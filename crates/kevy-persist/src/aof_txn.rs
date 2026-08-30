@@ -37,7 +37,6 @@ impl Aof {
     /// See [`Self::TXN_BEGIN`].
     pub const TXN_COMMIT: &'static [u8] = b"\0KEVYTXNCOMMIT";
 
-
     /// Append one of the transaction markers as a bare one-element frame.
     fn append_marker(&mut self, name: &'static [u8]) -> io::Result<()> {
         let mut frame = Vec::with_capacity(name.len() + 24);
@@ -132,5 +131,4 @@ impl Aof {
         }
         Ok(())
     }
-
 }

@@ -92,10 +92,7 @@ impl Server {
         let port = free_port();
         let dir = std::env::temp_dir().join(format!(
             "kevy-listmove-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
@@ -162,7 +159,11 @@ fn rpoplpush_lands_the_element_on_the_destinations_shard() {
             format!("${}\r\n{job}\r\n", job.len()).into_bytes(),
             "pair {i}: destination holds the wrong element"
         );
-        assert_eq!(call(&mut c, &[b"LLEN", src.as_bytes()]), b":0\r\n", "pair {i}: source not drained");
+        assert_eq!(
+            call(&mut c, &[b"LLEN", src.as_bytes()]),
+            b":0\r\n",
+            "pair {i}: source not drained"
+        );
     }
 }
 

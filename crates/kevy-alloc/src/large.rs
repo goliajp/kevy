@@ -73,8 +73,7 @@ struct PoolInner {
 }
 
 static POOL_LOCK: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
-static mut POOL: PoolInner =
-    PoolInner { entries: [(0, 0, 0); POOL_SLOTS], len: 0, generation: 0 };
+static mut POOL: PoolInner = PoolInner { entries: [(0, 0, 0); POOL_SLOTS], len: 0, generation: 0 };
 
 /// Run `f` holding the pool lock.
 fn with_pool<R>(f: impl FnOnce(&mut PoolInner) -> R) -> R {
@@ -289,8 +288,7 @@ mod pool_tests {
         }
         assert_eq!(parked_count(mapped), 8, "the burst should park whole");
         // The parked ones actually serve the next births of this length.
-        let again: Vec<NonNull<u8>> =
-            (0..8).map(|_| alloc(size, 8).expect("retake")).collect();
+        let again: Vec<NonNull<u8>> = (0..8).map(|_| alloc(size, 8).expect("retake")).collect();
         assert_eq!(parked_count(mapped), 0, "a parked mapping was not re-taken");
         for p in again {
             // SAFETY: allocated just above with exactly this size.

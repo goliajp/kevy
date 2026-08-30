@@ -21,9 +21,7 @@ pub(crate) fn restore_one_shard(
     report: &mut OpenReport,
 ) -> io::Result<()> {
     #[cfg(not(target_arch = "wasm32"))]
-    store
-        .enable_seg_rows(&layout::segs_dir(dir, i))
-        .map_err(io::Error::other)?;
+    store.enable_seg_rows(&layout::segs_dir(dir, i)).map_err(io::Error::other)?;
     let snap = layout::snapshot_path(dir, i);
     if snap.exists() {
         load_snapshot(store, &snap)?;

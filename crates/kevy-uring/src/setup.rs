@@ -16,8 +16,8 @@ use std::io;
 use crate::completion::Completion;
 use crate::ffi::{
     self, IORING_OFF_CQ_RING, IORING_OFF_SQ_RING, IORING_OFF_SQES, IORING_SETUP_COOP_TASKRUN,
-    IORING_SETUP_SINGLE_ISSUER, IORING_SETUP_SQ_AFF, IORING_SETUP_SQPOLL, MAP_POPULATE,
-    MAP_SHARED, PROT_READ, PROT_WRITE, SYS_IO_URING_SETUP,
+    IORING_SETUP_SINGLE_ISSUER, IORING_SETUP_SQ_AFF, IORING_SETUP_SQPOLL, MAP_POPULATE, MAP_SHARED,
+    PROT_READ, PROT_WRITE, SYS_IO_URING_SETUP,
 };
 use crate::layout::{IoUringParams, IoUringSqe};
 use crate::ring::IoUring;
@@ -107,10 +107,7 @@ impl IoUring {
         };
 
         for &modern in modern_flag_tiers {
-            let mut p = IoUringParams {
-                flags: sqpoll_flags | modern,
-                ..Default::default()
-            };
+            let mut p = IoUringParams { flags: sqpoll_flags | modern, ..Default::default() };
             if let Some((idle_ms, cpu)) = sqpoll {
                 p.sq_thread_idle = idle_ms;
                 if let Some(c) = cpu {
@@ -119,13 +116,7 @@ impl IoUring {
                 }
             }
             // SAFETY: `&mut p` lives across this call; kernel writes via ptr.
-            let fd = unsafe {
-                ffi::syscall(
-                    SYS_IO_URING_SETUP,
-                    ffi::arg(entries),
-                    &raw mut p,
-                )
-            };
+            let fd = unsafe { ffi::syscall(SYS_IO_URING_SETUP, ffi::arg(entries), &raw mut p) };
             if fd >= 0 {
                 return Ok((fd as c_int, p));
             }

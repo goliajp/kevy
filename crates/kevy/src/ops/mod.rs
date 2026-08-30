@@ -19,6 +19,7 @@
 pub(crate) mod client;
 pub(crate) mod cluster;
 pub(crate) mod config;
+mod info_sections;
 mod memory;
 pub(crate) mod replication;
 pub(crate) mod scope_move;
@@ -26,13 +27,11 @@ mod scope_move_emit;
 mod scope_move_ingest;
 mod scope_move_stream;
 pub(crate) mod stats;
-mod info_sections;
 use info_sections::*;
 
 use kevy_config::Config;
 use kevy_resp::{
-    ArgvView, RespVersion, encode_bulk, encode_error, encode_simple_string,
-    encode_verbatim,
+    ArgvView, RespVersion, encode_bulk, encode_error, encode_simple_string, encode_verbatim,
 };
 use kevy_store::Store;
 
@@ -157,7 +156,6 @@ fn want_section(want: Option<&[u8]>, name: &str) -> bool {
     }
 }
 
-
 // ───────────── DEBUG ─────────────
 
 fn cmd_debug<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut Vec<u8>) {
@@ -235,7 +233,10 @@ pub(super) fn appendfsync_str(v: kevy_config::AppendFsync) -> &'static str {
 }
 
 pub(super) fn eviction_str(v: kevy_config::EvictionPolicy) -> &'static str {
-    use kevy_config::EvictionPolicy::{NoEviction, AllKeysLru, AllKeysLfu, AllKeysRandom, VolatileLru, VolatileLfu, VolatileRandom, VolatileTtl};
+    use kevy_config::EvictionPolicy::{
+        AllKeysLfu, AllKeysLru, AllKeysRandom, NoEviction, VolatileLfu, VolatileLru,
+        VolatileRandom, VolatileTtl,
+    };
     match v {
         NoEviction => "noeviction",
         AllKeysLru => "allkeys-lru",
@@ -249,7 +250,7 @@ pub(super) fn eviction_str(v: kevy_config::EvictionPolicy) -> &'static str {
 }
 
 pub(super) fn log_level_str(v: kevy_config::LogLevel) -> &'static str {
-    use kevy_config::LogLevel::{Trace, Debug, Info, Warn, Error};
+    use kevy_config::LogLevel::{Debug, Error, Info, Trace, Warn};
     match v {
         Trace => "trace",
         Debug => "debug",
@@ -262,12 +263,8 @@ pub(super) fn log_level_str(v: kevy_config::LogLevel) -> &'static str {
 // ───────────── helpers ─────────────
 
 pub(super) fn wrong_args(out: &mut Vec<u8>, name: &str) {
-    encode_error(
-        out,
-        &format!("ERR wrong number of arguments for '{name}' command"),
-    );
+    encode_error(out, &format!("ERR wrong number of arguments for '{name}' command"));
 }
-
 
 #[cfg(test)]
 mod tests;

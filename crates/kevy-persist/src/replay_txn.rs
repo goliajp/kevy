@@ -29,4 +29,3 @@ pub(crate) fn txn_marker(args: &Argv) -> Option<TxnMarker> {
         None
     }
 }
-

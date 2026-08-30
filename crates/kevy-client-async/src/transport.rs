@@ -100,11 +100,7 @@ pub fn write_all<'a, T>(transport: &'a mut T, buf: &'a [u8]) -> WriteAll<'a, T>
 where
     T: AsyncWrite + Unpin + ?Sized,
 {
-    WriteAll {
-        transport,
-        buf,
-        written: 0,
-    }
+    WriteAll { transport, buf, written: 0 }
 }
 
 impl<T> Future for Read<'_, T>

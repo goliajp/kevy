@@ -11,12 +11,19 @@ use crate::message_kinds::Gathered;
 /// A partial result shipped back to the originating shard.
 pub(crate) enum Part {
     /// PREFIX.STATS per-shard result.
-    PrefixStats { keys: u64, expires: u64 },
+    PrefixStats {
+        keys: u64,
+        expires: u64,
+    },
     /// Extension fan-out per-shard chunk (opaque to the runtime).
     ExtensionChunk(Vec<u8>),
     /// `REPL.TOKEN` per-shard answer: the answering shard's
     /// id + its live `(feed generation, next_offset)` pair.
-    ReplToken { shard: u32, generation: u64, next_offset: u64 },
+    ReplToken {
+        shard: u32,
+        generation: u64,
+        next_offset: u64,
+    },
     Reply(SmallReply),
     Int(i64),
     Ok,
@@ -71,14 +78,18 @@ pub(crate) enum Part {
     CopyRead(Option<(kevy_store::Value, Option<u64>)>),
     /// COPY's result, same shape whether one shard answered or two:
     /// `stored` is what the `:1` / `:0` reply reports.
-    CopyPutDone { stored: bool },
+    CopyPutDone {
+        stored: bool,
+    },
     /// Cross-shard list move step 1: the popped element, or `None` when the
     /// source was empty/absent. `Err(())` = the source is not a list.
     ListMoveTaken(Result<Option<Vec<u8>>, ()>),
     /// Cross-shard list move step 2: `refused` is `None` when the push
     /// landed. `Some(value)` when the destination exists and is not a list
     /// — the element comes back so the orchestrator can restore the source.
-    ListMovePushed { refused: Option<Vec<u8>> },
+    ListMovePushed {
+        refused: Option<Vec<u8>>,
+    },
     /// `SLOWLOG GET` partial: this shard's ring buffer contents (in
     /// FIFO order — oldest first). Origin sorts by timestamp DESC and
     /// truncates per the `Get(count)` request.
@@ -89,5 +100,8 @@ pub(crate) enum Part {
     /// stream had data, or `None` when empty. `index` preserves request
     /// order; an error reply is carried verbatim in `element` and detected
     /// by the leading `-`.
-    XReadElement { index: u32, element: Option<Vec<u8>> },
+    XReadElement {
+        index: u32,
+        element: Option<Vec<u8>>,
+    },
 }

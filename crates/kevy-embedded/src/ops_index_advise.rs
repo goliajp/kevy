@@ -89,9 +89,7 @@ impl Store {
         let mut narrow: Vec<IdxAdvice> = Vec::new();
         let mut unused: Vec<IdxAdvice> = Vec::new();
         let tables = self.tables.catalog.read().unwrap_or_else(PoisonError::into_inner);
-        for (name, c) in
-            self.indexes.usage.read().unwrap_or_else(PoisonError::into_inner).iter()
-        {
+        for (name, c) in self.indexes.usage.read().unwrap_or_else(PoisonError::into_inner).iter() {
             let margin = c.min_margin.load(std::sync::atomic::Ordering::Relaxed);
             if let Some(dot) = name.iter().position(|&b| b == b'.')
                 && let Some(spec) = tables.get(&name[..dot])
@@ -121,12 +119,11 @@ impl Store {
     /// the refusal path is cold, and the query that pushed the count
     /// over still gets its error.
     pub(crate) fn observe_refused(&self, name: &[u8], shape: AdviseShape) {
-        let count = self
-            .tables
-            .advise
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .observe(name, shape.clone(), &[]);
+        let count = self.tables.advise.lock().unwrap_or_else(PoisonError::into_inner).observe(
+            name,
+            shape.clone(),
+            &[],
+        );
         if count >= kevy_index::AUTODECLARE_AFTER {
             self.auto_declare(name, shape, count);
         }

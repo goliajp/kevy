@@ -89,23 +89,20 @@ struct Server {
 
 impl Server {
     fn start(nshards: usize) -> Self {
-        let _gate = START_GATE
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let port = free_port();
         let dir = std::env::temp_dir().join(format!(
             "kevy-bzpopmin-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         let dir_thread = dir.clone();
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(nshards)).bind([127, 0, 0, 1], port).shards(nshards)
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(nshards))
+                .bind([127, 0, 0, 1], port)
+                .shards(nshards)
                 .with_data_dir(dir_thread);
             rt.run(stop_thread).unwrap();
         });
@@ -115,8 +112,7 @@ impl Server {
 
     fn connect(&self) -> std::net::TcpStream {
         let s = std::net::TcpStream::connect(("127.0.0.1", self.port)).unwrap();
-        s.set_read_timeout(Some(std::time::Duration::from_secs(5)))
-            .unwrap();
+        s.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
         s
     }
 }
@@ -138,8 +134,7 @@ fn bzpopmin_returns_lowest_scored_when_zset_has_members() {
     let srv = Server::start(1);
     let mut c = srv.connect();
     // ZADD z 3 c 1 a 2 b — lowest is (a, 1).
-    c.write_all(&req(&[b"ZADD", b"z", b"3", b"c", b"1", b"a", b"2", b"b"]))
-        .unwrap();
+    c.write_all(&req(&[b"ZADD", b"z", b"3", b"c", b"1", b"a", b"2", b"b"])).unwrap();
     let _ = read_reply(&mut c); // :3
     c.write_all(&req(&[b"BZPOPMIN", b"z", b"5"])).unwrap();
     // *3\r\n$1\r\nz\r\n$1\r\na\r\n$1\r\n1\r\n
@@ -194,8 +189,7 @@ fn bzpopmin_multi_key_returns_from_first_non_empty() {
     let _ = read_reply(&mut c); // :1
     // `missing` is empty; `ready` has data → arm-time readiness peek
     // resolves at once without parking.
-    c.write_all(&req(&[b"BZPOPMIN", b"missing", b"ready", b"5"]))
-        .unwrap();
+    c.write_all(&req(&[b"BZPOPMIN", b"missing", b"ready", b"5"])).unwrap();
     let reply = read_reply(&mut c);
     assert_eq!(reply, b"*3\r\n$5\r\nready\r\n$1\r\nx\r\n$1\r\n7\r\n");
 }
@@ -259,19 +253,12 @@ fn bzpopmin_woken_by_concurrent_zadd() {
     let mut consumer = srv.connect();
     let mut producer = srv.connect();
     // Park consumer with a generous timeout — the ZADD wake must arrive first.
-    consumer
-        .write_all(&req(&[b"BZPOPMIN", b"wakeable", b"5"]))
-        .unwrap();
+    consumer.write_all(&req(&[b"BZPOPMIN", b"wakeable", b"5"])).unwrap();
     std::thread::sleep(std::time::Duration::from_millis(50));
-    producer
-        .write_all(&req(&[b"ZADD", b"wakeable", b"42", b"hello"]))
-        .unwrap();
+    producer.write_all(&req(&[b"ZADD", b"wakeable", b"42", b"hello"])).unwrap();
     let _ = read_reply(&mut producer); // :1
     let reply = read_reply(&mut consumer);
-    assert_eq!(
-        reply,
-        b"*3\r\n$8\r\nwakeable\r\n$5\r\nhello\r\n$2\r\n42\r\n"
-    );
+    assert_eq!(reply, b"*3\r\n$8\r\nwakeable\r\n$5\r\nhello\r\n$2\r\n42\r\n");
 }
 
 #[test]
@@ -279,14 +266,10 @@ fn bzpopmin_woken_by_concurrent_zincrby_on_new_key() {
     let srv = Server::start(1);
     let mut consumer = srv.connect();
     let mut producer = srv.connect();
-    consumer
-        .write_all(&req(&[b"BZPOPMIN", b"newkey", b"5"]))
-        .unwrap();
+    consumer.write_all(&req(&[b"BZPOPMIN", b"newkey", b"5"])).unwrap();
     std::thread::sleep(std::time::Duration::from_millis(50));
     // ZINCRBY on a missing key creates the zset with `incr` as the score.
-    producer
-        .write_all(&req(&[b"ZINCRBY", b"newkey", b"3", b"m"]))
-        .unwrap();
+    producer.write_all(&req(&[b"ZINCRBY", b"newkey", b"3", b"m"])).unwrap();
     let _ = read_reply(&mut producer); // $1 3
     let reply = read_reply(&mut consumer);
     assert_eq!(reply, b"*3\r\n$6\r\nnewkey\r\n$1\r\nm\r\n$1\r\n3\r\n");
@@ -297,15 +280,11 @@ fn bzpopmin_multi_key_woken_on_second_key() {
     let srv = Server::start(1);
     let mut consumer = srv.connect();
     let mut producer = srv.connect();
-    consumer
-        .write_all(&req(&[b"BZPOPMIN", b"z1", b"z2", b"5"]))
-        .unwrap();
+    consumer.write_all(&req(&[b"BZPOPMIN", b"z1", b"z2", b"5"])).unwrap();
     std::thread::sleep(std::time::Duration::from_millis(50));
     // ZADD into the *second* watched key — the cross-shard arbiter
     // must serve z2.
-    producer
-        .write_all(&req(&[b"ZADD", b"z2", b"9", b"v2"]))
-        .unwrap();
+    producer.write_all(&req(&[b"ZADD", b"z2", b"9", b"v2"])).unwrap();
     let _ = read_reply(&mut producer); // :1
     let reply = read_reply(&mut consumer);
     assert_eq!(reply, b"*3\r\n$2\r\nz2\r\n$2\r\nv2\r\n$1\r\n9\r\n");

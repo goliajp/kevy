@@ -236,10 +236,7 @@ impl IndexSpec {
     /// dependency while keeping the answer in one place — the server and
     /// the embedded store index the same row the same way by
     /// construction, rather than by two copies of the same loop agreeing.
-    pub fn read_row(
-        &self,
-        mut get: impl FnMut(&[u8]) -> Option<Vec<u8>>,
-    ) -> RowInputs {
+    pub fn read_row(&self, mut get: impl FnMut(&[u8]) -> Option<Vec<u8>>) -> RowInputs {
         let mut fields = Vec::with_capacity(self.fields.len());
         for f in &self.fields {
             if let Some(raw) = get(&f.name) {
@@ -369,11 +366,11 @@ impl Catalog {
     /// `key`. Linear over ≤64 specs with a memcmp each — the compiled
     /// trie of the RFC becomes worthwhile only past this cap, so the
     /// simple form IS the fast form at our scale.
-    pub fn matching<'a>(&'a self, key: &'a [u8]) -> impl Iterator<Item = (&'a IndexSpec, IndexState)> {
-        self.specs
-            .iter()
-            .filter(move |(s, _)| key.starts_with(&s.prefix))
-            .map(|(s, st)| (s, *st))
+    pub fn matching<'a>(
+        &'a self,
+        key: &'a [u8],
+    ) -> impl Iterator<Item = (&'a IndexSpec, IndexState)> {
+        self.specs.iter().filter(move |(s, _)| key.starts_with(&s.prefix)).map(|(s, st)| (s, *st))
     }
 
     /// Coerce a raw field value for `spec` (convenience passthrough).
@@ -440,12 +437,7 @@ mod tests {
     /// Accept-and-ignore is the shape this refuses.
     #[test]
     fn only_text_indexes_accept_several_fields() {
-        let two = || {
-            vec![
-                FieldSpec::new(b"title".to_vec()),
-                FieldSpec::new(b"body".to_vec()),
-            ]
-        };
+        let two = || vec![FieldSpec::new(b"title".to_vec()), FieldSpec::new(b"body".to_vec())];
         let mut range = spec("multi-range", "p:");
         range.fields = two();
         assert!(Catalog::new().create(range).is_err(), "range must refuse two fields");

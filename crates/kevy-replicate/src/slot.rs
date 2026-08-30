@@ -70,11 +70,7 @@ impl SlotTable {
             s.last_seen_ns = now_ns;
             return;
         }
-        self.slots.push(ReplicaSlot {
-            id: id.to_string(),
-            last_seen_ns: now_ns,
-            acked_offset: 0,
-        });
+        self.slots.push(ReplicaSlot { id: id.to_string(), last_seen_ns: now_ns, acked_offset: 0 });
     }
 
     /// Iterate over all slots.
@@ -96,11 +92,7 @@ impl SlotTable {
             }
             return;
         }
-        self.slots.push(ReplicaSlot {
-            id: id.to_string(),
-            last_seen_ns: now_ns,
-            acked_offset,
-        });
+        self.slots.push(ReplicaSlot { id: id.to_string(), last_seen_ns: now_ns, acked_offset });
     }
 
     /// Remove the slot with the given id. Returns `true` if a slot

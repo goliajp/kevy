@@ -101,11 +101,7 @@ fn emit_rows(
 /// The faceted reply's one trailing element: `[field, [value, count, …],
 /// field, …]`, each field's buckets most-frequent-first with the label
 /// breaking ties so the order is stable across runs.
-fn emit_facets(
-    out: &mut Vec<u8>,
-    facets: &[Vec<u8>],
-    buckets: &[Vec<Bucket>],
-) {
+fn emit_facets(out: &mut Vec<u8>, facets: &[Vec<u8>], buckets: &[Vec<Bucket>]) {
     if facets.is_empty() {
         return;
     }
@@ -208,11 +204,7 @@ fn merge_ranked(chunks: &[Vec<u8>], m: Merge<'_>) -> Vec<u8> {
         // Order the union exactly as each shard ordered its own page —
         // one definition of that order, in kevy-text, used by both.
         Some(desc) => all.sort_by(|a, b| {
-            kevy_text::sorted_order(
-                (a.okey.as_deref(), &a.key),
-                (b.okey.as_deref(), &b.key),
-                desc,
-            )
+            kevy_text::sorted_order((a.okey.as_deref(), &a.key), (b.okey.as_deref(), &b.key), desc)
         }),
         None if ascending => {
             all.sort_by(|a, b| a.score.total_cmp(&b.score).then_with(|| a.key.cmp(&b.key)));
@@ -336,11 +328,7 @@ fn push_clauses(argv2: &mut Vec<Vec<u8>>, m: crate::cmd_index_query::MatchArgs) 
 /// happens: a shard that picked its best `limit` by score and left the
 /// re-ordering or the collapsing to the origin would hand back a page
 /// missing the rows that should have been on it.
-fn push_order(
-    argv2: &mut Vec<Vec<u8>>,
-    sort: Option<(Vec<u8>, bool)>,
-    distinct: Option<Vec<u8>>,
-) {
+fn push_order(argv2: &mut Vec<Vec<u8>>, sort: Option<(Vec<u8>, bool)>, distinct: Option<Vec<u8>>) {
     if let Some((field, desc)) = sort {
         argv2.push(b"SORT".to_vec());
         argv2.push(field);
@@ -402,10 +390,7 @@ fn decode_stats_chunk(c: &[u8]) -> Option<ShardCorpus> {
 }
 
 /// Decode one ranked segment `[n][(key, f64, hydration)*]`.
-fn read_ranked_segment(
-    c: &[u8],
-    pos: &mut usize,
-) -> Vec<(f64, Vec<u8>, Hydrated)> {
+fn read_ranked_segment(c: &[u8], pos: &mut usize) -> Vec<(f64, Vec<u8>, Hydrated)> {
     let mut out = Vec::new();
     let Some(n) = read_u32(c, pos) else { return out };
     for _ in 0..n {

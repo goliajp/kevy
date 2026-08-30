@@ -2,12 +2,12 @@
 
 use std::time::Duration;
 
-use crate::store::Store;
 use crate::KevyResult;
+use crate::store::Store;
 
 use super::util::{
-    arg_f64, arg_i64, arr, bulk, emit_int, err, fmt_score, kevy_err, nil, opt_bulk, rest, simple,
-    wrong_args, ERR_NOT_FLOAT, ERR_NOT_INT, ERR_SYNTAX,
+    ERR_NOT_FLOAT, ERR_NOT_INT, ERR_SYNTAX, arg_f64, arg_i64, arr, bulk, emit_int, err, fmt_score,
+    kevy_err, nil, opt_bulk, rest, simple, wrong_args,
 };
 
 /// One string-family request; `false` = verb not in this group.

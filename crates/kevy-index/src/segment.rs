@@ -125,8 +125,7 @@ impl Segment {
         match new {
             Some(v) => {
                 self.stats.entries += 1;
-                self.stats.approx_bytes +=
-                    (v.approx_bytes() + key.len() + ENTRY_OVERHEAD) as u64;
+                self.stats.approx_bytes += (v.approx_bytes() + key.len() + ENTRY_OVERHEAD) as u64;
                 self.inc_count(&v);
                 self.back.insert(key.to_vec(), v.clone());
                 self.tree.insert((v, key.to_vec()));
@@ -266,10 +265,7 @@ impl Segment {
     /// Count within `[min, max]` without materializing keys.
     pub fn count(&self, min: &IndexValue, max: &IndexValue) -> u64 {
         let lower = Bound::Included((min.clone(), Vec::new()));
-        self.tree
-            .range((lower, Bound::Unbounded))
-            .take_while(|(v, _)| v <= max)
-            .count() as u64
+        self.tree.range((lower, Bound::Unbounded)).take_while(|(v, _)| v <= max).count() as u64
     }
 
     /// Verify hook: what value does the segment hold for `key`?
@@ -293,18 +289,12 @@ impl Segment {
             (None, true) => Box::new(self.tree.iter().rev().map(|(v, k)| (v, k.as_slice()))),
             (Some(c), false) => Box::new(
                 self.tree
-                    .range((
-                        Bound::Excluded((c.value.clone(), c.key.clone())),
-                        Bound::Unbounded,
-                    ))
+                    .range((Bound::Excluded((c.value.clone(), c.key.clone())), Bound::Unbounded))
                     .map(|(v, k)| (v, k.as_slice())),
             ),
             (Some(c), true) => Box::new(
                 self.tree
-                    .range((
-                        Bound::Unbounded,
-                        Bound::Excluded((c.value.clone(), c.key.clone())),
-                    ))
+                    .range((Bound::Unbounded, Bound::Excluded((c.value.clone(), c.key.clone()))))
                     .rev()
                     .map(|(v, k)| (v, k.as_slice())),
             ),
@@ -415,12 +405,8 @@ mod tests {
         let mut t = Segment::new();
         t.apply(b"x", Some(IndexValue::Str(b"banana".to_vec())));
         t.apply(b"y", Some(IndexValue::Str(b"apple".to_vec())));
-        let (hits, _) = t.range(
-            &IndexValue::Str(b"a".to_vec()),
-            &IndexValue::Str(b"z".to_vec()),
-            None,
-            10,
-        );
+        let (hits, _) =
+            t.range(&IndexValue::Str(b"a".to_vec()), &IndexValue::Str(b"z".to_vec()), None, 10);
         assert_eq!(hits[0].0, b"y".to_vec());
     }
 }

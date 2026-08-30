@@ -254,10 +254,7 @@ fn eval_redis_sha1hex_returns_real_sha1() {
     let mut b = Bridge::with_no_dispatch();
     // SHA1("abc") = a9993e364706816aba3e25717850c26c9cd0d89d
     let reply = b.eval(b"return redis.sha1hex('abc')", &[], &[]);
-    assert_eq!(
-        reply,
-        b"$40\r\na9993e364706816aba3e25717850c26c9cd0d89d\r\n"
-    );
+    assert_eq!(reply, b"$40\r\na9993e364706816aba3e25717850c26c9cd0d89d\r\n");
 }
 
 #[test]
@@ -265,10 +262,7 @@ fn eval_redis_sha1hex_empty_string() {
     let mut b = Bridge::with_no_dispatch();
     // SHA1("") = da39a3ee5e6b4b0d3255bfef95601890afd80709
     let reply = b.eval(b"return redis.sha1hex('')", &[], &[]);
-    assert_eq!(
-        reply,
-        b"$40\r\nda39a3ee5e6b4b0d3255bfef95601890afd80709\r\n"
-    );
+    assert_eq!(reply, b"$40\r\nda39a3ee5e6b4b0d3255bfef95601890afd80709\r\n");
 }
 
 #[test]
@@ -323,8 +317,7 @@ type StubStore = Rc<RefCell<HashMap<Vec<u8>, Vec<u8>>>>;
 
 #[allow(clippy::type_complexity)] // impl Trait in a return tuple has no alias form
 fn make_stub_dispatch() -> (StubStore, impl Fn(&[&[u8]], bool) -> Vec<u8> + 'static) {
-    let store: Rc<RefCell<HashMap<Vec<u8>, Vec<u8>>>> =
-        Rc::new(RefCell::new(HashMap::new()));
+    let store: Rc<RefCell<HashMap<Vec<u8>, Vec<u8>>>> = Rc::new(RefCell::new(HashMap::new()));
     let store_in = Rc::clone(&store);
     // Minimal writes-list for the read-only check. In production
     // kevy-rt's command-flag table is the source of truth; this is
@@ -332,8 +325,16 @@ fn make_stub_dispatch() -> (StubStore, impl Fn(&[&[u8]], bool) -> Vec<u8> + 'sta
     fn is_write_command(cmd: &[u8]) -> bool {
         matches!(
             cmd,
-            b"SET" | b"DEL" | b"INCRBY" | b"HMSET" | b"LPUSH" | b"RPUSH"
-                | b"SADD" | b"ZADD" | b"EXPIRE" | b"PEXPIRE"
+            b"SET"
+                | b"DEL"
+                | b"INCRBY"
+                | b"HMSET"
+                | b"LPUSH"
+                | b"RPUSH"
+                | b"SADD"
+                | b"ZADD"
+                | b"EXPIRE"
+                | b"PEXPIRE"
         )
     }
     let dispatch = move |argv: &[&[u8]], read_only: bool| -> Vec<u8> {
@@ -379,10 +380,8 @@ fn make_stub_dispatch() -> (StubStore, impl Fn(&[&[u8]], bool) -> Vec<u8> + 'sta
                 format!(":{n}\r\n").into_bytes()
             }
             b"INCRBY" if argv.len() == 3 => {
-                let delta: i64 = std::str::from_utf8(argv[2])
-                    .ok()
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(0);
+                let delta: i64 =
+                    std::str::from_utf8(argv[2]).ok().and_then(|s| s.parse().ok()).unwrap_or(0);
                 let cur: i64 = store
                     .get(argv[1])
                     .and_then(|b| std::str::from_utf8(b).ok())
@@ -429,11 +428,7 @@ fn eval_redis_call_ping_status_reply_marshals_simple_string() {
 fn eval_redis_call_get_missing_returns_false() {
     let (_store, dispatch) = make_stub_dispatch();
     let mut b = Bridge::new(dispatch);
-    let reply = b.eval(
-        b"return redis.call('GET', 'never:set')",
-        &[],
-        &[],
-    );
+    let reply = b.eval(b"return redis.call('GET', 'never:set')", &[], &[]);
     // `$-1\r\n` → Lua boolean false → marshaled back as nil bulk.
     assert_eq!(reply, b"$-1\r\n");
 }
@@ -495,9 +490,7 @@ end\n";
 #[test]
 fn eval_canonical_redlock_unlock_pattern() {
     let (store, dispatch) = make_stub_dispatch();
-    store
-        .borrow_mut()
-        .insert(b"lock:foo".to_vec(), b"token-abc".to_vec());
+    store.borrow_mut().insert(b"lock:foo".to_vec(), b"token-abc".to_vec());
     let mut b = Bridge::new(dispatch);
     let reply = b.eval(REDLOCK_UNLOCK, &[b"lock:foo"], &[b"token-abc"]);
     assert_eq!(reply, b":1\r\n");
@@ -507,9 +500,7 @@ fn eval_canonical_redlock_unlock_pattern() {
 #[test]
 fn eval_canonical_redlock_unlock_token_mismatch_returns_zero() {
     let (store, dispatch) = make_stub_dispatch();
-    store
-        .borrow_mut()
-        .insert(b"lock:foo".to_vec(), b"someone-else".to_vec());
+    store.borrow_mut().insert(b"lock:foo".to_vec(), b"someone-else".to_vec());
     let mut b = Bridge::new(dispatch);
     let reply = b.eval(REDLOCK_UNLOCK, &[b"lock:foo"], &[b"my-token"]);
     assert_eq!(reply, b":0\r\n");
@@ -691,11 +682,7 @@ fn shebang_lua_52_enables_goto() {
 #[test]
 fn shebang_lua_54_enables_const_attrib() {
     let mut b = Bridge::with_no_dispatch();
-    let reply = b.eval(
-        b"#!lua version=5.4\nlocal x <const> = 7\nreturn x",
-        &[],
-        &[],
-    );
+    let reply = b.eval(b"#!lua version=5.4\nlocal x <const> = 7\nreturn x", &[], &[]);
     assert_eq!(reply, b":7\r\n");
 }
 
@@ -710,11 +697,7 @@ fn shebang_unknown_version_returns_resp_error() {
 #[test]
 fn shebang_with_extra_keys_doesnt_break_routing() {
     let mut b = Bridge::with_no_dispatch();
-    let reply = b.eval(
-        b"#!lua version=5.3 flags=no-writes name=mylib\nreturn 5 // 2",
-        &[],
-        &[],
-    );
+    let reply = b.eval(b"#!lua version=5.3 flags=no-writes name=mylib\nreturn 5 // 2", &[], &[]);
     assert_eq!(reply, b":2\r\n");
 }
 
@@ -767,9 +750,7 @@ fn redlock_unlock_runs_on_5_3() {
     // Same Redlock script, shebang-bumped to 5.3 to exercise the
     // multi-dialect path with a real ecosystem snippet.
     let (store, dispatch) = make_stub_dispatch();
-    store
-        .borrow_mut()
-        .insert(b"lock:foo".to_vec(), b"token-abc".to_vec());
+    store.borrow_mut().insert(b"lock:foo".to_vec(), b"token-abc".to_vec());
     let mut b = Bridge::new(dispatch);
     let script = b"#!lua version=5.3\n\
                    if redis.call('GET', KEYS[1]) == ARGV[1] then\n\
@@ -798,11 +779,7 @@ fn eval_ro_allows_read_command() {
 fn eval_ro_blocks_write_command() {
     let (_store, dispatch) = make_stub_dispatch();
     let mut b = Bridge::new(dispatch);
-    let reply = b.eval_ro(
-        b"return redis.call('SET', KEYS[1], 'v')",
-        &[b"k"],
-        &[],
-    );
+    let reply = b.eval_ro(b"return redis.call('SET', KEYS[1], 'v')", &[b"k"], &[]);
     // SET → -READONLY ... → raised as Lua error → wrapped as -READONLY.
     assert!(reply.starts_with(b"-READONLY "));
 }
@@ -822,11 +799,7 @@ fn eval_ro_blocks_del_command() {
 fn eval_ro_pcall_returns_err_table_on_write() {
     let (_store, dispatch) = make_stub_dispatch();
     let mut b = Bridge::new(dispatch);
-    let reply = b.eval_ro(
-        b"return redis.pcall('SET', KEYS[1], 'v')",
-        &[b"k"],
-        &[],
-    );
+    let reply = b.eval_ro(b"return redis.pcall('SET', KEYS[1], 'v')", &[b"k"], &[]);
     // pcall caught the error → {err = "READONLY ..."} → -READONLY ...
     assert!(reply.starts_with(b"-READONLY "));
 }

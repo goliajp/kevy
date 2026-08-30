@@ -50,9 +50,7 @@ impl TierBudgetSpec {
             }
             return Ok(Self::Percent(p as u8));
         }
-        parse_size(t)
-            .map(Self::Bytes)
-            .map_err(|e| format!("tiering budget: {e}"))
+        parse_size(t).map(Self::Bytes).map_err(|e| format!("tiering budget: {e}"))
     }
 
     /// Resolve to bytes given the probed memory bound. `Bytes` ignores
@@ -105,12 +103,9 @@ impl Config {
     /// The `KEVY_TIER_BUDGET` env arm — all three forms; plain bytes
     /// stay back-compat with the original plain-bytes-only knob.
     pub(crate) fn apply_env_tier_budget(&mut self, value: &str) -> Result<(), ConfigError> {
-        self.tiering.budget =
-            Some(TierBudgetSpec::parse(value).map_err(|msg| ConfigError::Schema {
-                line: 0,
-                field: "[env] KEVY_TIER_BUDGET".into(),
-                msg,
-            })?);
+        self.tiering.budget = Some(TierBudgetSpec::parse(value).map_err(|msg| {
+            ConfigError::Schema { line: 0, field: "[env] KEVY_TIER_BUDGET".into(), msg }
+        })?);
         Ok(())
     }
 }
@@ -159,7 +154,10 @@ mod tests {
     fn resolution_math() {
         assert_eq!(TierBudgetSpec::Bytes(42).resolve_with(None), Some(42));
         assert_eq!(TierBudgetSpec::Auto.resolve_with(Some(10_000_000_000)), Some(7_000_000_000));
-        assert_eq!(TierBudgetSpec::Percent(50).resolve_with(Some(8_000_000_000)), Some(4_000_000_000));
+        assert_eq!(
+            TierBudgetSpec::Percent(50).resolve_with(Some(8_000_000_000)),
+            Some(4_000_000_000)
+        );
         assert_eq!(TierBudgetSpec::Auto.resolve_with(None), None);
         assert_eq!(TierBudgetSpec::Percent(30).resolve_with(None), None);
     }

@@ -58,11 +58,7 @@ fn extreme(func: &'static str, args: &[Scalar], keep: Ordering) -> Result<Scalar
 
 /// Cross-type comparison for the family: `None` when either side is
 /// NULL (SQL: unknown), `Err` when the types are incomparable.
-fn compare(
-    func: &'static str,
-    a: &Scalar,
-    b: &Scalar,
-) -> Result<Option<Ordering>, ScalarError> {
+fn compare(func: &'static str, a: &Scalar, b: &Scalar) -> Result<Option<Ordering>, ScalarError> {
     let ord = match (a, b) {
         (Scalar::Null, _) | (_, Scalar::Null) => return Ok(None),
         (Scalar::Int(x), Scalar::Int(y)) => x.cmp(y),
@@ -70,10 +66,8 @@ fn compare(
         (Scalar::Bool(x), Scalar::Bool(y)) => x.cmp(y),
         (Scalar::Int(_) | Scalar::Float(_), Scalar::Int(_) | Scalar::Float(_)) => {
             let (x, y) = (as_f64(a), as_f64(b));
-            x.partial_cmp(&y).ok_or(ScalarError::Domain {
-                func,
-                what: "NaN is not orderable here",
-            })?
+            x.partial_cmp(&y)
+                .ok_or(ScalarError::Domain { func, what: "NaN is not orderable here" })?
         }
         _ => return Err(ScalarError::Type { func, arg: 1 }),
     };

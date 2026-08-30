@@ -156,11 +156,7 @@ pub(crate) fn cmd_blpop<A: ArgvView + ?Sized>(
         // replays a single-key `BLPOP key 0` (the len == 3 path below).
         return;
     }
-    let res = if tail {
-        store.rpop(&args[1], 1)
-    } else {
-        store.lpop(&args[1], 1)
-    };
+    let res = if tail { store.rpop(&args[1], 1) } else { store.lpop(&args[1], 1) };
     match res {
         Err(e) => store_err(out, e),
         Ok(items) => {
@@ -196,11 +192,7 @@ pub(crate) fn cmd_pop<A: ArgvView + ?Sized>(
     } else {
         1
     };
-    let res = if tail {
-        store.rpop(&args[1], count)
-    } else {
-        store.lpop(&args[1], count)
-    };
+    let res = if tail { store.rpop(&args[1], count) } else { store.lpop(&args[1], count) };
     match res {
         Err(e) => store_err(out, e),
         Ok(items) => {
@@ -243,11 +235,7 @@ pub(crate) fn cmd_set<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &m
                 let Some(n) = arg_i64(raw).filter(|&n| n > 0) else {
                     return encode_error(out, "ERR invalid expire time in 'set' command");
                 };
-                let ms = if opt == b"EX" {
-                    n.saturating_mul(1000)
-                } else {
-                    n
-                };
+                let ms = if opt == b"EX" { n.saturating_mul(1000) } else { n };
                 expire = Some(Duration::from_millis(ms as u64));
                 i += 1;
             }
@@ -280,13 +268,7 @@ pub(crate) fn cmd_setex<A: ArgvView + ?Sized>(
         return encode_error(out, &format!("ERR invalid expire time in '{name}' command"));
     };
     let ms = n.saturating_mul(unit_ms) as u64;
-    store.set_slice(
-        &args[1],
-        &args[3],
-        Some(Duration::from_millis(ms)),
-        false,
-        false,
-    );
+    store.set_slice(&args[1], &args[3], Some(Duration::from_millis(ms)), false, false);
     encode_simple_string(out, "OK");
 }
 
@@ -348,10 +330,7 @@ pub(crate) fn cmd_expire<A: ArgvView + ?Sized>(
         return encode_integer(out, 1);
     }
     let ms = n.saturating_mul(unit_ms) as u64;
-    encode_integer(
-        out,
-        i64::from(store.expire(&args[1], Duration::from_millis(ms))),
-    );
+    encode_integer(out, i64::from(store.expire(&args[1], Duration::from_millis(ms))));
 }
 
 /// `EXPIREAT` (unit_ms = 1000) / `PEXPIREAT` (unit_ms = 1). The argument is
@@ -391,10 +370,6 @@ pub(crate) fn cmd_ttl<A: ArgvView + ?Sized>(
         return wrong_args(out, cmd);
     }
     let ms = store.pttl(&args[1]);
-    let val = if in_secs && ms >= 0 {
-        (ms + 500) / 1000
-    } else {
-        ms
-    };
+    let val = if in_secs && ms >= 0 { (ms + 500) / 1000 } else { ms };
     encode_integer(out, val);
 }

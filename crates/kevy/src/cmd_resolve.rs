@@ -17,10 +17,7 @@ use crate::state::ReplicationState;
 
 /// One-pass verb resolution for [`crate::KevyCommands`]. Single `match upper`
 /// fans out into the per-attribute fields the runtime then consumes.
-pub(crate) fn kevy_resolve<A: ArgvView + ?Sized>(
-    repl: &ReplicationState,
-    args: &A,
-) -> ResolvedCmd {
+pub(crate) fn kevy_resolve<A: ArgvView + ?Sized>(repl: &ReplicationState, args: &A) -> ResolvedCmd {
     let Some(name) = args.first() else {
         return ResolvedCmd {
             txn_kind: TxnKind::Other,
@@ -81,14 +78,7 @@ fn resolve_general<A: ArgvView + ?Sized>(
     let block_hint = cmd_block::block_hint_for_verb(upper, args);
     let wake_idx = cmd_block::wake_idx_for_verb(upper);
 
-    ResolvedCmd {
-        txn_kind,
-        route,
-        is_quit,
-        is_write,
-        block_hint,
-        wake_idx,
-    }
+    ResolvedCmd { txn_kind, route, is_quit, is_write, block_hint, wake_idx }
 }
 
 /// [`crate::KevyCommands::route`]'s body — the same verb table
@@ -109,11 +99,7 @@ pub(crate) fn route<A: ArgvView + ?Sized>(repl: &ReplicationState, args: &A) -> 
 /// upper` plus the small extractor calls (KEYS pattern, SCAN cursor,
 /// XREAD STREAMS key, SLOWLOG sub-command).
 // LOC-WAIVER: data-driven verb → Route match table — one arm per verb.
-fn route_for_verb<A: ArgvView + ?Sized>(
-    repl: &ReplicationState,
-    upper: &[u8],
-    args: &A,
-) -> Route {
+fn route_for_verb<A: ArgvView + ?Sized>(repl: &ReplicationState, upper: &[u8], args: &A) -> Route {
     match upper {
         b"HELLO" => Route::Hello,
         // CLIENT: LIST / KILL fan out (the conn tables are per-shard);

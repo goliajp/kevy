@@ -52,10 +52,7 @@ fn groups_are_numbered_by_opening_paren() {
 fn nested_groups_number_outer_first() {
     let (whole, g) = caps(r"((a+)(b+))c", "xaabbc").expect("matches");
     assert_eq!(whole, "aabbc");
-    assert_eq!(
-        g,
-        vec![Some("aabb".into()), Some("aa".into()), Some("bb".into())]
-    );
+    assert_eq!(g, vec![Some("aabb".into()), Some("aa".into()), Some("bb".into())]);
 }
 
 // WRITTEN HERE: a group on the losing side of an alternation did not

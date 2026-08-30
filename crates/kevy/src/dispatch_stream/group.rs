@@ -10,8 +10,8 @@ use kevy_resp::{
     encode_simple_string,
 };
 use kevy_store::{
-    GroupCreateMode, ReadGroupId, Store, StreamId, now_unix_ms, parse_explicit_id,
-    parse_range_end, parse_range_start,
+    GroupCreateMode, ReadGroupId, Store, StreamId, now_unix_ms, parse_explicit_id, parse_range_end,
+    parse_range_start,
 };
 
 use crate::cmd::{store_err, wrong_args};
@@ -21,11 +21,7 @@ use super::emit_entries;
 // ───────────── XGROUP ─────────────
 
 /// `XGROUP CREATE | DESTROY | SETID | CREATECONSUMER | DELCONSUMER`
-pub(super) fn cmd_xgroup<A: ArgvView + ?Sized>(
-    store: &mut Store,
-    args: &A,
-    out: &mut Vec<u8>,
-) {
+pub(super) fn cmd_xgroup<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
     if args.len() < 2 {
         return wrong_args(out, "xgroup");
     }
@@ -60,10 +56,7 @@ fn xgroup_create<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Ve
     let mkstream = args.len() == 6 && args[5].eq_ignore_ascii_case(b"MKSTREAM");
     match store.xgroup_create(key, group, mode, mkstream) {
         Ok(true) => encode_simple_string(out, "OK"),
-        Ok(false) => encode_error(
-            out,
-            "BUSYGROUP Consumer Group name already exists",
-        ),
+        Ok(false) => encode_error(out, "BUSYGROUP Consumer Group name already exists"),
         Err(kevy_store::StoreError::NoSuchKey) => encode_error(
             out,
             "ERR The XGROUP subcommand requires the key to exist. \
@@ -132,11 +125,7 @@ fn parse_id_or_dollar(s: &[u8]) -> Result<GroupCreateMode, CmdError> {
 // ───────────── XREADGROUP ─────────────
 
 /// `XREADGROUP GROUP g c [COUNT n] [BLOCK ms] [NOACK] STREAMS key [...] id [...]`
-pub(super) fn cmd_xreadgroup<A: ArgvView + ?Sized>(
-    store: &mut Store,
-    args: &A,
-    out: &mut Vec<u8>,
-) {
+pub(super) fn cmd_xreadgroup<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
     let mut parsed = match parse_xreadgroup_argv(args) {
         Ok(p) => p,
         Err(msg) => return encode_error(out, msg.as_wire()),
@@ -192,10 +181,7 @@ fn xreadgroup_one_stream(
         match parse_explicit_id(last_seen_arg, /*end=*/ false) {
             Ok(id) => ReadGroupId::ReplayAfter(id),
             Err(_) => {
-                encode_error(
-                    out,
-                    "ERR Invalid stream ID specified as stream command argument",
-                );
+                encode_error(out, "ERR Invalid stream ID specified as stream command argument");
                 return Err(());
             }
         }
@@ -240,9 +226,7 @@ struct XReadGroupParsed {
     streams: Vec<(Vec<u8>, Vec<u8>)>,
 }
 
-fn parse_xreadgroup_argv<A: ArgvView + ?Sized>(
-    args: &A,
-) -> Result<XReadGroupParsed, CmdError> {
+fn parse_xreadgroup_argv<A: ArgvView + ?Sized>(args: &A) -> Result<XReadGroupParsed, CmdError> {
     if args.len() < 7 {
         return Err(CmdError::Wire("ERR wrong number of arguments for 'xreadgroup' command"));
     }
@@ -259,11 +243,17 @@ fn parse_xreadgroup_argv<A: ArgvView + ?Sized>(
         let tok = args[i].to_ascii_uppercase();
         match tok.as_slice() {
             b"COUNT" => {
-                count = Some(parse_kv_u64(args, i + 1, "ERR value is not an integer or out of range")? as usize);
+                count =
+                    Some(parse_kv_u64(args, i + 1, "ERR value is not an integer or out of range")?
+                        as usize);
                 i += 2;
             }
             b"BLOCK" => {
-                block_ms = Some(parse_kv_u64(args, i + 1, "ERR timeout is not an integer or out of range")?);
+                block_ms = Some(parse_kv_u64(
+                    args,
+                    i + 1,
+                    "ERR timeout is not an integer or out of range",
+                )?);
                 i += 2;
             }
             b"NOACK" => {
@@ -272,14 +262,7 @@ fn parse_xreadgroup_argv<A: ArgvView + ?Sized>(
             }
             b"STREAMS" => {
                 let streams = parse_xreadgroup_streams(args, i + 1)?;
-                return Ok(XReadGroupParsed {
-                    group,
-                    consumer,
-                    count,
-                    block_ms,
-                    noack,
-                    streams,
-                });
+                return Ok(XReadGroupParsed { group, consumer, count, block_ms, noack, streams });
             }
             _ => return Err(CmdError::Wire("ERR syntax error")),
         }
@@ -293,10 +276,7 @@ fn parse_kv_u64<A: ArgvView + ?Sized>(
     bad: &'static str,
 ) -> Result<u64, CmdError> {
     let n = args.get(idx).ok_or("ERR syntax error")?;
-    std::str::from_utf8(n)
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .ok_or(CmdError::Wire(bad))
+    std::str::from_utf8(n).ok().and_then(|s| s.parse().ok()).ok_or(CmdError::Wire(bad))
 }
 
 /// `(key, last-seen-arg)` pairs as parsed from the `STREAMS …` tail.
@@ -308,9 +288,9 @@ fn parse_xreadgroup_streams<A: ArgvView + ?Sized>(
 ) -> Result<Vec<StreamKeyLastSeen>, CmdError> {
     let rest = args.len() - start;
     if rest == 0 || !rest.is_multiple_of(2) {
-        return Err(
-            CmdError::Wire("ERR Unbalanced XREADGROUP list of streams: for each stream key an ID or '>' must be specified."),
-        );
+        return Err(CmdError::Wire(
+            "ERR Unbalanced XREADGROUP list of streams: for each stream key an ID or '>' must be specified.",
+        ));
     }
     let n = rest / 2;
     let mut streams = Vec::with_capacity(n);
@@ -409,20 +389,18 @@ fn parse_xpending_extended<A: ArgvView + ?Sized>(
     if args.len() < i + 3 {
         return Err(CmdError::Wire("ERR syntax error"));
     }
-    let start = parse_range_start(&args[i])
-        .map_err(|_| CmdError::Wire("ERR Invalid stream ID specified as stream command argument"))?;
-    let end = parse_range_end(&args[i + 1])
-        .map_err(|_| CmdError::Wire("ERR Invalid stream ID specified as stream command argument"))?;
+    let start = parse_range_start(&args[i]).map_err(|_| {
+        CmdError::Wire("ERR Invalid stream ID specified as stream command argument")
+    })?;
+    let end = parse_range_end(&args[i + 1]).map_err(|_| {
+        CmdError::Wire("ERR Invalid stream ID specified as stream command argument")
+    })?;
     let count: usize = std::str::from_utf8(&args[i + 2])
         .ok()
         .and_then(|s| s.parse().ok())
         .ok_or("ERR value is not an integer or out of range")?;
     i += 3;
-    let consumer = if i < args.len() {
-        Some(args[i].to_vec())
-    } else {
-        None
-    };
+    let consumer = if i < args.len() { Some(args[i].to_vec()) } else { None };
     Ok(XPendingExtendedArgs { idle_min_ms, start, end, count, consumer })
 }
 
@@ -458,4 +436,3 @@ fn emit_pending_extended(out: &mut Vec<u8>, rows: &[kevy_store::PendingExtendedR
         encode_integer(out, i64::from(r.delivery_count));
     }
 }
-

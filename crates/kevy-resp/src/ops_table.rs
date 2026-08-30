@@ -319,35 +319,39 @@ pub const OP_TABLE: &[OpSpec] = &[
 /// missing), F3 = RESP-dispatch holes (facade exists, wire doesn't).
 pub const KNOWN_GAPS: &[(&str, u16, &str)] = &[
     // F3 — exists in kevy-store + embedded but not on the server wire.
-    ("SSCAN",    surface::ESTORE, "manifest sweep 2026-07-03: scan/hscan/zscan facades exist, sscan missing"),
+    (
+        "SSCAN",
+        surface::ESTORE,
+        "manifest sweep 2026-07-03: scan/hscan/zscan facades exist, sscan missing",
+    ),
     // F2 — server-propagatable writes an embed-as-replica cannot
     // apply (replay verbs missing). Until closed, embed-as-replica is
     // only safe for the basic-type verb set.
-    ("SETNX",      surface::REPLAY, "F2: replica-apply hole"),
-    ("SETEX",      surface::REPLAY, "F2"),
-    ("PSETEX",     surface::REPLAY, "F2"),
-    ("MSET",       surface::REPLAY, "F2"),
-    ("HMSET",      surface::REPLAY, "F2"),
-    ("RPOPLPUSH",  surface::REPLAY, "F2"),
+    ("SETNX", surface::REPLAY, "F2: replica-apply hole"),
+    ("SETEX", surface::REPLAY, "F2"),
+    ("PSETEX", surface::REPLAY, "F2"),
+    ("MSET", surface::REPLAY, "F2"),
+    ("HMSET", surface::REPLAY, "F2"),
+    ("RPOPLPUSH", surface::REPLAY, "F2"),
     ("BRPOPLPUSH", surface::REPLAY, "F2"),
-    ("LMOVE",      surface::REPLAY, "F2"),
-    ("BLPOP",      surface::REPLAY, "F2"),
-    ("BRPOP",      surface::REPLAY, "F2"),
-    ("BZPOPMIN",   surface::REPLAY, "F2"),
-    ("UNLINK",     surface::REPLAY, "F2"),
-    ("GETEX",      surface::REPLAY, "F2: embedded getex TTL side-effect logs?  verify at closure"),
-    ("GEOADD",     surface::REPLAY, "F2"),
+    ("LMOVE", surface::REPLAY, "F2"),
+    ("BLPOP", surface::REPLAY, "F2"),
+    ("BRPOP", surface::REPLAY, "F2"),
+    ("BZPOPMIN", surface::REPLAY, "F2"),
+    ("UNLINK", surface::REPLAY, "F2"),
+    ("GETEX", surface::REPLAY, "F2: embedded getex TTL side-effect logs?  verify at closure"),
+    ("GEOADD", surface::REPLAY, "F2"),
     ("GEOSEARCHSTORE", surface::REPLAY, "F2"),
-    ("GEORADIUS",  surface::REPLAY, "F2"),
+    ("GEORADIUS", surface::REPLAY, "F2"),
     ("GEORADIUSBYMEMBER", surface::REPLAY, "F2"),
-    ("XADD",       surface::REPLAY, "F2"),
-    ("XDEL",       surface::REPLAY, "F2"),
-    ("XTRIM",      surface::REPLAY, "F2"),
-    ("XSETID",     surface::REPLAY, "F2"),
-    ("XGROUP",     surface::REPLAY, "F2"),
+    ("XADD", surface::REPLAY, "F2"),
+    ("XDEL", surface::REPLAY, "F2"),
+    ("XTRIM", surface::REPLAY, "F2"),
+    ("XSETID", surface::REPLAY, "F2"),
+    ("XGROUP", surface::REPLAY, "F2"),
     ("XREADGROUP", surface::REPLAY, "F2"),
-    ("XACK",       surface::REPLAY, "F2"),
-    ("XCLAIM",     surface::REPLAY, "F2"),
+    ("XACK", surface::REPLAY, "F2"),
+    ("XCLAIM", surface::REPLAY, "F2"),
     ("XAUTOCLAIM", surface::REPLAY, "F2"),
 ];
 
@@ -410,9 +414,8 @@ mod tests {
                 continue;
             }
             let replayable = o.surfaces & surface::REPLAY != 0;
-            let ledgered = KNOWN_GAPS
-                .iter()
-                .any(|(n, f, _)| n == &o.name && f & surface::REPLAY != 0);
+            let ledgered =
+                KNOWN_GAPS.iter().any(|(n, f, _)| n == &o.name && f & surface::REPLAY != 0);
             // Ops whose AOF form is a DIFFERENT verb (documented effect
             // logging): SPOP→SREM handled by SPOP retaining REPLAY for
             // legacy frames; MSET/SETNX/GETEX log SET/PEXPIREAT forms.

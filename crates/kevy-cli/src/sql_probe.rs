@@ -18,9 +18,9 @@ use std::process::ExitCode;
 /// The RFC's function-subset file prefixes: 8 date/time + 2
 /// format/regexp + the scalar block + the mysql/pg time aliases.
 const SUBSET: &[&str] = &[
-    "06", "07", "08", "09", "10", "11", "12", "13", "32", "33", "36", "37", "38", "39", "40",
-    "41", "42", "43", "44", "45", "46", "47", "48", "49", "50", "51", "52", "53", "54", "55",
-    "56", "57", "58", "62", "65", "66", "67",
+    "06", "07", "08", "09", "10", "11", "12", "13", "32", "33", "36", "37", "38", "39", "40", "41",
+    "42", "43", "44", "45", "46", "47", "48", "49", "50", "51", "52", "53", "54", "55", "56", "57",
+    "58", "62", "65", "66", "67",
 ];
 
 /// The corpus clock (probe 08 header): 2025-06-15T12:00:00Z.
@@ -199,7 +199,7 @@ fn push_line(sql: &mut String, l: &str) {
 
 #[cfg(test)]
 mod parse_records_tests {
-    use super::{parse_records, Expect};
+    use super::{Expect, parse_records};
 
     /// `parse_records` carried 68 never-executed regions while being a pure
     /// function from a corpus file's text to its records. The grammar is the
@@ -233,7 +233,8 @@ mod parse_records_tests {
     /// that distinguishes them is matched anywhere in the header line.
     #[test]
     fn statement_records_carry_their_expectation() {
-        let got = parse_records("statement ok\nCREATE TABLE t(a INT)\n\nstatement error\nSELECT nope\n");
+        let got =
+            parse_records("statement ok\nCREATE TABLE t(a INT)\n\nstatement error\nSELECT nope\n");
         assert_eq!(got.len(), 2);
         assert_eq!(got[0].0, "CREATE TABLE t(a INT)");
         assert!(matches!(got[0].1, Expect::StatementOk));
@@ -248,7 +249,12 @@ mod parse_records_tests {
     fn text_outside_a_record_is_not_sql() {
         let src = "# a comment\n\nhalt\n\nstatement ok\nSELECT 1\n";
         let got = parse_records(src);
-        assert_eq!(got.len(), 1, "only the statement is a record; got SQL {:?}", got.iter().map(|r| &r.0).collect::<Vec<_>>());
+        assert_eq!(
+            got.len(),
+            1,
+            "only the statement is a record; got SQL {:?}",
+            got.iter().map(|r| &r.0).collect::<Vec<_>>()
+        );
         assert_eq!(got[0].0, "SELECT 1");
     }
 

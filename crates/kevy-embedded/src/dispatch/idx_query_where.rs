@@ -4,8 +4,8 @@
 
 use kevy_index::{IndexValue, WhereClause};
 
+use super::super::idx::{arity_err, badargs, no_such_index, spec_of};
 use super::super::util::{err, int};
-use super::super::idx::{badargs, no_such_index, spec_of, arity_err};
 use super::{idx_err, parse_bounds};
 use crate::store::Store;
 
@@ -94,8 +94,7 @@ pub(super) fn cmd_idx_count(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     let Some((where_clause, tail)) = parse_count_shape(argv) else {
         return badargs(out, "IDX.COUNT", name);
     };
-    let Some((min, max)) = driving_bounds(s, &where_clause, argv, "IDX.COUNT", name, out)
-    else {
+    let Some((min, max)) = driving_bounds(s, &where_clause, argv, "IDX.COUNT", name, out) else {
         return;
     };
     if tail.filters.is_empty() {

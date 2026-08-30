@@ -6,20 +6,12 @@
 use kevy_lua::Bridge;
 
 fn unwrap_int(reply: &[u8]) -> i64 {
-    assert!(
-        reply.starts_with(b":"),
-        "reply: {:?}",
-        String::from_utf8_lossy(reply)
-    );
+    assert!(reply.starts_with(b":"), "reply: {:?}", String::from_utf8_lossy(reply));
     let end = reply.iter().position(|&b| b == b'\r').unwrap();
     std::str::from_utf8(&reply[1..end]).unwrap().parse().unwrap()
 }
 fn unwrap_bulk(reply: &[u8]) -> Vec<u8> {
-    assert!(
-        reply.starts_with(b"$"),
-        "reply: {:?}",
-        String::from_utf8_lossy(reply)
-    );
+    assert!(reply.starts_with(b"$"), "reply: {:?}", String::from_utf8_lossy(reply));
     let crlf = reply.iter().position(|&b| b == b'\r').unwrap();
     let n: usize = std::str::from_utf8(&reply[1..crlf]).unwrap().parse().unwrap();
     let start = crlf + 2;
@@ -29,11 +21,7 @@ fn unwrap_bulk(reply: &[u8]) -> Vec<u8> {
 #[test]
 fn round_trip_integer() {
     let mut b = Bridge::with_no_dispatch();
-    let reply = b.eval(
-        b"local s = cmsgpack.pack(42); return cmsgpack.unpack(s)",
-        &[],
-        &[],
-    );
+    let reply = b.eval(b"local s = cmsgpack.pack(42); return cmsgpack.unpack(s)", &[], &[]);
     assert_eq!(unwrap_int(&reply), 42);
 }
 
@@ -110,18 +98,9 @@ fn negative_ints_round_trip() {
 fn pack_byte_format_check() {
     let mut b = Bridge::with_no_dispatch();
     // 42 as positive fixint = 0x2a → single byte
-    assert_eq!(
-        unwrap_int(&b.eval(b"return #cmsgpack.pack(42)", &[], &[])),
-        1
-    );
+    assert_eq!(unwrap_int(&b.eval(b"return #cmsgpack.pack(42)", &[], &[])), 1);
     // 200 → uint8 (0xcc 0xc8) → 2 bytes
-    assert_eq!(
-        unwrap_int(&b.eval(b"return #cmsgpack.pack(200)", &[], &[])),
-        2
-    );
+    assert_eq!(unwrap_int(&b.eval(b"return #cmsgpack.pack(200)", &[], &[])), 2);
     // 70000 → uint32 (0xce + 4 bytes) → 5 bytes
-    assert_eq!(
-        unwrap_int(&b.eval(b"return #cmsgpack.pack(70000)", &[], &[])),
-        5
-    );
+    assert_eq!(unwrap_int(&b.eval(b"return #cmsgpack.pack(70000)", &[], &[])), 5);
 }

@@ -200,9 +200,7 @@ impl<'a> Parser<'a> {
     /// (`"` / `\`) or at run starts, so they are char boundaries; `get`
     /// still verifies rather than panicking.
     fn slice(&self, a: usize, b: usize) -> Result<&'a str, String> {
-        self.s
-            .get(a..b)
-            .ok_or_else(|| self.err("invalid utf-8 boundary"))
+        self.s.get(a..b).ok_or_else(|| self.err("invalid utf-8 boundary"))
     }
 
     /// One value of any kind, dispatched on its first byte.
@@ -361,9 +359,8 @@ impl<'a> Parser<'a> {
         let mut v: u16 = 0;
         for _ in 0..4 {
             let c = self.bump().ok_or_else(|| self.err("truncated \\u escape"))?;
-            let d = (c as char)
-                .to_digit(16)
-                .ok_or_else(|| self.err("bad hex digit in \\u escape"))?;
+            let d =
+                (c as char).to_digit(16).ok_or_else(|| self.err("bad hex digit in \\u escape"))?;
             v = (v << 4) | d as u16;
         }
         Ok(v)
@@ -376,25 +373,19 @@ impl<'a> Parser<'a> {
     /// to the host that sent it.
     fn number(&mut self) -> Result<Value, String> {
         let start = self.pos;
-        while matches!(
-            self.peek(),
-            Some(b'-' | b'+' | b'.' | b'e' | b'E' | b'0'..=b'9')
-        ) {
+        while matches!(self.peek(), Some(b'-' | b'+' | b'.' | b'e' | b'E' | b'0'..=b'9')) {
             self.pos += 1;
         }
         let text = self.slice(start, self.pos)?;
         if text.bytes().any(|c| matches!(c, b'.' | b'e' | b'E')) {
-            text.parse::<f64>()
-                .map(Value::Float)
-                .map_err(|_| self.err("invalid number"))
+            text.parse::<f64>().map(Value::Float).map_err(|_| self.err("invalid number"))
         } else {
             match text.parse::<i64>() {
                 Ok(n) => Ok(Value::Int(n)),
                 // Integral but beyond i64: JSON allows arbitrary precision.
-                Err(_) => text
-                    .parse::<f64>()
-                    .map(Value::Float)
-                    .map_err(|_| self.err("invalid number")),
+                Err(_) => {
+                    text.parse::<f64>().map(Value::Float).map_err(|_| self.err("invalid number"))
+                }
             }
         }
     }
@@ -412,10 +403,7 @@ mod tests {
             ("pi", Value::Float(3.25)),
             ("ok", Value::Bool(true)),
             ("gone", Value::Null),
-            (
-                "items",
-                Value::Array(vec![s("a"), Value::Int(1), Value::Object(Vec::new())]),
-            ),
+            ("items", Value::Array(vec![s("a"), Value::Int(1), Value::Object(Vec::new())])),
         ]);
         let text = v.serialize();
         assert_eq!(parse(&text).unwrap(), v);
@@ -446,10 +434,7 @@ mod tests {
         assert_eq!(parse("1.5").unwrap(), Value::Float(1.5));
         assert_eq!(parse("2e3").unwrap(), Value::Float(2000.0));
         // Integral beyond i64 falls back to f64.
-        assert!(matches!(
-            parse("99999999999999999999").unwrap(),
-            Value::Float(_)
-        ));
+        assert!(matches!(parse("99999999999999999999").unwrap(), Value::Float(_)));
     }
 
     #[test]

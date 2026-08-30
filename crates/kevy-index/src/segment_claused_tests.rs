@@ -4,9 +4,9 @@
 
 use super::*;
 use crate::catalog::ValType;
-use crate::value::ValueTest;
 use crate::segment::Segment;
 use crate::value::IndexValue;
+use crate::value::ValueTest;
 
 fn i(v: i64) -> IndexValue {
     IndexValue::I64(v)
@@ -189,11 +189,7 @@ fn filter_reduces_facet_counts_distinct_does_not() {
     let page = s.query_claused(&i(0), &i(100), None, &c);
     assert_eq!(page.facets[0], vec![(b"tokyo".to_vec(), b"tokyo".to_vec(), 2)]);
 
-    let c = ScalarClauses {
-        distinct: Some((0, ValType::Str)),
-        facets: &facets,
-        ..clauses()
-    };
+    let c = ScalarClauses { distinct: Some((0, ValType::Str)), facets: &facets, ..clauses() };
     let page = s.query_claused(&i(0), &i(100), None, &c);
     assert_eq!(page.facets[0][0].2, 2, "DISTINCT collapses the page, not the counts");
     assert_eq!(keys(&page.hits).len(), 4, "page IS collapsed");
@@ -266,10 +262,7 @@ fn facet_fold_sums_by_identity_across_shards() {
     sort_facets(&mut acc);
     assert_eq!(
         acc[0],
-        vec![
-            (b"id2".to_vec(), b"7".to_vec(), 9),
-            (b"id1".to_vec(), b"1".to_vec(), 5),
-        ],
+        vec![(b"id2".to_vec(), b"7".to_vec(), 9), (b"id1".to_vec(), b"1".to_vec(), 5),],
         "summed by identity; the label is the first spelling seen"
     );
 }
@@ -305,7 +298,13 @@ fn count_claused_matches_the_query_total() {
         &IndexValue::I64(0),
         &IndexValue::I64(499),
         None,
-        &ScalarClauses { filters: &filters, sort: None, distinct: None, facets: &[], fetch: 10_000 },
+        &ScalarClauses {
+            filters: &filters,
+            sort: None,
+            distinct: None,
+            facets: &[],
+            fetch: 10_000,
+        },
     );
     assert_eq!(n, page.hits.len() as u64);
     assert_eq!(n, 167, "0,3,...,498");
@@ -340,21 +339,21 @@ fn claused_over_matches_the_hot_walk_for_the_same_entries() {
     ];
     for (n, c) in shapes.iter().enumerate() {
         let hot = seg.query_claused(&i(0), &i(100), None, c);
-        let items: Vec<ColdEntryRow> = [
-            (10i64, &b"u1"[..]),
-            (20, b"u2"),
-            (30, b"u3"),
-            (40, b"u4"),
-            (50, b"u5"),
-        ]
-        .iter()
-        .map(|&(v, k)| {
-            (i(v), k.to_vec(), seg.stored_row(k).iter().map(|o| o.map(<[u8]>::to_vec)).collect())
-        })
-        .collect();
+        let items: Vec<ColdEntryRow> =
+            [(10i64, &b"u1"[..]), (20, b"u2"), (30, b"u3"), (40, b"u4"), (50, b"u5")]
+                .iter()
+                .map(|&(v, k)| {
+                    (
+                        i(v),
+                        k.to_vec(),
+                        seg.stored_row(k).iter().map(|o| o.map(<[u8]>::to_vec)).collect(),
+                    )
+                })
+                .collect();
         let (hits, facets) = claused_over(items.into_iter(), c);
-        let pair =
-            |hs: &[ScalarHit]| hs.iter().map(|h| (h.key.clone(), h.okey.clone(), h.dkey.clone())).collect::<Vec<_>>();
+        let pair = |hs: &[ScalarHit]| {
+            hs.iter().map(|h| (h.key.clone(), h.okey.clone(), h.dkey.clone())).collect::<Vec<_>>()
+        };
         assert_eq!(pair(&hot.hits), pair(&hits), "shape {n}: hits drifted");
         assert_eq!(hot.facets, facets, "shape {n}: facets drifted");
     }

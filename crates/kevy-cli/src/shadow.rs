@@ -61,10 +61,8 @@ pub fn rows_of(reply: &Reply, shape: Shape) -> Rows {
 }
 
 fn pairs(items: &[Reply]) -> Rows {
-    let bulks: Vec<&Vec<u8>> = items
-        .iter()
-        .filter_map(|r| if let Reply::Bulk(b) = r { Some(b) } else { None })
-        .collect();
+    let bulks: Vec<&Vec<u8>> =
+        items.iter().filter_map(|r| if let Reply::Bulk(b) = r { Some(b) } else { None }).collect();
     bulks
         .chunks(2)
         .map(|c| (c[0].clone(), c.get(1).map(|v| (*v).clone()).unwrap_or_default()))
@@ -99,10 +97,16 @@ pub struct Compared {
 pub fn compare(old: &Rows, new: &Rows) -> Compared {
     let old_set: std::collections::HashSet<&[u8]> = old.iter().map(|(k, _)| k.as_slice()).collect();
     let new_set: std::collections::HashSet<&[u8]> = new.iter().map(|(k, _)| k.as_slice()).collect();
-    let missing =
-        old.iter().filter(|(k, _)| !new_set.contains(k.as_slice())).map(|(k, _)| k.clone()).collect();
-    let extra =
-        new.iter().filter(|(k, _)| !old_set.contains(k.as_slice())).map(|(k, _)| k.clone()).collect();
+    let missing = old
+        .iter()
+        .filter(|(k, _)| !new_set.contains(k.as_slice()))
+        .map(|(k, _)| k.clone())
+        .collect();
+    let extra = new
+        .iter()
+        .filter(|(k, _)| !old_set.contains(k.as_slice()))
+        .map(|(k, _)| k.clone())
+        .collect();
     let mut first = None;
     for i in 0..old.len().max(new.len()) {
         if old.get(i).map(|(k, _)| k) != new.get(i).map(|(k, _)| k) {
@@ -178,7 +182,9 @@ pub fn print_report(r: &ShadowReport) {
                     c.missing.iter().take(5).map(|k| show(k)).collect::<Vec<_>>().join(", ")
                 );
                 println!("    a row the old path has and the new one does not is usually a writer");
-                println!("    that was never updated — the same class TABLE.VERIFY's `missing` finds");
+                println!(
+                    "    that was never updated — the same class TABLE.VERIFY's `missing` finds"
+                );
             }
             if !c.extra.is_empty() {
                 println!(
@@ -291,9 +297,8 @@ pub fn run_shadow_cli(args: &[String]) -> ExitCode {
         );
         return ExitCode::FAILURE;
     };
-    let split = |s: &str| -> Vec<Vec<u8>> {
-        s.split_whitespace().map(|t| t.as_bytes().to_vec()).collect()
-    };
+    let split =
+        |s: &str| -> Vec<Vec<u8>> { s.split_whitespace().map(|t| t.as_bytes().to_vec()).collect() };
     let mut client = match RespClient::connect(&host, port) {
         Ok(c) => c,
         Err(e) => {

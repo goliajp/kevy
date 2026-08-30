@@ -1,5 +1,5 @@
-use crate::KevyError;
 use super::*;
+use crate::KevyError;
 
 /// Smoke against the embedded backend: every generic + string method
 /// delegating to `Store`. Per-collection coverage (hash/list/set/zset)
@@ -36,8 +36,7 @@ fn embedded_mem_full_crud_round_trip() {
     c.flushall().unwrap();
     assert_eq!(c.dbsize().unwrap(), 0);
 
-    c.set_with_ttl(b"timed2", b"x", Duration::from_mins(1))
-        .unwrap();
+    c.set_with_ttl(b"timed2", b"x", Duration::from_mins(1)).unwrap();
     let ttl = c.ttl_ms(b"timed2").unwrap();
     assert!((0..=60_000).contains(&ttl));
 }
@@ -52,16 +51,9 @@ fn anonymous_mem_publish_returns_zero() {
 #[test]
 fn embedded_mget_mset() {
     let mut c = Connection::connect("mem://").unwrap();
-    c.mset(&[
-        (b"a".as_ref(), b"1".as_ref()),
-        (b"b".as_ref(), b"2".as_ref()),
-    ])
-    .unwrap();
+    c.mset(&[(b"a".as_ref(), b"1".as_ref()), (b"b".as_ref(), b"2".as_ref())]).unwrap();
     let got = c.mget(&[&b"a"[..], &b"b"[..], &b"missing"[..]]).unwrap();
-    assert_eq!(
-        got,
-        vec![Some(b"1".to_vec()), Some(b"2".to_vec()), None]
-    );
+    assert_eq!(got, vec![Some(b"1".to_vec()), Some(b"2".to_vec()), None]);
 }
 
 #[test]

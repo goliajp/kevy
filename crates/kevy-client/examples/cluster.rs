@@ -16,10 +16,7 @@
 use kevy_client::ClusterClient;
 
 fn main() -> kevy_client::KevyResult<()> {
-    let seed: u16 = std::env::args()
-        .nth(1)
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(6005);
+    let seed: u16 = std::env::args().nth(1).and_then(|s| s.parse().ok()).unwrap_or(6005);
 
     // Connect to a seed shard; the full topology is discovered from it.
     let mut cc = ClusterClient::connect("127.0.0.1", seed)?;

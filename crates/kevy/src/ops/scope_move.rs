@@ -142,18 +142,12 @@ fn validate_move_scope_route(
             return None;
         }
         None => {
-            encode_error(
-                out,
-                "ERR MOVE-SCOPE: [cluster] node_id is not configured on this node",
-            );
+            encode_error(out, "ERR MOVE-SCOPE: [cluster] node_id is not configured on this node");
             return None;
         }
     }
     let Some(target_addr) = ctx.state.scope.peer_addr(to_id) else {
-        encode_error(
-            out,
-            &format!("ERR MOVE-SCOPE: target node {to_id:?} not in [cluster] peers"),
-        );
+        encode_error(out, &format!("ERR MOVE-SCOPE: target node {to_id:?} not in [cluster] peers"));
         return None;
     };
     // The dispatch write-quiesce gate only consults the migration
@@ -171,10 +165,7 @@ fn validate_move_scope_route(
 }
 
 fn wrong_syntax(out: &mut Vec<u8>) {
-    encode_error(
-        out,
-        "ERR MOVE-SCOPE syntax: MOVE-SCOPE <prefix> FROM <from-id> TO <to-id>",
-    );
+    encode_error(out, "ERR MOVE-SCOPE syntax: MOVE-SCOPE <prefix> FROM <from-id> TO <to-id>");
 }
 
 /// Walk the local keyspace, reconstruct keys matching `prefix` as
@@ -214,10 +205,7 @@ fn ship_prefix_to_target(
     let n = s.read(&mut buf).map_err(|e| format!("read: {e}"))?;
     let reply = &buf[..n];
     if !reply.starts_with(b"+") {
-        return Err(format!(
-            "target replied non-OK: {:?}",
-            String::from_utf8_lossy(reply)
-        ));
+        return Err(format!("target replied non-OK: {:?}", String::from_utf8_lossy(reply)));
     }
     Ok(count)
 }
@@ -260,7 +248,10 @@ mod tests {
     fn serialize_prefix_emits_hset_for_hash_in_order() {
         let mut store = fresh_store();
         store
-            .hset(b"app:h", &[(b"f1".as_slice(), b"v1".as_slice()), (b"f2".as_slice(), b"v2".as_slice())])
+            .hset(
+                b"app:h",
+                &[(b"f1".as_slice(), b"v1".as_slice()), (b"f2".as_slice(), b"v2".as_slice())],
+            )
             .unwrap();
         let (bulk, count) = serialize_prefix(&mut store, b"app:");
         assert_eq!(count, 1);
@@ -393,14 +384,8 @@ mod tests {
         cmd_move_scope_ingest(&c.ctx(), &mut store, &args, &mut out);
         assert_eq!(out, b"+OK 2\r\n", "wire reply shape");
         // Store now carries both keys.
-        assert_eq!(
-            store.get(b"app:a").map(|v| v.map(|c| c.into_owned())),
-            Ok(Some(b"1".to_vec()))
-        );
-        assert_eq!(
-            store.get(b"app:b").map(|v| v.map(|c| c.into_owned())),
-            Ok(Some(b"2".to_vec()))
-        );
+        assert_eq!(store.get(b"app:a").map(|v| v.map(|c| c.into_owned())), Ok(Some(b"1".to_vec())));
+        assert_eq!(store.get(b"app:b").map(|v| v.map(|c| c.into_owned())), Ok(Some(b"2".to_vec())));
     }
 
     #[test]

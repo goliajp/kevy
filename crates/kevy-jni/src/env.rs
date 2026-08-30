@@ -87,8 +87,7 @@ unsafe fn slot(env: JniEnv, idx: usize) -> *const c_void {
 /// `env` as in [`slot`]; `arr` must be a live, non-null `byte[]` reference
 /// from the same call.
 pub(crate) unsafe fn get_byte_array(env: JniEnv, arr: JObject) -> Vec<u8> {
-    let len_fn: GetArrayLengthFn =
-        unsafe { std::mem::transmute(slot(env, SLOT_GET_ARRAY_LENGTH)) };
+    let len_fn: GetArrayLengthFn = unsafe { std::mem::transmute(slot(env, SLOT_GET_ARRAY_LENGTH)) };
     let n = unsafe { len_fn(env, arr) };
     if n <= 0 {
         return Vec::new();
@@ -107,8 +106,7 @@ pub(crate) unsafe fn get_byte_array(env: JniEnv, arr: JObject) -> Vec<u8> {
 /// `env` as in [`slot`]; `arr` must be a live, non-null `long[]` reference
 /// from the same call.
 pub(crate) unsafe fn get_long_array(env: JniEnv, arr: JObject) -> Vec<JLong> {
-    let len_fn: GetArrayLengthFn =
-        unsafe { std::mem::transmute(slot(env, SLOT_GET_ARRAY_LENGTH)) };
+    let len_fn: GetArrayLengthFn = unsafe { std::mem::transmute(slot(env, SLOT_GET_ARRAY_LENGTH)) };
     let n = unsafe { len_fn(env, arr) };
     if n <= 0 {
         return Vec::new();

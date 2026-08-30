@@ -18,8 +18,8 @@ impl Store {
     pub(crate) fn insert_entry(&mut self, key: SmallBytes, mut entry: Entry) -> Option<Entry> {
         // New-key event capture: the owned key copy is only paid when
         // the capture flag is on (server with `n` notifications).
-        let new_key_copy = (self.notify_capture & crate::notify::CAPTURE_NEW != 0)
-            .then(|| key.to_vec());
+        let new_key_copy =
+            (self.notify_capture & crate::notify::CAPTURE_NEW != 0).then(|| key.to_vec());
         // A wholesale value replacement (type change / RESTORE)
         // discards any per-field hash TTLs; a fresh create is a no-op.
         self.clear_hash_key_ttls(key.as_slice());
@@ -36,10 +36,8 @@ impl Store {
             Some(old) => {
                 // A displaced cold stub's vlog record dies with it.
                 self.tier_note_dead(key_heap, &old.value);
-                self.used_memory = self
-                    .used_memory
-                    .saturating_sub(old.weight())
-                    .saturating_add(new_w);
+                self.used_memory =
+                    self.used_memory.saturating_sub(old.weight()).saturating_add(new_w);
             }
             None => {
                 self.used_memory = self.used_memory.saturating_add(new_w + ENTRY_OVERHEAD);
@@ -73,9 +71,7 @@ impl Store {
     pub(crate) fn take_entry_keepalive(&mut self, key: &[u8]) -> Option<Entry> {
         self.clear_hash_key_ttls(key);
         let old = self.map.remove(key)?;
-        self.used_memory = self
-            .used_memory
-            .saturating_sub(old.weight() + ENTRY_OVERHEAD);
+        self.used_memory = self.used_memory.saturating_sub(old.weight() + ENTRY_OVERHEAD);
         if old.expire_at_ns.is_some() {
             self.adjust_expires(-1);
         }

@@ -146,10 +146,7 @@ pub fn render_timestamp(us: i64) -> String {
     let secs = us.div_euclid(MICROS_PER_SEC);
     let frac = us.rem_euclid(MICROS_PER_SEC);
     let c = kevy_time::civil_from_epoch(secs);
-    let mut out = format!(
-        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
-        c.y, c.m, c.d, c.h, c.min, c.s
-    );
+    let mut out = format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", c.y, c.m, c.d, c.h, c.min, c.s);
     if frac != 0 {
         out.push_str(format!(".{frac:06}").trim_end_matches('0'));
     }
@@ -249,8 +246,18 @@ pub(crate) fn to_char(args: &[Scalar]) -> Result<Scalar, ScalarError> {
 
 /// English month names, PG's spellings (`Month` pads to 9, `Mon` is 3).
 const MONTHS: [&str; 12] = [
-    "January", "February", "March", "April", "May", "June", "July", "August", "September",
-    "October", "November", "December",
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
 ];
 
 /// One `to_char` template token at the head of `rest` — longest pattern

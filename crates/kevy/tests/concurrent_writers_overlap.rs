@@ -59,8 +59,7 @@ fn concurrent_writers_overlap_no_fabrication() {
     let mut h = Harness::spawn(cfg).expect("spawn kevy");
 
     // Per-key set of all values that were ACK'd by ANY writer.
-    let acked: Arc<Mutex<HashMap<u32, HashSet<Vec<u8>>>>> =
-        Arc::new(Mutex::new(HashMap::new()));
+    let acked: Arc<Mutex<HashMap<u32, HashSet<Vec<u8>>>>> = Arc::new(Mutex::new(HashMap::new()));
     let stop = Arc::new(AtomicBool::new(false));
 
     let mut handles = Vec::with_capacity(N_WRITERS);
@@ -90,12 +89,7 @@ fn concurrent_writers_overlap_no_fabrication() {
     assert!(
         pre_kill_violations.is_empty(),
         "PRE-KILL FABRICATION DETECTED — kevy returned values nobody wrote:\n{}",
-        pre_kill_violations
-            .iter()
-            .take(5)
-            .map(|s| format!("  {s}"))
-            .collect::<Vec<_>>()
-            .join("\n")
+        pre_kill_violations.iter().take(5).map(|s| format!("  {s}")).collect::<Vec<_>>().join("\n")
     );
     eprintln!("overlap: pre-kill verify PASSED — no fabricated values across {key_count} keys");
 
@@ -114,7 +108,9 @@ fn concurrent_writers_overlap_no_fabrication() {
             .collect::<Vec<_>>()
             .join("\n")
     );
-    eprintln!("overlap: post-restart verify PASSED — AOF replay preserved no-fabrication invariant");
+    eprintln!(
+        "overlap: post-restart verify PASSED — AOF replay preserved no-fabrication invariant"
+    );
 
     let _ = std::fs::remove_dir_all(&tmp);
 }
@@ -147,10 +143,7 @@ fn writer_loop(
         }
         match stream.read(&mut reply_buf) {
             Ok(n) if n >= 5 && reply_buf[..5] == *b"+OK\r\n" => {
-                acked.lock().unwrap()
-                    .entry(key_idx)
-                    .or_default()
-                    .insert(value);
+                acked.lock().unwrap().entry(key_idx).or_default().insert(value);
                 seq += 1;
             }
             _ => return,
@@ -161,10 +154,7 @@ fn writer_loop(
 /// For each key in `acked`, GET it from kevy and verify the value is
 /// in the ACK set (or nil = lost). Returns descriptions of any
 /// fabricated values (failures).
-fn check_no_fabrication(
-    port: u16,
-    acked: &HashMap<u32, HashSet<Vec<u8>>>,
-) -> Vec<String> {
+fn check_no_fabrication(port: u16, acked: &HashMap<u32, HashSet<Vec<u8>>>) -> Vec<String> {
     let Ok(mut s) = TcpStream::connect(format!("127.0.0.1:{port}")) else {
         return vec!["verify conn failed".into()];
     };

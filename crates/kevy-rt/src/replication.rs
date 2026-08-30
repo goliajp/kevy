@@ -191,9 +191,7 @@ impl ReplicaConn {
             ReplicaState::HandshakePending => None,
             ReplicaState::AckSent { replica_id, .. }
             | ReplicaState::Streaming { replica_id, .. }
-            | ReplicaState::SnapshotShipping { replica_id, .. } => {
-                Some(replica_id.clone())
-            }
+            | ReplicaState::SnapshotShipping { replica_id, .. } => Some(replica_id.clone()),
             ReplicaState::Closed { .. } => return,
         };
         self.state = ReplicaState::Closed { replica_id: id };
@@ -219,8 +217,8 @@ pub(crate) fn advance_handshake(
         return Ok(());
     }
     let mut argv = Argv::default();
-    let parsed = parse_command_into(&conn.input, &mut argv)
-        .map_err(|_| HandshakeError::BadCommand)?;
+    let parsed =
+        parse_command_into(&conn.input, &mut argv).map_err(|_| HandshakeError::BadCommand)?;
     let consumed = match parsed {
         Some(n) => n,
         None => return Ok(()), // need more bytes — caller will read more
@@ -327,11 +325,8 @@ mod tests {
     #[test]
     fn close_is_idempotent() {
         let mut conn = fake_conn();
-        conn.state = ReplicaState::Streaming {
-            replica_id: "r".into(),
-            sent_offset: 5,
-            generation: 1,
-        };
+        conn.state =
+            ReplicaState::Streaming { replica_id: "r".into(), sent_offset: 5, generation: 1 };
         conn.close();
         let snapshot = format!("{:?}", conn.state);
         conn.close(); // second call must not overwrite fields

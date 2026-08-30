@@ -6,8 +6,8 @@
 //! sweeps in one batch, SPOP is deterministic, LINDEX is O(1) where
 //! Redis's quicklist is O(N)).
 
-use super::{VerbMeta, v};
 use super::flags::*;
+use super::{VerbMeta, v};
 
 #[rustfmt::skip]
 pub(super) const ROWS: &[VerbMeta] = &[

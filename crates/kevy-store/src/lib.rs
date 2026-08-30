@@ -95,8 +95,8 @@ pub use bitmap::{BitOp, bitop_combine};
 pub use error::{KevyError, KevyResult};
 pub mod evict;
 pub mod expire;
-pub use expire::ExpireStats;
 pub(crate) use entry::Entry;
+pub use expire::ExpireStats;
 mod hash;
 mod hash_read;
 mod hash_ttl;
@@ -104,12 +104,12 @@ pub use hash_ttl::{HExpireCode, HExpireCond};
 mod keyspace;
 mod keyspace_load;
 mod list;
-pub mod list_seg;
-pub mod seg_map;
 mod list_read;
+pub mod list_seg;
 mod notify;
 mod rng;
 mod scan;
+pub mod seg_map;
 pub use notify::KeyspaceEvent;
 mod list_ops;
 mod set;
@@ -117,8 +117,8 @@ mod set_read;
 mod small_set;
 pub use small_set::{SmallSetData, SmallSetIter};
 pub mod packed_row;
-mod value_weight;
 mod small_hash;
+mod value_weight;
 pub use small_hash::{SmallHashData, SmallHashIter};
 mod small_list;
 pub use small_list::{SmallListData, SmallListIter};
@@ -126,14 +126,14 @@ mod small_zset;
 pub use small_zset::{SmallZSetData, SmallZSetIter};
 mod snapshot;
 pub use snapshot::SnapshotView;
-mod stream;
-mod string;
-mod string_rmw;
-mod string_set;
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 mod segrows;
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 mod segwindow;
+mod stream;
+mod string;
+mod string_rmw;
+mod string_set;
 mod tier;
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 mod tier_codec;
@@ -154,25 +154,22 @@ mod util;
 mod value;
 mod value_cold;
 mod zset;
-pub mod zset_seg;
 mod zset_algebra;
 mod zset_range;
+pub mod zset_seg;
 pub use zset_algebra::{ZAggregate, zdiff, zinter, zintercard, zunion};
 mod zset_flags;
-pub use zset_flags::{ZaddFlags, ZaddReport};
 pub use stream::{
-    AutoclaimResult, ConsumerGroup, ConsumerState, EntryBatch, GroupCreateMode,
-    LoadedGroup, LoadedPelEntry, LoadedStreamEntry, PelEntry, PendingExtended,
-    PendingExtendedRow, PendingSummary, ReadGroupId, StreamData, StreamId, StreamIdError,
-    XAddIdSpec, XClaimOpts, now_unix_ms, parse_explicit_id, parse_range_end,
-    parse_range_start, parse_xadd_id,
+    AutoclaimResult, ConsumerGroup, ConsumerState, EntryBatch, GroupCreateMode, LoadedGroup,
+    LoadedPelEntry, LoadedStreamEntry, PelEntry, PendingExtended, PendingExtendedRow,
+    PendingSummary, ReadGroupId, StreamData, StreamId, StreamIdError, XAddIdSpec, XClaimOpts,
+    now_unix_ms, parse_explicit_id, parse_range_end, parse_range_start, parse_xadd_id,
 };
 pub use string::{GetReply, GetShared};
 pub use util::glob_match;
 pub use value::*;
+pub use zset_flags::{ZaddFlags, ZaddReport};
 
-pub(crate) use clock::{deadline_at, now_ns, pack_deadline, remaining_ms};
-use kevy_map::KevyMap;
 /// Feed kevy's monotonic clock on `wasm32-unknown-unknown`, which has no
 /// `Instant`. The embedding host advances time (ns since an arbitrary fixed
 /// epoch, e.g. `Date.now() * 1e6`) before TTL-sensitive ops and once per
@@ -185,7 +182,8 @@ pub use clock::set_clock_ns;
 /// auto-IDs and `EXPIREAT`/`PEXPIREAT`.
 #[cfg(any(feature = "external-clock", all(target_arch = "wasm32", target_os = "unknown")))]
 pub use clock::set_wall_clock_ms;
-
+pub(crate) use clock::{deadline_at, now_ns, pack_deadline, remaining_ms};
+use kevy_map::KevyMap;
 
 /// A single-database keyspace.
 ///
@@ -346,7 +344,6 @@ pub struct Store {
     pub(crate) tier_peek: bool,
 }
 
-
 mod store_admin;
 
 /// No row-segment backend on this target.
@@ -375,21 +372,21 @@ mod tests_list_seg;
 #[cfg(test)]
 mod tests_memory;
 #[cfg(test)]
-mod tests_seg_map;
+#[cfg(test)]
+mod tests_range_past_the_end;
 #[cfg(test)]
 mod tests_score_order;
 #[cfg(test)]
-mod tests_zadd_same_score;
-#[cfg(test)]
-mod tests_zset_seg;
+mod tests_seg_map;
 #[cfg(test)]
 mod tests_snapshot;
-#[cfg(test)]
-#[cfg(test)]
-mod tests_range_past_the_end;
 #[cfg(test)]
 mod tests_string_encoding;
 #[cfg(all(test, feature = "std", not(target_arch = "wasm32")))]
 mod tests_tier;
 #[cfg(all(test, feature = "std", not(target_arch = "wasm32")))]
 mod tests_tier_peek;
+#[cfg(test)]
+mod tests_zadd_same_score;
+#[cfg(test)]
+mod tests_zset_seg;

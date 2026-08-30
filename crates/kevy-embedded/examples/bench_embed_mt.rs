@@ -50,18 +50,14 @@ fn run(label: &str, store: &Store, threads: usize, n_per: usize, keys: &[Vec<u8>
 }
 
 fn main() {
-    let n_per: usize = std::env::var("KEVY_BENCH_N")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(2_000_000);
+    let n_per: usize =
+        std::env::var("KEVY_BENCH_N").ok().and_then(|s| s.parse().ok()).unwrap_or(2_000_000);
     let keys: Vec<Vec<u8>> = (0..KEYS).map(|i| format!("k{i}").into_bytes()).collect();
-    let shards: usize = std::env::var("KEVY_SHARDS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(1);
+    let shards: usize = std::env::var("KEVY_SHARDS").ok().and_then(|s| s.parse().ok()).unwrap_or(1);
 
     // Shared in-memory store (no AOF) — isolate the lock/keyspace from disk.
-    let store = Store::open(Config::default().with_shards(shards).with_ttl_reaper_manual()).unwrap();
+    let store =
+        Store::open(Config::default().with_shards(shards).with_ttl_reaper_manual()).unwrap();
     for k in &keys {
         store.set(k, VAL).unwrap();
     }

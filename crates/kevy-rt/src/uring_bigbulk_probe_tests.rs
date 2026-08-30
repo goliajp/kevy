@@ -40,47 +40,32 @@ fn generic_probe_matches_4k_set_just_header() {
 #[test]
 fn generic_probe_matches_64k_set() {
     let frame = make_set_frame(b"k", 65536);
-    assert!(matches!(
-        probe_generic_bigbulk(&frame),
-        BigArgGenericProbe::Promote { .. }
-    ));
+    assert!(matches!(probe_generic_bigbulk(&frame), BigArgGenericProbe::Promote { .. }));
 }
 
 #[test]
 fn generic_probe_rejects_small_set_below_threshold() {
     let frame = make_set_frame(b"k", 100);
-    assert!(matches!(
-        probe_generic_bigbulk(&frame),
-        BigArgGenericProbe::NotApplicable
-    ));
+    assert!(matches!(probe_generic_bigbulk(&frame), BigArgGenericProbe::NotApplicable));
 }
 
 #[test]
 fn generic_probe_rejects_threshold_minus_one() {
     let frame = make_set_frame(b"k", BIG_ARG_PROMOTE_THRESHOLD - 1);
-    assert!(matches!(
-        probe_generic_bigbulk(&frame),
-        BigArgGenericProbe::NotApplicable
-    ));
+    assert!(matches!(probe_generic_bigbulk(&frame), BigArgGenericProbe::NotApplicable));
 }
 
 #[test]
 fn generic_probe_matches_threshold_exact() {
     let frame = make_set_frame(b"k", BIG_ARG_PROMOTE_THRESHOLD);
-    assert!(matches!(
-        probe_generic_bigbulk(&frame),
-        BigArgGenericProbe::Promote { .. }
-    ));
+    assert!(matches!(probe_generic_bigbulk(&frame), BigArgGenericProbe::Promote { .. }));
 }
 
 #[test]
 fn generic_probe_accepts_lowercase_set() {
     let mut f = Vec::new();
     f.extend_from_slice(b"*3\r\n$3\r\nset\r\n$1\r\nk\r\n$4096\r\n");
-    assert!(matches!(
-        probe_generic_bigbulk(&f),
-        BigArgGenericProbe::Promote { .. }
-    ));
+    assert!(matches!(probe_generic_bigbulk(&f), BigArgGenericProbe::Promote { .. }));
 }
 
 // -- additional generic probe tests --
@@ -150,28 +135,19 @@ fn generic_probe_matches_setex_header_only() {
 #[test]
 fn generic_probe_matches_append_header_only() {
     let frame = make_append_frame(b"k", 16384);
-    assert!(matches!(
-        probe_generic_bigbulk(&frame),
-        BigArgGenericProbe::Promote { .. }
-    ));
+    assert!(matches!(probe_generic_bigbulk(&frame), BigArgGenericProbe::Promote { .. }));
 }
 
 #[test]
 fn generic_probe_matches_getset_header_only() {
     let frame = make_getset_frame(b"k", 65536);
-    assert!(matches!(
-        probe_generic_bigbulk(&frame),
-        BigArgGenericProbe::Promote { .. }
-    ));
+    assert!(matches!(probe_generic_bigbulk(&frame), BigArgGenericProbe::Promote { .. }));
 }
 
 #[test]
 fn generic_probe_rejects_small_append() {
     let frame = make_append_frame(b"k", 100);
-    assert!(matches!(
-        probe_generic_bigbulk(&frame),
-        BigArgGenericProbe::NotApplicable
-    ));
+    assert!(matches!(probe_generic_bigbulk(&frame), BigArgGenericProbe::NotApplicable));
 }
 
 #[test]
@@ -183,19 +159,13 @@ fn generic_probe_matches_bare_set() {
     // routing — the FrameStitch redispatch through `dispatch_batch`
     // is the correctness-preserving path.
     let frame = make_set_frame(b"k", 8192);
-    assert!(matches!(
-        probe_generic_bigbulk(&frame),
-        BigArgGenericProbe::Promote { .. }
-    ));
+    assert!(matches!(probe_generic_bigbulk(&frame), BigArgGenericProbe::Promote { .. }));
 }
 
 #[test]
 fn generic_probe_rejects_get_command() {
     let frame = b"*2\r\n$3\r\nGET\r\n$1\r\nk\r\n";
-    assert!(matches!(
-        probe_generic_bigbulk(frame),
-        BigArgGenericProbe::NotApplicable
-    ));
+    assert!(matches!(probe_generic_bigbulk(frame), BigArgGenericProbe::NotApplicable));
 }
 
 #[test]
@@ -211,10 +181,7 @@ fn generic_probe_rejects_set_with_options_big_value_not_last() {
     // EX value bulk header but value missing — the LAST bulk is
     // incomplete (the `10`), so big-bulk-is-last fires falsely.
     // Reject because the verb is SET (specialised path handles SET).
-    assert!(matches!(
-        probe_generic_bigbulk(&f),
-        BigArgGenericProbe::NotApplicable
-    ));
+    assert!(matches!(probe_generic_bigbulk(&f), BigArgGenericProbe::NotApplicable));
 }
 
 #[test]
@@ -223,11 +190,7 @@ fn generic_probe_matches_setex_with_partial_body() {
     let header_len = f.len();
     f.extend_from_slice(&[b'Y'; 1000]);
     match probe_generic_bigbulk(&f) {
-        BigArgGenericProbe::Promote {
-            total,
-            bytes_present,
-            ..
-        } => {
+        BigArgGenericProbe::Promote { total, bytes_present, .. } => {
             assert_eq!(total, header_len + 16384 + 2);
             assert_eq!(bytes_present, header_len + 1000);
         }
@@ -239,10 +202,7 @@ fn generic_probe_matches_setex_with_partial_body() {
 fn generic_probe_matches_psetex() {
     let mut f = Vec::new();
     f.extend_from_slice(b"*4\r\n$6\r\nPSETEX\r\n$1\r\nk\r\n$5\r\n10000\r\n$8192\r\n");
-    assert!(matches!(
-        probe_generic_bigbulk(&f),
-        BigArgGenericProbe::Promote { .. }
-    ));
+    assert!(matches!(probe_generic_bigbulk(&f), BigArgGenericProbe::Promote { .. }));
 }
 
 #[test]
@@ -250,10 +210,7 @@ fn generic_probe_matches_mset_last_big() {
     // *3 MSET k1 <BIG> — argc=3, verb+key+value.
     let mut f = Vec::new();
     f.extend_from_slice(b"*3\r\n$4\r\nMSET\r\n$2\r\nk1\r\n$8192\r\n");
-    assert!(matches!(
-        probe_generic_bigbulk(&f),
-        BigArgGenericProbe::Promote { .. }
-    ));
+    assert!(matches!(probe_generic_bigbulk(&f), BigArgGenericProbe::Promote { .. }));
 }
 
 #[test]
@@ -263,10 +220,7 @@ fn generic_probe_rejects_mset_big_not_last() {
     f.extend_from_slice(b"*5\r\n$4\r\nMSET\r\n$2\r\nk1\r\n$8192\r\n");
     f.extend_from_slice(&[b'X'; 8192]);
     f.extend_from_slice(b"\r\n$2\r\nk2\r\n$");
-    assert!(matches!(
-        probe_generic_bigbulk(&f),
-        BigArgGenericProbe::NotApplicable
-    ));
+    assert!(matches!(probe_generic_bigbulk(&f), BigArgGenericProbe::NotApplicable));
 }
 
 #[test]
@@ -274,20 +228,14 @@ fn generic_probe_rejects_mset_even_argc() {
     // MSET requires odd argc (verb + N pairs). *4 is malformed.
     let mut f = Vec::new();
     f.extend_from_slice(b"*4\r\n$4\r\nMSET\r\n$2\r\nk1\r\n$1\r\nv\r\n$8192\r\n");
-    assert!(matches!(
-        probe_generic_bigbulk(&f),
-        BigArgGenericProbe::NotApplicable
-    ));
+    assert!(matches!(probe_generic_bigbulk(&f), BigArgGenericProbe::NotApplicable));
 }
 
 #[test]
 fn generic_probe_rejects_truncated_header() {
     let full = make_setex_frame(b"k", b"100", 16384);
     for cut in 0..full.len() {
-        assert!(matches!(
-            probe_generic_bigbulk(&full[..cut]),
-            BigArgGenericProbe::NotApplicable
-        ));
+        assert!(matches!(probe_generic_bigbulk(&full[..cut]), BigArgGenericProbe::NotApplicable));
     }
 }
 
@@ -299,8 +247,5 @@ fn generic_probe_rejects_when_all_bulks_complete() {
     let mut f = make_setex_frame(b"k", b"100", 100);
     f.extend_from_slice(&[b'Z'; 100]);
     f.extend_from_slice(b"\r\n");
-    assert!(matches!(
-        probe_generic_bigbulk(&f),
-        BigArgGenericProbe::NotApplicable
-    ));
+    assert!(matches!(probe_generic_bigbulk(&f), BigArgGenericProbe::NotApplicable));
 }

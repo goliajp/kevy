@@ -72,11 +72,7 @@ fn preview_bytes(b: &[u8]) -> String {
             hex.push(' ');
         }
         let _ = write!(hex, "{x:02x}");
-        ascii.push(if (0x20..0x7f).contains(&x) {
-            x as char
-        } else {
-            '.'
-        });
+        ascii.push(if (0x20..0x7f).contains(&x) { x as char } else { '.' });
     }
     format!("hex=[{hex}] ascii=[{ascii}]")
 }

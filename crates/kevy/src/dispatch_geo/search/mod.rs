@@ -12,12 +12,8 @@ mod parse;
 
 pub(super) use parse::{parse_legacy_radius, parse_opts, parse_opts_at};
 
-use kevy_geo::{
-    EARTH_RADIUS_METERS, decode_score, haversine_meters, neighbor_score_ranges,
-};
-use kevy_resp::{
-    ArgvView, CmdError, encode_array_len, encode_bulk, encode_error, encode_integer,
-};
+use kevy_geo::{EARTH_RADIUS_METERS, decode_score, haversine_meters, neighbor_score_ranges};
+use kevy_resp::{ArgvView, CmdError, encode_array_len, encode_bulk, encode_error, encode_integer};
 use kevy_store::{ScoreBound, Store};
 
 use crate::cmd::{store_err, wrong_args};
@@ -27,11 +23,7 @@ use super::score_to_point;
 /// `GEOSEARCH key <FROMMEMBER member|FROMLONLAT lon lat>
 /// <BYRADIUS r unit|BYBOX w h unit> [ASC|DESC] [COUNT n [ANY]]
 /// [WITHCOORD] [WITHDIST] [WITHHASH]`
-pub(super) fn cmd_geosearch<A: ArgvView + ?Sized>(
-    store: &mut Store,
-    args: &A,
-    out: &mut Vec<u8>,
-) {
+pub(super) fn cmd_geosearch<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
     if args.len() < 4 {
         return wrong_args(out, "geosearch");
     }
@@ -155,7 +147,6 @@ pub(super) struct Opts {
     pub(super) storedist: bool,
 }
 
-
 // ───────────── candidate collection ─────────────
 
 pub(super) struct Hit {
@@ -164,11 +155,7 @@ pub(super) struct Hit {
     pub(super) dist_m: f64,
 }
 
-fn resolve_center(
-    store: &mut Store,
-    key: &[u8],
-    from: &Anchor,
-) -> Result<(f64, f64), SearchError> {
+fn resolve_center(store: &mut Store, key: &[u8], from: &Anchor) -> Result<(f64, f64), SearchError> {
     match from {
         Anchor::Member(m) => match score_to_point(store, key, m) {
             Ok(Some(p)) => Ok(p),
@@ -215,9 +202,7 @@ fn in_shape(shape: Shape, clon: f64, clat: f64, mlon: f64, mlat: f64) -> bool {
             // cos(lat) at higher latitudes (the standard small-box
             // approximation Redis uses).
             let dlat_m = (mlat - clat).to_radians() * EARTH_RADIUS_METERS;
-            let dlon_m = (mlon - clon).to_radians()
-                * EARTH_RADIUS_METERS
-                * clat.to_radians().cos();
+            let dlon_m = (mlon - clon).to_radians() * EARTH_RADIUS_METERS * clat.to_radians().cos();
             dlat_m.abs() <= h_m / 2.0 && dlon_m.abs() <= w_m / 2.0
         }
     }
@@ -319,9 +304,7 @@ pub(super) fn plan_geosearchstore<A: ArgvView + ?Sized>(
     args: &A,
 ) -> Result<(Vec<u8>, Opts), CmdError> {
     if args.len() < 5 {
-        return Err(CmdError::Wire(
-            "ERR wrong number of arguments for 'geosearchstore' command",
-        ));
+        return Err(CmdError::Wire("ERR wrong number of arguments for 'geosearchstore' command"));
     }
     let opts = parse_opts_at(args, 3)?;
     Ok((args[2].to_vec(), opts))
@@ -339,9 +322,8 @@ fn emit_reply(hits: &[Hit], opts: &Opts, out: &mut Vec<u8>) {
         return;
     }
     for h in hits {
-        let extras = i64::from(opts.with_dist)
-            + i64::from(opts.with_hash)
-            + i64::from(opts.with_coord);
+        let extras =
+            i64::from(opts.with_dist) + i64::from(opts.with_hash) + i64::from(opts.with_coord);
         encode_array_len(out, 1 + extras);
         encode_bulk(out, &h.member);
         if opts.with_dist {

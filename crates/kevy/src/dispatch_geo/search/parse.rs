@@ -3,15 +3,17 @@
 //! owns the search core + reply emission + STORE write path) stays
 //! under the project's 500-LOC limit.
 
-use kevy_resp::CmdError;
 use kevy_resp::ArgvView;
+use kevy_resp::CmdError;
 
 use crate::cmd::arg_f64;
 
 use super::super::parse_unit;
 use super::{Anchor, LegacyRadiusParsed, Opts, Shape, Sort};
 
-pub(in crate::dispatch_geo) fn parse_opts<A: ArgvView + ?Sized>(args: &A) -> Result<Opts, CmdError> {
+pub(in crate::dispatch_geo) fn parse_opts<A: ArgvView + ?Sized>(
+    args: &A,
+) -> Result<Opts, CmdError> {
     parse_opts_at(args, 2)
 }
 
@@ -66,9 +68,9 @@ pub(in crate::dispatch_geo) fn parse_legacy_radius<A: ArgvView + ?Sized>(
         };
     }
     if store_dst.is_some() && (s.with_coord || s.with_dist || s.with_hash) {
-        return Err(
-            CmdError::Wire("ERR STORE option in GEORADIUS is not compatible with WITHCOORD, WITHDIST and WITHHASH options"),
-        );
+        return Err(CmdError::Wire(
+            "ERR STORE option in GEORADIUS is not compatible with WITHCOORD, WITHDIST and WITHHASH options",
+        ));
     }
     let opts = s.finish()?;
     Ok(LegacyRadiusParsed { opts, store_dst })
@@ -89,9 +91,7 @@ pub(super) struct OptsBuilder {
 
 impl OptsBuilder {
     fn finish(self) -> Result<Opts, CmdError> {
-        let from = self
-            .from
-            .ok_or("ERR syntax error: missing FROMMEMBER / FROMLONLAT")?;
+        let from = self.from.ok_or("ERR syntax error: missing FROMMEMBER / FROMLONLAT")?;
         let (shape, unit) = self.shape.ok_or("ERR syntax error: missing BYRADIUS / BYBOX")?;
         Ok(Opts {
             from,
@@ -119,13 +119,31 @@ fn parse_one_opt<A: ArgvView + ?Sized>(
     match tok {
         b"FROMMEMBER" | b"FROMLONLAT" => parse_from(args, tok, i, &mut s.from),
         b"BYRADIUS" | b"BYBOX" => parse_shape(args, tok, i, &mut s.shape),
-        b"ASC" => { s.sort = Sort::Asc; Ok(1) }
-        b"DESC" => { s.sort = Sort::Desc; Ok(1) }
+        b"ASC" => {
+            s.sort = Sort::Asc;
+            Ok(1)
+        }
+        b"DESC" => {
+            s.sort = Sort::Desc;
+            Ok(1)
+        }
         b"COUNT" => parse_count(args, i, &mut s.count, &mut s.any),
-        b"WITHCOORD" => { s.with_coord = true; Ok(1) }
-        b"WITHDIST" => { s.with_dist = true; Ok(1) }
-        b"WITHHASH" => { s.with_hash = true; Ok(1) }
-        b"STOREDIST" => { s.storedist = true; Ok(1) }
+        b"WITHCOORD" => {
+            s.with_coord = true;
+            Ok(1)
+        }
+        b"WITHDIST" => {
+            s.with_dist = true;
+            Ok(1)
+        }
+        b"WITHHASH" => {
+            s.with_hash = true;
+            Ok(1)
+        }
+        b"STOREDIST" => {
+            s.storedist = true;
+            Ok(1)
+        }
         _ => Err(CmdError::Wire("ERR syntax error")),
     }
 }

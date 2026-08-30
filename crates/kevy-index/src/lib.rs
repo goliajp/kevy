@@ -14,54 +14,52 @@
 
 #![warn(missing_docs)]
 
+mod advise;
 mod agg;
 mod catalog;
 mod catalog_sidecar;
 mod composite;
 mod rowvalues;
+mod segcold;
 mod segment;
-mod advise;
 mod segment_claused;
 mod table;
-mod table_verify;
-mod segcold;
 mod table_sidecar;
+mod table_verify;
 mod table_wire;
 mod value;
 mod view;
 mod view_sidecar;
 
+pub use advise::{
+    ADVISE_CAP, AUTODECLARE_AFTER, AdviseEntry, AdviseLog, AdviseShape, UsageCell, advice_of,
+    apply_auto, narrow_advice,
+};
 pub use agg::{AggBy, AggSegment, AggStats, GroupStats, merge_group, sort_groups};
 pub use catalog::{
     AnnSpec, Catalog, FieldSpec, IndexKind, IndexSpec, IndexState, RowInputs, ValType, ValueSpec,
 };
 pub use composite::{
-    CompositeCol, MAX_COMPOSITE_COLS, MAX_STR_COMPONENT, WHERE_NOT_COMPOSITE, WhereClause,
-    RowDerivation, composite_bounds, composite_encode, parse_where,
+    CompositeCol, MAX_COMPOSITE_COLS, MAX_STR_COMPONENT, RowDerivation, WHERE_NOT_COMPOSITE,
+    WhereClause, composite_bounds, composite_encode, parse_where,
+};
+pub use segcold::{
+    ColdBloom, WindowAudit, WindowShape, decode_seg_key, decode_seg_values, encode_seg_values,
+    seg_bounds, seg_key, value_order_bytes, window_bound, window_value_of,
 };
 pub use segment::{Cursor, Segment, SegmentStats};
-pub use advise::{
-    ADVISE_CAP, AUTODECLARE_AFTER, AdviseEntry, AdviseLog, AdviseShape, UsageCell, advice_of,
-    apply_auto, narrow_advice,
-};
 pub use segment_claused::{
     ClausedPage, ColdEntryRow, FacetBucket, ScalarClauses, ScalarHit, claused_over, fold_facets,
-    merge_claused, values_pass,
-    scalar_sorted_order, sort_facets,
+    merge_claused, scalar_sorted_order, sort_facets, values_pass,
 };
 pub use table::{
     MAX_TABLES, OrderPath, TableCatalog, TableIndex, TableSpec, WindowSpec, compile_table,
     window_driver, window_for, window_text_for,
 };
-pub use segcold::{
-    ColdBloom, WindowAudit, WindowShape, decode_seg_key, decode_seg_values, encode_seg_values,
-    seg_bounds,
-    seg_key, value_order_bytes, window_bound, window_value_of,
-};
 pub use table_verify::{IndexVerify, TableEnsure, TableVerify, spec_diff};
 pub use table_wire::{TABLE_DECLARE_USAGE, parse_table_declare};
-pub use value::{IndexValue, ValueTest, order_key, coerce_bound, parse_literal_bound};
+pub use value::{IndexValue, ValueTest, coerce_bound, order_key, parse_literal_bound};
 pub use view::{
-    Leaf, MAX_TREE_DEPTH, MAX_TREE_LEAVES, MAX_VIEWS, MaterializedSet, Tree, ViewCatalog,
-    ViewMode, ViewSpec, eval_tree, key_in_tree, key_in_tree_vals,
+    Leaf, MAX_TREE_DEPTH, MAX_TREE_LEAVES, MAX_VIEWS, MaterializedSet, Tree, ViewCatalog, ViewMode,
+    ViewSpec, eval_tree, key_in_tree, key_in_tree_vals,
 };

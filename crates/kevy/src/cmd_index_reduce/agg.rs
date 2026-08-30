@@ -32,9 +32,7 @@ pub(super) fn reduce_agg(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> ExtensionReduc
     // rank observed by score; θ = k-th best observed score
     let mut ranked: Vec<(Vec<u8>, kevy_index::GroupStats)> = observed.into_iter().collect();
     ranked.sort_by(|a, b| score(&b.1, by).total_cmp(&score(&a.1, by)).then_with(|| a.0.cmp(&b.0)));
-    let theta = ranked
-        .get(limit - 1)
-        .map_or(f64::NEG_INFINITY, |(_, st)| score(st, by));
+    let theta = ranked.get(limit - 1).map_or(f64::NEG_INFINITY, |(_, st)| score(st, by));
     // uncertainty: could anything UNSEEN (or unseen mass of a seen
     // group) displace the k-th? Additive: bound = Σ τ; max-type:
     // bound = max τ.
@@ -169,10 +167,8 @@ pub(super) fn reduce_agg_fetch(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> 
             }
         }
     }
-    let mut ranked: Vec<(Vec<u8>, kevy_index::GroupStats)> = merged
-        .into_iter()
-        .filter(|(_, st)| st.count > 0)
-        .collect();
+    let mut ranked: Vec<(Vec<u8>, kevy_index::GroupStats)> =
+        merged.into_iter().filter(|(_, st)| st.count > 0).collect();
     kevy_index::sort_groups(&mut ranked, by);
     ranked.truncate(limit);
     encode_array_len(&mut out, ranked.len() as i64);
@@ -213,9 +209,7 @@ fn tag_of(by: kevy_index::AggBy) -> &'static str {
 /// Internal DEPTH arg (iterative deepening), default 1.
 fn groups_depth(argv: &[Vec<u8>]) -> usize {
     argv.iter()
-        .find_map(|a| {
-            std::str::from_utf8(a).ok()?.strip_prefix("DEPTH=")?.parse().ok()
-        })
+        .find_map(|a| std::str::from_utf8(a).ok()?.strip_prefix("DEPTH=")?.parse().ok())
         .unwrap_or(1)
 }
 
@@ -264,7 +258,10 @@ fn decode_agg_chunk(c: &[u8]) -> Vec<(Vec<u8>, kevy_index::GroupStats)> {
                 _ => mpos += 1,
             }
         }
-        rows.push((g, kevy_index::GroupStats { count, sum, min: vals[0].clone(), max: vals[1].clone() }));
+        rows.push((
+            g,
+            kevy_index::GroupStats { count, sum, min: vals[0].clone(), max: vals[1].clone() },
+        ));
     }
     rows
 }

@@ -81,11 +81,7 @@ pub(crate) enum PersistDone {
     /// One handed-off tee generation appended+fsynced to `tmp`
     /// (the two-phase rewrite's phase 2; see `advance_rewrite_handoff`).
     /// `buf` is the generation's buffer, CLEARED, for the pool.
-    TeeAppend {
-        result: io::Result<()>,
-        tmp: PathBuf,
-        buf: Vec<u8>,
-    },
+    TeeAppend { result: io::Result<()>, tmp: PathBuf, buf: Vec<u8> },
 }
 
 /// Lazily-spawned single-thread persister. Dropping it closes the channel;
@@ -97,10 +93,7 @@ pub(crate) struct PersistWorker {
 
 impl PersistWorker {
     pub(crate) fn new() -> Self {
-        Self {
-            chans: None,
-            in_flight: false,
-        }
+        Self { chans: None, in_flight: false }
     }
 
     /// One job in flight at a time — callers check before collecting a view.
@@ -214,24 +207,14 @@ pub(crate) fn drop_file_cache(f: &std::fs::File) {
     }
 }
 
-
-
 impl<C: Commands> Shard<C> {
     /// `BGSAVE` on this shard: freeze the view, start the AOF tee (the
     /// post-collect writes become the reset log), hand off. Skipped with a
     /// log line if a background job or rewrite is already in flight.
     #[cold]
     pub(crate) fn start_bg_save(&mut self) {
-        if self.persist.busy()
-            || self
-                .aof
-                .as_ref()
-                .is_some_and(kevy_persist::Aof::is_rewriting)
-        {
-            eprintln!(
-                "kevy: shard {} bgsave skipped (persist job in flight)",
-                self.id
-            );
+        if self.persist.busy() || self.aof.as_ref().is_some_and(kevy_persist::Aof::is_rewriting) {
+            eprintln!("kevy: shard {} bgsave skipped (persist job in flight)", self.id);
             return;
         }
         // collect + begin_view_rewrite back-to-back on this thread: no
@@ -255,12 +238,7 @@ impl<C: Commands> Shard<C> {
         // frozen in the same no-append window as the view itself, so
         // "snapshot + frames from cursor" is exact.
         let cursor = self.replicate.as_ref().map(|f| f.tail());
-        let job = PersistJob::Save {
-            view,
-            snap_path: self.snapshot_path(),
-            aof_reset,
-            cursor,
-        };
+        let job = PersistJob::Save { view, snap_path: self.snapshot_path(), aof_reset, cursor };
         if !self.persist.submit(self.id, job) {
             eprintln!("kevy: shard {} persist worker unavailable", self.id);
             if let Some(aof) = &mut self.aof {
@@ -288,17 +266,9 @@ impl<C: Commands> Shard<C> {
             self.aof_lane.want_restructure = true;
             return;
         }
-        if self.persist.busy()
-            || self
-                .aof
-                .as_ref()
-                .is_none_or(kevy_persist::Aof::is_rewriting)
-        {
+        if self.persist.busy() || self.aof.as_ref().is_none_or(kevy_persist::Aof::is_rewriting) {
             if self.aof.is_some() {
-                eprintln!(
-                    "kevy: shard {} aof rewrite skipped (persist job in flight)",
-                    self.id
-                );
+                eprintln!("kevy: shard {} aof rewrite skipped (persist job in flight)", self.id);
             }
             return;
         }
@@ -311,15 +281,9 @@ impl<C: Commands> Shard<C> {
                 return;
             }
         };
-        if !self
-            .persist
-            .submit(self.id, PersistJob::Rewrite { view, tmp })
-        {
+        if !self.persist.submit(self.id, PersistJob::Rewrite { view, tmp }) {
             eprintln!("kevy: shard {} persist worker unavailable", self.id);
-            self.aof
-                .as_mut()
-                .expect("checked")
-                .abort_concurrent_rewrite();
+            self.aof.as_mut().expect("checked").abort_concurrent_rewrite();
         }
     }
 
@@ -431,11 +395,7 @@ impl<C: Commands> Shard<C> {
     #[cold]
     pub(crate) fn commit_persist_done(&mut self, done: PersistDone) {
         match done {
-            PersistDone::Save {
-                result: Ok(tmp),
-                snap_path,
-                aof_reset,
-            } => {
+            PersistDone::Save { result: Ok(tmp), snap_path, aof_reset } => {
                 if let Err(e) = std::fs::rename(&tmp, &snap_path) {
                     eprintln!("kevy: shard {} bgsave rename failed: {e}", self.id);
                     self.abort_persist_tee(aof_reset);
@@ -451,11 +411,7 @@ impl<C: Commands> Shard<C> {
                     }
                 }
             }
-            PersistDone::Save {
-                result: Err(e),
-                aof_reset,
-                ..
-            } => {
+            PersistDone::Save { result: Err(e), aof_reset, .. } => {
                 eprintln!("kevy: shard {} bgsave failed: {e}", self.id);
                 self.abort_persist_tee(aof_reset);
             }

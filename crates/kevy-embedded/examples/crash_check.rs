@@ -27,10 +27,8 @@ fn main() {
             other => panic!("unknown flag {other}"),
         }
     }
-    let mut cfg = Config::default()
-        .with_persist(&dir)
-        .with_shards(shards)
-        .with_replay_resync(resync);
+    let mut cfg =
+        Config::default().with_persist(&dir).with_shards(shards).with_replay_resync(resync);
     if feed {
         cfg = cfg.with_feed(16 << 20);
     }

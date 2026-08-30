@@ -173,11 +173,7 @@ const EXPECTED: &[(&str, &str)] = &[
 ];
 
 fn render(bytes: &[u8]) -> String {
-    String::from_utf8_lossy(bytes)
-        .replace("\r\n", "\\r\\n")
-        .chars()
-        .take(160)
-        .collect()
+    String::from_utf8_lossy(bytes).replace("\r\n", "\\r\\n").chars().take(160).collect()
 }
 
 #[test]
@@ -203,10 +199,7 @@ fn embedded_answers_what_the_server_answers() {
         }
     }
 
-    let unnamed: Vec<_> = diverged
-        .iter()
-        .filter(|(c, _, _)| !expected.contains(c))
-        .collect();
+    let unnamed: Vec<_> = diverged.iter().filter(|(c, _, _)| !expected.contains(c)).collect();
 
     println!(
         "differential: {} of {} commands agree byte-for-byte; {} diverge \

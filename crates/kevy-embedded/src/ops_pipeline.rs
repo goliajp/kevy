@@ -60,18 +60,13 @@ impl<'a> Pipeline<'a> {
     /// Queue `SET key value`. Nothing is applied (or AOF-logged)
     /// until [`commit`](Self::commit) — true of every enqueue method.
     pub fn set(mut self, key: &[u8], value: &[u8]) -> Self {
-        self.ops.push(PendingOp::Set {
-            key: key.to_vec(),
-            value: value.to_vec(),
-        });
+        self.ops.push(PendingOp::Set { key: key.to_vec(), value: value.to_vec() });
         self
     }
 
     /// Queue `DEL key [key ...]`.
     pub fn del(mut self, keys: &[&[u8]]) -> Self {
-        self.ops.push(PendingOp::Del {
-            keys: keys.iter().map(|k| k.to_vec()).collect(),
-        });
+        self.ops.push(PendingOp::Del { keys: keys.iter().map(|k| k.to_vec()).collect() });
         self
     }
 
@@ -107,11 +102,7 @@ impl<'a> Pipeline<'a> {
 
     /// Queue `HINCRBY key field delta`.
     pub fn hincrby(mut self, key: &[u8], field: &[u8], delta: i64) -> Self {
-        self.ops.push(PendingOp::HIncrBy {
-            key: key.to_vec(),
-            field: field.to_vec(),
-            delta,
-        });
+        self.ops.push(PendingOp::HIncrBy { key: key.to_vec(), field: field.to_vec(), delta });
         self
     }
 
@@ -150,11 +141,7 @@ impl<'a> Pipeline<'a> {
 
     /// Queue `ZINCRBY key delta member`.
     pub fn zincrby(mut self, key: &[u8], delta: f64, member: &[u8]) -> Self {
-        self.ops.push(PendingOp::ZIncrBy {
-            key: key.to_vec(),
-            delta,
-            member: member.to_vec(),
-        });
+        self.ops.push(PendingOp::ZIncrBy { key: key.to_vec(), delta, member: member.to_vec() });
         self
     }
 
@@ -287,6 +274,6 @@ impl Store {
 /// `store_tests_op_table.rs` — update BOTH when adding an op.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) const PIPELINE_OPS: &[&str] = &[
-    "SET", "DEL", "INCR", "INCRBY", "HSET", "HDEL", "HINCRBY", "ZADD",
-    "ZREM", "ZINCRBY", "SADD", "SREM", "LPUSH", "RPUSH",
+    "SET", "DEL", "INCR", "INCRBY", "HSET", "HDEL", "HINCRBY", "ZADD", "ZREM", "ZINCRBY", "SADD",
+    "SREM", "LPUSH", "RPUSH",
 ];

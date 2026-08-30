@@ -144,18 +144,12 @@ impl ReplicaSource {
         // refused connect bumps the listener's accept queue enough
         // for the next poll cycle to see `stop`.
         let _ = TcpStream::connect_timeout(&self.bound_addr, Duration::from_millis(200));
-        if let Some(j) = self
-            .accept_join
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take()
+        if let Some(j) =
+            self.accept_join.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
         {
             let _ = j.join();
         }
-        let mut joins = self
-            .conn_joins
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut joins = self.conn_joins.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         for j in joins.drain(..) {
             let _ = j.join();
         }
@@ -166,9 +160,7 @@ impl ReplicaSource {
 /// Lives here so `commit_write` in `store.rs` can call into a
 /// helper instead of inlining the lock + argv build.
 pub(crate) fn push_into(source: &Arc<Mutex<ReplicationSource>>, parts: &[&[u8]]) {
-    let mut g = source
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut g = source.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut argv = Argv::default();
     for p in parts {
         argv.push(p);
@@ -194,10 +186,7 @@ fn run_accept_loop(
                     .name("kevy-embedded-writer-conn".into())
                     .spawn(move || run_conn(stream, source_c, generation, stop_c, snapshot_c))
                     .expect("spawn writer-conn thread");
-                conn_joins
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .push(join);
+                conn_joins.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(join);
             }
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
                 // Non-blocking accept — pause briefly so `stop` is
@@ -262,7 +251,9 @@ fn run_conn(
 /// blocking BEFORE any bulk write, or a snapshot ship dies with
 /// EWOULDBLOCK the moment the socket buffer fills (measured: EOF at
 /// ~319KB, one buffer's worth). Returns the parsed request.
-fn handshake_and_prepare(stream: &mut TcpStream) -> Option<kevy_replicate::handshake::HandshakeReq> {
+fn handshake_and_prepare(
+    stream: &mut TcpStream,
+) -> Option<kevy_replicate::handshake::HandshakeReq> {
     // Flip to blocking BEFORE the handshake read, not after it.
     //
     // The inheritance this function already knew about bites the
@@ -305,8 +296,8 @@ fn ship_snapshot_if_needed(
     // Generation fence: a resume claim is only honoured within THIS
     // boot's history. `gen 0 + offset 0` is the fresh no-claim form —
     // it falls through to the existing offset rules.
-    let gen_mismatch = req.generation != generation
-        && !(req.generation == 0 && req.from_offset == 0);
+    let gen_mismatch =
+        req.generation != generation && !(req.generation == 0 && req.from_offset == 0);
     let needs_snapshot = {
         let g = source.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let next = g.next_offset();
@@ -344,9 +335,7 @@ enum FrameStep {
 }
 
 fn next_frame_bytes(source: &Arc<Mutex<ReplicationSource>>, sent_offset: u64) -> FrameStep {
-    let s = source
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let s = source.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if sent_offset >= s.next_offset() {
         return FrameStep::CaughtUp;
     }
@@ -391,11 +380,7 @@ pub(crate) fn freeze_and_serialize(shards: &crate::store::Shards) -> (Vec<u8>, u
     let ack = guards
         .first()
         .and_then(|g| g.writer_source.as_ref())
-        .map(|src| {
-            src.lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .next_offset()
-        })
+        .map(|src| src.lock().unwrap_or_else(std::sync::PoisonError::into_inner).next_offset())
         .unwrap_or(0);
     let views: Vec<kevy_store::SnapshotView> =
         guards.iter().map(|g| g.store.collect_snapshot()).collect();
@@ -421,4 +406,3 @@ pub(crate) fn freeze_and_serialize(shards: &crate::store::Shards) -> (Vec<u8>, u
     let _ = kevy_persist::write_snapshot_to(&Multi(&views), &mut payload);
     (payload, ack)
 }
-

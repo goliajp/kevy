@@ -2,8 +2,8 @@
 //! COMPOSE / HYBRID) and `IDX.COUNT`, matching the server's origin
 //! reduce shapes over the embedded typed index ops.
 
-use crate::store::Store;
 use crate::KevyError;
+use crate::store::Store;
 
 use kevy_index::{IndexValue, ValType};
 
@@ -368,20 +368,19 @@ fn knn(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
 /// `[LIMIT k] [EF e] [FIELDS f…]` tail for KNN (EF bounds 16..=4096).
 #[cfg(feature = "vector")]
 fn parse_knn_tail(argv: &[Vec<u8>]) -> Option<(tail::Tail, usize)> {
-    let mut t =
-        tail::Tail {
-            limit: 10,
-            cursor_raw: None,
-            fields: Vec::new(),
-            highlight: None,
-            typo: 0,
-            offset: 0,
-            scope: Vec::new(),
-            filters: Vec::new(),
-            sort: None,
-            distinct: None,
-            facets: Vec::new(),
-        };
+    let mut t = tail::Tail {
+        limit: 10,
+        cursor_raw: None,
+        fields: Vec::new(),
+        highlight: None,
+        typo: 0,
+        offset: 0,
+        scope: Vec::new(),
+        filters: Vec::new(),
+        sort: None,
+        distinct: None,
+        facets: Vec::new(),
+    };
     let mut ef = 0usize;
     let mut i = 4;
     while i < argv.len() {

@@ -16,8 +16,8 @@
 //! the accept loop polls a nonblocking listener against a shutdown flag so
 //! `Drop` can join everything cleanly.
 
-use std::io::{self, Read};
 use std::io::Write as _;
+use std::io::{self, Read};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -186,7 +186,8 @@ fn spawn_forwarders(
     shared: &Arc<Shared>,
     forwarders: &mut Vec<JoinHandle<()>>,
 ) {
-    let clones = (client.try_clone(), upstream.try_clone(), client.try_clone(), upstream.try_clone());
+    let clones =
+        (client.try_clone(), upstream.try_clone(), client.try_clone(), upstream.try_clone());
     let (Ok(c_wr), Ok(u_wr), Ok(c_reg), Ok(u_reg)) = clones else {
         return; // clone failed: both originals drop => connection refused
     };
@@ -204,8 +205,9 @@ fn spawn_forwarders(
     forwarders
         .push(thread::spawn(move || forward(client, u_wr, Direction::ToUpstream, &shared_up)));
     let shared_down = Arc::clone(shared);
-    forwarders
-        .push(thread::spawn(move || forward(upstream, c_wr, Direction::ToDownstream, &shared_down)));
+    forwarders.push(thread::spawn(move || {
+        forward(upstream, c_wr, Direction::ToDownstream, &shared_down)
+    }));
 }
 
 /// One direction of one proxied connection. Checks the control plane before
@@ -327,8 +329,8 @@ mod tests {
         match result {
             Ok(0) => {}
             Err(e)
-                if e.kind() != io::ErrorKind::WouldBlock
-                    && e.kind() != io::ErrorKind::TimedOut => {}
+                if e.kind() != io::ErrorKind::WouldBlock && e.kind() != io::ErrorKind::TimedOut => {
+            }
             other => panic!("expected dead connection, got {other:?}"),
         }
     }

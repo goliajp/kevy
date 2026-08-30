@@ -104,14 +104,17 @@ impl Elector {
         self.epoch = new_epoch;
         out.push(Outbound {
             to: candidate_id,
-            msg: Message::Accept {
-                epoch: new_epoch,
-                accepter_id: self.node_id.clone(),
-            },
+            msg: Message::Accept { epoch: new_epoch, accepter_id: self.node_id.clone() },
         });
     }
 
-    pub(crate) fn on_accept(&mut self, epoch: u64, accepter_id: String, now: Instant, out: &mut Vec<Outbound>) {
+    pub(crate) fn on_accept(
+        &mut self,
+        epoch: u64,
+        accepter_id: String,
+        now: Instant,
+        out: &mut Vec<Outbound>,
+    ) {
         if self.role != Role::Candidate || self.epoch != epoch {
             return;
         }

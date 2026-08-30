@@ -19,7 +19,9 @@ use crate::{KevyError, KevyResult};
 use std::io;
 use std::sync::RwLock;
 
-use kevy_index::{Catalog, Cursor, IndexKind, IndexSpec, IndexValue, Segment, SegmentStats, ValType};
+use kevy_index::{
+    Catalog, Cursor, IndexKind, IndexSpec, IndexValue, Segment, SegmentStats, ValType,
+};
 
 use crate::store::{Store, lock_write};
 
@@ -146,7 +148,6 @@ impl ShardSegs {
         self.windows.iter().find(|(n, _)| n == name).map(|(_, w)| w)
     }
 
-
     /// Invalidate the `reserved_bytes` cache — a no-op on targets
     /// without the tier backend, so mutation chokepoints call it
     /// unconditionally.
@@ -206,14 +207,10 @@ impl Store {
         #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
         crate::ops_index_sync::tier_floor_check(&self.shards)?;
         {
-            let mut g = self
-                .indexes
-                .catalog
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut g =
+                self.indexes.catalog.write().unwrap_or_else(std::sync::PoisonError::into_inner);
             let (ver, cat) = &mut *g;
-            cat.create(spec)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+            cat.create(spec).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
             *ver += 1;
         }
         self.persist_index_sidecar();
@@ -265,11 +262,8 @@ impl Store {
     /// sidecar is re-persisted so the drop survives restart.
     pub fn idx_drop(&self, name: &[u8]) -> bool {
         let hit = {
-            let mut g = self
-                .indexes
-                .catalog
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut g =
+                self.indexes.catalog.write().unwrap_or_else(std::sync::PoisonError::into_inner);
             let (ver, cat) = &mut *g;
             let hit = cat.drop_index(name);
             if hit {
@@ -306,7 +300,6 @@ impl Store {
             .map(|(key, score, _)| (key, score))
             .collect())
     }
-
 
     /// Declare an aggregate index (KIND agg — write-time GROUP
     /// BY). `ty` must be numeric.
@@ -432,11 +425,7 @@ impl Store {
     #[cfg(not(feature = "persist"))]
     pub(crate) fn idx_boot(&self) {}
 
-    fn for_each_segment(
-        &self,
-        name: &[u8],
-        mut f: impl FnMut(&Segment),
-    ) -> KevyResult<()> {
+    fn for_each_segment(&self, name: &[u8], mut f: impl FnMut(&Segment)) -> KevyResult<()> {
         let mut found = false;
         for shard in self.shards.iter() {
             let mut g = lock_write(shard);
@@ -447,21 +436,13 @@ impl Store {
                 f(seg);
             }
         }
-        if found {
-            Ok(())
-        } else {
-            Err(KevyError::NotFound("no such index".into()))
-        }
+        if found { Ok(()) } else { Err(KevyError::NotFound("no such index".into())) }
     }
 
     #[cfg(feature = "persist")]
     fn persist_index_sidecar(&self) {
         let Some(dir) = &self.config.data_dir else { return };
-        let g = self
-            .indexes
-            .catalog
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let g = self.indexes.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         let tmp = dir.join("index-catalog.meta.tmp");
         if std::fs::write(&tmp, g.1.to_sidecar()).is_ok() {
             let _ = std::fs::rename(&tmp, dir.join(SIDECAR));
@@ -477,11 +458,8 @@ impl Store {
             && let Some(cat) = Catalog::from_sidecar(&text)
             && !cat.is_empty()
         {
-            let mut g = self
-                .indexes
-                .catalog
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut g =
+                self.indexes.catalog.write().unwrap_or_else(std::sync::PoisonError::into_inner);
             *g = (g.0 + 1, cat);
         }
     }

@@ -27,10 +27,7 @@ impl Server {
         let cluster_base = port + 1;
         let dir = std::env::temp_dir().join(format!(
             "kevy-cluster-client-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
         // CLUSTER SLOTS reads the process-wide config; install one matching
@@ -40,15 +37,16 @@ impl Server {
         cfg.server.threads = n;
         cfg.cluster.enabled = true;
         cfg.cluster.port_base = cluster_base;
-        let state = Arc::new(
-            kevy::RuntimeState::new(Arc::new(cfg), std::path::PathBuf::new(), n).unwrap(),
-        );
+        let state =
+            Arc::new(kevy::RuntimeState::new(Arc::new(cfg), std::path::PathBuf::new(), n).unwrap());
 
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         let dir_thread = dir.clone();
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::with_state(state)).bind([127, 0, 0, 1], port).shards(n)
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::with_state(state))
+                .bind([127, 0, 0, 1], port)
+                .shards(n)
                 .with_data_dir(dir_thread)
                 .with_cluster(cluster_base);
             rt.run(stop_thread).unwrap();
@@ -128,7 +126,10 @@ fn cluster_client_routes_every_key_to_owner() {
         let l = format!("l{i}");
         assert_eq!(cc.rpush(l.as_bytes(), &[b"a", b"b", b"c"]).unwrap(), 3);
         assert_eq!(cc.llen(l.as_bytes()).unwrap(), 3);
-        assert_eq!(cc.lrange(l.as_bytes(), 0, -1).unwrap(), vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]);
+        assert_eq!(
+            cc.lrange(l.as_bytes(), 0, -1).unwrap(),
+            vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]
+        );
         assert_eq!(cc.lpop(l.as_bytes(), 1).unwrap(), vec![b"a".to_vec()]);
 
         let s = format!("s{i}");

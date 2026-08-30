@@ -91,33 +91,26 @@ impl Server {
         let port = free_port();
         let dir = std::env::temp_dir().join(format!(
             "kevy-blocking-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         let dir_thread = dir.clone();
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(nshards)).bind([127, 0, 0, 1], port).shards(nshards)
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(nshards))
+                .bind([127, 0, 0, 1], port)
+                .shards(nshards)
                 .with_data_dir(dir_thread);
             rt.run(stop_thread).unwrap();
         });
         kevy_testnet::assert_listening(port, "the server under test");
-        Self {
-            port,
-            dir,
-            stop,
-            handle: Some(handle),
-        }
+        Self { port, dir, stop, handle: Some(handle) }
     }
 
     fn connect(&self) -> std::net::TcpStream {
         let s = std::net::TcpStream::connect(("127.0.0.1", self.port)).unwrap();
-        s.set_read_timeout(Some(std::time::Duration::from_secs(5)))
-            .unwrap();
+        s.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
         s
     }
 }
@@ -172,13 +165,9 @@ fn blpop_woken_by_concurrent_push() {
     let mut consumer = srv.connect();
     let mut producer = srv.connect();
     // Park the consumer with a generous timeout — wake must come first.
-    consumer
-        .write_all(&req(&[b"BLPOP", b"wakeable", b"5"]))
-        .unwrap();
+    consumer.write_all(&req(&[b"BLPOP", b"wakeable", b"5"])).unwrap();
     std::thread::sleep(std::time::Duration::from_millis(50));
-    producer
-        .write_all(&req(&[b"LPUSH", b"wakeable", b"hello"]))
-        .unwrap();
+    producer.write_all(&req(&[b"LPUSH", b"wakeable", b"hello"])).unwrap();
     let _push_reply = read_reply(&mut producer); // :1
     let reply = read_reply(&mut consumer);
     assert_eq!(reply, b"*2\r\n$8\r\nwakeable\r\n$5\r\nhello\r\n");
@@ -218,9 +207,7 @@ fn xread_block_returns_immediately_when_stream_has_entry() {
     let mut c = srv.connect();
     c.write_all(&req(&[b"XADD", b"s", b"1-0", b"f", b"v"])).unwrap();
     let _ = read_reply(&mut c); // $3 1-0
-    c.write_all(&req(&[
-        b"XREAD", b"BLOCK", b"5000", b"STREAMS", b"s", b"0",
-    ])).unwrap();
+    c.write_all(&req(&[b"XREAD", b"BLOCK", b"5000", b"STREAMS", b"s", b"0"])).unwrap();
     // Expect *1 [*2 s [*1 [*2 1-0 [*2 f v]]]]
     let reply = read_reply(&mut c);
     // Quick sanity: starts with *1 and contains the entry payload.
@@ -237,9 +224,7 @@ fn xread_block_times_out_with_nil_bulk_when_no_entries() {
     // errors out before BLOCK can engage.
     c.write_all(&req(&[b"XADD", b"s", b"1-0", b"f", b"v"])).unwrap();
     let _ = read_reply(&mut c);
-    c.write_all(&req(&[
-        b"XREAD", b"BLOCK", b"100", b"STREAMS", b"s", b"$",
-    ])).unwrap();
+    c.write_all(&req(&[b"XREAD", b"BLOCK", b"100", b"STREAMS", b"s", b"$"])).unwrap();
     let t0 = std::time::Instant::now();
     let reply = read_reply(&mut c);
     let elapsed = t0.elapsed();
@@ -255,19 +240,13 @@ fn xread_block_woken_by_concurrent_xadd() {
     let srv = Server::start(1);
     let mut consumer = srv.connect();
     let mut producer = srv.connect();
-    producer
-        .write_all(&req(&[b"XADD", b"stream", b"1-0", b"f", b"v"]))
-        .unwrap();
+    producer.write_all(&req(&[b"XADD", b"stream", b"1-0", b"f", b"v"])).unwrap();
     let _ = read_reply(&mut producer);
     consumer
-        .write_all(&req(&[
-            b"XREAD", b"BLOCK", b"5000", b"STREAMS", b"stream", b"1-0",
-        ]))
+        .write_all(&req(&[b"XREAD", b"BLOCK", b"5000", b"STREAMS", b"stream", b"1-0"]))
         .unwrap();
     std::thread::sleep(std::time::Duration::from_millis(50));
-    producer
-        .write_all(&req(&[b"XADD", b"stream", b"2-0", b"f", b"v2"]))
-        .unwrap();
+    producer.write_all(&req(&[b"XADD", b"stream", b"2-0", b"f", b"v2"])).unwrap();
     let _ = read_reply(&mut producer);
     let reply = read_reply(&mut consumer);
     assert!(reply.starts_with(b"*1\r\n"));
@@ -287,19 +266,11 @@ fn xread_block_dollar_id_wakes() {
     let mut producer = srv.connect();
     // Pre-populate so `$` resolves to a real ID (xread_dollar_last_id
     // errors on a missing key, which would prevent registration).
-    producer
-        .write_all(&req(&[b"XADD", b"stream", b"1-0", b"f", b"v"]))
-        .unwrap();
+    producer.write_all(&req(&[b"XADD", b"stream", b"1-0", b"f", b"v"])).unwrap();
     let _ = read_reply(&mut producer);
-    consumer
-        .write_all(&req(&[
-            b"XREAD", b"BLOCK", b"5000", b"STREAMS", b"stream", b"$",
-        ]))
-        .unwrap();
+    consumer.write_all(&req(&[b"XREAD", b"BLOCK", b"5000", b"STREAMS", b"stream", b"$"])).unwrap();
     std::thread::sleep(std::time::Duration::from_millis(50));
-    producer
-        .write_all(&req(&[b"XADD", b"stream", b"2-0", b"f", b"v2"]))
-        .unwrap();
+    producer.write_all(&req(&[b"XADD", b"stream", b"2-0", b"f", b"v2"])).unwrap();
     let _ = read_reply(&mut producer);
     let reply = read_reply(&mut consumer);
     assert!(
@@ -332,7 +303,8 @@ fn xreadgroup_block_times_out_when_no_new_entries() {
         b"STREAMS",
         b"s",
         b">",
-    ])).unwrap();
+    ]))
+    .unwrap();
     let t0 = std::time::Instant::now();
     let reply = read_reply(&mut c);
     let elapsed = t0.elapsed();
@@ -349,17 +321,19 @@ fn xreadgroup_block_woken_by_concurrent_xadd() {
     let _ = read_reply(&mut producer);
     producer.write_all(&req(&[b"XGROUP", b"CREATE", b"stream2", b"g", b"$"])).unwrap();
     let _ = read_reply(&mut producer);
-    consumer.write_all(&req(&[
-        b"XREADGROUP",
-        b"GROUP",
-        b"g",
-        b"bob",
-        b"BLOCK",
-        b"5000",
-        b"STREAMS",
-        b"stream2",
-        b">",
-    ])).unwrap();
+    consumer
+        .write_all(&req(&[
+            b"XREADGROUP",
+            b"GROUP",
+            b"g",
+            b"bob",
+            b"BLOCK",
+            b"5000",
+            b"STREAMS",
+            b"stream2",
+            b">",
+        ]))
+        .unwrap();
     std::thread::sleep(std::time::Duration::from_millis(50));
     producer.write_all(&req(&[b"XADD", b"stream2", b"2-0", b"f", b"v2"])).unwrap();
     let _ = read_reply(&mut producer);
@@ -392,9 +366,7 @@ fn blpop_multi_key_woken_on_second_key() {
     let srv = Server::start(1);
     let mut consumer = srv.connect();
     let mut producer = srv.connect();
-    consumer
-        .write_all(&req(&[b"BLPOP", b"k1", b"k2", b"5"]))
-        .unwrap();
+    consumer.write_all(&req(&[b"BLPOP", b"k1", b"k2", b"5"])).unwrap();
     std::thread::sleep(std::time::Duration::from_millis(50));
     // Push to the *second* watched key — the arbiter must serve k2.
     producer.write_all(&req(&[b"LPUSH", b"k2", b"v2"])).unwrap();
@@ -411,8 +383,7 @@ fn blpop_multi_key_immediate_hit_first_available() {
     let _ = read_reply(&mut c); // :1
     // `missing` is empty, `ready` has data → resolves at once via the arm
     // readiness peek (no parking).
-    c.write_all(&req(&[b"BLPOP", b"missing", b"ready", b"5"]))
-        .unwrap();
+    c.write_all(&req(&[b"BLPOP", b"missing", b"ready", b"5"])).unwrap();
     let reply = read_reply(&mut c);
     assert_eq!(reply, b"*2\r\n$5\r\nready\r\n$1\r\nx\r\n");
 }

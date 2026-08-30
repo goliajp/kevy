@@ -44,7 +44,7 @@ fn main() {
     let a_torn = st.torn + st.expired_hit;
 
     println!("\n-- Config B: worst case — 1 writer + 7 readers, ONE hot key --");
-    let (st_b, writes_b, ) = {
+    let (st_b, writes_b) = {
         let (s, w) = workloads::run_hotkey(7, 2_000_000);
         (s, w)
     };
@@ -115,7 +115,12 @@ fn main() {
         st.reads as f64 / 1e6,
         st_b.reads as f64 / 1e6
     );
-    println!("  G2 retry p99 <= 2 @ 50/50    : {} (p99 = {}, max = {})", pass(g2), a_p99, st.max_retry());
+    println!(
+        "  G2 retry p99 <= 2 @ 50/50    : {} (p99 = {}, max = {})",
+        pass(g2),
+        a_p99,
+        st.max_retry()
+    );
     println!(
         "  G3 direct saving >= 0.3 µs   : {} (main axis {:.2} µs, spread {:.2} µs; darwin/arm64 box — cross-check on lx64 before any implementation)",
         pass(g3),
@@ -137,7 +142,11 @@ fn print_read_stats(st: &workloads::ReadStats, writes: u64, secs: f64) {
         st.expired,
         st.arc_reads as f64 / 1e6
     );
-    println!("  writes {:.1}M  (read:write = {:.2})", writes as f64 / 1e6, st.reads as f64 / writes as f64);
+    println!(
+        "  writes {:.1}M  (read:write = {:.2})",
+        writes as f64 / 1e6,
+        st.reads as f64 / writes as f64
+    );
     if secs > 0.0 {
         println!("  wall {secs:.2}s");
     }

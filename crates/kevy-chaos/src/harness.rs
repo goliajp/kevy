@@ -136,10 +136,8 @@ impl Harness {
         // Route kevy's stderr to a file under the data dir so test
         // diagnostics (AOF replay summary, etc.) survive the test.
         let stderr_path = self.config.data_dir.join("kevy.stderr.log");
-        let stderr_file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&stderr_path)?;
+        let stderr_file =
+            std::fs::OpenOptions::new().create(true).append(true).open(&stderr_path)?;
         let mut cmd = Command::new(&self.config.kevy_bin);
         cmd.arg("--config")
             .arg(&cfg_path)
@@ -179,10 +177,7 @@ impl Harness {
         }
         let _ = std::fmt::Write::write_fmt(
             &mut toml,
-            format_args!(
-                "[persistence]\nappendfsync = \"{}\"\n",
-                self.config.appendfsync,
-            ),
+            format_args!("[persistence]\nappendfsync = \"{}\"\n", self.config.appendfsync,),
         );
         if let Some(sz) = self.config.aof_rewrite_min_size {
             use std::fmt::Write as _;
@@ -215,9 +210,11 @@ impl Harness {
                 if s.write_all(b"*1\r\n$4\r\nPING\r\n").is_ok() {
                     let mut buf = [0u8; 16];
                     if let Ok(n) = s.read(&mut buf)
-                        && n > 0 && buf.starts_with(b"+PONG") {
-                            return Ok(());
-                        }
+                        && n > 0
+                        && buf.starts_with(b"+PONG")
+                    {
+                        return Ok(());
+                    }
                 }
             }
             if Instant::now() > deadline {
@@ -242,9 +239,7 @@ impl Harness {
                 // approach via std-only is not portable. Instead use
                 // /proc/<pid>/something? Simplest: spawn `kill -TERM <pid>`.
                 let pid = child.id();
-                let _ = Command::new("kill")
-                    .args(["-TERM", &pid.to_string()])
-                    .status();
+                let _ = Command::new("kill").args(["-TERM", &pid.to_string()]).status();
             }
         }
         let _ = child.wait();

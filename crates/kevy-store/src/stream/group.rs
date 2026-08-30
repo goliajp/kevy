@@ -10,10 +10,10 @@ use alloc::collections::BTreeMap;
 
 use kevy_map::KevyMap;
 
-use super::{EntryBatch, StreamData, StreamId};
 pub(super) use super::claim::AutoclaimResult;
-use crate::value::SmallBytes;
+use super::{EntryBatch, StreamData, StreamId};
 use crate::StoreError;
+use crate::value::SmallBytes;
 
 /// One consumer group's state. Sorted PEL plus a map of known
 /// consumers (with cached pel_count for O(1) XINFO answers).
@@ -161,11 +161,7 @@ impl StreamData {
     /// `XGROUP CREATE key group <id|$> [MKSTREAM]`. Returns `true` if
     /// a new group was created; `false` if the group already existed
     /// (caller should report Redis's `-BUSYGROUP` error in that case).
-    pub fn group_create(
-        &mut self,
-        name: &[u8],
-        mode: GroupCreateMode,
-    ) -> Result<bool, StoreError> {
+    pub fn group_create(&mut self, name: &[u8], mode: GroupCreateMode) -> Result<bool, StoreError> {
         if self.groups.contains_key(name) {
             return Ok(false);
         }
@@ -314,7 +310,8 @@ impl StreamData {
         };
         let mut counts: Vec<(Vec<u8>, u64)> = Vec::new();
         for p in g.pel.values() {
-            if let Some((_, n)) = counts.iter_mut().find(|(name, _)| name == p.consumer.as_slice()) {
+            if let Some((_, n)) = counts.iter_mut().find(|(name, _)| name == p.consumer.as_slice())
+            {
                 *n += 1;
             } else {
                 counts.push((p.consumer.to_vec(), 1));
@@ -361,7 +358,6 @@ impl StreamData {
         }
         Some(PendingExtended { rows })
     }
-
 }
 
 /// XREADGROUP's per-stream ID: either `>` (= new entries) or an explicit
@@ -401,12 +397,7 @@ fn replay_pel_entries(
         }
     }
     hit.into_iter()
-        .map(|(id, fv)| {
-            (
-                id,
-                fv.iter().map(|(f, v)| (f.to_vec(), v.to_vec())).collect(),
-            )
-        })
+        .map(|(id, fv)| (id, fv.iter().map(|(f, v)| (f.to_vec(), v.to_vec())).collect()))
         .collect()
 }
 
@@ -414,11 +405,7 @@ pub(super) fn ensure_consumer(g: &mut ConsumerGroup, name: &SmallBytes, now_ms: 
     if g.consumers.get(name.as_slice()).is_none() {
         g.consumers.insert(
             name.clone(),
-            Box::new(ConsumerState {
-                name: name.clone(),
-                last_seen_ms: now_ms,
-                pel_count: 0,
-            }),
+            Box::new(ConsumerState { name: name.clone(), last_seen_ms: now_ms, pel_count: 0 }),
         );
     }
 }
@@ -433,11 +420,7 @@ fn record_deliveries(
     for (id, _) in entries {
         let entry = g.pel.entry(*id).or_insert_with(|| {
             new_for_consumer += 1;
-            PelEntry {
-                consumer: consumer.clone(),
-                delivery_time_ms: now_ms,
-                delivery_count: 0,
-            }
+            PelEntry { consumer: consumer.clone(), delivery_time_ms: now_ms, delivery_count: 0 }
         });
         if entry.consumer != *consumer {
             // Ownership transfer via the read path is unusual; Redis

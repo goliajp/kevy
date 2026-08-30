@@ -83,15 +83,11 @@ pub fn cmp_op(op: &str, a: &Scalar, b: &Scalar) -> Result<Scalar, ScalarError> {
         (Scalar::Null, _) | (_, Scalar::Null) => return Ok(Scalar::Null),
         (Scalar::Bool(x), Scalar::Bool(y)) => x.cmp(y),
         (Scalar::Int(x), Scalar::Int(y)) => x.cmp(y),
-        (Scalar::Float(x), Scalar::Float(y)) => x
-            .partial_cmp(y)
-            .unwrap_or(Ordering::Equal),
-        (Scalar::Int(x), Scalar::Float(y)) => (*x as f64)
-            .partial_cmp(y)
-            .unwrap_or(Ordering::Equal),
-        (Scalar::Float(x), Scalar::Int(y)) => x
-            .partial_cmp(&(*y as f64))
-            .unwrap_or(Ordering::Equal),
+        (Scalar::Float(x), Scalar::Float(y)) => x.partial_cmp(y).unwrap_or(Ordering::Equal),
+        (Scalar::Int(x), Scalar::Float(y)) => (*x as f64).partial_cmp(y).unwrap_or(Ordering::Equal),
+        (Scalar::Float(x), Scalar::Int(y)) => {
+            x.partial_cmp(&(*y as f64)).unwrap_or(Ordering::Equal)
+        }
         (Scalar::Text(x), Scalar::Text(y)) => x.as_bytes().cmp(y.as_bytes()),
         (Scalar::Timestamp(x), Scalar::Timestamp(y)) => x.cmp(y),
         (Scalar::Date(x), Scalar::Date(y)) => x.cmp(y),

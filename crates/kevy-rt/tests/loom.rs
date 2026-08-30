@@ -62,8 +62,8 @@
 #![allow(unexpected_cfgs)]
 #![cfg(loom)]
 
-use loom::sync::atomic::{fence, AtomicBool, Ordering};
 use loom::sync::Arc;
+use loom::sync::atomic::{AtomicBool, Ordering, fence};
 use loom::thread;
 
 /// Reduced model — replace the SPSC ring with one `AtomicBool` flag so

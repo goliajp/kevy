@@ -125,10 +125,7 @@ impl ViewSpec {
 /// index name to its [`Segment`] (None = unknown index → empty leaf —
 /// the runtime validates names at CREATE, so this is defensive).
 /// Returns the member keys (unordered set semantics).
-pub fn eval_tree<'a>(
-    tree: &Tree,
-    seg: &impl Fn(&[u8]) -> Option<&'a Segment>,
-) -> Vec<Vec<u8>> {
+pub fn eval_tree<'a>(tree: &Tree, seg: &impl Fn(&[u8]) -> Option<&'a Segment>) -> Vec<Vec<u8>> {
     match tree {
         Tree::Leaf(l) => match seg(&l.index) {
             Some(s) => {
@@ -142,8 +139,7 @@ pub fn eval_tree<'a>(
             // side, probe the larger.
             let (xa, xb) = (eval_tree(a, seg), eval_tree(b, seg));
             let (mut drive, probe) = if xa.len() <= xb.len() { (xa, xb) } else { (xb, xa) };
-            let set: std::collections::HashSet<&[u8]> =
-                probe.iter().map(Vec::as_slice).collect();
+            let set: std::collections::HashSet<&[u8]> = probe.iter().map(Vec::as_slice).collect();
             drive.retain(|k| set.contains(k.as_slice()));
             drive
         }
@@ -185,10 +181,7 @@ pub fn key_in_tree<'a>(
 /// write hook probes each referenced index ONCE per key and evaluates
 /// every view against the same small table (bounds compares only; no
 /// per-view re-hashing).
-pub fn key_in_tree_vals(
-    tree: &Tree,
-    vals: &impl Fn(&[u8]) -> Option<IndexValue>,
-) -> bool {
+pub fn key_in_tree_vals(tree: &Tree, vals: &impl Fn(&[u8]) -> Option<IndexValue>) -> bool {
     match tree {
         Tree::Leaf(l) => vals(&l.index).is_some_and(|v| v >= l.min && v <= l.max),
         Tree::And(a, b) => key_in_tree_vals(a, vals) && key_in_tree_vals(b, vals),
@@ -222,11 +215,7 @@ impl MaterializedSet {
     }
 
     fn cap(&self) -> usize {
-        if self.top_k == 0 {
-            usize::MAX
-        } else {
-            (self.top_k + self.top_k / 4) as usize
-        }
+        if self.top_k == 0 { usize::MAX } else { (self.top_k + self.top_k / 4) as usize }
     }
 
     /// Apply one key's membership verdict + order value. Returns
@@ -267,9 +256,7 @@ impl MaterializedSet {
                 self.order_excluded += 1;
                 false
             }
-            _ => {
-                self.top_k != 0 && self.set.len() < self.top_k as usize
-            }
+            _ => self.top_k != 0 && self.set.len() < self.top_k as usize,
         }
     }
 
@@ -311,10 +298,9 @@ impl MaterializedSet {
             return iter.take(limit).cloned().collect();
         }
         let iter: Box<dyn Iterator<Item = &(IndexValue, Vec<u8>)>> = match after {
-            Some(c) => Box::new(self.set.range((
-                std::ops::Bound::Excluded(c.clone()),
-                std::ops::Bound::Unbounded,
-            ))),
+            Some(c) => Box::new(
+                self.set.range((std::ops::Bound::Excluded(c.clone()), std::ops::Bound::Unbounded)),
+            ),
             None => Box::new(self.set.iter()),
         };
         iter.take(limit).cloned().collect()
@@ -338,10 +324,7 @@ impl MaterializedSet {
 
     /// Approximate heap bytes (RFC §5 formula's measured side).
     pub fn approx_bytes(&self) -> u64 {
-        self.set
-            .iter()
-            .map(|(v, k)| (v.approx_bytes() + k.len() + 48) as u64)
-            .sum()
+        self.set.iter().map(|(v, k)| (v.approx_bytes() + k.len() + 48) as u64).sum()
     }
 }
 

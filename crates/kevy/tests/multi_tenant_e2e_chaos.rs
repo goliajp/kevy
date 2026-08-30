@@ -54,9 +54,8 @@ fn multi_tenant_e2e_isolation_and_fairness() {
     // PHASE 1: spawn N_TENANTS × WRITERS_PER_TENANT writer threads.
     // Each per-tenant ACK count atomic lets us watch fairness during
     // the run.
-    let tenant_acks: Vec<Arc<AtomicU64>> = (0..N_TENANTS)
-        .map(|_| Arc::new(AtomicU64::new(0)))
-        .collect();
+    let tenant_acks: Vec<Arc<AtomicU64>> =
+        (0..N_TENANTS).map(|_| Arc::new(AtomicU64::new(0))).collect();
     let start = Instant::now();
     let mut handles = Vec::with_capacity(N_TENANTS * WRITERS_PER_TENANT);
     for (t, tenant_ack) in tenant_acks.iter().enumerate() {
@@ -85,26 +84,19 @@ fn multi_tenant_e2e_isolation_and_fairness() {
     for (t, a) in tenant_acks.iter().enumerate() {
         let n = a.load(Ordering::SeqCst);
         eprintln!("multi_tenant: tenant{t} ACKs = {n}/{expected_per_tenant}");
-        assert_eq!(
-            n, expected_per_tenant,
-            "tenant{t} missing ACKs: {n} vs {expected_per_tenant}"
-        );
+        assert_eq!(n, expected_per_tenant, "tenant{t} missing ACKs: {n} vs {expected_per_tenant}");
         total_acks += n;
         min_tenant = min_tenant.min(n);
         max_tenant = max_tenant.max(n);
     }
     let expected_total = expected_per_tenant * N_TENANTS as u64;
-    assert_eq!(
-        total_acks, expected_total,
-        "total ACK mismatch: {total_acks} vs {expected_total}"
-    );
+    assert_eq!(total_acks, expected_total, "total ACK mismatch: {total_acks} vs {expected_total}");
 
     // PHASE 3: cross-tenant isolation — for each tenant, sample 3 keys
     // from BOTH the tenant's own prefix (must exist) and ALL OTHER
     // tenants' prefixes (must not be visible as the wrong tenant's).
     // We verify by sampling DBSIZE per-prefix via KEYS pattern.
-    let mut s = TcpStream::connect(format!("127.0.0.1:{port}"))
-        .expect("verify conn");
+    let mut s = TcpStream::connect(format!("127.0.0.1:{port}")).expect("verify conn");
     let _ = s.set_read_timeout(Some(Duration::from_secs(5)));
     for t in 0..N_TENANTS {
         let pat = format!("tenant{t}:*");
@@ -124,9 +116,7 @@ fn multi_tenant_e2e_isolation_and_fairness() {
     // (We already asserted == expected_per_tenant for each, so this is
     // a sanity log; non-zero would have failed earlier.)
     let skew = max_tenant - min_tenant;
-    eprintln!(
-        "multi_tenant: fairness skew = {skew} (min={min_tenant}, max={max_tenant})"
-    );
+    eprintln!("multi_tenant: fairness skew = {skew} (min={min_tenant}, max={max_tenant})");
     assert_eq!(skew, 0, "fairness skew non-zero — tenant starved");
 
     // PHASE 5: health PING.
@@ -138,18 +128,14 @@ fn multi_tenant_e2e_isolation_and_fairness() {
         "post-load PING failed: {:?}",
         String::from_utf8_lossy(&buf[..n])
     );
-    eprintln!(
-        "multi_tenant: {} total ACKs, 0 cross-tenant leaks, kevy alive",
-        total_acks
-    );
+    eprintln!("multi_tenant: {} total ACKs, 0 cross-tenant leaks, kevy alive", total_acks);
 
     drop(s);
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
 fn tenant_writer(port: u16, tenant: usize, writer: usize, acks: Arc<AtomicU64>) {
-    let mut s = TcpStream::connect(format!("127.0.0.1:{port}"))
-        .expect("writer conn");
+    let mut s = TcpStream::connect(format!("127.0.0.1:{port}")).expect("writer conn");
     let _ = s.set_read_timeout(Some(Duration::from_secs(5)));
     let mut reply = vec![0u8; 256];
     for i in 0..SETS_PER_WRITER {
@@ -188,7 +174,9 @@ fn read_keys_count(s: &mut TcpStream) -> usize {
     let mut acc = Vec::with_capacity(128 * 1024);
     let deadline = Instant::now() + Duration::from_secs(3);
     while let Ok(n) = s.read(&mut buf) {
-        if n == 0 { break; }
+        if n == 0 {
+            break;
+        }
         acc.extend_from_slice(&buf[..n]);
         // Expected array length appears as `*<count>\r\n` at the head.
         if let Some(target) = parse_array_count(&acc) {
@@ -205,7 +193,9 @@ fn read_keys_count(s: &mut TcpStream) -> usize {
 }
 
 fn parse_array_count(buf: &[u8]) -> Option<usize> {
-    if buf.first()? != &b'*' { return None; }
+    if buf.first()? != &b'*' {
+        return None;
+    }
     let nl = buf.iter().position(|&b| b == b'\n')?;
     std::str::from_utf8(&buf[1..nl.saturating_sub(1)]).ok()?.parse().ok()
 }

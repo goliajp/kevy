@@ -57,17 +57,16 @@ impl Server {
         let port = free_port();
         let dir = std::env::temp_dir().join(format!(
             "kevy-resp3-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         let dir_thread = dir.clone();
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(nshards)).bind([127, 0, 0, 1], port).shards(nshards)
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(nshards))
+                .bind([127, 0, 0, 1], port)
+                .shards(nshards)
                 .with_data_dir(dir_thread);
             rt.run(stop_thread).unwrap();
         });
@@ -85,8 +84,7 @@ impl Server {
 
     fn connect(&self) -> std::net::TcpStream {
         let s = std::net::TcpStream::connect(("127.0.0.1", self.port)).unwrap();
-        s.set_read_timeout(Some(std::time::Duration::from_secs(5)))
-            .unwrap();
+        s.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
         s
     }
 
@@ -117,8 +115,7 @@ fn hgetall_returns_map_on_resp3() {
 
     // V2 conn: HSET 2 fields, HGETALL replies as RESP2 array `*4`.
     let mut v2 = srv.connect();
-    v2.write_all(&req(&[b"HSET", b"h", b"f1", b"v1", b"f2", b"v2"]))
-        .unwrap();
+    v2.write_all(&req(&[b"HSET", b"h", b"f1", b"v1", b"f2", b"v2"])).unwrap();
     read_reply(&mut v2, b":2\r\n");
     v2.write_all(&req(&[b"HGETALL", b"h"])).unwrap();
     // RESP2: `*4\r\n$2\r\nf1\r\n$2\r\nv1\r\n$2\r\nf2\r\n$2\r\nv2\r\n`
@@ -324,28 +321,19 @@ fn zrange_withscores_returns_nested_array_on_resp3() {
     // typed Double).
     let srv = Server::start(1);
     let mut v2 = srv.connect();
-    v2.write_all(&req(&[b"ZADD", b"z", b"1", b"a", b"2.5", b"b"]))
-        .unwrap();
+    v2.write_all(&req(&[b"ZADD", b"z", b"1", b"a", b"2.5", b"b"])).unwrap();
     read_reply(&mut v2, b":2\r\n");
 
     // V2 ZRANGE WITHSCORES — flat interleaved bulks.
-    v2.write_all(&req(&[b"ZRANGE", b"z", b"0", b"-1", b"WITHSCORES"]))
-        .unwrap();
+    v2.write_all(&req(&[b"ZRANGE", b"z", b"0", b"-1", b"WITHSCORES"])).unwrap();
     // *4 + bulk a + bulk 1 + bulk b + bulk 2.5
-    read_reply(
-        &mut v2,
-        b"*4\r\n$1\r\na\r\n$1\r\n1\r\n$1\r\nb\r\n$3\r\n2.5\r\n",
-    );
+    read_reply(&mut v2, b"*4\r\n$1\r\na\r\n$1\r\n1\r\n$1\r\nb\r\n$3\r\n2.5\r\n");
 
     // V3 ZRANGE WITHSCORES — nested [bulk, double] pairs.
     let mut v3 = srv.v3_conn();
-    v3.write_all(&req(&[b"ZRANGE", b"z", b"0", b"-1", b"WITHSCORES"]))
-        .unwrap();
+    v3.write_all(&req(&[b"ZRANGE", b"z", b"0", b"-1", b"WITHSCORES"])).unwrap();
     // *2 + (*2 + bulk a + ,1) + (*2 + bulk b + ,2.5)
-    read_reply(
-        &mut v3,
-        b"*2\r\n*2\r\n$1\r\na\r\n,1\r\n*2\r\n$1\r\nb\r\n,2.5\r\n",
-    );
+    read_reply(&mut v3, b"*2\r\n*2\r\n$1\r\na\r\n,1\r\n*2\r\n$1\r\nb\r\n,2.5\r\n");
 
     // No-WITHSCORES form: same plain bulk array on both protos.
     v3.write_all(&req(&[b"ZRANGE", b"z", b"0", b"-1"])).unwrap();
@@ -356,23 +344,12 @@ fn zrange_withscores_returns_nested_array_on_resp3() {
 fn zrangebyscore_withscores_returns_nested_array_on_resp3() {
     let srv = Server::start(1);
     let mut v3 = srv.v3_conn();
-    v3.write_all(&req(&[b"ZADD", b"zz", b"1", b"x", b"3", b"y"]))
-        .unwrap();
+    v3.write_all(&req(&[b"ZADD", b"zz", b"1", b"x", b"3", b"y"])).unwrap();
     read_reply(&mut v3, b":2\r\n");
 
     // Range covers both members; WITHSCORES → nested pairs with Double.
-    v3.write_all(&req(&[
-        b"ZRANGEBYSCORE",
-        b"zz",
-        b"-inf",
-        b"+inf",
-        b"WITHSCORES",
-    ]))
-    .unwrap();
-    read_reply(
-        &mut v3,
-        b"*2\r\n*2\r\n$1\r\nx\r\n,1\r\n*2\r\n$1\r\ny\r\n,3\r\n",
-    );
+    v3.write_all(&req(&[b"ZRANGEBYSCORE", b"zz", b"-inf", b"+inf", b"WITHSCORES"])).unwrap();
+    read_reply(&mut v3, b"*2\r\n*2\r\n$1\r\nx\r\n,1\r\n*2\r\n$1\r\ny\r\n,3\r\n");
 }
 
 #[test]
@@ -434,33 +411,21 @@ fn pubsub_message_uses_push_frame_on_resp3() {
 
     let mut v2 = srv.connect();
     v2.write_all(&req(&[b"SUBSCRIBE", b"news"])).unwrap();
-    read_reply(
-        &mut v2,
-        b"*3\r\n$9\r\nsubscribe\r\n$4\r\nnews\r\n:1\r\n",
-    );
+    read_reply(&mut v2, b"*3\r\n$9\r\nsubscribe\r\n$4\r\nnews\r\n:1\r\n");
 
     let mut v3 = srv.v3_conn();
     v3.write_all(&req(&[b"SUBSCRIBE", b"news"])).unwrap();
     // V3 subscribe ack itself is push-framed: `>3\r\n…`.
-    read_reply(
-        &mut v3,
-        b">3\r\n$9\r\nsubscribe\r\n$4\r\nnews\r\n:1\r\n",
-    );
+    read_reply(&mut v3, b">3\r\n$9\r\nsubscribe\r\n$4\r\nnews\r\n:1\r\n");
 
     let mut pub_ = srv.connect();
     pub_.write_all(&req(&[b"PUBLISH", b"news", b"hello"])).unwrap();
     read_reply(&mut pub_, b":2\r\n");
 
     // V2 sub: message arrives as `*3` array.
-    read_reply(
-        &mut v2,
-        b"*3\r\n$7\r\nmessage\r\n$4\r\nnews\r\n$5\r\nhello\r\n",
-    );
+    read_reply(&mut v2, b"*3\r\n$7\r\nmessage\r\n$4\r\nnews\r\n$5\r\nhello\r\n");
     // V3 sub: same body, `>3` push prefix.
-    read_reply(
-        &mut v3,
-        b">3\r\n$7\r\nmessage\r\n$4\r\nnews\r\n$5\r\nhello\r\n",
-    );
+    read_reply(&mut v3, b">3\r\n$7\r\nmessage\r\n$4\r\nnews\r\n$5\r\nhello\r\n");
 }
 
 #[test]
@@ -470,19 +435,12 @@ fn pmessage_uses_push_frame_on_resp3() {
 
     let mut v3 = srv.v3_conn();
     v3.write_all(&req(&[b"PSUBSCRIBE", b"news.*"])).unwrap();
-    read_reply(
-        &mut v3,
-        b">3\r\n$10\r\npsubscribe\r\n$6\r\nnews.*\r\n:1\r\n",
-    );
+    read_reply(&mut v3, b">3\r\n$10\r\npsubscribe\r\n$6\r\nnews.*\r\n:1\r\n");
 
     let mut pub_ = srv.connect();
-    pub_.write_all(&req(&[b"PUBLISH", b"news.tech", b"hi"]))
-        .unwrap();
+    pub_.write_all(&req(&[b"PUBLISH", b"news.tech", b"hi"])).unwrap();
     read_reply(&mut pub_, b":1\r\n");
-    read_reply(
-        &mut v3,
-        b">4\r\n$8\r\npmessage\r\n$6\r\nnews.*\r\n$9\r\nnews.tech\r\n$2\r\nhi\r\n",
-    );
+    read_reply(&mut v3, b">4\r\n$8\r\npmessage\r\n$6\r\nnews.*\r\n$9\r\nnews.tech\r\n$2\r\nhi\r\n");
 }
 
 #[test]

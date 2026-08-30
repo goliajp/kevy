@@ -10,11 +10,7 @@ use kevy_store::{ConsumerGroup, ConsumerState, Store, StreamData, now_unix_ms};
 
 use crate::cmd::{store_err, wrong_args};
 
-pub(super) fn cmd_xinfo<A: ArgvView + ?Sized>(
-    store: &mut Store,
-    args: &A,
-    out: &mut Vec<u8>,
-) {
+pub(super) fn cmd_xinfo<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
     if args.len() < 2 {
         return wrong_args(out, "xinfo");
     }
@@ -123,10 +119,7 @@ fn emit_group_info(out: &mut Vec<u8>, name: &[u8], g: &ConsumerGroup, s: &Stream
 
 fn entries_between(s: &StreamData, last_delivered_id: kevy_store::StreamId) -> i64 {
     let mut n = 0i64;
-    for (id, _) in s
-        .iter_entries()
-        .skip_while(|(id, _)| *id <= last_delivered_id)
-    {
+    for (id, _) in s.iter_entries().skip_while(|(id, _)| *id <= last_delivered_id) {
         let _ = id;
         n += 1;
     }

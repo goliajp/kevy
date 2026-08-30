@@ -96,8 +96,5 @@ fn three_node_primary_kill_promotes_replica_via_tcp() {
 
     b.shutdown();
     c.shutdown();
-    assert!(
-        new_primary.is_some(),
-        "no replica promoted within window via TCP",
-    );
+    assert!(new_primary.is_some(), "no replica promoted within window via TCP",);
 }

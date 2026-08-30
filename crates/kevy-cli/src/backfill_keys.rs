@@ -267,7 +267,8 @@ mod tests {
     /// have missed these".
     #[test]
     fn unique_means_no_other_source_named_it() {
-        let sources = [set(&["1", "2", "3"]), set(&["3", "4", "7"]), set(&["1", "2", "3", "4", "5"])];
+        let sources =
+            [set(&["1", "2", "3"]), set(&["3", "4", "7"]), set(&["1", "2", "3", "4", "5"])];
         let r = account(&labels(3), &sources);
         assert_eq!((r[0].total, r[0].unique), (3, 0), "all of s0 is covered elsewhere");
         assert_eq!((r[1].total, r[1].unique), (3, 1), "only s1 names 7");

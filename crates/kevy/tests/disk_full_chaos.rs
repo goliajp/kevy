@@ -48,14 +48,15 @@ fn disk_full_kevy_stays_alive_after_rlimit_fsize() {
     // The strict invariant is: if it DID spawn, it stays alive under
     // sustained write pressure.
     let Ok(h) = h else {
-        eprintln!("disk_full: kevy refused to start under fsize cap — acceptable (Redis-like loud refusal)");
+        eprintln!(
+            "disk_full: kevy refused to start under fsize cap — acceptable (Redis-like loud refusal)"
+        );
         return;
     };
 
     // Drive writes until something gives. Each SET appends ~30-50 B
     // to the AOF; ~5000-8000 writes should hit the 256 KiB cap.
-    let mut stream = TcpStream::connect(format!("127.0.0.1:{port}"))
-        .expect("conn");
+    let mut stream = TcpStream::connect(format!("127.0.0.1:{port}")).expect("conn");
     let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
     let mut last_ok = 0u32;
@@ -114,18 +115,19 @@ fn disk_full_kevy_stays_alive_after_rlimit_fsize() {
     ) {
         Ok(mut s) => {
             let _ = s.set_read_timeout(Some(Duration::from_secs(2)));
-            s.write_all(b"*1\r\n$4\r\nPING\r\n").is_ok()
-                && {
-                    let mut reply = [0u8; 64];
-                    matches!(s.read(&mut reply), Ok(n) if reply[..n].starts_with(b"+PONG"))
-                }
+            s.write_all(b"*1\r\n$4\r\nPING\r\n").is_ok() && {
+                let mut reply = [0u8; 64];
+                matches!(s.read(&mut reply), Ok(n) if reply[..n].starts_with(b"+PONG"))
+            }
         }
         Err(_) => false,
     };
     eprintln!("disk_full: in_process_survived={in_process_survived}");
 
     if in_process_survived {
-        eprintln!("disk_full: kevy held the line — SIGXFSZ was caught (or write returned gracefully)");
+        eprintln!(
+            "disk_full: kevy held the line — SIGXFSZ was caught (or write returned gracefully)"
+        );
     } else {
         eprintln!("disk_full: kevy died (likely SIGXFSZ); validating restart-recovery contract");
     }
@@ -139,8 +141,7 @@ fn disk_full_kevy_stays_alive_after_rlimit_fsize() {
     cfg2.threads = 1;
     // No fsize cap this time — recovery needs room.
     let h2 = Harness::spawn(cfg2).expect("post-disk-full restart spawn");
-    let mut p2 = TcpStream::connect(format!("127.0.0.1:{port2}"))
-        .expect("post-restart conn");
+    let mut p2 = TcpStream::connect(format!("127.0.0.1:{port2}")).expect("post-restart conn");
     let _ = p2.set_read_timeout(Some(Duration::from_secs(2)));
     p2.write_all(b"*1\r\n$4\r\nPING\r\n").expect("write PING2");
     let mut reply2 = [0u8; 64];
@@ -156,10 +157,8 @@ fn disk_full_kevy_stays_alive_after_rlimit_fsize() {
     // some BufWriter loss at the cap edge).
     let safe_seq = last_ok / 2;
     let safe_key = format!("k{safe_seq}");
-    p2.write_all(
-        format!("*2\r\n$3\r\nGET\r\n${}\r\n{safe_key}\r\n", safe_key.len()).as_bytes(),
-    )
-    .expect("write GET");
+    p2.write_all(format!("*2\r\n$3\r\nGET\r\n${}\r\n{safe_key}\r\n", safe_key.len()).as_bytes())
+        .expect("write GET");
     let mut reply3 = vec![0u8; 256];
     let n3 = p2.read(&mut reply3).expect("read GET");
     let reply3_str = String::from_utf8_lossy(&reply3[..n3]);

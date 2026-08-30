@@ -61,10 +61,7 @@ fn rewrite_roundtrip_restores_cold_hashes_and_field_ttls() {
     s.set(b"ttl'd", vec![b'y'; 2048], Some(Duration::from_secs(600)), false, false);
     s.hset(
         b"row",
-        &[
-            (b"name".as_slice(), b"ada".as_slice()),
-            (b"blob".as_slice(), &[0u8, 255, 7][..]),
-        ],
+        &[(b"name".as_slice(), b"ada".as_slice()), (b"blob".as_slice(), &[0u8, 255, 7][..])],
     )
     .unwrap();
     let deadline = kevy_store::now_unix_ms() + 60_000;

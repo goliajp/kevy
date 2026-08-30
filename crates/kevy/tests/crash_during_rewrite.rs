@@ -62,10 +62,7 @@ fn crash_during_aof_rewrite_no_corruption() {
     // complete dozens of rewrite cycles in this time.
     std::thread::sleep(Duration::from_secs(5));
     let pre_kill_acks = pool.log.lock().unwrap().len();
-    assert!(
-        pre_kill_acks >= 1000,
-        "vacuous test: only {pre_kill_acks} ACKs before kill"
-    );
+    assert!(pre_kill_acks >= 1000, "vacuous test: only {pre_kill_acks} ACKs before kill");
     // Snapshot the live kevy's `aof_rewrites_total` BEFORE killing.
     // The counter is in-memory and resets to 0 on restart, so the
     // "vacuous test" check must run pre-kill.
@@ -147,9 +144,10 @@ fn info_aof_rewrites(port: u16) -> u64 {
     let body = String::from_utf8_lossy(&buf[..n]);
     for line in body.lines() {
         if let Some(rest) = line.strip_prefix("aof_rewrites_total:")
-            && let Ok(v) = rest.trim().parse::<u64>() {
-                return v;
-            }
+            && let Ok(v) = rest.trim().parse::<u64>()
+        {
+            return v;
+        }
     }
     0
 }

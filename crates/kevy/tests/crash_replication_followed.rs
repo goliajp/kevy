@@ -41,10 +41,8 @@ fn crash_replication_followed_no_corruption() {
     let primary_port = pick_free_port().expect("primary port");
     let replica_port = pick_free_port().expect("replica port");
     let primary_replication_base = pick_free_port().expect("primary repl port");
-    let primary_tmp =
-        std::env::temp_dir().join(format!("kevy-chaos-primary-{primary_port}"));
-    let replica_tmp =
-        std::env::temp_dir().join(format!("kevy-chaos-replica-{replica_port}"));
+    let primary_tmp = std::env::temp_dir().join(format!("kevy-chaos-primary-{primary_port}"));
+    let replica_tmp = std::env::temp_dir().join(format!("kevy-chaos-replica-{replica_port}"));
     let _ = std::fs::remove_dir_all(&primary_tmp);
     let _ = std::fs::remove_dir_all(&replica_tmp);
 
@@ -102,10 +100,7 @@ fn crash_replication_followed_no_corruption() {
             }
         }
     }
-    assert!(
-        pre_kill_acks >= 1000,
-        "vacuous test: only {pre_kill_acks} primary-ACKs before kill"
-    );
+    assert!(pre_kill_acks >= 1000, "vacuous test: only {pre_kill_acks} primary-ACKs before kill");
     eprintln!("crash_replication: {pre_kill_acks} primary-ACKs before SIGKILL");
 
     // Phase 2: SIGKILL the primary mid-flight.

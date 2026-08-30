@@ -80,17 +80,16 @@ impl Server {
         let port = free_port();
         let dir = std::env::temp_dir().join(format!(
             "kevy-stream-group-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         let dir_thread = dir.clone();
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(nshards)).bind([127, 0, 0, 1], port).shards(nshards)
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(nshards))
+                .bind([127, 0, 0, 1], port)
+                .shards(nshards)
                 .with_data_dir(dir_thread);
             rt.run(stop_thread).unwrap();
         });
@@ -100,8 +99,7 @@ impl Server {
 
     fn connect(&self) -> std::net::TcpStream {
         let s = std::net::TcpStream::connect(("127.0.0.1", self.port)).unwrap();
-        s.set_read_timeout(Some(std::time::Duration::from_secs(5)))
-            .unwrap();
+        s.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
         s
     }
 }
@@ -142,10 +140,7 @@ fn xgroup_create_dollar_means_current_last_id() {
     c.write_all(&req(&[b"XGROUP", b"CREATE", b"s", b"g1", b"$"])).unwrap();
     assert_eq!(read_reply(&mut c), b"+OK\r\n");
     // No entries delivered to a fresh `$` consumer.
-    c.write_all(&req(&[
-        b"XREADGROUP", b"GROUP", b"g1", b"c1", b"STREAMS", b"s", b">",
-    ]))
-    .unwrap();
+    c.write_all(&req(&[b"XREADGROUP", b"GROUP", b"g1", b"c1", b"STREAMS", b"s", b">"])).unwrap();
     assert_eq!(read_reply(&mut c), b"*-1\r\n");
 }
 
@@ -165,10 +160,7 @@ fn xgroup_create_busygroup_when_duplicate() {
 fn xgroup_create_mkstream_creates_missing_key() {
     let srv = Server::start(1);
     let mut c = srv.connect();
-    c.write_all(&req(&[
-        b"XGROUP", b"CREATE", b"s", b"g1", b"$", b"MKSTREAM",
-    ]))
-    .unwrap();
+    c.write_all(&req(&[b"XGROUP", b"CREATE", b"s", b"g1", b"$", b"MKSTREAM"])).unwrap();
     assert_eq!(read_reply(&mut c), b"+OK\r\n");
     c.write_all(&req(&[b"EXISTS", b"s"])).unwrap();
     assert_eq!(read_reply(&mut c), b":1\r\n");
@@ -200,10 +192,7 @@ fn xreadgroup_with_new_returns_unread_and_grows_pel() {
     let srv = Server::start(1);
     let mut c = srv.connect();
     setup_group(&mut c);
-    c.write_all(&req(&[
-        b"XREADGROUP", b"GROUP", b"g1", b"c1", b"STREAMS", b"s", b">",
-    ]))
-    .unwrap();
+    c.write_all(&req(&[b"XREADGROUP", b"GROUP", b"g1", b"c1", b"STREAMS", b"s", b">"])).unwrap();
     let r = read_reply(&mut c);
     let s = String::from_utf8_lossy(&r);
     assert!(s.contains("1-0") && s.contains("2-0") && s.contains("3-0"), "got: {s}");
@@ -220,16 +209,10 @@ fn xreadgroup_explicit_id_replays_pel() {
     let mut c = srv.connect();
     setup_group(&mut c);
     // First read with > delivers entries → builds PEL for c1.
-    c.write_all(&req(&[
-        b"XREADGROUP", b"GROUP", b"g1", b"c1", b"STREAMS", b"s", b">",
-    ]))
-    .unwrap();
+    c.write_all(&req(&[b"XREADGROUP", b"GROUP", b"g1", b"c1", b"STREAMS", b"s", b">"])).unwrap();
     let _ = read_reply(&mut c);
     // Replay PEL with explicit ID = 0 → re-deliver all entries.
-    c.write_all(&req(&[
-        b"XREADGROUP", b"GROUP", b"g1", b"c1", b"STREAMS", b"s", b"0",
-    ]))
-    .unwrap();
+    c.write_all(&req(&[b"XREADGROUP", b"GROUP", b"g1", b"c1", b"STREAMS", b"s", b"0"])).unwrap();
     let r = read_reply(&mut c);
     let s = String::from_utf8_lossy(&r);
     assert!(s.contains("1-0") && s.contains("3-0"), "replay: {s}");
@@ -240,10 +223,8 @@ fn xreadgroup_noack_skips_pel() {
     let srv = Server::start(1);
     let mut c = srv.connect();
     setup_group(&mut c);
-    c.write_all(&req(&[
-        b"XREADGROUP", b"GROUP", b"g1", b"c1", b"NOACK", b"STREAMS", b"s", b">",
-    ]))
-    .unwrap();
+    c.write_all(&req(&[b"XREADGROUP", b"GROUP", b"g1", b"c1", b"NOACK", b"STREAMS", b"s", b">"]))
+        .unwrap();
     let _ = read_reply(&mut c);
     c.write_all(&req(&[b"XPENDING", b"s", b"g1"])).unwrap();
     let p = read_reply(&mut c);
@@ -261,10 +242,7 @@ fn xack_drops_from_pel() {
     let srv = Server::start(1);
     let mut c = srv.connect();
     setup_group(&mut c);
-    c.write_all(&req(&[
-        b"XREADGROUP", b"GROUP", b"g1", b"c1", b"STREAMS", b"s", b">",
-    ]))
-    .unwrap();
+    c.write_all(&req(&[b"XREADGROUP", b"GROUP", b"g1", b"c1", b"STREAMS", b"s", b">"])).unwrap();
     let _ = read_reply(&mut c);
     c.write_all(&req(&[b"XACK", b"s", b"g1", b"1-0", b"2-0"])).unwrap();
     assert_eq!(read_reply(&mut c), b":2\r\n");
@@ -284,15 +262,9 @@ fn xpending_extended_form_lists_rows() {
     let srv = Server::start(1);
     let mut c = srv.connect();
     setup_group(&mut c);
-    c.write_all(&req(&[
-        b"XREADGROUP", b"GROUP", b"g1", b"c1", b"STREAMS", b"s", b">",
-    ]))
-    .unwrap();
+    c.write_all(&req(&[b"XREADGROUP", b"GROUP", b"g1", b"c1", b"STREAMS", b"s", b">"])).unwrap();
     let _ = read_reply(&mut c);
-    c.write_all(&req(&[
-        b"XPENDING", b"s", b"g1", b"-", b"+", b"10",
-    ]))
-    .unwrap();
+    c.write_all(&req(&[b"XPENDING", b"s", b"g1", b"-", b"+", b"10"])).unwrap();
     let r = read_reply(&mut c);
     let s = String::from_utf8_lossy(&r);
     assert!(s.starts_with("*3\r\n"), "expected 3 rows: {s}");
@@ -306,25 +278,16 @@ fn xclaim_transfers_ownership() {
     let srv = Server::start(1);
     let mut c = srv.connect();
     setup_group(&mut c);
-    c.write_all(&req(&[
-        b"XREADGROUP", b"GROUP", b"g1", b"c1", b"STREAMS", b"s", b">",
-    ]))
-    .unwrap();
+    c.write_all(&req(&[b"XREADGROUP", b"GROUP", b"g1", b"c1", b"STREAMS", b"s", b">"])).unwrap();
     let _ = read_reply(&mut c);
     // min-idle-ms = 0 → always claim
-    c.write_all(&req(&[
-        b"XCLAIM", b"s", b"g1", b"c2", b"0", b"1-0", b"2-0",
-    ]))
-    .unwrap();
+    c.write_all(&req(&[b"XCLAIM", b"s", b"g1", b"c2", b"0", b"1-0", b"2-0"])).unwrap();
     let r = read_reply(&mut c);
     let s = String::from_utf8_lossy(&r);
     assert!(s.starts_with("*2\r\n"), "claimed 2 entries: {s}");
     assert!(s.contains("1-0") && s.contains("2-0"));
     // XPENDING per consumer
-    c.write_all(&req(&[
-        b"XPENDING", b"s", b"g1", b"-", b"+", b"10", b"c1",
-    ]))
-    .unwrap();
+    c.write_all(&req(&[b"XPENDING", b"s", b"g1", b"-", b"+", b"10", b"c1"])).unwrap();
     let p = read_reply(&mut c);
     let ps = String::from_utf8_lossy(&p);
     assert!(ps.starts_with("*1\r\n"), "c1 should keep only 3-0: {ps}");
@@ -336,15 +299,9 @@ fn xclaim_justid_returns_id_array() {
     let srv = Server::start(1);
     let mut c = srv.connect();
     setup_group(&mut c);
-    c.write_all(&req(&[
-        b"XREADGROUP", b"GROUP", b"g1", b"c1", b"STREAMS", b"s", b">",
-    ]))
-    .unwrap();
+    c.write_all(&req(&[b"XREADGROUP", b"GROUP", b"g1", b"c1", b"STREAMS", b"s", b">"])).unwrap();
     let _ = read_reply(&mut c);
-    c.write_all(&req(&[
-        b"XCLAIM", b"s", b"g1", b"c2", b"0", b"1-0", b"JUSTID",
-    ]))
-    .unwrap();
+    c.write_all(&req(&[b"XCLAIM", b"s", b"g1", b"c2", b"0", b"1-0", b"JUSTID"])).unwrap();
     let r = read_reply(&mut c);
     assert_eq!(r, b"*1\r\n$3\r\n1-0\r\n");
 }
@@ -356,15 +313,9 @@ fn xautoclaim_walks_pel_and_returns_cursor() {
     let srv = Server::start(1);
     let mut c = srv.connect();
     setup_group(&mut c);
-    c.write_all(&req(&[
-        b"XREADGROUP", b"GROUP", b"g1", b"c1", b"STREAMS", b"s", b">",
-    ]))
-    .unwrap();
+    c.write_all(&req(&[b"XREADGROUP", b"GROUP", b"g1", b"c1", b"STREAMS", b"s", b">"])).unwrap();
     let _ = read_reply(&mut c);
-    c.write_all(&req(&[
-        b"XAUTOCLAIM", b"s", b"g1", b"c2", b"0", b"0", b"COUNT", b"2",
-    ]))
-    .unwrap();
+    c.write_all(&req(&[b"XAUTOCLAIM", b"s", b"g1", b"c2", b"0", b"0", b"COUNT", b"2"])).unwrap();
     let r = read_reply(&mut c);
     let s = String::from_utf8_lossy(&r);
     // 3-element array: cursor, claimed entries, deleted ids
@@ -423,10 +374,7 @@ fn xinfo_consumers_lists_after_delivery() {
     let srv = Server::start(1);
     let mut c = srv.connect();
     setup_group(&mut c);
-    c.write_all(&req(&[
-        b"XREADGROUP", b"GROUP", b"g1", b"c1", b"STREAMS", b"s", b">",
-    ]))
-    .unwrap();
+    c.write_all(&req(&[b"XREADGROUP", b"GROUP", b"g1", b"c1", b"STREAMS", b"s", b">"])).unwrap();
     let _ = read_reply(&mut c);
     c.write_all(&req(&[b"XINFO", b"CONSUMERS", b"s", b"g1"])).unwrap();
     let r = read_reply(&mut c);
@@ -442,24 +390,12 @@ fn xgroup_createconsumer_then_delconsumer() {
     let srv = Server::start(1);
     let mut c = srv.connect();
     setup_group(&mut c);
-    c.write_all(&req(&[
-        b"XGROUP", b"CREATECONSUMER", b"s", b"g1", b"c1",
-    ]))
-    .unwrap();
+    c.write_all(&req(&[b"XGROUP", b"CREATECONSUMER", b"s", b"g1", b"c1"])).unwrap();
     assert_eq!(read_reply(&mut c), b":1\r\n");
-    c.write_all(&req(&[
-        b"XGROUP", b"CREATECONSUMER", b"s", b"g1", b"c1",
-    ]))
-    .unwrap();
+    c.write_all(&req(&[b"XGROUP", b"CREATECONSUMER", b"s", b"g1", b"c1"])).unwrap();
     assert_eq!(read_reply(&mut c), b":0\r\n");
-    c.write_all(&req(&[
-        b"XREADGROUP", b"GROUP", b"g1", b"c1", b"STREAMS", b"s", b">",
-    ]))
-    .unwrap();
+    c.write_all(&req(&[b"XREADGROUP", b"GROUP", b"g1", b"c1", b"STREAMS", b"s", b">"])).unwrap();
     let _ = read_reply(&mut c);
-    c.write_all(&req(&[
-        b"XGROUP", b"DELCONSUMER", b"s", b"g1", b"c1",
-    ]))
-    .unwrap();
+    c.write_all(&req(&[b"XGROUP", b"DELCONSUMER", b"s", b"g1", b"c1"])).unwrap();
     assert_eq!(read_reply(&mut c), b":3\r\n");
 }

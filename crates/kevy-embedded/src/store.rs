@@ -4,9 +4,9 @@
 
 use crate::KevyError;
 use crate::KevyResult;
-use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
 use std::sync::Mutex;
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 #[cfg(feature = "persist")]
 use kevy_persist::Argv;
@@ -270,10 +270,14 @@ impl Store {
     #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
     pub fn set_replica_upstream(&self, new_upstream: impl Into<String>) -> KevyResult<()> {
         if !self.is_replica() {
-            return Err(KevyError::InvalidInput("set_replica_upstream called on a non-replica store".into()));
+            return Err(KevyError::InvalidInput(
+                "set_replica_upstream called on a non-replica store".into(),
+            ));
         }
         let Some(runner) = self.guard.replica_runner.as_ref() else {
-            return Err(KevyError::InvalidInput("replica runner is not active (open was racy?)".into()));
+            return Err(KevyError::InvalidInput(
+                "replica runner is not active (open was racy?)".into(),
+            ));
         };
         runner.set_upstream(new_upstream.into());
         Ok(())
@@ -455,7 +459,6 @@ impl Store {
         Ok(())
     }
 }
-
 
 pub(crate) use crate::store_glue::{commit_write, lock_read, lock_write, store_err};
 

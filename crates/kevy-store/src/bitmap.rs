@@ -11,9 +11,9 @@
 use crate::nostd_prelude::*;
 use crate::util::range_bounds;
 use alloc::borrow::Cow;
+use alloc::sync::Arc;
 use alloc::vec;
 use core::num::NonZeroU64;
-use alloc::sync::Arc;
 
 use crate::value::{SmallBytes, Value};
 use crate::{Entry, Store, StoreError};
@@ -39,12 +39,7 @@ impl Store {
     /// (0 or 1). Extends the underlying string with zero-padding if
     /// `offset / 8 >= current_len`. Returns the PREVIOUS bit value.
     /// Errors on wrong type or `value > 1`.
-    pub fn setbit(
-        &mut self,
-        key: &[u8],
-        offset: u64,
-        value: u8,
-    ) -> Result<u8, StoreError> {
+    pub fn setbit(&mut self, key: &[u8], offset: u64, value: u8) -> Result<u8, StoreError> {
         if value > 1 {
             return Err(StoreError::OutOfRange);
         }
@@ -76,24 +71,15 @@ impl Store {
         };
         // Take any existing TTL, re-attach to the new entry. Entry
         // stores `expire_at_ns: Option<NonZeroU64>` (absolute ns).
-        let ttl_ns = self
-            .live_entry(key)
-            .and_then(|e| e.expire_at_ns.map(NonZeroU64::get));
-        self.insert_entry(
-            SmallBytes::from_slice(key),
-            Entry::new(new_val, ttl_ns),
-        );
+        let ttl_ns = self.live_entry(key).and_then(|e| e.expire_at_ns.map(NonZeroU64::get));
+        self.insert_entry(SmallBytes::from_slice(key), Entry::new(new_val, ttl_ns));
         Ok(prev)
     }
 
     /// `BITCOUNT key [start end [BYTE|BIT]]` — count set bits.
     /// `start`/`end` are byte offsets (inclusive, negative-from-tail
     /// like Redis). `None` for both = whole string.
-    pub fn bitcount(
-        &mut self,
-        key: &[u8],
-        range: Option<(i64, i64)>,
-    ) -> Result<u64, StoreError> {
+    pub fn bitcount(&mut self, key: &[u8], range: Option<(i64, i64)>) -> Result<u64, StoreError> {
         let bytes = match self.get(key)? {
             Some(cow) => cow,
             None => return Ok(0),
@@ -105,9 +91,8 @@ impl Store {
         let (s, e) = match range {
             None => (0, (len - 1) as usize),
             Some((start, end)) => {
-                let norm = |x: i64| -> i64 {
-                    if x < 0 { (len + x).max(0) } else { x.min(len - 1) }
-                };
+                let norm =
+                    |x: i64| -> i64 { if x < 0 { (len + x).max(0) } else { x.min(len - 1) } };
                 let s = norm(start);
                 let e = norm(end);
                 if s > e {
@@ -116,10 +101,7 @@ impl Store {
                 (s as usize, e as usize)
             }
         };
-        Ok(bytes[s..=e]
-            .iter()
-            .map(|b| u64::from(b.count_ones()))
-            .sum())
+        Ok(bytes[s..=e].iter().map(|b| u64::from(b.count_ones())).sum())
     }
 
     /// `BITPOS key bit [start [end]]` — return the position (bit
@@ -147,9 +129,8 @@ impl Store {
         let (s, e) = match range {
             None => (0usize, (len - 1) as usize),
             Some((start, end)) => {
-                let norm = |x: i64| -> i64 {
-                    if x < 0 { (len + x).max(0) } else { x.min(len - 1) }
-                };
+                let norm =
+                    |x: i64| -> i64 { if x < 0 { (len + x).max(0) } else { x.min(len - 1) } };
                 let s = norm(start);
                 let e = norm(end);
                 if s > e {
@@ -172,12 +153,7 @@ impl Store {
     /// `GETRANGE key start end` — substring with Redis-style
     /// negative indexing; `[start, end]` inclusive. Returns empty
     /// `Vec` when key absent or range out of bounds.
-    pub fn getrange(
-        &mut self,
-        key: &[u8],
-        start: i64,
-        end: i64,
-    ) -> Result<Vec<u8>, StoreError> {
+    pub fn getrange(&mut self, key: &[u8], start: i64, end: i64) -> Result<Vec<u8>, StoreError> {
         let bytes = match self.get(key)? {
             Some(cow) => cow,
             None => return Ok(Vec::new()),
@@ -204,12 +180,7 @@ impl Store {
     /// with `value`. Extends the string with zero padding if
     /// `offset > len`. Returns the new total length. Preserves
     /// any existing TTL.
-    pub fn setrange(
-        &mut self,
-        key: &[u8],
-        offset: u64,
-        value: &[u8],
-    ) -> Result<usize, StoreError> {
+    pub fn setrange(&mut self, key: &[u8], offset: u64, value: &[u8]) -> Result<usize, StoreError> {
         let offset = offset as usize;
         let mut owned: Vec<u8> = match self.get(key)? {
             Some(Cow::Borrowed(b)) => b.to_vec(),
@@ -227,13 +198,8 @@ impl Store {
         } else {
             Value::ArcBulk(Arc::new(owned.into_boxed_slice()))
         };
-        let ttl_ns = self
-            .live_entry(key)
-            .and_then(|e| e.expire_at_ns.map(NonZeroU64::get));
-        self.insert_entry(
-            SmallBytes::from_slice(key),
-            Entry::new(new_val, ttl_ns),
-        );
+        let ttl_ns = self.live_entry(key).and_then(|e| e.expire_at_ns.map(NonZeroU64::get));
+        self.insert_entry(SmallBytes::from_slice(key), Entry::new(new_val, ttl_ns));
         Ok(new_len)
     }
 }

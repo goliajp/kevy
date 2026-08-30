@@ -40,12 +40,7 @@ pub fn parse_request(line: &str) -> Result<Request, FrameError> {
 
 /// Success response line: `{"jsonrpc":"2.0","id":…,"result":…}`.
 pub fn ok_line(id: &Value, result: Value) -> String {
-    obj(vec![
-        ("jsonrpc", s("2.0")),
-        ("id", id.clone()),
-        ("result", result),
-    ])
-    .serialize()
+    obj(vec![("jsonrpc", s("2.0")), ("id", id.clone()), ("result", result)]).serialize()
 }
 
 /// Error response line: `{"jsonrpc":"2.0","id":…,"error":{code,message}}`.
@@ -53,10 +48,7 @@ pub fn err_line(id: &Value, code: i64, message: &str) -> String {
     obj(vec![
         ("jsonrpc", s("2.0")),
         ("id", id.clone()),
-        (
-            "error",
-            obj(vec![("code", Value::Int(code)), ("message", s(message))]),
-        ),
+        ("error", obj(vec![("code", Value::Int(code)), ("message", s(message))])),
     ])
     .serialize()
 }
@@ -93,10 +85,7 @@ mod tests {
             parse_request(r#"{"jsonrpc":"2.0","id":1}"#),
             Err(FrameError::Invalid(_))
         ));
-        assert!(matches!(
-            parse_request("[1,2,3]"),
-            Err(FrameError::Invalid(_))
-        ));
+        assert!(matches!(parse_request("[1,2,3]"), Err(FrameError::Invalid(_))));
     }
 
     #[test]

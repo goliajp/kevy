@@ -72,10 +72,10 @@ fn keys_iter_yields_all() {
 #[test]
 fn hscan_walks_fields_paged() {
     let s = s();
-    let pairs: Vec<(Vec<u8>, Vec<u8>)> = (0..6)
-        .map(|i| (format!("f{i}").into_bytes(), format!("v{i}").into_bytes()))
-        .collect();
-    let pair_refs: Vec<(&[u8], &[u8])> = pairs.iter().map(|(k, v)| (k.as_slice(), v.as_slice())).collect();
+    let pairs: Vec<(Vec<u8>, Vec<u8>)> =
+        (0..6).map(|i| (format!("f{i}").into_bytes(), format!("v{i}").into_bytes())).collect();
+    let pair_refs: Vec<(&[u8], &[u8])> =
+        pairs.iter().map(|(k, v)| (k.as_slice(), v.as_slice())).collect();
     s.hset(b"h", &pair_refs).unwrap();
     let mut seen: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
     let mut cursor = 0u64;

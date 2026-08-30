@@ -29,10 +29,10 @@ mod datetime_fmt;
 mod logic;
 mod math;
 mod md5;
-mod regex_engine;
-mod regexp;
 mod nullfam;
 mod ops;
+mod regex_engine;
+mod regexp;
 mod strings;
 mod strings_slice;
 #[cfg(test)]
@@ -42,8 +42,7 @@ pub use logic::{cmp_op, logic_and, logic_not, logic_or, parse_pg_bool};
 pub use ops::binop;
 
 pub use datetime_fmt::{
-    parse_date, parse_interval, parse_timestamp, render_date, render_interval,
-    render_timestamp,
+    parse_date, parse_interval, parse_timestamp, render_date, render_interval, render_timestamp,
 };
 
 /// A typed scalar value — the closed set the function library speaks.
@@ -236,13 +235,11 @@ pub fn eval(func: &str, args: &[Scalar]) -> Result<Scalar, ScalarError> {
         // ── strings ──
         "lower" | "upper" | "initcap" | "length" | "char_length" | "character_length"
         | "concat" | "concat_ws" | "trim" | "btrim" | "ltrim" | "rtrim" | "replace"
-        | "split_part" | "repeat" | "lpad" | "rpad" | "strpos" | "position" | "left"
-        | "right" | "reverse" | "translate" | "substr" | "substring" | "format" => {
-            strings::eval(&name, args)
-        }
+        | "split_part" | "repeat" | "lpad" | "rpad" | "strpos" | "position" | "left" | "right"
+        | "reverse" | "translate" | "substr" | "substring" | "format" => strings::eval(&name, args),
         // ── math ──
-        "floor" | "ceil" | "ceiling" | "round" | "trunc" | "mod" | "power" | "pow"
-        | "sqrt" | "sign" | "abs" => math::eval(&name, args),
+        "floor" | "ceil" | "ceiling" | "round" | "trunc" | "mod" | "power" | "pow" | "sqrt"
+        | "sign" | "abs" => math::eval(&name, args),
         // ── null family ──
         "coalesce" | "nullif" | "greatest" | "least" => nullfam::eval(&name, args),
         // ── date/time ──

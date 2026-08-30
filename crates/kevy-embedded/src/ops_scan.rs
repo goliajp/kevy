@@ -34,12 +34,7 @@ impl Store {
     ///
     /// `count` is the page size; pass `usize::MAX` to drain in one
     /// call.
-    pub fn scan(
-        &self,
-        cursor: u64,
-        pattern: Option<&[u8]>,
-        count: usize,
-    ) -> (u64, Vec<Vec<u8>>) {
+    pub fn scan(&self, cursor: u64, pattern: Option<&[u8]>, count: usize) -> (u64, Vec<Vec<u8>>) {
         let all = self.collect_keys(pattern, None);
         page_into(all, cursor, count)
     }
@@ -56,21 +51,13 @@ impl Store {
     /// `HSCAN key cursor [COUNT n]` — return up to `count` `(field,
     /// value)` pairs from the hash at `key`, plus the next cursor.
     /// `cursor = 0` starts; `next_cursor = 0` means complete.
-    pub fn hscan(
-        &self,
-        key: &[u8],
-        cursor: u64,
-        count: usize,
-    ) -> KevyResult<PairPage> {
+    pub fn hscan(&self, key: &[u8], cursor: u64, count: usize) -> KevyResult<PairPage> {
         let pairs = self.hgetall(key)?;
         Ok(page_into(pairs, cursor, count))
     }
 
     /// Iterator wrapper around [`Self::hscan`].
-    pub fn hash_iter(
-        &self,
-        key: &[u8],
-    ) -> KevyResult<std::vec::IntoIter<(Vec<u8>, Vec<u8>)>> {
+    pub fn hash_iter(&self, key: &[u8]) -> KevyResult<std::vec::IntoIter<(Vec<u8>, Vec<u8>)>> {
         Ok(self.hgetall(key)?.into_iter())
     }
 
@@ -79,30 +66,14 @@ impl Store {
     /// `ZSCAN key cursor [COUNT n]` — return up to `count` `(member,
     /// score)` pairs from the sorted set at `key`, in ascending score
     /// order, plus the next cursor.
-    pub fn zscan(
-        &self,
-        key: &[u8],
-        cursor: u64,
-        count: usize,
-    ) -> KevyResult<ScorePage> {
-        let pairs = self
-            .wshard(key)
-            .store
-            .zrange(key, 0, -1)
-            .map_err(store_err)?;
+    pub fn zscan(&self, key: &[u8], cursor: u64, count: usize) -> KevyResult<ScorePage> {
+        let pairs = self.wshard(key).store.zrange(key, 0, -1).map_err(store_err)?;
         Ok(page_into(pairs, cursor, count))
     }
 
     /// Iterator wrapper around [`Self::zscan`].
-    pub fn zset_iter(
-        &self,
-        key: &[u8],
-    ) -> KevyResult<std::vec::IntoIter<(Vec<u8>, f64)>> {
-        let pairs = self
-            .wshard(key)
-            .store
-            .zrange(key, 0, -1)
-            .map_err(store_err)?;
+    pub fn zset_iter(&self, key: &[u8]) -> KevyResult<std::vec::IntoIter<(Vec<u8>, f64)>> {
+        let pairs = self.wshard(key).store.zrange(key, 0, -1).map_err(store_err)?;
         Ok(pairs.into_iter())
     }
 }

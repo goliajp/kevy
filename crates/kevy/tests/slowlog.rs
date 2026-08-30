@@ -61,10 +61,7 @@ fn read_resp_value(s: &mut std::net::TcpStream) -> Vec<u8> {
     match line.first() {
         Some(b'+' | b'-' | b':') => out,
         Some(b'$') => {
-            let n: i64 = std::str::from_utf8(&line[1..line.len() - 2])
-                .unwrap()
-                .parse()
-                .unwrap();
+            let n: i64 = std::str::from_utf8(&line[1..line.len() - 2]).unwrap().parse().unwrap();
             if n < 0 {
                 return out;
             }
@@ -74,10 +71,7 @@ fn read_resp_value(s: &mut std::net::TcpStream) -> Vec<u8> {
             out
         }
         Some(b'*') => {
-            let n: i64 = std::str::from_utf8(&line[1..line.len() - 2])
-                .unwrap()
-                .parse()
-                .unwrap();
+            let n: i64 = std::str::from_utf8(&line[1..line.len() - 2]).unwrap().parse().unwrap();
             if n < 0 {
                 return out;
             }
@@ -103,17 +97,16 @@ impl Server {
         let port = free_port();
         let dir = std::env::temp_dir().join(format!(
             "kevy-slowlog-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         let dir_thread = dir.clone();
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(nshards)).bind([127, 0, 0, 1], port).shards(nshards)
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(nshards))
+                .bind([127, 0, 0, 1], port)
+                .shards(nshards)
                 .with_data_dir(dir_thread)
                 .with_aof(false)
                 .with_slowlog(slower_than_micros, max_len);
@@ -128,18 +121,12 @@ impl Server {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert!(ready, "runtime did not come up");
-        Self {
-            port,
-            dir,
-            stop,
-            handle: Some(handle),
-        }
+        Self { port, dir, stop, handle: Some(handle) }
     }
 
     fn connect(&self) -> std::net::TcpStream {
         let s = std::net::TcpStream::connect(("127.0.0.1", self.port)).unwrap();
-        s.set_read_timeout(Some(std::time::Duration::from_secs(5)))
-            .unwrap();
+        s.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
         s
     }
 }
@@ -159,10 +146,7 @@ fn slowlog_len(c: &mut std::net::TcpStream) -> i64 {
     c.write_all(&req(&[b"SLOWLOG", b"LEN"])).unwrap();
     let line = read_resp_line(c);
     assert_eq!(line[0], b':', "SLOWLOG LEN expected :N reply");
-    std::str::from_utf8(&line[1..line.len() - 2])
-        .unwrap()
-        .parse()
-        .unwrap()
+    std::str::from_utf8(&line[1..line.len() - 2]).unwrap().parse().unwrap()
 }
 
 #[test]
@@ -174,10 +158,7 @@ fn slowlog_help_returns_static_array() {
     assert!(reply.starts_with(b"*"), "HELP must return an array");
     // First bulk is the synopsis line — verify it lands intact.
     let body = String::from_utf8_lossy(&reply);
-    assert!(
-        body.contains("SLOWLOG <subcommand>"),
-        "HELP synopsis missing: {body}"
-    );
+    assert!(body.contains("SLOWLOG <subcommand>"), "HELP synopsis missing: {body}");
     assert!(body.contains("Reset the slowlog."), "HELP body missing");
 }
 
@@ -222,11 +203,7 @@ fn slowlog_threshold_high_records_nothing() {
         c.write_all(&req(&[b"SET", key.as_bytes(), b"v"])).unwrap();
         read_exact_bytes(&mut c, b"+OK\r\n");
     }
-    assert_eq!(
-        slowlog_len(&mut c),
-        0,
-        "threshold = i64::MAX must reject every entry"
-    );
+    assert_eq!(slowlog_len(&mut c), 0, "threshold = i64::MAX must reject every entry");
 }
 
 #[test]
@@ -259,10 +236,7 @@ fn slowlog_aggregates_across_shards() {
         read_exact_bytes(&mut c, b"+OK\r\n");
     }
     let total = slowlog_len(&mut c);
-    assert!(
-        total >= i64::from(n),
-        "expected ≥{n} SLOWLOG entries across 4 shards, got {total}"
-    );
+    assert!(total >= i64::from(n), "expected ≥{n} SLOWLOG entries across 4 shards, got {total}");
 
     // SLOWLOG GET (default count = 10) fans out and trims to 10 entries.
     c.write_all(&req(&[b"SLOWLOG", b"GET"])).unwrap();
@@ -307,13 +281,15 @@ fn slowlog_get_with_count_truncates() {
     let srv = Server::start(0, 128, 1);
     let mut c = srv.connect();
     for i in 0..7u32 {
-        c.write_all(&req(&[b"SET", format!("tr{i}").as_bytes(), b"v"]))
-            .unwrap();
+        c.write_all(&req(&[b"SET", format!("tr{i}").as_bytes(), b"v"])).unwrap();
         read_exact_bytes(&mut c, b"+OK\r\n");
     }
     // GET 3 → exactly 3 entries (most recent).
     c.write_all(&req(&[b"SLOWLOG", b"GET", b"3"])).unwrap();
     let reply = read_resp_value(&mut c);
-    assert!(reply.starts_with(b"*3\r\n"), "GET 3 expected *3\\r\\n header, got {:?}",
-        String::from_utf8_lossy(&reply[..reply.len().min(16)]));
+    assert!(
+        reply.starts_with(b"*3\r\n"),
+        "GET 3 expected *3\\r\\n header, got {:?}",
+        String::from_utf8_lossy(&reply[..reply.len().min(16)])
+    );
 }

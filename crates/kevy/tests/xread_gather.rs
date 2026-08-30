@@ -87,17 +87,15 @@ impl Server {
 
     /// Start against an existing data dir (restart-survival tests).
     fn start_in(dir: std::path::PathBuf) -> Self {
-        let port = std::net::TcpListener::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
+        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
         std::fs::create_dir_all(&dir).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
         let st = stop.clone();
         let d = dir.clone();
         let handle = std::thread::spawn(move || {
-            kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(4)).bind([127, 0, 0, 1], port).shards(4)
+            kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(4))
+                .bind([127, 0, 0, 1], port)
+                .shards(4)
                 .with_data_dir(d)
                 .run(st)
                 .unwrap();
@@ -145,14 +143,10 @@ fn xread_multistream_crossshard_returns_all_in_order() {
     let srv = Server::start();
     let mut c = srv.connect();
     for (st, val) in [("sa", "va"), ("sb", "vb"), ("sc", "vc")] {
-        c.write_all(&req(&[b"XADD", st.as_bytes(), b"1-0", b"f", val.as_bytes()]))
-            .unwrap();
+        c.write_all(&req(&[b"XADD", st.as_bytes(), b"1-0", b"f", val.as_bytes()])).unwrap();
         let _ = read_reply(&mut c);
     }
-    c.write_all(&req(&[
-        b"XREAD", b"STREAMS", b"sa", b"sb", b"sc", b"0", b"0", b"0",
-    ]))
-    .unwrap();
+    c.write_all(&req(&[b"XREAD", b"STREAMS", b"sa", b"sb", b"sc", b"0", b"0", b"0"])).unwrap();
     let reply = read_reply(&mut c);
     let s = String::from_utf8_lossy(&reply);
     // All three streams present (the gather), and in request order sa<sb<sc.
@@ -173,8 +167,7 @@ fn xread_multistream_skips_empty_streams() {
     c.write_all(&req(&[b"XADD", b"hasdata", b"1-0", b"f", b"v"])).unwrap();
     let _ = read_reply(&mut c);
     // `empty` stream doesn't exist; XREAD over both must return only `hasdata`.
-    c.write_all(&req(&[b"XREAD", b"STREAMS", b"empty", b"hasdata", b"0", b"0"]))
-        .unwrap();
+    c.write_all(&req(&[b"XREAD", b"STREAMS", b"empty", b"hasdata", b"0", b"0"])).unwrap();
     let reply = read_reply(&mut c);
     let s = String::from_utf8_lossy(&reply);
     assert!(reply.starts_with(b"*1\r\n"), "expected one stream, got {s:?}");
@@ -186,8 +179,7 @@ fn xread_multistream_all_empty_is_nil() {
     let _s = serial();
     let srv = Server::start();
     let mut c = srv.connect();
-    c.write_all(&req(&[b"XREAD", b"STREAMS", b"none1", b"none2", b"0", b"0"]))
-        .unwrap();
+    c.write_all(&req(&[b"XREAD", b"STREAMS", b"none1", b"none2", b"0", b"0"])).unwrap();
     assert_eq!(read_reply(&mut c), b"*-1\r\n");
 }
 
@@ -203,15 +195,15 @@ fn xread_multistream_count_is_honoured_per_stream() {
         let _ = read_reply(&mut c);
     }
     // COUNT 1 → at most one entry per stream (ids 1-0).
-    c.write_all(&req(&[
-        b"XREAD", b"COUNT", b"1", b"STREAMS", b"cs1", b"cs2", b"0", b"0",
-    ]))
-    .unwrap();
+    c.write_all(&req(&[b"XREAD", b"COUNT", b"1", b"STREAMS", b"cs1", b"cs2", b"0", b"0"])).unwrap();
     let reply = read_reply(&mut c);
     let s = String::from_utf8_lossy(&reply);
     assert!(reply.starts_with(b"*2\r\n"), "expected two streams, got {s:?}");
     // Only id 1-0 from each (COUNT 1), not 2-0 / 3-0.
-    assert!(s.contains("1-0") && !s.contains("2-0") && !s.contains("3-0"), "COUNT not honoured: {s:?}");
+    assert!(
+        s.contains("1-0") && !s.contains("2-0") && !s.contains("3-0"),
+        "COUNT not honoured: {s:?}"
+    );
 }
 
 #[test]
@@ -229,7 +221,15 @@ fn xreadgroup_multistream_crossshard_returns_all_streams() {
     // `>` over both streams: the regression was reading only the first
     // STREAMS key's shard and silently dropping the other stream.
     c.write_all(&req(&[
-        b"XREADGROUP", b"GROUP", b"grp", b"alice", b"STREAMS", b"ga", b"gb", b">", b">",
+        b"XREADGROUP",
+        b"GROUP",
+        b"grp",
+        b"alice",
+        b"STREAMS",
+        b"ga",
+        b"gb",
+        b">",
+        b">",
     ]))
     .unwrap();
     let reply = read_reply(&mut c);
@@ -240,7 +240,15 @@ fn xreadgroup_multistream_crossshard_returns_all_streams() {
     // Both deliveries are now pending: an id-mode replay (PEL) per stream
     // must show 1-0 on each — proving the remote shard's PEL was updated.
     c.write_all(&req(&[
-        b"XREADGROUP", b"GROUP", b"grp", b"alice", b"STREAMS", b"ga", b"gb", b"0", b"0",
+        b"XREADGROUP",
+        b"GROUP",
+        b"grp",
+        b"alice",
+        b"STREAMS",
+        b"ga",
+        b"gb",
+        b"0",
+        b"0",
     ]))
     .unwrap();
     let reply = read_reply(&mut c);
@@ -250,7 +258,15 @@ fn xreadgroup_multistream_crossshard_returns_all_streams() {
 
     // A second `>` read returns nothing new on either stream.
     c.write_all(&req(&[
-        b"XREADGROUP", b"GROUP", b"grp", b"alice", b"STREAMS", b"ga", b"gb", b">", b">",
+        b"XREADGROUP",
+        b"GROUP",
+        b"grp",
+        b"alice",
+        b"STREAMS",
+        b"ga",
+        b"gb",
+        b">",
+        b">",
     ]))
     .unwrap();
     assert_eq!(read_reply(&mut c), b"*-1\r\n");
@@ -268,7 +284,15 @@ fn xreadgroup_multistream_missing_group_errors() {
     // Group exists on neither stream → NOGROUP error (first error wins),
     // matching the single-stream form.
     c.write_all(&req(&[
-        b"XREADGROUP", b"GROUP", b"nogrp", b"alice", b"STREAMS", b"ha", b"hb", b">", b">",
+        b"XREADGROUP",
+        b"GROUP",
+        b"nogrp",
+        b"alice",
+        b"STREAMS",
+        b"ha",
+        b"hb",
+        b">",
+        b">",
     ]))
     .unwrap();
     let reply = read_reply(&mut c);
@@ -289,7 +313,15 @@ fn xreadgroup_gather_pel_survives_aof_restart() {
     // Cross-shard `>` delivery registers 1-0 in each stream's PEL — on its
     // owning shard, AOF-logged there as the rewritten single-stream form.
     c.write_all(&req(&[
-        b"XREADGROUP", b"GROUP", b"grp", b"alice", b"STREAMS", b"pa", b"pb", b">", b">",
+        b"XREADGROUP",
+        b"GROUP",
+        b"grp",
+        b"alice",
+        b"STREAMS",
+        b"pa",
+        b"pb",
+        b">",
+        b">",
     ]))
     .unwrap();
     assert!(read_reply(&mut c).starts_with(b"*2\r\n"));
@@ -300,7 +332,15 @@ fn xreadgroup_gather_pel_survives_aof_restart() {
     let srv2 = Server::start_in(dir);
     let mut c2 = srv2.connect();
     c2.write_all(&req(&[
-        b"XREADGROUP", b"GROUP", b"grp", b"alice", b"STREAMS", b"pa", b"pb", b"0", b"0",
+        b"XREADGROUP",
+        b"GROUP",
+        b"grp",
+        b"alice",
+        b"STREAMS",
+        b"pa",
+        b"pb",
+        b"0",
+        b"0",
     ]))
     .unwrap();
     let reply = read_reply(&mut c2);
@@ -325,7 +365,15 @@ fn xreadgroup_group_named_streams_routes_correct_key() {
         let _ = read_reply(&mut c);
     }
     c.write_all(&req(&[
-        b"XREADGROUP", b"GROUP", b"streams", b"alice", b"STREAMS", b"ns_a", b"ns_b", b">", b">",
+        b"XREADGROUP",
+        b"GROUP",
+        b"streams",
+        b"alice",
+        b"STREAMS",
+        b"ns_a",
+        b"ns_b",
+        b">",
+        b">",
     ]))
     .unwrap();
     let reply = read_reply(&mut c);
@@ -333,7 +381,15 @@ fn xreadgroup_group_named_streams_routes_correct_key() {
     assert!(reply.starts_with(b"*2\r\n") && s.contains("ns_a") && s.contains("ns_b"), "{s:?}");
     // PEL recorded on both streams (key_idx pointed at the stream, not "alice").
     c.write_all(&req(&[
-        b"XREADGROUP", b"GROUP", b"streams", b"alice", b"STREAMS", b"ns_a", b"ns_b", b"0", b"0",
+        b"XREADGROUP",
+        b"GROUP",
+        b"streams",
+        b"alice",
+        b"STREAMS",
+        b"ns_a",
+        b"ns_b",
+        b"0",
+        b"0",
     ]))
     .unwrap();
     let reply = read_reply(&mut c);
@@ -350,7 +406,12 @@ fn bare_xreadgroup_does_not_panic_shard() {
     let mut c = srv.connect();
     c.write_all(&req(&[b"XREADGROUP"])).unwrap();
     let reply = read_reply(&mut c);
-    assert_eq!(reply.first(), Some(&b'-'), "expected error, got {:?}", String::from_utf8_lossy(&reply));
+    assert_eq!(
+        reply.first(),
+        Some(&b'-'),
+        "expected error, got {:?}",
+        String::from_utf8_lossy(&reply)
+    );
     // Server still alive.
     c.write_all(&req(&[b"PING"])).unwrap();
     assert_eq!(read_reply(&mut c), b"+PONG\r\n");

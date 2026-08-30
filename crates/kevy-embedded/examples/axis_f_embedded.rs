@@ -48,10 +48,8 @@ fn print_row(label: &str, n: usize, dt: u128) {
 }
 
 fn main() {
-    let n: usize = std::env::var("KEVY_BENCH_N")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(N_DEFAULT);
+    let n: usize =
+        std::env::var("KEVY_BENCH_N").ok().and_then(|s| s.parse().ok()).unwrap_or(N_DEFAULT);
     println!("# axis_f kevy-embedded bench, N = {n}");
     println!("# (valkey + redis have no in-process mode — kevy-unique capability)");
     println!();

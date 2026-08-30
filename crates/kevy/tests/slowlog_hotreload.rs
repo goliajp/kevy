@@ -48,10 +48,7 @@ fn read_resp_line(s: &mut std::net::TcpStream) -> Vec<u8> {
 fn slowlog_len(c: &mut std::net::TcpStream) -> i64 {
     c.write_all(&req(&[b"SLOWLOG", b"LEN"])).unwrap();
     let line = read_resp_line(c);
-    std::str::from_utf8(&line[1..line.len() - 2])
-        .unwrap()
-        .parse()
-        .unwrap()
+    std::str::from_utf8(&line[1..line.len() - 2]).unwrap().parse().unwrap()
 }
 
 #[test]
@@ -60,17 +57,13 @@ fn hot_reload_takes_effect_within_one_tick() {
     let mut cfg = kevy_config::Config::default();
     cfg.slowlog.slower_than_micros = -1;
     cfg.slowlog.max_len = 128;
-    let state = Arc::new(
-        kevy::RuntimeState::new(Arc::new(cfg), std::path::PathBuf::new(), 1).unwrap(),
-    );
+    let state =
+        Arc::new(kevy::RuntimeState::new(Arc::new(cfg), std::path::PathBuf::new(), 1).unwrap());
 
     let port = free_port();
     let dir = std::env::temp_dir().join(format!(
         "kevy-slowlog-hot-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
     ));
     std::fs::create_dir_all(&dir).unwrap();
     let stop = Arc::new(AtomicBool::new(false));
@@ -82,7 +75,9 @@ fn hot_reload_takes_effect_within_one_tick() {
         // live_runtime_config tick path overrides it on the first tick
         // with whatever the shared state currently holds — we set it to
         // -1 above, so the runtime ends up OFF.
-        let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::with_state(state_thread)).bind([127, 0, 0, 1], port).shards(1)
+        let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::with_state(state_thread))
+            .bind([127, 0, 0, 1], port)
+            .shards(1)
             .with_data_dir(dir_thread)
             .with_aof(false);
         rt.run(stop_thread).unwrap();
@@ -96,8 +91,7 @@ fn hot_reload_takes_effect_within_one_tick() {
     c.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
     // Phase 1: SLOWLOG is OFF → nothing recorded.
     for i in 0..5u32 {
-        c.write_all(&req(&[b"SET", format!("p1-{i}").as_bytes(), b"v"]))
-            .unwrap();
+        c.write_all(&req(&[b"SET", format!("p1-{i}").as_bytes(), b"v"])).unwrap();
         read_exact_bytes(&mut c, b"+OK\r\n");
     }
     assert_eq!(slowlog_len(&mut c), 0, "phase 1: SLOWLOG must be off");
@@ -119,15 +113,11 @@ fn hot_reload_takes_effect_within_one_tick() {
     });
 
     for i in 0..5u32 {
-        c.write_all(&req(&[b"SET", format!("p2-{i}").as_bytes(), b"v"]))
-            .unwrap();
+        c.write_all(&req(&[b"SET", format!("p2-{i}").as_bytes(), b"v"])).unwrap();
         read_exact_bytes(&mut c, b"+OK\r\n");
     }
     let len = slowlog_len(&mut c);
-    assert!(
-        len >= 5,
-        "phase 2: hot-reload should have enabled the ring, got {len}"
-    );
+    assert!(len >= 5, "phase 2: hot-reload should have enabled the ring, got {len}");
 
     stop.store(true, Ordering::Relaxed);
     let _ = handle.join();

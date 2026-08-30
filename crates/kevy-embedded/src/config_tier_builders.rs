@@ -2,9 +2,9 @@
 //! `#[path]`, split from `config.rs` for the 500-LOC house rule;
 //! behaviour unchanged).
 
+use super::Config;
 #[cfg(feature = "tier")]
 use super::TierBudgetSpec;
-use super::Config;
 
 impl Config {
     /// Enable transparent tiering with a RAM budget of `bytes`: values

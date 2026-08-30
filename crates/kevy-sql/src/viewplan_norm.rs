@@ -59,7 +59,10 @@ pub(crate) fn normalize(v: &CreateView, t: &Table) -> Result<Vec<ColPred>, SqlEr
             return Err(SqlError::at(
                 p.line,
                 p.col,
-                format!("view '{}': WHERE names unknown column '{}' of table '{}'", v.name, p.column, t.name),
+                format!(
+                    "view '{}': WHERE names unknown column '{}' of table '{}'",
+                    v.name, p.column, t.name
+                ),
             ));
         };
         let acc = match cols.iter_mut().find(|(c, ..)| c == &p.column) {
@@ -80,7 +83,10 @@ fn apply(acc: &mut Acc, p: &Pred, ty: KevyType) -> Result<(), SqlError> {
         SqlError::at(
             p.line,
             p.col,
-            format!("predicates on '{}' do not combine \u{2014} one EQ, or one range ({what} is already set)", p.column),
+            format!(
+                "predicates on '{}' do not combine \u{2014} one EQ, or one range ({what} is already set)",
+                p.column
+            ),
         )
     };
     let a = typed(p, &p.a, ty)?;
@@ -141,10 +147,9 @@ fn typed(p: &Pred, b: &Bound, ty: KevyType) -> Result<BV, SqlError> {
             p.column,
             ty.tag()
         ))),
-        (Bound::Num(s), KevyType::Str) => Err(err(format!(
-            "column '{}' is str \u{2014} quote the literal ('{s}')",
-            p.column
-        ))),
+        (Bound::Num(s), KevyType::Str) => {
+            Err(err(format!("column '{}' is str \u{2014} quote the literal ('{s}')", p.column)))
+        }
     }
 }
 

@@ -38,8 +38,7 @@ fn wait_for_row_segment(dir: &std::path::Path) {
     let segs = dir.join("segs-0");
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        let slid = segs.exists()
-            && std::fs::read_dir(&segs).is_ok_and(|r| r.count() > 0);
+        let slid = segs.exists() && std::fs::read_dir(&segs).is_ok_and(|r| r.count() > 0);
         if slid {
             return;
         }
@@ -79,9 +78,7 @@ fn manual_tick_drives_the_window_slide() {
 fn near_boundary_queries_earn_a_span_suggestion_deep_ones_erase_it() {
     let d = kevy_tmpdir::TmpDir::new("emb-winnarrow");
     let s = Store::open(
-        Config::default()
-            .with_persist(d.path())
-            .with_reaper_interval(Duration::from_millis(25)),
+        Config::default().with_persist(d.path()).with_reaper_interval(Duration::from_millis(25)),
     )
     .expect("open");
     s.table_declare(windowed_table()).expect("declare");

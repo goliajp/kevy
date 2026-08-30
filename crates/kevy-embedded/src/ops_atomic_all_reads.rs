@@ -56,5 +56,4 @@ impl AtomicAllShards<'_> {
         let i = self.idx(key);
         self.guards[i].store.zrange_by_score(key, min, max).map_err(store_err)
     }
-
 }

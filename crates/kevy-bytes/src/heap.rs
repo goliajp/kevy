@@ -71,11 +71,7 @@ impl Heap {
     #[inline]
     pub(crate) fn new(ptr: NonNull<u8>, len: usize, cap: usize) -> Self {
         debug_assert!(cap <= CAP_MASK, "kevy-bytes: capacity exceeds 56-bit field");
-        Self {
-            ptr,
-            len,
-            cap_and_tag: TAG_HEAP_BIT | (cap & CAP_MASK),
-        }
+        Self { ptr, len, cap_and_tag: TAG_HEAP_BIT | (cap & CAP_MASK) }
     }
     #[cfg(target_pointer_width = "32")]
     #[inline]
@@ -87,13 +83,7 @@ impl Heap {
             len <= u32::MAX as usize && cap <= u32::MAX as usize,
             "kevy-bytes: len/cap exceeds u32 on 32-bit platform"
         );
-        Self {
-            ptr,
-            len: len as u32,
-            cap: cap as u32,
-            _pad: [0; 11],
-            tag: HEAP_TAG_BYTE,
-        }
+        Self { ptr, len: len as u32, cap: cap as u32, _pad: [0; 11], tag: HEAP_TAG_BYTE }
     }
 
     /// Live capacity (always returned as `usize` regardless of underlying

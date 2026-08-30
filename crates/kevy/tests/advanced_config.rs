@@ -82,20 +82,21 @@ fn runtime_with_advanced_runs_cmds_correctly() {
     let port = free_port();
     let dir = std::env::temp_dir().join(format!(
         "kevy-advcfg-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
     ));
     std::fs::create_dir_all(&dir).unwrap();
     let stop = Arc::new(AtomicBool::new(false));
     let stop_thread = stop.clone();
     let dir_thread = dir.clone();
     let handle = std::thread::spawn(move || {
-        let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(2)).bind([127, 0, 0, 1], port).shards(2)
+        let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(2))
+            .bind([127, 0, 0, 1], port)
+            .shards(2)
             .with_data_dir(dir_thread)
             // Atypical knobs: low spin, tight ring, slow tick.
-            .with_advanced(/* spin */ 16, /* park */ 25, /* tick */ 64, /* ring */ 64);
+            .with_advanced(
+                /* spin */ 16, /* park */ 25, /* tick */ 64, /* ring */ 64,
+            );
         rt.run(stop_thread).unwrap();
     });
     kevy_testnet::assert_listening(port, "the server under test");

@@ -29,9 +29,7 @@ impl Connection {
         check_fields(fields)?;
         let secs = ttl.as_secs();
         match self {
-            Self::Embedded(s) => {
-                s.hexpire(key, fields, std::time::Duration::from_secs(secs), cond)
-            }
+            Self::Embedded(s) => s.hexpire(key, fields, std::time::Duration::from_secs(secs), cond),
             Self::Remote(c) => {
                 hash_ttl_request(c, b"HEXPIRE", key, Some(secs.to_string()), cond, fields)
                     .map(to_codes)
@@ -51,9 +49,7 @@ impl Connection {
         check_fields(fields)?;
         let ms = ttl.as_millis().min(i64::MAX as u128) as u64;
         match self {
-            Self::Embedded(s) => {
-                s.hexpire(key, fields, std::time::Duration::from_millis(ms), cond)
-            }
+            Self::Embedded(s) => s.hexpire(key, fields, std::time::Duration::from_millis(ms), cond),
             Self::Remote(c) => {
                 hash_ttl_request(c, b"HPEXPIRE", key, Some(ms.to_string()), cond, fields)
                     .map(to_codes)
@@ -83,9 +79,7 @@ impl Connection {
         check_fields(fields)?;
         match self {
             Self::Embedded(s) => s.httl(key, fields),
-            Self::Remote(c) => {
-                hash_ttl_request(c, b"HTTL", key, None, HExpireCond::Always, fields)
-            }
+            Self::Remote(c) => hash_ttl_request(c, b"HTTL", key, None, HExpireCond::Always, fields),
         }
     }
 
@@ -167,8 +161,7 @@ mod tests {
     #[test]
     fn embedded_hexpire_httl_hpersist_round_trip() {
         let mut c = Connection::connect("mem://").unwrap();
-        c.hset(b"h", &[(b"a".as_ref(), b"1".as_ref()), (b"b".as_ref(), b"2".as_ref())])
-            .unwrap();
+        c.hset(b"h", &[(b"a".as_ref(), b"1".as_ref()), (b"b".as_ref(), b"2".as_ref())]).unwrap();
 
         let codes = c
             .hexpire(b"h", &[&b"a"[..], &b"nope"[..]], Duration::from_secs(60), HExpireCond::Always)

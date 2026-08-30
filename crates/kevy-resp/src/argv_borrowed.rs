@@ -34,18 +34,12 @@ pub struct ArgvBorrowed<'a> {
 impl<'a> ArgvBorrowed<'a> {
     /// An empty argv that will read arg bytes from `input`.
     pub fn new(input: &'a [u8]) -> Self {
-        Self {
-            input,
-            ranges: InlineRanges::new(),
-        }
+        Self { input, ranges: InlineRanges::new() }
     }
 
     /// An empty argv, pre-sizing `ranges` for `argc` args.
     pub fn with_capacity(input: &'a [u8], argc: usize) -> Self {
-        Self {
-            input,
-            ranges: InlineRanges::with_capacity(argc),
-        }
+        Self { input, ranges: InlineRanges::with_capacity(argc) }
     }
 
     /// Record one argument as `input[start..end]`.

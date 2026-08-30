@@ -5,8 +5,8 @@
 
 use crate::SnapshotSource;
 use crate::snapshot_fmt::{
-    OP_EOF, OP_HASH, OP_HFTTL, OP_LIST, OP_SET, OP_STR, OP_STREAM, OP_ZSET, SNAPSHOT_BUF_CAP,
-    MAGIC, OP_SEGSTUB, VERSION, VERSION_FEED_CURSOR, VERSION_HASH_TTL, VERSION_SEG_STUB,
+    MAGIC, OP_EOF, OP_HASH, OP_HFTTL, OP_LIST, OP_SEGSTUB, OP_SET, OP_STR, OP_STREAM, OP_ZSET,
+    SNAPSHOT_BUF_CAP, VERSION, VERSION_FEED_CURSOR, VERSION_HASH_TTL, VERSION_SEG_STUB,
     write_bytes, write_ttl,
 };
 use crate::snapshot_payload;
@@ -107,7 +107,10 @@ fn snapshot_version<S: SnapshotSource>(src: &S, has_fttl: bool, has_cursor: bool
 /// leisure, then the store-owning thread renames it in the same critical
 /// section that resets the AOF — keeping the snapshot/AOF commit adjacent
 /// instead of seconds apart.
-pub fn write_snapshot_tmp<S: SnapshotSource>(src: &S, path: &Path) -> io::Result<std::path::PathBuf> {
+pub fn write_snapshot_tmp<S: SnapshotSource>(
+    src: &S,
+    path: &Path,
+) -> io::Result<std::path::PathBuf> {
     let tmp = tmp_path(path);
     {
         let mut file = File::create(&tmp)?;
@@ -131,10 +134,9 @@ fn op_for(value: &Value) -> io::Result<u8> {
     Ok(match value {
         Value::Str(_) | Value::Int(_) | Value::ArcBulk(_) => OP_STR, // L1/L2: all reuse OP_STR.
 
-        Value::Hash(_)
-        | Value::SegHash(_)
-        | Value::SmallHashInline(_)
-        | Value::PackedRow(_) => OP_HASH,
+        Value::Hash(_) | Value::SegHash(_) | Value::SmallHashInline(_) | Value::PackedRow(_) => {
+            OP_HASH
+        }
         Value::List(_) | Value::SegList(_) | Value::SmallListInline(_) => OP_LIST,
         // A.7 O5: both Set encodings share the OP_SET wire format —
         // payload is `[len: u32 LE][bulk: len-prefixed bytes]*`, agnostic
@@ -166,11 +168,7 @@ fn write_payload<W: Write>(w: &mut W, value: &Value) -> io::Result<()> {
         Value::Hash(h) => snapshot_payload::write_hash_payload(w, h),
         // Same OP_HASH payload as every other hash encoding — the snapshot
         // records a hash, not how this process happened to store it.
-        Value::PackedRow(r) => snapshot_payload::write_pairs_payload(
-            w,
-            r.len(),
-            r.fields(),
-        ),
+        Value::PackedRow(r) => snapshot_payload::write_pairs_payload(w, r.len(), r.fields()),
         Value::SegHash(h) => snapshot_payload::write_seghash_payload(w, h),
         Value::SmallHashInline(h) => snapshot_payload::write_small_hash_payload(w, h),
         Value::List(l) => snapshot_payload::write_list_payload(w, l),
@@ -195,7 +193,10 @@ fn write_payload<W: Write>(w: &mut W, value: &Value) -> io::Result<()> {
 /// consumers (name + last_seen_ms), PEL rows]`. Tombstone PEL rows are kept
 /// — the snapshot path is the full-fidelity one (the AOF rewrite can't
 /// re-create them via XCLAIM, see `rewrite_fmt`).
-pub(crate) fn write_stream_groups<W: Write>(w: &mut W, groups: &[kevy_store::LoadedGroup]) -> io::Result<()> {
+pub(crate) fn write_stream_groups<W: Write>(
+    w: &mut W,
+    groups: &[kevy_store::LoadedGroup],
+) -> io::Result<()> {
     w.write_all(&(groups.len() as u32).to_le_bytes())?;
     for g in groups {
         write_bytes(w, &g.name)?;

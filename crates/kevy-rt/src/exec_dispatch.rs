@@ -74,14 +74,26 @@ impl<C: Commands> Shard<C> {
         // Role-gated write rejection covers the single-shard
         // path too (start_command gates the fan-out routes; seq is
         // already assigned here — slot+fold, not immediate_reply).
-        if meta.is_write && let Some(err) = self.commands.write_denied() {
+        if meta.is_write
+            && let Some(err) = self.commands.write_denied()
+        {
             self.push_pending_slot(conn_id, 1, Agg::First(None), is_quit);
-            self.fold(conn_id, seq, crate::message::Part::Reply(crate::message::SmallReply::from_vec(err)));
+            self.fold(
+                conn_id,
+                seq,
+                crate::message::Part::Reply(crate::message::SmallReply::from_vec(err)),
+            );
             return;
         }
-        if !meta.is_write && let Some(err) = self.commands.read_denied(args) {
+        if !meta.is_write
+            && let Some(err) = self.commands.read_denied(args)
+        {
             self.push_pending_slot(conn_id, 1, Agg::First(None), is_quit);
-            self.fold(conn_id, seq, crate::message::Part::Reply(crate::message::SmallReply::from_vec(err)));
+            self.fold(
+                conn_id,
+                seq,
+                crate::message::Part::Reply(crate::message::SmallReply::from_vec(err)),
+            );
             return;
         }
         // In-order local fast path: `seq == next_emit` and no prior cmd is
@@ -185,9 +197,8 @@ impl<C: Commands> Shard<C> {
             if !conn.pending.is_empty() {
                 return false;
             }
-            let reply = self
-                .store
-                .get_into_output(&args[1], &mut conn.output, &mut conn.output_arcs);
+            let reply =
+                self.store.get_into_output(&args[1], &mut conn.output, &mut conn.output_arcs);
             match reply {
                 Ok(true) => {}
                 Ok(false) => {
@@ -225,9 +236,7 @@ impl<C: Commands> Shard<C> {
         let wrote_reply = conn.output.len() > out_pre_len;
         // Park-on-miss for BLPOP / BRPOP / XREAD BLOCK that wrote nothing:
         // the reply is deferred to the wake / timeout path.
-        if !wrote_reply
-            && let crate::BlockHint::Block { kind, keys, timeout_ms } = block_hint
-        {
+        if !wrote_reply && let crate::BlockHint::Block { kind, keys, timeout_ms } = block_hint {
             self.slowlog_maybe(t0, args);
             self.park_dispatch(conn_id, args, kind, keys, timeout_ms, proto);
             return true;

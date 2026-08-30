@@ -106,7 +106,6 @@ fn route_matches_resolve_route_for_every_verb() {
     }
 }
 
-
 /// The DOC face and the AOF/propagation gate answer different questions,
 /// and for these verbs they answer differently. `OP_TABLE.write` asks
 /// "does this verb itself produce the replayable data effect?";
@@ -230,7 +229,8 @@ fn verb_arity_is_the_same_column_as_verb_meta() {
         .iter()
         .filter_map(|m| {
             let shared = kevy_resp::verb_arity::arity_of(m.name)?;
-            (shared != m.arity).then(|| format!("{}: VERB_META {} / shared {}", m.name, m.arity, shared))
+            (shared != m.arity)
+                .then(|| format!("{}: VERB_META {} / shared {}", m.name, m.arity, shared))
         })
         .collect();
     assert!(mismatched.is_empty(), "the two arity columns disagree: {mismatched:?}");

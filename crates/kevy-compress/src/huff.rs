@@ -193,11 +193,8 @@ pub(crate) fn validate_lens(lens: &[u8; 256], n: usize) -> Result<(), Corrupt> {
     if lens.iter().any(|&l| u32::from(l) > MAX_LEN) {
         return Err(Corrupt);
     }
-    let kraft: u64 = lens
-        .iter()
-        .filter(|&&l| l > 0)
-        .map(|&l| 1u64 << (MAX_LEN - u32::from(l)))
-        .sum();
+    let kraft: u64 =
+        lens.iter().filter(|&&l| l > 0).map(|&l| 1u64 << (MAX_LEN - u32::from(l))).sum();
     if kraft > (1u64 << MAX_LEN) || (n > 0 && kraft == 0) {
         return Err(Corrupt);
     }
@@ -221,7 +218,11 @@ pub(crate) fn symbols_fit(n: usize, stream_len: usize) -> usize {
 
 /// Decode `n` symbols from an LSB-first bitstream under `lens`;
 /// returns the bytes and the exact bits consumed.
-pub(crate) fn read_bits(stream: &[u8], lens: &[u8; 256], n: usize) -> Result<(Vec<u8>, u64), Corrupt> {
+pub(crate) fn read_bits(
+    stream: &[u8],
+    lens: &[u8; 256],
+    n: usize,
+) -> Result<(Vec<u8>, u64), Corrupt> {
     let codes = canonical_codes(lens);
     // Flat table: index = next MAX_LEN reversed bits -> (symbol, len).
     let mut table = vec![(0u8, 0u8); 1 << MAX_LEN];

@@ -19,8 +19,8 @@
 //! backlog) or it triggers a fresh snapshot ship.
 
 use std::net::{Shutdown, TcpStream};
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -65,7 +65,13 @@ impl ReplicaRunner {
         runner_slot: usize,
         progress: Arc<ReplicaProgress>,
     ) -> Self {
-        Self::spawn_target(upstream_addr, replica_id, Target::PerShard(sender), runner_slot, progress)
+        Self::spawn_target(
+            upstream_addr,
+            replica_id,
+            Target::PerShard(sender),
+            runner_slot,
+            progress,
+        )
     }
 
     /// Single-source mode: ONE runner drains one upstream
@@ -78,7 +84,13 @@ impl ReplicaRunner {
         runner_slot: usize,
         progress: Arc<ReplicaProgress>,
     ) -> Self {
-        Self::spawn_target(upstream_addr, replica_id, Target::Routed(senders), runner_slot, progress)
+        Self::spawn_target(
+            upstream_addr,
+            replica_id,
+            Target::Routed(senders),
+            runner_slot,
+            progress,
+        )
     }
 
     fn spawn_target(
@@ -95,14 +107,18 @@ impl ReplicaRunner {
         let handle = std::thread::Builder::new()
             .name(format!("kevy-replica-{replica_id}"))
             .spawn(move || {
-                run_loop(upstream_addr, replica_id, target, stop_thread, socket_thread, runner_slot, progress);
+                run_loop(
+                    upstream_addr,
+                    replica_id,
+                    target,
+                    stop_thread,
+                    socket_thread,
+                    runner_slot,
+                    progress,
+                );
             })
             .expect("spawn replica runner thread");
-        Self {
-            handle: Some(handle),
-            stop,
-            socket,
-        }
+        Self { handle: Some(handle), stop, socket }
     }
 
     /// Signal the runner to stop and join the thread. Sets the flag,
@@ -181,8 +197,13 @@ fn run_loop(
         ) {
             Ok(mut client) => {
                 from_offset = drain_session(
-                    &mut client, &target, &stop, &socket_slot, runner_slot,
-                    &progress, &mut data_gen,
+                    &mut client,
+                    &target,
+                    &stop,
+                    &socket_slot,
+                    runner_slot,
+                    &progress,
+                    &mut data_gen,
                 );
             }
             Err(e) => {
@@ -221,7 +242,12 @@ fn drain_session(
             drain_client(client, sender, stop, runner_slot, progress, data_gen)
         }
         Target::Routed(senders) => crate::replica_runner_routed::drain_client_routed(
-            client, senders, stop, runner_slot, progress, data_gen,
+            client,
+            senders,
+            stop,
+            runner_slot,
+            progress,
+            data_gen,
         ),
     };
     // Clear the slot — the socket the slot held now owns a

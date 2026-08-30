@@ -31,12 +31,7 @@ fn req(parts: &[&[u8]]) -> Vec<u8> {
 fn read_reply(s: &mut std::net::TcpStream, expected: &[u8]) {
     let mut buf = vec![0u8; expected.len()];
     s.read_exact(&mut buf).unwrap();
-    assert_eq!(
-        &buf,
-        expected,
-        "expected {:?}",
-        String::from_utf8_lossy(expected)
-    );
+    assert_eq!(&buf, expected, "expected {:?}", String::from_utf8_lossy(expected));
 }
 
 struct Server {
@@ -54,17 +49,16 @@ impl Server {
         // Isolate persistence per test run (each write hits an AOF now).
         let dir = std::env::temp_dir().join(format!(
             "kevy-sharded-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         let dir_thread = dir.clone();
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(nshards)).bind([127, 0, 0, 1], port).shards(nshards)
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(nshards))
+                .bind([127, 0, 0, 1], port)
+                .shards(nshards)
                 .with_data_dir(dir_thread);
             rt.run(stop_thread).unwrap();
         });
@@ -78,12 +72,7 @@ impl Server {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert!(ready, "runtime did not come up");
-        Server {
-            port,
-            dir,
-            stop,
-            handle: Some(handle),
-        }
+        Server { port, dir, stop, handle: Some(handle) }
     }
 
     fn connect(&self) -> std::net::TcpStream {
@@ -110,9 +99,7 @@ fn keyspace_is_shared_across_cores() {
     for i in 0..200u32 {
         let key = format!("k{i}");
         let val = format!("v{i}");
-        writer
-            .write_all(&req(&[b"SET", key.as_bytes(), val.as_bytes()]))
-            .unwrap();
+        writer.write_all(&req(&[b"SET", key.as_bytes(), val.as_bytes()])).unwrap();
         read_reply(&mut writer, b"+OK\r\n");
     }
 
@@ -156,8 +143,7 @@ fn fanout_dbsize_del_flush() {
     let mut c = srv.connect();
 
     for i in 0..30u32 {
-        c.write_all(&req(&[b"SET", format!("f{i}").as_bytes(), b"x"]))
-            .unwrap();
+        c.write_all(&req(&[b"SET", format!("f{i}").as_bytes(), b"x"])).unwrap();
         read_reply(&mut c, b"+OK\r\n");
     }
     // DBSIZE fans out to all shards and sums.
@@ -165,8 +151,7 @@ fn fanout_dbsize_del_flush() {
     read_reply(&mut c, b":30\r\n");
 
     // Multi-key DEL spanning shards returns the total removed.
-    c.write_all(&req(&[b"DEL", b"f0", b"f1", b"f2", b"nope"]))
-        .unwrap();
+    c.write_all(&req(&[b"DEL", b"f0", b"f1", b"f2", b"nope"])).unwrap();
     read_reply(&mut c, b":3\r\n");
 
     c.write_all(&req(&[b"DBSIZE"])).unwrap();
@@ -185,13 +170,9 @@ fn hash_type_across_cores() {
 
     // Write a hash through one connection.
     let mut w = srv.connect();
-    w.write_all(&req(&[
-        b"HSET", b"user:1", b"name", b"alice", b"age", b"30",
-    ]))
-    .unwrap();
+    w.write_all(&req(&[b"HSET", b"user:1", b"name", b"alice", b"age", b"30"])).unwrap();
     read_reply(&mut w, b":2\r\n");
-    w.write_all(&req(&[b"HSET", b"user:1", b"age", b"31"]))
-        .unwrap(); // update, 0 new
+    w.write_all(&req(&[b"HSET", b"user:1", b"age", b"31"])).unwrap(); // update, 0 new
     read_reply(&mut w, b":0\r\n");
 
     // Read it through another connection (possibly a different core).
@@ -200,8 +181,7 @@ fn hash_type_across_cores() {
     read_reply(&mut r, b"$5\r\nalice\r\n");
     r.write_all(&req(&[b"HLEN", b"user:1"])).unwrap();
     read_reply(&mut r, b":2\r\n");
-    r.write_all(&req(&[b"HINCRBY", b"user:1", b"age", b"1"]))
-        .unwrap();
+    r.write_all(&req(&[b"HINCRBY", b"user:1", b"age", b"1"])).unwrap();
     read_reply(&mut r, b":32\r\n");
     r.write_all(&req(&[b"TYPE", b"user:1"])).unwrap();
     read_reply(&mut r, b"+hash\r\n");
@@ -210,29 +190,21 @@ fn hash_type_across_cores() {
     r.write_all(&req(&[b"GET", b"user:1"])).unwrap();
     let mut buf = [0u8; 64];
     let n = r.read(&mut buf).unwrap();
-    assert!(
-        buf[..n].starts_with(b"-WRONGTYPE"),
-        "got {:?}",
-        String::from_utf8_lossy(&buf[..n])
-    );
+    assert!(buf[..n].starts_with(b"-WRONGTYPE"), "got {:?}", String::from_utf8_lossy(&buf[..n]));
 }
 
 #[test]
 fn list_type_across_cores() {
     let srv = Server::start(4);
     let mut w = srv.connect();
-    w.write_all(&req(&[b"RPUSH", b"q", b"a", b"b", b"c"]))
-        .unwrap();
+    w.write_all(&req(&[b"RPUSH", b"q", b"a", b"b", b"c"])).unwrap();
     read_reply(&mut w, b":3\r\n");
     w.write_all(&req(&[b"LPUSH", b"q", b"z"])).unwrap();
     read_reply(&mut w, b":4\r\n");
 
     let mut r = srv.connect();
     r.write_all(&req(&[b"LRANGE", b"q", b"0", b"-1"])).unwrap();
-    read_reply(
-        &mut r,
-        b"*4\r\n$1\r\nz\r\n$1\r\na\r\n$1\r\nb\r\n$1\r\nc\r\n",
-    );
+    read_reply(&mut r, b"*4\r\n$1\r\nz\r\n$1\r\na\r\n$1\r\nb\r\n$1\r\nc\r\n");
     r.write_all(&req(&[b"LPOP", b"q"])).unwrap();
     read_reply(&mut r, b"$1\r\nz\r\n");
     r.write_all(&req(&[b"LLEN", b"q"])).unwrap();
@@ -279,27 +251,20 @@ fn cross_shard_multikey() {
     let mut c = srv.connect();
 
     // MSET routes each pair to its key's shard.
-    c.write_all(&req(&[b"MSET", b"a", b"1", b"b", b"2", b"c", b"3"]))
-        .unwrap();
+    c.write_all(&req(&[b"MSET", b"a", b"1", b"b", b"2", b"c", b"3"])).unwrap();
     read_reply(&mut c, b"+OK\r\n");
     // MGET preserves request order, nil for a missing key.
-    c.write_all(&req(&[b"MGET", b"a", b"missing", b"c"]))
-        .unwrap();
+    c.write_all(&req(&[b"MGET", b"a", b"missing", b"c"])).unwrap();
     read_reply(&mut c, b"*3\r\n$1\r\n1\r\n$-1\r\n$1\r\n3\r\n");
 
     // Two sets, likely on different shards.
-    c.write_all(&req(&[b"SADD", b"s1", b"x", b"y", b"z"]))
-        .unwrap();
+    c.write_all(&req(&[b"SADD", b"s1", b"x", b"y", b"z"])).unwrap();
     read_reply(&mut c, b":3\r\n");
-    c.write_all(&req(&[b"SADD", b"s2", b"y", b"z", b"w"]))
-        .unwrap();
+    c.write_all(&req(&[b"SADD", b"s2", b"y", b"z", b"w"])).unwrap();
     read_reply(&mut c, b":3\r\n");
 
     c.write_all(&req(&[b"SINTER", b"s1", b"s2"])).unwrap();
-    assert_eq!(
-        read_array_sorted(&mut c),
-        vec![b"y".to_vec(), b"z".to_vec()]
-    );
+    assert_eq!(read_array_sorted(&mut c), vec![b"y".to_vec(), b"z".to_vec()]);
     c.write_all(&req(&[b"SUNION", b"s1", b"s2"])).unwrap();
     assert_eq!(
         read_array_sorted(&mut c),
@@ -314,8 +279,7 @@ fn keys_scan_randomkey_across_cores() {
     let srv = Server::start(4);
     let mut c = srv.connect();
     for i in 0..6u32 {
-        c.write_all(&req(&[b"SET", format!("u:{i}").as_bytes(), b"x"]))
-            .unwrap();
+        c.write_all(&req(&[b"SET", format!("u:{i}").as_bytes(), b"x"])).unwrap();
         read_reply(&mut c, b"+OK\r\n");
     }
     c.write_all(&req(&[b"SET", b"other", b"y"])).unwrap();
@@ -331,8 +295,7 @@ fn keys_scan_randomkey_across_cores() {
     let mut cursor = b"0".to_vec();
     let mut scanned: Vec<Vec<u8>> = Vec::new();
     for _ in 0..64 {
-        c.write_all(&req(&[b"SCAN", &cursor, b"MATCH", b"u:*"]))
-            .unwrap();
+        c.write_all(&req(&[b"SCAN", &cursor, b"MATCH", b"u:*"])).unwrap();
         assert_eq!(read_len(&mut c, b'*'), 2);
         let curlen = read_len(&mut c, b'$') as usize;
         let mut cur = vec![0u8; curlen];
@@ -367,21 +330,14 @@ fn pubsub_across_cores() {
 
     // Publisher (likely a different core) publishes; receiver count == 1.
     let mut publisher = srv.connect();
-    publisher
-        .write_all(&req(&[b"PUBLISH", b"news", b"hello"]))
-        .unwrap();
+    publisher.write_all(&req(&[b"PUBLISH", b"news", b"hello"])).unwrap();
     read_reply(&mut publisher, b":1\r\n");
 
     // The message is delivered to the subscriber across cores.
-    read_reply(
-        &mut sub,
-        b"*3\r\n$7\r\nmessage\r\n$4\r\nnews\r\n$5\r\nhello\r\n",
-    );
+    read_reply(&mut sub, b"*3\r\n$7\r\nmessage\r\n$4\r\nnews\r\n$5\r\nhello\r\n");
 
     // Publishing to a channel with no subscribers returns 0.
-    publisher
-        .write_all(&req(&[b"PUBLISH", b"empty", b"x"]))
-        .unwrap();
+    publisher.write_all(&req(&[b"PUBLISH", b"empty", b"x"])).unwrap();
     read_reply(&mut publisher, b":0\r\n");
 }
 
@@ -476,8 +432,7 @@ fn pipelined_cross_shard_no_deadlock() {
     let srv = Server::start(4);
     let mut c = srv.connect();
     // Fail fast instead of hanging forever if a deadlock regression slips in.
-    c.set_read_timeout(Some(std::time::Duration::from_secs(30)))
-        .unwrap();
+    c.set_read_timeout(Some(std::time::Duration::from_secs(30))).unwrap();
     let n = 10_000usize;
     let mut buf = Vec::new();
     for i in 0..n {
@@ -497,8 +452,7 @@ fn pipelined_cross_shard_no_deadlock() {
 
 /// Read a bulk-string INFO reply and return its body.
 fn read_info(s: &mut std::net::TcpStream, section: &str) -> String {
-    s.set_read_timeout(Some(std::time::Duration::from_secs(2)))
-        .unwrap();
+    s.set_read_timeout(Some(std::time::Duration::from_secs(2))).unwrap();
     s.write_all(&req(&[b"INFO", section.as_bytes()])).unwrap();
     let mut buf = Vec::new();
     let mut tmp = [0u8; 8192];
@@ -507,10 +461,7 @@ fn read_info(s: &mut std::net::TcpStream, section: &str) -> String {
         if let Some(hdr_end) = buf.windows(2).position(|w| w == b"\r\n")
             && buf.first() == Some(&b'$')
         {
-            let len: usize = std::str::from_utf8(&buf[1..hdr_end])
-                .unwrap()
-                .parse()
-                .unwrap();
+            let len: usize = std::str::from_utf8(&buf[1..hdr_end]).unwrap().parse().unwrap();
             if buf.len() >= hdr_end + 2 + len {
                 return String::from_utf8_lossy(&buf[hdr_end + 2..hdr_end + 2 + len]).into_owned();
             }
@@ -546,20 +497,12 @@ fn info_aggregates_across_shards() {
     let mut c = srv.connect();
 
     for i in 0..N {
-        c.write_all(&req(&[b"SET", format!("k{i}").as_bytes(), b"value-payload"]))
-            .unwrap();
+        c.write_all(&req(&[b"SET", format!("k{i}").as_bytes(), b"value-payload"])).unwrap();
         read_reply(&mut c, b"+OK\r\n");
     }
     for i in 0..M {
         // Long TTL so none lapse during the test.
-        c.write_all(&req(&[
-            b"SET",
-            format!("t{i}").as_bytes(),
-            b"v",
-            b"EX",
-            b"600",
-        ]))
-        .unwrap();
+        c.write_all(&req(&[b"SET", format!("t{i}").as_bytes(), b"v", b"EX", b"600"])).unwrap();
         read_reply(&mut c, b"+OK\r\n");
     }
 
@@ -590,11 +533,7 @@ fn info_aggregates_across_shards() {
 
     // Every shard has now published; the aggregate is complete.
     assert_eq!(db0_field(&ks, "keys"), Some(total), "keyspace keys not summed");
-    assert_eq!(
-        db0_field(&ks, "expires"),
-        Some(u64::from(M)),
-        "expire-set count wrong"
-    );
+    assert_eq!(db0_field(&ks, "expires"), Some(u64::from(M)), "expire-set count wrong");
 
     let mem = read_info(&mut c, "memory");
     let used = info_field(&mem, "used_memory");

@@ -135,11 +135,7 @@ impl Config {
             }
         }
         command.extend(args.map(String::into_bytes));
-        Config {
-            host,
-            port,
-            command,
-        }
+        Config { host, port, command }
     }
 }
 

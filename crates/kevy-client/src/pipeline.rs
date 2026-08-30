@@ -73,15 +73,14 @@ impl Connection {
     /// each reply, unlike the typed single-command wraps which map
     /// server errors to `io::Error`. An empty batch returns `Ok(vec![])`
     /// without touching the wire.
-    pub fn pipeline(
-        &mut self,
-        build: impl FnOnce(&mut PipelineBuf),
-    ) -> KevyResult<Vec<Reply>> {
+    pub fn pipeline(&mut self, build: impl FnOnce(&mut PipelineBuf)) -> KevyResult<Vec<Reply>> {
         let client = self.remote("pipeline")?;
         let mut p = PipelineBuf::default();
         build(&mut p);
         if p.poisoned {
-            return Err(KevyError::InvalidInput("pipeline: a queued command had an empty argv".into()));
+            return Err(KevyError::InvalidInput(
+                "pipeline: a queued command had an empty argv".into(),
+            ));
         }
         if p.count == 0 {
             return Ok(Vec::new());

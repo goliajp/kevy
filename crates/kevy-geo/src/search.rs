@@ -6,9 +6,7 @@
 //! file answers "which cells could be within `radius_m` of it" — a
 //! different job that happens to be built on the same bits.
 
-use crate::{
-    GEO_LAT_MAX, GEO_LAT_MIN, GEO_LON_MAX, GEO_LON_MIN, GEO_STEP, interleave52,
-};
+use crate::{GEO_LAT_MAX, GEO_LAT_MIN, GEO_LON_MAX, GEO_LON_MIN, GEO_STEP, interleave52};
 
 ///
 /// # Examples
@@ -85,10 +83,8 @@ fn encode_uniform_step(lon: f64, lat: f64, step: u32) -> (u32, u32) {
     let cells = (1u64 << step) as f64;
     let lat_clamped = lat.clamp(GEO_LAT_MIN, GEO_LAT_MAX);
     let lon_clamped = lon.clamp(GEO_LON_MIN, GEO_LON_MAX);
-    let lat_off =
-        ((lat_clamped - GEO_LAT_MIN) / (GEO_LAT_MAX - GEO_LAT_MIN) * cells) as u32;
-    let lon_off =
-        ((lon_clamped - GEO_LON_MIN) / (GEO_LON_MAX - GEO_LON_MIN) * cells) as u32;
+    let lat_off = ((lat_clamped - GEO_LAT_MIN) / (GEO_LAT_MAX - GEO_LAT_MIN) * cells) as u32;
+    let lon_off = ((lon_clamped - GEO_LON_MIN) / (GEO_LON_MAX - GEO_LON_MIN) * cells) as u32;
     let max = (1u32 << step) - 1;
     (lat_off.min(max), lon_off.min(max))
 }
@@ -108,4 +104,3 @@ fn merge_ranges(sorted: Vec<(u64, u64)>) -> Vec<(f64, f64)> {
     }
     out.into_iter().map(|(a, b)| (a as f64, b as f64)).collect()
 }
-

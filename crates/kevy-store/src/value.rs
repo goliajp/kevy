@@ -2,12 +2,12 @@
 
 #[cfg(not(feature = "std"))]
 use crate::nostd_prelude::*;
+use alloc::collections::VecDeque;
+use alloc::sync::Arc;
+use core::cmp::Ordering;
 pub use kevy_bytes::SmallBytes;
 use kevy_map::{KevyMap, KevySet};
 use kevy_ranktree::RankTree;
-use core::cmp::Ordering;
-use alloc::collections::VecDeque;
-use alloc::sync::Arc;
 
 /// Backing structure for a Hash value — [`KevyMap`] keyed by [`SmallBytes`]
 /// (22 B inline / heap-else). Field names ≤22B (the vast majority — `name`,
@@ -69,19 +69,11 @@ pub struct ScoreBound {
 impl ScoreBound {
     /// Does `s` satisfy this as a *minimum* bound?
     pub(crate) fn ge_ok(&self, s: f64) -> bool {
-        if self.exclusive {
-            s > self.value
-        } else {
-            s >= self.value
-        }
+        if self.exclusive { s > self.value } else { s >= self.value }
     }
     /// Does `s` satisfy this as a *maximum* bound?
     pub(crate) fn le_ok(&self, s: f64) -> bool {
-        if self.exclusive {
-            s < self.value
-        } else {
-            s <= self.value
-        }
+        if self.exclusive { s < self.value } else { s <= self.value }
     }
 }
 
@@ -361,7 +353,10 @@ impl Value {
     pub fn type_name(&self) -> &'static str {
         match self {
             Value::Str(_) | Value::Int(_) | Value::ArcBulk(_) => "string",
-            Value::Hash(_) | Value::SegHash(_) | Value::SmallHashInline(_) | Value::PackedRow(_) => "hash",
+            Value::Hash(_)
+            | Value::SegHash(_)
+            | Value::SmallHashInline(_)
+            | Value::PackedRow(_) => "hash",
             Value::List(_) | Value::SegList(_) | Value::SmallListInline(_) => "list",
             Value::Set(_) | Value::SegSet(_) | Value::SmallSetInline(_) => "set",
             Value::ZSet(_) | Value::SegZSet(_) | Value::SmallZSetInline(_) => "zset",
@@ -371,8 +366,6 @@ impl Value {
             Value::Cold(c) => c.type_name(),
         }
     }
-
-
 }
 
 // `BioDropSender = mpsc::Sender<Box<Value>>` requires `Value: Send`. Static

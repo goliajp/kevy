@@ -36,7 +36,9 @@ pub use sub::{kevy_psubscribe, kevy_sub_close, kevy_sub_next, kevy_sub_wait, kev
 pub use sub_raw::{kevy_sub_next_raw, kevy_sub_wait_raw};
 
 /// Opaque database handle. A `Box<Store>` on the Rust side.
-pub struct KevyDb { pub(crate) store: Store }
+pub struct KevyDb {
+    pub(crate) store: Store,
+}
 
 /// Opaque subscription handle. A `Box<Subscription>` on the Rust side.
 pub struct KevySub {
@@ -330,9 +332,7 @@ pub unsafe extern "C" fn kevy_set(
         if ttl_ms == 0 {
             store.set(k, v).map(|_| ())
         } else {
-            store
-                .set_with_ttl(k, v, std::time::Duration::from_millis(ttl_ms))
-                .map(|_| ())
+            store.set_with_ttl(k, v, std::time::Duration::from_millis(ttl_ms)).map(|_| ())
         }
     }));
     match done {

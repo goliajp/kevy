@@ -84,10 +84,12 @@ fn network_partition_client_side_disconnects() {
                 if s.write_all(b"*1\r\n$4\r\nPING\r\n").is_ok() {
                     let mut buf = [0u8; 32];
                     if let Ok(n) = s.read(&mut buf)
-                        && n >= 5 && buf[..5] == *b"+PONG" {
-                            storm_ok += 1;
-                            continue;
-                        }
+                        && n >= 5
+                        && buf[..5] == *b"+PONG"
+                    {
+                        storm_ok += 1;
+                        continue;
+                    }
                 }
                 storm_err += 1;
             }
@@ -108,8 +110,7 @@ fn network_partition_client_side_disconnects() {
 
     // PHASE 4: post-storm health — fresh PING.
     eprintln!("network_partition: phase 4 — fresh-conn PING");
-    let mut ping = TcpStream::connect(format!("127.0.0.1:{port}"))
-        .expect("post-storm conn");
+    let mut ping = TcpStream::connect(format!("127.0.0.1:{port}")).expect("post-storm conn");
     let _ = ping.set_read_timeout(Some(Duration::from_secs(2)));
     ping.write_all(b"*1\r\n$4\r\nPING\r\n").expect("write PING");
     let mut reply = [0u8; 64];

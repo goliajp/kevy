@@ -19,9 +19,9 @@ mod hash;
 #[cfg(feature = "index")]
 mod idx;
 #[cfg(feature = "index")]
-mod idx_create;
-#[cfg(feature = "index")]
 mod idx_compose;
+#[cfg(feature = "index")]
+mod idx_create;
 #[cfg(feature = "index")]
 mod idx_query;
 mod keyspace;
@@ -29,9 +29,9 @@ mod list;
 mod misc;
 mod set;
 mod strings;
-mod util;
 #[cfg(feature = "index")]
 mod table;
+mod util;
 #[cfg(feature = "index")]
 mod view;
 mod zset;
@@ -134,35 +134,145 @@ fn emit_scan_page(out: &mut Vec<u8>, cursor: &[u8], elems: &[Vec<u8>]) {
 // LOC-WAIVER: pure data table — one row per dispatched verb.
 pub(crate) const DISPATCH_VERBS: &[&str] = &[
     // strings
-    "APPEND", "DECR", "DECRBY", "GET", "GETDEL", "GETEX", "GETRANGE", "GETSET", "INCR", "INCRBY",
-    "INCRBYFLOAT", "MGET", "MSET", "SET", "SETNX", "SETRANGE", "STRLEN",
+    "APPEND",
+    "DECR",
+    "DECRBY",
+    "GET",
+    "GETDEL",
+    "GETEX",
+    "GETRANGE",
+    "GETSET",
+    "INCR",
+    "INCRBY",
+    "INCRBYFLOAT",
+    "MGET",
+    "MSET",
+    "SET",
+    "SETNX",
+    "SETRANGE",
+    "STRLEN",
     // bitmap
-    "BITCOUNT", "BITOP", "BITPOS", "GETBIT", "SETBIT",
+    "BITCOUNT",
+    "BITOP",
+    "BITPOS",
+    "GETBIT",
+    "SETBIT",
     // hashes
-    "HDEL", "HEXISTS", "HGET", "HGETALL", "HINCRBY", "HINCRBYFLOAT", "HKEYS", "HLEN", "HMGET",
-    "HSCAN", "HSET", "HSETNX", "HEXPIRE", "HPEXPIRE", "HPEXPIREAT", "HTTL", "HPTTL", "HPERSIST",
+    "HDEL",
+    "HEXISTS",
+    "HGET",
+    "HGETALL",
+    "HINCRBY",
+    "HINCRBYFLOAT",
+    "HKEYS",
+    "HLEN",
+    "HMGET",
+    "HSCAN",
+    "HSET",
+    "HSETNX",
+    "HEXPIRE",
+    "HPEXPIRE",
+    "HPEXPIREAT",
+    "HTTL",
+    "HPTTL",
+    "HPERSIST",
     "HVALS",
     // lists
-    "LINDEX", "LINSERT", "LLEN", "LPOP", "LPUSH", "LRANGE", "LREM", "LSET", "LTRIM", "RPOP",
+    "LINDEX",
+    "LINSERT",
+    "LLEN",
+    "LPOP",
+    "LPUSH",
+    "LRANGE",
+    "LREM",
+    "LSET",
+    "LTRIM",
+    "RPOP",
     "RPUSH",
     // sets
-    "SADD", "SCARD", "SDIFF", "SDIFFSTORE", "SINTER", "SINTERSTORE", "SISMEMBER", "SMEMBERS",
-    "SPOP", "SRANDMEMBER", "SREM", "SUNION", "SUNIONSTORE",
+    "SADD",
+    "SCARD",
+    "SDIFF",
+    "SDIFFSTORE",
+    "SINTER",
+    "SINTERSTORE",
+    "SISMEMBER",
+    "SMEMBERS",
+    "SPOP",
+    "SRANDMEMBER",
+    "SREM",
+    "SUNION",
+    "SUNIONSTORE",
     // zsets
-    "ZADD", "ZCARD", "ZCOUNT", "ZDIFFSTORE", "ZINCRBY", "ZINTERCARD", "ZINTERSTORE", "ZPOPMIN",
-    "ZPOPMIN.BELOW", "ZRANGE", "ZRANGEBYSCORE", "ZRANK", "ZREM", "ZREMRANGEBYRANK",
-    "ZREMRANGEBYSCORE", "ZREVRANGE", "ZREVRANGEBYSCORE", "ZSCAN", "ZSCORE", "ZUNIONSTORE",
+    "ZADD",
+    "ZCARD",
+    "ZCOUNT",
+    "ZDIFFSTORE",
+    "ZINCRBY",
+    "ZINTERCARD",
+    "ZINTERSTORE",
+    "ZPOPMIN",
+    "ZPOPMIN.BELOW",
+    "ZRANGE",
+    "ZRANGEBYSCORE",
+    "ZRANK",
+    "ZREM",
+    "ZREMRANGEBYRANK",
+    "ZREMRANGEBYSCORE",
+    "ZREVRANGE",
+    "ZREVRANGEBYSCORE",
+    "ZSCAN",
+    "ZSCORE",
+    "ZUNIONSTORE",
     // keyspace
-    "COPY", "DBSIZE", "DEL", "EXISTS", "EXPIRE", "EXPIREAT", "FLUSHALL", "KEYS", "PERSIST",
-    "PEXPIRE", "PEXPIREAT", "PTTL", "RANDOMKEY", "RENAME", "RENAMENX", "SCAN", "TIME", "TOUCH",
-    "TTL", "TYPE", "UNLINK",
+    "COPY",
+    "DBSIZE",
+    "DEL",
+    "EXISTS",
+    "EXPIRE",
+    "EXPIREAT",
+    "FLUSHALL",
+    "KEYS",
+    "PERSIST",
+    "PEXPIRE",
+    "PEXPIREAT",
+    "PTTL",
+    "RANDOMKEY",
+    "RENAME",
+    "RENAMENX",
+    "SCAN",
+    "TIME",
+    "TOUCH",
+    "TTL",
+    "TYPE",
+    "UNLINK",
     // feed + digests
-    "FEED.READ", "FEED.SHARDS", "FEED.TAIL", "PREFIX.DIGEST", "PREFIX.STATS",
+    "FEED.READ",
+    "FEED.SHARDS",
+    "FEED.TAIL",
+    "PREFIX.DIGEST",
+    "PREFIX.STATS",
     // index + views + tables
-    "IDX.ADVISE", "IDX.COUNT", "IDX.CREATE", "IDX.DROP", "IDX.LIST", "IDX.QUERY", "VIEW.CREATE", "VIEW.DROP",
-    "VIEW.LIST", "VIEW.QUERY", "TABLE.DECLARE", "TABLE.ENSURE", "TABLE.REPLACE", "TABLE.DROP", "TABLE.LIST", "TABLE.VERIFY",
+    "IDX.ADVISE",
+    "IDX.COUNT",
+    "IDX.CREATE",
+    "IDX.DROP",
+    "IDX.LIST",
+    "IDX.QUERY",
+    "VIEW.CREATE",
+    "VIEW.DROP",
+    "VIEW.LIST",
+    "VIEW.QUERY",
+    "TABLE.DECLARE",
+    "TABLE.ENSURE",
+    "TABLE.REPLACE",
+    "TABLE.DROP",
+    "TABLE.LIST",
+    "TABLE.VERIFY",
     // conn face
-    "ECHO", "PING", "PUBLISH",
+    "ECHO",
+    "PING",
+    "PUBLISH",
 ];
 
 #[cfg(test)]

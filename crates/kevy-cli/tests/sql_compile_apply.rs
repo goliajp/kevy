@@ -46,12 +46,9 @@ struct Srv {
 
 impl Srv {
     fn start(tag: &str) -> Srv {
-        let port =
-            std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-        let bin = std::path::Path::new(env!("CARGO_BIN_EXE_kevy-cli"))
-            .parent()
-            .unwrap()
-            .join("kevy");
+        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let bin =
+            std::path::Path::new(env!("CARGO_BIN_EXE_kevy-cli")).parent().unwrap().join("kevy");
         if !bin.exists() {
             // cargo doesn't know this test depends on the kevy bin;
             // build it deterministically (no-op when fresh).
@@ -87,10 +84,7 @@ impl Drop for Srv {
 }
 
 fn cli(args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_kevy-cli"))
-        .args(args)
-        .output()
-        .expect("run kevy-cli")
+    Command::new(env!("CARGO_BIN_EXE_kevy-cli")).args(args).output().expect("run kevy-cli")
 }
 
 fn write_schema(tag: &str) -> std::path::PathBuf {
@@ -146,23 +140,50 @@ fn apply_declares_then_a_card_query_serves() {
         }
         c.request(&argv).unwrap();
     };
-    hset(&mut c, "orders:1", &[("id", "1"), ("user_id", "42"), ("status", "paid"), ("total", "19.5"), ("created_at", "100")]);
-    hset(&mut c, "orders:2", &[("id", "2"), ("user_id", "42"), ("status", "pending"), ("total", "5"), ("created_at", "200")]);
-    hset(&mut c, "orders:3", &[("id", "3"), ("user_id", "7"), ("status", "paid"), ("total", "8"), ("created_at", "300")]);
+    hset(
+        &mut c,
+        "orders:1",
+        &[
+            ("id", "1"),
+            ("user_id", "42"),
+            ("status", "paid"),
+            ("total", "19.5"),
+            ("created_at", "100"),
+        ],
+    );
+    hset(
+        &mut c,
+        "orders:2",
+        &[
+            ("id", "2"),
+            ("user_id", "42"),
+            ("status", "pending"),
+            ("total", "5"),
+            ("created_at", "200"),
+        ],
+    );
+    hset(
+        &mut c,
+        "orders:3",
+        &[("id", "3"), ("user_id", "7"), ("status", "paid"), ("total", "8"), ("created_at", "300")],
+    );
 
     // The card: IDX.QUERY orders.user_id_created_at WHERE user_id EQ $1 …
     // ($1 = 42). Index backfill is async — poll past -INDEXBUILDING.
-    let card: Vec<Vec<u8>> = ["IDX.QUERY", "orders.user_id_created_at", "WHERE", "user_id", "EQ", "42", "LIMIT", "20"]
-        .iter()
-        .map(|s| s.as_bytes().to_vec())
-        .collect();
+    let card: Vec<Vec<u8>> =
+        ["IDX.QUERY", "orders.user_id_created_at", "WHERE", "user_id", "EQ", "42", "LIMIT", "20"]
+            .iter()
+            .map(|s| s.as_bytes().to_vec())
+            .collect();
     let keys = poll_keys(&mut c, &card);
     // created_at DESC: orders:2 (200) before orders:1 (100).
     assert_eq!(keys, vec!["orders:2".to_string(), "orders:1".to_string()]);
 
     // The constant view serves too.
-    let vq: Vec<Vec<u8>> =
-        ["VIEW.QUERY", "paid_orders", "LIMIT", "10"].iter().map(|s| s.as_bytes().to_vec()).collect();
+    let vq: Vec<Vec<u8>> = ["VIEW.QUERY", "paid_orders", "LIMIT", "10"]
+        .iter()
+        .map(|s| s.as_bytes().to_vec())
+        .collect();
     let keys = poll_keys(&mut c, &vq);
     assert_eq!(keys, vec!["orders:1".to_string(), "orders:3".to_string()]);
     let _ = std::fs::remove_file(f);

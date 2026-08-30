@@ -2,9 +2,9 @@
 //! correctness at scale, per-bucket COW behavior under a pinned
 //! snapshot view, semantics vs a model, and accounting round-trips.
 
+use crate::Store;
 use crate::seg_map::HS_PROMOTE;
 use crate::value::Value;
-use crate::Store;
 
 fn hset_n(st: &mut Store, key: &[u8], n: usize) {
     for i in 0..n {
@@ -104,7 +104,10 @@ fn sharded_hash_ops_match_semantics() {
 
     // HDEL removes across buckets.
     let removed = st
-        .hdel(b"h", &[b"field-00000001".as_slice(), b"field-00000002".as_slice(), b"nope".as_slice()])
+        .hdel(
+            b"h",
+            &[b"field-00000001".as_slice(), b"field-00000002".as_slice(), b"nope".as_slice()],
+        )
         .unwrap();
     assert_eq!(removed, 2);
     assert_eq!(st.hlen(b"h").unwrap(), n - 2);
@@ -182,9 +185,8 @@ fn accounting_round_trips_through_sharded_ops() {
 #[test]
 fn loads_apply_the_encoding_switch() {
     let mut st = Store::new();
-    let big: alloc::vec::Vec<(alloc::vec::Vec<u8>, alloc::vec::Vec<u8>)> = (0..HS_PROMOTE + 1)
-        .map(|i| (alloc::format!("f{i}").into_bytes(), b"v".to_vec()))
-        .collect();
+    let big: alloc::vec::Vec<(alloc::vec::Vec<u8>, alloc::vec::Vec<u8>)> =
+        (0..HS_PROMOTE + 1).map(|i| (alloc::format!("f{i}").into_bytes(), b"v".to_vec())).collect();
     st.load_hash(b"h".to_vec(), big, None);
     assert!(is_seghash(&st, b"h"));
     assert_eq!(st.hlen(b"h").unwrap(), HS_PROMOTE + 1);

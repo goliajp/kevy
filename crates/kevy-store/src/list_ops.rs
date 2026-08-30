@@ -20,11 +20,7 @@ impl Store {
     /// When `src == dst` Redis defines the result as a rotation
     /// (tail → head of the same list), which falls out of this code
     /// naturally because the pop sees the pre-rotation tail.
-    pub fn rpoplpush(
-        &mut self,
-        src: &[u8],
-        dst: &[u8],
-    ) -> Result<Option<Vec<u8>>, StoreError> {
+    pub fn rpoplpush(&mut self, src: &[u8], dst: &[u8]) -> Result<Option<Vec<u8>>, StoreError> {
         // WRONGTYPE pre-check on dst: if dst exists but isn't a list,
         // we must reject BEFORE consuming the src element (Redis: the
         // pop is reverted on WRONGTYPE at the destination).
@@ -62,11 +58,7 @@ impl Store {
                 _ => return Err(StoreError::WrongType),
             },
         }
-        let mut popped = if from_left {
-            self.lpop(src, 1)?
-        } else {
-            self.rpop(src, 1)?
-        };
+        let mut popped = if from_left { self.lpop(src, 1)? } else { self.rpop(src, 1)? };
         let Some(v) = popped.pop() else {
             return Ok(None);
         };
@@ -105,9 +97,10 @@ impl Store {
             return Err(StoreError::OutOfRange);
         }
         if let Some(c) = count
-            && c < 0 {
-                return Err(StoreError::OutOfRange);
-            }
+            && c < 0
+        {
+            return Err(StoreError::OutOfRange);
+        }
         let entries: Vec<Vec<u8>> = match self.live_entry(key) {
             None => return Ok(Vec::new()),
             Some(e) => match &e.value {

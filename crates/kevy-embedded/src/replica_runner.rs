@@ -132,10 +132,7 @@ impl ReplicaRunner {
     /// a config-pushed value, an ops-tool RPC, etc. kevy-embedded
     /// itself stays elect-protocol-agnostic.
     pub(crate) fn set_upstream(&self, new_upstream: String) {
-        *self
-            .upstream
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = new_upstream;
+        *self.upstream.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = new_upstream;
         // A new primary has its own offset axis — the previous
         // `applied_offset` value is meaningless against it. Reset to 0
         // so the next handshake requests a full backlog walk (or a
@@ -145,11 +142,8 @@ impl ReplicaRunner {
         // prior primary don't bleed through.
         self.applied_offset.store(0, Ordering::Relaxed);
         self.force_reconnect.store(true, Ordering::Relaxed);
-        if let Some(s) = self
-            .sock_clone
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .as_ref()
+        if let Some(s) =
+            self.sock_clone.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref()
         {
             let _ = s.shutdown(Shutdown::Both);
         }
@@ -159,21 +153,14 @@ impl ReplicaRunner {
     /// the thread. Idempotent. Called from `DropGuard::drop`.
     pub(crate) fn shutdown(&self) {
         self.stop.store(true, Ordering::Relaxed);
-        if let Some(s) = self
-            .sock_clone
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .as_ref()
+        if let Some(s) =
+            self.sock_clone.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref()
         {
             // shutdown(Both) wakes the blocking read on the runner's
             // own socket (same kernel file description as this clone).
             let _ = s.shutdown(Shutdown::Both);
         }
-        if let Some(j) = self
-            .join
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take()
+        if let Some(j) = self.join.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
         {
             let _ = j.join();
         }
@@ -210,8 +197,13 @@ fn run_loop(
             Ok(mut client) => {
                 backoff = backoff_min;
                 run_session(
-                    &shards, &mut client, &stop, &sock_clone, &link_up,
-                    &applied_offset, &mut data_gen,
+                    &shards,
+                    &mut client,
+                    &stop,
+                    &sock_clone,
+                    &link_up,
+                    &applied_offset,
+                    &mut data_gen,
                 );
             }
             Err(_) => {
@@ -234,10 +226,7 @@ fn dial(
     applied_offset: &Arc<AtomicU64>,
 ) -> Result<ReplicaClient, kevy_replicate::replica::ReplicaError> {
     let from_offset = applied_offset.load(Ordering::Relaxed);
-    let target = upstream
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone();
+    let target = upstream.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
     ReplicaClient::connect_at(&target, replica_id, data_gen, from_offset, Duration::from_secs(5))
 }
 
@@ -254,16 +243,12 @@ fn run_session(
     data_gen: &mut u64,
 ) {
     if let Ok(s) = client.socket_handle() {
-        *sock_clone
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(s);
+        *sock_clone.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(s);
     }
     link_up.store(true, Ordering::Relaxed);
     drain_session(shards, client, stop, applied_offset, data_gen);
     link_up.store(false, Ordering::Relaxed);
-    *sock_clone
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    *sock_clone.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
 }
 
 /// Pump one connected session's events until stop / disconnect.

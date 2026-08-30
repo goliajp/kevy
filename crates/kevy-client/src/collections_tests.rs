@@ -3,10 +3,8 @@ use super::*;
 #[test]
 fn embedded_hash_methods() {
     let mut c = Connection::connect("mem://").unwrap();
-    let pairs: &[(&[u8], &[u8])] = &[
-        (b"name".as_ref(), b"alice".as_ref()),
-        (b"age".as_ref(), b"30".as_ref()),
-    ];
+    let pairs: &[(&[u8], &[u8])] =
+        &[(b"name".as_ref(), b"alice".as_ref()), (b"age".as_ref(), b"30".as_ref())];
     assert_eq!(c.hset(b"u:1", pairs).unwrap(), 2);
     assert_eq!(c.hget(b"u:1", b"name").unwrap(), Some(b"alice".to_vec()));
     assert_eq!(c.hget(b"u:1", b"missing").unwrap(), None);
@@ -49,10 +47,7 @@ fn embedded_list_methods() {
 #[test]
 fn embedded_set_methods() {
     let mut c = Connection::connect("mem://").unwrap();
-    assert_eq!(
-        c.sadd(b"s", &[&b"a"[..], &b"b"[..], &b"a"[..]]).unwrap(),
-        2
-    );
+    assert_eq!(c.sadd(b"s", &[&b"a"[..], &b"b"[..], &b"a"[..]]).unwrap(), 2);
     assert_eq!(c.scard(b"s").unwrap(), 2);
     assert!(c.sismember(b"s", b"a").unwrap());
     assert!(!c.sismember(b"s", b"missing").unwrap());
@@ -68,21 +63,15 @@ fn embedded_set_methods() {
 #[test]
 fn embedded_zset_methods() {
     let mut c = Connection::connect("mem://").unwrap();
-    let pairs: &[(f64, &[u8])] = &[
-        (100.0, b"alice".as_ref()),
-        (200.0, b"bob".as_ref()),
-        (50.0, b"carol".as_ref()),
-    ];
+    let pairs: &[(f64, &[u8])] =
+        &[(100.0, b"alice".as_ref()), (200.0, b"bob".as_ref()), (50.0, b"carol".as_ref())];
     assert_eq!(c.zadd(b"lb", pairs).unwrap(), 3);
     assert_eq!(c.zscore(b"lb", b"bob").unwrap(), Some(200.0));
     assert_eq!(c.zscore(b"lb", b"none").unwrap(), None);
     assert_eq!(c.zcard(b"lb").unwrap(), 3);
 
     let r = c.zrange(b"lb", 0, -1).unwrap();
-    assert_eq!(
-        r,
-        vec![b"carol".to_vec(), b"alice".to_vec(), b"bob".to_vec()]
-    );
+    assert_eq!(r, vec![b"carol".to_vec(), b"alice".to_vec(), b"bob".to_vec()]);
 
     assert_eq!(c.zrem(b"lb", &[&b"carol"[..]]).unwrap(), 1);
     assert_eq!(c.zcard(b"lb").unwrap(), 2);
@@ -100,10 +89,7 @@ fn embedded_set_combine_ops() {
 
     let mut union = c.sunion(&[&b"a"[..], &b"b"[..]]).unwrap();
     union.sort();
-    assert_eq!(
-        union,
-        vec![b"w".to_vec(), b"x".to_vec(), b"y".to_vec(), b"z".to_vec()]
-    );
+    assert_eq!(union, vec![b"w".to_vec(), b"x".to_vec(), b"y".to_vec(), b"z".to_vec()]);
 
     let mut diff = c.sdiff(&[&b"a"[..], &b"b"[..]]).unwrap();
     diff.sort();

@@ -102,45 +102,45 @@ mod info;
 // Unconditional: `OpenReport` rides the DropGuard and the Store
 // handle in every archetype (a no-persist open reports zeros); only
 // the sink WIRING stays persist-gated in config.rs.
+#[cfg(all(feature = "listener", not(target_arch = "wasm32")))]
+mod listener;
 mod metric;
+mod op_manifest;
 mod ops;
 mod ops_atomic;
 mod ops_atomic_all;
-mod ops_atomic_all_reads;
-mod ops_reconcile;
 #[cfg(feature = "index")]
 mod ops_atomic_all_index;
+mod ops_atomic_all_reads;
 mod ops_bitmap;
+mod ops_blocking;
 mod ops_bonus;
+#[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
+mod ops_feed;
+mod ops_hash_ttl;
+#[cfg(feature = "index")]
+mod ops_index;
+#[cfg(feature = "index")]
+mod ops_index_cold;
+#[cfg(feature = "index")]
+mod ops_index_sync;
+#[cfg(all(feature = "index", feature = "persist", not(target_arch = "wasm32")))]
+mod ops_index_window;
 mod ops_keyspace;
 mod ops_more;
 mod ops_p2;
 mod ops_p3;
 mod ops_pipeline;
-#[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
-mod ops_feed;
-mod ops_blocking;
-mod ops_hash_ttl;
-#[cfg(feature = "index")]
-mod ops_index;
-#[cfg(feature = "index")]
-mod ops_index_sync;
-#[cfg(feature = "index")]
-mod ops_index_cold;
-#[cfg(all(feature = "index", feature = "persist", not(target_arch = "wasm32")))]
-mod ops_index_window;
+mod ops_reconcile;
+mod ops_scan;
+mod ops_snapshot_view;
 #[cfg(feature = "index")]
 mod ops_table;
 #[cfg(feature = "index")]
 mod ops_view;
-#[cfg(all(feature = "listener", not(target_arch = "wasm32")))]
-mod listener;
-mod ops_snapshot_view;
 mod ops_zset_algebra;
 mod ops_zset_flags;
-mod op_manifest;
 mod store_glue;
-mod ops_scan;
 pub use ops_atomic::AtomicCtx;
 pub use ops_atomic_all::AtomicAllShards;
 // BITOP's operator now lives with its arithmetic in kevy-store, so
@@ -149,11 +149,8 @@ pub use ops_atomic_all::AtomicAllShards;
 pub use kevy_store::BitOp;
 pub use ops_pipeline::Pipeline;
 mod pubsub;
-mod reaper;
-mod shard;
-#[cfg(feature = "persist")]
-mod shard_restore;
 mod pubsub_bus;
+mod reaper;
 #[cfg(feature = "persist")]
 mod replay;
 #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
@@ -162,48 +159,54 @@ mod replica_glue;
 mod replica_runner;
 #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
 mod replica_source;
+mod shard;
+#[cfg(feature = "persist")]
+mod shard_restore;
 mod store;
-mod store_tick;
 mod store_inner;
-mod store_wire;
 #[cfg(feature = "persist")]
 mod store_persist;
+mod store_tick;
+mod store_wire;
 
-pub use config::{Config, EvictionPolicy, TtlReaperMode};
 #[cfg(feature = "tier")]
 pub use config::TierBudgetSpec;
+pub use config::{Config, EvictionPolicy, TtlReaperMode};
 #[cfg(feature = "tier")]
 mod config_tier;
 #[cfg(feature = "persist")]
 pub use config::AppendFsync;
 pub use info::{KevyInfo, KevyTierInfo};
-#[cfg(feature = "persist")]
-pub use metric::KevyMetric;
-pub use metric::OpenReport;
+#[cfg(feature = "index")]
+pub use kevy_index::{AggBy, AnnSpec, GroupStats, Leaf as ViewLeaf, Tree as ViewTree, ViewMode};
+#[cfg(feature = "index")]
+pub use kevy_index::{
+    Cursor as IndexCursor, IndexKind, IndexValue, SegmentStats as IndexStats,
+    ValType as IndexValType,
+};
 #[cfg(feature = "persist")]
 pub use kevy_persist::RewriteStats;
 pub use kevy_store::{
     ExpireStats, GetShared, HExpireCode, HExpireCond, KevyError, KevyResult, ScoreBound,
     StoreError, ZAggregate, ZaddFlags, ZaddReport,
 };
+#[cfg(feature = "persist")]
+pub use metric::KevyMetric;
+pub use metric::OpenReport;
 #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
 pub use ops_feed::{Change, ChangeBatch, FeedError, PrefixInfo};
-pub use ops_snapshot_view::{Snapshot, SnapshotEntry};
-pub use ops_reconcile::ReconcileReport;
 #[cfg(feature = "index")]
 pub use ops_index::IndexPage;
-#[cfg(feature = "text")]
-pub use ops_index::highlight::{FacetCounts, MatchOpts, MatchPage};
 #[cfg(feature = "index")]
 pub use ops_index::advise::IdxAdvice;
 #[cfg(feature = "index")]
 pub use ops_index::claused::{ScalarPage, ScalarQueryOpts, ValueFilter};
+#[cfg(feature = "text")]
+pub use ops_index::highlight::{FacetCounts, MatchOpts, MatchPage};
+pub use ops_reconcile::ReconcileReport;
+pub use ops_snapshot_view::{Snapshot, SnapshotEntry};
 #[cfg(feature = "index")]
 pub use ops_view::ViewPage;
-#[cfg(feature = "index")]
-pub use kevy_index::{AggBy, AnnSpec, GroupStats, Leaf as ViewLeaf, Tree as ViewTree, ViewMode};
-#[cfg(feature = "index")]
-pub use kevy_index::{Cursor as IndexCursor, IndexKind, IndexValue, SegmentStats as IndexStats, ValType as IndexValType};
 // The TABLE face — the dogfood report's F7: `Store::table_declare` takes
 // a `TableSpec` the facade did not export, so the typed face of a
 // flagship v4 feature was uncallable without depending on kevy-index

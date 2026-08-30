@@ -2,8 +2,8 @@
 //! overwrites are shipped to the runtime's bio thread in per-iteration
 //! batches instead of dropping inline on the reactor.
 
-use crate::value::{self, Value};
 use crate::Store;
+use crate::value::{self, Value};
 
 /// Maximum [`Store::pending_drops`] depth before forcing a flush
 /// inside `maybe_offload_drop` (rather than waiting for the reactor's

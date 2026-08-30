@@ -203,9 +203,6 @@ fn spop_effect_survives_aof_restart() {
                 String::from_utf8_lossy(m)
             );
         }
-        assert_eq!(
-            cmd(&mut c, &[b"GET", b"marker"]),
-            Resp::Bulk(Some(b"fence-value".to_vec()))
-        );
+        assert_eq!(cmd(&mut c, &[b"GET", b"marker"]), Resp::Bulk(Some(b"fence-value".to_vec())));
     });
 }

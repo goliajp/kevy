@@ -73,12 +73,7 @@ fn aof_compat_matrix_replays_v1_vintage_aof() {
     for i in 0..10 {
         let f = format!("field{i}");
         let v = format!("hv-{i}");
-        aof.extend_from_slice(&resp_cmd(&[
-            b"HSET",
-            b"compat:hash",
-            f.as_bytes(),
-            v.as_bytes(),
-        ]));
+        aof.extend_from_slice(&resp_cmd(&[b"HSET", b"compat:hash", f.as_bytes(), v.as_bytes()]));
     }
     // 10 SADDs.
     for i in 0..10 {
@@ -116,8 +111,7 @@ fn aof_compat_matrix_replays_v1_vintage_aof() {
     let _h = Harness::spawn(cfg).expect("spawn kevy");
     std::thread::sleep(Duration::from_millis(300));
 
-    let mut s = TcpStream::connect(format!("127.0.0.1:{port}"))
-        .expect("conn");
+    let mut s = TcpStream::connect(format!("127.0.0.1:{port}")).expect("conn");
     let _ = s.set_read_timeout(Some(Duration::from_secs(2)));
 
     // PHASE 4: verify counters / types replay correctly.
@@ -127,70 +121,49 @@ fn aof_compat_matrix_replays_v1_vintage_aof() {
     let n = s.read(&mut buf).unwrap();
     let reply = String::from_utf8_lossy(&buf[..n]);
     eprintln!("aof_compat: GET compat:str:0042 = {reply:?}");
-    assert!(
-        reply.contains("val-42"),
-        "SET replay failed: {reply:?}"
-    );
+    assert!(reply.contains("val-42"), "SET replay failed: {reply:?}");
 
     // GET compat:counter → "10"
     s.write_all(&resp_cmd(&[b"GET", b"compat:counter"])).unwrap();
     let n = s.read(&mut buf).unwrap();
     let reply = String::from_utf8_lossy(&buf[..n]);
     eprintln!("aof_compat: GET compat:counter = {reply:?}");
-    assert!(
-        reply.contains("10"),
-        "INCR replay failed: {reply:?}"
-    );
+    assert!(reply.contains("10"), "INCR replay failed: {reply:?}");
 
     // LLEN compat:list → 10
     s.write_all(&resp_cmd(&[b"LLEN", b"compat:list"])).unwrap();
     let n = s.read(&mut buf).unwrap();
     let reply = String::from_utf8_lossy(&buf[..n]);
     eprintln!("aof_compat: LLEN compat:list = {reply:?}");
-    assert!(
-        reply.contains(":10"),
-        "LPUSH replay failed: {reply:?}"
-    );
+    assert!(reply.contains(":10"), "LPUSH replay failed: {reply:?}");
 
     // HLEN compat:hash → 10
     s.write_all(&resp_cmd(&[b"HLEN", b"compat:hash"])).unwrap();
     let n = s.read(&mut buf).unwrap();
     let reply = String::from_utf8_lossy(&buf[..n]);
     eprintln!("aof_compat: HLEN compat:hash = {reply:?}");
-    assert!(
-        reply.contains(":10"),
-        "HSET replay failed: {reply:?}"
-    );
+    assert!(reply.contains(":10"), "HSET replay failed: {reply:?}");
 
     // SCARD compat:set → 10
     s.write_all(&resp_cmd(&[b"SCARD", b"compat:set"])).unwrap();
     let n = s.read(&mut buf).unwrap();
     let reply = String::from_utf8_lossy(&buf[..n]);
     eprintln!("aof_compat: SCARD compat:set = {reply:?}");
-    assert!(
-        reply.contains(":10"),
-        "SADD replay failed: {reply:?}"
-    );
+    assert!(reply.contains(":10"), "SADD replay failed: {reply:?}");
 
     // ZCARD compat:zset → 10
     s.write_all(&resp_cmd(&[b"ZCARD", b"compat:zset"])).unwrap();
     let n = s.read(&mut buf).unwrap();
     let reply = String::from_utf8_lossy(&buf[..n]);
     eprintln!("aof_compat: ZCARD compat:zset = {reply:?}");
-    assert!(
-        reply.contains(":10"),
-        "ZADD replay failed: {reply:?}"
-    );
+    assert!(reply.contains(":10"), "ZADD replay failed: {reply:?}");
 
     // EXISTS torn → 0 (torn command must NOT have been applied).
     s.write_all(&resp_cmd(&[b"EXISTS", b"torn"])).unwrap();
     let n = s.read(&mut buf).unwrap();
     let reply = String::from_utf8_lossy(&buf[..n]);
     eprintln!("aof_compat: EXISTS torn = {reply:?}");
-    assert!(
-        reply.contains(":0"),
-        "torn command leaked partial key: {reply:?}"
-    );
+    assert!(reply.contains(":0"), "torn command leaked partial key: {reply:?}");
 
     // Final PING — server alive.
     s.write_all(b"*1\r\n$4\r\nPING\r\n").unwrap();

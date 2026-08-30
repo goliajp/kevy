@@ -93,14 +93,7 @@ impl<C: Commands> Shard<C> {
         // One client command at the dispatch boundary (before fan-out, so a
         // multi-key command counts once) — INFO's total_commands_processed.
         self.commands.on_command();
-        let ResolvedCmd {
-            route,
-            is_quit,
-            is_write,
-            block_hint,
-            wake_idx,
-            ..
-        } = resolved;
+        let ResolvedCmd { route, is_quit, is_write, block_hint, wake_idx, .. } = resolved;
         // Role-gated write rejection (read-only replica).
         // `seq` is already assigned by handle_command — resolve it
         // directly (immediate_reply would double-assign and wedge the
@@ -174,9 +167,9 @@ impl<C: Commands> Shard<C> {
             }
             // Cluster conns get `-CROSSSLOT` on cross-slot multi-key
             // (MGET/MSET/SINTER/SUNION/SDIFF); else fan-out as before.
-            other => self.start_multi_or_crossslot(
-                conn_id, seq, args, other, is_quit, cluster_conn,
-            ),
+            other => {
+                self.start_multi_or_crossslot(conn_id, seq, args, other, is_quit, cluster_conn)
+            }
         }
     }
 
@@ -214,15 +207,16 @@ impl<C: Commands> Shard<C> {
     /// `seq - next_emit`. Captures the conn's current `proto` so a
     /// later `materialize` (run when the last sub-reply lands) shapes
     /// the bytes per the proto that was in effect at dispatch time.
-    pub(crate) fn push_pending_slot(&mut self, conn_id: u64, remaining: u32, agg: Agg, is_quit: bool) {
+    pub(crate) fn push_pending_slot(
+        &mut self,
+        conn_id: u64,
+        remaining: u32,
+        agg: Agg,
+        is_quit: bool,
+    ) {
         if let Some(c) = self.conns.get_mut(&conn_id) {
             let proto = c.proto;
-            c.pending.push_back(PendingSlot {
-                remaining,
-                agg,
-                done: None,
-                proto,
-            });
+            c.pending.push_back(PendingSlot { remaining, agg, done: None, proto });
             if is_quit {
                 c.closing = true;
             }
@@ -256,15 +250,7 @@ impl<C: Commands> Shard<C> {
             } else {
                 // Multi-key ops (Del/MSet/Gather/…) use the unbatched path.
                 self.xshard_inflight += 1;
-                self.send_to(
-                    shard,
-                    Inbound::Request {
-                        origin: self.id,
-                        conn: conn_id,
-                        seq,
-                        op,
-                    },
-                );
+                self.send_to(shard, Inbound::Request { origin: self.id, conn: conn_id, seq, op });
             }
         }
     }
@@ -327,10 +313,9 @@ impl<C: Commands> Shard<C> {
         // follow-up discipline — `HPEXPIREAT key <abs> FIELDS …`
         // re-anchors the replay-time deadline to the original wall
         // clock. HPEXPIREAT itself is already absolute.
-        if args
-            .get(0)
-            .is_some_and(|v| v.eq_ignore_ascii_case(b"HEXPIRE") || v.eq_ignore_ascii_case(b"HPEXPIRE"))
-        {
+        if args.get(0).is_some_and(|v| {
+            v.eq_ignore_ascii_case(b"HEXPIRE") || v.eq_ignore_ascii_case(b"HPEXPIRE")
+        }) {
             self.log_hash_ttl_followup(args);
             return;
         }
@@ -362,11 +347,8 @@ impl<C: Commands> Shard<C> {
         else {
             return;
         };
-        let ms = if args[0].eq_ignore_ascii_case(b"HEXPIRE") {
-            raw.saturating_mul(1000)
-        } else {
-            raw
-        };
+        let ms =
+            if args[0].eq_ignore_ascii_case(b"HEXPIRE") { raw.saturating_mul(1000) } else { raw };
         let abs = kevy_store::now_unix_ms().saturating_add_signed(ms);
         let mut c = Argv::with_capacity(args.len(), 0);
         c.push(b"HPEXPIREAT");

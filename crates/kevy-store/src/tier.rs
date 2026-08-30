@@ -311,9 +311,7 @@ mod enabled {
                 t.vlog.note_dead(c.vref());
                 t.cold_keys = t.cold_keys.saturating_sub(1);
                 t.cold_bytes = t.cold_bytes.saturating_sub(u64::from(c.weight));
-                t.stub_bytes = t
-                    .stub_bytes
-                    .saturating_sub(crate::value::ENTRY_OVERHEAD + key_heap);
+                t.stub_bytes = t.stub_bytes.saturating_sub(crate::value::ENTRY_OVERHEAD + key_heap);
                 t.renames.remove(&(c.file_id, c.offset));
             }
         }
@@ -348,9 +346,9 @@ mod enabled {
 }
 
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
-pub use enabled::TierStats;
-#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 pub(crate) use enabled::TierState;
+#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+pub use enabled::TierStats;
 
 /// Funnel passthroughs for builds without the tier backend (no_std /
 /// wasm): `Value::Cold` cannot be constructed there (no `enable_tiering`),

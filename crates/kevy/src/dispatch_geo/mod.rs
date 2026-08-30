@@ -21,13 +21,9 @@ mod store;
 
 pub(crate) use store::{geo_search, geo_store_route};
 
+use kevy_geo::{decode_score, encode_base32_geohash, encode_score, haversine_meters};
 use kevy_resp::CmdError;
-use kevy_geo::{
-    decode_score, encode_base32_geohash, encode_score, haversine_meters,
-};
-use kevy_resp::{
-    ArgvView, encode_array_len, encode_bulk, encode_error, encode_null_bulk,
-};
+use kevy_resp::{ArgvView, encode_array_len, encode_bulk, encode_error, encode_null_bulk};
 use kevy_store::Store;
 
 use crate::cmd::{arg_f64, store_err, wrong_args};
@@ -131,14 +127,18 @@ fn parse_geoadd_flags<A: ArgvView + ?Sized>(
         match u.as_slice() {
             b"NX" => {
                 if matches!(mode, GeoAddMode::Xx) {
-                    return Err(CmdError::Wire("ERR XX and NX options at the same time are not compatible"));
+                    return Err(CmdError::Wire(
+                        "ERR XX and NX options at the same time are not compatible",
+                    ));
                 }
                 mode = GeoAddMode::Nx;
                 i += 1;
             }
             b"XX" => {
                 if matches!(mode, GeoAddMode::Nx) {
-                    return Err(CmdError::Wire("ERR XX and NX options at the same time are not compatible"));
+                    return Err(CmdError::Wire(
+                        "ERR XX and NX options at the same time are not compatible",
+                    ));
                 }
                 mode = GeoAddMode::Xx;
                 i += 1;
@@ -160,10 +160,8 @@ fn apply_geoadd(
     mode: GeoAddMode,
     ch: bool,
 ) -> Result<usize, kevy_store::StoreError> {
-    let existing: Vec<Option<f64>> = pairs
-        .iter()
-        .map(|(_, m)| store.zscore(key, m).unwrap_or(Some(0.0)))
-        .collect();
+    let existing: Vec<Option<f64>> =
+        pairs.iter().map(|(_, m)| store.zscore(key, m).unwrap_or(Some(0.0))).collect();
     let mut to_write: Vec<(f64, &[u8])> = Vec::with_capacity(pairs.len());
     for (i, p) in pairs.iter().enumerate() {
         let exists = existing[i].is_some();
@@ -243,7 +241,10 @@ fn cmd_geodist<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<
         match parse_unit(&args[4]) {
             Some(u) => u,
             None => {
-                return encode_error(out, "ERR unsupported unit provided. please use M, KM, FT, MI");
+                return encode_error(
+                    out,
+                    "ERR unsupported unit provided. please use M, KM, FT, MI",
+                );
             }
         }
     } else {

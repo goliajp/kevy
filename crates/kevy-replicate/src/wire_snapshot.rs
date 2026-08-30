@@ -184,10 +184,8 @@ pub fn decode_snapshot_marker(buf: &[u8]) -> Result<Option<(SnapshotMarker, usiz
         // with generation 0 ("unknown"; real generations start at 1).
         let marker = match rest.iter().position(|&b| b == b' ') {
             Some(sp) => {
-                let generation =
-                    parse_decimal(&rest[..sp]).ok_or(WireError::BadEnvelope)?;
-                let next_offset =
-                    parse_decimal(&rest[sp + 1..]).ok_or(WireError::BadEnvelope)?;
+                let generation = parse_decimal(&rest[..sp]).ok_or(WireError::BadEnvelope)?;
+                let next_offset = parse_decimal(&rest[sp + 1..]).ok_or(WireError::BadEnvelope)?;
                 SnapshotMarker::Ping { generation, next_offset }
             }
             None => SnapshotMarker::Ping {

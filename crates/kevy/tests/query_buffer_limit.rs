@@ -91,10 +91,7 @@ fn a_streaming_giant_frame_is_disconnected_at_the_cap() {
         let marker = format!("qbuf-marker-{port}");
         let mut w = TcpStream::connect(("127.0.0.1", port)).unwrap();
         w.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-        let set = format!(
-            "*3\r\n$3\r\nSET\r\n${}\r\n{marker}\r\n$2\r\nok\r\n",
-            marker.len()
-        );
+        let set = format!("*3\r\n$3\r\nSET\r\n${}\r\n{marker}\r\n$2\r\nok\r\n", marker.len());
         w.write_all(set.as_bytes()).unwrap();
         let mut buf = [0u8; 64];
         let n = w.read(&mut buf).unwrap_or(0);

@@ -23,10 +23,7 @@ fn known_dates_pin_the_calendar() {
     // The epoch itself, and the leap rules: 2000 (div-400 leap),
     // 1900 (century non-leap), 2024 (plain leap).
     assert_eq!(epoch_from_civil(Civil { y: 1970, m: 1, d: 1, h: 0, min: 0, s: 0 }), 0);
-    assert_eq!(
-        civil_from_epoch(951_782_400),
-        Civil { y: 2000, m: 2, d: 29, h: 0, min: 0, s: 0 }
-    );
+    assert_eq!(civil_from_epoch(951_782_400), Civil { y: 2000, m: 2, d: 29, h: 0, min: 0, s: 0 });
     assert_eq!(eval(b"@1900-02-29", 0), None, "1900 was not a leap year");
     assert!(eval(b"@2024-02-29", 0).is_some());
     // A negative epoch decodes correctly.
@@ -71,18 +68,18 @@ fn eval_speaks_the_whole_grammar() {
 #[test]
 fn eval_refuses_every_malformed_shape() {
     for bad in [
-        b"now".as_slice(),      // no @ sigil
-        b"@later",              // unknown word
-        b"@now-",               // sign, no digits
-        b"@now-7",              // digits, no unit
-        b"@now-7q",             // unknown unit
-        b"@now*7d",             // unknown operator
-        b"@2026-13-01",         // month 13
-        b"@2026-02-30",         // day past month end
-        b"@2026-8-3",           // unpadded
-        b"@2026-08-03T25:00:00",// hour 25
-        b"@2026-08-03 09:15:30",// space, not T
-        b"@",                   // empty body
+        b"now".as_slice(),       // no @ sigil
+        b"@later",               // unknown word
+        b"@now-",                // sign, no digits
+        b"@now-7",               // digits, no unit
+        b"@now-7q",              // unknown unit
+        b"@now*7d",              // unknown operator
+        b"@2026-13-01",          // month 13
+        b"@2026-02-30",          // day past month end
+        b"@2026-8-3",            // unpadded
+        b"@2026-08-03T25:00:00", // hour 25
+        b"@2026-08-03 09:15:30", // space, not T
+        b"@",                    // empty body
     ] {
         assert_eq!(eval(bad, 0), None, "{:?} must refuse", String::from_utf8_lossy(bad));
     }

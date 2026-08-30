@@ -22,10 +22,7 @@ pub(crate) fn upper_verb<'a>(name: &[u8], buf: &'a mut [u8; 32]) -> &'a [u8] {
 }
 
 pub(crate) fn wrong_args(out: &mut Vec<u8>, cmd: &str) {
-    encode_error(
-        out,
-        &format!("ERR wrong number of arguments for '{cmd}' command"),
-    );
+    encode_error(out, &format!("ERR wrong number of arguments for '{cmd}' command"));
 }
 
 /// Nothing in the local dispatch chain handled this verb — say which of
@@ -79,8 +76,7 @@ pub(crate) const WRONGTYPE: &str =
     "WRONGTYPE Operation against a key holding the wrong kind of value";
 /// Redis's classic OOM reply for write attempts under `NoEviction`. Matches
 /// the wording valkey clients (redis-cli, jedis, go-redis) detect.
-pub(crate) const OOM_ERR: &str =
-    "OOM command not allowed when used memory > 'maxmemory'.";
+pub(crate) const OOM_ERR: &str = "OOM command not allowed when used memory > 'maxmemory'.";
 
 /// Verb classification tables (`is_write_verb` / `notify_class_for_verb` /
 /// `is_growing_write_verb`) live in [`crate::cmd_class`]; re-exported here
@@ -129,10 +125,8 @@ pub(crate) fn cmd_hset<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &
     if args.len() < 4 || !args.len().is_multiple_of(2) {
         return wrong_args(out, "hset");
     }
-    let pairs: Vec<(&[u8], &[u8])> = (2..args.len())
-        .step_by(2)
-        .map(|i| (&args[i], &args[i + 1]))
-        .collect();
+    let pairs: Vec<(&[u8], &[u8])> =
+        (2..args.len()).step_by(2).map(|i| (&args[i], &args[i + 1])).collect();
     emit_int_result(store.hset(&args[1], &pairs).map(|n| n as i64), out);
 }
 
@@ -250,16 +244,14 @@ fn parse_zrbs_modifiers<A: ArgvView + ?Sized>(
                 encode_error(out, "ERR syntax error");
                 return None;
             }
-            let Some(off) = std::str::from_utf8(&args[i + 1])
-                .ok()
-                .and_then(|s| s.parse::<i64>().ok())
+            let Some(off) =
+                std::str::from_utf8(&args[i + 1]).ok().and_then(|s| s.parse::<i64>().ok())
             else {
                 encode_error(out, ERR_NOT_INT);
                 return None;
             };
-            let Some(cnt) = std::str::from_utf8(&args[i + 2])
-                .ok()
-                .and_then(|s| s.parse::<i64>().ok())
+            let Some(cnt) =
+                std::str::from_utf8(&args[i + 2]).ok().and_then(|s| s.parse::<i64>().ok())
             else {
                 encode_error(out, ERR_NOT_INT);
                 return None;
@@ -333,25 +325,15 @@ pub(crate) fn arg_f64(b: &[u8]) -> Option<f64> {
 /// Parse a `ZRANGEBYSCORE`/`ZCOUNT` bound: a leading `(` means exclusive.
 pub(crate) fn parse_score_bound(b: &[u8]) -> Option<ScoreBound> {
     match b.strip_prefix(b"(") {
-        Some(rest) => Some(ScoreBound {
-            value: arg_f64(rest)?,
-            exclusive: true,
-        }),
-        None => Some(ScoreBound {
-            value: arg_f64(b)?,
-            exclusive: false,
-        }),
+        Some(rest) => Some(ScoreBound { value: arg_f64(rest)?, exclusive: true }),
+        None => Some(ScoreBound { value: arg_f64(b)?, exclusive: false }),
     }
 }
 
 /// Format a score the way Redis does: integral values without a decimal point.
 pub(crate) fn fmt_score(s: f64) -> Vec<u8> {
     if s.is_infinite() {
-        return if s > 0.0 {
-            b"inf".to_vec()
-        } else {
-            b"-inf".to_vec()
-        };
+        return if s > 0.0 { b"inf".to_vec() } else { b"-inf".to_vec() };
     }
     // Bit-exact integer-valued check; epsilon would change the wire shape.
     #[allow(clippy::float_cmp)]
@@ -362,17 +344,13 @@ pub(crate) fn fmt_score(s: f64) -> Vec<u8> {
     format!("{s}").into_bytes()
 }
 
-
 /// Borrowed `args[from..]` as `Vec<&[u8]>` — zero per-member heap
 /// alloc. Mirrors valkey's `c->argv[j]`-without-copy hand-off (`t_set.c:611`
 /// `setTypeAdd(set, objectGetVal(c->argv[j]))`). Paired with the Store
 /// `*_borrowed` family that takes `&[&[u8]]`; the Store then materialises
 /// `SmallBytes` per member once at insert (same as before), but the dispatch
 /// hand-off no longer pays a `Vec<u8>` per arg.
-pub(crate) fn rest_borrowed<A: ArgvView + ?Sized>(
-    args: &A,
-    from: usize,
-) -> Vec<&[u8]> {
+pub(crate) fn rest_borrowed<A: ArgvView + ?Sized>(args: &A, from: usize) -> Vec<&[u8]> {
     (from..args.len()).map(|i| &args[i]).collect()
 }
 
@@ -384,9 +362,7 @@ pub(crate) fn arg_i64(b: &[u8]) -> Option<i64> {
 /// Parse `SCAN cursor [MATCH pattern] [COUNT count] [TYPE type]` into
 /// the runtime's [`kevy_rt::ScanArgs`]. `Err` carries the exact error
 /// message the runtime puts on the wire (Redis wording).
-pub(crate) fn scan_args<A: ArgvView + ?Sized>(
-    args: &A,
-) -> Result<kevy_rt::ScanArgs, &'static str> {
+pub(crate) fn scan_args<A: ArgvView + ?Sized>(args: &A) -> Result<kevy_rt::ScanArgs, &'static str> {
     let cursor: u64 = std::str::from_utf8(&args[1])
         .ok()
         .and_then(|s| s.parse().ok())

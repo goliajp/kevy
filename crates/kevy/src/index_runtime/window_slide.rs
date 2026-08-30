@@ -14,7 +14,12 @@ use crate::state::CatalogState;
 /// Freeze one eviction batch out of every text index of `table`.
 /// Failure leaves the entries hot — derived spill, semantics intact,
 /// logged and retried never (the batch's window has already slid).
-pub(super) fn freeze_text_batches(st: &mut ShardIndexes, table: &[u8], keys: &[Vec<u8>], dir: &std::path::Path) {
+pub(super) fn freeze_text_batches(
+    st: &mut ShardIndexes,
+    table: &[u8],
+    keys: &[Vec<u8>],
+    dir: &std::path::Path,
+) {
     for si in &mut st.idx {
         let (Some(cold), Some(ts), BuildState::Ready) =
             (&mut si.cold_text, &mut si.text, &si.build)
@@ -27,10 +32,9 @@ pub(super) fn freeze_text_batches(st: &mut ShardIndexes, table: &[u8], keys: &[V
         match cold.freeze_batch(ts, &si.spec.name, keys, dir) {
             Ok(true) => st.stats_dirty = true,
             Ok(false) => {}
-            Err(e) => eprintln!(
-                "kevy: text freeze '{}': {e}",
-                String::from_utf8_lossy(&si.spec.name)
-            ),
+            Err(e) => {
+                eprintln!("kevy: text freeze '{}': {e}", String::from_utf8_lossy(&si.spec.name))
+            }
         }
     }
 }
@@ -51,9 +55,8 @@ pub(super) fn evict_and_slide(
     drives_rows: bool,
 ) -> bool {
     if drives_rows && let Some(rows) = win.pending_rows(seg) {
-        let sealed = store
-            .enable_seg_rows(dir)
-            .and_then(|()| store.seal_rows_to_seg(table_of(name), &rows));
+        let sealed =
+            store.enable_seg_rows(dir).and_then(|()| store.seal_rows_to_seg(table_of(name), &rows));
         match sealed {
             Ok(None) => {}
             Ok(Some(batch)) => {
@@ -115,4 +118,3 @@ pub(super) fn shard_segs_dir(
 ) -> Option<std::path::PathBuf> {
     state.sidecar_dir().map(|d| kevy_persist::layout::segs_dir(d, shard_id))
 }
-

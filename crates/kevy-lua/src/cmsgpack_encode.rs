@@ -94,12 +94,7 @@ fn encode_str(bytes: &[u8], out: &mut Vec<u8>) {
     out.extend_from_slice(bytes);
 }
 
-fn encode_table(
-    vm: &Vm,
-    t: Gc<Table>,
-    out: &mut Vec<u8>,
-    depth: u32,
-) -> Result<(), String> {
+fn encode_table(vm: &Vm, t: Gc<Table>, out: &mut Vec<u8>, depth: u32) -> Result<(), String> {
     let t_ref = &*t;
     let (n, total_entries, is_array) = table_shape(t_ref)?;
     if is_array {
@@ -172,4 +167,3 @@ fn table_shape(t_ref: &Table) -> Result<(usize, usize, bool), String> {
 // ─────────────────────────────────────────────────────────────────────
 // Decoder
 // ─────────────────────────────────────────────────────────────────────
-

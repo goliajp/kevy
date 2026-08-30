@@ -62,9 +62,7 @@ impl AsyncConnection {
         let transport = connect_default(&parsed.host, parsed.port).await?;
         let mut codec = AsyncRespCodec::new(transport);
         if let Some(db) = parsed.db {
-            let reply = codec
-                .request(&[b"SELECT".to_vec(), db.to_string().into_bytes()])
-                .await?;
+            let reply = codec.request(&[b"SELECT".to_vec(), db.to_string().into_bytes()]).await?;
             if let Reply::Error(msg) = reply {
                 let text = String::from_utf8_lossy(&msg);
                 return Err(io::Error::other(format!("SELECT {db} rejected: {text}")));
@@ -76,9 +74,7 @@ impl AsyncConnection {
     /// Direct constructor — useful when the caller wants to manage
     /// transport setup itself (cluster client, custom socket opts).
     pub fn from_transport(transport: DefaultTransport) -> Self {
-        Self {
-            codec: AsyncRespCodec::new(transport),
-        }
+        Self { codec: AsyncRespCodec::new(transport) }
     }
 
     /// `PING`. Returns `Ok(())` on `+PONG`.
@@ -98,10 +94,9 @@ fn expect_pong(reply: Reply) -> io::Result<()> {
     match reply {
         Reply::Simple(s) if s == b"PONG" => Ok(()),
         Reply::Bulk(s) if s == b"PONG" => Ok(()),
-        Reply::Error(msg) => Err(io::Error::other(format!(
-            "PING failed: {}",
-            String::from_utf8_lossy(&msg)
-        ))),
+        Reply::Error(msg) => {
+            Err(io::Error::other(format!("PING failed: {}", String::from_utf8_lossy(&msg))))
+        }
         other => Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!("PING returned unexpected reply: {other:?}"),

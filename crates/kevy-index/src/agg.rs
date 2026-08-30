@@ -222,7 +222,9 @@ impl AggSegment {
             match by {
                 AggBy::Count => g.count as f64,
                 AggBy::Sum => g.sum,
-                AggBy::Max => g.values.keys().next_back().map_or(f64::NEG_INFINITY, IndexValue::as_f64),
+                AggBy::Max => {
+                    g.values.keys().next_back().map_or(f64::NEG_INFINITY, IndexValue::as_f64)
+                }
                 AggBy::Min => g.values.keys().next().map_or(f64::NEG_INFINITY, |v| -v.as_f64()),
             }
         };

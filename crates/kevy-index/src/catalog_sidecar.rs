@@ -98,7 +98,8 @@ impl Catalog {
             c.create(spec_from_line(line, version)?).ok()?;
         }
         Some(c)
-    }}
+    }
+}
 
 fn spec_from_line(line: &str, version: u8) -> Option<IndexSpec> {
     let parts: Vec<&str> = line.split('\t').collect();
@@ -175,7 +176,11 @@ fn composite_spec(parts: &[&str], version: u8) -> Option<IndexSpec> {
                 "d" => true,
                 _ => return None,
             };
-            Some(CompositeCol { name: unesc(segs[0])?, ty: ValType::parse(segs[1].as_bytes())?, desc })
+            Some(CompositeCol {
+                name: unesc(segs[0])?,
+                ty: ValType::parse(segs[1].as_bytes())?,
+                desc,
+            })
         })
         .collect::<Option<Vec<_>>>()?;
     if cols.is_empty() {

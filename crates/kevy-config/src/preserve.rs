@@ -37,12 +37,7 @@ struct Line {
 enum LineKind {
     BlankOrComment,
     Section(String),
-    Pair {
-        section: Option<String>,
-        key: String,
-        value_start: usize,
-        value_end: usize,
-    },
+    Pair { section: Option<String>, key: String, value_start: usize, value_end: usize },
 }
 
 impl Document {
@@ -71,10 +66,7 @@ impl Config {
     /// can't be re-parsed line-by-line (caller is expected to fall back
     /// to [`Self::to_toml_string`]).
     #[cold]
-    pub fn to_toml_string_preserving(
-        &self,
-        original_source: &str,
-    ) -> Result<String, ConfigError> {
+    pub fn to_toml_string_preserving(&self, original_source: &str) -> Result<String, ConfigError> {
         let doc = Document::parse(original_source)?;
         let pairs = canonical_pairs(self);
         let last_idx = last_line_per_known_section(&doc);
@@ -176,21 +168,17 @@ fn append_orphan_sections(
     }
 }
 
-fn emit_line(
-    line: &Line,
-    pairs: &[CanonicalPair],
-    emitted: &mut [bool],
-    out: &mut String,
-) {
+fn emit_line(line: &Line, pairs: &[CanonicalPair], emitted: &mut [bool], out: &mut String) {
     match &line.kind {
         LineKind::BlankOrComment | LineKind::Section(_) => {
             out.push_str(&line.raw);
             out.push('\n');
         }
         LineKind::Pair { section, key, value_start, value_end } => {
-            let canonical = pairs.iter().enumerate().find(|(_, p)| {
-                p.section == section.as_deref().unwrap_or("") && p.key == key
-            });
+            let canonical = pairs
+                .iter()
+                .enumerate()
+                .find(|(_, p)| p.section == section.as_deref().unwrap_or("") && p.key == key);
             if let Some((idx, p)) = canonical {
                 out.push_str(&line.raw[..*value_start]);
                 out.push_str(&p.value);
@@ -275,12 +263,7 @@ fn parse_pair_line(
     let value_start = j;
     let value_end = scan_value_end(bytes, j, line_no)?;
     check_trailing_or_comment(&bytes[value_end..], line_no, value_end + 1)?;
-    Ok(LineKind::Pair {
-        section: section_ctx.cloned(),
-        key,
-        value_start,
-        value_end,
-    })
+    Ok(LineKind::Pair { section: section_ctx.cloned(), key, value_start, value_end })
 }
 
 fn scan_value_end(bytes: &[u8], start: usize, line_no: usize) -> Result<usize, ConfigError> {
@@ -339,9 +322,7 @@ fn check_trailing_or_comment(
 }
 
 fn first_nonws(bytes: &[u8]) -> Option<usize> {
-    bytes
-        .iter()
-        .position(|&b| b != b' ' && b != b'\t' && b != b'\r')
+    bytes.iter().position(|&b| b != b' ' && b != b'\t' && b != b'\r')
 }
 
 fn skip_ws(bytes: &[u8], mut k: usize) -> usize {
@@ -356,10 +337,5 @@ fn is_ident_char(b: u8) -> bool {
 }
 
 fn parse_err(line: usize, col: usize, msg: impl Into<String>) -> ConfigError {
-    ConfigError::Parse {
-        line,
-        col,
-        msg: msg.into(),
-    }
+    ConfigError::Parse { line, col, msg: msg.into() }
 }
-

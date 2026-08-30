@@ -103,10 +103,7 @@ fn apply_hot_set_auto_aof_rewrite_pct_accepts_integer() {
 #[test]
 fn apply_hot_set_auto_aof_rewrite_min_size_accepts_size_literal() {
     let cfg = try_set("auto-aof-rewrite-min-size", "128mb").expect("ok");
-    assert_eq!(
-        cfg.persistence.auto_aof_rewrite_min_size,
-        128 * 1024 * 1024,
-    );
+    assert_eq!(cfg.persistence.auto_aof_rewrite_min_size, 128 * 1024 * 1024,);
 }
 
 #[test]
@@ -177,10 +174,7 @@ fn config_set_bad_value_returns_error_reply() {
     let bad = run(b"CONFIG", &[b"SET", b"maxmemory", b"not-a-size"]);
     let s = String::from_utf8(bad).unwrap();
     assert!(s.starts_with("-ERR"), "got: {s:?}");
-    assert!(
-        s.contains("CONFIG SET failed for 'maxmemory'"),
-        "got: {s:?}",
-    );
+    assert!(s.contains("CONFIG SET failed for 'maxmemory'"), "got: {s:?}",);
 }
 
 #[test]
@@ -188,10 +182,7 @@ fn config_set_unknown_field_returns_unknown_param_error() {
     let out = run(b"CONFIG", &[b"SET", b"not-a-real-setting", b"x"]);
     let s = String::from_utf8(out).unwrap();
     assert!(s.starts_with("-ERR"));
-    assert!(
-        s.contains("Unknown CONFIG SET parameter"),
-        "got: {s:?}",
-    );
+    assert!(s.contains("Unknown CONFIG SET parameter"), "got: {s:?}",);
 }
 
 #[test]
@@ -199,10 +190,7 @@ fn config_set_read_only_field_returns_restart_required_error() {
     let out = run(b"CONFIG", &[b"SET", b"bind", b"0.0.0.0"]);
     let s = String::from_utf8(out).unwrap();
     assert!(s.starts_with("-ERR"));
-    assert!(
-        s.contains("can't be changed at runtime"),
-        "got: {s:?}",
-    );
+    assert!(s.contains("can't be changed at runtime"), "got: {s:?}",);
 }
 
 #[test]
@@ -221,10 +209,7 @@ fn config_rewrite_without_source_returns_no_config_file_error() {
     let out = run(b"CONFIG", &[b"REWRITE"]);
     let s = String::from_utf8(out).unwrap();
     assert!(s.starts_with("-ERR"));
-    assert!(
-        s.contains("running without a config file"),
-        "got: {s:?}",
-    );
+    assert!(s.contains("running without a config file"), "got: {s:?}",);
 }
 
 #[test]
@@ -233,10 +218,7 @@ fn config_rewrite_writes_atomic_round_trip_file() {
     // handler short-circuits in the test binary (no source file).
     let dir = std::env::temp_dir().join(format!(
         "kevy-config-rewrite-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
     ));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("kevy.toml");

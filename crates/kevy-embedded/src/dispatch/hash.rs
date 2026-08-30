@@ -4,11 +4,11 @@
 
 use crate::store::Store;
 
-use kevy_store::{now_unix_ms, HExpireCond};
+use kevy_store::{HExpireCond, now_unix_ms};
 
 use super::util::{
-    arg_f64, arg_i64, arr, bulk, emit_bulk_array, emit_int, err, fmt_score, int, kevy_err,
-    opt_bulk, rest, wrong_args, ERR_NOT_FLOAT, ERR_NOT_INT, ERR_SYNTAX,
+    ERR_NOT_FLOAT, ERR_NOT_INT, ERR_SYNTAX, arg_f64, arg_i64, arr, bulk, emit_bulk_array, emit_int,
+    err, fmt_score, int, kevy_err, opt_bulk, rest, wrong_args,
 };
 
 /// One hash-family request; `false` = verb not in this group.

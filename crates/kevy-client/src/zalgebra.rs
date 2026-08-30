@@ -140,10 +140,8 @@ mod tests {
     use super::*;
 
     fn seed(c: &mut Connection) {
-        c.zadd(b"za", &[(1.0, b"x".as_ref()), (2.0, b"y".as_ref())])
-            .unwrap();
-        c.zadd(b"zb", &[(10.0, b"y".as_ref()), (20.0, b"z".as_ref())])
-            .unwrap();
+        c.zadd(b"za", &[(1.0, b"x".as_ref()), (2.0, b"y".as_ref())]).unwrap();
+        c.zadd(b"zb", &[(10.0, b"y".as_ref()), (20.0, b"z".as_ref())]).unwrap();
     }
 
     #[test]
@@ -160,12 +158,7 @@ mod tests {
         let mut c = Connection::connect("mem://").unwrap();
         seed(&mut c);
         let n = c
-            .zunionstore_with(
-                b"zw",
-                &[&b"za"[..], &b"zb"[..]],
-                Some(&[2.0, 1.0]),
-                ZAggregate::Max,
-            )
+            .zunionstore_with(b"zw", &[&b"za"[..], &b"zb"[..]], Some(&[2.0, 1.0]), ZAggregate::Max)
             .unwrap();
         assert_eq!(n, 3);
         // y: max(2*2, 10*1) = 10
@@ -175,10 +168,8 @@ mod tests {
     #[test]
     fn embedded_zintercard_with_and_without_limit() {
         let mut c = Connection::connect("mem://").unwrap();
-        c.zadd(b"za", &[(1.0, b"a".as_ref()), (2.0, b"b".as_ref()), (3.0, b"c".as_ref())])
-            .unwrap();
-        c.zadd(b"zb", &[(1.0, b"a".as_ref()), (2.0, b"b".as_ref()), (9.0, b"q".as_ref())])
-            .unwrap();
+        c.zadd(b"za", &[(1.0, b"a".as_ref()), (2.0, b"b".as_ref()), (3.0, b"c".as_ref())]).unwrap();
+        c.zadd(b"zb", &[(1.0, b"a".as_ref()), (2.0, b"b".as_ref()), (9.0, b"q".as_ref())]).unwrap();
         assert_eq!(c.zintercard(&[&b"za"[..], &b"zb"[..]], None).unwrap(), 2);
         assert_eq!(c.zintercard(&[&b"za"[..], &b"zb"[..]], Some(1)).unwrap(), 1);
     }

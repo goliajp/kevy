@@ -177,8 +177,7 @@ impl Store {
             // host-mediated pump replays both formats, and its dump is
             // the log's upgrade point (mirroring the native
             // first-rewrite upgrade).
-            let (buf, _keys) =
-                kevy_persist::dump_store_to_buf(&view, kevy_persist::AofFormat::V2);
+            let (buf, _keys) = kevy_persist::dump_store_to_buf(&view, kevy_persist::AofFormat::V2);
             if i == 0 {
                 out = buf;
             } else {
@@ -212,10 +211,7 @@ impl Store {
 /// (unlocked): serialize the view to the snapshot's durable tmp.
 /// Phase 3 (write lock): commit — snapshot rename and tee'd AOF reset
 /// adjacent, so the snapshot/log commit window stays microseconds.
-pub(crate) fn save_shard_snapshot(
-    shard: &RwLock<Inner>,
-    path: &std::path::Path,
-) -> KevyResult<()> {
+pub(crate) fn save_shard_snapshot(shard: &RwLock<Inner>, path: &std::path::Path) -> KevyResult<()> {
     let (view, reset_tmp) = freeze_for_save(shard)?;
     let tmp = match kevy_persist::write_snapshot_tmp(&view, path) {
         Ok(t) => t,

@@ -26,9 +26,7 @@ pub(crate) fn block_serve_argv<A: ArgvView + ?Sized>(
         BlockKind::Bzpopmin => pop_serve(b"BZPOPMIN", key),
         BlockKind::Brpoplpush => brpoplpush_serve(args, key),
         BlockKind::XReadBlock => xread_serve(args, key).unwrap_or_else(|| args.to_argv()),
-        BlockKind::XReadGroupBlock => {
-            xreadgroup_serve(args, key).unwrap_or_else(|| args.to_argv())
-        }
+        BlockKind::XReadGroupBlock => xreadgroup_serve(args, key).unwrap_or_else(|| args.to_argv()),
     }
 }
 
@@ -77,11 +75,7 @@ fn pop_serve(verb: &[u8], key: &[u8]) -> Argv {
 /// every combination forever; `LINDEX` means the same thing in both.
 /// The peek runs on the owning shard immediately before the pop, with
 /// nothing interleaved, so what it reads is what the pop takes.
-pub(crate) fn block_restore_argv(
-    store: &mut Store,
-    kind: BlockKind,
-    key: &[u8],
-) -> Option<Argv> {
+pub(crate) fn block_restore_argv(store: &mut Store, kind: BlockKind, key: &[u8]) -> Option<Argv> {
     match kind {
         // BLPOP takes the head, so putting it back is an LPUSH.
         BlockKind::Blpop => push_restore(store, b"LPUSH", key, 0),
@@ -228,12 +222,12 @@ pub(crate) fn block_ready<A: ArgvView + ?Sized>(
     kind: BlockKind,
 ) -> bool {
     match kind {
-        BlockKind::Blpop | BlockKind::Brpop | BlockKind::Brpoplpush => serve_argv
-            .get(1)
-            .is_some_and(|k| store.llen(k).is_ok_and(|n| n > 0)),
-        BlockKind::Bzpopmin => serve_argv
-            .get(1)
-            .is_some_and(|k| store.zcard(k).is_ok_and(|n| n > 0)),
+        BlockKind::Blpop | BlockKind::Brpop | BlockKind::Brpoplpush => {
+            serve_argv.get(1).is_some_and(|k| store.llen(k).is_ok_and(|n| n > 0))
+        }
+        BlockKind::Bzpopmin => {
+            serve_argv.get(1).is_some_and(|k| store.zcard(k).is_ok_and(|n| n > 0))
+        }
         BlockKind::XReadBlock => {
             // XREAD is read-only, so dispatching the replay is itself a safe
             // peek. What it is NOT is empty when there is nothing: measured,
@@ -394,9 +388,8 @@ mod ready_tests {
         // XREADGROUP: a call too short to name a group is not ready, and
         // cannot be — that guard is the first thing the arm does.
         assert!(!block_ready(&ctx, &mut s, &argv(&[b"XREADGROUP"]), BlockKind::XReadGroupBlock));
-        let grouped = argv(&[
-            b"XREADGROUP", b"GROUP", b"g", b"c", b"COUNT", b"1", b"STREAMS", b"st", b">",
-        ]);
+        let grouped =
+            argv(&[b"XREADGROUP", b"GROUP", b"g", b"c", b"COUNT", b"1", b"STREAMS", b"st", b">"]);
         assert!(!block_ready(&ctx, &mut s, &grouped, BlockKind::XReadGroupBlock));
         kevy.dispatch(&mut s, &argv(&[b"XGROUP", b"CREATE", b"st", b"g", b"0"]));
         assert!(block_ready(&ctx, &mut s, &grouped, BlockKind::XReadGroupBlock));

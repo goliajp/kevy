@@ -94,7 +94,15 @@ impl Connection {
         ty: IdxType,
     ) -> KevyResult<()> {
         let args: &[&[u8]] = &[
-            name, b"ON", b"PREFIX", prefix, b"FIELD", field, b"TYPE", ty.tag(), b"KIND",
+            name,
+            b"ON",
+            b"PREFIX",
+            prefix,
+            b"FIELD",
+            field,
+            b"TYPE",
+            ty.tag(),
+            b"KIND",
             b"range",
         ];
         self.idx_create_raw(args)
@@ -245,9 +253,7 @@ fn parse_ranked(reply: Reply) -> KevyResult<Vec<(Vec<u8>, f64)>> {
             };
             let mut it = cells.into_iter();
             match (it.next(), it.next()) {
-                (Some(Reply::Bulk(key)), Some(Reply::Bulk(score))) => {
-                    Ok((key, num_f64(&score)?))
-                }
+                (Some(Reply::Bulk(key)), Some(Reply::Bulk(score))) => Ok((key, num_f64(&score)?)),
                 _ => Err(KevyError::Protocol("IDX.QUERY ranked row: expected [key, score]".into())),
             }
         })
@@ -292,9 +298,7 @@ mod tests {
         let mut c = Connection::connect("mem://").unwrap();
         let err = c.idx_list().unwrap_err();
         assert!(matches!(err, KevyError::Unsupported(_)));
-        let err = c
-            .idx_create_range(b"i", b"user:", b"age", IdxType::I64)
-            .unwrap_err();
+        let err = c.idx_create_range(b"i", b"user:", b"age", IdxType::I64).unwrap_err();
         assert!(matches!(err, KevyError::Unsupported(_)));
     }
 
@@ -315,11 +319,8 @@ mod tests {
         assert_eq!(page.rows[0].key, b"user:1");
         assert_eq!(page.rows[0].value, b"21");
 
-        let done = parse_page(Reply::Array(vec![
-            Reply::Bulk(b"0".to_vec()),
-            Reply::Array(vec![]),
-        ]))
-        .unwrap();
+        let done = parse_page(Reply::Array(vec![Reply::Bulk(b"0".to_vec()), Reply::Array(vec![])]))
+            .unwrap();
         assert_eq!(done.cursor, None);
         assert!(done.rows.is_empty());
     }

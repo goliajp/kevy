@@ -25,8 +25,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use kevy_chaos::{
-    Harness, HarnessConfig, KillSignal, WriterPool, pick_free_port,
-    pipelined_verify_counts,
+    Harness, HarnessConfig, KillSignal, WriterPool, pick_free_port, pipelined_verify_counts,
 };
 
 #[test]
@@ -47,10 +46,7 @@ fn sigterm_drains_cleanly_no_lost_writes() {
     let pool = WriterPool::spawn(port, 4, Arc::clone(&stop));
     std::thread::sleep(Duration::from_secs(2));
     let pre_signal = pool.log.lock().unwrap().len();
-    assert!(
-        pre_signal >= 100,
-        "vacuous test: only {pre_signal} ACKs before SIGTERM"
-    );
+    assert!(pre_signal >= 100, "vacuous test: only {pre_signal} ACKs before SIGTERM");
     eprintln!("sigterm_drain: {pre_signal} ACKs before SIGTERM");
 
     // Send SIGTERM, then give the drain ~3 s to complete.
@@ -76,10 +72,7 @@ fn sigterm_drains_cleanly_no_lost_writes() {
     // present (SIGTERM drain MUST fsync the everysec window).
     h.restart().expect("restart");
     let (present, lost, corrupted) = pipelined_verify_counts(port, &acks);
-    eprintln!(
-        "sigterm_drain: present={present} lost={lost} corrupted={}",
-        corrupted.len()
-    );
+    eprintln!("sigterm_drain: present={present} lost={lost} corrupted={}", corrupted.len());
     assert!(
         corrupted.is_empty(),
         "CORRUPTION DETECTED after SIGTERM drain: {}",

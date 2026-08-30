@@ -252,15 +252,11 @@ impl Store {
                 Ok(next)
             }
             IncrOutcome::Insert(next) => {
-                self.insert_entry(
-                    SmallBytes::from_slice(key),
-                    Entry::new(Value::Int(next), None),
-                );
+                self.insert_entry(SmallBytes::from_slice(key), Entry::new(Value::Int(next), None));
                 Ok(next)
             }
         }
     }
-
 }
 
 enum IncrOutcome {

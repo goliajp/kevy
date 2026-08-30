@@ -24,9 +24,7 @@ pub fn run_embed_cli(dir: &str, command: &[Vec<u8>]) -> ExitCode {
     let scratch = match copy_data_files(src) {
         Ok(Some(s)) => s,
         Ok(None) => {
-            eprintln!(
-                "kevy-cli: --embed: no kevy data files (dump-*.rdb / aof-*.aof) in '{dir}'"
-            );
+            eprintln!("kevy-cli: --embed: no kevy data files (dump-*.rdb / aof-*.aof) in '{dir}'");
             return ExitCode::FAILURE;
         }
         Err(e) => {
@@ -81,10 +79,7 @@ fn embed_repl(store: &Store, dir: &str, nshards: usize) -> ExitCode {
             Ok(_) => {}
             Err(_) => return ExitCode::FAILURE,
         }
-        let argv: Vec<Vec<u8>> = line
-            .split_whitespace()
-            .map(|t| t.as_bytes().to_vec())
-            .collect();
+        let argv: Vec<Vec<u8>> = line.split_whitespace().map(|t| t.as_bytes().to_vec()).collect();
         if argv.is_empty() {
             continue;
         }

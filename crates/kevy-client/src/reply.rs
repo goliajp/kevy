@@ -54,16 +54,14 @@ pub(crate) fn store_err(e: kevy_embedded::StoreError) -> KevyError {
 
 /// Parse a wire numeric bulk (score / distance) as `f64`.
 pub(crate) fn num_f64(b: &[u8]) -> Result<f64, KevyError> {
-    let s = std::str::from_utf8(b)
-        .map_err(|_| KevyError::Protocol("non-utf8 number reply".into()))?;
-    s.parse()
-        .map_err(|_| KevyError::Protocol(format!("bad float reply: {s}")))
+    let s =
+        std::str::from_utf8(b).map_err(|_| KevyError::Protocol("non-utf8 number reply".into()))?;
+    s.parse().map_err(|_| KevyError::Protocol(format!("bad float reply: {s}")))
 }
 
 /// Parse a wire numeric bulk (counter / byte size) as `u64`.
 pub(crate) fn num_u64(b: &[u8]) -> Result<u64, KevyError> {
-    let s = std::str::from_utf8(b)
-        .map_err(|_| KevyError::Protocol("non-utf8 number reply".into()))?;
-    s.parse()
-        .map_err(|_| KevyError::Protocol(format!("bad integer reply: {s}")))
+    let s =
+        std::str::from_utf8(b).map_err(|_| KevyError::Protocol("non-utf8 number reply".into()))?;
+    s.parse().map_err(|_| KevyError::Protocol(format!("bad integer reply: {s}")))
 }

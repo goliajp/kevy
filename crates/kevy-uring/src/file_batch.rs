@@ -39,9 +39,8 @@ impl IoUring {
                 // SAFETY: `buf` lives in `bufs`, which is neither
                 // resized nor dropped until this chunk's completions
                 // are reaped below (leaked on the error path).
-                let ok = unsafe {
-                    self.prep_read_at(r.fd, buf.as_mut_ptr(), r.len, r.offset, i as u64)
-                };
+                let ok =
+                    unsafe { self.prep_read_at(r.fd, buf.as_mut_ptr(), r.len, r.offset, i as u64) };
                 if !ok {
                     break; // SQ full — submit this chunk first
                 }

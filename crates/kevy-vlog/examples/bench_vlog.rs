@@ -36,9 +36,12 @@ fn bench(label: &str, payload: usize, n: u32) {
 }
 
 fn main() {
-    for (label, payload, n) in
-        [("64 B", 64, 100_000), ("1 KiB", 1024, 100_000), ("4 KiB", 4096, 50_000), ("64 KiB", 65536, 5_000)]
-    {
+    for (label, payload, n) in [
+        ("64 B", 64, 100_000),
+        ("1 KiB", 1024, 100_000),
+        ("4 KiB", 4096, 50_000),
+        ("64 KiB", 65536, 5_000),
+    ] {
         bench(label, payload, n);
     }
 }

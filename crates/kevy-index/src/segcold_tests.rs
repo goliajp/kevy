@@ -50,9 +50,7 @@ fn seg_keys_sort_exactly_like_tree_entries() {
     byte_sorted.sort_by_key(|(val, k)| seg_key(val, k));
     // Str and I64 never meet in one real index; compare within groups.
     let split = |es: &[(IndexValue, Vec<u8>)]| {
-        es.iter()
-            .cloned()
-            .partition::<Vec<_>, _>(|(val, _)| matches!(val, IndexValue::I64(_)))
+        es.iter().cloned().partition::<Vec<_>, _>(|(val, _)| matches!(val, IndexValue::I64(_)))
     };
     assert_eq!(split(&tree_sorted), split(&byte_sorted));
 }

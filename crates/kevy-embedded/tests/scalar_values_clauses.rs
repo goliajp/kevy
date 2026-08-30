@@ -55,8 +55,23 @@ fn seeded() -> Store {
     let r = run(
         &s,
         &[
-            b"IDX.CREATE", b"vals", b"ON", b"PREFIX", b"v:", b"FIELD", b"age", b"TYPE", b"i64",
-            b"KIND", b"range", b"VALUES", b"city", b"price", b"TYPES", b"str", b"i64",
+            b"IDX.CREATE",
+            b"vals",
+            b"ON",
+            b"PREFIX",
+            b"v:",
+            b"FIELD",
+            b"age",
+            b"TYPE",
+            b"i64",
+            b"KIND",
+            b"range",
+            b"VALUES",
+            b"city",
+            b"price",
+            b"TYPES",
+            b"str",
+            b"i64",
         ],
     );
     assert_eq!(r, b"+OK\r\n");
@@ -75,8 +90,17 @@ fn plain_range_reply_is_byte_stable_next_to_a_values_free_twin() {
     let r = run(
         &s,
         &[
-            b"IDX.CREATE", b"plain", b"ON", b"PREFIX", b"v:", b"FIELD", b"age", b"TYPE", b"i64",
-            b"KIND", b"range",
+            b"IDX.CREATE",
+            b"plain",
+            b"ON",
+            b"PREFIX",
+            b"v:",
+            b"FIELD",
+            b"age",
+            b"TYPE",
+            b"i64",
+            b"KIND",
+            b"range",
         ],
     );
     assert_eq!(r, b"+OK\r\n");
@@ -281,21 +305,42 @@ fn values_on_unique_kind_and_refused_on_agg() {
     let r = run(
         &s,
         &[
-            b"IDX.CREATE", b"uniq", b"ON", b"PREFIX", b"u:", b"FIELD", b"sku", b"TYPE", b"str",
-            b"KIND", b"unique", b"VALUES", b"city",
+            b"IDX.CREATE",
+            b"uniq",
+            b"ON",
+            b"PREFIX",
+            b"u:",
+            b"FIELD",
+            b"sku",
+            b"TYPE",
+            b"str",
+            b"KIND",
+            b"unique",
+            b"VALUES",
+            b"city",
         ],
     );
     assert_eq!(r, b"+OK\r\n");
-    let r = run(
-        &s,
-        &[b"IDX.QUERY", b"uniq", b"EQ", b"a1", b"FILTER", b"city", b"EQ", b"tokyo"],
-    );
+    let r = run(&s, &[b"IDX.QUERY", b"uniq", b"EQ", b"a1", b"FILTER", b"city", b"EQ", b"tokyo"]);
     assert_eq!(r, flat_reply(&[("u:1", "a1")]));
     let r = run(
         &s,
         &[
-            b"IDX.CREATE", b"agg", b"ON", b"PREFIX", b"u:", b"FIELD", b"n", b"TYPE", b"i64",
-            b"KIND", b"agg", b"GROUPBY", b"city", b"VALUES", b"city",
+            b"IDX.CREATE",
+            b"agg",
+            b"ON",
+            b"PREFIX",
+            b"u:",
+            b"FIELD",
+            b"n",
+            b"TYPE",
+            b"i64",
+            b"KIND",
+            b"agg",
+            b"GROUPBY",
+            b"city",
+            b"VALUES",
+            b"city",
         ],
     );
     assert_eq!(r, b"-ERR VALUES requires KIND text|range|unique\r\n".to_vec());
@@ -312,8 +357,19 @@ fn scalar_values_survive_a_restart_via_the_sidecar() {
         let r = run(
             &s,
             &[
-                b"IDX.CREATE", b"vals", b"ON", b"PREFIX", b"v:", b"FIELD", b"age", b"TYPE",
-                b"i64", b"KIND", b"range", b"VALUES", b"city",
+                b"IDX.CREATE",
+                b"vals",
+                b"ON",
+                b"PREFIX",
+                b"v:",
+                b"FIELD",
+                b"age",
+                b"TYPE",
+                b"i64",
+                b"KIND",
+                b"range",
+                b"VALUES",
+                b"city",
             ],
         );
         assert_eq!(r, b"+OK\r\n");

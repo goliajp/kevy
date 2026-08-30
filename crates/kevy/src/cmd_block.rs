@@ -24,10 +24,7 @@ use kevy_rt::{BlockHint, BlockKind, Route, Store, XGroupCtx};
 /// supported since v2-7e: the runtime parks the conn on its origin shard and
 /// fans watch registrations out to each key's owning shard (see
 /// `kevy_rt::block_xshard`). The keys are returned in request order.
-pub(crate) fn block_hint_for_verb<A: ArgvView + ?Sized>(
-    upper: &[u8],
-    args: &A,
-) -> BlockHint {
+pub(crate) fn block_hint_for_verb<A: ArgvView + ?Sized>(upper: &[u8], args: &A) -> BlockHint {
     match upper {
         b"BLPOP" => blpop_hint(BlockKind::Blpop, args),
         b"BRPOP" => blpop_hint(BlockKind::Brpop, args),
@@ -86,11 +83,7 @@ fn blpop_hint<A: ArgvView + ?Sized>(kind: BlockKind, args: &A) -> BlockHint {
     }
     let timeout_ms = (secs * 1000.0) as u64;
     let keys = (1..timeout_idx).map(|i| args[i].to_vec()).collect();
-    BlockHint::Block {
-        kind,
-        keys,
-        timeout_ms,
-    }
+    BlockHint::Block { kind, keys, timeout_ms }
 }
 
 /// XREAD: scan `[COUNT n] [BLOCK ms] STREAMS key …` to discover both
@@ -131,11 +124,7 @@ fn xread_block_hint<A: ArgvView + ?Sized>(args: &A) -> BlockHint {
                 let Some(keys) = streams_keys(args, i + 1) else {
                     return BlockHint::None;
                 };
-                return BlockHint::Block {
-                    kind: BlockKind::XReadBlock,
-                    keys,
-                    timeout_ms: bm,
-                };
+                return BlockHint::Block { kind: BlockKind::XReadBlock, keys, timeout_ms: bm };
             }
             _ => return BlockHint::None,
         }
@@ -195,11 +184,7 @@ fn xreadgroup_block_hint<A: ArgvView + ?Sized>(args: &A) -> BlockHint {
                 // cmd_xreadgroup leaves `out` untouched only when at
                 // least one stream is in `>` mode, so a replay-mode
                 // call produces output and the registration is skipped.
-                return BlockHint::Block {
-                    kind: BlockKind::XReadGroupBlock,
-                    keys,
-                    timeout_ms: bm,
-                };
+                return BlockHint::Block { kind: BlockKind::XReadGroupBlock, keys, timeout_ms: bm };
             }
             _ => return BlockHint::None,
         }
@@ -261,9 +246,8 @@ fn xread_streams_route<A: ArgvView + ?Sized>(
     if n == 1 {
         return Route::Single(start);
     }
-    let streams = (0..n)
-        .map(|j| (args[start + j].to_vec(), args[start + n + j].to_vec()))
-        .collect();
+    let streams =
+        (0..n).map(|j| (args[start + j].to_vec(), args[start + n + j].to_vec())).collect();
     Route::XReadGather { streams, count, group }
 }
 
@@ -292,11 +276,8 @@ pub(crate) fn xreadgroup_route<A: ArgvView + ?Sized>(args: &A) -> Route {
                 if i + 1 >= args.len() {
                     return Route::Local; // cmd_xreadgroup emits the error
                 }
-                let group = XGroupCtx {
-                    group: args[2].to_vec(),
-                    consumer: args[3].to_vec(),
-                    noack,
-                };
+                let group =
+                    XGroupCtx { group: args[2].to_vec(), consumer: args[3].to_vec(), noack };
                 return xread_streams_route(args, i + 1, count, Some(group));
             }
             b"COUNT" => {
@@ -349,10 +330,7 @@ pub(crate) fn wake_idx_for_verb(upper: &[u8]) -> Option<u8> {
 /// the only way this is reached with malformed input is a logic bug
 /// elsewhere; returning the original argv keeps the existing failure
 /// mode (timeout) instead of crashing the shard.
-pub(crate) fn xread_resolve_argv<A: ArgvView + ?Sized>(
-    store: &mut Store,
-    args: &A,
-) -> Argv {
+pub(crate) fn xread_resolve_argv<A: ArgvView + ?Sized>(store: &mut Store, args: &A) -> Argv {
     let Some(streams_at) = find_xread_streams_token(args) else {
         return args.to_argv();
     };
@@ -370,7 +348,8 @@ pub(crate) fn xread_resolve_argv<A: ArgvView + ?Sized>(
         if pos < n && arg == b"$" {
             let key = args.get(keys_start + pos).expect("in range");
             let resolved = store
-                .xread_dollar_last_id(key).map_or_else(|_| arg.to_vec(), kevy_store::StreamId::encode);
+                .xread_dollar_last_id(key)
+                .map_or_else(|_| arg.to_vec(), kevy_store::StreamId::encode);
             out.push(&resolved);
         } else {
             out.push(arg);

@@ -138,11 +138,7 @@ fn page_keys(reply: &[u8]) -> Vec<Vec<u8>> {
 
 /// The value paired with `label` in a label/value bulk sequence.
 fn labeled(fields: &[Vec<u8>], label: &[u8]) -> Vec<Vec<u8>> {
-    fields
-        .windows(2)
-        .filter(|w| w[0] == label)
-        .map(|w| w[1].clone())
-        .collect()
+    fields.windows(2).filter(|w| w[0] == label).map(|w| w[1].clone()).collect()
 }
 
 fn keys_eq(reply: &[u8], want: &[&str]) {
@@ -196,13 +192,50 @@ fn wait_cold_stable(s: &mut std::net::TcpStream) -> u64 {
 // ---- the shared "user" table -------------------------------------------
 
 const DECLARE_USER: &[&[u8]] = &[
-    b"TABLE.DECLARE", b"user", b"PREFIX", b"u:", b"PK", b"id",
-    b"COLUMN", b"id", b"str", b"COLUMN", b"name", b"str", b"COLUMN", b"age", b"i64",
-    b"COLUMN", b"dept", b"str", b"COLUMN", b"email", b"str", b"COLUMN", b"deleted", b"i64",
-    b"INDEX", b"age", b"RANGE", b"VALUES", b"dept", b"name", b"deleted",
-    b"INDEX", b"dept", b"RANGE",
-    b"INDEX", b"email", b"UNIQUE",
-    b"ORDERPATH", b"by_dept_age", b"ON", b"dept", b"THEN", b"age", b"DESC",
+    b"TABLE.DECLARE",
+    b"user",
+    b"PREFIX",
+    b"u:",
+    b"PK",
+    b"id",
+    b"COLUMN",
+    b"id",
+    b"str",
+    b"COLUMN",
+    b"name",
+    b"str",
+    b"COLUMN",
+    b"age",
+    b"i64",
+    b"COLUMN",
+    b"dept",
+    b"str",
+    b"COLUMN",
+    b"email",
+    b"str",
+    b"COLUMN",
+    b"deleted",
+    b"i64",
+    b"INDEX",
+    b"age",
+    b"RANGE",
+    b"VALUES",
+    b"dept",
+    b"name",
+    b"deleted",
+    b"INDEX",
+    b"dept",
+    b"RANGE",
+    b"INDEX",
+    b"email",
+    b"UNIQUE",
+    b"ORDERPATH",
+    b"by_dept_age",
+    b"ON",
+    b"dept",
+    b"THEN",
+    b"age",
+    b"DESC",
 ];
 
 /// (key, name, age, dept, email) — u:6 deliberately has NO dept (the
@@ -219,8 +252,18 @@ const ROWS: &[(&str, &str, &str, &str, &str)] = &[
 fn write_rows(s: &mut std::net::TcpStream) {
     for (key, name, age, dept, email) in ROWS {
         let mut argv: Vec<&[u8]> = vec![
-            b"HSET", key.as_bytes(), b"id", &key.as_bytes()[2..], b"name", name.as_bytes(),
-            b"age", age.as_bytes(), b"email", email.as_bytes(), b"deleted", b"0",
+            b"HSET",
+            key.as_bytes(),
+            b"id",
+            &key.as_bytes()[2..],
+            b"name",
+            name.as_bytes(),
+            b"age",
+            age.as_bytes(),
+            b"email",
+            email.as_bytes(),
+            b"deleted",
+            b"0",
         ];
         if !dept.is_empty() {
             argv.push(b"dept");
@@ -287,27 +330,55 @@ fn r2_r3_r4_point_range_compose_and_residual_filter() {
     let mut c = srv.connect();
     setup_user(&mut c);
     // R2 — point + range through the compiled paths.
-    keys_eq(&cmd(&mut c, &[b"IDX.QUERY", b"user.age", b"RANGE", b"25", b"45"]),
-        &["u:3", "u:1", "u:4", "u:2"]);
+    keys_eq(
+        &cmd(&mut c, &[b"IDX.QUERY", b"user.age", b"RANGE", b"25", b"45"]),
+        &["u:3", "u:1", "u:4", "u:2"],
+    );
     keys_eq(&cmd(&mut c, &[b"IDX.QUERY", b"user.dept", b"EQ", b"ops"]), &["u:3", "u:5"]);
     keys_eq(&cmd(&mut c, &[b"IDX.QUERY", b"user.email", b"EQ", b"d@x"]), &["u:4"]);
     // R3 — AND/OR composition over two compiled indexes.
-    let and = cmd(&mut c, &[
-        b"IDX.QUERY", b"COMPOSE", b"AND", b"user.age", b"RANGE", b"30", b"50",
-        b"user.dept", b"EQ", b"eng",
-    ]);
+    let and = cmd(
+        &mut c,
+        &[
+            b"IDX.QUERY",
+            b"COMPOSE",
+            b"AND",
+            b"user.age",
+            b"RANGE",
+            b"30",
+            b"50",
+            b"user.dept",
+            b"EQ",
+            b"eng",
+        ],
+    );
     let and_keys: Vec<Vec<u8>> = bulks(&and)[1..].to_vec();
     assert_eq!(and_keys, vec![b"u:1".to_vec(), b"u:2".to_vec(), b"u:4".to_vec()], "AND, key order");
-    let or = cmd(&mut c, &[
-        b"IDX.QUERY", b"COMPOSE", b"OR", b"user.age", b"RANGE", b"60", b"100",
-        b"user.dept", b"EQ", b"ops",
-    ]);
+    let or = cmd(
+        &mut c,
+        &[
+            b"IDX.QUERY",
+            b"COMPOSE",
+            b"OR",
+            b"user.age",
+            b"RANGE",
+            b"60",
+            b"100",
+            b"user.dept",
+            b"EQ",
+            b"ops",
+        ],
+    );
     let or_keys: Vec<Vec<u8>> = bulks(&or)[1..].to_vec();
     assert_eq!(or_keys, vec![b"u:3".to_vec(), b"u:5".to_vec(), b"u:6".to_vec()]);
     // R4 — residual FILTER on a declared VALUES column (T2's G1).
-    keys_eq(&cmd(&mut c, &[
-        b"IDX.QUERY", b"user.age", b"RANGE", b"0", b"100", b"FILTER", b"dept", b"EQ", b"eng",
-    ]), &["u:1", "u:4", "u:2"]);
+    keys_eq(
+        &cmd(
+            &mut c,
+            &[b"IDX.QUERY", b"user.age", b"RANGE", b"0", b"100", b"FILTER", b"dept", b"EQ", b"eng"],
+        ),
+        &["u:1", "u:4", "u:2"],
+    );
 }
 
 #[test]
@@ -316,18 +387,37 @@ fn r5_order_by_single_and_composite_orderpath() {
     let mut c = srv.connect();
     setup_user(&mut c);
     // Single-column ORDER BY = the SORT clause over a stored VALUES column.
-    keys_eq(&cmd(&mut c, &[
-        b"IDX.QUERY", b"user.age", b"RANGE", b"0", b"100", b"SORT", b"name", b"ASC",
-    ]), &["u:1", "u:2", "u:3", "u:4", "u:5", "u:6"]);
+    keys_eq(
+        &cmd(
+            &mut c,
+            &[b"IDX.QUERY", b"user.age", b"RANGE", b"0", b"100", b"SORT", b"name", b"ASC"],
+        ),
+        &["u:1", "u:2", "u:3", "u:4", "u:5", "u:6"],
+    );
     // Composite ORDERPATH: equality prefix, DESC component.
-    keys_eq(&cmd(&mut c, &[
-        b"IDX.QUERY", b"user.by_dept_age", b"WHERE", b"dept", b"EQ", b"eng",
-    ]), &["u:2", "u:4", "u:1"]);
+    keys_eq(
+        &cmd(&mut c, &[b"IDX.QUERY", b"user.by_dept_age", b"WHERE", b"dept", b"EQ", b"eng"]),
+        &["u:2", "u:4", "u:1"],
+    );
     // Equality prefix + range on the next component (still age DESC).
-    keys_eq(&cmd(&mut c, &[
-        b"IDX.QUERY", b"user.by_dept_age", b"WHERE", b"dept", b"EQ", b"eng",
-        b"RANGE", b"age", b"31", b"46",
-    ]), &["u:2", "u:4"]);
+    keys_eq(
+        &cmd(
+            &mut c,
+            &[
+                b"IDX.QUERY",
+                b"user.by_dept_age",
+                b"WHERE",
+                b"dept",
+                b"EQ",
+                b"eng",
+                b"RANGE",
+                b"age",
+                b"31",
+                b"46",
+            ],
+        ),
+        &["u:2", "u:4"],
+    );
     // Missing-column exclusion: u:6 (no dept) exists on the plain path…
     keys_eq(&cmd(&mut c, &[b"IDX.QUERY", b"user.age", b"EQ", b"61"]), &["u:6"]);
     // …but is EXCLUDED from the composite: eng(3) + ops(2) = 5 of 6 rows.
@@ -346,12 +436,14 @@ fn r6_limit_offset_two_pages_do_not_overlap() {
     let srv = Server::start(None);
     let mut c = srv.connect();
     setup_user(&mut c);
-    let p1 = page_keys(&cmd(&mut c, &[
-        b"IDX.QUERY", b"user.age", b"RANGE", b"0", b"100", b"LIMIT", b"3",
-    ]));
-    let p2 = page_keys(&cmd(&mut c, &[
-        b"IDX.QUERY", b"user.age", b"RANGE", b"0", b"100", b"LIMIT", b"3", b"OFFSET", b"3",
-    ]));
+    let p1 = page_keys(&cmd(
+        &mut c,
+        &[b"IDX.QUERY", b"user.age", b"RANGE", b"0", b"100", b"LIMIT", b"3"],
+    ));
+    let p2 = page_keys(&cmd(
+        &mut c,
+        &[b"IDX.QUERY", b"user.age", b"RANGE", b"0", b"100", b"LIMIT", b"3", b"OFFSET", b"3"],
+    ));
     assert_eq!(p1.len(), 3);
     assert_eq!(p2.len(), 3);
     assert!(p1.iter().all(|k| !p2.contains(k)), "pages must not overlap: {p1:?} vs {p2:?}");
@@ -370,10 +462,26 @@ fn r7_count_and_the_agg_kind_is_a_named_refusal() {
     // Agg indexes are NOT table-compiled in v1: the grammar refuses the
     // kind by name (declare one directly via IDX.CREATE KIND agg).
     assert_eq!(
-        cmd(&mut c, &[
-            b"TABLE.DECLARE", b"t2", b"PREFIX", b"t2:", b"PK", b"id",
-            b"COLUMN", b"id", b"str", b"COLUMN", b"n", b"i64", b"INDEX", b"n", b"agg",
-        ]),
+        cmd(
+            &mut c,
+            &[
+                b"TABLE.DECLARE",
+                b"t2",
+                b"PREFIX",
+                b"t2:",
+                b"PK",
+                b"id",
+                b"COLUMN",
+                b"id",
+                b"str",
+                b"COLUMN",
+                b"n",
+                b"i64",
+                b"INDEX",
+                b"n",
+                b"agg",
+            ]
+        ),
         b"-ERR INDEX kind must be range|unique\r\n"
     );
 }
@@ -384,17 +492,33 @@ fn r8_via_lookup_over_a_compiled_index_unchanged() {
     let mut c = srv.connect();
     setup_user(&mut c);
     assert_eq!(
-        cmd(&mut c, &[
-            b"VIEW.CREATE", b"engers", b"QUERY", b"user.dept", b"EQ", b"eng",
-            b"ORDER", b"BY", b"user.age", b"VIA", b"{key}",
-        ]),
+        cmd(
+            &mut c,
+            &[
+                b"VIEW.CREATE",
+                b"engers",
+                b"QUERY",
+                b"user.dept",
+                b"EQ",
+                b"eng",
+                b"ORDER",
+                b"BY",
+                b"user.age",
+                b"VIA",
+                b"{key}",
+            ]
+        ),
         b"+OK\r\n"
     );
     let reply = cmd(&mut c, &[b"VIEW.QUERY", b"engers", b"FIELDS", b"name"]);
     let b = bulks(&reply);
     for name in [b"alice".as_slice(), b"bob", b"dave"] {
-        assert!(b.iter().any(|v| v == name), "VIA hydration missing {}: {}",
-            String::from_utf8_lossy(name), String::from_utf8_lossy(&reply));
+        assert!(
+            b.iter().any(|v| v == name),
+            "VIA hydration missing {}: {}",
+            String::from_utf8_lossy(name),
+            String::from_utf8_lossy(&reply)
+        );
     }
 }
 
@@ -436,7 +560,10 @@ fn r11_uniqueness_sequence_and_soft_delete_recipes() {
     keys_eq(&cmd(&mut c, &[b"IDX.QUERY", b"user.email", b"EQ", b"a@x"]), &["u:1", "u:2"]);
     for i in 7..14u32 {
         let key = format!("u:{i}");
-        let reply = cmd(&mut c, &[b"HSET", key.as_bytes(), b"id", format!("{i}").as_bytes(), b"email", b"a@x"]);
+        let reply = cmd(
+            &mut c,
+            &[b"HSET", key.as_bytes(), b"id", format!("{i}").as_bytes(), b"email", b"a@x"],
+        );
         assert!(reply.starts_with(b":"), "HSET {key}");
     }
     let verify = bulks(&cmd(&mut c, &[b"IDX.VERIFY", b"user.email"]));
@@ -448,9 +575,23 @@ fn r11_uniqueness_sequence_and_soft_delete_recipes() {
     // Soft delete: a flag column + residual FILTER (deleted stays a
     // declared VALUES column of user.age).
     assert!(cmd(&mut c, &[b"HSET", b"u:5", b"deleted", b"1"]).starts_with(b":"));
-    keys_eq(&cmd(&mut c, &[
-        b"IDX.QUERY", b"user.age", b"RANGE", b"0", b"100", b"FILTER", b"deleted", b"EQ", b"0",
-    ]), &["u:3", "u:1", "u:4", "u:2", "u:6"]);
+    keys_eq(
+        &cmd(
+            &mut c,
+            &[
+                b"IDX.QUERY",
+                b"user.age",
+                b"RANGE",
+                b"0",
+                b"100",
+                b"FILTER",
+                b"deleted",
+                b"EQ",
+                b"0",
+            ],
+        ),
+        &["u:3", "u:1", "u:4", "u:2", "u:6"],
+    );
 }
 
 #[test]
@@ -472,7 +613,9 @@ fn c2_table_verify_clean_after_declare_and_writes() {
         vec![b"6".to_vec(), b"5".to_vec(), b"6".to_vec(), b"5".to_vec()]
     );
     // Poison one typed column and the spot check names it.
-    assert!(cmd(&mut c, &[b"HSET", b"u:9", b"id", b"9", b"age", b"not-a-number"]).starts_with(b":"));
+    assert!(
+        cmd(&mut c, &[b"HSET", b"u:9", b"id", b"9", b"age", b"not-a-number"]).starts_with(b":")
+    );
     let verify = bulks(&cmd(&mut c, &[b"TABLE.VERIFY", b"user"]));
     assert_eq!(labeled(&verify, b"spotcheck_type_mismatches"), vec![b"1".to_vec()]);
     // v4.1-V4: the row→index direction classifies the poisoned row by
@@ -504,13 +647,30 @@ fn r9_c3_the_refusal_surface_errors_by_name() {
     assert!(cmd(&mut c, &[b"SELECT", b"*", b"FROM", b"user"]).starts_with(b"-ERR"));
     // TABLE.DECLARE refusals are named, never silent.
     assert_eq!(
-        cmd(&mut c, &[b"TABLE.DECLARE", b"t3", b"PREFIX", b"t3:", b"PK", b"id",
-            b"COLUMN", b"id", b"str", b"INDEX", b"ghost", b"RANGE"]),
+        cmd(
+            &mut c,
+            &[
+                b"TABLE.DECLARE",
+                b"t3",
+                b"PREFIX",
+                b"t3:",
+                b"PK",
+                b"id",
+                b"COLUMN",
+                b"id",
+                b"str",
+                b"INDEX",
+                b"ghost",
+                b"RANGE"
+            ]
+        ),
         b"-ERR INDEX names unknown column 'ghost'\r\n"
     );
     assert_eq!(
-        cmd(&mut c, &[b"TABLE.DECLARE", b"t3", b"PREFIX", b"t3:", b"PK", b"id",
-            b"COLUMN", b"id", b"uuid"]),
+        cmd(
+            &mut c,
+            &[b"TABLE.DECLARE", b"t3", b"PREFIX", b"t3:", b"PK", b"id", b"COLUMN", b"id", b"uuid"]
+        ),
         b"-ERR COLUMN type must be i64|f64|str\r\n"
     );
     // WHERE on a non-composite index is a named error, never a scan.
@@ -543,21 +703,52 @@ fn c6_index_only_queries_touch_zero_cold_rows() {
         let key = format!("row:{i:02}");
         let n = i.to_string();
         let cval = if i % 2 == 0 { "even" } else { "odd" };
-        let reply = cmd(&mut c, &[
-            b"HSET", key.as_bytes(), b"id", n.as_bytes(), b"n", n.as_bytes(),
-            b"c", cval.as_bytes(), b"pad", &pad,
-        ]);
+        let reply = cmd(
+            &mut c,
+            &[
+                b"HSET",
+                key.as_bytes(),
+                b"id",
+                n.as_bytes(),
+                b"n",
+                n.as_bytes(),
+                b"c",
+                cval.as_bytes(),
+                b"pad",
+                &pad,
+            ],
+        );
         assert!(reply.starts_with(b":"), "HSET {key}");
     }
     let cold_keys = wait_cold_stable(&mut c);
     assert!(cold_keys > 8, "need most rows cold, got {cold_keys}");
     // Declare AFTER the rows went cold — the backfill runs on the peek.
     assert_eq!(
-        cmd(&mut c, &[
-            b"TABLE.DECLARE", b"bench", b"PREFIX", b"row:", b"PK", b"id",
-            b"COLUMN", b"id", b"str", b"COLUMN", b"n", b"i64", b"COLUMN", b"c", b"str",
-            b"INDEX", b"n", b"RANGE", b"VALUES", b"c",
-        ]),
+        cmd(
+            &mut c,
+            &[
+                b"TABLE.DECLARE",
+                b"bench",
+                b"PREFIX",
+                b"row:",
+                b"PK",
+                b"id",
+                b"COLUMN",
+                b"id",
+                b"str",
+                b"COLUMN",
+                b"n",
+                b"i64",
+                b"COLUMN",
+                b"c",
+                b"str",
+                b"INDEX",
+                b"n",
+                b"RANGE",
+                b"VALUES",
+                b"c",
+            ]
+        ),
         b"+OK\r\n"
     );
     wait_ready(&mut c, &[b"IDX.QUERY", b"bench.n", b"RANGE", b"0", b"0"]);
@@ -569,14 +760,27 @@ fn c6_index_only_queries_touch_zero_cold_rows() {
 
     // Index-only: FILTER / SORT / COUNT without FIELDS = zero preads.
     let pre = common::snapshot_at_rest("tier gauges", || info_gauges(&mut c, TIER_GAUGES));
-    let filtered = page_keys(&cmd(&mut c, &[
-        b"IDX.QUERY", b"bench.n", b"RANGE", b"0", b"100", b"FILTER", b"c", b"EQ", b"even",
-        b"LIMIT", b"100",
-    ]));
+    let filtered = page_keys(&cmd(
+        &mut c,
+        &[
+            b"IDX.QUERY",
+            b"bench.n",
+            b"RANGE",
+            b"0",
+            b"100",
+            b"FILTER",
+            b"c",
+            b"EQ",
+            b"even",
+            b"LIMIT",
+            b"100",
+        ],
+    ));
     assert_eq!(filtered.len(), 30);
-    let sorted = page_keys(&cmd(&mut c, &[
-        b"IDX.QUERY", b"bench.n", b"RANGE", b"0", b"100", b"SORT", b"c", b"ASC", b"LIMIT", b"10",
-    ]));
+    let sorted = page_keys(&cmd(
+        &mut c,
+        &[b"IDX.QUERY", b"bench.n", b"RANGE", b"0", b"100", b"SORT", b"c", b"ASC", b"LIMIT", b"10"],
+    ));
     assert_eq!(sorted.len(), 10);
     assert_eq!(cmd(&mut c, &[b"IDX.COUNT", b"bench.n", b"RANGE", b"0", b"100"]), b":60\r\n");
     let post = common::snapshot_at_rest("tier gauges", || info_gauges(&mut c, TIER_GAUGES));
@@ -585,9 +789,10 @@ fn c6_index_only_queries_touch_zero_cold_rows() {
 
     // With FIELDS: exactly one read per RETURNED row, still no promotion.
     let pre = common::snapshot_at_rest("tier gauges", || info_gauges(&mut c, TIER_GAUGES));
-    let page = cmd(&mut c, &[
-        b"IDX.QUERY", b"bench.n", b"RANGE", b"0", b"9", b"LIMIT", b"10", b"FIELDS", b"c", b"n",
-    ]);
+    let page = cmd(
+        &mut c,
+        &[b"IDX.QUERY", b"bench.n", b"RANGE", b"0", b"9", b"LIMIT", b"10", b"FIELDS", b"c", b"n"],
+    );
     let returned = bulks(&page).iter().filter(|b| b.starts_with(b"row:")).count() as u64;
     assert_eq!(returned, 10);
     let post = common::snapshot_at_rest("tier gauges", || info_gauges(&mut c, TIER_GAUGES));
@@ -613,18 +818,49 @@ fn d2_fully_cold_table_index_only_queries_pay_zero_cold_reads() {
         let key = format!("row:{i:02}");
         let n = i.to_string();
         let cval = if i % 2 == 0 { "even" } else { "odd" };
-        let reply = cmd(&mut c, &[
-            b"HSET", key.as_bytes(), b"id", n.as_bytes(), b"n", n.as_bytes(),
-            b"c", cval.as_bytes(), b"pad", &pad,
-        ]);
+        let reply = cmd(
+            &mut c,
+            &[
+                b"HSET",
+                key.as_bytes(),
+                b"id",
+                n.as_bytes(),
+                b"n",
+                n.as_bytes(),
+                b"c",
+                cval.as_bytes(),
+                b"pad",
+                &pad,
+            ],
+        );
         assert!(reply.starts_with(b":"), "HSET {key}");
     }
     assert_eq!(
-        cmd(&mut c, &[
-            b"TABLE.DECLARE", b"bench", b"PREFIX", b"row:", b"PK", b"id",
-            b"COLUMN", b"id", b"str", b"COLUMN", b"n", b"i64", b"COLUMN", b"c", b"str",
-            b"INDEX", b"n", b"RANGE", b"VALUES", b"c",
-        ]),
+        cmd(
+            &mut c,
+            &[
+                b"TABLE.DECLARE",
+                b"bench",
+                b"PREFIX",
+                b"row:",
+                b"PK",
+                b"id",
+                b"COLUMN",
+                b"id",
+                b"str",
+                b"COLUMN",
+                b"n",
+                b"i64",
+                b"COLUMN",
+                b"c",
+                b"str",
+                b"INDEX",
+                b"n",
+                b"RANGE",
+                b"VALUES",
+                b"c",
+            ]
+        ),
         b"+OK\r\n"
     );
     wait_ready(&mut c, &[b"IDX.QUERY", b"bench.n", b"RANGE", b"0", b"0"]);
@@ -642,29 +878,51 @@ fn d2_fully_cold_table_index_only_queries_pay_zero_cold_reads() {
     assert!(cold >= 60, "every row must be cold, got {cold}");
 
     let pre = common::snapshot_at_rest("tier gauges", || info_gauges(&mut c, TIER_GAUGES));
-    let filtered = page_keys(&cmd(&mut c, &[
-        b"IDX.QUERY", b"bench.n", b"RANGE", b"0", b"100", b"FILTER", b"c", b"EQ", b"even",
-        b"LIMIT", b"100",
-    ]));
+    let filtered = page_keys(&cmd(
+        &mut c,
+        &[
+            b"IDX.QUERY",
+            b"bench.n",
+            b"RANGE",
+            b"0",
+            b"100",
+            b"FILTER",
+            b"c",
+            b"EQ",
+            b"even",
+            b"LIMIT",
+            b"100",
+        ],
+    ));
     assert_eq!(filtered.len(), 30);
-    let sorted = page_keys(&cmd(&mut c, &[
-        b"IDX.QUERY", b"bench.n", b"RANGE", b"0", b"100", b"SORT", b"c", b"DESC", b"LIMIT", b"10",
-    ]));
+    let sorted = page_keys(&cmd(
+        &mut c,
+        &[
+            b"IDX.QUERY",
+            b"bench.n",
+            b"RANGE",
+            b"0",
+            b"100",
+            b"SORT",
+            b"c",
+            b"DESC",
+            b"LIMIT",
+            b"10",
+        ],
+    ));
     assert_eq!(sorted.len(), 10);
     assert_eq!(cmd(&mut c, &[b"IDX.COUNT", b"bench.n", b"RANGE", b"0", b"100"]), b":60\r\n");
     let mid = common::snapshot_at_rest("tier gauges", || info_gauges(&mut c, TIER_GAUGES));
-    assert_eq!(
-        mid[0] - pre[0],
-        0,
-        "index-only queries on a FULLY-cold table must touch zero rows"
-    );
+    assert_eq!(mid[0] - pre[0], 0, "index-only queries on a FULLY-cold table must touch zero rows");
     assert_eq!(mid[1] - pre[1], 0);
 
     // And with FIELDS on the fully-cold table: EXACTLY one read per row.
-    let before_fields = common::snapshot_at_rest("tier gauges", || info_gauges(&mut c, TIER_GAUGES));
-    let page = cmd(&mut c, &[
-        b"IDX.QUERY", b"bench.n", b"RANGE", b"0", b"9", b"LIMIT", b"10", b"FIELDS", b"c", b"n",
-    ]);
+    let before_fields =
+        common::snapshot_at_rest("tier gauges", || info_gauges(&mut c, TIER_GAUGES));
+    let page = cmd(
+        &mut c,
+        &[b"IDX.QUERY", b"bench.n", b"RANGE", b"0", b"9", b"LIMIT", b"10", b"FIELDS", b"c", b"n"],
+    );
     let returned = bulks(&page).iter().filter(|b| b.starts_with(b"row:")).count() as u64;
     assert_eq!(returned, 10);
     let post = common::snapshot_at_rest("tier gauges", || info_gauges(&mut c, TIER_GAUGES));
@@ -704,9 +962,19 @@ fn ensure_and_replace_are_the_boot_verbs() {
 
     // A bad REPLACE refuses before the old table drops.
     let bad: &[&[u8]] = &[
-        b"TABLE.REPLACE", b"user", b"PREFIX", b"u:", b"PK", b"id",
-        b"COLUMN", b"id", b"str",
-        b"ORDERPATH", b"by_ghost", b"ON", b"ghost",
+        b"TABLE.REPLACE",
+        b"user",
+        b"PREFIX",
+        b"u:",
+        b"PK",
+        b"id",
+        b"COLUMN",
+        b"id",
+        b"str",
+        b"ORDERPATH",
+        b"by_ghost",
+        b"ON",
+        b"ghost",
     ];
     let r = cmd(&mut c, bad);
     assert!(r.starts_with(b"-ERR"), "bad replacement refuses");

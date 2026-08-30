@@ -25,7 +25,6 @@ impl Ord for Far {
     }
 }
 
-
 impl Hnsw {
     pub(super) fn greedy_at(&self, mut cur: u32, target: u32, layer: usize) -> u32 {
         let tv = &self.nodes[target as usize].vec;
@@ -51,13 +50,26 @@ impl Hnsw {
     /// Beam search at one layer. `include_dead` keeps tombstones as
     /// ROUTING waypoints (their links still connect the graph);
     /// results always include them so the caller can filter.
-    pub(super) fn search_layer(&self, start: u32, target: u32, layer: usize, ef: usize, _for_insert: bool) -> Vec<(f32, u32)> {
+    pub(super) fn search_layer(
+        &self,
+        start: u32,
+        target: u32,
+        layer: usize,
+        ef: usize,
+        _for_insert: bool,
+    ) -> Vec<(f32, u32)> {
         let tv = &self.nodes[target as usize].vec;
         self.search_layer_vec(start, tv, layer, ef)
     }
 
     // LOC-WAIVER: per-query beam-search hot body (63% of EF16 KNN self-time; see comment below).
-    pub(super) fn search_layer_vec(&self, start: u32, tv: &[f32], layer: usize, ef: usize) -> Vec<(f32, u32)> {
+    pub(super) fn search_layer_vec(
+        &self,
+        start: u32,
+        tv: &[f32],
+        layer: usize,
+        ef: usize,
+    ) -> Vec<(f32, u32)> {
         // The visited set is the beam search's hottest structure —
         // perf-record put 63% of the EF16 KNN shape inside this fn,
         // with the std HashMap's SipHash showing as a distinct cost.
@@ -138,7 +150,12 @@ impl Hnsw {
     ///   the cluster's bridges to the rest of the graph are all
     ///   pruned — the cluster becomes an island); the backfill also
     ///   prefers non-co-located candidates for the same reason.
-    pub(super) fn select_diverse(&self, sorted: &[(f32, u32)], cap: usize, node_vec: &[f32]) -> Vec<u32> {
+    pub(super) fn select_diverse(
+        &self,
+        sorted: &[(f32, u32)],
+        cap: usize,
+        node_vec: &[f32],
+    ) -> Vec<u32> {
         // Co-location = vector equality, NOT distance 0 (ip distance
         // of co-located vectors is -|v|², and 0 for orthogonal ones).
         let co = |c: u32| self.nodes[c as usize].vec == node_vec;
@@ -156,9 +173,9 @@ impl Hnsw {
                 continue;
             }
             let cv = &self.nodes[c as usize].vec;
-            let diverse = kept.iter().all(|&s| {
-                d <= self.params.distance.eval(&self.nodes[s as usize].vec, cv)
-            });
+            let diverse = kept
+                .iter()
+                .all(|&s| d <= self.params.distance.eval(&self.nodes[s as usize].vec, cv));
             if diverse {
                 kept.push(c);
             }
@@ -177,5 +194,4 @@ impl Hnsw {
         }
         kept
     }
-
 }

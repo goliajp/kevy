@@ -50,22 +50,14 @@ pub(crate) fn parse_cluster_slots(reply: Reply) -> io::Result<Vec<SlotRange>> {
         {
             return Err(bad());
         }
-        out.push(SlotRange {
-            start: start as u16,
-            end: end as u16,
-            host,
-            port: port as u16,
-        });
+        out.push(SlotRange { start: start as u16, end: end as u16, host, port: port as u16 });
     }
     Ok(out)
 }
 
 pub(crate) fn build_topology(ranges: &[SlotRange]) -> io::Result<Topology> {
     if ranges.is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "CLUSTER SLOTS returned no ranges",
-        ));
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "CLUSTER SLOTS returned no ranges"));
     }
     let mut nodes: Vec<(String, u16)> = Vec::new();
     let mut slot_to_shard = vec![0u16; NUM_SLOTS];

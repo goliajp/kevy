@@ -17,8 +17,16 @@ use core::cmp::Ordering;
 #[test]
 fn eq_agrees_with_ord() {
     let interesting = [
-        0.0_f64, -0.0, 1.0, -1.0, f64::MIN, f64::MAX,
-        f64::INFINITY, f64::NEG_INFINITY, 1e-308, -1e-308,
+        0.0_f64,
+        -0.0,
+        1.0,
+        -1.0,
+        f64::MIN,
+        f64::MAX,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        1e-308,
+        -1e-308,
     ];
     for &a in &interesting {
         for &b in &interesting {

@@ -101,21 +101,12 @@ impl Store {
             },
         }
         match self.remove_entry(key) {
-            Some(Entry {
-                value: Value::Str(v),
-                ..
-            }) => Ok(Some(v.into_vec())),
-            Some(Entry {
-                value: Value::Int(n),
-                ..
-            }) => {
+            Some(Entry { value: Value::Str(v), .. }) => Ok(Some(v.into_vec())),
+            Some(Entry { value: Value::Int(n), .. }) => {
                 let mut buf = itoa_i64_stack();
                 Ok(Some(format_i64_into(n, &mut buf).to_vec()))
             }
-            Some(Entry {
-                value: Value::ArcBulk(a),
-                ..
-            }) => Ok(Some(a.as_ref().to_vec())),
+            Some(Entry { value: Value::ArcBulk(a), .. }) => Ok(Some(a.as_ref().to_vec())),
             _ => Ok(None),
         }
     }
@@ -123,26 +114,28 @@ impl Store {
     /// `INCRBYFLOAT` — returns the new value formatted as Redis would. Preserves TTL.
     pub fn incr_by_float(&mut self, key: &[u8], delta: f64) -> Result<Vec<u8>, StoreError> {
         self.tier_resolve(key, crate::value::COLD_TAG_STRING)?;
-        let outcome = if let Some(e) = self.live_entry_mut(key) { match &mut e.value {
-            Value::Str(v) => {
-                let cur = parse_f64(v.as_slice()).ok_or(StoreError::NotFloat)?;
-                let bytes = float_incr_bytes(cur, delta)?;
-                *v = SmallBytes::from_slice(&bytes);
-                FloatOutcome::Reweigh(bytes)
+        let outcome = if let Some(e) = self.live_entry_mut(key) {
+            match &mut e.value {
+                Value::Str(v) => {
+                    let cur = parse_f64(v.as_slice()).ok_or(StoreError::NotFloat)?;
+                    let bytes = float_incr_bytes(cur, delta)?;
+                    *v = SmallBytes::from_slice(&bytes);
+                    FloatOutcome::Reweigh(bytes)
+                }
+                Value::Int(n) => {
+                    let bytes = float_incr_bytes(*n as f64, delta)?;
+                    e.value = Value::Str(SmallBytes::from_slice(&bytes));
+                    FloatOutcome::Reweigh(bytes)
+                }
+                Value::ArcBulk(a) => {
+                    let cur = parse_f64(a.as_ref()).ok_or(StoreError::NotFloat)?;
+                    let bytes = float_incr_bytes(cur, delta)?;
+                    e.value = Value::Str(SmallBytes::from_slice(&bytes));
+                    FloatOutcome::Reweigh(bytes)
+                }
+                _ => return Err(StoreError::WrongType),
             }
-            Value::Int(n) => {
-                let bytes = float_incr_bytes(*n as f64, delta)?;
-                e.value = Value::Str(SmallBytes::from_slice(&bytes));
-                FloatOutcome::Reweigh(bytes)
-            }
-            Value::ArcBulk(a) => {
-                let cur = parse_f64(a.as_ref()).ok_or(StoreError::NotFloat)?;
-                let bytes = float_incr_bytes(cur, delta)?;
-                e.value = Value::Str(SmallBytes::from_slice(&bytes));
-                FloatOutcome::Reweigh(bytes)
-            }
-            _ => return Err(StoreError::WrongType),
-        } } else {
+        } else {
             // Absent/expired ⇒ start from 0.0.
             if !delta.is_finite() {
                 return Err(StoreError::NotFloat);

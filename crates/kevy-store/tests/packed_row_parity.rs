@@ -96,10 +96,7 @@ fn the_whole_row_verbs_agree_with_the_general_hash() {
         q.sort();
         q
     };
-    assert_eq!(
-        paired(p.hgetall(b"row:1").unwrap()),
-        paired(g.hgetall(b"row:1").unwrap())
-    );
+    assert_eq!(paired(p.hgetall(b"row:1").unwrap()), paired(g.hgetall(b"row:1").unwrap()));
 }
 
 /// The mutating verbs a catch-all had been answering for.

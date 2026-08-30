@@ -116,8 +116,16 @@ fn cmd_list(s: &Store, out: &mut Vec<u8>) {
 /// reply shape; embedded builds are synchronous, so never BUILDING).
 fn cmd_verify(s: &Store, name: &[u8], out: &mut Vec<u8>) {
     const LABELS: [&[u8]; 10] = [
-        b"entries", b"bytes", b"coerce_failures", b"duplicates", b"drift", b"checked",
-        b"excluded", b"absent", b"rows", b"missing",
+        b"entries",
+        b"bytes",
+        b"coerce_failures",
+        b"duplicates",
+        b"drift",
+        b"checked",
+        b"excluded",
+        b"absent",
+        b"rows",
+        b"missing",
     ];
     let Ok(report) = s.table_verify_report(name) else {
         let n = String::from_utf8_lossy(name);
@@ -128,10 +136,21 @@ fn cmd_verify(s: &Store, name: &[u8], out: &mut Vec<u8>) {
         .per_index
         .into_iter()
         .map(|i| {
-            (i.name, [
-                i.entries, i.approx_bytes, i.coerce_failures, i.duplicates, i.drift, i.checked,
-                i.excluded, i.absent, i.rows, i.missing,
-            ])
+            (
+                i.name,
+                [
+                    i.entries,
+                    i.approx_bytes,
+                    i.coerce_failures,
+                    i.duplicates,
+                    i.drift,
+                    i.checked,
+                    i.excluded,
+                    i.absent,
+                    i.rows,
+                    i.missing,
+                ],
+            )
         })
         .collect();
     arr(out, per_index.len() + 1);

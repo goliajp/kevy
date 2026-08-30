@@ -38,12 +38,7 @@ unsafe impl Send for ProvidedBufRing {}
 impl ProvidedBufRing {
     /// Allocate a provided-buffer ring and register it with the kernel under
     /// `bgid`. Called from [`IoUring::register_buf_ring`](crate::IoUring::register_buf_ring).
-    pub(crate) fn new(
-        ring_fd: c_int,
-        entries: u16,
-        buf_size: u32,
-        bgid: u16,
-    ) -> io::Result<Self> {
+    pub(crate) fn new(ring_fd: c_int, entries: u16, buf_size: u32, bgid: u16) -> io::Result<Self> {
         assert!(entries.is_power_of_two(), "buf ring entries must be power of two");
         let (ring, ring_len) = Self::mmap_buf_ring(entries)?;
         if let Err(e) = Self::register_with_kernel(ring_fd, ring, entries, bgid) {
@@ -91,7 +86,12 @@ impl ProvidedBufRing {
     }
 
     /// Tell the kernel about a newly allocated buf ring under `bgid`.
-    fn register_with_kernel(ring_fd: c_int, ring: *mut u8, entries: u16, bgid: u16) -> io::Result<()> {
+    fn register_with_kernel(
+        ring_fd: c_int,
+        ring: *mut u8,
+        entries: u16,
+        bgid: u16,
+    ) -> io::Result<()> {
         let reg = IoUringBufReg {
             ring_addr: ring as u64,
             ring_entries: u32::from(entries),
@@ -166,13 +166,8 @@ impl Drop for ProvidedBufRing {
     fn drop(&mut self) {
         // Best-effort unregister (EBADF if the ring fd is already closed — fine),
         // then unmap. The slab Vec frees itself.
-        let reg = IoUringBufReg {
-            ring_addr: 0,
-            ring_entries: 0,
-            bgid: self.bgid,
-            pad: 0,
-            resv: [0; 3],
-        };
+        let reg =
+            IoUringBufReg { ring_addr: 0, ring_entries: 0, bgid: self.bgid, pad: 0, resv: [0; 3] };
         // SAFETY: kernel-side cleanup; the mapping is ours to free.
         unsafe {
             ffi::syscall(

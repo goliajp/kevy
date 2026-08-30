@@ -174,7 +174,6 @@ fn server_surface_has_dispatch_literals() {
     }
 }
 
-
 /// VERB_META families whose verbs carry no keyspace semantics at all,
 /// and so have no OP_TABLE row.
 ///
@@ -246,7 +245,8 @@ fn every_keyspace_verb_has_a_registry_row() {
         "{healed_groups:?} are named as carrying no keyspace semantics but have rows now"
     );
 
-    let healed_verbs: Vec<&str> = ADMIN_VERBS.iter().filter(|v| rows.contains(*v)).copied().collect();
+    let healed_verbs: Vec<&str> =
+        ADMIN_VERBS.iter().filter(|v| rows.contains(*v)).copied().collect();
     assert!(
         healed_verbs.is_empty(),
         "{healed_verbs:?} are named as administrative but have rows now — drop them from \

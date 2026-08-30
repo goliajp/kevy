@@ -159,11 +159,7 @@ pub(crate) fn re_parse_alt(
         *p += 1;
         branches.push(re_parse_concat(chars, p, depth, ng)?);
     }
-    if branches.len() == 1 {
-        Ok(branches.pop().unwrap())
-    } else {
-        Ok(ReNode::Alt(branches))
-    }
+    if branches.len() == 1 { Ok(branches.pop().unwrap()) } else { Ok(ReNode::Alt(branches)) }
 }
 
 // LOC-WAIVER: vendored spg ERE engine core (byte-identical fork); splitting upstream's tested matcher/parser injects bugs without readability gain.
@@ -189,34 +185,19 @@ pub(crate) fn re_parse_concat(
                     // (non-greedy): `X*?`. Consume it and record the
                     // laziness on the node.
                     let greedy = !consume_lazy_suffix(chars, p);
-                    ReNode::Quant {
-                        inner: Box::new(atom),
-                        min: 0,
-                        max: None,
-                        greedy,
-                    }
+                    ReNode::Quant { inner: Box::new(atom), min: 0, max: None, greedy }
                 }
                 '+' => {
                     *p += 1;
                     let greedy = !consume_lazy_suffix(chars, p);
-                    ReNode::Quant {
-                        inner: Box::new(atom),
-                        min: 1,
-                        max: None,
-                        greedy,
-                    }
+                    ReNode::Quant { inner: Box::new(atom), min: 1, max: None, greedy }
                 }
                 '?' => {
                     *p += 1;
                     // `X??` — lazy optional. The second `?` is the
                     // laziness marker, not a literal.
                     let greedy = !consume_lazy_suffix(chars, p);
-                    ReNode::Quant {
-                        inner: Box::new(atom),
-                        min: 0,
-                        max: Some(1),
-                        greedy,
-                    }
+                    ReNode::Quant { inner: Box::new(atom), min: 0, max: Some(1), greedy }
                 }
                 '{' => {
                     // counted repetition. Only a
@@ -230,12 +211,7 @@ pub(crate) fn re_parse_concat(
                             // A trailing `?` makes the counted
                             // repetition lazy: `X{m,n}?`.
                             let greedy = !consume_lazy_suffix(chars, p);
-                            ReNode::Quant {
-                                inner: Box::new(atom),
-                                min,
-                                max,
-                                greedy,
-                            }
+                            ReNode::Quant { inner: Box::new(atom), min, max, greedy }
                         }
                         None => atom,
                     }
@@ -247,11 +223,7 @@ pub(crate) fn re_parse_concat(
         };
         items.push(quantified);
     }
-    if items.len() == 1 {
-        Ok(items.pop().unwrap())
-    } else {
-        Ok(ReNode::Concat(items))
-    }
+    if items.len() == 1 { Ok(items.pop().unwrap()) } else { Ok(ReNode::Concat(items)) }
 }
 
 // LOC-WAIVER: vendored spg ERE engine core (byte-identical fork); splitting upstream's tested matcher/parser injects bugs without readability gain.
@@ -326,15 +298,9 @@ pub(crate) fn re_parse_atom(
             }
             *p += 1;
             match lookahead {
-                Some(negative) => Ok(ReNode::Lookahead {
-                    negative,
-                    inner: Box::new(inner),
-                }),
+                Some(negative) => Ok(ReNode::Lookahead { negative, inner: Box::new(inner) }),
                 None => match group_idx {
-                    Some(idx) => Ok(ReNode::Group {
-                        idx,
-                        inner: Box::new(inner),
-                    }),
+                    Some(idx) => Ok(ReNode::Group { idx, inner: Box::new(inner) }),
                     None => Ok(inner),
                 },
             }
@@ -366,10 +332,9 @@ pub(crate) fn re_parse_atom(
                     members: vec![ClassMember::Range('0', '9')],
                     negated: false,
                 }),
-                'D' => Ok(ReNode::Class {
-                    members: vec![ClassMember::Range('0', '9')],
-                    negated: true,
-                }),
+                'D' => {
+                    Ok(ReNode::Class { members: vec![ClassMember::Range('0', '9')], negated: true })
+                }
                 'w' => Ok(ReNode::Class {
                     members: vec![
                         ClassMember::Range('a', 'z'),
@@ -388,14 +353,8 @@ pub(crate) fn re_parse_atom(
                     ],
                     negated: true,
                 }),
-                's' => Ok(ReNode::Class {
-                    members: shortcut_members('s'),
-                    negated: false,
-                }),
-                'S' => Ok(ReNode::Class {
-                    members: shortcut_members('s'),
-                    negated: true,
-                }),
+                's' => Ok(ReNode::Class { members: shortcut_members('s'), negated: false }),
+                'S' => Ok(ReNode::Class { members: shortcut_members('s'), negated: true }),
                 // PG ARE word-boundary assertions (constraint escapes,
                 // regc_lex.c). Only `\m \M \y \Y` are word boundaries.
                 // Verified against live PG18: `\b`/`\B` are NOT boundaries
@@ -437,10 +396,9 @@ pub(crate) fn re_parse_atom(
                             detail: format!("regex compile: `\\{esc}` needs hex digits"),
                         });
                     }
-                    let code =
-                        u32::from_str_radix(&hex, 16).map_err(|_| ReErr::TypeMismatch {
-                            detail: "regex compile: bad numeric escape".into(),
-                        })?;
+                    let code = u32::from_str_radix(&hex, 16).map_err(|_| ReErr::TypeMismatch {
+                        detail: "regex compile: bad numeric escape".into(),
+                    })?;
                     Ok(ReNode::Literal(char::from_u32(code).unwrap_or('\u{fffd}')))
                 }
                 // `\1`..`\9` backreference. A

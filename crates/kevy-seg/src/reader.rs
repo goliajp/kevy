@@ -26,10 +26,10 @@ impl Seg {
     /// # Examples
     ///
     /// ```
-/// use kevy_seg::{SegBuilder, Seg};
-/// # let dir = std::env::temp_dir().join(format!("kevy-seg-doc-{}", std::process::id()));
-/// # std::fs::create_dir_all(&dir).unwrap();
-/// let path = dir.join("open.seg");
+    /// use kevy_seg::{SegBuilder, Seg};
+    /// # let dir = std::env::temp_dir().join(format!("kevy-seg-doc-{}", std::process::id()));
+    /// # std::fs::create_dir_all(&dir).unwrap();
+    /// let path = dir.join("open.seg");
     /// let mut b = SegBuilder::create(&path).unwrap();
     /// b.push(b"k", b"v").unwrap();
     /// b.finish().unwrap();
@@ -57,10 +57,9 @@ impl Seg {
         let footer_len = u32::from_le_bytes(tr[8..12].try_into().expect("4")) as usize;
         // Checked: both values are attacker-controlled bytes at this
         // point, and a wrapping sum must refuse, not panic.
-        let closes = (footer_len as u64)
-            .checked_add(TRAILER as u64)
-            .and_then(|t| footer_off.checked_add(t))
-            == Some(len);
+        let closes =
+            (footer_len as u64).checked_add(TRAILER as u64).and_then(|t| footer_off.checked_add(t))
+                == Some(len);
         if !closes {
             return Err(SegError::Corrupt("trailer does not close the file"));
         }
@@ -68,21 +67,17 @@ impl Seg {
         f.read_exact_at(&mut footer, footer_off)?;
         let (records, data_pages, min_key, max_key, fences) =
             layout::decode_footer(&footer).ok_or(SegError::Corrupt("footer crc/shape"))?;
-        Ok(Self {
-            f,
-            meta: SegMeta { records, data_pages, min_key, max_key },
-            fences,
-        })
+        Ok(Self { f, meta: SegMeta { records, data_pages, min_key, max_key }, fences })
     }
 
     /// Sealed-segment summary.
     /// # Examples
     ///
     /// ```
-/// use kevy_seg::{SegBuilder, Seg};
-/// # let dir = std::env::temp_dir().join(format!("kevy-seg-doc-{}", std::process::id()));
-/// # std::fs::create_dir_all(&dir).unwrap();
-/// let path = dir.join("meta.seg");
+    /// use kevy_seg::{SegBuilder, Seg};
+    /// # let dir = std::env::temp_dir().join(format!("kevy-seg-doc-{}", std::process::id()));
+    /// # std::fs::create_dir_all(&dir).unwrap();
+    /// let path = dir.join("meta.seg");
     /// let mut b = SegBuilder::create(&path).unwrap();
     /// b.push(b"a", b"1").unwrap();
     /// b.push(b"z", b"2").unwrap();
@@ -99,10 +94,10 @@ impl Seg {
     /// # Examples
     ///
     /// ```
-/// use kevy_seg::{SegBuilder, Seg};
-/// # let dir = std::env::temp_dir().join(format!("kevy-seg-doc-{}", std::process::id()));
-/// # std::fs::create_dir_all(&dir).unwrap();
-/// let path = dir.join("get.seg");
+    /// use kevy_seg::{SegBuilder, Seg};
+    /// # let dir = std::env::temp_dir().join(format!("kevy-seg-doc-{}", std::process::id()));
+    /// # std::fs::create_dir_all(&dir).unwrap();
+    /// let path = dir.join("get.seg");
     /// let mut b = SegBuilder::create(&path).unwrap();
     /// b.push(b"a", b"1").unwrap();
     /// b.finish().unwrap();
@@ -136,10 +131,10 @@ impl Seg {
     /// # Examples
     ///
     /// ```
-/// use kevy_seg::{SegBuilder, Seg};
-/// # let dir = std::env::temp_dir().join(format!("kevy-seg-doc-{}", std::process::id()));
-/// # std::fs::create_dir_all(&dir).unwrap();
-/// let path = dir.join("range.seg");
+    /// use kevy_seg::{SegBuilder, Seg};
+    /// # let dir = std::env::temp_dir().join(format!("kevy-seg-doc-{}", std::process::id()));
+    /// # std::fs::create_dir_all(&dir).unwrap();
+    /// let path = dir.join("range.seg");
     /// let mut b = SegBuilder::create(&path).unwrap();
     /// for k in [b"a", b"b", b"c", b"d"] { b.push(k, b"v").unwrap(); }
     /// b.finish().unwrap();
@@ -166,10 +161,10 @@ impl Seg {
     /// # Examples
     ///
     /// ```
-/// use kevy_seg::{SegBuilder, Seg};
-/// # let dir = std::env::temp_dir().join(format!("kevy-seg-doc-{}", std::process::id()));
-/// # std::fs::create_dir_all(&dir).unwrap();
-/// let path = dir.join("count.seg");
+    /// use kevy_seg::{SegBuilder, Seg};
+    /// # let dir = std::env::temp_dir().join(format!("kevy-seg-doc-{}", std::process::id()));
+    /// # std::fs::create_dir_all(&dir).unwrap();
+    /// let path = dir.join("count.seg");
     /// let mut b = SegBuilder::create(&path).unwrap();
     /// for k in [b"a", b"b", b"c", b"d"] { b.push(k, b"v").unwrap(); }
     /// b.finish().unwrap();
@@ -231,12 +226,10 @@ impl Seg {
         match cell {
             Cell::Inline { payload, .. } => Ok(payload.to_vec()),
             Cell::Overflow { total_len, first_page, n_pages, .. } => {
-                let mut out =
-                    Vec::with_capacity(layout::capped_capacity(total_len as usize));
+                let mut out = Vec::with_capacity(layout::capped_capacity(total_len as usize));
                 for p in 0..n_pages {
                     let mut buf = vec![0u8; PAGE];
-                    self.f
-                        .read_exact_at(&mut buf, u64::from(first_page + p) * PAGE as u64)?;
+                    self.f.read_exact_at(&mut buf, u64::from(first_page + p) * PAGE as u64)?;
                     if !layout::page_intact(&buf) {
                         return Err(SegError::Corrupt("overflow page crc"));
                     }

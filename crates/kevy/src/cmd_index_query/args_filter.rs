@@ -27,10 +27,8 @@ pub(crate) fn parse_filter(argv: &[Vec<u8>], i: usize) -> Option<(FilterArg, usi
     let field = argv.get(i + 1)?.clone();
     let mode = argv.get(i + 2)?;
     if mode.eq_ignore_ascii_case(b"RANGE") {
-        let shape = FilterShape::Range {
-            min: argv.get(i + 3)?.clone(),
-            max: argv.get(i + 4)?.clone(),
-        };
+        let shape =
+            FilterShape::Range { min: argv.get(i + 3)?.clone(), max: argv.get(i + 4)?.clone() };
         Some((FilterArg { field, shape }, i + 5))
     } else if mode.eq_ignore_ascii_case(b"EQ") {
         let shape = FilterShape::Eq { value: argv.get(i + 3)?.clone() };
@@ -61,16 +59,11 @@ pub(crate) fn apply_filter(argv: &[Vec<u8>], i: usize, a: &mut MatchArgs) -> Opt
     Some(next)
 }
 
-
 /// The clauses that name a stored value field: `SORT`, `DISTINCT`,
 /// `FACET`. Grouped because they share a shape — a field name, sometimes
 /// with a modifier — and because it keeps the main clause dispatcher
 /// readable as the surface grows.
-pub(crate) fn apply_value_clause(
-    argv: &[Vec<u8>],
-    i: usize,
-    a: &mut MatchArgs,
-) -> Option<usize> {
+pub(crate) fn apply_value_clause(argv: &[Vec<u8>], i: usize, a: &mut MatchArgs) -> Option<usize> {
     let kw = &argv[i];
     if kw.eq_ignore_ascii_case(b"SORT") {
         apply_sort(argv, i, a)

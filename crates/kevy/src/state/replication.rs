@@ -206,7 +206,9 @@ impl ReplicationState {
     /// unreachability.
     pub(crate) fn start_runners(&self, upstream: (IpAddr, u16)) -> Result<(), CmdError> {
         if self.inboxes.lock().expect("inboxes poisoned").is_some() {
-            return Err(CmdError::Wire("replica inboxes not wired into a runtime (kevy::serve required)"));
+            return Err(CmdError::Wire(
+                "replica inboxes not wired into a runtime (kevy::serve required)",
+            ));
         }
         let _transition = self.retarget.lock().expect("retarget poisoned");
         // Stop any prior fleet before installing the new one. The old

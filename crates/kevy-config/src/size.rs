@@ -20,9 +20,7 @@ pub fn parse_size(input: &str) -> Result<u64, String> {
         return Err(format!("empty size literal: {input:?}"));
     }
     // Split into numeric prefix + unit suffix.
-    let split_at = s
-        .find(|c: char| !c.is_ascii_digit())
-        .unwrap_or(s.len());
+    let split_at = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
     let (num_part, unit_part) = s.split_at(split_at);
     if num_part.is_empty() {
         return Err(format!("size literal {input:?} has no number"));
@@ -32,9 +30,8 @@ pub fn parse_size(input: &str) -> Result<u64, String> {
         .map_err(|_| format!("size literal {input:?} has invalid number: {num_part:?}"))?;
     let multiplier = parse_unit(unit_part.trim())
         .ok_or_else(|| format!("size literal {input:?} has unknown unit: {unit_part:?}"))?;
-    let total = n
-        .checked_mul(multiplier)
-        .ok_or_else(|| format!("size literal {input:?} overflows u64"))?;
+    let total =
+        n.checked_mul(multiplier).ok_or_else(|| format!("size literal {input:?} overflows u64"))?;
     // The TOML lexer reads bare integers as i64 and the emitter writes
     // sizes as bare integers, so a size past i64::MAX would serialize
     // but never reparse (the config_toml fuzz target caught the

@@ -92,7 +92,9 @@ fn maxscore_pruning_matches_naive() {
         v.truncate(limit);
         v
     };
-    for (q, limit) in [("rare common", 10), ("mid common", 5), ("rare mid common", 3), ("common", 7)] {
+    for (q, limit) in
+        [("rare common", 10), ("mid common", 5), ("rare mid common", 3), ("common", 7)]
+    {
         let got: Vec<(Vec<u8>, f64)> =
             s.matches(q.as_bytes(), limit).into_iter().map(|m| (m.key, m.score)).collect();
         let want = naive(q, limit);
@@ -164,8 +166,14 @@ fn limit_zero_is_empty() {
 #[test]
 fn a_weighted_field_outranks_the_same_term_in_a_plain_one() {
     let mut s = TextSegment::new();
-    s.apply_fields(b"doc:title", Some(&[(b"rust".to_vec(), 3.0), (b"filler text here".to_vec(), 1.0)]));
-    s.apply_fields(b"doc:body", Some(&[(b"other".to_vec(), 3.0), (b"rust filler text".to_vec(), 1.0)]));
+    s.apply_fields(
+        b"doc:title",
+        Some(&[(b"rust".to_vec(), 3.0), (b"filler text here".to_vec(), 1.0)]),
+    );
+    s.apply_fields(
+        b"doc:body",
+        Some(&[(b"other".to_vec(), 3.0), (b"rust filler text".to_vec(), 1.0)]),
+    );
     let hits = s.matches(b"rust", 10);
     assert_eq!(hits.len(), 2);
     assert_eq!(hits[0].key, b"doc:title".to_vec(), "the weighted field must rank first");
@@ -762,7 +770,8 @@ fn typo_df_terms_include_neighbours() {
 /// Two fields — a short title and a longer body — so a scoped query has
 /// something to score differently from the whole document.
 fn field_seg() -> TextSegment {
-    let mut s = TextSegment::with_shape(SegmentShape { fields: 2, positions: true, ..Default::default() });
+    let mut s =
+        TextSegment::with_shape(SegmentShape { fields: 2, positions: true, ..Default::default() });
     s.apply_fields(
         b"a",
         Some(&[(b"rust engine".to_vec(), 1.0), (b"a long body about gardening".to_vec(), 1.0)]),
@@ -803,8 +812,7 @@ fn scoping_restricts_matches_to_the_named_field() {
     // Unscoped, both documents mention rust.
     assert_eq!(s.matches_query(b"rust", 10, None).len(), 2);
     // Only "a" has it in the title.
-    let title =
-        s.matches_query_with(b"rust", 10, QueryOpts { fields: &[0], ..Default::default() });
+    let title = s.matches_query_with(b"rust", 10, QueryOpts { fields: &[0], ..Default::default() });
     assert_eq!(title.len(), 1, "one title mentions rust");
     assert_eq!(title[0].key, b"a".to_vec());
     // Only "b" has it in the body.
@@ -851,7 +859,8 @@ fn scoped_document_frequency_counts_a_document_once() {
 
 #[test]
 fn scoped_phrase_must_lie_inside_one_wanted_field() {
-    let mut s = TextSegment::with_shape(SegmentShape { fields: 2, positions: true, ..Default::default() });
+    let mut s =
+        TextSegment::with_shape(SegmentShape { fields: 2, positions: true, ..Default::default() });
     s.apply_fields(
         b"a",
         Some(&[(b"quick brown".to_vec(), 1.0), (b"nothing to see".to_vec(), 1.0)]),
@@ -905,8 +914,7 @@ fn reindexing_keeps_the_field_channel_exact() {
         b"a",
         Some(&[(b"garden engine".to_vec(), 1.0), (b"now the body says rust".to_vec(), 1.0)]),
     );
-    let title =
-        s.matches_query_with(b"rust", 10, QueryOpts { fields: &[0], ..Default::default() });
+    let title = s.matches_query_with(b"rust", 10, QueryOpts { fields: &[0], ..Default::default() });
     assert!(title.is_empty(), "no title mentions rust any more");
     let mut body: Vec<Vec<u8>> = s
         .matches_query_with(b"rust", 10, QueryOpts { fields: &[1], ..Default::default() })
@@ -1065,19 +1073,15 @@ fn sorting_selects_by_the_key_not_the_score() {
         let n: u32 = std::str::from_utf8(raw).ok()?.parse().ok()?;
         Some(n.to_be_bytes().to_vec())
     };
-    let asc = QueryOpts {
-        sort: Some(Sort { field: 0, desc: false, key: &key }),
-        ..Default::default()
-    };
+    let asc =
+        QueryOpts { sort: Some(Sort { field: 0, desc: false, key: &key }), ..Default::default() };
     let hits = s.matches_query_with(b"rust", 3, asc);
     let keys: Vec<Vec<u8>> = hits.iter().map(|h| h.key.clone()).collect();
     assert_eq!(keys, vec![b"d9".to_vec(), b"d8".to_vec(), b"d7".to_vec()], "cheapest first");
     assert!(hits[0].score < hits[2].score, "scores are still reported, just not ranked by");
 
-    let desc = QueryOpts {
-        sort: Some(Sort { field: 0, desc: true, key: &key }),
-        ..Default::default()
-    };
+    let desc =
+        QueryOpts { sort: Some(Sort { field: 0, desc: true, key: &key }), ..Default::default() };
     let keys: Vec<Vec<u8>> =
         s.matches_query_with(b"rust", 3, desc).into_iter().map(|h| h.key).collect();
     assert_eq!(keys, vec![b"d0".to_vec(), b"d1".to_vec(), b"d2".to_vec()], "priciest first");
@@ -1249,12 +1253,8 @@ fn a_filter_restricts_the_counts_but_distinct_does_not() {
     // FILTER: a filtered-out document did not match, so it is not counted.
     let dear = |v: &[u8]| v != b"10";
     let pred = [Filter { field: 0, test: &dear }];
-    let r = s.matches_query_faceted(
-        b"rust",
-        10,
-        QueryOpts { filter: &pred, ..Default::default() },
-        &f,
-    );
+    let r =
+        s.matches_query_faceted(b"rust", 10, QueryOpts { filter: &pred, ..Default::default() }, &f);
     assert_eq!(r.facets[0].len(), 2, "the excluded price has no bucket");
 
     // DISTINCT: collapsing decides what is SHOWN, not what matched, so

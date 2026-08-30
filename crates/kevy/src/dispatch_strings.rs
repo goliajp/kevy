@@ -11,12 +11,10 @@
 //! different file layouts in their head.
 
 use crate::cmd::{
-    ERR_NOT_INT, arg_f64, arg_i64, cmd_incr, cmd_incr_by, cmd_setex, emit_int_result,
-    store_err, wrong_args,
+    ERR_NOT_INT, arg_f64, arg_i64, cmd_incr, cmd_incr_by, cmd_setex, emit_int_result, store_err,
+    wrong_args,
 };
-use kevy_resp::{
-    ArgvView, encode_bulk, encode_error, encode_integer, encode_null_bulk,
-};
+use kevy_resp::{ArgvView, encode_bulk, encode_error, encode_integer, encode_null_bulk};
 use kevy_store::Store;
 
 /// String commands.

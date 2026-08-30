@@ -81,8 +81,7 @@ pub fn binop(op: char, a: &Scalar, b: &Scalar) -> Result<Scalar, ScalarError> {
 }
 
 fn checked(v: Option<i64>) -> Result<Scalar, ScalarError> {
-    v.map(Scalar::Int)
-        .ok_or(ScalarError::Domain { func: "operator", what: "bigint out of range" })
+    v.map(Scalar::Int).ok_or(ScalarError::Domain { func: "operator", what: "bigint out of range" })
 }
 
 fn float_op(op: char, a: &Scalar, b: &Scalar) -> Result<Scalar, ScalarError> {

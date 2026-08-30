@@ -91,15 +91,9 @@ fn audit_log_captures_admin_calls_in_order() {
     let mut config_set_count = 0;
     for line in &lines {
         let parts: Vec<&str> = line.split('\t').collect();
-        assert!(
-            parts.len() >= 2,
-            "audit line missing tab-separated fields: {line:?}"
-        );
+        assert!(parts.len() >= 2, "audit line missing tab-separated fields: {line:?}");
         let ts: u128 = parts[0].parse().expect("ts must be u128");
-        assert!(
-            ts >= last_ts,
-            "timestamps non-monotonic: prev={last_ts} cur={ts}"
-        );
+        assert!(ts >= last_ts, "timestamps non-monotonic: prev={last_ts} cur={ts}");
         last_ts = ts;
         if parts[1] == "CONFIG" && parts.get(2) == Some(&"SET") {
             config_set_count += 1;

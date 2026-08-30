@@ -48,10 +48,7 @@ fn backup_restore_round_trip_no_fabrication() {
     let pool = WriterPool::spawn(port, 4, Arc::clone(&stop));
     std::thread::sleep(Duration::from_secs(2));
     let pre_backup_count = pool.log.lock().unwrap().len();
-    assert!(
-        pre_backup_count >= 1000,
-        "vacuous test: only {pre_backup_count} ACKs before backup"
-    );
+    assert!(pre_backup_count >= 1000, "vacuous test: only {pre_backup_count} ACKs before backup");
     eprintln!("backup_restore: {pre_backup_count} ACKs before BGSAVE+backup");
 
     // Trigger BGSAVE + give it a moment.
@@ -66,10 +63,7 @@ fn backup_restore_round_trip_no_fabrication() {
 
     // Snapshot the ACK log AT the backup moment.
     let backup_acks: Vec<AckEntry> = pool.log.lock().unwrap().clone();
-    eprintln!(
-        "backup_restore: captured {} ACKs at backup moment",
-        backup_acks.len()
-    );
+    eprintln!("backup_restore: captured {} ACKs at backup moment", backup_acks.len());
 
     // Run the in-process backup pack.
     let backup_path = tmp.join("dump.kevybkp");
@@ -86,13 +80,11 @@ fn backup_restore_round_trip_no_fabrication() {
 
     // Restore into a fresh dir + start a NEW kevy against it.
     let restored_port = pick_free_port().expect("restored port");
-    let restored_dir =
-        std::env::temp_dir().join(format!("kevy-chaos-restored-{restored_port}"));
+    let restored_dir = std::env::temp_dir().join(format!("kevy-chaos-restored-{restored_port}"));
     let _ = std::fs::remove_dir_all(&restored_dir);
     backup::unpack(&backup_path, &restored_dir).expect("unpack");
 
-    let mut cfg2 = HarnessConfig::new(restored_dir.clone(), restored_port)
-        .with_fsync("everysec");
+    let mut cfg2 = HarnessConfig::new(restored_dir.clone(), restored_port).with_fsync("everysec");
     cfg2.kevy_bin = bin_path;
     cfg2.threads = 2;
     // Restored AOF can be 80 MB+; replay takes several seconds. Bump

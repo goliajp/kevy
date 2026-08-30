@@ -42,9 +42,7 @@ impl Rng {
     pub(crate) fn new(seed: u64) -> Self {
         // A zero seed makes splitmix64 degenerate; the golden-ratio constant is
         // the standard escape.
-        Self {
-            state: seed ^ 0x9E37_79B9_7F4A_7C15,
-        }
+        Self { state: seed ^ 0x9E37_79B9_7F4A_7C15 }
     }
 
     pub(crate) fn next_u64(&mut self) -> u64 {
@@ -54,7 +52,6 @@ impl Rng {
         z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
         z ^ (z >> 31)
     }
-
 }
 
 /// Uniform in `0..n` from one raw draw, without the modulo bias `% n` leaves.

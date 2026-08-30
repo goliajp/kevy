@@ -6,8 +6,8 @@
 //! `value.rs` calls them.
 
 use crate::value::{
-    HEAP_HEAVY_BYTES, HASH_SLOT_BYTES, LIST_SLOT_BYTES, RANKTREE_SLOT_BYTES, SET_SLOT_BYTES,
-    Value, collection_overhead,
+    HASH_SLOT_BYTES, HEAP_HEAVY_BYTES, LIST_SLOT_BYTES, RANKTREE_SLOT_BYTES, SET_SLOT_BYTES, Value,
+    collection_overhead,
 };
 
 impl Value {
@@ -27,21 +27,27 @@ impl Value {
             // Arc<[u8]> heap = the byte slice itself (refcount overhead
             // is amortised across shared clones).
             Value::ArcBulk(a) => a.len() as u64,
-            Value::Hash(h) => collection_overhead(h.capacity(), HASH_SLOT_BYTES) + h
-                .iter()
-                .map(|(f, v)| f.heap_bytes() as u64 + v.heap_bytes() as u64)
-                .sum::<u64>(),
-            Value::List(l) => (l.capacity() as u64).saturating_mul(LIST_SLOT_BYTES)
-                + l.iter().map(|v| v.capacity() as u64).sum::<u64>(),
+            Value::Hash(h) => {
+                collection_overhead(h.capacity(), HASH_SLOT_BYTES)
+                    + h.iter()
+                        .map(|(f, v)| f.heap_bytes() as u64 + v.heap_bytes() as u64)
+                        .sum::<u64>()
+            }
+            Value::List(l) => {
+                (l.capacity() as u64).saturating_mul(LIST_SLOT_BYTES)
+                    + l.iter().map(|v| v.capacity() as u64).sum::<u64>()
+            }
             // Segments charge like flat lists; the outer deque-of-Arcs
             // adds one pointer slot per segment.
-            Value::SegList(l) => (l.seg_count() as u64).saturating_mul(8)
-                + (l.len() as u64).saturating_mul(LIST_SLOT_BYTES)
-                + l.iter().map(|v| v.capacity() as u64).sum::<u64>(),
-            Value::Set(s) => collection_overhead(s.capacity(), SET_SLOT_BYTES) + s
-                .iter()
-                .map(|m| m.heap_bytes() as u64)
-                .sum::<u64>(),
+            Value::SegList(l) => {
+                (l.seg_count() as u64).saturating_mul(8)
+                    + (l.len() as u64).saturating_mul(LIST_SLOT_BYTES)
+                    + l.iter().map(|v| v.capacity() as u64).sum::<u64>()
+            }
+            Value::Set(s) => {
+                collection_overhead(s.capacity(), SET_SLOT_BYTES)
+                    + s.iter().map(|m| m.heap_bytes() as u64).sum::<u64>()
+            }
             Value::SegHash(h) => h.weight_as_hash(),
             Value::SegSet(s) => s.weight_as_set(),
             Value::SegZSet(z) => z.weight_as_zset(),
@@ -60,12 +66,11 @@ impl Value {
             // once as the `by_member` key, once inside the rank tree's
             // `(Score, SmallBytes)` key — hence the ×2 on `heap_bytes`.
             // Members ≤22 B are inline in both slots (heap_bytes = 0).
-            Value::ZSet(z) => collection_overhead(z.by_member.capacity(), HASH_SLOT_BYTES)
-                + z.by_member
-                    .iter()
-                    .map(|(m, _)| 2 * m.heap_bytes() as u64)
-                    .sum::<u64>()
-                + (z.by_score.len() as u64).saturating_mul(RANKTREE_SLOT_BYTES),
+            Value::ZSet(z) => {
+                collection_overhead(z.by_member.capacity(), HASH_SLOT_BYTES)
+                    + z.by_member.iter().map(|(m, _)| 2 * m.heap_bytes() as u64).sum::<u64>()
+                    + (z.by_score.len() as u64).saturating_mul(RANKTREE_SLOT_BYTES)
+            }
             Value::Stream(s) => s.weight(),
         }
     }
@@ -123,12 +128,8 @@ impl Value {
                 alloc::sync::Arc::strong_count(a) == 1 && !a.is_empty() && a.all_unique()
             }
             Value::Set(a) => alloc::sync::Arc::strong_count(a) == 1 && !a.is_empty(),
-            Value::ZSet(a) => {
-                alloc::sync::Arc::strong_count(a) == 1 && !a.by_member.is_empty()
-            }
-            Value::Stream(a) => {
-                alloc::sync::Arc::strong_count(a) == 1 && a.length() > 0
-            }
+            Value::ZSet(a) => alloc::sync::Arc::strong_count(a) == 1 && !a.by_member.is_empty(),
+            Value::Stream(a) => alloc::sync::Arc::strong_count(a) == 1 && a.length() > 0,
         }
     }
 }

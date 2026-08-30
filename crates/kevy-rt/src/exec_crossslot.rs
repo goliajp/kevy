@@ -36,7 +36,8 @@ impl<C: Commands> Shard<C> {
         if cluster_conn && is_crossslot_checked(&route) && keys_span_slots(&route, args) {
             self.push_pending_slot(conn_id, 1, Agg::First(None), is_quit);
             self.fold(
-                conn_id, seq,
+                conn_id,
+                seq,
                 Part::Reply(SmallReply::from_vec(
                     b"-CROSSSLOT Keys in request don't hash to the same slot\r\n".to_vec(),
                 )),
@@ -46,7 +47,6 @@ impl<C: Commands> Shard<C> {
         self.start_multi(conn_id, seq, args, route, is_quit);
     }
 }
-
 
 /// Routes whose keys must all hash to the same CRC16 slot under
 /// cluster mode (per the Redis Cluster spec). Other multi-key routes
@@ -127,9 +127,7 @@ fn irregular_form_spans<A: ArgvView + ?Sized>(route: &Route, args: &A) -> Option
 }
 
 fn parse_numkeys<A: ArgvView + ?Sized>(args: &A, idx: usize) -> Option<usize> {
-    args.get(idx)
-        .and_then(|v| std::str::from_utf8(v).ok())
-        .and_then(|s| s.parse().ok())
+    args.get(idx).and_then(|v| std::str::from_utf8(v).ok()).and_then(|s| s.parse().ok())
 }
 
 fn key_slot_at<A: ArgvView + ?Sized>(args: &A, idx: usize) -> Option<u16> {

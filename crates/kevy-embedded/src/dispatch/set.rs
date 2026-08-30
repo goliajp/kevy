@@ -1,10 +1,12 @@
 //! Set-family verbs, including the read + `*STORE` algebra forms.
 
-use crate::store::Store;
 use crate::KevyResult;
+use crate::store::Store;
 
 use super::util::{
-    arg_i64, bulk, emit_bulk_array, emit_int, err, kevy_err, nil, rest, wrong_args, ERR_NOT_INT, verb_name};
+    ERR_NOT_INT, arg_i64, bulk, emit_bulk_array, emit_int, err, kevy_err, nil, rest, verb_name,
+    wrong_args,
+};
 
 /// One set-family request; `false` = verb not in this group.
 // LOC-WAIVER: data-driven verb dispatch table — one arm per set verb.
@@ -120,13 +122,7 @@ type AlgebraReadOp = fn(&Store, &[&[u8]]) -> KevyResult<Vec<Vec<u8>>>;
 type AlgebraStoreOp = fn(&Store, &[u8], &[&[u8]]) -> KevyResult<usize>;
 
 /// `SINTER`/`SUNION`/`SDIFF key [key …]`.
-fn cmd_algebra_read(
-    s: &Store,
-    argv: &[Vec<u8>],
-    out: &mut Vec<u8>,
-    name: &str,
-    op: AlgebraReadOp,
-) {
+fn cmd_algebra_read(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>, name: &str, op: AlgebraReadOp) {
     if argv.len() < 2 {
         return wrong_args(out, name);
     }
@@ -142,12 +138,7 @@ fn cmd_algebra_read(
 /// `if args.len() >= 3` and a shorter call falls through to the dispatch
 /// chain, which names the verb the way Redis does. The wire differential
 /// found twelve verbs split this way.
-fn cmd_algebra_store(
-    s: &Store,
-    argv: &[Vec<u8>],
-    out: &mut Vec<u8>,
-    op: AlgebraStoreOp,
-) {
+fn cmd_algebra_store(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>, op: AlgebraStoreOp) {
     if argv.len() < 3 {
         return wrong_args(out, &verb_name(argv));
     }
