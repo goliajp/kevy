@@ -7,6 +7,14 @@
 #
 #   packaging/android/build-ffi-jnilibs.sh
 set -euo pipefail
+
+# Keep the builder's home out of the artifact. These libraries are shipped
+# inside public npm and pub.dev packages, and on a machine with the
+# `rust-src` component rustc resolves std's panic locations to the local
+# toolchain source instead of the `/rustc/<hash>/` form official builds
+# carry — putting hundreds of copies of /Users/<name>/.rustup/... in a file
+# that goes to a registry. Who built it is not something it should say.
+REMAP="--remap-path-prefix=$HOME=~"
 cd "$(dirname "$0")/../.."
 
 NDK="${ANDROID_NDK_HOME:-$(ls -d "$HOME"/Library/Android/sdk/ndk/* 2>/dev/null | sort -V | tail -1)}"
@@ -23,7 +31,7 @@ for triple in aarch64-linux-android x86_64-linux-android; do
   # it never needed one, but a consumer that *links* against this .so (the
   # RN/Nitro C++ door does) records the DT_NEEDED from the SONAME — without
   # it the linker bakes in the build-time path and dlopen fails at runtime.
-  RUSTFLAGS="-C link-arg=-Wl,-soname,libkevy_ffi.so" \
+  RUSTFLAGS="-C link-arg=-Wl,-soname,libkevy_ffi.so $REMAP" \
     cargo build -p kevy-ffi --release --target "$triple"
 done
 
