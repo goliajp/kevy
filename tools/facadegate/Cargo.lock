@@ -19,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-bytes"
-version = "6.1.0"
+version = "6.2.0"
 dependencies = [
  "kevy-hash",
 ]
@@ -46,11 +46,11 @@ dependencies = [
 
 [[package]]
 name = "kevy-compress"
-version = "6.1.0"
+version = "6.2.0"
 
 [[package]]
 name = "kevy-embedded"
-version = "6.1.0"
+version = "6.2.0"
 dependencies = [
  "kevy-hash",
  "kevy-index",
@@ -66,22 +66,22 @@ dependencies = [
 
 [[package]]
 name = "kevy-hash"
-version = "6.1.0"
+version = "6.2.0"
 
 [[package]]
 name = "kevy-index"
-version = "6.1.0"
+version = "6.2.0"
 dependencies = [
  "kevy-time",
 ]
 
 [[package]]
 name = "kevy-madvise"
-version = "6.1.0"
+version = "6.2.0"
 
 [[package]]
 name = "kevy-map"
-version = "6.1.0"
+version = "6.2.0"
 dependencies = [
  "kevy-hash",
  "kevy-madvise",
@@ -89,7 +89,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-persist"
-version = "6.1.0"
+version = "6.2.0"
 dependencies = [
  "kevy-resp",
  "kevy-store",
@@ -98,39 +98,39 @@ dependencies = [
 
 [[package]]
 name = "kevy-ranktree"
-version = "6.1.0"
+version = "6.2.0"
 
 [[package]]
 name = "kevy-replicate"
-version = "6.1.0"
+version = "6.2.0"
 dependencies = [
  "kevy-resp",
 ]
 
 [[package]]
 name = "kevy-resp"
-version = "6.1.0"
+version = "6.2.0"
 dependencies = [
  "kevy-bytes",
 ]
 
 [[package]]
 name = "kevy-resp-client"
-version = "6.1.0"
+version = "6.2.0"
 dependencies = [
  "kevy-resp",
 ]
 
 [[package]]
 name = "kevy-seg"
-version = "6.1.0"
+version = "6.2.0"
 dependencies = [
  "kevy-sys",
 ]
 
 [[package]]
 name = "kevy-store"
-version = "6.1.0"
+version = "6.2.0"
 dependencies = [
  "kevy-bytes",
  "kevy-hash",
@@ -142,23 +142,23 @@ dependencies = [
 
 [[package]]
 name = "kevy-sys"
-version = "6.1.0"
+version = "6.2.0"
 
 [[package]]
 name = "kevy-text"
-version = "6.1.0"
+version = "6.2.0"
 
 [[package]]
 name = "kevy-time"
-version = "6.1.0"
+version = "6.2.0"
 
 [[package]]
 name = "kevy-vector"
-version = "6.1.0"
+version = "6.2.0"
 
 [[package]]
 name = "kevy-vlog"
-version = "6.1.0"
+version = "6.2.0"
 dependencies = [
  "kevy-compress",
  "kevy-sys",
@@ -166,7 +166,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-window"
-version = "6.1.0"
+version = "6.2.0"
 dependencies = [
  "kevy-index",
  "kevy-seg",

@@ -55,15 +55,15 @@ dependencies = [
 
 [[package]]
 name = "kevy-compress"
-version = "6.1.0"
+version = "6.2.0"
 
 [[package]]
 name = "kevy-sys"
-version = "6.1.0"
+version = "6.2.0"
 
 [[package]]
 name = "kevy-vlog"
-version = "6.1.0"
+version = "6.2.0"
 dependencies = [
  "kevy-compress",
  "kevy-sys",

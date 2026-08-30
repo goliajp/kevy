@@ -1,10 +1,10 @@
 {
-  "version": "6.1.0",
+  "version": "6.2.0",
   "dead_platform": "linux",
   "stones": [
     {
       "crate": "kevy-alloc",
-      "dead_regions": 119,
+      "dead_regions": 117,
       "measured_regions": 1694,
       "packaged": true,
       "built": true,
@@ -20,10 +20,10 @@
       },
       "semver": {
         "ok": true,
-        "checks": 223,
-        "skipped": 31,
+        "checks": 196,
+        "skipped": 58,
         "unpublished": false,
-        "baseline": "",
+        "baseline": "6.1.0",
         "note": ""
       }
     },
@@ -31,12 +31,15 @@
       "crate": "kevy-bytes",
       "dead_regions": 9,
       "measured_regions": 463,
-      "packaged": true,
-      "built": true,
-      "tested": true,
-      "tests": 58,
-      "lift_note": "",
-      "unresolved": null,
+      "packaged": false,
+      "built": false,
+      "tested": false,
+      "tests": 0,
+      "lift_note": "failed to select a version for the requirement `kevy-hash = \"^6.2.0\"`",
+      "unresolved": {
+        "dep": "kevy-hash",
+        "req": "6.2.0"
+      },
       "docs": {
         "documented": 12,
         "items": 12,
@@ -45,10 +48,10 @@
       },
       "semver": {
         "ok": true,
-        "checks": 223,
-        "skipped": 31,
+        "checks": 196,
+        "skipped": 58,
         "unpublished": false,
-        "baseline": "",
+        "baseline": "6.1.0",
         "note": ""
       }
     },
@@ -56,12 +59,15 @@
       "crate": "kevy-hash",
       "dead_regions": 31,
       "measured_regions": 317,
-      "packaged": true,
-      "built": true,
-      "tested": true,
-      "tests": 24,
-      "lift_note": "",
-      "unresolved": null,
+      "packaged": false,
+      "built": false,
+      "tested": false,
+      "tests": 0,
+      "lift_note": "failed to select a version for the requirement `kevy-bench = \"^6.2.0\"`",
+      "unresolved": {
+        "dep": "kevy-bench",
+        "req": "6.2.0"
+      },
       "docs": {
         "documented": 10,
         "items": 10,
@@ -70,17 +76,17 @@
       },
       "semver": {
         "ok": true,
-        "checks": 223,
-        "skipped": 31,
+        "checks": 196,
+        "skipped": 58,
         "unpublished": false,
-        "baseline": "",
+        "baseline": "6.1.0",
         "note": ""
       }
     },
     {
       "crate": "kevy-compress",
       "dead_regions": 43,
-      "measured_regions": 1403,
+      "measured_regions": 1409,
       "packaged": true,
       "built": true,
       "tested": true,
@@ -95,10 +101,10 @@
       },
       "semver": {
         "ok": true,
-        "checks": 223,
-        "skipped": 31,
+        "checks": 196,
+        "skipped": 58,
         "unpublished": false,
-        "baseline": "",
+        "baseline": "6.1.0",
         "note": ""
       }
     },
@@ -110,10 +116,10 @@
       "built": false,
       "tested": false,
       "tests": 0,
-      "lift_note": "failed to select a version for the requirement `kevy-madvise = \"^6.1.0\"`",
+      "lift_note": "failed to select a version for the requirement `kevy-hash = \"^6.2.0\"`",
       "unresolved": {
-        "dep": "kevy-madvise",
-        "req": "6.1.0"
+        "dep": "kevy-hash",
+        "req": "6.2.0"
       },
       "docs": {
         "documented": 13,
@@ -126,7 +132,7 @@
         "checks": 196,
         "skipped": 58,
         "unpublished": false,
-        "baseline": "6.0.0",
+        "baseline": "6.1.0",
         "note": ""
       }
     },
@@ -151,7 +157,7 @@
         "checks": 196,
         "skipped": 58,
         "unpublished": false,
-        "baseline": "6.0.0",
+        "baseline": "6.1.0",
         "note": ""
       }
     },
@@ -176,7 +182,7 @@
         "checks": 196,
         "skipped": 58,
         "unpublished": false,
-        "baseline": "6.0.0",
+        "baseline": "6.1.0",
         "note": ""
       }
     },
@@ -184,12 +190,15 @@
       "crate": "kevy-ring",
       "dead_regions": 0,
       "measured_regions": 154,
-      "packaged": true,
-      "built": true,
-      "tested": true,
-      "tests": 20,
-      "lift_note": "",
-      "unresolved": null,
+      "packaged": false,
+      "built": false,
+      "tested": false,
+      "tests": 0,
+      "lift_note": "failed to select a version for the requirement `kevy-bench = \"^6.2.0\"`",
+      "unresolved": {
+        "dep": "kevy-bench",
+        "req": "6.2.0"
+      },
       "docs": {
         "documented": 11,
         "items": 11,
@@ -201,22 +210,22 @@
         "checks": 196,
         "skipped": 58,
         "unpublished": false,
-        "baseline": "6.0.0",
+        "baseline": "6.1.0",
         "note": ""
       }
     },
     {
       "crate": "kevy-seg",
       "dead_regions": 120,
-      "measured_regions": 1212,
+      "measured_regions": 1210,
       "packaged": false,
       "built": false,
       "tested": false,
       "tests": 0,
-      "lift_note": "failed to select a version for the requirement `kevy-sys = \"^6.1.0\"`",
+      "lift_note": "failed to select a version for the requirement `kevy-sys = \"^6.2.0\"`",
       "unresolved": {
         "dep": "kevy-sys",
-        "req": "6.1.0"
+        "req": "6.2.0"
       },
       "docs": {
         "documented": 20,
@@ -229,7 +238,7 @@
         "checks": 196,
         "skipped": 58,
         "unpublished": false,
-        "baseline": "6.0.0",
+        "baseline": "6.1.0",
         "note": ""
       }
     },
@@ -254,7 +263,7 @@
         "checks": 196,
         "skipped": 58,
         "unpublished": false,
-        "baseline": "6.0.0",
+        "baseline": "6.1.0",
         "note": ""
       }
     },
@@ -279,7 +288,7 @@
         "checks": 196,
         "skipped": 58,
         "unpublished": false,
-        "baseline": "6.0.0",
+        "baseline": "6.1.0",
         "note": ""
       }
     },
@@ -291,10 +300,10 @@
       "built": false,
       "tested": false,
       "tests": 0,
-      "lift_note": "failed to select a version for the requirement `kevy-tmpdir = \"^6.1.0\"`",
+      "lift_note": "failed to select a version for the requirement `kevy-tmpdir = \"^6.2.0\"`",
       "unresolved": {
         "dep": "kevy-tmpdir",
-        "req": "6.1.0"
+        "req": "6.2.0"
       },
       "docs": {
         "documented": 17,
@@ -307,14 +316,14 @@
         "checks": 196,
         "skipped": 58,
         "unpublished": false,
-        "baseline": "6.0.0",
+        "baseline": "6.1.0",
         "note": ""
       }
     },
     {
       "crate": "kevy-text",
       "dead_regions": 118,
-      "measured_regions": 4021,
+      "measured_regions": 4023,
       "packaged": true,
       "built": true,
       "tested": true,
@@ -332,14 +341,14 @@
         "checks": 196,
         "skipped": 58,
         "unpublished": false,
-        "baseline": "6.0.0",
+        "baseline": "6.1.0",
         "note": ""
       }
     },
     {
       "crate": "kevy-vector",
       "dead_regions": 36,
-      "measured_regions": 900,
+      "measured_regions": 899,
       "packaged": true,
       "built": true,
       "tested": true,
@@ -357,7 +366,7 @@
         "checks": 196,
         "skipped": 58,
         "unpublished": false,
-        "baseline": "6.0.0",
+        "baseline": "6.1.0",
         "note": ""
       }
     },
@@ -379,25 +388,25 @@
       },
       "semver": {
         "ok": true,
-        "checks": 223,
-        "skipped": 31,
+        "checks": 196,
+        "skipped": 58,
         "unpublished": false,
-        "baseline": "",
+        "baseline": "6.1.0",
         "note": ""
       }
     },
     {
       "crate": "kevy-scalar",
       "dead_regions": 1087,
-      "measured_regions": 4391,
+      "measured_regions": 4388,
       "packaged": false,
       "built": false,
       "tested": false,
       "tests": 0,
-      "lift_note": "failed to select a version for the requirement `kevy-time = \"^6.1.0\"`",
+      "lift_note": "failed to select a version for the requirement `kevy-time = \"^6.2.0\"`",
       "unresolved": {
         "dep": "kevy-time",
-        "req": "6.1.0"
+        "req": "6.2.0"
       },
       "docs": {
         "documented": 39,
@@ -410,7 +419,7 @@
         "checks": 196,
         "skipped": 58,
         "unpublished": false,
-        "baseline": "6.0.0",
+        "baseline": "6.1.0",
         "note": ""
       }
     },
@@ -435,7 +444,7 @@
         "checks": 196,
         "skipped": 58,
         "unpublished": false,
-        "baseline": "6.0.0",
+        "baseline": "6.1.0",
         "note": ""
       }
     },
@@ -457,10 +466,10 @@
       },
       "semver": {
         "ok": true,
-        "checks": 223,
-        "skipped": 31,
+        "checks": 196,
+        "skipped": 58,
         "unpublished": false,
-        "baseline": "",
+        "baseline": "6.1.0",
         "note": ""
       }
     }
