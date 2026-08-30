@@ -205,3 +205,25 @@ whether a span emptied while the process was still alive, which is a
 function of when the last test dropped its store. Named beside
 dispatch_with_proto in setratchet's docstring for the same reason.
 """
+
+[[unstable]]
+symbol = "::srandmember"
+observed = [
+  "baseline: 1",
+  "run 33285528604 attempt 1: 2 — setratchet FAIL, the only symbol that grew",
+  "run 33285528604 attempt 2: at or below baseline, deadgate green",
+]
+why = """
+Same commit, same tree, two attempts of the same run, different answers:
+the first grew this symbol from 1 to 2 and failed the ratchet, the second
+passed with nothing changed in between. Nothing in that commit touched
+Rust or suite/ at all — it was packaging scripts, a workflow and a Python
+gate — so the variation is the run, not the code.
+
+SRANDMEMBER samples. Which of its arms a test leaves dark depends on what
+the sampler drew, and no test here pins the draw. The same run also
+IMPROVED the set overall — 2605 symbols against a baseline of 2609, 26886
+regions against 26923, four symbols gone — which is what an element-wise
+maximum is for: it will not trade one symbol's regression for another's
+gain, and it should not.
+"""

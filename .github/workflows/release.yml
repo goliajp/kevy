@@ -291,6 +291,36 @@ jobs:
                 npm run build
               fi
               npm version "$V" --no-git-tag-version --allow-same-version
+
+              # Refuse to replace what a door serves with less than it.
+              #
+              # expo-kevy and react-native-kevy-nitro ship ~105 MB of
+              # prebuilt engine — xcframework slices and jniLibs — that are
+              # gitignored build outputs, not committed files. They exist on
+              # a machine with the iOS and Android toolchains and nowhere
+              # else, which is why those two were published by hand: on a
+              # clean runner `npm pack` would quietly produce a 200 KB
+              # package that declares `ios` and `android` in its files list
+              # and contains neither, and npm would accept it.
+              #
+              # The comparison is against what npm currently serves, because
+              # that is the thing a reader would be downgraded from. A first
+              # publish has nothing to compare and is allowed.
+              PREV=$(npm view "$name" dist.unpackedSize 2>/dev/null || echo "")
+              NOW=$(npm pack --dry-run --json 2>/dev/null | node -p \
+                    "JSON.parse(require('fs').readFileSync(0,'utf8'))[0].unpackedSize")
+              if [ -n "$PREV" ] && [ "$PREV" -gt 0 ] 2>/dev/null; then
+                if [ "$((NOW * 2))" -lt "$PREV" ]; then
+                  echo "REFUSING to publish $name@$V:"
+                  echo "  npm serves $PREV bytes unpacked; this would be $NOW."
+                  echo "  Something the published package has is missing here."
+                  echo "  If it is the prebuilt engine, this runner cannot"
+                  echo "  build it — publish that door from a machine with the"
+                  echo "  iOS and Android toolchains, or teach this workflow to"
+                  echo "  build the artifacts before packing."
+                  exit 1
+                fi
+              fi
               npm publish --access public
             )
             published=$((published + 1))
