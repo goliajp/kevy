@@ -10,6 +10,25 @@ use crate::value::{ZSetData, SmallBytes, Value, zset_member_weight};
 use crate::{Entry, Store, StoreError};
 use alloc::sync::Arc;
 
+/// `-0.0` and `0.0` are one score, as they are in Redis.
+///
+/// Folded at the one door every score passes through to reach a sorted set,
+/// rather than inside `Score`'s comparison — that would be a branch in the
+/// innermost step of every tree descent, paid on reads as well as writes, to
+/// settle something that can be settled once on the way in.
+///
+/// Redis keys its skiplist on a plain `double` compare, where the two zeros
+/// are equal and the member breaks the tie. This rank tree is a B-tree,
+/// whose key needs a total order that `f64: PartialOrd` is not, and `Score`
+/// orders by `total_cmp` — which is total precisely because it separates
+/// them. Measured against a real `redis:8` on one host,
+/// `ZADD z 0 a; ZADD z -0 b; ZRANGE z 0 -1` answered `a b` there and `b a`
+/// here. See the finding under bench/.
+#[inline]
+fn fold_zero_sign(score: f64) -> f64 {
+    if score == 0.0 { 0.0 } else { score }
+}
+
 impl Store {
     // ---- sorted sets ---------------------------------------------------
 
@@ -228,6 +247,7 @@ impl Store {
 
     /// A.8 core: set one `(member, score)` pair via encoding-switch.
     fn zadd_one(&mut self, key: &[u8], m: &[u8], score: f64) -> Result<ZaddOutcome, StoreError> {
+        let score = fold_zero_sign(score);
         if self.zset_value_for_set(key)?.is_none() {
             return Ok(self.zadd_create(key, m, score));
         }

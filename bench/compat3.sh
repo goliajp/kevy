@@ -110,6 +110,17 @@ check ZRANK z1 c
 check ZRANGE z1 0 -1
 check ZRANGE z1 0 -1 WITHSCORES
 check ZRANGEBYSCORE z1 2 5
+# -0 and 0 are one score. kevy's rank tree needs a total order over the
+# score, and total_cmp gives one by separating the two zeros — which put
+# `zb` before `za` here and after it in both references until the sign was
+# folded at the door. The corpus had no plus-or-minus-zero case, so the
+# headline was honest about what it measured and this was outside it.
+check ZADD zz 0 za
+check ZADD zz -0 zb
+check ZRANGE zz 0 -1
+check ZRANGE zz 0 -1 WITHSCORES
+check ZSCORE zz zb
+check ZADD zz XX CH 0 zb
 check ZCOUNT z1 1 3
 check ZINCRBY z1 1 b
 check ZREM z1 a
