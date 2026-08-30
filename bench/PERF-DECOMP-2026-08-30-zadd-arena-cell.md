@@ -316,6 +316,14 @@ order the tree uses (`total_cmp`), not through `==`.
 `Score`'s derived `PartialEq` is worth fixing on its own terms regardless
 of what this decomposition concludes.
 
+And pulling that thread found a divergence underneath it: Redis treats
+`-0` and `0` as one score and ties on the member, kevy's `total_cmp` orders
+the negative first, so `ZADD z 0 a; ZADD z -0 b; ZRANGE z 0 -1` answers
+`a b` there and `b a` here. Reproduced against `redis:8` on the same host
+and written up separately — it is not caused by the guard, is not fixed by
+it, and changing observable ordering does not belong inside a perf change.
+See `bench/FINDING-2026-08-30-negative-zero-is-its-own-score-here.md`.
+
 ---
 
 ## Budget reconciliation
