@@ -194,6 +194,8 @@
     "symbols": [
       "::get_into_output",
       "::mark",
+      "::resolve_xadd_id",
+      "::srandmember",
       "::top_groups",
       "kevy::dispatch::dispatch_with_proto::",
       "kevy_alloc::os::trim"
