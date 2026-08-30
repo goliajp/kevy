@@ -161,12 +161,25 @@ Three parts, all fixed and each with its own test or branch:
    frame; the walk already knew a short HEADER read from a short PAYLOAD read
    and gave both the same verdict.
 
-## What is not yet settled
+## Settled, 2026-08-30: twenty-eight runs
 
-Two CI runs since the fix are green. The base rate was already four in five,
-so two greens are consistent with the fix and also consistent with luck. The
-mechanism that produced every observed failure is closed and proven closed by
-construction; whether T6 can still fail some other way is an open question a
-handful more runs will answer. The `REDpending(T6)` declaration stays until
-they do — promoting it on two runs would repeat, in the other direction, the
-error of marking something pending and never re-reading it.
+Two greens were not enough to tell the fix from luck, and the declaration
+stayed until more runs answered it. They have.
+
+**Twenty-eight consecutive CI runs pass the T6 cell**, every one of them on
+a commit containing the resync fix, all on 2026-08-30. (A twenty-ninth was
+cancelled by a superseding push, which is not a reading either way.)
+
+Against the failure rate this finding recorded on CI — one in five — twenty
+-eight consecutive passes have probability **0.0019: about one in five
+hundred**. Against the gentler rate the bench box showed, one in eleven, it
+is 0.07, or one in fourteen. The CI rate is the relevant one: the failures
+were CI failures and these are CI runs.
+
+The cell is a hard `verdict`, not a `pending` — `bench/crashgate.sh:232`
+and `:234` — so those twenty-eight are the gate passing, not a pending red
+being tolerated. The header comment already said as much; this is the
+evidence behind it.
+
+**T6 is closed.** The mechanism was closed by construction on the day it was
+found; this is the part that had to be waited for rather than argued.

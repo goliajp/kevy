@@ -316,9 +316,20 @@ suite 从 75 项到 **84** 项(precommit 23 ⊆ prerelease 40 ⊆ full 84)。
       机制被找到并**按构造复现**过。九连绿买到的是「停止声明、开始强制」的底气:
       T6 已从 `pending` 升为 `verdict` —— pending 会把下一次回归静默吸收,
       verdict 让它在出现的那一轮就可见。finding 已写全。
-- [ ] ~~crashgate T6 cell 结果不确定~~(切点在字节偏移而非帧边界;三轮
-      100%/100%/50.07%)。**不是本 arc 造成的,也不该由本 arc 拍板** ——
-      修法会改变这个 cell 测的东西。`bench/FINDING-2026-08-28-crashgate-*.md`
+- [x] **crashgate T6 已结**(2026-08-30 settle)。原先写的是"切点在字节偏移
+      而非帧边界、不该由本 arc 拍板" —— **那个判断本身后来被推翻了**:instrument
+      加上之后发现**不是输入需要修,是引擎错了**。AOF 记录头被读成"长度合法但
+      大于剩余字节"时走 `TruncatedTail`,而 `resync` 在那条路上**根本不跑**;
+      读成 `len==0`/超限或 CRC 不符时走 `CorruptFrame`,resync 跑、尾巴救回来。
+      同样的损坏、同样的位置、相反的结果,取决于那几个字节撒了哪种谎。
+      三处都修了(resync 在任何非干净停止上都跑 / `corrupt` 由跳过的区间抬起
+      而不只由停止原因 / 默认路径不再把几 MB 的丢失叫作 partial frame)。
+      当时只有 2 次绿,不足以把"修好了"和"运气好"分开,所以声明留着。
+      **现在有 28 次连续 CI 通过**(全部在含修复的 commit 上)。若失败率仍是
+      当初记的 CI 1/5,28 连过的概率是 **0.0019,约 517 分之一**。
+      那一格是硬 `verdict` 不是 `pending`(`crashgate.sh:232`/`:234`),
+      所以这 28 次是门禁在过,不是 pending 红被容忍。
+      `bench/FINDING-2026-08-28-crashgate-t6-cell-is-outcome-nondeterministic.md`
 - [x] **性能轴:两格都已闭合 —— ZADD 攻下,LPUSH 被门禁挡住**(2026-08-30)。
       6.0.0 arena 对 Redis 8:GET 1.26× / SET 2.58× / INCR 1.98× / SADD 1.52× /
       HSET 1.40× / LPUSH 1.07×,而 **ZADD 落在噪声带里**(差 80,594,容差
