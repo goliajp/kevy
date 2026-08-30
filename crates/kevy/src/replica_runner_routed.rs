@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use kevy_replicate::replica::{ReplicaClient, ReplicaEvent};
 use kevy_rt::{ReplicaApply, ReplicaInboxSender, SnapshotGate};
 
-use crate::replica_runner::LoadingGuard;
+use crate::replica_runner_events::LoadingGuard;
 use crate::state::ReplicaProgress;
 
 /// Route one event fan into N shard inboxes: snapshot control/chunks
@@ -91,7 +91,7 @@ pub(crate) fn drain_client_routed(
                 progress.record_ping(runner_slot, generation, primary_offset, from_offset);
                 let _ = client.send_ack(from_offset);
                 last_ack = std::time::Instant::now();
-                if !crate::replica_runner::gen_still_matches(generation, ack_gen) {
+                if !crate::replica_runner_events::gen_still_matches(generation, ack_gen) {
                     return from_offset;
                 }
             }
@@ -106,7 +106,7 @@ pub(crate) fn drain_client_routed(
                 if route_event(event, &mut from_offset, senders, gate).is_err() {
                     return from_offset;
                 }
-                crate::replica_runner::maybe_ack(
+                crate::replica_runner_events::maybe_ack(
                     client, progress, runner_slot, from_offset, &mut last_ack,
                 );
             }
