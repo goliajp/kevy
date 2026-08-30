@@ -13,6 +13,14 @@ on:
 # tree, competing for the same runners. Cancelling one by hand — twice in
 # one afternoon — is what turned this up; halving the queue took the second
 # run from 6 jobs in flight to 20.
+#
+# The cost, seen three times the afternoon this changed: the pull request
+# run sits in `pending` until the run it supersedes actually stops, and a
+# job that only notices cancellation at a checkpoint — fuzz-smoke,
+# crashgate, a client-conformance suite — can hold that for minutes. It
+# clears on its own; `gh run cancel <the superseded run>` clears it sooner.
+# Neither is a fault. It is what cancel-in-progress costs when the thing
+# being cancelled is not listening every second.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
