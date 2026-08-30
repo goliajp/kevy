@@ -280,8 +280,13 @@ suite 从 75 项到 **84** 项(precommit 23 ⊆ prerelease 40 ⊆ full 84)。
       参数,rustfmt 排成 10 行,比它替换掉的 6 行还长。
       **`fmtgate` 已进 CI**(`cargo fmt --all --check`,Linux 一次),红-绿验过 ——
       没有门,那 4,634 处一年内会回来。
-      注:llvm 的 region 由 AST 决定,重排版**不会**动死集合/覆盖率基线;
-      克隆图谱是按行的,会动。
+      **原先那句注是错的,已实测推翻**:它写着"llvm 的 region 由 AST 决定,
+      重排版不会动死集合/覆盖率基线"。region 是按**源码 span** 记的,重排版
+      就会动它 —— 格式化前 26,852 死区 / 164,801 总区、覆盖 83.81%,格式化后
+      26,867 / 164,819、83.70%(都远在 79.34% 底线之上)。deadgate 是逐符号
+      棘轮,所以照样红;死集合基线已带理由重记(`--accept-growth`),理由里
+      写明哪些 JOINED 是被拆出来的子函数、哪些 GREW 的符号本分支根本没碰过。
+      克隆图谱是按行的,同样会动。
 - [~] **「2,596 项没有可执行示例」这个数不能用来规划** —— 本轮把它量清楚了。
       九块石头做过之后(bytes/time/geo/compress/ring/madvise/bench/ranktree/
       vector/scalar/seg/map/alloc,新增 ~110 个 doctest),真实情况是:
