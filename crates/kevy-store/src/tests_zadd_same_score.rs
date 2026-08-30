@@ -10,7 +10,6 @@
 //! Each test here catches a different way the guard can be wrong, checked
 //! by writing each wrong version and watching the right tests go red:
 //!
-//! - compared with `==` instead of `total_cmp`: the two `-0.0` tests fail;
 //! - returning `true` instead of `false`: the two "invisible" tests fail;
 //! - guard removed entirely: **all pass**, correctly — the unconditional
 //!   remove-and-insert it replaces is semantically a no-op, only slow, so
@@ -116,42 +115,37 @@ fn same_score_readd_is_invisible_seg() {
     assert!(st.zrange(b"k", 0, -1).unwrap() == order_before, "the order moved");
 }
 
-/// `-0.0` and `0.0` are equal under `f64`'s `==` and distinct under the
-/// order the rank tree keys on. A guard written with `==` would treat this
-/// update as a no-op and leave the member indexed at `-0.0` while its score
-/// reads `0.0` — the two halves of one sorted set disagreeing.
-///
-/// `ZADD z -0 m` is accepted by a live server, so this is reachable.
+/// `-0` and `0` are one score, as they are in Redis, because `zadd_one`
+/// folds the sign at the door. Before that fold this ordering was `zlo`
+/// first — `total_cmp` separates the zeros and orders the negative before
+/// the positive — while a real `redis:8` answered `zhi` first, on the
+/// member tie-break. See the finding under bench/.
 #[test]
-fn negative_zero_to_positive_zero_is_a_real_update() {
+fn the_two_zeros_are_one_score() {
     let mut st = Store::new();
-    // Three filler members first: two short ones would fit `SmallZSetInline`,
-    // which has no ordered index and would not reach the guard at all.
     for m in [b"f1".as_ref(), b"f2", b"f3"] {
         st.zadd(b"k", &[(9.0, m)]).unwrap();
     }
-    // `lo` sits at -0.0 and `hi` at 0.0, so the pair orders lo, hi.
-    st.zadd(b"k", &[(-0.0, b"lo"), (0.0, b"hi")]).unwrap();
+    st.zadd(b"k", &[(0.0, b"zhi"), (-0.0, b"zlo")]).unwrap();
     assert_eq!(encoding(&st, b"k"), "flat", "fixture must be on the heap-backed encoding");
+
+    // Same score, so the member breaks the tie: `zhi` before `zlo`.
     assert_eq!(
         st.zrange(b"k", 0, 1).unwrap().iter().map(|(m, _)| m.clone()).collect::<Vec<_>>(),
-        alloc::vec![b"lo".to_vec(), b"hi".to_vec()],
-        "-0.0 must sort before 0.0",
+        alloc::vec![b"zhi".to_vec(), b"zlo".to_vec()],
+        "-0 and 0 must be one score, ordered by member",
     );
 
-    // Move `lo` from -0.0 to 0.0. Ties break on the member bytes, so it
-    // should now sort AFTER `hi`.
-    st.zadd(b"k", &[(0.0, b"lo")]).unwrap();
-    assert_eq!(
-        st.zrange(b"k", 0, 1).unwrap().iter().map(|(m, _)| m.clone()).collect::<Vec<_>>(),
-        alloc::vec![b"hi".to_vec(), b"lo".to_vec()],
-        "the -0.0 -> 0.0 update was skipped: the index still holds -0.0",
-    );
+    // And the stored score really is `+0.0`, not a negative zero that
+    // happens to sort in the same place.
+    let sc = st.zscore(b"k", b"zlo").unwrap().unwrap();
+    assert!(sc == 0.0 && sc.is_sign_positive(), "the sign was not folded");
 }
 
-/// The same trap on the Seg encoding.
+/// The same at the Seg encoding, whose write entry point is a different
+/// function reached through the same door.
 #[test]
-fn negative_zero_to_positive_zero_is_a_real_update_seg() {
+fn the_two_zeros_are_one_score_seg() {
     let mut st = Store::new();
     let n = Z_PROMOTE + 64;
     for i in 0..n {
@@ -159,18 +153,12 @@ fn negative_zero_to_positive_zero_is_a_real_update_seg() {
         st.zadd(b"k", &[((i % 977) as f64 + 1.0, m.as_bytes())]).unwrap();
     }
     assert_eq!(encoding(&st, b"k"), "seg");
-    // Two members at the bottom of the order, one at -0.0 and one at 0.0.
-    st.zadd(b"k", &[(-0.0, b"zlo"), (0.0, b"zhi")]).unwrap();
-    let first_two: Vec<Vec<u8>> =
-        st.zrange(b"k", 0, 1).unwrap().iter().map(|(m, _)| m.clone()).collect();
-    assert_eq!(first_two, alloc::vec![b"zlo".to_vec(), b"zhi".to_vec()]);
+    st.zadd(b"k", &[(0.0, b"zhi"), (-0.0, b"zlo")]).unwrap();
 
-    st.zadd(b"k", &[(0.0, b"zlo")]).unwrap();
     let first_two: Vec<Vec<u8>> =
         st.zrange(b"k", 0, 1).unwrap().iter().map(|(m, _)| m.clone()).collect();
-    assert_eq!(
-        first_two,
-        alloc::vec![b"zhi".to_vec(), b"zlo".to_vec()],
-        "the -0.0 -> 0.0 update was skipped on the Seg path",
-    );
+    assert_eq!(first_two, alloc::vec![b"zhi".to_vec(), b"zlo".to_vec()]);
+
+    let sc = st.zscore(b"k", b"zlo").unwrap().unwrap();
+    assert!(sc == 0.0 && sc.is_sign_positive(), "the sign was not folded");
 }
