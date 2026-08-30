@@ -39,6 +39,44 @@ fn persist_sidecar(dir: Option<&Path>, cat: &ViewCatalog) {
     }
 }
 
+/// One leaf of a view tree: an index name, a shape, and the literals that
+/// shape needs — `RANGE min max` or `EQ value`, both coerced to the index's
+/// declared type.
+///
+/// Split from `parse_tree` for the 50-line rule, at the boundary the
+/// function already had: above it parses a node and recurses, here it
+/// parses a leaf and does not.
+fn parse_leaf<A: ArgvView + ?Sized>(
+    icat: Option<&Catalog>,
+    args: &A,
+    i: usize,
+    tok: &[u8],
+) -> Result<(Tree, usize), CmdError> {
+    // leaf: <index> RANGE min max | <index> EQ v — bounds coerced
+    // per the index's declared type.
+    let index = tok.to_vec();
+    let spec_ty = icat
+        .and_then(|c| c.get(&index).map(|(s, _)| s.ty))
+        .ok_or("ERR view leaf references unknown index")?;
+    let shape = args.get(i + 1).ok_or("ERR truncated view leaf")?;
+    if shape.eq_ignore_ascii_case(b"RANGE") {
+        let min =
+            IndexValue::parse_literal(spec_ty, args.get(i + 2).ok_or("ERR truncated view leaf")?)
+                .ok_or("ERR leaf min does not coerce to the index type")?;
+        let max =
+            IndexValue::parse_literal(spec_ty, args.get(i + 3).ok_or("ERR truncated view leaf")?)
+                .ok_or("ERR leaf max does not coerce to the index type")?;
+        Ok((Tree::Leaf(Leaf { index, min, max }), i + 4))
+    } else if shape.eq_ignore_ascii_case(b"EQ") {
+        let v =
+            IndexValue::parse_literal(spec_ty, args.get(i + 2).ok_or("ERR truncated view leaf")?)
+                .ok_or("ERR leaf value does not coerce to the index type")?;
+        Ok((Tree::Leaf(Leaf { index, min: v.clone(), max: v }), i + 3))
+    } else {
+        Err(CmdError::Wire("ERR view leaf shape must be RANGE|EQ"))
+    }
+}
+
 /// Parse one tree node starting at `i`; returns `(tree, next_i)`.
 /// `icat` is the index-catalog snapshot leaf lookups resolve against.
 fn parse_tree<A: ArgvView + ?Sized>(
@@ -69,35 +107,7 @@ fn parse_tree<A: ArgvView + ?Sized>(
         };
         Ok((tree, ni + 1))
     } else {
-        // leaf: <index> RANGE min max | <index> EQ v — bounds coerced
-        // per the index's declared type.
-        let index = tok.to_vec();
-        let spec_ty = icat
-            .and_then(|c| c.get(&index).map(|(s, _)| s.ty))
-            .ok_or("ERR view leaf references unknown index")?;
-        let shape = args.get(i + 1).ok_or("ERR truncated view leaf")?;
-        if shape.eq_ignore_ascii_case(b"RANGE") {
-            let min = IndexValue::parse_literal(
-                spec_ty,
-                args.get(i + 2).ok_or("ERR truncated view leaf")?,
-            )
-            .ok_or("ERR leaf min does not coerce to the index type")?;
-            let max = IndexValue::parse_literal(
-                spec_ty,
-                args.get(i + 3).ok_or("ERR truncated view leaf")?,
-            )
-            .ok_or("ERR leaf max does not coerce to the index type")?;
-            Ok((Tree::Leaf(Leaf { index, min, max }), i + 4))
-        } else if shape.eq_ignore_ascii_case(b"EQ") {
-            let v = IndexValue::parse_literal(
-                spec_ty,
-                args.get(i + 2).ok_or("ERR truncated view leaf")?,
-            )
-            .ok_or("ERR leaf value does not coerce to the index type")?;
-            Ok((Tree::Leaf(Leaf { index, min: v.clone(), max: v }), i + 3))
-        } else {
-            Err(CmdError::Wire("ERR view leaf shape must be RANGE|EQ"))
-        }
+        parse_leaf(icat, args, i, tok)
     }
 }
 

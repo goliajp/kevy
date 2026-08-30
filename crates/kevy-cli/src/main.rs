@@ -438,6 +438,9 @@ fn run_diff_cli(pos: &[String]) -> ExitCode {
 /// `digest [-h host -p port] <prefix>`
 /// `diff <hostA:portA> <hostB:portB> <prefix…>`
 /// `inspect [-h host -p port] <prefix>`
+// LOC-WAIVER: pure subcommand dispatch — eleven arms, each one call.
+// Splitting it would put half the table behind a name that means
+// nothing but "the other half".
 fn run_bulk_cli(args: &[String]) -> ExitCode {
     let verb = args[0].as_str();
     let (host, port, rate, dry_run, pos) = parse_bulk_flags(&args[1..]);

@@ -74,26 +74,18 @@ impl<C: Commands> Shard<C> {
         // Role-gated write rejection covers the single-shard
         // path too (start_command gates the fan-out routes; seq is
         // already assigned here — slot+fold, not immediate_reply).
-        if meta.is_write
-            && let Some(err) = self.commands.write_denied()
-        {
+        // One rejection, asked two ways: a write against a replica, or a
+        // read the role refuses. They were two blocks with identical
+        // bodies; the only thing that differed was which question to ask.
+        let denied = if meta.is_write {
+            self.commands.write_denied()
+        } else {
+            self.commands.read_denied(args)
+        };
+        if let Some(err) = denied {
             self.push_pending_slot(conn_id, 1, Agg::First(None), is_quit);
-            self.fold(
-                conn_id,
-                seq,
-                crate::message::Part::Reply(crate::message::SmallReply::from_vec(err)),
-            );
-            return;
-        }
-        if !meta.is_write
-            && let Some(err) = self.commands.read_denied(args)
-        {
-            self.push_pending_slot(conn_id, 1, Agg::First(None), is_quit);
-            self.fold(
-                conn_id,
-                seq,
-                crate::message::Part::Reply(crate::message::SmallReply::from_vec(err)),
-            );
+            let reply = crate::message::SmallReply::from_vec(err);
+            self.fold(conn_id, seq, crate::message::Part::Reply(reply));
             return;
         }
         // In-order local fast path: `seq == next_emit` and no prior cmd is
@@ -111,13 +103,27 @@ impl<C: Commands> Shard<C> {
             let part = self.run_dispatch(args, proto, meta);
             self.fold(conn_id, seq, part);
         } else {
-            // Cross-shard forward: materialise owned at the handoff —
-            // into a pool-recycled Argv, so the steady state mallocs
-            // nothing. The -c50 single-shard hot path never reaches here.
-            let argv = self.argv_pool.take_filled(args);
-            self.request_batch[shard].push((conn_id, seq, argv, proto, meta));
-            self.request_batch_nonempty |= 1u64 << shard;
+            self.forward_to(shard, conn_id, seq, args, proto, meta);
         }
+    }
+
+    /// Hand one command to another shard's request batch.
+    ///
+    /// Materialised owned at the handoff, into a pool-recycled `Argv`, so
+    /// the steady state mallocs nothing. The single-shard hot path never
+    /// reaches here.
+    fn forward_to<A: ArgvView + ?Sized>(
+        &mut self,
+        shard: usize,
+        conn_id: u64,
+        seq: u64,
+        args: &A,
+        proto: RespVersion,
+        meta: DispatchMeta,
+    ) {
+        let argv = self.argv_pool.take_filled(args);
+        self.request_batch[shard].push((conn_id, seq, argv, proto, meta));
+        self.request_batch_nonempty |= 1u64 << shard;
     }
 
     /// Try to dispatch a single-shard local command straight to the

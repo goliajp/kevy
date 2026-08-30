@@ -197,14 +197,7 @@ impl Store {
                 // `matches_query_with` parses quoted phrases out of the
                 // raw query text; with none it is the ordinary term query.
                 let r = ts.matches_query_faceted(query, fetch, q, facets);
-                for m in r.hits {
-                    let hl = highlight
-                        .map_or_else(Vec::new, |w| hit_highlight(ts, spec, &m.key, query, w));
-                    all.push((m.key, m.score, hl));
-                }
-                for (into, from) in buckets.iter_mut().zip(r.facets) {
-                    fold_raw(into, from);
-                }
+                absorb_live(r, ts, spec, query, highlight, &mut all, &mut buckets);
             }
             // The shard's frozen buckets join the union like one more
             // ranked contributor — the origin merge below re-orders,
@@ -458,6 +451,28 @@ fn finish_buckets(buckets: Vec<Vec<RawBucket>>) -> Vec<FacetCounts> {
             field.into_iter().map(|(_, label, n)| (label, n)).collect()
         })
         .collect()
+}
+
+/// Fold one live segment's answer into the running union: each hit with its
+/// highlight spans, each facet's raw buckets into the matching accumulator.
+///
+/// Split from `gather_hits` for the 50-line rule.
+fn absorb_live(
+    r: kevy_text::FacetedMatches,
+    ts: &kevy_text::TextSegment,
+    spec: &IndexSpec,
+    query: &[u8],
+    highlight: Option<&[Vec<u8>]>,
+    all: &mut Vec<(Vec<u8>, f64, Vec<FieldSpans>)>,
+    buckets: &mut [Vec<RawBucket>],
+) {
+    for m in r.hits {
+        let hl = highlight.map_or_else(Vec::new, |w| hit_highlight(ts, spec, &m.key, query, w));
+        all.push((m.key, m.score, hl));
+    }
+    for (into, from) in buckets.iter_mut().zip(r.facets) {
+        fold_raw(into, from);
+    }
 }
 
 /// One hit's highlight spans as `(field name, [(start, end)])`, filtered

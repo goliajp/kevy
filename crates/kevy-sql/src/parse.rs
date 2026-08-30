@@ -292,6 +292,30 @@ fn skip_default_expr(p: &mut P<'_>) -> Result<(), SqlError> {
     }
 }
 
+/// The inline column constraints kevy refuses, each with the note saying
+/// what to write instead. `None` when the next keyword is not one of them.
+///
+/// Split from `parse_column_def` for the 50-line rule: three of the loop's
+/// six arms were the same answer — "kevy enforces no constraints" — said
+/// three ways.
+fn refused_inline_constraint(p: &mut P<'_>) -> Option<SqlError> {
+    if p.is_kw("references") {
+        Some(p.refuse(
+            "REFERENCES",
+            "kevy enforces no constraints (Law 3); keep the FK as an indexed column",
+        ))
+    } else if p.is_kw("unique") {
+        Some(p.refuse(
+            "an inline UNIQUE",
+            "declare it table-level \u{2014} UNIQUE (<col>) \u{2014} or as CREATE UNIQUE INDEX",
+        ))
+    } else if p.is_kw("check") {
+        Some(p.refuse("CHECK", "constraints are the atomic-block recipe (cookbook 6)"))
+    } else {
+        None
+    }
+}
+
 fn parse_column_def(p: &mut P<'_>, t: &mut CreateTable) -> Result<(), SqlError> {
     let (name, line, col) = p.ident("a column name or a table constraint")?;
     let (ty, sql_ty) = parse_type(p)?;
@@ -322,20 +346,8 @@ fn parse_column_def(p: &mut P<'_>, t: &mut CreateTable) -> Result<(), SqlError> 
             p.bump();
             skip_default_expr(p)?;
             def.dropped_default = true;
-        } else if p.is_kw("references") {
-            return Err(p.refuse(
-                "REFERENCES",
-                "kevy enforces no constraints (Law 3); keep the FK as an indexed column (cookbook \u{a7}10)",
-            ));
-        } else if p.is_kw("unique") {
-            return Err(p.refuse(
-                "an inline UNIQUE",
-                "declare it table-level \u{2014} UNIQUE (<col>) \u{2014} or as CREATE UNIQUE INDEX ON <t> (<col>)",
-            ));
-        } else if p.is_kw("check") {
-            return Err(
-                p.refuse("CHECK", "constraints are the atomic-block recipe (cookbook \u{a7}5)")
-            );
+        } else if let Some(e) = refused_inline_constraint(p) {
+            return Err(e);
         } else {
             break;
         }

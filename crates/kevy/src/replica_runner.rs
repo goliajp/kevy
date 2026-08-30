@@ -171,6 +171,45 @@ enum Target {
     Routed(Vec<ReplicaInboxSender>),
 }
 
+/// One dial-and-drain attempt. Returns the offset to resume from — the one
+/// it reached, or the one it was given when the dial failed.
+///
+/// Split from `run_loop` for the 50-line rule, at the seam that function
+/// already had: the loop above owns the stop flag and the backoff, this
+/// owns one connection's lifetime.
+#[allow(clippy::too_many_arguments)]
+fn one_session(
+    upstream_addr: (std::net::IpAddr, u16),
+    replica_id: &str,
+    target: &Target,
+    stop: &Arc<AtomicBool>,
+    socket_slot: &Arc<Mutex<Option<TcpStream>>>,
+    runner_slot: usize,
+    progress: &Arc<ReplicaProgress>,
+    from_offset: u64,
+    data_gen: &mut u64,
+) -> u64 {
+    match ReplicaClient::connect_at(
+        upstream_addr,
+        replica_id,
+        *data_gen,
+        from_offset,
+        Duration::from_secs(5),
+    ) {
+        Ok(mut client) => {
+            drain_session(&mut client, target, stop, socket_slot, runner_slot, progress, data_gen)
+        }
+        Err(e) => {
+            eprintln!(
+                "kevy: replica runner '{replica_id}' connect to \
+                 {upstream_addr:?} failed: {e}; retrying in \
+                 {RECONNECT_BACKOFF:?}"
+            );
+            from_offset
+        }
+    }
+}
+
 fn run_loop(
     upstream_addr: (std::net::IpAddr, u16),
     replica_id: String,
@@ -188,32 +227,17 @@ fn run_loop(
     // `drain_client`).
     let mut data_gen: u64 = 0;
     while !stop.load(Ordering::Relaxed) {
-        match ReplicaClient::connect_at(
+        from_offset = one_session(
             upstream_addr,
             &replica_id,
-            data_gen,
+            &target,
+            &stop,
+            &socket_slot,
+            runner_slot,
+            &progress,
             from_offset,
-            Duration::from_secs(5),
-        ) {
-            Ok(mut client) => {
-                from_offset = drain_session(
-                    &mut client,
-                    &target,
-                    &stop,
-                    &socket_slot,
-                    runner_slot,
-                    &progress,
-                    &mut data_gen,
-                );
-            }
-            Err(e) => {
-                eprintln!(
-                    "kevy: replica runner '{replica_id}' connect to \
-                     {upstream_addr:?} failed: {e}; retrying in \
-                     {RECONNECT_BACKOFF:?}"
-                );
-            }
-        }
+            &mut data_gen,
+        );
         // Reconnect backoff — short enough that a transient blip
         // recovers within a tick, but long enough that a long-down
         // primary doesn't pin a CPU.

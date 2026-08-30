@@ -15,6 +15,32 @@ use crate::value::{ListData, SmallBytes, Value, list_item_weight};
 use crate::{Entry, Store, StoreError};
 use alloc::sync::Arc;
 
+/// Push into an inline list, promoting it to the heap encoding if the value
+/// does not fit. Returns whether the promotion happened, which is the only
+/// thing the caller does differently.
+///
+/// Split from `list_push_one` for the 50-line rule. `slot` must be a
+/// `Value::SmallListInline`; the caller checks, and the `else` here pushes
+/// nothing rather than asserting, because a wrong caller should not be a
+/// panic in the write path.
+fn push_inline(slot: &mut Value, v: &[u8], front: bool) -> bool {
+    let Value::SmallListInline(s) = slot else { return false };
+    let push = if front { s.try_push_front(v) } else { s.try_push_back(v) };
+    match push {
+        PushResult::Pushed => false,
+        PushResult::NoRoom => {
+            let mut promoted = small_list::promote(s);
+            if front {
+                promoted.push_front(v.to_vec());
+            } else {
+                promoted.push_back(v.to_vec());
+            }
+            *slot = Value::List(Arc::new(promoted));
+            true
+        }
+    }
+}
+
 impl Store {
     // ---- lists ---------------------------------------------------------
 
@@ -144,25 +170,15 @@ impl Store {
             return Ok(self.list_push_create(key, v));
         }
         let slot = self.list_value_for_push(key)?.expect("present and a list");
-        let reweigh = match slot {
-            Value::SmallListInline(s) => {
-                let push = if front { s.try_push_front(v) } else { s.try_push_back(v) };
-                match push {
-                    PushResult::Pushed => return Ok(0),
-                    PushResult::NoRoom => {
-                        let mut promoted = small_list::promote(s);
-                        if front {
-                            promoted.push_front(v.to_vec());
-                        } else {
-                            promoted.push_back(v.to_vec());
-                        }
-                        *slot = Value::List(Arc::new(promoted));
-                        // Reweighed from scratch — caller's delta should
-                        // be 0 for THIS pair (already in the new weight).
-                        true
-                    }
-                }
+        if matches!(slot, Value::SmallListInline(_)) {
+            // Promotion reweighs from scratch, so the caller's delta for
+            // THIS pair is 0 either way — the new weight already has it.
+            if push_inline(slot, v, front) {
+                self.reweigh_entry(key);
             }
+            return Ok(0);
+        }
+        let reweigh = match slot {
             Value::List(l) if l.len() >= SEG_PROMOTE => {
                 promote_flat_to_seg(slot, v, front);
                 true

@@ -62,6 +62,38 @@ impl LoadingGuard {
     }
 }
 
+/// The state both drains set up before their first event, in one place
+/// because they set up exactly the same thing.
+pub(crate) struct DrainStart {
+    pub from_offset: u64,
+    pub ack_gen: u64,
+    pub last_ack: std::time::Instant,
+    pub loading: LoadingGuard,
+    pub traced_first_frame: bool,
+}
+
+/// Resume offset, handshake generation, and the loading gate — and, when
+/// this is a fresh start rather than a resume, the data generation the
+/// caller will present on the next handshake.
+pub(crate) fn drain_start(
+    client: &ReplicaClient,
+    progress: &Arc<ReplicaProgress>,
+    data_gen: &mut u64,
+) -> DrainStart {
+    let from_offset = client.expected_offset();
+    let ack_gen = client.primary_gen_at_handshake();
+    if from_offset == 0 {
+        *data_gen = ack_gen;
+    }
+    DrainStart {
+        from_offset,
+        ack_gen,
+        last_ack: std::time::Instant::now(),
+        loading: LoadingGuard::new(Arc::clone(progress)),
+        traced_first_frame: false,
+    }
+}
+
 /// Drain `next_event` until the peer EOFs / errors. Returns the
 /// `from_offset` to resume from on the next reconnect.
 ///
@@ -80,14 +112,8 @@ pub(crate) fn drain_client(
     progress: &Arc<ReplicaProgress>,
     data_gen: &mut u64,
 ) -> u64 {
-    let mut from_offset = client.expected_offset();
-    let ack_gen = client.primary_gen_at_handshake();
-    if from_offset == 0 {
-        *data_gen = ack_gen;
-    }
-    let mut last_ack = std::time::Instant::now();
-    let mut loading = LoadingGuard::new(Arc::clone(progress));
-    let mut traced_first_frame = false;
+    let DrainStart { mut from_offset, ack_gen, mut last_ack, mut loading, mut traced_first_frame } =
+        drain_start(client, progress, data_gen);
     while !stop.load(Ordering::Relaxed) {
         match client.next_event() {
             Some(Ok(ReplicaEvent::Ping { generation, primary_offset })) => {
