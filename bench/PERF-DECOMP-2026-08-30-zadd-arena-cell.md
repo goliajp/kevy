@@ -377,8 +377,15 @@ those three rows is wrong and the ablation says which one to re-measure.
 
    It is not a three-line change: the pattern is what the borrow checker
    leaves you with when a mutable borrow cannot be held across the question
-   and the answer. Priced before written, like this one — an ablation
-   against `ZSCORE` will not separate it, because `ZSCORE` looks up once too.
+   and the answer.
+
+   **And it is now priced, in the LPUSH decomposition, and it is smaller
+   than this paragraph first implied.** `PING` does not touch the keyspace
+   and `LLEN` touches it once, both as RESP arrays: a lookup costs **8.1
+   ns**. Four of them are 32.4 ns of a 335 ns LPUSH — 9.7% — and removing
+   the three redundant ones recovers about 7%. Real, and worth doing
+   eventually, but not the shape a source reading with no number attached
+   suggested. See `PERF-DECOMP-2026-08-30-lpush-arena-cell.md` S03.
 
 3. **LPUSH**, the other narrow cell, is untouched here. Its arena cell grows
    without bound — at ~3M ops/s a 3-second window appends ~9M elements — so
