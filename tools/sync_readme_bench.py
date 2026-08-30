@@ -47,12 +47,29 @@ def latest_arena():
         if len(cells) < 5:
             continue
         verb = cells[0]
-        rows[verb] = {
-            "kevy": int(cells[1].replace(",", "")),
-            "redis8": int(cells[2].replace(",", "")),
-            "valkey": int(cells[3].replace(",", "")),
-            "dragonfly": int(cells[4].replace(",", "")),
-        }
+        try:
+            rows[verb] = {
+                "kevy": int(cells[1].replace(",", "")),
+                "redis8": int(cells[2].replace(",", "")),
+                "valkey": int(cells[3].replace(",", "")),
+                "dragonfly": int(cells[4].replace(",", "")),
+            }
+        except ValueError:
+            # Say which table and which cell, rather than raising
+            # `invalid literal for int(): 'encoding'` from a stack trace and
+            # leaving the reader to find out that an entry titled like a
+            # release re-measurement was in fact an A/B with a different
+            # table under it. That is exactly what happened on 2026-08-30.
+            sys.exit(
+                f"sync_readme_bench: the newest `arena bare face` entry "
+                f"({date}, kevy {version}) has a row this cannot read:\n"
+                f"  {line.strip()}\n"
+                f"A bare-face entry's table is `| verb | kevy | Redis 8 | "
+                f"valkey | Dragonfly |` and nothing else. An A/B or a "
+                f"decomposition belongs under a heading that is not "
+                f"`arena bare face — <date> — kevy <version>`, because that "
+                f"heading is what this tool reads to rewrite three READMEs."
+            )
     if not rows:
         sys.exit("sync_readme_bench: the arena table parsed to nothing")
     return date, version, rows

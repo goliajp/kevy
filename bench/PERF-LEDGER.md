@@ -567,9 +567,13 @@ textgate 正在断言的内存公式。范围决定权不在我。
 
 ---
 
-## arena bare face — 2026-08-30 — kevy 6.1.0 + same-score ZADD guard
+## arena A/B — 2026-08-30 — the same-score ZADD guard
 
-Not a release re-measurement: an A/B for one change. `bench/arena.sh` on
+**Not a `bare face` entry, and deliberately not named like one.** Those are
+per-release re-measurements of the shipped build, and `tools/
+sync_readme_bench.py` rewrites three READMEs from the most recent of them.
+This is an A/B for one unmerged change; a README that quoted it would be
+advertising a build nobody can install. `bench/arena.sh` on
 lx64, same protocol as every entry, run against a binary carrying the guard
 in `ZSetData::insert` / `SegZSetData::insert` that skips the ordered index
 when a ZADD's score is unchanged.
