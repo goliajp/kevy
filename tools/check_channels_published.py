@@ -205,6 +205,24 @@ def on_ghcr(image, v):
         return None
 
 
+def on_site(origin, v):
+    """The site is a door: it ships an engine and announces a version.
+
+    Nothing here can go by status code. Every path on that host answers 200
+    with the SPA index — a request for a filename invented on the spot came
+    back 200 with the same 2396 bytes as the home page — so the check is
+    that build.json parses as JSON and names the version, which the index
+    cannot do.
+    """
+    st, b = get(f"{origin}/build.json")
+    if b is None:
+        return None if st is None else False
+    try:
+        return json.loads(b).get("version") == v
+    except json.JSONDecodeError:
+        return False   # served the index page instead: the file is not there
+
+
 def on_github_release(repo, v):
     """A tag with no release behind it is a download page that 404s.
 
@@ -336,6 +354,14 @@ def service_doors():
     m = re.search(r"github\.com[:/]([\w.-]+/[\w.-]+?)(?:\.git)?$", remote)
     if m:
         out.append(("github", m.group(1), on_github_release, rel, None))
+
+    # The deployed site, with its origin read out of the prerenderer that
+    # writes the build.json this asks for.
+    pre = ROOT / "web/prerender.mjs"
+    if pre.exists():
+        m = re.search(r"https://([a-z0-9.-]+)\$\{", pre.read_text(encoding="utf-8"))
+        if m:
+            out.append(("site", f"https://{m.group(1)}", on_site, pre, None))
 
     dw = ROOT / ".github/workflows/docker.yml"
     if dw.exists():
