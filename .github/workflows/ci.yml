@@ -447,6 +447,19 @@ jobs:
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: bash bench/vendorgate.sh
 
+      # fmtgate. The tree had no rustfmt.toml and no fmt step until the day
+      # it was formatted, and `cargo fmt --all --check` reported 4,634
+      # differences across 772 files by then. Without a gate it would be
+      # 4,634 again inside a year; the only thing that keeps a formatter
+      # applied is a build that fails without it.
+      #
+      # `--check` and not `--all`-then-diff: `cargo fmt --check` exits
+      # non-zero and prints the hunks, which is the whole report. Linux
+      # only, like the other host-independent gates — formatting cannot
+      # differ by target and running it three times says nothing new.
+      - name: fmtgate (cargo fmt --all --check)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: cargo fmt --all --check
       # Named for what it runs. It used to say "all features", which this
       # workspace cannot do: kevy-client-async's runtime features (tokio /
       # smol / async-std) are mutually exclusive by contract, with a
