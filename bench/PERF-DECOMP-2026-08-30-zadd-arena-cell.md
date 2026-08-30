@@ -349,11 +349,34 @@ those three rows is wrong and the ablation says which one to re-measure.
    and this decomposition has not said what that is. Until it does, the
    arena number is quoted as a range with the better-powered run as the
    figure.
-2. **LPUSH**, the other narrow cell, is untouched here. Its arena cell grows
+2. **The row the guard does not touch has a named candidate in it.** Of the
+   171.5 ns at n=1, the guard removes 59.1 and leaves 112.4 — write path,
+   hash insert over get, and `SmallBytes`. Part of that is a double lookup
+   `zadd_one` does on every call:
+
+   ```rust
+   if self.zset_value_for_set(key)?.is_none() {
+       return Ok(self.zadd_create(key, m, score));
+   }
+   let v = self.zset_value_for_set(key)?.expect("present and a zset");
+   ```
+
+   The key is found once to ask whether it is there and again to get it, and
+   `account_delta` looks it up a third time. `list_push_one` has the same
+   shape, and `lpush` adds a fourth lookup through `list_len` to report the
+   new length — so a single-value LPUSH on an existing list can reach four
+   hash lookups where one would do.
+
+   It is not a three-line change: the pattern is what the borrow checker
+   leaves you with when a mutable borrow cannot be held across the question
+   and the answer. Priced before written, like this one — an ablation
+   against `ZSCORE` will not separate it, because `ZSCORE` looks up once too.
+
+3. **LPUSH**, the other narrow cell, is untouched here. Its arena cell grows
    without bound — at ~3M ops/s a 3-second window appends ~9M elements — so
    it is a different measurement with a different shape, and it needs its own
    pass rather than a paragraph in this one.
-3. **The 13-byte inline ceiling** is priced (14.7% at the boundary) but not
+4. **The 13-byte inline ceiling** is priced (14.7% at the boundary) but not
    actionable inside the `size_of::<Value>() <= 32` budget that keeps `Entry`
    at 48 bytes. Whether a zset member deserves more inline room than a
    `user:1234567` is a memory trade, and the owner has already priced the
