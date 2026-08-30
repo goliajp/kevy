@@ -6,7 +6,10 @@ candidate is priced and refuted before a line was written, and the
 Pre-Phase-B gate then refuses the round: the only userspace thing above the
 bar is the PAUSE instruction of seven shards waiting for the one that owns
 the key, which is the topology of a one-key benchmark rather than work.
-Nothing implemented, deliberately.
+Nothing implemented, deliberately — and S06 then reshapes the measurement
+twice more to check that the refusal was about the engine and not about the
+benchmark's topology. A saturated single shard profiles flat: 3,179 source
+lines, the largest 1.92%, nothing at 2%.
 
 Companion to `PERF-DECOMP-2026-08-30-zadd-arena-cell.md`. The ROADMAP names
 two narrow cells; that one covers ZADD.
@@ -220,14 +223,73 @@ userspace memcpy in this reactor and measured throughput-neutral, and
 another that attacked the spin limit and measured the same. Attacking a
 fifth of the samples that turns out to be idling would have been the third.
 
+## S06 — the shape that shows the work, and what it shows
+
+The gate above refused on a profile whose largest line was seven shards
+idling. That is a true statement about the arena's cell and a useless one
+about the engine, so the measurement was reshaped twice more.
+
+**All eight shards working.** `-t lpush` writes the literal key `mylist`;
+`-r 100000 lpush mylist:__rand_int__` spreads it over a hundred thousand
+keys, so every shard owns some and none forwards:
+
+| | ops/s | `sse2.rs:25` (PAUSE) |
+|---|---:|---:|
+| one key | 2,989,978 | 20.15% |
+| a hundred thousand keys | **4,295,682** | **1.69%** |
+
+The spin collapses and real work appears — `kevy-bytes/lib.rs:233` (the
+`SmallBytes` inline-tag test) 4.57%, `list.rs:179` (the `Value::List` arm
+and its `SEG_PROMOTE` guard) 4.53%, `list.rs:185` (`push_front(v.to_vec())`,
+a heap allocation per element) 3.17%.
+
+**But the arithmetic says that shape is not saturated either.** One key
+means one shard doing 2,989,978 ops/s; a hundred thousand keys means eight
+shards doing 4,295,682 between them, which is 536,960 each — five times
+worse per shard. The shards are not the bottleneck there; the client, the
+loopback and the syscall path are, and most of those samples are eight
+mostly-idle threads.
+
+**So: one shard, saturated.** `--threads 1`, pinned to one core, single key,
+same client pressure. 1,945,335 ops/s at **100% CPU** — every sample is one
+thread doing the work and nothing else.
+
+The profile of that is **flat**:
+
+| | |
+|---|---|
+| distinct source lines carrying samples | **3,179** |
+| the largest | **1.92%** |
+| lines at 5% or more | **0** |
+| lines at 2% or more | **0** |
+| lines at 1% or more | **7** |
+| lines needed to reach 25% / 50% / 75% / 90% | **35 / 154 / 534 / 1,551** |
+
+(The percentages sum above 100 because `--inline` credits a sample to every
+inlined frame it passed through.)
+
+The top of it, such as it is: an atomic at 1.99%, two `KevyMap` lookup
+lines at 1.30% and 1.10%, the `SmallBytes` inline-tag test at 1.03%, two
+`malloc` sites at 0.98% and 0.87%, reply encoding at 0.89%.
+
+**That is the answer to what the 84 ns per element and the 86 ns per command
+are made of: nothing in particular.** They are the sum of about fifteen
+hundred source lines each contributing well under one percent — allocation,
+map lookup, atomics, reply encoding, protocol handling, and a very long
+tail. There is no seat to take.
+
+A flat profile is a real result, not a failed one. It says the remaining
+cost is the shape of the code rather than a mistake in it, and that moving
+this cell wants a different kind of change — fewer allocations per element,
+a cheaper per-command path — designed rather than found by pointing at a
+profile.
+
 ## Open
 
-1. **What the 84 and 86 ns rows are made of** is still unnamed. The profile
-   says they are spread through inlined code in single-digit fractions
-   rather than sitting in a symbol, and the one line that stands out is not
-   work. Naming them would need instruction-level work inside the reactor,
-   or a differently-shaped measurement — a multi-key LPUSH cell would put
-   all eight shards to work and change what the profile is a profile of.
+1. ~~**What the 84 and 86 ns rows are made of**~~ — answered in S06, and
+   the answer is that they are not made of anything: 3,179 source lines,
+   the largest 1.92%, nothing at 2%. Moving them is a design question, not
+   a profiling one.
 2. **The unbounded growth is part of the measurement.** Whatever the profile
    says is an average over a list that spans a hundredfold during the
    window; a reading at a fixed length would say something different and is
