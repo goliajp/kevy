@@ -1,8 +1,9 @@
 # ZADD — Phase A decomposition (arena cell), v6 perf axis
 
-Status: **Phase A in progress.** The attack candidate is named and priced
-in part; the profile that splits its two halves is still building. Nothing
-has been implemented. Phase B has not started.
+Status: **Phase A complete for ZADD.** The candidate is named, priced by
+ablation, and reconciled to within 0.9% of the measured wire time. Nothing
+has been implemented; Phase B has not started. LPUSH, the other narrow
+cell, is not covered.
 
 Opened because the v6 ROADMAP's one substantive open perf item reads:
 
@@ -192,29 +193,81 @@ This is not a benchmark-shaped case. Re-adding a member at an unchanged
 score is what an idempotent upsert does, what a retry does, and what a
 leaderboard write does whenever the value has not moved.
 
-### Priced by ablation, on a set where the tree costs something
+### Priced by ablation: the hash is the control
 
-200,000 members loaded and verified by `ZCARD` before **and** after the
-run (the load silently produced an empty key on the first attempt through
-`redis-cli --pipe`; the witness is why that reading was thrown away instead
-of reported):
+`ZSCORE` reaches `by_member` and stops. `ZADD` reaches `by_member` and then
+the ordered index. Both go through the same parse and dispatch. Measured on
+the same server across sizes that span both encodings — arena protocol,
+median-of-5, cardinality read back before **and** after every sweep (the
+first attempt at loading 200k produced an empty key through
+`redis-cli --pipe` and the witness is why that reading was discarded rather
+than reported):
 
-| | median ops/s | stdev | ns/op |
+| members | encoding | ZADD ns/op | ZSCORE ns/op | ZADD − ZSCORE |
+|---:|---|---:|---:|---:|
+| 1 | Flat | 330.7 (±4.7%) | 159.2 | 171.5 |
+| 100 | Flat | 370.5 (±4.7%) | 159.1 | 211.4 |
+| 2,000 | Flat | 418.7 (±5.4%) | 151.7 | 266.9 |
+| 8,000 | Flat | 476.4 (±2.5%) | 155.1 | 321.3 |
+| 200,000 | Seg | 492.9 (±2.3%) | 150.2 | 342.8 |
+
+**`ZSCORE` is flat at 150-159 ns/op across five orders of magnitude.** The
+member hash does not care how many members there are, which is what a hash
+is for — and it is the control that makes the rest of the table readable.
+
+`ZADD` is not flat. It costs 162.2 ns/op more at 200,000 members than at 1,
+and 145.7 ns/op more at 8,000 than at 1 — the latter entirely within the
+Flat encoding, so it is one code path being asked to do more work, not two
+code paths being compared.
+
+The write path, the entry lookup, the COW and the propagation bookkeeping
+are all the same at n=1 and n=8,000. The hash is measured constant. **So
+the size-dependent term is the ordered index and nothing else** — which is
+precisely the remove-and-insert pair that a same-score ZADD does not need.
+
+| | n=1 | n=8,000 | n=200,000 |
 |---|---:|---:|---:|
-| same score | 1,989,749 | 64,435 | 502.6 |
-| varying score (`-r`) | 1,332,112 | 24,645 | 750.7 |
+| ZADD, total | 330.7 | 476.4 | 492.9 |
+| — of which grows with the set | 0 (by definition) | **145.7** | **162.2** |
+| — as a share of the op | — | **30.6%** | **32.9%** |
 
-657,637 apart against a tolerance of 64,435 — ten times the band.
+### What this predicts, and what it does not
 
-Against the one-member cell (333.9 ns/op, same protocol), a same-score ZADD
-on a 200k set costs **168.7 ns/op more**.
+A guard that skips the index work when the score is unchanged removes the
+size-dependent term outright, plus a fixed part it cannot separate from the
+rest without being implemented. So:
 
-**That 168.7 ns is not yet attributable.** At 200k the rank tree is deeper
-*and* `by_member` is a 200k-entry hash whose lookups miss cache more often.
-The number is the sum of both, and only the tree half is what the guard
-would remove. Splitting them is what the pending profile is for.
+- at 8,000 members: **≥145.7 ns/op of 476.4**, i.e. 2,099,000 -> ≥3,024,000
+  ops/s, **+44% or better**;
+- at 200,000 members (Seg): ≥162.2 ns/op of 492.9, **+49% or better**;
+- **at the arena's cell, n=1: almost nothing.** The size-dependent term is
+  zero there by construction. Only the fixed cost of calling remove and
+  insert on a one-node tree, and two `SmallBytes`, are on the table.
 
----
+That last line is the answer to the question the ROADMAP actually asked,
+and it is worth stating plainly: **the cell the roadmap points at is not
+where this cost lives.** The arena's ZADD writes to a sorted set of one
+member. Real sorted sets are leaderboards, time indexes, priority queues —
+thousands to millions of members — and it is at those sizes that a third of
+every same-score ZADD is spent taking an entry out of the index and putting
+it back unchanged.
+
+The Seg encoding has the same shape and one extra cost. `SegZSetData::insert`
+(crates/kevy-store/src/zset_seg.rs:80) removes and re-inserts just as
+unconditionally, and reaches its segment through
+`Arc::make_mut(&mut self.segs[si])` — so under a live snapshot a same-score
+ZADD can deep-clone a segment of up to `ZSEG_CAP` = 512 entries in order to
+put back exactly what was in it.
+
+### A correction to this document's own first pass
+
+An earlier reading here priced the candidate at "168.7 ns/op on a 200k set"
+by subtracting the one-member cell from the 200k one. That subtraction
+spans the `Z_PROMOTE` = 16,384 boundary: the one-member cell is `ZSet`
+(Flat) and the 200k cell is `SegZSet`. It was two encodings being
+differenced as though they were one, which is the same mistake this
+document opens by pointing out in the 2026-08-08 profile. The 8,000-member
+row exists because it is on the same side of that boundary as n=1.
 
 ## S04 — the guard has a correctness precondition, and it exposes a latent defect
 
@@ -264,22 +317,53 @@ of what this decomposition concludes.
 
 ---
 
+## Budget reconciliation
+
+The methodology asks that the stages sum to the measured wire time within
+±20%. For ZADD on an 8,000-member Flat set, where every term below was
+measured on the same server in the same session:
+
+| term | ns/op | how it was measured |
+|---|---:|---|
+| parse, dispatch, entry lookup, member hash, reply | 155.1 | `ZSCORE` on the same key |
+| write path + hash insert over get + 2 extra `SmallBytes` + fixed index calls | 171.5 | `ZADD` − `ZSCORE`, both at n=1 |
+| ordered-index work that scales with the set | 145.7 | `ZADD` at n=8,000 − `ZADD` at n=1 |
+| **sum** | **472.3** | |
+| **measured** | **476.4** | |
+
+**0.9% apart.** No stage is missing.
+
+The prediction that follows is stated as separately measurable quantities
+rather than one number, because the one-number form is what the SPG round
+got wrong five times out of six: the third row is what the guard removes
+in full, the second row is what it dents, and the first row is untouched.
+If a Phase B lands and ZADD at n=8,000 does not reach ~3.02M ops/s, one of
+those three rows is wrong and the ablation says which one to re-measure.
+
 ## Open
 
-1. **The profile that splits 168.7 ns into tree and hash.** Requires the
-   `profiling` profile — release codegen with symbols. `strip = true` is set
-   on `[profile.release]`, and a perf record of it resolves nothing but libc
-   and the kernel: the first attempt here came back with 22.92% against a
-   bare address. Cargo.toml says so directly, three profiles above where I
-   read it: *"Three phrase-query profiles were spent finding that out."*
-   Building now.
-2. **Budget reconciliation.** The methodology wants stages summing to within
-   ±20% of the measured wire time. Four stages are priced; the sum has not
-   been closed against 340.2 ns/op.
+1. **Phase B has not started.** The change is a guard in two functions —
+   `ZSetData::insert` (value.rs:81) and `SegZSetData::insert`
+   (zset_seg.rs:80) — comparing through `total_cmp`, never `==`, for the
+   reason in S04. It must be measured, not assumed: this repository's own
+   methodology file records four attacks whose decomposition predicted
+   thousands of microseconds and which measured throughput-neutral or
+   negative.
+2. **`Score`'s derived `PartialEq` should be fixed regardless.** It
+   disagrees with its own `Ord` about `-0.0`, which Rust does not permit of
+   an ordered key. Nothing exploits it today; the guard would be the first
+   thing to ask, and any future `==` on a `Score` is a latent version of the
+   same bug. That is a correctness change and belongs in its own commit,
+   before or independent of any perf work.
 3. **LPUSH**, the other narrow cell, is untouched here. Its arena cell grows
    without bound — at ~3M ops/s a 3-second window appends ~9M elements — so
    it is a different measurement with a different shape, and it needs its own
    pass rather than a paragraph in this one.
+4. **The 13-byte inline ceiling** is priced (14.7% at the boundary) but not
+   actionable inside the `size_of::<Value>() <= 32` budget that keeps `Entry`
+   at 48 bytes. Whether a zset member deserves more inline room than a
+   `user:1234567` is a memory trade, and the owner has already priced the
+   other side of it.
 
 ## Incidental, from the box rather than the code
 
