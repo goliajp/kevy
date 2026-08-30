@@ -18,6 +18,29 @@ use super::{CorpusStats, QueryOpts, TextMatch, TextSegment};
 use crate::positions::{Positions, walk};
 use crate::token::{tokenize, tokenize_spans};
 
+/// Whether the query is the ordinary pruned term query — no phrase, prefix,
+/// typo, field, filter, sort, distinct or facet clause.
+///
+/// Split out of `matches_query_faceted` for the 50-line rule. It reads
+/// better as a name than as eight `&&`s, and the name is the thing the
+/// comment underneath it used to have to say.
+fn is_plain_term_query(
+    phrases: &[Vec<Vec<u8>>],
+    prefixes: &[Vec<u8>],
+    want: &[usize],
+    opts: &QueryOpts,
+    facets: &[crate::Facet],
+) -> bool {
+    phrases.is_empty()
+        && prefixes.is_empty()
+        && opts.typo == 0
+        && want.is_empty()
+        && opts.filter.is_empty()
+        && opts.sort.is_none()
+        && opts.distinct.is_none()
+        && facets.is_empty()
+}
+
 impl TextSegment {
     /// BM25-ranked documents that contain `phrase`'s tokens **adjacent
     /// and in order**, best `limit` hits, score-descending.
@@ -125,18 +148,7 @@ impl TextSegment {
             return empty();
         };
         let (bare, phrases, prefixes) = parse_clauses(text);
-        if phrases.is_empty()
-            && prefixes.is_empty()
-            && opts.typo == 0
-            && want.is_empty()
-            && opts.filter.is_empty()
-            && opts.sort.is_none()
-            && opts.distinct.is_none()
-            && facets.is_empty()
-        {
-            // No phrase, prefix, typo, field, filter, sort or distinct
-            // clause — the
-            // ordinary pruned term query.
+        if is_plain_term_query(&phrases, &prefixes, &want, &opts, facets) {
             return crate::FacetedMatches {
                 hits: self.matches_scored(text, limit, opts.stats),
                 facets: Vec::new(),

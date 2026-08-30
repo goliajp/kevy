@@ -25,6 +25,9 @@ use crate::state::{CatalogState, RuntimeState};
 
 /// Origin half: merge chunks → RESP (or a follow-up fan-out — the
 /// GROUPS top-K and its AGG.FETCH phase are the two-phase shapes).
+// Nine guards in a row, each naming one verb and handing it to its
+// reducer. The control flow is a straight line.
+// LOC-WAIVER: a routing table written as a guard chain.
 pub(crate) fn extension_reduce(
     state: &RuntimeState,
     argv: &[Vec<u8>],

@@ -114,26 +114,14 @@ fn cmd_list(s: &Store, out: &mut Vec<u8>) {
 /// `TABLE.VERIFY name` — per compiled index the IDX.VERIFY sextet led
 /// by the index name, then the spot-check pair (the server's exact
 /// reply shape; embedded builds are synchronous, so never BUILDING).
-fn cmd_verify(s: &Store, name: &[u8], out: &mut Vec<u8>) {
-    const LABELS: [&[u8]; 10] = [
-        b"entries",
-        b"bytes",
-        b"coerce_failures",
-        b"duplicates",
-        b"drift",
-        b"checked",
-        b"excluded",
-        b"absent",
-        b"rows",
-        b"missing",
-    ];
-    let Ok(report) = s.table_verify_report(name) else {
-        let n = String::from_utf8_lossy(name);
-        return err(out, &format!("ERR no such table '{n}' (TABLE.LIST enumerates them)"));
-    };
-    let spot = [report.spot_rows, report.spot_type_mismatches];
-    let per_index: Vec<(Vec<u8>, [u64; 10])> = report
-        .per_index
+/// One index's ten counts, flattened into the order `LABELS` names them.
+///
+/// The array and the label list are two halves of one table and are zipped
+/// together at the reply, so they must stay in the same order; keeping the
+/// flattening here rather than inline in the reply loop is what makes that
+/// pairing a single readable line.
+fn index_counts(per_index: Vec<kevy_index::IndexVerify>) -> Vec<(Vec<u8>, [u64; 10])> {
+    per_index
         .into_iter()
         .map(|i| {
             (
@@ -152,7 +140,28 @@ fn cmd_verify(s: &Store, name: &[u8], out: &mut Vec<u8>) {
                 ],
             )
         })
-        .collect();
+        .collect()
+}
+
+fn cmd_verify(s: &Store, name: &[u8], out: &mut Vec<u8>) {
+    const LABELS: [&[u8]; 10] = [
+        b"entries",
+        b"bytes",
+        b"coerce_failures",
+        b"duplicates",
+        b"drift",
+        b"checked",
+        b"excluded",
+        b"absent",
+        b"rows",
+        b"missing",
+    ];
+    let Ok(report) = s.table_verify_report(name) else {
+        let n = String::from_utf8_lossy(name);
+        return err(out, &format!("ERR no such table '{n}' (TABLE.LIST enumerates them)"));
+    };
+    let spot = [report.spot_rows, report.spot_type_mismatches];
+    let per_index = index_counts(report.per_index);
     arr(out, per_index.len() + 1);
     for (iname, sums) in &per_index {
         arr(out, 22);

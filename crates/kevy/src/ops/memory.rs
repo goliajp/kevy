@@ -183,52 +183,33 @@ mod tests {
     fn memory_top_level_dispatches_each_subcommand() {
         let cfg = Config::default();
         let store = Store::new();
+        // One call shape, five subcommands: the closure is what keeps the
+        // five assertions readable next to each other.
+        let run = |args: &[&[u8]], out: &mut Vec<u8>| {
+            cmd_memory(&cfg, &crate::state::Totals::default(), &store, &argv(args), out);
+        };
         // DOCTOR — canonical no-issues body
         let mut out = Vec::new();
-        cmd_memory(
-            &cfg,
-            &crate::state::Totals::default(),
-            &store,
-            &argv(&[b"MEMORY", b"DOCTOR"]),
-            &mut out,
-        );
+        run(&[b"MEMORY", b"DOCTOR"], &mut out);
         assert!(
             out.starts_with(b"$") && out.windows(5).any(|w| w == b"issue"),
             "DOCTOR should return a bulk diagnostic; got {out:?}"
         );
         // PURGE — +OK
         out.clear();
-        cmd_memory(
-            &cfg,
-            &crate::state::Totals::default(),
-            &store,
-            &argv(&[b"MEMORY", b"PURGE"]),
-            &mut out,
-        );
+        run(&[b"MEMORY", b"PURGE"], &mut out);
         assert_eq!(out, b"+OK\r\n");
         // MALLOC-STATS — bulk note
         out.clear();
-        cmd_memory(
-            &cfg,
-            &crate::state::Totals::default(),
-            &store,
-            &argv(&[b"MEMORY", b"MALLOC-STATS"]),
-            &mut out,
-        );
+        run(&[b"MEMORY", b"MALLOC-STATS"], &mut out);
         assert!(out.starts_with(b"$"));
         // missing subcommand
         out.clear();
-        cmd_memory(&cfg, &crate::state::Totals::default(), &store, &argv(&[b"MEMORY"]), &mut out);
+        run(&[b"MEMORY"], &mut out);
         assert!(out.starts_with(b"-ERR wrong number of arguments"));
         // unknown subcommand
         out.clear();
-        cmd_memory(
-            &cfg,
-            &crate::state::Totals::default(),
-            &store,
-            &argv(&[b"MEMORY", b"NOPE"]),
-            &mut out,
-        );
+        run(&[b"MEMORY", b"NOPE"], &mut out);
         assert!(out.starts_with(b"-ERR Unknown MEMORY subcommand"));
     }
 

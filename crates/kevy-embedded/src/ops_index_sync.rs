@@ -101,6 +101,10 @@ pub(crate) fn sync_segs(reg: &IndexReg, shard_segs: &mut ShardSegs, store: &mut 
 
 /// The out-of-date half of `sync_segs`: rebuild every per-kind segment
 /// list against the catalog (existing segments move, new specs backfill).
+// Every kind appears twice below, once for the build that has the engine
+// and once for the build that answers NotFound instead, which is where the
+// length comes from — the control flow is one `for`.
+// LOC-WAIVER: a match over IndexKind, one push per arm, doubled by #[cfg].
 fn rebuild_seg_lists(
     cat: &kevy_index::Catalog,
     ver: u64,

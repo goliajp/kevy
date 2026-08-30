@@ -100,6 +100,37 @@ pub(crate) fn write_stream_id_fixup<W: Write>(
     Ok(frames)
 }
 
+/// The XCLAIM that restores one pending entry to its owner on replay.
+///
+/// `FORCE` because the entry is already in the stream and `JUSTID` because
+/// the payload is not being re-delivered — only the ownership and the
+/// delivery bookkeeping are. Split from `write_stream_group_commands` for
+/// the 50-line rule; it was the longest of that function's three argv
+/// literals and the only one with arguments to explain.
+fn xclaim_argv(
+    key: &[u8],
+    group: &[u8],
+    consumer: &[u8],
+    id: StreamId,
+    delivery_time_ms: impl core::fmt::Display,
+    delivery_count: impl core::fmt::Display,
+) -> Vec<Vec<u8>> {
+    vec![
+        b"XCLAIM".to_vec(),
+        key.to_vec(),
+        group.to_vec(),
+        consumer.to_vec(),
+        b"0".to_vec(),
+        id.encode(),
+        b"TIME".to_vec(),
+        delivery_time_ms.to_string().into_bytes(),
+        b"RETRYCOUNT".to_vec(),
+        delivery_count.to_string().into_bytes(),
+        b"FORCE".to_vec(),
+        b"JUSTID".to_vec(),
+    ]
+}
+
 /// Consumer-group section of a stream rewrite: `XGROUP CREATE … MKSTREAM`
 /// (MKSTREAM covers groups on a virgin empty stream), one CREATECONSUMER
 /// per known consumer, then one `XCLAIM … TIME t RETRYCOUNT n FORCE JUSTID`
@@ -144,20 +175,7 @@ pub(crate) fn write_stream_group_commands<W: Write>(
             if !s.contains_entry(id) {
                 continue;
             }
-            let argv = vec![
-                b"XCLAIM".to_vec(),
-                key.to_vec(),
-                g.name.clone(),
-                consumer.clone(),
-                b"0".to_vec(),
-                id.encode(),
-                b"TIME".to_vec(),
-                delivery_time_ms.to_string().into_bytes(),
-                b"RETRYCOUNT".to_vec(),
-                delivery_count.to_string().into_bytes(),
-                b"FORCE".to_vec(),
-                b"JUSTID".to_vec(),
-            ];
+            let argv = xclaim_argv(key, &g.name, consumer, id, *delivery_time_ms, *delivery_count);
             emit(w, &Argv::from(argv), fmt, scratch)?;
             frames += 1;
         }
