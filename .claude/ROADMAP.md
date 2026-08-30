@@ -6,6 +6,14 @@
 「无死路径」说的是**集合**,「无冗余实现」说的是**关系**,「stone 扎实」
 说的是**能不能在本 workspace 之外站起来**。
 
+**当前状态**(2026-08-30):已发布 **v6.1.0**,`check_channels_published.py`
+按内容核验 **56/56 扇门**(11 类 registry + GitHub release + ghcr + Docker Hub
++ 官网)。四扇仍需人手扣扳机 —— pypi / nuget / maven 是属主有意做成
+`workflow_dispatch`(发到那三处的版本撤不回来,不该由 tag push 自己开),
+pub.dev 差属主在 admin 里开「publish from GitHub Actions」这一个开关。
+忘记的风险已由 `channel-parity.yml` 兜住:它在**发布工作流结束时**跑,
+问 registry 不问树,四扇里任一停在旧版就红。
+
 ## 工具链 ✅ 十一件全部建成并接上真基线
 
 suite 从 75 项到 **84** 项(precommit 23 ⊆ prerelease 40 ⊆ full 84)。
@@ -24,6 +32,46 @@ suite 从 75 项到 **84** 项(precommit 23 ⊆ prerelease 40 ⊆ full 84)。
       `bench/FINDING-2026-08-28-part-of-the-dead-set-is-not-reproducible.md`
 
 ## 已闭合的缺陷(全部由这些仪器挖出并验证)
+
+- [x] **一次拒绝挡住了 runner 本可以开的四扇门**(2026-08-30,v6.1.0 发布轮)。
+      体积棘轮在它加入后的**第一次真实发布**里抓到了它就是为之而生的那件事:
+      Linux runner 打 `expo-kevy` 得 37,816 字节,而 npm 供 110,723,661 ——
+      预编译的 iOS/Android 引擎是 gitignore 的构建产物,只存在于带那两套
+      工具链的机器上。拒绝是对的。但 `set -e` 下的 `exit 1` 结束了整个循环,
+      排在它后面的四个包一个都没轮到,其中三个是纯 JS、runner 完全发得动。
+      **一扇谁也开不了的门,挡住了四扇谁都能开的**。
+      现在拒绝只记名字不传染;真正让发布变红的是**问 registry 的那道门**,
+      而它现在在发布工作流结束时就跑,不再只等第二天 06:17。
+- [x] **Go 那扇门被报成关着,而用户正从中走过**(同轮)。门禁问的是
+      `@v/v6.1.0.info`;tag 推完几秒我就去问,代理向 GitHub 要、tag 还没扩散,
+      于是**把缺席缓存了下来**,404 供了半小时 —— 同期 `@latest` 认 v6.1.0、
+      `.mod` 和 `.zip` 都是 200、`GOPROXY=proxy.golang.org go get …@v6.1.0`
+      装得上。`go` 解析精确版本要的是 `.mod` 和 `.zip`,`.info` 是给 @latest 的。
+      **假红的代价和假绿一样** —— 两者都教人别读这道门。改问 `.mod` 且看内容。
+- [x] **768 页里 657 页没有 hreflang,而没有任何东西问过**(同轮)。
+      `documentHtml` 一直收 `alternates`,五个函数调它,**只有一个填了**。
+      于是全部 618 个命令页、两个本地化首页、32 个内容页和英文正门都以
+      "本站只有一种语言"发了出去,而页头的语言切换器在每一页上都渲染三条链接。
+      `verify.mjs` 有一条叫「the document offers its translations」的检查,它过 ——
+      因为它抽的是参考页,正是那 111 页之一。**抽样的门禁只证明样本**。
+      改成从每页已声明的 `canonical` 机械推导(前缀摘下、各自装回),
+      调用方只能说"我缺哪几语",不可能忘记说"我在哪"。含自引用与 x-default。
+- [x] **变更日志页的 canonical 指着一个返回 200 的空壳**(同轮,被上一条挖出)。
+      `/changelog/` 由 `renderDocPage` 渲染,而它按 slug 拼出 `/docs/<slug>/` ——
+      于是这一页不知多少个发布以来都在告诉搜索引擎"我的真身在 /docs/changelog/",
+      而这台主机对那个地址回 200 + SPA 壳。`check.mjs` 查不到它:它的链接检查
+      第二行就 `if (/^(https?:|…)/) continue`,而 canonical/alternate 写的是绝对
+      URL,**从来没被要求解析过**。现在 3,834 条全部对 dist/ 解析,每页的
+      canonical 必须出现在自己的 alternates 里,并带下限;把缺陷放回去验过会红。
+- [x] **门禁审判的是它自己刚写出来的文件**(同轮)。CI 先跑 `stone_report.py`
+      覆盖 `bench/STONE-REPORT.json`,再跑 `check_stones.py` —— 所以 CI 判的
+      永远是它刚取的那份读数,**从不是仓库出货的那份**。而入库那份已经
+      **两次描述了错误的发布**:6.0.0 树里写 5.4.1,6.1.0 树里写 6.0.0。
+      第一次的修复把诊断写进了 commit message,然后只改了数据。两天后重演。
+      现在 CI 用 `git show HEAD:` 读入库副本(工作副本此时已被覆盖),
+      且这一步放在 artifact 上传**之后** —— 因为版本 bump 正是它会红的时刻,
+      而它让人去取的那个 artifact 必须已经存在。只比版本,不比覆盖率数字。
+      五条合并写在 `bench/FINDING-2026-08-30-gates-that-judge-their-own-output.md`。
 
 - [x] **十三件仪器全绿,而八扇发布门停在旧版**(2026-08-30,v6.0.0 发布后)。
       220 处版本声明一致、引擎字节自报 6.0.0、CI 全绿 —— **每一道门读的都是
