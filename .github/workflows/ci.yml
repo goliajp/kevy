@@ -184,6 +184,42 @@ jobs:
             bench/STONE-REPORT.json
             bench/STONE-REPORT.md
           if-no-files-found: error
+      # The one thing stonegate above cannot see.
+      #
+      # `stone_report.py` overwrites bench/STONE-REPORT.json before
+      # `check_stones.py` reads it, so what CI judges is always the report
+      # it just took — never the one in the repository. The tracked copy is
+      # what a person opens and what a local stonegate run refuses on, and
+      # it has now been left describing the previous release twice: at
+      # 5.4.1 in a 6.0.0 tree, and at 6.0.0 in a 6.1.0 one. Both times the
+      # diagnosis was written down and only the data was fixed.
+      #
+      # `git show HEAD:` is the point: it reads the committed file, not the
+      # overwritten working one, so this can run after the upload — which
+      # matters, because a version bump makes this step fail and the
+      # artifact it tells you to fetch must still be produced.
+      #
+      # Version only. Coverage numbers move for honest reasons and a gate
+      # that demands they match byte for byte would be red on noise.
+      - name: the tracked stone report describes THIS release
+        if: always() && steps.stonereport.outcome == 'success'
+        run: |
+          set -euo pipefail
+          want=$(python3 -c "import tomllib;print(tomllib.load(open('Cargo.toml','rb'))['workspace']['package']['version'])")
+          got=$(git show HEAD:bench/STONE-REPORT.json |
+                python3 -c "import json,sys;print(json.load(sys.stdin)['version'])")
+          if [ "$got" != "$want" ]; then
+            echo "The stone report committed to this repository says $got."
+            echo "This tree is $want. A reading of a different release cannot"
+            echo "judge this one, and it is the copy a reader opens."
+            echo
+            echo "Take this run's stone-report-linux artifact — the enforcing"
+            echo "platform's reading — and commit it. Do not regenerate on a"
+            echo "workstation: on macOS the Linux-only stones come back absent"
+            echo "rather than dead, and absent is not a score."
+            exit 1
+          fi
+          echo "tracked stone report: $got"
 
   # ───────────── doc deficit: what the documentation owes ─────────────
   docdeficit:
