@@ -249,6 +249,19 @@ all. Every gate passed: they all read the tree, and the tree was
 internally consistent. What follows is how to check a single channel by
 hand when the tool names one.
 
+**Three doors need a machine, not a runner.** `expo-kevy`,
+`react-native-kevy-nitro` and `flutter_kevy` ship ~105 MB of prebuilt
+engine — xcframework slices and jniLibs — that are gitignored build
+outputs. On a clean runner `npm pack` produces a package declaring `ios`
+and `android` and containing neither, and npm accepts it; the publish step
+now refuses when what it would upload is less than half of what the
+registry already serves. Build them with `packaging/apple/build-xcframework.sh`
+and `packaging/android/build-*jnilibs.sh`, copy them into place, and run
+`python3 tools/check_version_alignment.py` **on that machine** — its layer 6
+sees all 17 artifacts only there, and it refuses one that names its builder.
+That check exists because every published mobile package up to 6.0.0 carries
+`/Users/<name>/.rustup/...`, up to 422 times in a slice.
+
 **Two doors do not open by themselves.** Maven Central is
 `workflow_dispatch` only and deliberately so — Central cannot be
 withdrawn — and pub.dev's first publish per package is manual. Dispatch

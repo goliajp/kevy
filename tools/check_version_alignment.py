@@ -33,6 +33,7 @@ Run: python3 tools/check_version_alignment.py
 """
 
 import json
+import os
 import pathlib
 import re
 import subprocess
@@ -338,6 +339,26 @@ def layer6_vendored_bytes(v: str, bad: list) -> int:
             bad.append(
                 f"{p.relative_to(ROOT)}: engine bytes self-report {found or ['nothing']}, "
                 f"not {v} — rebuild and re-vendor (see the release skill)"
+            )
+        # And they must not say who built them. These files are shipped
+        # inside public npm and pub.dev packages; on a machine with the
+        # `rust-src` component rustc resolves std's panic locations to the
+        # local toolchain source, and the macOS xcframework slices carried
+        # 422 copies of /Users/<name>/.rustup/... into every release. The
+        # build scripts under packaging/ pass --remap-path-prefix now; this
+        # is what keeps it true.
+        #
+        # THIS machine's home, not any /Users/. The aarch64-apple-darwin
+        # compiler-builtins ships 343 paths under /Users/runner/work/rust —
+        # Rust's own build machine, present in every artifact for that
+        # target and not ours to remap. A check that flagged those would be
+        # red on a correct file, which is how a gate stops being read.
+        here = os.path.expanduser("~").encode()
+        if here != b"~" and here in out:
+            n = out.count(here)
+            bad.append(
+                f"{p.relative_to(ROOT)}: names its builder — {n} path(s) under "
+                f"this machine's home; rebuild with packaging/, which remaps $HOME"
             )
     return checked
 
