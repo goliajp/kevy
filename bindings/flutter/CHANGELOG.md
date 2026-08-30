@@ -1,3 +1,16 @@
+## 6.2.0
+
+Tracks the kevy 6.2.0 engine. No API change in this door.
+
+* **`-0` and `0` are one score now, as they are in Redis.** A member stored
+  at `-0` used to sort before members scored `0`; it now ties with them and
+  the member name breaks the tie, which is what Redis has always answered.
+  `ZSCORE` is unchanged — it returned `0` before and returns `0` now.
+* **`ZADD` is substantially faster when it changes nothing.** Re-adding a
+  member at a score it already has no longer removes it from the ordered
+  index and puts it back: +52.8% at eight thousand members, +55.3% at two
+  hundred thousand.
+
 ## 6.1.0
 
 Tracks the kevy 6.1.0 engine. No API change in this door.
