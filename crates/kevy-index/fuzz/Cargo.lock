@@ -55,7 +55,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-index"
-version = "6.1.0"
+version = "6.2.0"
 dependencies = [
  "kevy-time",
 ]
@@ -70,7 +70,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-time"
-version = "6.1.0"
+version = "6.2.0"
 
 [[package]]
 name = "libc"
