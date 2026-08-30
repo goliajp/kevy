@@ -198,17 +198,40 @@ def bump_patterned(new: str, changes: list) -> None:
             changes.append((f, edited))
 
 
+    # CMake's project() version. The gate learned this format on 2026-08-30
+    # after bindings/cpp sat three releases behind, unnoticed because
+    # nothing consumes it. A gate that reads a layer and a bump that does
+    # not is the same hole with an extra step.
+    for f in sorted(ROOT.glob("bindings/**/CMakeLists.txt")):
+        if skip(f):
+            continue
+        txt = source(f, changes)
+        edited = re.sub(r"(^project\([^)]*?VERSION\s+)\d+\.\d+\.\d+",
+                        lambda m: m.group(1) + new, txt, flags=re.M | re.S)
+        if edited != txt:
+            record(f, edited, changes)
+
+
 def bump_prose(new: str, changes: list) -> None:
     claim = re.compile(
         r"(tracks kevy \*\*)(\d+\.\d+\.\d+)(\*\*)"
         r"|(`jp\.golia:kevy:)(\d+\.\d+\.\d+)(`)"
-        r"|(<artifactId>kevy</artifactId><version>)(\d+\.\d+\.\d+)(</version>)")
+        r"|(<artifactId>kevy</artifactId><version>)(\d+\.\d+\.\d+)(</version>)"
+        # The three bindings tables — one per language — state a version per
+        # row. The gate has read them since it learned to; this did not, so
+        # the 6.1.0 bump left twenty-four rows saying 6.0.0 and the gate
+        # caught it. Same shape as every other layer that bit alone.
+        r"|(^\|[^|]*\|[^|]*\|\s*)(\d+\.\d+\.\d+)(\s*\|$)", re.M)
 
     def sub(m: re.Match) -> str:
         g = [x for x in m.groups() if x is not None]
         return g[0] + new + g[2]
 
-    for f in sorted(ROOT.glob("bindings/**/*.md")) + [ROOT / "README.md"]:
+    # Exactly the files layer 5 of the gate reads — the whole point of this
+    # tool is that the two cannot disagree about where a version lives.
+    for f in (sorted(ROOT.glob("bindings/**/*.md"))
+              + [ROOT / "README.md", ROOT / "docs/bindings.md",
+                 ROOT / "docs/ja/bindings.md", ROOT / "docs/zh/bindings.md"]):
         if skip(f) or not f.exists():
             continue
         txt = source(f, changes)
