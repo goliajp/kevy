@@ -46,7 +46,7 @@ The embedded store is also usable directly (`EmbeddedDb`, §5.2):
 ## Build / test
 
 Maven is the canonical build (`pom.xml`, group `jp.golia`, artifact `kevy`). The
-coordinates are `jp.golia:kevy:6.0.0`, matching the engine version — but
+coordinates are `jp.golia:kevy:6.1.0`, matching the engine version — but
 **nothing is on Maven Central yet**, so resolve it locally
 (`mvn install`) or use `run-tests.sh` below, which needs no Maven at all.
 This repo needs neither Maven nor Gradle on `PATH`: `run-tests.sh` builds
