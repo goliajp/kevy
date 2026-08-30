@@ -40,11 +40,7 @@ impl AsyncConnection {
 
     /// `SISMEMBER key member`. `false` if absent.
     pub async fn sismember(&mut self, key: &[u8], member: &[u8]) -> io::Result<bool> {
-        match self
-            .codec_mut()
-            .request_borrowed(&[b"SISMEMBER", key, member])
-            .await?
-        {
+        match self.codec_mut().request_borrowed(&[b"SISMEMBER", key, member]).await? {
             Reply::Int(1) => Ok(true),
             Reply::Int(0) => Ok(false),
             Reply::Error(e) => Err(io::Error::other(string(e))),

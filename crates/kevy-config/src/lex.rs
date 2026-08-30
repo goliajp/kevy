@@ -60,12 +60,7 @@ struct Lexer<'a> {
 
 impl<'a> Lexer<'a> {
     fn new(src: &'a str) -> Self {
-        Self {
-            bytes: src.as_bytes(),
-            pos: 0,
-            line: 1,
-            col: 1,
-        }
+        Self { bytes: src.as_bytes(), pos: 0, line: 1, col: 1 }
     }
 
     fn next_token(&mut self) -> Result<Option<Spanned>, ConfigError> {
@@ -208,9 +203,8 @@ impl<'a> Lexer<'a> {
             .filter(|&&b| b != b'_')
             .map(|&b| b as char)
             .collect();
-        let n: i64 = raw
-            .parse()
-            .map_err(|_| parse_err(line, col, format!("invalid integer {raw:?}")))?;
+        let n: i64 =
+            raw.parse().map_err(|_| parse_err(line, col, format!("invalid integer {raw:?}")))?;
         Ok(Token::Int(n))
     }
 
@@ -243,11 +237,7 @@ fn is_ident_cont(b: u8) -> bool {
 }
 
 fn parse_err(line: usize, col: usize, msg: impl Into<String>) -> ConfigError {
-    ConfigError::Parse {
-        line,
-        col,
-        msg: msg.into(),
-    }
+    ConfigError::Parse { line, col, msg: msg.into() }
 }
 
 #[cfg(test)]
@@ -255,12 +245,7 @@ mod tests {
     use super::*;
 
     fn toks(src: &str) -> Vec<Token> {
-        tokenize(src)
-            .unwrap()
-            .0
-            .into_iter()
-            .map(|s| s.tok)
-            .collect()
+        tokenize(src).unwrap().0.into_iter().map(|s| s.tok).collect()
     }
 
     #[test]
@@ -306,12 +291,7 @@ mod tests {
         let got = toks("port = 7000 # the port\n");
         assert_eq!(
             got,
-            vec![
-                Token::Ident("port".into()),
-                Token::Equals,
-                Token::Int(7000),
-                Token::Newline,
-            ]
+            vec![Token::Ident("port".into()), Token::Equals, Token::Int(7000), Token::Newline,]
         );
     }
 

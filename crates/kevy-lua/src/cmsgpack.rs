@@ -94,12 +94,7 @@ use encode::encode_value;
 // fn-length exemption: pure data-driven msgpack tag match table — one
 // flat arm per wire tag, only a length read + decode_* delegate each.
 // LOC-WAIVER: data-driven msgpack tag dispatch table — one arm per tag range.
-fn decode_value(
-    vm: &mut Vm,
-    bytes: &[u8],
-    cur: &mut usize,
-    depth: u32,
-) -> Result<Value, String> {
+fn decode_value(vm: &mut Vm, bytes: &[u8], cur: &mut usize, depth: u32) -> Result<Value, String> {
     if depth >= MAX_DEPTH {
         return Err("max recursion depth".into());
     }
@@ -244,7 +239,8 @@ fn decode_array(
     n: usize,
     depth: u32,
 ) -> Result<Value, String> {
-    let mut entries: Vec<Value> = Vec::with_capacity(elements_fit(n, bytes.len().saturating_sub(*cur), 1));
+    let mut entries: Vec<Value> =
+        Vec::with_capacity(elements_fit(n, bytes.len().saturating_sub(*cur), 1));
     for _ in 0..n {
         entries.push(decode_value(vm, bytes, cur, depth)?);
     }
@@ -263,7 +259,8 @@ fn decode_map(
     depth: u32,
 ) -> Result<Value, String> {
     // Pre-collect k/v so we have no &mut Vm conflict with the builder.
-    let mut kvs: Vec<(Value, Value)> = Vec::with_capacity(elements_fit(n, bytes.len().saturating_sub(*cur), 2));
+    let mut kvs: Vec<(Value, Value)> =
+        Vec::with_capacity(elements_fit(n, bytes.len().saturating_sub(*cur), 2));
     for _ in 0..n {
         let k = decode_value(vm, bytes, cur, depth)?;
         let v = decode_value(vm, bytes, cur, depth)?;
@@ -333,8 +330,6 @@ pub(crate) fn install_cmsgpack(vm: &mut Vm) {
     let t = vm.table_of([("pack", pack_fn), ("unpack", unpack_fn)]);
     let _ = vm.set_global("cmsgpack", Value::Table(t));
 }
-
-
 
 #[cfg(test)]
 #[path = "cmsgpack_tests.rs"]

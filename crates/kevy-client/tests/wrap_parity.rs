@@ -23,24 +23,19 @@ struct Server {
 impl Server {
     fn start() -> Self {
         let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let port = std::net::TcpListener::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
+        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
         let dir = std::env::temp_dir().join(format!(
             "kevy-client-parity-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         let dir_thread = dir.clone();
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(NSHARDS)).bind([127, 0, 0, 1], port).shards(NSHARDS)
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(NSHARDS))
+                .bind([127, 0, 0, 1], port)
+                .shards(NSHARDS)
                 .with_data_dir(dir_thread)
                 .with_feed(true, 0);
             rt.run(stop_thread).unwrap();
@@ -78,11 +73,8 @@ fn blocking_pop_immediate_when_data_present() {
     let hit = c.brpop(&[&b"bq"[..]], Some(Duration::from_secs(2))).unwrap();
     assert_eq!(hit, Some((b"bq".to_vec(), b"second".to_vec())));
 
-    c.zadd(b"bz", &[(3.0, b"hi".as_ref()), (1.5, b"lo".as_ref())])
-        .unwrap();
-    let hit = c
-        .bzpopmin(&[&b"bz"[..]], Some(Duration::from_secs(2)))
-        .unwrap();
+    c.zadd(b"bz", &[(3.0, b"hi".as_ref()), (1.5, b"lo".as_ref())]).unwrap();
+    let hit = c.bzpopmin(&[&b"bz"[..]], Some(Duration::from_secs(2))).unwrap();
     assert_eq!(hit, Some((b"bz".to_vec(), b"lo".to_vec(), 1.5)));
 }
 
@@ -91,14 +83,10 @@ fn blocking_pop_timeout_returns_none() {
     let srv = Server::start();
     let mut c = srv.conn();
     let t0 = std::time::Instant::now();
-    let hit = c
-        .blpop(&[&b"never"[..]], Some(Duration::from_millis(300)))
-        .unwrap();
+    let hit = c.blpop(&[&b"never"[..]], Some(Duration::from_millis(300))).unwrap();
     assert_eq!(hit, None);
     assert!(t0.elapsed() >= Duration::from_millis(250), "parked for real");
-    let hit = c
-        .bzpopmin(&[&b"never-z"[..]], Some(Duration::from_millis(300)))
-        .unwrap();
+    let hit = c.bzpopmin(&[&b"never-z"[..]], Some(Duration::from_millis(300))).unwrap();
     assert_eq!(hit, None);
 }
 
@@ -111,9 +99,7 @@ fn blocking_pop_wakes_on_push_from_other_connection() {
         std::thread::sleep(Duration::from_millis(150));
         pusher.rpush(b"wake-q", &[&b"payload"[..]]).unwrap();
     });
-    let hit = waiter
-        .blpop(&[&b"wake-q"[..]], Some(Duration::from_secs(5)))
-        .unwrap();
+    let hit = waiter.blpop(&[&b"wake-q"[..]], Some(Duration::from_secs(5))).unwrap();
     assert_eq!(hit, Some((b"wake-q".to_vec(), b"payload".to_vec())));
     t.join().unwrap();
 }
@@ -124,8 +110,7 @@ fn blocking_pop_wakes_on_push_from_other_connection() {
 fn hash_field_ttl_round_trip() {
     let srv = Server::start();
     let mut c = srv.conn();
-    c.hset(b"h", &[(b"a".as_ref(), b"1".as_ref()), (b"b".as_ref(), b"2".as_ref())])
-        .unwrap();
+    c.hset(b"h", &[(b"a".as_ref(), b"1".as_ref()), (b"b".as_ref(), b"2".as_ref())]).unwrap();
 
     let codes = c
         .hexpire(b"h", &[&b"a"[..], &b"nope"[..]], Duration::from_secs(120), HExpireCond::Always)
@@ -145,14 +130,11 @@ fn hash_field_ttl_round_trip() {
     assert!((110_000..=120_000).contains(&ms), "HPTTL must reply millis: {ms}");
 
     // NX refuses to overwrite the existing deadline.
-    let codes = c
-        .hexpire(b"h", &[&b"a"[..]], Duration::from_secs(300), HExpireCond::Nx)
-        .unwrap();
+    let codes = c.hexpire(b"h", &[&b"a"[..]], Duration::from_secs(300), HExpireCond::Nx).unwrap();
     assert_eq!(codes, vec![0]);
 
-    let codes = c
-        .hpexpire(b"h", &[&b"b"[..]], Duration::from_millis(90_500), HExpireCond::Always)
-        .unwrap();
+    let codes =
+        c.hpexpire(b"h", &[&b"b"[..]], Duration::from_millis(90_500), HExpireCond::Always).unwrap();
     assert_eq!(codes, vec![1]);
     // 90_500 ms rounds to 91 s — HTTL rounds to nearest, as the key-level TTL
     // and Redis both do.
@@ -174,10 +156,8 @@ fn hash_field_ttl_round_trip() {
 fn zset_algebra_store_and_card() {
     let srv = Server::start();
     let mut c = srv.conn();
-    c.zadd(b"za", &[(1.0, b"x".as_ref()), (2.0, b"y".as_ref())])
-        .unwrap();
-    c.zadd(b"zb", &[(10.0, b"y".as_ref()), (20.0, b"z".as_ref())])
-        .unwrap();
+    c.zadd(b"za", &[(1.0, b"x".as_ref()), (2.0, b"y".as_ref())]).unwrap();
+    c.zadd(b"zb", &[(10.0, b"y".as_ref()), (20.0, b"z".as_ref())]).unwrap();
 
     assert_eq!(c.zinterstore(b"zi", &[&b"za"[..], &b"zb"[..]]).unwrap(), 1);
     assert_eq!(c.zscore(b"zi", b"y").unwrap(), Some(12.0)); // SUM
@@ -185,12 +165,7 @@ fn zset_algebra_store_and_card() {
     assert_eq!(c.zunionstore(b"zu", &[&b"za"[..], &b"zb"[..]]).unwrap(), 3);
 
     let n = c
-        .zunionstore_with(
-            b"zw",
-            &[&b"za"[..], &b"zb"[..]],
-            Some(&[2.0, 1.0]),
-            ZAggregate::Max,
-        )
+        .zunionstore_with(b"zw", &[&b"za"[..], &b"zb"[..]], Some(&[2.0, 1.0]), ZAggregate::Max)
         .unwrap();
     assert_eq!(n, 3);
     assert_eq!(c.zscore(b"zw", b"y").unwrap(), Some(10.0)); // max(2*2, 10*1)
@@ -228,8 +203,7 @@ fn idx_create_query_list_drop_round_trip() {
         .unwrap();
     }
 
-    c.idx_create_range(b"age_idx", b"user:", b"age", IdxType::I64)
-        .unwrap();
+    c.idx_create_range(b"age_idx", b"user:", b"age", IdxType::I64).unwrap();
 
     // RANGE with pagination: 5 + rest, cursor round-trips, no overlap.
     let p1 = idx_ready(|| c.idx_query_range(b"age_idx", b"20", b"31", 5, None));
@@ -237,9 +211,7 @@ fn idx_create_query_list_drop_round_trip() {
     assert_eq!(p1.rows[0].key, b"user:0");
     assert_eq!(p1.rows[0].value, b"20");
     let cursor = p1.cursor.expect("more pages");
-    let p2 = c
-        .idx_query_range(b"age_idx", b"20", b"31", 100, Some(&cursor))
-        .unwrap();
+    let p2 = c.idx_query_range(b"age_idx", b"20", b"31", 100, Some(&cursor)).unwrap();
     assert_eq!(p2.rows.len(), 7, "12 hits total = 5 + 7");
     assert_eq!(p2.cursor, None);
     for row in &p1.rows {
@@ -252,9 +224,7 @@ fn idx_create_query_list_drop_round_trip() {
     assert_eq!(eq.rows[0].key, b"user:5");
 
     // Raw escape hatch: same query through the argv passthrough.
-    let raw = c
-        .idx_query_raw(&[b"age_idx", b"EQ", b"25", b"LIMIT", b"10"])
-        .unwrap();
+    let raw = c.idx_query_raw(&[b"age_idx", b"EQ", b"25", b"LIMIT", b"10"]).unwrap();
     assert!(matches!(raw, Reply::Array(_)));
 
     // LIST reports the index as ready with 20 entries.
@@ -267,7 +237,15 @@ fn idx_create_query_list_drop_round_trip() {
 
     // Raw create: a second (str) index via the passthrough.
     c.idx_create_raw(&[
-        b"name_idx", b"ON", b"PREFIX", b"user:", b"FIELD", b"age", b"TYPE", b"str", b"KIND",
+        b"name_idx",
+        b"ON",
+        b"PREFIX",
+        b"user:",
+        b"FIELD",
+        b"age",
+        b"TYPE",
+        b"str",
+        b"KIND",
         b"range",
     ])
     .unwrap();

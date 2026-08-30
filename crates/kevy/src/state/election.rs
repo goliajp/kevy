@@ -66,13 +66,8 @@ impl ElectionState {
         let (elector, start_role) = build_elector(cfg, elect_cfg, replication);
         // Filter out self when building outbound `PeerAddr` list.
         let self_id = cfg.cluster.node_id.as_str();
-        let peers: Vec<PeerAddr> = cfg
-            .cluster
-            .peers
-            .iter()
-            .filter(|p| p.node_id != self_id)
-            .map(peer_to_addr)
-            .collect();
+        let peers: Vec<PeerAddr> =
+            cfg.cluster.peers.iter().filter(|p| p.node_id != self_id).map(peer_to_addr).collect();
         let listen = (
             IpAddr::V4(Ipv4Addr::new(
                 cfg.server.bind[0],
@@ -116,10 +111,7 @@ impl ElectionState {
     /// override the static-config role flag with the live election
     /// state.
     pub(crate) fn current_snapshot(&self) -> Option<kevy_elect::ElectorSnapshot> {
-        self.transport
-            .read()
-            .ok()
-            .and_then(|g| g.as_ref().map(Transport::state_snapshot))
+        self.transport.read().ok().and_then(|g| g.as_ref().map(Transport::state_snapshot))
     }
 
     /// Feed shard `shard_id`'s `master_repl_offset` into the elector.
@@ -157,10 +149,7 @@ impl ElectionState {
     }
 
     fn aggregate_offset(&self) -> u64 {
-        self.shard_offsets
-            .iter()
-            .map(|a| a.load(Ordering::Relaxed))
-            .fold(0u64, u64::saturating_add)
+        self.shard_offsets.iter().map(|a| a.load(Ordering::Relaxed)).fold(0u64, u64::saturating_add)
     }
 }
 
@@ -284,12 +273,7 @@ fn build_elector(
         replication.set_read_only(true);
         replication.force_replica_flag();
     }
-    let peer_ids: Vec<String> = cfg
-        .cluster
-        .peers
-        .iter()
-        .map(|p| p.node_id.clone())
-        .collect();
+    let peer_ids: Vec<String> = cfg.cluster.peers.iter().map(|p| p.node_id.clone()).collect();
     let advertised_addr = format!("{}:{}", advertised_host(cfg), cfg.server.port);
     let elector = Elector::new(
         cfg.cluster.node_id.clone(),
@@ -326,11 +310,7 @@ fn advertised_host(cfg: &Config) -> String {
 }
 
 fn peer_to_addr(p: &PeerEntry) -> PeerAddr {
-    PeerAddr {
-        node_id: p.node_id.clone(),
-        host: p.host.clone(),
-        port: p.port,
-    }
+    PeerAddr { node_id: p.node_id.clone(), host: p.host.clone(), port: p.port }
 }
 
 #[cfg(test)]

@@ -3,8 +3,8 @@
 //! project ceiling; behaviour unchanged).
 
 use crate::value::IndexValue;
-use std::fmt::Write as _;
 use crate::view::{Leaf, Tree, ViewMode, ViewSpec};
+use std::fmt::Write as _;
 
 /// The view registry (mirrors [`crate::Catalog`]): named specs +
 /// sidecar text round-trip. Cap 64.
@@ -92,7 +92,14 @@ impl ViewCatalog {
 fn esc(b: &[u8]) -> String {
     let mut out = String::with_capacity(b.len());
     for &c in b {
-        if c == b' ' || c == b'\t' || c == b'\n' || c == b'%' || c == b'(' || c == b')' || !(33..127).contains(&c) {
+        if c == b' '
+            || c == b'\t'
+            || c == b'\n'
+            || c == b'%'
+            || c == b'('
+            || c == b')'
+            || !(33..127).contains(&c)
+        {
             let _ = write!(out, "%{c:02X}");
         } else {
             out.push(c as char);

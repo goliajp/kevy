@@ -95,36 +95,37 @@ pub(super) fn op_match_score(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>])
     let Some(stats) = argv.get(4).and_then(|b| decode_gstats_arg(b)) else {
         return vec![ST_BADARGS];
     };
-    let res = index_runtime::with_ready_text_segment(ctx, store, &q.name, |store, ts, spec, cold| {
-        if let Some(chunk) = cold_refusal(&q, cold) {
-            return Err(chunk);
-        }
-        // `matches_query_with` parses quoted phrases out of the raw query
-        // text; with none it is the ordinary term query.
-        // Fetch deep enough for the origin to skip OFFSET and still fill
-        // LIMIT: a shard cannot know which of its hits survive the merge.
-        let ((hits, sort_field, distinct_field, facets), cold_vals) =
-            scored_hits(ts, spec, &q, &stats, cold)?;
-        let spans = q.highlight.as_ref().map(|want| {
-            hits.iter()
-                .map(|h| {
-                    let chilled = cold.is_some_and(index_runtime::TextColdDir::has_cold);
-                    hit_highlight(store, ts, spec, &h.key, &q.text, want, chilled)
-                })
-                .collect::<Vec<_>>()
+    let res =
+        index_runtime::with_ready_text_segment(ctx, store, &q.name, |store, ts, spec, cold| {
+            if let Some(chunk) = cold_refusal(&q, cold) {
+                return Err(chunk);
+            }
+            // `matches_query_with` parses quoted phrases out of the raw query
+            // text; with none it is the ordinary term query.
+            // Fetch deep enough for the origin to skip OFFSET and still fill
+            // LIMIT: a shard cannot know which of its hits survive the merge.
+            let ((hits, sort_field, distinct_field, facets), cold_vals) =
+                scored_hits(ts, spec, &q, &stats, cold)?;
+            let spans = q.highlight.as_ref().map(|want| {
+                hits.iter()
+                    .map(|h| {
+                        let chilled = cold.is_some_and(index_runtime::TextColdDir::has_cold);
+                        hit_highlight(store, ts, spec, &h.key, &q.text, want, chilled)
+                    })
+                    .collect::<Vec<_>>()
+            });
+            // The origin merges the shards' pages and must order the union
+            // exactly as each shard ordered its own, so every hit carries its
+            // sort key back. Only the shard knows the field's declared type,
+            // so it sends the comparable encoding, not the raw value. A cold
+            // hit's value comes from its frozen doc record.
+            let hit_keys = |f: usize| order_keys(ts, spec, &cold_vals, &hits, f);
+            let okeys = sort_field.map(hit_keys);
+            // The origin collapses the union too, and needs the same identity
+            // the shard grouped by.
+            let dkeys = distinct_field.map(hit_keys);
+            Ok((hits, spans, okeys, dkeys, facets))
         });
-        // The origin merges the shards' pages and must order the union
-        // exactly as each shard ordered its own, so every hit carries its
-        // sort key back. Only the shard knows the field's declared type,
-        // so it sends the comparable encoding, not the raw value. A cold
-        // hit's value comes from its frozen doc record.
-        let hit_keys = |f: usize| order_keys(ts, spec, &cold_vals, &hits, f);
-        let okeys = sort_field.map(hit_keys);
-        // The origin collapses the union too, and needs the same identity
-        // the shard grouped by.
-        let dkeys = distinct_field.map(hit_keys);
-        Ok((hits, spans, okeys, dkeys, facets))
-    });
     match res {
         Ok(Err(chunk)) => chunk,
         Ok(Ok((hits, spans, okeys, dkeys, facets))) => {
@@ -135,7 +136,6 @@ pub(super) fn op_match_score(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>])
         Err(_) => vec![ST_NOINDEX],
     }
 }
-
 
 /// Agg per-shard. Chunk (both shapes):
 /// `[ST_OK][n][(glen,group,count u64,sum f64,minflag+min,maxflag+max)*]`
@@ -276,11 +276,8 @@ pub(super) fn op_hybrid(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> V
     let mut chunk = vec![ST_OK];
     chunk.extend_from_slice(&(m.len() as u32).to_le_bytes());
     // ONE batched hydration page covers both ranked segments.
-    let keys: Vec<&[u8]> = m
-        .iter()
-        .map(|h| h.key.as_slice())
-        .chain(k.iter().map(|(key, _)| key.as_slice()))
-        .collect();
+    let keys: Vec<&[u8]> =
+        m.iter().map(|h| h.key.as_slice()).chain(k.iter().map(|(key, _)| key.as_slice())).collect();
     let rows = peek_hydration(store, &keys, &q.fields);
     for (i, h) in m.iter().enumerate() {
         chunk.extend_from_slice(&(h.key.len() as u32).to_le_bytes());
@@ -362,17 +359,12 @@ fn compose_keys(
     let mut keys: Vec<Vec<u8>> = if cq.and {
         a_hits
             .into_iter()
-            .filter(|(k, _)| {
-                seg_b
-                    .verify_entry(k)
-                    .is_some_and(|v| *v >= min_b && *v <= max_b)
-            })
+            .filter(|(k, _)| seg_b.verify_entry(k).is_some_and(|v| *v >= min_b && *v <= max_b))
             .map(|(k, _)| k)
             .collect()
     } else {
         let (b_hits, _) = seg_b.range(&min_b, &max_b, None, usize::MAX);
-        let mut all: Vec<Vec<u8>> =
-            a_hits.into_iter().chain(b_hits).map(|(k, _)| k).collect();
+        let mut all: Vec<Vec<u8>> = a_hits.into_iter().chain(b_hits).map(|(k, _)| k).collect();
         all.sort();
         all.dedup();
         all
@@ -387,10 +379,9 @@ fn compose_keys(
 
 fn sub_bounds(shape: &Shape, ty: ValType) -> Option<(IndexValue, IndexValue)> {
     match shape {
-        Shape::Range { min, max } => Some((
-            IndexValue::parse_literal(ty, min)?,
-            IndexValue::parse_literal(ty, max)?,
-        )),
+        Shape::Range { min, max } => {
+            Some((IndexValue::parse_literal(ty, min)?, IndexValue::parse_literal(ty, max)?))
+        }
         Shape::Eq { value } => {
             let v = IndexValue::parse_literal(ty, value)?;
             Some((v.clone(), v))

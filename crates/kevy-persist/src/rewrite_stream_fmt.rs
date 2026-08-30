@@ -7,7 +7,6 @@ use kevy_resp::Argv;
 use kevy_store::{StreamData, StreamId};
 use std::io::{self, Write};
 
-
 /// Render one stream as commands: one XADD per entry (slow on huge
 /// streams but correct — a multi-entry XADD batch is a future parser
 /// feature), then `XSETID` whenever a bare replay of those XADDs would
@@ -15,7 +14,11 @@ use std::io::{self, Write};
 /// non-zero `entries_added` drift), then the consumer-group section.
 /// Returns the number of command frames written so callers that ship
 /// rebuild frames elsewhere (scope migration) can report a frame count.
-pub fn write_stream_as_commands<W: Write>(w: &mut W, key: &[u8], s: &StreamData) -> io::Result<usize> {
+pub fn write_stream_as_commands<W: Write>(
+    w: &mut W,
+    key: &[u8],
+    s: &StreamData,
+) -> io::Result<usize> {
     stream_as_commands(w, key, s, crate::AofFormat::V1, &mut Vec::new())
 }
 
@@ -56,15 +59,19 @@ pub(crate) fn write_stream_id_fixup<W: Write>(
     scratch: &mut Vec<u8>,
 ) -> io::Result<usize> {
     let mut frames = 0usize;
-    let (len, last, mxd, added) =
-        (s.length(), s.last_id(), s.max_deleted_id(), s.entries_added());
+    let (len, last, mxd, added) = (s.length(), s.last_id(), s.max_deleted_id(), s.entries_added());
     if len == 0 && last != StreamId::MIN {
         // Empty stream whose ID clock advanced (all entries deleted):
         // re-create the key with the right `last_id` via the
         // `XADD MAXLEN 0` trick — the inline trim wipes the dummy row.
         let argv = vec![
-            b"XADD".to_vec(), key.to_vec(), b"MAXLEN".to_vec(), b"0".to_vec(),
-            last.encode(), b"x".to_vec(), b"x".to_vec(),
+            b"XADD".to_vec(),
+            key.to_vec(),
+            b"MAXLEN".to_vec(),
+            b"0".to_vec(),
+            last.encode(),
+            b"x".to_vec(),
+            b"x".to_vec(),
         ];
         emit(w, &Argv::from(argv), fmt, scratch)?;
         frames += 1;
@@ -79,14 +86,49 @@ pub(crate) fn write_stream_id_fixup<W: Write>(
     };
     if natural != (last, added, mxd) {
         let argv = vec![
-            b"XSETID".to_vec(), key.to_vec(), last.encode(),
-            b"ENTRIESADDED".to_vec(), added.to_string().into_bytes(),
-            b"MAXDELETEDID".to_vec(), mxd.encode(),
+            b"XSETID".to_vec(),
+            key.to_vec(),
+            last.encode(),
+            b"ENTRIESADDED".to_vec(),
+            added.to_string().into_bytes(),
+            b"MAXDELETEDID".to_vec(),
+            mxd.encode(),
         ];
         emit(w, &Argv::from(argv), fmt, scratch)?;
         frames += 1;
     }
     Ok(frames)
+}
+
+/// The XCLAIM that restores one pending entry to its owner on replay.
+///
+/// `FORCE` because the entry is already in the stream and `JUSTID` because
+/// the payload is not being re-delivered — only the ownership and the
+/// delivery bookkeeping are. Split from `write_stream_group_commands` for
+/// the 50-line rule; it was the longest of that function's three argv
+/// literals and the only one with arguments to explain.
+fn xclaim_argv(
+    key: &[u8],
+    group: &[u8],
+    consumer: &[u8],
+    id: StreamId,
+    delivery_time_ms: impl core::fmt::Display,
+    delivery_count: impl core::fmt::Display,
+) -> Vec<Vec<u8>> {
+    vec![
+        b"XCLAIM".to_vec(),
+        key.to_vec(),
+        group.to_vec(),
+        consumer.to_vec(),
+        b"0".to_vec(),
+        id.encode(),
+        b"TIME".to_vec(),
+        delivery_time_ms.to_string().into_bytes(),
+        b"RETRYCOUNT".to_vec(),
+        delivery_count.to_string().into_bytes(),
+        b"FORCE".to_vec(),
+        b"JUSTID".to_vec(),
+    ]
 }
 
 /// Consumer-group section of a stream rewrite: `XGROUP CREATE … MKSTREAM`
@@ -106,18 +148,24 @@ pub(crate) fn write_stream_group_commands<W: Write>(
 ) -> io::Result<usize> {
     let mut frames = 0usize;
     for g in s.export_groups() {
-        let last_delivered =
-            StreamId { ms: g.last_delivered.0, seq: g.last_delivered.1 };
+        let last_delivered = StreamId { ms: g.last_delivered.0, seq: g.last_delivered.1 };
         let argv = vec![
-            b"XGROUP".to_vec(), b"CREATE".to_vec(), key.to_vec(), g.name.clone(),
-            last_delivered.encode(), b"MKSTREAM".to_vec(),
+            b"XGROUP".to_vec(),
+            b"CREATE".to_vec(),
+            key.to_vec(),
+            g.name.clone(),
+            last_delivered.encode(),
+            b"MKSTREAM".to_vec(),
         ];
         emit(w, &Argv::from(argv), fmt, scratch)?;
         frames += 1;
         for (consumer, _last_seen_ms) in &g.consumers {
             let argv = vec![
-                b"XGROUP".to_vec(), b"CREATECONSUMER".to_vec(), key.to_vec(),
-                g.name.clone(), consumer.clone(),
+                b"XGROUP".to_vec(),
+                b"CREATECONSUMER".to_vec(),
+                key.to_vec(),
+                g.name.clone(),
+                consumer.clone(),
             ];
             emit(w, &Argv::from(argv), fmt, scratch)?;
             frames += 1;
@@ -127,13 +175,7 @@ pub(crate) fn write_stream_group_commands<W: Write>(
             if !s.contains_entry(id) {
                 continue;
             }
-            let argv = vec![
-                b"XCLAIM".to_vec(), key.to_vec(), g.name.clone(), consumer.clone(),
-                b"0".to_vec(), id.encode(),
-                b"TIME".to_vec(), delivery_time_ms.to_string().into_bytes(),
-                b"RETRYCOUNT".to_vec(), delivery_count.to_string().into_bytes(),
-                b"FORCE".to_vec(), b"JUSTID".to_vec(),
-            ];
+            let argv = xclaim_argv(key, &g.name, consumer, id, *delivery_time_ms, *delivery_count);
             emit(w, &Argv::from(argv), fmt, scratch)?;
             frames += 1;
         }

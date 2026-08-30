@@ -177,10 +177,7 @@ mod tests {
         // mix of inserts, overwrites (inline↔spill), and clears — the
         // property that lets Segment::stats() skip the per-tick rescan.
         let recompute = |rv: &RowValues| -> u64 {
-            rv.rows
-                .iter()
-                .map(|(k, slots)| row_bytes(k.len(), slots))
-                .sum()
+            rv.rows.iter().map(|(k, slots)| row_bytes(k.len(), slots)).sum()
         };
         let mut rv = RowValues::new(2);
         rv.set(b"a", &[Some(b"x"), Some(&[b'z'; 40])]);

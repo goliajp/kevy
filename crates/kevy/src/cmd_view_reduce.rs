@@ -209,10 +209,13 @@ fn render_view_list(catalogs: &CatalogState) -> Vec<u8> {
             encode_bulk(&mut out, b"name");
             encode_bulk(&mut out, &spec.name);
             encode_bulk(&mut out, b"mode");
-            encode_bulk(&mut out, match spec.mode {
-                ViewMode::Virtual => b"virtual" as &[u8],
-                ViewMode::Materialized { .. } => b"materialized",
-            });
+            encode_bulk(
+                &mut out,
+                match spec.mode {
+                    ViewMode::Virtual => b"virtual" as &[u8],
+                    ViewMode::Materialized { .. } => b"materialized",
+                },
+            );
             encode_bulk(&mut out, b"order_by");
             encode_bulk(&mut out, &spec.order_by);
             encode_bulk(&mut out, b"leaves");
@@ -224,9 +227,7 @@ fn render_view_list(catalogs: &CatalogState) -> Vec<u8> {
 
 fn reduce_explain(catalogs: &CatalogState, argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> {
     let mut out = Vec::new();
-    let Some(spec) = argv
-        .get(1)
-        .and_then(|n| catalogs.view().and_then(|c| c.get(n).cloned()))
+    let Some(spec) = argv.get(1).and_then(|n| catalogs.view().and_then(|c| c.get(n).cloned()))
     else {
         encode_error(&mut out, "ERR no such view");
         return out;
@@ -252,12 +253,7 @@ fn reduce_explain(catalogs: &CatalogState, argv: &[Vec<u8>], chunks: &[Vec<u8>])
     encode_bulk(&mut out, b"leaf_counts");
     encode_bulk(
         &mut out,
-        counts
-            .iter()
-            .map(u64::to_string)
-            .collect::<Vec<_>>()
-            .join(",")
-            .as_bytes(),
+        counts.iter().map(u64::to_string).collect::<Vec<_>>().join(",").as_bytes(),
     );
     out
 }
@@ -330,11 +326,19 @@ fn decode_hydrated_rows(
         };
         let mut pos = 5usize;
         for _ in 0..hits {
-            let Some(idx) = c.get(pos..pos + 4).map(|b| u32::from_le_bytes(b.try_into().expect("4")) as usize) else { break };
+            let Some(idx) =
+                c.get(pos..pos + 4).map(|b| u32::from_le_bytes(b.try_into().expect("4")) as usize)
+            else {
+                break;
+            };
             pos += 4;
             let mut vals = Vec::with_capacity(nf);
             for _ in 0..nf {
-                let Some(len) = c.get(pos..pos + 4).map(|b| u32::from_le_bytes(b.try_into().expect("4"))) else { break };
+                let Some(len) =
+                    c.get(pos..pos + 4).map(|b| u32::from_le_bytes(b.try_into().expect("4")))
+                else {
+                    break;
+                };
                 pos += 4;
                 if len == u32::MAX {
                     vals.push(None);

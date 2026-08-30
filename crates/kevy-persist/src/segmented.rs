@@ -60,11 +60,8 @@ pub(crate) fn write_segmented_frames<W: Write, S: crate::SnapshotSource>(
     }
     let files = src.row_seg_files();
     for seq in cold_seqs {
-        let file = files
-            .iter()
-            .find(|(q, _)| q == seq)
-            .map(|(_, f)| f.clone())
-            .ok_or_else(|| {
+        let file =
+            files.iter().find(|(q, _)| q == seq).map(|(_, f)| f.clone()).ok_or_else(|| {
                 io::Error::other(format!("rewrite: stub references unknown segment seq {seq}"))
             })?;
         let argv = segmented_argv(file.as_bytes());
@@ -89,4 +86,3 @@ impl kevy_resp::ArgvView for Frame2<'_> {
         self.0.get(i).copied()
     }
 }
-

@@ -7,9 +7,7 @@
 //! buffer and should be near-free).
 
 use kevy_bench::{bench, black_box, report};
-use kevy_resp::{
-    encode_bulk, encode_integer, encode_simple_string, parse_command,
-};
+use kevy_resp::{encode_bulk, encode_integer, encode_simple_string, parse_command};
 
 const SAMPLES: usize = 60;
 const INNER: usize = 50_000;

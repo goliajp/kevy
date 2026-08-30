@@ -1,14 +1,12 @@
 use super::*;
 use crate::snapshot_fmt::VERSION;
-use std::time::Duration;
 use std::borrow::Cow;
+use std::time::Duration;
 
 pub(crate) fn temp_file(name: &str) -> std::path::PathBuf {
     let mut p = std::env::temp_dir();
-    let uniq = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
+    let uniq =
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
     p.push(format!("kevy-{name}-{uniq}.rdb"));
     p
 }
@@ -21,13 +19,7 @@ fn snapshot_round_trip() {
     src.set(b"plain", b"value".to_vec(), None, false, false);
     src.set(b"empty", Vec::new(), None, false, false);
     src.set(b"binary", vec![0u8, 1, 2, 255, 254], None, false, false);
-    src.set(
-        b"withttl",
-        b"soon".to_vec(),
-        Some(Duration::from_secs(100)),
-        false,
-        false,
-    );
+    src.set(b"withttl", b"soon".to_vec(), Some(Duration::from_secs(100)), false, false);
 
     save_snapshot(&src, &path).unwrap();
 
@@ -37,10 +29,7 @@ fn snapshot_round_trip() {
     assert_eq!(dst.dbsize(), 4);
     assert_eq!(dst.get(b"plain").unwrap(), Some(Cow::Borrowed(&b"value"[..])));
     assert_eq!(dst.get(b"empty").unwrap(), Some(Cow::Borrowed(&b""[..])));
-    assert_eq!(
-        dst.get(b"binary").unwrap(),
-        Some(Cow::Borrowed(&[0u8, 1, 2, 255, 254][..]))
-    );
+    assert_eq!(dst.get(b"binary").unwrap(), Some(Cow::Borrowed(&[0u8, 1, 2, 255, 254][..])));
     assert_eq!(dst.get(b"withttl").unwrap(), Some(Cow::Borrowed(&b"soon"[..])));
     // TTL survived (stored as an absolute Unix-ms deadline, v3 format).
     assert!(dst.pttl(b"withttl") > 90_000);
@@ -87,13 +76,7 @@ fn expired_keys_are_not_saved() {
     let path = temp_file("exp");
     let mut src = Store::new();
     src.set(b"live", b"1".to_vec(), None, false, false);
-    src.set(
-        b"dead",
-        b"2".to_vec(),
-        Some(Duration::from_millis(1)),
-        false,
-        false,
-    );
+    src.set(b"dead", b"2".to_vec(), Some(Duration::from_millis(1)), false, false);
     std::thread::sleep(Duration::from_millis(8));
 
     save_snapshot(&src, &path).unwrap();
@@ -110,14 +93,8 @@ fn expired_keys_are_not_saved() {
 fn hash_snapshot_round_trip() {
     let path = temp_file("hashrt");
     let mut src = Store::new();
-    src.hset(
-        b"h",
-        &[
-            (b"a".as_slice(), b"1".as_slice()),
-            (b"b".as_slice(), b"two".as_slice()),
-        ],
-    )
-    .unwrap();
+    src.hset(b"h", &[(b"a".as_slice(), b"1".as_slice()), (b"b".as_slice(), b"two".as_slice())])
+        .unwrap();
     src.set(b"s", b"str".to_vec(), None, false, false);
     save_snapshot(&src, &path).unwrap();
 
@@ -142,9 +119,7 @@ fn list_snapshot_round_trip() {
     load_snapshot(&mut dst, &path).unwrap();
     assert_eq!(dst.type_of(b"l"), "list");
     assert_eq!(dst.llen(b"l"), Ok(3));
-    assert_eq!(dst.lrange(b"l", 0, -1).unwrap(), vec![
-        b"a".to_vec(), b"b".to_vec(), b"c".to_vec()
-    ]);
+    assert_eq!(dst.lrange(b"l", 0, -1).unwrap(), vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]);
     let _ = std::fs::remove_file(&path);
 }
 
@@ -169,7 +144,8 @@ fn set_snapshot_round_trip() {
 fn zset_snapshot_round_trip() {
     let path = temp_file("zsetrt");
     let mut src = Store::new();
-    src.zadd(b"z", &[(1.0, b"a".as_slice()), (2.0, b"b".as_slice()), (0.5, b"c".as_slice())]).unwrap();
+    src.zadd(b"z", &[(1.0, b"a".as_slice()), (2.0, b"b".as_slice()), (0.5, b"c".as_slice())])
+        .unwrap();
     save_snapshot(&src, &path).unwrap();
 
     let mut dst = Store::new();
@@ -178,11 +154,7 @@ fn zset_snapshot_round_trip() {
     assert_eq!(dst.zcard(b"z"), Ok(3));
     // Ascending score order: c(0.5), a(1.0), b(2.0)
     let range = dst.zrange(b"z", 0, -1).unwrap();
-    assert_eq!(range, vec![
-        (b"c".to_vec(), 0.5),
-        (b"a".to_vec(), 1.0),
-        (b"b".to_vec(), 2.0),
-    ]);
+    assert_eq!(range, vec![(b"c".to_vec(), 0.5), (b"a".to_vec(), 1.0), (b"b".to_vec(), 2.0),]);
     let _ = std::fs::remove_file(&path);
 }
 
@@ -226,12 +198,9 @@ fn grouped_stream_store() -> Store {
         )
         .unwrap();
     }
-    src.xgroup_create(b"st", b"g", GroupCreateMode::AtId(StreamId::MIN), false)
-        .unwrap();
-    src.xreadgroup(b"st", b"g", b"c1", ReadGroupId::New, Some(2), false, 1000)
-        .unwrap();
-    src.xreadgroup(b"st", b"g", b"c2", ReadGroupId::New, None, false, 2000)
-        .unwrap();
+    src.xgroup_create(b"st", b"g", GroupCreateMode::AtId(StreamId::MIN), false).unwrap();
+    src.xreadgroup(b"st", b"g", b"c1", ReadGroupId::New, Some(2), false, 1000).unwrap();
+    src.xreadgroup(b"st", b"g", b"c2", ReadGroupId::New, None, false, 2000).unwrap();
     src.xdel(b"st", &[StreamId { ms: 2, seq: 1 }]).unwrap();
     src
 }
@@ -264,10 +233,7 @@ fn stream_groups_snapshot_round_trip() {
         .map(|(n, c)| (n.to_vec(), c.last_seen_ms(), c.pending_count()))
         .collect();
     consumers.sort();
-    assert_eq!(
-        consumers,
-        vec![(b"c1".to_vec(), 1000, 2), (b"c2".to_vec(), 2000, 1)]
-    );
+    assert_eq!(consumers, vec![(b"c1".to_vec(), 1000, 2), (b"c2".to_vec(), 2000, 1)]);
     let _ = std::fs::remove_file(&path);
 }
 

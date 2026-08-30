@@ -25,9 +25,7 @@ pub(super) fn emit_stream(store: &mut Store, key: &[u8], bulk: &mut Vec<u8>, cou
 #[cfg(test)]
 mod tests {
     use kevy_resp::Argv;
-    use kevy_store::{
-        GroupCreateMode, ReadGroupId, Store, StreamId, XAddIdSpec,
-    };
+    use kevy_store::{GroupCreateMode, ReadGroupId, Store, StreamId, XAddIdSpec};
 
     use super::super::scope_move::serialize_prefix;
 
@@ -48,16 +46,12 @@ mod tests {
     /// second consumer known to the group but with an empty PEL.
     fn seed_stream(store: &mut Store, key: &[u8]) {
         for (ms, f, v) in [(1u64, "f1", "v1"), (2, "f2", "v2"), (3, "f3", "v3")] {
-            store
-                .xadd(key, id(ms, 0), vec![(f.into(), v.into())], false, 0)
-                .unwrap();
+            store.xadd(key, id(ms, 0), vec![(f.into(), v.into())], false, 0).unwrap();
         }
         store
             .xgroup_create(key, b"g1", GroupCreateMode::AtId(StreamId { ms: 1, seq: 0 }), false)
             .unwrap();
-        store
-            .xreadgroup(key, b"g1", b"alice", ReadGroupId::New, Some(1), false, 777)
-            .unwrap();
+        store.xreadgroup(key, b"g1", b"alice", ReadGroupId::New, Some(1), false, 777).unwrap();
         store.xgroup_create_consumer(key, b"g1", b"bob", 778).unwrap();
         store.xdel(key, &[StreamId { ms: 3, seq: 0 }]).unwrap();
     }

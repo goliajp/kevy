@@ -123,11 +123,8 @@ fn replay_v1_slice<F: FnMut(Argv)>(
     // too; surfacing it gives operators a baseline to watch it grow.
     let start = std::time::Instant::now();
     // v1 (`KEVYAOF1\n`) or legacy bare-RESP (pre-1.2.0, parses from 0).
-    let mut pos = if data.starts_with(crate::aof::AOF_MAGIC) {
-        crate::aof::AOF_MAGIC.len()
-    } else {
-        0
-    };
+    let mut pos =
+        if data.starts_with(crate::aof::AOF_MAGIC) { crate::aof::AOF_MAGIC.len() } else { 0 };
     let (stop, replayed) = v1_walk(data, &mut pos, apply);
     let elapsed_ms = start.elapsed().as_millis();
     let corrupt = matches!(stop, ReplayStop::CorruptFrame(_));

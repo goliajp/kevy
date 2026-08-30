@@ -66,10 +66,8 @@ fn a_healthy_index_reports_zero_drift() {
     let mut store = Store::new();
     store.hset(b"u:1", &[(b"age".as_slice(), b"30".as_slice())]).unwrap();
     store.hset(b"u:2", &[(b"age".as_slice(), b"40".as_slice())]).unwrap();
-    let entries = vec![
-        (b"u:1".to_vec(), IndexValue::I64(30)),
-        (b"u:2".to_vec(), IndexValue::I64(40)),
-    ];
+    let entries =
+        vec![(b"u:1".to_vec(), IndexValue::I64(30)), (b"u:2".to_vec(), IndexValue::I64(40))];
     let chunk = encode_verify_chunk(&mut store, &spec(), &entries, &stats(), None);
     assert_eq!(drift_and_checked(&chunk), (0, 2));
 }

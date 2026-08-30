@@ -40,10 +40,7 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
                 drop(key);
                 Some(old_v)
             }
-            ProbeOutcome::NotFound {
-                insert_at,
-                via_tombstone,
-            } => {
+            ProbeOutcome::NotFound { insert_at, via_tombstone } => {
                 self.set_meta(insert_at, h2(hash));
                 // SAFETY: insert_at < cap ⇒ slot pointer in-bounds; we write
                 // (K, V) into a previously uninitialised slot.
@@ -69,9 +66,7 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
         let new_cap = if self.cap == 0 {
             MIN_CAP
         } else {
-            self.cap
-                .checked_mul(2)
-                .expect("kevy-map: capacity doubling overflow")
+            self.cap.checked_mul(2).expect("kevy-map: capacity doubling overflow")
         };
         let mut new_table = Self::alloc_table(new_cap);
         // Move every live entry over. After ptr::read'ing a slot we mark its
@@ -136,10 +131,7 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
     // LOC-WAIVER: per-op probe hot body — deliberate fast/slow loop pair (tombstone-free vs tracking).
     fn probe_with_key(&self, hash: u64, key: &K) -> ProbeOutcome {
         if self.cap == 0 {
-            return ProbeOutcome::NotFound {
-                insert_at: 0,
-                via_tombstone: false,
-            };
+            return ProbeOutcome::NotFound { insert_at: 0, via_tombstone: false };
         }
         let h2v = h2(hash);
         let mut group_start = (hash as usize) & self.mask;
@@ -329,10 +321,7 @@ impl<K, V> KevyMap<K, V> {
         Q: KevyHash + Eq + ?Sized,
     {
         if self.cap == 0 {
-            return ProbeOutcome::NotFound {
-                insert_at: 0,
-                via_tombstone: false,
-            };
+            return ProbeOutcome::NotFound { insert_at: 0, via_tombstone: false };
         }
         let hash = key.kevy_hash();
         let h2v = h2(hash);

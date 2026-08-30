@@ -268,10 +268,7 @@ impl Store {
     /// `HGET key field`. `None` if absent.
     pub fn hget(&self, key: &[u8], field: &[u8]) -> KevyResult<Option<Vec<u8>>> {
         let mut g = self.wshard(key);
-        Ok(g.store
-            .hget(key, field)
-            .map_err(store_err)?
-            .map(<[u8]>::to_vec))
+        Ok(g.store.hget(key, field).map_err(store_err)?.map(<[u8]>::to_vec))
     }
 
     /// `HDEL key field [field ...]`. Returns count actually removed.

@@ -30,12 +30,7 @@ impl<C: Commands> Shard<C> {
     /// `PSUBSCRIBE pattern [pattern ...]` — register each pattern on this
     /// shard + the shared pattern registry, emit per-pattern ack frames.
     /// Connection-level; never fans out to other shards.
-    pub(crate) fn do_psubscribe<A: ArgvView + ?Sized>(
-        &mut self,
-        conn_id: u64,
-        seq: u64,
-        args: &A,
-    ) {
+    pub(crate) fn do_psubscribe<A: ArgvView + ?Sized>(&mut self, conn_id: u64, seq: u64, args: &A) {
         if self.conns.get(&conn_id).is_none() {
             return;
         }
@@ -76,10 +71,7 @@ impl<C: Commands> Shard<C> {
         subscribe: bool,
     ) -> (Vec<u8>, Vec<Vec<u8>>) {
         let verb: &[u8] = if subscribe { b"psubscribe" } else { b"punsubscribe" };
-        let proto = self
-            .conns
-            .get(&conn_id)
-            .map_or(RespVersion::V2, |c| c.proto);
+        let proto = self.conns.get(&conn_id).map_or(RespVersion::V2, |c| c.proto);
         let mut out = Vec::new();
         let mut changed: Vec<Vec<u8>> = Vec::new();
         // Header: V2 `*3` array, V3 `>3` push frame.
@@ -123,10 +115,7 @@ impl<C: Commands> Shard<C> {
         if !c.psub.insert(pattern.to_vec()) {
             return false;
         }
-        self.psub_local
-            .entry(pattern.to_vec())
-            .or_default()
-            .push(conn_id);
+        self.psub_local.entry(pattern.to_vec()).or_default().push(conn_id);
         true
     }
 
@@ -171,10 +160,7 @@ impl<C: Commands> Shard<C> {
         for pat in changed {
             let pos = reg.iter().position(|(p, ..)| p == pat);
             if subscribe {
-                let local_has_after = self
-                    .psub_local
-                    .get(pat)
-                    .is_some_and(|ids| !ids.is_empty());
+                let local_has_after = self.psub_local.get(pat).is_some_and(|ids| !ids.is_empty());
                 match pos {
                     Some(i) => {
                         reg[i].1 += 1;
@@ -187,10 +173,7 @@ impl<C: Commands> Shard<C> {
             } else if let Some(i) = pos {
                 reg[i].1 = reg[i].1.saturating_sub(1);
                 // Clear our bit if our last local subscriber to `pat` is gone.
-                let local_has_after = self
-                    .psub_local
-                    .get(pat)
-                    .is_some_and(|ids| !ids.is_empty());
+                let local_has_after = self.psub_local.get(pat).is_some_and(|ids| !ids.is_empty());
                 if !local_has_after {
                     reg[i].2 &= !bit;
                 }
@@ -215,7 +198,11 @@ impl<C: Commands> Shard<C> {
                 proto,
             });
         }
-        self.fold(conn_id, seq, crate::message::Part::Reply(crate::message::SmallReply::from_vec(reply)));
+        self.fold(
+            conn_id,
+            seq,
+            crate::message::Part::Reply(crate::message::SmallReply::from_vec(reply)),
+        );
     }
 
     /// Sum the receiver counts + OR the shard bitsets of every pattern
@@ -297,10 +284,7 @@ impl<C: Commands> Shard<C> {
         for pat in patterns {
             if let Some(i) = reg.iter().position(|(p, ..)| p == pat) {
                 reg[i].1 = reg[i].1.saturating_sub(1);
-                let local_has_after = self
-                    .psub_local
-                    .get(pat)
-                    .is_some_and(|ids| !ids.is_empty());
+                let local_has_after = self.psub_local.get(pat).is_some_and(|ids| !ids.is_empty());
                 if !local_has_after {
                     reg[i].2 &= !bit;
                 }

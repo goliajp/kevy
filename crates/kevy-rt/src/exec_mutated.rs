@@ -62,7 +62,12 @@ impl<C: Commands> Shard<C> {
     /// already has to be right, rather than by a second one written for
     /// this path. V1 framing is plain RESP, so it parses straight back
     /// into the `Argv`s the AOF and the replication stream both take.
-    pub(crate) fn log_value_placed(&mut self, key: &[u8], value: &kevy_store::Value, ttl_ms: Option<u64>) {
+    pub(crate) fn log_value_placed(
+        &mut self,
+        key: &[u8],
+        value: &kevy_store::Value,
+        ttl_ms: Option<u64>,
+    ) {
         if self.aof.is_none() && self.replicate.is_none() {
             return;
         }

@@ -25,9 +25,9 @@
 use std::collections::VecDeque;
 use std::time::Instant;
 
+use crate::Commands;
 use crate::shard::Shard;
 use crate::uring_ops::{OP_AOF, OP_SHIFT};
-use crate::Commands;
 use kevy_uring::IoUring;
 
 /// One submitted-but-uncompleted append chunk. The bytes MUST outlive
@@ -92,10 +92,8 @@ impl<C: Commands> Shard<C> {
     /// classic synchronous path (fsync on the reactor before reply).
     pub(crate) fn uring_aof_setup(&mut self) {
         let Some(aof) = &mut self.aof else { return };
-        if matches!(
-            std::env::var("KEVY_AOF_OFFLOAD").as_deref(),
-            Ok("0" | "off" | "no" | "false")
-        ) {
+        if matches!(std::env::var("KEVY_AOF_OFFLOAD").as_deref(), Ok("0" | "off" | "no" | "false"))
+        {
             return;
         }
         aof.enable_queued_appends();
@@ -144,7 +142,13 @@ impl<C: Commands> Shard<C> {
             // SAFETY: `rest` points into `c.bytes`, which lives in
             // `inflight` until this chunk's final CQE is reaped.
             let ok = unsafe {
-                ring.prep_write_at(fd, rest.as_ptr(), rest.len() as u32, c.offset + u64::from(c.written), ud)
+                ring.prep_write_at(
+                    fd,
+                    rest.as_ptr(),
+                    rest.len() as u32,
+                    c.offset + u64::from(c.written),
+                    ud,
+                )
             };
             if !ok {
                 return; // SQ full; retry next iter (order preserved: we stop at the first miss)

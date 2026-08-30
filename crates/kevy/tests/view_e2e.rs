@@ -94,7 +94,9 @@ impl Server {
         let stop_thread = stop.clone();
         let dir_thread = dir.clone();
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(8)).bind([127, 0, 0, 1], port).shards(8)
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(8))
+                .bind([127, 0, 0, 1], port)
+                .shards(8)
                 .with_data_dir(dir_thread);
             rt.run(stop_thread).unwrap();
         });
@@ -136,14 +138,47 @@ fn seed(c: &mut std::net::TcpStream) {
         cmd(
             c,
             &[
-                b"HSET", format!("job:{i}").as_bytes(),
-                b"pri", format!("{i}").as_bytes(),
-                b"state", if i % 3 == 0 { b"ready" } else { b"done" },
+                b"HSET",
+                format!("job:{i}").as_bytes(),
+                b"pri",
+                format!("{i}").as_bytes(),
+                b"state",
+                if i % 3 == 0 { b"ready" } else { b"done" },
             ],
         );
     }
-    cmd(&mut *c, &[b"IDX.CREATE", b"j_pri", b"ON", b"PREFIX", b"job:", b"FIELD", b"pri", b"TYPE", b"i64", b"KIND", b"range"]);
-    cmd(&mut *c, &[b"IDX.CREATE", b"j_state", b"ON", b"PREFIX", b"job:", b"FIELD", b"state", b"TYPE", b"str", b"KIND", b"range"]);
+    cmd(
+        &mut *c,
+        &[
+            b"IDX.CREATE",
+            b"j_pri",
+            b"ON",
+            b"PREFIX",
+            b"job:",
+            b"FIELD",
+            b"pri",
+            b"TYPE",
+            b"i64",
+            b"KIND",
+            b"range",
+        ],
+    );
+    cmd(
+        &mut *c,
+        &[
+            b"IDX.CREATE",
+            b"j_state",
+            b"ON",
+            b"PREFIX",
+            b"job:",
+            b"FIELD",
+            b"state",
+            b"TYPE",
+            b"str",
+            b"KIND",
+            b"range",
+        ],
+    );
 }
 
 #[test]
@@ -154,9 +189,24 @@ fn virtual_view_query_order_cursor() {
     // ready jobs with pri in [0, 20], ordered by pri
     let r = cmd(
         &mut c,
-        &[b"VIEW.CREATE", b"v_ready", b"QUERY", b"(", b"AND",
-          b"j_pri", b"RANGE", b"0", b"20", b"j_state", b"EQ", b"ready", b")",
-          b"ORDER", b"BY", b"j_pri"],
+        &[
+            b"VIEW.CREATE",
+            b"v_ready",
+            b"QUERY",
+            b"(",
+            b"AND",
+            b"j_pri",
+            b"RANGE",
+            b"0",
+            b"20",
+            b"j_state",
+            b"EQ",
+            b"ready",
+            b")",
+            b"ORDER",
+            b"BY",
+            b"j_pri",
+        ],
     );
     assert_eq!(r, b"+OK\r\n", "{:?}", String::from_utf8_lossy(&r));
     // members: i%3==0 && i<=20 → 0,3,6,9,12,15,18 = 7
@@ -190,9 +240,29 @@ fn materialized_topk_desc_maintenance() {
     // top-5 highest-pri ready jobs (DESC + TOPK)
     let r = cmd(
         &mut c,
-        &[b"VIEW.CREATE", b"v_top", b"QUERY", b"(", b"AND",
-          b"j_pri", b"RANGE", b"0", b"100", b"j_state", b"EQ", b"ready", b")",
-          b"ORDER", b"BY", b"j_pri", b"DESC", b"MODE", b"materialized", b"TOPK", b"5"],
+        &[
+            b"VIEW.CREATE",
+            b"v_top",
+            b"QUERY",
+            b"(",
+            b"AND",
+            b"j_pri",
+            b"RANGE",
+            b"0",
+            b"100",
+            b"j_state",
+            b"EQ",
+            b"ready",
+            b")",
+            b"ORDER",
+            b"BY",
+            b"j_pri",
+            b"DESC",
+            b"MODE",
+            b"materialized",
+            b"TOPK",
+            b"5",
+        ],
     );
     assert_eq!(r, b"+OK\r\n");
     // ready: 0,3,...,27 → top-5 desc = 27,24,21,18,15
@@ -235,21 +305,45 @@ fn via_hydration_two_phase() {
     let mut c = srv.connect();
     // rows: task:<n> with owner field; owner profiles: user:<n>
     for i in 0..12 {
-        cmd(
-            &mut c,
-            &[b"HSET", format!("task:{i}").as_bytes(), b"due", format!("{i}").as_bytes()],
-        );
+        cmd(&mut c, &[b"HSET", format!("task:{i}").as_bytes(), b"due", format!("{i}").as_bytes()]);
         cmd(
             &mut c,
             &[b"HSET", format!("user:{i}").as_bytes(), b"name", format!("owner-{i}").as_bytes()],
         );
     }
-    cmd(&mut c, &[b"IDX.CREATE", b"t_due", b"ON", b"PREFIX", b"task:", b"FIELD", b"due", b"TYPE", b"i64", b"KIND", b"range"]);
+    cmd(
+        &mut c,
+        &[
+            b"IDX.CREATE",
+            b"t_due",
+            b"ON",
+            b"PREFIX",
+            b"task:",
+            b"FIELD",
+            b"due",
+            b"TYPE",
+            b"i64",
+            b"KIND",
+            b"range",
+        ],
+    );
     // view over due tasks, VIA maps task:<n> → user:<n>
     let r = cmd(
         &mut c,
-        &[b"VIEW.CREATE", b"v_due", b"QUERY", b"t_due", b"RANGE", b"0", b"5",
-          b"ORDER", b"BY", b"t_due", b"VIA", b"user:{key.1}"],
+        &[
+            b"VIEW.CREATE",
+            b"v_due",
+            b"QUERY",
+            b"t_due",
+            b"RANGE",
+            b"0",
+            b"5",
+            b"ORDER",
+            b"BY",
+            b"t_due",
+            b"VIA",
+            b"user:{key.1}",
+        ],
     );
     assert_eq!(r, b"+OK\r\n", "{:?}", String::from_utf8_lossy(&r));
     let r = ready(&mut c, &[b"VIEW.QUERY", b"v_due", b"LIMIT", b"10", b"FIELDS", b"name"]);
@@ -263,7 +357,14 @@ fn via_hydration_two_phase() {
     assert!(s.contains("task:3"), "row present: {s}");
     assert!(!s.contains("owner-3"), "hydration nil for deleted target: {s}");
     // FIELDS without VIA errors
-    cmd(&mut c, &[b"VIEW.CREATE", b"v_novia", b"QUERY", b"t_due", b"EQ", b"1", b"ORDER", b"BY", b"t_due"]);
+    cmd(
+        &mut c,
+        &[b"VIEW.CREATE", b"v_novia", b"QUERY", b"t_due", b"EQ", b"1", b"ORDER", b"BY", b"t_due"],
+    );
     let r = cmd(&mut c, &[b"VIEW.QUERY", b"v_novia", b"FIELDS", b"name"]);
-    assert!(String::from_utf8_lossy(&r).contains("requires the view to declare VIA"), "{:?}", String::from_utf8_lossy(&r));
+    assert!(
+        String::from_utf8_lossy(&r).contains("requires the view to declare VIA"),
+        "{:?}",
+        String::from_utf8_lossy(&r)
+    );
 }

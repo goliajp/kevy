@@ -53,8 +53,7 @@ fn sigxfsz_does_not_kill_kevy() {
 
     // PHASE 1: prove kevy is up.
     {
-        let mut s = TcpStream::connect(format!("127.0.0.1:{port}"))
-            .expect("pre-signal conn");
+        let mut s = TcpStream::connect(format!("127.0.0.1:{port}")).expect("pre-signal conn");
         let _ = s.set_read_timeout(Some(Duration::from_secs(2)));
         s.write_all(b"*1\r\n$4\r\nPING\r\n").expect("pre-PING write");
         let mut buf = [0u8; 32];
@@ -66,10 +65,7 @@ fn sigxfsz_does_not_kill_kevy() {
     // harness's listening port — `lsof -ti :<port>` returns the pid.
     let pid = find_pid_on_port(port).expect("locate kevy pid");
     eprintln!("xfsz: located kevy pid = {pid}, sending SIGXFSZ");
-    let status = Command::new("kill")
-        .args(["-25", &pid.to_string()])
-        .status()
-        .expect("kill");
+    let status = Command::new("kill").args(["-25", &pid.to_string()]).status().expect("kill");
     assert!(status.success(), "kill -25 {pid} failed");
 
     // Give kevy a moment to either die (no handler) or absorb (handler).
@@ -96,10 +92,7 @@ fn sigxfsz_does_not_kill_kevy() {
 }
 
 fn find_pid_on_port(port: u16) -> Option<u32> {
-    let out = Command::new("lsof")
-        .args(["-ti", &format!(":{port}")])
-        .output()
-        .ok()?;
+    let out = Command::new("lsof").args(["-ti", &format!(":{port}")]).output().ok()?;
     let s = String::from_utf8_lossy(&out.stdout);
     s.lines().next().and_then(|l| l.trim().parse().ok())
 }

@@ -61,4 +61,3 @@ pub(crate) fn write_verb_items<W: Write>(
     }
     Ok(())
 }
-

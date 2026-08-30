@@ -4,8 +4,8 @@
 //! keep it under the 500-LOC house cap.
 
 use crate::snapshot_fmt::{
-    MAGIC, OP_EOF, OP_HASH, OP_HFTTL, OP_LIST, OP_SEGSTUB, OP_SET, OP_STR, OP_STREAM, OP_ZSET, VERSION_SEG_STUB,
-    VERSION, VERSION_ABSOLUTE_TTL, VERSION_FEED_CURSOR, VERSION_RELATIVE_TTL,
+    MAGIC, OP_EOF, OP_HASH, OP_HFTTL, OP_LIST, OP_SEGSTUB, OP_SET, OP_STR, OP_STREAM, OP_ZSET,
+    VERSION, VERSION_ABSOLUTE_TTL, VERSION_FEED_CURSOR, VERSION_RELATIVE_TTL, VERSION_SEG_STUB,
     capped_capacity, read_bytes, read_ttl, read_u8, read_u32, read_u64,
 };
 use kevy_store::Store;
@@ -110,17 +110,11 @@ fn read_snapshot_header<R: Read>(r: &mut R) -> io::Result<u8> {
     let mut magic = [0u8; 8];
     r.read_exact(&mut magic)?;
     if &magic != MAGIC {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "kevy snapshot: bad magic",
-        ));
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "kevy snapshot: bad magic"));
     }
     let version = read_u8(r)?;
     if !(VERSION_RELATIVE_TTL..=VERSION_SEG_STUB).contains(&version) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "kevy snapshot: bad version",
-        ));
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "kevy snapshot: bad version"));
     }
     if version >= VERSION_FEED_CURSOR {
         let mut cur = [0u8; 16];
@@ -243,11 +237,7 @@ fn load_stream_record<R: Read>(
         let fv = read_pair_vec(r)?;
         entries.push((ms, seq, fv));
     }
-    let groups = if version >= VERSION {
-        read_stream_groups(r)?
-    } else {
-        Vec::new()
-    };
+    let groups = if version >= VERSION { read_stream_groups(r)? } else { Vec::new() };
     if keep(&key) {
         store.load_stream(
             key,

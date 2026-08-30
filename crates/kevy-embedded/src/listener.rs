@@ -21,20 +21,18 @@ pub(crate) use verbs::dispatch as verbs_dispatch;
 pub(crate) fn spawn(addr: SocketAddr, store: WeakStore) -> std::io::Result<SocketAddr> {
     let sock = TcpListener::bind(addr)?;
     let local = sock.local_addr()?;
-    std::thread::Builder::new()
-        .name("kevy-resp-listener".into())
-        .spawn(move || {
-            for conn in sock.incoming() {
-                let Ok(conn) = conn else { continue };
-                if store.upgrade().is_none() {
-                    return; // store gone — stop accepting
-                }
-                let store = store.clone();
-                let _ = std::thread::Builder::new()
-                    .name("kevy-resp-conn".into())
-                    .spawn(move || serve_conn(conn, &store));
+    std::thread::Builder::new().name("kevy-resp-listener".into()).spawn(move || {
+        for conn in sock.incoming() {
+            let Ok(conn) = conn else { continue };
+            if store.upgrade().is_none() {
+                return; // store gone — stop accepting
             }
-        })?;
+            let store = store.clone();
+            let _ = std::thread::Builder::new()
+                .name("kevy-resp-conn".into())
+                .spawn(move || serve_conn(conn, &store));
+        }
+    })?;
     Ok(local)
 }
 
@@ -81,11 +79,8 @@ fn parse_argv(b: &[u8]) -> Option<(Vec<Vec<u8>>, usize)> {
     let line = read_line(b, &mut pos)?;
     if line.first() != Some(&b'*') {
         // inline command (redis-cli PING style): split on whitespace
-        let argv: Vec<Vec<u8>> = line
-            .split(|&c| c == b' ')
-            .filter(|w| !w.is_empty())
-            .map(<[u8]>::to_vec)
-            .collect();
+        let argv: Vec<Vec<u8>> =
+            line.split(|&c| c == b' ').filter(|w| !w.is_empty()).map(<[u8]>::to_vec).collect();
         return (!argv.is_empty()).then_some((argv, pos));
     }
     let n: usize = std::str::from_utf8(&line[1..]).ok()?.trim().parse().ok()?;

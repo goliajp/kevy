@@ -64,10 +64,7 @@ fn scope_misdirected_reply_uses_client_port() {
              elect_port_base = {elect}\npeers = \"{peers_string}\"\n\
              scopes = \"app:billing:=nodeA\"\n"
         );
-        harnesses.push(
-            Harness::spawn(cfg)
-                .unwrap_or_else(|e| panic!("spawn {id} failed: {e}")),
-        );
+        harnesses.push(Harness::spawn(cfg).unwrap_or_else(|e| panic!("spawn {id} failed: {e}")));
         tmps.push(tmp);
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -80,22 +77,15 @@ fn scope_misdirected_reply_uses_client_port() {
     let nodeb_port = node_ports[1].0;
     let nodea_main = node_ports[0].0;
     let nodea_elect = node_ports[0].2;
-    let mut s = TcpStream::connect(format!("127.0.0.1:{nodeb_port}"))
-        .expect("conn");
+    let mut s = TcpStream::connect(format!("127.0.0.1:{nodeb_port}")).expect("conn");
     let _ = s.set_read_timeout(Some(Duration::from_secs(2)));
-    s.write_all(
-        b"*3\r\n$3\r\nSET\r\n$15\r\napp:billing:foo\r\n$3\r\nbar\r\n",
-    )
-    .expect("write SET");
+    s.write_all(b"*3\r\n$3\r\nSET\r\n$15\r\napp:billing:foo\r\n$3\r\nbar\r\n").expect("write SET");
     let mut buf = vec![0u8; 256];
     let n = s.read(&mut buf).expect("read SET reply");
     let reply = String::from_utf8_lossy(&buf[..n]);
     eprintln!("scope_client_port: nodeB SET reply = {reply:?}");
 
-    assert!(
-        reply.starts_with("-MISDIRECTED"),
-        "expected MISDIRECTED, got: {reply:?}"
-    );
+    assert!(reply.starts_with("-MISDIRECTED"), "expected MISDIRECTED, got: {reply:?}");
     let expected_main = format!("127.0.0.1:{nodea_main}");
     let elect_str = format!("127.0.0.1:{nodea_elect}");
     assert!(

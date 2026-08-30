@@ -54,17 +54,16 @@ impl Server {
         let port = free_port();
         let dir = std::env::temp_dir().join(format!(
             "kevy-watch-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         let dir_thread = dir.clone();
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(nshards)).bind([127, 0, 0, 1], port).shards(nshards)
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(nshards))
+                .bind([127, 0, 0, 1], port)
+                .shards(nshards)
                 .with_data_dir(dir_thread);
             rt.run(stop_thread).unwrap();
         });
@@ -77,18 +76,12 @@ impl Server {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert!(ready, "runtime did not come up");
-        Server {
-            port,
-            dir,
-            stop,
-            handle: Some(handle),
-        }
+        Server { port, dir, stop, handle: Some(handle) }
     }
 
     fn connect(&self) -> std::net::TcpStream {
         let s = std::net::TcpStream::connect(("127.0.0.1", self.port)).unwrap();
-        s.set_read_timeout(Some(std::time::Duration::from_secs(10)))
-            .unwrap();
+        s.set_read_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
         s
     }
 }
@@ -225,11 +218,7 @@ fn unknown_command_in_multi_aborts_exec() {
     // EXEC now aborts and runs nothing.
     c.write_all(&req(&[b"EXEC"])).unwrap();
     let n = c.read(&mut buf).unwrap();
-    assert!(
-        buf[..n].starts_with(b"-EXECABORT"),
-        "got {:?}",
-        String::from_utf8_lossy(&buf[..n])
-    );
+    assert!(buf[..n].starts_with(b"-EXECABORT"), "got {:?}", String::from_utf8_lossy(&buf[..n]));
     // The valid SET must NOT have run — the key stays absent.
     c.write_all(&req(&[b"GET", b"k"])).unwrap();
     read_reply(&mut c, b"$-1\r\n");
@@ -253,11 +242,7 @@ fn too_few_args_in_multi_aborts_exec() {
     );
     c.write_all(&req(&[b"EXEC"])).unwrap();
     let n = c.read(&mut buf).unwrap();
-    assert!(
-        buf[..n].starts_with(b"-EXECABORT"),
-        "got {:?}",
-        String::from_utf8_lossy(&buf[..n])
-    );
+    assert!(buf[..n].starts_with(b"-EXECABORT"), "got {:?}", String::from_utf8_lossy(&buf[..n]));
 }
 
 #[test]
@@ -378,10 +363,7 @@ fn exec_after_watch_with_multi_cmd_queue() {
     c.write_all(&req(&[b"GET", b"q:a"])).unwrap();
     read_reply(&mut c, b"+QUEUED\r\n");
     c.write_all(&req(&[b"EXEC"])).unwrap();
-    read_reply(
-        &mut c,
-        b"*4\r\n+OK\r\n:1\r\n+PONG\r\n$1\r\n1\r\n",
-    );
+    read_reply(&mut c, b"*4\r\n+OK\r\n:1\r\n+PONG\r\n$1\r\n1\r\n");
 }
 
 // ---------- at_seq invariants: queued cmds inside WATCH'd EXEC ----------

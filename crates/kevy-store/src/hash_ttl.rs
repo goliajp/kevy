@@ -80,11 +80,7 @@ impl Store {
                 codes.push(-2);
                 continue;
             }
-            let current = self
-                .hfttl
-                .get(key)
-                .and_then(|m| m.get(*f))
-                .copied();
+            let current = self.hfttl.get(key).and_then(|m| m.get(*f)).copied();
             let pass = match cond {
                 HExpireCond::Always => true,
                 HExpireCond::Nx => current.is_none(),
@@ -104,8 +100,7 @@ impl Store {
                 codes.push(2);
                 continue;
             }
-            hfttl_slot(&mut self.hfttl, key)
-                .insert(SmallBytes::from_slice(f), deadline_ms);
+            hfttl_slot(&mut self.hfttl, key).insert(SmallBytes::from_slice(f), deadline_ms);
             codes.push(1);
         }
         self.prune_hfttl_key(key);
@@ -132,7 +127,11 @@ impl Store {
     }
 
     /// Clear per-field TTLs: `-2` missing, `-1` had no TTL, `1` cleared.
-    pub fn hpersist(&mut self, key: &[u8], fields: &[&[u8]]) -> Result<Vec<HExpireCode>, StoreError> {
+    pub fn hpersist(
+        &mut self,
+        key: &[u8],
+        fields: &[&[u8]],
+    ) -> Result<Vec<HExpireCode>, StoreError> {
         self.purge_hash_ttl(key);
         let mut out = Vec::with_capacity(fields.len());
         for f in fields {
@@ -140,11 +139,7 @@ impl Store {
                 out.push(-2);
                 continue;
             }
-            let had = self
-                .hfttl
-                .get_mut(key)
-                .and_then(|m| m.remove(*f))
-                .is_some();
+            let had = self.hfttl.get_mut(key).and_then(|m| m.remove(*f)).is_some();
             out.push(if had { 1 } else { -1 });
         }
         self.prune_hfttl_key(key);
@@ -161,11 +156,7 @@ impl Store {
         let now = now_unix_ms();
         let due: Vec<Vec<u8>> = match self.hfttl.get(key) {
             None => return,
-            Some(m) => m
-                .iter()
-                .filter(|(_, d)| **d <= now)
-                .map(|(f, _)| f.to_vec())
-                .collect(),
+            Some(m) => m.iter().filter(|(_, d)| **d <= now).map(|(f, _)| f.to_vec()).collect(),
         };
         if due.is_empty() {
             return;
@@ -228,12 +219,7 @@ impl Store {
             let due: Vec<Vec<u8>> = self
                 .hfttl
                 .get(k.as_slice())
-                .map(|m| {
-                    m.iter()
-                        .filter(|(_, d)| **d <= now)
-                        .map(|(f, _)| f.to_vec())
-                        .collect()
-                })
+                .map(|m| m.iter().filter(|(_, d)| **d <= now).map(|(f, _)| f.to_vec()).collect())
                 .unwrap_or_default();
             if due.is_empty() {
                 continue;
@@ -254,8 +240,7 @@ impl Store {
     /// Snapshot loader hook: restore one field TTL (deadlines already
     /// absolute unix-ms; past deadlines simply purge on first access).
     pub fn load_hash_field_ttl(&mut self, key: &[u8], field: &[u8], deadline_ms: u64) {
-        hfttl_slot(&mut self.hfttl, key)
-            .insert(SmallBytes::from_slice(field), deadline_ms);
+        hfttl_slot(&mut self.hfttl, key).insert(SmallBytes::from_slice(field), deadline_ms);
     }
 
     /// Snapshot support: visit every live (key, field, deadline_ms).
@@ -271,7 +256,6 @@ impl Store {
 fn kevy_map_is_empty(m: &crate::KevyMap<SmallBytes, u64>) -> bool {
     m.iter().next().is_none()
 }
-
 
 /// `entry().or_default()` over both side-map backends — `KevyMap` (the
 /// `no_std` arm) has no entry API, so that arm inserts-if-absent and
@@ -298,11 +282,8 @@ mod tests {
     use super::*;
 
     fn h(s: &mut Store) {
-        s.hset(
-            b"h",
-            &[(b"a".as_slice(), b"1".as_slice()), (b"b".as_slice(), b"2".as_slice())],
-        )
-        .unwrap();
+        s.hset(b"h", &[(b"a".as_slice(), b"1".as_slice()), (b"b".as_slice(), b"2".as_slice())])
+            .unwrap();
     }
 
     #[test]
@@ -311,31 +292,17 @@ mod tests {
         h(&mut s);
         let far = now_unix_ms() + 100_000;
         // set on a + missing field
-        let codes = s
-            .hexpire_at(b"h", &[b"a", b"nope"], far, HExpireCond::Always)
-            .unwrap();
+        let codes = s.hexpire_at(b"h", &[b"a", b"nope"], far, HExpireCond::Always).unwrap();
         assert_eq!(codes, vec![1, -2]);
         let ttls = s.hpttl(b"h", &[b"a", b"b", b"nope"]).unwrap();
         assert!(ttls[0] > 90_000 && ttls[0] <= 100_000);
         assert_eq!(&ttls[1..], &[-1, -2]);
         // NX refuses existing, XX refuses missing
-        assert_eq!(
-            s.hexpire_at(b"h", &[b"a"], far + 1, HExpireCond::Nx).unwrap(),
-            vec![0]
-        );
-        assert_eq!(
-            s.hexpire_at(b"h", &[b"b"], far, HExpireCond::Xx).unwrap(),
-            vec![0]
-        );
+        assert_eq!(s.hexpire_at(b"h", &[b"a"], far + 1, HExpireCond::Nx).unwrap(), vec![0]);
+        assert_eq!(s.hexpire_at(b"h", &[b"b"], far, HExpireCond::Xx).unwrap(), vec![0]);
         // GT/LT
-        assert_eq!(
-            s.hexpire_at(b"h", &[b"a"], far + 500, HExpireCond::Gt).unwrap(),
-            vec![1]
-        );
-        assert_eq!(
-            s.hexpire_at(b"h", &[b"a"], far, HExpireCond::Gt).unwrap(),
-            vec![0]
-        );
+        assert_eq!(s.hexpire_at(b"h", &[b"a"], far + 500, HExpireCond::Gt).unwrap(), vec![1]);
+        assert_eq!(s.hexpire_at(b"h", &[b"a"], far, HExpireCond::Gt).unwrap(), vec![0]);
         // persist
         assert_eq!(s.hpersist(b"h", &[b"a", b"b", b"nope"]).unwrap(), vec![1, -1, -2]);
         assert_eq!(s.hpttl(b"h", &[b"a"]).unwrap(), vec![-1]);
@@ -346,10 +313,7 @@ mod tests {
         let mut s = Store::new();
         h(&mut s);
         // past deadline → immediate delete, code 2
-        assert_eq!(
-            s.hexpire_at(b"h", &[b"a"], 1, HExpireCond::Always).unwrap(),
-            vec![2]
-        );
+        assert_eq!(s.hexpire_at(b"h", &[b"a"], 1, HExpireCond::Always).unwrap(), vec![2]);
         assert!(!s.hexists(b"h", b"a").unwrap());
         // near-future deadline → lazily gone after it passes
         let soon = now_unix_ms() + 30;

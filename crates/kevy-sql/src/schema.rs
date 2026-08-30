@@ -63,10 +63,7 @@ type Built = (Vec<Table>, Vec<CreateView>, Vec<String>);
 /// without this every dumped table refuses for "no PRIMARY KEY").
 /// Returns the statement list with the alters consumed, plus the
 /// failures (unknown table, second PK) for the caller's severity.
-fn apply_alters(
-    stmts: &[Stmt],
-    notes: &mut Vec<String>,
-) -> (Vec<Stmt>, Vec<(String, SqlError)>) {
+fn apply_alters(stmts: &[Stmt], notes: &mut Vec<String>) -> (Vec<Stmt>, Vec<(String, SqlError)>) {
     let mut out: Vec<Stmt> = Vec::with_capacity(stmts.len());
     let mut failed: Vec<(String, SqlError)> = Vec::new();
     for st in stmts {
@@ -81,7 +78,11 @@ fn apply_alters(
         let Some(t) = target else {
             failed.push((
                 a.table.clone(),
-                SqlError::at(a.line, a.col, format!("ALTER TABLE names unknown table '{}'", a.table)),
+                SqlError::at(
+                    a.line,
+                    a.col,
+                    format!("ALTER TABLE names unknown table '{}'", a.table),
+                ),
             ));
             continue;
         };
@@ -239,15 +240,19 @@ fn build_table(
         if table.column_type(u).is_none() {
             return Err(SqlError::at(*line, *col, format!("UNIQUE names unknown column '{u}'")));
         }
-        push_index(&mut table, Ix { column: u.clone(), unique: true, values: Vec::new() }, *line, *col)?;
+        push_index(
+            &mut table,
+            Ix { column: u.clone(), unique: true, values: Vec::new() },
+            *line,
+            *col,
+        )?;
     }
     Ok(table)
 }
 
 /// Exactly one primary key, inline or table-level.
 fn resolve_pk(t: &crate::ast::CreateTable) -> Result<String, SqlError> {
-    let inline: Vec<&crate::ast::ColumnDef> =
-        t.columns.iter().filter(|c| c.inline_pk).collect();
+    let inline: Vec<&crate::ast::ColumnDef> = t.columns.iter().filter(|c| c.inline_pk).collect();
     match (&t.pk, inline.as_slice()) {
         (Some((pk, line, col)), []) => {
             if !t.columns.iter().any(|c| &c.name == pk) {
@@ -308,11 +313,7 @@ fn attach_index(
             ));
         }
     }
-    if ix.cols.len() == 1 {
-        attach_single(ix, t, notes)
-    } else {
-        attach_composite(ix, t)
-    }
+    if ix.cols.len() == 1 { attach_single(ix, t, notes) } else { attach_composite(ix, t) }
 }
 
 fn attach_single(ix: &CreateIndex, t: &mut Table, notes: &mut Vec<String>) -> Result<(), SqlError> {
@@ -367,9 +368,10 @@ fn attach_composite(ix: &CreateIndex, t: &mut Table) -> Result<(), SqlError> {
     if ix.cols.len() > MAX_COMPOSITE_COLS {
         return Err(SqlError::at(ix.line, ix.col, "a composite index supports at most 8 columns"));
     }
-    let name = ix.name.clone().unwrap_or_else(|| {
-        ix.cols.iter().map(|(c, _)| c.as_str()).collect::<Vec<_>>().join("_")
-    });
+    let name = ix
+        .name
+        .clone()
+        .unwrap_or_else(|| ix.cols.iter().map(|(c, _)| c.as_str()).collect::<Vec<_>>().join("_"));
     if t.orderpaths.iter().any(|o| o.name == name) {
         return Err(SqlError::at(ix.line, ix.col, format!("duplicate composite index '{name}'")));
     }

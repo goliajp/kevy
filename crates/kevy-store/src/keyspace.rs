@@ -177,11 +177,7 @@ impl Store {
             // Redis 6+ semantics: same-key rename is a no-op `+OK`.
             // (RENAMENX same-key returns `:0` per Redis since dst
             // technically already exists at src's address.)
-            return if nx {
-                RenameOutcome::DstExists
-            } else {
-                RenameOutcome::Renamed
-            };
+            return if nx { RenameOutcome::DstExists } else { RenameOutcome::Renamed };
         }
         if nx {
             // Reap dst before the existence test so a TTL-expired dst
@@ -313,10 +309,7 @@ impl Store {
     /// keyspace; call it for diagnostics, not on the hot path.
     pub fn ttl_pending_count(&self) -> usize {
         let now = now_ns();
-        self.map
-            .values()
-            .filter(|e| e.expire_at_ns.is_some() && !e.is_expired_at(now))
-            .count()
+        self.map.values().filter(|e| e.expire_at_ns.is_some() && !e.is_expired_at(now)).count()
     }
 
     // ---- persistence hooks ---------------------------------------------

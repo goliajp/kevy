@@ -118,8 +118,6 @@ pub(crate) const MATCH_STEP_LIMIT: u64 = 10_000_000;
 /// whatever it does (match / non-match / step-budget error) is preserved.
 /// 2_000_000 leaves a ~5× margin under the 10M step budget.
 
-
-
 #[derive(Debug, Clone)]
 pub(crate) enum ReNode {
     /// Single literal byte. ASCII fast-path; non-ASCII falls through
@@ -128,10 +126,7 @@ pub(crate) enum ReNode {
     /// Any single character.
     AnyChar,
     /// Character class: (positive members list, negated flag).
-    Class {
-        members: Vec<ClassMember>,
-        negated: bool,
-    },
+    Class { members: Vec<ClassMember>, negated: bool },
     /// Anchor start.
     Start,
     /// Anchor end.
@@ -148,12 +143,7 @@ pub(crate) enum ReNode {
     /// forms reach the SAME set of end positions and run under the SAME
     /// ReDoS step/depth guards — only the order the matcher tries those
     /// positions differs (longest-first vs shortest-first).
-    Quant {
-        inner: Box<ReNode>,
-        min: usize,
-        max: Option<usize>,
-        greedy: bool,
-    },
+    Quant { inner: Box<ReNode>, min: usize, max: Option<usize>, greedy: bool },
     /// Concatenation of sub-nodes.
     Concat(Vec<ReNode>),
     /// Alternation.
@@ -214,7 +204,6 @@ pub(crate) enum WordBoundaryKind {
 pub(crate) fn is_word_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_'
 }
-
 
 pub(crate) const CAP_MATCH_DEPTH_LIMIT: u32 = 300;
 

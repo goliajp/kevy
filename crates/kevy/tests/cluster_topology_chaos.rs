@@ -37,9 +37,7 @@ fn cluster_topology_routing_under_chaos() {
     let mut cfg = HarnessConfig::new(tmp.clone(), main_port).with_fsync("everysec");
     cfg.kevy_bin = bin_path;
     cfg.threads = 4;
-    cfg.extra_toml = format!(
-        "\n[cluster]\nenabled = true\nport_base = {cluster_port_base}\n"
-    );
+    cfg.extra_toml = format!("\n[cluster]\nenabled = true\nport_base = {cluster_port_base}\n");
     let _h = Harness::spawn(cfg).expect("spawn kevy");
 
     // PHASE 1: drive concurrent writes against the MAIN port (which
@@ -77,8 +75,8 @@ fn cluster_topology_routing_under_chaos() {
     // with -MOVED for keys whose slot isn't owned. We don't know which
     // slots which shard owns without parsing CLUSTER SHARDS, but ANY
     // SET on a cluster-port that lands wrong-shard yields a -MOVED.
-    let mut s = TcpStream::connect(format!("127.0.0.1:{cluster_port_base}"))
-        .expect("cluster port conn");
+    let mut s =
+        TcpStream::connect(format!("127.0.0.1:{cluster_port_base}")).expect("cluster port conn");
     let _ = s.set_read_timeout(Some(Duration::from_secs(2)));
     // Try a handful of distinct keys; at least one should hit the
     // wrong-shard MOVED path since shard 0 only owns ~1/4 of slots.
@@ -134,18 +132,14 @@ fn cluster_topology_routing_under_chaos() {
 
     // PHASE 4: CLUSTER NODES via main port should return populated body.
     drop(s);
-    let mut s = TcpStream::connect(format!("127.0.0.1:{main_port}"))
-        .expect("main port for CLUSTER NODES");
+    let mut s =
+        TcpStream::connect(format!("127.0.0.1:{main_port}")).expect("main port for CLUSTER NODES");
     let _ = s.set_read_timeout(Some(Duration::from_secs(2)));
-    s.write_all(b"*2\r\n$7\r\nCLUSTER\r\n$5\r\nNODES\r\n")
-        .expect("write CLUSTER NODES");
+    s.write_all(b"*2\r\n$7\r\nCLUSTER\r\n$5\r\nNODES\r\n").expect("write CLUSTER NODES");
     let mut nodes_buf = vec![0u8; 4096];
     let n = s.read(&mut nodes_buf).expect("read CLUSTER NODES");
     let nodes_reply = String::from_utf8_lossy(&nodes_buf[..n]);
-    eprintln!(
-        "cluster_topology: CLUSTER NODES (first 200 chars): {:.200}",
-        nodes_reply
-    );
+    eprintln!("cluster_topology: CLUSTER NODES (first 200 chars): {:.200}", nodes_reply);
     assert!(
         nodes_reply.starts_with('$'),
         "CLUSTER NODES should return a bulk string, got: {nodes_reply:?}"

@@ -60,7 +60,9 @@ impl PrimaryServer {
             std::env::set_var("KEVY_IO_URING", "0");
         }
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(1)).bind([127, 0, 0, 1], port).shards(1)
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(1))
+                .bind([127, 0, 0, 1], port)
+                .shards(1)
                 .with_data_dir(dir_path)
                 .with_aof(false)
                 .with_replication(true, 1024 * 1024)
@@ -78,13 +80,7 @@ impl PrimaryServer {
             }
             assert!(ready, "primary not up on port {p}");
         }
-        Self {
-            port,
-            replication_base,
-            stop,
-            handle: Some(handle),
-            _dir: dir,
-        }
+        Self { port, replication_base, stop, handle: Some(handle), _dir: dir }
     }
 
     fn shutdown(mut self) {
@@ -119,7 +115,9 @@ impl ReplicaServer {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(1)).bind([127, 0, 0, 1], port).shards(1)
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(1))
+                .bind([127, 0, 0, 1], port)
+                .shards(1)
                 .with_data_dir(dir_path)
                 .with_aof(false)
                 .with_replica_inboxes(vec![receiver]);
@@ -145,16 +143,22 @@ impl ReplicaServer {
                     match client.next_event() {
                         Some(Ok(ev)) => {
                             let apply = match ev {
-                        kevy_replicate::replica::ReplicaEvent::Ping { .. } => continue,
+                                kevy_replicate::replica::ReplicaEvent::Ping { .. } => continue,
                                 kevy_replicate::replica::ReplicaEvent::SnapshotBegin => {
                                     kevy_rt::ReplicaApply::SnapshotBegin
                                 }
                                 kevy_replicate::replica::ReplicaEvent::SnapshotChunk(b) => {
                                     kevy_rt::ReplicaApply::SnapshotChunk(b)
                                 }
-                                kevy_replicate::replica::ReplicaEvent::SnapshotEnd { ack_offset } => {
+                                kevy_replicate::replica::ReplicaEvent::SnapshotEnd {
+                                    ack_offset,
+                                } => {
                                     from_offset = ack_offset;
-                                    kevy_rt::ReplicaApply::SnapshotEnd { ack_offset, routed: false, gate: None }
+                                    kevy_rt::ReplicaApply::SnapshotEnd {
+                                        ack_offset,
+                                        routed: false,
+                                        gate: None,
+                                    }
                                 }
                                 kevy_replicate::replica::ReplicaEvent::Frame(frame) => {
                                     from_offset = frame.offset.saturating_add(1);
@@ -252,9 +256,8 @@ fn write_lands_on_primary_read_round_robins_to_replica() {
     for i in 0..5 {
         let key = format!("rw-k{i}");
         let expected = format!("v{i}");
-        let reply = client
-            .request_read(&[b"GET".to_vec(), key.as_bytes().to_vec()], false)
-            .expect("read");
+        let reply =
+            client.request_read(&[b"GET".to_vec(), key.as_bytes().to_vec()], false).expect("read");
         match reply {
             kevy_resp::Reply::Bulk(b) => assert_eq!(b, expected.as_bytes(), "{key}"),
             other => panic!("{key}: unexpected {other:?}"),
@@ -283,11 +286,8 @@ fn write_lands_on_primary_read_round_robins_to_replica() {
 #[test]
 fn read_falls_back_to_primary_when_no_replicas() {
     let primary = PrimaryServer::start();
-    let mut client = kevy_cluster_rw::ReadWriteClient::connect(
-        ("127.0.0.1", primary.port),
-        &[],
-    )
-    .expect("connect");
+    let mut client = kevy_cluster_rw::ReadWriteClient::connect(("127.0.0.1", primary.port), &[])
+        .expect("connect");
     assert_eq!(client.replica_count(), 0);
 
     // Write + read in the same client — both hit primary (no replica
@@ -295,9 +295,8 @@ fn read_falls_back_to_primary_when_no_replicas() {
     let _ = client
         .request_write(&[b"SET".to_vec(), b"fallback-k".to_vec(), b"v".to_vec()])
         .expect("write");
-    let reply = client
-        .request_read(&[b"GET".to_vec(), b"fallback-k".to_vec()], false)
-        .expect("read");
+    let reply =
+        client.request_read(&[b"GET".to_vec(), b"fallback-k".to_vec()], false).expect("read");
     match reply {
         kevy_resp::Reply::Bulk(b) => assert_eq!(b, b"v"),
         other => panic!("unexpected {other:?}"),
@@ -343,31 +342,54 @@ fn types_matrix_one_primary_two_replicas() {
     assert_eq!(client.replica_count(), 2);
 
     // Drive every redis-type write through the primary.
-    let _ = client.request(&[
-        b"SET".to_vec(), b"t:str".to_vec(), b"hello".to_vec(),
-    ]).expect("SET");
-    let _ = client.request(&[
-        b"HSET".to_vec(), b"t:hash".to_vec(),
-        b"f1".to_vec(), b"v1".to_vec(),
-        b"f2".to_vec(), b"v2".to_vec(),
-    ]).expect("HSET");
-    let _ = client.request(&[
-        b"RPUSH".to_vec(), b"t:list".to_vec(),
-        b"a".to_vec(), b"b".to_vec(), b"c".to_vec(),
-    ]).expect("RPUSH");
-    let _ = client.request(&[
-        b"SADD".to_vec(), b"t:set".to_vec(),
-        b"x".to_vec(), b"y".to_vec(), b"z".to_vec(),
-    ]).expect("SADD");
-    let _ = client.request(&[
-        b"ZADD".to_vec(), b"t:zset".to_vec(),
-        b"1".to_vec(), b"one".to_vec(),
-        b"2".to_vec(), b"two".to_vec(),
-    ]).expect("ZADD");
-    let _ = client.request(&[
-        b"XADD".to_vec(), b"t:stream".to_vec(),
-        b"1-1".to_vec(), b"event".to_vec(), b"alpha".to_vec(),
-    ]).expect("XADD");
+    let _ = client.request(&[b"SET".to_vec(), b"t:str".to_vec(), b"hello".to_vec()]).expect("SET");
+    let _ = client
+        .request(&[
+            b"HSET".to_vec(),
+            b"t:hash".to_vec(),
+            b"f1".to_vec(),
+            b"v1".to_vec(),
+            b"f2".to_vec(),
+            b"v2".to_vec(),
+        ])
+        .expect("HSET");
+    let _ = client
+        .request(&[
+            b"RPUSH".to_vec(),
+            b"t:list".to_vec(),
+            b"a".to_vec(),
+            b"b".to_vec(),
+            b"c".to_vec(),
+        ])
+        .expect("RPUSH");
+    let _ = client
+        .request(&[
+            b"SADD".to_vec(),
+            b"t:set".to_vec(),
+            b"x".to_vec(),
+            b"y".to_vec(),
+            b"z".to_vec(),
+        ])
+        .expect("SADD");
+    let _ = client
+        .request(&[
+            b"ZADD".to_vec(),
+            b"t:zset".to_vec(),
+            b"1".to_vec(),
+            b"one".to_vec(),
+            b"2".to_vec(),
+            b"two".to_vec(),
+        ])
+        .expect("ZADD");
+    let _ = client
+        .request(&[
+            b"XADD".to_vec(),
+            b"t:stream".to_vec(),
+            b"1-1".to_vec(),
+            b"event".to_vec(),
+            b"alpha".to_vec(),
+        ])
+        .expect("XADD");
 
     // Poll until **both** replicas (the round-robin alternates per
     // call) have the string key. 5 consecutive Bulk hits is enough
@@ -375,8 +397,7 @@ fn types_matrix_one_primary_two_replicas() {
     let mut consecutive = 0u32;
     let mut caught_up = false;
     for _ in 0..400 {
-        let r = client.request_read(&[b"GET".to_vec(), b"t:str".to_vec()], false)
-            .expect("read");
+        let r = client.request_read(&[b"GET".to_vec(), b"t:str".to_vec()], false).expect("read");
         if matches!(r, kevy_resp::Reply::Bulk(_)) {
             consecutive += 1;
             if consecutive >= 5 {
@@ -393,19 +414,16 @@ fn types_matrix_one_primary_two_replicas() {
     // Run all read queries via consistent reads (primary) AND via
     // round-robin replica reads — both paths should agree on values.
     for consistent in [true, false] {
-        let reply = client.request_read(
-            &[b"GET".to_vec(), b"t:str".to_vec()],
-            consistent,
-        ).expect("GET");
+        let reply =
+            client.request_read(&[b"GET".to_vec(), b"t:str".to_vec()], consistent).expect("GET");
         match reply {
             kevy_resp::Reply::Bulk(b) => assert_eq!(b, b"hello", "consistent={consistent}"),
             other => panic!("GET t:str (consistent={consistent}): {other:?}"),
         }
 
-        let reply = client.request_read(
-            &[b"HGETALL".to_vec(), b"t:hash".to_vec()],
-            consistent,
-        ).expect("HGETALL");
+        let reply = client
+            .request_read(&[b"HGETALL".to_vec(), b"t:hash".to_vec()], consistent)
+            .expect("HGETALL");
         match reply {
             kevy_resp::Reply::Array(arr) => {
                 assert_eq!(arr.len(), 4, "HGETALL array len; consistent={consistent}");
@@ -413,10 +431,12 @@ fn types_matrix_one_primary_two_replicas() {
             other => panic!("HGETALL (consistent={consistent}): {other:?}"),
         }
 
-        let reply = client.request_read(
-            &[b"LRANGE".to_vec(), b"t:list".to_vec(), b"0".to_vec(), b"-1".to_vec()],
-            consistent,
-        ).expect("LRANGE");
+        let reply = client
+            .request_read(
+                &[b"LRANGE".to_vec(), b"t:list".to_vec(), b"0".to_vec(), b"-1".to_vec()],
+                consistent,
+            )
+            .expect("LRANGE");
         match reply {
             kevy_resp::Reply::Array(arr) => {
                 assert_eq!(arr.len(), 3, "LRANGE; consistent={consistent}");
@@ -424,10 +444,9 @@ fn types_matrix_one_primary_two_replicas() {
             other => panic!("LRANGE (consistent={consistent}): {other:?}"),
         }
 
-        let reply = client.request_read(
-            &[b"SMEMBERS".to_vec(), b"t:set".to_vec()],
-            consistent,
-        ).expect("SMEMBERS");
+        let reply = client
+            .request_read(&[b"SMEMBERS".to_vec(), b"t:set".to_vec()], consistent)
+            .expect("SMEMBERS");
         match reply {
             kevy_resp::Reply::Array(arr) => {
                 assert_eq!(arr.len(), 3, "SMEMBERS; consistent={consistent}");
@@ -435,10 +454,9 @@ fn types_matrix_one_primary_two_replicas() {
             other => panic!("SMEMBERS (consistent={consistent}): {other:?}"),
         }
 
-        let reply = client.request_read(
-            &[b"ZSCORE".to_vec(), b"t:zset".to_vec(), b"one".to_vec()],
-            consistent,
-        ).expect("ZSCORE");
+        let reply = client
+            .request_read(&[b"ZSCORE".to_vec(), b"t:zset".to_vec(), b"one".to_vec()], consistent)
+            .expect("ZSCORE");
         match reply {
             kevy_resp::Reply::Bulk(b) => {
                 let s = std::str::from_utf8(&b).unwrap();
@@ -469,13 +487,11 @@ fn readconsistent_sees_fresh_write_before_replica_lag() {
 
     // Write a key + immediately read with consistent=true. No
     // waiting for replica catch-up — primary serves the read.
-    let _ = client.request_write(&[
-        b"SET".to_vec(), b"rc:k".to_vec(), b"fresh".to_vec(),
-    ]).expect("SET");
-    let reply = client.request_read(
-        &[b"GET".to_vec(), b"rc:k".to_vec()],
-        true,
-    ).expect("READCONSISTENT GET");
+    let _ =
+        client.request_write(&[b"SET".to_vec(), b"rc:k".to_vec(), b"fresh".to_vec()]).expect("SET");
+    let reply = client
+        .request_read(&[b"GET".to_vec(), b"rc:k".to_vec()], true)
+        .expect("READCONSISTENT GET");
     match reply {
         kevy_resp::Reply::Bulk(b) => assert_eq!(b, b"fresh"),
         other => panic!("READCONSISTENT: {other:?}"),
@@ -523,19 +539,25 @@ impl TrackedReplica {
         let rt_port = free_port_block(1) + 1;
         let dir = tempdir::TempDir::new("kevy-tracked-replica");
         let dir_path = dir.path().to_path_buf();
-        unsafe { std::env::set_var("KEVY_IO_URING", "0"); }
+        unsafe {
+            std::env::set_var("KEVY_IO_URING", "0");
+        }
         let (sender, receiver) = kevy_rt::replica_inbox_pair();
         let rt_stop = Arc::new(AtomicBool::new(false));
         let rt_stop_thread = rt_stop.clone();
         let rt_handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(1)).bind([127, 0, 0, 1], rt_port).shards(1)
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(1))
+                .bind([127, 0, 0, 1], rt_port)
+                .shards(1)
                 .with_data_dir(dir_path)
                 .with_aof(false)
                 .with_replica_inboxes(vec![receiver]);
             let _ = rt.run(rt_stop_thread);
         });
         for _ in 0..400 {
-            if std::net::TcpStream::connect(("127.0.0.1", rt_port)).is_ok() { break; }
+            if std::net::TcpStream::connect(("127.0.0.1", rt_port)).is_ok() {
+                break;
+            }
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         let last_offset = Arc::new(std::sync::atomic::AtomicU64::new(0));
@@ -599,19 +621,26 @@ impl TrackedReplica {
                     match client.next_event() {
                         Some(Ok(ev)) => {
                             let apply = match ev {
-                        kevy_replicate::replica::ReplicaEvent::Ping { .. } => continue,
+                                kevy_replicate::replica::ReplicaEvent::Ping { .. } => continue,
                                 kevy_replicate::replica::ReplicaEvent::SnapshotBegin => {
-                                    snapshot_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                    snapshot_count
+                                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                     kevy_rt::ReplicaApply::SnapshotBegin
                                 }
                                 kevy_replicate::replica::ReplicaEvent::SnapshotChunk(b) => {
                                     kevy_rt::ReplicaApply::SnapshotChunk(b)
                                 }
-                                kevy_replicate::replica::ReplicaEvent::SnapshotEnd { ack_offset } => {
+                                kevy_replicate::replica::ReplicaEvent::SnapshotEnd {
+                                    ack_offset,
+                                } => {
                                     from = ack_offset;
                                     last_offset.store(from, std::sync::atomic::Ordering::Relaxed);
                                     data_gen.store(ack_gen, std::sync::atomic::Ordering::Relaxed);
-                                    kevy_rt::ReplicaApply::SnapshotEnd { ack_offset, routed: false, gate: None }
+                                    kevy_rt::ReplicaApply::SnapshotEnd {
+                                        ack_offset,
+                                        routed: false,
+                                        gate: None,
+                                    }
                                 }
                                 kevy_replicate::replica::ReplicaEvent::Frame(frame) => {
                                     from = frame.offset.saturating_add(1);
@@ -622,13 +651,17 @@ impl TrackedReplica {
                                     }
                                 }
                             };
-                            if sender.send(apply).is_err() { return; }
+                            if sender.send(apply).is_err() {
+                                return;
+                            }
                         }
                         Some(Err(_)) | None => break,
                     }
                 }
                 // Clear socket slot before reconnect — old fd is dead.
-                if let Ok(mut guard) = socket_slot.lock() { *guard = None; }
+                if let Ok(mut guard) = socket_slot.lock() {
+                    *guard = None;
+                }
             }
         });
         self.runner_handle = Some(handle);
@@ -680,7 +713,9 @@ fn reconnect_within_backlog_resumes_no_snapshot() {
         let _ = writer.read(&mut buf);
     }
     for _ in 0..100 {
-        if replica.last_offset.load(std::sync::atomic::Ordering::Relaxed) >= 3 { break; }
+        if replica.last_offset.load(std::sync::atomic::Ordering::Relaxed) >= 3 {
+            break;
+        }
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
     // A first connection claims no generation, and a claim-less cursor
@@ -707,7 +742,9 @@ fn reconnect_within_backlog_resumes_no_snapshot() {
     // offsets 3..6. Should resume via backlog, no snapshot.
     replica.start_runner();
     for _ in 0..200 {
-        if replica.last_offset.load(std::sync::atomic::Ordering::Relaxed) >= 6 { break; }
+        if replica.last_offset.load(std::sync::atomic::Ordering::Relaxed) >= 6 {
+            break;
+        }
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
     assert!(
@@ -715,7 +752,8 @@ fn reconnect_within_backlog_resumes_no_snapshot() {
         "replica didn't catch up to offset 6"
     );
     assert_eq!(
-        replica.snapshot_count(), 1,
+        replica.snapshot_count(),
+        1,
         "reconnect-within-backlog must NOT trigger a SECOND snapshot ship"
     );
 
@@ -739,9 +777,13 @@ fn reconnect_outside_backlog_triggers_snapshot() {
         let dir_path = dir.path().to_path_buf();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
-        unsafe { std::env::set_var("KEVY_IO_URING", "0"); }
+        unsafe {
+            std::env::set_var("KEVY_IO_URING", "0");
+        }
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(1)).bind([127, 0, 0, 1], port).shards(1)
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(1))
+                .bind([127, 0, 0, 1], port)
+                .shards(1)
                 .with_data_dir(dir_path)
                 .with_aof(false)
                 .with_replication(true, 256) // 256-byte backlog: a few SETs evict the head
@@ -750,17 +792,13 @@ fn reconnect_outside_backlog_triggers_snapshot() {
         });
         for p in [port, replication_base] {
             for _ in 0..400 {
-                if std::net::TcpStream::connect(("127.0.0.1", p)).is_ok() { break; }
+                if std::net::TcpStream::connect(("127.0.0.1", p)).is_ok() {
+                    break;
+                }
                 std::thread::sleep(std::time::Duration::from_millis(5));
             }
         }
-        PrimaryServer {
-            port,
-            replication_base,
-            stop,
-            handle: Some(handle),
-            _dir: dir,
-        }
+        PrimaryServer { port, replication_base, stop, handle: Some(handle), _dir: dir }
     };
     let mut replica = TrackedReplica::start(primary.replication_base);
 
@@ -775,7 +813,9 @@ fn reconnect_outside_backlog_triggers_snapshot() {
         let _ = writer.read(&mut buf);
     }
     for _ in 0..100 {
-        if replica.last_offset.load(std::sync::atomic::Ordering::Relaxed) >= 3 { break; }
+        if replica.last_offset.load(std::sync::atomic::Ordering::Relaxed) >= 3 {
+            break;
+        }
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
     assert_eq!(replica.snapshot_count(), 1, "the initial join ships once");
@@ -796,7 +836,9 @@ fn reconnect_outside_backlog_triggers_snapshot() {
     // resume path returns TooOld → primary ships a snapshot.
     replica.start_runner();
     for _ in 0..400 {
-        if replica.snapshot_count() > 1 { break; }
+        if replica.snapshot_count() > 1 {
+            break;
+        }
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
     assert!(

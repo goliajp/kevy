@@ -3,7 +3,9 @@
 //! the per-type `match` tables in [`crate::dispatch_collections`], so
 //! the table rows delegate to the `cmd_*` functions defined here.
 
-use crate::cmd::{arg_i64, emit_zrange, fmt_score, parse_score_bound, store_err, wrong_args, ERR_NOT_INT, arg_f64};
+use crate::cmd::{
+    ERR_NOT_INT, arg_f64, arg_i64, emit_zrange, fmt_score, parse_score_bound, store_err, wrong_args,
+};
 use kevy_resp::{
     ArgvView, RespVersion, encode_array_len, encode_bulk, encode_error, encode_integer,
     encode_null_bulk,
@@ -121,11 +123,7 @@ fn lpos_opt_value<A: ArgvView + ?Sized>(args: &A, i: usize, out: &mut Vec<u8>) -
 /// - Single-key form (`len == 3`) — pops one member with the lowest
 ///   score; on empty, leaves `out` untouched so the in-shard fast path
 ///   registers the conn as a waiter on `args[1]`.
-pub(crate) fn cmd_bzpopmin<A: ArgvView + ?Sized>(
-    store: &mut Store,
-    args: &A,
-    out: &mut Vec<u8>,
-) {
+pub(crate) fn cmd_bzpopmin<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
     if args.len() < 3 {
         return wrong_args(out, "bzpopmin");
     }
@@ -324,20 +322,21 @@ fn parse_zrevrange_opts<A: ArgvView + ?Sized>(
 
 /// Parse `[MATCH pattern] [COUNT n]` modifiers starting at argv idx.
 /// Returns `(maybe_pattern, _count_ignored)` or None on syntax error.
-fn parse_scan_opts<A: ArgvView + ?Sized>(
-    args: &A,
-    start: usize,
-) -> Option<Option<Vec<u8>>> {
+fn parse_scan_opts<A: ArgvView + ?Sized>(args: &A, start: usize) -> Option<Option<Vec<u8>>> {
     let mut pat: Option<Vec<u8>> = None;
     let mut i = start;
     while i < args.len() {
         let tok = &args[i];
         if tok.eq_ignore_ascii_case(b"MATCH") {
-            if i + 1 >= args.len() { return None; }
+            if i + 1 >= args.len() {
+                return None;
+            }
             pat = Some(args[i + 1].to_vec());
             i += 2;
         } else if tok.eq_ignore_ascii_case(b"COUNT") {
-            if i + 1 >= args.len() { return None; }
+            if i + 1 >= args.len() {
+                return None;
+            }
             // Validate but ignore — kevy returns everything in one shot.
             arg_i64(&args[i + 1])?;
             i += 2;
@@ -373,9 +372,7 @@ pub(crate) fn cmd_sscan<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: 
         Ok(all) => {
             let filtered: Vec<Vec<u8>> = match pat {
                 None => all,
-                Some(p) => all.into_iter()
-                    .filter(|m| kevy_store::glob_match(&p, m))
-                    .collect(),
+                Some(p) => all.into_iter().filter(|m| kevy_store::glob_match(&p, m)).collect(),
             };
             emit_scan_reply(out, &filtered);
         }
@@ -401,7 +398,9 @@ pub(crate) fn cmd_hscan<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: 
             // Filter pairs by MATCH on the field name.
             let mut out_v: Vec<Vec<u8>> = Vec::with_capacity(flat.len());
             for pair in flat.chunks(2) {
-                if pair.len() != 2 { continue; }
+                if pair.len() != 2 {
+                    continue;
+                }
                 let field = &pair[0];
                 let val = &pair[1];
                 if pat.as_ref().is_none_or(|p| kevy_store::glob_match(p, field)) {

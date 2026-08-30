@@ -54,8 +54,7 @@ fn wire_torture_live_kevy_pathological_frames() {
 
     let cfg = HarnessConfig {
         kevy_bin: bin_path,
-        ..HarnessConfig::new(tmp.clone(), port)
-            .with_fsync("everysec")
+        ..HarnessConfig::new(tmp.clone(), port).with_fsync("everysec")
     };
     let _h = Harness::spawn(cfg).expect("spawn kevy");
 
@@ -75,8 +74,7 @@ fn wire_torture_live_kevy_pathological_frames() {
 
     for (name, payload) in patterns {
         eprintln!("wire_torture: pattern={name} len={}", payload.len());
-        let mut s = TcpStream::connect(format!("127.0.0.1:{port}"))
-            .expect("torture conn");
+        let mut s = TcpStream::connect(format!("127.0.0.1:{port}")).expect("torture conn");
         let _ = s.set_read_timeout(Some(Duration::from_secs(2)));
         let _ = s.set_write_timeout(Some(Duration::from_secs(2)));
         // Best-effort write; partial writes / RST are part of the test.
@@ -88,8 +86,7 @@ fn wire_torture_live_kevy_pathological_frames() {
         drop(s);
 
         // kevy must answer PING on a fresh conn.
-        let mut ping = TcpStream::connect(format!("127.0.0.1:{port}"))
-            .expect("post-torture conn");
+        let mut ping = TcpStream::connect(format!("127.0.0.1:{port}")).expect("post-torture conn");
         let _ = ping.set_read_timeout(Some(Duration::from_secs(2)));
         ping.write_all(b"*1\r\n$4\r\nPING\r\n").expect("write PING");
         let mut reply = [0u8; 64];

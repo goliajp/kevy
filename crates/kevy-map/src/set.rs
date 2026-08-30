@@ -70,10 +70,7 @@ impl<K> KevySet<K> {
     pub fn iter_from_slot(&self, start: usize) -> impl Iterator<Item = &K> {
         let cap = self.0.capacity();
         let start = if cap == 0 { 0 } else { start % cap };
-        self.0
-            .iter_from_bucket(start)
-            .chain(self.0.iter().take(start))
-            .map(|(k, ())| k)
+        self.0.iter_from_bucket(start).chain(self.0.iter().take(start)).map(|(k, ())| k)
     }
 
     /// The backing map, for callers that want its bucket addresses (prefetch).

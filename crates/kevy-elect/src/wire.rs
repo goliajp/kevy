@@ -15,12 +15,7 @@ use crate::message::{Message, Role};
 pub fn encode(msg: &Message) -> Vec<u8> {
     let mut out = Vec::with_capacity(256);
     match msg {
-        Message::Hb {
-            epoch,
-            node_id,
-            role,
-            repl_offset,
-        } => {
+        Message::Hb { epoch, node_id, role, repl_offset } => {
             push_bulk_array(&mut out, 5);
             push_bulk(&mut out, b"HB");
             push_bulk(&mut out, epoch.to_string().as_bytes());
@@ -28,11 +23,7 @@ pub fn encode(msg: &Message) -> Vec<u8> {
             push_bulk(&mut out, role.as_str().as_bytes());
             push_bulk(&mut out, repl_offset.to_string().as_bytes());
         }
-        Message::Offer {
-            new_epoch,
-            candidate_id,
-            repl_offset,
-        } => {
+        Message::Offer { new_epoch, candidate_id, repl_offset } => {
             push_bulk_array(&mut out, 4);
             push_bulk(&mut out, b"OFFER");
             push_bulk(&mut out, new_epoch.to_string().as_bytes());
@@ -45,11 +36,7 @@ pub fn encode(msg: &Message) -> Vec<u8> {
             push_bulk(&mut out, epoch.to_string().as_bytes());
             push_bulk(&mut out, accepter_id.as_bytes());
         }
-        Message::Announce {
-            epoch,
-            new_primary_id,
-            new_primary_addr,
-        } => {
+        Message::Announce { epoch, new_primary_id, new_primary_addr } => {
             push_bulk_array(&mut out, 4);
             push_bulk(&mut out, b"ANNOUNCE");
             push_bulk(&mut out, epoch.to_string().as_bytes());
@@ -119,10 +106,7 @@ fn parse_argv_for_verb(verb: &[u8], argv: &ArgvBorrowed<'_>) -> Result<Message, 
         if argv.len() != 3 {
             return Err(DecodeError::WrongShape);
         }
-        Ok(Message::Accept {
-            epoch: parse_u64(&argv[1])?,
-            accepter_id: parse_string(&argv[2]),
-        })
+        Ok(Message::Accept { epoch: parse_u64(&argv[1])?, accepter_id: parse_string(&argv[2]) })
     } else if verb.eq_ignore_ascii_case(b"ANNOUNCE") {
         if argv.len() != 4 {
             return Err(DecodeError::WrongShape);
@@ -138,10 +122,7 @@ fn parse_argv_for_verb(verb: &[u8], argv: &ArgvBorrowed<'_>) -> Result<Message, 
 }
 
 fn parse_u64(b: &[u8]) -> Result<u64, DecodeError> {
-    std::str::from_utf8(b)
-        .ok()
-        .and_then(|s| s.parse::<u64>().ok())
-        .ok_or(DecodeError::BadNumeric)
+    std::str::from_utf8(b).ok().and_then(|s| s.parse::<u64>().ok()).ok_or(DecodeError::BadNumeric)
 }
 
 fn parse_string(b: &[u8]) -> String {
@@ -190,11 +171,8 @@ mod tests {
 
     #[test]
     fn offer_round_trip() {
-        let msg = Message::Offer {
-            new_epoch: 7,
-            candidate_id: "replica-1".to_string(),
-            repl_offset: 99,
-        };
+        let msg =
+            Message::Offer { new_epoch: 7, candidate_id: "replica-1".to_string(), repl_offset: 99 };
         match round_trip(msg) {
             Message::Offer { new_epoch, candidate_id, repl_offset } => {
                 assert_eq!(new_epoch, 7);
@@ -207,10 +185,7 @@ mod tests {
 
     #[test]
     fn accept_round_trip() {
-        let msg = Message::Accept {
-            epoch: 7,
-            accepter_id: "replica-2".to_string(),
-        };
+        let msg = Message::Accept { epoch: 7, accepter_id: "replica-2".to_string() };
         match round_trip(msg) {
             Message::Accept { epoch, accepter_id } => {
                 assert_eq!(epoch, 7);
@@ -241,10 +216,7 @@ mod tests {
     fn decode_truncated_returns_more() {
         // Half a frame — decoder must surface Truncated so the
         // caller reads more bytes from the socket.
-        let full = encode(&Message::Accept {
-            epoch: 1,
-            accepter_id: "x".to_string(),
-        });
+        let full = encode(&Message::Accept { epoch: 1, accepter_id: "x".to_string() });
         let half = &full[..full.len() / 2];
         assert!(matches!(decode(half), Err(DecodeError::Truncated)));
     }

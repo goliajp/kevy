@@ -32,26 +32,14 @@ const INLINE_CAP: usize = 4;
 impl InlineRanges {
     /// Empty table (no allocations).
     pub(crate) fn new() -> Self {
-        Self {
-            inline: [(0, 0); INLINE_CAP],
-            heap: Vec::new(),
-            len: 0,
-        }
+        Self { inline: [(0, 0); INLINE_CAP], heap: Vec::new(), len: 0 }
     }
 
     /// Empty table, pre-reserving `cap` heap slots if `cap > INLINE_CAP`. The
     /// inline tier is always available regardless of the hint.
     pub(crate) fn with_capacity(cap: usize) -> Self {
-        let heap = if cap > INLINE_CAP {
-            Vec::with_capacity(cap - INLINE_CAP)
-        } else {
-            Vec::new()
-        };
-        Self {
-            inline: [(0, 0); INLINE_CAP],
-            heap,
-            len: 0,
-        }
+        let heap = if cap > INLINE_CAP { Vec::with_capacity(cap - INLINE_CAP) } else { Vec::new() };
+        Self { inline: [(0, 0); INLINE_CAP], heap, len: 0 }
     }
 
     #[inline]
@@ -81,11 +69,7 @@ impl InlineRanges {
         if i >= self.len {
             return None;
         }
-        if i < INLINE_CAP {
-            Some(self.inline[i])
-        } else {
-            Some(self.heap[i - INLINE_CAP])
-        }
+        if i < INLINE_CAP { Some(self.inline[i]) } else { Some(self.heap[i - INLINE_CAP]) }
     }
 }
 

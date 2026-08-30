@@ -40,13 +40,9 @@ impl Store {
         match self.live_entry(key) {
             None => Ok(Vec::new()),
             Some(e) => match &e.value {
-                Value::Set(s) => {
-                    Ok(s.iter().map(kevy_bytes::SmallBytes::to_vec).collect())
-                }
+                Value::Set(s) => Ok(s.iter().map(kevy_bytes::SmallBytes::to_vec).collect()),
                 Value::SegSet(s) => Ok(s.keys().map(kevy_bytes::SmallBytes::to_vec).collect()),
-                Value::SmallSetInline(s) => {
-                    Ok(s.iter_slices().map(<[u8]>::to_vec).collect())
-                }
+                Value::SmallSetInline(s) => Ok(s.iter_slices().map(<[u8]>::to_vec).collect()),
                 _ => Err(StoreError::WrongType),
             },
         }
@@ -60,9 +56,8 @@ impl Store {
     /// expected. When it is most of the set, rejection would thrash, so
     /// copy the members out and shuffle a prefix instead.
     pub fn srandmember(&mut self, key: &[u8], count: usize) -> Result<Vec<Vec<u8>>, StoreError> {
-        let mut draws: Vec<u64> = (0..count.saturating_mul(3).max(8))
-            .map(|_| self.rng.next_u64())
-            .collect();
+        let mut draws: Vec<u64> =
+            (0..count.saturating_mul(3).max(8)).map(|_| self.rng.next_u64()).collect();
         match self.live_entry(key) {
             None => Ok(Vec::new()),
             Some(e) => match &e.value {
@@ -123,10 +118,7 @@ impl Store {
                     if all.is_empty() {
                         return Ok(Vec::new());
                     }
-                    Ok(draws
-                        .iter()
-                        .map(|d| all[(*d as usize) % all.len()].clone())
-                        .collect())
+                    Ok(draws.iter().map(|d| all[(*d as usize) % all.len()].clone()).collect())
                 }
                 Value::Set(s) => {
                     if s.is_empty() {
@@ -135,9 +127,7 @@ impl Store {
                     Ok(draws
                         .iter()
                         .filter_map(|d| {
-                            s.iter_from_slot(*d as usize)
-                                .next()
-                                .map(kevy_bytes::SmallBytes::to_vec)
+                            s.iter_from_slot(*d as usize).next().map(kevy_bytes::SmallBytes::to_vec)
                         })
                         .collect())
                 }

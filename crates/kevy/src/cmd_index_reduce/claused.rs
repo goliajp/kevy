@@ -11,7 +11,7 @@
 use kevy_index::{FacetBucket, ScalarHit, fold_facets, merge_claused, sort_facets};
 use kevy_resp::{encode_array_len, encode_bulk, encode_error};
 
-use super::chunk::{emit_row, read_kbytes, read_u32, read_hydration, value_repr};
+use super::chunk::{emit_row, read_hydration, read_kbytes, read_u32, value_repr};
 use crate::cmd_index_query::{Hydrated, Query, decode_value};
 
 /// One merged hit with the hydration block that rode its chunk.

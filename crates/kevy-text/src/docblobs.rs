@@ -150,9 +150,7 @@ pub(crate) fn blob_alloc(b: &[u8]) -> u64 {
 /// and, for a `Many` token, its RawTable — is added per variant.
 #[cfg(test)]
 pub(crate) fn channel_bytes(map: &HashMap<Vec<u8>, DocBlobs>) -> u64 {
-    map.iter()
-        .map(|(t, db)| t.len() as u64 + 24 + 56 + db.approx_bytes())
-        .sum()
+    map.iter().map(|(t, db)| t.len() as u64 + 24 + 56 + db.approx_bytes()).sum()
 }
 
 /// The `Many` variant's RawTable term for `n` entries (the cap model
@@ -256,12 +254,9 @@ mod tests {
 
     #[test]
     fn varints_roundtrip() {
-        for case in [
-            vec![],
-            vec![0u32],
-            vec![1, 2, 3],
-            vec![5, 127, 128, 129, 16_383, 16_384, 2_000_000],
-        ] {
+        for case in
+            [vec![], vec![0u32], vec![1, 2, 3], vec![5, 127, 128, 129, 16_383, 16_384, 2_000_000]]
+        {
             let mut blob = Vec::new();
             for &v in &case {
                 put_varint(&mut blob, v);

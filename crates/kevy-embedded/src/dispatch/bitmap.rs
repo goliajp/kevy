@@ -2,10 +2,10 @@
 //! BITOP. Server-side these are a ledgered RESP gap (F3), so the
 //! wording follows Redis.
 
-use crate::store::Store;
 use crate::BitOp;
+use crate::store::Store;
 
-use super::util::{arg_i64, arg_u64, emit_int, err, kevy_err, wrong_args, ERR_NOT_INT, ERR_SYNTAX};
+use super::util::{ERR_NOT_INT, ERR_SYNTAX, arg_i64, arg_u64, emit_int, err, kevy_err, wrong_args};
 
 /// One bitmap request; `false` = verb not in this group.
 // LOC-WAIVER: data-driven verb dispatch table — one arm per bitmap verb.

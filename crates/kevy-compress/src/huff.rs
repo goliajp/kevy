@@ -193,11 +193,8 @@ pub(crate) fn validate_lens(lens: &[u8; 256], n: usize) -> Result<(), Corrupt> {
     if lens.iter().any(|&l| u32::from(l) > MAX_LEN) {
         return Err(Corrupt);
     }
-    let kraft: u64 = lens
-        .iter()
-        .filter(|&&l| l > 0)
-        .map(|&l| 1u64 << (MAX_LEN - u32::from(l)))
-        .sum();
+    let kraft: u64 =
+        lens.iter().filter(|&&l| l > 0).map(|&l| 1u64 << (MAX_LEN - u32::from(l))).sum();
     if kraft > (1u64 << MAX_LEN) || (n > 0 && kraft == 0) {
         return Err(Corrupt);
     }
@@ -219,11 +216,14 @@ pub(crate) fn symbols_fit(n: usize, stream_len: usize) -> usize {
     n.min(stream_len.saturating_mul(8).saturating_add(64))
 }
 
-/// Decode `n` symbols from an LSB-first bitstream under `lens`;
-/// returns the bytes and the exact bits consumed.
-pub(crate) fn read_bits(stream: &[u8], lens: &[u8; 256], n: usize) -> Result<(Vec<u8>, u64), Corrupt> {
+/// The flat decode table `read_bits` indexes with the next `MAX_LEN` bits,
+/// reversed: entry -> `(symbol, code length)`.
+///
+/// Every code shorter than `MAX_LEN` owns a run of entries — one per value
+/// of the bits it does not constrain — which is why each symbol is written
+/// at `base`, `base + step`, `base + 2*step` and so on rather than once.
+fn build_decode_table(lens: &[u8; 256]) -> Vec<(u8, u8)> {
     let codes = canonical_codes(lens);
-    // Flat table: index = next MAX_LEN reversed bits -> (symbol, len).
     let mut table = vec![(0u8, 0u8); 1 << MAX_LEN];
     for s in 0..256 {
         let l = u32::from(lens[s]);
@@ -238,6 +238,17 @@ pub(crate) fn read_bits(stream: &[u8], lens: &[u8; 256], n: usize) -> Result<(Ve
             ix += step;
         }
     }
+    table
+}
+
+/// Decode `n` symbols from an LSB-first bitstream under `lens`;
+/// returns the bytes and the exact bits consumed.
+pub(crate) fn read_bits(
+    stream: &[u8],
+    lens: &[u8; 256],
+    n: usize,
+) -> Result<(Vec<u8>, u64), Corrupt> {
+    let table = build_decode_table(lens);
     // `n` is a count read out of the frame. A Huffman code is at least one
     // bit, so n symbols need at least n bits and the stream cannot honour a
     // claim past `8 * stream.len()`. Reserving on the claim let CI's first

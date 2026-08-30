@@ -59,13 +59,7 @@ impl<C: Commands> Shard<C> {
             return;
         }
         let Some(state) = uc.pending_big_arg.as_mut() else { return };
-        let BigArgState::BareSetReading {
-            body,
-            body_len,
-            crlf_seen,
-            ..
-        } = state.as_mut()
-        else {
+        let BigArgState::BareSetReading { body, body_len, crlf_seen, .. } = state.as_mut() else {
             // Not in reading phase — defensive ignore.
             return;
         };
@@ -145,11 +139,7 @@ impl<C: Commands> Shard<C> {
             self.mark_arm_pending(cid, io);
             return;
         };
-        let BigArgState::BareSetCancelling {
-            cancel_acked,
-            target_canceled,
-            ..
-        } = state.as_mut()
+        let BigArgState::BareSetCancelling { cancel_acked, target_canceled, .. } = state.as_mut()
         else {
             return;
         };
@@ -173,11 +163,7 @@ impl<C: Commands> Shard<C> {
             self.mark_arm_pending(cid, io);
             return;
         };
-        let BigArgState::BareSetCancelling {
-            cancel_acked,
-            target_canceled,
-            ..
-        } = state.as_mut()
+        let BigArgState::BareSetCancelling { cancel_acked, target_canceled, .. } = state.as_mut()
         else {
             return;
         };
@@ -195,21 +181,10 @@ impl<C: Commands> Shard<C> {
     /// single-shot `prep_read` for any remaining body bytes. If the
     /// body completed via in-flight multishot CQEs BEFORE the
     /// transition fired, dispatch immediately and request re-arm.
-    pub(crate) fn transition_to_reading(
-        &mut self,
-        cid: u64,
-        io: &mut KevyMap<u64, UringConn>,
-    ) {
+    pub(crate) fn transition_to_reading(&mut self, cid: u64, io: &mut KevyMap<u64, UringConn>) {
         let Some(uc) = io.get_mut(&cid) else { return };
         let Some(state) = uc.pending_big_arg.take() else { return };
-        let BigArgState::BareSetCancelling {
-            key,
-            body,
-            body_len,
-            crlf_seen,
-            ..
-        } = *state
-        else {
+        let BigArgState::BareSetCancelling { key, body, body_len, crlf_seen, .. } = *state else {
             return;
         };
         if body.len() == body_len && crlf_seen == 2 {
@@ -222,12 +197,8 @@ impl<C: Commands> Shard<C> {
             self.mark_arm_pending(cid, io);
             return;
         }
-        uc.pending_big_arg = Some(Box::new(BigArgState::BareSetReading {
-            key,
-            body,
-            body_len,
-            crlf_seen,
-        }));
+        uc.pending_big_arg =
+            Some(Box::new(BigArgState::BareSetReading { key, body, body_len, crlf_seen }));
         uc.big_arg_read_pending = true;
         self.mark_arm_pending(cid, io);
     }
@@ -253,11 +224,7 @@ impl<C: Commands> Shard<C> {
         // `Vec::into_boxed_slice` to be zero-copy.
         debug_assert_eq!(body.len(), body_len);
         debug_assert_eq!(body.capacity(), body_len);
-        let view = ThreeSliceView {
-            verb: b"SET",
-            key: &key,
-            body: &body,
-        };
+        let view = ThreeSliceView { verb: b"SET", key: &key, body: &body };
         // No propagation-override take here (cf. post_write_housekeeping):
         // this path records a literal `SET` it built itself — deterministic,
         // never SPOP — and none can be pending anyway: every other dispatch

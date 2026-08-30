@@ -44,10 +44,7 @@ fn client_setname_persists_per_connection() {
     let r = send(&mut a, b"*3\r\n$6\r\nCLIENT\r\n$7\r\nSETNAME\r\n$5\r\nconn1\r\n");
     assert!(r.starts_with("+OK"), "SETNAME got: {r:?}");
     let r = send(&mut a, b"*2\r\n$6\r\nCLIENT\r\n$7\r\nGETNAME\r\n");
-    assert!(
-        r == "$5\r\nconn1\r\n",
-        "GETNAME round-trip failed: {r:?}"
-    );
+    assert!(r == "$5\r\nconn1\r\n", "GETNAME round-trip failed: {r:?}");
 
     // PHASE 2: Per-connection isolation. A second connection's
     // GETNAME must return empty bulk (not conn1's name).
@@ -69,10 +66,7 @@ fn client_setname_persists_per_connection() {
     // PHASE 4: Whitespace rejected per Redis spec.
     let mut c = connect(port);
     let r = send(&mut c, b"*3\r\n$6\r\nCLIENT\r\n$7\r\nSETNAME\r\n$6\r\nha ck1\r\n");
-    assert!(
-        r.starts_with("-ERR"),
-        "SETNAME with whitespace should reject, got {r:?}"
-    );
+    assert!(r.starts_with("-ERR"), "SETNAME with whitespace should reject, got {r:?}");
     // After reject, name stays empty.
     let r = send(&mut c, b"*2\r\n$6\r\nCLIENT\r\n$7\r\nGETNAME\r\n");
     assert_eq!(r, "$0\r\n\r\n");

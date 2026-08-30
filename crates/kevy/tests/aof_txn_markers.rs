@@ -105,7 +105,11 @@ fn single_commands_carry_no_markers_and_exec_is_bracketed() {
     let commit = aof.windows(13).position(|w| w == b"KEVYTXNCOMMIT").unwrap();
     for k in [&b"tx:a"[..], b"tx:b", b"tx:c"] {
         let at = aof.windows(k.len()).position(|w| w == k).unwrap();
-        assert!(begin < at && at < commit, "{} outside the marker window", String::from_utf8_lossy(k));
+        assert!(
+            begin < at && at < commit,
+            "{} outside the marker window",
+            String::from_utf8_lossy(k)
+        );
     }
 
     // Phase 3: the whole log replays — reopen and read both phases back.

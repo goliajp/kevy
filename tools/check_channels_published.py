@@ -180,10 +180,25 @@ def on_crates(name, v):
 
 
 def on_goproxy(module, v):
-    st, b = get(f"https://proxy.golang.org/{module.lower()}/@v/v{v}.info")
+    # `.mod`, not `.info`. The two disagree, and only one of them answers
+    # the question a user asks. On 2026-08-30 the tag was pushed, this
+    # gate was asked seconds later, the proxy went to GitHub before the
+    # tag had propagated, and it cached the miss — so `.info` served 404
+    # for half an hour while `@latest`, `.mod` and `.zip` all served
+    # v6.1.0 and `GOPROXY=https://proxy.golang.org go get module@v6.1.0`
+    # installed it. `go` needs `.mod` and `.zip` to resolve an exact
+    # version; `.info` is for @latest and metadata. A gate that reports a
+    # door shut while users are walking through it teaches people to
+    # ignore gates, which is the more expensive failure.
+    #
+    # And by content: the response must be the go.mod of THIS module, so
+    # a proxy that answers 200 with something else is not a pass.
+    st, b = get(f"https://proxy.golang.org/{module.lower()}/@v/v{v}.mod")
     if st in (404, 410):
         return False
-    return None if b is None else (f'"v{v}"'.encode() in b)
+    if b is None:
+        return None
+    return f"module {module}".encode() in b
 
 
 def on_ghcr(image, v):

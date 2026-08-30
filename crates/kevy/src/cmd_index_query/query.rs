@@ -53,9 +53,7 @@ pub(super) fn op_query(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>], verb:
     // selection clauses re-shape the page, so a resume point in the
     // driving order has nothing to resume.
     if q.cursor_raw.is_some() && q.selects() {
-        return super::query_claused::clause_chunk(
-            super::query_claused::CURSOR_CLAUSE_CONFLICT,
-        );
+        return super::query_claused::clause_chunk(super::query_claused::CURSOR_CLAUSE_CONFLICT);
     }
     if matches!(q.shape, Shape::Verify)
         && let Some(chunk) = verify_kind_stats(ctx, store, &q.name)
@@ -121,38 +119,37 @@ fn verify_kind_stats(ctx: &Ctx<'_>, store: &mut Store, name: &[u8]) -> Option<Ve
 
 /// Range / Eq / scalar-Verify against this shard's segment.
 fn run_scalar_query(ctx: &Ctx<'_>, store: &mut Store, q: &Query, verb: &[u8]) -> Vec<u8> {
-    let res = index_runtime::with_ready_segment(ctx, store, &q.name, |spec, seg, win| match q
-        .shape
-    {
-        Shape::Range { .. } | Shape::Eq { .. } | Shape::Where(_) => {
-            let now = (kevy_store::now_unix_ms() / 1000) as i64;
-            let (min, max) = match q.bounds_for(spec, now) {
-                Ok(b) => b,
-                Err(chunk) => return HitsOrChunk::Chunk(chunk),
-            };
-            super::probe_window(ctx, &q.name, win, &min);
-            scalar_range_or_count(q, verb, spec, seg, win, &min, &max)
-        }
-        // VERIFY answers "does the index still agree with the keyspace?".
-        // The segment cannot be walked and the store re-read at the same time
-        // (`with_ready_segment` holds the store), so snapshot the held
-        // (key, value) pairs here and do the recheck outside — which is what
-        // this arm was always shaped for, except the snapshot was collected,
-        // thrown away with `let _ = (...)`, and the drift it was for never
-        // computed. That left an O(N) walk plus an O(N) allocation per shard
-        // per VERIFY, producing nothing, while `verb_meta` and the docs
-        // advertised a drift statistic the reply did not carry.
-        Shape::Verify => {
-            let mut entries: Vec<(Vec<u8>, IndexValue)> = Vec::new();
-            seg.each_entry(|k, v| entries.push((k.to_vec(), v.clone())));
-            HitsOrChunk::Verify {
-                spec: Box::new(spec.clone()),
-                entries,
-                stats: seg.stats(),
-                window: win.and_then(|w| w.audit(spec.ty)),
+    let res =
+        index_runtime::with_ready_segment(ctx, store, &q.name, |spec, seg, win| match q.shape {
+            Shape::Range { .. } | Shape::Eq { .. } | Shape::Where(_) => {
+                let now = (kevy_store::now_unix_ms() / 1000) as i64;
+                let (min, max) = match q.bounds_for(spec, now) {
+                    Ok(b) => b,
+                    Err(chunk) => return HitsOrChunk::Chunk(chunk),
+                };
+                super::probe_window(ctx, &q.name, win, &min);
+                scalar_range_or_count(q, verb, spec, seg, win, &min, &max)
             }
-        }
-    });
+            // VERIFY answers "does the index still agree with the keyspace?".
+            // The segment cannot be walked and the store re-read at the same time
+            // (`with_ready_segment` holds the store), so snapshot the held
+            // (key, value) pairs here and do the recheck outside — which is what
+            // this arm was always shaped for, except the snapshot was collected,
+            // thrown away with `let _ = (...)`, and the drift it was for never
+            // computed. That left an O(N) walk plus an O(N) allocation per shard
+            // per VERIFY, producing nothing, while `verb_meta` and the docs
+            // advertised a drift statistic the reply did not carry.
+            Shape::Verify => {
+                let mut entries: Vec<(Vec<u8>, IndexValue)> = Vec::new();
+                seg.each_entry(|k, v| entries.push((k.to_vec(), v.clone())));
+                HitsOrChunk::Verify {
+                    spec: Box::new(spec.clone()),
+                    entries,
+                    stats: seg.stats(),
+                    window: win.and_then(|w| w.audit(spec.ty)),
+                }
+            }
+        });
     match res {
         Ok(HitsOrChunk::Chunk(chunk)) => chunk,
         Ok(HitsOrChunk::Hits(hits)) => encode_hits_chunk(store, &hits, &q.fields),

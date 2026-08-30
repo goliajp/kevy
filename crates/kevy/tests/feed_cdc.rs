@@ -71,7 +71,9 @@ impl Feed {
         let stop_thread = stop.clone();
         let dir_thread = dir.clone();
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(NSHARDS)).bind([127, 0, 0, 1], port).shards(NSHARDS)
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(NSHARDS))
+                .bind([127, 0, 0, 1], port)
+                .shards(NSHARDS)
                 .with_data_dir(dir_thread)
                 .with_feed(true, 0);
             rt.run(stop_thread).unwrap();
@@ -84,10 +86,7 @@ impl Feed {
         let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = std::env::temp_dir().join(format!(
             "kevy-feed-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
         Self::boot(dir)
@@ -125,10 +124,8 @@ impl Drop for Feed {
 /// Parse `*2 [:gen, :off]` from FEED.TAIL.
 fn parse_tail(reply: &[u8]) -> (u64, u64) {
     let s = String::from_utf8_lossy(reply);
-    let mut nums = s
-        .lines()
-        .filter(|l| l.starts_with(':'))
-        .map(|l| l[1..].trim().parse::<u64>().unwrap());
+    let mut nums =
+        s.lines().filter(|l| l.starts_with(':')).map(|l| l[1..].trim().parse::<u64>().unwrap());
     (nums.next().unwrap(), nums.next().unwrap())
 }
 
@@ -156,7 +153,14 @@ fn feed_shards_tail_read_roundtrip() {
     // Read from 0: frames come back in order with argv payloads.
     let r = cmd(
         &mut c,
-        &[b"FEED.READ", sh.to_string().as_bytes(), live_gen.to_string().as_bytes(), b"0", b"COUNT", b"100"],
+        &[
+            b"FEED.READ",
+            sh.to_string().as_bytes(),
+            live_gen.to_string().as_bytes(),
+            b"0",
+            b"COUNT",
+            b"100",
+        ],
     );
     let s = String::from_utf8_lossy(&r);
     assert!(s.starts_with(&format!("*3\r\n:{live_gen}\r\n")), "got {s}");
@@ -167,7 +171,12 @@ fn feed_shards_tail_read_roundtrip() {
     // Caught-up read = empty frame list, cursor unchanged.
     let r2 = cmd(
         &mut c,
-        &[b"FEED.READ", sh.to_string().as_bytes(), live_gen.to_string().as_bytes(), off.to_string().as_bytes()],
+        &[
+            b"FEED.READ",
+            sh.to_string().as_bytes(),
+            live_gen.to_string().as_bytes(),
+            off.to_string().as_bytes(),
+        ],
     );
     let s2 = String::from_utf8_lossy(&r2);
     assert!(s2.ends_with("*0\r\n"), "caught up: {s2}");
@@ -191,8 +200,14 @@ fn feed_prefix_filter_and_errors() {
         let r = cmd(
             &mut c,
             &[
-                b"FEED.READ", sh.to_string().as_bytes(), g.to_string().as_bytes(), b"0",
-                b"COUNT", b"100", b"PREFIX", b"user:",
+                b"FEED.READ",
+                sh.to_string().as_bytes(),
+                g.to_string().as_bytes(),
+                b"0",
+                b"COUNT",
+                b"100",
+                b"PREFIX",
+                b"user:",
             ],
         );
         let s = String::from_utf8_lossy(&r);
@@ -209,11 +224,7 @@ fn feed_prefix_filter_and_errors() {
     // An offset ahead of the stream in the LIVE generation → cursor-ahead.
     let (g0, _) = parse_tail(&cmd(&mut c, &[b"FEED.TAIL", b"0"]));
     let r = cmd(&mut c, &[b"FEED.READ", b"0", g0.to_string().as_bytes(), b"999999"]);
-    assert!(
-        r.starts_with(b"-ERR feed cursor ahead"),
-        "{:?}",
-        String::from_utf8_lossy(&r)
-    );
+    assert!(r.starts_with(b"-ERR feed cursor ahead"), "{:?}", String::from_utf8_lossy(&r));
 }
 
 #[test]
@@ -232,11 +243,7 @@ fn flushall_bumps_generation_and_old_cursor_resyncs() {
     // The old-generation cursor answers FEEDRESYNC with the new tail.
     let r = cmd(&mut c, &[b"FEED.READ", b"0", g_before.to_string().as_bytes(), b"5"]);
     let want = format!("-FEEDRESYNC {g} 0");
-    assert!(
-        r.starts_with(want.as_bytes()),
-        "want {want:?}, got {:?}",
-        String::from_utf8_lossy(&r)
-    );
+    assert!(r.starts_with(want.as_bytes()), "want {want:?}, got {:?}", String::from_utf8_lossy(&r));
 }
 
 #[test]
@@ -244,10 +251,7 @@ fn clean_restart_keeps_cursor_unclean_bumps() {
     let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let dir = std::env::temp_dir().join(format!(
         "kevy-feed-restart-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
     ));
     std::fs::create_dir_all(&dir).unwrap();
 
@@ -376,7 +380,14 @@ fn cross_shard_rename_reaches_the_feed_on_both_ends() {
         let (g, _) = parse_tail(&cmd(c, &[b"FEED.TAIL", sh.to_string().as_bytes()]));
         String::from_utf8_lossy(&cmd(
             c,
-            &[b"FEED.READ", sh.to_string().as_bytes(), g.to_string().as_bytes(), b"0", b"COUNT", b"100"],
+            &[
+                b"FEED.READ",
+                sh.to_string().as_bytes(),
+                g.to_string().as_bytes(),
+                b"0",
+                b"COUNT",
+                b"100",
+            ],
         ))
         .into_owned()
     };
@@ -428,7 +439,8 @@ fn a_cross_shard_bitop_result_reaches_the_feed_on_the_destination_shard() {
     cmd(&mut c, &[b"SETBIT", src_b.as_bytes(), b"3", b"1"]);
     // Where the destination's shard stands before the BITOP.
     let dst_shard = of(dst);
-    let (generation, before) = parse_tail(&cmd(&mut c, &[b"FEED.TAIL", dst_shard.to_string().as_bytes()]));
+    let (generation, before) =
+        parse_tail(&cmd(&mut c, &[b"FEED.TAIL", dst_shard.to_string().as_bytes()]));
 
     let reply = cmd(&mut c, &[b"BITOP", b"OR", dst.as_bytes(), src_a.as_bytes(), src_b.as_bytes()]);
     assert_eq!(reply, b":1\r\n".to_vec(), "BITOP did not store one byte");

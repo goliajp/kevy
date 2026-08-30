@@ -7,9 +7,9 @@
 
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream, ToSocketAddrs};
-use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
 
 use crate::elector::Outbound;
@@ -29,9 +29,7 @@ pub(crate) fn accept_loop(listener: TcpListener, tx: Sender<InboundEvent>, stop:
     // try_clone trick to interrupt; the non-blocking poll keeps the
     // surface uniform with the outbound loop's busy-but-cheap
     // pattern (election control plane is low-volume).
-    listener
-        .set_nonblocking(true)
-        .expect("listener set_nonblocking(true)");
+    listener.set_nonblocking(true).expect("listener set_nonblocking(true)");
     while !stop.load(Ordering::Relaxed) {
         match listener.accept() {
             Ok((stream, addr)) => {
@@ -289,17 +287,9 @@ mod sender_key_tests {
     /// timing; which variants exist is not.
     #[test]
     fn every_variant_reports_its_own_sender() {
-        let hb = Message::Hb {
-            epoch: 7,
-            node_id: "n-hb".into(),
-            role: Role::Primary,
-            repl_offset: 1,
-        };
-        let offer = Message::Offer {
-            new_epoch: 8,
-            candidate_id: "n-offer".into(),
-            repl_offset: 2,
-        };
+        let hb =
+            Message::Hb { epoch: 7, node_id: "n-hb".into(), role: Role::Primary, repl_offset: 1 };
+        let offer = Message::Offer { new_epoch: 8, candidate_id: "n-offer".into(), repl_offset: 2 };
         let accept = Message::Accept { epoch: 8, accepter_id: "n-accept".into() };
         let announce = Message::Announce {
             epoch: 8,

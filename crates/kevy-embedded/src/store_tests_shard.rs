@@ -1,9 +1,9 @@
 //! Sharding (B2) + server-dir-interop tests for the embedded store.
 //! Split from `store_tests.rs` to keep both under the 500-LOC house rule.
 
-use crate::store::*;
 use super::tests::tmp_dir;
 use crate::PubsubFrame;
+use crate::store::*;
 
 // ───────────────────────── sharding (B2) ─────────────────────────
 
@@ -15,10 +15,7 @@ fn sharded_in_memory_roundtrip() {
     }
     assert_eq!(s.dbsize(), 1000);
     for i in 0..1000u32 {
-        assert_eq!(
-            s.get(format!("k{i}").as_bytes()).unwrap(),
-            Some(format!("v{i}").into_bytes())
-        );
+        assert_eq!(s.get(format!("k{i}").as_bytes()).unwrap(), Some(format!("v{i}").into_bytes()));
     }
     // Cross-shard DEL: keys hash to different shards.
     let keys: Vec<Vec<u8>> = (0..1000u32).map(|i| format!("k{i}").into_bytes()).collect();
@@ -43,10 +40,9 @@ fn sharded_persist_survives_restart() {
     // Per-shard AOFs exist; reopen at the same shard count loads them.
     assert!(dir.join("shards.meta").exists());
     assert!(dir.join("aof-3.aof").exists());
-    let s2 = Store::open(
-        Config::default().with_persist(&dir).with_shards(4).with_ttl_reaper_manual(),
-    )
-    .unwrap();
+    let s2 =
+        Store::open(Config::default().with_persist(&dir).with_shards(4).with_ttl_reaper_manual())
+            .unwrap();
     assert_eq!(s2.dbsize(), 500);
     assert_eq!(s2.get(b"k0").unwrap(), Some(b"v0".to_vec()));
     assert_eq!(s2.get(b"k499").unwrap(), Some(b"v499".to_vec()));
@@ -58,10 +54,7 @@ fn migrates_single_aof_to_shards() {
     let dir = tmp_dir("migrate");
     // 1. Write with the default single-shard layout (one aof-0.aof, no meta).
     {
-        let s = Store::open(
-            Config::default().with_persist(&dir).with_ttl_reaper_manual(),
-        )
-        .unwrap();
+        let s = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
         for i in 0..300u32 {
             s.set(format!("k{i}").as_bytes(), format!("v{i}").as_bytes()).unwrap();
         }
@@ -87,15 +80,16 @@ fn migrates_single_aof_to_shards() {
     }
     // Migration artifacts: meta written, legacy AOF backed up, per-shard files.
     assert!(dir.join("shards.meta").exists());
-    assert!(std::fs::read_dir(&dir).unwrap().any(|e| {
-        e.unwrap().file_name().to_string_lossy().contains("premigration")
-    }));
+    assert!(
+        std::fs::read_dir(&dir)
+            .unwrap()
+            .any(|e| { e.unwrap().file_name().to_string_lossy().contains("premigration") })
+    );
 
     // 3. Reopen sharded again → loads per-shard, data intact.
-    let s3 = Store::open(
-        Config::default().with_persist(&dir).with_shards(4).with_ttl_reaper_manual(),
-    )
-    .unwrap();
+    let s3 =
+        Store::open(Config::default().with_persist(&dir).with_shards(4).with_ttl_reaper_manual())
+            .unwrap();
     assert_eq!(s3.dbsize(), 300);
     assert_eq!(s3.get(b"k150").unwrap(), Some(b"v150".to_vec()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -154,10 +148,7 @@ fn metaless_multishard_dir_is_migrated_not_partially_loaded() {
     b.set(b"beta", b"2".to_vec(), None, false, false);
     kevy_persist::save_snapshot(&b, &dir.join("dump-1.rdb")).unwrap();
 
-    let s = Store::open(
-        Config::default().with_persist(&dir).with_ttl_reaper_manual(),
-    )
-    .unwrap();
+    let s = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
     assert_eq!(s.dbsize(), 2, "both shards' keys must survive the n=1 open");
     assert_eq!(s.get(b"alpha").unwrap(), Some(b"1".to_vec()));
     assert_eq!(s.get(b"beta").unwrap(), Some(b"2".to_vec()));
@@ -170,10 +161,7 @@ fn metaless_multishard_dir_is_migrated_not_partially_loaded() {
 fn single_shard_default_names_record_meta() {
     let dir = tmp_dir("single-meta");
     {
-        let s = Store::open(
-            Config::default().with_persist(&dir).with_ttl_reaper_manual(),
-        )
-        .unwrap();
+        let s = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
         s.set(b"k", b"v").unwrap();
     }
     assert!(dir.join("shards.meta").exists());
@@ -215,10 +203,9 @@ fn open_rolls_forward_a_committed_reshard() {
     )
     .unwrap();
 
-    let s = Store::open(
-        Config::default().with_persist(&dir).with_shards(2).with_ttl_reaper_manual(),
-    )
-    .unwrap();
+    let s =
+        Store::open(Config::default().with_persist(&dir).with_shards(2).with_ttl_reaper_manual())
+            .unwrap();
     assert_eq!(s.dbsize(), 3, "recovered store must hold the migrated state");
     assert_eq!(s.get(b"alpha").unwrap(), Some(b"1".to_vec()));
     assert_eq!(s.get(b"gamma").unwrap(), Some(b"3".to_vec()));
@@ -242,10 +229,7 @@ fn open_discards_a_torn_reshard_journal() {
     kevy_persist::save_snapshot(&old, &dir.join("dump-0.rdb")).unwrap();
     std::fs::write(dir.join("reshard.journal"), "kevy-reshard-journal v1\nstamp=").unwrap();
 
-    let s = Store::open(
-        Config::default().with_persist(&dir).with_ttl_reaper_manual(),
-    )
-    .unwrap();
+    let s = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
     assert_eq!(s.get(b"keep").unwrap(), Some(b"v".to_vec()));
     drop(s);
     assert!(!dir.join("reshard.journal").exists());

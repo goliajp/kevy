@@ -44,10 +44,7 @@ pub fn bench_direct(n: u64) -> DirectNumbers {
     let mut plain = KevyMap::with_capacity(NKEYS * 2);
     for i in 0..NKEYS {
         let payload = build_payload(seed_of(i as u64, 1), PERF_LEN, 0);
-        plain.insert(
-            SmallBytes::from_vec(key_name(i)),
-            Value::Str(SmallBytes::from_vec(payload)),
-        );
+        plain.insert(SmallBytes::from_vec(key_name(i)), Value::Str(SmallBytes::from_vec(payload)));
     }
     let names: Vec<Vec<u8>> = (0..NKEYS).map(key_name).collect();
     let mut out = Vec::with_capacity(64);
@@ -178,8 +175,7 @@ fn forward_hop_only(n: u64) -> f64 {
                     out.clear();
                     // Owner reads its own keyspace — no pin needed (the
                     // owner IS the writer; nothing frees under it).
-                    let (_h, _) =
-                        ks.entry(&names[req.idx as usize]).read(0, &mut out, false);
+                    let (_h, _) = ks.entry(&names[req.idx as usize]).read(0, &mut out, false);
                     let mut resp = Resp { seq: req.seq, len: out.len() as u8, bytes: [0; 27] };
                     resp.bytes[..out.len()].copy_from_slice(&out);
                     let mut r = resp;
@@ -254,11 +250,9 @@ fn forward_chain(n: u64, batch_size: usize) -> f64 {
                         let mut resps = Vec::with_capacity(rb.len());
                         for req in rb.iter() {
                             out.clear();
-                            let (_h, _) = ks
-                                .entry(&req.argv[..req.klen as usize])
-                                .read(0, &mut out, false);
-                            let mut r =
-                                Resp { seq: req.seq, len: out.len() as u8, bytes: [0; 27] };
+                            let (_h, _) =
+                                ks.entry(&req.argv[..req.klen as usize]).read(0, &mut out, false);
+                            let mut r = Resp { seq: req.seq, len: out.len() as u8, bytes: [0; 27] };
                             r.bytes[..out.len()].copy_from_slice(&out);
                             resps.push(r);
                         }
@@ -428,9 +422,8 @@ pub fn run_cell(r: usize, hot: bool, writer: WriterMode, table_word: bool, ops: 
                     let ki = (rng % (hi - lo) as u64) as usize;
                     let seed = seed_of((lo + ki) as u64, nonce);
                     let payload = build_payload(seed, PERF_LEN, 0);
-                    let old = ks
-                        .entry(&names[ki])
-                        .write(Value::Str(SmallBytes::from_vec(payload)), 0);
+                    let old =
+                        ks.entry(&names[ki]).write(Value::Str(SmallBytes::from_vec(payload)), 0);
                     rq.retire(&ks.ebr, old);
                     if table_word {
                         tbl.fetch_add(1, Ordering::Release);

@@ -74,7 +74,8 @@ impl Store {
             keys: self.sum_shards(|i| i.store.dbsize()),
             used_memory: self.sum_shards_u64(|i| i.store.used_memory()),
             #[cfg(feature = "persist")]
-            aof_bytes: self.sum_shards_u64(|i| i.aof.as_ref().map_or(0, kevy_persist::Aof::size_bytes)),
+            aof_bytes: self
+                .sum_shards_u64(|i| i.aof.as_ref().map_or(0, kevy_persist::Aof::size_bytes)),
             #[cfg(not(feature = "persist"))]
             aof_bytes: 0,
             expire_pending: self.sum_shards(|i| i.store.ttl_pending_count()),
@@ -129,10 +130,6 @@ impl Store {
     /// (`-2` no key, `-1` no TTL) use [`Store::ttl_ms`].
     pub fn ttl(&self, key: &[u8]) -> Option<Duration> {
         let ms = self.wshard(key).store.pttl(key);
-        if ms < 0 {
-            None
-        } else {
-            Some(Duration::from_millis(ms as u64))
-        }
+        if ms < 0 { None } else { Some(Duration::from_millis(ms as u64)) }
     }
 }

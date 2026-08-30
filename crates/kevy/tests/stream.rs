@@ -81,17 +81,16 @@ impl Server {
         let port = free_port();
         let dir = std::env::temp_dir().join(format!(
             "kevy-stream-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         let dir_thread = dir.clone();
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(nshards)).bind([127, 0, 0, 1], port).shards(nshards)
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(nshards))
+                .bind([127, 0, 0, 1], port)
+                .shards(nshards)
                 .with_data_dir(dir_thread);
             rt.run(stop_thread).unwrap();
         });
@@ -101,8 +100,7 @@ impl Server {
 
     fn connect(&self) -> std::net::TcpStream {
         let s = std::net::TcpStream::connect(("127.0.0.1", self.port)).unwrap();
-        s.set_read_timeout(Some(std::time::Duration::from_secs(5)))
-            .unwrap();
+        s.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
         s
     }
 }
@@ -123,8 +121,7 @@ impl Drop for Server {
 fn xadd_explicit_id_returns_id_bulk() {
     let srv = Server::start(1);
     let mut c = srv.connect();
-    c.write_all(&req(&[b"XADD", b"s", b"1-0", b"field", b"value"]))
-        .unwrap();
+    c.write_all(&req(&[b"XADD", b"s", b"1-0", b"field", b"value"])).unwrap();
     assert_eq!(read_reply(&mut c), b"$3\r\n1-0\r\n");
 }
 
@@ -177,8 +174,7 @@ fn xadd_partial_auto_seq() {
 fn xadd_nomkstream_returns_nil_when_missing() {
     let srv = Server::start(1);
     let mut c = srv.connect();
-    c.write_all(&req(&[b"XADD", b"s", b"NOMKSTREAM", b"*", b"f", b"v"]))
-        .unwrap();
+    c.write_all(&req(&[b"XADD", b"s", b"NOMKSTREAM", b"*", b"f", b"v"])).unwrap();
     assert_eq!(read_reply(&mut c), b"$-1\r\n");
     c.write_all(&req(&[b"EXISTS", b"s"])).unwrap();
     assert_eq!(read_reply(&mut c), b":0\r\n");
@@ -192,8 +188,7 @@ fn xlen_after_inserts() {
     let mut c = srv.connect();
     for i in 1..=3 {
         let id = format!("{i}-0");
-        c.write_all(&req(&[b"XADD", b"s", id.as_bytes(), b"f", b"v"]))
-            .unwrap();
+        c.write_all(&req(&[b"XADD", b"s", id.as_bytes(), b"f", b"v"])).unwrap();
         let _ = read_reply(&mut c);
     }
     c.write_all(&req(&[b"XLEN", b"s"])).unwrap();
@@ -311,10 +306,7 @@ fn xadd_with_maxlen_trims_inline() {
     let srv = Server::start(1);
     let mut c = srv.connect();
     seed_three(&mut c);
-    c.write_all(&req(&[
-        b"XADD", b"s", b"MAXLEN", b"2", b"4-0", b"f", b"d",
-    ]))
-    .unwrap();
+    c.write_all(&req(&[b"XADD", b"s", b"MAXLEN", b"2", b"4-0", b"f", b"d"])).unwrap();
     assert_eq!(read_reply(&mut c), b"$3\r\n4-0\r\n");
     c.write_all(&req(&[b"XLEN", b"s"])).unwrap();
     assert_eq!(read_reply(&mut c), b":2\r\n");
@@ -363,8 +355,7 @@ fn xread_count_truncates() {
     let srv = Server::start(1);
     let mut c = srv.connect();
     seed_three(&mut c);
-    c.write_all(&req(&[b"XREAD", b"COUNT", b"1", b"STREAMS", b"s", b"0"]))
-        .unwrap();
+    c.write_all(&req(&[b"XREAD", b"COUNT", b"1", b"STREAMS", b"s", b"0"])).unwrap();
     let r = read_reply(&mut c);
     let s = String::from_utf8_lossy(&r);
     // *1 (one stream) → *2 → key + entries
@@ -411,10 +402,7 @@ fn xsetid_bumps_clock_and_rejects_rollback() {
     let srv = Server::start(1);
     let mut c = srv.connect();
     c.write_all(&req(&[b"XSETID", b"nope", b"1-0"])).unwrap();
-    assert_eq!(
-        read_reply(&mut c),
-        b"-ERR The XSETID command requires the key to exist.\r\n"
-    );
+    assert_eq!(read_reply(&mut c), b"-ERR The XSETID command requires the key to exist.\r\n");
     c.write_all(&req(&[b"XADD", b"s", b"5-1", b"f", b"v"])).unwrap();
     assert_eq!(read_reply(&mut c), b"$3\r\n5-1\r\n");
     c.write_all(&req(&[b"XSETID", b"s", b"4-0"])).unwrap();
@@ -422,10 +410,8 @@ fn xsetid_bumps_clock_and_rejects_rollback() {
         read_reply(&mut c),
         b"-ERR The ID specified in XSETID is smaller than the target stream top item\r\n"
     );
-    c.write_all(&req(&[
-        b"XSETID", b"s", b"9-0", b"ENTRIESADDED", b"42", b"MAXDELETEDID", b"3-3",
-    ]))
-    .unwrap();
+    c.write_all(&req(&[b"XSETID", b"s", b"9-0", b"ENTRIESADDED", b"42", b"MAXDELETEDID", b"3-3"]))
+        .unwrap();
     assert_eq!(read_reply(&mut c), b"+OK\r\n");
     // The bumped clock now gates XADD.
     c.write_all(&req(&[b"XADD", b"s", b"9-0", b"f", b"v"])).unwrap();

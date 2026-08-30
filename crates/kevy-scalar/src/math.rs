@@ -25,11 +25,7 @@ pub(crate) fn eval(name: &str, args: &[Scalar]) -> Result<Scalar, ScalarError> {
 /// without a fraction (`floor(1.7)` prints `1`), everything else in
 /// shortest-roundtrip form.
 pub(crate) fn render_float(f: f64) -> String {
-    if f.fract() == 0.0 && f.abs() < 1e15 {
-        format!("{}", f as i64)
-    } else {
-        format!("{f}")
-    }
+    if f.fract() == 0.0 && f.abs() < 1e15 { format!("{}", f as i64) } else { format!("{f}") }
 }
 
 /// Int passthrough, Float mapped; strict NULL.

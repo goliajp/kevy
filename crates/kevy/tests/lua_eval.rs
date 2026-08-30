@@ -35,9 +35,7 @@ fn argv(parts: &[&[u8]]) -> Argv {
 /// on a heavily-parallel CI runner.
 fn script_cache_gate() -> std::sync::MutexGuard<'static, ()> {
     static G: OnceLock<Mutex<()>> = OnceLock::new();
-    G.get_or_init(|| Mutex::new(()))
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
+    G.get_or_init(|| Mutex::new(())).lock().unwrap_or_else(|p| p.into_inner())
 }
 
 #[test]
@@ -52,10 +50,7 @@ fn eval_redis_call_set_then_get_round_trips() {
     let mut store = Store::new();
     let script = b"redis.call('SET', KEYS[1], ARGV[1])\n\
                    return redis.call('GET', KEYS[1])\n";
-    let reply = dispatch(
-        &mut store,
-        &argv(&[b"EVAL", script, b"1", b"mykey", b"hello"]),
-    );
+    let reply = dispatch(&mut store, &argv(&[b"EVAL", script, b"1", b"mykey", b"hello"]));
     assert_eq!(reply, b"$5\r\nhello\r\n");
     // Confirm the kevy Store actually got the SET.
     let reply2 = dispatch(&mut store, &argv(&[b"GET", b"mykey"]));
@@ -82,10 +77,7 @@ fn eval_uses_kevy_incr_through_redis_call() {
 #[test]
 fn eval_with_wrong_numkeys_returns_resp_error() {
     let mut store = Store::new();
-    let reply = dispatch(
-        &mut store,
-        &argv(&[b"EVAL", b"return 1", b"5", b"only-one-key"]),
-    );
+    let reply = dispatch(&mut store, &argv(&[b"EVAL", b"return 1", b"5", b"only-one-key"]));
     assert!(reply.starts_with(b"-ERR "));
 }
 
@@ -100,10 +92,7 @@ fn eval_missing_args_returns_wrong_args_err() {
 fn script_load_then_evalsha_round_trips() {
     let _g = script_cache_gate();
     let mut store = Store::new();
-    let load_reply = dispatch(
-        &mut store,
-        &argv(&[b"SCRIPT", b"LOAD", b"return 'cached'"]),
-    );
+    let load_reply = dispatch(&mut store, &argv(&[b"SCRIPT", b"LOAD", b"return 'cached'"]));
     // Reply is a bulk string of 40 hex chars.
     assert!(load_reply.starts_with(b"$40\r\n"));
     let sha_hex = &load_reply[5..45]; // skip "$40\r\n" prefix
@@ -117,16 +106,10 @@ fn script_load_then_evalsha_round_trips() {
 fn script_exists_reports_hits_and_misses() {
     let _g = script_cache_gate();
     let mut store = Store::new();
-    let load_reply = dispatch(
-        &mut store,
-        &argv(&[b"SCRIPT", b"LOAD", b"return 42"]),
-    );
+    let load_reply = dispatch(&mut store, &argv(&[b"SCRIPT", b"LOAD", b"return 42"]));
     let sha_hex = load_reply[5..45].to_vec();
     let missing_sha = b"0".repeat(40);
-    let reply = dispatch(
-        &mut store,
-        &argv(&[b"SCRIPT", b"EXISTS", &sha_hex, &missing_sha]),
-    );
+    let reply = dispatch(&mut store, &argv(&[b"SCRIPT", b"EXISTS", &sha_hex, &missing_sha]));
     assert_eq!(reply, b"*2\r\n:1\r\n:0\r\n");
 }
 
@@ -134,17 +117,11 @@ fn script_exists_reports_hits_and_misses() {
 fn script_flush_clears_cache() {
     let _g = script_cache_gate();
     let mut store = Store::new();
-    let load_reply = dispatch(
-        &mut store,
-        &argv(&[b"SCRIPT", b"LOAD", b"return 42"]),
-    );
+    let load_reply = dispatch(&mut store, &argv(&[b"SCRIPT", b"LOAD", b"return 42"]));
     let sha_hex = load_reply[5..45].to_vec();
     let flush_reply = dispatch(&mut store, &argv(&[b"SCRIPT", b"FLUSH"]));
     assert_eq!(flush_reply, b"+OK\r\n");
-    let exists = dispatch(
-        &mut store,
-        &argv(&[b"SCRIPT", b"EXISTS", &sha_hex]),
-    );
+    let exists = dispatch(&mut store, &argv(&[b"SCRIPT", b"EXISTS", &sha_hex]));
     assert_eq!(exists, b"*1\r\n:0\r\n");
     // Cached script no longer reachable.
     let evalsha_argv = vec![&b"EVALSHA"[..], &sha_hex[..], &b"0"[..]];
@@ -157,20 +134,14 @@ fn script_flush_clears_cache() {
 fn eval_redlock_unlock_canonical_script() {
     let mut store = Store::new();
     // Pre-seed the lock with the expected token.
-    let _ = dispatch(
-        &mut store,
-        &argv(&[b"SET", b"lock:foo", b"token-abc"]),
-    );
+    let _ = dispatch(&mut store, &argv(&[b"SET", b"lock:foo", b"token-abc"]));
     // The byte-for-byte canonical Redlock unlock script.
     let script = b"if redis.call('GET', KEYS[1]) == ARGV[1] then\n\
                        return redis.call('DEL', KEYS[1])\n\
                    else\n\
                        return 0\n\
                    end\n";
-    let reply = dispatch(
-        &mut store,
-        &argv(&[b"EVAL", script, b"1", b"lock:foo", b"token-abc"]),
-    );
+    let reply = dispatch(&mut store, &argv(&[b"EVAL", script, b"1", b"lock:foo", b"token-abc"]));
     assert_eq!(reply, b":1\r\n");
     // Lock is gone.
     let get_reply = dispatch(&mut store, &argv(&[b"GET", b"lock:foo"]));
@@ -180,19 +151,13 @@ fn eval_redlock_unlock_canonical_script() {
 #[test]
 fn eval_redlock_unlock_token_mismatch_returns_zero() {
     let mut store = Store::new();
-    let _ = dispatch(
-        &mut store,
-        &argv(&[b"SET", b"lock:foo", b"someone-else"]),
-    );
+    let _ = dispatch(&mut store, &argv(&[b"SET", b"lock:foo", b"someone-else"]));
     let script = b"if redis.call('GET', KEYS[1]) == ARGV[1] then\n\
                        return redis.call('DEL', KEYS[1])\n\
                    else\n\
                        return 0\n\
                    end\n";
-    let reply = dispatch(
-        &mut store,
-        &argv(&[b"EVAL", script, b"1", b"lock:foo", b"my-token"]),
-    );
+    let reply = dispatch(&mut store, &argv(&[b"EVAL", script, b"1", b"lock:foo", b"my-token"]));
     assert_eq!(reply, b":0\r\n");
     let get_reply = dispatch(&mut store, &argv(&[b"GET", b"lock:foo"]));
     assert_eq!(get_reply, b"$12\r\nsomeone-else\r\n");
@@ -249,10 +214,7 @@ fn eval_ro_blocks_del() {
     );
     assert!(reply.starts_with(b"-READONLY "));
     // Key still present.
-    assert_eq!(
-        dispatch(&mut store, &argv(&[b"EXISTS", b"k"])),
-        b":1\r\n"
-    );
+    assert_eq!(dispatch(&mut store, &argv(&[b"EXISTS", b"k"])), b":1\r\n");
 }
 
 #[test]
@@ -260,12 +222,7 @@ fn eval_ro_blocks_incrby_via_pcall_returns_err_table() {
     let mut store = Store::new();
     let reply = dispatch(
         &mut store,
-        &argv(&[
-            b"EVAL_RO",
-            b"return redis.pcall('INCRBY', KEYS[1], 5)",
-            b"1",
-            b"counter",
-        ]),
+        &argv(&[b"EVAL_RO", b"return redis.pcall('INCRBY', KEYS[1], 5)", b"1", b"counter"]),
     );
     // pcall catches the error → {err = "READONLY ..."} → -READONLY ...
     assert!(reply.starts_with(b"-READONLY "));
@@ -280,16 +237,10 @@ fn evalsha_ro_blocks_write_in_cached_script() {
         &argv(&[b"SCRIPT", b"LOAD", b"return redis.call('SET', KEYS[1], ARGV[1])"]),
     );
     let sha_hex = load_reply[5..45].to_vec();
-    let ro = dispatch(
-        &mut store,
-        &argv(&[b"EVALSHA_RO", &sha_hex, b"1", b"k", b"v"]),
-    );
+    let ro = dispatch(&mut store, &argv(&[b"EVALSHA_RO", &sha_hex, b"1", b"k", b"v"]));
     assert!(ro.starts_with(b"-READONLY "));
     // Same SHA via writeable EVALSHA works.
-    let rw = dispatch(
-        &mut store,
-        &argv(&[b"EVALSHA", &sha_hex, b"1", b"k", b"v"]),
-    );
+    let rw = dispatch(&mut store, &argv(&[b"EVALSHA", &sha_hex, b"1", b"k", b"v"]));
     assert_eq!(rw, b"+OK\r\n");
 }
 
@@ -327,11 +278,7 @@ fn eval_under_default_budget_runs_modest_loop() {
     // 1000-iter pure compute; well under the 200 M default budget.
     let reply = dispatch(
         &mut store,
-        &argv(&[
-            b"EVAL",
-            b"local s = 0\nfor i = 1, 1000 do s = s + i end\nreturn s",
-            b"0",
-        ]),
+        &argv(&[b"EVAL", b"local s = 0\nfor i = 1, 1000 do s = s + i end\nreturn s", b"0"]),
     );
     // 1+2+...+1000 = 500500. Lua 5.1 returns Float; kevy collapses
     // to integer when round-trippable.
@@ -352,10 +299,7 @@ fn eval_under_default_budget_runs_modest_loop() {
 fn eval_single_key_never_cross_slots() {
     let mut store = Store::new();
     // Single key, irrelevant of cluster mode.
-    let reply = dispatch(
-        &mut store,
-        &argv(&[b"EVAL", b"return KEYS[1]", b"1", b"k"]),
-    );
+    let reply = dispatch(&mut store, &argv(&[b"EVAL", b"return KEYS[1]", b"1", b"k"]));
     assert_eq!(reply, b"$1\r\nk\r\n");
 }
 
@@ -373,13 +317,7 @@ fn eval_multi_key_cluster_off_passes() {
     // even when the keys would map to different slots.
     let reply = dispatch(
         &mut store,
-        &argv(&[
-            b"EVAL",
-            b"return KEYS[1] .. '+' .. KEYS[2]",
-            b"2",
-            b"foo",
-            b"bar",
-        ]),
+        &argv(&[b"EVAL", b"return KEYS[1] .. '+' .. KEYS[2]", b"2", b"foo", b"bar"]),
     );
     assert_eq!(reply, b"$7\r\nfoo+bar\r\n");
 }

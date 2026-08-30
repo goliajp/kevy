@@ -43,9 +43,8 @@ pub(crate) fn apply<C: Commands>(
     state: &RuntimeState,
 ) -> Runtime<C> {
     let repl = &state.replication;
-    let receivers = state
-        .take_replica_inboxes()
-        .expect("replica inboxes are taken once, by this wiring");
+    let receivers =
+        state.take_replica_inboxes().expect("replica inboxes are taken once, by this wiring");
     let runtime = runtime.with_replica_inboxes(receivers);
 
     match cfg.replication.role {
@@ -58,9 +57,7 @@ pub(crate) fn apply<C: Commands>(
         }
         ReplicationRole::Replica => {
             repl.set_read_only(cfg.replication.replica_read_only);
-            repl.set_max_staleness_ms(
-                u64::from(cfg.replication.replica_max_staleness_ms),
-            );
+            repl.set_max_staleness_ms(u64::from(cfg.replication.replica_max_staleness_ms));
             spawn_initial_runners_from_config(repl, cfg);
             // Topology symmetry — a replica keeps a full
             // replication SOURCE + listener too, so promotion
@@ -113,10 +110,7 @@ fn spawn_initial_runners_from_config(repl: &ReplicationState, cfg: &Config) {
 /// Parses + resolves + starts the new fleet (stopping any prior).
 /// Returns `Err(static reason)` on parse / resolve failure so the
 /// command can map it to a `-ERR` reply.
-pub(crate) fn retarget_upstream(
-    repl: &ReplicationState,
-    upstream: &str,
-) -> Result<(), CmdError> {
+pub(crate) fn retarget_upstream(repl: &ReplicationState, upstream: &str) -> Result<(), CmdError> {
     let (host_str, port_base) = parse_upstream(upstream).ok_or("upstream not host:port")?;
     let host = resolve_host(&host_str).ok_or("upstream host not resolvable")?;
     repl.start_runners((host, port_base))
@@ -168,10 +162,7 @@ mod tests {
 
     #[test]
     fn parse_upstream_host_port() {
-        assert_eq!(
-            parse_upstream("127.0.0.1:6004"),
-            Some(("127.0.0.1".to_string(), 6004))
-        );
+        assert_eq!(parse_upstream("127.0.0.1:6004"), Some(("127.0.0.1".to_string(), 6004)));
     }
 
     #[test]
@@ -188,18 +179,12 @@ mod tests {
     fn parse_upstream_ipv6_brackets_kept_in_host() {
         // The bracketed form's brackets stay in the parsed host string
         // (resolve_host strips them later).
-        assert_eq!(
-            parse_upstream("[::1]:7000"),
-            Some(("[::1]".to_string(), 7000))
-        );
+        assert_eq!(parse_upstream("[::1]:7000"), Some(("[::1]".to_string(), 7000)));
     }
 
     #[test]
     fn resolve_host_ipv4_literal() {
-        assert_eq!(
-            resolve_host("10.0.0.1"),
-            Some(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)))
-        );
+        assert_eq!(resolve_host("10.0.0.1"), Some(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))));
     }
 
     #[test]

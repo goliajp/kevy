@@ -64,10 +64,7 @@ enum Inner {
     },
     /// In-process bus subscription. `timeout` mirrors the TCP
     /// `SO_RCVTIMEO` behaviour for [`Subscriber::recv`] / [`Subscriber::set_read_timeout`].
-    Embedded {
-        subscription: Subscription,
-        timeout: Option<Duration>,
-    },
+    Embedded { subscription: Subscription, timeout: Option<Duration> },
 }
 
 // The pubsub frame vocabulary is canonical in `kevy_resp_client`,
@@ -87,7 +84,10 @@ impl Subscriber {
         let target = parse_url(url)?;
         let inner = match target {
             Target::EmbedMemoryAnonymous => {
-                return Err(KevyError::Unsupported("anonymous mem:// has no other producer; use mem://<name> for a shared bus".into()));
+                return Err(KevyError::Unsupported(
+                    "anonymous mem:// has no other producer; use mem://<name> for a shared bus"
+                        .into(),
+                ));
             }
             Target::EmbedMemoryNamed(_) | Target::EmbedPersist(_) => Inner::Embedded {
                 subscription: resolve_store(&target)?.subscribe(&[]),
@@ -188,10 +188,7 @@ impl Subscriber {
                 Some(ev) => Ok(ev),
                 None => recv_remote(stream, buf),
             },
-            Inner::Embedded {
-                subscription,
-                timeout,
-            } => {
+            Inner::Embedded { subscription, timeout } => {
                 let frame = match *timeout {
                     Some(d) => subscription.recv_timeout(d)?,
                     None => subscription.recv()?,
@@ -249,7 +246,10 @@ impl Subscriber {
     /// command on a connection that uses it.
     pub fn hello3(&mut self) -> KevyResult<PubsubEvent> {
         match &mut self.inner {
-            Inner::Embedded { .. } => Err(KevyError::Unsupported("HELLO 3 is a remote/TCP-only operation; embedded backend has no proto switch".into())),
+            Inner::Embedded { .. } => Err(KevyError::Unsupported(
+                "HELLO 3 is a remote/TCP-only operation; embedded backend has no proto switch"
+                    .into(),
+            )),
             Inner::Remote { stream, buf, .. } => {
                 let mut frame = Vec::new();
                 encode_command(&mut frame, &[b"HELLO".to_vec(), b"3".to_vec()]);
@@ -353,15 +353,11 @@ impl Iterator for SubscriberMessages<'_> {
 /// reply — surfaced via the error branch below).
 fn classify_hello3_reply(reply: Reply) -> KevyResult<PubsubEvent> {
     match reply {
-        Reply::Map(_) | Reply::Array(_) => Ok(PubsubEvent::Subscribe {
-            channel: b"HELLO".to_vec(),
-            count: 3,
-        }),
+        Reply::Map(_) | Reply::Array(_) => {
+            Ok(PubsubEvent::Subscribe { channel: b"HELLO".to_vec(), count: 3 })
+        }
         Reply::Error(e) => Err(KevyError::Protocol(String::from_utf8_lossy(&e).into_owned())),
-        other => Err(invalid(format!(
-            "unexpected HELLO 3 reply shape: {}",
-            shape(&other)
-        ))),
+        other => Err(invalid(format!("unexpected HELLO 3 reply shape: {}", shape(&other)))),
     }
 }
 
@@ -376,18 +372,18 @@ fn classify_hello3_reply(reply: Reply) -> KevyResult<PubsubEvent> {
 // ─────────────────────────────────────────────────────────────────────────
 
 fn remote_host_port(url: &str) -> KevyResult<(String, u16)> {
-    let (_scheme, rest) = url.split_once("://").ok_or_else(|| {
-        KevyError::InvalidInput("URL missing '://'".into())
-    })?;
+    let (_scheme, rest) =
+        url.split_once("://").ok_or_else(|| KevyError::InvalidInput("URL missing '://'".into()))?;
     if rest.contains('@') {
-        return Err(KevyError::Unsupported("userinfo (user:pass@host) is unsupported — kevy has no AUTH".into()));
+        return Err(KevyError::Unsupported(
+            "userinfo (user:pass@host) is unsupported — kevy has no AUTH".into(),
+        ));
     }
     let authority = rest.split('/').next().unwrap_or("");
     let (host, port) = match authority.rsplit_once(':') {
         Some((h, p)) => {
-            let port: u16 = p.parse().map_err(|_| {
-                KevyError::InvalidInput(format!("bad port: {p}"))
-            })?;
+            let port: u16 =
+                p.parse().map_err(|_| KevyError::InvalidInput(format!("bad port: {p}")))?;
             (h.to_string(), port)
         }
         None => (authority.to_string(), 6379),

@@ -46,10 +46,6 @@ impl Routing<'_> {
     /// the cement layer's RESP encoder.
     #[must_use]
     pub fn misdirected_target(&self) -> Option<&str> {
-        if let Routing::Misdirected { target } = self {
-            Some(target)
-        } else {
-            None
-        }
+        if let Routing::Misdirected { target } = self { Some(target) } else { None }
     }
 }

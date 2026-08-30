@@ -129,11 +129,7 @@ pub fn advise_hugepage(ptr: *const u8, len: usize) {
         // memory, performs no writes, and is benign on error (EINVAL on
         // mis-aligned / unsupported kernels is what we want — no-op).
         unsafe {
-            let _ = ffi::madvise(
-                aligned_start as *mut c_void,
-                aligned_len,
-                MADV_HUGEPAGE,
-            );
+            let _ = ffi::madvise(aligned_start as *mut c_void, aligned_len, MADV_HUGEPAGE);
         }
     }
     #[cfg(not(target_os = "linux"))]

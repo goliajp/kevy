@@ -41,11 +41,7 @@ pub(crate) fn shard_idx(key: &[u8], n: usize) -> usize {
         return 0;
     }
     let h = key.kevy_hash() as usize;
-    if n.is_power_of_two() {
-        h & (n - 1)
-    } else {
-        h % n
-    }
+    if n.is_power_of_two() { h & (n - 1) } else { h % n }
 }
 
 /// The embedded store's file layout for [`kevy_persist::reshard`]: the
@@ -107,10 +103,7 @@ fn build_shards_persist(
                 "tiering requires a disk data dir (with_persist); a memory-only store has no cold tier",
             ));
         }
-        return Ok((
-            into_inners(stores, (0..n).map(|_| None).collect()),
-            OpenReport::default(),
-        ));
+        return Ok((into_inners(stores, (0..n).map(|_| None).collect()), OpenReport::default()));
     };
     std::fs::create_dir_all(&dir)?;
     // Complete (or safely discard) a reshard a crash interrupted, before
@@ -279,13 +272,7 @@ fn load_or_reshard(
 
     if same_layout {
         let report = load_in_place(dir, config, n, stores)?;
-        write_shards_meta(
-            &meta_path,
-            ShardsMeta {
-                n,
-                routing: Routing::KevyHash,
-            },
-        )?;
+        write_shards_meta(&meta_path, ShardsMeta { n, routing: Routing::KevyHash })?;
         return Ok(report);
     }
     {
@@ -340,16 +327,7 @@ fn reshard(
     let src_n = prev_n.unwrap_or(1);
     let (temp, report) = merge_into_temp(dir, config, src_n)?;
     redistribute(&temp, n, stores);
-    commit_reshard(
-        dir,
-        src_n,
-        ShardsMeta {
-            n,
-            routing: Routing::KevyHash,
-        },
-        stores,
-        &lay,
-    )?;
+    commit_reshard(dir, src_n, ShardsMeta { n, routing: Routing::KevyHash }, stores, &lay)?;
     // The merge scratch vlog is dead once the temp keyspace is gone.
     #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
     if config.tier_budget.is_some() {
@@ -453,8 +431,5 @@ fn into_inners(stores: Vec<Keyspace>, aofs: Vec<Option<Aof>>) -> Vec<Arc<RwLock<
 /// In-memory-only `Inner` build (the whole story without `persist`).
 #[cfg(not(feature = "persist"))]
 fn into_inners_mem(stores: Vec<Keyspace>) -> Vec<Arc<RwLock<Inner>>> {
-    stores
-        .into_iter()
-        .map(|store| Arc::new(RwLock::new(Inner::new(store))))
-        .collect()
+    stores.into_iter().map(|store| Arc::new(RwLock::new(Inner::new(store)))).collect()
 }

@@ -28,10 +28,7 @@ pub(crate) fn kevy_hello_reply<A: ArgvView + ?Sized>(
         Some(b"3") => RespVersion::V3,
         Some(_) => {
             let mut out = Vec::new();
-            encode_error(
-                &mut out,
-                "NOPROTO unsupported protocol version (kevy supports 2 and 3)",
-            );
+            encode_error(&mut out, "NOPROTO unsupported protocol version (kevy supports 2 and 3)");
             return (current_proto, out);
         }
     };

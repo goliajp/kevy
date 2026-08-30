@@ -99,12 +99,7 @@ fn cmd_config_set<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut Vec<u
     let value = &args[3];
     // Record the CONFIG SET event to the audit log (if enabled).
     let v_slice: &[u8] = value;
-    ctx.state.obs.audit_record(&[
-        &b"CONFIG"[..],
-        &b"SET"[..],
-        &key[..],
-        v_slice,
-    ]);
+    ctx.state.obs.audit_record(&[&b"CONFIG"[..], &b"SET"[..], &key[..], v_slice]);
     let live = ctx.state.config();
     let mut new_cfg = (*live).clone();
     match apply_hot_set(&mut new_cfg, &key, value) {
@@ -116,14 +111,12 @@ fn cmd_config_set<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut Vec<u
             out,
             &format!("ERR config setting '{k}' can't be changed at runtime, restart required"),
         ),
-        Err(SetError::Unknown(k)) => encode_error(
-            out,
-            &format!("ERR Unknown CONFIG SET parameter: '{k}'"),
-        ),
-        Err(SetError::BadValue { key, reason }) => encode_error(
-            out,
-            &format!("ERR CONFIG SET failed for '{key}': {reason}"),
-        ),
+        Err(SetError::Unknown(k)) => {
+            encode_error(out, &format!("ERR Unknown CONFIG SET parameter: '{k}'"))
+        }
+        Err(SetError::BadValue { key, reason }) => {
+            encode_error(out, &format!("ERR CONFIG SET failed for '{key}': {reason}"))
+        }
     }
 }
 
@@ -132,20 +125,14 @@ fn cmd_config_rewrite(ctx: &Ctx<'_>, out: &mut Vec<u8>) {
     ctx.state.obs.audit_record(&[&b"CONFIG"[..], &b"REWRITE"[..]]);
     let cfg = ctx.state.config();
     let Some(path) = cfg.source_path.clone() else {
-        return encode_error(
-            out,
-            "ERR The server is running without a config file",
-        );
+        return encode_error(out, "ERR The server is running without a config file");
     };
     let text = rewrite_text(&cfg, &path);
     match atomic_write(&path, text.as_bytes()) {
         Ok(()) => encode_simple_string(out, "OK"),
         Err(e) => encode_error(
             out,
-            &format!(
-                "ERR CONFIG REWRITE could not write {}: {e}",
-                path.display()
-            ),
+            &format!("ERR CONFIG REWRITE could not write {}: {e}", path.display()),
         ),
     }
 }
@@ -193,11 +180,7 @@ fn atomic_write(path: &PathBuf, bytes: &[u8]) -> std::io::Result<()> {
         None => return Err(std::io::Error::other("CONFIG REWRITE path has no file name")),
     };
     tmp.set_file_name(new_name);
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(&tmp)?;
+    let mut f = std::fs::OpenOptions::new().create(true).write(true).truncate(true).open(&tmp)?;
     f.write_all(bytes)?;
     f.sync_data()?;
     drop(f);
@@ -222,17 +205,17 @@ enum SetError {
 fn apply_hot_set(cfg: &mut Config, key: &[u8], value: &[u8]) -> Result<(), SetError> {
     let key_str = std::str::from_utf8(key)
         .map_err(|_| SetError::Unknown(String::from_utf8_lossy(key).into_owned()))?;
-    let value_str = std::str::from_utf8(value)
-        .map_err(|_| SetError::BadValue {
-            key: key_str.to_string(),
-            reason: "value is not valid UTF-8".to_string(),
-        })?;
+    let value_str = std::str::from_utf8(value).map_err(|_| SetError::BadValue {
+        key: key_str.to_string(),
+        reason: "value is not valid UTF-8".to_string(),
+    })?;
     match key_str {
         "maxmemory" | "maxmemory-policy" => set_memory(cfg, key_str, value_str),
-        "appendfsync" | "auto-aof-rewrite-percentage" | "auto-aof-rewrite-min-size"
-        | "auto-aof-rewrite-bytes" | "auto-aof-rewrite-interval-secs" => {
-            set_persistence(cfg, key_str, value_str)
-        }
+        "appendfsync"
+        | "auto-aof-rewrite-percentage"
+        | "auto-aof-rewrite-min-size"
+        | "auto-aof-rewrite-bytes"
+        | "auto-aof-rewrite-interval-secs" => set_persistence(cfg, key_str, value_str),
         "hz" | "maxmemory-samples" => set_expiry(cfg, key_str, value_str),
         "loglevel" | "logfile" => set_log(cfg, key_str, value_str),
         // Hot-settable ONLY as a budget change: the shard tick
@@ -241,9 +224,8 @@ fn apply_hot_set(cfg: &mut Config, key: &[u8], value: &[u8]) -> Result<(), SetEr
         // the spill dir likewise.
         "tiering-budget" => {
             cfg.tiering.budget = Some(
-                kevy_config::TierBudgetSpec::parse(value_str).map_err(|reason| {
-                    SetError::BadValue { key: key_str.to_string(), reason }
-                })?,
+                kevy_config::TierBudgetSpec::parse(value_str)
+                    .map_err(|reason| SetError::BadValue { key: key_str.to_string(), reason })?,
             );
             Ok(())
         }
@@ -280,21 +262,18 @@ fn set_packed_rows(cfg: &mut Config, key: &str, value: &str) -> Result<(), SetEr
 fn set_memory(cfg: &mut Config, key: &str, value: &str) -> Result<(), SetError> {
     match key {
         "maxmemory" => {
-            cfg.memory.maxmemory = parse_size(value).map_err(|reason| SetError::BadValue {
-                key: key.to_string(),
-                reason,
-            })?;
+            cfg.memory.maxmemory = parse_size(value)
+                .map_err(|reason| SetError::BadValue { key: key.to_string(), reason })?;
         }
         "maxmemory-policy" => {
-            cfg.memory.maxmemory_policy = EvictionPolicy::parse(value).ok_or_else(|| {
-                SetError::BadValue {
+            cfg.memory.maxmemory_policy =
+                EvictionPolicy::parse(value).ok_or_else(|| SetError::BadValue {
                     key: key.to_string(),
                     reason: "expected one of noeviction / allkeys-lru / \
                              allkeys-lfu / allkeys-random / volatile-lru / \
                              volatile-lfu / volatile-random / volatile-ttl"
                         .to_string(),
-                }
-            })?;
+                })?;
         }
         _ => return Err(SetError::Unknown(key.to_string())),
     }
@@ -318,18 +297,12 @@ fn set_persistence(cfg: &mut Config, key: &str, value: &str) -> Result<(), SetEr
                 })?;
         }
         "auto-aof-rewrite-min-size" => {
-            cfg.persistence.auto_aof_rewrite_min_size =
-                parse_size(value).map_err(|reason| SetError::BadValue {
-                    key: key.to_string(),
-                    reason,
-                })?;
+            cfg.persistence.auto_aof_rewrite_min_size = parse_size(value)
+                .map_err(|reason| SetError::BadValue { key: key.to_string(), reason })?;
         }
         "auto-aof-rewrite-bytes" => {
-            cfg.persistence.auto_aof_rewrite_bytes =
-                parse_size(value).map_err(|reason| SetError::BadValue {
-                    key: key.to_string(),
-                    reason,
-                })?;
+            cfg.persistence.auto_aof_rewrite_bytes = parse_size(value)
+                .map_err(|reason| SetError::BadValue { key: key.to_string(), reason })?;
         }
         "auto-aof-rewrite-interval-secs" => {
             cfg.persistence.auto_aof_rewrite_interval_secs =
@@ -361,8 +334,7 @@ fn set_log(cfg: &mut Config, key: &str, value: &str) -> Result<(), SetError> {
         "loglevel" => {
             cfg.log.level = LogLevel::parse(value).ok_or_else(|| SetError::BadValue {
                 key: key.to_string(),
-                reason: "expected one of trace / debug / info / warning / error"
-                    .to_string(),
+                reason: "expected one of trace / debug / info / warning / error".to_string(),
             })?;
         }
         "logfile" => {
@@ -398,31 +370,19 @@ fn config_pairs(cfg: &Config) -> Vec<(&'static str, String)> {
     // tooling (redis-benchmark's per-node config fetch) requires the key
     // to exist and treats its absence as "could not fetch CONFIG".
     v.push(("save", String::new()));
-    v.push((
-        "appendfsync",
-        appendfsync_str(cfg.persistence.appendfsync).to_string(),
-    ));
+    v.push(("appendfsync", appendfsync_str(cfg.persistence.appendfsync).to_string()));
     v.push((
         "auto-aof-rewrite-percentage",
         cfg.persistence.auto_aof_rewrite_percentage.to_string(),
     ));
-    v.push((
-        "auto-aof-rewrite-min-size",
-        cfg.persistence.auto_aof_rewrite_min_size.to_string(),
-    ));
+    v.push(("auto-aof-rewrite-min-size", cfg.persistence.auto_aof_rewrite_min_size.to_string()));
     v.push(("maxmemory", cfg.memory.maxmemory.to_string()));
-    v.push((
-        "maxmemory-policy",
-        eviction_str(cfg.memory.maxmemory_policy).to_string(),
-    ));
+    v.push(("maxmemory-policy", eviction_str(cfg.memory.maxmemory_policy).to_string()));
     v.push(("hz", cfg.expiry.hz.to_string()));
     v.push(("maxmemory-samples", cfg.expiry.sample.to_string()));
     v.push(("loglevel", log_level_str(cfg.log.level).to_string()));
     v.push(("cluster-enabled", yes_no(cfg.cluster.enabled)));
-    v.push((
-        "cluster-port-base",
-        crate::cluster_port_base(cfg).to_string(),
-    ));
+    v.push(("cluster-port-base", crate::cluster_port_base(cfg).to_string()));
     push_tiering_pairs(&mut v, cfg);
     v
 }
@@ -432,18 +392,11 @@ fn config_pairs(cfg: &Config) -> Vec<(&'static str, String)> {
 fn push_tiering_pairs(v: &mut Vec<(&'static str, String)>, cfg: &Config) {
     v.push((
         "tiering-budget",
-        cfg.tiering
-            .budget
-            .map(kevy_config::TierBudgetSpec::as_config_string)
-            .unwrap_or_default(),
+        cfg.tiering.budget.map(kevy_config::TierBudgetSpec::as_config_string).unwrap_or_default(),
     ));
     v.push((
         "tiering-spill-dir",
-        cfg.tiering
-            .spill_dir
-            .as_ref()
-            .map(|p| p.display().to_string())
-            .unwrap_or_default(),
+        cfg.tiering.spill_dir.as_ref().map(|p| p.display().to_string()).unwrap_or_default(),
     ));
 }
 
@@ -474,7 +427,6 @@ fn glob_match(pat: &[u8], s: &[u8]) -> bool {
 fn yes_no(b: bool) -> String {
     if b { "yes".into() } else { "no".into() }
 }
-
 
 #[cfg(test)]
 #[path = "config_tests.rs"]

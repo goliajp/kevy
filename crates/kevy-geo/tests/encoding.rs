@@ -68,10 +68,7 @@ fn score_matches_redis_for_palermo() {
     // produces ZSCORE = 3479099956230698 (decimal).
     let score = encode_score(13.361389, 38.115556).expect("Palermo");
     let bits = score as u64;
-    assert_eq!(
-        bits, 3479099956230698,
-        "Palermo score must match Redis bit-for-bit (got {bits})",
-    );
+    assert_eq!(bits, 3479099956230698, "Palermo score must match Redis bit-for-bit (got {bits})",);
     // Sanity: equal as f64 too.
     assert_eq!(score, 3479099956230698f64 + EPS_BIT_PERFECT as f64);
 }
@@ -107,10 +104,7 @@ fn haversine_antipode_is_half_circumference() {
     // (0,0) ↔ (180, 0): exactly half of the equator. 2πR/2 = πR.
     let d = haversine_meters(0.0, 0.0, 180.0, 0.0);
     let expected = std::f64::consts::PI * EARTH_RADIUS_METERS;
-    assert!(
-        (d - expected).abs() < 1.0,
-        "antipode distance {d} ≠ πR ≈ {expected}",
-    );
+    assert!((d - expected).abs() < 1.0, "antipode distance {d} ≠ πR ≈ {expected}",);
 }
 
 // Redis's GEOHASH command takes the WGS84 score, decodes it to a cell
@@ -198,10 +192,7 @@ fn neighbor_ranges_medium_radius_includes_known_neighbour() {
 fn neighbor_ranges_sorted_and_disjoint() {
     let ranges = neighbor_score_ranges(0.0, 0.0, 50_000.0);
     for w in ranges.windows(2) {
-        assert!(
-            w[0].1 < w[1].0,
-            "ranges should be disjoint after merge: {w:?}",
-        );
+        assert!(w[0].1 < w[1].0, "ranges should be disjoint after merge: {w:?}",);
     }
 }
 
@@ -209,12 +200,8 @@ fn neighbor_ranges_sorted_and_disjoint() {
 fn score_is_within_52_bits() {
     // Maximum-corner inputs must produce a non-negative integer ≤ 2^52 - 1
     // so that f64 conversion is lossless (mantissa 53 bits).
-    let cases = [
-        (GEO_LON_MAX, GEO_LAT_MAX),
-        (GEO_LON_MIN, GEO_LAT_MIN),
-        (0.0, 0.0),
-        (-180.0, 85.0),
-    ];
+    let cases =
+        [(GEO_LON_MAX, GEO_LAT_MAX), (GEO_LON_MIN, GEO_LAT_MIN), (0.0, 0.0), (-180.0, 85.0)];
     for (lon, lat) in cases {
         let score = encode_score(lon, lat).expect("in range");
         assert!(score >= 0.0);

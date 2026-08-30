@@ -287,10 +287,7 @@ mod tests {
     fn set_no_room_overflow() {
         let mut s = SmallHashData::new();
         // 8-byte field + 10-byte value = 2+8+10 = 20 bytes used.
-        assert!(matches!(
-            s.try_set(b"fieldnam", b"valuevalue"),
-            AddResult::Added
-        ));
+        assert!(matches!(s.try_set(b"fieldnam", b"valuevalue"), AddResult::Added));
         // Next pair won't fit.
         assert!(matches!(s.try_set(b"more", b"data"), AddResult::NoRoom));
     }
@@ -315,10 +312,7 @@ mod tests {
         s.try_set(b"abc", b"defghijk"); // 2+3+8=13
         s.try_set(b"x", b"yzwuv"); // 2+1+5=8, total 21
         // Try to grow `x`'s value by 2 → would push used to 23 > 22.
-        assert!(matches!(
-            s.try_set(b"x", b"yzwuvAB"),
-            AddResult::NoRoom
-        ));
+        assert!(matches!(s.try_set(b"x", b"yzwuvAB"), AddResult::NoRoom));
     }
 
     #[test]

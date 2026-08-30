@@ -83,10 +83,8 @@ pub fn zinter(
         return Vec::new();
     };
     // Membership maps for the non-first inputs.
-    let maps: Vec<ScratchMap<&[u8], f64>> = rest
-        .iter()
-        .map(|inp| inp.iter().map(|(m, s)| (m.as_slice(), *s)).collect())
-        .collect();
+    let maps: Vec<ScratchMap<&[u8], f64>> =
+        rest.iter().map(|inp| inp.iter().map(|(m, s)| (m.as_slice(), *s)).collect()).collect();
     let w0 = weight_of(weights, 0);
     let mut out = Vec::new();
     'member: for (m, s) in first {
@@ -109,15 +107,9 @@ pub fn zdiff(inputs: &[Vec<(Vec<u8>, f64)>]) -> Vec<(Vec<u8>, f64)> {
     let Some((first, rest)) = inputs.split_first() else {
         return Vec::new();
     };
-    let excluded: ScratchSet<&[u8]> = rest
-        .iter()
-        .flat_map(|inp| inp.iter().map(|(m, _)| m.as_slice()))
-        .collect();
-    first
-        .iter()
-        .filter(|(m, _)| !excluded.contains(m.as_slice()))
-        .cloned()
-        .collect()
+    let excluded: ScratchSet<&[u8]> =
+        rest.iter().flat_map(|inp| inp.iter().map(|(m, _)| m.as_slice())).collect();
+    first.iter().filter(|(m, _)| !excluded.contains(m.as_slice())).cloned().collect()
 }
 
 /// `ZINTERCARD` (with optional `LIMIT`, 0 = unlimited): cardinality of
@@ -126,10 +118,8 @@ pub fn zintercard(inputs: &[Vec<(Vec<u8>, f64)>], limit: usize) -> usize {
     let Some((first, rest)) = inputs.split_first() else {
         return 0;
     };
-    let maps: Vec<ScratchSet<&[u8]>> = rest
-        .iter()
-        .map(|inp| inp.iter().map(|(m, _)| m.as_slice()).collect())
-        .collect();
+    let maps: Vec<ScratchSet<&[u8]>> =
+        rest.iter().map(|inp| inp.iter().map(|(m, _)| m.as_slice()).collect()).collect();
     let mut n = 0;
     'member: for (m, _) in first {
         for map in &maps {
@@ -154,17 +144,9 @@ impl Store {
         match self.live_entry(key) {
             None => Ok(Vec::new()),
             Some(e) => match &e.value {
-                Value::ZSet(z) => Ok(z
-                    .by_member
-                    .iter()
-                    .map(|(m, s)| (m.to_vec(), *s))
-                    .collect()),
-                Value::SegZSet(z) => {
-                    Ok(z.ordered().map(|(m, s)| (m.to_vec(), s)).collect())
-                }
-                Value::SmallZSetInline(z) => {
-                    Ok(z.iter().map(|(m, s)| (m.to_vec(), s)).collect())
-                }
+                Value::ZSet(z) => Ok(z.by_member.iter().map(|(m, s)| (m.to_vec(), *s)).collect()),
+                Value::SegZSet(z) => Ok(z.ordered().map(|(m, s)| (m.to_vec(), s)).collect()),
+                Value::SmallZSetInline(z) => Ok(z.iter().map(|(m, s)| (m.to_vec(), s)).collect()),
                 Value::Set(s) => Ok(s.iter().map(|m| (m.to_vec(), 1.0)).collect()),
                 Value::SegSet(s) => Ok(s.keys().map(|m| (m.to_vec(), 1.0)).collect()),
                 Value::SmallSetInline(s) => Ok(s.iter().map(|m| (m.to_vec(), 1.0)).collect()),
@@ -215,10 +197,7 @@ mod tests {
         let a = zs(&[("x", 1.0), ("y", 2.0)]);
         let b = zs(&[("y", 3.0), ("z", 4.0)]);
         assert_eq!(zinter(&[a.clone(), b.clone()], None, ZAggregate::Sum), zs(&[("y", 5.0)]));
-        assert_eq!(
-            zinter(&[a, b], Some(&[10.0, 1.0]), ZAggregate::Max),
-            zs(&[("y", 20.0)])
-        );
+        assert_eq!(zinter(&[a, b], Some(&[10.0, 1.0]), ZAggregate::Max), zs(&[("y", 20.0)]));
         assert!(zinter(&[], None, ZAggregate::Sum).is_empty());
     }
 

@@ -20,9 +20,7 @@ use std::time::Duration;
 use kevy_embedded::{Config, Store};
 
 fn main() {
-    let listen_addr = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "127.0.0.1:16204".to_string());
+    let listen_addr = std::env::args().nth(1).unwrap_or_else(|| "127.0.0.1:16204".to_string());
 
     println!("kevy-embedded scoped-writer demo");
     println!("  replication source listening on {listen_addr}");
@@ -50,10 +48,7 @@ fn main() {
         .unwrap();
 
     println!("  store now holds:");
-    for key in [
-        &b"app:billing:invoice:42"[..],
-        b"app:billing:invoice:43",
-    ] {
+    for key in [&b"app:billing:invoice:42"[..], b"app:billing:invoice:43"] {
         if let Some(v) = writer.get(key).unwrap() {
             println!(
                 "    {:?} = {:?}",

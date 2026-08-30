@@ -148,11 +148,7 @@ impl Store {
         }
         let mut hfttl = Vec::new();
         self.hash_ttl_each(|k, f, d| {
-            hfttl.push((
-                crate::SmallBytes::from_slice(k),
-                crate::SmallBytes::from_slice(f),
-                d,
-            ));
+            hfttl.push((crate::SmallBytes::from_slice(k), crate::SmallBytes::from_slice(f), d));
         });
         SnapshotView {
             entries,

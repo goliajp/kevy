@@ -18,12 +18,11 @@ fn round_trip_small_empty_and_large() {
     let mut v = Vlog::open(d.path(), DEFAULT_ROTATE_BYTES).unwrap();
     let cases: &[(&[u8], Vec<u8>)] = &[
         (b"k1", b"v1".to_vec()),
-        (b"", Vec::new()),                    // empty key AND empty payload
-        (b"k3", vec![0xAB; 1 << 20]),         // 1 MiB payload
-        (b"k4\x00bin", vec![0u8; 3]),         // binary key
+        (b"", Vec::new()),            // empty key AND empty payload
+        (b"k3", vec![0xAB; 1 << 20]), // 1 MiB payload
+        (b"k4\x00bin", vec![0u8; 3]), // binary key
     ];
-    let refs: Vec<VlogRef> =
-        cases.iter().map(|(k, p)| v.append(k, p).unwrap()).collect();
+    let refs: Vec<VlogRef> = cases.iter().map(|(k, p)| v.append(k, p).unwrap()).collect();
     for ((k, p), r) in cases.iter().zip(&refs) {
         let (rk, rp) = v.read(*r).unwrap();
         assert_eq!((rk.as_slice(), &rp), (*k, p), "mismatch at {r:?}");

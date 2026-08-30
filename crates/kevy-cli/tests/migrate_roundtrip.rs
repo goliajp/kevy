@@ -18,10 +18,8 @@ impl Srv {
         // inline in start() rather than in a fn the sweep could see.
         let port = kevy_testnet::free_port();
         // the kevy server binary lives next to our own test artifacts
-        let bin = std::path::Path::new(env!("CARGO_BIN_EXE_kevy-cli"))
-            .parent()
-            .unwrap()
-            .join("kevy");
+        let bin =
+            std::path::Path::new(env!("CARGO_BIN_EXE_kevy-cli")).parent().unwrap().join("kevy");
         if !bin.exists() {
             // cargo doesn't know this test depends on the kevy bin;
             // under full-workspace parallelism the build order races.
@@ -69,9 +67,8 @@ impl Srv {
                 // Say what the server said. A bare ConnectionRefused here is
                 // indistinguishable between "it crashed" and "it lost a race
                 // with 106 parallel suites", and those want opposite fixes.
-                let log = std::env::temp_dir()
-                    .join(format!("kevy-mig-{}", self.port))
-                    .join("server.log");
+                let log =
+                    std::env::temp_dir().join(format!("kevy-mig-{}", self.port)).join("server.log");
                 let said = std::fs::read_to_string(&log).unwrap_or_default();
                 panic!(
                     "connect to 127.0.0.1:{} failed: {e}\n--- server said ---\n{}",
@@ -101,10 +98,17 @@ fn export_import_roundtrip_digest_equal() {
     let dst = Srv::start();
     let mut cs = src.client();
     for i in 0..500 {
-        cs.request_borrowed(&[b"SET", format!("mig:s:{i}").as_bytes(), format!("v{i}").as_bytes()]).unwrap();
+        cs.request_borrowed(&[b"SET", format!("mig:s:{i}").as_bytes(), format!("v{i}").as_bytes()])
+            .unwrap();
         cs.request_borrowed(&[
-            b"HSET", format!("mig:h:{i}").as_bytes(), b"a", format!("{i}").as_bytes(), b"b", b"x",
-        ]).unwrap();
+            b"HSET",
+            format!("mig:h:{i}").as_bytes(),
+            b"a",
+            format!("{i}").as_bytes(),
+            b"b",
+            b"x",
+        ])
+        .unwrap();
     }
     cs.request_borrowed(&[b"RPUSH", b"mig:list", b"1", b"2", b"3"]).unwrap();
     cs.request_borrowed(&[b"SADD", b"mig:set", b"p", b"q"]).unwrap();
@@ -154,7 +158,8 @@ fn bulk_ops_and_diff() {
     let srv = Srv::start();
     let mut c = srv.client();
     for i in 0..200 {
-        c.request_borrowed(&[b"SET", format!("bk:{i}").as_bytes(), format!("v{i}").as_bytes()]).unwrap();
+        c.request_borrowed(&[b"SET", format!("bk:{i}").as_bytes(), format!("v{i}").as_bytes()])
+            .unwrap();
     }
     c.request_borrowed(&[b"SET", b"bk:ttl", b"x"]).unwrap();
     c.request_borrowed(&[b"PEXPIRE", b"bk:ttl", b"60000"]).unwrap();
@@ -171,7 +176,8 @@ fn bulk_ops_and_diff() {
     let r = c.request_borrowed(&[b"GET", b"ck:42"]).unwrap();
     assert_eq!(format!("{r:?}"), format!("{:?}", kevy_cli::Reply::Bulk(b"v42".to_vec())));
     let r = c.request_borrowed(&[b"PTTL", b"ck:ttl"]).unwrap();
-    let ms: i64 = format!("{r:?}").trim_start_matches("Int(").trim_end_matches(')').parse().unwrap();
+    let ms: i64 =
+        format!("{r:?}").trim_start_matches("Int(").trim_end_matches(')').parse().unwrap();
     assert!(ms > 0, "COPY carries TTL: {ms}");
     let _ = da;
 
@@ -242,7 +248,8 @@ fn every_type_is_either_exported_or_reported() {
 
     let accounted = out.keys + out.skipped.values().sum::<u64>();
     assert_eq!(
-        accounted, 6,
+        accounted,
+        6,
         "6 keys written, {} exported + {} skipped — the difference is silent loss",
         out.keys,
         out.skipped.values().sum::<u64>()

@@ -43,10 +43,8 @@ use kevy_chaos::{
 #[test]
 #[ignore = "soak chaos test — opt-in via --ignored, needs `cargo build --release -p kevy` first; SOAK_SECONDS env var (default 30, set 3600 for 1 h)"]
 fn soak_then_crash_no_corruption_no_degradation() {
-    let soak_seconds: u64 = std::env::var("SOAK_SECONDS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(30);
+    let soak_seconds: u64 =
+        std::env::var("SOAK_SECONDS").ok().and_then(|s| s.parse().ok()).unwrap_or(30);
     let bin_path = resolve_kevy_bin();
     let port = pick_free_port().expect("free port");
     let tmp = std::env::temp_dir().join(format!("kevy-chaos-soak-{port}"));
@@ -118,10 +116,7 @@ fn soak_then_crash_no_corruption_no_degradation() {
 
     // Strict: NO CORRUPTION on restart.
     let (present, lost, corrupted) = pipelined_verify_counts(port, &acks);
-    eprintln!(
-        "soak: present={present}, lost={lost}, corrupted={}",
-        corrupted.len()
-    );
+    eprintln!("soak: present={present}, lost={lost}, corrupted={}", corrupted.len());
     assert!(
         corrupted.is_empty(),
         "CORRUPTION DETECTED — {} keys returned wrong values:\n{}",

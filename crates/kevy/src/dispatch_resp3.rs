@@ -8,7 +8,7 @@
 //! and short-circuits on a hit, so adding an override is a 1:1 swap
 //! from a V2 helper to a RESP3 helper.
 
-use crate::cmd::{wrong_args, arg_f64, cmd_zrange, cmd_zrangebyscore, store_err};
+use crate::cmd::{arg_f64, cmd_zrange, cmd_zrangebyscore, store_err, wrong_args};
 use crate::state::Ctx;
 use kevy_resp::{
     ArgvView, RespVersion, encode_bulk, encode_double, encode_error, encode_map_header,

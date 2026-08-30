@@ -172,10 +172,8 @@ impl ReplicaInboxReceiver {
 #[must_use]
 pub fn replica_inbox_pair() -> (ReplicaInboxSender, ReplicaInboxReceiver) {
     let (tx, rx) = channel();
-    let signal = Arc::new(InboxSignal {
-        waker: OnceLock::new(),
-        wake_pending: AtomicBool::new(false),
-    });
+    let signal =
+        Arc::new(InboxSignal { waker: OnceLock::new(), wake_pending: AtomicBool::new(false) });
     (
         ReplicaInboxSender { inner: tx, signal: Arc::clone(&signal) },
         ReplicaInboxReceiver { inner: rx, signal },

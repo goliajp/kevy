@@ -27,17 +27,16 @@ impl Server {
         let port = free_port();
         let dir = std::env::temp_dir().join(format!(
             "kevy-client-resp3-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         let dir_thread = dir.clone();
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(1)).bind([127, 0, 0, 1], port).shards(1)
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(1))
+                .bind([127, 0, 0, 1], port)
+                .shards(1)
                 .with_data_dir(dir_thread);
             rt.run(stop_thread).unwrap();
         });
@@ -86,10 +85,7 @@ fn hello3_then_subscribe_recv_push_frames() {
     let msg = sub.recv().unwrap();
     assert_eq!(
         msg,
-        PubsubEvent::Message {
-            channel: b"news".to_vec(),
-            payload: b"hello".to_vec(),
-        },
+        PubsubEvent::Message { channel: b"news".to_vec(), payload: b"hello".to_vec() },
         "expected Message via push frame, got the wrong variant"
     );
 }

@@ -53,19 +53,12 @@ const SUBSCRIBE_CHAN_REQ_LEN: usize = 31;
 
 #[test]
 fn open_subscribes_and_receives_subscribe_ack() {
-    let port = mock_server(
-        SUBSCRIBE_CHAN_REQ_LEN,
-        b"*3\r\n$9\r\nsubscribe\r\n$4\r\nchan\r\n:1\r\n",
-    );
-    let mut sub = Subscriber::connect_channels(&format!("kevy://127.0.0.1:{port}"), &[b"chan"]).unwrap();
+    let port =
+        mock_server(SUBSCRIBE_CHAN_REQ_LEN, b"*3\r\n$9\r\nsubscribe\r\n$4\r\nchan\r\n:1\r\n");
+    let mut sub =
+        Subscriber::connect_channels(&format!("kevy://127.0.0.1:{port}"), &[b"chan"]).unwrap();
     let ev = sub.recv().unwrap();
-    assert_eq!(
-        ev,
-        PubsubEvent::Subscribe {
-            channel: b"chan".to_vec(),
-            count: 1,
-        }
-    );
+    assert_eq!(ev, PubsubEvent::Subscribe { channel: b"chan".to_vec(), count: 1 });
 }
 
 #[test]
@@ -76,17 +69,12 @@ fn message_frame_classified_with_payload() {
         b"*3\r\n$9\r\nsubscribe\r\n$4\r\nnews\r\n:1\r\n\
           *3\r\n$7\r\nmessage\r\n$4\r\nnews\r\n$5\r\nhello\r\n",
     );
-    let mut sub = Subscriber::connect_channels(&format!("kevy://127.0.0.1:{port}"), &[b"news"]).unwrap();
+    let mut sub =
+        Subscriber::connect_channels(&format!("kevy://127.0.0.1:{port}"), &[b"news"]).unwrap();
     // Drain the ack.
     let _ = sub.recv().unwrap();
     let ev = sub.recv().unwrap();
-    assert_eq!(
-        ev,
-        PubsubEvent::Message {
-            channel: b"news".to_vec(),
-            payload: b"hello".to_vec(),
-        }
-    );
+    assert_eq!(ev, PubsubEvent::Message { channel: b"news".to_vec(), payload: b"hello".to_vec() });
 }
 
 #[test]
@@ -101,10 +89,7 @@ fn psubscribe_then_pmessage_round_trip() {
     sub.psubscribe(&[b"news.*"]).unwrap();
     assert_eq!(
         sub.recv().unwrap(),
-        PubsubEvent::Psubscribe {
-            pattern: b"news.*".to_vec(),
-            count: 1,
-        }
+        PubsubEvent::Psubscribe { pattern: b"news.*".to_vec(), count: 1 }
     );
     assert_eq!(
         sub.recv().unwrap(),
@@ -124,20 +109,15 @@ fn unsubscribe_with_nil_channel_classified_as_none() {
         // channel slot. Issued after we send UNSUBSCRIBE without args.
         b"*3\r\n$11\r\nunsubscribe\r\n$-1\r\n:0\r\n",
     );
-    let mut sub = Subscriber::connect_channels(&format!("kevy://127.0.0.1:{port}"), &[b"chan"]).unwrap();
+    let mut sub =
+        Subscriber::connect_channels(&format!("kevy://127.0.0.1:{port}"), &[b"chan"]).unwrap();
     // The mock prepends the subscribe ack every real server sends;
     // `subscribe()` queues it, so take it before the canned frame.
     let _ack = sub.recv().unwrap();
     // After SUBSCRIBE chan, we ignore the (not-sent here) ack and
     // immediately ask the mock for its canned UNSUBSCRIBE-nil reply.
     let ev = sub.recv().unwrap();
-    assert_eq!(
-        ev,
-        PubsubEvent::Unsubscribe {
-            channel: None,
-            count: 0,
-        }
-    );
+    assert_eq!(ev, PubsubEvent::Unsubscribe { channel: None, count: 0 });
 }
 
 #[test]
@@ -168,7 +148,8 @@ fn server_close_yields_unexpected_eof() {
 #[test]
 fn malformed_frame_yields_invalid_data() {
     let port = mock_server(SUBSCRIBE_CHAN_REQ_LEN, b"!totally-bogus\r\n");
-    let mut sub = Subscriber::connect_channels(&format!("kevy://127.0.0.1:{port}"), &[b"chan"]).unwrap();
+    let mut sub =
+        Subscriber::connect_channels(&format!("kevy://127.0.0.1:{port}"), &[b"chan"]).unwrap();
     // The mock prepends the subscribe ack every real server sends;
     // `subscribe()` queues it, so take it before the canned frame.
     let _ack = sub.recv().unwrap();
@@ -180,11 +161,9 @@ fn malformed_frame_yields_invalid_data() {
 fn unknown_pubsub_kind_yields_invalid_data() {
     // Well-formed RESP array, but a bogus kind field. Should not crash —
     // we classify it as InvalidData with a descriptive message.
-    let port = mock_server(
-        SUBSCRIBE_CHAN_REQ_LEN,
-        b"*3\r\n$5\r\nbogus\r\n$1\r\nx\r\n:0\r\n",
-    );
-    let mut sub = Subscriber::connect_channels(&format!("kevy://127.0.0.1:{port}"), &[b"chan"]).unwrap();
+    let port = mock_server(SUBSCRIBE_CHAN_REQ_LEN, b"*3\r\n$5\r\nbogus\r\n$1\r\nx\r\n:0\r\n");
+    let mut sub =
+        Subscriber::connect_channels(&format!("kevy://127.0.0.1:{port}"), &[b"chan"]).unwrap();
     // The mock prepends the subscribe ack every real server sends;
     // `subscribe()` queues it, so take it before the canned frame.
     let _ack = sub.recv().unwrap();
@@ -220,10 +199,7 @@ fn read_timeout_blocks_recv() {
     };
     let k = io_err.kind();
     assert!(
-        matches!(
-            k,
-            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-        ),
+        matches!(k, std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut),
         "unexpected kind: {k:?}"
     );
 }

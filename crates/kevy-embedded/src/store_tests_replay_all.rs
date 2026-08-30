@@ -29,11 +29,7 @@ fn replay_covers_bitmap_verbs() {
     }
     let s2 = Store::open(reopen_cfg(&dir)).unwrap();
     assert_eq!(s2.getbit(b"bits", 7).unwrap(), 1, "SETBIT lost on replay");
-    assert_eq!(
-        s2.getrange(b"range", 5, 9).unwrap(),
-        b"hello".to_vec(),
-        "SETRANGE lost on replay"
-    );
+    assert_eq!(s2.getrange(b"range", 5, 9).unwrap(), b"hello".to_vec(), "SETRANGE lost on replay");
     drop(s2);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -47,11 +43,7 @@ fn replay_covers_hash_verbs() {
         s.hincrbyfloat(b"hf", b"score", 2.5).unwrap();
     }
     let s2 = Store::open(reopen_cfg(&dir)).unwrap();
-    assert_eq!(
-        s2.hget(b"h", b"f").unwrap(),
-        Some(b"v".to_vec()),
-        "HSETNX lost on replay"
-    );
+    assert_eq!(s2.hget(b"h", b"f").unwrap(), Some(b"v".to_vec()), "HSETNX lost on replay");
     assert_eq!(
         s2.hget(b"hf", b"score").unwrap(),
         Some(b"2.5".to_vec()),
@@ -91,16 +83,8 @@ fn replay_covers_rename_verbs() {
     }
     let s2 = Store::open(reopen_cfg(&dir)).unwrap();
     assert_eq!(s2.get(b"src").unwrap(), None, "RENAME src survived replay");
-    assert_eq!(
-        s2.get(b"dst").unwrap(),
-        Some(b"v1".to_vec()),
-        "RENAME dst lost on replay"
-    );
-    assert_eq!(
-        s2.get(b"dst2").unwrap(),
-        Some(b"v2".to_vec()),
-        "RENAMENX dst lost on replay"
-    );
+    assert_eq!(s2.get(b"dst").unwrap(), Some(b"v1".to_vec()), "RENAME dst lost on replay");
+    assert_eq!(s2.get(b"dst2").unwrap(), Some(b"v2".to_vec()), "RENAMENX dst lost on replay");
     drop(s2);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -110,8 +94,7 @@ fn replay_covers_zset_removal_verbs() {
     let dir = tmp_dir("replay-zset-rm");
     {
         let s = Store::open(persist_cfg(&dir)).unwrap();
-        let members: &[(f64, &[u8])] =
-            &[(1.0, b"a"), (2.0, b"b"), (3.0, b"c"), (4.0, b"d")];
+        let members: &[(f64, &[u8])] = &[(1.0, b"a"), (2.0, b"b"), (3.0, b"c"), (4.0, b"d")];
         s.zadd(b"zp", members).unwrap();
         s.zpopmin(b"zp", 1).unwrap(); // pops "a"
         s.zadd(b"zr", members).unwrap();
@@ -122,17 +105,9 @@ fn replay_covers_zset_removal_verbs() {
     let s2 = Store::open(reopen_cfg(&dir)).unwrap();
     assert_eq!(s2.zscore(b"zp", b"a").unwrap(), None, "ZPOPMIN lost on replay");
     assert_eq!(s2.zcard(b"zp").unwrap(), 3);
-    assert_eq!(
-        s2.zscore(b"zr", b"a").unwrap(),
-        None,
-        "ZREMRANGEBYRANK lost on replay"
-    );
+    assert_eq!(s2.zscore(b"zr", b"a").unwrap(), None, "ZREMRANGEBYRANK lost on replay");
     assert_eq!(s2.zcard(b"zr").unwrap(), 3);
-    assert_eq!(
-        s2.zscore(b"zs", b"d").unwrap(),
-        None,
-        "ZREMRANGEBYSCORE lost on replay"
-    );
+    assert_eq!(s2.zscore(b"zs", b"d").unwrap(), None, "ZREMRANGEBYSCORE lost on replay");
     assert_eq!(s2.zcard(b"zs").unwrap(), 3);
     drop(s2);
     let _ = std::fs::remove_dir_all(&dir);
@@ -212,9 +187,7 @@ fn fsync_aof_barrier_flushes_everysec() {
 #[test]
 fn apply_frame_and_dump_buf_roundtrip_sharded() {
     use kevy_persist::Argv;
-    let frame = |parts: &[&[u8]]| {
-        Argv::from(parts.iter().map(|p| p.to_vec()).collect::<Vec<_>>())
-    };
+    let frame = |parts: &[&[u8]]| Argv::from(parts.iter().map(|p| p.to_vec()).collect::<Vec<_>>());
 
     let src = Store::open(Config::default().with_ttl_reaper_manual().with_shards(4)).unwrap();
     for i in 0..64 {
@@ -225,9 +198,7 @@ fn apply_frame_and_dump_buf_roundtrip_sharded() {
     assert!(image.starts_with(kevy_persist::AOF2_MAGIC));
     // Exactly one magic header: it must not recur past the start.
     assert!(
-        !image[1..]
-            .windows(kevy_persist::AOF2_MAGIC.len())
-            .any(|w| w == kevy_persist::AOF2_MAGIC),
+        !image[1..].windows(kevy_persist::AOF2_MAGIC.len()).any(|w| w == kevy_persist::AOF2_MAGIC),
         "per-shard magic leaked into the concatenated image"
     );
 

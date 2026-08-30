@@ -118,8 +118,8 @@ impl<'a> Parser<'a> {
         let mut acc = self.and_expr()?;
         while self.eat_kw("or") {
             let rhs = self.and_expr()?;
-            acc = kevy_scalar::logic_or(&acc, &rhs)
-                .map_err(|e| SqlError::at(0, 0, e.to_string()))?;
+            acc =
+                kevy_scalar::logic_or(&acc, &rhs).map_err(|e| SqlError::at(0, 0, e.to_string()))?;
         }
         Ok(acc)
     }

@@ -21,9 +21,8 @@ fn band_of(dl: u32) -> u8 {
     dl.max(1).ilog2().min(15) as u8
 }
 
-pub(crate) const BAND_MIN_DL: [u32; 16] = [
-    1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768,
-];
+pub(crate) const BAND_MIN_DL: [u32; 16] =
+    [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768];
 
 /// One tf bucket: SPARSE dl bands (band asc), each a dense id Vec —
 /// ordered walks are sequential 4B scans; per-id EXACT dl comes from

@@ -141,11 +141,7 @@ pub struct Subscription {
 impl Subscription {
     pub(crate) fn new(inner: Arc<RwLock<Inner>>, guard: Arc<crate::store::DropGuard>) -> Self {
         let (sender, receiver) = channel();
-        let id = inner
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .bus
-            .alloc_id();
+        let id = inner.write().unwrap_or_else(std::sync::PoisonError::into_inner).bus.alloc_id();
         Self {
             inner,
             _guard: guard,
@@ -161,10 +157,7 @@ impl Subscription {
     /// Unsubscribe / ...) and to register a sender clone inside
     /// `PubsubBus`. Calling this acquires the sender lock briefly (~20 ns).
     fn sender_clone(&self) -> Sender<PubsubFrame> {
-        self.sender
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
+        self.sender.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
     }
 
     /// `SUBSCRIBE channel [channel ...]`. Per-channel `Subscribe` acks are
@@ -179,10 +172,7 @@ impl Subscription {
                 self.channels.insert(owned.clone());
             }
             let count = g.bus.count_for(self.id);
-            let _ = s.send(PubsubFrame::Subscribe {
-                channel: owned,
-                count,
-            });
+            let _ = s.send(PubsubFrame::Subscribe { channel: owned, count });
         }
     }
 
@@ -198,10 +188,7 @@ impl Subscription {
                 self.patterns.insert(owned.clone());
             }
             let count = g.bus.count_for(self.id);
-            let _ = s.send(PubsubFrame::Psubscribe {
-                pattern: owned,
-                count,
-            });
+            let _ = s.send(PubsubFrame::Psubscribe { pattern: owned, count });
         }
     }
 
@@ -221,10 +208,7 @@ impl Subscription {
             let _ = g.bus.remove_channel(self.id, &owned);
             self.channels.remove(&owned);
             let count = g.bus.count_for(self.id);
-            let _ = s.send(PubsubFrame::Unsubscribe {
-                channel: Some(owned),
-                count,
-            });
+            let _ = s.send(PubsubFrame::Unsubscribe { channel: Some(owned), count });
         }
     }
 
@@ -241,10 +225,7 @@ impl Subscription {
             let _ = g.bus.remove_pattern(self.id, &owned);
             self.patterns.remove(&owned);
             let count = g.bus.count_for(self.id);
-            let _ = s.send(PubsubFrame::Punsubscribe {
-                pattern: Some(owned),
-                count,
-            });
+            let _ = s.send(PubsubFrame::Punsubscribe { pattern: Some(owned), count });
         }
     }
 
@@ -260,10 +241,7 @@ impl Subscription {
         for ch in owned {
             let _ = g.bus.remove_channel(self.id, &ch);
             let count = g.bus.count_for(self.id);
-            let _ = s.send(PubsubFrame::Unsubscribe {
-                channel: Some(ch),
-                count,
-            });
+            let _ = s.send(PubsubFrame::Unsubscribe { channel: Some(ch), count });
         }
     }
 
@@ -279,10 +257,7 @@ impl Subscription {
         for p in owned {
             let _ = g.bus.remove_pattern(self.id, &p);
             let count = g.bus.count_for(self.id);
-            let _ = s.send(PubsubFrame::Punsubscribe {
-                pattern: Some(p),
-                count,
-            });
+            let _ = s.send(PubsubFrame::Punsubscribe { pattern: Some(p), count });
         }
     }
 

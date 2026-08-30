@@ -10,10 +10,9 @@ fn main() {
     let port: u16 = args.next().expect("port").parse().expect("port");
     let n_keys: usize = args.next().and_then(|s| s.parse().ok()).unwrap_or(100_000);
     let addr = format!("127.0.0.1:{port}").parse().expect("addr");
-    let store = Store::open(
-        Config::default().with_shards(4).with_feed(1 << 22).with_resp_listener(addr),
-    )
-    .expect("open");
+    let store =
+        Store::open(Config::default().with_shards(4).with_feed(1 << 22).with_resp_listener(addr))
+            .expect("open");
     // seed
     for i in 0..n_keys {
         store

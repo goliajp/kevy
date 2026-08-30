@@ -125,7 +125,6 @@ mod sidecar_v2_tests {
     }
 }
 
-
 mod sidecar_v4_tests {
     use super::super::*;
 
@@ -151,11 +150,7 @@ mod sidecar_v4_tests {
             c.create(s).expect("valid spec");
         }
         let text = c.to_sidecar();
-        Catalog::from_sidecar(&text)
-            .expect("round trip")
-            .iter()
-            .map(|(s, _)| s.clone())
-            .collect()
+        Catalog::from_sidecar(&text).expect("round trip").iter().map(|(s, _)| s.clone()).collect()
     }
 
     #[test]
@@ -170,7 +165,10 @@ mod sidecar_v4_tests {
         assert!(!back[0].with_positions);
         assert!(back[1].with_positions && back[1].values.is_empty());
         assert!(!back[2].with_positions);
-        assert_eq!(back[2].values, vec![ValueSpec::new(b"price".to_vec()), ValueSpec::new(b"status".to_vec())]);
+        assert_eq!(
+            back[2].values,
+            vec![ValueSpec::new(b"price".to_vec()), ValueSpec::new(b"status".to_vec())]
+        );
         assert!(back[3].with_positions);
         assert_eq!(back[3].values, vec![ValueSpec::new(b"price".to_vec())]);
     }
@@ -226,10 +224,7 @@ mod sidecar_v4_tests {
         s.kind = IndexKind::Agg;
         s.ty = ValType::I64;
         s.group_by = Some(b"g".to_vec());
-        assert_eq!(
-            Catalog::new().create(s),
-            Err("ERR VALUES requires KIND text|range|unique")
-        );
+        assert_eq!(Catalog::new().create(s), Err("ERR VALUES requires KIND text|range|unique"));
     }
 }
 
@@ -396,7 +391,10 @@ mod sidecar_v6_tests {
         let mut c = Catalog::new();
         c.create(composite_spec("op")).unwrap();
         c.create(IndexSpec::single_field(
-            b"plain".to_vec(), b"t:".to_vec(), b"n".to_vec(), ValType::I64,
+            b"plain".to_vec(),
+            b"t:".to_vec(),
+            b"n".to_vec(),
+            ValType::I64,
             crate::IndexKind::Range,
         ))
         .unwrap();
@@ -404,8 +402,11 @@ mod sidecar_v6_tests {
         assert!(text.starts_with("kevy-index-catalog v6\n"), "{text}");
         let back = Catalog::from_sidecar(&text).expect("v6 round trip");
         let (spec, _) = back.get(b"op").expect("composite index");
-        assert_eq!(spec.composite, composite_spec("op").composite,
-            "types, order and DESC flags must reload byte-exactly (the derivation depends on them)");
+        assert_eq!(
+            spec.composite,
+            composite_spec("op").composite,
+            "types, order and DESC flags must reload byte-exactly (the derivation depends on them)"
+        );
         let (plain, _) = back.get(b"plain").expect("plain index");
         assert!(plain.composite.is_none());
     }
@@ -417,7 +418,10 @@ mod sidecar_v6_tests {
     fn a5_no_composite_catalog_keeps_the_old_header() {
         let mut c = Catalog::new();
         c.create(IndexSpec::single_field(
-            b"i".to_vec(), b"p:".to_vec(), b"f".to_vec(), ValType::I64,
+            b"i".to_vec(),
+            b"p:".to_vec(),
+            b"f".to_vec(),
+            ValType::I64,
             crate::IndexKind::Range,
         ))
         .unwrap();

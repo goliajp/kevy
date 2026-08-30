@@ -78,12 +78,7 @@ impl Store {
     /// `ZREVRANGE key start stop WITHSCORES` — `zrange` with the order
     /// reversed (highest score first). The `start..=stop` indexing is
     /// against the reversed list, matching Redis semantics.
-    pub fn zrevrange(
-        &self,
-        key: &[u8],
-        start: i64,
-        stop: i64,
-    ) -> KevyResult<Vec<(Vec<u8>, f64)>> {
+    pub fn zrevrange(&self, key: &[u8], start: i64, stop: i64) -> KevyResult<Vec<(Vec<u8>, f64)>> {
         self.wshard(key).store.zrevrange(key, start, stop).map_err(store_err)
     }
 
@@ -117,10 +112,7 @@ impl Store {
         min: ScoreBound,
         max: ScoreBound,
     ) -> KevyResult<Vec<(Vec<u8>, f64)>> {
-        self.wshard(key)
-            .store
-            .zrange_by_score(key, min, max)
-            .map_err(store_err)
+        self.wshard(key).store.zrange_by_score(key, min, max).map_err(store_err)
     }
 
     /// `ZRANGEBYSCORE key min max LIMIT offset count` — score-range

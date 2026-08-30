@@ -52,21 +52,14 @@ const INFO_DESC: &str = "Fetch kevy server statistics via INFO [section]. Return
 
 /// One tool descriptor: `{name, description, inputSchema}`.
 fn tool(name: &str, desc: &str, input_schema: Value) -> Value {
-    obj(vec![
-        ("name", s(name)),
-        ("description", s(desc)),
-        ("inputSchema", input_schema),
-    ])
+    obj(vec![("name", s(name)), ("description", s(desc)), ("inputSchema", input_schema)])
 }
 
 /// Hand-built JSON Schema: `{type:"object", properties, required?}`.
 fn schema(props: Vec<(&str, Value)>, required: &[&str]) -> Value {
     let mut fields = vec![("type", s("object")), ("properties", obj(props))];
     if !required.is_empty() {
-        fields.push((
-            "required",
-            Value::Array(required.iter().map(|r| s(r)).collect()),
-        ));
+        fields.push(("required", Value::Array(required.iter().map(|r| s(r)).collect())));
     }
     obj(fields)
 }
@@ -100,8 +93,9 @@ pub fn tools_list(allow_writes: bool) -> Value {
 /// The `kevy_discover` descriptor. `verb` is optional — omitting it
 /// returns the whole table.
 fn discover_tool() -> Value {
-    let verb =
-        string_prop("Optional verb name to fetch docs for (e.g. \"SET\"); omit for the full table.");
+    let verb = string_prop(
+        "Optional verb name to fetch docs for (e.g. \"SET\"); omit for the full table.",
+    );
     tool("kevy_discover", DISCOVER_DESC, schema(vec![("verb", verb)], &[]))
 }
 
@@ -123,11 +117,7 @@ fn explain_tool() -> Value {
     let index = string_prop("Name of the index to explain against.");
     let args =
         string_array_prop("Query arguments passed through to IDX.EXPLAIN after the index name.");
-    tool(
-        "kevy_explain",
-        EXPLAIN_DESC,
-        schema(vec![("index", index), ("args", args)], &["index"]),
-    )
+    tool("kevy_explain", EXPLAIN_DESC, schema(vec![("index", index), ("args", args)], &["index"]))
 }
 
 /// The `kevy_info` descriptor.
@@ -192,10 +182,7 @@ fn run_command(cx: &mut ToolCx, args: &Value, want: Class) -> Result<Value, RpcE
         .ok_or_else(|| (INVALID_PARAMS, "missing 'command' (array of strings)".to_string()))?;
     let argv = strings(cmd, "command")?;
     if argv.is_empty() {
-        return Err((
-            INVALID_PARAMS,
-            "'command' must be a non-empty array of strings".to_string(),
-        ));
+        return Err((INVALID_PARAMS, "'command' must be a non-empty array of strings".to_string()));
     }
     let verb = argv[0].to_ascii_uppercase();
     match (cx.catalog.classify(&verb), want) {
@@ -203,14 +190,12 @@ fn run_command(cx: &mut ToolCx, args: &Value, want: Class) -> Result<Value, RpcE
             INVALID_PARAMS,
             format!("unknown verb '{verb}' — call kevy_discover for the full verb table"),
         )),
-        (Some(Class::Write), Class::Read) => Err((
-            INVALID_PARAMS,
-            format!("'{verb}' is a write verb — use kevy_write"),
-        )),
-        (Some(Class::Read), Class::Write) => Err((
-            INVALID_PARAMS,
-            format!("'{verb}' is read-only — use kevy_read"),
-        )),
+        (Some(Class::Write), Class::Read) => {
+            Err((INVALID_PARAMS, format!("'{verb}' is a write verb — use kevy_write")))
+        }
+        (Some(Class::Read), Class::Write) => {
+            Err((INVALID_PARAMS, format!("'{verb}' is read-only — use kevy_read")))
+        }
         _ => {
             let argv: Vec<Vec<u8>> = argv.iter().map(|a| a.as_bytes().to_vec()).collect();
             Ok(tool_result(&request(cx, &argv)?))
@@ -247,9 +232,7 @@ fn info(cx: &mut ToolCx, args: &Value) -> Result<Value, RpcError> {
 /// A lost connection is an internal error rather than a tool result: the
 /// answer is not "the server said no", it is that there was no answer.
 fn request(cx: &mut ToolCx, argv: &[Vec<u8>]) -> Result<Reply, RpcError> {
-    cx.client
-        .request(argv)
-        .map_err(|e| (INTERNAL, format!("kevy request failed: {e}")))
+    cx.client.request(argv).map_err(|e| (INTERNAL, format!("kevy request failed: {e}")))
 }
 
 /// An argument that must be an array of strings, or the error saying so.
@@ -262,9 +245,9 @@ fn strings(v: &Value, what: &str) -> Result<Vec<String>, RpcError> {
         .ok_or_else(|| (INVALID_PARAMS, format!("'{what}' must be an array of strings")))?;
     arr.iter()
         .map(|item| {
-            item.as_str().map(str::to_string).ok_or_else(|| {
-                (INVALID_PARAMS, format!("'{what}' items must all be strings"))
-            })
+            item.as_str()
+                .map(str::to_string)
+                .ok_or_else(|| (INVALID_PARAMS, format!("'{what}' items must all be strings")))
         })
         .collect()
 }
@@ -284,13 +267,7 @@ pub fn tool_result(reply: &Reply) -> Value {
 /// An MCP tool result carrying one block of text.
 fn text_result(text: String, is_error: bool) -> Value {
     obj(vec![
-        (
-            "content",
-            Value::Array(vec![obj(vec![
-                ("type", s("text")),
-                ("text", Value::Str(text)),
-            ])]),
-        ),
+        ("content", Value::Array(vec![obj(vec![("type", s("text")), ("text", Value::Str(text))])])),
         ("isError", Value::Bool(is_error)),
     ])
 }
@@ -311,12 +288,9 @@ pub fn reply_to_json(reply: &Reply) -> Value {
         Reply::Array(items) | Reply::Set(items) | Reply::Push(items) => {
             Value::Array(items.iter().map(reply_to_json).collect())
         }
-        Reply::Map(pairs) => Value::Object(
-            pairs
-                .iter()
-                .map(|(k, v)| (key_text(k), reply_to_json(v)))
-                .collect(),
-        ),
+        Reply::Map(pairs) => {
+            Value::Object(pairs.iter().map(|(k, v)| (key_text(k), reply_to_json(v))).collect())
+        }
     }
 }
 
@@ -353,10 +327,7 @@ mod tests {
                 .unwrap_or_default()
         };
         let ro = names(&tools_list(false));
-        assert_eq!(
-            ro,
-            ["kevy_discover", "kevy_read", "kevy_explain", "kevy_info"]
-        );
+        assert_eq!(ro, ["kevy_discover", "kevy_read", "kevy_explain", "kevy_info"]);
         let rw = names(&tools_list(true));
         assert!(rw.contains(&"kevy_write".to_string()));
         assert_eq!(rw.len(), 5);
@@ -382,10 +353,7 @@ mod tests {
             Reply::Boolean(true),
             Reply::Double(1.5),
             Reply::Double(f64::INFINITY),
-            Reply::Map(vec![(
-                Reply::Bulk(b"k".to_vec()),
-                Reply::Int(1),
-            )]),
+            Reply::Map(vec![(Reply::Bulk(b"k".to_vec()), Reply::Int(1))]),
         ]);
         assert_eq!(
             reply_to_json(&reply).serialize(),

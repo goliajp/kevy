@@ -43,21 +43,14 @@ impl AtomicCtx<'_> {
     /// `NX`/`XX` veto).
     pub fn set(&mut self, key: &[u8], value: &[u8]) -> bool {
         self.snap(key);
-        let ok = self
-            .inner
-            .store
-            .set(key, value.to_vec(), None, false, false);
+        let ok = self.inner.store.set(key, value.to_vec(), None, false, false);
         self.log_arg(&[b"SET", key, value]);
         ok
     }
 
     /// `GET key`.
     pub fn get(&mut self, key: &[u8]) -> KevyResult<Option<Vec<u8>>> {
-        self.inner
-            .store
-            .get(key)
-            .map(|opt| opt.as_deref().map(<[u8]>::to_vec))
-            .map_err(store_err)
+        self.inner.store.get(key).map(|opt| opt.as_deref().map(<[u8]>::to_vec)).map_err(store_err)
     }
 
     /// `INCR key` — by 1.
@@ -96,12 +89,7 @@ impl AtomicCtx<'_> {
 
     /// `HGET key field`.
     pub fn hget(&mut self, key: &[u8], field: &[u8]) -> KevyResult<Option<Vec<u8>>> {
-        Ok(self
-            .inner
-            .store
-            .hget(key, field)
-            .map_err(store_err)?
-            .map(<[u8]>::to_vec))
+        Ok(self.inner.store.hget(key, field).map_err(store_err)?.map(<[u8]>::to_vec))
     }
 
     /// `HINCRBY key field delta`.
@@ -167,9 +155,7 @@ impl AtomicCtx<'_> {
 
     /// `EXISTS key [key ...]` — count of the given keys that exist.
     pub fn exists(&mut self, keys: &[&[u8]]) -> usize {
-        keys.iter()
-            .filter(|k| self.inner.store.key_exists(k))
-            .count()
+        keys.iter().filter(|k| self.inner.store.key_exists(k)).count()
     }
 
     // ---- hash ops --------------------------------------------------
@@ -298,17 +284,10 @@ impl AtomicCtx<'_> {
         if !flags.valid() {
             return Err(KevyError::InvalidInput("invalid ZADD flag combo".into()));
         }
-        let rep = self
-            .inner
-            .store
-            .zadd_flags(key, pairs, flags)
-            .map_err(store_err)?;
+        let rep = self.inner.store.zadd_flags(key, pairs, flags).map_err(store_err)?;
         if !rep.applied.is_empty() {
-            let score_strs: Vec<Vec<u8>> = rep
-                .applied
-                .iter()
-                .map(|(s, _)| format!("{s}").into_bytes())
-                .collect();
+            let score_strs: Vec<Vec<u8>> =
+                rep.applied.iter().map(|(s, _)| format!("{s}").into_bytes()).collect();
             let mut parts: Vec<&[u8]> = Vec::with_capacity(2 + rep.applied.len() * 2);
             parts.push(b"ZADD");
             parts.push(key);
@@ -320,7 +299,6 @@ impl AtomicCtx<'_> {
         }
         Ok(rep)
     }
-
 
     // ---- collection reads --------------------------------------------
     // Requested by a consumer: a set could be written inside a transaction but never read back
@@ -434,10 +412,34 @@ impl Store {
 /// Parity manifest: command names `AtomicCtx` implements.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) const ATOMIC_OPS: &[&str] = &[
-    "SET", "GET", "INCR", "INCRBY", "HSET", "HGET", "HINCRBY", "ZADD",
-    "ZINCRBY", "ZSCORE", "DEL", "EXISTS", "HDEL", "HGETALL", "HMGET",
-    "HEXISTS", "SADD", "SREM", "LPUSH", "RPUSH", "ZREM", "ZCARD",
-    "SMEMBERS", "SISMEMBER", "LRANGE", "LLEN", "SCARD", "ZRANGEBYSCORE",
+    "SET",
+    "GET",
+    "INCR",
+    "INCRBY",
+    "HSET",
+    "HGET",
+    "HINCRBY",
+    "ZADD",
+    "ZINCRBY",
+    "ZSCORE",
+    "DEL",
+    "EXISTS",
+    "HDEL",
+    "HGETALL",
+    "HMGET",
+    "HEXISTS",
+    "SADD",
+    "SREM",
+    "LPUSH",
+    "RPUSH",
+    "ZREM",
+    "ZCARD",
+    "SMEMBERS",
+    "SISMEMBER",
+    "LRANGE",
+    "LLEN",
+    "SCARD",
+    "ZRANGEBYSCORE",
 ];
 
 /// Undo a rejected transaction.

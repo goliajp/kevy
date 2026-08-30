@@ -14,15 +14,19 @@ fn s() -> Store {
 fn atomic_read_modify_write_loop() {
     let s = s();
     s.set(b"counter", b"10").unwrap();
-    let result: i64 = s.atomic(|tx| {
-        let cur = tx
-            .get(b"counter")?
-            .and_then(|v| std::str::from_utf8(&v).ok().map(|x| x.parse::<i64>().ok().unwrap_or(0)))
-            .unwrap_or(0);
-        let next = cur * 2 + 1;
-        tx.set(b"counter", next.to_string().as_bytes());
-        Ok(next)
-    }).unwrap();
+    let result: i64 = s
+        .atomic(|tx| {
+            let cur = tx
+                .get(b"counter")?
+                .and_then(|v| {
+                    std::str::from_utf8(&v).ok().map(|x| x.parse::<i64>().ok().unwrap_or(0))
+                })
+                .unwrap_or(0);
+            let next = cur * 2 + 1;
+            tx.set(b"counter", next.to_string().as_bytes());
+            Ok(next)
+        })
+        .unwrap();
     assert_eq!(result, 21);
     assert_eq!(s.get(b"counter").unwrap(), Some(b"21".to_vec()));
 }
@@ -36,7 +40,8 @@ fn atomic_multi_op_commits_together() {
         tx.hset(b"h", &[(b"f", b"v")])?;
         tx.zadd(b"z", &[(1.0, b"m")])?;
         Ok::<(), crate::KevyError>(())
-    }).unwrap();
+    })
+    .unwrap();
     assert_eq!(s.get(b"a").unwrap(), Some(b"1".to_vec()));
     assert_eq!(s.get(b"b").unwrap(), Some(b"2".to_vec()));
     assert_eq!(s.hget(b"h", b"f").unwrap(), Some(b"v".to_vec()));
@@ -46,11 +51,13 @@ fn atomic_multi_op_commits_together() {
 #[test]
 fn atomic_incr_visible_in_closure() {
     let s = s();
-    let final_value: i64 = s.atomic(|tx| {
-        tx.incr(b"k")?;
-        tx.incr(b"k")?;
-        tx.incr_by(b"k", 8)
-    }).unwrap();
+    let final_value: i64 = s
+        .atomic(|tx| {
+            tx.incr(b"k")?;
+            tx.incr(b"k")?;
+            tx.incr_by(b"k", 8)
+        })
+        .unwrap();
     assert_eq!(final_value, 10);
 }
 
@@ -68,11 +75,13 @@ fn atomic_error_propagates() {
 #[test]
 fn atomic_hash_field_increment() {
     let s = s();
-    let final_n: i64 = s.atomic(|tx| {
-        tx.hset(b"counters", &[(b"n", b"5")])?;
-        tx.hincrby(b"counters", b"n", 7)?;
-        tx.hincrby(b"counters", b"n", -2)
-    }).unwrap();
+    let final_n: i64 = s
+        .atomic(|tx| {
+            tx.hset(b"counters", &[(b"n", b"5")])?;
+            tx.hincrby(b"counters", b"n", 7)?;
+            tx.hincrby(b"counters", b"n", -2)
+        })
+        .unwrap();
     assert_eq!(final_n, 10);
     assert_eq!(s.hget(b"counters", b"n").unwrap(), Some(b"10".to_vec()));
 }
@@ -80,11 +89,13 @@ fn atomic_hash_field_increment() {
 #[test]
 fn atomic_zset_incr_visible() {
     let s = s();
-    let score: f64 = s.atomic(|tx| {
-        tx.zadd(b"z", &[(0.0, b"m")])?;
-        tx.zincrby(b"z", 1.5, b"m")?;
-        tx.zincrby(b"z", 2.5, b"m")
-    }).unwrap();
+    let score: f64 = s
+        .atomic(|tx| {
+            tx.zadd(b"z", &[(0.0, b"m")])?;
+            tx.zincrby(b"z", 1.5, b"m")?;
+            tx.zincrby(b"z", 2.5, b"m")
+        })
+        .unwrap();
     assert!((score - 4.0).abs() < 1e-9);
 }
 
@@ -273,10 +284,7 @@ fn atomic_new_writes_survive_reopen() {
         })
         .unwrap();
     }
-    let s2 = Store::open(
-        Config::default().with_persist(&dir).with_ttl_reaper_manual(),
-    )
-    .unwrap();
+    let s2 = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
     assert!(s2.sismember(b"s", b"a").unwrap());
     assert!(!s2.sismember(b"s", b"b").unwrap());
     assert_eq!(s2.llen(b"l").unwrap(), 2);
@@ -330,9 +338,14 @@ fn zadd_flags_facade_pipeline_atomic_and_reopen() {
         })
         .unwrap();
         // Invalid combo rejected at the typed boundary.
-        assert!(s
-            .zadd_flags(b"z", &[(1.0, b"q")], ZaddFlags { nx: true, xx: true, ..ZaddFlags::default() })
-            .is_err());
+        assert!(
+            s.zadd_flags(
+                b"z",
+                &[(1.0, b"q")],
+                ZaddFlags { nx: true, xx: true, ..ZaddFlags::default() }
+            )
+            .is_err()
+        );
     }
     // Reopen: the logged *effects* replay to the exact same state.
     let s2 = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
@@ -369,7 +382,11 @@ fn atomic_err_removes_a_key_the_closure_created() {
         Err::<(), _>(crate::KevyError::Io(std::io::Error::other("nope")))
     });
     assert!(out.is_err());
-    assert_eq!(s.get(b"fresh").unwrap(), None, "a key created inside a rejected txn must not survive");
+    assert_eq!(
+        s.get(b"fresh").unwrap(),
+        None,
+        "a key created inside a rejected txn must not survive"
+    );
 }
 
 #[test]

@@ -84,10 +84,7 @@ fn parse_inline_into(buf: &[u8], dst: &mut Argv) -> Result<Option<usize>, Protoc
         return Ok(None);
     };
     let line = &buf[..eol];
-    for tok in line
-        .split(u8::is_ascii_whitespace)
-        .filter(|s| !s.is_empty())
-    {
+    for tok in line.split(u8::is_ascii_whitespace).filter(|s| !s.is_empty()) {
         dst.push(tok);
     }
     Ok(Some(eol + 2))
@@ -113,8 +110,8 @@ pub(crate) fn validate_multibulk_frame(
         let Some(len_end) = find_crlf(buf, pos + 1) else {
             return Ok(None);
         };
-        let len = parse_int(&buf[pos + 1..len_end])
-            .ok_or(ProtocolError::Malformed("bad bulk length"))?;
+        let len =
+            parse_int(&buf[pos + 1..len_end]).ok_or(ProtocolError::Malformed("bad bulk length"))?;
         if len < 0 {
             return Err(ProtocolError::Malformed("negative bulk length in request"));
         }
@@ -404,10 +401,7 @@ mod tests {
         assert_eq!(cmd, vec![b"PING".to_vec()]);
         assert_eq!(used, 6);
         let (cmd, _) = parse_command(b"ECHO  hi there\r\n").unwrap().unwrap();
-        assert_eq!(
-            cmd,
-            vec![b"ECHO".to_vec(), b"hi".to_vec(), b"there".to_vec()]
-        );
+        assert_eq!(cmd, vec![b"ECHO".to_vec(), b"hi".to_vec(), b"there".to_vec()]);
     }
 
     #[test]
@@ -424,5 +418,4 @@ mod tests {
         assert_eq!(cmd, vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()]);
         assert_eq!(used, buf.len());
     }
-
 }

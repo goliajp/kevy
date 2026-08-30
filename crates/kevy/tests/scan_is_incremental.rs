@@ -40,10 +40,7 @@ impl Server {
         let port = free_port();
         let dir = std::env::temp_dir().join(format!(
             "kevy-scan-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
@@ -202,11 +199,7 @@ fn scan_pages_are_bounded_and_cover_exactly() {
         reply_bytes < 64 * 1024,
         "first page is {reply_bytes} bytes — the old whole-keyspace sweep"
     );
-    assert!(
-        keys.len() < 1_000,
-        "first page returned {} keys for COUNT 10",
-        keys.len()
-    );
+    assert!(keys.len() < 1_000, "first page returned {} keys for COUNT 10", keys.len());
 
     // Test 2: full loop = exact set coverage.
     let (all, calls) = full_sweep(&mut c, &[b"COUNT", b"100"], 50_000);
@@ -214,10 +207,7 @@ fn scan_pages_are_bounded_and_cover_exactly() {
     let distinct: std::collections::HashSet<Vec<u8>> = all.into_iter().collect();
     assert_eq!(distinct.len(), 50_000, "sweep missed or invented keys");
     for i in 0..50_000u32 {
-        assert!(
-            distinct.contains(format!("k:{i}").as_bytes()),
-            "key k:{i} never returned"
-        );
+        assert!(distinct.contains(format!("k:{i}").as_bytes()), "key k:{i} never returned");
     }
 }
 

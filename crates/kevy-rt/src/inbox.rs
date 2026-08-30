@@ -41,7 +41,11 @@ impl<C: Commands> Shard<C> {
                     drop(argv);
                     off += consumed;
                     if !self.conns.contains_key(&conn_id) {
-                        return BatchOutcome { consumed: off, protocol_error: false, conn_gone: true };
+                        return BatchOutcome {
+                            consumed: off,
+                            protocol_error: false,
+                            conn_gone: true,
+                        };
                     }
                 }
                 Ok(None) => {
@@ -263,12 +267,7 @@ impl<C: Commands> Shard<C> {
             while let Some(msg) = self.inboxes[src].as_mut().expect("peer inbox").pop() {
                 did += 1;
                 match msg {
-                    Inbound::Request {
-                        origin,
-                        conn,
-                        seq,
-                        op,
-                    } => {
+                    Inbound::Request { origin, conn, seq, op } => {
                         let part = self.exec_op(op);
                         self.send_to(origin, Inbound::Response { conn, seq, part });
                     }
@@ -347,14 +346,9 @@ impl<C: Commands> Shard<C> {
                         }
                     }
                     // ── Cross-shard BLOCK arbiter (see `block_xshard`) ──
-                    Inbound::BlockArm {
-                        origin,
-                        conn,
-                        key,
-                        kind,
-                        serve_argv,
-                        proto,
-                    } => self.target_arm(origin, conn, key, kind, serve_argv, proto),
+                    Inbound::BlockArm { origin, conn, key, kind, serve_argv, proto } => {
+                        self.target_arm(origin, conn, key, kind, serve_argv, proto)
+                    }
                     Inbound::BlockReady { conn, key } => self.origin_on_ready(conn, &key),
                     Inbound::BlockServeReq { origin, conn, key } => {
                         let reply = self.target_serve(origin, conn, &key);

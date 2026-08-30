@@ -24,8 +24,7 @@ pub use text::{ColdHit, ColdPage, ColdPageQuery, TextColdDir};
 use kevy_index::{
     ColdBloom, ColdEntryRow, FacetBucket, IndexValue, ScalarClauses, ScalarHit, ValType,
     WindowAudit, WindowShape, WindowSpec, claused_over, decode_seg_key, decode_seg_values,
-    encode_seg_values,
-    seg_bounds, seg_key, values_pass, window_bound, window_value_of,
+    encode_seg_values, seg_bounds, seg_key, values_pass, window_bound, window_value_of,
 };
 
 /// One index's window state on one shard.
@@ -339,7 +338,8 @@ impl WindowRt {
         // number is one below the counter it left behind.
         self.cold.push((
             self.seq - 1,
-            kevy_seg::Seg::open(&segs_dir.join(&file)).map_err(|e| format!("reopen {file}: {e}"))?,
+            kevy_seg::Seg::open(&segs_dir.join(&file))
+                .map_err(|e| format!("reopen {file}: {e}"))?,
         ));
         self.probe(index_name, batch.len());
         self.w = target;
@@ -417,8 +417,7 @@ fn clean_stale_derived(index_name: &[u8], segs_dir: &Path) -> Result<(), String>
     }
     let mut m = kevy_seg::Manifest::open(segs_dir).map_err(|e| e.to_string())?;
     let tag = [b"idxcold:", index_name].concat();
-    let stale: Vec<String> =
-        m.live().filter(|e| e.meta == tag).map(|e| e.file.clone()).collect();
+    let stale: Vec<String> = m.live().filter(|e| e.meta == tag).map(|e| e.file.clone()).collect();
     for f in stale {
         m.drop_seg(&f).map_err(|e| e.to_string())?;
         let _ = std::fs::remove_file(segs_dir.join(&f));

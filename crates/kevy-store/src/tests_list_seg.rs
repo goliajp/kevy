@@ -2,9 +2,9 @@
 //! model, per-segment COW behavior under a pinned snapshot view, and
 //! accounting round-trips.
 
+use crate::Store;
 use crate::list_seg::{SEG_CAP, SEG_PROMOTE};
 use crate::value::Value;
-use crate::Store;
 use alloc::sync::Arc;
 
 fn rpush_n(st: &mut Store, key: &[u8], n: usize, tag: u8) {
@@ -40,9 +40,7 @@ fn push_promotes_at_threshold_and_preserves_order() {
         alloc::format!("elem-0-{:010}", SEG_CAP).into_bytes()
     );
     // An LRANGE spanning the segment boundary.
-    let span = st
-        .lrange(b"l", SEG_CAP as i64 - 2, SEG_CAP as i64 + 1)
-        .unwrap();
+    let span = st.lrange(b"l", SEG_CAP as i64 - 2, SEG_CAP as i64 + 1).unwrap();
     assert_eq!(span.len(), 4);
     assert_eq!(span[2], alloc::format!("elem-0-{:010}", SEG_CAP).into_bytes());
 }
@@ -78,10 +76,7 @@ fn cow_write_under_pinned_view_clones_only_touched_segment() {
     let Some(Value::SegList(live)) = st.map.get(b"l".as_slice()).map(|e| &e.value) else {
         panic!("still segmented");
     };
-    let shared = live
-        .seg_arcs()
-        .filter(|s| Arc::strong_count(s) >= 2)
-        .count();
+    let shared = live.seg_arcs().filter(|s| Arc::strong_count(s) >= 2).count();
     let unique = live.seg_arcs().filter(|s| Arc::strong_count(s) == 1).count();
     // Only the tail segment (the one the push touched) was cloned.
     assert_eq!(unique, 1, "exactly the touched segment is unshared");

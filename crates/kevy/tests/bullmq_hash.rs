@@ -26,10 +26,7 @@ fn argv(parts: &[&[u8]]) -> Argv {
 #[test]
 fn hmset_returns_ok_and_stores_pairs() {
     let mut store = Store::new();
-    let reply = dispatch(
-        &mut store,
-        &argv(&[b"HMSET", b"h", b"f1", b"v1", b"f2", b"v2"]),
-    );
+    let reply = dispatch(&mut store, &argv(&[b"HMSET", b"h", b"f1", b"v1", b"f2", b"v2"]));
     assert_eq!(reply, b"+OK\r\n");
     let g1 = dispatch(&mut store, &argv(&[b"HGET", b"h", b"f1"]));
     assert_eq!(g1, b"$2\r\nv1\r\n");
@@ -64,11 +61,7 @@ fn hmset_on_wrong_type_errors() {
     let mut store = Store::new();
     dispatch(&mut store, &argv(&[b"SET", b"s", b"str"]));
     let reply = dispatch(&mut store, &argv(&[b"HMSET", b"s", b"f", b"v"]));
-    assert!(
-        reply.starts_with(b"-WRONGTYPE "),
-        "got {:?}",
-        String::from_utf8_lossy(&reply)
-    );
+    assert!(reply.starts_with(b"-WRONGTYPE "), "got {:?}", String::from_utf8_lossy(&reply));
 }
 
 // ---- hash field TTLs --------------------------------------------------------
@@ -78,29 +71,21 @@ fn hexpire_httl_hpersist_dispatch() {
     let mut store = Store::new();
     dispatch(&mut store, &argv(&[b"HSET", b"ht", b"a", b"1", b"b", b"2"]));
     // HEXPIRE with GT cond keyword + FIELDS
-    let r = dispatch(
-        &mut store,
-        &argv(&[b"HEXPIRE", b"ht", b"100", b"FIELDS", b"2", b"a", b"nope"]),
-    );
+    let r =
+        dispatch(&mut store, &argv(&[b"HEXPIRE", b"ht", b"100", b"FIELDS", b"2", b"a", b"nope"]));
     assert_eq!(r, b"*2\r\n:1\r\n:-2\r\n");
     let r = dispatch(&mut store, &argv(&[b"HTTL", b"ht", b"FIELDS", b"2", b"a", b"b"]));
     let s = String::from_utf8_lossy(&r);
     assert!(s.starts_with("*2\r\n:"), "{s}");
     assert!(s.ends_with(":-1\r\n"), "b has no ttl: {s}");
     // NX refused on a
-    let r = dispatch(
-        &mut store,
-        &argv(&[b"HEXPIRE", b"ht", b"200", b"NX", b"FIELDS", b"1", b"a"]),
-    );
+    let r = dispatch(&mut store, &argv(&[b"HEXPIRE", b"ht", b"200", b"NX", b"FIELDS", b"1", b"a"]));
     assert_eq!(r, b"*1\r\n:0\r\n");
     // HPERSIST clears
     let r = dispatch(&mut store, &argv(&[b"HPERSIST", b"ht", b"FIELDS", b"1", b"a"]));
     assert_eq!(r, b"*1\r\n:1\r\n");
     // HPEXPIREAT with past deadline deletes (code 2)
-    let r = dispatch(
-        &mut store,
-        &argv(&[b"HPEXPIREAT", b"ht", b"1", b"FIELDS", b"1", b"b"]),
-    );
+    let r = dispatch(&mut store, &argv(&[b"HPEXPIREAT", b"ht", b"1", b"FIELDS", b"1", b"b"]));
     assert_eq!(r, b"*1\r\n:2\r\n");
     let r = dispatch(&mut store, &argv(&[b"HEXISTS", b"ht", b"b"]));
     assert_eq!(r, b":0\r\n");

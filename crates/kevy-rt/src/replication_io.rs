@@ -50,10 +50,7 @@ impl<C: Commands> Shard<C> {
                     // report it. `peer_addr` errs on a peer that
                     // already vanished — fall back to 0.0.0.0:0,
                     // the connection will reap on the next read.
-                    let peer = sock.peer_addr().unwrap_or((
-                        std::net::Ipv4Addr::UNSPECIFIED,
-                        0,
-                    ));
+                    let peer = sock.peer_addr().unwrap_or((std::net::Ipv4Addr::UNSPECIFIED, 0));
                     self.replicas.push(ReplicaConn::with_peer(sock, peer));
                 }
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Ok(()),
@@ -93,21 +90,14 @@ impl<C: Commands> Shard<C> {
                             return Ok(());
                         }
                         conn.input.extend_from_slice(&scratch[..n]);
-                        let feed_gen =
-                            self.replicate.as_ref().map_or(0, |f| f.generation());
+                        let feed_gen = self.replicate.as_ref().map_or(0, |f| f.generation());
                         let conn = &mut self.replicas[idx];
                         if let Err(e) = advance_handshake(conn, feed_gen) {
-                            eprintln!(
-                                "kevy: replica handshake rejected on fd {}: {e}",
-                                conn.fd,
-                            );
+                            eprintln!("kevy: replica handshake rejected on fd {}: {e}", conn.fd,);
                             conn.close();
                             return Ok(());
                         }
-                        if !matches!(
-                            self.replicas[idx].state,
-                            ReplicaState::HandshakePending
-                        ) {
+                        if !matches!(self.replicas[idx].state, ReplicaState::HandshakePending) {
                             if crate::repl_trace() {
                                 self.trace_handshake(idx);
                             }
@@ -155,16 +145,11 @@ impl<C: Commands> Shard<C> {
             if conn.write_off >= conn.output.len() {
                 conn.output.clear();
                 conn.write_off = 0;
-                if let ReplicaState::AckSent { replica_id, from_offset, generation } =
-                    &conn.state
-                {
+                if let ReplicaState::AckSent { replica_id, from_offset, generation } = &conn.state {
                     let rid = replica_id.clone();
                     let (off, generation) = (*from_offset, *generation);
-                    conn.state = ReplicaState::Streaming {
-                        replica_id: rid,
-                        sent_offset: off,
-                        generation,
-                    };
+                    conn.state =
+                        ReplicaState::Streaming { replica_id: rid, sent_offset: off, generation };
                 }
                 return Ok(());
             }
@@ -220,9 +205,8 @@ impl<C: Commands> Shard<C> {
         if !self.replicas.iter().any(|r| matches!(r.state, ReplicaState::Closed { .. })) {
             return;
         }
-        let now_ns = std::time::Instant::now()
-            .duration_since(self.replication_epoch)
-            .as_nanos() as u64;
+        let now_ns =
+            std::time::Instant::now().duration_since(self.replication_epoch).as_nanos() as u64;
         let mut i = self.replicas.len();
         while i > 0 {
             i -= 1;
@@ -242,9 +226,7 @@ impl<C: Commands> Shard<C> {
         if self.replicate.is_none() || self.slots.is_empty() {
             return;
         }
-        let now_ns = now
-            .duration_since(self.replication_epoch)
-            .as_nanos() as u64;
+        let now_ns = now.duration_since(self.replication_epoch).as_nanos() as u64;
         let window_ns = u64::from(self.replication_reconnect_window_ms) * 1_000_000;
         let dropped = self.slots.expire(now_ns, window_ns);
         if !dropped.is_empty() {

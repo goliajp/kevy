@@ -28,9 +28,8 @@ pub(crate) enum Target {
 }
 
 pub(crate) fn parse_url(url: &str) -> Result<Target, KevyError> {
-    let (scheme, rest) = url
-        .split_once("://")
-        .ok_or_else(|| KevyError::InvalidInput("URL missing '://'".into()))?;
+    let (scheme, rest) =
+        url.split_once("://").ok_or_else(|| KevyError::InvalidInput("URL missing '://'".into()))?;
     match scheme {
         "mem" => Ok(if rest.is_empty() {
             Target::EmbedMemoryAnonymous
@@ -87,9 +86,7 @@ pub(crate) fn resolve_store(target: &Target) -> Result<Store, KevyError> {
         }
         Target::EmbedPersist(path) => Store::open(Config::default().with_persist(path)),
         Target::Remote(_) => {
-            return Err(KevyError::InvalidInput(
-                "resolve_store called on a Remote target".into(),
-            ));
+            return Err(KevyError::InvalidInput("resolve_store called on a Remote target".into()));
         }
     }?;
     if let Some(k) = key
@@ -106,10 +103,7 @@ mod tests {
 
     #[test]
     fn parse_mem_url() {
-        assert!(matches!(
-            parse_url("mem://").unwrap(),
-            Target::EmbedMemoryAnonymous
-        ));
+        assert!(matches!(parse_url("mem://").unwrap(), Target::EmbedMemoryAnonymous));
         match parse_url("mem://my-bus").unwrap() {
             Target::EmbedMemoryNamed(n) => assert_eq!(n, "my-bus"),
             other => panic!("expected EmbedMemoryNamed, got {other:?}"),
@@ -141,10 +135,7 @@ mod tests {
 
     #[test]
     fn parse_tls_rejected() {
-        assert!(matches!(
-            parse_url("rediss://h:6379").unwrap_err(),
-            KevyError::Unsupported(_)
-        ));
+        assert!(matches!(parse_url("rediss://h:6379").unwrap_err(), KevyError::Unsupported(_)));
     }
 
     #[test]

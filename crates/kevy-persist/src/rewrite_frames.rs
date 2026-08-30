@@ -20,7 +20,7 @@ use crate::rewrite_fmt::write_value_as_commands;
 pub fn value_as_v1_frames(key: &[u8], value: &Value, ttl_ms: Option<u64>) -> Vec<u8> {
     let mut buf = Vec::new();
     let mut scratch = Vec::new();
-    let _ = write_value_as_commands(&mut buf, key, value, ttl_ms, crate::AofFormat::V1, &mut scratch);
+    let _ =
+        write_value_as_commands(&mut buf, key, value, ttl_ms, crate::AofFormat::V1, &mut scratch);
     buf
 }
-

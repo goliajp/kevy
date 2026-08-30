@@ -103,12 +103,11 @@ mod enabled {
 
     /// Extract `fields` from a live hot entry, hmget-shaped. `Err` on a
     /// non-hash; `Cold` never reaches here (callers resolve it first).
-    fn hot_hash_fields(
-        e: &Entry,
-        fields: &[&[u8]],
-    ) -> Result<Vec<Option<Vec<u8>>>, StoreError> {
+    fn hot_hash_fields(e: &Entry, fields: &[&[u8]]) -> Result<Vec<Option<Vec<u8>>>, StoreError> {
         match &e.value {
-            Value::Hash(h) => Ok(fields.iter().map(|f| h.get(*f).map(SmallBytes::to_vec)).collect()),
+            Value::Hash(h) => {
+                Ok(fields.iter().map(|f| h.get(*f).map(SmallBytes::to_vec)).collect())
+            }
             Value::PackedRow(r) => {
                 Ok(fields.iter().map(|f| r.get_named(f).map(<[u8]>::to_vec)).collect())
             }
@@ -148,7 +147,11 @@ mod enabled {
         /// mismatch is WRONGTYPE with zero preads. Hot/absent =
         /// `live_entry` verbatim. Inside [`Store::peek_scope`] the gate
         /// is bypassed: serve via scratch, mark untouched, no promote.
-        pub(crate) fn tier_serve(&mut self, key: &[u8], want: u8) -> Result<Option<&Entry>, StoreError> {
+        pub(crate) fn tier_serve(
+            &mut self,
+            key: &[u8],
+            want: u8,
+        ) -> Result<Option<&Entry>, StoreError> {
             if !self.cold_backing {
                 return Ok(self.live_entry(key));
             }
@@ -177,7 +180,11 @@ mod enabled {
         /// `expire_at_ns` behave identically. `peek = false` is the
         /// gate's first touch (probation mark set); `peek = true` is a
         /// bulk read (mark untouched, peek pread counted).
-        fn tier_serve_cold(&mut self, key: &[u8], peek: bool) -> Result<Option<&Entry>, StoreError> {
+        fn tier_serve_cold(
+            &mut self,
+            key: &[u8],
+            peek: bool,
+        ) -> Result<Option<&Entry>, StoreError> {
             let (cref, expire) = {
                 let e = self.map.get_mut(key).expect("probed live above");
                 let Value::Cold(c) = &mut e.value else { unreachable!("cold checked above") };
@@ -259,11 +266,7 @@ mod enabled {
         /// read + ONE decode for all fields. `Ok(None)` = missing key;
         /// `Err(WrongType)` = non-hash (zero preads when cold — the
         /// stage-1 tag answers).
-        pub fn peek_hash_fields(
-            &mut self,
-            key: &[u8],
-            fields: &[&[u8]],
-        ) -> PeekRow {
+        pub fn peek_hash_fields(&mut self, key: &[u8], fields: &[&[u8]]) -> PeekRow {
             self.purge_hash_ttl(key);
             match self.peek_probe(key) {
                 Probe::Missing => Ok(None),
@@ -383,9 +386,9 @@ mod enabled {
                     vref: c.vref(),
                 })
                 .collect();
-            let (images, submissions) = reader
-                .read_batch(&reads)
-                .expect("tier: vlog batch read failed — per-boot spill file, this is a process bug");
+            let (images, submissions) = reader.read_batch(&reads).expect(
+                "tier: vlog batch read failed — per-boot spill file, this is a process bug",
+            );
             assert_eq!(images.len(), reads.len(), "reader must return one image per read");
             t.preads_total += plan.len() as u64;
             t.peek_preads_total += plan.len() as u64;
@@ -402,7 +405,8 @@ mod enabled {
                 let Value::Hash(h) = &value else {
                     unreachable!("hash-tagged record decodes to a hash")
                 };
-                out[row] = Ok(Some(fields.iter().map(|f| h.get(*f).map(SmallBytes::to_vec)).collect()));
+                out[row] =
+                    Ok(Some(fields.iter().map(|f| h.get(*f).map(SmallBytes::to_vec)).collect()));
             }
         }
     }
@@ -429,7 +433,11 @@ mod disabled {
         }
 
         #[inline]
-        pub(crate) fn tier_serve(&mut self, key: &[u8], _want: u8) -> Result<Option<&Entry>, StoreError> {
+        pub(crate) fn tier_serve(
+            &mut self,
+            key: &[u8],
+            _want: u8,
+        ) -> Result<Option<&Entry>, StoreError> {
             Ok(self.live_entry(key))
         }
 
@@ -464,9 +472,9 @@ mod disabled {
                     Value::SmallHashInline(h) => {
                         Ok(Some(fields.iter().map(|f| h.get(f).map(<[u8]>::to_vec)).collect()))
                     }
-                    Value::PackedRow(r) => {
-                        Ok(Some(fields.iter().map(|f| r.get_named(f).map(<[u8]>::to_vec)).collect()))
-                    }
+                    Value::PackedRow(r) => Ok(Some(
+                        fields.iter().map(|f| r.get_named(f).map(<[u8]>::to_vec)).collect(),
+                    )),
                     _ => Err(StoreError::WrongType),
                 },
             }

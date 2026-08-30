@@ -316,34 +316,21 @@ impl Elector {
     /// Updates per-peer view, applies the state machine transitions
     /// the spec defines, returns any outbound messages the
     /// transition produced.
-    pub fn on_message(
-        &mut self,
-        from_node_id: &str,
-        msg: Message,
-        now: Instant,
-    ) -> Vec<Outbound> {
+    pub fn on_message(&mut self, from_node_id: &str, msg: Message, now: Instant) -> Vec<Outbound> {
         let mut out = Vec::new();
         match msg {
-            Message::Hb {
-                epoch,
-                node_id: _,
-                role,
-                repl_offset,
-            } => self.on_hb(from_node_id, epoch, role, repl_offset, now),
-            Message::Offer {
-                new_epoch,
-                candidate_id,
-                repl_offset,
-            } => self.on_offer(new_epoch, candidate_id, repl_offset, &mut out),
-            Message::Accept {
-                epoch,
-                accepter_id,
-            } => self.on_accept(epoch, accepter_id, now, &mut out),
-            Message::Announce {
-                epoch,
-                new_primary_id,
-                new_primary_addr,
-            } => self.on_announce(epoch, &new_primary_id, new_primary_addr, &mut out),
+            Message::Hb { epoch, node_id: _, role, repl_offset } => {
+                self.on_hb(from_node_id, epoch, role, repl_offset, now)
+            }
+            Message::Offer { new_epoch, candidate_id, repl_offset } => {
+                self.on_offer(new_epoch, candidate_id, repl_offset, &mut out)
+            }
+            Message::Accept { epoch, accepter_id } => {
+                self.on_accept(epoch, accepter_id, now, &mut out)
+            }
+            Message::Announce { epoch, new_primary_id, new_primary_addr } => {
+                self.on_announce(epoch, &new_primary_id, new_primary_addr, &mut out)
+            }
         }
         out
     }
@@ -400,9 +387,8 @@ impl Elector {
                 return false;
             }
         } else {
-            let seen_enough = self
-                .first_tick
-                .is_some_and(|t| now.duration_since(t) >= self.config.down_after);
+            let seen_enough =
+                self.first_tick.is_some_and(|t| now.duration_since(t) >= self.config.down_after);
             if !seen_enough {
                 return false;
             }
@@ -472,14 +458,11 @@ impl Elector {
             self.role = Role::Replica;
             self.offer_at = None;
             self.accept_votes.clear();
-            let jitter = self
-                .jitter
-                .sample(self.config.election_backoff_jitter, now, &self.node_id);
+            let jitter =
+                self.jitter.sample(self.config.election_backoff_jitter, now, &self.node_id);
             self.backoff_until = Some(now + self.config.election_backoff + jitter);
         }
     }
 
     // ─────────── inbound handlers ───────────
-
-
 }

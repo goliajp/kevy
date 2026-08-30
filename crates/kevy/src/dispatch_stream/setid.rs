@@ -24,9 +24,7 @@ pub(super) fn cmd_xsetid<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out:
         let tok = args[i].to_ascii_uppercase();
         match tok.as_slice() {
             b"ENTRIESADDED" => {
-                let n = std::str::from_utf8(&args[i + 1])
-                    .ok()
-                    .and_then(|s| s.parse().ok());
+                let n = std::str::from_utf8(&args[i + 1]).ok().and_then(|s| s.parse().ok());
                 let Some(n) = n else {
                     return encode_error(out, "ERR value is not an integer or out of range");
                 };
@@ -44,10 +42,9 @@ pub(super) fn cmd_xsetid<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out:
     }
     match store.xsetid(&args[1], last_id, entries_added, max_deleted_id) {
         Ok(()) => encode_simple_string(out, "OK"),
-        Err(kevy_store::StoreError::NoSuchKey) => encode_error(
-            out,
-            "ERR The XSETID command requires the key to exist.",
-        ),
+        Err(kevy_store::StoreError::NoSuchKey) => {
+            encode_error(out, "ERR The XSETID command requires the key to exist.")
+        }
         Err(kevy_store::StoreError::OutOfRange) => encode_error(
             out,
             "ERR The ID specified in XSETID is smaller than the target stream top item",

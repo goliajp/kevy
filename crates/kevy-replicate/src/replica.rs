@@ -88,7 +88,6 @@ pub enum ReplicaEvent {
     },
 }
 
-
 /// One blocking TCP connection to a primary's per-shard replication
 /// listener. After [`Self::connect`] completes the handshake, the
 /// client behaves as an `Iterator<Item = Result<DecodedFrame, ReplicaError>>`
@@ -384,9 +383,8 @@ mod tests {
         // Round-trip: encode here, parse via the primary-side parser.
         let bytes = encode_replicate_from(3, 42, "replica-a");
         let mut argv = Argv::default();
-        let consumed = kevy_resp::parse_command_into(&bytes, &mut argv)
-            .expect("parse ok")
-            .expect("complete");
+        let consumed =
+            kevy_resp::parse_command_into(&bytes, &mut argv).expect("parse ok").expect("complete");
         assert_eq!(consumed, bytes.len());
         let req = crate::handshake::parse_replicate_from(&argv).expect("handshake ok");
         assert_eq!(req.generation, 3);
@@ -398,36 +396,18 @@ mod tests {
     fn ack_line_parses_gen_and_offset() {
         assert_eq!(parse_ack_line(b"+ACK 1 0\r\n").unwrap(), (1, 0));
         assert_eq!(parse_ack_line(b"+ACK 7 42\r\n").unwrap(), (7, 42));
-        assert_eq!(
-            parse_ack_line(b"+ACK 2 12345678\r\n").unwrap(),
-            (2, 12_345_678)
-        );
+        assert_eq!(parse_ack_line(b"+ACK 2 12345678\r\n").unwrap(), (2, 12_345_678));
     }
 
     #[test]
     fn ack_line_rejects_malformed() {
-        assert!(matches!(
-            parse_ack_line(b"+PONG\r\n"),
-            Err(ReplicaError::AckMalformed)
-        ));
-        assert!(matches!(
-            parse_ack_line(b"+ACK abc 1\r\n"),
-            Err(ReplicaError::AckMalformed)
-        ));
-        assert!(matches!(
-            parse_ack_line(b"-ERR nope\r\n"),
-            Err(ReplicaError::AckMalformed)
-        ));
+        assert!(matches!(parse_ack_line(b"+PONG\r\n"), Err(ReplicaError::AckMalformed)));
+        assert!(matches!(parse_ack_line(b"+ACK abc 1\r\n"), Err(ReplicaError::AckMalformed)));
+        assert!(matches!(parse_ack_line(b"-ERR nope\r\n"), Err(ReplicaError::AckMalformed)));
         // The legacy one-number (pre-4.0) ACK — clean wire break.
-        assert!(matches!(
-            parse_ack_line(b"+ACK 42\r\n"),
-            Err(ReplicaError::AckMalformed)
-        ));
+        assert!(matches!(parse_ack_line(b"+ACK 42\r\n"), Err(ReplicaError::AckMalformed)));
         // Missing CRLF.
-        assert!(matches!(
-            parse_ack_line(b"+ACK 1 1"),
-            Err(ReplicaError::AckMalformed)
-        ));
+        assert!(matches!(parse_ack_line(b"+ACK 1 1"), Err(ReplicaError::AckMalformed)));
     }
 
     #[test]
@@ -439,5 +419,4 @@ mod tests {
             Err(ReplicaError::AckMalformed)
         ));
     }
-
 }

@@ -42,10 +42,7 @@ const MAGIC: &[u8; 8] = b"KEVYBKP1";
 /// directory of TRUTH cannot join the data dir without someone reading
 /// this first.
 pub fn pack(data_dir: &Path, out_path: &Path) -> io::Result<u64> {
-    let out = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(out_path)?;
+    let out = OpenOptions::new().create_new(true).write(true).open(out_path)?;
     let mut w = BufWriter::new(out);
     w.write_all(MAGIC)?;
     let mut total_bytes: u64 = 0;

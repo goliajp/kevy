@@ -162,7 +162,7 @@ fn push_int(out: &mut Vec<u8>, n: i64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{parse_reply, Reply};
+    use crate::{Reply, parse_reply};
 
     /// Each encoder pairs with its parse_reply round-trip — byte-exact
     /// out, structurally-exact back in.
@@ -282,10 +282,7 @@ mod tests {
         encode_big_number(&mut out, b"170141183460469231731687303715884105727");
         assert_eq!(out, b"(170141183460469231731687303715884105727\r\n");
         let (r, _) = parse_reply(&out).unwrap().unwrap();
-        assert_eq!(
-            r,
-            Reply::BigNumber(b"170141183460469231731687303715884105727".to_vec())
-        );
+        assert_eq!(r, Reply::BigNumber(b"170141183460469231731687303715884105727".to_vec()));
     }
 
     #[test]

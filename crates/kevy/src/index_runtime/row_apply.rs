@@ -42,8 +42,7 @@ pub(super) fn apply_scalar_row(store: &mut Store, spec: &IndexSpec, seg: &mut Se
                 None => seg.apply_with_values(key, None, &[]),
                 Some(v) if spec.values.is_empty() => seg.apply(key, Some(v)),
                 Some(v) => {
-                    let refs: Vec<Option<&[u8]>> =
-                        vals[w..].iter().map(|o| o.as_deref()).collect();
+                    let refs: Vec<Option<&[u8]>> = vals[w..].iter().map(|o| o.as_deref()).collect();
                     seg.apply_with_values(key, Some(v), &refs);
                 }
             }
@@ -129,12 +128,7 @@ fn apply_row_text(
 
 /// [`apply_row`]'s agg half: both fields must resolve — the aggregated
 /// value coerces per the declared type, the group key is raw bytes.
-fn apply_row_agg(
-    store: &mut Store,
-    spec: &IndexSpec,
-    a: &mut kevy_index::AggSegment,
-    key: &[u8],
-) {
+fn apply_row_agg(store: &mut Store, spec: &IndexSpec, a: &mut kevy_index::AggSegment, key: &[u8]) {
     // Both fields read with ONE row peek — a cold row costs one
     // record read, promotes nothing, never marks the gate. The peek's
     // `Ok(None)`/`Err` arms carry the deleted-vs-excluded distinction
@@ -145,8 +139,7 @@ fn apply_row_agg(
     match store.peek_hash_fields(key, &[group_field, spec.field()]) {
         Ok(Some(mut vals)) => {
             let group = vals[0].take();
-            let val =
-                vals[1].take().and_then(|raw| kevy_index::IndexValue::coerce(spec.ty, &raw));
+            let val = vals[1].take().and_then(|raw| kevy_index::IndexValue::coerce(spec.ty, &raw));
             match (group, val) {
                 (Some(g), Some(v)) => a.apply(key, Some((g, v)), false),
                 _ => a.apply(key, None, true),

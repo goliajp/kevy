@@ -5,10 +5,29 @@
 #[cfg(not(feature = "std"))]
 use crate::nostd_prelude::*;
 use crate::small_zset::{self, AddResult as ZAddResult, SmallZSetData};
+use crate::value::{SmallBytes, Value, ZSetData, zset_member_weight};
 use crate::zset_seg::{SegZSetData, Z_PROMOTE};
-use crate::value::{ZSetData, SmallBytes, Value, zset_member_weight};
 use crate::{Entry, Store, StoreError};
 use alloc::sync::Arc;
+
+/// `-0.0` and `0.0` are one score, as they are in Redis.
+///
+/// Folded at the one door every score passes through to reach a sorted set,
+/// rather than inside `Score`'s comparison — that would be a branch in the
+/// innermost step of every tree descent, paid on reads as well as writes, to
+/// settle something that can be settled once on the way in.
+///
+/// Redis keys its skiplist on a plain `double` compare, where the two zeros
+/// are equal and the member breaks the tie. This rank tree is a B-tree,
+/// whose key needs a total order that `f64: PartialOrd` is not, and `Score`
+/// orders by `total_cmp` — which is total precisely because it separates
+/// them. Measured against a real `redis:8` on one host,
+/// `ZADD z 0 a; ZADD z -0 b; ZRANGE z 0 -1` answered `a b` there and `b a`
+/// here. See the finding under bench/.
+#[inline]
+fn fold_zero_sign(score: f64) -> f64 {
+    if score == 0.0 { 0.0 } else { score }
+}
 
 impl Store {
     // ---- sorted sets ---------------------------------------------------
@@ -86,11 +105,7 @@ impl Store {
     /// `ZADD` — returns the count of newly-added members. Borrowed
     /// argv: no per-member allocation; routes through the
     /// encoding-switch path.
-    pub fn zadd(
-        &mut self,
-        key: &[u8],
-        pairs: &[(f64, &[u8])],
-    ) -> Result<usize, StoreError> {
+    pub fn zadd(&mut self, key: &[u8], pairs: &[(f64, &[u8])]) -> Result<usize, StoreError> {
         if pairs.is_empty() {
             return Ok(0);
         }
@@ -139,11 +154,7 @@ impl Store {
     }
 
     /// `ZREM` — returns the count of members removed.
-    pub fn zrem(
-        &mut self,
-        key: &[u8],
-        members: &[&[u8]],
-    ) -> Result<usize, StoreError> {
+    pub fn zrem(&mut self, key: &[u8], members: &[&[u8]]) -> Result<usize, StoreError> {
         let (removed, delta) = {
             let mut r = 0usize;
             let mut d: i64 = 0;
@@ -191,21 +202,15 @@ impl Store {
         match self.live_entry(key) {
             None => Ok(None),
             Some(e) => match &e.value {
-                Value::ZSet(z) => Ok(z
-                    .by_member
-                    .get(member)
-                    .copied()
-                    .and_then(|sc| z.rank_of(member, sc))),
-                Value::SegZSet(z) => {
-                    Ok(z.score_of(member).and_then(|sc| z.rank_of(member, sc)))
+                Value::ZSet(z) => {
+                    Ok(z.by_member.get(member).copied().and_then(|sc| z.rank_of(member, sc)))
                 }
+                Value::SegZSet(z) => Ok(z.score_of(member).and_then(|sc| z.rank_of(member, sc))),
                 Value::SmallZSetInline(z) => {
                     // Inline holds at most 2 entries; sort by score (then
                     // bytes) so ZRANK matches ZRANGE order.
                     let mut entries: Vec<(&[u8], f64)> = z.iter().collect();
-                    entries.sort_by(|a, b| {
-                        a.1.total_cmp(&b.1).then_with(|| a.0.cmp(b.0))
-                    });
+                    entries.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(b.0)));
                     Ok(entries.iter().position(|(m, _)| *m == member))
                 }
                 _ => Err(StoreError::WrongType),
@@ -228,6 +233,7 @@ impl Store {
 
     /// A.8 core: set one `(member, score)` pair via encoding-switch.
     fn zadd_one(&mut self, key: &[u8], m: &[u8], score: f64) -> Result<ZaddOutcome, StoreError> {
+        let score = fold_zero_sign(score);
         if self.zset_value_for_set(key)?.is_none() {
             return Ok(self.zadd_create(key, m, score));
         }
@@ -246,11 +252,7 @@ impl Store {
                 let is_new = promote_flat_zset_and_add(v, m, score);
                 self.reweigh_entry(key);
                 // Reweighed from scratch — swallow the per-member delta.
-                if is_new {
-                    Ok(ZaddOutcome::AddedHeap(0))
-                } else {
-                    Ok(ZaddOutcome::UpdatedHeap)
-                }
+                if is_new { Ok(ZaddOutcome::AddedHeap(0)) } else { Ok(ZaddOutcome::UpdatedHeap) }
             }
             Value::ZSet(z) => {
                 let z = Arc::make_mut(z);
@@ -306,11 +308,7 @@ fn promote_inline_zset_and_add(v: &mut Value, m: &[u8], score: f64) -> ZaddOutco
     let w = zset_member_weight(&smb) as i64;
     promoted.insert(m, score);
     *v = Value::ZSet(Arc::new(promoted));
-    if is_new {
-        ZaddOutcome::AddedHeap(w)
-    } else {
-        ZaddOutcome::UpdatedHeap
-    }
+    if is_new { ZaddOutcome::AddedHeap(w) } else { ZaddOutcome::UpdatedHeap }
 }
 
 /// Flat zset at the threshold: segment, then set. One-time

@@ -23,8 +23,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use kevy_chaos::{Harness, HarnessConfig, KillSignal, WriterPool, pick_free_port};
 use kevy_chaos::{AckEntry, pipelined_verify_counts};
+use kevy_chaos::{Harness, HarnessConfig, KillSignal, WriterPool, pick_free_port};
 
 #[test]
 #[ignore = "chaos test — opt-in via --ignored, needs `cargo build --release -p kevy` first"]
@@ -47,10 +47,7 @@ fn crash_everysec_no_corruption_bounded_loss() {
     // naive "2 s run + 1 s fsync = 50 % lost worst case" pitfall.
     std::thread::sleep(Duration::from_secs(5));
     let pre_kill_acks = pool.log.lock().unwrap().len();
-    assert!(
-        pre_kill_acks >= 100,
-        "vacuous test: only {pre_kill_acks} ACKs before kill"
-    );
+    assert!(pre_kill_acks >= 100, "vacuous test: only {pre_kill_acks} ACKs before kill");
     eprintln!("crash_everysec: {pre_kill_acks} ACKs before SIGKILL");
 
     h.kill(KillSignal::Sigkill).expect("kill");
@@ -89,10 +86,7 @@ fn crash_everysec_no_corruption_bounded_loss() {
     // Count present/lost/corrupted using a SINGLE pipelined TCP conn.
     // Per-GET TCP connect would exhaust ephemeral ports at 600 k+ ACKs.
     let (present, lost, corrupted) = pipelined_verify_counts(port, &acks);
-    eprintln!(
-        "crash_everysec: present={present}, lost={lost}, corrupted={}",
-        corrupted.len()
-    );
+    eprintln!("crash_everysec: present={present}, lost={lost}, corrupted={}", corrupted.len());
 
     // STRICT contract: no-corruption (every present read
     // returns the ACK'd value, never a wrong one).
@@ -129,7 +123,6 @@ fn crash_everysec_no_corruption_bounded_loss() {
 
     let _ = std::fs::remove_dir_all(&tmp);
 }
-
 
 fn resolve_kevy_bin() -> PathBuf {
     if let Ok(p) = std::env::var("KEVY_BIN") {

@@ -89,10 +89,7 @@ mod tests {
         let dir = kevy_tmpdir::unique_dir("shardsmeta");
         let p = dir.join("shards.meta");
         std::fs::write(&p, "4").unwrap();
-        assert_eq!(
-            read_shards_meta(&p),
-            Some(ShardsMeta { n: 4, routing: Routing::KevyHash })
-        );
+        assert_eq!(read_shards_meta(&p), Some(ShardsMeta { n: 4, routing: Routing::KevyHash }));
         std::fs::write(&p, "4\nfuture-scheme\n").unwrap();
         assert_eq!(read_shards_meta(&p), None);
         std::fs::remove_dir_all(&dir).unwrap();

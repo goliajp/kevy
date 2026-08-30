@@ -78,7 +78,9 @@ pub use transaction::{Transaction, TransactionReplies};
 pub use kevy_embedded::{HExpireCode, HExpireCond, KevyError, KevyResult, StoreError, ZAggregate};
 pub use kevy_resp::Reply;
 
-pub(crate) use reply::{array_to_bulks, num_f64, num_u64, store_err, string, unexpected, vec2, vec3};
+pub(crate) use reply::{
+    array_to_bulks, num_f64, num_u64, store_err, string, unexpected, vec2, vec3,
+};
 pub(crate) use url::{Target, parse_url, resolve_store};
 
 /// One open connection to a kevy backend, opaque about whether the backend
@@ -400,7 +402,6 @@ impl Connection {
         }
     }
 }
-
 
 #[cfg(test)]
 #[path = "lib_tests.rs"]

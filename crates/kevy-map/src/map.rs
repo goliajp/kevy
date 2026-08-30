@@ -63,10 +63,7 @@ fn prefetch_t0(ptr: *const u8) {
         // SAFETY: _mm_prefetch reads no memory; any aligned/unaligned/
         // out-of-bounds pointer is permitted by the ISA.
         unsafe {
-            core::arch::x86_64::_mm_prefetch(
-                ptr as *const i8,
-                core::arch::x86_64::_MM_HINT_T0,
-            );
+            core::arch::x86_64::_mm_prefetch(ptr as *const i8, core::arch::x86_64::_MM_HINT_T0);
         }
     }
     #[cfg(all(target_arch = "aarch64", not(miri)))]
@@ -172,10 +169,7 @@ type SlotSlicesMut<'a, K, V> = (&'a [u8], &'a mut [MaybeUninit<(K, V)>]);
 
 pub(crate) enum ProbeOutcome {
     Found(usize),
-    NotFound {
-        insert_at: usize,
-        via_tombstone: bool,
-    },
+    NotFound { insert_at: usize, via_tombstone: bool },
 }
 
 impl<K, V> KevyMap<K, V> {
@@ -184,8 +178,8 @@ impl<K, V> KevyMap<K, V> {
     ///
     /// ```
     /// // The key must implement `KevyHash`, which is deliberately a small
-/// // set: byte strings and integers, the things a KV engine keys on.
-/// let m: kevy_map::KevyMap<Vec<u8>, u32> = kevy_map::KevyMap::new();
+    /// // set: byte strings and integers, the things a KV engine keys on.
+    /// let m: kevy_map::KevyMap<Vec<u8>, u32> = kevy_map::KevyMap::new();
     /// assert!(m.is_empty());
     /// assert_eq!(m.len(), 0);
     /// ```
@@ -430,7 +424,6 @@ impl<K, V> KevyMap<K, V> {
         self.cap - (self.cap / 8)
     }
 }
-
 
 impl<K, V> Default for KevyMap<K, V> {
     fn default() -> Self {

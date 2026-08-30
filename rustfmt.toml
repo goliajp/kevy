@@ -1,0 +1,20 @@
+# One knob, and the reason it is set.
+#
+# rustfmt's default `use_small_heuristics = "Default"` breaks any call,
+# struct literal, array or chain wider than 60% of `max_width` onto its own
+# lines — even when the whole thing fits well inside 100 columns. This tree
+# was hand-written to roughly that budget already: median line 38, 95th
+# percentile 78, 99th percentile 94, and half a percent of lines past 100.
+#
+# Measured, on 772 files: the default adds enough wrapping to push 76
+# functions past the 50-line ceiling and 22 files past 500 — 98 locgate
+# violations without changing a single token. "Max", which keeps a
+# construct on one line as long as it fits `max_width`, leaves 19. That is
+# the difference between a formatter that agrees with how this code was
+# written and one that argues with it.
+#
+# `max_width` stays at rustfmt's default 100. Widening it to 110 or 120
+# does cut the remaining violations to 7 and 5, and was not taken: the
+# point of adopting rustfmt here is to stop having a house style, and 100
+# is the one every other Rust project reads at.
+use_small_heuristics = "Max"

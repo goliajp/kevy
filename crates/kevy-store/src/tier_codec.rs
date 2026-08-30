@@ -136,19 +136,15 @@ fn decode_hash(p: &[u8]) -> Result<Value, &'static str> {
 /// the row are the same answer. `None` if the row no longer fits the
 /// packed form, and then the general hash carries the same data.
 fn rebuild_packed(pairs: &[(&[u8], &[u8])]) -> Option<crate::packed_row::PackedRow> {
-    let names: crate::packed_row::ColumnNames =
-        pairs.iter().map(|(f, _)| f.to_vec()).collect();
+    let names: crate::packed_row::ColumnNames = pairs.iter().map(|(f, _)| f.to_vec()).collect();
     let vals: Vec<Option<&[u8]>> = pairs.iter().map(|(_, v)| Some(*v)).collect();
     crate::packed_row::PackedRow::build(&names, &vals)
 }
 
 fn read_u32(p: &[u8], cur: &mut usize) -> Result<u32, &'static str> {
     let end = cur.checked_add(4).ok_or("tier: offset overflow")?;
-    let b: [u8; 4] = p
-        .get(*cur..end)
-        .ok_or("tier: truncated length")?
-        .try_into()
-        .expect("4-byte slice");
+    let b: [u8; 4] =
+        p.get(*cur..end).ok_or("tier: truncated length")?.try_into().expect("4-byte slice");
     *cur = end;
     Ok(u32::from_le_bytes(b))
 }

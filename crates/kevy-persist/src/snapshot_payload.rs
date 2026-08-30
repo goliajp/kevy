@@ -91,10 +91,7 @@ pub(crate) fn write_segset_payload<W: Write>(
     Ok(())
 }
 
-pub(crate) fn write_set_payload<W: Write>(
-    w: &mut W,
-    set: &kevy_store::SetData,
-) -> io::Result<()> {
+pub(crate) fn write_set_payload<W: Write>(w: &mut W, set: &kevy_store::SetData) -> io::Result<()> {
     w.write_all(&(set.len() as u32).to_le_bytes())?;
     for m in set {
         write_bytes(w, m.as_slice())?;
@@ -156,10 +153,7 @@ pub(crate) fn write_small_zset_payload<W: Write>(
     Ok(())
 }
 
-pub(crate) fn write_zset_payload<W: Write>(
-    w: &mut W,
-    z: &kevy_store::ZSetData,
-) -> io::Result<()> {
+pub(crate) fn write_zset_payload<W: Write>(w: &mut W, z: &kevy_store::ZSetData) -> io::Result<()> {
     let entries: Vec<(&[u8], f64)> = z.ordered().collect();
     w.write_all(&(entries.len() as u32).to_le_bytes())?;
     for (m, score) in entries {

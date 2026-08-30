@@ -101,9 +101,7 @@ fn cluster_peer_formation_survives_node_death() {
 
     // Phase 2: SIGKILL node 0. Surviving nodes 1 + 2 should stay up
     // and still answer PING.
-    harnesses[0]
-        .kill(KillSignal::Sigkill)
-        .expect("kill node 0");
+    harnesses[0].kill(KillSignal::Sigkill).expect("kill node 0");
     eprintln!("cluster_peer: node 0 SIGKILL'd");
     std::thread::sleep(Duration::from_millis(500));
 
@@ -140,9 +138,10 @@ fn info_cluster_known_nodes(port: u16) -> u32 {
     let body = String::from_utf8_lossy(&buf[..n]);
     for line in body.lines() {
         if let Some(rest) = line.strip_prefix("cluster_known_nodes:")
-            && let Ok(v) = rest.trim().parse::<u32>() {
-                return v;
-            }
+            && let Ok(v) = rest.trim().parse::<u32>()
+        {
+            return v;
+        }
     }
     0
 }

@@ -94,10 +94,7 @@ fn shutdown_drains_cleanly_no_lost_writes() {
     // Restart on the same data dir; ACK'd writes must survive.
     h.restart().expect("restart");
     let (present, lost, corrupted) = pipelined_verify_counts(port, &acks);
-    eprintln!(
-        "shutdown_drain: present={present} lost={lost} corrupted={}",
-        corrupted.len()
-    );
+    eprintln!("shutdown_drain: present={present} lost={lost} corrupted={}", corrupted.len());
     assert!(
         corrupted.is_empty(),
         "CORRUPTION DETECTED after SHUTDOWN drain: {}",
@@ -132,11 +129,7 @@ fn shutdown_save_writes_final_snapshot() {
     s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
     for i in 0..50 {
         let key = format!("snap:{i}");
-        let frame = format!(
-            "*3\r\n$3\r\nSET\r\n${}\r\n{}\r\n$2\r\nok\r\n",
-            key.len(),
-            key
-        );
+        let frame = format!("*3\r\n$3\r\nSET\r\n${}\r\n{}\r\n$2\r\nok\r\n", key.len(), key);
         s.write_all(frame.as_bytes()).unwrap();
         let mut ack = [0u8; 5];
         s.read_exact(&mut ack).expect("SET ack");
@@ -158,11 +151,7 @@ fn shutdown_save_writes_final_snapshot() {
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .filter(|n| n.starts_with("dump-") && n.ends_with(".rdb"))
         .collect();
-    assert!(
-        !dumps.is_empty(),
-        "SHUTDOWN SAVE left no dump-*.rdb in {}",
-        tmp.display()
-    );
+    assert!(!dumps.is_empty(), "SHUTDOWN SAVE left no dump-*.rdb in {}", tmp.display());
     eprintln!("shutdown_save: final snapshots {dumps:?}");
 
     let _ = std::fs::remove_dir_all(&tmp);

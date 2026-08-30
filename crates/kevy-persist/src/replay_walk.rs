@@ -24,7 +24,10 @@ pub(crate) enum ReplayStop {
     /// truncation's clothes. Separated from `TruncatedTail` so the operator
     /// message stops calling it "a partial frame (crash mid-append,
     /// recoverable)": CI printed exactly that for 27,485,178 bytes.
-    LengthOutranFile { claimed: u64, available: u64 },
+    LengthOutranFile {
+        claimed: u64,
+        available: u64,
+    },
     CorruptFrame(String),
 }
 

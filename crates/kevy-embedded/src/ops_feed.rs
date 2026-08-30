@@ -19,7 +19,6 @@ use kevy_replicate::feed::{FeedRead, FeedSource};
 
 use crate::store::Store;
 
-
 /// One mutation delivered by [`Store::changes_since`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Change {
@@ -58,9 +57,19 @@ pub enum FeedError {
 /// Multi-key / keyless verbs the fail-open prefix filter never drops
 /// (their key layout isn't argv[1], or they touch everything).
 const FILTER_DENYLIST: &[&[u8]] = &[
-    b"DEL", b"UNLINK", b"MSET", b"COPY", b"RENAME", b"FLUSHALL", b"BITOP",
-    b"SINTERSTORE", b"SUNIONSTORE", b"SDIFFSTORE",
-    b"ZINTERSTORE", b"ZUNIONSTORE", b"ZDIFFSTORE",
+    b"DEL",
+    b"UNLINK",
+    b"MSET",
+    b"COPY",
+    b"RENAME",
+    b"FLUSHALL",
+    b"BITOP",
+    b"SINTERSTORE",
+    b"SUNIONSTORE",
+    b"SDIFFSTORE",
+    b"ZINTERSTORE",
+    b"ZUNIONSTORE",
+    b"ZDIFFSTORE",
 ];
 
 fn matches_prefixes(argv: &[Vec<u8>], prefixes: &[&[u8]]) -> bool {
@@ -172,7 +181,10 @@ impl Store {
 
     /// Clean-close half of the continuity contract (called from the
     /// DropGuard after the AOF flush).
-    pub(crate) fn feed_write_close_marker(shards_feed: &Arc<Mutex<FeedSource>>, dir: &std::path::Path) {
+    pub(crate) fn feed_write_close_marker(
+        shards_feed: &Arc<Mutex<FeedSource>>,
+        dir: &std::path::Path,
+    ) {
         let g = shards_feed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let (generation, next) = g.tail();
         if let Err(e) = kevy_persist::feed_meta::write_feed_meta(dir, 0, generation, next) {

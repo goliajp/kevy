@@ -71,7 +71,9 @@ impl Server {
         let stop_thread = stop.clone();
         let dir_thread = dir.clone();
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(8)).bind([127, 0, 0, 1], port).shards(8)
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(8))
+                .bind([127, 0, 0, 1], port)
+                .shards(8)
                 .with_data_dir(dir_thread);
             rt.run(stop_thread).unwrap();
         });
@@ -126,7 +128,19 @@ fn create_backfill_query_cursor_count_verify_drop() {
 
     let r = cmd(
         &mut c,
-        &[b"IDX.CREATE", b"age_idx", b"ON", b"PREFIX", b"user:", b"FIELD", b"age", b"TYPE", b"i64", b"KIND", b"range"],
+        &[
+            b"IDX.CREATE",
+            b"age_idx",
+            b"ON",
+            b"PREFIX",
+            b"user:",
+            b"FIELD",
+            b"age",
+            b"TYPE",
+            b"i64",
+            b"KIND",
+            b"range",
+        ],
     );
     assert_eq!(r, b"+OK\r\n");
 
@@ -134,10 +148,8 @@ fn create_backfill_query_cursor_count_verify_drop() {
     cmd(&mut c, &[b"HSET", b"user:live", b"age", b"18"]);
 
     // Query: ages [18, 30] → live(18) + rows 20..=30 = 12 hits.
-    let r = query_ready(
-        &mut c,
-        &[b"IDX.QUERY", b"age_idx", b"RANGE", b"18", b"30", b"LIMIT", b"100"],
-    );
+    let r =
+        query_ready(&mut c, &[b"IDX.QUERY", b"age_idx", b"RANGE", b"18", b"30", b"LIMIT", b"100"]);
     let s = String::from_utf8_lossy(&r);
     assert!(s.contains("user:live"), "live-written row present: {s}");
     assert!(s.contains("user:0"), "backfilled row present: {s}");
@@ -152,7 +164,17 @@ fn create_backfill_query_cursor_count_verify_drop() {
     assert_ne!(cursor, "0", "more pages: {s1}");
     let r2 = cmd(
         &mut c,
-        &[b"IDX.QUERY", b"age_idx", b"RANGE", b"18", b"30", b"LIMIT", b"100", b"CURSOR", cursor.as_bytes()],
+        &[
+            b"IDX.QUERY",
+            b"age_idx",
+            b"RANGE",
+            b"18",
+            b"30",
+            b"LIMIT",
+            b"100",
+            b"CURSOR",
+            cursor.as_bytes(),
+        ],
     );
     let s2 = String::from_utf8_lossy(&r2);
     assert_eq!(s1.matches("user:").count(), 5);
@@ -197,20 +219,65 @@ fn hydration_and_compose() {
         cmd(
             &mut c,
             &[
-                b"HSET", format!("emp:{i}").as_bytes(),
-                b"age", format!("{}", 20 + i).as_bytes(),
-                b"dept", if i % 2 == 0 { b"eng" } else { b"ops" },
-                b"name", format!("emp-{i}").as_bytes(),
+                b"HSET",
+                format!("emp:{i}").as_bytes(),
+                b"age",
+                format!("{}", 20 + i).as_bytes(),
+                b"dept",
+                if i % 2 == 0 { b"eng" } else { b"ops" },
+                b"name",
+                format!("emp-{i}").as_bytes(),
             ],
         );
     }
-    cmd(&mut c, &[b"IDX.CREATE", b"e_age", b"ON", b"PREFIX", b"emp:", b"FIELD", b"age", b"TYPE", b"i64", b"KIND", b"range"]);
-    cmd(&mut c, &[b"IDX.CREATE", b"e_dept", b"ON", b"PREFIX", b"emp:", b"FIELD", b"dept", b"TYPE", b"str", b"KIND", b"range"]);
+    cmd(
+        &mut c,
+        &[
+            b"IDX.CREATE",
+            b"e_age",
+            b"ON",
+            b"PREFIX",
+            b"emp:",
+            b"FIELD",
+            b"age",
+            b"TYPE",
+            b"i64",
+            b"KIND",
+            b"range",
+        ],
+    );
+    cmd(
+        &mut c,
+        &[
+            b"IDX.CREATE",
+            b"e_dept",
+            b"ON",
+            b"PREFIX",
+            b"emp:",
+            b"FIELD",
+            b"dept",
+            b"TYPE",
+            b"str",
+            b"KIND",
+            b"range",
+        ],
+    );
 
     // FIELDS hydration: rows come back with name+dept from the owner shard.
     let r = query_ready(
         &mut c,
-        &[b"IDX.QUERY", b"e_age", b"RANGE", b"20", b"24", b"LIMIT", b"100", b"FIELDS", b"name", b"dept"],
+        &[
+            b"IDX.QUERY",
+            b"e_age",
+            b"RANGE",
+            b"20",
+            b"24",
+            b"LIMIT",
+            b"100",
+            b"FIELDS",
+            b"name",
+            b"dept",
+        ],
     );
     let s = String::from_utf8_lossy(&r);
     assert!(s.contains("emp-0"), "hydrated name: {s}");
@@ -220,7 +287,20 @@ fn hydration_and_compose() {
     // COMPOSE AND: age in [20,29] AND dept == eng → emp:0,2,4,6,8.
     let r = query_ready(
         &mut c,
-        &[b"IDX.QUERY", b"COMPOSE", b"AND", b"e_age", b"RANGE", b"20", b"29", b"e_dept", b"EQ", b"eng", b"LIMIT", b"100"],
+        &[
+            b"IDX.QUERY",
+            b"COMPOSE",
+            b"AND",
+            b"e_age",
+            b"RANGE",
+            b"20",
+            b"29",
+            b"e_dept",
+            b"EQ",
+            b"eng",
+            b"LIMIT",
+            b"100",
+        ],
     );
     let s = String::from_utf8_lossy(&r);
     assert_eq!(s.matches("emp:").count(), 5, "{s}");
@@ -229,7 +309,20 @@ fn hydration_and_compose() {
     // COMPOSE OR: age in [20,21] OR dept == eng → 0..=1 ∪ evens = 11 keys.
     let r = cmd(
         &mut c,
-        &[b"IDX.QUERY", b"COMPOSE", b"OR", b"e_age", b"RANGE", b"20", b"21", b"e_dept", b"EQ", b"eng", b"LIMIT", b"100"],
+        &[
+            b"IDX.QUERY",
+            b"COMPOSE",
+            b"OR",
+            b"e_age",
+            b"RANGE",
+            b"20",
+            b"21",
+            b"e_dept",
+            b"EQ",
+            b"eng",
+            b"LIMIT",
+            b"100",
+        ],
     );
     let s = String::from_utf8_lossy(&r);
     assert_eq!(s.matches("emp:").count(), 11, "{s}");
@@ -237,14 +330,42 @@ fn hydration_and_compose() {
     // COMPOSE cursor pagination (key-ordered, no overlap).
     let r1 = cmd(
         &mut c,
-        &[b"IDX.QUERY", b"COMPOSE", b"OR", b"e_age", b"RANGE", b"20", b"21", b"e_dept", b"EQ", b"eng", b"LIMIT", b"4"],
+        &[
+            b"IDX.QUERY",
+            b"COMPOSE",
+            b"OR",
+            b"e_age",
+            b"RANGE",
+            b"20",
+            b"21",
+            b"e_dept",
+            b"EQ",
+            b"eng",
+            b"LIMIT",
+            b"4",
+        ],
     );
     let s1 = String::from_utf8_lossy(&r1);
     let cursor = s1.lines().nth(2).unwrap().to_string();
     assert_ne!(cursor, "0");
     let r2 = cmd(
         &mut c,
-        &[b"IDX.QUERY", b"COMPOSE", b"OR", b"e_age", b"RANGE", b"20", b"21", b"e_dept", b"EQ", b"eng", b"LIMIT", b"100", b"CURSOR", cursor.as_bytes()],
+        &[
+            b"IDX.QUERY",
+            b"COMPOSE",
+            b"OR",
+            b"e_age",
+            b"RANGE",
+            b"20",
+            b"21",
+            b"e_dept",
+            b"EQ",
+            b"eng",
+            b"LIMIT",
+            b"100",
+            b"CURSOR",
+            cursor.as_bytes(),
+        ],
     );
     let s2 = String::from_utf8_lossy(&r2);
     assert_eq!(s1.matches("emp:").count() + s2.matches("emp:").count(), 11, "{s1} // {s2}");
@@ -255,7 +376,22 @@ fn hydration_and_compose() {
     // COMPOSE with hydration.
     let r = cmd(
         &mut c,
-        &[b"IDX.QUERY", b"COMPOSE", b"AND", b"e_age", b"RANGE", b"20", b"23", b"e_dept", b"EQ", b"eng", b"LIMIT", b"10", b"FIELDS", b"name"],
+        &[
+            b"IDX.QUERY",
+            b"COMPOSE",
+            b"AND",
+            b"e_age",
+            b"RANGE",
+            b"20",
+            b"23",
+            b"e_dept",
+            b"EQ",
+            b"eng",
+            b"LIMIT",
+            b"10",
+            b"FIELDS",
+            b"name",
+        ],
     );
     let s = String::from_utf8_lossy(&r);
     assert!(s.contains("emp-0") && s.contains("emp-2"), "{s}");
@@ -271,7 +407,21 @@ fn maxmem_budget_fails_declaratively() {
     // 64-byte budget cannot hold 200 entries → FailedOverBudget.
     cmd(
         &mut c,
-        &[b"IDX.CREATE", b"tiny", b"ON", b"PREFIX", b"big:", b"FIELD", b"v", b"TYPE", b"i64", b"KIND", b"range", b"MAXMEM", b"64"],
+        &[
+            b"IDX.CREATE",
+            b"tiny",
+            b"ON",
+            b"PREFIX",
+            b"big:",
+            b"FIELD",
+            b"v",
+            b"TYPE",
+            b"i64",
+            b"KIND",
+            b"range",
+            b"MAXMEM",
+            b"64",
+        ],
     );
     let mut over = false;
     for _ in 0..100 {
@@ -301,19 +451,35 @@ fn text_kind_match_bm25() {
     }
     let r = cmd(
         &mut c,
-        &[b"IDX.CREATE", b"d_body", b"ON", b"PREFIX", b"doc:", b"FIELD", b"body", b"TYPE", b"str", b"KIND", b"text"],
+        &[
+            b"IDX.CREATE",
+            b"d_body",
+            b"ON",
+            b"PREFIX",
+            b"doc:",
+            b"FIELD",
+            b"body",
+            b"TYPE",
+            b"str",
+            b"KIND",
+            b"text",
+        ],
     );
     assert_eq!(r, b"+OK\r\n", "{:?}", String::from_utf8_lossy(&r));
 
     // Latin match, ranked: doc:2 mentions rust AND search-adjacent terms.
-    let r = query_ready(&mut c, &[b"IDX.QUERY", b"d_body", b"MATCH", b"rust text search", b"LIMIT", b"10"]);
+    let r = query_ready(
+        &mut c,
+        &[b"IDX.QUERY", b"d_body", b"MATCH", b"rust text search", b"LIMIT", b"10"],
+    );
     let s = String::from_utf8_lossy(&r);
     assert!(s.contains("doc:1") && s.contains("doc:2"), "{s}");
     assert!(s.find("doc:2\r").unwrap() < s.find("doc:1\r").unwrap(), "doc:2 ranks first: {s}");
     assert!(!s.contains("doc:4"), "unrelated doc absent: {s}");
 
     // CJK bigram match.
-    let r = cmd(&mut c, &[b"IDX.QUERY", b"d_body", b"MATCH", "中文分词".as_bytes(), b"LIMIT", b"10"]);
+    let r =
+        cmd(&mut c, &[b"IDX.QUERY", b"d_body", b"MATCH", "中文分词".as_bytes(), b"LIMIT", b"10"]);
     let s = String::from_utf8_lossy(&r);
     assert!(s.contains("doc:3"), "{s}");
     let r = cmd(&mut c, &[b"IDX.QUERY", b"d_body", b"MATCH", "検索".as_bytes(), b"LIMIT", b"10"]);
@@ -329,7 +495,10 @@ fn text_kind_match_bm25() {
     assert!(!String::from_utf8_lossy(&r).contains("doc:1"));
 
     // hydration + VERIFY stats + LIST.
-    let r = cmd(&mut c, &[b"IDX.QUERY", b"d_body", b"MATCH", b"rust", b"LIMIT", b"5", b"FIELDS", b"body"]);
+    let r = cmd(
+        &mut c,
+        &[b"IDX.QUERY", b"d_body", b"MATCH", b"rust", b"LIMIT", b"5", b"FIELDS", b"body"],
+    );
     let s = String::from_utf8_lossy(&r);
     assert!(s.contains("key value store"), "hydrated body: {s}");
     let r = cmd(&mut c, &[b"IDX.VERIFY", b"d_body"]);
@@ -363,8 +532,23 @@ fn ann_kind_knn_e2e() {
     }
     let r = cmd(
         &mut c,
-        &[b"IDX.CREATE", b"e_v", b"ON", b"PREFIX", b"e:", b"FIELD", b"v",
-          b"TYPE", b"vector", b"KIND", b"ann", b"DIM", b"3", b"DISTANCE", b"l2"],
+        &[
+            b"IDX.CREATE",
+            b"e_v",
+            b"ON",
+            b"PREFIX",
+            b"e:",
+            b"FIELD",
+            b"v",
+            b"TYPE",
+            b"vector",
+            b"KIND",
+            b"ann",
+            b"DIM",
+            b"3",
+            b"DISTANCE",
+            b"l2",
+        ],
     );
     assert_eq!(r, b"+OK\r\n", "{:?}", String::from_utf8_lossy(&r));
     // query near point i=100 (t=10.0)
@@ -428,10 +612,9 @@ fn prefix_digest_server_matches_embedded() {
     let s = String::from_utf8_lossy(&r);
     assert!(s.starts_with("*2\r\n:5\r\n"), "count 5: {s}");
     // must equal the embedded digest of identical data (cross-surface pin)
-    let store = kevy_embedded::Store::open(
-        kevy_embedded::Config::default().with_ttl_reaper_manual(),
-    )
-    .unwrap();
+    let store =
+        kevy_embedded::Store::open(kevy_embedded::Config::default().with_ttl_reaper_manual())
+            .unwrap();
     store.set(b"pd:str", b"hello").unwrap();
     store.hset(b"pd:hash", &[(b"a", b"1"), (b"b", b"2")]).unwrap();
     store.rpush(b"pd:list", &[b"x", b"y"]).unwrap();
@@ -447,15 +630,40 @@ fn agg_kind_group_by_e2e() {
     let srv = Server::start();
     let mut c = srv.connect();
     // orders: status group, amount value
-    for (i, (st, amt)) in [("paid", 100), ("paid", 250), ("open", 40), ("paid", 100),
-                            ("open", 999), ("void", 7)].iter().enumerate() {
-        cmd(&mut c, &[b"HSET", format!("ord:{i}").as_bytes(), b"status", st.as_bytes(),
-                       b"amount", amt.to_string().as_bytes()]);
+    for (i, (st, amt)) in
+        [("paid", 100), ("paid", 250), ("open", 40), ("paid", 100), ("open", 999), ("void", 7)]
+            .iter()
+            .enumerate()
+    {
+        cmd(
+            &mut c,
+            &[
+                b"HSET",
+                format!("ord:{i}").as_bytes(),
+                b"status",
+                st.as_bytes(),
+                b"amount",
+                amt.to_string().as_bytes(),
+            ],
+        );
     }
     let r = cmd(
         &mut c,
-        &[b"IDX.CREATE", b"ord_amt", b"ON", b"PREFIX", b"ord:", b"FIELD", b"amount",
-          b"TYPE", b"i64", b"KIND", b"agg", b"GROUPBY", b"status"],
+        &[
+            b"IDX.CREATE",
+            b"ord_amt",
+            b"ON",
+            b"PREFIX",
+            b"ord:",
+            b"FIELD",
+            b"amount",
+            b"TYPE",
+            b"i64",
+            b"KIND",
+            b"agg",
+            b"GROUPBY",
+            b"status",
+        ],
     );
     assert_eq!(r, b"+OK\r\n", "{:?}", String::from_utf8_lossy(&r));
     // single group stats
@@ -465,7 +673,11 @@ fn agg_kind_group_by_e2e() {
     assert!(s.contains("100") && s.contains("250") && s.contains("150"), "min/max/avg: {s}");
     // unknown group = count 0, nils
     let r = cmd(&mut c, &[b"IDX.QUERY", b"ord_amt", b"GROUP", b"nope"]);
-    assert!(String::from_utf8_lossy(&r).starts_with("*5\r\n$1\r\n0\r\n"), "{:?}", String::from_utf8_lossy(&r));
+    assert!(
+        String::from_utf8_lossy(&r).starts_with("*5\r\n$1\r\n0\r\n"),
+        "{:?}",
+        String::from_utf8_lossy(&r)
+    );
     // GROUPS ranked by sum: open (1039) > paid (450) > void (7)
     let r = cmd(&mut c, &[b"IDX.QUERY", b"ord_amt", b"GROUPS", b"BY", b"sum", b"LIMIT", b"10"]);
     let s = String::from_utf8_lossy(&r);
@@ -493,11 +705,41 @@ fn agg_kind_group_by_e2e() {
     // `excluded`, not a coerce failure of some scalar audit.
     assert!(s.contains("excluded\r\n$1\r\n1"), "excluded visible: {s}");
     // bad CREATEs rejected
-    let r = cmd(&mut c, &[b"IDX.CREATE", b"bad1", b"ON", b"PREFIX", b"x:", b"FIELD", b"f",
-                           b"TYPE", b"i64", b"KIND", b"agg"]);
+    let r = cmd(
+        &mut c,
+        &[
+            b"IDX.CREATE",
+            b"bad1",
+            b"ON",
+            b"PREFIX",
+            b"x:",
+            b"FIELD",
+            b"f",
+            b"TYPE",
+            b"i64",
+            b"KIND",
+            b"agg",
+        ],
+    );
     assert!(String::from_utf8_lossy(&r).contains("GROUPBY"), "{:?}", String::from_utf8_lossy(&r));
-    let r = cmd(&mut c, &[b"IDX.CREATE", b"bad2", b"ON", b"PREFIX", b"x:", b"FIELD", b"f",
-                           b"TYPE", b"str", b"KIND", b"agg", b"GROUPBY", b"g"]);
+    let r = cmd(
+        &mut c,
+        &[
+            b"IDX.CREATE",
+            b"bad2",
+            b"ON",
+            b"PREFIX",
+            b"x:",
+            b"FIELD",
+            b"f",
+            b"TYPE",
+            b"str",
+            b"KIND",
+            b"agg",
+            b"GROUPBY",
+            b"g",
+        ],
+    );
     assert!(String::from_utf8_lossy(&r).contains("i64|f64"), "{:?}", String::from_utf8_lossy(&r));
 }
 
@@ -513,12 +755,47 @@ fn fields_multi_attribute_create_and_rank() {
     // title; in post:2 it is only in the body. The weight must make
     // post:1 rank first — the comparability a single-field index cannot
     // give, since it would score the two fields on separate corpora.
-    cmd(&mut c, &[b"HSET", b"post:1", b"title", b"rust", b"body", b"a long body about other things entirely"]);
-    cmd(&mut c, &[b"HSET", b"post:2", b"title", b"unrelated", b"body", b"this body mentions rust once among much filler text"]);
+    cmd(
+        &mut c,
+        &[
+            b"HSET",
+            b"post:1",
+            b"title",
+            b"rust",
+            b"body",
+            b"a long body about other things entirely",
+        ],
+    );
+    cmd(
+        &mut c,
+        &[
+            b"HSET",
+            b"post:2",
+            b"title",
+            b"unrelated",
+            b"body",
+            b"this body mentions rust once among much filler text",
+        ],
+    );
     let r = cmd(
         &mut c,
-        &[b"IDX.CREATE", b"posts", b"ON", b"PREFIX", b"post:", b"FIELDS", b"title", b"body",
-          b"WEIGHTS", b"5", b"1", b"TYPE", b"str", b"KIND", b"text"],
+        &[
+            b"IDX.CREATE",
+            b"posts",
+            b"ON",
+            b"PREFIX",
+            b"post:",
+            b"FIELDS",
+            b"title",
+            b"body",
+            b"WEIGHTS",
+            b"5",
+            b"1",
+            b"TYPE",
+            b"str",
+            b"KIND",
+            b"text",
+        ],
     );
     assert_eq!(r, b"+OK\r\n", "{:?}", String::from_utf8_lossy(&r));
 
@@ -540,18 +817,51 @@ fn fields_defaults_and_non_text_refusal() {
     cmd(&mut c, &[b"HSET", b"d:1", b"a", b"alpha", b"b", b"beta"]);
     let r = cmd(
         &mut c,
-        &[b"IDX.CREATE", b"unweighted", b"ON", b"PREFIX", b"d:", b"FIELDS", b"a", b"b",
-          b"TYPE", b"str", b"KIND", b"text"],
+        &[
+            b"IDX.CREATE",
+            b"unweighted",
+            b"ON",
+            b"PREFIX",
+            b"d:",
+            b"FIELDS",
+            b"a",
+            b"b",
+            b"TYPE",
+            b"str",
+            b"KIND",
+            b"text",
+        ],
     );
-    assert_eq!(r, b"+OK\r\n", "unweighted FIELDS defaults to 1.0: {:?}", String::from_utf8_lossy(&r));
+    assert_eq!(
+        r,
+        b"+OK\r\n",
+        "unweighted FIELDS defaults to 1.0: {:?}",
+        String::from_utf8_lossy(&r)
+    );
 
     // A range index reads one scalar; two fields must be refused.
     let r = cmd(
         &mut c,
-        &[b"IDX.CREATE", b"badrange", b"ON", b"PREFIX", b"d:", b"FIELDS", b"a", b"b",
-          b"TYPE", b"i64", b"KIND", b"range"],
+        &[
+            b"IDX.CREATE",
+            b"badrange",
+            b"ON",
+            b"PREFIX",
+            b"d:",
+            b"FIELDS",
+            b"a",
+            b"b",
+            b"TYPE",
+            b"i64",
+            b"KIND",
+            b"range",
+        ],
     );
-    assert!(String::from_utf8_lossy(&r).starts_with("-ERR"), "range refuses two fields: {:?}", String::from_utf8_lossy(&r));
+    assert!(
+        String::from_utf8_lossy(&r).starts_with("-ERR"),
+        "range refuses two fields: {:?}",
+        String::from_utf8_lossy(&r)
+    );
 }
 
 /// Mismatched WEIGHTS/FIELDS counts and empty FIELDS are usage errors,
@@ -561,10 +871,34 @@ fn fields_arity_errors() {
     let srv = Server::start();
     let mut c = srv.connect();
     let bad: &[&[&[u8]]] = &[
-        &[b"IDX.CREATE", b"x", b"ON", b"PREFIX", b"p:", b"FIELDS", b"a", b"b",
-          b"WEIGHTS", b"1", b"TYPE", b"str", b"KIND", b"text"], // 2 fields, 1 weight
-        &[b"IDX.CREATE", b"x", b"ON", b"PREFIX", b"p:", b"FIELDS",
-          b"TYPE", b"str", b"KIND", b"text"], // no field names
+        &[
+            b"IDX.CREATE",
+            b"x",
+            b"ON",
+            b"PREFIX",
+            b"p:",
+            b"FIELDS",
+            b"a",
+            b"b",
+            b"WEIGHTS",
+            b"1",
+            b"TYPE",
+            b"str",
+            b"KIND",
+            b"text",
+        ], // 2 fields, 1 weight
+        &[
+            b"IDX.CREATE",
+            b"x",
+            b"ON",
+            b"PREFIX",
+            b"p:",
+            b"FIELDS",
+            b"TYPE",
+            b"str",
+            b"KIND",
+            b"text",
+        ], // no field names
     ];
     for parts in bad {
         let r = cmd(&mut c, parts);
@@ -590,8 +924,21 @@ fn positions_create_succeeds_and_ranking_is_unaffected() {
     cmd(&mut c, &[b"HSET", b"doc:2", b"body", b"quick systems programming"]);
     let r = cmd(
         &mut c,
-        &[b"IDX.CREATE", b"withpos", b"ON", b"PREFIX", b"doc:", b"FIELD", b"body",
-          b"TYPE", b"str", b"KIND", b"text", b"WITH", b"POSITIONS"],
+        &[
+            b"IDX.CREATE",
+            b"withpos",
+            b"ON",
+            b"PREFIX",
+            b"doc:",
+            b"FIELD",
+            b"body",
+            b"TYPE",
+            b"str",
+            b"KIND",
+            b"text",
+            b"WITH",
+            b"POSITIONS",
+        ],
     );
     assert_eq!(r, b"+OK\r\n", "WITH POSITIONS creates: {:?}", String::from_utf8_lossy(&r));
     let r = query_ready(&mut c, &[b"IDX.QUERY", b"withpos", b"MATCH", b"quick", b"LIMIT", b"10"]);
@@ -609,8 +956,21 @@ fn positions_flag_is_text_only_and_validated() {
     // side-channel, so the flag must be refused.
     let r = cmd(
         &mut c,
-        &[b"IDX.CREATE", b"rangepos", b"ON", b"PREFIX", b"n:", b"FIELD", b"age",
-          b"TYPE", b"i64", b"KIND", b"range", b"WITH", b"POSITIONS"],
+        &[
+            b"IDX.CREATE",
+            b"rangepos",
+            b"ON",
+            b"PREFIX",
+            b"n:",
+            b"FIELD",
+            b"age",
+            b"TYPE",
+            b"i64",
+            b"KIND",
+            b"range",
+            b"WITH",
+            b"POSITIONS",
+        ],
     );
     assert!(
         String::from_utf8_lossy(&r).starts_with("-ERR"),
@@ -620,8 +980,21 @@ fn positions_flag_is_text_only_and_validated() {
     // WITH is a keyword flag that only spells POSITIONS.
     let r = cmd(
         &mut c,
-        &[b"IDX.CREATE", b"junkwith", b"ON", b"PREFIX", b"t:", b"FIELD", b"body",
-          b"TYPE", b"str", b"KIND", b"text", b"WITH", b"NONSENSE"],
+        &[
+            b"IDX.CREATE",
+            b"junkwith",
+            b"ON",
+            b"PREFIX",
+            b"t:",
+            b"FIELD",
+            b"body",
+            b"TYPE",
+            b"str",
+            b"KIND",
+            b"text",
+            b"WITH",
+            b"NONSENSE",
+        ],
     );
     assert!(
         String::from_utf8_lossy(&r).starts_with("-ERR"),
@@ -643,12 +1016,26 @@ fn phrase_query_matches_only_adjacent_docs() {
     cmd(&mut c, &[b"HSET", b"p:3", b"body", b"a brown quick animal appears"]);
     let r = cmd(
         &mut c,
-        &[b"IDX.CREATE", b"ph", b"ON", b"PREFIX", b"p:", b"FIELD", b"body",
-          b"TYPE", b"str", b"KIND", b"text", b"WITH", b"POSITIONS"],
+        &[
+            b"IDX.CREATE",
+            b"ph",
+            b"ON",
+            b"PREFIX",
+            b"p:",
+            b"FIELD",
+            b"body",
+            b"TYPE",
+            b"str",
+            b"KIND",
+            b"text",
+            b"WITH",
+            b"POSITIONS",
+        ],
     );
     assert_eq!(r, b"+OK\r\n", "{:?}", String::from_utf8_lossy(&r));
     // The MATCH text is the single quoted argument `"quick brown"`.
-    let r = query_ready(&mut c, &[b"IDX.QUERY", b"ph", b"MATCH", b"\"quick brown\"", b"LIMIT", b"10"]);
+    let r =
+        query_ready(&mut c, &[b"IDX.QUERY", b"ph", b"MATCH", b"\"quick brown\"", b"LIMIT", b"10"]);
     let s = String::from_utf8_lossy(&r);
     assert!(s.contains("p:1"), "adjacent, in-order phrase matches p:1: {s}");
     assert!(!s.contains("p:2"), "far-apart terms are not a phrase: {s}");
@@ -656,7 +1043,10 @@ fn phrase_query_matches_only_adjacent_docs() {
     // A plain term query still ORs — every doc has "brown".
     let r = query_ready(&mut c, &[b"IDX.QUERY", b"ph", b"MATCH", b"brown", b"LIMIT", b"10"]);
     let s = String::from_utf8_lossy(&r);
-    assert!(s.contains("p:1") && s.contains("p:2") && s.contains("p:3"), "term OR matches all: {s}");
+    assert!(
+        s.contains("p:1") && s.contains("p:2") && s.contains("p:3"),
+        "term OR matches all: {s}"
+    );
 }
 
 /// HIGHLIGHT adds a trailing per-hit element naming each field and the
@@ -673,8 +1063,21 @@ fn highlight_returns_match_spans() {
     // does.
     let r = cmd(
         &mut c,
-        &[b"IDX.CREATE", b"hi", b"ON", b"PREFIX", b"h:", b"FIELD", b"body",
-          b"TYPE", b"str", b"KIND", b"text", b"WITH", b"POSITIONS"],
+        &[
+            b"IDX.CREATE",
+            b"hi",
+            b"ON",
+            b"PREFIX",
+            b"h:",
+            b"FIELD",
+            b"body",
+            b"TYPE",
+            b"str",
+            b"KIND",
+            b"text",
+            b"WITH",
+            b"POSITIONS",
+        ],
     );
     assert_eq!(r, b"+OK\r\n", "{:?}", String::from_utf8_lossy(&r));
 
@@ -710,8 +1113,19 @@ fn prefix_query_over_the_wire() {
     cmd(&mut c, &[b"HSET", b"p:3", b"body", b"slow turtle"]);
     let r = cmd(
         &mut c,
-        &[b"IDX.CREATE", b"pf", b"ON", b"PREFIX", b"p:", b"FIELD", b"body",
-          b"TYPE", b"str", b"KIND", b"text"],
+        &[
+            b"IDX.CREATE",
+            b"pf",
+            b"ON",
+            b"PREFIX",
+            b"p:",
+            b"FIELD",
+            b"body",
+            b"TYPE",
+            b"str",
+            b"KIND",
+            b"text",
+        ],
     );
     assert_eq!(r, b"+OK\r\n", "{:?}", String::from_utf8_lossy(&r));
     let r = query_ready(&mut c, &[b"IDX.QUERY", b"pf", b"MATCH", b"qui*", b"LIMIT", b"10"]);
@@ -733,8 +1147,19 @@ fn typo_query_over_the_wire() {
     cmd(&mut c, &[b"HSET", b"t:2", b"body", b"slow green turtle"]);
     let r = cmd(
         &mut c,
-        &[b"IDX.CREATE", b"tp", b"ON", b"PREFIX", b"t:", b"FIELD", b"body",
-          b"TYPE", b"str", b"KIND", b"text"],
+        &[
+            b"IDX.CREATE",
+            b"tp",
+            b"ON",
+            b"PREFIX",
+            b"t:",
+            b"FIELD",
+            b"body",
+            b"TYPE",
+            b"str",
+            b"KIND",
+            b"text",
+        ],
     );
     assert_eq!(r, b"+OK\r\n", "{:?}", String::from_utf8_lossy(&r));
     // "quik" is one edit from "quick": exact finds nothing, TYPO 1 finds it.
@@ -766,8 +1191,19 @@ fn offset_pages_the_merged_ranking() {
     }
     let r = cmd(
         &mut c,
-        &[b"IDX.CREATE", b"off", b"ON", b"PREFIX", b"o:", b"FIELD", b"body",
-          b"TYPE", b"str", b"KIND", b"text"],
+        &[
+            b"IDX.CREATE",
+            b"off",
+            b"ON",
+            b"PREFIX",
+            b"o:",
+            b"FIELD",
+            b"body",
+            b"TYPE",
+            b"str",
+            b"KIND",
+            b"text",
+        ],
     );
     assert_eq!(r, b"+OK\r\n", "{:?}", String::from_utf8_lossy(&r));
 
@@ -805,12 +1241,39 @@ fn offset_pages_the_merged_ranking() {
 fn field_scope_over_the_wire() {
     let srv = Server::start();
     let mut c = srv.connect();
-    cmd(&mut c, &[b"HSET", b"f:1", b"title", b"rust engine", b"body", b"a long body about gardening"]);
-    cmd(&mut c, &[b"HSET", b"f:2", b"title", b"gardening weekly", b"body", b"this body mentions rust once or twice"]);
+    cmd(
+        &mut c,
+        &[b"HSET", b"f:1", b"title", b"rust engine", b"body", b"a long body about gardening"],
+    );
+    cmd(
+        &mut c,
+        &[
+            b"HSET",
+            b"f:2",
+            b"title",
+            b"gardening weekly",
+            b"body",
+            b"this body mentions rust once or twice",
+        ],
+    );
     let r = cmd(
         &mut c,
-        &[b"IDX.CREATE", b"fs", b"ON", b"PREFIX", b"f:", b"FIELDS", b"title", b"body",
-          b"TYPE", b"str", b"KIND", b"text", b"WITH", b"POSITIONS"],
+        &[
+            b"IDX.CREATE",
+            b"fs",
+            b"ON",
+            b"PREFIX",
+            b"f:",
+            b"FIELDS",
+            b"title",
+            b"body",
+            b"TYPE",
+            b"str",
+            b"KIND",
+            b"text",
+            b"WITH",
+            b"POSITIONS",
+        ],
     );
     assert_eq!(r, b"+OK\r\n", "{:?}", String::from_utf8_lossy(&r));
 
@@ -876,14 +1339,41 @@ fn filter_over_the_wire() {
     for i in 0..10u32 {
         let body = format!("rust {}", "rust ".repeat((10 - i) as usize));
         let price = format!("{}", (10 - i) * 10);
-        cmd(&mut c, &[b"HSET", format!("p:{i}").as_bytes(), b"body", body.as_bytes(),
-                      b"price", price.as_bytes(), b"status", if i % 2 == 0 { b"live" } else { b"draft" }]);
+        cmd(
+            &mut c,
+            &[
+                b"HSET",
+                format!("p:{i}").as_bytes(),
+                b"body",
+                body.as_bytes(),
+                b"price",
+                price.as_bytes(),
+                b"status",
+                if i % 2 == 0 { b"live" } else { b"draft" },
+            ],
+        );
     }
     let r = cmd(
         &mut c,
-        &[b"IDX.CREATE", b"pf", b"ON", b"PREFIX", b"p:", b"FIELD", b"body",
-          b"TYPE", b"str", b"KIND", b"text",
-          b"VALUES", b"price", b"status", b"TYPES", b"i64", b"str"],
+        &[
+            b"IDX.CREATE",
+            b"pf",
+            b"ON",
+            b"PREFIX",
+            b"p:",
+            b"FIELD",
+            b"body",
+            b"TYPE",
+            b"str",
+            b"KIND",
+            b"text",
+            b"VALUES",
+            b"price",
+            b"status",
+            b"TYPES",
+            b"i64",
+            b"str",
+        ],
     );
     assert_eq!(r, b"+OK\r\n", "{:?}", String::from_utf8_lossy(&r));
 
@@ -897,7 +1387,19 @@ fn filter_over_the_wire() {
     // rank below those leaders — not an empty page.
     let cheap = query_ready(
         &mut c,
-        &[b"IDX.QUERY", b"pf", b"MATCH", b"rust", b"LIMIT", b"3", b"FILTER", b"price", b"RANGE", b"10", b"50"],
+        &[
+            b"IDX.QUERY",
+            b"pf",
+            b"MATCH",
+            b"rust",
+            b"LIMIT",
+            b"3",
+            b"FILTER",
+            b"price",
+            b"RANGE",
+            b"10",
+            b"50",
+        ],
     );
     let s = String::from_utf8_lossy(&cheap);
     assert!(!s.contains("p:0") && !s.contains("p:1"), "the pricey leaders are out: {s}");
@@ -908,7 +1410,19 @@ fn filter_over_the_wire() {
     // sort above "10".
     let numeric = query_ready(
         &mut c,
-        &[b"IDX.QUERY", b"pf", b"MATCH", b"rust", b"LIMIT", b"10", b"FILTER", b"price", b"RANGE", b"10", b"20"],
+        &[
+            b"IDX.QUERY",
+            b"pf",
+            b"MATCH",
+            b"rust",
+            b"LIMIT",
+            b"10",
+            b"FILTER",
+            b"price",
+            b"RANGE",
+            b"10",
+            b"20",
+        ],
     );
     let s = String::from_utf8_lossy(&numeric);
     assert_eq!(s.matches("p:").count(), 2, "prices 10 and 20 only: {s}");
@@ -916,8 +1430,23 @@ fn filter_over_the_wire() {
     // EQ on a text value, and two predicates ANDing.
     let both = query_ready(
         &mut c,
-        &[b"IDX.QUERY", b"pf", b"MATCH", b"rust", b"LIMIT", b"10",
-          b"FILTER", b"status", b"EQ", b"live", b"FILTER", b"price", b"RANGE", b"10", b"50"],
+        &[
+            b"IDX.QUERY",
+            b"pf",
+            b"MATCH",
+            b"rust",
+            b"LIMIT",
+            b"10",
+            b"FILTER",
+            b"status",
+            b"EQ",
+            b"live",
+            b"FILTER",
+            b"price",
+            b"RANGE",
+            b"10",
+            b"50",
+        ],
     );
     let s = String::from_utf8_lossy(&both);
     assert!(s.contains("p:6") && s.contains("p:8"), "even indexes are live: {s}");
@@ -953,16 +1482,40 @@ fn sort_over_the_wire() {
     for i in 0..10u32 {
         let body = format!("rust {}", "rust ".repeat((10 - i) as usize));
         let price = format!("{}", (10 - i) * 10);
-        cmd(&mut c, &[b"HSET", format!("s:{i}").as_bytes(), b"body", body.as_bytes(),
-                      b"price", price.as_bytes()]);
+        cmd(
+            &mut c,
+            &[
+                b"HSET",
+                format!("s:{i}").as_bytes(),
+                b"body",
+                body.as_bytes(),
+                b"price",
+                price.as_bytes(),
+            ],
+        );
     }
     // Two rows that match but carry no price at all.
     cmd(&mut c, &[b"HSET", b"s:x", b"body", b"rust"]);
     cmd(&mut c, &[b"HSET", b"s:y", b"body", b"rust", b"price", b"not a number"]);
     let r = cmd(
         &mut c,
-        &[b"IDX.CREATE", b"sf", b"ON", b"PREFIX", b"s:", b"FIELD", b"body",
-          b"TYPE", b"str", b"KIND", b"text", b"VALUES", b"price", b"TYPES", b"i64"],
+        &[
+            b"IDX.CREATE",
+            b"sf",
+            b"ON",
+            b"PREFIX",
+            b"s:",
+            b"FIELD",
+            b"body",
+            b"TYPE",
+            b"str",
+            b"KIND",
+            b"text",
+            b"VALUES",
+            b"price",
+            b"TYPES",
+            b"i64",
+        ],
     );
     assert_eq!(r, b"+OK\r\n", "{:?}", String::from_utf8_lossy(&r));
 
@@ -980,7 +1533,10 @@ fn sort_over_the_wire() {
     );
     let s = String::from_utf8_lossy(&asc);
     assert!(s.contains("s:9") && s.contains("s:8") && s.contains("s:7"), "cheapest: {s}");
-    assert!(!s.contains("s:0") && !s.contains("s:1"), "the score leaders are not on this page: {s}");
+    assert!(
+        !s.contains("s:0") && !s.contains("s:1"),
+        "the score leaders are not on this page: {s}"
+    );
 
     // Descending is the other end.
     let desc = query_ready(
@@ -1014,15 +1570,27 @@ fn sort_over_the_wire() {
     // SORT composes with FILTER, and an unstored field errors.
     let both = query_ready(
         &mut c,
-        &[b"IDX.QUERY", b"sf", b"MATCH", b"rust", b"LIMIT", b"2",
-          b"FILTER", b"price", b"RANGE", b"50", b"100", b"SORT", b"price", b"ASC"],
+        &[
+            b"IDX.QUERY",
+            b"sf",
+            b"MATCH",
+            b"rust",
+            b"LIMIT",
+            b"2",
+            b"FILTER",
+            b"price",
+            b"RANGE",
+            b"50",
+            b"100",
+            b"SORT",
+            b"price",
+            b"ASC",
+        ],
     );
     let s = String::from_utf8_lossy(&both);
     assert!(s.contains("s:5") && s.contains("s:4"), "cheapest of the qualifying: {s}");
-    let bad = query_ready(
-        &mut c,
-        &[b"IDX.QUERY", b"sf", b"MATCH", b"rust", b"SORT", b"colour", b"ASC"],
-    );
+    let bad =
+        query_ready(&mut c, &[b"IDX.QUERY", b"sf", b"MATCH", b"rust", b"SORT", b"colour", b"ASC"]);
     let s = String::from_utf8_lossy(&bad);
     assert!(s.starts_with("-ERR") && s.contains("price"), "unstored sort field: {s}");
 }
@@ -1038,18 +1606,45 @@ fn distinct_over_the_wire() {
     // top scorers, so collapsing a score page after the fact would return
     // a short page.
     for (k, reps, price) in [
-        ("a1", 9, "10"), ("a2", 8, "10"),
-        ("b1", 7, "20"), ("b2", 6, "20"),
-        ("c1", 5, "30"), ("c2", 4, "30"),
+        ("a1", 9, "10"),
+        ("a2", 8, "10"),
+        ("b1", 7, "20"),
+        ("b2", 6, "20"),
+        ("c1", 5, "30"),
+        ("c2", 4, "30"),
     ] {
         let body = format!("rust {}", "rust ".repeat(reps));
-        cmd(&mut c, &[b"HSET", format!("g:{k}").as_bytes(), b"body", body.as_bytes(),
-                      b"price", price.as_bytes()]);
+        cmd(
+            &mut c,
+            &[
+                b"HSET",
+                format!("g:{k}").as_bytes(),
+                b"body",
+                body.as_bytes(),
+                b"price",
+                price.as_bytes(),
+            ],
+        );
     }
     let r = cmd(
         &mut c,
-        &[b"IDX.CREATE", b"gf", b"ON", b"PREFIX", b"g:", b"FIELD", b"body",
-          b"TYPE", b"str", b"KIND", b"text", b"VALUES", b"price", b"TYPES", b"i64"],
+        &[
+            b"IDX.CREATE",
+            b"gf",
+            b"ON",
+            b"PREFIX",
+            b"g:",
+            b"FIELD",
+            b"body",
+            b"TYPE",
+            b"str",
+            b"KIND",
+            b"text",
+            b"VALUES",
+            b"price",
+            b"TYPES",
+            b"i64",
+        ],
     );
     assert_eq!(r, b"+OK\r\n", "{:?}", String::from_utf8_lossy(&r));
 
@@ -1076,8 +1671,19 @@ fn distinct_over_the_wire() {
     // Composes with SORT and FILTER.
     let both = query_ready(
         &mut c,
-        &[b"IDX.QUERY", b"gf", b"MATCH", b"rust", b"LIMIT", b"5",
-          b"DISTINCT", b"price", b"SORT", b"price", b"DESC"],
+        &[
+            b"IDX.QUERY",
+            b"gf",
+            b"MATCH",
+            b"rust",
+            b"LIMIT",
+            b"5",
+            b"DISTINCT",
+            b"price",
+            b"SORT",
+            b"price",
+            b"DESC",
+        ],
     );
     let s = String::from_utf8_lossy(&both);
     let c1 = s.find("g:c1").expect("c1 present");
@@ -1085,10 +1691,8 @@ fn distinct_over_the_wire() {
     assert!(c1 < a1, "descending by price puts 30 before 10: {s}");
 
     // An unstored field errors rather than collapsing nothing.
-    let bad = query_ready(
-        &mut c,
-        &[b"IDX.QUERY", b"gf", b"MATCH", b"rust", b"DISTINCT", b"colour"],
-    );
+    let bad =
+        query_ready(&mut c, &[b"IDX.QUERY", b"gf", b"MATCH", b"rust", b"DISTINCT", b"colour"]);
     let s = String::from_utf8_lossy(&bad);
     assert!(s.starts_with("-ERR") && s.contains("price"), "unstored distinct field: {s}");
 }
@@ -1101,18 +1705,45 @@ fn facet_over_the_wire() {
     let srv = Server::start();
     let mut c = srv.connect();
     for (k, reps, price) in [
-        ("a1", 9, "10"), ("a2", 8, "10"),
-        ("b1", 7, "20"), ("b2", 6, "20"),
-        ("c1", 5, "30"), ("c2", 4, "30"),
+        ("a1", 9, "10"),
+        ("a2", 8, "10"),
+        ("b1", 7, "20"),
+        ("b2", 6, "20"),
+        ("c1", 5, "30"),
+        ("c2", 4, "30"),
     ] {
         let body = format!("rust {}", "rust ".repeat(reps));
-        cmd(&mut c, &[b"HSET", format!("f2:{k}").as_bytes(), b"body", body.as_bytes(),
-                      b"price", price.as_bytes()]);
+        cmd(
+            &mut c,
+            &[
+                b"HSET",
+                format!("f2:{k}").as_bytes(),
+                b"body",
+                body.as_bytes(),
+                b"price",
+                price.as_bytes(),
+            ],
+        );
     }
     let r = cmd(
         &mut c,
-        &[b"IDX.CREATE", b"ff", b"ON", b"PREFIX", b"f2:", b"FIELD", b"body",
-          b"TYPE", b"str", b"KIND", b"text", b"VALUES", b"price", b"TYPES", b"i64"],
+        &[
+            b"IDX.CREATE",
+            b"ff",
+            b"ON",
+            b"PREFIX",
+            b"f2:",
+            b"FIELD",
+            b"body",
+            b"TYPE",
+            b"str",
+            b"KIND",
+            b"text",
+            b"VALUES",
+            b"price",
+            b"TYPES",
+            b"i64",
+        ],
     );
     assert_eq!(r, b"+OK\r\n", "{:?}", String::from_utf8_lossy(&r));
 
@@ -1133,18 +1764,45 @@ fn facet_over_the_wire() {
     // FILTER restricts the counts; DISTINCT does not.
     let filtered = query_ready(
         &mut c,
-        &[b"IDX.QUERY", b"ff", b"MATCH", b"rust", b"LIMIT", b"10",
-          b"FILTER", b"price", b"RANGE", b"20", b"30", b"FACET", b"price"],
+        &[
+            b"IDX.QUERY",
+            b"ff",
+            b"MATCH",
+            b"rust",
+            b"LIMIT",
+            b"10",
+            b"FILTER",
+            b"price",
+            b"RANGE",
+            b"20",
+            b"30",
+            b"FACET",
+            b"price",
+        ],
     );
     let s = String::from_utf8_lossy(&filtered);
     assert!(!s.contains("\r\n10\r\n"), "the excluded price has no bucket: {s}");
     let collapsed = query_ready(
         &mut c,
-        &[b"IDX.QUERY", b"ff", b"MATCH", b"rust", b"LIMIT", b"10",
-          b"DISTINCT", b"price", b"FACET", b"price"],
+        &[
+            b"IDX.QUERY",
+            b"ff",
+            b"MATCH",
+            b"rust",
+            b"LIMIT",
+            b"10",
+            b"DISTINCT",
+            b"price",
+            b"FACET",
+            b"price",
+        ],
     );
     let s = String::from_utf8_lossy(&collapsed);
-    assert_eq!(s.matches("$1\r\n2\r\n").count(), 3, "collapsing the page does not change what matched: {s}");
+    assert_eq!(
+        s.matches("$1\r\n2\r\n").count(),
+        3,
+        "collapsing the page does not change what matched: {s}"
+    );
 
     // Without FACET the reply is exactly the rows, no trailing element.
     let plain = query_ready(&mut c, &[b"IDX.QUERY", b"ff", b"MATCH", b"rust", b"LIMIT", b"2"]);
@@ -1152,10 +1810,7 @@ fn facet_over_the_wire() {
     assert!(s.starts_with("*2\r\n"), "two rows and nothing else: {s}");
 
     // An unstored field errors rather than counting nothing.
-    let bad = query_ready(
-        &mut c,
-        &[b"IDX.QUERY", b"ff", b"MATCH", b"rust", b"FACET", b"colour"],
-    );
+    let bad = query_ready(&mut c, &[b"IDX.QUERY", b"ff", b"MATCH", b"rust", b"FACET", b"colour"]);
     let s = String::from_utf8_lossy(&bad);
     assert!(s.starts_with("-ERR") && s.contains("price"), "unstored facet field: {s}");
 }
@@ -1201,61 +1856,155 @@ fn scalar_values_filter_sort_distinct_facet_offset() {
     seed_values_rows(&mut c);
     let r = cmd(
         &mut c,
-        &[b"IDX.CREATE", b"vals", b"ON", b"PREFIX", b"v:", b"FIELD", b"age", b"TYPE", b"i64",
-          b"KIND", b"range", b"VALUES", b"city", b"price", b"TYPES", b"str", b"i64"],
+        &[
+            b"IDX.CREATE",
+            b"vals",
+            b"ON",
+            b"PREFIX",
+            b"v:",
+            b"FIELD",
+            b"age",
+            b"TYPE",
+            b"i64",
+            b"KIND",
+            b"range",
+            b"VALUES",
+            b"city",
+            b"price",
+            b"TYPES",
+            b"str",
+            b"i64",
+        ],
     );
     assert_eq!(r, b"+OK\r\n");
     // A twin without VALUES over the same domain: the plain reply's
     // byte-stability proof (A5 on the wire).
     let r = cmd(
         &mut c,
-        &[b"IDX.CREATE", b"plainidx", b"ON", b"PREFIX", b"v:", b"FIELD", b"age", b"TYPE", b"i64",
-          b"KIND", b"range"],
+        &[
+            b"IDX.CREATE",
+            b"plainidx",
+            b"ON",
+            b"PREFIX",
+            b"v:",
+            b"FIELD",
+            b"age",
+            b"TYPE",
+            b"i64",
+            b"KIND",
+            b"range",
+        ],
     );
     assert_eq!(r, b"+OK\r\n");
 
     let all = flat_reply(&[
-        ("v:1", "10"), ("v:2", "20"), ("v:3", "30"), ("v:4", "40"), ("v:5", "50"), ("v:6", "60"),
+        ("v:1", "10"),
+        ("v:2", "20"),
+        ("v:3", "30"),
+        ("v:4", "40"),
+        ("v:5", "50"),
+        ("v:6", "60"),
     ]);
     let with_values =
         query_ready(&mut c, &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"LIMIT", b"100"]);
-    let without = query_ready(
-        &mut c,
-        &[b"IDX.QUERY", b"plainidx", b"RANGE", b"0", b"100", b"LIMIT", b"100"],
-    );
+    let without =
+        query_ready(&mut c, &[b"IDX.QUERY", b"plainidx", b"RANGE", b"0", b"100", b"LIMIT", b"100"]);
     assert_eq!(with_values, all, "plain RANGE reply bytes unchanged by the declaration");
     assert_eq!(without, all, "and identical to the VALUES-free twin's");
 
     // FILTER: missing value FAILS; an uncoercible stored value is
     // excluded from a numeric range, not matched.
-    let r = cmd(&mut c, &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"city", b"EQ", b"tokyo"]);
+    let r = cmd(
+        &mut c,
+        &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"city", b"EQ", b"tokyo"],
+    );
     assert_eq!(r, flat_reply(&[("v:1", "10"), ("v:4", "40")]));
-    let r = cmd(&mut c, &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"price", b"RANGE", b"0", b"6"]);
+    let r = cmd(
+        &mut c,
+        &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"price", b"RANGE", b"0", b"6"],
+    );
     assert_eq!(r, flat_reply(&[("v:1", "10"), ("v:2", "20"), ("v:5", "50")]));
 
     // FILTER pages with a cursor (driving order unchanged).
-    let p1 = cmd(&mut c, &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"city", b"EQ", b"tokyo", b"LIMIT", b"1"]);
+    let p1 = cmd(
+        &mut c,
+        &[
+            b"IDX.QUERY",
+            b"vals",
+            b"RANGE",
+            b"0",
+            b"100",
+            b"FILTER",
+            b"city",
+            b"EQ",
+            b"tokyo",
+            b"LIMIT",
+            b"1",
+        ],
+    );
     let s1 = String::from_utf8_lossy(&p1).into_owned();
     assert!(s1.contains("v:1") && !s1.contains("v:4"), "{s1}");
     let cursor = s1.lines().nth(2).unwrap().to_string();
     assert_ne!(cursor, "0", "full filtered page carries a cursor: {s1}");
     let p2 = cmd(
         &mut c,
-        &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"city", b"EQ", b"tokyo",
-          b"LIMIT", b"5", b"CURSOR", cursor.as_bytes()],
+        &[
+            b"IDX.QUERY",
+            b"vals",
+            b"RANGE",
+            b"0",
+            b"100",
+            b"FILTER",
+            b"city",
+            b"EQ",
+            b"tokyo",
+            b"LIMIT",
+            b"5",
+            b"CURSOR",
+            cursor.as_bytes(),
+        ],
     );
     assert_eq!(p2, flat_reply(&[("v:4", "40")]), "non-overlapping resume");
 
     // SORT ASC/DESC: missing value LAST in both directions; str vs i64
     // declared types order differently.
     let r = cmd(&mut c, &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"SORT", b"city", b"ASC"]);
-    assert_eq!(r, flat_reply(&[("v:5", "50"), ("v:2", "20"), ("v:6", "60"), ("v:1", "10"), ("v:4", "40"), ("v:3", "30")]));
-    let r = cmd(&mut c, &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"SORT", b"city", b"DESC"]);
-    assert_eq!(r, flat_reply(&[("v:1", "10"), ("v:4", "40"), ("v:2", "20"), ("v:6", "60"), ("v:5", "50"), ("v:3", "30")]));
-    let r = cmd(&mut c, &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"SORT", b"price", b"ASC"]);
     assert_eq!(
         r,
-        flat_reply(&[("v:2", "20"), ("v:5", "50"), ("v:1", "10"), ("v:3", "30"), ("v:4", "40"), ("v:6", "60")]),
+        flat_reply(&[
+            ("v:5", "50"),
+            ("v:2", "20"),
+            ("v:6", "60"),
+            ("v:1", "10"),
+            ("v:4", "40"),
+            ("v:3", "30")
+        ])
+    );
+    let r =
+        cmd(&mut c, &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"SORT", b"city", b"DESC"]);
+    assert_eq!(
+        r,
+        flat_reply(&[
+            ("v:1", "10"),
+            ("v:4", "40"),
+            ("v:2", "20"),
+            ("v:6", "60"),
+            ("v:5", "50"),
+            ("v:3", "30")
+        ])
+    );
+    let r =
+        cmd(&mut c, &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"SORT", b"price", b"ASC"]);
+    assert_eq!(
+        r,
+        flat_reply(&[
+            ("v:2", "20"),
+            ("v:5", "50"),
+            ("v:1", "10"),
+            ("v:3", "30"),
+            ("v:4", "40"),
+            ("v:6", "60")
+        ]),
         "numeric under TYPES i64; no-price and uncoercible-price sort last"
     );
 
@@ -1266,54 +2015,108 @@ fn scalar_values_filter_sort_distinct_facet_offset() {
 
     // FACET: counts over the WHOLE match set before truncation, ONE
     // trailing element appended to the rows array.
-    let r = cmd(&mut c, &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"FACET", b"city", b"LIMIT", b"2"]);
+    let r = cmd(
+        &mut c,
+        &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"FACET", b"city", b"LIMIT", b"2"],
+    );
     let expect = "*2\r\n$1\r\n0\r\n*5\r\n$3\r\nv:1\r\n$2\r\n10\r\n$3\r\nv:2\r\n$2\r\n20\r\n\
                   *2\r\n$4\r\ncity\r\n*6\r\n$5\r\nosaka\r\n$1\r\n2\r\n$5\r\ntokyo\r\n$1\r\n2\r\n$5\r\nkyoto\r\n$1\r\n1\r\n";
     assert_eq!(String::from_utf8_lossy(&r), expect);
     // FILTER reduces the counts; DISTINCT does not.
-    let r = cmd(&mut c, &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"price", b"RANGE", b"0", b"6", b"FACET", b"city"]);
+    let r = cmd(
+        &mut c,
+        &[
+            b"IDX.QUERY",
+            b"vals",
+            b"RANGE",
+            b"0",
+            b"100",
+            b"FILTER",
+            b"price",
+            b"RANGE",
+            b"0",
+            b"6",
+            b"FACET",
+            b"city",
+        ],
+    );
     let s = String::from_utf8_lossy(&r);
     for label in ["kyoto", "osaka", "tokyo"] {
         assert!(s.contains(&format!("{label}\r\n$1\r\n1")), "{s}");
     }
-    let r = cmd(&mut c, &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"DISTINCT", b"city", b"FACET", b"city"]);
+    let r = cmd(
+        &mut c,
+        &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"DISTINCT", b"city", b"FACET", b"city"],
+    );
     let s = String::from_utf8_lossy(&r);
     assert!(s.contains("osaka\r\n$1\r\n2") && s.contains("tokyo\r\n$1\r\n2"), "{s}");
 
     // OFFSET: non-overlapping pages; past the end = empty, not error.
-    let r = cmd(&mut c, &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"OFFSET", b"2", b"LIMIT", b"2"]);
+    let r = cmd(
+        &mut c,
+        &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"OFFSET", b"2", b"LIMIT", b"2"],
+    );
     assert_eq!(r, flat_reply(&[("v:3", "30"), ("v:4", "40")]));
-    let r = cmd(&mut c, &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"OFFSET", b"4", b"LIMIT", b"2"]);
+    let r = cmd(
+        &mut c,
+        &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"OFFSET", b"4", b"LIMIT", b"2"],
+    );
     assert_eq!(r, flat_reply(&[("v:5", "50"), ("v:6", "60")]));
     let r = cmd(&mut c, &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"OFFSET", b"100"]);
     assert_eq!(r, flat_reply(&[]));
 
     // CURSOR × selection clauses: the named refusal.
-    let r = cmd(&mut c, &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"CURSOR", b"0", b"SORT", b"city", b"ASC"]);
+    let r = cmd(
+        &mut c,
+        &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"CURSOR", b"0", b"SORT", b"city", b"ASC"],
+    );
     assert_eq!(
         String::from_utf8_lossy(&r),
         "-ERR IDX.QUERY 'vals': CURSOR cannot combine with SORT|DISTINCT|FACET|OFFSET\r\n"
     );
 
     // Clause errors name the field / the declared type.
-    let r = cmd(&mut c, &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"nope", b"EQ", b"1"]);
-    assert!(String::from_utf8_lossy(&r).contains("FILTER names field 'nope'"), "{:?}", String::from_utf8_lossy(&r));
-    let r = cmd(&mut c, &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"price", b"EQ", b"abc"]);
-    assert!(String::from_utf8_lossy(&r).contains("is not a valid i64"), "{:?}", String::from_utf8_lossy(&r));
+    let r = cmd(
+        &mut c,
+        &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"nope", b"EQ", b"1"],
+    );
+    assert!(
+        String::from_utf8_lossy(&r).contains("FILTER names field 'nope'"),
+        "{:?}",
+        String::from_utf8_lossy(&r)
+    );
+    let r = cmd(
+        &mut c,
+        &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"price", b"EQ", b"abc"],
+    );
+    assert!(
+        String::from_utf8_lossy(&r).contains("is not a valid i64"),
+        "{:?}",
+        String::from_utf8_lossy(&r)
+    );
 
     // IDX.COUNT applies FILTER (4.2: the claused count); clauses it
     // would not apply stay refusals, not silence.
-    let r = cmd(&mut c, &[b"IDX.COUNT", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"city", b"EQ", b"tokyo"]);
+    let r = cmd(
+        &mut c,
+        &[b"IDX.COUNT", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"city", b"EQ", b"tokyo"],
+    );
     assert_eq!(r, b":2\r\n".to_vec(), "v:1 and v:4 are tokyo");
     let r = cmd(&mut c, &[b"IDX.COUNT", b"vals", b"RANGE", b"0", b"100", b"SORT", b"city", b"ASC"]);
     assert!(r.starts_with(b"-ERR"), "{:?}", String::from_utf8_lossy(&r));
 
     // A live update moves the stored value with the row.
     cmd(&mut c, &[b"HSET", b"v:3", b"city", b"tokyo"]);
-    let r = cmd(&mut c, &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"city", b"EQ", b"tokyo"]);
+    let r = cmd(
+        &mut c,
+        &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"city", b"EQ", b"tokyo"],
+    );
     assert_eq!(r, flat_reply(&[("v:1", "10"), ("v:3", "30"), ("v:4", "40")]));
     cmd(&mut c, &[b"DEL", b"v:1"]);
-    let r = cmd(&mut c, &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"city", b"EQ", b"tokyo"]);
+    let r = cmd(
+        &mut c,
+        &[b"IDX.QUERY", b"vals", b"RANGE", b"0", b"100", b"FILTER", b"city", b"EQ", b"tokyo"],
+    );
     assert_eq!(r, flat_reply(&[("v:3", "30"), ("v:4", "40")]));
 }
 
@@ -1333,10 +2136,25 @@ fn flushall_empties_the_index_segments() {
                 .starts_with(b":")
         );
     }
-    assert!(cmd(&mut c, &[
-        b"IDX.CREATE", b"by_score", b"ON", b"PREFIX", b"u:", b"FIELD", b"score",
-        b"TYPE", b"i64", b"KIND", b"range",
-    ]).starts_with(b"+OK"));
+    assert!(
+        cmd(
+            &mut c,
+            &[
+                b"IDX.CREATE",
+                b"by_score",
+                b"ON",
+                b"PREFIX",
+                b"u:",
+                b"FIELD",
+                b"score",
+                b"TYPE",
+                b"i64",
+                b"KIND",
+                b"range",
+            ]
+        )
+        .starts_with(b"+OK")
+    );
     let full = query_ready(&mut c, &[b"IDX.QUERY", b"by_score", b"RANGE", b"0", b"100"]);
     assert!(full.starts_with(b"*"), "{}", String::from_utf8_lossy(&full));
     assert_ne!(full, b"*0\r\n".to_vec(), "populated before the flush");
@@ -1361,29 +2179,62 @@ fn idx_count_applies_filter() {
     for i in 0..30u32 {
         let key = format!("u:{i}");
         let dept: &[u8] = if i % 3 == 0 { b"eng" } else { b"ops" };
-        assert!(cmd(&mut c, &[
-            b"HSET", key.as_bytes(), b"score", format!("{i}").as_bytes(), b"dept", dept,
-        ]).starts_with(b":"));
+        assert!(
+            cmd(
+                &mut c,
+                &[b"HSET", key.as_bytes(), b"score", format!("{i}").as_bytes(), b"dept", dept,]
+            )
+            .starts_with(b":")
+        );
     }
-    assert!(cmd(&mut c, &[
-        b"IDX.CREATE", b"by_score", b"ON", b"PREFIX", b"u:", b"FIELD", b"score",
-        b"TYPE", b"i64", b"KIND", b"range", b"VALUES", b"dept",
-    ]).starts_with(b"+OK"));
+    assert!(
+        cmd(
+            &mut c,
+            &[
+                b"IDX.CREATE",
+                b"by_score",
+                b"ON",
+                b"PREFIX",
+                b"u:",
+                b"FIELD",
+                b"score",
+                b"TYPE",
+                b"i64",
+                b"KIND",
+                b"range",
+                b"VALUES",
+                b"dept",
+            ]
+        )
+        .starts_with(b"+OK")
+    );
     let _ = query_ready(&mut c, &[b"IDX.QUERY", b"by_score", b"RANGE", b"0", b"100"]);
 
-    assert_eq!(cmd(&mut c, &[b"IDX.COUNT", b"by_score", b"RANGE", b"0", b"100"]), b":30\r\n".to_vec());
     assert_eq!(
-        cmd(&mut c, &[b"IDX.COUNT", b"by_score", b"RANGE", b"0", b"100", b"FILTER", b"dept", b"EQ", b"eng"]),
+        cmd(&mut c, &[b"IDX.COUNT", b"by_score", b"RANGE", b"0", b"100"]),
+        b":30\r\n".to_vec()
+    );
+    assert_eq!(
+        cmd(
+            &mut c,
+            &[b"IDX.COUNT", b"by_score", b"RANGE", b"0", b"100", b"FILTER", b"dept", b"EQ", b"eng"]
+        ),
         b":10\r\n".to_vec(),
         "0,3,...,27"
     );
     assert_eq!(
-        cmd(&mut c, &[b"IDX.COUNT", b"by_score", b"RANGE", b"10", b"20", b"FILTER", b"dept", b"EQ", b"eng"]),
+        cmd(
+            &mut c,
+            &[b"IDX.COUNT", b"by_score", b"RANGE", b"10", b"20", b"FILTER", b"dept", b"EQ", b"eng"]
+        ),
         b":3\r\n".to_vec(),
         "eng within 10..=20 is 12, 15, 18"
     );
     // A clause the count would not apply is a refusal, not silence.
-    assert!(cmd(&mut c, &[b"IDX.COUNT", b"by_score", b"RANGE", b"0", b"100", b"SORT", b"dept", b"ASC"]).starts_with(b"-ERR"));
+    assert!(
+        cmd(&mut c, &[b"IDX.COUNT", b"by_score", b"RANGE", b"0", b"100", b"SORT", b"dept", b"ASC"])
+            .starts_with(b"-ERR")
+    );
 }
 
 /// A key deleted by a MULTI-key verb must leave the index with it.
@@ -1411,7 +2262,19 @@ fn multi_key_delete_and_rename_keep_the_index_honest() {
     assert_eq!(
         cmd(
             &mut c,
-            &[b"IDX.CREATE", b"byage", b"ON", b"PREFIX", b"row:", b"FIELD", b"age", b"TYPE", b"i64", b"KIND", b"range"],
+            &[
+                b"IDX.CREATE",
+                b"byage",
+                b"ON",
+                b"PREFIX",
+                b"row:",
+                b"FIELD",
+                b"age",
+                b"TYPE",
+                b"i64",
+                b"KIND",
+                b"range"
+            ],
         ),
         b"+OK\r\n"
     );
@@ -1471,12 +2334,27 @@ fn scope_ingested_rows_enter_the_index() {
     let mut c = srv.connect();
 
     for i in 0..8 {
-        cmd(&mut c, &[b"HSET", format!("row:{i}").as_bytes(), b"age", format!("{}", 20 + i).as_bytes()]);
+        cmd(
+            &mut c,
+            &[b"HSET", format!("row:{i}").as_bytes(), b"age", format!("{}", 20 + i).as_bytes()],
+        );
     }
     assert_eq!(
         cmd(
             &mut c,
-            &[b"IDX.CREATE", b"byage", b"ON", b"PREFIX", b"row:", b"FIELD", b"age", b"TYPE", b"i64", b"KIND", b"range"],
+            &[
+                b"IDX.CREATE",
+                b"byage",
+                b"ON",
+                b"PREFIX",
+                b"row:",
+                b"FIELD",
+                b"age",
+                b"TYPE",
+                b"i64",
+                b"KIND",
+                b"range"
+            ],
         ),
         b"+OK\r\n"
     );
@@ -1519,21 +2397,27 @@ fn merge_returns_the_globally_smallest_page_across_shards() {
     let mut c = srv.connect();
 
     for i in 0..200 {
-        cmd(
-            &mut c,
-            &[b"HSET", format!("m:{i:03}").as_bytes(), b"n", format!("{i}").as_bytes()],
-        );
+        cmd(&mut c, &[b"HSET", format!("m:{i:03}").as_bytes(), b"n", format!("{i}").as_bytes()]);
     }
     let r = cmd(
         &mut c,
-        &[b"IDX.CREATE", b"n_idx", b"ON", b"PREFIX", b"m:", b"FIELD", b"n", b"TYPE", b"i64", b"KIND", b"range"],
+        &[
+            b"IDX.CREATE",
+            b"n_idx",
+            b"ON",
+            b"PREFIX",
+            b"m:",
+            b"FIELD",
+            b"n",
+            b"TYPE",
+            b"i64",
+            b"KIND",
+            b"range",
+        ],
     );
     assert_eq!(r, b"+OK\r\n");
 
-    let r = query_ready(
-        &mut c,
-        &[b"IDX.QUERY", b"n_idx", b"RANGE", b"0", b"199", b"LIMIT", b"20"],
-    );
+    let r = query_ready(&mut c, &[b"IDX.QUERY", b"n_idx", b"RANGE", b"0", b"199", b"LIMIT", b"20"]);
     let s = String::from_utf8_lossy(&r);
 
     // Exactly LIMIT rows, and exactly the twenty smallest — m:000..m:019.
@@ -1570,11 +2454,36 @@ fn a_covering_value_does_not_outlive_the_field_it_copies() {
     let mut c = srv.connect();
 
     for i in 0..5 {
-        cmd(&mut c, &[b"HSET", format!("tt:{i}").as_bytes(), b"n",
-                      format!("{i}").as_bytes(), b"label", format!("L{i}").as_bytes()]);
+        cmd(
+            &mut c,
+            &[
+                b"HSET",
+                format!("tt:{i}").as_bytes(),
+                b"n",
+                format!("{i}").as_bytes(),
+                b"label",
+                format!("L{i}").as_bytes(),
+            ],
+        );
     }
-    let r = cmd(&mut c, &[b"IDX.CREATE", b"tix", b"ON", b"PREFIX", b"tt:", b"FIELD", b"n",
-                          b"TYPE", b"i64", b"KIND", b"range", b"VALUES", b"label"]);
+    let r = cmd(
+        &mut c,
+        &[
+            b"IDX.CREATE",
+            b"tix",
+            b"ON",
+            b"PREFIX",
+            b"tt:",
+            b"FIELD",
+            b"n",
+            b"TYPE",
+            b"i64",
+            b"KIND",
+            b"range",
+            b"VALUES",
+            b"label",
+        ],
+    );
     assert_eq!(r, b"+OK\r\n");
     // Settle the backfill before expiring anything.
     query_ready(&mut c, &[b"IDX.QUERY", b"tix", b"RANGE", b"0", b"9", b"LIMIT", b"5"]);
@@ -1587,9 +2496,22 @@ fn a_covering_value_does_not_outlive_the_field_it_copies() {
     assert_eq!(direct, b"$-1\r\n", "the expired field reads as nil: {direct:?}");
 
     // Therefore nothing may still select tt:2 by that value.
-    let filtered = cmd(&mut c, &[b"IDX.QUERY", b"tix", b"RANGE", b"0", b"9", b"LIMIT", b"5",
-                                 b"FILTER", b"label", b"EQ", b"L2"]);
+    let filtered = cmd(
+        &mut c,
+        &[
+            b"IDX.QUERY",
+            b"tix",
+            b"RANGE",
+            b"0",
+            b"9",
+            b"LIMIT",
+            b"5",
+            b"FILTER",
+            b"label",
+            b"EQ",
+            b"L2",
+        ],
+    );
     let s = String::from_utf8_lossy(&filtered);
-    assert!(!s.contains("tt:2"),
-            "FILTER matched a covering value whose field has expired: {s}");
+    assert!(!s.contains("tt:2"), "FILTER matched a covering value whose field has expired: {s}");
 }

@@ -24,6 +24,8 @@ export type Lang = 'en' | 'zh' | 'ja'
 
 export const LANG_LABEL: Record<Lang, string> = { en: 'EN', zh: '中文', ja: '日本語' }
 export const LANG_HTML: Record<Lang, string> = { en: 'en', zh: 'zh-CN', ja: 'ja' }
+/** Every locale the site is built in. English is the one without a prefix. */
+export const ALL_LANGS: Lang[] = ['en', 'zh', 'ja']
 
 const NAV: Record<Lang, { home: string; docs: string; commands: string }> = {
   en: { home: 'Home', docs: 'Docs', commands: 'Commands' },
@@ -159,20 +161,41 @@ export type DocumentProps = {
   canonical: string
   root: string
   css: string
-  /** Other locales of this same page, for hreflang. */
-  alternates?: { lang: Lang; path: string }[]
+  /**
+   * Which locales this page exists in, for hreflang. Default: all of them.
+   *
+   * The URLs are DERIVED from `canonical`, not passed in. They used to be
+   * passed in, and the result was that one of the five callers of `page`
+   * computed them and four did not: 657 of 768 pages went out with no
+   * hreflang at all, including both localised home pages and all 618
+   * command pages. Nothing was broken — the field was simply optional and
+   * easy to not think about. Deriving it from the path the page already
+   * declares is what makes forgetting impossible.
+   *
+   * A locale is only worth naming here when the page is missing from one:
+   * an hreflang pointing at a 404 is worse than no hreflang.
+   */
+  have?: Lang[]
   /** Inline script, for the one page that needs arithmetic. */
   script?: string
 }
 
 /** The HTML document around a Layout. One copy, for the same reason. */
 export function documentHtml(p: DocumentProps, body: string): string {
-  const alt = (p.alternates ?? [])
-    .map(
-      (a) =>
-        `<link rel="alternate" hreflang="${LANG_HTML[a.lang]}" href="https://kevy.golia.jp${a.path}">`,
-    )
-    .join('\n    ')
+  // The locale prefix comes off the front and each locale's own goes back
+  // on: `/ja/docs/x/` is `/docs/x/` is `/zh/docs/x/`. English carries no
+  // prefix, which is why it is the tail itself.
+  const tail = p.lang === 'en' ? p.canonical : p.canonical.replace(`/${p.lang}`, '') || '/'
+  const urlFor = (l: Lang) => `https://kevy.golia.jp${l === 'en' ? tail : `/${l}${tail}`}`
+  const have = p.have ?? ALL_LANGS
+  // Including itself: an annotation that omits the page it is on is not a
+  // set of alternates, and search engines are documented to ignore the
+  // whole group when the return link is missing.
+  const alt = [
+    ...have.map((l) => `<link rel="alternate" hreflang="${LANG_HTML[l]}" href="${urlFor(l)}">`),
+    // Whoever the other two are not for.
+    ...(have.includes('en') ? [`<link rel="alternate" hreflang="x-default" href="${urlFor('en')}">`] : []),
+  ].join('\n    ')
   return `<!doctype html>
 <html lang="${LANG_HTML[p.lang]}">
   <head>

@@ -128,8 +128,7 @@ impl ReplicaProgress {
     pub(super) fn size_runner_slots(&self, n: usize) {
         *self.runner_offsets.lock().expect("runner_offsets poisoned") =
             (0..n).map(|_| AtomicU64::new(0)).collect();
-        *self.upstream_gens.lock().expect("upstream_gens poisoned") =
-            vec![0; n].into_boxed_slice();
+        *self.upstream_gens.lock().expect("upstream_gens poisoned") = vec![0; n].into_boxed_slice();
     }
 
     pub(super) fn clear_runner_slots(&self) {
@@ -177,4 +176,3 @@ pub(super) fn epoch_ms() -> u64 {
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
 }
-

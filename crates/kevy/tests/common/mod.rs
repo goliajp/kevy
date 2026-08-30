@@ -63,8 +63,10 @@ pub fn snapshot_at_rest<F: FnMut() -> Vec<u64>>(what: &str, mut read: F) -> Vec<
             since = Instant::now();
         }
     }
-    panic!("{what} never came to rest: still moving after {:?} and {reads} reads (last = {last:?})",
-           started.elapsed());
+    panic!(
+        "{what} never came to rest: still moving after {:?} and {reads} reads (last = {last:?})",
+        started.elapsed()
+    );
 }
 
 /// Read until the value stops changing for [`REST`], then return it.
@@ -90,8 +92,10 @@ pub fn at_rest<F: FnMut() -> u64>(what: &str, mut read: F) -> u64 {
             since = Instant::now();
         }
     }
-    panic!("{what} never came to rest: still moving after {:?} and {reads} reads (last = {last})",
-           started.elapsed());
+    panic!(
+        "{what} never came to rest: still moving after {:?} and {reads} reads (last = {last})",
+        started.elapsed()
+    );
 }
 
 /// Poll until `ok` returns true, or panic naming what was being waited for.

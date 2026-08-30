@@ -70,10 +70,7 @@ pub fn detected_memory_bound() -> Option<u64> {
 ///   through the hand-written binding in [`crate::ffi`].
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub fn process_rss_bytes() -> u64 {
-    std::fs::read_to_string("/proc/self/status")
-        .ok()
-        .and_then(|s| vmrss_bytes(&s))
-        .unwrap_or(0)
+    std::fs::read_to_string("/proc/self/status").ok().and_then(|s| vmrss_bytes(&s)).unwrap_or(0)
 }
 
 /// Parse the `VmRSS:` line (kB) out of a `/proc/<pid>/status` body.
@@ -208,10 +205,8 @@ mod tests {
         struct Fixture(PathBuf);
         impl Fixture {
             fn write(name: &str, content: &str) -> Self {
-                let p = std::env::temp_dir().join(format!(
-                    "kevy-sys-mem-{name}-{}",
-                    std::process::id()
-                ));
+                let p = std::env::temp_dir()
+                    .join(format!("kevy-sys-mem-{name}-{}", std::process::id()));
                 std::fs::write(&p, content).expect("fixture write");
                 Fixture(p)
             }

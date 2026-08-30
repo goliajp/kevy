@@ -79,4 +79,3 @@ fn emit_scalar_facets(out: &mut Vec<u8>, names: &[Vec<u8>], buckets: &[Vec<(Vec<
         }
     }
 }
-

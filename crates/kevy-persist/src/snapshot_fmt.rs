@@ -70,11 +70,7 @@ pub(crate) fn write_ttl<W: Write>(w: &mut W, ttl: Option<u64>) -> io::Result<()>
 }
 
 pub(crate) fn read_ttl<R: Read>(r: &mut R) -> io::Result<Option<u64>> {
-    if read_u8(r)? == 1 {
-        Ok(Some(read_u64(r)?))
-    } else {
-        Ok(None)
-    }
+    if read_u8(r)? == 1 { Ok(Some(read_u64(r)?)) } else { Ok(None) }
 }
 
 pub(crate) fn write_bytes<W: Write>(w: &mut W, b: &[u8]) -> io::Result<()> {

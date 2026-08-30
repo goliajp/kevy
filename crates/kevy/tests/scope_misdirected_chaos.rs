@@ -39,9 +39,9 @@ fn scope_misdirected_chaos_writes_into_wrong_node() {
         .map(|i| {
             let node_base = base + (i as u16) * 16;
             (
-                node_base,            // main_port
-                node_base + 1,        // cluster_port_base
-                node_base + 8,        // elect_port_base
+                node_base,     // main_port
+                node_base + 1, // cluster_port_base
+                node_base + 8, // elect_port_base
             )
         })
         .collect();
@@ -72,10 +72,7 @@ fn scope_misdirected_chaos_writes_into_wrong_node() {
              elect_port_base = {elect}\npeers = \"{peers_string}\"\n\
              scopes = \"app:billing:=nodeA\"\n"
         );
-        harnesses.push(
-            Harness::spawn(cfg)
-                .unwrap_or_else(|e| panic!("spawn {id} failed: {e}")),
-        );
+        harnesses.push(Harness::spawn(cfg).unwrap_or_else(|e| panic!("spawn {id} failed: {e}")));
         tmps.push(tmp);
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -89,13 +86,10 @@ fn scope_misdirected_chaos_writes_into_wrong_node() {
     let mut any_misdirected = false;
     for (i, (main, _, _)) in node_ports.iter().enumerate() {
         let id = if i == 0 { "nodeA" } else { "nodeB" };
-        let mut s = TcpStream::connect(format!("127.0.0.1:{main}"))
-            .expect("conn");
+        let mut s = TcpStream::connect(format!("127.0.0.1:{main}")).expect("conn");
         let _ = s.set_read_timeout(Some(Duration::from_secs(2)));
-        s.write_all(
-            b"*3\r\n$3\r\nSET\r\n$15\r\napp:billing:foo\r\n$3\r\nbar\r\n",
-        )
-        .expect("write SET");
+        s.write_all(b"*3\r\n$3\r\nSET\r\n$15\r\napp:billing:foo\r\n$3\r\nbar\r\n")
+            .expect("write SET");
         let mut buf = vec![0u8; 256];
         let n = s.read(&mut buf).expect("read SET reply");
         let reply = String::from_utf8_lossy(&buf[..n]);
@@ -116,9 +110,7 @@ fn scope_misdirected_chaos_writes_into_wrong_node() {
     );
 
     // SIGKILL nodeA; nodeB must stay alive.
-    harnesses[0]
-        .kill(KillSignal::Sigkill)
-        .expect("kill nodeA");
+    harnesses[0].kill(KillSignal::Sigkill).expect("kill nodeA");
     std::thread::sleep(Duration::from_millis(500));
 
     let mut s = TcpStream::connect(format!("127.0.0.1:{}", node_ports[1].0))

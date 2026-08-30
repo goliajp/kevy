@@ -50,3 +50,18 @@ tools/check_version_alignment.py` **机械判定**(在 CI 里,每层带下限,
 - 跑 server:`cargo run -p kevy --bin kevy -- --port 6004`(默认 bind 127.0.0.1;容器内用 `KEVY_BIND=0.0.0.0`)
 - 基准对打 valkey:`bash bench/run.sh`
 - 开发端口:6004(port-registry 已登记)
+
+## Build profile: debug info and incremental
+
+`[profile.dev] debug = 1` (set 2026-08-28, was cargo's default of 2). Backtraces
+keep file and line; what is given up is variable inspection under a debugger.
+The reason is size: `target/debug/deps` is the single largest thing on these
+machines — 104 GB in smix alone — and debug info is most of it.
+
+**Incremental compilation is a machine-level decision, not a project one.** It
+is left ON here and disabled on `mini` via its `~/.cargo/config.toml`, because
+mini is the runner / perf-bench box: it has no edit-rebuild loop to speed up,
+and a benchmark that reuses incremental state from an earlier commit is not
+measuring what it claims to. On mini this was 20-30 GB per repo and growing
+(spg-ci alone reached 108 GB). Do not move that setting into a project's
+Cargo.toml — it would slow the development loop on studio for no gain.

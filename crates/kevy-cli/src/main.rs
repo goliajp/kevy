@@ -60,18 +60,11 @@ fn main() -> ExitCode {
     let mut conn = match RespClient::connect(&cfg.host, cfg.port) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!(
-                "kevy-cli: could not connect to {}:{}: {e}",
-                cfg.host, cfg.port
-            );
+            eprintln!("kevy-cli: could not connect to {}:{}: {e}", cfg.host, cfg.port);
             return ExitCode::FAILURE;
         }
     };
-    if cfg.command.is_empty() {
-        repl(&mut conn, &cfg)
-    } else {
-        run_once(&mut conn, &cfg.command)
-    }
+    if cfg.command.is_empty() { repl(&mut conn, &cfg) } else { run_once(&mut conn, &cfg.command) }
 }
 
 /// Route the non-REPL subcommands. `Some(code)` = handled, exit with it;
@@ -125,7 +118,10 @@ fn route_subcommand(args: &[String]) -> Option<ExitCode> {
         return Some(run_migrate_cli(args));
     }
     if !args.is_empty()
-        && matches!(args[0].as_str(), "copy-prefix" | "delete-prefix" | "digest" | "diff" | "inspect")
+        && matches!(
+            args[0].as_str(),
+            "copy-prefix" | "delete-prefix" | "digest" | "diff" | "inspect"
+        )
     {
         return Some(run_bulk_cli(args));
     }
@@ -137,11 +133,7 @@ fn run_once(conn: &mut RespClient, command: &[Vec<u8>]) -> ExitCode {
     match conn.request(command) {
         Ok(reply) => {
             println!("{}", format_reply(&reply, 0));
-            if matches!(reply, Reply::Error(_)) {
-                ExitCode::FAILURE
-            } else {
-                ExitCode::SUCCESS
-            }
+            if matches!(reply, Reply::Error(_)) { ExitCode::FAILURE } else { ExitCode::SUCCESS }
         }
         Err(e) => {
             eprintln!("kevy-cli: {e}");
@@ -188,9 +180,7 @@ fn repl(conn: &mut RespClient, cfg: &Config) -> ExitCode {
 
 /// Split a line into arguments on ASCII whitespace (no quote handling yet).
 fn split_args(line: &str) -> Vec<Vec<u8>> {
-    line.split_whitespace()
-        .map(|s| s.as_bytes().to_vec())
-        .collect()
+    line.split_whitespace().map(|s| s.as_bytes().to_vec()).collect()
 }
 
 // ───────────── backup / restore ─────────────
@@ -335,7 +325,9 @@ fn run_migrate_cli(args: &[String]) -> ExitCode {
     let verb = args[0].as_str();
     let (host, port, prefix, resume, strict, file) = parse_migrate_flags(&args[1..]);
     let Some(file) = file else {
-        eprintln!("usage: kevy-cli {verb} [-h host] [-p port] [--prefix p | --resume --strict] <file>");
+        eprintln!(
+            "usage: kevy-cli {verb} [-h host] [-p port] [--prefix p | --resume --strict] <file>"
+        );
         return ExitCode::FAILURE;
     };
     let mut client = match kevy_resp_client::RespClient::connect(&host, port) {
@@ -352,19 +344,17 @@ fn run_migrate_cli(args: &[String]) -> ExitCode {
                 println!("exported {} keys -> {file}", e.keys);
             })
     } else {
-        kevy_cli::migrate::run_import(&mut client, std::path::Path::new(&file), resume, strict)
-            .map(|r| {
+        kevy_cli::migrate::run_import(&mut client, std::path::Path::new(&file), resume, strict).map(
+            |r| {
                 if resume && r.sent == 0 && r.errors == 0 {
                     // A no-op resume reads as a silent failure without
                     // this — say plainly that the file was already in.
                     println!("imported: already complete (offset {}), nothing to resume", r.offset)
                 } else {
-                    println!(
-                        "imported: {} ok, {} errors, offset {}",
-                        r.sent, r.errors, r.offset
-                    )
+                    println!("imported: {} ok, {} errors, offset {}", r.sent, r.errors, r.offset)
                 }
-            })
+            },
+        )
     };
     match res {
         Ok(()) => ExitCode::SUCCESS,
@@ -448,6 +438,9 @@ fn run_diff_cli(pos: &[String]) -> ExitCode {
 /// `digest [-h host -p port] <prefix>`
 /// `diff <hostA:portA> <hostB:portB> <prefix…>`
 /// `inspect [-h host -p port] <prefix>`
+// LOC-WAIVER: pure subcommand dispatch — eleven arms, each one call.
+// Splitting it would put half the table behind a name that means
+// nothing but "the other half".
 fn run_bulk_cli(args: &[String]) -> ExitCode {
     let verb = args[0].as_str();
     let (host, port, rate, dry_run, pos) = parse_bulk_flags(&args[1..]);
@@ -463,17 +456,25 @@ fn run_bulk_cli(args: &[String]) -> ExitCode {
                 Err(e) => return fail(e),
             };
             let res: io::Result<()> = match (verb, pos.as_slice()) {
-                ("copy-prefix", [src, dst]) => {
-                    kevy_cli::bulk::run_copy_prefix(&mut client, src.as_bytes(), dst.as_bytes(), rate)
-                        .map(|e| {
-                            report_skipped("copy-prefix", &e.skipped);
-                            println!("copied {} keys", e.keys);
-                        })
-                }
-                ("delete-prefix", [p]) => {
-                    kevy_cli::bulk::run_delete_prefix(&mut client, p.as_bytes(), rate, dry_run)
-                        .map(|n| println!("{}{n} keys", if dry_run { "would delete " } else { "deleted " }))
-                }
+                ("copy-prefix", [src, dst]) => kevy_cli::bulk::run_copy_prefix(
+                    &mut client,
+                    src.as_bytes(),
+                    dst.as_bytes(),
+                    rate,
+                )
+                .map(|e| {
+                    report_skipped("copy-prefix", &e.skipped);
+                    println!("copied {} keys", e.keys);
+                }),
+                ("delete-prefix", [p]) => kevy_cli::bulk::run_delete_prefix(
+                    &mut client,
+                    p.as_bytes(),
+                    rate,
+                    dry_run,
+                )
+                .map(|n| {
+                    println!("{}{n} keys", if dry_run { "would delete " } else { "deleted " })
+                }),
                 ("digest", [p]) => kevy_cli::bulk::run_digest(&mut client, p.as_bytes())
                     .map(|(n, d)| println!("{n} keys {d}")),
                 ("inspect", [p]) => {
@@ -491,4 +492,3 @@ fn run_bulk_cli(args: &[String]) -> ExitCode {
         }
     }
 }
-

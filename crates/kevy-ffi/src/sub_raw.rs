@@ -40,16 +40,18 @@ pub unsafe extern "C" fn kevy_sub_next_raw(sub: *mut KevySub, out: *mut KevyBuf)
         return -1;
     }
     let s = unsafe { &(*sub).sub };
-    let drained = catch_unwind(AssertUnwindSafe(|| loop {
-        match s.try_recv() {
-            Ok(Some(f)) => {
-                if let Some(p) = f.into_payload() {
-                    return Ok(Some(p));
+    let drained = catch_unwind(AssertUnwindSafe(|| {
+        loop {
+            match s.try_recv() {
+                Ok(Some(f)) => {
+                    if let Some(p) = f.into_payload() {
+                        return Ok(Some(p));
+                    }
+                    // control/ack frame — no payload; keep draining.
                 }
-                // control/ack frame — no payload; keep draining.
+                Ok(None) => return Ok(None),
+                Err(e) => return Err(e),
             }
-            Ok(None) => return Ok(None),
-            Err(e) => return Err(e),
         }
     }));
     match drained {
@@ -77,7 +79,11 @@ pub unsafe extern "C" fn kevy_sub_next_raw(sub: *mut KevySub, out: *mut KevyBuf)
 /// # Safety
 /// `sub` must be live; `out` must point to writable [`KevyBuf`] storage.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn kevy_sub_wait_raw(sub: *mut KevySub, timeout_ms: u64, out: *mut KevyBuf) -> i32 {
+pub unsafe extern "C" fn kevy_sub_wait_raw(
+    sub: *mut KevySub,
+    timeout_ms: u64,
+    out: *mut KevyBuf,
+) -> i32 {
     if out.is_null() {
         return -1;
     }

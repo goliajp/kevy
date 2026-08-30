@@ -7,9 +7,9 @@
 //! type here adds no dependency edge anywhere; the protocol crate
 //! (`kevy-resp`) hosting it would require a protocol → store edge.
 
+use crate::StoreError;
 #[cfg(not(feature = "std"))]
 use crate::nostd_prelude::*;
-use crate::StoreError;
 use core::fmt;
 #[cfg(feature = "std")]
 use std::io;

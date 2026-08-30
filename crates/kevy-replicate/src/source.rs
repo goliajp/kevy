@@ -20,9 +20,9 @@
 //! wiring layer's concern.
 
 use crate::wire::encode_frame;
-use kevy_resp::ArgvView;
 #[cfg(test)]
 use kevy_resp::Argv;
+use kevy_resp::ArgvView;
 
 /// One encoded mutation frame parked in the backlog.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,12 +66,7 @@ impl ReplicationSource {
     /// even one frame, so it is a caller bug, not a runtime state.
     pub fn new(max_bytes: usize) -> Self {
         assert!(max_bytes > 0, "ReplicationSource max_bytes must be > 0");
-        Self {
-            next_offset: 0,
-            bytes_in_buf: 0,
-            max_bytes,
-            buf: std::collections::VecDeque::new(),
-        }
+        Self { next_offset: 0, bytes_in_buf: 0, max_bytes, buf: std::collections::VecDeque::new() }
     }
 
     /// Resume offset assignment at `next` (boot continuity from the
@@ -193,10 +188,7 @@ impl ReplicationSource {
         }
         // from == next_offset → replica is exactly caught up; empty slice.
         if from == self.next_offset {
-            return Ok(FramesIter {
-                buf: &self.buf,
-                cursor: self.buf.len(),
-            });
+            return Ok(FramesIter { buf: &self.buf, cursor: self.buf.len() });
         }
         // from < next_offset: the requested frame either is still in
         // the backlog or was evicted. Empty buf with from < next_offset
@@ -386,9 +378,8 @@ mod tests {
         // push it; the decoded round-trip must match a hand-built Argv
         // of the same command.
         let resp = b"*3\r\n$3\r\nSET\r\n$3\r\nfoo\r\n$3\r\nbar\r\n";
-        let (borrowed, consumed) = kevy_resp::parse_command_borrowed(resp)
-            .expect("parse ok")
-            .expect("complete frame");
+        let (borrowed, consumed) =
+            kevy_resp::parse_command_borrowed(resp).expect("parse ok").expect("complete frame");
         assert_eq!(consumed, resp.len());
 
         let mut s = ReplicationSource::new(1024);

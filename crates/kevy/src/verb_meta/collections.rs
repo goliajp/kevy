@@ -6,8 +6,8 @@
 //! is a single-batch copy, SPOP is deterministic, SINTER has no
 //! smallest-set-first ordering).
 
-use super::{VerbMeta, v};
 use super::flags::*;
+use super::{VerbMeta, v};
 
 #[rustfmt::skip]
 pub(super) const ROWS: &[VerbMeta] = &[

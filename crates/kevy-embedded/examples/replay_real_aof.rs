@@ -12,17 +12,12 @@ use std::path::PathBuf;
 use kevy_embedded::{Config, Store};
 
 fn main() {
-    let path = std::env::args()
-        .nth(1)
-        .expect("usage: replay_real_aof <aof-path>");
+    let path = std::env::args().nth(1).expect("usage: replay_real_aof <aof-path>");
     let src = PathBuf::from(&path);
     let bytes = std::fs::metadata(&src).map_or(0, |m| m.len());
     println!("reproducer: staging {} bytes from {}", bytes, src.display());
 
-    let dir = std::env::temp_dir().join(format!(
-        "kevy-aof-reproducer-{}",
-        std::process::id()
-    ));
+    let dir = std::env::temp_dir().join(format!("kevy-aof-reproducer-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("create temp dir");
     let staged = dir.join("aof-0.aof");
     std::fs::copy(&src, &staged).expect("copy AOF into staging dir");

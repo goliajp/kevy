@@ -7,9 +7,9 @@
 use crate::BlockKind;
 use kevy_resp::{Argv, RespVersion};
 
+pub(crate) use crate::message_kinds::{DispatchMeta, GatherKind, Gathered};
 pub use crate::message_kinds::{MultiOp, ZCombine};
 pub(crate) use crate::message_part::Part;
-pub(crate) use crate::message_kinds::{DispatchMeta, GatherKind, Gathered};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
@@ -63,9 +63,15 @@ pub(crate) enum Op {
     /// Step-2 of the zset-algebra orchestrator: materialize the
     /// combined result at `dst` on its owning shard (overwrite; empty
     /// deletes). Replies `Part::Int(cardinality)`.
-    ZStoreResult { dst: Vec<u8>, pairs: Vec<(Vec<u8>, f64)> },
+    ZStoreResult {
+        dst: Vec<u8>,
+        pairs: Vec<(Vec<u8>, f64)>,
+    },
     /// Set-form step-2 (`SINTERSTORE` family).
-    SetStoreResult { dst: Vec<u8>, members: Vec<Vec<u8>> },
+    SetStoreResult {
+        dst: Vec<u8>,
+        members: Vec<Vec<u8>>,
+    },
     /// FEED.READ executed on the target shard.
     FeedRead {
         cursor_gen: u64,
@@ -80,13 +86,17 @@ pub(crate) enum Op {
     /// Shared, not cloned: the same argv goes to every shard, and copying
     /// ten byte-strings sixteen times to hand each thread its own set was
     /// ~160 allocations a query for bytes nobody mutates.
-    Extension { argv: std::sync::Arc<[Vec<u8>]> },
+    Extension {
+        argv: std::sync::Arc<[Vec<u8>]>,
+    },
     /// Step-1 of the geo `*STORE` orchestrator: run the search half of
     /// `GEOSEARCHSTORE` / `GEORADIUS[BYMEMBER] … STORE` on the SOURCE key's
     /// shard (read-only — the destination write is a separate
     /// [`Op::ZStoreResult`] on the destination's shard). Reply
     /// [`Part::GeoHits`].
-    GeoSearch { argv: Vec<Vec<u8>> },
+    GeoSearch {
+        argv: Vec<Vec<u8>>,
+    },
     /// `REPL.TOKEN` fan-out: read this shard's live
     /// `(feed generation, next_offset)` pair. Reply [`Part::ReplToken`].
     /// Live (not tick-stale): a token minted right after a write must
@@ -159,10 +169,17 @@ pub(crate) enum Op {
     /// Cross-shard BITOP step 2: store the combined bytes at `key`, or
     /// delete `key` when they are empty. Reply [`Part::Int`] with the
     /// stored length.
-    BitOpResult { key: Vec<u8>, value: Vec<u8> },
+    BitOpResult {
+        key: Vec<u8>,
+        value: Vec<u8>,
+    },
     /// Same-shard COPY: both keys hash here, so one atomic
     /// clone-then-put. Reply [`Part::CopyPutDone`].
-    Copy { src: Vec<u8>, dst: Vec<u8>, replace: bool },
+    Copy {
+        src: Vec<u8>,
+        dst: Vec<u8>,
+        replace: bool,
+    },
     /// Cross-shard COPY step 1: clone `src`'s value and its remaining
     /// TTL WITHOUT removing it. That one word is the whole difference
     /// from [`Op::RenameTake`], and it is why this family needs no
@@ -190,7 +207,10 @@ pub(crate) enum Op {
     /// shard. Reply [`Part::ListMoveTaken`] — `None` when the source is
     /// empty or absent, which the orchestrator turns into a nil reply
     /// without ever touching the destination.
-    ListMoveTake { key: Vec<u8>, from_left: bool },
+    ListMoveTake {
+        key: Vec<u8>,
+        from_left: bool,
+    },
     /// Cross-shard list move step 2: push the taken element onto `key` on
     /// this shard. Reply [`Part::ListMovePushed`] — `refused` carries the
     /// element back when the destination exists and is not a list, so the
@@ -228,10 +248,12 @@ pub(crate) enum Op {
     /// mutates group state (PEL / last-delivered), so the owning shard runs
     /// the post-write housekeeping (AOF log of the rewritten argv, WATCH
     /// bump, keyspace notify) after dispatch. Reply: [`Part::XReadElement`].
-    XReadOne { index: u32, argv: Argv, write: bool },
+    XReadOne {
+        index: u32,
+        argv: Argv,
+        write: bool,
+    },
 }
-
-
 
 /// A RESP reply fragment with a 30-byte inline arm. The forwarded-dispatch
 /// hot path produces tiny replies (`+OK`, `:N`, a `$16` GET payload = 23 B)
@@ -271,7 +293,6 @@ impl SmallReply {
         }
     }
 }
-
 
 /// A batch of single-key dispatches forwarded to one owning shard:
 /// `(conn, seq, argv, proto)` each. Batched per loop so a -c50 flood
@@ -338,7 +359,10 @@ pub(crate) enum Inbound {
     },
     /// target → origin: a watched `key` may now satisfy `conn`. The origin
     /// arbitrates (ignores if `conn` already served / serving).
-    BlockReady { conn: u64, key: Vec<u8> },
+    BlockReady {
+        conn: u64,
+        key: Vec<u8>,
+    },
     /// origin → target: "serve `key` for `(origin, conn)` now" — the target
     /// replays the armed `serve_argv` (popping / consuming) and returns the
     /// reply via [`Inbound::BlockServeResp`].
@@ -356,19 +380,30 @@ pub(crate) enum Inbound {
     },
     /// origin → target: the serve landed on a live client — release the
     /// undo the target is holding for `(origin, conn)`.
-    BlockServeAck { origin: usize, conn: u64 },
+    BlockServeAck {
+        origin: usize,
+        conn: u64,
+    },
     /// origin → src's shard: a cross-shard RENAME's put committed on the
     /// destination, so the source may now record its half (the delete).
     /// Sent only after the put succeeded — see
     /// `Shard::log_rename_source_committed` for why not before.
-    RenameCommitted { src: Vec<u8> },
+    RenameCommitted {
+        src: Vec<u8>,
+    },
     /// origin → target: the serve could NOT be delivered (the client
     /// disconnected while it was in flight) — apply the held undo, so
     /// the popped element goes back instead of vanishing.
-    BlockServeAbort { origin: usize, conn: u64 },
+    BlockServeAbort {
+        origin: usize,
+        conn: u64,
+    },
     /// origin → target: drop every waiter for `(origin, conn)` — sent on
     /// successful serve, timeout, or disconnect.
-    BlockCancel { origin: usize, conn: u64 },
+    BlockCancel {
+        origin: usize,
+        conn: u64,
+    },
 
     // ── Replication waiters (see [`crate::exec_replwait`]) ──
     // WAIT / REPL.WAIT arm-and-defer messages ride their own Inbound
@@ -401,9 +436,12 @@ pub(crate) enum Inbound {
     /// target → origin: one shard's WAIT / REPL.WAIT answer, folded as
     /// `Part::Int(n)` into the pending slot ([`Agg::MinInt`] /
     /// [`Agg::ReplBarrier`]).
-    ReplDone { conn: u64, seq: u64, n: i64 },
+    ReplDone {
+        conn: u64,
+        seq: u64,
+        n: i64,
+    },
 }
-
 
 // The aggregation half (`Agg` / `RenameStep` / `PendingSlot`) lives in
 // [`crate::message_agg`] — split out so this file stays under the

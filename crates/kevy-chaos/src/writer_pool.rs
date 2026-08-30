@@ -61,12 +61,7 @@ impl WriterPool {
     }
 }
 
-fn writer_loop(
-    writer_id: usize,
-    port: u16,
-    log: AckLog,
-    stop: Arc<std::sync::atomic::AtomicBool>,
-) {
+fn writer_loop(writer_id: usize, port: u16, log: AckLog, stop: Arc<std::sync::atomic::AtomicBool>) {
     let mut stream = match TcpStream::connect(format!("127.0.0.1:{port}")) {
         Ok(s) => s,
         Err(_) => return,
@@ -132,10 +127,7 @@ pub fn verify_all_present(port: u16, acks: &[AckEntry]) -> Result<(), String> {
 
 /// Same as `verify_all_present` but returns counts instead of fail-fast.
 /// Returns `(present, lost, corrupted_descriptions)`.
-pub fn pipelined_verify_counts(
-    port: u16,
-    acks: &[AckEntry],
-) -> (usize, usize, Vec<String>) {
+pub fn pipelined_verify_counts(port: u16, acks: &[AckEntry]) -> (usize, usize, Vec<String>) {
     let buf = match pipeline_get_replies(port, acks) {
         Ok(buf) => buf,
         Err(e) => return (0, acks.len(), vec![e]),
@@ -235,4 +227,3 @@ fn parse_one_reply(buf: &[u8], start: usize) -> Option<(Option<&[u8]>, usize)> {
     }
     Some((Some(&rest[body_start..body_end]), start + body_end + 2))
 }
-

@@ -1,5 +1,5 @@
-use crate::KevyError;
 use super::*;
+use crate::KevyError;
 use crate::{Config, Store};
 
 fn store() -> Store {
@@ -33,21 +33,12 @@ fn subscribe_ack_then_message_delivered() {
     let s = store();
     let sub = s.subscribe(&[b"news"]);
     // Drain the SUBSCRIBE ack.
-    assert_eq!(
-        sub.recv().unwrap(),
-        PubsubFrame::Subscribe {
-            channel: b"news".to_vec(),
-            count: 1,
-        }
-    );
+    assert_eq!(sub.recv().unwrap(), PubsubFrame::Subscribe { channel: b"news".to_vec(), count: 1 });
     // Same store handle (or a clone) can publish.
     assert_eq!(s.publish(b"news", b"hello"), 1);
     assert_eq!(
         sub.recv().unwrap(),
-        PubsubFrame::Message {
-            channel: b"news".to_vec(),
-            payload: b"hello".to_vec(),
-        }
+        PubsubFrame::Message { channel: b"news".to_vec(), payload: b"hello".to_vec() }
     );
 }
 
@@ -60,10 +51,7 @@ fn store_clone_publishes_reach_other_clones_subscribers() {
     assert_eq!(s2.publish(b"x", b"v"), 1);
     assert_eq!(
         sub.recv().unwrap(),
-        PubsubFrame::Message {
-            channel: b"x".to_vec(),
-            payload: b"v".to_vec(),
-        }
+        PubsubFrame::Message { channel: b"x".to_vec(), payload: b"v".to_vec() }
     );
 }
 
@@ -109,13 +97,7 @@ fn unsubscribe_removes_then_no_more_messages() {
     let _ = sub.recv().unwrap();
     sub.unsubscribe(&[b"x"]);
     // Drain the unsubscribe ack.
-    assert!(matches!(
-        sub.recv().unwrap(),
-        PubsubFrame::Unsubscribe {
-            channel: Some(_),
-            count: 0
-        }
-    ));
+    assert!(matches!(sub.recv().unwrap(), PubsubFrame::Unsubscribe { channel: Some(_), count: 0 }));
     // Publishes no longer reach us.
     assert_eq!(s.publish(b"x", b"v"), 0);
 }
@@ -129,13 +111,7 @@ fn unsubscribe_all_with_empty_args_drains_every_channel() {
     sub.unsubscribe(&[]);
     // Two unsubscribe acks, one per removed channel.
     for _ in 0..2 {
-        assert!(matches!(
-            sub.recv().unwrap(),
-            PubsubFrame::Unsubscribe {
-                channel: Some(_),
-                ..
-            }
-        ));
+        assert!(matches!(sub.recv().unwrap(), PubsubFrame::Unsubscribe { channel: Some(_), .. }));
     }
     // Publishes go nowhere now.
     assert_eq!(s.publish(b"a", b"x"), 0);
@@ -147,13 +123,7 @@ fn unsubscribe_when_no_subs_held_emits_nil_channel_ack() {
     let s = store();
     let mut sub = s.subscribe(&[]); // empty start
     sub.unsubscribe(&[]);
-    assert!(matches!(
-        sub.recv().unwrap(),
-        PubsubFrame::Unsubscribe {
-            channel: None,
-            count: 0
-        }
-    ));
+    assert!(matches!(sub.recv().unwrap(), PubsubFrame::Unsubscribe { channel: None, count: 0 }));
 }
 
 #[test]
@@ -173,9 +143,7 @@ fn recv_timeout_returns_timeout_when_empty() {
     let sub = s.subscribe(&[b"x"]);
     // Drain the ack first.
     let _ = sub.recv_timeout(Duration::from_millis(100)).unwrap();
-    let err = sub
-        .recv_timeout(Duration::from_millis(50))
-        .unwrap_err();
+    let err = sub.recv_timeout(Duration::from_millis(50)).unwrap_err();
     assert!(matches!(err, KevyError::TimedOut));
 }
 

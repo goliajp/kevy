@@ -18,8 +18,10 @@ use std::time::{Duration, Instant};
 
 fn main() {
     let mut args = std::env::args().skip(1);
-    let port: u16 = args.next().and_then(|s| s.parse().ok()).expect("usage: tail_probe <port> <seconds>");
-    let secs: u64 = args.next().and_then(|s| s.parse().ok()).expect("usage: tail_probe <port> <seconds>");
+    let port: u16 =
+        args.next().and_then(|s| s.parse().ok()).expect("usage: tail_probe <port> <seconds>");
+    let secs: u64 =
+        args.next().and_then(|s| s.parse().ok()).expect("usage: tail_probe <port> <seconds>");
 
     let mut conn = TcpStream::connect(("127.0.0.1", port)).expect("connect");
     conn.set_nodelay(true).expect("nodelay");

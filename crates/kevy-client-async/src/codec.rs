@@ -109,10 +109,7 @@ impl<T: AsyncTransport> AsyncRespCodec<T> {
                 Ok(Some(reply)) => return Ok(reply),
                 Ok(None) => {}
                 Err(_) => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "malformed reply",
-                    ));
+                    return Err(io::Error::new(io::ErrorKind::InvalidData, "malformed reply"));
                 }
             }
             let n = read(transport, &mut chunk[..]).await?;
@@ -167,11 +164,7 @@ mod tests {
 
     impl MockTransport {
         fn new(server_reply: Vec<u8>) -> Self {
-            Self {
-                incoming: server_reply,
-                in_cursor: 0,
-                outgoing: Vec::new(),
-            }
+            Self { incoming: server_reply, in_cursor: 0, outgoing: Vec::new() }
         }
     }
 
@@ -239,17 +232,13 @@ mod tests {
         // Three replies concatenated: +A\r\n +B\r\n +C\r\n
         let mock = MockTransport::new(b"+A\r\n+B\r\n+C\r\n".to_vec());
         let mut codec = AsyncRespCodec::new(mock);
-        let batch = vec![
-            vec![b"PING".to_vec()],
-            vec![b"PING".to_vec()],
-            vec![b"PING".to_vec()],
-        ];
+        let batch = vec![vec![b"PING".to_vec()], vec![b"PING".to_vec()], vec![b"PING".to_vec()]];
         let replies = block_on(codec.pipeline(&batch)).unwrap();
         assert_eq!(replies.len(), 3);
         let mock = codec.into_inner();
         // Single write contained all three encoded commands.
-        let expected: Vec<u8> = b"*1\r\n$4\r\nPING\r\n*1\r\n$4\r\nPING\r\n*1\r\n$4\r\nPING\r\n"
-            .to_vec();
+        let expected: Vec<u8> =
+            b"*1\r\n$4\r\nPING\r\n*1\r\n$4\r\nPING\r\n*1\r\n$4\r\nPING\r\n".to_vec();
         assert_eq!(mock.outgoing, expected);
     }
 }

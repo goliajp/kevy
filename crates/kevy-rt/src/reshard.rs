@@ -36,10 +36,7 @@ pub(crate) fn ensure_layout<C: Commands>(
         // Legacy dir (server never wrote meta): the shard count is however
         // many per-shard files exist, the routing is the only scheme that
         // existed. An empty dir trivially "matches" — just record target.
-        None => ShardsMeta {
-            n: layout::infer_files_n(dir),
-            routing: Routing::KevyHash,
-        },
+        None => ShardsMeta { n: layout::infer_files_n(dir), routing: Routing::KevyHash },
     };
     if prev.n == 0 || prev == target {
         std::fs::create_dir_all(dir)?;
@@ -112,7 +109,11 @@ fn reshard<C: Commands>(
     }
     eprintln!(
         "kevy: re-sharded {} -> {} shards ({:?} -> {:?} routing); {} source file(s) backed up as .premigration.{stamp}",
-        prev.n, target.n, prev.routing, target.routing, sources.len(),
+        prev.n,
+        target.n,
+        prev.routing,
+        target.routing,
+        sources.len(),
     );
     Ok(())
 }

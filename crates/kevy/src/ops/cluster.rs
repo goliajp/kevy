@@ -41,11 +41,7 @@ fn node_id(i: usize) -> String {
 /// `0.0.0.0` wildcard (an unroutable advertise would strand every client).
 fn advertised_ip(cfg: &Config) -> String {
     let [a, b, c, d] = cfg.server.bind;
-    if [a, b, c, d] == [0, 0, 0, 0] {
-        "127.0.0.1".into()
-    } else {
-        format!("{a}.{b}.{c}.{d}")
-    }
+    if [a, b, c, d] == [0, 0, 0, 0] { "127.0.0.1".into() } else { format!("{a}.{b}.{c}.{d}") }
 }
 
 // LOC-WAIVER: data-driven subcommand dispatch table — one reply-emitter arm per subcommand.
@@ -71,11 +67,7 @@ pub(crate) fn cmd_cluster<A: ArgvView + ?Sized>(
             // Without `peers` we report 1 (this node only) when
             // cluster is enabled — clients see a real single-node
             // topology instead of 0.
-            let known = if enabled {
-                cfg.cluster.peers.len().max(1)
-            } else {
-                1
-            };
+            let known = if enabled { cfg.cluster.peers.len().max(1) } else { 1 };
             let body = format!(
                 "cluster_enabled:{}\r\ncluster_state:ok\r\n\
                  cluster_slots_assigned:16384\r\ncluster_slots_ok:16384\r\n\
@@ -89,10 +81,7 @@ pub(crate) fn cmd_cluster<A: ArgvView + ?Sized>(
             encode_bulk(out, body.as_bytes());
         }
         b"NODES" if enabled => {
-            encode_bulk(
-                out,
-                nodes_text(cfg, n, live_role(ctx), ctx.shard.shard_id()).as_bytes(),
-            );
+            encode_bulk(out, nodes_text(cfg, n, live_role(ctx), ctx.shard.shard_id()).as_bytes());
         }
         b"NODES" => {
             // Standalone stub. The role flag reflects live state
@@ -158,11 +147,7 @@ fn for_each_node(cfg: &Config, n: usize, mut f: impl FnMut(usize, &str, i64, u16
 /// shards within this same process share the same role (they're
 /// sibling shards in one process), so callers apply it to every entry.
 fn live_role(ctx: &Ctx<'_>) -> &'static str {
-    if ctx.state.replication.current_upstream().is_some() {
-        "slave"
-    } else {
-        "master"
-    }
+    if ctx.state.replication.current_upstream().is_some() { "slave" } else { "master" }
 }
 
 /// `CLUSTER NODES` text: one line per virtual node. The answering
@@ -171,11 +156,7 @@ fn live_role(ctx: &Ctx<'_>) -> &'static str {
 fn nodes_text(cfg: &Config, n: usize, role: &str, me: usize) -> String {
     let mut body = String::new();
     for_each_node(cfg, n, |i, ip, port, start, end| {
-        let flags = if i == me {
-            format!("myself,{role}")
-        } else {
-            role.to_string()
-        };
+        let flags = if i == me { format!("myself,{role}") } else { role.to_string() };
         body.push_str(&format!(
             "{} {ip}:{port}@{port} {flags} - 0 0 {} connected {start}-{end}\r\n",
             node_id(i),

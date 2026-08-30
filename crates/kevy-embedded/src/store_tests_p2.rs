@@ -65,10 +65,7 @@ fn hmget_per_field_option() {
     let s = s();
     s.hset(b"t", &[(b"a", b"1"), (b"b", b"2")]).unwrap();
     let got = s.hmget(b"t", &[b"a", b"x", b"b"]).unwrap();
-    assert_eq!(
-        got,
-        vec![Some(b"1".to_vec()), None, Some(b"2".to_vec())]
-    );
+    assert_eq!(got, vec![Some(b"1".to_vec()), None, Some(b"2".to_vec())]);
 }
 
 #[test]
@@ -88,14 +85,7 @@ fn zrange_asc_with_scores() {
     let s = s();
     s.zadd(b"z", &[(1.0, b"a"), (2.0, b"b"), (3.0, b"c")]).unwrap();
     let got = s.zrange(b"z", 0, -1).unwrap();
-    assert_eq!(
-        got,
-        vec![
-            (b"a".to_vec(), 1.0),
-            (b"b".to_vec(), 2.0),
-            (b"c".to_vec(), 3.0)
-        ]
-    );
+    assert_eq!(got, vec![(b"a".to_vec(), 1.0), (b"b".to_vec(), 2.0), (b"c".to_vec(), 3.0)]);
 }
 
 #[test]
@@ -103,14 +93,7 @@ fn zrevrange_desc_with_scores() {
     let s = s();
     s.zadd(b"z", &[(1.0, b"a"), (2.0, b"b"), (3.0, b"c")]).unwrap();
     let got = s.zrevrange(b"z", 0, -1).unwrap();
-    assert_eq!(
-        got,
-        vec![
-            (b"c".to_vec(), 3.0),
-            (b"b".to_vec(), 2.0),
-            (b"a".to_vec(), 1.0)
-        ]
-    );
+    assert_eq!(got, vec![(b"c".to_vec(), 3.0), (b"b".to_vec(), 2.0), (b"a".to_vec(), 1.0)]);
 }
 
 #[test]
@@ -126,10 +109,7 @@ fn zrange_by_score_inclusive() {
     let s = s();
     s.zadd(b"z", &[(1.0, b"a"), (2.0, b"b"), (3.0, b"c"), (4.0, b"d")]).unwrap();
     let got = s.zrange_by_score(b"z", 2.0, 3.0).unwrap();
-    assert_eq!(
-        got,
-        vec![(b"b".to_vec(), 2.0), (b"c".to_vec(), 3.0)]
-    );
+    assert_eq!(got, vec![(b"b".to_vec(), 2.0), (b"c".to_vec(), 3.0)]);
 }
 
 #[test]
@@ -151,10 +131,7 @@ fn lrange_basic() {
         s.lrange(b"l", 0, -1).unwrap(),
         vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec(), b"d".to_vec()]
     );
-    assert_eq!(
-        s.lrange(b"l", 1, 2).unwrap(),
-        vec![b"b".to_vec(), b"c".to_vec()]
-    );
+    assert_eq!(s.lrange(b"l", 1, 2).unwrap(), vec![b"b".to_vec(), b"c".to_vec()]);
 }
 
 #[test]
@@ -171,10 +148,7 @@ fn lrem_removes_n_from_head() {
     let s = s();
     s.rpush(b"l", &[b"x", b"y", b"x", b"z", b"x"]).unwrap();
     assert_eq!(s.lrem(b"l", 2, b"x").unwrap(), 2);
-    assert_eq!(
-        s.lrange(b"l", 0, -1).unwrap(),
-        vec![b"y".to_vec(), b"z".to_vec(), b"x".to_vec()]
-    );
+    assert_eq!(s.lrange(b"l", 0, -1).unwrap(), vec![b"y".to_vec(), b"z".to_vec(), b"x".to_vec()]);
 }
 
 // ---- string single-call atomic -------------------------------------------

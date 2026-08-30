@@ -22,10 +22,7 @@ fn dispatch(s: &Store, argv: &[&[u8]]) -> Vec<u8> {
 }
 
 fn tiered_config(dir: &std::path::Path, budget: u64) -> Config {
-    Config::default()
-        .with_ttl_reaper_manual()
-        .with_persist(dir)
-        .with_tier_budget(budget)
+    Config::default().with_ttl_reaper_manual().with_persist(dir).with_tier_budget(budget)
 }
 
 /// One deterministic value per key so a mixed-up restore cannot pass.
@@ -45,8 +42,7 @@ fn b10_rewrite_aof_streams_cold_values_losslessly() {
         s.set(b"hot:k", b"small").unwrap();
         s.set(b"cold:a", &val_of(1, 4096)).unwrap();
         s.set(b"cold:b", &val_of(2, 2500)).unwrap();
-        s.hset(b"cold:row", &[(b"name".as_slice(), b"ada".as_slice()), (b"dept", b"eng")])
-            .unwrap();
+        s.hset(b"cold:row", &[(b"name".as_slice(), b"ada".as_slice()), (b"dept", b"eng")]).unwrap();
         assert_eq!(
             dispatch(&s, &[b"HPEXPIRE", b"cold:row", b"3600000", b"FIELDS", b"1", b"name"]),
             b"*1\r\n:1\r\n".to_vec()

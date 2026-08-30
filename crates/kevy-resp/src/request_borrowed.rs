@@ -48,9 +48,7 @@ pub fn parse_command_borrowed(
 // See note on `parse_inline_into`: signature symmetry with
 // `parse_multibulk_borrowed` is the point; the inline path itself can't fail.
 #[allow(clippy::unnecessary_wraps)]
-fn parse_inline_borrowed(
-    buf: &[u8],
-) -> Result<Option<(ArgvBorrowed<'_>, usize)>, ProtocolError> {
+fn parse_inline_borrowed(buf: &[u8]) -> Result<Option<(ArgvBorrowed<'_>, usize)>, ProtocolError> {
     let Some(eol) = find_crlf(buf, 0) else {
         return Ok(None);
     };
@@ -153,21 +151,14 @@ mod tests {
         for i in 0..argv.len() {
             let slice = argv.get(i).unwrap();
             let p = slice.as_ptr() as usize;
-            assert!(
-                p >= base && p + slice.len() <= end,
-                "arg {i} not borrowed from buf"
-            );
+            assert!(p >= base && p + slice.len() <= end, "arg {i} not borrowed from buf");
         }
     }
 
     #[test]
     fn borrowed_incomplete_returns_none() {
         assert!(parse_command_borrowed(b"*1\r\n$4\r\nPI").unwrap().is_none());
-        assert!(
-            parse_command_borrowed(b"*2\r\n$4\r\nECHO\r\n")
-                .unwrap()
-                .is_none()
-        );
+        assert!(parse_command_borrowed(b"*2\r\n$4\r\nECHO\r\n").unwrap().is_none());
         assert!(parse_command_borrowed(b"").unwrap().is_none());
     }
 
@@ -180,10 +171,7 @@ mod tests {
 
         let frame = b"ECHO  hi there\r\n";
         let (argv, _) = parse_command_borrowed(frame).unwrap().unwrap();
-        assert_eq!(
-            argv,
-            vec![b"ECHO".to_vec(), b"hi".to_vec(), b"there".to_vec()]
-        );
+        assert_eq!(argv, vec![b"ECHO".to_vec(), b"hi".to_vec(), b"there".to_vec()]);
     }
 
     #[test]

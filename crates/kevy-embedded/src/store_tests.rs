@@ -1,15 +1,13 @@
-use crate::store::*;
 use crate::KevyMetric;
 use crate::config::{AppendFsync, EvictionPolicy};
+use crate::store::*;
 use std::path::PathBuf;
 use std::time::Duration;
 
 pub(crate) fn tmp_dir(name: &str) -> PathBuf {
     let mut p = std::env::temp_dir();
-    let uniq = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
+    let uniq =
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
     p.push(format!("kevy-embedded-{name}-{uniq}"));
     p
 }
@@ -42,12 +40,7 @@ fn persistence_round_trip_via_aof() {
         s.hset(b"h", &[(b"field" as &[u8], b"val" as &[u8])]).unwrap();
     }
     // Reopen: AOF replay should reconstruct exactly the same state.
-    let s2 = Store::open(
-        Config::default()
-            .with_persist(&dir)
-            .with_ttl_reaper_manual(),
-    )
-    .unwrap();
+    let s2 = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
     assert_eq!(s2.dbsize(), 52); // 50 + counter + h
     assert_eq!(s2.get(b"k0").unwrap(), Some(b"v".to_vec()));
     assert_eq!(s2.get(b"k49").unwrap(), Some(b"v".to_vec()));
@@ -67,8 +60,7 @@ fn eviction_works_under_pressure() {
     )
     .unwrap();
     for i in 0..50 {
-        s.set(format!("k{i:02}").as_bytes(), b"xxxxxxxxxxxxxxxxxxxx")
-            .unwrap();
+        s.set(format!("k{i:02}").as_bytes(), b"xxxxxxxxxxxxxxxxxxxx").unwrap();
     }
     assert!(s.used_memory() <= 800, "got {}", s.used_memory());
     assert!(s.evictions_total() > 0);
@@ -111,10 +103,7 @@ fn with_escape_hatch_works() {
 
 #[test]
 fn background_reaper_thread_drops_expired_keys() {
-    let s = Store::open(
-        Config::default().with_reaper_interval(Duration::from_millis(20)),
-    )
-    .unwrap();
+    let s = Store::open(Config::default().with_reaper_interval(Duration::from_millis(20))).unwrap();
     s.set_with_ttl(b"k", b"v", Duration::from_millis(5)).unwrap();
     // The active reaper (20ms interval) reclaims the expired key on its own —
     // reads no longer reap. Poll for it (bounded) rather than racing a fixed
@@ -154,10 +143,8 @@ fn drop_during_reaper_does_not_deadlock() {
     // while the reaper is sleeping. Without the stop-flag + join the
     // drop would either hang or race the reaper holding the mutex.
     for _ in 0..4 {
-        let s = Store::open(
-            Config::default().with_reaper_interval(Duration::from_millis(5)),
-        )
-        .unwrap();
+        let s =
+            Store::open(Config::default().with_reaper_interval(Duration::from_millis(5))).unwrap();
         s.set(b"k", b"v").unwrap();
         // Let the reaper actually run a couple of times.
         std::thread::sleep(Duration::from_millis(40));
@@ -170,10 +157,7 @@ fn save_snapshot_then_restart() {
     let dir = tmp_dir("snap-rt");
     {
         let s = Store::open(
-            Config::default()
-                .with_persist(&dir)
-                .without_aof()
-                .with_ttl_reaper_manual(),
+            Config::default().with_persist(&dir).without_aof().with_ttl_reaper_manual(),
         )
         .unwrap();
         for i in 0..10 {
@@ -182,13 +166,9 @@ fn save_snapshot_then_restart() {
         let saved = s.save_snapshot().unwrap();
         assert!(saved);
     }
-    let s2 = Store::open(
-        Config::default()
-            .with_persist(&dir)
-            .without_aof()
-            .with_ttl_reaper_manual(),
-    )
-    .unwrap();
+    let s2 =
+        Store::open(Config::default().with_persist(&dir).without_aof().with_ttl_reaper_manual())
+            .unwrap();
     assert_eq!(s2.dbsize(), 10);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -247,20 +227,14 @@ fn metric_sink_receives_rewrite_and_replay() {
     seen.lock().unwrap().clear();
     let r_seen = seen.clone();
     let _s2 = Store::open(
-        Config::default()
-            .with_persist(&dir)
-            .with_ttl_reaper_manual()
-            .with_metric_sink(move |m| {
-                if matches!(m, KevyMetric::Replay { .. }) {
-                    r_seen.lock().unwrap().push("replay");
-                }
-            }),
+        Config::default().with_persist(&dir).with_ttl_reaper_manual().with_metric_sink(move |m| {
+            if matches!(m, KevyMetric::Replay { .. }) {
+                r_seen.lock().unwrap().push("replay");
+            }
+        }),
     )
     .unwrap();
-    assert!(
-        seen.lock().unwrap().contains(&"replay"),
-        "reopening should emit a Replay metric"
-    );
+    assert!(seen.lock().unwrap().contains(&"replay"), "reopening should emit a Replay metric");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -291,10 +265,7 @@ fn auto_aof_rewrite_compacts_redundant_writes() {
     // Latest value preserved, and it survives a real restart.
     assert_eq!(s.get(b"hot").unwrap(), Some(b"v299".to_vec()));
     drop(s);
-    let s2 = Store::open(
-        Config::default().with_persist(&dir).with_ttl_reaper_manual(),
-    )
-    .unwrap();
+    let s2 = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
     assert_eq!(s2.get(b"hot").unwrap(), Some(b"v299".to_vec()));
     assert_eq!(s2.dbsize(), 1);
     let _ = std::fs::remove_dir_all(&dir);
@@ -308,19 +279,13 @@ fn auto_aof_rewrite_compacts_redundant_writes() {
 fn save_snapshot_resets_aof_no_double_replay() {
     let dir = tmp_dir("save-aof-reset");
     {
-        let s = Store::open(
-            Config::default().with_persist(&dir).with_ttl_reaper_manual(),
-        )
-        .unwrap();
+        let s = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
         s.rpush(b"l", &[b"a", b"b"]).unwrap();
         assert!(s.save_snapshot().unwrap());
         // Post-snapshot write: must survive via the (reset) AOF.
         s.rpush(b"l", &[b"c"]).unwrap();
     }
-    let s2 = Store::open(
-        Config::default().with_persist(&dir).with_ttl_reaper_manual(),
-    )
-    .unwrap();
+    let s2 = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
     assert_eq!(
         s2.llen(b"l").unwrap(),
         3,
@@ -366,10 +331,7 @@ fn open_report_surfaces_drops_corruption_and_quarantine() {
         f.write_all(b"abcd").unwrap();
         f.write_all(b"trailing-good-bytes-lost-with-the-bad-record").unwrap();
     }
-    let s = Store::open(
-        Config::default().with_persist(&dir).with_ttl_reaper_manual(),
-    )
-    .unwrap();
+    let s = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
     let r = s.open_report();
     assert!(r.dropped_bytes > 0, "damage must be reported: {r:?}");
     assert!(r.corrupt, "parser-failing damage must set corrupt: {r:?}");
@@ -386,10 +348,7 @@ fn open_report_surfaces_drops_corruption_and_quarantine() {
 fn shutdown_fsyncs_refuses_writes_and_survives_reopen() {
     let dir = tmp_dir("shutdown");
     {
-        let s = Store::open(
-            Config::default().with_persist(&dir).with_ttl_reaper_manual(),
-        )
-        .unwrap();
+        let s = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
         let clone = s.clone();
         for i in 0..50 {
             s.set(format!("k{i}").as_bytes(), b"v").unwrap();
@@ -405,10 +364,7 @@ fn shutdown_fsyncs_refuses_writes_and_survives_reopen() {
         s.shutdown().unwrap();
     }
     // Everything written before shutdown survived the (clean) teardown.
-    let s = Store::open(
-        Config::default().with_persist(&dir).with_ttl_reaper_manual(),
-    )
-    .unwrap();
+    let s = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
     assert_eq!(s.get(b"k49").unwrap(), Some(b"v".to_vec()));
     assert_eq!(s.get(b"late").unwrap(), None, "refused write must not exist");
     let _ = std::fs::remove_dir_all(&dir);

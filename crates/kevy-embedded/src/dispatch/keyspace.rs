@@ -6,8 +6,8 @@ use std::time::Duration;
 use crate::store::Store;
 
 use super::util::{
-    arg_i64, arg_u64, arr, bulk, emit_int, err, int, kevy_err, opt_bulk, rest, simple,
-    wrong_args, ERR_NOT_INT, ERR_SYNTAX,
+    ERR_NOT_INT, ERR_SYNTAX, arg_i64, arg_u64, arr, bulk, emit_int, err, int, kevy_err, opt_bulk,
+    rest, simple, wrong_args,
 };
 
 /// One keyspace request; `false` = verb not in this group.

@@ -178,11 +178,7 @@ impl Store {
     }
 
     /// `HSET` — returns the count of newly-added fields.
-    pub fn hset(
-        &mut self,
-        key: &[u8],
-        pairs: &[(&[u8], &[u8])],
-    ) -> Result<usize, StoreError> {
+    pub fn hset(&mut self, key: &[u8], pairs: &[(&[u8], &[u8])]) -> Result<usize, StoreError> {
         self.purge_hash_ttl(key);
         // Overwriting a field discards its TTL (Redis 7.4).
         if !self.hfttl.is_empty() {
@@ -237,11 +233,7 @@ impl Store {
     }
 
     /// `HDEL` — returns count removed; deletes the key if emptied.
-    pub fn hdel(
-        &mut self,
-        key: &[u8],
-        fields: &[&[u8]],
-    ) -> Result<usize, StoreError> {
+    pub fn hdel(&mut self, key: &[u8], fields: &[&[u8]]) -> Result<usize, StoreError> {
         self.purge_hash_ttl(key);
         self.tier_resolve(key, crate::value::COLD_TAG_HASH)?;
         self.unpack_row(key);
@@ -374,9 +366,7 @@ impl Store {
                 })
             }
             Value::Hash(h) => Ok(heap_hash_set(HashRefMut::Flat(Arc::make_mut(h)), field, value)),
-            Value::SegHash(h) => {
-                Ok(heap_hash_set(HashRefMut::Seg(Arc::make_mut(h)), field, value))
-            }
+            Value::SegHash(h) => Ok(heap_hash_set(HashRefMut::Seg(Arc::make_mut(h)), field, value)),
             _ => Err(StoreError::WrongType),
         }
     }

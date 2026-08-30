@@ -133,13 +133,11 @@ impl MatchArgs {
     /// FILTER that is ignored returns unfiltered results, which is a
     /// wrong answer wearing a successful reply.
     pub(crate) fn parse_terminal(argv: &[Vec<u8>]) -> MatchParse {
-        if let Some(i) = (4..argv.len()).find(|&i| {
-            NOT_YET.iter().any(|c| argv[i].eq_ignore_ascii_case(c))
-        }) {
-            let clause = NOT_YET
-                .iter()
-                .find(|c| argv[i].eq_ignore_ascii_case(c))
-                .expect("just matched");
+        if let Some(i) =
+            (4..argv.len()).find(|&i| NOT_YET.iter().any(|c| argv[i].eq_ignore_ascii_case(c)))
+        {
+            let clause =
+                NOT_YET.iter().find(|c| argv[i].eq_ignore_ascii_case(c)).expect("just matched");
             return MatchParse::NotYet(clause);
         }
         match Self::parse(argv) {
@@ -177,7 +175,6 @@ impl MatchArgs {
         a.offset = a.offset.min(10_000);
         Some(a)
     }
-
 }
 
 #[path = "args_filter.rs"]

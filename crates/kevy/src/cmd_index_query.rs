@@ -111,7 +111,10 @@ pub(crate) fn extension_op(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -
         return ops::op_knn(ctx, store, argv);
     }
     // IDX.QUERY <name> GROUP <g> | GROUPS [BY m] [LIMIT n]
-    if argv.get(2).is_some_and(|a| a.eq_ignore_ascii_case(b"GROUP") || a.eq_ignore_ascii_case(b"GROUPS")) {
+    if argv
+        .get(2)
+        .is_some_and(|a| a.eq_ignore_ascii_case(b"GROUP") || a.eq_ignore_ascii_case(b"GROUPS"))
+    {
         return ops::op_agg(ctx, store, argv);
     }
     // Phase 2 of GROUPS (internal): AGG.FETCH <name> <g…> — exact partials
@@ -120,10 +123,7 @@ pub(crate) fn extension_op(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -
         return ops::op_agg_fetch(ctx, store, argv);
     }
     // IDX.REBUILD <name> (ANN tombstone compaction)
-    if argv
-        .first()
-        .is_some_and(|v| v.eq_ignore_ascii_case(b"IDX.REBUILD"))
-    {
+    if argv.first().is_some_and(|v| v.eq_ignore_ascii_case(b"IDX.REBUILD")) {
         return ops::op_rebuild(ctx, store, argv);
     }
     query::op_query(ctx, store, argv, verb)

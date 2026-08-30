@@ -11,11 +11,7 @@ use crate::cmd::{store_err, wrong_args};
 
 use super::emit_entries;
 
-pub(super) fn cmd_xclaim<A: ArgvView + ?Sized>(
-    store: &mut Store,
-    args: &A,
-    out: &mut Vec<u8>,
-) {
+pub(super) fn cmd_xclaim<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
     if args.len() < 6 {
         return wrong_args(out, "xclaim");
     }
@@ -34,11 +30,7 @@ pub(super) fn cmd_xclaim<A: ArgvView + ?Sized>(
     emit_claim_reply(out, &claimed, justid);
 }
 
-pub(super) fn cmd_xautoclaim<A: ArgvView + ?Sized>(
-    store: &mut Store,
-    args: &A,
-    out: &mut Vec<u8>,
-) {
+pub(super) fn cmd_xautoclaim<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
     if args.len() < 6 {
         return wrong_args(out, "xautoclaim");
     }
@@ -47,10 +39,7 @@ pub(super) fn cmd_xautoclaim<A: ArgvView + ?Sized>(
         None => return encode_error(out, "ERR value is not an integer or out of range"),
     };
     let Ok(start) = parse_range_start(&args[5]) else {
-        return encode_error(
-            out,
-            "ERR Invalid stream ID specified as stream command argument",
-        );
+        return encode_error(out, "ERR Invalid stream ID specified as stream command argument");
     };
     let (count, justid) = match parse_autoclaim_tail(args, 6) {
         Ok(p) => p,
@@ -91,10 +80,7 @@ fn parse_xclaim_ids<A: ArgvView + ?Sized>(
     let mut i = start;
     while i < args.len() {
         let tok = args[i].to_ascii_uppercase();
-        if matches!(
-            tok.as_slice(),
-            b"IDLE" | b"TIME" | b"RETRYCOUNT" | b"FORCE" | b"JUSTID"
-        ) {
+        if matches!(tok.as_slice(), b"IDLE" | b"TIME" | b"RETRYCOUNT" | b"FORCE" | b"JUSTID") {
             break;
         }
         let id = parse_explicit_id(&args[i], /*end=*/ false)

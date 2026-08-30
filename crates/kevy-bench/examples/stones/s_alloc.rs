@@ -77,11 +77,7 @@ fn churn(size: usize) {
         }
         live.clear();
     });
-    crate::row(
-        &format!("churn {CHURN}x{size}B interleaved free (kevy-alloc)"),
-        s,
-        CHURN,
-    );
+    crate::row(&format!("churn {CHURN}x{size}B interleaved free (kevy-alloc)"), s, CHURN);
 }
 
 /// What returning pages actually costs, and what an idle sweep costs.
@@ -106,11 +102,7 @@ fn reclaim_cost(size: usize) {
         }
         heap.reclaim();
     });
-    crate::row(
-        &format!("churn {CHURN}x{size}B + page return (kevy-alloc)"),
-        s,
-        CHURN,
-    );
+    crate::row(&format!("churn {CHURN}x{size}B + page return (kevy-alloc)"), s, CHURN);
 
     let s = bench(20, 200, || heap.reclaim());
     crate::row("reclaim sweep, nothing to return (per call)", s, 1);
@@ -132,9 +124,5 @@ fn churn_system(size: usize) {
             }
         }
     });
-    crate::row(
-        &format!("churn {CHURN}x{size}B interleaved free (system)"),
-        s,
-        CHURN,
-    );
+    crate::row(&format!("churn {CHURN}x{size}B interleaved free (system)"), s, CHURN);
 }

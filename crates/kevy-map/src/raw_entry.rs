@@ -81,13 +81,10 @@ impl<K, V> KevyMap<K, V> {
         Q: KevyHash + Eq + ?Sized,
     {
         match self.probe_by_borrow(key) {
-            ProbeOutcome::Found(slot) => RawEntryMut::Occupied(RawOccupiedEntryMut {
-                map: self,
-                slot,
-            }),
-            ProbeOutcome::NotFound { .. } => {
-                RawEntryMut::Vacant(RawVacantEntryMut { map: self })
+            ProbeOutcome::Found(slot) => {
+                RawEntryMut::Occupied(RawOccupiedEntryMut { map: self, slot })
             }
+            ProbeOutcome::NotFound { .. } => RawEntryMut::Vacant(RawVacantEntryMut { map: self }),
         }
     }
 }
@@ -143,9 +140,8 @@ impl<'a, K, V> RawOccupiedEntryMut<'a, K, V> {
         // SAFETY: slot was full; we just marked it DELETED so it won't
         // be re-read as occupied. `ptr::read` moves the (K, V) out;
         // dropping `k` here is correct because we don't return it.
-        let (_k, v) = unsafe {
-            ptr::read(self.map.slots_ptr.as_ptr().add(self.slot) as *const (K, V))
-        };
+        let (_k, v) =
+            unsafe { ptr::read(self.map.slots_ptr.as_ptr().add(self.slot) as *const (K, V)) };
         v
     }
 }

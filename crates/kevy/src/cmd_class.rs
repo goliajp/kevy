@@ -110,9 +110,8 @@ pub(crate) fn is_write_verb(cmd: &[u8]) -> bool {
 pub(crate) fn notify_class_for_verb(cmd: &[u8]) -> Option<NotifyClass> {
     Some(match cmd {
         // String — Redis class `$`.
-        b"SET" | b"SETNX" | b"SETEX" | b"PSETEX" | b"GETSET" | b"GETDEL"
-        | b"APPEND" | b"INCR" | b"DECR" | b"INCRBY" | b"DECRBY" | b"INCRBYFLOAT"
-        | b"SETBIT" | b"SETRANGE" => {
+        b"SET" | b"SETNX" | b"SETEX" | b"PSETEX" | b"GETSET" | b"GETDEL" | b"APPEND" | b"INCR"
+        | b"DECR" | b"INCRBY" | b"DECRBY" | b"INCRBYFLOAT" | b"SETBIT" | b"SETRANGE" => {
             NotifyClass::String
         }
         // Hash — class `h`.
@@ -122,13 +121,15 @@ pub(crate) fn notify_class_for_verb(cmd: &[u8]) -> Option<NotifyClass> {
         b"LPUSH" | b"RPUSH" | b"LPOP" | b"RPOP" | b"LSET" | b"LREM" | b"LTRIM" | b"LINSERT"
         | b"RPOPLPUSH" | b"LMOVE" => NotifyClass::List,
         // Set — class `s` (SINTERSTORE/SUNIONSTORE/SDIFFSTORE not yet impl'd).
-        b"SADD" | b"SREM" | b"SPOP" | b"SINTERSTORE" | b"SUNIONSTORE"
-        | b"SDIFFSTORE" => NotifyClass::Set,
+        b"SADD" | b"SREM" | b"SPOP" | b"SINTERSTORE" | b"SUNIONSTORE" | b"SDIFFSTORE" => {
+            NotifyClass::Set
+        }
         // Sorted set — class `z`. GEOADD writes a ZSet under the hood,
         // so it fires `zadd` notifications too (matches Redis).
         b"ZADD" | b"ZREM" | b"ZINCRBY" | b"ZPOPMIN" | b"ZPOPMIN.BELOW" | b"ZREMRANGEBYRANK"
-        | b"ZREMRANGEBYSCORE" | b"ZINTERSTORE" | b"ZUNIONSTORE" | b"ZDIFFSTORE"
-        | b"GEOADD" => NotifyClass::Zset,
+        | b"ZREMRANGEBYSCORE" | b"ZINTERSTORE" | b"ZUNIONSTORE" | b"ZDIFFSTORE" | b"GEOADD" => {
+            NotifyClass::Zset
+        }
         // Stream — class `t`. XADD/XDEL/XTRIM/XGROUP/XACK/XCLAIM/
         // XREADGROUP all fire their lowercased verb name.
         b"XADD" | b"XDEL" | b"XTRIM" | b"XSETID" | b"XGROUP" | b"XACK" | b"XCLAIM"

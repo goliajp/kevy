@@ -39,22 +39,18 @@ mod tiering;
 
 pub use cluster::{ClusterSection, PeerEntry, ScopeEntry};
 pub use replication::{ReplicationRole, ReplicationSection};
-pub use tiering::{TierBudgetSpec, TieringSection};
 pub use schema::{
-    AdvancedSection, AppendFsync, Config, ConfigError, EvictionPolicy,
-    ExpirySection, LogLevel, LogOutput, LogSection, LuaSection, MemorySection,
-    NotificationFlags, NotificationSection, PersistenceSection, ServerSection,
-    SlowlogSection, parse_notification_flags,
+    AdvancedSection, AppendFsync, Config, ConfigError, EvictionPolicy, ExpirySection, LogLevel,
+    LogOutput, LogSection, LuaSection, MemorySection, NotificationFlags, NotificationSection,
+    PersistenceSection, ServerSection, SlowlogSection, parse_notification_flags,
 };
 pub use size::parse_size;
+pub use tiering::{TierBudgetSpec, TieringSection};
 
 use std::path::{Path, PathBuf};
 
 /// Auto-detect search order when `Config::load(None)` is called.
-const AUTODETECT_PATHS: &[&str] = &[
-    "./kevy.toml",
-    "/etc/kevy/kevy.toml",
-];
+const AUTODETECT_PATHS: &[&str] = &["./kevy.toml", "/etc/kevy/kevy.toml"];
 
 impl Config {
     /// Load config from the given explicit path, or auto-detect.
@@ -186,10 +182,8 @@ pub struct CliOverrides {
 }
 
 fn read_required(p: &Path) -> Result<String, ConfigError> {
-    std::fs::read_to_string(p).map_err(|e| ConfigError::IoOpen {
-        path: p.to_path_buf(),
-        err: e.to_string(),
-    })
+    std::fs::read_to_string(p)
+        .map_err(|e| ConfigError::IoOpen { path: p.to_path_buf(), err: e.to_string() })
 }
 
 fn autodetect() -> Option<PathBuf> {

@@ -49,17 +49,16 @@ impl Server {
         let port = free_port();
         let dir = std::env::temp_dir().join(format!(
             "kevy-psub-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         let dir_thread = dir.clone();
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(nshards)).bind([127, 0, 0, 1], port).shards(nshards)
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(nshards))
+                .bind([127, 0, 0, 1], port)
+                .shards(nshards)
                 .with_data_dir(dir_thread);
             rt.run(stop_thread).unwrap();
         });
@@ -72,18 +71,12 @@ impl Server {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert!(ready, "runtime did not come up");
-        Server {
-            port,
-            dir,
-            stop,
-            handle: Some(handle),
-        }
+        Server { port, dir, stop, handle: Some(handle) }
     }
 
     fn connect(&self) -> std::net::TcpStream {
         let s = std::net::TcpStream::connect(("127.0.0.1", self.port)).unwrap();
-        s.set_read_timeout(Some(std::time::Duration::from_secs(10)))
-            .unwrap();
+        s.set_read_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
         s
     }
 }
@@ -104,16 +97,12 @@ fn psubscribe_ack_then_pmessage_round_trip() {
 
     let mut sub = srv.connect();
     sub.write_all(&req(&[b"PSUBSCRIBE", b"news.*"])).unwrap();
-    read_reply(
-        &mut sub,
-        b"*3\r\n$10\r\npsubscribe\r\n$6\r\nnews.*\r\n:1\r\n",
-    );
+    read_reply(&mut sub, b"*3\r\n$10\r\npsubscribe\r\n$6\r\nnews.*\r\n:1\r\n");
 
     // PUBLISH from a different conn (likely a different shard than the
     // sub). reply = 1 (one pattern subscriber).
     let mut pub_ = srv.connect();
-    pub_.write_all(&req(&[b"PUBLISH", b"news.tech", b"hi"]))
-        .unwrap();
+    pub_.write_all(&req(&[b"PUBLISH", b"news.tech", b"hi"])).unwrap();
     read_reply(&mut pub_, b":1\r\n");
 
     read_reply(
@@ -128,21 +117,16 @@ fn pattern_no_match_no_delivery() {
 
     let mut sub = srv.connect();
     sub.write_all(&req(&[b"PSUBSCRIBE", b"news.*"])).unwrap();
-    read_reply(
-        &mut sub,
-        b"*3\r\n$10\r\npsubscribe\r\n$6\r\nnews.*\r\n:1\r\n",
-    );
+    read_reply(&mut sub, b"*3\r\n$10\r\npsubscribe\r\n$6\r\nnews.*\r\n:1\r\n");
 
     // Publish to something that does NOT match `news.*` — pub count = 0,
     // sub gets no pmessage frame.
     let mut pub_ = srv.connect();
-    pub_.write_all(&req(&[b"PUBLISH", b"weather", b"sunny"]))
-        .unwrap();
+    pub_.write_all(&req(&[b"PUBLISH", b"weather", b"sunny"])).unwrap();
     read_reply(&mut pub_, b":0\r\n");
 
     // Verify nothing leaked — set a 200 ms read timeout and confirm EAGAIN.
-    sub.set_read_timeout(Some(std::time::Duration::from_millis(200)))
-        .unwrap();
+    sub.set_read_timeout(Some(std::time::Duration::from_millis(200))).unwrap();
     let mut buf = [0u8; 64];
     let r = sub.read(&mut buf);
     match r {
@@ -150,10 +134,9 @@ fn pattern_no_match_no_delivery() {
             e.kind(),
             std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
         )),
-        Ok(n) => panic!(
-            "expected no data; got {n} bytes: {:?}",
-            String::from_utf8_lossy(&buf[..n])
-        ),
+        Ok(n) => {
+            panic!("expected no data; got {n} bytes: {:?}", String::from_utf8_lossy(&buf[..n]))
+        }
     }
 }
 
@@ -165,15 +148,9 @@ fn channel_plus_pattern_both_fire() {
 
     let mut sub = srv.connect();
     sub.write_all(&req(&[b"SUBSCRIBE", b"news"])).unwrap();
-    read_reply(
-        &mut sub,
-        b"*3\r\n$9\r\nsubscribe\r\n$4\r\nnews\r\n:1\r\n",
-    );
+    read_reply(&mut sub, b"*3\r\n$9\r\nsubscribe\r\n$4\r\nnews\r\n:1\r\n");
     sub.write_all(&req(&[b"PSUBSCRIBE", b"new?"])).unwrap();
-    read_reply(
-        &mut sub,
-        b"*3\r\n$10\r\npsubscribe\r\n$4\r\nnew?\r\n:2\r\n",
-    );
+    read_reply(&mut sub, b"*3\r\n$10\r\npsubscribe\r\n$4\r\nnew?\r\n:2\r\n");
 
     let mut pub_ = srv.connect();
     pub_.write_all(&req(&[b"PUBLISH", b"news", b"x"])).unwrap();
@@ -208,19 +185,14 @@ fn cross_shard_pattern_delivery() {
         let mut s = srv.connect();
         let pat = format!("ev.{i}.*");
         s.write_all(&req(&[b"PSUBSCRIBE", pat.as_bytes()])).unwrap();
-        let expected = format!(
-            "*3\r\n$10\r\npsubscribe\r\n${}\r\n{}\r\n:1\r\n",
-            pat.len(),
-            pat
-        );
+        let expected = format!("*3\r\n$10\r\npsubscribe\r\n${}\r\n{}\r\n:1\r\n", pat.len(), pat);
         read_reply(&mut s, expected.as_bytes());
         subs.push((s, pat));
     }
 
     // PUBLISH targeted at ev.3.x — matches only sub #3's pattern.
     let mut pub_ = srv.connect();
-    pub_.write_all(&req(&[b"PUBLISH", b"ev.3.start", b"hi"]))
-        .unwrap();
+    pub_.write_all(&req(&[b"PUBLISH", b"ev.3.start", b"hi"])).unwrap();
     read_reply(&mut pub_, b":1\r\n");
 
     // Sub #3 receives one pmessage. Other subs receive nothing.
@@ -233,8 +205,7 @@ fn cross_shard_pattern_delivery() {
             );
             read_reply(s, expected.as_bytes());
         } else {
-            s.set_read_timeout(Some(std::time::Duration::from_millis(150)))
-                .unwrap();
+            s.set_read_timeout(Some(std::time::Duration::from_millis(150))).unwrap();
             let mut buf = [0u8; 64];
             let r = s.read(&mut buf);
             assert!(
@@ -252,20 +223,11 @@ fn punsubscribe_specific_pattern_stops_delivery() {
 
     let mut sub = srv.connect();
     sub.write_all(&req(&[b"PSUBSCRIBE", b"a.*", b"b.*"])).unwrap();
-    read_reply(
-        &mut sub,
-        b"*3\r\n$10\r\npsubscribe\r\n$3\r\na.*\r\n:1\r\n",
-    );
-    read_reply(
-        &mut sub,
-        b"*3\r\n$10\r\npsubscribe\r\n$3\r\nb.*\r\n:2\r\n",
-    );
+    read_reply(&mut sub, b"*3\r\n$10\r\npsubscribe\r\n$3\r\na.*\r\n:1\r\n");
+    read_reply(&mut sub, b"*3\r\n$10\r\npsubscribe\r\n$3\r\nb.*\r\n:2\r\n");
 
     sub.write_all(&req(&[b"PUNSUBSCRIBE", b"a.*"])).unwrap();
-    read_reply(
-        &mut sub,
-        b"*3\r\n$12\r\npunsubscribe\r\n$3\r\na.*\r\n:1\r\n",
-    );
+    read_reply(&mut sub, b"*3\r\n$12\r\npunsubscribe\r\n$3\r\na.*\r\n:1\r\n");
 
     // a.X no longer reaches the sub; b.X still does.
     let mut pub_ = srv.connect();
@@ -273,10 +235,7 @@ fn punsubscribe_specific_pattern_stops_delivery() {
     read_reply(&mut pub_, b":0\r\n");
     pub_.write_all(&req(&[b"PUBLISH", b"b.x", b"b"])).unwrap();
     read_reply(&mut pub_, b":1\r\n");
-    read_reply(
-        &mut sub,
-        b"*4\r\n$8\r\npmessage\r\n$3\r\nb.*\r\n$3\r\nb.x\r\n$1\r\nb\r\n",
-    );
+    read_reply(&mut sub, b"*4\r\n$8\r\npmessage\r\n$3\r\nb.*\r\n$3\r\nb.x\r\n$1\r\nb\r\n");
 }
 
 #[test]
@@ -285,14 +244,8 @@ fn punsubscribe_all_drains_held_patterns() {
 
     let mut sub = srv.connect();
     sub.write_all(&req(&[b"PSUBSCRIBE", b"x.*", b"y.*"])).unwrap();
-    read_reply(
-        &mut sub,
-        b"*3\r\n$10\r\npsubscribe\r\n$3\r\nx.*\r\n:1\r\n",
-    );
-    read_reply(
-        &mut sub,
-        b"*3\r\n$10\r\npsubscribe\r\n$3\r\ny.*\r\n:2\r\n",
-    );
+    read_reply(&mut sub, b"*3\r\n$10\r\npsubscribe\r\n$3\r\nx.*\r\n:1\r\n");
+    read_reply(&mut sub, b"*3\r\n$10\r\npsubscribe\r\n$3\r\ny.*\r\n:2\r\n");
 
     // PUNSUBSCRIBE with no args removes everything — one ack per pattern.
     // The two acks can arrive in either order (HashSet iteration order).
@@ -323,10 +276,7 @@ fn punsubscribe_with_no_patterns_held_emits_nil_ack() {
     let srv = Server::start(1);
     let mut c = srv.connect();
     c.write_all(&req(&[b"PUNSUBSCRIBE"])).unwrap();
-    read_reply(
-        &mut c,
-        b"*3\r\n$12\r\npunsubscribe\r\n$-1\r\n:0\r\n",
-    );
+    read_reply(&mut c, b"*3\r\n$12\r\npunsubscribe\r\n$-1\r\n:0\r\n");
 }
 
 #[test]
@@ -337,25 +287,17 @@ fn subscriber_disconnect_unregisters_patterns() {
 
     let mut sub = srv.connect();
     sub.write_all(&req(&[b"PSUBSCRIBE", b"gone.*"])).unwrap();
-    read_reply(
-        &mut sub,
-        b"*3\r\n$10\r\npsubscribe\r\n$6\r\ngone.*\r\n:1\r\n",
-    );
+    read_reply(&mut sub, b"*3\r\n$10\r\npsubscribe\r\n$6\r\ngone.*\r\n:1\r\n");
 
     // Verify it's wired before we kill it.
     let mut pub_ = srv.connect();
-    pub_.write_all(&req(&[b"PUBLISH", b"gone.now", b"v"]))
-        .unwrap();
+    pub_.write_all(&req(&[b"PUBLISH", b"gone.now", b"v"])).unwrap();
     read_reply(&mut pub_, b":1\r\n");
-    read_reply(
-        &mut sub,
-        b"*4\r\n$8\r\npmessage\r\n$6\r\ngone.*\r\n$8\r\ngone.now\r\n$1\r\nv\r\n",
-    );
+    read_reply(&mut sub, b"*4\r\n$8\r\npmessage\r\n$6\r\ngone.*\r\n$8\r\ngone.now\r\n$1\r\nv\r\n");
 
     drop(sub);
     std::thread::sleep(std::time::Duration::from_millis(80));
 
-    pub_.write_all(&req(&[b"PUBLISH", b"gone.again", b"v"]))
-        .unwrap();
+    pub_.write_all(&req(&[b"PUBLISH", b"gone.again", b"v"])).unwrap();
     read_reply(&mut pub_, b":0\r\n");
 }

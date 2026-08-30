@@ -48,7 +48,10 @@ fn listener_reads_live_store_rejects_writes() {
     assert_eq!(cmd(&mut c, &[b"HGET", b"h:1", b"f"]), b"$2\r\nv1\r\n");
     let r = cmd(&mut c, &[b"HGETALL", b"h:1"]);
     assert!(r.starts_with(b"*4\r\n"), "{:?}", String::from_utf8_lossy(&r));
-    assert_eq!(cmd(&mut c, &[b"LRANGE", b"l:1", b"0", b"-1"]), b"*3\r\n$1\r\na\r\n$1\r\nb\r\n$1\r\nc\r\n");
+    assert_eq!(
+        cmd(&mut c, &[b"LRANGE", b"l:1", b"0", b"-1"]),
+        b"*3\r\n$1\r\na\r\n$1\r\nb\r\n$1\r\nc\r\n"
+    );
     assert_eq!(cmd(&mut c, &[b"SCARD", b"s:1"]), b":2\r\n");
     let r = cmd(&mut c, &[b"ZRANGE", b"z:1", b"0", b"-1", b"WITHSCORES"]);
     assert!(String::from_utf8_lossy(&r).contains("m2"), "{r:?}");

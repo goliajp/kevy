@@ -30,12 +30,7 @@ fn req(parts: &[&[u8]]) -> Vec<u8> {
 fn read_reply(s: &mut std::net::TcpStream, expected: &[u8]) {
     let mut buf = vec![0u8; expected.len()];
     s.read_exact(&mut buf).unwrap();
-    assert_eq!(
-        &buf,
-        expected,
-        "expected {:?}",
-        String::from_utf8_lossy(expected)
-    );
+    assert_eq!(&buf, expected, "expected {:?}", String::from_utf8_lossy(expected));
 }
 
 /// Read a CONFIG GET reply and return the value for `key` (or None if
@@ -81,7 +76,9 @@ fn with_runtime(
     let stop_t = stop.clone();
     let dir = dir.to_path_buf();
     let handle = std::thread::spawn(move || {
-        let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::with_state(state)).bind([127, 0, 0, 1], port).shards(nshards)
+        let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::with_state(state))
+            .bind([127, 0, 0, 1], port)
+            .shards(nshards)
             .with_data_dir(dir);
         rt.run(stop_t).unwrap();
     });
@@ -101,13 +98,9 @@ fn with_runtime(
 
 #[test]
 fn config_set_maxmemory_takes_effect_globally() {
-
     let dir = std::env::temp_dir().join(format!(
         "kevy-cfgset-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
     ));
     std::fs::create_dir_all(&dir).unwrap();
     let port = free_port();
@@ -134,10 +127,7 @@ fn config_set_maxmemory_takes_effect_globally() {
         c.write_all(&req(&[b"CONFIG", b"SET", b"maxmemory-policy", b"allkeys-lfu"])).unwrap();
         read_reply(&mut c, b"+OK\r\n");
         c.write_all(&req(&[b"CONFIG", b"GET", b"maxmemory-policy"])).unwrap();
-        assert_eq!(
-            read_config_get_value(&mut c, "maxmemory-policy"),
-            Some("allkeys-lfu".into()),
-        );
+        assert_eq!(read_config_get_value(&mut c, "maxmemory-policy"), Some("allkeys-lfu".into()),);
 
         // The Live config the shard sees on its next tick should match.
         // (We can't inspect Store::max_memory externally, but if the
@@ -153,10 +143,7 @@ fn config_set_maxmemory_takes_effect_globally() {
 fn config_set_appendfsync_round_trips_through_get() {
     let dir = std::env::temp_dir().join(format!(
         "kevy-cfgset-fsync-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
     ));
     std::fs::create_dir_all(&dir).unwrap();
     let port = free_port();
@@ -164,19 +151,13 @@ fn config_set_appendfsync_round_trips_through_get() {
     with_runtime(port, &dir, 1, Config::default(), |p| {
         let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
         c.write_all(&req(&[b"CONFIG", b"GET", b"appendfsync"])).unwrap();
-        assert_eq!(
-            read_config_get_value(&mut c, "appendfsync"),
-            Some("everysec".into()),
-        );
+        assert_eq!(read_config_get_value(&mut c, "appendfsync"), Some("everysec".into()),);
 
         c.write_all(&req(&[b"CONFIG", b"SET", b"appendfsync", b"always"])).unwrap();
         read_reply(&mut c, b"+OK\r\n");
 
         c.write_all(&req(&[b"CONFIG", b"GET", b"appendfsync"])).unwrap();
-        assert_eq!(
-            read_config_get_value(&mut c, "appendfsync"),
-            Some("always".into()),
-        );
+        assert_eq!(read_config_get_value(&mut c, "appendfsync"), Some("always".into()),);
     });
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -186,10 +167,7 @@ fn config_set_appendfsync_round_trips_through_get() {
 fn config_set_read_only_bind_returns_restart_required_error() {
     let dir = std::env::temp_dir().join(format!(
         "kevy-cfgset-ro-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
     ));
     std::fs::create_dir_all(&dir).unwrap();
     let port = free_port();
@@ -201,10 +179,7 @@ fn config_set_read_only_bind_returns_restart_required_error() {
         let n = c.read(&mut buf).unwrap();
         let reply = String::from_utf8_lossy(&buf[..n]);
         assert!(reply.starts_with("-ERR"), "got: {reply:?}");
-        assert!(
-            reply.contains("can't be changed at runtime"),
-            "got: {reply:?}",
-        );
+        assert!(reply.contains("can't be changed at runtime"), "got: {reply:?}",);
     });
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -214,10 +189,7 @@ fn config_set_read_only_bind_returns_restart_required_error() {
 fn config_rewrite_writes_round_trippable_file_from_source_path() {
     let dir = std::env::temp_dir().join(format!(
         "kevy-cfgrewrite-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
     ));
     std::fs::create_dir_all(&dir).unwrap();
     let toml_path = dir.join("kevy.toml");
@@ -270,10 +242,7 @@ fn config_rewrite_without_source_path_returns_error() {
     // "running without a config file" -ERR.
     let dir = std::env::temp_dir().join(format!(
         "kevy-cfgrewrite-nosrc-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
     ));
     std::fs::create_dir_all(&dir).unwrap();
     let port = free_port();
@@ -285,10 +254,7 @@ fn config_rewrite_without_source_path_returns_error() {
         let n = c.read(&mut buf).unwrap();
         let reply = String::from_utf8_lossy(&buf[..n]);
         assert!(reply.starts_with("-ERR"), "got: {reply:?}");
-        assert!(
-            reply.contains("running without a config file"),
-            "got: {reply:?}",
-        );
+        assert!(reply.contains("running without a config file"), "got: {reply:?}",);
     });
 
     let _ = std::fs::remove_dir_all(&dir);

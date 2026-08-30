@@ -54,7 +54,10 @@ fn embed_writer_streams_committed_argvs_to_replica_client() {
     writer.set(b"live", b"yes").unwrap();
     let frame_c = next_frame(&mut client, Duration::from_secs(2));
     assert_eq!(frame_c.offset, 2);
-    assert_eq!(argv_to_vecvec(&frame_c.argv), vec![b"SET".to_vec(), b"live".to_vec(), b"yes".to_vec()]);
+    assert_eq!(
+        argv_to_vecvec(&frame_c.argv),
+        vec![b"SET".to_vec(), b"live".to_vec(), b"yes".to_vec()]
+    );
 
     drop(client);
     drop(writer);
@@ -211,14 +214,9 @@ fn writer_restart_generation_fence_ships_instead_of_aliasing() {
     }
 
     // Resume claim from boot A's history: (gen_a, offset 3).
-    let mut sub = ReplicaClient::connect_at(
-        addr_b.as_str(),
-        "sub-restart",
-        gen_a,
-        3,
-        Duration::from_secs(5),
-    )
-    .unwrap();
+    let mut sub =
+        ReplicaClient::connect_at(addr_b.as_str(), "sub-restart", gen_a, 3, Duration::from_secs(5))
+            .unwrap();
     let gen_b = sub.primary_gen_at_handshake();
     assert_ne!(gen_b, gen_a, "each boot mints its own generation");
     // The fence must answer with a FULL snapshot of boot B's

@@ -64,11 +64,7 @@ fn precedence_chain_cli_beats_env_beats_file_beats_default() {
     assert_eq!(cfg.server.port, 7001);
 
     // CLI overlay (port = 7002) > env.
-    cfg.merge_cli(CliOverrides {
-        port: Some(7002),
-        ..CliOverrides::default()
-    })
-    .unwrap();
+    cfg.merge_cli(CliOverrides { port: Some(7002), ..CliOverrides::default() }).unwrap();
     assert_eq!(cfg.server.port, 7002);
 }
 
@@ -98,18 +94,14 @@ fn unknown_section_errors_with_line() {
 
 #[test]
 fn unknown_key_errors_with_line() {
-    let err =
-        Config::from_toml_str("[server]\nbogus_setting = 1\n", None).unwrap_err();
+    let err = Config::from_toml_str("[server]\nbogus_setting = 1\n", None).unwrap_err();
     assert!(matches!(err, ConfigError::Schema { .. }));
 }
 
 #[test]
 fn invalid_enum_value_errors() {
-    let err = Config::from_toml_str(
-        "[memory]\nmaxmemory_policy = \"random-everywhere\"\n",
-        None,
-    )
-    .unwrap_err();
+    let err = Config::from_toml_str("[memory]\nmaxmemory_policy = \"random-everywhere\"\n", None)
+        .unwrap_err();
     match err {
         ConfigError::Schema { field, msg, .. } => {
             assert!(field.contains("maxmemory_policy"));
@@ -136,11 +128,7 @@ fn log_output_file_path_round_trips() {
 #[test]
 fn cli_no_aof_overrides_file_aof_true() {
     let mut cfg = Config::from_toml_str("[persistence]\naof = true\n", None).unwrap();
-    cfg.merge_cli(CliOverrides {
-        aof: Some(false),
-        ..CliOverrides::default()
-    })
-    .unwrap();
+    cfg.merge_cli(CliOverrides { aof: Some(false), ..CliOverrides::default() }).unwrap();
     assert!(!cfg.persistence.aof);
 }
 
@@ -186,8 +174,7 @@ fn replication_role_defaults_to_standalone() {
 
 #[test]
 fn replication_unknown_role_errors() {
-    let err =
-        Config::from_toml_str("[replication]\nrole = \"witness\"\n", None).unwrap_err();
+    let err = Config::from_toml_str("[replication]\nrole = \"witness\"\n", None).unwrap_err();
     match err {
         ConfigError::Schema { field, msg, .. } => {
             assert!(field.contains("role"));

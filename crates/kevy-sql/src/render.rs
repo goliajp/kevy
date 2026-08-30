@@ -29,7 +29,9 @@ pub(crate) fn render(c: &Compilation) -> String {
     let mut out = String::new();
     out.push_str("# compiled by kevy-sql ");
     out.push_str(env!("CARGO_PKG_VERSION"));
-    out.push_str(" \u{2014} declaration-time only (Law 3): these commands run ONCE, like a migration.\n");
+    out.push_str(
+        " \u{2014} declaration-time only (Law 3): these commands run ONCE, like a migration.\n",
+    );
     out.push_str("# Ad-hoc runtime SQL stays refused by the engine; runtime reads use the query cards below.\n\n");
     for cmd in &c.commands {
         let line: Vec<String> = cmd.iter().map(|a| shq(a)).collect();

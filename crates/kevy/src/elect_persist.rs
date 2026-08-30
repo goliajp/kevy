@@ -29,10 +29,7 @@ impl FileElectorPersist {
     /// Point the store at `<dir>/elect.meta`. No I/O happens here —
     /// the first `save` creates the file.
     pub(crate) fn new(dir: &Path) -> Self {
-        Self {
-            path: dir.join("elect.meta"),
-            tmp: dir.join("elect.meta.tmp"),
-        }
+        Self { path: dir.join("elect.meta"), tmp: dir.join("elect.meta.tmp") }
     }
 
     fn write_atomic(&self, body: &[u8]) -> std::io::Result<()> {
@@ -54,10 +51,7 @@ impl ElectorPersist for FileElectorPersist {
             // must not die because the meta file is unwritable. The
             // durability guarantee is degraded until the operator
             // fixes the disk.
-            eprintln!(
-                "kevy: elect.meta save failed at {}: {e}",
-                self.path.display()
-            );
+            eprintln!("kevy: elect.meta save failed at {}: {e}", self.path.display());
         }
     }
 
@@ -115,10 +109,7 @@ mod tests {
         let p = FileElectorPersist::new(&d);
         p.save(3, None);
         assert_eq!(p.load(), (3, None));
-        assert_eq!(
-            std::fs::read_to_string(d.join("elect.meta")).unwrap(),
-            "epoch 3\nvoted -\n"
-        );
+        assert_eq!(std::fs::read_to_string(d.join("elect.meta")).unwrap(), "epoch 3\nvoted -\n");
         let _ = std::fs::remove_dir_all(&d);
     }
 

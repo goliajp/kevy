@@ -55,11 +55,7 @@ impl<C: Commands> Shard<C> {
         args: &A,
         subscribe: bool,
     ) {
-        let verb: &[u8] = if subscribe {
-            b"subscribe"
-        } else {
-            b"unsubscribe"
-        };
+        let verb: &[u8] = if subscribe { b"subscribe" } else { b"unsubscribe" };
         // Channels: the explicit args, or (UNSUBSCRIBE with none) all current subs.
         let channels: Vec<Vec<u8>> = match self.conns.get(&conn_id) {
             None => return,
@@ -112,11 +108,7 @@ impl<C: Commands> Shard<C> {
             encode_integer(&mut out, c.sub.len() as i64);
         }
         for ch in channels {
-            let did = if subscribe {
-                c.sub.insert(ch.clone())
-            } else {
-                c.sub.remove(ch)
-            };
+            let did = if subscribe { c.sub.insert(ch.clone()) } else { c.sub.remove(ch) };
             if did {
                 changed.push(ch.clone());
             }
@@ -190,19 +182,9 @@ impl<C: Commands> Shard<C> {
     /// ops per publish (N sends + N replies).
     // LOC-WAIVER: hot PUBLISH fan-out path (H1.A single-shard inline +
     // per-target batch); splitting risks codegen on the pubsub angle.
-    pub(crate) fn do_publish<A: ArgvView + ?Sized>(
-        &mut self,
-        conn_id: u64,
-        seq: u64,
-        args: &A,
-    ) {
-        let (mut count, mut bits) = self
-            .pubsub
-            .read()
-            .expect("pubsub registry")
-            .get(&args[1])
-            .copied()
-            .unwrap_or((0, 0));
+    pub(crate) fn do_publish<A: ArgvView + ?Sized>(&mut self, conn_id: u64, seq: u64, args: &A) {
+        let (mut count, mut bits) =
+            self.pubsub.read().expect("pubsub registry").get(&args[1]).copied().unwrap_or((0, 0));
         // Pattern path: walk the shared pattern registry and OR any matching
         // entry's count + bits in. Read-locked + linear; empty-Vec
         // short-circuit keeps channel-only PUBLISH undisturbed by the
@@ -295,10 +277,7 @@ impl<C: Commands> Shard<C> {
     /// for tiny frames.
     fn deliver_publish_copy(&mut self, channel: &[u8], msg: &[u8]) {
         // Snapshot ids to avoid borrow conflict with self.conns mutation.
-        let ids: Vec<u64> = self
-            .subs_by_channel
-            .get(channel).cloned()
-            .unwrap_or_default();
+        let ids: Vec<u64> = self.subs_by_channel.get(channel).cloned().unwrap_or_default();
         let v2 = pubsub_message(channel, msg, kevy_resp::RespVersion::V2);
         let mut v3_cache: Option<Vec<u8>> = None;
         for id in &ids {
@@ -327,10 +306,7 @@ impl<C: Commands> Shard<C> {
     /// path splices the body bytes in via iovec — zero memcpy of the
     /// body per subscriber. Mirrors valkey's `bulkStrRef` (`networking.c:618-697`).
     fn deliver_publish_arc(&mut self, channel: &[u8], msg: &[u8]) {
-        let ids: Vec<u64> = self
-            .subs_by_channel
-            .get(channel).cloned()
-            .unwrap_or_default();
+        let ids: Vec<u64> = self.subs_by_channel.get(channel).cloned().unwrap_or_default();
         // One alloc + one memcpy of `msg` (4 KB at the 50/4K endpoint)
         // into a refcounted boxed slice that all subscribers share.
         // `Arc<Box<[u8]>>` instead of `Arc<[u8]>` so
@@ -371,12 +347,7 @@ impl<C: Commands> Shard<C> {
     /// returned proto version to the conn BEFORE folding the reply, so
     /// the ack itself goes out in the new proto's shape (a `HELLO 3`
     /// ack arrives as a RESP3 Map per the spec).
-    pub(crate) fn do_hello<A: ArgvView + ?Sized>(
-        &mut self,
-        conn_id: u64,
-        seq: u64,
-        args: &A,
-    ) {
+    pub(crate) fn do_hello<A: ArgvView + ?Sized>(&mut self, conn_id: u64, seq: u64, args: &A) {
         let current = match self.conns.get(&conn_id) {
             Some(c) => c.proto,
             None => return,

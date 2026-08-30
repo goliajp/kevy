@@ -139,12 +139,15 @@ pub(crate) fn build_guard(
     reaper_stop: Option<Arc<std::sync::atomic::AtomicBool>>,
     reaper_join: Option<std::thread::JoinHandle<()>>,
     shards: &Shards,
-    #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
-    replica_runner: Option<crate::replica_runner::ReplicaRunner>,
-    #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
-    replica_source: Option<crate::replica_source::ReplicaSource>,
-    #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
-    feed: &Option<Arc<std::sync::Mutex<kevy_replicate::feed::FeedSource>>>,
+    #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))] replica_runner: Option<
+        crate::replica_runner::ReplicaRunner,
+    >,
+    #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))] replica_source: Option<
+        crate::replica_source::ReplicaSource,
+    >,
+    #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))] feed: &Option<
+        Arc<std::sync::Mutex<kevy_replicate::feed::FeedSource>>,
+    >,
     config: &crate::config::Config,
     #[cfg(feature = "index")] tables: &Arc<crate::ops_table::TableReg>,
 ) -> Arc<crate::store_inner::DropGuard> {

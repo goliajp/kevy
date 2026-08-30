@@ -101,10 +101,7 @@ impl Store {
     pub fn record_watch(&mut self, key: &[u8]) -> u64 {
         #[cfg(feature = "std")]
         {
-            *self
-                .watch_versions
-                .entry(key.to_vec())
-                .or_insert(0)
+            *self.watch_versions.entry(key.to_vec()).or_insert(0)
         }
         #[cfg(not(feature = "std"))]
         {
@@ -186,5 +183,4 @@ impl Store {
         }
         evict::evict_until_under_limit(self)
     }
-
 }

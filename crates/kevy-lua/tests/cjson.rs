@@ -20,22 +20,13 @@ fn unwrap_bulk(r: &[u8]) -> Vec<u8> {
 #[test]
 fn encode_primitives() {
     let mut b = Bridge::with_no_dispatch();
-    assert_eq!(
-        unwrap_bulk(&b.eval(b"return cjson.encode(42)", &[], &[])),
-        b"42".to_vec()
-    );
+    assert_eq!(unwrap_bulk(&b.eval(b"return cjson.encode(42)", &[], &[])), b"42".to_vec());
     assert_eq!(
         unwrap_bulk(&b.eval(b"return cjson.encode('hello')", &[], &[])),
         b"\"hello\"".to_vec()
     );
-    assert_eq!(
-        unwrap_bulk(&b.eval(b"return cjson.encode(true)", &[], &[])),
-        b"true".to_vec()
-    );
-    assert_eq!(
-        unwrap_bulk(&b.eval(b"return cjson.encode(nil)", &[], &[])),
-        b"null".to_vec()
-    );
+    assert_eq!(unwrap_bulk(&b.eval(b"return cjson.encode(true)", &[], &[])), b"true".to_vec());
+    assert_eq!(unwrap_bulk(&b.eval(b"return cjson.encode(nil)", &[], &[])), b"null".to_vec());
 }
 
 #[test]
@@ -64,11 +55,7 @@ fn decode_primitives() {
         unwrap_bulk(&b.eval(b"return cjson.decode('\"hello\"')", &[], &[])),
         b"hello".to_vec()
     );
-    let r = b.eval(
-        b"if cjson.decode('true') == true then return 1 else return 0 end",
-        &[],
-        &[],
-    );
+    let r = b.eval(b"if cjson.decode('true') == true then return 1 else return 0 end", &[], &[]);
     assert_eq!(unwrap_int(&r), 1);
 }
 

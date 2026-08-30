@@ -92,9 +92,7 @@ pub(crate) const PBUF_GROUP: u16 = 0;
 /// — so an unavailable io_uring degrades to epoll instead of failing startup.
 pub(crate) fn io_uring_available() -> bool {
     match IoUring::new(URING_ENTRIES) {
-        Ok(ring) => ring
-            .register_buf_ring(PBUF_ENTRIES, PBUF_SIZE, PBUF_GROUP)
-            .is_ok(),
+        Ok(ring) => ring.register_buf_ring(PBUF_ENTRIES, PBUF_SIZE, PBUF_GROUP).is_ok(),
         Err(_) => false,
     }
 }

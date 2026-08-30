@@ -234,7 +234,10 @@ fn a_wrong_typed_source_refuses_the_whole_command_and_writes_nothing() {
 fn the_refusals_are_redis_words() {
     let mut w = shared().wire();
     assert_eq!(s(&w.call(&["BITOP"])), "-ERR wrong number of arguments for 'bitop' command\\r\\n");
-    assert_eq!(s(&w.call(&["BITOP", "AND", "d"])), "-ERR wrong number of arguments for 'bitop' command\\r\\n");
+    assert_eq!(
+        s(&w.call(&["BITOP", "AND", "d"])),
+        "-ERR wrong number of arguments for 'bitop' command\\r\\n"
+    );
     assert_eq!(s(&w.call(&["BITOP", "SIDEWAYS", "d", "a"])), "-ERR syntax error\\r\\n");
     assert_eq!(
         s(&w.call(&["BITOP", "NOT", "d", "a", "b"])),

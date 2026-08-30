@@ -28,8 +28,7 @@ pub(crate) use progress::ReplicaProgress;
 pub(crate) use replication::ReplicationState;
 pub(crate) use scope::{ScopeState, WriteRedirect, encode_misdirected, encode_quiesced};
 pub(crate) use shard::{
-    IDX_NONEMPTY, READ_GATED, SCOPE_ACTIVE, ShardCtx, TABLE_NONEMPTY, VIEW_NONEMPTY,
-    WRITE_GATED,
+    IDX_NONEMPTY, READ_GATED, SCOPE_ACTIVE, ShardCtx, TABLE_NONEMPTY, VIEW_NONEMPTY, WRITE_GATED,
 };
 
 use std::path::{Path, PathBuf};
@@ -199,11 +198,7 @@ impl RuntimeState {
     /// mutations then skip persistence, matching the pre-4.0 embedded
     /// behaviour.
     pub(crate) fn sidecar_dir(&self) -> Option<&Path> {
-        if self.data_dir.as_os_str().is_empty() {
-            None
-        } else {
-            Some(&self.data_dir)
-        }
+        if self.data_dir.as_os_str().is_empty() { None } else { Some(&self.data_dir) }
     }
 
     pub(crate) fn nshards(&self) -> usize {
@@ -296,10 +291,7 @@ impl KevyCommands {
     /// and the embedder form for a real config:
     /// `KevyCommands::with_state(Arc::new(RuntimeState::new(cfg, dir, n)?))`.
     pub fn with_state(state: Arc<RuntimeState>) -> Self {
-        Self {
-            state,
-            shard: ShardCtx::default(),
-        }
+        Self { state, shard: ShardCtx::default() }
     }
 
     /// The shared state this command set serves.
@@ -340,10 +332,7 @@ impl KevyCommands {
     }
 
     pub(crate) fn ctx(&self) -> Ctx<'_> {
-        Ctx {
-            state: &self.state,
-            shard: &self.shard,
-        }
+        Ctx { state: &self.state, shard: &self.shard }
     }
 }
 

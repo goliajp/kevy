@@ -26,15 +26,13 @@ use super::search::{Opts, SearchError, plan_geosearchstore, search_pairs};
 /// the caller keeps its normal single-key route for those.
 pub(crate) fn geo_store_route<A: ArgvView + ?Sized>(verb: &[u8], args: &A) -> Option<Route> {
     match verb {
-        b"GEOSEARCHSTORE" if args.len() >= 5 => Some(Route::GeoStore {
-            dst: args[1].to_vec(),
-            src: args[2].to_vec(),
-        }),
+        b"GEOSEARCHSTORE" if args.len() >= 5 => {
+            Some(Route::GeoStore { dst: args[1].to_vec(), src: args[2].to_vec() })
+        }
         // Legacy prefix: verb key lon lat radius unit  → options from 6.
-        b"GEORADIUS" if args.len() >= 6 => legacy_store_dst(args, 6).map(|dst| Route::GeoStore {
-            src: args[1].to_vec(),
-            dst,
-        }),
+        b"GEORADIUS" if args.len() >= 6 => {
+            legacy_store_dst(args, 6).map(|dst| Route::GeoStore { src: args[1].to_vec(), dst })
+        }
         // Legacy prefix: verb key member radius unit   → options from 5.
         b"GEORADIUSBYMEMBER" if args.len() >= 5 => {
             legacy_store_dst(args, 5).map(|dst| Route::GeoStore { src: args[1].to_vec(), dst })

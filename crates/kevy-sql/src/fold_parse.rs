@@ -172,7 +172,6 @@ fn cast_suffix(p: &mut Parser<'_>, mut v: Scalar) -> Result<Scalar, SqlError> {
     }
 }
 
-
 /// The datetime text-literal casts, split from [`cast`] (50-LOC rule).
 fn cast_datetime(v: &Scalar, ty: &str) -> Result<Scalar, String> {
     // The caller matched Text; by argument any other variant reaching
@@ -212,9 +211,9 @@ fn cast(v: &Scalar, ty: &str) -> Result<Scalar, String> {
         ("int" | "integer" | "bigint" | "int4" | "int8", Scalar::Bool(b)) => {
             Scalar::Int(i64::from(*b))
         }
-        ("int" | "integer" | "bigint" | "int4" | "int8", Scalar::Text(s)) => Scalar::Int(
-            s.trim().parse().map_err(|_| format!("'{s}' is not an integer"))?,
-        ),
+        ("int" | "integer" | "bigint" | "int4" | "int8", Scalar::Text(s)) => {
+            Scalar::Int(s.trim().parse().map_err(|_| format!("'{s}' is not an integer"))?)
+        }
         ("int" | "integer" | "bigint" | "int4" | "int8", Scalar::Int(i)) => Scalar::Int(*i),
         ("int" | "integer" | "bigint" | "int4" | "int8", Scalar::Float(f)) => {
             // PG rounds (half away) on float→int casts, not truncates.
@@ -232,9 +231,9 @@ fn cast(v: &Scalar, ty: &str) -> Result<Scalar, String> {
         ("float" | "float8" | "double" | "numeric" | "decimal", Scalar::Float(f)) => {
             Scalar::Float(*f)
         }
-        ("float" | "float8" | "double" | "numeric" | "decimal", Scalar::Text(s)) => Scalar::Float(
-            s.trim().parse().map_err(|_| format!("'{s}' is not a number"))?,
-        ),
+        ("float" | "float8" | "double" | "numeric" | "decimal", Scalar::Text(s)) => {
+            Scalar::Float(s.trim().parse().map_err(|_| format!("'{s}' is not a number"))?)
+        }
         _ => return Err(format!("cast to '{ty}' is not supported here")),
     };
     Ok(out)

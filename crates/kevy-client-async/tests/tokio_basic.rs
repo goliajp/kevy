@@ -39,18 +39,14 @@ async fn spawn_replier_seq(steps: Vec<(Vec<u8>, Vec<u8>)>) -> io::Result<u16> {
 /// Shorthand for a one-shot interaction (single read followed by
 /// single write). Used by tests that send exactly one command + one
 /// pipeline batch.
-async fn spawn_replier(
-    incoming_expected: Vec<u8>,
-    outgoing: Vec<u8>,
-) -> io::Result<u16> {
+async fn spawn_replier(incoming_expected: Vec<u8>, outgoing: Vec<u8>) -> io::Result<u16> {
     spawn_replier_seq(vec![(incoming_expected, outgoing)]).await
 }
 
 #[tokio::test]
 async fn ping_round_trip() {
-    let port = spawn_replier(b"*1\r\n$4\r\nPING\r\n".to_vec(), b"+PONG\r\n".to_vec())
-        .await
-        .unwrap();
+    let port =
+        spawn_replier(b"*1\r\n$4\r\nPING\r\n".to_vec(), b"+PONG\r\n".to_vec()).await.unwrap();
     let url = format!("tcp://127.0.0.1:{port}");
     let mut conn = AsyncConnection::connect(&url).await.unwrap();
     conn.ping().await.unwrap();
@@ -61,14 +57,8 @@ async fn set_then_get() {
     // Two sequential requests: client waits for SET's +OK before
     // sending GET, so the fake server must read+reply twice.
     let port = spawn_replier_seq(vec![
-        (
-            b"*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$1\r\nv\r\n".to_vec(),
-            b"+OK\r\n".to_vec(),
-        ),
-        (
-            b"*2\r\n$3\r\nGET\r\n$1\r\nk\r\n".to_vec(),
-            b"$1\r\nv\r\n".to_vec(),
-        ),
+        (b"*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$1\r\nv\r\n".to_vec(), b"+OK\r\n".to_vec()),
+        (b"*2\r\n$3\r\nGET\r\n$1\r\nk\r\n".to_vec(), b"$1\r\nv\r\n".to_vec()),
     ])
     .await
     .unwrap();
@@ -93,14 +83,8 @@ async fn pipeline_one_round_trip() {
     .unwrap();
     let url = format!("tcp://127.0.0.1:{port}");
     let mut conn = AsyncConnection::connect(&url).await.unwrap();
-    let replies = conn
-        .pipeline()
-        .set(b"k", b"v")
-        .get(b"k")
-        .incr(b"cnt")
-        .run(&mut conn)
-        .await
-        .unwrap();
+    let replies =
+        conn.pipeline().set(b"k", b"v").get(b"k").incr(b"cnt").run(&mut conn).await.unwrap();
     assert_eq!(replies.len(), 3);
     assert!(matches!(replies[0], Reply::Simple(ref s) if s == b"OK"));
     assert!(matches!(replies[1], Reply::Bulk(ref v) if v == b"v"));
@@ -174,11 +158,7 @@ async fn one(step: (Vec<u8>, Vec<u8>)) -> AsyncConnection {
 
 #[tokio::test]
 async fn list_push_sends_every_value_and_returns_the_length() {
-    let mut c = one((
-        req(&[b"LPUSH", b"l", b"a", b"b"]),
-        b":2\r\n".to_vec(),
-    ))
-    .await;
+    let mut c = one((req(&[b"LPUSH", b"l", b"a", b"b"]), b":2\r\n".to_vec())).await;
     assert_eq!(c.lpush(b"l", &[b"a", b"b"]).await.unwrap(), 2);
 
     let mut c = one((req(&[b"RPUSH", b"l", b"z"]), b":7\r\n".to_vec())).await;
@@ -188,11 +168,7 @@ async fn list_push_sends_every_value_and_returns_the_length() {
 #[tokio::test]
 async fn list_pop_reads_an_array_a_bulk_and_a_nil() {
     // The count is always on the wire, even at 1.
-    let mut c = one((
-        req(&[b"LPOP", b"l", b"2"]),
-        b"*2\r\n$1\r\na\r\n$1\r\nb\r\n".to_vec(),
-    ))
-    .await;
+    let mut c = one((req(&[b"LPOP", b"l", b"2"]), b"*2\r\n$1\r\na\r\n$1\r\nb\r\n".to_vec())).await;
     assert_eq!(c.lpop(b"l", 2).await.unwrap(), vec![b"a".to_vec(), b"b".to_vec()]);
 
     // A single-element pop may come back as a bare bulk rather than a
@@ -207,16 +183,9 @@ async fn list_pop_reads_an_array_a_bulk_and_a_nil() {
 
 #[tokio::test]
 async fn a_server_error_becomes_an_io_error_carrying_its_text() {
-    let mut c = one((
-        req(&[b"LPOP", b"l", b"1"]),
-        b"-WRONGTYPE not a list\r\n".to_vec(),
-    ))
-    .await;
+    let mut c = one((req(&[b"LPOP", b"l", b"1"]), b"-WRONGTYPE not a list\r\n".to_vec())).await;
     let e = c.lpop(b"l", 1).await.unwrap_err();
-    assert!(
-        e.to_string().contains("WRONGTYPE"),
-        "the server's own words must survive: {e}"
-    );
+    assert!(e.to_string().contains("WRONGTYPE"), "the server's own words must survive: {e}");
 }
 
 #[tokio::test]
@@ -236,11 +205,7 @@ async fn set_multi_and_set_combine_send_what_they_are_given() {
     assert_eq!(c.srem(b"s", &[b"a"]).await.unwrap(), 1);
 
     // set_combine takes keys only — no key count on the wire.
-    let mut c = one((
-        req(&[b"SINTER", b"s1", b"s2"]),
-        b"*1\r\n$1\r\nx\r\n".to_vec(),
-    ))
-    .await;
+    let mut c = one((req(&[b"SINTER", b"s1", b"s2"]), b"*1\r\n$1\r\nx\r\n".to_vec())).await;
     assert_eq!(c.sinter(&[b"s1", b"s2"]).await.unwrap(), vec![b"x".to_vec()]);
 
     let mut c = one((req(&[b"SDIFF", b"s1", b"s2"]), b"*0\r\n".to_vec())).await;
@@ -291,12 +256,11 @@ async fn string_verbs_send_their_redis_spelling() {
 
 #[tokio::test]
 async fn hash_verbs_flatten_pairs_in_order() {
-    let mut c = one((
-        req(&[b"HSET", b"h", b"f1", b"v1", b"f2", b"v2"]),
-        b":2\r\n".to_vec(),
-    ))
-    .await;
-    assert_eq!(c.hset(b"h", &[(&b"f1"[..], &b"v1"[..]), (&b"f2"[..], &b"v2"[..])]).await.unwrap(), 2);
+    let mut c = one((req(&[b"HSET", b"h", b"f1", b"v1", b"f2", b"v2"]), b":2\r\n".to_vec())).await;
+    assert_eq!(
+        c.hset(b"h", &[(&b"f1"[..], &b"v1"[..]), (&b"f2"[..], &b"v2"[..])]).await.unwrap(),
+        2
+    );
 
     let mut c = one((req(&[b"HGET", b"h", b"f1"]), b"$2\r\nv1\r\n".to_vec())).await;
     assert_eq!(c.hget(b"h", b"f1").await.unwrap().as_deref(), Some(&b"v1"[..]));
@@ -320,15 +284,9 @@ async fn zset_verbs_interleave_score_then_member() {
     // ZADD's wire order is score-first per pair, and the score is a
     // formatted float — `1` not `1.0` for a whole number, because that is
     // what `f64::to_string` produces and what the server parses.
-    let mut c = one((
-        req(&[b"ZADD", b"z", b"1", b"one", b"2.5", b"two"]),
-        b":2\r\n".to_vec(),
-    ))
-    .await;
-    assert_eq!(
-        c.zadd(b"z", &[(1.0, &b"one"[..]), (2.5, &b"two"[..])]).await.unwrap(),
-        2
-    );
+    let mut c =
+        one((req(&[b"ZADD", b"z", b"1", b"one", b"2.5", b"two"]), b":2\r\n".to_vec())).await;
+    assert_eq!(c.zadd(b"z", &[(1.0, &b"one"[..]), (2.5, &b"two"[..])]).await.unwrap(), 2);
 
     let mut c = one((req(&[b"ZSCORE", b"z", b"one"]), b"$1\r\n1\r\n".to_vec())).await;
     assert_eq!(c.zscore(b"z", b"one").await.unwrap(), Some(1.0));
@@ -391,18 +349,11 @@ async fn cluster_connect_opens_one_connection_per_node() {
 async fn cluster_routes_a_keyed_command_to_its_shard() {
     // One shard owning every slot, so routing is determined and the test
     // asserts what arrived rather than which of two listeners woke.
-    let shard = spawn_replier_seq(vec![(
-        req(&[b"SET", b"k", b"v"]),
-        b"+OK\r\n".to_vec(),
-    )])
-    .await
-    .unwrap();
-    let seed = spawn_replier_seq(vec![(
-        CLUSTER_SLOTS.to_vec(),
-        slots_reply(&[(0, 16383, shard)]),
-    )])
-    .await
-    .unwrap();
+    let shard =
+        spawn_replier_seq(vec![(req(&[b"SET", b"k", b"v"]), b"+OK\r\n".to_vec())]).await.unwrap();
+    let seed = spawn_replier_seq(vec![(CLUSTER_SLOTS.to_vec(), slots_reply(&[(0, 16383, shard)]))])
+        .await
+        .unwrap();
 
     let mut c = AsyncClusterClient::connect("127.0.0.1", seed).await.unwrap();
     assert_eq!(c.shard_count(), 1);
@@ -417,10 +368,7 @@ async fn cluster_refuses_a_topology_it_cannot_read() {
         ("not an array", b"+OK\r\n".to_vec()),
         ("row is not an array", b"*1\r\n:1\r\n".to_vec()),
         ("row too short", b"*1\r\n*2\r\n:0\r\n:1\r\n".to_vec()),
-        (
-            "node array too short",
-            b"*1\r\n*3\r\n:0\r\n:1\r\n*1\r\n$9\r\n127.0.0.1\r\n".to_vec(),
-        ),
+        ("node array too short", b"*1\r\n*3\r\n:0\r\n:1\r\n*1\r\n$9\r\n127.0.0.1\r\n".to_vec()),
         (
             "port out of range",
             b"*1\r\n*3\r\n:0\r\n:1\r\n*2\r\n$9\r\n127.0.0.1\r\n:70000\r\n".to_vec(),
@@ -431,9 +379,7 @@ async fn cluster_refuses_a_topology_it_cannot_read() {
         ),
     ];
     for (what, reply) in cases {
-        let seed = spawn_replier_seq(vec![(CLUSTER_SLOTS.to_vec(), reply)])
-            .await
-            .unwrap();
+        let seed = spawn_replier_seq(vec![(CLUSTER_SLOTS.to_vec(), reply)]).await.unwrap();
         assert!(
             AsyncClusterClient::connect("127.0.0.1", seed).await.is_err(),
             "{what}: a topology that cannot be read must refuse, not connect"
@@ -460,12 +406,9 @@ async fn cluster_command_methods_go_through_the_router() {
     ])
     .await
     .unwrap();
-    let seed = spawn_replier_seq(vec![(
-        CLUSTER_SLOTS.to_vec(),
-        slots_reply(&[(0, 16383, shard)]),
-    )])
-    .await
-    .unwrap();
+    let seed = spawn_replier_seq(vec![(CLUSTER_SLOTS.to_vec(), slots_reply(&[(0, 16383, shard)]))])
+        .await
+        .unwrap();
     let mut c = AsyncClusterClient::connect("127.0.0.1", seed).await.unwrap();
 
     assert_eq!(c.get(b"k").await.unwrap().as_deref(), Some(&b"v"[..]));
@@ -493,33 +436,20 @@ async fn cluster_command_methods_go_through_the_router() {
 use kevy_client_async::subscriber::AsyncSubscriber;
 
 fn ack(kind: &str, ch: &str, n: usize) -> Vec<u8> {
-    format!(
-        "*3\r\n${}\r\n{kind}\r\n${}\r\n{ch}\r\n:{n}\r\n",
-        kind.len(),
-        ch.len()
-    )
-    .into_bytes()
+    format!("*3\r\n${}\r\n{kind}\r\n${}\r\n{ch}\r\n:{n}\r\n", kind.len(), ch.len()).into_bytes()
 }
 
 fn message(ch: &str, payload: &str) -> Vec<u8> {
-    format!(
-        "*3\r\n$7\r\nmessage\r\n${}\r\n{ch}\r\n${}\r\n{payload}\r\n",
-        ch.len(),
-        payload.len()
-    )
-    .into_bytes()
+    format!("*3\r\n$7\r\nmessage\r\n${}\r\n{ch}\r\n${}\r\n{payload}\r\n", ch.len(), payload.len())
+        .into_bytes()
 }
 
 #[tokio::test]
 async fn subscribe_waits_for_one_ack_per_channel() {
     let mut acks = ack("subscribe", "a", 1);
     acks.extend_from_slice(&ack("subscribe", "b", 2));
-    let port = spawn_replier_seq(vec![(req(&[b"SUBSCRIBE", b"a", b"b"]), acks)])
-        .await
-        .unwrap();
-    let mut s = AsyncSubscriber::connect(&format!("tcp://127.0.0.1:{port}"))
-        .await
-        .unwrap();
+    let port = spawn_replier_seq(vec![(req(&[b"SUBSCRIBE", b"a", b"b"]), acks)]).await.unwrap();
+    let mut s = AsyncSubscriber::connect(&format!("tcp://127.0.0.1:{port}")).await.unwrap();
     s.subscribe(&[b"a", b"b"]).await.unwrap();
 }
 
@@ -529,12 +459,8 @@ async fn a_message_arriving_before_the_ack_is_queued_not_dropped() {
     // still return, and the message must still be there to read.
     let mut stream = message("a", "early");
     stream.extend_from_slice(&ack("subscribe", "a", 1));
-    let port = spawn_replier_seq(vec![(req(&[b"SUBSCRIBE", b"a"]), stream)])
-        .await
-        .unwrap();
-    let mut s = AsyncSubscriber::connect(&format!("tcp://127.0.0.1:{port}"))
-        .await
-        .unwrap();
+    let port = spawn_replier_seq(vec![(req(&[b"SUBSCRIBE", b"a"]), stream)]).await.unwrap();
+    let mut s = AsyncSubscriber::connect(&format!("tcp://127.0.0.1:{port}")).await.unwrap();
     s.subscribe(&[b"a"]).await.unwrap();
     let (ch, payload) = s.recv_message().await.unwrap();
     assert_eq!(ch, b"a".to_vec());
@@ -544,9 +470,7 @@ async fn a_message_arriving_before_the_ack_is_queued_not_dropped() {
 #[tokio::test]
 async fn subscribe_with_no_channels_is_refused_before_the_wire() {
     let port = spawn_replier_seq(vec![]).await.unwrap();
-    let mut s = AsyncSubscriber::connect(&format!("tcp://127.0.0.1:{port}"))
-        .await
-        .unwrap();
+    let mut s = AsyncSubscriber::connect(&format!("tcp://127.0.0.1:{port}")).await.unwrap();
     assert!(
         s.subscribe(&[]).await.is_err(),
         "an empty SUBSCRIBE is refused here, not sent and refused there"

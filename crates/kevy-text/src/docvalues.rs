@@ -32,7 +32,10 @@ pub(crate) enum Val {
     /// empty value: a predicate never passes on an absent one.
     #[default]
     Absent,
-    Inline { len: u8, buf: [u8; 23] },
+    Inline {
+        len: u8,
+        buf: [u8; 23],
+    },
     Heap(Vec<u8>),
 }
 

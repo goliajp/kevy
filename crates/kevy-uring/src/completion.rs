@@ -1,8 +1,7 @@
 //! A reaped completion event.
 
 use crate::ffi::{
-    IORING_CQE_BUFFER_SHIFT, IORING_CQE_F_BUFFER, IORING_CQE_F_MORE,
-    IORING_CQE_F_SOCK_NONEMPTY,
+    IORING_CQE_BUFFER_SHIFT, IORING_CQE_F_BUFFER, IORING_CQE_F_MORE, IORING_CQE_F_SOCK_NONEMPTY,
 };
 
 /// One reaped completion (`struct io_uring_cqe`): the `user_data` you tagged

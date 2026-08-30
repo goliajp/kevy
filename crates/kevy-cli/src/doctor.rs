@@ -90,8 +90,11 @@ pub fn check_table(client: &mut RespClient, name: &str) -> io::Result<TableHealt
     let reply = client.request_borrowed(&[b"TABLE.VERIFY", name.as_bytes()])?;
     if let Reply::Error(e) = &reply {
         let msg = String::from_utf8_lossy(e);
-        let health =
-            if msg.starts_with("INDEXBUILDING") { Health::Building } else { Health::Drift { detail: msg.into_owned() } };
+        let health = if msg.starts_with("INDEXBUILDING") {
+            Health::Building
+        } else {
+            Health::Drift { detail: msg.into_owned() }
+        };
         return Ok(TableHealth { name: name.to_string(), health, reported: String::new() });
     }
     // The reply is per-index groups plus a spot-check group; summing the

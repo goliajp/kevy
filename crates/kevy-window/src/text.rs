@@ -150,7 +150,6 @@ impl TextColdDir {
         }
         Ok(true)
     }
-
 }
 
 /// Write one bucket to disk: forward records first (`\0`-prefixed row

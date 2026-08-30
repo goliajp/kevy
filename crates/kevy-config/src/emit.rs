@@ -56,11 +56,7 @@ impl Config {
         self.write_toml_persistence_section(out);
         let _ = writeln!(out, "[memory]");
         let _ = writeln!(out, "maxmemory         = {}", self.memory.maxmemory);
-        let _ = writeln!(
-            out,
-            "maxmemory_policy  = \"{}\"",
-            self.memory.maxmemory_policy.as_str(),
-        );
+        let _ = writeln!(out, "maxmemory_policy  = \"{}\"", self.memory.maxmemory_policy.as_str(),);
     }
 
     /// The `[persistence]` section — split from
@@ -96,11 +92,7 @@ impl Config {
             "auto_aof_rewrite_interval_secs = {}",
             self.persistence.auto_aof_rewrite_interval_secs,
         );
-        let _ = writeln!(
-            out,
-            "replay_resync                = {}",
-            self.persistence.replay_resync,
-        );
+        let _ = writeln!(out, "replay_resync                = {}", self.persistence.replay_resync,);
         let _ = writeln!(out);
     }
 
@@ -135,11 +127,7 @@ impl Config {
         let _ = writeln!(out, "ring_capacity    = {}", self.advanced.ring_capacity);
         let _ = writeln!(out);
         let _ = writeln!(out, "[slowlog]");
-        let _ = writeln!(
-            out,
-            "slower_than_micros = {}",
-            self.slowlog.slower_than_micros,
-        );
+        let _ = writeln!(out, "slower_than_micros = {}", self.slowlog.slower_than_micros,);
         let _ = writeln!(out, "max_len            = {}", self.slowlog.max_len);
     }
 
@@ -221,12 +209,7 @@ fn push_server(v: &mut Vec<CanonicalPair>, cfg: &Config) {
         push(v, "server", "accept_shards", n.to_string());
     }
     push(v, "server", "max_clients", cfg.server.max_clients.to_string());
-    push(
-        v,
-        "server",
-        "data_dir",
-        toml_string(&cfg.server.data_dir.display().to_string()),
-    );
+    push(v, "server", "data_dir", toml_string(&cfg.server.data_dir.display().to_string()));
 }
 
 fn push_persistence(v: &mut Vec<CanonicalPair>, cfg: &Config) {
@@ -239,12 +222,7 @@ fn push_persistence(v: &mut Vec<CanonicalPair>, cfg: &Config) {
         "auto_aof_rewrite_percentage",
         p.auto_aof_rewrite_percentage.to_string(),
     );
-    push(
-        v,
-        "persistence",
-        "auto_aof_rewrite_bytes",
-        p.auto_aof_rewrite_bytes.to_string(),
-    );
+    push(v, "persistence", "auto_aof_rewrite_bytes", p.auto_aof_rewrite_bytes.to_string());
     push(v, "persistence", "replay_resync", p.replay_resync.to_string());
     push(
         v,
@@ -252,22 +230,12 @@ fn push_persistence(v: &mut Vec<CanonicalPair>, cfg: &Config) {
         "auto_aof_rewrite_interval_secs",
         p.auto_aof_rewrite_interval_secs.to_string(),
     );
-    push(
-        v,
-        "persistence",
-        "auto_aof_rewrite_min_size",
-        p.auto_aof_rewrite_min_size.to_string(),
-    );
+    push(v, "persistence", "auto_aof_rewrite_min_size", p.auto_aof_rewrite_min_size.to_string());
 }
 
 fn push_memory(v: &mut Vec<CanonicalPair>, cfg: &Config) {
     push(v, "memory", "maxmemory", cfg.memory.maxmemory.to_string());
-    push(
-        v,
-        "memory",
-        "maxmemory_policy",
-        toml_string(cfg.memory.maxmemory_policy.as_str()),
-    );
+    push(v, "memory", "maxmemory_policy", toml_string(cfg.memory.maxmemory_policy.as_str()));
 }
 
 fn push_expiry(v: &mut Vec<CanonicalPair>, cfg: &Config) {
@@ -298,12 +266,7 @@ fn push_advanced(v: &mut Vec<CanonicalPair>, cfg: &Config) {
 }
 
 fn push_slowlog(v: &mut Vec<CanonicalPair>, cfg: &Config) {
-    push(
-        v,
-        "slowlog",
-        "slower_than_micros",
-        cfg.slowlog.slower_than_micros.to_string(),
-    );
+    push(v, "slowlog", "slower_than_micros", cfg.slowlog.slower_than_micros.to_string());
     push(v, "slowlog", "max_len", cfg.slowlog.max_len.to_string());
 }
 
@@ -326,31 +289,11 @@ fn push_replication(v: &mut Vec<CanonicalPair>, cfg: &Config) {
         push(v, "replication", "upstream", toml_string(up));
     }
     push(v, "replication", "listen_port_base", r.listen_port_base.to_string());
-    push(
-        v,
-        "replication",
-        "replication_buffer_size",
-        r.replication_buffer_size.to_string(),
-    );
+    push(v, "replication", "replication_buffer_size", r.replication_buffer_size.to_string());
     push(v, "replication", "reconnect_window_ms", r.reconnect_window_ms.to_string());
-    push(
-        v,
-        "replication",
-        "min_replicas_to_write",
-        r.min_replicas_to_write.to_string(),
-    );
-    push(
-        v,
-        "replication",
-        "min_replicas_max_lag_ms",
-        r.min_replicas_max_lag_ms.to_string(),
-    );
-    push(
-        v,
-        "replication",
-        "replica_max_staleness_ms",
-        r.replica_max_staleness_ms.to_string(),
-    );
+    push(v, "replication", "min_replicas_to_write", r.min_replicas_to_write.to_string());
+    push(v, "replication", "min_replicas_max_lag_ms", r.min_replicas_max_lag_ms.to_string());
+    push(v, "replication", "replica_max_staleness_ms", r.replica_max_staleness_ms.to_string());
     push(v, "replication", "replica_read_only", r.replica_read_only.to_string());
     push(v, "replication", "single_source", r.single_source.to_string());
 }
@@ -365,12 +308,7 @@ fn push_metrics(v: &mut Vec<CanonicalPair>, cfg: &Config) {
 }
 
 fn push_audit(v: &mut Vec<CanonicalPair>, cfg: &Config) {
-    push(
-        v,
-        "audit",
-        "log_path",
-        toml_string(&cfg.audit.log_path.display().to_string()),
-    );
+    push(v, "audit", "log_path", toml_string(&cfg.audit.log_path.display().to_string()));
 }
 
 fn push_feed(v: &mut Vec<CanonicalPair>, cfg: &Config) {

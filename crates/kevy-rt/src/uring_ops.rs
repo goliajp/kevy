@@ -19,7 +19,6 @@ pub(crate) const ENOBUFS: i32 = 105;
 /// in-shard memcpy fallback after the prior 256-arc cap.
 pub(crate) const MAX_IOVECS_PER_WRITEV: usize = 1024;
 
-
 // `user_data` layout: top 4 bits = op, low 60 bits = conn id.
 // OP_SHIFT was widened from 61 to 60 to add two op tags
 // (`OP_BIG_CANCEL` + `OP_BIG_READ`) for the bigval-SET kernel-direct

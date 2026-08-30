@@ -366,5 +366,4 @@ fn splice_output_arcs(conn: &mut crate::conn::Conn) {
         linear.extend_from_slice(&conn.output[prev..]);
     }
     conn.output = linear;
-
 }

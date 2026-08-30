@@ -265,6 +265,8 @@ jobs:
           fi
           published=0
           considered=0
+          already=0
+          deferred=""
           while IFS= read -r pkg; do
             # Independently of what the find above excluded: never publish
             # out of a node_modules. Dropping that -not -path turns this
@@ -282,6 +284,7 @@ jobs:
             considered=$((considered + 1))
             if npm view "$name@$V" version >/dev/null 2>&1; then
               echo "$name@$V already published"
+              already=$((already + 1))
               continue
             fi
             (
@@ -307,8 +310,13 @@ jobs:
               # that is the thing a reader would be downgraded from. A first
               # publish has nothing to compare and is allowed.
               PREV=$(npm view "$name" dist.unpackedSize 2>/dev/null || echo "")
+              # npm 10 prints an array here; npm 12 prints an object keyed
+              # by package name. Reading [0] works until the runner image
+              # moves and then throws — fail-closed, but on a day when the
+              # message would say nothing about npm.
               NOW=$(npm pack --dry-run --json 2>/dev/null | node -p \
-                    "JSON.parse(require('fs').readFileSync(0,'utf8'))[0].unpackedSize")
+                    "const j=JSON.parse(require('fs').readFileSync(0,'utf8'));
+                     (Array.isArray(j)?j[0]:Object.values(j)[0]).unpackedSize")
               if [ -n "$PREV" ] && [ "$PREV" -gt 0 ] 2>/dev/null; then
                 if [ "$((NOW * 2))" -lt "$PREV" ]; then
                   echo "REFUSING to publish $name@$V:"
@@ -322,11 +330,35 @@ jobs:
                 fi
               fi
               npm publish --access public
-            )
-            published=$((published + 1))
-            echo "published $name@$V"
+            ) && ok=1 || ok=0
+            # A refusal is about one door. On 2026-08-30 it was an `exit 1`
+            # under `set -e`, so the first door this runner could not build
+            # ended the loop and took four it could with it — three of them
+            # pure JavaScript. The refusal still stands; it just stops being
+            # contagious. What makes the release red is the parity gate that
+            # asks the registries, which now runs when this workflow ends.
+            if [ "$ok" = "1" ]; then
+              published=$((published + 1))
+              echo "published $name@$V"
+            else
+              deferred="$deferred $name"
+              echo "DEFERRED $name@$V — refused above, not published here"
+            fi
           done < /tmp/binding-pkgs.txt
           echo "binding packages: $considered publishable, $published published here"
+          if [ -n "$deferred" ]; then
+            echo "::warning title=Doors not published by CI::$deferred"
+            {
+              echo "### Doors this runner could not publish"
+              echo
+              for d in $deferred; do echo "- \`$d\` — publish by hand, then re-run channel parity"; done
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ "$published" = "0" ] && [ "$already" = "0" ]; then
+            echo "not one binding package was published or already present — the"
+            echo "loop ran and did nothing, which is never a correct release"
+            exit 1
+          fi
           # The floor belongs on the number of packages this step actually
           # took responsibility for, not on how many files the find turned
           # up. Counting files, a tree where every manifest had gone

@@ -452,7 +452,6 @@ impl Vlog {
             epoch: self.epoch,
         }
     }
-
 }
 
 mod compact;

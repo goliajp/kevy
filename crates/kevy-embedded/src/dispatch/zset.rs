@@ -7,8 +7,8 @@ use crate::store::Store;
 use kevy_store::{ScoreBound, ZaddFlags};
 
 use super::util::{
-    arg_f64, arg_i64, bulk, emit_int, emit_scored, err, fmt_score, int, kevy_err, nil, rest,
-    wrong_args, ERR_NOT_FLOAT, ERR_NOT_INT, ERR_SYNTAX,
+    ERR_NOT_FLOAT, ERR_NOT_INT, ERR_SYNTAX, arg_f64, arg_i64, bulk, emit_int, emit_scored, err,
+    fmt_score, int, kevy_err, nil, rest, wrong_args,
 };
 
 const ERR_MIN_MAX: &str = "ERR min or max is not a float";

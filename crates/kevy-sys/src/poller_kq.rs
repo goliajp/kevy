@@ -34,14 +34,7 @@ impl Poller {
     }
 
     fn change(&self, fd: i32, filter: i16, flags: u16) -> io::Result<()> {
-        let kev = ffi::Kevent {
-            ident: fd as usize,
-            filter,
-            flags,
-            fflags: 0,
-            data: 0,
-            udata: 0,
-        };
+        let kev = ffi::Kevent { ident: fd as usize, filter, flags, fflags: 0, data: 0, udata: 0 };
         let r = unsafe { ffi::kevent(self.kq, &raw const kev, 1, ptr::null_mut(), 0, ptr::null()) };
         if r < 0 {
             return Err(io::Error::last_os_error());
@@ -60,16 +53,8 @@ impl Poller {
 
     /// Change the read/write interest of an already-registered `fd`.
     pub fn modify(&self, fd: i32, read: bool, write: bool) -> io::Result<()> {
-        self.change(
-            fd,
-            kq::EVFILT_READ,
-            if read { kq::EV_ENABLE } else { kq::EV_DISABLE },
-        )?;
-        self.change(
-            fd,
-            kq::EVFILT_WRITE,
-            if write { kq::EV_ENABLE } else { kq::EV_DISABLE },
-        )?;
+        self.change(fd, kq::EVFILT_READ, if read { kq::EV_ENABLE } else { kq::EV_DISABLE })?;
+        self.change(fd, kq::EVFILT_WRITE, if write { kq::EV_ENABLE } else { kq::EV_DISABLE })?;
         Ok(())
     }
 
@@ -96,14 +81,7 @@ impl Poller {
             None => ptr::null(),
         };
         let n = unsafe {
-            ffi::kevent(
-                self.kq,
-                ptr::null(),
-                0,
-                raw.as_mut_ptr(),
-                WAIT_CAPACITY as c_int,
-                ts_ptr,
-            )
+            ffi::kevent(self.kq, ptr::null(), 0, raw.as_mut_ptr(), WAIT_CAPACITY as c_int, ts_ptr)
         };
         if n < 0 {
             let e = io::Error::last_os_error();

@@ -25,11 +25,7 @@ pub(crate) struct PubsubBus {
 
 impl PubsubBus {
     pub(crate) fn new() -> Self {
-        Self {
-            next_id: 1,
-            channels: HashMap::new(),
-            patterns: Vec::new(),
-        }
+        Self { next_id: 1, channels: HashMap::new(), patterns: Vec::new() }
     }
 
     pub(crate) fn alloc_id(&mut self) -> u64 {
@@ -40,11 +36,7 @@ impl PubsubBus {
 
     /// Total channels + patterns the given subscription id is bound to.
     pub(crate) fn count_for(&self, id: u64) -> usize {
-        let chans = self
-            .channels
-            .values()
-            .filter(|v| v.iter().any(|e| e.id == id))
-            .count();
+        let chans = self.channels.values().filter(|v| v.iter().any(|e| e.id == id)).count();
         let pats = self.patterns.iter().filter(|(_, e)| e.id == id).count();
         chans + pats
     }
@@ -61,10 +53,7 @@ impl PubsubBus {
         if let Some(subs) = self.channels.get(channel) {
             for e in subs {
                 plans.push((
-                    PubsubFrame::Message {
-                        channel: channel.to_vec(),
-                        payload: payload.to_vec(),
-                    },
+                    PubsubFrame::Message { channel: channel.to_vec(), payload: payload.to_vec() },
                     e.sender.clone(),
                 ));
             }
@@ -94,10 +83,7 @@ impl PubsubBus {
         if subs.iter().any(|e| e.id == id) {
             return false;
         }
-        subs.push(BusEntry {
-            id,
-            sender: sender.clone(),
-        });
+        subs.push(BusEntry { id, sender: sender.clone() });
         true
     }
 
@@ -107,20 +93,10 @@ impl PubsubBus {
         sender: &Sender<PubsubFrame>,
         pattern: Vec<u8>,
     ) -> bool {
-        if self
-            .patterns
-            .iter()
-            .any(|(p, e)| p == &pattern && e.id == id)
-        {
+        if self.patterns.iter().any(|(p, e)| p == &pattern && e.id == id) {
             return false;
         }
-        self.patterns.push((
-            pattern,
-            BusEntry {
-                id,
-                sender: sender.clone(),
-            },
-        ));
+        self.patterns.push((pattern, BusEntry { id, sender: sender.clone() }));
         true
     }
 

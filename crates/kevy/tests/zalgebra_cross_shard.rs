@@ -38,17 +38,16 @@ impl Server {
         let port = free_port();
         let dir = std::env::temp_dir().join(format!(
             "kevy-zalg-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         let dir_thread = dir.clone();
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(NSHARDS)).bind([127, 0, 0, 1], port).shards(NSHARDS)
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(NSHARDS))
+                .bind([127, 0, 0, 1], port)
+                .shards(NSHARDS)
                 .with_data_dir(dir_thread);
             rt.run(stop_thread).unwrap();
         });
@@ -98,7 +97,18 @@ fn zinterstore_cross_shard_weights_aggregate() {
     assert_eq!(
         cmd(
             &mut c,
-            &[b"ZINTERSTORE", b"zd2", b"2", b"za", b"zb", b"WEIGHTS", b"10", b"1", b"AGGREGATE", b"MAX"]
+            &[
+                b"ZINTERSTORE",
+                b"zd2",
+                b"2",
+                b"za",
+                b"zb",
+                b"WEIGHTS",
+                b"10",
+                b"1",
+                b"AGGREGATE",
+                b"MAX"
+            ]
         ),
         b":1\r\n"
     );
@@ -119,10 +129,7 @@ fn zunionstore_with_plain_set_and_overwrite() {
 
     // *STORE overwrites a dst of ANY type; empty result deletes dst.
     cmd(&mut c, &[b"SET", b"zu-d2", b"oldstring"]);
-    assert_eq!(
-        cmd(&mut c, &[b"ZINTERSTORE", b"zu-d2", b"2", b"zu-a", b"zu-missing"]),
-        b":0\r\n"
-    );
+    assert_eq!(cmd(&mut c, &[b"ZINTERSTORE", b"zu-d2", b"2", b"zu-a", b"zu-missing"]), b":0\r\n");
     assert_eq!(cmd(&mut c, &[b"EXISTS", b"zu-d2"]), b":0\r\n");
 }
 
@@ -135,10 +142,7 @@ fn zdiffstore_zintercard_and_errors() {
 
     assert_eq!(cmd(&mut c, &[b"ZDIFFSTORE", b"dz-d", b"2", b"dz-a", b"dz-b"]), b":2\r\n");
     assert_eq!(cmd(&mut c, &[b"ZINTERCARD", b"2", b"dz-a", b"dz-b"]), b":1\r\n");
-    assert_eq!(
-        cmd(&mut c, &[b"ZINTERCARD", b"2", b"dz-a", b"dz-a", b"LIMIT", b"2"]),
-        b":2\r\n"
-    );
+    assert_eq!(cmd(&mut c, &[b"ZINTERCARD", b"2", b"dz-a", b"dz-a", b"LIMIT", b"2"]), b":2\r\n");
 
     // WRONGTYPE source aborts the whole op.
     cmd(&mut c, &[b"SET", b"dz-str", b"v"]);
@@ -168,16 +172,15 @@ fn zalgebra_survives_restart_via_effect_aof() {
     let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let dir = std::env::temp_dir().join(format!(
         "kevy-zalg-restart-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
     ));
     std::fs::create_dir_all(&dir).unwrap();
 
     let boot = |port: u16, stop: Arc<AtomicBool>, dir: std::path::PathBuf| {
         std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(NSHARDS)).bind([127, 0, 0, 1], port).shards(NSHARDS)
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(NSHARDS))
+                .bind([127, 0, 0, 1], port)
+                .shards(NSHARDS)
                 .with_data_dir(dir);
             rt.run(stop).unwrap();
         })

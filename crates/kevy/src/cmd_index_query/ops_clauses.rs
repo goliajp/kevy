@@ -25,8 +25,7 @@ pub(super) fn scope_positions(
         match spec.fields.iter().position(|f| f.name == *want) {
             Some(i) => out.push(i),
             None => {
-                let declared: Vec<&[u8]> =
-                    spec.fields.iter().map(|f| f.name.as_slice()).collect();
+                let declared: Vec<&[u8]> = spec.fields.iter().map(|f| f.name.as_slice()).collect();
                 return Err(clause_error("IN", want, "index", &declared));
             }
         }
@@ -65,7 +64,6 @@ fn clause_text(clause: &str, bad: &[u8], verb: &str, offered: &[&[u8]]) -> Strin
         String::from_utf8_lossy(&offered.join(&b", "[..])),
     )
 }
-
 
 /// [`filter_preds`] with each test boxed as the closure the segment
 /// takes. The boxes must outlive the borrowed `Filter` list, so they are
@@ -129,7 +127,6 @@ pub(super) fn filter_tests(
     }
     Ok(out)
 }
-
 
 /// Resolve a `SORT <field> ASC|DESC` clause: which stored value orders
 /// the page, and the order-preserving encoding of that field's type.

@@ -2,8 +2,8 @@
 //! (kevy-embedded 1.8.0).
 
 use crate::Config;
-use kevy_store::BitOp;
 use crate::store::Store;
+use kevy_store::BitOp;
 
 fn s() -> Store {
     Store::open(Config::default().with_ttl_reaper_manual()).unwrap()
@@ -166,10 +166,7 @@ fn setrange_past_end_extends_with_zeros() {
     let s = s();
     let n = s.setrange(b"k", 5, b"World").unwrap();
     assert_eq!(n, 10);
-    assert_eq!(
-        s.get(b"k").unwrap(),
-        Some(vec![0, 0, 0, 0, 0, b'W', b'o', b'r', b'l', b'd'])
-    );
+    assert_eq!(s.get(b"k").unwrap(), Some(vec![0, 0, 0, 0, 0, b'W', b'o', b'r', b'l', b'd']));
 }
 
 // ---- BITOP --------------------------------------------------------------

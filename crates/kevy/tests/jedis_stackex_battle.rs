@@ -62,8 +62,7 @@ fn jedis_5x_golden_path() {
     let _h = Harness::spawn(cfg).expect("spawn kevy");
     std::thread::sleep(Duration::from_millis(200));
 
-    let mut s = TcpStream::connect(format!("127.0.0.1:{port}"))
-        .expect("conn");
+    let mut s = TcpStream::connect(format!("127.0.0.1:{port}")).expect("conn");
     let _ = s.set_read_timeout(Some(Duration::from_secs(3)));
 
     // PHASE 1: Jedis connect lifecycle.
@@ -84,13 +83,9 @@ fn jedis_5x_golden_path() {
     );
 
     eprintln!("jedis: CLIENT SETNAME jedis-client-1");
-    s.write_all(&build(&[b"CLIENT", b"SETNAME", b"jedis-client-1"]))
-        .unwrap();
+    s.write_all(&build(&[b"CLIENT", b"SETNAME", b"jedis-client-1"])).unwrap();
     let setname = read_one_reply(&mut s);
-    assert!(
-        setname.starts_with("+OK"),
-        "CLIENT SETNAME expected +OK, got: {setname:?}"
-    );
+    assert!(setname.starts_with("+OK"), "CLIENT SETNAME expected +OK, got: {setname:?}");
 
     eprintln!("jedis: CLIENT GETNAME");
     s.write_all(&build(&[b"CLIENT", b"GETNAME"])).unwrap();
@@ -130,7 +125,12 @@ fn jedis_5x_golden_path() {
                 expected_replies.push(":");
             }
             _ => {
-                pipeline.extend_from_slice(&build(&[b"HSET", b"jedis:hash", key.as_bytes(), val.as_bytes()]));
+                pipeline.extend_from_slice(&build(&[
+                    b"HSET",
+                    b"jedis:hash",
+                    key.as_bytes(),
+                    val.as_bytes(),
+                ]));
                 expected_replies.push(":");
             }
         }
@@ -155,18 +155,12 @@ fn jedis_5x_golden_path() {
         got_replies = count_replies(&acc);
     }
     eprintln!("jedis: pipeline got {got_replies}/100 replies in {} bytes", acc.len());
-    assert!(
-        got_replies >= 100,
-        "pipeline returned fewer than 100 replies: {got_replies}"
-    );
+    assert!(got_replies >= 100, "pipeline returned fewer than 100 replies: {got_replies}");
 
     // PHASE 3: Jedis post-pipeline PING — connection still healthy.
     s.write_all(b"*1\r\n$4\r\nPING\r\n").unwrap();
     let ping = read_one_reply(&mut s);
-    assert!(
-        ping.starts_with("+PONG"),
-        "post-pipeline PING failed: {ping:?}"
-    );
+    assert!(ping.starts_with("+PONG"), "post-pipeline PING failed: {ping:?}");
     eprintln!("jedis: golden path OK");
 
     drop(s);
@@ -187,8 +181,7 @@ fn stackexchange_redis_golden_path() {
     let _h = Harness::spawn(cfg).expect("spawn kevy");
     std::thread::sleep(Duration::from_millis(200));
 
-    let mut s = TcpStream::connect(format!("127.0.0.1:{port}"))
-        .expect("conn");
+    let mut s = TcpStream::connect(format!("127.0.0.1:{port}")).expect("conn");
     let _ = s.set_read_timeout(Some(Duration::from_secs(3)));
 
     // PHASE 1: HELLO 3 — upgrade to RESP3.
@@ -203,19 +196,12 @@ fn stackexchange_redis_golden_path() {
     let has_proto3 = hello_reply.contains(":3\r\n")
         || hello_reply.contains("proto:3")
         || hello_reply.contains("PROTO:3");
-    assert!(
-        has_proto3,
-        "HELLO 3 reply missing proto:3 field: {hello_reply:?}"
-    );
+    assert!(has_proto3, "HELLO 3 reply missing proto:3 field: {hello_reply:?}");
 
     // PHASE 2: CLIENT SETNAME — same as Jedis.
-    s.write_all(&build(&[b"CLIENT", b"SETNAME", b"stackex-client-1"]))
-        .unwrap();
+    s.write_all(&build(&[b"CLIENT", b"SETNAME", b"stackex-client-1"])).unwrap();
     let setname = read_one_reply(&mut s);
-    assert!(
-        setname.starts_with("+OK"),
-        "CLIENT SETNAME expected +OK, got: {setname:?}"
-    );
+    assert!(setname.starts_with("+OK"), "CLIENT SETNAME expected +OK, got: {setname:?}");
 
     // PHASE 3: CLIENT NO-EVICT ON — StackExchange.Redis sends this on
     // pool connections. kevy may not implement it; either +OK or
@@ -238,8 +224,7 @@ fn stackexchange_redis_golden_path() {
     for i in 0..5 {
         let k = format!("stackex:mget:{i}");
         let v = format!("val-{i}");
-        s.write_all(&build(&[b"SET", k.as_bytes(), v.as_bytes()]))
-            .unwrap();
+        s.write_all(&build(&[b"SET", k.as_bytes(), v.as_bytes()])).unwrap();
         let r = read_one_reply(&mut s);
         assert!(r.starts_with("+OK"), "SET expected +OK, got: {r:?}");
     }
@@ -255,25 +240,16 @@ fn stackexchange_redis_golden_path() {
     let mget_reply = read_one_reply(&mut s);
     eprintln!("stackex: MGET reply = {mget_reply:?}");
     // Reply must be an array of 5 elements.
-    assert!(
-        mget_reply.starts_with("*5\r\n"),
-        "MGET expected array of 5, got: {mget_reply:?}"
-    );
+    assert!(mget_reply.starts_with("*5\r\n"), "MGET expected array of 5, got: {mget_reply:?}");
     for i in 0..5 {
         let v = format!("val-{i}");
-        assert!(
-            mget_reply.contains(&v),
-            "MGET reply missing val-{i}: {mget_reply:?}"
-        );
+        assert!(mget_reply.contains(&v), "MGET reply missing val-{i}: {mget_reply:?}");
     }
 
     // PHASE 5: Final PING.
     s.write_all(b"*1\r\n$4\r\nPING\r\n").unwrap();
     let ping = read_one_reply(&mut s);
-    assert!(
-        ping.contains("PONG"),
-        "post-battle PING failed: {ping:?}"
-    );
+    assert!(ping.contains("PONG"), "post-battle PING failed: {ping:?}");
     eprintln!("stackex: golden path OK");
 
     drop(s);
@@ -336,10 +312,7 @@ fn advance_one(buf: &[u8], start: usize) -> Option<usize> {
         return None;
     }
     let tag = buf[start];
-    let line_end = buf[start..]
-        .iter()
-        .position(|&b| b == b'\n')
-        .map(|p| start + p + 1)?;
+    let line_end = buf[start..].iter().position(|&b| b == b'\n').map(|p| start + p + 1)?;
     match tag {
         b'+' | b'-' | b':' => Some(line_end),
         b'$' => {
