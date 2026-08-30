@@ -9,6 +9,16 @@
       content="Redis-compatible: your client connects unchanged, and every operation is faster — 1.5× single-connection GET/SET, 2.35× pipelined writes. Vector search, full text, secondary indexes, materialised views and a change feed live in the engine. Pure Rust, zero third-party crates."
     />
     <link rel="canonical" href="https://kevy.golia.jp/" />
+    <!--
+      The other two locales of this page. Every prerendered page derives
+      these from its canonical path; this one is Vite's template, which
+      documentHtml never sees, so it was the single page of 768 with no
+      hreflang — and the one crawlers reach first.
+    -->
+    <link rel="alternate" hreflang="en" href="https://kevy.golia.jp/" />
+    <link rel="alternate" hreflang="zh-CN" href="https://kevy.golia.jp/zh/" />
+    <link rel="alternate" hreflang="ja" href="https://kevy.golia.jp/ja/" />
+    <link rel="alternate" hreflang="x-default" href="https://kevy.golia.jp/" />
     <meta name="color-scheme" content="light" />
     <meta name="theme-color" content="#fcfbf8" />
     <!-- The version, on the one page Vite builds rather than prerender.

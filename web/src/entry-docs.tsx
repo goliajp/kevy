@@ -24,13 +24,24 @@ export type DocPage = {
   version: string
   /** How many directories deep this page sits, for relative links. */
   depth: number
-  /** Which other languages have this page. */
+  /** Which languages have this page, this one included. */
   have: Lang[]
   /** Where this page actually lives, when that is not `/docs/<slug>/`.
    *  The release notes keep the URL they were published under and that
    *  downstream users were pointed at; without this the language control
    *  links to a `/docs/changelog/` that does not exist. */
   selfHref?: string
+  /**
+   * Where this page really lives, when it is not `/docs/<slug>/`.
+   *
+   * The release notes are rendered by this function but written to
+   * `/changelog/`, and so declared themselves canonical at
+   * `/docs/changelog/` — a URL this site answers with the SPA shell and
+   * HTTP 200, which is the shape that hides a missing page rather than
+   * reporting it. Nothing noticed until the hreflang links were derived
+   * from the canonical and one of them pointed at nothing.
+   */
+  canonical?: string
 }
 
 const ON_THIS_PAGE: Record<Lang, string> = {
@@ -103,12 +114,10 @@ export function renderDocPage(p: DocPage, css: string): string {
       version: p.version,
       title: `${p.title} · kevy`,
       desc: p.desc,
-      canonical: `${p.lang === 'en' ? '' : `/${p.lang}`}/docs/${p.slug}/`,
+      canonical: p.canonical ?? `${p.lang === 'en' ? '' : `/${p.lang}`}/docs/${p.slug}/`,
       root,
       css,
-      alternates: p.have
-        .filter((l) => l !== p.lang)
-        .map((l) => ({ lang: l, path: `${l === 'en' ? '' : `/${l}`}/docs/${p.slug}/` })),
+      have: p.have,
     },
     <Layout
       lang={p.lang}
