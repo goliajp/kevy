@@ -434,6 +434,27 @@ present but treated as negligible. It is 59.1 ns of that 171.5: two
 This is the whole reason the prediction was written as three measurable rows
 rather than one number: the miss names its own row.
 
+### What else a skipped write could have broken, and did not
+
+Three things downstream of a ZADD could plausibly have depended on the
+store actually touching the index. Each was read rather than assumed:
+
+- **AOF and replication.** `post_write_housekeeping(args, meta)` runs
+  whenever `meta.is_write`, which comes from `is_write_verb` — a static
+  property of the verb. It takes the raw arguments, never the store's
+  return value, so a ZADD that changes nothing is still recorded and still
+  reaches a replica.
+- **`WATCH`.** The version bump is `self.store.bump_if_watched(&args[idx])`
+  in the runtime's dispatch layer, not inside `insert`. It bumped before
+  this change on a same-score write and it bumps now.
+- **`ZADD … CH` and the flag variants.** They call `Store::zadd`, so they
+  do reach the guard — but `zadd_flags` already short-circuits an unchanged
+  score itself (`if *score != old`), and where it does call through, the
+  guard returns exactly the `is_new` the old code did. `ZADD … INCR` with a
+  delta of zero now skips the index, which is correct and which the `-0.0`
+  case makes non-trivial: `-0.0 + 0.0` is `+0.0`, a different key under
+  `total_cmp`, so that one is a real update and the guard lets it through.
+
 ### The seven arena cells, and nothing else moved
 
 Same interleaving, kevy against kevy, median-of-5:
