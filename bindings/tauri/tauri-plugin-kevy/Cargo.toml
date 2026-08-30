@@ -14,7 +14,7 @@
 # Those stay 0-dep; only THIS crate carries `tauri`.
 [package]
 name = "tauri-plugin-kevy"
-version = "6.1.0"
+version = "6.2.0"
 edition = "2021"
 rust-version = "1.80.0"
 authors = ["GOLIA K.K."]

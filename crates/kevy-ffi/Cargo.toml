@@ -19,7 +19,7 @@ publish = false
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
-kevy-embedded = { path = "../kevy-embedded", version = "6.1.0" }
+kevy-embedded = { path = "../kevy-embedded", version = "6.2.0" }
 
 [lints]
 workspace = true
