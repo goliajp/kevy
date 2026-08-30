@@ -8,9 +8,8 @@ use crate::conn::Conn;
 use crate::message::{Agg, Gathered, MultiOp, SmallReply};
 use kevy_hash::KevyHash;
 use kevy_resp::{
-    RespVersion, encode_array_len, encode_bulk, encode_error, encode_null_bulk,
+    RespVersion, encode_array_len, encode_bulk, encode_error, encode_integer, encode_null_bulk,
     encode_push_header, encode_set_header,
-    encode_integer,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -440,11 +439,7 @@ pub fn shard_of(key: &[u8], n: usize, slots: bool) -> usize {
     // pre-hashtag routing, so no migration for existing keyspaces.
     let hash_input = hashtag(key).unwrap_or(key);
     let h = hash_input.kevy_hash();
-    if n.is_power_of_two() {
-        (h as usize) & (n - 1)
-    } else {
-        (h as usize) % n
-    }
+    if n.is_power_of_two() { (h as usize) & (n - 1) } else { (h as usize) % n }
 }
 
 /// Extract the `{...}` hashtag from `key` per Redis Cluster spec:

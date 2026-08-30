@@ -33,11 +33,7 @@ impl std::fmt::Display for OwnershipError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::DuplicatePrefix { prefix } => {
-                write!(
-                    f,
-                    "duplicate scope prefix {:?}",
-                    String::from_utf8_lossy(prefix)
-                )
+                write!(f, "duplicate scope prefix {:?}", String::from_utf8_lossy(prefix))
             }
             Self::OverlappingPrefix { inner, outer } => {
                 write!(
@@ -225,29 +221,21 @@ mod tests {
 
     #[test]
     fn overlap_rejected() {
-        let err = OwnershipTable::new(vec![
-            s(b"app:", "w-app"),
-            s(b"app:billing:", "w-billing"),
-        ])
-        .unwrap_err();
+        let err = OwnershipTable::new(vec![s(b"app:", "w-app"), s(b"app:billing:", "w-billing")])
+            .unwrap_err();
         assert!(matches!(err, OwnershipError::OverlappingPrefix { .. }));
     }
 
     #[test]
     fn duplicate_rejected() {
-        let err = OwnershipTable::new(vec![
-            s(b"app:", "w-app"),
-            s(b"app:", "w-app2"),
-        ])
-        .unwrap_err();
+        let err = OwnershipTable::new(vec![s(b"app:", "w-app"), s(b"app:", "w-app2")]).unwrap_err();
         assert!(matches!(err, OwnershipError::DuplicatePrefix { .. }));
     }
 
     #[test]
     fn fallback_active_when_writer_down() {
         let t = OwnershipTable::new(vec![
-            Scope::new(b"app:".to_vec(), "w-app".to_string())
-                .with_fallback("fb-1".to_string()),
+            Scope::new(b"app:".to_vec(), "w-app".to_string()).with_fallback("fb-1".to_string()),
         ])
         .unwrap();
         // Writer up: local node (fb-1) sees Misdirected.
@@ -271,12 +259,8 @@ mod tests {
     fn lookup_matches_longest_prefix_after_sort() {
         // Build the table with overlap-forbidden distinct prefixes;
         // longest-match still applies among disjoint declarations.
-        let t = OwnershipTable::new(vec![
-            s(b"a:", "wa"),
-            s(b"b:", "wb"),
-            s(b"abc:", "wabc"),
-        ])
-        .unwrap();
+        let t =
+            OwnershipTable::new(vec![s(b"a:", "wa"), s(b"b:", "wb"), s(b"abc:", "wabc")]).unwrap();
         assert_eq!(t.lookup(b"a:foo").map(Scope::writer), Some("wa"));
         assert_eq!(t.lookup(b"abc:foo").map(Scope::writer), Some("wabc"));
         assert_eq!(t.lookup(b"b:foo").map(Scope::writer), Some("wb"));

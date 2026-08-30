@@ -160,11 +160,8 @@ impl<C: Commands> Runtime<C> {
     /// fallback / off) and per-shard slice of it. The vlog dir root is
     /// [`Self::tier_root`].
     pub(crate) fn resolved_tier_budget(&self) -> Option<u64> {
-        self.tier_budget.or_else(|| {
-            std::env::var("KEVY_TIER_BUDGET")
-                .ok()
-                .and_then(|v| v.parse::<u64>().ok())
-        })
+        self.tier_budget
+            .or_else(|| std::env::var("KEVY_TIER_BUDGET").ok().and_then(|v| v.parse::<u64>().ok()))
     }
 
     /// One shard's slice of the process tiering budget (even split,
@@ -177,9 +174,7 @@ impl<C: Commands> Runtime<C> {
     /// The cold-tier root dir: the `[tiering] spill_dir` override, or
     /// `<data_dir>/tier/`.
     pub(crate) fn tier_root(&self) -> PathBuf {
-        self.tier_dir
-            .clone()
-            .unwrap_or_else(|| self.data_dir.join("tier"))
+        self.tier_dir.clone().unwrap_or_else(|| self.data_dir.join("tier"))
     }
 
     /// Listen address for the client TCP listener (every shard binds it

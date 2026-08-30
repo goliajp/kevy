@@ -43,17 +43,15 @@ fn zrevrange_past_the_end_is_empty() {
     for (score, member) in [(1.0, &b"one"[..]), (2.0, b"two"), (3.0, b"three")] {
         s.zadd(b"z", &[(score, member)]).unwrap();
     }
-    let members = |v: Vec<(Vec<u8>, f64)>| -> Vec<Vec<u8>> { v.into_iter().map(|(m, _)| m).collect() };
+    let members =
+        |v: Vec<(Vec<u8>, f64)>| -> Vec<Vec<u8>> { v.into_iter().map(|(m, _)| m).collect() };
 
     assert_eq!(
         members(s.zrevrange(b"z", 0, -1).unwrap()),
         vec![b"three".to_vec(), b"two".to_vec(), b"one".to_vec()]
     );
     assert_eq!(members(s.zrevrange(b"z", 0, 0).unwrap()), vec![b"three".to_vec()]);
-    assert_eq!(
-        members(s.zrevrange(b"z", -2, -1).unwrap()),
-        vec![b"two".to_vec(), b"one".to_vec()]
-    );
+    assert_eq!(members(s.zrevrange(b"z", -2, -1).unwrap()), vec![b"two".to_vec(), b"one".to_vec()]);
     // Past the last rank: valkey answers an empty array.
     assert_eq!(members(s.zrevrange(b"z", 5, 10).unwrap()), Vec::<Vec<u8>>::new());
     assert_eq!(members(s.zrevrange(b"z", 3, 3).unwrap()), Vec::<Vec<u8>>::new());

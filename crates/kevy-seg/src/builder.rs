@@ -6,9 +6,7 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
-use crate::layout::{
-    self, OVERFLOW_CAP, PAGE, PAGE_BUDGET, PAGE_CRC, PAGE_HDR, TRAILER,
-};
+use crate::layout::{self, OVERFLOW_CAP, PAGE, PAGE_BUDGET, PAGE_CRC, PAGE_HDR, TRAILER};
 use crate::{SegError, SegMeta};
 
 /// Streaming builder. Records must arrive in strictly ascending key
@@ -63,10 +61,10 @@ impl SegBuilder {
     /// # Examples
     ///
     /// ```
-/// use kevy_seg::{SegBuilder, Seg};
-/// # let dir = std::env::temp_dir().join(format!("kevy-seg-doc-{}", std::process::id()));
-/// # std::fs::create_dir_all(&dir).unwrap();
-/// let path = dir.join("create.seg");
+    /// use kevy_seg::{SegBuilder, Seg};
+    /// # let dir = std::env::temp_dir().join(format!("kevy-seg-doc-{}", std::process::id()));
+    /// # std::fs::create_dir_all(&dir).unwrap();
+    /// let path = dir.join("create.seg");
     /// let mut b = SegBuilder::create(&path).unwrap();
     /// b.push(b"a", b"1").unwrap();
     /// let meta = b.finish().unwrap();
@@ -94,10 +92,10 @@ impl SegBuilder {
     /// # Examples
     ///
     /// ```
-/// use kevy_seg::{SegBuilder, Seg};
-/// # let dir = std::env::temp_dir().join(format!("kevy-seg-doc-{}", std::process::id()));
-/// # std::fs::create_dir_all(&dir).unwrap();
-/// let path = dir.join("push.seg");
+    /// use kevy_seg::{SegBuilder, Seg};
+    /// # let dir = std::env::temp_dir().join(format!("kevy-seg-doc-{}", std::process::id()));
+    /// # std::fs::create_dir_all(&dir).unwrap();
+    /// let path = dir.join("push.seg");
     /// let mut b = SegBuilder::create(&path).unwrap();
     /// // Keys must arrive in ascending order — the segment is built for
     /// // a binary search, so an out-of-order key is refused rather than
@@ -114,9 +112,7 @@ impl SegBuilder {
         let inline = layout::inline_cell_len(key.len(), payload.len());
         // A cell must fit a page together with its slot entry.
         if inline + 2 <= PAGE_BUDGET {
-            self.push_cell(key, |page, off| {
-                layout::write_inline_cell(page, off, key, payload)
-            })?;
+            self.push_cell(key, |page, off| layout::write_inline_cell(page, off, key, payload))?;
         } else {
             self.push_overflow(key, payload)?;
         }
@@ -133,10 +129,10 @@ impl SegBuilder {
     /// # Examples
     ///
     /// ```
-/// use kevy_seg::{SegBuilder, Seg};
-/// # let dir = std::env::temp_dir().join(format!("kevy-seg-doc-{}", std::process::id()));
-/// # std::fs::create_dir_all(&dir).unwrap();
-/// let path = dir.join("finish.seg");
+    /// use kevy_seg::{SegBuilder, Seg};
+    /// # let dir = std::env::temp_dir().join(format!("kevy-seg-doc-{}", std::process::id()));
+    /// # std::fs::create_dir_all(&dir).unwrap();
+    /// let path = dir.join("finish.seg");
     /// let mut b = SegBuilder::create(&path).unwrap();
     /// for k in [b"a", b"b", b"c"] { b.push(k, b"v").unwrap(); }
     /// let meta = b.finish().unwrap();

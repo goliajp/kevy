@@ -39,19 +39,19 @@ mod marshal;
 mod resp;
 mod shebang;
 
+mod cjson;
+mod cmsgpack;
 /// SHA-1 digest helpers. Exposed because the operator-side wire
 /// layer (kevy-rt's SCRIPT LOAD / EVALSHA codec) needs to convert
 /// between the 20-byte digest used as a cache key and the 40-char
 /// ASCII hex Redis uses on the wire.
 pub mod sha1;
-mod cmsgpack;
-mod cjson;
 
 /// Re-export so callers can name the dialect without depending on
 /// luna-core directly.
 pub use luna_core::version::LuaVersion;
 
-pub(crate) use dispatch::{DispatchHandle, DispatchSlot, DISPATCH_KEY};
+pub(crate) use dispatch::{DISPATCH_KEY, DispatchHandle, DispatchSlot};
 
 /// Lua 5.1 / 5.2 / 5.3 / 5.4 / MacroLua / 5.5 — six fixed slots.
 /// `MacroLua` sits between `Lua54` and `Lua55` (it's a 5.4-superset
@@ -238,11 +238,8 @@ impl Bridge {
         };
         if !self.allow[dialect_slot(sh.version)] {
             return resp::err(
-                format!(
-                    "dialect {} disabled by [lua] allow_dialects",
-                    version_tag(sh.version)
-                )
-                .as_bytes(),
+                format!("dialect {} disabled by [lua] allow_dialects", version_tag(sh.version))
+                    .as_bytes(),
             );
         }
         let src = match std::str::from_utf8(body) {
@@ -331,7 +328,6 @@ impl Bridge {
         self.script_cache.clear();
     }
 
-
     /// Number of dialect VMs currently spawned. Test-only helper —
     /// production code doesn't need to inspect the pool.
     #[cfg(test)]
@@ -348,11 +344,8 @@ impl Bridge {
     fn vm_for(&mut self, version: LuaVersion) -> &mut Vm {
         let slot = &mut self.vms[dialect_slot(version)];
         if slot.is_none() {
-            let mut builder = Vm::sandbox(version)
-                .open_base()
-                .open_math()
-                .open_string()
-                .open_table();
+            let mut builder =
+                Vm::sandbox(version).open_base().open_math().open_string().open_table();
             if self.instr_budget > 0 {
                 builder = builder.with_instr_budget(self.instr_budget);
             }
@@ -403,7 +396,6 @@ fn version_tag(v: LuaVersion) -> &'static str {
         LuaVersion::Lua55 => "5.5",
     }
 }
-
 
 // Most public-surface tests live in `tests/integration.rs` (the
 // house-rule 500 LOC limit on src/*.rs is preserved that way). The

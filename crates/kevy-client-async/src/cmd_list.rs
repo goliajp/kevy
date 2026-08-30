@@ -41,12 +41,7 @@ impl AsyncConnection {
     }
 
     /// `LRANGE key start stop`. Negative offsets count from tail.
-    pub async fn lrange(
-        &mut self,
-        key: &[u8],
-        start: i64,
-        stop: i64,
-    ) -> io::Result<Vec<Vec<u8>>> {
+    pub async fn lrange(&mut self, key: &[u8], start: i64, stop: i64) -> io::Result<Vec<Vec<u8>>> {
         let start_s = start.to_string();
         let stop_s = stop.to_string();
         match self

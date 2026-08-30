@@ -68,11 +68,7 @@ fn fd_exhaust_kevy_stays_alive_refuses_cleanly() {
             }
         }
     }
-    eprintln!(
-        "fd_exhaust: offered={OFFERED_CONNS} alive={} refused={}",
-        alive.len(),
-        refused
-    );
+    eprintln!("fd_exhaust: offered={OFFERED_CONNS} alive={} refused={}", alive.len(), refused);
 
     // Strict: a fresh-conn PING must answer if we have at least one
     // alive conn (or send PING via the first alive conn).
@@ -94,8 +90,7 @@ fn fd_exhaust_kevy_stays_alive_refuses_cleanly() {
     // Close all alive conns, then verify kevy can accept new ones.
     drop(alive);
     std::thread::sleep(Duration::from_millis(200));
-    let mut fresh = TcpStream::connect(format!("127.0.0.1:{port}"))
-        .expect("fresh post-storm conn");
+    let mut fresh = TcpStream::connect(format!("127.0.0.1:{port}")).expect("fresh post-storm conn");
     let _ = fresh.set_read_timeout(Some(Duration::from_secs(2)));
     fresh.write_all(b"*1\r\n$4\r\nPING\r\n").expect("write PING2");
     let mut reply2 = [0u8; 64];

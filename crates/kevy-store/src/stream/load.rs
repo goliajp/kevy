@@ -94,11 +94,10 @@ impl StreamData {
                 if let Some(cs) = consumers.get_mut(consumer.as_slice()) {
                     cs.pel_count += 1;
                 }
-                pel.insert(StreamId { ms, seq }, PelEntry {
-                    consumer,
-                    delivery_time_ms,
-                    delivery_count,
-                });
+                pel.insert(
+                    StreamId { ms, seq },
+                    PelEntry { consumer, delivery_time_ms, delivery_count },
+                );
             }
             self.groups.insert(
                 SmallBytes::from_vec(lg.name),

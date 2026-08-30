@@ -45,10 +45,7 @@ fn short_lived_reopens_do_not_grow_the_log_without_bound() {
         drop(store);
     }
     let grown = aof_size(dir.path());
-    assert!(
-        grown > 100 * 1024,
-        "precondition: history should dominate ({grown} bytes)"
-    );
+    assert!(grown > 100 * 1024, "precondition: history should dominate ({grown} bytes)");
     // One more open, held across reaper ticks: the anchored baseline sees
     // the file as ~100% history and the auto-rewrite compacts it.
     let store = Store::open(config()).expect("open");
@@ -68,8 +65,5 @@ fn short_lived_reopens_do_not_grow_the_log_without_bound() {
     );
     // And the data survived the compaction.
     let store = Store::open(config()).expect("reopen");
-    assert_eq!(
-        store.get(b"the-one-key").expect("get").as_deref(),
-        Some(&value[..])
-    );
+    assert_eq!(store.get(b"the-one-key").expect("get").as_deref(), Some(&value[..]));
 }

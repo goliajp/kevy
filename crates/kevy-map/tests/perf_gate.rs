@@ -50,10 +50,7 @@ fn get_hit_under_budget() {
         }
     });
     let per_get = s.median_ns / KEYS as u64;
-    assert!(
-        per_get < 80,
-        "KevyMap per-get median = {per_get} ns (KEYS={KEYS}), budget 80"
-    );
+    assert!(per_get < 80, "KevyMap per-get median = {per_get} ns (KEYS={KEYS}), budget 80");
 }
 
 /// Remove hot path. Slightly higher budget than get (writes metadata).
@@ -72,8 +69,5 @@ fn remove_under_budget() {
     // s.median_ns covers (insert + remove) × KEYS; isolate via subtraction
     // would over-engineer this test — use a generous combined budget.
     let per_op = s.median_ns / (2 * KEYS) as u64;
-    assert!(
-        per_op < 250,
-        "KevyMap insert+remove combined per-op median = {per_op} ns, budget 250"
-    );
+    assert!(per_op < 250, "KevyMap insert+remove combined per-op median = {per_op} ns, budget 250");
 }

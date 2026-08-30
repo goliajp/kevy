@@ -16,15 +16,7 @@ fn mset_then_mget_round_trip() {
     let s = s();
     s.mset(&[(b"a", b"1"), (b"b", b"2"), (b"c", b"3")]).unwrap();
     let got = s.mget(&[b"a", b"b", b"missing", b"c"]).unwrap();
-    assert_eq!(
-        got,
-        vec![
-            Some(b"1".to_vec()),
-            Some(b"2".to_vec()),
-            None,
-            Some(b"3".to_vec()),
-        ]
-    );
+    assert_eq!(got, vec![Some(b"1".to_vec()), Some(b"2".to_vec()), None, Some(b"3".to_vec()),]);
 }
 
 #[test]
@@ -77,10 +69,7 @@ fn getex_returns_value_and_sets_ttl() {
     let got = s.getex(b"k", Duration::from_secs(60)).unwrap();
     assert_eq!(got, Some(b"v".to_vec()));
     let ttl = s.ttl_ms(b"k");
-    assert!(
-        (1..=60_000).contains(&ttl),
-        "expected TTL in (0..60_000], got {ttl}"
-    );
+    assert!((1..=60_000).contains(&ttl), "expected TTL in (0..60_000], got {ttl}");
 }
 
 #[test]
@@ -158,10 +147,7 @@ fn pexpire_sets_relative_ms() {
     s.set(b"k", b"v").unwrap();
     assert!(s.pexpire(b"k", 30_000).unwrap());
     let ttl = s.ttl_ms(b"k");
-    assert!(
-        (1..=30_000).contains(&ttl),
-        "expected TTL in (0..30_000], got {ttl}"
-    );
+    assert!((1..=30_000).contains(&ttl), "expected TTL in (0..30_000], got {ttl}");
 }
 
 // ---- hincrbyfloat -------------------------------------------------------

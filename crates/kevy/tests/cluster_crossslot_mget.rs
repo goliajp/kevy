@@ -59,10 +59,7 @@ fn cluster_mode_multikey_emits_crossslot() {
         // Cluster conn may answer -MOVED for some of these depending on
         // which shard owns each slot. Either +OK or -MOVED is RESP-valid;
         // we don't care for this test.
-        assert!(
-            r.starts_with('+') || r.starts_with('-'),
-            "SET reply malformed: {r:?}"
-        );
+        assert!(r.starts_with('+') || r.starts_with('-'), "SET reply malformed: {r:?}");
     }
 
     // PHASE 1: MGET cross-slot — MUST be -CROSSSLOT.
@@ -70,10 +67,7 @@ fn cluster_mode_multikey_emits_crossslot() {
     c.write_all(&build(&[b"MGET", b"k1", b"k2", b"k3"])).unwrap();
     let mget = read_one_reply(&mut c);
     eprintln!("crossslot: cluster MGET reply = {mget:?}");
-    assert!(
-        mget.starts_with("-CROSSSLOT"),
-        "MGET cross-slot expected -CROSSSLOT, got: {mget:?}"
-    );
+    assert!(mget.starts_with("-CROSSSLOT"), "MGET cross-slot expected -CROSSSLOT, got: {mget:?}");
 
     // PHASE 2: MGET same-slot via hash-tag `{shared}` — MUST be proper
     // `*N` array (no CROSSSLOT).
@@ -81,13 +75,7 @@ fn cluster_mode_multikey_emits_crossslot() {
         c.write_all(&build(&[b"SET", key.as_bytes(), b"v"])).unwrap();
         let _ = read_one_reply(&mut c);
     }
-    c.write_all(&build(&[
-        b"MGET",
-        b"{shared}:k1",
-        b"{shared}:k2",
-        b"{shared}:k3",
-    ]))
-    .unwrap();
+    c.write_all(&build(&[b"MGET", b"{shared}:k1", b"{shared}:k2", b"{shared}:k3"])).unwrap();
     let mget_same = read_one_reply(&mut c);
     eprintln!("crossslot: cluster MGET same-slot reply = {mget_same:?}");
     assert!(
@@ -97,16 +85,10 @@ fn cluster_mode_multikey_emits_crossslot() {
 
     // PHASE 3: MSET cross-slot — MUST be -CROSSSLOT.
     eprintln!("crossslot: cluster MSET cross-slot expected");
-    c.write_all(&build(&[
-        b"MSET", b"k1", b"v1", b"k2", b"v2", b"k3", b"v3",
-    ]))
-    .unwrap();
+    c.write_all(&build(&[b"MSET", b"k1", b"v1", b"k2", b"v2", b"k3", b"v3"])).unwrap();
     let mset = read_one_reply(&mut c);
     eprintln!("crossslot: cluster MSET reply = {mset:?}");
-    assert!(
-        mset.starts_with("-CROSSSLOT"),
-        "MSET cross-slot expected -CROSSSLOT, got: {mset:?}"
-    );
+    assert!(mset.starts_with("-CROSSSLOT"), "MSET cross-slot expected -CROSSSLOT, got: {mset:?}");
 
     // PHASE 4: SINTER cross-slot — MUST be -CROSSSLOT.
     eprintln!("crossslot: cluster SINTER cross-slot expected");
@@ -122,8 +104,7 @@ fn cluster_mode_multikey_emits_crossslot() {
     // cross-slot must still return a proper array (compat — single-DB
     // operators keep the legacy fan-out behaviour).
     eprintln!("crossslot: non-cluster conn -> 127.0.0.1:{main}");
-    let mut nc = TcpStream::connect(format!("127.0.0.1:{main}"))
-        .expect("non-cluster conn");
+    let mut nc = TcpStream::connect(format!("127.0.0.1:{main}")).expect("non-cluster conn");
     let _ = nc.set_read_timeout(Some(Duration::from_secs(2)));
     nc.write_all(&build(&[b"SET", b"nc:k1", b"v1"])).unwrap();
     let _ = read_one_reply(&mut nc);
@@ -191,10 +172,7 @@ fn advance_one(buf: &[u8], start: usize) -> Option<usize> {
         return None;
     }
     let tag = buf[start];
-    let line_end = buf[start..]
-        .iter()
-        .position(|&b| b == b'\n')
-        .map(|p| start + p + 1)?;
+    let line_end = buf[start..].iter().position(|&b| b == b'\n').map(|p| start + p + 1)?;
     match tag {
         b'+' | b'-' | b':' => Some(line_end),
         b'$' => {

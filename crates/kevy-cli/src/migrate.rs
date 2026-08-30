@@ -49,7 +49,8 @@ pub fn run_export(
     // a migration loses a whole type and reports success.
     let mut skipped: std::collections::BTreeMap<Vec<u8>, u64> = Default::default();
     loop {
-        let reply = client.request_borrowed(&[b"SCAN", &cursor, b"MATCH", &pattern, b"COUNT", b"512"])?;
+        let reply =
+            client.request_borrowed(&[b"SCAN", &cursor, b"MATCH", &pattern, b"COUNT", b"512"])?;
         let Reply::Array(items) = reply else {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "SCAN reply shape"));
         };
@@ -248,10 +249,7 @@ fn append_ttl_frame(
             .duration_since(std::time::UNIX_EPOCH)
             .map_err(io::Error::other)?
             .as_millis() as i64;
-        encode_command_borrowed(
-            frame,
-            &[b"PEXPIREAT", dst, (now + ms).to_string().as_bytes()],
-        );
+        encode_command_borrowed(frame, &[b"PEXPIREAT", dst, (now + ms).to_string().as_bytes()]);
     }
     Ok(())
 }

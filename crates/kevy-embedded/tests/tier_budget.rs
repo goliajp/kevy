@@ -18,20 +18,14 @@ fn dispatch(s: &Store, argv: &[&[u8]]) -> Vec<u8> {
 }
 
 fn tiered_bytes(dir: &std::path::Path, budget: u64) -> Config {
-    Config::default()
-        .with_ttl_reaper_manual()
-        .with_persist(dir)
-        .with_tier_budget(budget)
+    Config::default().with_ttl_reaper_manual().with_persist(dir).with_tier_budget(budget)
 }
 
 #[test]
 fn builder_auto_resolves_against_the_real_probe() {
     let dir = kevy_tmpdir::TmpDir::new("tier-t5-auto");
     let s = Store::open(
-        Config::default()
-            .with_ttl_reaper_manual()
-            .with_persist(dir.path())
-            .with_tier_budget_auto(),
+        Config::default().with_ttl_reaper_manual().with_persist(dir.path()).with_tier_budget_auto(),
     )
     .expect("auto budget must resolve on the dev host");
     let t = s.tier_info().expect("tiered store reports the section");
@@ -150,8 +144,14 @@ fn reserved_floor_feeds_through_the_manual_tick() {
         s.hset(format!("row:{i}").as_bytes(), &[(b"score".as_slice(), format!("{i}").as_bytes())])
             .unwrap();
     }
-    s.idx_create(b"by_score", b"row:", b"score", kevy_embedded::IndexValType::I64, kevy_embedded::IndexKind::Range)
-        .unwrap();
+    s.idx_create(
+        b"by_score",
+        b"row:",
+        b"score",
+        kevy_embedded::IndexValType::I64,
+        kevy_embedded::IndexKind::Range,
+    )
+    .unwrap();
     assert_eq!(s.info().tiering.unwrap().index_reserved_bytes, 0, "not fed before a tick");
     s.tick();
     let t = s.info().tiering.unwrap();
@@ -175,20 +175,41 @@ fn idx_create_refused_when_the_floor_exceeds_the_budget() {
             .unwrap();
     }
     // First index: at declare time the floor is still 0 — accepted.
-    s.idx_create(b"idx1", b"row:", b"score", kevy_embedded::IndexValType::I64, kevy_embedded::IndexKind::Range)
-        .expect("first index declares against an empty floor");
+    s.idx_create(
+        b"idx1",
+        b"row:",
+        b"score",
+        kevy_embedded::IndexValType::I64,
+        kevy_embedded::IndexKind::Range,
+    )
+    .expect("first index declares against an empty floor");
     // Second: the existing floor now exceeds the tiny budget — refused
     // by name, and byte-identical on the wire to the server's error.
     let err = s
-        .idx_create(b"idx2", b"row:", b"score", kevy_embedded::IndexValType::I64, kevy_embedded::IndexKind::Range)
+        .idx_create(
+            b"idx2",
+            b"row:",
+            b"score",
+            kevy_embedded::IndexValType::I64,
+            kevy_embedded::IndexKind::Range,
+        )
         .expect_err("the floor must refuse the second index");
-    assert!(
-        err.to_string().contains("index memory floor exceeds the tiering budget"),
-        "{err}"
-    );
+    assert!(err.to_string().contains("index memory floor exceeds the tiering budget"), "{err}");
     let wire = dispatch(
         &s,
-        &[b"IDX.CREATE", b"idx3", b"ON", b"PREFIX", b"row:", b"FIELD", b"score", b"TYPE", b"i64", b"KIND", b"range"],
+        &[
+            b"IDX.CREATE",
+            b"idx3",
+            b"ON",
+            b"PREFIX",
+            b"row:",
+            b"FIELD",
+            b"score",
+            b"TYPE",
+            b"i64",
+            b"KIND",
+            b"range",
+        ],
     );
     assert_eq!(wire, b"-ERR index memory floor exceeds the tiering budget\r\n".to_vec());
 }
@@ -208,8 +229,14 @@ fn the_reserved_floor_cache_never_serves_stale_floors() {
             .unwrap();
     }
     // Declare (rebuild chokepoint) — the floor appears.
-    s.idx_create(b"by_score", b"row:", b"score", kevy_embedded::IndexValType::I64, kevy_embedded::IndexKind::Range)
-        .unwrap();
+    s.idx_create(
+        b"by_score",
+        b"row:",
+        b"score",
+        kevy_embedded::IndexValType::I64,
+        kevy_embedded::IndexKind::Range,
+    )
+    .unwrap();
     s.tick();
     let after_create = reserved(&s);
     assert!(after_create > 0, "declare grows the floor");

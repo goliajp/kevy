@@ -49,7 +49,6 @@ impl<'a> AtomicAllShards<'a> {
         shard_idx(key, self.guards.len())
     }
 
-
     /// Record `key`'s prior state, once, before its first mutation.
     fn snap(&mut self, key: &[u8]) {
         if self.touched.contains(key) {
@@ -62,8 +61,7 @@ impl<'a> AtomicAllShards<'a> {
     }
 
     fn log_arg(&mut self, idx: usize, parts: &[&[u8]]) {
-        self.log
-            .push((idx, parts.iter().map(|p| p.to_vec()).collect()));
+        self.log.push((idx, parts.iter().map(|p| p.to_vec()).collect()));
     }
 
     // ---- string ops -----------------------------------------------
@@ -72,9 +70,7 @@ impl<'a> AtomicAllShards<'a> {
     pub fn set(&mut self, key: &[u8], value: &[u8]) -> bool {
         self.snap(key);
         let i = self.idx(key);
-        let ok = self.guards[i]
-            .store
-            .set(key, value.to_vec(), None, false, false);
+        let ok = self.guards[i].store.set(key, value.to_vec(), None, false, false);
         self.log_arg(i, &[b"SET", key, value]);
         ok
     }
@@ -115,10 +111,7 @@ impl<'a> AtomicAllShards<'a> {
     pub fn hset(&mut self, key: &[u8], pairs: &[(&[u8], &[u8])]) -> KevyResult<usize> {
         self.snap(key);
         let i = self.idx(key);
-        let n = self.guards[i]
-            .store
-            .hset(key, pairs)
-            .map_err(store_err)?;
+        let n = self.guards[i].store.hset(key, pairs).map_err(store_err)?;
         let mut parts: Vec<&[u8]> = Vec::with_capacity(2 + pairs.len() * 2);
         parts.push(b"HSET");
         parts.push(key);
@@ -133,21 +126,14 @@ impl<'a> AtomicAllShards<'a> {
     /// `HGET key field` — `None` when the key or field is absent.
     pub fn hget(&mut self, key: &[u8], field: &[u8]) -> KevyResult<Option<Vec<u8>>> {
         let i = self.idx(key);
-        Ok(self.guards[i]
-            .store
-            .hget(key, field)
-            .map_err(store_err)?
-            .map(<[u8]>::to_vec))
+        Ok(self.guards[i].store.hget(key, field).map_err(store_err)?.map(<[u8]>::to_vec))
     }
 
     /// `HINCRBY key field delta` — returns the field's new value.
     pub fn hincrby(&mut self, key: &[u8], field: &[u8], delta: i64) -> KevyResult<i64> {
         self.snap(key);
         let i = self.idx(key);
-        let n = self.guards[i]
-            .store
-            .hincrby(key, field, delta)
-            .map_err(store_err)?;
+        let n = self.guards[i].store.hincrby(key, field, delta).map_err(store_err)?;
         let s = format!("{delta}");
         self.log_arg(i, &[b"HINCRBY", key, field, s.as_bytes()]);
         Ok(n)
@@ -160,14 +146,9 @@ impl<'a> AtomicAllShards<'a> {
     pub fn zadd(&mut self, key: &[u8], pairs: &[(f64, &[u8])]) -> KevyResult<usize> {
         self.snap(key);
         let i = self.idx(key);
-        let n = self.guards[i]
-            .store
-            .zadd(key, pairs)
-            .map_err(store_err)?;
-        let score_strs: Vec<Vec<u8>> = pairs
-            .iter()
-            .map(|(s, _)| format!("{s}").into_bytes())
-            .collect();
+        let n = self.guards[i].store.zadd(key, pairs).map_err(store_err)?;
+        let score_strs: Vec<Vec<u8>> =
+            pairs.iter().map(|(s, _)| format!("{s}").into_bytes()).collect();
         let mut parts: Vec<&[u8]> = Vec::with_capacity(2 + pairs.len() * 2);
         parts.push(b"ZADD");
         parts.push(key);
@@ -183,10 +164,7 @@ impl<'a> AtomicAllShards<'a> {
     pub fn zincrby(&mut self, key: &[u8], delta: f64, member: &[u8]) -> KevyResult<f64> {
         self.snap(key);
         let i = self.idx(key);
-        let n = self.guards[i]
-            .store
-            .zincrby(key, delta, member)
-            .map_err(store_err)?;
+        let n = self.guards[i].store.zincrby(key, delta, member).map_err(store_err)?;
         let s = format!("{delta}");
         self.log_arg(i, &[b"ZINCRBY", key, s.as_bytes(), member]);
         Ok(n)
@@ -363,16 +341,10 @@ impl<'a> AtomicAllShards<'a> {
             return Err(KevyError::InvalidInput("invalid ZADD flag combo".into()));
         }
         let i = self.idx(key);
-        let rep = self.guards[i]
-            .store
-            .zadd_flags(key, pairs, flags)
-            .map_err(store_err)?;
+        let rep = self.guards[i].store.zadd_flags(key, pairs, flags).map_err(store_err)?;
         if !rep.applied.is_empty() {
-            let score_strs: Vec<Vec<u8>> = rep
-                .applied
-                .iter()
-                .map(|(s, _)| format!("{s}").into_bytes())
-                .collect();
+            let score_strs: Vec<Vec<u8>> =
+                rep.applied.iter().map(|(s, _)| format!("{s}").into_bytes()).collect();
             let mut parts: Vec<&[u8]> = Vec::with_capacity(2 + rep.applied.len() * 2);
             parts.push(b"ZADD");
             parts.push(key);
@@ -402,11 +374,8 @@ impl Store {
         ensure_writable(self)?;
         // Take every shard's write lock in shard-index order
         // (deterministic order avoids deadlock).
-        let guards: Vec<RwLockWriteGuard<'_, Inner>> = self
-            .shards
-            .iter()
-            .map(|s| s.write().expect("lock poisoned"))
-            .collect();
+        let guards: Vec<RwLockWriteGuard<'_, Inner>> =
+            self.shards.iter().map(|s| s.write().expect("lock poisoned")).collect();
         let mut ctx = AtomicAllShards {
             guards,
             log: Vec::new(),
@@ -435,10 +404,34 @@ impl Store {
 /// drifted before — zscore was missing here).
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) const ATOMIC_ALL_OPS: &[&str] = &[
-    "SET", "GET", "INCR", "INCRBY", "HSET", "HGET", "HINCRBY", "ZADD",
-    "ZINCRBY", "ZSCORE", "DEL", "EXISTS", "HDEL", "HGETALL", "HMGET",
-    "HEXISTS", "SADD", "SREM", "LPUSH", "RPUSH", "ZREM", "ZCARD",
-    "SMEMBERS", "SISMEMBER", "LRANGE", "LLEN", "SCARD", "ZRANGEBYSCORE",
+    "SET",
+    "GET",
+    "INCR",
+    "INCRBY",
+    "HSET",
+    "HGET",
+    "HINCRBY",
+    "ZADD",
+    "ZINCRBY",
+    "ZSCORE",
+    "DEL",
+    "EXISTS",
+    "HDEL",
+    "HGETALL",
+    "HMGET",
+    "HEXISTS",
+    "SADD",
+    "SREM",
+    "LPUSH",
+    "RPUSH",
+    "ZREM",
+    "ZCARD",
+    "SMEMBERS",
+    "SISMEMBER",
+    "LRANGE",
+    "LLEN",
+    "SCARD",
+    "ZRANGEBYSCORE",
 ];
 
 /// Undo a rejected cross-shard transaction. See `Store::atomic`; reverse

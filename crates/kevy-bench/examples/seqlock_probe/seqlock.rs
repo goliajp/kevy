@@ -225,11 +225,7 @@ impl Ebr {
     /// Smallest epoch any pinned reader holds ([`QUIESCENT`] when none).
     pub fn min_active(&self) -> u64 {
         fence(Ordering::SeqCst);
-        self.slots
-            .iter()
-            .map(|s| s.0.load(Ordering::SeqCst))
-            .min()
-            .unwrap_or(QUIESCENT)
+        self.slots.iter().map(|s| s.0.load(Ordering::SeqCst)).min().unwrap_or(QUIESCENT)
     }
 }
 

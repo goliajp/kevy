@@ -104,8 +104,7 @@ impl Heap {
         let mut sum = 0u64;
         for (c, cl) in self.claims.iter().enumerate() {
             if let Some(cl) = cl {
-                sum += u64::from((cl.claimed & !cl.taken).count_ones())
-                    * class::size_of(c) as u64;
+                sum += u64::from((cl.claimed & !cl.taken).count_ones()) * class::size_of(c) as u64;
             }
         }
         sum

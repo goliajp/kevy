@@ -6,14 +6,40 @@
 //! [`crate::list_seg::SEG_PROMOTE`] elements — a write under a live
 //! snapshot view clones one segment, not the whole value).
 
+use crate::list_seg::{SEG_PROMOTE, SegListData};
 #[cfg(not(feature = "std"))]
 use crate::nostd_prelude::*;
-use crate::list_seg::{SEG_PROMOTE, SegListData};
 use crate::small_list::{self, PushResult, SmallListData};
 use crate::util::{norm_index, range_bounds};
 use crate::value::{ListData, SmallBytes, Value, list_item_weight};
 use crate::{Entry, Store, StoreError};
 use alloc::sync::Arc;
+
+/// Push into an inline list, promoting it to the heap encoding if the value
+/// does not fit. Returns whether the promotion happened, which is the only
+/// thing the caller does differently.
+///
+/// Split from `list_push_one` for the 50-line rule. `slot` must be a
+/// `Value::SmallListInline`; the caller checks, and the `else` here pushes
+/// nothing rather than asserting, because a wrong caller should not be a
+/// panic in the write path.
+fn push_inline(slot: &mut Value, v: &[u8], front: bool) -> bool {
+    let Value::SmallListInline(s) = slot else { return false };
+    let push = if front { s.try_push_front(v) } else { s.try_push_back(v) };
+    match push {
+        PushResult::Pushed => false,
+        PushResult::NoRoom => {
+            let mut promoted = small_list::promote(s);
+            if front {
+                promoted.push_front(v.to_vec());
+            } else {
+                promoted.push_back(v.to_vec());
+            }
+            *slot = Value::List(Arc::new(promoted));
+            true
+        }
+    }
+}
 
 impl Store {
     // ---- lists ---------------------------------------------------------
@@ -35,10 +61,8 @@ impl Store {
         }
         // A.8: see hash.rs::hash_mut — promote out-of-scope, then
         // re-borrow as the heap variant.
-        let is_inline = matches!(
-            self.map.get(key).map(|e| &e.value),
-            Some(Value::SmallListInline(_))
-        );
+        let is_inline =
+            matches!(self.map.get(key).map(|e| &e.value), Some(Value::SmallListInline(_)));
         if is_inline {
             let promoted = {
                 let e = self.map.get(key).expect("present");
@@ -60,10 +84,7 @@ impl Store {
     /// Whether `key` currently holds the `SegList` encoding (after lazy
     /// expiry). The write ops branch on this before the flat path.
     fn is_seglist(&mut self, key: &[u8]) -> bool {
-        matches!(
-            self.live_entry_mut(key).map(|e| &e.value),
-            Some(Value::SegList(_))
-        )
+        matches!(self.live_entry_mut(key).map(|e| &e.value), Some(Value::SegList(_)))
     }
 
     /// Borrow the seg-encoded list mutably. Caller has checked
@@ -116,11 +137,7 @@ impl Store {
     }
 
     /// `LPUSH` — prepend each value in turn; returns the new length.
-    pub fn lpush(
-        &mut self,
-        key: &[u8],
-        values: &[&[u8]],
-    ) -> Result<usize, StoreError> {
+    pub fn lpush(&mut self, key: &[u8], values: &[&[u8]]) -> Result<usize, StoreError> {
         if values.is_empty() {
             return Ok(self.list_len(key));
         }
@@ -133,11 +150,7 @@ impl Store {
     }
 
     /// `RPUSH` — append each value; returns the new length.
-    pub fn rpush(
-        &mut self,
-        key: &[u8],
-        values: &[&[u8]],
-    ) -> Result<usize, StoreError> {
+    pub fn rpush(&mut self, key: &[u8], values: &[&[u8]]) -> Result<usize, StoreError> {
         if values.is_empty() {
             return Ok(self.list_len(key));
         }
@@ -157,37 +170,35 @@ impl Store {
             return Ok(self.list_push_create(key, v));
         }
         let slot = self.list_value_for_push(key)?.expect("present and a list");
-        let reweigh = match slot {
-            Value::SmallListInline(s) => {
-                let push = if front { s.try_push_front(v) } else { s.try_push_back(v) };
-                match push {
-                    PushResult::Pushed => return Ok(0),
-                    PushResult::NoRoom => {
-                        let mut promoted = small_list::promote(s);
-                        if front {
-                            promoted.push_front(v.to_vec());
-                        } else {
-                            promoted.push_back(v.to_vec());
-                        }
-                        *slot = Value::List(Arc::new(promoted));
-                        // Reweighed from scratch — caller's delta should
-                        // be 0 for THIS pair (already in the new weight).
-                        true
-                    }
-                }
+        if matches!(slot, Value::SmallListInline(_)) {
+            // Promotion reweighs from scratch, so the caller's delta for
+            // THIS pair is 0 either way — the new weight already has it.
+            if push_inline(slot, v, front) {
+                self.reweigh_entry(key);
             }
+            return Ok(0);
+        }
+        let reweigh = match slot {
             Value::List(l) if l.len() >= SEG_PROMOTE => {
                 promote_flat_to_seg(slot, v, front);
                 true
             }
             Value::List(l) => {
                 let l = Arc::make_mut(l);
-                if front { l.push_front(v.to_vec()) } else { l.push_back(v.to_vec()) }
+                if front {
+                    l.push_front(v.to_vec())
+                } else {
+                    l.push_back(v.to_vec())
+                }
                 return Ok(list_item_weight(v.len()) as i64);
             }
             Value::SegList(l) => {
                 let l = Arc::make_mut(l);
-                if front { l.push_front(v.to_vec()) } else { l.push_back(v.to_vec()) }
+                if front {
+                    l.push_front(v.to_vec())
+                } else {
+                    l.push_back(v.to_vec())
+                }
                 return Ok(list_item_weight(v.len()) as i64);
             }
             _ => return Err(StoreError::WrongType),
@@ -219,7 +230,12 @@ impl Store {
     }
 
     /// `LPOP`/`RPOP` shared body — pop up to `count` from one end.
-    fn list_pop(&mut self, key: &[u8], count: usize, front: bool) -> Result<Vec<Vec<u8>>, StoreError> {
+    fn list_pop(
+        &mut self,
+        key: &[u8],
+        count: usize,
+        front: bool,
+    ) -> Result<Vec<Vec<u8>>, StoreError> {
         // Inline → promote first if there is anything to pop; simpler
         // than maintaining a second pop path on the packed buffer.
         if matches!(self.map.get(key).map(|e| &e.value), Some(Value::SmallListInline(_))) {
@@ -273,10 +289,7 @@ impl Store {
     /// (no-op if already heap or absent). Used by mutating paths that
     /// only support the heap representations (pop/lrem/lset/ltrim).
     fn promote_list_inline_to_heap(&mut self, key: &[u8]) {
-        let needs = matches!(
-            self.map.get(key).map(|e| &e.value),
-            Some(Value::SmallListInline(_))
-        );
+        let needs = matches!(self.map.get(key).map(|e| &e.value), Some(Value::SmallListInline(_)));
         if !needs {
             return;
         }
@@ -411,7 +424,11 @@ fn promote_flat_to_seg(slot: &mut Value, v: &[u8], front: bool) {
         _ => unreachable!("matched List"),
     };
     let mut seg = SegListData::from_flat(flat);
-    if front { seg.push_front(v.to_vec()) } else { seg.push_back(v.to_vec()) }
+    if front {
+        seg.push_front(v.to_vec())
+    } else {
+        seg.push_back(v.to_vec())
+    }
     *slot = Value::SegList(Arc::new(seg));
 }
 

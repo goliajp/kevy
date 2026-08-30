@@ -21,11 +21,8 @@ impl ClusterTopo {
     /// `-MOVED <slot> <ip>:<port>\r\n` pointing at `shard`'s cluster port.
     pub(crate) fn moved(&self, slot: u16, shard: usize) -> Vec<u8> {
         let [a, b, c, d] = self.ip;
-        format!(
-            "-MOVED {slot} {a}.{b}.{c}.{d}:{}\r\n",
-            self.port_base as usize + shard
-        )
-        .into_bytes()
+        format!("-MOVED {slot} {a}.{b}.{c}.{d}:{}\r\n", self.port_base as usize + shard)
+            .into_bytes()
     }
 }
 

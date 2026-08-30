@@ -42,10 +42,7 @@ fn casts_intervals_and_arithmetic() {
     assert_eq!(one("SELECT INTERVAL '1 year 2 months'"), "1 year 2 mons");
     assert_eq!(one("SELECT INTERVAL '-3 days'"), "-3 days");
     // Month clamp: Jan 31 + 1 mon lands on the last day of Feb.
-    assert_eq!(
-        one("SELECT '2024-01-31'::DATE + INTERVAL '1 month'"),
-        "2024-02-29 00:00:00"
-    );
+    assert_eq!(one("SELECT '2024-01-31'::DATE + INTERVAL '1 month'"), "2024-02-29 00:00:00");
     assert_eq!(one("SELECT 1 + 2 * 3"), "7");
     assert_eq!(one("SELECT (1 + 2) * 3"), "9");
 }

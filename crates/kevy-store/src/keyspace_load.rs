@@ -44,9 +44,7 @@ impl Store {
             Value::SegHash(h) => {
                 self.load_hash(k, h.iter().map(|(f, v)| (f.to_vec(), v.to_vec())).collect(), ttl_ms)
             }
-            Value::SegSet(s) => {
-                self.load_set(k, s.keys().map(|m| m.to_vec()).collect(), ttl_ms)
-            }
+            Value::SegSet(s) => self.load_set(k, s.keys().map(|m| m.to_vec()).collect(), ttl_ms),
             Value::List(l) => self.load_list(k, l.iter().cloned().collect(), ttl_ms),
             Value::SegList(l) => self.load_list(k, l.iter().cloned().collect(), ttl_ms),
             Value::SmallListInline(l) => {

@@ -399,10 +399,7 @@ fn inline_payload_does_not_allocate() {
             drop(s);
         }
     });
-    assert_eq!(
-        allocs, 0,
-        "expected SSO inline path to be alloc-free, got {allocs} allocs"
-    );
+    assert_eq!(allocs, 0, "expected SSO inline path to be alloc-free, got {allocs} allocs");
 }
 
 #[test]
@@ -416,10 +413,7 @@ fn heap_payload_does_allocate() {
         std::hint::black_box(&s);
         drop(s);
     });
-    assert!(
-        allocs >= 1,
-        "expected the heap path to allocate at least once, got {allocs}"
-    );
+    assert!(allocs >= 1, "expected the heap path to allocate at least once, got {allocs}");
 }
 
 /// REAL production incident: two legitimately-constructed
@@ -445,9 +439,7 @@ fn partial_eq_mixed_arm_does_not_panic() {
     // the read inside PartialEq.
     let mut storage = ManuallyDrop::new(b"hi".to_vec());
     let ptr = NonNull::new(storage.as_mut_ptr()).expect("non-null Vec");
-    let forged = ManuallyDrop::new(SmallBytes {
-        heap: Heap::new(ptr, 2, 2),
-    });
+    let forged = ManuallyDrop::new(SmallBytes { heap: Heap::new(ptr, 2, 2) });
 
     // Equal content: must return true, must NOT panic.
     assert_eq!(inline_hi, *forged);
@@ -470,7 +462,9 @@ fn partial_eq_mixed_arm_does_not_panic() {
     // SAFETY: storage hasn't been dropped yet and we won't access it
     // after this; the only outstanding alias (forged.heap.ptr) is
     // intentionally orphaned in `forged` which we never read again.
-    unsafe { ManuallyDrop::drop(&mut storage); }
+    unsafe {
+        ManuallyDrop::drop(&mut storage);
+    }
 }
 
 /// The actual production crash shape, reproduced without unsafe:
@@ -485,9 +479,8 @@ fn partial_eq_mixed_arm_does_not_panic() {
 #[test]
 fn partial_eq_unequal_length_across_inline_heap_is_false() {
     let short_inline = SmallBytes::from_slice(b"_health_probe"); // 13 B
-    let long_heap = SmallBytes::from_slice(
-        b"this string is definitely longer than twenty-two bytes",
-    );
+    let long_heap =
+        SmallBytes::from_slice(b"this string is definitely longer than twenty-two bytes");
     // Sanity: pre-conditions of the shape.
     assert!(short_inline.is_inline());
     assert!(!long_heap.is_inline());

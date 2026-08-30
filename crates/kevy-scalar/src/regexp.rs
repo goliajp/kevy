@@ -61,9 +61,8 @@ fn render_array(elems: &[Option<String>]) -> String {
             Some(s) => {
                 let needs_quote = s.is_empty()
                     || s.eq_ignore_ascii_case("null")
-                    || s.chars().any(|c| {
-                        matches!(c, '{' | '}' | ',' | '"' | '\\') || c.is_whitespace()
-                    });
+                    || s.chars()
+                        .any(|c| matches!(c, '{' | '}' | ',' | '"' | '\\') || c.is_whitespace());
                 if needs_quote {
                     out.push('"');
                     for c in s.chars() {

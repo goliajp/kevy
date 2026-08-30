@@ -1,17 +1,17 @@
 {
   "corpus": "c1",
   "platform": "linux",
-  "total_regions": 164528,
-  "dead_regions": 26923,
-  "llvm_per_instantiation_dead": 27891,
+  "total_regions": 164819,
+  "dead_regions": 26969,
+  "llvm_per_instantiation_dead": 27837,
   "crates": {
     "kevy": {
-      "regions": 29420,
-      "dead": 5314
+      "regions": 29462,
+      "dead": 5305
     },
     "kevy-alloc": {
       "regions": 1694,
-      "dead": 119
+      "dead": 117
     },
     "kevy-bench": {
       "regions": 130,
@@ -22,16 +22,16 @@
       "dead": 9
     },
     "kevy-chaos": {
-      "regions": 1081,
+      "regions": 1083,
       "dead": 425
     },
     "kevy-cli": {
-      "regions": 4569,
-      "dead": 1715
+      "regions": 4572,
+      "dead": 1718
     },
     "kevy-client": {
-      "regions": 4878,
-      "dead": 1391
+      "regions": 4873,
+      "dead": 1388
     },
     "kevy-client-async": {
       "regions": 2350,
@@ -42,23 +42,23 @@
       "dead": 87
     },
     "kevy-compress": {
-      "regions": 1403,
+      "regions": 1409,
       "dead": 43
     },
     "kevy-config": {
-      "regions": 3631,
-      "dead": 396
+      "regions": 3627,
+      "dead": 394
     },
     "kevy-elect": {
       "regions": 1851,
       "dead": 111
     },
     "kevy-embedded": {
-      "regions": 27478,
-      "dead": 3780
+      "regions": 27502,
+      "dead": 3769
     },
     "kevy-ffi": {
-      "regions": 842,
+      "regions": 843,
       "dead": 136
     },
     "kevy-geo": {
@@ -70,7 +70,7 @@
       "dead": 31
     },
     "kevy-index": {
-      "regions": 5866,
+      "regions": 5864,
       "dead": 438
     },
     "kevy-jni": {
@@ -94,11 +94,11 @@
       "dead": 16
     },
     "kevy-mcp": {
-      "regions": 1737,
-      "dead": 520
+      "regions": 1731,
+      "dead": 516
     },
     "kevy-persist": {
-      "regions": 7818,
+      "regions": 7826,
       "dead": 698
     },
     "kevy-pubsub-bench": {
@@ -126,11 +126,11 @@
       "dead": 0
     },
     "kevy-rt": {
-      "regions": 16242,
-      "dead": 4787
+      "regions": 16253,
+      "dead": 4766
     },
     "kevy-scalar": {
-      "regions": 4391,
+      "regions": 4388,
       "dead": 1087
     },
     "kevy-scope": {
@@ -138,16 +138,16 @@
       "dead": 56
     },
     "kevy-seg": {
-      "regions": 1212,
+      "regions": 1210,
       "dead": 120
     },
     "kevy-sql": {
-      "regions": 4341,
+      "regions": 4343,
       "dead": 692
     },
     "kevy-store": {
-      "regions": 18858,
-      "dead": 1489
+      "regions": 19169,
+      "dead": 1491
     },
     "kevy-sys": {
       "regions": 730,
@@ -158,7 +158,7 @@
       "dead": 10
     },
     "kevy-text": {
-      "regions": 4021,
+      "regions": 4023,
       "dead": 118
     },
     "kevy-time": {
@@ -174,19 +174,19 @@
       "dead": 238
     },
     "kevy-vector": {
-      "regions": 900,
+      "regions": 899,
       "dead": 36
     },
     "kevy-vlog": {
-      "regions": 611,
-      "dead": 47
+      "regions": 519,
+      "dead": 46
     },
     "kevy-wasm": {
-      "regions": 868,
-      "dead": 148
+      "regions": 866,
+      "dead": 147
     },
     "kevy-window": {
-      "regions": 1059,
+      "regions": 1055,
       "dead": 193
     }
   },
@@ -242,7 +242,7 @@
     "::apply_one": 52,
     "::apply_persistence": 15,
     "::apply_replication": 13,
-    "::apply_server": 14,
+    "::apply_server": 12,
     "::apply_slowlog": 5,
     "::apply_tiering": 4,
     "::arm": 6,
@@ -306,7 +306,7 @@
     "::compact": 5,
     "::compact_below": 1,
     "::compact_step_capped": 4,
-    "::compaction_pending": 7,
+    "::compaction_pending": 9,
     "::concat_expr": 17,
     "::connect": 39,
     "::connect_at::": 5,
@@ -572,20 +572,17 @@
     "::object": 4,
     "::on_accept": 1,
     "::on_announce": 2,
-    "::on_aof_format": 2,
     "::on_command": 2,
     "::on_conn_gauge": 2,
     "::on_connection": 2,
     "::on_flush": 4,
     "::on_offer": 2,
-    "::on_persist_stats": 2,
     "::on_replay_report": 2,
     "::on_replication_view": 2,
     "::on_row_write": 6,
     "::on_shard_init": 2,
     "::on_shard_start": 2,
     "::on_shard_tick": 2,
-    "::on_tick_gap": 2,
     "::on_write": 2,
     "::op_or_sym": 16,
     "::open": 16,
@@ -849,7 +846,7 @@
     "::tier_stats": 1,
     "::to_sidecar": 6,
     "::tokens": 4,
-    "::top_groups": 23,
+    "::top_groups": 12,
     "::touch_policy": 1,
     "::trim_maxlen": 2,
     "::trim_minid": 1,
@@ -946,7 +943,7 @@
     "::zrange_by_score": 4,
     "::zrange_by_score_limit": 15,
     "::zrangebyscore": 12,
-    "::zrank": 23,
+    "::zrank": 21,
     "::zrem": 25,
     "::zrem_range_by_rank": 38,
     "::zrem_range_by_score": 1,
@@ -1033,7 +1030,7 @@
     "<kevy_rt::shard::Shard>::build_zalgebra_store::": 4,
     "<kevy_rt::shard::Shard>::build_zintercard::": 4,
     "<kevy_rt::shard::Shard>::cancel_xshard_on_close": 2,
-    "<kevy_rt::shard::Shard>::check_repl_ack_waiters": 48,
+    "<kevy_rt::shard::Shard>::check_repl_ack_waiters": 53,
     "<kevy_rt::shard::Shard>::check_repl_apply_waiters": 28,
     "<kevy_rt::shard::Shard>::check_tee_overrun": 27,
     "<kevy_rt::shard::Shard>::client_getname::": 37,
@@ -1044,7 +1041,7 @@
     "<kevy_rt::shard::Shard>::commit_rewrite_done": 17,
     "<kevy_rt::shard::Shard>::conn_readable": 7,
     "<kevy_rt::shard::Shard>::deliver_block": 2,
-    "<kevy_rt::shard::Shard>::deliver_pmessages": 2,
+    "<kevy_rt::shard::Shard>::deliver_pmessages": 3,
     "<kevy_rt::shard::Shard>::deliver_publish": 3,
     "<kevy_rt::shard::Shard>::deliver_publish_arc": 52,
     "<kevy_rt::shard::Shard>::deliver_publish_copy": 2,
@@ -1145,10 +1142,10 @@
     "<kevy_rt::shard::Shard>::park_blocked_xshard": 1,
     "<kevy_rt::shard::Shard>::park_dispatch::": 2,
     "<kevy_rt::shard::Shard>::park_if_held": 6,
-    "<kevy_rt::shard::Shard>::parse_replica_acks": 11,
+    "<kevy_rt::shard::Shard>::parse_replica_acks": 48,
     "<kevy_rt::shard::Shard>::post_write_housekeeping::": 3,
     "<kevy_rt::shard::Shard>::preallocate_exec_slots": 1,
-    "<kevy_rt::shard::Shard>::prepare_uring_shard": 92,
+    "<kevy_rt::shard::Shard>::prepare_uring_shard": 91,
     "<kevy_rt::shard::Shard>::protocol_error": 23,
     "<kevy_rt::shard::Shard>::psub_count_for": 1,
     "<kevy_rt::shard::Shard>::pump_replication": 5,
@@ -1165,8 +1162,8 @@
     "<kevy_rt::shard::Shard>::repl_ack_count": 4,
     "<kevy_rt::shard::Shard>::repl_waiter_reply": 5,
     "<kevy_rt::shard::Shard>::replica_conn_is_live": 11,
-    "<kevy_rt::shard::Shard>::replica_io_failed": 1,
-    "<kevy_rt::shard::Shard>::replica_readable": 13,
+    "<kevy_rt::shard::Shard>::replica_io_failed": 8,
+    "<kevy_rt::shard::Shard>::replica_readable": 27,
     "<kevy_rt::shard::Shard>::replica_writable": 13,
     "<kevy_rt::shard::Shard>::replicas_brief": 29,
     "<kevy_rt::shard::Shard>::reply_feed_error": 13,
@@ -1176,7 +1173,7 @@
     "<kevy_rt::shard::Shard>::restore_serve_on_teardown": 9,
     "<kevy_rt::shard::Shard>::rewrite_aof_after_resync": 11,
     "<kevy_rt::shard::Shard>::rewrite_predicted_diverging": 3,
-    "<kevy_rt::shard::Shard>::run": 74,
+    "<kevy_rt::shard::Shard>::run": 79,
     "<kevy_rt::shard::Shard>::run_uring": 334,
     "<kevy_rt::shard::Shard>::run_uring::cold_path_hint": 2,
     "<kevy_rt::shard::Shard>::send_or_hold_response": 8,
@@ -1198,7 +1195,7 @@
     "<kevy_rt::shard::Shard>::start_rename_xshard": 1,
     "<kevy_rt::shard::Shard>::start_repl_barrier": 22,
     "<kevy_rt::shard::Shard>::start_repl_wait": 7,
-    "<kevy_rt::shard::Shard>::start_single::": 24,
+    "<kevy_rt::shard::Shard>::start_single::": 15,
     "<kevy_rt::shard::Shard>::start_snapshot_ship": 10,
     "<kevy_rt::shard::Shard>::submit_offthread_swap": 10,
     "<kevy_rt::shard::Shard>::target_apply_escrow": 1,
@@ -1238,10 +1235,10 @@
     "<kevy_rt::shard::Shard>::uring_on_big_arg_cancel": 28,
     "<kevy_rt::shard::Shard>::uring_on_big_arg_read": 75,
     "<kevy_rt::shard::Shard>::uring_on_big_arg_target_canceled": 26,
-    "<kevy_rt::shard::Shard>::uring_on_recv": 239,
+    "<kevy_rt::shard::Shard>::uring_on_recv": 241,
     "<kevy_rt::shard::Shard>::uring_on_write": 96,
     "<kevy_rt::shard::Shard>::uring_park": 36,
-    "<kevy_rt::shard::Shard>::uring_reap_closed": 61,
+    "<kevy_rt::shard::Shard>::uring_reap_closed": 59,
     "<kevy_rt::shard::Shard>::uring_recv_dispatch": 62,
     "<kevy_rt::shard::Shard>::uring_resolve_serve": 35,
     "<kevy_rt::shard::Shard>::uring_stamp_hold": 22,
@@ -1479,7 +1476,8 @@
     "kevy::cmd_view::op_query": 1,
     "kevy::cmd_view::op_stats": 2,
     "kevy::cmd_view::parse_create_opts::": 6,
-    "kevy::cmd_view::parse_tree::": 28,
+    "kevy::cmd_view::parse_leaf::": 9,
+    "kevy::cmd_view::parse_tree::": 19,
     "kevy::cmd_view::persist_sidecar": 12,
     "kevy::cmd_view_reduce::collect_chunk_rows": 3,
     "kevy::cmd_view_reduce::decode_hydrated_rows": 7,
@@ -1496,7 +1494,7 @@
     "kevy::die::": 3,
     "kevy::dispatch::cmd_select::": 4,
     "kevy::dispatch::dispatch_conn::": 3,
-    "kevy::dispatch::dispatch_with_proto::": 14,
+    "kevy::dispatch::dispatch_with_proto::": 10,
     "kevy::dispatch_collections::cmd_brpoplpush::": 6,
     "kevy::dispatch_collections::cmd_lmove::": 5,
     "kevy::dispatch_collections::dispatch_hash::": 4,
@@ -1565,7 +1563,7 @@
     "kevy::dispatch_stream::group::cmd_xgroup::": 9,
     "kevy::dispatch_stream::group::cmd_xpending::": 18,
     "kevy::dispatch_stream::group::parse_kv_u64::": 1,
-    "kevy::dispatch_stream::group::parse_xpending_extended::": 20,
+    "kevy::dispatch_stream::group::parse_xpending_extended::": 26,
     "kevy::dispatch_stream::group::parse_xreadgroup_argv::": 6,
     "kevy::dispatch_stream::group::parse_xreadgroup_streams::": 1,
     "kevy::dispatch_stream::group::xgroup_create::": 14,
@@ -1582,7 +1580,7 @@
     "kevy::dispatch_stream::info::xinfo_stream::": 7,
     "kevy::dispatch_stream::parse_optional_count::": 3,
     "kevy::dispatch_stream::parse_trim_arg::": 4,
-    "kevy::dispatch_stream::parse_xadd_argv::": 15,
+    "kevy::dispatch_stream::parse_xadd_argv::": 12,
     "kevy::dispatch_stream::read::cmd_xread::": 15,
     "kevy::dispatch_stream::read::parse_xread_argv::": 5,
     "kevy::dispatch_stream::read::xread_parse_kv_u64::": 1,
@@ -1605,7 +1603,7 @@
     "kevy::index_runtime::with_ready_text_segment::": 2,
     "kevy::index_runtime::with_segment_resolver::": 1,
     "kevy::index_runtime::with_two_ready_segments::": 3,
-    "kevy::install_signal_handlers": 46,
+    "kevy::install_signal_handlers": 47,
     "kevy::install_signal_handlers::handler": 5,
     "kevy::install_signal_handlers::xfsz_noop": 2,
     "kevy::main": 19,
@@ -1673,14 +1671,16 @@
     "kevy::parse_ipv4": 1,
     "kevy::print_help": 5,
     "kevy::print_startup_banner": 15,
-    "kevy::replica_runner::drain_client": 7,
     "kevy::replica_runner::drain_session": 8,
-    "kevy::replica_runner::event_to_apply": 1,
-    "kevy::replica_runner::gen_still_matches": 3,
-    "kevy::replica_runner::maybe_ack": 5,
-    "kevy::replica_runner::run_loop": 3,
+    "kevy::replica_runner::one_session": 3,
+    "kevy::replica_runner::run_loop": 1,
     "kevy::replica_runner::set_socket_slot": 1,
-    "kevy::replica_runner_routed::drain_client_routed": 68,
+    "kevy::replica_runner_events::drain_client": 6,
+    "kevy::replica_runner_events::drain_start": 1,
+    "kevy::replica_runner_events::event_to_apply": 1,
+    "kevy::replica_runner_events::gen_still_matches": 3,
+    "kevy::replica_runner_events::maybe_ack": 5,
+    "kevy::replica_runner_routed::drain_client_routed": 59,
     "kevy::replica_runner_routed::route_event": 57,
     "kevy::replica_trace::trace_session_event": 10,
     "kevy::replica_trace::trace_session_start": 7,
@@ -1824,7 +1824,7 @@
     "kevy_cli::route_subcommand": 37,
     "kevy_cli::route_tool": 4,
     "kevy_cli::run_backup_cli": 17,
-    "kevy_cli::run_bulk_cli": 77,
+    "kevy_cli::run_bulk_cli": 80,
     "kevy_cli::run_diff_cli": 71,
     "kevy_cli::run_migrate_cli": 57,
     "kevy_cli::run_once": 15,
@@ -1878,7 +1878,7 @@
     "kevy_client::reply::unexpected": 19,
     "kevy_client::scan::parse_scan_reply": 47,
     "kevy_client::subscribe::classify_hello3_reply": 7,
-    "kevy_client::subscribe::remote_host_port": 9,
+    "kevy_client::subscribe::remote_host_port": 6,
     "kevy_client::subscribe_io::await_acks": 4,
     "kevy_client::subscribe_io::frame_to_event": 6,
     "kevy_client::subscribe_io::invalid::": 3,
@@ -2036,8 +2036,9 @@
     "kevy_embedded::dispatch::view::cmd_view_list": 1,
     "kevy_embedded::dispatch::view::cmd_view_query": 34,
     "kevy_embedded::dispatch::view::parse_create_opts": 39,
+    "kevy_embedded::dispatch::view::parse_leaf": 28,
     "kevy_embedded::dispatch::view::parse_query_opts": 38,
-    "kevy_embedded::dispatch::view::parse_tree": 74,
+    "kevy_embedded::dispatch::view::parse_tree": 47,
     "kevy_embedded::dispatch::zset::apply_limit": 3,
     "kevy_embedded::dispatch::zset::cmd_zadd": 13,
     "kevy_embedded::dispatch::zset::cmd_zpopmin": 11,
@@ -2171,10 +2172,10 @@
     "kevy_ffi::dispatch::dispatch_packed": 28,
     "kevy_ffi::frame::ack": 3,
     "kevy_ffi::frame::encode_frame": 16,
-    "kevy_ffi::kevy_sub_wait": 5,
     "kevy_ffi::lifecycle::apply": 3,
     "kevy_ffi::open_with::": 1,
-    "kevy_ffi::sub_open": 2,
+    "kevy_ffi::sub::kevy_sub_wait": 5,
+    "kevy_ffi::sub::sub_open": 2,
     "kevy_ffi::sub_raw::kevy_sub_next_raw": 2,
     "kevy_ffi::sub_raw::kevy_sub_wait_raw": 5,
     "kevy_ffi::unpack_argv": 35,
@@ -2315,7 +2316,7 @@
     "kevy_mcp::catalog::field_text": 1,
     "kevy_mcp::catalog::flag_list": 2,
     "kevy_mcp::catalog::parse_docs": 6,
-    "kevy_mcp::catalog::parse_fields": 11,
+    "kevy_mcp::catalog::parse_fields": 9,
     "kevy_mcp::catalog::text": 2,
     "kevy_mcp::dispatch": 35,
     "kevy_mcp::handle_line": 31,
@@ -2333,7 +2334,7 @@
     "kevy_mcp::tools::reply_to_json": 12,
     "kevy_mcp::tools::request": 7,
     "kevy_mcp::tools::run_command": 40,
-    "kevy_mcp::tools::strings": 21,
+    "kevy_mcp::tools::strings": 19,
     "kevy_mcp::tools::tool_result": 1,
     "kevy_mget": 11,
     "kevy_open": 1,
@@ -2448,7 +2449,7 @@
     "kevy_replicate::wire::parse_decimal": 2,
     "kevy_replicate::wire::parse_envelope_header": 2,
     "kevy_replicate::wire::parse_signed_decimal": 5,
-    "kevy_replicate::wire_snapshot::decode_replconf_ack": 7,
+    "kevy_replicate::wire_snapshot::decode_replconf_ack": 27,
     "kevy_replicate::wire_snapshot::decode_snapshot_chunk": 1,
     "kevy_replicate::wire_snapshot::decode_snapshot_marker": 1,
     "kevy_resp::fuzz::run_n": 5,
@@ -2644,7 +2645,7 @@
     "kevy_sql::fold_parse::number": 8,
     "kevy_sql::fold_parse::primary": 14,
     "kevy_sql::lex::lex": 1,
-    "kevy_sql::parse::parse_column_def": 6,
+    "kevy_sql::parse::parse_column_def": 3,
     "kevy_sql::parse::parse_create_index": 8,
     "kevy_sql::parse::parse_create_table": 4,
     "kevy_sql::parse::parse_direction": 1,
@@ -2655,6 +2656,7 @@
     "kevy_sql::parse::parse_table_unique": 3,
     "kevy_sql::parse::parse_type": 5,
     "kevy_sql::parse::parse_type_args": 3,
+    "kevy_sql::parse::refused_inline_constraint": 3,
     "kevy_sql::parse::refused_verb": 2,
     "kevy_sql::parse::skip_default_expr": 8,
     "kevy_sql::parse_dump::is_set_config": 1,
@@ -2704,6 +2706,7 @@
     "kevy_store::evict::score_entry": 8,
     "kevy_store::evict::touch_on_access": 16,
     "kevy_store::list::promote_flat_to_seg": 7,
+    "kevy_store::list::push_inline": 1,
     "kevy_store::list_ops::lpos_scan": 2,
     "kevy_store::segrows::seq_of": 2,
     "kevy_store::segwindow::apply_segmented": 7,
@@ -2797,7 +2800,6 @@
     "kevy_vector::dist::l2_lanes": 8,
     "kevy_vector::dist::parse_vector": 1,
     "kevy_vlog::compact::read_record": 3,
-    "kevy_vlog::crc32c::crc32c": 3,
     "kevy_vlog::split_body": 4,
     "kevy_vlog::verify_image": 1,
     "kevy_wasm::abi_aof::feed": 3,
@@ -2806,7 +2808,7 @@
     "kevy_wasm::abi_cmd::unpack_argv": 3,
     "kevy_wasm::abi_kv::kevy_del": 4,
     "kevy_wasm::abi_kv::kevy_exists": 4,
-    "kevy_wasm::abi_kv::kevy_expire": 21,
+    "kevy_wasm::abi_kv::kevy_expire": 20,
     "kevy_wasm::abi_kv::kevy_flushall": 4,
     "kevy_wasm::abi_kv::kevy_keys": 1,
     "kevy_wasm::abi_kv::kevy_mget": 48,
@@ -2947,6 +2949,34 @@
       "symbols": 2609,
       "regions": 26923,
       "reason": "Re-taken on the merged release tip, because the code changed: the fourteen verbs landed, GET/SET's unreachable arms left dispatch_string, and getrange and zrevrange converged onto range_bounds. Three distinct observations of THIS commit \u2014 md5 67d5cc5e86a1 / 6eb8c7e7e8e0 / 1c34746a61cc \u2014 after a rerun of the same run handed back the first artifact again, which would have let one sample count as two. Against the baseline before the fourteen verbs the set is smaller in both dimensions: 2,621 symbols / 27,867 regions -> 2,609 / 26,913."
+    },
+    {
+      "accepted": [
+        "kevy::cmd_view::parse_leaf::",
+        "kevy::replica_runner::one_session",
+        "kevy::replica_runner_events::drain_client",
+        "kevy::replica_runner_events::drain_start",
+        "kevy::replica_runner_events::event_to_apply",
+        "kevy::replica_runner_events::gen_still_matches",
+        "kevy::replica_runner_events::maybe_ack",
+        "kevy_embedded::dispatch::view::parse_leaf",
+        "kevy_ffi::sub::kevy_sub_wait",
+        "kevy_ffi::sub::sub_open",
+        "kevy_sql::parse::refused_inline_constraint",
+        "kevy_store::list::push_inline",
+        "::compaction_pending",
+        "kevy::dispatch_stream::group::parse_xpending_extended::",
+        "kevy::install_signal_handlers",
+        "kevy_cli::run_bulk_cli"
+      ],
+      "reason": "rustfmt across 752 files. LLVM coverage regions are keyed on source spans, so reformatting moves them: 26,852 dead of 164,801 immediately before, 26,867 of 164,819 after, coverage 83.81% -> 83.70%, both far above the 79.34% floor. The JOINED entries are functions split out of parents that already owned those regions (parse_leaf out of parse_tree, push_inline out of list_push_one, one_session out of run_loop); the GREW entries include install_signal_handlers, which this branch never edited. This refutes the roadmap's note that reformatting does not move the dead set.",
+      "delta": 79
+    },
+    {
+      "envelope_over": 3,
+      "symbols": 2611,
+      "regions": 26969,
+      "reason": "Replacing a single-run baseline with the three-run envelope the roadmap asks for, taken at the moment it names: the first covgate runs on develop after the merge, so all three are the same code (9ec62051). They read 26,834 / 26,967 / 26,854 dead regions - a spread of 133 with nothing changed - and deadgate failed on two of the three against the single reading. SegMap::rand_entry samples randomly and covers 2 to 4 regions depending on the run; a baseline that says 'no worse than the worst of three' is the only one that means anything here. The single-run baseline it replaces was my error, recorded earlier the same day."
     }
   ]
 }

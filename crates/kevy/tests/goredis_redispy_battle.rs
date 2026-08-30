@@ -50,8 +50,7 @@ fn goredis_v9_golden_path() {
     let _h = Harness::spawn(cfg).expect("spawn kevy");
     std::thread::sleep(Duration::from_millis(200));
 
-    let mut s = TcpStream::connect(format!("127.0.0.1:{port}"))
-        .expect("conn");
+    let mut s = TcpStream::connect(format!("127.0.0.1:{port}")).expect("conn");
     let _ = s.set_read_timeout(Some(Duration::from_secs(3)));
 
     // PHASE 1: HELLO 2.
@@ -77,10 +76,7 @@ fn goredis_v9_golden_path() {
     // Either the bulk body contains `id=` (well-formed CLIENT INFO)
     // OR a `+OK` ack (kevy stub) — accept both.
     let well_formed = info.contains("id=") || info.starts_with("+OK");
-    assert!(
-        well_formed,
-        "CLIENT INFO neither contained id= nor +OK stub: {info:?}"
-    );
+    assert!(well_formed, "CLIENT INFO neither contained id= nor +OK stub: {info:?}");
 
     // PHASE 3: MULTI / SET / INCR / EXEC.
     eprintln!("goredis: MULTI / SET / INCR / EXEC");
@@ -108,10 +104,7 @@ fn goredis_v9_golden_path() {
     // PHASE 4: Final PING.
     s.write_all(b"*1\r\n$4\r\nPING\r\n").unwrap();
     let ping = read_one_reply(&mut s);
-    assert!(
-        ping.starts_with("+PONG"),
-        "post-MULTI PING failed: {ping:?}"
-    );
+    assert!(ping.starts_with("+PONG"), "post-MULTI PING failed: {ping:?}");
     eprintln!("goredis: golden path OK");
 
     drop(s);
@@ -132,8 +125,7 @@ fn redispy_5x_golden_path() {
     let _h = Harness::spawn(cfg).expect("spawn kevy");
     std::thread::sleep(Duration::from_millis(200));
 
-    let mut conn_writer = TcpStream::connect(format!("127.0.0.1:{port}"))
-        .expect("writer conn");
+    let mut conn_writer = TcpStream::connect(format!("127.0.0.1:{port}")).expect("writer conn");
     let _ = conn_writer.set_read_timeout(Some(Duration::from_secs(3)));
 
     // PHASE 1: WATCH / MULTI / EXEC optimistic-lock transaction.
@@ -144,10 +136,7 @@ fn redispy_5x_golden_path() {
 
     conn_writer.write_all(&build(&[b"WATCH", b"redispy:counter"])).unwrap();
     let watch_reply = read_one_reply(&mut conn_writer);
-    assert!(
-        watch_reply.starts_with("+OK"),
-        "WATCH expected +OK, got: {watch_reply:?}"
-    );
+    assert!(watch_reply.starts_with("+OK"), "WATCH expected +OK, got: {watch_reply:?}");
 
     let mut tx = Vec::with_capacity(128);
     tx.extend_from_slice(&build(&[b"MULTI"]));
@@ -169,12 +158,9 @@ fn redispy_5x_golden_path() {
 
     // PHASE 2: pub/sub round-trip across two conns.
     eprintln!("redispy: SUBSCRIBE + PUBLISH cross-conn round-trip");
-    let mut conn_sub = TcpStream::connect(format!("127.0.0.1:{port}"))
-        .expect("sub conn");
+    let mut conn_sub = TcpStream::connect(format!("127.0.0.1:{port}")).expect("sub conn");
     let _ = conn_sub.set_read_timeout(Some(Duration::from_secs(3)));
-    conn_sub
-        .write_all(&build(&[b"SUBSCRIBE", b"redispy:channel"]))
-        .unwrap();
+    conn_sub.write_all(&build(&[b"SUBSCRIBE", b"redispy:channel"])).unwrap();
     // Subscribe confirmation: `*3\r\n$9\r\nsubscribe\r\n$15\r\nredispy:channel\r\n:1\r\n`
     let sub_ack = read_one_reply(&mut conn_sub);
     eprintln!("redispy: SUBSCRIBE ack = {sub_ack:?}");
@@ -183,12 +169,9 @@ fn redispy_5x_golden_path() {
         "SUBSCRIBE ack missing 'subscribe' marker: {sub_ack:?}"
     );
 
-    let mut conn_pub = TcpStream::connect(format!("127.0.0.1:{port}"))
-        .expect("pub conn");
+    let mut conn_pub = TcpStream::connect(format!("127.0.0.1:{port}")).expect("pub conn");
     let _ = conn_pub.set_read_timeout(Some(Duration::from_secs(3)));
-    conn_pub
-        .write_all(&build(&[b"PUBLISH", b"redispy:channel", b"hello-from-redispy"]))
-        .unwrap();
+    conn_pub.write_all(&build(&[b"PUBLISH", b"redispy:channel", b"hello-from-redispy"])).unwrap();
     let pub_reply = read_one_reply(&mut conn_pub);
     eprintln!("redispy: PUBLISH reply = {pub_reply:?} (subscriber count)");
     assert!(
@@ -205,9 +188,7 @@ fn redispy_5x_golden_path() {
     );
 
     // PHASE 3: UNSUBSCRIBE clean shutdown.
-    conn_sub
-        .write_all(&build(&[b"UNSUBSCRIBE", b"redispy:channel"]))
-        .unwrap();
+    conn_sub.write_all(&build(&[b"UNSUBSCRIBE", b"redispy:channel"])).unwrap();
     let unsub = read_one_reply(&mut conn_sub);
     assert!(
         unsub.contains("unsubscribe") || unsub.contains("UNSUBSCRIBE"),
@@ -294,10 +275,7 @@ fn advance_one(buf: &[u8], start: usize) -> Option<usize> {
         return None;
     }
     let tag = buf[start];
-    let line_end = buf[start..]
-        .iter()
-        .position(|&b| b == b'\n')
-        .map(|p| start + p + 1)?;
+    let line_end = buf[start..].iter().position(|&b| b == b'\n').map(|p| start + p + 1)?;
     match tag {
         b'+' | b'-' | b':' => Some(line_end),
         b'$' => {

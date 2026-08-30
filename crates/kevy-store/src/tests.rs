@@ -1,6 +1,6 @@
 use super::*;
-use std::time::Duration;
 use std::borrow::Cow;
+use std::time::Duration;
 
 pub(crate) fn s(x: &str) -> Vec<u8> {
     x.as_bytes().to_vec()
@@ -79,7 +79,10 @@ fn append_strlen_type_flush() {
 #[test]
 fn hash_ops() {
     let mut st = Store::new();
-    assert_eq!(st.hset(b"h", &[(b"a".as_slice(), b"1".as_slice()), (b"b".as_slice(), b"2".as_slice())]), Ok(2));
+    assert_eq!(
+        st.hset(b"h", &[(b"a".as_slice(), b"1".as_slice()), (b"b".as_slice(), b"2".as_slice())]),
+        Ok(2)
+    );
     assert_eq!(st.hset(b"h", &[(b"a".as_slice(), b"9".as_slice())]), Ok(0)); // update, not new
     assert_eq!(st.hget(b"h", b"a"), Ok(Some(&b"9"[..])));
     assert_eq!(st.hget(b"h", b"missing"), Ok(None));
@@ -105,10 +108,7 @@ fn wrong_type_errors() {
     assert_eq!(st.incr_by(b"h", 1), Err(StoreError::WrongType));
     st.set(b"s", s("v"), None, false, false);
     assert_eq!(st.hget(b"s", b"f"), Err(StoreError::WrongType));
-    assert_eq!(
-        st.hset(b"s", &[(b"f".as_slice(), b"v".as_slice())]),
-        Err(StoreError::WrongType)
-    );
+    assert_eq!(st.hset(b"s", &[(b"f".as_slice(), b"v".as_slice())]), Err(StoreError::WrongType));
 }
 
 #[test]
@@ -116,10 +116,7 @@ fn list_ops() {
     let mut st = Store::new();
     assert_eq!(st.rpush(b"l", &[b"a".as_slice(), b"b".as_slice(), b"c".as_slice()]), Ok(3));
     assert_eq!(st.lpush(b"l", &[b"x".as_slice(), b"y".as_slice()]), Ok(5)); // -> y x a b c
-    assert_eq!(
-        st.lrange(b"l", 0, -1),
-        Ok(vec![s("y"), s("x"), s("a"), s("b"), s("c")])
-    );
+    assert_eq!(st.lrange(b"l", 0, -1), Ok(vec![s("y"), s("x"), s("a"), s("b"), s("c")]));
     assert_eq!(st.lindex(b"l", -1), Ok(Some(s("c"))));
     assert_eq!(st.lindex(b"l", 99), Ok(None));
     assert_eq!(st.llen(b"l"), Ok(5));
@@ -136,8 +133,11 @@ fn list_ops() {
 #[test]
 fn list_lrem_ltrim_and_empty_delete() {
     let mut st = Store::new();
-    st.rpush(b"l", &[b"a".as_slice(), b"b".as_slice(), b"a".as_slice(), b"c".as_slice(), b"a".as_slice()])
-        .unwrap();
+    st.rpush(
+        b"l",
+        &[b"a".as_slice(), b"b".as_slice(), b"a".as_slice(), b"c".as_slice(), b"a".as_slice()],
+    )
+    .unwrap();
     assert_eq!(st.lrem(b"l", 2, b"a"), Ok(2)); // remove first 2 'a' -> b c a
     assert_eq!(st.lrange(b"l", 0, -1), Ok(vec![s("b"), s("c"), s("a")]));
     st.ltrim(b"l", 1, 1).unwrap(); // keep only 'c'
@@ -196,8 +196,11 @@ fn list_empty_and_missing_key_paths() {
 fn list_lrem_negative_count_and_lset_errors() {
     let mut st = Store::new();
     // LREM with negative count — drives the reverse-walk branch.
-    st.rpush(b"l", &[b"a".as_slice(), b"b".as_slice(), b"a".as_slice(), b"c".as_slice(), b"a".as_slice()])
-        .unwrap();
+    st.rpush(
+        b"l",
+        &[b"a".as_slice(), b"b".as_slice(), b"a".as_slice(), b"c".as_slice(), b"a".as_slice()],
+    )
+    .unwrap();
     assert_eq!(st.lrem(b"l", -2, b"a"), Ok(2)); // remove last 2 'a' from tail
     assert_eq!(st.lrange(b"l", 0, -1), Ok(vec![s("a"), s("b"), s("c")]));
 
@@ -253,38 +256,23 @@ fn zset_ops() {
     assert_eq!(st.zcard(b"z"), Ok(3));
     assert_eq!(st.type_of(b"z"), "zset");
     // order by score now: b(2) c(3) a(5)
-    assert_eq!(
-        st.zrange(b"z", 0, -1),
-        Ok(vec![(s("b"), 2.0), (s("c"), 3.0), (s("a"), 5.0)])
-    );
+    assert_eq!(st.zrange(b"z", 0, -1), Ok(vec![(s("b"), 2.0), (s("c"), 3.0), (s("a"), 5.0)]));
     assert_eq!(st.zrank(b"z", b"c"), Ok(Some(1)));
     assert_eq!(st.zrank(b"z", b"missing"), Ok(None));
     assert_eq!(st.zincrby(b"z", 1.0, b"b"), Ok(3.0)); // b -> 3, ties with c
     let mid = st
         .zrange_by_score(
             b"z",
-            ScoreBound {
-                value: 3.0,
-                exclusive: false,
-            },
-            ScoreBound {
-                value: 4.0,
-                exclusive: false,
-            },
+            ScoreBound { value: 3.0, exclusive: false },
+            ScoreBound { value: 4.0, exclusive: false },
         )
         .unwrap();
     assert_eq!(mid.len(), 2); // b(3) and c(3)
     assert_eq!(
         st.zcount(
             b"z",
-            ScoreBound {
-                value: f64::NEG_INFINITY,
-                exclusive: false
-            },
-            ScoreBound {
-                value: f64::INFINITY,
-                exclusive: false
-            }
+            ScoreBound { value: f64::NEG_INFINITY, exclusive: false },
+            ScoreBound { value: f64::INFINITY, exclusive: false }
         ),
         Ok(3)
     );
@@ -363,7 +351,6 @@ fn hdel_removes_empty_hash() {
     assert_eq!(st.dbsize(), 0);
 }
 
-
 // ───────────── WATCH version tracking ─────────────
 
 #[test]
@@ -421,12 +408,9 @@ pub(crate) fn grouped_stream_fixture(st: &mut Store) {
         )
         .unwrap();
     }
-    st.xgroup_create(b"st", b"g", GroupCreateMode::AtId(StreamId::MIN), false)
-        .unwrap();
-    st.xreadgroup(b"st", b"g", b"c1", ReadGroupId::New, Some(2), false, 1000)
-        .unwrap();
-    st.xreadgroup(b"st", b"g", b"c2", ReadGroupId::New, None, false, 2000)
-        .unwrap();
+    st.xgroup_create(b"st", b"g", GroupCreateMode::AtId(StreamId::MIN), false).unwrap();
+    st.xreadgroup(b"st", b"g", b"c1", ReadGroupId::New, Some(2), false, 1000).unwrap();
+    st.xreadgroup(b"st", b"g", b"c2", ReadGroupId::New, None, false, 2000).unwrap();
     st.xdel(b"st", &[StreamId { ms: 2, seq: 1 }]).unwrap();
 }
 
@@ -481,13 +465,8 @@ fn xsetid_scalar_overrides_and_guards() {
         st.xsetid(b"s", StreamId { ms: 4, seq: 0 }, None, None),
         Err(StoreError::OutOfRange)
     );
-    st.xsetid(
-        b"s",
-        StreamId { ms: 9, seq: 0 },
-        Some(42),
-        Some(StreamId { ms: 3, seq: 3 }),
-    )
-    .unwrap();
+    st.xsetid(b"s", StreamId { ms: 9, seq: 0 }, Some(42), Some(StreamId { ms: 3, seq: 3 }))
+        .unwrap();
     let view = st.stream_view(b"s").unwrap().unwrap();
     assert_eq!(view.last_id(), StreamId { ms: 9, seq: 0 });
     assert_eq!(view.entries_added(), 42);
@@ -504,7 +483,6 @@ fn xsetid_scalar_overrides_and_guards() {
         .is_err()
     );
 }
-
 
 /// The O(1) `expires` counter must never drift from the O(n) ground truth
 /// across every TTL-transition path (insert / overwrite / EXPIRE / PERSIST /

@@ -79,11 +79,7 @@ pub fn validate_payload(bytes: &[u8], now_ns: u64, expired_hit: &mut u64) -> boo
     if exp != 0 && now_ns > exp + 1_000_000 {
         *expired_hit += 1;
     }
-    bytes
-        .iter()
-        .enumerate()
-        .skip(16)
-        .all(|(j, &b)| b == pattern_byte(seed, j))
+    bytes.iter().enumerate().skip(16).all(|(j, &b)| b == pattern_byte(seed, j))
 }
 
 // ---------------------------------------------------------------------------

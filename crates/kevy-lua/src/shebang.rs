@@ -37,9 +37,7 @@ pub(crate) struct Shebang {
 
 impl Default for Shebang {
     fn default() -> Self {
-        Shebang {
-            version: LuaVersion::Lua51,
-        }
+        Shebang { version: LuaVersion::Lua51 }
     }
 }
 
@@ -75,11 +73,7 @@ pub(crate) fn parse(src: &[u8]) -> Result<(Shebang, &[u8]), ShebangError> {
     let line = &src[..line_end];
     // The body starts after the `\n`. If we hit EOF without a `\n`
     // the body is empty.
-    let body = if line_end < src.len() {
-        &src[line_end + 1..]
-    } else {
-        &[]
-    };
+    let body = if line_end < src.len() { &src[line_end + 1..] } else { &[] };
 
     // Body of the shebang after `#!`.
     let after_hashbang = &line[2..];
@@ -93,10 +87,7 @@ pub(crate) fn parse(src: &[u8]) -> Result<(Shebang, &[u8]), ShebangError> {
     };
 
     let mut shebang = Shebang::default();
-    for kv in after_lua
-        .split(|b| *b == b' ' || *b == b'\t')
-        .filter(|s| !s.is_empty())
-    {
+    for kv in after_lua.split(|b| *b == b' ' || *b == b'\t').filter(|s| !s.is_empty()) {
         if let Some(rest) = kv.strip_prefix(b"version=") {
             shebang.version = parse_version(rest)?;
         } else if kv.starts_with(b"flags=") || kv.starts_with(b"name=") {
@@ -120,9 +111,7 @@ fn parse_version(bytes: &[u8]) -> Result<LuaVersion, ShebangError> {
         b"5.3" | b"53" => Ok(LuaVersion::Lua53),
         b"5.4" | b"54" => Ok(LuaVersion::Lua54),
         b"5.5" | b"55" => Ok(LuaVersion::Lua55),
-        other => Err(ShebangError::UnknownVersion(
-            String::from_utf8_lossy(other).into_owned(),
-        )),
+        other => Err(ShebangError::UnknownVersion(String::from_utf8_lossy(other).into_owned())),
     }
 }
 
@@ -165,8 +154,7 @@ mod tests {
 
     #[test]
     fn shebang_with_extra_keys_tolerated() {
-        let (s, body) =
-            parse(b"#!lua version=5.3 flags=no-writes name=mylib\nreturn 1").unwrap();
+        let (s, body) = parse(b"#!lua version=5.3 flags=no-writes name=mylib\nreturn 1").unwrap();
         assert_eq!(s.version, LuaVersion::Lua53);
         assert_eq!(body, b"return 1");
     }

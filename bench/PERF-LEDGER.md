@@ -567,6 +567,119 @@ textgate 正在断言的内存公式。范围决定权不在我。
 
 ---
 
+## arena bare face — 2026-08-30 — kevy 6.2.0
+
+Re-measured for the 6.2.0 release rather than relabelled. `bash
+bench/arena.sh target/release/kevy` on lx64, same protocol as every entry:
+cores 0-7 server / 8-15 client, one engine at a time, `-c 50 -P 16`,
+median-of-5 with sample stdev, throughput from each server's own command
+counter over a timed window.
+
+| verb | kevy 6.2.0 | Redis 8 | valkey 9.1.1 | Dragonfly | vs Redis 8 |
+|---|---:|---:|---:|---:|---:|
+| GET | 6,990,156 | 5,653,255 | 3,282,765 | 2,800,320 | 1.24x |
+| SET | 6,847,720 | 2,463,354 | 1,689,824 | 1,895,074 | 2.78x |
+| INCR | 6,724,179 | 3,309,109 | 2,268,391 | 1,986,973 | 2.03x |
+| SADD | 5,778,726 | 3,712,338 | 2,214,684 | 1,751,237 | 1.56x |
+| HSET | 4,419,255 | 3,019,669 | 1,868,938 | 1,751,321 | 1.46x |
+| LPUSH | 3,090,840 | 2,837,496 | 1,867,068 | 1,435,069 | 1.09x |
+| ZADD | 3,355,835 | 2,814,574 | 1,805,751 | 1,712,136 | 1.19x |
+
+Gap rule: `|kevy - other| <= max(stdev_kevy, stdev_other)` reads as NOISE.
+
+**Every cell clears its band.** The narrowest is LPUSH at 2.3x its
+tolerance; the next is HSET at 2.2x.
+
+### ZADD left the noise band
+
+The 6.0.0 entry recorded ZADD as the first cell this ledger ever put
+*inside* the band — 80,594 against a tolerance of 82,849, a tie. Here it
+reads 1.19x, 541,261 against 164,260, which is 3.3x its tolerance.
+
+The change is the same-score guard: `ZSetData::insert` and
+`SegZSetData::insert` no longer remove a member from the rank tree and
+insert it back when its score has not moved. The arena's cell writes one
+member at one score forever, so it exercises exactly that path. Measured
+separately against itself before the release, on sets the arena does not
+reach, the same guard reads +52.8% at eight thousand members and +55.3% at
+two hundred thousand — see the A/B entry below and
+`bench/PERF-DECOMP-2026-08-30-zadd-arena-cell.md`.
+
+### What did not move, and one that did the other way
+
+GET, SET, INCR, SADD and LPUSH are within a few percent of the 6.0.0
+entry, which is what a release carrying one zset change and a formatter
+should look like. HSET reads 4,419,255 against 4,388,836 — inside its own
+629,604 stdev, so not a claim either way; that cell's spread is wide on
+this box and always has been.
+
+## arena A/B — 2026-08-30 — the same-score ZADD guard
+
+**Not a `bare face` entry, and deliberately not named like one.** Those are
+per-release re-measurements of the shipped build, and `tools/
+sync_readme_bench.py` rewrites three READMEs from the most recent of them.
+This is an A/B for one unmerged change; a README that quoted it would be
+advertising a build nobody can install. `bench/arena.sh` on
+lx64, same protocol as every entry, run against a binary carrying the guard
+in `ZSetData::insert` / `SegZSetData::insert` that skips the ordered index
+when a ZADD's score is unchanged.
+
+| verb | kevy 6.1.0+guard | Redis 8 | valkey 9.1.1 | Dragonfly |
+|---|---:|---:|---:|---:|
+| GET | 7,320,368 | 5,681,931 | 3,037,838 | 2,894,780 |
+| SET | 6,393,582 | 2,522,055 | 1,665,513 | 1,941,631 |
+| INCR | 6,314,125 | 3,384,681 | 2,232,867 | 2,073,333 |
+| SADD | 5,380,960 | 3,653,358 | 2,426,068 | 1,490,047 |
+| HSET | 4,233,639 | 2,959,818 | 2,005,480 | 1,438,887 |
+| LPUSH | 2,988,692 | 2,872,658 | 1,967,287 | 1,247,830 |
+| ZADD | 3,187,200 | 2,811,568 | 1,886,907 | 1,502,123 |
+
+**The ZADD row in this table is not the one to quote.** kevy's ZADD cell
+carried an 11.7% sample stdev here, and a cell that noisy cannot support a
+ratio. The number below can.
+
+### ZADD, exclusive box, nine interleaved rounds
+
+Both kevy binaries and Redis 8 alternating within one session, after waiting
+for `arena.sh` to finish and the load average to fall under 1.2:
+
+| | median | stdev |
+|---|---:|---:|
+| kevy + guard | 3,312,723 | ±196,844 (5.9%) |
+| kevy, no guard | 3,028,399 | ±218,139 (7.2%) |
+| Redis 8 | 2,875,747 | ±61,669 (2.1%) |
+
+| | Δ | tolerance | verdict |
+|---|---:|---:|---|
+| guard vs no guard | +284,324 | 218,139 | 1.09x |
+| guard vs Redis 8 | +436,976 | 196,844 | **1.15x** |
+| no guard vs Redis 8 | +152,652 | 218,139 | **NOISE** |
+
+The last row reproduces the 2026-08-27 entry's verdict on the same cell —
+80,594 against 82,849 there, 152,652 against 218,139 here, a tie both times.
+With the guard it clears its band by 2.2x. **The first cell this ledger ever
+recorded inside the noise band is now outside it.**
+
+### Where the change actually pays
+
+The arena's ZADD cell writes to a sorted set of ONE member — without `-r`,
+redis-benchmark sends `element:__rand_int__` literally, so the same member
+is re-added at the same score forever. At sizes a sorted set is actually
+used at, kevy against itself, median-of-5 interleaved:
+
+| members | encoding | no guard | guard | |
+|---:|---|---:|---:|---|
+| 1 | Flat | 3,093,924 | 3,786,703 | +22.4% |
+| 8,000 | Flat | 2,231,477 | 3,408,582 | **+52.8%** |
+| 200,000 | Seg | 2,033,624 | 3,158,316 | **+55.3%** |
+
+Five of the other six arena cells read NOISE against the same A/B; GET reads
++3.6%, 1.5x outside its band with no mechanism, recorded and not claimed.
+
+Full decomposition, including the ablation that priced this before it was
+written and the one line of its prediction that was wrong:
+`bench/PERF-DECOMP-2026-08-30-zadd-arena-cell.md`.
+
 ## arena bare face — 2026-08-27 — kevy 6.0.0
 
 Re-measured for the 6.0.0 release rather than relabelled, per the rule that

@@ -15,7 +15,12 @@ fn tesc(b: &[u8]) -> String {
     use core::fmt::Write as _;
     let mut out = String::with_capacity(b.len());
     for &c in b {
-        if c == b'\t' || c == b'\n' || c == b'%' || c == b',' || c == b':' || !(32..127).contains(&c)
+        if c == b'\t'
+            || c == b'\n'
+            || c == b'%'
+            || c == b','
+            || c == b':'
+            || !(32..127).contains(&c)
         {
             let _ = write!(out, "%{c:02X}");
         } else {
@@ -214,4 +219,3 @@ fn orderpath_from_entry(e: &str) -> Option<OrderPath> {
         .collect::<Option<Vec<_>>>()?;
     Some(OrderPath { name, on })
 }
-

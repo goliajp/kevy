@@ -119,7 +119,10 @@ fn query_ready(c: &mut std::net::TcpStream, parts: &[&[u8]]) -> Vec<u8> {
 /// the same (different-count) shard layout.
 const DOCS: &[(&str, &str)] = &[
     ("doc:01", "rust rust rust systems programming language"),
-    ("doc:02", "rust is a systems language with memory safety and zero cost abstractions across the whole stack"),
+    (
+        "doc:02",
+        "rust is a systems language with memory safety and zero cost abstractions across the whole stack",
+    ),
     ("doc:03", "python scripting language dynamic typing"),
     ("doc:04", "rust text search engine full text indexing"),
     ("doc:05", "search search relevance ranking bm25 scoring"),
@@ -177,9 +180,24 @@ fn seed_and_query(nshards: usize) -> Vec<(String, String)> {
     }
     cmd(
         &mut c,
-        &[b"IDX.CREATE", b"d_body", b"ON", b"PREFIX", b"doc:", b"FIELD", b"body", b"TYPE", b"str", b"KIND", b"text"],
+        &[
+            b"IDX.CREATE",
+            b"d_body",
+            b"ON",
+            b"PREFIX",
+            b"doc:",
+            b"FIELD",
+            b"body",
+            b"TYPE",
+            b"str",
+            b"KIND",
+            b"text",
+        ],
     );
-    let r = query_ready(&mut c, &[b"IDX.QUERY", b"d_body", b"MATCH", b"rust text search", b"LIMIT", b"20"]);
+    let r = query_ready(
+        &mut c,
+        &[b"IDX.QUERY", b"d_body", b"MATCH", b"rust text search", b"LIMIT", b"20"],
+    );
     parse_ranked(&r)
 }
 
@@ -212,7 +230,19 @@ fn match_with_fields_hydrates_across_shards() {
     }
     cmd(
         &mut c,
-        &[b"IDX.CREATE", b"d_body", b"ON", b"PREFIX", b"doc:", b"FIELD", b"body", b"TYPE", b"str", b"KIND", b"text"],
+        &[
+            b"IDX.CREATE",
+            b"d_body",
+            b"ON",
+            b"PREFIX",
+            b"doc:",
+            b"FIELD",
+            b"body",
+            b"TYPE",
+            b"str",
+            b"KIND",
+            b"text",
+        ],
     );
     let r = query_ready(
         &mut c,

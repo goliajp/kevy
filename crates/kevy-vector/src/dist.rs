@@ -246,8 +246,14 @@ mod tests {
             Distance::Cosine.prepare(v);
         }
         assert!(Distance::Cosine.eval(&a, &b) < Distance::Cosine.eval(&a, &c));
-        assert!(Distance::L2.eval(&[0.0, 0.0], &[1.0, 1.0]) > Distance::L2.eval(&[0.0, 0.0], &[0.5, 0.5]));
-        assert!(Distance::Ip.eval(&[1.0, 1.0], &[2.0, 2.0]) < Distance::Ip.eval(&[1.0, 1.0], &[0.1, 0.1]));
+        assert!(
+            Distance::L2.eval(&[0.0, 0.0], &[1.0, 1.0])
+                > Distance::L2.eval(&[0.0, 0.0], &[0.5, 0.5])
+        );
+        assert!(
+            Distance::Ip.eval(&[1.0, 1.0], &[2.0, 2.0])
+                < Distance::Ip.eval(&[1.0, 1.0], &[0.1, 0.1])
+        );
     }
 
     #[test]

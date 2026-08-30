@@ -193,12 +193,7 @@ pub unsafe fn splice_foreign(
         // SAFETY: the tail is ours until the CAS below publishes the
         // chain; its link word is free to point at the current head.
         unsafe { tail.cast::<*mut u8>().write(old) };
-        match seg.foreign.compare_exchange_weak(
-            old,
-            head,
-            Ordering::Release,
-            Ordering::Relaxed,
-        ) {
+        match seg.foreign.compare_exchange_weak(old, head, Ordering::Release, Ordering::Relaxed) {
             Ok(_) => break,
             Err(actual) => old = actual,
         }

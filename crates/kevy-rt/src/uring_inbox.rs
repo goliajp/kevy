@@ -65,9 +65,8 @@ impl<C: Commands> Shard<C> {
             // Already reaped (e.g. dedup on a doubly-pushed cid)?
             let Some(uc) = io.get(&cid) else { continue };
             let conn = self.conns.get(&cid);
-            let drained = conn.is_none_or(|c| {
-                c.output.is_empty() && c.pending.is_empty() && c.write_pos == 0
-            });
+            let drained = conn
+                .is_none_or(|c| c.output.is_empty() && c.pending.is_empty() && c.write_pos == 0);
             let closing = uc.closing || conn.is_some_and(|c| c.closing);
             // Sanity: cid was pushed because something flipped closing — but
             // accept-fail / EOF races could land it without `closing == true`.

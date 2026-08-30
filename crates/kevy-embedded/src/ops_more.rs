@@ -86,12 +86,7 @@ impl Store {
     /// `ZREMRANGEBYRANK key start stop` — remove members in
     /// `[start, stop]` rank range (inclusive, Redis-style negative
     /// indexing). Returns count removed.
-    pub fn zremrangebyrank(
-        &self,
-        key: &[u8],
-        start: i64,
-        stop: i64,
-    ) -> KevyResult<usize> {
+    pub fn zremrangebyrank(&self, key: &[u8], start: i64, stop: i64) -> KevyResult<usize> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
         let removed = g.store.zrem_range_by_rank(key, start, stop).map_err(store_err)?;
@@ -105,12 +100,7 @@ impl Store {
 
     /// `ZREMRANGEBYSCORE key min max` — remove members with scores
     /// in `[min, max]` (inclusive). Returns count removed.
-    pub fn zremrangebyscore(
-        &self,
-        key: &[u8],
-        min: f64,
-        max: f64,
-    ) -> KevyResult<usize> {
+    pub fn zremrangebyscore(&self, key: &[u8], min: f64, max: f64) -> KevyResult<usize> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
         let removed = g

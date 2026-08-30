@@ -60,10 +60,7 @@ impl Server {
         let port = free_port();
         let dir = std::env::temp_dir().join(format!(
             "kevy-keynotify-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -81,7 +78,9 @@ impl Server {
         let stop_thread = stop.clone();
         let dir_thread = dir.clone();
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::with_state(state)).bind([127, 0, 0, 1], port).shards(nshards)
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::with_state(state))
+                .bind([127, 0, 0, 1], port)
+                .shards(nshards)
                 .with_data_dir(dir_thread);
             rt.run(stop_thread).unwrap();
         });
@@ -95,8 +94,7 @@ impl Server {
 
     fn connect(&self) -> std::net::TcpStream {
         let s = std::net::TcpStream::connect(("127.0.0.1", self.port)).unwrap();
-        s.set_read_timeout(Some(std::time::Duration::from_secs(5)))
-            .unwrap();
+        s.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
         s
     }
 }
@@ -120,19 +118,13 @@ fn keyspace_channel_fires_on_set() {
 
     let mut sub = srv.connect();
     sub.write_all(&req(&[b"SUBSCRIBE", b"__keyspace@0__:k"])).unwrap();
-    read_reply(
-        &mut sub,
-        b"*3\r\n$9\r\nsubscribe\r\n$16\r\n__keyspace@0__:k\r\n:1\r\n",
-    );
+    read_reply(&mut sub, b"*3\r\n$9\r\nsubscribe\r\n$16\r\n__keyspace@0__:k\r\n:1\r\n");
 
     let mut w = srv.connect();
     w.write_all(&req(&[b"SET", b"k", b"value"])).unwrap();
     read_reply(&mut w, b"+OK\r\n");
 
-    read_reply(
-        &mut sub,
-        b"*3\r\n$7\r\nmessage\r\n$16\r\n__keyspace@0__:k\r\n$3\r\nset\r\n",
-    );
+    read_reply(&mut sub, b"*3\r\n$7\r\nmessage\r\n$16\r\n__keyspace@0__:k\r\n$3\r\nset\r\n");
 }
 
 #[test]
@@ -144,19 +136,13 @@ fn keyevent_channel_fires_on_set() {
 
     let mut sub = srv.connect();
     sub.write_all(&req(&[b"SUBSCRIBE", b"__keyevent@0__:set"])).unwrap();
-    read_reply(
-        &mut sub,
-        b"*3\r\n$9\r\nsubscribe\r\n$18\r\n__keyevent@0__:set\r\n:1\r\n",
-    );
+    read_reply(&mut sub, b"*3\r\n$9\r\nsubscribe\r\n$18\r\n__keyevent@0__:set\r\n:1\r\n");
 
     let mut w = srv.connect();
     w.write_all(&req(&[b"SET", b"foo", b"bar"])).unwrap();
     read_reply(&mut w, b"+OK\r\n");
 
-    read_reply(
-        &mut sub,
-        b"*3\r\n$7\r\nmessage\r\n$18\r\n__keyevent@0__:set\r\n$3\r\nfoo\r\n",
-    );
+    read_reply(&mut sub, b"*3\r\n$7\r\nmessage\r\n$18\r\n__keyevent@0__:set\r\n$3\r\nfoo\r\n");
 }
 
 #[test]
@@ -235,19 +221,13 @@ fn xadd_fires_stream_keyspace_event() {
 
     let mut sub = srv.connect();
     sub.write_all(&req(&[b"SUBSCRIBE", b"__keyspace@0__:s"])).unwrap();
-    read_reply(
-        &mut sub,
-        b"*3\r\n$9\r\nsubscribe\r\n$16\r\n__keyspace@0__:s\r\n:1\r\n",
-    );
+    read_reply(&mut sub, b"*3\r\n$9\r\nsubscribe\r\n$16\r\n__keyspace@0__:s\r\n:1\r\n");
 
     let mut w = srv.connect();
     w.write_all(&req(&[b"XADD", b"s", b"1-0", b"f", b"v"])).unwrap();
     read_reply(&mut w, b"$3\r\n1-0\r\n");
 
-    read_reply(
-        &mut sub,
-        b"*3\r\n$7\r\nmessage\r\n$16\r\n__keyspace@0__:s\r\n$4\r\nxadd\r\n",
-    );
+    read_reply(&mut sub, b"*3\r\n$7\r\nmessage\r\n$16\r\n__keyspace@0__:s\r\n$4\r\nxadd\r\n");
 }
 
 #[test]
@@ -283,8 +263,7 @@ fn class_gate_filters_unrelated_events() {
     let mut buf = vec![0u8; 256];
     let n = sub.read(&mut buf).unwrap();
     assert!(
-        buf[..n].windows(b"__keyspace@0__:str".len())
-            .any(|w| w == b"__keyspace@0__:str"),
+        buf[..n].windows(b"__keyspace@0__:str".len()).any(|w| w == b"__keyspace@0__:str"),
         "SET should fire a keyspace event when class `$` is enabled, got {:?}",
         String::from_utf8_lossy(&buf[..n])
     );

@@ -45,20 +45,9 @@ impl<C: Commands> Shard<C> {
         serve_argv: Argv,
         proto: RespVersion,
     ) -> bool {
-        let frozen = self
-            .commands
-            .resolve_block_argv(&mut self.store, &serve_argv, kind);
+        let frozen = self.commands.resolve_block_argv(&mut self.store, &serve_argv, kind);
         let ready = self.commands.block_ready(&mut self.store, &frozen, kind);
-        self.xwaiters.arm(
-            key,
-            XWaiter {
-                origin,
-                conn,
-                kind,
-                serve_argv: frozen,
-                proto,
-            },
-        );
+        self.xwaiters.arm(key, XWaiter { origin, conn, kind, serve_argv: frozen, proto });
         ready
     }
 
@@ -101,9 +90,9 @@ impl<C: Commands> Shard<C> {
         let mut reply = Vec::new();
         match proto {
             RespVersion::V2 => self.commands.dispatch_into(&mut self.store, &argv, &mut reply),
-            RespVersion::V3 => self
-                .commands
-                .dispatch_into_resp3(&mut self.store, &argv, &mut reply),
+            RespVersion::V3 => {
+                self.commands.dispatch_into_resp3(&mut self.store, &argv, &mut reply)
+            }
         }
         reply
     }

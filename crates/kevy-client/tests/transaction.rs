@@ -1,8 +1,8 @@
 //! Mock-RESP round-trip for `Transaction` — drives the MULTI / QUEUED /
 //! EXEC / DISCARD wire shapes against a tiny scripted server.
 
-use kevy_client::KevyError;
 use kevy_client::Connection;
+use kevy_client::KevyError;
 use kevy_resp::Reply;
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -63,9 +63,9 @@ fn multi_queue_exec_returns_array() {
 #[test]
 fn multi_discard_clears_queue() {
     let port = mock_server(vec![
-        (14, b"+OK\r\n"),    // MULTI
+        (14, b"+OK\r\n"),     // MULTI
         (29, b"+QUEUED\r\n"), // SET a 1
-        (8, b"+OK\r\n"),     // DISCARD
+        (8, b"+OK\r\n"),      // DISCARD
     ]);
     let mut conn = Connection::connect(&format!("kevy://127.0.0.1:{port}")).unwrap();
     let mut txn = conn.multi().unwrap();
@@ -76,9 +76,9 @@ fn multi_discard_clears_queue() {
 #[test]
 fn multi_drop_sends_implicit_discard() {
     let port = mock_server(vec![
-        (14, b"+OK\r\n"),    // MULTI
+        (14, b"+OK\r\n"),     // MULTI
         (29, b"+QUEUED\r\n"), // SET a 1
-        (8, b"+OK\r\n"),     // DISCARD via Drop
+        (8, b"+OK\r\n"),      // DISCARD via Drop
     ]);
     let mut conn = Connection::connect(&format!("kevy://127.0.0.1:{port}")).unwrap();
     {
@@ -103,12 +103,7 @@ fn typed_builders_chain_and_exec() {
     ]);
     let mut conn = Connection::connect(&format!("kevy://127.0.0.1:{port}")).unwrap();
     let mut txn = conn.multi().unwrap();
-    txn.set(b"a", b"1")
-        .unwrap()
-        .incr(b"c")
-        .unwrap()
-        .del(&[b"b"])
-        .unwrap();
+    txn.set(b"a", b"1").unwrap().incr(b"c").unwrap().del(&[b"b"]).unwrap();
     let replies = txn.exec().unwrap();
     assert_eq!(replies.len(), 3);
     assert!(matches!(&replies[0], Reply::Simple(s) if s == b"OK"));
@@ -120,9 +115,9 @@ fn typed_builders_chain_and_exec() {
 fn watch_then_multi_exec_success() {
     // WATCH x → +OK; MULTI → +OK; INCR x → +QUEUED; EXEC → *1\r\n:7\r\n
     let port = mock_server(vec![
-        (20, b"+OK\r\n"),     // WATCH x
-        (14, b"+OK\r\n"),     // MULTI
-        (23, b"+QUEUED\r\n"), // INCR x
+        (20, b"+OK\r\n"),      // WATCH x
+        (14, b"+OK\r\n"),      // MULTI
+        (23, b"+QUEUED\r\n"),  // INCR x
         (13, b"*1\r\n:7\r\n"), // EXEC
     ]);
     let mut conn = Connection::connect(&format!("kevy://127.0.0.1:{port}")).unwrap();
@@ -163,15 +158,12 @@ fn unwatch_sends_off_the_wire() {
 fn exec_typed_reads_mixed_replies_in_order() {
     // MULTI → SET a 1 (+OK) / INCR c (:5) / GET a ($1 1) / MGET b c (*2 $-1 $1 5)
     let port = mock_server(vec![
-        (14, b"+OK\r\n"),                                     // MULTI
-        (29, b"+QUEUED\r\n"),                                 // SET a 1
-        (23, b"+QUEUED\r\n"),                                 // INCR c
-        (22, b"+QUEUED\r\n"),                                 // GET a
-        (28, b"+QUEUED\r\n"),                                 // MGET b c
-        (
-            13,
-            b"*4\r\n+OK\r\n:5\r\n$1\r\n1\r\n*2\r\n$-1\r\n$1\r\n5\r\n",
-        ), // EXEC
+        (14, b"+OK\r\n"),                                                // MULTI
+        (29, b"+QUEUED\r\n"),                                            // SET a 1
+        (23, b"+QUEUED\r\n"),                                            // INCR c
+        (22, b"+QUEUED\r\n"),                                            // GET a
+        (28, b"+QUEUED\r\n"),                                            // MGET b c
+        (13, b"*4\r\n+OK\r\n:5\r\n$1\r\n1\r\n*2\r\n$-1\r\n$1\r\n5\r\n"), // EXEC
     ]);
     let mut conn = Connection::connect(&format!("kevy://127.0.0.1:{port}")).unwrap();
     let mut txn = conn.multi().unwrap();
@@ -188,19 +180,16 @@ fn exec_typed_reads_mixed_replies_in_order() {
     r.next_ok().unwrap();
     assert_eq!(r.next_int().unwrap(), 5);
     assert_eq!(r.next_bulk().unwrap(), Some(b"1".to_vec()));
-    assert_eq!(
-        r.next_array_of_bulks().unwrap(),
-        vec![None, Some(b"5".to_vec())]
-    );
+    assert_eq!(r.next_array_of_bulks().unwrap(), vec![None, Some(b"5".to_vec())]);
     r.expect_empty().unwrap();
 }
 
 #[test]
 fn exec_typed_type_mismatch_surfaces_invalid_data() {
     let port = mock_server(vec![
-        (14, b"+OK\r\n"),       // MULTI
-        (23, b"+QUEUED\r\n"),   // INCR c
-        (13, b"*1\r\n:5\r\n"),  // EXEC
+        (14, b"+OK\r\n"),      // MULTI
+        (23, b"+QUEUED\r\n"),  // INCR c
+        (13, b"*1\r\n:5\r\n"), // EXEC
     ]);
     let mut conn = Connection::connect(&format!("kevy://127.0.0.1:{port}")).unwrap();
     let mut txn = conn.multi().unwrap();
@@ -209,10 +198,7 @@ fn exec_typed_type_mismatch_surfaces_invalid_data() {
     // Ask for a Bulk when the next reply is actually Int → InvalidData.
     let err = r.next_bulk().unwrap_err();
     assert!(matches!(err, KevyError::Protocol(_)));
-    assert!(
-        err.to_string().contains("expected Bulk"),
-        "msg = {err}"
-    );
+    assert!(err.to_string().contains("expected Bulk"), "msg = {err}");
 }
 
 #[test]

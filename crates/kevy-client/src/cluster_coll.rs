@@ -203,9 +203,8 @@ impl ClusterClient {
             Reply::Bulk(v) => {
                 let s = std::str::from_utf8(&v)
                     .map_err(|_| KevyError::Protocol("non-utf8 score reply".into()))?;
-                let n: f64 = s
-                    .parse()
-                    .map_err(|_| KevyError::Protocol(format!("bad score float: {s}")))?;
+                let n: f64 =
+                    s.parse().map_err(|_| KevyError::Protocol(format!("bad score float: {s}")))?;
                 Ok(Some(n))
             }
             Reply::Nil => Ok(None),

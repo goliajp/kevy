@@ -26,11 +26,7 @@ impl Aof {
         self.flush_queued()?;
         let (body, keys) = dump_store_to_buf(store, crate::AofFormat::V2);
         self.rewrite_tee = Some(Vec::new());
-        Ok(RewritePlan {
-            body,
-            tmp: crate::aof_util::rewrite_tmp_path(&self.path),
-            keys,
-        })
+        Ok(RewritePlan { body, tmp: crate::aof_util::rewrite_tmp_path(&self.path), keys })
     }
 
     /// Phase 2: the `plan.body` is already on disk at `tmp` (spilled off-lock).
@@ -41,8 +37,7 @@ impl Aof {
         let tee = self.rewrite_tee.take().unwrap_or_default();
         // Embedded/synchronous path: the caller's own thread is not a
         // reactor, so dropping the spent buffers inline here is fine.
-        self.finish_concurrent_rewrite_with(tmp, keys, tee)
-            .map(|(stats, _bufs)| stats)
+        self.finish_concurrent_rewrite_with(tmp, keys, tee).map(|(stats, _bufs)| stats)
     }
 
     /// Take the accumulated diff buffer for an off-thread append and
@@ -184,7 +179,11 @@ impl Aof {
     /// this thread); reopen the append handle against it, reset every
     /// anchor, release the hold. Opening an EXISTING file writes no
     /// journal metadata — the reactor's synchronous cost is µs.
-    pub fn swap_finalize_reopen(&mut self, keys: u64, trash: Option<PathBuf>) -> io::Result<RewriteStats> {
+    pub fn swap_finalize_reopen(
+        &mut self,
+        keys: u64,
+        trash: Option<PathBuf>,
+    ) -> io::Result<RewriteStats> {
         self.swap_hold = false;
         // Deliberately NOT clearing `rewrite_tee` here: the buffer can
         // carry a GB-scale capacity (clears never shrink it), and `=

@@ -73,12 +73,7 @@ pub(crate) fn re_match_at_caps(
             }
             Ok(None)
         }
-        ReNode::Quant {
-            inner,
-            min,
-            max,
-            greedy,
-        } => {
+        ReNode::Quant { inner, min, max, greedy } => {
             // Standalone quantifier (no tail): greedy = longest, lazy = fewest.
             // Captures accumulate across reps (PG: `(a)*` keeps the LAST rep);
             // a rep that fails past the minimum leaves the earlier caps intact.
@@ -137,11 +132,7 @@ pub(crate) fn re_match_at_caps(
                 if end <= s.len()
                     && (0..need_len).all(|k| {
                         let (a, b) = (s[pos + k], s[cs + k]);
-                        if *ci {
-                            a.eq_ignore_ascii_case(&b)
-                        } else {
-                            a == b
-                        }
+                        if *ci { a.eq_ignore_ascii_case(&b) } else { a == b }
                     })
                 {
                     Ok(Some(end))
@@ -185,13 +176,7 @@ pub(crate) fn re_match_seq_caps(
         // inner quant's reachable ends, record caps[idx] at each rep count, and
         // try the tail (so `^(a*)\1$` on `aaaa` gives back to group = `aa`).
         ReNode::Group { idx, inner } if matches!(**inner, ReNode::Quant { .. }) => {
-            let ReNode::Quant {
-                inner: qinner,
-                min,
-                max,
-                greedy,
-            } = &**inner
-            else {
+            let ReNode::Quant { inner: qinner, min, max, greedy } = &**inner else {
                 unreachable!()
             };
             let mut ends = vec![pos];
@@ -246,12 +231,7 @@ pub(crate) fn re_match_seq_caps(
             }
             Ok(None)
         }
-        ReNode::Quant {
-            inner,
-            min,
-            max,
-            greedy,
-        } => {
+        ReNode::Quant { inner, min, max, greedy } => {
             // Enumerate reachable ends, recording a journal MARK before each
             // rep so trying the tail at `k` reps can undo the captures made by
             // the reps beyond `k` (otherwise a backtrack leaves stale caps).
@@ -315,8 +295,7 @@ pub(crate) fn re_match_seq_caps(
             Ok(None)
         }
         ReNode::Concat(nested) => {
-            let mut combined: Vec<ReNode> =
-                Vec::with_capacity(nested.len() + rest.len());
+            let mut combined: Vec<ReNode> = Vec::with_capacity(nested.len() + rest.len());
             combined.extend(nested.iter().cloned());
             combined.extend(rest.iter().cloned());
             re_match_seq_caps(&combined, s, pos, d, steps, caps, journal)

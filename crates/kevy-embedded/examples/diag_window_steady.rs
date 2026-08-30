@@ -109,7 +109,9 @@ fn idle_median(span: i64, bucket: i64, rounds: usize) -> f64 {
 fn main() {
     const ROUNDS: usize = 100;
     println!("# window slide steady-state (median tick µs, {ROUNDS} rounds, 3 runs each)");
-    println!("# every measured tick slides ≥1 bucket (churn ≥ bucket), so the median IS the slide\n");
+    println!(
+        "# every measured tick slides ≥1 bucket (churn ≥ bucket), so the median IS the slide\n"
+    );
 
     println!("## axis 1 — window SIZE at fixed bucket(100)/churn(128); flat = size-independent");
     for span in [1_000i64, 10_000, 100_000] {
@@ -123,7 +125,9 @@ fn main() {
         println!("churn {churn:>4}/tick: {:?}", m.iter().map(|v| v.round()).collect::<Vec<_>>());
     }
 
-    println!("\n## axis 2b — BUCKET amortization at fixed span(20_000)/churn(512); cost ∝ 1/bucket");
+    println!(
+        "\n## axis 2b — BUCKET amortization at fixed span(20_000)/churn(512); cost ∝ 1/bucket"
+    );
     for bucket in [100i64, 500, 2_000] {
         let m: Vec<f64> = (0..3).map(|_| steady_median(20_000, bucket, 512, ROUNDS)).collect();
         println!("bucket {bucket:>5}: {:?}", m.iter().map(|v| v.round()).collect::<Vec<_>>());

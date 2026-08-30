@@ -11,8 +11,8 @@
 use std::collections::{BTreeMap, HashMap};
 
 use crate::bm25::bm25_score;
-use crate::positions::walk;
 use crate::docblobs::put_varint;
+use crate::positions::walk;
 use crate::segment::TextSegment;
 
 /// One slide batch's worth of frozen text entries: term → encoded
@@ -212,9 +212,7 @@ pub fn score_cold_phrase(
     }
     let per_tok: Vec<HashMap<Vec<u8>, ColdEntry>> = payloads
         .iter()
-        .map(|p| {
-            decode_posting(p).map(|es| es.into_iter().map(|e| (e.key.clone(), e)).collect())
-        })
+        .map(|p| decode_posting(p).map(|es| es.into_iter().map(|e| (e.key.clone(), e)).collect()))
         .collect::<Option<_>>()?;
     let distinct = crate::segment::distinct_tokens(toks);
     for (key, first) in &per_tok[0] {
@@ -222,9 +220,10 @@ pub fn score_cold_phrase(
             continue;
         }
         let adjacent = walk(&first.positions).any(|start| {
-            toks.iter().enumerate().skip(1).all(|(i, _)| {
-                walk(&per_tok[i][key].positions).any(|p| p == start + i as u32)
-            })
+            toks.iter()
+                .enumerate()
+                .skip(1)
+                .all(|(i, _)| walk(&per_tok[i][key].positions).any(|p| p == start + i as u32))
         });
         if !adjacent {
             continue;
@@ -234,9 +233,7 @@ pub fn score_cold_phrase(
         for t in &distinct {
             let Some(pos) = toks.iter().position(|tt| tt == t) else { continue };
             let e = &per_tok[pos][key];
-            let df = f64::from(
-                *stats.df.get(t).unwrap_or(&(per_tok[pos].len() as u32)),
-            );
+            let df = f64::from(*stats.df.get(t).unwrap_or(&(per_tok[pos].len() as u32)));
             score += bm25_score(f64::from(e.tf), df, stats.n_docs, dl, stats.avgdl);
         }
         *acc.entry(key.clone()).or_insert(0.0) += score;
@@ -249,20 +246,13 @@ pub fn score_cold_phrase(
 /// the ROW rather than the segment (the freeze consumed the stored
 /// copy). Same re-analysis, same span rules, byte-identical output
 /// for the same texts.
-pub fn highlight_fields(
-    fields: &[Vec<u8>],
-    query: &[u8],
-) -> Vec<(usize, Vec<(usize, usize)>)> {
+pub fn highlight_fields(fields: &[Vec<u8>], query: &[u8]) -> Vec<(usize, Vec<(usize, usize)>)> {
     let (bare, phrases, prefixes) = crate::parse_clauses(query);
     let terms: std::collections::HashSet<&[u8]> = bare.iter().map(Vec::as_slice).collect();
     let mut out = Vec::new();
     for (fi, text) in fields.iter().enumerate() {
-        let mut spans = crate::segment::field_spans(
-            &crate::tokenize_spans(text),
-            &terms,
-            &phrases,
-            &prefixes,
-        );
+        let mut spans =
+            crate::segment::field_spans(&crate::tokenize_spans(text), &terms, &phrases, &prefixes);
         if !spans.is_empty() {
             spans.sort_unstable();
             spans.dedup();

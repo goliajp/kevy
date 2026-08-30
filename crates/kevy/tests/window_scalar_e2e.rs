@@ -29,8 +29,7 @@ impl Server {
         let mut cfg = kevy_config::Config::default();
         cfg.server.port = port;
         cfg.server.threads = 1;
-        let state =
-            Arc::new(kevy::RuntimeState::new(Arc::new(cfg), dir.clone(), 1).unwrap());
+        let state = Arc::new(kevy::RuntimeState::new(Arc::new(cfg), dir.clone(), 1).unwrap());
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         let dir_thread = dir.clone();
@@ -94,18 +93,65 @@ fn windowed_index_answers_byte_identically_to_the_control() {
     // Two tables over ONE key prefix: `ev` windowed (span 100,
     // bucket 10), `ctl` not. Same rows feed both compiled indexes.
     let declare_ev: &[&[u8]] = &[
-        b"TABLE.DECLARE", b"ev", b"PREFIX", b"ev:", b"PK", b"id",
-        b"COLUMN", b"id", b"str", b"COLUMN", b"at", b"i64",
-        b"COLUMN", b"prio", b"i64", b"COLUMN", b"tag", b"str",
-        b"INDEX", b"at", b"range", b"VALUES", b"at", b"prio", b"tag",
-        b"WINDOW", b"at", b"SPAN", b"100", b"BUCKET", b"10",
+        b"TABLE.DECLARE",
+        b"ev",
+        b"PREFIX",
+        b"ev:",
+        b"PK",
+        b"id",
+        b"COLUMN",
+        b"id",
+        b"str",
+        b"COLUMN",
+        b"at",
+        b"i64",
+        b"COLUMN",
+        b"prio",
+        b"i64",
+        b"COLUMN",
+        b"tag",
+        b"str",
+        b"INDEX",
+        b"at",
+        b"range",
+        b"VALUES",
+        b"at",
+        b"prio",
+        b"tag",
+        b"WINDOW",
+        b"at",
+        b"SPAN",
+        b"100",
+        b"BUCKET",
+        b"10",
     ];
     assert!(send(&mut c, declare_ev).starts_with("+OK"), "declare ev");
     let declare_ctl: &[&[u8]] = &[
-        b"TABLE.DECLARE", b"ctl", b"PREFIX", b"ev:", b"PK", b"id",
-        b"COLUMN", b"id", b"str", b"COLUMN", b"at", b"i64",
-        b"COLUMN", b"prio", b"i64", b"COLUMN", b"tag", b"str",
-        b"INDEX", b"at", b"range", b"VALUES", b"at", b"prio", b"tag",
+        b"TABLE.DECLARE",
+        b"ctl",
+        b"PREFIX",
+        b"ev:",
+        b"PK",
+        b"id",
+        b"COLUMN",
+        b"id",
+        b"str",
+        b"COLUMN",
+        b"at",
+        b"i64",
+        b"COLUMN",
+        b"prio",
+        b"i64",
+        b"COLUMN",
+        b"tag",
+        b"str",
+        b"INDEX",
+        b"at",
+        b"range",
+        b"VALUES",
+        b"at",
+        b"prio",
+        b"tag",
     ];
     assert!(send(&mut c, declare_ctl).starts_with("+OK"), "declare ctl");
 
@@ -119,8 +165,16 @@ fn windowed_index_answers_byte_identically_to_the_control() {
         let key = format!("ev:{i}");
         let at = (i * 10).to_string();
         let prio = ((i % 4) * 10).to_string();
-        let mut argv: Vec<&[u8]> = vec![b"HSET", key.as_bytes(), b"id", key.as_bytes(),
-            b"at", at.as_bytes(), b"prio", prio.as_bytes()];
+        let mut argv: Vec<&[u8]> = vec![
+            b"HSET",
+            key.as_bytes(),
+            b"id",
+            key.as_bytes(),
+            b"at",
+            at.as_bytes(),
+            b"prio",
+            prio.as_bytes(),
+        ];
         let tag = tags[(i % 3) as usize];
         if i % 7 != 0 {
             argv.extend_from_slice(&[b"tag", tag.as_bytes()]);
@@ -135,7 +189,10 @@ fn windowed_index_answers_byte_identically_to_the_control() {
     loop {
         let slid = segs.exists()
             && std::fs::read_dir(&segs)
-                .map(|d| d.filter_map(Result::ok).any(|e| e.file_name().to_string_lossy().ends_with(".seg")))
+                .map(|d| {
+                    d.filter_map(Result::ok)
+                        .any(|e| e.file_name().to_string_lossy().ends_with(".seg"))
+                })
                 .unwrap_or(false);
         if slid {
             break;
@@ -192,10 +249,36 @@ fn windowed_index_answers_byte_identically_to_the_control() {
             assert_eq!(ev, ctl, "{tag}: clauses {:?}", String::from_utf8_lossy(shape[0]));
             assert!(ctl.starts_with("*"), "{tag}: control refused: {ctl}");
         }
-        let cc_ev = send(c, &[b"IDX.COUNT", b"ev.at", b"RANGE", b"0", b"280",
-            b"FILTER", b"prio", b"RANGE", b"10", b"20"]);
-        let cc_ctl = send(c, &[b"IDX.COUNT", b"ctl.at", b"RANGE", b"0", b"280",
-            b"FILTER", b"prio", b"RANGE", b"10", b"20"]);
+        let cc_ev = send(
+            c,
+            &[
+                b"IDX.COUNT",
+                b"ev.at",
+                b"RANGE",
+                b"0",
+                b"280",
+                b"FILTER",
+                b"prio",
+                b"RANGE",
+                b"10",
+                b"20",
+            ],
+        );
+        let cc_ctl = send(
+            c,
+            &[
+                b"IDX.COUNT",
+                b"ctl.at",
+                b"RANGE",
+                b"0",
+                b"280",
+                b"FILTER",
+                b"prio",
+                b"RANGE",
+                b"10",
+                b"20",
+            ],
+        );
         assert_eq!(cc_ev, cc_ctl, "{tag}: claused COUNT");
         assert!(cc_ctl.starts_with(":"), "{tag}: claused COUNT refused: {cc_ctl}");
         // FILTER + CURSOR pages the merged cold+hot stream: walk both
@@ -203,10 +286,34 @@ fn windowed_index_answers_byte_identically_to_the_control() {
         // and the walk terminates.
         let mut cursor = String::new();
         for page in 0..20 {
-            let mut ev: Vec<&[u8]> = vec![b"IDX.QUERY", b"ev.at", b"RANGE", b"0", b"280",
-                b"LIMIT", b"4", b"FILTER", b"prio", b"RANGE", b"0", b"20"];
-            let mut ctl: Vec<&[u8]> = vec![b"IDX.QUERY", b"ctl.at", b"RANGE", b"0", b"280",
-                b"LIMIT", b"4", b"FILTER", b"prio", b"RANGE", b"0", b"20"];
+            let mut ev: Vec<&[u8]> = vec![
+                b"IDX.QUERY",
+                b"ev.at",
+                b"RANGE",
+                b"0",
+                b"280",
+                b"LIMIT",
+                b"4",
+                b"FILTER",
+                b"prio",
+                b"RANGE",
+                b"0",
+                b"20",
+            ];
+            let mut ctl: Vec<&[u8]> = vec![
+                b"IDX.QUERY",
+                b"ctl.at",
+                b"RANGE",
+                b"0",
+                b"280",
+                b"LIMIT",
+                b"4",
+                b"FILTER",
+                b"prio",
+                b"RANGE",
+                b"0",
+                b"20",
+            ];
             if !cursor.is_empty() {
                 ev.extend_from_slice(&[b"CURSOR", cursor.as_bytes()]);
                 ctl.extend_from_slice(&[b"CURSOR", cursor.as_bytes()]);
@@ -226,10 +333,10 @@ fn windowed_index_answers_byte_identically_to_the_control() {
         // page 2+, the orderpath e2e's catch).
         let mut cursor = String::new();
         for page in 0..20 {
-            let mut ev: Vec<&[u8]> = vec![b"IDX.QUERY", b"ev.at",
-                b"RANGE", b"0", b"280", b"LIMIT", b"4"];
-            let mut ctl: Vec<&[u8]> = vec![b"IDX.QUERY", b"ctl.at",
-                b"RANGE", b"0", b"280", b"LIMIT", b"4"];
+            let mut ev: Vec<&[u8]> =
+                vec![b"IDX.QUERY", b"ev.at", b"RANGE", b"0", b"280", b"LIMIT", b"4"];
+            let mut ctl: Vec<&[u8]> =
+                vec![b"IDX.QUERY", b"ctl.at", b"RANGE", b"0", b"280", b"LIMIT", b"4"];
             if !cursor.is_empty() {
                 ev.extend_from_slice(&[b"CURSOR", cursor.as_bytes()]);
                 ctl.extend_from_slice(&[b"CURSOR", cursor.as_bytes()]);
@@ -253,11 +360,21 @@ fn windowed_index_answers_byte_identically_to_the_control() {
     // frozen payload for it must stop serving), delete another cold
     // row, and revive a third with a new in-window value. The
     // tombstone + bloom machinery must keep the two faces in lockstep.
-    assert!(send(&mut c, &[b"HSET", b"ev:5", b"id", b"ev:5", b"at", b"50",
-        b"prio", b"99", b"tag", b"delta"]).starts_with(":"));
+    assert!(
+        send(
+            &mut c,
+            &[b"HSET", b"ev:5", b"id", b"ev:5", b"at", b"50", b"prio", b"99", b"tag", b"delta"]
+        )
+        .starts_with(":")
+    );
     assert_eq!(send(&mut c, &[b"DEL", b"ev:7"]), ":1\r\n");
-    assert!(send(&mut c, &[b"HSET", b"ev:3", b"id", b"ev:3", b"at", b"260",
-        b"prio", b"30", b"tag", b"beta"]).starts_with(":"));
+    assert!(
+        send(
+            &mut c,
+            &[b"HSET", b"ev:3", b"id", b"ev:3", b"at", b"260", b"prio", b"30", b"tag", b"beta"]
+        )
+        .starts_with(":")
+    );
     compare(&mut c, "after cold-row churn");
     assert_eq!(send(&mut c, &[b"IDX.COUNT", b"ev.at", b"RANGE", b"-1000", b"1000"]), ":29\r\n");
 }

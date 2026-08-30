@@ -33,9 +33,7 @@ fn tail(store: &Store) -> (u64, u64) {
 #[test]
 fn flushall_bumps_the_feed_generation_and_writes_it_down() {
     let dir = kevy_tmpdir::TmpDir::new("feed-gen-flush");
-    let cfg = Config::default()
-        .with_persist(dir.path().to_str().unwrap())
-        .with_feed(1 << 20);
+    let cfg = Config::default().with_persist(dir.path().to_str().unwrap()).with_feed(1 << 20);
     let store = Store::open(cfg).expect("open");
 
     for i in 0..8 {
@@ -73,8 +71,5 @@ fn flushall_bumps_the_feed_generation_and_writes_it_down() {
         .trim()
         .parse()
         .expect("the generation file holds a decimal");
-    assert_eq!(
-        persisted, gen_after,
-        "the drawn generation was not the one written down"
-    );
+    assert_eq!(persisted, gen_after, "the drawn generation was not the one written down");
 }

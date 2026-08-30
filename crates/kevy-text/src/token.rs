@@ -193,10 +193,7 @@ mod tests {
     use super::*;
 
     fn toks(s: &str) -> Vec<String> {
-        tokenize(s.as_bytes())
-            .into_iter()
-            .map(|t| String::from_utf8(t).unwrap())
-            .collect()
+        tokenize(s.as_bytes()).into_iter().map(|t| String::from_utf8(t).unwrap()).collect()
     }
 
     #[test]
@@ -247,9 +244,9 @@ mod tests {
         assert_eq!(
             got,
             vec![
-                ("quick", "Quick"),   // token lowercased, span is the source
+                ("quick", "Quick"), // token lowercased, span is the source
                 ("brown", "brown"),
-                ("全文", "全文"),      // a two-char run is one bigram, no unigram
+                ("全文", "全文"), // a two-char run is one bigram, no unigram
                 ("fox", "fox"),
             ],
             "single-char 'a' dropped; every span slices its source"
@@ -260,7 +257,12 @@ mod tests {
     /// variant is a superset, never a different tokenizer.
     #[test]
     fn spans_tokens_match_tokenize() {
-        for s in ["rust full text search", "全文检索引擎 rust 実装", "Rust搜索engine引擎x", "a I v2.7-alpha"] {
+        for s in [
+            "rust full text search",
+            "全文检索引擎 rust 実装",
+            "Rust搜索engine引擎x",
+            "a I v2.7-alpha",
+        ] {
             let plain = tokenize(s.as_bytes());
             let with_spans: Vec<Vec<u8>> =
                 tokenize_spans(s.as_bytes()).into_iter().map(|(t, _, _)| t).collect();

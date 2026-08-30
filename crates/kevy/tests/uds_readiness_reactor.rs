@@ -88,9 +88,8 @@ fn talk(sock: &std::path::Path, request: &[u8], want_bytes: usize) -> Option<Vec
 #[test]
 fn the_unix_socket_answers_on_the_readiness_reactor() {
     let srv = start();
-    let got = talk(&srv.sock, b"PING\r\n", 7).expect(
-        "the unix socket never answered — it is bound but nothing accepts on this reactor",
-    );
+    let got = talk(&srv.sock, b"PING\r\n", 7)
+        .expect("the unix socket never answered — it is bound but nothing accepts on this reactor");
     assert_eq!(got, b"+PONG\r\n");
 }
 

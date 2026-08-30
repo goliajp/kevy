@@ -227,12 +227,8 @@ impl<C: Commands> Shard<C> {
                 draw: self.store.rand_draw(),
             },
             Op::ScanStep { cursor, count, pattern, type_filter } => {
-                let (next, keys, visited) = self.store.scan_page(
-                    cursor,
-                    count,
-                    pattern.as_deref(),
-                    type_filter.as_deref(),
-                );
+                let (next, keys, visited) =
+                    self.store.scan_page(cursor, count, pattern.as_deref(), type_filter.as_deref());
                 Part::ScanPage { next, keys, visited }
             }
             Op::CheckWatch(keys) => {
@@ -241,9 +237,7 @@ impl<C: Commands> Shard<C> {
                 // time) is now dirty on this shard. The origin shard
                 // ORs the partial results across shards and aborts
                 // EXEC if any shard reports `true`.
-                let dirty = keys
-                    .iter()
-                    .any(|(k, v)| self.store.key_version(k) != *v);
+                let dirty = keys.iter().any(|(k, v)| self.store.key_version(k) != *v);
                 Part::Int(i64::from(dirty))
             }
             Op::Rename { src, dst, nx } => {
@@ -335,12 +329,7 @@ impl<C: Commands> Shard<C> {
                     None => Part::RenameNoSuchSrc,
                 }
             }
-            Op::RenamePut {
-                dst,
-                value,
-                ttl_ms,
-                nx,
-            } => {
+            Op::RenamePut { dst, value, ttl_ms, nx } => {
                 // Step 2 of cross-shard RENAME. If NX is set and dst
                 // already exists on this shard, refuse the put. The
                 // orchestrator decides whether to surface `:0` (RENAMENX
@@ -348,9 +337,7 @@ impl<C: Commands> Shard<C> {
                 if nx && self.store.key_exists(&dst) {
                     // NX-refused: hand the source value back so the
                     // orchestrator can restore it on src's shard.
-                    return Part::RenamePutDone {
-                        refused: Some((value, ttl_ms)),
-                    };
+                    return Part::RenamePutDone { refused: Some((value, ttl_ms)) };
                 }
                 self.log_value_placed(&dst, &value, ttl_ms);
                 self.store.put_with_ttl(dst.clone(), value, ttl_ms);
@@ -476,4 +463,3 @@ impl<C: Commands> Shard<C> {
     // `Shard::run_dispatch` above — the old `bump_watch_for_dispatch`
     // re-ran the full `Commands::route` verb walk per write and is gone.
 }
-

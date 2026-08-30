@@ -1,5 +1,130 @@
 # Changelog
 
+## 6.2.0 — a sorted set stopped rewriting an index it had not changed
+
+One behaviour changes, one command gets substantially faster, and every
+line of Rust in the tree went through a formatter for the first time.
+
+### `-0` and `0` are one score, as they are in Redis
+
+`ZADD z 0 a; ZADD z -0 b; ZRANGE z 0 -1` answered `a b` on Redis 8 and
+`b a` here — measured against a real `redis:8` on one host, not read off a
+specification. The score readings agreed and `ZADD … XX CH` agreed; only
+the order differed.
+
+Neither side was careless. Redis keys its skiplist on a plain `double`
+comparison, where the two zeros are equal and the member breaks the tie.
+kevy's rank tree is a B-tree, whose key needs a total order that
+`f64: PartialOrd` is not, and `Score` orders by `total_cmp` — which is
+total precisely *because* it separates them.
+
+The sign is now folded where a score enters a sorted set, once per write,
+rather than in the comparison every tree descent runs. **If you stored a
+member at `-0`, its position among other members scored `±0` changes.**
+Nothing else about it does: `ZSCORE` answered `0` before and answers `0`
+now.
+
+The compatibility corpus grew six lines. It had no `±0` case, which is why
+the headline it produces stayed honest while this sat outside it.
+
+### ZADD stopped writing to the index when nothing moved
+
+`ZSetData::insert` removed the member from the rank tree and inserted it
+back unconditionally. When the score is unchanged those two operations are
+of the same key: the tree ends where it began, having paid a descent, a
+removal, an insertion and two extra `SmallBytes` to do it. Re-adding a
+member at an unchanged score is what an idempotent upsert does, what a
+retry does, and what a leaderboard write does whenever the value has not
+moved.
+
+Measured before it was written, by ablation rather than by profile:
+`ZSCORE` reaches the member hash and stops, and is flat at 150-159 ns/op
+across five orders of magnitude, while `ZADD` climbed 330.7 → 476.4 → 492.9
+ns/op from 1 to 8,000 to 200,000 members. Same code path, same write
+bookkeeping, constant hash — so the growth was the ordered index and
+nothing else.
+
+Same-session A/B on the bench box, two binaries from one tree differing
+only in the guard:
+
+| members | before | after | |
+|---:|---:|---:|---|
+| 8,000 | 2,231,477 | 3,408,582 | **+52.8%** |
+| 200,000 | 2,033,624 | 3,158,316 | **+55.3%** |
+
+Against Redis 8 on the arena's own single-member cell, nine interleaved
+rounds on an exclusive box: the unguarded build reads NOISE — a tie, 152,652
+apart against a tolerance of 218,139, reproducing what the 6.0.0 ledger
+recorded — and the guarded one reads **1.15x**, clearing its band by 2.2x.
+That cell was the first this ledger ever put inside the noise band.
+
+`Score`'s `PartialEq` was derived from `f64` while its `Ord` was
+`total_cmp`; the two disagreed on `-0.0`, which Rust does not permit of an
+ordered key. It is written now, with tests that fail against the derived
+version.
+
+### rustfmt, on 752 files
+
+The tree had no `rustfmt.toml`, no fmt step in CI, and 4,634 differences
+across 772 files. One knob is set and it was chosen by measurement:
+rustfmt's default wrapping adds lines to code that already fits 100
+columns — enough to push 76 functions past this project's 50-line ceiling
+and 22 files past 500, ninety-eight violations without a token changing.
+`use_small_heuristics = "Max"` leaves nineteen, which were resolved: two
+files split at seams they already had, fifteen functions split (most
+removing a duplication on the way), two waived as the dispatch tables they
+are. `max_width` stays at rustfmt's default 100.
+
+`fmtgate` runs `cargo fmt --all --check` in CI, because the only thing that
+keeps a formatter applied is a build that fails without it.
+
+No behaviour changes here. The workspace tests, clippy and every gate pass
+on the reformatted tree.
+
+### Gates that were green about nothing
+
+Six, each found in a working, passing, thoughtfully-commented check:
+
+- **A refusal about one door stopped four the runner could open.** The
+  release job's size ratchet correctly refused a mobile package a Linux
+  runner cannot build with its engine in it — then `exit 1` under `set -e`
+  ended the loop, and four packages behind it never got their turn, three
+  of them pure JavaScript. The refusal no longer spreads; what makes a
+  release red is the gate that asks the registries, which now runs when the
+  release workflow ends rather than at 06:17 the next morning.
+- **The Go door was reported shut while users were walking through it.**
+  The parity gate asked `proxy.golang.org` for `@v/…​.info`, which had cached
+  a miss from the seconds after the tag push. `.mod` and `.zip` served the
+  version and `go get` installed it with no fallback. It asks `.mod` now,
+  and by content.
+- **657 of 768 site pages went out with no hreflang.** `documentHtml` has
+  taken an `alternates` list since the site was rebuilt; five functions call
+  it and one filled it in. They are derived from each page's own canonical
+  path now, so forgetting is not available.
+- **The release notes declared themselves canonical at a URL that does not
+  exist.** `/changelog/` is rendered by the docs renderer, which builds
+  `/docs/<slug>/` from the slug. This host answers the missing URL with the
+  SPA shell and HTTP 200. `check.mjs` resolves all 3,834 canonical and
+  hreflang links now; it used to skip anything starting `https:`.
+- **The stone report in the repository described the wrong release twice.**
+  CI regenerates it before gating it, so CI never judged the copy the
+  repository ships. It reads the committed copy with `git show HEAD:` now.
+- **A branch outside CI's push filter runs no jobs and says nothing about
+  it.** `gh run list --branch` returns an empty list, which looks exactly
+  like a run that has not started.
+
+### The perf axis, and one round that ended in a refusal
+
+LPUSH was the other cell the roadmap named. Its gap is real — 1.08x, 2.8x
+its tolerance — and its Phase A ends without a Phase B, deliberately. The
+cost splits cleanly into 235.4 ns per command and 100.0 ns per element
+(fitted on one and eight values, checked against two and four to within
+0.8%), and the profile of a saturated shard is flat: 3,179 source lines
+carry samples, the largest is 1.92%, nothing reaches 2%. There is no seat
+to take. The one line that did stand out at 19.68% was `_mm_pause` — seven
+shards spinning while the one that owns the key does the work, which is the
+topology of a single-key benchmark rather than a cost.
+
 ## 6.1.0 — what the release was actually checked by
 
 v6.0.0 shipped, and then the question was asked: which of the eighty-five

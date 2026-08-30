@@ -21,6 +21,16 @@ name: channel parity — does the world have what we shipped
 on:
   schedule:
     - cron: '17 6 * * *'
+  # And when a release ends, because that is the one moment the answer is
+  # supposed to change. Daily alone left a window: v6.1.0's npm job refused
+  # a door it could not build, four publishable doors behind it never got
+  # their turn, and nothing would have asked a registry about any of them
+  # until the next morning. Red here after a release means the release is
+  # not finished — including when the remaining doors are the ones a Linux
+  # runner cannot build and a person still has to publish by hand.
+  workflow_run:
+    workflows: ['Release']  # exact `name:` of release.yml — matching is by name
+    types: [completed]
   workflow_dispatch:
     inputs:
       version:
@@ -49,4 +59,14 @@ jobs:
         # value here comes from whoever pressed the button.
         env:
           ASK_VERSION: ${{ inputs.version }}
-        run: python3 tools/check_channels_published.py $ASK_VERSION
+        run: |
+          # Branching rather than an unquoted $ASK_VERSION: unquoted, a
+          # value with a space becomes two arguments and one with a glob
+          # character becomes whatever is in the working directory. Quoted
+          # unconditionally, the empty default becomes an empty argument
+          # and the script asks about version "".
+          if [ -n "$ASK_VERSION" ]; then
+            python3 tools/check_channels_published.py "$ASK_VERSION"
+          else
+            python3 tools/check_channels_published.py
+          fi

@@ -4,11 +4,11 @@
 //! Split out of `exec.rs` so that file stays under the 500-LOC house rule.
 //! Everything here is still on the same `impl<C: Commands> Shard<C>`.
 
-use kevy_resp::CmdError;
 use crate::Commands;
 use crate::Route;
 use crate::message::{Agg, GatherKind, KvPairs, MultiOp, Op};
 use crate::shard::Shard;
+use kevy_resp::CmdError;
 use kevy_resp::{Argv, ArgvView};
 use std::collections::HashMap;
 
@@ -59,26 +59,13 @@ impl<C: Commands> Shard<C> {
             }
             Route::DelKeys => (self.group_keys(args, Op::Del), Agg::SumInt(0)),
             Route::ExistsKeys => (self.group_keys(args, Op::Exists), Agg::SumInt(0)),
-            Route::Dbsize => (
-                (0..self.nshards).map(|s| (s, Op::Dbsize)).collect(),
-                Agg::SumInt(0),
-            ),
-            Route::Flush => (
-                (0..self.nshards).map(|s| (s, Op::Flush)).collect(),
-                Agg::AllOk,
-            ),
-            Route::Save => (
-                (0..self.nshards).map(|s| (s, Op::Save)).collect(),
-                Agg::AllOk,
-            ),
-            Route::BgSave => (
-                (0..self.nshards).map(|s| (s, Op::BgSave)).collect(),
-                Agg::AllOk,
-            ),
-            Route::RewriteAof => (
-                (0..self.nshards).map(|s| (s, Op::RewriteAof)).collect(),
-                Agg::AllOk,
-            ),
+            Route::Dbsize => ((0..self.nshards).map(|s| (s, Op::Dbsize)).collect(), Agg::SumInt(0)),
+            Route::Flush => ((0..self.nshards).map(|s| (s, Op::Flush)).collect(), Agg::AllOk),
+            Route::Save => ((0..self.nshards).map(|s| (s, Op::Save)).collect(), Agg::AllOk),
+            Route::BgSave => ((0..self.nshards).map(|s| (s, Op::BgSave)).collect(), Agg::AllOk),
+            Route::RewriteAof => {
+                ((0..self.nshards).map(|s| (s, Op::RewriteAof)).collect(), Agg::AllOk)
+            }
             Route::MSet => self.build_mset_targets(args),
             Route::Gather(op) => match op {
                 MultiOp::Mget => self.build_gather(args, GatherKind::Str, op),
@@ -103,9 +90,8 @@ impl<C: Commands> Shard<C> {
             Route::Extension => {
                 let argv: std::sync::Arc<[Vec<u8>]> =
                     (0..args.len()).map(|i| args[i].to_vec()).collect();
-                let targets = (0..self.nshards)
-                    .map(|s| (s, Op::Extension { argv: argv.clone() }))
-                    .collect();
+                let targets =
+                    (0..self.nshards).map(|s| (s, Op::Extension { argv: argv.clone() })).collect();
                 (targets, Agg::ExtensionGather { argv, chunks: Vec::new() })
             }
             // REPL.TOKEN: every shard reports its live
@@ -127,9 +113,7 @@ impl<C: Commands> Shard<C> {
             ),
             Route::ClientKill => match crate::client_ops::ClientKillFilter::parse(args) {
                 Some((filter, oldform)) => (
-                    (0..self.nshards)
-                        .map(|s| (s, Op::ClientKill(filter.clone())))
-                        .collect(),
+                    (0..self.nshards).map(|s| (s, Op::ClientKill(filter.clone()))).collect(),
                     Agg::ClientKill { killed: 0, oldform },
                 ),
                 // The command layer validates before routing here; an
@@ -139,9 +123,8 @@ impl<C: Commands> Shard<C> {
             },
             Route::PrefixStats => {
                 let prefix = args.get(1).map(|p| p.to_vec()).unwrap_or_default();
-                let targets = (0..self.nshards)
-                    .map(|s| (s, Op::PrefixStats(prefix.clone())))
-                    .collect();
+                let targets =
+                    (0..self.nshards).map(|s| (s, Op::PrefixStats(prefix.clone()))).collect();
                 (targets, Agg::PrefixStats { keys: 0, expires: 0 })
             }
             // FEED.* is intercepted in `start_command` before the
@@ -210,10 +193,7 @@ impl<C: Commands> Shard<C> {
     }
 
     /// Group `args[1..]` key/value pairs by each key's shard for MSET.
-    fn build_mset_targets<A: ArgvView + ?Sized>(
-        &self,
-        args: &A,
-    ) -> (Vec<(usize, Op)>, Agg) {
+    fn build_mset_targets<A: ArgvView + ?Sized>(&self, args: &A) -> (Vec<(usize, Op)>, Agg) {
         let mut by_shard: HashMap<usize, KvPairs> = HashMap::new();
         let mut i = 1;
         while i + 1 < args.len() {
@@ -223,13 +203,7 @@ impl<C: Commands> Shard<C> {
                 .push((args[i].to_vec(), args[i + 1].to_vec()));
             i += 2;
         }
-        (
-            by_shard
-                .into_iter()
-                .map(|(s, p)| (s, Op::MSet(p)))
-                .collect(),
-            Agg::AllOk,
-        )
+        (by_shard.into_iter().map(|(s, p)| (s, Op::MSet(p))).collect(), Agg::AllOk)
     }
 
     /// Group `args[1..]` keys by shard for a cross-shard gather.
@@ -242,24 +216,10 @@ impl<C: Commands> Shard<C> {
         let keys: Vec<Vec<u8>> = (1..args.len()).map(|i| args[i].to_vec()).collect();
         let mut by_shard: HashMap<usize, Vec<Vec<u8>>> = HashMap::new();
         for k in &keys {
-            by_shard
-                .entry(self.shard_of(k))
-                .or_default()
-                .push(k.clone());
+            by_shard.entry(self.shard_of(k)).or_default().push(k.clone());
         }
-        let targets = by_shard
-            .into_iter()
-            .map(|(s, ks)| (s, Op::Gather(kind, ks)))
-            .collect();
-        (
-            targets,
-            Agg::Gather {
-                op,
-                limit: 0,
-                keys,
-                got: HashMap::new(),
-            },
-        )
+        let targets = by_shard.into_iter().map(|(s, ks)| (s, Op::Gather(kind, ks))).collect();
+        (targets, Agg::Gather { op, limit: 0, keys, got: HashMap::new() })
     }
 
     /// `Z*STORE dst numkeys key… [WEIGHTS…] [AGGREGATE …]` and
@@ -287,21 +247,8 @@ impl<C: Commands> Shard<C> {
             by_shard.entry(self.shard_of(k)).or_default().push(k.clone());
         }
         let kind = if zset_form { GatherKind::Scored } else { GatherKind::Set };
-        let targets = by_shard
-            .into_iter()
-            .map(|(s, ks)| (s, Op::Gather(kind, ks)))
-            .collect();
-        (
-            targets,
-            Agg::ZStoreGather {
-                combine,
-                weights,
-                aggregate,
-                dst,
-                keys,
-                got: HashMap::new(),
-            },
-        )
+        let targets = by_shard.into_iter().map(|(s, ks)| (s, Op::Gather(kind, ks))).collect();
+        (targets, Agg::ZStoreGather { combine, weights, aggregate, dst, keys, got: HashMap::new() })
     }
 
     /// `ZINTERCARD numkeys key… [LIMIT n]`.
@@ -314,19 +261,9 @@ impl<C: Commands> Shard<C> {
         for k in &keys {
             by_shard.entry(self.shard_of(k)).or_default().push(k.clone());
         }
-        let targets = by_shard
-            .into_iter()
-            .map(|(s, ks)| (s, Op::Gather(GatherKind::Scored, ks)))
-            .collect();
-        (
-            targets,
-            Agg::Gather {
-                op: MultiOp::ZInterCard,
-                limit,
-                keys,
-                got: HashMap::new(),
-            },
-        )
+        let targets =
+            by_shard.into_iter().map(|(s, ks)| (s, Op::Gather(GatherKind::Scored, ks))).collect();
+        (targets, Agg::Gather { op: MultiOp::ZInterCard, limit, keys, got: HashMap::new() })
     }
 
     /// Fan a key-collection out to every shard — KEYS, and only KEYS now.
@@ -334,9 +271,7 @@ impl<C: Commands> Shard<C> {
     /// draws one weighted candidate per shard; the KeyShape enum this used to
     /// dispatch on retired with them.
     fn fanout_keys(&self, pat: Option<Vec<u8>>) -> (Vec<(usize, Op)>, Agg) {
-        let targets = (0..self.nshards)
-            .map(|s| (s, Op::CollectKeys(pat.clone(), None)))
-            .collect();
+        let targets = (0..self.nshards).map(|s| (s, Op::CollectKeys(pat.clone(), None))).collect();
         (targets, Agg::Keys { acc: Vec::new() })
     }
 
@@ -349,18 +284,11 @@ impl<C: Commands> Shard<C> {
         let mut by_shard: HashMap<usize, Vec<Vec<u8>>> = HashMap::new();
         for i in 1..args.len() {
             let key = &args[i];
-            by_shard
-                .entry(self.shard_of(key))
-                .or_default()
-                .push(key.to_vec());
+            by_shard.entry(self.shard_of(key)).or_default().push(key.to_vec());
         }
-        by_shard
-            .into_iter()
-            .map(|(s, keys)| (s, mk(keys)))
-            .collect()
+        by_shard.into_iter().map(|(s, keys)| (s, mk(keys))).collect()
     }
 }
-
 
 /// Empty-target error resolution: `start_multi` pushes remaining=1 and
 /// folds an `Int(0)` the `Agg::First` ignores; materialize then emits

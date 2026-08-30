@@ -9,9 +9,9 @@ use crate::Commands;
 use crate::shard::Shard;
 use crate::uring_conn::UringConn;
 use crate::uring_reactor::ENOBUFS;
-use kevy_uring::Completion;
 use crate::uring_reactor::{MAX_IOVECS_PER_WRITEV, OP_RECV, OP_WRITE};
 use kevy_map::KevyMap;
+use kevy_uring::Completion;
 use kevy_uring::IoUring;
 
 impl<C: Commands> Shard<C> {
@@ -41,11 +41,7 @@ impl<C: Commands> Shard<C> {
     /// the queue once. Safe to call when the conn was just dropped
     /// (the lookup misses and the call is a no-op).
     #[inline]
-    pub(crate) fn mark_arm_pending(
-        &mut self,
-        cid: u64,
-        io: &mut KevyMap<u64, UringConn>,
-    ) {
+    pub(crate) fn mark_arm_pending(&mut self, cid: u64, io: &mut KevyMap<u64, UringConn>) {
         if let Some(uc) = io.get_mut(&cid)
             && !uc.arm_queued
         {
@@ -272,10 +268,8 @@ impl<C: Commands> Shard<C> {
                                 iov_len: pos - prev,
                             });
                         }
-                        uc.write_iovecs.push(kevy_uring::Iovec {
-                            iov_base: arc.as_ptr(),
-                            iov_len: arc.len(),
-                        });
+                        uc.write_iovecs
+                            .push(kevy_uring::Iovec { iov_base: arc.as_ptr(), iov_len: arc.len() });
                         prev = pos;
                         arcs_consumed = i + 1;
                     }
@@ -287,8 +281,7 @@ impl<C: Commands> Shard<C> {
                     }
                     uc.arcs_in_flight = arcs_consumed;
                     uc.write_byte_cap = byte_cap;
-                    uc.write_inflight_bytes =
-                        uc.write_iovecs.iter().map(|v| v.iov_len).sum();
+                    uc.write_inflight_bytes = uc.write_iovecs.iter().map(|v| v.iov_len).sum();
                     // SAFETY: write_buf, write_arcs (Arc keeps bytes
                     // alive), and write_iovecs all live in `uc`, which
                     // is in the io map — they outlive any SQE we submit
@@ -334,11 +327,8 @@ impl<C: Commands> Shard<C> {
             }
             if uc.big_arg_read_pending && !uc.closing {
                 if let Some(boxed) = uc.pending_big_arg.as_mut()
-                    && let crate::uring_conn::BigArgState::BareSetReading {
-                        body,
-                        body_len,
-                        ..
-                    } = boxed.as_mut()
+                    && let crate::uring_conn::BigArgState::BareSetReading { body, body_len, .. } =
+                        boxed.as_mut()
                 {
                     // prep_read SQE length = remaining body bytes.
                     // The trailing CRLF is consumed via the re-armed
@@ -399,11 +389,10 @@ impl<C: Commands> Shard<C> {
                 )
             );
             let want_multishot = !uc.recv_armed && !uc.closing && !big_arg_owns_recv;
-            let recv_arm_wanted = (want_multishot || uc.big_arg_rearm_recv)
-                && !uc.recv_armed
-                && !uc.closing;
-            let recv_armed_now = recv_arm_wanted
-                && ring.prep_recv_multishot(conn.sock.raw(), bgid, OP_RECV | cid);
+            let recv_arm_wanted =
+                (want_multishot || uc.big_arg_rearm_recv) && !uc.recv_armed && !uc.closing;
+            let recv_armed_now =
+                recv_arm_wanted && ring.prep_recv_multishot(conn.sock.raw(), bgid, OP_RECV | cid);
             if recv_armed_now {
                 uc.recv_armed = true;
                 uc.big_arg_rearm_recv = false;

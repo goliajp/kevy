@@ -106,10 +106,7 @@ pub(crate) fn evict_until_under_limit(store: &mut Store) -> usize {
         // precheck will refuse and return OOM to the client.
         return 0;
     }
-    let target = store
-        .maxmemory
-        .saturating_mul(HEADROOM_NUM)
-        / HEADROOM_DEN;
+    let target = store.maxmemory.saturating_mul(HEADROOM_NUM) / HEADROOM_DEN;
     let mut evicted = 0;
     let mut consecutive_no_candidate = 0;
     while store.used_memory > target {
@@ -135,9 +132,9 @@ pub(crate) fn evict_until_under_limit(store: &mut Store) -> usize {
 fn evict_one(store: &mut Store) -> bool {
     let policy = store.eviction_policy;
     let volatile_only = policy.is_volatile();
-    let Some(victim) = sample_pick_with(store, policy, |e| {
-        !volatile_only || e.expire_at_ns.is_some()
-    }, usize::MAX) else {
+    let Some(victim) =
+        sample_pick_with(store, policy, |e| !volatile_only || e.expire_at_ns.is_some(), usize::MAX)
+    else {
         return false;
     };
     if store.remove_entry(&victim).is_some() {
@@ -210,9 +207,7 @@ pub(crate) fn sample_pick_with<F: Fn(&Entry) -> bool>(
 fn score_entry(e: &Entry, policy: EvictionPolicy, now: u64, clock: u32) -> i64 {
     match policy {
         EvictionPolicy::AllKeysLru | EvictionPolicy::VolatileLru => i64::from(e.lru_clock()),
-        EvictionPolicy::AllKeysLfu | EvictionPolicy::VolatileLfu => {
-            i64::from(e.lru_clock() & 0xFF)
-        }
+        EvictionPolicy::AllKeysLfu | EvictionPolicy::VolatileLfu => i64::from(e.lru_clock() & 0xFF),
         EvictionPolicy::AllKeysRandom | EvictionPolicy::VolatileRandom => {
             // Stamp each sampled entry with a fresh splitmix bit so the
             // "lowest score" rule picks uniformly at random.
@@ -256,8 +251,7 @@ mod tests {
                 high_hits += 1;
             }
         }
-        assert!(low_hits > 100 * high_hits,
-            "log scaling broken: low={low_hits} high={high_hits}");
+        assert!(low_hits > 100 * high_hits, "log scaling broken: low={low_hits} high={high_hits}");
     }
 
     #[test]

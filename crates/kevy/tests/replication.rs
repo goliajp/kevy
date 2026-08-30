@@ -62,10 +62,8 @@ fn wait_port(port: u16, what: &str) {
 /// patience, so the budget tracks machine speed rather than the worst
 /// case ever seen.
 fn patience() -> std::time::Duration {
-    let mult: f64 = std::env::var("KEVY_TEST_PATIENCE")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(1.0);
+    let mult: f64 =
+        std::env::var("KEVY_TEST_PATIENCE").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0);
     std::time::Duration::from_secs_f64(60.0 * mult)
 }
 
@@ -148,18 +146,20 @@ impl Server {
         }
 
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(nshards)).bind([127, 0, 0, 1], port).shards(nshards)
-            .with_data_dir(dir_path)
-            .with_aof(false)
-            .with_replication(true, 1024 * 1024)
-            // Scales with `patience()` for the same reason the waits do.
-            // The default is 60s, the same order as an instrumented run of
-            // this suite -- so under covgate the replica's slot expired
-            // while the test was still waiting for it, and no amount of
-            // extra waiting could help: the thing being waited for had
-            // lost its backlog position.
-            .with_replication_reconnect_window(patience().as_millis() as u32)
-            .with_replication_listener(replication_base);
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(nshards))
+                .bind([127, 0, 0, 1], port)
+                .shards(nshards)
+                .with_data_dir(dir_path)
+                .with_aof(false)
+                .with_replication(true, 1024 * 1024)
+                // Scales with `patience()` for the same reason the waits do.
+                // The default is 60s, the same order as an instrumented run of
+                // this suite -- so under covgate the replica's slot expired
+                // while the test was still waiting for it, and no amount of
+                // extra waiting could help: the thing being waited for had
+                // lost its backlog position.
+                .with_replication_reconnect_window(patience().as_millis() as u32)
+                .with_replication_listener(replication_base);
             let _ = rt.run(stop_thread);
         });
 
@@ -180,14 +180,7 @@ impl Server {
         for p in ports {
             wait_port(p, "runtime");
         }
-        Server {
-            port,
-            replication_base,
-            nshards,
-            stop,
-            handle: Some(handle),
-            _dir: Some(dir),
-        }
+        Server { port, replication_base, nshards, stop, handle: Some(handle), _dir: Some(dir) }
     }
 
     fn shutdown(mut self) {
@@ -322,7 +315,6 @@ fn read_to_eof(s: &mut std::net::TcpStream) -> Vec<u8> {
     out
 }
 
-
 #[test]
 fn replica_handshake_receives_ack_and_stays_connected() {
     // After `+ACK` the conn transitions to Streaming.
@@ -389,7 +381,9 @@ fn replication_disabled_means_no_listener_on_replication_port() {
         std::env::set_var("KEVY_IO_URING", "0");
     }
     let handle = std::thread::spawn(move || {
-        let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(1)).bind([127, 0, 0, 1], base).shards(1)
+        let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(1))
+            .bind([127, 0, 0, 1], base)
+            .shards(1)
             .with_data_dir(dir_path)
             .with_aof(false);
         // No .with_replication / .with_replication_listener calls.
@@ -403,10 +397,8 @@ fn replication_disabled_means_no_listener_on_replication_port() {
     // 50 ms timeout connect so the test doesn't hang on platforms
     // where unconnected TCP returns CONNREFUSED slowly.
     let addr: std::net::SocketAddr = format!("127.0.0.1:{}", base + 1).parse().unwrap();
-    let connect = std::net::TcpStream::connect_timeout(
-        &addr,
-        std::time::Duration::from_millis(100),
-    );
+    let connect =
+        std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(100));
     assert!(
         connect.is_err(),
         "no listener should be on the would-be replication port without with_replication_listener",
@@ -444,11 +436,7 @@ fn streaming_replica_receives_set_command_as_wire_frame() {
     let server = Server::start(1);
 
     // Replica connects to the replication port and handshakes from 0.
-    let mut replica = std::net::TcpStream::connect((
-        "127.0.0.1",
-        server.replication_base,
-    ))
-    .unwrap();
+    let mut replica = std::net::TcpStream::connect(("127.0.0.1", server.replication_base)).unwrap();
     replica
         .write_all(&replicate_from(live_generation(server.replication_base), "0", "replica-stream"))
         .unwrap();
@@ -486,8 +474,7 @@ fn streaming_replica_receives_set_command_as_wire_frame() {
         }
     }
     let buf = &buf[start..];
-    let (offset, argv, used) =
-        kevy_replicate::wire::decode_frame(buf).expect("decode frame");
+    let (offset, argv, used) = kevy_replicate::wire::decode_frame(buf).expect("decode frame");
     assert_eq!(offset, 0);
     assert_eq!(argv.len(), 3);
     assert_eq!(argv.get(0), Some(&b"SET"[..]));
@@ -501,11 +488,7 @@ fn streaming_replica_receives_set_command_as_wire_frame() {
 #[test]
 fn streaming_replica_receives_multiple_frames_in_order() {
     let server = Server::start(1);
-    let mut replica = std::net::TcpStream::connect((
-        "127.0.0.1",
-        server.replication_base,
-    ))
-    .unwrap();
+    let mut replica = std::net::TcpStream::connect(("127.0.0.1", server.replication_base)).unwrap();
     replica
         .write_all(&replicate_from(live_generation(server.replication_base), "0", "replica-multi"))
         .unwrap();
@@ -701,10 +684,7 @@ fn replica_client_handshake_failure_on_closed_port() {
         0,
         std::time::Duration::from_millis(200),
     );
-    assert!(
-        result.is_err(),
-        "connect to released port should fail, got Ok",
-    );
+    assert!(result.is_err(), "connect to released port should fail, got Ok",);
 }
 
 /// Spawn a primary with a small replication buffer so backlog
@@ -724,7 +704,9 @@ fn start_small_buffer_primary(buffer_size: u64) -> Server {
         std::env::set_var("KEVY_IO_URING", "0");
     }
     let handle = std::thread::spawn(move || {
-        let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(1)).bind([127, 0, 0, 1], port).shards(1)
+        let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(1))
+            .bind([127, 0, 0, 1], port)
+            .shards(1)
             .with_data_dir(dir_path)
             .with_aof(false)
             .with_replication(true, buffer_size)
@@ -734,14 +716,7 @@ fn start_small_buffer_primary(buffer_size: u64) -> Server {
     for p in [port, replication_base] {
         wait_port(p, "runtime");
     }
-    Server {
-        port,
-        replication_base,
-        nshards: 1,
-        stop,
-        handle: Some(handle),
-        _dir: Some(dir),
-    }
+    Server { port, replication_base, nshards: 1, stop, handle: Some(handle), _dir: Some(dir) }
 }
 
 #[test]
@@ -766,12 +741,9 @@ fn snapshot_ship_triggers_when_replica_falls_behind_backlog() {
         assert_eq!(ok, b"+OK\r\n");
     }
 
-    let mut client = ReplicaClient::connect(
-        ("127.0.0.1", server.replication_base),
-        "replica-snapshot",
-        0,
-    )
-    .expect("connect + handshake");
+    let mut client =
+        ReplicaClient::connect(("127.0.0.1", server.replication_base), "replica-snapshot", 0)
+            .expect("connect + handshake");
 
     // First NON-PING event must be SnapshotBegin (TooOld → ship);
     // heartbeats may interleave before the ship starts.
@@ -825,9 +797,8 @@ fn snapshot_ship_loaded_into_local_store_matches_primary() {
     let server = start_small_buffer_primary(256);
 
     // Stage N writes against the primary; backlog evicts old offsets.
-    let pairs: Vec<(String, String)> = (0..20)
-        .map(|i| (format!("snap-k{i}"), format!("val-{i:04}")))
-        .collect();
+    let pairs: Vec<(String, String)> =
+        (0..20).map(|i| (format!("snap-k{i}"), format!("val-{i:04}"))).collect();
     let mut writer = std::net::TcpStream::connect(("127.0.0.1", server.port)).unwrap();
     for (k, v) in &pairs {
         send_resp(&mut writer, &[b"SET", k.as_bytes(), v.as_bytes()]);
@@ -836,12 +807,9 @@ fn snapshot_ship_loaded_into_local_store_matches_primary() {
     }
 
     // Replica connects from 0; primary detects TooOld + ships snapshot.
-    let mut client = ReplicaClient::connect(
-        ("127.0.0.1", server.replication_base),
-        "replica-loader",
-        0,
-    )
-    .expect("connect");
+    let mut client =
+        ReplicaClient::connect(("127.0.0.1", server.replication_base), "replica-loader", 0)
+            .expect("connect");
     assert!(matches!(
         client.next_event().expect("event").expect("ok"),
         ReplicaEvent::SnapshotBegin
@@ -874,7 +842,8 @@ fn snapshot_ship_loaded_into_local_store_matches_primary() {
         let reply = dispatch(&mut local_store, &argv);
         let expected = format!("${}\r\n{}\r\n", v.len(), v);
         assert_eq!(
-            reply, expected.as_bytes(),
+            reply,
+            expected.as_bytes(),
             "key {k:?}: loaded replica returned {:?}, expected {:?}",
             String::from_utf8_lossy(&reply),
             expected,
@@ -901,9 +870,8 @@ fn fresh_replica_join_snapshot_then_live_frames() {
 
     // Stage 1: pre-snapshot writes overflow the 256 B backlog, so a
     // from-0 replica will trigger snapshot ship.
-    let pre: Vec<(String, String)> = (0..20)
-        .map(|i| (format!("pre-k{i}"), format!("pre-v{i:04}")))
-        .collect();
+    let pre: Vec<(String, String)> =
+        (0..20).map(|i| (format!("pre-k{i}"), format!("pre-v{i:04}"))).collect();
     let mut writer = std::net::TcpStream::connect(("127.0.0.1", server.port)).unwrap();
     for (k, v) in &pre {
         send_resp(&mut writer, &[b"SET", k.as_bytes(), v.as_bytes()]);
@@ -911,12 +879,9 @@ fn fresh_replica_join_snapshot_then_live_frames() {
     }
 
     // Stage 2: replica connects from 0, drains the snapshot path.
-    let mut client = ReplicaClient::connect(
-        ("127.0.0.1", server.replication_base),
-        "replica-t127",
-        0,
-    )
-    .expect("connect + handshake");
+    let mut client =
+        ReplicaClient::connect(("127.0.0.1", server.replication_base), "replica-t127", 0)
+            .expect("connect + handshake");
     assert!(matches!(
         client.next_event().expect("event").expect("ok"),
         ReplicaEvent::SnapshotBegin
@@ -941,9 +906,8 @@ fn fresh_replica_join_snapshot_then_live_frames() {
     // Stage 4: primary takes M post-snapshot writes; they arrive at
     // offsets `ack_offset..ack_offset+M`. M kept small so the 256 B
     // backlog holds the burst without re-evicting under the replica.
-    let post: Vec<(String, String)> = (0..5)
-        .map(|i| (format!("post-k{i}"), format!("post-v{i:04}")))
-        .collect();
+    let post: Vec<(String, String)> =
+        (0..5).map(|i| (format!("post-k{i}"), format!("post-v{i:04}"))).collect();
     for (k, v) in &post {
         send_resp(&mut writer, &[b"SET", k.as_bytes(), v.as_bytes()]);
         assert_eq!(read_line(&mut writer), b"+OK\r\n");
@@ -974,7 +938,8 @@ fn fresh_replica_join_snapshot_then_live_frames() {
         let reply = dispatch(&mut local_store, &argv);
         let expected = format!("${}\r\n{}\r\n", v.len(), v);
         assert_eq!(
-            reply, expected.as_bytes(),
+            reply,
+            expected.as_bytes(),
             "key {k:?}: got {:?}, expected {:?}",
             String::from_utf8_lossy(&reply),
             expected,
@@ -1005,12 +970,8 @@ fn replica_apply_dispatch_mirrors_primary_store() {
 
     // Issue a handful of mixed writes against the primary.
     let mut writer = std::net::TcpStream::connect(("127.0.0.1", server.port)).unwrap();
-    let pairs: &[(&[u8], &[u8])] = &[
-        (b"alpha", b"one"),
-        (b"beta", b"two"),
-        (b"gamma", b"three"),
-        (b"delta", b"four"),
-    ];
+    let pairs: &[(&[u8], &[u8])] =
+        &[(b"alpha", b"one"), (b"beta", b"two"), (b"gamma", b"three"), (b"delta", b"four")];
     for (k, v) in pairs {
         send_resp(&mut writer, &[b"SET", k, v]);
         let ok = read_line(&mut writer);
@@ -1033,7 +994,8 @@ fn replica_apply_dispatch_mirrors_primary_store() {
         let reply = dispatch(&mut local_store, &argv);
         let expected = format!("${}\r\n{}\r\n", v.len(), String::from_utf8_lossy(v));
         assert_eq!(
-            reply, expected.as_bytes(),
+            reply,
+            expected.as_bytes(),
             "key {:?}: replica GET returned {:?}, expected {:?}",
             String::from_utf8_lossy(k),
             String::from_utf8_lossy(&reply),
@@ -1136,8 +1098,7 @@ fn multi_shard_listener_binds_per_shard_port() {
     for i in 0..server.nshards {
         let port = server.replication_base + i as u16;
         let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
-        s.write_all(&replicate_from(live_generation(port), "0", &format!("replica-{i}")))
-            .unwrap();
+        s.write_all(&replicate_from(live_generation(port), "0", &format!("replica-{i}"))).unwrap();
         let reply = read_to_eof(&mut s);
         let (_, ack_off, rest) = parse_ack(&reply);
         assert_eq!(ack_off, 0);
@@ -1215,10 +1176,12 @@ impl ReplicaServer {
             // out of the covgate log. Both now land in REPLICA_RT_EXIT and
             // the fence-timeout message prints them verbatim.
             let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-                let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(1)).bind([127, 0, 0, 1], port).shards(1)
-                .with_data_dir(dir_path)
-                .with_aof(false)
-                .with_replica_inboxes(vec![receiver]);
+                let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(1))
+                    .bind([127, 0, 0, 1], port)
+                    .shards(1)
+                    .with_data_dir(dir_path)
+                    .with_aof(false)
+                    .with_replica_inboxes(vec![receiver]);
                 rt.run(stop_runtime_thread)
             }));
             let reason = match run {
@@ -1226,9 +1189,10 @@ impl ReplicaServer {
                 Ok(Err(e)) => Some(format!("Runtime::run returned Err({e})")),
                 Err(p) => Some(format!(
                     "Runtime::run PANICKED: {}",
-                    p.downcast_ref::<String>().map(String::as_str).or_else(
-                        || p.downcast_ref::<&str>().copied()
-                    ).unwrap_or("<non-string panic payload>")
+                    p.downcast_ref::<String>()
+                        .map(String::as_str)
+                        .or_else(|| p.downcast_ref::<&str>().copied())
+                        .unwrap_or("<non-string panic payload>")
                 )),
             };
             if let Some(r) = reason {
@@ -1285,16 +1249,22 @@ impl ReplicaServer {
                     match client.next_event() {
                         Some(Ok(ev)) => {
                             let apply = match ev {
-                        kevy_replicate::replica::ReplicaEvent::Ping { .. } => continue,
+                                kevy_replicate::replica::ReplicaEvent::Ping { .. } => continue,
                                 kevy_replicate::replica::ReplicaEvent::SnapshotBegin => {
                                     kevy_rt::ReplicaApply::SnapshotBegin
                                 }
                                 kevy_replicate::replica::ReplicaEvent::SnapshotChunk(b) => {
                                     kevy_rt::ReplicaApply::SnapshotChunk(b)
                                 }
-                                kevy_replicate::replica::ReplicaEvent::SnapshotEnd { ack_offset } => {
+                                kevy_replicate::replica::ReplicaEvent::SnapshotEnd {
+                                    ack_offset,
+                                } => {
                                     from_offset = ack_offset;
-                                    kevy_rt::ReplicaApply::SnapshotEnd { ack_offset, routed: false, gate: None }
+                                    kevy_rt::ReplicaApply::SnapshotEnd {
+                                        ack_offset,
+                                        routed: false,
+                                        gate: None,
+                                    }
                                 }
                                 kevy_replicate::replica::ReplicaEvent::Frame(frame) => {
                                     from_offset = frame.offset.saturating_add(1);
@@ -1456,15 +1426,19 @@ fn server_as_replica_applies_upstream_writes() {
         let header = read_line(&mut reader);
         let expected_header = format!("${}\r\n", v.len());
         assert_eq!(
-            header, expected_header.as_bytes(),
-            "key {:?}: header mismatch", String::from_utf8_lossy(k),
+            header,
+            expected_header.as_bytes(),
+            "key {:?}: header mismatch",
+            String::from_utf8_lossy(k),
         );
         let payload = read_line(&mut reader);
         let mut expected_payload = v.to_vec();
         expected_payload.extend_from_slice(b"\r\n");
         assert_eq!(
-            payload, expected_payload,
-            "key {:?}: payload mismatch", String::from_utf8_lossy(k),
+            payload,
+            expected_payload,
+            "key {:?}: payload mismatch",
+            String::from_utf8_lossy(k),
         );
     }
 
@@ -1487,10 +1461,7 @@ fn read_resp_bulks(s: &mut std::net::TcpStream) -> Vec<Vec<u8>> {
     match head[0] {
         b'+' | b':' => Vec::new(),
         b'$' => {
-            let n: i64 = std::str::from_utf8(&head[1..head.len() - 2])
-                .unwrap()
-                .parse()
-                .unwrap();
+            let n: i64 = std::str::from_utf8(&head[1..head.len() - 2]).unwrap().parse().unwrap();
             if n < 0 {
                 return Vec::new();
             }
@@ -1500,20 +1471,14 @@ fn read_resp_bulks(s: &mut std::net::TcpStream) -> Vec<Vec<u8>> {
             vec![payload]
         }
         b'*' => {
-            let n: i64 = std::str::from_utf8(&head[1..head.len() - 2])
-                .unwrap()
-                .parse()
-                .unwrap();
+            let n: i64 = std::str::from_utf8(&head[1..head.len() - 2]).unwrap().parse().unwrap();
             let mut out = Vec::new();
             for _ in 0..n.max(0) {
                 out.extend(read_resp_bulks(s));
             }
             out
         }
-        other => panic!(
-            "unexpected RESP tag {other:?} in {:?}",
-            String::from_utf8_lossy(&head)
-        ),
+        other => panic!("unexpected RESP tag {other:?} in {:?}", String::from_utf8_lossy(&head)),
     }
 }
 
@@ -1634,14 +1599,14 @@ fn spop_storm_keeps_replica_sets_identical() {
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner)
                             .clone()
-                            .unwrap_or_else(|| "no recorded reason (exit before wrapper?)".to_string())
+                            .unwrap_or_else(
+                                || "no recorded reason (exit before wrapper?)".to_string()
+                            )
                     )
                 },
             ),
         };
-        panic!(
-            "replica never caught up to the post-storm fence within {budget:?}\n{detail}"
-        );
+        panic!("replica never caught up to the post-storm fence within {budget:?}\n{detail}");
     }
 
     // Member-for-member equality on every set. Under verb propagation
@@ -1681,11 +1646,7 @@ fn replicaof_command_dynamically_attaches_to_primary() {
     // Primary on its own Runtime — same setup as the original e2e.
     let primary = Server::start(1);
     let mut writer = std::net::TcpStream::connect(("127.0.0.1", primary.port)).unwrap();
-    let pairs: &[(&[u8], &[u8])] = &[
-        (b"dy-alpha", b"A"),
-        (b"dy-beta",  b"B"),
-        (b"dy-gamma", b"C"),
-    ];
+    let pairs: &[(&[u8], &[u8])] = &[(b"dy-alpha", b"A"), (b"dy-beta", b"B"), (b"dy-gamma", b"C")];
     for (k, v) in pairs {
         send_resp(&mut writer, &[b"SET", k, v]);
         assert_eq!(read_line(&mut writer), b"+OK\r\n");
@@ -1695,23 +1656,24 @@ fn replicaof_command_dynamically_attaches_to_primary() {
     // pair; taking the receivers here wires them into the runtime so
     // the `cmd_replicaof` handler can spawn runners against them.
     let replica_commands = kevy::KevyCommands::sharded(1);
-    let receivers = replica_commands
-        .state()
-        .take_replica_inboxes()
-        .expect("fresh state");
+    let receivers = replica_commands.state().take_replica_inboxes().expect("fresh state");
 
     let replica_port = free_port_block(1) + 1;
     let replica_dir = TmpDir::new("kevy-dynamic-replica");
     let replica_dir_path = replica_dir.path().to_path_buf();
     // SAFETY: see Server::start.
-    unsafe { std::env::set_var("KEVY_IO_URING", "0"); }
+    unsafe {
+        std::env::set_var("KEVY_IO_URING", "0");
+    }
     let replica_stop = Arc::new(AtomicBool::new(false));
     let replica_stop_thread = replica_stop.clone();
     let replica_handle = std::thread::spawn(move || {
-        let rt = kevy_rt::Runtime::builder(replica_commands).bind([127, 0, 0, 1], replica_port).shards(1)
-        .with_data_dir(replica_dir_path)
-        .with_aof(false)
-        .with_replica_inboxes(receivers);
+        let rt = kevy_rt::Runtime::builder(replica_commands)
+            .bind([127, 0, 0, 1], replica_port)
+            .shards(1)
+            .with_data_dir(replica_dir_path)
+            .with_aof(false)
+            .with_replica_inboxes(receivers);
         let _ = rt.run(replica_stop_thread);
     });
     wait_port(replica_port, "server");
@@ -1835,11 +1797,15 @@ impl AttachedReplica {
         let dir = TmpDir::new("kevy-v316-replica");
         let dir_path = dir.path().to_path_buf();
         // SAFETY: see Server::start.
-        unsafe { std::env::set_var("KEVY_IO_URING", "0"); }
+        unsafe {
+            std::env::set_var("KEVY_IO_URING", "0");
+        }
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::builder(commands).bind([127, 0, 0, 1], port).shards(1)
+            let rt = kevy_rt::Runtime::builder(commands)
+                .bind([127, 0, 0, 1], port)
+                .shards(1)
                 .with_data_dir(dir_path)
                 .with_aof(false)
                 .with_replica_inboxes(receivers);
@@ -1928,11 +1894,9 @@ fn spawn_primary_process(replication_base: u16) -> (kevy_chaos::Harness, u16, st
     let cfg = kevy_chaos::HarnessConfig {
         kevy_bin: std::path::PathBuf::from(env!("CARGO_BIN_EXE_kevy")),
         threads: 1,
-        ..kevy_chaos::HarnessConfig::new(dir.clone(), port)
-            .with_fsync("everysec")
-            .with_extra_toml(format!(
-                "[replication]\nrole = \"primary\"\nlisten_port_base = {replication_base}\n"
-            ))
+        ..kevy_chaos::HarnessConfig::new(dir.clone(), port).with_fsync("everysec").with_extra_toml(
+            format!("[replication]\nrole = \"primary\"\nlisten_port_base = {replication_base}\n"),
+        )
     };
     let primary = kevy_chaos::Harness::spawn(cfg).expect("spawn primary kevy");
     (primary, port, dir)
@@ -2023,10 +1987,7 @@ fn repl_wait_read_your_writes_and_future_token_misdirects() {
         assert_eq!(tok.len(), 2);
         let (g, off) = (tok[0].to_string(), tok[1].to_string());
         let _ = r.set_read_timeout(Some(std::time::Duration::from_secs(8)));
-        send_resp(
-            &mut r,
-            &[b"REPL.WAIT", g.as_bytes(), off.as_bytes(), b"TIMEOUT", b"5000"],
-        );
+        send_resp(&mut r, &[b"REPL.WAIT", g.as_bytes(), off.as_bytes(), b"TIMEOUT", b"5000"]);
         let reply = read_line(&mut r);
         assert_eq!(
             reply,
@@ -2047,10 +2008,7 @@ fn repl_wait_read_your_writes_and_future_token_misdirects() {
     let tok = read_int_array(&mut w);
     let (g, off) = (tok[0].to_string(), (tok[1] + 1000).to_string());
     let t0 = std::time::Instant::now();
-    send_resp(
-        &mut r,
-        &[b"REPL.WAIT", g.as_bytes(), off.as_bytes(), b"TIMEOUT", b"300"],
-    );
+    send_resp(&mut r, &[b"REPL.WAIT", g.as_bytes(), off.as_bytes(), b"TIMEOUT", b"300"]);
     let reply = read_line(&mut r);
     assert!(
         reply.starts_with(b"-MISDIRECTED writer is "),
@@ -2066,10 +2024,7 @@ fn repl_wait_read_your_writes_and_future_token_misdirects() {
     let bad_gen = (tok[0] + 7).to_string();
     let off_now = tok[1].to_string();
     let t0 = std::time::Instant::now();
-    send_resp(
-        &mut r,
-        &[b"REPL.WAIT", bad_gen.as_bytes(), off_now.as_bytes(), b"TIMEOUT", b"5000"],
-    );
+    send_resp(&mut r, &[b"REPL.WAIT", bad_gen.as_bytes(), off_now.as_bytes(), b"TIMEOUT", b"5000"]);
     let reply = read_line(&mut r);
     assert!(
         reply.starts_with(b"-MISDIRECTED"),
@@ -2210,7 +2165,6 @@ fn ahead_cursor_ships_snapshot_instead_of_wedging() {
     server.shutdown();
 }
 
-
 /// A multi-key delete must reach a replica.
 ///
 /// The replication push lived on the single-key dispatch path only, so
@@ -2235,7 +2189,9 @@ fn multi_key_delete_reaches_a_replica() {
     let replica_dir = TmpDir::new("kevy-replica-multikey-del");
     let replica_dir_path = replica_dir.path().to_path_buf();
     // SAFETY: see Server::start.
-    unsafe { std::env::set_var("KEVY_IO_URING", "0"); }
+    unsafe {
+        std::env::set_var("KEVY_IO_URING", "0");
+    }
     let replica_stop = Arc::new(AtomicBool::new(false));
     let replica_stop_thread = replica_stop.clone();
     let replica_handle = std::thread::spawn(move || {
@@ -2284,7 +2240,6 @@ fn multi_key_delete_reaches_a_replica() {
     let _ = replica_handle.join();
 }
 
-
 /// A promoted node must serve its keyspace to a fresh replica cursor.
 ///
 /// Promotion fences the offset space: the shard bumps its feed
@@ -2330,7 +2285,9 @@ fn promoted_node_ships_its_keyspace_to_a_fresh_cursor() {
     let dir = TmpDir::new("kevy-promotion-window");
     let dir_path = dir.path().to_path_buf();
     // SAFETY: see Server::start.
-    unsafe { std::env::set_var("KEVY_IO_URING", "0"); }
+    unsafe {
+        std::env::set_var("KEVY_IO_URING", "0");
+    }
     let stop = Arc::new(AtomicBool::new(false));
     let stop_thread = stop.clone();
     let handle = std::thread::spawn(move || {

@@ -23,10 +23,7 @@ use crate::parse::P;
 /// The dialect's skippable / foldable statements, tried before the
 /// refusal table: `None` = not a dialect statement; `Some(Ok(None))`
 /// = fully consumed, nothing to keep.
-pub(crate) fn dump_statement(
-    p: &mut P<'_>,
-    verb: &str,
-) -> Option<Result<Option<Stmt>, SqlError>> {
+pub(crate) fn dump_statement(p: &mut P<'_>, verb: &str) -> Option<Result<Option<Stmt>, SqlError>> {
     match verb {
         "set" => {
             skip_set(p);

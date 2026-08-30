@@ -52,9 +52,8 @@ const PHASE_DURATION_MS: u64 = 1000;
 struct Lcg(u64);
 impl Lcg {
     fn next_u64(&mut self) -> u64 {
-        self.0 = self.0
-            .wrapping_mul(6_364_136_223_846_793_005)
-            .wrapping_add(1_442_695_040_888_963_407);
+        self.0 =
+            self.0.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
         self.0
     }
     fn next_pct(&mut self) -> u8 {
@@ -96,10 +95,7 @@ fn burst_ramp_realistic_workload() {
         let acks_resume = Arc::clone(&acks_resume);
         let errs = Arc::clone(&errs);
         handles.push(thread::spawn(move || {
-            producer_loop(
-                port, p,
-                acks_steady, acks_burst, acks_cool, acks_resume, errs,
-            );
+            producer_loop(port, p, acks_steady, acks_burst, acks_cool, acks_resume, errs);
         }));
     }
     for h in handles {
@@ -113,33 +109,27 @@ fn burst_ramp_realistic_workload() {
     let c = acks_cool.load(Ordering::SeqCst);
     let r = acks_resume.load(Ordering::SeqCst);
     let e = errs.load(Ordering::SeqCst);
-    eprintln!(
-        "burst_ramp: ACKs steady={s} burst={b} cool={c} resume={r} errs={e}"
-    );
+    eprintln!("burst_ramp: ACKs steady={s} burst={b} cool={c} resume={r} errs={e}");
     assert_eq!(e, 0, "non-RESP / parse errors during run = {e}");
     // Burst phase should produce strictly more ACKs than steady (kevy
     // accepts the higher rate). Allow 0.5× slack for jitter.
-    assert!(
-        b * 2 >= s * 3,
-        "burst did not exceed steady by 1.5x: b={b} s={s}"
-    );
+    assert!(b * 2 >= s * 3, "burst did not exceed steady by 1.5x: b={b} s={s}");
 
     // Sleep briefly to let any pending writes drain.
     std::thread::sleep(Duration::from_millis(300));
     let post_mem = read_used_memory(port);
-    eprintln!("burst_ramp: post-burst used_memory = {post_mem} B (4x cap = {})", pre_mem.saturating_mul(4).max(8 * 1024 * 1024));
+    eprintln!(
+        "burst_ramp: post-burst used_memory = {post_mem} B (4x cap = {})",
+        pre_mem.saturating_mul(4).max(8 * 1024 * 1024)
+    );
 
     // Memory must not balloon past 4× pre-burst (with a floor of 8 MiB
     // to avoid spurious failures when pre_mem is tiny).
     let cap = pre_mem.saturating_mul(4).max(8 * 1024 * 1024);
-    assert!(
-        post_mem <= cap,
-        "post-burst memory ballooned: {post_mem} > cap {cap}"
-    );
+    assert!(post_mem <= cap, "post-burst memory ballooned: {post_mem} > cap {cap}");
 
     // Final health PING.
-    let mut ping = TcpStream::connect(format!("127.0.0.1:{port}"))
-        .expect("ping conn");
+    let mut ping = TcpStream::connect(format!("127.0.0.1:{port}")).expect("ping conn");
     let _ = ping.set_read_timeout(Some(Duration::from_secs(2)));
     ping.write_all(b"*1\r\n$4\r\nPING\r\n").unwrap();
     let mut buf = [0u8; 64];
@@ -165,8 +155,7 @@ fn producer_loop(
     acks_resume: Arc<AtomicU64>,
     errs: Arc<AtomicU64>,
 ) {
-    let mut conn = TcpStream::connect(format!("127.0.0.1:{port}"))
-        .expect("producer conn");
+    let mut conn = TcpStream::connect(format!("127.0.0.1:{port}")).expect("producer conn");
     let _ = conn.set_read_timeout(Some(Duration::from_secs(5)));
     let mut rng = Lcg(0xCAFEBABE_DEAD0000 ^ (producer_id as u64));
     let mut reply = vec![0u8; 64 * 1024];
@@ -176,24 +165,48 @@ fn producer_loop(
     }
 
     run_phase(
-        "steady", producer_id, STEADY_RATE,
-        &mut conn, &mut rng, &mut reply, &large_val,
-        &acks_steady, &errs,
+        "steady",
+        producer_id,
+        STEADY_RATE,
+        &mut conn,
+        &mut rng,
+        &mut reply,
+        &large_val,
+        &acks_steady,
+        &errs,
     );
     run_phase(
-        "burst", producer_id, BURST_RATE,
-        &mut conn, &mut rng, &mut reply, &large_val,
-        &acks_burst, &errs,
+        "burst",
+        producer_id,
+        BURST_RATE,
+        &mut conn,
+        &mut rng,
+        &mut reply,
+        &large_val,
+        &acks_burst,
+        &errs,
     );
     run_phase(
-        "cool", producer_id, COOLDOWN_RATE,
-        &mut conn, &mut rng, &mut reply, &large_val,
-        &acks_cool, &errs,
+        "cool",
+        producer_id,
+        COOLDOWN_RATE,
+        &mut conn,
+        &mut rng,
+        &mut reply,
+        &large_val,
+        &acks_cool,
+        &errs,
     );
     run_phase(
-        "resume", producer_id, STEADY_RATE,
-        &mut conn, &mut rng, &mut reply, &large_val,
-        &acks_resume, &errs,
+        "resume",
+        producer_id,
+        STEADY_RATE,
+        &mut conn,
+        &mut rng,
+        &mut reply,
+        &large_val,
+        &acks_resume,
+        &errs,
     );
 }
 
@@ -237,8 +250,18 @@ fn run_phase(
             // HSET 5 fields.
             let key = format!("p{producer_id}:h:{key_idx:05}");
             build_resp(&[
-                b"HSET", key.as_bytes(),
-                b"f1", b"v1", b"f2", b"v2", b"f3", b"v3", b"f4", b"v4", b"f5", b"v5",
+                b"HSET",
+                key.as_bytes(),
+                b"f1",
+                b"v1",
+                b"f2",
+                b"v2",
+                b"f3",
+                b"v3",
+                b"f4",
+                b"v4",
+                b"f5",
+                b"v5",
             ])
         } else if pct < 95 {
             // LPUSH.
@@ -304,9 +327,10 @@ fn read_used_memory(port: u16) -> u64 {
     let text = String::from_utf8_lossy(&buf[..n]);
     for line in text.lines() {
         if let Some(rest) = line.strip_prefix("used_memory:")
-            && let Ok(v) = rest.trim().parse::<u64>() {
-                return v;
-            }
+            && let Ok(v) = rest.trim().parse::<u64>()
+        {
+            return v;
+        }
     }
     0
 }

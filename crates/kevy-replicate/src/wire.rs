@@ -15,8 +15,9 @@ use kevy_resp::{Argv, ArgvView, ProtocolError, parse_command_into};
 // to keep this file under the 500-LOC project ceiling); re-export
 // here so the canonical import path stays `kevy_replicate::wire::*`.
 pub use crate::wire_snapshot::{
-    SNAPSHOT_CHUNK_MAX, SNAPSHOT_LINE_MAX, SnapshotMarker, decode_replconf_ack, decode_snapshot_chunk, encode_ping, encode_replconf_ack,
-    decode_snapshot_marker, encode_snapshot_begin, encode_snapshot_chunk, encode_snapshot_end,
+    SNAPSHOT_CHUNK_MAX, SNAPSHOT_LINE_MAX, SnapshotMarker, decode_replconf_ack,
+    decode_snapshot_chunk, decode_snapshot_marker, encode_ping, encode_replconf_ack,
+    encode_snapshot_begin, encode_snapshot_chunk, encode_snapshot_end,
 };
 
 /// Wire-layer error. Only [`WireError::Truncated`] is recoverable by
@@ -429,8 +430,7 @@ mod tests {
         // changes byte order trips this test.
         let argv = argv_from(&[b"SET", b"foo", b"bar"]);
         let bytes = encode_frame(99, &argv);
-        let expected =
-            b"*2\r\n:99\r\n*3\r\n$3\r\nSET\r\n$3\r\nfoo\r\n$3\r\nbar\r\n";
+        let expected = b"*2\r\n:99\r\n*3\r\n$3\r\nSET\r\n$3\r\nfoo\r\n$3\r\nbar\r\n";
         assert_eq!(bytes, expected);
     }
 }

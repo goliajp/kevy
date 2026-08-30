@@ -45,9 +45,8 @@ const SLOPE_CAP_BYTES_PER_SAMPLE: i64 = 256 * 1024;
 struct Lcg(u64);
 impl Lcg {
     fn next_u64(&mut self) -> u64 {
-        self.0 = self.0
-            .wrapping_mul(6_364_136_223_846_793_005)
-            .wrapping_add(1_442_695_040_888_963_407);
+        self.0 =
+            self.0.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
         self.0
     }
     fn next_pct(&mut self) -> u8 {
@@ -63,10 +62,8 @@ fn soak_long_running_no_leak() {
     let tmp = std::env::temp_dir().join(format!("kevy-chaos-soak-{port}"));
     let _ = std::fs::remove_dir_all(&tmp);
 
-    let soak_secs: u64 = std::env::var("KEVY_SOAK_SECS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(60);
+    let soak_secs: u64 =
+        std::env::var("KEVY_SOAK_SECS").ok().and_then(|s| s.parse().ok()).unwrap_or(60);
     eprintln!("soak: running for {soak_secs} s (override via KEVY_SOAK_SECS)");
 
     let mut cfg = HarnessConfig::new(tmp.clone(), port).with_fsync("everysec");
@@ -120,16 +117,10 @@ fn soak_long_running_no_leak() {
         let n = second.len() as i64;
         let sum_x: i64 = (0..n).sum();
         let sum_y: i64 = second.iter().map(|&v| v as i64).sum();
-        let sum_xy: i64 = second.iter().enumerate()
-            .map(|(i, &v)| (i as i64) * (v as i64))
-            .sum();
+        let sum_xy: i64 = second.iter().enumerate().map(|(i, &v)| (i as i64) * (v as i64)).sum();
         let sum_xx: i64 = (0..n).map(|i| i * i).sum();
         let denom = n * sum_xx - sum_x * sum_x;
-        let slope = if denom == 0 {
-            0
-        } else {
-            (n * sum_xy - sum_x * sum_y) / denom
-        };
+        let slope = if denom == 0 { 0 } else { (n * sum_xy - sum_x * sum_y) / denom };
         eprintln!(
             "soak: second-half memory slope = {slope} B/sample (cap = {} B/sample, samples = {:?})",
             SLOPE_CAP_BYTES_PER_SAMPLE, second
@@ -143,8 +134,7 @@ fn soak_long_running_no_leak() {
     }
 
     // Post-soak PING.
-    let mut ping = TcpStream::connect(format!("127.0.0.1:{port}"))
-        .expect("post-soak conn");
+    let mut ping = TcpStream::connect(format!("127.0.0.1:{port}")).expect("post-soak conn");
     let _ = ping.set_read_timeout(Some(Duration::from_secs(2)));
     ping.write_all(b"*1\r\n$4\r\nPING\r\n").unwrap();
     let mut buf = [0u8; 64];
@@ -249,9 +239,10 @@ fn read_used_memory(port: u16) -> u64 {
     let text = String::from_utf8_lossy(&buf[..n]);
     for line in text.lines() {
         if let Some(rest) = line.strip_prefix("used_memory:")
-            && let Ok(v) = rest.trim().parse::<u64>() {
-                return v;
-            }
+            && let Ok(v) = rest.trim().parse::<u64>()
+        {
+            return v;
+        }
     }
     0
 }

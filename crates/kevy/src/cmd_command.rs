@@ -52,9 +52,7 @@ pub(crate) fn cmd_command<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
 /// `COMMAND DOCS [name…]` body: no names = every verb.
 fn cmd_command_docs<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
     let named: Vec<&VerbMeta> = if args.len() > 2 {
-        (2..args.len())
-            .filter_map(|i| args.get(i).and_then(lookup))
-            .collect()
+        (2..args.len()).filter_map(|i| args.get(i).and_then(lookup)).collect()
     } else {
         VERB_META.iter().collect()
     };

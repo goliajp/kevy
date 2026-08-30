@@ -18,10 +18,18 @@ pub(crate) fn encode_frame(f: &PubsubFrame) -> Vec<u8> {
         PubsubFrame::Pmessage { pattern, channel, payload } => {
             arr(&mut out, &[b"pmessage", pattern, channel, payload]);
         }
-        PubsubFrame::Subscribe { channel, count } => ack(&mut out, b"subscribe", Some(channel), *count),
-        PubsubFrame::Psubscribe { pattern, count } => ack(&mut out, b"psubscribe", Some(pattern), *count),
-        PubsubFrame::Unsubscribe { channel, count } => ack(&mut out, b"unsubscribe", channel.as_deref(), *count),
-        PubsubFrame::Punsubscribe { pattern, count } => ack(&mut out, b"punsubscribe", pattern.as_deref(), *count),
+        PubsubFrame::Subscribe { channel, count } => {
+            ack(&mut out, b"subscribe", Some(channel), *count)
+        }
+        PubsubFrame::Psubscribe { pattern, count } => {
+            ack(&mut out, b"psubscribe", Some(pattern), *count)
+        }
+        PubsubFrame::Unsubscribe { channel, count } => {
+            ack(&mut out, b"unsubscribe", channel.as_deref(), *count)
+        }
+        PubsubFrame::Punsubscribe { pattern, count } => {
+            ack(&mut out, b"punsubscribe", pattern.as_deref(), *count)
+        }
     }
     out
 }

@@ -8,9 +8,8 @@ use core::ptr;
 use crate::ffi::{
     IORING_ACCEPT_MULTISHOT, IORING_FSYNC_DATASYNC, IORING_OP_ACCEPT, IORING_OP_ASYNC_CANCEL,
     IORING_OP_FSYNC, IORING_OP_NOP, IORING_OP_READ, IORING_OP_RECV, IORING_OP_TIMEOUT,
-    IORING_OP_WRITE, IORING_OP_WRITEV,
-    IORING_RECV_MULTISHOT, IOSQE_BUFFER_SELECT, IOSQE_FIXED_FILE, Iovec, SOCK_CLOEXEC,
-    SOCK_NONBLOCK,
+    IORING_OP_WRITE, IORING_OP_WRITEV, IORING_RECV_MULTISHOT, IOSQE_BUFFER_SELECT,
+    IOSQE_FIXED_FILE, Iovec, SOCK_CLOEXEC, SOCK_NONBLOCK,
 };
 use crate::layout::{IoUringSqe, KernelTimespec};
 use crate::ring::IoUring;
@@ -58,10 +57,7 @@ impl IoUring {
         // SAFETY: `idx` is a freshly reserved, in-bounds SQE slot we own alone.
         unsafe {
             let sqe = self.sqes_ptr().add(idx);
-            ptr::write(
-                sqe,
-                IoUringSqe::new(IORING_OP_READ, fd, buf as u64, len, user_data),
-            );
+            ptr::write(sqe, IoUringSqe::new(IORING_OP_READ, fd, buf as u64, len, user_data));
             (*sqe).off = offset;
         }
         true
@@ -110,10 +106,7 @@ impl IoUring {
         // SAFETY: `idx` is a freshly reserved, in-bounds SQE slot we own alone.
         unsafe {
             let sqe = self.sqes_ptr().add(idx);
-            ptr::write(
-                sqe,
-                IoUringSqe::new(IORING_OP_WRITE, fd, buf as u64, len, user_data),
-            );
+            ptr::write(sqe, IoUringSqe::new(IORING_OP_WRITE, fd, buf as u64, len, user_data));
             (*sqe).off = offset;
         }
         true
@@ -229,22 +222,14 @@ impl IoUring {
     /// `IOSQE_FIXED_FILE | IOSQE_BUFFER_SELECT`; the kernel skips its
     /// per-op `fget`/`fput`. Caller must have populated `slot` via
     /// [`crate::IoUring::update_file_slot`].
-    pub fn prep_recv_multishot_fixed(
-        &mut self,
-        slot: u32,
-        bgid: u16,
-        user_data: u64,
-    ) -> bool {
+    pub fn prep_recv_multishot_fixed(&mut self, slot: u32, bgid: u16, user_data: u64) -> bool {
         let Some(idx) = self.reserve() else {
             return false;
         };
         // SAFETY: `idx` is a freshly reserved, in-bounds SQE slot we own alone.
         unsafe {
             let sqe = self.sqes_ptr().add(idx);
-            ptr::write(
-                sqe,
-                IoUringSqe::new(IORING_OP_RECV, slot as i32, 0, 0, user_data),
-            );
+            ptr::write(sqe, IoUringSqe::new(IORING_OP_RECV, slot as i32, 0, 0, user_data));
             (*sqe).ioprio = IORING_RECV_MULTISHOT;
             (*sqe).flags = IOSQE_BUFFER_SELECT | IOSQE_FIXED_FILE;
             (*sqe).buf_index = bgid;
@@ -262,10 +247,7 @@ impl IoUring {
         // SAFETY: `idx` is a freshly reserved, in-bounds SQE slot we own alone.
         unsafe {
             let sqe = self.sqes_ptr().add(idx);
-            ptr::write(
-                sqe,
-                IoUringSqe::new(IORING_OP_ACCEPT, listen_fd, 0, 0, user_data),
-            );
+            ptr::write(sqe, IoUringSqe::new(IORING_OP_ACCEPT, listen_fd, 0, 0, user_data));
             (*sqe).rw_flags = SOCK_NONBLOCK | SOCK_CLOEXEC;
         }
         true
@@ -290,10 +272,7 @@ impl IoUring {
         // SAFETY: `idx` is a freshly reserved, in-bounds SQE slot we own alone.
         unsafe {
             let sqe = self.sqes_ptr().add(idx);
-            ptr::write(
-                sqe,
-                IoUringSqe::new(IORING_OP_ACCEPT, listen_fd, 0, 0, user_data),
-            );
+            ptr::write(sqe, IoUringSqe::new(IORING_OP_ACCEPT, listen_fd, 0, 0, user_data));
             (*sqe).rw_flags = SOCK_NONBLOCK | SOCK_CLOEXEC;
             (*sqe).ioprio = IORING_ACCEPT_MULTISHOT;
         }
@@ -317,10 +296,7 @@ impl IoUring {
             let sqe = self.sqes_ptr().add(idx);
             // addr = timespec ptr, len = 1 (one timespec), off = 0 (pure
             // timeout — no completion-count trigger), rw_flags = 0 (relative).
-            ptr::write(
-                sqe,
-                IoUringSqe::new(IORING_OP_TIMEOUT, -1, ts as u64, 1, user_data),
-            );
+            ptr::write(sqe, IoUringSqe::new(IORING_OP_TIMEOUT, -1, ts as u64, 1, user_data));
         }
         true
     }

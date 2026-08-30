@@ -116,21 +116,16 @@ pub struct MemorySection {
 
 impl Default for MemorySection {
     fn default() -> Self {
-        Self {
-            maxmemory: 0,
-            maxmemory_policy: EvictionPolicy::NoEviction,
-        }
+        Self { maxmemory: 0, maxmemory_policy: EvictionPolicy::NoEviction }
     }
 }
 
 /// `[metrics]` section — Prometheus-format HTTP exposition.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct MetricsSection {
     /// TCP port for the `/metrics` HTTP endpoint. `0` = OFF (default).
     pub listen_port: u16,
 }
-
 
 /// `[audit]` section — append-only audit log of ADMIN-class
 /// commands (`CONFIG SET` / `CONFIG REWRITE` / `DEBUG` / `FLUSHDB` /
@@ -173,10 +168,7 @@ pub struct LogSection {
 
 impl Default for LogSection {
     fn default() -> Self {
-        Self {
-            level: LogLevel::Info,
-            output: LogOutput::Stderr,
-        }
+        Self { level: LogLevel::Info, output: LogOutput::Stderr }
     }
 }
 
@@ -214,12 +206,7 @@ pub struct AdvancedSection {
 
 impl Default for AdvancedSection {
     fn default() -> Self {
-        Self {
-            spin_limit: 256,
-            park_timeout_ms: 50,
-            tick_check_every: 256,
-            ring_capacity: 1024,
-        }
+        Self { spin_limit: 256, park_timeout_ms: 50, tick_check_every: 256, ring_capacity: 1024 }
     }
 }
 
@@ -327,10 +314,7 @@ pub struct LuaSection {
 
 impl Default for LuaSection {
     fn default() -> Self {
-        Self {
-            time_limit_ms: 5000,
-            allow_dialects: Vec::new(),
-        }
+        Self { time_limit_ms: 5000, allow_dialects: Vec::new() }
     }
 }
 
@@ -350,10 +334,7 @@ pub struct SlowlogSection {
 
 impl Default for SlowlogSection {
     fn default() -> Self {
-        Self {
-            slower_than_micros: -1,
-            max_len: 128,
-        }
+        Self { slower_than_micros: -1, max_len: 128 }
     }
 }
 

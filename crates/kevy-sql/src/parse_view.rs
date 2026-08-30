@@ -89,13 +89,10 @@ fn check_from_tail(p: &mut P<'_>) -> Result<(), SqlError> {
         return Err(refuse_join(p, "JOIN"));
     }
     // A bare identifier after the table is an alias.
-    if matches!(p.peek().tok, Tok::Ident(_) | Tok::QIdent(_))
-        && !is_view_tail_kw(p)
-    {
-        return Err(p.refuse(
-            "a table alias",
-            "single-table views reference their columns unqualified",
-        ));
+    if matches!(p.peek().tok, Tok::Ident(_) | Tok::QIdent(_)) && !is_view_tail_kw(p) {
+        return Err(
+            p.refuse("a table alias", "single-table views reference their columns unqualified")
+        );
     }
     Ok(())
 }
@@ -290,8 +287,14 @@ fn parse_comparison(p: &mut P<'_>) -> Result<(PredOp, Bound, Option<Bound>), Sql
 
 const REFUSED_PRED_KWS: &[(&str, &str)] = &[
     ("in", "subset v1 has no IN \u{2014} run one EQ query per member (points on the same index)"),
-    ("like", "pattern scans are refused; declare a text index for token search (docs/text-search.md)"),
-    ("ilike", "pattern scans are refused; declare a text index for token search (docs/text-search.md)"),
+    (
+        "like",
+        "pattern scans are refused; declare a text index for token search (docs/text-search.md)",
+    ),
+    (
+        "ilike",
+        "pattern scans are refused; declare a text index for token search (docs/text-search.md)",
+    ),
     (
         "is",
         "NULL is an absent field, and absent fields leave the index entirely; model presence as a flag column (cookbook \u{a7}7)",

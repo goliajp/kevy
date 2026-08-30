@@ -47,10 +47,7 @@ impl Poller {
     }
 
     fn ctl(&self, op: c_int, fd: i32, read: bool, write: bool) -> io::Result<()> {
-        let mut ev = ffi::EpollEvent {
-            events: Self::mask(read, write),
-            data: fd as u64,
-        };
+        let mut ev = ffi::EpollEvent { events: Self::mask(read, write), data: fd as u64 };
         let r = unsafe { ffi::epoll_ctl(self.epfd, op, fd, &raw mut ev) };
         if r < 0 {
             return Err(io::Error::last_os_error());

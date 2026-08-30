@@ -8,7 +8,6 @@
 //! bounded (per-peer TLS, auth, and region are explicitly out of
 //! charter for the election subsystem).
 
-
 /// `[cluster]` section — single-node cluster mode: keys route by
 /// Redis-cluster slot (CRC16 `{hashtag}` & 16383) and every shard `i`
 /// gets a second, deterministic listener at `port_base + i` that answers
@@ -395,4 +394,3 @@ mod scope_entry_tests {
         }
     }
 }
-

@@ -22,10 +22,7 @@ pub fn waker() -> io::Result<Waker> {
     if unsafe { ffi::pipe(fds.as_mut_ptr()) } < 0 {
         return Err(io::Error::last_os_error());
     }
-    let w = Waker {
-        read_fd: fds[0],
-        write_fd: fds[1],
-    };
+    let w = Waker { read_fd: fds[0], write_fd: fds[1] };
     set_fd_nonblocking(w.read_fd)?;
     set_fd_nonblocking(w.write_fd)?;
     Ok(w)
@@ -60,7 +57,8 @@ impl Waker {
     pub fn drain(&self) {
         let mut buf = [0u8; 64];
         loop {
-            let n = unsafe { ffi::read(self.read_fd, buf.as_mut_ptr().cast::<c_void>(), buf.len()) };
+            let n =
+                unsafe { ffi::read(self.read_fd, buf.as_mut_ptr().cast::<c_void>(), buf.len()) };
             if n <= 0 {
                 break; // EAGAIN / EOF / error — nothing more to drain
             }

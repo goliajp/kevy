@@ -48,10 +48,7 @@ pub(crate) fn sample_round(store: &mut Store, samples: usize, now: u64) -> (u32,
     // the same bucket range twice in a row. (No-quality PRNG needed for
     // sampling, just want to spread starting positions.)
     store.clock_counter = store.clock_counter.wrapping_add(1);
-    let start = (store
-        .clock_counter
-        .wrapping_mul(0x9E37_79B9_7F4A_7C15) as usize)
-        % cap;
+    let start = (store.clock_counter.wrapping_mul(0x9E37_79B9_7F4A_7C15) as usize) % cap;
     let (sampled, victims) = collect_victims(store, samples, now, start);
     let expired = victims.len() as u32;
     for k in &victims {
@@ -62,9 +59,7 @@ pub(crate) fn sample_round(store: &mut Store, samples: usize, now: u64) -> (u32,
     // perspective — surface them under the same counter `MEMORY STATS` /
     // `INFO memory` already exposes.
     if expired > 0 {
-        store.expired_keys_total = store
-            .expired_keys_total
-            .saturating_add(u64::from(expired));
+        store.expired_keys_total = store.expired_keys_total.saturating_add(u64::from(expired));
     }
     (sampled, expired)
 }
@@ -82,12 +77,7 @@ pub(crate) fn sample_round(store: &mut Store, samples: usize, now: u64) -> (u32,
 /// buckets; sparse-TTL keyspaces sample fewer keys per round and rely
 /// on the rotating random start (plus lazy expiry) for coverage —
 /// the same time-boxing trade Redis's activeExpireCycle makes.
-fn collect_victims(
-    store: &Store,
-    samples: usize,
-    now: u64,
-    start: usize,
-) -> (u32, Vec<Vec<u8>>) {
+fn collect_victims(store: &Store, samples: usize, now: u64, start: usize) -> (u32, Vec<Vec<u8>>) {
     let mut victims: Vec<Vec<u8>> = Vec::with_capacity(samples);
     let mut sampled = 0u32;
     let visit_cap = samples.saturating_mul(8);
@@ -135,11 +125,7 @@ impl Store {
         // structure that the task entry mentioned would only beat the
         // current random-sample algorithm at very high TTL fractions,
         // and is left as a future workload-driven follow-up.
-        if samples_per_round == 0
-            || max_rounds == 0
-            || self.map.is_empty()
-            || self.expires == 0
-        {
+        if samples_per_round == 0 || max_rounds == 0 || self.map.is_empty() || self.expires == 0 {
             return ExpireStats::default();
         }
         self.run_expire_rounds(samples_per_round, max_rounds)
@@ -178,11 +164,7 @@ impl Store {
                 break;
             }
         }
-        ExpireStats {
-            sampled: total_sampled,
-            expired: total_expired,
-            rounds,
-        }
+        ExpireStats { sampled: total_sampled, expired: total_expired, rounds }
     }
 
     /// Total keys expired (by lazy reap OR active reaper). Surfaced via

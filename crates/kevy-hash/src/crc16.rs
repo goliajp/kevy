@@ -33,11 +33,7 @@ const fn make_table() -> [u16; 256] {
         let mut crc = (i as u16) << 8;
         let mut bit = 0;
         while bit < 8 {
-            crc = if crc & 0x8000 != 0 {
-                (crc << 1) ^ POLY
-            } else {
-                crc << 1
-            };
+            crc = if crc & 0x8000 != 0 { (crc << 1) ^ POLY } else { crc << 1 };
             bit += 1;
         }
         table[i] = crc;
@@ -159,15 +155,10 @@ mod tests {
     fn slice_by_4_matches_bytewise() {
         // Every length 0..=64 over a churned byte pattern, so all chunk /
         // remainder splits and both crc-folded lookups are exercised.
-        let data: Vec<u8> = (0..64u32)
-            .map(|i| (i.wrapping_mul(167).wrapping_add(13) % 251) as u8)
-            .collect();
+        let data: Vec<u8> =
+            (0..64u32).map(|i| (i.wrapping_mul(167).wrapping_add(13) % 251) as u8).collect();
         for len in 0..=data.len() {
-            assert_eq!(
-                crc16(&data[..len]),
-                crc16_bytewise(&data[..len]),
-                "len={len}"
-            );
+            assert_eq!(crc16(&data[..len]), crc16_bytewise(&data[..len]), "len={len}");
         }
         assert_eq!(crc16(b"key:000000123456"), crc16_bytewise(b"key:000000123456"));
     }
@@ -182,10 +173,7 @@ mod tests {
     #[test]
     fn hashtag_extraction_redis_spec_examples() {
         // {user1000}.following / .followers share the slot of "user1000".
-        assert_eq!(
-            key_hash_slot(b"{user1000}.following"),
-            key_hash_slot(b"{user1000}.followers")
-        );
+        assert_eq!(key_hash_slot(b"{user1000}.following"), key_hash_slot(b"{user1000}.followers"));
         assert_eq!(key_hash_slot(b"{user1000}.following"), key_hash_slot(b"user1000"));
         // Empty {} → whole key is hashed.
         assert_eq!(hashtag(b"foo{}{bar}"), b"foo{}{bar}");

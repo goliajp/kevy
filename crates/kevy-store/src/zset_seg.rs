@@ -81,6 +81,13 @@ impl SegZSetData {
         let smb = SmallBytes::from_slice(member);
         let old = self.by_member.insert(smb.clone(), score);
         if let Some(old_sc) = old {
+            // See ZSetData::insert. Same reasoning, and one cost more: the
+            // path below reaches its segment through Arc::make_mut, so under
+            // a live snapshot an unchanged score deep-clones a segment of up
+            // to ZSEG_CAP entries in order to put back what was in it.
+            if Score(old_sc) == Score(score) {
+                return false;
+            }
             self.remove_ordered(&(Score(old_sc), smb.clone()));
         }
         let key = (Score(score), smb);
@@ -149,10 +156,7 @@ impl SegZSetData {
 
     /// `(member, score)` pairs in ascending `(score, member)` order.
     pub fn ordered(&self) -> impl Iterator<Item = (&[u8], f64)> {
-        self.segs
-            .iter()
-            .flat_map(|t| t.iter())
-            .map(|(s, m)| (m.as_slice(), s.0))
+        self.segs.iter().flat_map(|t| t.iter()).map(|(s, m)| (m.as_slice(), s.0))
     }
 
     /// Like [`Self::ordered`] but starting at ascending `rank` — an
@@ -245,11 +249,7 @@ impl SegZSetData {
     /// (member slots + ×2 heap bytes + rank-tree slots) plus the shells.
     pub(crate) fn weight_as_zset(&self) -> u64 {
         self.by_member.weight_shell_only()
-            + self
-                .by_member
-                .keys()
-                .map(|m| 2 * m.heap_bytes() as u64)
-                .sum::<u64>()
+            + self.by_member.keys().map(|m| 2 * m.heap_bytes() as u64).sum::<u64>()
             + (self.len() as u64).saturating_mul(crate::value::RANKTREE_SLOT_BYTES)
             + (self.segs.len() as u64).saturating_mul(8)
     }
@@ -262,9 +262,6 @@ impl SegZSetData {
     /// Test-only: `(strong_count, len)` per segment tree.
     #[cfg(test)]
     pub(crate) fn seg_stats(&self) -> Vec<(usize, usize)> {
-        self.segs
-            .iter()
-            .map(|t| (Arc::strong_count(t), t.len()))
-            .collect()
+        self.segs.iter().map(|t| (Arc::strong_count(t), t.len())).collect()
     }
 }

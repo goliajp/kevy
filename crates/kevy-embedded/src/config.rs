@@ -428,7 +428,6 @@ impl Config {
         self.reaper_interval = iv;
         self
     }
-
 }
 
 #[cfg(test)]

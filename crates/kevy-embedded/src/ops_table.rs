@@ -56,11 +56,7 @@ impl Store {
         // refusal here, never a panic downstream (dogfood F9).
         let compiled = compile_table(&spec).map_err(KevyError::InvalidInput)?;
         {
-            let g = self
-                .tables
-                .catalog
-                .read()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let g = self.tables.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
             if g.get(&spec.name).is_some() {
                 return Err(KevyError::InvalidInput("table already exists".into()));
             }
@@ -69,11 +65,7 @@ impl Store {
         // catalog — the server admits into a clone and installs once;
         // this is the same all-or-nothing shape.
         {
-            let g = self
-                .indexes
-                .catalog
-                .read()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let g = self.indexes.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
             let mut probe = g.1.clone();
             for ispec in &compiled {
                 probe
@@ -82,11 +74,8 @@ impl Store {
             }
         }
         {
-            let mut g = self
-                .tables
-                .catalog
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut g =
+                self.tables.catalog.write().unwrap_or_else(std::sync::PoisonError::into_inner);
             g.create(spec).map_err(|e| KevyError::InvalidInput(strip_err(&e).into()))?;
         }
         self.persist_table_sidecar();
@@ -110,11 +99,7 @@ impl Store {
     /// ([`Self::table_replace`]).
     pub fn table_ensure(&self, spec: TableSpec) -> KevyResult<TableEnsure> {
         let existing = {
-            let g = self
-                .tables
-                .catalog
-                .read()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let g = self.tables.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
             g.get(&spec.name).cloned()
         };
         match existing {
@@ -123,9 +108,9 @@ impl Store {
                 Ok(TableEnsure::Created)
             }
             Some(cur) if cur.sans_auto() == spec => Ok(TableEnsure::Unchanged),
-            Some(cur) => Err(KevyError::InvalidInput(
-                kevy_index::spec_diff(&cur.sans_auto(), &spec),
-            )),
+            Some(cur) => {
+                Err(KevyError::InvalidInput(kevy_index::spec_diff(&cur.sans_auto(), &spec)))
+            }
         }
     }
 
@@ -145,11 +130,7 @@ impl Store {
     /// indexes; `false` if absent.
     pub fn table_drop(&self, name: &[u8]) -> bool {
         let compiled: Vec<Vec<u8>> = {
-            let g = self
-                .tables
-                .catalog
-                .read()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let g = self.tables.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
             g.get(name)
                 .map(|s| {
                     compile_table(s)
@@ -159,11 +140,8 @@ impl Store {
                 .unwrap_or_default()
         };
         let hit = {
-            let mut g = self
-                .tables
-                .catalog
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut g =
+                self.tables.catalog.write().unwrap_or_else(std::sync::PoisonError::into_inner);
             g.drop_table(name)
         };
         if hit {
@@ -178,11 +156,7 @@ impl Store {
 
     /// Declared tables, declaration order.
     pub fn table_list(&self) -> Vec<TableSpec> {
-        let g = self
-            .tables
-            .catalog
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let g = self.tables.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         g.iter().cloned().collect()
     }
 
@@ -198,7 +172,17 @@ impl Store {
             r.per_index
                 .into_iter()
                 .map(|i| {
-                    (i.name, [i.entries, i.approx_bytes, i.coerce_failures, i.duplicates, i.drift, i.checked])
+                    (
+                        i.name,
+                        [
+                            i.entries,
+                            i.approx_bytes,
+                            i.coerce_failures,
+                            i.duplicates,
+                            i.drift,
+                            i.checked,
+                        ],
+                    )
                 })
                 .collect(),
             [r.spot_rows, r.spot_type_mismatches],
@@ -209,11 +193,7 @@ impl Store {
     /// documented on the field (see [`IndexVerify`]).
     pub fn table_verify_report(&self, name: &[u8]) -> KevyResult<TableVerify> {
         let spec = {
-            let g = self
-                .tables
-                .catalog
-                .read()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let g = self.tables.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
             g.get(name).cloned()
         }
         .ok_or_else(|| KevyError::NotFound("no such table".into()))?;
@@ -261,11 +241,8 @@ impl Store {
             && let Some(cat) = TableCatalog::from_sidecar(&text)
             && !cat.is_empty()
         {
-            let mut g = self
-                .tables
-                .catalog
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut g =
+                self.tables.catalog.write().unwrap_or_else(std::sync::PoisonError::into_inner);
             *g = cat;
         }
     }
@@ -276,11 +253,7 @@ impl Store {
     #[cfg(feature = "persist")]
     pub(crate) fn persist_table_sidecar(&self) {
         let Some(dir) = &self.config.data_dir else { return };
-        let g = self
-            .tables
-            .catalog
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let g = self.tables.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         let tmp = dir.join("table-catalog.meta.tmp");
         if std::fs::write(&tmp, g.to_sidecar()).is_ok() {
             let _ = std::fs::rename(&tmp, dir.join(SIDECAR));
@@ -399,8 +372,7 @@ fn shard_index_counts(
     ispec: &kevy_index::IndexSpec,
     sums: &mut [u64; 10],
 ) {
-    let Some((spec, seg)) = inner.idx_segs.segs.iter().find(|(s, _)| s.name == ispec.name)
-    else {
+    let Some((spec, seg)) = inner.idx_segs.segs.iter().find(|(s, _)| s.name == ispec.name) else {
         return;
     };
     let stats = seg.stats();

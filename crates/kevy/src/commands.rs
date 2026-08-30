@@ -42,8 +42,7 @@ impl Commands for KevyCommands {
     }
 
     fn is_quit<A: ArgvView + ?Sized>(&self, args: &A) -> bool {
-        args.first()
-            .is_some_and(|c| c.eq_ignore_ascii_case(b"QUIT"))
+        args.first().is_some_and(|c| c.eq_ignore_ascii_case(b"QUIT"))
     }
 
     fn on_shard_init(&self, store: &mut Store) {
@@ -112,16 +111,12 @@ impl Commands for KevyCommands {
         // into an instance-wide view (offset sum + per-replica union).
         self.state().obs.publish_repl_view(
             self.shard_ctx().shard_id(),
-            crate::state::ReplShardView {
-                offset: master_repl_offset,
-                replicas: replicas.clone(),
-            },
+            crate::state::ReplShardView { offset: master_repl_offset, replicas: replicas.clone() },
         );
         // The shard zone keeps its own copy for per-shard consumers
         // (the min-replicas health gate reads the answering shard's
         // rows — write gating is per shard-stream by design).
-        self.shard_ctx()
-            .set_replication_view(ops::replication::ReplicationView { replicas });
+        self.shard_ctx().set_replication_view(ops::replication::ReplicationView { replicas });
         // v3-cluster Phase 1.5: feed the offset into kevy-elect so
         // the next heartbeat carries the up-to-date `repl_offset`.
         // No-op when the elector isn't running.
@@ -146,11 +141,7 @@ impl Commands for KevyCommands {
         // reactor's tick check loop forever.
         let cfg = self.state().config();
         let hz = cfg.expiry.hz;
-        if hz == 0 {
-            0
-        } else {
-            (1000 / u64::from(hz)).clamp(1, 10_000)
-        }
+        if hz == 0 { 0 } else { (1000 / u64::from(hz)).clamp(1, 10_000) }
     }
 
     fn on_write(&self, store: &mut Store, key: &[u8]) {
@@ -318,8 +309,7 @@ impl Commands for KevyCommands {
 
     fn on_conn_gauge(&self, live: u64) {
         self.shard_ctx().with_stats_slot(|s| {
-            s.clients_connected
-                .store(live, std::sync::atomic::Ordering::Relaxed);
+            s.clients_connected.store(live, std::sync::atomic::Ordering::Relaxed);
         });
     }
 
@@ -342,11 +332,8 @@ impl Commands for KevyCommands {
         }
         let cfg = self.state().config();
         let hz = cfg.expiry.hz;
-        let tick_ms = if hz == 0 {
-            Some(0)
-        } else {
-            Some((1000u64 / u64::from(hz)).clamp(1, 10_000))
-        };
+        let tick_ms =
+            if hz == 0 { Some(0) } else { Some((1000u64 / u64::from(hz)).clamp(1, 10_000)) };
         kevy_rt::LiveRuntimeConfig {
             appendfsync: Some(map_appendfsync(cfg.persistence.appendfsync)),
             auto_aof_rewrite_pct: Some(cfg.persistence.auto_aof_rewrite_percentage),
@@ -359,10 +346,8 @@ impl Commands for KevyCommands {
             // (notifications OFF) is unreachable in practice and safe
             // if a foreign path ever slips one through.
             notify_flags: Some(
-                kevy_config::parse_notification_flags(
-                    &cfg.notification.notify_keyspace_events,
-                )
-                .unwrap_or_default(),
+                kevy_config::parse_notification_flags(&cfg.notification.notify_keyspace_events)
+                    .unwrap_or_default(),
             ),
             slowlog_slower_than_micros: Some(cfg.slowlog.slower_than_micros),
             slowlog_max_len: Some(cfg.slowlog.max_len),
@@ -427,14 +412,12 @@ impl Commands for KevyCommands {
         let mut buf = [0u8; 32];
         let upper = upper_verb(name, &mut buf);
         let shown = String::from_utf8_lossy(name);
-        let known = std::str::from_utf8(upper)
-            .ok()
-            .and_then(crate::verb_meta::verb_meta);
+        let known = std::str::from_utf8(upper).ok().and_then(crate::verb_meta::verb_meta);
         let Some(meta) = known else {
             return Some(format!("-ERR unknown command '{shown}'\r\n").into_bytes());
         };
         let min_args = i64::from(meta.arity.unsigned_abs());
-        (( args.len() as i64) < min_args).then(|| {
+        ((args.len() as i64) < min_args).then(|| {
             format!("-ERR wrong number of arguments for '{}' command\r\n", meta.name.to_lowercase())
                 .into_bytes()
         })
@@ -467,12 +450,7 @@ impl Commands for KevyCommands {
         cmd_block_serve::block_serve_argv(args, kind, key)
     }
 
-    fn block_restore_argv(
-        &self,
-        store: &mut Store,
-        kind: BlockKind,
-        key: &[u8],
-    ) -> Option<Argv> {
+    fn block_restore_argv(&self, store: &mut Store, kind: BlockKind, key: &[u8]) -> Option<Argv> {
         cmd_block_serve::block_restore_argv(store, kind, key)
     }
 

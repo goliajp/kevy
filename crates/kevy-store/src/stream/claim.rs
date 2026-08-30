@@ -2,12 +2,12 @@
 //! both files stay under the project's ≤500-LOC rule. Owns the
 //! `AutoclaimResult` return type alongside the methods that produce it.
 
-#[cfg(not(feature = "std"))]
-use crate::nostd_prelude::*;
 use super::group::{ConsumerGroup, ensure_consumer};
 use super::{EntryBatch, PelEntry, StreamData, StreamId, XClaimOpts};
-use crate::value::SmallBytes;
 use crate::StoreError;
+#[cfg(not(feature = "std"))]
+use crate::nostd_prelude::*;
+use crate::value::SmallBytes;
 
 /// Snapshot of `XAUTOCLAIM` work in progress: cursor for the next
 /// call, IDs successfully transferred, and IDs skipped because the
@@ -86,9 +86,7 @@ impl StreamData {
                 .map(|(id, _)| *id)
                 .collect()
         };
-        let next_cursor = candidates
-            .last()
-            .map_or(StreamId::MIN, |id| id.next());
+        let next_cursor = candidates.last().map_or(StreamId::MIN, |id| id.next());
         let claimed = self.claim(group, new_owner, &candidates, &opts, now_ms)?;
         let mut deleted = Vec::new();
         for id in &candidates {
@@ -105,12 +103,9 @@ impl StreamData {
     pub fn payloads_for(&self, ids: &[StreamId]) -> EntryBatch {
         ids.iter()
             .filter_map(|id| {
-                self.entries.get(id).map(|fv| {
-                    (
-                        *id,
-                        fv.iter().map(|(f, v)| (f.to_vec(), v.to_vec())).collect(),
-                    )
-                })
+                self.entries
+                    .get(id)
+                    .map(|fv| (*id, fv.iter().map(|(f, v)| (f.to_vec(), v.to_vec())).collect()))
             })
             .collect()
     }
@@ -156,11 +151,7 @@ fn claim_one(
     });
     let prev = g.pel.insert(
         id,
-        PelEntry {
-            consumer: new_owner.clone(),
-            delivery_time_ms: new_dt,
-            delivery_count: new_dc,
-        },
+        PelEntry { consumer: new_owner.clone(), delivery_time_ms: new_dt, delivery_count: new_dc },
     );
     transfer_ownership_counts(g, prev.as_ref(), new_owner);
     true

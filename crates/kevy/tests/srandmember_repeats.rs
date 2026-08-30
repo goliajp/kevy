@@ -17,10 +17,7 @@ fn srandmember_negative_count_allows_repeats() {
     assert_eq!(got.len(), 20, "a negative count returns exactly |count|");
     assert_eq!(s.scard(b"s").expect("scard"), 3);
     let uniq: std::collections::HashSet<_> = got.iter().collect();
-    assert!(
-        uniq.len() <= 3,
-        "cannot draw more than 3 distinct members from a 3-member set"
-    );
+    assert!(uniq.len() <= 3, "cannot draw more than 3 distinct members from a 3-member set");
     // 20 draws from 3 members: the odds of no repeat are zero.
     assert!(uniq.len() < got.len(), "repetition never happened");
 }
@@ -28,9 +25,5 @@ fn srandmember_negative_count_allows_repeats() {
 #[test]
 fn a_missing_key_is_empty_not_an_error() {
     let mut s = Store::new();
-    assert!(
-        s.srandmember_with_repeats(b"nope", 3)
-            .expect("missing key")
-            .is_empty()
-    );
+    assert!(s.srandmember_with_repeats(b"nope", 3).expect("missing key").is_empty());
 }

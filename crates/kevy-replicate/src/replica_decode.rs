@@ -57,9 +57,7 @@ impl ReplicaClient {
         match first {
             b'+' => self.try_decode_snapshot_marker(),
             b'$' if self.in_snapshot => self.try_decode_snapshot_chunk(),
-            b'*' if self.in_snapshot => {
-                Some(Err(ReplicaError::UnexpectedInSnapshot))
-            }
+            b'*' if self.in_snapshot => Some(Err(ReplicaError::UnexpectedInSnapshot)),
             b'*' => self.try_decode_live_frame(),
             _ => Some(Err(ReplicaError::Frame(WireError::BadEnvelope))),
         }
@@ -127,7 +125,9 @@ impl ReplicaClient {
 #[cfg(test)]
 mod tests {
     use crate::replica::{ReplicaClient, ReplicaError, ReplicaEvent};
-    use crate::wire::{encode_frame, encode_snapshot_begin, encode_snapshot_chunk, encode_snapshot_end};
+    use crate::wire::{
+        encode_frame, encode_snapshot_begin, encode_snapshot_chunk, encode_snapshot_end,
+    };
     use kevy_resp::Argv;
     use std::io::Write;
     use std::net::{TcpListener, TcpStream};
@@ -203,10 +203,7 @@ mod tests {
         let mut client = ReplicaClient::from_socket_for_test(cli, 0);
         assert!(matches!(client.next_event(), Some(Ok(ReplicaEvent::SnapshotBegin))));
         assert!(matches!(client.next_event(), Some(Ok(ReplicaEvent::SnapshotChunk(_)))));
-        assert!(matches!(
-            client.next_event(),
-            Some(Err(ReplicaError::UnexpectedInSnapshot))
-        ));
+        assert!(matches!(client.next_event(), Some(Err(ReplicaError::UnexpectedInSnapshot))));
     }
 
     #[test]
@@ -218,10 +215,7 @@ mod tests {
             drop(srv);
         });
         let mut client = ReplicaClient::from_socket_for_test(cli, 0);
-        assert!(matches!(
-            client.next_frame(),
-            Some(Err(ReplicaError::SnapshotInProgress))
-        ));
+        assert!(matches!(client.next_frame(), Some(Err(ReplicaError::SnapshotInProgress))));
     }
 
     #[test]

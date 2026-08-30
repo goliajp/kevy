@@ -27,7 +27,8 @@ fn atomic_all_sees_each_keys_writes_across_shards() {
         assert_eq!(tx.get(b"k0")?, Some(b"v0".to_vec()));
         assert_eq!(tx.get(b"k7")?, Some(b"v7".to_vec()));
         Ok::<(), crate::KevyError>(())
-    }).unwrap();
+    })
+    .unwrap();
     for i in 0..8 {
         let key = format!("k{i}");
         let val = format!("v{i}");
@@ -49,7 +50,8 @@ fn atomic_all_rmw_across_shards() {
         tx.set(b"counter:a", (a + b).to_string().as_bytes());
         tx.set(b"counter:b", (b - a).to_string().as_bytes());
         Ok::<(), crate::KevyError>(())
-    }).unwrap();
+    })
+    .unwrap();
     assert_eq!(s.get(b"counter:a").unwrap(), Some(b"30".to_vec()));
     assert_eq!(s.get(b"counter:b").unwrap(), Some(b"10".to_vec()));
 }
@@ -99,7 +101,8 @@ fn atomic_all_works_on_single_shard_config() {
         tx.set(b"a", b"1");
         tx.set(b"b", b"2");
         Ok::<(), crate::KevyError>(())
-    }).unwrap();
+    })
+    .unwrap();
     assert_eq!(s.get(b"a").unwrap(), Some(b"1".to_vec()));
     assert_eq!(s.get(b"b").unwrap(), Some(b"2".to_vec()));
 }

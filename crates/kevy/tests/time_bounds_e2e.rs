@@ -29,8 +29,7 @@ impl Server {
         let mut cfg = kevy_config::Config::default();
         cfg.server.port = port;
         cfg.server.threads = 1;
-        let state =
-            Arc::new(kevy::RuntimeState::new(Arc::new(cfg), dir.clone(), 1).unwrap());
+        let state = Arc::new(kevy::RuntimeState::new(Arc::new(cfg), dir.clone(), 1).unwrap());
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         let dir_thread = dir.clone();
@@ -94,15 +93,34 @@ fn at_expressions_answer_like_their_hand_computed_bounds() {
     // A table whose `at` is epoch SECONDS around the real now — the
     // grammar resolves against the server clock, so the rows must
     // live where @now can see them.
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()
+        as i64;
     let declare: &[&[u8]] = &[
-        b"TABLE.DECLARE", b"ev", b"PREFIX", b"ev:", b"PK", b"id",
-        b"COLUMN", b"id", b"str", b"COLUMN", b"at", b"i64", b"COLUMN", b"tag", b"str",
-        b"INDEX", b"at", b"range", b"VALUES", b"at", b"tag",
-        b"ORDERPATH", b"recent", b"ON", b"at",
+        b"TABLE.DECLARE",
+        b"ev",
+        b"PREFIX",
+        b"ev:",
+        b"PK",
+        b"id",
+        b"COLUMN",
+        b"id",
+        b"str",
+        b"COLUMN",
+        b"at",
+        b"i64",
+        b"COLUMN",
+        b"tag",
+        b"str",
+        b"INDEX",
+        b"at",
+        b"range",
+        b"VALUES",
+        b"at",
+        b"tag",
+        b"ORDERPATH",
+        b"recent",
+        b"ON",
+        b"at",
     ];
     assert!(send(&mut c, declare).starts_with("+OK"), "declare");
     // 20 rows, one per hour into the past: at = now - i*3600.
@@ -110,8 +128,10 @@ fn at_expressions_answer_like_their_hand_computed_bounds() {
         let key = format!("ev:{i}");
         let at = (now - i * 3600).to_string();
         let tag = if i % 2 == 0 { &b"@now"[..] } else { b"plain" };
-        let r = send(&mut c, &[b"HSET", key.as_bytes(), b"id", key.as_bytes(),
-            b"at", at.as_bytes(), b"tag", tag]);
+        let r = send(
+            &mut c,
+            &[b"HSET", key.as_bytes(), b"id", key.as_bytes(), b"at", at.as_bytes(), b"tag", tag],
+        );
         assert!(r.starts_with(":"), "HSET {key}: {r}");
     }
 
@@ -144,14 +164,58 @@ fn at_expressions_answer_like_their_hand_computed_bounds() {
             &[b"IDX.COUNT", b"ev.at", b"RANGE", lo6h.as_bytes(), hi.as_bytes()],
         ),
         (
-            &[b"IDX.QUERY", b"ev.recent", b"WHERE", b"RANGE", b"at", b"@now-23400s", b"@now+1800s", b"LIMIT", b"50"],
-            &[b"IDX.QUERY", b"ev.recent", b"WHERE", b"RANGE", b"at", lo6h.as_bytes(), hi.as_bytes(), b"LIMIT", b"50"],
+            &[
+                b"IDX.QUERY",
+                b"ev.recent",
+                b"WHERE",
+                b"RANGE",
+                b"at",
+                b"@now-23400s",
+                b"@now+1800s",
+                b"LIMIT",
+                b"50",
+            ],
+            &[
+                b"IDX.QUERY",
+                b"ev.recent",
+                b"WHERE",
+                b"RANGE",
+                b"at",
+                lo6h.as_bytes(),
+                hi.as_bytes(),
+                b"LIMIT",
+                b"50",
+            ],
         ),
         (
-            &[b"IDX.QUERY", b"ev.at", b"RANGE", b"-9000000000000000000", b"9000000000000000000",
-              b"LIMIT", b"50", b"FILTER", b"at", b"RANGE", b"@now-23400s", b"@now+1800s"],
-            &[b"IDX.QUERY", b"ev.at", b"RANGE", b"-9000000000000000000", b"9000000000000000000",
-              b"LIMIT", b"50", b"FILTER", b"at", b"RANGE", lo6h.as_bytes(), hi.as_bytes()],
+            &[
+                b"IDX.QUERY",
+                b"ev.at",
+                b"RANGE",
+                b"-9000000000000000000",
+                b"9000000000000000000",
+                b"LIMIT",
+                b"50",
+                b"FILTER",
+                b"at",
+                b"RANGE",
+                b"@now-23400s",
+                b"@now+1800s",
+            ],
+            &[
+                b"IDX.QUERY",
+                b"ev.at",
+                b"RANGE",
+                b"-9000000000000000000",
+                b"9000000000000000000",
+                b"LIMIT",
+                b"50",
+                b"FILTER",
+                b"at",
+                b"RANGE",
+                lo6h.as_bytes(),
+                hi.as_bytes(),
+            ],
         ),
     ];
     for (at_form, hand_form) in pairs {
@@ -166,18 +230,28 @@ fn at_expressions_answer_like_their_hand_computed_bounds() {
         ":7\r\n"
     );
     // Calendar literals parse (bounds far in the past/future).
-    let r = send(&mut c, &[b"IDX.COUNT", b"ev.at", b"RANGE", b"@2020-01-01", b"@2100-01-01T00:00:00"]);
+    let r =
+        send(&mut c, &[b"IDX.COUNT", b"ev.at", b"RANGE", b"@2020-01-01", b"@2100-01-01T00:00:00"]);
     assert_eq!(r, ":20\r\n", "literal bounds: {r}");
     // Month arithmetic reaches back too.
-    assert_eq!(
-        send(&mut c, &[b"IDX.COUNT", b"ev.at", b"RANGE", b"@now-1mo", b"@now"]),
-        ":20\r\n"
-    );
+    assert_eq!(send(&mut c, &[b"IDX.COUNT", b"ev.at", b"RANGE", b"@now-1mo", b"@now"]), ":20\r\n");
 
     // A str field holding a literal "@now" is DATA: the EQ value
     // passes through untouched and matches the ten rows carrying it.
-    let r = send(&mut c, &[b"IDX.COUNT", b"ev.at", b"RANGE", b"-9000000000000000000",
-        b"9000000000000000000", b"FILTER", b"tag", b"EQ", b"@now"]);
+    let r = send(
+        &mut c,
+        &[
+            b"IDX.COUNT",
+            b"ev.at",
+            b"RANGE",
+            b"-9000000000000000000",
+            b"9000000000000000000",
+            b"FILTER",
+            b"tag",
+            b"EQ",
+            b"@now",
+        ],
+    );
     assert_eq!(r, ":10\r\n", "str @ value must stay data: {r}");
 
     // Malformed expressions refuse by name, never match-nothing.

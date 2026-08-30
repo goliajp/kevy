@@ -79,22 +79,23 @@ impl Store {
         let (scope, tests) = self.resolve_clauses(name, opts.scope, opts.filters)?;
         let sorted = self.sort_field(name, opts.sort)?;
         let fkeys = self.facet_keys(name, opts.facets)?;
-        let fac: Vec<kevy_text::Facet> =
-            fkeys.iter().map(|(field, k)| kevy_text::Facet { field: *field, key: k.as_ref() }).collect();
+        let fac: Vec<kevy_text::Facet> = fkeys
+            .iter()
+            .map(|(field, k)| kevy_text::Facet { field: *field, key: k.as_ref() })
+            .collect();
         let grouped = self.value_field("DISTINCT", name, opts.distinct)?;
         let dkey = grouped.map(|(_, ty)| move |raw: &[u8]| kevy_index::order_key(ty, raw));
-        let distinct = grouped
-            .zip(dkey.as_ref())
-            .map(|((field, _), k)| kevy_text::Distinct { field, key: k });
+        let distinct =
+            grouped.zip(dkey.as_ref()).map(|((field, _), k)| kevy_text::Distinct { field, key: k });
         let key = sorted.map(|(_, _, ty)| move |raw: &[u8]| kevy_index::order_key(ty, raw));
-        let sort = sorted
-            .zip(key.as_ref())
-            .map(|((field, desc, _), k)| kevy_text::Sort { field, desc, key: k });
+        let sort = sorted.zip(key.as_ref()).map(|((field, desc, _), k)| kevy_text::Sort {
+            field,
+            desc,
+            key: k,
+        });
         let boxed = box_tests(tests);
-        let filter: Vec<kevy_text::Filter> = boxed
-            .iter()
-            .map(|(f, t)| kevy_text::Filter { field: *f, test: t.as_ref() })
-            .collect();
+        let filter: Vec<kevy_text::Filter> =
+            boxed.iter().map(|(f, t)| kevy_text::Filter { field: *f, test: t.as_ref() }).collect();
         let stats = self.text_corpus_stats_in(name, query, opts.typo, &scope)?;
         let q = kevy_text::QueryOpts {
             stats: Some(&stats),
@@ -146,8 +147,7 @@ impl Store {
                 .ok_or_else(|| unknown_field("IN", want, "index", &names()))?;
             positions.push(i);
         }
-        let tests =
-            filters.iter().map(|f| value_test(spec, f)).collect::<KevyResult<Vec<_>>>()?;
+        let tests = filters.iter().map(|f| value_test(spec, f)).collect::<KevyResult<Vec<_>>>()?;
         Ok((positions, tests))
     }
 }
@@ -170,7 +170,6 @@ fn box_tests(tests: Vec<(usize, kevy_index::ValueTest)>) -> Vec<(usize, ValuePre
         })
         .collect()
 }
-
 
 impl Store {
     /// Every shard's page for this query, unmerged, with the facet
@@ -198,22 +197,24 @@ impl Store {
                 // `matches_query_with` parses quoted phrases out of the
                 // raw query text; with none it is the ordinary term query.
                 let r = ts.matches_query_faceted(query, fetch, q, facets);
-                for m in r.hits {
-                    let hl = highlight
-                        .map_or_else(Vec::new, |w| hit_highlight(ts, spec, &m.key, query, w));
-                    all.push((m.key, m.score, hl));
-                }
-                for (into, from) in buckets.iter_mut().zip(r.facets) {
-                    fold_raw(into, from);
-                }
+                absorb_live(r, ts, spec, query, highlight, &mut all, &mut buckets);
             }
             // The shard's frozen buckets join the union like one more
             // ranked contributor — the origin merge below re-orders,
             // re-collapses and truncates the lot.
             #[cfg(not(target_arch = "wasm32"))]
             gather_cold(
-                inner, name, query, fetch, stats, &q, facets, highlight, &mut all,
-                &mut buckets, &mut cold_vals,
+                inner,
+                name,
+                query,
+                fetch,
+                stats,
+                &q,
+                facets,
+                highlight,
+                &mut all,
+                &mut buckets,
+                &mut cold_vals,
             );
             #[cfg(target_arch = "wasm32")]
             let _ = stats;
@@ -285,11 +286,7 @@ impl Store {
     /// encoding of its declared type — the identity buckets are grouped
     /// by. Returned rather than built inline because the borrowed
     /// `Facet` list points at these closures.
-    fn facet_keys(
-        &self,
-        name: &[u8],
-        facets: &[Vec<u8>],
-    ) -> KevyResult<Vec<FacetKey>> {
+    fn facet_keys(&self, name: &[u8], facets: &[Vec<u8>]) -> KevyResult<Vec<FacetKey>> {
         Ok(self
             .facet_fields(name, facets)?
             .into_iter()
@@ -397,12 +394,7 @@ fn gather_cold(
         facets,
         fetch,
     });
-    let spec = inner
-        .idx_segs
-        .text
-        .iter()
-        .find(|(s, _)| s.name == name)
-        .map(|(s, _)| s.clone());
+    let spec = inner.idx_segs.text.iter().find(|(s, _)| s.name == name).map(|(s, _)| s.clone());
     for h in page.hits {
         let hl = highlight.map_or_else(Vec::new, |w| {
             spec.as_ref().map_or_else(Vec::new, |sp| {
@@ -461,6 +453,27 @@ fn finish_buckets(buckets: Vec<Vec<RawBucket>>) -> Vec<FacetCounts> {
         .collect()
 }
 
+/// Fold one live segment's answer into the running union: each hit with its
+/// highlight spans, each facet's raw buckets into the matching accumulator.
+///
+/// Split from `gather_hits` for the 50-line rule.
+fn absorb_live(
+    r: kevy_text::FacetedMatches,
+    ts: &kevy_text::TextSegment,
+    spec: &IndexSpec,
+    query: &[u8],
+    highlight: Option<&[Vec<u8>]>,
+    all: &mut Vec<(Vec<u8>, f64, Vec<FieldSpans>)>,
+    buckets: &mut [Vec<RawBucket>],
+) {
+    for m in r.hits {
+        let hl = highlight.map_or_else(Vec::new, |w| hit_highlight(ts, spec, &m.key, query, w));
+        all.push((m.key, m.score, hl));
+    }
+    for (into, from) in buckets.iter_mut().zip(r.facets) {
+        fold_raw(into, from);
+    }
+}
 
 /// One hit's highlight spans as `(field name, [(start, end)])`, filtered
 /// to the requested fields (`want` empty = every field with a match).

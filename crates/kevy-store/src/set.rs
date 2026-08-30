@@ -19,10 +19,7 @@ impl Store {
 
     /// Borrow the value at `key` for mutation. Returns `None` if the key
     /// is absent (and the caller creates) or `WrongType` on a non-set.
-    fn set_value_mut(
-        &mut self,
-        key: &[u8],
-    ) -> Result<Option<&mut Value>, StoreError> {
+    fn set_value_mut(&mut self, key: &[u8]) -> Result<Option<&mut Value>, StoreError> {
         match self.live_entry_mut(key) {
             None => Ok(None),
             Some(e) => match &e.value {
@@ -47,11 +44,7 @@ impl Store {
     }
 
     /// `SADD` — returns the count of newly-added members.
-    pub fn sadd(
-        &mut self,
-        key: &[u8],
-        members: &[&[u8]],
-    ) -> Result<usize, StoreError> {
+    pub fn sadd(&mut self, key: &[u8], members: &[&[u8]]) -> Result<usize, StoreError> {
         if members.is_empty() {
             return Ok(0);
         }
@@ -93,11 +86,7 @@ impl Store {
                 let added = promote_flat_set_to_seg(v, m);
                 self.reweigh_entry(key);
                 // Reweighed from scratch — swallow the per-member delta.
-                if added {
-                    Ok(SaddOutcome::AddedHeap(0))
-                } else {
-                    Ok(SaddOutcome::AlreadyPresent)
-                }
+                if added { Ok(SaddOutcome::AddedHeap(0)) } else { Ok(SaddOutcome::AlreadyPresent) }
             }
             Value::Set(s) => {
                 let smb = SmallBytes::from_slice(m);
@@ -141,11 +130,7 @@ impl Store {
     }
 
     /// `SREM` — returns the count removed (deleting an emptied key).
-    pub fn srem(
-        &mut self,
-        key: &[u8],
-        members: &[&[u8]],
-    ) -> Result<usize, StoreError> {
+    pub fn srem(&mut self, key: &[u8], members: &[&[u8]]) -> Result<usize, StoreError> {
         let (removed, delta) = {
             let mut r = 0usize;
             let mut d: i64 = 0;
@@ -223,7 +208,6 @@ impl Store {
     }
 }
 
-
 /// Inline set out of room: promote to KevySet, then insert the
 /// spilling member. Caller reweighs the entry.
 fn promote_inline_set_and_add(v: &mut Value, m: &[u8]) -> SaddOutcome {
@@ -234,11 +218,7 @@ fn promote_inline_set_and_add(v: &mut Value, m: &[u8]) -> SaddOutcome {
     let inserted = promoted.insert(smb);
     debug_assert!(inserted, "promote re-inserts existing inline");
     *v = Value::Set(Arc::new(promoted));
-    if inserted {
-        SaddOutcome::AddedHeap(w)
-    } else {
-        SaddOutcome::AlreadyPresent
-    }
+    if inserted { SaddOutcome::AddedHeap(w) } else { SaddOutcome::AlreadyPresent }
 }
 
 /// Flat set at the promotion threshold: re-bucket, then add `m`.
@@ -262,10 +242,8 @@ fn flat_spop_draws(set_mut: &mut SetData, draws: &[u64], count: usize) -> (Vec<V
         if set_mut.is_empty() {
             break;
         }
-        let Some(m) = set_mut
-            .iter_from_slot(*slot as usize)
-            .next()
-            .map(kevy_bytes::SmallBytes::to_vec)
+        let Some(m) =
+            set_mut.iter_from_slot(*slot as usize).next().map(kevy_bytes::SmallBytes::to_vec)
         else {
             break;
         };

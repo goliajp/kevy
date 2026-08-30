@@ -8,8 +8,12 @@
 //! over the verbs it implements, delegates to a `cmd::*` helper or a
 //! direct `store::*` call, and returns whether the verb was handled.
 
+use crate::cmd::{
+    ERR_NOT_INT, arg_f64, arg_i64, cmd_blpop, cmd_hset, cmd_pop, cmd_zrange, cmd_zrangebyscore,
+    cmd_zrevrange, emit_bulk_array, emit_int_result, fmt_score, parse_score_bound, rest_borrowed,
+    store_err, wrong_args,
+};
 use crate::cmd_zadd::cmd_zadd;
-use crate::cmd::{cmd_hset, wrong_args, emit_int_result, store_err, rest_borrowed, arg_i64, ERR_NOT_INT, emit_bulk_array, cmd_pop, cmd_blpop, fmt_score, arg_f64, cmd_zrange, cmd_zrevrange, cmd_zrangebyscore, parse_score_bound};
 use crate::dispatch_collections_v127::{
     cmd_bzpopmin, cmd_hscan, cmd_lpos, cmd_sscan, cmd_zpopmin, cmd_zpopmin_below,
     cmd_zrevrangebyscore, cmd_zscan,
@@ -46,10 +50,8 @@ pub(crate) fn dispatch_hash<A: ArgvView + ?Sized>(
             if args.len() < 4 || !args.len().is_multiple_of(2) {
                 wrong_args(out, "hmset");
             } else {
-                let pairs: Vec<(&[u8], &[u8])> = (2..args.len())
-                    .step_by(2)
-                    .map(|i| (&args[i], &args[i + 1]))
-                    .collect();
+                let pairs: Vec<(&[u8], &[u8])> =
+                    (2..args.len()).step_by(2).map(|i| (&args[i], &args[i + 1])).collect();
                 match store.hset(&args[1], &pairs) {
                     Ok(_) => encode_simple_string(out, "OK"),
                     Err(e) => store_err(out, e),
@@ -58,10 +60,7 @@ pub(crate) fn dispatch_hash<A: ArgvView + ?Sized>(
         }
         b"HSETNX" => {
             if args.len() == 4 {
-                emit_int_result(
-                    store.hsetnx(&args[1], &args[2], &args[3]).map(i64::from),
-                    out,
-                );
+                emit_int_result(store.hsetnx(&args[1], &args[2], &args[3]).map(i64::from), out);
             } else {
                 wrong_args(out, "hsetnx");
             }
@@ -82,9 +81,7 @@ pub(crate) fn dispatch_hash<A: ArgvView + ?Sized>(
                 wrong_args(out, "hdel");
             } else {
                 emit_int_result(
-                    store
-                        .hdel(&args[1], &rest_borrowed(args, 2))
-                        .map(|n| n as i64),
+                    store.hdel(&args[1], &rest_borrowed(args, 2)).map(|n| n as i64),
                     out,
                 );
             }
@@ -183,9 +180,7 @@ pub(crate) fn dispatch_list<A: ArgvView + ?Sized>(
                 wrong_args(out, "lpush");
             } else {
                 emit_int_result(
-                    store
-                        .lpush(&args[1], &rest_borrowed(args, 2))
-                        .map(|n| n as i64),
+                    store.lpush(&args[1], &rest_borrowed(args, 2)).map(|n| n as i64),
                     out,
                 );
             }
@@ -195,9 +190,7 @@ pub(crate) fn dispatch_list<A: ArgvView + ?Sized>(
                 wrong_args(out, "rpush");
             } else {
                 emit_int_result(
-                    store
-                        .rpush(&args[1], &rest_borrowed(args, 2))
-                        .map(|n| n as i64),
+                    store.rpush(&args[1], &rest_borrowed(args, 2)).map(|n| n as i64),
                     out,
                 );
             }
@@ -391,9 +384,7 @@ pub(crate) fn dispatch_zset<A: ArgvView + ?Sized>(
                 wrong_args(out, "zrem");
             } else {
                 emit_int_result(
-                    store
-                        .zrem(&args[1], &rest_borrowed(args, 2))
-                        .map(|n| n as i64),
+                    store.zrem(&args[1], &rest_borrowed(args, 2)).map(|n| n as i64),
                     out,
                 );
             }
@@ -451,10 +442,7 @@ pub(crate) fn dispatch_zset<A: ArgvView + ?Sized>(
             if args.len() != 4 {
                 wrong_args(out, "zremrangebyrank");
             } else if let (Some(s), Some(e)) = (arg_i64(&args[2]), arg_i64(&args[3])) {
-                emit_int_result(
-                    store.zrem_range_by_rank(&args[1], s, e).map(|n| n as i64),
-                    out,
-                );
+                emit_int_result(store.zrem_range_by_rank(&args[1], s, e).map(|n| n as i64), out);
             } else {
                 encode_error(out, ERR_NOT_INT);
             }
@@ -466,9 +454,7 @@ pub(crate) fn dispatch_zset<A: ArgvView + ?Sized>(
                 (parse_score_bound(&args[2]), parse_score_bound(&args[3]))
             {
                 emit_int_result(
-                    store
-                        .zrem_range_by_score(&args[1], min, max)
-                        .map(|n| n as i64),
+                    store.zrem_range_by_score(&args[1], min, max).map(|n| n as i64),
                     out,
                 );
             } else {

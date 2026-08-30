@@ -37,11 +37,7 @@ fn zadd(store: &mut Store, key: &[u8], pairs: &[(&[u8], &[u8])]) {
 #[test]
 fn zpopmin_returns_lowest_member_and_score() {
     let mut store = Store::new();
-    zadd(
-        &mut store,
-        b"z",
-        &[(b"3", b"c"), (b"1", b"a"), (b"2", b"b")],
-    );
+    zadd(&mut store, b"z", &[(b"3", b"c"), (b"1", b"a"), (b"2", b"b")]);
     let r = dispatch(&mut store, &argv(&[b"ZPOPMIN", b"z"]));
     // *2  $1 a  $1 1
     assert_eq!(r, b"*2\r\n$1\r\na\r\n$1\r\n1\r\n");
@@ -52,11 +48,7 @@ fn zpopmin_returns_lowest_member_and_score() {
 #[test]
 fn zpopmin_with_count_returns_n_pairs() {
     let mut store = Store::new();
-    zadd(
-        &mut store,
-        b"z",
-        &[(b"3", b"c"), (b"1", b"a"), (b"2", b"b")],
-    );
+    zadd(&mut store, b"z", &[(b"3", b"c"), (b"1", b"a"), (b"2", b"b")]);
     let r = dispatch(&mut store, &argv(&[b"ZPOPMIN", b"z", b"2"]));
     // *4 a 1 b 2
     assert_eq!(r, b"*4\r\n$1\r\na\r\n$1\r\n1\r\n$1\r\nb\r\n$1\r\n2\r\n");
@@ -82,42 +74,19 @@ fn zpopmin_wrong_type_errors() {
 #[test]
 fn zremrangebyrank_removes_in_inclusive_range() {
     let mut store = Store::new();
-    zadd(
-        &mut store,
-        b"z",
-        &[
-            (b"1", b"a"),
-            (b"2", b"b"),
-            (b"3", b"c"),
-            (b"4", b"d"),
-            (b"5", b"e"),
-        ],
-    );
-    let r = dispatch(
-        &mut store,
-        &argv(&[b"ZREMRANGEBYRANK", b"z", b"1", b"3"]),
-    );
+    zadd(&mut store, b"z", &[(b"1", b"a"), (b"2", b"b"), (b"3", b"c"), (b"4", b"d"), (b"5", b"e")]);
+    let r = dispatch(&mut store, &argv(&[b"ZREMRANGEBYRANK", b"z", b"1", b"3"]));
     assert_eq!(r, b":3\r\n");
-    let g = dispatch(
-        &mut store,
-        &argv(&[b"ZRANGE", b"z", b"0", b"-1", b"WITHSCORES"]),
-    );
+    let g = dispatch(&mut store, &argv(&[b"ZRANGE", b"z", b"0", b"-1", b"WITHSCORES"]));
     assert_eq!(g, b"*4\r\n$1\r\na\r\n$1\r\n1\r\n$1\r\ne\r\n$1\r\n5\r\n");
 }
 
 #[test]
 fn zremrangebyrank_negative_indices() {
     let mut store = Store::new();
-    zadd(
-        &mut store,
-        b"z",
-        &[(b"1", b"a"), (b"2", b"b"), (b"3", b"c")],
-    );
+    zadd(&mut store, b"z", &[(b"1", b"a"), (b"2", b"b"), (b"3", b"c")]);
     // -2..=-1 = last two
-    let r = dispatch(
-        &mut store,
-        &argv(&[b"ZREMRANGEBYRANK", b"z", b"-2", b"-1"]),
-    );
+    let r = dispatch(&mut store, &argv(&[b"ZREMRANGEBYRANK", b"z", b"-2", b"-1"]));
     assert_eq!(r, b":2\r\n");
     let g = dispatch(&mut store, &argv(&[b"ZRANGE", b"z", b"0", b"-1"]));
     assert_eq!(g, b"*1\r\n$1\r\na\r\n");
@@ -126,10 +95,7 @@ fn zremrangebyrank_negative_indices() {
 #[test]
 fn zremrangebyrank_absent_key_returns_zero() {
     let mut store = Store::new();
-    let r = dispatch(
-        &mut store,
-        &argv(&[b"ZREMRANGEBYRANK", b"absent", b"0", b"-1"]),
-    );
+    let r = dispatch(&mut store, &argv(&[b"ZREMRANGEBYRANK", b"absent", b"0", b"-1"]));
     assert_eq!(r, b":0\r\n");
 }
 
@@ -138,20 +104,8 @@ fn zremrangebyrank_absent_key_returns_zero() {
 #[test]
 fn zremrangebyscore_removes_inclusive_bounds() {
     let mut store = Store::new();
-    zadd(
-        &mut store,
-        b"z",
-        &[
-            (b"1", b"a"),
-            (b"2", b"b"),
-            (b"3", b"c"),
-            (b"4", b"d"),
-        ],
-    );
-    let r = dispatch(
-        &mut store,
-        &argv(&[b"ZREMRANGEBYSCORE", b"z", b"2", b"3"]),
-    );
+    zadd(&mut store, b"z", &[(b"1", b"a"), (b"2", b"b"), (b"3", b"c"), (b"4", b"d")]);
+    let r = dispatch(&mut store, &argv(&[b"ZREMRANGEBYSCORE", b"z", b"2", b"3"]));
     assert_eq!(r, b":2\r\n");
     let g = dispatch(&mut store, &argv(&[b"ZRANGE", b"z", b"0", b"-1"]));
     assert_eq!(g, b"*2\r\n$1\r\na\r\n$1\r\nd\r\n");
@@ -160,31 +114,17 @@ fn zremrangebyscore_removes_inclusive_bounds() {
 #[test]
 fn zremrangebyscore_exclusive_bound_via_paren() {
     let mut store = Store::new();
-    zadd(
-        &mut store,
-        b"z",
-        &[(b"1", b"a"), (b"2", b"b"), (b"3", b"c")],
-    );
+    zadd(&mut store, b"z", &[(b"1", b"a"), (b"2", b"b"), (b"3", b"c")]);
     // (1 .. 3 → b, c
-    let r = dispatch(
-        &mut store,
-        &argv(&[b"ZREMRANGEBYSCORE", b"z", b"(1", b"3"]),
-    );
+    let r = dispatch(&mut store, &argv(&[b"ZREMRANGEBYSCORE", b"z", b"(1", b"3"]));
     assert_eq!(r, b":2\r\n");
 }
 
 #[test]
 fn zremrangebyscore_inf_bounds() {
     let mut store = Store::new();
-    zadd(
-        &mut store,
-        b"z",
-        &[(b"1", b"a"), (b"2", b"b"), (b"3", b"c")],
-    );
-    let r = dispatch(
-        &mut store,
-        &argv(&[b"ZREMRANGEBYSCORE", b"z", b"-inf", b"+inf"]),
-    );
+    zadd(&mut store, b"z", &[(b"1", b"a"), (b"2", b"b"), (b"3", b"c")]);
+    let r = dispatch(&mut store, &argv(&[b"ZREMRANGEBYSCORE", b"z", b"-inf", b"+inf"]));
     assert_eq!(r, b":3\r\n");
 }
 
@@ -193,16 +133,9 @@ fn zremrangebyscore_inf_bounds() {
 #[test]
 fn zrevrangebyscore_returns_descending_order() {
     let mut store = Store::new();
-    zadd(
-        &mut store,
-        b"z",
-        &[(b"1", b"a"), (b"2", b"b"), (b"3", b"c")],
-    );
+    zadd(&mut store, b"z", &[(b"1", b"a"), (b"2", b"b"), (b"3", b"c")]);
     // max=3, min=1
-    let r = dispatch(
-        &mut store,
-        &argv(&[b"ZREVRANGEBYSCORE", b"z", b"3", b"1"]),
-    );
+    let r = dispatch(&mut store, &argv(&[b"ZREVRANGEBYSCORE", b"z", b"3", b"1"]));
     assert_eq!(r, b"*3\r\n$1\r\nc\r\n$1\r\nb\r\n$1\r\na\r\n");
 }
 
@@ -210,10 +143,8 @@ fn zrevrangebyscore_returns_descending_order() {
 fn zrevrangebyscore_withscores_v2_shape() {
     let mut store = Store::new();
     zadd(&mut store, b"z", &[(b"1", b"a"), (b"2", b"b")]);
-    let r = dispatch(
-        &mut store,
-        &argv(&[b"ZREVRANGEBYSCORE", b"z", b"+inf", b"-inf", b"WITHSCORES"]),
-    );
+    let r =
+        dispatch(&mut store, &argv(&[b"ZREVRANGEBYSCORE", b"z", b"+inf", b"-inf", b"WITHSCORES"]));
     // *4 b 2 a 1
     assert_eq!(r, b"*4\r\n$1\r\nb\r\n$1\r\n2\r\n$1\r\na\r\n$1\r\n1\r\n");
 }
@@ -221,27 +152,10 @@ fn zrevrangebyscore_withscores_v2_shape() {
 #[test]
 fn zrevrangebyscore_limit() {
     let mut store = Store::new();
-    zadd(
-        &mut store,
-        b"z",
-        &[
-            (b"1", b"a"),
-            (b"2", b"b"),
-            (b"3", b"c"),
-            (b"4", b"d"),
-        ],
-    );
+    zadd(&mut store, b"z", &[(b"1", b"a"), (b"2", b"b"), (b"3", b"c"), (b"4", b"d")]);
     let r = dispatch(
         &mut store,
-        &argv(&[
-            b"ZREVRANGEBYSCORE",
-            b"z",
-            b"+inf",
-            b"-inf",
-            b"LIMIT",
-            b"1",
-            b"2",
-        ]),
+        &argv(&[b"ZREVRANGEBYSCORE", b"z", b"+inf", b"-inf", b"LIMIT", b"1", b"2"]),
     );
     // Reversed order [d, c, b, a]; LIMIT 1 2 → [c, b]
     assert_eq!(r, b"*2\r\n$1\r\nc\r\n$1\r\nb\r\n");
@@ -251,10 +165,7 @@ fn zrevrangebyscore_limit() {
 fn zrevrangebyscore_bad_bound_errors() {
     let mut store = Store::new();
     zadd(&mut store, b"z", &[(b"1", b"a")]);
-    let r = dispatch(
-        &mut store,
-        &argv(&[b"ZREVRANGEBYSCORE", b"z", b"notafloat", b"-inf"]),
-    );
+    let r = dispatch(&mut store, &argv(&[b"ZREVRANGEBYSCORE", b"z", b"notafloat", b"-inf"]));
     assert!(r.starts_with(b"-ERR min or max"));
 }
 

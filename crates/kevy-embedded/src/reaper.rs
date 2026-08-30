@@ -62,34 +62,32 @@ fn spawn_loop(
     let tier: TierSpecOpt = config.tier_budget;
     #[cfg(not(all(feature = "tier", not(target_arch = "wasm32"))))]
     let tier: TierSpecOpt = ();
-    std::thread::Builder::new()
-        .name(String::from("kevy-embedded-reaper"))
-        .spawn(move || {
-            #[cfg(feature = "persist")]
-            reaper_loop(
-                shards_t,
-                stop_t,
-                interval,
-                samples,
-                rounds,
-                tier,
-                #[cfg(all(feature = "index", feature = "persist", not(target_arch = "wasm32")))]
-                win,
-                policy,
-                sink,
-            );
-            #[cfg(not(feature = "persist"))]
-            reaper_loop(
-                shards_t,
-                stop_t,
-                interval,
-                samples,
-                rounds,
-                tier,
-                #[cfg(all(feature = "index", feature = "persist", not(target_arch = "wasm32")))]
-                win,
-            );
-        })
+    std::thread::Builder::new().name(String::from("kevy-embedded-reaper")).spawn(move || {
+        #[cfg(feature = "persist")]
+        reaper_loop(
+            shards_t,
+            stop_t,
+            interval,
+            samples,
+            rounds,
+            tier,
+            #[cfg(all(feature = "index", feature = "persist", not(target_arch = "wasm32")))]
+            win,
+            policy,
+            sink,
+        );
+        #[cfg(not(feature = "persist"))]
+        reaper_loop(
+            shards_t,
+            stop_t,
+            interval,
+            samples,
+            rounds,
+            tier,
+            #[cfg(all(feature = "index", feature = "persist", not(target_arch = "wasm32")))]
+            win,
+        );
+    })
 }
 
 /// The auto-rewrite policy + metric sink, captured from config.

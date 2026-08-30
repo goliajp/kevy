@@ -23,7 +23,12 @@ fn build<'a>(
 fn round_trip_across_many_pages() {
     let (_d, p) = tmp("seg-roundtrip");
     let recs: Vec<(Vec<u8>, Vec<u8>)> = (0..5000u32)
-        .map(|i| (format!("k{i:08}").into_bytes(), format!("v{i}-{}", "x".repeat(i as usize % 90)).into_bytes()))
+        .map(|i| {
+            (
+                format!("k{i:08}").into_bytes(),
+                format!("v{i}-{}", "x".repeat(i as usize % 90)).into_bytes(),
+            )
+        })
         .collect();
     let meta = build(&p, recs.iter().map(|(k, v)| (k.as_slice(), v.as_slice())));
     assert_eq!(meta.records, 5000);
@@ -34,7 +39,12 @@ fn round_trip_across_many_pages() {
     assert_eq!(s.meta().min_key, b"k00000000".to_vec());
     // Every record comes back byte-identical.
     for (k, v) in &recs {
-        assert_eq!(s.get(k).expect("get").as_deref(), Some(v.as_slice()), "{}", String::from_utf8_lossy(k));
+        assert_eq!(
+            s.get(k).expect("get").as_deref(),
+            Some(v.as_slice()),
+            "{}",
+            String::from_utf8_lossy(k)
+        );
     }
     // Absent keys answer None on both sides of the fences.
     assert_eq!(s.get(b"k00000000zzz").unwrap(), None);
@@ -52,10 +62,7 @@ fn range_and_count_agree_with_the_walk() {
 
     let lo = b"k00000100".as_slice();
     let hi = b"k00002599".as_slice();
-    let walked: Vec<Vec<u8>> = s
-        .range(lo, hi)
-        .map(|r| r.expect("range record").0)
-        .collect();
+    let walked: Vec<Vec<u8>> = s.range(lo, hi).map(|r| r.expect("range record").0).collect();
     assert_eq!(walked.len(), 2500);
     assert_eq!(walked.first().unwrap().as_slice(), lo);
     assert_eq!(walked.last().unwrap().as_slice(), hi);
@@ -245,7 +252,6 @@ mod manifest {
         assert!(m.live().any(|e| e.file == "post.seg"));
     }
 }
-
 
 /// A count read out of a file is a claim, not a size.
 ///

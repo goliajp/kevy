@@ -161,6 +161,44 @@ for (const f of pages) {
   }
 }
 
+// ── 2b. the links a page makes about ITSELF ──────────────────────────────
+// Skipped by the check above, which drops anything starting `https:` —
+// and `<link rel="canonical">` and `rel="alternate"` are written absolute,
+// so they were never asked to resolve. The release notes spent an unknown
+// number of releases declaring themselves canonical at /docs/changelog/,
+// a URL this host answers with the SPA shell and HTTP 200. A soft 404 is
+// not visible from the outside; it is visible from here.
+//
+// Self-referential because an hreflang group that omits its own page is
+// documented to be discarded whole, which is the same as having none.
+const HOST = 'https://kevy.golia.jp'
+let selfLinks = 0
+for (const f of pages) {
+  const html = readFileSync(f, 'utf8')
+  const canon = [...html.matchAll(/<link rel="canonical" href="([^"]+)"/g)].map((m) => m[1])
+  const alts = [...html.matchAll(/<link rel="alternate"[^>]*href="([^"]+)"/g)].map((m) => m[1])
+  const rel = relative(DIST, f)
+  if (canon.length !== 1) fail(`${rel}: ${canon.length} canonical links, expected 1`)
+  if (alts.length === 0) fail(`${rel}: no hreflang alternates — every page has translations`)
+  if (canon.length === 1 && alts.length > 0 && !alts.includes(canon[0])) {
+    fail(`${rel}: canonical ${canon[0]} is not among its own alternates`)
+  }
+  for (const url of [...canon, ...alts]) {
+    if (!url.startsWith(HOST)) continue
+    selfLinks++
+    const target = join(DIST, url.slice(HOST.length))
+    const ok = statSync(target, { throwIfNoEntry: false })?.isDirectory()
+      ? existsSync(join(target, 'index.html'))
+      : existsSync(target)
+    if (!ok) fail(`${rel}: ${url} points at a page that does not exist`)
+  }
+}
+// A floor, because the loop above passes triumphantly on a dist/ where
+// nothing declares anything at all.
+if (selfLinks < pages.length * 2) {
+  fail(`only ${selfLinks} self-referential links across ${pages.length} pages`)
+}
+
 // ── 3. the translations line up ──────────────────────────────────────────
 const docsOf = (lang) => {
   const d = lang === 'en' ? join(DIST, 'docs') : join(DIST, lang, 'docs')
@@ -208,5 +246,5 @@ if (problems.length) {
   process.exit(1)
 }
 process.stdout.write(
-  `check: PASS — ${pages.length} pages, ${links} internal links, all at ${VERSION}, byte-identical across two builds\n`,
+  `check: PASS — ${pages.length} pages, ${links} internal links, ${selfLinks} canonical/hreflang, all at ${VERSION}, byte-identical across two builds\n`,
 )

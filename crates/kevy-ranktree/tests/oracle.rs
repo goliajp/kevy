@@ -91,21 +91,20 @@ fn compare_bounds(step: usize, t: &RankTree<u64>, o: &Oracle, rng: &mut SplitMix
         (Bound::Unbounded, Bound::Excluded(hi)),
     ];
     for bounds in shapes {
-        let want: Vec<u64> = o
-            .0
-            .iter()
-            .copied()
-            .filter(|k| match bounds.0 {
-                Bound::Included(l) => *k >= l,
-                Bound::Excluded(l) => *k > l,
-                Bound::Unbounded => true,
-            })
-            .filter(|k| match bounds.1 {
-                Bound::Included(h) => *k <= h,
-                Bound::Excluded(h) => *k < h,
-                Bound::Unbounded => true,
-            })
-            .collect();
+        let want: Vec<u64> =
+            o.0.iter()
+                .copied()
+                .filter(|k| match bounds.0 {
+                    Bound::Included(l) => *k >= l,
+                    Bound::Excluded(l) => *k > l,
+                    Bound::Unbounded => true,
+                })
+                .filter(|k| match bounds.1 {
+                    Bound::Included(h) => *k <= h,
+                    Bound::Excluded(h) => *k < h,
+                    Bound::Unbounded => true,
+                })
+                .collect();
         let got: Vec<u64> = t.range(&bounds).copied().collect();
         assert_eq!(got, want, "step {step}: range({bounds:?})");
         assert_eq!(t.count_in(&bounds), want.len(), "step {step}: count_in({bounds:?})");

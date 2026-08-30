@@ -113,11 +113,7 @@ fn parse_xread_argv<A: ArgvView + ?Sized>(args: &A) -> Result<XReadParsed, CmdEr
             }
             b"STREAMS" => {
                 let streams = xread_parse_streams(args, i + 1)?;
-                return Ok(XReadParsed {
-                    count,
-                    block_ms,
-                    streams,
-                });
+                return Ok(XReadParsed { count, block_ms, streams });
             }
             _ => return Err(CmdError::Wire("ERR syntax error")),
         }
@@ -131,10 +127,7 @@ fn xread_parse_kv_usize<A: ArgvView + ?Sized>(
     bad: &'static str,
 ) -> Result<usize, CmdError> {
     let n = args.get(idx).ok_or("ERR syntax error")?;
-    std::str::from_utf8(n)
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .ok_or(CmdError::Wire(bad))
+    std::str::from_utf8(n).ok().and_then(|s| s.parse().ok()).ok_or(CmdError::Wire(bad))
 }
 
 fn xread_parse_kv_u64<A: ArgvView + ?Sized>(
@@ -143,10 +136,7 @@ fn xread_parse_kv_u64<A: ArgvView + ?Sized>(
     bad: &'static str,
 ) -> Result<u64, CmdError> {
     let n = args.get(idx).ok_or("ERR syntax error")?;
-    std::str::from_utf8(n)
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .ok_or(CmdError::Wire(bad))
+    std::str::from_utf8(n).ok().and_then(|s| s.parse().ok()).ok_or(CmdError::Wire(bad))
 }
 
 /// `(key, last-seen-arg)` pairs as parsed from the `STREAMS …` tail.
@@ -158,9 +148,9 @@ fn xread_parse_streams<A: ArgvView + ?Sized>(
 ) -> Result<Vec<StreamKeyLastSeen>, CmdError> {
     let rest = args.len() - start;
     if rest == 0 || !rest.is_multiple_of(2) {
-        return Err(
-            CmdError::Wire("ERR Unbalanced XREAD list of streams: for each stream key an ID or '$' must be specified."),
-        );
+        return Err(CmdError::Wire(
+            "ERR Unbalanced XREAD list of streams: for each stream key an ID or '$' must be specified.",
+        ));
     }
     let n = rest / 2;
     let mut streams = Vec::with_capacity(n);
@@ -169,7 +159,6 @@ fn xread_parse_streams<A: ArgvView + ?Sized>(
     }
     Ok(streams)
 }
-
 
 fn emit_xread_reply(out: &mut Vec<u8>, reply: &[StreamReply]) {
     if reply.is_empty() {

@@ -31,11 +31,7 @@ fn table(name: &[u8], windowed: bool) -> TableSpec {
             values: vec![],
         }],
         orderpaths: vec![],
-        window: windowed.then_some(WindowSpec {
-            column: b"at".to_vec(),
-            span: 100,
-            bucket: 10,
-        }),
+        window: windowed.then_some(WindowSpec { column: b"at".to_vec(), span: 100, bucket: 10 }),
         autodeclare: 0,
         auto_added: vec![],
     }
@@ -46,8 +42,19 @@ fn seed(s: &Store) {
     for i in 0..30i64 {
         let key = format!("ev:{i}");
         let at = (i * 10).to_string();
-        run(s, &[b"HSET", key.as_bytes(), b"id", key.as_bytes(), b"at", at.as_bytes(),
-                 b"note", format!("row number {i}").as_bytes()]);
+        run(
+            s,
+            &[
+                b"HSET",
+                key.as_bytes(),
+                b"id",
+                key.as_bytes(),
+                b"at",
+                at.as_bytes(),
+                b"note",
+                format!("row number {i}").as_bytes(),
+            ],
+        );
     }
     // Out-of-window by value, but TTL'd: must stay hot.
     run(s, &[b"HSET", b"ev:ttl", b"id", b"ev:ttl", b"at", b"5", b"note", b"short-lived"]);
@@ -75,9 +82,7 @@ fn wait_for_row_segment(dir: &std::path::Path) {
 fn cold_rows_answer_every_kv_command_like_hot_ones() {
     let d = kevy_tmpdir::TmpDir::new("emb-winrows");
     let s = Store::open(
-        Config::default()
-            .with_persist(d.path())
-            .with_reaper_interval(Duration::from_millis(25)),
+        Config::default().with_persist(d.path()).with_reaper_interval(Duration::from_millis(25)),
     )
     .expect("open");
     s.table_declare(table(b"ev", true)).expect("declare ev");
@@ -126,9 +131,7 @@ fn cold_rows_answer_every_kv_command_like_hot_ones() {
     // stub (segments retained, not orphan-swept) and stay equivalent.
     drop(s);
     let s = Store::open(
-        Config::default()
-            .with_persist(d.path())
-            .with_reaper_interval(Duration::from_millis(25)),
+        Config::default().with_persist(d.path()).with_reaper_interval(Duration::from_millis(25)),
     )
     .expect("reopen");
     let segs = d.path().join("segs-0");
@@ -234,9 +237,7 @@ fn scan_all(s: &Store) -> Vec<Vec<u8>> {
 fn rewrite_and_snapshot_stop_carrying_cold_rows() {
     let d = kevy_tmpdir::TmpDir::new("emb-winpersist");
     let s = Store::open(
-        Config::default()
-            .with_persist(d.path())
-            .with_reaper_interval(Duration::from_millis(25)),
+        Config::default().with_persist(d.path()).with_reaper_interval(Duration::from_millis(25)),
     )
     .expect("open");
     s.table_declare(table(b"ev", true)).expect("declare ev");
@@ -261,9 +262,7 @@ fn rewrite_and_snapshot_stop_carrying_cold_rows() {
 
     drop(s);
     let s = Store::open(
-        Config::default()
-            .with_persist(d.path())
-            .with_reaper_interval(Duration::from_millis(25)),
+        Config::default().with_persist(d.path()).with_reaper_interval(Duration::from_millis(25)),
     )
     .expect("reopen after rewrite");
     compare_stores(&s, &c, "after rewrite restart");

@@ -44,10 +44,8 @@ impl<C: Commands> Shard<C> {
                 self.immediate_reply(conn_id, b"+OK\r\n".to_vec());
             }
             (true, TxnKind::Exec) => self.exec_transaction(conn_id),
-            (true, TxnKind::Watch) => self.immediate_reply(
-                conn_id,
-                b"-ERR WATCH inside MULTI is not allowed\r\n".to_vec(),
-            ),
+            (true, TxnKind::Watch) => self
+                .immediate_reply(conn_id, b"-ERR WATCH inside MULTI is not allowed\r\n".to_vec()),
             (true, TxnKind::Other) => self.queue_in_multi(conn_id, args),
             // (false, Other | Watch) dispatched on the early path above.
             (false, TxnKind::Other | TxnKind::Watch) => {}
@@ -71,7 +69,6 @@ impl<C: Commands> Shard<C> {
         }
         self.immediate_reply(conn_id, b"+QUEUED\r\n".to_vec());
     }
-
 
     /// `EXEC` — emit a `*N` array header, then run the queued commands in order.
     /// The seq-ordered ring concatenates their replies into one valid array.
@@ -101,10 +98,7 @@ impl<C: Commands> Shard<C> {
             return;
         }
         let (queued, watched) = match self.conns.get_mut(&conn_id) {
-            Some(c) => (
-                c.multi.take().unwrap_or_default(),
-                std::mem::take(&mut c.watched),
-            ),
+            Some(c) => (c.multi.take().unwrap_or_default(), std::mem::take(&mut c.watched)),
             None => return,
         };
         if !watched.is_empty() {

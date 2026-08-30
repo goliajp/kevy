@@ -48,8 +48,8 @@ extern crate alloc;
 #[cfg(target_endian = "big")]
 compile_error!("kevy-bytes requires little-endian: heap-tag byte overlaps inline length byte");
 
-mod find_crlf;
 mod eq;
+mod find_crlf;
 mod traits;
 
 mod heap;
@@ -124,12 +124,7 @@ impl SmallBytes {
     /// assert_eq!(EMPTY.heap_bytes(), 0);
     /// ```
     pub const fn new() -> Self {
-        Self {
-            inline: Inline {
-                data: [0; INLINE_CAP],
-                tag: 0,
-            },
-        }
+        Self { inline: Inline { data: [0; INLINE_CAP], tag: 0 } }
     }
 
     /// Construct from a byte slice — inline if `bytes.len() <= 22`, else heap.
@@ -150,12 +145,7 @@ impl SmallBytes {
             unsafe {
                 core::ptr::copy_nonoverlapping(bytes.as_ptr(), data.as_mut_ptr(), bytes.len());
             }
-            Self {
-                inline: Inline {
-                    data,
-                    tag: bytes.len() as u8,
-                },
-            }
+            Self { inline: Inline { data, tag: bytes.len() as u8 } }
         } else {
             Self::alloc_heap(bytes)
         }
@@ -194,9 +184,7 @@ impl SmallBytes {
             let ptr = unsafe { NonNull::new_unchecked(v.as_mut_ptr()) };
             let len = v.len();
             let cap = v.capacity();
-            Self {
-                heap: Heap::new(ptr, len, cap),
-            }
+            Self { heap: Heap::new(ptr, len, cap) }
         }
     }
 
@@ -210,17 +198,13 @@ impl SmallBytes {
         let layout = unsafe { Layout::from_size_align_unchecked(len, 1) };
         // SAFETY: layout.size() > 0 (caller's heap branch guarantees len > 22).
         let raw = unsafe { alloc(layout) };
-        let Some(ptr) = NonNull::new(raw) else {
-            handle_alloc_error(layout)
-        };
+        let Some(ptr) = NonNull::new(raw) else { handle_alloc_error(layout) };
         // SAFETY: alloc returned a writable region of `len` bytes; source is a
         // disjoint slice.
         unsafe {
             core::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr.as_ptr(), len);
         }
-        Self {
-            heap: Heap::new(ptr, len, len),
-        }
+        Self { heap: Heap::new(ptr, len, len) }
     }
 
     /// True when stored inline; the byte at index 23 is the deciding tag in
@@ -303,9 +287,7 @@ impl SmallBytes {
     pub fn as_slice(&self) -> &[u8] {
         if self.is_inline() {
             // SAFETY: first `tag` bytes of `data` are valid (zero-init at construction).
-            unsafe {
-                slice::from_raw_parts(self.inline.data.as_ptr(), self.inline.tag as usize)
-            }
+            unsafe { slice::from_raw_parts(self.inline.data.as_ptr(), self.inline.tag as usize) }
         } else {
             // SAFETY: heap variant active; ptr/len originate from a Vec or our own alloc.
             unsafe { slice::from_raw_parts(self.heap.ptr.as_ptr(), self.heap.length()) }
@@ -351,13 +333,8 @@ impl SmallBytes {
             // self drops as inline — nothing to free.
         } else {
             // SAFETY: heap variant active.
-            let (ptr, len, cap) = unsafe {
-                (
-                    self.heap.ptr.as_ptr(),
-                    self.heap.length(),
-                    self.heap.capacity(),
-                )
-            };
+            let (ptr, len, cap) =
+                unsafe { (self.heap.ptr.as_ptr(), self.heap.length(), self.heap.capacity()) };
             // Skip our Drop to avoid double-free; Vec::from_raw_parts now owns it.
             let _do_not_drop = ManuallyDrop::new(self);
             // SAFETY: ptr/len/cap originated from either a Vec<u8> (from_vec)
@@ -428,19 +405,13 @@ impl SmallBytes {
         let layout = unsafe { Layout::from_size_align_unchecked(len, 1) };
         // SAFETY: layout.size() > 0.
         let raw = unsafe { alloc(layout) };
-        let Some(ptr) = NonNull::new(raw) else {
-            handle_alloc_error(layout)
-        };
+        let Some(ptr) = NonNull::new(raw) else { handle_alloc_error(layout) };
         // SAFETY: src has `len` valid bytes; dst is freshly-allocated for `len`
         // bytes; regions are disjoint.
         unsafe { core::ptr::copy_nonoverlapping(src_ptr, ptr.as_ptr(), len) };
-        Self {
-            heap: Heap::new(ptr, len, len),
-        }
+        Self { heap: Heap::new(ptr, len, len) }
     }
 }
-
-
 
 #[cfg(test)]
 mod tests;

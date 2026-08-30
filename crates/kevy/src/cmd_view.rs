@@ -39,6 +39,44 @@ fn persist_sidecar(dir: Option<&Path>, cat: &ViewCatalog) {
     }
 }
 
+/// One leaf of a view tree: an index name, a shape, and the literals that
+/// shape needs — `RANGE min max` or `EQ value`, both coerced to the index's
+/// declared type.
+///
+/// Split from `parse_tree` for the 50-line rule, at the boundary the
+/// function already had: above it parses a node and recurses, here it
+/// parses a leaf and does not.
+fn parse_leaf<A: ArgvView + ?Sized>(
+    icat: Option<&Catalog>,
+    args: &A,
+    i: usize,
+    tok: &[u8],
+) -> Result<(Tree, usize), CmdError> {
+    // leaf: <index> RANGE min max | <index> EQ v — bounds coerced
+    // per the index's declared type.
+    let index = tok.to_vec();
+    let spec_ty = icat
+        .and_then(|c| c.get(&index).map(|(s, _)| s.ty))
+        .ok_or("ERR view leaf references unknown index")?;
+    let shape = args.get(i + 1).ok_or("ERR truncated view leaf")?;
+    if shape.eq_ignore_ascii_case(b"RANGE") {
+        let min =
+            IndexValue::parse_literal(spec_ty, args.get(i + 2).ok_or("ERR truncated view leaf")?)
+                .ok_or("ERR leaf min does not coerce to the index type")?;
+        let max =
+            IndexValue::parse_literal(spec_ty, args.get(i + 3).ok_or("ERR truncated view leaf")?)
+                .ok_or("ERR leaf max does not coerce to the index type")?;
+        Ok((Tree::Leaf(Leaf { index, min, max }), i + 4))
+    } else if shape.eq_ignore_ascii_case(b"EQ") {
+        let v =
+            IndexValue::parse_literal(spec_ty, args.get(i + 2).ok_or("ERR truncated view leaf")?)
+                .ok_or("ERR leaf value does not coerce to the index type")?;
+        Ok((Tree::Leaf(Leaf { index, min: v.clone(), max: v }), i + 3))
+    } else {
+        Err(CmdError::Wire("ERR view leaf shape must be RANGE|EQ"))
+    }
+}
+
 /// Parse one tree node starting at `i`; returns `(tree, next_i)`.
 /// `icat` is the index-catalog snapshot leaf lookups resolve against.
 fn parse_tree<A: ArgvView + ?Sized>(
@@ -69,26 +107,7 @@ fn parse_tree<A: ArgvView + ?Sized>(
         };
         Ok((tree, ni + 1))
     } else {
-        // leaf: <index> RANGE min max | <index> EQ v — bounds coerced
-        // per the index's declared type.
-        let index = tok.to_vec();
-        let spec_ty = icat
-            .and_then(|c| c.get(&index).map(|(s, _)| s.ty))
-            .ok_or("ERR view leaf references unknown index")?;
-        let shape = args.get(i + 1).ok_or("ERR truncated view leaf")?;
-        if shape.eq_ignore_ascii_case(b"RANGE") {
-            let min = IndexValue::parse_literal(spec_ty, args.get(i + 2).ok_or("ERR truncated view leaf")?)
-                .ok_or("ERR leaf min does not coerce to the index type")?;
-            let max = IndexValue::parse_literal(spec_ty, args.get(i + 3).ok_or("ERR truncated view leaf")?)
-                .ok_or("ERR leaf max does not coerce to the index type")?;
-            Ok((Tree::Leaf(Leaf { index, min, max }), i + 4))
-        } else if shape.eq_ignore_ascii_case(b"EQ") {
-            let v = IndexValue::parse_literal(spec_ty, args.get(i + 2).ok_or("ERR truncated view leaf")?)
-                .ok_or("ERR leaf value does not coerce to the index type")?;
-            Ok((Tree::Leaf(Leaf { index, min: v.clone(), max: v }), i + 3))
-        } else {
-            Err(CmdError::Wire("ERR view leaf shape must be RANGE|EQ"))
-        }
+        parse_leaf(icat, args, i, tok)
     }
 }
 
@@ -96,7 +115,10 @@ fn parse_tree<A: ArgvView + ?Sized>(
 /// [MODE virtual|materialized] [TOPK k] [VIA tpl]`.
 pub(crate) fn cmd_view_create<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut Vec<u8>) {
     if args.len() < 8 || !args[2].eq_ignore_ascii_case(b"QUERY") {
-        return encode_error(out, "ERR usage: VIEW.CREATE name QUERY <tree> ORDER BY idx [DESC] [MODE v|m] [TOPK k] [VIA tpl]");
+        return encode_error(
+            out,
+            "ERR usage: VIEW.CREATE name QUERY <tree> ORDER BY idx [DESC] [MODE v|m] [TOPK k] [VIA tpl]",
+        );
     }
     let icat = ctx.state.catalogs.index();
     let (tree, mut i) = match parse_tree(icat.as_deref(), args, 3, 1) {
@@ -141,10 +163,7 @@ type CreateOpts = (bool, ViewMode, u32, Option<Vec<u8>>);
 
 /// Parse the optional `VIEW.CREATE` tail starting at `i`:
 /// `[DESC] [MODE virtual|materialized] [TOPK k] [VIA tpl]`.
-fn parse_create_opts<A: ArgvView + ?Sized>(
-    args: &A,
-    mut i: usize,
-) -> Result<CreateOpts, CmdError> {
+fn parse_create_opts<A: ArgvView + ?Sized>(args: &A, mut i: usize) -> Result<CreateOpts, CmdError> {
     let mut desc = false;
     let mut mode = ViewMode::Virtual;
     let mut top_k = 0u32;
@@ -168,7 +187,11 @@ fn parse_create_opts<A: ArgvView + ?Sized>(
             };
             i += 2;
         } else if t.eq_ignore_ascii_case(b"TOPK") {
-            top_k = match args.get(i + 1).and_then(|v| std::str::from_utf8(v).ok()).and_then(|s| s.parse().ok()) {
+            top_k = match args
+                .get(i + 1)
+                .and_then(|v| std::str::from_utf8(v).ok())
+                .and_then(|s| s.parse().ok())
+            {
                 Some(k) => k,
                 None => return Err(CmdError::Wire("ERR TOPK must be an integer")),
             };
@@ -453,7 +476,11 @@ mod hydrate_tests {
         assert_eq!(cold, hot, "cold hydration must be byte-identical to the hot twin");
         assert_eq!(after.promotions_total, 0, "a hydrated page is not an access signal");
         assert_eq!(after.peek_preads_total - before.peek_preads_total, 3, "one read per cold ROW");
-        assert_eq!(after.batch_submissions_total - before.batch_submissions_total, 1, "one batch per page");
+        assert_eq!(
+            after.batch_submissions_total - before.batch_submissions_total,
+            1,
+            "one batch per page"
+        );
         // Rows are still cold; the client 2-touch gate starts fresh.
         let again = op_hydrate(&mut s, &a);
         assert_eq!(again, hot);

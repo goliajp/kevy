@@ -68,13 +68,7 @@ fn effective_deadline(timeout_ms: u64) -> u64 {
 impl<C: Commands> Shard<C> {
     /// Origin side of `WAIT numreplicas timeout` — one pending slot
     /// folding MIN over every shard's acked-replica count.
-    pub(crate) fn start_repl_wait(
-        &mut self,
-        conn_id: u64,
-        seq: u64,
-        need: u32,
-        timeout_ms: u64,
-    ) {
+    pub(crate) fn start_repl_wait(&mut self, conn_id: u64, seq: u64, need: u32, timeout_ms: u64) {
         let deadline_ms = effective_deadline(timeout_ms);
         // Ship any batched single-key forwards BEFORE arming: a
         // pipelined `SET k v; WAIT …` parks the SET in
@@ -160,10 +154,7 @@ impl<C: Commands> Shard<C> {
         need: u32,
         deadline_ms: u64,
     ) {
-        let target_offset = self
-            .replicate
-            .as_ref()
-            .map_or(0, |f| f.source().next_offset());
+        let target_offset = self.replicate.as_ref().map_or(0, |f| f.source().next_offset());
         let n = self.repl_ack_count(target_offset);
         if n >= i64::from(need) {
             self.repl_waiter_reply(origin, conn, seq, n);

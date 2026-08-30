@@ -6,8 +6,8 @@
 //! membership probes see fresh segments). Callers gate both hooks on
 //! the `VIEW_NONEMPTY` gate bit.
 
-use kevy_resp::CmdError;
 use kevy_index::{IndexValue, MaterializedSet, ViewMode, ViewSpec, eval_tree, key_in_tree};
+use kevy_resp::CmdError;
 use kevy_store::Store;
 
 use crate::state::{CatalogState, Ctx, ShardCtx};
@@ -49,12 +49,7 @@ pub(crate) fn on_write(ctx: &Ctx<'_>, store: &mut Store, key: &[u8]) {
     crate::index_runtime::with_segment_resolver(ctx, store, |seg| {
         let vals: Vec<(&[u8], Option<kevy_index::IndexValue>)> = referenced
             .iter()
-            .map(|n| {
-                (
-                    n.as_slice(),
-                    seg(n).and_then(|s| s.verify_entry(key)).cloned(),
-                )
-            })
+            .map(|n| (n.as_slice(), seg(n).and_then(|s| s.verify_entry(key)).cloned()))
             .collect();
         let lookup = |name: &[u8]| -> Option<kevy_index::IndexValue> {
             vals.iter().find(|(n, _)| *n == name).and_then(|(_, v)| v.clone())
@@ -132,11 +127,7 @@ pub(crate) fn shard_page(
     let mut st = ctx.shard.views.borrow_mut();
     refresh(&ctx.state.catalogs, &mut st);
     let st = &mut *st;
-    let vs = st
-        .views
-        .iter_mut()
-        .find(|v| v.spec.name == name)
-        .ok_or("ERR no such view")?;
+    let vs = st.views.iter_mut().find(|v| v.spec.name == name).ok_or("ERR no such view")?;
     if referenced_index_building(ctx, store, &vs.spec) {
         return Err(CmdError::Wire("INDEXBUILDING view's base index is still building"));
     }
@@ -169,11 +160,7 @@ pub(crate) fn shard_stats(
     let mut st = ctx.shard.views.borrow_mut();
     refresh(&ctx.state.catalogs, &mut st);
     let st = &mut *st;
-    let vs = st
-        .views
-        .iter_mut()
-        .find(|v| v.spec.name == name)
-        .ok_or("ERR no such view")?;
+    let vs = st.views.iter_mut().find(|v| v.spec.name == name).ok_or("ERR no such view")?;
     match &vs.mat {
         Some(m) => Ok((m.len() as u64, m.approx_bytes(), m.order_excluded, vs.needs_rebuild)),
         None => {
@@ -209,13 +196,11 @@ fn refresh(catalogs: &CatalogState, st: &mut ShardViews) {
                 None => {
                     let mat = match spec.mode {
                         ViewMode::Virtual => None,
-                        ViewMode::Materialized { top_k } => Some(MaterializedSet::new(top_k, spec.desc)),
+                        ViewMode::Materialized { top_k } => {
+                            Some(MaterializedSet::new(top_k, spec.desc))
+                        }
                     };
-                    next.push(ViewState {
-                        spec: spec.clone(),
-                        needs_rebuild: mat.is_some(),
-                        mat,
-                    });
+                    next.push(ViewState { spec: spec.clone(), needs_rebuild: mat.is_some(), mat });
                 }
             }
         }
@@ -276,9 +261,7 @@ fn eval_with_order(
         members
             .into_iter()
             .filter_map(|k| {
-                seg(&spec.order_by)
-                    .and_then(|s| s.verify_entry(&k))
-                    .map(|v| (v.clone(), k))
+                seg(&spec.order_by).and_then(|s| s.verify_entry(&k)).map(|v| (v.clone(), k))
             })
             .collect()
     })
@@ -310,7 +293,5 @@ fn rebuild_local(ctx: &Ctx<'_>, store: &mut Store, vs: &mut ViewState) {
 fn referenced_index_building(ctx: &Ctx<'_>, store: &mut Store, spec: &ViewSpec) -> bool {
     let mut names: Vec<Vec<u8>> = vec![spec.order_by.clone()];
     spec.tree.each_leaf(&mut |l| names.push(l.index.clone()));
-    names
-        .iter()
-        .any(|n| crate::index_runtime::segment_building(ctx, store, n))
+    names.iter().any(|n| crate::index_runtime::segment_building(ctx, store, n))
 }

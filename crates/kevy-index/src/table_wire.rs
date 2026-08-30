@@ -159,13 +159,9 @@ fn parse_window(argv: &[&[u8]], at: usize, spec: &mut TableSpec) -> Result<usize
     if spec.window.is_some() {
         return Err("ERR duplicate WINDOW clause".into());
     }
-    let (Some(col), Some(span_kw), Some(span_raw), Some(bucket_kw), Some(bucket_raw)) = (
-        argv.get(at),
-        argv.get(at + 1),
-        argv.get(at + 2),
-        argv.get(at + 3),
-        argv.get(at + 4),
-    ) else {
+    let (Some(col), Some(span_kw), Some(span_raw), Some(bucket_kw), Some(bucket_raw)) =
+        (argv.get(at), argv.get(at + 1), argv.get(at + 2), argv.get(at + 3), argv.get(at + 4))
+    else {
         return Err(TABLE_DECLARE_USAGE.into());
     };
     if !span_kw.eq_ignore_ascii_case(b"SPAN") || !bucket_kw.eq_ignore_ascii_case(b"BUCKET") {

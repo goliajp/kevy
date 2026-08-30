@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use kevy_replicate::replica::{ReplicaClient, ReplicaEvent};
 use kevy_rt::{ReplicaApply, ReplicaInboxSender, SnapshotGate};
 
-use crate::replica_runner::LoadingGuard;
+use crate::replica_runner_events::{DrainStart, drain_start};
 use crate::state::ReplicaProgress;
 
 /// Route one event fan into N shard inboxes: snapshot control/chunks
@@ -41,11 +41,7 @@ pub(crate) fn route_event(
             *from_offset = ack_offset;
             // Every shard gets a CLONE of the gate: the loading
             // lowering fires when the last shard's load lands.
-            send_all(&|| ReplicaApply::SnapshotEnd {
-                ack_offset,
-                routed: true,
-                gate: gate.clone(),
-            })
+            send_all(&|| ReplicaApply::SnapshotEnd { ack_offset, routed: true, gate: gate.clone() })
         }
         ReplicaEvent::Frame(frame) => {
             *from_offset = frame.offset.saturating_add(1);
@@ -77,21 +73,15 @@ pub(crate) fn drain_client_routed(
     progress: &Arc<ReplicaProgress>,
     data_gen: &mut u64,
 ) -> u64 {
-    let mut from_offset = client.expected_offset();
-    let ack_gen = client.primary_gen_at_handshake();
-    if from_offset == 0 {
-        *data_gen = ack_gen;
-    }
-    let mut last_ack = std::time::Instant::now();
-    let mut loading = LoadingGuard::new(Arc::clone(progress));
-    let mut traced_first_frame = false;
+    let DrainStart { mut from_offset, ack_gen, mut last_ack, mut loading, mut traced_first_frame } =
+        drain_start(client, progress, data_gen);
     while !stop.load(Ordering::Relaxed) {
         match client.next_event() {
             Some(Ok(ReplicaEvent::Ping { generation, primary_offset })) => {
                 progress.record_ping(runner_slot, generation, primary_offset, from_offset);
                 let _ = client.send_ack(from_offset);
                 last_ack = std::time::Instant::now();
-                if !crate::replica_runner::gen_still_matches(generation, ack_gen) {
+                if !crate::replica_runner_events::gen_still_matches(generation, ack_gen) {
                     return from_offset;
                 }
             }
@@ -100,14 +90,20 @@ pub(crate) fn drain_client_routed(
                     *data_gen = ack_gen;
                 }
                 crate::replica_trace::trace_session_event(
-                    runner_slot, &event, &mut traced_first_frame,
+                    runner_slot,
+                    &event,
+                    &mut traced_first_frame,
                 );
                 let gate = loading.observe(&event);
                 if route_event(event, &mut from_offset, senders, gate).is_err() {
                     return from_offset;
                 }
-                crate::replica_runner::maybe_ack(
-                    client, progress, runner_slot, from_offset, &mut last_ack,
+                crate::replica_runner_events::maybe_ack(
+                    client,
+                    progress,
+                    runner_slot,
+                    from_offset,
+                    &mut last_ack,
                 );
             }
             Some(Err(e)) => {
@@ -119,4 +115,3 @@ pub(crate) fn drain_client_routed(
     }
     from_offset
 }
-

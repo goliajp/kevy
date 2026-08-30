@@ -9,9 +9,7 @@ use crate::cmd::{arg_f64, emit_int_result, fmt_score, store_err, wrong_args};
 
 /// Leading `ZADD` option tokens (Redis 6.2): `NX`/`XX`/`GT`/`LT`/`CH`/
 /// `INCR`. Returns `(flags, incr, index of the first score)`.
-fn parse_zadd_flags<A: ArgvView + ?Sized>(
-    args: &A,
-) -> Result<(ZaddFlags, bool, usize), CmdError> {
+fn parse_zadd_flags<A: ArgvView + ?Sized>(args: &A) -> Result<(ZaddFlags, bool, usize), CmdError> {
     let mut f = ZaddFlags::default();
     let mut incr = false;
     let mut i = 2;
@@ -35,7 +33,9 @@ fn parse_zadd_flags<A: ArgvView + ?Sized>(
         i += 1;
     }
     if !f.valid() {
-        return Err(CmdError::Wire("ERR GT, LT, and/or NX options at the same time are not compatible"));
+        return Err(CmdError::Wire(
+            "ERR GT, LT, and/or NX options at the same time are not compatible",
+        ));
     }
     Ok((f, incr, i))
 }

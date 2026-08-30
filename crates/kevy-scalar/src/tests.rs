@@ -134,10 +134,7 @@ fn mod_power_sqrt_sign_domains() {
         eval("power", &[Scalar::Int(0), Scalar::Int(-1)]),
         Err(ScalarError::Domain { .. })
     ));
-    assert!(matches!(
-        eval("sqrt", &[Scalar::Int(-1)]),
-        Err(ScalarError::Domain { .. })
-    ));
+    assert!(matches!(eval("sqrt", &[Scalar::Int(-1)]), Err(ScalarError::Domain { .. })));
     assert_eq!(flt(eval("sqrt", &[Scalar::Int(9)])), 3.0);
     assert_eq!(int(eval("sign", &[Scalar::Float(-4.2)])), -1);
 }
@@ -150,10 +147,7 @@ fn concat_skips_null_but_null_separator_poisons() {
         txt(eval("concat_ws", &[t("-"), t("a"), Scalar::Null, t("b")])),
         "a-b" // no doubled separator around the skipped NULL
     );
-    assert_eq!(
-        eval("concat_ws", &[Scalar::Null, t("a"), t("b")]).unwrap(),
-        Scalar::Null
-    );
+    assert_eq!(eval("concat_ws", &[Scalar::Null, t("a"), t("b")]).unwrap(), Scalar::Null);
 }
 
 // ── probe 57 + case/measure misc ──
@@ -199,10 +193,7 @@ fn extract_and_date_part_field_matrices() {
     // extract refuses time fields on DATE; date_part promotes to 0.
     let d = Scalar::Date(crate::parse_date("2030-06-15").unwrap());
     assert_eq!(flt(eval("extract", &[t("year"), d.clone()])), 2030.0);
-    assert!(matches!(
-        eval("extract", &[t("hour"), d.clone()]),
-        Err(ScalarError::Domain { .. })
-    ));
+    assert!(matches!(eval("extract", &[t("hour"), d.clone()]), Err(ScalarError::Domain { .. })));
     assert_eq!(flt(eval("date_part", &[t("hour"), d])), 0.0);
     // Interval decomposition (probe 11).
     let iv = Scalar::Interval { months: 17, days: 0, micros: 0 };
@@ -219,10 +210,13 @@ fn extract_and_date_part_field_matrices() {
 fn date_trunc_boundaries() {
     let t1 = ts("2024-03-15 14:30:45");
     let out = eval("date_trunc", &[t("day"), t1.clone()]).unwrap();
-    assert_eq!(crate::render_timestamp(match out {
-        Scalar::Timestamp(us) => us,
-        other => panic!("{other:?}"),
-    }), "2024-03-15 00:00:00");
+    assert_eq!(
+        crate::render_timestamp(match out {
+            Scalar::Timestamp(us) => us,
+            other => panic!("{other:?}"),
+        }),
+        "2024-03-15 00:00:00"
+    );
     let out = eval("date_trunc", &[t("month"), t1.clone()]).unwrap();
     assert_eq!(out, ts("2024-03-01 00:00:00"));
     let out = eval("date_trunc", &[t("hour"), t1]).unwrap();
@@ -256,11 +250,14 @@ fn age_decomposes_calendar_months_first() {
 
 #[test]
 fn timestamp_parse_render_and_to_char() {
-    assert_eq!(crate::render_timestamp(crate::parse_timestamp("2024-01-01 00:00:30").unwrap()),
-        "2024-01-01 00:00:30");
-    assert_eq!(crate::render_timestamp(
-        crate::parse_timestamp("2024-03-15 10:20:45.123456").unwrap()),
-        "2024-03-15 10:20:45.123456");
+    assert_eq!(
+        crate::render_timestamp(crate::parse_timestamp("2024-01-01 00:00:30").unwrap()),
+        "2024-01-01 00:00:30"
+    );
+    assert_eq!(
+        crate::render_timestamp(crate::parse_timestamp("2024-03-15 10:20:45.123456").unwrap()),
+        "2024-03-15 10:20:45.123456"
+    );
     assert_eq!(crate::parse_date("2024-02-30"), None); // round-trip reject
     assert_eq!(crate::parse_timestamp("2024-13-01"), None);
     assert_eq!(
@@ -290,10 +287,7 @@ fn format_specifiers_from_probe_32() {
     assert_eq!(txt(eval("format", &[t("100%%")])), "100%");
     assert_eq!(txt(eval("format", &[t("%2$s %1$s"), t("last"), t("first")])), "first last");
     assert_eq!(eval("format", &[Scalar::Null, t("x")]).unwrap(), Scalar::Null);
-    assert!(matches!(
-        eval("format", &[t("%q"), t("x")]),
-        Err(ScalarError::Domain { .. })
-    ));
+    assert!(matches!(eval("format", &[t("%q"), t("x")]), Err(ScalarError::Domain { .. })));
     assert!(matches!(
         eval("format", &[t("%s %s"), t("only-one")]),
         Err(ScalarError::Domain { .. })
@@ -344,7 +338,10 @@ fn regexp_replace_matches_and_split() {
 
     // split_to_array: literal and whitespace-class delimiters.
     assert_eq!(txt(eval("regexp_split_to_array", &[t("a,b,c"), t(",")])), "{a,b,c}");
-    assert_eq!(txt(eval("regexp_split_to_array", &[t("one two   three"), t(r"\s+")])), "{one,two,three}");
+    assert_eq!(
+        txt(eval("regexp_split_to_array", &[t("one two   three"), t(r"\s+")])),
+        "{one,two,three}"
+    );
     assert_eq!(txt(eval("regexp_split_to_array", &[t("abc"), t(",")])), "{abc}");
 
     // A bad pattern is a named refusal, not a wrong answer.
@@ -366,10 +363,7 @@ fn three_valued_logic_and_comparisons() {
     assert_eq!(cmp_op("<", &f, &t).unwrap(), S::Bool(true));
     assert_eq!(cmp_op("<>", &S::Int(2), &S::Float(2.5)).unwrap(), S::Bool(true));
     assert_eq!(cmp_op("=", &n, &t).unwrap(), n);
-    assert_eq!(
-        cmp_op("=", &S::Timestamp(86_400_000_000), &S::Date(1)).unwrap(),
-        S::Bool(true)
-    );
+    assert_eq!(cmp_op("=", &S::Timestamp(86_400_000_000), &S::Date(1)).unwrap(), S::Bool(true));
 }
 
 #[test]

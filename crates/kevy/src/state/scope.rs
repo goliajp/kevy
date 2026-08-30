@@ -58,19 +58,10 @@ impl ScopeState {
                 (p.node_id.clone(), format!("{}:{}", p.host, reported))
             })
             .collect();
-        let self_node_id = if cfg.cluster.node_id.is_empty() {
-            None
-        } else {
-            Some(cfg.cluster.node_id.clone())
-        };
-        Ok(Self {
-            ownership,
-            peer_addrs,
-            self_node_id,
-            migrations: MigrationTable::new(),
-        })
+        let self_node_id =
+            if cfg.cluster.node_id.is_empty() { None } else { Some(cfg.cluster.node_id.clone()) };
+        Ok(Self { ownership, peer_addrs, self_node_id, migrations: MigrationTable::new() })
     }
-
 
     /// `true` when the ownership table has at least one declared
     /// scope. The hot dispatch path branches off this early — when
@@ -92,10 +83,7 @@ impl ScopeState {
     /// MOVE-SCOPE command handler — it needs to connect to the target
     /// writer over TCP).
     pub(crate) fn peer_addr(&self, node_id: &str) -> Option<String> {
-        self.peer_addrs
-            .iter()
-            .find(|(id, _)| id == node_id)
-            .map(|(_, addr)| addr.clone())
+        self.peer_addrs.iter().find(|(id, _)| id == node_id).map(|(_, addr)| addr.clone())
     }
 
     pub(crate) fn migration_start(
@@ -116,8 +104,7 @@ impl ScopeState {
     }
 
     fn resolve_addr(&self, node_id: &str) -> String {
-        self.peer_addr(node_id)
-            .unwrap_or_else(|| node_id.to_string())
+        self.peer_addr(node_id).unwrap_or_else(|| node_id.to_string())
     }
 }
 
@@ -155,9 +142,7 @@ impl RuntimeState {
         }
         let scope = &self.scope;
         if let Some(m) = scope.migrations.match_migrating(key) {
-            return Some(WriteRedirect::Quiesced {
-                to_addr: scope.resolve_addr(&m.to),
-            });
+            return Some(WriteRedirect::Quiesced { to_addr: scope.resolve_addr(&m.to) });
         }
         if let Some(m) = scope.migrations.match_migrated(key) {
             return Some(WriteRedirect::Misdirected(scope.resolve_addr(&m.to)));
@@ -251,4 +236,3 @@ mod tests {
         assert!(scope.self_node_id().is_none());
     }
 }
-

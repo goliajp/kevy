@@ -108,8 +108,7 @@ unsafe fn find_crlf_avx2(buf: &[u8], start: usize) -> Option<usize> {
     while i + 32 < n {
         // SAFETY: `i + 32 < n` ⇒ bytes [i, i+31] are inside `buf`; the
         // ptr is just past the buffer at most when this loop exits.
-        let chunk =
-            unsafe { _mm256_loadu_si256(buf.as_ptr().add(i) as *const __m256i) };
+        let chunk = unsafe { _mm256_loadu_si256(buf.as_ptr().add(i) as *const __m256i) };
         // Pure register ops on already-loaded vectors.
         let mask = _mm256_movemask_epi8(_mm256_cmpeq_epi8(chunk, cr)) as u32;
         if mask != 0 {
@@ -280,7 +279,7 @@ mod tests {
             b"PING\r\n",
             b"XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX\r\n", // CRLF right after a full AVX2 chunk
             b"XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX\r\n", // CRLF one byte after
-            b"\r\nXX\r\nXXXXXX\r\n", // multiple CRLFs, hit each in turn
+            b"\r\nXX\r\nXXXXXX\r\n",                 // multiple CRLFs, hit each in turn
             b"XXXXXXXXXXXXXXXX\rXXXXXXXXXXXXXXXX\r\n", // lone CR in chunk N, real CRLF in chunk N+1
             b"only-text-no-newline-at-all-just-bytes-here-XXXX",
         ];

@@ -59,7 +59,12 @@ pub fn write_feed_gen(dir: &Path, shard: usize, generation: u64) -> io::Result<(
 }
 
 /// Write the clean-shutdown continuity marker.
-pub fn write_feed_meta(dir: &Path, shard: usize, generation: u64, next_offset: u64) -> io::Result<()> {
+pub fn write_feed_meta(
+    dir: &Path,
+    shard: usize,
+    generation: u64,
+    next_offset: u64,
+) -> io::Result<()> {
     let tmp = dir.join(format!("feed-{shard}.meta.tmp"));
     {
         let mut f = fs::File::create(&tmp)?;
@@ -83,9 +88,8 @@ fn read_meta(dir: &Path, shard: usize) -> Option<(u64, u64)> {
 /// and the next clean shutdown must read as unclean), bump + persist
 /// the generation when continuity is broken.
 pub fn load_feed_boot(dir: &Path, shard: usize) -> io::Result<FeedBoot> {
-    let highwater: Option<u64> = fs::read_to_string(gen_path(dir, shard))
-        .ok()
-        .and_then(|s| s.trim().parse().ok());
+    let highwater: Option<u64> =
+        fs::read_to_string(gen_path(dir, shard)).ok().and_then(|s| s.trim().parse().ok());
     let marker = read_meta(dir, shard);
     let _ = fs::remove_file(meta_path(dir, shard));
     let boot = match (highwater, marker) {
@@ -144,10 +148,7 @@ mod tests {
         assert_ne!(b.generation, 0);
         assert_eq!(b.next_offset, 0);
         // gen high-water persisted
-        assert_eq!(
-            fs::read_to_string(d.join("feed-0.gen")).unwrap(),
-            b.generation.to_string()
-        );
+        assert_eq!(fs::read_to_string(d.join("feed-0.gen")).unwrap(), b.generation.to_string());
         // Two fresh dirs must not share an identity (the "every fresh
         // node is gen 1" collision).
         let d2 = tmp();
@@ -180,10 +181,7 @@ mod tests {
         let b = load_feed_boot(&d, 0).unwrap();
         assert_ne!(b.generation, g1);
         assert_ne!(b.generation, 0);
-        assert_eq!(
-            fs::read_to_string(d.join("feed-0.gen")).unwrap(),
-            b.generation.to_string()
-        );
+        assert_eq!(fs::read_to_string(d.join("feed-0.gen")).unwrap(), b.generation.to_string());
         let _ = fs::remove_dir_all(&d);
     }
 

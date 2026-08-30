@@ -180,9 +180,8 @@ fn write_rows(s: &mut std::net::TcpStream) {
     }
 }
 
-const QUERY: &[&[u8]] = &[
-    b"IDX.QUERY", b"byn", b"RANGE", b"0", b"100", b"LIMIT", b"100", b"FIELDS", b"a", b"n",
-];
+const QUERY: &[&[u8]] =
+    &[b"IDX.QUERY", b"byn", b"RANGE", b"0", b"100", b"LIMIT", b"100", b"FIELDS", b"a", b"n"];
 
 fn wait_index_ready(s: &mut std::net::TcpStream) -> Vec<u8> {
     for _ in 0..100 {
@@ -222,17 +221,22 @@ fn cold_table_digest_backfill_and_hydration_match_the_hot_twin() {
         info_gauges(&mut cc, &["promotions_total", "peek_preads_total", "cold_keys"])
     });
     assert_eq!(g[0], 0, "digest must not promote");
-    assert_eq!(
-        g[1],
-        g[2],
-        "digest: one read per cold row"
-    );
+    assert_eq!(g[1], g[2], "digest: one read per cold row");
 
     // Phase D — IDX.CREATE AFTER the rows went cold: the backfill runs
     // entirely over the no-promote peek.
     let create: &[&[u8]] = &[
-        b"IDX.CREATE", b"byn", b"ON", b"PREFIX", b"row:", b"FIELD", b"n", b"TYPE", b"i64",
-        b"KIND", b"range",
+        b"IDX.CREATE",
+        b"byn",
+        b"ON",
+        b"PREFIX",
+        b"row:",
+        b"FIELD",
+        b"n",
+        b"TYPE",
+        b"i64",
+        b"KIND",
+        b"range",
     ];
     assert_eq!(cmd(&mut hc, create), b"+OK\r\n");
     assert_eq!(cmd(&mut cc, create), b"+OK\r\n");
@@ -273,8 +277,5 @@ fn cold_table_digest_backfill_and_hydration_match_the_hot_twin() {
     let vh = cmd(&mut hc, &[b"IDX.VERIFY", b"byn"]);
     let vc = cmd(&mut cc, &[b"IDX.VERIFY", b"byn"]);
     assert_eq!(vc, vh, "IDX.VERIFY over cold rows must match the hot twin");
-    assert_eq!(
-        common::at_rest("promotions_total", || info_gauge(&mut cc, "promotions_total")),
-        0
-    );
+    assert_eq!(common::at_rest("promotions_total", || info_gauge(&mut cc, "promotions_total")), 0);
 }

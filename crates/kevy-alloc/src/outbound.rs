@@ -93,12 +93,8 @@ impl Outbound {
             let e = self.entries[i];
             // SAFETY: every entry was a live slot address when pushed,
             // and pending slots are exclusively ours until spliced.
-            let seg = unsafe {
-                segment::segment_of(NonNull::new_unchecked(e.addr as *mut u8))
-            };
-            let slot = groups
-                .iter_mut()
-                .find(|g| g.seg == seg.as_ptr() || g.seg.is_null());
+            let seg = unsafe { segment::segment_of(NonNull::new_unchecked(e.addr as *mut u8)) };
+            let slot = groups.iter_mut().find(|g| g.seg == seg.as_ptr() || g.seg.is_null());
             let g = match slot {
                 Some(g) => g,
                 // All group slots busy with other segments: ship the

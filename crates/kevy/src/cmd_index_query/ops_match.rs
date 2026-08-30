@@ -45,14 +45,15 @@ fn with_clauses<R>(
         .collect();
     let grouped = distinct_field(spec, &q.distinct)?;
     let dkey = grouped.map(|(_, ty)| move |raw: &[u8]| kevy_index::order_key(ty, raw));
-    let distinct = grouped
-        .zip(dkey.as_ref())
-        .map(|((field, _), k)| kevy_text::Distinct { field, key: k });
+    let distinct =
+        grouped.zip(dkey.as_ref()).map(|((field, _), k)| kevy_text::Distinct { field, key: k });
     let sorted = sort_field(spec, &q.sort)?;
     let key = sorted.map(|(_, _, ty)| move |raw: &[u8]| kevy_index::order_key(ty, raw));
-    let sort = sorted
-        .zip(key.as_ref())
-        .map(|((field, desc, _), k)| kevy_text::Sort { field, desc, key: k });
+    let sort = sorted.zip(key.as_ref()).map(|((field, desc, _), k)| kevy_text::Sort {
+        field,
+        desc,
+        key: k,
+    });
     let counted = facet_fields(spec, &q.facets)?;
     let fkeys: Vec<_> = counted
         .iter()

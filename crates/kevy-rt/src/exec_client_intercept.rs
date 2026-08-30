@@ -14,8 +14,8 @@
 
 use kevy_resp::ArgvView;
 
-use crate::shard::Shard;
 use crate::Commands;
+use crate::shard::Shard;
 
 impl<C: Commands> Shard<C> {
     /// Return `true` when `args` is `CLIENT SETNAME <name>` or
@@ -97,7 +97,8 @@ impl<C: Commands> Shard<C> {
         if name.iter().any(|b| b.is_ascii_whitespace() || *b < 0x20) {
             self.immediate_reply(
                 conn_id,
-                b"-ERR Client names cannot contain spaces, newlines or special characters.\r\n".to_vec(),
+                b"-ERR Client names cannot contain spaces, newlines or special characters.\r\n"
+                    .to_vec(),
             );
             return;
         }

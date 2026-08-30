@@ -6,7 +6,10 @@
 //! function carries the whole command set. Command bodies delegate to the
 //! helpers in [`crate::cmd`].
 
-use crate::cmd::{upper_verb, wrong_args, store_err, OOM_ERR, cmd_set, is_growing_write_verb, cmd_hello, emit_int_result, rest_borrowed, emit_bulk_array, cmd_spop_rand, cmd_expire, cmd_expireat, cmd_ttl};
+use crate::cmd::{
+    OOM_ERR, cmd_expire, cmd_expireat, cmd_hello, cmd_set, cmd_spop_rand, cmd_ttl, emit_bulk_array,
+    emit_int_result, is_growing_write_verb, rest_borrowed, store_err, upper_verb, wrong_args,
+};
 use crate::state::Ctx;
 use kevy_resp::{
     ArgvView, encode_bulk, encode_error, encode_integer, encode_null_bulk, encode_simple_string,
@@ -14,7 +17,11 @@ use kevy_resp::{
 use kevy_store::Store;
 
 /// Map one command to its RESP reply bytes.
-pub(crate) fn dispatch<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, store: &mut Store, args: &A) -> Vec<u8> {
+pub(crate) fn dispatch<A: ArgvView + ?Sized>(
+    ctx: &Ctx<'_>,
+    store: &mut Store,
+    args: &A,
+) -> Vec<u8> {
     let mut out = Vec::new();
     dispatch_into(ctx, store, args, &mut out);
     out
@@ -182,9 +189,8 @@ fn dispatch_with_proto<A: ArgvView + ?Sized>(
 /// Redis answers a two-element array of decimal strings: unix seconds,
 /// then the microseconds within that second.
 fn cmd_time(out: &mut Vec<u8>) {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
+    let now =
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
     kevy_resp::encode_array_len(out, 2);
     encode_bulk(out, now.as_secs().to_string().as_bytes());
     encode_bulk(out, now.subsec_micros().to_string().as_bytes());
@@ -278,7 +284,6 @@ fn cmd_select<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
     }
 }
 
-
 /// Set commands (single-key; multi-key SINTER/SUNION/SDIFF are runtime gathers).
 // LOC-WAIVER: data-driven verb dispatch table — one arm per set verb.
 fn dispatch_set<A: ArgvView + ?Sized>(
@@ -293,9 +298,7 @@ fn dispatch_set<A: ArgvView + ?Sized>(
                 wrong_args(out, "sadd");
             } else {
                 emit_int_result(
-                    store
-                        .sadd(&args[1], &rest_borrowed(args, 2))
-                        .map(|n| n as i64),
+                    store.sadd(&args[1], &rest_borrowed(args, 2)).map(|n| n as i64),
                     out,
                 );
             }
@@ -305,9 +308,7 @@ fn dispatch_set<A: ArgvView + ?Sized>(
                 wrong_args(out, "srem");
             } else {
                 emit_int_result(
-                    store
-                        .srem(&args[1], &rest_borrowed(args, 2))
-                        .map(|n| n as i64),
+                    store.srem(&args[1], &rest_borrowed(args, 2)).map(|n| n as i64),
                     out,
                 );
             }
@@ -405,4 +406,3 @@ fn dispatch_generic<A: ArgvView + ?Sized>(
     }
     true
 }
-

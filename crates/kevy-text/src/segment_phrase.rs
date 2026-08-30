@@ -18,6 +18,29 @@ use super::{CorpusStats, QueryOpts, TextMatch, TextSegment};
 use crate::positions::{Positions, walk};
 use crate::token::{tokenize, tokenize_spans};
 
+/// Whether the query is the ordinary pruned term query — no phrase, prefix,
+/// typo, field, filter, sort, distinct or facet clause.
+///
+/// Split out of `matches_query_faceted` for the 50-line rule. It reads
+/// better as a name than as eight `&&`s, and the name is the thing the
+/// comment underneath it used to have to say.
+fn is_plain_term_query(
+    phrases: &[Vec<Vec<u8>>],
+    prefixes: &[Vec<u8>],
+    want: &[usize],
+    opts: &QueryOpts,
+    facets: &[crate::Facet],
+) -> bool {
+    phrases.is_empty()
+        && prefixes.is_empty()
+        && opts.typo == 0
+        && want.is_empty()
+        && opts.filter.is_empty()
+        && opts.sort.is_none()
+        && opts.distinct.is_none()
+        && facets.is_empty()
+}
+
 impl TextSegment {
     /// BM25-ranked documents that contain `phrase`'s tokens **adjacent
     /// and in order**, best `limit` hits, score-descending.
@@ -98,12 +121,7 @@ impl TextSegment {
     /// whole-document scores: frequency, length and document frequency
     /// all come from the wanted fields alone, so a match in a short title
     /// is not diluted by a long body that never mentioned the term.
-    pub fn matches_query_with(
-        &self,
-        text: &[u8],
-        limit: usize,
-        opts: QueryOpts,
-    ) -> Vec<TextMatch> {
+    pub fn matches_query_with(&self, text: &[u8], limit: usize, opts: QueryOpts) -> Vec<TextMatch> {
         self.matches_query_faceted(text, limit, opts, &[]).hits
     }
 
@@ -121,7 +139,8 @@ impl TextSegment {
         opts: QueryOpts,
         facets: &[crate::Facet],
     ) -> crate::FacetedMatches {
-        let empty = || crate::FacetedMatches { hits: Vec::new(), facets: vec![Vec::new(); facets.len()] };
+        let empty =
+            || crate::FacetedMatches { hits: Vec::new(), facets: vec![Vec::new(); facets.len()] };
         if limit == 0 {
             return empty();
         }
@@ -129,18 +148,7 @@ impl TextSegment {
             return empty();
         };
         let (bare, phrases, prefixes) = parse_clauses(text);
-        if phrases.is_empty()
-            && prefixes.is_empty()
-            && opts.typo == 0
-            && want.is_empty()
-            && opts.filter.is_empty()
-            && opts.sort.is_none()
-            && opts.distinct.is_none()
-            && facets.is_empty()
-        {
-            // No phrase, prefix, typo, field, filter, sort or distinct
-            // clause — the
-            // ordinary pruned term query.
+        if is_plain_term_query(&phrases, &prefixes, &want, &opts, facets) {
             return crate::FacetedMatches {
                 hits: self.matches_scored(text, limit, opts.stats),
                 facets: Vec::new(),
@@ -413,9 +421,10 @@ fn phrase_occurs(pos: &Positions, toks: &[Vec<u8>], id: u32) -> bool {
         return false;
     };
     walk(first).any(|start| {
-        toks.iter().enumerate().skip(1).all(|(i, t)| {
-            pos.blob(t, id).is_some_and(|b| walk(b).any(|p| p == start + i as u32))
-        })
+        toks.iter()
+            .enumerate()
+            .skip(1)
+            .all(|(i, t)| pos.blob(t, id).is_some_and(|b| walk(b).any(|p| p == start + i as u32)))
     })
 }
 
@@ -432,8 +441,7 @@ fn phrase_starts(pos: &Positions, toks: &[Vec<u8>], id: u32) -> HashSet<u32> {
         let Some(offs) = pos.get(t, id) else {
             return HashSet::new();
         };
-        let shifted: HashSet<u32> =
-            offs.iter().filter_map(|&p| p.checked_sub(i as u32)).collect();
+        let shifted: HashSet<u32> = offs.iter().filter_map(|&p| p.checked_sub(i as u32)).collect();
         starts.retain(|s| shifted.contains(s));
         if starts.is_empty() {
             return starts;

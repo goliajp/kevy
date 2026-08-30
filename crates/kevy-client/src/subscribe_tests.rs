@@ -1,5 +1,5 @@
-use crate::KevyError;
 use super::*;
+use crate::KevyError;
 
 // ----- URL routing -----
 
@@ -45,7 +45,10 @@ fn remote_host_port_explicit() {
 
 #[test]
 fn remote_host_port_userinfo_rejected() {
-    assert!(matches!(remote_host_port("kevy://u:p@h:6379").unwrap_err(), KevyError::Unsupported(_)));
+    assert!(matches!(
+        remote_host_port("kevy://u:p@h:6379").unwrap_err(),
+        KevyError::Unsupported(_)
+    ));
 }
 
 // ----- embedded end-to-end -----
@@ -63,13 +66,7 @@ fn embed_subscribe_then_publish_via_same_url_delivers() {
     // Publish from the second handle.
     assert_eq!(pubconn.publish(b"chan", b"hi").unwrap(), 1);
     let ev = sub.recv().unwrap();
-    assert_eq!(
-        ev,
-        PubsubEvent::Message {
-            channel: b"chan".to_vec(),
-            payload: b"hi".to_vec(),
-        }
-    );
+    assert_eq!(ev, PubsubEvent::Message { channel: b"chan".to_vec(), payload: b"hi".to_vec() });
 }
 
 #[test]

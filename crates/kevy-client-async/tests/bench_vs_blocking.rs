@@ -48,11 +48,7 @@ async fn async_sequential() {
         c.set(k.as_bytes(), b"v").await.unwrap();
     }
     let dt = t.elapsed();
-    println!(
-        "async   sequential SET ×{N}: {:?} ({:.0} ops/s)",
-        dt,
-        (N as f64) / dt.as_secs_f64()
-    );
+    println!("async   sequential SET ×{N}: {:?} ({:.0} ops/s)", dt, (N as f64) / dt.as_secs_f64());
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -95,9 +91,5 @@ fn blocking_sequential() {
         c.set(k.as_bytes(), b"v").unwrap();
     }
     let dt = t.elapsed();
-    println!(
-        "blocking sequential SET ×{N}: {:?} ({:.0} ops/s)",
-        dt,
-        (N as f64) / dt.as_secs_f64()
-    );
+    println!("blocking sequential SET ×{N}: {:?} ({:.0} ops/s)", dt, (N as f64) / dt.as_secs_f64());
 }

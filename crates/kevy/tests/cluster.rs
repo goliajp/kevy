@@ -106,7 +106,9 @@ impl Server {
         let stop_thread = stop.clone();
         let dir_thread = dir.clone();
         let handle = std::thread::spawn(move || {
-            let mut rt = kevy_rt::Runtime::builder(kevy::KevyCommands::with_state(state)).bind([127, 0, 0, 1], port).shards(nshards)
+            let mut rt = kevy_rt::Runtime::builder(kevy::KevyCommands::with_state(state))
+                .bind([127, 0, 0, 1], port)
+                .shards(nshards)
                 .with_data_dir(dir_thread);
             if cluster {
                 rt = rt.with_cluster(cluster_base);
@@ -298,14 +300,7 @@ fn reshard_migrates_kevyhash_data_to_slots_losslessly() {
     assert_eq!(meta, format!("{n}\nslots\n"));
     let backups = std::fs::read_dir(&dir)
         .unwrap()
-        .filter(|e| {
-            e.as_ref()
-                .unwrap()
-                .file_name()
-                .to_string_lossy()
-                .contains(".premigration.")
-        })
+        .filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().contains(".premigration."))
         .count();
     assert!(backups > 0, "expected .premigration backups in {dir:?}");
 }
-

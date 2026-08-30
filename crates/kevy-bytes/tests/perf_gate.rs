@@ -65,8 +65,5 @@ fn as_slice_inline_under_budget() {
 #[test]
 fn size_and_align_pinned() {
     assert_eq!(std::mem::size_of::<SmallBytes>(), 24);
-    assert_eq!(
-        std::mem::align_of::<SmallBytes>(),
-        std::mem::align_of::<usize>()
-    );
+    assert_eq!(std::mem::align_of::<SmallBytes>(), std::mem::align_of::<usize>());
 }

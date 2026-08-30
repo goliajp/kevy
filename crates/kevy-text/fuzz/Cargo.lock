@@ -55,7 +55,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-text"
-version = "6.1.0"
+version = "6.2.0"
 
 [[package]]
 name = "kevy-text-fuzz"

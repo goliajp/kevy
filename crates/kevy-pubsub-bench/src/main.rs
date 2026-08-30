@@ -111,8 +111,7 @@ fn read_line(s: &mut impl Read) -> std::io::Result<String> {
 fn subscriber_loop(addr: &str, ready: &AtomicUsize, done: &AtomicUsize, target_bytes: usize) {
     let mut s = TcpStream::connect(addr).expect("subscriber connect");
     s.set_nodelay(true).ok();
-    s.write_all(&resp(&[b"SUBSCRIBE", CHANNEL.as_bytes()]))
-        .unwrap();
+    s.write_all(&resp(&[b"SUBSCRIBE", CHANNEL.as_bytes()])).unwrap();
     read_reply(&mut s).unwrap(); // subscribe confirmation
     ready.fetch_add(1, Ordering::SeqCst);
     // Drain exactly `target_bytes` of message frames.

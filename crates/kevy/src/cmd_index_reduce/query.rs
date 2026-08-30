@@ -158,9 +158,8 @@ fn merge_chunks(chunks: &[Vec<u8>], limit: usize) -> Vec<(IndexValue, Vec<u8>, H
             None => (0, pos),
         });
     }
-    let mut head: Vec<Option<(IndexValue, Vec<u8>, Hydrated)>> = (0..chunks.len())
-        .map(|i| next_row(&chunks[i], &mut cur[i]))
-        .collect();
+    let mut head: Vec<Option<(IndexValue, Vec<u8>, Hydrated)>> =
+        (0..chunks.len()).map(|i| next_row(&chunks[i], &mut cur[i])).collect();
 
     let mut out = Vec::with_capacity(limit.min(64));
     while out.len() < limit {

@@ -101,17 +101,18 @@ fn parse_fields(argv: &[Vec<u8>]) -> Result<(Vec<FieldSpec>, usize), &'static st
     if i < argv.len() && argv[i].eq_ignore_ascii_case(b"WEIGHTS") {
         i = parse_weights(argv, i + 1, &mut weights)?;
     }
-    let fields = names
-        .into_iter()
-        .zip(weights)
-        .map(|(name, weight)| FieldSpec { name, weight })
-        .collect();
+    let fields =
+        names.into_iter().zip(weights).map(|(name, weight)| FieldSpec { name, weight }).collect();
     Ok((fields, i))
 }
 
 /// Fill `weights` from argv starting at `start`, stopping at `TYPE`.
 /// Returns the `TYPE` index. Count must match `weights.len()` exactly.
-fn parse_weights(argv: &[Vec<u8>], start: usize, weights: &mut [f32]) -> Result<usize, &'static str> {
+fn parse_weights(
+    argv: &[Vec<u8>],
+    start: usize,
+    weights: &mut [f32],
+) -> Result<usize, &'static str> {
     let mut i = start;
     let mut wi = 0;
     while i < argv.len() && !argv[i].eq_ignore_ascii_case(b"TYPE") {
@@ -133,7 +134,10 @@ fn parse_weights(argv: &[Vec<u8>], start: usize, weights: &mut [f32]) -> Result<
 
 /// TYPE / KIND / PREFIX validation. `type_pos` is the TYPE keyword;
 /// value at +1, KIND value at +3.
-fn parse_type_kind(argv: &[Vec<u8>], type_pos: usize) -> Result<(ValType, IndexKind), &'static str> {
+fn parse_type_kind(
+    argv: &[Vec<u8>],
+    type_pos: usize,
+) -> Result<(ValType, IndexKind), &'static str> {
     let Some(ty) = ValType::parse(&argv[type_pos + 1]) else {
         return Err("ERR TYPE must be i64|f64|str|vector");
     };
@@ -216,7 +220,11 @@ fn parse_values(argv: &[Vec<u8>], start: usize, o: &mut CreateOpts) -> Result<us
 /// `TYPES t…`: how each declared value field's bytes compare. Declared
 /// rather than guessed, because a numeric range compared
 /// lexicographically is silently wrong.
-fn parse_value_types(argv: &[Vec<u8>], start: usize, o: &mut CreateOpts) -> Result<usize, &'static str> {
+fn parse_value_types(
+    argv: &[Vec<u8>],
+    start: usize,
+    o: &mut CreateOpts,
+) -> Result<usize, &'static str> {
     let mut i = start;
     let mut n = 0;
     while i < argv.len() && !is_create_opt(&argv[i]) {
@@ -285,7 +293,11 @@ fn apply_create_opt(opt: &[u8], val: &[u8], o: &mut CreateOpts) -> Result<(), &'
 }
 
 /// KIND × TYPE (× GROUPBY) compatibility, mirroring the server.
-fn validate_kind_combo(kind: IndexKind, ty: ValType, opts: &CreateOpts) -> Result<(), &'static str> {
+fn validate_kind_combo(
+    kind: IndexKind,
+    ty: ValType,
+    opts: &CreateOpts,
+) -> Result<(), &'static str> {
     match (kind, ty) {
         (IndexKind::Ann, ValType::Vector) if opts.dim > 0 => {}
         (IndexKind::Ann, _) => return Err("ERR KIND ann requires TYPE vector and DIM"),
@@ -327,7 +339,12 @@ fn route(s: &Store, argv: &[Vec<u8>], p: &Parsed, out: &mut Vec<u8>) {
             name,
             prefix,
             field0,
-            kevy_index::AnnSpec { dim: p.opts.dim, distance: p.opts.distance, m: p.opts.m, ef: p.opts.ef },
+            kevy_index::AnnSpec {
+                dim: p.opts.dim,
+                distance: p.opts.distance,
+                m: p.opts.m,
+                ef: p.opts.ef,
+            },
         ),
         #[cfg(not(feature = "vector"))]
         IndexKind::Ann => return err(out, "ERR vector indexes need the `vector` feature"),
@@ -350,7 +367,8 @@ fn route(s: &Store, argv: &[Vec<u8>], p: &Parsed, out: &mut Vec<u8>) {
 /// positions, and typed stored values.
 #[cfg(feature = "text")]
 fn create_text(s: &Store, name: &[u8], prefix: &[u8], p: &Parsed) -> crate::KevyResult<()> {
-    let fields: Vec<(&[u8], f32)> = p.fields.iter().map(|f| (f.name.as_slice(), f.weight)).collect();
+    let fields: Vec<(&[u8], f32)> =
+        p.fields.iter().map(|f| (f.name.as_slice(), f.weight)).collect();
     let values: Vec<(&[u8], ValType)> =
         p.opts.values.iter().map(|v| (v.name.as_slice(), v.ty)).collect();
     s.idx_create_text(name, prefix, &fields, p.opts.with_positions, &values)

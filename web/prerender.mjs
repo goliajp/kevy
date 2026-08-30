@@ -267,6 +267,7 @@ for (const lang of LANGS) {
         depth: 1,
         have: ['en'],
         selfHref: './',
+        canonical: '/changelog/',
       },
       CSS,
     ),

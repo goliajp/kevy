@@ -53,10 +53,7 @@ fn extended_flag_ignores_unescaped_whitespace() {
 // spg e2e_regex_extended_flag: `#` starts an end-of-line comment.
 #[test]
 fn extended_flag_strips_hash_comments() {
-    assert_eq!(
-        matched(r"(?x) \d+  # the digits", "foo123bar").as_deref(),
-        Some("123")
-    );
+    assert_eq!(matched(r"(?x) \d+  # the digits", "foo123bar").as_deref(), Some("123"));
 }
 
 // spg e2e_regex_extended_flag: an escaped space and a space inside a class

@@ -10,9 +10,7 @@ use super::{appendfsync_str, eviction_str, memory, replication};
 use crate::state::Ctx;
 
 pub(super) fn info_server(cfg: &Config, b: &mut String) {
-    let now = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
+    let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_secs());
     b.push_str("# Server\r\n");
     b.push_str("redis_version:7.4.0\r\n"); // valkey-compat byte-for-byte sniffing
     b.push_str(&format!("kevy_version:{}\r\n", env!("CARGO_PKG_VERSION")));
@@ -27,10 +25,7 @@ pub(super) fn info_clients(cfg: &Config, totals: &crate::state::Totals, b: &mut 
     b.push_str("# Clients\r\n");
     // Live client conns summed over every shard's per-tick gauge
     // (stale by at most one tick interval).
-    b.push_str(&format!(
-        "connected_clients:{}\r\n",
-        totals.clients_connected
-    ));
+    b.push_str(&format!("connected_clients:{}\r\n", totals.clients_connected));
     b.push_str(&format!("maxclients:{}\r\n", cfg.server.max_clients));
     b.push_str("\r\n");
 }
@@ -40,32 +35,20 @@ pub(super) fn info_memory(cfg: &Config, totals: &crate::state::Totals, b: &mut S
     let peak = totals.used_memory_peak;
     b.push_str("# Memory\r\n");
     b.push_str(&format!("used_memory:{used}\r\n"));
-    b.push_str(&format!(
-        "used_memory_human:{}\r\n",
-        memory::format_bytes_human(used)
-    ));
+    b.push_str(&format!("used_memory_human:{}\r\n", memory::format_bytes_human(used)));
     b.push_str(&format!("used_memory_peak:{peak}\r\n"));
-    b.push_str(&format!(
-        "used_memory_peak_human:{}\r\n",
-        memory::format_bytes_human(peak)
-    ));
+    b.push_str(&format!("used_memory_peak_human:{}\r\n", memory::format_bytes_human(peak)));
     b.push_str(&format!("maxmemory:{}\r\n", cfg.memory.maxmemory));
     b.push_str(&format!(
         "maxmemory_human:{}\r\n",
         memory::format_bytes_human(cfg.memory.maxmemory)
     ));
-    b.push_str(&format!(
-        "maxmemory_policy:{}\r\n",
-        eviction_str(cfg.memory.maxmemory_policy)
-    ));
+    b.push_str(&format!("maxmemory_policy:{}\r\n", eviction_str(cfg.memory.maxmemory_policy)));
     b.push_str(&format!("evicted_keys:{}\r\n", totals.evicted_keys));
     // The process, not the store size containers
     // from RSS — indexes, buffers and allocator overhead live outside
     // `used_memory`. 0 on platforms without a probe.
-    b.push_str(&format!(
-        "process_rss_bytes:{}\r\n",
-        kevy_sys::process_rss_bytes()
-    ));
+    b.push_str(&format!("process_rss_bytes:{}\r\n", kevy_sys::process_rss_bytes()));
     b.push_str("\r\n");
 }
 
@@ -102,25 +85,13 @@ pub(super) fn info_persistence(ctx: &Ctx<'_>, cfg: &Config, b: &mut String) {
     // `loading` = a full-resync snapshot ship is being received (the
     // window where reads answer -LOADING). Startup AOF replay never
     // shows here — it completes before the listener accepts.
-    b.push_str(&format!(
-        "loading:{}\r\n",
-        i32::from(ctx.state.replication.loading())
-    ));
-    b.push_str(&format!(
-        "aof_enabled:{}\r\n",
-        i32::from(cfg.persistence.aof)
-    ));
-    b.push_str(&format!(
-        "appendfsync:{}\r\n",
-        appendfsync_str(cfg.persistence.appendfsync)
-    ));
+    b.push_str(&format!("loading:{}\r\n", i32::from(ctx.state.replication.loading())));
+    b.push_str(&format!("aof_enabled:{}\r\n", i32::from(cfg.persistence.aof)));
+    b.push_str(&format!("appendfsync:{}\r\n", appendfsync_str(cfg.persistence.appendfsync)));
     // The answering shard's view (each shard persists independently);
     // refreshed per reactor tick, so in-progress flips within ~100 ms of
     // a BGSAVE/BGREWRITEAOF starting or finishing.
-    b.push_str(&format!(
-        "aof_rewrite_in_progress:{}\r\n",
-        i32::from(in_flight)
-    ));
+    b.push_str(&format!("aof_rewrite_in_progress:{}\r\n", i32::from(in_flight)));
     b.push_str(&format!("aof_rewrites_total:{rewrites}\r\n"));
     // The on-disk format this shard's AOF speaks (the smix
     // ask's server twin): v1 = a pre-4.0 file still being appended, so
@@ -150,14 +121,8 @@ fn info_replay_verdict(ctx: &Ctx<'_>, b: &mut String) {
 
 pub(super) fn info_stats(ctx: &Ctx<'_>, totals: &crate::state::Totals, b: &mut String) {
     b.push_str("# Stats\r\n");
-    b.push_str(&format!(
-        "total_connections_received:{}\r\n",
-        totals.connections_received
-    ));
-    b.push_str(&format!(
-        "total_commands_processed:{}\r\n",
-        totals.commands_processed
-    ));
+    b.push_str(&format!("total_connections_received:{}\r\n", totals.connections_received));
+    b.push_str(&format!("total_commands_processed:{}\r\n", totals.commands_processed));
     b.push_str(&format!(
         "instantaneous_ops_per_sec:{}\r\n",
         ctx.state.obs.instantaneous_ops_per_sec(totals.commands_processed)
@@ -177,10 +142,7 @@ pub(super) fn info_stats(ctx: &Ctx<'_>, totals: &crate::state::Totals, b: &mut S
     // kevy extension: the reactor's single-iteration stall upper
     // bound, as the tick's worst observed lateness (µs). The tailgate
     // reads this for its "reactor single-loop <= 100ms" line.
-    b.push_str(&format!(
-        "reactor_tick_gap_max_us:{}\r\n",
-        totals.tick_gap_max_us
-    ));
+    b.push_str(&format!("reactor_tick_gap_max_us:{}\r\n", totals.tick_gap_max_us));
     // The gauge above is a high-water mark; this counter is the other
     // half of the pair. One late tick and a chronically starved cadence
     // read the same on the gauge alone — two reads of this counter over
@@ -215,11 +177,7 @@ pub(super) fn info_repl_replica(ctx: &Ctx<'_>, b: &mut String, host: std::net::I
     // ping freshness (<3s), applied offset and frame lag from
     // the runner registry.
     let (up, applied, lag, last_io) = ctx.state.replication.replica_link_view();
-    b.push_str(if up {
-        "master_link_status:up\r\n"
-    } else {
-        "master_link_status:down\r\n"
-    });
+    b.push_str(if up { "master_link_status:up\r\n" } else { "master_link_status:down\r\n" });
     b.push_str(&format!("master_last_io_seconds_ago:{last_io}\r\n"));
     b.push_str("master_sync_in_progress:0\r\n");
     b.push_str(if ctx.state.replication.read_only() {
@@ -257,11 +215,7 @@ pub(super) fn info_repl_master(ctx: &Ctx<'_>, b: &mut String) {
 
 pub(super) fn info_cluster(cfg: &Config, b: &mut String) {
     b.push_str("# Cluster\r\n");
-    b.push_str(if cfg.cluster.enabled {
-        "cluster_enabled:1\r\n"
-    } else {
-        "cluster_enabled:0\r\n"
-    });
+    b.push_str(if cfg.cluster.enabled { "cluster_enabled:1\r\n" } else { "cluster_enabled:0\r\n" });
     b.push_str("\r\n");
 }
 
@@ -294,10 +248,7 @@ pub(super) fn info_keyspace(totals: &crate::state::Totals, b: &mut String) {
     // Redis omits the `dbN:` line entirely for an empty keyspace. `avg_ttl` is
     // a Redis estimate we don't track; report 0 (its "unknown" value).
     if totals.keys > 0 {
-        b.push_str(&format!(
-            "db0:keys={},expires={},avg_ttl=0\r\n",
-            totals.keys, totals.expires
-        ));
+        b.push_str(&format!("db0:keys={},expires={},avg_ttl=0\r\n", totals.keys, totals.expires));
     }
     b.push_str("\r\n");
 }

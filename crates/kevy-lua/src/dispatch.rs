@@ -124,15 +124,11 @@ fn invoke_dispatch(vm: &mut Vm, fs: u32, nargs: u32) -> Result<Vec<u8>, LuaError
         .userdata_borrow::<DispatchSlot>(DISPATCH_KEY)
         .map(|s| (Rc::clone(&s.f), Rc::clone(&s.read_only)))
         .ok_or_else(|| {
-            LuaError(Value::Str(
-                vm.heap
-                    .intern(b"redis.call: kevy host dispatch not installed"),
-            ))
+            LuaError(Value::Str(vm.heap.intern(b"redis.call: kevy host dispatch not installed")))
         })?;
     if nargs == 0 {
         return Err(LuaError(Value::Str(
-            vm.heap
-                .intern(b"redis.call: wrong number of arguments (no command)"),
+            vm.heap.intern(b"redis.call: wrong number of arguments (no command)"),
         )));
     }
     let mut argv: Vec<Vec<u8>> = Vec::with_capacity(nargs as usize);
@@ -153,8 +149,7 @@ fn value_to_bytes(v: Value) -> Vec<u8> {
         Value::Str(s) => s.as_bytes().to_vec(),
         Value::Int(n) => n.to_string().into_bytes(),
         Value::Float(f) => {
-            if f.is_finite() && f.fract() == 0.0
-                && (i64::MIN as f64..=i64::MAX as f64).contains(&f)
+            if f.is_finite() && f.fract() == 0.0 && (i64::MIN as f64..=i64::MAX as f64).contains(&f)
             {
                 (f as i64).to_string().into_bytes()
             } else {
@@ -183,9 +178,7 @@ fn error_payload(reply: &[u8]) -> Vec<u8> {
 /// marshaling table.
 fn parse_resp_value(vm: &mut Vm, bytes: &[u8], pos: &mut usize) -> Result<Value, LuaError> {
     if *pos >= bytes.len() {
-        return Err(LuaError(Value::Str(
-            vm.heap.intern(b"redis.call: empty RESP reply"),
-        )));
+        return Err(LuaError(Value::Str(vm.heap.intern(b"redis.call: empty RESP reply"))));
     }
     let tag = bytes[*pos];
     *pos += 1;
@@ -199,14 +192,11 @@ fn parse_resp_value(vm: &mut Vm, bytes: &[u8], pos: &mut usize) -> Result<Value,
         }
         b':' => {
             // Integer.
-            parse_int_line(vm, bytes, pos, b"redis.call: invalid integer reply")
-                .map(Value::Int)
+            parse_int_line(vm, bytes, pos, b"redis.call: invalid integer reply").map(Value::Int)
         }
         b'$' => parse_bulk(vm, bytes, pos),
         b'*' => parse_array(vm, bytes, pos),
-        _ => Err(LuaError(Value::Str(
-            vm.heap.intern(b"redis.call: unknown RESP type tag"),
-        ))),
+        _ => Err(LuaError(Value::Str(vm.heap.intern(b"redis.call: unknown RESP type tag")))),
     }
 }
 
@@ -233,9 +223,7 @@ fn parse_bulk(vm: &mut Vm, bytes: &[u8], pos: &mut usize) -> Result<Value, LuaEr
     }
     let len = n as usize;
     if *pos + len + 2 > bytes.len() {
-        return Err(LuaError(Value::Str(
-            vm.heap.intern(b"redis.call: truncated bulk reply"),
-        )));
+        return Err(LuaError(Value::Str(vm.heap.intern(b"redis.call: truncated bulk reply"))));
     }
     let payload = &bytes[*pos..*pos + len];
     let v = Value::Str(vm.heap.intern(payload));

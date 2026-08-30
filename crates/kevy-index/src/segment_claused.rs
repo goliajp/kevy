@@ -21,8 +21,8 @@ use std::collections::HashMap;
 use std::ops::Bound;
 
 use crate::catalog::ValType;
-use crate::value::ValueTest;
 use crate::segment::{Cursor, Segment};
+use crate::value::ValueTest;
 use crate::value::{IndexValue, order_key};
 
 /// Everything a scalar query carries beyond its bounds. Field indices
@@ -117,9 +117,7 @@ impl Segment {
         if filters.is_empty() {
             return true;
         }
-        filters
-            .iter()
-            .all(|(f, t)| self.stored(key, *f).is_some_and(|raw| t.passes(raw)))
+        filters.iter().all(|(f, t)| self.stored(key, *f).is_some_and(|raw| t.passes(raw)))
     }
 
     /// A stored value's coerced key for a clause: order key under the
@@ -140,9 +138,7 @@ impl Segment {
         max: &IndexValue,
         filters: &[(usize, ValueTest)],
     ) -> u64 {
-        self.range_iter(min, max, None)
-            .filter(|(_, k)| self.passes(k, filters))
-            .count() as u64
+        self.range_iter(min, max, None).filter(|(_, k)| self.passes(k, filters)).count() as u64
     }
 
     /// The clause-carrying scan of `[min, max]`. FILTER-only queries
@@ -205,12 +201,7 @@ impl Segment {
     /// value in. Buckets key by the coerced identity; the label is a
     /// spelling that occurs in the corpus. Rows without a value (or
     /// with one that does not coerce) are in no bucket.
-    fn count_facets(
-        &self,
-        key: &[u8],
-        c: &ScalarClauses<'_>,
-        facets: &mut [FacetCounts],
-    ) {
+    fn count_facets(&self, key: &[u8], c: &ScalarClauses<'_>, facets: &mut [FacetCounts]) {
         for ((f, ty), counts) in c.facets.iter().zip(facets.iter_mut()) {
             let Some(raw) = self.stored(key, *f) else { continue };
             let Some(id) = order_key(*ty, raw) else { continue };

@@ -130,8 +130,10 @@ mod format_reply_tests {
         assert_eq!(f(&Reply::Double(1.5)), "(double) 1.5");
         assert_eq!(f(&Reply::Boolean(true)), "(boolean) t");
         assert_eq!(f(&Reply::Boolean(false)), "(boolean) f");
-        assert_eq!(f(&Reply::BigNumber(b"123456789012345678901".to_vec())),
-                   "(bignum) 123456789012345678901");
+        assert_eq!(
+            f(&Reply::BigNumber(b"123456789012345678901".to_vec())),
+            "(bignum) 123456789012345678901"
+        );
 
         // RESP3's second null and second error spelling render as their
         // RESP2 counterparts — a client must not be able to tell which
@@ -146,10 +148,7 @@ mod format_reply_tests {
 
         // Set and Push share the array arm; a set of one is still numbered.
         assert_eq!(f(&Reply::Set(vec![Reply::Int(4)])), "1) (integer) 4");
-        assert_eq!(
-            f(&Reply::Push(vec![Reply::Bulk(b"message".to_vec())])),
-            "1) \"message\""
-        );
+        assert_eq!(f(&Reply::Push(vec![Reply::Bulk(b"message".to_vec())])), "1) \"message\"");
     }
 
     /// Arrays number from one and nest by indent — the recursive arm, which

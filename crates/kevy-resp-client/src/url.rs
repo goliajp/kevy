@@ -108,11 +108,7 @@ mod tests {
 
     #[test]
     fn kevy_redis_tcp_schemes_all_resolve() {
-        for url in [
-            "kevy://localhost:6379",
-            "redis://localhost:6379",
-            "tcp://localhost:6379",
-        ] {
+        for url in ["kevy://localhost:6379", "redis://localhost:6379", "tcp://localhost:6379"] {
             let p = parse(url);
             assert_eq!(p.host, "localhost");
             assert_eq!(p.port, 6379);

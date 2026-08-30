@@ -31,11 +31,7 @@ fn tree_eval_and_or_diff() {
         }
     };
     let age = leaf("age", IndexValue::I64(2), IndexValue::I64(7));
-    let eng = leaf(
-        "dept",
-        IndexValue::Str(b"eng".to_vec()),
-        IndexValue::Str(b"eng".to_vec()),
-    );
+    let eng = leaf("dept", IndexValue::Str(b"eng".to_vec()), IndexValue::Str(b"eng".to_vec()));
     let and = Tree::And(Box::new(age.clone()), Box::new(eng.clone()));
     let mut got = eval_tree(&and, &seg);
     got.sort();
@@ -81,18 +77,13 @@ fn caps_validate() {
 fn materialized_bounds_and_underflow() {
     let mut m = MaterializedSet::new(4, false); // cap = 4 + 1 = 5
     for i in 0..8 {
-        let under = m.apply(
-            format!("k{i}").as_bytes(),
-            true,
-            Some(IndexValue::I64(i)),
-        );
+        let under = m.apply(format!("k{i}").as_bytes(), true, Some(IndexValue::I64(i)));
         assert!(!under);
     }
     assert_eq!(m.len(), 5, "bounded at K+Δ");
     let page = m.page(None, 10, false);
     assert_eq!(page[0].1, b"k0".to_vec(), "best kept");
     assert_eq!(page.last().unwrap().1, b"k4".to_vec(), "worst evicted");
-
 }
 
 #[test]

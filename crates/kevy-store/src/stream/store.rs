@@ -4,12 +4,12 @@
 //! `StreamId` types + entry-side ops) so each file stays under the
 //! project's ≤500-LOC rule.
 
-#[cfg(not(feature = "std"))]
-use crate::nostd_prelude::*;
 use super::group::{AutoclaimResult, ReadGroupId};
 use super::{
     GroupCreateMode, PendingExtended, PendingSummary, StreamData, StreamId, XAddIdSpec, XClaimOpts,
 };
+#[cfg(not(feature = "std"))]
+use crate::nostd_prelude::*;
 use crate::value::{SmallBytes, Value};
 use crate::{Entry, Store, StoreError};
 use alloc::sync::Arc;

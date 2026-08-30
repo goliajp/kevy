@@ -74,23 +74,12 @@ impl MigrationTable {
     /// is already in either map. The caller (server cement) is
     /// expected to hold a higher-level lock per `MOVE-SCOPE`
     /// invocation so concurrent operator commands don't race.
-    pub fn start(
-        &self,
-        prefix: Vec<u8>,
-        from: String,
-        to: String,
-    ) -> Result<(), MigrationError> {
-        let mut mig = self
-            .migrating
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+    pub fn start(&self, prefix: Vec<u8>, from: String, to: String) -> Result<(), MigrationError> {
+        let mut mig = self.migrating.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if mig.contains_key(&prefix) {
             return Err(MigrationError::AlreadyMigrating);
         }
-        let done = self
-            .migrated
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let done = self.migrated.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if done.contains_key(&prefix) {
             return Err(MigrationError::AlreadyMigrated);
         }
@@ -103,16 +92,10 @@ impl MigrationTable {
     /// to MIGRATED. Returns the state that was committed, or `None`
     /// when there's no in-flight migration for `prefix` (idempotent).
     pub fn commit(&self, prefix: &[u8]) -> Option<MigrationState> {
-        let mut mig = self
-            .migrating
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut mig = self.migrating.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let entry = mig.remove(prefix)?;
         drop(mig);
-        let mut done = self
-            .migrated
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut done = self.migrated.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         done.insert(prefix.to_vec(), entry.clone());
         Some(entry)
     }
@@ -122,10 +105,7 @@ impl MigrationTable {
     /// aborted migration never moved data). Returns the state that
     /// was aborted, or `None` when there was nothing to abort.
     pub fn abort(&self, prefix: &[u8]) -> Option<MigrationState> {
-        let mut mig = self
-            .migrating
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut mig = self.migrating.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         mig.remove(prefix)
     }
 
@@ -146,11 +126,7 @@ impl MigrationTable {
     /// migrations (post-MOVE-SCOPE-INGEST).
     #[must_use]
     pub fn lookup_migrated(&self, prefix: &[u8]) -> Option<MigrationState> {
-        self.migrated
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(prefix)
-            .cloned()
+        self.migrated.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(prefix).cloned()
     }
 
     /// Longest-prefix-match lookup for in-flight migrations. Used by
@@ -159,18 +135,13 @@ impl MigrationTable {
     /// `OwnershipTable::route`.
     #[must_use]
     pub fn match_migrating(&self, key: &[u8]) -> Option<MigrationState> {
-        let g = self
-            .migrating
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let g = self.migrating.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         // The expected prefix count is small (operator-declared per-
         // cluster); a linear scan is fine. Choose the longest match
         // so nested prefixes route deterministically.
         let mut best: Option<(&Vec<u8>, &MigrationState)> = None;
         for (p, st) in g.iter() {
-            if key.starts_with(p)
-                && best.is_none_or(|(prev, _)| p.len() > prev.len())
-            {
+            if key.starts_with(p) && best.is_none_or(|(prev, _)| p.len() > prev.len()) {
                 best = Some((p, st));
             }
         }
@@ -180,15 +151,10 @@ impl MigrationTable {
     /// As [`Self::match_migrating`], for the MIGRATED map.
     #[must_use]
     pub fn match_migrated(&self, key: &[u8]) -> Option<MigrationState> {
-        let g = self
-            .migrated
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let g = self.migrated.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut best: Option<(&Vec<u8>, &MigrationState)> = None;
         for (p, st) in g.iter() {
-            if key.starts_with(p)
-                && best.is_none_or(|(prev, _)| p.len() > prev.len())
-            {
+            if key.starts_with(p) && best.is_none_or(|(prev, _)| p.len() > prev.len()) {
                 best = Some((p, st));
             }
         }
@@ -203,8 +169,7 @@ mod tests {
     #[test]
     fn start_then_lookup() {
         let t = MigrationTable::new();
-        t.start(b"app:billing:".to_vec(), "A".into(), "B".into())
-            .unwrap();
+        t.start(b"app:billing:".to_vec(), "A".into(), "B".into()).unwrap();
         let st = t.lookup_migrating(b"app:billing:").unwrap();
         assert_eq!(st.from, "A");
         assert_eq!(st.to, "B");
@@ -241,8 +206,7 @@ mod tests {
     fn match_migrating_longest_prefix_wins() {
         let t = MigrationTable::new();
         t.start(b"app:".to_vec(), "A".into(), "B".into()).unwrap();
-        t.start(b"app:billing:".to_vec(), "B".into(), "C".into())
-            .unwrap();
+        t.start(b"app:billing:".to_vec(), "B".into(), "C".into()).unwrap();
         // Note: kevy-scope's OwnershipTable rejects overlapping
         // prefixes at startup, but the MigrationTable is operator-
         // driven runtime state; it has to handle whatever the

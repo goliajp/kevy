@@ -95,11 +95,8 @@ impl Server {
     fn start(nshards: usize) -> Self {
         let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let port = free_port();
-        let dir = std::env::temp_dir().join(format!(
-            "kevy-randomkey-{}-{}",
-            std::process::id(),
-            port
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("kevy-randomkey-{}-{}", std::process::id(), port));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
@@ -193,10 +190,7 @@ fn two_servers_disagree_about_arbitrary() {
 fn randomkey_on_an_empty_db_is_nil() {
     let srv = Server::start(SHARDS);
     let mut c = srv.connect();
-    assert!(
-        call(&mut c, &[b"RANDOMKEY"]).starts_with(b"$-1"),
-        "empty keyspace must answer nil"
-    );
+    assert!(call(&mut c, &[b"RANDOMKEY"]).starts_with(b"$-1"), "empty keyspace must answer nil");
 }
 
 /// One key total: every draw must find it, whichever shard it landed on. This

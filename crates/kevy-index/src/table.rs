@@ -342,8 +342,7 @@ pub fn compile_table(t: &TableSpec) -> Result<Vec<IndexSpec>, String> {
         // Post-validate this is total; the Err arm is the honest form
         // of what `expect` asserted, kept reachable so a validate()
         // gap can never again become a panic.
-        t.column_type(col)
-            .ok_or_else(|| format!("ERR column '{}' is not declared", show(col)))
+        t.column_type(col).ok_or_else(|| format!("ERR column '{}' is not declared", show(col)))
     };
     let mut out = Vec::with_capacity(t.indexes.len() + t.orderpaths.len());
     for ix in &t.indexes {

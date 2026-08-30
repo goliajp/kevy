@@ -9,8 +9,7 @@ use std::io;
 
 use crate::completion::Completion;
 use crate::ffi::{
-    self, IORING_ENTER_GETEVENTS, IORING_ENTER_SQ_WAKEUP, IORING_SQ_NEED_WAKEUP,
-    SYS_IO_URING_ENTER,
+    self, IORING_ENTER_GETEVENTS, IORING_ENTER_SQ_WAKEUP, IORING_SQ_NEED_WAKEUP, SYS_IO_URING_ENTER,
 };
 use crate::layout::IoUringSqe;
 
@@ -305,8 +304,6 @@ impl IoUring {
         unsafe { (*self.cq_khead).store(head, Ordering::Release) };
         n
     }
-
-
 }
 
 impl Drop for IoUring {

@@ -43,50 +43,51 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 mod cmd;
-mod cmd_class;
-mod cmd_zadd;
 mod cmd_block;
-mod metrics_http;
 mod cmd_block_serve;
+mod cmd_class;
+mod cmd_command;
 mod cmd_data;
+mod cmd_digest;
+mod cmd_failover;
 mod cmd_hash_ttl;
+mod cmd_hello;
 mod cmd_index;
 mod cmd_index_advise;
-mod cmd_digest;
+mod cmd_index_query;
+mod cmd_index_reduce;
+mod cmd_lua;
+mod cmd_repl;
+mod cmd_resolve;
 mod cmd_table;
 mod cmd_table_verify;
 mod cmd_view;
 mod cmd_view_reduce;
-mod cmd_index_query;
-mod cmd_index_reduce;
-mod index_runtime;
-mod table_runtime;
-mod view_runtime;
-mod cmd_hello;
-mod cmd_lua;
-mod cmd_repl;
-mod cmd_resolve;
+mod cmd_zadd;
 mod commands;
-mod replication;
 mod dispatch;
 mod dispatch_bitmap;
 mod dispatch_collections;
 mod dispatch_collections_v127;
-mod dispatch_resp3;
 mod dispatch_geo;
 mod dispatch_replay;
+mod dispatch_resp3;
 mod dispatch_stream;
 mod dispatch_strings;
 mod elect_persist;
+mod index_runtime;
+mod metrics_http;
 mod ops;
 mod replica_runner;
+mod replica_runner_events;
 mod replica_runner_routed;
 mod replica_trace;
+mod replication;
 mod state;
+mod table_runtime;
 mod tier_read;
 pub mod verb_meta;
-mod cmd_command;
-mod cmd_failover;
+mod view_runtime;
 
 pub use kevy_rt::Argv;
 pub use kevy_store::Store as KeyspaceStore;
@@ -101,7 +102,6 @@ pub enum AfterDrain {
     /// written before the close, so this is not an abort.
     Close,
 }
-
 
 /// Translate a `kevy_config::EvictionPolicy` (the user-facing TOML enum) into
 /// the `kevy_store::EvictionPolicy` mirror. The mapping is one-to-one — the
@@ -133,7 +133,8 @@ static SIGNAL_RECEIVED: AtomicBool = AtomicBool::new(false);
 /// signal out to every runtime instance, and registration resets a
 /// leftover signal from a previous run so a second serve() in the
 /// same process doesn't exit on arrival.
-static STOP_FLAGS: std::sync::Mutex<Vec<std::sync::Weak<AtomicBool>>> = std::sync::Mutex::new(Vec::new());
+static STOP_FLAGS: std::sync::Mutex<Vec<std::sync::Weak<AtomicBool>>> =
+    std::sync::Mutex::new(Vec::new());
 
 /// Installed on first call to [`serve`]. Catches SIGTERM
 /// (graceful shutdown) and SIGINT (Ctrl-C). Both flip the per-run
@@ -164,17 +165,19 @@ fn install_signal_handlers(stop: Arc<AtomicBool>) {
     flags.push(Arc::downgrade(&stop));
     drop(flags);
     if first {
-        std::thread::spawn(|| loop {
-            if SIGNAL_RECEIVED.load(std::sync::atomic::Ordering::SeqCst) {
-                let flags = STOP_FLAGS.lock().expect("STOP_FLAGS poisoned");
-                for f in flags.iter() {
-                    if let Some(stop) = f.upgrade() {
-                        stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        std::thread::spawn(|| {
+            loop {
+                if SIGNAL_RECEIVED.load(std::sync::atomic::Ordering::SeqCst) {
+                    let flags = STOP_FLAGS.lock().expect("STOP_FLAGS poisoned");
+                    for f in flags.iter() {
+                        if let Some(stop) = f.upgrade() {
+                            stop.store(true, std::sync::atomic::Ordering::SeqCst);
+                        }
                     }
+                    return;
                 }
-                return;
+                std::thread::sleep(std::time::Duration::from_millis(100));
             }
-            std::thread::sleep(std::time::Duration::from_millis(100));
         });
     }
 }
@@ -291,9 +294,10 @@ fn build_runtime(cfg: &kevy_config::Config, commands: KevyCommands) -> Runtime<K
     // local clients (and benches) skip TCP loopback overhead — fair
     // comparison against valkey/redis's `unixsocket` config.
     if let Ok(path) = std::env::var("KEVY_UNIX_SOCKET")
-        && !path.is_empty() {
-            runtime = runtime.with_unix_socket(PathBuf::from(path));
-        }
+        && !path.is_empty()
+    {
+        runtime = runtime.with_unix_socket(PathBuf::from(path));
+    }
     replication::apply(runtime, cfg, &state)
 }
 
@@ -306,9 +310,9 @@ fn wire_tiering(
     cfg: &kevy_config::Config,
 ) -> Runtime<KevyCommands> {
     match resolve_tier_budget(cfg) {
-        Ok(budget) => runtime
-            .with_tier_budget(budget)
-            .with_tier_spill_dir(cfg.tiering.spill_dir.clone()),
+        Ok(budget) => {
+            runtime.with_tier_budget(budget).with_tier_spill_dir(cfg.tiering.spill_dir.clone())
+        }
         Err(msg) => {
             eprintln!("kevy: {msg}");
             std::process::exit(1);
@@ -320,22 +324,19 @@ fn wire_tiering(
 /// tiering off; `Err` = an auto/percent form with no detectable memory
 /// bound (named refusal at boot; on the tick the caller keeps the last
 /// resolved value instead).
-pub(crate) fn resolve_tier_budget(
-    cfg: &kevy_config::Config,
-) -> Result<Option<u64>, String> {
+pub(crate) fn resolve_tier_budget(cfg: &kevy_config::Config) -> Result<Option<u64>, String> {
     match cfg.tiering.budget {
         None => Ok(None),
-        Some(spec) => spec
-            .resolve_with(kevy_sys::detected_memory_bound())
-            .map(Some)
-            .ok_or_else(|| {
+        Some(spec) => {
+            spec.resolve_with(kevy_sys::detected_memory_bound()).map(Some).ok_or_else(|| {
                 format!(
                     "[tiering] budget = \"{}\": no memory bound detected on this host \
                      (cgroup v2 memory.max / /proc/meminfo MemAvailable / hw.memsize all \
                      unavailable) — use an absolute budget (\"4gb\")",
                     spec.as_config_string()
                 )
-            }),
+            })
+        }
     }
 }
 
@@ -383,10 +384,7 @@ pub fn drain_commands(
                 kevy_rt::propagation::discard_override();
                 output.extend_from_slice(&reply);
                 input.drain(..consumed);
-                if args
-                    .first()
-                    .is_some_and(|c| c.eq_ignore_ascii_case(b"QUIT"))
-                {
+                if args.first().is_some_and(|c| c.eq_ignore_ascii_case(b"QUIT")) {
                     return AfterDrain::Close;
                 }
             }

@@ -59,9 +59,8 @@ impl Shared {
         for _ in 0..n {
             wakers.push(Arc::new(waker()?));
         }
-        let parked: Vec<Arc<CachePadded<AtomicBool>>> = (0..n)
-            .map(|_| Arc::new(CachePadded::new(AtomicBool::new(false))))
-            .collect();
+        let parked: Vec<Arc<CachePadded<AtomicBool>>> =
+            (0..n).map(|_| Arc::new(CachePadded::new(AtomicBool::new(false)))).collect();
         // Per-shard inbox-dirty bitmaps (one u64 bit per peer src).
         // Senders OR a bit on the target's dirty word; the target's
         // `drain_inbound_core` swaps and short-circuits when 0.
@@ -72,9 +71,8 @@ impl Shared {
         // Pad each Arc<AtomicU64> to a full 64-byte cache
         // line. A `perf c2c` diagnostic showed cross-shard fetch_or vs. owner
         // swap on adjacent atomics bounced cache lines between cores.
-        let inbound_dirty: Vec<Arc<CachePadded<AtomicU64>>> = (0..n)
-            .map(|_| Arc::new(CachePadded::new(AtomicU64::new(0))))
-            .collect();
+        let inbound_dirty: Vec<Arc<CachePadded<AtomicU64>>> =
+            (0..n).map(|_| Arc::new(CachePadded::new(AtomicU64::new(0)))).collect();
         Ok(Shared {
             outboxes,
             inboxes,
@@ -196,15 +194,10 @@ impl<C: Commands> Runtime<C> {
     /// advertises 127.0.0.1 — an unroutable redirect target would strand
     /// every cluster client (single-machine scope; no announce-ip knob).
     fn cluster_topo(&self) -> Option<crate::cluster::ClusterTopo> {
-        self.cluster_port_base
-            .map(|base| crate::cluster::ClusterTopo {
-                ip: if self.ip == [0, 0, 0, 0] {
-                    [127, 0, 0, 1]
-                } else {
-                    self.ip
-                },
-                port_base: base,
-            })
+        self.cluster_port_base.map(|base| crate::cluster::ClusterTopo {
+            ip: if self.ip == [0, 0, 0, 0] { [127, 0, 0, 1] } else { self.ip },
+            port_base: base,
+        })
     }
 
     /// Build all `n` shards: per-shard listeners + store + the flat
@@ -364,11 +357,7 @@ impl<C: Commands> Runtime<C> {
                 // shard tick, so a write landing before that never fired
                 // its keyspace notification (CI-visible flake; a real
                 // startup gap for any pre-configured notify_keyspace_events).
-                notify_flags: self
-                    .commands
-                    .live_runtime_config()
-                    .notify_flags
-                    .unwrap_or_default(),
+                notify_flags: self.commands.live_runtime_config().notify_flags.unwrap_or_default(),
                 spin_limit: self.spin_limit,
                 arms_accept: self.accept_shards.is_none_or(|n| id < n),
                 max_clients_per_shard: if self.max_clients == 0 {

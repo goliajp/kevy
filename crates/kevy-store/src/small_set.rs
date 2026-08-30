@@ -106,11 +106,7 @@ pub(crate) enum AddResult {
 impl SmallSetData {
     /// Build an empty inline set.
     pub(crate) fn new() -> Self {
-        Self {
-            count: 0,
-            used: 0,
-            buf: [0; SMALL_SET_BUF_CAP],
-        }
+        Self { count: 0, used: 0, buf: [0; SMALL_SET_BUF_CAP] }
     }
 
     /// Build an inline set holding one member, if it fits. Returns `None`

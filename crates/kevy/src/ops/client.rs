@@ -18,11 +18,7 @@ use kevy_resp::{
 use super::wrong_args;
 
 // LOC-WAIVER: data-driven subcommand dispatch table — one reply-emitter arm per subcommand.
-pub(crate) fn cmd_client<A: ArgvView + ?Sized>(
-    args: &A,
-    out: &mut Vec<u8>,
-    proto: RespVersion,
-) {
+pub(crate) fn cmd_client<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>, proto: RespVersion) {
     let sub = match args.get(1) {
         Some(s) => s.to_ascii_uppercase(),
         None => return wrong_args(out, "client"),

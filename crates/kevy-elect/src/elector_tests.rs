@@ -141,10 +141,8 @@ mod tests {
         );
         let out = e.tick(t0 + Duration::from_millis(101)); // DOWN window crossed
         // Expect: some HBs + one OFFER broadcast.
-        let offers: Vec<_> = out
-            .iter()
-            .filter(|o| matches!(o.msg, Message::Offer { .. }))
-            .collect();
+        let offers: Vec<_> =
+            out.iter().filter(|o| matches!(o.msg, Message::Offer { .. })).collect();
         assert_eq!(offers.len(), 1, "expected one OFFER, out: {out:?}");
         assert_eq!(e.role(), Role::Candidate);
         assert_eq!(e.epoch(), 2);
@@ -173,10 +171,7 @@ mod tests {
         e.force_known_primary("c");
         let out = e.tick(trigger_at);
         // a should NOT have started candidacy (b is better).
-        assert!(
-            !out.iter().any(|o| matches!(o.msg, Message::Offer { .. })),
-            "out: {out:?}"
-        );
+        assert!(!out.iter().any(|o| matches!(o.msg, Message::Offer { .. })), "out: {out:?}");
         assert_eq!(e.role(), Role::Replica);
     }
 
@@ -202,18 +197,13 @@ mod tests {
         // Peer b ACCEPTs.
         e.on_message(
             "b",
-            Message::Accept {
-                epoch: 2,
-                accepter_id: "b".to_string(),
-            },
+            Message::Accept { epoch: 2, accepter_id: "b".to_string() },
             t0 + Duration::from_millis(102),
         );
         // Self-vote (1) + b's vote (1) = 2 = quorum for N=3.
         let out = e.tick(t0 + Duration::from_millis(103));
-        let announces: Vec<_> = out
-            .iter()
-            .filter(|o| matches!(o.msg, Message::Announce { .. }))
-            .collect();
+        let announces: Vec<_> =
+            out.iter().filter(|o| matches!(o.msg, Message::Announce { .. })).collect();
         assert_eq!(announces.len(), 1);
         assert_eq!(e.role(), Role::Primary);
         assert_eq!(e.current_primary(), Some("a"));
@@ -269,27 +259,20 @@ mod tests {
 
         let out_b_to_a = b.on_message(
             "a", // received from "a"
-            Message::Offer {
-                new_epoch: 2,
-                candidate_id: "a".to_string(),
-                repl_offset: 100,
-            },
+            Message::Offer { new_epoch: 2, candidate_id: "a".to_string(), repl_offset: 100 },
             now(),
         );
-        assert!(out_b_to_a.iter().any(|o| matches!(o.msg, Message::Accept { .. })),
-            "b should ACCEPT a's OFFER (a < b by node-id tiebreak)");
+        assert!(
+            out_b_to_a.iter().any(|o| matches!(o.msg, Message::Accept { .. })),
+            "b should ACCEPT a's OFFER (a < b by node-id tiebreak)"
+        );
 
         let out_a_to_b = a.on_message(
             "b",
-            Message::Offer {
-                new_epoch: 2,
-                candidate_id: "b".to_string(),
-                repl_offset: 100,
-            },
+            Message::Offer { new_epoch: 2, candidate_id: "b".to_string(), repl_offset: 100 },
             now(),
         );
-        assert!(out_a_to_b.is_empty(),
-            "a should REJECT b's OFFER (a < b)");
+        assert!(out_a_to_b.is_empty(), "a should REJECT b's OFFER (a < b)");
     }
 
     #[test]
@@ -297,11 +280,7 @@ mod tests {
         let mut e = mk("c", &["a", "b", "c"], Role::Replica);
         let out1 = e.on_message(
             "a",
-            Message::Offer {
-                new_epoch: 2,
-                candidate_id: "a".to_string(),
-                repl_offset: 100,
-            },
+            Message::Offer { new_epoch: 2, candidate_id: "a".to_string(), repl_offset: 100 },
             now(),
         );
         assert_eq!(out1.len(), 1);
@@ -309,11 +288,7 @@ mod tests {
         // ACCEPT again.
         let out2 = e.on_message(
             "b",
-            Message::Offer {
-                new_epoch: 2,
-                candidate_id: "b".to_string(),
-                repl_offset: 100,
-            },
+            Message::Offer { new_epoch: 2, candidate_id: "b".to_string(), repl_offset: 100 },
             now(),
         );
         assert!(out2.is_empty(), "c already voted in epoch 2");
@@ -426,15 +401,10 @@ mod tests {
         // rejected — the Raft one-vote-per-epoch guarantee has to
         // survive the restart.
         let p = MemPersist::default();
-        let mut c = mk("c", &["a", "b", "c"], Role::Replica)
-            .with_persist(Box::new(p.clone()));
+        let mut c = mk("c", &["a", "b", "c"], Role::Replica).with_persist(Box::new(p.clone()));
         let out = c.on_message(
             "a",
-            Message::Offer {
-                new_epoch: 2,
-                candidate_id: "a".to_string(),
-                repl_offset: 100,
-            },
+            Message::Offer { new_epoch: 2, candidate_id: "a".to_string(), repl_offset: 100 },
             now(),
         );
         assert!(
@@ -442,8 +412,7 @@ mod tests {
             "c should ACCEPT a's OFFER pre-restart"
         );
         // "Restart": fresh Elector, same persist backend.
-        let mut c2 = mk("c", &["a", "b", "c"], Role::Replica)
-            .with_persist(Box::new(p.clone()));
+        let mut c2 = mk("c", &["a", "b", "c"], Role::Replica).with_persist(Box::new(p.clone()));
         assert_eq!(c2.epoch(), 2, "epoch must be restored from persist");
         let out2 = c2.on_message(
             "b",
@@ -454,10 +423,7 @@ mod tests {
             },
             now(),
         );
-        assert!(
-            out2.is_empty(),
-            "restarted c must NOT vote again in epoch 2: {out2:?}"
-        );
+        assert!(out2.is_empty(), "restarted c must NOT vote again in epoch 2: {out2:?}");
     }
 
     #[test]
@@ -467,8 +433,7 @@ mod tests {
         // an OFFER under an already-consumed epoch — its next
         // candidacy runs at epoch 3.
         let p = MemPersist::default();
-        let mut a = mk("a", &["a", "b", "c"], Role::Replica)
-            .with_persist(Box::new(p.clone()));
+        let mut a = mk("a", &["a", "b", "c"], Role::Replica).with_persist(Box::new(p.clone()));
         a.set_repl_offset(100);
         a.force_known_primary("c");
         let t0 = now();
@@ -476,8 +441,7 @@ mod tests {
         assert_eq!(a.role(), Role::Candidate);
         assert_eq!(a.epoch(), 2);
         // "Restart".
-        let mut a2 = mk("a", &["a", "b", "c"], Role::Replica)
-            .with_persist(Box::new(p.clone()));
+        let mut a2 = mk("a", &["a", "b", "c"], Role::Replica).with_persist(Box::new(p.clone()));
         assert_eq!(a2.epoch(), 2, "restored epoch, not the boot default 1");
         a2.set_repl_offset(100);
         a2.force_known_primary("c");
@@ -502,16 +466,11 @@ mod tests {
         // show exactly one save, carrying the voted epoch+candidate,
         // the moment the ACCEPT surfaces.
         let p = MemPersist::default();
-        let mut c = mk("c", &["a", "b", "c"], Role::Replica)
-            .with_persist(Box::new(p.clone()));
+        let mut c = mk("c", &["a", "b", "c"], Role::Replica).with_persist(Box::new(p.clone()));
         assert!(p.log().is_empty(), "no save before any vote");
         let out = c.on_message(
             "a",
-            Message::Offer {
-                new_epoch: 2,
-                candidate_id: "a".to_string(),
-                repl_offset: 100,
-            },
+            Message::Offer { new_epoch: 2, candidate_id: "a".to_string(), repl_offset: 100 },
             now(),
         );
         assert!(out.iter().any(|o| matches!(o.msg, Message::Accept { .. })));
@@ -524,11 +483,7 @@ mod tests {
         // OFFER is refused → no new save entry).
         let out2 = c.on_message(
             "b",
-            Message::Offer {
-                new_epoch: 2,
-                candidate_id: "b".to_string(),
-                repl_offset: 100,
-            },
+            Message::Offer { new_epoch: 2, candidate_id: "b".to_string(), repl_offset: 100 },
             now(),
         );
         assert!(out2.is_empty());
@@ -541,8 +496,7 @@ mod tests {
         // voting for self; both must be durable before the OFFER
         // broadcast surfaces.
         let p = MemPersist::default();
-        let mut a = mk("a", &["a", "b", "c"], Role::Replica)
-            .with_persist(Box::new(p.clone()));
+        let mut a = mk("a", &["a", "b", "c"], Role::Replica).with_persist(Box::new(p.clone()));
         a.set_repl_offset(100);
         a.force_known_primary("c");
         let out = a.tick(now() + Duration::from_millis(101));
@@ -557,8 +511,7 @@ mod tests {
         // must not run an election under an epoch older than one
         // it already witnessed.
         let p = MemPersist::default();
-        let mut a = mk("a", &["a", "b", "c"], Role::Replica)
-            .with_persist(Box::new(p.clone()));
+        let mut a = mk("a", &["a", "b", "c"], Role::Replica).with_persist(Box::new(p.clone()));
         a.on_message(
             "b",
             Message::Hb {
@@ -572,8 +525,7 @@ mod tests {
         assert_eq!(a.epoch(), 7);
         assert_eq!(p.log(), vec![(7, None)], "epoch follow persisted, no vote");
         // Restart: epoch restored, no vote restored.
-        let a2 = mk("a", &["a", "b", "c"], Role::Replica)
-            .with_persist(Box::new(p.clone()));
+        let a2 = mk("a", &["a", "b", "c"], Role::Replica).with_persist(Box::new(p.clone()));
         assert_eq!(a2.epoch(), 7);
     }
 }

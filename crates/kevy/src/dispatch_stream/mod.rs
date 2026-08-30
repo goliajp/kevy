@@ -72,13 +72,8 @@ fn cmd_xadd<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>
         Ok(p) => p,
         Err(msg) => return encode_error(out, msg.as_wire()),
     };
-    let id = match store.xadd(
-        &args[1],
-        parsed.id,
-        parsed.fields,
-        parsed.nomkstream,
-        now_unix_ms(),
-    ) {
+    let id = match store.xadd(&args[1], parsed.id, parsed.fields, parsed.nomkstream, now_unix_ms())
+    {
         Ok(Some(id)) => id,
         Ok(None) => return encode_null_bulk(out), // NOMKSTREAM + missing key
         Err(kevy_store::StoreError::OutOfRange) => {
@@ -134,9 +129,8 @@ fn parse_xadd_argv<A: ArgvView + ?Sized>(args: &A) -> Result<XAddParsed, CmdErro
     if i + 2 >= args.len() {
         return Err(CmdError::Wire("ERR wrong number of arguments for 'xadd' command"));
     }
-    let id = parse_xadd_id(&args[i]).map_err(|_| {
-        "ERR Invalid stream ID specified as stream command argument"
-    })?;
+    let id = parse_xadd_id(&args[i])
+        .map_err(|_| "ERR Invalid stream ID specified as stream command argument")?;
     i += 1;
     let rest = args.len() - i;
     if !rest.is_multiple_of(2) || rest == 0 {
@@ -203,32 +197,17 @@ fn cmd_xlen<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>
 
 // ───────────── XRANGE / XREVRANGE ─────────────
 
-fn cmd_range<A: ArgvView + ?Sized>(
-    store: &mut Store,
-    args: &A,
-    out: &mut Vec<u8>,
-    rev: bool,
-) {
+fn cmd_range<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>, rev: bool) {
     if !(4..=6).contains(&args.len()) {
         return wrong_args(out, if rev { "xrevrange" } else { "xrange" });
     }
     // XREVRANGE swaps start/end at the argv layer (high → low).
-    let (s_arg, e_arg) = if rev {
-        (&args[3], &args[2])
-    } else {
-        (&args[2], &args[3])
-    };
+    let (s_arg, e_arg) = if rev { (&args[3], &args[2]) } else { (&args[2], &args[3]) };
     let Ok(start) = parse_range_start(s_arg) else {
-        return encode_error(
-            out,
-            "ERR Invalid stream ID specified as stream command argument",
-        );
+        return encode_error(out, "ERR Invalid stream ID specified as stream command argument");
     };
     let Ok(end) = parse_range_end(e_arg) else {
-        return encode_error(
-            out,
-            "ERR Invalid stream ID specified as stream command argument",
-        );
+        return encode_error(out, "ERR Invalid stream ID specified as stream command argument");
     };
     let count = match parse_optional_count(args, 4) {
         Ok(c) => c,
@@ -332,4 +311,3 @@ pub(super) fn emit_entries(out: &mut Vec<u8>, entries: &EntryBatch) {
         }
     }
 }
-

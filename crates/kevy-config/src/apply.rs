@@ -7,9 +7,7 @@ use std::path::PathBuf;
 
 use crate::parse::{Item, Value};
 use crate::replication::ReplicationRole;
-use crate::schema::{
-    AppendFsync, Config, ConfigError, EvictionPolicy, LogLevel, LogOutput,
-};
+use crate::schema::{AppendFsync, Config, ConfigError, EvictionPolicy, LogLevel, LogOutput};
 use crate::size::parse_size;
 
 impl Config {
@@ -55,9 +53,8 @@ impl Config {
     fn apply_server(&mut self, item: &Item) -> Result<(), ConfigError> {
         match item.key.as_str() {
             "bind" => {
-                self.server.bind = parse_ipv4(&value_as_string(item)?).ok_or_else(|| {
-                    schema_err(item, "bind must be a dotted-quad IPv4 string")
-                })?;
+                self.server.bind = parse_ipv4(&value_as_string(item)?)
+                    .ok_or_else(|| schema_err(item, "bind must be a dotted-quad IPv4 string"))?;
             }
             "port" => self.server.port = value_as_u16(item)?,
             "threads" => self.server.threads = value_as_usize(item)?,
@@ -76,10 +73,7 @@ impl Config {
             "appendfsync" => {
                 self.persistence.appendfsync = parse_appendfsync(&value_as_string(item)?)
                     .ok_or_else(|| {
-                        schema_err(
-                            item,
-                            "appendfsync must be 'always' | 'everysec' | 'no'",
-                        )
+                        schema_err(item, "appendfsync must be 'always' | 'everysec' | 'no'")
                     })?;
             }
             "auto_aof_rewrite_percentage" => {
@@ -92,8 +86,7 @@ impl Config {
                 self.persistence.auto_aof_rewrite_bytes = value_as_size(item)?;
             }
             "auto_aof_rewrite_interval_secs" => {
-                self.persistence.auto_aof_rewrite_interval_secs =
-                    u64::from(value_as_u32(item)?);
+                self.persistence.auto_aof_rewrite_interval_secs = u64::from(value_as_u32(item)?);
             }
             "replay_resync" => {
                 self.persistence.replay_resync = value_as_bool(item)?;
@@ -107,8 +100,8 @@ impl Config {
         match item.key.as_str() {
             "maxmemory" => self.memory.maxmemory = value_as_size(item)?,
             "maxmemory_policy" => {
-                self.memory.maxmemory_policy = parse_eviction(&value_as_string(item)?)
-                    .ok_or_else(|| {
+                self.memory.maxmemory_policy =
+                    parse_eviction(&value_as_string(item)?).ok_or_else(|| {
                         schema_err(
                             item,
                             "maxmemory_policy must be one of: noeviction, allkeys-lru, \
@@ -280,11 +273,7 @@ impl Config {
     /// Apply one env var. Recognised names (others ignored):
     /// `KEVY_BIND`, `KEVY_PORT`, `KEVY_THREADS`, `KEVY_DIR`, `KEVY_AOF`,
     /// `KEVY_CLUSTER`.
-    pub(crate) fn apply_env_var(
-        &mut self,
-        name: &str,
-        value: &str,
-    ) -> Result<(), ConfigError> {
+    pub(crate) fn apply_env_var(&mut self, name: &str, value: &str) -> Result<(), ConfigError> {
         match name {
             "KEVY_BIND" => {
                 self.server.bind = parse_ipv4(value).ok_or_else(|| ConfigError::Schema {
@@ -311,11 +300,12 @@ impl Config {
                 self.server.packed_rows = matches!(value, "1" | "true" | "yes" | "on");
             }
             "KEVY_ACCEPT_SHARDS" => {
-                self.server.accept_shards = Some(value.parse().map_err(|_| ConfigError::Schema {
-                    line: 0,
-                    field: "[env] KEVY_ACCEPT_SHARDS".into(),
-                    msg: format!("must be a positive integer, got {value:?}"),
-                })?);
+                self.server.accept_shards =
+                    Some(value.parse().map_err(|_| ConfigError::Schema {
+                        line: 0,
+                        field: "[env] KEVY_ACCEPT_SHARDS".into(),
+                        msg: format!("must be a positive integer, got {value:?}"),
+                    })?);
             }
             "KEVY_DIR" => self.server.data_dir = PathBuf::from(value),
             // All three budget forms (auto / percent / bytes); plain bytes stay back-compat.
@@ -395,17 +385,12 @@ fn value_as_size(item: &Item) -> Result<u64, ConfigError> {
 /// (`"a,b,"`) means the same as it does in the array form.
 fn value_as_list(item: &Item) -> Result<Vec<String>, ConfigError> {
     match &item.value {
-        Value::Arr(v) => Ok(v
-            .iter()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect()),
-        Value::Str(s) => Ok(s
-            .split(',')
-            .map(str::trim)
-            .filter(|p| !p.is_empty())
-            .map(String::from)
-            .collect()),
+        Value::Arr(v) => {
+            Ok(v.iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
+        }
+        Value::Str(s) => {
+            Ok(s.split(',').map(str::trim).filter(|p| !p.is_empty()).map(String::from).collect())
+        }
         other => Err(schema_err(
             item,
             format!("expected a list — [\"a\", \"b\"] or \"a,b\" — got {other:?}"),
@@ -418,11 +403,7 @@ pub(crate) fn schema_err(item: &Item, msg: impl Into<String>) -> ConfigError {
         Some(s) => format!("[{}].{}", s, item.key),
         None => item.key.clone(),
     };
-    ConfigError::Schema {
-        line: item.line,
-        field,
-        msg: msg.into(),
-    }
+    ConfigError::Schema { line: item.line, field, msg: msg.into() }
 }
 
 // ───────────── small value parsers ─────────────

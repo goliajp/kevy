@@ -95,10 +95,7 @@ impl PackedRow {
             let at = 2 + bitmap + i * 2;
             buf[at..at + 2].copy_from_slice(&(end as u16).to_le_bytes());
         }
-        Some(PackedRow(Box::new(PackedInner {
-            cols: names.clone(),
-            buf: buf.into_boxed_slice(),
-        })))
+        Some(PackedRow(Box::new(PackedInner { cols: names.clone(), buf: buf.into_boxed_slice() })))
     }
 
     /// Declared column count.
@@ -188,9 +185,8 @@ impl PackedRow {
     /// Field name and value for every present column, in declared order —
     /// what `HGETALL`, the rewrite and the snapshot writer need.
     pub fn fields(&self) -> impl Iterator<Item = (&[u8], &[u8])> {
-        (0..self.columns()).filter_map(move |i| {
-            Some((self.0.cols.get(i)?.as_slice(), self.get(i)?))
-        })
+        (0..self.columns())
+            .filter_map(move |i| Some((self.0.cols.get(i)?.as_slice(), self.get(i)?)))
     }
 
     /// Total heap bytes of THIS row — the shared column names are one
@@ -257,8 +253,9 @@ pub(crate) mod tests {
 
     #[test]
     fn replacing_a_column_leaves_the_others_alone() {
-        let r = PackedRow::build(&names(3), &[Some(&b"a"[..]), Some(&b"bb"[..]), Some(&b"ccc"[..])])
-            .expect("fits");
+        let r =
+            PackedRow::build(&names(3), &[Some(&b"a"[..]), Some(&b"bb"[..]), Some(&b"ccc"[..])])
+                .expect("fits");
         let r2 = r.with_column(1, Some(b"REPLACED")).expect("fits");
         assert_eq!(r2.get(0), Some(&b"a"[..]));
         assert_eq!(r2.get(1), Some(&b"REPLACED"[..]));
@@ -332,8 +329,8 @@ pub(crate) mod tests {
 
 #[cfg(test)]
 mod cost_tests {
-    use super::*;
     use super::tests::names;
+    use super::*;
 
     /// The claim this type exists for, as arithmetic rather than prose.
     ///

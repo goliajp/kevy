@@ -110,23 +110,72 @@ fn cold_text_answers_byte_identically_to_the_control() {
     // indexes over the same field — the dotted names bind them to
     // their tables, so only ev.note gets a cold directory.
     let declare_ev: &[&[u8]] = &[
-        b"TABLE.DECLARE", b"ev", b"PREFIX", b"ev:", b"PK", b"id",
-        b"COLUMN", b"id", b"str", b"COLUMN", b"at", b"i64",
-        b"INDEX", b"at", b"range",
-        b"WINDOW", b"at", b"SPAN", b"100", b"BUCKET", b"10",
+        b"TABLE.DECLARE",
+        b"ev",
+        b"PREFIX",
+        b"ev:",
+        b"PK",
+        b"id",
+        b"COLUMN",
+        b"id",
+        b"str",
+        b"COLUMN",
+        b"at",
+        b"i64",
+        b"INDEX",
+        b"at",
+        b"range",
+        b"WINDOW",
+        b"at",
+        b"SPAN",
+        b"100",
+        b"BUCKET",
+        b"10",
     ];
     assert!(send(&mut c, declare_ev).starts_with("+OK"), "declare ev");
     let declare_ctl: &[&[u8]] = &[
-        b"TABLE.DECLARE", b"ctl", b"PREFIX", b"ev:", b"PK", b"id",
-        b"COLUMN", b"id", b"str", b"COLUMN", b"at", b"i64",
-        b"INDEX", b"at", b"range",
+        b"TABLE.DECLARE",
+        b"ctl",
+        b"PREFIX",
+        b"ev:",
+        b"PK",
+        b"id",
+        b"COLUMN",
+        b"id",
+        b"str",
+        b"COLUMN",
+        b"at",
+        b"i64",
+        b"INDEX",
+        b"at",
+        b"range",
     ];
     assert!(send(&mut c, declare_ctl).starts_with("+OK"), "declare ctl");
     for name in [b"ev.note".as_slice(), b"ctl.note"] {
-        let r = send(&mut c, &[b"IDX.CREATE", name, b"ON", b"PREFIX", b"ev:",
-            b"FIELD", b"note", b"TYPE", b"str", b"KIND", b"text",
-            b"WITH", b"POSITIONS",
-            b"VALUES", b"prio", b"tag", b"TYPES", b"i64", b"str"]);
+        let r = send(
+            &mut c,
+            &[
+                b"IDX.CREATE",
+                name,
+                b"ON",
+                b"PREFIX",
+                b"ev:",
+                b"FIELD",
+                b"note",
+                b"TYPE",
+                b"str",
+                b"KIND",
+                b"text",
+                b"WITH",
+                b"POSITIONS",
+                b"VALUES",
+                b"prio",
+                b"tag",
+                b"TYPES",
+                b"i64",
+                b"str",
+            ],
+        );
         assert!(r.starts_with("+OK"), "IDX.CREATE {}: {r}", String::from_utf8_lossy(name));
     }
 
@@ -136,16 +185,31 @@ fn cold_text_answers_byte_identically_to_the_control() {
     // DISTINCT/FACET groups — and every 7th row has NO tag, so the
     // absent-value rules (never filters, sorts last, own group) are
     // exercised on both faces.
-    let vocab = ["rust engine warm", "storage engine warm", "python glue warm",
-                 "rust storage cold path", "engine of record warm"];
+    let vocab = [
+        "rust engine warm",
+        "storage engine warm",
+        "python glue warm",
+        "rust storage cold path",
+        "engine of record warm",
+    ];
     let tags = ["alpha", "beta", "gamma"];
     for i in 0..30i64 {
         let key = format!("ev:{i}");
         let at = (i * 10).to_string();
         let note = vocab[(i % 5) as usize];
         let prio = ((i % 4) * 10).to_string();
-        let mut argv: Vec<&[u8]> = vec![b"HSET", key.as_bytes(), b"id", key.as_bytes(),
-            b"at", at.as_bytes(), b"note", note.as_bytes(), b"prio", prio.as_bytes()];
+        let mut argv: Vec<&[u8]> = vec![
+            b"HSET",
+            key.as_bytes(),
+            b"id",
+            key.as_bytes(),
+            b"at",
+            at.as_bytes(),
+            b"note",
+            note.as_bytes(),
+            b"prio",
+            prio.as_bytes(),
+        ];
         let tag = tags[(i % 3) as usize];
         if i % 7 != 0 {
             argv.extend_from_slice(&[b"tag", tag.as_bytes()]);
@@ -161,7 +225,8 @@ fn cold_text_answers_byte_identically_to_the_control() {
     loop {
         let frozen = segs.exists()
             && std::fs::read_dir(&segs).is_ok_and(|r| {
-                r.filter_map(Result::ok).any(|e| e.file_name().to_string_lossy().starts_with("txt-"))
+                r.filter_map(Result::ok)
+                    .any(|e| e.file_name().to_string_lossy().starts_with("txt-"))
             });
         if frozen {
             break;
@@ -191,12 +256,27 @@ fn cold_text_answers_byte_identically_to_the_control() {
         &[b"MATCH", b"engine", b"LIMIT", b"30", b"DISTINCT", b"tag"],
         &[b"MATCH", b"rust", b"LIMIT", b"30", b"DISTINCT", b"prio", b"SORT", b"prio", b"DESC"],
         &[b"MATCH", b"rust", b"LIMIT", b"1", b"FACET", b"tag"],
-        &[b"MATCH", b"engine", b"LIMIT", b"1", b"FACET", b"prio",
-          b"FILTER", b"tag", b"EQ", b"beta"],
+        &[
+            b"MATCH", b"engine", b"LIMIT", b"1", b"FACET", b"prio", b"FILTER", b"tag", b"EQ",
+            b"beta",
+        ],
         &[b"MATCH", b"rust", b"LIMIT", b"30", b"HIGHLIGHT"],
         &[b"MATCH", b"\"rust engine\"", b"LIMIT", b"30", b"HIGHLIGHT"],
-        &[b"MATCH", b"rust", b"LIMIT", b"30", b"FILTER", b"prio", b"RANGE", b"0", b"20",
-          b"SORT", b"prio", b"ASC", b"HIGHLIGHT"],
+        &[
+            b"MATCH",
+            b"rust",
+            b"LIMIT",
+            b"30",
+            b"FILTER",
+            b"prio",
+            b"RANGE",
+            b"0",
+            b"20",
+            b"SORT",
+            b"prio",
+            b"ASC",
+            b"HIGHLIGHT",
+        ],
     ];
     let compare = |c: &mut TcpStream, tag: &str| {
         for shape in shapes {
@@ -214,8 +294,26 @@ fn cold_text_answers_byte_identically_to_the_control() {
     // Churn: rewrite a cold row's note AND values (revives hot +
     // tombstones the frozen entries, statistics withdrawn exactly),
     // delete another cold row.
-    assert!(send(&mut c, &[b"HSET", b"ev:3", b"id", b"ev:3", b"at", b"30",
-        b"note", b"rust replaced text", b"prio", b"5", b"tag", b"beta"]).starts_with(":"));
+    assert!(
+        send(
+            &mut c,
+            &[
+                b"HSET",
+                b"ev:3",
+                b"id",
+                b"ev:3",
+                b"at",
+                b"30",
+                b"note",
+                b"rust replaced text",
+                b"prio",
+                b"5",
+                b"tag",
+                b"beta"
+            ]
+        )
+        .starts_with(":")
+    );
     assert_eq!(send(&mut c, &[b"DEL", b"ev:7"]), ":1\r\n");
     std::thread::sleep(Duration::from_millis(200));
     compare(&mut c, "after churn");
@@ -233,10 +331,16 @@ fn cold_text_answers_byte_identically_to_the_control() {
         let mut ctl: Vec<&[u8]> = vec![b"IDX.QUERY", b"ctl.note"];
         ctl.extend_from_slice(shape);
         let ev = send(&mut c, &ev);
-        assert!(ev.contains("not built yet"),
-            "must refuse on cold: {:?} -> {ev}", String::from_utf8_lossy(shape[1]));
+        assert!(
+            ev.contains("not built yet"),
+            "must refuse on cold: {:?} -> {ev}",
+            String::from_utf8_lossy(shape[1])
+        );
         let ctl = send(&mut c, &ctl);
-        assert!(ctl.starts_with("*"),
-            "control must serve: {:?} -> {ctl}", String::from_utf8_lossy(shape[1]));
+        assert!(
+            ctl.starts_with("*"),
+            "control must serve: {:?} -> {ctl}",
+            String::from_utf8_lossy(shape[1])
+        );
     }
 }

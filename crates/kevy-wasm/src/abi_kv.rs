@@ -128,16 +128,14 @@ pub unsafe extern "C" fn kevy_expire(h: u32, kp: *const u8, kl: u32, ttl_ms: f64
     // SAFETY: loader-staged argument buffer, live for this call.
     let key = unsafe { arg(kp, kl) };
     let ms = if ttl_ms > 0.0 { ttl_ms as u64 } else { 0 };
-    with(h, BAD_HANDLE, |inst| {
-        match inst.store.expire(key, Duration::from_millis(ms)) {
-            Ok(true) => {
-                let deadline = kevy_store::now_unix_ms().saturating_add(ms);
-                inst.log_frame(&[b"PEXPIREAT", key, deadline.to_string().as_bytes()]);
-                1
-            }
-            Ok(false) => 0,
-            Err(e) => inst.fail_kevy(&e),
+    with(h, BAD_HANDLE, |inst| match inst.store.expire(key, Duration::from_millis(ms)) {
+        Ok(true) => {
+            let deadline = kevy_store::now_unix_ms().saturating_add(ms);
+            inst.log_frame(&[b"PEXPIREAT", key, deadline.to_string().as_bytes()]);
+            1
         }
+        Ok(false) => 0,
+        Err(e) => inst.fail_kevy(&e),
     })
 }
 

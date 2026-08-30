@@ -48,12 +48,7 @@ impl<C: Commands> Shard<C> {
             } else {
                 self.send_to(
                     src_shard,
-                    Inbound::Request {
-                        origin: self.id,
-                        conn: conn_id,
-                        seq,
-                        op,
-                    },
+                    Inbound::Request { origin: self.id, conn: conn_id, seq, op },
                 );
             }
             return;
@@ -92,12 +87,7 @@ impl<C: Commands> Shard<C> {
         };
         if let Some(c) = self.conns.get_mut(&conn_id) {
             let proto = c.proto;
-            c.pending.push_back(PendingSlot {
-                remaining: 1,
-                agg,
-                done: None,
-                proto,
-            });
+            c.pending.push_back(PendingSlot { remaining: 1, agg, done: None, proto });
         }
         let take_op = Op::RenameTake(src);
         if src_shard == self.id {
@@ -106,12 +96,7 @@ impl<C: Commands> Shard<C> {
         } else {
             self.send_to(
                 src_shard,
-                Inbound::Request {
-                    origin: self.id,
-                    conn: conn_id,
-                    seq,
-                    op: take_op,
-                },
+                Inbound::Request { origin: self.id, conn: conn_id, seq, op: take_op },
             );
         }
     }
@@ -130,20 +115,14 @@ impl<C: Commands> Shard<C> {
     /// race vs adding a third "restore-src" step — Redis cluster has
     /// the same trade-off via MIGRATE).
     pub(crate) fn finalize_rename_agg(&mut self, conn_id: u64, seq: u64, agg: Agg) {
-        let Agg::RenameOrchestrator {
-            step,
-            nx,
-            src,
-            dst,
-            dst_shard,
-            taken,
-            put_stored,
-        } = agg
+        let Agg::RenameOrchestrator { step, nx, src, dst, dst_shard, taken, put_stored } = agg
         else {
             return;
         };
         match step {
-            RenameStep::Take => self.advance_rename_to_put(conn_id, seq, nx, src, dst, dst_shard, taken),
+            RenameStep::Take => {
+                self.advance_rename_to_put(conn_id, seq, nx, src, dst, dst_shard, taken)
+            }
             RenameStep::Put => self.finish_rename_put(conn_id, seq, nx, src, taken, put_stored),
             // Restore (RENAMENX NX-refused) completed → src is back; reply :0.
             RenameStep::Restore => self.fill_rename_slot(conn_id, seq, b":0\r\n".to_vec()),
@@ -193,12 +172,7 @@ impl<C: Commands> Shard<C> {
         } else {
             self.send_to(
                 dst_shard,
-                Inbound::Request {
-                    origin: self.id,
-                    conn: conn_id,
-                    seq,
-                    op: put_op,
-                },
+                Inbound::Request { origin: self.id, conn: conn_id, seq, op: put_op },
             );
         }
     }

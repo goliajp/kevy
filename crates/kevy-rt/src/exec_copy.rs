@@ -17,11 +17,11 @@
 //! Same-shard pairs take one atomic `Op::Copy` and behave exactly as
 //! Redis's COPY does.
 
+use crate::Commands;
 use crate::message::{Agg, Inbound, Op, Part, PendingSlot, SmallReply};
 use crate::message_agg::CopyStep;
 use crate::reduce::drain_front;
 use crate::shard::Shard;
-use crate::Commands;
 use kevy_resp::ArgvView;
 
 /// What a cross-shard copy needs to know, in one place.
@@ -197,7 +197,12 @@ impl<C: Commands> Shard<C> {
     fn fold_copy_reply(&mut self, conn_id: u64, seq: u64, reply: Vec<u8>) {
         if let Some(c) = self.conns.get_mut(&conn_id) {
             let proto = c.proto;
-            c.pending.push_back(PendingSlot { remaining: 1, agg: Agg::First(None), done: None, proto });
+            c.pending.push_back(PendingSlot {
+                remaining: 1,
+                agg: Agg::First(None),
+                done: None,
+                proto,
+            });
         }
         self.fold(conn_id, seq, Part::Reply(SmallReply::from_vec(reply)));
     }

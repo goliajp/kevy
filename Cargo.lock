@@ -414,7 +414,7 @@ dependencies = [
 
 [[package]]
 name = "kevy"
-version = "6.1.0"
+version = "6.2.0"
 dependencies = [
  "kevy-alloc",
  "kevy-bench",
@@ -448,11 +448,11 @@ dependencies = [
 
 [[package]]
 name = "kevy-alloc"
-version = "6.1.0"
+version = "6.2.0"
 
 [[package]]
 name = "kevy-bench"
-version = "6.1.0"
+version = "6.2.0"
 dependencies = [
  "kevy-alloc",
  "kevy-config",
@@ -465,7 +465,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-bytes"
-version = "6.1.0"
+version = "6.2.0"
 dependencies = [
  "kevy-bench",
  "kevy-hash",
@@ -473,11 +473,11 @@ dependencies = [
 
 [[package]]
 name = "kevy-chaos"
-version = "6.1.0"
+version = "6.2.0"
 
 [[package]]
 name = "kevy-cli"
-version = "6.1.0"
+version = "6.2.0"
 dependencies = [
  "kevy-embedded",
  "kevy-persist",
@@ -517,7 +517,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-cluster-rw"
-version = "6.1.0"
+version = "6.2.0"
 dependencies = [
  "kevy",
  "kevy-replicate",
@@ -529,15 +529,15 @@ dependencies = [
 
 [[package]]
 name = "kevy-compress"
-version = "6.1.0"
+version = "6.2.0"
 
 [[package]]
 name = "kevy-config"
-version = "6.1.0"
+version = "6.2.0"
 
 [[package]]
 name = "kevy-elect"
-version = "6.1.0"
+version = "6.2.0"
 dependencies = [
  "kevy-resp",
  "kevy-testnet",
@@ -545,7 +545,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-embedded"
-version = "6.1.0"
+version = "6.2.0"
 dependencies = [
  "kevy",
  "kevy-client",
@@ -567,57 +567,57 @@ dependencies = [
 
 [[package]]
 name = "kevy-ffi"
-version = "6.1.0"
+version = "6.2.0"
 dependencies = [
  "kevy-embedded",
 ]
 
 [[package]]
 name = "kevy-geo"
-version = "6.1.0"
+version = "6.2.0"
 
 [[package]]
 name = "kevy-hash"
-version = "6.1.0"
+version = "6.2.0"
 dependencies = [
  "kevy-bench",
 ]
 
 [[package]]
 name = "kevy-index"
-version = "6.1.0"
+version = "6.2.0"
 dependencies = [
  "kevy-time",
 ]
 
 [[package]]
 name = "kevy-jni"
-version = "6.1.0"
+version = "6.2.0"
 dependencies = [
  "kevy-ffi",
 ]
 
 [[package]]
 name = "kevy-lua"
-version = "6.1.0"
+version = "6.2.0"
 dependencies = [
  "luna-core",
 ]
 
 [[package]]
 name = "kevy-lua-host"
-version = "6.1.0"
+version = "6.2.0"
 dependencies = [
  "kevy-lua",
 ]
 
 [[package]]
 name = "kevy-madvise"
-version = "6.1.0"
+version = "6.2.0"
 
 [[package]]
 name = "kevy-map"
-version = "6.1.0"
+version = "6.2.0"
 dependencies = [
  "kevy-bench",
  "kevy-hash",
@@ -626,7 +626,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-mcp"
-version = "6.1.0"
+version = "6.2.0"
 dependencies = [
  "kevy-resp",
  "kevy-resp-client",
@@ -634,14 +634,14 @@ dependencies = [
 
 [[package]]
 name = "kevy-napi"
-version = "6.1.0"
+version = "6.2.0"
 dependencies = [
  "kevy-ffi",
 ]
 
 [[package]]
 name = "kevy-persist"
-version = "6.1.0"
+version = "6.2.0"
 dependencies = [
  "kevy-resp",
  "kevy-store",
@@ -651,22 +651,22 @@ dependencies = [
 
 [[package]]
 name = "kevy-pubsub-bench"
-version = "6.1.0"
+version = "6.2.0"
 
 [[package]]
 name = "kevy-ranktree"
-version = "6.1.0"
+version = "6.2.0"
 
 [[package]]
 name = "kevy-replicate"
-version = "6.1.0"
+version = "6.2.0"
 dependencies = [
  "kevy-resp",
 ]
 
 [[package]]
 name = "kevy-resp"
-version = "6.1.0"
+version = "6.2.0"
 dependencies = [
  "kevy-bench",
  "kevy-bytes",
@@ -674,14 +674,14 @@ dependencies = [
 
 [[package]]
 name = "kevy-resp-client"
-version = "6.1.0"
+version = "6.2.0"
 dependencies = [
  "kevy-resp",
 ]
 
 [[package]]
 name = "kevy-ring"
-version = "6.1.0"
+version = "6.2.0"
 dependencies = [
  "kevy-bench",
  "loom",
@@ -689,7 +689,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-rt"
-version = "6.1.0"
+version = "6.2.0"
 dependencies = [
  "kevy-config",
  "kevy-hash",
@@ -706,18 +706,18 @@ dependencies = [
 
 [[package]]
 name = "kevy-scalar"
-version = "6.1.0"
+version = "6.2.0"
 dependencies = [
  "kevy-time",
 ]
 
 [[package]]
 name = "kevy-scope"
-version = "6.1.0"
+version = "6.2.0"
 
 [[package]]
 name = "kevy-seg"
-version = "6.1.0"
+version = "6.2.0"
 dependencies = [
  "kevy-sys",
  "kevy-tmpdir",
@@ -725,7 +725,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-sql"
-version = "6.1.0"
+version = "6.2.0"
 dependencies = [
  "kevy-index",
  "kevy-scalar",
@@ -733,7 +733,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-store"
-version = "6.1.0"
+version = "6.2.0"
 dependencies = [
  "kevy-bench",
  "kevy-bytes",
@@ -747,38 +747,38 @@ dependencies = [
 
 [[package]]
 name = "kevy-sys"
-version = "6.1.0"
+version = "6.2.0"
 
 [[package]]
 name = "kevy-testnet"
-version = "6.1.0"
+version = "6.2.0"
 
 [[package]]
 name = "kevy-text"
-version = "6.1.0"
+version = "6.2.0"
 
 [[package]]
 name = "kevy-time"
-version = "6.1.0"
+version = "6.2.0"
 
 [[package]]
 name = "kevy-tmpdir"
-version = "6.1.0"
+version = "6.2.0"
 
 [[package]]
 name = "kevy-uring"
-version = "6.1.0"
+version = "6.2.0"
 dependencies = [
  "kevy-tmpdir",
 ]
 
 [[package]]
 name = "kevy-vector"
-version = "6.1.0"
+version = "6.2.0"
 
 [[package]]
 name = "kevy-vlog"
-version = "6.1.0"
+version = "6.2.0"
 dependencies = [
  "kevy-compress",
  "kevy-sys",
@@ -787,7 +787,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-wasm"
-version = "6.1.0"
+version = "6.2.0"
 dependencies = [
  "kevy-embedded",
  "kevy-persist",
@@ -797,7 +797,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-window"
-version = "6.1.0"
+version = "6.2.0"
 dependencies = [
  "kevy-index",
  "kevy-seg",

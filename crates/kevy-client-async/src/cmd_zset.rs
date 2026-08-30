@@ -35,17 +35,12 @@ impl AsyncConnection {
 
     /// `ZSCORE key member`. `None` if absent.
     pub async fn zscore(&mut self, key: &[u8], member: &[u8]) -> io::Result<Option<f64>> {
-        match self
-            .codec_mut()
-            .request_borrowed(&[b"ZSCORE", key, member])
-            .await?
-        {
+        match self.codec_mut().request_borrowed(&[b"ZSCORE", key, member]).await? {
             Reply::Bulk(v) => {
                 let s = std::str::from_utf8(&v)
                     .map_err(|_| io::Error::other("non-utf8 score reply"))?;
-                let n: f64 = s
-                    .parse()
-                    .map_err(|_| io::Error::other(format!("bad score float: {s}")))?;
+                let n: f64 =
+                    s.parse().map_err(|_| io::Error::other(format!("bad score float: {s}")))?;
                 Ok(Some(n))
             }
             Reply::Nil => Ok(None),
@@ -65,12 +60,7 @@ impl AsyncConnection {
 
     /// `ZRANGE key start stop`. Ascending-score order; negative indices
     /// count from the tail.
-    pub async fn zrange(
-        &mut self,
-        key: &[u8],
-        start: i64,
-        stop: i64,
-    ) -> io::Result<Vec<Vec<u8>>> {
+    pub async fn zrange(&mut self, key: &[u8], start: i64, stop: i64) -> io::Result<Vec<Vec<u8>>> {
         let start_s = start.to_string();
         let stop_s = stop.to_string();
         match self

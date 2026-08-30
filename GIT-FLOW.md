@@ -26,6 +26,16 @@ the exact `git config` lines if you'd rather set them by hand.
 | `release/<ver>` | Stabilization line for `vX.Y.Z`.           | Forks from `develop`. Holds version-bump + CHANGELOG only — no new features.         |
 | `hotfix/<name>` | Emergency fix on the **published** line.   | Forks from `master`. Merges back to both `master` and `develop`.                     |
 
+**These prefixes are the ones CI runs on, and that list is not advisory.**
+`.github/workflows/ci.yml` triggers `on: push:` for `master`, `develop`,
+`feature/**`, `release/**`, `hotfix/**`, `bugfix/**` and `support/**`, and
+nothing else. A branch named anything else — `fix/…`, `wip/…`, your
+initials — gets **no CI at all**, silently: there is no run to go red,
+no annotation, and `gh run list --branch <name>` returns an empty list that
+looks exactly like a run that has not started yet. A workflow that does not
+trigger cannot warn you that it did not trigger. Check the prefix against
+this table before you push, or check that a run actually exists after.
+
 ## Feature flow — the everyday case
 
 For one self-contained sprint (a single coherent change set):

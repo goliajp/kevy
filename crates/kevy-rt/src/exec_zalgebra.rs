@@ -22,15 +22,7 @@ use crate::shard::Shard;
 
 impl<C: Commands> Shard<C> {
     pub(crate) fn finalize_zstore_agg(&mut self, conn_id: u64, seq: u64, agg: Agg) {
-        let Agg::ZStoreGather {
-            combine,
-            weights,
-            aggregate,
-            dst,
-            keys,
-            got,
-        } = agg
-        else {
+        let Agg::ZStoreGather { combine, weights, aggregate, dst, keys, got } = agg else {
             return;
         };
         // Rebuild inputs in request-key order; WRONGTYPE on any source
@@ -54,13 +46,7 @@ impl<C: Commands> Shard<C> {
     /// run the store Op on the DESTINATION's owning shard. Shared with the
     /// geo `*STORE` orchestrator ([`crate::exec_geostore`]) — both compute
     /// elsewhere and materialize here.
-    pub(crate) fn ship_store_op(
-        &mut self,
-        conn_id: u64,
-        seq: u64,
-        dst_shard: usize,
-        op: Op,
-    ) {
+    pub(crate) fn ship_store_op(&mut self, conn_id: u64, seq: u64, dst_shard: usize, op: Op) {
         if let Some(c) = self.conns.get_mut(&conn_id) {
             let idx = (seq - c.next_emit) as usize;
             if let Some(slot) = c.pending.get_mut(idx) {
@@ -72,15 +58,7 @@ impl<C: Commands> Shard<C> {
             let part = self.exec_op(op);
             self.fold(conn_id, seq, part);
         } else {
-            self.send_to(
-                dst_shard,
-                Inbound::Request {
-                    origin: self.id,
-                    conn: conn_id,
-                    seq,
-                    op,
-                },
-            );
+            self.send_to(dst_shard, Inbound::Request { origin: self.id, conn: conn_id, seq, op });
         }
     }
 
@@ -97,9 +75,8 @@ impl<C: Commands> Shard<C> {
                 slot.agg = Agg::ExtensionGather { argv: argv.clone(), chunks: Vec::new() };
             }
         }
-        let targets: Vec<(usize, Op)> = (0..self.nshards)
-            .map(|s| (s, Op::Extension { argv: argv.clone() }))
-            .collect();
+        let targets: Vec<(usize, Op)> =
+            (0..self.nshards).map(|s| (s, Op::Extension { argv: argv.clone() })).collect();
         self.dispatch_targets(conn_id, seq, targets);
     }
 
@@ -124,10 +101,7 @@ impl<C: Commands> Shard<C> {
 
 /// Inputs in request order: `Scored` as-is, set `Members` at 1.0,
 /// missing = empty. Second return = a WRONGTYPE was gathered.
-fn collect_scored(
-    keys: &[Vec<u8>],
-    got: &HashMap<Vec<u8>, Gathered>,
-) -> (Vec<ScoredInput>, bool) {
+fn collect_scored(keys: &[Vec<u8>], got: &HashMap<Vec<u8>, Gathered>) -> (Vec<ScoredInput>, bool) {
     let mut inputs = Vec::with_capacity(keys.len());
     for k in keys {
         match got.get(k) {
@@ -156,12 +130,8 @@ fn build_store_op(
     match combine {
         ZCombine::ZInter | ZCombine::ZUnion | ZCombine::ZDiff => {
             let pairs = match combine {
-                ZCombine::ZInter => {
-                    kevy_store::zinter(&zset_inputs, weights.as_deref(), aggregate)
-                }
-                ZCombine::ZUnion => {
-                    kevy_store::zunion(&zset_inputs, weights.as_deref(), aggregate)
-                }
+                ZCombine::ZInter => kevy_store::zinter(&zset_inputs, weights.as_deref(), aggregate),
+                ZCombine::ZUnion => kevy_store::zunion(&zset_inputs, weights.as_deref(), aggregate),
                 _ => kevy_store::zdiff(&zset_inputs),
             };
             Op::ZStoreResult { dst, pairs }

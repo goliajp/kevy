@@ -2,12 +2,12 @@
 
 #[cfg(not(feature = "std"))]
 use crate::nostd_prelude::*;
+use alloc::collections::VecDeque;
+use alloc::sync::Arc;
+use core::cmp::Ordering;
 pub use kevy_bytes::SmallBytes;
 use kevy_map::{KevyMap, KevySet};
 use kevy_ranktree::RankTree;
-use core::cmp::Ordering;
-use alloc::collections::VecDeque;
-use alloc::sync::Arc;
 
 /// Backing structure for a Hash value — [`KevyMap`] keyed by [`SmallBytes`]
 /// (22 B inline / heap-else). Field names ≤22B (the vast majority — `name`,
@@ -21,8 +21,28 @@ pub type SetData = KevySet<SmallBytes>;
 
 /// A total-ordered f64 score (Redis scores are never NaN). `total_cmp` gives a
 /// total order so scores can key an ordered container.
-#[derive(Clone, Copy, PartialEq)]
+///
+/// `PartialEq` is written rather than derived, and it must stay that way.
+/// Derived, it is `f64`'s `==`, which disagrees with the `total_cmp` below
+/// on `-0.0`: `==` calls it equal to `0.0`, `total_cmp` orders it before.
+/// Rust requires of an `Ord` key that `a == b` exactly when `a.cmp(b)` is
+/// `Equal`, and a `Score` that breaks that is a key whose container and
+/// whose callers disagree about which entries are the same one.
+///
+/// It was latent while nothing compared two `Score`s — `ZSetData::insert`
+/// reached the tree only through `Ord`, and its unconditional
+/// remove-then-insert never had to ask. `ZADD z -0 m` is accepted and
+/// `ZADD z2 -0 a; ZADD z2 0 b` really does order `a` first, so the first
+/// caller to write `old == score` would have skipped a live update and left
+/// `by_member` and `by_score` holding different scores for one member.
+/// NaN cannot arrive: the parser refuses it.
+#[derive(Clone, Copy)]
 pub struct Score(pub f64);
+impl PartialEq for Score {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.total_cmp(&other.0) == Ordering::Equal
+    }
+}
 impl Eq for Score {}
 impl Ord for Score {
     fn cmp(&self, other: &Self) -> Ordering {
@@ -49,19 +69,11 @@ pub struct ScoreBound {
 impl ScoreBound {
     /// Does `s` satisfy this as a *minimum* bound?
     pub(crate) fn ge_ok(&self, s: f64) -> bool {
-        if self.exclusive {
-            s > self.value
-        } else {
-            s >= self.value
-        }
+        if self.exclusive { s > self.value } else { s >= self.value }
     }
     /// Does `s` satisfy this as a *maximum* bound?
     pub(crate) fn le_ok(&self, s: f64) -> bool {
-        if self.exclusive {
-            s < self.value
-        } else {
-            s <= self.value
-        }
+        if self.exclusive { s < self.value } else { s <= self.value }
     }
 }
 
@@ -82,6 +94,22 @@ impl ZSetData {
     pub(crate) fn insert(&mut self, member: &[u8], score: f64) -> bool {
         let is_new = match self.by_member.insert(SmallBytes::from_slice(member), score) {
             Some(old) => {
+                // An unchanged score has nothing to reorder. Without this,
+                // the remove below takes (old, member) out of the index and
+                // the insert at the bottom puts (score, member) back — the
+                // same key, so the tree ends exactly where it began, having
+                // paid a descent, a removal, an insertion and two extra
+                // SmallBytes for it. Measured at 30.6% of the operation
+                // on an 8,000-member set — see the ZADD decomposition
+                // under bench/, which prices it against ZSCORE.
+                //
+                // Through `Score`, never `f64`. The two disagree on -0.0,
+                // the tree keys on `Score`, and `==` here would skip a real
+                // reordering and leave this map and that tree holding
+                // different scores for one member.
+                if Score(old) == Score(score) {
+                    return false;
+                }
                 self.by_score.remove(&(Score(old), SmallBytes::from_slice(member)));
                 false
             }
@@ -325,7 +353,10 @@ impl Value {
     pub fn type_name(&self) -> &'static str {
         match self {
             Value::Str(_) | Value::Int(_) | Value::ArcBulk(_) => "string",
-            Value::Hash(_) | Value::SegHash(_) | Value::SmallHashInline(_) | Value::PackedRow(_) => "hash",
+            Value::Hash(_)
+            | Value::SegHash(_)
+            | Value::SmallHashInline(_)
+            | Value::PackedRow(_) => "hash",
             Value::List(_) | Value::SegList(_) | Value::SmallListInline(_) => "list",
             Value::Set(_) | Value::SegSet(_) | Value::SmallSetInline(_) => "set",
             Value::ZSet(_) | Value::SegZSet(_) | Value::SmallZSetInline(_) => "zset",
@@ -335,8 +366,6 @@ impl Value {
             Value::Cold(c) => c.type_name(),
         }
     }
-
-
 }
 
 // `BioDropSender = mpsc::Sender<Box<Value>>` requires `Value: Send`. Static

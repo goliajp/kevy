@@ -67,11 +67,7 @@ impl<'a> P<'a> {
     }
 
     pub(crate) fn expect_sym(&mut self, ch: char, ctx: &str) -> Result<(), SqlError> {
-        if self.eat_sym(ch) {
-            Ok(())
-        } else {
-            Err(self.err_here(format!("expected '{ch}' {ctx}")))
-        }
+        if self.eat_sym(ch) { Ok(()) } else { Err(self.err_here(format!("expected '{ch}' {ctx}"))) }
     }
 
     /// An identifier (unquoted → already lower-cased, or `"quoted"`),
@@ -131,9 +127,7 @@ fn refused_verb(p: &P<'_>, verb: &str) -> Option<SqlError> {
         "alter" => "declarations compile once \u{2014} TABLE.DROP, edit the schema, re-apply",
         "drop" => "issue TABLE.DROP / IDX.DROP / VIEW.DROP directly against the server",
         "truncate" => "delete the rows through the live commands (kevy-cli delete-prefix <p>)",
-        "with" => {
-            "CTEs are query-time composition (Law 3); declare each step as its own view"
-        }
+        "with" => "CTEs are query-time composition (Law 3); declare each step as its own view",
         "grant" | "revoke" => "kevy has no SQL privilege layer (AUTH/TLS are permanently out)",
         "begin" | "commit" | "rollback" => {
             "transactions are runtime commands (WATCH/MULTI/EXEC, cookbook \u{a7}4), not declarations"
@@ -298,6 +292,30 @@ fn skip_default_expr(p: &mut P<'_>) -> Result<(), SqlError> {
     }
 }
 
+/// The inline column constraints kevy refuses, each with the note saying
+/// what to write instead. `None` when the next keyword is not one of them.
+///
+/// Split from `parse_column_def` for the 50-line rule: three of the loop's
+/// six arms were the same answer — "kevy enforces no constraints" — said
+/// three ways.
+fn refused_inline_constraint(p: &mut P<'_>) -> Option<SqlError> {
+    if p.is_kw("references") {
+        Some(p.refuse(
+            "REFERENCES",
+            "kevy enforces no constraints (Law 3); keep the FK as an indexed column",
+        ))
+    } else if p.is_kw("unique") {
+        Some(p.refuse(
+            "an inline UNIQUE",
+            "declare it table-level \u{2014} UNIQUE (<col>) \u{2014} or as CREATE UNIQUE INDEX",
+        ))
+    } else if p.is_kw("check") {
+        Some(p.refuse("CHECK", "constraints are the atomic-block recipe (cookbook 6)"))
+    } else {
+        None
+    }
+}
+
 fn parse_column_def(p: &mut P<'_>, t: &mut CreateTable) -> Result<(), SqlError> {
     let (name, line, col) = p.ident("a column name or a table constraint")?;
     let (ty, sql_ty) = parse_type(p)?;
@@ -328,18 +346,8 @@ fn parse_column_def(p: &mut P<'_>, t: &mut CreateTable) -> Result<(), SqlError> 
             p.bump();
             skip_default_expr(p)?;
             def.dropped_default = true;
-        } else if p.is_kw("references") {
-            return Err(p.refuse(
-                "REFERENCES",
-                "kevy enforces no constraints (Law 3); keep the FK as an indexed column (cookbook \u{a7}10)",
-            ));
-        } else if p.is_kw("unique") {
-            return Err(p.refuse(
-                "an inline UNIQUE",
-                "declare it table-level \u{2014} UNIQUE (<col>) \u{2014} or as CREATE UNIQUE INDEX ON <t> (<col>)",
-            ));
-        } else if p.is_kw("check") {
-            return Err(p.refuse("CHECK", "constraints are the atomic-block recipe (cookbook \u{a7}5)"));
+        } else if let Some(e) = refused_inline_constraint(p) {
+            return Err(e);
         } else {
             break;
         }

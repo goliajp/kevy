@@ -59,19 +59,13 @@ fn snapshot_view_collections_are_cow() {
     s.hset(b"h", &[(big_f.as_slice(), big_v1.as_slice())]).unwrap();
 
     let view = s.collect_snapshot();
-    s.hset(
-        b"h",
-        &[(big_f.as_slice(), big_v2.as_slice()), (big_g.as_slice(), big_w.as_slice())],
-    )
-    .unwrap();
+    s.hset(b"h", &[(big_f.as_slice(), big_v2.as_slice()), (big_g.as_slice(), big_w.as_slice())])
+        .unwrap();
 
     match view_get(&view, b"h") {
         Some(Value::Hash(h)) => {
             assert_eq!(h.len(), 1, "view hash gained post-collect fields");
-            assert_eq!(
-                h.get(big_f.as_slice()).map(|v| v.as_slice()),
-                Some(big_v1.as_slice())
-            );
+            assert_eq!(h.get(big_f.as_slice()).map(|v| v.as_slice()), Some(big_v1.as_slice()));
         }
         other => panic!("expected frozen Hash, got {:?}", other.map(|v| v.type_name())),
     }
@@ -85,7 +79,8 @@ fn snapshot_view_collections_are_cow() {
 fn snapshot_view_outlives_deletion_of_collections() {
     let mut s = Store::new();
     for i in 0..100u32 {
-        s.hset(b"big", &[(format!("f{i}").into_bytes().as_slice(), vec![b'x'; 64].as_slice())]).unwrap();
+        s.hset(b"big", &[(format!("f{i}").into_bytes().as_slice(), vec![b'x'; 64].as_slice())])
+            .unwrap();
     }
     let view = s.collect_snapshot();
     s.del(&[b"big".as_slice()]);
@@ -153,7 +148,10 @@ fn collect_pause_is_shallow() {
         assert_eq!(view.len(), 1_000_000);
         best = best.min(dt);
     }
-    eprintln!("collect_snapshot: 1M string keys in {best} us ({:.1} ns/entry)", best as f64 / 1000.0);
+    eprintln!(
+        "collect_snapshot: 1M string keys in {best} us ({:.1} ns/entry)",
+        best as f64 / 1000.0
+    );
     // Generous ceiling: even a debug build on a loaded CI box clears this;
     // a regression to deep-copy semantics (O(serialized bytes)) would not.
     assert!(best < 2_000_000, "collect took {best} us — deep copy regression?");
@@ -165,9 +163,8 @@ fn collect_pause_is_shallow() {
 fn collect_pause_is_independent_of_collection_size() {
     let mut s = Store::new();
     for k in 0..10u32 {
-        let pairs: Vec<(Vec<u8>, Vec<u8>)> = (0..100_000u32)
-            .map(|i| (format!("f{i}").into_bytes(), b"valueval".to_vec()))
-            .collect();
+        let pairs: Vec<(Vec<u8>, Vec<u8>)> =
+            (0..100_000u32).map(|i| (format!("f{i}").into_bytes(), b"valueval".to_vec())).collect();
         let pair_refs: Vec<(&[u8], &[u8])> =
             pairs.iter().map(|(f, v)| (f.as_slice(), v.as_slice())).collect();
         s.hset(format!("big{k}").as_bytes(), &pair_refs).unwrap();

@@ -83,10 +83,9 @@ fn move_scope_ships_prefix_slice_to_mock_target_and_commits() {
     // Install scope_integration with self_node_id = A, peers = A + B.
     let mut cfg = Config::default();
     cfg.cluster.node_id = "A".to_string();
-    cfg.cluster.peers = kevy_config::PeerEntry::parse_list(&format!(
-        "A@127.0.0.1:11000,B@127.0.0.1:{port}",
-    ))
-    .unwrap();
+    cfg.cluster.peers =
+        kevy_config::PeerEntry::parse_list(&format!("A@127.0.0.1:11000,B@127.0.0.1:{port}",))
+            .unwrap();
     // The state carries node identity + peer table straight from the
     // config, so the public dispatch path exercises the same routing
     // `kevy::serve` would.
@@ -116,10 +115,7 @@ fn move_scope_ships_prefix_slice_to_mock_target_and_commits() {
             .recv_timeout(Duration::from_secs(2))
             .expect("mock target should have received the request");
         let req_s = String::from_utf8_lossy(&request);
-        assert!(
-            req_s.contains("MOVE-SCOPE-INGEST"),
-            "request shape: {req_s:?}",
-        );
+        assert!(req_s.contains("MOVE-SCOPE-INGEST"), "request shape: {req_s:?}",);
         assert!(req_s.contains("test:a"), "key 1 in request: {req_s:?}");
         assert!(req_s.contains("test:b"), "key 2 in request: {req_s:?}");
     }

@@ -52,10 +52,7 @@ fn copy_preserves_ttl_on_dst() {
     s.pexpire(b"src", 60_000).unwrap();
     assert!(s.copy(b"src", b"dst", false).unwrap());
     let ttl = s.ttl_ms(b"dst");
-    assert!(
-        (1..=60_000).contains(&ttl),
-        "expected TTL preserved on dst, got {ttl}"
-    );
+    assert!((1..=60_000).contains(&ttl), "expected TTL preserved on dst, got {ttl}");
 }
 
 // ---- randomkey ----------------------------------------------------------

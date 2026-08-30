@@ -72,10 +72,7 @@ pub(crate) fn posix_class_members(name: &str) -> Result<Vec<ClassMember>, ReErr>
             ClassMember::Single('\u{0c}'),
         ],
         "blank" => vec![ClassMember::Single(' '), ClassMember::Single('\t')],
-        "cntrl" => vec![
-            ClassMember::Range('\u{00}', '\u{1f}'),
-            ClassMember::Single('\u{7f}'),
-        ],
+        "cntrl" => vec![ClassMember::Range('\u{00}', '\u{1f}'), ClassMember::Single('\u{7f}')],
         "print" => vec![ClassMember::Range('\u{20}', '\u{7e}')],
         "graph" => vec![ClassMember::Range('\u{21}', '\u{7e}')],
         "punct" => vec![

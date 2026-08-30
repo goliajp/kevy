@@ -148,10 +148,7 @@ fn probe_verb_bulk(buf: &[u8], start: usize) -> Option<([u8; 16], usize, usize)>
 /// isn't last — a possible follow-up. Plain `SET k v` (no options, big
 /// value as last bulk) is included.
 fn generic_bigbulk_verb_supported(verb: &[u8]) -> bool {
-    matches!(
-        verb,
-        b"SET" | b"APPEND" | b"GETSET" | b"SETEX" | b"PSETEX" | b"MSET"
-    )
+    matches!(verb, b"SET" | b"APPEND" | b"GETSET" | b"SETEX" | b"PSETEX" | b"MSET")
 }
 
 /// Walk a `$<len>\r\n<bytes>\r\n` bulk at `buf[i..]`. If the bulk is
@@ -174,7 +171,10 @@ enum BulkStep {
         body_len: usize,
         after: usize,
     },
-    HeaderOnlyBigBody { body_len: usize, after: usize },
+    HeaderOnlyBigBody {
+        body_len: usize,
+        after: usize,
+    },
     Incomplete,
 }
 
@@ -195,11 +195,7 @@ fn step_bulk(buf: &[u8], i: usize) -> BulkStep {
         if &buf[body_start + body_len..body_start + body_len + 2] != b"\r\n" {
             return BulkStep::Incomplete;
         }
-        BulkStep::Complete {
-            body_start,
-            body_len,
-            after,
-        }
+        BulkStep::Complete { body_start, body_len, after }
     } else {
         // Header present, body not (fully) — record the total `after`
         // so the caller knows the frame extent.
@@ -257,11 +253,7 @@ pub(crate) fn probe_generic_bigbulk(buf: &[u8]) -> BigArgGenericProbe {
     let mut key_range: Option<(usize, usize)> = None;
     for bulk_idx in 1..argc {
         match step_bulk(buf, cursor) {
-            BulkStep::Complete {
-                body_start,
-                body_len,
-                after,
-            } => {
+            BulkStep::Complete { body_start, body_len, after } => {
                 if is_bare_set && bulk_idx == 1 {
                     key_range = Some((body_start, body_start + body_len));
                 }

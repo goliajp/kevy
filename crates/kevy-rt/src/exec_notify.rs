@@ -23,13 +23,8 @@ impl<C: Commands> Shard<C> {
     /// `do_publish`'s fan-out path but does not write back a receiver
     /// count to any client.
     pub(crate) fn broadcast_notification(&mut self, channel: &[u8], payload: &[u8]) {
-        let (_count, channel_bits) = self
-            .pubsub
-            .read()
-            .expect("pubsub registry")
-            .get(channel)
-            .copied()
-            .unwrap_or((0, 0));
+        let (_count, channel_bits) =
+            self.pubsub.read().expect("pubsub registry").get(channel).copied().unwrap_or((0, 0));
         let (_pcount, pat_bits) = self.pattern_match_for_channel(channel);
         let bits = channel_bits | pat_bits;
         if bits == 0 {

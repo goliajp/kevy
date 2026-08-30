@@ -51,9 +51,7 @@ pub(super) fn plan_radius<A: ArgvView + ?Sized>(
         (Anchor::Member(args[2].to_vec()), 3)
     } else {
         if args.len() < 6 {
-            return Err(CmdError::Wire(
-                "ERR wrong number of arguments for 'georadius' command",
-            ));
+            return Err(CmdError::Wire("ERR wrong number of arguments for 'georadius' command"));
         }
         let lon = arg_f64(&args[2]).ok_or("ERR value is not a valid float")?;
         let lat = arg_f64(&args[3]).ok_or("ERR value is not a valid float")?;
@@ -62,8 +60,7 @@ pub(super) fn plan_radius<A: ArgvView + ?Sized>(
     let radius = arg_f64(&args[radius_idx]).ok_or("ERR value is not a valid float")?;
     let unit = parse_unit(&args[radius_idx + 1])
         .ok_or("ERR unsupported unit provided. please use M, KM, FT, MI")?;
-    let parsed =
-        search::parse_legacy_radius(args, radius_idx + 2, anchor, radius * unit, unit)?;
+    let parsed = search::parse_legacy_radius(args, radius_idx + 2, anchor, radius * unit, unit)?;
     Ok((args[1].to_vec(), parsed))
 }
 

@@ -79,9 +79,7 @@ pub unsafe extern "C" fn kevy_publish(
 ) -> i32 {
     // SAFETY: loader-staged argument buffers, live for this call.
     let (channel, payload) = unsafe { (arg(cp, cl), arg(pp, pl)) };
-    with(h, BAD_HANDLE, |inst| {
-        inst.store.publish(channel, payload) as i32
-    })
+    with(h, BAD_HANDLE, |inst| inst.store.publish(channel, payload) as i32)
 }
 
 /// Drain every queued message across this instance's subscriptions into

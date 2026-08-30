@@ -136,8 +136,7 @@ fn borrow_from_right<K>(node: &mut Node<K>, i: usize) {
     let (up, moved) = {
         let right = &mut node.children[i + 1];
         let up = right.keys.remove(0);
-        let moved =
-            if right.children.is_empty() { None } else { Some(right.children.remove(0)) };
+        let moved = if right.children.is_empty() { None } else { Some(right.children.remove(0)) };
         right.recount();
         (up, moved)
     };

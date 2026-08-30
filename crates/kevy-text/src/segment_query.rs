@@ -142,10 +142,8 @@ impl TextSegment {
             // Global df when supplied — the whole point of the injected
             // stats. Falls back to the local list length, which is what
             // the shard-local path always used.
-            let df = stats
-                .and_then(|s| s.df.get(t))
-                .map(|&d| f64::from(d))
-                .unwrap_or(list.len() as f64);
+            let df =
+                stats.and_then(|s| s.df.get(t)).map(|&d| f64::from(d)).unwrap_or(list.len() as f64);
             let max_tf = f64::from(list.max_tf());
             lists.push((list, df, bm25_upper(max_tf, df, n_docs)));
         }
@@ -178,8 +176,7 @@ impl TextSegment {
             if scores.len() >= limit {
                 let bound = bm25_upper(f64::from(*tf), df, n_docs);
                 if bound + tail_next < kth_of(scores, limit) {
-                    let walked_tfs: Vec<u32> =
-                        groups[..bi].iter().map(|(t, _)| *t).collect();
+                    let walked_tfs: Vec<u32> = groups[..bi].iter().map(|(t, _)| *t).collect();
                     self.probe_list(list, df, &walked_tfs, ctx, scores);
                     break;
                 }
@@ -211,13 +208,8 @@ impl TextSegment {
             if band.is_empty() {
                 continue;
             }
-            let bound = bm25_score(
-                f64::from(tf),
-                df,
-                n_docs,
-                f64::from(BAND_MIN_DL[b as usize]),
-                avgdl,
-            );
+            let bound =
+                bm25_score(f64::from(tf), df, n_docs, f64::from(BAND_MIN_DL[b as usize]), avgdl);
             if single && scores.len() >= limit && bound < kth_of(scores, limit) {
                 break;
             }

@@ -18,7 +18,10 @@
 use core::arch::x86_64::*;
 
 #[cfg(target_arch = "aarch64")]
-use core::arch::aarch64::{uint8x16_t, vld1q_u8, vdupq_n_u8, vceqq_u8, vreinterpretq_u16_u8, vshrn_n_u16, vget_lane_u64, vreinterpret_u64_u8};
+use core::arch::aarch64::{
+    uint8x16_t, vceqq_u8, vdupq_n_u8, vget_lane_u64, vld1q_u8, vreinterpret_u64_u8,
+    vreinterpretq_u16_u8, vshrn_n_u16,
+};
 
 /// 16-byte SIMD chunk of metadata bytes.
 #[cfg(target_arch = "x86_64")]
@@ -129,11 +132,7 @@ impl BitMask {
     /// Index of the lowest set slot, or `None` if empty.
     #[inline]
     pub(crate) fn lowest_set(self) -> Option<usize> {
-        if self.0 == 0 {
-            None
-        } else {
-            Some(BIT_TO_SLOT(self.0.trailing_zeros() as usize))
-        }
+        if self.0 == 0 { None } else { Some(BIT_TO_SLOT(self.0.trailing_zeros() as usize)) }
     }
 }
 
@@ -178,16 +177,13 @@ mod tests {
     #[test]
     fn match_finds_all_positions() {
         let buf: [u8; 16] = [
-            0xAB, 0x00, 0xAB, 0x01, 0xAB, 0xAB, 0x02, 0xAB,
-            0x03, 0x04, 0xAB, 0x05, 0xAB, 0xAB, 0x06, 0xAB,
+            0xAB, 0x00, 0xAB, 0x01, 0xAB, 0xAB, 0x02, 0xAB, 0x03, 0x04, 0xAB, 0x05, 0xAB, 0xAB,
+            0x06, 0xAB,
         ];
         let g = unsafe { Group::load(buf.as_ptr()) };
         let hits: Vec<usize> = g.match_byte(0xAB).iter().collect();
-        let want: Vec<usize> = buf
-            .iter()
-            .enumerate()
-            .filter_map(|(i, &b)| (b == 0xAB).then_some(i))
-            .collect();
+        let want: Vec<usize> =
+            buf.iter().enumerate().filter_map(|(i, &b)| (b == 0xAB).then_some(i)).collect();
         assert_eq!(hits, want);
     }
 
@@ -214,26 +210,20 @@ mod tests {
     fn unaligned_load_works() {
         // Backing buffer of 17 bytes; load at offset 1 (unaligned).
         let buf: [u8; 17] = [
-            0xDE, 0xAB, 0x00, 0xAB, 0x01, 0xAB, 0xAB, 0x02,
-            0xAB, 0x03, 0x04, 0xAB, 0x05, 0xAB, 0xAB, 0x06, 0xAB,
+            0xDE, 0xAB, 0x00, 0xAB, 0x01, 0xAB, 0xAB, 0x02, 0xAB, 0x03, 0x04, 0xAB, 0x05, 0xAB,
+            0xAB, 0x06, 0xAB,
         ];
         let g = unsafe { Group::load(buf.as_ptr().add(1)) };
         let hits: Vec<usize> = g.match_byte(0xAB).iter().collect();
         // Same as buf[1..17] match_byte(0xAB):
-        let want: Vec<usize> = buf[1..17]
-            .iter()
-            .enumerate()
-            .filter_map(|(i, &b)| (b == 0xAB).then_some(i))
-            .collect();
+        let want: Vec<usize> =
+            buf[1..17].iter().enumerate().filter_map(|(i, &b)| (b == 0xAB).then_some(i)).collect();
         assert_eq!(hits, want);
     }
 
     #[test]
     fn lowest_set_matches_first_iter() {
-        let buf: [u8; 16] = [
-            0, 0, 0, 0, 0xAA, 0, 0, 0,
-            0xAA, 0, 0, 0, 0, 0, 0, 0,
-        ];
+        let buf: [u8; 16] = [0, 0, 0, 0, 0xAA, 0, 0, 0, 0xAA, 0, 0, 0, 0, 0, 0, 0];
         let g = unsafe { Group::load(buf.as_ptr()) };
         let m = g.match_byte(0xAA);
         assert_eq!(m.lowest_set(), Some(4));

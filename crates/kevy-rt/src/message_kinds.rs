@@ -86,6 +86,3 @@ pub(crate) struct DispatchMeta {
     /// version bump target. `None` for keyless `Route::Local` cmds.
     pub(crate) key_idx: Option<u8>,
 }
-
-
-

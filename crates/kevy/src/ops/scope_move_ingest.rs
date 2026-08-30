@@ -51,7 +51,6 @@ pub(crate) fn cmd_move_scope_ingest<A: ArgvView + ?Sized>(
     out.extend_from_slice(reply.as_bytes());
 }
 
-
 /// Replay the shipped frames into `store`, returning how many applied.
 ///
 /// The rows land by replaying frames straight in, which bypasses the

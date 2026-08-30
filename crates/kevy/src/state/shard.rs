@@ -172,10 +172,7 @@ impl ShardCtx {
     }
 
     pub(crate) fn ingesting_matches(&self, key: &[u8]) -> bool {
-        self.ingesting_prefix
-            .borrow()
-            .as_ref()
-            .is_some_and(|p| key.starts_with(p))
+        self.ingesting_prefix.borrow().as_ref().is_some_and(|p| key.starts_with(p))
     }
 
     pub(crate) fn set_stats_slot(&self, slot: Option<Arc<ShardStats>>) {
@@ -225,8 +222,7 @@ impl ShardCtx {
     /// the distinction the counter exists to make visible.
     pub(crate) fn note_query_buffer_exceeded(&self) {
         self.with_stats_slot(|st| {
-            st.query_buffer_disconnections
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            st.query_buffer_disconnections.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         });
     }
 
@@ -234,13 +230,11 @@ impl ShardCtx {
     /// (`fetch_max` — the gauge is a high-water mark, not a sum).
     pub(crate) fn note_tick_gap(&self, excess_us: u64) {
         self.with_stats_slot(|st| {
-            st.tick_gap_max_us
-                .fetch_max(excess_us, std::sync::atomic::Ordering::Relaxed);
+            st.tick_gap_max_us.fetch_max(excess_us, std::sync::atomic::Ordering::Relaxed);
             // The reactor calls this exactly once per tick BODY, so the
             // count rides along for free and turns the max gauge into a
             // pair a reader can tell apart: one late tick vs a slow one.
-            st.ticks_total
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            st.ticks_total.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         });
     }
 

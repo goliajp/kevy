@@ -34,11 +34,7 @@ use napi::{
 };
 
 const fn empty_buf() -> KevyBuf {
-    KevyBuf {
-        ptr: null_mut(),
-        len: 0,
-        cap: 0,
-    }
+    KevyBuf { ptr: null_mut(), len: 0, cap: 0 }
 }
 
 /// Copy a reply buffer into a fresh JS Buffer, then free the buffer.
@@ -74,11 +70,8 @@ unsafe fn take_buf(env: NapiEnv, buf: KevyBuf) -> NapiValue {
 /// `env` must be the current callback's env; `buf` exactly as returned by
 /// [`kevy_ffi::kevy_get_shared`], consumed exactly once.
 unsafe fn take_buf_shared(env: NapiEnv, buf: KevyBuf) -> NapiValue {
-    let s: &[u8] = if buf.len == 0 {
-        &[]
-    } else {
-        unsafe { std::slice::from_raw_parts(buf.ptr, buf.len) }
-    };
+    let s: &[u8] =
+        if buf.len == 0 { &[] } else { unsafe { std::slice::from_raw_parts(buf.ptr, buf.len) } };
     let v = unsafe { make_buffer(env, s) };
     unsafe { kevy_ffi::kevy_buf_free_shared(buf.ptr, buf.len, buf.cap) };
     v
@@ -264,8 +257,7 @@ unsafe extern "C" fn js_set(env: NapiEnv, info: NapiCallbackInfo) -> NapiValue {
         };
         let ttl_ms = unsafe { get_i64(env, ttl) };
         let ttl = if ttl_ms > 0 { ttl_ms as u64 } else { 0 };
-        let rc =
-            unsafe { kevy_ffi::kevy_set(db, k.as_ptr(), k.len(), v.as_ptr(), v.len(), ttl) };
+        let rc = unsafe { kevy_ffi::kevy_set(db, k.as_ptr(), k.len(), v.as_ptr(), v.len(), ttl) };
         if rc < 0 {
             return unsafe { throw(env, "kevy: kevy_set misuse or storage error\0") };
         }

@@ -184,9 +184,8 @@ pub fn free_port_block(width: usize) -> u16 {
         // Held together: a run is usable only if every port in it is free
         // at the same moment, which checking them one at a time does not
         // establish.
-        let held: Vec<_> = (0..run)
-            .map_while(|i| TcpListener::bind(("127.0.0.1", candidate + i)).ok())
-            .collect();
+        let held: Vec<_> =
+            (0..run).map_while(|i| TcpListener::bind(("127.0.0.1", candidate + i)).ok()).collect();
         if held.len() == run as usize {
             return candidate;
         }

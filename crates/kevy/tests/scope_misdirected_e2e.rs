@@ -33,10 +33,8 @@ fn write_to_non_writer_node_returns_misdirected() {
     // `app:*` keys must MISDIRECT to B's address.
     let mut cfg = Config::default();
     cfg.cluster.node_id = "A".to_string();
-    cfg.cluster.peers = kevy_config::PeerEntry::parse_list(
-        "A@127.0.0.1:6004,B@10.0.0.99:6004",
-    )
-    .unwrap();
+    cfg.cluster.peers =
+        kevy_config::PeerEntry::parse_list("A@127.0.0.1:6004,B@10.0.0.99:6004").unwrap();
     cfg.cluster.scopes = kevy_config::ScopeEntry::parse_list("app:=B").unwrap();
     let kevy = kevy::KevyCommands::with_state(Arc::new(
         kevy::RuntimeState::new(Arc::new(cfg), std::path::PathBuf::new(), 1).unwrap(),
@@ -47,14 +45,8 @@ fn write_to_non_writer_node_returns_misdirected() {
     // because self_node_id (A) is not the declared writer (B).
     let reply = kevy.dispatch(&mut store, &argv(&[b"SET", b"app:foo", b"v"]));
     let s = String::from_utf8_lossy(&reply);
-    assert!(
-        s.starts_with("-MISDIRECTED"),
-        "expected -MISDIRECTED, got: {s:?}",
-    );
-    assert!(
-        s.contains("10.0.0.99:6004"),
-        "should name B's host:port: {s:?}",
-    );
+    assert!(s.starts_with("-MISDIRECTED"), "expected -MISDIRECTED, got: {s:?}",);
+    assert!(s.contains("10.0.0.99:6004"), "should name B's host:port: {s:?}",);
     // The store must NOT have applied the write locally.
     assert_eq!(
         store.get(b"app:foo").map(|v| v.map(|c| c.into_owned())),
@@ -66,10 +58,7 @@ fn write_to_non_writer_node_returns_misdirected() {
     let reply = kevy.dispatch(&mut store, &argv(&[b"SET", b"other:k", b"v"]));
     let s = String::from_utf8_lossy(&reply);
     assert!(s.starts_with('+') || s.starts_with(':'), "{s:?}");
-    assert_eq!(
-        store.get(b"other:k").map(|v| v.map(|c| c.into_owned())),
-        Ok(Some(b"v".to_vec())),
-    );
+    assert_eq!(store.get(b"other:k").map(|v| v.map(|c| c.into_owned())), Ok(Some(b"v".to_vec())),);
 }
 
 #[test]
@@ -83,10 +72,8 @@ fn read_to_non_writer_node_is_not_misdirected() {
     // reads.
     let mut cfg = Config::default();
     cfg.cluster.node_id = "A".to_string();
-    cfg.cluster.peers = kevy_config::PeerEntry::parse_list(
-        "A@127.0.0.1:6004,B@10.0.0.99:6004",
-    )
-    .unwrap();
+    cfg.cluster.peers =
+        kevy_config::PeerEntry::parse_list("A@127.0.0.1:6004,B@10.0.0.99:6004").unwrap();
     cfg.cluster.scopes = kevy_config::ScopeEntry::parse_list("app:=B").unwrap();
     let kevy = kevy::KevyCommands::with_state(Arc::new(
         kevy::RuntimeState::new(Arc::new(cfg), std::path::PathBuf::new(), 1).unwrap(),
@@ -95,8 +82,5 @@ fn read_to_non_writer_node_is_not_misdirected() {
     let mut store = Store::new();
     let reply = kevy.dispatch(&mut store, &argv(&[b"GET", b"app:nonexistent"]));
     let s = String::from_utf8_lossy(&reply);
-    assert!(
-        !s.starts_with("-MISDIRECTED"),
-        "reads must not be redirected: {s:?}",
-    );
+    assert!(!s.starts_with("-MISDIRECTED"), "reads must not be redirected: {s:?}",);
 }

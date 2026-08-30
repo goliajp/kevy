@@ -84,7 +84,9 @@ fn check_blocking_args(keys: &[&[u8]], timeout: Option<Duration>) -> KevyResult<
         return Err(KevyError::InvalidInput("blocking pop needs at least one key".into()));
     }
     if timeout == Some(Duration::ZERO) {
-        return Err(KevyError::InvalidInput("timeout Some(0) is ambiguous (wire 0 = wait forever); use None to wait forever".into()));
+        return Err(KevyError::InvalidInput(
+            "timeout Some(0) is ambiguous (wire 0 = wait forever); use None to wait forever".into(),
+        ));
     }
     Ok(())
 }
@@ -130,9 +132,7 @@ fn pop_kv_score(reply: Reply) -> KevyResult<Option<ZPopHit>> {
         Reply::Array(items) if items.len() == 3 => {
             let mut it = items.into_iter();
             match (it.next().unwrap(), it.next().unwrap(), it.next().unwrap()) {
-                (Reply::Bulk(k), Reply::Bulk(m), Reply::Bulk(s)) => {
-                    Ok(Some((k, m, num_f64(&s)?)))
-                }
+                (Reply::Bulk(k), Reply::Bulk(m), Reply::Bulk(s)) => Ok(Some((k, m, num_f64(&s)?))),
                 (a, _, _) => Err(unexpected(a)),
             }
         }
@@ -159,24 +159,17 @@ mod tests {
     #[test]
     fn embedded_blpop_timeout_returns_none() {
         let mut c = Connection::connect("mem://").unwrap();
-        let hit = c
-            .blpop(&[&b"empty"[..]], Some(Duration::from_millis(30)))
-            .unwrap();
+        let hit = c.blpop(&[&b"empty"[..]], Some(Duration::from_millis(30))).unwrap();
         assert_eq!(hit, None);
     }
 
     #[test]
     fn embedded_bzpopmin_pops_lowest_score() {
         let mut c = Connection::connect("mem://").unwrap();
-        c.zadd(b"z", &[(2.0, b"hi".as_ref()), (1.0, b"lo".as_ref())])
-            .unwrap();
-        let hit = c
-            .bzpopmin(&[&b"z"[..]], Some(Duration::from_secs(1)))
-            .unwrap();
+        c.zadd(b"z", &[(2.0, b"hi".as_ref()), (1.0, b"lo".as_ref())]).unwrap();
+        let hit = c.bzpopmin(&[&b"z"[..]], Some(Duration::from_secs(1))).unwrap();
         assert_eq!(hit, Some((b"z".to_vec(), b"lo".to_vec(), 1.0)));
-        let miss = c
-            .bzpopmin(&[&b"gone"[..]], Some(Duration::from_millis(30)))
-            .unwrap();
+        let miss = c.bzpopmin(&[&b"gone"[..]], Some(Duration::from_millis(30))).unwrap();
         assert_eq!(miss, None);
     }
 

@@ -39,10 +39,7 @@ pub struct KevyOpenReport {
 /// `db` must be a live handle from `kevy_open*`; `out` must point to a
 /// writable [`KevyOpenReport`].
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn kevy_open_report(
-    db: *mut KevyDb,
-    out: *mut KevyOpenReport,
-) -> i32 {
+pub unsafe extern "C" fn kevy_open_report(db: *mut KevyDb, out: *mut KevyOpenReport) -> i32 {
     if db.is_null() || out.is_null() {
         return -1;
     }

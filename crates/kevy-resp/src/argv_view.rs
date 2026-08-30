@@ -139,10 +139,7 @@ mod tests {
         assert_eq!(ArgvView::len(&a), 3);
         assert_eq!(first_arg(&a), Some(b"SET" as &[u8]));
         assert_eq!(arg_at(&a, 1), b"k" as &[u8]);
-        assert_eq!(
-            collect_iter(&a),
-            vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()]
-        );
+        assert_eq!(collect_iter(&a), vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()]);
     }
 
     #[test]

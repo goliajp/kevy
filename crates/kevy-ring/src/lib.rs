@@ -250,16 +250,7 @@ pub struct Consumer<T> {
 /// ```
 pub fn ring<T>(capacity: usize) -> (Producer<T>, Consumer<T>) {
     let r = Arc::new(Ring::with_capacity(capacity));
-    (
-        Producer {
-            inner: r.clone(),
-            head_cache: 0,
-        },
-        Consumer {
-            inner: r,
-            tail_cache: 0,
-        },
-    )
+    (Producer { inner: r.clone(), head_cache: 0 }, Consumer { inner: r, tail_cache: 0 })
 }
 
 impl<T> Producer<T> {

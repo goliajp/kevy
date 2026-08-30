@@ -1,82 +1,82 @@
 //! Terminal MATCH surface parse tests, split from `args.rs` for the
 //! 500-LOC house rule (a `#[path]` child of `args`).
 
-    use super::*;
+use super::*;
 
-    fn argv(parts: &[&str]) -> Vec<Vec<u8>> {
-        parts.iter().map(|p| p.as_bytes().to_vec()).collect()
+fn argv(parts: &[&str]) -> Vec<Vec<u8>> {
+    parts.iter().map(|p| p.as_bytes().to_vec()).collect()
+}
+
+/// Nothing is reserved any more — every clause of the terminal
+/// surface executes. The mechanism stays: a clause added to the
+/// frozen surface ahead of its implementation still comes back named
+/// rather than silently ignored, which is the failure mode worth
+/// keeping a guard for.
+#[test]
+fn nothing_is_reserved_and_the_surface_is_complete() {
+    assert!(NOT_YET.is_empty(), "the last reserved clause has shipped");
+    for c in ["IN", "FILTER", "FACET", "SORT", "DISTINCT", "HIGHLIGHT"] {
+        let a = argv(&["IDX.QUERY", "idx", "MATCH", "hello", c, "x"]);
+        assert!(
+            !matches!(MatchArgs::parse_terminal(&a), MatchParse::NotYet(_)),
+            "{c} executes now"
+        );
     }
+}
 
-    /// Nothing is reserved any more — every clause of the terminal
-    /// surface executes. The mechanism stays: a clause added to the
-    /// frozen surface ahead of its implementation still comes back named
-    /// rather than silently ignored, which is the failure mode worth
-    /// keeping a guard for.
-    #[test]
-    fn nothing_is_reserved_and_the_surface_is_complete() {
-        assert!(NOT_YET.is_empty(), "the last reserved clause has shipped");
-        for c in ["IN", "FILTER", "FACET", "SORT", "DISTINCT", "HIGHLIGHT"] {
-            let a = argv(&["IDX.QUERY", "idx", "MATCH", "hello", c, "x"]);
-            assert!(
-                !matches!(MatchArgs::parse_terminal(&a), MatchParse::NotYet(_)),
-                "{c} executes now"
-            );
-        }
-    }
-
-    /// HIGHLIGHT parses now: with fields it names them, with none it means
-    /// every field, and it coexists with FIELDS in any order.
-    #[test]
-    fn highlight_parses() {
-        let none = argv(&["IDX.QUERY", "idx", "MATCH", "hello"]);
-        assert!(matches!(MatchArgs::parse_terminal(&none),
+/// HIGHLIGHT parses now: with fields it names them, with none it means
+/// every field, and it coexists with FIELDS in any order.
+#[test]
+fn highlight_parses() {
+    let none = argv(&["IDX.QUERY", "idx", "MATCH", "hello"]);
+    assert!(matches!(MatchArgs::parse_terminal(&none),
             MatchParse::Ok(q) if q.highlight.is_none()));
 
-        let all = argv(&["IDX.QUERY", "idx", "MATCH", "hello", "HIGHLIGHT"]);
-        assert!(matches!(MatchArgs::parse_terminal(&all),
+    let all = argv(&["IDX.QUERY", "idx", "MATCH", "hello", "HIGHLIGHT"]);
+    assert!(matches!(MatchArgs::parse_terminal(&all),
             MatchParse::Ok(q) if q.highlight == Some(vec![])));
 
-        let some = argv(&["IDX.QUERY", "idx", "MATCH", "hello", "HIGHLIGHT", "title", "body"]);
-        assert!(matches!(MatchArgs::parse_terminal(&some),
+    let some = argv(&["IDX.QUERY", "idx", "MATCH", "hello", "HIGHLIGHT", "title", "body"]);
+    assert!(matches!(MatchArgs::parse_terminal(&some),
             MatchParse::Ok(q) if q.highlight == Some(vec![b"title".to_vec(), b"body".to_vec()])));
 
-        // FIELDS then HIGHLIGHT: each variadic clause stops at the other.
-        let both = argv(&["IDX.QUERY", "idx", "MATCH", "hi", "FIELDS", "a", "HIGHLIGHT", "b"]);
-        match MatchArgs::parse_terminal(&both) {
-            MatchParse::Ok(q) => {
-                assert_eq!(q.fields, vec![b"a".to_vec()]);
-                assert_eq!(q.highlight, Some(vec![b"b".to_vec()]));
-            }
-            _ => panic!("FIELDS and HIGHLIGHT must coexist"),
+    // FIELDS then HIGHLIGHT: each variadic clause stops at the other.
+    let both = argv(&["IDX.QUERY", "idx", "MATCH", "hi", "FIELDS", "a", "HIGHLIGHT", "b"]);
+    match MatchArgs::parse_terminal(&both) {
+        MatchParse::Ok(q) => {
+            assert_eq!(q.fields, vec![b"a".to_vec()]);
+            assert_eq!(q.highlight, Some(vec![b"b".to_vec()]));
         }
+        _ => panic!("FIELDS and HIGHLIGHT must coexist"),
     }
+}
 
-    #[test]
-    fn the_shipped_surface_still_parses() {
-        let a = argv(&["IDX.QUERY", "idx", "MATCH", "hello", "LIMIT", "5", "FIELDS", "title"]);
-        match MatchArgs::parse_terminal(&a) {
-            MatchParse::Ok(q) => {
-                assert_eq!(q.text, b"hello");
-                assert_eq!(q.limit, 5);
-                assert_eq!(q.fields, vec![b"title".to_vec()]);
-            }
-            _ => panic!("the existing surface must keep working unchanged"),
+#[test]
+fn the_shipped_surface_still_parses() {
+    let a = argv(&["IDX.QUERY", "idx", "MATCH", "hello", "LIMIT", "5", "FIELDS", "title"]);
+    match MatchArgs::parse_terminal(&a) {
+        MatchParse::Ok(q) => {
+            assert_eq!(q.text, b"hello");
+            assert_eq!(q.limit, 5);
+            assert_eq!(q.fields, vec![b"title".to_vec()]);
         }
+        _ => panic!("the existing surface must keep working unchanged"),
     }
+}
 
-    #[test]
-    fn genuine_nonsense_is_still_bad_args() {
-        let a = argv(&["IDX.QUERY", "idx", "MATCH", "hello", "WOBBLE"]);
-        assert!(matches!(MatchArgs::parse_terminal(&a), MatchParse::BadArgs));
-    }
+#[test]
+fn genuine_nonsense_is_still_bad_args() {
+    let a = argv(&["IDX.QUERY", "idx", "MATCH", "hello", "WOBBLE"]);
+    assert!(matches!(MatchArgs::parse_terminal(&a), MatchParse::BadArgs));
+}
 
-    /// A reserved word appearing as the search text is a query, not a
-    /// clause -- the scan starts after the text argument.
-    #[test]
-    fn a_reserved_word_as_the_query_text_is_not_a_clause() {
-        let a = argv(&["IDX.QUERY", "idx", "MATCH", "FILTER"]);
-        assert!(matches!(MatchArgs::parse_terminal(&a), MatchParse::Ok(_)));
-    }
+/// A reserved word appearing as the search text is a query, not a
+/// clause -- the scan starts after the text argument.
+#[test]
+fn a_reserved_word_as_the_query_text_is_not_a_clause() {
+    let a = argv(&["IDX.QUERY", "idx", "MATCH", "FILTER"]);
+    assert!(matches!(MatchArgs::parse_terminal(&a), MatchParse::Ok(_)));
+}
 
 /// TYPO ships now: 0/1/2 parse into a budget; anything else — including
 /// the frozen surface's AUTO, which is not built — is a syntax error
@@ -140,8 +140,19 @@ fn scope_parses() {
 
     // Variadic, and it stops at the next clause keyword rather than
     // swallowing it.
-    let many =
-        argv(&["IDX.QUERY", "idx", "MATCH", "hi", "IN", "title", "body", "LIMIT", "3", "TYPO", "1"]);
+    let many = argv(&[
+        "IDX.QUERY",
+        "idx",
+        "MATCH",
+        "hi",
+        "IN",
+        "title",
+        "body",
+        "LIMIT",
+        "3",
+        "TYPO",
+        "1",
+    ]);
     match MatchArgs::parse_terminal(&many) {
         MatchParse::Ok(q) => {
             assert_eq!(q.scope, vec![b"title".to_vec(), b"body".to_vec()]);
@@ -162,8 +173,21 @@ fn scope_parses() {
 #[test]
 fn pass_two_reparses_every_clause() {
     let argv2 = argv(&[
-        "MATCH.SCORE", "idx", "hello", "LIMIT=7", "<gstats>", "FIELDS", "a", "HIGHLIGHT", "TYPO",
-        "2", "OFFSET", "4", "IN", "title", "body",
+        "MATCH.SCORE",
+        "idx",
+        "hello",
+        "LIMIT=7",
+        "<gstats>",
+        "FIELDS",
+        "a",
+        "HIGHLIGHT",
+        "TYPO",
+        "2",
+        "OFFSET",
+        "4",
+        "IN",
+        "title",
+        "body",
     ]);
     let q = crate::cmd_index_query::parse_match_score(&argv2).expect("pass-2 argv parses");
     assert_eq!(q.name, b"idx".to_vec());
@@ -199,8 +223,23 @@ fn filter_parses() {
     // Several predicates AND, and they coexist with the other clauses in
     // any order.
     let many = argv(&[
-        "IDX.QUERY", "idx", "MATCH", "hi", "FILTER", "price", "RANGE", "1", "9", "IN", "title",
-        "FILTER", "status", "EQ", "live", "LIMIT", "3",
+        "IDX.QUERY",
+        "idx",
+        "MATCH",
+        "hi",
+        "FILTER",
+        "price",
+        "RANGE",
+        "1",
+        "9",
+        "IN",
+        "title",
+        "FILTER",
+        "status",
+        "EQ",
+        "live",
+        "LIMIT",
+        "3",
     ]);
     match MatchArgs::parse_terminal(&many) {
         MatchParse::Ok(q) => {
@@ -223,7 +262,6 @@ fn filter_parses() {
     }
 }
 
-
 /// SORT ships now: it names a stored field and a direction, and it is
 /// carried to pass 2 because that is where the selection happens.
 #[test]
@@ -241,8 +279,20 @@ fn sort_parses() {
 
     // Composes with the rest, and pass 2 re-parses it identically.
     let full = argv(&[
-        "IDX.QUERY", "idx", "MATCH", "hi", "SORT", "price", "ASC", "FILTER", "price",
-        "RANGE", "1", "9", "LIMIT", "5",
+        "IDX.QUERY",
+        "idx",
+        "MATCH",
+        "hi",
+        "SORT",
+        "price",
+        "ASC",
+        "FILTER",
+        "price",
+        "RANGE",
+        "1",
+        "9",
+        "LIMIT",
+        "5",
     ]);
     match MatchArgs::parse_terminal(&full) {
         MatchParse::Ok(q) => {

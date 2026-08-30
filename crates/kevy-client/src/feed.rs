@@ -117,7 +117,9 @@ impl Connection {
 /// Embedded feed is single-shard; any other index is a caller bug.
 fn check_embedded_shard(shard: usize) -> KevyResult<()> {
     if shard != 0 {
-        return Err(KevyError::InvalidInput("embedded feed is single-shard: shard must be 0".into()));
+        return Err(KevyError::InvalidInput(
+            "embedded feed is single-shard: shard must be 0".into(),
+        ));
     }
     Ok(())
 }
@@ -130,7 +132,9 @@ fn feed_err(e: FeedError) -> KevyError {
             KevyError::Protocol(format!("FEEDRESYNC {generation} {tail}"))
         }
         FeedError::Future => KevyError::Protocol("ERR feed cursor ahead of stream".into()),
-        FeedError::Disabled => KevyError::Unsupported("feed disabled: open the embedded store with Config::with_feed".into()),
+        FeedError::Disabled => KevyError::Unsupported(
+            "feed disabled: open the embedded store with Config::with_feed".into(),
+        ),
     }
 }
 
@@ -178,10 +182,7 @@ fn parse_batch(reply: Reply) -> KevyResult<FeedBatch> {
     let Reply::Array(raw_frames) = it.next().unwrap() else {
         return Err(KevyError::Protocol("FEED.READ: frames not an array".into()));
     };
-    let frames = raw_frames
-        .into_iter()
-        .map(parse_frame)
-        .collect::<KevyResult<_>>()?;
+    let frames = raw_frames.into_iter().map(parse_frame).collect::<KevyResult<_>>()?;
     Ok(FeedBatch { generation: g as u64, next_offset: next as u64, frames })
 }
 

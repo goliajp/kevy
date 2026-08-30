@@ -208,8 +208,7 @@ fn freeze_text_batches(
             if table_of(&spec.name) != table {
                 continue;
             }
-            let Some((_, dir)) = segs.cold_text.iter_mut().find(|(n, _)| n == &spec.name)
-            else {
+            let Some((_, dir)) = segs.cold_text.iter_mut().find(|(n, _)| n == &spec.name) else {
                 continue;
             };
             match dir.freeze_batch(ts, &spec.name, keys, segs_dir) {

@@ -8,9 +8,9 @@
 //! the segments when someone asks.
 
 use crate::class;
-use crate::segment::{FIRST_DATA_SPAN, NO_CLASS, SEGMENT_BYTES, SPANS_PER_SEGMENT};
 use crate::class::SPAN_BYTES;
 use crate::heap::Heap;
+use crate::segment::{FIRST_DATA_SPAN, NO_CLASS, SEGMENT_BYTES, SPANS_PER_SEGMENT};
 use crate::stats::Stats;
 
 impl Heap {
@@ -22,7 +22,8 @@ impl Heap {
     /// not per operation.
     #[must_use]
     pub fn snapshot(&self) -> Stats {
-        let mut st = Stats { live: self.live_bytes, rounding: self.rounding_bytes, ..Stats::default() };
+        let mut st =
+            Stats { live: self.live_bytes, rounding: self.rounding_bytes, ..Stats::default() };
         let mut seg = self.segments;
         while !seg.is_null() {
             // SAFETY: live header from our own list.
@@ -83,4 +84,3 @@ fn add_span(st: &mut Stats, meta: &crate::segment::SpanMeta) {
     }
     st.virgin += SPAN_BYTES as u64 - u64::from(meta.high_water) * slot;
 }
-

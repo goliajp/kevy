@@ -142,11 +142,16 @@ impl Store {
                 break;
             }
             let cap = self.tier.as_ref().expect("gated by caller").max_spill;
-            let victim = crate::evict::sample_pick_with(self, policy, |e| {
-                spillable_class(&e.value)
-                    && e.weight() >= MIN_SPILL_BYTES
-                    && (cap == 0 || e.weight() <= cap)
-            }, visit_bound);
+            let victim = crate::evict::sample_pick_with(
+                self,
+                policy,
+                |e| {
+                    spillable_class(&e.value)
+                        && e.weight() >= MIN_SPILL_BYTES
+                        && (cap == 0 || e.weight() <= cap)
+                },
+                visit_bound,
+            );
             match victim {
                 None => break,
                 Some(k) if self.demote_in_place(&k) => {
@@ -252,9 +257,7 @@ impl Store {
         t.promotions_total += 1;
         t.cold_keys = t.cold_keys.saturating_sub(1);
         t.cold_bytes = t.cold_bytes.saturating_sub(u64::from(cref.weight));
-        t.stub_bytes = t
-            .stub_bytes
-            .saturating_sub(crate::value::ENTRY_OVERHEAD + key_heap);
+        t.stub_bytes = t.stub_bytes.saturating_sub(crate::value::ENTRY_OVERHEAD + key_heap);
         true
     }
 
@@ -319,9 +322,7 @@ pub(crate) fn watermark(budget: u64) -> u64 {
 /// visible in INFO).
 #[inline]
 pub(crate) fn effective_target(t: &crate::tier::TierState) -> u64 {
-    watermark(t.budget)
-        .saturating_sub(t.reserved_bytes)
-        .saturating_sub(t.stub_bytes)
+    watermark(t.budget).saturating_sub(t.reserved_bytes).saturating_sub(t.stub_bytes)
 }
 
 /// [`CompactOwner`] over the store map + the rename forward-pointers.

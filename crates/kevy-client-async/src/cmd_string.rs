@@ -68,11 +68,7 @@ impl AsyncConnection {
     /// `INCRBY key delta`. Negative delta = `DECRBY`.
     pub async fn incr_by(&mut self, key: &[u8], delta: i64) -> io::Result<i64> {
         let delta_s = delta.to_string();
-        match self
-            .codec_mut()
-            .request_borrowed(&[b"INCRBY", key, delta_s.as_bytes()])
-            .await?
-        {
+        match self.codec_mut().request_borrowed(&[b"INCRBY", key, delta_s.as_bytes()]).await? {
             Reply::Int(n) => Ok(n),
             Reply::Error(e) => Err(io::Error::other(string(e))),
             other => Err(unexpected(other)),
@@ -84,11 +80,7 @@ impl AsyncConnection {
     pub async fn expire(&mut self, key: &[u8], ttl: Duration) -> io::Result<bool> {
         let ms = ttl.as_millis().min(i64::MAX as u128) as i64;
         let ms_s = ms.to_string();
-        match self
-            .codec_mut()
-            .request_borrowed(&[b"PEXPIRE", key, ms_s.as_bytes()])
-            .await?
-        {
+        match self.codec_mut().request_borrowed(&[b"PEXPIRE", key, ms_s.as_bytes()]).await? {
             Reply::Int(1) => Ok(true),
             Reply::Int(0) => Ok(false),
             Reply::Error(e) => Err(io::Error::other(string(e))),
@@ -200,11 +192,7 @@ impl AsyncConnection {
 
     /// `PUBLISH channel message`. Returns subscriber-receive count.
     pub async fn publish(&mut self, channel: &[u8], message: &[u8]) -> io::Result<usize> {
-        match self
-            .codec_mut()
-            .request_borrowed(&[b"PUBLISH", channel, message])
-            .await?
-        {
+        match self.codec_mut().request_borrowed(&[b"PUBLISH", channel, message]).await? {
             Reply::Int(n) if n >= 0 => Ok(n as usize),
             Reply::Error(e) => Err(io::Error::other(string(e))),
             other => Err(unexpected(other)),

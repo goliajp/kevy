@@ -134,22 +134,14 @@ impl Pipeline {
 
     /// Queue `INCRBY key delta`.
     pub fn incr_by(mut self, key: &[u8], delta: i64) -> Self {
-        self.cmds.push(vec![
-            b"INCRBY".to_vec(),
-            key.to_vec(),
-            delta.to_string().into_bytes(),
-        ]);
+        self.cmds.push(vec![b"INCRBY".to_vec(), key.to_vec(), delta.to_string().into_bytes()]);
         self
     }
 
     /// Queue `PEXPIRE key ttl_ms`.
     pub fn expire(mut self, key: &[u8], ttl: Duration) -> Self {
         let ms = ttl.as_millis().min(i64::MAX as u128) as i64;
-        self.cmds.push(vec![
-            b"PEXPIRE".to_vec(),
-            key.to_vec(),
-            ms.to_string().into_bytes(),
-        ]);
+        self.cmds.push(vec![b"PEXPIRE".to_vec(), key.to_vec(), ms.to_string().into_bytes()]);
         self
     }
 
@@ -247,11 +239,8 @@ mod tests {
 
     #[test]
     fn builder_accumulates_in_order() {
-        let p = Pipeline::new()
-            .set(b"k", b"v")
-            .get(b"k")
-            .incr(b"counter")
-            .del(&[&b"a"[..], &b"b"[..]]);
+        let p =
+            Pipeline::new().set(b"k", b"v").get(b"k").incr(b"counter").del(&[&b"a"[..], &b"b"[..]]);
         assert_eq!(p.len(), 4);
         let cmds = p.into_cmds();
         assert_eq!(cmds[0][0], b"SET");
@@ -269,9 +258,7 @@ mod tests {
 
     #[test]
     fn push_raw_escape_hatch() {
-        let cmds = Pipeline::new()
-            .push_raw(vec![b"CUSTOM".to_vec(), b"arg".to_vec()])
-            .into_cmds();
+        let cmds = Pipeline::new().push_raw(vec![b"CUSTOM".to_vec(), b"arg".to_vec()]).into_cmds();
         assert_eq!(cmds, vec![vec![b"CUSTOM".to_vec(), b"arg".to_vec()]]);
     }
 }

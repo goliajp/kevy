@@ -103,10 +103,7 @@ fn seal_segment(data_dir: &Path, file: &str, rows: &[RowSpec<'_>]) {
 
 fn append_frame(data_dir: &Path, args: &[&[u8]]) {
     let payload = cmd(args);
-    let mut f = std::fs::OpenOptions::new()
-        .append(true)
-        .open(data_dir.join("aof-0.aof"))
-        .unwrap();
+    let mut f = std::fs::OpenOptions::new().append(true).open(data_dir.join("aof-0.aof")).unwrap();
     f.write_all(&(payload.len() as u32).to_le_bytes()).unwrap();
     f.write_all(&kevy_sys::checksum::crc32c(&payload).to_le_bytes()).unwrap();
     f.write_all(&payload).unwrap();
@@ -135,10 +132,14 @@ fn stitch_evicts_revives_and_refuses_through_the_server() {
 
     // The eviction's durable half, done by hand: segment + manifest,
     // then the stitch frame, then a revival write for row:1.
-    seal_segment(&tmp, "row-74-0.seg", &[
-        (b"row:1", &[(b"id", b"row:1"), (b"note", b"hot")]),
-        (b"row:2", &[(b"id", b"row:2"), (b"note", b"hot")]),
-    ]);
+    seal_segment(
+        &tmp,
+        "row-74-0.seg",
+        &[
+            (b"row:1", &[(b"id", b"row:1"), (b"note", b"hot")]),
+            (b"row:2", &[(b"id", b"row:2"), (b"note", b"hot")]),
+        ],
+    );
     append_frame(&tmp, &[kevy_persist::SEGMENTED, b"row-74-0.seg"]);
     append_frame(&tmp, &[b"HSET", b"row:1", b"note", b"revived"]);
 

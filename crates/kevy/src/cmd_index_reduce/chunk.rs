@@ -122,18 +122,15 @@ pub(super) fn encode_cursor(v: &IndexValue, k: &[u8]) -> Vec<u8> {
 /// migration, same posture as `dispatch_resp3.rs`'s overrides).
 pub(crate) fn resp3_upgrade(argv: &[Vec<u8>], reply: Vec<u8>) -> Vec<u8> {
     let verb = argv.first().map(Vec::as_slice).unwrap_or(b"");
-    let mapify = verb.eq_ignore_ascii_case(b"IDX.EXPLAIN")
-        || verb.eq_ignore_ascii_case(b"VIEW.EXPLAIN");
+    let mapify =
+        verb.eq_ignore_ascii_case(b"IDX.EXPLAIN") || verb.eq_ignore_ascii_case(b"VIEW.EXPLAIN");
     if !mapify || !reply.starts_with(b"*") {
         return reply;
     }
     // Parse `*N\r\n` then N × (`*2\r\n` pair); bail untouched on any
     // shape surprise.
     let Some(hdr_end) = reply.iter().position(|&b| b == b'\n') else { return reply };
-    let Ok(n) = std::str::from_utf8(&reply[1..hdr_end - 1])
-        .unwrap_or("x")
-        .parse::<usize>()
-    else {
+    let Ok(n) = std::str::from_utf8(&reply[1..hdr_end - 1]).unwrap_or("x").parse::<usize>() else {
         return reply;
     };
     let body = &reply[hdr_end + 1..];

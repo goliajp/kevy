@@ -272,7 +272,9 @@ impl<'a> Parser<'a> {
         for &k in kw {
             match self.bump() {
                 Some(b) if b == k => {}
-                _ => return Err(format!("expected keyword {:?}", std::str::from_utf8(kw).unwrap())),
+                _ => {
+                    return Err(format!("expected keyword {:?}", std::str::from_utf8(kw).unwrap()));
+                }
             }
         }
         Ok(())
@@ -369,20 +371,15 @@ impl<'a> Parser<'a> {
                 self.cur += 1;
             }
         }
-        let s = std::str::from_utf8(&self.bytes[start..self.cur])
-            .map_err(|_| "bad number")?;
+        let s = std::str::from_utf8(&self.bytes[start..self.cur]).map_err(|_| "bad number")?;
         if is_float {
-            s.parse::<f64>()
-                .map(Value::Float)
-                .map_err(|_| "bad float".into())
+            s.parse::<f64>().map(Value::Float).map_err(|_| "bad float".into())
         } else {
             // Try i64 first; if it overflows, fall back to f64.
             if let Ok(n) = s.parse::<i64>() {
                 Ok(Value::Int(n))
             } else {
-                s.parse::<f64>()
-                    .map(Value::Float)
-                    .map_err(|_| "bad integer".into())
+                s.parse::<f64>().map(Value::Float).map_err(|_| "bad integer".into())
             }
         }
     }
@@ -464,11 +461,6 @@ pub(crate) fn install_cjson(vm: &mut Vm) {
     // table, so encoding `obj` gives `{}` instead of `{"field":null}`.
     // Matches the lossy behaviour of every Lua-without-sentinel
     // setup. Full sentinel detection is a future patch.
-    let t = vm.table_of([
-        ("encode", enc_fn),
-        ("decode", dec_fn),
-        ("null", Value::Nil),
-    ]);
+    let t = vm.table_of([("encode", enc_fn), ("decode", dec_fn), ("null", Value::Nil)]);
     let _ = vm.set_global("cjson", Value::Table(t));
 }
-

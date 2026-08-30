@@ -113,7 +113,10 @@ pub(crate) struct Inner {
 }
 
 impl Inner {
-    pub(crate) fn new(store: kevy_store::Store, #[cfg(feature = "persist")] aof: Option<Aof>) -> Self {
+    pub(crate) fn new(
+        store: kevy_store::Store,
+        #[cfg(feature = "persist")] aof: Option<Aof>,
+    ) -> Self {
         Inner {
             store,
             #[cfg(feature = "persist")]
@@ -170,10 +173,8 @@ pub(crate) struct DropGuard {
     /// present iff feed enabled AND persistent. Written after the AOF
     /// flush so the marker's cursor describes durable state.
     #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
-    pub(crate) feed_close: Option<(
-        std::sync::Arc<Mutex<kevy_replicate::feed::FeedSource>>,
-        std::path::PathBuf,
-    )>,
+    pub(crate) feed_close:
+        Option<(std::sync::Arc<Mutex<kevy_replicate::feed::FeedSource>>, std::path::PathBuf)>,
     /// Replica-source listener + accepted connection threads, present
     /// iff this store is an embed-as-writer
     /// (`Config::embed_writer_listen_addr = Some(...)`). Joined on
@@ -202,11 +203,8 @@ impl Drop for DropGuard {
         if let Some(stop) = &self.reaper_stop {
             stop.store(true, Ordering::Relaxed);
         }
-        if let Some(j) = self
-            .reaper_join
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take()
+        if let Some(j) =
+            self.reaper_join.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
         {
             let _ = j.join();
         }

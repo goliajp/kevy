@@ -38,11 +38,7 @@ fn getdel_accepts_all_string_encodings() {
 fn getset_accepts_all_string_encodings() {
     let mut s = Store::new();
     set(&mut s, b"i", b"42");
-    assert_eq!(
-        s.getset(b"i", b"new".to_vec()).unwrap(),
-        Some(b"42".to_vec()),
-        "Int encoding"
-    );
+    assert_eq!(s.getset(b"i", b"new".to_vec()).unwrap(), Some(b"42".to_vec()), "Int encoding");
     assert_eq!(s.get(b"i").unwrap().unwrap().as_ref(), b"new");
 
     let b = big(b'y');

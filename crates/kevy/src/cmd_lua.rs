@@ -74,8 +74,7 @@ fn cross_shard_violation(
     if nshards > 1
         && let Some(target_key) = argv.get(1)
     {
-        let target_shard =
-            kevy_rt::shard_of_key(target_key, nshards, cfg.cluster.enabled);
+        let target_shard = kevy_rt::shard_of_key(target_key, nshards, cfg.cluster.enabled);
         if target_shard != my_shard {
             return Some(b"-CROSSSLOT Lua redis.call target key is on a different shard than the EVAL. Use {hashtag} to colocate keys, or run kevy --threads 1.\r\n".to_vec());
         }
@@ -190,10 +189,7 @@ fn with_host<R>(ctx: &Ctx<'_>, f: impl FnOnce(&mut LuaHost<Store>) -> R) -> Opti
 }
 
 fn emit_reentry_err(out: &mut Vec<u8>) {
-    encode_error(
-        out,
-        "ERR EVAL inside EVAL is not supported in v1.27",
-    );
+    encode_error(out, "ERR EVAL inside EVAL is not supported in v1.27");
 }
 
 /// Dispatch entry for Lua-scripting commands. Returns `true` when
@@ -327,12 +323,8 @@ fn cmd_script<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut Vec<u8>) 
         wrong_args(out, "script");
         return;
     }
-    let sub_upper: Vec<u8> = args
-        .get(1)
-        .unwrap_or(b"")
-        .iter()
-        .map(|b| b.to_ascii_uppercase())
-        .collect();
+    let sub_upper: Vec<u8> =
+        args.get(1).unwrap_or(b"").iter().map(|b| b.to_ascii_uppercase()).collect();
     // SCRIPT LOAD / EXISTS / FLUSH operate on the shared
     // cache; no per-shard LuaHost touched, so no re-entrancy guard
     // needed and no shard-local state to worry about under
@@ -341,10 +333,7 @@ fn cmd_script<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut Vec<u8>) 
         b"LOAD" => script_load(ctx, args, out),
         b"EXISTS" => script_exists(ctx, args, out),
         b"FLUSH" => script_flush(ctx, args, out),
-        _ => encode_error(
-            out,
-            "ERR SCRIPT subcommand must be one of LOAD, EXISTS, FLUSH",
-        ),
+        _ => encode_error(out, "ERR SCRIPT subcommand must be one of LOAD, EXISTS, FLUSH"),
     }
 }
 
@@ -421,18 +410,12 @@ fn parse_eval_keys_argv<'a, A: ArgvView + ?Sized>(
     };
     let total_after_numkeys = args.len().saturating_sub(3);
     if numkeys > total_after_numkeys {
-        encode_error(
-            out,
-            "ERR Number of keys can't be greater than number of args",
-        );
+        encode_error(out, "ERR Number of keys can't be greater than number of args");
         return None;
     }
-    let keys: Vec<&[u8]> = (0..numkeys)
-        .map(|i| args.get(3 + i).unwrap_or(b""))
-        .collect();
-    let argv: Vec<&[u8]> = ((3 + numkeys)..args.len())
-        .map(|i| args.get(i).unwrap_or(b""))
-        .collect();
+    let keys: Vec<&[u8]> = (0..numkeys).map(|i| args.get(3 + i).unwrap_or(b"")).collect();
+    let argv: Vec<&[u8]> =
+        ((3 + numkeys)..args.len()).map(|i| args.get(i).unwrap_or(b"")).collect();
     if let Some(crossslot) = cross_slot_check(ctx, &keys) {
         out.extend_from_slice(&crossslot);
         return None;
@@ -469,10 +452,7 @@ fn cross_slot_check(ctx: &Ctx<'_>, keys: &[&[u8]]) -> Option<Vec<u8>> {
     for k in &keys[1..] {
         if kevy_hash::key_hash_slot(k) != first {
             let mut out = Vec::new();
-            encode_error(
-                &mut out,
-                "CROSSSLOT Keys in request don't hash to the same slot",
-            );
+            encode_error(&mut out, "CROSSSLOT Keys in request don't hash to the same slot");
             return Some(out);
         }
     }

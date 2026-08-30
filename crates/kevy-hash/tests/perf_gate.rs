@@ -16,11 +16,7 @@ fn kevy_hash_bytes_under_budget() {
     let s = bench(40, 100_000, || {
         black_box(black_box(buf.as_slice()).kevy_hash());
     });
-    assert!(
-        s.median_ns < 50,
-        "KevyHash bytes[16] median = {} ns, budget 50",
-        s.median_ns
-    );
+    assert!(s.median_ns < 50, "KevyHash bytes[16] median = {} ns, budget 50", s.median_ns);
 }
 
 /// u64 hash via `KevyHash`. Budget = 20 ns (one mix + fmix64; sub-5ns warm).
@@ -29,11 +25,7 @@ fn kevy_hash_u64_under_budget() {
     let s = bench(40, 100_000, || {
         black_box(black_box(0xdead_beef_u64).kevy_hash());
     });
-    assert!(
-        s.median_ns < 20,
-        "KevyHash u64 median = {} ns, budget 20",
-        s.median_ns
-    );
+    assert!(s.median_ns < 20, "KevyHash u64 median = {} ns, budget 20", s.median_ns);
 }
 
 /// FxHasher state-machine path (used by std::HashMap callers). Budget = 70 ns.
@@ -45,9 +37,5 @@ fn fxhasher_bytes_under_budget() {
         h.write(black_box(buf.as_slice()));
         black_box(h.finish());
     });
-    assert!(
-        s.median_ns < 70,
-        "FxHasher bytes[16] median = {} ns, budget 70",
-        s.median_ns
-    );
+    assert!(s.median_ns < 70, "FxHasher bytes[16] median = {} ns, budget 70", s.median_ns);
 }

@@ -192,12 +192,7 @@ impl SegListData {
     /// the segment in O(segments) instead of skip-walking elements.
     pub fn iter_range(&self, start: usize, count: usize) -> impl Iterator<Item = &Vec<u8>> {
         let (si, off) = if start >= self.len { (self.segs.len(), 0) } else { self.locate(start) };
-        self.segs
-            .iter()
-            .skip(si)
-            .flat_map(|s| s.iter())
-            .skip(off)
-            .take(count)
+        self.segs.iter().skip(si).flat_map(|s| s.iter()).skip(off).take(count)
     }
 
     /// `LREM` walk: remove up to `|count|` occurrences of `val`
@@ -212,7 +207,8 @@ impl SegListData {
         };
         let (mut removed, mut delta) = (0usize, 0i64);
         let indices: Vec<usize> = (0..self.segs.len()).collect();
-        let order: Vec<usize> = if count >= 0 { indices } else { indices.into_iter().rev().collect() };
+        let order: Vec<usize> =
+            if count >= 0 { indices } else { indices.into_iter().rev().collect() };
         for si in order {
             if removed >= limit {
                 break;
@@ -300,10 +296,7 @@ impl SegListData {
     /// Empty the list, returning the (negative) weight delta. Read-only
     /// walk for accounting; shared segments are released, not cloned.
     pub fn clear(&mut self) -> i64 {
-        let delta = -(self
-            .iter()
-            .map(|v| list_item_weight(v.len()) as i64)
-            .sum::<i64>());
+        let delta = -(self.iter().map(|v| list_item_weight(v.len()) as i64).sum::<i64>());
         self.segs.clear();
         self.len = 0;
         delta

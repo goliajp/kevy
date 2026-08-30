@@ -82,7 +82,8 @@ fn field_of_ts(func: &'static str, field: &str, us: i64) -> Result<Scalar, Scala
 
 /// Day of year: distance from Jan 1 of the same year, 1-based.
 fn doy(c: kevy_time::Civil) -> i64 {
-    let jan1 = kevy_time::epoch_from_civil(kevy_time::Civil { m: 1, d: 1, h: 0, min: 0, s: 0, ..c });
+    let jan1 =
+        kevy_time::epoch_from_civil(kevy_time::Civil { m: 1, d: 1, h: 0, min: 0, s: 0, ..c });
     let this = kevy_time::epoch_from_civil(kevy_time::Civil { h: 0, min: 0, s: 0, ..c });
     (this - jan1) / 86_400 + 1
 }
@@ -165,14 +166,13 @@ fn age(args: &[Scalar]) -> Result<Scalar, ScalarError> {
     let (lc, ec) = (kevy_time::civil_from_epoch(ls), kevy_time::civil_from_epoch(es));
     let mut months = (lc.y - ec.y) * 12 + i64::from(lc.m) - i64::from(ec.m);
     // Borrow a month whenever the shifted-earlier lands past later.
-    while kevy_time::add_months(es, months) * MICROS_PER_SEC
-        + earlier.rem_euclid(MICROS_PER_SEC)
+    while kevy_time::add_months(es, months) * MICROS_PER_SEC + earlier.rem_euclid(MICROS_PER_SEC)
         > later
     {
         months -= 1;
     }
-    let anchored = kevy_time::add_months(es, months) * MICROS_PER_SEC
-        + earlier.rem_euclid(MICROS_PER_SEC);
+    let anchored =
+        kevy_time::add_months(es, months) * MICROS_PER_SEC + earlier.rem_euclid(MICROS_PER_SEC);
     let rest = later - anchored;
     let (days, micros) = (rest / MICROS_PER_DAY, rest % MICROS_PER_DAY);
     Ok(if neg {

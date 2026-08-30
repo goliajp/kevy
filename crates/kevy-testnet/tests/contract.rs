@@ -31,7 +31,8 @@ fn a_port_in_use_is_never_handed_out_again() {
 fn a_block_is_contiguous_and_free() {
     let base = kevy_testnet::free_port_block(4);
     for i in 0..4u16 {
-        std::net::TcpListener::bind(("127.0.0.1", base + i)).expect("every port in the run is free");
+        std::net::TcpListener::bind(("127.0.0.1", base + i))
+            .expect("every port in the run is free");
     }
 }
 

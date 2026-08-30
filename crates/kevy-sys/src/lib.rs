@@ -59,23 +59,23 @@
 #![warn(missing_docs)]
 
 pub(crate) mod addr;
-pub(crate) mod ffi;
 pub mod checksum;
+pub(crate) mod ffi;
 mod mem;
 mod signal;
 mod socket;
 mod waker;
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-mod poller_kq;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 mod poller_ep;
-
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-pub use poller_kq::Poller;
+mod poller_kq;
+
+pub use mem::{detected_memory_bound, fadvise_dontneed_all, malloc_trim_now, process_rss_bytes};
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub use poller_ep::Poller;
-pub use mem::{detected_memory_bound, fadvise_dontneed_all, malloc_trim_now, process_rss_bytes};
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub use poller_kq::Poller;
 pub use signal::{SIGINT, SIGTERM, SIGXFSZ, install_signal_handler};
 pub use socket::{Socket, tcp_listen, tcp_listen_reuseport, unix_listen};
 pub use waker::{Waker, waker};
@@ -97,8 +97,6 @@ pub struct Event {
 
 /// How many raw events to pull from the kernel per `wait` call.
 const WAIT_CAPACITY: usize = 1024;
-
-
 
 #[cfg(test)]
 mod tests;

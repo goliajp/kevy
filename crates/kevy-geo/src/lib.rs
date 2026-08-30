@@ -153,8 +153,7 @@ pub fn haversine_meters(lon1: f64, lat1: f64, lon2: f64, lat2: f64) -> f64 {
     let phi2 = lat2.to_radians();
     let dphi = (lat2 - lat1).to_radians();
     let dlam = (lon2 - lon1).to_radians();
-    let a = (dphi * 0.5).sin().powi(2)
-        + phi1.cos() * phi2.cos() * (dlam * 0.5).sin().powi(2);
+    let a = (dphi * 0.5).sin().powi(2) + phi1.cos() * phi2.cos() * (dlam * 0.5).sin().powi(2);
     let c = 2.0 * a.sqrt().clamp(0.0, 1.0).asin();
     EARTH_RADIUS_METERS * c
 }
@@ -193,11 +192,7 @@ pub fn encode_base32_geohash(lon: f64, lat: f64) -> [u8; 11] {
         // Redis emits the 52 score bits across the first 10 chars (50 bits)
         // and pads the 11th char with zero rather than spilling the 2 low
         // real bits into it — match that so GEOHASH strings are byte-equal.
-        let idx = if shift >= 0 {
-            ((bits >> shift) & 0x1f) as usize
-        } else {
-            0
-        };
+        let idx = if shift >= 0 { ((bits >> shift) & 0x1f) as usize } else { 0 };
         *slot = ALPHABET[idx];
     }
     out
@@ -250,14 +245,7 @@ fn encode_bits_full_range(lon: f64, lat: f64) -> u64 {
     encode_bits(lon, lat, GEO_LON_MIN, GEO_LON_MAX, -90.0, 90.0)
 }
 
-fn encode_bits(
-    lon: f64,
-    lat: f64,
-    lon_min: f64,
-    lon_max: f64,
-    lat_min: f64,
-    lat_max: f64,
-) -> u64 {
+fn encode_bits(lon: f64, lat: f64, lon_min: f64, lon_max: f64, lat_min: f64, lat_max: f64) -> u64 {
     let cells = (1u64 << GEO_STEP) as f64;
     let lat_off = ((lat - lat_min) / (lat_max - lat_min)) * cells;
     let lon_off = ((lon - lon_min) / (lon_max - lon_min)) * cells;
@@ -385,18 +373,8 @@ mod tests {
         // decode(encode(..)) must reproduce valkey/redis GEOPOS byte-for-byte
         // (17 sig digits), which requires the exact cell-midpoint float order.
         for (lon, lat, want_lon, want_lat) in [
-            (
-                PALERMO.0,
-                PALERMO.1,
-                "13.36138933897018433",
-                "38.11555639549629859",
-            ),
-            (
-                CATANIA.0,
-                CATANIA.1,
-                "15.08726745843887329",
-                "37.50266842333162032",
-            ),
+            (PALERMO.0, PALERMO.1, "13.36138933897018433", "38.11555639549629859"),
+            (CATANIA.0, CATANIA.1, "15.08726745843887329", "37.50266842333162032"),
         ] {
             let score = encode_score(lon, lat).expect("in range");
             let (dlon, dlat) = decode_score(score);

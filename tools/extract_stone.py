@@ -195,7 +195,39 @@ def lift(crate, workdir):
         shutil.rmtree(sandbox, ignore_errors=True)
 
 
+FAILED_TEST = re.compile(r"^test (\S+) \.\.\. FAILED")
+
+
 def last_error(log):
+    """One line saying what went wrong, and for tests, WHICH.
+
+    cargo's own summary for a failing test run is `error: test failed, to
+    rerun pass --lib`, and taking the first `error` line gives exactly that
+    — a report that a stone did not lift, with the reason left in a log
+    nobody kept. Diagnosing one cost a full CI round: the stone report said
+    `tested: false, tests: 0` and the note said nothing more.
+
+    So a test failure names its tests and carries the first panic line.
+    A build error still reports the first `error`, which for a compile
+    failure is the thing itself.
+    """
+    failed = [m.group(1) for line in log.splitlines()
+              if (m := FAILED_TEST.match(line))]
+    if failed:
+        shown = ", ".join(failed[:4])
+        more = f" (+{len(failed) - 4} more)" if len(failed) > 4 else ""
+        # cargo prints `panicked at <file>:<line>:` and puts the message on
+        # the NEXT line, so the location alone is half a sentence.
+        lines = log.splitlines()
+        why = ""
+        for i, l in enumerate(lines):
+            if "panicked at" in l:
+                where = l.split("panicked at", 1)[1].strip().rstrip(":")
+                msg = lines[i + 1].strip() if i + 1 < len(lines) else ""
+                why = f"{where} {msg}".strip()
+                break
+        tail = f" — {why}" if why else ""
+        return f"{len(failed)} test(s) failed: {shown}{more}{tail}"[:200]
     errs = [l for l in log.splitlines() if l.startswith("error")]
     return (errs[0] if errs else log.strip().splitlines()[-1] if log.strip() else "?")[:200]
 

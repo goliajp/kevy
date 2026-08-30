@@ -55,7 +55,6 @@ impl<C: Commands> Shard<C> {
         self.commands.on_data_dir(&self.data_dir);
     }
 
-
     /// Owning shard of `key` under this server's routing scheme.
     #[inline]
     pub(crate) fn shard_of(&self, key: &[u8]) -> usize {
@@ -93,11 +92,7 @@ impl<C: Commands> Shard<C> {
         if snap.exists()
             && let Err(e) = load_snapshot(&mut self.store, &snap)
         {
-            eprintln!(
-                "kevy: shard {} failed to load {}: {e}",
-                self.id,
-                snap.display()
-            );
+            eprintln!("kevy: shard {} failed to load {}: {e}", self.id, snap.display());
         }
         if self.aof.is_some() {
             let aof_path = self.aof_path();
@@ -158,7 +153,9 @@ impl<C: Commands> Shard<C> {
         let mut cluster_fd = -1;
         if let Some(cl) = &self.cluster_listener {
             cl.set_nonblocking()?;
-            if self.arms_accept { self.poller.add(cl.raw(), true, false)?; }
+            if self.arms_accept {
+                self.poller.add(cl.raw(), true, false)?;
+            }
             cluster_fd = cl.raw();
         }
         // Same trick for the unix-domain listener, which only shard 0
@@ -268,9 +265,7 @@ impl<C: Commands> Shard<C> {
                         }
                     } else if let Some(idx) = self.replica_index_by_fd(ev.fd) {
                         let readable = ev.readable || ev.hup;
-                        if readable
-                            && let Err(e) = self.replica_readable(idx)
-                        {
+                        if readable && let Err(e) = self.replica_readable(idx) {
                             self.replica_io_failed(idx, "read", &e);
                         }
                         // A handshake `+ACK` is small (≤ 30 B) and
@@ -370,8 +365,7 @@ impl<C: Commands> Shard<C> {
                         // its next tick ~250 ms over the interval — the
                         // gauge IS the single-iteration upper bound,
                         // measured without touching the per-iter path.
-                        self.commands
-                            .on_tick_gap((gap - iv).as_micros() as u64);
+                        self.commands.on_tick_gap((gap - iv).as_micros() as u64);
                         self.commands.on_shard_tick(&mut self.store);
                         slow.mark("t:shard_tick");
                         self.drain_tick_frames();

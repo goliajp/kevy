@@ -62,11 +62,7 @@ pub extern "C" fn kevy_open(flags: u32) -> u32 {
 /// AOF frames are discarded — pump them out first if they matter.
 #[unsafe(no_mangle)]
 pub extern "C" fn kevy_close(h: u32) -> i32 {
-    match REG
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .remove(&h)
-    {
+    match REG.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&h) {
         Some(_) => OK,
         None => BAD_HANDLE,
     }

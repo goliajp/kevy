@@ -7,7 +7,7 @@
 use core::ffi::c_long;
 
 use crate::ffi::{
-    self, IORING_ENTER_REGISTERED_RING, IORING_REGISTER_FILES2, IORING_REGISTER_FILES_UPDATE,
+    self, IORING_ENTER_REGISTERED_RING, IORING_REGISTER_FILES_UPDATE, IORING_REGISTER_FILES2,
     IORING_REGISTER_RING_FDS, SYS_IO_URING_REGISTER,
 };
 use crate::layout::{
@@ -48,11 +48,8 @@ impl IoUring {
     /// that already holds — the shard's `run_uring` owns the ring and
     /// stays on one OS thread for the reactor's life.
     pub(crate) fn try_register_ring_fd(&mut self) {
-        let mut upd = IoUringRsrcUpdate {
-            offset: u32::MAX,
-            resv: 0,
-            data: u64::from(self.ring_fd as u32),
-        };
+        let mut upd =
+            IoUringRsrcUpdate { offset: u32::MAX, resv: 0, data: u64::from(self.ring_fd as u32) };
         // SAFETY: `upd` lives through the syscall; ring_fd is valid.
         let ret = unsafe {
             ffi::syscall(
@@ -84,11 +81,8 @@ impl IoUring {
     /// with `nr_args = sizeof::<IoUringRsrcRegister>() = 32`. There is no
     /// stand-alone "FILES_SPARSE" opcode in mainline.
     pub fn register_files_sparse(&self, nr: u32) -> io::Result<()> {
-        let reg = IoUringRsrcRegister {
-            nr,
-            flags: IORING_RSRC_REGISTER_SPARSE,
-            ..Default::default()
-        };
+        let reg =
+            IoUringRsrcRegister { nr, flags: IORING_RSRC_REGISTER_SPARSE, ..Default::default() };
         // SAFETY: `reg` lives through the syscall; ring_fd is valid.
         let ret = unsafe {
             ffi::syscall(
@@ -111,11 +105,7 @@ impl IoUring {
     /// per-op fget/fput once amortised across many ops per conn.
     pub fn update_file_slot(&self, index: u32, fd: i32) -> io::Result<()> {
         let fd_val: i32 = fd;
-        let upd = IoUringFilesUpdate {
-            offset: index,
-            resv: 0,
-            fds: (&raw const fd_val) as u64,
-        };
+        let upd = IoUringFilesUpdate { offset: index, resv: 0, fds: (&raw const fd_val) as u64 };
         // SAFETY: `upd` and `fd_val` both live through the syscall; ring_fd
         // came from io_uring_setup.
         let ret = unsafe {

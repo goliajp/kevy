@@ -62,7 +62,13 @@ fn main() -> kevy_embedded::KevyResult<()> {
             let hist = format!("dev:{dev}:hist");
             let count = format!("dev:{dev}:n");
             // A plausible reading payload (temp, humidity, seq).
-            let payload = format!("{{\"t\":{}.{},\"h\":{},\"seq\":{}}}", 20 + (r % 15), r % 10, 40 + (dev % 30), r);
+            let payload = format!(
+                "{{\"t\":{}.{},\"h\":{},\"seq\":{}}}",
+                20 + (r % 15),
+                r % 10,
+                40 + (dev % 30),
+                r
+            );
 
             // Latest value carries the retention window.
             store.set_with_ttl(latest.as_bytes(), payload.as_bytes(), RETENTION)?;
@@ -76,14 +82,8 @@ fn main() -> kevy_embedded::KevyResult<()> {
     }
     let ingest = t0.elapsed();
     let ops = total * 3; // set + lpush(+trim) + incr, roughly
-    println!(
-        "\ningest          : {total} readings from {DEVICES} devices in {:?}",
-        ingest
-    );
-    println!(
-        "                  ~{:.0} store-ops/s sustained",
-        ops as f64 / ingest.as_secs_f64()
-    );
+    println!("\ningest          : {total} readings from {DEVICES} devices in {:?}", ingest);
+    println!("                  ~{:.0} store-ops/s sustained", ops as f64 / ingest.as_secs_f64());
 
     // ---- 2. What the memory ceiling did --------------------------
     report_rss("RSS under load", rss_kb());
@@ -161,16 +161,24 @@ fn main() -> kevy_embedded::KevyResult<()> {
         store.set_with_ttl(k.as_bytes(), b"in-window", Duration::from_millis(300))?;
     }
     let with_window = store.exists(
-        &(0..DEVICES).map(|d| format!("win:{d}")).collect::<Vec<_>>()
-            .iter().map(|s| s.as_bytes()).collect::<Vec<_>>(),
+        &(0..DEVICES)
+            .map(|d| format!("win:{d}"))
+            .collect::<Vec<_>>()
+            .iter()
+            .map(|s| s.as_bytes())
+            .collect::<Vec<_>>(),
     )?;
     println!("window keys     : {with_window} live");
     std::thread::sleep(Duration::from_millis(400));
     let before = store.dbsize();
     store.tick(); // the gateway's own loop reclaims — no background thread
     let survivors = store.exists(
-        &(0..DEVICES).map(|d| format!("win:{d}")).collect::<Vec<_>>()
-            .iter().map(|s| s.as_bytes()).collect::<Vec<_>>(),
+        &(0..DEVICES)
+            .map(|d| format!("win:{d}"))
+            .collect::<Vec<_>>()
+            .iter()
+            .map(|s| s.as_bytes())
+            .collect::<Vec<_>>(),
     )?;
     println!(
         "after 400ms+tick: {survivors} live  ({} → {} keys, expired-out total {})",
@@ -195,10 +203,5 @@ fn report_rss(label: &str, kb: Option<u64>) {
 /// whether this fits on the device at all.
 fn rss_kb() -> Option<u64> {
     let s = std::fs::read_to_string("/proc/self/status").ok()?;
-    s.lines()
-        .find(|l| l.starts_with("VmRSS:"))?
-        .split_whitespace()
-        .nth(1)?
-        .parse()
-        .ok()
+    s.lines().find(|l| l.starts_with("VmRSS:"))?.split_whitespace().nth(1)?.parse().ok()
 }

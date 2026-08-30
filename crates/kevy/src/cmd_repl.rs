@@ -85,11 +85,7 @@ pub(crate) fn repl_wait_route<A: ArgvView + ?Sized>(repl: &ReplicationState, arg
 /// `WAIT` reached dispatch: replica → the Redis error; malformed →
 /// parse errors; otherwise this is a runtime-less context (embedded
 /// direct dispatch — no shards, no replicas) → `:0`.
-pub(crate) fn cmd_wait<A: ArgvView + ?Sized>(
-    repl: &ReplicationState,
-    args: &A,
-    out: &mut Vec<u8>,
-) {
+pub(crate) fn cmd_wait<A: ArgvView + ?Sized>(repl: &ReplicationState, args: &A, out: &mut Vec<u8>) {
     if args.len() != 3 {
         return wrong_args(out, "wait");
     }
@@ -214,11 +210,7 @@ pub(crate) fn parse_repl_wait<A: ArgvView + ?Sized>(args: &A) -> Option<ReplWait
 fn gens_match(repl: &ReplicationState, tok: &ReplWaitToken) -> bool {
     let gens = repl.upstream_gens();
     gens.len() == tok.pairs.len()
-        && tok
-            .pairs
-            .iter()
-            .zip(gens.iter())
-            .all(|((g, _), known)| *g == *known && *g != 0)
+        && tok.pairs.iter().zip(gens.iter()).all(|((g, _), known)| *g == *known && *g != 0)
 }
 
 /// The `-MISDIRECTED writer is <addr>` reply. The address is the live
@@ -269,10 +261,8 @@ mod tests {
 
     #[test]
     fn parse_repl_wait_multi_pair_with_timeout_clause() {
-        let t = parse_repl_wait(&argv(&[
-            "REPL.WAIT", "1", "10", "1", "20", "TIMEOUT", "250",
-        ]))
-        .unwrap();
+        let t =
+            parse_repl_wait(&argv(&["REPL.WAIT", "1", "10", "1", "20", "TIMEOUT", "250"])).unwrap();
         assert_eq!(t.pairs, vec![(1, 10), (1, 20)]);
         assert_eq!(t.timeout_ms, 250);
     }
@@ -317,10 +307,7 @@ mod tests {
     #[test]
     fn repl_wait_on_primary_replies_ok_immediately() {
         let repl = primary();
-        assert!(matches!(
-            repl_wait_route(&repl, &argv(&["REPL.WAIT", "1", "10"])),
-            Route::Local
-        ));
+        assert!(matches!(repl_wait_route(&repl, &argv(&["REPL.WAIT", "1", "10"])), Route::Local));
         let mut out = Vec::new();
         cmd_repl_wait(&repl, &argv(&["REPL.WAIT", "1", "10"]), &mut out);
         assert_eq!(out, b"+OK\r\n");

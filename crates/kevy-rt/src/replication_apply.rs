@@ -190,8 +190,7 @@ impl<C: Commands> Shard<C> {
             },
         };
         self.reply_scratch.clear();
-        self.commands
-            .dispatch_into(&mut self.store, argv, &mut self.reply_scratch);
+        self.commands.dispatch_into(&mut self.store, argv, &mut self.reply_scratch);
         self.reply_scratch.clear();
         self.post_write_housekeeping(argv, meta);
     }

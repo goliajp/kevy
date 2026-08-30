@@ -108,10 +108,7 @@ fn k4_identical_values_collapse_against_the_dictionary() {
         per_datum += encode(&[], &value).len();
     }
     let per_value = with_dict / n;
-    assert!(
-        per_value <= 16,
-        "K4 shape missed: {per_value} B/value against the dictionary"
-    );
+    assert!(per_value <= 16, "K4 shape missed: {per_value} B/value against the dictionary");
     assert!(
         per_datum / n >= value.len() / 2,
         "per-datum baseline unexpectedly captured cross-value redundancy"

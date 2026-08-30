@@ -71,8 +71,7 @@ pub(crate) fn cmd_table_declare<A: ArgvView + ?Sized>(
     if let Err(e) = tcat.create(spec.clone()) {
         return encode_error(out, &e);
     }
-    let mut icat: Catalog =
-        ctx.state.catalogs.index().map(|c| (*c).clone()).unwrap_or_default();
+    let mut icat: Catalog = ctx.state.catalogs.index().map(|c| (*c).clone()).unwrap_or_default();
     let compiled = match compile_table(&spec) {
         Ok(c) => c,
         Err(e) => return encode_error(out, &e),
@@ -131,8 +130,7 @@ pub(crate) fn cmd_table_replace<A: ArgvView + ?Sized>(
     if let Err(e) = compile_table(&spec) {
         return encode_error(out, &e);
     }
-    let exists =
-        ctx.state.catalogs.table().and_then(|c| c.get(&spec.name).cloned()).is_some();
+    let exists = ctx.state.catalogs.table().and_then(|c| c.get(&spec.name).cloned()).is_some();
     if exists {
         let mut scratch = Vec::new();
         cmd_table_drop_by_name(ctx, &spec.name, &mut scratch);
@@ -146,9 +144,7 @@ fn cmd_table_drop_by_name(ctx: &Ctx<'_>, name: &[u8], out: &mut Vec<u8>) {
     let compiled: Vec<Vec<u8>> = tcat
         .get(name)
         .map(|s| {
-            compile_table(s)
-                .map(|c| c.into_iter().map(|i| i.name).collect())
-                .unwrap_or_default() // catalog entries were admitted validated
+            compile_table(s).map(|c| c.into_iter().map(|i| i.name).collect()).unwrap_or_default() // catalog entries were admitted validated
         })
         .unwrap_or_default();
     if tcat.drop_table(name) {
@@ -174,9 +170,7 @@ pub(crate) fn cmd_table_drop<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out:
     let compiled: Vec<Vec<u8>> = tcat
         .get(&args[1])
         .map(|s| {
-            compile_table(s)
-                .map(|c| c.into_iter().map(|i| i.name).collect())
-                .unwrap_or_default() // catalog entries were admitted validated
+            compile_table(s).map(|c| c.into_iter().map(|i| i.name).collect()).unwrap_or_default() // catalog entries were admitted validated
         })
         .unwrap_or_default();
     let hit = tcat.drop_table(&args[1]);
@@ -215,9 +209,8 @@ pub(crate) fn extension_op(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -
 /// excluded, absent, rows, missing — every one fresh), then
 /// two u64 (spotcheck rows, type mismatches).
 fn op_verify(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
-    let Some(spec) = argv
-        .get(1)
-        .and_then(|n| ctx.state.catalogs.table().and_then(|c| c.get(n).cloned()))
+    let Some(spec) =
+        argv.get(1).and_then(|n| ctx.state.catalogs.table().and_then(|c| c.get(n).cloned()))
     else {
         return vec![ST_NOINDEX];
     };
@@ -244,7 +237,6 @@ fn op_verify(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     chunk.extend_from_slice(&mismatches.to_le_bytes());
     chunk
 }
-
 
 /// Sample up to [`SPOTCHECK_ROWS`] rows on this shard and check that
 /// every PRESENT declared-typed column coerces (absent = NULL, never
@@ -333,15 +325,13 @@ fn window_field(s: &kevy_index::TableSpec) -> Vec<u8> {
 /// by the index name) plus a trailing spot-check element.
 fn reduce_verify(catalogs: &CatalogState, argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> {
     let mut out = Vec::new();
-    let name_s = argv
-        .get(1)
-        .map(|a| String::from_utf8_lossy(a).into_owned())
-        .unwrap_or_default();
-    let Some(spec) = argv
-        .get(1)
-        .and_then(|n| catalogs.table().and_then(|c| c.get(n).cloned()))
+    let name_s = argv.get(1).map(|a| String::from_utf8_lossy(a).into_owned()).unwrap_or_default();
+    let Some(spec) = argv.get(1).and_then(|n| catalogs.table().and_then(|c| c.get(n).cloned()))
     else {
-        encode_error(&mut out, &format!("ERR no such table '{name_s}' (TABLE.LIST enumerates them)"));
+        encode_error(
+            &mut out,
+            &format!("ERR no such table '{name_s}' (TABLE.LIST enumerates them)"),
+        );
         return out;
     };
     let n = compile_table(&spec).map(|c| c.len()).unwrap_or_default();
@@ -349,13 +339,19 @@ fn reduce_verify(catalogs: &CatalogState, argv: &[Vec<u8>], chunks: &[Vec<u8>]) 
         match c.first().copied() {
             Some(x) if x == ST_OK => {}
             Some(x) if x == ST_BUILDING => {
-                encode_error(&mut out, &format!(
-                    "INDEXBUILDING table '{name_s}' has an index still building (poll IDX.LIST until state=ready)"
-                ));
+                encode_error(
+                    &mut out,
+                    &format!(
+                        "INDEXBUILDING table '{name_s}' has an index still building (poll IDX.LIST until state=ready)"
+                    ),
+                );
                 return out;
             }
             _ => {
-                encode_error(&mut out, &format!("ERR no such table '{name_s}' (TABLE.LIST enumerates them)"));
+                encode_error(
+                    &mut out,
+                    &format!("ERR no such table '{name_s}' (TABLE.LIST enumerates them)"),
+                );
                 return out;
             }
         }
@@ -394,8 +390,16 @@ fn fold_verify_chunks(n: usize, chunks: &[Vec<u8>]) -> (Vec<[u64; 10]>, [u64; 2]
 /// working), then one 4-element spot-check row.
 fn render_verify(out: &mut Vec<u8>, spec: &TableSpec, sums: &[[u64; 10]], spot: [u64; 2]) {
     const LABELS: [&[u8]; 10] = [
-        b"entries", b"bytes", b"coerce_failures", b"duplicates", b"drift", b"checked",
-        b"excluded", b"absent", b"rows", b"missing",
+        b"entries",
+        b"bytes",
+        b"coerce_failures",
+        b"duplicates",
+        b"drift",
+        b"checked",
+        b"excluded",
+        b"absent",
+        b"rows",
+        b"missing",
     ];
     encode_array_len(out, (sums.len() + 1) as i64);
     for (ispec, s) in compile_table(spec).unwrap_or_default().iter().zip(sums) {

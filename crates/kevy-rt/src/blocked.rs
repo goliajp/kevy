@@ -2,10 +2,7 @@
 // sprints (`BlockKind::XReadBlock`, `BlockKind::XReadGroupBlock`,
 // `BlockHint::XReadBlock`, …) are marked here; once those sprints connect
 // callers the corresponding warnings re-fire automatically.
-#![expect(
-    dead_code,
-    reason = "stream BlockKind / BlockHint variants land in v2-7d.3 / .4"
-)]
+#![expect(dead_code, reason = "stream BlockKind / BlockHint variants land in v2-7d.3 / .4")]
 
 //! Per-shard blocked-client registry, shared by `BLPOP` / `BRPOP` /
 //! `XREAD BLOCK` / `XREADGROUP BLOCK`.
@@ -32,9 +29,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// a waiter expire late, but BLOCK is not a wall-clock contract.
 #[inline]
 pub(crate) fn unix_now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis() as u64)
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
 }
 
 /// Emit the RESP nil reply that a timed-out blocking command returns.
@@ -176,13 +171,7 @@ impl BlockedClients {
         proto: RespVersion,
     ) {
         for key in keys {
-            let bc = BlockedClient {
-                conn_id,
-                kind,
-                deadline_ms,
-                argv: argv.clone(),
-                proto,
-            };
+            let bc = BlockedClient { conn_id, kind, deadline_ms, argv: argv.clone(), proto };
             self.by_key.entry(key.clone()).or_default().push_back(bc);
         }
         self.by_conn.insert(conn_id, keys.to_vec());
@@ -248,16 +237,13 @@ impl BlockedClients {
         let keys = self.by_conn.get(&conn_id)?;
         let first_key = keys.first()?;
         let queue = self.by_key.get(first_key)?;
-        queue
-            .iter()
-            .find(|w| w.conn_id == conn_id)
-            .map(|w| BlockedClient {
-                conn_id: w.conn_id,
-                kind: w.kind,
-                deadline_ms: w.deadline_ms,
-                argv: w.argv.clone(),
-                proto: w.proto,
-            })
+        queue.iter().find(|w| w.conn_id == conn_id).map(|w| BlockedClient {
+            conn_id: w.conn_id,
+            kind: w.kind,
+            deadline_ms: w.deadline_ms,
+            argv: w.argv.clone(),
+            proto: w.proto,
+        })
     }
 }
 
@@ -320,12 +306,12 @@ impl<C: Commands> Shard<C> {
         conn.blocked = false;
         let proto = waiter.proto;
         match proto {
-            RespVersion::V2 => self
-                .commands
-                .dispatch_into(&mut self.store, &waiter.argv, &mut conn.output),
-            RespVersion::V3 => self
-                .commands
-                .dispatch_into_resp3(&mut self.store, &waiter.argv, &mut conn.output),
+            RespVersion::V2 => {
+                self.commands.dispatch_into(&mut self.store, &waiter.argv, &mut conn.output)
+            }
+            RespVersion::V3 => {
+                self.commands.dispatch_into_resp3(&mut self.store, &waiter.argv, &mut conn.output)
+            }
         }
         conn.next_emit += 1;
         self.dirty.push(waiter.conn_id);

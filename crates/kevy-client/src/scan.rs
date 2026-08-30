@@ -71,9 +71,9 @@ impl Connection {
     /// RNG); the server returns a truly random key. Both honour empty.
     pub fn randomkey(&mut self) -> KevyResult<Option<Vec<u8>>> {
         match self {
-            Self::Embedded(s) => Ok(s.with(|inner| {
-                inner.collect_keys(None, Some(1)).into_iter().next()
-            })),
+            Self::Embedded(s) => {
+                Ok(s.with(|inner| inner.collect_keys(None, Some(1)).into_iter().next()))
+            }
             Self::Remote(c) => match c.request(&[b"RANDOMKEY".to_vec()])? {
                 Reply::Bulk(v) => Ok(Some(v)),
                 Reply::Nil => Ok(None),

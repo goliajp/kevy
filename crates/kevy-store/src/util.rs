@@ -5,11 +5,7 @@ use crate::nostd_prelude::*;
 pub(crate) fn norm_index(idx: i64, len: usize) -> Option<usize> {
     let len = len as i64;
     let i = if idx < 0 { idx + len } else { idx };
-    if i < 0 || i >= len {
-        None
-    } else {
-        Some(i as usize)
-    }
+    if i < 0 || i >= len { None } else { Some(i as usize) }
 }
 
 /// Clamp a possibly-negative `[start, stop]` range to valid bounds (inclusive),
@@ -21,11 +17,7 @@ pub(crate) fn range_bounds(start: i64, stop: i64, len: usize) -> Option<(usize, 
     let len = len as i64;
     let s = (if start < 0 { start + len } else { start }).max(0);
     let e = (if stop < 0 { stop + len } else { stop }).min(len - 1);
-    if s > e || s >= len {
-        None
-    } else {
-        Some((s as usize, e as usize))
-    }
+    if s > e || s >= len { None } else { Some((s as usize, e as usize)) }
 }
 
 /// Strict base-10 `i64` parse over raw bytes (allows a leading `+`/`-`).
@@ -64,11 +56,8 @@ pub(crate) fn format_i64_into(n: i64, buf: &mut [u8; 20]) -> &[u8] {
     // Standard digit-by-digit unroll: faster + no alloc vs `n.to_string()`.
     // For negatives, format the absolute value as u64 (handles i64::MIN
     // without overflow) then prepend '-'.
-    let (mut n_abs, neg) = if n < 0 {
-        ((n as i128).unsigned_abs() as u64, true)
-    } else {
-        (n as u64, false)
-    };
+    let (mut n_abs, neg) =
+        if n < 0 { ((n as i128).unsigned_abs() as u64, true) } else { (n as u64, false) };
     let mut i = buf.len();
     if n_abs == 0 {
         i -= 1;
@@ -202,11 +191,7 @@ fn match_class(p: &[u8], ch: u8) -> (bool, &[u8]) {
             matched |= p[i + 1] == ch;
             i += 2;
         } else if i + 2 < p.len() && p[i + 1] == b'-' && p[i + 2] != b']' {
-            let (lo, hi) = if p[i] <= p[i + 2] {
-                (p[i], p[i + 2])
-            } else {
-                (p[i + 2], p[i])
-            };
+            let (lo, hi) = if p[i] <= p[i + 2] { (p[i], p[i + 2]) } else { (p[i + 2], p[i]) };
             matched |= (lo..=hi).contains(&ch);
             i += 3;
         } else {

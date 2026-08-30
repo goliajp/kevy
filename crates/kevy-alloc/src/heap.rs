@@ -25,9 +25,7 @@ use crate::class::{self, NCLASSES};
 use crate::os;
 use crate::outbound::Outbound;
 use crate::partials::PartialRing;
-use crate::segment::{
-    self, FIRST_DATA_SPAN, NO_CLASS, SEGMENT_BYTES, SPANS_PER_SEGMENT, Segment,
-};
+use crate::segment::{self, FIRST_DATA_SPAN, NO_CLASS, SEGMENT_BYTES, SPANS_PER_SEGMENT, Segment};
 
 /// Spans one class may hold at once, per heap — a runaway guard, not a
 /// policy. At 64 KiB a span, this bounds one class at roughly 4 GiB per
@@ -67,7 +65,6 @@ pub const PER_CLASS_CAP: u32 = 16_777_216;
 /// whole segment. Decay-style hysteresis, after jemalloc: releasing
 /// eagerly turns a churny workload into an mmap/munmap storm.
 pub const EMPTY_SPAN_HYSTERESIS: u16 = 4;
-
 
 /// One shard's heap. Not `Sync`: exactly one thread owns it, which is
 /// what removes the atomics from the fast path.
@@ -189,7 +186,8 @@ impl Heap {
         new_size: usize,
         align: usize,
     ) -> bool {
-        let (Some(a), Some(b)) = (class::index_of(old_size, align), class::index_of(new_size, align))
+        let (Some(a), Some(b)) =
+            (class::index_of(old_size, align), class::index_of(new_size, align))
         else {
             return false;
         };
@@ -204,8 +202,8 @@ impl Heap {
         }
         let slot = class::size_of(a) as u64;
         self.live_bytes = self.live_bytes - old_size as u64 + new_size as u64;
-        self.rounding_bytes = self.rounding_bytes - (slot - old_size as u64)
-            + (slot - new_size as u64);
+        self.rounding_bytes =
+            self.rounding_bytes - (slot - old_size as u64) + (slot - new_size as u64);
         true
     }
 
@@ -368,7 +366,6 @@ impl Heap {
         unsafe { crate::large::dealloc(ptr, size) };
     }
 }
-
 
 impl Drop for Heap {
     fn drop(&mut self) {

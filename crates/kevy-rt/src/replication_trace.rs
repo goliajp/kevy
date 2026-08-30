@@ -16,9 +16,7 @@ impl<C: Commands> Shard<C> {
     /// state) `last_ping` slot as a 1s trace cadence.
     pub(crate) fn trace_acksent_pending(&mut self, idx: usize) {
         let conn = &mut self.replicas[idx];
-        let due = conn
-            .last_ping
-            .is_none_or(|t| t.elapsed() >= std::time::Duration::from_secs(1));
+        let due = conn.last_ping.is_none_or(|t| t.elapsed() >= std::time::Duration::from_secs(1));
         if !due {
             return;
         }
@@ -67,10 +65,8 @@ impl<C: Commands> Shard<C> {
         else {
             return;
         };
-        let (feed_gen, feed_next) = self
-            .replicate
-            .as_ref()
-            .map_or((0, 0), |f| (f.generation(), f.source().next_offset()));
+        let (feed_gen, feed_next) =
+            self.replicate.as_ref().map_or((0, 0), |f| (f.generation(), f.source().next_offset()));
         crate::repl_trace_line(format_args!(
             "shard {} fd {} handshake accepted: replica '{replica_id}' \
              presented gen {generation} from {from_offset} | feed gen {feed_gen} \

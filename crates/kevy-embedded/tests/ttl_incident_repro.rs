@@ -30,20 +30,14 @@ fn t3_ttl_survives_restart_and_still_expires() {
     std::fs::create_dir_all(&dir).unwrap();
 
     {
-        let s = Store::open(
-            Config::default().with_persist(&dir).with_ttl_reaper_manual(),
-        )
-        .unwrap();
+        let s = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
         s.set_with_ttl(b"k", b"v", Duration::from_millis(800)).unwrap();
         assert_eq!(s.get(b"k").unwrap(), Some(b"v".to_vec()));
     } // drop -> flush AOF
 
     // Age the key 600ms of its 800ms life, then "restart" (reopen -> AOF replay).
     std::thread::sleep(Duration::from_millis(600));
-    let s = Store::open(
-        Config::default().with_persist(&dir).with_ttl_reaper_manual(),
-    )
-    .unwrap();
+    let s = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
     assert_eq!(s.get(b"k").unwrap(), Some(b"v".to_vec()), "value lost after restart");
     let pttl = s.ttl_ms(b"k");
     eprintln!("T3: pttl right after restart = {pttl} ms (original deadline ~200ms away)");

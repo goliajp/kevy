@@ -22,12 +22,12 @@
 //! which routes both to one shard and restores the atomic path. This is the
 //! same trade-off `exec_rename` makes, and it is stated in `docs/migration.md`.
 
+use crate::Commands;
 use crate::message::Part;
 use crate::message::{Agg, Inbound, Op, PendingSlot, SmallReply};
 use crate::message_agg::ListMoveStep;
 use crate::reduce::drain_front;
 use crate::shard::Shard;
-use crate::Commands;
 use kevy_resp::ArgvView;
 
 impl<C: Commands> Shard<C> {
@@ -73,7 +73,9 @@ impl<C: Commands> Shard<C> {
             return;
         }
 
-        self.start_list_move_xshard(conn_id, seq, src, dst, src_shard, dst_shard, from_left, to_left, blocking);
+        self.start_list_move_xshard(
+            conn_id, seq, src, dst, src_shard, dst_shard, from_left, to_left, blocking,
+        );
     }
 
     /// Cross-shard arm: arm the orchestrator slot and ship step 1.
@@ -124,7 +126,16 @@ impl<C: Commands> Shard<C> {
     /// `fold` when the slot's `remaining` hits zero.
     pub(crate) fn finalize_list_move_agg(&mut self, conn_id: u64, seq: u64, agg: Agg) {
         let Agg::ListMoveOrchestrator {
-            step, blocking, src, dst, src_shard, dst_shard, from_left, to_left, taken, pushed,
+            step,
+            blocking,
+            src,
+            dst,
+            src_shard,
+            dst_shard,
+            from_left,
+            to_left,
+            taken,
+            pushed,
         } = agg
         else {
             return;
@@ -135,7 +146,9 @@ impl<C: Commands> Shard<C> {
             ListMoveStep::Push => self.after_push(m, taken, pushed),
             // The element is back on the source; the client gets the error the
             // destination raised.
-            ListMoveStep::Restore => self.finish_list_move(m.conn_id, m.blocking, &m.src, wrongtype()),
+            ListMoveStep::Restore => {
+                self.finish_list_move(m.conn_id, m.blocking, &m.src, wrongtype())
+            }
         }
     }
 
@@ -269,7 +282,13 @@ impl<C: Commands> Shard<C> {
     /// effects rather than as the verb, so the record is identical to the
     /// cross-shard path's — a replay does not have to know which shard layout
     /// produced it.
-    pub(crate) fn after_list_move(&mut self, src: &[u8], dst: &[u8], from_left: bool, to_left: bool) {
+    pub(crate) fn after_list_move(
+        &mut self,
+        src: &[u8],
+        dst: &[u8],
+        from_left: bool,
+        to_left: bool,
+    ) {
         self.note_key_mutated(src);
         self.note_key_mutated(dst);
         self.log_list_pop(src, from_left);
@@ -323,11 +342,7 @@ impl<C: Commands> Shard<C> {
         // Step 1 of the cross-shard move: pop one element. The
         // destination is not touched until the element is in hand, so
         // an empty source costs the destination nothing.
-        let popped = if from_left {
-            self.store.lpop(key, 1)
-        } else {
-            self.store.rpop(key, 1)
-        };
+        let popped = if from_left { self.store.lpop(key, 1) } else { self.store.rpop(key, 1) };
         match popped {
             Ok(mut v) => {
                 let element = v.pop();
@@ -365,12 +380,11 @@ impl<C: Commands> Shard<C> {
 
     /// `Op::ListMoveRestore` — split out of `exec_op` for the LOC ceiling.
     pub(crate) fn op_list_move_restore(
-    &mut self,
-    key: &[u8],
-    value: &[u8],
-    from_left: bool,
+        &mut self,
+        key: &[u8],
+        value: &[u8],
+        from_left: bool,
     ) -> Part {
-
         // Rollback: put the element back on the end it was taken from.
         let _ = if from_left {
             self.store.lpush(key, &[value])

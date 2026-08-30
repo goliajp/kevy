@@ -115,10 +115,7 @@ fn ltrim_keeps_inclusive_range() {
     let s = s();
     s.rpush(b"l", &[b"a", b"b", b"c", b"d", b"e"]).unwrap();
     s.ltrim(b"l", 1, 3).unwrap();
-    assert_eq!(
-        s.lrange(b"l", 0, -1).unwrap(),
-        vec![b"b".to_vec(), b"c".to_vec(), b"d".to_vec()]
-    );
+    assert_eq!(s.lrange(b"l", 0, -1).unwrap(), vec![b"b".to_vec(), b"c".to_vec(), b"d".to_vec()]);
 }
 
 // ---- keyspace extras ----------------------------------------------------
@@ -271,10 +268,8 @@ fn feed_flushall_bumps_generation() {
 #[test]
 fn feed_clean_reopen_continues_crash_bumps() {
     let dir = crate::store::test_suites::tests::tmp_dir("feed-reopen");
-    let s = Store::open(
-        Config::default().with_persist(&dir).with_ttl_reaper_manual().with_feed(0),
-    )
-    .unwrap();
+    let s = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual().with_feed(0))
+        .unwrap();
     s.set(b"a", b"1").unwrap();
     s.set(b"b", b"2").unwrap();
     let (g1, off1) = s.changes_tail().unwrap();
@@ -282,10 +277,9 @@ fn feed_clean_reopen_continues_crash_bumps() {
     assert_eq!(off1, 2);
     drop(s); // clean drop → marker written after AOF flush
 
-    let s2 = Store::open(
-        Config::default().with_persist(&dir).with_ttl_reaper_manual().with_feed(0),
-    )
-    .unwrap();
+    let s2 =
+        Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual().with_feed(0))
+            .unwrap();
     // clean reopen: same generation, offset continues
     assert_eq!(s2.changes_tail().unwrap(), (g1, 2));
     s2.set(b"c", b"3").unwrap();
@@ -296,10 +290,9 @@ fn feed_clean_reopen_continues_crash_bumps() {
 
     // simulate crash: markers gone → next open draws a fresh identity
     std::fs::remove_file(std::path::Path::new(&dir).join("feed-0.meta")).unwrap();
-    let s3 = Store::open(
-        Config::default().with_persist(&dir).with_ttl_reaper_manual().with_feed(0),
-    )
-    .unwrap();
+    let s3 =
+        Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual().with_feed(0))
+            .unwrap();
     let (g3, off3) = s3.changes_tail().unwrap();
     assert_ne!(g3, g1, "unclean reopen draws a fresh generation");
     assert_ne!(g3, 0);
@@ -328,10 +321,7 @@ fn info_prefix_counts() {
 fn zpopmin_below_pops_due_jobs_and_replays() {
     let dir = crate::store::test_suites::tests::tmp_dir("zpb-reopen");
     {
-        let s = Store::open(
-            Config::default().with_persist(&dir).with_ttl_reaper_manual(),
-        )
-        .unwrap();
+        let s = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
         s.zadd(b"jobs", &[(10.0, b"due1"), (20.0, b"due2"), (99.0, b"later")]).unwrap();
         // strictly-below semantics: 20.0 is NOT < 20.0
         let due = s.zpopmin_below(b"jobs", 20.0, 10).unwrap();
@@ -418,17 +408,17 @@ fn snapshot_view_is_point_in_time_and_prefix_scoped() {
     assert_eq!(keys.len(), 10, "10 sv: keys at freeze time");
     assert!(keys.iter().any(|e| e.key == b"sv:1"), "deleted-after still in view");
     assert!(!keys.iter().any(|e| e.key == b"sv:999"), "added-after not in view");
-    assert!(
-        keys.iter().find(|e| e.key == b"sv:0").unwrap().ttl_ms.is_some(),
-        "ttl carried"
-    );
+    assert!(keys.iter().find(|e| e.key == b"sv:0").unwrap().ttl_ms.is_some(), "ttl carried");
     assert_eq!(snap.keys_prefix(b"other:").len(), 1);
     assert_eq!(snap.len(), 11);
 
     // typed access via each_prefix
     let mut string_count = 0;
     snap.each_prefix(b"sv:", |_, v, _| {
-        if matches!(v, kevy_store::Value::Str(_) | kevy_store::Value::Int(_) | kevy_store::Value::ArcBulk(_)) {
+        if matches!(
+            v,
+            kevy_store::Value::Str(_) | kevy_store::Value::Int(_) | kevy_store::Value::ArcBulk(_)
+        ) {
             string_count += 1;
         }
     });
@@ -454,14 +444,16 @@ fn hash_field_ttl_full_matrix_with_reopen() {
         s.hset(b"h", &[(b"keep", b"1"), (b"ttl", b"2"), (b"soon", b"3")]).unwrap();
         // absolute deadline via relative facade
         let codes = s
-            .hexpire(b"h", &[b"ttl", b"missing"], std::time::Duration::from_secs(200), HExpireCond::Always)
+            .hexpire(
+                b"h",
+                &[b"ttl", b"missing"],
+                std::time::Duration::from_secs(200),
+                HExpireCond::Always,
+            )
             .unwrap();
         assert_eq!(codes, vec![1, -2]);
         // immediate-past absolute → delete, code 2
-        assert_eq!(
-            s.hpexpire_at(b"h", &[b"soon"], 1, HExpireCond::Always).unwrap(),
-            vec![2]
-        );
+        assert_eq!(s.hpexpire_at(b"h", &[b"soon"], 1, HExpireCond::Always).unwrap(), vec![2]);
         assert!(!s.hexists(b"h", b"soon").unwrap());
         // httl visible
         let ttls = s.hpttl(b"h", &[b"ttl", b"keep"]).unwrap();
@@ -473,7 +465,8 @@ fn hash_field_ttl_full_matrix_with_reopen() {
     }
     // AOF replay: ttl field still carries its deadline, keep does not
     {
-        let s2 = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
+        let s2 =
+            Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
         let ttls = s2.hpttl(b"h", &[b"ttl", b"keep"]).unwrap();
         assert!(ttls[0] > 0, "deadline survived replay: {ttls:?}");
         assert_eq!(ttls[1], -1, "persisted field stays persisted");
@@ -481,7 +474,8 @@ fn hash_field_ttl_full_matrix_with_reopen() {
         s2.save_snapshot().unwrap();
     }
     {
-        let s3 = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
+        let s3 =
+            Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
         let ttls = s3.hpttl(b"h", &[b"ttl"]).unwrap();
         assert!(ttls[0] > 0, "deadline survived snapshot round-trip: {ttls:?}");
         drop(s3);
@@ -493,32 +487,19 @@ fn hash_field_ttl_full_matrix_with_reopen() {
 
 #[test]
 fn idx_create_query_maintain_reopen() {
-    use crate::{IndexKind, IndexValue, IndexValType};
+    use crate::{IndexKind, IndexValType, IndexValue};
     let dir = crate::store::test_suites::tests::tmp_dir("idx-reopen");
     {
-        let s = Store::open(
-            Config::default().with_persist(&dir).with_ttl_reaper_manual(),
-        )
-        .unwrap();
+        let s = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
         for i in 0..30 {
-            s.hset(
-                format!("row:{i}").as_bytes(),
-                &[(b"score", format!("{}", i * 10).as_bytes())],
-            )
-            .unwrap();
+            s.hset(format!("row:{i}").as_bytes(), &[(b"score", format!("{}", i * 10).as_bytes())])
+                .unwrap();
         }
         s.hset(b"row:bad", &[(b"score", b"junk")]).unwrap();
         // create builds synchronously from pre-existing rows
-        s.idx_create(b"score_idx", b"row:", b"score", IndexValType::I64, IndexKind::Range)
-            .unwrap();
+        s.idx_create(b"score_idx", b"row:", b"score", IndexValType::I64, IndexKind::Range).unwrap();
         let (hits, next) = s
-            .idx_query(
-                b"score_idx",
-                &IndexValue::I64(0),
-                &IndexValue::I64(100),
-                None,
-                100,
-            )
+            .idx_query(b"score_idx", &IndexValue::I64(0), &IndexValue::I64(100), None, 100)
             .unwrap();
         assert_eq!(hits.len(), 11, "0..=100 step 10");
         assert!(next.is_none());
@@ -534,9 +515,8 @@ fn idx_create_query_maintain_reopen() {
             "row:0 moved out, row:1 gone, row:new in"
         );
         // cursor pagination
-        let (page1, cur) = s
-            .idx_query(b"score_idx", &IndexValue::I64(0), &IndexValue::I64(100), None, 4)
-            .unwrap();
+        let (page1, cur) =
+            s.idx_query(b"score_idx", &IndexValue::I64(0), &IndexValue::I64(100), None, 4).unwrap();
         let cur = cur.expect("more");
         let (page2, _) = s
             .idx_query(b"score_idx", &IndexValue::I64(0), &IndexValue::I64(100), Some(&cur), 100)
@@ -563,7 +543,9 @@ fn idx_create_query_maintain_reopen() {
     let st = s2.idx_stats(b"score_idx").unwrap();
     assert_eq!(st.entries, 31, "30 + copied, rebuilt from replayed data");
     assert!(s2.idx_drop(b"score_idx"));
-    assert!(s2.idx_query(b"score_idx", &IndexValue::I64(0), &IndexValue::I64(1), None, 10).is_err());
+    assert!(
+        s2.idx_query(b"score_idx", &IndexValue::I64(0), &IndexValue::I64(1), None, 10).is_err()
+    );
     drop(s2);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -596,14 +578,11 @@ fn view_create_query_maintain_reopen() {
         s.idx_create(b"t_pri", b"t:", b"pri", IndexValType::I64, IndexKind::Range).unwrap();
         s.idx_create(b"t_flag", b"t:", b"flag", IndexValType::I64, IndexKind::Range).unwrap();
         // materialized top-3 DESC: even (flag=1) rows with pri ≤ 15
-        let tree = ViewTree::And(
-            Box::new(leaf("t_pri", 0, 15)),
-            Box::new(leaf("t_flag", 1, 1)),
-        );
-        s.view_create(b"v_top", tree, b"t_pri", true, ViewMode::Materialized { top_k: 3 })
-            .unwrap();
+        let tree = ViewTree::And(Box::new(leaf("t_pri", 0, 15)), Box::new(leaf("t_flag", 1, 1)));
+        s.view_create(b"v_top", tree, b"t_pri", true, ViewMode::Materialized { top_k: 3 }).unwrap();
         let (page, _) = s.view_query(b"v_top", None, 3).unwrap();
-        let keys: Vec<_> = page.iter().map(|(k, _)| String::from_utf8_lossy(k).into_owned()).collect();
+        let keys: Vec<_> =
+            page.iter().map(|(k, _)| String::from_utf8_lossy(k).into_owned()).collect();
         assert_eq!(keys, vec!["t:14", "t:12", "t:10"], "top-3 desc evens ≤15");
         // maintenance: a new higher even member enters
         s.hset(b"t:15", &[(b"flag", b"1")]).unwrap();
@@ -617,7 +596,9 @@ fn view_create_query_maintain_reopen() {
         s.view_create(b"v_all", leaf("t_pri", 0, 100), b"t_pri", false, ViewMode::Virtual).unwrap();
         assert_eq!(s.view_count(b"v_all").unwrap(), 20);
         assert_eq!(s.view_list().len(), 2);
-        assert!(s.view_create(b"bad", leaf("nope", 0, 1), b"t_pri", false, ViewMode::Virtual).is_err());
+        assert!(
+            s.view_create(b"bad", leaf("nope", 0, 1), b"t_pri", false, ViewMode::Virtual).is_err()
+        );
     }
     // reopen: view catalog persisted; rebuilt lazily against replayed data
     let s2 = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
@@ -670,17 +651,26 @@ fn text_index_highlight_embedded() {
     assert_eq!(plain.len(), 1);
     assert!(plain[0].2.is_empty(), "no spans without a highlight request");
     // Highlight the term: "quick" is bytes 4..9 of field "body".
-    let hl = s.idx_match_with(b"hb", b"quick", 10, crate::MatchOpts { highlight: Some(&[]), ..Default::default() }).unwrap();
+    let hl = s
+        .idx_match_with(
+            b"hb",
+            b"quick",
+            10,
+            crate::MatchOpts { highlight: Some(&[]), ..Default::default() },
+        )
+        .unwrap();
     assert_eq!(hl.len(), 1);
     assert_eq!(hl[0].0, b"n:1".to_vec());
     assert_eq!(hl[0].2, vec![(b"body".to_vec(), vec![(4u32, 9u32)])]);
     // A field filter that names no indexed field yields no spans.
-    let none = s.idx_match_with(
-        b"hb",
-        b"quick",
-        10,
-        crate::MatchOpts { highlight: Some(&[b"title".to_vec()]), ..Default::default() },
-    ).unwrap();
+    let none = s
+        .idx_match_with(
+            b"hb",
+            b"quick",
+            10,
+            crate::MatchOpts { highlight: Some(&[b"title".to_vec()]), ..Default::default() },
+        )
+        .unwrap();
     assert!(none[0].2.is_empty(), "the 'body' spans are filtered out");
 }
 
@@ -697,7 +687,8 @@ fn ann_index_knn_embedded() {
         let (x, y) = ((i % 10) as f32, (i / 10) as f32);
         s.hset(format!("g:{i}").as_bytes(), &[(b"v", blob(x, y).as_slice())]).unwrap();
     }
-    s.idx_create_ann(b"g_v", b"g:", b"v", crate::AnnSpec { dim: 2, distance: 1, m: 0, ef: 0 }).unwrap(); // l2, defaults
+    s.idx_create_ann(b"g_v", b"g:", b"v", crate::AnnSpec { dim: 2, distance: 1, m: 0, ef: 0 })
+        .unwrap(); // l2, defaults
     let hits = s.idx_knn(b"g_v", &[5.1, 7.05], 3, 0).unwrap();
     assert_eq!(hits[0].0, b"g:75".to_vec(), "{hits:?}"); // (5,7)
     assert_eq!(hits.len(), 3);
@@ -709,7 +700,10 @@ fn ann_index_knn_embedded() {
     let hits = s.idx_knn(b"g_v", &[50.0, 50.0], 1, 0).unwrap();
     assert_ne!(hits[0].0, b"g:0".to_vec());
     // bad params + unknown index
-    assert!(s.idx_create_ann(b"bad", b"g:", b"v", crate::AnnSpec { dim: 0, distance: 0, m: 0, ef: 0 }).is_err());
+    assert!(
+        s.idx_create_ann(b"bad", b"g:", b"v", crate::AnnSpec { dim: 0, distance: 0, m: 0, ef: 0 })
+            .is_err()
+    );
     assert!(s.idx_knn(b"nope", &[1.0, 2.0], 3, 0).is_err());
 }
 
@@ -750,7 +744,11 @@ fn agg_index_group_by_embedded() {
     use crate::{AggBy, IndexValType};
     let s = Store::open(Config::default().with_ttl_reaper_manual().with_shards(4)).unwrap();
     for (i, (g, v)) in [("a", 10), ("a", 20), ("b", 5), ("b", 500), ("c", 1)].iter().enumerate() {
-        s.hset(format!("m:{i}").as_bytes(), &[(b"grp", g.as_bytes()), (b"val", v.to_string().as_bytes())]).unwrap();
+        s.hset(
+            format!("m:{i}").as_bytes(),
+            &[(b"grp", g.as_bytes()), (b"val", v.to_string().as_bytes())],
+        )
+        .unwrap();
     }
     s.idx_create_agg(b"m_agg", b"m:", b"val", IndexValType::I64, b"grp").unwrap();
     let g = s.idx_group(b"m_agg", b"a").unwrap();
@@ -790,7 +788,8 @@ fn text_match_is_shard_count_invariant() {
         ("d:6", "rust rust rust everywhere in this doc"),
     ];
     let ranked = |shards: usize| -> Vec<(Vec<u8>, f64)> {
-        let s = Store::open(Config::default().with_shards(shards).with_ttl_reaper_manual()).unwrap();
+        let s =
+            Store::open(Config::default().with_shards(shards).with_ttl_reaper_manual()).unwrap();
         for (k, body) in corpus {
             s.hset(k.as_bytes(), &[(b"body", body.as_bytes())]).unwrap();
         }
@@ -859,7 +858,6 @@ fn text_index_field_scope_embedded() {
     assert!(msg.contains("title") && msg.contains("body"), "lists the declared ones: {msg}");
 }
 
-
 ///  in-process matches the wire: predicates decide eligibility,
 /// not score, and they reach documents ranked below the unfiltered
 /// leaders. Typed by the declaration, so a numeric range compares as a
@@ -887,7 +885,12 @@ fn text_index_filter_embedded() {
     // Filtered to the cheap half, the page fills from further down.
     let cheap = [crate::ValueFilter::Range { field: b"price", min: b"10", max: b"50" }];
     let hits = s
-        .idx_match_with(b"pf", b"rust", 3, crate::MatchOpts { filters: &cheap, ..Default::default() })
+        .idx_match_with(
+            b"pf",
+            b"rust",
+            3,
+            crate::MatchOpts { filters: &cheap, ..Default::default() },
+        )
         .unwrap();
     assert_eq!(hits.len(), 3, "not an empty page");
     assert!(hits.iter().all(|h| h.0 != b"p:0".to_vec()), "the leader is filtered out");
@@ -895,23 +898,37 @@ fn text_index_filter_embedded() {
     // Numeric, not lexicographic: 10..20 is two documents.
     let narrow = [crate::ValueFilter::Range { field: b"price", min: b"10", max: b"20" }];
     let hits = s
-        .idx_match_with(b"pf", b"rust", 10, crate::MatchOpts { filters: &narrow, ..Default::default() })
+        .idx_match_with(
+            b"pf",
+            b"rust",
+            10,
+            crate::MatchOpts { filters: &narrow, ..Default::default() },
+        )
         .unwrap();
     assert_eq!(hits.len(), 2, "9 must not sort above 10");
 
     // An unstored field and a bad bound both error rather than paging empty.
     let unstored = [crate::ValueFilter::Eq { field: b"colour", value: b"red" }];
     let e = s
-        .idx_match_with(b"pf", b"rust", 10, crate::MatchOpts { filters: &unstored, ..Default::default() })
+        .idx_match_with(
+            b"pf",
+            b"rust",
+            10,
+            crate::MatchOpts { filters: &unstored, ..Default::default() },
+        )
         .expect_err("unstored field");
     assert!(format!("{e}").contains("price"), "names what it does store: {e}");
     let badbound = [crate::ValueFilter::Range { field: b"price", min: b"cheap", max: b"50" }];
     let e = s
-        .idx_match_with(b"pf", b"rust", 10, crate::MatchOpts { filters: &badbound, ..Default::default() })
+        .idx_match_with(
+            b"pf",
+            b"rust",
+            10,
+            crate::MatchOpts { filters: &badbound, ..Default::default() },
+        )
         .expect_err("bad bound");
     assert!(format!("{e}").contains("i64"), "names the declared type: {e}");
 }
-
 
 /// SORT in-process matches the wire: the page is selected BY the key, so
 /// it holds documents the score would never have reached, and unknowns
@@ -933,26 +950,43 @@ fn text_index_sort_embedded() {
     s.idx_create_text(b"sf", b"s:", &[(b"body", 1.0)], false, &[(b"price", IndexValType::I64)])
         .unwrap();
 
-    let opts = |desc| crate::MatchOpts { sort: Some((b"price" as &[u8], desc)), ..Default::default() };
-    let asc: Vec<Vec<u8>> =
-        s.idx_match_with(b"sf", b"rust", 3, opts(false)).unwrap().into_iter().map(|h| h.0).collect();
-    assert_eq!(asc, vec![b"s:9".to_vec(), b"s:8".to_vec(), b"s:7".to_vec()], "cheapest, numerically");
+    let opts =
+        |desc| crate::MatchOpts { sort: Some((b"price" as &[u8], desc)), ..Default::default() };
+    let asc: Vec<Vec<u8>> = s
+        .idx_match_with(b"sf", b"rust", 3, opts(false))
+        .unwrap()
+        .into_iter()
+        .map(|h| h.0)
+        .collect();
+    assert_eq!(
+        asc,
+        vec![b"s:9".to_vec(), b"s:8".to_vec(), b"s:7".to_vec()],
+        "cheapest, numerically"
+    );
     let desc: Vec<Vec<u8>> =
         s.idx_match_with(b"sf", b"rust", 3, opts(true)).unwrap().into_iter().map(|h| h.0).collect();
     assert_eq!(desc, vec![b"s:0".to_vec(), b"s:1".to_vec(), b"s:2".to_vec()], "priciest");
 
     for d in [false, true] {
-        let all: Vec<Vec<u8>> =
-            s.idx_match_with(b"sf", b"rust", 11, opts(d)).unwrap().into_iter().map(|h| h.0).collect();
+        let all: Vec<Vec<u8>> = s
+            .idx_match_with(b"sf", b"rust", 11, opts(d))
+            .unwrap()
+            .into_iter()
+            .map(|h| h.0)
+            .collect();
         assert_eq!(all.last(), Some(&b"s:x".to_vec()), "the priceless row is last (desc={d})");
     }
 
     let e = s
-        .idx_match_with(b"sf", b"rust", 3, crate::MatchOpts { sort: Some((b"colour", false)), ..Default::default() })
+        .idx_match_with(
+            b"sf",
+            b"rust",
+            3,
+            crate::MatchOpts { sort: Some((b"colour", false)), ..Default::default() },
+        )
         .expect_err("unstored sort field");
     assert!(format!("{e}").contains("price"), "names what it stores: {e}");
 }
-
 
 /// DISTINCT in-process matches the wire: one hit per value, each its
 /// group's best, and the page is still filled.
@@ -961,9 +995,12 @@ fn text_index_distinct_embedded() {
     use crate::IndexValType;
     let s = Store::open(Config::default().with_ttl_reaper_manual()).unwrap();
     for (k, reps, price) in [
-        ("a1", 9, "10"), ("a2", 8, "10"),
-        ("b1", 7, "20"), ("b2", 6, "20"),
-        ("c1", 5, "30"), ("c2", 4, "30"),
+        ("a1", 9, "10"),
+        ("a2", 8, "10"),
+        ("b1", 7, "20"),
+        ("b2", 6, "20"),
+        ("c1", 5, "30"),
+        ("c2", 4, "30"),
     ] {
         let body = format!("rust {}", "rust ".repeat(reps));
         s.hset(
@@ -989,11 +1026,15 @@ fn text_index_distinct_embedded() {
     );
 
     let e = s
-        .idx_match_with(b"gf", b"rust", 3, crate::MatchOpts { distinct: Some(b"colour"), ..Default::default() })
+        .idx_match_with(
+            b"gf",
+            b"rust",
+            3,
+            crate::MatchOpts { distinct: Some(b"colour"), ..Default::default() },
+        )
         .expect_err("unstored distinct field");
     assert!(format!("{e}").contains("price"), "names what it stores: {e}");
 }
-
 
 /// FACET in-process matches the wire: counts come from the match set, so
 /// a LIMIT-1 page still reports every bucket.
@@ -1002,9 +1043,12 @@ fn text_index_facet_embedded() {
     use crate::IndexValType;
     let s = Store::open(Config::default().with_ttl_reaper_manual()).unwrap();
     for (k, reps, price) in [
-        ("a1", 9, "10"), ("a2", 8, "10"),
-        ("b1", 7, "20"), ("b2", 6, "20"),
-        ("c1", 5, "30"), ("c2", 4, "30"),
+        ("a1", 9, "10"),
+        ("a2", 8, "10"),
+        ("b1", 7, "20"),
+        ("b2", 6, "20"),
+        ("c1", 5, "30"),
+        ("c2", 4, "30"),
     ] {
         let body = format!("rust {}", "rust ".repeat(reps));
         s.hset(
@@ -1018,7 +1062,12 @@ fn text_index_facet_embedded() {
 
     let names = vec![b"price".to_vec()];
     let page = s
-        .idx_match_faceted(b"ff", b"rust", 1, crate::MatchOpts { facets: &names, ..Default::default() })
+        .idx_match_faceted(
+            b"ff",
+            b"rust",
+            1,
+            crate::MatchOpts { facets: &names, ..Default::default() },
+        )
         .unwrap();
     assert_eq!(page.hits.len(), 1, "the page is one document");
     let mut got: Vec<(Vec<u8>, u64)> = page.facets[0].clone();
@@ -1042,7 +1091,12 @@ fn text_index_facet_embedded() {
     assert_eq!(page.facets[0].iter().map(|(_, n)| n).sum::<u64>(), 6);
 
     let e = s
-        .idx_match_faceted(b"ff", b"rust", 3, crate::MatchOpts { facets: &[b"colour".to_vec()], ..Default::default() })
+        .idx_match_faceted(
+            b"ff",
+            b"rust",
+            3,
+            crate::MatchOpts { facets: &[b"colour".to_vec()], ..Default::default() },
+        )
         .expect_err("unstored facet field");
     assert!(format!("{e}").contains("price"), "names what it stores: {e}");
 }

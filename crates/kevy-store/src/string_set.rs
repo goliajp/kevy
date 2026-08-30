@@ -6,12 +6,11 @@
 
 #[cfg(not(feature = "std"))]
 use crate::nostd_prelude::*;
+use crate::util::parse_canonical_i64;
 use crate::value::{BULK_THRESHOLD, SmallBytes, Value};
 use crate::{Entry, Store, deadline_at, now_ns};
-use crate::util::parse_canonical_i64;
 use alloc::sync::Arc;
 use core::time::Duration;
-
 
 /// L2 + L1: pick the optimal encoding for `bytes` at SET time:
 /// 1. Canonical i64 ASCII → `Value::Int(n)` (smallest + INCR fast path)
@@ -44,7 +43,6 @@ pub(crate) fn pick_value_for_set_owned(bytes: Vec<u8>) -> Value {
 }
 
 impl Store {
-
     /// `SET` — overwrites any existing value/type. NX/XX guards; clears TTL.
     /// Takes an owned `Vec` so a >22 B value's allocation is adopted as-is
     /// (no copy). For callers holding a borrowed slice, prefer
@@ -122,8 +120,7 @@ impl Store {
                 if nx {
                     return false;
                 }
-                let (delta, ttl_delta, old) =
-                    overwrite_in_place(e, new_value, expire_at, key_heap);
+                let (delta, ttl_delta, old) = overwrite_in_place(e, new_value, expire_at, key_heap);
                 (Ok((delta, ttl_delta)), Some(old))
             }
             None => {
@@ -270,9 +267,8 @@ impl Store {
     /// expired counter.
     #[inline]
     fn note_expired_removed(&mut self, old: &Entry) {
-        self.used_memory = self
-            .used_memory
-            .saturating_sub(old.weight() + crate::value::ENTRY_OVERHEAD);
+        self.used_memory =
+            self.used_memory.saturating_sub(old.weight() + crate::value::ENTRY_OVERHEAD);
         if old.expire_at_ns.is_some() {
             self.adjust_expires(-1);
         }
@@ -280,15 +276,22 @@ impl Store {
     }
 }
 
-
 /// Phase-1 verdict of the SET probe (see [`Store::set_probe_no_evict`]).
 enum SetOutcome {
-    Updated { delta: i64, ttl_delta: i64, old: Value },
-    ExpiredThenInsert { old: Value },
+    Updated {
+        delta: i64,
+        ttl_delta: i64,
+        old: Value,
+    },
+    ExpiredThenInsert {
+        old: Value,
+    },
     NeedInsert,
     /// An NX/XX guard stopped the write; `drop_first` carries an
     /// expired-removed `Value` that still needs the bio-drop hand-off.
-    Refused { drop_first: Option<Value> },
+    Refused {
+        drop_first: Option<Value>,
+    },
 }
 
 /// Overwrite one live entry's value + TTL in place; returns

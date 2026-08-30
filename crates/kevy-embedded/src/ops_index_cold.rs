@@ -101,7 +101,6 @@ impl Store {
         Ok(total)
     }
 
-
     /// [`Self::for_each_segment`], with each shard's window runtime
     /// (if any) beside the segment, and a fallible visitor — the cold
     /// half does I/O, and a corrupt cold segment must become the
@@ -126,11 +125,6 @@ impl Store {
                 f(spec, seg, win)?;
             }
         }
-        if found {
-            Ok(())
-        } else {
-            Err(KevyError::NotFound("no such index".into()))
-        }
+        if found { Ok(()) } else { Err(KevyError::NotFound("no such index".into())) }
     }
-
 }
