@@ -1,9 +1,10 @@
 # ZADD — Phase A decomposition (arena cell), v6 perf axis
 
-Status: **Phase A complete for ZADD.** The candidate is named, priced by
-ablation, and reconciled to within 0.9% of the measured wire time. Nothing
-has been implemented; Phase B has not started. LPUSH, the other narrow
-cell, is not covered.
+Status: **Phase A and Phase B complete for ZADD.** The candidate was named
+and priced by ablation, reconciled to within 0.9% of the measured wire time,
+implemented, and measured. It holds — and one line of the Phase A prediction
+was wrong, recorded below rather than quietly dropped. LPUSH, the other
+narrow cell, is not covered.
 
 Opened because the v6 ROADMAP's one substantive open perf item reads:
 
@@ -342,28 +343,137 @@ those three rows is wrong and the ablation says which one to re-measure.
 
 ## Open
 
-1. **Phase B has not started.** The change is a guard in two functions —
-   `ZSetData::insert` (value.rs:81) and `SegZSetData::insert`
-   (zset_seg.rs:80) — comparing through `total_cmp`, never `==`, for the
-   reason in S04. It must be measured, not assumed: this repository's own
-   methodology file records four attacks whose decomposition predicted
-   thousands of microseconds and which measured throughput-neutral or
-   negative.
-2. **`Score`'s derived `PartialEq` should be fixed regardless.** It
-   disagrees with its own `Ord` about `-0.0`, which Rust does not permit of
-   an ordered key. Nothing exploits it today; the guard would be the first
-   thing to ask, and any future `==` on a `Score` is a latent version of the
-   same bug. That is a correctness change and belongs in its own commit,
-   before or independent of any perf work.
-3. **LPUSH**, the other narrow cell, is untouched here. Its arena cell grows
+1. **Why the arena cell's gain is unstable between runs.** The base column
+   reproduces to 0.2% across two sessions; the guard column moves by 10%.
+   A cheaper operation is more exposed to whatever else bounds that cell,
+   and this decomposition has not said what that is. Until it does, the
+   arena number is quoted as a range with the better-powered run as the
+   figure.
+2. **LPUSH**, the other narrow cell, is untouched here. Its arena cell grows
    without bound — at ~3M ops/s a 3-second window appends ~9M elements — so
    it is a different measurement with a different shape, and it needs its own
    pass rather than a paragraph in this one.
-4. **The 13-byte inline ceiling** is priced (14.7% at the boundary) but not
+3. **The 13-byte inline ceiling** is priced (14.7% at the boundary) but not
    actionable inside the `size_of::<Value>() <= 32` budget that keeps `Entry`
    at 48 bytes. Whether a zset member deserves more inline room than a
    `user:1234567` is a memory trade, and the owner has already priced the
    other side of it.
+
+## Phase B — measured
+
+Landed as `Score` made consistent with its own `Ord` (its own commit, with
+red-green tests), then the guard in `ZSetData::insert` and
+`SegZSetData::insert`, comparing through `Score` and never `f64`.
+
+Two binaries built from the same source tree on the bench box, differing
+only in the guard (md5 checked — a build that does not change the binary is
+not a build), then measured **interleaved in one session**, because the
+ledger's own entry for 6.0.0 records this box moving 5-10% between days.
+
+### The guard, kevy against itself
+
+Arena protocol, median-of-5 per cell, rounds alternating between the two
+binaries, cardinality verified before and after each load:
+
+| members | encoding | base | guard | Δ | tolerance | |
+|---:|---|---:|---:|---:|---:|---|
+| 1 | Flat | 3,093,924 | 3,786,703 | +692,779 | 338,180 | **+22.4%** |
+| 8,000 | Flat | 2,231,477 | 3,408,582 | +1,177,105 | 291,943 | **+52.8%** |
+| 200,000 | Seg | 2,033,624 | 3,158,316 | +1,124,692 | 127,315 | **+55.3%** |
+
+All three clear the band — by 2.0x, 4.0x and 8.8x respectively. The two
+large-set numbers beat the Phase A prediction of +44% and +49%.
+
+### Where the prediction was wrong
+
+Phase A said of the one-member cell: *"almost nothing. The size-dependent
+term is zero there by construction."* It measured **+22.4%**, or 59.1 ns/op.
+
+The budget said which row that has to come out of. Row two —
+"write path + hash insert over get + 2 extra `SmallBytes` + fixed index
+calls", 171.5 ns at n=1 — was carrying a fixed index cost I described as
+present but treated as negligible. It is 59.1 ns of that 171.5: two
+`RankTree` calls and two `SmallBytes` on a one-node tree. Splitting row two:
+
+| | ns/op | removed by the guard |
+|---|---:|---|
+| write path, hash insert over get, 2 `SmallBytes` | 112.4 | no |
+| fixed index calls | 59.1 | **yes** |
+
+This is the whole reason the prediction was written as three measurable rows
+rather than one number: the miss names its own row.
+
+### The seven arena cells, and nothing else moved
+
+Same interleaving, kevy against kevy, median-of-5:
+
+| verb | base | guard | |
+|---|---:|---:|---|
+| GET | 7,252,269 | 7,512,772 | +3.6% |
+| SET | 6,758,714 | 6,693,121 | NOISE |
+| INCR | 6,414,602 | 6,391,528 | NOISE |
+| LPUSH | 3,082,703 | 3,085,622 | NOISE |
+| SADD | 5,413,682 | 5,356,876 | NOISE |
+| HSET | 4,125,795 | 4,010,546 | NOISE |
+| **ZADD** | 3,023,834 | 3,649,594 | **+20.7%** |
+
+GET's +3.6% sits 1.5x outside its band and has no mechanism — the guard is
+not on GET's path, and code layout is the only way it could reach. It is
+recorded, not claimed.
+
+### The arena cell's effect size is not stable, and the better-powered run wins
+
+A second ZADD comparison, exclusive box, nine interleaved rounds per engine,
+tighter bands:
+
+| | median | stdev |
+|---|---:|---:|
+| kevy guard | 3,312,723 | ±196,844 (5.9%) |
+| kevy base | 3,028,399 | ±218,139 (7.2%) |
+| Redis 8 | 2,875,747 | ±61,669 (2.1%) |
+
+| | Δ | tolerance | |
+|---|---:|---:|---|
+| guard vs base | +284,324 | 218,139 | **1.09x** |
+| guard vs Redis 8 | +436,976 | 196,844 | **1.15x** |
+| base vs Redis 8 | +152,652 | 218,139 | **NOISE** |
+
+The base column reproduces across the two runs to within 0.2% (3,023,834 and
+3,028,399); it is the **guard** side that moves, 3,649,594 against
+3,312,723. So the arena cell's gain is somewhere in +9% to +21% and this run,
+with nine rounds on a quiet box, is the one to quote: **+9.4%**.
+
+The bottom row is the point. `base vs Redis 8` reproduces the 6.0.0 ledger's
+verdict exactly — NOISE, a tie — and the guard turns it into a lead that
+clears its band by 2.2x. That is the ROADMAP's cell, moved.
+
+The large-set numbers are where the change actually pays, and they are not
+in question: +52.8% and +55.3%, at 4.0x and 8.8x their tolerances.
+
+### A measurement thrown away
+
+Between those two runs there is a third that is not reported, because it was
+taken while the full four-engine `arena.sh` was **still running** on the same
+cores. It read 45-48% stdev and roughly half the throughput of every other
+run. A rate measured under one's own interference is not a rate; the fix was
+to wait for `gap rule` to appear in the arena output, then for the load
+average to come back under 1.2, and measure again.
+
+### Full arena, four engines, same session, guard binary
+
+| verb | kevy 6.1.0+guard | Redis 8 | valkey 9.1.1 | Dragonfly |
+|---|---:|---:|---:|---:|
+| GET | 7,320,368 | 5,681,931 | 3,037,838 | 2,894,780 |
+| SET | 6,393,582 | 2,522,055 | 1,665,513 | 1,941,631 |
+| INCR | 6,314,125 | 3,384,681 | 2,232,867 | 2,073,333 |
+| SADD | 5,380,960 | 3,653,358 | 2,426,068 | 1,490,047 |
+| HSET | 4,233,639 | 2,959,818 | 2,005,480 | 1,438,887 |
+| LPUSH | 2,988,692 | 2,872,658 | 1,967,287 | 1,247,830 |
+| ZADD | 3,187,200 | 2,811,568 | 1,886,907 | 1,502,123 |
+
+kevy's ZADD cell carried an 11.7% sample stdev in this run, which is why the
+vs-Redis ratio is quoted from the nine-round comparison above and not from
+this table. The rest of the table is the like-for-like context.
 
 ## Incidental, from the box rather than the code
 
