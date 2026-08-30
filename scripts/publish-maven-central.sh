@@ -220,7 +220,13 @@ for _ in $(seq 1 60); do
   [ "$ST" = "FAILED" ] && { echo "✗ publish failed" >&2; exit 1; }
   sleep 20
 done
-[ "$ST" = "PUBLISHED" ] || { echo "✗ still ${ST} after twenty minutes" >&2; exit 1; }
+# Not a verdict. On 2026-08-30 this was one: the Portal sat on PUBLISHING
+# past twenty minutes and the script exited 1 — while repo1 was already
+# serving the POM and the JAR. The release was out and its own workflow
+# said it had failed, which is the more expensive of the two lies. The
+# Portal's state is its bookkeeping; the check below is the release. A
+# FAILED above still exits, because that is an answer.
+[ "$ST" = "PUBLISHED" ] || echo "  note: Portal still ${ST} — asking repo1 instead"
 
 # The Portal saying PUBLISHED is not the same as a stranger being able
 # to depend on it. Ask the thing their build will ask.
