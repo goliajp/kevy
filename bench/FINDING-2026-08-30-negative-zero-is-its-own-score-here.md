@@ -69,15 +69,29 @@ is the invariant `tests_score_order.rs` currently holds by making `Eq` use
 `total_cmp`. Both belong: the type-level invariant is what stops the next
 caller writing `old == score`, and the fold is what stops the divergence.
 
-## Why it is not fixed in the commit that found it
+## Fixed, and verified the same way it was found
 
-It changes observable ordering. It belongs in its own change, with the
-reproduction above as its evidence, rather than riding inside a perf branch
-whose subject is an unrelated guard.
+`fold_zero_sign`, called from the top of `zadd_one`. Built on the bench box
+and put back in front of the same `redis:8`:
+
+| | kevy | Redis 8 |
+|---|---|---|
+| `ZRANGE z 0 -1 WITHSCORES` | `a\|0\|b\|0\|` | `a\|0\|b\|0\|` |
+| `ZSCORE z2 m` after `ZADD z2 -0 m` | `0` | `0` |
+| `ZADD z2 XX CH 0 m` | `0` | `0` |
+
+Byte-identical, where the same three commands gave `b a` here and `a b`
+there an hour earlier.
+
+It is its own change rather than part of the perf branch that found it,
+because it moves observable ordering and that does not belong inside a
+commit about a guard.
 
 ## The corpus does not cover it
 
 `tools/check_compat_claim.py` derives the headline from `bench/compat3.sh`,
 and that corpus has no `±0` score case — so the claim is honest about what
-it measures and this is a hole in what it measures, not a false number. A
-`ZADD` with `-0` and a `ZRANGE` over the result would close it.
+it measures and this is a hole in what it measures, not a false number. Six lines
+now cover it — a `ZADD` with each sign of zero, the `ZRANGE` over the
+result with and without scores, the `ZSCORE`, and the `XX CH` update that
+both engines decline.
