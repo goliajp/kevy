@@ -33,6 +33,33 @@ suite 从 75 项到 **84** 项(precommit 23 ⊆ prerelease 40 ⊆ full 84)。
 
 ## 已闭合的缺陷(全部由这些仪器挖出并验证)
 
+- [x] **`-0` 与 `0` 在 Redis 里是一个分数,在这里是两个**(2026-08-30,由
+      ZADD 守卫的正确性前置条件拉出来)。同机对真 `redis:8` 实测:
+      `ZADD z 0 a; ZADD z -0 b; ZRANGE z 0 -1` 那边答 `a b`、这边答 `b a`。
+      分数读数一致、`CH` 短路一致,**只有顺序不同**。
+      两边都不算大意:Redis 的跳表用普通 double 比较,两个零相等、按成员
+      分先后;这里的 rank tree 是 B 树,键需要 `f64: PartialOrd` 给不了的
+      全序,而 `Score` 用 `total_cmp` —— 它之所以是全序,恰恰因为它把两个
+      零分开。修法是 `fold_zero_sign`,放在 `zadd_one`(每个分数进入有序
+      集合的唯一那扇门),**不是**放进 `Score::cmp`(那会在每次树下降的
+      最内层加分支,读写都付)。修后逐字节一致。
+      兼容语料补六行 —— 它此前没有任何 ±0 用例,所以那个头条一直诚实,
+      只是这件事在它量的范围之外。
+      `bench/FINDING-2026-08-30-negative-zero-is-its-own-score-here.md`
+- [x] **一条分支落在 CI 过滤器之外,于是一个 job 都不跑,且不出声**(同轮)。
+      分支起名 `fix/…`,而 push 触发器只认 `master develop feature/**
+      release/** hotfix/** bugfix/** support/**`。**没有被触发的工作流
+      没法报告自己没被触发**,`gh run list --branch` 的空列表和"还没开始"
+      长得一模一样。改名 `bugfix/` 后才真的跑起来;GIT-FLOW 的分支表现在
+      说明这些前缀就是 CI 读的东西,不是建议。
+- [x] **石头报告说某块石头抬不起来,却不说为什么**(同轮)。`last_error`
+      取第一行 `error`,而 cargo 对测试失败的汇总恰好是那句什么都没说的
+      `error: test failed, to rerun pass --lib`;报告只留下 `tested: false,
+      tests: 0` 和那句话,诊断一次要花一整轮 CI。现在测试失败会写出**哪些
+      测试**加第一条 panic(位置与消息,cargo 把消息放在下一行)。
+      注:我**无法**用真实日志验证这个修复 —— 那份日志已经不存在了,
+      这正是缺陷本身的形状。
+
 - [x] **一次拒绝挡住了 runner 本可以开的四扇门**(2026-08-30,v6.1.0 发布轮)。
       体积棘轮在它加入后的**第一次真实发布**里抓到了它就是为之而生的那件事:
       Linux runner 打 `expo-kevy` 得 37,816 字节,而 npm 供 110,723,661 ——
