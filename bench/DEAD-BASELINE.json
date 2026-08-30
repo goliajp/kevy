@@ -2,16 +2,16 @@
   "corpus": "c1",
   "platform": "linux",
   "total_regions": 164819,
-  "dead_regions": 26867,
-  "llvm_per_instantiation_dead": 27861,
+  "dead_regions": 26969,
+  "llvm_per_instantiation_dead": 27837,
   "crates": {
     "kevy": {
       "regions": 29462,
-      "dead": 5310
+      "dead": 5305
     },
     "kevy-alloc": {
       "regions": 1694,
-      "dead": 119
+      "dead": 117
     },
     "kevy-bench": {
       "regions": 130,
@@ -127,7 +127,7 @@
     },
     "kevy-rt": {
       "regions": 16253,
-      "dead": 4772
+      "dead": 4766
     },
     "kevy-scalar": {
       "regions": 4388,
@@ -135,7 +135,7 @@
     },
     "kevy-scope": {
       "regions": 629,
-      "dead": 57
+      "dead": 56
     },
     "kevy-seg": {
       "regions": 1210,
@@ -147,7 +147,7 @@
     },
     "kevy-store": {
       "regions": 19169,
-      "dead": 1489
+      "dead": 1491
     },
     "kevy-sys": {
       "regions": 730,
@@ -721,7 +721,7 @@
     "::resolve::": 17,
     "::resolve_block_argv::": 4,
     "::resolve_clauses": 3,
-    "::resolve_xadd_id": 3,
+    "::resolve_xadd_id": 2,
     "::restart": 11,
     "::revive_node": 7,
     "::revrange": 5,
@@ -1030,7 +1030,7 @@
     "<kevy_rt::shard::Shard>::build_zalgebra_store::": 4,
     "<kevy_rt::shard::Shard>::build_zintercard::": 4,
     "<kevy_rt::shard::Shard>::cancel_xshard_on_close": 2,
-    "<kevy_rt::shard::Shard>::check_repl_ack_waiters": 48,
+    "<kevy_rt::shard::Shard>::check_repl_ack_waiters": 53,
     "<kevy_rt::shard::Shard>::check_repl_apply_waiters": 28,
     "<kevy_rt::shard::Shard>::check_tee_overrun": 27,
     "<kevy_rt::shard::Shard>::client_getname::": 37,
@@ -1041,7 +1041,7 @@
     "<kevy_rt::shard::Shard>::commit_rewrite_done": 17,
     "<kevy_rt::shard::Shard>::conn_readable": 7,
     "<kevy_rt::shard::Shard>::deliver_block": 2,
-    "<kevy_rt::shard::Shard>::deliver_pmessages": 2,
+    "<kevy_rt::shard::Shard>::deliver_pmessages": 3,
     "<kevy_rt::shard::Shard>::deliver_publish": 3,
     "<kevy_rt::shard::Shard>::deliver_publish_arc": 52,
     "<kevy_rt::shard::Shard>::deliver_publish_copy": 2,
@@ -1142,7 +1142,7 @@
     "<kevy_rt::shard::Shard>::park_blocked_xshard": 1,
     "<kevy_rt::shard::Shard>::park_dispatch::": 2,
     "<kevy_rt::shard::Shard>::park_if_held": 6,
-    "<kevy_rt::shard::Shard>::parse_replica_acks": 11,
+    "<kevy_rt::shard::Shard>::parse_replica_acks": 48,
     "<kevy_rt::shard::Shard>::post_write_housekeeping::": 3,
     "<kevy_rt::shard::Shard>::preallocate_exec_slots": 1,
     "<kevy_rt::shard::Shard>::prepare_uring_shard": 91,
@@ -1162,8 +1162,8 @@
     "<kevy_rt::shard::Shard>::repl_ack_count": 4,
     "<kevy_rt::shard::Shard>::repl_waiter_reply": 5,
     "<kevy_rt::shard::Shard>::replica_conn_is_live": 11,
-    "<kevy_rt::shard::Shard>::replica_io_failed": 1,
-    "<kevy_rt::shard::Shard>::replica_readable": 13,
+    "<kevy_rt::shard::Shard>::replica_io_failed": 8,
+    "<kevy_rt::shard::Shard>::replica_readable": 27,
     "<kevy_rt::shard::Shard>::replica_writable": 13,
     "<kevy_rt::shard::Shard>::replicas_brief": 29,
     "<kevy_rt::shard::Shard>::reply_feed_error": 13,
@@ -1173,7 +1173,7 @@
     "<kevy_rt::shard::Shard>::restore_serve_on_teardown": 9,
     "<kevy_rt::shard::Shard>::rewrite_aof_after_resync": 11,
     "<kevy_rt::shard::Shard>::rewrite_predicted_diverging": 3,
-    "<kevy_rt::shard::Shard>::run": 74,
+    "<kevy_rt::shard::Shard>::run": 79,
     "<kevy_rt::shard::Shard>::run_uring": 334,
     "<kevy_rt::shard::Shard>::run_uring::cold_path_hint": 2,
     "<kevy_rt::shard::Shard>::send_or_hold_response": 8,
@@ -1249,7 +1249,7 @@
     "<kevy_rt::uring_bigbulk_b2alt::ThreeSliceView as core::ops::index::Index>::index": 7,
     "<kevy_store::error::KevyError as core::convert::From>::from": 3,
     "<kevy_store::seg_map::SegMap>::all_unique": 6,
-    "<kevy_store::seg_map::SegMap>::rand_entry": 2,
+    "<kevy_store::seg_map::SegMap>::rand_entry": 4,
     "<kevy_store::seg_map::SegMap>::values": 5,
     "<kevy_tmpdir::TmpDir as core::convert::AsRef>::as_ref": 3,
     "Java_jp_golia_kevy_KevyNative_close": 3,
@@ -2112,8 +2112,9 @@
     "kevy_embedded::replay::parse_zadd_flags": 2,
     "kevy_embedded::replica_runner::drain_session": 4,
     "kevy_embedded::replica_runner::finish_snapshot": 1,
+    "kevy_embedded::replica_runner::run_loop": 6,
     "kevy_embedded::replica_runner::run_session": 1,
-    "kevy_embedded::replica_runner::sleep_interruptible": 9,
+    "kevy_embedded::replica_runner::sleep_interruptible": 15,
     "kevy_embedded::replica_runner::snapshot_event": 4,
     "kevy_embedded::replica_source::handshake_and_prepare": 3,
     "kevy_embedded::replica_source::next_frame_bytes": 3,
@@ -2448,7 +2449,7 @@
     "kevy_replicate::wire::parse_decimal": 2,
     "kevy_replicate::wire::parse_envelope_header": 2,
     "kevy_replicate::wire::parse_signed_decimal": 5,
-    "kevy_replicate::wire_snapshot::decode_replconf_ack": 7,
+    "kevy_replicate::wire_snapshot::decode_replconf_ack": 27,
     "kevy_replicate::wire_snapshot::decode_snapshot_chunk": 1,
     "kevy_replicate::wire_snapshot::decode_snapshot_marker": 1,
     "kevy_resp::fuzz::run_n": 5,
@@ -2819,6 +2820,7 @@
     "kevy_window::text::clean_stale": 17,
     "kevy_window::text::write_seg_file": 11
   },
+  "envelope_runs": 3,
   "history": [
     {
       "accepted": [
@@ -2969,6 +2971,12 @@
       ],
       "reason": "rustfmt across 752 files. LLVM coverage regions are keyed on source spans, so reformatting moves them: 26,852 dead of 164,801 immediately before, 26,867 of 164,819 after, coverage 83.81% -> 83.70%, both far above the 79.34% floor. The JOINED entries are functions split out of parents that already owned those regions (parse_leaf out of parse_tree, push_inline out of list_push_one, one_session out of run_loop); the GREW entries include install_signal_handlers, which this branch never edited. This refutes the roadmap's note that reformatting does not move the dead set.",
       "delta": 79
+    },
+    {
+      "envelope_over": 3,
+      "symbols": 2611,
+      "regions": 26969,
+      "reason": "Replacing a single-run baseline with the three-run envelope the roadmap asks for, taken at the moment it names: the first covgate runs on develop after the merge, so all three are the same code (9ec62051). They read 26,834 / 26,967 / 26,854 dead regions - a spread of 133 with nothing changed - and deadgate failed on two of the three against the single reading. SegMap::rand_entry samples randomly and covers 2 to 4 regions depending on the run; a baseline that says 'no worse than the worst of three' is the only one that means anything here. The single-run baseline it replaces was my error, recorded earlier the same day."
     }
   ]
 }

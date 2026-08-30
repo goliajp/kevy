@@ -2,16 +2,16 @@
   "corpus": "c1",
   "platform": "linux",
   "total_regions": 164819,
-  "dead_regions": 26867,
-  "llvm_per_instantiation_dead": 27861,
+  "dead_regions": 26854,
+  "llvm_per_instantiation_dead": 27837,
   "crates": {
     "kevy": {
       "regions": 29462,
-      "dead": 5310
+      "dead": 5305
     },
     "kevy-alloc": {
       "regions": 1694,
-      "dead": 119
+      "dead": 117
     },
     "kevy-bench": {
       "regions": 130,
@@ -127,7 +127,7 @@
     },
     "kevy-rt": {
       "regions": 16253,
-      "dead": 4772
+      "dead": 4766
     },
     "kevy-scalar": {
       "regions": 4388,
@@ -135,7 +135,7 @@
     },
     "kevy-scope": {
       "regions": 629,
-      "dead": 57
+      "dead": 56
     },
     "kevy-seg": {
       "regions": 1210,
@@ -147,7 +147,7 @@
     },
     "kevy-store": {
       "regions": 19169,
-      "dead": 1489
+      "dead": 1491
     },
     "kevy-sys": {
       "regions": 730,
@@ -529,7 +529,6 @@
     "::mark": 10,
     "::mask": 2,
     "::match_migrated": 15,
-    "::match_migrating": 1,
     "::matches_query_faceted": 1,
     "::materialize": 3,
     "::materialize_cold": 18,
@@ -721,7 +720,7 @@
     "::resolve::": 17,
     "::resolve_block_argv::": 4,
     "::resolve_clauses": 3,
-    "::resolve_xadd_id": 3,
+    "::resolve_xadd_id": 2,
     "::restart": 11,
     "::revive_node": 7,
     "::revrange": 5,
@@ -1203,8 +1202,8 @@
     "<kevy_rt::shard::Shard>::tick_blocked_timeouts": 1,
     "<kevy_rt::shard::Shard>::tick_persist": 1,
     "<kevy_rt::shard::Shard>::tick_replication_slots": 2,
-    "<kevy_rt::shard::Shard>::tick_replication_view": 13,
-    "<kevy_rt::shard::Shard>::tick_replication_watermark": 5,
+    "<kevy_rt::shard::Shard>::tick_replication_view": 9,
+    "<kevy_rt::shard::Shard>::tick_replication_watermark": 3,
     "<kevy_rt::shard::Shard>::tick_xshard_timeouts": 2,
     "<kevy_rt::shard::Shard>::trace_acksent_pending": 17,
     "<kevy_rt::shard::Shard>::trace_handshake": 20,
@@ -1249,7 +1248,7 @@
     "<kevy_rt::uring_bigbulk_b2alt::ThreeSliceView as core::ops::index::Index>::index": 7,
     "<kevy_store::error::KevyError as core::convert::From>::from": 3,
     "<kevy_store::seg_map::SegMap>::all_unique": 6,
-    "<kevy_store::seg_map::SegMap>::rand_entry": 2,
+    "<kevy_store::seg_map::SegMap>::rand_entry": 4,
     "<kevy_store::seg_map::SegMap>::values": 5,
     "<kevy_tmpdir::TmpDir as core::convert::AsRef>::as_ref": 3,
     "Java_jp_golia_kevy_KevyNative_close": 3,
@@ -1679,7 +1678,6 @@
     "kevy::replica_runner_events::drain_start": 1,
     "kevy::replica_runner_events::event_to_apply": 1,
     "kevy::replica_runner_events::gen_still_matches": 3,
-    "kevy::replica_runner_events::maybe_ack": 5,
     "kevy::replica_runner_routed::drain_client_routed": 59,
     "kevy::replica_runner_routed::route_event": 57,
     "kevy::replica_trace::trace_session_event": 10,
@@ -1734,7 +1732,7 @@
     "kevy_alloc::large::with_pool::": 1,
     "kevy_alloc::os::discard": 1,
     "kevy_alloc::os::map_aligned": 4,
-    "kevy_alloc::os::trim": 3,
+    "kevy_alloc::os::trim": 1,
     "kevy_alloc::os::unmap": 1,
     "kevy_alloc::segment::splice_foreign": 2,
     "kevy_bench::bench::": 1,
