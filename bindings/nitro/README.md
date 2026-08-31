@@ -81,8 +81,7 @@ append-log write per set:
 const kevy = createKevyNitroAt(FileSystem.documentDirectory + 'kevy')
 ```
 
-Perf/durability tradeoff (see `bench/PERF-DECOMP-2026-07-16-rn-mmkv-mitt.md`
-and `bench/PERF-FINDING-2026-07-15-mmap-aof-refuted.md` for the ground
+Perf/durability tradeoff (measured against MMKV on real hardware for the ground
 truth): in-memory `setData` (~35 ns FFI CPU, host) crushes MMKV but is
 ephemeral. Durable `setData` is gated by the **AOF-vs-mmap** axis, not the
 crossing — on real ext4 kevy's durable SET beats MMKV **3.97×** (buffered

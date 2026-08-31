@@ -90,8 +90,7 @@ fn backreference_matches_what_the_group_captured() {
 //
 // PostgreSQL may well differ, and if it does, so does spg — the engine is
 // byte-identical there. Pinned here as a regression guard on the CURRENT
-// behaviour rather than as a claim about the correct one; see
-// bench/FINDING-2026-08-28-a-backreference-to-an-unset-group.md. Replace
+// behaviour rather than as a claim about the correct one. Replace
 // with a PG oracle when one exists, in whichever direction it points.
 #[test]
 fn backreference_to_unmatched_group_matches_empty() {

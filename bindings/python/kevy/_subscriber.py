@@ -117,8 +117,7 @@ class Subscriber:
         raced the registration, and a lost message parks a blocking
         `recv_message()` forever — that is how the python conformance job
         hung for 3h46m in CI. See
-        bench/FINDING-2026-07-19-subscribe-returns-before-live.md.
-
+    
         Everything read while waiting is QUEUED, not consumed: a message
         for an already-subscribed channel can arrive before the ack for a
         new one, and dropping it would trade a race for a lost message.

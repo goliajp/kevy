@@ -285,7 +285,7 @@ from a script in [`bench/`](bench/).
 
 The same `GET -c 50 -P 16` face, four engines on one box — kevy at 6.99 M/s against each (median-of-5; method and per-engine cycle
 accounting in
-[`bench/PERF-VERDICT-V4-T9.md`](bench/PERF-VERDICT-V4-T9.md)):
+[`bench/REPORT.md`](bench/REPORT.md)):
 
 | Engine | kevy's lead |
 |---|---:|
@@ -299,8 +299,7 @@ and the reason is the ruler, not the engines. The earlier figures read
 quantized to multiples of its 250 ms sampling timer and therefore
 understated — unevenly, so the ratio moved too. Counting server-side
 removes the quantization; kevy's own number went UP (6.39 → 7.24 M/s)
-and every competitor's went up more. See
-[`bench/PERF-FINDING-2026-07-12-benchmark-250ms-quantization.md`](bench/PERF-FINDING-2026-07-12-benchmark-250ms-quantization.md).
+and every competitor's went up more.
 
 The pub/sub and embedded rows are from their own harnesses and were
 not part of this re-measurement.

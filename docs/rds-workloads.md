@@ -519,8 +519,6 @@ this engine gets faster with more cores; this one does not.
 
 **Use cursors.** `OFFSET` is there, it is not refused, and a deep one is
 the O(N) skip the rest of this table exists to keep out of your latency.
-Full measurement and the open policy question:
-`bench/FINDING-2026-08-05-offset-boundary-drift.md`.
 
 ## Sizing and operational deltas
 
@@ -548,8 +546,7 @@ GET 2.46×, SET 4.00×, INCR 2.86×, SADD 2.95×, HSET 2.17×, ZADD 1.78×,
 LPUSH 1.76× — 7/7 wins with the full replication/heartbeat pipeline
 landed. Some of these ratios are lower than the v3.18.0 figures they
 replace, because that run read `redis-benchmark`'s own rate, which is
-quantized low under `--threads`
-(`bench/PERF-FINDING-2026-07-12-benchmark-250ms-quantization.md`);
+quantized low under `--threads`;
 counting server-side raised every engine's number, the competitors'
 by more. Against
 a disk-first RDS on point reads the gap is larger still; the honest

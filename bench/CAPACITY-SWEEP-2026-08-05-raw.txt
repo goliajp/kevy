@@ -2,7 +2,6 @@
 # 4 KiB values, fixed 2 GB tiering budget, cold segments on NVMe.
 # Binary: release build of fix/idx-drift-on-multikey-writes.
 # ratio = cold_bytes / used_peak (the data:RAM actually ACHIEVED).
-# Read with bench/FINDING-2026-08-05-capacity-ceiling-sweep.md.
 
 # capacity-ceiling-sweep 2026-08-05T05:47:33Z
 # fixed budget 2GB, value 4096B, growing dataset

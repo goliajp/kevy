@@ -365,7 +365,6 @@ sleep "$DRAIN"  # drain the spill backlog, keep sampling
 # demotion alloc/free churn — reclaim-proof (malloc_trim /
 # MALLOC_ARENA_MAX measured no-ops) and inherent to a pure-Rust 0-dep
 # allocator; it is REPORTED as a fragmentation ratio, not gated. See
-# PERF-FINDING-2026-07-25-b6-rss-glibc-fragmentation.md.
 RSS_KB=$(sort -n "$RUNDIR/rss.samples" | tail -1); RSS_PEAK=$((${RSS_KB:-0} * 1024))
 PEAK_USED=$(sort -n "$RUNDIR/used.samples" | tail -1); PEAK_USED=${PEAK_USED:-0}
 CAP=$((B6_BUDGET * 105 / 100))

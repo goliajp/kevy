@@ -10,7 +10,7 @@
 //! touches, instead of the whole value. That turns the rc-soak's
 //! multi-second `Arc::make_mut` reactor stall on multi-GB single lists
 //! into a bounded ~one-segment clone (element-COW RFC under
-//! `.claude/rfcs/`).
+//! the element-COW RFC).
 //!
 //! Lists at or below [`SEG_PROMOTE`] keep the flat `Value::List`
 //! representation — the segment indirection is only paid where the

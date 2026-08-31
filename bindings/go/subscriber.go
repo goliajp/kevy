@@ -177,7 +177,6 @@ func (s *Subscriber) Hello3() (PubsubEvent, error) {
 // forever. Everything read while waiting is QUEUED, not consumed — a
 // message on an already-subscribed channel can legitimately arrive before
 // the ack for a new one — so the observable event stream is unchanged.
-// See bench/FINDING-2026-07-19-subscribe-returns-before-live.md.
 func (s *Subscriber) awaitAcks(n int, kind PubsubKind) error {
 	for seen := 0; seen < n; {
 		r, err := s.remote.readReply(context.Background())

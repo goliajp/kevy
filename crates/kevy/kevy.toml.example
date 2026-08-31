@@ -14,7 +14,7 @@
 
 [server]
 # IPv4 bind address. Anything outside 127.0.0.0/8 triggers a startup WARN
-# because kevy has no AUTH/TLS yet — see .claude/scope-decisions.md.
+# because kevy has no AUTH/TLS.
 bind     = "127.0.0.1"
 port     = 6004
 # 0 = auto-detect (CPU count via std::thread::available_parallelism).

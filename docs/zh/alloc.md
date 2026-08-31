@@ -10,7 +10,7 @@ cargo build --release -p kevy --features kevy-alloc
 
 ## 它买到什么
 
-在基准参考机（io_uring、8 shard）上的实测，负载细节见 `bench/FINDING-2026-08-07-balance-round-ra-rc.md`：
+在基准参考机（io_uring、8 shard）上的实测，测量夹具与协议见 `bench/REPORT.md`：
 
 - **碎片 / RSS**：长时间运行的高换手负载下，常驻内存约为活数据的 2.16 倍，对照 glibc 的 2.40 倍——稳态常驻足迹小约 10%，且分配换手越剧烈差距越大。
 - **容量余量**：更小、更可预测的足迹正是分层容量模型做预算的对象；在容量吃紧的部署里，分配器就是「装得下」与「开始换页」之间的差别。
@@ -23,7 +23,6 @@ cargo build --release -p kevy --features kevy-alloc
 - 这些饱和角上 sadd 约 −10~−16%、zadd 约 −13% 吞吐（hash 写除外——小的 hash 值在 store 里内联存放，只付 −0.2%）。
 - 分配不密集的角（GET/SET/INCR/LPUSH、cluster、RESP 兼容）定价在 −2~−6%；未饱和的服务器通常测不出任何差别——空闲余量把每调用成本吸收掉了。
 
-完整分解见 `bench/PERF-DECOMP-2026-08-08-zadd-sadd-alloc-tax-split.md`。
 
 ## 什么时候启用
 

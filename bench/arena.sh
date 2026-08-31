@@ -20,14 +20,13 @@
 #     it; at 8M and ~1.25s it was still 20% wide. Counting server-side
 #     removes it outright. Both engines expose the same counter, so the
 #     comparison stays like-for-like. See
-#     bench/PERF-FINDING-2026-07-12-benchmark-250ms-quantization.md.
 #   - competitor version recorded in the output header.
 #
 # Output: markdown table rows for bench/PERF-LEDGER.md.
 # Usage (lx64): bash bench/arena.sh <kevy-binary>
 set -u
 # ROOT: arena is the one documented exception to "bench scripts do not run
-# as root" (bench/INCIDENT-2026-07-perfgate-pkill-massacre.md, rule 4). It
+# as root" (hard rule 4). It
 # needs docker to run the competitors, docker on the bench box is root-only,
 # and rootless cannot substitute: `--cpuset-cpus` requires the cpuset
 # controller to be delegated to the user slice, and it is not (user slices

@@ -156,7 +156,7 @@ def run_load_b6():
     # trips a reactor flow-control wedge (the server backpressures its
     # recv while the client is mid-send, and neither side progresses —
     # reproducible on a PLAIN non-tiered server at ~16MB, orthogonal to
-    # tiering; see PERF-FINDING-2026-07-25-uring-deep-pipeline-wedge.md).
+    # tiering).
     # ~128KB in flight is a realistic bulk-load client and measures the
     # capacity behaviour B6 is actually about (demotion bounding RSS),
     # not that unrelated reactor bug.

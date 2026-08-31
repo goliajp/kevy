@@ -168,7 +168,7 @@ cold key ≈ 96 B (entry overhead) + key heap bytes     # value fully reclaimed
 
 ## ゲートの状態（正直の台帳）
 
-上記のうち機構についての主張はすべて、このツリーで走るテストとゲートに覆われています（透過性スイート、ティアリングつき永続化スイート、`bench/memgate.sh`、`bench/tiergate.sh`）。**envelope の数字**は専用ベンチマシン上の `bench/capacity-envelope.sh` で実測済みです——コールド読み取り p99、書き換え負荷下の vlog 空間増幅、容量比。数字はこのページと `bench/FINDING-2026-08-05-capacity-ceiling-sweep.md` にあります。
+上記のうち機構についての主張はすべて、このツリーで走るテストとゲートに覆われています（透過性スイート、ティアリングつき永続化スイート、`bench/memgate.sh`、`bench/tiergate.sh`）。**envelope の数字**は専用ベンチマシン上の `bench/capacity-envelope.sh` で実測済みです——コールド読み取り p99、書き換え負荷下の vlog 空間増幅、容量比。数字はこのページにあります。
 
 一方 `bench/tiergate.sh` は**まっさらなチェックアウトではそれらの行を保留のまま表示します**。これは矛盾ではなく設計です：ゲートが読むのはベンチマシンが産む結果ファイルであり、それを手渡されていないツリーは何も検証していないからです。envelope を走らせ、`bench/.capacity-envelope-results` を持ち帰り、`TIERGATE_RUN_ENVELOPE=1 bash bench/tiergate.sh` を実行すれば、行はこの段落ではなく証拠で緑になります。部分実行が専用の結果ファイルに書くのも同じ理由です——**行が黙って欠けた結果ファイルをゲートに渡してはいけません**。
 

@@ -25,7 +25,7 @@ set -u
 BIN=${1:?usage: textgate.sh <kevy-binary>}
 PORT=7052
 DIR=$(mktemp -d /tmp/kevy-textgate-XXXXXX)
-# The rule the repo already has (.claude/rule/hygiene.md): a gate script
+# The rule the repo already has: a gate script
 # traps its own cleanup. Without this an interrupted run leaks both the
 # server and $DIR.
 trap 'kill $SRV 2>/dev/null; wait $SRV 2>/dev/null; rm -rf "$DIR"' EXIT INT TERM

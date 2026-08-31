@@ -33,7 +33,6 @@
 #     calling instance spread "the dominant noise axis" was reading the
 #     ruler, not the box. These angles now take throughput from the server's
 #     own command counter over a wall window timed here, which has no grid.
-#     See bench/PERF-FINDING-2026-07-12-benchmark-250ms-quantization.md.
 #
 # Exit codes: 0 = PASS (or baseline updated), 1 = FAIL/regression, 2 = refused
 # (dirty box / missing tools / bad usage).
@@ -87,7 +86,7 @@ tiered_hotset_get tiered_hotset_set"
 # ---------- preflight: never measure on a dirty box ----------
 # A perf comparison of two userland binaries never legitimately needs the
 # ability to SIGTERM init. Running this as root is what turned a foot-gun
-# into three site outages (bench/INCIDENT-2026-07-perfgate-pkill-massacre.md,
+# into three site outages (
 # hard rule 4) — the privilege is the difference between "killed my own
 # processes" and "killed sshd". No override flag: an escape hatch here would
 # be used, and then it would be the default again.
