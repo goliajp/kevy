@@ -27,7 +27,12 @@ pub(crate) fn log_replay_summary(
     elapsed_ms: u128,
 ) {
     let display = path.display();
-    let dropped = total - pos;
+    // Saturating like replay.rs's other two consumers of this pair
+    // (`pos.min(total)` / `saturating_sub`): `total` is a snapshot of the
+    // file length at open, and a writer appending during replay walks
+    // `pos` past it. 6.2.1 panicked here in debug and printed a wrapped
+    // "trailing 18446744073709551607 bytes" in release (downstream report).
+    let dropped = total.saturating_sub(pos);
     match stop {
         ReplayStop::Clean => {
             eprintln!(
@@ -100,4 +105,31 @@ fn outran_warn(
          mid-append — a torn append leaves at most one incomplete record. \
          Turn on `replay_resync` to recover the good records behind it."
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::replay_walk::ReplayStop;
+
+    /// `pos > total` is a real state, not a bug in the caller: `stream_v2`
+    /// snapshots `total = metadata().len()` and then reads through a
+    /// `BufReader` — a writer appending to the same file during replay
+    /// hands the walker records past the snapshot. Both other consumers
+    /// of the pair already guard (`pos.min(total)`, `saturating_sub`);
+    /// this line panicked in debug and wrapped to ~1.8e19 in release
+    /// (reported downstream against 6.2.1).
+    #[test]
+    fn summary_survives_pos_past_total_on_every_stop() {
+        let p = std::path::Path::new("/nonexistent/grew-during-replay.aof");
+        let stops = [
+            ReplayStop::Clean,
+            ReplayStop::TruncatedTail,
+            ReplayStop::LengthOutranFile { claimed: 4, available: 1 },
+            ReplayStop::CorruptFrame("test".into()),
+        ];
+        for stop in stops {
+            log_replay_summary(p, 9, 27, 1, b"", stop, 0);
+        }
+    }
 }

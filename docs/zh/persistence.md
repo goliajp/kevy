@@ -259,6 +259,7 @@ store.evictions_total();        // total evicted by maxmemory
 | `aof-<id>.aof` | shard `<id>` 的在线 AOF。 |
 | `dump-<id>.rdb` | shard `<id>` 的二进制快照。 |
 | `shards.meta` | 记录的 shard 数量与路由方案。 |
+| `LOCK` | 咨询锁：一个目录同一时刻只属于一个活着的引擎。第一个引擎持有期间，第二次打开——无论同进程还是另一进程——都会被明确拒绝；释放后文件本身留在原地，空且无害（锁随进程由内核回收，不会变成陈锁）。 |
 | `dump-<id>.rdb.tmp` | 写出中的快照。确认陈旧后可安全删除。 |
 | `aof-<id>.aof.rewrite` | 进行中的 AOF 重写/重置。确认陈旧后可安全删除。 |
 | `dump-<id>.rdb.reshard` + `reshard.journal` | 进行中的 shard 布局迁移。下次启动向前滚完；journal 绝不能手工删除。 |

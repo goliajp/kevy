@@ -28,10 +28,10 @@ exclude = ["tests/wrap_parity.rs"]
 workspace = true
 
 [dependencies]
-kevy-embedded = { path = "../kevy-embedded", version = "6.2.1" }
-kevy-resp = { path = "../kevy-resp", version = "6.2.1" }
-kevy-resp-client = { path = "../kevy-resp-client", version = "6.2.1" }
-kevy-hash = { path = "../kevy-hash", version = "6.2.1" }
+kevy-embedded = { path = "../kevy-embedded", version = "6.2.2" }
+kevy-resp = { path = "../kevy-resp", version = "6.2.2" }
+kevy-resp-client = { path = "../kevy-resp-client", version = "6.2.2" }
+kevy-hash = { path = "../kevy-hash", version = "6.2.2" }
 
 [dev-dependencies]
 kevy-testnet = { path = "../kevy-testnet" }
@@ -39,5 +39,5 @@ kevy-testnet = { path = "../kevy-testnet" }
 # full kevy command set (same harness as crates/kevy/tests/*). Path-
 # only (no version) so publish strips them — mirrors kevy's own
 # dev-dependency on kevy-client; the normal-dep graph stays acyclic.
-kevy = { path = "../kevy", version = "6.2.1" }
-kevy-rt = { path = "../kevy-rt", version = "6.2.1" }
+kevy = { path = "../kevy", version = "6.2.2" }
+kevy-rt = { path = "../kevy-rt", version = "6.2.2" }

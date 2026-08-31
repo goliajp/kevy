@@ -23,6 +23,20 @@ pub(crate) struct Backbone {
     pub(crate) reaper_join: Option<std::thread::JoinHandle<()>>,
 }
 
+/// One engine per data dir: claim it before any file is touched. A dir
+/// already claimed — by this process or another — errors here instead
+/// of interleaving two writers' appends into one AOF
+/// ([`kevy_persist::DirLock`]; the two-magics corruption report).
+#[cfg(feature = "persist")]
+pub(crate) fn claim_dir(
+    config: &crate::config::Config,
+) -> KevyResult<Option<kevy_persist::DirLock>> {
+    Ok(match &config.data_dir {
+        Some(dir) => Some(kevy_persist::DirLock::acquire(dir)?),
+        None => None,
+    })
+}
+
 pub(crate) fn boot_backbone(config: &crate::config::Config) -> KevyResult<Backbone> {
     let (shards, open_report) = crate::shard::build_shards(config)?;
     let shards: Shards = Arc::new(shards);
@@ -150,6 +164,7 @@ pub(crate) fn build_guard(
     >,
     config: &crate::config::Config,
     #[cfg(feature = "index")] tables: &Arc<crate::ops_table::TableReg>,
+    #[cfg(feature = "persist")] dir_lock: Option<kevy_persist::DirLock>,
 ) -> Arc<crate::store_inner::DropGuard> {
     #[cfg(any(target_arch = "wasm32", not(feature = "replicate")))]
     let _ = config;
@@ -170,5 +185,7 @@ pub(crate) fn build_guard(
         },
         #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
         replica_source,
+        #[cfg(feature = "persist")]
+        _dir_lock: dir_lock,
     })
 }
