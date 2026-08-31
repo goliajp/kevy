@@ -9,7 +9,7 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
-kevy-sys = { path = "../kevy-sys", version = "6.2.1" }
+kevy-sys = { path = "../kevy-sys", version = "6.2.2" }
 
 [dev-dependencies]
-kevy-tmpdir = { path = "../kevy-tmpdir", version = "6.2.1" }
+kevy-tmpdir = { path = "../kevy-tmpdir", version = "6.2.2" }
