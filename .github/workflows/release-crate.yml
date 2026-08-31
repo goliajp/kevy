@@ -13,10 +13,12 @@ name: Release a single crate (reusable)
 #     workspace bump.
 #
 #   * release-<crate>.yml (this body) — per-crate, manually dispatched.
-#     Use this when a single crate ships an independent minor/patch
-#     (e.g. kevy-client v1.5.0) without touching the rest of the
-#     workspace. Tag scheme `<crate>-v<version>` keeps the tag
-#     namespace orthogonal to the workspace `vX.Y.Z` line.
+#     Use this to re-send ONE crate at the workspace version when the
+#     tag workflow failed to deliver it (rate limit, registry outage).
+#     It is not for a crate on a version line of its own: no crate has
+#     one since 6.2.1, and the alignment gate refuses a member that
+#     declares its own `version =`. Tag scheme `<crate>-v<version>`
+#     keeps the tag namespace orthogonal to the workspace `vX.Y.Z` line.
 #
 # Dispatch flow (per-crate):
 #   resolve version from Cargo.toml → refuse if `<crate>-v<version>`

@@ -1,23 +1,13 @@
 [package]
 name = "kevy-client"
 description = "Unified client for kevy — switch between in-process embedded and TCP server backends with a single URL."
-# Explicit, not workspace-inherited: kevy-client tracks its own version
-# (additive API growth is faster than the underlying server's). Minor
-# 1.6.0 adds Subscriber::recv_message — auto-skips SUBSCRIBE acks and
-# returns (channel, payload) directly. Minor 1.7.0 adds
-# Subscriber::events() / messages() borrowing iterators (sync wrapper —
-# kevy-client stays 0-deps so it's std::iter::Iterator, not
-# futures::Stream; async runtimes wrap via spawn_blocking) plus
-# Transaction::exec_typed() / exec_watched_typed() returning a typed
-# TransactionReplies cursor (next_int / next_bulk / next_ok /
-# next_array_of_bulks / expect_empty) so callers stop hand-matching
-# Reply variants out of EXEC's reply array. Patch 1.7.1 picks up the
-# workspace 1.4.2 chain + an internal split of `subscribe.rs` (no
-# API change — pure refactor under the 500-LOC house rule). Minor
-# 1.14.0 closes the wrap-parity gap vs the kevy 3.17 server surface:
-# blocking pops, hash field-TTL, zset algebra, IDX.*, FEED.*, and
-# non-atomic pipeline batching (see README's op-family matrix).
-version = "2.2.0"
+# Inherits the workspace version since 6.2.1. It used to keep its own 2.x
+# line on the theory that a client's API grows faster than the server's;
+# what that bought was three releases (6.0.0, 6.1.0, 6.2.0) in which this
+# manifest pinned its siblings at 6.x while crates.io still served a 2.2.0
+# that pinned them at ^5.0 — the publish loop saw "2.2.0 already exists"
+# and skipped it. One version for every crate, moved together, every time.
+version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
@@ -38,10 +28,10 @@ exclude = ["tests/wrap_parity.rs"]
 workspace = true
 
 [dependencies]
-kevy-embedded = { path = "../kevy-embedded", version = "6.2.0" }
-kevy-resp = { path = "../kevy-resp", version = "6.2.0" }
-kevy-resp-client = { path = "../kevy-resp-client", version = "6.2.0" }
-kevy-hash = { path = "../kevy-hash", version = "6.2.0" }
+kevy-embedded = { path = "../kevy-embedded", version = "6.2.1" }
+kevy-resp = { path = "../kevy-resp", version = "6.2.1" }
+kevy-resp-client = { path = "../kevy-resp-client", version = "6.2.1" }
+kevy-hash = { path = "../kevy-hash", version = "6.2.1" }
 
 [dev-dependencies]
 kevy-testnet = { path = "../kevy-testnet" }
@@ -49,5 +39,5 @@ kevy-testnet = { path = "../kevy-testnet" }
 # full kevy command set (same harness as crates/kevy/tests/*). Path-
 # only (no version) so publish strips them — mirrors kevy's own
 # dev-dependency on kevy-client; the normal-dep graph stays acyclic.
-kevy = { path = "../kevy", version = "6.2.0" }
-kevy-rt = { path = "../kevy-rt", version = "6.2.0" }
+kevy = { path = "../kevy", version = "6.2.1" }
+kevy-rt = { path = "../kevy-rt", version = "6.2.1" }

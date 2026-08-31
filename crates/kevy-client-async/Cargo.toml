@@ -1,9 +1,10 @@
 [package]
 name = "kevy-client-async"
 description = "Async client for kevy — runtime-agnostic core with feature-gated tokio / smol / async-std transports; mirrors the blocking kevy-client surface."
-# Explicit, not workspace-inherited: kevy-client-async tracks its own
-# version. v1.0.0 = T4.x Phase-4 first cut (mirror + pipeline-first).
-version = "2.2.0"
+# Inherits the workspace version since 6.2.1, for the reason given in
+# kevy-client's manifest: the two rode a 2.x line of their own and were
+# never republished when their pins moved to 6.x.
+version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
@@ -30,12 +31,12 @@ workspace = true
 # Pure kevy-* deps. `version` is required for crates.io publish even
 # when `path` is set — cargo strips the path on publish and the
 # version is what crates.io uses to resolve.
-kevy-resp = { path = "../kevy-resp", version = "6.2.0" }
-kevy-hash = { path = "../kevy-hash", version = "6.2.0" }
+kevy-resp = { path = "../kevy-resp", version = "6.2.1" }
+kevy-hash = { path = "../kevy-hash", version = "6.2.1" }
 # URL parsing + the pubsub frame vocabulary live in kevy-resp-client
 # (the canonical client-shared pieces); only those pure modules are
 # used — the blocking TCP client itself is not touched here.
-kevy-resp-client = { path = "../kevy-resp-client", version = "6.2.0" }
+kevy-resp-client = { path = "../kevy-resp-client", version = "6.2.1" }
 
 # Phase 4 tasks T4.5/T4.6/T4.7 add the runtime deps with their inline
 # `# EXEMPTION — see feedback-pure-rust-no-c-principle.md` comments.
@@ -70,7 +71,7 @@ smol = { version = "2" }
 async-std = { version = "1", features = ["attributes"] }
 # T4.23 benchmark vs the blocking client. Workspace path, no
 # crates.io dep — blocking client is itself a 0-dep crate.
-kevy-client = { path = "../kevy-client", version = "2.2.0" }
+kevy-client = { path = "../kevy-client", version = "6.2.1" }
 
 [features]
 # `default = ["tokio"]` is a dev convenience so `cargo test --workspace`

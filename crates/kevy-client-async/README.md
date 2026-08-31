@@ -21,7 +21,7 @@ Pick exactly one runtime feature:
 
 ```toml
 [dependencies]
-kevy-client-async = { version = "1", features = ["tokio"] }
+kevy-client-async = { version = "6", features = ["tokio"] }
 # or "smol", or "async-std"
 ```
 
