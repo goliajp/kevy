@@ -19,7 +19,7 @@
 | `kevy-wasm` / `@goliapkg/kevy`（npm） | —— | 4.0.0 | 4.0 新增——见 [wasm.md](wasm.md) |
 | 基础设施 crate（`kevy-store`、`kevy-rt`……） | 3.18.x | 4.0.0 | 跟随工作区版本 |
 
-`kevy-client` 与 `kevy-client-async` **不在**工作区的版本线上：它们发的是 **2.0.0**，不是 4.0.0。`cargo add kevy-client` 解析到 2.x 就是当前版本，不是过期版本。
+`kevy-client` 与 `kevy-client-async` **不在**工作区的版本线上：它们发的是 **2.0.0**，不是 4.0.0。`cargo add kevy-client` 解析到 2.x 就是当前版本，不是过期版本。（到 6.2.1 为止：自那时起两个客户端改为跟随工作区版本，写成 `"2"` 的依赖会解析到基于 5.x 引擎构建的客户端——见 [upgrading-6.2.0-to-6.2.1.md](upgrading-6.2.0-to-6.2.1.md)。）
 
 ## 什么是自动兼容的
 

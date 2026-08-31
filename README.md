@@ -117,7 +117,7 @@ go get github.com/goliajp/kevy-go/v6             # Go
 ```
 ```xml
 <dependency>                                     <!-- Java -->
-  <groupId>jp.golia</groupId><artifactId>kevy</artifactId><version>6.2.0</version>
+  <groupId>jp.golia</groupId><artifactId>kevy</artifactId><version>6.2.1</version>
 </dependency>
 ```
 
@@ -355,8 +355,8 @@ All run unmodified against a default `kevy --port 6379` instance.
 |---|---|
 | [`kevy`](crates/kevy) | The server binary and library entry-point |
 | [`kevy-embedded`](crates/kevy-embedded) | In-process KV with the Redis-shaped Rust API |
-| [`kevy-client`](crates/kevy-client) | Blocking RESP client; URL facade for server or in-process backend — **its own version line (2.x), not the workspace's 4.x** |
-| [`kevy-client-async`](crates/kevy-client-async) | Async mirror of `kevy-client` for tokio / smol / async-std — **2.x, same line as `kevy-client`** |
+| [`kevy-client`](crates/kevy-client) | Blocking RESP client; URL facade for server or in-process backend — **carries the workspace version since 6.2.1** (was a 2.x line of its own; see [docs/upgrading-6.2.0-to-6.2.1.md](docs/upgrading-6.2.0-to-6.2.1.md)) |
+| [`kevy-client-async`](crates/kevy-client-async) | Async mirror of `kevy-client` for tokio / smol / async-std — **workspace version since 6.2.1**, like `kevy-client` |
 | [`kevy-cluster-rw`](crates/kevy-cluster-rw) | Primary-write / replica-read client wrapper |
 | [`kevy-cli`](crates/kevy-cli) | Operator CLI: backup, restore, smoke tests |
 | [`kevy-config`](crates/kevy-config) | TOML config schema with CLI/env/file precedence |

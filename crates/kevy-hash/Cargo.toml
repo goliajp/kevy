@@ -28,4 +28,4 @@ workspace = true
 [dependencies]
 
 [dev-dependencies]
-kevy-bench = { path = "../kevy-bench", version = "6.2.0" }
+kevy-bench = { path = "../kevy-bench", version = "6.2.1" }

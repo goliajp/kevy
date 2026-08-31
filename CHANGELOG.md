@@ -1,5 +1,52 @@
 # Changelog
 
+## 6.2.1 — the two crates that were published without ever being sent
+
+A user pointed out that `kevy-client` on crates.io still asked for
+`kevy-embedded ^5.0`. They were right, and the report understated it.
+
+### What was wrong
+
+`kevy-client` and `kevy-client-async` kept a version line of their own —
+2.x, on the theory that a client's API grows at its own pace. When the
+workspace went to 6.0.0 their manifests moved with it: every sibling pin
+in the tree read `6.0.0`, then `6.1.0`, then `6.2.0`. Their own number
+stayed at 2.2.0, because nothing about *their* API had changed.
+
+`cargo publish` refuses a version that already exists, and the release
+workflow treated that refusal as "already done". It was already done —
+on 2026-08-10, with pins at `^5.0`. So for three releases the tree
+described a client that drove a 6.x engine, and the world could only
+install one that resolved to 5.4.1. Every gate passed. Every gate read
+the tree, and the tree agreed with itself.
+
+### What changes
+
+**No crate has a version of its own any more.** Every workspace member
+inherits the workspace version and a bump moves all of them — the two
+clients, and three others (`kevy-embedded`, `kevy-tmpdir`, `kevy-wasm`)
+that declared the workspace number explicitly rather than inheriting it,
+which is the same arrangement one forgotten edit away.
+
+`kevy-client` and `kevy-client-async` therefore go from 2.2.0 to 6.2.1.
+The API is the 2.2.0 API; what moves is the number, so that
+`cargo add kevy-client` fetches a client whose siblings are the engine
+this changelog describes. A dependency written as `kevy-client = "2"`
+keeps resolving to 2.2.0 and the 5.4.1 engine — change it to `"6"`.
+
+### Three gates that now ask the world
+
+- `tools/check_version_alignment.py` refuses a member of `crates/` that
+  declares its own `version =`. Inheritance is the only form a bump
+  cannot leave behind.
+- The publish loop no longer takes "already exists" at its word. Before
+  it skips a crate it compares the manifest crates.io holds under that
+  number with the one the tree would upload — every dependency's name,
+  requirement and kind — and fails the release when they differ. The
+  comparison is `tools/check_published_manifest.py <crate> <version>`.
+- `tools/check_channels_published.py` runs the same comparison on every
+  crate door. On 6.2.0 it now reports 54 of 56 doors, naming the two.
+
 ## 6.2.0 — a sorted set stopped rewriting an index it had not changed
 
 One behaviour changes, one command gets substantially faster, and every
