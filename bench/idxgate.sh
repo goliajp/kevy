@@ -125,7 +125,7 @@ print(f"idxgate: 1M-row build ready in {time.time()-t0:.1f}s")
 # ---- clamp 1: MEDIAN-CONNECTION p99 < 2ms over 6 fresh conns ----
 # A known per-connection mode (accept/RSS placement) gives ~1-in-N
 # conns a constant ~2ms tail at this scale — see
-# bench/PERF-FINDING-2026-07-04-idxquery-conn-tail.md. The gate
+# The gate
 # measures the median connection's experience; the max is reported
 # as the finding's live signal.
 import random

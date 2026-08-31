@@ -1,10 +1,9 @@
 //! Background-I/O thread — the orthodox valkey `bio.c` model in pure Rust.
 //!
-//! **Why this exists** (architecture decision recorded in
-//! `bench/V125-DECISIONS-PENDING.md`):
+//! **Why this exists**:
 //!
 //! The 10 KB SET tail max sat at 130-160 ms, isolated by
-//! decomposition (`v125-deco-axis-i-c50-10kb.md` S09/S16) to the
+//! decomposition to the
 //! synchronous `Drop` of overwritten `Value::ArcBulk(Arc<[u8]>)` — when the
 //! Arc refcount hits zero, `Box::<[u8]>::drop` of a 10 KB jemalloc large-class
 //! slot can stall on `madvise`/`munmap` for tens to hundreds of microseconds
@@ -12,7 +11,7 @@
 //! identically via `lazyfree.c` — the dict overwrite enqueues the old
 //! `robj` to a bio thread instead of `free()`-ing inline.
 //!
-//! An earlier attempt (reverted; see `bench/V125-AXIS-I-LATENCY.md`) tried
+//! An earlier attempt (reverted) tried
 //! deferring drops to a per-shard `pending_drops: Vec<Value>` drained after
 //! `flush_conn`. Measured finding: that's WORSE (p999 +144 µs / 1 spike 64 ms),
 //! because single-threaded deferred bunching converts the steady-state inline
@@ -53,8 +52,7 @@
 //! send per shard-flush, amortising the per-send atomic + cross-
 //! thread cacheline cost across N drops). The follow-up uses are
 //! wired by promoting this to a `BioWork` enum here; the per-shard
-//! `BioSender` clone is already in place. Candidates (from
-//! `bench/V125-DECISIONS-PENDING.md` A.3):
+//! `BioSender` clone is already in place. Candidates:
 //! - `Save { view, snap_path, … }` — migrate `start_bg_save` off the
 //!   per-shard `PersistWorker` mpsc onto this thread to consolidate
 //!   resource use (the orthodox valkey model: one bio thread total).
@@ -87,8 +85,8 @@ use std::thread;
 /// `PersistWorker`, `Fsync` off-thread for `appendfsync=always` — will
 /// replace this with a `BioWork` enum carrying both `DropBatch(Vec<…>)`
 /// and a `Save{…}` variant; the `BioDropSender` type alias on
-/// `kevy-store` will then re-shape to `Sender<BioWork>`. Per
-/// `bench/V125-DECISIONS-PENDING.md` A.3, those follow-ups share the
+/// `kevy-store` will then re-shape to `Sender<BioWork>`. Those
+/// follow-ups share the
 /// same single-thread B2 topology, so the call-site plumbing established
 /// here (sender clone per shard, drop-on-shutdown channel close, join
 /// on the held handle) is reused unchanged.

@@ -91,7 +91,7 @@ class Db {
   get(key) {
     // Scalar lane when available (Bun and Node — kevy-napi ships get/set as of
     // #27): skips the structural RESP-framing floor (~575 ns even at 16B; see
-    // bench/PERF-FINDING-2026-07-16-embedded-get-scalar-vs-resp.md — that doc's
+    // The embedded scalar-vs-RESP measurement — that measurement's
     // 2.0-2.6× is a Go-host microbench, the JS-runtime FFI overhead profile
     // differs, so re-measure on a JS bench before claiming a speedup).
     if (this.#raw.getScalar) {

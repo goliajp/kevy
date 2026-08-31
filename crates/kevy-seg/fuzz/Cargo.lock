@@ -55,7 +55,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-seg"
-version = "6.2.0"
+version = "6.2.1"
 dependencies = [
  "kevy-sys",
 ]
@@ -70,7 +70,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-sys"
-version = "6.2.0"
+version = "6.2.1"
 
 [[package]]
 name = "libc"

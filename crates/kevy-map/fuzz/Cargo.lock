@@ -55,15 +55,15 @@ dependencies = [
 
 [[package]]
 name = "kevy-hash"
-version = "6.2.0"
+version = "6.2.1"
 
 [[package]]
 name = "kevy-madvise"
-version = "6.2.0"
+version = "6.2.1"
 
 [[package]]
 name = "kevy-map"
-version = "6.2.0"
+version = "6.2.1"
 dependencies = [
  "kevy-hash",
  "kevy-madvise",

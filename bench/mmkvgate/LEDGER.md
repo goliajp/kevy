@@ -32,8 +32,7 @@ next rungs.
 > MMKV 11.84 µs/op — kevy 3.97× FASTER** (median of 3; kevy on EverySec,
 > the *more* durable setting). The sim's host-FS write path both inflated
 > kevy's `write()` and made MMKV's mmap look cheap. On real hardware kevy
-> beats MMKV on **both** GET and SET. See
-> `bench/PERF-FINDING-2026-07-15-mmap-aof-refuted.md`. The definitive
+> beats MMKV on **both** GET and SET. The definitive
 > *mobile* number still needs a real-device run, but the sim is the outlier
 > and must not drive decisions.
 
@@ -166,7 +165,7 @@ only because it **overwrites a small resident region** (hot pages, no
 growth); kevy's AOF is an **unbounded append log**, so mmap is the wrong
 tool. The SET gap is architectural (overwrite-in-place store vs append
 log), not an mmap trick — full write-up:
-`bench/PERF-FINDING-2026-07-15-mmap-aof-refuted.md`. Do not merge; the
+Do not merge; the
 BufWriter backend stays. Next honest step for the SET gap: a real-device
 mmkvgate (the sim SET numbers are inflated by its host-FS write path — on
 real ext4 the buffered SET 4 KB is already ~3 µs/op, near MMKV's ~3.5 µs).

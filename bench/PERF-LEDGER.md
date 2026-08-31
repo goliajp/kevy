@@ -27,13 +27,11 @@
 > `bench/perfgate.sh` 与 `bench/arena.sh` 已改为**从服务端自己的命令计数器
 > 上、在稳态窗口里读吞吐**(两个引擎的 `INFO total_commands_processed` 同义,
 > 竞品对比依然成立)。**下面的表在用新测法重跑之前,只应被当作"方向正确、
-> 精度不可信"来读。** 详见
-> `PERF-FINDING-2026-07-12-benchmark-250ms-quantization.md`。
+> 精度不可信"来读。**
 
 **状态:v3.8.0 定稿(2026-07-05)**。复测节奏:每个 release 前全矩阵
 重跑;对标物升级(valkey / redis-stack 新 GA)= gap 表重测。
-裸面 perfgate ratchet 的盒级环境阻塞档案见
-PERF-FINDING-2026-07-05-tails-closure.md(floor 不下调,盒恢复复验)。
+裸面 perfgate ratchet 的盒级环境阻塞:floor 不下调,盒恢复后复验。
 
 初版:2026-07-05(v3.3 基线 arena)。对标物版本入账;gap 规则:
 差值 ≤ max(两侧 stdev) = NOISE。协议:lx64,隔离(单服务器占同核),
@@ -44,7 +42,7 @@ host loopback,client 绑异核,median-of-5 + sample stdev。
 **协议**:`-c 50 -P 16`,server 绑核 0-7 / client 绑核 8-15,四引擎逐个独占同一批核,
 median-of-5。**吞吐从服务端自己的 `INFO total_commands_processed` 上、在 1s ramp 之后的
 3s 稳态窗口里读**,不再读 redis-benchmark 那个被 250ms 定时器向上取整的 rps
-(四个引擎同一把尺;机制见 `PERF-FINDING-2026-07-12-benchmark-250ms-quantization.md`)。
+(四个引擎同一把尺)。
 
 | 命令 | kevy 4.0 | valkey 9.1 | redis 8 | dragonfly | vs valkey | vs redis 8 | vs dragonfly |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -185,13 +183,11 @@ arena 同协议 ×3 轮独立 fresh instance(每轮 median-of-5)收口:
 
 **判定:非回归,观察项关闭。**(⚠️ 2026-07-12 更正:结论对,**理由错**。
 所谓"instance 级双峰"是 redis-benchmark 的 250ms 计时量化 —— 2.91M→2.7530s、
-3.20M→2.5030s,相邻两格。不是 page placement,不是 IRQ 运气。见
-`PERF-FINDING-2026-07-12-benchmark-250ms-quantization.md`。) 同一 binary 三轮
+3.20M→2.5030s,相邻两格。不是 page placement,不是 IRQ 运气。) 同一 binary 三轮
 fresh instance 在 2.91M / 3.20M 两个模式间跳——round 2 逐位复现
 v3.17.0 的 3.20M,round 1/3 复现 v3.18.0 的 2.91M。两个"版本值"
 都是同一 instance 分布的两个峰(page placement / IRQ luck;
-legacy8sh SET 双峰同款,见 PERF-FINDING-2026-07-03-legacy8sh-set-
-bimodal.md)。v3.17→v3.18 的 -9% 是单轮 arena 各采到一个峰的读数
+legacy8sh SET 双峰同款)。v3.17→v3.18 的 -9% 是单轮 arena 各采到一个峰的读数
 差,不是代码回归。vs valkey 1.64-1.80× 领先不变。
 
 后续盯法:LPUSH(连同 INCR/SADD/HSET/ZADD)自本轮起进 perfgate
@@ -212,7 +208,6 @@ floor = 基线 ×0.92 吸收双峰带宽。
 > **2026-07-12 顺序平衡 + 修好尺子后复测**:legacy SET **−0.23%**、
 > legacy GET **+0.98%**、pinned_cluster_set **−1.0%**,全部落在样本方差
 > (3.5–5.6%)之内。**没有回归。** 下面的两段 bisect 是在给一个假象拟合机制。
-> 详见 `PERF-FINDING-2026-07-12-benchmark-250ms-quantization.md`。
 
 perfgate 新增 legacy 拓扑 5 角(INCR/SADD/HSET/LPUSH/ZADD,
 redis-benchmark stock -t,同 get/set N=30M ×3 instances);
@@ -229,8 +224,7 @@ baseline → 按 Pre-Phase-A gate 做同盒同小时 A/B(vs v3.18.0 tag
 
 两段回归:T1a 实例化/K-108 段 + K-110 内核判决段。arena -P16 口径
 不显(SET 6.39M 持平 v3.18)——深管线(P256)才暴露的 per-op 成本。
-细账 + baseline 处理纪律见
-PERF-FINDING-2026-07-11-v4-set-write-path-regression.md。
+细账 + baseline 处理纪律照旧。
 
 baseline 合成(不为绿灯改账):legacy_8sh_set 重录为 v3.18.0 同小时
 真值 9,210,970(消陈旧双峰误报,保留回归红灯);legacy_8sh_get
@@ -603,7 +597,7 @@ member at one score forever, so it exercises exactly that path. Measured
 separately against itself before the release, on sets the arena does not
 reach, the same guard reads +52.8% at eight thousand members and +55.3% at
 two hundred thousand — see the A/B entry below and
-`bench/PERF-DECOMP-2026-08-30-zadd-arena-cell.md`.
+the arena decomposition.
 
 ### What did not move, and one that did the other way
 
@@ -678,7 +672,7 @@ Five of the other six arena cells read NOISE against the same A/B; GET reads
 
 Full decomposition, including the ablation that priced this before it was
 written and the one line of its prediction that was wrong:
-`bench/PERF-DECOMP-2026-08-30-zadd-arena-cell.md`.
+the arena decomposition.
 
 ## arena bare face — 2026-08-27 — kevy 6.0.0
 
@@ -825,7 +819,7 @@ to 0-7, load generator to 8-15, one engine at a time, host loopback.
 read from each server's own `total_commands_processed` over a timed 3.0 s
 window after a 1.0 s ramp — not from redis-benchmark's reported rate,
 which quantises to 250 ms buckets under `--threads` and understates every
-engine (bench/PERF-FINDING-2026-07-12-benchmark-250ms-quantization.md).
+engine.
 
 Competitors: `valkey/valkey:9.1` (reports v=9.1.1), `redis:8`,
 `docker.dragonflydb.io/dragonflydb/dragonfly`, each with persistence off
@@ -868,7 +862,7 @@ to 0-7, load generator to 8-15, one engine at a time, host loopback.
 read from each server's own `total_commands_processed` over a timed 3.0 s
 window after a 1.0 s ramp — not from redis-benchmark's reported rate,
 which quantises to 250 ms buckets under `--threads` and understates every
-engine (bench/PERF-FINDING-2026-07-12-benchmark-250ms-quantization.md).
+engine.
 
 Competitors: `valkey/valkey:9.1` (reports v=9.1.1), `redis:8`,
 `docker.dragonflydb.io/dragonflydb/dragonfly`, each with persistence off

@@ -4,7 +4,7 @@
 # Target: Axis I 10 KB SET tail max — pre-attack ~130-160 ms (B.4 agent
 # report). After attack, single-threaded sync Drop of overwritten
 # Value::ArcBulk is moved to a global bio thread (B2 architecture,
-# per bench/V125-DECISIONS-PENDING.md).
+# per the recorded decision).
 #
 # Sanity: matrix-style standard scenarios — must NOT regress.
 #

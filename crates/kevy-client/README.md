@@ -25,6 +25,10 @@ assert_eq!(conn.get(b"hello")?, Some(b"world".to_vec()));
 cargo add kevy-client
 ```
 
+Since 6.2.1 `kevy-client` carries the same version as the engine it
+drives. A requirement written as `kevy-client = "2"` keeps resolving
+to 2.2.0, which pins the 5.x engine — write `"6"`.
+
 ## URL backends
 
 | URL | Backend |
@@ -180,7 +184,7 @@ match conn {
 # }
 ```
 
-## Wrap coverage matrix (kevy server 4.x × kevy-client 2.0.0)
+## Wrap coverage matrix (kevy server × kevy-client, one version since 6.2.1)
 
 Status legend — **wrapped**: typed `Connection` methods; **partial**:
 the listed subset is wrapped, the rest is raw-only; **raw-only**: no

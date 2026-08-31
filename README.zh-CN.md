@@ -249,7 +249,7 @@ loader API 与 ABI 契约见 [docs/zh/wasm.md](docs/zh/wasm.md)；
 
 同一个 `GET -c 50 -P 16` 面，同一台机器上对打四个引擎——kevy
 以 7.24 M/s 分别对阵（median-of-5；方法与逐引擎的 cycle 记账见
-[`bench/PERF-VERDICT-V4-T9.md`](bench/PERF-VERDICT-V4-T9.md)）：
+[`bench/REPORT.md`](bench/REPORT.md)）：
 
 | 引擎 | kevy 领先 |
 |---|---:|
@@ -262,7 +262,6 @@ loader API 与 ABI 契约见 [docs/zh/wasm.md](docs/zh/wasm.md)；
 只能被自己的 250 ms 采样计时器量化，因此系统性偏低——而且各引擎
 偏低的程度不同，比值也就跟着失真。改成服务端计数后量化消失：kevy
 自己的数字反而**上升**（6.39 → 7.24 M/s），只是每个竞品上升得更多。
-见 [`bench/PERF-FINDING-2026-07-12-benchmark-250ms-quantization.md`](bench/PERF-FINDING-2026-07-12-benchmark-250ms-quantization.md)。
 
 Pub/sub 与嵌入式两行来自各自的测试台，不在本次重测范围内。
 

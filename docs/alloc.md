@@ -13,8 +13,8 @@ no runtime toggle. The default build does not carry it.
 
 ## What it buys
 
-Measured on the reference bench box (io_uring, 8-shard), workload details in
-`bench/FINDING-2026-08-07-balance-round-ra-rc.md`:
+Measured on the reference bench box (io_uring, 8-shard); the harness and
+protocol are in `bench/REPORT.md`:
 
 - **Fragmentation / RSS**: long-running churn workloads hold ~2.16× the live
   data size in RSS vs glibc's 2.40× — roughly a 10 % smaller resident
@@ -38,7 +38,6 @@ call vs glibc, which shows up as:
   compat) price at −2~−6 %; unsaturated servers typically see no measurable
   difference at all — idle headroom absorbs the per-call cost.
 
-Full decomposition: `bench/PERF-DECOMP-2026-08-08-zadd-sadd-alloc-tax-split.md`.
 
 ## When to enable it
 

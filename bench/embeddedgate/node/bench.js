@@ -1,7 +1,7 @@
 // embeddedgate — Node track. kevy-node scalar get/set vs better-sqlite3
 // (synchronous, the real bar) and classic-level (asynchronous, a labeled
 // cross-model reference — NOT a latency peer). See
-// .claude/rfcs/2026-07-23-v4-embedded-bench.md for the fairness rules this
+// bench/EMBEDDED-LEDGER.md for the fairness rules this
 // harness encodes: durability tiers compared within-tier only, sync and
 // async never in the same table, cold-single-op AND amortized both reported,
 // value-size sweep, each side's durability config printed for audit.

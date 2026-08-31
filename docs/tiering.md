@@ -382,8 +382,7 @@ Everything above that is a mechanism claim is covered by tests and
 gates that run in this tree (the transparency suite, the tiered
 persistence suite, `bench/memgate.sh`, `bench/tiergate.sh`). The **envelope numbers** are measured on the dedicated bench box by
 `bench/capacity-envelope.sh`: cold-read p99, vlog space amplification
-under churn, and the capacity ratio all have numbers on this page and
-in `bench/FINDING-2026-08-05-capacity-ceiling-sweep.md`.
+under churn, and the capacity ratio all have numbers on this page.
 
 `bench/tiergate.sh` **in a fresh checkout still shows those lines
 pending**, and that is the design rather than a contradiction: the gate

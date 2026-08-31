@@ -18,6 +18,41 @@ index-catalog.meta
 # Claude Code workspace — kept entirely local, not part of the public repo.
 .claude/
 
+# Development-collaboration documents. This repository's git surface is what
+# a USER needs; how the work is organised is not part of that. They stay on
+# disk — they are just not published.
+/CONTRIBUTING.md
+/GIT-FLOW.md
+
+# Internal process records: lab notebooks for a single investigation —
+# what was predicted, what the instrument actually said, what got reverted.
+# They are how the work was done, not something a user of kevy needs, and a
+# removal that is not backed by a rule here survives exactly until the next
+# `git add -A`. The published evidence surface stays: the ledgers the READMEs
+# and the site quote, the atlases the gates read, and bench/REPORT.md.
+bench/FINDING-*.md
+bench/PERF-FINDING-*.md
+bench/PERF-DECOMP-*.md
+bench/PERF-PROFILE-*.md
+bench/PERF-PROBE-*.md
+bench/PERF-ATTACK-LOG-*.md
+bench/PERF-VERDICT-*.md
+bench/AUDIT-*.md
+bench/INCIDENT-*.md
+bench/MATRIX-*.md
+bench/matrix-results-*.md
+bench/PGCOMPARE-*.md
+bench/R4A-*.md
+bench/V125-*.md
+bench/v125-precision-*.md
+bench/LESSONS-FROM-VALKEY-REDIS.md
+bench/.flake-archive/
+
+# Maintainer runbook and a resolved internal publish form. The product
+# facts they carried live in bindings/go/README.md, which a user reads.
+/.github/workflows/RELEASE.md
+/bindings/go/PUBLISH-FORM.md
+
 # Node ecosystem pollution — kevy has no Node.js dependencies in
 # this repo. Any node_modules/ + package*.json here come from
 # ad-hoc ecosystem-compat tests that should never have been

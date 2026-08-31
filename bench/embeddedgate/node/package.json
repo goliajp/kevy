@@ -2,7 +2,7 @@
   "name": "kevy-embeddedgate-node",
   "private": true,
   "type": "module",
-  "description": "embeddedgate Node harness — kevy-node scalar vs better-sqlite3 (sync) / classic-level (async). See bench/EMBEDDED-LEDGER.md + .claude/rfcs/2026-07-23-v4-embedded-bench.md",
+  "description": "embeddedgate Node harness — kevy-node scalar vs better-sqlite3 (sync) / classic-level (async). See bench/EMBEDDED-LEDGER.md",
   "scripts": {
     "bench": "node bench.js"
   },

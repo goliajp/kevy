@@ -168,7 +168,7 @@ cold key ≈ 96 B (entry overhead) + key heap bytes     # value fully reclaimed
 
 ## 门禁状态（诚实账本）
 
-上文所有机制性主张都由本树中运行的测试和门禁覆盖（透明性套件、分层持久化套件、`bench/memgate.sh`、`bench/tiergate.sh`）。**envelope 数字**由专用基准机上的 `bench/capacity-envelope.sh` 实测：冷读 p99、写入翻涌下的 vlog 空间放大、容量比，本页与 `bench/FINDING-2026-08-05-capacity-ceiling-sweep.md` 都有数。
+上文所有机制性主张都由本树中运行的测试和门禁覆盖（透明性套件、分层持久化套件、`bench/memgate.sh`、`bench/tiergate.sh`）。**envelope 数字**由专用基准机上的 `bench/capacity-envelope.sh` 实测：冷读 p99、写入翻涌下的 vlog 空间放大、容量比，本页都有数。
 
 而 `bench/tiergate.sh` **在一份全新检出里仍然把那几行显示为待测**——这是设计而非自相矛盾：门禁消费的是基准机产出的结果文件，没拿到结果文件的树就是什么都没验证过。跑完 envelope、把 `bench/.capacity-envelope-results` 带回来、再 `TIERGATE_RUN_ENVELOPE=1 bash bench/tiergate.sh`，那几行才凭证据翻绿，而不是凭这段话。只跑一半会写进它自己的结果文件，理由相同：**绝不能把缺行的结果文件递给门禁**。
 

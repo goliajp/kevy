@@ -4,13 +4,13 @@
 # The arc exists because resident memory ran 2.24x the logical bound on
 # ~400 B values under demote/promote churn, and neither malloc_trim nor
 # MALLOC_ARENA_MAX moved it
-# (bench/PERF-FINDING-2026-07-25-b6-rss-glibc-fragmentation.md). This
+# This
 # runs that shape against an allocator-off and an allocator-on binary and
 # reports what each does to the ratio.
 #
 # It is deliberately narrow. The pub/sub A/B says the allocator costs
 # throughput on that path
-# (bench/PERF-FINDING-2026-07-26-header-free-costs-a-cache-line.md); this
+# this
 # is the other side of the trade, and nobody can weigh the two without
 # both numbers.
 #

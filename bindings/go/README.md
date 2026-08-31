@@ -11,7 +11,7 @@ engine. One import ships both faces of the [client contract](../../docs/client-c
   `kevy_embedded` build tag (see below). Same business code either way:
   switch backends by changing only the URL.
 
-This client tracks kevy **6.2.0**.
+This client tracks kevy **6.2.1**.
 
 ```bash
 go get github.com/goliajp/kevy-go/v6
@@ -19,7 +19,7 @@ go get github.com/goliajp/kevy-go/v6
 
 That module is generated from this directory and pushed on each release
 — Go has no registry, so an import path has to be a repository URL.
-Edit here, never there. See [PUBLISH-FORM.md](PUBLISH-FORM.md).
+Edit here, never there.
 
 ```go
 import (

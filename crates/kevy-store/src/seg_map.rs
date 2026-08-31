@@ -8,7 +8,7 @@
 //! (index + pointer arrays) plus ONLY the bucket it routes to —
 //! bounding the COW stall to one bucket (≤ [`BUCKET_SPLIT`] entries)
 //! instead of the whole value. The list twin is `list_seg.rs`; the
-//! design rationale lives in the element-COW RFC under `.claude/rfcs/`.
+//! design rationale lives in the element-COW RFC.
 //!
 //! Layout note: the directory holds bucket INDICES (`Vec<u32>`), and
 //! buckets live once each in a side vector — so an `Arc<Bucket>` is
