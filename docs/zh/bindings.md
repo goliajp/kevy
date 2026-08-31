@@ -15,18 +15,18 @@
 
 | 语言 | 安装 | 版本 |
 |---|---|---|
-| Rust | `cargo add kevy-embedded` | 6.2.1 |
-| Python | `pip install kevy` | 6.2.1 |
-| Go | `go get github.com/goliajp/kevy-go/v6` | 6.2.1 |
-| Java | Maven Central 上的 `jp.golia:kevy` | 6.2.1 |
-| Node / TypeScript | `npm i @goliapkg/kevy-ts` | 6.2.1 |
-| 浏览器（wasm） | `npm i @goliapkg/kevy` | 6.2.1 |
-| Flutter | `flutter pub add flutter_kevy` | 6.2.1 |
+| Rust | `cargo add kevy-embedded` | 6.2.2 |
+| Python | `pip install kevy` | 6.2.2 |
+| Go | `go get github.com/goliajp/kevy-go/v6` | 6.2.2 |
+| Java | Maven Central 上的 `jp.golia:kevy` | 6.2.2 |
+| Node / TypeScript | `npm i @goliapkg/kevy-ts` | 6.2.2 |
+| 浏览器（wasm） | `npm i @goliapkg/kevy` | 6.2.2 |
+| Flutter | `flutter pub add flutter_kevy` | 6.2.2 |
 
 ```xml
 <!-- Java，写在 pom.xml 里 -->
 <dependency>
-  <groupId>jp.golia</groupId><artifactId>kevy</artifactId><version>6.2.1</version>
+  <groupId>jp.golia</groupId><artifactId>kevy</artifactId><version>6.2.2</version>
 </dependency>
 ```
 

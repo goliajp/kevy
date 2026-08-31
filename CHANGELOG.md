@@ -1,5 +1,48 @@
 # Changelog
 
+## 6.2.2 — one directory, one engine
+
+A downstream integration suite let several tests open one persist
+directory at once and sent back two findings, with the bytes to prove
+them. Both are fixed; nothing else changes.
+
+### A second engine on a live directory is refused, not interleaved
+
+Nothing used to stop two `Store`s — same process or two processes —
+from owning one data directory. The second open appended its own
+`KEVYAOF2` magic into the first one's live AOF; the next replay read
+that magic as a record header and quarantined it, silently. The
+downstream report carried the corpse: two magics back to back.
+
+Every engine now claims its directory on open — `flock(LOCK_EX |
+LOCK_NB)` on `<dir>/LOCK`, a new file documented in the persistence
+chapter. The claim is advisory on purpose: the kernel releases it with
+the process, so a crash can never wedge a directory and there is no
+stale-pidfile heuristic to get wrong. A second open answers with an
+error naming the directory; a same-process double-open is caught too,
+because each `open` is its own file description. Sequential reopen —
+close, then open again — works exactly as before: the claim releases
+with the engine's last handle, after the final AOF flush. The server
+runtime takes the same claim before its shards spawn; a pure in-memory
+run claims nothing. On wasm32 the claim is a no-op — no second process
+exists to race.
+
+**If you deliberately opened one directory from two places, that now
+errors.** It was never safe; the error is the feature.
+
+### The replay summary no longer underflows when the file grew
+
+Replay snapshots the AOF's length at open and then walks the file. A
+writer appending during the walk hands the replayer records past the
+snapshot — and the summary line computed `total - pos` bare, where its
+two sibling consumers already guarded. Debug builds panicked at
+`replay_log.rs:30`; release builds printed a wrapped "trailing
+18446744073709551607 bytes". The subtraction now saturates, and a test
+drives every replay outcome through `pos > total` — it failed on the
+old line and passes on the new one. With the directory claim above,
+the two-engine route to that state is closed; the guard stays, because
+a growing file during replay is a state the format allows.
+
 ## 6.2.1 — the two crates that were published without ever being sent
 
 A user pointed out that `kevy-client` on crates.io still asked for

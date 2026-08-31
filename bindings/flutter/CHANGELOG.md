@@ -1,3 +1,10 @@
+## 6.2.2
+
+Tracks the kevy 6.2.2 engine. No API change in this door. The engine
+fix underneath: a persistence directory is now one engine's — a second
+open is refused instead of corrupting the first one's append-only log —
+and the replay summary survives a file that grew during replay.
+
 ## 6.2.1
 
 Tracks the kevy 6.2.1 engine. No API change in this door, and no change
