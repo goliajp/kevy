@@ -125,25 +125,23 @@ impl Store {
     }
 
     fn open_inner(config: Config) -> KevyResult<Self> {
+        #[cfg(feature = "persist")]
+        let dir_lock = crate::store_wire::claim_dir(&config)?;
         let bb = crate::store_wire::boot_backbone(&config)?;
-        let (shards, open_report) = (bb.shards, bb.open_report);
+        let (shards, open_report) = (bb.shards, Arc::new(bb.open_report));
         #[cfg(feature = "index")]
         let tables = bb.tables;
-        let (reaper_stop, reaper_join) = (bb.reaper_stop, bb.reaper_join);
         #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
         let (replica_runner, replica_source, feed) =
             crate::store_wire::wire_replication(&config, &shards)?;
         let blocker = crate::store_wire::wire_blocker(&shards);
         #[cfg(feature = "index")]
         let (indexes, views) = crate::store_wire::wire_registries(&shards);
-        let open_report = Arc::new(open_report);
-        // Guard construction (engine-lifetime state incl. the table
-        // registry — WeakStore::upgrade rebuilds from it) lives in
-        // `store_wire::build_guard`, split for the fn-length rule.
+        // Engine-lifetime state: `store_wire::build_guard` (fn-length rule).
         let guard = crate::store_wire::build_guard(
             &open_report,
-            reaper_stop,
-            reaper_join,
+            bb.reaper_stop,
+            bb.reaper_join,
             &shards,
             #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
             replica_runner,
@@ -154,6 +152,8 @@ impl Store {
             &config,
             #[cfg(feature = "index")]
             &tables,
+            #[cfg(feature = "persist")]
+            dir_lock,
         );
         let store = Store {
             shards,

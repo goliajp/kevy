@@ -48,7 +48,10 @@
 //! - You want a Redis-protocol TCP server → use the `kevy` crate's
 //!   [`serve`](https://docs.rs/kevy/latest/kevy/fn.serve.html) instead.
 //! - You need cross-process concurrency → kevy-embedded is single-process
-//!   (one mutex). Multi-process needs the network layer.
+//!   (one mutex). Multi-process needs the network layer. A persist dir is
+//!   one engine's: `Store::open` on a dir a live engine holds — in this
+//!   process or another — errors (`flock` on `<dir>/LOCK`) instead of
+//!   letting two writers interleave one AOF.
 //!
 //! # Locking & concurrency
 //!

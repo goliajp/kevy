@@ -45,6 +45,7 @@ mod aof_txn;
 mod aof_util;
 mod baseline;
 mod crc32c;
+mod dir_lock;
 mod dump_cache;
 pub mod feed_meta;
 pub mod layout;
@@ -82,6 +83,7 @@ pub use segmented::{SEGMENTED, segmented_argv, segmented_frame};
 /// (whose drive loops live in the callers — kevy-rt / kevy-embedded)
 /// and the snapshot loader stride identically.
 pub const REPLAY_DEMOTE_INTERVAL: u64 = 1024;
+pub use dir_lock::DirLock;
 pub use kevy_resp::{Argv, ArgvView};
 use kevy_store::Store;
 use kevy_store::Value;

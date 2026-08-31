@@ -6,7 +6,7 @@ in-process embedded engine (`mem://` / `file://`) or a remote RESP server
 synchronous and an async `Task` face. Same package also ships the raw
 embedded door (`Kevy.Embedded.KevyDb`, below). Pure Rust engine, no server.
 
-This document tracks kevy **6.2.1**.
+This document tracks kevy **6.2.2**.
 
 ```bash
 dotnet add package kevy
