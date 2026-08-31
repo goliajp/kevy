@@ -478,7 +478,6 @@ def main() -> int:
         print("A release that reached most of its channels is not released — "
               "the manifests, the docs and the tag all name a version the "
               "world cannot install.")
-        print("See .claude/skills/release/SKILL.md.")
         return 1
 
     kinds = ", ".join(sorted({k for k, _, _, _, _ in ds}))

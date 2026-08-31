@@ -70,8 +70,7 @@ l8_mem_budget() { # -> "PASS ..." or "FAIL: why" on stdout
   # semantics. RSS follows the allocator (glibc brk fragmentation under
   # the 4KiB demotion churn is reclaim-proof) and is REPORTED as a
   # fragmentation ratio, not gated. See
-  # PERF-FINDING-2026-07-25-b6-rss-glibc-fragmentation.md.
-  local cap=$((budget_bytes * 105 / 100)) peak_used=0 peak_rss=0 used rss
+    local cap=$((budget_bytes * 105 / 100)) peak_used=0 peak_rss=0 used rss
   redis-benchmark -p "$port" -t set -n 250000 -r 250000 -d 4096 -q >/dev/null 2>&1 &
   local bench=$!
   while kill -0 "$bench" 2>/dev/null; do
@@ -101,7 +100,7 @@ l8_mem_budget() { # -> "PASS ..." or "FAIL: why" on stdout
 # function of shape — measured 0.53× at 8× over budget, 0.74× at 2×,
 # 1.04× when nothing spills. So the default here is the HARSH end and
 # the line reads red until the RFC sentence gets a workload attached.
-# See FINDING-2026-08-06-l4-replay-spill-needs-a-shape.md; picking the
+# Picking the
 # shape is the design's call, not the gate's.
 #
 # The comparison is made ON ONE AOF, replayed twice: the data directory
@@ -351,7 +350,6 @@ line "L3  spill-budget (B3)"   "PENDING(T9/lx64)" "batching/hysteresis landed (T
 # different operator questions: does a mildly over-budget restart feel
 # normal (L4a), and does a badly over-budget one still finish (L4b).
 # Floors are set below the measured values with room, not at them.
-# See FINDING-2026-08-06-l4-replay-spill-needs-a-shape.md.
 if [ "${TIERGATE_RUN_L4:-0}" = "1" ]; then
   for spec in "L4a|256mb|0.70|2x over budget" "L4b|64mb|0.45|8x over budget"; do
     IFS='|' read -r tag budget floor shape <<<"$spec"

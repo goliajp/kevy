@@ -52,7 +52,7 @@ allow:\bT0\b
 deny:\b[TWK]-?[0-9]+[a-z]?\b
 
 # ── G4: RFC / plan / date references ────────────────────────────────
-# Internal design docs (.claude/plans/*.md) are not visible to crate
+# Internal design docs are not visible to crate
 # readers; a comment citing them is a dangling pointer. Real IETF RFCs
 # ("RFC 3174") stay legal: the deny shapes below only match the
 # internal citation styles (dated RFC ids, letter-designator sections

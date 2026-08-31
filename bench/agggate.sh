@@ -218,7 +218,7 @@ print(f"agggate: write tax bases={[int(b) for b in bases]} taxed={[int(t) for t 
 # The measured tax is 9.9 +/- 0.5% across seven quiet-box runs — the
 # run-to-run spread exceeds the distance to the 10% line, so a hard
 # >=10% verdict is a coin flip on noise, not a judgement on the engine
-# (bench/FINDING-2026-08-17-agg-write-tax-at-the-line.md). The gate
+# The gate
 # fails when a breach is ESTABLISHED beyond that band; the claim's own
 # line is unchanged and the true number prints every run. Tightening
 # back to 10.0 requires either an attack on the tax or a claim

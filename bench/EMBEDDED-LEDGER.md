@@ -8,7 +8,7 @@ embedded store, **losing axes named, not hidden** — the north star
 point is that no such comparison had been run.
 
 Design + competitor selection + fairness framework:
-`.claude/rfcs/2026-07-23-v4-embedded-bench.md`. Read it first — it defines
+the embedded-bench RFC, which defines
 the durability tiers, the sync-vs-async split, the cold-single-op vs
 amortized axes, and why LiteDB is a document-store reference rather than the
 C# KV peer (LMDB via Lightning.NET is).
@@ -116,7 +116,7 @@ copying bindings; the C track needs no view lane (raw C already zero-copy).
 _Status: **Attack #1 COMPLETE.** Binding half closed (`kevy_set_many` FFI +
 `SetMany` in kevy-go/Kevy.Embedded, tested). Engine half decomposed to root
 (per-op durable AOF frame — kevy's durability model) and **decided** in
-`.claude/rfcs/2026-07-24-embedded-bulk-write-ceiling.md`: **keep per-op durable
+The bulk-write ceiling verdict: **keep per-op durable
 logging; do not add a deferred-commit batch mode** — trading kevy's
 every-write-recoverable guarantee (the durability-trust arc, the goliajp
 payroll consumer) for LMDB-parity on bulk write throughput is the wrong trade

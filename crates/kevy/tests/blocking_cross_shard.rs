@@ -251,9 +251,8 @@ fn blpop_remote_disconnect_then_push_is_clean() {
     // eventually, not instantly. 40ms was a bet that it completes before
     // the push below, and on a loaded runner that bet loses: the target
     // still has the stale waiter armed, serves the push to it, and the
-    // element is then lost at the origin (see
-    // bench/FINDING-2026-07-19-xshard-block-serve-drop.md — a real defect
-    // this test is not the right place to assert). 500ms so this test
+    // element is then lost at the origin (a real defect this test is
+    // not the right place to assert). 500ms so this test
     // asserts what it is for: that the cancel HAPPENS.
     std::thread::sleep(std::time::Duration::from_millis(500));
     // The property: a later push must NOT be consumed by the gone waiter —
@@ -274,7 +273,7 @@ fn blpop_remote_disconnect_then_push_is_clean() {
     assert_eq!(
         left, b"*1\r\n$4\r\nstay\r\n",
         "the gone waiter must not consume the later push. *0 = it did (the \
-         defect escrow closes, bench/FINDING-2026-07-19-xshard-block-serve-drop.md); \
+         defect escrow closes); \
          got: {left:?}",
     );
 }

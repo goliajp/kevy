@@ -12,8 +12,7 @@
 > 1. **Pub/sub 4 KB "0.49× deferred ⚠"** in the v1.25 headline below
 >    was a **valkey noise misread** (3-run repro shows valkey 24%
 >    sample stdev, kevy 0.4%). Re-measured: **kevy actually 8.9 %
->    ahead at subs=50 size=4 KB**. See
->    [`PERF-FINDING-2026-06-29-axis-H-no-real-gap.md`](PERF-FINDING-2026-06-29-axis-H-no-real-gap.md).
+>    ahead at subs=50 size=4 KB**.
 > 2. **`-d 65536 SET` shows a -5 % / -13 % gap** (kevy 2-core /
 >    10-core fair-core respectively) **structurally located in the
 >    kernel TCP path**, not in kevy app code. perf-record dwarf
@@ -21,15 +20,12 @@
 >    + softirq the next largest buckets. No userspace attack moves
 >    this gap (verified via 3 Phase B attempts: B2-alt prep_cancel,
 >    Option A `Arc<Box<[u8]>>`, A7 conn-density-aware spin_limit —
->    all throughput-neutral). Findings:
->    [`PERF-FINDING-2026-06-29-fair-core-bigval-SET.md`](PERF-FINDING-2026-06-29-fair-core-bigval-SET.md) +
->    [`PERF-FINDING-2026-06-29-arc-from-box-memcpys.md`](PERF-FINDING-2026-06-29-arc-from-box-memcpys.md).
+>    all throughput-neutral).
 > 3. **c100 GET methodology v1.2 §9 Pre-Phase-B gate compliance test**
 >    found NO actionable userspace symbol ≥ 10 pp self-time on v1.29.
 >    kevy's userspace hot-path is at the architectural ceiling on
 >    every measured workload. The remaining throughput delta vs
->    valkey 9.1 lives in kernel paths beyond app-code reach. Finding:
->    [`PERF-FINDING-2026-06-29-c100-GET-methodology-gate-says-no.md`](PERF-FINDING-2026-06-29-c100-GET-methodology-gate-says-no.md).
+>    valkey 9.1 lives in kernel paths beyond app-code reach.
 >
 > Empirical project standing perf claim: **kevy is competitive-or-
 > ahead of valkey 9.1 at every measured workload axis except
@@ -43,9 +39,7 @@
 > from -13.4 % to -9.5 %. A2-A3 plateau is the empirical sweet spot
 > (acceptable range `ceil(conns/25)..ceil(conns/15)`). The remaining
 > -9.5 % is the kernel-TCP-path residue — same root cause as the
-> §9 gate finding above, unchanged by app-layer work. See
-> [`PERF-FINDING-2026-06-29-v1-30-accept-shards-bench.md`](PERF-FINDING-2026-06-29-v1-30-accept-shards-bench.md)
-> for the perfgate + A-curve.
+> §9 gate finding above, unchanged by app-layer work.
 >
 > ---
 >
@@ -53,7 +47,7 @@
 >
 > All cells below are **precision bench** (n=1 M × 10 runs,
 > 2σ-outlier-filtered mean, CI95 < 1 % across the table). Methodology
-> rules: [`.claude/rule/perf-vs-foss.md`](../.claude/rule/perf-vs-foss.md)
+> rules
 > — R1–R11; the big ones are R2 (banned trigger words like
 > "tied = win"), R10 (read-back validation mandatory on every
 > micro-bench — caught a multi-shard SET silent-drop in attack B.4),
@@ -1261,13 +1255,13 @@ The v1.25 cycle moved kevy from "leads in some cells, ties in others"
 (v1.22-v1.23 framing) to **precision-bench-clean leads** at the
 workloads the userspace stack can still influence. 16 perf attacks
 across 7 axes, each scoped from a Phase A decomposition note in
-`.claude/notes/v125-deco-axis-*.md`, shipped (or explicitly retired)
+the axis decompositions, shipped (or explicitly retired)
 against a precision harness with CI95 < 1 %.
 
 ## Methodology evolution
 
 Eleven rules emerged from this sprint and now live in
-[`.claude/rule/perf-vs-foss.md`](../.claude/rule/perf-vs-foss.md).
+the decomposition-first methodology.
 The load-bearing ones:
 
 - **R1 (precision over single-shot)** — every micro-bench is
@@ -1278,7 +1272,7 @@ The load-bearing ones:
   "leads on all 4 cells" framing was 6/8 cells inside CI95 — i.e.
   not leads. This sprint removed that.
 - **R3 (Phase A decomposition first)** — every attack is a written
-  prediction (`bench/V125-AXIS-*.md`) before code. Two pub/sub
+  prediction written down before code. Two pub/sub
   predictions were refuted by the actual perf record, which became
   the win condition for H1 and the deletion of an SPSC fast-path
   that was dead code under `--threads 1 nshards=1`.
@@ -1295,8 +1289,7 @@ The load-bearing ones:
 
 ## The 16 attacks
 
-Brief tally; the full Phase-A → Phase-B → bench narrative lives in
-the `V125-AXIS-*.md` files plus `V125-AXES-MASTER.md`.
+Brief tally.
 
 | axis | attack | shipped? | notable |
 |---|---|---|---|
@@ -1350,5 +1343,5 @@ bash /path/to/kevy/bench/v125-uds-smoke.sh        # 39 UDS assertions
 ```
 
 Phase-A decomposition + per-attack predictions:
-`.claude/notes/v125-deco-axis-*.md`. Shipped commit chain:
+the axis decompositions. Shipped commit chain:
 [`CHANGELOG.md`](../CHANGELOG.md) v1.25.0 entry.

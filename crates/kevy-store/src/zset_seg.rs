@@ -12,7 +12,7 @@
 //! rebalancing internals); the price is an O(segments) prefix walk on
 //! rank arithmetic, microseconds even at hundreds of millions of
 //! members. Design rationale: the element-COW RFC under
-//! `.claude/rfcs/`.
+//! the element-COW RFC.
 
 #[cfg(not(feature = "std"))]
 use crate::nostd_prelude::*;

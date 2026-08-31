@@ -454,7 +454,6 @@ def main() -> int:
         for b in bad:
             print(f"  {b}")
         print("\nA bump that moves one layer and forgets another ships a lie.")
-        print("See .claude/skills/release/SKILL.md for the seven layers and the fix.")
         return 1
     total = sum(counts.values())
     detail = ", ".join(f"{k} {n}" for k, n in counts.items())

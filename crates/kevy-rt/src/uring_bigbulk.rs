@@ -2,8 +2,7 @@
 //! io_uring reactor.
 //!
 //! The decompositions
-//! ([`.claude/notes/v125-deco-axis-i-c50-10kb.md`] +
-//! [`.claude/notes/v125-deco-axis-b-64kb.md`]) identified the conn.input
+//! (the c50/10 KB and 64 KB axis decompositions) identified the conn.input
 //! realloc storm on multi-CQE big values as a key amplifier on Axis B
 //! (64 KiB SET) and Axis I (10 KiB SET): the multishot recv path splits
 //! the body into ~16 KiB chunks; each chunk gets memcpy'd from the
