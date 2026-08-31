@@ -1,10 +1,10 @@
 {
-  "version": "6.2.1",
+  "version": "6.2.2",
   "dead_platform": "linux",
   "stones": [
     {
       "crate": "kevy-alloc",
-      "dead_regions": 117,
+      "dead_regions": 119,
       "measured_regions": 1694,
       "packaged": true,
       "built": true,
@@ -23,7 +23,7 @@
         "checks": 223,
         "skipped": 31,
         "unpublished": false,
-        "baseline": "6.2.0",
+        "baseline": "6.2.1",
         "note": ""
       }
     },
@@ -35,10 +35,10 @@
       "built": false,
       "tested": false,
       "tests": 0,
-      "lift_note": "failed to select a version for the requirement `kevy-hash = \"^6.2.1\"`",
+      "lift_note": "failed to select a version for the requirement `kevy-hash = \"^6.2.2\"`",
       "unresolved": {
         "dep": "kevy-hash",
-        "req": "6.2.1"
+        "req": "6.2.2"
       },
       "docs": {
         "documented": 12,
@@ -51,7 +51,7 @@
         "checks": 223,
         "skipped": 31,
         "unpublished": false,
-        "baseline": "6.2.0",
+        "baseline": "6.2.1",
         "note": ""
       }
     },
@@ -63,10 +63,10 @@
       "built": false,
       "tested": false,
       "tests": 0,
-      "lift_note": "failed to select a version for the requirement `kevy-bench = \"^6.2.1\"`",
+      "lift_note": "failed to select a version for the requirement `kevy-bench = \"^6.2.2\"`",
       "unresolved": {
         "dep": "kevy-bench",
-        "req": "6.2.1"
+        "req": "6.2.2"
       },
       "docs": {
         "documented": 10,
@@ -79,7 +79,7 @@
         "checks": 223,
         "skipped": 31,
         "unpublished": false,
-        "baseline": "6.2.0",
+        "baseline": "6.2.1",
         "note": ""
       }
     },
@@ -104,7 +104,7 @@
         "checks": 223,
         "skipped": 31,
         "unpublished": false,
-        "baseline": "6.2.0",
+        "baseline": "6.2.1",
         "note": ""
       }
     },
@@ -116,10 +116,10 @@
       "built": false,
       "tested": false,
       "tests": 0,
-      "lift_note": "failed to select a version for the requirement `kevy-hash = \"^6.2.1\"`",
+      "lift_note": "failed to select a version for the requirement `kevy-hash = \"^6.2.2\"`",
       "unresolved": {
         "dep": "kevy-hash",
-        "req": "6.2.1"
+        "req": "6.2.2"
       },
       "docs": {
         "documented": 13,
@@ -132,7 +132,7 @@
         "checks": 223,
         "skipped": 31,
         "unpublished": false,
-        "baseline": "6.2.0",
+        "baseline": "6.2.1",
         "note": ""
       }
     },
@@ -157,7 +157,7 @@
         "checks": 223,
         "skipped": 31,
         "unpublished": false,
-        "baseline": "6.2.0",
+        "baseline": "6.2.1",
         "note": ""
       }
     },
@@ -182,7 +182,7 @@
         "checks": 223,
         "skipped": 31,
         "unpublished": false,
-        "baseline": "6.2.0",
+        "baseline": "6.2.1",
         "note": ""
       }
     },
@@ -194,10 +194,10 @@
       "built": false,
       "tested": false,
       "tests": 0,
-      "lift_note": "failed to select a version for the requirement `kevy-bench = \"^6.2.1\"`",
+      "lift_note": "failed to select a version for the requirement `kevy-bench = \"^6.2.2\"`",
       "unresolved": {
         "dep": "kevy-bench",
-        "req": "6.2.1"
+        "req": "6.2.2"
       },
       "docs": {
         "documented": 11,
@@ -210,7 +210,7 @@
         "checks": 223,
         "skipped": 31,
         "unpublished": false,
-        "baseline": "6.2.0",
+        "baseline": "6.2.1",
         "note": ""
       }
     },
@@ -222,10 +222,10 @@
       "built": false,
       "tested": false,
       "tests": 0,
-      "lift_note": "failed to select a version for the requirement `kevy-sys = \"^6.2.1\"`",
+      "lift_note": "failed to select a version for the requirement `kevy-sys = \"^6.2.2\"`",
       "unresolved": {
         "dep": "kevy-sys",
-        "req": "6.2.1"
+        "req": "6.2.2"
       },
       "docs": {
         "documented": 20,
@@ -238,7 +238,7 @@
         "checks": 223,
         "skipped": 31,
         "unpublished": false,
-        "baseline": "6.2.0",
+        "baseline": "6.2.1",
         "note": ""
       }
     },
@@ -263,32 +263,32 @@
         "checks": 223,
         "skipped": 31,
         "unpublished": false,
-        "baseline": "6.2.0",
+        "baseline": "6.2.1",
         "note": ""
       }
     },
     {
       "crate": "kevy-sys",
-      "dead_regions": 121,
-      "measured_regions": 730,
+      "dead_regions": 116,
+      "measured_regions": 740,
       "packaged": true,
       "built": true,
       "tested": true,
-      "tests": 14,
+      "tests": 15,
       "lift_note": "",
       "unresolved": null,
       "docs": {
-        "documented": 24,
-        "items": 24,
+        "documented": 25,
+        "items": 25,
         "pct": 100.0,
-        "examples": 1
+        "examples": 2
       },
       "semver": {
         "ok": true,
         "checks": 223,
         "skipped": 31,
         "unpublished": false,
-        "baseline": "6.2.0",
+        "baseline": "6.2.1",
         "note": ""
       }
     },
@@ -300,10 +300,10 @@
       "built": false,
       "tested": false,
       "tests": 0,
-      "lift_note": "failed to select a version for the requirement `kevy-tmpdir = \"^6.2.1\"`",
+      "lift_note": "failed to select a version for the requirement `kevy-tmpdir = \"^6.2.2\"`",
       "unresolved": {
         "dep": "kevy-tmpdir",
-        "req": "6.2.1"
+        "req": "6.2.2"
       },
       "docs": {
         "documented": 17,
@@ -316,7 +316,7 @@
         "checks": 223,
         "skipped": 31,
         "unpublished": false,
-        "baseline": "6.2.0",
+        "baseline": "6.2.1",
         "note": ""
       }
     },
@@ -341,7 +341,7 @@
         "checks": 223,
         "skipped": 31,
         "unpublished": false,
-        "baseline": "6.2.0",
+        "baseline": "6.2.1",
         "note": ""
       }
     },
@@ -366,7 +366,7 @@
         "checks": 223,
         "skipped": 31,
         "unpublished": false,
-        "baseline": "6.2.0",
+        "baseline": "6.2.1",
         "note": ""
       }
     },
@@ -391,7 +391,7 @@
         "checks": 223,
         "skipped": 31,
         "unpublished": false,
-        "baseline": "6.2.0",
+        "baseline": "6.2.1",
         "note": ""
       }
     },
@@ -403,10 +403,10 @@
       "built": false,
       "tested": false,
       "tests": 0,
-      "lift_note": "failed to select a version for the requirement `kevy-time = \"^6.2.1\"`",
+      "lift_note": "failed to select a version for the requirement `kevy-time = \"^6.2.2\"`",
       "unresolved": {
         "dep": "kevy-time",
-        "req": "6.2.1"
+        "req": "6.2.2"
       },
       "docs": {
         "documented": 39,
@@ -419,7 +419,7 @@
         "checks": 223,
         "skipped": 31,
         "unpublished": false,
-        "baseline": "6.2.0",
+        "baseline": "6.2.1",
         "note": ""
       }
     },
@@ -444,7 +444,7 @@
         "checks": 223,
         "skipped": 31,
         "unpublished": false,
-        "baseline": "6.2.0",
+        "baseline": "6.2.1",
         "note": ""
       }
     },
@@ -469,7 +469,7 @@
         "checks": 223,
         "skipped": 31,
         "unpublished": false,
-        "baseline": "6.2.0",
+        "baseline": "6.2.1",
         "note": ""
       }
     }

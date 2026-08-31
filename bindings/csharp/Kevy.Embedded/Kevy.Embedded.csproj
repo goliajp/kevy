@@ -19,7 +19,7 @@
          user confirmation — see the v4-csharp-client report. -->
     <IsPackable>false</IsPackable>
     <PackageId>Kevy.Embedded.Internal</PackageId>
-    <Version>6.2.1</Version>
+    <Version>6.2.2</Version>
     <Authors>GOLIA K.K.</Authors>
     <Description>kevy embedded in .NET — the real native engine behind one Cmd() entry plus a typed surface. TTL, structures, pub/sub, persistence you can read; pure Rust, zero services.</Description>
     <PackageLicenseExpression>Apache-2.0 OR MIT</PackageLicenseExpression>
