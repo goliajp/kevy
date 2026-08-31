@@ -4,6 +4,7 @@
 //! - `dump-{i}.rdb` — shard `i`'s snapshot ([`crate::save_snapshot`])
 //! - `aof-{i}.aof` — shard `i`'s append-only log ([`crate::Aof`])
 //! - `shards.meta` — the layout record ([`crate::ShardsMeta`])
+//! - `LOCK` — the directory's advisory lock ([`crate::DirLock`])
 //!
 //! The server runtime, the embedded store, and the reshard engine all
 //! derive their paths from here, so a dir written by one is readable by
@@ -29,6 +30,16 @@ pub fn snapshot_path(dir: &Path, i: usize) -> PathBuf {
 /// Shard `i`'s AOF path under `dir`.
 pub fn aof_path(dir: &Path, i: usize) -> PathBuf {
     dir.join(aof_file(i))
+}
+
+/// The advisory-lock file's path under `dir` ([`crate::DirLock`]).
+///
+/// ```
+/// use std::path::Path;
+/// assert_eq!(kevy_persist::layout::lock_path(Path::new("/data")), Path::new("/data/LOCK"));
+/// ```
+pub fn lock_path(dir: &Path) -> PathBuf {
+    dir.join("LOCK")
 }
 
 /// The layout record's path under `dir`.

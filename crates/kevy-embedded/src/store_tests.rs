@@ -369,3 +369,23 @@ fn shutdown_fsyncs_refuses_writes_and_survives_reopen() {
     assert_eq!(s.get(b"late").unwrap(), None, "refused write must not exist");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A live persist dir refuses a second engine (this process or another
+/// — flock catches both); the claim releases with the last clone, so
+/// the sequential reopen every other test does keeps working.
+#[test]
+fn second_open_of_a_live_dir_is_refused() {
+    let dir = tmp_dir("second-open-refused");
+    let s = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
+    s.set(b"k", b"v").unwrap();
+    let err = match Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()) {
+        Ok(_) => panic!("a second engine on a live dir must refuse, not co-write the AOF"),
+        Err(e) => e,
+    };
+    assert!(err.to_string().contains("already open"), "unexpected error: {err}");
+    drop(s);
+    let s2 = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
+    assert_eq!(s2.get(b"k").unwrap(), Some(b"v".to_vec()));
+    drop(s2);
+    let _ = std::fs::remove_dir_all(&dir);
+}

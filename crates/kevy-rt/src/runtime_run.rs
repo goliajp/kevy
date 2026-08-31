@@ -88,6 +88,7 @@ impl Shared {
 impl<C: Commands> Runtime<C> {
     /// Spawn one thread per shard and run until `stop` is set.
     pub fn run(mut self, stop: Arc<AtomicBool>) -> io::Result<()> {
+        let _dir_lock = self.claim_data_dir()?;
         let n = self.nshards;
         // Single global bio thread. Spawn BEFORE shards so
         // every shard's first overwrite already has a live consumer. The
@@ -159,6 +160,20 @@ impl<C: Commands> Runtime<C> {
             ));
         }
         Ok(())
+    }
+
+    /// One server per data dir (same condition as [`Self::reconcile_layout`]:
+    /// a pure in-memory run against an unused dir claims nothing). A dir
+    /// already claimed errors here, before any shard touches a file,
+    /// instead of two writers interleaving one AOF.
+    fn claim_data_dir(&self) -> io::Result<Option<kevy_persist::DirLock>> {
+        if self.enable_aof
+            || self.cluster_port_base.is_some()
+            || crate::reshard::has_kevy_files(&self.data_dir)
+        {
+            return Ok(Some(kevy_persist::DirLock::acquire(&self.data_dir)?));
+        }
+        Ok(None)
     }
 
     /// Reconcile the on-disk shard layout (count + routing) before any

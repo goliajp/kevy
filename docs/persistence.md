@@ -299,6 +299,7 @@ store.evictions_total();        // total evicted by maxmemory
 | `aof-<id>.aof` | Live AOF for shard `<id>`. |
 | `dump-<id>.rdb` | Binary snapshot for shard `<id>`. |
 | `shards.meta` | Recorded shard count and routing scheme. |
+| `LOCK` | Advisory lock: one live engine per directory. A second open — same process or another — is refused while the first holds it; the file itself stays behind, empty and inert, once released (the kernel drops the lock with the process, so it cannot go stale). |
 | `dump-<id>.rdb.tmp` | In-progress snapshot write. Safe to delete if stale. |
 | `aof-<id>.aof.rewrite` | In-progress AOF rewrite/reset. Safe to delete if stale. |
 | `dump-<id>.rdb.reshard` + `reshard.journal` | In-progress shard-layout migration. Rolled forward on next start; never delete the journal by hand. |
