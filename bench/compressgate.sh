@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # compressgate — the v5 memory-experiment gate for kevy-compress.
 #
-# RFC: .claude/rfcs/2026-07-26-v5-kevy-compress.md §6 (K1..K7)
+# Measures K1..K7 of the kevy-compress contract.
 # Accounting contract: bench/V5-ACCOUNTING-CONTRACT.md §2
 #
 # One line per acceptance criterion; a line is either a real assertion or

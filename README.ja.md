@@ -277,7 +277,7 @@ median-of-5、スループットは各サーバー自身のコマンドカウン
 同じ`GET -c 50 -P 16`の面を、同一マシン上で四つのエンジンと対戦
 ——kevyは7.24 M/sでそれぞれに対して（median-of-5。手法と
 エンジンごとのサイクル記録は
-[`bench/PERF-VERDICT-V4-T9.md`](bench/PERF-VERDICT-V4-T9.md)）：
+[`bench/REPORT.md`](bench/REPORT.md)）：
 
 | エンジン | kevyのリード |
 |---|---:|
@@ -292,7 +292,6 @@ median-of-5、スループットは各サーバー自身のコマンドカウン
 低く出る度合いが違うので、比率も歪みます。サーバー側で数えると
 量子化は消え、kevy自身の数値はむしろ**上がりました**（6.39 →
 7.24 M/s）。競合はそれ以上に上がった、というだけです。
-[`bench/PERF-FINDING-2026-07-12-benchmark-250ms-quantization.md`](bench/PERF-FINDING-2026-07-12-benchmark-250ms-quantization.md)を参照。
 
 Pub/subと組み込みの2行はそれぞれ別のハーネスによるもので、今回の
 再測定の対象外です。

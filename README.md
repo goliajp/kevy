@@ -117,7 +117,7 @@ go get github.com/goliajp/kevy-go/v6             # Go
 ```
 ```xml
 <dependency>                                     <!-- Java -->
-  <groupId>jp.golia</groupId><artifactId>kevy</artifactId><version>6.2.0</version>
+  <groupId>jp.golia</groupId><artifactId>kevy</artifactId><version>6.2.1</version>
 </dependency>
 ```
 
@@ -285,7 +285,7 @@ from a script in [`bench/`](bench/).
 
 The same `GET -c 50 -P 16` face, four engines on one box — kevy at 6.99 M/s against each (median-of-5; method and per-engine cycle
 accounting in
-[`bench/PERF-VERDICT-V4-T9.md`](bench/PERF-VERDICT-V4-T9.md)):
+[`bench/REPORT.md`](bench/REPORT.md)):
 
 | Engine | kevy's lead |
 |---|---:|
@@ -299,8 +299,7 @@ and the reason is the ruler, not the engines. The earlier figures read
 quantized to multiples of its 250 ms sampling timer and therefore
 understated — unevenly, so the ratio moved too. Counting server-side
 removes the quantization; kevy's own number went UP (6.39 → 7.24 M/s)
-and every competitor's went up more. See
-[`bench/PERF-FINDING-2026-07-12-benchmark-250ms-quantization.md`](bench/PERF-FINDING-2026-07-12-benchmark-250ms-quantization.md).
+and every competitor's went up more.
 
 The pub/sub and embedded rows are from their own harnesses and were
 not part of this re-measurement.
@@ -356,8 +355,8 @@ All run unmodified against a default `kevy --port 6379` instance.
 |---|---|
 | [`kevy`](crates/kevy) | The server binary and library entry-point |
 | [`kevy-embedded`](crates/kevy-embedded) | In-process KV with the Redis-shaped Rust API |
-| [`kevy-client`](crates/kevy-client) | Blocking RESP client; URL facade for server or in-process backend — **its own version line (2.x), not the workspace's 4.x** |
-| [`kevy-client-async`](crates/kevy-client-async) | Async mirror of `kevy-client` for tokio / smol / async-std — **2.x, same line as `kevy-client`** |
+| [`kevy-client`](crates/kevy-client) | Blocking RESP client; URL facade for server or in-process backend — **carries the workspace version since 6.2.1** (was a 2.x line of its own; see [docs/upgrading-6.2.0-to-6.2.1.md](docs/upgrading-6.2.0-to-6.2.1.md)) |
+| [`kevy-client-async`](crates/kevy-client-async) | Async mirror of `kevy-client` for tokio / smol / async-std — **workspace version since 6.2.1**, like `kevy-client` |
 | [`kevy-cluster-rw`](crates/kevy-cluster-rw) | Primary-write / replica-read client wrapper |
 | [`kevy-cli`](crates/kevy-cli) | Operator CLI: backup, restore, smoke tests |
 | [`kevy-config`](crates/kevy-config) | TOML config schema with CLI/env/file precedence |

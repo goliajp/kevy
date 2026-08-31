@@ -7,7 +7,7 @@
 > against them.
 >
 > Owners: `bench/allocgate.sh` (M3) · `bench/compressgate.sh` (K5) ·
-> RFCs `.claude/rfcs/2026-07-26-v5-kevy-{alloc,compress}.md`.
+> the kevy-alloc and kevy-compress RFCs.
 >
 > **This is an experiment.** If a term turns out to be the wrong cut of
 > reality, change the contract and say why — do not add a fudge term to make

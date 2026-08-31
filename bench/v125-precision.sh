@@ -1,5 +1,5 @@
 #!/bin/bash
-# v1.25 precision bench harness — per .claude/rule/perf-vs-foss.md R7.
+# v1.25 precision bench harness — per methodology rule R7.
 #
 # Many v1.25 attacks measured "sub-noise" (within ±5% variance band on
 # lx64 with shared host load). To validate <5 µs / <5 ns wins claimed

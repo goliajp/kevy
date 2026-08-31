@@ -10,7 +10,7 @@ cargo build --release -p kevy --features kevy-alloc
 
 ## 得られるもの
 
-ベンチ参照機（io_uring、8 shard）での実測。ワークロードの詳細は `bench/FINDING-2026-08-07-balance-round-ra-rc.md` を参照：
+ベンチ参照機（io_uring、8 shard）での実測。計測ハーネスとプロトコルは `bench/REPORT.md` を参照：
 
 - **フラグメンテーション / RSS**：長時間稼働の高チャーン負荷で、常駐メモリはライブデータの約 2.16 倍。glibc の 2.40 倍に対して定常状態のフットプリントが約 10% 小さく、アロケーションのチャーンが激しいほど差は広がります。
 - **容量の余裕**：小さく予測しやすいフットプリントは、階層化の容量モデルが予算を立てる対象そのものです。容量が逼迫したデプロイでは、アロケータが「収まる」と「ページングが始まる」の分かれ目になります。
@@ -23,7 +23,6 @@ cargo build --release -p kevy --features kevy-alloc
 - 飽和角で sadd 約 −10~−16%、zadd 約 −13% のスループット（hash 書き込みは例外——小さな hash 値は store 内にインライン格納され、−0.2% しか払いません）。
 - アロケーション密度の低い角（GET/SET/INCR/LPUSH、cluster、RESP 互換）は −2~−6%。飽和していないサーバでは通常、差は測定できません——アイドルの余裕が呼び出しごとのコストを吸収します。
 
-完全な分解は `bench/PERF-DECOMP-2026-08-08-zadd-sadd-alloc-tax-split.md` を参照。
 
 ## いつ有効にするか
 

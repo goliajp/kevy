@@ -115,6 +115,11 @@ def main():
         print("  Every link to one of these is green here and 404 on the built site.")
         return 2
 
+    in_git = set(subprocess.run(
+        ["git", "-C", str(ROOT), "ls-files"],
+        capture_output=True, text=True, check=True,
+    ).stdout.split())
+
     bad, n_links = [], 0
     for f in files:
         body = FENCE.sub("", f.read_text(encoding="utf-8"))
@@ -123,11 +128,11 @@ def main():
                 continue
             path, _, frag = raw.partition("#")
             n_links += 1
-            # A link whose TARGET is under `.claude/` (private working
-            # notes, intentionally gitignored) or absolute (a machine-
-            # specific path) is an external reference, not a repo-internal
-            # doc link — skip it the same way the source dirs are skipped.
-            if path.startswith("/") or ".claude/" in path:
+            # An absolute target is a machine-specific path, not a
+            # repo-internal doc link. `.claude/` was skipped here too; it is
+            # not any more, because that directory is now entirely out of
+            # git and a link into it is exactly the dead link a reader hits.
+            if path.startswith("/"):
                 continue
             target = f if not path else (f.parent / path).resolve()
             # Also skip if it resolved to somewhere outside the repo root
@@ -138,6 +143,20 @@ def main():
                 continue
             if not target.exists():
                 bad.append((f, raw, "no such file"))
+                continue
+            # Existing on THIS disk is not the question. A link to a file
+            # git does not carry resolves for whoever wrote it and 404s for
+            # every reader — which is how 247 untracked files kept 39
+            # tracked ones pointing at them with every gate green. Ask the
+            # index, not the filesystem.
+            rel = str(target.relative_to(ROOT))
+            # A directory is tracked when git carries anything under it —
+            # `ls-files` lists blobs, not trees, and a link to a directory
+            # is a link a reader can follow.
+            if rel not in in_git and not any(
+                p.startswith(rel + "/") for p in in_git
+            ):
+                bad.append((f, raw, "not in git"))
                 continue
             if not frag or target.suffix != ".md":
                 continue

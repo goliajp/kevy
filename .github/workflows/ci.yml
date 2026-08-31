@@ -419,7 +419,7 @@ jobs:
         run: bash bench/consumergate.sh
       # killgate: an unguarded `pkill -f "$X"` matches every process on the
       # box when $X is empty. That took the lx64 bench host offline three
-      # times in 2026-07 (see bench/INCIDENT-2026-07-perfgate-pkill-massacre.md).
+      # times in 2026-07.
       # The lesson was written down after an earlier incident and ignored by
       # a script written later — hence a gate, not a note.
       - name: killgate (no unguarded pkill -f in bench scripts)

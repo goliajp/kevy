@@ -459,8 +459,7 @@ Rationale: before this rule, `subscribe` wrote the command and returned,
 so it handed back a subscriber that was not yet subscribed. Anyone who
 published straight after was racing the registration, and a lost message
 parks a blocking `recv_message` forever. Three independent tests raced
-exactly that way in one day — including a CI job that hung for 3h46m. See
-`bench/FINDING-2026-07-19-subscribe-returns-before-live.md`.
+exactly that way in one day — including a CI job that hung for 3h46m.
 
 | Method | Params | Returns | Notes |
 |---|---|---|---|

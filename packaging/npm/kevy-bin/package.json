@@ -1,6 +1,6 @@
 {
   "name": "@goliapkg/kevy-bin",
-  "version": "6.2.0",
+  "version": "6.2.1",
   "description": "kevy server + cli binaries. Redis-compatible data layer for AI systems — installs the real native binaries via npm/yarn/pnpm/bun.",
   "license": "(Apache-2.0 OR MIT)",
   "repository": {
@@ -16,9 +16,9 @@
     "bin/"
   ],
   "optionalDependencies": {
-    "@goliapkg/kevy-bin-linux-x64": "6.2.0",
-    "@goliapkg/kevy-bin-linux-arm64": "6.2.0",
-    "@goliapkg/kevy-bin-darwin-arm64": "6.2.0"
+    "@goliapkg/kevy-bin-linux-x64": "6.2.1",
+    "@goliapkg/kevy-bin-linux-arm64": "6.2.1",
+    "@goliapkg/kevy-bin-darwin-arm64": "6.2.1"
   },
   "engines": {
     "node": ">=18"

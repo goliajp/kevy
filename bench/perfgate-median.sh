@@ -3,11 +3,11 @@
 #
 # Why this exists: single perfgate runs carry a ±3-6 pp per-angle band
 # (two same-tip runs disagreed by that much on every collection angle —
-# bench/PERF-DECOMP-2026-08-07-hset-tax-owner-thread.md), so no single
+# the owner thread), so no single
 # run can green or red an angle inside it. The methodology's bench-infra
 # clause says: invest in the instrument, not in re-arguing its noise.
 # It became practical when the zadd stall (which REFUSED half the runs)
-# was fixed — bench/PERF-FINDING-2026-08-07-zadd-pause-drain-starvation.md.
+# was fixed.
 #
 #   bash bench/perfgate-median.sh <KEVY_BIN> [N]
 #

@@ -49,6 +49,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import check_published_manifest  # noqa: E402
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 UA = "kevy-channel-parity (https://github.com/goliajp/kevy)"
 
@@ -83,7 +86,8 @@ def demo(p: pathlib.Path) -> bool:
 
 def released_version(argv) -> str:
     if len(argv) > 1:
-        return argv[1]
+        # `v6.2.0` and `6.2.0` are the same request; the tag has the v.
+        return argv[1][1:] if argv[1].startswith("v") else argv[1]
     out = subprocess.run(
         ["git", "tag", "--list", "v[0-9]*", "--sort=-v:refname"],
         cwd=ROOT, capture_output=True, text=True,
@@ -176,7 +180,27 @@ def on_crates(name, v):
     st, d = jget(f"https://crates.io/api/v1/crates/{name}/{v}")
     if st == 404:
         return False
-    return None if d is None else (d.get("version", {}).get("num") == v)
+    if d is None or d.get("version", {}).get("num") != v:
+        return None if d is None else False
+    # The version being there is half the answer. The other half is whether
+    # it is THIS manifest: kevy-client 2.2.0 was "published" for three
+    # releases while pinning siblings at ^5.0 that the tree had at 6.x.
+    ok, lines = check_published_manifest.compare(name, v, _cargo_meta())
+    if ok is False:
+        for line in lines:
+            print(f"    {name}: {line.strip()}")
+    return ok
+
+
+_META = {}
+
+
+def _cargo_meta():
+    if "m" not in _META:
+        _META["m"] = json.loads(subprocess.run(
+            ["cargo", "metadata", "--no-deps", "--format-version", "1"],
+            cwd=ROOT, capture_output=True, text=True).stdout or "{}")
+    return _META["m"]
 
 
 def on_goproxy(module, v):
@@ -344,9 +368,7 @@ def binding_doors(excused):
 
 def crate_doors():
     """Everything cargo would publish, at the version each crate declares."""
-    meta = json.loads(subprocess.run(
-        ["cargo", "metadata", "--no-deps", "--format-version", "1"],
-        cwd=ROOT, capture_output=True, text=True).stdout or "{}")
+    meta = _cargo_meta()
     return [
         ("crates.io", pk["name"], on_crates,
          pathlib.Path(pk["manifest_path"]), pk.get("version"))
@@ -397,10 +419,11 @@ def doors():
     no edit here. That is the point: the doors this gate exists because of
     were missed by a human keeping a list, twice.
 
-    The declared version matters because two crates are deliberately on
-    their own line (kevy-client, kevy-client-async at 2.x). Asking those for
-    the release version finds nothing and says so, which reads like a
-    finding and is not one. Each door is asked about the version it claims.
+    Every door is asked about the release version. The version a door
+    declares is carried along so a door that declares something else can be
+    named — no crate rides a line of its own any more; the two that did
+    (kevy-client, kevy-client-async at 2.x) went unpublished for three
+    releases precisely because a version that does not move cannot be.
     """
     excused = {ROOT / k for k in NOT_PUBLISHED}
     return binding_doors(excused) + crate_doors() + service_doors()
@@ -429,7 +452,6 @@ def unseen(ds):
 
 def main() -> int:
     v = released_version(sys.argv)
-    ws = workspace_version()
     ds = doors()
     if len(ds) < FLOOR:
         print(f"check_channels_published: found only {len(ds)} doors in the tree, "
@@ -447,15 +469,14 @@ def main() -> int:
               "A gate that silently skips a door is the gate that was missing.")
         return 2
 
-    behind, unknown, ok, own_line = [], [], 0, []
+    behind, unknown, ok = [], [], 0
     for kind, name, ask, src, declared in ds:
-        # A door on its own version line is asked about that line. Anything
-        # tracking the workspace is asked about the release.
-        want = declared if (declared and declared != ws) else v
-        if want != v:
-            own_line.append(f"{name} {want}")
-        got = ask(name, want)
+        want = v
         rel = src.relative_to(ROOT) if ROOT in src.parents else src
+        if declared and declared != v:
+            behind.append(f"{kind:<10} {name:<28} declares {declared}, not {v}   ({rel})")
+            continue
+        got = ask(name, want)
         if got is None:
             unknown.append(f"{kind:<10} {name} — the registry gave no answer")
         elif got:
@@ -478,13 +499,10 @@ def main() -> int:
         print("A release that reached most of its channels is not released — "
               "the manifests, the docs and the tag all name a version the "
               "world cannot install.")
-        print("See .claude/skills/release/SKILL.md.")
         return 1
 
     kinds = ", ".join(sorted({k for k, _, _, _, _ in ds}))
     print(f"ok: all {ok} doors serve {v} ({kinds})")
-    if own_line:
-        print(f"     on their own line: {', '.join(sorted(own_line))}")
     if NOT_PUBLISHED:
         print(f"     deliberately unpublished: {', '.join(sorted(NOT_PUBLISHED))}")
     return 0

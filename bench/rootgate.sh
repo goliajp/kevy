@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # rootgate — the repo root is not a data directory, gated.
 #
-# .claude/rule/hygiene.md's first rule is "never run a server or an
+# The first hygiene rule is "never run a server or an
 # embedded store in the repo root". It has now been broken twice, and both
 # times nothing noticed, because the two ways it shows up are each
 # invisible to the tool you would expect to catch them:
@@ -77,7 +77,7 @@ if [ -n "$present" ]; then
     echo "$present" | head -8 | sed 's/^/  /'
     [ "$n" -gt 8 ] && echo "  … and $((n - 8)) more"
     echo "  something opened a store here. Data directories belong in a"
-    echo "  mktemp dir or a bench script's \$DIR — see .claude/rule/hygiene.md."
+    echo "  mktemp dir or a bench script's \$DIR."
     fail=1
 fi
 
@@ -88,7 +88,7 @@ for d in $dir_shapes; do
         echo "rootgate: FAIL — runtime store directory in the repo root: $hit"
         echo "  a store opened here (the tier and segment writers use"
         echo "  data_dir, which defaults to '.'). Pass --dir, or start the"
-        echo "  server somewhere else — see .claude/rule/hygiene.md."
+        echo "  server somewhere else."
         fail=1
     done
 done
@@ -115,7 +115,7 @@ if [ -n "$elsewhere" ]; then
     echo "$elsewhere" | head -8 | sed 's/^/  /'
     [ "$n" -gt 8 ] && echo "  … and $((n - 8)) more"
     echo "  a store opened in a source directory. A test that spawns a"
-    echo "  server must pass --dir <temp>; see .claude/rule/hygiene.md."
+    echo "  server must pass --dir <temp>."
     fail=1
 fi
 

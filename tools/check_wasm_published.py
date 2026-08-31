@@ -25,6 +25,7 @@ Run: python3 tools/check_wasm_published.py
 
 import json
 import pathlib
+import platform
 import re
 import subprocess
 import sys
@@ -68,6 +69,37 @@ def published(name: str, version: str, into: pathlib.Path):
         return t.extractfile(member).read()
 
 
+def git(*args):
+    return subprocess.run(
+        ["git", "-C", str(ROOT), *args],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+
+
+def same_source_as_tag(version: str):
+    """True / False / a string saying why the question could not be asked.
+
+    A dirty working tree is not the tag even when HEAD is, because what
+    gets built is the tree, not HEAD."""
+    tag = f"v{version}"
+    try:
+        git("rev-parse", "--verify", f"{tag}^{{commit}}")
+    except subprocess.CalledProcessError:
+        return f"no tag {tag} in this checkout"
+    try:
+        return git("diff", "--stat", tag) == ""
+    except subprocess.CalledProcessError as e:
+        return (e.stderr or "git diff failed").strip()
+
+
+def tree_delta(version: str) -> str:
+    try:
+        n = len(git("diff", "--name-only", f"v{version}").splitlines())
+    except subprocess.CalledProcessError:
+        return "could not list the difference"
+    return f"{n} file(s) differ"
+
+
 def main():
     if not WASM.exists():
         print("check_wasm_published: no kevy.wasm — run `npm run engine` in web/")
@@ -87,12 +119,31 @@ def main():
         print(f"ok: the built wasm is byte-identical to {name}@{version} ({len(mine) // 1024} KB)")
         return 0
 
+    return verdict(name, version, mine, theirs)
+
+
+def verdict(name: str, version: str, mine: bytes, theirs: bytes) -> int:
+    """Two binaries that are not the same bytes. Which kind of not-the-same?
+
+    "Different bytes" is not yet an answer. The published package was built
+    by release.yml from tag vX.Y.Z; if this tree IS that tag, the same source
+    produced both and the difference is the compiler — CI builds on Linux,
+    this deploys from macOS, and wasm codegen is not identical across them.
+    So decide before announcing: the case that needs no decision must not
+    read as an alarm, or the alarm fires on every release from this machine
+    and people stop reading it.
+    """
     mine_v, theirs_v = verbs(mine), verbs(theirs)
-    print(f"check_wasm_published: the built wasm is NOT {name}@{version}\n")
+    only_here = mine_v - theirs_v
+
+    same = None if only_here else same_source_as_tag(version)
+    if same is True:
+        print(f"ok: the built wasm is not byte-identical to {name}@{version}, and does not need to be\n")
+    else:
+        print(f"check_wasm_published: the built wasm is NOT {name}@{version}\n")
     print(f"  built     {len(mine) // 1024:>5} KB   {', '.join(sorted(mine_v)) or '(none of the markers)'}")
     print(f"  published {len(theirs) // 1024:>5} KB   {', '.join(sorted(theirs_v)) or '(none of the markers)'}")
 
-    only_here = mine_v - theirs_v
     if only_here:
         print(
             f"\n  The site would demonstrate {', '.join(sorted(only_here))}, which "
@@ -103,7 +154,19 @@ def main():
             f"  honest if it would."
         )
     else:
-        print("\n  Same markers, different bytes — a rebuild, or a change below the marker level.")
+        if same is True:
+            print(
+                f"\n  Same markers, and this tree is byte-identical to v{version} — the tag\n"
+                f"  release.yml built the package from. Same source, different toolchain\n"
+                f"  (CI builds on Linux; this is {platform.system()} {platform.machine()}).\n"
+                f"  The page and the package expose the same engine."
+            )
+            return 0
+        print("\n  Same markers, different bytes — a change below the marker level.")
+        if same is False:
+            print(f"  This tree is NOT v{version}: {tree_delta(version)}")
+        else:
+            print(f"  (Could not compare against v{version}: {same})")
     print("\n  Deploy anyway only if that is a decision somebody made, not one nobody saw.")
     return 1
 

@@ -1,6 +1,5 @@
 #!/bin/bash
-# killgate — the mechanical form of hard rule 1/2 in
-# bench/INCIDENT-2026-07-perfgate-pkill-massacre.md.
+# killgate — the mechanical form of hard rules 1 and 2 for pkill.
 #
 # `pkill -f "$X"` with an empty $X matches EVERY process on the box; as
 # root that SIGTERMs sshd/systemd and the machine goes dark. That is not
@@ -21,7 +20,7 @@
 # read-only face of the same confusion the incident above is the
 # destructive face of, and it costs a background slot and an hour rather
 # than a machine — which is why it went unnoticed twice. See
-# .claude/rule/hygiene.md, "等待条件不能自匹配".
+# the hygiene rule that a wait condition must not match itself.
 #
 # Usage: bash bench/killgate.sh [dir ...]     (default: bench scripts/)
 set -euo pipefail
@@ -66,9 +65,8 @@ if bad:
     print("killgate: FAIL — unguarded interpolated `pkill -f`", file=sys.stderr)
     print("  An empty variable makes the pattern match every process on the",
           file=sys.stderr)
-    print("  box. Guard it, or kill a captured PID instead (see",
+    print("  box. Guard it, or kill a captured PID instead.\n",
           file=sys.stderr)
-    print("  bench/INCIDENT-2026-07-perfgate-pkill-massacre.md).\n", file=sys.stderr)
     for f, n, line, missing in bad:
         print(f"  {f}:{n}: {line}", file=sys.stderr)
         print(f"      no `[ -n \"${{{missing[0]}}}\" ]` guard within 3 lines above",
@@ -103,7 +101,7 @@ if selfmatch:
           file=sys.stderr)
     print("  Wait on evidence the subject produces instead — a finished-marker",
           file=sys.stderr)
-    print("  line, a flag file, an exit-code file. See .claude/rule/hygiene.md.\n",
+    print("  line, a flag file, an exit-code file.\n",
           file=sys.stderr)
     for f, n, line in selfmatch:
         print(f"  {f}:{n}: {line}", file=sys.stderr)

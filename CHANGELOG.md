@@ -1,5 +1,52 @@
 # Changelog
 
+## 6.2.1 — the two crates that were published without ever being sent
+
+A user pointed out that `kevy-client` on crates.io still asked for
+`kevy-embedded ^5.0`. They were right, and the report understated it.
+
+### What was wrong
+
+`kevy-client` and `kevy-client-async` kept a version line of their own —
+2.x, on the theory that a client's API grows at its own pace. When the
+workspace went to 6.0.0 their manifests moved with it: every sibling pin
+in the tree read `6.0.0`, then `6.1.0`, then `6.2.0`. Their own number
+stayed at 2.2.0, because nothing about *their* API had changed.
+
+`cargo publish` refuses a version that already exists, and the release
+workflow treated that refusal as "already done". It was already done —
+on 2026-08-10, with pins at `^5.0`. So for three releases the tree
+described a client that drove a 6.x engine, and the world could only
+install one that resolved to 5.4.1. Every gate passed. Every gate read
+the tree, and the tree agreed with itself.
+
+### What changes
+
+**No crate has a version of its own any more.** Every workspace member
+inherits the workspace version and a bump moves all of them — the two
+clients, and three others (`kevy-embedded`, `kevy-tmpdir`, `kevy-wasm`)
+that declared the workspace number explicitly rather than inheriting it,
+which is the same arrangement one forgotten edit away.
+
+`kevy-client` and `kevy-client-async` therefore go from 2.2.0 to 6.2.1.
+The API is the 2.2.0 API; what moves is the number, so that
+`cargo add kevy-client` fetches a client whose siblings are the engine
+this changelog describes. A dependency written as `kevy-client = "2"`
+keeps resolving to 2.2.0 and the 5.4.1 engine — change it to `"6"`.
+
+### Three gates that now ask the world
+
+- `tools/check_version_alignment.py` refuses a member of `crates/` that
+  declares its own `version =`. Inheritance is the only form a bump
+  cannot leave behind.
+- The publish loop no longer takes "already exists" at its word. Before
+  it skips a crate it compares the manifest crates.io holds under that
+  number with the one the tree would upload — every dependency's name,
+  requirement and kind — and fails the release when they differ. The
+  comparison is `tools/check_published_manifest.py <crate> <version>`.
+- `tools/check_channels_published.py` runs the same comparison on every
+  crate door. On 6.2.0 it now reports 54 of 56 doors, naming the two.
+
 ## 6.2.0 — a sorted set stopped rewriting an index it had not changed
 
 One behaviour changes, one command gets substantially faster, and every
@@ -171,9 +218,6 @@ below is an instrument, a record, or a duplicate implementation.
   6.1.0 bump left twenty-five declarations behind and the alignment gate
   caught them. Both tools read the same set of places now, which was the
   stated reason the bump tool exists.
-
-The audit, including the instrument errors made while finding these, is in
-`bench/AUDIT-2026-08-30-what-v6-was-checked-by.md`.
 
 ## 6.0.0 — the instruments
 
@@ -714,14 +758,12 @@ as-is in both directions.
 
 - The agg index build's RSS transient is ~8× its settled formula and
   invariant to dataset residency; the formula describes the settled
-  index correctly (`bench/FINDING-2026-08-17-agg-build-rss-transient.md`).
+  index correctly.
 - The agg write tax measures 9.9 ± 0.5 % against its 10 % claim — the
-  spread exceeds the distance to the line
-  (`bench/FINDING-2026-08-17-agg-write-tax-at-the-line.md`).
+  spread exceeds the distance to the line.
 - The firehose-epoll reactor-gap bar breaches ~1 in 5 runs on the bench
   box; a released 5.1.0 binary reproduces it on the same disk, so it is
-  the documented jbd2 tail, not a regression
-  (`bench/.flake-archive/2026-08-18-tailgate-firehose-gap-intermittent-NOTE.md`).
+  the documented jbd2 tail, not a regression.
 
 ## 5.2.0 — the browser gets the whole data layer
 
@@ -1649,7 +1691,7 @@ touches the cold tier.
   batched/bulk writes**: kevy logs a crash-recoverable AOF frame per
   write where a B+tree/LSM defers all durability to one commit — the
   honest price of per-op durability, decomposed and decided in
-  `.claude/rfcs/2026-07-24-embedded-bulk-write-ceiling.md` (keep it).
+  (keep it).
 - **Batch write** — `kevy_set_many` (C ABI) + `SetMany` (Go, C#) +
   `setMany` (Node): apply N writes in one boundary crossing, durability
   unchanged. It closes the crossing tax for the one binding that pays an
@@ -1848,9 +1890,7 @@ failure is now closed, each behind an executable gate.
 - **`uringgate`**, the gate that caught the first of these, is green
   and in CI. Its sq-pressure half needs a real ring; its
   blocking-tail half runs everywhere, because the bug it found was
-  never reactor-specific. Full investigation, including the two dead
-  ends and the one-line triage that ended it, in
-  `bench/PERF-FINDING-2026-07-18-uring-recv-rearm-wedge.md`.
+  never reactor-specific.
 
 - **A cross-shard blocking pop could lose the element it popped.** The
   target pops for a waiter and ships the reply to the origin; if the
@@ -2475,9 +2515,7 @@ train, versions bump at ship time.
   baseline); pinned angles held (+8~18%); -c1 sequential IMPROVED to
   80.3k ops/s @ p50 15µs (above the post-4fa4631 63-65k — both sides
   of the historical trade now win). perfgate 6/6 PASS on the
-  untouched 2026-06-11 baseline, then honestly re-recorded. Full
-  archaeology: bench/PERF-FINDING-2026-07-03-legacy8sh-set-bimodal.md
-  + bench/PERF-DECOMP-2026-07-04-legacy8sh-owner-starvation.md.
+  untouched 2026-06-11 baseline, then honestly re-recorded.
 - Batch-gated 200µs nap retained as the second ladder rung for the
   no-inflight idle shape (`NAP_BATCH_MIN` 4).
 
@@ -2732,11 +2770,11 @@ On every surface: server `ZADD` parser (combo validation + `CH`/`INCR` reply sha
 ### Also
 
 - `string.rs` → `string_rmw.rs`, `kevy-store/lib.rs` → `types.rs`, `kevy-embedded/store.rs` → `store_glue.rs` (500-LOC debt repaid — all prod files under the ceiling again).
-- Op-surface gap matrix doc (`.claude/perfs/2026-07-03-op-surface-gap-matrix.md`): F1–F6 findings; F2 (embed-as-replica verb holes) and F3 (server missing bitmap family etc.) are the ledgered next targets.
+- Op-surface gap matrix: F1–F6 findings; F2 (embed-as-replica verb holes) and F3 (server missing bitmap family etc.) are the ledgered next targets.
 
 ### Perf-gate disclosure (五轴 perf axis)
 
-perfgate's `legacy_8sh_set` line is red at ship time — **a documented pre-existing condition, not a v2.1 regression**: an A/B/C binary matrix (v2.1 ≡ v2.0.21 ≡ v2.0.20), a baseline-era-binary control reproducing its 2026-06-11 numbers to 0.03% on the same box the same hour, and a plain-release rebuild rule out this branch, the box, and the build profile. The decay is gradual (2026-06-11→06-30, ~40 releases, typical draw -8%) with a new multi-mode instance instability; a 140-revision bisect false-converged on a client-only commit, demonstrating single-culprit hunting fails on this distribution. Full evidence: `bench/PERF-FINDING-2026-07-03-legacy8sh-set-bimodal.md`. Ship-with-documented-red explicitly authorized by the user 2026-07-03; the decay decomposition campaign is the next open task. All five pinned/compat angles pass, four of them **+10–19% above** the recorded baseline. mem/disk gates recorded + PASS on lx64 (96 B/entry @16B, 106 AOF B/op @d64); covgate green in CI (79.64% Linux ratchet).
+perfgate's `legacy_8sh_set` line is red at ship time — **a documented pre-existing condition, not a v2.1 regression**: an A/B/C binary matrix (v2.1 ≡ v2.0.21 ≡ v2.0.20), a baseline-era-binary control reproducing its 2026-06-11 numbers to 0.03% on the same box the same hour, and a plain-release rebuild rule out this branch, the box, and the build profile. The decay is gradual (2026-06-11→06-30, ~40 releases, typical draw -8%) with a new multi-mode instance instability; a 140-revision bisect false-converged on a client-only commit, demonstrating single-culprit hunting fails on this distribution. Ship-with-documented-red explicitly authorized by the user 2026-07-03; the decay decomposition campaign is the next open task. All five pinned/compat angles pass, four of them **+10–19% above** the recorded baseline. mem/disk gates recorded + PASS on lx64 (96 B/entry @16B, 106 AOF B/op @d64); covgate green in CI (79.64% Linux ratchet).
 
 Ships as `kevy-embedded` **1.16.0** / workspace **v2.1.0**.
 
@@ -3296,7 +3334,7 @@ test result: ok. 114 passed; 0 failed (was 106 in v2.0.9; +8 scan).
 | 6 | ⏳ atomic — shape conversation pending |
 | 13 | ⏳ pipeline — shape conversation pending |
 
-**15 of 16 fully closed; only #6 atomic and #13 pipeline remain.** Both still need 1 short reply from mailrs (see [v1.7.0 update note](/Users/doracawl/workspace/stables/mailrs/.claude/notes/kevy-response-zset-hash-multi-2026-07-01.md)).
+**15 of 16 fully closed; only #6 atomic and #13 pipeline remain.** Both still need 1 short reply from mailrs.
 
 ## [v2.0.9] — 2026-07-01 — **`kevy-embedded` 1.8.2**: README Phase 2+ ops showcase
 
@@ -3569,8 +3607,6 @@ test result: ok. 77 passed; 0 failed (was 63 in v2.0.3; +14 P3 tests).
 
 ### Cross-reference
 
-- Reply note to mailrs: `/Users/doracawl/workspace/stables/mailrs/.claude/notes/kevy-response-zset-hash-multi-2026-07-01.md`
-- Original feedback note: `/Users/doracawl/workspace/stables/mailrs/.claude/notes/kevy-feedback-zset-hash-multi-2026-07-01.md`
 
 ## [v2.0.3] — 2026-07-01 — **`kevy-embedded` 1.5.0**: Phase 2 ops surface (mailrs feedback)
 
@@ -3633,7 +3669,6 @@ Per mailrs's suggested release shape, this ships the methods that already had a 
 
 ### Cross-reference
 
-- Original feedback note: `/Users/doracawl/workspace/stables/mailrs/.claude/notes/kevy-feedback-zset-hash-multi-2026-07-01.md`
 - mailrs's KV layout this ship enables: `/Users/doracawl/workspace/stables/mailrs/crates/mailbox-kevy/src/lib.rs:25-46`
 
 ## [v2.0.2] — 2026-07-01 — CI regression fix: unit test caught up to v1.57 `cluster_known_nodes` semantics
@@ -5014,7 +5049,7 @@ kevy does NOT install a SIGXFSZ handler. On Mac/Linux, RLIMIT_FSIZE exceeded →
 
 ## [v1.36.0] — 2026-06-30 (v2 roadmap Phase A step 1 — RESP fuzz + error-reply catalog)
 
-**Theme**: v2 roadmap (`.claude/plans/2026-06-30-v2-roadmap.md`) Phase A "Failure-mode hardening" step 1 of 3. Industrial-grade RESP parser fuzz coverage + a full catalog of every wire-level error kevy emits.
+**Theme**: v2 roadmap, Phase A "Failure-mode hardening" step 1 of 3. Industrial-grade RESP parser fuzz coverage + a full catalog of every wire-level error kevy emits.
 
 ### Added
 
@@ -5256,7 +5291,7 @@ All gated `#[ignore]`. Opt-in via `--ignored`.
 
 ### v1.32 cross-platform validation (doc-only, landed on master pre-tag)
 
-See [`bench/PERF-FINDING-2026-06-30-v1-32-chaos-cross-platform-lx64.md`](bench/PERF-FINDING-2026-06-30-v1-32-chaos-cross-platform-lx64.md):
+The cross-platform run:
 
 | Test | Mac aarch64 | lx64 x86_64 |
 |------|-------------|-------------|
@@ -5353,8 +5388,6 @@ The `crash_everysec` test surfaces a real product-relevant question: empirical l
 
 **Important**: NO CORRUPTION ever observed across multiple runs. kevy never returns wrong values, only nil for lost writes. The "lost more than expected" question is the kind of question v1.31 is meant to surface — actionable for v1.31.x but **not** a v1.31.0 ship-blocker.
 
-See [`bench/PERF-FINDING-2026-06-30-everysec-loss-fraction.md`](bench/PERF-FINDING-2026-06-30-everysec-loss-fraction.md) for the finding + investigation roadmap.
-
 ### Empirical validation (passing tests)
 
 - `crash_always`: 571 ACKs in 2 s, SIGKILL, restart → **0 lost, 0 corrupted** (`appendfsync = always` zero-loss contract validated). Wall-clock 2.47 s.
@@ -5392,7 +5425,7 @@ See [`bench/PERF-FINDING-2026-06-30-everysec-loss-fraction.md`](bench/PERF-FINDI
 - **`Shard.listener: Socket` → `Option<Socket>`**. Off-accept-set shards skip `tcp_listen_reuseport` entirely; SO_REUSEPORT redistributes new conns across only the bound subset.
 - **`uring_reactor.rs` + `shard.rs` (epoll) + `shard_lifecycle.rs`** — all listener call sites destructure `Option<Socket>` and return / skip on `None`.
 
-### Perf validation ([`bench/PERF-FINDING-2026-06-29-v1-30-accept-shards-bench.md`](bench/PERF-FINDING-2026-06-29-v1-30-accept-shards-bench.md))
+### Perf validation
 
 Fair-core bigval-SET (`-c 50 -d 65536 -t set -n 200k`, kevy 10c taskset 0-9 vs valkey 10c same):
 
@@ -5485,20 +5518,6 @@ Specific axes:
 - **A8 conn-affinity rebalance** — empirically supported (fair-core 10c LOSES MORE than 2c, validates the "conn-density inversion" the c100 GET decomp identified at 6 conns/shard). 200+ LOC, breaks stateless-shard model, multi-session work. Deferred to v1.30 or v1.29.x patch line if pursued.
 - **D-series kernel-side experiments** (per-port iptables fast-path; hugepage `.text`; MSG_ZEROCOPY for big writes). Deployer-side, not app code; require system-wide changes.
 - **Per-workload throughput headline win** — empirically not available without one of the above two paths. Honest framing is "architectural prep + empirical userspace ceiling verification + cross-project methodology upgrade".
-
-### Where the actual perf findings live (link rot guard)
-
-| Finding | Doc |
-|---------|-----|
-| Phase A c100 GET decomp + A0 baseline | [`bench/PERF-DECOMP-2026-06-28-c100-GET-vs-valkey-9.1.md`](bench/PERF-DECOMP-2026-06-28-c100-GET-vs-valkey-9.1.md) |
-| Axis sweep probe (5 axes) | [`bench/PERF-PROBE-2026-06-28-axis-sweep-vs-valkey.md`](bench/PERF-PROBE-2026-06-28-axis-sweep-vs-valkey.md) |
-| Bigval-SET Phase A decomp + perf record §I | [`bench/PERF-DECOMP-2026-06-28-bigval-SET-vs-valkey-9.1.md`](bench/PERF-DECOMP-2026-06-28-bigval-SET-vs-valkey-9.1.md) |
-| Arc-from-Box memcpy is real (B3 revert + Option A validation addendum) | [`bench/PERF-FINDING-2026-06-29-arc-from-box-memcpys.md`](bench/PERF-FINDING-2026-06-29-arc-from-box-memcpys.md) |
-| Axis H 4 KB pub/sub no real gap (valkey noise) | [`bench/PERF-FINDING-2026-06-29-axis-H-no-real-gap.md`](bench/PERF-FINDING-2026-06-29-axis-H-no-real-gap.md) |
-| Axis G + I sweep | [`bench/PERF-FINDING-2026-06-29-axis-G-I-no-new-gaps.md`](bench/PERF-FINDING-2026-06-29-axis-G-I-no-new-gaps.md) |
-| Fair-core 10c-vs-10c bigval-SET (validates A8) | [`bench/PERF-FINDING-2026-06-29-fair-core-bigval-SET.md`](bench/PERF-FINDING-2026-06-29-fair-core-bigval-SET.md) |
-| A7 throughput-neutral (reverted) | [`bench/PERF-FINDING-2026-06-29-A7-spin-limit-throughput-neutral.md`](bench/PERF-FINDING-2026-06-29-A7-spin-limit-throughput-neutral.md) |
-| c100 GET methodology gate compliance | [`bench/PERF-FINDING-2026-06-29-c100-GET-methodology-gate-says-no.md`](bench/PERF-FINDING-2026-06-29-c100-GET-methodology-gate-says-no.md) |
 
 ---
 
@@ -5916,7 +5935,6 @@ Deferred to v1.28+:
 - i18n docs/lua mirrors (ja + zh-CN).
 
 Reference: [`docs/lua.md`](docs/lua.md).
-Reference: [`.claude/rfcs/2026-06-23-v1.27-luna-bridge.md`](.claude/rfcs/2026-06-23-v1.27-luna-bridge.md) (the v1.27 phase plan).
 
 
 ## [v1.26.6] — 2026-06-22 (v1.26.5 follow-up — stronger crates.io 429 backoff)
@@ -6071,16 +6089,15 @@ Everything below remains true (it's the v1.25.0 entry, unchanged).
 ## [v1.25.0] — 2026-06-22 (decomposition-driven perf sprint + UDS support)
 
 This release adopts and ships the
-**decomposition-then-attack methodology** (`.claude/rule/perf-vs-foss.md`,
+**decomposition-then-attack methodology** (
 adapted from the SPG project's `PERF_METHODOLOGY_VS_FOSS.md`). Every
 v1.25 attack started from a per-axis Phase A decomposition
-(`.claude/notes/v125-deco-axis-*.md`) that enumerated 18+ stages of
+that enumerated 18+ stages of
 the kevy and valkey paths side-by-side, file:line × atomic-op-count,
 total ±20 % of measured wire RTT. Phase B attacks then implemented
 the Top-N attack list from each decomposition.
 
 **8 of 11 pre-v1.25 axis hypotheses were refuted** by Phase A reading.
-The full outcomes report is `bench/V125-AXES-MASTER.md`.
 
 v1.25.0 supersedes v1.24.1 UNRELEASED — both ship together (v1.24.1's
 12-attack chain remains, listed below; the new v1.25 attacks are
@@ -6099,7 +6116,7 @@ additive on top).
 
 ### v1.25 — Reverted with measurement (R3 ★)
 
-Two attacks from `.claude/notes/v125-deco-axis-i-c50-10kb.md` did NOT
+Two attacks from the c50/10 KB decomposition did NOT
 match their Phase A predictions; reverted after bench:
 
 - **G6 A2 lazy-drop big values** — predicted -20-150 µs p999;
@@ -6111,8 +6128,7 @@ match their Phase A predictions; reverted after bench:
   p999; measured **+44 % p999**. The spin ladder existed precisely
   so burst arrival catches the next recv within the spin window.
 
-Both negative results are captured in `bench/V125-AXIS-I-LATENCY.md`
-and `bench/V125-AXES-MASTER.md` as R3 ★ flipped predictions.
+Both negative results are recorded as R3 ★ flipped predictions.
 
 ### v1.25 — Deferred (named cause + fix path, not ceiling claims)
 
@@ -6126,15 +6142,14 @@ and `bench/V125-AXES-MASTER.md` as R3 ★ flipped predictions.
 
 ### v1.25 — Trigger-word ban applied to bench docs
 
-11 bench docs (`bench/V125-AXIS-*.md` + `V125-AXES-MASTER.md`)
-rewritten in commit `dcaeadc`: removed "tied / kernel-bound / loopback
+11 bench docs rewritten in commit `dcaeadc`: removed "tied / kernel-bound / loopback
 floor / valkey absorbed / structural ceiling / RTT-bound hides X"
 claims, replaced with file:line + atomic-op-count + named fix paths
-per `.claude/rule/perf-vs-foss.md` R2.
+per the methodology's R2.
 
 ### v1.25 — Methodology rule + memory artifacts
 
-- `.claude/rule/perf-vs-foss.md` — R1-R8 codified rules for kevy +
+- R1-R8 codified rules for kevy +
   any future vs-FOSS project. CLAUDE.md project link added.
 - Auto-memory entry `feedback-perf-vs-foss-decomposition` records
   the methodology + my own pre-adoption mistakes (V125-AXIS-* dev
@@ -6161,8 +6176,7 @@ attacks shipped, 3 retired-with-rationale, 3 audit-closed, 1 deferred.
 
 The Rust client at -c1 has reached **C-client parity** — the prior gap
 was userspace-side; this sprint closed it. Post-sprint H-redo
-diagnostic (`bench/PERF-PROFILE-2026-06-20-POST-V124-CHAIN.md`)
-confirms 38 % of remaining CPU is kernel-side (tcp_sendmsg + io_uring
+diagnostic confirms 38 % of remaining CPU is kernel-side (tcp_sendmsg + io_uring
 admin + 1.26 % nft_do_chain loopback netfilter).
 
 ### Shipped (12 attacks + 1 diag doc)
@@ -6181,7 +6195,7 @@ admin + 1.26 % nft_do_chain loopback netfilter).
 | E15 | kevy-rt `drain_inbound`            | fast-path inline + cold-body outline (`drain_inbound_core_slow`) |
 | E16 | kevy-rt `flush_wakes` / `flush_backlog` | same fast-path inline + cold outline pattern |
 | A13 | kevy-store `tick_expire`           | skip sampling loop when `expires == 0` (TTL-free workloads) |
-| —   | bench docs                         | `PERF-PROFILE-2026-06-20-POST-V124-CHAIN.md` re-diagnosis after the chain |
+| —   | bench docs                         | re-diagnosis after the chain |
 
 ### Retired with rationale (kept in code as inline notes)
 
@@ -6366,7 +6380,7 @@ Two more attacks (#22 + #23 in the cumulative log):
   Real engineering tasks; **deferred** beyond this incremental
   sprint.
 
-- **PERF-ATTACK-LOG-2026-06-20.md** — attacks 22 + 23 logged. Final
+- **Attack log** — attacks 22 + 23 logged. Final
   scoreboard:
 
   **23 attacks total. 16 kept (14 code + 2 doc), 4 dropped,
@@ -6435,7 +6449,7 @@ host-tuning lever found in the entire sprint.
   PGO recipe for fixed-workload deployments. Measured 1-10% on the
   lx64 reference; workload-bound so NOT shipped in CI default.
 
-- **PERF-ATTACK-LOG-2026-06-20.md** — updated with attacks 17-21.
+- **Attack log** — updated with attacks 17-21.
   21 attacks total in the cumulative sprint: 14 kept (12 code + 2
   doc), 4 dropped, 5 doc-only / diagnostic.
 
@@ -6484,10 +6498,8 @@ The -c50 -P16 numbers (6 M/s GET, 4 M/s SET) hit the `redis-benchmark`
 client-side cap with `--threads 6`; the server has more headroom but the
 test harness can't push faster.
 
-Sprint methodology: top-down `perf record` flamegraph on the lx64 reference
-(documented in [`bench/PERF-PROFILE-2026-06-20.md`](bench/PERF-PROFILE-2026-06-20.md)).
-Each attack measured before and after; verdicts + per-attack measurement
-in [`bench/PERF-ATTACK-LOG-2026-06-20.md`](bench/PERF-ATTACK-LOG-2026-06-20.md).
+Sprint methodology: top-down `perf record` flamegraph on the lx64 reference.
+Each attack measured before and after.
 **16 attacks** total: 12 kept, 4 dropped.
 
 ### Reactor open-loop wins

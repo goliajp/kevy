@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # allocgate — the v5 memory-experiment gate for kevy-alloc.
 #
-# RFC: .claude/rfcs/2026-07-26-v5-kevy-alloc.md §8 (M1..M8)
+# Measures M1..M8 of the kevy-alloc contract.
 # Accounting contract: bench/V5-ACCOUNTING-CONTRACT.md §1
 #
 # One line per acceptance criterion; a line is either a real assertion or

@@ -210,7 +210,7 @@ impl<C: Commands> Shard<C> {
             // the cross-shard fan-out path is dead code — skip the
             // Arc::new + 2 × to_vec allocation and deliver inline from the
             // borrowed argv slices. Saves ~0.18 µs/publish at subs=10 (per
-            // .claude/notes/v125-deco-axis-h-pubsub-edges.md sub-Q1).
+            // the pub/sub edge decomposition, sub-Q1).
             if self.nshards == 1 {
                 debug_assert!(bits == 1 && self.id == 0);
                 self.deliver_publish(&args[1], &args[2]);

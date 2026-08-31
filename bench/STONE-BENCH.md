@@ -113,7 +113,7 @@ identical shapes.
 
 The page-return row has no system column deliberately: there is nothing
 to compare it against, because that is the operation glibc cannot perform
-at any price (`bench/PERF-FINDING-2026-07-25-b6-rss-glibc-fragmentation.md`).
+at any price.
 Folding it into the churn row instead — which the first draft of this
 bench did — timed our reclaim against their nothing and read as a 1.5×
 loss that was really a missing column.

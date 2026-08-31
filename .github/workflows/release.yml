@@ -55,10 +55,12 @@ jobs:
   # the loop silently publishes everything except the new crate — the
   # v1.4.0 release tagged kevy-geo this way.
   #
-  # Per-crate version tracking: kevy-embedded and kevy-client carry their
-  # own explicit `version =` in Cargo.toml (independent additive growth);
-  # everything else inherits the workspace version. The workflow doesn't
-  # care — `cargo publish -p <crate>` reads each crate's own Cargo.toml.
+  # Every crate inherits the workspace version; none keeps a line of its
+  # own. Two did (kevy-client, kevy-client-async on a 2.x line), and for
+  # three releases the loop below saw "2.2.0 already exists" and skipped
+  # them while their manifests in the tree pinned siblings the published
+  # 2.2.0 had never heard of. A version that does not move cannot be
+  # republished, so every version moves.
   #
   # Rate limit: crates.io throttles NEW-crate publishes (burst-5 then
   # 1/~10 min), but version BUMPS on existing crates are not throttled —
@@ -141,10 +143,24 @@ jobs:
                 return 0
               fi
               if grep -qE "already uploaded|crate version .* is already|already exists on crates.io" "$log"; then
+                # "Already exists" is a statement about the version number.
+                # It is an honest skip only when the manifest crates.io holds
+                # under that number is the one this tree would upload — a
+                # retried release. When the tree moved and the number did not,
+                # the world has a crate we can never ship, and that is a
+                # failure of THIS release, not a skip.
+                local ver
+                ver=$(cargo metadata --no-deps --format-version 1 \
+                  | jq -r --arg c "$crate" '.packages[] | select(.name==$c) | .version')
+                if python3 tools/check_published_manifest.py "$crate" "$ver"; then
+                  echo "::endgroup::"
+                  echo "↷ skipped $crate ($ver already on crates.io with this manifest)"
+                  sleep 5
+                  return 0
+                fi
                 echo "::endgroup::"
-                echo "↷ skipped $crate (already on crates.io)"
-                sleep 5
-                return 0
+                echo "✗ FAILED $crate: $ver is on crates.io with a DIFFERENT manifest — bump and republish" >&2
+                return 1
               fi
               if grep -qE "429 Too Many Requests|too many updates" "$log"; then
                 echo "::warning::rate-limited on $crate (attempt $attempt of 5) — sleeping 300s"

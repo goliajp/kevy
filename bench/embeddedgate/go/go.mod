@@ -1,5 +1,5 @@
 // embeddedgate Go harness — kevy-go scalar vs bbolt / badger.
-// See bench/EMBEDDED-LEDGER.md + .claude/rfcs/2026-07-23-v4-embedded-bench.md.
+// See bench/EMBEDDED-LEDGER.md.
 // kevy-go is linked via replace to the in-repo source of truth; its cgo
 // preamble links target/debug/libkevy_ffi.a, so run.sh stages the RELEASE
 // static lib there for a fair perf comparison and restores it after.

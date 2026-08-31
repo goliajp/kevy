@@ -31,7 +31,10 @@ mechanical migration — every change below has a one-line rule.
 
 `kevy-client` and `kevy-client-async` are **not** on the workspace's
 version line: they ship as **2.0.0**, not 4.0.0. `cargo add kevy-client`
-resolves 2.x — that is the current release, not a stale one.
+resolves 2.x — that is the current release, not a stale one. (True
+until 6.2.1, when both clients moved onto the workspace version; a
+`"2"` requirement now resolves to a client built against the 5.x
+engine — see [upgrading-6.2.0-to-6.2.1.md](upgrading-6.2.0-to-6.2.1.md).)
 
 ## What is compatible automatically
 
