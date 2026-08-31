@@ -19,7 +19,7 @@ go get github.com/goliajp/kevy-go/v6
 
 That module is generated from this directory and pushed on each release
 — Go has no registry, so an import path has to be a repository URL.
-Edit here, never there. See [PUBLISH-FORM.md](PUBLISH-FORM.md).
+Edit here, never there.
 
 ```go
 import (
