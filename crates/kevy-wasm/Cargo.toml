@@ -1,7 +1,7 @@
 [package]
 name = "kevy-wasm"
 description = "WebAssembly bindings for kevy — the embedded Redis-compatible KV engine behind a hand-written C ABI for browsers and JS runtimes."
-version = "6.2.0"
+version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
@@ -44,11 +44,11 @@ crate-type = ["cdylib", "rlib"]
 # them, not to save bytes: `replicate` needs a network peer, `listener`
 # needs a TCP socket, and `tier` needs a disk directory — its own docs
 # say a wasm store rejects the config at open.
-kevy-embedded = { path = "../kevy-embedded", version = "6.2.0", default-features = false, features = ["core", "persist", "index", "text", "vector"] }
+kevy-embedded = { path = "../kevy-embedded", version = "6.2.1", default-features = false, features = ["core", "persist", "index", "text", "vector"] }
 # Clock access: TTL frames record absolute deadlines, anchored to the
 # host-fed wall clock.
-kevy-store = { path = "../kevy-store", version = "6.2.0" }
+kevy-store = { path = "../kevy-store", version = "6.2.1" }
 # AOF frame format: the pump emits and parses the same multi-bulk frames
 # (and magic header) a kevy-written on-disk AOF carries.
-kevy-persist = { path = "../kevy-persist", version = "6.2.0" }
-kevy-resp = { path = "../kevy-resp", version = "6.2.0" }
+kevy-persist = { path = "../kevy-persist", version = "6.2.1" }
+kevy-resp = { path = "../kevy-resp", version = "6.2.1" }

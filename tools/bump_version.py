@@ -27,11 +27,9 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
-# Reuse the gate's own exclusions and independent-track list rather than
-# restating them: a door the gate ignores must not be bumped either.
-from check_version_alignment import (  # noqa: E402
-    INDEPENDENT, INDEPENDENT_VERSION, skip,
-)
+# Reuse the gate's own exclusions rather than restating them: a door the
+# gate ignores must not be bumped either.
+from check_version_alignment import skip  # noqa: E402
 
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 
@@ -100,17 +98,14 @@ def bump_cargo(new: str, changes: list) -> None:
     # version-gated dependency against crates.io — the new crate would have
     # resolved to the old sibling.
     #
-    # And the value came from `new` regardless of what the pin points AT, so
-    # a pin on an independent-line crate was rewritten to the workspace
-    # version — naming a version of kevy-client that does not exist. The
-    # target decides, exactly as the gate reads it.
+    # Every sibling is at the workspace version (no crate keeps a line of
+    # its own any more — the gate refuses one that tries), so every pin
+    # is rewritten to `new`.
     pin = re.compile(
         r'(path\s*=\s*"[^"]*?(kevy(?:-[\w-]+)?)"\s*,\s*version\s*=\s*"=?)(\d+\.\d+\.\d+)(")')
 
     def pin_sub(m: re.Match) -> str:
-        target = f"crates/{m.group(2)}/Cargo.toml"
-        want = INDEPENDENT_VERSION.get(target, new)
-        return m.group(1) + want + m.group(4)
+        return m.group(1) + new + m.group(4)
     for p in cargo_files():
         if skip(p):
             continue
@@ -120,11 +115,10 @@ def bump_cargo(new: str, changes: list) -> None:
             if line.lstrip().startswith("#"):
                 out.append(line)
                 continue
-            if rel not in INDEPENDENT:
-                line2 = own.sub(lambda m: m.group(1) + new + m.group(3), line, count=1)
-                if line2 != line:
-                    hit = True
-                line = line2
+            line2 = own.sub(lambda m: m.group(1) + new + m.group(3), line, count=1)
+            if line2 != line:
+                hit = True
+            line = line2
             line2 = pin.sub(pin_sub, line)
             if line2 != line:
                 hit = True

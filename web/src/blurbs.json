@@ -31,6 +31,7 @@
     "vector-search": "KNN over your keyspace. No embedding model included.",
     "views": "Materialised views, kept fresh by the write path.",
     "wasm": "151 KB in a browser tab, persisted to OPFS.",
+    "upgrading-6.2.0-to-6.2.1": "Nothing on the server changes; two client crates finally reach crates.io at the engine's version.",
     "upgrading-5.1-to-5.2": "Stop 5.1, start 5.2 on the same directory — the Lua dialects now match upstream.",
     "packed-rows": "One allocation per declared row, and the ordering that decides whether it saves anything."
   },
@@ -66,6 +67,7 @@
     "vector-search": "キー空間の上での KNN。embedding モデルは含まない。",
     "views": "マテリアライズドビュー。書き込みパスが鮮度を保つ。",
     "wasm": "ブラウザのタブに 151 KB、OPFS へ永続化。",
+    "upgrading-6.2.0-to-6.2.1": "サーバーは無変更。2 つのクライアント crate がようやくエンジンと同じ番号で crates.io に届く。",
     "upgrading-5.1-to-5.2": "5.1 を止め、同じディレクトリで 5.2 を起動——Lua の方言が上流と一致します。",
     "packed-rows": "宣言済みの行を 1 回の確保に。節約になるかを決めるのは順序のほう。"
   },
@@ -101,6 +103,7 @@
     "vector-search": "在你的键空间上做 KNN。不含 embedding 模型。",
     "views": "物化视图，由写路径顺手保持新鲜。",
     "wasm": "浏览器标签页里的 151 KB，持久化到 OPFS。",
+    "upgrading-6.2.0-to-6.2.1": "服务器什么都没变；两个客户端 crate 终于以引擎的版本号到达 crates.io。",
     "upgrading-5.1-to-5.2": "停 5.1、在同一目录起 5.2 —— Lua 方言与上游对齐。",
     "packed-rows": "声明过的行存成一次分配，以及决定它到底省不省的那个顺序。"
   }

@@ -1,3 +1,11 @@
+## 6.2.1
+
+Tracks the kevy 6.2.1 engine. No API change in this door, and no change
+in the engine either: 6.2.1 exists because two Rust client crates
+(`kevy-client`, `kevy-client-async`) had gone three releases without
+reaching crates.io, and every kevy package now carries one version and
+moves together. This door moves with them.
+
 ## 6.2.0
 
 Tracks the kevy 6.2.0 engine. No API change in this door.
