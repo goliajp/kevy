@@ -1,6 +1,6 @@
 {
   "name": "@goliapkg/kevy-node",
-  "version": "6.2.1",
+  "version": "6.2.2",
   "description": "kevy embedded in Bun and Node — the real native engine behind one cmd() entry. Bun loads the dylib via bun:ffi; Node loads the hand-written N-API addon.",
   "license": "(Apache-2.0 OR MIT)",
   "repository": {
@@ -17,8 +17,8 @@
     "node.js"
   ],
   "optionalDependencies": {
-    "@goliapkg/kevy-node-darwin-arm64": "6.2.1",
-    "@goliapkg/kevy-node-linux-x64": "6.2.1",
-    "@goliapkg/kevy-node-linux-arm64": "6.2.1"
+    "@goliapkg/kevy-node-darwin-arm64": "6.2.2",
+    "@goliapkg/kevy-node-linux-x64": "6.2.2",
+    "@goliapkg/kevy-node-linux-arm64": "6.2.2"
   }
 }

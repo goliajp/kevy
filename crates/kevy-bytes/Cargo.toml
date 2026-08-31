@@ -26,7 +26,7 @@ alloc = ["kevy-hash/alloc"]
 workspace = true
 
 [dependencies]
-kevy-hash = { path = "../kevy-hash", version = "6.2.1", default-features = false }
+kevy-hash = { path = "../kevy-hash", version = "6.2.2", default-features = false }
 
 [dev-dependencies]
-kevy-bench = { path = "../kevy-bench", version = "6.2.1" }
+kevy-bench = { path = "../kevy-bench", version = "6.2.2" }
