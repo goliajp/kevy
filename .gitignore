@@ -48,6 +48,11 @@ bench/v125-precision-*.md
 bench/LESSONS-FROM-VALKEY-REDIS.md
 bench/.flake-archive/
 
+# Maintainer runbook and a resolved internal publish form. The product
+# facts they carried live in bindings/go/README.md, which a user reads.
+/.github/workflows/RELEASE.md
+/bindings/go/PUBLISH-FORM.md
+
 # Node ecosystem pollution — kevy has no Node.js dependencies in
 # this repo. Any node_modules/ + package*.json here come from
 # ad-hoc ecosystem-compat tests that should never have been
