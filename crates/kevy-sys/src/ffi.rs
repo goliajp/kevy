@@ -33,6 +33,10 @@ unsafe extern "C" {
     // aarch64 Linux where `c_char = u8`; x86_64 + macOS where
     // `c_char = i8` continue to type-check.
     pub fn unlink(path: *const c_char) -> c_int;
+    // flock(2) for kevy-persist's directory lock (one writer per data
+    // dir). Same constants on Linux and macOS; the lock rides the open
+    // file description, so process death always releases it.
+    pub fn flock(fd: c_int, operation: c_int) -> c_int;
     pub fn chmod(path: *const c_char, mode: u32) -> c_int;
     // signal(2) for SIGTERM / SIGINT handling. Variadic-ish
     // in glibc but the fixed two-arg form is universally supported.

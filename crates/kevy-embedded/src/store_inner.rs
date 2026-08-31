@@ -181,6 +181,13 @@ pub(crate) struct DropGuard {
     /// last-clone drop.
     #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
     pub(crate) replica_source: Option<crate::replica_source::ReplicaSource>,
+    /// Exclusive claim on the persist dir (`with_persist`) — one engine
+    /// per directory; a second `Store::open` on the same dir errors
+    /// instead of interleaving appends into this engine's AOF. Held for
+    /// the engine lifetime; released here when the last clone drops
+    /// (the drop body's final AOF flush runs before fields drop).
+    #[cfg(feature = "persist")]
+    pub(crate) _dir_lock: Option<kevy_persist::DirLock>,
 }
 
 impl Drop for DropGuard {
