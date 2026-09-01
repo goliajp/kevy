@@ -18,6 +18,7 @@ Run: python3 tools/sync_readme_bench.py [--check]
 
 import pathlib
 import re
+import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -195,6 +196,37 @@ def write_site(rows, version, check):
     return bad
 
 
+def export_site_json(check):
+    """Regenerate web/src/content.json from the site_content sources.
+
+    `write_site` edits `tools/site_content/{en,zh,ja}.py`, but the site
+    BUILDS from `web/src/content.json`, which is generated from them. On
+    2026-09-01 this tool reported "3 READMEs and the site carry the
+    2026-09-01 numbers" while content.json still held the previous run's,
+    and the site was deployed from it — a page headed 6.2.2 quoting 6.2.0
+    figures. Nothing this tool printed was false; it just stopped one step
+    short of the artifact anyone reads, and said "the site" anyway.
+
+    So the export is part of the sync, not a thing to remember afterwards.
+    In --check mode a stale content.json is a stale site, reported here
+    rather than only by the separate content-export gate, because this is
+    the tool a person runs when they want the numbers to be current.
+    """
+    cmd = [sys.executable, str(ROOT / "tools/export_site_content.py")]
+    if check:
+        cmd.append("--check")
+    r = subprocess.run(cmd, capture_output=True, text=True, cwd=ROOT)
+    if r.returncode == 0:
+        return []
+    if check:
+        return ["web/src/content.json (run tools/export_site_content.py)"]
+    sys.exit(
+        "sync_readme_bench: the READMEs and site sources were rewritten, "
+        "but exporting web/src/content.json failed:\n"
+        f"{r.stdout}{r.stderr}"
+    )
+
+
 def main():
     check = "--check" in sys.argv
     date, version, rows = latest_arena()
@@ -233,6 +265,7 @@ def main():
                 p.write_text(s, encoding="utf-8")
 
     stale += write_site(rows, version, check)
+    stale += export_site_json(check)
 
     if check:
         if stale:
@@ -243,7 +276,8 @@ def main():
         print(f"ok: 3 READMEs and the site carry the {date} arena numbers (kevy {version})")
         return
 
-    print(f"wrote the {date} arena numbers (kevy {version}) into 3 READMEs and the site")
+    print(f"wrote the {date} arena numbers (kevy {version}) into 3 READMEs, "
+          "the site sources, and web/src/content.json (what the site builds from)")
 
 
 if __name__ == "__main__":
