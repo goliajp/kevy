@@ -561,6 +561,106 @@ textgate 正在断言的内存公式。范围决定权不在我。
 
 ---
 
+## arena bare face — 2026-09-01 — kevy 6.2.2
+
+Re-measured for 6.2.2 rather than relabelled. **Three full runs**, not
+one — and the third run is the entry's reason for existing. Protocol per
+run is unchanged: `bash bench/arena.sh target/release/kevy` on lx64,
+cores 0-7 server / 8-15 client, one engine at a time, `-c 50 -P 16`,
+median-of-5 with sample stdev, throughput from each server's own command
+counter. The cells below are the **median of the three runs' medians**,
+with the run-to-run spread beside them.
+
+| verb | kevy 6.2.2 | Redis 8 | valkey 9.1.1 | Dragonfly | vs Redis 8 |
+|---|---:|---:|---:|---:|---:|
+| GET | 7,395,730 | 5,599,436 | 3,086,168 | 2,845,294 | 1.32x |
+| SET | 6,305,322 | 2,551,278 | 1,694,840 | 1,924,695 | 2.47x |
+| INCR | 6,294,330 | 3,326,620 | 2,221,391 | 2,031,132 | 1.89x |
+| SADD | 4,874,874 | 3,788,956 | 2,192,994 | 1,800,121 | 1.29x |
+| HSET | 4,511,460 | 3,043,259 | 1,863,456 | 1,768,012 | 1.48x |
+| LPUSH | 3,088,809 | 2,788,277 | 1,873,136 | 1,461,737 | 1.11x |
+| ZADD | 3,508,110 | 2,816,824 | 1,794,137 | 1,714,133 | 1.25x |
+
+Gap rule: `|kevy - other| <= max(stdev_kevy, stdev_other)` reads as NOISE.
+No cell hit it. With three runs a stronger statement is available and is
+the one this entry makes: **kevy's worst run beats every competitor's
+best run, in every cell** — narrowest LPUSH 1.09x and SADD 1.20x against
+Redis 8, LPUSH 1.52x against valkey, ZADD 1.94x against Dragonfly. No
+cell needs the median to win.
+
+What the three runs were for, and what they exposed about the instrument,
+is in the section below this one.
+
+## 6.2.2 arena — what three runs exposed (2026-09-01)
+
+Companion to the bare-face entry above; kept under its own heading because
+a bare-face entry carries one table and nothing else.
+
+### The claim that survives the spread
+
+Rather than the gap rule against a single run's stdev, this entry states
+the stronger thing three runs allow: **kevy's WORST run beats every
+competitor's BEST run, in every cell.** The narrowest are LPUSH at 1.09x
+and SADD at 1.20x against Redis 8; against valkey the narrowest is LPUSH
+at 1.52x, against Dragonfly ZADD at 1.94x. No cell needs the median to
+win.
+
+### Run-to-run spread is not the same instrument as within-run stdev
+
+The reason for three runs: run 1 read SADD at 4,591,850 and INCR at
+5,841,583, both far under the 6.2.0 entry. Before recording that, the
+serving path was diffed between the two tags — `git diff v6.2.0 v6.2.2 --
+crates/*/src` is comment-only in every serving crate (`.claude/` path
+references removed from doc comments) plus fifteen lines in
+`runtime_run.rs` that take the new data-directory lock once at startup.
+**No executable serving-path change exists between 6.2.0 and 6.2.2**, so
+a 20% drop could not be the engine, and re-measuring was the only honest
+next step. Runs 2 and 3 put SADD back at 5.89M and 5.34M.
+
+What that exposed is a property of the instrument this ledger had not
+recorded:
+
+| engine | run-to-run spread, worst cell |
+|---|---|
+| kevy | **26.6%** (SADD) |
+| Dragonfly | 10.5% (SET) |
+| valkey | 8.6% (LPUSH) |
+| Redis 8 | 7.6% (SET) |
+
+Within-run stdev over five iterations does not predict this. kevy is the
+least reproducible engine on this bench, and only on the verbs that grow
+a hash table — SET, INCR, SADD, HSET spread 12.5-26.6% while GET (2.7%)
+and LPUSH (0.3%) are the two steadiest cells in the whole matrix.
+
+**A hypothesis with a mechanism, not a conclusion:** `KevyMap::grow` is a
+bulk rehash — allocate 2x, move every live entry in one loop
+(`map_keyed.rs`). Redis rehashes incrementally for exactly this reason. A
+rehash landing inside the 3.0 s measurement window costs a visible slice
+of it, and whether it lands inside depends on how far the ramp got —
+which varies per run. That predicts the observed split precisely: the
+verbs that create keys are the unstable ones, and the read-only and
+append-into-existing verbs are not. It has not been proven here. Proving
+it needs a rehash counter read across the window; disproving it needs the
+same counter to come back flat.
+
+### Dragonfly's column is not measurement-grade
+
+Its within-run stdev reached 45% of the median on GET in run 1 (1,278,433
+on 2,826,723) and 22-27% on SET, SADD and HSET. Its medians are
+reproducible across runs (≤10.5%), so the numbers above are usable as a
+direction, but any published table carrying a Dragonfly column should
+first make that column as clean as the valkey one (0.7-5.6% stdev), or
+drop it. A comparison that a competitor's own maintainers could not
+reproduce would take the solid columns down with it.
+
+### Note for the next entry
+
+`perfgate-median` exists and is exactly the right shape — per-angle
+medians over N runs, the noise-resistant verdict — but it wraps
+`perfgate`, which measures kevy against a reference commit of itself.
+The table that goes in front of readers is this one, and it had no
+multi-run variant. This entry is that variant done by hand.
+
 ## arena bare face — 2026-08-30 — kevy 6.2.0
 
 Re-measured for the 6.2.0 release rather than relabelled. `bash
