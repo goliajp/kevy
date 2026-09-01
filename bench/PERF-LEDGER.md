@@ -632,16 +632,54 @@ least reproducible engine on this bench, and only on the verbs that grow
 a hash table — SET, INCR, SADD, HSET spread 12.5-26.6% while GET (2.7%)
 and LPUSH (0.3%) are the two steadiest cells in the whole matrix.
 
-**A hypothesis with a mechanism, not a conclusion:** `KevyMap::grow` is a
-bulk rehash — allocate 2x, move every live entry in one loop
-(`map_keyed.rs`). Redis rehashes incrementally for exactly this reason. A
-rehash landing inside the 3.0 s measurement window costs a visible slice
-of it, and whether it lands inside depends on how far the ramp got —
-which varies per run. That predicts the observed split precisely: the
-verbs that create keys are the unstable ones, and the read-only and
-append-into-existing verbs are not. It has not been proven here. Proving
-it needs a rehash counter read across the window; disproving it needs the
-same counter to come back flat.
+**The hypothesis this entry first recorded was wrong, and was tested the
+same day.** It said: `KevyMap::grow` is a bulk rehash, a rehash landing
+inside the 3.0 s window costs a slice of it, and whether it lands inside
+varies per run. That predicted the split — the verbs that create keys are
+the unstable ones — and it was refuted by looking at what the workload
+actually does.
+
+`arena.sh` passes redis-benchmark no `-r`, so every cell hammers **one
+key**. Measured on the box: after 200,000 SET plus 200,000 SADD the
+keyspace holds **two** keys, `key:__rand_int__` and `myset`. Nothing
+grows, so nothing rehashes, so the mechanism cannot be the cause. The
+correlation it was built on — writes unstable, reads steady — is real and
+still unexplained.
+
+A second hypothesis was tested and also failed. One key means one shard
+owns all the data work while eight cores carry the I/O, so run-to-run
+variance might be which cores the fifty connections land on under
+SO_REUSEPORT. Spreading the keyspace with `-r 100000` should then collapse
+it. Under AOF it appeared to: 19.3% to 3.6%. **Under `--no-aof`, which is
+what arena runs, it does not:** 15.9% single-key against 14.6% spread. The
+first measurement was of a different system — with AOF on, the disk path
+dominates the write and hides whatever the placement does. The
+intervention that looked decisive was run in the wrong configuration.
+
+**So the cause of the spread is unknown.** It is recorded here as an open
+question rather than an explained one, because an explanation that has
+been falsified twice is worth less than an honest gap. What is known:
+the spread is real, it is on the write verbs, it does not track keyspace
+growth, and it does not track connection placement.
+
+### The published shape is the narrow-keyspace one
+
+Worth knowing before this table is quoted anywhere. redis-benchmark's
+default single key is what every engine here is measured on, but it is not
+neutral between them: kevy shards by key, so one key means one core does
+the data work and seven feed it. Measured with each engine's arena flags,
+three runs per cell, SADD:
+
+| workload | kevy | Redis 8 | valkey | vs Redis 8 | vs valkey |
+|---|---:|---:|---:|---:|---:|
+| one key (this table's shape) | 5,221,029 | 3,768,203 | 2,300,821 | 1.39x | 2.27x |
+| `-r 100000` | 3,589,051 | 3,260,501 | 2,122,080 | 1.10x | 1.69x |
+
+**kevy wins both, and the lead is roughly half as wide on the spread
+keyspace.** Neither shape is wrong — the single-key default is what the
+tool ships and what everyone publishes — but a claim that quotes 1.29x
+without saying which keyspace it was taken on is quoting the friendlier
+of two true numbers.
 
 ### Dragonfly's column is not measurement-grade
 
@@ -655,11 +693,15 @@ reproduce would take the solid columns down with it.
 
 ### Note for the next entry
 
-`perfgate-median` exists and is exactly the right shape — per-angle
-medians over N runs, the noise-resistant verdict — but it wraps
-`perfgate`, which measures kevy against a reference commit of itself.
-The table that goes in front of readers is this one, and it had no
-multi-run variant. This entry is that variant done by hand.
+`perfgate-median` was exactly the right shape — per-angle medians over N
+runs, the noise-resistant verdict — but it wrapped `perfgate`, which
+measures kevy against a reference commit of itself. The table that goes in
+front of readers is this one, and it had no multi-run variant. This entry
+was that variant done by hand; **`bench/arena-median.sh` is it done by
+script.** It prints this table on per-cell medians, the run-to-run spread
+per engine, and the worst-against-best check — and exits non-zero when a
+cell needs the median to win, so that fact reaches the entry instead of
+being averaged away.
 
 ## arena bare face — 2026-08-30 — kevy 6.2.0
 

@@ -526,6 +526,20 @@ requires = ["server-debug"]
 proves = "every kevy-cli line in the cookbook runs green as written"
 
 [[check]]
+id = "crossgate"
+area = "compat"
+tier = "prerelease"
+# The claim that one log replays in both engines was prose in a source
+# comment for several releases with nothing checking it. It is the one
+# thing neither Redis (no browser form) nor SQLite (no server form) can
+# do, so a silent divergence would cost more than a feature.
+cmd = "bash bench/crossgate.sh"
+expected = 9
+timeout = 300
+requires = ["server-release", "node", "wasm-artifact"]
+proves = "an AOF written by either engine replays in the other, both directions"
+
+[[check]]
 id = "vendorgate"
 area = "doors"
 tier = "prerelease"
