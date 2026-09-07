@@ -1,5 +1,88 @@
 # Changelog
 
+## 6.4.0 — the quality release: what a reader can check, and what a gate can
+
+No behaviour changed. Every command answers exactly as it did in 6.3.0,
+the data directory opens in both directions, and a 6.3.x replica pairs
+with a 6.4.0 primary. This release is about the other thing a codebase
+owes its readers.
+
+The measure was deliberately put outside: not "does kevy meet kevy's
+rules" — that is a baseline you can pass while being unremarkable — but
+whether a Rust expert reading this repository cold would call it
+exemplary. Seven things earn that label, each with a named reference,
+and kevy had four of them.
+
+### Every unsafe block states its premise (378 of them did not)
+
+The heaviest item, because unsafe discipline is the first thing an expert
+checks. `clippy::all` being green said nothing about it:
+`undocumented_unsafe_blocks` is in the restriction group and off by
+default, which is how 378 unargued blocks accumulated without a gate
+noticing.
+
+The argument written is the premise, not the conclusion. `kevy-sys` — the
+one crate the charter lets touch libc — now says why each syscall is
+allowed: `Socket` owns its fd for its whole life so `self.fd` is open at
+every call site; `buf` is a live slice so the pointer is good for exactly
+`buf.len()` bytes; `SockaddrIn` is repr(C) over integers so the all-zero
+pattern is a valid inhabitant, which is what the kernel expects to be
+handed. `Waker: Sync` holds because a descriptor is an integer handle
+into a kernel table rather than a pointer into this process.
+
+The four binding crates state their foundation once per file — the JVM
+hands each export a live JNIEnv* for that call only; N-API handles reach
+us only as externals we made — and each block names which part it uses.
+
+`undocumented_unsafe_blocks = "deny"` now, workspace-wide, and the three
+crates that had never opted into `[workspace.lints]` do, so the table
+covers 47 of 47 rather than silently skipping three. The gate is
+ablation-tested: remove one comment and it reports one.
+
+### Every public type can be printed
+
+165 of 392 public types had no `Debug`, so a caller holding one could not
+put it in an assertion message or a log line. All of them can now. Seven
+needed a hand-written impl and each says why: `Ring<T>` holds
+`MaybeUninit` and only `[head, tail)` is initialised, so a derived
+`Debug` would read uninitialised memory — undefined behaviour, not merely
+unhelpful output.
+
+### A map for someone arriving
+
+`ARCHITECTURE.md`: two products and one engine, the 47 crates as a
+seven-level DAG whose dependencies only point down (checked — zero
+backward edges), and where one SET goes crate by crate. Two claims taken
+from the charter did not match the code, and the code won: libc is
+declared in five crates, not one, and the file names all five.
+
+### Four stone modules that teach
+
+Redis is model C because you can implement `listpack.c`'s format from its
+file header. kevy's crate headers already did that; its module headers
+did not. The HNSW graph, the hashtable probe, the distance kernels and
+the impact-bucketed posting lists now carry their layout and their
+invariants — including the ones that are corrections rather than
+optimisations, like one graph node per distinct vector rather than per
+key, without which a cluster of identical vectors larger than the link
+cap disconnects from the graph.
+
+### Registry metadata, and examples that run
+
+Thirteen of 41 publishable crates were missing metadata a registry needs
+to present them, and five had no README — which is what a reader lands on
+from crates.io. All 41 are complete. `kevy-vlog` had nineteen public
+functions and no runnable example; it has six, and because a rustdoc
+example is a doctest they fail when the API moves rather than rotting.
+
+### Deferred, with the reason
+
+`C-STRUCT-PRIVATE` — 740 public fields on public structs — is a real
+finding and cannot ship in a minor: adding a private field to an
+all-public struct is `struct-add-private-field-when-public`, MAJOR by
+Cargo's own table. It is recorded in `quality/API-GUIDELINES.md` with
+that identifier, as a v7 item rather than a thing that got dropped.
+
 ## 6.3.0 — the opponents, pinned; and three gaps they exposed
 
 A week of work on one question: what is kevy actually measured against,
