@@ -789,8 +789,6 @@ cmd = "bash bench/resp3gate.sh target/release/kevy"
 expected = 60
 timeout = 900
 requires = ["docker", "server-release"]
-advisory = true
-advisory_reason = "HRANDFIELD WITHVALUES is not implemented at all (compat-surface RFC, MUST group), so this gate reports a command gap rather than a protocol defect. Advisory ends when that verb lands — every other shape-changing verb already agrees with the pinned redis."
 proves = "kevy changes reply shape under HELLO 3 exactly where the pinned redis does"
 
 [[check]]
