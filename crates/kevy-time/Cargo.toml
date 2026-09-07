@@ -6,6 +6,11 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+documentation = "https://docs.rs/kevy-time"
+readme = "README.md"
+keywords = ["calendar", "epoch", "date", "gregorian", "no-std"]
+categories = ["date-and-time", "no-std"]
+homepage.workspace = true
 authors.workspace = true
 
 [lints]

@@ -7,6 +7,7 @@ rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+readme = "README.md"
 homepage.workspace = true
 documentation = "https://docs.rs/kevy-bench"
 keywords = ["benchmark", "bench", "perf", "median", "kevy"]
