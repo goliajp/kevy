@@ -74,12 +74,20 @@ version, and the READMEs and site derive their labels from the same file.
 ### Coverage, stated rather than assumed
 
 kevy answers 206 verbs; Redis 8.10.1 serves 599. That difference was not
-written down anywhere. It is now: 256 exempt with a reason each, 81
+written down anywhere. It is now: 256 exempt with a reason each, 80
 owned by an RFC that must exist, and zero unclassified — with a ratchet,
 so the number can only go down. Two RFCs were written to own them, and
 the site's command reference is derived from the engine's own
 `COMMAND DOCS` rather than hand-maintained under a header claiming it
 was generated.
+
+### Upgrading
+
+Nothing to change: no API moved, the data directory opens in both
+directions, and a 6.2.x replica talks to a 6.3.0 primary. What each
+addition is for, and the one reply that changed because it was wrong
+before, is in [docs/upgrading-6.2-to-6.3.md](docs/upgrading-6.2-to-6.3.md)
+(also in Chinese and Japanese).
 
 ## 6.2.2 — one directory, one engine
 
