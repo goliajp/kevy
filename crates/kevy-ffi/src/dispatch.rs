@@ -32,8 +32,7 @@ pub unsafe fn dispatch_packed(db: *mut KevyDb, packed: &[u8], out: &mut KevyBuf)
     let Some(args) = unpack_argv(packed) else {
         return -1;
     };
-    // SAFETY: checked non-null above, and the contract requires a live handle from
-    // `kevy_open*`, so the referent outlives this borrow.
+    // SAFETY: checked non-null above; the contract requires a live `kevy_open*` handle.
     let store = unsafe { &(*db).store };
     let reply = catch_unwind(AssertUnwindSafe(|| {
         let mut buf = Vec::new();

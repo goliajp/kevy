@@ -44,31 +44,24 @@ pub unsafe extern "C" fn kevy_set_many(
     if keys.is_null() || key_lens.is_null() || vals.is_null() || val_lens.is_null() {
         return -1;
     }
-    // SAFETY: checked non-null above, and the contract requires a live handle from
-    // `kevy_open*`, so the referent outlives this borrow.
+    // SAFETY: checked non-null above; the contract requires a live `kevy_open*` handle.
     let store = unsafe { &(*db).store };
     let done = catch_unwind(AssertUnwindSafe(|| {
-        // SAFETY: this fn's `# Safety` section requires that pointer to address that many
-        // readable elements, and it was checked non-null above.
+        // SAFETY: the `# Safety` contract above covers this pointer/length pair.
         let keys = unsafe { std::slice::from_raw_parts(keys, n) };
-        // SAFETY: this fn's `# Safety` section requires that pointer to address that many
-        // readable elements, and it was checked non-null above.
+        // SAFETY: the `# Safety` contract above covers this pointer/length pair.
         let key_lens = unsafe { std::slice::from_raw_parts(key_lens, n) };
-        // SAFETY: this fn's `# Safety` section requires that pointer to address that many
-        // readable elements, and it was checked non-null above.
+        // SAFETY: the `# Safety` contract above covers this pointer/length pair.
         let vals = unsafe { std::slice::from_raw_parts(vals, n) };
-        // SAFETY: this fn's `# Safety` section requires that pointer to address that many
-        // readable elements, and it was checked non-null above.
+        // SAFETY: the `# Safety` contract above covers this pointer/length pair.
         let val_lens = unsafe { std::slice::from_raw_parts(val_lens, n) };
         for i in 0..n {
             if keys[i].is_null() || vals[i].is_null() {
                 return Err(());
             }
-            // SAFETY: this fn's `# Safety` section requires that pointer to address that many
-            // readable elements, and it was checked non-null above.
+            // SAFETY: same contract, this element's own pointer and length.
             let k = unsafe { std::slice::from_raw_parts(keys[i], key_lens[i]) };
-            // SAFETY: this fn's `# Safety` section requires that pointer to address that many
-            // readable elements, and it was checked non-null above.
+            // SAFETY: same contract, this element's own pointer and length.
             let v = unsafe { std::slice::from_raw_parts(vals[i], val_lens[i]) };
             store.set(k, v).map_err(|_| ())?;
         }

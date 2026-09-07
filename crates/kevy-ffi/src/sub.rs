@@ -57,11 +57,9 @@ unsafe fn sub_open(
     if db.is_null() || chan.is_null() {
         return std::ptr::null_mut();
     }
-    // SAFETY: checked non-null above, and the contract requires a live handle from
-    // `kevy_open*`, so the referent outlives this borrow.
+    // SAFETY: checked non-null above; the contract requires a live `kevy_open*` handle.
     let store = unsafe { &(*db).store };
-    // SAFETY: this fn's `# Safety` section requires that pointer to address that many
-    // readable elements, and it was checked non-null above.
+    // SAFETY: the `# Safety` contract above covers this pointer/length pair.
     let name = unsafe { std::slice::from_raw_parts(chan, chan_len) };
     let opened = catch_unwind(AssertUnwindSafe(|| {
         if pattern { store.psubscribe(&[name]) } else { store.subscribe(&[name]) }
@@ -92,8 +90,7 @@ pub unsafe extern "C" fn kevy_sub_next(sub: *mut KevySub, out: *mut KevyBuf) -> 
     if sub.is_null() {
         return -1;
     }
-    // SAFETY: checked non-null above, and the contract requires a live handle from
-    // `kevy_open*`, so the referent outlives this borrow.
+    // SAFETY: checked non-null above; the contract requires a live `kevy_open*` handle.
     let s = unsafe { &(*sub).sub };
     let polled = catch_unwind(AssertUnwindSafe(|| s.try_recv()));
     match polled {
@@ -138,8 +135,7 @@ pub unsafe extern "C" fn kevy_sub_wait(
     if sub.is_null() {
         return -1;
     }
-    // SAFETY: checked non-null above, and the contract requires a live handle from
-    // `kevy_open*`, so the referent outlives this borrow.
+    // SAFETY: checked non-null above; the contract requires a live `kevy_open*` handle.
     let s = unsafe { &(*sub).sub };
     let waited = catch_unwind(AssertUnwindSafe(|| {
         if timeout_ms == 0 {

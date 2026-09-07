@@ -43,8 +43,7 @@ pub unsafe extern "C" fn kevy_open_report(db: *mut KevyDb, out: *mut KevyOpenRep
     if db.is_null() || out.is_null() {
         return -1;
     }
-    // SAFETY: checked non-null above, and the contract requires a live handle from
-    // `kevy_open*`, so the referent outlives this borrow.
+    // SAFETY: checked non-null above; the contract requires a live `kevy_open*` handle.
     let store = unsafe { &(*db).store };
     let filled = catch_unwind(AssertUnwindSafe(|| {
         let r = store.open_report();

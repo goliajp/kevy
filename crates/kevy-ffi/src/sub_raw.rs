@@ -41,8 +41,7 @@ pub unsafe extern "C" fn kevy_sub_next_raw(sub: *mut KevySub, out: *mut KevyBuf)
     if sub.is_null() {
         return -1;
     }
-    // SAFETY: checked non-null above, and the contract requires a live handle from
-    // `kevy_open*`, so the referent outlives this borrow.
+    // SAFETY: checked non-null above; the contract requires a live `kevy_open*` handle.
     let s = unsafe { &(*sub).sub };
     let drained = catch_unwind(AssertUnwindSafe(|| {
         loop {
@@ -99,8 +98,7 @@ pub unsafe extern "C" fn kevy_sub_wait_raw(
     if sub.is_null() {
         return -1;
     }
-    // SAFETY: checked non-null above, and the contract requires a live handle from
-    // `kevy_open*`, so the referent outlives this borrow.
+    // SAFETY: checked non-null above; the contract requires a live `kevy_open*` handle.
     let s = unsafe { &(*sub).sub };
     let waited = catch_unwind(AssertUnwindSafe(|| {
         if timeout_ms == 0 {

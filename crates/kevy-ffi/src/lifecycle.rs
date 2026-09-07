@@ -65,16 +65,14 @@ pub unsafe extern "C" fn kevy_open_with(
         }
         Config::default()
     } else {
-        // SAFETY: this fn's `# Safety` section requires that pointer to address that many
-        // readable elements, and it was checked non-null above.
+        // SAFETY: the `# Safety` contract above covers this pointer/length pair.
         let bytes = unsafe { std::slice::from_raw_parts(dir, dir_len) };
         let Ok(path) = std::str::from_utf8(bytes) else {
             return std::ptr::null_mut();
         };
         Config::default().with_persist(path.to_owned())
     };
-    // SAFETY: checked non-null above, and the contract requires a live handle from
-    // `kevy_open*`, so the referent outlives this borrow.
+    // SAFETY: checked non-null above; the contract requires a live `kevy_open*` handle.
     let cfg = if opts.is_null() { base } else { apply(unsafe { &*opts }, base) };
     open_with(move || cfg)
 }
@@ -92,8 +90,7 @@ pub unsafe extern "C" fn kevy_shutdown(db: *mut KevyDb) -> i32 {
     if db.is_null() {
         return -1;
     }
-    // SAFETY: checked non-null above, and the contract requires a live handle from
-    // `kevy_open*`, so the referent outlives this borrow.
+    // SAFETY: checked non-null above; the contract requires a live `kevy_open*` handle.
     let store = unsafe { &(*db).store };
     match catch_unwind(AssertUnwindSafe(|| store.shutdown())) {
         Ok(Ok(())) => 0,
