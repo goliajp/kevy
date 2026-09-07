@@ -82,7 +82,7 @@ echo "== postgres 18 (stock config) =="
 # root, once:
 #   docker run -d --name kevy-pgcmp -p 127.0.0.1:15499:5432 \
 #     -e POSTGRES_PASSWORD=bench -e POSTGRES_DB=bench \
-#     postgres:18.6-bookworm -c cluster_name=kevypgcmp
+#     postgres:18.6-trixie -c cluster_name=kevypgcmp
 # cluster_name is what lets the harness find this cluster's processes in
 # /proc without docker, and keeps it off the other Postgres instances
 # this box runs.

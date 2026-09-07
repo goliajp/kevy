@@ -72,6 +72,16 @@
           "pattern": "Redis ([0-9]+\\.[0-9][0-9.]*)",
           "mode": "derive",
           "what": "table heading for the multi-run ledger table"
+        },
+        {
+          "file": "bench/arena_serving.py",
+          "pattern": "redis:([0-9][0-9.]*)",
+          "what": "the docker command in the header that says which image opens the FT oracle's port"
+        },
+        {
+          "file": "bench/arena_ann.py",
+          "pattern": "redis:([0-9][0-9.]*)",
+          "what": "the docker command in the header that says which image opens the FT oracle's port"
         }
       ]
     },
@@ -184,18 +194,19 @@
         "kind": "endoflife",
         "product": "postgresql"
       },
-      "image": "postgres:{v}-bookworm",
+      "image": "postgres:{v}-trixie",
       "sites": [
         {
           "file": "bench/pgcompare.sh",
-          "pattern": "postgres:([0-9][0-9.]*)-bookworm",
+          "pattern": "postgres:([0-9][0-9.]*)-trixie",
           "what": "the docker run line in the comment, and the version assertion beside it"
         },
         {
           "file": "bench/migrationgate.sh",
-          "pattern": "postgres:([0-9][0-9.]*)-bookworm"
+          "pattern": "postgres:([0-9][0-9.]*)-trixie"
         }
-      ]
+      ],
+      "note": "Debian trixie, which is what the official `postgres:latest` points at as of 2026-09-07. The bookworm variant was the same Postgres on an older base; pgcompare stores no baseline (it prints a comparison rather than ratcheting a number), so following the default variant costs nothing and keeps 'latest stable' meaning the whole tag."
     },
     "redis-stack": {
       "pinned": "8.10.1",
