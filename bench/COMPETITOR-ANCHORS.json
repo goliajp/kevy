@@ -1,6 +1,6 @@
 {
   "_doc": "The competitors kevy measures itself against, and the version each one is pinned to. A benchmark that says 'vs redis' without a version is not a measurement, it is a mood: redis 7.4 and redis 8.10 differ by ~2x on GET, so the same table can read as a 1.4x win or a 2.6x win depending on which one the box happened to have cached. Every anchor here is pinned to an exact upstream release, and tools/check_competitor_anchors.py fails when a pin drifts from this file, when a pin cannot be found at all, or when this file has fallen behind the upstream's latest stable.",
-  "_pinning": "Floating tags (redis:8, dragonfly with no tag) are the specific thing this file exists to remove. `redis:8` resolved to 8.10.0 on the bench box in Sept 2026 because that is what docker had cached in August; the registry served 8.10.1. Nothing in the tree recorded either number.",
+  "_pinning": "Floating tags — an image named by bare major, or with no tag at all — are the specific thing this file exists to remove. The redis anchor resolved to 8.10.0 on the bench box in Sept 2026 because that is what docker had cached in August; the registry served 8.10.1. Nothing in the tree recorded either number.",
   "_updated": "2026-09-07",
   "anchors": {
     "redis": {
@@ -209,5 +209,12 @@
       "sites": []
     }
   },
-  "_modes": "A site is checked one of two ways. mode 'pin' (the default) reads the version out of the file and requires it to equal `pinned`. mode 'derive' is for a file that reads this manifest at runtime instead of carrying a copy: it must reference COMPETITOR-ANCHORS.json, and it must NOT contain a literal tag — a hardcoded version sitting next to a derived one is the drift this file exists to prevent, and it is the more dangerous kind because it looks maintained."
+  "_modes": "A site is checked one of two ways. mode 'pin' (the default) reads the version out of the file and requires it to equal `pinned`. mode 'derive' is for a file that reads this manifest at runtime instead of carrying a copy: it must reference COMPETITOR-ANCHORS.json, and it must NOT contain a literal tag — a hardcoded version sitting next to a derived one is the drift this file exists to prevent, and it is the more dangerous kind because it looks maintained.",
+  "_unregistered": "A site this file does not list is a competitor version nobody is watching. The gate therefore also sweeps the live surface for image references it was not told about, and fails on any it finds. Exempt paths are listed below with the reason each is exempt — an exemption is a decision, not a hole.",
+  "_exempt": {
+    "bench/COMPETITOR-ANCHORS.json": "this file. Its `image` fields are templates ({v} is substituted), not uses.",
+    "bench/v125-*": "one-off exploration probes from the v1.25 arc. They record what was run in June 2026 against the engines of June 2026; editing them would falsify a record, and re-running them is not a thing anyone does.",
+    "*.md": "written history. bench/PERF-LEDGER.md and bench/REPORT.md say which version each measurement was against, at the time; a raised anchor makes an old table old, not wrong.",
+    "bench/axis_*.sh": "these name binaries on the box rather than image tags, and assert the pinned version at start-up instead — see anchor_require in each."
+  }
 }
