@@ -9,7 +9,7 @@
 # All compiled --release. The container runs as a long-lived `sleep
 # infinity` and `run.sh` execs into it to drive each test, so the
 # (slow, layered) build only happens once.
-FROM rust:1.95-slim AS build
+FROM rust:1.97-slim-trixie AS build
 WORKDIR /src
 RUN apt-get update && apt-get install -y --no-install-recommends \
       libzmq3-dev cmake clang pkg-config build-essential \
