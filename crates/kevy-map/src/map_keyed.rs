@@ -1,9 +1,52 @@
-//! Key-trait-bound `KevyMap` operations: insert/grow/lookup/remove.
+//! Insert, grow, look up and remove — the operations that need to compare keys.
 //!
-//! Split out of [`crate::map`] for file-size hygiene. The raw / non-keyed
-//! impl block (allocation, metadata bookkeeping, iter, Drop, trait impls)
-//! stays in `map.rs`; everything that needs `K: KevyHash + Eq` or
-//! `K: Borrow<Q>, Q: KevyHash + Eq` lives here.
+//! The layout they operate on is documented in [`crate::map`]: `cap` metadata
+//! bytes plus a `GROUP_WIDTH` mirror tail, one byte per slot, `EMPTY` = 0xFF,
+//! `DELETED` = 0x80, and a full slot holding `h2(hash)` — the top seven bits,
+//! never 0x80 or 0xFF. This file is the probe that reads them.
+//!
+//! # The probe
+//!
+//! Probing is by **group of 16, then linear**, not by the more usual
+//! quadratic step:
+//!
+//! ```text
+//!   group_start = hash & mask
+//!   loop:
+//!     load 16 metadata bytes at group_start        (one SIMD word)
+//!     for each byte == h2(hash):  compare the key  (a real candidate)
+//!     if any byte == EMPTY:       stop             (the key is not here)
+//!     group_start = (group_start + 16) & mask      (next group, linear)
+//! ```
+//!
+//! Linear beats quadratic here because the scan is already group-aware: at
+//! this load factor the next group is usually the next cache line, and a
+//! quadratic step throws that away for a collision pattern the h2 filter has
+//! already broken up.
+//!
+//! # Three invariants the probe depends on
+//!
+//! 1. **`EMPTY` terminates, `DELETED` does not.** That is the whole reason
+//!    the two constants differ: a removed slot must stay walkable or every
+//!    key that probed past it becomes unreachable. Removal writes `DELETED`,
+//!    never `EMPTY`.
+//! 2. **The slot is marked `DELETED` *before* the value is moved out.**
+//!    `remove` writes the metadata byte first, then `ptr::read`s the pair.
+//!    The order is what makes the move sound: once the byte says `DELETED`,
+//!    nothing — not a later probe, not `Drop`, not a rehash — will read that
+//!    slot again, so moving the `(K, V)` out cannot become a double drop.
+//!    Reading first and marking second would leave a window in which the slot
+//!    claims to hold a value that has already been moved away.
+//! 3. **The mirror tail is kept in sync.** Every metadata write goes to both
+//!    `i` and its mirror index, so a group load starting near the end of the
+//!    table reads real bytes rather than falling off the allocation.
+//!
+//! # Growth
+//!
+//! Growth rebuilds rather than rehashes in place, and reinserts through
+//! `insert_known_unique`, which skips the key comparison entirely — the old
+//! table already proved every key distinct. That turns the rehash into one
+//! `match_byte(EMPTY)` per key.
 
 use core::borrow::Borrow;
 use core::ptr;

@@ -1,6 +1,35 @@
-//! Impact-bucketed posting lists for [`crate::segment::TextSegment`]
-//! (split out of `segment.rs` to keep it under the 500-LOC project
-//! ceiling; behaviour unchanged).
+//! Impact-bucketed posting lists — the shape that makes top-K stop early.
+//!
+//! # Layout
+//!
+//! ```text
+//!   Buckets::One { id, tf, dl }              a token in exactly one document
+//!   Buckets::Many                            everything else
+//!     buckets: [(tf, bands)]                 tf DESCENDING
+//!                └ bands: [(band, [id])]     band (≈ log2 dl) ASCENDING
+//!     index:   id -> (bucket, band, slot)    O(1) probe and swap-remove
+//! ```
+//!
+//! Two orderings, chosen to match BM25's monotonicity — the score rises with
+//! `tf` and falls with `dl`. Walking buckets high-`tf` first and, inside a
+//! bucket, bands low-`dl` first means the walk can **stop** the moment
+//! `score(tf, dl)` can no longer reach the kth floor. Exact top-K then visits
+//! roughly `k · buckets` postings instead of the whole list: the
+//! single-common-term shape measured 1.5 ms at 66k postings under a tf-only
+//! stop, and the dl ordering is what makes the cut *within* a bucket.
+//!
+//! # Why `One` exists
+//!
+//! Zipf text is mostly hapax legomena — an id, an email address, a document
+//! number appears in exactly one row. The one-posting case is therefore
+//! inline and allocates nothing; the full structure materialises only from
+//! the second posting on. The eager shape cost **+2 GiB RSS over 1M singleton
+//! tokens**, which is what textgate caught.
+//!
+//! Bands set the granularity of the cut, not the score: a band is a `log2(dl)`
+//! bucket, and the exact `dl` for any id comes from the segment's `id_dl`
+//! table. Split out of `segment.rs` for the 500-line ceiling; behaviour
+//! unchanged by that move.
 
 use std::collections::HashMap;
 

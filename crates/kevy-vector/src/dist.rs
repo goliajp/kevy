@@ -1,4 +1,33 @@
-//! Distance metrics + the wire vector format.
+//! Distance metrics and the wire vector format.
+//!
+//! # One direction for every metric
+//!
+//! Every variant scores **smaller = closer**, which is why cosine is stored as
+//! `1 - cos` and inner product as `-dot`. One ascending merge then serves all
+//! three, and no call site has to remember which metric runs backwards — the
+//! kind of detail that is right in the code and wrong in someone's head six
+//! months later.
+//!
+//! # Wire format
+//!
+//! A vector arrives as `dim * 4` bytes, little-endian `f32`. Two rules, both
+//! enforced by `parse_vector`:
+//!
+//! - **A wrong length is rejected, never truncated or padded.** A vector of
+//!   the wrong dimension is a caller error, and silently reshaping it would
+//!   put a meaningless point into the index that nothing could later explain.
+//! - **Non-finite values are rejected.** A NaN inside a distance makes the
+//!   comparison non-transitive, and a non-transitive comparison in a graph
+//!   search does not give a wrong answer, it gives an inconsistent one.
+//!
+//! `csv:1.0,2.0,3.0` is accepted as a debugging form under the same rules.
+//!
+//! # Dispatch
+//!
+//! On x86_64 the kernels have an AVX2+FMA path chosen once and cached in an
+//! atomic, because `is_x86_feature_detected!` is not free and this sits on the
+//! search path. Everywhere else the scalar lane form is what the autovectoriser
+//! already handles well.
 
 /// Distance metric. Scores are "smaller = closer" for every variant
 /// (cosine → `1 - cos`, ip → `-dot`), so one ascending merge works.
