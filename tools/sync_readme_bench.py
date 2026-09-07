@@ -156,7 +156,23 @@ def _m(n):
 def write_site(rows, version, check):
     """rows: {verb: {engine: int}}. Returns a list of complaints."""
     bad = []
+    pin = pins()
     order = ["GET", "SET", "INCR", "SADD", "HSET", "LPUSH", "ZADD"]
+
+    def headings(text):
+        """The four-engine table's heading names each opponent, and a name
+        without a version describes every release that ever bore it: the
+        site said "Redis 8" for a table measured against one particular
+        8.x. Rewritten inside the heading row only, so the prose around it
+        — which argues about margins and needs a human — is left alone."""
+        def one_row(m):
+            row = m.group(0)
+            row = re.sub(r"Redis [0-9][0-9.]*", f"Redis {pin['redis']}", row)
+            row = re.sub(r"valkey [0-9][0-9.]*", f"valkey {pin['valkey']}", row)
+            row = re.sub(r"Dragonfly( [0-9][0-9.]*)?", f"Dragonfly {pin['dragonfly']}", row)
+            return row
+        return re.sub(r'"head": \[[^\]]*\]', one_row, text)
+
     for rel in SITE_CONTENT:
         p = ROOT / rel
         text = p.read_text(encoding="utf-8")
@@ -170,6 +186,7 @@ def write_site(rows, version, check):
             text = re.sub(rf'\["{verb}", "[\d,]+", "[\d,]+", "[\d,]+", "[\d,]+", "[!*][\d.]+×"\]',
                           new.replace("\\", "\\\\"), text)
         text = re.sub(r'"kevy \d+\.\d+\.\d+"', f'"kevy {version}"', text)
+        text = headings(text)
         if text != before:
             if check:
                 bad.append(f"{rel} does not carry the {version} numbers")
