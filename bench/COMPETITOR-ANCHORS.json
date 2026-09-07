@@ -225,6 +225,67 @@
       "manual": true,
       "note": "SUPERSEDED BY THE redis ANCHOR, 2026-09-07, and this entry stays only to record why. It used to pin redis/redis-stack-server, whose last tag is 7.4.0-v8 (2025-11-03) — which read as a frozen upstream and therefore as an FT face measured against a search engine two majors behind. It is not frozen; it is retired. Redis 8 ships the query engine in the standard image: `docker run -d redis:8.10.1` answers 669 commands including 47 FT.*, 25 JSON.*, 21 TS.* and 11 BF.*, while redis-stack-server:latest is still 7.4.7. So the latest stable RediSearch IS the redis anchor, and this anchor tracks the same pin. The harnesses take a port and do not care which image opened it.",
       "sites": []
+    },
+    "go-redis": {
+      "pinned": "9.22.0",
+      "role": "clientgate's Go client; the surface a Go application actually sends",
+      "upstream": {
+        "kind": "github",
+        "repo": "redis/go-redis",
+        "tag_prefix": "v"
+      },
+      "sites": [
+        {
+          "file": "bench/clientgate/goredis/go.mod",
+          "pattern": "go-redis/v9 v([0-9][0-9.]*)",
+          "what": "the module requirement"
+        }
+      ]
+    },
+    "stackexchange-redis": {
+      "pinned": "3.1.31",
+      "role": "clientgate's .NET client; its first-class API is the evidence for several MUST verbs",
+      "upstream": {
+        "kind": "nuget",
+        "package": "StackExchange.Redis"
+      },
+      "sites": [
+        {
+          "file": "bench/clientgate/seredis/seredis.csproj",
+          "pattern": "StackExchange\\.Redis\" Version=\"([0-9][0-9.]*)\"",
+          "what": "the package reference"
+        }
+      ]
+    },
+    "node-redis": {
+      "pinned": "6.2.1",
+      "role": "clientgate's Node client; its pool return path is why RESET is a MUST",
+      "upstream": {
+        "kind": "npm",
+        "package": "redis"
+      },
+      "sites": [
+        {
+          "file": "bench/clientgate.sh",
+          "pattern": "\\bredis@([0-9][0-9.]*)",
+          "what": "the npm install, which had no version at all"
+        }
+      ]
+    },
+    "redis-py": {
+      "pinned": "8.1.0",
+      "role": "clientgate's Python client",
+      "upstream": {
+        "kind": "pypi",
+        "package": "redis"
+      },
+      "sites": [
+        {
+          "file": "bench/clientgate.sh",
+          "pattern": "redis==([0-9][0-9.]*)",
+          "what": "the pip install, which had no version at all"
+        }
+      ]
     }
   },
   "_modes": "A site is checked one of two ways. mode 'pin' (the default) reads the version out of the file and requires it to equal `pinned`. mode 'derive' is for a file that reads this manifest at runtime instead of carrying a copy: it must reference COMPETITOR-ANCHORS.json, and it must NOT contain a literal tag — a hardcoded version sitting next to a derived one is the drift this file exists to prevent, and it is the more dangerous kind because it looks maintained.",
@@ -236,5 +297,6 @@
     "bench/axis_*.sh": "these name binaries on the box rather than image tags, and assert the pinned version at start-up instead — see anchor_require in each.",
     "tools/check_competitor_anchors.py": "this gate itself: it defines the image patterns, so it necessarily contains example references. It is not a site — nothing here selects an image to run."
   },
-  "_sweep_scope": "The sweep reads bench/, tools/, examples/ and .github/ — the surface that RUNS a competitor. Engine source under crates/ is deliberately outside it: two comments there cite a `redis:8` they were compared against once (zset.rs, tests_zadd_same_score.rs), and those are observations from a particular day, the same kind of record as a ledger entry. Making them track the pin would rewrite what was measured. If a crate ever RUNS a competitor image, add crates/ here."
+  "_sweep_scope": "The sweep reads bench/, tools/, examples/ and .github/ — the surface that RUNS a competitor. Engine source under crates/ is deliberately outside it: two comments there cite a `redis:8` they were compared against once (zset.rs, tests_zadd_same_score.rs), and those are observations from a particular day, the same kind of record as a ledger entry. Making them track the pin would rewrite what was measured. If a crate ever RUNS a competitor image, add crates/ here.",
+  "_clients": "The client libraries are anchors too, and were the least watched of any: clientgate pinned go-redis and StackExchange.Redis to versions from late 2024 and installed node-redis and redis-py with no version at all. 'A Redis client sees Redis' is a claim about THESE, so a frozen client tests a 2024 idea of what a client sends, and a floating one changes what is being tested without anyone choosing."
 }
