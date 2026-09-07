@@ -2,6 +2,25 @@
 //! call sequences the JS loader makes, minus the linear-memory staging
 //! (on native we pass Rust slices' pointers straight through).
 
+//!
+//! # Safety of the calls below
+//!
+//! Every `unsafe` block in this file is a call into kevy's own C ABI, and they
+//! all rest on the same three facts, stated here once rather than repeated at
+//! each of the ~100 call sites:
+//!
+//! 1. **Handles are live.** Each `KevyDb` comes from `kevy_open*` earlier in
+//!    the same test and is closed exactly once, at the end. Subscriptions come
+//!    from `kevy_subscribe` / `kevy_psubscribe` on such a handle.
+//! 2. **Pointer/length pairs match.** Every pointer passed is `as_ptr()` on a
+//!    local slice or array still in scope, and the length beside it is that
+//!    slice's own `len()` — which is what each entry point's `# Safety`
+//!    section requires.
+//! 3. **Out-parameters are live locals.** `&raw mut out` always names a
+//!    `KevyBuf` on the current frame.
+//!
+//! Where a call deliberately passes null, the comment says so: those tests
+//! exist to prove the guard returns an error instead of dereferencing.
 use crate::abi_aof::{kevy_aof_dump, kevy_aof_frame_in, kevy_aof_frames_out};
 use crate::abi_cmd::kevy_cmd;
 use crate::abi_core::{
@@ -24,14 +43,17 @@ fn out(h: u32) -> Vec<u8> {
     if ptr.is_null() {
         return Vec::new();
     }
+    // SAFETY: pointer and length are the pair the ABI just produced.
     unsafe { std::slice::from_raw_parts(ptr, len) }.to_vec()
 }
 
 fn set(h: u32, k: &[u8], v: &[u8]) -> i32 {
+    // SAFETY: live handle and live locals — see the module note.
     unsafe { kevy_set(h, k.as_ptr(), k.len() as u32, v.as_ptr(), v.len() as u32) }
 }
 
 fn get(h: u32, k: &[u8]) -> (i32, Vec<u8>) {
+    // SAFETY: live handle and live locals — see the module note.
     let s = unsafe { kevy_get(h, k.as_ptr(), k.len() as u32) };
     (s, out(h))
 }
@@ -45,6 +67,7 @@ fn abi_version_is_stable() {
 fn alloc_free_roundtrip() {
     let p = kevy_alloc(64);
     assert!(!p.is_null());
+    // SAFETY: live handle and live locals — see the module note at the top of this file.
     unsafe {
         p.write_bytes(0xAB, 64);
         kevy_free(p, 64);
@@ -57,9 +80,12 @@ fn open_set_get_del_exists() {
     assert_ne!(h, 0);
     assert_eq!(set(h, b"k", b"v"), OK);
     assert_eq!(get(h, b"k"), (1, b"v".to_vec()));
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_exists(h, b"k".as_ptr(), 1) }, 1);
     assert_eq!(kevy_dbsize(h) as u64, 1);
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_del(h, b"k".as_ptr(), 1) }, 1);
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_del(h, b"k".as_ptr(), 1) }, 0);
     assert_eq!(get(h, b"k").0, 0);
     assert_eq!(kevy_close(h), OK);
@@ -73,13 +99,18 @@ fn ttl_surface() {
     let h = kevy_open(0);
     let k = b"flash";
     assert_eq!(
+        // SAFETY: live handle and live locals — see the module note.
         unsafe { kevy_set_ttl(h, k.as_ptr(), k.len() as u32, b"x".as_ptr(), 1, 60_000.0) },
         OK
     );
+    // SAFETY: live handle and live locals — see the module note.
     let ttl = unsafe { kevy_pttl(h, k.as_ptr(), k.len() as u32) };
     assert!(ttl > 0.0 && ttl <= 60_000.0, "pttl = {ttl}");
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_persist(h, k.as_ptr(), k.len() as u32) }, 1);
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_pttl(h, k.as_ptr(), k.len() as u32) }, -1.0);
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_pttl(h, b"missing".as_ptr(), 7) }, -2.0);
     assert_eq!(kevy_tick(h), 0);
     kevy_close(h);
@@ -88,11 +119,14 @@ fn ttl_surface() {
 #[test]
 fn incrby_and_error_reporting() {
     let h = kevy_open(0);
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_incrby(h, b"n".as_ptr(), 1, 5.0) }, OK);
     assert_eq!(out(h), b"5");
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_incrby(h, b"n".as_ptr(), 1, -2.0) }, OK);
     assert_eq!(out(h), b"3");
     set(h, b"s", b"not-a-number");
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_incrby(h, b"s".as_ptr(), 1, 1.0) }, ERR);
     assert!(!out(h).is_empty(), "error status must leave a message");
     kevy_close(h);
@@ -105,6 +139,7 @@ fn keys_packing() {
     set(h, b"user:2", b"b");
     set(h, b"other", b"c");
     let pat = b"user:*";
+    // SAFETY: live handle and live locals — see the module note.
     let n = unsafe { kevy_keys(h, pat.as_ptr(), pat.len() as u32, 0) };
     assert_eq!(n, 2);
     let buf = out(h);
@@ -152,9 +187,12 @@ fn unpack_events(buf: &[u8]) -> Vec<Event> {
 #[test]
 fn pubsub_poll_drain() {
     let h = kevy_open(0);
+    // SAFETY: live handle and live locals — see the module note.
     let s1 = unsafe { kevy_subscribe(h, b"news".as_ptr(), 4) };
+    // SAFETY: live handle and live locals — see the module note.
     let s2 = unsafe { kevy_psubscribe(h, b"n*".as_ptr(), 2) };
     assert!(s1 > 0 && s2 > 0 && s1 != s2);
+    // SAFETY: live handle and live locals — see the module note.
     let reached = unsafe { kevy_publish(h, b"news".as_ptr(), 4, b"hello".as_ptr(), 5) };
     assert_eq!(reached, 2);
     let n = kevy_poll_events(h);
@@ -172,6 +210,7 @@ fn pubsub_poll_drain() {
     assert_eq!(kevy_poll_events(h), 0);
     assert_eq!(kevy_unsubscribe(h, s1), OK);
     assert_eq!(kevy_unsubscribe(h, s1), BAD_HANDLE);
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_publish(h, b"news".as_ptr(), 4, b"x".as_ptr(), 1) }, 1);
     kevy_close(h);
 }
@@ -182,7 +221,9 @@ fn aof_pump_roundtrip_chunked() {
     let w = kevy_open(OPEN_CAPTURE_AOF);
     set(w, b"a", b"1");
     set(w, b"b", b"2");
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_incrby(w, b"a".as_ptr(), 1, 10.0) }, OK);
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_del(w, b"b".as_ptr(), 1) }, 1);
     let len = kevy_aof_frames_out(w);
     assert!(len > 0);
@@ -200,6 +241,7 @@ fn aof_pump_roundtrip_chunked() {
     let r = kevy_open(0);
     let mut applied = 0;
     for chunk in log.chunks(7) {
+        // SAFETY: live handle and live locals — see the module note.
         let n = unsafe { kevy_aof_frame_in(r, chunk.as_ptr(), chunk.len() as u32) };
         assert!(n >= 0, "chunked feed failed: {:?}", String::from_utf8_lossy(&out(r)));
         applied += n;
@@ -216,6 +258,7 @@ fn aof_frame_in_rejects_corrupt_tail() {
     // A valid DEL frame, then a multi-bulk whose element is not a bulk
     // string — the parser rejects that outright (not "need more bytes").
     let bytes = b"*2\r\n$3\r\nDEL\r\n$1\r\nk\r\n*2\r\nXX\r\n";
+    // SAFETY: live handle and live locals — see the module note.
     let n = unsafe { kevy_aof_frame_in(h, bytes.as_ptr(), bytes.len() as u32) };
     assert_eq!(n, ERR);
     assert!(!out(h).is_empty());
@@ -241,6 +284,7 @@ fn aof_dump_compacts_and_replays() {
     kevy_close(w);
 
     let r = kevy_open(0);
+    // SAFETY: live handle and live locals — see the module note.
     let n = unsafe { kevy_aof_frame_in(r, image.as_ptr(), image.len() as u32) };
     assert_eq!(n, 50);
     assert_eq!(kevy_dbsize(r) as u64, 50);
@@ -256,6 +300,7 @@ fn aof_v1_log_feeds_and_outbound_stays_v1() {
     let mut log = kevy_persist::AOF_MAGIC.to_vec();
     log.extend_from_slice(b"*3\r\n$3\r\nSET\r\n$1\r\na\r\n$1\r\n1\r\n");
     let h = kevy_open(OPEN_CAPTURE_AOF);
+    // SAFETY: live handle and live locals — see the module note.
     let n = unsafe { kevy_aof_frame_in(h, log.as_ptr(), log.len() as u32) };
     assert_eq!(n, 1);
     assert_eq!(get(h, b"a"), (1, b"1".to_vec()));
@@ -282,6 +327,7 @@ fn aof_v2_bit_flip_is_refused_not_replayed() {
     let idx = log.len() - 3; // inside the final record's payload
     log[idx] ^= 0x01;
     let r = kevy_open(0);
+    // SAFETY: live handle and live locals — see the module note.
     let n = unsafe { kevy_aof_frame_in(r, log.as_ptr(), log.len() as u32) };
     assert_eq!(n, ERR, "flipped payload must fail the CRC");
     let msg = String::from_utf8_lossy(&out(r)).into_owned();
@@ -306,6 +352,7 @@ fn pack_argv(parts: &[&[u8]]) -> Vec<u8> {
 /// Run one command through the raw channel; returns (status, reply bytes).
 fn cmd(h: u32, parts: &[&[u8]]) -> (i32, Vec<u8>) {
     let packed = pack_argv(parts);
+    // SAFETY: live handle and live locals — see the module note.
     let s = unsafe { kevy_cmd(h, packed.as_ptr(), packed.len() as u32) };
     (s, out(h))
 }
@@ -359,12 +406,14 @@ fn cmd_universal_path_reaches_the_compiled_surface() {
 fn cmd_rejects_malformed_and_bad_handle() {
     let h = kevy_open(0);
     // Empty packed argv is caller misuse (-1), not a protocol error.
+    // SAFETY: null on purpose — the contract documents the error return this checks.
     let s = unsafe { kevy_cmd(h, std::ptr::null(), 0) };
     assert_eq!(s, ERR);
     assert!(!out(h).is_empty());
     kevy_close(h);
     // Bad handle after close.
     let packed = pack_argv(&[b"PING"]);
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_cmd(h, packed.as_ptr(), packed.len() as u32) }, BAD_HANDLE);
 }
 

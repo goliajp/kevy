@@ -121,10 +121,7 @@ impl core::fmt::Debug for Distinct<'_> {
     /// identity worth printing — it shows as `<fn>` so the rest of the
     /// struct stays inspectable.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("Distinct")
-            .field("field", &self.field)
-            .field("key", &"<fn>")
-            .finish()
+        f.debug_struct("Distinct").field("field", &self.field).field("key", &"<fn>").finish()
     }
 }
 
@@ -135,9 +132,6 @@ impl core::fmt::Debug for Facet<'_> {
     /// identity worth printing — it shows as `<fn>` so the rest of the
     /// struct stays inspectable.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("Facet")
-            .field("field", &self.field)
-            .field("key", &"<fn>")
-            .finish()
+        f.debug_struct("Facet").field("field", &self.field).field("key", &"<fn>").finish()
     }
 }
