@@ -63,7 +63,7 @@ TESTS="get set incr lpush sadd hset zadd"
 # Which version of each competitor this table is against. The pins live in
 # bench/COMPETITOR-ANCHORS.json, each image is asked what it actually is,
 # and a mismatch stops the run — see anchor-lib.sh for why.
-. "$(dirname "$0")/anchor-lib.sh"
+. ./anchor-lib.sh   # cwd is this script's directory, set above
 
 VALKEY_PIN=$(anchor_pin valkey)
 VALKEY_VER=$(anchor_image_ver "valkey/valkey:$VALKEY_PIN" valkey-server --version)
