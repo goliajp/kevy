@@ -12,7 +12,7 @@
 
 services:
   kevy:
-    image: goliakk/kevy:rc   # or ghcr.io/goliajp/kevy:rc — same image
+    image: goliakk/kevy:6.3.0   # or ghcr.io/goliajp/kevy:6.3.0 — same image
     restart: unless-stopped
 
     # Persist snapshot + AOF across `docker compose down`. Drop the volume
