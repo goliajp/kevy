@@ -1,6 +1,45 @@
-//! HNSW graph: hierarchical layers, greedy descent +
-//! beam search on layer 0, tombstone deletes filtered at search
-//! time, bounded full rebuild by re-inserting the living.
+//! The HNSW graph — layout, invariants, and the three that are not obvious.
+//!
+//! # Shape
+//!
+//! Nodes live in one `Vec<Node>` and are addressed by `u32` index, never by
+//! pointer: `links[layer]` is a list of neighbour ids, so the whole graph is
+//! index-into-a-vector. That is what lets a node be rewritten in place during
+//! a prune without any lifetime touching another node, and it keeps the
+//! neighbour list contiguous for the cache.
+//!
+//! ```text
+//!   layer 2        (e)                     entry point, sparsest layer
+//!   layer 1     (a)-(e)---(k)              greedy descent happens here
+//!   layer 0  (a)-(b)-(c)-(e)-(k)-(m)       every living node; beam search
+//! ```
+//!
+//! A search enters at `entry` on the top layer, descends greedily to the
+//! single best node per layer, then runs a beam search on layer 0 only.
+//!
+//! # Invariants
+//!
+//! 1. **One node per distinct vector, not per key.** `keys` is a list because
+//!    duplicate vectors under different keys collapse onto one node. This is
+//!    not an optimisation — it is a correctness fix a fuzz run found: with one
+//!    node per key, a cluster of identical vectors larger than the link cap
+//!    disconnects from the graph, because every co-located edge loses the
+//!    diversity prune and the cluster ends up linked only to itself.
+//! 2. **`by_vec` keys on the prepared bits, so `-0.0` and `0.0` are distinct
+//!    nodes.** Harmless: the tie-keeping prune covers sub-cap co-located pairs.
+//! 3. **Deletes are tombstones.** `dead` is set, the node stays in the graph
+//!    so its edges keep the topology connected, and search filters it out.
+//!    Space comes back only from a rebuild, which re-inserts the living.
+//! 4. **`links_total` and the tombstone count are maintained at the push and
+//!    shrink sites**, never recomputed. `stats()` must not walk the graph —
+//!    it is on the reporting path, and an O(N) stat call is how a metrics
+//!    endpoint becomes a latency source.
+//!
+//! # Why a rebuild is bounded
+//!
+//! Re-inserting the living is O(live · log live) with the same constants as
+//! the original inserts, so a rebuild costs what building that many vectors
+//! cost in the first place — not what the tombstoned history cost.
 
 use std::collections::HashMap;
 
