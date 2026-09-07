@@ -198,15 +198,15 @@
       ]
     },
     "redis-stack": {
-      "pinned": "7.4.0-v8",
-      "role": "RediSearch oracle for the FT / vector face (arena_serving.py, arena_ann.py)",
+      "pinned": "8.10.1",
+      "role": "RediSearch / query-engine oracle for the FT and vector faces (arena_serving.py, arena_ann.py)",
       "upstream": {
-        "kind": "dockerhub",
-        "repo": "redis/redis-stack-server"
+        "kind": "github",
+        "repo": "redis/redis"
       },
-      "image": "redis/redis-stack-server:{v}",
+      "image": "redis:{v}",
       "manual": true,
-      "note": "FROZEN UPSTREAM, and that is a finding rather than an oversight: the last redis-stack-server tag is 7.4.0-v8 (2025-11-03), because Redis 8 absorbed RediSearch, RedisJSON and the rest into the server itself. So this anchor measures kevy's FT face against a search engine two majors behind the redis anchor above. Migrating the FT oracle onto the redis anchor's own image is a real piece of work (arena_serving.py and arena_ann.py both assume a stack port) and is the owner's call, not this file's.",
+      "note": "SUPERSEDED BY THE redis ANCHOR, 2026-09-07, and this entry stays only to record why. It used to pin redis/redis-stack-server, whose last tag is 7.4.0-v8 (2025-11-03) — which read as a frozen upstream and therefore as an FT face measured against a search engine two majors behind. It is not frozen; it is retired. Redis 8 ships the query engine in the standard image: `docker run -d redis:8.10.1` answers 669 commands including 47 FT.*, 25 JSON.*, 21 TS.* and 11 BF.*, while redis-stack-server:latest is still 7.4.7. So the latest stable RediSearch IS the redis anchor, and this anchor tracks the same pin. The harnesses take a port and do not care which image opened it.",
       "sites": []
     }
   },
