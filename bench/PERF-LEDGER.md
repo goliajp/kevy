@@ -561,6 +561,67 @@ textgate 正在断言的内存公式。范围决定权不在我。
 
 ---
 
+## arena bare face — 2026-09-07 — kevy 6.2.2
+
+The first table in this file whose opponents are named to the patch, and
+the reason it exists. Until this week `bench/arena.sh` asked docker for
+the redis image by bare major: the box served the 8.10.0 layer it had
+cached in August while the registry served 8.10.1, and the 2026-09-01
+entry above published seven ratios against a version no number in this
+repository recorded. The pins now live in `bench/COMPETITOR-ANCHORS.json`,
+`tools/check_competitor_anchors.py` fails when one falls behind its
+upstream's latest stable, and arena asks each image what it actually is
+and refuses to run on a mismatch. This run's header, printed by the
+harness rather than typed:
+
+    # engines: redis 8.10.1 | valkey 9.1.2 | dragonfly 1.40.2
+
+Protocol unchanged: `bash bench/arena-median.sh target/release/kevy 3` on
+lx64, cores 0-7 server / 8-15 client, one engine at a time, `-c 50 -P 16`,
+median-of-5 per run, throughput from each server's own command counter.
+Three full runs; the cells are per-cell medians across them. Same kevy
+binary as the 2026-09-01 entry (6.2.2, no serving-path change between
+them), so what moved is the opponents and the dice.
+
+| verb | kevy | Redis 8.10.1 | valkey 9.1.2 | Dragonfly 1.40.2 | vs Redis 8.10.1 |
+|---|---:|---:|---:|---:|---:|
+| GET | 7,342,698 | 5,835,424 | 3,132,401 | 2,802,076 | 1.26x |
+| SET | 6,854,741 | 2,561,414 | 1,743,510 | 1,853,306 | 2.68x |
+| INCR | 6,632,498 | 3,397,561 | 2,296,495 | 1,940,670 | 1.95x |
+| SADD | 5,543,379 | 3,690,253 | 2,268,729 | 1,831,543 | 1.50x |
+| HSET | 4,456,414 | 3,039,059 | 1,868,933 | 1,739,677 | 1.47x |
+| LPUSH | 3,061,570 | 2,783,323 | 1,920,937 | 1,488,802 | 1.10x |
+| ZADD | 3,296,001 | 2,804,915 | 1,807,926 | 1,793,792 | 1.18x |
+
+Gap rule: `|kevy - other| <= max(stdev_kevy, stdev_other)` reads as NOISE.
+No cell hit it, and the stronger three-run statement holds again:
+**kevy's worst run beats every competitor's best run, in every cell** —
+narrowest LPUSH 1.09x and ZADD 1.14x against Redis, LPUSH 1.56x against
+valkey, ZADD 1.79x against Dragonfly.
+
+Run-to-run spread, worst cell per engine: kevy SADD 6.9%, Redis GET 6.1%,
+valkey GET 14.2%, Dragonfly SADD 11.0%.
+
+### What the new anchors changed
+
+Two things moved at once — the opponents' versions and three fresh runs of
+dice — so no single cell's delta is attributable to either alone. What can
+be said:
+
+- **Redis 8.10.0 → 8.10.1** shows up mainly on GET: 5,599,436 → 5,835,424
+  (+4.2%). The other six verbs are within their own run-to-run spread.
+  GET is where our lead narrows accordingly: 1.32x → 1.26x.
+- **valkey 9.1.1 → 9.1.2** GET 3,086,168 → 3,132,401 (+1.5%), inside
+  valkey's own 14.2% spread — not a version effect this run can claim.
+- **kevy's own cells moved up to 14%** (SADD 4,874,874 → 5,543,379) on an
+  unchanged binary, which is the 2026-09-01 entry's point about needing
+  three runs, restated. SADD's ratio moving 1.29x → 1.50x is our dice, not
+  Redis getting slower.
+
+The honest one-line summary is that raising the anchors cost us the GET
+headline (1.32x → 1.26x against a genuinely faster Redis) and changed
+nothing else that survives its own noise.
+
 ## arena bare face — 2026-09-01 — kevy 6.2.2
 
 Re-measured for 6.2.2 rather than relabelled. **Three full runs**, not

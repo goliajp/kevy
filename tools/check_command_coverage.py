@@ -48,7 +48,10 @@ def refresh(data: dict) -> dict:
     """Ask the pinned redis image what it serves. Needs docker."""
     pin = json.loads(ANCHORS.read_text())["anchors"]["redis"]["pinned"]
     image = f"redis:{pin}"
-    script = ("redis-server --port 7399 --daemonize yes --save '' && "
+    # --logfile: without it the daemon's startup banner lands on the same
+    # stdout as the reply, and words out of an English log line ("ADD",
+    # "ALSO", "AND", "BEING") read exactly like command names.
+    script = ("redis-server --port 7399 --daemonize yes --save '' --logfile /dev/null && "
               "for i in $(seq 50); do redis-cli -p 7399 ping >/dev/null 2>&1 && break; sleep 0.1; done && "
               "redis-cli -p 7399 COMMAND LIST")
     out = subprocess.run(["docker", "run", "--rm", "--entrypoint", "sh", image, "-c", script],
@@ -71,7 +74,11 @@ def classify(verb: str, table: dict) -> str:
     for key in table:
         for pat in key.split("|"):
             pat = pat.strip()
-            if verb == pat or (pat.endswith(".") and verb.startswith(pat)) or verb.startswith(pat + " "):
+            # Redis names a container's subcommands "ACL|CAT", and the
+            # module families by a dotted prefix ("FT.SEARCH").
+            if (verb == pat or verb.startswith(pat + "|")
+                    or (pat.endswith(".") and verb.startswith(pat))
+                    or verb.startswith(pat + " ")):
                 return key
     return ""
 
@@ -85,7 +92,11 @@ def main() -> int:
         sys.exit("check_command_coverage: no captured Redis command set — run with --refresh (needs docker)")
 
     ours, theirs = kevy_verbs(), set(captured["commands"])
-    missing = sorted(theirs - ours)
+    # Redis lists a container's subcommands individually ("XGROUP|CREATE");
+    # VERB_META names the container once ("XGROUP") and documents its
+    # syntax there. A container we implement covers its subcommands, so
+    # fold them before diffing — otherwise XGROUP alone reads as six gaps.
+    missing = sorted(v for v in theirs - ours if v.split("|")[0] not in ours)
     exempt, planned, unclassified = [], [], []
     for verb in missing:
         if classify(verb, data["exempt"]):
