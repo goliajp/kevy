@@ -1,0 +1,177 @@
+{
+  "_doc": "The competitors kevy measures itself against, and the version each one is pinned to. A benchmark that says 'vs redis' without a version is not a measurement, it is a mood: redis 7.4 and redis 8.10 differ by ~2x on GET, so the same table can read as a 1.4x win or a 2.6x win depending on which one the box happened to have cached. Every anchor here is pinned to an exact upstream release, and tools/check_competitor_anchors.py fails when a pin drifts from this file, when a pin cannot be found at all, or when this file has fallen behind the upstream's latest stable.",
+  "_pinning": "Floating tags (redis:8, dragonfly with no tag) are the specific thing this file exists to remove. `redis:8` resolved to 8.10.0 on the bench box in Sept 2026 because that is what docker had cached in August; the registry served 8.10.1. Nothing in the tree recorded either number.",
+  "_updated": "2026-09-07",
+  "anchors": {
+    "redis": {
+      "pinned": "8.10.1",
+      "role": "the original; the strongest competitor on the bare read/write face",
+      "upstream": {
+        "kind": "github",
+        "repo": "redis/redis"
+      },
+      "image": "redis:{v}",
+      "sites": [
+        {
+          "file": "bench/arena.sh",
+          "pattern": "redis:([0-9][0-9.]*)",
+          "mode": "derive"
+        },
+        {
+          "file": "bench/docker-compose.yml",
+          "pattern": "image: redis:([0-9][0-9.]*)"
+        },
+        {
+          "file": "bench/pubsub-compare/docker-compose.yml",
+          "pattern": "image: redis:([0-9][0-9.]*)"
+        },
+        {
+          "file": "bench/loopback_c1.sh",
+          "pattern": "redis:([0-9][0-9.]*)"
+        },
+        {
+          "file": "bench/loopback_c50.sh",
+          "pattern": "redis:([0-9][0-9.]*)"
+        },
+        {
+          "file": "bench/pubsub_loopback.sh",
+          "pattern": "redis:([0-9][0-9.]*)"
+        },
+        {
+          "file": "examples/docker-compose.yml",
+          "pattern": "redis:([0-9][0-9.]*)"
+        },
+        {
+          "file": "bench/compat3.sh",
+          "pattern": "redis ([0-9]+\\.[0-9][0-9.]*)",
+          "what": "prose: printed into reports"
+        },
+        {
+          "file": "bench/loopback_c1.sh",
+          "pattern": "redis ([0-9]+\\.[0-9][0-9.]*)",
+          "what": "prose: printed into reports"
+        },
+        {
+          "file": "bench/loopback_c50.sh",
+          "pattern": "redis ([0-9]+\\.[0-9][0-9.]*)",
+          "what": "prose: printed into reports"
+        },
+        {
+          "file": "bench/pubsub_loopback.sh",
+          "pattern": "redis ([0-9]+\\.[0-9][0-9.]*)",
+          "what": "prose: printed into reports"
+        }
+      ]
+    },
+    "valkey": {
+      "pinned": "9.1.2",
+      "role": "the fork; the reference this project's charter names",
+      "upstream": {
+        "kind": "github",
+        "repo": "valkey-io/valkey"
+      },
+      "image": "valkey/valkey:{v}",
+      "sites": [
+        {
+          "file": "bench/arena.sh",
+          "pattern": "valkey/valkey:([0-9][0-9.]*)",
+          "mode": "derive"
+        },
+        {
+          "file": "bench/docker-compose.yml",
+          "pattern": "image: valkey/valkey:([0-9][0-9.]*)"
+        },
+        {
+          "file": "bench/pubsub-compare/docker-compose.yml",
+          "pattern": "image: valkey/valkey:([0-9][0-9.]*)"
+        },
+        {
+          "file": "bench/loopback_c1.sh",
+          "pattern": "valkey/valkey:([0-9][0-9.]*)"
+        },
+        {
+          "file": "bench/loopback_c50.sh",
+          "pattern": "valkey/valkey:([0-9][0-9.]*)"
+        },
+        {
+          "file": "bench/pubsub_loopback.sh",
+          "pattern": "valkey/valkey:([0-9][0-9.]*)"
+        },
+        {
+          "file": "bench/compat3.sh",
+          "pattern": "valkey ([0-9]+\\.[0-9][0-9.]*)",
+          "what": "prose: printed into reports"
+        },
+        {
+          "file": "bench/run.sh",
+          "pattern": "valkey ([0-9]+\\.[0-9][0-9.]*)",
+          "what": "prose: printed into reports"
+        },
+        {
+          "file": "bench/loopback_c1.sh",
+          "pattern": "valkey ([0-9]+\\.[0-9][0-9.]*)",
+          "what": "prose: printed into reports"
+        },
+        {
+          "file": "bench/loopback_c50.sh",
+          "pattern": "valkey ([0-9]+\\.[0-9][0-9.]*)",
+          "what": "prose: printed into reports"
+        },
+        {
+          "file": "bench/pubsub_loopback.sh",
+          "pattern": "valkey ([0-9]+\\.[0-9][0-9.]*)",
+          "what": "prose: printed into reports"
+        }
+      ]
+    },
+    "dragonfly": {
+      "pinned": "1.40.2",
+      "role": "the multi-threaded rewrite; the fourth engine of the position plot",
+      "upstream": {
+        "kind": "github",
+        "repo": "dragonflydb/dragonfly",
+        "tag_prefix": "v"
+      },
+      "image": "docker.dragonflydb.io/dragonflydb/dragonfly:v{v}",
+      "sites": [
+        {
+          "file": "bench/arena.sh",
+          "pattern": "dragonflydb/dragonfly:v([0-9][0-9.]*)",
+          "mode": "derive"
+        }
+      ]
+    },
+    "postgres": {
+      "pinned": "18.6",
+      "role": "the durable-store reference for pgcompare and migrationgate",
+      "upstream": {
+        "kind": "endoflife",
+        "product": "postgresql"
+      },
+      "image": "postgres:{v}-bookworm",
+      "sites": [
+        {
+          "file": "bench/pgcompare.sh",
+          "pattern": "postgres:([0-9][0-9.]*)-bookworm"
+        },
+        {
+          "file": "bench/migrationgate.sh",
+          "pattern": "postgres:([0-9][0-9.]*)-bookworm"
+        }
+      ]
+    },
+    "redis-stack": {
+      "pinned": "7.4.0-v8",
+      "role": "RediSearch oracle for the FT / vector face (arena_serving.py, arena_ann.py)",
+      "upstream": {
+        "kind": "dockerhub",
+        "repo": "redis/redis-stack-server"
+      },
+      "image": "redis/redis-stack-server:{v}",
+      "manual": true,
+      "note": "FROZEN UPSTREAM, and that is a finding rather than an oversight: the last redis-stack-server tag is 7.4.0-v8 (2025-11-03), because Redis 8 absorbed RediSearch, RedisJSON and the rest into the server itself. So this anchor measures kevy's FT face against a search engine two majors behind the redis anchor above. Migrating the FT oracle onto the redis anchor's own image is a real piece of work (arena_serving.py and arena_ann.py both assume a stack port) and is the owner's call, not this file's.",
+      "sites": []
+    }
+  },
+  "_modes": "A site is checked one of two ways. mode 'pin' (the default) reads the version out of the file and requires it to equal `pinned`. mode 'derive' is for a file that reads this manifest at runtime instead of carrying a copy: it must reference COMPETITOR-ANCHORS.json, and it must NOT contain a literal tag — a hardcoded version sitting next to a derived one is the drift this file exists to prevent, and it is the more dangerous kind because it looks maintained."
+}
