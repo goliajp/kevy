@@ -127,6 +127,59 @@ impl Store {
         }
     }
 
+    /// `HRANDFIELD` — `count` distinct fields, or `count.abs()` fields with
+    /// repeats allowed when `count` is negative, which is Redis's way of
+    /// asking for a sample rather than a subset.
+    ///
+    /// Built on `hash_pairs` so it covers all four storage forms at once
+    /// (Hash / SegHash / SmallHashInline / PackedRow) rather than growing a
+    /// fourth near-copy of the same match. `with_values` decides whether the
+    /// value rides along; the RESP3 reply nests the pairs and RESP2 flattens
+    /// them, which is the caller's business, not this one's.
+    pub fn hrandfield(
+        &mut self,
+        key: &[u8],
+        count: i64,
+        with_values: bool,
+    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, StoreError> {
+        self.purge_hash_ttl(key);
+        let Some(pairs) = self.hash_pairs(key)? else {
+            return Ok(Vec::new());
+        };
+        if pairs.is_empty() || count == 0 {
+            return Ok(Vec::new());
+        }
+        let n = pairs.len();
+        let mut out: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+
+        if count < 0 {
+            // Repeats allowed: draw independently, so the result may name the
+            // same field twice and is as long as asked for.
+            let want = count.unsigned_abs() as usize;
+            out.reserve(want.min(1 << 20));
+            for _ in 0..want.min(1 << 20) {
+                let i = (self.rng.next_u64() % n as u64) as usize;
+                let (f, v) = &pairs[i];
+                out.push((f.clone(), if with_values { v.clone() } else { Vec::new() }));
+            }
+            return Ok(out);
+        }
+
+        let want = (count as usize).min(n);
+        let mut idx: Vec<usize> = (0..n).collect();
+        // Partial Fisher-Yates: only the prefix we return needs to be shuffled.
+        for i in 0..want {
+            let j = i + (self.rng.next_u64() % (n - i) as u64) as usize;
+            idx.swap(i, j);
+        }
+        out.reserve(want);
+        for &i in &idx[..want] {
+            let (f, v) = &pairs[i];
+            out.push((f.clone(), if with_values { v.clone() } else { Vec::new() }));
+        }
+        Ok(out)
+    }
+
     /// Every field name, copied out. Unordered: a hash has no field
     /// order to preserve, so two calls may differ in sequence.
     pub fn hkeys(&mut self, key: &[u8]) -> Result<Vec<Vec<u8>>, StoreError> {

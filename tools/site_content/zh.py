@@ -203,7 +203,7 @@ let mut store = Store::new_in(&mut arena);""",
             "eyebrow": "为什么可以直接替换 Redis",
             "h2": "同样的协议。更高的吞吐。",
             "intro": (
-                "RESP2 和 RESP3，205 条命令——redis-cli 和你的客户端库不用改就能连。"
+                "RESP2 和 RESP3，206 条命令——redis-cli 和你的客户端库不用改就能连。"
                 "一台机器，16 核，loopback，五次取中位数。"
             ),
             "rows": [
@@ -296,7 +296,7 @@ PAGES["migrate"] = {
             "t": "prose",
             "h2": "从 Redis 过来",
             "body": [
-                "<b>你的客户端不用改。</b>kevy 说 RESP2 和 RESP3，实现了 205 条命令。"
+                "<b>你的客户端不用改。</b>kevy 说 RESP2 和 RESP3，实现了 206 条命令。"
                 "把你现有的库指过来就行，代码不动，redis-cli 不换。没有新的 SDK 要接，"
                 "也没有新协议要学。",
                 "<b>所以真正要问的只有一句：你能换到什么。</b>只有四样。如果这四样对你都没有"
@@ -500,7 +500,7 @@ PAGES["choose"] = {
             "items": [
                 {
                     "q": "它真的能直接替换 Redis 吗？",
-                    "a": "在协议层面，是的——RESP2 和 RESP3，205 条命令，你的客户端库不会察觉。在行为层面，大体上是，而例外恰恰是重点。跨 shard 的 <code>RENAME</code> 不是原子的——多键写只在单个 shard 内原子。另外 SCAN 的游标只在签发它的服务器上有效，与 Redis Cluster 的按节点性质相同。<a href=\"~/docs/commands/\">全部 205 条命令都标着真实的偏差和真实的代价</a>，这些是从实现里读出来的，不是从 Redis 的文档里抄来的。",
+                    "a": "在协议层面，是的——RESP2 和 RESP3，206 条命令，你的客户端库不会察觉。在行为层面，大体上是，而例外恰恰是重点。跨 shard 的 <code>RENAME</code> 不是原子的——多键写只在单个 shard 内原子。另外 SCAN 的游标只在签发它的服务器上有效，与 Redis Cluster 的按节点性质相同。<a href=\"~/docs/commands/\">全部 206 条命令都标着真实的偏差和真实的代价</a>，这些是从实现里读出来的，不是从 Redis 的文档里抄来的。",
                 },
                 {
                     "q": "数据集必须装进 RAM 吗？",
@@ -699,7 +699,7 @@ HGETALL flags""",
             "items": [
                 {"kicker": "指南", "title": "食谱", "body": "会话、限流、排行榜、信息流的可用配方。", "go": "去读", "href": "docs/cookbook/"},
                 {"kicker": "指南", "title": "持久化", "body": "kill -9 之后什么还在，以及 fsync 策略要你付出什么。", "go": "去读", "href": "docs/persistence/"},
-                {"kicker": "参考", "title": "全部命令", "body": "205 条命令，每一条都标着真实代价和相对 Redis 的偏差。", "go": "去查", "href": "docs/commands/"},
+                {"kicker": "参考", "title": "全部命令", "body": "206 条命令，每一条都标着真实代价和相对 Redis 的偏差。", "go": "去查", "href": "docs/commands/"},
             ],
         },
     ],

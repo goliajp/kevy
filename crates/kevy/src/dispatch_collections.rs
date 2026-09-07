@@ -121,6 +121,7 @@ pub(crate) fn dispatch_hash<A: ArgvView + ?Sized>(
                 encode_error(out, "ERR value is not a valid float");
             }
         }
+        b"HRANDFIELD" => crate::dispatch_collections_v127::cmd_hrandfield(store, args, out),
         b"HKEYS" => {
             if args.len() == 2 {
                 emit_bulk_array(store.hkeys(&args[1]), out);

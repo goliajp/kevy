@@ -439,3 +439,45 @@ pub(crate) fn cmd_zscan<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: 
         }
     }
 }
+
+/// `HRANDFIELD key [count [WITHVALUES]]`.
+///
+/// Without a count: one field as a bulk (or a null bulk on a missing key).
+/// With one: an array of fields, or — with WITHVALUES — field/value pairs,
+/// flat in RESP2. The RESP3 nesting lives in dispatch_resp3.
+pub(crate) fn cmd_hrandfield<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
+    if args.len() < 2 || args.len() > 4 {
+        return wrong_args(out, "hrandfield");
+    }
+    if args.len() == 2 {
+        return match store.hrandfield(&args[1], 1, false) {
+            Ok(v) if v.is_empty() => encode_null_bulk(out),
+            Ok(v) => encode_bulk(out, &v[0].0),
+            Err(e) => store_err(out, e),
+        };
+    }
+    let Some(count) = arg_i64(&args[2]) else {
+        return encode_error(out, "ERR value is not an integer or out of range");
+    };
+    let with_values = if args.len() == 4 {
+        if !args[3].eq_ignore_ascii_case(b"WITHVALUES") {
+            return encode_error(out, "ERR syntax error");
+        }
+        true
+    } else {
+        false
+    };
+    match store.hrandfield(&args[1], count, with_values) {
+        Err(e) => store_err(out, e),
+        Ok(items) => {
+            let n = if with_values { items.len() * 2 } else { items.len() };
+            encode_array_len(out, n as i64);
+            for (f, v) in &items {
+                encode_bulk(out, f);
+                if with_values {
+                    encode_bulk(out, v);
+                }
+            }
+        }
+    }
+}

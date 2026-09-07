@@ -39,6 +39,7 @@ pub(crate) const ESTORE_OPS: &[&str] = &[
     "HINCRBY",
     "HINCRBYFLOAT",
     "HKEYS",
+    "HRANDFIELD",
     "HLEN",
     "HMGET",
     "HSCAN",

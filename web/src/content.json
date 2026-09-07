@@ -103,7 +103,7 @@
           "eyebrow": "Why you can replace Redis",
           "h2": "Same protocol. More throughput.",
           "id": "swap",
-          "intro": "RESP2 and RESP3, 205 commands — redis-cli and your client library connect unchanged. One machine, 16 cores, loopback, median of five.",
+          "intro": "RESP2 and RESP3, 206 commands — redis-cli and your client library connect unchanged. One machine, 16 cores, loopback, median of five.",
           "note": "<b>LPUSH and ZADD are only 10% and 18% ahead.</b> If lists or sorted sets are your hot path, speed is not the reason to switch. <a href=\"~/benchmarks/\">Full table, against valkey and Dragonfly too.</a> Migration is three commands — <a href=\"~/migrate/\">export, import, digest</a> — and works in both directions.",
           "rows": [
             [
@@ -443,7 +443,7 @@
           "h2": "Third — what are you giving up?",
           "items": [
             {
-              "a": "On the wire, yes — RESP2 and RESP3, 205 commands, and your client library will not notice. In behaviour, mostly, and the exceptions are the point. A cross-shard <code>RENAME</code> is not atomic — multi-key writes are atomic per shard, not globally. And a SCAN cursor is only valid on the server that issued it, the same per-node property Redis Cluster has. <a href=\"~/docs/commands/\">All 205 commands carry their real deviation and their real cost</a>, read out of the implementation rather than copied from Redis's documentation.",
+              "a": "On the wire, yes — RESP2 and RESP3, 206 commands, and your client library will not notice. In behaviour, mostly, and the exceptions are the point. A cross-shard <code>RENAME</code> is not atomic — multi-key writes are atomic per shard, not globally. And a SCAN cursor is only valid on the server that issued it, the same per-node property Redis Cluster has. <a href=\"~/docs/commands/\">All 206 commands carry their real deviation and their real cost</a>, read out of the implementation rather than copied from Redis's documentation.",
               "q": "Is it really a drop-in replacement for Redis?"
             },
             {
@@ -490,7 +490,7 @@
         },
         {
           "body": [
-            "<b>Your client does not change.</b> kevy speaks RESP2 and RESP3 and answers 205 commands. Point your existing library at it, keep your code, keep your redis-cli. There is no SDK to adopt and no new protocol to learn.",
+            "<b>Your client does not change.</b> kevy speaks RESP2 and RESP3 and answers 206 commands. Point your existing library at it, keep your code, keep your redis-cli. There is no SDK to adopt and no new protocol to learn.",
             "<b>So the only real question is what you gain.</b> Four things, and if none of them is worth anything to you, then stay on Redis — it is a superb piece of software and switching for its own sake is a waste of your week."
           ],
           "h2": "Coming from Redis",
@@ -986,7 +986,7 @@
               "title": "Persistence"
             },
             {
-              "body": "205 commands, each with its real cost and its deviation from Redis.",
+              "body": "206 commands, each with its real cost and its deviation from Redis.",
               "go": "Look it up",
               "href": "docs/commands/",
               "kicker": "Reference",
@@ -1404,7 +1404,7 @@
           "eyebrow": "なぜ Redis を置き換えられるのか",
           "h2": "プロトコルは同じ。スループットは上。",
           "id": "swap",
-          "intro": "RESP2 と RESP3、205 個のコマンド——redis-cli も、クライアントライブラリも、そのままつながります。1 台のマシン、16 コア、ループバック、5 回実行した中央値です。",
+          "intro": "RESP2 と RESP3、206 個のコマンド——redis-cli も、クライアントライブラリも、そのままつながります。1 台のマシン、16 コア、ループバック、5 回実行した中央値です。",
           "note": "<b>LPUSH と ZADD は、10% と 18% しか上回っていません。</b>リストやソート済みセットがホットパスなら、速さは乗り換える理由になりません。<a href=\"~/benchmarks/\">valkey や Dragonfly も含めた、完全な表はこちら。</a>移行はコマンド 3 つ——<a href=\"~/migrate/\">export、import、digest</a>——で、どちらの向きにも動きます。",
           "rows": [
             [
@@ -1744,7 +1744,7 @@
           "h2": "最後に——何を差し出すことになるか",
           "items": [
             {
-              "a": "ワイヤの上では、なります。RESP2 と RESP3、205 個のコマンドに対応し、クライアントライブラリは違いに気づきません。挙動もおおむね同じですが、その例外こそが要点です。シャードをまたぐ <code>RENAME</code> は原子的ではありません——複数キーの書き込みは shard 単位でのみ原子的です。また SCAN のカーソルは発行したサーバーでのみ有効で、これは Redis Cluster のノード単位の性質と同じです。<a href=\"~/docs/commands/\">205 個すべてのコマンドに、本当の差異と本当のコストを併記してあります</a>。Redis の文書から書き写したものではなく、実装から読み出したものです。",
+              "a": "ワイヤの上では、なります。RESP2 と RESP3、206 個のコマンドに対応し、クライアントライブラリは違いに気づきません。挙動もおおむね同じですが、その例外こそが要点です。シャードをまたぐ <code>RENAME</code> は原子的ではありません——複数キーの書き込みは shard 単位でのみ原子的です。また SCAN のカーソルは発行したサーバーでのみ有効で、これは Redis Cluster のノード単位の性質と同じです。<a href=\"~/docs/commands/\">206 個すべてのコマンドに、本当の差異と本当のコストを併記してあります</a>。Redis の文書から書き写したものではなく、実装から読み出したものです。",
               "q": "本当に Redis のドロップイン置き換えになりますか"
             },
             {
@@ -1791,7 +1791,7 @@
         },
         {
           "body": [
-            "<b>クライアントは変わりません。</b>kevy は RESP2 と RESP3 を話し、205 個のコマンドに応答します。既存のライブラリの接続先を変えるだけで、コードもそのまま、redis-cli もそのままです。新しく覚える SDK もプロトコルもありません。",
+            "<b>クライアントは変わりません。</b>kevy は RESP2 と RESP3 を話し、206 個のコマンドに応答します。既存のライブラリの接続先を変えるだけで、コードもそのまま、redis-cli もそのままです。新しく覚える SDK もプロトコルもありません。",
             "<b>だから本当の問題は、何が得られるのかだけです。</b>得られるものは 4 つあります。そのどれにも価値を感じないなら、Redis に留まってください。あれは見事なソフトウェアであり、乗り換えのための乗り換えは 1 週間の浪費です。"
           ],
           "h2": "Redis から移る",
@@ -2287,7 +2287,7 @@
               "title": "永続化"
             },
             {
-              "body": "205 個のコマンド。それぞれの本当のコストと、Redis との差異つき。",
+              "body": "206 個のコマンド。それぞれの本当のコストと、Redis との差異つき。",
               "go": "調べる",
               "href": "docs/commands/",
               "kicker": "リファレンス",
@@ -2705,7 +2705,7 @@
           "eyebrow": "为什么可以直接替换 Redis",
           "h2": "同样的协议。更高的吞吐。",
           "id": "swap",
-          "intro": "RESP2 和 RESP3，205 条命令——redis-cli 和你的客户端库不用改就能连。一台机器，16 核，loopback，五次取中位数。",
+          "intro": "RESP2 和 RESP3，206 条命令——redis-cli 和你的客户端库不用改就能连。一台机器，16 核，loopback，五次取中位数。",
           "note": "<b>LPUSH 和 ZADD 只领先 10% 和 18%。</b>如果 list 或者 sorted set 是你的热路径，那么性能就不是换过来的理由。<a href=\"~/benchmarks/\">完整的表格在这里，valkey 和 Dragonfly 也一起打了。</a>迁移只有三条命令——<a href=\"~/migrate/\">export、import、digest</a>——而且两个方向都能走。",
           "rows": [
             [
@@ -3045,7 +3045,7 @@
           "h2": "第三步——你要放弃什么",
           "items": [
             {
-              "a": "在协议层面，是的——RESP2 和 RESP3，205 条命令，你的客户端库不会察觉。在行为层面，大体上是，而例外恰恰是重点。跨 shard 的 <code>RENAME</code> 不是原子的——多键写只在单个 shard 内原子。另外 SCAN 的游标只在签发它的服务器上有效，与 Redis Cluster 的按节点性质相同。<a href=\"~/docs/commands/\">全部 205 条命令都标着真实的偏差和真实的代价</a>，这些是从实现里读出来的，不是从 Redis 的文档里抄来的。",
+              "a": "在协议层面，是的——RESP2 和 RESP3，206 条命令，你的客户端库不会察觉。在行为层面，大体上是，而例外恰恰是重点。跨 shard 的 <code>RENAME</code> 不是原子的——多键写只在单个 shard 内原子。另外 SCAN 的游标只在签发它的服务器上有效，与 Redis Cluster 的按节点性质相同。<a href=\"~/docs/commands/\">全部 206 条命令都标着真实的偏差和真实的代价</a>，这些是从实现里读出来的，不是从 Redis 的文档里抄来的。",
               "q": "它真的能直接替换 Redis 吗？"
             },
             {
@@ -3092,7 +3092,7 @@
         },
         {
           "body": [
-            "<b>你的客户端不用改。</b>kevy 说 RESP2 和 RESP3，实现了 205 条命令。把你现有的库指过来就行，代码不动，redis-cli 不换。没有新的 SDK 要接，也没有新协议要学。",
+            "<b>你的客户端不用改。</b>kevy 说 RESP2 和 RESP3，实现了 206 条命令。把你现有的库指过来就行，代码不动，redis-cli 不换。没有新的 SDK 要接，也没有新协议要学。",
             "<b>所以真正要问的只有一句：你能换到什么。</b>只有四样。如果这四样对你都没有价值，那就留在 Redis——它是一件极好的软件，为换而换，只是白白搭进去一个星期。"
           ],
           "h2": "从 Redis 过来",
@@ -3588,7 +3588,7 @@
               "title": "持久化"
             },
             {
-              "body": "205 条命令，每一条都标着真实代价和相对 Redis 的偏差。",
+              "body": "206 条命令，每一条都标着真实代价和相对 Redis 的偏差。",
               "go": "去查",
               "href": "docs/commands/",
               "kicker": "参考",
