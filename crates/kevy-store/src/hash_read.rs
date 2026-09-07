@@ -136,6 +136,28 @@ impl Store {
     /// fourth near-copy of the same match. `with_values` decides whether the
     /// value rides along; the RESP3 reply nests the pairs and RESP2 flattens
     /// them, which is the caller's business, not this one's.
+    /// ```
+    /// use kevy_store::Store;
+    ///
+    /// let mut s = Store::new();
+    /// s.hset(b"h", &[(b"f1".as_slice(), b"v1".as_slice()),
+    ///                (b"f2".as_slice(), b"v2".as_slice())]).unwrap();
+    ///
+    /// // A positive count is distinct, and capped at what the hash holds.
+    /// assert_eq!(s.hrandfield(b"h", 9, false).unwrap().len(), 2);
+    ///
+    /// // A negative count returns exactly |count|, repeats allowed — the
+    /// // distinction Redis draws between a subset and a sample.
+    /// assert_eq!(s.hrandfield(b"h", -5, false).unwrap().len(), 5);
+    ///
+    /// // `with_values` fills the second half of each pair; without it the
+    /// // value is empty and only the field name means anything.
+    /// let pairs = s.hrandfield(b"h", 2, true).unwrap();
+    /// assert!(pairs.iter().all(|(f, v)| !f.is_empty() && !v.is_empty()));
+    ///
+    /// // A missing key is empty, not an error.
+    /// assert!(s.hrandfield(b"absent", 3, false).unwrap().is_empty());
+    /// ```
     pub fn hrandfield(
         &mut self,
         key: &[u8],
