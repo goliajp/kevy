@@ -121,6 +121,11 @@ warnings = "deny"
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
+# Every `unsafe` block in this workspace states the premise it rests on. The
+# lint is in clippy's `restriction` group, so it is off by default and
+# `clippy::all` being green says nothing about it — which is exactly how 378
+# unargued blocks accumulated without a gate noticing. Now it is denied.
+undocumented_unsafe_blocks = "deny"
 # v3.18 T5d pedantic sweep: every stone crate was run with `-W clippy::pedantic`
 # and each finding was either fixed or `#[allow]`ed in place with a reason. The
 # lints below fired in bulk (~330 sites) for patterns that are deliberate across

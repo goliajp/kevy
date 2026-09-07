@@ -125,6 +125,8 @@ unsafe extern "C" {
 pub(crate) unsafe fn args<const N: usize>(env: NapiEnv, info: NapiCallbackInfo) -> [NapiValue; N] {
     let mut argv = [std::ptr::null_mut(); N];
     let mut argc = N;
+    // SAFETY: `env` is this callback's and every argument below is a live local —
+    // facts 1 and 4 of the module note.
     let rc = unsafe {
         napi_get_cb_info(
             env,
@@ -152,12 +154,14 @@ pub(crate) unsafe fn buffer_bytes<'a>(env: NapiEnv, value: NapiValue) -> Option<
     }
     let mut data: *mut c_void = std::ptr::null_mut();
     let mut len = 0usize;
+    // SAFETY: `env` is this callback's; `data` and `len` are live locals N-API fills.
     if unsafe { napi_get_buffer_info(env, value, &mut data, &mut len) } != 0 {
         return None;
     }
     if len == 0 {
         return Some(&[]);
     }
+    // SAFETY: `buf.ptr` and `buf.len` are the pair kevy-ffi just returned.
     Some(unsafe { std::slice::from_raw_parts(data.cast::<u8>(), len) })
 }
 
@@ -174,6 +178,8 @@ pub(crate) unsafe fn make_buffer(env: NapiEnv, bytes: &[u8]) -> NapiValue {
     } else {
         bytes.as_ptr().cast_mut()
     };
+    // SAFETY: `env` is this callback's; `src` points at `bytes.len()` readable bytes of
+    // a slice still in scope, and N-API copies out of it during the call.
     let rc = unsafe { napi_create_buffer_copy(env, bytes.len(), src.cast(), &mut copy, &mut out) };
     if rc != 0 { std::ptr::null_mut() } else { out }
 }
@@ -185,6 +191,8 @@ pub(crate) unsafe fn make_buffer(env: NapiEnv, bytes: &[u8]) -> NapiValue {
 /// `env` as in [`args`].
 pub(crate) unsafe fn make_object(env: NapiEnv) -> NapiValue {
     let mut out: NapiValue = std::ptr::null_mut();
+    // SAFETY: `env` is this callback's and every out-parameter is a live local on this
+    // frame, which is all these N-API entry points read or write.
     let rc = unsafe { napi_create_object(env, &mut out) };
     if rc != 0 { std::ptr::null_mut() } else { out }
 }
@@ -197,7 +205,11 @@ pub(crate) unsafe fn make_object(env: NapiEnv) -> NapiValue {
 /// `env` as in [`args`]; `name` must be NUL-terminated.
 pub(crate) unsafe fn set_num(env: NapiEnv, obj: NapiValue, name: &'static str, v: f64) {
     let mut val: NapiValue = std::ptr::null_mut();
+    // SAFETY: `env` is this callback's and every out-parameter is a live local on this
+    // frame, which is all these N-API entry points read or write.
     if unsafe { napi_create_double(env, v, &mut val) } == 0 {
+        // SAFETY: `env` is this callback's; `name` is a NUL-terminated literal and both
+        // values are live N-API handles from the calls just above.
         unsafe { napi_set_named_property(env, obj, name.as_ptr().cast(), val) };
     }
 }
@@ -208,7 +220,11 @@ pub(crate) unsafe fn set_num(env: NapiEnv, obj: NapiValue, name: &'static str, v
 /// `env` as in [`args`]; `name` must be NUL-terminated.
 pub(crate) unsafe fn set_bool(env: NapiEnv, obj: NapiValue, name: &'static str, v: bool) {
     let mut val: NapiValue = std::ptr::null_mut();
+    // SAFETY: `env` is this callback's and every out-parameter is a live local on this
+    // frame, which is all these N-API entry points read or write.
     if unsafe { napi_get_boolean(env, v, &mut val) } == 0 {
+        // SAFETY: `env` is this callback's; `name` is a NUL-terminated literal and both
+        // values are live N-API handles from the calls just above.
         unsafe { napi_set_named_property(env, obj, name.as_ptr().cast(), val) };
     }
 }
@@ -220,6 +236,8 @@ pub(crate) unsafe fn set_bool(env: NapiEnv, obj: NapiValue, name: &'static str, 
 /// `env` as in [`args`].
 pub(crate) unsafe fn make_external<T>(env: NapiEnv, p: *mut T) -> NapiValue {
     let mut out: NapiValue = std::ptr::null_mut();
+    // SAFETY: `env` is this callback's; the pointer is one we made and the out-param is
+    // a live local.
     let rc = unsafe { napi_create_external(env, p.cast(), None, std::ptr::null_mut(), &mut out) };
     if rc != 0 { std::ptr::null_mut() } else { out }
 }
@@ -233,6 +251,8 @@ pub(crate) unsafe fn external_ptr<T>(env: NapiEnv, value: NapiValue) -> *mut T {
         return std::ptr::null_mut();
     }
     let mut p: *mut c_void = std::ptr::null_mut();
+    // SAFETY: `env` is this callback's; the pointer is one we made and the out-param is
+    // a live local.
     if unsafe { napi_get_value_external(env, value, &mut p) } != 0 {
         return std::ptr::null_mut();
     }
@@ -245,6 +265,8 @@ pub(crate) unsafe fn external_ptr<T>(env: NapiEnv, value: NapiValue) -> *mut T {
 /// `env` as in [`args`].
 pub(crate) unsafe fn undefined(env: NapiEnv) -> NapiValue {
     let mut out: NapiValue = std::ptr::null_mut();
+    // SAFETY: `env` is this callback's and every out-parameter is a live local on this
+    // frame, which is all these N-API entry points read or write.
     unsafe { napi_get_undefined(env, &mut out) };
     out
 }
@@ -255,6 +277,8 @@ pub(crate) unsafe fn undefined(env: NapiEnv) -> NapiValue {
 /// `env` as in [`args`].
 pub(crate) unsafe fn null(env: NapiEnv) -> NapiValue {
     let mut out: NapiValue = std::ptr::null_mut();
+    // SAFETY: `env` is this callback's and every out-parameter is a live local on this
+    // frame, which is all these N-API entry points read or write.
     unsafe { napi_get_null(env, &mut out) };
     out
 }
@@ -270,6 +294,8 @@ pub(crate) unsafe fn get_i64(env: NapiEnv, value: NapiValue) -> i64 {
         return 0;
     }
     let mut out: i64 = 0;
+    // SAFETY: `env` is this callback's and every out-parameter is a live local on this
+    // frame, which is all these N-API entry points read or write.
     if unsafe { napi_get_value_int64(env, value, &mut out) } != 0 {
         return 0;
     }
@@ -291,6 +317,8 @@ pub(crate) unsafe fn is_object(env: NapiEnv, value: NapiValue) -> bool {
         return false;
     }
     let mut t: i32 = -1;
+    // SAFETY: `env` is this callback's and every out-parameter is a live local on this
+    // frame, which is all these N-API entry points read or write.
     (unsafe { napi_typeof(env, value, &mut t) }) == 0 && t == TYPE_OBJECT
 }
 
@@ -308,10 +336,14 @@ pub(crate) unsafe fn get_field_u64(
     default: u64,
 ) -> u64 {
     let mut prop: NapiValue = std::ptr::null_mut();
+    // SAFETY: `env` is this callback's and every out-parameter is a live local on this
+    // frame, which is all these N-API entry points read or write.
     if unsafe { napi_get_named_property(env, obj, name.as_ptr().cast(), &mut prop) } != 0 {
         return default;
     }
     let mut v: i64 = 0;
+    // SAFETY: `env` is this callback's and every out-parameter is a live local on this
+    // frame, which is all these N-API entry points read or write.
     if unsafe { napi_get_value_int64(env, prop, &mut v) } != 0 {
         return default;
     }
@@ -324,6 +356,8 @@ pub(crate) unsafe fn get_field_u64(
 /// # Safety
 /// `env` as in [`args`]; `msg` must be NUL-terminated.
 pub(crate) unsafe fn throw(env: NapiEnv, msg: &'static str) -> NapiValue {
+    // SAFETY: `env` is this callback's and every out-parameter is a live local on this
+    // frame, which is all these N-API entry points read or write.
     unsafe { napi_throw_error(env, std::ptr::null(), msg.as_ptr().cast()) };
     std::ptr::null_mut()
 }

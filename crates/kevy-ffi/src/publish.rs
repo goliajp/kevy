@@ -31,11 +31,17 @@ pub unsafe extern "C" fn kevy_publish(
     if db.is_null() || chan.is_null() || (payload.is_null() && payload_len != 0) {
         return -1;
     }
+    // SAFETY: checked non-null above, and the contract requires a live handle from
+    // `kevy_open*`, so the referent outlives this borrow.
     let store = unsafe { &(*db).store };
+    // SAFETY: this fn's `# Safety` section requires that pointer to address that many
+    // readable elements, and it was checked non-null above.
     let channel = unsafe { std::slice::from_raw_parts(chan, chan_len) };
     let msg: &[u8] = if payload_len == 0 {
         &[]
     } else {
+        // SAFETY: this fn's `# Safety` section requires that pointer to address that many
+        // readable elements, and it was checked non-null above.
         unsafe { std::slice::from_raw_parts(payload, payload_len) }
     };
     match catch_unwind(AssertUnwindSafe(|| store.publish(channel, msg))) {

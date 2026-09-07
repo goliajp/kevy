@@ -56,6 +56,9 @@ fn cmd(conn: &mut TcpStream, parts: &[&[u8]]) -> Vec<u8> {
 
 #[test]
 fn two_runtimes_in_one_process_do_not_share_state() {
+    // SAFETY: `set_var` is unsafe because it is not thread-safe. This runs on the test's
+    // own thread before the runtime thread that reads the variable is spawned, so no
+    // other thread can be touching the environment at this point.
     unsafe {
         std::env::set_var("KEVY_IO_URING", "0");
     }
