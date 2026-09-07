@@ -556,3 +556,35 @@ fn hrandfield_argv_forms_and_refusals() {
     assert_starts(&run(&mut s, &[b"SET", b"str", b"x"]), b"+OK", "set");
     assert_starts(&run(&mut s, &[b"HRANDFIELD", b"str", b"1"]), b"-WRONGTYPE", "wrong type");
 }
+
+/// The V2 error paths the RESP3 work exposed, driven where the ratchet
+/// named them.
+///
+/// `cmd_geopos` grew an early type resolution when a RESP3 test found it
+/// writing an array header and then an error into one reply; that arm, and
+/// the emitters' `Err` arms, are only reachable through a wrong-typed key.
+#[test]
+fn geo_and_collection_error_paths() {
+    let mut s = KeyspaceStore::new();
+    assert_starts(&run(&mut s, &[b"SET", b"str", b"x"]), b"+OK", "set");
+    assert_starts(&run(&mut s, &[b"GEOADD", b"g", b"13.361389", b"38.115556", b"P"]), b":1", "geoadd");
+
+    // A wrong-typed key answers WRONGTYPE and nothing else — not an array
+    // header followed by an error, which is what this used to do.
+    assert_starts(&run(&mut s, &[b"GEOPOS", b"str", b"m"]), b"-WRONGTYPE", "geopos wrongtype");
+    // The happy and missing cases still hold their shapes.
+    assert_starts(&run(&mut s, &[b"GEOPOS", b"g", b"P"]), b"*1", "geopos hit");
+    assert_starts(&run(&mut s, &[b"GEOPOS", b"g", b"absent"]), b"*1", "geopos miss is a null array");
+    assert_starts(&run(&mut s, &[b"GEOPOS", b"nokey", b"m"]), b"*1", "geopos missing key");
+    assert_starts(&run(&mut s, &[b"GEOPOS", b"g"]), b"-ERR", "geopos wrong arity");
+
+    // The other overridden verbs' error arms, through the V2 chain.
+    for argv in [
+        vec![b"ZPOPMIN".as_slice(), b"str"],
+        vec![b"ZADD".as_slice(), b"str", b"INCR", b"1", b"m"],
+        vec![b"SPOP".as_slice(), b"str", b"1"],
+        vec![b"HRANDFIELD".as_slice(), b"str", b"2"],
+    ] {
+        assert_starts(&run(&mut s, &argv), b"-WRONGTYPE", "wrongtype propagates");
+    }
+}

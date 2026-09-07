@@ -201,3 +201,41 @@ fn hrandfield_every_form() {
     // A missing key is empty, not an error.
     assert!(s.hrandfield(b"absent", 2, false).unwrap().is_empty());
 }
+
+/// The embedded HRANDFIELD dispatch arm's refusals.
+///
+/// `hrandfield_every_form` drives the facade; this drives the arm that
+/// parses argv, which the coverage ratchet named separately — its error
+/// branches are unreachable from the typed API.
+#[test]
+fn hrandfield_dispatch_refusals() {
+    let s = s();
+    s.hset(b"h", &[(b"f1", b"v1"), (b"f2", b"v2")]).unwrap();
+
+    let call = |argv: &[&[u8]]| -> String {
+        let owned: Vec<Vec<u8>> = argv.iter().map(|a| a.to_vec()).collect();
+        let mut out = Vec::new();
+        crate::dispatch::dispatch(&s, &owned, &mut out);
+        String::from_utf8_lossy(&out).to_string()
+    };
+
+    // Every accepted form.
+    assert!(call(&[b"HRANDFIELD", b"h"]).starts_with('$'), "bare form is a bulk");
+    assert!(call(&[b"HRANDFIELD", b"h", b"9"]).starts_with("*2"), "capped at the hash size");
+    assert!(call(&[b"HRANDFIELD", b"h", b"-4"]).starts_with("*4"), "negative allows repeats");
+    assert!(
+        call(&[b"HRANDFIELD", b"h", b"2", b"WITHVALUES"]).starts_with("*4"),
+        "withvalues is flat here"
+    );
+    assert_eq!(call(&[b"HRANDFIELD", b"absent"]), "$-1\r\n", "missing key is a null bulk");
+
+    // Every refusal.
+    for argv in [
+        vec![b"HRANDFIELD".as_slice()],
+        vec![b"HRANDFIELD".as_slice(), b"h", b"notanint"],
+        vec![b"HRANDFIELD".as_slice(), b"h", b"2", b"NOPE"],
+        vec![b"HRANDFIELD".as_slice(), b"h", b"2", b"WITHVALUES", b"extra"],
+    ] {
+        assert!(call(&argv).starts_with('-'), "must refuse {argv:?}");
+    }
+}
