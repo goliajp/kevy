@@ -561,6 +561,45 @@ textgate 正在断言的内存公式。范围决定权不在我。
 
 ---
 
+## arena bare face — 2026-09-07 — kevy 6.3.0
+
+The release measurement for 6.3.0, taken rather than relabelled. Same
+protocol as the entry below it: `bash bench/arena-median.sh
+target/release/kevy 3` on lx64, cores 0-7 server / 8-15 client, one engine
+at a time, `-c 50 -P 16`, median-of-5 per run, throughput read from each
+server's own command counter, three full runs with the per-cell median
+taken across them. Engine versions asserted by the harness against
+bench/COMPETITOR-ANCHORS.json before a number was produced.
+
+| verb | kevy | Redis 8.10.1 | valkey 9.1.2 | Dragonfly 1.40.2 | vs Redis 8.10.1 |
+|---|---:|---:|---:|---:|---:|
+| GET | 7,489,119 | 5,631,398 | 2,980,764 | 2,845,704 | 1.33x |
+| SET | 6,824,662 | 2,567,607 | 1,683,227 | 1,943,358 | 2.66x |
+| INCR | 6,753,558 | 3,294,927 | 2,279,738 | 1,953,406 | 2.05x |
+| SADD | 6,152,617 | 3,753,131 | 2,214,659 | 1,899,967 | 1.64x |
+| HSET | 4,002,580 | 2,966,288 | 1,857,532 | 1,773,498 | 1.35x |
+| LPUSH | 3,142,699 | 2,860,306 | 1,859,265 | 1,505,141 | 1.10x |
+| ZADD | 3,242,967 | 2,818,626 | 1,786,230 | 1,794,335 | 1.15x |
+
+Gap rule: `|kevy - other| <= max(stdev_kevy, stdev_other)` reads as NOISE.
+No cell hit it, and the three-run statement holds: **kevy's worst run beats
+every competitor's best run, in every cell** — narrowest LPUSH 1.08x and
+ZADD 1.08x against Redis, LPUSH 1.60x against valkey, ZADD 1.69x against
+Dragonfly.
+
+Run-to-run spread, worst cell per engine: kevy SADD 11.1%, valkey SADD
+13.5%, Dragonfly SADD 5.6%.
+
+### Against 6.2.2, six days earlier
+
+The serving path did not change in this release — 6.3.0 adds HRANDFIELD, a
+CONFIG parameter and four RESP3 reply shapes, none of them on these seven
+verbs — so the deltas here are the dice, and they are within the spread the
+table itself reports. SADD moved most (5,543,379 -> 6,152,617, +11%) and
+SADD is also the worst-spread cell for two of the four engines. The
+headline against Redis is unchanged at the second decimal for five of
+seven verbs.
+
 ## arena bare face — 2026-09-07 — kevy 6.2.2
 
 The first table in this file whose opponents are named to the patch, and

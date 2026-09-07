@@ -204,11 +204,11 @@ let mut store = Store::new_in(&mut arena);""",
                 ["LPUSH", 3213470, 2862374, "1.12×", True],
                 ["ZADD", 3053101, 2773929, "1.10×", True],
             ],
-            "us": "kevy 6.2.2",
+            "us": "kevy 6.3.0",
             "them": "Redis 8.10.1",
             "thin": "under 15% — your workload decides, not the engine",
             "note": (
-                "<b>LPUSH and ZADD are only 10% and 18% ahead.</b> If lists or sorted "
+                "<b>LPUSH and ZADD are only 10% and 15% ahead.</b> If lists or sorted "
                 "sets are your hot path, speed is not the reason to switch. "
                 "<a href=\"~/benchmarks/\">Full table, against valkey and Dragonfly "
                 "too.</a> Migration is three commands — "
@@ -323,7 +323,7 @@ PAGES["migrate"] = {
                 },
                 {
                     "title": "It is faster on the operations you already run",
-                    "body": "1.26× on GET, 2.68× on SET, 1.95× on INCR against Redis 8.10.1 on the same machine. Read the whole table before you count on it, though — LPUSH and ZADD are only 10% and 18% ahead, and if lists or sorted sets are your hot path this is not the reason to move.",
+                    "body": "1.33× on GET, 2.66× on SET, 2.05× on INCR against Redis 8.10.1 on the same machine. Read the whole table before you count on it, though — LPUSH and ZADD are only 10% and 15% ahead, and if lists or sorted sets are your hot path this is not the reason to move.",
                 },
                 {
                     "title": "Your dataset no longer has to fit in RAM",
@@ -1460,18 +1460,18 @@ PAGES["benchmarks"] = {
                 "server's own command counter over a three-second steady window rather "
                 "than from the benchmark client's reported rate."
             ),
-            "head": ["", "kevy 6.2.2", "Redis 8.10.1", "valkey 9.1.2", "Dragonfly 1.40.2", "vs Redis 8.10.1"],
+            "head": ["", "kevy 6.3.0", "Redis 8.10.1", "valkey 9.1.2", "Dragonfly 1.40.2", "vs Redis 8.10.1"],
             "rows": [
-                ["GET", "7,342,698", "5,835,424", "3,132,401", "2,802,076", "*1.26×"],
-                ["SET", "6,854,741", "2,561,414", "1,743,510", "1,853,306", "*2.68×"],
-                ["INCR", "6,632,498", "3,397,561", "2,296,495", "1,940,670", "*1.95×"],
-                ["SADD", "5,543,379", "3,690,253", "2,268,729", "1,831,543", "*1.50×"],
-                ["HSET", "4,456,414", "3,039,059", "1,868,933", "1,739,677", "*1.47×"],
-                ["LPUSH", "3,061,570", "2,783,323", "1,920,937", "1,488,802", "!1.10×"],
-                ["ZADD", "3,296,001", "2,804,915", "1,807,926", "1,793,792", "!1.18×"],
+                ["GET", "7,489,119", "5,631,398", "2,980,764", "2,845,704", "*1.33×"],
+                ["SET", "6,824,662", "2,567,607", "1,683,227", "1,943,358", "*2.66×"],
+                ["INCR", "6,753,558", "3,294,927", "2,279,738", "1,953,406", "*2.05×"],
+                ["SADD", "6,152,617", "3,753,131", "2,214,659", "1,899,967", "*1.64×"],
+                ["HSET", "4,002,580", "2,966,288", "1,857,532", "1,773,498", "*1.35×"],
+                ["LPUSH", "3,142,699", "2,860,306", "1,859,265", "1,505,141", "!1.10×"],
+                ["ZADD", "3,242,967", "2,818,626", "1,786,230", "1,794,335", "!1.15×"],
             ],
             "note": (
-                "<b>LPUSH is 10% ahead of Redis 8.10.1, and ZADD 18%.</b> At that margin "
+                "<b>LPUSH is 10% ahead of Redis 8.10.1, and ZADD 15%.</b> At that margin "
                 "your value sizes and key distribution decide the winner, not the "
                 "engine — so if lists or sorted sets are your hot path, benchmark your "
                 "own workload and do not switch for speed. The rows are coloured that "

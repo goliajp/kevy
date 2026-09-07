@@ -242,6 +242,12 @@ const CORPUS: &[&str] = &[
     "GET wnum",
     "HSET wh f1 v1 f2 2",
     "HGETALL wh",
+    // HRANDFIELD draws from each surface's own generator, so it is defined
+    // only once the count reaches the field count — and even then the order
+    // is a shuffle. Compared as a multiset, via UNORDERED below; the field
+    // set and the field->value pairing are the parts that mean something.
+    "HRANDFIELD wh 5",
+    "HRANDFIELD wh 5 WITHVALUES",
     "HLEN wh",
     "HMGET wh f1 f2 nope",
     "HINCRBY wh f2 3",
@@ -547,7 +553,8 @@ const EXPECTED: &[(&str, &str)] = &[
 /// `KEYS`, `HSCAN` and `ZSCAN` are the same class and are deliberately
 /// NOT here: they agree byte for byte today, and if that stops being
 /// true the cell should say so rather than have been excused in advance.
-const UNORDERED: &[&str] = &["SINTER", "SUNION", "SDIFF", "SCAN", "SMEMBERS", "SRANDMEMBER"];
+const UNORDERED: &[&str] =
+    &["SINTER", "SUNION", "SDIFF", "SCAN", "SMEMBERS", "SRANDMEMBER", "HRANDFIELD"];
 
 /// A canonical form for a reply whose order is not defined: every array
 /// in it, at every depth, has its elements sorted.
