@@ -72,6 +72,15 @@ VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 PRUNE_DIRS = {"target", "node_modules", ".build", ".git", "__pycache__"}
 
 
+def walk_suffix(base: pathlib.Path, ending: str):
+    """Files under `base` whose name ends with `ending`, pruned.
+
+    `ROOT.glob("bindings/**/*.md")` still descends node_modules and .build to
+    find them: after the first pruning pass, cProfile showed 14.3 s still in
+    glob.select_recursive, all of it in these calls."""
+    return (p for p in walk(base) if p.name.endswith(ending))
+
+
 def walk(base: pathlib.Path):
     """Every file under `base`, not descending into PRUNE_DIRS."""
     for dirpath, dirnames, filenames in os.walk(base):
@@ -121,9 +130,7 @@ def historical(p) -> bool:
 def layer1_cargo(v: str, bad: list) -> int:
     """Workspace version + every version-gated path dependency."""
     checked = 0
-    for p in [ROOT / "Cargo.toml"] + sorted(ROOT.glob("crates/*/Cargo.toml")) + sorted(
-        ROOT.glob("bindings/**/Cargo.toml")
-    ):
+    for p in [ROOT / "Cargo.toml"] + sorted(ROOT.glob("crates/*/Cargo.toml")) + sorted(walk_suffix(ROOT / "bindings", "Cargo.toml")):
         if skip(p):
             continue
         rel = str(p.relative_to(ROOT))
@@ -172,7 +179,7 @@ def layer1_cargo(v: str, bad: list) -> int:
 def layer23_manifests(v: str, bad: list) -> int:
     """Language manifests, plus our own inter-package pins inside them."""
     checked = 0
-    for p in sorted(ROOT.glob("bindings/**/package.json")) + sorted(
+    for p in sorted(walk_suffix(ROOT / "bindings", "package.json")) + sorted(
         ROOT.glob("packaging/**/package.json")
     ) + sorted(ROOT.glob("crates/*/pkg/package.json")):
         if skip(p):
@@ -211,7 +218,7 @@ def layer23_manifests(v: str, bad: list) -> int:
     # Maven poms. Their absence from this gate is how the Java door sat at
     # 5.0.0 through a release that moved everything else — the gate could
     # only see the formats it had been taught.
-    for f in sorted(ROOT.glob("bindings/**/pom.xml")):
+    for f in sorted(walk_suffix(ROOT / "bindings", "pom.xml")):
         if skip(f):
             continue
         m = re.search(r"<version>(\d+\.\d+\.\d+)</version>", f.read_text(encoding="utf-8"))
@@ -220,7 +227,7 @@ def layer23_manifests(v: str, bad: list) -> int:
             if m.group(1) != v:
                 bad.append(f"{f.relative_to(ROOT)}: <version> {m.group(1)} != {v}")
 
-    for f in sorted(ROOT.glob("bindings/**/*.csproj")):
+    for f in sorted(walk_suffix(ROOT / "bindings", ".csproj")):
         if skip(f):
             continue
         m = re.search(r"<Version>(\d+\.\d+\.\d+)</Version>", f.read_text(encoding="utf-8"))
@@ -234,7 +241,7 @@ def layer23_manifests(v: str, bad: list) -> int:
     # three releases behind while every format above stayed current: a
     # declaration nobody reads is still a declaration, and a reader who opens
     # the file to learn which kevy this door speaks is told 5.0.0.
-    for f in sorted(ROOT.glob("bindings/**/CMakeLists.txt")):
+    for f in sorted(walk_suffix(ROOT / "bindings", "CMakeLists.txt")):
         if skip(f):
             continue
         m = re.search(r"^project\([^)]*?VERSION\s+(\d+\.\d+\.\d+)",
@@ -291,7 +298,7 @@ def layer5_prose(v: str, bad: list) -> int:
     # and in the same Maven XML the README states at 6.0.0. A reader pastes
     # this one. The blanket docs/ exclusion is right for what it was written
     # for and was covering this too.
-    files = (sorted(ROOT.glob("bindings/**/*.md"))
+    files = (sorted(walk_suffix(ROOT / "bindings", ".md"))
              + [ROOT / "README.md", ROOT / "docs/bindings.md",
                 ROOT / "docs/ja/bindings.md", ROOT / "docs/zh/bindings.md"])
     for f in files:

@@ -214,6 +214,16 @@ requires = []
 proves = "the command count the site publishes is the count the engine answers"
 
 [[check]]
+id = "suite-ledger"
+area = "hygiene"
+tier = "precommit"
+cmd = "python3 tools/check_suite_ledger.py"
+expected = 2
+timeout = 60
+requires = []
+proves = "a recorded duration is a duration — a timeout kill is not filed in the same field"
+
+[[check]]
 id = "architecture"
 area = "arch"
 tier = "precommit"
