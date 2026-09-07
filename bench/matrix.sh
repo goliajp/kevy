@@ -1,5 +1,6 @@
 #!/bin/bash
-# 4-way matrix bench: kevy / valkey 9.1.0 / redis 8.8.0
+# 4-way matrix bench: kevy vs valkey and redis, at the versions
+# bench/COMPETITOR-ANCHORS.json pins (asserted below, not typed here).
 #
 # Each scenario runs 3 times, prints all + the median (sort -n | head -2 | tail -1).
 # All TCP servers built from source on lx64, default jemalloc, no TLS, no
@@ -16,6 +17,13 @@ KEVY_BIN=${KEVY_BIN:-/root/kevy/target/release-perf/kevy}
 KEVY_THREADS=${KEVY_THREADS:-1}
 REDIS_BIN=/root/srcbench/redis/src/redis-server
 VALKEY_BIN=/root/srcbench/valkey/src/valkey-server
+
+# This probe measures against source builds on the box; a drifted checkout
+# produces numbers nobody can place. See bench/anchor-lib.sh.
+. "$(dirname "$0")/anchor-lib.sh"
+anchor_require "redis (source build)" "$(anchor_pin redis)" "$(anchor_bin_ver "$REDIS_BIN")"
+anchor_require "valkey (source build)" "$(anchor_pin valkey)" "$(anchor_bin_ver "$VALKEY_BIN")"
+
 REDIS_BENCH=/root/srcbench/redis/src/redis-benchmark
 PORT=7001
 N_C1=${N_C1:-300000}
