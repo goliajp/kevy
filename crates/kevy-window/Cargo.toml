@@ -6,6 +6,11 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+documentation = "https://docs.rs/kevy-window"
+readme = "README.md"
+keywords = ["sliding-window", "index", "eviction", "cold-tier", "spill"]
+categories = ["database-implementations", "data-structures"]
+homepage.workspace = true
 authors.workspace = true
 
 [dependencies]

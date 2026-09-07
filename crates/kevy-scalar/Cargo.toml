@@ -6,6 +6,11 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+documentation = "https://docs.rs/kevy-scalar"
+readme = "README.md"
+keywords = ["postgres", "scalar", "sql", "functions", "evaluation"]
+categories = ["database-implementations", "algorithms"]
+homepage.workspace = true
 authors.workspace = true
 
 [lints]

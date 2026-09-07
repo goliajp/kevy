@@ -6,6 +6,11 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+documentation = "https://docs.rs/kevy-seg"
+readme = "README.md"
+keywords = ["segment", "immutable", "binary-search", "storage", "crc32c"]
+categories = ["database-implementations", "data-structures"]
+homepage.workspace = true
 authors.workspace = true
 
 [dependencies]
