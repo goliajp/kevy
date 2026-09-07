@@ -1,3 +1,29 @@
+## 6.3.0
+
+Tracks the kevy 6.3.0 engine. No API change in this door; the engine
+underneath gained one command and answers four replies in their RESP3
+shapes.
+
+`HRANDFIELD` is new — random fields from a hash, distinct for a positive
+count and a sample with repeats for a negative one, optionally paired with
+their values.
+
+Under RESP3 (`HELLO 3`), `ZPOPMIN`, `ZADD ... INCR` and `GEOPOS` now send
+scores and coordinates as doubles, `SPOP key count` sends a set, and
+`HRANDFIELD ... WITHVALUES` nests each field with its value — all matching
+Redis 8.10.1, verified command by command against it. A client that
+negotiates RESP3 and decodes by type was previously reading the RESP2
+shapes for those five.
+
+Also fixed: `GEOPOS` on a wrong-typed key answered with an array header
+followed by an error, so the error arrived as the array's first element.
+It answers `WRONGTYPE` and nothing else, as Redis does.
+
+And `CONFIG SET notify-keyspace-events` works over the wire. Keyspace
+notifications have always worked from the config file, but there was no
+RESP path to them — clients that set this on connect (Spring Data's expiry
+listener, the socket.io adapter) met "unknown parameter".
+
 ## 6.2.2
 
 Tracks the kevy 6.2.2 engine. No API change in this door. The engine
