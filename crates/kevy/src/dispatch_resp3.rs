@@ -266,6 +266,10 @@ fn emit_geopos_resp3<A: ArgvView + ?Sized>(
     out: &mut Vec<u8>,
 ) {
     let n = args.len() - 2;
+    // Same as the V2 path: the type must resolve before the header is written.
+    if let Err(e) = store.zscore(&args[1], &args[2]) {
+        return store_err(out, e);
+    }
     kevy_resp::encode_array_len(out, n as i64);
     for i in 0..n {
         match store.zscore(&args[1], &args[i + 2]) {

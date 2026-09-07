@@ -548,3 +548,57 @@ fn the_shapes_resp3gate_named_are_typed_on_v3_and_bulk_on_v2() {
     assert!(reply.contains(",1") || reply.contains(",2"),
             "V3 ZPOPMIN must emit the score as a Double: {reply:?}");
 }
+
+/// Every RESP3 override's error arm, which the coverage ratchet named.
+///
+/// The happy paths are covered above; each emitter also has an
+/// `Err(e) => store_err` arm, and a store error must arrive as a RESP3
+/// error rather than as a half-written reply of the overridden shape. A
+/// wrong-typed key is the cheapest way to reach all of them.
+#[test]
+fn resp3_overrides_propagate_a_store_error_as_an_error() {
+    let srv = Server::start(1);
+
+    let mut setup = srv.connect();
+    setup.write_all(&req(&[b"SET", b"str", b"notacollection"])).unwrap();
+    read_reply(&mut setup, b"+OK\r\n");
+
+    // Each of these takes the override path and then meets WRONGTYPE.
+    let cases: &[&[&[u8]]] = &[
+        &[b"ZPOPMIN", b"str"],
+        &[b"ZADD", b"str", b"INCR", b"1", b"m"],
+        &[b"SPOP", b"str", b"1"],
+        &[b"GEOPOS", b"str", b"m"],
+        &[b"HRANDFIELD", b"str", b"2", b"WITHVALUES"],
+        &[b"HGETALL", b"str"],
+        &[b"SMEMBERS", b"str"],
+        &[b"ZSCORE", b"str", b"m"],
+    ];
+    for argv in cases {
+        let mut v3 = srv.v3_conn();
+        v3.write_all(&req(argv)).unwrap();
+        let mut head = [0u8; 1];
+        v3.read_exact(&mut head).unwrap();
+        assert_eq!(head[0], b'-', "V3 {:?} must answer an error, not a partial reply", argv[0]);
+        let mut sink = vec![0u8; 1024];
+        let _ = v3.read(&mut sink).unwrap();
+    }
+
+    // The argument refusals inside the override chain take their own arms.
+    let refusals: &[&[&[u8]]] = &[
+        &[b"ZPOPMIN", b"z", b"notanint"],
+        &[b"ZPOPMIN", b"z", b"-1"],
+        &[b"SPOP", b"s", b"notanint"],
+        &[b"SPOP", b"s", b"-1"],
+        &[b"HRANDFIELD", b"h", b"notanint", b"WITHVALUES"],
+    ];
+    for argv in refusals {
+        let mut v3 = srv.v3_conn();
+        v3.write_all(&req(argv)).unwrap();
+        let mut head = [0u8; 1];
+        v3.read_exact(&mut head).unwrap();
+        assert_eq!(head[0], b'-', "V3 {argv:?} must be refused");
+        let mut sink = vec![0u8; 1024];
+        let _ = v3.read(&mut sink).unwrap();
+    }
+}
