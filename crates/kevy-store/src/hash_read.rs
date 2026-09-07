@@ -7,6 +7,18 @@ use crate::value::{SmallBytes, Value};
 use crate::{Store, StoreError};
 
 /// `(field, value)` pairs collected off any hash encoding.
+/// Owned `(field, value)` pairs, as the hash readers hand them back.
+///
+/// ```
+/// use kevy_store::{FieldValuePairs, Store};
+///
+/// let mut s = Store::new();
+/// s.hset(b"h", &[(b"f".as_slice(), b"v".as_slice())]).unwrap();
+///
+/// // Both halves are owned, so the pairs outlive the borrow of the store.
+/// let pairs: FieldValuePairs = s.hrandfield(b"h", 1, true).unwrap();
+/// assert_eq!(pairs, vec![(b"f".to_vec(), b"v".to_vec())]);
+/// ```
 pub type FieldValuePairs = Vec<(Vec<u8>, Vec<u8>)>;
 
 impl Store {
