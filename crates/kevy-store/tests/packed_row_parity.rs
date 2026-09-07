@@ -99,6 +99,41 @@ fn the_whole_row_verbs_agree_with_the_general_hash() {
     assert_eq!(paired(p.hgetall(b"row:1").unwrap()), paired(g.hgetall(b"row:1").unwrap()));
 }
 
+/// `HRANDFIELD` reads a packed row the same way it reads a general hash.
+///
+/// The implementation goes through `hash_pairs`, which covers all four
+/// storage forms in one place — this proves it rather than asserting it, and
+/// formgate requires exactly that of every hash verb: a packed row is a
+/// distinct representation, and a verb that has never been called against
+/// one is a verb nobody knows answers on it.
+#[test]
+fn hrandfield_agrees_with_the_general_hash() {
+    let (mut p, mut g, fields) = both();
+    let n = fields.len() as i64;
+
+    // At a count reaching the field cardinality both surfaces return the
+    // whole set — the only comparison a sampler admits.
+    let names = |mut v: Vec<(Vec<u8>, Vec<u8>)>| {
+        v.sort();
+        v
+    };
+    assert_eq!(
+        names(p.hrandfield(b"row:1", n, true).unwrap()),
+        names(g.hrandfield(b"row:1", n, true).unwrap()),
+        "a packed row must sample the same field/value set as the general hash"
+    );
+
+    // A count past the end is capped identically on both forms.
+    assert_eq!(
+        p.hrandfield(b"row:1", n + 10, false).unwrap().len(),
+        g.hrandfield(b"row:1", n + 10, false).unwrap().len()
+    );
+
+    // A negative count returns exactly |count| from both.
+    assert_eq!(p.hrandfield(b"row:1", -5, false).unwrap().len(), 5);
+    assert_eq!(g.hrandfield(b"row:1", -5, false).unwrap().len(), 5);
+}
+
 /// The mutating verbs a catch-all had been answering for.
 ///
 /// `HDEL` and `HINCRBYFLOAT` reach the value through paths that named

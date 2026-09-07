@@ -172,11 +172,23 @@ def main() -> int:
         for name, group in (("exempt", exempt), ("planned", planned), ("unclassified", unclassified)):
             if group:
                 print(f"\n{name}:\n  " + "\n  ".join(group))
+    # A planned gap must name an RFC. Whether that file is READABLE here is a
+    # different question: .claude/ is deliberately not carried by git (the
+    # owner's "git carries the user surface" decision), so a clone has the
+    # entry and not the document. Requiring the file made every planned row
+    # unowned on the bench box while being green on the workstation — the
+    # gate answering a question about the checkout rather than about the
+    # decision. It requires the reference; it verifies the file where one
+    # exists to verify.
     for key, entry in data["planned"].items():
         rfc = entry.get("rfc", "")
-        if not rfc or not (ROOT / rfc).exists():
-            print(f"  MISSING RFC planned[{key}] names {rfc!r}, which does not exist — "
-                  f"a gap with no document is not owned, it is deferred", file=sys.stderr)
+        if not rfc:
+            print(f"  MISSING RFC planned[{key}] names no document — a gap with nothing "
+                  f"to point at is not owned, it is deferred", file=sys.stderr)
+            unclassified = unclassified + [f"(planned:{key})"]
+        elif (ROOT / ".claude").is_dir() and not (ROOT / rfc).exists():
+            print(f"  MISSING RFC planned[{key}] names {rfc!r}, which does not exist in a "
+                  f"checkout that does carry .claude/", file=sys.stderr)
             unclassified = unclassified + [f"(planned:{key})"]
     ceiling = data.get("unclassified_ceiling")
     for verb in unclassified:

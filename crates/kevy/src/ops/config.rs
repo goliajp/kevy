@@ -224,14 +224,7 @@ fn apply_hot_set(cfg: &mut Config, key: &[u8], value: &[u8]) -> Result<(), SetEr
         // listener, the socket.io redis adapter and several job queues send
         // `CONFIG SET notify-keyspace-events Ex` as their first act on a new
         // connection, so "unknown parameter" met them in the first second.
-        "notify-keyspace-events" => {
-            kevy_config::parse_notification_flags(value_str).map_err(|c| SetError::BadValue {
-                key: key_str.to_string(),
-                reason: format!("unknown flag char {c:?}"),
-            })?;
-            cfg.notification.notify_keyspace_events = value_str.to_string();
-            Ok(())
-        }
+        "notify-keyspace-events" => set_notification(cfg, key_str, value_str),
         // Hot-settable ONLY as a budget change: the shard tick
         // re-resolves + re-applies it (the maxmemory precedent).
         // Turning tiering on/off needs the vlog lifecycle — a restart;
@@ -340,6 +333,19 @@ fn set_expiry(cfg: &mut Config, key: &str, value: &str) -> Result<(), SetError> 
         "maxmemory-samples" => cfg.expiry.sample = n,
         _ => return Err(SetError::Unknown(key.to_string())),
     }
+    Ok(())
+}
+
+/// `notify-keyspace-events` — Redis spells it hyphenated on the wire, kevy's
+/// TOML uses underscores, and nothing bridged the two until 6.3.0: the engine
+/// supported keyspace notifications from the config file and had no wire path
+/// to them. Spring Data's expiry listener sets this on connect.
+fn set_notification(cfg: &mut Config, key: &str, value: &str) -> Result<(), SetError> {
+    kevy_config::parse_notification_flags(value).map_err(|c| SetError::BadValue {
+        key: key.to_string(),
+        reason: format!("unknown flag char {c:?}"),
+    })?;
+    cfg.notification.notify_keyspace_events = value.to_string();
     Ok(())
 }
 
