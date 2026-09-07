@@ -554,9 +554,8 @@ fn expires_counter_tracks_ground_truth() {
 #[test]
 fn hrandfield_distinct_repeating_and_bounded() {
     let mut s = Store::new();
-    let fields: Vec<(Vec<u8>, Vec<u8>)> = (0..8u32)
-        .map(|i| (format!("f{i}").into_bytes(), format!("v{i}").into_bytes()))
-        .collect();
+    let fields: Vec<(Vec<u8>, Vec<u8>)> =
+        (0..8u32).map(|i| (format!("f{i}").into_bytes(), format!("v{i}").into_bytes())).collect();
     for (f, v) in &fields {
         s.hset(b"h", &[(f.as_slice(), v.as_slice())]).unwrap();
     }

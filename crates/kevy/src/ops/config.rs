@@ -402,10 +402,7 @@ fn config_pairs(cfg: &Config) -> Vec<(&'static str, String)> {
     // A client that CONFIG SETs this then reads it back — Spring Data's
     // listener does exactly that to confirm the flags took — needs it here
     // too, or the write appears to have vanished.
-    v.push((
-        "notify-keyspace-events",
-        cfg.notification.notify_keyspace_events.clone(),
-    ));
+    v.push(("notify-keyspace-events", cfg.notification.notify_keyspace_events.clone()));
     v.push(("maxmemory-samples", cfg.expiry.sample.to_string()));
     v.push(("loglevel", log_level_str(cfg.log.level).to_string()));
     v.push(("cluster-enabled", yes_no(cfg.cluster.enabled)));

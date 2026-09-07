@@ -1,13 +1,13 @@
 {
   "corpus": "c1",
   "platform": "linux",
-  "total_regions": 164934,
-  "dead_regions": 26937,
-  "llvm_per_instantiation_dead": 27907,
+  "total_regions": 164819,
+  "dead_regions": 26854,
+  "llvm_per_instantiation_dead": 27837,
   "crates": {
     "kevy": {
       "regions": 29462,
-      "dead": 5314
+      "dead": 5305
     },
     "kevy-alloc": {
       "regions": 1694,
@@ -54,8 +54,8 @@
       "dead": 111
     },
     "kevy-embedded": {
-      "regions": 27511,
-      "dead": 3781
+      "regions": 27502,
+      "dead": 3769
     },
     "kevy-ffi": {
       "regions": 843,
@@ -98,8 +98,8 @@
       "dead": 516
     },
     "kevy-persist": {
-      "regions": 7906,
-      "dead": 701
+      "regions": 7826,
+      "dead": 698
     },
     "kevy-pubsub-bench": {
       "regions": 283,
@@ -111,7 +111,7 @@
     },
     "kevy-replicate": {
       "regions": 2672,
-      "dead": 192
+      "dead": 172
     },
     "kevy-resp": {
       "regions": 3378,
@@ -126,8 +126,8 @@
       "dead": 0
     },
     "kevy-rt": {
-      "regions": 16269,
-      "dead": 4793
+      "regions": 16253,
+      "dead": 4766
     },
     "kevy-scalar": {
       "regions": 4388,
@@ -147,10 +147,10 @@
     },
     "kevy-store": {
       "regions": 19169,
-      "dead": 1490
+      "dead": 1491
     },
     "kevy-sys": {
-      "regions": 740,
+      "regions": 730,
       "dead": 121
     },
     "kevy-testnet": {
@@ -212,7 +212,6 @@
     "::account_delta": 1,
     "::accumulate": 1,
     "::ack": 3,
-    "::acquire": 3,
     "::add": 1,
     "::add_expr": 7,
     "::add_pattern": 3,
@@ -530,7 +529,6 @@
     "::mark": 10,
     "::mask": 2,
     "::match_migrated": 15,
-    "::match_migrating": 1,
     "::matches_query_faceted": 1,
     "::materialize": 3,
     "::materialize_cold": 18,
@@ -986,11 +984,10 @@
     "<kevy_ranktree::iter::Iter as core::iter::traits::iterator::Iterator>::next": 1,
     "<kevy_ranktree::iter::IterRev as core::iter::traits::iterator::Iterator>::next": 1,
     "<kevy_rt::runtime::Runtime>::build_shards": 13,
-    "<kevy_rt::runtime::Runtime>::claim_data_dir": 1,
     "<kevy_rt::runtime::Runtime>::cluster_topo": 1,
     "<kevy_rt::runtime::Runtime>::reconcile_layout": 1,
     "<kevy_rt::runtime::Runtime>::resolved_tier_budget": 2,
-    "<kevy_rt::runtime::Runtime>::run": 12,
+    "<kevy_rt::runtime::Runtime>::run": 11,
     "<kevy_rt::runtime::Runtime>::validate_port_ranges": 8,
     "<kevy_rt::runtime::Runtime>::with_accept_shards": 4,
     "<kevy_rt::runtime::Runtime>::with_auto_rewrite_bytes": 4,
@@ -1032,8 +1029,8 @@
     "<kevy_rt::shard::Shard>::build_zalgebra_store::": 4,
     "<kevy_rt::shard::Shard>::build_zintercard::": 4,
     "<kevy_rt::shard::Shard>::cancel_xshard_on_close": 2,
-    "<kevy_rt::shard::Shard>::check_repl_ack_waiters": 53,
-    "<kevy_rt::shard::Shard>::check_repl_apply_waiters": 2,
+    "<kevy_rt::shard::Shard>::check_repl_ack_waiters": 48,
+    "<kevy_rt::shard::Shard>::check_repl_apply_waiters": 28,
     "<kevy_rt::shard::Shard>::check_tee_overrun": 27,
     "<kevy_rt::shard::Shard>::client_getname::": 37,
     "<kevy_rt::shard::Shard>::client_info": 5,
@@ -1051,7 +1048,7 @@
     "<kevy_rt::shard::Shard>::dispatch_batch": 2,
     "<kevy_rt::shard::Shard>::do_hello::": 2,
     "<kevy_rt::shard::Shard>::do_psubscribe::": 1,
-    "<kevy_rt::shard::Shard>::do_publish::": 4,
+    "<kevy_rt::shard::Shard>::do_publish::": 1,
     "<kevy_rt::shard::Shard>::do_punsubscribe::": 1,
     "<kevy_rt::shard::Shard>::do_subscribe::": 9,
     "<kevy_rt::shard::Shard>::do_unwatch": 1,
@@ -1144,7 +1141,7 @@
     "<kevy_rt::shard::Shard>::park_blocked_xshard": 1,
     "<kevy_rt::shard::Shard>::park_dispatch::": 2,
     "<kevy_rt::shard::Shard>::park_if_held": 6,
-    "<kevy_rt::shard::Shard>::parse_replica_acks": 48,
+    "<kevy_rt::shard::Shard>::parse_replica_acks": 11,
     "<kevy_rt::shard::Shard>::post_write_housekeeping::": 3,
     "<kevy_rt::shard::Shard>::preallocate_exec_slots": 1,
     "<kevy_rt::shard::Shard>::prepare_uring_shard": 91,
@@ -1165,7 +1162,7 @@
     "<kevy_rt::shard::Shard>::repl_waiter_reply": 5,
     "<kevy_rt::shard::Shard>::replica_conn_is_live": 11,
     "<kevy_rt::shard::Shard>::replica_io_failed": 1,
-    "<kevy_rt::shard::Shard>::replica_readable": 24,
+    "<kevy_rt::shard::Shard>::replica_readable": 13,
     "<kevy_rt::shard::Shard>::replica_writable": 13,
     "<kevy_rt::shard::Shard>::replicas_brief": 29,
     "<kevy_rt::shard::Shard>::reply_feed_error": 13,
@@ -1205,8 +1202,8 @@
     "<kevy_rt::shard::Shard>::tick_blocked_timeouts": 1,
     "<kevy_rt::shard::Shard>::tick_persist": 1,
     "<kevy_rt::shard::Shard>::tick_replication_slots": 2,
-    "<kevy_rt::shard::Shard>::tick_replication_view": 13,
-    "<kevy_rt::shard::Shard>::tick_replication_watermark": 5,
+    "<kevy_rt::shard::Shard>::tick_replication_view": 9,
+    "<kevy_rt::shard::Shard>::tick_replication_watermark": 3,
     "<kevy_rt::shard::Shard>::tick_xshard_timeouts": 2,
     "<kevy_rt::shard::Shard>::trace_acksent_pending": 17,
     "<kevy_rt::shard::Shard>::trace_handshake": 20,
@@ -1496,7 +1493,7 @@
     "kevy::die::": 3,
     "kevy::dispatch::cmd_select::": 4,
     "kevy::dispatch::dispatch_conn::": 3,
-    "kevy::dispatch::dispatch_with_proto::": 14,
+    "kevy::dispatch::dispatch_with_proto::": 10,
     "kevy::dispatch_collections::cmd_brpoplpush::": 6,
     "kevy::dispatch_collections::cmd_lmove::": 5,
     "kevy::dispatch_collections::dispatch_hash::": 4,
@@ -1681,7 +1678,6 @@
     "kevy::replica_runner_events::drain_start": 1,
     "kevy::replica_runner_events::event_to_apply": 1,
     "kevy::replica_runner_events::gen_still_matches": 3,
-    "kevy::replica_runner_events::maybe_ack": 5,
     "kevy::replica_runner_routed::drain_client_routed": 59,
     "kevy::replica_runner_routed::route_event": 57,
     "kevy::replica_trace::trace_session_event": 10,
@@ -2114,9 +2110,8 @@
     "kevy_embedded::replay::parse_zadd_flags": 2,
     "kevy_embedded::replica_runner::drain_session": 4,
     "kevy_embedded::replica_runner::finish_snapshot": 1,
-    "kevy_embedded::replica_runner::run_loop": 6,
     "kevy_embedded::replica_runner::run_session": 1,
-    "kevy_embedded::replica_runner::sleep_interruptible": 15,
+    "kevy_embedded::replica_runner::sleep_interruptible": 9,
     "kevy_embedded::replica_runner::snapshot_event": 4,
     "kevy_embedded::replica_source::handshake_and_prepare": 3,
     "kevy_embedded::replica_source::next_frame_bytes": 3,
@@ -2451,7 +2446,7 @@
     "kevy_replicate::wire::parse_decimal": 2,
     "kevy_replicate::wire::parse_envelope_header": 2,
     "kevy_replicate::wire::parse_signed_decimal": 5,
-    "kevy_replicate::wire_snapshot::decode_replconf_ack": 27,
+    "kevy_replicate::wire_snapshot::decode_replconf_ack": 7,
     "kevy_replicate::wire_snapshot::decode_snapshot_chunk": 1,
     "kevy_replicate::wire_snapshot::decode_snapshot_marker": 1,
     "kevy_resp::fuzz::run_n": 5,
@@ -2822,7 +2817,6 @@
     "kevy_window::text::clean_stale": 17,
     "kevy_window::text::write_seg_file": 11
   },
-  "envelope_runs": 3,
   "history": [
     {
       "accepted": [

@@ -545,8 +545,10 @@ fn the_shapes_resp3gate_named_are_typed_on_v3_and_bulk_on_v2() {
     let mut buf = vec![0u8; 256];
     let n = v3.read(&mut buf).unwrap();
     let reply = String::from_utf8_lossy(&buf[..n]).to_string();
-    assert!(reply.contains(",1") || reply.contains(",2"),
-            "V3 ZPOPMIN must emit the score as a Double: {reply:?}");
+    assert!(
+        reply.contains(",1") || reply.contains(",2"),
+        "V3 ZPOPMIN must emit the score as a Double: {reply:?}"
+    );
 }
 
 /// Every RESP3 override's error arm, which the coverage ratchet named.

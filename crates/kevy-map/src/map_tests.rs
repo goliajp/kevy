@@ -134,7 +134,8 @@ fn drop_runs_for_remaining_entries() {
 #[test]
 fn grow_then_remove_then_grow_again_stays_consistent() {
     let mut m = KevyMap::<u64, u64>::new();
-    let (half, full, twice) = (crate::scaled(1_000) as u64, crate::scaled(2_000) as u64, crate::scaled(4_000) as u64);
+    let (half, full, twice) =
+        (crate::scaled(1_000) as u64, crate::scaled(2_000) as u64, crate::scaled(4_000) as u64);
     for i in 0..full {
         m.insert(i, i);
     }
