@@ -99,13 +99,25 @@ impl<C: Commands> Shard<C> {
         io: &mut KevyMap<u64, UringConn>,
         pbuf: &mut ProvidedBufRing,
     ) {
-        // -ECANCELED (-125) on a multishot recv is ALWAYS
-        // the big-arg cancel cycle's terminal CQE (kevy doesn't issue
-        // recv cancels anywhere else). Route to the state-machine
-        // handler regardless of whether `pending_big_arg` is still set
-        // — the body may have completed via in-flight multishot CQEs
-        // between cancel submission and ECANCELED arrival, in which
-        // case the handler safely no-ops state and re-arms multishot.
+        // -ECANCELED (-125) on a multishot recv answers one of TWO cancels:
+        //
+        //   1. the big-arg cancel cycle's terminal CQE, and
+        //   2. the cancel `uring_arm_conns` issues for a **closing** conn,
+        //      so `close(fd)` sends a FIN instead of leaving the socket
+        //      pinned by an armed multishot.
+        //
+        // Both clear `recv_armed` here. The routing below is written for
+        // case 1: it runs the state-machine handler regardless of whether
+        // `pending_big_arg` is still set, because the body may have
+        // completed via in-flight multishot CQEs between cancel submission
+        // and ECANCELED arrival, and the handler then no-ops the state.
+        //
+        // For case 2 the handler takes its `pending_big_arg == None` branch
+        // and asks for a recv re-arm the conn will never get — `!closing`
+        // blocks it at the arm site, and that same guard is the only place
+        // `big_arg_rearm_recv` is cleared, so the flag stays set on a
+        // closing conn. Harmless while the guard holds; it is a leaked bit
+        // waiting for whoever loosens it.
         if c.res == -ECANCELED {
             if let Some(uc) = io.get_mut(&cid) {
                 uc.recv_armed = false;
