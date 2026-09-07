@@ -286,6 +286,31 @@
           "what": "the pip install, which had no version at all"
         }
       ]
+    },
+    "rust-image": {
+      "pinned": "1.97",
+      "role": "the Rust toolchain the release container and the pubsub-compare images build with",
+      "upstream": {
+        "kind": "msrv",
+        "file": "Cargo.toml"
+      },
+      "image": "rust:{v}-slim-trixie",
+      "compare": "minor",
+      "sites": [
+        {
+          "file": "Dockerfile",
+          "pattern": "FROM rust:([0-9]+\\.[0-9]+)-slim"
+        },
+        {
+          "file": "bench/pubsub-compare/Dockerfile.kevy",
+          "pattern": "FROM rust:([0-9]+\\.[0-9]+)-slim"
+        },
+        {
+          "file": "bench/pubsub-compare/Dockerfile.loadgen",
+          "pattern": "FROM rust:([0-9]+\\.[0-9]+)-slim"
+        }
+      ],
+      "note": "Derived from `rust-version` in Cargo.toml, NOT from Rust's latest stable, and that is the point: building the shipped container on exactly the MSRV proves the MSRV every time the image is built. Following latest here would leave the promise untested. rust-toolchain.toml says `stable`, so developer and CI builds do run on latest — the two surfaces answer different questions and only one of them is an anchor to upstream."
     }
   },
   "_modes": "A site is checked one of two ways. mode 'pin' (the default) reads the version out of the file and requires it to equal `pinned`. mode 'derive' is for a file that reads this manifest at runtime instead of carrying a copy: it must reference COMPETITOR-ANCHORS.json, and it must NOT contain a literal tag — a hardcoded version sitting next to a derived one is the drift this file exists to prevent, and it is the more dangerous kind because it looks maintained.",
@@ -298,5 +323,6 @@
     "tools/check_competitor_anchors.py": "this gate itself: it defines the image patterns, so it necessarily contains example references. It is not a site — nothing here selects an image to run."
   },
   "_sweep_scope": "The sweep reads bench/, tools/, examples/ and .github/ — the surface that RUNS a competitor. Engine source under crates/ is deliberately outside it: two comments there cite a `redis:8` they were compared against once (zset.rs, tests_zadd_same_score.rs), and those are observations from a particular day, the same kind of record as a ledger entry. Making them track the pin would rewrite what was measured. If a crate ever RUNS a competitor image, add crates/ here.",
-  "_clients": "The client libraries are anchors too, and were the least watched of any: clientgate pinned go-redis and StackExchange.Redis to versions from late 2024 and installed node-redis and redis-py with no version at all. 'A Redis client sees Redis' is a claim about THESE, so a frozen client tests a 2024 idea of what a client sends, and a floating one changes what is being tested without anyone choosing."
+  "_clients": "The client libraries are anchors too, and were the least watched of any: clientgate pinned go-redis and StackExchange.Redis to versions from late 2024 and installed node-redis and redis-py with no version at all. 'A Redis client sees Redis' is a claim about THESE, so a frozen client tests a 2024 idea of what a client sends, and a floating one changes what is being tested without anyone choosing.",
+  "_toolchain": "Build inputs are anchors too, but not all of them track upstream. `rust-version` in Cargo.toml is the MSRV — a promise about the oldest toolchain that still builds kevy — so raising it to follow upstream would EXCLUDE users rather than keep up with anyone. It moves when the owner decides to require something newer. The container images derive from it (see the rust-image anchor), which is what makes the promise tested rather than asserted; rust-toolchain.toml is `stable`, so ordinary builds still run on latest."
 }

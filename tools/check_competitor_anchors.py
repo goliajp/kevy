@@ -130,7 +130,21 @@ def latest_nuget(spec: dict) -> str:
     return max(stable, key=semver)
 
 
-RESOLVERS = {"github": latest_github, "endoflife": latest_endoflife,
+def latest_msrv(spec: dict) -> str:
+    """Not an upstream at all: the MSRV this repository promises.
+
+    An anchor whose correct value is a local decision still needs a judge —
+    what goes wrong is the container drifting away from the version the
+    manifest promises, which leaves the promise untested. So this resolves
+    to Cargo.toml's rust-version, and a build image that disagrees is red."""
+    txt = (ROOT / spec["file"]).read_text(encoding="utf-8")
+    m = re.search(r'^rust-version = "(\d+\.\d+)(?:\.\d+)?"', txt, re.M)
+    if not m:
+        raise LookupError(f"no rust-version in {spec['file']}")
+    return m.group(1)
+
+
+RESOLVERS = {"msrv": latest_msrv, "github": latest_github, "endoflife": latest_endoflife,
              "dockerhub": latest_dockerhub, "npm": latest_npm,
              "pypi": latest_pypi, "nuget": latest_nuget}
 
@@ -244,6 +258,8 @@ def check_anchor(name: str, anchor: dict, offline: bool) -> dict:
         except (urllib.error.URLError, LookupError, KeyError, OSError, ValueError) as e:
             fails.append(f"UNREACHABLE {name}: cannot read upstream ({e.__class__.__name__}: {e})")
         else:
+            if anchor.get("compare") == "minor":
+                upstream = ".".join(upstream.split(".")[:2])
             if semver(upstream) > semver(pinned):
                 fails.append(f"STALE    {name}: upstream stable is {upstream}, we pin {pinned}")
             elif semver(upstream) < semver(pinned):
