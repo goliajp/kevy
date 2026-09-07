@@ -882,7 +882,7 @@ jobs:
 
   # ───────────── command parity (correctness gate) ─────────────
   compat-differential:
-    name: compat3 differential (kevy == valkey 9.1, byte-for-byte)
+    name: compat3 differential (kevy == valkey, byte-for-byte)
     runs-on: ubuntu-latest
     timeout-minutes: 25
     # Blocking, unlike the perf smoke above: a divergence is a deterministic
@@ -891,7 +891,7 @@ jobs:
     # diverges from valkey on any check.
     steps:
       - uses: actions/checkout@v7
-      - name: 3-way differential vs valkey 9.1 + redis 7.4
+      - name: 3-way differential vs the pinned valkey and redis
         run: bash bench/compat3.sh
 
   # ── clientgate — bring your redis client, gated ──────────────────────────
