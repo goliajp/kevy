@@ -16,6 +16,7 @@
     "iot": "no_std, no allocator, no operating system.",
     "lua": "EVAL, on an interpreter we wrote.",
     "migration": "Moving in from Redis, and back out again.",
+    "packed-rows": "One allocation per declared row, and the ordering that decides whether it saves anything.",
     "persistence": "The append-only log, snapshots, and what survives a kill -9.",
     "pubsub": "Channels, patterns, and what happens to a slow subscriber.",
     "rds-workloads": "What a relational workload costs here, honestly.",
@@ -28,12 +29,12 @@
     "uds": "Unix sockets: no TCP, no loopback, no kernel copy.",
     "upgrading-4-to-5": "Stop 4.1.1, start 5.0 on the same directory — and what behaves differently.",
     "upgrading-5.0-to-5.1": "Stop 5.0, start 5.1 on the same directory — a read hazard repaired and two stalls removed.",
+    "upgrading-5.1-to-5.2": "Stop 5.1, start 5.2 on the same directory — the Lua dialects now match upstream.",
+    "upgrading-6.2-to-6.3": "HRANDFIELD, keyspace-event config over the wire, four RESP3 shapes and one GEOPOS reply corrected.",
+    "upgrading-6.2.0-to-6.2.1": "Nothing on the server changes; two client crates finally reach crates.io at the engine's version.",
     "vector-search": "KNN over your keyspace. No embedding model included.",
     "views": "Materialised views, kept fresh by the write path.",
-    "wasm": "151 KB in a browser tab, persisted to OPFS.",
-    "upgrading-6.2.0-to-6.2.1": "Nothing on the server changes; two client crates finally reach crates.io at the engine's version.",
-    "upgrading-5.1-to-5.2": "Stop 5.1, start 5.2 on the same directory — the Lua dialects now match upstream.",
-    "packed-rows": "One allocation per declared row, and the ordering that decides whether it saves anything."
+    "wasm": "151 KB in a browser tab, persisted to OPFS."
   },
   "ja": {
     "UPGRADING": "以前のメジャー——2.x から 3.x、および 3.x から 4.0。",
@@ -52,6 +53,7 @@
     "iot": "no_std、アロケータ無し、OS 無し。",
     "lua": "EVAL —— 自前で書いたインタープリタの上で。",
     "migration": "Redis から移ってくる道と、出ていく道。",
+    "packed-rows": "宣言済みの行を 1 回の確保に。節約になるかを決めるのは順序のほう。",
     "persistence": "append-only ログ、スナップショット、そして kill -9 の後に何が残るか。",
     "pubsub": "チャンネル、パターン、そして遅い購読者に何が起きるか。",
     "rds-workloads": "リレーショナルなワークロードがここで払う代価を、正直に。",
@@ -64,12 +66,12 @@
     "uds": "Unix ドメインソケット —— TCP も loopback も kernel コピーも無い。",
     "upgrading-4-to-5": "4.1.1 を止めて同じディレクトリで 5.0 を起動——変わる挙動はこれだ。",
     "upgrading-5.0-to-5.1": "5.0 を止めて同じディレクトリで 5.1 を起動——読み出しハザードを修復し、停止を 2 つ除去。",
+    "upgrading-5.1-to-5.2": "5.1 を止め、同じディレクトリで 5.2 を起動——Lua の方言が上流と一致します。",
+    "upgrading-6.2-to-6.3": "HRANDFIELD、ワイヤ越しに設定できる keyspace イベント、4 つの RESP3 の形、そして訂正された GEOPOS の応答 1 件。",
+    "upgrading-6.2.0-to-6.2.1": "サーバーは無変更。2 つのクライアント crate がようやくエンジンと同じ番号で crates.io に届く。",
     "vector-search": "キー空間の上での KNN。embedding モデルは含まない。",
     "views": "マテリアライズドビュー。書き込みパスが鮮度を保つ。",
-    "wasm": "ブラウザのタブに 151 KB、OPFS へ永続化。",
-    "upgrading-6.2.0-to-6.2.1": "サーバーは無変更。2 つのクライアント crate がようやくエンジンと同じ番号で crates.io に届く。",
-    "upgrading-5.1-to-5.2": "5.1 を止め、同じディレクトリで 5.2 を起動——Lua の方言が上流と一致します。",
-    "packed-rows": "宣言済みの行を 1 回の確保に。節約になるかを決めるのは順序のほう。"
+    "wasm": "ブラウザのタブに 151 KB、OPFS へ永続化。"
   },
   "zh": {
     "UPGRADING": "更早的大版本：2.x 到 3.x，以及 3.x 到 4.0。",
@@ -88,6 +90,7 @@
     "iot": "no_std、没有分配器、没有操作系统。",
     "lua": "EVAL —— 跑在我们自己写的解释器上。",
     "migration": "从 Redis 搬进来，以及再搬出去。",
+    "packed-rows": "声明过的行存成一次分配，以及决定它到底省不省的那个顺序。",
     "persistence": "append-only 日志、快照，以及 kill -9 之后还剩下什么。",
     "pubsub": "频道、模式，以及订阅者跟不上时会发生什么。",
     "rds-workloads": "关系型负载在这里到底要付多少钱 —— 照实说。",
@@ -100,11 +103,11 @@
     "uds": "Unix socket：没有 TCP、没有回环、没有内核拷贝。",
     "upgrading-4-to-5": "停 4.1.1、同目录启 5.0——以及哪些行为变了。",
     "upgrading-5.0-to-5.1": "停 5.0、同目录启 5.1——修掉一个读取隐患，去掉两处停顿。",
+    "upgrading-5.1-to-5.2": "停 5.1、在同一目录起 5.2 —— Lua 方言与上游对齐。",
+    "upgrading-6.2-to-6.3": "HRANDFIELD、能在线上设的 keyspace 事件开关、四处 RESP3 形状，以及一条修正过的 GEOPOS 回复。",
+    "upgrading-6.2.0-to-6.2.1": "服务器什么都没变；两个客户端 crate 终于以引擎的版本号到达 crates.io。",
     "vector-search": "在你的键空间上做 KNN。不含 embedding 模型。",
     "views": "物化视图，由写路径顺手保持新鲜。",
-    "wasm": "浏览器标签页里的 151 KB，持久化到 OPFS。",
-    "upgrading-6.2.0-to-6.2.1": "服务器什么都没变；两个客户端 crate 终于以引擎的版本号到达 crates.io。",
-    "upgrading-5.1-to-5.2": "停 5.1、在同一目录起 5.2 —— Lua 方言与上游对齐。",
-    "packed-rows": "声明过的行存成一次分配，以及决定它到底省不省的那个顺序。"
+    "wasm": "浏览器标签页里的 151 KB，持久化到 OPFS。"
   }
 }
