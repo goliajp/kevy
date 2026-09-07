@@ -16,12 +16,17 @@
 #
 # Usage: bash bench/resp3gate.sh <kevy-binary>
 set -uo pipefail
+# Resolve the argument BEFORE cd'ing anywhere. Four scripts in this tree have
+# now had the same defect — a relative path interpreted after the cd — and in
+# every one of them the failure was a server that never started rather than an
+# error naming the path.
+KBIN=${1:?usage: resp3gate.sh <kevy-binary>}
+[ -x "$KBIN" ] || { echo "resp3gate: no executable at '$KBIN' (resolved from $PWD)" >&2; exit 2; }
+KBIN=$(cd "$(dirname "$KBIN")" && pwd)/$(basename "$KBIN")
+
 cd "$(dirname "$0")"
 . ./anchor-lib.sh || { echo "resp3gate: cannot load anchor-lib.sh" >&2; exit 2; }
 command -v anchor_pin >/dev/null || { echo "resp3gate: anchor_pin missing" >&2; exit 2; }
-
-KBIN=${1:?usage: resp3gate.sh <kevy-binary>}
-KBIN=$(cd "$(dirname "$KBIN")" && pwd)/$(basename "$KBIN")
 RPORT=7431
 KPORT=7432
 RNAME=resp3gate-redis
@@ -46,9 +51,11 @@ anchor_require "redis (resp3gate)" "$PIN" "$served"
 
 env KEVY_BIND=127.0.0.1 "$KBIN" --port $KPORT --no-aof >/tmp/resp3gate-kevy.log 2>&1 &
 KPID=$!
+up=0
 for _ in $(seq 60); do
-    python3 -c "import socket,sys; socket.create_connection(('127.0.0.1',$KPORT),1).close()" 2>/dev/null && break
+    if python3 -c "import socket,sys; socket.create_connection(('127.0.0.1',$KPORT),1).close()" 2>/dev/null; then up=1; break; fi
     sleep 0.5
 done
+[ "$up" = 1 ] || { echo "resp3gate: kevy never came up on $KPORT — see /tmp/resp3gate-kevy.log" >&2; tail -5 /tmp/resp3gate-kevy.log >&2; exit 2; }
 
 python3 resp3gate.py "$RPORT" "$KPORT"
