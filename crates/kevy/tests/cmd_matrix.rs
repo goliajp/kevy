@@ -522,3 +522,37 @@ fn multikey_stubs() {
         assert_starts(&run(&mut s, &[v]), b"-ERR", "stub arity");
     }
 }
+
+/// `HRANDFIELD`'s every argv form, including the three refusals.
+///
+/// The coverage ratchet named `cmd_hrandfield` with 27 uncovered lines: the
+/// store-level and RESP3-level tests reach the happy paths, and nothing was
+/// driving the argument parser's error arms.
+#[test]
+fn hrandfield_argv_forms_and_refusals() {
+    let mut s = KeyspaceStore::new();
+    assert_starts(&run(&mut s, &[b"HSET", b"h", b"f1", b"v1", b"f2", b"v2"]), b":2", "hset");
+
+    // No count: a single bulk.
+    assert_starts(&run(&mut s, &[b"HRANDFIELD", b"h"]), b"$2", "bare form is one bulk");
+    // Missing key, no count: a null bulk, not an error.
+    assert_eq_reply(&run(&mut s, &[b"HRANDFIELD", b"nokey"]), b"$-1\r\n", "missing key");
+    // Missing key with a count: an empty array.
+    assert_eq_reply(&run(&mut s, &[b"HRANDFIELD", b"nokey", b"3"]), b"*0\r\n", "missing with count");
+
+    // Positive count is capped at the field count; negative returns |count|.
+    assert_starts(&run(&mut s, &[b"HRANDFIELD", b"h", b"9"]), b"*2", "capped at the hash size");
+    assert_starts(&run(&mut s, &[b"HRANDFIELD", b"h", b"-5"]), b"*5", "negative allows repeats");
+    // WITHVALUES doubles the flat array in RESP2.
+    assert_starts(&run(&mut s, &[b"HRANDFIELD", b"h", b"2", b"WITHVALUES"]), b"*4", "withvalues");
+
+    // The three refusals.
+    assert_starts(&run(&mut s, &[b"HRANDFIELD"]), b"-ERR", "no key is wrong arity");
+    assert_starts(&run(&mut s, &[b"HRANDFIELD", b"h", b"notanint"]), b"-ERR", "bad count");
+    assert_starts(&run(&mut s, &[b"HRANDFIELD", b"h", b"2", b"NOPE"]), b"-ERR", "bad keyword");
+    assert_starts(&run(&mut s, &[b"HRANDFIELD", b"h", b"2", b"WITHVALUES", b"extra"]), b"-ERR", "too many");
+
+    // Wrong type is refused like every other hash verb.
+    assert_starts(&run(&mut s, &[b"SET", b"str", b"x"]), b"+OK", "set");
+    assert_starts(&run(&mut s, &[b"HRANDFIELD", b"str", b"1"]), b"-WRONGTYPE", "wrong type");
+}
