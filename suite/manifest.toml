@@ -178,6 +178,10 @@ id = "anchor-pins"
 area = "release-pins"
 tier = "precommit"
 cmd = "python3 tools/check_competitor_anchors.py --offline"
+# --offline exits 2: it skipped the upstream question rather than answering
+# it. The online half runs daily in competitor-anchors.yml and in the
+# prerelease row below, which does not pass --offline.
+skip_is_exit_2 = true
 expected = 2
 timeout = 60
 requires = []

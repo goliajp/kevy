@@ -169,3 +169,35 @@ fn getdel_returns_and_removes() {
     assert_eq!(s.get(b"k").unwrap(), None);
     assert_eq!(s.getdel(b"absent").unwrap(), None);
 }
+
+/// `HRANDFIELD` through the embedded facade and its dispatch arm.
+///
+/// The wire surface and this one answer the same verbs, and the coverage
+/// ratchet noticed the arm arriving untested — 16 uncovered lines to 43 in
+/// one function. Every branch the arm has: no count, a count, WITHVALUES,
+/// a negative count, a bad count, and a bad keyword.
+#[test]
+fn hrandfield_every_form() {
+    let s = s();
+    s.hset(b"h", &[(b"f1", b"v1"), (b"f2", b"v2"), (b"f3", b"v3")]).unwrap();
+
+    // No count: one field.
+    assert_eq!(s.hrandfield(b"h", 1, false).unwrap().len(), 1);
+
+    // Positive count is distinct and capped at the field count.
+    let got = s.hrandfield(b"h", 10, false).unwrap();
+    assert_eq!(got.len(), 3, "a count past the end is capped");
+    let names: std::collections::HashSet<_> = got.iter().map(|(f, _)| f.clone()).collect();
+    assert_eq!(names.len(), 3, "a positive count must not repeat");
+
+    // Negative count returns exactly |count|, repeats allowed.
+    assert_eq!(s.hrandfield(b"h", -7, false).unwrap().len(), 7);
+
+    // WITHVALUES pairs each field with its own value.
+    for (f, v) in s.hrandfield(b"h", 3, true).unwrap() {
+        assert_eq!(Some(v), s.hget(b"h", &f).unwrap(), "wrong pairing for {f:?}");
+    }
+
+    // A missing key is empty, not an error.
+    assert!(s.hrandfield(b"absent", 2, false).unwrap().is_empty());
+}
