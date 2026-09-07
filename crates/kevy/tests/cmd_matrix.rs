@@ -538,7 +538,11 @@ fn hrandfield_argv_forms_and_refusals() {
     // Missing key, no count: a null bulk, not an error.
     assert_eq_reply(&run(&mut s, &[b"HRANDFIELD", b"nokey"]), b"$-1\r\n", "missing key");
     // Missing key with a count: an empty array.
-    assert_eq_reply(&run(&mut s, &[b"HRANDFIELD", b"nokey", b"3"]), b"*0\r\n", "missing with count");
+    assert_eq_reply(
+        &run(&mut s, &[b"HRANDFIELD", b"nokey", b"3"]),
+        b"*0\r\n",
+        "missing with count",
+    );
 
     // Positive count is capped at the field count; negative returns |count|.
     assert_starts(&run(&mut s, &[b"HRANDFIELD", b"h", b"9"]), b"*2", "capped at the hash size");
@@ -550,7 +554,11 @@ fn hrandfield_argv_forms_and_refusals() {
     assert_starts(&run(&mut s, &[b"HRANDFIELD"]), b"-ERR", "no key is wrong arity");
     assert_starts(&run(&mut s, &[b"HRANDFIELD", b"h", b"notanint"]), b"-ERR", "bad count");
     assert_starts(&run(&mut s, &[b"HRANDFIELD", b"h", b"2", b"NOPE"]), b"-ERR", "bad keyword");
-    assert_starts(&run(&mut s, &[b"HRANDFIELD", b"h", b"2", b"WITHVALUES", b"extra"]), b"-ERR", "too many");
+    assert_starts(
+        &run(&mut s, &[b"HRANDFIELD", b"h", b"2", b"WITHVALUES", b"extra"]),
+        b"-ERR",
+        "too many",
+    );
 
     // Wrong type is refused like every other hash verb.
     assert_starts(&run(&mut s, &[b"SET", b"str", b"x"]), b"+OK", "set");
@@ -567,14 +575,22 @@ fn hrandfield_argv_forms_and_refusals() {
 fn geo_and_collection_error_paths() {
     let mut s = KeyspaceStore::new();
     assert_starts(&run(&mut s, &[b"SET", b"str", b"x"]), b"+OK", "set");
-    assert_starts(&run(&mut s, &[b"GEOADD", b"g", b"13.361389", b"38.115556", b"P"]), b":1", "geoadd");
+    assert_starts(
+        &run(&mut s, &[b"GEOADD", b"g", b"13.361389", b"38.115556", b"P"]),
+        b":1",
+        "geoadd",
+    );
 
     // A wrong-typed key answers WRONGTYPE and nothing else — not an array
     // header followed by an error, which is what this used to do.
     assert_starts(&run(&mut s, &[b"GEOPOS", b"str", b"m"]), b"-WRONGTYPE", "geopos wrongtype");
     // The happy and missing cases still hold their shapes.
     assert_starts(&run(&mut s, &[b"GEOPOS", b"g", b"P"]), b"*1", "geopos hit");
-    assert_starts(&run(&mut s, &[b"GEOPOS", b"g", b"absent"]), b"*1", "geopos miss is a null array");
+    assert_starts(
+        &run(&mut s, &[b"GEOPOS", b"g", b"absent"]),
+        b"*1",
+        "geopos miss is a null array",
+    );
     assert_starts(&run(&mut s, &[b"GEOPOS", b"nokey", b"m"]), b"*1", "geopos missing key");
     assert_starts(&run(&mut s, &[b"GEOPOS", b"g"]), b"-ERR", "geopos wrong arity");
 
