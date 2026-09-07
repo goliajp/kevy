@@ -132,6 +132,8 @@ struct Ring<T> {
 // accesses never alias. A `T: Send` may thus cross the producer→consumer thread
 // boundary, making the shared `Ring` safe to `Send` and `Sync`.
 unsafe impl<T: Send> Send for Ring<T> {}
+// SAFETY: as above — the producer and consumer touch disjoint index ranges, so the
+// `UnsafeCell` accesses reachable through a shared `&Ring<T>` never alias.
 unsafe impl<T: Send> Sync for Ring<T> {}
 
 impl<T> Ring<T> {

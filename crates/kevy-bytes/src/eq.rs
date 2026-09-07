@@ -29,8 +29,12 @@ impl SmallBytes {
         if len != other_tag as usize {
             return false;
         }
-        // SAFETY: both in inline variant; first `len` bytes valid.
+        // SAFETY: the caller reached this arm by finding both tags <= INLINE_LEN_MAX,
+        // so the inline variant is the live one on both sides, and `len` is that tag —
+        // the count of initialised bytes in `inline.data`.
         let a = unsafe { slice::from_raw_parts(self.inline.data.as_ptr(), len) };
+        // SAFETY: as above, and the equal-length check just above means `other` holds
+        // the same number of initialised bytes.
         let b = unsafe { slice::from_raw_parts(other.inline.data.as_ptr(), len) };
         a == b
     }
@@ -45,8 +49,11 @@ impl SmallBytes {
         if a_len != b_len {
             return false;
         }
-        // SAFETY: heap pointers + len are valid.
+        // SAFETY: the caller reached this arm with both tags > INLINE_LEN_MAX, so the
+        // heap variant is live on both sides. `heap.ptr` owns an allocation of
+        // `heap.length()` bytes for the life of the value, and `a_len` is that length.
         let a = unsafe { slice::from_raw_parts(self.heap.ptr.as_ptr(), a_len) };
+        // SAFETY: as above, with `other`'s own pointer and its own length.
         let b = unsafe { slice::from_raw_parts(other.heap.ptr.as_ptr(), b_len) };
         a == b
     }
@@ -64,6 +71,7 @@ impl PartialEq for SmallBytes {
         // variant — it's either the inline-length 0..=22 or 0xFF as the
         // heap-discriminator overlap (see crate doc).
         let self_tag = unsafe { self.inline.tag };
+        // SAFETY: same overlap argument, on the other value.
         let other_tag = unsafe { other.inline.tag };
         let self_inline = self_tag <= INLINE_LEN_MAX;
         let other_inline = other_tag <= INLINE_LEN_MAX;

@@ -27,6 +27,8 @@ impl Poller {
     /// Creates a fresh kqueue instance (closed on drop). Errors surface the
     /// raw OS error from `kqueue(2)`.
     pub fn new() -> io::Result<Self> {
+        // SAFETY: `kqueue(2)` takes no arguments and dereferences nothing. A negative
+        // return is checked below before the descriptor is wrapped.
         let kq = unsafe { ffi::kqueue() };
         if kq < 0 {
             return Err(io::Error::last_os_error());
@@ -36,6 +38,9 @@ impl Poller {
 
     fn change(&self, fd: i32, filter: i16, flags: u16) -> io::Result<()> {
         let kev = ffi::Kevent { ident: fd as usize, filter, flags, fflags: 0, data: 0, udata: 0 };
+        // SAFETY: `self.kq` is open for the life of this `Poller` — `Drop` is the only
+        // close. `kev` is a live local and the changelist length passed is 1, matching it;
+        // the eventlist is null with length 0, so nothing is written back.
         let r = unsafe { ffi::kevent(self.kq, &raw const kev, 1, ptr::null_mut(), 0, ptr::null()) };
         if r < 0 {
             return Err(io::Error::last_os_error());
@@ -81,6 +86,10 @@ impl Poller {
             }
             None => ptr::null(),
         };
+        // SAFETY: `self.kq` is open for the life of this `Poller`. The changelist is null
+        // with length 0. `raw` was built with `WAIT_CAPACITY` capacity and that same
+        // number is passed as the eventlist length, so the kernel writes only within the
+        // allocation. `ts_ptr` is either null or points at `ts`, which outlives the call.
         let n = unsafe {
             ffi::kevent(self.kq, ptr::null(), 0, raw.as_mut_ptr(), WAIT_CAPACITY as c_int, ts_ptr)
         };
@@ -91,6 +100,9 @@ impl Poller {
             }
             return Err(e);
         }
+        // SAFETY: `kevent(2)` returned `n` and `n >= 0` was checked above; the kernel
+        // initialised exactly that many elements of `raw`, and `n <= WAIT_CAPACITY` is the
+        // eventlist length we passed, so `n` is within the capacity `raw` was built with.
         unsafe { raw.set_len(n as usize) };
         for kev in &raw {
             out.push(Event {
@@ -106,6 +118,9 @@ impl Poller {
 
 impl Drop for Poller {
     fn drop(&mut self) {
+        // SAFETY: `self.kq` was open for the life of this `Poller` and this is the only
+        // close: `Poller` is neither `Copy` nor `Clone`, so no second owner can close it
+        // again.
         unsafe {
             ffi::close(self.kq);
         }

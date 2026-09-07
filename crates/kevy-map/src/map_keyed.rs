@@ -32,10 +32,14 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
             ProbeOutcome::Found(idx) => {
                 // SAFETY: slot is full ⇒ initialised. We replace only the V
                 // field; the old K is kept (std HashMap semantics).
+                // SAFETY: `idx` came from a probe that found a full metadata byte, so the
+                // slot at `idx` holds an initialised `(K, V)` inside the slot allocation.
                 let v_ptr = unsafe {
                     let kv: *mut (K, V) = self.slots_ptr.as_ptr().add(idx).cast::<(K, V)>();
                     ptr::addr_of_mut!((*kv).1)
                 };
+                // SAFETY: `v_ptr` points at that slot's initialised `V`, so the old value
+                // is a valid `V` to move out and the new one is written in its place.
                 let old_v = unsafe { ptr::replace(v_ptr, value) };
                 drop(key);
                 Some(old_v)
@@ -86,6 +90,9 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
                 // SAFETY: full slot ⇒ initialised; we mark DELETED immediately
                 // so this byte is never re-read as occupied.
                 let (k, v) = unsafe { ptr::read(self.slots_ptr.as_ptr().add(i) as *const (K, V)) };
+                // SAFETY: `i < cap`, so this is inside the metadata range. Writing DELETED
+                // immediately is what keeps the `ptr::read` above from being a double move:
+                // the byte is never seen as occupied again.
                 unsafe { *self.metadata_ptr.as_ptr().add(i) = DELETED };
                 let hash = k.kevy_hash();
                 new_table.insert_known_unique(hash, k, v);

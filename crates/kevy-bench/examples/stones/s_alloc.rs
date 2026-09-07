@@ -39,10 +39,14 @@ fn round_trip(size: usize) {
     let mut heap = Heap::new(0);
     // Warm the span so the first sample is not paying for a map syscall.
     if let Some(p) = heap.alloc(size, 8) {
+        // SAFETY: the pointer came from `heap.alloc` with this same size and alignment
+        // and is freed exactly once.
         unsafe { heap.dealloc(p, size, 8) };
     }
     let s = bench(30, 20_000, || {
         if let Some(p) = heap.alloc(black_box(size), 8) {
+            // SAFETY: the pointer came from `heap.alloc` with this same size and alignment
+            // and is freed exactly once.
             unsafe { heap.dealloc(p, size, 8) };
         }
     });
@@ -70,9 +74,13 @@ fn churn(size: usize) {
         // Free every other one first, then the rest: adjacent slots go
         // back at different times, which is what fragments a bump heap.
         for i in (0..live.len()).step_by(2) {
+            // SAFETY: the pointer came from `heap.alloc` with this same size and alignment
+            // and is freed exactly once.
             unsafe { heap.dealloc(live[i], size, 8) };
         }
         for i in (1..live.len()).step_by(2) {
+            // SAFETY: the pointer came from `heap.alloc` with this same size and alignment
+            // and is freed exactly once.
             unsafe { heap.dealloc(live[i], size, 8) };
         }
         live.clear();
@@ -98,6 +106,8 @@ fn reclaim_cost(size: usize) {
     let s = bench(10, 20, || {
         let live: Vec<_> = (0..CHURN).filter_map(|_| heap.alloc(size, 8)).collect();
         for p in &live {
+            // SAFETY: the pointer came from `heap.alloc` with this same size and alignment
+            // and is freed exactly once.
             unsafe { heap.dealloc(*p, size, 8) };
         }
         heap.reclaim();

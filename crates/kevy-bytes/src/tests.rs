@@ -351,6 +351,9 @@ thread_local! {
     static THREAD_ALLOC_CALLS: Cell<usize> = const { Cell::new(0) };
 }
 
+// SAFETY: every method forwards to `System`, which is a correct `GlobalAlloc`; the
+// only addition is a thread-local counter that allocates nothing itself. Blocks are
+// therefore returned to the same allocator that produced them.
 unsafe impl GlobalAlloc for CountingAlloc {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         // `try_with` so if the TLS is being destroyed (process teardown)

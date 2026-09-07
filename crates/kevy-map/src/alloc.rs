@@ -48,7 +48,11 @@ impl<K, V> KevyMap<K, V> {
         // single memset. The slot array is left uninitialised — slots
         // become initialised only when their metadata byte transitions
         // out of the high-bit-set state (EMPTY/DELETED).
+        // SAFETY: `meta_offset` is the metadata's offset inside the layout `base` was
+        // allocated with, so the result stays inside that one allocation.
         let meta_byte_ptr = unsafe { base.add(meta_offset) };
+        // SAFETY: the layout reserved `cap + GROUP_WIDTH` metadata bytes starting here,
+        // which is exactly the count written, and `u8` needs no alignment.
         unsafe { ptr::write_bytes(meta_byte_ptr, EMPTY, cap + GROUP_WIDTH) };
 
         let slots_ptr = base.cast::<MaybeUninit<(K, V)>>();
@@ -63,9 +67,11 @@ impl<K, V> KevyMap<K, V> {
         }
 
         Self {
-            // SAFETY: alloc returned non-null; raw pointers are derived
-            // within the same allocation.
+            // SAFETY: the allocation above returned non-null (checked, or the fallback
+            // aborts), and `slots_ptr` is `base` itself — so it is non-null too.
             slots_ptr: unsafe { NonNull::new_unchecked(slots_ptr) },
+            // SAFETY: `metadata_ptr` is `base` advanced by a within-layout offset, so it
+            // is non-null for the same reason.
             metadata_ptr: unsafe { NonNull::new_unchecked(metadata_ptr) },
             cap,
             mask: cap - 1,

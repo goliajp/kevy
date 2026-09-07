@@ -39,6 +39,8 @@ impl Socket {
     /// Accept one inbound connection. On a non-blocking listener with no pending
     /// connection this returns `Err` with kind `WouldBlock`.
     pub fn accept(&self) -> io::Result<Socket> {
+        // SAFETY: `self.fd` is open for the life of this `Socket` — the type owns it and only `Drop` closes it. Both address-out pointers are
+        // null, which `accept(2)` documents as "do not report the peer address".
         let fd = unsafe { ffi::accept(self.fd, ptr::null_mut(), ptr::null_mut()) };
         if fd < 0 {
             return Err(io::Error::last_os_error());
@@ -50,6 +52,8 @@ impl Socket {
     /// On a non-blocking socket with no data, returns `WouldBlock`.
     pub fn read(&self, buf: &mut [u8]) -> io::Result<usize> {
         loop {
+            // SAFETY: `self.fd` is open for the life of this `Socket` — the type owns it and only `Drop` closes it. `buf` is a live mutable slice, so
+            // its pointer is valid for `buf.len()` writes and the kernel writes no further.
             let n = unsafe { ffi::read(self.fd, buf.as_mut_ptr().cast::<c_void>(), buf.len()) };
             if n < 0 {
                 let e = io::Error::last_os_error();
@@ -77,6 +81,8 @@ impl Socket {
     pub fn peer_gone(&self) -> bool {
         let mut byte = [0u8; 1];
         loop {
+            // SAFETY: `self.fd` is open for the life of this `Socket` — the type owns it and only `Drop` closes it. `byte` is a live 1-byte array and the
+            // length passed is 1, so the kernel may write at most that one byte.
             let n = unsafe {
                 ffi::recv(
                     self.fd,
@@ -105,6 +111,8 @@ impl Socket {
     /// `WouldBlock` on a full non-blocking socket. Retries on EINTR.
     pub fn write(&self, buf: &[u8]) -> io::Result<usize> {
         loop {
+            // SAFETY: `self.fd` is open for the life of this `Socket` — the type owns it and only `Drop` closes it. `buf` is a live shared slice, so its
+            // pointer is valid for `buf.len()` reads and the kernel reads no further.
             let n = unsafe { ffi::write(self.fd, buf.as_ptr().cast::<c_void>(), buf.len()) };
             if n < 0 {
                 let e = io::Error::last_os_error();
@@ -137,6 +145,9 @@ impl Socket {
     /// Disable Nagle's algorithm (`TCP_NODELAY`) for low-latency replies.
     pub fn set_nodelay(&self) -> io::Result<()> {
         let one: c_int = 1;
+        // SAFETY: `self.fd` is open for the life of this `Socket` — the type owns it and only `Drop` closes it. `one` is a live `c_int` on this frame
+        // and the length passed is exactly `size_of::<c_int>()`, so the kernel reads
+        // only within it.
         let r = unsafe {
             ffi::setsockopt(
                 self.fd,
@@ -157,6 +168,9 @@ impl Socket {
         let mut addr = SockaddrIn::zeroed();
         let mut len = size_of::<SockaddrIn>() as u32;
         let r =
+            // SAFETY: `self.fd` is open for the life of this `Socket` — the type owns it and only `Drop` closes it. `addr` and `len` are live locals; `len`
+            // starts at `size_of::<SockaddrIn>()`, bounding what `getsockname(2)` may write
+            // into `addr`.
             unsafe { ffi::getsockname(self.fd, (&raw mut addr).cast::<c_void>(), &raw mut len) };
         if r < 0 {
             return Err(io::Error::last_os_error());
@@ -172,6 +186,9 @@ impl Socket {
         let mut addr = SockaddrIn::zeroed();
         let mut len = size_of::<SockaddrIn>() as u32;
         let r =
+            // SAFETY: `self.fd` is open for the life of this `Socket` — the type owns it and only `Drop` closes it. `addr` and `len` are live locals; `len`
+            // starts at `size_of::<SockaddrIn>()`, bounding what `getpeername(2)` may write
+            // into `addr`.
             unsafe { ffi::getpeername(self.fd, (&raw mut addr).cast::<c_void>(), &raw mut len) };
         if r < 0 {
             return Err(io::Error::last_os_error());
@@ -187,6 +204,9 @@ impl Socket {
 
 impl Drop for Socket {
     fn drop(&mut self) {
+        // SAFETY: `self.fd` was open for the life of this `Socket` and this is the only
+        // close: `Socket` has no `Copy`/`Clone`, so no second owner can close it again,
+        // and nothing reads `self.fd` after `drop`.
         unsafe {
             ffi::close(self.fd);
         }
@@ -195,10 +215,14 @@ impl Drop for Socket {
 
 /// Set `O_NONBLOCK` on a raw fd (sockets and pipe ends alike).
 pub(crate) fn set_fd_nonblocking(fd: c_int) -> io::Result<()> {
+    // SAFETY: `fd` is a descriptor the caller holds open across this call.
+    // `F_GETFL` takes no third argument; the `0` is the required placeholder.
     let flags = unsafe { ffi::fcntl(fd, F_GETFL, 0) };
     if flags < 0 {
         return Err(io::Error::last_os_error());
     }
+    // SAFETY: same open `fd`. `F_SETFL` takes the flag word by value, so there is
+    // no pointer for the kernel to dereference.
     if unsafe { ffi::fcntl(fd, F_SETFL, flags | O_NONBLOCK) } < 0 {
         return Err(io::Error::last_os_error());
     }
@@ -206,6 +230,9 @@ pub(crate) fn set_fd_nonblocking(fd: c_int) -> io::Result<()> {
 }
 
 fn setsockopt_int(fd: c_int, level: c_int, name: c_int, val: c_int) -> io::Result<()> {
+    // SAFETY: `fd` is a descriptor the caller holds open across this call. `val` is
+    // a live `c_int` on this frame and the length passed is exactly
+    // `size_of::<c_int>()`, so the kernel reads only within it.
     let r = unsafe {
         ffi::setsockopt(
             fd,
@@ -222,6 +249,8 @@ fn setsockopt_int(fd: c_int, level: c_int, name: c_int, val: c_int) -> io::Resul
 }
 
 fn listen_inner(ip: [u8; 4], port: u16, backlog: i32, reuseport: bool) -> io::Result<Socket> {
+    // SAFETY: `socket(2)` takes three integers by value — no pointer is dereferenced.
+    // A negative return is checked below before the fd is wrapped.
     let fd = unsafe { ffi::socket(AF_INET, SOCK_STREAM, 0) };
     if fd < 0 {
         return Err(io::Error::last_os_error());
@@ -236,12 +265,17 @@ fn listen_inner(ip: [u8; 4], port: u16, backlog: i32, reuseport: bool) -> io::Re
     }
 
     let addr = SockaddrIn::new(ip, port);
+    // SAFETY: `fd` is the descriptor just created and now owned by `sock`, so it stays
+    // open until this function returns. `addr` is a live local and the length passed
+    // is exactly `size_of::<SockaddrIn>()`.
     let r = unsafe {
         ffi::bind(fd, (&raw const addr).cast::<c_void>(), size_of::<SockaddrIn>() as u32)
     };
     if r < 0 {
         return Err(io::Error::last_os_error());
     }
+    // SAFETY: `fd` is still owned by `sock` and open; `listen(2)` takes both arguments
+    // by value.
     if unsafe { ffi::listen(fd, backlog) } < 0 {
         return Err(io::Error::last_os_error());
     }
@@ -268,11 +302,16 @@ pub fn unix_listen(path: &[u8], backlog: i32) -> io::Result<Socket> {
     // Best-effort unlink so subsequent bind doesn't EADDRINUSE on restart.
     // Convert path to a NUL-terminated CString for libc::unlink.
     if let Ok(c) = std::ffi::CString::new(path) {
+        // SAFETY: `c` is a live `CString`, so its pointer is NUL-terminated and valid for
+        // the whole call. A failed unlink is deliberately ignored — the bind below is what
+        // decides whether the path was usable.
         unsafe {
             ffi::unlink(c.as_ptr());
         }
     }
 
+    // SAFETY: `socket(2)` takes three integers by value — no pointer is dereferenced.
+    // A negative return is checked below before the fd is wrapped.
     let fd = unsafe { ffi::socket(AF_UNIX, SOCK_STREAM, 0) };
     if fd < 0 {
         return Err(io::Error::last_os_error());
@@ -280,16 +319,22 @@ pub fn unix_listen(path: &[u8], backlog: i32) -> io::Result<Socket> {
     let sock = Socket { fd };
 
     let (addr, len) = SockaddrUn::new(path)?;
+    // SAFETY: `fd` is owned by `sock` and open. `addr` is a live local and `len` is the
+    // length `SockaddrUn::new` computed for it, so the kernel reads only within it.
     let r = unsafe { ffi::bind(fd, (&raw const addr).cast::<c_void>(), len) };
     if r < 0 {
         return Err(io::Error::last_os_error());
     }
+    // SAFETY: `fd` is still owned by `sock` and open; `listen(2)` takes both arguments
+    // by value.
     if unsafe { ffi::listen(fd, backlog) } < 0 {
         return Err(io::Error::last_os_error());
     }
     // World-writable so clients with different uid can connect (redis SOP).
     // Use libc::chmod via CString.
     if let Ok(c) = std::ffi::CString::new(path) {
+        // SAFETY: `c` is a live `CString`, so its pointer is NUL-terminated and valid for
+        // the whole call.
         unsafe { ffi::chmod(c.as_ptr(), 0o777) };
     }
     Ok(sock)

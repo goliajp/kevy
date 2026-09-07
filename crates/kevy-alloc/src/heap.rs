@@ -216,8 +216,13 @@ impl Heap {
     /// `size`, and must not be used afterwards.
     pub unsafe fn dealloc(&mut self, ptr: NonNull<u8>, size: usize, align: usize) {
         match class::index_of(size, align) {
-            // SAFETY: delegated to the caller's contract.
+            // SAFETY: this fn is `unsafe`; its contract already requires that `ptr` came
+            // from this heap for this `size`/`align` and is not used again. `class::index_of`
+            // returning `Some(c)` means the block was served from the small path, so
+            // `dealloc_small` is the matching return path.
             Some(c) => unsafe { self.dealloc_small(ptr, c, size) },
+            // SAFETY: same caller contract; `None` means the size/align pair has no size
+            // class, so the block came from the large path and returns to it.
             None => unsafe { self.dealloc_large(ptr, size) },
         }
     }
