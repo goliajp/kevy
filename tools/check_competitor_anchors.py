@@ -27,6 +27,7 @@ can catch:
 Run: python3 tools/check_competitor_anchors.py [--offline] [--json]
 """
 
+import fnmatch
 import json
 import os
 import pathlib
@@ -40,8 +41,20 @@ ANCHORS = ROOT / "bench" / "COMPETITOR-ANCHORS.json"
 TIMEOUT = 20
 
 
+PLAIN_VERSION = re.compile(r"^\d+(\.\d+){0,3}$")
+
+
 def semver(v: str) -> tuple:
-    return tuple(int(p) for p in re.findall(r"\d+", v)[:4])
+    """Compare only versions that are plainly numeric.
+
+    This read every run of digits as a component, so "8.10.0-rc1" became
+    (8,10,0,1) and sorted ABOVE (8,10,0) — a prerelease reading as newer
+    than the release it precedes. Anything that is not purely numeric now
+    refuses to be compared rather than being compared wrongly."""
+    if not PLAIN_VERSION.match(v):
+        raise ValueError(f"not a plain version: {v!r}")
+    parts = [int(p) for p in v.split(".")]
+    return tuple(parts + [0] * (4 - len(parts)))
 
 
 def fetch(url: str) -> object:
@@ -123,7 +136,39 @@ def check_site(name: str, site: dict, pinned: str) -> list:
             for v in sorted(set(found)) if v != pinned]
 
 
-IMAGE_RE = re.compile(r"\b(redis|valkey/valkey|dragonflydb/dragonfly|postgres):[0-9v]")
+# Any reference to a competitor image, PINNED OR NOT. The previous pattern
+# required `:[0-9v]`, which meant it saw exactly the references that were
+# already fine and missed `redis:latest`, a bare `redis`, a digest pin and
+# `redis:${TAG}` — the floating forms this whole file exists to eliminate.
+IMAGE_NAMES = (r"redis/redis-stack-server", r"redis/redis-stack", r"valkey/valkey",
+               r"dragonflydb/dragonfly", r"pgvector/pgvector", r"redis", r"valkey", r"postgres")
+_NAMES = "|".join(IMAGE_NAMES)
+
+# Two rules, because one was wrong in both directions. Requiring a numeric
+# tag saw only references that were already fine and missed `redis:latest`,
+# a bare `redis` and `redis@sha256:…` — the floating forms this file exists
+# to remove. Accepting a bare name anywhere then matched the word "redis" in
+# prose, in a log, and in node_modules' sqlite3.c.
+#
+#   TAGGED  — a name carrying any tag or digest, anywhere. `:latest`,
+#             `:${VAR}` and `@sha256:` are the point, not the exception.
+#   IN_CTX  — a bare name, but only where docker is being told to run it.
+# The tag has to look like a tag. Accepting any word after the colon made
+# `for cfg in "redis:start_redis"` — a shell label:function pair — read as an
+# image reference. Versions, the known floating names, and a shell/CI variable
+# are what a tag actually is here.
+_TAG_SHAPE = r"(?:v?[0-9][A-Za-z0-9._-]*|latest|edge|unstable|alpine[A-Za-z0-9._-]*|" \
+             r"bookworm|trixie|bullseye|slim[A-Za-z0-9._-]*|\$\{[A-Za-z_][A-Za-z0-9_]*\})"
+TAGGED_RE = re.compile(r"\b(" + _NAMES + r")(:" + _TAG_SHAPE + r"|@sha256:[0-9a-f]+)")
+IN_CTX_RE = re.compile(
+    r"(?:docker\s+run[^\n]*?|image:\s*[\"']?|FROM\s+|--entrypoint\s+\S+\s+)"
+    r"\b(" + _NAMES + r")\b(?![:/.-])")
+IMAGE_PATTERNS = (TAGGED_RE, IN_CTX_RE)
+
+# Build artefacts, vendored trees and recorded output are not the live
+# surface: a competitor name in a .log or a .sql dump is a record, not a run.
+SWEEP_SKIP_SUFFIX = (".md", ".log", ".txt", ".test", ".sql", ".json.gz")
+SWEEP_SKIP_PATH = ("__pycache__", "node_modules", "/target/", "/dist/", "/.build/")
 SWEPT = ("bench", "tools", "examples", ".github")
 
 
@@ -134,23 +179,36 @@ def unregistered(data: dict) -> list:
     script added next year that pulls its own redis image would be invisible
     to all of them — the gate would stay green while a new, unwatched
     version quietly entered the measurements."""
-    known = {s["file"] for a in data["anchors"].values() for s in a["sites"]}
-    exempt = tuple(k.rstrip("*") for k in data["_exempt"])
+    # D7: per-competitor. A file that is a site for redis was invisible to
+    # the sweep for postgres too, which is the case unregistered() exists for.
+    claimed = {name: {s["file"] for s in a["sites"]} for name, a in data["anchors"].items()}
+    every_site = set().union(*claimed.values()) if claimed else set()
+    exempt = tuple(data["_exempt"])
     out = []
     for top in SWEPT:
         for path in sorted((ROOT / top).rglob("*")):
             rel = str(path.relative_to(ROOT))
-            if not path.is_file() or rel in known or rel.endswith(".md"):
+            if (not path.is_file() or rel.endswith(SWEEP_SKIP_SUFFIX)
+                    or any(s in rel for s in SWEEP_SKIP_PATH)):
                 continue
-            if any(rel.startswith(e) for e in exempt) or "/v125-" in rel or "__pycache__" in rel:
+            # fnmatch, not rstrip("*") — the glob in the key is a glob.
+            if any(fnmatch.fnmatch(rel, e) or rel == e for e in exempt):
                 continue
             try:
                 text = path.read_text(encoding="utf-8")
             except (UnicodeDecodeError, OSError):
                 continue
-            hit = IMAGE_RE.search(text)
-            if hit:
-                out.append(f"UNREGISTERED {rel} names {hit.group(0)} but is in no anchor's site list")
+            for hit in [h for pat in IMAGE_PATTERNS for h in pat.finditer(text)]:
+                image = hit.group(1)
+                owner = next((n for n, a in data["anchors"].items()
+                              if a.get("image", "").split(":")[0].split("/")[-1] == image.split("/")[-1]), None)
+                if owner and rel in claimed.get(owner, ()):
+                    continue          # this file is a registered site FOR THIS competitor
+                if not owner and rel in every_site:
+                    continue          # an image no anchor owns, in a file some anchor watches
+                out.append(f"UNREGISTERED {rel} names {hit.group(0).strip()} "
+                           f"but is in no anchor's site list")
+                break
     return out
 
 
@@ -167,7 +225,8 @@ def check_anchor(name: str, anchor: dict, offline: bool) -> dict:
             if semver(upstream) > semver(pinned):
                 fails.append(f"STALE    {name}: upstream stable is {upstream}, we pin {pinned}")
             elif semver(upstream) < semver(pinned):
-                note = f"(ahead of upstream {upstream} — a pin from a prerelease?)"
+                fails.append(f"UNCONFIRMED {name}: we pin {pinned}, ahead of upstream's "
+                             f"latest stable {upstream} — no upstream can confirm this version")
     return {"name": name, "pinned": pinned, "upstream": upstream, "note": note,
             "sites": len(anchor["sites"]), "manual": anchor.get("manual", False), "fails": fails}
 
@@ -193,9 +252,14 @@ def main() -> int:
     fails = [f for r in results for f in r["fails"]]
     for f in fails:
         print(f"  {f}", file=sys.stderr)
-    if offline:
-        print("  NOTE: --offline skips the upstream question entirely; it is not a pass.", file=sys.stderr)
     print(f"\n{len(fails)} problem(s) across {len(results)} anchors")
+    if offline:
+        # Exit 2, not 0. This printed "it is not a pass" and then returned a
+        # pass, so a caller that added --offline to the online row would have
+        # silently downgraded the gate to tree-agrees-with-itself.
+        print("  --offline skipped the upstream question: exit 2, for a caller that "
+              "accepts a tree-only answer.", file=sys.stderr)
+        return 1 if fails else 2
     return 1 if fails else 0
 
 
