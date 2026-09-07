@@ -136,6 +136,7 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("HGETALL",      RD, NG,   None,            None,    SERVER | ESTORE | ATOMIC),
     op("HINCRBY",      WR, GROW, Some(N::Hash),   None,    SERVER | ESTORE | PIPE | ATOMIC | REPLAY),
     op("HINCRBYFLOAT", WR, GROW, Some(N::Hash),            None,    SERVER | ESTORE | REPLAY),
+    op("HRANDFIELD",   RD, NG,   None,            None,    SERVER | ESTORE),
     op("HKEYS",        RD, NG,   None,            None,    SERVER | ESTORE),
     op("HLEN",         RD, NG,   None,            None,    SERVER | ESTORE),
     op("HMGET",        RD, NG,   None,            None,    SERVER | ESTORE | ATOMIC),

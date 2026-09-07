@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 
 use crate::map::KevyMap;
+use crate::scaled;
 
 /// Drive a full sweep (cursor 0 → … → 0), recording how many times each
 /// key was visited.
@@ -38,14 +39,14 @@ fn empty_map_is_done_immediately() {
 fn full_coverage_exactly_once_on_fixed_table() {
     // Pre-size so no grow happens during the sweep: every live key must
     // be visited EXACTLY once (home groups partition the keyspace).
-    let mut m: KevyMap<u64, u64> = KevyMap::with_capacity(10_000);
-    for i in 0..10_000u64 {
+    let mut m: KevyMap<u64, u64> = KevyMap::with_capacity(scaled(10_000));
+    for i in 0..scaled(10_000) as u64 {
         m.insert(i, i * 2);
     }
     let cap_before = m.capacity();
     let seen = full_sweep(&m);
     assert_eq!(m.capacity(), cap_before, "table grew unexpectedly");
-    assert_eq!(seen.len(), 10_000, "missed keys");
+    assert_eq!(seen.len(), scaled(10_000), "missed keys");
     for (k, n) in &seen {
         assert_eq!(*n, 1, "key {k} visited {n} times on a static table");
     }
@@ -56,18 +57,19 @@ fn coverage_survives_tombstones() {
     // Deletions leave DELETED metadata; survivors must still all be
     // found exactly once (tombstone-reuse displacement is the tricky
     // path for the run-termination bound).
-    let mut m: KevyMap<u64, u64> = KevyMap::with_capacity(4_096);
-    for i in 0..4_000u64 {
+    let mut m: KevyMap<u64, u64> = KevyMap::with_capacity(scaled(4_096));
+    for i in 0..scaled(4_000) as u64 {
         m.insert(i, i);
     }
-    for i in (0..4_000u64).step_by(3) {
+    for i in (0..scaled(4_000) as u64).step_by(3) {
         m.remove(&i);
     }
     // Re-insert a few so tombstone reuse actually happens.
-    for i in (0..600u64).step_by(3) {
+    for i in (0..scaled(600) as u64).step_by(3) {
         m.insert(i, i + 1);
     }
-    let want: Vec<u64> = (0..4_000u64).filter(|i| i % 3 != 0 || *i < 600).collect();
+    let want: Vec<u64> =
+        (0..scaled(4_000) as u64).filter(|i| i % 3 != 0 || *i < scaled(600) as u64).collect();
     let seen = full_sweep(&m);
     assert_eq!(seen.len(), want.len());
     for k in &want {
@@ -83,7 +85,7 @@ fn grow_mid_sweep_never_skips_an_original_key() {
     // 8k more (forcing at least two capacity doublings), finish the
     // sweep — every original key must have been seen.
     let mut m: KevyMap<u64, u64> = KevyMap::new();
-    for i in 0..2_000u64 {
+    for i in 0..scaled(2_000) as u64 {
         m.insert(i, i);
     }
     let cap_small = m.capacity();
@@ -97,7 +99,7 @@ fn grow_mid_sweep_never_skips_an_original_key() {
         assert_ne!(cursor, 0, "sweep finished before the grow could happen");
     }
 
-    for i in 2_000..10_000u64 {
+    for i in scaled(2_000) as u64..scaled(10_000) as u64 {
         m.insert(i, i);
     }
     assert!(m.capacity() >= cap_small * 4, "test needs ≥2 doublings");
@@ -111,7 +113,7 @@ fn grow_mid_sweep_never_skips_an_original_key() {
         assert!(steps <= m.capacity(), "sweep did not terminate");
     }
 
-    for i in 0..2_000u64 {
+    for i in 0..scaled(2_000) as u64 {
         assert!(seen.contains_key(&i), "original key {i} skipped across the grow");
     }
 }

@@ -360,6 +360,29 @@ jobs:
       - name: version alignment (seven layers agree with the workspace)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: python3 tools/check_version_alignment.py
+      # Same failure shape, other direction: a bench table names an
+      # opponent, and the name has to be a version that is actually
+      # written down. This half proves the tree agrees with the anchors
+      # file; the daily competitor-anchors workflow asks the upstreams
+      # whether the anchors file is still current.
+      - name: competitor anchors (every pinned version agrees)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        # --offline exits 2 for "I skipped the upstream question", which is
+        # neither a pass nor a failure. This step accepts that verdict on
+        # purpose: it is the tree-side half, and competitor-anchors.yml asks
+        # the upstreams daily. Any other non-zero is a real disagreement.
+        run: |
+          python3 tools/check_competitor_anchors.py --offline || rc=$?
+          if [ "${rc:-0}" -ne 0 ] && [ "${rc:-0}" -ne 2 ]; then exit "$rc"; fi
+      # The other half of the same shape: what the site says we implement
+      # against what the engine answers. It said 188 for long enough that
+      # nobody knows when it drifted; COMMAND COUNT was 205 the whole time.
+      - name: the published command count is the engine's
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: python3 tools/check_capability_claim.py
+      - name: every Redis command is implemented, exempt, or owned
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: python3 tools/check_command_coverage.py
       # Nine of twenty-three fuzz targets existed and never ran. A target
       # in the tree and not in the matrix shows coverage that is not there,
       # which is worse than never having written it.
@@ -865,7 +888,7 @@ jobs:
 
   # ───────────── command parity (correctness gate) ─────────────
   compat-differential:
-    name: compat3 differential (kevy == valkey 9.1, byte-for-byte)
+    name: compat3 differential (kevy == valkey, byte-for-byte)
     runs-on: ubuntu-latest
     timeout-minutes: 25
     # Blocking, unlike the perf smoke above: a divergence is a deterministic
@@ -874,7 +897,7 @@ jobs:
     # diverges from valkey on any check.
     steps:
       - uses: actions/checkout@v7
-      - name: 3-way differential vs valkey 9.1 + redis 7.4
+      - name: 3-way differential vs the pinned valkey and redis
         run: bash bench/compat3.sh
 
   # ── clientgate — bring your redis client, gated ──────────────────────────

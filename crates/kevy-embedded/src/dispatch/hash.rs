@@ -88,6 +88,44 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
                 err(out, ERR_NOT_FLOAT);
             }
         }
+        b"HRANDFIELD" => {
+            // The embedded facade answers the same verbs as the server, and
+            // the two are cross-checked: adding this to ESTORE_OPS without an
+            // arm here failed `estore_ops_is_subset_of_dispatch_verbs`.
+            if argv.len() < 2 || argv.len() > 4 {
+                wrong_args(out, "hrandfield");
+            } else if argv.len() == 2 {
+                match s.hrandfield(&argv[1], 1, false) {
+                    Ok(v) if v.is_empty() => out.extend_from_slice(b"$-1\r\n"),
+                    Ok(v) => bulk(out, &v[0].0),
+                    Err(e) => kevy_err(out, &e),
+                }
+            } else {
+                match arg_i64(&argv[2]) {
+                    None => err(out, ERR_NOT_INT),
+                    Some(count) => {
+                        let with_values = argv.len() == 4;
+                        if with_values && !argv[3].eq_ignore_ascii_case(b"WITHVALUES") {
+                            err(out, "ERR syntax error");
+                        } else {
+                            match s.hrandfield(&argv[1], count, with_values) {
+                                Err(e) => kevy_err(out, &e),
+                                Ok(items) => {
+                                    let n = if with_values { items.len() * 2 } else { items.len() };
+                                    out.extend_from_slice(format!("*{n}\r\n").as_bytes());
+                                    for (f, v) in &items {
+                                        bulk(out, f);
+                                        if with_values {
+                                            bulk(out, v);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         b"HKEYS" => {
             if argv.len() == 2 {
                 emit_bulk_array(out, s.hkeys(&argv[1]));

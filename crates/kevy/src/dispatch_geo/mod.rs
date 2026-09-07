@@ -206,6 +206,13 @@ fn cmd_geopos<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u
         return wrong_args(out, "geopos");
     }
     let n = args.len() - 2;
+    // Resolve the type BEFORE the array header goes out. This used to write
+    // `*1\r\n` and then an error into the same reply, so a WRONGTYPE arrived
+    // as the array's first element — real Redis answers WRONGTYPE and nothing
+    // else. Found by a RESP3 error-path test; the V2 path had it too.
+    if let Err(e) = store.zscore(&args[1], &args[2]) {
+        return store_err(out, e);
+    }
     encode_array_len(out, n as i64);
     for i in 0..n {
         match store.zscore(&args[1], &args[i + 2]) {

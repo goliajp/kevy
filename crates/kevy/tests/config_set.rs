@@ -259,3 +259,54 @@ fn config_rewrite_without_source_path_returns_error() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `CONFIG SET notify-keyspace-events` is the first thing several real
+/// clients send.
+///
+/// The engine supported keyspace notifications from the config file the whole
+/// time and had no wire path to them: `notify` appeared nowhere in
+/// `ops/config.rs`, so the parameter was neither gettable nor settable.
+/// Spring Data Redis's key-expiry listener, the socket.io redis adapter and
+/// several job queues send `CONFIG SET notify-keyspace-events Ex` on a new
+/// connection and then read it back to confirm — so they met "unknown
+/// parameter" in the first second, on a feature that worked.
+#[test]
+fn notify_keyspace_events_is_gettable_and_settable() {
+    let dir = std::env::temp_dir().join(format!(
+        "kevy-cfgnotify-{}",
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let port = free_port();
+
+    with_runtime(port, &dir, 1, Config::default(), |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        let mut ask = |argv: &[&[u8]]| {
+            c.write_all(&req(argv)).unwrap();
+            let mut buf = [0u8; 512];
+            let n = c.read(&mut buf).unwrap();
+            String::from_utf8_lossy(&buf[..n]).to_string()
+        };
+
+        // Present before it is ever set: a client that reads first must not
+        // conclude the parameter does not exist.
+        let got = ask(&[b"CONFIG", b"GET", b"notify-keyspace-events"]);
+        assert!(got.contains("notify-keyspace-events"), "not gettable: {got:?}");
+
+        assert!(
+            ask(&[b"CONFIG", b"SET", b"notify-keyspace-events", b"Ex"]).starts_with("+OK"),
+            "the expiry-listener flags must be settable"
+        );
+
+        // Read back what was written — Spring Data confirms the flags took.
+        let back = ask(&[b"CONFIG", b"GET", b"notify-keyspace-events"]);
+        assert!(back.contains("Ex"), "the set value did not read back: {back:?}");
+
+        // A bad flag is refused by name, not silently kept.
+        let bad = ask(&[b"CONFIG", b"SET", b"notify-keyspace-events", b"ZZZ"]);
+        assert!(bad.starts_with("-ERR"), "bad flags must be refused: {bad:?}");
+        assert!(bad.contains('Z'), "the refusal must name the character: {bad:?}");
+    });
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

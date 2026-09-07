@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 3-way differential compatibility: run the SAME command sequence against
-# valkey 9.1, redis 7.4, and kevy (all in Docker, driven by the neutral
+# valkey 9.1.2, redis 8.10.1, and kevy (all in Docker, driven by the neutral
 # valkey-cli) and diff the replies. valkey & redis are the reference (a Redis
 # fork + the original); kevy is the subject. All start empty, so an identical
 # sequence must yield identical replies.
@@ -10,16 +10,50 @@
 set -uo pipefail
 cd "$(dirname "$0")"
 
-echo "### bringing up valkey 9.1 + redis 7.4 + kevy ..."
+. ./anchor-lib.sh || { echo "compat3: cannot load anchor-lib.sh" >&2; exit 2; }
+command -v anchor_pin >/dev/null || { echo "compat3: anchor-lib.sh loaded but anchor_pin is missing" >&2; exit 2; }
+echo "### bringing up valkey $(anchor_pin valkey) + redis $(anchor_pin redis) + kevy ..."
+# Pull before up. `compose up` is happy with a cached layer under the pinned
+# tag, which is the exact scenario COMPETITOR-ANCHORS.json was opened about:
+# the box serves what it cached weeks ago while the registry serves the pin.
+# The assertion below then catches it — correctly, and after a five-minute
+# build. Pulling first makes the common case pass instead of failing loudly.
+docker compose pull -q valkey redis loadgen >/dev/null 2>&1
 docker compose up -d --build valkey redis kevy loadgen >/dev/null 2>&1
 for h in valkey redis kevy; do
   for _ in $(seq 1 60); do
-    docker compose exec -T loadgen valkey-cli -h "$h" -p 6379 ping 2>/dev/null | grep -q PONG && break
+    docker compose exec -T loadgen valkey-cli --no-raw -h "$h" -p 6379 ping 2>/dev/null | grep -q PONG && break
     sleep 0.3
   done
 done
 
-run() { docker compose exec -T loadgen valkey-cli -h "$1" -p 6379 "${@:2}" 2>&1; }
+# --no-raw, and it changes what this file proves. Piped, valkey-cli renders in
+# raw mode: `:1` and `+1` and `$1\r\n1` all print as `1`. So 212/212 meant "the
+# competitor's renderer produced the same text", not "the wire is the same" —
+# and the bit it folded away is exactly the one a type-dispatching client
+# library reads. --no-raw prints `(integer) 1` against `"1"`.
+# What answered, not what the compose file asked for.
+# valkey reports the Redis version it EMULATES in `redis_version` (7.2.4 on
+# valkey 9.1.2) and its own in `valkey_version`. Asking the wrong field made
+# a correctly-pinned container look like a stale one — the witness was right
+# to fire and wrong about what it saw. Prefer the server's own field.
+engine_reported() {
+    # Two expressions in one sed do NOT reorder the input: redis_version comes
+    # first in INFO's output, so `head -1` took the emulated version anyway and
+    # the fix read exactly like the bug. Ask for the server's own field, and
+    # only fall back when there is none.
+    local info
+    info=$(docker compose exec -T loadgen valkey-cli --no-raw -h "$1" -p 6379 INFO server 2>/dev/null | tr -d '\r')
+    local own
+    own=$(printf '%s\n' "$info" | sed -n 's/^valkey_version:\(.*\)$/\1/p' | head -1)
+    if [ -n "$own" ]; then
+        printf '%s' "$own"
+    else
+        printf '%s\n' "$info" | sed -n 's/^redis_version:\(.*\)$/\1/p' | head -1
+    fi
+}
+
+run() { docker compose exec -T loadgen valkey-cli --no-raw -h "$1" -p 6379 "${@:2}" 2>&1; }
 strip_idx() { sed -E 's/^[0-9]+\) //'; }
 
 kv_p=0; kv_f=0   # kevy  vs valkey
@@ -44,6 +78,11 @@ check_impl() {
 }
 check() { check_impl x "$@"; }
 checku() { check_impl u "$@"; }
+
+for pair in "valkey:$(anchor_pin valkey)" "redis:$(anchor_pin redis)"; do
+    host=${pair%%:*}; want=${pair#*:}
+    anchor_require "$host (container)" "$want" "$(engine_reported "$host")"
+done
 
 echo "### running 3-way compatibility checks ..."
 # strings

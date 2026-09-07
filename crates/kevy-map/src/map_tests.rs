@@ -58,11 +58,12 @@ fn tombstone_reused_on_reinsert() {
 #[test]
 fn grow_preserves_all_entries_10k() {
     let mut m = KevyMap::<u64, u64>::new();
-    for i in 0..10_000u64 {
+    let n = crate::scaled(10_000) as u64;
+    for i in 0..n {
         m.insert(i, i.wrapping_mul(7));
     }
-    assert_eq!(m.len(), 10_000);
-    for i in 0..10_000u64 {
+    assert_eq!(m.len(), n as usize);
+    for i in 0..n {
         assert_eq!(m.get(&i), Some(&i.wrapping_mul(7)));
     }
 }
@@ -133,20 +134,22 @@ fn drop_runs_for_remaining_entries() {
 #[test]
 fn grow_then_remove_then_grow_again_stays_consistent() {
     let mut m = KevyMap::<u64, u64>::new();
-    for i in 0..2000u64 {
+    let (half, full, twice) =
+        (crate::scaled(1_000) as u64, crate::scaled(2_000) as u64, crate::scaled(4_000) as u64);
+    for i in 0..full {
         m.insert(i, i);
     }
-    for i in 0..1000u64 {
+    for i in 0..half {
         assert_eq!(m.remove(&i), Some(i));
     }
-    for i in 2000..4000u64 {
+    for i in full..twice {
         m.insert(i, i);
     }
-    assert_eq!(m.len(), 3000);
-    for i in 1000..4000u64 {
+    assert_eq!(m.len(), (twice - half) as usize);
+    for i in half..twice {
         assert_eq!(m.get(&i), Some(&i));
     }
-    for i in 0..1000u64 {
+    for i in 0..half {
         assert_eq!(m.get(&i), None);
     }
 }
@@ -203,7 +206,7 @@ fn many_collisions_via_long_byte_keys() {
     // is uniform — exercises real-world probe chains rather than a
     // degenerate collision storm).
     let mut m = KevyMap::<Vec<u8>, u64>::new();
-    let n = 5_000u64;
+    let n = crate::scaled(5_000) as u64;
     for i in 0..n {
         let k = format!("session:{i:08}:user").into_bytes();
         m.insert(k, i);
@@ -421,12 +424,13 @@ fn set_extend() {
 #[test]
 fn clone_preserves_entries_and_independence() {
     let mut m: KevyMap<Vec<u8>, u64> = KevyMap::new();
-    for i in 0..1000u64 {
+    let n = crate::scaled(1_000) as u64;
+    for i in 0..n {
         m.insert(format!("k{i}").into_bytes(), i);
     }
     let c = m.clone();
-    assert_eq!(c.len(), 1000);
-    for i in 0..1000u64 {
+    assert_eq!(c.len(), n as usize);
+    for i in 0..n {
         assert_eq!(c.get(format!("k{i}").as_bytes()), Some(&i));
     }
     // Independence both ways.
@@ -441,15 +445,15 @@ fn clone_preserves_entries_and_independence() {
 #[test]
 fn clone_after_heavy_deletion_keeps_probes_correct() {
     let mut m: KevyMap<Vec<u8>, u64> = KevyMap::new();
-    for i in 0..4096u64 {
+    for i in 0..crate::scaled(4096) as u64 {
         m.insert(format!("key-{i}").into_bytes(), i);
     }
-    for i in (0..4096u64).step_by(2) {
+    for i in (0..crate::scaled(4096) as u64).step_by(2) {
         assert!(m.remove(format!("key-{i}").as_bytes()).is_some());
     }
     let c = m.clone();
     assert_eq!(c.len(), m.len());
-    for i in 0..4096u64 {
+    for i in 0..crate::scaled(4096) as u64 {
         let want = (i % 2 == 1).then_some(i);
         assert_eq!(c.get(format!("key-{i}").as_bytes()).copied(), want, "key-{i}");
     }

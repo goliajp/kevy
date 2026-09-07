@@ -7,7 +7,19 @@ use crate::value::{SmallBytes, Value};
 use crate::{Store, StoreError};
 
 /// `(field, value)` pairs collected off any hash encoding.
-pub(crate) type FieldValuePairs = Vec<(Vec<u8>, Vec<u8>)>;
+/// Owned `(field, value)` pairs, as the hash readers hand them back.
+///
+/// ```
+/// use kevy_store::{FieldValuePairs, Store};
+///
+/// let mut s = Store::new();
+/// s.hset(b"h", &[(b"f".as_slice(), b"v".as_slice())]).unwrap();
+///
+/// // Both halves are owned, so the pairs outlive the borrow of the store.
+/// let pairs: FieldValuePairs = s.hrandfield(b"h", 1, true).unwrap();
+/// assert_eq!(pairs, vec![(b"f".to_vec(), b"v".to_vec())]);
+/// ```
+pub type FieldValuePairs = Vec<(Vec<u8>, Vec<u8>)>;
 
 impl Store {
     /// Read the key's hash immutably (lazily expiring) — returns the
@@ -125,6 +137,81 @@ impl Store {
                 Ok(out)
             }
         }
+    }
+
+    /// `HRANDFIELD` — `count` distinct fields, or `count.abs()` fields with
+    /// repeats allowed when `count` is negative, which is Redis's way of
+    /// asking for a sample rather than a subset.
+    ///
+    /// Built on `hash_pairs` so it covers all four storage forms at once
+    /// (Hash / SegHash / SmallHashInline / PackedRow) rather than growing a
+    /// fourth near-copy of the same match. `with_values` decides whether the
+    /// value rides along; the RESP3 reply nests the pairs and RESP2 flattens
+    /// them, which is the caller's business, not this one's.
+    /// ```
+    /// use kevy_store::Store;
+    ///
+    /// let mut s = Store::new();
+    /// s.hset(b"h", &[(b"f1".as_slice(), b"v1".as_slice()),
+    ///                (b"f2".as_slice(), b"v2".as_slice())]).unwrap();
+    ///
+    /// // A positive count is distinct, and capped at what the hash holds.
+    /// assert_eq!(s.hrandfield(b"h", 9, false).unwrap().len(), 2);
+    ///
+    /// // A negative count returns exactly |count|, repeats allowed — the
+    /// // distinction Redis draws between a subset and a sample.
+    /// assert_eq!(s.hrandfield(b"h", -5, false).unwrap().len(), 5);
+    ///
+    /// // `with_values` fills the second half of each pair; without it the
+    /// // value is empty and only the field name means anything.
+    /// let pairs = s.hrandfield(b"h", 2, true).unwrap();
+    /// assert!(pairs.iter().all(|(f, v)| !f.is_empty() && !v.is_empty()));
+    ///
+    /// // A missing key is empty, not an error.
+    /// assert!(s.hrandfield(b"absent", 3, false).unwrap().is_empty());
+    /// ```
+    pub fn hrandfield(
+        &mut self,
+        key: &[u8],
+        count: i64,
+        with_values: bool,
+    ) -> Result<FieldValuePairs, StoreError> {
+        self.purge_hash_ttl(key);
+        let Some(pairs) = self.hash_pairs(key)? else {
+            return Ok(Vec::new());
+        };
+        if pairs.is_empty() || count == 0 {
+            return Ok(Vec::new());
+        }
+        let n = pairs.len();
+        let mut out: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+
+        if count < 0 {
+            // Repeats allowed: draw independently, so the result may name the
+            // same field twice and is as long as asked for.
+            let want = count.unsigned_abs() as usize;
+            out.reserve(want.min(1 << 20));
+            for _ in 0..want.min(1 << 20) {
+                let i = (self.rng.next_u64() % n as u64) as usize;
+                let (f, v) = &pairs[i];
+                out.push((f.clone(), if with_values { v.clone() } else { Vec::new() }));
+            }
+            return Ok(out);
+        }
+
+        let want = (count as usize).min(n);
+        let mut idx: Vec<usize> = (0..n).collect();
+        // Partial Fisher-Yates: only the prefix we return needs to be shuffled.
+        for i in 0..want {
+            let j = i + (self.rng.next_u64() % (n - i) as u64) as usize;
+            idx.swap(i, j);
+        }
+        out.reserve(want);
+        for &i in &idx[..want] {
+            let (f, v) = &pairs[i];
+            out.push((f.clone(), if with_values { v.clone() } else { Vec::new() }));
+        }
+        Ok(out)
     }
 
     /// Every field name, copied out. Unordered: a hash has no field

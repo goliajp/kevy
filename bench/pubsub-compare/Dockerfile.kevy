@@ -2,7 +2,7 @@
 # in-tree bench/pubsub_loopback.sh kevy port).
 #
 # `docker compose --profile kevy up -d` brings this up.
-FROM rust:1.95-slim AS build
+FROM rust:1.97-slim-trixie AS build
 WORKDIR /src
 COPY . .
 RUN cargo build --release -p kevy --bin kevy

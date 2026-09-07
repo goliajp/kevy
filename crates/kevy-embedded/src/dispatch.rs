@@ -164,6 +164,7 @@ pub(crate) const DISPATCH_VERBS: &[&str] = &[
     "HGETALL",
     "HINCRBY",
     "HINCRBYFLOAT",
+    "HRANDFIELD",
     "HKEYS",
     "HLEN",
     "HMGET",

@@ -82,12 +82,25 @@ echo "== postgres 18 (stock config) =="
 # root, once:
 #   docker run -d --name kevy-pgcmp -p 127.0.0.1:15499:5432 \
 #     -e POSTGRES_PASSWORD=bench -e POSTGRES_DB=bench \
-#     postgres:18.4-bookworm -c cluster_name=kevypgcmp
+#     postgres:18.6-trixie -c cluster_name=kevypgcmp
 # cluster_name is what lets the harness find this cluster's processes in
 # /proc without docker, and keeps it off the other Postgres instances
 # this box runs.
-"$VENV" -c "import socket,sys; socket.create_connection(('127.0.0.1', $PGPORT), 3).close()" \
+# Which Postgres, not just whether one answers. This container is started
+# by hand and then outlives everything: the one this gate ran against was
+# started in August on 18.4 while the anchors file had moved to 18.6, and
+# nothing would have said so — the port was open, so the check passed.
+# Asking the server its version turns a silently-old opponent into a stop.
+. "$(dirname "$0")/anchor-lib.sh"
+command -v anchor_pin >/dev/null || { echo "$(basename "$0"): anchor-lib.sh did not load" >&2; exit 2; }
+PG_VER=$("$VENV" -c "
+import psycopg
+with psycopg.connect('host=127.0.0.1 port=$PGPORT user=postgres password=bench dbname=bench',
+                     connect_timeout=3) as c:
+    print(c.execute('SHOW server_version').fetchone()[0].split()[0])
+" 2>/dev/null) \
   || refuse "no Postgres on 127.0.0.1:$PGPORT (see the comment above this line)"
+anchor_require "postgres (container on :$PGPORT)" "$(anchor_pin postgres)" "$PG_VER"
 "$VENV" "$PY" pg --csv "$CSV" --cluster "${PGCMP_CLUSTER:-kevypgcmp}" \
   --dsn "host=127.0.0.1 port=$PGPORT user=postgres password=bench dbname=bench" \
   --samples "${PGCMP_SAMPLES:-5000}" | tee -a "$OUT"

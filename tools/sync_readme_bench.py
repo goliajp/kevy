@@ -18,10 +18,24 @@ Run: python3 tools/sync_readme_bench.py [--check]
 
 import pathlib
 import re
+import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 LEDGER = ROOT / "bench/PERF-LEDGER.md"
+ANCHORS = ROOT / "bench/COMPETITOR-ANCHORS.json"
+
+
+def pins():
+    """Which version of each competitor the READMEs are allowed to name.
+
+    These labels used to be spelled out in this file, hardcoded to whatever
+    was current when it was written — a fourth place a competitor version
+    lived, and the one that writes it into three READMEs and the site. bench/COMPETITOR-ANCHORS.json is the
+    only place a competitor version is written down now."""
+    import json
+    return {k: v["pinned"] for k, v in json.loads(
+        ANCHORS.read_text(encoding="utf-8"))["anchors"].items()}
 READMES = ["README.md", "README.zh-CN.md", "README.ja.md"]
 
 
@@ -64,8 +78,8 @@ def latest_arena():
                 f"sync_readme_bench: the newest `arena bare face` entry "
                 f"({date}, kevy {version}) has a row this cannot read:\n"
                 f"  {line.strip()}\n"
-                f"A bare-face entry's table is `| verb | kevy | Redis 8 | "
-                f"valkey | Dragonfly |` and nothing else. An A/B or a "
+                f"A bare-face entry's table is five columns — verb, kevy, "
+                f"redis, valkey, dragonfly — and nothing else. An A/B or a "
                 f"decomposition belongs under a heading that is not "
                 f"`arena bare face — <date> — kevy <version>`, because that "
                 f"heading is what this tool reads to rewrite three READMEs."
@@ -82,6 +96,7 @@ def m(n):
 def build(date, version, rows):
     """The two tables, and the sentence that dates them."""
     get, setv = rows["GET"], rows["SET"]
+    pin = pins()
     head = {
         "README.md": ("Workload", "Ratio"),
         "README.zh-CN.md": ("负载", "倍数"),
@@ -98,7 +113,7 @@ def build(date, version, rows):
         c, d = lead[f]
         out[f] = {
             "vs": (
-                f"| {a} | kevy | valkey 9.1 | {b} |\n"
+                f"| {a} | kevy | valkey {pin['valkey']} | {b} |\n"
                 f"|---|---:|---:|---|\n"
                 f"| `GET -c 50 -P 16` | {m(get['kevy'])} | {m(get['valkey'])} | "
                 f"**{get['kevy'] / get['valkey']:.2f}×** |\n"
@@ -108,9 +123,9 @@ def build(date, version, rows):
             "lead": (
                 f"| {c} | {d} |\n"
                 f"|---|---:|\n"
-                f"| valkey 9.1 | **{get['kevy'] / get['valkey']:.2f}×** |\n"
-                f"| redis 8 | **{get['kevy'] / get['redis8']:.2f}×** |\n"
-                f"| dragonfly | **{get['kevy'] / get['dragonfly']:.2f}×** |"
+                f"| valkey {pin['valkey']} | **{get['kevy'] / get['valkey']:.2f}×** |\n"
+                f"| redis {pin['redis']} | **{get['kevy'] / get['redis8']:.2f}×** |\n"
+                f"| dragonfly {pin['dragonfly']} | **{get['kevy'] / get['dragonfly']:.2f}×** |"
             ),
             "rate": m(get["kevy"]),
         }
@@ -141,7 +156,23 @@ def _m(n):
 def write_site(rows, version, check):
     """rows: {verb: {engine: int}}. Returns a list of complaints."""
     bad = []
+    pin = pins()
     order = ["GET", "SET", "INCR", "SADD", "HSET", "LPUSH", "ZADD"]
+
+    def headings(text):
+        """The four-engine table's heading names each opponent, and a name
+        without a version describes every release that ever bore it: the
+        site said "Redis 8" for a table measured against one particular
+        8.x. Rewritten inside the heading row only, so the prose around it
+        — which argues about margins and needs a human — is left alone."""
+        def one_row(m):
+            row = m.group(0)
+            row = re.sub(r"Redis [0-9][0-9.]*", f"Redis {pin['redis']}", row)
+            row = re.sub(r"valkey [0-9][0-9.]*", f"valkey {pin['valkey']}", row)
+            row = re.sub(r"Dragonfly( [0-9][0-9.]*)?", f"Dragonfly {pin['dragonfly']}", row)
+            return row
+        return re.sub(r'"head": \[[^\]]*\]', one_row, text)
+
     for rel in SITE_CONTENT:
         p = ROOT / rel
         text = p.read_text(encoding="utf-8")
@@ -155,6 +186,7 @@ def write_site(rows, version, check):
             text = re.sub(rf'\["{verb}", "[\d,]+", "[\d,]+", "[\d,]+", "[\d,]+", "[!*][\d.]+×"\]',
                           new.replace("\\", "\\\\"), text)
         text = re.sub(r'"kevy \d+\.\d+\.\d+"', f'"kevy {version}"', text)
+        text = headings(text)
         if text != before:
             if check:
                 bad.append(f"{rel} does not carry the {version} numbers")
@@ -195,6 +227,37 @@ def write_site(rows, version, check):
     return bad
 
 
+def export_site_json(check):
+    """Regenerate web/src/content.json from the site_content sources.
+
+    `write_site` edits `tools/site_content/{en,zh,ja}.py`, but the site
+    BUILDS from `web/src/content.json`, which is generated from them. On
+    2026-09-01 this tool reported "3 READMEs and the site carry the
+    2026-09-01 numbers" while content.json still held the previous run's,
+    and the site was deployed from it — a page headed 6.2.2 quoting 6.2.0
+    figures. Nothing this tool printed was false; it just stopped one step
+    short of the artifact anyone reads, and said "the site" anyway.
+
+    So the export is part of the sync, not a thing to remember afterwards.
+    In --check mode a stale content.json is a stale site, reported here
+    rather than only by the separate content-export gate, because this is
+    the tool a person runs when they want the numbers to be current.
+    """
+    cmd = [sys.executable, str(ROOT / "tools/export_site_content.py")]
+    if check:
+        cmd.append("--check")
+    r = subprocess.run(cmd, capture_output=True, text=True, cwd=ROOT)
+    if r.returncode == 0:
+        return []
+    if check:
+        return ["web/src/content.json (run tools/export_site_content.py)"]
+    sys.exit(
+        "sync_readme_bench: the READMEs and site sources were rewritten, "
+        "but exporting web/src/content.json failed:\n"
+        f"{r.stdout}{r.stderr}"
+    )
+
+
 def main():
     check = "--check" in sys.argv
     date, version, rows = latest_arena()
@@ -233,6 +296,7 @@ def main():
                 p.write_text(s, encoding="utf-8")
 
     stale += write_site(rows, version, check)
+    stale += export_site_json(check)
 
     if check:
         if stale:
@@ -243,7 +307,8 @@ def main():
         print(f"ok: 3 READMEs and the site carry the {date} arena numbers (kevy {version})")
         return
 
-    print(f"wrote the {date} arena numbers (kevy {version}) into 3 READMEs and the site")
+    print(f"wrote the {date} arena numbers (kevy {version}) into 3 READMEs, "
+          "the site sources, and web/src/content.json (what the site builds from)")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,86 @@
 # Changelog
 
+## 6.3.0 — the opponents, pinned; and three gaps they exposed
+
+A week of work on one question: what is kevy actually measured against,
+and how does that stay true? The answer turned into gates, and the gates
+found three defects — two of them user-visible, in features that already
+worked.
+
+### CONFIG SET notify-keyspace-events
+
+Keyspace notifications have worked from the config file since they were
+added: the flags parse, the events fire. There was no wire path to them.
+`notify` appeared nowhere in the RESP config surface, because the TOML
+spells it with underscores and nothing bridged the two — so the parameter
+was neither gettable nor settable over a connection.
+
+Spring Data Redis's key-expiry listener, the socket.io Redis adapter and
+several job queues send `CONFIG SET notify-keyspace-events Ex` as the
+first thing they do on a new connection, and read it back to confirm.
+Every one of them met "unknown parameter" in the first second, on a
+feature this engine has. Both directions are wired now, reusing the
+existing flag parser so a bad character is refused by name.
+
+### RESP3 reply shapes, and a gate that knows which ones matter
+
+The site says "RESP2 and RESP3 — your client library will not notice", in
+three languages. The override table held nine verbs, the differential
+harness contained zero RESP3 cases, and all six conformance clients
+connected on the default protocol. So the claim had no judge, and the bit
+at stake is a reply's *type* — exactly what a type-decoding client reads
+(redis-py `protocol=3`, node-redis v5+).
+
+`bench/resp3gate.sh` asks the pinned Redis which verbs change shape under
+`HELLO 3` rather than trusting a hand-written list, and requires kevy to
+move where Redis moves. It found five: `ZPOPMIN`, `ZADD … INCR` and
+`GEOPOS` were sending bulk strings where RESP3 specifies doubles,
+`SPOP key count` an array where RESP3 specifies a set, and
+`HRANDFIELD … WITHVALUES` a flat list where RESP3 nests the pairs. All
+five now agree with Redis 8.10.1; the gate reports 11 shape-changing
+verbs and 0 disagreements.
+
+### HRANDFIELD
+
+The fifth of those was not a shape problem — the command did not exist.
+`HRANDFIELD key [count [WITHVALUES]]` is implemented across all four hash
+storage forms: a positive count returns distinct fields capped at the
+hash size, a negative count returns exactly `|count|` with repeats
+allowed, and `WITHVALUES` pairs each field with its value — flat in
+RESP2, nested in RESP3.
+
+### What the engine is measured against, and how it stays true
+
+Benchmark opponents were named by floating tag. `bench/arena.sh` asked
+Docker for the Redis image by bare major; the bench box served a layer
+cached weeks earlier while the registry served a newer one, and the
+published table recorded neither. The same shape ran through the rest of
+the surface: the differential ran against Redis 7.4 while calling itself
+current, the box's source-built competitors had drifted, and the
+Postgres container had been on an older patch since August behind a
+readiness check that only opened a socket.
+
+Ten anchors are now pinned to an exact version in one file, and each is
+checked against its own upstream's latest stable: redis 8.10.1, valkey
+9.1.2, dragonfly 1.40.2, postgres 18.6, the four client libraries the
+conformance suite uses — two of which had been frozen since 2024 and two
+of which had no version at all — and the Rust image, which tracks the
+MSRV so that building the release container proves it.
+
+Every benchmark now asks each engine what version it is and refuses to
+produce numbers on a mismatch. The arena table headings carry the exact
+version, and the READMEs and site derive their labels from the same file.
+
+### Coverage, stated rather than assumed
+
+kevy answers 206 verbs; Redis 8.10.1 serves 599. That difference was not
+written down anywhere. It is now: 256 exempt with a reason each, 81
+owned by an RFC that must exist, and zero unclassified — with a ratchet,
+so the number can only go down. Two RFCs were written to own them, and
+the site's command reference is derived from the engine's own
+`COMMAND DOCS` rather than hand-maintained under a header claiming it
+was generated.
+
 ## 6.2.2 — one directory, one engine
 
 A downstream integration suite let several tests open one persist

@@ -84,32 +84,32 @@ KPID=$!
 run_two 7001 "kevy-uring"
 kill "$KPID" 2>/dev/null; wait "$KPID" 2>/dev/null
 
-# ---- valkey 9.1 default (single exec thread) ----
-echo "=== valkey 9.1 (default) ==="
+# ---- valkey 9.1.2 default (single exec thread) ----
+echo "=== valkey 9.1.2 (default) ==="
 docker run -d --rm --name bench_v --network host --cpuset-cpus "$SRV_CORES" \
-  valkey/valkey:9.1 valkey-server --port 7002 --save '' --appendonly no >/dev/null 2>&1
+  valkey/valkey:9.1.2 valkey-server --port 7002 --save '' --appendonly no >/dev/null 2>&1
 run_two 7002 "valkey-def"
 docker rm -f bench_v >/dev/null 2>&1
 
-# ---- valkey 9.1 io-threads ----
-echo "=== valkey 9.1 (io-threads=$KEVY_THREADS) ==="
+# ---- valkey 9.1.2 io-threads ----
+echo "=== valkey 9.1.2 (io-threads=$KEVY_THREADS) ==="
 docker run -d --rm --name bench_v --network host --cpuset-cpus "$SRV_CORES" \
-  valkey/valkey:9.1 valkey-server --port 7002 --save '' --appendonly no \
+  valkey/valkey:9.1.2 valkey-server --port 7002 --save '' --appendonly no \
   --io-threads "$KEVY_THREADS" >/dev/null 2>&1
 run_two 7002 "valkey-iot"
 docker rm -f bench_v >/dev/null 2>&1
 
-# ---- redis 7.4 default ----
-echo "=== redis 7.4 (default) ==="
+# ---- redis 8.10.1 default ----
+echo "=== redis 8.10.1 (default) ==="
 docker run -d --rm --name bench_r --network host --cpuset-cpus "$SRV_CORES" \
-  redis:7.4 redis-server --port 7003 --save '' --appendonly no >/dev/null 2>&1
+  redis:8.10.1 redis-server --port 7003 --save '' --appendonly no >/dev/null 2>&1
 run_two 7003 "redis-def"
 docker rm -f bench_r >/dev/null 2>&1
 
-# ---- redis 7.4 io-threads ----
-echo "=== redis 7.4 (io-threads=$KEVY_THREADS) ==="
+# ---- redis 8.10.1 io-threads ----
+echo "=== redis 8.10.1 (io-threads=$KEVY_THREADS) ==="
 docker run -d --rm --name bench_r --network host --cpuset-cpus "$SRV_CORES" \
-  redis:7.4 redis-server --port 7003 --save '' --appendonly no \
+  redis:8.10.1 redis-server --port 7003 --save '' --appendonly no \
   --io-threads "$KEVY_THREADS" >/dev/null 2>&1
 run_two 7003 "redis-iot"
 docker rm -f bench_r >/dev/null 2>&1

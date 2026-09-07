@@ -40,3 +40,27 @@ pub use kevy_hash::KevyHash;
 pub use map::KevyMap;
 pub use raw_entry::{RawEntryMut, RawOccupiedEntryMut, RawVacantEntryMut};
 pub use set::{KevySet, SetIter};
+
+/// Loop counts for the heavy unit tests, scaled down under miri.
+///
+/// miri interprets every memory access. Five tests in this crate — the
+/// scan sweeps and the two large probe-chain tests — were 339 of the miri
+/// job's 389 seconds, and that job alone is the CI wall clock: 10.5 of
+/// 10.5 minutes, with 57 other jobs finishing inside its shadow.
+///
+/// What miri checks here is undefined behaviour in the probe, grow,
+/// tombstone and clone paths. Those are entered the same way at 1,000
+/// keys as at 10,000; the count buys coverage of the *logic*, and the
+/// native `cargo test` run still does that at full size. Each test keeps
+/// its structural assertion — two capacity doublings, no unexpected
+/// grow, every key visited exactly once — so a count too small to force
+/// the path it needs FAILS the test rather than quietly passing on less.
+#[cfg(test)]
+pub(crate) const fn scaled(full: usize) -> usize {
+    if cfg!(miri) {
+        let n = full / 10;
+        if n < 64 { 64 } else { n }
+    } else {
+        full
+    }
+}

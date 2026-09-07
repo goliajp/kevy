@@ -14,7 +14,7 @@
 # itself. That material lives in the repository, for the people who go looking.
 #
 # What DOES belong, because it changes what a reader decides: where we are only
-# barely ahead (LPUSH: 12%), what we refuse to do (no cluster, no AUTH, no TLS),
+# barely ahead (LPUSH: 10%), what we refuse to do (no cluster, no AUTH, no TLS),
 # and which commands do not behave the way Redis's docs say.
 #
 # Numbers: bench/PERF-LEDGER.md. Sizes: ls -l site/demo/pkg/kevy.wasm.
@@ -192,7 +192,7 @@ let mut store = Store::new_in(&mut arena);""",
             "eyebrow": "Why you can replace Redis",
             "h2": "Same protocol. More throughput.",
             "intro": (
-                "RESP2 and RESP3, 188 commands — redis-cli and your client library "
+                "RESP2 and RESP3, 206 commands — redis-cli and your client library "
                 "connect unchanged. One machine, 16 cores, loopback, median of five."
             ),
             "rows": [
@@ -204,11 +204,11 @@ let mut store = Store::new_in(&mut arena);""",
                 ["LPUSH", 3213470, 2862374, "1.12×", True],
                 ["ZADD", 3053101, 2773929, "1.10×", True],
             ],
-            "us": "kevy 6.2.0",
-            "them": "Redis 8",
+            "us": "kevy 6.3.0",
+            "them": "Redis 8.10.1",
             "thin": "under 15% — your workload decides, not the engine",
             "note": (
-                "<b>LPUSH and ZADD are only 12% and 10% ahead.</b> If lists or sorted "
+                "<b>LPUSH and ZADD are only 10% and 15% ahead.</b> If lists or sorted "
                 "sets are your hot path, speed is not the reason to switch. "
                 "<a href=\"~/benchmarks/\">Full table, against valkey and Dragonfly "
                 "too.</a> Migration is three commands — "
@@ -290,7 +290,7 @@ PAGES["migrate"] = {
             "h2": "Coming from Redis",
             "body": [
                 "<b>Your client does not change.</b> kevy speaks RESP2 and RESP3 and "
-                "answers 188 commands. Point your existing library at it, keep your "
+                "answers 206 commands. Point your existing library at it, keep your "
                 "code, keep your redis-cli. There is no SDK to adopt and no new "
                 "protocol to learn.",
                 "<b>So the only real question is what you gain.</b> Four things, and "
@@ -323,7 +323,7 @@ PAGES["migrate"] = {
                 },
                 {
                     "title": "It is faster on the operations you already run",
-                    "body": "1.4× on GET, 2.7× on SET, 1.8× on INCR against Redis 8 on the same machine. Read the whole table before you count on it, though — LPUSH and ZADD are only 12% and 10% ahead, and if lists or sorted sets are your hot path this is not the reason to move.",
+                    "body": "1.33× on GET, 2.66× on SET, 2.05× on INCR against Redis 8.10.1 on the same machine. Read the whole table before you count on it, though — LPUSH and ZADD are only 10% and 15% ahead, and if lists or sorted sets are your hot path this is not the reason to move.",
                 },
                 {
                     "title": "Your dataset no longer has to fit in RAM",
@@ -513,7 +513,7 @@ PAGES["choose"] = {
             "items": [
                 {
                     "q": "Is it really a drop-in replacement for Redis?",
-                    "a": "On the wire, yes — RESP2 and RESP3, 188 commands, and your client library will not notice. In behaviour, mostly, and the exceptions are the point. A cross-shard <code>RENAME</code> is not atomic — multi-key writes are atomic per shard, not globally. And a SCAN cursor is only valid on the server that issued it, the same per-node property Redis Cluster has. <a href=\"~/docs/commands/\">All 188 commands carry their real deviation and their real cost</a>, read out of the implementation rather than copied from Redis's documentation.",
+                    "a": "On the wire, yes — RESP2 and RESP3, 206 commands, and your client library will not notice. In behaviour, mostly, and the exceptions are the point. A cross-shard <code>RENAME</code> is not atomic — multi-key writes are atomic per shard, not globally. And a SCAN cursor is only valid on the server that issued it, the same per-node property Redis Cluster has. <a href=\"~/docs/commands/\">All 206 commands carry their real deviation and their real cost</a>, read out of the implementation rather than copied from Redis's documentation.",
                 },
                 {
                     "q": "Does the dataset have to fit in RAM?",
@@ -719,7 +719,7 @@ HGETALL flags""",
             "items": [
                 {"kicker": "Guide", "title": "The cookbook", "body": "Working recipes for sessions, rate limits, leaderboards and feeds.", "go": "Read it", "href": "docs/cookbook/"},
                 {"kicker": "Guide", "title": "Persistence", "body": "What survives a kill -9, and what the fsync policy costs you.", "go": "Read it", "href": "docs/persistence/"},
-                {"kicker": "Reference", "title": "Every command", "body": "188 commands, each with its real cost and its deviation from Redis.", "go": "Look it up", "href": "docs/commands/"},
+                {"kicker": "Reference", "title": "Every command", "body": "206 commands, each with its real cost and its deviation from Redis.", "go": "Look it up", "href": "docs/commands/"},
             ],
         },
     ],
@@ -1438,7 +1438,7 @@ store.set(b"temp", b"21.4")?;""",
 
 PAGES["benchmarks"] = {
     "title": "Benchmarks — kevy",
-    "desc": "kevy 4.0 against Redis 8, valkey 9.1 and Dragonfly on one machine — including the commands where kevy is barely ahead.",
+    "desc": "kevy 6.2.2 against Redis 8.10.1, valkey 9.1.2 and Dragonfly 1.40.2 on one machine — including the commands where kevy is barely ahead.",
     "foot": "reproducible from bench/ in the repository",
     "blocks": [
         {
@@ -1460,18 +1460,18 @@ PAGES["benchmarks"] = {
                 "server's own command counter over a three-second steady window rather "
                 "than from the benchmark client's reported rate."
             ),
-            "head": ["", "kevy 6.2.0", "Redis 8", "valkey 9.1", "Dragonfly", "vs Redis 8"],
+            "head": ["", "kevy 6.3.0", "Redis 8.10.1", "valkey 9.1.2", "Dragonfly 1.40.2", "vs Redis 8.10.1"],
             "rows": [
-                ["GET", "6,990,156", "5,653,255", "3,282,765", "2,800,320", "*1.24×"],
-                ["SET", "6,847,720", "2,463,354", "1,689,824", "1,895,074", "*2.78×"],
-                ["INCR", "6,724,179", "3,309,109", "2,268,391", "1,986,973", "*2.03×"],
-                ["SADD", "5,778,726", "3,712,338", "2,214,684", "1,751,237", "*1.56×"],
-                ["HSET", "4,419,255", "3,019,669", "1,868,938", "1,751,321", "*1.46×"],
-                ["LPUSH", "3,090,840", "2,837,496", "1,867,068", "1,435,069", "!1.09×"],
-                ["ZADD", "3,355,835", "2,814,574", "1,805,751", "1,712,136", "!1.19×"],
+                ["GET", "7,489,119", "5,631,398", "2,980,764", "2,845,704", "*1.33×"],
+                ["SET", "6,824,662", "2,567,607", "1,683,227", "1,943,358", "*2.66×"],
+                ["INCR", "6,753,558", "3,294,927", "2,279,738", "1,953,406", "*2.05×"],
+                ["SADD", "6,152,617", "3,753,131", "2,214,659", "1,899,967", "*1.64×"],
+                ["HSET", "4,002,580", "2,966,288", "1,857,532", "1,773,498", "*1.35×"],
+                ["LPUSH", "3,142,699", "2,860,306", "1,859,265", "1,505,141", "!1.10×"],
+                ["ZADD", "3,242,967", "2,818,626", "1,786,230", "1,794,335", "!1.15×"],
             ],
             "note": (
-                "<b>LPUSH is 12% ahead of Redis 8, and ZADD 10%.</b> At that margin "
+                "<b>LPUSH is 10% ahead of Redis 8.10.1, and ZADD 15%.</b> At that margin "
                 "your value sizes and key distribution decide the winner, not the "
                 "engine — so if lists or sorted sets are your hot path, benchmark your "
                 "own workload and do not switch for speed. The rows are coloured that "

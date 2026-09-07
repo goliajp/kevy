@@ -13,6 +13,15 @@ KBIN=${KBIN:-/root/kevy/target/release/kevy}
 REDIS_BIN=/root/srcbench/redis/src/redis-server
 VALKEY_BIN=/root/srcbench/valkey/src/valkey-server
 REDIS_BENCH=/root/srcbench/redis/src/redis-benchmark
+
+# The source-built competitors this probe measures against must be the
+# versions on record; a probe that quietly runs an older redis produces a
+# number nobody can place. See bench/anchor-lib.sh.
+. "$(dirname "$0")/anchor-lib.sh"
+command -v anchor_pin >/dev/null || { echo "$(basename "$0"): anchor-lib.sh did not load" >&2; exit 2; }
+anchor_require "redis (source build)" "$(anchor_pin redis)" "$(anchor_bin_ver "$REDIS_BIN")"
+anchor_require "valkey (source build)" "$(anchor_pin valkey)" "$(anchor_bin_ver "$VALKEY_BIN")"
+
 PORT=7001
 N=${N:-1000000}
 RUNS=${RUNS:-3}
