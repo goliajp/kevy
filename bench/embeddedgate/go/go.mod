@@ -9,7 +9,7 @@ go 1.25.0
 
 require (
 	github.com/dgraph-io/badger/v4 v4.9.4
-	github.com/goliajp/kevy-go/v6 v5.0.0
+	github.com/goliajp/kevy-go/v6 v6.3.0
 	go.etcd.io/bbolt v1.5.0
 )
 
