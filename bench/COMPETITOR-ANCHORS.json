@@ -216,5 +216,6 @@
     "bench/v125-*": "one-off exploration probes from the v1.25 arc. They record what was run in June 2026 against the engines of June 2026; editing them would falsify a record, and re-running them is not a thing anyone does.",
     "*.md": "written history. bench/PERF-LEDGER.md and bench/REPORT.md say which version each measurement was against, at the time; a raised anchor makes an old table old, not wrong.",
     "bench/axis_*.sh": "these name binaries on the box rather than image tags, and assert the pinned version at start-up instead — see anchor_require in each."
-  }
+  },
+  "_sweep_scope": "The sweep reads bench/, tools/, examples/ and .github/ — the surface that RUNS a competitor. Engine source under crates/ is deliberately outside it: two comments there cite a `redis:8` they were compared against once (zset.rs, tests_zadd_same_score.rs), and those are observations from a particular day, the same kind of record as a ledger entry. Making them track the pin would rewrite what was measured. If a crate ever RUNS a competitor image, add crates/ here."
 }
