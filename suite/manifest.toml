@@ -193,6 +193,18 @@ timeout = 180
 requires = []
 proves = "the pinned competitors are each project's current latest stable — asked of the upstreams, not of the tree"
 
+[[check]]
+id = "command-coverage"
+area = "compat"
+tier = "prerelease"
+cmd = "python3 tools/check_command_coverage.py"
+expected = 2
+timeout = 60
+requires = []
+advisory = true
+advisory_reason = "141 commands the pinned Redis serves are neither implemented nor decided about, and sorting them is a product call, not a code fix — the array family (18 verbs, Redis 8.8), the 8.6/8.10 additions, and a long tail of classic verbs this engine never implemented (SORT, BITFIELD, ZDIFF/ZINTER/ZUNION, SMOVE, the BLMOVE/BLMPOP family). Advisory ends when that list is empty: each verb either implemented, exempt with a reason, or owned by an RFC."
+proves = "every command the pinned Redis serves is implemented, exempt by a written decision, or owned by an RFC"
+
 # ── architecture ─────────────────────────────────────────────────────
 
 [[check]]

@@ -14,7 +14,7 @@
 # itself. That material lives in the repository, for the people who go looking.
 #
 # What DOES belong, because it changes what a reader decides: where we are only
-# barely ahead (LPUSH: 12%), what we refuse to do (no cluster, no AUTH, no TLS),
+# barely ahead (LPUSH: 10%), what we refuse to do (no cluster, no AUTH, no TLS),
 # and which commands do not behave the way Redis's docs say.
 #
 # Numbers: bench/PERF-LEDGER.md. Sizes: ls -l site/demo/pkg/kevy.wasm.
@@ -205,10 +205,10 @@ let mut store = Store::new_in(&mut arena);""",
                 ["ZADD", 3053101, 2773929, "1.10×", True],
             ],
             "us": "kevy 6.2.2",
-            "them": "Redis 8",
+            "them": "Redis 8.10.1",
             "thin": "under 15% — your workload decides, not the engine",
             "note": (
-                "<b>LPUSH and ZADD are only 12% and 10% ahead.</b> If lists or sorted "
+                "<b>LPUSH and ZADD are only 10% and 18% ahead.</b> If lists or sorted "
                 "sets are your hot path, speed is not the reason to switch. "
                 "<a href=\"~/benchmarks/\">Full table, against valkey and Dragonfly "
                 "too.</a> Migration is three commands — "
@@ -323,7 +323,7 @@ PAGES["migrate"] = {
                 },
                 {
                     "title": "It is faster on the operations you already run",
-                    "body": "1.4× on GET, 2.7× on SET, 1.8× on INCR against Redis 8 on the same machine. Read the whole table before you count on it, though — LPUSH and ZADD are only 12% and 10% ahead, and if lists or sorted sets are your hot path this is not the reason to move.",
+                    "body": "1.26× on GET, 2.68× on SET, 1.95× on INCR against Redis 8.10.1 on the same machine. Read the whole table before you count on it, though — LPUSH and ZADD are only 10% and 18% ahead, and if lists or sorted sets are your hot path this is not the reason to move.",
                 },
                 {
                     "title": "Your dataset no longer has to fit in RAM",
@@ -1438,7 +1438,7 @@ store.set(b"temp", b"21.4")?;""",
 
 PAGES["benchmarks"] = {
     "title": "Benchmarks — kevy",
-    "desc": "kevy 4.0 against Redis 8, valkey 9.1 and Dragonfly on one machine — including the commands where kevy is barely ahead.",
+    "desc": "kevy 6.2.2 against Redis 8.10.1, valkey 9.1.2 and Dragonfly 1.40.2 on one machine — including the commands where kevy is barely ahead.",
     "foot": "reproducible from bench/ in the repository",
     "blocks": [
         {
@@ -1460,18 +1460,18 @@ PAGES["benchmarks"] = {
                 "server's own command counter over a three-second steady window rather "
                 "than from the benchmark client's reported rate."
             ),
-            "head": ["", "kevy 6.2.2", "Redis 8", "valkey 9.1", "Dragonfly", "vs Redis 8"],
+            "head": ["", "kevy 6.2.2", "Redis 8.10.1", "valkey 9.1.2", "Dragonfly 1.40.2", "vs Redis 8.10.1"],
             "rows": [
-                ["GET", "7,395,730", "5,599,436", "3,086,168", "2,845,294", "*1.32×"],
-                ["SET", "6,305,322", "2,551,278", "1,694,840", "1,924,695", "*2.47×"],
-                ["INCR", "6,294,330", "3,326,620", "2,221,391", "2,031,132", "*1.89×"],
-                ["SADD", "4,874,874", "3,788,956", "2,192,994", "1,800,121", "*1.29×"],
-                ["HSET", "4,511,460", "3,043,259", "1,863,456", "1,768,012", "*1.48×"],
-                ["LPUSH", "3,088,809", "2,788,277", "1,873,136", "1,461,737", "!1.11×"],
-                ["ZADD", "3,508,110", "2,816,824", "1,794,137", "1,714,133", "*1.25×"],
+                ["GET", "7,342,698", "5,835,424", "3,132,401", "2,802,076", "*1.26×"],
+                ["SET", "6,854,741", "2,561,414", "1,743,510", "1,853,306", "*2.68×"],
+                ["INCR", "6,632,498", "3,397,561", "2,296,495", "1,940,670", "*1.95×"],
+                ["SADD", "5,543,379", "3,690,253", "2,268,729", "1,831,543", "*1.50×"],
+                ["HSET", "4,456,414", "3,039,059", "1,868,933", "1,739,677", "*1.47×"],
+                ["LPUSH", "3,061,570", "2,783,323", "1,920,937", "1,488,802", "!1.10×"],
+                ["ZADD", "3,296,001", "2,804,915", "1,807,926", "1,793,792", "!1.18×"],
             ],
             "note": (
-                "<b>LPUSH is 12% ahead of Redis 8, and ZADD 10%.</b> At that margin "
+                "<b>LPUSH is 10% ahead of Redis 8.10.1, and ZADD 18%.</b> At that margin "
                 "your value sizes and key distribution decide the winner, not the "
                 "engine — so if lists or sorted sets are your hot path, benchmark your "
                 "own workload and do not switch for speed. The rows are coloured that "

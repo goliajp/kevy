@@ -14,7 +14,7 @@
 # achievement, and a page that congratulates itself for it is a page about itself.
 #
 # What DOES belong, because it changes what a reader decides: where we are only
-# barely ahead (LPUSH: 12%), what we refuse to do (no cluster, no AUTH, no TLS),
+# barely ahead (LPUSH: 10%), what we refuse to do (no cluster, no AUTH, no TLS),
 # and which commands do not behave the way Redis's docs say. Keep every word of
 # that, blunt.
 #
@@ -216,10 +216,10 @@ let mut store = Store::new_in(&mut arena);""",
                 ["ZADD", 3053101, 2773929, "1.10×", True],
             ],
             "us": "kevy 6.2.2",
-            "them": "Redis 8",
+            "them": "Redis 8.10.1",
             "thin": "不到 15%——决定胜负的是你的负载，不是引擎",
             "note": (
-                "<b>LPUSH 和 ZADD 只领先 12% 和 10%。</b>如果 list 或者 sorted set "
+                "<b>LPUSH 和 ZADD 只领先 10% 和 18%。</b>如果 list 或者 sorted set "
                 "是你的热路径，那么性能就不是换过来的理由。"
                 "<a href=\"~/benchmarks/\">完整的表格在这里，valkey 和 Dragonfly 也一起打了。</a>"
                 "迁移只有三条命令——<a href=\"~/migrate/\">export、import、digest</a>——"
@@ -327,7 +327,7 @@ PAGES["migrate"] = {
                 },
                 {
                     "title": "你现在跑的那些操作，它更快",
-                    "body": "同一台机器上对 Redis 8：GET 快 1.4×，SET 快 2.7×，INCR 快 1.8×。不过在你把这个当成理由之前，先把整张表看完——LPUSH 和 ZADD 只领先 12% 和 10%，如果 list 或者 sorted set 是你的热路径，那这就不是你该搬的理由。",
+                    "body": "同一台机器上对 Redis 8.10.1：GET 快 1.26×，SET 快 2.68×，INCR 快 1.95×。不过在你把这个当成理由之前，先把整张表看完——LPUSH 和 ZADD 只领先 10% 和 18%，如果 list 或者 sorted set 是你的热路径，那这就不是你该搬的理由。",
                 },
                 {
                     "title": "数据集不必再装进 RAM",
@@ -1376,7 +1376,7 @@ store.set(b"temp", b"21.4")?;""",
 
 PAGES["benchmarks"] = {
     "title": "基准测试——kevy",
-    "desc": "kevy 4.0 在一台机器上对打 Redis 8、valkey 9.1 和 Dragonfly——也包括 kevy 只是勉强领先的那几条命令。",
+    "desc": "kevy 6.2.2 在一台机器上对打 Redis 8.10.1、valkey 9.1.2 和 Dragonfly 1.40.2——也包括 kevy 只是勉强领先的那几条命令。",
     "foot": "可以用仓库里的 bench/ 复现",
     "blocks": [
         {
@@ -1396,18 +1396,18 @@ PAGES["benchmarks"] = {
                 "50 条连接，小 value。五次运行取中位数，数字取自每个服务端自己的命令计数器，"
                 "统计的是三秒稳态窗口内的增量，而不是压测客户端报出来的速率。"
             ),
-            "head": ["", "kevy 6.2.2", "Redis 8", "valkey 9.1", "Dragonfly", "vs Redis 8"],
+            "head": ["", "kevy 6.2.2", "Redis 8.10.1", "valkey 9.1.2", "Dragonfly 1.40.2", "vs Redis 8.10.1"],
             "rows": [
-                ["GET", "7,395,730", "5,599,436", "3,086,168", "2,845,294", "*1.32×"],
-                ["SET", "6,305,322", "2,551,278", "1,694,840", "1,924,695", "*2.47×"],
-                ["INCR", "6,294,330", "3,326,620", "2,221,391", "2,031,132", "*1.89×"],
-                ["SADD", "4,874,874", "3,788,956", "2,192,994", "1,800,121", "*1.29×"],
-                ["HSET", "4,511,460", "3,043,259", "1,863,456", "1,768,012", "*1.48×"],
-                ["LPUSH", "3,088,809", "2,788,277", "1,873,136", "1,461,737", "!1.11×"],
-                ["ZADD", "3,508,110", "2,816,824", "1,794,137", "1,714,133", "*1.25×"],
+                ["GET", "7,342,698", "5,835,424", "3,132,401", "2,802,076", "*1.26×"],
+                ["SET", "6,854,741", "2,561,414", "1,743,510", "1,853,306", "*2.68×"],
+                ["INCR", "6,632,498", "3,397,561", "2,296,495", "1,940,670", "*1.95×"],
+                ["SADD", "5,543,379", "3,690,253", "2,268,729", "1,831,543", "*1.50×"],
+                ["HSET", "4,456,414", "3,039,059", "1,868,933", "1,739,677", "*1.47×"],
+                ["LPUSH", "3,061,570", "2,783,323", "1,920,937", "1,488,802", "!1.10×"],
+                ["ZADD", "3,296,001", "2,804,915", "1,807,926", "1,793,792", "!1.18×"],
             ],
             "note": (
-                "<b>LPUSH 比 Redis 8 快 12%，ZADD 快 10%。</b>差距只有这么大的时候，"
+                "<b>LPUSH 比 Redis 8.10.1 快 10%，ZADD 快 18%。</b>差距只有这么大的时候，"
                 "决定胜负的是你的 value 大小和 key 分布，而不是引擎——所以如果 list 或者 "
                 "sorted set 是你的热路径，请拿你自己的负载去测，不要为了性能而换。"
                 "这两行的颜色是故意标成这样的。"
