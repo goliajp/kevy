@@ -111,6 +111,7 @@ pub const VERB_ARITY: &[(&str, i8)] = &[
     ("HPEXPIRE", -6),
     ("HPEXPIREAT", -6),
     ("HPTTL", -5),
+    ("HRANDFIELD", -2),
     ("HSCAN", -3),
     ("HSET", -4),
     ("HSETNX", 4),

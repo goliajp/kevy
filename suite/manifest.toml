@@ -214,6 +214,16 @@ requires = []
 proves = "the command count the site publishes is the count the engine answers"
 
 [[check]]
+id = "site-commands-derived"
+area = "doc"
+tier = "precommit"
+cmd = "python3 tools/export_site_commands.py --check"
+expected = 4
+timeout = 120
+requires = ["server-debug"]
+proves = "the site's command reference is the engine's own COMMAND DOCS, not a hand-kept copy"
+
+[[check]]
 id = "suite-ledger"
 area = "hygiene"
 tier = "precommit"
@@ -770,6 +780,18 @@ expected = 900
 timeout = 3600
 requires = ["docker", "server-release"]
 proves = "the same command sequence answers identically on kevy, valkey and redis"
+
+[[check]]
+id = "resp3gate"
+area = "compat"
+tier = "full"
+cmd = "bash bench/resp3gate.sh target/release/kevy"
+expected = 60
+timeout = 900
+requires = ["docker", "server-release"]
+advisory = true
+advisory_reason = "HRANDFIELD WITHVALUES is not implemented at all (compat-surface RFC, MUST group), so this gate reports a command gap rather than a protocol defect. Advisory ends when that verb lands — every other shape-changing verb already agrees with the pinned redis."
+proves = "kevy changes reply shape under HELLO 3 exactly where the pinned redis does"
 
 [[check]]
 id = "clientgate"

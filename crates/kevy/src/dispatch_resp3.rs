@@ -39,6 +39,24 @@ pub(crate) fn try_resp3_overrides<A: ArgvView + ?Sized>(
         // to be complete. It was not: five verbs sent the RESP2 wire to a
         // client that had negotiated RESP3, while the site said in three
         // languages that a client library would not notice.
+        b"HRANDFIELD" if args.len() == 4 && args[3].eq_ignore_ascii_case(b"WITHVALUES") => {
+            // RESP3 nests each field with its value; RESP2 flattens them.
+            match arg_i64(&args[2]) {
+                Some(count) => match store.hrandfield(&args[1], count, true) {
+                    Ok(items) => {
+                        kevy_resp::encode_array_len(out, items.len() as i64);
+                        for (f, v) in &items {
+                            kevy_resp::encode_array_len(out, 2);
+                            encode_bulk(out, f);
+                            encode_bulk(out, v);
+                        }
+                    }
+                    Err(e) => store_err(out, e),
+                },
+                None => encode_error(out, "ERR value is not an integer or out of range"),
+            }
+            true
+        }
         b"ZADD" => {
             // Only the INCR form changes shape: it returns the new score,
             // which is a Double in RESP3 and a bulk string in RESP2. Plain

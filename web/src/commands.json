@@ -1,6 +1,6 @@
 {
   "generated_from": "crates/kevy/src/verb_meta",
-  "count": 205,
+  "count": 206,
   "commands": [
     {"name": "KEYS", "group": "scan", "arity": 2, "flags": ["readonly"], "since": "1.0.0", "syntax": "KEYS pattern", "summary": "Return every key matching the glob pattern (cross-shard gather).", "complexity": "O(N) keys in the whole keyspace — every shard walks its entire map, plus an O(P*K) glob match per key", "compat": "full"},
     {"name": "RANDOMKEY", "group": "scan", "arity": 1, "flags": ["readonly"], "since": "1.0.0", "syntax": "RANDOMKEY", "summary": "Return a random key from the keyspace.", "complexity": "O(1) expected — each shard probes a random slot, and the origin folds the candidates through a reservoir weighted by shard key counts, so every key is equally likely", "compat": "full"},
@@ -51,6 +51,7 @@
     {"name": "HGETALL", "group": "hash", "arity": 2, "flags": ["readonly"], "since": "1.0.0", "syntax": "HGETALL key", "summary": "Return all fields and values of a hash.", "complexity": "O(N) fields, with a full copy of every name and value", "compat": "full"},
     {"name": "HINCRBY", "group": "hash", "arity": 4, "flags": ["write"], "since": "1.0.0", "syntax": "HINCRBY key field increment", "summary": "Increment the integer value of a hash field.", "complexity": "O(1)", "compat": "full"},
     {"name": "HINCRBYFLOAT", "group": "hash", "arity": 4, "flags": ["write"], "since": "1.0.0", "syntax": "HINCRBYFLOAT key field increment", "summary": "Increment the float value of a hash field.", "complexity": "O(1)", "compat": "full"},
+    {"name": "HRANDFIELD", "group": "hash", "arity": -2, "flags": ["readonly"], "since": "6.2.0", "syntax": "HRANDFIELD key [count [WITHVALUES]]", "summary": "Return random fields from a hash; a negative count allows repeats, WITHVALUES pairs each with its value.", "complexity": "O(count) for the positive form (partial Fisher-Yates over a materialised field list), O(|count|) for the negative form", "compat": "full"},
     {"name": "HKEYS", "group": "hash", "arity": 2, "flags": ["readonly"], "since": "1.0.0", "syntax": "HKEYS key", "summary": "Return all field names of a hash.", "complexity": "O(N) fields", "compat": "full"},
     {"name": "HLEN", "group": "hash", "arity": 2, "flags": ["readonly"], "since": "1.0.0", "syntax": "HLEN key", "summary": "Return the number of fields in a hash.", "complexity": "O(1)", "compat": "full"},
     {"name": "HMGET", "group": "hash", "arity": -3, "flags": ["readonly"], "since": "1.0.0", "syntax": "HMGET key field [field ...]", "summary": "Return the values of multiple hash fields.", "complexity": "O(M) fields requested", "compat": "full"},
