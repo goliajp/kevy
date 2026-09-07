@@ -368,6 +368,15 @@ jobs:
       - name: competitor anchors (every pinned version agrees)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: python3 tools/check_competitor_anchors.py --offline
+      # The other half of the same shape: what the site says we implement
+      # against what the engine answers. It said 188 for long enough that
+      # nobody knows when it drifted; COMMAND COUNT was 205 the whole time.
+      - name: the published command count is the engine's
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: python3 tools/check_capability_claim.py
+      - name: every Redis command is implemented, exempt, or owned
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: python3 tools/check_command_coverage.py
       # Nine of twenty-three fuzz targets existed and never ran. A target
       # in the tree and not in the matrix shows coverage that is not there,
       # which is worse than never having written it.

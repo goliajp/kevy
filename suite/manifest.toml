@@ -201,11 +201,17 @@ cmd = "python3 tools/check_command_coverage.py"
 expected = 2
 timeout = 60
 requires = []
-advisory = true
-advisory_reason = "141 commands the pinned Redis serves are neither implemented nor decided about, and sorting them is a product call, not a code fix — the array family (18 verbs, Redis 8.8), the 8.6/8.10 additions, and a long tail of classic verbs this engine never implemented (SORT, BITFIELD, ZDIFF/ZINTER/ZUNION, SMOVE, the BLMOVE/BLMPOP family). Advisory ends when that list is empty: each verb either implemented, exempt with a reason, or owned by an RFC."
-proves = "every command the pinned Redis serves is implemented, exempt by a written decision, or owned by an RFC"
+proves = "every command the pinned Redis serves is implemented, exempt by a written decision, or owned by an RFC — and the unclassified count only goes down"
 
-# ── architecture ─────────────────────────────────────────────────────
+[[check]]
+id = "capability-claim"
+area = "doc"
+tier = "precommit"
+cmd = "python3 tools/check_capability_claim.py"
+expected = 2
+timeout = 60
+requires = []
+proves = "the command count the site publishes is the count the engine answers"
 
 [[check]]
 id = "architecture"
