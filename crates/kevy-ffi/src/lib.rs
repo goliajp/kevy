@@ -96,8 +96,7 @@ pub unsafe extern "C" fn kevy_open(dir: *const u8, dir_len: usize) -> *mut KevyD
     if dir.is_null() {
         return std::ptr::null_mut();
     }
-    // SAFETY: this fn's `# Safety` section requires that pointer to address that many
-    // readable elements, and it was checked non-null above.
+    // SAFETY: the `# Safety` contract above covers this pointer/length pair.
     let bytes = unsafe { std::slice::from_raw_parts(dir, dir_len) };
     let Ok(path) = std::str::from_utf8(bytes) else {
         return std::ptr::null_mut();
@@ -164,14 +163,11 @@ pub unsafe extern "C" fn kevy_cmd(
     if db.is_null() || argc == 0 || argv.is_null() || argv_len.is_null() {
         return -1;
     }
-    // SAFETY: checked non-null above, and the contract requires a live handle from
-    // `kevy_open*`, so the referent outlives this borrow.
+    // SAFETY: checked non-null above; the contract requires a live `kevy_open*` handle.
     let store = unsafe { &(*db).store };
-    // SAFETY: this fn's `# Safety` section requires that pointer to address that many
-    // readable elements, and it was checked non-null above.
+    // SAFETY: the `# Safety` contract above covers this pointer/length pair.
     let ptrs = unsafe { std::slice::from_raw_parts(argv, argc) };
-    // SAFETY: this fn's `# Safety` section requires that pointer to address that many
-    // readable elements, and it was checked non-null above.
+    // SAFETY: the `# Safety` contract above covers this pointer/length pair.
     let lens = unsafe { std::slice::from_raw_parts(argv_len, argc) };
     if ptrs.iter().any(|p| p.is_null()) {
         return -1;
@@ -179,8 +175,7 @@ pub unsafe extern "C" fn kevy_cmd(
     let args: Vec<Vec<u8>> = ptrs
         .iter()
         .zip(lens)
-        // SAFETY: this fn's `# Safety` section requires that pointer to address that many
-        // readable elements, and it was checked non-null above.
+        // SAFETY: the `# Safety` contract above covers this pointer/length pair.
         .map(|(&p, &l)| unsafe { std::slice::from_raw_parts(p, l) }.to_vec())
         .collect();
     let reply = catch_unwind(AssertUnwindSafe(|| {
@@ -212,8 +207,7 @@ pub unsafe extern "C" fn kevy_buf_free(ptr: *mut u8, len: usize, cap: usize) {
     if ptr.is_null() {
         return;
     }
-    // SAFETY: this fn's `# Safety` section requires that pointer to address that many
-    // readable elements, and it was checked non-null above.
+    // SAFETY: the `# Safety` contract above covers this pointer/length pair.
     drop(unsafe { Vec::from_raw_parts(ptr, len, cap) });
 }
 
@@ -240,11 +234,9 @@ pub unsafe extern "C" fn kevy_get(
     if db.is_null() || key.is_null() {
         return -1;
     }
-    // SAFETY: checked non-null above, and the contract requires a live handle from
-    // `kevy_open*`, so the referent outlives this borrow.
+    // SAFETY: checked non-null above; the contract requires a live `kevy_open*` handle.
     let store = unsafe { &(*db).store };
-    // SAFETY: this fn's `# Safety` section requires that pointer to address that many
-    // readable elements, and it was checked non-null above.
+    // SAFETY: the `# Safety` contract above covers this pointer/length pair.
     let k = unsafe { std::slice::from_raw_parts(key, key_len) };
     match catch_unwind(AssertUnwindSafe(|| store.get(k))) {
         Ok(Ok(Some(v))) => {
@@ -284,11 +276,9 @@ pub unsafe extern "C" fn kevy_get_shared(
     if db.is_null() || key.is_null() {
         return -1;
     }
-    // SAFETY: checked non-null above, and the contract requires a live handle from
-    // `kevy_open*`, so the referent outlives this borrow.
+    // SAFETY: checked non-null above; the contract requires a live `kevy_open*` handle.
     let store = unsafe { &(*db).store };
-    // SAFETY: this fn's `# Safety` section requires that pointer to address that many
-    // readable elements, and it was checked non-null above.
+    // SAFETY: the `# Safety` contract above covers this pointer/length pair.
     let k = unsafe { std::slice::from_raw_parts(key, key_len) };
     match catch_unwind(AssertUnwindSafe(|| store.get_shared_owned(k))) {
         Ok(Ok(Some(shared))) => {
@@ -335,8 +325,7 @@ pub unsafe extern "C" fn kevy_buf_free_shared(ptr: *mut u8, len: usize, cap: usi
     }
     if cap & 1 == 1 {
         // Vec-backed small value: capacity in the high bits.
-        // SAFETY: this fn's `# Safety` section requires that pointer to address that many
-        // readable elements, and it was checked non-null above.
+        // SAFETY: the `# Safety` contract above covers this pointer/length pair.
         drop(unsafe { Vec::from_raw_parts(ptr, len, cap >> 1) });
     } else {
         // Arc-backed bulk value: cap is the Arc raw pointer.
@@ -363,14 +352,11 @@ pub unsafe extern "C" fn kevy_set(
     if db.is_null() || key.is_null() || val.is_null() {
         return -1;
     }
-    // SAFETY: checked non-null above, and the contract requires a live handle from
-    // `kevy_open*`, so the referent outlives this borrow.
+    // SAFETY: checked non-null above; the contract requires a live `kevy_open*` handle.
     let store = unsafe { &(*db).store };
-    // SAFETY: this fn's `# Safety` section requires that pointer to address that many
-    // readable elements, and it was checked non-null above.
+    // SAFETY: the `# Safety` contract above covers this pointer/length pair.
     let k = unsafe { std::slice::from_raw_parts(key, key_len) };
-    // SAFETY: this fn's `# Safety` section requires that pointer to address that many
-    // readable elements, and it was checked non-null above.
+    // SAFETY: the `# Safety` contract above covers this pointer/length pair.
     let v = unsafe { std::slice::from_raw_parts(val, val_len) };
     let done = catch_unwind(AssertUnwindSafe(|| {
         if ttl_ms == 0 {
