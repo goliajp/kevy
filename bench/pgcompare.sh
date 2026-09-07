@@ -92,6 +92,7 @@ echo "== postgres 18 (stock config) =="
 # nothing would have said so — the port was open, so the check passed.
 # Asking the server its version turns a silently-old opponent into a stop.
 . "$(dirname "$0")/anchor-lib.sh"
+command -v anchor_pin >/dev/null || { echo "$(basename "$0"): anchor-lib.sh did not load" >&2; exit 2; }
 PG_VER=$("$VENV" -c "
 import psycopg
 with psycopg.connect('host=127.0.0.1 port=$PGPORT user=postgres password=bench dbname=bench',

@@ -12,6 +12,7 @@ RBIN=/root/srcbench/redis/src/redis-server
 # versions on record; a probe that quietly runs an older redis produces a
 # number nobody can place. See bench/anchor-lib.sh.
 . "$(dirname "$0")/anchor-lib.sh"
+command -v anchor_pin >/dev/null || { echo "$(basename "$0"): anchor-lib.sh did not load" >&2; exit 2; }
 anchor_require "redis (source build)" "$(anchor_pin redis)" "$(anchor_bin_ver "$RBIN")"
 anchor_require "valkey (source build)" "$(anchor_pin valkey)" "$(anchor_bin_ver "$VBIN")"
 

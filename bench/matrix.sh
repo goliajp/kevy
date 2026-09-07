@@ -21,6 +21,7 @@ VALKEY_BIN=/root/srcbench/valkey/src/valkey-server
 # This probe measures against source builds on the box; a drifted checkout
 # produces numbers nobody can place. See bench/anchor-lib.sh.
 . "$(dirname "$0")/anchor-lib.sh"
+command -v anchor_pin >/dev/null || { echo "$(basename "$0"): anchor-lib.sh did not load" >&2; exit 2; }
 anchor_require "redis (source build)" "$(anchor_pin redis)" "$(anchor_bin_ver "$REDIS_BIN")"
 anchor_require "valkey (source build)" "$(anchor_pin valkey)" "$(anchor_bin_ver "$VALKEY_BIN")"
 

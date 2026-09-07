@@ -10,7 +10,8 @@
 set -uo pipefail
 cd "$(dirname "$0")"
 
-. "$(dirname "$0")/anchor-lib.sh"
+. ./anchor-lib.sh || { echo "compat3: cannot load anchor-lib.sh" >&2; exit 2; }
+command -v anchor_pin >/dev/null || { echo "compat3: anchor-lib.sh loaded but anchor_pin is missing" >&2; exit 2; }
 echo "### bringing up valkey $(anchor_pin valkey) + redis $(anchor_pin redis) + kevy ..."
 docker compose up -d --build valkey redis kevy loadgen >/dev/null 2>&1
 for h in valkey redis kevy; do

@@ -110,7 +110,29 @@ def latest_dockerhub(spec: dict) -> str:
     return max(vers, key=semver)
 
 
-RESOLVERS = {"github": latest_github, "endoflife": latest_endoflife, "dockerhub": latest_dockerhub}
+def latest_npm(spec: dict) -> str:
+    tags = fetch(f"https://registry.npmjs.org/{spec['package']}")["dist-tags"]
+    if "latest" not in tags:
+        raise LookupError(f"no dist-tags.latest for {spec['package']}")
+    return tags["latest"]
+
+
+def latest_pypi(spec: dict) -> str:
+    return fetch(f"https://pypi.org/pypi/{spec['package']}/json")["info"]["version"]
+
+
+def latest_nuget(spec: dict) -> str:
+    pkg = spec["package"].lower()
+    vers = fetch(f"https://api.nuget.org/v3-flatcontainer/{pkg}/index.json")["versions"]
+    stable = [v for v in vers if PLAIN_VERSION.match(v)]
+    if not stable:
+        raise LookupError(f"no stable version among {len(vers)} on nuget/{pkg}")
+    return max(stable, key=semver)
+
+
+RESOLVERS = {"github": latest_github, "endoflife": latest_endoflife,
+             "dockerhub": latest_dockerhub, "npm": latest_npm,
+             "pypi": latest_pypi, "nuget": latest_nuget}
 
 
 MANIFEST_REF = "COMPETITOR-ANCHORS.json"
