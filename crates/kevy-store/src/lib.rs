@@ -99,6 +99,7 @@ pub(crate) use entry::Entry;
 pub use expire::ExpireStats;
 mod hash;
 mod hash_read;
+pub use hash_read::FieldValuePairs;
 mod hash_ttl;
 pub use hash_ttl::{HExpireCode, HExpireCond};
 mod keyspace;

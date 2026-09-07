@@ -50,7 +50,7 @@ impl Store {
         key: &[u8],
         count: i64,
         with_values: bool,
-    ) -> KevyResult<Vec<(Vec<u8>, Vec<u8>)>> {
+    ) -> KevyResult<kevy_store::FieldValuePairs> {
         self.wshard(key).store.hrandfield(key, count, with_values).map_err(store_err)
     }
 
