@@ -78,7 +78,7 @@ if [ "${FOURWAY:-1}" = 1 ]; then
     anchor_require dragonfly "$DRAGONFLY_PIN" "$DRAGONFLY_VER"
     ENGINES="redis $REDIS_VER | valkey $VALKEY_VER | dragonfly $DRAGONFLY_VER"
 fi
-echo "# arena bare face — $(date -u +%F) — kevy $($KBIN --version | head -1)"
+echo "# arena bare face — $(date -u +%F) — $($KBIN --version | head -1)"
 echo "# engines: $ENGINES"
 echo "# protocol: -c $CONC -P $PIPE, server cores $SRV_CORES, client cores $CLI_CORES, median-of-$RUNS"
 echo "# measured: server-side total_commands_processed over a ${WINDOW}s window after a ${RAMP}s ramp (NOT redis-benchmark's rate — see the header)"

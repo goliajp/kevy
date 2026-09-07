@@ -23,6 +23,19 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 LEDGER = ROOT / "bench/PERF-LEDGER.md"
+ANCHORS = ROOT / "bench/COMPETITOR-ANCHORS.json"
+
+
+def pins():
+    """Which version of each competitor the READMEs are allowed to name.
+
+    These labels used to be spelled out in this file, hardcoded to whatever
+    was current when it was written — a fourth place a competitor version
+    lived, and the one that writes it into three READMEs and the site. bench/COMPETITOR-ANCHORS.json is the
+    only place a competitor version is written down now."""
+    import json
+    return {k: v["pinned"] for k, v in json.loads(
+        ANCHORS.read_text(encoding="utf-8"))["anchors"].items()}
 READMES = ["README.md", "README.zh-CN.md", "README.ja.md"]
 
 
@@ -65,8 +78,8 @@ def latest_arena():
                 f"sync_readme_bench: the newest `arena bare face` entry "
                 f"({date}, kevy {version}) has a row this cannot read:\n"
                 f"  {line.strip()}\n"
-                f"A bare-face entry's table is `| verb | kevy | Redis 8 | "
-                f"valkey | Dragonfly |` and nothing else. An A/B or a "
+                f"A bare-face entry's table is five columns — verb, kevy, "
+                f"redis, valkey, dragonfly — and nothing else. An A/B or a "
                 f"decomposition belongs under a heading that is not "
                 f"`arena bare face — <date> — kevy <version>`, because that "
                 f"heading is what this tool reads to rewrite three READMEs."
@@ -83,6 +96,7 @@ def m(n):
 def build(date, version, rows):
     """The two tables, and the sentence that dates them."""
     get, setv = rows["GET"], rows["SET"]
+    pin = pins()
     head = {
         "README.md": ("Workload", "Ratio"),
         "README.zh-CN.md": ("负载", "倍数"),
@@ -99,7 +113,7 @@ def build(date, version, rows):
         c, d = lead[f]
         out[f] = {
             "vs": (
-                f"| {a} | kevy | valkey 9.1 | {b} |\n"
+                f"| {a} | kevy | valkey {pin['valkey']} | {b} |\n"
                 f"|---|---:|---:|---|\n"
                 f"| `GET -c 50 -P 16` | {m(get['kevy'])} | {m(get['valkey'])} | "
                 f"**{get['kevy'] / get['valkey']:.2f}×** |\n"
@@ -109,9 +123,9 @@ def build(date, version, rows):
             "lead": (
                 f"| {c} | {d} |\n"
                 f"|---|---:|\n"
-                f"| valkey 9.1 | **{get['kevy'] / get['valkey']:.2f}×** |\n"
-                f"| redis 8 | **{get['kevy'] / get['redis8']:.2f}×** |\n"
-                f"| dragonfly | **{get['kevy'] / get['dragonfly']:.2f}×** |"
+                f"| valkey {pin['valkey']} | **{get['kevy'] / get['valkey']:.2f}×** |\n"
+                f"| redis {pin['redis']} | **{get['kevy'] / get['redis8']:.2f}×** |\n"
+                f"| dragonfly {pin['dragonfly']} | **{get['kevy'] / get['dragonfly']:.2f}×** |"
             ),
             "rate": m(get["kevy"]),
         }

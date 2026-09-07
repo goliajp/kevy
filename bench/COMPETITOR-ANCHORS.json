@@ -60,6 +60,12 @@
           "file": "bench/pubsub_loopback.sh",
           "pattern": "redis ([0-9]+\\.[0-9][0-9.]*)",
           "what": "prose: printed into reports"
+        },
+        {
+          "file": "tools/sync_readme_bench.py",
+          "pattern": "redis ([0-9]+\\.[0-9][0-9.]*)",
+          "mode": "derive",
+          "what": "writes the competitor label into three READMEs and the site"
         }
       ]
     },
@@ -121,6 +127,12 @@
           "file": "bench/pubsub_loopback.sh",
           "pattern": "valkey ([0-9]+\\.[0-9][0-9.]*)",
           "what": "prose: printed into reports"
+        },
+        {
+          "file": "tools/sync_readme_bench.py",
+          "pattern": "valkey ([0-9]+\\.[0-9][0-9.]*)",
+          "mode": "derive",
+          "what": "writes the competitor label into three READMEs and the site"
         }
       ]
     },
@@ -138,6 +150,12 @@
           "file": "bench/arena.sh",
           "pattern": "dragonflydb/dragonfly:v([0-9][0-9.]*)",
           "mode": "derive"
+        },
+        {
+          "file": "tools/sync_readme_bench.py",
+          "pattern": "dragonfly ([0-9]+\\.[0-9][0-9.]*)",
+          "mode": "derive",
+          "what": "writes the competitor label into three READMEs and the site"
         }
       ]
     },
