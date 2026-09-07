@@ -156,6 +156,8 @@ pub fn malloc_trim_now() -> bool {
     unsafe extern "C" {
         fn malloc_trim(pad: usize) -> core::ffi::c_int;
     }
+    // SAFETY: `malloc_trim` takes its pad by value and dereferences nothing. The
+    // binding is declared under `linux/gnu` only, which is where the symbol exists.
     unsafe { malloc_trim(0) == 1 }
 }
 
@@ -185,6 +187,8 @@ pub fn fadvise_dontneed_all(fd: std::os::fd::RawFd) -> bool {
         ) -> core::ffi::c_int;
     }
     // len = 0 ⇒ "to end of file" per POSIX.
+    // SAFETY: `posix_fadvise` takes an fd and three integers by value — no pointer is
+    // dereferenced. The caller holds `fd` open across the call.
     unsafe { posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED) == 0 }
 }
 
