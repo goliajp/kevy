@@ -55,7 +55,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-compress"
-version = "6.3.0"
+version = "6.4.0"
 
 [[package]]
 name = "kevy-compress-fuzz"
