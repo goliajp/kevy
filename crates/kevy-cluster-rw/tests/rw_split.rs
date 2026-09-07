@@ -56,6 +56,9 @@ impl PrimaryServer {
         let dir_path = dir.path().to_path_buf();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
+        // SAFETY: `set_var` is unsafe because it is not thread-safe. This runs on the test's
+        // own thread before the runtime thread that reads the variable is spawned, so no
+        // other thread can be touching the environment at this point.
         unsafe {
             std::env::set_var("KEVY_IO_URING", "0");
         }
@@ -108,6 +111,9 @@ impl ReplicaServer {
         let port = free_port_block(1) + 1;
         let dir = tempdir::TempDir::new("kevy-rw-replica");
         let dir_path = dir.path().to_path_buf();
+        // SAFETY: `set_var` is unsafe because it is not thread-safe. This runs on the test's
+        // own thread before the runtime thread that reads the variable is spawned, so no
+        // other thread can be touching the environment at this point.
         unsafe {
             std::env::set_var("KEVY_IO_URING", "0");
         }
@@ -539,6 +545,9 @@ impl TrackedReplica {
         let rt_port = free_port_block(1) + 1;
         let dir = tempdir::TempDir::new("kevy-tracked-replica");
         let dir_path = dir.path().to_path_buf();
+        // SAFETY: `set_var` is unsafe because it is not thread-safe. This runs on the test's
+        // own thread before the runtime thread that reads the variable is spawned, so no
+        // other thread can be touching the environment at this point.
         unsafe {
             std::env::set_var("KEVY_IO_URING", "0");
         }
@@ -777,6 +786,9 @@ fn reconnect_outside_backlog_triggers_snapshot() {
         let dir_path = dir.path().to_path_buf();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
+        // SAFETY: `set_var` is unsafe because it is not thread-safe. This runs on the test's
+        // own thread before the runtime thread that reads the variable is spawned, so no
+        // other thread can be touching the environment at this point.
         unsafe {
             std::env::set_var("KEVY_IO_URING", "0");
         }

@@ -28,6 +28,8 @@ pub unsafe extern "C" fn kevy_subscribe(
     chan: *const u8,
     chan_len: usize,
 ) -> *mut KevySub {
+    // SAFETY: covered by this fn's `# Safety` contract, with the null case ruled out by
+    // the checks above.
     unsafe { sub_open(db, chan, chan_len, false) }
 }
 
@@ -41,6 +43,8 @@ pub unsafe extern "C" fn kevy_psubscribe(
     pat: *const u8,
     pat_len: usize,
 ) -> *mut KevySub {
+    // SAFETY: covered by this fn's `# Safety` contract, with the null case ruled out by
+    // the checks above.
     unsafe { sub_open(db, pat, pat_len, true) }
 }
 
@@ -53,7 +57,11 @@ unsafe fn sub_open(
     if db.is_null() || chan.is_null() {
         return std::ptr::null_mut();
     }
+    // SAFETY: checked non-null above, and the contract requires a live handle from
+    // `kevy_open*`, so the referent outlives this borrow.
     let store = unsafe { &(*db).store };
+    // SAFETY: this fn's `# Safety` section requires that pointer to address that many
+    // readable elements, and it was checked non-null above.
     let name = unsafe { std::slice::from_raw_parts(chan, chan_len) };
     let opened = catch_unwind(AssertUnwindSafe(|| {
         if pattern { store.psubscribe(&[name]) } else { store.subscribe(&[name]) }
@@ -78,14 +86,20 @@ pub unsafe extern "C" fn kevy_sub_next(sub: *mut KevySub, out: *mut KevyBuf) -> 
     if out.is_null() {
         return -1;
     }
+    // SAFETY: covered by this fn's `# Safety` contract, with the null case ruled out by
+    // the checks above.
     unsafe { out.write(KevyBuf::empty()) };
     if sub.is_null() {
         return -1;
     }
+    // SAFETY: checked non-null above, and the contract requires a live handle from
+    // `kevy_open*`, so the referent outlives this borrow.
     let s = unsafe { &(*sub).sub };
     let polled = catch_unwind(AssertUnwindSafe(|| s.try_recv()));
     match polled {
         Ok(Ok(Some(frame))) => {
+            // SAFETY: covered by this fn's `# Safety` contract, with the null case ruled out by
+            // the checks above.
             unsafe { out.write(KevyBuf::from_vec(encode_frame(&frame))) };
             1
         }
@@ -118,10 +132,14 @@ pub unsafe extern "C" fn kevy_sub_wait(
     if out.is_null() {
         return -1;
     }
+    // SAFETY: covered by this fn's `# Safety` contract, with the null case ruled out by
+    // the checks above.
     unsafe { out.write(KevyBuf::empty()) };
     if sub.is_null() {
         return -1;
     }
+    // SAFETY: checked non-null above, and the contract requires a live handle from
+    // `kevy_open*`, so the referent outlives this borrow.
     let s = unsafe { &(*sub).sub };
     let waited = catch_unwind(AssertUnwindSafe(|| {
         if timeout_ms == 0 {
@@ -136,6 +154,8 @@ pub unsafe extern "C" fn kevy_sub_wait(
     }));
     match waited {
         Ok(Ok(Some(frame))) => {
+            // SAFETY: covered by this fn's `# Safety` contract, with the null case ruled out by
+            // the checks above.
             unsafe { out.write(KevyBuf::from_vec(encode_frame(&frame))) };
             1
         }
@@ -154,5 +174,7 @@ pub unsafe extern "C" fn kevy_sub_close(sub: *mut KevySub) {
     if sub.is_null() {
         return;
     }
+    // SAFETY: the contract makes the caller pass a handle this crate produced with
+    // `Box::into_raw` and never freed, so this takes ownership back exactly once.
     let _ = catch_unwind(AssertUnwindSafe(|| drop(unsafe { Box::from_raw(sub) })));
 }

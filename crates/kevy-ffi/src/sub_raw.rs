@@ -35,10 +35,14 @@ pub unsafe extern "C" fn kevy_sub_next_raw(sub: *mut KevySub, out: *mut KevyBuf)
     if out.is_null() {
         return -1;
     }
+    // SAFETY: covered by this fn's `# Safety` contract, with the null case ruled out by
+    // the checks above.
     unsafe { out.write(KevyBuf::empty()) };
     if sub.is_null() {
         return -1;
     }
+    // SAFETY: checked non-null above, and the contract requires a live handle from
+    // `kevy_open*`, so the referent outlives this borrow.
     let s = unsafe { &(*sub).sub };
     let drained = catch_unwind(AssertUnwindSafe(|| {
         loop {
@@ -56,6 +60,8 @@ pub unsafe extern "C" fn kevy_sub_next_raw(sub: *mut KevySub, out: *mut KevyBuf)
     }));
     match drained {
         Ok(Ok(Some(p))) => {
+            // SAFETY: covered by this fn's `# Safety` contract, with the null case ruled out by
+            // the checks above.
             unsafe { out.write(KevyBuf::from_vec(p)) };
             1
         }
@@ -87,10 +93,14 @@ pub unsafe extern "C" fn kevy_sub_wait_raw(
     if out.is_null() {
         return -1;
     }
+    // SAFETY: covered by this fn's `# Safety` contract, with the null case ruled out by
+    // the checks above.
     unsafe { out.write(KevyBuf::empty()) };
     if sub.is_null() {
         return -1;
     }
+    // SAFETY: checked non-null above, and the contract requires a live handle from
+    // `kevy_open*`, so the referent outlives this borrow.
     let s = unsafe { &(*sub).sub };
     let waited = catch_unwind(AssertUnwindSafe(|| {
         if timeout_ms == 0 {
@@ -108,6 +118,8 @@ pub unsafe extern "C" fn kevy_sub_wait_raw(
         // latter is reported as 0 so the caller re-waits (payload-only lane).
         Ok(Ok(Some(f))) => match f.into_payload() {
             Some(p) => {
+                // SAFETY: covered by this fn's `# Safety` contract, with the null case ruled out by
+                // the checks above.
                 unsafe { out.write(KevyBuf::from_vec(p)) };
                 1
             }

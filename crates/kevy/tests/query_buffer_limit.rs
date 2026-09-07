@@ -21,6 +21,9 @@ use kevy_testnet::free_port;
 fn a_streaming_giant_frame_is_disconnected_at_the_cap() {
     // The override must be set BEFORE the runtime thread constructs its
     // shards (read once at shard build).
+    // SAFETY: `set_var` is unsafe because it is not thread-safe. This runs on the test's
+    // own thread before the runtime thread that reads the variable is spawned, so no
+    // other thread can be touching the environment at this point.
     unsafe { std::env::set_var("KEVY_DEBUG_INPUT_LIMIT", "4096") };
     let port = free_port();
     let dir = std::env::temp_dir().join(format!(
