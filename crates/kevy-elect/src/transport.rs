@@ -43,6 +43,7 @@ pub(crate) const READ_RETRY_BACKOFF: Duration = Duration::from_millis(100);
 /// election message from a peer, or a "the connection from $peer
 /// went down" notification (so the orchestrator can clear any
 /// state that assumed the link was up).
+#[derive(Debug)]
 pub enum InboundEvent {
     /// `(from_node_id, msg)`.
     Message(String, Message),
@@ -57,6 +58,7 @@ pub enum InboundEvent {
 /// the latest `epoch` / `repl_offset` for the next heartbeat
 /// without round-tripping through the orchestrator — but **only the
 /// orchestrator mutates** via `tick` / `on_message`.
+#[derive(Debug)]
 pub(crate) struct Shared {
     pub(crate) elector: Mutex<Elector>,
     /// Per-peer outbound queue. Indexed by `node_id`. Each worker
@@ -94,6 +96,7 @@ pub struct PeerAddr {
 /// Public handle to a running transport. Owns the orchestrator +
 /// listener + outbound worker threads. Dropping it signals stop
 /// and joins (best-effort within `JOIN_TIMEOUT`).
+#[derive(Debug)]
 pub struct Transport {
     stop: Arc<AtomicBool>,
     handles: Vec<JoinHandle<()>>,

@@ -39,7 +39,7 @@
 use kevy_bytes::SmallBytes;
 
 /// Inline packed hash storage. 24 bytes total.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct SmallHashData {
     count: u8,
     used: u8,
@@ -215,6 +215,7 @@ impl SmallHashData {
 }
 
 /// Iterator over [`SmallHashData`] yielding `(&[u8] field, &[u8] value)`.
+#[derive(Debug)]
 pub struct SmallHashIter<'a> {
     buf: &'a [u8],
     cursor: usize,

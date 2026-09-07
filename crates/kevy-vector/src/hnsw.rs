@@ -6,6 +6,7 @@ use std::collections::HashMap;
 
 use crate::params::{HnswParams, VectorStats};
 
+#[derive(Debug)]
 struct Node {
     /// Every LIVING key whose vector is exactly this one (duplicate
     /// vectors under different keys collapse onto ONE graph node —
@@ -51,6 +52,7 @@ struct Node {
 /// assert!(!keys.contains(&b"gone".to_vec()));
 /// assert!(keys.contains(&b"kept".to_vec()));
 /// ```
+#[derive(Debug)]
 pub struct Hnsw {
     params: HnswParams,
     dim: usize,

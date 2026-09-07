@@ -16,6 +16,7 @@ use kevy_persist::Fsync;
 /// from 4× down to 1×.
 ///
 /// [`Commands::resolve`]: crate::Commands::resolve
+#[derive(Debug)]
 pub struct ResolvedCmd {
     /// MULTI/EXEC/DISCARD/WATCH classification, so the transaction layer
     /// does not re-parse the verb.
@@ -95,6 +96,7 @@ pub enum ExtensionReduced {
 }
 
 /// Transaction-control classification for a command.
+#[derive(Debug)]
 pub enum TxnKind {
     /// `MULTI` — opens a queue on this connection.
     Multi,

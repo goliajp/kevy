@@ -12,6 +12,7 @@ use alloc::sync::Arc;
 /// L1 return shape for [`Store::get_for_reply`] — lets the reactor's reply
 /// path choose between memcpy (`Bytes`) and writev zero-copy (`ArcBulk`)
 /// off one keyspace lookup.
+#[derive(Debug)]
 pub enum GetReply<'a> {
     /// Inline-encoded value — caller memcpys the bytes into its output Vec
     /// (small replies; encoding cost is tiny vs the RTT floor).
@@ -27,6 +28,7 @@ pub enum GetReply<'a> {
 /// ([`Store::get_shared_owned`]). Bulk values ride out as an Arc clone (no
 /// byte copy); small values as a plain Vec (one alloc — cheaper than a fresh
 /// Arc). The FFI's shared free reconstructs whichever the tag says.
+#[derive(Debug)]
 pub enum GetShared {
     /// Bulk value — the engine's Arc, cloned. Zero byte copy.
     Arc(Arc<Box<[u8]>>),

@@ -25,6 +25,7 @@ const PIPELINE: usize = 512;
 /// is the half that used to be invisible: a type with no rebuild verb
 /// produced no frames, no error and no mention, so a migration could
 /// report success while leaving a whole type behind.
+#[derive(Debug)]
 pub struct Export {
     /// Keys whose frames are in the file.
     pub keys: u64,
@@ -255,6 +256,7 @@ fn append_ttl_frame(
 }
 
 /// Import stats.
+#[derive(Debug)]
 pub struct ImportReport {
     /// Commands sent successfully.
     pub sent: u64,

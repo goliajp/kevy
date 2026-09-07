@@ -65,6 +65,7 @@ fn with_heap<R>(f: impl FnOnce(&mut Heap) -> R) -> Option<R> {
 /// #[global_allocator]
 /// static ALLOC: kevy_alloc::KevyAlloc = kevy_alloc::KevyAlloc;
 /// ```
+#[derive(Debug)]
 pub struct KevyAlloc;
 
 /// Bytes reserved before an over-aligned block to remember its base.

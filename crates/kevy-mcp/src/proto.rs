@@ -6,6 +6,7 @@ use crate::json::{self, Value, obj, s};
 
 /// One decoded JSON-RPC message. `id: None` means notification — the
 /// server must never answer it (JSON-RPC 2.0 §4.1).
+#[derive(Debug)]
 pub struct Request {
     /// Echoed verbatim into the response (number, string — any JSON).
     pub id: Option<Value>,
@@ -16,6 +17,7 @@ pub struct Request {
 }
 
 /// Framing-level failures, each mapped to its JSON-RPC error code.
+#[derive(Debug)]
 pub enum FrameError {
     /// Not valid JSON → `-32700`.
     Parse(String),

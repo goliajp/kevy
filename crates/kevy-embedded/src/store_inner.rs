@@ -21,7 +21,7 @@ use crate::store::{Shards, Store};
 /// Used by the URL-keyed registry in `kevy-client` so that multiple
 /// `Connection::connect("mem://name")` calls share the same backing store
 /// without leaking it when all strong handles go away.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct WeakStore {
     shards: Weak<Vec<Arc<RwLock<Inner>>>>,
     guard: Weak<DropGuard>,
@@ -79,6 +79,7 @@ impl Store {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct Inner {
     pub(crate) store: kevy_store::Store,
     #[cfg(feature = "persist")]
@@ -142,6 +143,7 @@ impl Inner {
 /// Owns the reaper-thread handle + the shards for the final AOF flush. Lives
 /// in an `Arc<DropGuard>` shared across every `Store` clone; the drop logic
 /// fires only when the last clone goes away.
+#[derive(Debug)]
 pub(crate) struct DropGuard {
     /// Set by [`Store::shutdown`]: every later write fails with
     /// `KevyError::Closed`. Shared across clones (it lives here so ANY

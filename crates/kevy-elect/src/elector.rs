@@ -466,3 +466,32 @@ impl Elector {
 
     // ─────────── inbound handlers ───────────
 }
+
+impl core::fmt::Debug for Elector {
+    /// Prints the whole election state except the persistence backend.
+    ///
+    /// `persist` is a `Box<dyn ElectorPersist + Send>`: a trait object has
+    /// no `Debug`, and the backend's identity says nothing about why an
+    /// election went the way it did. Everything that does — role, epoch,
+    /// votes, timers — is shown.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Elector")
+            .field("node_id", &self.node_id)
+            .field("peer_ids", &self.peer_ids)
+            .field("config", &self.config)
+            .field("role", &self.role)
+            .field("epoch", &self.epoch)
+            .field("current_primary", &self.current_primary)
+            .field("first_tick", &self.first_tick)
+            .field("my_repl_offset", &self.my_repl_offset)
+            .field("last_hb_sent", &self.last_hb_sent)
+            .field("peer_views", &self.peer_views)
+            .field("accept_votes", &self.accept_votes)
+            .field("offer_at", &self.offer_at)
+            .field("backoff_until", &self.backoff_until)
+            .field("last_accept_epoch", &self.last_accept_epoch)
+            .field("my_advertised_addr", &self.my_advertised_addr)
+            .field("jitter", &self.jitter)
+            .finish_non_exhaustive()
+    }
+}

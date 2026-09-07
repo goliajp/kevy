@@ -28,6 +28,7 @@ use kevy_index::{
 };
 
 /// One index's window state on one shard.
+#[derive(Debug)]
 pub struct WindowRt {
     /// The declared window — width, column and retention — as the catalog
     /// recorded it. Fixed for the life of the index; everything else here

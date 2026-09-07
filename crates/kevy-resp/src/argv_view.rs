@@ -74,6 +74,7 @@ pub trait ArgvView: core::ops::Index<usize, Output = [u8]> {
 ///
 /// Returned by [`ArgvView::iter`]. Concrete (rather than `impl Iterator`) so
 /// the method works for both `Argv` and `ArgvBorrowed` callers.
+#[derive(Debug)]
 pub struct ArgvIter<'a, V: ?Sized + ArgvView> {
     view: &'a V,
     i: usize,

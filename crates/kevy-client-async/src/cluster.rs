@@ -36,6 +36,7 @@ async fn connect_default(host: &str, port: u16) -> io::Result<DefaultTransport> 
 }
 
 /// One open connection per distinct shard node + a slot→shard table.
+#[derive(Debug)]
 pub struct AsyncClusterClient {
     shards: Vec<AsyncRespCodec<DefaultTransport>>,
     slot_to_shard: Vec<u16>,

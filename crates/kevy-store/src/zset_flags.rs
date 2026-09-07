@@ -32,6 +32,7 @@ impl ZaddFlags {
 }
 
 /// Outcome of a flags-aware `ZADD`.
+#[derive(Debug)]
 pub struct ZaddReport {
     /// Members newly added.
     pub added: usize,

@@ -18,6 +18,7 @@ pub const INTERNAL: i64 = -32603;
 
 /// Everything a tool call needs: the live connection, the verb catalog
 /// bootstrapped from it, and the write opt-in flag.
+#[derive(Debug)]
 pub struct ToolCx<'a> {
     /// RESP connection to the kevy server.
     pub client: &'a mut RespClient,

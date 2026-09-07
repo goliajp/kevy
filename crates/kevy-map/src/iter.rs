@@ -6,6 +6,7 @@ use core::mem::MaybeUninit;
 use crate::map::KevyMap;
 
 /// `(&K, &V)` iterator over all live entries of a [`KevyMap`]; order unspecified.
+#[derive(Debug)]
 pub struct Iter<'a, K, V> {
     metadata: &'a [u8],
     slots: &'a [MaybeUninit<(K, V)>],
@@ -67,6 +68,7 @@ impl<'a, K, V> IntoIterator for &'a KevyMap<K, V> {
 
 /// `(&K, &mut V)` iterator over all live entries of a [`KevyMap`]; order
 /// unspecified. Keys stay shared — mutating a key would corrupt its bucket.
+#[derive(Debug)]
 pub struct IterMut<'a, K, V> {
     metadata: &'a [u8],
     slots: &'a mut [MaybeUninit<(K, V)>],
@@ -109,6 +111,7 @@ impl<'a, K, V> IntoIterator for &'a mut KevyMap<K, V> {
 }
 
 /// `&K` iterator over all live entries of a [`KevyMap`].
+#[derive(Debug)]
 pub struct Keys<'a, K, V>(Iter<'a, K, V>);
 
 impl<'a, K, V> Keys<'a, K, V> {
@@ -125,6 +128,7 @@ impl<'a, K, V> Iterator for Keys<'a, K, V> {
 }
 
 /// `&V` iterator over all live entries of a [`KevyMap`].
+#[derive(Debug)]
 pub struct Values<'a, K, V>(Iter<'a, K, V>);
 
 impl<'a, K, V> Values<'a, K, V> {

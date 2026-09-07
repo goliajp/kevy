@@ -28,7 +28,7 @@ type Rows = Vec<(Vec<u8>, Vec<u8>)>;
 /// `ZRANGE … WITHSCORES` as a plain list silently treats every score as
 /// a row key and reports a divergence on every sample — so the two
 /// ambiguous shapes are told apart by the caller, not by a heuristic.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Shape {
     /// `[cursor, [key, sortval, key, sortval, …]]` — kevy's paged
     /// index reply. Detected, not declared: a two-element array whose
@@ -70,6 +70,7 @@ fn pairs(items: &[Reply]) -> Rows {
 }
 
 /// What one comparison found.
+#[derive(Debug)]
 pub struct Divergence {
     /// Position of the first place the two orders differ.
     pub at: usize,
@@ -83,6 +84,7 @@ pub struct Divergence {
 /// difference. Membership and order are reported separately because
 /// they fail for different reasons: a missing row is a writer nobody
 /// updated, a reordering is score drift.
+#[derive(Debug)]
 pub struct Compared {
     /// Rows the old path returns and the new one does not.
     pub missing: Vec<Vec<u8>>,
@@ -118,6 +120,7 @@ pub fn compare(old: &Rows, new: &Rows) -> Compared {
 }
 
 /// Outcome of a shadow run — the paste-able conclusion.
+#[derive(Debug)]
 pub struct ShadowReport {
     /// How many times both sides were asked.
     pub samples: u64,

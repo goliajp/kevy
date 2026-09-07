@@ -33,6 +33,7 @@ use crate::replica_runner::ReplicaRunner;
 /// senders, the live runner fleet, the upstream address, and the
 /// availability flags (`-READONLY` / `-QUIESCED` / `-NOREPLICAS` /
 /// `-STALE`) that gate client reads and writes.
+#[derive(Debug)]
 pub(crate) struct ReplicationState {
     /// One per-shard sender to the matching shard's
     /// [`kevy_rt::ReplicaInboxReceiver`]. Length = `nshards`; index =

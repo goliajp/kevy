@@ -64,7 +64,7 @@
 use kevy_bytes::SmallBytes;
 
 /// Inline packed set storage. 24 bytes total — see module docs for layout.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct SmallSetData {
     /// Number of inline members (0..=22 cap, real ceiling is byte-budget).
     count: u8,
@@ -205,6 +205,7 @@ impl SmallSetData {
 }
 
 /// Iterator over [`SmallSetData`] members as `&[u8]` slices.
+#[derive(Debug)]
 pub struct SmallSetIter<'a> {
     buf: &'a [u8],
     cursor: usize,

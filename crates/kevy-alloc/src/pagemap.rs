@@ -36,7 +36,7 @@ pub const NO_CLASS: u8 = 0xFF;
 /// Per-span bookkeeping. Deliberately *not* small: the bitmap is the
 /// price of page-granular reclaim, and it lives in the header span,
 /// which exists to be spent on exactly this.
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct SpanMeta {
     /// Size class this span serves, or [`NO_CLASS`].
     pub class: u8,

@@ -12,6 +12,7 @@ use crate::{SegError, SegMeta};
 
 /// An open segment. Cheap to clone-by-Arc above this crate; internally
 /// one file handle plus the in-memory fence table.
+#[derive(Debug)]
 pub struct Seg {
     f: File,
     meta: SegMeta,
@@ -246,6 +247,7 @@ impl Seg {
 }
 
 /// Ascending `(key, payload)` iterator over a closed range.
+#[derive(Debug)]
 pub struct RangeIter<'a> {
     seg: &'a Seg,
     page_ix: usize,

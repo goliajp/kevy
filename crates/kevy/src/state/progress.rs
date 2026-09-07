@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 /// This is the ONLY slice of state a replica runner thread captures
 /// (`Arc<ReplicaProgress>`), keeping runner lifetimes decoupled from
 /// [`ReplicationState`] and the state graph acyclic.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(crate) struct ReplicaProgress {
     /// Full-resync window count: raised per runner at `SnapshotBegin`,
     /// lowered when the shard-side APPLY of `SnapshotEnd` lands (the

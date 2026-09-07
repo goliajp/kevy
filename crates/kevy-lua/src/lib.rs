@@ -402,6 +402,26 @@ fn version_tag(v: LuaVersion) -> &'static str {
 // few unit tests below need `Bridge::vm_count`, which is
 // `#[cfg(test)]`-gated and therefore not visible from
 // integration tests.
+impl core::fmt::Debug for Bridge {
+    /// Reports the bridge's configuration and how much of it is live,
+    /// without touching the VMs or the dispatch closure.
+    ///
+    /// Neither can be printed: luna-core's `Vm` has no `Debug`, and
+    /// `dispatch` is an `Rc<dyn Fn>` with no identity worth showing. The
+    /// VMs are reported as a count of spawned slots, which is the thing
+    /// worth knowing about them from outside — whether a dialect has been
+    /// used yet.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Bridge")
+            .field("vms_spawned", &self.vms.iter().filter(|v| v.is_some()).count())
+            .field("read_only", &self.read_only.get())
+            .field("instr_budget", &self.instr_budget)
+            .field("allow", &self.allow)
+            .field("cached_scripts", &self.script_cache.len())
+            .finish_non_exhaustive()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

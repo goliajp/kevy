@@ -30,6 +30,7 @@ impl GroupStats {
     }
 }
 
+#[derive(Debug)]
 struct Group {
     count: u64,
     sum: f64,
@@ -83,7 +84,7 @@ pub struct AggStats {
 }
 
 /// One shard's aggregate segment.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct AggSegment {
     groups: HashMap<Vec<u8>, Group>,
     /// row key → (group, value) for O(log) update/remove.

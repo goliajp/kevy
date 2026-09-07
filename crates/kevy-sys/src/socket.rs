@@ -14,6 +14,7 @@ use core::ptr;
 use std::io;
 
 /// An owned socket file descriptor. Closes itself on drop via our own `close`.
+#[derive(Debug)]
 pub struct Socket {
     pub(crate) fd: c_int,
 }

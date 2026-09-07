@@ -13,7 +13,7 @@ pub(crate) const MIN_KEYS: usize = MAX_KEYS / 2;
 
 /// One node. `children` is empty exactly when the node is a leaf; an
 /// internal node always has `keys.len() + 1` children.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub(crate) struct Node<K> {
     /// Sorted keys.
     pub(crate) keys: Vec<K>,

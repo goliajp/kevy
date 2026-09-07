@@ -28,6 +28,7 @@ use kevy_sys::Socket;
 ///
 /// Lives in `Shard::replicas`. See the module-level docs for the
 /// lifecycle diagram.
+#[derive(Debug)]
 pub struct ReplicaConn {
     /// Owning socket. Dropped when the conn is dropped (closes the fd).
     pub sock: Socket,

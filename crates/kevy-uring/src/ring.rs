@@ -14,6 +14,7 @@ use crate::ffi::{
 use crate::layout::IoUringSqe;
 
 /// A Linux io_uring instance: one submission ring + one completion ring.
+#[derive(Debug)]
 pub struct IoUring {
     pub(crate) ring_fd: c_int,
     sq_mmap: *mut c_void,

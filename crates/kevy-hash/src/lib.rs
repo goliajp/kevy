@@ -213,7 +213,7 @@ fn multiply_mix(x: u64, y: u64) -> u64 {
 /// split.write(b"efgh");
 /// assert_ne!(whole.finish(), split.finish());
 /// ```
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct FxHasher(u64);
 
 impl Hasher for FxHasher {

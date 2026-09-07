@@ -18,6 +18,7 @@ use crate::layout::IoUringBufReg;
 /// [`recv`](crate::IoUring::prep_recv_multishot)). Owns the buf-ring mapping
 /// and the backing slab; the kernel fills a buffer per arrival, the app
 /// recycles it.
+#[derive(Debug)]
 pub struct ProvidedBufRing {
     pub(crate) ring_fd: c_int,
     pub(crate) ring: *mut u8,

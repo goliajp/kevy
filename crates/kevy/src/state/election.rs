@@ -26,6 +26,7 @@ use kevy_elect::{
 
 use super::ReplicationState;
 
+#[derive(Debug)]
 pub(crate) struct ElectionState {
     /// Live Transport handle. `None` when the operator has not
     /// configured peers, `Some(...)` while the elector is running.

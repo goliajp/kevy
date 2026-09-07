@@ -72,6 +72,7 @@ impl<T> AsyncTransport for T where T: AsyncRead + AsyncWrite + Send + Unpin + ?S
 
 /// Future returned by [`read`]: drives a single `poll_read` to
 /// completion.
+#[derive(Debug)]
 pub struct Read<'a, T: ?Sized> {
     transport: &'a mut T,
     buf: &'a mut [u8],
@@ -79,6 +80,7 @@ pub struct Read<'a, T: ?Sized> {
 
 /// Future returned by [`write_all`]: drives `poll_write` to completion
 /// for the whole buffer (loops on partial writes internally).
+#[derive(Debug)]
 pub struct WriteAll<'a, T: ?Sized> {
     transport: &'a mut T,
     buf: &'a [u8],

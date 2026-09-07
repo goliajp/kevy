@@ -36,7 +36,7 @@ pub type SetData = KevySet<SmallBytes>;
 /// caller to write `old == score` would have skipped a live update and left
 /// `by_member` and `by_score` holding different scores for one member.
 /// NaN cannot arrive: the parser refuses it.
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct Score(pub f64);
 impl PartialEq for Score {
     fn eq(&self, other: &Self) -> bool {
@@ -57,6 +57,7 @@ impl PartialOrd for Score {
 
 /// A score-range endpoint for `ZRANGEBYSCORE`/`ZCOUNT` (inclusive or exclusive).
 /// Use `value = ±INFINITY` for `-inf`/`+inf`.
+#[derive(Debug)]
 pub struct ScoreBound {
     /// The score itself. `f64::INFINITY` / `NEG_INFINITY` carry `+inf` and
     /// `-inf`, which is why this is not an `Option`.
@@ -81,7 +82,7 @@ impl ScoreBound {
 /// `(score, member)` ([`kevy_ranktree::RankTree`] — every node carries its
 /// subtree count), so rank queries (`ZRANK`, `ZRANGE` by rank, `ZCOUNT`,
 /// score-bound seeks) are O(log N) descents instead of linear walks.
-#[derive(Default, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct ZSetData {
     pub(crate) by_member: KevyMap<SmallBytes, f64>,
     /// The `(score, member)` order-statistic index. Member is a
@@ -179,7 +180,7 @@ pub use crate::value_cold::{COLD_TAG_HASH, COLD_TAG_STRING, ColdRef};
 /// `Clone` is the snapshot-collect primitive: `Str` copies its bytes
 /// (inline = 24 B memcpy; heap = one allocation), collections bump a
 /// refcount. See [`crate::Store::collect_snapshot`].
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum Value {
     /// A byte string, inline up to 22 bytes — see the type doc above for
     /// why that boundary is where it is.

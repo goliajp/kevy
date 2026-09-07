@@ -92,7 +92,7 @@ use node::Node;
 /// assert!(!t.insert(1));
 /// assert_eq!(t.len(), 1);
 /// ```
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct RankTree<K> {
     root: Node<K>,
 }

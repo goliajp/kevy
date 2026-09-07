@@ -29,6 +29,7 @@ pub(crate) const WEIGHT_MAX: u32 = u32::MAX;
 ///
 /// Storage saving over the original layout: 16 bytes per entry = 25 %.
 /// For a 1 M-key shard that's ~16 MB of RSS back.
+#[derive(Debug)]
 pub(crate) struct Entry {
     pub(crate) value: Value,
     pub(crate) expire_at_ns: Option<NonZeroU64>,

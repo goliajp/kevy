@@ -51,6 +51,7 @@ pub const HS_PROMOTE: usize = 16 * 1024;
 /// here and lets the one bucket grow flat instead of looping.
 const MAX_BITS: u8 = 40;
 
+#[derive(Debug)]
 pub(crate) struct Bucket<V> {
     local_bits: u8,
     map: KevyMap<SmallBytes, V>,
@@ -64,6 +65,7 @@ impl<V: Clone> Clone for Bucket<V> {
 
 /// A giant hash/set: extendible-hash directory over `Arc`-shared
 /// buckets. `V = SmallBytes` is the hash door, `V = ()` the set door.
+#[derive(Debug)]
 pub struct SegMap<V> {
     global_bits: u8,
     /// `1 << global_bits` entries; each names a bucket index.

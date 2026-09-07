@@ -40,6 +40,7 @@ pub trait ShardLayout {
 }
 
 /// The standard per-shard file names, for every shard count.
+#[derive(Debug)]
 pub struct StdLayout;
 
 impl ShardLayout for StdLayout {

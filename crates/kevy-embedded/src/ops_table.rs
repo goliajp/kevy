@@ -16,7 +16,7 @@ use crate::{KevyError, KevyResult};
 
 /// Store-level table state (declarations only — a table's runtime
 /// footprint is its compiled indexes in the index registry).
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(crate) struct TableReg {
     pub(crate) catalog: RwLock<TableCatalog>,
     /// The refusal log (the auto-declaration loop's observation

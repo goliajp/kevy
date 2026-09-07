@@ -19,13 +19,13 @@ use crate::ops_index::ShardSegs;
 use crate::store::{Store, lock_write};
 
 /// Store-level registry.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(crate) struct ViewReg {
     pub(crate) catalog: RwLock<(u64, ViewCatalog)>,
 }
 
 /// One shard's view states (inside `Inner`, guarded by the shard lock).
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(crate) struct ShardViews {
     pub(crate) version: u64,
     pub(crate) views: Vec<ViewState>,
@@ -37,6 +37,8 @@ pub(crate) struct ShardViews {
     #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
     pub(crate) reserved_cache: u64,
 }
+
+#[derive(Debug)]
 
 pub(crate) struct ViewState {
     spec: ViewSpec,

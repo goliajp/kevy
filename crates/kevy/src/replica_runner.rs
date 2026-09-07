@@ -39,6 +39,7 @@ const RECONNECT_BACKOFF: Duration = Duration::from_millis(250);
 /// `Vec<ReplicaRunner>` in its `ReplicationState` so `REPLICAOF`
 /// can stop + replace runners at runtime and so the
 /// process exits cleanly via `Drop`.
+#[derive(Debug)]
 pub(crate) struct ReplicaRunner {
     handle: Option<JoinHandle<()>>,
     stop: Arc<AtomicBool>,

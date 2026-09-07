@@ -27,6 +27,7 @@ use std::process::ExitCode;
 use kevy_resp_client::RespClient;
 
 /// Where a set of item names comes from.
+#[derive(Debug)]
 pub enum Source {
     /// The members of a set, sorted set, or list key.
     Index(String),
@@ -60,6 +61,7 @@ impl Source {
 }
 
 /// What one source contributed.
+#[derive(Debug)]
 pub struct SourceReport {
     /// How the source was named on the command line.
     pub label: String,
@@ -71,6 +73,7 @@ pub struct SourceReport {
 }
 
 /// The union, and where each name came from.
+#[derive(Debug)]
 pub struct Union {
     /// Every name, first-seen order, deduplicated.
     pub names: Vec<Vec<u8>>,

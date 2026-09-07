@@ -30,7 +30,7 @@ const MAX_POOLED_BYTES: usize = 4096;
 
 /// A recycling pool of owned [`Argv`]s. See the module docs for the
 /// cross-shard ownership cycle it serves.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct ArgvPool {
     free: Vec<Argv>,
 }

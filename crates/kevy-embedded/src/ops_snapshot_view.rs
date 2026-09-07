@@ -17,6 +17,7 @@ use kevy_store::SnapshotView;
 use crate::store::{Store, lock_write};
 
 /// A frozen, consistent point-in-time view of the whole store.
+#[derive(Debug)]
 pub struct Snapshot {
     views: Vec<SnapshotView>,
 }

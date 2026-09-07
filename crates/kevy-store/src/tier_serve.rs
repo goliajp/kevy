@@ -53,6 +53,7 @@ mod enabled {
     /// One planned cold-record read in a [`Store::peek_hash_rows`]
     /// batch. The pinned file keeps the record readable even if a
     /// compaction retires the file mid-batch.
+    #[derive(Debug)]
     pub struct ColdRead {
         /// Pinned vlog file the record lives in.
         pub file: Arc<VlogFile>,
@@ -75,6 +76,7 @@ mod enabled {
     }
 
     /// The default reader: one ordered `pread` per record.
+    #[derive(Debug)]
     pub struct SyncColdRead;
 
     impl ColdBatchReader for SyncColdRead {

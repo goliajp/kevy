@@ -153,8 +153,7 @@ fn frame_without_manifest_entry_refuses_startup_by_name() {
     append_frame(d.path(), &[kevy_persist::SEGMENTED, b"row-7465-9.seg"]);
 
     let err = Store::open(Config::default().with_persist(d.path()))
-        .err()
-        .expect("startup must refuse, not drop rows");
+        .expect_err("startup must refuse, not drop rows");
     let msg = format!("{err}");
     assert!(msg.contains("row-7465-9.seg"), "refusal must name the segment: {msg}");
 }

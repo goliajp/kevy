@@ -31,6 +31,7 @@ const TXT_TAG: &[u8] = b"txtcold:";
 
 /// One open cold segment with its LIVE corpus contribution — the
 /// frozen numbers minus every tombstoned document's exact share.
+#[derive(Debug)]
 pub(super) struct ColdSeg {
     pub(super) seg: kevy_seg::Seg,
     pub(super) seq: u32,
@@ -45,6 +46,7 @@ pub use query::{ColdHit, ColdPage, ColdPageQuery};
 /// The frozen text segments for one windowed full-text index on one
 /// shard, plus the bloom and tombstones that let a query skip or correct
 /// them without opening a file.
+#[derive(Debug)]
 pub struct TextColdDir {
     pub(super) segs: Vec<ColdSeg>,
     seq: u32,

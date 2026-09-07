@@ -68,6 +68,7 @@ pub fn write_record_multibulk<W: Write, A: ArgvView + ?Sized>(
 /// Public for external incremental consumers ([`next_record`]): a
 /// stream arriving in arbitrary chunks treats `Truncated` as "wait
 /// for more bytes" and `Corrupt` as its format error.
+#[derive(Debug)]
 pub enum RecordStep<'a> {
     /// A complete, checksum-valid record.
     Ok {

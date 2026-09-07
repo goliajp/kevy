@@ -30,7 +30,7 @@ pub const SEG_CAP: usize = 16 * 1024;
 pub const SEG_PROMOTE: usize = SEG_CAP;
 
 /// A giant list: a deque of `Arc`-shared segments plus an O(1) length.
-#[derive(Clone, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct SegListData {
     segs: VecDeque<Arc<ListData>>,
     len: usize,

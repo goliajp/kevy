@@ -19,6 +19,7 @@ use crate::value::Value;
 use crate::{SmallBytes, Store, now_ns, remaining_ms};
 
 /// A frozen, `Send` view of one store's live entries at a single instant.
+#[derive(Debug)]
 pub struct SnapshotView {
     entries: Vec<(SmallBytes, Value, Option<u64>)>,
     /// Hash field TTLs frozen with the view.

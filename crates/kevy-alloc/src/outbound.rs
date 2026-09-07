@@ -45,7 +45,7 @@ const GROUPS: usize = 8;
 /// One pending foreign free: the slot, what the caller asked for, and
 /// its class (needed for slot-size sums at flush; not recoverable from
 /// the request size alone).
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 struct Pending {
     addr: usize,
     requested: u32,
@@ -53,6 +53,7 @@ struct Pending {
 }
 
 /// The heap-local ring of foreign frees awaiting shipment.
+#[derive(Debug)]
 pub(crate) struct Outbound {
     entries: [Pending; CAP],
     len: u16,

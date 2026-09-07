@@ -15,7 +15,7 @@ use crate::{KevyError, KevyResult};
 /// Grouping them keeps one entry point instead of one per clause, and
 /// [`MatchOpts::default`] is the plain query, so a caller opts into
 /// exactly the clauses it names.
-#[derive(Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct MatchOpts<'a> {
     /// `HIGHLIGHT`: `None` = not requested, `Some(&[])` = every indexed
     /// field, `Some(names)` = only those.
