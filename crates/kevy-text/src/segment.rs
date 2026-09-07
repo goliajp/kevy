@@ -483,9 +483,6 @@ impl core::fmt::Debug for Filter<'_> {
     /// identity worth printing — it shows as `<fn>` so the rest of the
     /// struct stays inspectable.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("Filter")
-            .field("field", &self.field)
-            .field("test", &"<fn>")
-            .finish()
+        f.debug_struct("Filter").field("field", &self.field).field("test", &"<fn>").finish()
     }
 }
