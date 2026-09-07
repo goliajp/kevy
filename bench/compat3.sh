@@ -13,6 +13,12 @@ cd "$(dirname "$0")"
 . ./anchor-lib.sh || { echo "compat3: cannot load anchor-lib.sh" >&2; exit 2; }
 command -v anchor_pin >/dev/null || { echo "compat3: anchor-lib.sh loaded but anchor_pin is missing" >&2; exit 2; }
 echo "### bringing up valkey $(anchor_pin valkey) + redis $(anchor_pin redis) + kevy ..."
+# Pull before up. `compose up` is happy with a cached layer under the pinned
+# tag, which is the exact scenario COMPETITOR-ANCHORS.json was opened about:
+# the box serves what it cached weeks ago while the registry serves the pin.
+# The assertion below then catches it — correctly, and after a five-minute
+# build. Pulling first makes the common case pass instead of failing loudly.
+docker compose pull -q valkey redis loadgen >/dev/null 2>&1
 docker compose up -d --build valkey redis kevy loadgen >/dev/null 2>&1
 for h in valkey redis kevy; do
   for _ in $(seq 1 60); do
