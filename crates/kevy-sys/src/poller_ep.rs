@@ -29,6 +29,8 @@ impl Poller {
     /// Creates a fresh epoll instance (`EPOLL_CLOEXEC`, closed on drop).
     /// Errors surface the raw OS error from `epoll_create1(2)`.
     pub fn new() -> io::Result<Self> {
+        // SAFETY: `epoll_create1(2)` takes one integer by value and dereferences nothing.
+        // A negative return is checked below before the fd is wrapped.
         let epfd = unsafe { ffi::epoll_create1(ep::EPOLL_CLOEXEC) };
         if epfd < 0 {
             return Err(io::Error::last_os_error());
@@ -49,6 +51,9 @@ impl Poller {
 
     fn ctl(&self, op: c_int, fd: i32, read: bool, write: bool) -> io::Result<()> {
         let mut ev = ffi::EpollEvent { events: Self::mask(read, write), data: fd as u64 };
+        // SAFETY: `self.epfd` is open for the life of this `Poller` — `Drop` is the only
+        // close. `ev` is a live local and `epoll_ctl(2)` reads it only for the
+        // duration of the call.
         let r = unsafe { ffi::epoll_ctl(self.epfd, op, fd, &raw mut ev) };
         if r < 0 {
             return Err(io::Error::last_os_error());
@@ -68,6 +73,9 @@ impl Poller {
 
     /// Deregister `fd` from the epoll set.
     pub fn delete(&self, fd: i32) -> io::Result<()> {
+        // SAFETY: `self.epfd` is open for the life of this `Poller` — `Drop` is the only
+        // close. `epoll_ctl(2)` with `EPOLL_CTL_DEL` ignores the event
+        // pointer, which is why null is the documented argument here.
         let r = unsafe { ffi::epoll_ctl(self.epfd, ep::EPOLL_CTL_DEL, fd, ptr::null_mut()) };
         if r < 0 {
             return Err(io::Error::last_os_error());
@@ -79,6 +87,10 @@ impl Poller {
     pub fn wait(&self, out: &mut Vec<Event>, timeout_ms: Option<i32>) -> io::Result<usize> {
         out.clear();
         let mut raw: Vec<ffi::EpollEvent> = Vec::with_capacity(WAIT_CAPACITY);
+        // SAFETY: `self.epfd` is open for the life of this `Poller` — `Drop` is the only
+        // close. `raw` was built with `WAIT_CAPACITY` capacity and that same
+        // number is passed as the array length, so the kernel writes only within the
+        // allocation.
         let n = unsafe {
             ffi::epoll_wait(
                 self.epfd,
@@ -94,6 +106,9 @@ impl Poller {
             }
             return Err(e);
         }
+        // SAFETY: `epoll_wait` returned `n` and `n >= 0` was checked above; the kernel
+        // initialised exactly that many elements, and `n <= WAIT_CAPACITY` is the length we
+        // passed, which is the capacity `raw` was built with.
         unsafe { raw.set_len(n as usize) };
         for ev in &raw {
             let flags = ev.events; // copy out (struct may be packed on x86_64)
@@ -112,6 +127,8 @@ impl Poller {
 
 impl Drop for Poller {
     fn drop(&mut self) {
+        // SAFETY: `self.epfd` was open for the life of this `Poller` and this is the only
+        // close: `Poller` is neither `Copy` nor `Clone`.
         unsafe {
             ffi::close(self.epfd);
         }

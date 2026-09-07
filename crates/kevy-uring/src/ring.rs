@@ -129,6 +129,8 @@ impl IoUring {
         // SAFETY: `sq_off` / `cq_off` were filled by the kernel for this ring;
         // their byte offsets lie inside the just-mapped regions.
         let sq = unsafe { Self::sq_cursors(sq_mmap, &p) };
+        // SAFETY: as above — `cq_off` came from the same kernel-filled params and its
+        // offsets lie inside the completion-queue mapping.
         let cq = unsafe { Self::cq_cursors(cq_mmap, &p) };
         let sq_flags = if sqpoll.is_some() { Some(sq.flags) } else { None };
 
@@ -291,6 +293,8 @@ impl IoUring {
     pub fn for_each_completion<F: FnMut(Completion)>(&mut self, mut f: F) -> u32 {
         // SAFETY: cq_khead / cq_ktail are the kernel-shared cursors.
         let mut head = unsafe { (*self.cq_khead).load(Ordering::Relaxed) };
+        // SAFETY: same kernel-shared cursor pair. `Acquire` on the tail pairs with the
+        // kernel's release, so every CQE it counts is fully written before we read it.
         let tail = unsafe { (*self.cq_ktail).load(Ordering::Acquire) };
         let mut n = 0;
         while head != tail {

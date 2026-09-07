@@ -219,6 +219,9 @@ impl<C: Commands> Shard<C> {
                 let ok = if uc.write_arcs.is_empty() {
                     // Simple linear path — no arc-bulks pinned. Same as
                     // before.
+                    // SAFETY: `write_buf` is a live Vec and `write_off <= len`, so the pointer is
+                    // inside it and the length passed is exactly what remains. The buffer outlives
+                    // the SQE because the connection owns it until the completion is reaped.
                     unsafe {
                         ring.prep_write(
                             conn.sock.raw(),
@@ -342,6 +345,9 @@ impl<C: Commands> Shard<C> {
                         // `body_len`; pointer is valid for writes up to
                         // `body_remaining` bytes.
                         let ptr = unsafe { body.as_mut_ptr().add(body.len()) };
+                        // SAFETY: `ptr` is inside `body`'s allocation (previous line) and
+                        // `body_remaining` is what its capacity has left, so the kernel writes only
+                        // within it. `body` outlives the SQE — the connection owns it until reap.
                         let ok = unsafe {
                             ring.prep_read(
                                 conn.sock.raw(),
