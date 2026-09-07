@@ -1,0 +1,46 @@
+# Are the engines we benchmark against still the current ones?
+#
+# The tree can only ever prove that it agrees with itself. On 2026-09-01
+# it did: the arena table, the ledger and the site all said "Redis 8", and
+# every one of them was internally consistent while the bench box ran a
+# cached 8.10.0 and the registry served 8.10.1. A published ratio was a
+# function of a docker cache, and no gate could have noticed, because
+# noticing requires asking redis what its newest release is.
+#
+# So this asks the upstreams — GitHub releases for redis, valkey and
+# dragonfly, endoflife.date for postgres, Docker Hub for redis-stack — and
+# goes red when a pin in bench/COMPETITOR-ANCHORS.json falls behind a
+# latest stable. Red means the published comparison numbers are now
+# against an older opponent than the one users can install. The fix is the
+# `competitor-anchors` skill: raise the pin, follow the DRIFT list, rebuild
+# the box's source trees, and RE-MEASURE. Relabelling a table is
+# falsification.
+#
+# Daily rather than per-push, for the same reason channel-parity is: the
+# answer changes when redis cuts a release, not when this repository does,
+# and a per-push network gate teaches people to ignore red. The tree-side
+# half of the same check (anchor-pins) does run on every push, inside CI.
+name: competitor anchors — are we still measuring against current engines
+
+on:
+  schedule:
+    - cron: '41 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  anchors:
+    name: every anchor is a current latest stable
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: ask every upstream
+        # Authenticated so the GitHub half cannot fail on the 60/hour
+        # anonymous limit: a rate-limited gate reads exactly like a stale
+        # pin, and this one must never be ambiguous about which it is.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 tools/check_competitor_anchors.py

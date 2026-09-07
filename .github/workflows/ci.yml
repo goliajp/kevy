@@ -360,6 +360,14 @@ jobs:
       - name: version alignment (seven layers agree with the workspace)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: python3 tools/check_version_alignment.py
+      # Same failure shape, other direction: a bench table names an
+      # opponent, and the name has to be a version that is actually
+      # written down. This half proves the tree agrees with the anchors
+      # file; the daily competitor-anchors workflow asks the upstreams
+      # whether the anchors file is still current.
+      - name: competitor anchors (every pinned version agrees)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: python3 tools/check_competitor_anchors.py --offline
       # Nine of twenty-three fuzz targets existed and never ran. A target
       # in the tree and not in the matrix shows coverage that is not there,
       # which is worse than never having written it.

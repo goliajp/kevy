@@ -36,13 +36,13 @@ echo "=== kevy io_uring (${THREADS}sh) ==="
 KEVY_IO_URING=1 KEVY_BIND=127.0.0.1 taskset -c "$SRV_CORES" "$KBIN" --threads "$THREADS" --port 7001 --no-aof >/tmp/ps_u.log 2>&1 &
 P=$!; run 7001 "kevy-uring"; kill "$P" 2>/dev/null; wait "$P" 2>/dev/null
 
-echo "=== valkey 9.1 ==="
+echo "=== valkey 9.1.2 ==="
 docker run -d --rm --name bench_v --network host --cpuset-cpus "$SRV_CORES" \
-  valkey/valkey:9.1 valkey-server --port 7002 --save '' --appendonly no >/dev/null 2>&1
+  valkey/valkey:9.1.2 valkey-server --port 7002 --save '' --appendonly no >/dev/null 2>&1
 run 7002 "valkey9.1"; docker rm -f bench_v >/dev/null 2>&1
 
-echo "=== redis 7.4 ==="
+echo "=== redis 8.10.1 ==="
 docker run -d --rm --name bench_r --network host --cpuset-cpus "$SRV_CORES" \
-  redis:7.4 redis-server --port 7003 --save '' --appendonly no >/dev/null 2>&1
+  redis:8.10.1 redis-server --port 7003 --save '' --appendonly no >/dev/null 2>&1
 run 7003 "redis7.4"; docker rm -f bench_r >/dev/null 2>&1
 echo "### PUBSUB_DONE"

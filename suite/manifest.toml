@@ -173,6 +173,26 @@ timeout = 60
 requires = []
 proves = "workflow actions agree on one major each"
 
+[[check]]
+id = "anchor-pins"
+area = "release-pins"
+tier = "precommit"
+cmd = "python3 tools/check_competitor_anchors.py --offline"
+expected = 2
+timeout = 60
+requires = []
+proves = "every competitor version in the tree matches bench/COMPETITOR-ANCHORS.json"
+
+[[check]]
+id = "anchor-currency"
+area = "release-pins"
+tier = "prerelease"
+cmd = "python3 tools/check_competitor_anchors.py"
+expected = 8
+timeout = 180
+requires = []
+proves = "the pinned competitors are each project's current latest stable — asked of the upstreams, not of the tree"
+
 # ── architecture ─────────────────────────────────────────────────────
 
 [[check]]

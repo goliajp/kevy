@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Portability / smoke harness: valkey 9.1 vs kevy via Docker bridge, default
+# Portability / smoke harness: valkey 9.1.2 vs kevy via Docker bridge, default
 # `-c50 -P1` valkey-benchmark. Exercises the protocol end-to-end so a fresh
 # clone can verify "it runs and answers". NOT a perf benchmark — docker NAT
 # softirq, no pipelining, and short N depress kevy's busy-poll path. For
@@ -18,7 +18,7 @@ cat <<'BANNER'
 ### See bench/REPORT.md for the methodology and current numbers.
 BANNER
 
-echo "### Bringing up valkey 9.1 + kevy (building kevy --release) ..."
+echo "### Bringing up valkey 9.1.2 + kevy (building kevy --release) ..."
 docker compose up -d --build
 
 wait_ping() { # host
@@ -41,13 +41,13 @@ bench() { # host concurrency — runs on the isolated loadgen cores
 }
 
 echo
-echo "=== valkey 9.1   -c 1   (n=$N, no pipeline) ==="
+echo "=== valkey 9.1.2   -c 1   (n=$N, no pipeline) ==="
 bench valkey 1
 echo
 echo "=== kevy         -c 1   (n=$N, no pipeline) ==="
 bench kevy 1
 echo
-echo "=== valkey 9.1   -c 50  (n=$N) ==="
+echo "=== valkey 9.1.2   -c 50  (n=$N) ==="
 bench valkey 50
 echo
 echo "=== kevy         -c 50  (n=$N)  [now multiplexed by the reactor] ==="

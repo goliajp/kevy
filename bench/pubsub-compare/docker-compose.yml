@@ -37,7 +37,7 @@ services:
     profiles: ["build", "kevy"]
 
   valkey:
-    image: valkey/valkey:9.1
+    image: valkey/valkey:9.1.2
     network_mode: host
     cpuset: "0-9"
     profiles: ["valkey"]
@@ -50,7 +50,7 @@ services:
       ]
 
   redis:
-    image: redis:7.4
+    image: redis:8.10.1
     network_mode: host
     cpuset: "0-9"
     profiles: ["redis"]

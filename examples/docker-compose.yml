@@ -39,11 +39,11 @@ services:
     networks: [appnet]
 
   app:
-    # Replace this with your real application image. The redis:7.4 image
+    # Replace this with your real application image. The redis:8.10.1 image
     # here is just a demo "consumer" — it ships redis-cli, which we use
     # to prove the wire is up by writing a heartbeat key every 2 seconds
     # and reading it back through kevy.
-    image: redis:7.4
+    image: redis:8.10.1
     depends_on:
       kevy:
         condition: service_healthy

@@ -34,7 +34,7 @@ PSQL="docker exec -i $PGC psql -U postgres -q"
 # ── 1. seed a real PG ──
 docker rm -f "$PGC" >/dev/null 2>&1
 docker run -d --name "$PGC" -e POSTGRES_PASSWORD=drill \
-    -p "127.0.0.1:$PGPORT:5432" postgres:18-bookworm >/dev/null || fail "docker run"
+    -p "127.0.0.1:$PGPORT:5432" postgres:18.6-bookworm >/dev/null || fail "docker run"
 for _ in $(seq 60); do
     docker exec "$PGC" pg_isready -U postgres -q && break
     sleep 1

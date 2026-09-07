@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 3-way differential compatibility: run the SAME command sequence against
-# valkey 9.1, redis 7.4, and kevy (all in Docker, driven by the neutral
+# valkey 9.1.2, redis 8.10.1, and kevy (all in Docker, driven by the neutral
 # valkey-cli) and diff the replies. valkey & redis are the reference (a Redis
 # fork + the original); kevy is the subject. All start empty, so an identical
 # sequence must yield identical replies.
@@ -10,7 +10,7 @@
 set -uo pipefail
 cd "$(dirname "$0")"
 
-echo "### bringing up valkey 9.1 + redis 7.4 + kevy ..."
+echo "### bringing up valkey 9.1.2 + redis 8.10.1 + kevy ..."
 docker compose up -d --build valkey redis kevy loadgen >/dev/null 2>&1
 for h in valkey redis kevy; do
   for _ in $(seq 1 60); do
