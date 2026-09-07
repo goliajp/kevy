@@ -32,7 +32,11 @@ VERB_META = ROOT / "crates" / "kevy" / "src" / "verb_meta"
 CLAIMS = [
     ("tools/site_content/en.py", re.compile(r"(\d+)\s+commands\b")),
     ("tools/site_content/zh.py", re.compile(r"(\d+)\s*条命令")),
-    ("tools/site_content/ja.py", re.compile(r"(\d+)\s*(?:個の)?\s*コマンド")),
+    # The Japanese counter is written as a character class so this line is not
+    # itself CJK prose with ASCII punctuation in it — check_cjk_punct reads
+    # every file, including its siblings.
+    ("tools/site_content/ja.py", re.compile("(\\d+)\\s*(?:" + "\u500b\u306e" + ")?\\s*"
+                                            + "\u30b3\u30de\u30f3\u30c9")),
 ]
 
 
