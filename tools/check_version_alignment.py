@@ -63,6 +63,24 @@ THIRD_PARTY = ("node_modules", "package-lock.json", "/target/", "/.build/", "Car
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 
 
+# Directories this gate walks and then throws away. `skip` already
+# discards everything under target/, node_modules/ and .build/, but
+# glob("**/*") collected and sorted every path first: 350,827 files under
+# target/ and 175,094 under bindings/ on a working tree, which is where
+# 120 of precommit's 223 seconds went. Pruning at the directory level
+# checks exactly the same files.
+PRUNE_DIRS = {"target", "node_modules", ".build", ".git", "__pycache__"}
+
+
+def walk(base: pathlib.Path):
+    """Every file under `base`, not descending into PRUNE_DIRS."""
+    for dirpath, dirnames, filenames in os.walk(base):
+        dirnames[:] = [d for d in dirnames if d not in PRUNE_DIRS]
+        here = pathlib.Path(dirpath)
+        for name in filenames:
+            yield here / name
+
+
 def workspace_version() -> str:
     txt = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
     m = re.search(r'^version = "(\d+\.\d+\.\d+)"', txt, re.M)
@@ -293,7 +311,7 @@ def layer6_vendored_bytes(v: str, bad: list) -> int:
     """The artifacts that do not say a version — they are one."""
     checked = 0
     natives = [
-        p for p in ROOT.glob("bindings/**/*")
+        p for p in walk(ROOT / "bindings")
         if (p.suffix == ".so" and "jniLibs" in str(p))
         or (p.suffix == ".a" and "xcframework" in str(p))
     ]
@@ -366,7 +384,7 @@ def layer7_go_module_major(v: str, bad: list) -> int:
     want = f"/v{major}"
     used = re.compile(r"github\.com/goliajp/kevy-go/v(\d+)")
     checked = 0
-    for pth in sorted(ROOT.glob("**/*")):
+    for pth in sorted(walk(ROOT)):
         if pth.is_dir() or skip(pth) or historical(pth) or pth.suffix not in (
                 ".go", ".mod", ".sh", ".md", ".yml", ".yaml"):
             continue
