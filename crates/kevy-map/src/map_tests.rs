@@ -203,7 +203,7 @@ fn many_collisions_via_long_byte_keys() {
     // is uniform — exercises real-world probe chains rather than a
     // degenerate collision storm).
     let mut m = KevyMap::<Vec<u8>, u64>::new();
-    let n = 5_000u64;
+    let n = crate::scaled(5_000) as u64;
     for i in 0..n {
         let k = format!("session:{i:08}:user").into_bytes();
         m.insert(k, i);
@@ -441,15 +441,15 @@ fn clone_preserves_entries_and_independence() {
 #[test]
 fn clone_after_heavy_deletion_keeps_probes_correct() {
     let mut m: KevyMap<Vec<u8>, u64> = KevyMap::new();
-    for i in 0..4096u64 {
+    for i in 0..crate::scaled(4096) as u64 {
         m.insert(format!("key-{i}").into_bytes(), i);
     }
-    for i in (0..4096u64).step_by(2) {
+    for i in (0..crate::scaled(4096) as u64).step_by(2) {
         assert!(m.remove(format!("key-{i}").as_bytes()).is_some());
     }
     let c = m.clone();
     assert_eq!(c.len(), m.len());
-    for i in 0..4096u64 {
+    for i in 0..crate::scaled(4096) as u64 {
         let want = (i % 2 == 1).then_some(i);
         assert_eq!(c.get(format!("key-{i}").as_bytes()).copied(), want, "key-{i}");
     }
