@@ -38,9 +38,19 @@ done
 # a correctly-pinned container look like a stale one — the witness was right
 # to fire and wrong about what it saw. Prefer the server's own field.
 engine_reported() {
-    docker compose exec -T loadgen valkey-cli --no-raw -h "$1" -p 6379 INFO server 2>/dev/null \
-        | tr -d '\r' \
-        | sed -n 's/^valkey_version:\(.*\)$/\1/p;s/^redis_version:\(.*\)$/\1/p' | head -1
+    # Two expressions in one sed do NOT reorder the input: redis_version comes
+    # first in INFO's output, so `head -1` took the emulated version anyway and
+    # the fix read exactly like the bug. Ask for the server's own field, and
+    # only fall back when there is none.
+    local info
+    info=$(docker compose exec -T loadgen valkey-cli --no-raw -h "$1" -p 6379 INFO server 2>/dev/null | tr -d '\r')
+    local own
+    own=$(printf '%s\n' "$info" | sed -n 's/^valkey_version:\(.*\)$/\1/p' | head -1)
+    if [ -n "$own" ]; then
+        printf '%s' "$own"
+    else
+        printf '%s\n' "$info" | sed -n 's/^redis_version:\(.*\)$/\1/p' | head -1
+    fi
 }
 
 run() { docker compose exec -T loadgen valkey-cli --no-raw -h "$1" -p 6379 "${@:2}" 2>&1; }

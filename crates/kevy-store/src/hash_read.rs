@@ -7,7 +7,7 @@ use crate::value::{SmallBytes, Value};
 use crate::{Store, StoreError};
 
 /// `(field, value)` pairs collected off any hash encoding.
-pub(crate) type FieldValuePairs = Vec<(Vec<u8>, Vec<u8>)>;
+pub type FieldValuePairs = Vec<(Vec<u8>, Vec<u8>)>;
 
 impl Store {
     /// Read the key's hash immutably (lazily expiring) — returns the
@@ -141,7 +141,7 @@ impl Store {
         key: &[u8],
         count: i64,
         with_values: bool,
-    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, StoreError> {
+    ) -> Result<FieldValuePairs, StoreError> {
         self.purge_hash_ttl(key);
         let Some(pairs) = self.hash_pairs(key)? else {
             return Ok(Vec::new());
