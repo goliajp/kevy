@@ -26,6 +26,7 @@ import json
 import pathlib
 import re
 import subprocess
+import time
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -45,20 +46,37 @@ def kevy_verbs() -> set:
 
 
 def refresh(data: dict) -> dict:
-    """Ask the pinned redis image what it serves. Needs docker."""
+    """Ask the pinned redis image what it serves. Needs docker.
+
+    Through the image's OWN entrypoint, in a detached container. Starting
+    `redis-server` by hand under `--entrypoint sh` looks like the same
+    question and is not: the modules Redis 8 ships — the query engine,
+    JSON, time series, the probabilistic set — are loaded by the image's
+    startup, so a hand-started server answers 449 commands where the real
+    one answers 669. That reading is what made redis-stack look like the
+    only image with a query engine.
+    """
     pin = json.loads(ANCHORS.read_text())["anchors"]["redis"]["pinned"]
-    image = f"redis:{pin}"
-    # --logfile: without it the daemon's startup banner lands on the same
-    # stdout as the reply, and words out of an English log line ("ADD",
-    # "ALSO", "AND", "BEING") read exactly like command names.
-    script = ("redis-server --port 7399 --daemonize yes --save '' --logfile /dev/null && "
-              "for i in $(seq 50); do redis-cli -p 7399 ping >/dev/null 2>&1 && break; sleep 0.1; done && "
-              "redis-cli -p 7399 COMMAND LIST")
-    out = subprocess.run(["docker", "run", "--rm", "--entrypoint", "sh", image, "-c", script],
-                         capture_output=True, text=True, timeout=180)
-    cmds = sorted({c.strip().upper() for c in out.stdout.split() if c.strip()})
-    if len(cmds) < 100:
-        sys.exit(f"check_command_coverage: {image} answered {len(cmds)} commands — refusing a short list\n{out.stderr[:400]}")
+    image, name = f"redis:{pin}", "kevy-cmdcap"
+    subprocess.run(["docker", "rm", "-f", name], capture_output=True)
+    up = subprocess.run(["docker", "run", "-d", "--name", name, image],
+                        capture_output=True, text=True, timeout=300)
+    if up.returncode != 0:
+        sys.exit(f"check_command_coverage: could not start {image}\n{up.stderr[:400]}")
+    try:
+        for _ in range(60):
+            ping = subprocess.run(["docker", "exec", name, "redis-cli", "ping"],
+                                  capture_output=True, text=True)
+            if "PONG" in ping.stdout:
+                break
+            time.sleep(0.5)
+        out = subprocess.run(["docker", "exec", name, "redis-cli", "COMMAND", "LIST"],
+                             capture_output=True, text=True, timeout=120)
+    finally:
+        subprocess.run(["docker", "rm", "-f", name], capture_output=True)
+    cmds = sorted({c.strip().upper() for c in out.stdout.split() if len(c.strip()) > 1})
+    if len(cmds) < 400:
+        sys.exit(f"check_command_coverage: {image} answered {len(cmds)} commands — refusing a short list")
     data["redis_command_set"] = {"version": pin, "captured": _today(), "commands": cmds}
     COVERAGE.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
     print(f"captured {len(cmds)} commands from {image}")
