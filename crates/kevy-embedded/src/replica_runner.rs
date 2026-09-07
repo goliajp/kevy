@@ -31,6 +31,7 @@ use crate::store::{Shards, lock_write};
 /// Handle to the background thread streaming from the primary. Owned
 /// by `DropGuard` so the runner outlives the public [`crate::Store`]
 /// clones but is joined on the last drop.
+#[derive(Debug)]
 pub(crate) struct ReplicaRunner {
     stop: Arc<AtomicBool>,
     /// `try_clone`'d socket handle from the live `ReplicaClient`, used

@@ -23,6 +23,7 @@ use kevy_store::Store;
 use crate::state::{CatalogState, Ctx};
 
 /// Per-shard build progress for one index.
+#[derive(Debug)]
 enum BuildState {
     /// Keys captured at create-time, next position to process.
     Backfilling { keys: Vec<Vec<u8>>, pos: usize },
@@ -33,6 +34,7 @@ enum BuildState {
     FailedOverBudget,
 }
 
+#[derive(Debug)]
 struct ShardIndex {
     spec: IndexSpec,
     seg: Segment,
@@ -54,7 +56,7 @@ struct ShardIndex {
 /// One shard's slice of every declared index. Owned by
 /// `crate::state::ShardCtx`; every entry point below borrows it
 /// from the caller's shard zone.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(crate) struct ShardIndexes {
     generation: u64,
     idx: Vec<ShardIndex>,

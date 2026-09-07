@@ -68,6 +68,7 @@ pub const EMPTY_SPAN_HYSTERESIS: u16 = 4;
 
 /// One shard's heap. Not `Sync`: exactly one thread owns it, which is
 /// what removes the atomics from the fast path.
+#[derive(Debug)]
 pub struct Heap {
     id: usize,
     pub(crate) segments: *mut Segment,

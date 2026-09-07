@@ -20,6 +20,7 @@ mod ep {
 }
 
 /// Edge/level-readiness poller. macOS: kqueue. Linux: epoll. Same API on both.
+#[derive(Debug)]
 pub struct Poller {
     epfd: c_int,
 }

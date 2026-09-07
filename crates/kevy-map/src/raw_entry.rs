@@ -49,6 +49,7 @@ use crate::map::{DELETED, KevyMap, ProbeOutcome};
 /// [`RawOccupiedEntryMut::remove`] consumes `self`, which releases the
 /// outstanding borrow on the map and lets the caller perform the
 /// deletion within the same borrow scope.
+#[derive(Debug)]
 pub enum RawEntryMut<'a, K, V> {
     /// The key was present; gives read / mutate / consume access.
     Occupied(RawOccupiedEntryMut<'a, K, V>),
@@ -57,6 +58,7 @@ pub enum RawEntryMut<'a, K, V> {
 }
 
 /// Handle to an existing entry, returned by [`RawEntryMut::Occupied`].
+#[derive(Debug)]
 pub struct RawOccupiedEntryMut<'a, K, V> {
     map: &'a mut KevyMap<K, V>,
     /// Slot index inside `map.slots_ptr` for the located entry.
@@ -64,6 +66,7 @@ pub struct RawOccupiedEntryMut<'a, K, V> {
 }
 
 /// Handle to an absent entry, returned by [`RawEntryMut::Vacant`].
+#[derive(Debug)]
 pub struct RawVacantEntryMut<'a, K, V> {
     map: &'a mut KevyMap<K, V>,
 }

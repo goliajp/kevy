@@ -194,7 +194,7 @@ use kevy_map::KevyMap;
 /// since the shard is single-threaded with no cross-trust keys). Owning the
 /// table also exposes bucket addresses for software prefetch on the batch
 /// driver.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct Store {
     pub(crate) map: KevyMap<SmallBytes, Entry>,
     /// The random source. SPOP and SRANDMEMBER promise an ARBITRARY member;

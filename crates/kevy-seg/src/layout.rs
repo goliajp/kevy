@@ -75,6 +75,7 @@ pub fn slot_offset(page: &[u8], i: u16) -> usize {
 }
 
 /// A decoded cell: the key slice and where its payload is.
+#[derive(Debug)]
 pub enum Cell<'a> {
     Inline { key: &'a [u8], payload: &'a [u8] },
     Overflow { key: &'a [u8], total_len: u32, first_page: u32, n_pages: u32 },

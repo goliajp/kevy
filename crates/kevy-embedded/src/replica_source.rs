@@ -46,6 +46,7 @@ use kevy_resp::Argv;
 /// Replication source attached to this embed when it is a scope
 /// writer. Pushes from `commit_write` flow into the source;
 /// accepted replicas stream out of it.
+#[derive(Debug)]
 pub(crate) struct ReplicaSource {
     source: Arc<Mutex<ReplicationSource>>,
     stop: Arc<AtomicBool>,

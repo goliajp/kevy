@@ -120,6 +120,7 @@ impl<K: fmt::Debug> fmt::Debug for KevySet<K> {
 }
 
 /// `&K` iterator over all members of a [`KevySet`]; order unspecified.
+#[derive(Debug)]
 pub struct SetIter<'a, K>(Iter<'a, K, ()>);
 
 impl<'a, K> Iterator for SetIter<'a, K> {

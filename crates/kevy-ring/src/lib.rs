@@ -182,6 +182,7 @@ impl<T> Drop for Ring<T> {
 /// assert_eq!(rx.pop(), Some(1));
 /// assert!(tx.push(3).is_ok());
 /// ```
+#[derive(Debug)]
 pub struct Producer<T> {
     inner: Arc<Ring<T>>,
     /// Cached snapshot of the consumer's `head`. Stale-OK: a value the
@@ -209,6 +210,7 @@ pub struct Producer<T> {
 /// assert_eq!(rx.pop(), Some("b"));
 /// assert!(rx.is_empty());
 /// ```
+#[derive(Debug)]
 pub struct Consumer<T> {
     inner: Arc<Ring<T>>,
     /// Cached snapshot of the producer's `tail`. Stale-OK in the same way as
@@ -424,3 +426,22 @@ impl<T> Consumer<T> {
 
 #[cfg(test)]
 mod tests;
+
+impl<T> core::fmt::Debug for Ring<T> {
+    /// Reports the ring's shape, never its contents.
+    ///
+    /// `buf` holds `MaybeUninit<T>` and only the slots in `[head, tail)`
+    /// are initialised, so a derived `Debug` would read uninitialised
+    /// memory — undefined behaviour, not merely unhelpful output. The
+    /// indices are loaded `Relaxed` because this is a diagnostic:
+    /// ordering them against the SPSC protocol would give a number no
+    /// more true than the one taken without it.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        use core::sync::atomic::Ordering::Relaxed;
+        f.debug_struct("Ring")
+            .field("capacity", &(self.mask + 1))
+            .field("head", &self.head.0.load(Relaxed))
+            .field("tail", &self.tail.0.load(Relaxed))
+            .finish_non_exhaustive()
+    }
+}

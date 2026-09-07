@@ -129,6 +129,7 @@ pub fn verify_image(r: VlogRef, mut image: Vec<u8>) -> io::Result<(Vec<u8>, Vec<
 /// readers hold more. When compaction retires the file it sets
 /// `delete_on_drop`; the underlying file is unlinked by whichever holder
 /// drops last — that is the entire pin protocol.
+#[derive(Debug)]
 pub struct VlogFile {
     id: u32,
     path: PathBuf,
@@ -224,6 +225,7 @@ pub trait CompactOwner {
 }
 
 /// Owner-side per-file accounting (bytes are header-inclusive).
+#[derive(Debug)]
 struct FileState {
     handle: Arc<VlogFile>,
     bytes: u64,
@@ -248,6 +250,7 @@ pub struct VlogStats {
 
 /// One shard's value log. Single owner (`&mut` appends, the shard
 /// thread); concurrent readers go through [`Vlog::pin`].
+#[derive(Debug)]
 pub struct Vlog {
     dir: PathBuf,
     rotate_bytes: u64,

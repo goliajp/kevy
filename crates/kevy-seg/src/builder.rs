@@ -38,6 +38,7 @@ use crate::{SegError, SegMeta};
 ///
 /// std::fs::remove_file(&path).unwrap();
 /// ```
+#[derive(Debug)]
 pub struct SegBuilder {
     w: BufWriter<File>,
     page: Box<[u8; PAGE]>,

@@ -61,6 +61,7 @@ pub struct ManifestEntry {
 }
 
 /// The append-only ledger. One per segment directory.
+#[derive(Debug)]
 pub struct Manifest {
     path: PathBuf,
     f: File,

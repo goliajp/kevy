@@ -61,6 +61,7 @@ pub type Bucket = (Vec<u8>, Vec<u8>, u64);
 
 /// One faceted query's answer: the page, and a count per value for each
 /// requested field.
+#[derive(Debug)]
 pub struct FacetedMatches {
     /// The ranked page, exactly what an unfaceted query would return.
     pub hits: Vec<TextMatch>,
@@ -75,7 +76,7 @@ pub struct FacetedMatches {
 /// Grouping them keeps the query entry point from growing a parameter per
 /// clause, and gives every clause one place to be defaulted from
 /// ([`QueryOpts::default`] is the plain, exact, unscoped query).
-#[derive(Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct QueryOpts<'a> {
     /// Corpus-wide BM25 statistics — the second pass of a cross-shard
     /// query. `None` scores against this segment's own slice.
@@ -96,4 +97,47 @@ pub struct QueryOpts<'a> {
     /// during selection, so the page is filled with `limit` DISTINCT
     /// documents rather than `limit` documents that then collapse.
     pub distinct: Option<Distinct<'a>>,
+}
+
+impl core::fmt::Debug for Sort<'_> {
+    /// Prints every field except `key`.
+    ///
+    /// The ordering key is a `&dyn Fn`, which has no `Debug` and no stable
+    /// identity worth printing — it shows as `<fn>` so the rest of the
+    /// struct stays inspectable.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Sort")
+            .field("field", &self.field)
+            .field("desc", &self.desc)
+            .field("key", &"<fn>")
+            .finish()
+    }
+}
+
+impl core::fmt::Debug for Distinct<'_> {
+    /// Prints every field except `key`.
+    ///
+    /// The identity key is a `&dyn Fn`, which has no `Debug` and no stable
+    /// identity worth printing — it shows as `<fn>` so the rest of the
+    /// struct stays inspectable.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Distinct")
+            .field("field", &self.field)
+            .field("key", &"<fn>")
+            .finish()
+    }
+}
+
+impl core::fmt::Debug for Facet<'_> {
+    /// Prints every field except `key`.
+    ///
+    /// The bucketing key is a `&dyn Fn`, which has no `Debug` and no stable
+    /// identity worth printing — it shows as `<fn>` so the rest of the
+    /// struct stays inspectable.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Facet")
+            .field("field", &self.field)
+            .field("key", &"<fn>")
+            .finish()
+    }
 }

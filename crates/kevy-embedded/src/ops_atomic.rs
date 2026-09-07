@@ -23,6 +23,7 @@ type UndoEntry = (Vec<u8>, Option<(kevy_store::Value, Option<u64>)>);
 /// Handle passed to the `atomic` closure body. Methods mirror the
 /// equivalent `Store` ops but operate on the already-held write
 /// lock, so reads inside the block see the closure's own writes.
+#[derive(Debug)]
 pub struct AtomicCtx<'a> {
     inner: &'a mut Inner,
     log: Vec<Vec<Vec<u8>>>,

@@ -40,6 +40,7 @@ use kevy_config::Config;
 /// Everything the server knows that is not per-shard keyspace data.
 /// Built once (by [`crate::serve`] or an embedder) and shared across
 /// shards behind an `Arc`.
+#[derive(Debug)]
 pub struct RuntimeState {
     /// The live config. Hot-swapped by `CONFIG SET` via
     /// [`Self::config_replace`]; each shard re-reads the new value
@@ -244,6 +245,7 @@ pub(crate) struct Ctx<'a> {
 /// [`RuntimeState`] plus this shard's private [`ShardCtx`]. The
 /// runtime clones one `KevyCommands` per shard; the manual [`Clone`]
 /// shares the state Arc and rebuilds the shard zone empty.
+#[derive(Debug)]
 pub struct KevyCommands {
     state: Arc<RuntimeState>,
     shard: ShardCtx,

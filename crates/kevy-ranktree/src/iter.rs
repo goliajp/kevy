@@ -20,6 +20,7 @@ use crate::node::Node;
 /// // Ascending, and lazy: the tree is not copied to iterate it.
 /// assert_eq!(t.iter().copied().collect::<Vec<_>>(), vec![1, 2, 3]);
 /// ```
+#[derive(Debug)]
 pub struct Iter<'a, K> {
     stack: Vec<(&'a Node<K>, usize)>,
     remaining: usize,
@@ -115,6 +116,7 @@ impl<K> ExactSizeIterator for Iter<'_, K> {}
 /// for k in [3u32, 1, 2] { t.insert(k); }
 /// assert_eq!(t.iter_rev().copied().collect::<Vec<_>>(), vec![3, 2, 1]);
 /// ```
+#[derive(Debug)]
 pub struct IterRev<'a, K> {
     stack: Vec<(&'a Node<K>, usize)>,
     remaining: usize,

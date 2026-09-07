@@ -46,6 +46,7 @@ pub struct TextStats {
 /// need only carry the query's tokens — the values a query actually
 /// scores with — which is why global BM25 does not need a whole-corpus
 /// df table.
+#[derive(Debug)]
 pub struct CorpusStats {
     /// Total documents across the corpus.
     pub n_docs: f64,
@@ -57,7 +58,7 @@ pub struct CorpusStats {
 }
 
 /// What an index declares, in the terms a segment is built from.
-#[derive(Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct SegmentShape {
     /// Separately scored fields — `IN <field…>` scopes to these. 0 or 1
     /// keeps no per-field breakdown, because with one field the
@@ -474,3 +475,17 @@ mod segment_scope;
 #[cfg(test)]
 #[path = "segment_tests.rs"]
 mod tests;
+
+impl core::fmt::Debug for Filter<'_> {
+    /// Prints every field except `test`.
+    ///
+    /// The predicate is a `&dyn Fn`, which has no `Debug` and no stable
+    /// identity worth printing — it shows as `<fn>` so the rest of the
+    /// struct stays inspectable.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Filter")
+            .field("field", &self.field)
+            .field("test", &"<fn>")
+            .finish()
+    }
+}

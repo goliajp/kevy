@@ -15,7 +15,7 @@ use super::Heap;
 /// One claimed word of one span, held heap-locally. `base` is the
 /// span's data base, precomputed so the handout path performs no
 /// segment-header access at all.
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct Claim {
     pub(crate) seg: NonNull<Segment>,
     pub(crate) span_ix: u8,

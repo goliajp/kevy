@@ -27,6 +27,7 @@ use std::cell::Cell;
 
 /// What the post-write hooks should record for the command that just
 /// executed.
+#[derive(Debug)]
 pub enum Propagate {
     /// Record the client's original argv unchanged (the default —
     /// every deterministic verb).

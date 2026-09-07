@@ -11,6 +11,7 @@ use std::io;
 /// from another thread. Register `read_fd()` in the poller for
 /// read-readiness; call `wake()` from any thread to make the poll return;
 /// call `drain()` when the read end fires.
+#[derive(Debug)]
 pub struct Waker {
     read_fd: c_int,
     write_fd: c_int,

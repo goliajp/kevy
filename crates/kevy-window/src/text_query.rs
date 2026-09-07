@@ -18,6 +18,7 @@ use kevy_text::{CorpusStats, sorted_order};
 use super::TextColdDir;
 
 /// Everything pass 2 asks of the cold directory.
+#[derive(Debug)]
 pub struct ColdPageQuery<'a> {
     /// Bare terms, sorted and deduplicated (the hot engine's rule).
     pub bare: Vec<Vec<u8>>,
@@ -38,6 +39,7 @@ pub struct ColdPageQuery<'a> {
 }
 
 /// One cold hit: its page-order ingredients, ready to merge.
+#[derive(Debug)]
 pub struct ColdHit {
     /// The row key this hit points at.
     pub key: Vec<u8>,
@@ -50,6 +52,7 @@ pub struct ColdHit {
 }
 
 /// The cold half of one shard's pass-2 answer.
+#[derive(Debug)]
 pub struct ColdPage {
     /// Best `fetch` cold hits in the page's order.
     pub hits: Vec<ColdHit>,

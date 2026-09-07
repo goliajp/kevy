@@ -39,6 +39,7 @@ mod enabled {
     /// Per-shard tiering state — present only when tiering is enabled
     /// (`tier: Option<TierState>`; `None` = today's paths, the A1 gate's
     /// precondition).
+    #[derive(Debug)]
     pub(crate) struct TierState {
         pub(crate) vlog: Vlog,
         pub(crate) budget: u64,

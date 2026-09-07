@@ -57,6 +57,7 @@ pub enum Fsync {
 /// [`Aof::rewrite_from`] (BGREWRITEAOF) via the
 /// `auto_aof_rewrite_percentage` + `auto_aof_rewrite_min_size` knobs in
 /// `kevy_config`.
+#[derive(Debug)]
 pub struct Aof {
     pub(crate) file: BufWriter<File>,
     /// A begin marker has been written and its commit marker has not.
@@ -142,6 +143,7 @@ pub struct Aof {
 /// Handoff between the two halves of a non-blocking rewrite: the serialized
 /// keyspace image (produced under the store lock) and the temp path to spill
 /// it to (off-lock). See [`Aof::begin_concurrent_rewrite`].
+#[derive(Debug)]
 pub struct RewritePlan {
     /// The compacted AOF image (magic + one command stream per key).
     pub body: Vec<u8>,

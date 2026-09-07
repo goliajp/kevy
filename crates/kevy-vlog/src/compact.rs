@@ -11,6 +11,7 @@ use std::sync::atomic::Ordering;
 use crate::{CompactOwner, HEADER, MAX_BODY, Vlog, VlogFile, VlogRef, bad};
 
 /// Resumable position within the file currently being compacted.
+#[derive(Debug)]
 pub(crate) struct CompactCursor {
     /// Pinned so record reads never borrow `Vlog::files` (freeing the
     /// `&mut self` that `append` needs for the survivor).

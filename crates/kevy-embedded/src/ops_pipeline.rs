@@ -17,11 +17,13 @@ use crate::store::Store;
 /// Builder-style write queue. Returned by [`Store::pipeline`]; call
 /// fluent methods to enqueue + `commit()` to apply with batched
 /// AOF fsync.
+#[derive(Debug)]
 pub struct Pipeline<'a> {
     store: &'a Store,
     ops: Vec<PendingOp>,
 }
 
+#[derive(Debug)]
 enum PendingOp {
     Set { key: Vec<u8>, value: Vec<u8> },
     Del { keys: Vec<Vec<u8>> },

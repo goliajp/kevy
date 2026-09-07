@@ -85,6 +85,7 @@ pub(crate) use url::{Target, parse_url, resolve_store};
 
 /// One open connection to a kevy backend, opaque about whether the backend
 /// is in-process or over TCP.
+#[derive(Debug)]
 pub enum Connection {
     /// In-process [`kevy_embedded::Store`]. Boxed because `Store` is
     /// sizeable (carries its `Config`, including the replica

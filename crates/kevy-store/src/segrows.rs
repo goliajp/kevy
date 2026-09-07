@@ -25,6 +25,7 @@ use crate::{Store, key_heap_bytes_for, tier_codec};
 
 /// One shard's row-segment directory: the open segments and their
 /// live/dead record accounting (compaction's future trigger feed).
+#[derive(Debug)]
 pub(crate) struct SegRows {
     dir: PathBuf,
     /// Open segments, keyed by their stable seq (the file-name number
@@ -34,6 +35,7 @@ pub(crate) struct SegRows {
     seq: u32,
 }
 
+#[derive(Debug)]
 struct SegSlot {
     /// Arc so a [`crate::SnapshotView`] can pin the segment across the
     /// serializer thread, exactly like the vlog file pins.
@@ -55,6 +57,7 @@ impl SegRows {
 
 /// One sealed eviction batch: the segment's identity and EXACTLY the
 /// keys it holds (the commit's phase-change list).
+#[derive(Debug)]
 pub struct SealedRows {
     /// The segment's stable seq.
     pub seq: u32,

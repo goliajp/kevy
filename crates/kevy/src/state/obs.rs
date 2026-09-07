@@ -12,7 +12,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 /// One shard's observability slot. All atomics are `Relaxed`: these are
 /// statistics, never used to establish happens-before.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(crate) struct ShardStats {
     pub used_memory: AtomicU64,
     pub used_memory_peak: AtomicU64,
@@ -48,7 +48,7 @@ pub(crate) struct ShardStats {
 /// One shard's `INFO # Tiering` slot — mirrors
 /// `kevy_store::TierStats`, published per tick alongside the memory
 /// gauges. All `Relaxed` (statistics, like everything else here).
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(crate) struct TierGauges {
     /// 1 when this shard's store has tiering enabled.
     pub enabled: AtomicU64,
@@ -118,6 +118,7 @@ pub(crate) struct TierTotals {
 /// Retained ops-per-sec samples — 16 × 100 ms default tick ≈ a 1.6 s window.
 const OPS_WINDOW: usize = 16;
 
+#[derive(Debug)]
 pub(crate) struct ObsState {
     /// Append-only ADMIN-command audit log. `None` = OFF (`[audit]
     /// log_path` empty, or the file failed to open at boot).
@@ -140,7 +141,7 @@ pub(crate) struct ObsState {
 
 /// One shard's per-tick replication view: its `master_repl_offset`
 /// plus a row per handshake-complete replica conn.
-#[derive(Clone, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct ReplShardView {
     pub(crate) offset: u64,
     pub(crate) replicas: Vec<kevy_rt::ReplicaViewRow>,

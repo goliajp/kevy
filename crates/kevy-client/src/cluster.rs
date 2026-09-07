@@ -24,6 +24,7 @@ const NUM_SLOTS: usize = 16384;
 
 /// One open connection per distinct shard node, with a slot → shard index so a
 /// single-key command goes straight to its owner.
+#[derive(Debug)]
 pub struct ClusterClient {
     /// Per distinct shard node, in first-advertised order.
     shards: Vec<RespClient>,

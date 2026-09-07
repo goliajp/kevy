@@ -12,6 +12,7 @@ use std::path::PathBuf;
 const DEFAULT_RING_CAPACITY: usize = 1024;
 
 /// The public entry point: configure and run the thread-per-core server.
+#[derive(Debug)]
 pub struct Runtime<C: Commands> {
     pub(crate) ip: [u8; 4],
     pub(crate) port: u16,

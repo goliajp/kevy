@@ -18,6 +18,7 @@ use crate::segment::TextSegment;
 /// One slide batch's worth of frozen text entries: term → encoded
 /// posting payload, in term order (the segment builder's key order),
 /// plus the bucket's contribution to the corpus statistics.
+#[derive(Debug)]
 pub struct FrozenBucket {
     /// term → [`encode_posting`] payload, ascending by term.
     pub terms: BTreeMap<Vec<u8>, Vec<u8>>,
@@ -32,6 +33,7 @@ pub struct FrozenBucket {
 }
 
 /// One decoded cold posting entry.
+#[derive(Debug)]
 pub struct ColdEntry {
     /// The document's row key.
     pub key: Vec<u8>,
@@ -67,6 +69,7 @@ pub fn posting_df(payload: &[u8]) -> Option<u32> {
 
 /// One decoded forward record: the document's length, its terms, and
 /// its stored values (aligned with the declared VALUES order).
+#[derive(Debug)]
 pub struct FwdRecord {
     /// Document length (unweighted tokens).
     pub dl: u32,

@@ -87,7 +87,7 @@ pub(crate) fn merge_page(mut all: Vec<(IndexValue, Vec<u8>)>, limit: usize) -> I
 /// Store-level index state: catalog + a version stamp the per-shard
 /// segment lists sync against, and each declared path's usage cell
 /// (the refusal log's dual — reclaim-face raw material).
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(crate) struct IndexReg {
     pub(crate) catalog: RwLock<(u64, Catalog)>,
     pub(crate) usage:
@@ -103,7 +103,7 @@ pub(crate) type WinRef<'a> = Option<&'a core::convert::Infallible>;
 
 /// Per-shard segment list, kept inside `Inner` (guarded by the shard
 /// lock).
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(crate) struct ShardSegs {
     pub(crate) version: u64,
     pub(crate) segs: Vec<(IndexSpec, Segment)>,
