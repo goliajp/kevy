@@ -35,7 +35,7 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - [WASM / browser](docs/wasm.md) · [Electron apps](docs/electron.md) · [Tauri apps](docs/tauri.md) · [IoT / embedded tiers](docs/iot.md)
 - [Error contract](docs/error-replies.md) · [Tuning](docs/tuning.md)
 
-## Verbs (205 total)
+## Verbs (206 total)
 
 ### scan
 
@@ -194,6 +194,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
   - compat: full
 - `HINCRBYFLOAT key field increment` [write] — Increment the float value of a hash field.
   - complexity: O(1)
+  - compat: full
+- `HRANDFIELD key [count [WITHVALUES]]` [readonly] — Return random fields from a hash; a negative count allows repeats, WITHVALUES pairs each with its value.
+  - complexity: O(count) for the positive form (partial Fisher-Yates over a materialised field list), O(|count|) for the negative form
   - compat: full
 - `HKEYS key` [readonly] — Return all field names of a hash.
   - complexity: O(N) fields

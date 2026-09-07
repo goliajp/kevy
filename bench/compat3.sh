@@ -33,9 +33,14 @@ done
 # and the bit it folded away is exactly the one a type-dispatching client
 # library reads. --no-raw prints `(integer) 1` against `"1"`.
 # What answered, not what the compose file asked for.
+# valkey reports the Redis version it EMULATES in `redis_version` (7.2.4 on
+# valkey 9.1.2) and its own in `valkey_version`. Asking the wrong field made
+# a correctly-pinned container look like a stale one — the witness was right
+# to fire and wrong about what it saw. Prefer the server's own field.
 engine_reported() {
     docker compose exec -T loadgen valkey-cli --no-raw -h "$1" -p 6379 INFO server 2>/dev/null \
-        | tr -d '\r' | sed -n 's/^redis_version:\(.*\)$/\1/p' | head -1
+        | tr -d '\r' \
+        | sed -n 's/^valkey_version:\(.*\)$/\1/p;s/^redis_version:\(.*\)$/\1/p' | head -1
 }
 
 run() { docker compose exec -T loadgen valkey-cli --no-raw -h "$1" -p 6379 "${@:2}" 2>&1; }
