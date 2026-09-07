@@ -188,7 +188,8 @@
       "sites": [
         {
           "file": "bench/pgcompare.sh",
-          "pattern": "postgres:([0-9][0-9.]*)-bookworm"
+          "pattern": "postgres:([0-9][0-9.]*)-bookworm",
+          "what": "the docker run line in the comment, and the version assertion beside it"
         },
         {
           "file": "bench/migrationgate.sh",
