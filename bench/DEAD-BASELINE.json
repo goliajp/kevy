@@ -1,13 +1,13 @@
 {
   "corpus": "c1",
   "platform": "linux",
-  "total_regions": 165518,
-  "dead_regions": 26835,
-  "llvm_per_instantiation_dead": 27849,
+  "total_regions": 165633,
+  "dead_regions": 26934,
+  "llvm_per_instantiation_dead": 27968,
   "crates": {
     "kevy": {
       "regions": 29770,
-      "dead": 5299
+      "dead": 5288
     },
     "kevy-alloc": {
       "regions": 1694,
@@ -50,12 +50,12 @@
       "dead": 391
     },
     "kevy-elect": {
-      "regions": 1851,
-      "dead": 111
+      "regions": 1888,
+      "dead": 148
     },
     "kevy-embedded": {
       "regions": 27695,
-      "dead": 3777
+      "dead": 3789
     },
     "kevy-ffi": {
       "regions": 843,
@@ -71,15 +71,15 @@
     },
     "kevy-index": {
       "regions": 5864,
-      "dead": 438
+      "dead": 449
     },
     "kevy-jni": {
       "regions": 526,
       "dead": 526
     },
     "kevy-lua": {
-      "regions": 2789,
-      "dead": 603
+      "regions": 2814,
+      "dead": 628
     },
     "kevy-lua-host": {
       "regions": 360,
@@ -122,12 +122,12 @@
       "dead": 126
     },
     "kevy-ring": {
-      "regions": 154,
-      "dead": 0
+      "regions": 169,
+      "dead": 15
     },
     "kevy-rt": {
       "regions": 16269,
-      "dead": 4747
+      "dead": 4744
     },
     "kevy-scalar": {
       "regions": 4388,
@@ -147,7 +147,7 @@
     },
     "kevy-store": {
       "regions": 19252,
-      "dead": 1487
+      "dead": 1486
     },
     "kevy-sys": {
       "regions": 740,
@@ -158,8 +158,8 @@
       "dead": 10
     },
     "kevy-text": {
-      "regions": 4023,
-      "dead": 118
+      "regions": 4061,
+      "dead": 156
     },
     "kevy-time": {
       "regions": 289,
@@ -395,7 +395,7 @@
     "::flush_pending_drops": 5,
     "::flush_queued": 1,
     "::flushall": 51,
-    "::fmt": 156,
+    "::fmt": 247,
     "::follow_primary_hb": 3,
     "::for_each_hash_ttl::": 2,
     "::for_each_segment::<::idx_stats>": 2,
@@ -418,7 +418,7 @@
     "::geo_search": 3,
     "::get": 52,
     "::get_for_reply": 22,
-    "::get_into_output": 1,
+    "::get_into_output": 2,
     "::get_shared_owned": 34,
     "::getdel": 4,
     "::getex": 2,
@@ -776,7 +776,7 @@
     "::set_upstream": 1,
     "::set_value_evict": 1,
     "::set_value_no_evict": 20,
-    "::set_view_offset": 5,
+    "::set_view_offset": 3,
     "::set_with_ttl": 114,
     "::setbit": 5,
     "::setnx": 2,
@@ -848,7 +848,7 @@
     "::tier_stats": 1,
     "::to_sidecar": 6,
     "::tokens": 4,
-    "::top_groups": 12,
+    "::top_groups": 23,
     "::touch_policy": 1,
     "::trim_maxlen": 2,
     "::trim_minid": 1,
@@ -1018,7 +1018,7 @@
     "<kevy_rt::shard::Shard>::aof_end_group_logged": 2,
     "<kevy_rt::shard::Shard>::apply_live_persist_knobs": 1,
     "<kevy_rt::shard::Shard>::apply_live_runtime_config": 2,
-    "<kevy_rt::shard::Shard>::apply_promotion_epoch": 30,
+    "<kevy_rt::shard::Shard>::apply_promotion_epoch": 14,
     "<kevy_rt::shard::Shard>::apply_psub_to_conn": 1,
     "<kevy_rt::shard::Shard>::apply_psub_to_registry": 11,
     "<kevy_rt::shard::Shard>::apply_snapshot_end": 12,
@@ -1052,7 +1052,7 @@
     "<kevy_rt::shard::Shard>::dispatch_batch": 2,
     "<kevy_rt::shard::Shard>::do_hello::": 2,
     "<kevy_rt::shard::Shard>::do_psubscribe::": 1,
-    "<kevy_rt::shard::Shard>::do_publish::": 1,
+    "<kevy_rt::shard::Shard>::do_publish::": 4,
     "<kevy_rt::shard::Shard>::do_punsubscribe::": 1,
     "<kevy_rt::shard::Shard>::do_subscribe::": 9,
     "<kevy_rt::shard::Shard>::do_unwatch": 1,
@@ -1060,7 +1060,7 @@
     "<kevy_rt::shard::Shard>::drain_inbound": 1,
     "<kevy_rt::shard::Shard>::drain_inbound_core_slow::": 50,
     "<kevy_rt::shard::Shard>::drain_persist_on_shutdown": 1,
-    "<kevy_rt::shard::Shard>::drain_replica_inbox": 4,
+    "<kevy_rt::shard::Shard>::drain_replica_inbox": 3,
     "<kevy_rt::shard::Shard>::drain_store_notify": 15,
     "<kevy_rt::shard::Shard>::drain_streaming_outputs": 9,
     "<kevy_rt::shard::Shard>::dump_stalled_conn": 14,
@@ -1165,8 +1165,8 @@
     "<kevy_rt::shard::Shard>::repl_ack_count": 4,
     "<kevy_rt::shard::Shard>::repl_waiter_reply": 5,
     "<kevy_rt::shard::Shard>::replica_conn_is_live": 11,
-    "<kevy_rt::shard::Shard>::replica_io_failed": 1,
-    "<kevy_rt::shard::Shard>::replica_readable": 13,
+    "<kevy_rt::shard::Shard>::replica_io_failed": 8,
+    "<kevy_rt::shard::Shard>::replica_readable": 16,
     "<kevy_rt::shard::Shard>::replica_writable": 13,
     "<kevy_rt::shard::Shard>::replicas_brief": 29,
     "<kevy_rt::shard::Shard>::reply_feed_error": 13,
@@ -1176,7 +1176,7 @@
     "<kevy_rt::shard::Shard>::restore_serve_on_teardown": 9,
     "<kevy_rt::shard::Shard>::rewrite_aof_after_resync": 11,
     "<kevy_rt::shard::Shard>::rewrite_predicted_diverging": 3,
-    "<kevy_rt::shard::Shard>::run": 74,
+    "<kevy_rt::shard::Shard>::run": 79,
     "<kevy_rt::shard::Shard>::run_uring": 334,
     "<kevy_rt::shard::Shard>::run_uring::cold_path_hint": 2,
     "<kevy_rt::shard::Shard>::send_or_hold_response": 8,
@@ -1206,14 +1206,14 @@
     "<kevy_rt::shard::Shard>::tick_blocked_timeouts": 1,
     "<kevy_rt::shard::Shard>::tick_persist": 1,
     "<kevy_rt::shard::Shard>::tick_replication_slots": 2,
-    "<kevy_rt::shard::Shard>::tick_replication_view": 13,
-    "<kevy_rt::shard::Shard>::tick_replication_watermark": 5,
+    "<kevy_rt::shard::Shard>::tick_replication_view": 9,
+    "<kevy_rt::shard::Shard>::tick_replication_watermark": 3,
     "<kevy_rt::shard::Shard>::tick_xshard_timeouts": 2,
     "<kevy_rt::shard::Shard>::trace_acksent_pending": 17,
     "<kevy_rt::shard::Shard>::trace_handshake": 20,
     "<kevy_rt::shard::Shard>::transition_to_reading": 46,
     "<kevy_rt::shard::Shard>::try_apply_fsync_policy": 14,
-    "<kevy_rt::shard::Shard>::try_inline_local::": 11,
+    "<kevy_rt::shard::Shard>::try_inline_local::": 13,
     "<kevy_rt::shard::Shard>::try_intercept_client::": 21,
     "<kevy_rt::shard::Shard>::try_promote_bigbulk": 85,
     "<kevy_rt::shard::Shard>::unregister_psubs": 5,
@@ -1252,7 +1252,7 @@
     "<kevy_rt::uring_bigbulk_b2alt::ThreeSliceView as core::ops::index::Index>::index": 7,
     "<kevy_store::error::KevyError as core::convert::From>::from": 3,
     "<kevy_store::seg_map::SegMap>::all_unique": 6,
-    "<kevy_store::seg_map::SegMap>::rand_entry": 4,
+    "<kevy_store::seg_map::SegMap>::rand_entry": 2,
     "<kevy_store::seg_map::SegMap>::values": 5,
     "<kevy_tmpdir::TmpDir as core::convert::AsRef>::as_ref": 3,
     "Java_jp_golia_kevy_KevyNative_close": 3,
@@ -1497,7 +1497,7 @@
     "kevy::die::": 3,
     "kevy::dispatch::cmd_select::": 4,
     "kevy::dispatch::dispatch_conn::": 3,
-    "kevy::dispatch::dispatch_with_proto::": 14,
+    "kevy::dispatch::dispatch_with_proto::": 10,
     "kevy::dispatch_collections::cmd_brpoplpush::": 6,
     "kevy::dispatch_collections::cmd_lmove::": 5,
     "kevy::dispatch_collections::dispatch_hash::": 4,
@@ -1682,7 +1682,6 @@
     "kevy::replica_runner_events::drain_start": 1,
     "kevy::replica_runner_events::event_to_apply": 1,
     "kevy::replica_runner_events::gen_still_matches": 3,
-    "kevy::replica_runner_events::maybe_ack": 5,
     "kevy::replica_runner_routed::drain_client_routed": 59,
     "kevy::replica_runner_routed::route_event": 57,
     "kevy::replica_trace::trace_session_event": 10,
@@ -2115,8 +2114,9 @@
     "kevy_embedded::replay::parse_zadd_flags": 2,
     "kevy_embedded::replica_runner::drain_session": 4,
     "kevy_embedded::replica_runner::finish_snapshot": 1,
+    "kevy_embedded::replica_runner::run_loop": 6,
     "kevy_embedded::replica_runner::run_session": 1,
-    "kevy_embedded::replica_runner::sleep_interruptible": 9,
+    "kevy_embedded::replica_runner::sleep_interruptible": 15,
     "kevy_embedded::replica_runner::snapshot_event": 4,
     "kevy_embedded::replica_source::handshake_and_prepare": 3,
     "kevy_embedded::replica_source::next_frame_bytes": 3,
@@ -2247,21 +2247,21 @@
     "kevy_jni::env::slot": 4,
     "kevy_jni::env::throw": 24,
     "kevy_jni::handle::": 3,
-    "kevy_jni::jni_close": 4,
-    "kevy_jni::jni_cmd": 25,
-    "kevy_jni::jni_get": 31,
-    "kevy_jni::jni_open": 16,
-    "kevy_jni::jni_open_mem": 2,
-    "kevy_jni::jni_open_report": 24,
-    "kevy_jni::jni_open_with": 51,
-    "kevy_jni::jni_set": 33,
-    "kevy_jni::jni_shutdown": 8,
-    "kevy_jni::jni_sub_close": 4,
-    "kevy_jni::jni_sub_next": 17,
-    "kevy_jni::jni_sub_wait": 18,
-    "kevy_jni::jni_subscribe": 29,
     "kevy_jni::jni_version": 8,
-    "kevy_jni::nz": 5,
+    "kevy_jni::kv::jni_cmd": 25,
+    "kevy_jni::kv::jni_get": 31,
+    "kevy_jni::kv::jni_open_report": 24,
+    "kevy_jni::kv::jni_set": 33,
+    "kevy_jni::lifecycle::jni_close": 4,
+    "kevy_jni::lifecycle::jni_open": 16,
+    "kevy_jni::lifecycle::jni_open_mem": 2,
+    "kevy_jni::lifecycle::jni_open_with": 51,
+    "kevy_jni::lifecycle::jni_shutdown": 8,
+    "kevy_jni::lifecycle::nz": 5,
+    "kevy_jni::sub::jni_sub_close": 4,
+    "kevy_jni::sub::jni_sub_next": 17,
+    "kevy_jni::sub::jni_sub_wait": 18,
+    "kevy_jni::sub::jni_subscribe": 29,
     "kevy_jni::sub_ptr": 3,
     "kevy_jni::take_buf": 19,
     "kevy_jni::take_buf_shared": 19,
@@ -2802,8 +2802,8 @@
     "kevy_vector::dist::l2_lanes": 8,
     "kevy_vector::dist::parse_vector": 1,
     "kevy_vlog::compact::read_record": 3,
+    "kevy_vlog::record::verify_image": 1,
     "kevy_vlog::split_body": 4,
-    "kevy_vlog::verify_image": 1,
     "kevy_wasm::abi_aof::feed": 3,
     "kevy_wasm::abi_aof::feed_v2": 5,
     "kevy_wasm::abi_cmd::kevy_cmd": 1,
@@ -3001,6 +3001,28 @@
       ],
       "reason": "Re-recorded from CI's own observation, which is where this gate actually runs on every push. The baseline had been taken on the bench box, and the two machines do not produce the same set for the same commit: 165,518 total regions on the CI runner against 164,489 on the box, so the dead set differs by construction before any code does. Proven by measuring develop \u2014 none of 6.3.0 in it \u2014 in an isolated worktree: it reports the same splice_output_arcs 2->39 and uring_off 3->5 the box flagged against this release. The gate's identity is platform-level (linux/macos) and cannot see that distinction; recording from CI removes the mismatch rather than papering over it. The three symbols still growing here are 6.3.0's own new surface: try_resp3_overrides and the embedded hash dispatch arm, whose error paths are driven by tests added this release, and Runtime::run by one region.",
       "delta": 41
+    },
+    {
+      "accepted": [
+        "kevy_jni::kv::jni_cmd",
+        "kevy_jni::kv::jni_get",
+        "kevy_jni::kv::jni_open_report",
+        "kevy_jni::kv::jni_set",
+        "kevy_jni::lifecycle::jni_close",
+        "kevy_jni::lifecycle::jni_open",
+        "kevy_jni::lifecycle::jni_open_mem",
+        "kevy_jni::lifecycle::jni_open_with",
+        "kevy_jni::lifecycle::jni_shutdown",
+        "kevy_jni::lifecycle::nz",
+        "kevy_jni::sub::jni_sub_close",
+        "kevy_jni::sub::jni_sub_next",
+        "kevy_jni::sub::jni_sub_wait",
+        "kevy_jni::sub::jni_subscribe",
+        "kevy_vlog::record::verify_image",
+        "::fmt"
+      ],
+      "reason": "Two causes, both deliberate and neither new dead product code.\n\n(1) Fifteen symbols joined and sixteen left because kevy-jni's lib.rs was\nsplit into kv / lifecycle / sub to get back under the 500-line rule. The\nfunctions are unchanged; their module path is not, so 'kevy_jni::jni_cmd'\nreads as 'kevy_jni::kv::jni_cmd'. The symbol count is identical either\nside of the split \u2014 2613 before, 2613 after \u2014 which is what a rename\nlooks like and what new dead code does not.\n\n(2) ::fmt grew 156 -> 247 regions: 165 derived Debug impls plus seven\nhand-written ones, added so every public type can be printed (C-DEBUG).\nFormatting code is never reached by tests unless a test formats that\ntype, and writing 165 such assertions would be coverage padding, not\ncoverage. The regions exist to be reached by a human debugging, which is\nthe whole reason the trait was added.",
+      "delta": 359
     }
   ]
 }

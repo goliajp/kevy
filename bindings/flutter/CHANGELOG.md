@@ -1,3 +1,16 @@
+## 6.4.0
+
+Tracks the kevy 6.4.0 engine. No API change in this door, and no
+behaviour change underneath it: every command answers exactly as it did
+in 6.3.0.
+
+6.4.0 is a quality release for the engine's source. What reaches this
+door is the part that ships in bytes: the vendored `libkevy_ffi` was
+rebuilt, so the `.so` and `.xcframework` in this package now self-report
+6.4.0 rather than the previous engine — which is the property that
+matters here, since a vendored engine does not *say* a version, it is
+one.
+
 ## 6.3.0
 
 Tracks the kevy 6.3.0 engine. No API change in this door; the engine
