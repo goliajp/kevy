@@ -66,6 +66,12 @@
           "pattern": "redis ([0-9]+\\.[0-9][0-9.]*)",
           "mode": "derive",
           "what": "writes the competitor label into three READMEs and the site"
+        },
+        {
+          "file": "bench/arena-median.sh",
+          "pattern": "Redis ([0-9]+\\.[0-9][0-9.]*)",
+          "mode": "derive",
+          "what": "table heading for the multi-run ledger table"
         }
       ]
     },
@@ -133,6 +139,12 @@
           "pattern": "valkey ([0-9]+\\.[0-9][0-9.]*)",
           "mode": "derive",
           "what": "writes the competitor label into three READMEs and the site"
+        },
+        {
+          "file": "bench/arena-median.sh",
+          "pattern": "valkey ([0-9]+\\.[0-9][0-9.]*)",
+          "mode": "derive",
+          "what": "table heading for the multi-run ledger table"
         }
       ]
     },
@@ -156,6 +168,12 @@
           "pattern": "dragonfly ([0-9]+\\.[0-9][0-9.]*)",
           "mode": "derive",
           "what": "writes the competitor label into three READMEs and the site"
+        },
+        {
+          "file": "bench/arena-median.sh",
+          "pattern": "Dragonfly ([0-9]+\\.[0-9][0-9.]*)",
+          "mode": "derive",
+          "what": "table heading for the multi-run ledger table"
         }
       ]
     },

@@ -43,7 +43,7 @@ for i in $(seq 1 "$N"); do
 done
 [ -s "$OUT/samples" ] || { echo "arena-median: no samples parsed from $N runs" >&2; exit 2; }
 
-python3 - "$OUT/samples" "$N" <<'PY'
+python3 - "$OUT/samples" "$N" "$(dirname "$0")/COMPETITOR-ANCHORS.json" <<'PY'
 import statistics, sys
 rows = {}
 for line in open(sys.argv[1]):
@@ -52,11 +52,19 @@ for line in open(sys.argv[1]):
 n = int(sys.argv[2])
 verbs = ["GET", "SET", "INCR", "SADD", "HSET", "LPUSH", "ZADD"]
 engines = ["kevy", "redis8", "valkey", "dragonfly"]
-label = {"kevy": "kevy", "redis8": "Redis 8", "valkey": "valkey", "dragonfly": "Dragonfly"}
+# The engine labels name a version, because a table heading that says
+# only "Redis 8" describes eleven releases. Read from the anchors file so
+# the heading cannot outlive the pin — see bench/COMPETITOR-ANCHORS.json.
+import json, pathlib
+_pins = {k: v["pinned"] for k, v in json.loads(
+    (pathlib.Path(sys.argv[3])).read_text(encoding="utf-8"))["anchors"].items()}
+label = {"kevy": "kevy", "redis8": f"Redis {_pins['redis']}",
+         "valkey": f"valkey {_pins['valkey']}", "dragonfly": f"Dragonfly {_pins['dragonfly']}"}
+_redis_label = label["redis8"]
 
 med = {k: statistics.median(v) for k, v in rows.items()}
 print(f"# arena-median over {n} runs — per-cell medians\n")
-print("| verb | " + " | ".join(label[e] for e in engines) + " | vs Redis 8 |")
+print("| verb | " + " | ".join(label[e] for e in engines) + f" | vs {_redis_label} |")
 print("|---|" + "---:|" * (len(engines) + 1))
 for v in verbs:
     cells = " | ".join(f"{med[(e, v)]:,.0f}" for e in engines)
