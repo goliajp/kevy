@@ -355,7 +355,7 @@ def run_tier(suite, checks, tier, only=None, area=None):
                     print(f"      {line[:140]}")
         except subprocess.TimeoutExpired:
             took = time.monotonic() - t0
-            results.append((c, "FAIL", took, f"timed out after {c['timeout']}s"))
+            results.append((c, "TIMEOUT", took, f"timed out after {c['timeout']}s"))
             print(f"  ✗ {c['id']:<22} {took:6.1f}s  TIMEOUT ({c['timeout']}s)")
 
     # Exit hygiene: the tier leaves the tree as it found it. rootgate
@@ -407,8 +407,15 @@ def run_tier(suite, checks, tier, only=None, area=None):
     # build cleans this too.
     out = ROOT / f"target/suite-{tier}.json"
     out.parent.mkdir(exist_ok=True)
+    # `seconds` is a measurement only when the check ran to completion. A
+    # TIMEOUT row's seconds is the ceiling it hit, and recording the two in
+    # one field is how 120.1 s of timeout became "this gate costs two
+    # minutes" in a later decomposition. `measured` is the witness: read
+    # `seconds` only where it is true.
     out.write_text(json.dumps(
-        [{"id": c["id"], "status": s, "seconds": round(t, 1)} for c, s, t, _ in results],
+        [{"id": c["id"], "status": s, "seconds": round(t, 1),
+          "measured": s != "TIMEOUT",
+          "ceiling": c["timeout"] if s == "TIMEOUT" else None} for c, s, t, _ in results],
         indent=1))
 
     budget = suite["budgets"].get(tier)
