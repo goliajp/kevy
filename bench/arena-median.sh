@@ -43,7 +43,7 @@ for i in $(seq 1 "$N"); do
 done
 [ -s "$OUT/samples" ] || { echo "arena-median: no samples parsed from $N runs" >&2; exit 2; }
 
-python3 - "$OUT/samples" "$N" "$(dirname "$0")/COMPETITOR-ANCHORS.json" <<'PY'
+python3 - "$OUT/samples" "$N" "$HERE/COMPETITOR-ANCHORS.json" <<'PY'
 import statistics, sys
 rows = {}
 for line in open(sys.argv[1]):
