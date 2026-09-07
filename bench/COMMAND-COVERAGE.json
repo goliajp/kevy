@@ -606,18 +606,311 @@
       "ZUNIONSTORE"
     ]
   },
-  "exempt": {
-    "AUTH|ACL|HELLO AUTH": "AUTH is firm OUT by the owner, repeatedly — see .claude/scope-decisions.md. Not a backlog item.",
-    "CLUSTER": "single-machine engine; cluster is OUT of scope.",
-    "FT.": "the query engine, which Redis 8 ships in the image (47 commands). kevy answers search with its own INDEX/VIEW/TABLE surface designed for this engine; matching FT.* verb-for-verb is a product decision the owner has not made, not an oversight.",
-    "JSON.": "RedisJSON, shipped in the Redis 8 image (25 commands). Same product question as FT.*.",
-    "TS.": "RedisTimeSeries, shipped in the Redis 8 image (21 commands). Same product question.",
-    "BF.|CF.|CMS.|TOPK.|TDIGEST.": "the probabilistic family, shipped in the Redis 8 image. Same product question.",
-    "SUBSCRIBE SHARD|SSUBSCRIBE|SUNSUBSCRIBE|SPUBLISH": "shard pub/sub is a cluster feature.",
-    "FAILOVER|REPLICAOF|SLAVEOF|PSYNC|SYNC": "kevy has its own replication verbs; the Redis wire-level replication handshake is not a compatibility target.",
-    "ASKING|READONLY|READWRITE|REPLCONF|RESTORE-ASKING|TRIMSLOTS|PUBSUB|SHARDCHANNELS|PUBSUB|SHARDNUMSUB": "cluster-mode verbs: slot redirection, the replica handshake and shard pub/sub. Same decision as CLUSTER itself.",
-    "VADD|VSIM|VREM|VDIM|VCARD|VEMB|VGETATTR|VSETATTR|VLINKS|VINFO|VRANDMEMBER|VISMEMBER|VRANGE": "vector sets, absorbed module. VISMEMBER and VRANGE joined the family after the first list was written."
+  "planned": {
+    "array type": {
+      "prefixes": [
+        "ARSET",
+        "ARGET",
+        "ARMSET",
+        "ARMGET",
+        "ARGETRANGE",
+        "ARSCAN",
+        "ARGREP",
+        "AROP",
+        "ARRING",
+        "ARLASTITEMS",
+        "ARINSERT",
+        "ARNEXT",
+        "ARSEEK",
+        "ARDEL",
+        "ARDELRANGE",
+        "ARLEN",
+        "ARCOUNT",
+        "ARINFO"
+      ],
+      "rfc": ".claude/rfcs/2026-09-07-array-type.md",
+      "reason": "Redis 8.8's sparse array type, 18 verbs and a storage-layer design. Staged; stage 0 pins eleven unverified semantics against the pinned image before any routing code."
+    },
+    "client first-class API": {
+      "prefixes": [
+        "ZRANGEBYLEX",
+        "ZREVRANGEBYLEX",
+        "ZLEXCOUNT",
+        "ZREMRANGEBYLEX",
+        "SMISMEMBER",
+        "PEXPIRETIME",
+        "EXPIRETIME",
+        "RESET",
+        "PUBSUB",
+        "BITFIELD",
+        "BITFIELD_RO",
+        "BLMOVE"
+      ],
+      "rfc": ".claude/rfcs/2026-09-07-compat-surface.md",
+      "reason": "MUST: a major client library's first-class API sends these literally and hits ERR unknown command. Evidence per verb in the RFC (SE.Redis, node-redis v5 pool return, Sidekiq, RQ)."
+    },
+    "half-built families": {
+      "prefixes": [
+        "ZPOPMAX",
+        "BZPOPMAX",
+        "ZREVRANK",
+        "ZMSCORE",
+        "ZRANDMEMBER",
+        "ZMPOP",
+        "BZMPOP",
+        "ZDIFF",
+        "ZINTER",
+        "ZUNION",
+        "ZRANGESTORE",
+        "HEXPIREAT",
+        "HEXPIRETIME",
+        "HPEXPIRETIME",
+        "HSTRLEN",
+        "HRANDFIELD",
+        "LPUSHX",
+        "RPUSHX",
+        "LMPOP",
+        "LCS",
+        "SUBSTR",
+        "SMOVE",
+        "SINTERCARD",
+        "MSETNX",
+        "BLMPOP"
+      ],
+      "rfc": ".claude/rfcs/2026-09-07-compat-surface.md",
+      "reason": "MUST: the other half of a family kevy already implements. BZPOPMIN answers and BZPOPMAX does not; ZPOPMIN answers and ZPOPMAX does not. A half-built family passes a smoke test and fails in production."
+    },
+    "read-only aliases": {
+      "prefixes": [
+        "EVAL_RO",
+        "EVALSHA_RO",
+        "GEORADIUS_RO",
+        "GEORADIUSBYMEMBER_RO"
+      ],
+      "rfc": ".claude/rfcs/2026-09-07-compat-surface.md",
+      "reason": "MUST: free aliases over implementations that already exist; they exist so a client can route a read to a replica."
+    },
+    "SORT": {
+      "prefixes": [
+        "SORT",
+        "SORT_RO"
+      ],
+      "rfc": ".claude/rfcs/2026-09-07-compat-surface.md",
+      "reason": "MUST, scoped: the key's own elements with LIMIT/ALPHA/ASC/DESC/STORE and BY nosort. The dereferencing BY/GET patterns are refused with a named reason — on a sharded keyspace they are a cross-shard gather per element, and no surveyed client sends that form."
+    },
+    "HyperLogLog": {
+      "prefixes": [
+        "PFADD",
+        "PFCOUNT",
+        "PFMERGE"
+      ],
+      "rfc": ".claude/rfcs/2026-09-07-compat-surface.md",
+      "reason": "MUST, and a data type rather than three verbs: sparse/dense register encoding plus a Value arm. Twelve years old and wrapped by every client library, which makes it likelier to be reached than the array type."
+    },
+    "Redis 8.6/8.10 additions": {
+      "prefixes": [
+        "LMOVEM",
+        "BLMOVEM",
+        "SUNIONCARD",
+        "SDIFFCARD",
+        "XACKDEL",
+        "XDELEX",
+        "XNACK",
+        "INCREX",
+        "MSETEX",
+        "DELEX",
+        "HSETEX",
+        "HGETEX",
+        "HGETDEL"
+      ],
+      "rfc": ".claude/rfcs/2026-09-07-compat-surface.md",
+      "reason": "each sits on machinery that exists. This is the lane a future Redis release's new verbs land in, which is what makes keeping up a recurring cheap operation instead of a project."
+    }
   },
-  "planned": {},
-  "_planned_doc": "Each entry: verb prefix -> the RFC or issue that owns it. A planned gap is still a gap; this only records that a decision exists."
+  "_planned_doc": "Each entry names the RFC that owns it. A planned gap is still a gap — this records that a decision exists and where it is argued. The gate checks the rfc path exists.",
+  "exempt": {
+    "AUTH +1": {
+      "prefixes": [
+        "AUTH",
+        "ACL"
+      ],
+      "reason": "AUTH is firm OUT by the owner, repeatedly — see .claude/scope-decisions.md. Not a backlog item."
+    },
+    "CLUSTER": {
+      "prefixes": [
+        "CLUSTER"
+      ],
+      "reason": "single-machine engine; cluster is OUT of scope."
+    },
+    "FT.": {
+      "prefixes": [
+        "FT."
+      ],
+      "reason": "the query engine, which Redis 8 ships in the image (47 commands). kevy answers search with its own INDEX/VIEW/TABLE surface designed for this engine; matching FT.* verb-for-verb is a product decision the owner has not made, not an oversight."
+    },
+    "JSON.": {
+      "prefixes": [
+        "JSON."
+      ],
+      "reason": "RedisJSON, shipped in the Redis 8 image (25 commands). Same product question as FT.*."
+    },
+    "TS.": {
+      "prefixes": [
+        "TS."
+      ],
+      "reason": "RedisTimeSeries, shipped in the Redis 8 image (21 commands). Same product question."
+    },
+    "BF. +4": {
+      "prefixes": [
+        "BF.",
+        "CF.",
+        "CMS.",
+        "TOPK.",
+        "TDIGEST."
+      ],
+      "reason": "the probabilistic family, shipped in the Redis 8 image. Same product question."
+    },
+    "SUBSCRIBE SHARD +3": {
+      "prefixes": [
+        "SSUBSCRIBE",
+        "SUNSUBSCRIBE",
+        "SPUBLISH"
+      ],
+      "reason": "shard pub/sub is a cluster feature."
+    },
+    "FAILOVER +4": {
+      "prefixes": [
+        "FAILOVER",
+        "REPLICAOF",
+        "SLAVEOF",
+        "PSYNC",
+        "SYNC"
+      ],
+      "reason": "kevy has its own replication verbs; the Redis wire-level replication handshake is not a compatibility target."
+    },
+    "ASKING +7": {
+      "prefixes": [
+        "ASKING",
+        "READONLY",
+        "READWRITE",
+        "REPLCONF",
+        "RESTORE-ASKING",
+        "TRIMSLOTS",
+        "PUBSUB|SHARDCHANNELS",
+        "PUBSUB|SHARDNUMSUB"
+      ],
+      "reason": "cluster-mode verbs: slot redirection, the replica handshake and shard pub/sub. Same decision as CLUSTER itself."
+    },
+    "VADD +12": {
+      "prefixes": [
+        "VADD",
+        "VSIM",
+        "VREM",
+        "VDIM",
+        "VCARD",
+        "VEMB",
+        "VGETATTR",
+        "VSETATTR",
+        "VLINKS",
+        "VINFO",
+        "VRANDMEMBER",
+        "VISMEMBER",
+        "VRANGE"
+      ],
+      "reason": "vector sets, absorbed module. VISMEMBER and VRANGE joined the family after the first list was written."
+    },
+    "module aliases": {
+      "prefixes": [
+        "SEARCH.",
+        "TIMESERIES."
+      ],
+      "reason": "the query-engine and time-series families under their alias spelling. Same decision as FT./TS.; they were missed because the first list keyed on the dotted names only."
+    },
+    "BACKUP": {
+      "prefixes": [
+        "BACKUP"
+      ],
+      "reason": "Redis 8's operator-facing backup subsystem (START/SEAL/ABORT/STATUS/LIST/CLEANUP). kevy's durability surface is its own: AOF with segmented rewrite, snapshots, and PREFIX.DIGEST for verification. A verb-for-verb match would be a second persistence UI over a different mechanism."
+    },
+    "HOTKEYS": {
+      "prefixes": [
+        "HOTKEYS"
+      ],
+      "reason": "Redis 8.6's hot-key sampler. kevy exposes access-frequency through its own eviction/tiering counters; adopting this surface would mean adopting its sampling model too."
+    },
+    "HIMPORT": {
+      "prefixes": [
+        "HIMPORT"
+      ],
+      "reason": "Redis 8's staged hash import (PREPARE/SET/DISCARD). kevy has no equivalent staging concept and no client library calls it."
+    },
+    "MODULE": {
+      "prefixes": [
+        "MODULE"
+      ],
+      "reason": "module loading. kevy is zero-dependency pure Rust with no dynamic module ABI — this is not a gap, it is the charter."
+    },
+    "introspection": {
+      "prefixes": [
+        "MONITOR",
+        "LATENCY",
+        "LOLWUT",
+        "OBJECT",
+        "LASTSAVE"
+      ],
+      "reason": "operator introspection. Verified across eight client libraries: none sends any of these on an ordinary application path, and no scan/hscan helper depends on OBJECT or TYPE for internal filtering. They are user-invoked diagnostics, and kevy answers the same questions through INFO and its own counters."
+    },
+    "DUMP/RESTORE/MIGRATE": {
+      "prefixes": [
+        "DUMP",
+        "RESTORE",
+        "MIGRATE"
+      ],
+      "reason": "these serialise values in Redis's RDB payload format. Implementing them means implementing that format byte-for-byte and versioning it forever; kevy moves data with its own snapshot format and kevy-cli migrate. No client sends them automatically."
+    },
+    "multi-db": {
+      "prefixes": [
+        "MOVE",
+        "SWAPDB"
+      ],
+      "reason": "numbered-database operations. kevy is single-keyspace by design (SELECT accepts 0 only); these have no meaning here."
+    },
+    "FUNCTION/FCALL": {
+      "prefixes": [
+        "FUNCTION",
+        "FCALL",
+        "FCALL_RO"
+      ],
+      "reason": "the server-side function registry. kevy runs Lua through the luna bridge (EVAL/EVALSHA/SCRIPT); the registry is a second, persistent namespace with its own replication and DUMP/RESTORE story. A product decision, and the owner has not asked for it."
+    },
+    "HLL internals": {
+      "prefixes": [
+        "PFDEBUG",
+        "PFSELFTEST"
+      ],
+      "reason": "Redis-internal HyperLogLog debugging, tied to its exact register encoding. The user-facing PFADD/PFCOUNT/PFMERGE are planned, not exempt."
+    },
+    "WAITAOF": {
+      "prefixes": [
+        "WAITAOF"
+      ],
+      "reason": "blocks until N replicas have fsynced their AOF. kevy's replication acknowledges at a different point and WAIT is already implemented; matching this verb would require adopting Redis's AOF-ack semantics."
+    },
+    "stream internals": {
+      "prefixes": [
+        "XIDMPRECORD",
+        "XCFGSET"
+      ],
+      "reason": "Redis 8 stream internals (id-map records, per-stream config). Not in any client library's surface."
+    },
+    "DIGEST": {
+      "prefixes": [
+        "DIGEST"
+      ],
+      "reason": "Redis 8's keyspace digest. kevy has PREFIX.DIGEST, which answers the same question over a prefix rather than the whole keyspace and predates it."
+    }
+  },
+  "_exempt_schema": "Each entry is {prefixes: [...], reason: \"...\"}. The prefixes are a LIST because Redis puts '|' inside verb names (XGROUP|CREATE), so a '|'-joined string cannot express one: it produced a bare PUBSUB fragment that swallowed PUBSUB CHANNELS/NUMSUB/NUMPAT — verbs a client library calls — under a reason about cluster mode. A prefix that matches nothing is reported, so a dead fragment cannot sit here looking like a decision.",
+  "unclassified_ceiling": 0,
+  "_ratchet": "The number of commands that are neither implemented nor decided about, and it may only go down. Above it: a new Redis release added commands, or a decision was removed — either way it is a thing to look at, not a thing to absorb. Below it: lower it in the same commit that earned the gain, so the floor holds. This is what keeps `advisory` from covering a whole arc: without it 151 could become 250 while the tier stayed green."
 }
