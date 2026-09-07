@@ -61,12 +61,12 @@ use kevy_sys::checksum::crc32c;
 #[cfg(test)]
 mod tests;
 
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::io;
 use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 
 /// Default rotation threshold for the active file (RFC §7: 256 MiB).
 pub const DEFAULT_ROTATE_BYTES: u64 = 256 << 20;
@@ -77,128 +77,12 @@ const HEADER: u64 = 8;
 /// Refuse absurd bodies (mirrors the AOF envelope's `MAX_RECORD` bound).
 const MAX_BODY: u32 = 1 << 30;
 
-/// The address of one spilled record — what a cold stub holds.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct VlogRef {
-    /// Which file in the shard's log holds it. Files are append-only and
-    /// never renumbered, so this stays valid until compaction rewrites the
-    /// ref — see `epoch`.
-    pub file_id: u32,
-    /// Byte offset of the record HEADER within the file.
-    pub offset: u64,
-    /// Body length (key_len field + key + payload), excluding the header.
-    pub len: u32,
-}
-
-impl VlogRef {
-    /// Total on-disk record length: header + body. The image size a
-    /// batched reader must fetch at `offset` (see [`verify_image`]).
-    #[inline]
-    pub fn disk_len(self) -> usize {
-        HEADER as usize + self.len as usize
-    }
-}
-
-/// Verify a raw record image (the `disk_len()` bytes at `r.offset`) and
-/// split it into `(key, payload)`. This is the completion half of a
-/// batched read: the io_uring path fetches images concurrently and runs
-/// each through here; [`VlogFile::read`] is exactly one fetch + this.
-/// A length or CRC mismatch is `InvalidData` — this process wrote the
-/// record this boot, so a bad image is a bug, never corruption to heal.
-pub fn verify_image(r: VlogRef, mut image: Vec<u8>) -> io::Result<(Vec<u8>, Vec<u8>)> {
-    if image.len() != r.disk_len() {
-        return Err(bad(format!(
-            "vlog: image length mismatch (want {}, got {})",
-            r.disk_len(),
-            image.len()
-        )));
-    }
-    let body_len = u32::from_le_bytes(image[..4].try_into().unwrap());
-    let crc = u32::from_le_bytes(image[4..8].try_into().unwrap());
-    if body_len != r.len || body_len > MAX_BODY {
-        return Err(bad(format!("vlog: length mismatch (ref {}, disk {body_len})", r.len)));
-    }
-    if crc32c(&image[HEADER as usize..]) != crc {
-        return Err(bad(format!("vlog: crc mismatch at {}:{}", r.file_id, r.offset)));
-    }
-    image.drain(..HEADER as usize);
-    split_body(image)
-}
-
-/// One log file. Shared via `Arc`: the `Vlog` holds one, and pinned
-/// readers hold more. When compaction retires the file it sets
-/// `delete_on_drop`; the underlying file is unlinked by whichever holder
-/// drops last — that is the entire pin protocol.
-#[derive(Debug)]
-pub struct VlogFile {
-    id: u32,
-    path: PathBuf,
-    file: File,
-    delete_on_drop: AtomicBool,
-    /// The corpus model every record in THIS file was encoded against —
-    /// trained at rotation from the previous file's raw samples, empty
-    /// for the first file. Lives and dies with the file (disposability
-    /// is inherited, not engineered).
-    dict: Vec<u8>,
-}
-
-impl VlogFile {
-    /// This file's id, as a `VlogRef` records it.
-    pub fn id(&self) -> u32 {
-        self.id
-    }
-
-    /// Read one record back: `(key, payload)`. ONE positional pread of
-    /// the whole record image (the body length is already in the ref),
-    /// then [`verify_image`] — a length/CRC mismatch is `InvalidData`
-    /// (this process wrote the record this boot; a bad read is a bug,
-    /// never "corruption to heal").
-    pub fn read(&self, r: VlogRef) -> io::Result<(Vec<u8>, Vec<u8>)> {
-        let (key, frame) = verify_image(r, self.read_image(r)?)?;
-        Ok((key, self.decompress(&frame)?))
-    }
-
-    /// Decode a verified record's frame against THIS file's dictionary.
-    /// The batched-read path pairs this with [`verify_image`]; a frame
-    /// that fails to decode is a process bug by the same doctrine as a
-    /// CRC mismatch (this process wrote it this boot).
-    pub fn decompress(&self, frame: &[u8]) -> io::Result<Vec<u8>> {
-        kevy_compress::decode(&self.dict, frame)
-            .map_err(|e| bad(format!("vlog: {e} at file {}", self.id)))
-    }
-
-    /// Fetch the raw record image (`r.disk_len()` bytes at `r.offset`)
-    /// in one pread, UNverified — the batched-read issuance half; pair
-    /// with [`verify_image`] on completion.
-    pub fn read_image(&self, r: VlogRef) -> io::Result<Vec<u8>> {
-        let mut image = vec![0u8; r.disk_len()];
-        self.file.read_exact_at(&mut image, r.offset)?;
-        Ok(image)
-    }
-
-    /// The underlying file descriptor — what an io_uring batch reader
-    /// preps its READ SQEs against. The fd stays valid for the life of
-    /// this pin (the whole point of holding the `Arc<VlogFile>`).
-    pub fn raw_fd(&self) -> i32 {
-        use std::os::fd::AsRawFd;
-        self.file.as_raw_fd()
-    }
-}
-
-impl Drop for VlogFile {
-    fn drop(&mut self) {
-        if self.delete_on_drop.load(Ordering::Acquire) {
-            let _ = fs::remove_file(&self.path);
-        }
-    }
-}
-
-fn bad(msg: String) -> io::Error {
+pub(crate) fn bad(msg: String) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, msg)
 }
 
 /// Split a verified body into `(key, payload)`.
-fn split_body(body: Vec<u8>) -> io::Result<(Vec<u8>, Vec<u8>)> {
+pub(crate) fn split_body(body: Vec<u8>) -> io::Result<(Vec<u8>, Vec<u8>)> {
     if body.len() < 4 {
         return Err(bad("vlog: body shorter than its key header".into()));
     }
@@ -213,16 +97,8 @@ fn split_body(body: Vec<u8>) -> io::Result<(Vec<u8>, Vec<u8>)> {
     Ok((key, payload))
 }
 
-/// Owner callbacks for [`Vlog::compact_below`] — one object, one borrow,
-/// so the store can capture its map mutably across both phases.
-pub trait CompactOwner {
-    /// Is `old` still the owner's live ref for `key`? A record whose ref
-    /// was overwritten, deleted, or promoted answers `false` and is
-    /// dropped by the compaction.
-    fn is_live(&mut self, key: &[u8], old: VlogRef) -> bool;
-    /// The record survived and now lives at `new` — swap the cold ref.
-    fn moved(&mut self, key: &[u8], old: VlogRef, new: VlogRef);
-}
+mod record;
+pub use record::{CompactOwner, VlogFile, VlogRef, verify_image};
 
 /// Owner-side per-file accounting (bytes are header-inclusive).
 #[derive(Debug)]
@@ -278,6 +154,17 @@ const SAMPLE_BUDGET: usize = 256 << 10;
 impl Vlog {
     /// Open a fresh vlog under `dir`, DELETING any leftover vlog files —
     /// the log is per-boot disposable (the AOF is the durability truth).
+    /// # Examples
+    ///
+    /// ```
+    /// use kevy_vlog::Vlog;
+    /// let dir = kevy_tmpdir::TmpDir::new("vlog-open");
+    /// // 1 MiB before the active file rotates.
+    /// let v = Vlog::open(dir.path(), 1 << 20).unwrap();
+    /// // A fresh log starts with exactly one file and nothing live in it.
+    /// assert_eq!(v.stats().files, 1);
+    /// assert_eq!(v.stats().live_bytes, 0);
+    /// ```
     pub fn open(dir: &Path, rotate_bytes: u64) -> io::Result<Self> {
         fs::create_dir_all(dir)?;
         for entry in fs::read_dir(dir)? {
@@ -333,6 +220,18 @@ impl Vlog {
 
     /// Append one record; returns its address. Rotates the active file
     /// past the threshold FIRST, so a record never spans files.
+    /// # Examples
+    ///
+    /// ```
+    /// use kevy_vlog::Vlog;
+    /// let dir = kevy_tmpdir::TmpDir::new("vlog-append");
+    /// let mut v = Vlog::open(dir.path(), 1 << 20).unwrap();
+    ///
+    /// let r = v.append(b"user:1", b"the cold value").unwrap();
+    /// // The ref is the address a cold stub keeps; reading it back gives
+    /// // the key alongside the payload, so a stub can be re-checked.
+    /// assert_eq!(v.read(r).unwrap(), (b"user:1".to_vec(), b"the cold value".to_vec()));
+    /// ```
     pub fn append(&mut self, key: &[u8], payload: &[u8]) -> io::Result<VlogRef> {
         self.append_level(key, payload, false)
     }
@@ -414,6 +313,20 @@ impl Vlog {
     /// frozen refs: any ref frozen at the same instant can only name a
     /// file that exists now, so the whole set keeps the view readable
     /// across compaction for its entire life.
+    /// # Examples
+    ///
+    /// ```
+    /// use kevy_vlog::Vlog;
+    /// let dir = kevy_tmpdir::TmpDir::new("vlog-pin");
+    /// let mut v = Vlog::open(dir.path(), 1 << 20).unwrap();
+    /// v.append(b"k", b"v").unwrap();
+    ///
+    /// // Pinned files survive compaction for as long as the handle lives —
+    /// // this is how a snapshot reads a cold value without blocking the
+    /// // shard that owns the log.
+    /// let pinned = v.pin_all();
+    /// assert_eq!(pinned.len(), v.stats().files);
+    /// ```
     pub fn pin_all(&self) -> Vec<Arc<VlogFile>> {
         self.files.iter().map(|s| Arc::clone(&s.handle)).collect()
     }
@@ -440,6 +353,15 @@ impl Vlog {
     /// Monotone compaction counter — bumped once per retired file. A
     /// reader holding `(epoch, VlogRef)` can verify in O(1) that no
     /// compaction has run (so its ref cannot have moved).
+    /// # Examples
+    ///
+    /// ```
+    /// use kevy_vlog::Vlog;
+    /// let dir = kevy_tmpdir::TmpDir::new("vlog-epoch");
+    /// let v = Vlog::open(dir.path(), 1 << 20).unwrap();
+    /// // A ref taken while the epoch reads N stays valid until it changes.
+    /// assert_eq!(v.epoch(), v.stats().epoch);
+    /// ```
     pub fn epoch(&self) -> u64 {
         self.epoch
     }
@@ -447,6 +369,24 @@ impl Vlog {
     /// A snapshot of the gauges INFO reads. Cheap: the byte totals are
     /// summed over the file list, which is one entry per file rather than
     /// per record.
+    /// # Examples
+    ///
+    /// ```
+    /// use kevy_vlog::Vlog;
+    /// let dir = kevy_tmpdir::TmpDir::new("vlog-stats");
+    /// let mut v = Vlog::open(dir.path(), 1 << 20).unwrap();
+    /// let r = v.append(b"k", b"payload").unwrap();
+    ///
+    /// let before = v.stats();
+    /// assert!(before.live_bytes > 0);
+    ///
+    /// // Telling the log a stub is gone moves bytes from live to dead;
+    /// // nothing is reclaimed until compaction runs.
+    /// v.note_dead(r);
+    /// let after = v.stats();
+    /// assert_eq!(after.live_bytes, 0);
+    /// assert_eq!(after.bytes, before.bytes);
+    /// ```
     pub fn stats(&self) -> VlogStats {
         VlogStats {
             files: self.files.len(),
