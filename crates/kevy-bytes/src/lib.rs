@@ -106,7 +106,14 @@ const _: () = {
     assert!(mem::align_of::<SmallBytes>() == mem::align_of::<usize>());
 };
 
+// SAFETY: the heap variant owns its allocation outright — `heap.ptr` is never
+// shared with another `SmallBytes` (clone allocates and copies) and nothing
+// behind it is interior-mutable, so moving the value to another thread hands
+// over sole ownership. The inline variant is plain bytes.
 unsafe impl Send for SmallBytes {}
+// SAFETY: every shared-reference method reads only; there is no interior
+// mutability anywhere in either variant, so concurrent readers observe the same
+// immutable bytes.
 unsafe impl Sync for SmallBytes {}
 
 impl SmallBytes {
@@ -396,14 +403,17 @@ impl SmallBytes {
     /// false). `self.heap.ptr` must point to `self.heap.len` valid bytes.
     #[inline]
     unsafe fn clone_heap(&self) -> Self {
-        // SAFETY (covers the three `self.heap.*` reads): caller asserts the
-        // heap variant is active.
+        // SAFETY: this fn is `unsafe` and its `# Safety` section makes the caller
+        // assert that the heap variant is the live one, which is what both reads here
+        // require.
         let (src_ptr, len) = unsafe { (self.heap.ptr.as_ptr(), self.heap.length()) };
-        // `len > 22 ⇒ len > 0`, and the high bits are guarded by `CAP_MASK`
-        // never letting cap exceed 2^56, well below `isize::MAX`, so the
-        // unchecked layout is sound. Allocator alignment for `u8` is 1.
+        // SAFETY: `Layout::from_size_align_unchecked` requires a non-zero power-of-two
+        // alignment and a size that, rounded up to it, does not overflow `isize::MAX`.
+        // Alignment 1 satisfies the first. For the second: the heap variant is only
+        // taken when `len > 22`, and `CAP_MASK` keeps the capacity below 2^56, well
+        // under `isize::MAX` on every target kevy builds for.
         let layout = unsafe { Layout::from_size_align_unchecked(len, 1) };
-        // SAFETY: layout.size() > 0.
+        // SAFETY: `alloc` requires a layout of non-zero size; `len > 22` above gives it.
         let raw = unsafe { alloc(layout) };
         let Some(ptr) = NonNull::new(raw) else { handle_alloc_error(layout) };
         // SAFETY: src has `len` valid bytes; dst is freshly-allocated for `len`

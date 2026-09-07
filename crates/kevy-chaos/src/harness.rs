@@ -320,6 +320,8 @@ fn apply_rlimits(nofile: u64, fsize: u64) -> io::Result<()> {
     }
     if fsize > 0 {
         let lim = RawRlimit { rlim_cur: fsize, rlim_max: fsize };
+        // SAFETY: `lim` is a live `RawRlimit` on this frame and `setrlimit(2)` only reads
+        // through the pointer for the duration of the call.
         let rc = unsafe { setrlimit(RLIMIT_FSIZE, &lim) };
         if rc != 0 {
             return Err(io::Error::last_os_error());

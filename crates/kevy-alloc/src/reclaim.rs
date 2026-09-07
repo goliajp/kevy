@@ -64,6 +64,8 @@ impl Heap {
                     continue;
                 }
                 let c = s.spans[ix].class as usize;
+                // SAFETY: `seg` is the segment being walked in this loop; it came from the
+                // live span list, so it is a real segment address and never null.
                 if self.partial[c] == Some((unsafe { NonNull::new_unchecked(seg) }, ix as u8)) {
                     self.partial[c] = None;
                 }

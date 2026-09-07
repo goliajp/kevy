@@ -87,6 +87,10 @@ impl SockaddrIn {
     }
 
     pub(crate) fn zeroed() -> Self {
+        // SAFETY: `SockaddrIn` is `repr(C)` over integer and array fields only — no
+        // references, no `NonNull`, no padding whose value is read — so the all-zero bit
+        // pattern is a valid inhabitant. That is what the kernel expects to be handed
+        // before it fills the struct in.
         unsafe { core::mem::zeroed() }
     }
 }

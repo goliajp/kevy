@@ -636,6 +636,8 @@ fn claimed_word_recycles_locally_and_retires_honestly() {
             assert_eq!(p, prev, "short-lived churn must reuse the same lowest slot");
         }
         last = Some(p);
+        // SAFETY: `p` came from `h.alloc` with this same size and alignment and has not
+        // been freed yet, which is `dealloc`'s contract.
         unsafe { h.dealloc(p, 48, 8) };
     }
     // Identity balances with a claim in flight (no flush).
@@ -662,6 +664,8 @@ fn claims_span_words_and_never_strand_occupancy() {
         ptrs.push(h.alloc(64, 8).unwrap()); // > 64 slots ⇒ multiple words
     }
     for p in ptrs.drain(..) {
+        // SAFETY: `p` came from `h.alloc` with this same size and alignment and has not
+        // been freed yet, which is `dealloc`'s contract.
         unsafe { h.dealloc(p, 64, 8) };
     }
     h.flush_claims();

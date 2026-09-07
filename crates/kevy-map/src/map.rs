@@ -156,6 +156,8 @@ pub struct KevyMap<K, V> {
 // `NonNull<...>` fields are conceptually `Box<[…]>` and inherit the same
 // Send/Sync bounds: send-K + send-V ⇒ KevyMap is Send. Same for Sync.
 unsafe impl<K: Send, V: Send> Send for KevyMap<K, V> {}
+// SAFETY: as above — the pointers are owning, not shared, so a `&KevyMap` grants
+// only reads of `K` and `V`, which `K: Sync + V: Sync` makes safe to share.
 unsafe impl<K: Sync, V: Sync> Sync for KevyMap<K, V> {}
 
 /// `(metadata, slots)` parallel-slice pair returned by [`KevyMap::as_slices`].
@@ -235,6 +237,8 @@ impl<K, V> KevyMap<K, V> {
         // SAFETY: i ∈ [0, cap); i2 ∈ [GROUP_WIDTH, cap + GROUP_WIDTH);
         // both in-bounds since metadata buffer length is cap + GROUP_WIDTH.
         let i2 = (i.wrapping_sub(GROUP_WIDTH) & self.mask) + GROUP_WIDTH;
+        // SAFETY: both indices are in range by the bound stated just above, and the
+        // metadata allocation is `cap + GROUP_WIDTH` bytes long.
         unsafe {
             *self.metadata_ptr.as_ptr().add(i) = v;
             *self.metadata_ptr.as_ptr().add(i2) = v;
