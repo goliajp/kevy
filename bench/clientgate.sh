@@ -81,7 +81,7 @@ cp bench/clientgate/node_redis.mjs bench/clientgate/ioredis.mjs "$NODEAPP/"
 # found in the client smoke two steps later.
 for attempt in 1 2 3; do
     (cd "$NODEAPP" && npm install --no-audit --no-fund --quiet \
-        --fetch-retries=5 redis ioredis) > "$NODEAPP/npm-install.log" 2>&1 && break
+        --fetch-retries=5 redis@6.2.1 ioredis) > "$NODEAPP/npm-install.log" 2>&1 && break
     if [ "$attempt" = 3 ]; then
         echo "clientgate: FAIL — npm install failed after 3 attempts:"
         tail -20 "$NODEAPP/npm-install.log"
@@ -100,9 +100,11 @@ run se-redis env KEVY_PORT=$PORT dotnet run --project bench/clientgate/seredis -
 
 # ── Python: redis-py, sync + asyncio (venv, no global pollution) ──
 # The async client (redis.asyncio) ships in the same `redis` package, so
-# both smokes run off one install — same ladder, sync vs await.
+# both smokes run off one install — same ladder, sync vs await. The version is
+# pinned and tracked in bench/COMPETITOR-ANCHORS.json: an unpinned client
+# changes what is being tested without anyone choosing it.
 python3 -m venv "$DIR/venv" >/dev/null 2>&1 \
-    && "$DIR/venv/bin/pip" install --quiet redis >/dev/null 2>&1
+    && "$DIR/venv/bin/pip" install --quiet redis==8.1.0 >/dev/null 2>&1
 run redis-py       env KEVY_PORT=$PORT "$DIR/venv/bin/python" bench/clientgate/redispy.py
 run redis-py-async env KEVY_PORT=$PORT "$DIR/venv/bin/python" bench/clientgate/redispy_async.py
 

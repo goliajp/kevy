@@ -43,6 +43,17 @@ impl Store {
         self.wshard(key).store.hkeys(key).map_err(store_err)
     }
 
+    /// `HRANDFIELD key count [WITHVALUES]` — random fields, distinct for a
+    /// positive count and with repeats allowed for a negative one.
+    pub fn hrandfield(
+        &self,
+        key: &[u8],
+        count: i64,
+        with_values: bool,
+    ) -> KevyResult<kevy_store::FieldValuePairs> {
+        self.wshard(key).store.hrandfield(key, count, with_values).map_err(store_err)
+    }
+
     /// `HVALS key` — every value in `key`'s hash.
     pub fn hvals(&self, key: &[u8]) -> KevyResult<Vec<Vec<u8>>> {
         self.wshard(key).store.hvals(key).map_err(store_err)

@@ -20,7 +20,7 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-kevy-ffi = { path = "../kevy-ffi", version = "6.2.2" }
+kevy-ffi = { path = "../kevy-ffi", version = "6.3.0" }
 
 [lints]
 workspace = true

@@ -14,7 +14,7 @@
 # achievement, and a page that congratulates itself for it is a page about itself.
 #
 # What DOES belong, because it changes what a reader decides: where we are only
-# barely ahead (LPUSH: 12%), what we refuse to do (no cluster, no AUTH, no TLS),
+# barely ahead (LPUSH: 10%), what we refuse to do (no cluster, no AUTH, no TLS),
 # and which commands do not behave the way Redis's docs say. Keep every word of
 # that, blunt.
 #
@@ -203,7 +203,7 @@ let mut store = Store::new_in(&mut arena);""",
             "eyebrow": "为什么可以直接替换 Redis",
             "h2": "同样的协议。更高的吞吐。",
             "intro": (
-                "RESP2 和 RESP3，188 条命令——redis-cli 和你的客户端库不用改就能连。"
+                "RESP2 和 RESP3，206 条命令——redis-cli 和你的客户端库不用改就能连。"
                 "一台机器，16 核，loopback，五次取中位数。"
             ),
             "rows": [
@@ -215,11 +215,11 @@ let mut store = Store::new_in(&mut arena);""",
                 ["LPUSH", 3213470, 2862374, "1.12×", True],
                 ["ZADD", 3053101, 2773929, "1.10×", True],
             ],
-            "us": "kevy 6.2.0",
-            "them": "Redis 8",
+            "us": "kevy 6.3.0",
+            "them": "Redis 8.10.1",
             "thin": "不到 15%——决定胜负的是你的负载，不是引擎",
             "note": (
-                "<b>LPUSH 和 ZADD 只领先 12% 和 10%。</b>如果 list 或者 sorted set "
+                "<b>LPUSH 和 ZADD 只领先 10% 和 15%。</b>如果 list 或者 sorted set "
                 "是你的热路径，那么性能就不是换过来的理由。"
                 "<a href=\"~/benchmarks/\">完整的表格在这里，valkey 和 Dragonfly 也一起打了。</a>"
                 "迁移只有三条命令——<a href=\"~/migrate/\">export、import、digest</a>——"
@@ -296,7 +296,7 @@ PAGES["migrate"] = {
             "t": "prose",
             "h2": "从 Redis 过来",
             "body": [
-                "<b>你的客户端不用改。</b>kevy 说 RESP2 和 RESP3，实现了 188 条命令。"
+                "<b>你的客户端不用改。</b>kevy 说 RESP2 和 RESP3，实现了 206 条命令。"
                 "把你现有的库指过来就行，代码不动，redis-cli 不换。没有新的 SDK 要接，"
                 "也没有新协议要学。",
                 "<b>所以真正要问的只有一句：你能换到什么。</b>只有四样。如果这四样对你都没有"
@@ -327,7 +327,7 @@ PAGES["migrate"] = {
                 },
                 {
                     "title": "你现在跑的那些操作，它更快",
-                    "body": "同一台机器上对 Redis 8：GET 快 1.4×，SET 快 2.7×，INCR 快 1.8×。不过在你把这个当成理由之前，先把整张表看完——LPUSH 和 ZADD 只领先 12% 和 10%，如果 list 或者 sorted set 是你的热路径，那这就不是你该搬的理由。",
+                    "body": "同一台机器上对 Redis 8.10.1：GET 快 1.33×，SET 快 2.66×，INCR 快 2.05×。不过在你把这个当成理由之前，先把整张表看完——LPUSH 和 ZADD 只领先 10% 和 15%，如果 list 或者 sorted set 是你的热路径，那这就不是你该搬的理由。",
                 },
                 {
                     "title": "数据集不必再装进 RAM",
@@ -500,7 +500,7 @@ PAGES["choose"] = {
             "items": [
                 {
                     "q": "它真的能直接替换 Redis 吗？",
-                    "a": "在协议层面，是的——RESP2 和 RESP3，188 条命令，你的客户端库不会察觉。在行为层面，大体上是，而例外恰恰是重点。跨 shard 的 <code>RENAME</code> 不是原子的——多键写只在单个 shard 内原子。另外 SCAN 的游标只在签发它的服务器上有效，与 Redis Cluster 的按节点性质相同。<a href=\"~/docs/commands/\">全部 188 条命令都标着真实的偏差和真实的代价</a>，这些是从实现里读出来的，不是从 Redis 的文档里抄来的。",
+                    "a": "在协议层面，是的——RESP2 和 RESP3，206 条命令，你的客户端库不会察觉。在行为层面，大体上是，而例外恰恰是重点。跨 shard 的 <code>RENAME</code> 不是原子的——多键写只在单个 shard 内原子。另外 SCAN 的游标只在签发它的服务器上有效，与 Redis Cluster 的按节点性质相同。<a href=\"~/docs/commands/\">全部 206 条命令都标着真实的偏差和真实的代价</a>，这些是从实现里读出来的，不是从 Redis 的文档里抄来的。",
                 },
                 {
                     "q": "数据集必须装进 RAM 吗？",
@@ -699,7 +699,7 @@ HGETALL flags""",
             "items": [
                 {"kicker": "指南", "title": "食谱", "body": "会话、限流、排行榜、信息流的可用配方。", "go": "去读", "href": "docs/cookbook/"},
                 {"kicker": "指南", "title": "持久化", "body": "kill -9 之后什么还在，以及 fsync 策略要你付出什么。", "go": "去读", "href": "docs/persistence/"},
-                {"kicker": "参考", "title": "全部命令", "body": "188 条命令，每一条都标着真实代价和相对 Redis 的偏差。", "go": "去查", "href": "docs/commands/"},
+                {"kicker": "参考", "title": "全部命令", "body": "206 条命令，每一条都标着真实代价和相对 Redis 的偏差。", "go": "去查", "href": "docs/commands/"},
             ],
         },
     ],
@@ -1376,7 +1376,7 @@ store.set(b"temp", b"21.4")?;""",
 
 PAGES["benchmarks"] = {
     "title": "基准测试——kevy",
-    "desc": "kevy 4.0 在一台机器上对打 Redis 8、valkey 9.1 和 Dragonfly——也包括 kevy 只是勉强领先的那几条命令。",
+    "desc": "kevy 6.2.2 在一台机器上对打 Redis 8.10.1、valkey 9.1.2 和 Dragonfly 1.40.2——也包括 kevy 只是勉强领先的那几条命令。",
     "foot": "可以用仓库里的 bench/ 复现",
     "blocks": [
         {
@@ -1396,18 +1396,18 @@ PAGES["benchmarks"] = {
                 "50 条连接，小 value。五次运行取中位数，数字取自每个服务端自己的命令计数器，"
                 "统计的是三秒稳态窗口内的增量，而不是压测客户端报出来的速率。"
             ),
-            "head": ["", "kevy 6.2.0", "Redis 8", "valkey 9.1", "Dragonfly", "vs Redis 8"],
+            "head": ["", "kevy 6.3.0", "Redis 8.10.1", "valkey 9.1.2", "Dragonfly 1.40.2", "vs Redis 8.10.1"],
             "rows": [
-                ["GET", "6,990,156", "5,653,255", "3,282,765", "2,800,320", "*1.24×"],
-                ["SET", "6,847,720", "2,463,354", "1,689,824", "1,895,074", "*2.78×"],
-                ["INCR", "6,724,179", "3,309,109", "2,268,391", "1,986,973", "*2.03×"],
-                ["SADD", "5,778,726", "3,712,338", "2,214,684", "1,751,237", "*1.56×"],
-                ["HSET", "4,419,255", "3,019,669", "1,868,938", "1,751,321", "*1.46×"],
-                ["LPUSH", "3,090,840", "2,837,496", "1,867,068", "1,435,069", "!1.09×"],
-                ["ZADD", "3,355,835", "2,814,574", "1,805,751", "1,712,136", "!1.19×"],
+                ["GET", "7,489,119", "5,631,398", "2,980,764", "2,845,704", "*1.33×"],
+                ["SET", "6,824,662", "2,567,607", "1,683,227", "1,943,358", "*2.66×"],
+                ["INCR", "6,753,558", "3,294,927", "2,279,738", "1,953,406", "*2.05×"],
+                ["SADD", "6,152,617", "3,753,131", "2,214,659", "1,899,967", "*1.64×"],
+                ["HSET", "4,002,580", "2,966,288", "1,857,532", "1,773,498", "*1.35×"],
+                ["LPUSH", "3,142,699", "2,860,306", "1,859,265", "1,505,141", "!1.10×"],
+                ["ZADD", "3,242,967", "2,818,626", "1,786,230", "1,794,335", "!1.15×"],
             ],
             "note": (
-                "<b>LPUSH 比 Redis 8 快 12%，ZADD 快 10%。</b>差距只有这么大的时候，"
+                "<b>LPUSH 比 Redis 8.10.1 快 10%，ZADD 快 15%。</b>差距只有这么大的时候，"
                 "决定胜负的是你的 value 大小和 key 分布，而不是引擎——所以如果 list 或者 "
                 "sorted set 是你的热路径，请拿你自己的负载去测，不要为了性能而换。"
                 "这两行的颜色是故意标成这样的。"

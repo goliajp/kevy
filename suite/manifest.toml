@@ -173,7 +173,69 @@ timeout = 60
 requires = []
 proves = "workflow actions agree on one major each"
 
-# ── architecture ─────────────────────────────────────────────────────
+[[check]]
+id = "anchor-pins"
+area = "release-pins"
+tier = "precommit"
+cmd = "python3 tools/check_competitor_anchors.py --offline"
+# --offline exits 2: it skipped the upstream question rather than answering
+# it. The online half runs daily in competitor-anchors.yml and in the
+# prerelease row below, which does not pass --offline.
+skip_is_exit_2 = true
+expected = 2
+timeout = 60
+requires = []
+proves = "every competitor version in the tree matches bench/COMPETITOR-ANCHORS.json"
+
+[[check]]
+id = "anchor-currency"
+area = "release-pins"
+tier = "prerelease"
+cmd = "python3 tools/check_competitor_anchors.py"
+expected = 8
+timeout = 180
+requires = []
+proves = "the pinned competitors are each project's current latest stable — asked of the upstreams, not of the tree"
+
+[[check]]
+id = "command-coverage"
+area = "compat"
+tier = "prerelease"
+cmd = "python3 tools/check_command_coverage.py"
+expected = 2
+timeout = 60
+requires = []
+proves = "every command the pinned Redis serves is implemented, exempt by a written decision, or owned by an RFC — and the unclassified count only goes down"
+
+[[check]]
+id = "capability-claim"
+area = "doc"
+tier = "precommit"
+cmd = "python3 tools/check_capability_claim.py"
+expected = 2
+timeout = 60
+requires = []
+proves = "the command count the site publishes is the count the engine answers"
+
+[[check]]
+id = "site-commands-derived"
+area = "doc"
+tier = "precommit"
+cmd = "python3 tools/export_site_commands.py --check"
+expected = 4
+timeout = 120
+requires = ["server-debug"]
+proves = "the site's command reference is the engine's own COMMAND DOCS, not a hand-kept copy"
+
+[[check]]
+id = "suite-ledger"
+area = "hygiene"
+tier = "precommit"
+cmd = "python3 tools/check_suite_ledger.py"
+expected = 2
+timeout = 60
+requires = []
+proves = "a recorded duration is a duration — a timeout kill is not filed in the same field"
 
 [[check]]
 id = "architecture"
@@ -526,6 +588,20 @@ requires = ["server-debug"]
 proves = "every kevy-cli line in the cookbook runs green as written"
 
 [[check]]
+id = "crossgate"
+area = "compat"
+tier = "prerelease"
+# The claim that one log replays in both engines was prose in a source
+# comment for several releases with nothing checking it. It is the one
+# thing neither Redis (no browser form) nor SQLite (no server form) can
+# do, so a silent divergence would cost more than a feature.
+cmd = "bash bench/crossgate.sh"
+expected = 9
+timeout = 300
+requires = ["server-release", "node", "wasm-artifact"]
+proves = "an AOF written by either engine replays in the other, both directions"
+
+[[check]]
 id = "vendorgate"
 area = "doors"
 tier = "prerelease"
@@ -708,6 +784,16 @@ expected = 900
 timeout = 3600
 requires = ["docker", "server-release"]
 proves = "the same command sequence answers identically on kevy, valkey and redis"
+
+[[check]]
+id = "resp3gate"
+area = "compat"
+tier = "full"
+cmd = "bash bench/resp3gate.sh target/release/kevy"
+expected = 60
+timeout = 900
+requires = ["docker", "server-release"]
+proves = "kevy changes reply shape under HELLO 3 exactly where the pinned redis does"
 
 [[check]]
 id = "clientgate"

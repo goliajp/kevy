@@ -345,6 +345,14 @@ def run_tier(suite, checks, tier, only=None, area=None):
             if r.returncode == 0:
                 results.append((c, "PASS", took, ""))
                 print(f"  ✓ {c['id']:<22} {took:6.1f}s")
+            elif r.returncode == 2 and c.get("skip_is_exit_2"):
+                # Exit 2 means "I did not answer the question", not "the answer
+                # is no" — a gate that skipped an outward call and says so must
+                # not read as a failure, and must not read as a pass either.
+                # The row carries the reason, the way a NOT-RUN does.
+                why = ((r.stdout + r.stderr).strip().splitlines() or ["exit 2"])[-1]
+                results.append((c, "SKIPPED", took, why))
+                print(f"  ⊘ {c['id']:<22} {took:6.1f}s  SKIPPED — {why[:80]}")
             else:
                 tail = (r.stdout + r.stderr).strip().splitlines()[-6:]
                 status = "ADVISORY" if c.get("advisory") else "FAIL"
@@ -355,7 +363,7 @@ def run_tier(suite, checks, tier, only=None, area=None):
                     print(f"      {line[:140]}")
         except subprocess.TimeoutExpired:
             took = time.monotonic() - t0
-            results.append((c, "FAIL", took, f"timed out after {c['timeout']}s"))
+            results.append((c, "TIMEOUT", took, f"timed out after {c['timeout']}s"))
             print(f"  ✗ {c['id']:<22} {took:6.1f}s  TIMEOUT ({c['timeout']}s)")
 
     # Exit hygiene: the tier leaves the tree as it found it. rootgate
@@ -407,8 +415,15 @@ def run_tier(suite, checks, tier, only=None, area=None):
     # build cleans this too.
     out = ROOT / f"target/suite-{tier}.json"
     out.parent.mkdir(exist_ok=True)
+    # `seconds` is a measurement only when the check ran to completion. A
+    # TIMEOUT row's seconds is the ceiling it hit, and recording the two in
+    # one field is how 120.1 s of timeout became "this gate costs two
+    # minutes" in a later decomposition. `measured` is the witness: read
+    # `seconds` only where it is true.
     out.write_text(json.dumps(
-        [{"id": c["id"], "status": s, "seconds": round(t, 1)} for c, s, t, _ in results],
+        [{"id": c["id"], "status": s, "seconds": round(t, 1),
+          "measured": s != "TIMEOUT",
+          "ceiling": c["timeout"] if s == "TIMEOUT" else None} for c, s, t, _ in results],
         indent=1))
 
     budget = suite["budgets"].get(tier)

@@ -472,3 +472,135 @@ fn v2_wire_byte_for_byte_unchanged_after_resp3_migration() {
     c.write_all(&req(&[b"SMEMBERS", b"ss"])).unwrap();
     read_reply(&mut c, b"*1\r\n$4\r\nonly\r\n");
 }
+
+/// The four overrides bench/resp3gate.sh found missing, each proved by its
+/// leading type byte on both protocols.
+///
+/// The gate asks the pinned redis which verbs change shape under HELLO 3 and
+/// requires kevy to move where redis moves; these were the five it named, and
+/// the fifth (HRANDFIELD WITHVALUES) did not exist as a command at all. Read
+/// as type bytes rather than rendered text — that is the bit a type-decoding
+/// client reads, and the bit a competitor's CLI folds away.
+#[test]
+fn the_shapes_resp3gate_named_are_typed_on_v3_and_bulk_on_v2() {
+    let srv = Server::start(1);
+
+    let mut setup = srv.connect();
+    setup.write_all(&req(&[b"ZADD", b"z", b"1", b"a", b"2", b"b"])).unwrap();
+    read_reply(&mut setup, b":2\r\n");
+    setup.write_all(&req(&[b"SADD", b"s", b"m1", b"m2", b"m3"])).unwrap();
+    read_reply(&mut setup, b":3\r\n");
+    setup.write_all(&req(&[b"HSET", b"h", b"f1", b"v1", b"f2", b"v2"])).unwrap();
+    read_reply(&mut setup, b":2\r\n");
+    setup.write_all(&req(&[b"GEOADD", b"g", b"13.361389", b"38.115556", b"P"])).unwrap();
+    read_reply(&mut setup, b":1\r\n");
+
+    // Each case: the command, the byte V2 must lead with, the byte V3 must.
+    // `,` is Double, `~` is Set, `*` is Array, `$` is Bulk.
+    let cases: &[(&[&[u8]], u8, u8)] = &[
+        // ZPOPMIN's score: bulk in V2, Double in V3. The array header comes
+        // first, so the score's byte is checked after skipping the member.
+        (&[b"ZADD", b"z", b"INCR", b"1", b"a"], b'$', b','),
+        // SPOP with a count: Array in V2, Set in V3.
+        (&[b"SPOP", b"s", b"1"], b'*', b'~'),
+        // HRANDFIELD WITHVALUES: flat in V2, nested pairs in V3 — both lead
+        // with `*`, so the nesting is checked by length below.
+        (&[b"GEOPOS", b"g", b"P"], b'*', b'*'),
+    ];
+    for (argv, want_v2, want_v3) in cases {
+        let mut head = [0u8; 1];
+
+        let mut v2 = srv.connect();
+        v2.write_all(&req(argv)).unwrap();
+        v2.read_exact(&mut head).unwrap();
+        assert_eq!(head[0], *want_v2, "V2 shape for {:?}", argv[0]);
+        let mut sink = vec![0u8; 4096];
+        let _ = v2.read(&mut sink).unwrap();
+
+        let mut v3 = srv.v3_conn();
+        v3.write_all(&req(argv)).unwrap();
+        v3.read_exact(&mut head).unwrap();
+        assert_eq!(head[0], *want_v3, "V3 shape for {:?}", argv[0]);
+        let _ = v3.read(&mut sink).unwrap();
+    }
+
+    // HRANDFIELD WITHVALUES: V2 is a flat array of 4, V3 is 2 pairs.
+    let mut v2 = srv.connect();
+    v2.write_all(&req(&[b"HRANDFIELD", b"h", b"2", b"WITHVALUES"])).unwrap();
+    let mut hdr = [0u8; 4];
+    v2.read_exact(&mut hdr).unwrap();
+    assert_eq!(&hdr, b"*4\r\n", "V2 HRANDFIELD WITHVALUES is flat");
+    let mut sink = vec![0u8; 4096];
+    let _ = v2.read(&mut sink).unwrap();
+
+    let mut v3 = srv.v3_conn();
+    v3.write_all(&req(&[b"HRANDFIELD", b"h", b"2", b"WITHVALUES"])).unwrap();
+    v3.read_exact(&mut hdr).unwrap();
+    assert_eq!(&hdr, b"*2\r\n", "V3 HRANDFIELD WITHVALUES nests the pairs");
+    let _ = v3.read(&mut sink).unwrap();
+
+    // ZPOPMIN's score byte, after the array header and the member.
+    let mut v3 = srv.v3_conn();
+    v3.write_all(&req(&[b"ZPOPMIN", b"z"])).unwrap();
+    let mut buf = vec![0u8; 256];
+    let n = v3.read(&mut buf).unwrap();
+    let reply = String::from_utf8_lossy(&buf[..n]).to_string();
+    assert!(
+        reply.contains(",1") || reply.contains(",2"),
+        "V3 ZPOPMIN must emit the score as a Double: {reply:?}"
+    );
+}
+
+/// Every RESP3 override's error arm, which the coverage ratchet named.
+///
+/// The happy paths are covered above; each emitter also has an
+/// `Err(e) => store_err` arm, and a store error must arrive as a RESP3
+/// error rather than as a half-written reply of the overridden shape. A
+/// wrong-typed key is the cheapest way to reach all of them.
+#[test]
+fn resp3_overrides_propagate_a_store_error_as_an_error() {
+    let srv = Server::start(1);
+
+    let mut setup = srv.connect();
+    setup.write_all(&req(&[b"SET", b"str", b"notacollection"])).unwrap();
+    read_reply(&mut setup, b"+OK\r\n");
+
+    // Each of these takes the override path and then meets WRONGTYPE.
+    let cases: &[&[&[u8]]] = &[
+        &[b"ZPOPMIN", b"str"],
+        &[b"ZADD", b"str", b"INCR", b"1", b"m"],
+        &[b"SPOP", b"str", b"1"],
+        &[b"GEOPOS", b"str", b"m"],
+        &[b"HRANDFIELD", b"str", b"2", b"WITHVALUES"],
+        &[b"HGETALL", b"str"],
+        &[b"SMEMBERS", b"str"],
+        &[b"ZSCORE", b"str", b"m"],
+    ];
+    for argv in cases {
+        let mut v3 = srv.v3_conn();
+        v3.write_all(&req(argv)).unwrap();
+        let mut head = [0u8; 1];
+        v3.read_exact(&mut head).unwrap();
+        assert_eq!(head[0], b'-', "V3 {:?} must answer an error, not a partial reply", argv[0]);
+        let mut sink = vec![0u8; 1024];
+        let _ = v3.read(&mut sink).unwrap();
+    }
+
+    // The argument refusals inside the override chain take their own arms.
+    let refusals: &[&[&[u8]]] = &[
+        &[b"ZPOPMIN", b"z", b"notanint"],
+        &[b"ZPOPMIN", b"z", b"-1"],
+        &[b"SPOP", b"s", b"notanint"],
+        &[b"SPOP", b"s", b"-1"],
+        &[b"HRANDFIELD", b"h", b"notanint", b"WITHVALUES"],
+    ];
+    for argv in refusals {
+        let mut v3 = srv.v3_conn();
+        v3.write_all(&req(argv)).unwrap();
+        let mut head = [0u8; 1];
+        v3.read_exact(&mut head).unwrap();
+        assert_eq!(head[0], b'-', "V3 {argv:?} must be refused");
+        let mut sink = vec![0u8; 1024];
+        let _ = v3.read(&mut sink).unwrap();
+    }
+}

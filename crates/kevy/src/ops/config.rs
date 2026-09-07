@@ -218,6 +218,13 @@ fn apply_hot_set(cfg: &mut Config, key: &[u8], value: &[u8]) -> Result<(), SetEr
         | "auto-aof-rewrite-interval-secs" => set_persistence(cfg, key_str, value_str),
         "hz" | "maxmemory-samples" => set_expiry(cfg, key_str, value_str),
         "loglevel" | "logfile" => set_log(cfg, key_str, value_str),
+        // Redis spells it with hyphens on the wire and kevy's TOML uses
+        // underscores; the engine supported the feature from the config file
+        // and simply had no wire path to it. Spring Data Redis's key-expiry
+        // listener, the socket.io redis adapter and several job queues send
+        // `CONFIG SET notify-keyspace-events Ex` as their first act on a new
+        // connection, so "unknown parameter" met them in the first second.
+        "notify-keyspace-events" => set_notification(cfg, key_str, value_str),
         // Hot-settable ONLY as a budget change: the shard tick
         // re-resolves + re-applies it (the maxmemory precedent).
         // Turning tiering on/off needs the vlog lifecycle — a restart;
@@ -329,6 +336,19 @@ fn set_expiry(cfg: &mut Config, key: &str, value: &str) -> Result<(), SetError> 
     Ok(())
 }
 
+/// `notify-keyspace-events` — Redis spells it hyphenated on the wire, kevy's
+/// TOML uses underscores, and nothing bridged the two until 6.3.0: the engine
+/// supported keyspace notifications from the config file and had no wire path
+/// to them. Spring Data's expiry listener sets this on connect.
+fn set_notification(cfg: &mut Config, key: &str, value: &str) -> Result<(), SetError> {
+    kevy_config::parse_notification_flags(value).map_err(|c| SetError::BadValue {
+        key: key.to_string(),
+        reason: format!("unknown flag char {c:?}"),
+    })?;
+    cfg.notification.notify_keyspace_events = value.to_string();
+    Ok(())
+}
+
 fn set_log(cfg: &mut Config, key: &str, value: &str) -> Result<(), SetError> {
     match key {
         "loglevel" => {
@@ -379,6 +399,10 @@ fn config_pairs(cfg: &Config) -> Vec<(&'static str, String)> {
     v.push(("maxmemory", cfg.memory.maxmemory.to_string()));
     v.push(("maxmemory-policy", eviction_str(cfg.memory.maxmemory_policy).to_string()));
     v.push(("hz", cfg.expiry.hz.to_string()));
+    // A client that CONFIG SETs this then reads it back — Spring Data's
+    // listener does exactly that to confirm the flags took — needs it here
+    // too, or the write appears to have vanished.
+    v.push(("notify-keyspace-events", cfg.notification.notify_keyspace_events.clone()));
     v.push(("maxmemory-samples", cfg.expiry.sample.to_string()));
     v.push(("loglevel", log_level_str(cfg.log.level).to_string()));
     v.push(("cluster-enabled", yes_no(cfg.cluster.enabled)));

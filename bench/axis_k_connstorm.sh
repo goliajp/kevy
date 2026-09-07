@@ -1,12 +1,21 @@
 #!/bin/bash
 # Axis K — connection storm (c >> 2000)
-# kevy --threads 1 vs valkey 9.1 vs redis 8.8
+# kevy --threads 1 vs valkey and redis, at the versions COMPETITOR-ANCHORS.json pins
 set -u
 
 KBIN=/root/kevy/target/release/kevy
 VBIN=/root/srcbench/valkey/src/valkey-server
 RBIN=/root/srcbench/redis/src/redis-server
 RB=/root/srcbench/redis/src/redis-benchmark
+
+# The source-built competitors this probe measures against must be the
+# versions on record; a probe that quietly runs an older redis produces a
+# number nobody can place. See bench/anchor-lib.sh.
+. "$(dirname "$0")/anchor-lib.sh"
+command -v anchor_pin >/dev/null || { echo "$(basename "$0"): anchor-lib.sh did not load" >&2; exit 2; }
+anchor_require "redis (source build)" "$(anchor_pin redis)" "$(anchor_bin_ver "$RBIN")"
+anchor_require "valkey (source build)" "$(anchor_pin valkey)" "$(anchor_bin_ver "$VBIN")"
+
 PORT=7001
 ulimit -n 200000
 

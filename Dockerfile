@@ -18,7 +18,7 @@
 #   docker run --rm -p 6379:6379 \
 #     --security-opt seccomp=unconfined ghcr.io/goliajp/kevy
 
-FROM rust:1.97-slim-bookworm AS build
+FROM rust:1.97-slim-trixie AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
@@ -30,7 +30,7 @@ COPY crates ./crates
 # external image.
 RUN cargo build --release --bin kevy --bin kevy-cli --locked
 
-FROM debian:bookworm-slim AS runtime
+FROM debian:trixie-slim AS runtime
 LABEL org.opencontainers.image.title="kevy" \
       org.opencontainers.image.description="Pure-Rust, zero-dependency, Redis-compatible KV server." \
       org.opencontainers.image.source="https://github.com/goliajp/kevy" \

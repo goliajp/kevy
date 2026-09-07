@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# v3.3 baseline arena — BARE FACE: kevy vs valkey 9.1, the real gap
+# v3.3 baseline arena — BARE FACE: kevy vs valkey, the real gap
 # table (perfgate ratchets only prove "no regression vs ourselves";
 # this measures the competitor). Discipline per the perf-arc charter:
 #   - isolation (one server at a time, same cores), host loopback,
@@ -60,8 +60,26 @@ RUNS=${RUNS:-5}
 PORT=7201
 TESTS="get set incr lpush sadd hset zadd"
 
-VALKEY_VER=$(docker run --rm valkey/valkey:9.1 valkey-server --version | grep -oE "v=[0-9.]+" | head -1)
-echo "# arena bare face — $(date -u +%F) — kevy $($KBIN --version | head -1) vs valkey $VALKEY_VER"
+# Which version of each competitor this table is against. The pins live in
+# bench/COMPETITOR-ANCHORS.json, each image is asked what it actually is,
+# and a mismatch stops the run — see anchor-lib.sh for why.
+. ./anchor-lib.sh   # cwd is this script's directory, set above
+
+VALKEY_PIN=$(anchor_pin valkey)
+VALKEY_VER=$(anchor_image_ver "valkey/valkey:$VALKEY_PIN" valkey-server --version)
+anchor_require valkey "$VALKEY_PIN" "$VALKEY_VER"
+ENGINES="valkey $VALKEY_VER"
+if [ "${FOURWAY:-1}" = 1 ]; then
+    REDIS_PIN=$(anchor_pin redis)
+    REDIS_VER=$(anchor_image_ver "redis:$REDIS_PIN" redis-server --version)
+    anchor_require redis "$REDIS_PIN" "$REDIS_VER"
+    DRAGONFLY_PIN=$(anchor_pin dragonfly)
+    DRAGONFLY_VER=$(anchor_image_ver "docker.dragonflydb.io/dragonflydb/dragonfly:v$DRAGONFLY_PIN" --version)
+    anchor_require dragonfly "$DRAGONFLY_PIN" "$DRAGONFLY_VER"
+    ENGINES="redis $REDIS_VER | valkey $VALKEY_VER | dragonfly $DRAGONFLY_VER"
+fi
+echo "# arena bare face — $(date -u +%F) — $($KBIN --version | head -1)"
+echo "# engines: $ENGINES"
 echo "# protocol: -c $CONC -P $PIPE, server cores $SRV_CORES, client cores $CLI_CORES, median-of-$RUNS"
 echo "# measured: server-side total_commands_processed over a ${WINDOW}s window after a ${RAMP}s ramp (NOT redis-benchmark's rate — see the header)"
 
@@ -160,7 +178,7 @@ run_server_and_measure kevy \
 
 run_server_and_measure valkey \
     docker run --rm --name arena-valkey --network host --cpuset-cpus "$SRV_CORES" \
-    valkey/valkey:9.1 valkey-server --port $PORT --save '' --appendonly no --io-threads 8
+    "valkey/valkey:$VALKEY_PIN" valkey-server --port $PORT --save '' --appendonly no --io-threads 8
 
 # The other two engines of the four-way position claim. They were measured
 # once, in the T9 decomposition, with the same quantized ruler this file just
@@ -172,11 +190,11 @@ run_server_and_measure valkey \
 if [ "${FOURWAY:-1}" = 1 ]; then
     run_server_and_measure redis8 \
         docker run --rm --name arena-redis8 --network host --cpuset-cpus "$SRV_CORES" \
-        redis:8 redis-server --port $PORT --save '' --appendonly no --io-threads 8
+        "redis:$REDIS_PIN" redis-server --port $PORT --save '' --appendonly no --io-threads 8
 
     run_server_and_measure dragonfly \
         docker run --rm --name arena-dragonfly --network host --cpuset-cpus "$SRV_CORES" \
-        --ulimit memlock=-1 docker.dragonflydb.io/dragonflydb/dragonfly \
+        --ulimit memlock=-1 "docker.dragonflydb.io/dragonflydb/dragonfly:v$DRAGONFLY_PIN" \
         --port $PORT --proactor_threads=8
 fi
 

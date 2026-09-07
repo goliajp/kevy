@@ -1,12 +1,21 @@
 #!/bin/bash
 # Axis I — tail latency (p50 / p95 / p99 / p99.9 ms)
-# kevy --threads 1 vs valkey 9.1 vs redis 8.8
+# kevy --threads 1 vs valkey and redis, at the versions COMPETITOR-ANCHORS.json pins
 set -u
 
 KBIN=/root/kevy/target/release/kevy
 VBIN=/root/srcbench/valkey/src/valkey-server
 RBIN=/root/srcbench/redis/src/redis-server
 RB=/root/srcbench/redis/src/redis-benchmark
+
+# The source-built competitors this probe measures against must be the
+# versions on record; a probe that quietly runs an older redis produces a
+# number nobody can place. See bench/anchor-lib.sh.
+. "$(dirname "$0")/anchor-lib.sh"
+command -v anchor_pin >/dev/null || { echo "$(basename "$0"): anchor-lib.sh did not load" >&2; exit 2; }
+anchor_require "redis (source build)" "$(anchor_pin redis)" "$(anchor_bin_ver "$RBIN")"
+anchor_require "valkey (source build)" "$(anchor_pin valkey)" "$(anchor_bin_ver "$VBIN")"
+
 PORT=7001
 ulimit -n 65536
 
@@ -68,7 +77,7 @@ run_scenario() {
   done
 }
 
-echo "=== Axis I — tail latency (ms) — kevy --threads 1 vs valkey 9.1 vs redis 8.8 ==="
+echo "=== Axis I — tail latency (ms) — kevy --threads 1 vs valkey $(anchor_pin valkey) vs redis $(anchor_pin redis) ==="
 echo "redis-benchmark percentiles: p50=50.000% p95~=93.750% p99~=99.219% p999~=99.902% max=100.000%"
 echo ""
 

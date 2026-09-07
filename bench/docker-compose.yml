@@ -1,4 +1,4 @@
-# Baseline bench harness: valkey 9.1 and kevy side-by-side on one Linux network,
+# Baseline bench harness: valkey 9.1.2 and kevy side-by-side on one Linux network,
 # measured by the neutral valkey-benchmark tool. Persistence disabled on both so
 # we measure the in-memory path, not disk I/O.
 #
@@ -13,14 +13,14 @@
 # should be quoted.
 services:
   valkey:
-    image: valkey/valkey:9.1
+    image: valkey/valkey:9.1.2
     command:
       ["valkey-server", "--save", "", "--appendonly", "no", "--protected-mode", "no"]
     cpuset: "${KEVY_BENCH_CPUSET_SERVERS:-}"
     networks: [bench]
 
   redis:
-    image: redis:7.4
+    image: redis:8.10.1
     command:
       ["redis-server", "--save", "", "--appendonly", "no", "--protected-mode", "no"]
     cpuset: "${KEVY_BENCH_CPUSET_SERVERS:-}"
@@ -46,7 +46,7 @@ services:
   # Idle box on its own cores; we exec valkey-benchmark here so the client never
   # competes with the servers for CPU.
   loadgen:
-    image: valkey/valkey:9.1
+    image: valkey/valkey:9.1.2
     command: ["sleep", "infinity"]
     cpuset: "${KEVY_BENCH_CPUSET_LOADGEN:-}"
     networks: [bench]

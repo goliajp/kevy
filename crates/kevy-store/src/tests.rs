@@ -545,3 +545,42 @@ fn expires_counter_tracks_ground_truth() {
     check!();
     assert_eq!(st.expires_count(), 0);
 }
+
+/// `HRANDFIELD`'s three shapes, over every hash storage form.
+///
+/// It reached kevy through bench/resp3gate.sh: the gate asks the pinned redis
+/// which verbs change reply shape under HELLO 3, and this one answered with an
+/// error because it was not implemented at all.
+#[test]
+fn hrandfield_distinct_repeating_and_bounded() {
+    let mut s = Store::new();
+    let fields: Vec<(Vec<u8>, Vec<u8>)> =
+        (0..8u32).map(|i| (format!("f{i}").into_bytes(), format!("v{i}").into_bytes())).collect();
+    for (f, v) in &fields {
+        s.hset(b"h", &[(f.as_slice(), v.as_slice())]).unwrap();
+    }
+
+    // Positive count: distinct, and never more than the hash holds.
+    let got = s.hrandfield(b"h", 5, false).unwrap();
+    assert_eq!(got.len(), 5);
+    let names: std::collections::HashSet<_> = got.iter().map(|(f, _)| f.clone()).collect();
+    assert_eq!(names.len(), 5, "a positive count must not repeat a field");
+
+    let all = s.hrandfield(b"h", 100, false).unwrap();
+    assert_eq!(all.len(), 8, "a count past the end is capped at the hash size");
+
+    // Negative count: repeats allowed, and the length is exactly what was asked.
+    let rep = s.hrandfield(b"h", -20, false).unwrap();
+    assert_eq!(rep.len(), 20, "a negative count returns |count| entries, repeats allowed");
+
+    // WITHVALUES pairs each field with its own value.
+    for (f, v) in s.hrandfield(b"h", 8, true).unwrap() {
+        let want = s.hget(b"h", &f).unwrap().map(<[u8]>::to_vec);
+        assert_eq!(Some(v), want, "WITHVALUES paired {f:?} with the wrong value");
+    }
+
+    // A missing key is empty, not an error.
+    assert!(s.hrandfield(b"absent", 3, false).unwrap().is_empty());
+    // A zero count is empty in Redis too.
+    assert!(s.hrandfield(b"h", 0, false).unwrap().is_empty());
+}
