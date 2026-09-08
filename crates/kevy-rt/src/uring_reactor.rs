@@ -103,7 +103,7 @@ impl<C: Commands> Shard<C> {
         let mut comps: Vec<Completion> = Vec::with_capacity(URING_ENTRIES as usize);
         let mut idle_spins: u32 = 0;
         let stall_dump_every = crate::uring_stalldump::stall_dump_interval();
-        let mut last_stall_dump = Instant::now();
+        let mut last_stall_dump = crate::uring_stalldump::stall_dump_start(stall_dump_every);
         // Nap rung (restored, batch-gated): size of the last
         // non-empty inbound drain + whether this idle episode already
         // napped. See the idle-ladder comment below.
