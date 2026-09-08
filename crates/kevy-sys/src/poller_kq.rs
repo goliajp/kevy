@@ -65,6 +65,13 @@ impl Poller {
     }
 
     /// Best-effort deregistration of both filters.
+    ///
+    /// A filter kqueue has already dropped — because the fd closed, or
+    /// because it was never enabled — answers `ENOENT`, which is the
+    /// state being asked for. And both must be attempted: returning on
+    /// the first leaves the write filter registered against an fd that
+    /// is going away.
+    #[expect(clippy::let_underscore_must_use, reason = "ENOENT here is the outcome wanted")]
     pub fn delete(&self, fd: i32) -> io::Result<()> {
         let _ = self.change(fd, kq::EVFILT_READ, kq::EV_DELETE);
         let _ = self.change(fd, kq::EVFILT_WRITE, kq::EV_DELETE);

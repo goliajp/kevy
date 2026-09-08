@@ -8,6 +8,12 @@
 //! error an operator sees; it is every index silently rebuilding from
 //! scratch on the next boot.
 
+// `write!` into a `String` returns a `Result` because `fmt::Write` must,
+// not because it can fail: `String`'s impl is infallible. Discarding it
+// is the whole of the handling there is, and saying so once here beats
+// the same sentence beside every line.
+#![expect(clippy::let_underscore_must_use, reason = "writing to a String cannot fail")]
+
 use core::fmt::Write as _;
 
 use crate::catalog::{AnnSpec, Catalog, FieldSpec, IndexKind, IndexSpec, ValType, ValueSpec};

@@ -20,6 +20,11 @@
 //! have missed. That is the 89 % / 76 % drift the lesson was paid for,
 //! measured on your own data instead of quoted from someone else's.
 
+// The progress report goes to stderr, and a stderr that has gone away
+// (a closed pipe, `| head`) is not a reason to abandon a backfill that
+// is otherwise succeeding. What matters is written to the store.
+#![expect(clippy::let_underscore_must_use, reason = "a report nobody is reading is not a failure")]
+
 use std::collections::BTreeSet;
 use std::io::{self, Write};
 use std::process::ExitCode;

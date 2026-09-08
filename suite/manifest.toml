@@ -475,11 +475,11 @@ tier = "precommit"
 # a test that unwraps is stating a precondition rather than ducking one.
 # Scoping by target is what makes the deny possible at all — the same
 # survey read 2,425 `unwrap` sites with tests compiled and 71 without.
-cmd = "cargo clippy --workspace --lib --bins -- -D clippy::unwrap_used -D clippy::panic"
+cmd = "cargo clippy --workspace --lib --bins -- -D clippy::unwrap_used -D clippy::panic -D missing_docs"
 expected = 30
 timeout = 900
 requires = []
-proves = "no library code reaches for unwrap or panic without a declared reason"
+proves = "library code has no undeclared unwrap or panic, and no undocumented public item"
 
 [[check]]
 id = "expect-reasons"

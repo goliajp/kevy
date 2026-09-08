@@ -9,6 +9,12 @@
 //! [audit]/[feed] missing, plus `server.max_clients`). The
 //! whole-config round-trip tests below lock the coverage.
 
+// `write!` into a `String` returns a `Result` because `fmt::Write` must,
+// not because it can fail: `String`'s impl is infallible. Discarding it
+// is the whole of the handling there is, and saying so once here beats
+// the same sentence beside every line.
+#![expect(clippy::let_underscore_must_use, reason = "writing to a String cannot fail")]
+
 use crate::cluster::{PeerEntry, ScopeEntry};
 use crate::schema::{Config, LogOutput};
 

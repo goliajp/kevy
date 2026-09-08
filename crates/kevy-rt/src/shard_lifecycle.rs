@@ -3,6 +3,12 @@
 //! `impl Shard` — same private state, called from `run()` and the
 //! conn-close paths in [`crate::inbox`].
 
+// Wakes and poller edits are advisory: a wake that does not land
+// delays the work to the next natural wakeup, and deleting an fd
+// the poller has already dropped reports what was wanted. Socket
+// options shape latency, not correctness.
+#![expect(clippy::let_underscore_must_use, reason = "a missed wake costs a tick, not a result")]
+
 use std::io;
 
 use crate::Commands;

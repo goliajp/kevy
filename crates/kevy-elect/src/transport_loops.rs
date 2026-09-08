@@ -5,6 +5,13 @@
 //! run these functions; the handle type, shared state, and spawn
 //! plumbing stay in `transport.rs`.
 
+// Socket options are advisory here. `set_nodelay`, `set_read_timeout`
+// and `set_nonblocking` shape latency, not correctness — a kernel that
+// declines one leaves a connection that still elects, just less
+// promptly — and a thread that will not spawn is reported by the
+// election timing out, which is the signal this module already watches.
+#![expect(clippy::let_underscore_must_use, reason = "socket tuning is advisory to an election")]
+
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream, ToSocketAddrs};
 use std::sync::Arc;

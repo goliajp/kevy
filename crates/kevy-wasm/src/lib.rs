@@ -41,6 +41,10 @@
 //! byte format is exactly `kevy-persist`'s AOF format, so a log written
 //! by a browser tab replays in a native kevy just as well.
 
+// `write!` into a `String` / `Vec` returns a `Result` because the
+// trait must, not because it can fail.
+#![expect(clippy::let_underscore_must_use, reason = "writing to an in-memory buffer cannot fail")]
+
 pub mod abi_aof;
 pub mod abi_cmd;
 pub mod abi_core;

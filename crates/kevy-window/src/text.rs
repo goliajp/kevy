@@ -18,6 +18,11 @@
 //! Cold text segments are derived spill (indexes rebuild on boot):
 //! a restart drops the previous run's set and re-freezes.
 
+// Best-effort removal, on paths where the file is being abandoned.
+// A file that will not delete is a stray the next sweep collects,
+// and refusing here would abandon the rest of the cleanup.
+#![expect(clippy::let_underscore_must_use, reason = "removing what is already meant to be gone")]
+
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 

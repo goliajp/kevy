@@ -2,6 +2,11 @@
 //! [`crate::view`] (split out to keep `view.rs` under the 500-LOC
 //! project ceiling; behaviour unchanged).
 
+// `write!` into an in-memory buffer returns a `Result` because
+// `fmt::Write` must, not because it can fail — `String`'s and `Vec`'s
+// impls are infallible. Said once here rather than beside every line.
+#![expect(clippy::let_underscore_must_use, reason = "writing to an in-memory buffer cannot fail")]
+
 use crate::value::IndexValue;
 use crate::view::{Leaf, Tree, ViewMode, ViewSpec};
 use std::fmt::Write as _;

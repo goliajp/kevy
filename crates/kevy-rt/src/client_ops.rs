@@ -4,6 +4,10 @@
 //! shard's reactor thread, where the conn table is plain data
 //! (thread-per-core, no locks).
 
+// `write!` into a `String` / `Vec` returns a `Result` because the
+// trait must, not because it can fail.
+#![expect(clippy::let_underscore_must_use, reason = "writing to an in-memory buffer cannot fail")]
+
 use crate::Commands;
 use crate::conn::Conn;
 use crate::message::Part;

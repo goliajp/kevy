@@ -1,3 +1,9 @@
+//! Tell macOS's linker that the `napi_*` symbols are not missing.
+//!
+//! They live in the node executable and resolve when the addon is
+//! loaded. A Linux linker leaves undefined symbols in a shared object
+//! alone; ld64 refuses the link unless told to expect them.
+
 fn main() {
     // The napi_* symbols live in the node executable and resolve at load
     // time. Linux linkers leave undefined symbols in a shared object alone;

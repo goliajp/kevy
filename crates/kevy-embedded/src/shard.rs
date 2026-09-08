@@ -11,6 +11,11 @@
 //! to the server's 1-thread layout, and `n == 1` records `shards.meta` too
 //! so neither side needs inference.
 
+// Best-effort removal, on paths where the file is being abandoned.
+// A file that will not delete is a stray the next sweep collects,
+// and refusing here would abandon the rest of the cleanup.
+#![expect(clippy::let_underscore_must_use, reason = "removing what is already meant to be gone")]
+
 use std::io;
 #[cfg(feature = "persist")]
 use std::path::{Path, PathBuf};

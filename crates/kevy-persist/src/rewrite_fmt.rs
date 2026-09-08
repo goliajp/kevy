@@ -8,6 +8,11 @@
 //! re-anchoring to replay-time (re-anchoring silently extends every
 //! TTL by the key's age — a production incident class).
 
+// `write!` into an in-memory buffer returns a `Result` because
+// `fmt::Write` / `io::Write` must, not because it can fail: the
+// `String` and `Vec` impls are infallible. Said once here.
+#![expect(clippy::let_underscore_must_use, reason = "writing to an in-memory buffer cannot fail")]
+
 use crate::SNAPSHOT_BUF_CAP;
 use kevy_resp::ArgvView;
 

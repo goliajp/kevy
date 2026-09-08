@@ -20,8 +20,6 @@
 //!
 //! Run with [`run_one`] for one stream + [`run_n`] for a campaign.
 
-#![allow(missing_docs)]
-
 use crate::request::parse_command;
 
 /// Std-only LCG PRNG (MMIX constants). Deterministic per seed.
@@ -29,16 +27,20 @@ use crate::request::parse_command;
 pub struct Lcg(pub u64);
 
 impl Lcg {
+    /// Seed the generator; zero is replaced, since it is this LCG's
+    /// fixed point and would emit the same value forever.
     #[must_use]
     pub const fn new(seed: u64) -> Self {
         // Avoid the zero fixed-point.
         Self(if seed == 0 { 0x9E37_79B9_7F4A_7C15 } else { seed })
     }
+    /// The next 64 bits of the stream.
     pub fn next_u64(&mut self) -> u64 {
         self.0 =
             self.0.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
         self.0
     }
+    /// One byte, taken from the high end where this LCG mixes best.
     pub fn next_u8(&mut self) -> u8 {
         (self.next_u64() >> 24) as u8
     }
@@ -65,6 +67,7 @@ pub enum Strategy {
 }
 
 impl Strategy {
+    /// Every strategy, so a campaign can cover all of them.
     pub const ALL: [Self; 5] = [
         Self::Uniform,
         Self::StructuredJunk,
@@ -72,6 +75,7 @@ impl Strategy {
         Self::OversizedClaim,
         Self::NegativeLengths,
     ];
+    /// One strategy drawn from [`Self::ALL`].
     pub fn pick(rng: &mut Lcg) -> Self {
         Self::ALL[rng.bound(Self::ALL.len())]
     }
@@ -119,16 +123,26 @@ pub fn generate(strategy: Strategy, seed: u64) -> Vec<u8> {
 /// Outcome of one fuzz call.
 #[derive(Debug)]
 pub struct FuzzResult {
+    /// Which distribution produced the input.
     pub strategy: Strategy,
+    /// The seed that produced it — replaying this reproduces the call
+    /// bit for bit.
     pub seed: u64,
+    /// Length of the generated input in bytes.
     pub input_len: usize,
+    /// What the parser did with it.
     pub outcome: FuzzOutcome,
 }
 
+/// What one call to the parser did. Anything outside these four is a
+/// failure of the harness's own promise: bounded time, no panic.
 #[derive(Debug)]
 pub enum FuzzOutcome {
     /// Parsed a complete frame; `consumed` ≤ input_len.
-    Parsed { consumed: usize },
+    Parsed {
+        /// Bytes the parser took, never more than the input.
+        consumed: usize,
+    },
     /// Incomplete; needs more bytes.
     Incomplete,
     /// Parser returned an error (well-formed `ProtocolError`).
@@ -136,7 +150,10 @@ pub enum FuzzOutcome {
     /// Parser took longer than the per-call timeout — indicates a
     /// runaway. Never observed in correct code; the harness records
     /// the offending seed for reproduction.
-    Timeout { elapsed_micros: u128 },
+    Timeout {
+        /// How long it actually took, for the record that names the seed.
+        elapsed_micros: u128,
+    },
 }
 
 /// Per-call wall-clock budget. RESP parsing of ≤ 2 KiB inputs should
@@ -187,12 +204,20 @@ pub fn run_n(n: u64, base_seed: u64) -> Summary {
     summary
 }
 
+/// What a campaign saw. `total` is the count with a floor under it: a
+/// run that parsed nothing is a broken harness, not a clean parser.
 #[derive(Debug, Default)]
 pub struct Summary {
+    /// Calls made.
     pub total: u64,
+    /// Calls that returned a complete frame.
     pub parsed: u64,
+    /// Calls that asked for more bytes.
     pub incomplete: u64,
+    /// Calls that returned a well-formed protocol error.
     pub errored: u64,
+    /// `(strategy, seed, micros)` for every call that outran the
+    /// per-call budget — each one replayable from its seed.
     pub timed_out: Vec<(Strategy, u64, u128)>,
 }
 

@@ -8,6 +8,11 @@
 //! command table, and keys redistribute under the server's routing
 //! (KevyHash, or slot ranges in cluster mode).
 
+// Best-effort removal, on paths where the file is being abandoned.
+// A file that will not delete is a stray the next sweep collects,
+// and refusing here would abandon the rest of the cleanup.
+#![expect(clippy::let_underscore_must_use, reason = "removing what is already meant to be gone")]
+
 use crate::Commands;
 use crate::reduce::shard_of;
 use kevy_persist::reshard::{StdLayout, commit_reshard, merge_sources, recover_journal};

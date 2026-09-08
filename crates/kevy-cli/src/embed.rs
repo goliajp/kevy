@@ -8,6 +8,11 @@
 //! writing disabled. Verbs are the embedded RESP listener's read-only
 //! whitelist, answered via `Store::dispatch_readonly`.
 
+// Scratch directories and a final flush, on the way out. A scratch
+// directory that will not delete is the OS's to reclaim, and a flush
+// that fails on a closed stdout has nowhere to put its bytes anyway.
+#![expect(clippy::let_underscore_must_use, reason = "cleanup on the way out")]
+
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;

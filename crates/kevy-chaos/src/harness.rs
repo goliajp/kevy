@@ -1,5 +1,10 @@
 //! Spawn + kill + restart a kevy child process. Public API is `Harness`.
 
+// `write!` into an in-memory buffer returns a `Result` because
+// `fmt::Write` must, not because it can fail — `String`'s and `Vec`'s
+// impls are infallible. Said once here rather than beside every line.
+#![expect(clippy::let_underscore_must_use, reason = "writing to an in-memory buffer cannot fail")]
+
 use std::io;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::PathBuf;

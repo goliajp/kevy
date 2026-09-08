@@ -24,6 +24,10 @@
 //! separates threads within a process and the pid separates processes. That is
 //! the whole trick, and it is why this is one crate instead of nine copies.
 
+// Best-effort removal, on paths where the file is being abandoned.
+// A file that will not delete is a stray the next sweep collects,
+// and refusing here would abandon the rest of the cleanup.
+#![expect(clippy::let_underscore_must_use, reason = "removing what is already meant to be gone")]
 #![warn(missing_docs)]
 
 use std::path::{Path, PathBuf};

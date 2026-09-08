@@ -29,6 +29,14 @@
 //! - cjson.null is a constant table; encoder treats it as JSON null.
 //!   This matches the Redis cjson convention.
 
+// Seeding a sandbox global. A VM that refuses one fails the script
+// anyway, with its own message — "attempt to index a nil value" says
+// more than "set_global returned Err".
+#![expect(
+    clippy::let_underscore_must_use,
+    reason = "a VM that refuses a global fails the script with a better message"
+)]
+
 use luna_core::runtime::heap::Gc;
 use luna_core::runtime::table::Table;
 use luna_core::runtime::value::Value;

@@ -17,6 +17,11 @@
 //! state and a fresh (empty) log opens on bring-up; the old logs live on in
 //! the `.premigration.<stamp>` backups.
 
+// Best-effort removal, on paths where the file is being abandoned.
+// A file that will not delete is a stray the next sweep collects,
+// and refusing here would abandon the rest of the cleanup.
+#![expect(clippy::let_underscore_must_use, reason = "removing what is already meant to be gone")]
+
 use crate::layout;
 use crate::{
     Argv, Routing, ShardsMeta, load_snapshot, replay_aof, save_snapshot, write_shards_meta,

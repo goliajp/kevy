@@ -4,6 +4,10 @@
 //! the rest are the stateless pieces used across the runtime — set algebra,
 //! pub/sub framing, the seq-ring drain, and the shard hash.
 
+// `write!` into a `String` / `Vec` returns a `Result` because the
+// trait must, not because it can fail.
+#![expect(clippy::let_underscore_must_use, reason = "writing to an in-memory buffer cannot fail")]
+
 use crate::conn::Conn;
 use crate::message::{Agg, Gathered, MultiOp, SmallReply};
 use kevy_hash::KevyHash;

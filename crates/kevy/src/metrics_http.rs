@@ -11,6 +11,13 @@
 //! finished `serve` never leaves an immortal scraper thread pinning
 //! the whole state alive.
 
+// A scrape endpoint, serving one reader at a time. The socket timeouts
+// shape how long a stuck scraper can hold the thread, not whether the
+// metrics are right; and a response that cannot be written has a
+// collector that has already gone. Neither is worth taking the server
+// down for, and there is no caller above this to hand them to.
+#![expect(clippy::let_underscore_must_use, reason = "a scrape that nobody collects is not a fault")]
+
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Weak};

@@ -4,6 +4,15 @@
 //! pre-split layout; this module hosts long-running disk paths
 //! separately from the hot lock/dispatch surface in `store.rs`.
 
+// Temporary files, on the failure path of the write that created them.
+// The real error is the one being returned; a temp file that will not
+// delete is a stray byte range the next rewrite overwrites, and
+// reporting it here would replace the cause with its cleanup.
+#![expect(
+    clippy::let_underscore_must_use,
+    reason = "removing a temp file cannot outrank the error that stranded it"
+)]
+
 use crate::KevyResult;
 use std::io;
 use std::sync::RwLock;

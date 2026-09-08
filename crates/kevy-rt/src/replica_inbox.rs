@@ -28,6 +28,12 @@
 //! froze, unmasked when `frames_from` went O(B) → O(log B) and the
 //! primary started feeding at full speed).
 
+// Wakes and poller edits are advisory: a wake that does not land
+// delays the work to the next natural wakeup, and deleting an fd
+// the poller has already dropped reports what was wanted. Socket
+// options shape latency, not correctness.
+#![expect(clippy::let_underscore_must_use, reason = "a missed wake costs a tick, not a result")]
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, SendError, Sender, channel};
 use std::sync::{Arc, OnceLock};

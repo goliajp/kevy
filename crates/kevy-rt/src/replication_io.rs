@@ -6,6 +6,12 @@
 //! types + `close()` + handshake parser) so each file stays under the
 //! 500-LOC house rule. All methods here are `impl<C: Commands> Shard<C>`.
 
+// Wakes and poller edits are advisory: a wake that does not land
+// delays the work to the next natural wakeup, and deleting an fd
+// the poller has already dropped reports what was wanted. Socket
+// options shape latency, not correctness.
+#![expect(clippy::let_underscore_must_use, reason = "a missed wake costs a tick, not a result")]
+
 use crate::Commands;
 use crate::replication::{ReplicaConn, ReplicaState, advance_handshake};
 use crate::shard::Shard;

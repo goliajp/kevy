@@ -3,6 +3,11 @@
 //! path (runs once per process); split out of `runtime.rs` for the
 //! 500-LOC house rule and decomposed into per-stage helpers.
 
+// Teardown. `join` returns what the thread panicked with and the
+// thread is already being abandoned; a flush on the way out has
+// nowhere left to put its bytes. No caller remains to be told.
+#![expect(clippy::let_underscore_must_use, reason = "teardown has nobody left to report to")]
+
 use crate::Commands;
 use crate::message::{Inbound, PubSubPatternReg, PubSubReg};
 use crate::runtime::Runtime;
