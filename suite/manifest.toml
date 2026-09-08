@@ -465,7 +465,17 @@ cmd = "cargo clippy --workspace --all-targets -- -D warnings"
 expected = 240
 timeout = 1800
 requires = []
-proves = "zero clippy findings across every target"
+proves = "zero clippy findings across every target, in the DEFAULT feature set"
+
+[[check]]
+id = "feature-lints"
+area = "hygiene"
+tier = "prerelease"
+cmd = "python3 tools/check_feature_lints.py"
+expected = 90
+timeout = 1800
+requires = []
+proves = "every crate alone, and every off-by-default feature, is clippy-zero too"
 
 [[check]]
 id = "workspace-tests"

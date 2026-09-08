@@ -83,6 +83,32 @@ fn is_over_aligned(layout: Layout) -> bool {
         && !(layout.size() > class::MAX_SMALL && layout.align() <= crate::os::PAGE)
 }
 
+// SAFETY: the four premises `GlobalAlloc` asks for, in order.
+//
+// 1. A returned block meets the layout. Alignments up to
+//    `class::MAX_NATIVE_ALIGN` are what the size classes are built on;
+//    anything stricter goes through `alloc_over_aligned`, which
+//    over-allocates and rounds up, so the address it returns is aligned
+//    by construction and has `layout.size()` bytes after it.
+// 2. Failure is a null pointer, never an unwind. Every path out of
+//    `with_heap` is an `Option`: `try_with` yields `None` once the
+//    thread's `HEAP` is gone or not yet made, and the heap itself
+//    returns `None` when it cannot serve, and both land on
+//    `core::ptr::null_mut()`. Nothing here can panic on the failure
+//    path, which is what makes it usable as THE allocator.
+// 3. It is callable from any thread, and a block may cross threads. Each
+//    thread has its own `Heap`, so there is no shared mutable state to
+//    race on. A free arriving on a thread that did not allocate the
+//    block is the case that would otherwise be unsound: `dealloc_small`
+//    compares `seg.owner` against `self.id` and, when they differ,
+//    pushes to the local outbound ring for the owner to drain rather
+//    than touching the owner's segment or its non-atomic counters
+//    (`heap_free.rs`). Ownership is read from the segment header, so it
+//    is a property of the block, not of who is asking.
+// 4. Re-entrancy cannot occur. The closure `with_heap` runs holds the
+//    only reference to the thread's heap, and no path inside it
+//    allocates — which is the premise the reference in `with_heap`
+//    rests on in turn.
 unsafe impl GlobalAlloc for KevyAlloc {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         if is_over_aligned(layout) {

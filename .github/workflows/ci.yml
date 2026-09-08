@@ -500,6 +500,18 @@ jobs:
       - name: Clippy (kevy-wasm's own feature set, which the workspace hides)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: cargo clippy -p kevy-wasm --all-targets -- -D warnings
+      # The step above is hand-written, and hand-written is how the next
+      # one was missed for a whole release line: kevy-alloc's `global`
+      # feature is off by default, so nothing in the tree turns it on, so
+      # `unsafe impl GlobalAlloc for KevyAlloc` — the most safety-critical
+      # impl here — was never linted and carried no SAFETY argument while
+      # the workspace reported clippy-zero on both platforms. This derives
+      # both lists from cargo metadata: every crate alone (what a
+      # dependent gets, which feature unification hides) and every
+      # off-by-default feature set (what nothing turns on).
+      - name: Clippy (the configurations --workspace never compiles)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: python3 tools/check_feature_lints.py
 
   # ───────────── contract gates: availability / AI / replication ─────────────
   # The executable behavior contracts: availgate's clamps (replication
