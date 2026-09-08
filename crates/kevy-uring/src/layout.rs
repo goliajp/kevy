@@ -198,3 +198,22 @@ pub struct IoUringRsrcRegister {
 /// `IORING_RSRC_REGISTER_SPARSE` — tells the kernel "no initial fds, just
 /// give me an empty table of size `nr`."
 pub const IORING_RSRC_REGISTER_SPARSE: u32 = 1 << 0;
+
+// ─────────────────────────────────────────────────────────────────────
+// ABI assertions.
+//
+// `setup.rs` computes its mmap lengths from `size_of::<IoUringSqe>()`
+// and `size_of::<Completion>()`. A field added to either, or a reorder,
+// silently misaligns every ring read — which surfaces as arbitrary
+// `user_data`, i.e. completions routed to random connections. There is
+// no test that would catch it and no error it would raise.
+//
+// Sizes are the kernel's, from `<linux/io_uring.h>`.
+// ─────────────────────────────────────────────────────────────────────
+
+const _: () = assert!(size_of::<IoUringSqe>() == 64, "io_uring_sqe is 64 bytes");
+const _: () = assert!(align_of::<IoUringSqe>() == 8);
+const _: () = assert!(size_of::<IoUringBufReg>() == 40);
+const _: () = assert!(size_of::<KernelTimespec>() == 16);
+const _: () = assert!(size_of::<IoSqringOffsets>() == 40);
+const _: () = assert!(size_of::<IoCqringOffsets>() == 40);

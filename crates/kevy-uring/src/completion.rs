@@ -44,3 +44,9 @@ impl Completion {
         self.flags & IORING_CQE_F_SOCK_NONEMPTY != 0
     }
 }
+
+// The CQE the ring is read through; `setup.rs` sizes the completion
+// mmap from it. See `layout.rs` for why this is a build failure rather
+// than a test.
+const _: () = assert!(size_of::<Completion>() == 16, "io_uring_cqe is 16 bytes");
+const _: () = assert!(align_of::<Completion>() == 8);
