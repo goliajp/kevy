@@ -49,15 +49,28 @@ pub struct Stats {
     /// Free slots in spans that were handed out before and returned to
     /// the free pool: touched, therefore resident.
     pub span_free: u64,
-    /// Free slots whose pages have been handed back to the OS while
-    /// their span stays live — mapped, not resident. The v2 term: this
-    /// is what page-granular reclaim produces, and it did not exist
-    /// while the reclaim unit was the whole span.
+    /// Bytes whose pages have been handed back to the OS — mapped, not
+    /// resident. The v2 term: this is what page-granular reclaim
+    /// produces, and it did not exist while the reclaim unit was the
+    /// whole span.
+    ///
+    /// Two shapes, both genuinely returned: free slots inside a span
+    /// that is still live, and whole spans emptied and retired. The
+    /// second used to be filed under `hysteresis`, so this read 0 while
+    /// most of the map had in fact gone back.
     pub returned: u64,
-    /// Span bytes at or above the bump cursor — mapped, never touched,
-    /// not resident.
+    /// Mapped and never touched, therefore not resident: span bytes at
+    /// or above the bump cursor, and whole spans carved with their
+    /// segment that no class has ever claimed.
     pub virgin: u64,
-    /// Whole spans with nothing live, retained rather than released.
+    /// Retained rather than released, and therefore still resident:
+    /// empty spans the per-sweep policy keeps for their class, spans
+    /// whose discard the platform refused, and large mappings parked in
+    /// the process-wide retention pool.
+    ///
+    /// Every byte here is one the allocator chose to keep. A byte that
+    /// went back to the OS belongs in [`Self::returned`] — the two are
+    /// opposites, and for the whole v5 arc they were the same number.
     pub hysteresis: u64,
     /// Segment headers.
     pub segment_overhead: u64,
@@ -107,9 +120,16 @@ impl Stats {
     /// An estimate by construction — the kernel decides residency, not
     /// us — so it is named as a prediction and compared against real RSS
     /// by the gate rather than substituted for it.
+    ///
+    /// `hysteresis` is NOT subtracted, and used to be. That term is what
+    /// the policy is deliberately holding — empty spans kept for their
+    /// class, large mappings parked in the retention pool — and holding
+    /// is the opposite of handing back. Subtracting it made this
+    /// prediction fall by exactly the amount the retention pool grew,
+    /// which is the one direction it cannot be right in.
     #[must_use]
     pub fn predicted_resident(&self) -> u64 {
-        self.mapped - self.virgin - self.hysteresis - self.returned
+        self.mapped - self.virgin - self.returned
     }
 
     /// Add another heap's snapshot. Shards report separately; a process

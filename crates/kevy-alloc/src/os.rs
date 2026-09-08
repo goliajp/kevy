@@ -114,11 +114,24 @@ pub fn page_size_matches() -> bool {
         _ => {
             // SAFETY: `sysconf` reads no Rust memory and takes an int.
             let got = unsafe { sysconf(SC_PAGESIZE) };
-            let ok = got > 0 && got as usize == PAGE;
+            let ok = usable_page_size(got);
             ANSWER.store(u8::from(!ok) + 1, Ordering::Relaxed);
             ok
         }
     }
+}
+
+/// The decision, separated from the syscall that supplies it.
+///
+/// Every machine gives one answer, so the other branch cannot be
+/// executed where it runs — which is how a coverage ratchet ends up
+/// holding a permanently dead region, and how the interesting half (a
+/// mismatch: the one that makes reclaim inert) stays untested on
+/// exactly the machines where it is false. Taking the measurement as an
+/// argument makes both answers reachable from a test anywhere.
+#[must_use]
+pub(crate) fn usable_page_size(measured: i64) -> bool {
+    measured > 0 && measured as u64 == PAGE as u64
 }
 
 /// Non-Unix has no reclaim path at all, so nothing can be misreported.
@@ -245,4 +258,23 @@ pub unsafe fn discard(ptr: NonNull<u8>, len: usize) -> bool {
 #[must_use]
 pub const fn available() -> bool {
     cfg!(any(target_os = "linux", target_os = "macos")) && !cfg!(miri)
+}
+
+#[cfg(test)]
+mod page_size_tests {
+    use super::{PAGE, usable_page_size};
+
+    /// Both answers, including the one this machine cannot give. The
+    /// 16384 case is not hypothetical — it is every Apple Silicon Mac,
+    /// and it is the case in which page-granular reclaim does nothing.
+    #[test]
+    fn only_an_exact_match_is_usable() {
+        assert!(usable_page_size(PAGE as i64));
+        assert!(!usable_page_size(16384), "a 16 KiB page is not our 4 KiB arithmetic");
+        assert!(!usable_page_size(1024), "a smaller page misaligns the same way");
+        // `sysconf` reports failure as -1, and a negative cast to
+        // unsigned is how a refusal becomes an enormous page size.
+        assert!(!usable_page_size(-1), "a failed sysconf must not read as a match");
+        assert!(!usable_page_size(0));
+    }
 }

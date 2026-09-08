@@ -251,4 +251,189 @@ mod tests {
         assert!(decode_with(&d, b"").is_err());
         assert!(decode_with(&d, b"\xff\xff\xff").is_err());
     }
+
+    /// Every arm of the tag match, because this entry point has to
+    /// answer for frames it did not write. `decode` was already whole;
+    /// `decode_with` is a second reader of the same format, and a second
+    /// reader that agrees on the frames one encoder happens to produce
+    /// is not the same as one that agrees on the format. Fifteen of its
+    /// lines had never run — including the whole dictionary-plus-entropy
+    /// arm, which is the one `kevy-vlog` compaction takes.
+    #[test]
+    fn every_tag_decodes_or_is_refused() {
+        let raw = dict_bytes();
+        let d = Dict::new(&raw);
+        let empty = Dict::new(b"");
+        assert!(empty.content().is_empty(), "an empty dictionary has no content");
+        let v = b"level=info svc=api dur=12 extra=padding to reach a match";
+
+        // Dict-less frames, through a reader that holds a dictionary:
+        // the tag says which dictionary to use, so these must decode
+        // against none of it rather than against ours. The input has to
+        // compress on its own or both encoders hand back RAW and the two
+        // arms under test never run — the first version of this asserted
+        // only the round-trip and did exactly that.
+        //
+        // Structure alone is not enough either: a value the matcher
+        // covers well leaves no literal for a Huffman block to pay for,
+        // and `encode_high` hands back the plain `TAG_LZ` frame. Two
+        // repeats give the matcher something; the geometric tail gives
+        // the entropy coder something.
+        let mut alone = Vec::new();
+        for _ in 0..2 {
+            alone.extend_from_slice(b"level=info svc=api dur=12 msg=request handled cleanly ");
+        }
+        let mut x: u32 = 999;
+        for _ in 0..1500 {
+            x = x.wrapping_mul(1_103_515_245).wrapping_add(12345);
+            alone.push(b'a' + ((x >> 16).trailing_zeros() as u8).min(25));
+        }
+        for (want, frame) in [
+            (crate::TAG_LZ, crate::encode(&[], &alone)),
+            (crate::TAG_LZH, crate::encode_high(&[], &alone)),
+        ] {
+            assert_eq!(frame[0], want, "not the arm under test: tag {}", frame[0]);
+            assert_eq!(decode_with(&d, &frame).unwrap(), alone);
+        }
+
+        // Dictionary frames, through a reader that has none: refused,
+        // because decoding them without the dictionary would silently
+        // produce different bytes rather than fail.
+        for frame in [encode_with(&d, v), encode_high_with(&d, v)] {
+            if frame[0] == crate::TAG_LZ_DICT || frame[0] == crate::TAG_LZH_DICT {
+                assert!(decode_with(&empty, &frame).is_err(), "tag {}", frame[0]);
+            }
+            assert_eq!(decode_with(&d, &frame).unwrap(), v);
+        }
+    }
+
+    /// The two arms that answer for frames nobody should have written: a
+    /// RAW header that does not match its payload, and a tag no version
+    /// of this format has ever used.
+    #[test]
+    fn a_lying_header_and_an_unknown_tag_are_refused() {
+        let d = Dict::new(&dict_bytes());
+        let mut lying = crate::encode(&[], b"short");
+        assert_eq!(lying[0], crate::TAG_RAW, "a 5-byte input is below MIN_INPUT");
+        lying.push(b'!');
+        assert!(decode_with(&d, &lying).is_err(), "a RAW frame longer than it claims");
+        assert!(decode_with(&d, &[0x7f, 0x01, b'x']).is_err(), "an unknown tag");
+    }
+
+    /// The 5.0.0 compatibility retry: a `TAG_LZH` frame that fails
+    /// against no table is tried again against the dictionary's, because
+    /// that encoder could emit a shared-table literal block under the
+    /// dict-less tag. `decode` had this covered and `decode_with` did
+    /// not — the second reader of a format needs the same history as the
+    /// first, and a copied `match` arm that is never entered is a claim
+    /// rather than a behaviour.
+    ///
+    /// Driven with a corrupted frame, which is the honest way to reach
+    /// it: the retry is entered on failure, and whether it then succeeds
+    /// depends on bytes only the old encoder wrote. Refusing is the
+    /// right answer here and the arm still runs.
+    #[test]
+    fn a_high_frame_that_fails_is_retried_against_the_dictionary_table() {
+        let raw = dict_bytes();
+        let d = Dict::new(&raw);
+        assert!(format!("{d:?}").contains("has_entropy_table: true"), "no table to retry with");
+
+        let mut v = Vec::new();
+        let mut x: u32 = 7;
+        for _ in 0..1500 {
+            x = x.wrapping_mul(1_103_515_245).wrapping_add(12345);
+            v.push(b'a' + ((x >> 16).trailing_zeros() as u8).min(25));
+        }
+        let good = crate::encode_high(&[], &v);
+        assert_eq!(good[0], crate::TAG_LZH, "not the arm under test: tag {}", good[0]);
+        assert_eq!(decode_with(&d, &good).unwrap(), v);
+
+        // Corrupt the payload, not the header: the length still promises
+        // what it promised, so the failure happens inside the entropy
+        // decode where the retry lives.
+        for cut in [good.len() / 2, good.len() - 1] {
+            let mut bad = good.clone();
+            bad[cut] ^= 0xff;
+            let out = decode_with(&d, &bad);
+            if let Ok(ref got) = out {
+                assert_ne!(got.len(), 0, "an empty success is not a decode");
+            }
+            assert_eq!(out.is_ok(), crate::decode(&raw, &bad).is_ok(), "the two readers disagreed");
+        }
+    }
+
+    /// The dictionary-and-entropy arm specifically — the one `kevy-vlog`
+    /// compaction takes, and the reason `Dict` holds a prebuilt decode
+    /// table at all. It had never been executed.
+    ///
+    /// Reaching it needs an input that BOTH matches into the dictionary
+    /// and still has enough literal left for a Huffman block to pay for
+    /// itself; a value that the dictionary covers well comes back as
+    /// plain `TAG_LZ_DICT`, which is what the obvious version of this
+    /// test produced. Hence the tail: a skewed 5-symbol alphabet, cheap
+    /// to entropy-code and too irregular for four-byte matches.
+    ///
+    /// The tag is asserted, not hoped for. A test that only round-trips
+    /// passes on whatever frame the encoder felt like emitting, which is
+    /// how this arm stayed unexecuted under a suite that round-trips it.
+    #[test]
+    fn a_dictionary_entropy_frame_decodes_through_the_prebuilt_table() {
+        let corpus: Vec<&[u8]> = vec![
+            b"level=info svc=api dur=12 msg=request handled cleanly",
+            b"level=warn svc=api dur=48 msg=request handled cleanly",
+        ];
+        let raw = crate::train(&corpus, crate::MAX_OFFSET);
+        let d = Dict::new(&raw);
+        let mut v = b"level=info svc=api dur=12 msg=".to_vec();
+        let alphabet = b"aaaaaaaabbbbccde";
+        let mut x: u32 = 12345;
+        for _ in 0..400 {
+            x = x.wrapping_mul(1_103_515_245).wrapping_add(12345);
+            v.push(alphabet[(x >> 16) as usize % alphabet.len()]);
+        }
+        let frame = encode_high_with(&d, &v);
+        assert_eq!(frame[0], crate::TAG_LZH_DICT, "not the arm under test: tag {}", frame[0]);
+        assert_eq!(decode_with(&d, &frame).unwrap(), v);
+        assert_eq!(crate::decode(&raw, &frame).unwrap(), v, "both readers, one format");
+        // The same input through the fast encoder takes the other
+        // dictionary arm, so both are covered by one construction.
+        let fast = encode_with(&d, &v);
+        assert_eq!(fast[0], crate::TAG_LZ_DICT, "not the arm under test: tag {}", fast[0]);
+        assert_eq!(decode_with(&d, &fast).unwrap(), v);
+
+        // Every single-byte corruption of the entropy frame, because the
+        // prebuilt table is the one thing this path does that `decode`
+        // does not, and its refusal branch — a code the table does not
+        // hold, or one longer than the bits left — is only reachable
+        // from here. Either reader may accept a corruption that happens
+        // to stay well-formed; they may not disagree about it.
+        let mut refused = 0;
+        for i in 1..frame.len() {
+            let mut bad = frame.clone();
+            bad[i] ^= 0xa5;
+            let ours = decode_with(&d, &bad);
+            refused += usize::from(ours.is_err());
+            assert_eq!(
+                ours.ok(),
+                crate::decode(&raw, &bad).ok(),
+                "the two readers disagreed on a corruption at byte {i}"
+            );
+        }
+        // The floor: a sweep that never refused anything would pass the
+        // agreement check above without having tested a refusal.
+        assert!(refused > 0, "no corruption of a {} byte frame was refused", frame.len());
+    }
+
+    /// Input below `MIN_INPUT` never reaches the matcher: both encoders
+    /// hand back RAW rather than a frame that costs more than it saves.
+    #[test]
+    fn an_input_too_short_to_match_comes_back_raw() {
+        let d = Dict::new(&dict_bytes());
+        for v in [b"".as_slice(), b"a", b"1234567"] {
+            for frame in [encode_with(&d, v), encode_high_with(&d, v), crate::encode_high(&[], v)] {
+                assert_eq!(frame[0], crate::TAG_RAW, "{v:?} did not come back raw");
+                assert_eq!(decode_with(&d, &frame).unwrap(), v);
+            }
+        }
+    }
 }

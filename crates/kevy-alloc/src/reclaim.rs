@@ -32,6 +32,19 @@ impl Heap {
     /// second sweep found it already past the threshold and returned
     /// everything, which made the hysteresis vanish after one call.
     pub fn reclaim(&mut self) {
+        self.reclaim_with(os::page_size_matches());
+    }
+
+    /// [`Self::reclaim`] with the platform's answer supplied.
+    ///
+    /// Only one value of `can_discard` is possible on any given machine,
+    /// so the other side of every branch below is unreachable where it
+    /// runs — and the unreachable one is the interesting one: it is the
+    /// case in which page-granular reclaim does nothing at all, which is
+    /// every Apple Silicon Mac. Taking it as an argument is what lets a
+    /// test drive both, and it is asked once per sweep rather than once
+    /// per span.
+    pub(crate) fn reclaim_with(&mut self, can_discard: bool) {
         // Claimed-word bits pin their pages exactly as live slots do;
         // write them back first so the sweep sees true occupancy.
         self.flush_claims();
@@ -56,7 +69,7 @@ impl Heap {
                     continue;
                 }
                 if s.spans[ix].live != 0 {
-                    Self::discard_free_pages(s, ix);
+                    Self::discard_free_pages(s, ix, can_discard);
                     continue;
                 }
                 if kept < EMPTY_SPAN_HYSTERESIS {
@@ -66,7 +79,7 @@ impl Heap {
                 // SAFETY: `seg` is the segment being walked in this loop; it came
                 // from the live span list, so it is a real segment address and
                 // never null.
-                self.retire_empty_span(unsafe { NonNull::new_unchecked(seg) }, s, ix);
+                self.retire_empty_span(unsafe { NonNull::new_unchecked(seg) }, s, ix, can_discard);
             }
             seg = s.next;
         }
@@ -79,23 +92,36 @@ impl Heap {
     /// that has been reset would hand out slots from a span with no
     /// class), decrement the class's span count, and only then reset the
     /// metadata.
-    fn retire_empty_span(&mut self, seg: NonNull<Segment>, s: &mut Segment, ix: usize) {
+    fn retire_empty_span(
+        &mut self,
+        seg: NonNull<Segment>,
+        s: &mut Segment,
+        ix: usize,
+        can_discard: bool,
+    ) {
         let c = s.spans[ix].class as usize;
         if self.partial[c] == Some((seg, ix as u8)) {
             self.partial[c] = None;
         }
         self.spans_in_class[c] -= 1;
         s.spans[ix].reset(crate::pagemap::NO_CLASS);
+        // Emptied and handed back, which is not the same unassigned as
+        // never-assigned: this span's pages were touched. The snapshot
+        // needs the difference to tell `returned` from `virgin`.
+        s.spans[ix].retired = true;
         // Refused on a system whose page size is not `os::PAGE`: see
         // `discard_free_pages` for why reporting a return that did not
-        // happen is worse than not returning.
-        if os::page_size_matches() {
+        // happen is worse than not returning. The span then stays
+        // resident and is accounted as `hysteresis`, which is what it
+        // is — held, not released.
+        if can_discard {
             let base = s.span_base(ix);
             // SAFETY: nothing is live in this span, and the range is
             // page-aligned and inside a live mapping.
             unsafe {
                 os::discard(NonNull::new_unchecked(base), SPAN_BYTES);
             }
+            s.spans[ix].discarded = crate::pagemap::ALL_PAGES_DISCARDED;
         }
     }
 
@@ -105,7 +131,7 @@ impl Heap {
     /// pages are already non-resident — discarding them is a wasted
     /// syscall), not already discarded, and no live slot overlapping.
     /// Contiguous runs go to the OS in one call.
-    fn discard_free_pages(s: &mut Segment, ix: usize) {
+    fn discard_free_pages(s: &mut Segment, ix: usize, can_discard: bool) {
         use crate::pagemap::{PAGES_PER_SPAN, slots_of_page};
         // The page rule is arithmetic at `os::PAGE`, and on a system
         // whose pages are larger those ranges are not page-aligned.
@@ -114,7 +140,7 @@ impl Heap {
         // `returned`, and lower `predicted_resident()` for memory the
         // kernel still holds — the accounting would read as a success.
         // Refusing keeps the seven-term identity true about the world.
-        if !os::page_size_matches() {
+        if !can_discard {
             return;
         }
         let meta = &mut s.spans[ix];

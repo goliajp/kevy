@@ -175,6 +175,46 @@ fn m6_an_exhausted_class_refuses_instead_of_handing_back_a_wild_pointer() {
 }
 
 #[test]
+fn m4_a_machine_that_cannot_discard_reports_held_not_returned() {
+    require_mapping!();
+    let mut heap = Heap::new(0);
+    let size = 64;
+    let count = class::slots_per_span(class::index_of(size, 8).unwrap()) * 12;
+    let mut given = Vec::with_capacity(count);
+    for _ in 0..count {
+        given.push(heap.alloc(size, 8).expect("filling spans"));
+    }
+    let full = heap.snapshot();
+    for p in given {
+        // SAFETY: ours, this size.
+        unsafe { heap.dealloc(p, size, 8) };
+    }
+    let idle = heap.snapshot();
+
+    // The branch this machine may not be able to take. Every Apple
+    // Silicon Mac takes it — `sysconf` answers 16384 while the span-page
+    // arithmetic is written at 4096 — and there page-granular reclaim
+    // hands back nothing. The accounting has to say so: nothing
+    // `returned`, and the emptied spans `hysteresis`, which is what
+    // "retained rather than released" means.
+    heap.reclaim_with(false);
+    let after = heap.snapshot();
+    assert!(after.balanced(), "{after:?}");
+    assert_eq!(after.returned, 0, "a refused discard was reported as a return");
+    assert!(
+        after.hysteresis > idle.hysteresis,
+        "the emptied spans went somewhere other than held: {} -> {}",
+        idle.hysteresis,
+        after.hysteresis
+    );
+    assert_eq!(
+        after.predicted_resident(),
+        full.predicted_resident(),
+        "residency was predicted to fall on a sweep that returned nothing"
+    );
+}
+
+#[test]
 fn m4_emptied_spans_have_their_pages_returned() {
     require_mapping!();
     let mut heap = Heap::new(0);
@@ -198,18 +238,64 @@ fn m4_emptied_spans_have_their_pages_returned() {
     heap.reclaim();
     let after = heap.snapshot();
     assert!(after.balanced(), "{after:?}");
-    assert!(
-        after.hysteresis > idle.hysteresis,
-        "reclaim returned nothing: hysteresis {} -> {}",
-        idle.hysteresis,
-        after.hysteresis
-    );
-    assert!(
-        after.predicted_resident() < full.predicted_resident(),
-        "predicted residency did not fall: {} -> {}",
-        full.predicted_resident(),
-        after.predicted_resident()
-    );
+    // This used to read `after.hysteresis > idle.hysteresis`, with a
+    // message that said "reclaim returned nothing" — the assertion said
+    // hysteresis and meant returned, which is how the two terms stayed
+    // swapped for the whole v5 arc. Worse, it was true on both sides of
+    // the branch below, so it passed on a machine where reclaim hands
+    // back nothing at all and reported that as the feature working.
+    //
+    // Which branch holds is a property of the machine, not of the
+    // allocator, so the test asserts the one that applies and names it.
+    if crate::os::page_size_matches() {
+        assert!(
+            after.returned > idle.returned,
+            "reclaim returned nothing: returned {} -> {}",
+            idle.returned,
+            after.returned
+        );
+        // And the policy really does hold some back rather than
+        // releasing everything: `EMPTY_SPAN_HYSTERESIS` spans stay
+        // assigned to their class, resident, per sweep. A version that
+        // released the lot would satisfy the assertion above and be an
+        // mmap storm.
+        assert!(
+            after.hysteresis > 0,
+            "the whole pool was released, so nothing absorbs the next burst"
+        );
+        assert!(
+            after.predicted_resident() < full.predicted_resident(),
+            "predicted residency did not fall: {} -> {}",
+            full.predicted_resident(),
+            after.predicted_resident()
+        );
+    } else {
+        // A 16 KiB-page machine (every Apple Silicon Mac) is one: the
+        // span-page arithmetic is written at `os::PAGE` = 4096, so the
+        // ranges are not page-aligned, `madvise` reclaims nothing, and
+        // `discard` is refused rather than lying about it. Page-granular
+        // reclaim is INERT here — the emptied spans stay resident, and
+        // saying so is the point of the branch.
+        assert_eq!(after.returned, 0, "a refused discard reported a return");
+        assert!(
+            after.hysteresis > idle.hysteresis,
+            "the emptied spans went somewhere other than held: {} -> {}",
+            idle.hysteresis,
+            after.hysteresis
+        );
+        // Nothing went back, so nothing should predict that it did.
+        // This assertion sat outside the branch and passed here, which
+        // is the third thing the swapped terms bought: `hysteresis` was
+        // subtracted from the prediction, so held memory read as
+        // released, so M4 — the gate for the property the whole
+        // experiment rests on — was green on a machine where the
+        // property does not hold at all.
+        assert_eq!(
+            after.predicted_resident(),
+            full.predicted_resident(),
+            "residency was predicted to fall on a machine that returned nothing"
+        );
+    }
 }
 
 #[test]

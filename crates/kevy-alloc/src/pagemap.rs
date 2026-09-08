@@ -27,6 +27,10 @@ use crate::os::PAGE;
 /// 4 KiB pages per 64 KiB span.
 pub const PAGES_PER_SPAN: usize = SPAN_BYTES / PAGE;
 
+/// `discarded` with every page set — a whole span handed back at once,
+/// which is what retiring an emptied span does.
+pub const ALL_PAGES_DISCARDED: u16 = ((1u32 << PAGES_PER_SPAN) - 1) as u16;
+
 /// Bitmap words: enough for the smallest class (16 B → 4096 slots).
 pub const BITMAP_WORDS: usize = SPAN_BYTES / 16 / 64;
 
@@ -49,9 +53,20 @@ pub struct SpanMeta {
     /// Slots at or above this index have never been handed out; their
     /// pages were never touched and are not resident.
     pub high_water: u16,
-    /// Pages returned to the OS (`MADV_DONTNEED`) while the span stays
-    /// assigned. Cleared per page when an allocation lands back in one.
+    /// Pages returned to the OS (`MADV_DONTNEED`). Cleared per page when
+    /// an allocation lands back in one; set wholesale by
+    /// [`Heap::retire_empty_span`](crate::Heap) when the span is emptied
+    /// and its pages go back together.
     pub discarded: u16,
+    /// Set when this span was emptied and handed back to the free pool,
+    /// as opposed to never having been assigned at all.
+    ///
+    /// Both are `class == NO_CLASS`, and they are opposite kinds of
+    /// unassigned: one was never touched, the other was touched and then
+    /// either discarded or deliberately kept. Without this bit all three
+    /// collapse into one bucket, which is what they did — the identity
+    /// balances the same whichever way they fall, so nothing caught it.
+    pub retired: bool,
     /// One bit per slot; set = live (or parked on a foreign list, which
     /// pins the page exactly as a live slot does).
     bitmap: [u64; BITMAP_WORDS],
@@ -65,6 +80,7 @@ impl SpanMeta {
             live: 0,
             high_water: 0,
             discarded: 0,
+            retired: false,
             bitmap: [0; BITMAP_WORDS],
         }
     }

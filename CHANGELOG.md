@@ -109,6 +109,75 @@ nine honest zeroes. The first version of this section gated on that
 answer existing, and reported `allocator_impl:kevy-alloc` over an
 allocator that was not running.
 
+### `returned: 0`, on a workload that had returned 89% of its map
+
+The first thing `INFO allocator` said was that page-granular reclaim —
+the v2 rewrite the whole allocator experiment rests on — produced
+nothing. Two shards, 20,000 values written and then all deleted: 16.8 MB
+mapped, 152 KB live, `returned` 0, and `hysteresis` holding 14.9 MB.
+
+`hysteresis` was not hysteresis. It was every span with no class
+assigned, and that is three opposite things at once: a span carved with
+its segment and never claimed (never touched — `virgin`), a span emptied
+and handed back to the OS (`returned`), and a span emptied and
+deliberately kept (`hysteresis`, the only one the name describes). Which
+of the three those 14.9 MB actually were depended on the machine, and the
+number could not say — on a 4 KiB-page host they had gone back to the OS
+and were being reported as held; on the 16 KiB-page host they were
+measured on they were genuinely held, and were being subtracted from the
+residency prediction as though they had gone back. One bucket, wrong in
+both directions. The accounting identity — the crate's central check, and
+M3's whole content — balances the same whichever bucket they land in, so
+nothing failed.
+
+It had two more faces, and both had been reporting PASS:
+
+`predicted_resident()` subtracted `hysteresis` as though it were memory
+handed back, which is the one direction it cannot be right in: the term
+is what the allocator has chosen to keep. It fell by exactly the amount
+the retention pool grew. It now subtracts `virgin` and `returned` only.
+
+M4 — "emptied spans give their pages back" — asserted that `hysteresis`
+grew, under a failure message reading "reclaim returned nothing". That
+assertion is true on both sides of a platform branch, so it passed on
+every Apple Silicon Mac, where the span-page arithmetic is written at
+4096, `sysconf` answers 16384, `discard` is correctly refused, and
+reclaim hands back **nothing at all**. The gate for the property the
+experiment rests on was green on a machine where the property does not
+hold. It now asserts the branch it is in and names which.
+
+The partition is `virgin` / `returned` / `hysteresis`, decided by one
+function that takes the two facts as arguments rather than reading the
+machine — so a test sees all three states anywhere, including the two the
+machine it runs on cannot produce. The reclaim sweep takes the platform's
+answer the same way, for the same reason.
+
+Read back from the same workload afterwards, on the same 16 KiB-page
+host: 16,777,216 mapped, 172,014 live, `returned` 0, `hysteresis`
+15,269,888, `virgin` 697,824. The zero is now a statement rather than an
+artefact — this machine returns nothing, and the section says which term
+is holding the map instead of implying it was handed back.
+
+### Two gates that were not where they could stop anything
+
+`cargo fmt --all --check` lived in CI and nowhere else, so the only thing
+that could catch an unformatted push was the push. That is exactly what
+happened during this release: a red CI run whose entire content was two
+`println!` calls wrapped differently. It is now the first check in
+`precommit`, the tier that runs before every push.
+
+Adding it failed the manifest audit, which was the more interesting
+finding. Tier cost here is arithmetic — declared durations are summed
+against a budget — and precommit's declarations summed to **299s against
+its 300s budget while the tier actually costs 134s**. Two rows carried
+the padding: `version-alignment` declared 72s and takes 10.6s, `doc-toml`
+declared 125s and takes 66.1s. So the next cheap check anyone tried to
+add would have been refused by stale numbers rather than by time — a
+budget doing the opposite of its job. The runner already writes every
+real duration to `target/suite-<tier>.json` for exactly this; the
+declarations are now corrected from it, at roughly twice measurement, and
+precommit declares 230s for its 134.
+
 ### A disconnect the server decided on and the client never received
 
 On Linux/io_uring, a connection the server chose to close — the

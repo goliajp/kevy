@@ -313,6 +313,36 @@ mod tests {
     use super::*;
     use alloc::format;
 
+    /// The prebuilt-table reader refuses rather than inventing symbols:
+    /// a stream with fewer bits than the next code needs, and a code the
+    /// table does not hold. Only `Dict` reaches this reader, so this
+    /// branch had never been executed by anything — the table version
+    /// was added beside a covered one and inherited its reputation.
+    #[test]
+    fn a_prebuilt_table_refuses_a_stream_that_cannot_answer() {
+        let mut lens = [0u8; 256];
+        // Two symbols, one bit each: a complete tree over {0, 1}, so
+        // every table entry is filled and only the length check can fire.
+        lens[0] = 1;
+        lens[1] = 1;
+        let full = DecodeTable::new(&lens);
+        assert!(read_bits_with(&[], &full, 1).is_err(), "no bits, yet a symbol was produced");
+
+        // An under-full tree leaves holes: one symbol at length 2 fills a
+        // quarter of the table and the rest reads back as length 0.
+        let mut sparse = [0u8; 256];
+        sparse[7] = 2;
+        let holed = DecodeTable::new(&sparse);
+        let mut hit_hole = false;
+        for byte in 0u8..=255 {
+            if read_bits_with(&[byte, byte], &holed, 1).is_err() {
+                hit_hole = true;
+                break;
+            }
+        }
+        assert!(hit_hole, "no byte landed in a hole, so the refusal never ran");
+    }
+
     #[test]
     fn roundtrips_and_shrinks_text() {
         let mut text = Vec::new();
