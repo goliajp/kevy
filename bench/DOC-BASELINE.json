@@ -5,11 +5,11 @@
   },
   "kind": "doc-deficit",
   "platform": "linux",
-  "total_regions": 2684,
-  "min_total": 1342,
-  "public_items": 2684,
-  "documented": 2684,
-  "with_example": 135,
+  "total_regions": 2689,
+  "min_total": 1344,
+  "public_items": 2689,
+  "documented": 2689,
+  "with_example": 153,
   "symbols": {
     "gen-docs/without-example": 8,
     "kevy/without-example": 21,
@@ -28,7 +28,7 @@
     "kevy-geo/without-example": 6,
     "kevy-hash/without-example": 4,
     "kevy-index/without-example": 232,
-    "kevy-jni/without-example": 15,
+    "kevy-jni/without-example": 2,
     "kevy-lua/without-example": 22,
     "kevy-lua-host/without-example": 14,
     "kevy-map/without-example": 12,
@@ -38,7 +38,7 @@
     "kevy-pubsub-bench/without-example": 11,
     "kevy-ranktree/without-example": 1,
     "kevy-replicate/without-example": 128,
-    "kevy-resp/without-example": 107,
+    "kevy-resp/without-example": 118,
     "kevy-resp-client/without-example": 33,
     "kevy-rt/without-example": 210,
     "kevy-scalar/without-example": 21,
@@ -53,7 +53,7 @@
     "kevy-tmpdir/without-example": 1,
     "kevy-uring/without-example": 16,
     "kevy-vector/without-example": 12,
-    "kevy-vlog/without-example": 32,
+    "kevy-vlog/without-example": 21,
     "kevy-wasm/without-example": 41,
     "kevy-window/without-example": 34
   },
@@ -64,6 +64,13 @@
       ],
       "reason": "BitOp and its four variants moved from kevy-embedded to kevy-store, where the byte arithmetic they name now lives so both surfaces can call one implementation. kevy-embedded/without-example fell 170 -> 165 by exactly those items; kevy-store/without-example rose 285 -> 289, four rather than five because the enum itself gained an executable example. The deficit is one item smaller overall; the ratchet is keyed per crate, so a move between crates shows as growth in the receiving key. bitop_combine and Route::BitOpStore both carry examples that teach \u2014 the padding rules and the 0xff tail of NOT, and why BITOP cannot ride Route::Single(1).",
       "delta": 4
+    },
+    {
+      "accepted": [
+        "kevy-resp/without-example"
+      ],
+      "reason": "kevy-resp/without-example 107\u2192118: eighteen public items in the fuzz module left the docs-owed set (the crate's own #![allow(missing_docs)] had been hiding them) and joined the examples-owed one, which is what documenting them costs. Seven now carry a runnable example; the remaining eleven are struct and enum-variant fields, which cannot carry a doctest at all. The deficit as a whole fell \u2014 2549 regions to 2536 \u2014 and docs owed went to zero.",
+      "delta": 11
     }
   ]
 }
