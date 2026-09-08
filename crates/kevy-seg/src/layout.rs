@@ -57,21 +57,23 @@ pub fn seal_page(page: &mut [u8; PAGE], n_slots: u16) {
 /// Verify a page's CRC. `true` = intact.
 pub fn page_intact(page: &[u8]) -> bool {
     page.len() == PAGE && {
-        let want = u32::from_le_bytes(page[PAGE - PAGE_CRC..].try_into().expect("4 bytes"));
+        let want = u32::from_le_bytes(
+            page[PAGE - PAGE_CRC..].try_into().expect("guarded by page.len() == PAGE above"),
+        );
         kevy_sys::checksum::crc32c(&page[..PAGE - PAGE_CRC]) == want
     }
 }
 
 /// Slot count of a sealed page.
 pub fn page_slots(page: &[u8]) -> u16 {
-    u16::from_le_bytes(page[0..2].try_into().expect("2 bytes"))
+    u16::from_le_bytes(page[0..2].try_into().expect("a sealed page is PAGE bytes"))
 }
 
 /// The `i`-th cell offset of a sealed page (slots grow backward from
 /// the CRC).
 pub fn slot_offset(page: &[u8], i: u16) -> usize {
     let pos = PAGE - PAGE_CRC - 2 * (i as usize + 1);
-    u16::from_le_bytes(page[pos..pos + 2].try_into().expect("2 bytes")) as usize
+    u16::from_le_bytes(page[pos..pos + 2].try_into().expect("a sealed page is PAGE bytes")) as usize
 }
 
 /// A decoded cell: the key slice and where its payload is.

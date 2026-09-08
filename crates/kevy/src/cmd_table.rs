@@ -371,13 +371,17 @@ fn fold_verify_chunks(n: usize, chunks: &[Vec<u8>]) -> (Vec<[u64; 10]>, [u64; 2]
         for s in sums.iter_mut() {
             for slot in s.iter_mut() {
                 let Some(w) = c.get(pos..pos + 8) else { break };
-                *slot += u64::from_le_bytes(w.try_into().expect("8 bytes"));
+                *slot += u64::from_le_bytes(
+                    w.try_into().expect("the get(pos..pos + 8) above returned Some"),
+                );
                 pos += 8;
             }
         }
         for slot in &mut spot {
             let Some(w) = c.get(pos..pos + 8) else { break };
-            *slot += u64::from_le_bytes(w.try_into().expect("8 bytes"));
+            *slot += u64::from_le_bytes(
+                w.try_into().expect("the get(pos..pos + 8) above returned Some"),
+            );
             pos += 8;
         }
     }

@@ -127,7 +127,10 @@ impl ManyBuckets {
             let si = loc.slot as usize;
             v.swap_remove(si);
             if let Some(&moved) = v.get(si) {
-                self.index.get_mut(&moved).expect("indexed posting").slot = loc.slot;
+                self.index
+                    .get_mut(&moved)
+                    .expect("every posting in a band has an index entry")
+                    .slot = loc.slot;
             }
             if v.is_empty() {
                 self.buckets[i].1.remove(bi);

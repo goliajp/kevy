@@ -51,11 +51,13 @@ impl Seg {
         }
         let mut tr = [0u8; TRAILER];
         f.read_exact_at(&mut tr, len - TRAILER as u64)?;
-        if u32::from_le_bytes(tr[12..16].try_into().expect("4")) != layout::MAGIC {
+        if u32::from_le_bytes(tr[12..16].try_into().expect("tr is [u8; TRAILER]")) != layout::MAGIC
+        {
             return Err(SegError::Corrupt("bad magic"));
         }
-        let footer_off = u64::from_le_bytes(tr[0..8].try_into().expect("8"));
-        let footer_len = u32::from_le_bytes(tr[8..12].try_into().expect("4")) as usize;
+        let footer_off = u64::from_le_bytes(tr[0..8].try_into().expect("tr is [u8; TRAILER]"));
+        let footer_len =
+            u32::from_le_bytes(tr[8..12].try_into().expect("tr is [u8; TRAILER]")) as usize;
         // Checked: both values are attacker-controlled bytes at this
         // point, and a wrapping sum must refuse, not panic.
         let closes =

@@ -98,9 +98,12 @@ fn prefetch_t0(ptr: *const u8) {
 /// at most `cap + GROUP_WIDTH - 2`.
 #[inline]
 pub(crate) fn table_layout<KV>(cap: usize) -> (Layout, usize) {
-    let slots = Layout::array::<MaybeUninit<KV>>(cap).expect("slots layout overflow");
-    let meta = Layout::array::<u8>(cap + GROUP_WIDTH).expect("metadata layout overflow");
-    let (combined, meta_offset) = slots.extend(meta).expect("layout extend overflow");
+    let slots = Layout::array::<MaybeUninit<KV>>(cap)
+        .expect("a capacity that overflows a Layout could not have been allocated");
+    let meta = Layout::array::<u8>(cap + GROUP_WIDTH)
+        .expect("a capacity that overflows a Layout could not have been allocated");
+    let (combined, meta_offset) =
+        slots.extend(meta).expect("both halves already fit, so their sum fits isize");
     (combined.pad_to_align(), meta_offset)
 }
 
@@ -443,7 +446,7 @@ where
 {
     type Output = V;
     fn index(&self, key: &Q) -> &V {
-        self.get(key).expect("no entry found for key")
+        self.get(key).expect("Index panics by contract; get is the fallible form")
     }
 }
 

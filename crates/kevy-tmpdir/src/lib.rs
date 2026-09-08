@@ -60,8 +60,11 @@ static SEQ: AtomicU64 = AtomicU64::new(0);
 pub fn unique_dir(label: &str) -> PathBuf {
     let n = SEQ.fetch_add(1, Ordering::Relaxed);
     let p = std::env::temp_dir().join(format!("kevy-{label}-{}-{n}", std::process::id()));
+    // A leftover from a previous process that reused this pid: it is being
+    // replaced, so its removal failing is not this call's problem.
     let _ = std::fs::remove_dir_all(&p);
-    std::fs::create_dir_all(&p).expect("create temp dir");
+    std::fs::create_dir_all(&p)
+        .expect("a caller with nowhere to put its files has nothing to do next");
     p
 }
 
@@ -121,6 +124,8 @@ impl AsRef<Path> for TmpDir {
 
 impl Drop for TmpDir {
     fn drop(&mut self) {
+        // Drop cannot report, and a temp directory that outlives its process
+        // is the OS's to reclaim.
         let _ = std::fs::remove_dir_all(&self.0);
     }
 }

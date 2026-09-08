@@ -290,7 +290,8 @@ fn read_record(bytes: &[u8], o: usize) -> Option<(Vec<u8>, usize)> {
 /// failure there is rot, not a torn tail).
 fn whole_records_end(bytes: &[u8], o: usize) -> bool {
     let Some(len_bytes) = bytes.get(o..o + 4) else { return false };
-    let len = u32::from_le_bytes(len_bytes.try_into().expect("4")) as usize;
+    let len = u32::from_le_bytes(len_bytes.try_into().expect("bytes.get(o..o + 4) returned Some"))
+        as usize;
     bytes.len() >= o + 8 + len
 }
 

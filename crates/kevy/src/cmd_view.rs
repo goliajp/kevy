@@ -258,11 +258,9 @@ pub(crate) fn extension_op(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -
 /// order, target)*]` — read `f…` from every TARGET this shard owns.
 /// Chunk: `(row_idx: u32, (flen|MAX, bytes)*)*`.
 fn op_hydrate(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
-    let Some(nf) = argv
-        .get(2)
-        .and_then(|b| b.get(..4))
-        .map(|b| u32::from_le_bytes(b.try_into().expect("4 bytes")) as usize)
-    else {
+    let Some(nf) = argv.get(2).and_then(|b| b.get(..4)).map(|b| {
+        u32::from_le_bytes(b.try_into().expect("the get(..4) above returned Some")) as usize
+    }) else {
         return vec![crate::cmd_index_query::ST_BADARGS];
     };
     let fields = &argv[3..3 + nf];
