@@ -23,7 +23,7 @@ mod shard;
 
 pub(crate) use catalogs::CatalogState;
 pub(crate) use election::ElectionState;
-pub(crate) use obs::{ObsState, ReplShardView, Totals};
+pub(crate) use obs::{ObsState, ReplShardView, ShardStats, Totals};
 pub(crate) use progress::ReplicaProgress;
 pub(crate) use replication::ReplicationState;
 pub(crate) use scope::{ScopeState, WriteRedirect, encode_misdirected, encode_quiesced};

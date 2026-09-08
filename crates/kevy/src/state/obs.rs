@@ -51,6 +51,9 @@ pub(crate) struct ShardStats {
     /// This shard's tiering gauges (all zero when
     /// tiering is off — `tier_enabled` is the section gate).
     pub tier: TierGauges,
+    /// This shard's allocator terms (all zero, `reporting` included,
+    /// when kevy-alloc is not the global allocator).
+    pub alloc: AllocGauges,
 }
 
 /// One shard's `INFO # Tiering` slot — mirrors
@@ -74,6 +77,34 @@ pub(crate) struct TierGauges {
     pub vlog_bytes: AtomicU64,
     pub vlog_live_bytes: AtomicU64,
     pub vlog_epoch: AtomicU64,
+}
+
+/// One shard's `INFO # Allocator` slot — mirrors `kevy_alloc::Stats`,
+/// published per tick alongside the memory gauges by the shard thread
+/// that owns the heap being described (`thread_stats` answers for the
+/// calling thread only, so this is the one place it can be read).
+///
+/// The section exists because the accounting identity — every mapped
+/// byte in exactly one bucket — is the only way to say WHERE a resident
+/// ratio went. Without it, the one workload where this allocator loses
+/// to glibc can be measured but not explained.
+#[derive(Debug, Default)]
+pub(crate) struct AllocGauges {
+    /// 1 once this shard has published a real snapshot. The section
+    /// gate: a zeroed slot and a heap that genuinely holds nothing
+    /// are not the same answer.
+    pub reporting: AtomicU64,
+    pub mapped: AtomicU64,
+    pub live: AtomicU64,
+    pub rounding: AtomicU64,
+    pub cache: AtomicU64,
+    pub span_free: AtomicU64,
+    pub returned: AtomicU64,
+    pub virgin: AtomicU64,
+    pub hysteresis: AtomicU64,
+    pub segment_overhead: AtomicU64,
+    pub large_count: AtomicU64,
+    pub spans_assigned: AtomicU64,
 }
 
 /// Process-wide totals, summed across every shard slot.
@@ -101,6 +132,10 @@ pub(crate) struct Totals {
     /// all do or none does — the config is process-wide).
     pub tier_enabled: bool,
     pub tier: TierTotals,
+    /// How many shards published an allocator snapshot. 0 = the section
+    /// is absent; it is also the denominator for reading the sums.
+    pub alloc_shards: u64,
+    pub alloc: AllocTotals,
 }
 
 /// The summed `# Tiering` gauges (budgets, floors and vlog gauges are
@@ -121,6 +156,58 @@ pub(crate) struct TierTotals {
     pub vlog_bytes: u64,
     pub vlog_live_bytes: u64,
     pub vlog_epoch: u64,
+}
+
+/// The summed allocator terms. Each shard has its own heap and the
+/// buckets are disjoint within one, so the sums stay an identity:
+/// `accounted` over all shards is comparable to `mapped` over all
+/// shards exactly as it is per-heap.
+#[derive(Default)]
+pub(crate) struct AllocTotals {
+    pub mapped: u64,
+    pub live: u64,
+    pub rounding: u64,
+    pub cache: u64,
+    pub span_free: u64,
+    pub returned: u64,
+    pub virgin: u64,
+    pub hysteresis: u64,
+    pub segment_overhead: u64,
+    pub large_count: u64,
+    pub spans_assigned: u64,
+}
+
+impl AllocTotals {
+    /// Fold one shard's heap into the totals. Every bucket is disjoint
+    /// within a heap and the heaps are disjoint from each other, so the
+    /// identity survives the sum term by term.
+    fn add(&mut self, g: &AllocGauges) {
+        self.mapped += g.mapped.load(Relaxed);
+        self.live += g.live.load(Relaxed);
+        self.rounding += g.rounding.load(Relaxed);
+        self.cache += g.cache.load(Relaxed);
+        self.span_free += g.span_free.load(Relaxed);
+        self.returned += g.returned.load(Relaxed);
+        self.virgin += g.virgin.load(Relaxed);
+        self.hysteresis += g.hysteresis.load(Relaxed);
+        self.segment_overhead += g.segment_overhead.load(Relaxed);
+        self.large_count += g.large_count.load(Relaxed);
+        self.spans_assigned += g.spans_assigned.load(Relaxed);
+    }
+
+    /// The sum the identity asserts, mirroring `Stats::accounted` — kept
+    /// separate from [`Self::mapped`] so a reader compares the two
+    /// rather than being handed a difference someone else computed.
+    pub fn accounted(&self) -> u64 {
+        self.live
+            + self.rounding
+            + self.cache
+            + self.span_free
+            + self.returned
+            + self.virgin
+            + self.hysteresis
+            + self.segment_overhead
+    }
 }
 
 /// Retained ops-per-sec samples — 16 × 100 ms default tick ≈ a 1.6 s window.
@@ -217,6 +304,10 @@ impl ObsState {
             t.tier.vlog_bytes += s.tier.vlog_bytes.load(Relaxed);
             t.tier.vlog_live_bytes += s.tier.vlog_live_bytes.load(Relaxed);
             t.tier.vlog_epoch += s.tier.vlog_epoch.load(Relaxed);
+            if s.alloc.reporting.load(Relaxed) != 0 {
+                t.alloc_shards += 1;
+                t.alloc.add(&s.alloc);
+            }
         }
         t
     }

@@ -77,6 +77,38 @@ from crates.io. All 41 are complete. `kevy-vlog` had nineteen public
 functions and no runnable example; it has six, and because a rustdoc
 example is a doctest they fail when the API moves rather than rotting.
 
+### `INFO allocator`: which term a resident ratio went into
+
+The v5 accounting contract names nine terms whose sum is every mapped
+byte, and names INFO as the transport. The terms existed and the
+transport did not, so for a whole arc the one workload where kevy-alloc
+loses to glibc could be measured and not explained: 2.39× resident is a
+number, not an address.
+
+`INFO allocator` now reports them, summed across shard heaps, on a build
+with the `kevy-alloc` feature. Its first read on a two-shard server after
+2,000 200-byte SETs: 8,388,608 mapped against 708,582 live — and the gap
+is not spread thinly. `hysteresis` holds 3,932,160 of it, `span_free`
+2,034,304, and `returned` is 0. Whole empty spans being retained rather
+than released is the largest single term, and nothing had said so.
+
+`alloc_accounted` is printed beside `alloc_mapped` rather than as a
+difference, because the two agreeing is the check — a reader compares
+them instead of trusting a residual someone else computed, and a term
+dropped from the section shows up as a gap rather than migrating
+silently into another bucket.
+
+The section is absent unless a shard reported, so a build on the system
+allocator emits exactly what it emitted before. "Reported" is
+`mapped > 0` and not "a snapshot came back": compiling the feature in
+links the allocator, while the `#[global_allocator]` attribute is what
+makes it *the* allocator — and that lives in `main.rs`. The library, its
+tests, the embedded API and any FFI host can therefore have the feature
+on and allocate somewhere else, where `thread_stats` still answers with
+nine honest zeroes. The first version of this section gated on that
+answer existing, and reported `allocator_impl:kevy-alloc` over an
+allocator that was not running.
+
 ### A disconnect the server decided on and the client never received
 
 On Linux/io_uring, a connection the server chose to close — the

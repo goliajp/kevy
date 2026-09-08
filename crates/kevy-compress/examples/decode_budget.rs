@@ -99,8 +99,11 @@ fn main() {
             j = (j + 1) % held.len();
             enc(&dict, &held[j])
         });
-        let enc_with: fn(&kevy_compress::Dict, &[u8]) -> Vec<u8> =
-            if name.starts_with("encode ") { kevy_compress::encode_with } else { kevy_compress::encode_high_with };
+        let enc_with: fn(&kevy_compress::Dict, &[u8]) -> Vec<u8> = if name.starts_with("encode ") {
+            kevy_compress::encode_with
+        } else {
+            kevy_compress::encode_high_with
+        };
         let mut m = 0;
         let et_held = time(2_000, || {
             m = (m + 1) % held.len();
@@ -119,7 +122,11 @@ fn main() {
             mean_len / dt_held / 1e9,
             dt_held * 1e6
         );
-        println!("  encode    {:.3} GB/s   ({:.3} us/value)   [dict per call]", mean_len / et / 1e9, et * 1e6);
+        println!(
+            "  encode    {:.3} GB/s   ({:.3} us/value)   [dict per call]",
+            mean_len / et / 1e9,
+            et * 1e6
+        );
         println!(
             "  encode    {:.3} GB/s   ({:.3} us/value)   [Dict seeded once]",
             mean_len / et_held / 1e9,

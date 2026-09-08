@@ -285,6 +285,35 @@ m8() {
 m8_out=$(m8)
 line "M8-unsafe-ratchet" "${m8_out%% *}" "${m8_out#* } [baseline: bench/.unsafe-crates-baseline]"
 
+# ── M9: the terms reach a reader. M3 proves the identity inside the
+# crate; that is a different claim from "an operator can see which term
+# a resident ratio went into", and until this line existed the contract
+# named INFO as the transport while INFO said nothing.
+#
+# It is the only line here that builds kevy with the feature on, and it
+# has to: the feature links the allocator, the `#[global_allocator]`
+# attribute is what makes it the allocator, and that attribute lives in
+# `main.rs`. A library test with the feature on gets a heap that serves
+# nothing and reports nine honest zeroes — which is why the test
+# declares the attribute itself and why the section is gated on
+# `mapped > 0` rather than on the snapshot existing.
+m9() {
+  local out n
+  if out=$(cd "$ROOT" && cargo test -p kevy --features kevy-alloc --test info_allocator 2>&1); then
+    n=$(printf '%s' "$out" | sed -n 's/.*test result: ok\. \([0-9][0-9]*\) passed.*/\1/p' | head -1)
+    if [ "${n:-0}" -eq 0 ]; then
+      echo "FAIL the INFO suite asserted nothing"
+    else
+      echo "PASS $n assertion(s) green: the section is there and its terms sum to mapped"
+    fi
+  else
+    echo "FAIL $(printf '%s' "$out" | grep -m1 -E 'panicked at|^error' || echo 'the INFO suite failed')"
+  fi
+}
+m9_out=$(m9)
+line "M9-info-transport" "${m9_out%% *}" \
+  "INFO allocator reports the nine terms and alloc_mapped == alloc_accounted on a live server — ${m9_out#* } [contract: bench/V5-ACCOUNTING-CONTRACT.md]"
+
 echo
 if [ "$fail" -ne 0 ]; then
   echo "allocgate: RED — as designed at T0. Lines turn green as T1/T2 land."

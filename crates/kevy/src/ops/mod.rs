@@ -127,6 +127,13 @@ fn build_info_body(
     if totals.tier_enabled && want_section(want, "tiering") {
         info_tiering(totals, &mut body);
     }
+    // `# Allocator`: present ONLY when a shard reported, for the same
+    // byte-stability reason as `# Tiering` — a build on the system
+    // allocator emits exactly what it emitted before this section
+    // existed.
+    if totals.alloc_shards > 0 && want_section(want, "allocator") {
+        info_allocator(totals, &mut body);
+    }
     if want_section(want, "persistence") {
         info_persistence(ctx, cfg, &mut body);
     }
