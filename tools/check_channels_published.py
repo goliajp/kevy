@@ -185,11 +185,33 @@ def on_crates(name, v):
     # The version being there is half the answer. The other half is whether
     # it is THIS manifest: kevy-client 2.2.0 was "published" for three
     # releases while pinning siblings at ^5.0 that the tree had at 6.x.
+    #
+    # That half can only be asked while the tree still IS v. Between
+    # releases the tree has moved, its sibling pins have moved with it,
+    # and comparing them against what v published finds a difference on
+    # every crate — a correct publication reported as a hole in the world.
+    # Presence is then the whole of what this checkout can answer, and
+    # saying so beats answering the wrong question confidently.
+    if _tree_version(name) not in (None, v):
+        _PRESENCE_ONLY.append(name)
+        return True
     ok, lines = check_published_manifest.compare(name, v, _cargo_meta())
     if ok is False:
         for line in lines:
             print(f"    {name}: {line.strip()}")
     return ok
+
+
+# Crates whose answer this run could only take as far as "the version is
+# there", because the tree has moved past the version being asked about.
+_PRESENCE_ONLY: list[str] = []
+
+
+def _tree_version(crate: str):
+    for pkg in _cargo_meta().get("packages", []):
+        if pkg["name"] == crate:
+            return pkg["version"]
+    return None
 
 
 _META = {}
@@ -469,13 +491,26 @@ def main() -> int:
               "A gate that silently skips a door is the gate that was missing.")
         return 2
 
-    behind, unknown, ok = [], [], 0
+    behind, unknown, ahead, ok = [], [], [], 0
     for kind, name, ask, src, declared in ds:
         want = v
         rel = src.relative_to(ROOT) if ROOT in src.parents else src
+        # A manifest that declares something else is a fact about the TREE.
+        # It used to end the door's turn right here, and that made this
+        # gate blind for the whole of development: between a tag and the
+        # next one the tree is ahead by design, so 51 of 56 doors were
+        # never asked anything, and the daily run printed a wall of
+        # "declares 6.4.0, not 6.3.0" that says nothing about the world.
+        #
+        # It cost a channel. flutter_kevy has served 6.2.2 since before
+        # 6.3.0 shipped — the mirror repo carries the v6.3.0 tag and has
+        # no workflow to act on it — and this gate ran every day through
+        # all of it without once asking pub.dev.
+        #
+        # So the mismatch is noted and the question is still put. Whether
+        # a door is current is the registry's answer, not the manifest's.
         if declared and declared != v:
-            behind.append(f"{kind:<10} {name:<28} declares {declared}, not {v}   ({rel})")
-            continue
+            ahead.append(f"{kind:<10} {name:<28} tree declares {declared}   ({rel})")
         got = ask(name, want)
         if got is None:
             unknown.append(f"{kind:<10} {name} — the registry gave no answer")
@@ -490,6 +525,19 @@ def main() -> int:
             print(f"  {u}")
         print("\nThis run could not answer. It is not a pass.")
         return 2
+
+    if _PRESENCE_ONLY:
+        print(f"{len(_PRESENCE_ONLY)} crate(s) answered on presence alone: the "
+              f"tree has moved past {v}, so whether what {v} published still "
+              f"matches this tree is not a question this checkout can put.")
+        print()
+
+    if ahead:
+        print(f"the tree is past {v} in {len(ahead)} manifest(s) — expected "
+              f"between releases, and not an answer about the doors:")
+        for a in ahead:
+            print(f"  {a}")
+        print()
 
     if behind:
         print(f"{len(behind)} door(s) do not have it:")
