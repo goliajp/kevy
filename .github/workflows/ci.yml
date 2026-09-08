@@ -509,8 +509,12 @@ jobs:
       # both lists from cargo metadata: every crate alone (what a
       # dependent gets, which feature unification hides) and every
       # off-by-default feature set (what nothing turns on).
+      #
+      # Both matrix legs, host-native (no --target, so it reuses the build
+      # cache the steps above filled). Running it on one runner would make
+      # it the other kind of partial green — the one measured on a single
+      # platform — which is the first mistake this pair of steps records.
       - name: Clippy (the configurations --workspace never compiles)
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: python3 tools/check_feature_lints.py
 
   # ───────────── contract gates: availability / AI / replication ─────────────
