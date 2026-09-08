@@ -98,6 +98,20 @@ pub struct VlogFile {
     /// for the first file. Lives and dies with the file (disposability
     /// is inherited, not engineered).
     pub(crate) dict: Vec<u8>,
+    /// The same dictionary, parsed once.
+    ///
+    /// Every record in this file decodes against it, and the parse —
+    /// unpacking 128 header bytes, Kraft-validating 256 code lengths,
+    /// and building an 8 KiB Huffman decode table — is a pure function
+    /// of these bytes. Paying it per record put the compaction decode
+    /// path at 0.042 GB/s against a stated 1 GB/s floor; paying it here
+    /// puts it at 0.636, and the fast path at 2.118.
+    ///
+    /// Held alongside the raw bytes rather than replacing them because
+    /// the ENCODE side still takes `&[u8]` and re-seeds its match table
+    /// from it per record — the same per-file-state-as-per-call-argument
+    /// shape, not yet fixed. One dictionary is ~65 KiB, per open file.
+    pub(crate) parsed: kevy_compress::Dict,
 }
 
 impl VlogFile {
@@ -121,7 +135,7 @@ impl VlogFile {
     /// that fails to decode is a process bug by the same doctrine as a
     /// CRC mismatch (this process wrote it this boot).
     pub fn decompress(&self, frame: &[u8]) -> io::Result<Vec<u8>> {
-        kevy_compress::decode(&self.dict, frame)
+        kevy_compress::decode_with(&self.parsed, frame)
             .map_err(|e| bad(format!("vlog: {e} at file {}", self.id)))
     }
 

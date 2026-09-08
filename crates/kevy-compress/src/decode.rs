@@ -16,9 +16,10 @@
 //!
 //! `examples/decode_budget` measures held-out values against a
 //! dictionary trained on a different sample, which is the shape
-//! `kevy-vlog` produces. On that shape the floor is **missed**: 0.56
-//! GB/s on the fast path and 0.048 GB/s through compaction, against a
-//! stated >= 1 GB/s. The causes are named in `lib.rs`'s status note.
+//! `kevy-vlog` produces. On that shape the floor is met at 2.079 GB/s
+//! fast and 1.265 through compaction — through `Dict`. Through
+//! `decode`, which reparses the dictionary per call, it is 0.543 and
+//! 0.045. See `lib.rs`'s note on the decode requirement.
 //!
 //! A frame that walks outside its promised bounds at any point is
 //! rejected with [`Corrupt`] — truncated and bit-flipped frames must
@@ -83,6 +84,7 @@ fn read_literal_block<'a>(
     rest: &'a [u8],
     lit_total: usize,
     lens: Option<&[u8; 256]>,
+    table: Option<&crate::huff::DecodeTable>,
 ) -> Result<(alloc::borrow::Cow<'a, [u8]>, usize), Corrupt> {
     match flag {
         0 => {
@@ -94,8 +96,13 @@ fn read_literal_block<'a>(
             Ok((alloc::borrow::Cow::Owned(l), used))
         }
         2 => {
-            let l = lens.ok_or(Corrupt)?;
-            let (out, bits) = crate::huff::read_bits(rest, l, lit_total)?;
+            // The dictionary-carried table. Built once per file when the
+            // caller holds a `Dict`; built here from the lengths only
+            // when it does not, which is the path `decode` takes.
+            let (out, bits) = match table {
+                Some(t) => crate::huff::read_bits_with(rest, t, lit_total)?,
+                None => crate::huff::read_bits(rest, lens.ok_or(Corrupt)?, lit_total)?,
+            };
             Ok((alloc::borrow::Cow::Owned(out), bits.div_ceil(8) as usize))
         }
         _ => Err(Corrupt),
@@ -163,12 +170,13 @@ fn copy_match(dict: &[u8], out: &mut Vec<u8>, dist: usize, len: usize) {
 pub(crate) fn lz_high(
     dict: &[u8],
     lens: Option<&[u8; 256]>,
+    table: Option<&crate::huff::DecodeTable>,
     payload: &[u8],
     orig_len: usize,
 ) -> Result<Vec<u8>, Corrupt> {
     let (lit_total, rest) = crate::read_varint(payload)?;
     let (&flag, rest) = rest.split_first().ok_or(Corrupt)?;
-    let (lits, seq_start) = read_literal_block(flag, rest, lit_total, lens)?;
+    let (lits, seq_start) = read_literal_block(flag, rest, lit_total, lens, table)?;
     let seqs = rest.get(seq_start..).ok_or(Corrupt)?;
     let mut out = Vec::with_capacity(reserve_for(orig_len, payload.len()));
     let (mut p, mut lp) = (0usize, 0usize);

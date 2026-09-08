@@ -64,7 +64,11 @@ fn main() {
     let held = corpus(200, 999);
 
     println!("dictionary {} B, trained on {} values", dict.len(), train_set.len());
-    println!("held-out values: {}, mean {} B\n", held.len(), held.iter().map(Vec::len).sum::<usize>() / held.len());
+    println!(
+        "held-out values: {}, mean {} B\n",
+        held.len(),
+        held.iter().map(Vec::len).sum::<usize>() / held.len()
+    );
 
     for (name, enc) in [
         ("encode      (write path)", kevy_compress::encode as fn(&[u8], &[u8]) -> Vec<u8>),
@@ -79,6 +83,14 @@ fn main() {
             i = (i + 1) % frames.len();
             kevy_compress::decode(&dict, &frames[i]).expect("round trip")
         });
+        // The same frames through a dictionary parsed once, which is what
+        // a per-file `Dict` gives a reader.
+        let parsed = kevy_compress::Dict::new(&dict);
+        let mut k = 0;
+        let dt_held = time(20_000, || {
+            k = (k + 1) % frames.len();
+            kevy_compress::decode_with(&parsed, &frames[k]).expect("round trip")
+        });
         let mean_len = orig as f64 / held.len() as f64;
         let gbps = mean_len / dt / 1e9;
 
@@ -90,11 +102,16 @@ fn main() {
 
         println!("{name}");
         println!("  ratio     {:.2}x  ({comp} B from {orig} B)", orig as f64 / comp as f64);
-        println!("  decode    {:.3} GB/s   ({:.3} us/value)", gbps, dt * 1e6);
+        println!("  decode    {:.3} GB/s   ({:.3} us/value)   [dict per call]", gbps, dt * 1e6);
+        println!(
+            "  decode    {:.3} GB/s   ({:.3} us/value)   [Dict parsed once]",
+            mean_len / dt_held / 1e9,
+            dt_held * 1e6
+        );
         println!("  encode    {:.3} GB/s   ({:.3} us/value)", mean_len / et / 1e9, et * 1e6);
         println!(
             "  budget    {}  (lib.rs states >= ~1 GB/s decode)\n",
-            if gbps >= 1.0 { "MET" } else { "MISSED" }
+            if mean_len / dt_held / 1e9 >= 1.0 { "MET" } else { "MISSED" }
         );
     }
 }

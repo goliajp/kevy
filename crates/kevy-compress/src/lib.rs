@@ -19,23 +19,29 @@
 //!   measured ~8 GB/s in its naive form. Speed is a requirement of the
 //!   design, not a later optimisation.
 //!
-//!   **This requirement is currently missed, and by how much is now
-//!   measured.** On held-out values against a trained dictionary — the
-//!   shape `kevy-vlog` produces — `examples/decode_budget` reports 0.56
-//!   GB/s on the fast path and 0.048 GB/s through compaction. The
-//!   earlier "order of magnitude above" reading came from
+//!   **Met through [`Dict`], missed through [`decode`].** The cause was
+//!   never the token grammar: the dictionary is per-file state and every
+//!   entry point took it as a per-call argument. `examples/decode_budget`
+//!   measures held-out values against a trained dictionary — the shape
+//!   `kevy-vlog` produces — and reports, per value:
+//!
+//!   | path | `decode` | [`decode_with`] + [`Dict`] |
+//!   |---|---|---|
+//!   | fast | 0.543 GB/s | **2.079 GB/s** |
+//!   | compaction | 0.045 GB/s | **1.265 GB/s** |
+//!
+//!   `kevy-vlog` holds one `Dict` per file, so a cold read takes the
+//!   right column. `decode` stays for callers with nothing to hold it in,
+//!   and is honest about what it costs.
+//!
+//!   The earlier "order of magnitude above" reading came from
 //!   `examples/k1_sanity`, which trains the dictionary on the same value
 //!   it compresses; that decodes one long match out of the dictionary at
 //!   a 41x ratio, which no stored value ever does.
 //!
-//!   The cause is not the token grammar. The dictionary is per-file
-//!   state and every entry point treats it as a per-call argument:
-//!   `decode` runs `parse_dict` before it has even read the tag, so a
-//!   `TAG_RAW` frame pays for it; the high level rebuilds an 8 KiB
-//!   Huffman decode table per record from lengths that are a per-file
-//!   constant; and `encode` re-hashes all 65,532 dictionary positions
-//!   per record, which is why an 8-byte value costs more to encode than
-//!   a 6 KiB one.
+//!   Still per-record, and still to do: `encode` re-hashes all 65,532
+//!   dictionary positions per record, which is why an 8-byte value costs
+//!   more to encode than a 6 KiB one — the same shape, on the write side.
 //! - **Never expand**: per-datum zlib on random 400 B values
 //!   *grows* them by 11 B. The raw-frame fallback is therefore part of
 //!   the format, not an optimisation.
@@ -103,8 +109,11 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 mod decode;
+mod dict;
 mod encode;
 mod huff;
+
+pub use dict::{Dict, decode_with};
 
 /// Frame tag: payload is the original bytes verbatim.
 pub const TAG_RAW: u8 = 0;
@@ -263,24 +272,29 @@ pub fn encode_high(dict: &[u8], input: &[u8]) -> Vec<u8> {
 /// assert!(decode(b"", b"\xff\xff\xff").is_err());
 /// ```
 pub fn decode(dict: &[u8], frame: &[u8]) -> Result<Vec<u8>, Corrupt> {
-    let (lens, content) = parse_dict(dict);
+    // The tag first. `parse_dict` used to run above this line, so a
+    // `TAG_RAW` or `TAG_LZ` frame — which never reads the dictionary —
+    // still paid 128 header bytes unpacked into a 256-entry array and a
+    // Kraft sum over all of it. Measured at +0.138 us, which is 111% of
+    // a 400 B decode and 79% of a 64 B one.
     let (&tag, rest) = frame.split_first().ok_or(Corrupt)?;
     let (orig_len, payload) = read_varint(rest)?;
+    if matches!(tag, TAG_RAW | TAG_LZ) {
+        return match tag {
+            TAG_RAW if payload.len() == orig_len => Ok(payload.to_vec()),
+            TAG_RAW => Err(Corrupt),
+            _ => decode::lz(&[], payload, orig_len),
+        };
+    }
+    let (lens, content) = parse_dict(dict);
     match tag {
-        TAG_RAW => {
-            if payload.len() != orig_len {
-                return Err(Corrupt);
-            }
-            Ok(payload.to_vec())
-        }
-        TAG_LZ => decode::lz(&[], payload, orig_len),
         TAG_LZ_DICT => {
             if content.is_empty() {
                 return Err(Corrupt);
             }
             decode::lz(content, payload, orig_len)
         }
-        TAG_LZH => match decode::lz_high(&[], None, payload, orig_len) {
+        TAG_LZH => match decode::lz_high(&[], None, None, payload, orig_len) {
             // Compat: the 5.0.0 encoder could emit a shared-table
             // (flag 2) literal block under TAG_LZH — the tag missed
             // the dict dependency (fuzz crash 6b733e74; fixed in
@@ -288,7 +302,7 @@ pub fn decode(dict: &[u8], frame: &[u8]) -> Result<Vec<u8>, Corrupt> {
             // table: retry with it before declaring corrupt. The
             // record's CRC already vouched for the bytes.
             Err(Corrupt) if lens.is_some() => {
-                decode::lz_high(&[], lens.as_ref(), payload, orig_len)
+                decode::lz_high(&[], lens.as_ref(), None, payload, orig_len)
             }
             r => r,
         },
@@ -296,7 +310,7 @@ pub fn decode(dict: &[u8], frame: &[u8]) -> Result<Vec<u8>, Corrupt> {
             if content.is_empty() {
                 return Err(Corrupt);
             }
-            decode::lz_high(content, lens.as_ref(), payload, orig_len)
+            decode::lz_high(content, lens.as_ref(), None, payload, orig_len)
         }
         _ => Err(Corrupt),
     }

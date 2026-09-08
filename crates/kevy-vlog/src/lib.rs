@@ -203,6 +203,7 @@ impl Vlog {
                 path,
                 file,
                 delete_on_drop: AtomicBool::new(false),
+                parsed: kevy_compress::Dict::new(&dict),
                 dict,
             }),
             bytes: 0,

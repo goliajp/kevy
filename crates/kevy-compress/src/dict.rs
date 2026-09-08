@@ -1,0 +1,114 @@
+//! A dictionary parsed once, and the decode that uses it.
+//!
+//! Split from `lib.rs` so the assembly point stays one — and because
+//! this is one subject: the dictionary is per-FILE state, and every
+//! entry point in this crate used to take it per call.
+
+use alloc::vec::Vec;
+
+use crate::{
+    Corrupt, TAG_LZ, TAG_LZ_DICT, TAG_LZH, TAG_LZH_DICT, TAG_RAW, decode, huff, parse_dict,
+    read_varint,
+};
+
+/// A dictionary, parsed once.
+///
+/// The dictionary is per-FILE state — `kevy-vlog` trains one at rotation
+/// and every record in that file decodes against it — and every entry
+/// point here used to take it as a per-call argument. That cost three
+/// things per record: unpacking 128 header bytes and Kraft-validating
+/// 256 lengths, rebuilding an 8 KiB Huffman decode table, and (on the
+/// encode side) re-hashing all 65,532 dictionary positions.
+///
+/// Holding one of these moves that work to where the state actually
+/// changes. It is the same bytes and the same frames — no byte of the
+/// format moves — so a `Dict` and a `&[u8]` decode identically.
+///
+/// ```
+/// use kevy_compress::{Dict, encode, decode, decode_with, train};
+///
+/// let vals: Vec<&[u8]> = vec![b"user=alice role=admin", b"user=bob role=admin"];
+/// let raw = train(&vals, kevy_compress::MAX_OFFSET);
+/// let frame = encode(&raw, b"user=carol role=admin");
+///
+/// let d = Dict::new(&raw);
+/// assert_eq!(decode_with(&d, &frame).unwrap(), decode(&raw, &frame).unwrap());
+/// ```
+pub struct Dict {
+    lens: Option<[u8; 256]>,
+    content: Vec<u8>,
+    table: Option<huff::DecodeTable>,
+}
+
+impl core::fmt::Debug for Dict {
+    /// The shape, not the bytes: a dictionary is up to 64 KiB and its
+    /// decode table another 8, and a `{:?}` that pastes those into a log
+    /// line is worse than no `Debug` at all.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Dict")
+            .field("content_bytes", &self.content.len())
+            .field("has_entropy_table", &self.table.is_some())
+            .finish()
+    }
+}
+
+impl Dict {
+    /// Parse `bytes` and build what every record would otherwise rebuild.
+    ///
+    /// Eager on purpose: this is constructed once per file, so paying the
+    /// table build here is paying it once instead of once per record.
+    /// [`decode`] does NOT construct one — it would then build an 8 KiB
+    /// table to decode a `TAG_RAW` frame that never looks at it.
+    /// Owning rather than borrowing so a `Dict` can be stored beside the
+    /// file it belongs to — `kevy-vlog`'s `VlogFile` would otherwise be
+    /// self-referential. The copy is one dictionary per file.
+    #[must_use]
+    pub fn new(bytes: &[u8]) -> Self {
+        let (lens, content) = parse_dict(bytes);
+        let table = lens.as_ref().map(huff::DecodeTable::new);
+        Self { lens, content: content.to_vec(), table }
+    }
+
+    /// The dictionary content, with any header stripped.
+    #[must_use]
+    pub fn content(&self) -> &[u8] {
+        &self.content
+    }
+}
+
+/// [`decode`] against a dictionary that was parsed once.
+///
+/// Identical output to `decode(bytes, frame)` for the same bytes — this
+/// changes when the per-file work happens, not what any frame means.
+///
+/// # Errors
+/// [`Corrupt`] when the frame does not decode to exactly what its header
+/// promises, the same conditions as [`decode`].
+pub fn decode_with(dict: &Dict, frame: &[u8]) -> Result<Vec<u8>, Corrupt> {
+    let (&tag, rest) = frame.split_first().ok_or(Corrupt)?;
+    let (orig_len, payload) = read_varint(rest)?;
+    match tag {
+        TAG_RAW if payload.len() == orig_len => Ok(payload.to_vec()),
+        TAG_RAW => Err(Corrupt),
+        TAG_LZ => decode::lz(&[], payload, orig_len),
+        TAG_LZ_DICT if dict.content.is_empty() => Err(Corrupt),
+        TAG_LZ_DICT => decode::lz(&dict.content, payload, orig_len),
+        // The 5.0.0 compat retry, as in `decode`: that encoder could emit
+        // a shared-table literal block under the dict-less tag.
+        TAG_LZH => match decode::lz_high(&[], None, None, payload, orig_len) {
+            Err(Corrupt) if dict.lens.is_some() => {
+                decode::lz_high(&[], dict.lens.as_ref(), dict.table.as_ref(), payload, orig_len)
+            }
+            r => r,
+        },
+        TAG_LZH_DICT if dict.content.is_empty() => Err(Corrupt),
+        TAG_LZH_DICT => decode::lz_high(
+            &dict.content,
+            dict.lens.as_ref(),
+            dict.table.as_ref(),
+            payload,
+            orig_len,
+        ),
+        _ => Err(Corrupt),
+    }
+}
