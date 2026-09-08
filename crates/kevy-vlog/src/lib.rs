@@ -204,7 +204,6 @@ impl Vlog {
                 file,
                 delete_on_drop: AtomicBool::new(false),
                 parsed: kevy_compress::Dict::new(&dict),
-                dict,
             }),
             bytes: 0,
             live: 0,
@@ -267,11 +266,15 @@ impl Vlog {
             self.sample_bytes += payload.len();
             self.samples.push(payload.to_vec());
         }
-        let dict = &self.active().handle.dict;
+        // The file's dictionary, parsed and seeded once at rotation.
+        // Taking it per call re-hashed all 65,532 of its positions for
+        // every record, which made encode time flat in input size — an
+        // 8-byte value cost more than a 6 KiB one.
+        let dict = &self.active().handle.parsed;
         let frame = if high {
-            kevy_compress::encode_high(dict, payload)
+            kevy_compress::encode_high_with(dict, payload)
         } else {
-            kevy_compress::encode(dict, payload)
+            kevy_compress::encode_with(dict, payload)
         };
         let body_len = 4 + key.len() + frame.len();
         let mut body = Vec::with_capacity(body_len);

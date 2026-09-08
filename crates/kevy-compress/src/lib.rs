@@ -39,9 +39,19 @@
 //!   it compresses; that decodes one long match out of the dictionary at
 //!   a 41x ratio, which no stored value ever does.
 //!
-//!   Still per-record, and still to do: `encode` re-hashes all 65,532
-//!   dictionary positions per record, which is why an 8-byte value costs
-//!   more to encode than a 6 KiB one — the same shape, on the write side.
+//!   The write side had the same shape and is fixed the same way:
+//!   seeding the match table walks every dictionary position, so encode
+//!   time was flat in input size — an 8-byte value cost more than a
+//!   6 KiB one, because almost none of the work was about the value.
+//!
+//!   | path | `encode` | [`encode_with`] + [`Dict`] |
+//!   |---|---|---|
+//!   | fast | 35.2 us/value | **0.47 us** |
+//!   | compaction | 38.4 us/value | **2.86 us** |
+//!
+//!   The frames are identical either way — `examples/decode_budget`
+//!   asserts that before it reports a number, because a speedup that
+//!   changed what was written would be a different change.
 //! - **Never expand**: per-datum zlib on random 400 B values
 //!   *grows* them by 11 B. The raw-frame fallback is therefore part of
 //!   the format, not an optimisation.
@@ -113,7 +123,7 @@ mod dict;
 mod encode;
 mod huff;
 
-pub use dict::{Dict, decode_with};
+pub use dict::{Dict, decode_with, encode_high_with, encode_with};
 
 /// Frame tag: payload is the original bytes verbatim.
 pub const TAG_RAW: u8 = 0;
@@ -179,6 +189,22 @@ impl core::fmt::Display for Corrupt {
     }
 }
 
+/// Close a frame, or throw it away and store the input verbatim.
+///
+/// Never-expanding is a return value here, not a hope: an encoder that
+/// could not beat the input hands back a `TAG_RAW` frame rather than a
+/// larger one. Shared by all four entry points so the fallback cannot
+/// drift between them.
+fn finish_or_raw(frame: &mut Vec<u8>, tag: u8, ok: bool, input: &[u8]) {
+    if ok {
+        finish_header(frame, tag, input.len());
+    } else {
+        frame.clear();
+        push_header(frame, TAG_RAW, input.len());
+        frame.extend_from_slice(input);
+    }
+}
+
 /// Encode `input` into a frame, using `dict` as shared history when it
 /// pays. The result is **never longer than `input` plus the frame
 /// header**: when LZ cannot save a byte — incompressible input,
@@ -207,17 +233,11 @@ pub fn encode(dict: &[u8], input: &[u8]) -> Vec<u8> {
     let (_, content) = parse_dict(dict);
     let mut frame = Vec::with_capacity(input.len() + MAX_HEADER);
     let (tag, ok) = if input.len() >= encode::MIN_INPUT {
-        encode::try_lz(content, input, &mut frame)
+        encode::try_lz(content, None, input, &mut frame)
     } else {
         (TAG_RAW, false)
     };
-    if ok {
-        finish_header(&mut frame, tag, input.len());
-    } else {
-        frame.clear();
-        push_header(&mut frame, TAG_RAW, input.len());
-        frame.extend_from_slice(input);
-    }
+    finish_or_raw(&mut frame, tag, ok, input);
     frame
 }
 
@@ -242,17 +262,11 @@ pub fn encode_high(dict: &[u8], input: &[u8]) -> Vec<u8> {
     let (lens, content) = parse_dict(dict);
     let mut frame = Vec::with_capacity(input.len() + MAX_HEADER);
     let (tag, ok) = if input.len() >= encode::MIN_INPUT {
-        encode::try_high(content, lens.as_ref(), input, &mut frame)
+        encode::try_high(content, lens.as_ref(), None, input, &mut frame)
     } else {
         (TAG_RAW, false)
     };
-    if ok {
-        finish_header(&mut frame, tag, input.len());
-    } else {
-        frame.clear();
-        push_header(&mut frame, TAG_RAW, input.len());
-        frame.extend_from_slice(input);
-    }
+    finish_or_raw(&mut frame, tag, ok, input);
     frame
 }
 
