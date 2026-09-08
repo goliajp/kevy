@@ -144,7 +144,7 @@ impl<C: Commands> Shard<C> {
             "kevy: STALL shard {} conn {cid}: CLOSING reap_candidate={} \
              writes_quiet={writes_quiet} (write_inflight={} write_buf={}) \
              drained={drained} (output={} pending={} write_pos={}) \
-             recv_armed={} big_arg={} cancel_pending={}",
+             recv_armed={} big_read_inflight={} big_arg={} cancel_pending={}",
             self.id,
             self.closing_uring_conns.contains(&cid),
             uc.write_inflight,
@@ -153,6 +153,11 @@ impl<C: Commands> Shard<C> {
             conn.pending.len(),
             conn.write_pos,
             uc.recv_armed,
+            // Every term of `closing_conn_is_quiet` appears on this
+            // line, and this one is why: the dump has to move whenever
+            // the predicate does, or the next wedge is diagnosed against
+            // a condition that stopped being the condition.
+            uc.big_read_inflight,
             describe_big_arg(uc),
             uc.big_arg_cancel_pending,
         );

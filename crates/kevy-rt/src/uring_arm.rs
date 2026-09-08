@@ -358,6 +358,11 @@ impl<C: Commands> Shard<C> {
                         };
                         if ok {
                             uc.big_arg_read_pending = false;
+                            // The kernel now holds `ptr` until the
+                            // matching completion. Nothing may free the
+                            // conn — and therefore the body — before
+                            // then; `closing_conn_is_quiet` asks.
+                            uc.big_read_inflight = true;
                         }
                     } else {
                         uc.big_arg_read_pending = false;

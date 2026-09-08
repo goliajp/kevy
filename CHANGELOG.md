@@ -178,6 +178,39 @@ real duration to `target/suite-<tier>.json` for exactly this; the
 declarations are now corrected from it, at roughly twice measurement, and
 precommit declares 230s for its 134.
 
+### A second connection the reap could tear down under the kernel
+
+The disconnect defect below was fixed by adding the one term
+`closing_conn_is_quiet` was missing. Asking what *else* the kernel could
+still be holding found another, and this one is worse: a use-after-free.
+
+The kernel-direct big-argument read hands `io_uring` a raw pointer into
+the body `Vec` that the connection owns, and the kernel may write there
+until the completion is reaped. Nothing recorded that. `big_arg_read_pending`
+looks like it would, and is exactly inverted: it means "queue an SQE on
+the next arm pass" and is cleared the moment the SQE is submitted — so it
+is `false` for precisely the window in which the kernel owns the buffer.
+
+So a connection uploading a large `SET` body was, to the reap, quiet on
+all three terms it knew about: writes idle, nothing left to drain, and
+`recv_armed` false (the multishot is cancelled before this mode is
+entered — that is what the mode is for). `CLIENT KILL` sets `closing` and
+queues the reap without consulting any of it; the reap then drops the
+connection, frees the body, and leaves the kernel writing a client's
+bytes into freed memory. A client that stalls mid-body holds that window
+open for as long as it likes.
+
+`big_read_inflight` now records it — set on a successful submit, cleared
+when the completion arrives, including on the error and EOF paths, where
+the completion is still the kernel handing the buffer back. It is a term
+of the reap predicate and a field on the stall dump, because a dump that
+does not move with the predicate diagnoses the next wedge against a
+condition that stopped being the condition.
+
+Two tests, one per direction: a submitted read is not quiet, and a read
+merely *wanted* still is. The second exists because the flag that looks
+like it should have covered this is the one that does not.
+
 ### A disconnect the server decided on and the client never received
 
 On Linux/io_uring, a connection the server chose to close — the

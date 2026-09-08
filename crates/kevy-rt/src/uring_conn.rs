@@ -184,6 +184,22 @@ pub(crate) struct UringConn {
     /// `prep_read` CQE leaves body bytes still pending. Cleared once
     /// the SQE is queued.
     pub(crate) big_arg_read_pending: bool,
+    /// A kernel-direct `prep_read` SQE is in flight: the kernel holds a
+    /// pointer into `pending_big_arg`'s body Vec and may write to it
+    /// until the matching `OP_BIG_READ` completion is reaped.
+    ///
+    /// This is NOT `big_arg_read_pending` inverted, and that distinction
+    /// is the whole point. That flag means "queue an SQE next arm pass"
+    /// and is cleared the moment the SQE is submitted — so it is FALSE
+    /// for exactly the window in which the kernel owns the buffer. Reap
+    /// used the three flags it had and none of them covered this, so a
+    /// `CLIENT KILL` against a client stalled mid-body dropped the
+    /// `UringConn`, freed the body, and left the kernel writing into it.
+    ///
+    /// Set on a successful submit, cleared when the completion arrives —
+    /// including the error and EOF paths, where the completion is still
+    /// the kernel handing the buffer back.
+    pub(crate) big_read_inflight: bool,
     /// The conn needs its multishot recv re-armed
     /// on the next [`Shard::uring_arm_conns`] visit (the big-arg body
     /// is fully received and the conn returns to normal recv mode).
@@ -236,6 +252,7 @@ impl UringConn {
             arm_queued: false,
             big_arg_cancel_pending: false,
             big_arg_read_pending: false,
+            big_read_inflight: false,
             big_arg_rearm_recv: false,
             pending_crlf_skip: 0,
             recv_zero_streak: 0,
