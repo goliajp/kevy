@@ -26,6 +26,11 @@ to be derived, so every crate is linted alone here.
 
 Both lists come from `cargo metadata`, so a crate added tomorrow, or a
 feature added tomorrow, is covered tomorrow with no edit.
+
+`--target <triple>` passes through, for the same reason the axes exist:
+the host is one more thing a green can quietly be about. Run from macOS,
+`--target x86_64-unknown-linux-gnu` is what makes the reactor's
+Linux-only code participate at all.
 """
 
 import json
@@ -56,6 +61,14 @@ def default_closure(features: dict) -> set:
 
 
 def main() -> int:
+    target: list[str] = []
+    argv = sys.argv[1:]
+    if argv[:1] == ["--target"] and len(argv) == 2:
+        target = ["--target", argv[1]]
+    elif argv:
+        print(f"usage: {sys.argv[0]} [--target <triple>]")
+        return 2
+
     meta = json.loads(
         subprocess.run(
             ["cargo", "metadata", "--no-deps", "--format-version", "1"],
@@ -101,7 +114,8 @@ def main() -> int:
 
     bad = []
     for crate, label, args in jobs:
-        cmd = ["cargo", "clippy", "-p", crate, "--all-targets", *args, "--", "-D", "warnings"]
+        cmd = ["cargo", "clippy", "-p", crate, "--all-targets", *target, *args,
+               "--", "-D", "warnings"]
         r = subprocess.run(cmd, capture_output=True, text=True)
         mark = "ok " if r.returncode == 0 else "FAIL"
         if r.returncode != 0 or not label.startswith("alone"):
@@ -109,7 +123,8 @@ def main() -> int:
         if r.returncode != 0:
             bad.append((crate, label, r.stderr))
 
-    print(f"\n{len(jobs)} configurations linted, {len(bad)} failing")
+    where = f" for {target[1]}" if target else ""
+    print(f"\n{len(jobs)} configurations linted{where}, {len(bad)} failing")
     for crate, label, err in bad:
         print(f"\n─── {crate} [{label}] ───\n{err}")
     return 1 if bad else 0
