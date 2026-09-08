@@ -468,6 +468,21 @@ requires = []
 proves = "zero clippy findings across every target, in the DEFAULT feature set"
 
 [[check]]
+id = "rulebook"
+area = "hygiene"
+tier = "full"
+# Not a gate: it counts. The rulebook has 50 rules and 9 of them are
+# refused by a gate; the other 41 were a claim with no reading behind
+# it until this existed. Ratcheting the counts comes after the counts
+# are driven down, not before — a ratchet on a number nobody has
+# attacked just freezes it.
+cmd = "python3 tools/rulebook_audit.py"
+expected = 20
+timeout = 300
+requires = []
+proves = "where this repository stands against every rule, including the ones no gate can see"
+
+[[check]]
 id = "panic-free"
 area = "hygiene"
 tier = "precommit"
