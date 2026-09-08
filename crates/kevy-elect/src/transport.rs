@@ -18,6 +18,11 @@
 //!
 //! Out of scope (Phase 1.5): TLS / auth / connection pooling.
 
+// Teardown. `join` returns what the thread panicked with and the
+// thread is already being abandoned; a flush on the way out has
+// nowhere left to put its bytes. No caller remains to be told.
+#![expect(clippy::let_underscore_must_use, reason = "teardown has nobody left to report to")]
+
 use std::net::TcpListener;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Sender, channel};

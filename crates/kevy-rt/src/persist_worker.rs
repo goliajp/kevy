@@ -19,6 +19,15 @@
 //! request landing while busy is skipped with a log line. A failed job
 //! aborts the tee — the live AOF and the previous snapshot are untouched.
 
+// A discarded fsync. A transient failure self-heals — `dirty` stays
+// set and the next tick retries — but a persistent one (full disk,
+// read-only remount, EIO) means `appendfsync everysec` has quietly
+// become "never" with nothing saying so. Open question §2.
+#![expect(
+    clippy::let_underscore_must_use,
+    reason = "a persistent fsync failure is invisible; see .claude/OPEN-QUESTIONS-6.4.md"
+)]
+
 use crate::Commands;
 use crate::shard::Shard;
 use kevy_store::SnapshotView;

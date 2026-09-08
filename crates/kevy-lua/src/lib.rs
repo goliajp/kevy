@@ -25,6 +25,13 @@
 //! SCRIPT LOAD/EXISTS/FLUSH, and the `redis.call` host plumbing all
 //! live here.
 
+// Seeding a sandbox global. A VM that refuses one fails the script
+// anyway, with its own message — "attempt to index a nil value" says
+// more than "set_global returned Err".
+#![expect(
+    clippy::let_underscore_must_use,
+    reason = "a VM that refuses a global fails the script with a better message"
+)]
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 

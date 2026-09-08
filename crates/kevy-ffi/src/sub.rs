@@ -10,6 +10,16 @@
 //! `sub_raw.rs` was; that file is this one's scalar sibling, handing back
 //! the payload with no RESP framing.
 
+// `catch_unwind` at the ABI boundary. Its `Err` is the panic payload,
+// and the point of catching it here is that a panic must not cross
+// into C — see `boundary/no-panic-across-abi`. There is no Rust
+// frame above this to hand it to, and the callee has already
+// reported through its own error channel.
+#![expect(
+    clippy::let_underscore_must_use,
+    reason = "catch_unwind exists to stop the unwind, not to report it"
+)]
+
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use kevy_embedded::KevyError;

@@ -9,6 +9,11 @@
 //! so the open paths pass `quiet_info` there. The corrupt-frame WARN is
 //! an incident signal and never silenced — it does not share the switch.
 
+// `write!` into an in-memory buffer returns a `Result` because
+// `fmt::Write` / `io::Write` must, not because it can fail: the
+// `String` and `Vec` impls are infallible. Said once here.
+#![expect(clippy::let_underscore_must_use, reason = "writing to an in-memory buffer cannot fail")]
+
 use crate::replay_walk::ReplayStop;
 use std::path::Path;
 

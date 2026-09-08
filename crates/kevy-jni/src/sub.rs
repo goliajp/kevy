@@ -1,5 +1,15 @@
 //! The subscription family — open, poll, wait, close.
 
+// `catch_unwind` at the ABI boundary. Its `Err` is the panic payload,
+// and the point of catching it here is that a panic must not cross
+// into C — see `boundary/no-panic-across-abi`. There is no Rust
+// frame above this to hand it to, and the callee has already
+// reported through its own error channel.
+#![expect(
+    clippy::let_underscore_must_use,
+    reason = "catch_unwind exists to stop the unwind, not to report it"
+)]
+
 use crate::env::*;
 use crate::{db_ptr, empty_buf, handle, sub_ptr, take_buf};
 use std::panic::{AssertUnwindSafe, catch_unwind};

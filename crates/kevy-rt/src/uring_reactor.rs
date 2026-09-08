@@ -18,7 +18,6 @@
 //! wired here (no pub/sub in `sharded`).
 
 use crate::Commands;
-use crate::conn::Conn;
 use crate::shard::Shard;
 use crate::uring_conn::ParkState;
 pub(crate) use crate::uring_conn::UringConn;
@@ -240,25 +239,7 @@ impl<C: Commands> Shard<C> {
                                 drop(sock); // close fd immediately
                                 continue;
                             }
-                            // TCP_NODELAY doesn't apply to AF_UNIX; skip for UDS.
-                            if !is_unix {
-                                let _ = sock.set_nodelay();
-                            }
-                            let ncid = self.next_conn_id;
-                            self.next_conn_id += self.conn_id_step;
-                            let mut conn = Conn::new(sock);
-                            conn.cluster = cluster;
-                            self.conns.insert(ncid, conn);
-                            let mut uc = UringConn::new();
-                            // New conn needs an arm visit so its
-                            // multishot recv gets queued.
-                            uc.arm_queued = true;
-                            io.insert(ncid, uc);
-                            self.arm_pending.push(ncid);
-                            // Client connections only — cluster-bus is internal.
-                            if !cluster {
-                                self.commands.on_connection();
-                            }
+                            self.install_accepted(&mut io, sock, cluster, is_unix);
                         }
                     }
                     OP_WAKER => {

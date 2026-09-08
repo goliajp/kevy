@@ -15,6 +15,15 @@
 //! callback. The native fn signatures stay the same; only the body
 //! grows.
 
+// Seeding the sandbox's globals (`KEYS`, `ARGV`, `redis`). A VM that
+// refuses a global assignment is a VM that is about to fail the script
+// anyway, and it fails it with the real message — "attempt to index a
+// nil value" says more than "set_global returned Err".
+#![expect(
+    clippy::let_underscore_must_use,
+    reason = "a VM that refuses a global fails the script with a better message"
+)]
+
 use luna_core::runtime::value::Value;
 use luna_core::vm::error::LuaError;
 use luna_core::vm::exec::Vm;

@@ -22,6 +22,13 @@
 //!   per accepted replica. Designed for the "scope writer's
 //!   replication is a control-plane event, not a hot-path" posture.
 
+// Teardown. `join` returns whatever the thread panicked with, and the
+// thread is already being abandoned; `shutdown` on a socket the peer
+// has closed reports what already happened. Neither has a caller left
+// to tell, and stopping halfway through a teardown leaves more behind
+// than finishing it blind.
+#![expect(clippy::let_underscore_must_use, reason = "teardown has nobody left to report to")]
+
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};

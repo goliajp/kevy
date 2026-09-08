@@ -10,6 +10,11 @@
 //! vlog is disposable and the AOF is the durable truth, so the answer is an
 //! error, never a heal.
 
+// Best-effort removal, on paths where the file is being abandoned.
+// A file that will not delete is a stray the next sweep collects,
+// and refusing here would abandon the rest of the cleanup.
+#![expect(clippy::let_underscore_must_use, reason = "removing what is already meant to be gone")]
+
 use super::{HEADER, MAX_BODY, bad, crc32c, split_body};
 use kevy_sys as _;
 use std::fs::{self, File};

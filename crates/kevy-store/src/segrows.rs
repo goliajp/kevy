@@ -17,6 +17,12 @@
 //! frame — the parts that stop snapshots/rewrites carrying cold row
 //! data — are the next train; until then both still materialize.
 
+// Removing a segment that is already gone is the outcome asked for.
+// These run on the reclaim path, after the manifest no longer names the
+// file, so a failure here leaves a stray file that the next sweep
+// collects — and refusing would abandon the rest of the reclaim.
+#![expect(clippy::let_underscore_must_use, reason = "reclaim is idempotent and continues")]
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 

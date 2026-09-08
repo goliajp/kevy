@@ -24,6 +24,11 @@
 //! | G            | `G off` (matching)   | gen G, offset off (resume) |
 //! | G            | mismatched/corrupt   | gen G+1, offset 0 (bumped) |
 
+// Best-effort removal, on paths where the file is being abandoned.
+// A file that will not delete is a stray the next sweep collects,
+// and refusing here would abandon the rest of the cleanup.
+#![expect(clippy::let_underscore_must_use, reason = "removing what is already meant to be gone")]
+
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};

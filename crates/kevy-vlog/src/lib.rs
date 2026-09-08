@@ -45,6 +45,10 @@
 //! way: kevy-vlog is the value log, and `[workspace.lints.rust] warnings = "deny"`
 //! turns a new gap into a compile error rather than a number that
 //! drifts. Closed from 65 sites (store) and 7 (vlog) in v6.
+// Best-effort removal, on paths where the file is being abandoned.
+// A file that will not delete is a stray the next sweep collects,
+// and refusing here would abandon the rest of the cleanup.
+#![expect(clippy::let_underscore_must_use, reason = "removing what is already meant to be gone")]
 #![warn(missing_docs)]
 // The checksum comes from the one public front, not a private copy of it.
 // `kevy_sys::checksum`'s own docstring names this crate as a consumer and

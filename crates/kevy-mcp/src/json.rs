@@ -5,6 +5,11 @@
 //! model: object / array / string (with `\uXXXX` escapes and surrogate
 //! pairs) / number (i64 fast path, f64 otherwise) / bool / null.
 
+// `write!` into an in-memory buffer returns a `Result` because
+// `fmt::Write` must, not because it can fail — `String`'s and `Vec`'s
+// impls are infallible. Said once here rather than beside every line.
+#![expect(clippy::let_underscore_must_use, reason = "writing to an in-memory buffer cannot fail")]
+
 use std::fmt::Write as _;
 
 /// A JSON value. Objects preserve insertion order (a Vec of pairs), which

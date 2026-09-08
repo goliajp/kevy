@@ -10,6 +10,10 @@
 //!
 //! Usage: `kevy-pubsub-bench --host H --port P --subs K --msgs M --size S`
 
+// Teardown: `join` yields what a thread panicked with, and the thread
+// is already being abandoned; `shutdown` on a closed socket reports
+// what already happened.
+#![expect(clippy::let_underscore_must_use, reason = "teardown has nobody left to report to")]
 // A load generator, not a server. Every unwrap here is on its own setup —
 // its sockets, its own arguments — and a load generator that cannot set
 // itself up has no measurement to report and should stop saying so

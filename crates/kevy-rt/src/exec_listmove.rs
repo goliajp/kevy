@@ -22,6 +22,13 @@
 //! which routes both to one shard and restores the atomic path. This is the
 //! same trade-off `exec_rename` makes, and it is stated in `docs/migration.md`.
 
+// The discarded value is the operation's own count — how many fields
+// went, how many members landed — and the caller returns its own.
+#![expect(
+    clippy::let_underscore_must_use,
+    reason = "the discarded value is a count, not an error report"
+)]
+
 use crate::Commands;
 use crate::message::Part;
 use crate::message::{Agg, Inbound, Op, PendingSlot, SmallReply};

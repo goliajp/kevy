@@ -2,6 +2,15 @@
 //! `store.rs` to keep it under the 500-LOC house cap; operates on the shared
 //! [`Inner`] state via the same mutex the public `Store` methods use.
 
+// A discarded fsync. A transient failure self-heals — `dirty` stays
+// set and the next tick retries — but a persistent one (full disk,
+// read-only remount, EIO) means `appendfsync everysec` has quietly
+// become "never" with nothing saying so. Open question §2.
+#![expect(
+    clippy::let_underscore_must_use,
+    reason = "a persistent fsync failure is invisible; see .claude/OPEN-QUESTIONS-6.4.md"
+)]
+
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock, RwLockWriteGuard};

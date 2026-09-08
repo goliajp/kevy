@@ -3,6 +3,14 @@
 //!
 //! [`RuntimeState`]: crate::RuntimeState
 
+// Best effort. What matters is reported by the path that owns the
+// outcome — the next read, the next tick, the returned value — and
+// this call is the notification, not the result.
+#![expect(
+    clippy::let_underscore_must_use,
+    reason = "best effort, with the real outcome reported elsewhere"
+)]
+
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::Path;
