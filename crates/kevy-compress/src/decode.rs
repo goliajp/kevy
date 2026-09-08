@@ -5,8 +5,20 @@
 //! `extend_from_within`, and only the two genuinely irregular cases —
 //! an overlapping match (offset < length: a repeating pattern by
 //! definition) and a match crossing the dictionary/output boundary —
-//! fall back to stepwise copies. The decode-budget probe put this an order
-//! of magnitude above the ~1 GB/s budget floor.
+//! fall back to stepwise copies.
+//!
+//! That was once written as "an order of magnitude above the ~1 GB/s
+//! budget floor", on the strength of `examples/k1_sanity`. That example
+//! trains the dictionary on the very value it then compresses, so the
+//! 4 KiB input becomes a 100-byte frame — a 41x ratio — and the decode
+//! it times is one long match out of the dictionary. No stored value is
+//! ever its own training sample.
+//!
+//! `examples/decode_budget` measures held-out values against a
+//! dictionary trained on a different sample, which is the shape
+//! `kevy-vlog` produces. On that shape the floor is **missed**: 0.56
+//! GB/s on the fast path and 0.048 GB/s through compaction, against a
+//! stated >= 1 GB/s. The causes are named in `lib.rs`'s status note.
 //!
 //! A frame that walks outside its promised bounds at any point is
 //! rejected with [`Corrupt`] — truncated and bit-flipped frames must

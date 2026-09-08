@@ -18,12 +18,35 @@
 //!   38 % of its p99 budget in decode; a token + wildcopy design
 //!   measured ~8 GB/s in its naive form. Speed is a requirement of the
 //!   design, not a later optimisation.
+//!
+//!   **This requirement is currently missed, and by how much is now
+//!   measured.** On held-out values against a trained dictionary — the
+//!   shape `kevy-vlog` produces — `examples/decode_budget` reports 0.56
+//!   GB/s on the fast path and 0.048 GB/s through compaction. The
+//!   earlier "order of magnitude above" reading came from
+//!   `examples/k1_sanity`, which trains the dictionary on the same value
+//!   it compresses; that decodes one long match out of the dictionary at
+//!   a 41x ratio, which no stored value ever does.
+//!
+//!   The cause is not the token grammar. The dictionary is per-file
+//!   state and every entry point treats it as a per-call argument:
+//!   `decode` runs `parse_dict` before it has even read the tag, so a
+//!   `TAG_RAW` frame pays for it; the high level rebuilds an 8 KiB
+//!   Huffman decode table per record from lengths that are a per-file
+//!   constant; and `encode` re-hashes all 65,532 dictionary positions
+//!   per record, which is why an 8-byte value costs more to encode than
+//!   a 6 KiB one.
 //! - **Never expand**: per-datum zlib on random 400 B values
 //!   *grows* them by 11 B. The raw-frame fallback is therefore part of
 //!   the format, not an optimisation.
 //! - **The dictionary carries the corpus claim**: match-finding refinements move
 //!   little; dictionary construction decides how much of the corpus
-//!   ceiling is captured. The `train` entry point is deliberately a
+//!   ceiling is captured. **Measured, this is the wrong way round on the
+//!   templated corpus**: a brute-force oracle over the same grammar
+//!   reaches 181.8 B/value where the shipped single-probe finder reaches
+//!   220.7 — 17.6 % of frame bytes — and `HT_BITS = 12` alone leaves
+//!   43.5 % of the dictionary's distinct 4-grams unreachable, so a
+//!   better `train` cannot cash in what it produces. The `train` entry point is deliberately a
 //!   replaceable policy behind a stable signature.
 //!
 //! # Format
