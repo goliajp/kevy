@@ -31,7 +31,7 @@ fn a_streaming_giant_frame_is_disconnected_at_the_cap() {
     // recorded (`client_query_buffer_limit_disconnections` counted it)
     // and the close never reaching the client. Reading the source
     // narrowed that to three possibilities and could not separate them:
-    // the conn never entered `uring_reap_closing`'s candidate list, or
+    // the conn never entered `uring_reap_closed`'s candidate list, or
     // it entered and one of `writes_quiet` / `drained` stayed false, or
     // both held and the fd was closed without a FIN going out. The dump
     // prints each of those terms per closing conn, so a fourth failure

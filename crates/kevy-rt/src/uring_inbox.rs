@@ -56,8 +56,7 @@ impl<C: Commands> Shard<C> {
         // O(closing) per reap pass — typically 0-few entries at any
         // moment.
         //
-        // Conns whose write path hasn't drained yet are re-pushed to
-        // the closing set tail (so reap retries on a subsequent iter).
+        // A conn that is not yet quiet goes back on the set's tail.
         let candidates: Vec<u64> = std::mem::take(&mut self.closing_uring_conns);
         let mut done: Vec<u64> = Vec::with_capacity(candidates.len());
         let mut requeue: Vec<u64> = Vec::new();
@@ -65,17 +64,13 @@ impl<C: Commands> Shard<C> {
             // Already reaped (e.g. dedup on a doubly-pushed cid)?
             let Some(uc) = io.get(&cid) else { continue };
             let conn = self.conns.get(&cid);
-            let drained = conn
-                .is_none_or(|c| c.output.is_empty() && c.pending.is_empty() && c.write_pos == 0);
-            let closing = uc.closing || conn.is_some_and(|c| c.closing);
             // Sanity: cid was pushed because something flipped closing — but
             // accept-fail / EOF races could land it without `closing == true`.
             // Skip non-closing rather than reap.
-            if !closing {
+            if !(uc.closing || conn.is_some_and(|c| c.closing)) {
                 continue;
             }
-            let writes_quiet = !uc.write_inflight && uc.write_buf.is_empty();
-            if writes_quiet && drained {
+            if closing_conn_is_quiet(uc, conn) {
                 done.push(cid);
             } else {
                 requeue.push(cid);
@@ -100,4 +95,39 @@ impl<C: Commands> Shard<C> {
             // `io.get_mut(&cid)` return None).
         }
     }
+}
+
+/// Whether a closing conn is finished with the ring and can be torn
+/// down: nothing of it still in flight, nothing of it still unsent.
+///
+/// The recv term is the one that was missing. [`Shard::uring_arm_conns`]
+/// cancels a closing conn's multishot recv precisely so that `close(fd)`
+/// sends a FIN, and its comment ends "the next reap closes cleanly" —
+/// but the next reap did not look at `recv_armed`. A reap landing in the
+/// window between the cancel being submitted and its terminal CQE
+/// arriving tore the conn down with the multishot still armed; the
+/// socket stayed pinned in the kernel, `close(fd)` sent nothing, and a
+/// client the server had decided to disconnect waited on a live socket
+/// forever.
+///
+/// Measured rather than reasoned. The query-buffer cell failed 5-7 times
+/// in 100 on Linux/io_uring, and in every one of those the reactor's own
+/// stall dump reported `conns=0` for all 121 heartbeats spanning the
+/// client's 30-second wait: the conn was already fully reaped while the
+/// client still saw the socket open. That rules out everything upstream
+/// of the reap and leaves the teardown itself.
+///
+/// Waiting here is bounded. The arm loop re-issues the cancel on every
+/// visit to a closing conn (idempotent — a redundant one returns
+/// `-ENOENT`) and keeps closing conns queued, and `recv_armed` clears on
+/// either that cancel's `-ECANCELED` or a multishot that stops
+/// delivering. If it somehow did not clear, the conn stays in
+/// `self.conns` and the stall dump names it — which is the failure worth
+/// having, the alternative being the silent half-open leak this fixes.
+fn closing_conn_is_quiet(uc: &UringConn, conn: Option<&crate::conn::Conn>) -> bool {
+    let drained =
+        conn.is_none_or(|c| c.output.is_empty() && c.pending.is_empty() && c.write_pos == 0);
+    let writes_quiet = !uc.write_inflight && uc.write_buf.is_empty();
+    let recv_quiet = !uc.recv_armed;
+    writes_quiet && recv_quiet && drained
 }
