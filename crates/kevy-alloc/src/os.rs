@@ -97,6 +97,13 @@ pub const PAGE: usize = 4096;
 ///
 /// Answered once and cached: `sysconf` is a call, and this sits under
 /// the reclaim tick.
+///
+/// ```
+/// // Stable across calls — it is answered once and cached, and an
+/// // answer that flapped would be worse than either value.
+/// let a = kevy_alloc::os::page_size_matches();
+/// assert_eq!(a, kevy_alloc::os::page_size_matches());
+/// ```
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn page_size_matches() -> bool {
     use core::sync::atomic::{AtomicU8, Ordering};

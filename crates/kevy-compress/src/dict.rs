@@ -84,6 +84,23 @@ impl Dict {
 /// Identical output to `decode(bytes, frame)` for the same bytes — this
 /// changes when the per-file work happens, not what any frame means.
 ///
+/// ```
+/// use kevy_compress::{Dict, decode, decode_with, encode_high, train};
+///
+/// let vals: Vec<&[u8]> = vec![b"level=info svc=api", b"level=warn svc=api"];
+/// let raw = train(&vals, kevy_compress::MAX_OFFSET);
+/// let frame = encode_high(&raw, b"level=error svc=api");
+///
+/// // The compaction path is the one that rebuilt an 8 KiB table per
+/// // record; same bytes out either way.
+/// let d = Dict::new(&raw);
+/// assert_eq!(decode_with(&d, &frame).unwrap(), b"level=error svc=api");
+/// assert_eq!(decode_with(&d, &frame).unwrap(), decode(&raw, &frame).unwrap());
+///
+/// // A `Dict` says its shape and not its contents.
+/// assert!(format!("{d:?}").starts_with("Dict {"));
+/// ```
+///
 /// # Errors
 /// [`Corrupt`] when the frame does not decode to exactly what its header
 /// promises, the same conditions as [`decode`].
@@ -125,7 +142,19 @@ pub fn decode_with(dict: &Dict, frame: &[u8]) -> Result<Vec<u8>, Corrupt> {
 /// value cost more than a 6 KiB one. Here it is a memcpy of a 16 KiB
 /// table instead.
 ///
-/// Same frames as [`crate::encode`] for the same bytes.
+/// Same frames as [`crate::encode`] for the same bytes — asserted here,
+/// because a speedup that changed what was written would be a different
+/// change.
+///
+/// ```
+/// use kevy_compress::{Dict, encode, encode_with, train};
+///
+/// let vals: Vec<&[u8]> = vec![b"user=alice role=admin", b"user=bob role=admin"];
+/// let raw = train(&vals, kevy_compress::MAX_OFFSET);
+/// let d = Dict::new(&raw);
+/// let v = b"user=carol role=admin";
+/// assert_eq!(encode_with(&d, v), encode(&raw, v));
+/// ```
 #[must_use]
 pub fn encode_with(dict: &Dict, input: &[u8]) -> Vec<u8> {
     let mut frame = Vec::with_capacity(input.len() + crate::MAX_HEADER);
@@ -141,6 +170,17 @@ pub fn encode_with(dict: &Dict, input: &[u8]) -> Vec<u8> {
 /// [`crate::encode_high`] against a dictionary parsed and seeded once.
 ///
 /// Same frames as [`crate::encode_high`] for the same bytes.
+///
+/// ```
+/// use kevy_compress::{Dict, decode, encode_high, encode_high_with, train};
+///
+/// let vals: Vec<&[u8]> = vec![b"GET /a 200", b"GET /b 200", b"GET /c 404"];
+/// let raw = train(&vals, kevy_compress::MAX_OFFSET);
+/// let d = Dict::new(&raw);
+/// let v = b"GET /d 200";
+/// assert_eq!(encode_high_with(&d, v), encode_high(&raw, v));
+/// assert_eq!(decode(&raw, &encode_high_with(&d, v)).unwrap(), v);
+/// ```
 #[must_use]
 pub fn encode_high_with(dict: &Dict, input: &[u8]) -> Vec<u8> {
     let mut frame = Vec::with_capacity(input.len() + crate::MAX_HEADER);
@@ -157,4 +197,59 @@ pub fn encode_high_with(dict: &Dict, input: &[u8]) -> Vec<u8> {
     };
     crate::finish_or_raw(&mut frame, tag, ok, input);
     frame
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Dict, decode_with, encode_high_with, encode_with};
+
+    fn dict_bytes() -> Vec<u8> {
+        let vals: Vec<&[u8]> =
+            vec![b"level=info svc=api dur=12", b"level=warn svc=api dur=48"];
+        crate::train(&vals, crate::MAX_OFFSET)
+    }
+
+    /// The prebuilt table has to be the one that gets used, and only a
+    /// dictionary-carried literal block (flag 2) reaches it — which is
+    /// why the arm that takes it went from ten never-executed regions
+    /// to eleven when it was added without a test.
+    #[test]
+    fn a_prebuilt_table_decodes_the_same_bytes_as_a_rebuilt_one() {
+        let raw = dict_bytes();
+        let d = Dict::new(&raw);
+        for v in [
+            b"level=error svc=api dur=99".as_slice(),
+            b"level=info svc=api dur=7",
+            b"unrelated bytes entirely",
+        ] {
+            let high = encode_high_with(&d, v);
+            assert_eq!(high, crate::encode_high(&raw, v), "frames must not move");
+            assert_eq!(decode_with(&d, &high).unwrap(), v);
+            assert_eq!(crate::decode(&raw, &high).unwrap(), v);
+
+            let fast = encode_with(&d, v);
+            assert_eq!(fast, crate::encode(&raw, v), "frames must not move");
+            assert_eq!(decode_with(&d, &fast).unwrap(), v);
+        }
+    }
+
+    /// A `Dict` over bytes that are not a dictionary still decodes the
+    /// frames those bytes produced — the no-magic path.
+    #[test]
+    fn plain_bytes_are_a_dictionary_without_an_entropy_table() {
+        let raw = b"a plain shared prefix, no magic".to_vec();
+        let d = Dict::new(&raw);
+        assert!(!format!("{d:?}").contains("true"), "no entropy table here: {d:?}");
+        let v = b"a plain shared prefix, and then some";
+        assert_eq!(decode_with(&d, &encode_with(&d, v)).unwrap(), v);
+    }
+
+    /// Corrupt input is refused, not guessed at, through this entry
+    /// point too.
+    #[test]
+    fn a_frame_that_is_not_one_is_refused() {
+        let d = Dict::new(&dict_bytes());
+        assert!(decode_with(&d, b"").is_err());
+        assert!(decode_with(&d, b"\xff\xff\xff").is_err());
+    }
 }
