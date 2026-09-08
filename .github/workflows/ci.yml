@@ -516,6 +516,13 @@ jobs:
       # platform — which is the first mistake this pair of steps records.
       - name: Clippy (the configurations --workspace never compiles)
         run: python3 tools/check_feature_lints.py
+      # Library code only. The rule is scoped there, and a test that
+      # unwraps is stating a precondition rather than ducking one — the
+      # same survey read 2,425 `unwrap` sites with tests compiled and 71
+      # without. Both legs: a deny that holds on one platform says nothing
+      # about the code the other one compiles.
+      - name: Clippy (no unwrap or panic in library code)
+        run: cargo clippy --workspace --lib --bins --target ${{ matrix.target }} -- -D clippy::unwrap_used -D clippy::panic
 
   # ───────────── contract gates: availability / AI / replication ─────────────
   # The executable behavior contracts: availgate's clamps (replication

@@ -88,19 +88,20 @@ pub fn parse_replicate_from(argv: &Argv) -> Result<HandshakeReq, HandshakeError>
     if argv.len() != 6 {
         return Err(HandshakeError::WrongArity(argv.len()));
     }
-    if !eq_ascii_ci(argv.get(0).unwrap(), b"REPLICATE") {
+    if !eq_ascii_ci(argv.get(0).expect("the argv.len() != 6 return above"), b"REPLICATE") {
         return Err(HandshakeError::BadCommand);
     }
-    if !eq_ascii_ci(argv.get(1).unwrap(), b"FROM") {
+    if !eq_ascii_ci(argv.get(1).expect("the argv.len() != 6 return above"), b"FROM") {
         return Err(HandshakeError::BadFromKeyword);
     }
-    let generation =
-        parse_decimal_u64(argv.get(2).unwrap()).ok_or(HandshakeError::BadGeneration)?;
-    let from_offset = parse_decimal_u64(argv.get(3).unwrap()).ok_or(HandshakeError::BadOffset)?;
-    if !eq_ascii_ci(argv.get(4).unwrap(), b"ID") {
+    let generation = parse_decimal_u64(argv.get(2).expect("the argv.len() != 6 return above"))
+        .ok_or(HandshakeError::BadGeneration)?;
+    let from_offset = parse_decimal_u64(argv.get(3).expect("the argv.len() != 6 return above"))
+        .ok_or(HandshakeError::BadOffset)?;
+    if !eq_ascii_ci(argv.get(4).expect("the argv.len() != 6 return above"), b"ID") {
         return Err(HandshakeError::BadIdKeyword);
     }
-    let id_bytes = argv.get(5).unwrap();
+    let id_bytes = argv.get(5).expect("the argv.len() != 6 return above");
     if id_bytes.is_empty() {
         return Err(HandshakeError::BadReplicaId);
     }

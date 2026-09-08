@@ -79,7 +79,9 @@ fn writer_loop(writer_id: usize, port: u16, log: AckLog, stop: Arc<std::sync::at
         }
         match stream.read(&mut reply_buf) {
             Ok(n) if n >= 5 && reply_buf[..5] == *b"+OK\r\n" => {
-                log.lock().unwrap().push(AckEntry { key, value, seq });
+                log.lock()
+                    .expect("the lock is only poisoned by a panic that already failed the process")
+                    .push(AckEntry { key, value, seq });
                 seq += 1;
             }
             _ => return,

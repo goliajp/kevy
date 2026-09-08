@@ -273,7 +273,10 @@ impl<'a> Parser<'a> {
             match self.bump() {
                 Some(b) if b == k => {}
                 _ => {
-                    return Err(format!("expected keyword {:?}", std::str::from_utf8(kw).unwrap()));
+                    return Err(format!(
+                        "expected keyword {:?}",
+                        std::str::from_utf8(kw).expect("kw is an ASCII literal from this module")
+                    ));
                 }
             }
         }

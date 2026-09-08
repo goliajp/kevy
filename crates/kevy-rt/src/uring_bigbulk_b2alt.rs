@@ -269,11 +269,14 @@ pub(crate) struct ThreeSliceView<'a> {
 
 impl<'a> core::ops::Index<usize> for ThreeSliceView<'a> {
     type Output = [u8];
+    #[expect(clippy::panic, reason = "Index's contract is to panic")]
     fn index(&self, i: usize) -> &[u8] {
         match i {
             0 => self.verb,
             1 => self.key,
             2 => self.body,
+            // `Index::index` has no fallible form — panicking out of range
+            // is the trait's contract, the same one `[T]` and `Vec` keep.
             _ => panic!("ThreeSliceView index oob: {i}"),
         }
     }

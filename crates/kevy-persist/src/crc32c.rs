@@ -39,8 +39,8 @@ fn crc32c_sw(data: &[u8]) -> u32 {
     let mut crc = !0u32;
     let (chunks, tail) = data.as_chunks::<8>();
     for c in chunks {
-        let lo = u32::from_le_bytes(c[..4].try_into().unwrap()) ^ crc;
-        let hi = u32::from_le_bytes(c[4..].try_into().unwrap());
+        let lo = u32::from_le_bytes(c[..4].try_into().expect("c is [u8; 8] from as_chunks")) ^ crc;
+        let hi = u32::from_le_bytes(c[4..].try_into().expect("c is [u8; 8] from as_chunks"));
         crc = t[7][(lo & 0xFF) as usize]
             ^ t[6][((lo >> 8) & 0xFF) as usize]
             ^ t[5][((lo >> 16) & 0xFF) as usize]
