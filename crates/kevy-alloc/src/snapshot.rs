@@ -56,9 +56,61 @@ impl Heap {
     }
 }
 
+/// Which bucket a span with no class belongs in. Three, not one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Unassigned {
+    /// Carved with the segment and never claimed: mapped, never touched.
+    Virgin,
+    /// Emptied, retired, and its pages handed back.
+    Returned,
+    /// Emptied and retired, but the discard was refused — so it is still
+    /// resident, and held rather than released.
+    Held,
+}
+
+/// The classification, separated from the walk that applies it.
+///
+/// Which of the three a given machine can produce is fixed by that
+/// machine: where `os::page_size_matches()` is true no span is ever
+/// `Held`, and where it is false none is ever `Returned`. Deciding it in
+/// a function that takes the two facts as arguments is what lets a test
+/// see all three anywhere — and `Held` is the case worth seeing, because
+/// it is the one where reclaim does nothing.
+fn unassigned_bucket(retired: bool, discarded: u16) -> Unassigned {
+    if !retired {
+        Unassigned::Virgin
+    } else if discarded == crate::pagemap::ALL_PAGES_DISCARDED {
+        Unassigned::Returned
+    } else {
+        Unassigned::Held
+    }
+}
+
 /// Fold one span's bytes into a snapshot.
+///
+/// A span with no class used to go wholesale into `hysteresis`, which
+/// made that one number mean three opposite things: a span nobody has
+/// ever claimed (never touched — `virgin`), a span emptied and given
+/// back to the OS (`returned`), and a span emptied and deliberately
+/// kept (`hysteresis`, the only one the name describes). The identity
+/// balances whichever bucket they land in, so nothing failed; what the
+/// operator got was a single figure that could not answer the question
+/// it existed for. `returned` — the term page-granular reclaim was
+/// built to produce — read 0 on a workload that had just emptied
+/// 20,000 values, while 89 % of the map sat under `hysteresis`.
 fn add_span(st: &mut Stats, meta: &crate::segment::SpanMeta) {
     if meta.class == NO_CLASS {
+        match unassigned_bucket(meta.retired, meta.discarded) {
+            Unassigned::Virgin => st.virgin += SPAN_BYTES as u64,
+            Unassigned::Returned => st.returned += SPAN_BYTES as u64,
+            Unassigned::Held => st.hysteresis += SPAN_BYTES as u64,
+        }
+        return;
+    }
+    if meta.live == 0 {
+        // Empty but still assigned: the per-sweep hysteresis is holding
+        // it for its class rather than retiring it. Resident and
+        // deliberately kept — the contract's `hysteresis`, exactly.
         st.hysteresis += SPAN_BYTES as u64;
         return;
     }
@@ -83,4 +135,26 @@ fn add_span(st: &mut Stats, meta: &crate::segment::SpanMeta) {
         }
     }
     st.virgin += SPAN_BYTES as u64 - u64::from(meta.high_water) * slot;
+}
+
+#[cfg(test)]
+mod unassigned_tests {
+    use super::{Unassigned, unassigned_bucket};
+    use crate::pagemap::ALL_PAGES_DISCARDED;
+
+    /// All three, including the two this machine cannot produce. They
+    /// used to be one number, and the identity balanced either way —
+    /// which is exactly why nothing caught it: `returned` read 0 on a
+    /// workload that had handed most of its map back, while `hysteresis`
+    /// — "retained rather than released" — held it.
+    #[test]
+    fn an_unassigned_span_is_one_of_three_things() {
+        assert_eq!(unassigned_bucket(false, 0), Unassigned::Virgin);
+        assert_eq!(unassigned_bucket(false, ALL_PAGES_DISCARDED), Unassigned::Virgin);
+        assert_eq!(unassigned_bucket(true, ALL_PAGES_DISCARDED), Unassigned::Returned);
+        assert_eq!(unassigned_bucket(true, 0), Unassigned::Held);
+        // A partial discard is not a return: some of the span is still
+        // resident, so the whole span is held.
+        assert_eq!(unassigned_bucket(true, ALL_PAGES_DISCARDED >> 1), Unassigned::Held);
+    }
 }

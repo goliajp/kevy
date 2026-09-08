@@ -32,6 +32,14 @@
 [suite]
 manifest_floor = 43
 
+# Declared durations are corrected from `target/suite-<tier>.json`, not
+# guessed. They had drifted far enough to matter: precommit's declarations
+# summed to 299s against its 300s budget while the tier really cost 134s,
+# so the next cheap check anyone tried to add was refused by padding
+# rather than by time — which is the one thing this budget must not do.
+# `version-alignment` declared 72s and costs 10.6s; `doc-toml` declared
+# 125s and costs 66.1s. Both now declare roughly twice their measurement:
+# headroom for a slower machine, without being fiction.
 [suite.budgets]
 precommit = 300
 prerelease = 5400
@@ -148,7 +156,7 @@ id = "version-alignment"
 area = "release-pins"
 tier = "precommit"
 cmd = "python3 tools/check_version_alignment.py"
-expected = 72
+expected = 25
 timeout = 120
 requires = []
 proves = "all six version layers agree, including vendored engine bytes"
@@ -398,7 +406,7 @@ tier = "precommit"
 # a config block that does not load hands a first-time reader a server
 # that refuses to start.
 cmd = "python3 tools/check_doc_toml.py"
-expected = 125
+expected = 100
 timeout = 180
 requires = ["server-debug"]
 proves = "every TOML block in the docs parses"
@@ -481,6 +489,22 @@ expected = 20
 timeout = 300
 requires = []
 proves = "where this repository stands against every rule, including the ones no gate can see"
+
+[[check]]
+id = "fmtgate"
+area = "hygiene"
+tier = "precommit"
+# It was in CI and nowhere else, so the only thing that could catch an
+# unformatted push was the push itself — which is what happened: a red
+# CI run whose entire content was two `println!` calls wrapped
+# differently. The cheapest, most mechanical check in the repository
+# belongs in the tier that runs before every push, not in the one that
+# runs after.
+cmd = "cargo fmt --all --check"
+expected = 3
+timeout = 120
+requires = []
+proves = "every source file is formatted, before the push rather than after"
 
 [[check]]
 id = "panic-free"

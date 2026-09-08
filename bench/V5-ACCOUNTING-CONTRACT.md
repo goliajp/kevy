@@ -55,10 +55,32 @@ cannot fail is worse than none:
 | `rounding` | Σ (`slot size` − `Layout::size()`) over live allocations |
 | `cache` | bytes parked on foreign-free lists, waiting to be drained home |
 | `span_free` | free slots in spans that were handed out before and returned — **touched, therefore resident** |
-| `virgin` | span bytes at or above the bump cursor — mapped, never touched, **not resident** |
-| `returned` | free slots whose pages went back to the OS while their span stays live — mapped, **not resident** (the v2 term) |
-| `hysteresis` | retained rather than released: whole empty spans, and (T2-v8) parked large mappings in the process-wide retention pool — same policy, two scales |
+| `virgin` | mapped and never touched, **not resident**: span bytes at or above the bump cursor, plus whole spans carved with their segment that no class ever claimed |
+| `returned` | pages handed back to the OS — mapped, **not resident** (the v2 term): free slots inside a live span, plus whole spans emptied and retired |
+| `hysteresis` | retained rather than released and therefore **resident**: empty spans the per-sweep policy keeps for their class, spans whose discard the platform refused, and (T2-v8) parked large mappings in the process-wide retention pool |
 | `segment_overhead` | segment headers (one span per segment) |
+
+**Corrected in 6.4.0, and the correction is the point of the section.**
+`hysteresis` was every span with no class, which is three opposite
+things: never claimed (`virgin`), emptied and given back (`returned`),
+and emptied and kept (`hysteresis`). The identity balances whichever
+bucket they fall in, so no gate could see it. What an operator saw was
+`returned: 0` with 89 % of the map under `hysteresis` — and which of the
+three that 89 % really was depended on the host: given back on a 4 KiB
+page and reported as held, held on a 16 KiB page and subtracted from the
+residency prediction as though given back. One number, wrong in both
+directions.
+
+It had two further faces, both of which had been reported as PASS:
+
+* `predicted_resident()` **subtracted** `hysteresis`, so held memory read
+  as released. It now subtracts `virgin` and `returned` only.
+* M4 — "emptied spans give their pages back", the property the whole
+  experiment rests on — asserted `after.hysteresis > idle.hysteresis`
+  under a message reading "reclaim returned nothing". That is true on
+  both sides of the platform branch, so it passed on a 16 KiB-page
+  machine where `discard` is refused and reclaim hands back **nothing**.
+  The assertion now names the branch it is in.
 
 ### The identity M3 asserts
 

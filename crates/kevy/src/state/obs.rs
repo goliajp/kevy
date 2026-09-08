@@ -432,4 +432,39 @@ mod tests {
         }
         assert_eq!(obs.ops_ring.lock().unwrap().len(), OPS_WINDOW);
     }
+
+    /// The allocator fold, and its gate. The publisher is behind the
+    /// `kevy-alloc` feature and the fold is not, so with the feature off
+    /// — which is the default build, and how the coverage corpus runs —
+    /// nothing else here ever executes this path.
+    ///
+    /// The gate is the part worth asserting: a slot that never reported
+    /// holds nine zeroes, and nine zeroes are also a legitimate reading
+    /// of a heap. Counting the first as the second is what would let
+    /// INFO name an allocator that is not running.
+    #[test]
+    fn only_shards_that_reported_are_folded_in() {
+        let obs = ObsState::new(Path::new(""), 3);
+        let a = obs.slot(0).expect("slot 0");
+        a.alloc.mapped.store(8_388_608, Relaxed);
+        a.alloc.live.store(700_000, Relaxed);
+        a.alloc.hysteresis.store(7_688_608, Relaxed);
+        a.alloc.reporting.store(1, Relaxed);
+
+        let b = obs.slot(1).expect("slot 1");
+        b.alloc.mapped.store(4_194_304, Relaxed);
+        b.alloc.live.store(100_000, Relaxed);
+        b.alloc.hysteresis.store(4_094_304, Relaxed);
+        b.alloc.reporting.store(1, Relaxed);
+
+        // Shard 2 never published. Its zeroes must not be read as a
+        // third heap that happens to hold nothing.
+        let t = obs.aggregate();
+        assert_eq!(t.alloc_shards, 2, "a silent shard was counted as a reporting one");
+        assert_eq!(t.alloc.mapped, 12_582_912);
+        assert_eq!(t.alloc.live, 800_000);
+        // Disjoint within a heap and between heaps, so the identity
+        // survives the sum: this is the property the section rests on.
+        assert_eq!(t.alloc.accounted(), t.alloc.mapped, "the summed terms stopped partitioning");
+    }
 }
