@@ -248,7 +248,34 @@ pub(crate) fn read_bits(
     lens: &[u8; 256],
     n: usize,
 ) -> Result<(Vec<u8>, u64), Corrupt> {
-    let table = build_decode_table(lens);
+    read_bits_with(stream, &DecodeTable::new(lens), n)
+}
+
+/// A built flat decode table, so the build can be paid once.
+///
+/// `build_decode_table` allocates 8 KiB and fills 4,096 strided entries,
+/// on top of `canonical_codes`'s 12x256 double loop. Under `read_bits`
+/// that ran once per record — for the dictionary-carried table (flag 2)
+/// the lengths are a per-file constant, so the whole thing was a pure
+/// function of something that does not change between records. Measured
+/// at 400 B values it was ~3.3 us of the 4.18 us a high-level decode
+/// took, and it is why `examples/decode_budget` reports 0.048 GB/s
+/// through compaction against a stated 1 GB/s floor.
+pub(crate) struct DecodeTable(Vec<(u8, u8)>);
+
+impl DecodeTable {
+    pub(crate) fn new(lens: &[u8; 256]) -> Self {
+        Self(build_decode_table(lens))
+    }
+}
+
+/// [`read_bits`] against a table someone else already built.
+pub(crate) fn read_bits_with(
+    stream: &[u8],
+    table: &DecodeTable,
+    n: usize,
+) -> Result<(Vec<u8>, u64), Corrupt> {
+    let table = &table.0;
     // `n` is a count read out of the frame. A Huffman code is at least one
     // bit, so n symbols need at least n bits and the stream cannot honour a
     // claim past `8 * stream.len()`. Reserving on the claim let CI's first
