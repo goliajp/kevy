@@ -215,6 +215,42 @@ fn multiply_mix(x: u64, y: u64) -> u64 {
 /// split.write(b"efgh");
 /// assert_ne!(whole.finish(), split.finish());
 /// ```
+/// # Not injective over byte strings
+///
+/// The absorb consumes whole words and zero-extends a short tail, and
+/// nothing folds in the total length — so distinct inputs share a value
+/// in three families, all with the same cause:
+///
+/// * a zero-extended 1–3 byte tail is indistinguishable from a 4-byte
+///   one: `"aaa"` and `"a\0\0\0aa"`;
+/// * `mix(0, 0) == 0`, so leading zero words are absorbed with no
+///   effect — `""`, `"\0\0\0\0"` and `"\0\0\0\0\0\0\0\0"` all hash to
+///   **0**, and prefixing any key with four NULs leaves its hash
+///   unchanged;
+/// * a 4-byte tail and an 8-byte word with four trailing zeros agree.
+///
+/// Measured: over the 1,093 strings of length ≤ 6 from `{a, b, NUL}`,
+/// **27 collision classes**. A uniform 64-bit hash on that many inputs
+/// would be expected to produce none.
+///
+/// Whether it reaches you depends on how `Hash` feeds the bytes.
+/// `Hash for [u8]` writes a length prefix, so `FxHashMap<Vec<u8>, _>`
+/// and `FxHashMap<SmallBytes, _>` — everything kevy itself uses — are
+/// unaffected, and the measurement above gives 0 classes for them.
+/// `Hash for str` writes only a `0xff` terminator, so **`&str` and
+/// `String` keys do reach it**, which is what the 27 are.
+///
+/// The fix is to fold the total length into [`Hasher::finish`], six
+/// lines, and it changes every value this type produces — which the note
+/// on [`KevyHash for [u8]`](KevyHash) says this path deliberately does
+/// not do. That is an owner decision, recorded with its costs in this
+/// repository's `.claude/OPEN-QUESTIONS-6.4.md`. Until it is taken, this
+/// section is here so the behaviour is chosen rather than discovered.
+///
+/// (One tempting non-fix, for the record: seeding the initial state to a
+/// non-zero constant. Measured, it makes all three families *worse* —
+/// 39 classes instead of 27 — because it removes the only case the
+/// zero-absorption collapsed.)
 #[derive(Debug, Default)]
 pub struct FxHasher(u64);
 

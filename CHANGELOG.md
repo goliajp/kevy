@@ -178,6 +178,29 @@ real duration to `target/suite-<tier>.json` for exactly this; the
 declarations are now corrected from it, at roughly twice measurement, and
 precommit declares 230s for its 134.
 
+### Structs the kernel reads, with nothing checking their shape
+
+`kevy-sys` and `kevy-uring` hand `#[repr(C)]` structs straight to the
+kernel and had no layout assertion between them. A field added, a type
+widened, an alignment changed — none of those fail a test. They produce a
+syscall reading the wrong memory, on whichever platform nobody happened
+to develop on.
+
+One declaration was already wrong: `sockaddr_un::sun_path` was `[u8; 108]`
+unconditionally, under a comment reading "108 bytes on Linux + macOS BSD",
+where macOS's own header says 104. Benign in practice — xnu bounds by
+`sun_len` into a larger buffer — but the crate's header claims these
+bindings match the platform ABI, and nothing in the build would have said
+otherwise.
+
+Compile-time assertions now cover `sockaddr_in`, `sockaddr_un`, `kevent`,
+`timespec`, `epoll_event` (whose packing is arch-conditional; losing it on
+x86_64 shifts `data` four bytes and routes every readiness event to the
+wrong connection), `io_uring_sqe`, `io_uring_cqe`, the ring-offset
+structs, `io_uring_buf_reg` and `__kernel_timespec`. The io_uring setup
+computes its mmap lengths from two of those sizes, so a drift there
+misaligns every ring read into arbitrary `user_data`.
+
 ### `maxmemory` charged the length of a buffer, not its size
 
 `SmallBytes::heap_bytes` is what the eviction bound is computed from, and
