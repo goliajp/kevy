@@ -449,10 +449,34 @@ fn v2_pages_return_while_the_span_still_lives() {
     heap.reclaim();
     let after = heap.snapshot();
     assert!(after.balanced(), "{after:?}");
-    assert!(
-        after.returned > 0,
-        "a span with survivors returned nothing — the v1 failure, back: {after:?}"
-    );
+    // `returned` is the accounting, not the kernel. On a system whose
+    // page size is not `os::PAGE` the reclaim path refuses (it would
+    // otherwise report pages it cannot return), so the behaviour under
+    // test is not available here — and this assertion, which reads the
+    // accounting, would have passed on such a machine right up until
+    // the refusal landed. Say which case ran rather than pass either
+    // way.
+    if os::page_size_matches() {
+        assert!(
+            after.returned > 0,
+            "a span with survivors returned nothing — the v1 failure, back: {after:?}"
+        );
+    } else {
+        assert_eq!(
+            after.returned, 0,
+            "the reclaim path must not account pages it refused to return: {after:?}"
+        );
+        eprintln!(
+            "NOT EXERCISED: page return needs a {}-byte page; this system disagrees",
+            os::PAGE
+        );
+    }
+    if !os::page_size_matches() {
+        // The rest of this test is about how much came back, and nothing
+        // did. Returning here is the honest end — the alternative is a
+        // second reading of the same accounting under a different name.
+        return;
+    }
     // Almost all of the span's free bytes should be returned: only the
     // pages pinned by survivors (and slot-straddling edges) stay.
     assert!(
@@ -513,10 +537,18 @@ fn v2_densification_migrates_free_space_into_whole_pages() {
     heap.reclaim();
     let st = heap.snapshot();
     assert!(st.balanced(), "{st:?}");
-    assert!(
-        st.returned > 0,
-        "an interleaved churn produced no returnable page — densification is not happening: {st:?}"
-    );
+    // Same split as `v2_pages_return_while_the_span_still_lives`: this
+    // reads the accounting, and the accounting is only about the kernel
+    // on a system with the page size the geometry was built for.
+    if os::page_size_matches() {
+        assert!(
+            st.returned > 0,
+            "an interleaved churn produced no returnable page — densification is not happening: {st:?}"
+        );
+    } else {
+        assert_eq!(st.returned, 0, "accounted a page the reclaim path refused: {st:?}");
+        eprintln!("NOT EXERCISED: densification's page return needs a {}-byte page", os::PAGE);
+    }
     for p in live {
         // SAFETY: ours.
         unsafe { heap.dealloc(p, size, 8) };
@@ -674,4 +706,47 @@ fn claims_span_words_and_never_strand_occupancy() {
     assert!(st.balanced(), "{st:?}");
     h.reclaim();
     assert!(h.snapshot().balanced());
+}
+
+// ── the reclaim path may not report pages it did not return ──────────
+
+/// `os::PAGE` is a constant and the running system's page size is not.
+///
+/// This machine reports 16384 and the bench box reports 4096, and the
+/// reclaim path computes `madvise` ranges at 4096 granularity. On the
+/// larger page those ranges are not page-aligned; macOS answers 0
+/// regardless and reclaims nothing, so a reclaim that ran anyway would
+/// mark the pages discarded and count them in `returned` for memory the
+/// kernel still holds.
+///
+/// This asserts the check exists and agrees with the system, which is
+/// the only part that can be checked from inside the process. What it
+/// cannot check is whether `madvise` did anything — that needs RSS, and
+/// `bench/allocgate-mem.sh` is where that lives.
+#[test]
+fn the_page_size_check_agrees_with_the_system() {
+    let matches = crate::os::page_size_matches();
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        // An independent reading, not the same call: the constant this
+        // crate was built around is 4096, and a system that disagrees
+        // must make `page_size_matches` false.
+        let out = std::process::Command::new("getconf").arg("PAGE_SIZE").output();
+        if let Ok(o) = out
+            && let Ok(text) = String::from_utf8(o.stdout)
+            && let Ok(sys) = text.trim().parse::<usize>()
+        {
+            assert_eq!(
+                matches,
+                sys == crate::os::PAGE,
+                "getconf says {sys}, the crate assumes {}, and page_size_matches() says {matches}",
+                crate::os::PAGE
+            );
+            return;
+        }
+    }
+    // No independent reading available: assert only that the answer is
+    // stable, since it is cached and a flapping answer would be worse
+    // than either value.
+    assert_eq!(matches, crate::os::page_size_matches());
 }

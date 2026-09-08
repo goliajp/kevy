@@ -63,22 +63,39 @@ impl Heap {
                     kept += 1;
                     continue;
                 }
-                let c = s.spans[ix].class as usize;
-                // SAFETY: `seg` is the segment being walked in this loop; it came from the
-                // live span list, so it is a real segment address and never null.
-                if self.partial[c] == Some((unsafe { NonNull::new_unchecked(seg) }, ix as u8)) {
-                    self.partial[c] = None;
-                }
-                self.spans_in_class[c] -= 1;
-                s.spans[ix].reset(crate::pagemap::NO_CLASS);
-                let base = s.span_base(ix);
-                // SAFETY: nothing is live in this span, and the range is
-                // page-aligned and inside a live mapping.
-                unsafe {
-                    os::discard(NonNull::new_unchecked(base), SPAN_BYTES);
-                }
+                // SAFETY: `seg` is the segment being walked in this loop; it came
+                // from the live span list, so it is a real segment address and
+                // never null.
+                self.retire_empty_span(unsafe { NonNull::new_unchecked(seg) }, s, ix);
             }
             seg = s.next;
+        }
+    }
+
+    /// Unhook an empty span from its class and hand its pages back.
+    ///
+    /// Three steps that have to happen together and in this order: drop
+    /// the class's cached pointer to it (a `partial` entry naming a span
+    /// that has been reset would hand out slots from a span with no
+    /// class), decrement the class's span count, and only then reset the
+    /// metadata.
+    fn retire_empty_span(&mut self, seg: NonNull<Segment>, s: &mut Segment, ix: usize) {
+        let c = s.spans[ix].class as usize;
+        if self.partial[c] == Some((seg, ix as u8)) {
+            self.partial[c] = None;
+        }
+        self.spans_in_class[c] -= 1;
+        s.spans[ix].reset(crate::pagemap::NO_CLASS);
+        // Refused on a system whose page size is not `os::PAGE`: see
+        // `discard_free_pages` for why reporting a return that did not
+        // happen is worse than not returning.
+        if os::page_size_matches() {
+            let base = s.span_base(ix);
+            // SAFETY: nothing is live in this span, and the range is
+            // page-aligned and inside a live mapping.
+            unsafe {
+                os::discard(NonNull::new_unchecked(base), SPAN_BYTES);
+            }
         }
     }
 
@@ -90,6 +107,16 @@ impl Heap {
     /// Contiguous runs go to the OS in one call.
     fn discard_free_pages(s: &mut Segment, ix: usize) {
         use crate::pagemap::{PAGES_PER_SPAN, slots_of_page};
+        // The page rule is arithmetic at `os::PAGE`, and on a system
+        // whose pages are larger those ranges are not page-aligned.
+        // macOS answers 0 to such a `madvise` and reclaims nothing, so
+        // running on would set `discarded`, count the pages in
+        // `returned`, and lower `predicted_resident()` for memory the
+        // kernel still holds — the accounting would read as a success.
+        // Refusing keeps the seven-term identity true about the world.
+        if !os::page_size_matches() {
+            return;
+        }
         let meta = &mut s.spans[ix];
         let slot = class::size_of(meta.class as usize);
         let cap = meta.capacity();
