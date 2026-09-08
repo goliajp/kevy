@@ -90,7 +90,7 @@ impl<C: Commands> Shard<C> {
             // The other two are: an armed recv and an in-flight write each
             // have an outstanding completion that brings the conn back.
             // A closing conn has no such guarantee — it is waiting on
-            // `uring_reap_closing`, whose own two terms can stay false
+            // `uring_reap_closed`, whose own two terms can stay false
             // forever, and whose candidate list it may never have entered.
             // Skipping it made the dump silent on the one shape it was
             // built to name: decided-to-close, never landed.
@@ -130,7 +130,7 @@ impl<C: Commands> Shard<C> {
 
     /// One closing conn's line, reported in the reap's own terms.
     ///
-    /// [`Self::uring_reap_closing`] drops a conn when it is a candidate
+    /// [`Self::uring_reap_closed`] drops a conn when it is a candidate
     /// AND `writes_quiet && drained`. Each of those is printed here
     /// separately, alongside candidate-list membership, because a closing
     /// conn that outlives one dump interval failed exactly one of them and
