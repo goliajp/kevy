@@ -427,6 +427,15 @@ impl<K, V> KevyMap<K, V> {
 
     /// 7/8 of the capacity — the inclusive max for `occupied + deleted`.
     #[inline]
+    /// Slots holding a tombstone: erased, but still probed through.
+    ///
+    /// A test's window onto the growth question — the load check counts
+    /// `occupied + deleted`, so this is half of what decides a grow.
+    #[must_use]
+    pub fn tombstones(&self) -> usize {
+        self.deleted
+    }
+
     pub(crate) fn threshold(&self) -> usize {
         self.cap - (self.cap / 8)
     }

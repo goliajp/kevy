@@ -32,7 +32,16 @@ unsafe extern "C" {
     ) -> *mut c_void;
     fn munmap(addr: *mut c_void, length: usize) -> i32;
     fn madvise(addr: *mut c_void, length: usize, advice: i32) -> i32;
+    fn sysconf(name: i32) -> i64;
 }
+
+/// `_SC_PAGESIZE`. Linux says 30, macOS says 29 — the one constant in
+/// this file that is not shared, which is itself why it is worth asking
+/// the system rather than assuming.
+#[cfg(target_os = "linux")]
+const SC_PAGESIZE: i32 = 30;
+#[cfg(target_os = "macos")]
+const SC_PAGESIZE: i32 = 29;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 const PROT_READ: i32 = 0x1;
@@ -62,7 +71,54 @@ const MADV_DISCARD: i32 = 4;
 const MADV_DISCARD: i32 = 5;
 
 /// The system page size this module assumes for rounding.
+///
+/// It is a constant because the geometry is: `PAGES_PER_SPAN` is
+/// `SPAN_BYTES / PAGE`, and `SpanMeta::discarded` is exactly a `u16` for
+/// the sixteen pages that gives. What is NOT safe is assuming the
+/// system agrees — see [`page_size_matches`].
 pub const PAGE: usize = 4096;
+
+/// Whether the running system's page size is the one the geometry above
+/// was built for.
+///
+/// This is not pedantry. The development machine for this crate reports
+/// 16384 and the bench box reports 4096, and the reclaim path issues
+/// `madvise` on ranges computed at 4096 granularity. On a 16 KiB-page
+/// system those ranges are not page-aligned; macOS answers 0 anyway and
+/// reclaims nothing, and the three callers in `reclaim.rs` discard the
+/// return value — so the allocator marks the pages discarded, counts
+/// them in `returned`, lowers `predicted_resident()`, and the kernel
+/// hands back nothing at all.
+///
+/// A measuring device that fails in the shape of data. The README's
+/// headline "plus returning the pages = 29.3 ns/op" was taken on the
+/// 16384 machine, which means it timed a run of `madvise` calls that
+/// could not do what the line says they did.
+///
+/// Answered once and cached: `sysconf` is a call, and this sits under
+/// the reclaim tick.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub fn page_size_matches() -> bool {
+    use core::sync::atomic::{AtomicU8, Ordering};
+    static ANSWER: AtomicU8 = AtomicU8::new(0); // 0 unknown, 1 yes, 2 no
+    match ANSWER.load(Ordering::Relaxed) {
+        1 => true,
+        2 => false,
+        _ => {
+            // SAFETY: `sysconf` reads no Rust memory and takes an int.
+            let got = unsafe { sysconf(SC_PAGESIZE) };
+            let ok = got > 0 && got as usize == PAGE;
+            ANSWER.store(u8::from(!ok) + 1, Ordering::Relaxed);
+            ok
+        }
+    }
+}
+
+/// Non-Unix has no reclaim path at all, so nothing can be misreported.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub fn page_size_matches() -> bool {
+    false
+}
 
 /// Round `n` up to a multiple of `align`, which must be a power of two.
 #[must_use]

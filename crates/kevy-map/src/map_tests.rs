@@ -589,3 +589,60 @@ fn raw_entry_mut_borrow_lookup_with_bytes_key() {
     assert_eq!(m.get(b"alpha".as_slice()), None);
     assert_eq!(m.get(b"beta".as_slice()), Some(&2));
 }
+
+// ── growth under churn: the table may not ratchet on tombstones ──────
+//
+// The load check counts `occupied + deleted`, so a workload that keeps a
+// constant live set — the ordinary Redis shape of expiry, eviction and
+// DEL — drives the table through grow after grow on tombstones alone,
+// and every grow doubles. The live set never moves; the allocation does,
+// and never comes back.
+
+/// Insert and delete in step, so `len()` never moves, and the capacity
+/// must not either past the first settle.
+///
+/// A table at 7/8 load holds `cap` slots for `7cap/8` live entries, so
+/// the ceiling this asserts is 8/7 of what a full table would need. The
+/// number to beat is not tight — it is the difference between "bounded"
+/// and "doubling forever".
+#[test]
+fn churn_at_a_constant_live_set_does_not_grow_the_table() {
+    let mut m: KevyMap<Vec<u8>, u64> = KevyMap::new();
+    const LIVE: usize = 4096;
+    for i in 0..LIVE {
+        m.insert(format!("k{i}").into_bytes(), i as u64);
+    }
+    let settled = m.capacity();
+    assert!(settled >= LIVE, "sanity: the table holds what was put in it");
+
+    // Ten times the live set, in and out, one for one.
+    for i in LIVE..LIVE * 11 {
+        m.insert(format!("k{i}").into_bytes(), i as u64);
+        m.remove(format!("k{}", i - LIVE).as_bytes());
+        assert_eq!(m.len(), LIVE, "the live set is the invariant of this loop");
+    }
+
+    assert_eq!(
+        m.capacity(),
+        settled,
+        "the live set never moved, so neither should the table: {} slots for {LIVE} \
+         entries after 10x churn, settled at {settled}",
+        m.capacity()
+    );
+}
+
+/// The narrower half of the same question, isolated: one `DEL` must not
+/// leave the table permanently on its slow probe path.
+#[test]
+fn a_single_erase_leaves_no_tombstone_when_the_group_has_room() {
+    let mut m: KevyMap<Vec<u8>, u64> = KevyMap::new();
+    m.insert(b"only".to_vec(), 1);
+    assert_eq!(m.remove(b"only".as_slice()), Some(1));
+    assert_eq!(m.len(), 0);
+    assert_eq!(
+        m.tombstones(),
+        0,
+        "a group with fifteen empty slots has nowhere for a probe to continue to, \
+         so the erased slot is EMPTY and not DELETED"
+    );
+}
