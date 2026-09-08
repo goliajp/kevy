@@ -34,11 +34,31 @@ pub mod count {
 
     /// Read the counter and reset it, so the next read is a fresh
     /// interval rather than a running total nobody differenced.
+    ///
+    /// ```
+    /// # #[cfg(feature = "count-distances")] {
+    /// use kevy_vector::{count, Distance, Hnsw, HnswParams};
+    /// let mut h = Hnsw::new(2, HnswParams::default());
+    /// h.apply(b"a", Some(vec![1.0, 0.0]));
+    /// h.apply(b"b", Some(vec![0.0, 1.0]));
+    /// let _ = count::take();
+    /// let _ = h.knn(&[1.0, 0.0], 1, 16);
+    /// assert!(count::take() > 0, "a search evaluates distances");
+    /// let _ = Distance::Cosine;
+    /// # }
+    /// ```
     pub fn take() -> u64 {
         N.swap(0, Ordering::Relaxed)
     }
 
     /// Read without resetting.
+    ///
+    /// ```
+    /// # #[cfg(feature = "count-distances")] {
+    /// let before = kevy_vector::count::peek();
+    /// assert_eq!(before, kevy_vector::count::peek(), "peek does not consume");
+    /// # }
+    /// ```
     #[must_use]
     pub fn peek() -> u64 {
         N.load(Ordering::Relaxed)

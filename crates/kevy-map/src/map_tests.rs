@@ -646,3 +646,38 @@ fn a_single_erase_leaves_no_tombstone_when_the_group_has_room() {
          so the erased slot is EMPTY and not DELETED"
     );
 }
+
+/// The slow probe path still exists for the case that still needs it.
+///
+/// `erase_mark` writes `EMPTY` where no probe could have walked
+/// through, which is most single erases — and that is the point. But a
+/// dense table erased in the middle of a run leaves real tombstones,
+/// and the probe has to walk past them to the key beyond. Without a
+/// test that reaches it, the path went from three never-executed
+/// regions to fifteen, and deadgate said so.
+#[test]
+fn a_probe_walks_past_tombstones_to_the_key_beyond() {
+    let mut m: KevyMap<Vec<u8>, u64> = KevyMap::new();
+    // Enough to fill several groups so a run of full slots exists.
+    for i in 0..2048u64 {
+        m.insert(format!("k{i}").into_bytes(), i);
+    }
+    // Erase a long contiguous stretch of the key space. Some of these
+    // land inside runs and must become tombstones.
+    for i in 200..1400u64 {
+        m.remove(format!("k{i}").as_bytes());
+    }
+    assert!(m.tombstones() > 0, "a dense erase must leave some tombstone to probe past");
+    // Every survivor is still reachable, which is what a tombstone is for.
+    for i in (0..200u64).chain(1400..2048) {
+        assert_eq!(
+            m.get(format!("k{i}").as_bytes()),
+            Some(&i),
+            "k{i} became unreachable across the erased stretch"
+        );
+    }
+    // And the erased ones are gone, not merely hidden.
+    for i in 200..1400u64 {
+        assert_eq!(m.get(format!("k{i}").as_bytes()), None, "k{i} came back");
+    }
+}
