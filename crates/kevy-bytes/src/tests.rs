@@ -492,3 +492,44 @@ fn partial_eq_unequal_length_across_inline_heap_is_false() {
     assert_ne!(short_inline, long_heap);
     assert_ne!(long_heap, short_inline);
 }
+
+/// `heap_bytes` reports the ALLOCATION, and a buffer with slack is the
+/// case where that differs from the length.
+///
+/// `maxmemory` charges this number, and `from_vec` adopts its argument's
+/// buffer as it stands — so a value grown by `APPEND` arrives carrying
+/// the doubling ladder's slack. Reporting `len` charged 360 bytes for a
+/// 640-byte allocation on the eleventh append to one key.
+#[test]
+fn a_buffer_with_slack_is_charged_for_what_it_holds() {
+    let mut v = Vec::with_capacity(4096);
+    v.extend_from_slice(&[b'x'; 1000]);
+    let s = SmallBytes::from_vec(v);
+    assert_eq!(s.len(), 1000);
+    assert_eq!(s.heap_bytes(), 4096, "charged the length, not the allocation");
+
+    // The exact shape the store's APPEND takes: take, grow, re-wrap.
+    let mut acc = SmallBytes::from_slice(&[b'x'; 40]);
+    let mut ever_exceeded = false;
+    for _ in 0..12 {
+        let mut owned = core::mem::take(&mut acc).into_vec();
+        owned.extend_from_slice(&[b'y'; 40]);
+        let cap = owned.capacity();
+        acc = SmallBytes::from_vec(owned);
+        assert_eq!(acc.heap_bytes(), cap, "the charge left the allocation behind");
+        ever_exceeded |= cap > acc.len();
+    }
+    // The floor: if growth never left slack, the assertion above held
+    // for a reason that has nothing to do with what is being tested.
+    assert!(ever_exceeded, "no append produced slack, so nothing was proven");
+}
+
+/// An exact allocation still charges its length — the case the doc
+/// example shows, kept here so the two cannot drift apart.
+#[test]
+fn an_exact_allocation_charges_its_length() {
+    assert_eq!(SmallBytes::from_slice(&[b'x'; 1000]).heap_bytes(), 1000);
+    assert_eq!(SmallBytes::from_slice(b"user:1").heap_bytes(), 0);
+    assert_eq!(SmallBytes::heap_bytes_for(&[b'x'; 1000]), 1000);
+    assert_eq!(SmallBytes::heap_bytes_for(b"user:1"), 0);
+}

@@ -178,6 +178,48 @@ real duration to `target/suite-<tier>.json` for exactly this; the
 declarations are now corrected from it, at roughly twice measurement, and
 precommit declares 230s for its 134.
 
+### `maxmemory` charged the length of a buffer, not its size
+
+`SmallBytes::heap_bytes` is what the eviction bound is computed from, and
+it returned `len`. `from_vec` adopts its argument's allocation as it
+stands, and `APPEND` grows a value with `extend_from_slice` — so the
+doubling ladder's slack arrives with it and was never charged.
+
+Measured through the store's own append path: on the eighth append to one
+key, 360 bytes reported against a 640-byte allocation. 1.78x. A server
+told to stop at a bound could sit well past it without evicting, and
+nothing outside the crate could see it — `Heap::capacity` is
+`pub(crate)`, so there was no second opinion to compare against.
+
+It now charges the allocation. The test drives the store's exact
+take-grow-rewrap loop and asserts the charge equals the capacity at every
+step, with a floor that fails if no step produced slack — otherwise it
+would be agreement between two numbers that happened to be equal.
+
+`kevy-store` had also copied the inline threshold out as the literal
+`22`, so moving that boundary would have mis-charged every key with
+nothing failing. It now asks `kevy-bytes` via `heap_bytes_for`.
+
+### The key hash decides which file a key lives in, and nothing pinned it
+
+`kevy_hash()` on a key selects its `aof-{i}.aof` and `dump-{i}.rdb`.
+`shards.meta` records the routing *scheme* precisely so that changing it
+triggers a lossless re-shard instead of stranding keys — but the tag is
+`"kevyhash"` for every version of the function. Change a constant and the
+recorded scheme still compares equal, no migration runs, and every key
+resolves to the wrong file.
+
+Nothing would have caught it. The tests here ask whether the output is
+deterministic, differs from a neighbour, and spreads evenly — all of
+which survive any constant change. Perturbing `ANTI_ZERO` by one left all
+24 green. The CRC-16 half of the same crate, probed the same way, killed
+four mutations out of four: it is pinned to a published check value.
+
+So the byte hash and the integer hashes are now pinned to frozen vectors,
+verified red-green against both mutations that can reach them. If it
+fails, the hash moved — put it back, or bump the routing tag in the same
+change so existing data directories migrate instead of misreading.
+
 ### A second connection the reap could tear down under the kernel
 
 The disconnect defect below was fixed by adding the one term
