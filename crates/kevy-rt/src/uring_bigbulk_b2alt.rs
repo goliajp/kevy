@@ -48,6 +48,10 @@ impl<C: Commands> Shard<C> {
         io: &mut KevyMap<u64, UringConn>,
     ) {
         let Some(uc) = io.get_mut(&cid) else { return };
+        // The completion IS the kernel handing the buffer back, on every
+        // path below including error and EOF — so this clears first and
+        // unconditionally rather than once per branch.
+        uc.big_read_inflight = false;
         if res <= 0 {
             // EOF or error mid-body — drop the conn (mirrors
             // `uring_on_recv` semantics; partial-body state is

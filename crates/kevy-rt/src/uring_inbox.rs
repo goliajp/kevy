@@ -129,7 +129,12 @@ fn closing_conn_is_quiet(uc: &UringConn, conn: Option<&crate::conn::Conn>) -> bo
         conn.is_none_or(|c| c.output.is_empty() && c.pending.is_empty() && c.write_pos == 0);
     let writes_quiet = !uc.write_inflight && uc.write_buf.is_empty();
     let recv_quiet = !uc.recv_armed;
-    writes_quiet && recv_quiet && drained
+    // The kernel-direct big-arg read holds a raw pointer into the body
+    // Vec this conn owns. Reaping while it is in flight frees that Vec
+    // under the kernel — a use-after-free the Rust side cannot see and
+    // no test would report as anything but corruption somewhere else.
+    let big_read_quiet = !uc.big_read_inflight;
+    writes_quiet && recv_quiet && big_read_quiet && drained
 }
 
 #[cfg(test)]
@@ -171,6 +176,36 @@ mod tests {
         let mut uc = UringConn::new();
         uc.recv_armed = true;
         assert!(!closing_conn_is_quiet(&uc, None), "reaped with the recv still armed");
+    }
+
+    /// The term added after `recv_armed`, and found the same way: by
+    /// asking what else the kernel could still be holding.
+    ///
+    /// A kernel-direct big-arg read has a raw pointer into the body Vec
+    /// that `pending_big_arg` owns. Reaping frees it, and the kernel
+    /// then writes the client's SET body into freed memory. `CLIENT KILL`
+    /// against a connection stalled mid-body reaches it, and the window
+    /// is as long as the client cares to hold it.
+    ///
+    /// Note which flag does NOT protect this: `big_arg_read_pending`
+    /// means "queue an SQE next pass" and is cleared on submit, so it is
+    /// false for exactly the dangerous window.
+    #[test]
+    fn a_kernel_direct_big_read_in_flight_is_not_quiet() {
+        let mut uc = UringConn::new();
+        uc.big_read_inflight = true;
+        assert!(!closing_conn_is_quiet(&uc, None), "reaped with a read in the kernel");
+    }
+
+    /// And the flag that looks like it should have covered it does not,
+    /// stated as an assertion rather than left to a reader: a conn
+    /// waiting to QUEUE a read owns its body outright and is safe to
+    /// reap. Only a submitted one is not.
+    #[test]
+    fn a_big_read_merely_wanted_is_still_quiet() {
+        let mut uc = UringConn::new();
+        uc.big_arg_read_pending = true;
+        assert!(closing_conn_is_quiet(&uc, None));
     }
 
     #[test]
