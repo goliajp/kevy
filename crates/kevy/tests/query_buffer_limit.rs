@@ -42,10 +42,13 @@ fn a_streaming_giant_frame_is_disconnected_at_the_cap() {
     // thread-local — so a passing run shows a heartbeat line or two.
     // That is the point: a silent dump cannot be told from one that
     // never ran, which is the ambiguity the module's own header records.
-    // 250ms rather than a comfortable second for the same reason: at this
-    // cadence a heartbeat appears in EVERY run of this binary, including
-    // the passing ones, so the absence of one is evidence about the
-    // device rather than about the connection.
+    // 250ms rather than a comfortable second, and the reactor backdates
+    // its first deadline so the opening heartbeat lands on the first tick
+    // instead of 250ms in. Both are for the same reason: a heartbeat has
+    // to appear in EVERY run of this binary, passing ones included, or
+    // the absence of one says nothing. The first attempt got this wrong
+    // — a passing run of 0.4s produced no line at all, which reads
+    // exactly like a dump that was never switched on.
     //
     // SAFETY: same as above — this runs on the test's own thread before the runtime
     // thread that reads the variable is spawned, so no other thread can be touching

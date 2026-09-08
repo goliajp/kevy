@@ -159,6 +159,27 @@ impl<C: Commands> Shard<C> {
     }
 }
 
+/// The dump's first deadline, backdated by one interval so the opening
+/// heartbeat lands on the reactor's FIRST tick rather than one interval
+/// into its life.
+///
+/// The dump's whole value is that its silence is evidence, and silence
+/// is only evidence if a run too short to contain an interval cannot
+/// produce it. A passing CI run of the query-buffer cell lasted 0.4s
+/// against a 250ms cadence and printed nothing at all — indistinguishable
+/// from the dump being off, one commit after a comment claimed a
+/// heartbeat appears in every run.
+///
+/// `checked_sub` may decline this early in a process's life; the first
+/// heartbeat is then one interval late, which is the old behaviour and
+/// not a wrong one. With no interval set there is nothing to backdate
+/// and [`Shard::uring_maybe_dump_stalled`] returns on its first line
+/// anyway.
+pub(crate) fn stall_dump_start(every: Option<std::time::Duration>) -> std::time::Instant {
+    let now = std::time::Instant::now();
+    every.and_then(|iv| now.checked_sub(iv)).unwrap_or(now)
+}
+
 /// Stall-dump cadence from `KEVY_DEBUG_STALL_MS`; `None` (the default)
 /// disables [`Shard::uring_maybe_dump_stalled`] entirely.
 pub(crate) fn stall_dump_interval() -> Option<std::time::Duration> {
