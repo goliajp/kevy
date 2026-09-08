@@ -163,12 +163,11 @@ impl<C: Commands> Shard<C> {
 /// heartbeat lands on the reactor's FIRST tick rather than one interval
 /// into its life.
 ///
-/// The dump's whole value is that its silence is evidence, and silence
-/// is only evidence if a run too short to contain an interval cannot
-/// produce it. A passing CI run of the query-buffer cell lasted 0.4s
-/// against a 250ms cadence and printed nothing at all — indistinguishable
-/// from the dump being off, one commit after a comment claimed a
-/// heartbeat appears in every run.
+/// The reason is not that a passing run should show a heartbeat — it
+/// cannot: the test harness captures a spawned thread's output too, and
+/// prints it only for a failing test. The reason is that the block it
+/// DOES print should open with the dump rather than 250ms into it, so a
+/// failure that lands quickly still carries one.
 ///
 /// `checked_sub` may decline this early in a process's life; the first
 /// heartbeat is then one interval late, which is the old behaviour and
@@ -188,4 +187,47 @@ pub(crate) fn stall_dump_interval() -> Option<std::time::Duration> {
         .and_then(|v| v.parse::<u64>().ok())
         .filter(|ms| *ms > 0)
         .map(std::time::Duration::from_millis)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::stall_dump_start;
+    use std::time::{Duration, Instant};
+
+    /// With the dump off there is no interval to backdate, and the
+    /// returned instant must not sit in the past: a stale deadline would
+    /// make the disabled path do arithmetic against a fabricated time.
+    #[test]
+    fn no_interval_starts_the_clock_at_now() {
+        let before = Instant::now();
+        let started = stall_dump_start(None);
+        let after = Instant::now();
+        assert!(started >= before && started <= after, "not between the two readings");
+    }
+
+    /// The property the reactor depends on: the first tick must already
+    /// be past the deadline, so the opening heartbeat lands immediately
+    /// rather than one interval into the run. A run shorter than one
+    /// interval otherwise prints nothing, and nothing is also what a
+    /// dump that was never switched on prints.
+    ///
+    /// `checked_sub` can decline within one interval of boot, and this
+    /// asserts as if it cannot: Linux's `Instant` is CLOCK_MONOTONIC,
+    /// so declining requires a machine less than 250 ms old, which is
+    /// not a machine that is running tests.
+    #[test]
+    fn an_interval_backdates_the_deadline_by_at_least_that_interval() {
+        let iv = Duration::from_millis(250);
+        let elapsed = Instant::now().duration_since(stall_dump_start(Some(iv)));
+        assert!(elapsed >= iv, "backdated by {elapsed:?}, wanted at least {iv:?}");
+    }
+
+    /// A longer interval backdates further — the amount tracks the
+    /// argument rather than being a fixed nudge.
+    #[test]
+    fn a_longer_interval_backdates_further() {
+        let short = stall_dump_start(Some(Duration::from_millis(100)));
+        let long = stall_dump_start(Some(Duration::from_secs(5)));
+        assert!(long < short, "5s did not backdate further than 100ms");
+    }
 }

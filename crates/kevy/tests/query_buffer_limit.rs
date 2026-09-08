@@ -37,18 +37,22 @@ fn a_streaming_giant_frame_is_disconnected_at_the_cap() {
     // prints each of those terms per closing conn, so a fourth failure
     // arrives with the answer attached instead of needing a repro.
     //
-    // It goes to the process's real stderr rather than the harness
-    // capture — the runtime runs on its own thread and Rust's capture is
-    // thread-local — so a passing run shows a heartbeat line or two.
-    // That is the point: a silent dump cannot be told from one that
-    // never ran, which is the ambiguity the module's own header records.
-    // 250ms rather than a comfortable second, and the reactor backdates
-    // its first deadline so the opening heartbeat lands on the first tick
-    // instead of 250ms in. Both are for the same reason: a heartbeat has
-    // to appear in EVERY run of this binary, passing ones included, or
-    // the absence of one says nothing. The first attempt got this wrong
-    // — a passing run of 0.4s produced no line at all, which reads
-    // exactly like a dump that was never switched on.
+    // Where the output goes was got wrong twice before it was checked.
+    // The runtime runs on a thread this test spawns, and Rust's output
+    // capture is thread-local — from which it does NOT follow that the
+    // dump reaches the real stderr, because a spawned thread inherits
+    // the capture. The harness holds it and prints it only when the test
+    // fails, under `---- <test name> stdout ----`. The archived failure
+    // log shows exactly that: `reactor = io_uring`, the AOF replay line,
+    // and both `query buffer exceeded` lines, all inside that block and
+    // absent from every passing run.
+    //
+    // Which is the arrangement worth having, not a limitation: the dump
+    // appears precisely when there is something to read, and costs a
+    // passing run nothing. 250ms then puts ~120 lines in a 30s failure,
+    // and the reactor backdates the first deadline so the opening
+    // heartbeat is at the top of that block rather than 250ms into it —
+    // a failure that lands quickly still carries one.
     //
     // SAFETY: same as above — this runs on the test's own thread before the runtime
     // thread that reads the variable is spawned, so no other thread can be touching
