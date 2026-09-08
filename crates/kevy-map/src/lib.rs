@@ -17,7 +17,6 @@
 //! Constraints: pure Rust, no `crates.io` deps; `unsafe` is allowed here (scoped
 //! to this crate) so `kevy-store` keeps `forbid(unsafe_code)`.
 
-#![deny(unsafe_op_in_unsafe_fn)]
 #![warn(missing_docs)]
 #![cfg_attr(not(feature = "std"), no_std)]
 

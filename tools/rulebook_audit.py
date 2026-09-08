@@ -121,14 +121,26 @@ def m_stringly():
 
 
 def m_mod_rs_logic():
-    bad = []
+    """An assembly point is a file that assembles — one declaring
+    submodules. A `lib.rs` with none IS the crate's single file, and the
+    rule's reason ("nobody knows where to find that logic") does not
+    apply to it: there is one place, and this is it. Counting those was
+    the first version of this measurement, and it read 38 files where
+    the rule means 32.
+    """
+    bad, fns = [], 0
     for p in PROD:
         if p.name not in ("mod.rs", "lib.rs"):
             continue
         body = re.sub(r"//.*", "", read(p))
-        if re.search(r"^\s*(pub(\([^)]*\))?\s+)?(async\s+)?fn\s+\w+[^;]*\{", body, re.M):
+        submods = re.findall(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+\s*;", body, re.M)
+        bodies = re.findall(
+            r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:const\s+)?(?:async\s+)?(?:unsafe\s+)?fn\s+\w+[^;{]*\{",
+            body, re.M)
+        if submods and bodies:
             bad.append(p)
-    return len(bad), "mod.rs / lib.rs files carrying a function body"
+            fns += len(bodies)
+    return len(bad), f"assembly points carrying logic, {fns} functions between them"
 
 
 def m_blocking_in_async():
@@ -233,10 +245,17 @@ def main() -> int:
             rows.append((rid, scope, "LOCKED", extra))
             locked += 1
         elif verdict == "COUNTED-BELOW":
-            has = sum(1 for p in PROD if "forbid(unsafe_op_in_unsafe_fn)" in read(p)
-                      or "unsafe_op_in_unsafe_fn" in read(p))
-            rows.append((rid, scope, "COUNTED", f"{has} crates declare it; the workspace does not"))
-            counted += 1
+            ws = "unsafe_op_in_unsafe_fn" in (ROOT / "Cargo.toml").read_text()
+            per = sum(1 for p in PROD if "unsafe_op_in_unsafe_fn" in read(p))
+            note = ("declared once at the workspace" if ws
+                    else f"NOT at the workspace; {per} crates declare it alone")
+            if ws and per:
+                note += f"; {per} crates still repeat it"
+            rows.append((rid, scope, "LOCKED" if ws else "COUNTED", note))
+            if rows[-1][2] == "LOCKED":
+                locked += 1
+            else:
+                counted += 1
         else:
             rows.append((rid, scope, "READING", extra))
             reading += 1
