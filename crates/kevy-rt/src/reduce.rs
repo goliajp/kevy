@@ -402,7 +402,7 @@ pub(crate) fn set_diff(sets: &[Vec<Vec<u8>>]) -> Vec<Vec<u8>> {
 /// Emit the contiguous prefix of completed slots in seq order.
 pub(crate) fn drain_front(conn: &mut Conn) {
     while matches!(conn.pending.front(), Some(s) if s.done.is_some()) {
-        let slot = conn.pending.pop_front().unwrap();
+        let slot = conn.pending.pop_front().expect("the front() matched Some in the loop guard");
         if let Some(bytes) = slot.done {
             conn.output.extend_from_slice(bytes.as_slice());
         }

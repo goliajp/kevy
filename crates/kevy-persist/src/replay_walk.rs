@@ -97,8 +97,8 @@ pub(crate) fn walk_v2(
             Ok(_) => {}
             Err(e) => return Err(e),
         }
-        let len = u32::from_le_bytes(header[..4].try_into().unwrap());
-        let crc = u32::from_le_bytes(header[4..].try_into().unwrap());
+        let len = u32::from_le_bytes(header[..4].try_into().expect("header is a fixed-size array"));
+        let crc = u32::from_le_bytes(header[4..].try_into().expect("header is a fixed-size array"));
         if len == 0 || len > crate::record::MAX_RECORD {
             w.preview_len = preview_of(&header, &mut w.preview);
             break ReplayStop::CorruptFrame(String::from("record length out of range"));

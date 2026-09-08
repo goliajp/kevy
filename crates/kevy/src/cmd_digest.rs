@@ -105,8 +105,10 @@ pub(crate) fn extension_reduce(chunks: Vec<Vec<u8>>) -> Vec<u8> {
             kevy_resp::encode_error(&mut out, "ERR bad PREFIX.DIGEST arguments");
             return out;
         }
-        count += u64::from_le_bytes(c[1..9].try_into().expect("the c.len() < 17 guard returned above"));
-        xor ^= u64::from_le_bytes(c[9..17].try_into().expect("the c.len() < 17 guard returned above"));
+        count +=
+            u64::from_le_bytes(c[1..9].try_into().expect("the c.len() < 17 guard returned above"));
+        xor ^=
+            u64::from_le_bytes(c[9..17].try_into().expect("the c.len() < 17 guard returned above"));
     }
     kevy_resp::encode_array_len(&mut out, 2);
     kevy_resp::encode_integer(&mut out, count as i64);

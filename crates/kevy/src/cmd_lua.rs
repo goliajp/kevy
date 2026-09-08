@@ -250,7 +250,7 @@ fn cmd_eval<A: ArgvView + ?Sized>(
     // subsequent EVALSHA from any shard finds it (matches Redis's
     // auto-cache-on-EVAL semantics).
     let sha = kevy_lua::sha1::sha1(script);
-    ctx.state.catalogs.scripts.lock().unwrap().insert(sha, script.to_vec());
+    scripts(ctx).insert(sha, script.to_vec());
     let reply = with_host(ctx, |h| {
         if read_only {
             h.eval_ro(store, script, &keys, &argv)
@@ -267,6 +267,29 @@ fn cmd_eval<A: ArgvView + ?Sized>(
 // ─────────────────────────────────────────────────────────────────────
 // EVALSHA / EVALSHA_RO
 // ─────────────────────────────────────────────────────────────────────
+
+/// The script cache, which every shard shares.
+///
+/// A poisoned lock is taken rather than refused. Poisoning only records
+/// that some thread panicked while holding this mutex; what it guards is
+/// a map of sha to source, whose `insert` / `get` / `clear` cannot leave
+/// it half-written. Refusing here would turn an unrelated panic into a
+/// dead EVALSHA for the life of the process.
+fn scripts<'a>(
+    ctx: &'a Ctx<'_>,
+) -> std::sync::MutexGuard<'a, std::collections::HashMap<[u8; 20], Vec<u8>>> {
+    ctx.state.catalogs.scripts.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// The source behind a sha, from the cache any shard's `SCRIPT LOAD` or
+/// `EVAL` filled.
+///
+/// Deliberately not `LuaHost::evalsha`: that one reads a per-Bridge cache
+/// which only ever saw the local shard's history, so a script loaded on
+/// one shard would be NOSCRIPT on the next.
+fn script_source(ctx: &Ctx<'_>, sha: &[u8; 20]) -> Option<Vec<u8>> {
+    scripts(ctx).get(sha).cloned()
+}
 
 fn cmd_evalsha<A: ArgvView + ?Sized>(
     ctx: &Ctx<'_>,
@@ -290,16 +313,9 @@ fn cmd_evalsha<A: ArgvView + ?Sized>(
     let Some((keys, argv)) = parse_eval_keys_argv(ctx, args, out) else {
         return;
     };
-    // Lookup the script source from the shared cache (any
-    // shard's SCRIPT LOAD / EVAL filled it). Bypass
-    // `LuaHost::evalsha` whose per-Bridge cache only sees the local
-    // shard's history.
-    let source = match ctx.state.catalogs.scripts.lock().unwrap().get(&sha).cloned() {
-        Some(s) => s,
-        None => {
-            encode_error(out, "NOSCRIPT No matching script. Please use EVAL.");
-            return;
-        }
+    let Some(source) = script_source(ctx, &sha) else {
+        encode_error(out, "NOSCRIPT No matching script. Please use EVAL.");
+        return;
     };
     let reply = with_host(ctx, |h| {
         if read_only {
@@ -344,7 +360,7 @@ fn script_load<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut Vec<u8>)
     }
     let source = args.get(2).unwrap_or(b"");
     let sha = kevy_lua::sha1::sha1(source);
-    ctx.state.catalogs.scripts.lock().unwrap().insert(sha, source.to_vec());
+    scripts(ctx).insert(sha, source.to_vec());
     let hex = kevy_lua::sha1::hex(&sha);
     out.push(b'$');
     out.extend_from_slice(b"40\r\n");
@@ -357,7 +373,8 @@ fn script_exists<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut Vec<u8
         wrong_args(out, "script|exists");
         return;
     }
-    let cache = ctx.state.catalogs.scripts.lock().unwrap();
+    let cache =
+        ctx.state.catalogs.scripts.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let count = args.len() - 2;
     out.extend_from_slice(format!("*{count}\r\n").as_bytes());
     for i in 2..args.len() {
@@ -382,7 +399,7 @@ fn script_flush<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut Vec<u8>
         wrong_args(out, "script|flush");
         return;
     }
-    ctx.state.catalogs.scripts.lock().unwrap().clear();
+    ctx.state.catalogs.scripts.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
     out.extend_from_slice(b"+OK\r\n");
 }
 

@@ -64,8 +64,10 @@ pub fn verify_image(r: VlogRef, mut image: Vec<u8>) -> io::Result<(Vec<u8>, Vec<
             image.len()
         )));
     }
-    let body_len = u32::from_le_bytes(image[..4].try_into().unwrap());
-    let crc = u32::from_le_bytes(image[4..8].try_into().unwrap());
+    let body_len =
+        u32::from_le_bytes(image[..4].try_into().expect("the disk_len check returned above"));
+    let crc =
+        u32::from_le_bytes(image[4..8].try_into().expect("the disk_len check returned above"));
     if body_len != r.len || body_len > MAX_BODY {
         return Err(bad(format!("vlog: length mismatch (ref {}, disk {body_len})", r.len)));
     }

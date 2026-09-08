@@ -42,6 +42,16 @@ pub(crate) fn pick_value_for_set_owned(bytes: Vec<u8>) -> Value {
     Value::Str(SmallBytes::from_vec(bytes))
 }
 
+/// The new value, taken from the slot the caller filled.
+///
+/// Every insert path reads it exactly once, and the paths that do not
+/// insert never reach these calls — so a slot that is empty here means
+/// two inserts ran for one `SET`, which is a different bug and not one
+/// to paper over with a default.
+fn take_new_value(slot: &mut Option<Value>) -> Value {
+    slot.take().expect("the caller fills the slot and only one path takes it")
+}
+
 impl Store {
     /// `SET` — overwrites any existing value/type. NX/XX guards; clears TTL.
     /// Takes an owned `Vec` so a >22 B value's allocation is adopted as-is
@@ -185,12 +195,12 @@ impl Store {
                 Some(old)
             }
             SetOutcome::ExpiredThenInsert { old } => {
-                let entry = Entry::new(value_slot.take().unwrap(), expire_at);
+                let entry = Entry::new(take_new_value(&mut value_slot), expire_at);
                 self.insert_entry(SmallBytes::from_slice(key), entry);
                 Some(old)
             }
             SetOutcome::NeedInsert => {
-                let entry = Entry::new(value_slot.take().unwrap(), expire_at);
+                let entry = Entry::new(take_new_value(&mut value_slot), expire_at);
                 self.insert_entry(SmallBytes::from_slice(key), entry);
                 None
             }
@@ -246,7 +256,7 @@ impl Store {
                     // amplifier).
                     let (delta, ttl_delta, old) = overwrite_in_place(
                         occ.get_mut(),
-                        value_slot.take().unwrap(),
+                        take_new_value(value_slot),
                         expire_at,
                         key_heap,
                     );

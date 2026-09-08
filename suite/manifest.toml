@@ -468,6 +468,20 @@ requires = []
 proves = "zero clippy findings across every target, in the DEFAULT feature set"
 
 [[check]]
+id = "panic-free"
+area = "hygiene"
+tier = "precommit"
+# --lib --bins, not --all-targets: the rule is scoped to library code, and
+# a test that unwraps is stating a precondition rather than ducking one.
+# Scoping by target is what makes the deny possible at all — the same
+# survey read 2,425 `unwrap` sites with tests compiled and 71 without.
+cmd = "cargo clippy --workspace --lib --bins -- -D clippy::unwrap_used -D clippy::panic"
+expected = 30
+timeout = 900
+requires = []
+proves = "no library code reaches for unwrap or panic without a declared reason"
+
+[[check]]
 id = "expect-reasons"
 area = "hygiene"
 tier = "precommit"

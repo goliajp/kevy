@@ -87,6 +87,7 @@ impl ColdRef {
 }
 
 impl SegRows {
+    #[expect(clippy::panic, reason = "a torn index must not be served as data")]
     fn read(&self, cref: ColdRef, key: &[u8]) -> Value {
         let slot = self.slot(cref.seg_ix());
         let payload = slot
@@ -94,6 +95,10 @@ impl SegRows {
             .get(key)
             .expect("segrows: segment read failed — refused, not healed")
             .unwrap_or_else(|| {
+                // Refuse rather than heal. A stub pointing at a segment that
+                // does not hold its key means the index and the segment
+                // disagree, and every other answer here — an empty value, a
+                // skipped row — hands the caller data that is not theirs.
                 panic!(
                     "segrows: stub for {:?} points at segment '{}' (seq {}) which does not hold it",
                     String::from_utf8_lossy(key),

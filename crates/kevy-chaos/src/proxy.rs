@@ -64,7 +64,10 @@ struct Shared {
 
 impl Shared {
     fn kill_connections(&self) {
-        let mut conns = self.conns.lock().unwrap();
+        let mut conns = self
+            .conns
+            .lock()
+            .expect("the lock is only poisoned by a panic that already failed the process");
         for stream in conns.drain(..) {
             let _ = stream.shutdown(Shutdown::Both);
         }
@@ -192,7 +195,10 @@ fn spawn_forwarders(
         return; // clone failed: both originals drop => connection refused
     };
     {
-        let mut conns = shared.conns.lock().unwrap();
+        let mut conns = shared
+            .conns
+            .lock()
+            .expect("the lock is only poisoned by a panic that already failed the process");
         conns.push(c_reg);
         conns.push(u_reg);
     }

@@ -98,11 +98,15 @@ pub fn next_record(buf: &[u8], pos: usize) -> RecordStep<'_> {
     if rest.len() < RECORD_HEADER {
         return RecordStep::Truncated;
     }
-    let len = u32::from_le_bytes(rest[..4].try_into().unwrap());
+    let len = u32::from_le_bytes(
+        rest[..4].try_into().expect("the rest.len() < RECORD_HEADER return above"),
+    );
     if len == 0 || len > MAX_RECORD {
         return RecordStep::Corrupt;
     }
-    let crc = u32::from_le_bytes(rest[4..8].try_into().unwrap());
+    let crc = u32::from_le_bytes(
+        rest[4..8].try_into().expect("the rest.len() < RECORD_HEADER return above"),
+    );
     let Some(payload) = rest.get(RECORD_HEADER..RECORD_HEADER + len as usize) else {
         return RecordStep::Truncated;
     };

@@ -10,6 +10,11 @@
 //!
 //! Usage: `kevy-pubsub-bench --host H --port P --subs K --msgs M --size S`
 
+// A load generator, not a server. Every unwrap here is on its own setup —
+// its sockets, its own arguments — and a load generator that cannot set
+// itself up has no measurement to report and should stop saying so
+// loudly. Nothing in this binary runs inside kevy.
+#![expect(clippy::unwrap_used, reason = "a bench harness fails its own run, not a user's")]
 #![forbid(unsafe_code)]
 
 use std::io::{Read, Write};

@@ -86,7 +86,8 @@ pub(crate) fn split_body(body: Vec<u8>) -> io::Result<(Vec<u8>, Vec<u8>)> {
     if body.len() < 4 {
         return Err(bad("vlog: body shorter than its key header".into()));
     }
-    let key_len = u32::from_le_bytes(body[..4].try_into().unwrap()) as usize;
+    let key_len =
+        u32::from_le_bytes(body[..4].try_into().expect("the body.len() < 4 return above")) as usize;
     if 4 + key_len > body.len() {
         return Err(bad("vlog: key overruns body".into()));
     }

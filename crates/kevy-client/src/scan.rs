@@ -90,8 +90,8 @@ fn parse_scan_reply(reply: Reply) -> KevyResult<(u64, Vec<Vec<u8>>)> {
     match reply {
         Reply::Array(items) if items.len() == 2 => {
             let mut it = items.into_iter();
-            let cursor_bulk = it.next().unwrap();
-            let keys_arr = it.next().unwrap();
+            let cursor_bulk = it.next().expect("the items.len() check above");
+            let keys_arr = it.next().expect("the items.len() check above");
             let next_cursor = match cursor_bulk {
                 Reply::Bulk(b) => std::str::from_utf8(&b)
                     .map_err(|_| KevyError::Protocol("non-utf8 SCAN cursor".into()))?
