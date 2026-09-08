@@ -25,6 +25,32 @@ fn a_streaming_giant_frame_is_disconnected_at_the_cap() {
     // own thread before the runtime thread that reads the variable is spawned, so no
     // other thread can be touching the environment at this point.
     unsafe { std::env::set_var("KEVY_DEBUG_INPUT_LIMIT", "4096") };
+    // The reactor's own stall dump, switched on for this binary only.
+    //
+    // This cell has failed in CI with the server's decision to close
+    // recorded (`client_query_buffer_limit_disconnections` counted it)
+    // and the close never reaching the client. Reading the source
+    // narrowed that to three possibilities and could not separate them:
+    // the conn never entered `uring_reap_closing`'s candidate list, or
+    // it entered and one of `writes_quiet` / `drained` stayed false, or
+    // both held and the fd was closed without a FIN going out. The dump
+    // prints each of those terms per closing conn, so a fourth failure
+    // arrives with the answer attached instead of needing a repro.
+    //
+    // It goes to the process's real stderr rather than the harness
+    // capture — the runtime runs on its own thread and Rust's capture is
+    // thread-local — so a passing run shows a heartbeat line or two.
+    // That is the point: a silent dump cannot be told from one that
+    // never ran, which is the ambiguity the module's own header records.
+    // 250ms rather than a comfortable second for the same reason: at this
+    // cadence a heartbeat appears in EVERY run of this binary, including
+    // the passing ones, so the absence of one is evidence about the
+    // device rather than about the connection.
+    //
+    // SAFETY: same as above — this runs on the test's own thread before the runtime
+    // thread that reads the variable is spawned, so no other thread can be touching
+    // the environment at this point.
+    unsafe { std::env::set_var("KEVY_DEBUG_STALL_MS", "250") };
     let port = free_port();
     let dir = std::env::temp_dir().join(format!(
         "kevy-qbuf-{}",
