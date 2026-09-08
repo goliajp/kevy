@@ -137,6 +137,23 @@ mod tests {
     use super::closing_conn_is_quiet;
     use crate::uring_conn::UringConn;
 
+    /// A `Conn` for the cases that need one. `Conn::new` reads only
+    /// `peer_addr`, which is allowed to fail, so a listener on an
+    /// ephemeral port is the cheapest socket that will do — nothing
+    /// below touches the socket itself.
+    fn a_conn() -> crate::conn::Conn {
+        crate::conn::Conn::new(kevy_sys::tcp_listen([127, 0, 0, 1], 0, 1).unwrap())
+    }
+
+    fn a_pending_slot() -> crate::message_agg::PendingSlot {
+        crate::message_agg::PendingSlot {
+            remaining: 0,
+            agg: crate::message_agg::Agg::SumInt(0),
+            done: None,
+            proto: kevy_resp::RespVersion::default(),
+        }
+    }
+
     /// A `None` conn is a conn already gone from `self.conns`, which the
     /// reap treats as drained — so these cases isolate the three terms
     /// that live on the `UringConn` side.
@@ -168,5 +185,36 @@ mod tests {
         let mut uc = UringConn::new();
         uc.write_buf.push(b'x');
         assert!(!closing_conn_is_quiet(&uc, None));
+    }
+
+    /// The `Some` side of the same question, and the reason it is not
+    /// covered by the cases above: `drained` is three terms of its own,
+    /// and the reap tears a conn down on all three.
+    #[test]
+    fn a_conn_with_nothing_left_to_send_is_quiet() {
+        assert!(closing_conn_is_quiet(&UringConn::new(), Some(&a_conn())));
+    }
+
+    #[test]
+    fn unsent_output_is_not_quiet() {
+        let mut c = a_conn();
+        c.output.push(b'x');
+        assert!(!closing_conn_is_quiet(&UringConn::new(), Some(&c)));
+    }
+
+    #[test]
+    fn an_unemitted_reply_is_not_quiet() {
+        let mut c = a_conn();
+        c.pending.push_back(a_pending_slot());
+        assert!(!closing_conn_is_quiet(&UringConn::new(), Some(&c)));
+    }
+
+    /// A half-written reply: `output` has been consumed up to
+    /// `write_pos`, so emptiness alone would call this drained.
+    #[test]
+    fn a_partly_written_reply_is_not_quiet() {
+        let mut c = a_conn();
+        c.write_pos = 1;
+        assert!(!closing_conn_is_quiet(&UringConn::new(), Some(&c)));
     }
 }
