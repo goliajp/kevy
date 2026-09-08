@@ -66,7 +66,6 @@
 // The `global` feature needs thread-local storage, which is a `std`
 // facility; the core allocator itself is `core`-only.
 #![cfg_attr(all(not(test), not(feature = "global")), no_std)]
-#![forbid(unsafe_op_in_unsafe_fn)]
 #![warn(missing_docs)]
 
 pub mod class;

@@ -118,6 +118,13 @@ homepage = "https://github.com/goliajp/kevy"
 # opt in via `[lints] workspace = true`.
 [workspace.lints.rust]
 warnings = "deny"
+# `unsafe fn` does not make its body an unsafe block. Rust 2024 warns by
+# default and `warnings = "deny"` already turns that into an error, so
+# this costs nothing today — it is here so the rule survives an edition
+# whose default changes, and so it is stated rather than inherited.
+# Four crates were declaring it individually; this is the workspace
+# saying it once.
+unsafe_op_in_unsafe_fn = "deny"
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }

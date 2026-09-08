@@ -65,7 +65,6 @@
 // would add per-op cost. Each such block documents its invariant; the
 // epoll/kqueue path and every other module stay safe, and all libc lives in
 // kevy-sys.
-#![deny(unsafe_op_in_unsafe_fn)]
 
 //! Every public item here is documented, and the lint keeps it that
 //! way: kevy-rt is the reactor, and `warnings = "deny"` turns a new
