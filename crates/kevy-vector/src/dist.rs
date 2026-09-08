@@ -97,6 +97,8 @@ impl Distance {
     /// Distance between two prepared vectors (see [`prepare`]).
     #[inline]
     pub(crate) fn eval(self, a: &[f32], b: &[f32]) -> f32 {
+        #[cfg(feature = "count-distances")]
+        crate::count::bump();
         match self {
             // prepared cosine vectors are unit length → 1 - dot
             Distance::Cosine => 1.0 - dot(a, b),

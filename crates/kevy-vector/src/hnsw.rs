@@ -344,9 +344,23 @@ impl Hnsw {
                 cur = next;
             }
         }
-        // Recall grows with beam width (measured on a dense 20k
-        // cluster @128d: ef 64 → 0.67 recall@10, 100 → 0.77); the
-        // default floor suits easy corpora, hard ones pass EF.
+        // Recall grows with beam width — but `ef` is a knob, not a cost,
+        // and this note sat here unchased because nothing could plot
+        // recall against what a search actually spends.
+        // `examples/recall_vs_cost` now can, and the shape it shows is
+        // the finding:
+        //
+        //     20k x 128d, M=16, efC=200, recall@10
+        //     corpus              ef=100            ef=400
+        //     uniform random      0.813 @ 2647d     0.978 @ 7159d
+        //     20 tight clusters   0.769 @ 1062d     0.851 @ 1378d
+        //
+        // On clustered data a 4x beam buys 1.3x the distance
+        // computations. The search is not evaluating more and missing —
+        // it cannot reach further, which is what a graph that fills its
+        // degree with intra-cluster neighbours looks like from outside.
+        // `select_diverse`'s unconditional backfill is the candidate;
+        // that is now a measurable question rather than a guess.
         let ef = if ef == 0 { (k * 4).max(100) } else { ef.max(k) };
         let found = self.search_layer_vec(cur, &q, 0, ef);
         self.expand_living(found, k)

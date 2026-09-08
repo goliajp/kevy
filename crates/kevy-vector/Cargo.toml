@@ -17,3 +17,15 @@ categories = ["data-structures", "database-implementations"]
 workspace = true
 
 [dependencies]
+
+[features]
+# The distance counter in `count`. Off by default: it sits inside
+# `Distance::eval`, and a release build must not carry it.
+count-distances = []
+
+# The counter lives inside `Distance::eval`; without it this example
+# would build and print numbers that mean nothing. `required-features`
+# makes cargo refuse instead.
+[[example]]
+name = "recall_vs_cost"
+required-features = ["count-distances"]

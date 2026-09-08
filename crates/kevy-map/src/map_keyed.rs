@@ -320,13 +320,59 @@ impl<K, V> KevyMap<K, V> {
         Q: KevyHash + Eq + ?Sized,
     {
         let idx = self.find_by_borrow(key)?;
-        self.set_meta(idx, DELETED);
+        let mark = self.erase_mark(idx);
+        self.set_meta(idx, mark);
         self.occupied -= 1;
-        self.deleted += 1;
+        if mark == DELETED {
+            self.deleted += 1;
+        }
         // SAFETY: slot was full, we just marked it DELETED so it won't be
         // read again; ptr::read moves the (K, V) out.
         let (_k, v) = unsafe { ptr::read(self.slots_ptr.as_ptr().add(idx) as *const (K, V)) };
         Some(v)
+    }
+
+    /// `EMPTY` or `DELETED` for a slot being erased.
+    ///
+    /// A tombstone exists to keep a probe going past a hole. When no
+    /// probe could have walked through this position, the hole stops
+    /// nothing and `EMPTY` is the honest mark — which frees the slot for
+    /// reuse and keeps it out of the load count.
+    ///
+    /// Writing `DELETED` unconditionally cost two things. `deleted` only
+    /// returns to zero at a grow, and both the insert probe and
+    /// `raw_entry` branch on `self.deleted == 0` — so ONE `DEL` put the
+    /// table on its slower probe for the rest of the table's life, an
+    /// extra SIMD compare and branch per group forever. And tombstones
+    /// count toward the load threshold, so they drive doubling: the
+    /// steady state under constant-live churn measured 3,048 tombstones
+    /// against a 3,072 headroom, 24 slots from a doubling that the live
+    /// set never asked for.
+    fn erase_mark(&self, idx: usize) -> u8 {
+        // hashbrown's rule, and the reason it is not "does this slot's
+        // group hold an EMPTY": probes here start at `hash & mask` and
+        // are NOT group-aligned, so the sequence that placed a later key
+        // may have entered from any of the `GROUP_WIDTH - 1` positions
+        // before this one. What decides it is whether a run of at least
+        // `GROUP_WIDTH` non-empty slots spans this position — if one
+        // does, some probe could have walked through, and the hole has
+        // to stay a tombstone.
+        //
+        // A simpler condition was tried and it lost a key:
+        // `clone_after_heavy_deletion_keeps_probes_correct` found it
+        // immediately, which is what that test is for.
+        let before = idx.wrapping_sub(GROUP_WIDTH) & self.mask;
+        // SAFETY: both indices are < cap and the metadata array is
+        // `cap + GROUP_WIDTH` bytes, so either group load is in bounds.
+        let (gb, ga) = unsafe {
+            (
+                Group::load(self.metadata_ptr.as_ptr().add(before)),
+                Group::load(self.metadata_ptr.as_ptr().add(idx)),
+            )
+        };
+        let empty_before = gb.match_byte(EMPTY).slot_mask().leading_zeros() as usize;
+        let empty_after = ga.match_byte(EMPTY).slot_mask().trailing_zeros() as usize;
+        if empty_before + empty_after >= GROUP_WIDTH { DELETED } else { EMPTY }
     }
 
     pub(crate) fn find_by_borrow<Q>(&self, key: &Q) -> Option<usize>
