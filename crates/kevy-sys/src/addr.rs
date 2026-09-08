@@ -97,7 +97,22 @@ impl SockaddrIn {
 
 // ---- sockaddr_un (AF_UNIX) -------------------------------------------------
 
-/// Unix-domain `sockaddr_un`. sun_path is 108 bytes on Linux + macOS BSD.
+/// The platform's `sun_path` capacity. Linux's `<sys/un.h>` gives 108;
+/// every BSD, macOS included, gives 104. This was declared as 108 for
+/// both, under a comment asserting that was correct for macOS — so the
+/// struct was four bytes too long there, `sun_len` was set to a size the
+/// kernel does not use, and [`SockaddrUn::new`] accepted paths four
+/// bytes longer than the platform can hold.
+///
+/// It was benign: xnu bounds by `sun_len` into a larger buffer, so an
+/// oversized struct still binds. What it was not is *true*, and this
+/// crate's header claims these bindings match the platform ABI.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub(crate) const SUN_PATH_CAP: usize = 108;
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+pub(crate) const SUN_PATH_CAP: usize = 104;
+
+/// Unix-domain `sockaddr_un`.
 // struct_field_names: the `sun_` prefix mirrors the C ABI struct verbatim —
 // dropping it would obscure the 1:1 layout correspondence.
 #[allow(clippy::struct_field_names)]
@@ -109,18 +124,18 @@ pub(crate) struct SockaddrUn {
     pub(crate) sun_len: u8,
     #[cfg(not(any(target_os = "linux", target_os = "android")))]
     pub(crate) sun_family: u8,
-    pub(crate) sun_path: [u8; 108],
+    pub(crate) sun_path: [u8; SUN_PATH_CAP],
 }
 
 impl SockaddrUn {
     pub(crate) fn new(path: &[u8]) -> io::Result<(Self, u32)> {
-        if path.is_empty() || path.len() >= 108 {
+        if path.is_empty() || path.len() >= SUN_PATH_CAP {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "unix socket path must be 1..=107 bytes",
+                format!("unix socket path must be 1..={} bytes", SUN_PATH_CAP - 1),
             ));
         }
-        let mut sun_path = [0u8; 108];
+        let mut sun_path = [0u8; SUN_PATH_CAP];
         sun_path[..path.len()].copy_from_slice(path);
         // The actual length passed to bind() is offset_of(sun_path) + strlen(path) + 1
         // (for the NUL); using full struct size also works on Linux + BSD.
@@ -136,3 +151,30 @@ impl SockaddrUn {
         Ok((sa, size_of::<SockaddrUn>() as u32))
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// ABI assertions.
+//
+// These structs are handed to the kernel. A field added, a type widened
+// or an alignment changed does not fail a test — it produces a syscall
+// reading the wrong memory, on whichever platform nobody happened to
+// develop on. There were none of these, and `sun_path` was already
+// wrong: declared 108 bytes on a platform whose own header says 104,
+// under a comment asserting otherwise.
+//
+// A wrong layout is a build failure now. Verified red-green: moving
+// SUN_PATH_CAP by one byte fails the build with the message below.
+// ─────────────────────────────────────────────────────────────────────
+
+const _: () = assert!(size_of::<SockaddrIn>() == 16, "sockaddr_in is 16 bytes everywhere");
+const _: () = assert!(align_of::<SockaddrIn>() == 4);
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const _: () = assert!(size_of::<SockaddrUn>() == 110, "2-byte family + 108 path");
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+const _: () = assert!(size_of::<SockaddrUn>() == 106, "1-byte len + 1-byte family + 104 path");
+
+// The path must fit inside what the struct declares, or `new` writes
+// past it. Stated rather than left to follow from the definition, so an
+// edit to either one has to keep them agreeing.
+const _: () = assert!(SUN_PATH_CAP < size_of::<SockaddrUn>());
