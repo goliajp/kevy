@@ -237,9 +237,13 @@ pub(crate) fn apply_delta(v: &mut u64, delta: i64) {
     }
 }
 
-/// Heap bytes a `SmallBytes`-encoded key would own (`&[u8]` mirror of
-/// `SmallBytes::heap_bytes`; 22-byte inline boundary per `kevy-bytes`).
+/// Heap bytes a `SmallBytes`-encoded key would own.
+///
+/// Delegates rather than mirroring. It used to be `if key.len() <= 22`,
+/// with the boundary copied out of `kevy-bytes` as a literal — so moving
+/// the inline threshold there would have mis-charged every key here with
+/// nothing failing to say so.
 #[inline]
 pub(crate) fn key_heap_bytes_for(key: &[u8]) -> u64 {
-    if key.len() <= 22 { 0 } else { key.len() as u64 }
+    kevy_bytes::SmallBytes::heap_bytes_for(key) as u64
 }

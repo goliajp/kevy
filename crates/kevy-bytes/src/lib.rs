@@ -265,6 +265,14 @@ impl SmallBytes {
     /// callers (e.g. `maxmemory` enforcement) charge only the off-stack footprint
     /// without re-deriving the inline-length threshold.
     ///
+    /// This is the **allocation**, not the live length, and those differ:
+    /// [`Self::from_vec`] adopts its argument's buffer as it stands, so a
+    /// `Vec` grown by `extend_from_slice` arrives with the doubling
+    /// ladder's slack still on it. Reporting `len` charged 360 bytes for
+    /// a 640-byte allocation on the eleventh `APPEND` to one key — and
+    /// `maxmemory` is what this number feeds, so the server could sit at
+    /// 1.8x its bound without evicting.
+    ///
     /// # Examples
     ///
     /// This is what `maxmemory` charges, so an inline value must cost zero
@@ -273,11 +281,45 @@ impl SmallBytes {
     /// ```
     /// use kevy_bytes::SmallBytes;
     /// assert_eq!(SmallBytes::from_slice(b"user:1").heap_bytes(), 0);
+    /// // `from_slice` allocates exactly, so here the two agree.
     /// assert_eq!(SmallBytes::from_slice(&[b'x'; 1000]).heap_bytes(), 1000);
+    ///
+    /// // A buffer with slack does not, and the slack is real memory.
+    /// let mut v = Vec::with_capacity(4096);
+    /// v.extend_from_slice(&[b'x'; 1000]);
+    /// assert_eq!(SmallBytes::from_vec(v).heap_bytes(), 4096);
     /// ```
     #[inline]
     pub fn heap_bytes(&self) -> usize {
-        if self.is_inline() { 0 } else { self.len() }
+        if self.is_inline() {
+            0
+        } else {
+            // SAFETY: `is_inline()` was false, so byte 23 is 0xFF, which
+            // only the heap representation writes — the union holds a
+            // `Heap` and reading it through that view is the valid one.
+            unsafe { self.heap.capacity() }
+        }
+    }
+
+    /// Heap bytes a `SmallBytes` built from `bytes` would own.
+    ///
+    /// The same rule as [`Self::heap_bytes`], answerable without building
+    /// the value — for accounting a key by its slice before it is stored.
+    /// Exists so the inline threshold is not copied out of this crate:
+    /// it was, as the literal `22`, and any change to the boundary would
+    /// have silently mis-charged every key with nothing failing.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use kevy_bytes::SmallBytes;
+    /// assert_eq!(SmallBytes::heap_bytes_for(b"user:1"), 0);
+    /// assert_eq!(SmallBytes::heap_bytes_for(&[b'x'; 1000]), 1000);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn heap_bytes_for(bytes: &[u8]) -> usize {
+        if bytes.len() <= INLINE_LEN_MAX as usize { 0 } else { bytes.len() }
     }
 
     /// Borrow the bytes (no allocation; same for inline and heap variants).
