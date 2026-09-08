@@ -113,7 +113,9 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
         let new_cap = if self.cap == 0 {
             MIN_CAP
         } else {
-            self.cap.checked_mul(2).expect("kevy-map: capacity doubling overflow")
+            self.cap
+                .checked_mul(2)
+                .expect("a capacity that overflows usize could not have been allocated")
         };
         let mut new_table = Self::alloc_table(new_cap);
         // Move every live entry over. After ptr::read'ing a slot we mark its

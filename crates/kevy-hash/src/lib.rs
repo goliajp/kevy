@@ -126,11 +126,13 @@ fn hash_bytes_pipelined(bytes: &[u8]) -> u64 {
     if len <= 16 {
         if len >= 8 {
             // Read first 8 and last 8 (may overlap when 8 ≤ len ≤ 15).
-            s0 ^= u64::from_le_bytes(bytes[0..8].try_into().unwrap());
-            s1 ^= u64::from_le_bytes(bytes[len - 8..].try_into().unwrap());
+            s0 ^= u64::from_le_bytes(bytes[0..8].try_into().expect("the len >= 8 arm"));
+            s1 ^= u64::from_le_bytes(bytes[len - 8..].try_into().expect("the len >= 8 arm"));
         } else if len >= 4 {
-            s0 ^= u64::from(u32::from_le_bytes(bytes[0..4].try_into().unwrap()));
-            s1 ^= u64::from(u32::from_le_bytes(bytes[len - 4..].try_into().unwrap()));
+            s0 ^= u64::from(u32::from_le_bytes(bytes[0..4].try_into().expect("the len >= 4 arm")));
+            s1 ^= u64::from(u32::from_le_bytes(
+                bytes[len - 4..].try_into().expect("the len >= 4 arm"),
+            ));
         } else if len > 0 {
             // 1-3 byte tail: form a 3-byte key (lo, mid, hi) that
             // distinguishes "ab" from "ba" etc.
@@ -147,8 +149,8 @@ fn hash_bytes_pipelined(bytes: &[u8]) -> u64 {
         // rustc-hash 2.x does; it makes the suffix path uniform).
         let mut bulk = &bytes[..len - 1];
         while let Some((chunk, rest)) = bulk.split_first_chunk::<16>() {
-            let x = u64::from_le_bytes(chunk[..8].try_into().unwrap());
-            let y = u64::from_le_bytes(chunk[8..].try_into().unwrap());
+            let x = u64::from_le_bytes(chunk[..8].try_into().expect("chunk is [u8; 16]"));
+            let y = u64::from_le_bytes(chunk[8..].try_into().expect("chunk is [u8; 16]"));
             let t = multiply_mix(s0 ^ x, ANTI_ZERO ^ y);
             s0 = s1;
             s1 = t;
@@ -156,8 +158,8 @@ fn hash_bytes_pipelined(bytes: &[u8]) -> u64 {
         }
         // Suffix 16 bytes (may overlap with last bulk iter).
         let suffix = &bytes[len - 16..];
-        s0 ^= u64::from_le_bytes(suffix[0..8].try_into().unwrap());
-        s1 ^= u64::from_le_bytes(suffix[8..16].try_into().unwrap());
+        s0 ^= u64::from_le_bytes(suffix[0..8].try_into().expect("suffix is the last 16 bytes"));
+        s1 ^= u64::from_le_bytes(suffix[8..16].try_into().expect("suffix is the last 16 bytes"));
     }
 
     let folded = multiply_mix(s0, s1) ^ (len as u64);
@@ -226,12 +228,13 @@ impl Hasher for FxHasher {
     fn write(&mut self, mut bytes: &[u8]) {
         let mut state = self.0;
         while bytes.len() >= 8 {
-            let word = u64::from_le_bytes(bytes[..8].try_into().unwrap());
+            let word = u64::from_le_bytes(bytes[..8].try_into().expect("the len >= 8 loop guard"));
             state = mix(state, word);
             bytes = &bytes[8..];
         }
         if bytes.len() >= 4 {
-            let word = u64::from(u32::from_le_bytes(bytes[..4].try_into().unwrap()));
+            let word =
+                u64::from(u32::from_le_bytes(bytes[..4].try_into().expect("the len >= 4 guard")));
             state = mix(state, word);
             bytes = &bytes[4..];
         }

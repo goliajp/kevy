@@ -102,7 +102,10 @@ impl Outbound {
                 // fullest one now and reuse its slot. Nothing is lost,
                 // one group just amortises less this once.
                 None => {
-                    let g = groups.iter_mut().max_by_key(|g| g.count).unwrap();
+                    let g = groups
+                        .iter_mut()
+                        .max_by_key(|g| g.count)
+                        .expect("groups is [Group; GROUPS]");
                     g.ship();
                     g
                 }

@@ -468,6 +468,16 @@ requires = []
 proves = "zero clippy findings across every target, in the DEFAULT feature set"
 
 [[check]]
+id = "expect-reasons"
+area = "hygiene"
+tier = "precommit"
+cmd = "python3 tools/check_expect_reasons.py"
+expected = 2
+timeout = 120
+requires = []
+proves = "no expect() in library code answers with a measurement or a conclusion"
+
+[[check]]
 id = "feature-lints"
 area = "hygiene"
 tier = "prerelease"

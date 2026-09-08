@@ -368,7 +368,7 @@ impl Drop for SmallBytes {
         // own alloc_heap which used the same layout).
         unsafe {
             let cap = self.heap.capacity();
-            let layout = Layout::array::<u8>(cap).expect("kevy-bytes: drop layout");
+            let layout = Layout::array::<u8>(cap).expect("the same layout succeeded at alloc time");
             dealloc(self.heap.ptr.as_ptr(), layout);
         }
     }

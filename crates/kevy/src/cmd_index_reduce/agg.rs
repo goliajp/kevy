@@ -237,13 +237,17 @@ fn decode_agg_chunk(c: &[u8]) -> Vec<(Vec<u8>, kevy_index::GroupStats)> {
     for _ in 0..n {
         let Some(g) = read_kbytes(c, &mut pos) else { break };
         let Some(cb) = c.get(pos..pos + 8) else { break };
-        let count = u64::from_le_bytes(cb.try_into().expect("8"));
+        let count =
+            u64::from_le_bytes(cb.try_into().expect("the get(pos..pos + 8) above returned Some"));
         pos += 8;
         let Some(sb) = c.get(pos..pos + 8) else { break };
-        let sum = f64::from_le_bytes(sb.try_into().expect("8"));
+        let sum =
+            f64::from_le_bytes(sb.try_into().expect("the get(pos..pos + 8) above returned Some"));
         pos += 8;
         let Some(ml) = c.get(pos..pos + 4) else { break };
-        let ml = u32::from_le_bytes(ml.try_into().expect("4")) as usize;
+        let ml =
+            u32::from_le_bytes(ml.try_into().expect("the get(pos..pos + 4) above returned Some"))
+                as usize;
         pos += 4;
         let Some(mm) = c.get(pos..pos + ml) else { break };
         pos += ml;

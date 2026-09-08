@@ -185,7 +185,7 @@ pub(crate) fn find_crlf_swar(buf: &[u8], start: usize) -> Option<usize> {
         return None;
     }
     while i + 8 < n {
-        let word = u64::from_le_bytes(buf[i..i + 8].try_into().expect("8 bytes"));
+        let word = u64::from_le_bytes(buf[i..i + 8].try_into().expect("the i + 8 < n loop guard"));
         let x = word ^ CR_BCAST;
         let zeroed = x.wrapping_sub(ONES) & !x & HIGH;
         if zeroed != 0 {

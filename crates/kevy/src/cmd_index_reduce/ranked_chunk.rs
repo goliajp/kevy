@@ -17,7 +17,8 @@ pub(super) fn collect_hits(
     for _ in 0..n {
         let Some(key) = read_kbytes(c, &mut pos) else { break };
         let Some(sb) = c.get(pos..pos + 8) else { break };
-        let v = f64::from_le_bytes(sb.try_into().expect("8 bytes"));
+        let v =
+            f64::from_le_bytes(sb.try_into().expect("the get(pos..pos + 8) above returned Some"));
         pos += 8;
         let Some(fv) = read_hydration(c, &mut pos) else { break };
         let hl = if highlight {
@@ -63,7 +64,9 @@ pub(super) fn collect_facets(c: &[u8], mut pos: usize, n_fields: usize, out: &mu
             let Some(key) = read_kbytes(c, &mut pos) else { return };
             let Some(label) = read_kbytes(c, &mut pos) else { return };
             let Some(cb) = c.get(pos..pos + 8) else { return };
-            let count = u64::from_le_bytes(cb.try_into().expect("8 bytes"));
+            let count = u64::from_le_bytes(
+                cb.try_into().expect("the get(pos..pos + 8) above returned Some"),
+            );
             pos += 8;
             match field.iter_mut().find(|(k, _, _)| *k == key) {
                 Some(e) => e.2 += count,
