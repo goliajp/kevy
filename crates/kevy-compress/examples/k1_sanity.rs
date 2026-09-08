@@ -1,4 +1,16 @@
-// K1 sanity: decode throughput on a 4 KiB structured value, this box.
+//! K1 sanity: the round trip works and a 4 KiB value shrinks. **Not a
+//! throughput measurement**, though it prints one.
+//!
+//! The dictionary here is trained on the very value that is then
+//! compressed, so the 4 KiB input becomes a ~100-byte frame — a 41x
+//! ratio — and what the loop below times is one long match copied out of
+//! the dictionary. No stored value is ever its own training sample, so
+//! the GB/s figure describes nothing a read does. It was once quoted as
+//! evidence that decode ran "an order of magnitude above" the crate's
+//! 1 GB/s floor.
+//!
+//! For the budget, use `examples/decode_budget`, which holds values out
+//! of the dictionary's training set.
 fn main() {
     let mut text = Vec::new();
     for i in 0..80 {
