@@ -204,8 +204,7 @@ mod tests {
     use super::{Dict, decode_with, encode_high_with, encode_with};
 
     fn dict_bytes() -> Vec<u8> {
-        let vals: Vec<&[u8]> =
-            vec![b"level=info svc=api dur=12", b"level=warn svc=api dur=48"];
+        let vals: Vec<&[u8]> = vec![b"level=info svc=api dur=12", b"level=warn svc=api dur=48"];
         crate::train(&vals, crate::MAX_OFFSET)
     }
 

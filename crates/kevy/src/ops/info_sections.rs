@@ -76,6 +76,41 @@ pub(super) fn info_tiering(totals: &crate::state::Totals, b: &mut String) {
     b.push_str("\r\n");
 }
 
+/// `# Allocator`: the accounting identity, summed across the shard
+/// heaps that reported. Emitted only when at least one did — with the
+/// system allocator there is nothing to say, and an all-zero section
+/// would say something false.
+///
+/// Nine terms, disjoint by construction: every mapped byte is in
+/// exactly one of them. `alloc_accounted` is printed beside
+/// `alloc_mapped` rather than as a difference, because the two agreeing
+/// is the check — a reader compares them instead of trusting a residual
+/// somebody else computed.
+///
+/// This is the instrument the resident-ratio work needed and did not
+/// have: the one workload where this allocator loses to glibc could be
+/// measured, but not attributed to a term.
+pub(super) fn info_allocator(totals: &crate::state::Totals, b: &mut String) {
+    let a = &totals.alloc;
+    b.push_str("# Allocator\r\n");
+    b.push_str("allocator_impl:kevy-alloc\r\n");
+    // The denominator: these are sums over this many independent heaps.
+    b.push_str(&format!("alloc_shards_reporting:{}\r\n", totals.alloc_shards));
+    b.push_str(&format!("alloc_mapped:{}\r\n", a.mapped));
+    b.push_str(&format!("alloc_accounted:{}\r\n", a.accounted()));
+    b.push_str(&format!("alloc_live:{}\r\n", a.live));
+    b.push_str(&format!("alloc_rounding:{}\r\n", a.rounding));
+    b.push_str(&format!("alloc_cache:{}\r\n", a.cache));
+    b.push_str(&format!("alloc_span_free:{}\r\n", a.span_free));
+    b.push_str(&format!("alloc_returned:{}\r\n", a.returned));
+    b.push_str(&format!("alloc_virgin:{}\r\n", a.virgin));
+    b.push_str(&format!("alloc_hysteresis:{}\r\n", a.hysteresis));
+    b.push_str(&format!("alloc_segment_overhead:{}\r\n", a.segment_overhead));
+    b.push_str(&format!("alloc_large_count:{}\r\n", a.large_count));
+    b.push_str(&format!("alloc_spans_assigned:{}\r\n", a.spans_assigned));
+    b.push_str("\r\n");
+}
+
 pub(super) fn info_persistence(ctx: &Ctx<'_>, cfg: &Config, b: &mut String) {
     // The answering shard's background-persistence view, refreshed by
     // the reactor tick via `Commands::on_persist_stats` into the shard

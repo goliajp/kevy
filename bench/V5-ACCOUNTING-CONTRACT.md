@@ -28,6 +28,26 @@ Exported per process, summed across shards. Names are the wire names; the
 transport is INFO (a `# Allocator` section, following the capacity arc's
 `# Tiering` precedent) plus a direct accessor for the embedded API.
 
+**Landed in 6.4.0** (`INFO allocator`, wire names prefixed `alloc_`; the
+direct accessor is `kevy_alloc::thread_stats`, per-thread by nature).
+Written here in the v5 arc and unimplemented until then: M3 proved the
+identity inside the crate, which is a different claim from an operator
+being able to see which term a resident ratio went into. M9 gates the
+transport.
+
+Two things the section is careful about, both because an instrument that
+cannot fail is worse than none:
+
+* It is **absent** unless a shard reported, so a build on the system
+  allocator emits the bytes it emitted before the section existed.
+* "Reported" is `mapped > 0`, not "the snapshot existed". The feature
+  links the allocator; the `#[global_allocator]` attribute is what makes
+  it *the* allocator, and that lives in `main.rs` — so the library, its
+  tests, the embedded API and any FFI host can have the feature on and
+  allocate somewhere else entirely. `thread_stats` answers `Some` there,
+  with nine honest zeroes, and printing `allocator_impl:kevy-alloc`
+  over them would name an allocator that is not running.
+
 | field | definition |
 |---|---|
 | `mapped` | total bytes currently mapped from the OS. **The anchor** |
