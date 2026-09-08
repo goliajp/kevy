@@ -13,15 +13,15 @@
 //   node verify.mjs [url]        default: http://localhost:6040
 //   node verify.mjs https://kevy.golia.jp
 //
-// Needs a Chromium. Resolution order: $CHROME_PATH, the Playwright browser
-// cache, then the system Google Chrome.
+// Needs a Chromium; `find-browser.mjs` says where one is, and is the same
+// answer `tools/suite.py` uses to decide whether this can run at all.
 
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { chromium } from 'playwright-core'
+import { findBrowser } from './find-browser.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const URL_ = process.argv[2] ?? 'http://localhost:6040'
@@ -36,38 +36,6 @@ function workspaceVersion() {
   return m[1]
 }
 
-function findBrowser() {
-  if (process.env.CHROME_PATH && existsSync(process.env.CHROME_PATH)) {
-    return process.env.CHROME_PATH
-  }
-  const caches = [
-    join(homedir(), 'Library/Caches/ms-playwright'),
-    join(homedir(), '.cache/ms-playwright'),
-  ]
-  for (const cache of caches) {
-    if (!existsSync(cache)) continue
-    for (const dir of readdirSync(cache)) {
-      if (!dir.startsWith('chromium')) continue
-      for (const rel of [
-        'chrome-mac/Chromium.app/Contents/MacOS/Chromium',
-        'chrome-mac-arm64/Chromium.app/Contents/MacOS/Chromium',
-        'chrome-linux/chrome',
-      ]) {
-        const p = join(cache, dir, rel)
-        if (existsSync(p)) return p
-      }
-    }
-  }
-  for (const p of [
-    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-    '/usr/bin/google-chrome',
-    '/usr/bin/chromium',
-    '/usr/bin/chromium-browser',
-  ]) {
-    if (existsSync(p)) return p
-  }
-  throw new Error('no Chromium found; set CHROME_PATH')
-}
 
 const checks = []
 function check(name, ok, detail = '') {

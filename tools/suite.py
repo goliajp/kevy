@@ -121,9 +121,32 @@ def _have_node():
 
 
 def _have_chromium():
-    if (ROOT / "web/node_modules/playwright-core").exists():
+    """A browser, not the library that drives one.
+
+    This asked whether `web/node_modules/playwright-core` existed, which
+    is a different question with a different answer: Playwright installs
+    its browsers separately from itself. On the bench box — library
+    present, browser absent — the requirement read as satisfied and
+    sitegate then failed inside `chromium.launch`, leaving a stack trace
+    that says nothing about the site and everything about the machine.
+    A missing requirement is supposed to be a loud NOT-RUN.
+
+    `web/find-browser.mjs` is the one place that knows where a browser
+    is; run directly it prints the path or exits 1, which is exactly this
+    question. Asking it rather than restating its rules here keeps the
+    runner and `verify.mjs` from ever disagreeing about what counts.
+    """
+    if not shutil.which("node"):
+        return False, "node is not on PATH, so no browser can be located"
+    probe = ROOT / "web/find-browser.mjs"
+    if not probe.exists():
+        return False, f"{probe.relative_to(ROOT)} is missing"
+    r = subprocess.run(
+        ["node", str(probe)], capture_output=True, text=True, cwd=ROOT, timeout=30
+    )
+    if r.returncode == 0 and r.stdout.strip():
         return True, ""
-    return False, "web/node_modules is not installed (npm ci in web/)"
+    return False, "no Chromium: set CHROME_PATH, or `npx playwright install chromium` in web/"
 
 
 def _have_web_deps():
