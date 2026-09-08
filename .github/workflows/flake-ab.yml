@@ -1,0 +1,102 @@
+# What is this cell's failure rate, and does the instrument change it?
+#
+# The query-buffer cell fails intermittently on Linux/io_uring, and the
+# rate has been quoted from memory rather than measured — "two runs in
+# three" was never derived from a denominator. This job derives one.
+#
+# It also answers the question the instrument raises about itself. The
+# stall dump adds per-tick work (a formatted line and a walk of `conns`)
+# to a reactor whose race this cell is trying to catch, so "does turning
+# the dump on change the outcome" has to stay answerable. The test reads
+# KEVY_DEBUG_STALL_MS and only defaults it when unset; 0 disables it.
+#
+# Manual, because it is an experiment and not a gate: it costs N server
+# lifetimes per arm and answers a question that does not change per
+# commit.
+name: flake A/B (query-buffer cell)
+
+on:
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: "iterations per arm"
+        required: false
+        default: "20"
+
+jobs:
+  ab:
+    name: the cell, N times with the dump off and N times on
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust (stable)
+        run: |
+          rustup toolchain install stable --no-self-update
+          rustup default stable
+      - name: Cache cargo registry + build artifacts
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: flakeab-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: flakeab-${{ runner.os }}-
+
+      # Built once, run many times. Rebuilding between iterations would
+      # measure the compiler's mood alongside the reactor's.
+      - name: Build the cell
+        run: cargo test -p kevy --test query_buffer_limit --no-run
+
+      - name: Which reactor this runner gives us
+        run: |
+          set -euo pipefail
+          # A run on epoll would answer a different question entirely, and
+          # the server says which it took. Absent = it never started.
+          out=$(cargo test -p kevy --test query_buffer_limit -- --nocapture 2>&1 || true)
+          echo "$out" | grep -oE 'kevy: reactor = [a-z_]+ \([^)]*\)' | sort -u \
+            | tee /tmp/reactor.txt
+          grep -q 'reactor = io_uring' /tmp/reactor.txt || {
+            echo "::error::this runner did not take the io_uring path; the arms below would measure epoll"
+            exit 1
+          }
+
+      - name: Run both arms
+        env:
+          N: ${{ github.event.inputs.runs }}
+        run: |
+          set -uo pipefail
+          n="${N:-20}"
+          [ "$n" -ge 1 ] || { echo "::error::N=$n is not a number of runs"; exit 1; }
+          declare -A fails
+          for arm in 0 250; do
+            f=0
+            for i in $(seq 1 "$n"); do
+              if ! KEVY_DEBUG_STALL_MS="$arm" \
+                   cargo test -p kevy --test query_buffer_limit >"/tmp/ab-$arm-$i.log" 2>&1; then
+                f=$((f + 1))
+                echo "arm=$arm iteration=$i FAILED"
+                # The dump lands in the harness's captured block, which is
+                # printed only for a failing test — so this is where it is.
+                grep -E 'STALLDUMP|CLOSING reap_candidate|STILL open' "/tmp/ab-$arm-$i.log" \
+                  | head -40 || true
+              fi
+            done
+            fails[$arm]=$f
+          done
+          echo "### query-buffer cell, $n runs per arm" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| dump | failures | of |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---:|---:|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| off (KEVY_DEBUG_STALL_MS=0) | ${fails[0]} | $n |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| on (250ms) | ${fails[250]} | $n |" >> "$GITHUB_STEP_SUMMARY"
+          echo "off=${fails[0]}/$n  on=${fails[250]}/$n"
+
+      - name: Keep every failing iteration's log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: flake-ab-logs
+          path: /tmp/ab-*.log
+          if-no-files-found: error

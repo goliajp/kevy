@@ -54,10 +54,17 @@ fn a_streaming_giant_frame_is_disconnected_at_the_cap() {
     // heartbeat is at the top of that block rather than 250ms into it —
     // a failure that lands quickly still carries one.
     //
-    // SAFETY: same as above — this runs on the test's own thread before the runtime
-    // thread that reads the variable is spawned, so no other thread can be touching
-    // the environment at this point.
-    unsafe { std::env::set_var("KEVY_DEBUG_STALL_MS", "250") };
+    // Set only when the caller has not: the dump adds per-tick work
+    // (a formatted line and a walk of `conns`), and this cell is a race,
+    // so "does the instrument change the outcome" has to stay an
+    // answerable question. `KEVY_DEBUG_STALL_MS=0` from outside disables
+    // it — `parse_stall_dump_interval` folds zero into off — which makes
+    // an A/B possible without editing this file.
+    if std::env::var_os("KEVY_DEBUG_STALL_MS").is_none() {
+        // SAFETY: as above — the test's own thread, before the runtime thread that
+        // reads the variable is spawned.
+        unsafe { std::env::set_var("KEVY_DEBUG_STALL_MS", "250") };
+    }
     let port = free_port();
     let dir = std::env::temp_dir().join(format!(
         "kevy-qbuf-{}",
