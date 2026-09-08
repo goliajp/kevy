@@ -129,6 +129,23 @@ impl BitMask {
         self.0 == 0
     }
 
+    /// One bit per slot, low bit = slot 0.
+    ///
+    /// The two encodings differ — x86_64 packs one bit per slot, aarch64
+    /// one per nibble — and every consumer so far went through the
+    /// iterator, which hides that. A caller that needs to count runs of
+    /// slots cannot: `leading_zeros` on the raw word counts 48 padding
+    /// bits on x86_64 and quadruples the answer on aarch64. This
+    /// normalises once.
+    #[inline]
+    pub(crate) fn slot_mask(self) -> u16 {
+        let mut m: u16 = 0;
+        for s in self.iter() {
+            m |= 1u16 << s;
+        }
+        m
+    }
+
     /// Index of the lowest set slot, or `None` if empty.
     #[inline]
     pub(crate) fn lowest_set(self) -> Option<usize> {
