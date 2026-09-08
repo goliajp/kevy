@@ -2,10 +2,12 @@
 
 ## 6.4.0 — the quality release: what a reader can check, and what a gate can
 
-No behaviour changed. Every command answers exactly as it did in 6.3.0,
-the data directory opens in both directions, and a 6.3.x replica pairs
-with a 6.4.0 primary. This release is about the other thing a codebase
-owes its readers.
+Every command answers exactly as it did in 6.3.0, the data directory
+opens in both directions, and a 6.3.x replica pairs with a 6.4.0
+primary. One defect is fixed, on the io_uring path, and it is the last
+section here — it was found by an instrument this release built. Apart
+from that, this release is about the other thing a codebase owes its
+readers.
 
 The measure was deliberately put outside: not "does kevy meet kevy's
 rules" — that is a baseline you can pass while being unremarkable — but
@@ -74,6 +76,40 @@ to present them, and five had no README — which is what a reader lands on
 from crates.io. All 41 are complete. `kevy-vlog` had nineteen public
 functions and no runnable example; it has six, and because a rustdoc
 example is a doctest they fail when the API moves rather than rotting.
+
+### A disconnect the server decided on and the client never received
+
+On Linux/io_uring, a connection the server chose to close — the
+query-buffer guard, the output-buffer guard, `CLIENT KILL` — could stay
+open on the client's side indefinitely. The server was not confused
+about it: it logged the decision, counted it in
+`client_query_buffer_limit_disconnections`, tore the connection down and
+forgot it. The socket simply never closed.
+
+The reactor cancels a closing connection's multishot receive precisely
+so that `close(fd)` sends a FIN — a comment at the cancel site has said
+so for a long time, ending "the next reap closes cleanly". The reap did
+not check. A reap landing in the window between the cancel's submission
+and its completion tore the connection down with the receive still
+armed, which pins the socket in the kernel: the descriptor closes, and
+nothing goes out on the wire. The client then waits on a socket the
+server believes is gone, until its own timeout.
+
+It is a race, so it was intermittent — 5 to 7 times in 100 on a
+GitHub-hosted runner, and 0 in 200 after the fix. Those numbers are
+measured rather than estimated; a manual `flake A/B` job runs the case N
+times per arm and refuses to report at all unless the runner took the
+io_uring path, because a rate measured on epoll would answer a different
+question.
+
+Three hypotheses read out of the source were raised and refuted before
+the real one arrived from a measurement. What produced it was the
+reactor's own stall dump — an opt-in diagnostic that existed already and
+skipped, by construction, every connection marked closing, which is to
+say the only shape it was built to name. With that corrected, the answer
+was one line: `conns=0`, on all 121 heartbeats spanning the client's
+30-second wait. The connection was already gone while the client still
+saw it open, which leaves only the teardown.
 
 ### Deferred, with the reason
 
