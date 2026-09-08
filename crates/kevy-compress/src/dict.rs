@@ -38,6 +38,7 @@ pub struct Dict {
     lens: Option<[u8; 256]>,
     content: Vec<u8>,
     table: Option<huff::DecodeTable>,
+    seeded: Vec<u32>,
 }
 
 impl core::fmt::Debug for Dict {
@@ -48,6 +49,7 @@ impl core::fmt::Debug for Dict {
         f.debug_struct("Dict")
             .field("content_bytes", &self.content.len())
             .field("has_entropy_table", &self.table.is_some())
+            .field("match_table_slots", &self.seeded.len())
             .finish()
     }
 }
@@ -66,7 +68,8 @@ impl Dict {
     pub fn new(bytes: &[u8]) -> Self {
         let (lens, content) = parse_dict(bytes);
         let table = lens.as_ref().map(huff::DecodeTable::new);
-        Self { lens, content: content.to_vec(), table }
+        let seeded = crate::encode::seeded_table(content);
+        Self { lens, content: content.to_vec(), table, seeded }
     }
 
     /// The dictionary content, with any header stripped.
@@ -111,4 +114,47 @@ pub fn decode_with(dict: &Dict, frame: &[u8]) -> Result<Vec<u8>, Corrupt> {
         ),
         _ => Err(Corrupt),
     }
+}
+
+/// [`crate::encode`] against a dictionary whose match table was seeded
+/// once.
+///
+/// Seeding walks every dictionary position — 65,532 hash-and-store for
+/// the 64 KiB dictionary `kevy-vlog` trains — and it happened on every
+/// record, which is why encode time was flat in input size: an 8-byte
+/// value cost more than a 6 KiB one. Here it is a memcpy of a 16 KiB
+/// table instead.
+///
+/// Same frames as [`crate::encode`] for the same bytes.
+#[must_use]
+pub fn encode_with(dict: &Dict, input: &[u8]) -> Vec<u8> {
+    let mut frame = Vec::with_capacity(input.len() + crate::MAX_HEADER);
+    let (tag, ok) = if input.len() >= crate::encode::MIN_INPUT {
+        crate::encode::try_lz(&dict.content, Some(&dict.seeded), input, &mut frame)
+    } else {
+        (TAG_RAW, false)
+    };
+    crate::finish_or_raw(&mut frame, tag, ok, input);
+    frame
+}
+
+/// [`crate::encode_high`] against a dictionary parsed and seeded once.
+///
+/// Same frames as [`crate::encode_high`] for the same bytes.
+#[must_use]
+pub fn encode_high_with(dict: &Dict, input: &[u8]) -> Vec<u8> {
+    let mut frame = Vec::with_capacity(input.len() + crate::MAX_HEADER);
+    let (tag, ok) = if input.len() >= crate::encode::MIN_INPUT {
+        crate::encode::try_high(
+            &dict.content,
+            dict.lens.as_ref(),
+            Some(&dict.seeded),
+            input,
+            &mut frame,
+        )
+    } else {
+        (TAG_RAW, false)
+    };
+    crate::finish_or_raw(&mut frame, tag, ok, input);
+    frame
 }
