@@ -131,3 +131,42 @@ fn closing_conn_is_quiet(uc: &UringConn, conn: Option<&crate::conn::Conn>) -> bo
     let recv_quiet = !uc.recv_armed;
     writes_quiet && recv_quiet && drained
 }
+
+#[cfg(test)]
+mod tests {
+    use super::closing_conn_is_quiet;
+    use crate::uring_conn::UringConn;
+
+    /// A `None` conn is a conn already gone from `self.conns`, which the
+    /// reap treats as drained — so these cases isolate the three terms
+    /// that live on the `UringConn` side.
+    #[test]
+    fn a_fresh_conn_with_nothing_outstanding_is_quiet() {
+        assert!(closing_conn_is_quiet(&UringConn::new(), None));
+    }
+
+    /// The term this function was extracted to add. An armed multishot
+    /// recv pins the socket in the kernel, so reaping here closes the
+    /// descriptor without a FIN ever reaching the client — the
+    /// query-buffer disconnect that was decided and never landed.
+    #[test]
+    fn an_armed_recv_is_not_quiet() {
+        let mut uc = UringConn::new();
+        uc.recv_armed = true;
+        assert!(!closing_conn_is_quiet(&uc, None), "reaped with the recv still armed");
+    }
+
+    #[test]
+    fn a_write_in_flight_is_not_quiet() {
+        let mut uc = UringConn::new();
+        uc.write_inflight = true;
+        assert!(!closing_conn_is_quiet(&uc, None));
+    }
+
+    #[test]
+    fn unsent_bytes_in_write_buf_are_not_quiet() {
+        let mut uc = UringConn::new();
+        uc.write_buf.push(b'x');
+        assert!(!closing_conn_is_quiet(&uc, None));
+    }
+}
