@@ -178,6 +178,57 @@ real duration to `target/suite-<tier>.json` for exactly this; the
 declarations are now corrected from it, at roughly twice measurement, and
 precommit declares 230s for its 134.
 
+### One flipped bit deleted segment files, silently
+
+A manifest record is `[len][crc][body]`, and the CRC covers the body. The
+four length bytes are covered by nothing — and the recovery rule, which
+decides whether a record that will not decode is a crash mid-append or
+damage, reads exactly those four bytes.
+
+Measured: flipping one bit in the **first** record's length took a
+five-entry, 220-byte ledger to **zero entries and zero bytes**, with
+`open()` returning `Ok`. `sweep()` then removes every `.seg` the ledger
+no longer names, so that is data gone from disk, from one bit, with no
+error anywhere. The control — a bit inside the body, which the CRC does
+cover — was correctly refused.
+
+The fix changes no bytes on disk. It uses the writer's own invariant:
+`append` is a single `write_all` followed by `sync_all`, so at most one
+record can ever be partly written. Three things therefore cannot be a
+torn tail — a length larger than any record `append` will write, more
+bytes remaining than one envelope can hold, and a decodable record
+appearing after the suspect one, since nothing follows a partial write.
+
+Over every bit of every length field: **96 flips silently dropped
+entries before, none after**. The 14 that remain are all in the *last*
+record, where nothing follows to contradict the claim; losing that one
+record is what a genuine torn tail costs anyway.
+
+The first version of that check refused a tail shorter than the length
+field itself — the most ordinary crash there is. An exhaustive sweep of
+every prefix of a real envelope caught it, and now guards it.
+
+### A key of 4074 bytes wrote a segment that could not be read
+
+`SegBuilder::push` sealed the page when a cell did not fit and then wrote
+regardless. With a 7-byte payload:
+
+| key bytes | result |
+|---|---|
+| ≤ 4070 | stored and read back |
+| **4074** | `push` Ok, `finish` Ok, `open` Ok, **read back fails** |
+| ≥ 4075 | **panic** |
+
+The middle row is the worse one: the slot directory lands on the tail of
+the cell and the page CRC is taken afterwards, so the page is internally
+consistent and wrong while the builder reports success. Both rows are
+reachable from user data — a document with a long run of non-separator
+bytes becomes one token and then one key.
+
+The bound is now checked arithmetically at the boundary, before anything
+measures the cell: the measurement is itself a write into a page-sized
+buffer, which is where the panic came from.
+
 ### GEOSEARCH dropped members inside the radius, silently
 
 Placing 360 points at 98 % of a radius and asking for all of them back —

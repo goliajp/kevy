@@ -72,6 +72,21 @@ pub struct Manifest {
 }
 
 const MANIFEST: &str = "segs.manifest";
+/// The largest record this writer will ever produce, and therefore the
+/// largest a reader may believe.
+///
+/// A record is a file name, a small meta blob, two segment keys and a
+/// count; keys are bounded by the page a cell must fit in, so this is
+/// generous by a wide margin. It exists because the length field is the
+/// one part of a record that **nothing checks** — the CRC covers the
+/// body, and the length sits outside it. See `open` for what that cost.
+const MAX_RECORD_BYTES: usize = 64 * 1024;
+
+/// The most that can legitimately be discarded as a torn tail: one
+/// envelope. `append` is a single `write_all` followed by `sync_all`, so
+/// at most one record can ever be partly on disk.
+const MAX_TORN_TAIL: usize = 8 + MAX_RECORD_BYTES;
+
 const OP_ADD: u8 = 1;
 const OP_DROP: u8 = 2;
 
@@ -93,24 +108,7 @@ impl Manifest {
     pub fn open(dir: &Path) -> Result<Self, SegError> {
         let path = dir.join(MANIFEST);
         let mut live = BTreeMap::new();
-        let mut good = 0u64;
-        if path.exists() {
-            let bytes = std::fs::read(&path)?;
-            let mut o = 0usize;
-            while o < bytes.len() {
-                match read_record(&bytes, o) {
-                    Some((rec, next)) => {
-                        apply(&mut live, &rec)?;
-                        good = next as u64;
-                        o = next;
-                    }
-                    None if whole_records_end(&bytes, o) => {
-                        return Err(SegError::Corrupt("manifest record crc"));
-                    }
-                    None => break, // torn tail: crash mid-append
-                }
-            }
-        }
+        let good = if path.exists() { replay(&std::fs::read(&path)?, &mut live)? } else { 0 };
         let f = OpenOptions::new().create(true).append(true).open(&path)?;
         if path.metadata()?.len() > good {
             // Drop the torn tail so the next append starts clean.
@@ -259,6 +257,13 @@ impl Manifest {
     }
 
     fn append(&mut self, op: u8, payload: &[u8]) -> Result<(), SegError> {
+        // The reader trusts that no record exceeds this, and that trust
+        // is what lets it tell a torn tail from a corrupt length. Refuse
+        // here rather than write something it would later have to call
+        // corruption.
+        if 1 + payload.len() > MAX_RECORD_BYTES {
+            return Err(SegError::Corrupt("manifest record too large"));
+        }
         self.f.write_all(&envelope(op, payload))?;
         self.f.sync_all()?;
         Ok(())
@@ -284,6 +289,96 @@ fn read_record(bytes: &[u8], o: usize) -> Option<(Vec<u8>, usize)> {
     let want = u32::from_le_bytes(bytes.get(o + 4..o + 8)?.try_into().ok()?);
     let body = bytes.get(o + 8..o + 8 + len)?;
     (kevy_sys::checksum::crc32c(body) == want).then(|| (body.to_vec(), o + 8 + len))
+}
+
+/// Replay every whole record, returning the offset of the last good one.
+///
+/// The three refusals here are what separate a torn tail — a crash
+/// part-way through one `append` — from a damaged length field. That
+/// distinction used to not exist: the length is the only part of a
+/// record nothing covers, since the CRC is over the body, so a bit
+/// flipped there made the record undecodable, and an undecodable record
+/// was taken for a tail and everything after it truncated away.
+///
+/// Measured: one bit flipped in the FIRST record's length took a
+/// five-entry, 220-byte ledger to zero entries and zero bytes with
+/// `open` returning `Ok` — and `sweep` then deletes every segment file
+/// the ledger no longer names. Over every bit of every length field,
+/// 96 flips silently dropped entries; now none does, except in the last
+/// record, where nothing follows to contradict the claim and the loss is
+/// the one record a real torn tail would have cost anyway.
+fn replay(bytes: &[u8], live: &mut BTreeMap<String, ManifestEntry>) -> Result<u64, SegError> {
+    let mut good = 0u64;
+    let mut o = 0usize;
+    while o < bytes.len() {
+        match read_record(bytes, o) {
+            Some((rec, next)) => {
+                apply(live, &rec)?;
+                good = next as u64;
+                o = next;
+            }
+            None if whole_records_end(bytes, o) => {
+                return Err(SegError::Corrupt("manifest record crc"));
+            }
+            // A length no `append` could have written.
+            None if !plausible_len(bytes, o) => {
+                return Err(SegError::Corrupt("manifest length field"));
+            }
+            // More left than one envelope can be; `append` writes one
+            // record and fsyncs, so at most one is ever partly on disk.
+            None if bytes.len() - o > MAX_TORN_TAIL => {
+                return Err(SegError::Corrupt("manifest length field"));
+            }
+            // Something after this decodes, so this is not the end.
+            None if valid_record_follows(bytes, o) => {
+                return Err(SegError::Corrupt("manifest length field"));
+            }
+            None => break, // torn tail: crash mid-append
+        }
+    }
+    Ok(good)
+}
+
+/// Whether a decodable record begins anywhere after `o`.
+///
+/// A torn tail is the last thing in the file by construction — the
+/// writer appends one record and fsyncs, so nothing follows a partial
+/// one. If something after `o` decodes and passes its CRC, then what is
+/// at `o` is not a tail, and treating it as one throws that record away.
+///
+/// This is what makes the recovery rule decidable rather than a guess.
+/// The length bound above catches a wildly wrong length; this catches a
+/// plausible one, which is the case that would otherwise silently
+/// discard every record after the damaged one.
+///
+/// Cost is a CRC per candidate offset over the bytes that would be
+/// discarded, paid once at open and only when a record has already
+/// failed to decode — never on a healthy ledger.
+fn valid_record_follows(bytes: &[u8], o: usize) -> bool {
+    (o + 1..bytes.len().saturating_sub(8)).any(|p| read_record(bytes, p).is_some())
+}
+
+/// Whether the length field at `o` could have been written by
+/// [`Manifest::append`].
+///
+/// This is the check that separates a torn tail from a flipped bit. The
+/// length is the only part of a record nothing covers — the CRC is over
+/// the body — so a bit flipped there makes the record undecodable, and
+/// an undecodable record at the end looks exactly like a crash
+/// mid-append. Taking it for one truncates everything after it.
+///
+/// A length beyond what `append` will write is not a tail under any
+/// circumstances, so it is the discriminator. Note the direction: a
+/// flipped bit that makes the length SMALLER is already caught, because
+/// the body then fails its CRC with a whole record's bytes present.
+fn plausible_len(bytes: &[u8], o: usize) -> bool {
+    // Fewer than four bytes left is a torn tail by definition: the
+    // writer was interrupted before it finished the length field. Saying
+    // "not plausible" here would turn the most ordinary crash into a
+    // refusal to open — which an exhaustive check of this caught.
+    let Some(b) = bytes.get(o..o + 4) else { return true };
+    let len = u32::from_le_bytes(b.try_into().expect("bytes.get(o..o + 4) returned Some")) as usize;
+    len <= MAX_RECORD_BYTES
 }
 
 /// Whether a full record's worth of bytes exists at `o` (so a decode

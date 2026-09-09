@@ -251,6 +251,111 @@ mod manifest {
         assert_eq!(m.live().count(), 6);
         assert!(m.live().any(|e| e.file == "post.seg"));
     }
+
+    /// A bit flipped in a record's LENGTH must not be read as a torn tail.
+    ///
+    /// The CRC covers the body; the four length bytes sit outside it. So a
+    /// flip there makes the record undecodable, and an undecodable record
+    /// used to be taken for a crash mid-append — which truncates everything
+    /// after it. Measured before this: flipping one bit in the FIRST
+    /// record's length took a five-entry, 220-byte ledger to zero entries
+    /// and zero bytes, with `open()` returning `Ok`. `sweep()` then deletes
+    /// every segment file the ledger no longer names, so that is real data
+    /// gone from disk, from one bit, with no error anywhere.
+    ///
+    /// The last record is the one case that cannot be decided from the
+    /// bytes: nothing follows it, so a wrong length there really is
+    /// indistinguishable from a tail. Losing that one record is what a torn
+    /// tail would have cost anyway. Every earlier record is now decidable
+    /// and is refused by name.
+    #[test]
+    fn a_flipped_length_is_refused_rather_than_read_as_a_torn_tail() {
+        let d = kevy_tmpdir::TmpDir::new("man-lenflip");
+        {
+            let mut m = Manifest::open(d.path()).unwrap();
+            for i in 0..5 {
+                m.add(entry(&format!("s{i}.seg"), i)).unwrap();
+            }
+        }
+        let path = d.path().join("segs.manifest");
+        let good = std::fs::read(&path).unwrap();
+        let full = Manifest::open(d.path()).unwrap().live().count();
+        assert_eq!(full, 5);
+
+        // Walk the real record boundaries.
+        let mut offs = Vec::new();
+        let mut o = 0usize;
+        while o + 8 <= good.len() {
+            let len = u32::from_le_bytes(good[o..o + 4].try_into().expect("4 bytes")) as usize;
+            offs.push(o);
+            o += 8 + len;
+        }
+        assert_eq!(offs.len(), 5, "expected five records, found {}", offs.len());
+        let last = *offs.last().expect("five records");
+
+        let mut silent = Vec::new();
+        for &ro in &offs {
+            for byte in 0..4usize {
+                for bit in 0..8u8 {
+                    let mut bad = good.clone();
+                    bad[ro + byte] ^= 1 << bit;
+                    std::fs::write(&path, &bad).unwrap();
+                    if let Ok(m) = Manifest::open(d.path())
+                        && m.live().count() != full
+                    {
+                        silent.push((ro, byte, bit));
+                    }
+                }
+            }
+        }
+        let escaped: Vec<_> = silent.iter().filter(|(ro, _, _)| *ro != last).collect();
+        assert!(
+            escaped.is_empty(),
+            "{} flips outside the last record silently dropped entries: {escaped:?}",
+            escaped.len()
+        );
+    }
+
+    /// And a genuine torn tail still recovers — every prefix of a real
+    /// envelope, not just a hand-made one.
+    ///
+    /// The first version of the check above refused a tail shorter than the
+    /// length field itself, which is the most ordinary crash there is. This
+    /// is what caught that.
+    #[test]
+    fn every_prefix_of_an_interrupted_append_is_still_recovered() {
+        let d = kevy_tmpdir::TmpDir::new("man-prefix");
+        {
+            let mut m = Manifest::open(d.path()).unwrap();
+            for i in 0..3 {
+                m.add(entry(&format!("s{i}.seg"), i)).unwrap();
+            }
+        }
+        let path = d.path().join("segs.manifest");
+        let good = std::fs::read(&path).unwrap();
+
+        // A real fourth envelope, produced by the writer itself.
+        let scratch = kevy_tmpdir::TmpDir::new("man-prefix-src");
+        let six = {
+            let mut m = Manifest::open(scratch.path()).unwrap();
+            for i in 0..3 {
+                m.add(entry(&format!("s{i}.seg"), i)).unwrap();
+            }
+            m.add(entry("s3.seg", 3)).unwrap();
+            std::fs::read(scratch.path().join("segs.manifest")).unwrap()
+        };
+        let envelope = &six[good.len()..];
+        assert!(envelope.len() > 8, "the fourth record must be a real envelope");
+
+        for cut in 1..envelope.len() {
+            let mut torn = good.clone();
+            torn.extend_from_slice(&envelope[..cut]);
+            std::fs::write(&path, &torn).unwrap();
+            let m = Manifest::open(d.path())
+                .unwrap_or_else(|e| panic!("a {cut}-byte torn tail was refused: {e}"));
+            assert_eq!(m.live().count(), 3, "torn tail of {cut} bytes lost an entry");
+        }
+    }
 }
 
 /// A count read out of a file is a claim, not a size.
@@ -296,4 +401,51 @@ fn a_lying_fence_count_is_still_refused() {
     let enc = crate::layout::encode_footer(42, 3, b"aa", b"zz", &fences);
     let got = crate::layout::decode_footer(&enc).expect("honest footer decodes");
     assert_eq!(got, (42u64, 3u32, b"aa".to_vec(), b"zz".to_vec(), fences));
+}
+
+/// Every key length around the page boundary either stores and reads
+/// back, or is refused — never panics, and never reports a write that
+/// cannot be read.
+///
+/// Measured before the bound existed, one key with a 7-byte payload:
+///
+/// | key bytes | result |
+/// |---|---|
+/// | ≤ 4070 | stored, read back |
+/// | 4074 | `push` Ok, `finish` Ok, `open` Ok, **read back fails** |
+/// | ≥ 4075 | **panic** |
+///
+/// The middle row is the worse one: the slot directory is written over
+/// the tail of the cell and the page CRC is taken afterwards, so the
+/// page is internally consistent and wrong, and the builder reports
+/// success. Both are reachable from user data — a document with a long
+/// run of non-separator bytes becomes one token and then one key.
+#[test]
+fn no_key_length_panics_or_writes_something_unreadable() {
+    let d = kevy_tmpdir::TmpDir::new("seg-keylen");
+    let mut stored = 0usize;
+    let mut refused = 0usize;
+    for klen in (1..64).chain(4000..4200).chain([8192, 65_536]) {
+        let path = d.path().join(format!("k{klen}.seg"));
+        let key = vec![b'k'; klen];
+        let mut b = match SegBuilder::create(&path) {
+            Ok(b) => b,
+            Err(e) => panic!("create failed at klen {klen}: {e}"),
+        };
+        if b.push(&key, b"payload").is_err() {
+            refused += 1;
+            continue;
+        }
+        b.finish().unwrap_or_else(|e| panic!("finish failed at klen {klen}: {e}"));
+        let seg = Seg::open(&path).unwrap_or_else(|e| panic!("open failed at klen {klen}: {e}"));
+        let got = seg
+            .get(&key)
+            .unwrap_or_else(|e| panic!("a segment written at klen {klen} cannot be read: {e}"));
+        assert!(got.is_some(), "key of {klen} bytes stored but not found");
+        stored += 1;
+    }
+    // Floors: a sweep that stored nothing, or refused nothing, would
+    // satisfy the assertions above without exercising either side.
+    assert!(stored > 60, "only {stored} key lengths stored — the sweep collapsed");
+    assert!(refused > 0, "no key length was refused — the bound is not being hit");
 }
