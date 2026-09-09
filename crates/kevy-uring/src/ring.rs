@@ -40,6 +40,18 @@ pub struct IoUring {
     /// `IORING_SQ_NEED_WAKEUP` first and skip the syscall when the SQ poll
     /// thread is awake.
     sq_flags: Option<*const AtomicU32>,
+    /// The same word, kept unconditionally, because `IORING_SQ_CQ_OVERFLOW`
+    /// lives there in EVERY mode while the field above is `Some` only
+    /// under SQPOLL. Reading the overflow bit through that `Option` meant
+    /// it was physically unreadable in the mode this engine actually
+    /// runs.
+    flags_word: *const AtomicU32,
+    /// `sq_off.dropped`: submissions the kernel refused. Mapped by the
+    /// kernel since the beginning and read by nobody.
+    dropped: *const AtomicU32,
+    /// Last `dropped` reading, so a rise is reported once rather than on
+    /// every call for the life of the ring.
+    last_dropped: u32,
     /// `(index, enter_flag)` for a successful registered-ring-fd setup. When
     /// `Some((i, _))`, `submit_and_wait` passes `i` as the syscall fd and
     /// ORs `IORING_ENTER_REGISTERED_RING` into the enter flags — the kernel
@@ -153,6 +165,9 @@ impl IoUring {
             cq_ktail: cq.ktail,
             cqes: cq.cqes,
             sq_flags,
+            flags_word: sq.flags,
+            dropped: sq.dropped,
+            last_dropped: 0,
             enter_ring: None,
             iters_since_enter: 0,
         };
@@ -244,7 +259,13 @@ impl IoUring {
         // closely enough to remain race-free, and even with this
         // counter as a safety net on top, a window remained where CQEs
         // piled up between bit-clear observations.
-        if to_submit == 0 && wait_nr == 0 && self.sq_flags.is_none() {
+        // The kernel parked completions on its overflow list because the
+        // CQ was full. They come back only on an enter that asks for
+        // events, so the skip below must not apply and the syscall must
+        // carry GETEVENTS — otherwise operations that have completed are
+        // never reported, and nothing anywhere says so.
+        let overflowed = self.cq_overflowed();
+        if !overflowed && to_submit == 0 && wait_nr == 0 && self.sq_flags.is_none() {
             self.iters_since_enter = self.iters_since_enter.saturating_add(1);
             if self.iters_since_enter < ENTER_SKIP_THRESHOLD {
                 return Ok(0);
@@ -253,7 +274,7 @@ impl IoUring {
             // below so task_work flushes. Counter resets after syscall.
         }
 
-        let mut enter_flags = if wait_nr > 0 { IORING_ENTER_GETEVENTS } else { 0 };
+        let mut enter_flags = if wait_nr > 0 || overflowed { IORING_ENTER_GETEVENTS } else { 0 };
         if let Some(sq_flags_ptr) = self.sq_flags {
             // SAFETY: `sq_flags_ptr` lives inside the SQ mmap, valid for ring
             // lifetime. Kernel writes IORING_SQ_NEED_WAKEUP on park; Acquire
@@ -308,7 +329,39 @@ impl IoUring {
         };
         // Real enter happened — the skip counter resets.
         self.iters_since_enter = 0;
+        self.check_dropped()?;
         Ok(ret as u32)
+    }
+
+    /// Whether the kernel has completions parked on its overflow list.
+    ///
+    /// Relaxed: this is a hint the kernel republishes, and the enter it
+    /// triggers is what actually orders anything.
+    fn cq_overflowed(&self) -> bool {
+        // SAFETY: `flags_word` points inside the SQ mapping, which lives
+        // as long as this ring.
+        let flags = unsafe { (*self.flags_word).load(Ordering::Relaxed) };
+        flags & crate::ffi::IORING_SQ_CQ_OVERFLOW != 0
+    }
+
+    /// Fail if the kernel refused any submission since the last check.
+    ///
+    /// A dropped SQE produces no completion, ever. Anything waiting on
+    /// one waits forever, and every scheme for tracking in-flight work —
+    /// including this crate's own — hangs on a count that will not come
+    /// down. Silence is the one response that cannot be right.
+    fn check_dropped(&mut self) -> io::Result<()> {
+        // SAFETY: `dropped` points inside the SQ mapping, which lives as
+        // long as this ring.
+        let now = unsafe { (*self.dropped).load(Ordering::Relaxed) };
+        let lost = dropped_since(self.last_dropped, now);
+        self.last_dropped = now;
+        match lost {
+            0 => Ok(()),
+            n => Err(io::Error::other(format!(
+                "io_uring dropped {n} submission(s); they will never complete"
+            ))),
+        }
     }
 
     /// Reap every available completion, calling `f` for each; returns the count.
@@ -370,5 +423,38 @@ impl Drop for IoUring {
             ffi::munmap(self.sq_mmap, self.sq_mmap_len);
             ffi::close(self.ring_fd);
         }
+    }
+}
+
+/// How many submissions the kernel refused since `last`.
+///
+/// A free function so both answers are reachable from a test: on a
+/// healthy ring the counter never moves, so the reporting branch would
+/// be code no coverage run could execute — the same shape that put
+/// `page_size_matches` on the ratchet.
+///
+/// `wrapping_sub` because the kernel's counter is a `u32` that only ever
+/// grows. A ring that dropped four billion submissions has bigger
+/// problems than this arithmetic, but reporting a nonsense count is
+/// still worse than reporting a small one.
+fn dropped_since(last: u32, now: u32) -> u32 {
+    now.wrapping_sub(last)
+}
+
+#[cfg(test)]
+mod dropped_tests {
+    use super::dropped_since;
+
+    /// Both answers, including the one a healthy ring never gives.
+    #[test]
+    fn a_still_counter_reports_nothing_and_a_moved_one_reports_the_delta() {
+        assert_eq!(dropped_since(0, 0), 0, "an untouched ring must report nothing");
+        assert_eq!(dropped_since(7, 7), 0);
+        assert_eq!(dropped_since(0, 1), 1);
+        assert_eq!(dropped_since(5, 9), 4, "the delta, not the total");
+        // The kernel's counter is u32 and only grows; a wrap must not
+        // report four billion.
+        assert_eq!(dropped_since(u32::MAX, 0), 1);
+        assert_eq!(dropped_since(u32::MAX - 1, 1), 3);
     }
 }

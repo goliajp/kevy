@@ -102,6 +102,13 @@ pub const IORING_ENTER_GETEVENTS: u32 = 1;
 /// to `io_uring_enter` whenever it is set.
 pub const IORING_ENTER_SQ_WAKEUP: u32 = 1 << 1;
 
+/// `IORING_SQ_CQ_OVERFLOW` in the shared `sq_flags`: the completion queue
+/// filled and the kernel parked the overflow on a side list. Those CQEs
+/// reach userspace only on an `io_uring_enter` that asks for events, so
+/// a reactor that never passes `IORING_ENTER_GETEVENTS` never sees them
+/// again — operations that completed and are never reported.
+pub const IORING_SQ_CQ_OVERFLOW: u32 = 1 << 1;
+
 // ---- shared SQ ring flag bits ---------------------------------------------
 
 /// The SQPOLL kernel thread has parked itself (idle longer than

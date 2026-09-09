@@ -178,6 +178,35 @@ real duration to `target/suite-<tier>.json` for exactly this; the
 declarations are now corrected from it, at roughly twice measurement, and
 precommit declares 230s for its 134.
 
+### Two io_uring counters the kernel maintained and nobody read
+
+**Completion-queue overflow was physically unreadable in the mode kevy
+runs.** When the CQ fills, the kernel parks the surplus on a side list
+and sets `IORING_SQ_CQ_OVERFLOW` in the shared flag word. Those entries
+return only on an `io_uring_enter` that asks for events. This reactor
+kept the flag word only when SQPOLL was enabled — and it does not enable
+SQPOLL — so the bit could not be read at all; and its steady-state call
+is `submit_and_wait(0)`, which never passed `IORING_ENTER_GETEVENTS`. A
+burst large enough to overflow the ring would have left completed
+operations unreported, with nothing anywhere to say so. The flag word is
+now kept in every mode, and an overflow forces the syscall and asks for
+events.
+
+**A refused submission was silent.** `sq_off.dropped` counts SQEs the
+kernel would not consume, and a dropped SQE produces no completion ever —
+so anything waiting on one waits forever, and any scheme that counts
+in-flight work hangs on a number that will not come down. The kernel has
+maintained that word since the ring was created and nothing had ever
+mapped it. It is read after every enter now, and a rise ends the shard's
+reactor loop with an error naming how many were lost, which is the
+failure worth having next to a permanent stall.
+
+The bit value was checked against `/usr/include/linux/io_uring.h` on the
+Linux box rather than taken from memory, and the delta arithmetic is a
+free function with tests for both answers — on a healthy ring the counter
+never moves, so the reporting branch would otherwise be code no coverage
+run could ever execute.
+
 ### One rank descent instead of three
 
 `select`, the forward iterator and the reverse iterator each carried
