@@ -178,6 +178,25 @@ real duration to `target/suite-<tier>.json` for exactly this; the
 declarations are now corrected from it, at roughly twice measurement, and
 precommit declares 230s for its 134.
 
+### One rank descent instead of three
+
+`select`, the forward iterator and the reverse iterator each carried
+their own copy of "walk down to ascending rank r", differing only in what
+they pushed onto a stack on the way. They also end identically: all three
+use `(node, idx)` the same way whether the walk stopped at an offset
+inside a leaf or landed exactly on a separator, which is the part that
+made three copies look necessary and was not.
+
+There is one walk now, taking a callback for the per-level push — the
+forward iterator resumes at the separator to the right of the child it
+took, the reverse one at the separator to the left, and `select` passes a
+closure that does nothing.
+
+This is not a hypothetical tidy-up. `lib.rs` carries a note recording
+that one of those copies had come to document the opposite of what its
+code did, and that writing a runnable example is what caught it. Mirrored
+implementations diverge, and both sides' tests stay green while they do.
+
 ### A B-tree node with room for 28 keys and a ceiling of 15
 
 `kevy-ranktree`'s nodes grew their key vectors from empty, and split by

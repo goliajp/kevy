@@ -50,3 +50,49 @@ impl<K> Node<K> {
         self.total = self.keys.len() + self.children.iter().map(|c| c.total).sum::<usize>();
     }
 }
+
+/// Walk from `root` toward ascending `rank`, returning the node and the
+/// index within its `keys` that the rank lands on.
+///
+/// `on_descend(node, i)` fires once per internal node the walk passes
+/// through, with the index of the child taken. Callers that need the
+/// path — the iterators, which keep a stack of where to resume — build
+/// it there; `select`, which needs only the destination, passes a
+/// closure that does nothing.
+///
+/// This existed three times: once in `select` and once in each
+/// iterator's constructor, differing only in what they pushed. They are
+/// the same walk, and they end the same way — every one of them uses
+/// `(node, idx)` identically whether it stopped at a leaf offset or
+/// landed exactly on a separator. `mod/no-second-implementation` is not
+/// hypothetical here: `lib.rs` carries a note recording that one copy's
+/// doc had come to say the opposite of what its code did, and that
+/// writing an example is what caught it. Mirrored code diverges, and
+/// both sides' tests stay green while it does.
+pub(crate) fn descend_to_rank<'a, K>(
+    root: &'a Node<K>,
+    mut rank: usize,
+    mut on_descend: impl FnMut(&'a Node<K>, usize),
+) -> (&'a Node<K>, usize) {
+    let mut node = root;
+    loop {
+        if node.is_leaf() {
+            return (node, rank);
+        }
+        let mut i = 0;
+        loop {
+            let below = node.children[i].total;
+            if rank < below {
+                on_descend(node, i);
+                node = &node.children[i];
+                break;
+            }
+            rank -= below;
+            if rank == 0 {
+                return (node, i);
+            }
+            rank -= 1;
+            i += 1;
+        }
+    }
+}
