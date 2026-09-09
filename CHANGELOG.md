@@ -178,6 +178,29 @@ real duration to `target/suite-<tier>.json` for exactly this; the
 declarations are now corrected from it, at roughly twice measurement, and
 precommit declares 230s for its 134.
 
+### Four more unexecutable branches, closed rather than accepted
+
+Every one was a decision made inside a method where one side could never
+run on the machine that runs it, which is how a coverage ratchet ends up
+holding a permanently dead region:
+
+* `submit_and_wait`'s enter policy — on a healthy non-SQPOLL ring
+  `overflowed` and `sqpoll` are false forever. `may_skip_enter` and
+  `enter_flags_for` are pure now, with tests for every combination.
+* the dropped-submission report — on a healthy ring the counter never
+  moves, so the reporting arm was unexecutable. `dropped_error` is
+  separate and tested for both answers.
+* `discard_free_pages`'s refusal — the previous test freed everything, so
+  every span went to the retire branch and this one was never reached.
+  The new test leaves live slots in each span, which is what forces the
+  page-granular path.
+* `kevy-ranktree`'s post-merge guard, which was unreachable while its
+  invariant holds. Folded into the arithmetic — `total -= usize::from(removed)`
+  says the same thing with no arm at all.
+
+`ring.rs` crossed 500 lines doing this, and split at the seam that was
+already there: nothing in the new `enter_policy` module touches the ring.
+
 ### Two io_uring counters the kernel maintained and nobody read
 
 **Completion-queue overflow was physically unreadable in the mode kevy

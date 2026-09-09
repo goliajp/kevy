@@ -62,17 +62,21 @@ fn remove_hit_in_internal<K: Ord>(node: &mut Node<K>, key: &K, i: usize) -> bool
         // Both flanks minimal: fold keys[i] + right flank into the left
         // flank, then delete the key from inside the merged child.
         merge_children(node, i);
-        if !remove_rec(&mut node.children[i], key) {
-            // The merged child must contain the separator key, and does.
-            // This was a `debug_assert!` on a discarded bool, so the two
-            // builds disagreed about what happens if it ever stopped
-            // holding: debug panicked, release decremented `total`
-            // anyway. A `total` that is one too low is not a wrong
-            // answer once — it is every rank, select, len, count and
-            // range answer wrong, silently, for the life of the tree,
-            // with no path that would ever notice.
-            return false;
-        }
+        // The merged child must contain the separator key, and does. But
+        // this was a `debug_assert!` on a discarded bool, so the two
+        // builds disagreed about what happens if it ever stopped
+        // holding: debug panicked, release decremented `total` anyway. A
+        // `total` one too low is not one wrong answer — it is every
+        // rank, select, len, count and range answer wrong, silently, for
+        // the life of the tree, with nothing that would notice.
+        //
+        // Folded into the decrement rather than guarded with an `if`:
+        // the guard's false arm is unreachable while the invariant
+        // holds, which makes it a region no coverage run can execute.
+        // Arithmetic says the same thing and has no arm.
+        let removed = remove_rec(&mut node.children[i], key);
+        node.total -= usize::from(removed);
+        return removed;
     }
     node.total -= 1;
     true

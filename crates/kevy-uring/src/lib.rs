@@ -31,6 +31,7 @@
 #![warn(missing_docs)]
 
 mod completion;
+mod enter_policy;
 mod ffi;
 mod file_batch;
 mod layout;
