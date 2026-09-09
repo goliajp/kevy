@@ -131,14 +131,23 @@ fn promotable_range(start: usize, len: usize) -> Option<(usize, usize)> {
 ///
 /// This is the witness. It is a test and diagnostic surface, not a
 /// control input.
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "std"))]
 #[must_use]
 pub fn last_advised_bytes() -> usize {
-    LAST_ADVISED.load(core::sync::atomic::Ordering::Relaxed)
+    LAST_ADVISED.with(core::cell::Cell::get)
 }
 
-#[cfg(target_os = "linux")]
-static LAST_ADVISED: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+// Per THREAD, not per process. Tests run concurrently inside one
+// process, so a process-wide cell lets one test read what another just
+// wrote — which is exactly what happened: the small-region test below
+// passed or failed depending on which test ran first, and a mutation
+// that should have been invisible to it made it fail. The witness is
+// only ever read on the thread that made the call, so this costs
+// nothing and removes the coupling.
+#[cfg(all(target_os = "linux", feature = "std"))]
+std::thread_local! {
+    static LAST_ADVISED: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+}
 
 /// Hint the kernel that the region `[ptr, ptr+len)` is a candidate for
 /// transparent huge pages (Linux `MADV_HUGEPAGE`). A best-effort kernel
@@ -191,7 +200,6 @@ pub fn advise_hugepage(ptr: *const u8, len: usize) {
     #[cfg(target_os = "linux")]
     {
         use core::ffi::{c_int, c_void};
-        use core::sync::atomic::Ordering;
         let Some((aligned_start, aligned_len)) = promotable_range(ptr as usize, len) else {
             return;
         };
@@ -210,7 +218,10 @@ pub fn advise_hugepage(ptr: *const u8, len: usize) {
         // which is false of `madvise` in general and true only of this
         // advice — a premise stated as though it were about the syscall.
         let rc = unsafe { ffi::madvise(aligned_start as *mut c_void, aligned_len, MADV_HUGEPAGE) };
-        LAST_ADVISED.store(if rc == 0 { aligned_len } else { 0 }, Ordering::Relaxed);
+        #[cfg(feature = "std")]
+        LAST_ADVISED.with(|c| c.set(if rc == 0 { aligned_len } else { 0 }));
+        #[cfg(not(feature = "std"))]
+        let _ = rc;
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -412,82 +423,5 @@ pub unsafe fn munmap_2mb(ptr: core::ptr::NonNull<u8>, len: usize) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn no_call_below_two_pages() {
-        // Smaller than 2 * 4 KiB: short-circuit, never reaches the syscall.
-        // We cannot directly assert "no syscall" without a hook, but the
-        // function must at least return cleanly on a tiny buffer.
-        let buf = [0u8; 1024];
-        advise_hugepage(buf.as_ptr(), buf.len());
-    }
-
-    #[test]
-    fn unaligned_buffer_does_not_panic() {
-        // 16 KiB unaligned buffer; the wrapper rounds inward and either
-        // calls madvise on the aligned subset or no-ops. Either way, no
-        // panic, no UB.
-        let buf = vec![0u8; 16 * 1024];
-        advise_hugepage(buf.as_ptr().wrapping_add(7), buf.len() - 7);
-    }
-
-    #[test]
-    fn zero_length_is_noop() {
-        advise_hugepage(core::ptr::null(), 0);
-    }
-
-    #[test]
-    fn large_aligned_region_runs() {
-        // 64 KiB region — enough to clear all the page-alignment guards.
-        // On Linux this issues the syscall; on macOS it's compile-time
-        // out. We only assert the function completes.
-        let buf = vec![0u8; 64 * 1024];
-        advise_hugepage(buf.as_ptr(), buf.len());
-    }
-
-    /// The hint must actually be accepted by the kernel, not merely
-    /// issued.
-    ///
-    /// Every other test in this module checks that a call returns
-    /// cleanly, and one of them says so out loud: "We cannot directly
-    /// assert 'no syscall' without a hook". So they pass whether the
-    /// kernel honours the advice or refuses every one of them — which is
-    /// exactly what a hardcoded 4 KiB page size did on a 64 KiB-page
-    /// kernel, silently, because the return value was discarded.
-    ///
-    /// `last_advised_bytes` is that hook.
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn a_hugepage_hint_on_a_real_region_is_accepted_by_the_kernel() {
-        // Big enough that a whole aligned huge page fits inside it
-        // whatever the region's starting address turns out to be.
-        let len = HUGE_PAGE * 4;
-        let Some(p) = mmap_anon_aligned_2mb(len) else {
-            // No mapping available (constrained container): say so rather
-            // than pass.
-            panic!("could not map a region to advise — this test verified nothing");
-        };
-        advise_hugepage(p.as_ptr(), len);
-        let got = last_advised_bytes();
-        assert!(
-            got >= HUGE_PAGE * 2,
-            "the kernel accepted {got} bytes of a {len} byte region — a refused hint reads \
-             exactly like a granted one unless this is checked"
-        );
-        // SAFETY: unmapping exactly what `mmap_anon_aligned_2mb` returned.
-        unsafe { munmap_2mb(p, len) };
-    }
-
-    /// And a region too small to hold an aligned huge page is not
-    /// advised at all — the syscall costs a write lock and a possible VMA
-    /// split in exchange for a promotion that cannot happen.
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn a_region_too_small_to_promote_is_not_advised() {
-        let buf = vec![0u8; HUGE_PAGE];
-        advise_hugepage(buf.as_ptr(), buf.len());
-        assert_eq!(last_advised_bytes(), 0, "advised a region that cannot be promoted");
-    }
-}
+#[path = "lib_tests.rs"]
+mod tests;
