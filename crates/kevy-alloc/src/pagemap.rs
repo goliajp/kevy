@@ -29,6 +29,19 @@ pub const PAGES_PER_SPAN: usize = SPAN_BYTES / PAGE;
 
 /// `discarded` with every page set — a whole span handed back at once,
 /// which is what retiring an emptied span does.
+///
+/// # Examples
+///
+/// One bit per page of the span, and no more — the field is a `u16` and
+/// a span is 16 pages, so an off-by-one here would either lose a page or
+/// set a bit that names nothing.
+///
+/// ```
+/// use kevy_alloc::pagemap::{ALL_PAGES_DISCARDED, PAGES_PER_SPAN};
+///
+/// assert_eq!(ALL_PAGES_DISCARDED.count_ones() as usize, PAGES_PER_SPAN);
+/// assert_eq!(ALL_PAGES_DISCARDED.trailing_ones() as usize, PAGES_PER_SPAN);
+/// ```
 pub const ALL_PAGES_DISCARDED: u16 = ((1u32 << PAGES_PER_SPAN) - 1) as u16;
 
 /// Bitmap words: enough for the smallest class (16 B → 4096 slots).
@@ -66,6 +79,29 @@ pub struct SpanMeta {
     /// either discarded or deliberately kept. Without this bit all three
     /// collapse into one bucket, which is what they did — the identity
     /// balances the same whichever way they fall, so nothing caught it.
+    ///
+    /// # Examples
+    ///
+    /// The three states a span with no class can be in, and the two
+    /// fields that tell them apart:
+    ///
+    /// ```
+    /// use kevy_alloc::pagemap::{ALL_PAGES_DISCARDED, NO_CLASS};
+    ///
+    /// // (class, retired, discarded) -> what it is
+    /// let never_claimed = (NO_CLASS, false, 0u16);
+    /// let given_back = (NO_CLASS, true, ALL_PAGES_DISCARDED);
+    /// let held = (NO_CLASS, true, 0u16);
+    ///
+    /// // All three read as "unassigned", and only `retired` plus the
+    /// // discard bitmap separate the one that was never touched from the
+    /// // one whose pages went back and the one still resident.
+    /// for (class, _, _) in [never_claimed, given_back, held] {
+    ///     assert_eq!(class, NO_CLASS);
+    /// }
+    /// assert!(!never_claimed.1);
+    /// assert_ne!(given_back.2, held.2);
+    /// ```
     pub retired: bool,
     /// One bit per slot; set = live (or parked on a foreign list, which
     /// pins the page exactly as a live slot does).

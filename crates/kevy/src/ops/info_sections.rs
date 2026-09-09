@@ -26,6 +26,11 @@ pub(super) fn info_clients(cfg: &Config, totals: &crate::state::Totals, b: &mut 
     // Live client conns summed over every shard's per-tick gauge
     // (stale by at most one tick interval).
     b.push_str(&format!("connected_clients:{}\r\n", totals.clients_connected));
+    // Redis reports this in `# Clients` and kevy did not, which also left
+    // a blocking test with no condition to wait on: six of them slept a
+    // fixed 50 ms hoping the client had parked, and under a loaded
+    // machine that is a race rather than a wait.
+    b.push_str(&format!("blocked_clients:{}\r\n", totals.blocked_clients));
     b.push_str(&format!("maxclients:{}\r\n", cfg.server.max_clients));
     b.push_str("\r\n");
 }

@@ -86,15 +86,20 @@ impl Poller {
     /// Wait for readiness, filling `out`. `timeout_ms == None` blocks forever.
     pub fn wait(&self, out: &mut Vec<Event>, timeout_ms: Option<i32>) -> io::Result<usize> {
         out.clear();
-        let mut raw: Vec<ffi::EpollEvent> = Vec::with_capacity(WAIT_CAPACITY);
+        // Stack, not heap: this runs on every iteration of the shard's
+        // busy-poll body, and a `Vec::with_capacity` here was one malloc
+        // plus one free of 12 KB per iteration. See the kqueue twin for
+        // the reasoning; no throughput claim is made, only that the
+        // allocation is gone and the signature is unchanged.
+        let mut raw =
+            [const { core::mem::MaybeUninit::<ffi::EpollEvent>::uninit() }; WAIT_CAPACITY];
         // SAFETY: `self.epfd` is open for the life of this `Poller` — `Drop` is the only
-        // close. `raw` was built with `WAIT_CAPACITY` capacity and that same
-        // number is passed as the array length, so the kernel writes only within the
-        // allocation.
+        // close. `raw` is `WAIT_CAPACITY` elements and that same number is passed as the
+        // array length, so the kernel writes only within it.
         let n = unsafe {
             ffi::epoll_wait(
                 self.epfd,
-                raw.as_mut_ptr(),
+                raw.as_mut_ptr().cast::<ffi::EpollEvent>(),
                 WAIT_CAPACITY as c_int,
                 timeout_ms.unwrap_or(-1),
             )
@@ -106,11 +111,12 @@ impl Poller {
             }
             return Err(e);
         }
-        // SAFETY: `epoll_wait` returned `n` and `n >= 0` was checked above; the kernel
-        // initialised exactly that many elements, and `n <= WAIT_CAPACITY` is the length we
-        // passed, which is the capacity `raw` was built with.
-        unsafe { raw.set_len(n as usize) };
-        for ev in &raw {
+        // `n >= 0` was checked above and `n <= WAIT_CAPACITY` is the length we passed, so
+        // this slice is inside the array and every element of it was written by the kernel.
+        for ev in &raw[..n as usize] {
+            // SAFETY: `epoll_wait` reported `n` events, so each element here was
+            // initialised by the kernel before it returned.
+            let ev = unsafe { ev.assume_init_ref() };
             let flags = ev.events; // copy out (struct may be packed on x86_64)
             let fd = ev.data as i32;
             let hup = flags & (ep::EPOLLHUP | ep::EPOLLERR | ep::EPOLLRDHUP) != 0;

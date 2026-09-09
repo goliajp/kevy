@@ -178,6 +178,98 @@ real duration to `target/suite-<tier>.json` for exactly this; the
 declarations are now corrected from it, at roughly twice measurement, and
 precommit declares 230s for its 134.
 
+### `INFO clients` reports `blocked_clients`
+
+Redis publishes it and kevy did not, and the gap had a second cost: six
+blocking tests had no condition to wait on, so each slept a flat 50 ms
+and assumed the client had parked by then. Under a full-workspace run —
+dozens of test binaries at once — that assumption failed once, and a test
+that fails for a reason unrelated to what it tests is worse than no test.
+
+The gauge is published per shard on the tick, summed across shards like
+the other client gauges. It counts each parked connection once: the
+in-shard registry is keyed by connection, and a client blocked on a
+remote or multi-key form is recorded on exactly one arbiter shard
+instead. Verified on a live server — 0 idle, 1 while a `BLPOP` waits,
+back to 0 when it times out.
+
+The tests now wait for that number instead of for a duration, which also
+took the blocking suite from about ten seconds to one.
+
+### Three more from the same reviews
+
+**A discarded `bool` that would have corrupted every later rank answer.**
+`kevy-ranktree`'s delete path merges two minimal children and then removes
+the key from the merged child, asserting via `debug_assert!` that it was
+found. The result was otherwise discarded, so the two builds disagreed
+about what happens if that invariant ever stopped holding: debug panicked,
+release decremented the subtree count anyway. A count one too low is not
+one wrong answer — it is every rank, select, len, count and range answer
+wrong, silently, for the life of the tree.
+
+**Two `unsafe impl`s that turned the compiler's own check off.**
+`kevy_sys::Waker` holds two file descriptors and nothing else, so it is
+`Send + Sync` by auto-derive; the manual impls were no-ops. But an
+explicit `unsafe impl` opts a type out of that check permanently, so the
+day someone adds a pointer or a `Cell` the compiler would have stayed
+silent about a type that had stopped being `Sync`. `Socket` and `Poller`
+have the same shape and carry no such impls. They are gone, their
+reasoning is kept, and a static assertion now states the requirement so
+it fails here rather than at a distant call site.
+
+**A heap allocation per iteration of the busy-poll loop.** Both pollers
+built a `Vec::with_capacity(1024)` for the kernel's event array on every
+`wait` — 32 KB malloc-and-free per call on kqueue, 12 KB on epoll, inside
+the loop body the shard runs continuously. It is a stack array now. The
+signature did not move, and no throughput claim is attached to this: what
+is claimed is that the allocation is gone.
+
+### Four io_uring paths where a failure had nowhere to be reported
+
+From the same review as the use-after-free below. None of these is known
+to have fired; each is a case where, if it did, the result would be
+corruption or a hang with nothing to read.
+
+**A panicking completion callback replayed the batch.** `for_each_completion`
+published the consumer head only on the normal path, so an unwinding
+callback left `cq_khead` where it was and the whole batch arrived again
+next call. For a completion carrying a provided-buffer id that means
+recycling the same buffer twice, which publishes it to the ring twice and
+lets the kernel hand it to two receives at once. The head is now published
+by a drop guard, and each completion is counted consumed *before* the
+callback sees it: a lost completion stalls one operation and can be
+diagnosed, a repeated one aliases memory inside the kernel.
+
+**Dropping a provided-buffer ring freed a slab the kernel could still
+write to.** `IORING_UNREGISTER_PBUF_RING` removes the group from the
+ring's table; it cancels no armed multishot receive and waits for none
+that has already selected a buffer. Nothing here can know whether one is
+outstanding, so the slab is now leaked rather than freed — the same
+doctrine the batched-read error path already used, and the honest price
+of a safe API that cannot prove the kernel is finished.
+
+**A full submission queue looped forever in release builds.**
+`read_file_batch` guarded that case with `debug_assert!`, so in release an
+empty chunk meant reaping nothing, advancing nothing, and retrying the
+same full queue for ever. It returns an error now.
+
+**And it validated completions by an index it did not check.**
+`for_each_completion` drains the entire queue, so a completion from any
+other submitter on the ring arrived in that callback and its `user_data`
+was used to index the read table directly. The reactor tags its own with
+`OP << 60 | cid`, which as an index is astronomically out of bounds; a
+smaller foreign value would have quietly validated the wrong read. The
+batch tags its submissions and ignores anything else.
+
+Plus the barrier `submit_and_wait` was missing on the SQPOLL path: the
+tail store and the `sq_flags` load are a store-load pair on different
+addresses, which release/acquire does not order. Both sides could read
+the other's old value — userspace skipping the syscall while the poll
+thread sleeps — and the submission would then never run and never
+complete. liburing puts a full barrier at exactly that point. While there,
+the poll thread is no longer woken for an empty submission, which on an
+idle loop was one syscall per iteration.
+
 ### Structs the kernel reads, with nothing checking their shape
 
 `kevy-sys` and `kevy-uring` hand `#[repr(C)]` structs straight to the

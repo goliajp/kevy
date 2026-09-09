@@ -199,6 +199,12 @@ pub trait Commands: Clone + Send + 'static {
     /// no-op.
     fn on_conn_gauge(&self, _live: u64) {}
 
+    /// Publish how many connections are parked in a blocking command on
+    /// this shard, once per tick, beside [`Self::on_conn_gauge`].
+    ///
+    /// Defaulted to a no-op so adding it breaks no implementor.
+    fn on_blocked_gauge(&self, _blocked: u64) {}
+
     /// Per-tick replication-view publication: the answering shard's
     /// current `master_repl_offset` (== `ReplicationSource::next_offset()`)
     /// plus a [`ReplicaViewRow`] for every handshake-complete replica

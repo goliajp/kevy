@@ -313,6 +313,12 @@ impl Commands for KevyCommands {
         });
     }
 
+    fn on_blocked_gauge(&self, blocked: u64) {
+        self.shard_ctx().with_stats_slot(|s| {
+            s.blocked_clients.store(blocked, std::sync::atomic::Ordering::Relaxed);
+        });
+    }
+
     fn live_runtime_config(&self) -> kevy_rt::LiveRuntimeConfig {
         // Per-tick (every 100 ms by default) re-read of the shared config.
         // When no explicit config was ever installed (tests, hand-rolled

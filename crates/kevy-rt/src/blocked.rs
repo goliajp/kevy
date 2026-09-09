@@ -152,6 +152,15 @@ impl BlockedClients {
         self.by_key.is_empty()
     }
 
+    /// Connections parked here right now. `by_conn` is keyed by
+    /// connection, so its length is the count — a conn blocked on
+    /// several keys at once appears once, which is what `blocked_clients`
+    /// means.
+    #[inline]
+    pub(crate) fn blocked_conns(&self) -> usize {
+        self.by_conn.len()
+    }
+
     #[inline]
     pub(crate) fn is_watched(&self, key: &[u8]) -> bool {
         self.by_key.contains_key(key)

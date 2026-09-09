@@ -85,16 +85,31 @@ impl Drop for Waker {
     }
 }
 
-// The pipe ends are plain fds with no aliasing; safe to move across threads.
-// SAFETY: `Waker` owns two pipe fds and nothing else. A descriptor is an integer
-// handle into a kernel table, not a pointer into this process, so moving one to
-// another thread aliases nothing.
+// `Waker` is `Send + Sync` by auto-derive, and deliberately says so by
+// saying nothing: it holds two `c_int` fds and nothing else, and a
+// descriptor is an integer handle into a kernel table rather than a
+// pointer into this process.
 //
-// `Sync`: the only shared-reference operations are `wake` (a 1-byte `write`) and
-// `drain` (a `read`); the kernel serialises both internally, and a pipe write of
-// one byte is atomic. Concurrent callers can therefore race only over which of
-// them wakes the poller, which is the intended semantics.
-unsafe impl Send for Waker {}
-// SAFETY: as above — the only shared-reference operations are a 1-byte pipe write
-// and a pipe read, both serialised by the kernel.
-unsafe impl Sync for Waker {}
+// There were `unsafe impl Send` and `unsafe impl Sync` here. Both were
+// no-ops — the auto impls already applied — but an explicit `unsafe
+// impl` opts the type out of the compiler's check permanently. The day
+// someone adds a `*mut c_void` or a `Cell` to this struct, say a cached
+// buffer for `drain`, the compiler would have stayed silent about a type
+// that had genuinely stopped being `Sync`. `Socket` and `Poller` have
+// the same shape and carry no such impls, which is what made these two
+// look defensive rather than required.
+//
+// The reasoning they carried is worth keeping: the only shared-reference
+// operations are `wake` (a one-byte `write`) and `drain` (a `read`), the
+// kernel serialises both, and a one-byte pipe write is atomic — so
+// concurrent callers race only over which of them wakes the poller,
+// which is the intended semantics.
+//
+// The requirement is still stated, and now the compiler is what checks
+// it: if a field is added that is not `Send + Sync`, this fails to build
+// here rather than at some distant call site — or, with the manual
+// impls, not at all.
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<Waker>();
+};

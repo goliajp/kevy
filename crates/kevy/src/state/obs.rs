@@ -33,6 +33,9 @@ pub(crate) struct ShardStats {
     /// Live client conns on this shard right now (gauge, published per
     /// tick from the reactor's conn table; cluster-bus links excluded).
     pub clients_connected: AtomicU64,
+    /// Client conns parked in a blocking command on this shard right now
+    /// (gauge, published per tick alongside `clients_connected`).
+    pub blocked_clients: AtomicU64,
     /// High-water mark of the reactor tick's lateness (µs over its
     /// interval) — the single-iteration stall upper bound (V3 tail
     /// train). fetch_max'd from the tick, never reset.
@@ -119,6 +122,8 @@ pub(crate) struct Totals {
     pub commands_processed: u64,
     pub connections_received: u64,
     pub clients_connected: u64,
+    /// SUM across shards — each blocked conn is registered on exactly one.
+    pub blocked_clients: u64,
     /// MAX across shards (a stall on one shard is the instance's
     /// answer — summing stalls would say something false).
     pub tick_gap_max_us: u64,
@@ -286,6 +291,7 @@ impl ObsState {
             t.commands_processed += s.commands_processed.load(Relaxed);
             t.connections_received += s.connections_received.load(Relaxed);
             t.clients_connected += s.clients_connected.load(Relaxed);
+            t.blocked_clients += s.blocked_clients.load(Relaxed);
             t.tick_gap_max_us = t.tick_gap_max_us.max(s.tick_gap_max_us.load(Relaxed));
             t.ticks_total += s.ticks_total.load(Relaxed);
             t.query_buffer_disconnections += s.query_buffer_disconnections.load(Relaxed);
