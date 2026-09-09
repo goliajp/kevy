@@ -8,9 +8,8 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use std::io;
 
 use crate::completion::Completion;
-use crate::ffi::{
-    self, IORING_ENTER_GETEVENTS, IORING_ENTER_SQ_WAKEUP, IORING_SQ_NEED_WAKEUP, SYS_IO_URING_ENTER,
-};
+use crate::enter_policy::{dropped_error, dropped_since, enter_flags_for, may_skip_enter};
+use crate::ffi::{self, IORING_ENTER_SQ_WAKEUP, IORING_SQ_NEED_WAKEUP, SYS_IO_URING_ENTER};
 use crate::layout::IoUringSqe;
 
 /// A Linux io_uring instance: one submission ring + one completion ring.
@@ -265,7 +264,7 @@ impl IoUring {
         // carry GETEVENTS — otherwise operations that have completed are
         // never reported, and nothing anywhere says so.
         let overflowed = self.cq_overflowed();
-        if !overflowed && to_submit == 0 && wait_nr == 0 && self.sq_flags.is_none() {
+        if may_skip_enter(overflowed, to_submit, wait_nr, self.sq_flags.is_some()) {
             self.iters_since_enter = self.iters_since_enter.saturating_add(1);
             if self.iters_since_enter < ENTER_SKIP_THRESHOLD {
                 return Ok(0);
@@ -274,7 +273,7 @@ impl IoUring {
             // below so task_work flushes. Counter resets after syscall.
         }
 
-        let mut enter_flags = if wait_nr > 0 || overflowed { IORING_ENTER_GETEVENTS } else { 0 };
+        let mut enter_flags = enter_flags_for(wait_nr, overflowed);
         if let Some(sq_flags_ptr) = self.sq_flags {
             // SAFETY: `sq_flags_ptr` lives inside the SQ mmap, valid for ring
             // lifetime. Kernel writes IORING_SQ_NEED_WAKEUP on park; Acquire
@@ -356,12 +355,7 @@ impl IoUring {
         let now = unsafe { (*self.dropped).load(Ordering::Relaxed) };
         let lost = dropped_since(self.last_dropped, now);
         self.last_dropped = now;
-        match lost {
-            0 => Ok(()),
-            n => Err(io::Error::other(format!(
-                "io_uring dropped {n} submission(s); they will never complete"
-            ))),
-        }
+        dropped_error(lost)
     }
 
     /// Reap every available completion, calling `f` for each; returns the count.
@@ -423,38 +417,5 @@ impl Drop for IoUring {
             ffi::munmap(self.sq_mmap, self.sq_mmap_len);
             ffi::close(self.ring_fd);
         }
-    }
-}
-
-/// How many submissions the kernel refused since `last`.
-///
-/// A free function so both answers are reachable from a test: on a
-/// healthy ring the counter never moves, so the reporting branch would
-/// be code no coverage run could execute — the same shape that put
-/// `page_size_matches` on the ratchet.
-///
-/// `wrapping_sub` because the kernel's counter is a `u32` that only ever
-/// grows. A ring that dropped four billion submissions has bigger
-/// problems than this arithmetic, but reporting a nonsense count is
-/// still worse than reporting a small one.
-fn dropped_since(last: u32, now: u32) -> u32 {
-    now.wrapping_sub(last)
-}
-
-#[cfg(test)]
-mod dropped_tests {
-    use super::dropped_since;
-
-    /// Both answers, including the one a healthy ring never gives.
-    #[test]
-    fn a_still_counter_reports_nothing_and_a_moved_one_reports_the_delta() {
-        assert_eq!(dropped_since(0, 0), 0, "an untouched ring must report nothing");
-        assert_eq!(dropped_since(7, 7), 0);
-        assert_eq!(dropped_since(0, 1), 1);
-        assert_eq!(dropped_since(5, 9), 4, "the delta, not the total");
-        // The kernel's counter is u32 and only grows; a wrap must not
-        // report four billion.
-        assert_eq!(dropped_since(u32::MAX, 0), 1);
-        assert_eq!(dropped_since(u32::MAX - 1, 1), 3);
     }
 }

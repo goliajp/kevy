@@ -175,6 +175,38 @@ fn m6_an_exhausted_class_refuses_instead_of_handing_back_a_wild_pointer() {
 }
 
 #[test]
+fn m4_a_refused_discard_returns_no_pages_from_a_live_span() {
+    require_mapping!();
+    let mut heap = Heap::new(0);
+    let size = 64;
+    let per_span = class::slots_per_span(class::index_of(size, 8).unwrap());
+    // Two spans' worth, then free only the second half of each: every
+    // span keeps live slots, so the sweep takes the page-granular path
+    // rather than retiring whole spans. That is the path the previous
+    // test never reaches — it frees everything, so every span is empty
+    // and goes to the retire branch instead.
+    let count = per_span * 2;
+    let mut given = Vec::with_capacity(count);
+    for _ in 0..count {
+        given.push(heap.alloc(size, 8).expect("filling spans"));
+    }
+    for (i, p) in given.into_iter().enumerate() {
+        if i % 2 == 1 {
+            // SAFETY: ours, this size.
+            unsafe { heap.dealloc(p, size, 8) };
+        }
+    }
+    let before = heap.snapshot();
+    assert!(before.live > 0, "every span must still hold live slots");
+
+    heap.reclaim_with(false);
+    let after = heap.snapshot();
+    assert!(after.balanced(), "{after:?}");
+    assert_eq!(after.returned, 0, "a refused discard reported pages as returned");
+    assert_eq!(after.live, before.live, "reclaim must not touch live slots");
+}
+
+#[test]
 fn m4_a_machine_that_cannot_discard_reports_held_not_returned() {
     require_mapping!();
     let mut heap = Heap::new(0);
