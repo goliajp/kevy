@@ -68,7 +68,7 @@ impl PartialEq for SmallBytes {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
         // SAFETY: byte 23 (`inline.tag`) is always a valid load in either
-        // variant — it's either the inline-length 0..=22 or 0xFF as the
+        // variant — it's either the inline-length 0..=23 or 0xFF as the
         // heap-discriminator overlap (see crate doc).
         let self_tag = unsafe { self.inline.tag };
         // SAFETY: same overlap argument, on the other value.
@@ -80,8 +80,8 @@ impl PartialEq for SmallBytes {
             (false, false) => self.eq_heap_heap(other),
             // Mixed inline/heap: this IS reachable in normal operation.
             // It happens whenever HashMap (or any `==` consumer) compares
-            // an inline-length value (len ≤ 22) against a heap-length
-            // value (len > 22). Two SmallBytes of different lengths can
+            // an inline-length value (len ≤ 23) against a heap-length
+            // value (len > 23). Two SmallBytes of different lengths can
             // *collide* on hashbrown's hash + quadratic probe, and the
             // probe checks equality even though the lengths differ. The
             // pre-fix `unreachable!()` here was a logic bug — it assumed

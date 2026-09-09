@@ -109,7 +109,12 @@ impl Drop for Waker {
 // it: if a field is added that is not `Send + Sync`, this fails to build
 // here rather than at some distant call site — or, with the manual
 // impls, not at all.
-const _: fn() = || {
-    fn assert_send_sync<T: Send + Sync>() {}
-    assert_send_sync::<Waker>();
-};
+//
+// A `where` clause rather than a closure calling a generic function: the
+// closure form is never invoked, so it is a body that by construction
+// cannot be executed — five never-executed regions handed to the
+// coverage ratchet in exchange for a check a type definition does for
+// free.
+struct _WakerIsSendSync
+where
+    Waker: Send + Sync;

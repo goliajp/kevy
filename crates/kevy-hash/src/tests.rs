@@ -63,18 +63,31 @@ fn kevy_hash_integer_paths_differ_per_value() {
 }
 
 #[test]
-fn kevy_hash_top7_bits_distribute() {
-    // Same low-entropy clustering guard, but driven through `kevy_hash`
-    // on byte slices — the path kevy-map's metadata byte will use.
+fn kevy_hash_bits_distribute_at_both_ends() {
+    // The low-entropy clustering guard, driven through `kevy_hash` on
+    // byte slices — the two-stream pipelined path.
+    //
+    // This checked only the top 7 bits, while the low-bit check ran on
+    // the LEGACY `FxHasher` absorb, which is a different function. So the
+    // half of the word that picks the bucket had no guard on the path
+    // that actually picks buckets: `kevy-map` takes the index from the
+    // low bits and the metadata byte from the top 7, and only one end was
+    // being watched on each path.
+    let mut low = [0u32; 256];
     let mut top = [0u32; 128];
     for i in 0..4096u64 {
         let mut k = format!("key:{i}").into_bytes();
         k.resize(12, b'x');
         let hash = k.as_slice().kevy_hash();
+        low[(hash & 0xff) as usize] += 1;
         top[(hash >> 57) as usize] += 1;
     }
-    let max = *top.iter().max().unwrap();
-    assert!(max < 128, "top-7-bit skew {max} (mean 32) — avalanche failing");
+    let max_low = *low.iter().max().unwrap();
+    let max_top = *top.iter().max().unwrap();
+    // 4096 keys over 256 buckets is a mean of 16; over 128 control bytes,
+    // 32. Well-avalanched ⇒ no bucket past ~4x its mean.
+    assert!(max_low < 64, "low-bit skew {max_low} (mean 16) — avalanche failing");
+    assert!(max_top < 128, "top-7-bit skew {max_top} (mean 32) — avalanche failing");
 }
 
 #[test]

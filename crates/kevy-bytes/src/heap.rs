@@ -10,7 +10,18 @@
 use core::ptr::NonNull;
 
 pub(crate) const INLINE_CAP: usize = 23;
-pub(crate) const INLINE_LEN_MAX: u8 = (INLINE_CAP - 1) as u8;
+/// The longest payload the inline rep holds — the whole buffer.
+///
+/// This was `INLINE_CAP - 1`. That would be right if the tag were carved
+/// out of `data`, and it is not: `Inline` is two sibling fields,
+/// `{ data: [u8; 23], tag: u8 }`, totalling 24. So `data[22]` was
+/// written as zero and never read, and every 23-byte key or value paid
+/// for a malloc, a free, a pointer chase and an allocator header it did
+/// not need.
+///
+/// The tag still separates the reps: inline tags are `0..=23` and the
+/// heap rep writes `0xFF`.
+pub(crate) const INLINE_LEN_MAX: u8 = INLINE_CAP as u8;
 
 #[cfg(target_pointer_width = "64")]
 const TAG_HEAP_BIT: usize = 0xFFusize << 56;
@@ -27,7 +38,7 @@ const HEAP_TAG_BYTE: u8 = 0xFF;
 #[derive(Copy, Clone)]
 pub(crate) struct Inline {
     pub(crate) data: [u8; INLINE_CAP],
-    /// 0..=22 = inline length. The heap rep sets this byte to 0xFF either via
+    /// 0..=23 = inline length. The heap rep sets this byte to 0xFF either via
     /// the high byte of `Heap::cap_and_tag` (64-bit, little-endian overlap)
     /// or as a dedicated `tag` field at offset 23 (32-bit).
     pub(crate) tag: u8,
