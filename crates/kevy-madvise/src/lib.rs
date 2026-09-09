@@ -36,11 +36,12 @@
 mod ffi {
     use core::ffi::{c_int, c_void};
 
-    // The four libc symbols kevy-madvise touches; every call site is in this
+    // The libc symbols kevy-madvise touches; every call site is in this
     // file. glibc resolves these via `std`'s existing linkage — no extra
     // link directive needed.
     unsafe extern "C" {
         pub fn madvise(addr: *mut c_void, length: usize, advice: c_int) -> c_int;
+        pub fn sysconf(name: c_int) -> i64;
         pub fn mmap(
             addr: *mut c_void,
             length: usize,
@@ -52,6 +53,92 @@ mod ffi {
         pub fn munmap(addr: *mut c_void, length: usize) -> c_int;
     }
 }
+
+/// The kernel's page size, asked once and remembered.
+///
+/// `madvise` refuses a start address that is not page-aligned, and the
+/// page size is a **runtime** property: 4 KiB on x86_64, but 16 KiB and
+/// 64 KiB kernels are both ordinary on aarch64 — and `aarch64-unknown-linux-*`
+/// is a target this project publishes.
+///
+/// This used to be `const PAGE: usize = 4096`, justified by a comment
+/// saying that on 16 KiB / 64 KiB systems "the wider alignment still
+/// happens to be a 4-KiB multiple, so this is correct, just slightly
+/// more conservative". That has it backwards twice. What has to hold is
+/// that the address is a multiple of the REAL page size, and rounding to
+/// 4 KiB does not give that; and rounding to a *smaller* granularity is
+/// less conservative, not more. On a 64 KiB-page kernel fifteen hints in
+/// sixteen would have been refused with EINVAL — silently, because the
+/// return value is discarded.
+///
+/// `kevy-alloc` learned this and wrote it down: a measuring device that
+/// fails in the shape of data. This is the same syscall, asked the same
+/// way.
+#[cfg(target_os = "linux")]
+fn page_size() -> usize {
+    use core::sync::atomic::{AtomicUsize, Ordering};
+    static CACHED: AtomicUsize = AtomicUsize::new(0);
+    let seen = CACHED.load(Ordering::Relaxed);
+    if seen != 0 {
+        return seen;
+    }
+    // `_SC_PAGESIZE` is 30 on Linux (asm-generic/posix_types.h ordering
+    // in glibc's `bits/confname.h`).
+    const SC_PAGESIZE: core::ffi::c_int = 30;
+    // SAFETY: `sysconf` reads no Rust memory and takes an int.
+    let got = unsafe { ffi::sysconf(SC_PAGESIZE) };
+    // A failure (-1) or a nonsensical answer falls back to the smallest
+    // page any of these kernels use, which is the safe direction: too
+    // small an assumption only over-aligns within a real page.
+    let size = if got > 0 { got as usize } else { 4096 };
+    CACHED.store(size, Ordering::Relaxed);
+    size
+}
+
+/// The page-aligned sub-range worth advising, if any.
+///
+/// Two conditions, and the second was wrong. The range must be aligned
+/// to the kernel's **real** page size, or `madvise` answers EINVAL; and
+/// it must be able to contain a whole huge-page-aligned huge page, or
+/// `khugepaged` has nothing to promote and the call buys a syscall under
+/// the mmap write lock plus a possible VMA split in exchange for
+/// nothing. The threshold used to be two base pages — 8 KiB — which on
+/// the caller's own path is the common case.
+#[cfg(target_os = "linux")]
+fn promotable_range(start: usize, len: usize) -> Option<(usize, usize)> {
+    if len < HUGE_PAGE * 2 {
+        return None;
+    }
+    let page = page_size();
+    let aligned_start = (start + page - 1) & !(page - 1);
+    let end = start.checked_add(len)?;
+    if aligned_start >= end {
+        return None;
+    }
+    let aligned_len = (end - aligned_start) & !(page - 1);
+    (aligned_len >= HUGE_PAGE * 2).then_some((aligned_start, aligned_len))
+}
+
+/// Bytes the last [`advise_hugepage`] call actually got the kernel to
+/// accept — `0` if it was refused or never made.
+///
+/// The call itself returns nothing, deliberately: a caller cannot branch
+/// on it and be right on another platform. But "returns nothing" also
+/// made a hint that the kernel **refused** indistinguishable from one it
+/// granted, which is the whole failure mode of a hardcoded page size —
+/// on a 64 KiB-page kernel every call would have been EINVAL and no test
+/// or metric could have said so.
+///
+/// This is the witness. It is a test and diagnostic surface, not a
+/// control input.
+#[cfg(target_os = "linux")]
+#[must_use]
+pub fn last_advised_bytes() -> usize {
+    LAST_ADVISED.load(core::sync::atomic::Ordering::Relaxed)
+}
+
+#[cfg(target_os = "linux")]
+static LAST_ADVISED: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 
 /// Hint the kernel that the region `[ptr, ptr+len)` is a candidate for
 /// transparent huge pages (Linux `MADV_HUGEPAGE`). A best-effort kernel
@@ -104,32 +191,26 @@ pub fn advise_hugepage(ptr: *const u8, len: usize) {
     #[cfg(target_os = "linux")]
     {
         use core::ffi::{c_int, c_void};
-        // 4 KiB base page is universal on x86_64 / aarch64 Linux setups
-        // kevy targets. (On systems using 16 KiB / 64 KiB pages the wider
-        // alignment still happens to be a 4-KiB multiple, so this is
-        // correct, just slightly more conservative.)
-        const PAGE: usize = 4096;
-        if len < PAGE * 2 {
+        use core::sync::atomic::Ordering;
+        let Some((aligned_start, aligned_len)) = promotable_range(ptr as usize, len) else {
             return;
-        }
-        let start = ptr as usize;
-        let aligned_start = (start + PAGE - 1) & !(PAGE - 1);
-        let end = start + len;
-        if aligned_start >= end {
-            return;
-        }
-        let aligned_len = (end - aligned_start) & !(PAGE - 1);
-        if aligned_len < PAGE * 2 {
-            return;
-        }
+        };
         // Linux MADV_HUGEPAGE = 14 (mm/madvise.c, asm-generic/mman-common.h).
         const MADV_HUGEPAGE: c_int = 14;
-        // SAFETY: ffi::madvise is a kernel advise call; it reads no Rust
-        // memory, performs no writes, and is benign on error (EINVAL on
-        // mis-aligned / unsupported kernels is what we want — no-op).
-        unsafe {
-            let _ = ffi::madvise(aligned_start as *mut c_void, aligned_len, MADV_HUGEPAGE);
-        }
+        // SAFETY: the advice is `MADV_HUGEPAGE`, which is a pure hint —
+        // it neither reads nor writes the region, so passing a pointer to
+        // live Rust memory aliases nothing. That is the premise, and it
+        // is what lets this be a safe function: `MADV_DONTNEED` would
+        // ZERO the region, and a safe wrapper around that would be
+        // unsound. The range is page-aligned above using the kernel's own
+        // page size, and an unmapped range answers ENOMEM rather than
+        // doing anything.
+        //
+        // The note here used to read "madvise ... performs no writes",
+        // which is false of `madvise` in general and true only of this
+        // advice — a premise stated as though it were about the syscall.
+        let rc = unsafe { ffi::madvise(aligned_start as *mut c_void, aligned_len, MADV_HUGEPAGE) };
+        LAST_ADVISED.store(if rc == 0 { aligned_len } else { 0 }, Ordering::Relaxed);
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -364,5 +445,49 @@ mod tests {
         // out. We only assert the function completes.
         let buf = vec![0u8; 64 * 1024];
         advise_hugepage(buf.as_ptr(), buf.len());
+    }
+
+    /// The hint must actually be accepted by the kernel, not merely
+    /// issued.
+    ///
+    /// Every other test in this module checks that a call returns
+    /// cleanly, and one of them says so out loud: "We cannot directly
+    /// assert 'no syscall' without a hook". So they pass whether the
+    /// kernel honours the advice or refuses every one of them — which is
+    /// exactly what a hardcoded 4 KiB page size did on a 64 KiB-page
+    /// kernel, silently, because the return value was discarded.
+    ///
+    /// `last_advised_bytes` is that hook.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_hugepage_hint_on_a_real_region_is_accepted_by_the_kernel() {
+        // Big enough that a whole aligned huge page fits inside it
+        // whatever the region's starting address turns out to be.
+        let len = HUGE_PAGE * 4;
+        let Some(p) = mmap_anon_aligned_2mb(len) else {
+            // No mapping available (constrained container): say so rather
+            // than pass.
+            panic!("could not map a region to advise — this test verified nothing");
+        };
+        advise_hugepage(p.as_ptr(), len);
+        let got = last_advised_bytes();
+        assert!(
+            got >= HUGE_PAGE * 2,
+            "the kernel accepted {got} bytes of a {len} byte region — a refused hint reads \
+             exactly like a granted one unless this is checked"
+        );
+        // SAFETY: unmapping exactly what `mmap_anon_aligned_2mb` returned.
+        unsafe { munmap_2mb(p, len) };
+    }
+
+    /// And a region too small to hold an aligned huge page is not
+    /// advised at all — the syscall costs a write lock and a possible VMA
+    /// split in exchange for a promotion that cannot happen.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_region_too_small_to_promote_is_not_advised() {
+        let buf = vec![0u8; HUGE_PAGE];
+        advise_hugepage(buf.as_ptr(), buf.len());
+        assert_eq!(last_advised_bytes(), 0, "advised a region that cannot be promoted");
     }
 }
