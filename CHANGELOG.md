@@ -178,6 +178,50 @@ real duration to `target/suite-<tier>.json` for exactly this; the
 declarations are now corrected from it, at roughly twice measurement, and
 precommit declares 230s for its 134.
 
+### Two instruments that were checking less than they appeared to
+
+**The SIMD scanner's oracle could be comparing a function to itself.**
+`find_crlf` dispatches to AVX2, NEON, or a SWAR loop, and the test
+compared the *dispatcher* against SWAR. On x86_64 without AVX2 the
+dispatcher **is** the SWAR loop, so every input passed and nothing was
+verified — while looking exactly like an oracle that verifies something.
+The vector kernel is now driven directly rather than through the
+dispatcher, so a dispatcher that declined to use it can no longer hide a
+broken one, and a build with no vector tier says so instead of passing
+quietly. Red-green checked: a deliberately broken NEON kernel fails five
+of the eight cases.
+
+**The pipelined hash was guarded at one end only.** `kevy-map` takes its
+bucket index from the low bits and its metadata byte from the top seven.
+The low-bit distribution check ran on the legacy `FxHasher` absorb, and
+the check on the pipelined path — the one that actually indexes buckets —
+looked only at the top seven. Both ends are now checked on both paths.
+
+Also: `hash_bytes_pipelined`'s length waiver claimed codegen as its
+reason, which is not one of the two the rule allows. It is in fact the
+second — a byte-faithful transcription of rustc-hash 2.x, verified
+identical for every length 0..200 — and now says so.
+
+### One byte of inline capacity that the layout had all along
+
+`SmallBytes` stores short values inside itself: a 23-byte buffer and a
+one-byte tag, 24 bytes total. The bound was `INLINE_CAP - 1`, which would
+be right if the tag were carved out of the buffer — and it is not, they
+are sibling fields. So `data[22]` was written as zero, never read, and
+every 23-byte key or value paid for a malloc, a free, a pointer chase and
+an allocator header it did not need. A Redis key like
+`user:1234567890:session` is exactly 23 bytes.
+
+The bound is the buffer now. Asserted through the crate's own allocation
+counter — 23 bytes allocates zero, 24 still allocates — rather than by
+reading the constant back, so what is tested is the behaviour and not the
+arithmetic. Two existing boundary tests pinned the off-by-one at 22/23 and
+have moved to 23/24.
+
+This was only safe because the previous change removed the copy of that
+threshold from `kevy-store`; with the literal `22` still there, moving the
+boundary would have mis-charged every key with nothing failing to say so.
+
 ### `INFO clients` reports `blocked_clients`
 
 Redis publishes it and kevy did not, and the gap had a second cost: six

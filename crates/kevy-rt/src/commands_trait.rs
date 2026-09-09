@@ -203,6 +203,28 @@ pub trait Commands: Clone + Send + 'static {
     /// this shard, once per tick, beside [`Self::on_conn_gauge`].
     ///
     /// Defaulted to a no-op so adding it breaks no implementor.
+    ///
+    /// # Examples
+    ///
+    /// It is a gauge, not a counter: each tick replaces the value rather
+    /// than adjusting it, so an implementation stores and never adds. A
+    /// connection blocked on several keys at once is still one connection.
+    ///
+    /// ```
+    /// use core::sync::atomic::{AtomicU64, Ordering};
+    ///
+    /// // What an implementation does with the argument.
+    /// static BLOCKED: AtomicU64 = AtomicU64::new(0);
+    /// let publish = |n: u64| BLOCKED.store(n, Ordering::Relaxed);
+    ///
+    /// publish(2);
+    /// assert_eq!(BLOCKED.load(Ordering::Relaxed), 2);
+    ///
+    /// // One of them woke. The next tick replaces the reading; nothing
+    /// // decrements, so a missed tick cannot leave the gauge drifting.
+    /// publish(1);
+    /// assert_eq!(BLOCKED.load(Ordering::Relaxed), 1);
+    /// ```
     fn on_blocked_gauge(&self, _blocked: u64) {}
 
     /// Per-tick replication-view publication: the answering shard's

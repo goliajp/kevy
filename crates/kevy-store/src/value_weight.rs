@@ -65,7 +65,7 @@ impl Value {
             // Each member's bytes live twice when they spill to heap (>22 B):
             // once as the `by_member` key, once inside the rank tree's
             // `(Score, SmallBytes)` key — hence the ×2 on `heap_bytes`.
-            // Members ≤22 B are inline in both slots (heap_bytes = 0).
+            // Members ≤23 B are inline in both slots (heap_bytes = 0).
             Value::ZSet(z) => {
                 collection_overhead(z.by_member.capacity(), HASH_SLOT_BYTES)
                     + z.by_member.iter().map(|(m, _)| 2 * m.heap_bytes() as u64).sum::<u64>()
@@ -86,7 +86,7 @@ impl Value {
     // LOC-WAIVER: pure per-variant predicate table — one arm per stored encoding, no control flow
     pub fn is_heap_heavy(&self) -> bool {
         match self {
-            // Inline 22 B / heap ≤ small-class — fast to free inline.
+            // Inline 23 B / heap ≤ small-class — fast to free inline.
             Value::Str(_)
             | Value::Int(_)
             | Value::SmallSetInline(_)

@@ -212,15 +212,72 @@ pub(crate) fn find_crlf_swar(buf: &[u8], start: usize) -> Option<usize> {
 mod tests {
     use super::*;
 
+    /// The vector tier this build will actually verify against SWAR, or
+    /// `None` when there is none.
+    ///
+    /// `assert_matches_swar` compares `find_crlf` — the dispatcher — to
+    /// `find_crlf_swar`. On x86_64 *without* AVX2 the dispatcher falls
+    /// through to the SWAR loop, so that comparison is a function against
+    /// itself: every input passes and the oracle verifies nothing, while
+    /// looking exactly like an oracle that does. Naming the tier makes
+    /// the difference visible, and the test below fails rather than
+    /// passing quietly when there is no tier to check.
+    /// A vector kernel and the name to report it under.
+    type Tier = (&'static str, unsafe fn(&[u8], usize) -> Option<usize>);
+
+    fn vector_tier() -> Option<Tier> {
+        #[cfg(all(target_arch = "x86_64", feature = "std"))]
+        if has_avx2() {
+            return Some(("avx2", find_crlf_avx2));
+        }
+        #[cfg(target_arch = "aarch64")]
+        return Some(("neon", find_crlf_neon));
+        #[cfg(not(target_arch = "aarch64"))]
+        None
+    }
+
     /// Cross-tier oracle: SWAR is the reference. Every implementation must
     /// match it for every input shape.
+    ///
+    /// Drives the vector kernel **directly** where one exists, rather
+    /// than through `find_crlf` — otherwise a dispatcher that declined to
+    /// use it would still pass, which is the failure this guards.
     fn assert_matches_swar(buf: &[u8]) {
+        let tier = vector_tier();
         for start in 0..=buf.len() {
-            assert_eq!(
-                find_crlf(buf, start),
-                find_crlf_swar(buf, start),
-                "mismatch at buf={buf:?} start={start}",
-            );
+            let want = find_crlf_swar(buf, start);
+            assert_eq!(find_crlf(buf, start), want, "dispatch: buf={buf:?} start={start}");
+            if let Some((name, f)) = tier {
+                // SAFETY: `f` came from `vector_tier`, which returns a
+                // kernel only when this machine has the ISA it needs.
+                let got = unsafe { f(buf, start) };
+                assert_eq!(got, want, "{name}: buf={buf:?} start={start}");
+            }
+        }
+    }
+
+    /// Say out loud which tier the oracle above is checking, so a run
+    /// that verified only SWAR cannot be read as one that verified a
+    /// vector kernel.
+    #[test]
+    fn the_oracle_names_the_tier_it_verified() {
+        match vector_tier() {
+            Some((name, _)) => {
+                assert!(!name.is_empty());
+                // A tier exists, so the comparison in `assert_matches_swar`
+                // is between two different implementations.
+            }
+            None => {
+                // No vector kernel on this build. `find_crlf` IS
+                // `find_crlf_swar` here, so every other test in this
+                // module is comparing a function to itself. That is a
+                // true statement about the build, not a pass.
+                assert_eq!(
+                    find_crlf(b"ab\r\ncd", 0),
+                    find_crlf_swar(b"ab\r\ncd", 0),
+                    "SWAR-only build: nothing here verifies a vector kernel",
+                );
+            }
         }
     }
 

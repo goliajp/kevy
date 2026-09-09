@@ -121,3 +121,58 @@ impl IoUring {
         Ok((bufs, submissions))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{FILE_BATCH_TAG, FileRead, reap_one};
+    use crate::completion::Completion;
+
+    fn reads() -> Vec<FileRead> {
+        vec![FileRead { fd: 3, offset: 0, len: 64 }, FileRead { fd: 3, offset: 64, len: 32 }]
+    }
+
+    fn cqe(user_data: u64, res: i32) -> Completion {
+        Completion { user_data, res, flags: 0 }
+    }
+
+    /// Every arm of the completion filter, because the whole point of
+    /// this function is what it does with completions it did not submit.
+    ///
+    /// `for_each_completion` drains the entire queue, so a foreign
+    /// `user_data` reaches here. It used to index `reads` directly: the
+    /// reactor's own tags are `OP << 60 | cid`, astronomically out of
+    /// bounds, and a smaller foreign value would have validated the
+    /// wrong read without saying so.
+    #[test]
+    fn only_this_batch_s_own_completions_are_judged() {
+        let r = reads();
+
+        // A full read of the length asked for: nothing recorded.
+        let mut bad = None;
+        reap_one(cqe(FILE_BATCH_TAG, 64), &r, &mut bad);
+        assert_eq!(bad, None);
+
+        // A short read of ours: recorded, with which one and what it got.
+        let mut bad = None;
+        reap_one(cqe(FILE_BATCH_TAG | 1, 8), &r, &mut bad);
+        assert_eq!(bad, Some((1, 8)));
+
+        // Only the first mismatch is kept, so the error names where it
+        // started rather than wherever the drain happened to stop.
+        reap_one(cqe(FILE_BATCH_TAG, -5), &r, &mut bad);
+        assert_eq!(bad, Some((1, 8)));
+
+        // The reactor's own tag: ignored, not indexed. Without the tag
+        // check this is `reads[10376293541461622784]`.
+        let mut bad = None;
+        reap_one(cqe((9u64 << 60) | 12345, -1), &r, &mut bad);
+        assert_eq!(bad, None, "a foreign completion was judged as ours");
+
+        // Our tag with an index past the batch: ignored too. The tag
+        // alone is not enough — a stale completion from an earlier,
+        // longer batch on this ring carries it.
+        let mut bad = None;
+        reap_one(cqe(FILE_BATCH_TAG | 99, -1), &r, &mut bad);
+        assert_eq!(bad, None, "an out-of-range index was indexed");
+    }
+}

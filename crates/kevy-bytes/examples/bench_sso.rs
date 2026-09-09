@@ -13,7 +13,7 @@ fn main() {
     println!("kevy-bytes SmallBytes micro-bench — vs Vec<u8> baseline");
     println!("(ratios are the signal; absolutes drift on a loaded host)\n");
 
-    // 12-byte payload: inline path (< 22 B threshold).
+    // 12-byte payload: inline path (≤ 23 B threshold).
     let short = b"hello world!".to_vec();
     // 64-byte payload: heap path.
     let long: Vec<u8> = (0u8..64).collect();

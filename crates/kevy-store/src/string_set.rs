@@ -54,7 +54,7 @@ fn take_new_value(slot: &mut Option<Value>) -> Value {
 
 impl Store {
     /// `SET` — overwrites any existing value/type. NX/XX guards; clears TTL.
-    /// Takes an owned `Vec` so a >22 B value's allocation is adopted as-is
+    /// Takes an owned `Vec` so a >23 B value's allocation is adopted as-is
     /// (no copy). For callers holding a borrowed slice, prefer
     /// [`Self::set_slice`] — it skips the `to_vec` entirely for values that
     /// inline.
@@ -69,7 +69,7 @@ impl Store {
         self.set_value(key, pick_value_for_set_owned(value), expire, nx, xx)
     }
 
-    /// [`Self::set`] for a borrowed value. Values ≤ 22 B store inline in the
+    /// [`Self::set`] for a borrowed value. Values ≤ 23 B store inline in the
     /// entry — zero allocator traffic, where `set(key, value.to_vec(), …)`
     /// paid a malloc for the `Vec` and a free when the inline copy dropped
     /// it (the dominant overwrite-SET pattern). Larger values pay the same

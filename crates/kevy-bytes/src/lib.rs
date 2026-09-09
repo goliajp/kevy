@@ -3,7 +3,7 @@
 //! ```
 //! use kevy_bytes::SmallBytes;
 //!
-//! // Up to 22 bytes live in the value itself — no allocation, and the
+//! // Up to 23 bytes live in the value itself — no allocation, and the
 //! // whole string fits in one 24-byte slot.
 //! let short = SmallBytes::from_slice(b"user:1");
 //! assert_eq!(short.as_slice(), b"user:1");
@@ -34,7 +34,7 @@
 //! against perf-affecting changes (cfg-gated 32-bit alternative lives
 //! alongside it without touching any 64-bit code path).
 //!
-//! This lets us store every byte string up to 22 bytes — covering the vast
+//! This lets us store every byte string up to 23 bytes — covering the vast
 //! majority of Redis-style values — without any pointer-chase, while keeping
 //! `size_of::<SmallBytes>() == 24` (same as `Vec<u8>`). Used by `kevy-store`
 //! to make `Value::Str(SmallBytes)` fit alongside the boxed collection
@@ -65,7 +65,7 @@ use core::slice;
 
 /// A 24-byte owned byte string with inline small-string optimization.
 ///
-/// Strings of up to 22 bytes live entirely inside the value (no allocation,
+/// Strings of up to 23 bytes live entirely inside the value (no allocation,
 /// no pointer chase); larger strings spill to a heap buffer. The
 /// discriminator is a single byte at offset 23 (the tag, which doubles as
 /// the inline length 0..=22 OR equals 0xFF when the heap variant is active).
@@ -134,21 +134,21 @@ impl SmallBytes {
         Self { inline: Inline { data: [0; INLINE_CAP], tag: 0 } }
     }
 
-    /// Construct from a byte slice — inline if `bytes.len() <= 22`, else heap.
+    /// Construct from a byte slice — inline if `bytes.len() <= 23`, else heap.
     ///
     /// # Examples
     ///
-    /// Twenty-two is the boundary, and it is exact:
+    /// Twenty-three is the boundary, and it is exact:
     ///
     /// ```
     /// use kevy_bytes::SmallBytes;
-    /// assert_eq!(SmallBytes::from_slice(&[b'x'; 22]).heap_bytes(), 0);
-    /// assert_eq!(SmallBytes::from_slice(&[b'x'; 23]).heap_bytes(), 23);
+    /// assert_eq!(SmallBytes::from_slice(&[b'x'; 23]).heap_bytes(), 0);
+    /// assert_eq!(SmallBytes::from_slice(&[b'x'; 24]).heap_bytes(), 24);
     /// ```
     pub fn from_slice(bytes: &[u8]) -> Self {
         if bytes.len() <= INLINE_LEN_MAX as usize {
             let mut data = [0u8; INLINE_CAP];
-            // SAFETY: bytes.len() ≤ 22 ≤ data.len(); non-overlapping regions.
+            // SAFETY: bytes.len() ≤ 23 = data.len(); non-overlapping regions.
             unsafe {
                 core::ptr::copy_nonoverlapping(bytes.as_ptr(), data.as_mut_ptr(), bytes.len());
             }
@@ -158,7 +158,7 @@ impl SmallBytes {
         }
     }
 
-    /// Take ownership of a `Vec<u8>` — inline if `vec.len() <= 22`, else **reuse
+    /// Take ownership of a `Vec<u8>` — inline if `vec.len() <= 23`, else **reuse
     /// the vec's allocation** (no copy on the heap path).
     ///
     /// # Examples
@@ -239,7 +239,7 @@ impl SmallBytes {
     #[inline]
     pub fn len(&self) -> usize {
         if self.is_inline() {
-            // SAFETY: just verified `inline.tag` ≤ 22.
+            // SAFETY: just verified `inline.tag` ≤ 23.
             unsafe { self.inline.tag as usize }
         } else {
             // SAFETY: tag > 22 ⇒ heap variant is active.
@@ -426,7 +426,7 @@ impl Clone for SmallBytes {
         if self.is_inline() {
             // SAFETY: `Inline` is `repr(C)` + `Copy`; bitwise copy is sound
             // when the source is currently in the inline variant (the tag
-            // byte ≤ 22 is part of the bit pattern we're copying, so the
+            // byte ≤ 23 is part of the bit pattern we're copying, so the
             // discriminator stays correct).
             unsafe { Self { inline: self.inline } }
         } else {
