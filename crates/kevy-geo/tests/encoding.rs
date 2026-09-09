@@ -289,3 +289,22 @@ fn every_point_inside_the_radius_is_inside_the_searched_ranges() {
         &missed[..missed.len().min(6)]
     );
 }
+
+/// The two degenerate answers, as a real test rather than only a
+/// doctest — the coverage corpus runs `--lib --tests`, so a branch
+/// exercised only by an example is a branch nothing here executes.
+#[test]
+fn an_unusable_centre_and_a_planet_wide_radius_both_give_the_keyspace() {
+    let all = (0.0, (1u64 << 52) as f64 - 1.0);
+
+    // A centre that is not a number cannot pick a cell, so the honest
+    // answer is everything: a wrong-but-fast empty result would drop
+    // members that exist.
+    assert_eq!(neighbor_score_ranges(f64::NAN, 0.0, 100.0), vec![all]);
+    assert_eq!(neighbor_score_ranges(0.0, f64::NAN, 100.0), vec![all]);
+    assert_eq!(neighbor_score_ranges(f64::INFINITY, 0.0, 100.0), vec![all]);
+
+    // A radius wider than the planet really does cover everything.
+    assert_eq!(neighbor_score_ranges(0.0, 0.0, 40_000_000.0), vec![all]);
+    assert_eq!(neighbor_score_ranges(13.36, 38.11, f64::INFINITY), vec![all]);
+}

@@ -111,6 +111,24 @@ impl SegBuilder {
             return Err(SegError::Unsorted);
         }
         let inline = layout::inline_cell_len(key.len(), payload.len());
+        // The key is stored in the page whichever cell kind is chosen, so
+        // a key that fits neither form cannot be stored at all. Refused
+        // here, before anything measures or writes: the measurement is
+        // itself a write into a page-sized buffer, so an oversized key
+        // panicked inside it rather than being reported.
+        //
+        // Measured before this, pushing one key with a 7-byte payload:
+        // 4070 bytes fine; 4074 accepted by `push` and `finish`, opened
+        // cleanly, and unreadable — the slot directory lands on the tail
+        // of the cell and the page CRC is taken afterwards, so the page
+        // is internally consistent and wrong; 4075 and up panicked.
+        //
+        // Both are reachable from user data: an indexed document with a
+        // long run of non-separator bytes becomes one token and then one
+        // key, and `seg_key` concatenates two unbounded user strings.
+        if inline + 2 > PAGE_BUDGET && layout::overflow_cell_len(key.len()) + 2 > PAGE_BUDGET {
+            return Err(SegError::Corrupt("key too large for a page"));
+        }
         // A cell must fit a page together with its slot entry.
         if inline + 2 <= PAGE_BUDGET {
             self.push_cell(key, |page, off| layout::write_inline_cell(page, off, key, payload))?;
@@ -188,6 +206,26 @@ impl SegBuilder {
         };
         if self.used + projected(cell_len, self.slots.len()) > PAGE_BUDGET + PAGE_HDR {
             self.seal_current_page()?;
+        }
+        // Sealing empties the page; if the cell still does not fit, it
+        // never will. There was no second check here, so the write below
+        // went ahead regardless:
+        //
+        //   key ≤ 4070 bytes  fine
+        //   key = 4074        `push` Ok, `finish` Ok, `Seg::open` Ok, and
+        //                     reading that key back fails — the slot
+        //                     directory is written over the tail of the
+        //                     cell, then the page CRC is taken, so the
+        //                     page is internally consistent and wrong
+        //   key ≥ 4075        panic, writing past the page buffer
+        //
+        // Both are reachable from user data: an indexed document with a
+        // long run of non-separator bytes becomes one token and then one
+        // key, and `seg_key` concatenates two unbounded user byte
+        // strings. Refusing is the only answer that does not either
+        // crash or claim a write that cannot be read.
+        if projected(cell_len, 0) > PAGE_BUDGET + PAGE_HDR {
+            return Err(SegError::Corrupt("key and payload exceed one page"));
         }
         if self.slots.is_empty() {
             self.fences.push((self.pages_written, key.to_vec()));
