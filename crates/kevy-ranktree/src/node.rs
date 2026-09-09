@@ -26,9 +26,16 @@ pub(crate) struct Node<K> {
 }
 
 impl<K> Node<K> {
-    /// A fresh empty leaf.
+    /// A fresh empty leaf, sized for the most it can ever hold.
+    ///
+    /// A node fills to at most `MAX_KEYS` keys before it splits, and one
+    /// more transiently while splitting — so `MAX_KEYS + 1` is not a
+    /// guess, it is the ceiling. Growing from empty instead walked the
+    /// doubling ladder (0 → 4 → 8 → 16) and paid two reallocations and
+    /// their memcpys per node on the way. Capacity ends at 16 either
+    /// way, so this costs no memory.
     pub(crate) fn leaf() -> Self {
-        Node { keys: Vec::new(), children: Vec::new(), total: 0 }
+        Node { keys: Vec::with_capacity(MAX_KEYS + 1), children: Vec::new(), total: 0 }
     }
 
     /// Leaf ⇔ no children.
