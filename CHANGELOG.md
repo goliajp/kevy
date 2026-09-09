@@ -178,6 +178,30 @@ real duration to `target/suite-<tier>.json` for exactly this; the
 declarations are now corrected from it, at roughly twice measurement, and
 precommit declares 230s for its 134.
 
+### A B-tree node with room for 28 keys and a ceiling of 15
+
+`kevy-ranktree`'s nodes grew their key vectors from empty, and split by
+`split_off`. Both were measured rather than reasoned about, with a
+counting allocator over 10,000 inserts:
+
+| | allocations | bytes held |
+|---|---:|---:|
+| growing | 4,152 | 521,648 (6.52x payload) |
+| reserved | 1,393 | 291,792 (3.65x payload) |
+
+Three times fewer allocations and 44% fewer bytes — and the second half
+of that was not the expected trade. Reserving capacity normally buys
+fewer allocations by holding more memory. The reason it bought both here
+is `split_off`: it seeds the right half at exactly seven keys, and
+doubling from seven goes 7 → 14 → 28. A node whose ceiling is fifteen
+keys was ending up with room for twenty-eight. Asking for `MAX_KEYS + 1`
+once lands on sixteen and stays.
+
+The counting allocator lives in an integration test because the crate
+itself is `#![forbid(unsafe_code)]`, and both numbers are recorded as
+assertions with a floor, so a run that allocated nothing fails instead of
+satisfying every upper bound.
+
 ### Two instruments that were checking less than they appeared to
 
 **The SIMD scanner's oracle could be comparing a function to itself.**
