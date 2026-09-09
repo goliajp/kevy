@@ -178,6 +178,43 @@ real duration to `target/suite-<tier>.json` for exactly this; the
 declarations are now corrected from it, at roughly twice measurement, and
 precommit declares 230s for its 134.
 
+### A huge-page hint that a 64 KiB-page kernel would have refused every time
+
+`kevy-madvise` hardcoded `const PAGE = 4096`, justified by a comment
+saying that on 16 KiB / 64 KiB systems "the wider alignment still happens
+to be a 4-KiB multiple, so this is correct, just slightly more
+conservative". That is backwards twice: what has to hold is that the
+address is a multiple of the **real** page size, which rounding to 4 KiB
+does not give — and rounding to a *smaller* granularity is less
+conservative, not more.
+
+`madvise` refuses a misaligned start with EINVAL, and the return value
+was discarded, so on a 64 KiB-page kernel fifteen hints in sixteen would
+have been refused in silence. `aarch64-unknown-linux-*` is a target this
+project publishes, and 64 KiB-page kernels are ordinary there.
+
+The page size is asked of the kernel once and cached now — the same
+`sysconf` pattern `kevy-alloc` already uses, and for the same reason it
+wrote down: a measuring device that fails in the shape of data.
+
+Two more from the same reading:
+
+* the threshold was two **base** pages, 8 KiB. `khugepaged` cannot
+  promote anything smaller than a whole aligned huge page, so every call
+  between 8 KiB and 2 MiB bought a syscall under the mmap write lock, and
+  a possible VMA split, in exchange for a promotion that could not
+  happen. It is two huge pages now.
+* the `SAFETY` note read "madvise … performs no writes", which is false
+  of `madvise` in general — `MADV_DONTNEED` zeroes the region — and true
+  only of this advice. It now states that premise, which is also the
+  reason this can be a safe function at all.
+
+The four existing tests all assert that a call returns cleanly, and one
+says so in a comment: "We cannot directly assert 'no syscall' without a
+hook". So they pass whether the kernel honours the advice or refuses
+every one. `last_advised_bytes` is that hook, and the new tests fail if
+the kernel accepted nothing.
+
 ### Two of seven time units answered an offset that could not fit
 
 `@now-7d` and friends are query bounds a client supplies
