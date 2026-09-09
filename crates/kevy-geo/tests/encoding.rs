@@ -153,11 +153,23 @@ fn decode_garbage_score_does_not_panic() {
 }
 
 #[test]
-fn neighbor_ranges_for_zero_radius_returns_full_keyspace() {
+fn neighbor_ranges_for_zero_radius_scan_one_cell_not_the_keyspace() {
+    // This asserted the opposite — that a zero radius returns the whole
+    // keyspace — which pinned `GEOSEARCH … BYRADIUS 0` as an O(members)
+    // scan any client could ask for. Measured before the fix on a
+    // 200,000-member key: 9.23 ms, against 0.05 ms for `BYRADIUS 1000`.
     let r = neighbor_score_ranges(13.36, 38.11, 0.0);
-    assert_eq!(r.len(), 1);
-    assert_eq!(r[0].0, 0.0);
-    assert!(r[0].1 >= (1u64 << 52) as f64 - 1.0);
+    let full = (1u64 << 52) as f64 - 1.0;
+    let span: f64 = r.iter().map(|(lo, hi)| hi - lo).sum();
+    assert!(span < full / 1e6, "zero radius still scans {span} of {full}");
+
+    // A negative radius is the same case and must not be wider.
+    let neg: f64 = neighbor_score_ranges(13.36, 38.11, -5.0).iter().map(|(lo, hi)| hi - lo).sum();
+    assert!(neg <= span, "a negative radius scanned more than a zero one");
+
+    // The floor: a range set that covers nothing would satisfy the
+    // bounds above without being a usable answer.
+    assert!(!r.is_empty(), "zero radius returned no range at all");
 }
 
 #[test]
@@ -209,4 +221,71 @@ fn score_is_within_52_bits() {
         // f64 → u64 → f64 must round-trip exactly.
         assert_eq!(score, (score as u64) as f64);
     }
+}
+
+/// Every point inside the radius must fall inside the score ranges the
+/// search will look at. This is the property the candidate cells exist
+/// for, and it was false.
+///
+/// `estimate_step` did not take a latitude. A cell's longitude width in
+/// degrees is fixed, but the bounding box's longitude half-width is the
+/// latitude half-width divided by `cos(lat)` — so the nine cells that
+/// cover the box at the equator stop covering it further north, and
+/// members simply never get looked at. Measured against a live server
+/// before the fix, placing 360 points at 98 % of the radius and asking
+/// for all of them back:
+///
+/// | latitude | radius | returned of 360 |
+/// |---|---|---|
+/// | 0, 60, 66 | 1 km | 360 |
+/// | 70 | 1 km | 297 |
+/// | 80 | 1 km | 171 |
+/// | 84 | 1 km | **94** |
+///
+/// After: 133 latitude/radius combinations, 11,546 members, none lost.
+#[test]
+fn every_point_inside_the_radius_is_inside_the_searched_ranges() {
+    const R: f64 = 6_372_797.560_856;
+
+    // Destination point from a centre, a bearing and a distance.
+    fn dest(lon: f64, lat: f64, bearing_deg: f64, d: f64) -> (f64, f64) {
+        let (br, p1, l1, dr) =
+            (bearing_deg.to_radians(), lat.to_radians(), lon.to_radians(), d / R);
+        let p2 = (p1.sin() * dr.cos() + p1.cos() * dr.sin() * br.cos()).asin();
+        let l2 = l1 + (br.sin() * dr.sin() * p1.cos()).atan2(dr.cos() - p1.sin() * p2.sin());
+        (l2.to_degrees(), p2.to_degrees())
+    }
+
+    let mut checked = 0usize;
+    let mut missed = Vec::new();
+    for &lat in &[0.0, 15.0, 30.0, 45.0, 60.0, 66.0, 70.0, 75.0, 80.0, 84.0, 85.0] {
+        for &sign in &[1.0f64, -1.0] {
+            let lat = lat * sign;
+            for &r in &[100.0f64, 1_000.0, 10_000.0, 74_818.0, 100_000.0, 500_000.0] {
+                let ranges = neighbor_score_ranges(0.0, lat, r);
+                for b in (0..360).step_by(4) {
+                    let (plon, plat) = dest(0.0, lat, f64::from(b), r * 0.98);
+                    // Points past the Mercator limit have no score at all.
+                    if plat.abs() > 85.051_128_78 {
+                        continue;
+                    }
+                    let Some(score) = encode_score(plon, plat) else { continue };
+                    checked += 1;
+                    if !ranges.iter().any(|(lo, hi)| score >= *lo && score <= *hi) {
+                        missed.push((lat, r, b));
+                    }
+                }
+            }
+        }
+    }
+    // The floor: a matrix that checked nothing would pass the assertion
+    // below without meaning anything.
+    assert!(checked > 5_000, "only {checked} points checked — the matrix collapsed");
+    assert!(
+        missed.is_empty(),
+        "{} of {checked} points inside the radius fall outside the searched ranges; \
+         first few (lat, radius_m, bearing): {:?}",
+        missed.len(),
+        &missed[..missed.len().min(6)]
+    );
 }

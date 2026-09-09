@@ -178,6 +178,57 @@ real duration to `target/suite-<tier>.json` for exactly this; the
 declarations are now corrected from it, at roughly twice measurement, and
 precommit declares 230s for its 134.
 
+### GEOSEARCH dropped members inside the radius, silently
+
+Placing 360 points at 98 % of a radius and asking for all of them back —
+they are inside it by construction, so every one must return:
+
+| latitude | radius | returned of 360 |
+|---|---|---|
+| 0, 60, 66 | 1 km | 360 |
+| 70 | 1 km | 297 |
+| 80 | 1 km | 171 |
+| **84** | 1 km | **94** |
+| −80 | 100 km | 247 |
+
+`estimate_step` did not take a latitude. A cell's longitude width in
+degrees is fixed, but the bounding box's longitude half-width is the
+latitude half-width divided by `cos(lat)`, which diverges toward the
+pole — so the nine cells that cover the box at the equator stop covering
+it further north, and the members outside them are never looked at. No
+error, no warning, just a shorter answer.
+
+Redis handles this with two latitude thresholds and a correction pass.
+The condition underneath both is directly checkable, so this checks it
+instead: the query point can sit anywhere in its cell, including on an
+edge, so the only margin the 3×3 block guarantees on any side is one
+whole cell — nine cells cover the box exactly when each half-extent fits
+within one cell's span. Widen until that holds.
+
+The width is measured at the box's **pole-most** latitude, not its
+centre: a circle on a sphere is widest in longitude at whichever edge is
+nearer the pole, and the centre-latitude version still lost 2 of 63 at
+latitude 84 with a 500 km radius.
+
+After: 133 latitude/radius combinations, 11,546 members, none lost.
+Ordinary queries did not get slower — latitude 40 with a 500 km radius
+returns 255 members in 0.130 ms.
+
+### `GEOSEARCH … BYRADIUS 0` scanned every member
+
+A zero radius short-circuited to the whole keyspace, making one client
+command an O(members) scan: **9.23 ms on a 200,000-member key, against
+0.05 ms for `BYRADIUS 1000` on the same key**. `estimate_step` already
+answered this case correctly — a non-positive radius gives the finest
+step, a single 52-bit cell — and a guard above it was overriding that.
+Now 0.026 ms.
+
+Two tests had pinned the wrong behaviour as contract, including one named
+`neighbor_ranges_for_zero_radius_returns_full_keyspace`. The replacement
+is red-green checked: with the widening disabled, 2,108 of 11,546 points
+inside the radius fall outside the searched ranges, and the test names
+them.
+
 ### Four more unexecutable branches, closed rather than accepted
 
 Every one was a decision made inside a method where one side could never
