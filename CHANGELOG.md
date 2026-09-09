@@ -178,6 +178,31 @@ real duration to `target/suite-<tier>.json` for exactly this; the
 declarations are now corrected from it, at roughly twice measurement, and
 precommit declares 230s for its 134.
 
+### Two of seven time units answered an offset that could not fit
+
+`@now-7d` and friends are query bounds a client supplies
+(`IDX.QUERY … RANGE`). Five of the seven units checked their arithmetic
+for overflow and returned nothing when it did not fit. `mo` and `y` did
+not.
+
+So the same impossible request was refused when written in days and
+answered when written in months: in a release build
+`@now+9223372036854775807mo` returned a timestamp in **1969**, and in a
+debug build it panicked — which for a query bound means a wrong row set
+or a shard going down, from a value that arrived straight from argv.
+
+Both are checked now, along with the day-count arithmetic underneath
+them, which overflows before the seconds multiply gets a chance. The
+public `add_months` keeps its signature and saturates rather than
+panicking; `checked_add_months` and `checked_epoch_from_civil` are new
+and are what `eval` uses.
+
+The test asserts the property that was false rather than a list of
+inputs: a longer unit can never succeed where a shorter one overflowed.
+It carries a floor, so a matrix where nothing overflows fails instead of
+passing vacuously, and it checks that ordinary offsets still work in the
+right direction — otherwise "refuse everything" would pass.
+
 ### One flipped bit deleted segment files, silently
 
 A manifest record is `[len][crc][body]`, and the CRC covers the body. The

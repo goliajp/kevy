@@ -184,11 +184,60 @@ fn last_day(y: i64, m: u32) -> u32 {
 /// assert_eq!((c.y, c.m, c.d), (2023, 11, 15));
 /// ```
 pub fn add_months(secs: i64, n: i64) -> i64 {
+    checked_add_months(secs, n).unwrap_or(if n < 0 { i64::MIN } else { i64::MAX })
+}
+
+/// [`add_months`], answering `None` instead of saturating when the result
+/// leaves the range an `i64` epoch can hold.
+///
+/// The arithmetic here is unbounded in `n`: the month count, the era
+/// split and the final multiply by seconds-per-day all overflow long
+/// before `n` does. Unchecked, `@now+9223372036854775807mo` panicked in
+/// debug and returned a 1969 timestamp in release, while the same
+/// expression written in days was correctly refused — five of the seven
+/// units in [`eval`] rejected overflow and two did not.
+///
+/// # Examples
+///
+/// ```
+/// use kevy_time::checked_add_months;
+/// assert_eq!(checked_add_months(0, 1), Some(2_678_400));  // 1970-02-01
+/// assert_eq!(checked_add_months(0, i64::MAX), None);
+/// assert_eq!(checked_add_months(0, i64::MIN), None);
+/// ```
+#[must_use]
+pub fn checked_add_months(secs: i64, n: i64) -> Option<i64> {
     let c = civil_from_epoch(secs);
-    let months = c.y * 12 + i64::from(c.m) - 1 + n;
+    let months = c.y.checked_mul(12)?.checked_add(i64::from(c.m) - 1)?.checked_add(n)?;
     let (y, m) = (months.div_euclid(12), (months.rem_euclid(12) + 1) as u32);
+    // `days_from_civil` multiplies the era by 146,097 and the result is
+    // then multiplied by 86,400 — so the day count overflows before the
+    // seconds do, and a year outside this range cannot be checked by
+    // `checked_epoch_from_civil` because it never gets there.
+    //
+    // The bound is what an i64 epoch can hold: 2^63 seconds is about
+    // 292 billion years, and this stops short of it.
+    const MAX_YEAR: i64 = 290_000_000_000;
+    if !(-MAX_YEAR..=MAX_YEAR).contains(&y) {
+        return None;
+    }
     let d = c.d.min(last_day(y, m));
-    epoch_from_civil(Civil { y, m, d, ..c })
+    checked_epoch_from_civil(Civil { y, m, d, ..c })
+}
+
+/// [`epoch_from_civil`], answering `None` instead of overflowing.
+///
+/// `epoch_from_civil` multiplies a day count by 86,400, which leaves
+/// `i64` for any year past roughly ±292 billion — reachable from
+/// [`add_months`] with a large enough month count, and therefore from a
+/// query bound a client supplies.
+#[must_use]
+pub fn checked_epoch_from_civil(c: Civil) -> Option<i64> {
+    days_from_civil(c.y, c.m, c.d)
+        .checked_mul(SECS_PER_DAY)?
+        .checked_add(i64::from(c.h) * 3600)?
+        .checked_add(i64::from(c.min) * 60)?
+        .checked_add(i64::from(c.s))
 }
 
 /// Evaluate one `@` query-bound expression against the caller's
@@ -252,8 +301,11 @@ pub fn eval(expr: &[u8], now: i64) -> Option<i64> {
             b"h" => now.checked_add(sign.checked_mul(n.checked_mul(3600)?)?),
             b"d" => now.checked_add(sign.checked_mul(n.checked_mul(SECS_PER_DAY)?)?),
             b"w" => now.checked_add(sign.checked_mul(n.checked_mul(7 * SECS_PER_DAY)?)?),
-            b"mo" => Some(add_months(now, sign * n)),
-            b"y" => Some(add_months(now, sign.checked_mul(n.checked_mul(12)?)?)),
+            // Checked, like the five above it. These two were not, so
+            // the same expression was refused in days and silently wrong
+            // in months.
+            b"mo" => checked_add_months(now, sign.checked_mul(n)?),
+            b"y" => checked_add_months(now, sign.checked_mul(n.checked_mul(12)?)?),
             _ => None,
         };
     }
