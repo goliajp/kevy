@@ -84,3 +84,54 @@ fn eval_refuses_every_malformed_shape() {
         assert_eq!(eval(bad, 0), None, "{:?} must refuse", String::from_utf8_lossy(bad));
     }
 }
+
+/// A longer unit can never succeed where a shorter one overflowed.
+///
+/// `s`/`m`/`h`/`d`/`w` were checked and `mo`/`y` were not, so exactly
+/// this was false: `@now+9223372036854775807d` was correctly refused
+/// while `@now+9223372036854775807mo` — a strictly larger offset —
+/// returned a timestamp in 1969 in release, and panicked in debug.
+///
+/// The value arrives straight from client argv as a query bound
+/// (`IDX.QUERY … RANGE`), so a wrong answer is a wrong row set and a
+/// panic is a shard going down.
+#[test]
+fn a_longer_unit_never_succeeds_where_a_shorter_one_overflowed() {
+    // Ascending duration. `mo` and `y` are the two that were unchecked.
+    const UNITS: [&str; 7] = ["s", "m", "h", "d", "w", "mo", "y"];
+    let now = 1_757_000_000i64;
+    let mut refusals = 0usize;
+
+    for n in ["1", "1000000", "100000000000000", "9223372036854775807"] {
+        for sign in ["+", "-"] {
+            let mut refused_at = None;
+            for (i, unit) in UNITS.iter().enumerate() {
+                let e = format!("@now{sign}{n}{unit}");
+                let got = eval(e.as_bytes(), now);
+                match (refused_at, got) {
+                    (Some(first), Some(v)) => panic!(
+                        "{e} answered {v}, but the shorter unit {} already overflowed",
+                        UNITS[first]
+                    ),
+                    (None, None) => {
+                        refused_at = Some(i);
+                        refusals += 1;
+                    }
+                    (Some(_), None) => refusals += 1,
+                    (None, Some(_)) => {}
+                }
+            }
+        }
+    }
+    // The floor: if nothing ever overflowed, the property above holds
+    // vacuously and this test proves nothing.
+    assert!(refusals > 0, "no offset overflowed — the matrix is too small to test anything");
+
+    // And ordinary offsets still work, in the right direction and by a
+    // sane amount, so "refuse everything" cannot pass.
+    let a = eval(b"@now+1mo", now).expect("one month ahead");
+    let b = eval(b"@now-1mo", now).expect("one month back");
+    assert!(a > now && b < now, "a month either way must straddle now");
+    assert!(a - now < 32 * 86_400 && now - b < 32 * 86_400, "a month is not a year");
+    assert!(eval(b"@now+7d", now).is_some() && eval(b"@now+1y", now).is_some());
+}
