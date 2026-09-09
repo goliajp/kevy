@@ -172,30 +172,14 @@ impl<K> RankTree<K> {
     /// assert_eq!(t.select(3), None);
     /// ```
     #[must_use]
-    pub fn select(&self, mut rank: usize) -> Option<&K> {
+    pub fn select(&self, rank: usize) -> Option<&K> {
         if rank >= self.root.total {
             return None;
         }
-        let mut node = &self.root;
-        loop {
-            if node.is_leaf() {
-                return Some(&node.keys[rank]);
-            }
-            let mut i = 0;
-            loop {
-                let below = node.children[i].total;
-                if rank < below {
-                    node = &node.children[i];
-                    break;
-                }
-                rank -= below;
-                if rank == 0 {
-                    return Some(&node.keys[i]);
-                }
-                rank -= 1;
-                i += 1;
-            }
-        }
+        // Landing on a leaf offset and landing on a separator are the
+        // same answer here — both are `keys[idx]` of the node returned.
+        let (node, idx) = crate::node::descend_to_rank(&self.root, rank, |_, _| {});
+        Some(&node.keys[idx])
     }
 
     /// Forward in-order iterator over all keys.

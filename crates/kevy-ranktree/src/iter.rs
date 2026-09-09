@@ -29,37 +29,24 @@ pub struct Iter<'a, K> {
 impl<'a, K> Iter<'a, K> {
     /// Position the stack on the key at ascending `rank`; yields nothing
     /// when `rank` is past the end.
-    pub(crate) fn new_from(root: &'a Node<K>, mut rank: usize) -> Self {
+    pub(crate) fn new_from(root: &'a Node<K>, rank: usize) -> Self {
         let remaining = root.total.saturating_sub(rank);
         let mut it = Iter { stack: Vec::new(), remaining };
         if remaining == 0 {
             return it;
         }
-        let mut node = root;
-        'descent: loop {
-            if node.is_leaf() {
-                it.stack.push((node, rank));
-                return it;
+        // Forward: resume at `keys[i]` of each node passed through, so
+        // the separator to the RIGHT of the child taken. The last child
+        // has no such separator, hence the bound.
+        let mut stack = Vec::new();
+        let (node, idx) = crate::node::descend_to_rank(root, rank, |n, i| {
+            if i < n.keys.len() {
+                stack.push((n, i));
             }
-            let mut i = 0;
-            loop {
-                let below = node.children[i].total;
-                if rank < below {
-                    if i < node.keys.len() {
-                        it.stack.push((node, i));
-                    }
-                    node = &node.children[i];
-                    continue 'descent;
-                }
-                rank -= below;
-                if rank == 0 {
-                    it.stack.push((node, i));
-                    return it;
-                }
-                rank -= 1;
-                i += 1;
-            }
-        }
+        });
+        stack.push((node, idx));
+        it.stack = stack;
+        it
     }
 
     /// Stop after at most `cap` keys (the range iterator's upper bound).
@@ -132,32 +119,20 @@ impl<'a, K> IterRev<'a, K> {
         if remaining == 0 {
             return it;
         }
-        let mut rank = remaining - 1; // ascending rank of the first yield
-        let mut node = root;
-        'descent: loop {
-            if node.is_leaf() {
-                it.stack.push((node, rank));
-                return it;
+        let rank = remaining - 1; // ascending rank of the first yield
+        // Reverse: resume at the separator to the LEFT of the child
+        // taken. The first child has none, hence the bound — the mirror
+        // of the forward case, and the only thing that differs between
+        // the two walks.
+        let mut stack = Vec::new();
+        let (node, idx) = crate::node::descend_to_rank(root, rank, |n, i| {
+            if i > 0 {
+                stack.push((n, i - 1));
             }
-            let mut i = 0;
-            loop {
-                let below = node.children[i].total;
-                if rank < below {
-                    if i > 0 {
-                        it.stack.push((node, i - 1));
-                    }
-                    node = &node.children[i];
-                    continue 'descent;
-                }
-                rank -= below;
-                if rank == 0 {
-                    it.stack.push((node, i));
-                    return it;
-                }
-                rank -= 1;
-                i += 1;
-            }
-        }
+        });
+        stack.push((node, idx));
+        it.stack = stack;
+        it
     }
 
     /// After yielding `keys[i]` of `node`, the next-smaller keys live
