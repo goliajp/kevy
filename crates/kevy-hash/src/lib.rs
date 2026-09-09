@@ -304,10 +304,21 @@ pub type FxBuildHasher = BuildHasherDefault<FxHasher>;
 /// friendly hash by exposing one method on each that produces the final mixed
 /// 64-bit value in one go.
 ///
-/// All impls must agree with feeding the value through [`FxHasher`] then
-/// calling `finish` — this lets us cut the trait dispatch without changing the
-/// hash function. `kevy-map` consumes both the full hash (for bucket index)
-/// and its top 7 bits (for the metadata byte).
+/// **The integer impls** agree with feeding the value through
+/// [`FxHasher`] and calling `finish`, so for those the trait is a
+/// dispatch shortcut and nothing more. **The `[u8]` impl does not** — it
+/// takes the two-stream pipelined path, and its own documentation says
+/// so.
+///
+/// That distinction used to be stated as "all impls must agree", forty
+/// lines above the note admitting one of them does not. This is not a
+/// typo to tidy: the sentence declared exactly the property that makes
+/// mixing the two safe, so a caller who used `FxHashMap` in one place
+/// and `kevy_hash()` in another and compared across them would have been
+/// silently wrong, on the strength of a guarantee written here.
+///
+/// `kevy-map` consumes both the full hash (for bucket index) and its top
+/// 7 bits (for the metadata byte).
 /// # Examples
 ///
 /// The point of the trait is that a leaf type hashes in one call, with no

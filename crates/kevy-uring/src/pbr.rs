@@ -164,9 +164,32 @@ impl ProvidedBufRing {
 }
 
 impl Drop for ProvidedBufRing {
+    /// Unregister, unmap — and **leak the slab**.
+    ///
+    /// `IORING_UNREGISTER_PBUF_RING` takes the group out of the ring's
+    /// table. It does not cancel a multishot receive that is already
+    /// armed against that group, and it does not wait for one that has
+    /// already selected a buffer. So between this call and the ring fd
+    /// actually closing, the kernel may still write into the slab.
+    ///
+    /// Freeing it there is a write into freed memory, which nothing on
+    /// the Rust side can see. There is no state here that could tell
+    /// whether a receive is outstanding — `register_buf_ring` hands this
+    /// value back with no lifetime tying it to the ring, and
+    /// `prep_recv_multishot` is a safe function — so the only sound exit
+    /// is not to free it. The same doctrine as the error path in
+    /// `file_batch.rs`, and for the same reason: a leak is a cost, a
+    /// kernel write into freed memory is not a cost, it is corruption.
+    ///
+    /// In kevy this leaks nothing that matters: one ring per shard, torn
+    /// down at process exit. For a caller that builds and drops these in
+    /// a loop it is a real leak, which is the honest price of a safe API
+    /// that cannot prove the kernel is finished.
     fn drop(&mut self) {
+        // Give up the allocation rather than return it: see above.
+        core::mem::forget(core::mem::take(&mut self.slab));
         // Best-effort unregister (EBADF if the ring fd is already closed — fine),
-        // then unmap. The slab Vec frees itself.
+        // then unmap.
         let reg =
             IoUringBufReg { ring_addr: 0, ring_entries: 0, bgid: self.bgid, pad: 0, resv: [0; 3] };
         // SAFETY: kernel-side cleanup; the mapping is ours to free.

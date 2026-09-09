@@ -108,17 +108,36 @@ pub const PAGE: usize = 4096;
 pub fn page_size_matches() -> bool {
     use core::sync::atomic::{AtomicU8, Ordering};
     static ANSWER: AtomicU8 = AtomicU8::new(0); // 0 unknown, 1 yes, 2 no
-    match ANSWER.load(Ordering::Relaxed) {
-        1 => true,
-        2 => false,
-        _ => {
-            // SAFETY: `sysconf` reads no Rust memory and takes an int.
-            let got = unsafe { sysconf(SC_PAGESIZE) };
-            let ok = usable_page_size(got);
-            ANSWER.store(u8::from(!ok) + 1, Ordering::Relaxed);
-            ok
-        }
+    if let Some(known) = decode_memo(ANSWER.load(Ordering::Relaxed)) {
+        return known;
     }
+    // SAFETY: `sysconf` reads no Rust memory and takes an int.
+    let got = unsafe { sysconf(SC_PAGESIZE) };
+    let ok = usable_page_size(got);
+    ANSWER.store(encode_memo(ok), Ordering::Relaxed);
+    ok
+}
+
+/// The memo's three states, as a function of the stored byte.
+///
+/// Every machine takes exactly one of `1` and `2` forever, so whichever
+/// it is not is unreachable code there — a permanently dead region on
+/// any single platform's coverage run. Splitting the decode out makes
+/// all three answerable from a test anywhere.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const fn decode_memo(stored: u8) -> Option<bool> {
+    match stored {
+        1 => Some(true),
+        2 => Some(false),
+        _ => None,
+    }
+}
+
+/// The inverse of [`decode_memo`], kept beside it so the two cannot
+/// drift into disagreeing about which byte means what.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const fn encode_memo(answer: bool) -> u8 {
+    if answer { 1 } else { 2 }
 }
 
 /// The decision, separated from the syscall that supplies it.
@@ -263,6 +282,21 @@ pub const fn available() -> bool {
 #[cfg(test)]
 mod page_size_tests {
     use super::{PAGE, usable_page_size};
+
+    /// The memo round-trips, and its unknown state is distinct from
+    /// both answers. Whichever of the two a machine stores, the other
+    /// arm is unreachable there — which is why this is tested through a
+    /// pure function rather than left to a coverage run that can only
+    /// ever see one of them.
+    #[test]
+    fn the_memo_round_trips_and_unknown_is_neither_answer() {
+        use super::{decode_memo, encode_memo};
+        assert_eq!(decode_memo(encode_memo(true)), Some(true));
+        assert_eq!(decode_memo(encode_memo(false)), Some(false));
+        assert_eq!(decode_memo(0), None, "0 is unasked, not an answer");
+        assert_ne!(encode_memo(true), 0, "an answer must not read as unasked");
+        assert_ne!(encode_memo(false), 0);
+    }
 
     /// Both answers, including the one this machine cannot give. The
     /// 16384 case is not hypothetical — it is every Apple Silicon Mac,

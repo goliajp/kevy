@@ -205,6 +205,24 @@ impl IoUring {
         let to_submit = self.sq_tail.wrapping_sub(prev);
         // SAFETY: publishing our local tail to the kernel-shared atomic.
         unsafe { (*self.sq_ktail).store(self.sq_tail, Ordering::Release) };
+        if self.sq_flags.is_some() {
+            // Store-load, the one pair acquire/release does not order:
+            // the tail store above and the `sq_flags` load below are
+            // different addresses, so both this CPU and the compiler may
+            // let the load happen first — on x86 the tail is still in the
+            // store buffer while the load is satisfied from cache.
+            //
+            // The kernel's SQ-poll thread parks as: see SQ empty, set
+            // NEED_WAKEUP, re-check the tail, sleep. Without a barrier
+            // here each side can read the other's old value — we see
+            // NEED_WAKEUP clear and take the fast path with no syscall,
+            // the poll thread sees the old tail and sleeps. That
+            // submission then never runs and never completes: an
+            // operation that hangs with no error anywhere.
+            //
+            // liburing puts `io_uring_smp_mb()` at exactly this point.
+            core::sync::atomic::fence(Ordering::SeqCst);
+        }
 
         // Threshold-based enter skip. A syscall-tracepoint diagnostic
         // showed ~12 wasted io_uring_enter calls per actual op on the
@@ -241,7 +259,11 @@ impl IoUring {
             // lifetime. Kernel writes IORING_SQ_NEED_WAKEUP on park; Acquire
             // pairs with the kernel's Release on update.
             let sq_flags = unsafe { (*sq_flags_ptr).load(Ordering::Acquire) };
-            if sq_flags & IORING_SQ_NEED_WAKEUP != 0 {
+            // Only wake the poll thread when there is something for it.
+            // Waking it for an empty submission is a syscall that buys
+            // nothing, and on an idle busy-poll loop it is one per
+            // iteration — which removes the entire point of SQPOLL.
+            if to_submit > 0 && sq_flags & IORING_SQ_NEED_WAKEUP != 0 {
                 enter_flags |= IORING_ENTER_SQ_WAKEUP;
             } else if wait_nr == 0 {
                 // SQ poll thread is awake and caller doesn't need to wait —
@@ -290,23 +312,51 @@ impl IoUring {
     }
 
     /// Reap every available completion, calling `f` for each; returns the count.
+    ///
+    /// The consumer head is published even if `f` panics, and each CQE is
+    /// counted consumed *before* `f` sees it. Both halves matter:
+    ///
+    /// * publishing only on the normal path left `cq_khead` where it was
+    ///   when a callback unwound, so the whole batch was delivered a
+    ///   second time on the next call. For a completion carrying a
+    ///   provided-buffer id that means recycling the same `bid` twice,
+    ///   which publishes one buffer to the ring twice and lets the kernel
+    ///   hand it to two receives at once — two concurrent kernel writes
+    ///   to one region.
+    /// * counting before the call makes delivery at-most-once rather than
+    ///   at-least-once. A lost completion stalls one operation, which is
+    ///   visible and diagnosable; a repeated one aliases memory inside
+    ///   the kernel. Given that asymmetry, the panicking CQE is consumed.
     pub fn for_each_completion<F: FnMut(Completion)>(&mut self, mut f: F) -> u32 {
+        /// Publishes the head on the way out, however that happens.
+        struct PublishHead {
+            khead: *const core::sync::atomic::AtomicU32,
+            head: u32,
+        }
+        impl Drop for PublishHead {
+            fn drop(&mut self) {
+                // SAFETY: `khead` is the kernel-shared consumer cursor,
+                // borrowed from the ring that outlives this guard (it is
+                // a local of one of that ring's own methods).
+                unsafe { (*self.khead).store(self.head, Ordering::Release) };
+            }
+        }
+
         // SAFETY: cq_khead / cq_ktail are the kernel-shared cursors.
-        let mut head = unsafe { (*self.cq_khead).load(Ordering::Relaxed) };
+        let head = unsafe { (*self.cq_khead).load(Ordering::Relaxed) };
         // SAFETY: same kernel-shared cursor pair. `Acquire` on the tail pairs with the
         // kernel's release, so every CQE it counts is fully written before we read it.
         let tail = unsafe { (*self.cq_ktail).load(Ordering::Acquire) };
+        let mut guard = PublishHead { khead: self.cq_khead, head };
         let mut n = 0;
-        while head != tail {
-            let idx = (head & self.cq_mask) as usize;
+        while guard.head != tail {
+            let idx = (guard.head & self.cq_mask) as usize;
             // SAFETY: `idx < cq_entries` by mask; cqes points to that array.
             let cqe = unsafe { *self.cqes.add(idx) };
-            f(cqe);
-            head = head.wrapping_add(1);
+            guard.head = guard.head.wrapping_add(1);
             n += 1;
+            f(cqe);
         }
-        // SAFETY: publish the consumer head to the kernel.
-        unsafe { (*self.cq_khead).store(head, Ordering::Release) };
         n
     }
 }

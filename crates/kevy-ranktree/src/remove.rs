@@ -62,8 +62,17 @@ fn remove_hit_in_internal<K: Ord>(node: &mut Node<K>, key: &K, i: usize) -> bool
         // Both flanks minimal: fold keys[i] + right flank into the left
         // flank, then delete the key from inside the merged child.
         merge_children(node, i);
-        let removed = remove_rec(&mut node.children[i], key);
-        debug_assert!(removed, "merged child must contain the separator key");
+        if !remove_rec(&mut node.children[i], key) {
+            // The merged child must contain the separator key, and does.
+            // This was a `debug_assert!` on a discarded bool, so the two
+            // builds disagreed about what happens if it ever stopped
+            // holding: debug panicked, release decremented `total`
+            // anyway. A `total` that is one too low is not a wrong
+            // answer once — it is every rank, select, len, count and
+            // range answer wrong, silently, for the life of the tree,
+            // with no path that would ever notice.
+            return false;
+        }
     }
     node.total -= 1;
     true
