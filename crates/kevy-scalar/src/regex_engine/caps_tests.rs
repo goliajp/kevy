@@ -113,3 +113,137 @@ fn captures_hold_when_the_match_starts_late() {
     assert_eq!(whole, "xy");
     assert_eq!(g, vec![Some("x".into()), Some("y".into())]);
 }
+
+/// The two descents agree — at the low level where they are the same
+/// algorithm, and at the high level where one of them routes.
+///
+/// `re_match_at` and `re_match_at_caps` are one backtracking descent
+/// written twice, the second threading a `Caps` array and an undo journal
+/// through it so a failed branch restores what it overwrote. Between them
+/// they carry 123 never-executed regions, and they are what every
+/// `regexp_matches` and every `regexp_replace` with a `\1` runs. Nothing
+/// checked that they answer the same question the same way. Two
+/// implementations of one descent is the shape
+/// `mod/no-second-implementation` warns about: they drift, disagree on a
+/// quantifier or a backtrack, and both stay green because each is tested
+/// alone.
+///
+/// **Backreferences are not one of those disagreements**, and finding that
+/// out is why this test has two halves. `re_match_at` answers `Ok(None)`
+/// for any `Backref` — it has no captures to compare against — so
+/// `(abc)\1` on `"abcabc"` returns no match there while the caps descent
+/// returns 6. That is not drift: `re_find` checks `has_backref` and routes
+/// those patterns to the capturing side, discarding the captures. The
+/// low-level half therefore compares only patterns without backreferences,
+/// which is the domain where the two are meant to be interchangeable, and
+/// the high-level half compares `re_find` against `re_find_caps` over
+/// everything — which is where the routing itself gets checked.
+///
+/// One difference is deliberate and is why this stays shallow:
+/// `MATCH_DEPTH_LIMIT` is 500 and `CAP_MATCH_DEPTH_LIMIT` is 300, so a
+/// pattern nested between those errors in one and matches in the other.
+#[test]
+fn the_capturing_and_non_capturing_descents_agree() {
+    use crate::regex_engine::{has_backref, re_find, re_find_caps, re_match_at, re_match_at_caps};
+
+    // Quantifiers, alternation, classes, anchors, backtracking, and the
+    // empty-match cases that separate a correct descent from a plausible one.
+    let patterns = [
+        "a*b",
+        "a+b",
+        "a?b",
+        "(a|b)+c",
+        "(a|ab)c",
+        "[a-z]{2,4}",
+        "^ab$",
+        "a{3}",
+        "[^x]+",
+        "(ab)*",
+        "(a*)*b",
+        "x|",
+        "()",
+        "a**",
+        "(a|b|c)d",
+        "[[:digit:]]+",
+        "a.c",
+        "(abc)\\1",
+        "^$",
+        "(a)(b)(c)",
+    ];
+    let inputs = [
+        "", "a", "b", "ab", "abc", "aab", "abab", "abcabc", "xyz", "aaaa", "a1b2", "ac", "d", "cd",
+        "123", "  ", "aXc",
+    ];
+
+    let (mut low, mut high, mut matched, mut backref_pats) = (0, 0, 0, 0);
+    for pat in patterns {
+        // A pattern this engine refuses to compile is not a disagreement
+        // between the descents, which is what this test is about.
+        let Ok(node) = re_compile(pat) else { continue };
+        let ngroups = max_group(&node);
+        let routed = has_backref(&node);
+        if routed {
+            backref_pats += 1;
+        }
+        for input in inputs {
+            let s = chars(input);
+
+            // High level: both entries, every pattern, routing included.
+            let plain_span = re_find(&node, &s, 0);
+            let caps_span = re_find_caps(&node, &s, 0, ngroups).map(|o| o.map(|(span, _)| span));
+            match (&plain_span, &caps_span) {
+                (Ok(a), Ok(b)) => assert_eq!(
+                    a, b,
+                    "pattern {pat:?} on {input:?}: re_find says {a:?}, re_find_caps says {b:?}"
+                ),
+                (Err(_), Err(_)) => {}
+                _ => {
+                    panic!("pattern {pat:?} on {input:?}: one entry errored and the other did not")
+                }
+            }
+            high += 1;
+
+            // Low level: only where the two are meant to be interchangeable.
+            if routed {
+                continue;
+            }
+            let mut steps_plain: u64 = 0;
+            let plain = re_match_at(&node, &s, 0, 0, &mut steps_plain);
+            let mut steps_caps: u64 = 0;
+            let mut caps: Vec<Option<(usize, usize)>> = vec![None; ngroups + 1];
+            let mut journal: Vec<(usize, Option<(usize, usize)>)> = Vec::new();
+            let capped =
+                re_match_at_caps(&node, &s, 0, 0, &mut steps_caps, &mut caps, &mut journal);
+            match (&plain, &capped) {
+                (Ok(a), Ok(b)) => {
+                    assert_eq!(
+                        a, b,
+                        "pattern {pat:?} on {input:?}: re_match_at says {a:?}, \
+                         re_match_at_caps says {b:?}"
+                    );
+                    if a.is_some() {
+                        matched += 1;
+                    }
+                }
+                (Err(_), Err(_)) => {}
+                _ => panic!(
+                    "pattern {pat:?} on {input:?}: one matcher errored and the other did not"
+                ),
+            }
+            low += 1;
+        }
+    }
+
+    assert_eq!(high, patterns.len() * inputs.len(), "every pair went through both entries");
+    assert!(
+        backref_pats > 0,
+        "the table must contain a backref pattern, or the routing half
+             of this test compares nothing"
+    );
+    assert!(low > 0 && low < high, "the low-level half must run and must skip the routed ones");
+    assert!(
+        matched > 40,
+        "only {matched} of {low} low-level pairs matched; a table where almost nothing \
+         matches compares two ways of saying no"
+    );
+}
