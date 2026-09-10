@@ -544,8 +544,12 @@ fn a_parenthesised_alternation_retries_its_branches_against_the_tail() {
     assert_eq!(whole, "abcd");
     assert_eq!(g, vec![Some("abc".into()), Some("ab".into())]);
 
-    // And the non-capturing forms, which take the other descent.
-    assert!(hits(r"(?:a|ab)c", "abc"), "non-capturing group");
+    // A control, not a regression: `(?:` was never broken. A non-capturing
+    // group returns its inner node rather than a `Group`, so the `Alt`
+    // lands directly in the sequence where the correct arm already reached
+    // it. It is here to keep that distinction visible — only capturing
+    // parentheses were affected.
+    assert!(hits(r"(?:a|ab)c", "abc"), "non-capturing group was always right");
     assert!(hits(r"(a|ab)c", "abc"), "capturing group through re_find");
 
     // A first branch that still wins is not disturbed.
