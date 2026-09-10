@@ -80,6 +80,73 @@ fn byte_string_keys_with_borrow_lookup() {
     assert!(!m.contains_key(b"bar".as_slice()));
 }
 
+/// The three probes agree — including the arm that a fix made cold.
+///
+/// One probe loop is written three times in `map_keyed.rs`, and the split
+/// is deliberate rather than accidental:
+///
+///  - `find_by_borrow` — lookup only, so it never tracks `DELETED`.
+///  - `probe_by_borrow_fast` — lookup plus an insert slot, no tombstones.
+///  - `probe_by_borrow_slow` — the same, remembering the first `DELETED`
+///    so a later insert reclaims it.
+///
+/// The middle two exist because a lookup should not pay for insert
+/// bookkeeping, and the third because tombstone tracking should not be paid
+/// when there are none. All three walk groups, match `h2`, compare the
+/// borrowed key and stop on `EMPTY`. What the rule against a second
+/// implementation warns about is exactly this: they evolve apart, disagree
+/// on some boundary, and both sets of tests stay green.
+///
+/// So this asks them the same question and requires the same answer, in
+/// both table states. The slow arm reached fifteen never-executed regions
+/// after the commit that stopped one `DEL` from putting the table on its
+/// slow probe permanently — the fix working, and a correctness path going
+/// quiet at the same time. `probe_by_borrow` is reached through
+/// `raw_entry_mut`, which is the only caller; `get` takes `find_by_borrow`
+/// instead, which is why a `get`-based test does not reach it at all.
+#[test]
+fn find_and_probe_agree_with_and_without_tombstones() {
+    let key = |i: u64| format!("key-{i:05}").into_bytes();
+    let mut m = KevyMap::<Vec<u8>, u64>::new();
+    for i in 0..400u64 {
+        m.insert(key(i), i);
+    }
+
+    // Both arms of `probe_by_borrow` are exercised: this first pass has no
+    // tombstones, the second has 134 of them.
+    let mut checked = 0;
+    for phase in 0..2 {
+        if phase == 1 {
+            // Every third, so tombstones land inside groups rather than in
+            // one run the probe can step over.
+            for i in (0..400u64).step_by(3) {
+                assert_eq!(m.remove(key(i).as_slice()), Some(i), "removing {i}");
+            }
+        }
+        for i in 0..450u64 {
+            let k = key(i);
+            let by_find = m.find_by_borrow(k.as_slice()).is_some();
+            let by_probe =
+                matches!(m.probe_by_borrow(k.as_slice()), crate::map::ProbeOutcome::Found(_));
+            assert_eq!(
+                by_find, by_probe,
+                "phase {phase}, key {i}: find_by_borrow says {by_find}, \
+                 probe_by_borrow says {by_probe}"
+            );
+            let present = i < 400 && !(phase == 1 && i % 3 == 0);
+            assert_eq!(by_find, present, "phase {phase}, key {i}: expected present={present}");
+            checked += 1;
+        }
+    }
+    assert_eq!(checked, 900, "both phases ran over the whole key range");
+
+    // And the slow arm's other job: a reinsert lands in a tombstone.
+    let before = m.len();
+    m.insert(key(0), 999);
+    assert_eq!(m.len(), before + 1);
+    assert_eq!(m.get(key(0).as_slice()), Some(&999));
+}
+
 #[test]
 fn iter_yields_all_entries() {
     let mut m = KevyMap::<u64, u64>::new();
