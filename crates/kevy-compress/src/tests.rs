@@ -190,15 +190,22 @@ fn high_level_roundtrips_and_never_loses_to_fast() {
         high.len(),
         fast.len()
     );
-    // Corruption still rejects, never mis-decodes.
-    for flip in [1usize, 8, high.len() / 2, high.len() - 1] {
+    // Corruption is bounded, not detected — a frame carries no checksum,
+    // and `a_bit_flip_can_decode_to_something_else` below measures how
+    // often a flip decodes to the wrong thing (894 of 2356 positions on
+    // this very fixture). What must hold for every flip is that the walk
+    // stays inside the frame and inside `orig_len`.
+    for flip in 0..high.len() {
         let mut bad = high.clone();
         bad[flip] ^= 0x20;
-        let out = decode(&[], &bad);
-        assert!(
-            out.is_err() || out.as_deref() == Ok(&text[..]),
-            "bit flip at {flip} mis-decoded silently"
-        );
+        if let Ok(out) = decode(&[], &bad) {
+            assert!(
+                out.len() <= text.len().max(bad.len() * 256 + 1024),
+                "a flip at {flip} produced {} bytes, past what the format can \
+                 expand to",
+                out.len()
+            );
+        }
     }
 }
 
@@ -335,5 +342,108 @@ fn a_symbol_count_from_a_frame_cannot_size_an_allocation() {
     // always honour 8 * len — the bound never short-reserves an honest frame.
     for len in [0usize, 1, 7, 64, 4096] {
         assert_eq!(symbols_fit(len * 8, len), len * 8, "8*{len} still fits exactly");
+    }
+}
+
+/// A bit flip can decode to something else. That is why the record carries
+/// a CRC, and this test is the reason to keep it.
+///
+/// Every bit of every byte of a held-out high frame, exhaustively. Three
+/// things must hold and one must not:
+///
+///  - **must**: never panics — the walk stays inside the frame.
+///  - **must**: never returns more than the format can expand to.
+///  - **must**: every truncation is refused, because a short frame cannot
+///    satisfy `out.len() == orig_len`. Truncation is structural and this
+///    layer does catch it.
+///  - **must not**: detect the flips. Some fraction of them decode to a
+///    different value of the right length, and the assertion below is that
+///    this fraction is **not zero**.
+///
+/// That last one reads backwards until you see what it defends. This
+/// module's header promised the opposite — "bit-flipped frames must fail
+/// loudly, never mis-decode" — and what checked it was four sampled byte
+/// positions, all of which happened to land on bits the walk rejects.
+/// Integrity lives one layer up, in `kevy-vlog`'s per-record `crc32c`,
+/// checked before a frame ever reaches `decode`. A future reader who
+/// deletes that CRC on the grounds that the codec catches corruption would
+/// be reading the old header; this test is what says otherwise.
+///
+/// Which of these are guards and which are records, checked by mutation
+/// rather than assumed:
+///
+///  - the truncation loop is a **guard**: neutering `lz_high`'s closing
+///    `out.len() == orig_len` check makes it fail at "truncated to 45 of
+///    366 bytes decoded as if whole".
+///  - `different > 0` and the expansion bound are **records**. Removing
+///    the per-literal `orig_len` bound leaves both green, because the
+///    closing length check still catches an over-long output. They state
+///    what the format does, and they turn red if the format changes --
+///    which is what they are for -- not if a particular guard is deleted.
+#[test]
+fn a_bit_flip_can_decode_to_something_else() {
+    // Held out, which is the shape `kevy-vlog` produces. A dictionary
+    // trained on the value it then compresses turns 400 bytes into a dozen
+    // — the module header warns about exactly that — and a dozen bytes has
+    // almost no walk to corrupt.
+    let training: Vec<Vec<u8>> = (0..40)
+        .map(|i| alloc::format!("{{\"user\":\"u{i}\",\"role\":\"admin\"}}\n").into_bytes())
+        .collect();
+    let dict = train(&training.iter().map(|v| &v[..]).collect::<Vec<_>>(), MAX_OFFSET);
+    let mut value = Vec::new();
+    for i in 900..960 {
+        value.extend_from_slice(
+            alloc::format!("{{\"user\":\"u{i}\",\"role\":\"reader\",\"active\":true}}\n")
+                .as_bytes(),
+        );
+    }
+    let frame = encode_high(&dict, &value);
+    assert!(frame.len() > 64, "a {}-byte frame would not exercise the walk", frame.len());
+    assert_eq!(decode(&dict, &frame).unwrap(), value, "the unaltered frame decodes");
+
+    let (mut refused, mut identical, mut different) = (0usize, 0usize, 0usize);
+    for byte in 0..frame.len() {
+        for bit in 0..8u32 {
+            let mut bad = frame.clone();
+            bad[byte] ^= 1 << bit;
+            match decode(&dict, &bad) {
+                Err(_) => refused += 1,
+                Ok(v) if v == value => identical += 1,
+                Ok(v) => {
+                    assert!(
+                        v.len() <= bad.len() * 256 + 1024,
+                        "bit {bit} of byte {byte} produced {} bytes, past what the \
+                         format can expand to",
+                        v.len()
+                    );
+                    different += 1;
+                }
+            }
+        }
+    }
+
+    let total = frame.len() * 8;
+    assert_eq!(refused + identical + different, total, "every flip was accounted for");
+    assert!(
+        different > 0,
+        "not one of {total} flips decoded to a different value. Either the \
+         format grew a checksum — in which case say so here and in \
+         decode.rs's header — or this fixture stopped exercising the walk. \
+         It is not evidence that the codec detects corruption; it never did."
+    );
+    assert!(
+        refused > frame.len(),
+        "only {refused} of {total} flips were refused; a frame this \
+         compressible has far more load-bearing bits than bytes, so this \
+         few means the walk is not reaching them"
+    );
+
+    // Truncation is structural, and is caught.
+    for cut in 0..frame.len() {
+        assert!(
+            decode(&dict, &frame[..cut]).is_err(),
+            "a frame truncated to {cut} of {} bytes decoded as if whole",
+            frame.len()
+        );
     }
 }

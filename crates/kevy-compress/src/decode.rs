@@ -22,8 +22,31 @@
 //! 0.045. See `lib.rs`'s note on the decode requirement.
 //!
 //! A frame that walks outside its promised bounds at any point is
-//! rejected with [`Corrupt`] — truncated and bit-flipped frames must
-//! fail loudly, never mis-decode.
+//! rejected with [`Corrupt`]. That is a bound on the walk, and it is
+//! worth being exact about what it is not.
+//!
+//! **This layer does not detect corruption, and is not where that
+//! belongs.** A frame carries no checksum. A flipped bit that leaves
+//! every offset and length in range produces a different, structurally
+//! valid token stream, and the decode returns it — measured on a held-out
+//! JSON frame, 38% of single-byte flips decode to output of exactly the
+//! right length and the wrong contents. Integrity is `kevy-vlog`'s
+//! per-record `crc32c`, checked in `verify_image` **before** the frame
+//! reaches here; `lib.rs`'s decode says the same thing where it retries a
+//! 5.0.0-era tag ("the record's CRC already vouched for the bytes").
+//!
+//! What this layer does guarantee, for arbitrary bytes: it never reads
+//! outside a slice, never panics, never reserves on an unvalidated
+//! length, and never returns more than `orig_len`. Truncation it does
+//! catch, because a short frame cannot satisfy `out.len() == orig_len`.
+//! `a_bit_flip_can_decode_to_something_else` in `tests.rs` holds the
+//! distinction, so that the header cannot drift back into promising
+//! integrity it does not provide.
+//!
+//! The header did promise it, in those words, until 2026-09-10. What
+//! checked the promise was four sampled byte positions with one bit
+//! pattern each, and on its own fixture 894 of 2356 positions mis-decode
+//! — the four it happened to pick were not among them.
 
 use alloc::vec::Vec;
 
