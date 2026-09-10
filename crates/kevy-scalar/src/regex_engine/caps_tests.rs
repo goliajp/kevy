@@ -20,7 +20,7 @@
 
 #![cfg(test)]
 
-use crate::regex_engine::{max_group, re_compile, re_find_caps};
+use crate::regex_engine::{max_group, re_compile, re_find, re_find_caps};
 
 fn chars(s: &str) -> Vec<char> {
     s.chars().collect()
@@ -112,6 +112,119 @@ fn captures_hold_when_the_match_starts_late() {
     let (whole, g) = caps(r"(x)(y)", "aaaxy").expect("matches");
     assert_eq!(whole, "xy");
     assert_eq!(g, vec![Some("x".into()), Some("y".into())]);
+}
+
+/// Does `pat` find anything in `hay`? Compilation must succeed.
+fn hits(pat: &str, hay: &str) -> bool {
+    let node = re_compile(pat).unwrap_or_else(|_| panic!("{pat} must compile"));
+    let cs = chars(hay);
+    re_find(&node, &cs, 0).unwrap_or_else(|_| panic!("{pat} must not error")).is_some()
+}
+
+/// The message `pat` is refused with. Compilation must fail.
+fn refusal(pat: &str) -> String {
+    match re_compile(pat) {
+        Err(crate::regex_engine::ReErr::TypeMismatch { detail }) => detail,
+        Ok(_) => panic!("{pat} must not compile"),
+    }
+}
+
+// PORTED + WRITTEN HERE: the escape table, one row per arm.
+//
+// `re_parse_atom` carried 74 never-executed regions and most of them are
+// this table — twenty-odd escapes, each with a comment naming what PG18
+// does and several marked "verified against live PG18". The comments were
+// the only thing holding the semantics.
+//
+// The two that matter most are the two that are NOT what a PCRE reader
+// expects, and are the ones most likely to be "fixed" into agreement with
+// the wrong engine: in PG's ARE, `\b` is the BACKSPACE character and `\B`
+// is a literal backslash. Word boundaries are `\y \Y \m \M`.
+#[test]
+fn every_escape_means_what_the_comment_beside_it_says() {
+    // (pattern, haystack, must match)
+    let cases: &[(&str, &str, bool)] = &[
+        // Character-class shorthands.
+        (r"\d", "5", true),
+        (r"\d", "x", false),
+        (r"\D", "x", true),
+        (r"\D", "5", false),
+        (r"\w", "a", true),
+        (r"\w", "_", true),
+        (r"\w", "-", false),
+        (r"\W", "-", true),
+        (r"\s", " ", true),
+        (r"\s", "a", false),
+        (r"\S", "a", true),
+        // Character-entry escapes. `\b` and `\B` are the PCRE-surprising pair.
+        (r"\a", "\u{07}", true),
+        (r"\e", "\u{1b}", true),
+        (r"\f", "\u{0c}", true),
+        (r"\n", "\n", true),
+        (r"\r", "\r", true),
+        (r"\t", "\t", true),
+        (r"\v", "\u{0b}", true),
+        (r"\b", "\u{08}", true),
+        (r"\b", "ab", false),
+        (r"\B", "\\", true),
+        (r"\B", "ab", false),
+        // Numeric escapes.
+        (r"\x41", "A", true),
+        (r"\x41", "B", false),
+        (r"A", "A", true),
+        // Word boundaries — these are the real ones.
+        (r"\yfoo\y", "a foo b", true),
+        (r"\yfoo\y", "afoob", false),
+        (r"\mfoo", "foo bar", true),
+        (r"foo\M", "a foo", true),
+        // String anchors: `\A` is `^`, `\Z` is `$`.
+        (r"\Afoo", "foobar", true),
+        (r"\Afoo", "xfoo", false),
+        (r"bar\Z", "foobar", true),
+        (r"bar\Z", "barfoo", false),
+    ];
+
+    for (pat, hay, want) in cases {
+        assert_eq!(hits(pat, hay), *want, "{pat:?} against {hay:?}");
+    }
+    assert_eq!(cases.len(), 33, "the table shrank; a table-driven test that loses rows tests less");
+}
+
+// WRITTEN HERE: what the parser refuses, and with which message. The
+// message is the whole user-visible surface of a bad pattern.
+#[test]
+fn a_malformed_escape_or_group_is_refused_by_name() {
+    assert!(refusal("\\").contains("dangling backslash"), "{}", refusal("\\"));
+    assert!(refusal(r"\xZZ").contains("needs hex digits"), "{}", refusal(r"\xZZ"));
+    assert!(refusal(r"\uZZ").contains("needs hex digits"));
+    assert!(
+        refusal(r"\1").contains("invalid backreference number"),
+        "a backreference with no group before it"
+    );
+    assert!(refusal(r"(a)\2").contains("invalid backreference number"), "a forward reference");
+    assert!(refusal("(a").contains("not balanced"), "an unclosed group");
+
+    // `(?x` where x is none of `: = !`. PG splits these two ways: a letter
+    // reads as a bad embedded option, anything else as a `?` with no
+    // operand. Before this arm existed, `(?<name>h)` parsed the `?` as a
+    // literal and matched nothing at all.
+    assert!(refusal("(?P<n>a)").contains("invalid embedded option"), "PCRE named group");
+    assert!(refusal("(?<n>a)").contains("quantifier operand invalid"), "the `<` form");
+}
+
+// WRITTEN HERE: the three `(?...)` forms this engine does implement.
+#[test]
+fn non_capturing_groups_and_lookahead_parse_and_match() {
+    // `(?:` groups without capturing — the group count stays at zero, so a
+    // backreference to 1 is still invalid.
+    assert!(hits("(?:ab)+c", "ababc"));
+    assert!(refusal(r"(?:a)\1").contains("invalid backreference number"), "(?: does not capture");
+
+    // `(?=` and `(?!` are zero-width.
+    assert!(hits("a(?=b)", "ab"));
+    assert!(!hits("a(?=b)", "ac"));
+    assert!(hits("a(?!b)", "ac"));
+    assert!(!hits("a(?!b)", "ab"));
 }
 
 // WRITTEN HERE: a quantified capture group that a backreference then
