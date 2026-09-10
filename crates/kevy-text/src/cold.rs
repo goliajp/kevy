@@ -11,7 +11,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use crate::bm25::bm25_score;
-use crate::docblobs::put_varint;
+use crate::docblobs::{next_varint as read_varint, put_varint};
 use crate::positions::walk;
 use crate::segment::TextSegment;
 
@@ -263,23 +263,6 @@ pub fn highlight_fields(fields: &[Vec<u8>], query: &[u8]) -> Vec<(usize, Vec<(us
         }
     }
     out
-}
-
-fn read_varint(b: &[u8], at: &mut usize) -> Option<u32> {
-    let mut cur = 0u32;
-    let mut shift = 0u32;
-    loop {
-        let byte = *b.get(*at)?;
-        *at += 1;
-        cur |= u32::from(byte & 0x7f) << shift;
-        if byte & 0x80 == 0 {
-            return Some(cur);
-        }
-        shift += 7;
-        if shift > 28 {
-            return None;
-        }
-    }
 }
 
 impl TextSegment {

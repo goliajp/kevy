@@ -12,7 +12,7 @@
 //! lockstep. Delta+varint keeps a high-frequency term from paying 4
 //! bytes per occurrence — the standard Lucene positions layout.
 
-use crate::docblobs::{Channel, DocBlobs, get_varints, put_varint};
+use crate::docblobs::{Channel, DocBlobs, next_varint, put_varint};
 
 /// Encode ascending `offsets` as a delta+varint blob. Offsets are
 /// strictly ascending (distinct ordinals), so every delta after the
@@ -30,34 +30,25 @@ fn encode(offsets: &[u32]) -> Vec<u8> {
 /// Walk a delta+varint blob's ascending offsets without building a
 /// `Vec` — the allocation-free twin of [`decode`], for the hot phrase
 /// check.
+///
+/// Ends at the first byte that is not part of a whole, well-formed varint,
+/// and at a delta that would carry the running offset past `u32::MAX`. Both
+/// are unreachable for a blob [`encode`] wrote — deltas of an ascending
+/// `u32` sequence sum to at most `u32::MAX` — and both used to be a panic in
+/// a debug build and a wrong answer in a release one.
 pub(crate) fn walk(blob: &[u8]) -> impl Iterator<Item = u32> + '_ {
+    let mut at = 0usize;
     let mut acc = 0u32;
-    let mut cur = 0u32;
-    let mut shift = 0u32;
-    blob.iter().filter_map(move |&b| {
-        cur |= u32::from(b & 0x7f) << shift;
-        if b & 0x80 == 0 {
-            acc += cur;
-            cur = 0;
-            shift = 0;
-            Some(acc)
-        } else {
-            shift += 7;
-            None
-        }
+    core::iter::from_fn(move || {
+        let delta = next_varint(blob, &mut at)?;
+        acc = acc.checked_add(delta)?;
+        Some(acc)
     })
 }
 
 /// Decode a delta+varint blob back to ascending offsets.
 fn decode(blob: &[u8]) -> Vec<u32> {
-    let mut acc = 0u32;
-    get_varints(blob)
-        .into_iter()
-        .map(|d| {
-            acc += d;
-            acc
-        })
-        .collect()
+    walk(blob).collect()
 }
 
 /// The positional side-channel: token → per-document position blobs.
@@ -157,6 +148,30 @@ mod tests {
         assert_eq!(p.get(b"a", 2), Some(vec![3]));
         p.remove(b"b", 1);
         assert_eq!(p.ids(b"b"), Vec::<u32>::new(), "empty token dropped");
+    }
+
+    /// The offsets are deltas, and the running sum is a `u32`. A blob whose
+    /// deltas sum past `u32::MAX` cannot come from `encode` — the deltas of
+    /// an ascending `u32` sequence sum to at most `u32::MAX` — but it can
+    /// come from bytes. `acc += delta` panicked on it in a debug build and
+    /// wrapped to a small offset in a release one, which the phrase check
+    /// would then have matched against.
+    #[test]
+    fn a_delta_past_the_end_of_the_offset_space_ends_the_walk() {
+        let mut blob = Vec::new();
+        put_varint(&mut blob, u32::MAX);
+        put_varint(&mut blob, 1);
+        assert_eq!(walk(&blob).collect::<Vec<_>>(), vec![u32::MAX]);
+    }
+
+    /// And the walk agrees with the encoder for everything that is legal —
+    /// otherwise the guard above could be trimming real offsets.
+    #[test]
+    fn walk_returns_exactly_what_encode_was_given() {
+        for case in [vec![], vec![0u32], vec![0, 1, 2], vec![7, 4_000_000_000, u32::MAX]] {
+            let blob = encode(&case);
+            assert_eq!(walk(&blob).collect::<Vec<_>>(), case, "roundtrip {case:?}");
+        }
     }
 
     #[test]
