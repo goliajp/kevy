@@ -359,6 +359,16 @@ proves = "every fuzz target in the tree runs in CI's fuzz-smoke matrix, and ever
 # `--cfg loom` changes RUSTFLAGS, and cargo rebuilds the whole release
 # profile whenever those change. Warm it is 22 s; run alternately with any
 # other release build it costs both of them a full rebuild every time.
+#
+# `expected` is an ESTIMATE and the only one in this file that is. The two
+# measurements in hand are 22 s warm on a workstation and 48-58 s for CI's
+# `loom` job including checkout and a cached build. Neither is the number
+# this row will actually cost, because inside the prerelease tier the
+# RUSTFLAGS switch lands on a release profile the preceding checks just
+# built, and the rebuild is the cost. 150 is that rebuild guessed at, not
+# timed. Replace it with `target/suite-prerelease.json`'s figure the first
+# time the tier runs with this row in it — the corrections at the top of
+# this file are what happens when nobody does.
 [[check]]
 id = "loomgate"
 area = "arch"
