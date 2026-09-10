@@ -209,6 +209,24 @@ pub(crate) fn re_match_seq(
             }
             Ok(None)
         }
+        // A group holding an alternation needs the arm above, and without
+        // this it did not get it. `(a|ab)c` on "abc" fell to the catch-all
+        // below, where `re_match_at` returns the FIRST branch that matches
+        // — "a" — and the tail then faces "b" and fails with no way back
+        // to "ab". `(ab|a)c` matched only because the longer branch
+        // happened to be written first.
+        //
+        // Parentheses do not change what a sequence matches on this path;
+        // they group, and capture only on the `_caps` side. So flatten the
+        // group into the sequence and let the arm above do its work. The
+        // quantified case is left to the arm that handles quantifiers,
+        // which already enumerates reachable ends.
+        ReNode::Group { inner, .. } if matches!(**inner, ReNode::Alt(_)) => {
+            let mut combined: Vec<ReNode> = Vec::with_capacity(1 + rest.len());
+            combined.push((**inner).clone());
+            combined.extend(rest.iter().cloned());
+            re_match_seq(&combined, s, pos, d, steps)
+        }
         ReNode::Concat(nested) => {
             // Flatten: nested ++ rest, preserving backtracking
             // across the boundary.
