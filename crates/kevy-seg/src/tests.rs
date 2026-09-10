@@ -466,3 +466,61 @@ fn no_key_length_panics_or_writes_something_unreadable() {
     assert!(stored > 60, "only {stored} key lengths stored — the sweep collapsed");
     assert!(refused > 0, "no key length was refused — the bound is not being hit");
 }
+
+/// A page header that lies about its slot count, with the CRC recomputed
+/// so the existing check agrees with it.
+///
+/// `page_intact` answers "these bytes did not change". It cannot answer
+/// "these bytes describe a page", and `n_slots` lives inside the CRC's
+/// range, so anything that rewrites the page — a repair tool, a restore
+/// from a stale copy, anyone who can write the data directory — can hand
+/// the reader a self-consistent page claiming 65535 slots. The slot array
+/// grows backward from the CRC, so slot 65534 sits at
+/// `4096 - 4 - 2 * 65535`, which is not a place.
+#[test]
+fn a_page_that_claims_more_slots_than_fit_is_corrupt_not_a_panic() {
+    use std::io::{Read, Seek, SeekFrom, Write};
+
+    let (_d, p) = tmp("seg-slotcount");
+    build(&p, [(&b"a"[..], &b"1"[..]), (&b"b"[..], &b"2"[..])]);
+
+    let mut f = std::fs::OpenOptions::new().read(true).write(true).open(&p).expect("reopen");
+    let mut page = vec![0u8; crate::layout::PAGE];
+    f.read_exact(&mut page).expect("read page 0");
+    page[0..2].copy_from_slice(&u16::MAX.to_le_bytes());
+    let crc = kevy_sys::checksum::crc32c(&page[..crate::layout::PAGE - crate::layout::PAGE_CRC]);
+    let n = crate::layout::PAGE - crate::layout::PAGE_CRC;
+    page[n..].copy_from_slice(&crc.to_le_bytes());
+    f.seek(SeekFrom::Start(0)).expect("seek");
+    f.write_all(&page).expect("rewrite page 0");
+    f.sync_all().expect("sync");
+    drop(f);
+
+    let seg = Seg::open(&p).expect("the footer and trailer are untouched");
+    assert!(
+        matches!(seg.get(b"a"), Err(SegError::Corrupt(_))),
+        "a page whose slot count cannot fit must be refused as corrupt"
+    );
+}
+
+/// The bound must not reject a page the builder can actually write.
+///
+/// A guard set one slot too tight would refuse real segments, and the
+/// corruption test above would still pass — it only proves the guard fires,
+/// not that it fires on the right side. Thousands of two-byte records pack
+/// the densest pages this format produces; every one of them must read back.
+#[test]
+fn the_densest_pages_the_builder_writes_are_within_the_slot_bound() {
+    let (_d, p) = tmp("seg-dense");
+    let recs: Vec<(Vec<u8>, Vec<u8>)> =
+        (0..4000u32).map(|i| (format!("{i:06}").into_bytes(), vec![b'v'])).collect();
+    let meta = build(&p, recs.iter().map(|(k, v)| (&k[..], &v[..])));
+    assert!(meta.data_pages > 1, "a single page would not exercise the bound");
+
+    let seg = Seg::open(&p).expect("open");
+    for (k, v) in &recs {
+        assert_eq!(seg.get(k).expect("get"), Some(v.clone()), "key {k:?}");
+    }
+    let walked = seg.range(b"000000", b"999999").count();
+    assert_eq!(walked, recs.len(), "every record walks back");
+}

@@ -54,6 +54,15 @@ pub fn seal_page(page: &mut [u8; PAGE], n_slots: u16) {
     page[PAGE - PAGE_CRC..].copy_from_slice(&crc.to_le_bytes());
 }
 
+/// The most slots a data page can carry.
+///
+/// The slot array grows backward from the CRC toward the header, two bytes
+/// each, so it can occupy at most the space between them. This is a
+/// geometric bound and not a tight one — every slot also needs a cell, and
+/// the smallest cell is six bytes — but it is the bound that has to hold
+/// for a slot offset to be a place in the page at all.
+pub const MAX_SLOTS: u16 = ((PAGE - PAGE_CRC - PAGE_HDR) / 2) as u16;
+
 /// Verify a page's CRC. `true` = intact.
 pub fn page_intact(page: &[u8]) -> bool {
     page.len() == PAGE && {
@@ -62,6 +71,21 @@ pub fn page_intact(page: &[u8]) -> bool {
         );
         kevy_sys::checksum::crc32c(&page[..PAGE - PAGE_CRC]) == want
     }
+}
+
+/// Does this page's header describe a page?
+///
+/// [`page_intact`] answers a different question: whether the bytes are the
+/// bytes that were written. It cannot answer whether they mean anything,
+/// and `n_slots` lives inside the range the CRC covers — so a page rewritten
+/// by anything that recomputes the CRC is self-consistent no matter what it
+/// claims. A claim of 65535 slots puts slot 65534 at `PAGE - PAGE_CRC -
+/// 2 * 65535`, which underflows: a debug build panicked in the subtraction,
+/// a release build wrapped to an enormous offset and panicked on the index.
+/// Both are a panic out of a library that returns `SegError` for everything
+/// else it cannot read.
+pub fn page_shape_ok(page: &[u8]) -> bool {
+    page.len() == PAGE && page_slots(page) <= MAX_SLOTS
 }
 
 /// Slot count of a sealed page.
