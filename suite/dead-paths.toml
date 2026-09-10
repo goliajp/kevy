@@ -47,38 +47,6 @@ what gates them — the arithmetic is — so they are registered here by hand
 instead of being reclassified.
 """
 
-[[dead]]
-symbol = "kevy_geo::estimate_step"
-regions = 1
-kind = "unreachable"
-delete = false
-reason = """
-`if radius_m <= 0.0 { return GEO_STEP; }` at crates/kevy-geo/src/lib.rs:250.
-
-Unreachable today: `estimate_step` is private, has exactly one call site
-(line 222), and that site sits after line 219's early return on
-`radius_m <= 0.0`. Verified by grep — two occurrences in the whole
-workspace, the definition and the one call.
-
-**It must not be deleted.** Without it a non-positive radius enters
-`while r < MERCATOR_MAX { r *= 2.0; step += 1; }` with `r <= 0.0`, which
-never reaches the bound: an infinite loop in release, a step overflow in
-debug. The guard is not redundant defence against a condition that cannot
-happen — it is the thing that makes the loop terminate, and it is dead only
-because one caller happens to check first today.
-
-The atlas found this as one of four never-executed regions in kevy-geo and
-my first reading of it was that it was a redundant guard to remove. Reading
-the loop underneath is what changed the answer. That is the whole reason
-this file distinguishes `unreachable` from `delete = true`.
-
-The other three regions the atlas found in this crate were `untested`, not
-unreachable, and are now covered by
-`a_radius_larger_than_the_world_returns_the_whole_range` and
-`cells_past_the_latitude_limit_are_skipped_not_wrapped`.
-"""
-
-
 [[dead_crate]]
 crate = "kevy-jni"
 gate = "bench/jnigate.sh"
@@ -132,7 +100,7 @@ improved.
 #     is what the next person retests to find out.
 
 [[unstable]]
-prefix = "<kevy_rt::shard::Shard>::"
+prefix = "kevy_rt::shard::Shard::"
 observed = [
   "A: deliver_pmessages 3, try_inline_local 13, close_conn 5, tick_replication_view 13, tick_replication_watermark 5, unregister_subs 2",
   "B: do_publish 4, close_conn 5, tick_replication_view 13, tick_replication_watermark 5, unregister_subs 2",
@@ -161,21 +129,24 @@ prefix = "kevy_rt::aof_writer::"
 observed = ["A: run_worker 6", "B: 6", "C: 5 (matched baseline)"]
 why = "A background writer whose drain path depends on whether a batch was pending when the test finished."
 
-# Monomorphised generics whose demangled name carries no path — registered
-# by symbol because there is no prefix to name.
+# Monomorphised generics and trait impls, registered by symbol because there
+# is no prefix that names them. These were written as bare method names —
+# `::mark`, `::top_groups` — back when `symbol_of` collapsed a qualified
+# path to its last segment. They named nothing after that was fixed, which
+# is what `deadgate.sh`'s register check now catches.
 
 [[unstable]]
-symbol = "::mark"
+symbol = "kevy_rt::slow_iter::SlowIter::mark"
 observed = ["A: 10", "B: 10", "C: 10 — joined in all three, absent from the baseline"]
 why = "Present in every run's growth list and in no baseline: the baseline sampled a run where it was covered, and no run since has repeated that."
 
 [[unstable]]
-symbol = "::get_into_output"
+symbol = "kevy_store::Store::get_into_output"
 observed = ["A: 17", "C: 17", "B: 16 (matched baseline)"]
 why = "A reader path in the reactor, reached only on a buffer shape that depends on how a read split."
 
 [[unstable]]
-symbol = "::top_groups"
+symbol = "kevy_index::agg::AggSegment::top_groups"
 observed = ["A: 23", "C: 23", "B: 12 (matched baseline)"]
 why = "The widest swing measured, 12 to 23 across runs of one corpus."
 
@@ -207,7 +178,7 @@ dispatch_with_proto in setratchet's docstring for the same reason.
 """
 
 [[unstable]]
-symbol = "::srandmember"
+symbol = "kevy_store::Store::srandmember"
 observed = [
   "baseline: 1",
   "run 33285528604 attempt 1: 2 — setratchet FAIL, the only symbol that grew",
@@ -229,7 +200,7 @@ gain, and it should not.
 """
 
 [[unstable]]
-symbol = "::resolve_xadd_id"
+symbol = "kevy_store::stream::StreamData::resolve_xadd_id"
 observed = [
   "baseline: 2",
   "run 33287288186: 3 — setratchet FAIL, the only symbol that grew",

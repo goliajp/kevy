@@ -51,35 +51,57 @@ fi
 
 python3 "$ROOT/tools/coverage_atlas.py" "$COV" || exit $?
 
-# The register and the exemptions are two files, and nothing reconciled them.
-# `suite/dead-paths.toml` is what a person reads; `unstable` inside the
-# `unstable` block setratchet honours is carried through the atlas into
-# DEAD-SET.json and from there into the baseline. So the invariant to check
-# is the one the atlas just produced: comparing against the BASELINE fails
-# on every registration until the next run, because the baseline's copy is
-# always one atlas behind. Checked against the baseline first, and it
-# reported exactly that lag as a disagreement.
+# Every unstable declaration must exempt something that exists.
+#
+# This check used to compare `suite/dead-paths.toml` against the `unstable`
+# block inside DEAD-SET.json — and the atlas copies that block straight out
+# of the same TOML, so it was comparing the register with itself. It said
+# "register and this run agree" on every run it has ever made, and could
+# not have said anything else.
+#
+# What it missed, found the day the symbol scheme changed: the register
+# declared `kevy_geo::estimate_step`, and no symbol by that name has been in
+# the set for some time — the real one is `kevy_geo::search::estimate_step`.
+# A declaration that exempts nothing is a hole in the ratchet with a reason
+# attached, which reads to the next person like a hole that was considered.
+#
+# So the comparison is now against the symbols actually observed. A stale
+# declaration fails; so does an empty register, because a register that
+# reads as empty is a broken read and not an absence of exemptions.
 python3 - "$ROOT" <<'RECONCILE' || exit $?
 import json, pathlib, sys, tomllib
 root = pathlib.Path(sys.argv[1])
-reg = tomllib.loads((root / "suite/dead-paths.toml").read_text()).get("unstable", [])
-base = json.loads((root / "bench/DEAD-SET.json").read_text()).get("unstable", {})
+doc = tomllib.loads((root / "suite/dead-paths.toml").read_text())
+reg = doc.get("unstable", [])
+observed = json.loads((root / "bench/DEAD-SET.json").read_text()).get("symbols", {})
 if not reg:
     print("deadgate: REFUSED — suite/dead-paths.toml declares no unstable "
           "entries; an empty register is a broken read, not agreement",
           file=sys.stderr)
     sys.exit(2)
-want = {e["symbol"] for e in reg if "symbol" in e} | {e["prefix"] for e in reg if "prefix" in e}
-have = set(base.get("symbols", [])) | set(base.get("prefixes", []))
-only_reg, only_base = sorted(want - have), sorted(have - want)
-if only_reg or only_base:
-    print("deadgate: FAIL — the unstable register and this run's exemptions disagree")
-    for x in only_reg:
-        print(f"  registered in suite/dead-paths.toml, exempts nothing: {x}")
-    for x in only_base:
-        print(f"  exempt in this run, explained nowhere: {x}")
+if not observed:
+    print("deadgate: REFUSED — the atlas observed no symbols at all; there is "
+          "nothing for the register to be checked against", file=sys.stderr)
+    sys.exit(2)
+dead = []
+for kind in ("unstable", "dead"):
+    for e in doc.get(kind, []):
+        if "symbol" in e:
+            if e["symbol"] not in observed:
+                dead.append(f"[[{kind}]] symbol {e['symbol']!r}")
+        elif "prefix" in e:
+            if not any(k.startswith(e["prefix"]) for k in observed):
+                dead.append(f"[[{kind}]] prefix {e['prefix']!r}")
+if dead:
+    print("deadgate: FAIL — register entr(ies) naming nothing in this run")
+    for x in dead:
+        print(f"  {x}")
+    print("  An [[unstable]] one is a hole in the ratchet with a reason attached;")
+    print("  a [[dead]] one is a written reason for a region that is not there.")
+    print("  Either the symbol was renamed, or it left the set and the entry can go.")
     sys.exit(1)
-print(f"deadgate: {len(want)} unstable declaration(s), register and this run agree")
+n = len(reg) + len(doc.get("dead", []))
+print(f"deadgate: {n} register entr(ies), each naming a symbol this run observed")
 RECONCILE
 
 if [ "$MODE" = "--update-baseline" ]; then
