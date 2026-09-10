@@ -355,6 +355,20 @@ timeout = 60
 requires = []
 proves = "every fuzz target in the tree runs in CI's fuzz-smoke matrix, and every matrix entry names a target that exists — nine of twenty-three were in the tree unrun, and the first run of one of them found two defects"
 
+# prerelease, not precommit, for a build-cache reason and not a time one:
+# `--cfg loom` changes RUSTFLAGS, and cargo rebuilds the whole release
+# profile whenever those change. Warm it is 22 s; run alternately with any
+# other release build it costs both of them a full rebuild every time.
+[[check]]
+id = "loomgate"
+area = "arch"
+tier = "prerelease"
+cmd = "python3 tools/check_loom.py"
+expected = 150
+timeout = 1800
+requires = []
+proves = "the two loom suites actually run, and every #[test] in them runs — both files are #![cfg(loom)] and nothing in this repository passed --cfg loom, so four exhaustive interleaving searches reported `0 passed; ok` while three production sites cited them by name as the argument for their memory ordering"
+
 [[check]]
 id = "lockgate"
 area = "release-pins"
