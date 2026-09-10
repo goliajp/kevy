@@ -65,28 +65,67 @@ fn k2_incompressible_never_expands() {
     assert_eq!(decode(&[], &frame).unwrap(), random);
 }
 
-/// K3: truncations and bit flips are rejected, never mis-decoded into
-/// a wrong-but-plausible value.
+/// K3, stated as it holds rather than as it was written: **every**
+/// truncation is refused and an unknown tag is refused; a bit flip is not
+/// detected, and cannot be at this layer.
+///
+/// K3 read "truncations and bit flips are rejected, never mis-decoded into
+/// a wrong-but-plausible value" and this test sampled five byte positions
+/// with one bit pattern each. Scanning all of them: **3,965 of 8,184
+/// single-bit flips (48%) decode to a value of the right length and the
+/// wrong contents**. The five it picked were not among them, which is how
+/// a criterion the format cannot meet stayed green.
+///
+/// A frame carries no checksum, and it should not: integrity is
+/// `kevy-vlog`'s per-record `crc32c`, checked before a frame reaches
+/// `decode`. The fuzz target already states the real contract — "must
+/// either error or produce a value, never panic, never overrun". This
+/// brings the unit test and the criterion into line with it. See
+/// `a_bit_flip_can_decode_to_something_else` for the high level, and
+/// `decode.rs`'s header for what this layer does guarantee.
 #[test]
-fn k3_corrupt_frames_reject() {
+fn k3_every_truncation_is_refused_and_bit_flips_are_not_detected() {
     let mut text = Vec::new();
     for i in 0..200 {
         text.extend_from_slice(alloc::format!("record-{i}: payload payload payload\n").as_bytes());
     }
     let frame = encode(&[], &text);
-    for cut in [0, 1, frame.len() / 2, frame.len() - 1] {
-        let out = decode(&[], &frame[..cut]);
-        assert!(out.is_err() || out.as_deref() == Ok(&text[..]), "truncation at {cut} mis-decoded");
-    }
-    for flip in [0usize, 1, 2, frame.len() / 2, frame.len() - 1] {
-        let mut bad = frame.clone();
-        bad[flip] ^= 0x40;
-        let out = decode(&[], &bad);
+
+    // Truncation is structural, and the closing `out.len() == orig_len`
+    // check in `lz` catches all of it. Every prefix, not four of them.
+    for cut in 0..frame.len() {
         assert!(
-            out.is_err() || out.as_deref() == Ok(&text[..]),
-            "bit flip at {flip} produced a wrong value silently"
+            decode(&[], &frame[..cut]).is_err(),
+            "a frame truncated to {cut} of {} bytes decoded as if whole",
+            frame.len()
         );
     }
+
+    // A flip is not detected. This counts rather than forbids, and asserts
+    // the count is non-zero: the assertion fails if the format grows a
+    // checksum, which is the change that would let someone drop the CRC
+    // upstream.
+    let (mut refused, mut identical, mut different) = (0usize, 0usize, 0usize);
+    for flip in 0..frame.len() {
+        for bit in 0..8u32 {
+            let mut bad = frame.clone();
+            bad[flip] ^= 1 << bit;
+            match decode(&[], &bad) {
+                Err(_) => refused += 1,
+                Ok(v) if v == text => identical += 1,
+                Ok(_) => different += 1,
+            }
+        }
+    }
+    assert_eq!(refused + identical + different, frame.len() * 8, "all flips accounted for");
+    assert!(
+        different > 0,
+        "not one of {} flips decoded to a different value — either the \
+         format grew a checksum, in which case say so here and in \
+         decode.rs's header, or this fixture stopped exercising the walk",
+        frame.len() * 8
+    );
+
     assert_eq!(decode(&[], &[]), Err(Corrupt));
     assert_eq!(decode(&[], &[9, 0]), Err(Corrupt), "unknown tag must reject");
 }
