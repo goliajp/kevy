@@ -237,7 +237,17 @@ impl Seg {
                 let mut out = Vec::with_capacity(layout::capped_capacity(total_len as usize));
                 for p in 0..n_pages {
                     let mut buf = vec![0u8; PAGE];
-                    self.f.read_exact_at(&mut buf, u64::from(first_page + p) * PAGE as u64)?;
+                    // `first_page` and `n_pages` both come off disk, so the sum
+                    // is arithmetic on untrusted numbers. It cannot actually
+                    // overflow a `u32`: reaching `p >= 1` means the read at
+                    // `p == 0` succeeded, so `first_page` is a page this file
+                    // has, and a file with `u32::MAX` pages is 17.6 TB. That
+                    // argument is the only thing standing between the debug
+                    // build and a panic, and it depends on a fact about file
+                    // sizes rather than about this expression. Widened, the
+                    // sum names the page it says regardless.
+                    let at = (u64::from(first_page) + u64::from(p)) * PAGE as u64;
+                    self.f.read_exact_at(&mut buf, at)?;
                     if !layout::page_intact(&buf) {
                         return Err(SegError::Corrupt("overflow page crc"));
                     }

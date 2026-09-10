@@ -115,14 +115,37 @@ impl<'a> Cell<'a> {
     }
 }
 
+/// Where a field of `n` bytes starting at `at` ends, or `None` if that is
+/// not a number.
+///
+/// The lengths in a cell header come off disk as a `u16` and a `u32`, and
+/// the offsets built from them are `usize`. On the 32-bit targets this
+/// crate is built for — `armv7-unknown-linux-musleabihf` and
+/// `thumbv7em-none-eabihf` are both in CI's matrix — `off + 6 + klen +
+/// plen` with a `plen` near `u32::MAX` exceeds `usize`, and the two build
+/// profiles then disagree: debug panics on the addition, release wraps to
+/// a smaller end than start and the slice lookup happens to return `None`.
+/// Getting the right answer by wrapping into a second bug is not the same
+/// as getting the right answer.
+///
+/// Split out from the byte reads so it can be tested at all: on a 64-bit
+/// host the overflow needs an `at` no page will ever have, and a pure
+/// function can simply be handed one.
+pub(crate) fn field_end(at: usize, n: usize) -> Option<usize> {
+    at.checked_add(n)
+}
+
 /// Decode the cell at `off`. `None` = malformed (treated as corrupt by
 /// the caller; a CRC-intact page never yields it).
 pub fn read_cell(page: &[u8], off: usize) -> Option<Cell<'_>> {
-    let klen = u16::from_le_bytes(page.get(off..off + 2)?.try_into().ok()?) as usize;
-    let plen = u32::from_le_bytes(page.get(off + 2..off + 6)?.try_into().ok()?);
-    let key = page.get(off + 6..off + 6 + klen)?;
+    let klen = u16::from_le_bytes(page.get(off..field_end(off, 2)?)?.try_into().ok()?) as usize;
+    let plen =
+        u32::from_le_bytes(page.get(field_end(off, 2)?..field_end(off, 6)?)?.try_into().ok()?);
+    let key_at = field_end(off, 6)?;
+    let key = page.get(key_at..field_end(key_at, klen)?)?;
+    let after_key = field_end(key_at, klen)?;
     if plen == OVERFLOW {
-        let rest = page.get(off + 6 + klen..off + 6 + klen + 12)?;
+        let rest = page.get(after_key..field_end(after_key, 12)?)?;
         Some(Cell::Overflow {
             key,
             total_len: u32::from_le_bytes(rest[0..4].try_into().ok()?),
@@ -130,7 +153,7 @@ pub fn read_cell(page: &[u8], off: usize) -> Option<Cell<'_>> {
             n_pages: u32::from_le_bytes(rest[8..12].try_into().ok()?),
         })
     } else {
-        let payload = page.get(off + 6 + klen..off + 6 + klen + plen as usize)?;
+        let payload = page.get(after_key..field_end(after_key, plen as usize)?)?;
         Some(Cell::Inline { key, payload })
     }
 }
@@ -217,9 +240,12 @@ pub fn decode_footer(b: &[u8]) -> Option<(u64, u32, Vec<u8>, Vec<u8>, Vec<(u32, 
         return None;
     }
     let mut o = 0usize;
+    // Same reason as `read_cell`: every `n` here is a length read out of the
+    // file, so the running offset must not be assumed to stay a number.
     let take = |o: &mut usize, n: usize| -> Option<&[u8]> {
-        let s = body.get(*o..*o + n)?;
-        *o += n;
+        let end = field_end(*o, n)?;
+        let s = body.get(*o..end)?;
+        *o = end;
         Some(s)
     };
     let records = u64::from_le_bytes(take(&mut o, 8)?.try_into().ok()?);
