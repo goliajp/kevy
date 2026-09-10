@@ -114,6 +114,11 @@ use sync::{Arc, AtomicUsize, Ordering, UnsafeCell};
 #[repr(align(128))]
 struct CachePadded<T>(T);
 
+/// The largest capacity a ring can have: the highest power of two a `usize`
+/// holds. Nothing can allocate one, but it is the bound `ring` documents and
+/// the number its panic names.
+const MAX_CAPACITY: usize = (usize::MAX >> 1) + 1;
+
 struct Ring<T> {
     /// `capacity` slots; only indices in `[head, tail)` (mod capacity) are init.
     buf: Box<[UnsafeCell<MaybeUninit<T>>]>,
@@ -139,7 +144,20 @@ unsafe impl<T: Send> Sync for Ring<T> {}
 impl<T> Ring<T> {
     fn with_capacity(cap: usize) -> Self {
         // At least 2 slots; round up to a power of two for masking.
-        let cap = cap.max(2).next_power_of_two();
+        //
+        // Checked, because the unchecked form returns **zero** on overflow in
+        // a release build rather than panicking as it does in debug. Zero
+        // makes `mask` `usize::MAX` and `buf` empty, which is a `Ring` that
+        // constructs without complaint and then indexes out of bounds on the
+        // first push — a panic as far from its cause as it could be. Panicking
+        // here says which argument was wrong.
+        let cap = cap.max(2).checked_next_power_of_two().unwrap_or_else(|| {
+            panic!(
+                "kevy-ring: no power of two is >= the requested capacity {cap}; \
+                 the largest ring addressable on this target is {}",
+                MAX_CAPACITY
+            )
+        });
         let mut v = Vec::with_capacity(cap);
         for _ in 0..cap {
             v.push(UnsafeCell::new(MaybeUninit::uninit()));
@@ -252,6 +270,14 @@ pub struct Consumer<T> {
 /// assert_eq!(kevy_ring::ring::<u8>(8).0.capacity(), 8);
 /// assert_eq!(kevy_ring::ring::<u8>(0).0.capacity(), 2);
 /// ```
+///
+/// # Panics
+///
+/// If no power of two is greater than or equal to `capacity` — that is, above
+/// `(usize::MAX >> 1) + 1`. Long before that the allocation fails, so this is
+/// a bound on the argument rather than on what a machine can hold; it is
+/// stated because the rounding is where an out-of-range capacity is noticed,
+/// and it used to be noticed silently.
 pub fn ring<T>(capacity: usize) -> (Producer<T>, Consumer<T>) {
     let r = Arc::new(Ring::with_capacity(capacity));
     (Producer { inner: r.clone(), head_cache: 0 }, Consumer { inner: r, tail_cache: 0 })
