@@ -43,7 +43,7 @@
 //! distinction, so that the header cannot drift back into promising
 //! integrity it does not provide.
 //!
-//! The header did promise it, in those words, until 2026-09-10. What
+//! The header did promise exactly that, in those words. What
 //! checked the promise was four sampled byte positions with one bit
 //! pattern each, and on its own fixture 894 of 2356 positions mis-decode
 //! — the four it happened to pick were not among them.
