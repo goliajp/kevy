@@ -17,6 +17,7 @@ use crate::NotificationFlags;
 use crate::blocked::BlockedClients;
 use crate::conn::Conn;
 use crate::message::{Inbound, PubMsg, PubSubPatternReg, PubSubReg, ReqBatch};
+use crate::park_fence::ParkFlag;
 use kevy_map::KevyMap;
 use kevy_persist::Aof;
 use kevy_ring::{Consumer, Producer};
@@ -25,7 +26,7 @@ use kevy_sys::{Event, Poller, Socket, Waker};
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::atomic::AtomicU64;
 use std::time::Instant;
 
 pub(crate) use crate::cache_padded::CachePadded;
@@ -153,7 +154,7 @@ pub(crate) struct Shard<C: Commands> {
     /// Per-shard "is this core parked (blocking) right now?" flags. A sender only
     /// needs a syscall wakeup for a parked peer; a spinning peer sees the message
     /// on its next poll. Indexed by shard id; `parked[self.id]` is our own.
-    pub(crate) parked: Vec<Arc<CachePadded<AtomicBool>>>,
+    pub(crate) parked: Vec<Arc<CachePadded<ParkFlag>>>,
     /// Per-shard inbox-dirty bitmaps. `inbound_dirty[me]` is owned by shard
     /// `me`: a sender from shard `src` calls `inbound_dirty[me].fetch_or(1
     /// << src, Release)` after pushing a message into `inboxes[src]`, so

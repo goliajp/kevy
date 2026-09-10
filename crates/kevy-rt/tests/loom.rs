@@ -7,23 +7,24 @@
 //! avoid a lost-wake-up race:
 //!
 //! ```text
-//!   Receiver side (Shard::run):
+//!   Receiver side (Shard::run, uring_park):
 //!     ... idle loop ...
-//!     parked[me].store(true, SeqCst);          // 1. advertise "I'm parking"
-//!     fence(SeqCst);                           // 2. fence ↕ sender's load
-//!     if drain_inbound()? {                    // 3. one more drain attempt
-//!         parked[me].store(false, SeqCst);     // 4. found work → un-park
-//!         continue;                            //    and process
+//!     publish_parked(&parked[me]);   // 1. advertise, then fence
+//!     if drain_inbound()? {          // 2. one more drain attempt
+//!         clear_parked(&parked[me]); // 3. found work → un-park
+//!         continue;                  //    and process
 //!     }
-//!     poller.wait(PARK_TIMEOUT_MS)             // 5. block (woken by sender)
+//!     poller.wait(PARK_TIMEOUT_MS)   // 4. block (woken by sender)
 //!
 //!   Sender side (send_to + flush_wakes):
-//!     ring.push(msg)                           // A. push (or set a flag)
-//!     fence(SeqCst);                           // B. fence ↕ receiver's store
-//!     if parked[dst].load(SeqCst) {            // C. only wake if parked
-//!         wakers[dst].wake()                   // D. syscall (eventfd write)
-//!     }
+//!     ring.push(msg)                 // A. Release store on the tail
+//!     fence_before_wake_scan();      // B. fence ↕ the receiver's
+//!     if peer_is_parked(&parked[d])  // C. only wake if parked
+//!         wakers[d].wake()           // D. syscall (eventfd write)
 //! ```
+//!
+//! Those five names are `kevy_rt::park_fence`'s, and this file calls
+//! them. That is the point of the module existing.
 //!
 //! The invariant: in every legal interleaving the receiver either
 //! (i) sees the message in step `3` or (ii) gets a wake signal (because
@@ -33,21 +34,22 @@
 //! in production (until `PARK_TIMEOUT_MS` saved it, but that's a
 //! 50 ms-latency band-aid, not a correctness fix).
 //!
-//! Production NOTE: this said, until it was checked, that `Shard::run`
-//! relies on the SeqCst total order alone *without* the fences modelled
-//! here, and that production therefore carries a lost-wake window bounded
-//! by `PARK_TIMEOUT_MS`. That has not been true for some time. The fence
-//! is in production in three places — `shard_run.rs` (epoll park),
-//! `uring_park.rs` (io_uring park) and `shard_flush.rs` (the sender's
-//! side) — and each of those three cites this file by name as the
-//! argument for its ordering. The note stayed behind because nothing ran
-//! this file to notice.
+//! Two things this file used to be, and is not any more.
 //!
-//! What is still true, and is the reason to read the two tests below with
-//! care: they model the pairing, they do not drive it. The atomics here
-//! are declared in the test body, so this file would stay green if the
-//! fence were deleted from all three production sites tomorrow. It
-//! verifies that the pattern is sound, not that kevy-rt implements it.
+//! Its header claimed production relied on the SeqCst total order alone,
+//! *without* these fences, and therefore carried a lost-wake window
+//! bounded by `PARK_TIMEOUT_MS`. Production grew all three fences some
+//! time ago — `shard_run.rs` (epoll park), `uring_park.rs` (io_uring
+//! park), `shard_flush.rs` (the sender). The note stayed behind because
+//! nothing ran this file to notice.
+//!
+//! And it declared its own atomics: a faithful replica of the pattern,
+//! written out a second time in the test body. It proved the pattern
+//! sound and said nothing about whether kevy-rt implemented it — delete
+//! the fence from all three production sites and this file stayed green,
+//! while all three cited it by name as the argument for their ordering.
+//! It now calls the production functions, so deleting either fence turns
+//! both tests below red (checked, one fence at a time).
 //!
 //! ## Charter
 //!
@@ -74,102 +76,113 @@
 #![allow(unexpected_cfgs)]
 #![cfg(loom)]
 
+use kevy_rt::park_fence::{self, ParkFlag};
 use loom::sync::Arc;
-use loom::sync::atomic::{AtomicBool, Ordering, fence};
+use loom::sync::atomic::{AtomicBool, Ordering};
 use loom::thread;
 
-/// Reduced model — replace the SPSC ring with one `AtomicBool` flag so
-/// the test space is small enough for `LOOM_MAX_PREEMPTIONS=2`. The
-/// pattern of "push payload then load parked" / "store parked then peek
-/// payload" is identical; loom is exercising the SeqCst fence between
-/// them, which is the actual primitive under test.
+/// The payload's orderings are the ring's, not `SeqCst`.
+///
+/// `kevy-ring` publishes its tail cursor with `Release` and reads it with
+/// `Acquire` (`kevy-ring/src/lib.rs`; the ring itself is that crate's own
+/// loom suite's job). What arrives in a parked shard's inbox therefore
+/// arrives at those orderings, and a model that published it at `SeqCst`
+/// would be modelling a stronger machine than the one kevy-rt runs on.
+///
+/// Both fences are load-bearing under this model, verified by removing
+/// each one on its own: with `publish_parked`'s fence gone, and again
+/// with `fence_before_wake_scan`'s gone, both tests below fail. They pass
+/// with both in place.
+const PUBLISH: Ordering = Ordering::Release;
+const DRAIN: Ordering = Ordering::Acquire;
+
+/// One sender, one parking receiver, one message. Runs the three
+/// production functions — `fence_before_wake_scan` / `peer_is_parked` on
+/// the sender, `publish_parked` / `clear_parked` on the receiver — under
+/// every interleaving loom can reach, and asserts the disjunction the
+/// pairing exists to guarantee: the receiver either drained the message
+/// or got a wake.
+///
+/// Failing it in production means a shard blocks in `Poller::wait`
+/// holding a message nobody will wake it for, until `PARK_TIMEOUT_MS`
+/// (50 ms) expires.
 #[test]
 fn park_wake_fence_no_lost_wakeup() {
     loom::model(|| {
-        // Stand-in for the SPSC ring's tail-cursor: a single flag the
-        // sender flips to publish one message.
+        // Stand-in for the ring's tail cursor: one flag, published at the
+        // ring's ordering. The ring itself is kevy-ring's loom suite's job.
         let pushed = Arc::new(AtomicBool::new(false));
-        // Receiver's "is parking now?" flag (Shard.parked[me]).
-        let parked = Arc::new(AtomicBool::new(false));
-        // Sender → receiver wake signal. Production: eventfd/pipe write.
-        let wake_signal = Arc::new(AtomicBool::new(false));
+        // The real thing: Shard.parked[me], and the real ParkFlag type.
+        let parked = Arc::new(ParkFlag::new(false));
+        // Stand-in for the eventfd write in `Waker::wake`.
+        let woke = Arc::new(AtomicBool::new(false));
 
-        let pushed_s = pushed.clone();
-        let parked_s = parked.clone();
-        let wake_s = wake_signal.clone();
-
-        // Sender: publish + fence + load parked + maybe wake.
+        let (pushed_s, parked_s, woke_s) = (pushed.clone(), parked.clone(), woke.clone());
         let sender = thread::spawn(move || {
-            // (A) Push. SeqCst store stands in for the ring's release.
-            pushed_s.store(true, Ordering::SeqCst);
-            // (B) Fence: any earlier SeqCst store from any thread now
-            // synchronises with subsequent SeqCst loads here.
-            fence(Ordering::SeqCst);
-            // (C) Check if receiver is parked. If yes, send wake.
-            if parked_s.load(Ordering::SeqCst) {
-                // (D) Wake (in production: eventfd write).
-                wake_s.store(true, Ordering::SeqCst);
+            // `send_to`: the outbox push lands.
+            pushed_s.store(true, PUBLISH);
+            // `flush_wakes_slow`, verbatim.
+            park_fence::fence_before_wake_scan();
+            if park_fence::peer_is_parked(&parked_s) {
+                woke_s.store(true, Ordering::SeqCst);
             }
         });
 
-        // Receiver: park, fence, drain once. (Phase 5 — blocking
-        // poll — isn't loom-modelled; we just assert the disjunction
-        // holds at the end of phase 3.)
-        parked.store(true, Ordering::SeqCst);
-        fence(Ordering::SeqCst);
-        let drained = pushed.load(Ordering::SeqCst);
+        // `Shard::run` / `uring_park`, verbatim: advertise, then drain once
+        // more before blocking.
+        park_fence::publish_parked(&parked);
+        let drained = pushed.load(DRAIN);
         if drained {
-            parked.store(false, Ordering::SeqCst);
+            park_fence::clear_parked(&parked);
         }
 
         sender.join().unwrap();
 
-        let got_wake = wake_signal.load(Ordering::SeqCst);
         assert!(
-            drained || got_wake,
-            "lost-wake under SeqCst fence model: receiver drained nothing \
-             AND sender did not signal — production would block until \
-             PARK_TIMEOUT_MS (50 ms) elapses, defeating the fence's purpose"
+            drained || woke.load(Ordering::SeqCst),
+            "lost wake: the receiver drained nothing AND the sender skipped \
+             the wake syscall, so this shard blocks until PARK_TIMEOUT_MS \
+             (50 ms) expires with a message already in its inbox"
         );
     });
 }
 
-/// Same property, but flipped: assert the *contrapositive* — if the
-/// sender did NOT signal a wake (sender saw parked=false), then the
-/// receiver MUST have drained the published message. This is the
-/// strict correctness invariant the fence buys us in addition to the
-/// disjunction above.
+/// The contrapositive, which is the invariant the sender side relies on:
+/// if `peer_is_parked` said no — so no wake syscall was paid for — then
+/// the receiver must have seen the message on its own.
+///
+/// Stated this way it is the assertion that skipping the syscall is
+/// *safe*, which is the whole reason the flag exists.
 #[test]
 fn no_wake_implies_drained() {
     loom::model(|| {
         let pushed = Arc::new(AtomicBool::new(false));
-        let parked = Arc::new(AtomicBool::new(false));
-        let wake_signal = Arc::new(AtomicBool::new(false));
+        let parked = Arc::new(ParkFlag::new(false));
+        let woke = Arc::new(AtomicBool::new(false));
 
-        let pushed_s = pushed.clone();
-        let parked_s = parked.clone();
-        let wake_s = wake_signal.clone();
-
+        let (pushed_s, parked_s, woke_s) = (pushed.clone(), parked.clone(), woke.clone());
         let sender = thread::spawn(move || {
-            pushed_s.store(true, Ordering::SeqCst);
-            fence(Ordering::SeqCst);
-            if parked_s.load(Ordering::SeqCst) {
-                wake_s.store(true, Ordering::SeqCst);
+            pushed_s.store(true, PUBLISH);
+            park_fence::fence_before_wake_scan();
+            if park_fence::peer_is_parked(&parked_s) {
+                woke_s.store(true, Ordering::SeqCst);
             }
         });
 
-        parked.store(true, Ordering::SeqCst);
-        fence(Ordering::SeqCst);
-        let drained = pushed.load(Ordering::SeqCst);
+        park_fence::publish_parked(&parked);
+        let drained = pushed.load(DRAIN);
+        if drained {
+            park_fence::clear_parked(&parked);
+        }
 
         sender.join().unwrap();
-        let got_wake = wake_signal.load(Ordering::SeqCst);
-        if !got_wake {
+
+        if !woke.load(Ordering::SeqCst) {
             assert!(
                 drained,
-                "fence invariant broken: sender saw parked=false (no wake) \
-                 yet receiver also missed the push — both ends raced past \
-                 the fence somehow"
+                "the sender saw parked=false and skipped the wake, but the \
+                 receiver missed the push too — the fence pairing did not \
+                 hold and the syscall was not safe to skip"
             );
         }
     });

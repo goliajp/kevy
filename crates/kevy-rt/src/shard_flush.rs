@@ -11,9 +11,10 @@
 
 use crate::Commands;
 use crate::message::Inbound;
+use crate::park_fence;
 use crate::shard::Shard;
 use std::io;
-use std::sync::atomic::{Ordering, fence};
+use std::sync::atomic::Ordering;
 
 impl<C: Commands> Shard<C> {
     /// Wake every target enqueued to this iteration that is currently parked.
@@ -41,25 +42,27 @@ impl<C: Commands> Shard<C> {
     /// saw `pending_wakes != 0`.
     #[inline(never)]
     fn flush_wakes_slow(&mut self) {
-        // Close the park/wake race: the SeqCst fence pairs with the
-        // matching fence in `Shard::run` after a peer stores `parked=true`.
+        // Close the park/wake race: this fence pairs with the one inside
+        // `publish_parked`, which a peer runs before its post-park drain.
         // Combined, they guarantee: if our ring push (Release on the
         // outbox's tail, executed earlier this iteration via `send_to`)
-        // happens-before this load, AND the peer's parked-store
+        // happens-before the loads below, AND the peer's parked-store
         // happens-before its post-park drain, then either
         //   (a) the peer's drain sees our push,            OR
         //   (b) our load sees `parked=true` and we send the wake.
-        // Loom-verified by `kevy-rt/tests/loom.rs::no_wake_implies_drained`.
+        // Loom-verified: the functions called here are the ones
+        // `tests/loom.rs::no_wake_implies_drained` schedules.
         // Without the fence the lost-wake window was bounded by the
         // peer's `PARK_TIMEOUT_MS` (50 ms); the timeout remains as
         // defense-in-depth against missed eventfd writes / OS hiccups.
-        fence(Ordering::SeqCst);
+        // One fence for the whole scan, not one per peer.
+        park_fence::fence_before_wake_scan();
         let mut mask = self.pending_wakes;
         self.pending_wakes = 0;
         while mask != 0 {
             let i = mask.trailing_zeros() as usize;
             mask &= mask - 1;
-            if self.parked[i].load(Ordering::SeqCst) {
+            if park_fence::peer_is_parked(&self.parked[i]) {
                 let _ = self.wakers[i].wake();
             }
         }

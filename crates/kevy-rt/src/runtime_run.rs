@@ -10,6 +10,7 @@
 
 use crate::Commands;
 use crate::message::{Inbound, PubSubPatternReg, PubSubReg};
+use crate::park_fence::{self, ParkFlag};
 use crate::runtime::Runtime;
 use crate::shard::{CachePadded, Shard};
 use kevy_map::KevyMap;
@@ -31,7 +32,7 @@ struct Shared {
     /// `inboxes[j][i]` = shard j's consumer half from shard i.
     inboxes: Vec<Vec<Option<Consumer<Inbound>>>>,
     wakers: Vec<Arc<Waker>>,
-    parked: Vec<Arc<CachePadded<AtomicBool>>>,
+    parked: Vec<Arc<CachePadded<ParkFlag>>>,
     inbound_dirty: Vec<Arc<CachePadded<AtomicU64>>>,
     /// Shared pub/sub channel registry (one per server, read on every
     /// PUBLISH) + the pattern registry (empty in steady state — the
@@ -64,8 +65,8 @@ impl Shared {
         for _ in 0..n {
             wakers.push(Arc::new(waker()?));
         }
-        let parked: Vec<Arc<CachePadded<AtomicBool>>> =
-            (0..n).map(|_| Arc::new(CachePadded::new(AtomicBool::new(false)))).collect();
+        let parked: Vec<Arc<CachePadded<ParkFlag>>> =
+            (0..n).map(|_| Arc::new(CachePadded::new(park_fence::new_flag()))).collect();
         // Per-shard inbox-dirty bitmaps (one u64 bit per peer src).
         // Senders OR a bit on the target's dirty word; the target's
         // `drain_inbound_core` swaps and short-circuits when 0.

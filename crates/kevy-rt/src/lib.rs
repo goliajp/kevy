@@ -72,6 +72,11 @@
 //! from 35 sites in v6 — all of them fields inside well-documented
 //! variants, which is where prose review does not look.
 #![warn(missing_docs)]
+// `--cfg loom` is a known custom cfg: it swaps the park/wake fence's atomic
+// for loom's instrumented one and publishes `park_fence` so `tests/loom.rs`
+// can schedule it. rustc cannot learn a RUSTFLAGS-set cfg name, so silence
+// the lint rather than let it fail every normal build.
+#![allow(unexpected_cfgs)]
 mod bio;
 mod block_xshard;
 mod block_xshard_confirm;
@@ -114,6 +119,14 @@ mod message;
 mod message_agg;
 mod message_kinds;
 mod message_part;
+// Private in every normal build. A `--cfg loom` build publishes it so
+// `tests/loom.rs` — a separate crate — can schedule the real functions
+// instead of a hand-built replica of them. The public API is unchanged
+// for every build anyone ships.
+#[cfg(loom)]
+pub mod park_fence;
+#[cfg(not(loom))]
+mod park_fence;
 mod persist_jobs;
 mod persist_rewrite;
 mod persist_worker;
