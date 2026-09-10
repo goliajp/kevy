@@ -69,6 +69,34 @@ improved.
 """
 
 
+[[dead_crate]]
+crate = "kevy-pubsub-bench"
+gate = "bench/pubsub_loopback.sh"
+reason = """
+A benchmark binary, `publish = false`, whose whole body is a fan-out load
+generator: connect N subscribers over raw RESP, publish, count. `cargo
+test` has nothing to call — there is no library face, only `main.rs` — so
+all 283 regions read dead, the second of the two crates in the workspace
+with no in-corpus coverage at all.
+
+Where it does run: `bench/pubsub_loopback.sh` drives it against a local
+server, and `bench/axis_h_pubsub.sh` uses it for the pubsub axis of the
+comparison table. Both are measurements on the bench box rather than CI
+gates, and this entry says so rather than implying a door that watches
+this crate on every push. What watches it is that the numbers it produces
+have to be reproducible — a broken generator shows up as a benchmark that
+stops agreeing with itself.
+
+Registered rather than excluded from the corpus, for the same reason
+kevy-jni is: moving 283 regions out of the denominator would read as an
+improvement in a number nothing improved. That said, this crate differs
+from kevy-jni in a way worth keeping visible — kevy-jni is a shipped door
+with real users behind it and a gate that proves it works, and this is an
+internal tool. If the register ever grows a third of these, that is the
+signal to ask whether bench binaries belong in the coverage corpus at all
+rather than to write a fourth entry.
+"""
+
 # ---------------------------------------------------------------------------
 # Where the never-executed count is NOT reproducible.
 #

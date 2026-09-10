@@ -92,13 +92,30 @@ for kind in ("unstable", "dead"):
         elif "prefix" in e:
             if not any(k.startswith(e["prefix"]) for k in observed):
                 dead.append(f"[[{kind}]] prefix {e['prefix']!r}")
+# The other direction, for whole crates. `[[dead_crate]]` exists for the
+# case where every region in a crate has one explanation, and the atlas
+# already refuses an entry whose named gate file is gone. Nothing asked the
+# reverse: a crate that reads 100% dead and is explained NOWHERE. That is
+# the largest thing a register can be missing and the easiest to not
+# notice, because a crate with no coverage produces no failing line —
+# it produces no line at all.
+crates = json.loads((root / "bench/DEAD-SET.json").read_text()).get("crates", {})
+registered = {e["crate"] for e in doc.get("dead_crate", [])}
+for name, v in sorted(crates.items()):
+    if v.get("regions", 0) > 0 and v["dead"] == v["regions"] and name not in registered:
+        dead.append(f"[[dead_crate]] missing for {name!r}: {v['dead']} of "
+                    f"{v['regions']} regions dead, explained nowhere")
+
 if dead:
     print("deadgate: FAIL — register entr(ies) naming nothing in this run")
     for x in dead:
         print(f"  {x}")
     print("  An [[unstable]] one is a hole in the ratchet with a reason attached;")
-    print("  a [[dead]] one is a written reason for a region that is not there.")
-    print("  Either the symbol was renamed, or it left the set and the entry can go.")
+    print("  a [[dead]] one is a written reason for a region that is not there;")
+    print("  a missing [[dead_crate]] is a whole crate nothing has explained.")
+    print("  For the first two: either the symbol was renamed, or it left the")
+    print("  set and the entry can go. For the third: write the entry, naming")
+    print("  the gate that does cover the crate, or say that none does.")
     sys.exit(1)
 n = len(reg) + len(doc.get("dead", []))
 print(f"deadgate: {n} register entr(ies), each naming a symbol this run observed")
