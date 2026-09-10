@@ -294,6 +294,24 @@ pub(crate) fn re_match_seq_caps(
             }
             Ok(None)
         }
+        // The same gap as `matcher.rs`'s, and it cannot be closed the same
+        // way: flattening would lose the group's span. Retry each branch
+        // against the tail here, recording the group at the branch that
+        // wins. `(a|ab)c` on "abc" therefore captures "ab", not nothing.
+        ReNode::Group { idx, inner } if matches!(**inner, ReNode::Alt(_)) => {
+            let ReNode::Alt(branches) = &**inner else { unreachable!() };
+            for b in branches {
+                let mark = journal.len();
+                if let Some(p) = re_match_at_caps(b, s, pos, d, steps, caps, journal)? {
+                    cap_set(caps, journal, *idx, (pos, p));
+                    if let Some(e) = re_match_seq_caps(rest, s, p, d, steps, caps, journal)? {
+                        return Ok(Some(e));
+                    }
+                }
+                cap_undo(caps, journal, mark);
+            }
+            Ok(None)
+        }
         ReNode::Concat(nested) => {
             let mut combined: Vec<ReNode> = Vec::with_capacity(nested.len() + rest.len());
             combined.extend(nested.iter().cloned());

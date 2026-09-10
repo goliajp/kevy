@@ -129,6 +129,60 @@ fn refusal(pat: &str) -> String {
     }
 }
 
+// WRITTEN HERE: greedy and lazy choose opposite ends of the same set.
+//
+// `re_match_seq`'s quantifier arm collects every reachable repetition count
+// and then tries the tail at each — greedy walking high to low, lazy low to
+// high, both honouring the same `[min, max]`. 51 of its regions had never
+// executed.
+//
+// Telling the two apart needs a tail that can match in more than one place.
+// On `aaab` both `a*b` and `a*?b` take all three `a`s, because only one
+// position works; the difference is invisible. `(a*)a` and `(a*?)a` on
+// `aaa` are the pair that shows it.
+#[test]
+fn greedy_and_lazy_walk_the_repetition_counts_from_opposite_ends() {
+    // Greedy: as many as possible, then give back until the tail fits.
+    let (whole, g) = caps(r"(a*)a", "aaa").expect("matches");
+    assert_eq!(whole, "aaa");
+    assert_eq!(g, vec![Some("aa".into())], "greedy gives back exactly one");
+
+    // Lazy: as few as possible, then take more only when the tail fails.
+    let (whole, g) = caps(r"(a*?)a", "aaa").expect("matches");
+    assert_eq!(whole, "a", "lazy stops at the first tail that fits");
+    assert_eq!(g, vec![Some("".into())], "which is zero repetitions");
+
+    // `+` has a floor of one, so neither can reach zero.
+    let (whole, g) = caps(r"(a+)a", "aaa").expect("matches");
+    assert_eq!((whole.as_str(), &g), ("aaa", &vec![Some("aa".into())]));
+    let (whole, g) = caps(r"(a+?)a", "aaa").expect("matches");
+    assert_eq!((whole.as_str(), &g), ("aa", &vec![Some("a".into())]), "lazy still honours min");
+
+    // A bounded floor: greedy descends past `min` and stops; lazy climbs
+    // and skips the counts below it. Both must land on two.
+    let (_, g) = caps(r"(a{2,})a", "aaaa").expect("matches");
+    assert_eq!(g, vec![Some("aaa".into())], "greedy gives back to three, not below two");
+    let (whole, g) = caps(r"(a{2,}?)a", "aaaa").expect("matches");
+    assert_eq!(whole, "aaa", "lazy climbs to two and stops");
+    assert_eq!(g, vec![Some("aa".into())]);
+    assert!(caps(r"(a{2,})b", "ab").is_none(), "one a cannot satisfy a floor of two");
+
+    // The ceiling stops the collection.
+    let (whole, _) = caps(r"a{1,2}", "aaa").expect("matches");
+    assert_eq!(whole, "aa", "a ceiling of two takes two");
+
+    // The alternation arm backtracks across the tail: `a` matches first but
+    // leaves `c` facing `b`, so the second branch has to be tried.
+    let (whole, _) = caps(r"(a|ab)c", "abc").expect("matches");
+    assert_eq!(whole, "abc", "the losing branch is retried against the tail");
+
+    // The concat arm flattens nested sequences while preserving that
+    // backtracking across the boundary.
+    let (whole, g) = caps(r"((a|ab)c)d", "abcd").expect("matches");
+    assert_eq!(whole, "abcd");
+    assert_eq!(g, vec![Some("abc".into()), Some("ab".into())]);
+}
+
 // WRITTEN HERE: what `(?i)` reaches, and what it deliberately does not.
 //
 // `fold_case` walks the parsed pattern rewriting literals and classes into
@@ -449,4 +503,53 @@ fn the_capturing_and_non_capturing_descents_agree() {
         "only {matched} of {low} low-level pairs matched; a table where almost nothing \
          matches compares two ways of saying no"
     );
+}
+
+/// A group holding an alternation must retry its branches against the tail.
+///
+/// `(a|ab)c` on "abc" returned no match. Branch `a` matched, the tail `c`
+/// then faced `b` and failed, and nothing went back for `ab`. `(ab|a)c`
+/// on the same input matched — the only difference being which branch was
+/// written first, which is not a difference a regex is allowed to have.
+///
+/// Both `re_match_seq` and `re_match_seq_caps` retry branches when an
+/// `Alt` sits directly in the sequence. Neither reached that arm when the
+/// `Alt` was wrapped in parentheses: a `Group` fell to the catch-all,
+/// where `re_match_at*` returns the first branch that matches and offers
+/// no way back.
+///
+/// Worth recording how this survived: `the_capturing_and_non_capturing_
+/// descents_agree` runs `(a|ab)c` and passed, because BOTH descents were
+/// wrong in the same way. A differential test is blind to a defect the two
+/// implementations share, which is the one thing it cannot be asked to
+/// find.
+#[test]
+fn a_parenthesised_alternation_retries_its_branches_against_the_tail() {
+    // The case that was broken, and its mirror that was not.
+    let (whole, g) = caps(r"(a|ab)c", "abc").expect("the second branch must be tried");
+    assert_eq!(whole, "abc");
+    assert_eq!(g, vec![Some("ab".into())], "the branch that won is what was captured");
+    let (whole, g) = caps(r"(ab|a)c", "abc").expect("matches either way round");
+    assert_eq!((whole.as_str(), &g), ("abc", &vec![Some("ab".into())]));
+
+    // Branch order must not decide the answer.
+    for pat in [r"(a|ab|abc)d", r"(abc|ab|a)d", r"(ab|abc|a)d"] {
+        let (whole, g) = caps(pat, "abcd").unwrap_or_else(|| panic!("{pat} must match"));
+        assert_eq!(whole, "abcd", "{pat}");
+        assert_eq!(g, vec![Some("abc".into())], "{pat}: the branch the tail needs");
+    }
+
+    // Nested, so the retry has to cross more than one level.
+    let (whole, g) = caps(r"((a|ab)c)d", "abcd").expect("matches");
+    assert_eq!(whole, "abcd");
+    assert_eq!(g, vec![Some("abc".into()), Some("ab".into())]);
+
+    // And the non-capturing forms, which take the other descent.
+    assert!(hits(r"(?:a|ab)c", "abc"), "non-capturing group");
+    assert!(hits(r"(a|ab)c", "abc"), "capturing group through re_find");
+
+    // A first branch that still wins is not disturbed.
+    let (whole, g) = caps(r"(a|ab)b", "abb").expect("matches");
+    assert_eq!(whole, "ab", "the shorter branch is correct here and stays");
+    assert_eq!(g, vec![Some("a".into())]);
 }

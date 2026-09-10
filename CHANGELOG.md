@@ -877,6 +877,38 @@ engine's capturing and non-capturing descents, the second of which also
 pins the routing rule that sends backreference patterns to the capturing
 side.
 
+### A regex whose answer depended on which branch was written first
+
+```
+regexp_matches('abc', '(a|ab)c')  ->  NULL     -- wrong
+regexp_matches('abc', '(ab|a)c')  ->  {ab}     -- right
+```
+
+Same pattern, same input, opposite answers, and the only difference is the
+order of the alternation's branches. `(a|ab)c` matched branch `a`, put the
+tail `c` in front of a `b`, failed, and never went back for `ab`.
+
+Both sequence matchers retry an alternation's branches against the tail —
+that arm exists and is correct. Neither reached it when the alternation
+was in parentheses: a `Group` fell to the catch-all, where the matcher
+returns the first branch that succeeds and offers no way back. Fixed on
+both, differently, because they need different things: the non-capturing
+side flattens the group into the sequence (parentheses only group there),
+and the capturing side retries the branches in place so the group's span
+still records the branch that won — `(a|ab)c` now captures `ab`.
+
+Every `regexp_matches`, `regexp_replace` and `regexp_split_to_array` with
+a parenthesised alternation followed by anything was affected.
+
+**How it survived a differential test.** The same arc added a test
+asserting that this engine's capturing and non-capturing descents agree,
+and `(a|ab)c` is in its table. It passed, because both descents were wrong
+in the same way. A differential test cannot find a defect its two
+implementations share; that is a structural limit, not an oversight in
+this one. What found it was writing down what the answer should be — the
+case was serving as an example of alternation backtracking in a test about
+greedy and lazy quantifiers, and it did not match.
+
 ### Deferred, with the reason
 
 `C-STRUCT-PRIVATE` — 740 public fields on public structs — is a real
