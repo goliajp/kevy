@@ -156,3 +156,25 @@ fn stress_with_intermittent_consumer() {
     producer.join().unwrap();
     assert_eq!(next, N);
 }
+
+/// A capacity with no power of two above it names itself, in both profiles.
+///
+/// `next_power_of_two` panics on overflow in a debug build and returns
+/// **zero** in a release one. Zero gives `mask = usize::MAX` and an empty
+/// `buf`: a ring that constructs cleanly and then indexes out of bounds on
+/// the first push, reporting a fault in `push` for a mistake made in `ring`.
+#[test]
+#[should_panic(expected = "no power of two is >=")]
+fn a_capacity_with_no_power_of_two_above_it_is_refused_at_construction() {
+    let _ = ring::<u8>(usize::MAX);
+}
+
+/// And the largest capacity that *is* a power of two still rounds to itself,
+/// so the guard cannot be rejecting one legal value early.
+#[test]
+fn the_largest_addressable_capacity_still_rounds_to_itself() {
+    assert_eq!(usize::MAX.checked_next_power_of_two(), None);
+    let max = (usize::MAX >> 1) + 1;
+    assert_eq!(max.checked_next_power_of_two(), Some(max), "a power of two is its own");
+    assert_eq!((max + 1).checked_next_power_of_two(), None, "one past it has none");
+}
