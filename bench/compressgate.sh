@@ -113,8 +113,18 @@ t3_test() { # $1 = test filter -> "PASS ..." | "FAIL ..."
 }
 line "K2-never-expands" "$(t3_test k2_incompressible_never_expands)" \
   "encoded <= raw + frame header; adversarial input falls back to raw [unit; fuzz target roundtrip.rs]"
-line "K3-roundtrip" "$(t3_test k3_corrupt_frames_reject)" \
-  "round-trip identity; truncated/corrupt frames REJECTED [unit; fuzz targets roundtrip/decode_arbitrary]"
+# K3's two halves are now two tests, because they are two claims and only
+# one of them was true. Truncation is refused — structurally, by the closing
+# `out.len() == orig_len` — and every prefix is checked, not four sampled
+# ones. A bit flip is NOT detected and cannot be at this layer: a frame
+# carries no checksum, and 48% of single-bit flips at the fast level decode
+# to a value of the right length and the wrong contents. Integrity is
+# kevy-vlog's per-record crc32c, checked before the frame reaches decode.
+# Naming both here means deleting either one turns this line red.
+line "K3-truncation" "$(t3_test k3_every_truncation_is_refused_and_bit_flips_are_not_detected)" \
+  "round-trip identity; EVERY truncation refused, and the codec's non-detection of flips pinned [unit; fuzz targets roundtrip/decode_arbitrary]"
+line "K3-flip-not-detected" "$(t3_test a_bit_flip_can_decode_to_something_else)" \
+  "the high level, same claim: flips decode to another value, which is why the record CRC upstream cannot be dropped"
 
 # ── K4: the structural claim. A per-datum baseline provably cannot pass
 # this, which is the whole point — it is not a ratio, it is a category.
