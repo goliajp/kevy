@@ -18,17 +18,26 @@
 //!
 //! ## How to run
 //!
+//! `python3 tools/check_loom.py` — the gate, which is what CI's `loom` job
+//! runs and what the `loomgate` suite entry names. It demands that every
+//! `#[test]` below actually ran, because for months none of them did:
+//! nothing in this repository passed `--cfg loom`, so `cargo test
+//! --workspace` reported `running 0 tests / test result: ok` and that
+//! counted as a pass. By hand it is:
+//!
 //! ```bash
 //! RUSTFLAGS="--cfg loom" cargo test -p kevy-ring --test loom --release
 //! ```
 //!
-//! `--release` is recommended: loom's exhaustive search explores tens of
-//! thousands of interleavings, and debug builds make each one painfully slow.
-//! Total wall-clock is on the order of 1-10s for the cases below.
+//! `--release` is recommended: debug builds make each interleaving slow.
 //!
-//! `LOOM_MAX_PREEMPTIONS` (default 2) bounds how aggressive the preemption
-//! search is; bumping to 3+ explodes the state space combinatorially. The
-//! invariants here are small enough that the default suffices.
+//! Cost, measured rather than assumed — the two searches below finish in
+//! 0.00 / 0.01 / 0.02 / 0.04 s at `LOOM_MAX_PREEMPTIONS` 2 / 3 / 4 / 5.
+//! This header used to claim "1-10 s" and that raising the bound past the
+//! default 2 "explodes the state space combinatorially"; both were guesses
+//! and both were wrong by orders of magnitude. The state space here is
+//! genuinely small, which is a fact about these models and not a reason to
+//! search them shallowly — so the gate runs them at 5.
 
 #![allow(unexpected_cfgs)]
 #![cfg(loom)]

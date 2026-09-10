@@ -831,6 +831,35 @@ jobs:
           MIRIFLAGS: "-Zmiri-disable-isolation"
         run: cargo miri test -p kevy-store --lib zset
 
+  # ───────────── loom: exhaustive interleaving search on the two ─────────────
+  # ───────────── lock-free handshakes                            ─────────────
+  # Both loom suites are `#![cfg(loom)]`, and until this job existed nothing
+  # anywhere passed `--cfg loom`. `cargo test --workspace` therefore ran them
+  # as "running 0 tests / test result: ok" — a pass — while three sites in
+  # kevy-rt cited a loom test by name as the argument for their SeqCst
+  # ordering. The gate demands the count: every #[test] in each loom.rs must
+  # have run, so silence cannot read as agreement again.
+  loom:
+    name: loom (kevy-ring SPSC + kevy-rt park/wake fence)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: loom-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            loom-
+
+      - name: loomgate (every loom test runs, and finishes clean)
+        run: python3 tools/check_loom.py
+
   # ───────────── fuzz smoke: 60s per target on every push ─────────────
   # The twelve libFuzzer targets (v3.18 T5a + the stone fuzz corpus) get a
   # 60-second smoke each — long enough to replay the checked-in corpus and
