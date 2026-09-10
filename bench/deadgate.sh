@@ -31,6 +31,13 @@ MODE=${1:-gate}
 
 command -v cargo >/dev/null || { echo "deadgate: REFUSED — no cargo" >&2; exit 2; }
 
+# The atlas verifies itself before it is trusted to measure anything. Symbol
+# identity is what the whole ratchet holds, and it was computed by a regex
+# that silently collapsed `<Type as Trait>::method` to `::method` — one
+# identity absorbing every crate's `Debug`. The selftest carries a floor, so
+# deleting the examples fails rather than passes quietly.
+python3 "$ROOT/tools/coverage_atlas.py" --selftest || exit $?
+
 if [ ! -f "$COV" ]; then
   echo "deadgate: producing the corpus run (this is the slow part)"
   # shellcheck disable=SC2086

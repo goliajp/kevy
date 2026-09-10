@@ -176,12 +176,87 @@ def demangle(names):
     return dict(zip(names, got))
 
 
+def _split_angle(s):
+    """Split `<inner>rest` at the matching `>`. Returns (inner, rest).
+
+    Nesting-aware, which a regex is not: `<Foo<Bar>>::m` has to close on the
+    second `>`, not the first.
+
+    >>> _split_angle("<Foo>::m")
+    ('Foo', '::m')
+    >>> _split_angle("<Foo<Bar, Baz>>::m")
+    ('Foo<Bar, Baz>', '::m')
+    """
+    depth = 0
+    for i, ch in enumerate(s):
+        if ch == "<":
+            depth += 1
+        elif ch == ">":
+            depth -= 1
+            if depth == 0:
+                return s[1:i], s[i + 1:]
+    return s, ""
+
+
+def _drop_generic_args(s):
+    """Drop every `<...>` group, honouring nesting.
+
+    >>> _drop_generic_args("alloc::vec::Vec<u8>::push")
+    'alloc::vec::Vec::push'
+    >>> _drop_generic_args("a::B<C<D>, E>::f")
+    'a::B::f'
+    """
+    out, depth = [], 0
+    for ch in s:
+        if ch == "<":
+            depth += 1
+        elif ch == ">":
+            depth -= 1
+        elif depth == 0:
+            out.append(ch)
+    return "".join(out)
+
+
 def symbol_of(demangled):
-    """Strip the closure/instantiation tail and the trailing hash."""
+    """Strip the closure/instantiation tail and the hash, and canonicalise
+    a qualified path to the type that owns the method.
+
+    This used to be three regexes, the last of which was `<[^<>]*>` -> "".
+    On a generic instantiation that does what it should. On a trait impl —
+    `<Type as Trait>::method`, which is what every derived `Debug` demangles
+    to — the `<...>` **is** the type, so the identity collapsed to the bare
+    method name and one identity absorbed every crate's copy of it. `::fmt`
+    held 241 dead regions across at least twelve crates, so a regression in
+    one crate's `Debug` was cancelled by an improvement in another's and the
+    ratchet never saw either. Worse, whether it collapsed was arbitrary: the
+    pattern cannot match nested angle brackets, so a type that happened to
+    carry a generic parameter survived and a plain one did not.
+
+    >>> symbol_of("kevy_time::eval")
+    'kevy_time::eval'
+    >>> symbol_of("<kevy_replicate::state::ReplState as core::fmt::Debug>::fmt")
+    'kevy_replicate::state::ReplState::fmt'
+    >>> symbol_of("<kevy_elect::vote::Ballot as core::fmt::Debug>::fmt")
+    'kevy_elect::vote::Ballot::fmt'
+    >>> symbol_of("<kevy_uring::ring::IoUring>::submit_and_wait")
+    'kevy_uring::ring::IoUring::submit_and_wait'
+    >>> symbol_of("<kevy_map::map::KevyMap<alloc::vec::Vec, u64>>::probe_by_borrow_slow")
+    'kevy_map::map::KevyMap::probe_by_borrow_slow'
+    >>> symbol_of("kevy::dispatch::dispatch_with_proto::{closure#0}")
+    'kevy::dispatch::dispatch_with_proto'
+    >>> symbol_of("<kevy_seg::builder::Builder>::push::hab12cd34ef567890")
+    'kevy_seg::builder::Builder::push'
+
+    The two crates above are distinct identities now, which is the point.
+    """
     s = re.sub(r"::\{closure#\d+\}", "", demangled)
     s = re.sub(r"::h[0-9a-f]{16}$", "", s)
-    s = re.sub(r"<[^<>]*>", "", s)
-    return s
+    if s.startswith("<"):
+        inner, rest = _split_angle(s)
+        # `<Type as Trait>::m` -> `Type::m`; `<Type>::m` -> `Type::m`.
+        owner = inner.split(" as ", 1)[0]
+        s = owner + rest
+    return _drop_generic_args(s)
 
 
 def source_line(path, lineno, cache):
@@ -451,6 +526,17 @@ def write_outputs(cfg, counts, rows, llvm_dead):
     OUT_SET.write_text(json.dumps({
         "corpus": cfg["id"],
         "platform": cfg["platform"],
+        # What question this set answers, in setratchet's `identity` sense —
+        # alongside which corpus and which platform. It is here because
+        # `symbol_of` changed: sets recorded before the change name a trait
+        # method `::fmt` and sets recorded after name it
+        # `kevy_elect::vote::Ballot::fmt`, and comparing the two would report
+        # thousands of symbols joining and leaving. That is not a worse set,
+        # it is a different question, and setratchet already knows to refuse
+        # rather than fail when the identity differs. A baseline recorded
+        # before this field existed has no `kind`, so it refuses on sight
+        # instead of quietly reading as a catastrophe.
+        "kind": SYMBOL_SCHEME,
         "total_regions": len(counts),
         "dead_regions": len(rows),
         "llvm_per_instantiation_dead": llvm_dead,
@@ -494,9 +580,41 @@ def write_outputs(cfg, counts, rows, llvm_dead):
     OUT_MD.write_text("\n".join(out) + "\n")
 
 
+SYMBOL_DOCTEST_FLOOR = 11
+
+# Bump when `symbol_of` changes what an identity is. Baselines carry it, so
+# a mismatch is refused rather than read as a regression.
+SYMBOL_SCHEME = "symbols/qualified-path"
+
+
+def selftest():
+    """Run this module's doctests and refuse a run that verified nothing.
+
+    `python3 -m doctest` exits 0 on a file with no doctests, which is the
+    failure mode this repository keeps finding: an instrument that checks
+    nothing is indistinguishable from one that checks everything and agrees.
+    The floor makes deleting an example a failure rather than a shortcut —
+    and `symbol_of` is exactly the function that needs examples, because the
+    identity it computes is what the whole ratchet holds.
+    """
+    import doctest
+
+    ran, failed = doctest.testmod(sys.modules[__name__], verbose=False)[::-1]
+    if ran < SYMBOL_DOCTEST_FLOOR:
+        refuse(f"only {ran} doctest example(s), floor is {SYMBOL_DOCTEST_FLOOR} "
+               "— an instrument that checks nothing must not report agreement")
+    if failed:
+        print(f"coverage_atlas: FAIL — {failed} of {ran} examples")
+        return 1
+    print(f"coverage_atlas: selftest ok — {ran} examples")
+    return 0
+
+
 def main():
+    if len(sys.argv) == 2 and sys.argv[1] == "--selftest":
+        return selftest()
     if len(sys.argv) != 2:
-        refuse("usage: coverage_atlas.py <llvm-cov.json>")
+        refuse("usage: coverage_atlas.py <llvm-cov.json> | --selftest")
     cfg, counts, rows, llvm_dead, excluded = build(sys.argv[1])
     write_outputs(cfg, counts, rows, llvm_dead)
     print(f"  {excluded} never-executed regions under #[cfg(test)] excluded "
