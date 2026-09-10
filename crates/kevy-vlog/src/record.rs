@@ -123,10 +123,24 @@ impl VlogFile {
         Ok((key, self.decompress(&frame)?))
     }
 
-    /// Decode a verified record's frame against THIS file's dictionary.
-    /// The batched-read path pairs this with [`verify_image`]; a frame
-    /// that fails to decode is a process bug by the same doctrine as a
-    /// CRC mismatch (this process wrote it this boot).
+    /// Decode a **verified** record's frame against THIS file's dictionary.
+    ///
+    /// The caller must have run [`verify_image`] on the record first, and
+    /// this is load-bearing rather than tidy: `kevy-compress` frames carry
+    /// no checksum of their own, and a flipped bit that leaves every offset
+    /// and length in range decodes to a different value of the right length
+    /// — measured at 39-48% of single-bit flips. The CRC checked in
+    /// `verify_image` is the only thing standing between a corrupt record
+    /// and a plausible wrong answer. `kevy-compress`'s `decode.rs` header
+    /// states the same division from the other side.
+    ///
+    /// Two callers exist and both verify first: `read` just above, and
+    /// `kevy_store::tier_serve`'s batched cold read. Nothing in the type
+    /// system enforces the pairing — a `VerifiedFrame` newtype would, and
+    /// is a v7 item because changing this signature is a major bump.
+    ///
+    /// A frame that fails to decode is a process bug by the same doctrine
+    /// as a CRC mismatch (this process wrote it this boot).
     pub fn decompress(&self, frame: &[u8]) -> io::Result<Vec<u8>> {
         kevy_compress::decode_with(&self.parsed, frame)
             .map_err(|e| bad(format!("vlog: {e} at file {}", self.id)))
