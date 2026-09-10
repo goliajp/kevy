@@ -524,3 +524,97 @@ fn the_densest_pages_the_builder_writes_are_within_the_slot_bound() {
     let walked = seg.range(b"000000", b"999999").count();
     assert_eq!(walked, recs.len(), "every record walks back");
 }
+
+/// Cell offsets are `usize` built from a `u16` and a `u32` read off disk,
+/// and on a 32-bit target — `armv7-unknown-linux-musleabihf` and
+/// `thumbv7em-none-eabihf` are both in CI's matrix — `off + 6 + klen + plen`
+/// with a `plen` near `u32::MAX` runs past the end of `usize`. Debug panics
+/// on the addition; release wraps to an end below the start, and the slice
+/// lookup then returns `None` for the wrong reason.
+///
+/// A 64-bit host cannot reach that through a page, so the arithmetic is a
+/// pure function and the test hands it an offset directly.
+#[test]
+fn a_cell_offset_that_runs_off_the_end_of_usize_is_none_not_a_panic() {
+    use crate::layout::{field_end, read_cell};
+
+    assert_eq!(field_end(10, 6), Some(16), "ordinary arithmetic is unchanged");
+    assert_eq!(field_end(usize::MAX, 1), None);
+    assert_eq!(field_end(usize::MAX - 1, 2), None, "landing exactly past the end");
+    assert_eq!(field_end(usize::MAX - 2, 2), Some(usize::MAX), "landing exactly on it");
+
+    let page = vec![0u8; crate::layout::PAGE];
+    assert!(read_cell(&page, usize::MAX - 1).is_none(), "no panic, no cell");
+}
+
+/// An overflow cell names its payload run as `first_page` + `n_pages`, both
+/// `u32` and both read off disk. A run pointing past the end of the file
+/// must fail the read rather than return whatever is there.
+///
+/// This started out claiming to catch a `u32` overflow in `first_page + p`,
+/// and mutation testing said otherwise: replacing the widened addition with
+/// a wrapping one leaves this green. The reason is worth keeping — reaching
+/// `p >= 1` means the read at `p == 0` succeeded, so `first_page` names a
+/// page the file has, and a file with `u32::MAX` pages is 17.6 TB. The
+/// overflow is unreachable, the widening is there so that stops being
+/// something a reader has to work out, and this test verifies the thing it
+/// can actually verify.
+#[test]
+fn an_overflow_run_pointing_past_the_file_is_refused() {
+    use crate::layout::{self, Cell};
+    use std::io::{Read, Seek, SeekFrom, Write};
+
+    let (_d, p) = tmp("seg-ovf-wrap");
+    build(&p, [(b"k".as_slice(), vec![b'X'; 9000].as_slice())]);
+
+    let mut f = std::fs::OpenOptions::new().read(true).write(true).open(&p).expect("reopen");
+    let pages = f.metadata().expect("metadata").len() / layout::PAGE as u64;
+
+    // The payload pages come first, so page 0 is raw `X`s — its first two
+    // bytes read as a slot count of 22616. Find the data page by shape.
+    let mut patched = None;
+    for ix in 0..pages {
+        let mut page = vec![0u8; layout::PAGE];
+        f.seek(SeekFrom::Start(ix * layout::PAGE as u64)).expect("seek");
+        if f.read_exact(&mut page).is_err() {
+            break;
+        }
+        if !layout::page_intact(&page) || !layout::page_shape_ok(&page) {
+            continue;
+        }
+        let mut found = false;
+        for s in 0..layout::page_slots(&page) {
+            let off = layout::slot_offset(&page, s);
+            let Some(Cell::Overflow { key, .. }) = layout::read_cell(&page, off) else { continue };
+            let tail = off + 6 + key.len();
+            // Point the run at the top of the u32 range, two pages long, so
+            // the second page's index is `first_page + 1`.
+            page[tail + 4..tail + 8].copy_from_slice(&u32::MAX.to_le_bytes());
+            page[tail + 8..tail + 12].copy_from_slice(&2u32.to_le_bytes());
+            found = true;
+            break;
+        }
+        if found {
+            let n = layout::PAGE - layout::PAGE_CRC;
+            let crc = kevy_sys::checksum::crc32c(&page[..n]);
+            page[n..].copy_from_slice(&crc.to_le_bytes());
+            f.seek(SeekFrom::Start(ix * layout::PAGE as u64)).expect("seek");
+            f.write_all(&page).expect("rewrite");
+            patched = Some(ix);
+            break;
+        }
+    }
+    assert!(patched.is_some(), "the 9000-byte value must have produced an overflow cell");
+    f.sync_all().expect("sync");
+    drop(f);
+
+    let seg = Seg::open(&p).expect("footer untouched");
+    // Named precisely, not just `is_err()`. Two independent things refuse
+    // this run — the read fails, and a zero-filled buffer fails the page CRC
+    // — so `is_err()` stays true with either one removed and proves neither.
+    // The read is the one that should fire first.
+    assert!(
+        matches!(seg.get(b"k"), Err(SegError::Io(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof),
+        "a run past the end of the file must fail the read, not be filled in"
+    );
+}
