@@ -129,6 +129,48 @@ fn refusal(pat: &str) -> String {
     }
 }
 
+// WRITTEN HERE: what `(?i)` reaches, and what it deliberately does not.
+//
+// `fold_case` walks the parsed pattern rewriting literals and classes into
+// both cases, recursing through quantifiers, groups, lookahead, concat and
+// alternation, and marking backreferences `ci` so both sides fold at match
+// time. 47 of its regions had never executed.
+//
+// The row that matters most is the last one. Every test in that function
+// is `is_ascii_alphabetic` and every fold is `to_ascii_lowercase`, so
+// `(?i)é` does not match `É`. That is deliberate — this engine's `\w`,
+// `[[:alnum:]]` and word boundaries are ASCII-scoped too — but nothing
+// said so and nothing checked it, which is exactly the state in which
+// someone widens one of the two and leaves the pair inconsistent.
+#[test]
+fn case_folding_is_ascii_only() {
+    // Literals, and each container fold_case recurses through.
+    assert!(hits("(?i)abc", "ABC"), "literal");
+    assert!(hits("(?i)(ab)+", "ABAB"), "group under a quantifier");
+    assert!(hits("(?i)a|b", "B"), "alternation");
+    assert!(hits("(?i)(?:ab)c", "ABC"), "non-capturing group");
+    assert!(hits("(?i)a(?=b)", "aB"), "lookahead");
+
+    // Class members: singles and ranges both.
+    assert!(hits("(?i)[abc]+", "ABC"), "class singles");
+    assert!(hits("(?i)[a-c]+", "ABC"), "class range");
+    assert!(hits("(?i)[^a-c]", "X"), "a negated class still folds its members");
+    assert!(!hits("(?i)[a-c]", "X"));
+
+    // A backreference is not rewritten — it is marked `ci` and both sides
+    // fold when the comparison happens, since what it must equal is not
+    // known until the group captures.
+    assert!(hits("(?i)(a)\\1", "aA"), "backreference folds at match time");
+    assert!(hits("(?i)(ab)\\1", "abAB"));
+    assert!(!hits("(?i)(a)\\1", "ab"));
+
+    // And the boundary. Non-ASCII letters are NOT folded.
+    assert!(hits("(?i)a", "A"), "ASCII folds");
+    assert!(!hits("(?i)é", "É"), "a non-ASCII letter does not fold");
+    assert!(hits("(?i)é", "é"), "it still matches itself");
+    assert!(!hits("(?i)[α-ω]", "Α"), "nor does a non-ASCII range");
+}
+
 // PORTED + WRITTEN HERE: the escape table, one row per arm.
 //
 // `re_parse_atom` carried 74 never-executed regions and most of them are
