@@ -833,6 +833,50 @@ honestly: the change that stopped a single `DEL` from putting the table on
 its slow probe for the rest of its life left the arm almost never entered.
 A fix working and a correctness path going quiet are the same event.
 
+### Four instruments that were answering a different question
+
+None of these changes what kevy does. They change what this repository can
+tell you about itself, which is the release's subject.
+
+**A gate that compared the register with itself.** `deadgate.sh` ends by
+reconciling `suite/dead-paths.toml` — the file a person reads — against the
+exemptions the run applied. It compared the register against a copy of the
+register that the atlas had just written out of the same TOML. It printed
+"register and this run agree" on every run it has ever made and could not
+have printed anything else. What it was there to catch was sitting in the
+register the whole time: a `[[dead]]` entry naming
+`kevy_geo::estimate_step`, a symbol that has not existed since the function
+moved files, explaining a region that is executed now.
+
+**An identity that held every crate's `Debug`.** Symbol identity was
+computed with a regex that collapsed `<Type as Trait>::method` to
+`::method`. `::fmt` was one identity holding 241 dead regions across at
+least twelve crates, so a regression in one crate's `Debug` and an
+improvement in another's cancelled inside one number. Whether it collapsed
+was arbitrary — the pattern cannot see nested angle brackets, so a type
+carrying a generic parameter survived and a plain one did not.
+
+**An envelope that spanned three trees.** `setratchet envelope` takes the
+element-wise maximum across runs so noise cannot fail the gate. Across
+*different* trees that maximum restores dead regions a later commit
+covered. It now records and requires one tree, refuses a set that records
+none, and refuses a dirty working copy.
+
+**A crate with no coverage produces no failing line.** `[[dead_crate]]`
+explains a crate whose dead regions have one cause, and the atlas already
+refused an entry whose named gate had been deleted. Nothing asked the
+reverse. A crate at 100% dead shows up as no symbols, no growth, no name —
+there was one, unexplained.
+
+Alongside them, coverage where the corpus reached least: every msgpack
+wire tag (`cmsgpack.unpack` is a global on every script, so the tag byte
+comes off the wire, and 146 of its regions had never run), every missing
+field in the pubsub frame classifier, and two differential tests where one
+algorithm is written twice — `kevy-map`'s three probe loops and the regex
+engine's capturing and non-capturing descents, the second of which also
+pins the routing rule that sends backreference patterns to the capturing
+side.
+
 ### Deferred, with the reason
 
 `C-STRUCT-PRIVATE` — 740 public fields on public structs — is a real
