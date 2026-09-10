@@ -751,6 +751,72 @@ suite does not leave 0.00 s at any bound through 6. The gate searches at
 50 ms lost-wake window, had been false for some time; it survived because
 nothing ran the file that would have said so.
 
+### The codec promised to catch corruption; 48% of flips get through
+
+`kevy-compress`'s acceptance criterion K3 read "truncations and bit flips
+are rejected, never mis-decoded into a wrong-but-plausible value", and the
+decoder's own header said the same. What checked it was five sampled byte
+positions with one bit pattern each, at the fast level, and four at the
+high level. Scanning every bit of every byte instead:
+
+    fast level   3,965 of 8,184 flips (48%)   decode to the wrong contents
+    high level   1,148 of 2,928 flips (39%)   at exactly the right length
+
+The sampled positions were not among them. At a 39-48% hit rate, four or
+five samples miss entirely about one time in seven, which is what happened.
+
+The promise was never implementable at that layer and does not belong
+there. A frame carries no checksum, and a flipped bit that leaves every
+offset and length in range produces a different, structurally valid token
+stream — returning it is the correct behaviour for a codec. Integrity is
+`kevy-vlog`'s per-record `crc32c`, checked in `verify_image` **before** the
+frame reaches `decode`. The layering was right; three statements of K3
+existed and only the fuzz target's was accurate ("must either error or
+produce a value, never panic, never overrun").
+
+Both levels now assert what holds. Every truncation is refused — that half
+is structural, caught by the closing `out.len() == orig_len`, and is now
+checked over every prefix rather than four. And each test carries
+`different > 0`: the assertion that the codec does **not** detect flips,
+which fails if the format ever grows a checksum. It reads backwards until
+you see what it defends — a future reader deleting the upstream CRC on the
+grounds that the codec catches corruption.
+
+### Two varint decoders with no shift guard, and a third that had one
+
+`kevy-text` had three decoders for one LEB128 stream. `cold.rs`'s stopped
+at `shift > 28`; `docblobs::get_varints` and `positions::walk` — the two
+that read the side-channel blobs — did not. Six bytes reach both:
+`80 80 80 80 80 01` puts the sixth at shift 35, which panics in a debug
+build and silently masks to shift 3 in a release one, returning `[8]`.
+`walk` had a second in the same loop: offsets are deltas summed into a
+`u32` with `acc += cur`. One decoder now, bounded, returning `Option`.
+
+### A page header that lied, and the CRC agreed with it
+
+`kevy-seg` checked each page's CRC and nothing else, and every slot walk
+indexes off the header that check does not examine. `n_slots` is two bytes
+at offset 0, inside the CRC's range, so a page rewritten by anything that
+recomputes the CRC is self-consistent whatever it claims. Claim 65535
+slots and slot 65534 sits at `4096 - 4 - 131070`, which is not a place:
+a debug build panics in the subtraction, a release build wraps and panics
+on the index. `page_shape_ok` is the check a CRC cannot be — the CRC says
+the bytes are the bytes that were written, this says they describe a page.
+
+Also in that crate: cell offsets are built from a `u16` and a `u32` read
+off disk, and on the 32-bit targets in CI's matrix that sum runs past the
+end of `usize`.
+
+### A ring that constructed cleanly and indexed out of bounds on first push
+
+`kevy_ring::ring(capacity)` rounds up to a power of two, and
+`next_power_of_two` panics on overflow in a debug build and returns
+**zero** in a release one. Zero makes `mask` `usize::MAX` and `buf` empty:
+a ring that constructs without complaint, answers `capacity()` wrongly,
+and goes out of bounds on the first push — reporting a fault in `push` for
+an argument passed to `ring`. Checked now, with `# Panics` stating the
+ceiling the docs had never given.
+
 ### Deferred, with the reason
 
 `C-STRUCT-PRIVATE` — 740 public fields on public structs — is a real
