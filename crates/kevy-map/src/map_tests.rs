@@ -106,9 +106,16 @@ fn byte_string_keys_with_borrow_lookup() {
 /// instead, which is why a `get`-based test does not reach it at all.
 #[test]
 fn find_and_probe_agree_with_and_without_tombstones() {
+    // Scaled, like every other heavy test here: miri interprets each access
+    // and this crate's miri job is the CI wall clock. The paths this walks
+    // are entered the same way at 64 keys as at 400 — several probe groups,
+    // tombstones inside them — and the assertions below are derived from `n`
+    // so a count too small to force those paths fails rather than passes on
+    // less.
+    let n = crate::scaled(400) as u64;
     let key = |i: u64| format!("key-{i:05}").into_bytes();
     let mut m = KevyMap::<Vec<u8>, u64>::new();
-    for i in 0..400u64 {
+    for i in 0..n {
         m.insert(key(i), i);
     }
 
@@ -119,11 +126,17 @@ fn find_and_probe_agree_with_and_without_tombstones() {
         if phase == 1 {
             // Every third, so tombstones land inside groups rather than in
             // one run the probe can step over.
-            for i in (0..400u64).step_by(3) {
+            let mut removed = 0;
+            for i in (0..n).step_by(3) {
                 assert_eq!(m.remove(key(i).as_slice()), Some(i), "removing {i}");
+                removed += 1;
             }
+            assert!(
+                removed > 0 && (removed as u64) < n,
+                "both states must exist: {removed} of {n}"
+            );
         }
-        for i in 0..450u64 {
+        for i in 0..n + 50 {
             let k = key(i);
             let by_find = m.find_by_borrow(k.as_slice()).is_some();
             let by_probe =
@@ -133,12 +146,12 @@ fn find_and_probe_agree_with_and_without_tombstones() {
                 "phase {phase}, key {i}: find_by_borrow says {by_find}, \
                  probe_by_borrow says {by_probe}"
             );
-            let present = i < 400 && !(phase == 1 && i % 3 == 0);
+            let present = i < n && !(phase == 1 && i % 3 == 0);
             assert_eq!(by_find, present, "phase {phase}, key {i}: expected present={present}");
             checked += 1;
         }
     }
-    assert_eq!(checked, 900, "both phases ran over the whole key range");
+    assert_eq!(checked, 2 * (n + 50), "both phases ran over the whole key range");
 
     // And the slow arm's other job: a reinsert lands in a tombstone.
     let before = m.len();
