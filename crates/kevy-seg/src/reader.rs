@@ -118,7 +118,7 @@ impl Seg {
         let n = layout::page_slots(&page);
         let (mut lo, mut hi) = (0u16, n);
         while lo < hi {
-            let mid = (lo + hi) / 2;
+            let mid = lo + (hi - lo) / 2;
             let cell = layout::read_cell(&page, layout::slot_offset(&page, mid))
                 .ok_or(SegError::Corrupt("cell shape"))?;
             match cell.key().cmp(key) {
@@ -220,6 +220,11 @@ impl Seg {
         self.f.read_exact_at(&mut buf, u64::from(page_index) * PAGE as u64)?;
         if !layout::page_intact(&buf) {
             return Err(SegError::Corrupt("data page crc"));
+        }
+        // The CRC says the bytes are unchanged; this says they are a page.
+        // Every slot walk below indexes off this header.
+        if !layout::page_shape_ok(&buf) {
+            return Err(SegError::Corrupt("data page slot count"));
         }
         Ok(buf)
     }
