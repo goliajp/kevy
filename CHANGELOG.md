@@ -897,8 +897,15 @@ side flattens the group into the sequence (parentheses only group there),
 and the capturing side retries the branches in place so the group's span
 still records the branch that won — `(a|ab)c` now captures `ab`.
 
-Every `regexp_matches`, `regexp_replace` and `regexp_split_to_array` with
-a parenthesised alternation followed by anything was affected.
+Only **capturing** parentheses are affected. `(?:a|ab)c` was always
+right, because a non-capturing group returns its inner node rather than a
+`Group`, so the alternation sits directly in the sequence where the
+correct arm reaches it. The shape that breaks is `(A|B)tail` where `A` is
+a prefix of `B` and the tail fails after `A` but succeeds after `B` —
+across `regexp_matches`, `regexp_replace` and `regexp_split_to_array`.
+
+The same defect is in `spg`, which this engine is a byte-identical fork
+of; reproduced there and written up in that repository, not fixed there.
 
 **How it survived a differential test.** The same arc added a test
 asserting that this engine's capturing and non-capturing descents agree,
