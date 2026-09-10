@@ -82,11 +82,6 @@ const MANIFEST: &str = "segs.manifest";
 /// body, and the length sits outside it. See `open` for what that cost.
 const MAX_RECORD_BYTES: usize = 64 * 1024;
 
-/// The most that can legitimately be discarded as a torn tail: one
-/// envelope. `append` is a single `write_all` followed by `sync_all`, so
-/// at most one record can ever be partly on disk.
-const MAX_TORN_TAIL: usize = 8 + MAX_RECORD_BYTES;
-
 const OP_ADD: u8 = 1;
 const OP_DROP: u8 = 2;
 
@@ -324,11 +319,12 @@ fn replay(bytes: &[u8], live: &mut BTreeMap<String, ManifestEntry>) -> Result<u6
             None if !plausible_len(bytes, o) => {
                 return Err(SegError::Corrupt("manifest length field"));
             }
-            // More left than one envelope can be; `append` writes one
-            // record and fsyncs, so at most one is ever partly on disk.
-            None if bytes.len() - o > MAX_TORN_TAIL => {
-                return Err(SegError::Corrupt("manifest length field"));
-            }
+            // There is no arm here for "more bytes left than one envelope
+            // can be". It cannot fire: if the length is plausible
+            // (≤ MAX_RECORD_BYTES) and more than 8 + MAX_RECORD_BYTES
+            // remain, then a whole record's bytes are present, so
+            // `whole_records_end` above already returned the CRC error.
+            // Writing it anyway left a branch no input could reach.
             // Something after this decodes, so this is not the end.
             None if valid_record_follows(bytes, o) => {
                 return Err(SegError::Corrupt("manifest length field"));

@@ -131,6 +131,21 @@ fn promotable_range(start: usize, len: usize) -> Option<(usize, usize)> {
 ///
 /// This is the witness. It is a test and diagnostic surface, not a
 /// control input.
+///
+/// # Examples
+///
+/// A region too small to hold an aligned huge page is not advised, so
+/// the witness stays zero — the kernel was never asked.
+///
+/// ```
+/// # #[cfg(target_os = "linux")] {
+/// use kevy_madvise::{advise_hugepage, last_advised_bytes};
+///
+/// let small = vec![0u8; 4096];
+/// advise_hugepage(small.as_ptr(), small.len());
+/// assert_eq!(last_advised_bytes(), 0);
+/// # }
+/// ```
 #[cfg(all(target_os = "linux", feature = "std"))]
 #[must_use]
 pub fn last_advised_bytes() -> usize {

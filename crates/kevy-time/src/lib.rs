@@ -210,17 +210,6 @@ pub fn checked_add_months(secs: i64, n: i64) -> Option<i64> {
     let c = civil_from_epoch(secs);
     let months = c.y.checked_mul(12)?.checked_add(i64::from(c.m) - 1)?.checked_add(n)?;
     let (y, m) = (months.div_euclid(12), (months.rem_euclid(12) + 1) as u32);
-    // `days_from_civil` multiplies the era by 146,097 and the result is
-    // then multiplied by 86,400 — so the day count overflows before the
-    // seconds do, and a year outside this range cannot be checked by
-    // `checked_epoch_from_civil` because it never gets there.
-    //
-    // The bound is what an i64 epoch can hold: 2^63 seconds is about
-    // 292 billion years, and this stops short of it.
-    const MAX_YEAR: i64 = 290_000_000_000;
-    if !(-MAX_YEAR..=MAX_YEAR).contains(&y) {
-        return None;
-    }
     let d = c.d.min(last_day(y, m));
     checked_epoch_from_civil(Civil { y, m, d, ..c })
 }
@@ -231,8 +220,32 @@ pub fn checked_add_months(secs: i64, n: i64) -> Option<i64> {
 /// `i64` for any year past roughly ±292 billion — reachable from
 /// [`add_months`] with a large enough month count, and therefore from a
 /// query bound a client supplies.
+///
+/// # Examples
+///
+/// ```
+/// use kevy_time::{Civil, checked_epoch_from_civil, civil_from_epoch};
+/// // An ordinary date answers exactly as the unchecked version does.
+/// assert_eq!(checked_epoch_from_civil(civil_from_epoch(1_700_000_000)), Some(1_700_000_000));
+/// // A year no i64 epoch can hold answers None instead of wrapping.
+/// let far = Civil { y: i64::MAX / 2, m: 1, d: 1, h: 0, min: 0, s: 0 };
+/// assert_eq!(checked_epoch_from_civil(far), None);
+/// ```
 #[must_use]
 pub fn checked_epoch_from_civil(c: Civil) -> Option<i64> {
+    // The bound has to be here, not in the caller. `days_from_civil`
+    // multiplies the era by 146,097 before anything is multiplied by
+    // 86,400, so for an extreme year the DAY count overflows first and
+    // the checked seconds arithmetic below never runs. A first version
+    // put this in `checked_add_months` and left this function public and
+    // still able to panic — its own doc example is what caught that.
+    //
+    // The bound is what an i64 epoch can hold: 2^63 seconds is roughly
+    // 292 billion years, and this stops short of it.
+    const MAX_YEAR: i64 = 290_000_000_000;
+    if !(-MAX_YEAR..=MAX_YEAR).contains(&c.y) {
+        return None;
+    }
     days_from_civil(c.y, c.m, c.d)
         .checked_mul(SECS_PER_DAY)?
         .checked_add(i64::from(c.h) * 3600)?

@@ -135,3 +135,39 @@ fn a_longer_unit_never_succeeds_where_a_shorter_one_overflowed() {
     assert!(a - now < 32 * 86_400 && now - b < 32 * 86_400, "a month is not a year");
     assert!(eval(b"@now+7d", now).is_some() && eval(b"@now+1y", now).is_some());
 }
+
+/// The checked calendar helpers, driven directly at every way they can
+/// answer `None` — the paths `eval` reaches only through a client's
+/// argv, and which a coverage run over `--lib --tests` cannot see from a
+/// doc example.
+#[test]
+fn the_checked_helpers_refuse_every_way_the_arithmetic_can_leave_i64() {
+    // The month count itself overflows.
+    assert_eq!(checked_add_months(0, i64::MAX), None);
+    assert_eq!(checked_add_months(0, i64::MIN), None);
+    // The month count fits but the resulting year does not.
+    assert_eq!(checked_add_months(0, 1 << 60), None);
+    assert_eq!(checked_add_months(0, -(1 << 60)), None);
+    // The starting instant is extreme in each direction.
+    assert_eq!(checked_add_months(i64::MAX, 1), None);
+    assert_eq!(checked_add_months(i64::MIN, -1), None);
+
+    // And the same for the civil-to-epoch direction.
+    let far = Civil { y: i64::MAX / 2, m: 1, d: 1, h: 0, min: 0, s: 0 };
+    assert_eq!(checked_epoch_from_civil(far), None);
+    let back = Civil { y: i64::MIN / 2, m: 1, d: 1, h: 0, min: 0, s: 0 };
+    assert_eq!(checked_epoch_from_civil(back), None);
+
+    // The floor: ordinary values must still answer, or "refuse
+    // everything" would satisfy every assertion above.
+    assert_eq!(checked_add_months(0, 1), Some(2_678_400));
+    assert_eq!(checked_add_months(0, -1), Some(-2_678_400));
+    for t in [0i64, 1_700_000_000, -2_208_988_800] {
+        assert_eq!(checked_epoch_from_civil(civil_from_epoch(t)), Some(t), "round trip at {t}");
+    }
+
+    // `add_months` keeps its signature and must never panic: it
+    // saturates where the checked form refuses.
+    assert_eq!(add_months(0, i64::MAX), i64::MAX);
+    assert_eq!(add_months(0, i64::MIN), i64::MIN);
+}

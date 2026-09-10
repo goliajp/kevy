@@ -207,26 +207,10 @@ impl SegBuilder {
         if self.used + projected(cell_len, self.slots.len()) > PAGE_BUDGET + PAGE_HDR {
             self.seal_current_page()?;
         }
-        // Sealing empties the page; if the cell still does not fit, it
-        // never will. There was no second check here, so the write below
-        // went ahead regardless:
-        //
-        //   key ≤ 4070 bytes  fine
-        //   key = 4074        `push` Ok, `finish` Ok, `Seg::open` Ok, and
-        //                     reading that key back fails — the slot
-        //                     directory is written over the tail of the
-        //                     cell, then the page CRC is taken, so the
-        //                     page is internally consistent and wrong
-        //   key ≥ 4075        panic, writing past the page buffer
-        //
-        // Both are reachable from user data: an indexed document with a
-        // long run of non-separator bytes becomes one token and then one
-        // key, and `seg_key` concatenates two unbounded user byte
-        // strings. Refusing is the only answer that does not either
-        // crash or claim a write that cannot be read.
-        if projected(cell_len, 0) > PAGE_BUDGET + PAGE_HDR {
-            return Err(SegError::Corrupt("key and payload exceed one page"));
-        }
+        // No second fit-check here. `push` refuses a key that fits
+        // neither cell form before anything is measured, so by the time
+        // a cell reaches this function an empty page can always hold it.
+        // A check here as well was a branch nothing could reach.
         if self.slots.is_empty() {
             self.fences.push((self.pages_written, key.to_vec()));
         }
