@@ -114,6 +114,54 @@ fn captures_hold_when_the_match_starts_late() {
     assert_eq!(g, vec![Some("x".into()), Some("y".into())]);
 }
 
+// WRITTEN HERE: a quantified capture group that a backreference then
+// constrains. This is the arm `caps.rs` documents with
+// `^(a*)\1$` on "aaaa" giving back group = "aa", and 138 of its regions
+// had never executed — the largest surviving block in this crate.
+//
+// The arm exists because a greedy `(a*)` would take all four `a`s and
+// leave nothing for `\1`. It has to enumerate the inner quantifier's
+// reachable ends, record `caps[idx]` at each repetition count, and try the
+// tail from each — a backtrack point the plain descent never needs,
+// because it has no captures for a backreference to refer to.
+#[test]
+fn a_quantified_group_backtracks_for_the_backreference_that_follows_it() {
+    // The documented case: greedy `(a*)` must give back to two.
+    let (whole, g) = caps(r"^(a*)\1$", "aaaa").expect("matches");
+    assert_eq!(whole, "aaaa");
+    assert_eq!(g, vec![Some("aa".into())], "the group gives back half");
+
+    // Odd length cannot split in two, at any give-back.
+    assert!(caps(r"^(a*)\1$", "aaa").is_none(), "three a's cannot be a doubled prefix");
+    assert!(caps(r"^(a*)\1$", "aaaaa").is_none());
+
+    // Zero is a reachable end: the empty group matches the empty string.
+    let (whole, g) = caps(r"^(a*)\1$", "").expect("empty matches with an empty group");
+    assert_eq!(whole, "");
+    assert_eq!(g, vec![Some("".into())]);
+
+    // Three copies: eight a's give back to two, not four.
+    let (whole, g) = caps(r"^(a*)\1\1$", "aaaaaa").expect("matches");
+    assert_eq!(whole, "aaaaaa");
+    assert_eq!(g, vec![Some("aa".into())], "six a's split three ways");
+
+    // `+` has a floor of one, so the empty end is not reachable.
+    assert!(caps(r"^(a+)\1$", "").is_none(), "a+ cannot match empty");
+    let (_, g) = caps(r"^(a+)\1$", "aaaa").expect("matches");
+    assert_eq!(g, vec![Some("aa".into())]);
+
+    // A multi-character body, so the enumeration is over repetitions of a
+    // group rather than of a single character.
+    let (whole, g) = caps(r"^(ab)+\1$", "ababab").expect("matches");
+    assert_eq!(whole, "ababab");
+    assert_eq!(g, vec![Some("ab".into())], "the last repetition is what \\1 sees");
+
+    // A bounded quantifier: the enumeration must stop at the ceiling.
+    let (_, g) = caps(r"^(a{1,2})\1$", "aaaa").expect("matches");
+    assert_eq!(g, vec![Some("aa".into())]);
+    assert!(caps(r"^(a{1,2})\1$", "aaaaaa").is_none(), "the ceiling of two is enforced");
+}
+
 /// The two descents agree — at the low level where they are the same
 /// algorithm, and at the high level where one of them routes.
 ///
