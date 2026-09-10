@@ -149,15 +149,18 @@ impl<T> Ring<T> {
         // a release build rather than panicking as it does in debug. Zero
         // makes `mask` `usize::MAX` and `buf` empty, which is a `Ring` that
         // constructs without complaint and then indexes out of bounds on the
-        // first push — a panic as far from its cause as it could be. Panicking
-        // here says which argument was wrong.
-        let cap = cap.max(2).checked_next_power_of_two().unwrap_or_else(|| {
-            panic!(
-                "kevy-ring: no power of two is >= the requested capacity {cap}; \
-                 the largest ring addressable on this target is {}",
-                MAX_CAPACITY
-            )
-        });
+        // first push — a fault reported in `push`, in a file the caller never
+        // touched, for an argument passed to `ring`.
+        //
+        // Saturating rather than panicking keeps the invariant this type is
+        // built on — `mask == cap - 1` and `buf.len() == cap`, always — and
+        // leaves the failure where it belongs. A `MAX_CAPACITY` ring is
+        // `2^63` slots; the `Vec::with_capacity` below refuses it the way
+        // `Vec` refuses any over-large request, which is a behaviour the
+        // standard library defines and this crate does not need to reinvent.
+        // The alternative was a `panic!` here, and this crate has a gate
+        // against those in library code for a reason.
+        let cap = cap.max(2).checked_next_power_of_two().unwrap_or(MAX_CAPACITY);
         let mut v = Vec::with_capacity(cap);
         for _ in 0..cap {
             v.push(UnsafeCell::new(MaybeUninit::uninit()));
@@ -271,13 +274,13 @@ pub struct Consumer<T> {
 /// assert_eq!(kevy_ring::ring::<u8>(0).0.capacity(), 2);
 /// ```
 ///
-/// # Panics
-///
-/// If no power of two is greater than or equal to `capacity` — that is, above
-/// `(usize::MAX >> 1) + 1`. Long before that the allocation fails, so this is
-/// a bound on the argument rather than on what a machine can hold; it is
-/// stated because the rounding is where an out-of-range capacity is noticed,
-/// and it used to be noticed silently.
+/// A `capacity` with no power of two above it — anything past
+/// `(usize::MAX >> 1) + 1` — saturates there rather than wrapping to zero,
+/// so `capacity()` is a power of two for every input. Allocating a ring
+/// that size is what fails, the way any over-large `Vec` request fails.
+/// This is stated because the rounding is where an out-of-range capacity is
+/// noticed, and it used to be noticed by returning a ring whose `mask` and
+/// `buf` disagreed.
 pub fn ring<T>(capacity: usize) -> (Producer<T>, Consumer<T>) {
     let r = Arc::new(Ring::with_capacity(capacity));
     (Producer { inner: r.clone(), head_cache: 0 }, Consumer { inner: r, tail_cache: 0 })
