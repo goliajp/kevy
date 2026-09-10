@@ -537,6 +537,10 @@ def write_outputs(cfg, counts, rows, llvm_dead):
         # before this field existed has no `kind`, so it refuses on sight
         # instead of quietly reading as a catastrophe.
         "kind": SYMBOL_SCHEME,
+        # Which tree produced these numbers. Not part of the identity the
+        # ratchet compares on; `envelope` uses it to refuse a maximum taken
+        # across different code. See `tree_id`.
+        "tree": tree_id(),
         "total_regions": len(counts),
         "dead_regions": len(rows),
         "llvm_per_instantiation_dead": llvm_dead,
@@ -581,6 +585,42 @@ def write_outputs(cfg, counts, rows, llvm_dead):
 
 
 SYMBOL_DOCTEST_FLOOR = 11
+
+
+def tree_id():
+    """Which tree this corpus ran against: `HEAD`'s tree hash, plus a
+    `-dirty` suffix when the working copy differs from it.
+
+    Deliberately NOT part of `identity`. A baseline is meant to be compared
+    against a later tree — that is the whole point of a ratchet — so making
+    the tree part of the identity would refuse every gate run.
+
+    It is here for `envelope`, which takes the element-wise maximum across
+    several runs to absorb the noise. A maximum across *different* trees
+    absorbs something else: a dead region that a later commit covered comes
+    back in from an earlier run's numbers, and the baseline records it as
+    still dead. That is a ratchet loosening itself with no reason attached,
+    which is the one thing `setratchet`'s own docstring says must not
+    happen. Three runs of one tree is what an envelope means.
+
+    The tree hash rather than the commit, because two commits with the same
+    content answer the same question. `-dirty` because a local run against
+    uncommitted edits is not a run of that tree, and an envelope that mixed
+    one in would be unreproducible.
+    """
+    def git(*args):
+        try:
+            r = subprocess.run(["git", *args], cwd=ROOT, capture_output=True,
+                               text=True, check=True)
+        except (OSError, subprocess.CalledProcessError):
+            return None
+        return r.stdout.strip()
+
+    head = git("rev-parse", "HEAD^{tree}")
+    if not head:
+        return None
+    dirty = git("status", "--porcelain")
+    return f"{head}-dirty" if dirty else head
 
 # Bump when `symbol_of` changes what an identity is. Baselines carry it, so
 # a mismatch is refused rather than read as a regression.
