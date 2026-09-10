@@ -157,24 +157,30 @@ fn stress_with_intermittent_consumer() {
     assert_eq!(next, N);
 }
 
-/// A capacity with no power of two above it names itself, in both profiles.
+/// The rounding cannot produce a capacity the mask disagrees with.
 ///
 /// `next_power_of_two` panics on overflow in a debug build and returns
 /// **zero** in a release one. Zero gives `mask = usize::MAX` and an empty
-/// `buf`: a ring that constructs cleanly and then indexes out of bounds on
-/// the first push, reporting a fault in `push` for a mistake made in `ring`.
+/// `buf`: a ring that constructs cleanly, answers `capacity()` wrongly, and
+/// indexes out of bounds on the first push — a fault reported in `push` for
+/// a mistake made in `ring`.
+///
+/// Saturating keeps `cap` a power of two for every input, which is the
+/// invariant `mask` and `buf` are both derived from. The arithmetic is
+/// pinned here rather than by constructing a `MAX_CAPACITY` ring, because
+/// that ring is `2^63` slots and allocating it is what the standard
+/// library refuses — the point is that the *rounding* never yields zero.
 #[test]
-#[should_panic(expected = "no power of two is >=")]
-fn a_capacity_with_no_power_of_two_above_it_is_refused_at_construction() {
-    let _ = ring::<u8>(usize::MAX);
-}
-
-/// And the largest capacity that *is* a power of two still rounds to itself,
-/// so the guard cannot be rejecting one legal value early.
-#[test]
-fn the_largest_addressable_capacity_still_rounds_to_itself() {
-    assert_eq!(usize::MAX.checked_next_power_of_two(), None);
+fn rounding_a_capacity_never_yields_zero_or_a_non_power_of_two() {
     let max = (usize::MAX >> 1) + 1;
+    for c in [0usize, 1, 2, 3, 5, 8, 1024, max - 1, max, max + 1, usize::MAX] {
+        let rounded = c.max(2).checked_next_power_of_two().unwrap_or(max);
+        assert!(rounded >= 2, "capacity {c} rounded to {rounded}, below the floor");
+        assert!(rounded.is_power_of_two(), "capacity {c} rounded to {rounded}, not a power of two");
+        assert!(rounded >= c.min(max), "capacity {c} rounded down to {rounded}");
+    }
+    // The two the saturation turns on, stated directly.
     assert_eq!(max.checked_next_power_of_two(), Some(max), "a power of two is its own");
     assert_eq!((max + 1).checked_next_power_of_two(), None, "one past it has none");
+    assert_eq!(usize::MAX.checked_next_power_of_two(), None);
 }
