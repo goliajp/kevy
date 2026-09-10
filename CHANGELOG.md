@@ -817,6 +817,22 @@ and goes out of bounds on the first push — reporting a fault in `push` for
 an argument passed to `ring`. Checked now, with `# Panics` stating the
 ceiling the docs had never given.
 
+### One probe loop, written three times
+
+`kevy-map` walks the same probe in three functions — lookup only, lookup
+plus an insert slot, and the same again while remembering the first
+tombstone. The split is deliberate (a lookup should not pay insert
+bookkeeping) which makes it the shape the rule against a second
+implementation warns about rather than exempt from it: they can drift
+apart, disagree on a boundary, and both sets of tests stay green. They now
+answer the same question over the same keys in both table states and must
+agree, red-green on each arm separately.
+
+Fifteen never-executed regions sat in the tombstone arm, and they arrived
+honestly: the change that stopped a single `DEL` from putting the table on
+its slow probe for the rest of its life left the arm almost never entered.
+A fix working and a correctness path going quiet are the same event.
+
 ### Deferred, with the reason
 
 `C-STRUCT-PRIVATE` — 740 public fields on public structs — is a real
