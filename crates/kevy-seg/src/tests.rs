@@ -356,6 +356,23 @@ mod manifest {
             assert_eq!(m.live().count(), 3, "torn tail of {cut} bytes lost an entry");
         }
     }
+
+    /// `append` refuses a record larger than the reader is willing to
+    /// believe, because that bound is exactly what lets `replay` tell a
+    /// damaged length from a torn tail. A writer that could exceed it
+    /// would be writing something the reader must later call corrupt.
+    #[test]
+    fn a_record_too_large_for_the_reader_is_refused_by_the_writer() {
+        let d = kevy_tmpdir::TmpDir::new("man-toobig");
+        let mut m = Manifest::open(d.path()).unwrap();
+        let mut e = entry("huge.seg", 1);
+        e.meta = vec![0u8; 128 * 1024];
+        let err = m.add(e).expect_err("a record past the reader's bound must be refused");
+        assert!(format!("{err}").contains("too large"), "the refusal must say why, got: {err}");
+        // And the ledger is untouched — a refused write leaves nothing.
+        drop(m);
+        assert_eq!(Manifest::open(d.path()).unwrap().live().count(), 0);
+    }
 }
 
 /// A count read out of a file is a claim, not a size.
