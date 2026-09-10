@@ -705,6 +705,52 @@ was one line: `conns=0`, on all 121 heartbeats spanning the client's
 30-second wait. The connection was already gone while the client still
 saw it open, which leaves only the teardown.
 
+### Four interleaving searches that reported success by never running
+
+kevy has two loom suites — one over `kevy-ring`'s SPSC handshake, one
+over the cross-shard park/wake fence — and between them they are the
+stated proof for the memory orderings on the hot cross-core path. Both
+files are `#![cfg(loom)]`, and nothing in this repository ever passed
+`--cfg loom`. So what every run of `cargo test --workspace` did with them
+was print `running 0 tests` / `test result: ok` and move on. Three
+production sites cite one of those tests by name as the argument for
+their `SeqCst` ordering: `shard_run.rs`, `shard_flush.rs`, `uring_park.rs`.
+
+`tools/check_loom.py` runs both under the cfg and demands the count. The
+floor is read from the source — the number of `#[test]` functions in each
+`loom.rs` — so a harness that goes silent again fails, and so does a new
+loom test the cfg build does not pick up; a hardcoded four would catch
+only the first. An abort with no summary line is a failure and not a
+missing opinion, which matters because that is exactly how loom reports a
+broken ordering: it panics inside a destructor during model cleanup, so
+the process dies on `SIGABRT` having printed no `test result:` at all.
+Red-green both ways: relaxing the `Release` on the ring's tail store
+makes the gate report the abort; a `#[test]` the cfg build cannot see
+makes it report `3 #[test] ... but only 2 ran`.
+
+**And the park/wake suite was testing a copy of the code.** Its two tests
+declared their own atomics and reproduced the fence pattern in the test
+body. That proves the pattern sound and says nothing about whether
+kevy-rt implements it — the fence could have been deleted from all three
+production sites and both tests would have stayed green, while all three
+sites pointed at them. The pairing now lives in one module,
+`kevy-rt/src/park_fence.rs`, whose four functions the three sites call
+and the loom suite schedules; under `--cfg loom` its flag becomes loom's
+instrumented atomic. Verified by removing each fence on its own: with
+either gone, both tests fail. The payload in the model is published at
+the ring's real `Release`/`Acquire` rather than at `SeqCst`, so the model
+is not a stronger machine than the one this runs on.
+
+Two claims in those files' headers were guesses, and measurement refused
+both. "Total wall-clock is on the order of 1-10s" — it is 0.00 s. And
+"bumping to 3+ explodes the state space combinatorially", which was the
+stated reason for leaving the preemption bound at its default: at bounds
+2/3/4/5 the ring suite costs 0.00/0.01/0.02/0.04 s and the park/wake
+suite does not leave 0.00 s at any bound through 6. The gate searches at
+5. A third claim, that production still lacked the fences and carried a
+50 ms lost-wake window, had been false for some time; it survived because
+nothing ran the file that would have said so.
+
 ### Deferred, with the reason
 
 `C-STRUCT-PRIVATE` — 740 public fields on public structs — is a real
