@@ -3,6 +3,25 @@
 //! stone under plain `cargo test`, where llvm-cov can see it and where an
 //! ABI regression fails without a C toolchain in the loop.
 
+//!
+//! # Safety of the calls below
+//!
+//! Every `unsafe` block in this file is a call into kevy's own C ABI, and they
+//! all rest on the same three facts, stated here once rather than repeated at
+//! each of the ~100 call sites:
+//!
+//! 1. **Handles are live.** Each `KevyDb` comes from `kevy_open*` earlier in
+//!    the same test and is closed exactly once, at the end. Subscriptions come
+//!    from `kevy_subscribe` / `kevy_psubscribe` on such a handle.
+//! 2. **Pointer/length pairs match.** Every pointer passed is `as_ptr()` on a
+//!    local slice or array still in scope, and the length beside it is that
+//!    slice's own `len()` — which is what each entry point's `# Safety`
+//!    section requires.
+//! 3. **Out-parameters are live locals.** `&raw mut out` always names a
+//!    `KevyBuf` on the current frame.
+//!
+//! Where a call deliberately passes null, the comment says so: those tests
+//! exist to prove the guard returns an error instead of dereferencing.
 use super::*;
 use crate::batch::kevy_set_many;
 
@@ -10,6 +29,7 @@ fn cmd(db: *mut KevyDb, argv: &[&[u8]]) -> Vec<u8> {
     let ptrs: Vec<*const u8> = argv.iter().map(|a| a.as_ptr()).collect();
     let lens: Vec<usize> = argv.iter().map(|a| a.len()).collect();
     let mut out = KevyBuf::empty();
+    // SAFETY: live handle and live locals — see the module note.
     let rc = unsafe { kevy_cmd(db, argv.len(), ptrs.as_ptr(), lens.as_ptr(), &raw mut out) };
     assert_eq!(rc, 0, "kevy_cmd misuse");
     take(out)
@@ -19,8 +39,10 @@ fn take(buf: KevyBuf) -> Vec<u8> {
     let v = if buf.ptr.is_null() {
         Vec::new()
     } else {
+        // SAFETY: pointer and length are the pair the ABI just produced.
         unsafe { std::slice::from_raw_parts(buf.ptr, buf.len) }.to_vec()
     };
+    // SAFETY: buffer from this ABI, freed once; null/zero is the documented no-op.
     unsafe { kevy_buf_free(buf.ptr, buf.len, buf.cap) };
     v
 }
@@ -30,8 +52,10 @@ fn take_shared(buf: KevyBuf) -> Vec<u8> {
     let v = if buf.ptr.is_null() {
         Vec::new()
     } else {
+        // SAFETY: pointer and length are the pair the ABI just produced.
         unsafe { std::slice::from_raw_parts(buf.ptr, buf.len) }.to_vec()
     };
+    // SAFETY: buffer from this ABI, freed once; null/zero is the documented no-op.
     unsafe { kevy_buf_free_shared(buf.ptr, buf.len, buf.cap) };
     v
 }
@@ -41,35 +65,44 @@ fn shared_get_zero_copy_small_and_bulk_and_plain_lane_unchanged() {
     let db = kevy_open_mem();
     let small = b"tiny"; // inline Value::Str
     let big = vec![0x61u8; 4096]; // > 64 B → Value::ArcBulk (the zero-copy path)
+    // SAFETY: live handle and live locals — see the module note at the top of this file.
     unsafe {
         assert_eq!(kevy_set(db, b"s".as_ptr(), 1, small.as_ptr(), small.len(), 0), 0);
         assert_eq!(kevy_set(db, b"b".as_ptr(), 1, big.as_ptr(), big.len(), 0), 0);
     }
     // Shared GET returns the exact bytes for both encodings.
     let mut out = KevyBuf::empty();
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_get_shared(db, b"s".as_ptr(), 1, &raw mut out) }, 1);
     assert_eq!(take_shared(out), small);
     let mut out = KevyBuf::empty();
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_get_shared(db, b"b".as_ptr(), 1, &raw mut out) }, 1);
     assert_eq!(take_shared(out), big);
     // Miss.
     let mut out = KevyBuf::empty();
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_get_shared(db, b"absent".as_ptr(), 6, &raw mut out) }, 0);
     // The bulk value is STILL intact after the shared buffer was freed — the Arc
     // was dropped exactly once, the store's own clone lives on (no UAF/double-free).
     let mut out = KevyBuf::empty();
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_get(db, b"b".as_ptr(), 1, &raw mut out) }, 1);
     assert_eq!(take(out), big); // plain (Vec) lane byte-unchanged
     // Misuse + null-cap free no-op.
     let mut out = KevyBuf::empty();
+    // SAFETY: null on purpose — the contract documents the error return this checks.
     assert!(unsafe { kevy_get_shared(std::ptr::null_mut(), b"s".as_ptr(), 1, &raw mut out) } < 0);
+    // SAFETY: null on purpose — the contract documents the error return this checks.
     unsafe { kevy_buf_free_shared(std::ptr::null_mut(), 0, 0) };
+    // SAFETY: live handle from `kevy_open`, closed once. See the module note.
     unsafe { kevy_close(db) };
 }
 
 #[test]
 fn version_and_abi() {
     assert_eq!(kevy_abi(), KEVY_ABI);
+    // SAFETY: the ABI returns a NUL-terminated static that outlives this borrow.
     let v = unsafe { std::ffi::CStr::from_ptr(kevy_version()) };
     assert_eq!(v.to_str().unwrap(), env!("CARGO_PKG_VERSION"));
 }
@@ -84,6 +117,7 @@ fn cmd_round_trip_and_protocol_error() {
     // A protocol error is a successful call with a RESP error inside.
     assert_eq!(cmd(db, &[b"NOSUCHVERB"])[0], b'-');
 
+    // SAFETY: live handle from `kevy_open`, closed once. See the module note.
     unsafe { kevy_close(db) };
 }
 
@@ -94,17 +128,26 @@ fn misuse_is_reported_not_undefined() {
     let p: *const u8 = b"X".as_ptr();
     let l = 1usize;
     assert!(
+        // SAFETY: null on purpose — the contract documents the error return this checks.
         unsafe { kevy_cmd(std::ptr::null_mut(), 1, &raw const p, &raw const l, &raw mut out) } < 0
     );
     let db = kevy_open_mem();
+    // SAFETY: live handle and live locals — see the module note.
     assert!(unsafe { kevy_cmd(db, 0, &raw const p, &raw const l, &raw mut out) } < 0);
+    // SAFETY: null on purpose — the contract documents the error return this checks.
     assert!(unsafe { kevy_cmd(db, 1, &raw const p, &raw const l, std::ptr::null_mut()) } < 0);
+    // SAFETY: null on purpose — the contract documents the error return this checks.
     assert!(unsafe { kevy_get(db, std::ptr::null(), 0, &raw mut out) } < 0);
+    // SAFETY: null on purpose — the contract documents the error return this checks.
     assert!(unsafe { kevy_set(db, std::ptr::null(), 0, std::ptr::null(), 0, 0) } < 0);
     // Null handles are no-ops, exactly once each.
+    // SAFETY: null on purpose — the contract documents the error return this checks.
     unsafe { kevy_close(std::ptr::null_mut()) };
+    // SAFETY: null on purpose — the contract documents the error return this checks.
     unsafe { kevy_sub_close(std::ptr::null_mut()) };
+    // SAFETY: null on purpose — the contract documents the error return this checks.
     unsafe { kevy_buf_free(std::ptr::null_mut(), 0, 0) };
+    // SAFETY: live handle from `kevy_open`, closed once. See the module note.
     unsafe { kevy_close(db) };
 }
 
@@ -112,52 +155,67 @@ fn misuse_is_reported_not_undefined() {
 fn scalar_fast_path_hits_misses_and_ttl() {
     let db = kevy_open_mem();
     let k = b"fast";
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_set(db, k.as_ptr(), k.len(), b"v".as_ptr(), 1, 0) }, 0);
     let mut out = KevyBuf::empty();
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_get(db, k.as_ptr(), k.len(), &raw mut out) }, 1);
     assert_eq!(take(out), b"v");
     let mut out = KevyBuf::empty();
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_get(db, b"absent".as_ptr(), 6, &raw mut out) }, 0);
     // TTL through the fast path, observed through the verb surface.
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_set(db, k.as_ptr(), k.len(), b"w".as_ptr(), 1, 30_000) }, 0);
     let pttl = cmd(db, &[b"PTTL", b"fast"]);
     let n: i64 = std::str::from_utf8(&pttl[1..pttl.len() - 2]).unwrap().parse().unwrap();
     assert!(n > 0 && n <= 30_000, "pttl = {n}");
+    // SAFETY: live handle from `kevy_open`, closed once. See the module note.
     unsafe { kevy_close(db) };
 }
 
 #[test]
 fn pubsub_ack_message_and_pattern_frames() {
     let db = kevy_open_mem();
+    // SAFETY: live handle and live locals — see the module note.
     let sub = unsafe { kevy_subscribe(db, b"c1".as_ptr(), 2) };
     assert!(!sub.is_null());
+    // SAFETY: live handle and live locals — see the module note.
     let psub = unsafe { kevy_psubscribe(db, b"c*".as_ptr(), 2) };
     assert!(!psub.is_null());
 
     // Each drains its subscribe ack first.
     let mut out = KevyBuf::empty();
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_sub_next(sub, &raw mut out) }, 1);
     assert!(take(out).starts_with(b"*3\r\n$9\r\nsubscribe\r\n"));
     let mut out = KevyBuf::empty();
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_sub_next(psub, &raw mut out) }, 1);
     assert!(take(out).starts_with(b"*3\r\n$10\r\npsubscribe\r\n"));
 
     // One publish reaches both: message on the channel, pmessage on the glob.
     assert_eq!(cmd(db, &[b"PUBLISH", b"c1", b"hi"]), b":2\r\n");
     let mut out = KevyBuf::empty();
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_sub_next(sub, &raw mut out) }, 1);
     assert_eq!(take(out), b"*3\r\n$7\r\nmessage\r\n$2\r\nc1\r\n$2\r\nhi\r\n");
     let mut out = KevyBuf::empty();
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_sub_next(psub, &raw mut out) }, 1);
     assert_eq!(take(out), b"*4\r\n$8\r\npmessage\r\n$2\r\nc*\r\n$2\r\nc1\r\n$2\r\nhi\r\n");
 
     // Drained: 0 with an empty (non-freeable) buffer.
     let mut out = KevyBuf::empty();
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_sub_next(sub, &raw mut out) }, 0);
     assert!(out.ptr.is_null());
 
+    // SAFETY: live subscription, closed once. See the module note.
     unsafe { kevy_sub_close(sub) };
+    // SAFETY: live subscription, closed once. See the module note.
     unsafe { kevy_sub_close(psub) };
+    // SAFETY: live handle from `kevy_open`, closed once. See the module note.
     unsafe { kevy_close(db) };
 }
 
@@ -173,13 +231,16 @@ fn open_with_options_and_shutdown_lifecycle() {
         rewrite_bytes: 0,
         rewrite_interval_secs: 0,
     };
+    // SAFETY: null on purpose — the contract documents the error return this checks.
     let db = unsafe { kevy_open_with(std::ptr::null(), 0, &raw const opts) };
     assert!(!db.is_null());
     assert_eq!(cmd(db, &[b"SET", b"k", b"v"]), b"+OK\r\n");
 
     // Shutdown: writes refuse (an -ERR reply through the cmd lane), reads
     // keep answering, and the call is idempotent.
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_shutdown(db) }, 0);
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_shutdown(db) }, 0);
     let reply = cmd(db, &[b"SET", b"k", b"w"]);
     assert!(
@@ -188,10 +249,13 @@ fn open_with_options_and_shutdown_lifecycle() {
         String::from_utf8_lossy(&reply)
     );
     assert_eq!(cmd(db, &[b"GET", b"k"]), b"$1\r\nv\r\n");
+    // SAFETY: null on purpose — the contract documents the error return this checks.
     assert_eq!(unsafe { kevy_shutdown(std::ptr::null_mut()) }, -1);
+    // SAFETY: live handle from `kevy_open`, closed once. See the module note.
     unsafe { kevy_close(db) };
 
     // dir=null with a non-zero length is misuse, not an in-memory open.
+    // SAFETY: null on purpose — the contract documents the error return this checks.
     assert!(unsafe { kevy_open_with(std::ptr::null(), 3, &raw const opts) }.is_null());
 }
 
@@ -206,11 +270,14 @@ fn open_report_is_zeroed_for_a_clean_memory_open() {
         corrupt: 1,
         quarantine_count: 1,
     };
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_open_report(db, &raw mut rep) }, 0);
     assert_eq!(rep.dropped_bytes, 0);
     assert_eq!(rep.corrupt, 0);
     assert_eq!(rep.quarantine_count, 0);
+    // SAFETY: null on purpose — the contract documents the error return this checks.
     assert_eq!(unsafe { kevy_open_report(std::ptr::null_mut(), &raw mut rep) }, -1);
+    // SAFETY: live handle from `kevy_open`, closed once. See the module note.
     unsafe { kevy_close(db) };
 }
 
@@ -219,47 +286,62 @@ fn publish_scalar_counts_and_delivers_same_frames_as_framed() {
     let db = kevy_open_mem();
 
     // No subscribers: the count is 0, and misuse is a clean -1.
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_publish(db, b"c1".as_ptr(), 2, b"hi".as_ptr(), 2) }, 0);
     assert_eq!(
+        // SAFETY: null on purpose — the contract documents the error return this checks.
         unsafe { kevy_publish(std::ptr::null_mut(), b"c1".as_ptr(), 2, b"hi".as_ptr(), 2) },
         -1
     );
 
     // One channel sub + one pattern sub: same :2 a framed PUBLISH reports,
     // and each receives the identical frame bytes the framed lane delivers.
+    // SAFETY: live handle and live locals — see the module note.
     let sub = unsafe { kevy_subscribe(db, b"c1".as_ptr(), 2) };
+    // SAFETY: live handle and live locals — see the module note.
     let psub = unsafe { kevy_psubscribe(db, b"c*".as_ptr(), 2) };
     let mut out = KevyBuf::empty();
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_sub_next(sub, &raw mut out) }, 1);
     drop(take(out)); // subscribe ack
     let mut out = KevyBuf::empty();
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_sub_next(psub, &raw mut out) }, 1);
     drop(take(out)); // psubscribe ack
 
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_publish(db, b"c1".as_ptr(), 2, b"hi".as_ptr(), 2) }, 2);
     let mut out = KevyBuf::empty();
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_sub_next(sub, &raw mut out) }, 1);
     assert_eq!(take(out), b"*3\r\n$7\r\nmessage\r\n$2\r\nc1\r\n$2\r\nhi\r\n");
     let mut out = KevyBuf::empty();
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_sub_next(psub, &raw mut out) }, 1);
     assert_eq!(take(out), b"*4\r\n$8\r\npmessage\r\n$2\r\nc*\r\n$2\r\nc1\r\n$2\r\nhi\r\n");
 
     // Empty payload is legal (null ptr allowed only with len 0).
+    // SAFETY: null on purpose — the contract documents the error return this checks.
     assert_eq!(unsafe { kevy_publish(db, b"c1".as_ptr(), 2, std::ptr::null(), 0) }, 2);
 
+    // SAFETY: live subscription, closed once. See the module note.
     unsafe { kevy_sub_close(sub) };
+    // SAFETY: live subscription, closed once. See the module note.
     unsafe { kevy_sub_close(psub) };
+    // SAFETY: live handle from `kevy_open`, closed once. See the module note.
     unsafe { kevy_close(db) };
 }
 
 #[test]
 fn sub_wait_blocks_then_delivers_and_times_out() {
     let db = kevy_open_mem();
+    // SAFETY: live handle and live locals — see the module note.
     let sub = unsafe { kevy_subscribe(db, b"c1".as_ptr(), 2) };
     assert!(!sub.is_null());
 
     // The subscribe ack is already queued — wait returns it at once.
     let mut out = KevyBuf::empty();
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_sub_wait(sub, 1000, &raw mut out) }, 1);
     assert!(take(out).starts_with(b"*3\r\n$9\r\nsubscribe\r\n"));
 
@@ -267,6 +349,7 @@ fn sub_wait_blocks_then_delivers_and_times_out() {
     // (and it actually parked — no busy-spin — for ~the timeout).
     let mut out = KevyBuf::empty();
     let t = std::time::Instant::now();
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_sub_wait(sub, 50, &raw mut out) }, 0);
     assert!(out.ptr.is_null());
     assert!(t.elapsed() >= std::time::Duration::from_millis(40));
@@ -278,11 +361,14 @@ fn sub_wait_blocks_then_delivers_and_times_out() {
         cmd(db2 as *mut _, &[b"PUBLISH", b"c1", b"hi"]);
     });
     let mut out = KevyBuf::empty();
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_sub_wait(sub, 2000, &raw mut out) }, 1);
     assert_eq!(take(out), b"*3\r\n$7\r\nmessage\r\n$2\r\nc1\r\n$2\r\nhi\r\n");
     h.join().unwrap();
 
+    // SAFETY: live subscription, closed once. See the module note.
     unsafe { kevy_sub_close(sub) };
+    // SAFETY: live handle from `kevy_open`, closed once. See the module note.
     unsafe { kevy_close(db) };
 }
 
@@ -292,17 +378,21 @@ fn raw_drain_returns_payload_and_framed_lane_is_unchanged() {
     // Two independent subscriptions on the same channel: one drained raw,
     // one drained framed — proving both lanes see the same publish and each
     // returns its own shape.
+    // SAFETY: live handle and live locals — see the module note.
     let raw = unsafe { kevy_subscribe(db, b"c1".as_ptr(), 2) };
+    // SAFETY: live handle and live locals — see the module note.
     let framed = unsafe { kevy_subscribe(db, b"c1".as_ptr(), 2) };
     assert!(!raw.is_null() && !framed.is_null());
 
     // The raw lane SKIPS the subscribe ack (a control frame, no payload):
     // with only the ack queued it reports 0 (nothing *with a payload*).
     let mut out = KevyBuf::empty();
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_sub_next_raw(raw, &raw mut out) }, 0);
     assert!(out.ptr.is_null());
     // The framed lane still delivers that ack as a full RESP array.
     let mut out = KevyBuf::empty();
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_sub_next(framed, &raw mut out) }, 1);
     assert!(take(out).starts_with(b"*3\r\n$9\r\nsubscribe\r\n"));
 
@@ -310,52 +400,66 @@ fn raw_drain_returns_payload_and_framed_lane_is_unchanged() {
 
     // Raw lane: exactly the payload bytes, no framing.
     let mut out = KevyBuf::empty();
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_sub_next_raw(raw, &raw mut out) }, 1);
     assert_eq!(take(out), b"hello");
     // Framed lane: byte-for-byte the RESP array the server pushes — proof the
     // existing lane is unaffected by the new one.
     let mut out = KevyBuf::empty();
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_sub_next(framed, &raw mut out) }, 1);
     assert_eq!(take(out), b"*3\r\n$7\r\nmessage\r\n$2\r\nc1\r\n$5\r\nhello\r\n");
 
     // Drained: raw reports 0 with an empty (non-freeable) buffer.
     let mut out = KevyBuf::empty();
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_sub_next_raw(raw, &raw mut out) }, 0);
     assert!(out.ptr.is_null());
 
     // Pattern subscriber: raw still hands back just the payload.
+    // SAFETY: live handle and live locals — see the module note.
     let praw = unsafe { kevy_psubscribe(db, b"c*".as_ptr(), 2) };
     assert_eq!(cmd(db, &[b"PUBLISH", b"c1", b"world"]), b":3\r\n");
     let mut out = KevyBuf::empty();
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_sub_next_raw(praw, &raw mut out) }, 1);
     assert_eq!(take(out), b"world");
 
     // Misuse is reported, not undefined.
     let mut misuse = KevyBuf::empty();
+    // SAFETY: null on purpose — the contract documents the error return this checks.
     assert!(unsafe { kevy_sub_next_raw(std::ptr::null_mut(), &raw mut misuse) } < 0);
+    // SAFETY: null on purpose — the contract documents the error return this checks.
     assert!(unsafe { kevy_sub_next_raw(raw, std::ptr::null_mut()) } < 0);
 
+    // SAFETY: live subscription, closed once. See the module note.
     unsafe { kevy_sub_close(raw) };
+    // SAFETY: live subscription, closed once. See the module note.
     unsafe { kevy_sub_close(framed) };
+    // SAFETY: live subscription, closed once. See the module note.
     unsafe { kevy_sub_close(praw) };
+    // SAFETY: live handle from `kevy_open`, closed once. See the module note.
     unsafe { kevy_close(db) };
 }
 
 #[test]
 fn sub_wait_raw_skips_ack_blocks_then_delivers_payload() {
     let db = kevy_open_mem();
+    // SAFETY: live handle and live locals — see the module note.
     let sub = unsafe { kevy_subscribe(db, b"c1".as_ptr(), 2) };
     assert!(!sub.is_null());
 
     // The subscribe ack is queued but carries no payload: wait_raw reports 0
     // (re-wait), it does NOT surface framing bytes.
     let mut out = KevyBuf::empty();
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_sub_wait_raw(sub, 1000, &raw mut out) }, 0);
     assert!(out.ptr.is_null());
 
     // Nothing queued now: a bounded wait times out (0), and it actually parked.
     let mut out = KevyBuf::empty();
     let t = std::time::Instant::now();
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_sub_wait_raw(sub, 50, &raw mut out) }, 0);
     assert!(out.ptr.is_null());
     assert!(t.elapsed() >= std::time::Duration::from_millis(40));
@@ -367,16 +471,21 @@ fn sub_wait_raw_skips_ack_blocks_then_delivers_payload() {
         cmd(db2 as *mut _, &[b"PUBLISH", b"c1", b"payload-only"]);
     });
     let mut out = KevyBuf::empty();
+    // SAFETY: live handle and live locals — see the module note.
     assert_eq!(unsafe { kevy_sub_wait_raw(sub, 2000, &raw mut out) }, 1);
     assert_eq!(take(out), b"payload-only");
     h.join().unwrap();
 
     // Misuse.
     let mut misuse = KevyBuf::empty();
+    // SAFETY: null on purpose — the contract documents the error return this checks.
     assert!(unsafe { kevy_sub_wait_raw(std::ptr::null_mut(), 0, &raw mut misuse) } < 0);
+    // SAFETY: null on purpose — the contract documents the error return this checks.
     assert!(unsafe { kevy_sub_wait_raw(sub, 0, std::ptr::null_mut()) } < 0);
 
+    // SAFETY: live subscription, closed once. See the module note.
     unsafe { kevy_sub_close(sub) };
+    // SAFETY: live handle from `kevy_open`, closed once. See the module note.
     unsafe { kevy_close(db) };
 }
 
@@ -385,18 +494,24 @@ fn persistent_open_survives_close_and_reopen() {
     let dir = kevy_tmpdir_path();
     let bytes = dir.as_bytes();
 
+    // SAFETY: live handle and live locals — see the module note.
     let db = unsafe { kevy_open(bytes.as_ptr(), bytes.len()) };
     assert!(!db.is_null());
     assert_eq!(cmd(db, &[b"SET", b"durable", b"yes"]), b"+OK\r\n");
+    // SAFETY: live handle from `kevy_open`, closed once. See the module note.
     unsafe { kevy_close(db) };
 
+    // SAFETY: live handle and live locals — see the module note.
     let db = unsafe { kevy_open(bytes.as_ptr(), bytes.len()) };
     assert!(!db.is_null());
     assert_eq!(cmd(db, &[b"GET", b"durable"]), b"$3\r\nyes\r\n");
+    // SAFETY: live handle from `kevy_open`, closed once. See the module note.
     unsafe { kevy_close(db) };
 
     // Invalid UTF-8 and null dirs fail closed.
+    // SAFETY: live handle and live locals — see the module note.
     assert!(unsafe { kevy_open(b"\xff\xfe".as_ptr(), 2) }.is_null());
+    // SAFETY: null on purpose — the contract documents the error return this checks.
     assert!(unsafe { kevy_open(std::ptr::null(), 0) }.is_null());
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -412,17 +527,20 @@ fn set_many_batches_writes_and_each_key_reads_back() {
     let klens: Vec<usize> = keys.iter().map(|k| k.len()).collect();
     let vptrs: Vec<*const u8> = vals.iter().map(|v| v.as_ptr()).collect();
     let vlens: Vec<usize> = vals.iter().map(|v| v.len()).collect();
+    // SAFETY: live handle and live locals — see the module note at the top of this file.
     let rc = unsafe {
         kevy_set_many(db, 3, kptrs.as_ptr(), klens.as_ptr(), vptrs.as_ptr(), vlens.as_ptr())
     };
     assert_eq!(rc, 0);
     for (k, expect) in keys.iter().zip(vals.iter()) {
         let mut out = KevyBuf::empty();
+        // SAFETY: live handle and live locals — see the module note.
         let hit = unsafe { kevy_get(db, k.as_ptr(), k.len(), &raw mut out) };
         assert_eq!(hit, 1, "key not found after set_many");
         assert_eq!(take(out), *expect);
     }
     // n == 0 is a clean no-op; a null db is misuse.
+    // SAFETY: live handle and live locals — see the module note at the top of this file.
     let no_op = unsafe {
         kevy_set_many(
             db,
@@ -434,6 +552,7 @@ fn set_many_batches_writes_and_each_key_reads_back() {
         )
     };
     assert_eq!(no_op, 0);
+    // SAFETY: live handle and live locals — see the module note at the top of this file.
     let rc_null = unsafe {
         kevy_set_many(
             std::ptr::null_mut(),
@@ -445,6 +564,7 @@ fn set_many_batches_writes_and_each_key_reads_back() {
         )
     };
     assert_eq!(rc_null, -1);
+    // SAFETY: live handle from `kevy_open`, closed once. See the module note.
     unsafe { kevy_close(db) };
 }
 

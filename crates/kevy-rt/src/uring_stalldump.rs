@@ -85,7 +85,20 @@ impl<C: Commands> Shard<C> {
                 eprintln!("kevy: STALL shard {} conn {cid}: no UringConn entry", self.id);
                 continue;
             };
-            if uc.recv_armed || uc.write_inflight || uc.closing {
+            // `closing` is NOT a reason to skip, and used to be one.
+            //
+            // The other two are: an armed recv and an in-flight write each
+            // have an outstanding completion that brings the conn back.
+            // A closing conn has no such guarantee — it is waiting on
+            // `uring_reap_closed`, whose own two terms can stay false
+            // forever, and whose candidate list it may never have entered.
+            // Skipping it made the dump silent on the one shape it was
+            // built to name: decided-to-close, never landed.
+            if uc.closing {
+                self.dump_closing_conn(*cid, conn, uc);
+                continue;
+            }
+            if uc.recv_armed || uc.write_inflight {
                 continue;
             }
             self.dump_stalled_conn(*cid, conn, uc);
@@ -114,14 +127,50 @@ impl<C: Commands> Shard<C> {
             conn.next_emit,
         );
     }
+
+    /// One closing conn's line, reported in the reap's own terms.
+    ///
+    /// [`Self::uring_reap_closed`] drops a conn when it is a candidate
+    /// AND `writes_quiet && drained`. Each of those is printed here
+    /// separately, alongside candidate-list membership, because a closing
+    /// conn that outlives one dump interval failed exactly one of them and
+    /// no other reading says which. A conn absent from the candidate list
+    /// is never retried at all, so that flag is not a detail: it is the
+    /// difference between "waiting on a write" and "unreachable".
+    fn dump_closing_conn(&self, cid: u64, conn: &crate::conn::Conn, uc: &UringConn) {
+        let writes_quiet = !uc.write_inflight && uc.write_buf.is_empty();
+        let drained = conn.output.is_empty() && conn.pending.is_empty() && conn.write_pos == 0;
+        eprintln!(
+            "kevy: STALL shard {} conn {cid}: CLOSING reap_candidate={} \
+             writes_quiet={writes_quiet} (write_inflight={} write_buf={}) \
+             drained={drained} (output={} pending={} write_pos={}) \
+             recv_armed={} big_read_inflight={} big_arg={} cancel_pending={}",
+            self.id,
+            self.closing_uring_conns.contains(&cid),
+            uc.write_inflight,
+            uc.write_buf.len(),
+            conn.output.len(),
+            conn.pending.len(),
+            conn.write_pos,
+            uc.recv_armed,
+            // Every term of `closing_conn_is_quiet` appears on this
+            // line, and this one is why: the dump has to move whenever
+            // the predicate does, or the next wedge is diagnosed against
+            // a condition that stopped being the condition.
+            uc.big_read_inflight,
+            describe_big_arg(uc),
+            uc.big_arg_cancel_pending,
+        );
+    }
 }
 
 /// Stall-dump cadence from `KEVY_DEBUG_STALL_MS`; `None` (the default)
 /// disables [`Shard::uring_maybe_dump_stalled`] entirely.
+///
+/// The parsing lives in [`crate::uring_stall_cadence`] where it can be
+/// tested on any host; what stays here is the environment read, which
+/// only the io_uring reactor performs.
 pub(crate) fn stall_dump_interval() -> Option<std::time::Duration> {
-    std::env::var("KEVY_DEBUG_STALL_MS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .filter(|ms| *ms > 0)
-        .map(std::time::Duration::from_millis)
+    let raw = std::env::var("KEVY_DEBUG_STALL_MS").ok();
+    crate::uring_stall_cadence::parse_stall_dump_interval(raw.as_deref())
 }

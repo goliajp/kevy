@@ -6,6 +6,17 @@
 //! `( AND|OR|DIFF <sub> <sub> )` | `<index> RANGE <min> <max>` |
 //! `<index> EQ <v>`.
 
+// The sidecar IS the catalog's persistence — `boot` reads it and a
+// directory without one "boots empty". So a rename that fails loses
+// the index definitions at the next start, after the command that
+// created them has already replied OK. That is a gap, not a
+// non-event, and it is written up as an open question rather than
+// silently accepted here: .claude/OPEN-QUESTIONS-6.4.md §3.
+#![expect(
+    clippy::let_underscore_must_use,
+    reason = "the catalog has no other home; see .claude/OPEN-QUESTIONS-6.4.md"
+)]
+
 use kevy_resp::CmdError;
 use std::path::Path;
 
@@ -258,11 +269,9 @@ pub(crate) fn extension_op(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -
 /// order, target)*]` — read `f…` from every TARGET this shard owns.
 /// Chunk: `(row_idx: u32, (flen|MAX, bytes)*)*`.
 fn op_hydrate(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
-    let Some(nf) = argv
-        .get(2)
-        .and_then(|b| b.get(..4))
-        .map(|b| u32::from_le_bytes(b.try_into().expect("4 bytes")) as usize)
-    else {
+    let Some(nf) = argv.get(2).and_then(|b| b.get(..4)).map(|b| {
+        u32::from_le_bytes(b.try_into().expect("the get(..4) above returned Some")) as usize
+    }) else {
         return vec![crate::cmd_index_query::ST_BADARGS];
     };
     let fields = &argv[3..3 + nf];

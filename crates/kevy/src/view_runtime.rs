@@ -12,6 +12,7 @@ use kevy_store::Store;
 
 use crate::state::{CatalogState, Ctx, ShardCtx};
 
+#[derive(Debug)]
 struct ViewState {
     spec: ViewSpec,
     /// `Some` for materialized views.
@@ -21,7 +22,7 @@ struct ViewState {
 }
 
 /// One shard's view states. Owned by `crate::state::ShardCtx`.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(crate) struct ShardViews {
     generation: u64,
     views: Vec<ViewState>,

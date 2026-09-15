@@ -17,6 +17,12 @@
 //! frame — the parts that stop snapshots/rewrites carrying cold row
 //! data — are the next train; until then both still materialize.
 
+// Removing a segment that is already gone is the outcome asked for.
+// These run on the reclaim path, after the manifest no longer names the
+// file, so a failure here leaves a stray file that the next sweep
+// collects — and refusing would abandon the rest of the reclaim.
+#![expect(clippy::let_underscore_must_use, reason = "reclaim is idempotent and continues")]
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -25,6 +31,7 @@ use crate::{Store, key_heap_bytes_for, tier_codec};
 
 /// One shard's row-segment directory: the open segments and their
 /// live/dead record accounting (compaction's future trigger feed).
+#[derive(Debug)]
 pub(crate) struct SegRows {
     dir: PathBuf,
     /// Open segments, keyed by their stable seq (the file-name number
@@ -34,6 +41,7 @@ pub(crate) struct SegRows {
     seq: u32,
 }
 
+#[derive(Debug)]
 struct SegSlot {
     /// Arc so a [`crate::SnapshotView`] can pin the segment across the
     /// serializer thread, exactly like the vlog file pins.
@@ -55,6 +63,7 @@ impl SegRows {
 
 /// One sealed eviction batch: the segment's identity and EXACTLY the
 /// keys it holds (the commit's phase-change list).
+#[derive(Debug)]
 pub struct SealedRows {
     /// The segment's stable seq.
     pub seq: u32,
@@ -84,6 +93,7 @@ impl ColdRef {
 }
 
 impl SegRows {
+    #[expect(clippy::panic, reason = "a torn index must not be served as data")]
     fn read(&self, cref: ColdRef, key: &[u8]) -> Value {
         let slot = self.slot(cref.seg_ix());
         let payload = slot
@@ -91,6 +101,10 @@ impl SegRows {
             .get(key)
             .expect("segrows: segment read failed — refused, not healed")
             .unwrap_or_else(|| {
+                // Refuse rather than heal. A stub pointing at a segment that
+                // does not hold its key means the index and the segment
+                // disagree, and every other answer here — an empty value, a
+                // skipped row — hands the caller data that is not theirs.
                 panic!(
                     "segrows: stub for {:?} points at segment '{}' (seq {}) which does not hold it",
                     String::from_utf8_lossy(key),

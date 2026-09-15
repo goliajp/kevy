@@ -32,6 +32,14 @@
 //!   guard already in place for `redis.call` arrays). Beyond it,
 //!   encoder errors out — matches Redis 7's behaviour.
 
+// Seeding a sandbox global. A VM that refuses one fails the script
+// anyway, with its own message — "attempt to index a nil value" says
+// more than "set_global returned Err".
+#![expect(
+    clippy::let_underscore_must_use,
+    reason = "a VM that refuses a global fails the script with a better message"
+)]
+
 use luna_core::runtime::value::Value;
 use luna_core::vm::error::LuaError;
 use luna_core::vm::exec::Vm;

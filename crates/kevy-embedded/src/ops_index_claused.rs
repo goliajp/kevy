@@ -19,7 +19,7 @@ use crate::{KevyError, KevyResult};
 /// The bounds are raw bytes and are coerced with the type the field was
 /// DECLARED as, so a numeric range compares numerically rather than
 /// lexicographically.
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub enum ValueFilter<'a> {
     /// `field` between `min` and `max`, both inclusive.
     Range {
@@ -116,7 +116,7 @@ pub(crate) fn unknown_field(clause: &str, bad: &[u8], verb: &str, offered: &[&[u
 /// Everything a scalar RANGE/EQ query carries beyond its bounds and
 /// limit — the embedded twin of the wire's optional clauses.
 /// [`ScalarQueryOpts::default`] is the plain query.
-#[derive(Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct ScalarQueryOpts<'a> {
     /// `FILTER …`: non-scoring predicates over stored values, ANDed. A
     /// row without the stored value fails — absent is not a value.

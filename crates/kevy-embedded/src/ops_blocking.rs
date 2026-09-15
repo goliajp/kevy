@@ -31,6 +31,7 @@ use crate::store::Store;
 type ZPopHit = (Vec<u8>, Vec<u8>, f64);
 
 /// Process-wide wake channel for blocking pops.
+#[derive(Debug)]
 pub(crate) struct Blocker {
     waiters: AtomicUsize,
     generation: Mutex<u64>,

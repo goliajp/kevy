@@ -94,6 +94,7 @@ pub use kevy_store::Store as KeyspaceStore;
 pub use state::{KevyCommands, RuntimeState};
 
 /// What to do with a connection after draining its buffered commands.
+#[derive(Debug)]
 pub enum AfterDrain {
     /// Keep serving this connection — the ordinary outcome.
     KeepOpen,

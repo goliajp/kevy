@@ -13,6 +13,11 @@
 //! N for sets / push). This keeps the encoders alloc-free and matches how
 //! dispatch already streams replies into the conn's output buffer.
 
+// `write!` into an in-memory buffer returns a `Result` because
+// `fmt::Write` / `io::Write` must, not because it can fail: the
+// `String` and `Vec` impls are infallible. Said once here.
+#![expect(clippy::let_underscore_must_use, reason = "writing to an in-memory buffer cannot fail")]
+
 /// `%<count>\r\n` — a map header. Follow with `count` × 2 sub-replies
 /// (key₁ value₁ key₂ value₂ …). The count is the **pair** count, not
 /// the element count.

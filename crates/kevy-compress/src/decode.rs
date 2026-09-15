@@ -5,12 +5,48 @@
 //! `extend_from_within`, and only the two genuinely irregular cases —
 //! an overlapping match (offset < length: a repeating pattern by
 //! definition) and a match crossing the dictionary/output boundary —
-//! fall back to stepwise copies. The decode-budget probe put this an order
-//! of magnitude above the ~1 GB/s budget floor.
+//! fall back to stepwise copies.
+//!
+//! That was once written as "an order of magnitude above the ~1 GB/s
+//! budget floor", on the strength of `examples/k1_sanity`. That example
+//! trains the dictionary on the very value it then compresses, so the
+//! 4 KiB input becomes a 100-byte frame — a 41x ratio — and the decode
+//! it times is one long match out of the dictionary. No stored value is
+//! ever its own training sample.
+//!
+//! `examples/decode_budget` measures held-out values against a
+//! dictionary trained on a different sample, which is the shape
+//! `kevy-vlog` produces. On that shape the floor is met at 2.079 GB/s
+//! fast and 1.265 through compaction — through `Dict`. Through
+//! `decode`, which reparses the dictionary per call, it is 0.543 and
+//! 0.045. See `lib.rs`'s note on the decode requirement.
 //!
 //! A frame that walks outside its promised bounds at any point is
-//! rejected with [`Corrupt`] — truncated and bit-flipped frames must
-//! fail loudly, never mis-decode.
+//! rejected with [`Corrupt`]. That is a bound on the walk, and it is
+//! worth being exact about what it is not.
+//!
+//! **This layer does not detect corruption, and is not where that
+//! belongs.** A frame carries no checksum. A flipped bit that leaves
+//! every offset and length in range produces a different, structurally
+//! valid token stream, and the decode returns it — measured on a held-out
+//! JSON frame, 38% of single-byte flips decode to output of exactly the
+//! right length and the wrong contents. Integrity is `kevy-vlog`'s
+//! per-record `crc32c`, checked in `verify_image` **before** the frame
+//! reaches here; `lib.rs`'s decode says the same thing where it retries a
+//! 5.0.0-era tag ("the record's CRC already vouched for the bytes").
+//!
+//! What this layer does guarantee, for arbitrary bytes: it never reads
+//! outside a slice, never panics, never reserves on an unvalidated
+//! length, and never returns more than `orig_len`. Truncation it does
+//! catch, because a short frame cannot satisfy `out.len() == orig_len`.
+//! `a_bit_flip_can_decode_to_something_else` in `tests.rs` holds the
+//! distinction, so that the header cannot drift back into promising
+//! integrity it does not provide.
+//!
+//! The header did promise exactly that, in those words. What
+//! checked the promise was four sampled byte positions with one bit
+//! pattern each, and on its own fixture 894 of 2356 positions mis-decode
+//! — the four it happened to pick were not among them.
 
 use alloc::vec::Vec;
 
@@ -71,6 +107,7 @@ fn read_literal_block<'a>(
     rest: &'a [u8],
     lit_total: usize,
     lens: Option<&[u8; 256]>,
+    table: Option<&crate::huff::DecodeTable>,
 ) -> Result<(alloc::borrow::Cow<'a, [u8]>, usize), Corrupt> {
     match flag {
         0 => {
@@ -82,8 +119,13 @@ fn read_literal_block<'a>(
             Ok((alloc::borrow::Cow::Owned(l), used))
         }
         2 => {
-            let l = lens.ok_or(Corrupt)?;
-            let (out, bits) = crate::huff::read_bits(rest, l, lit_total)?;
+            // The dictionary-carried table. Built once per file when the
+            // caller holds a `Dict`; built here from the lengths only
+            // when it does not, which is the path `decode` takes.
+            let (out, bits) = match table {
+                Some(t) => crate::huff::read_bits_with(rest, t, lit_total)?,
+                None => crate::huff::read_bits(rest, lens.ok_or(Corrupt)?, lit_total)?,
+            };
             Ok((alloc::borrow::Cow::Owned(out), bits.div_ceil(8) as usize))
         }
         _ => Err(Corrupt),
@@ -151,12 +193,13 @@ fn copy_match(dict: &[u8], out: &mut Vec<u8>, dist: usize, len: usize) {
 pub(crate) fn lz_high(
     dict: &[u8],
     lens: Option<&[u8; 256]>,
+    table: Option<&crate::huff::DecodeTable>,
     payload: &[u8],
     orig_len: usize,
 ) -> Result<Vec<u8>, Corrupt> {
     let (lit_total, rest) = crate::read_varint(payload)?;
     let (&flag, rest) = rest.split_first().ok_or(Corrupt)?;
-    let (lits, seq_start) = read_literal_block(flag, rest, lit_total, lens)?;
+    let (lits, seq_start) = read_literal_block(flag, rest, lit_total, lens, table)?;
     let seqs = rest.get(seq_start..).ok_or(Corrupt)?;
     let mut out = Vec::with_capacity(reserve_for(orig_len, payload.len()));
     let (mut p, mut lp) = (0usize, 0usize);

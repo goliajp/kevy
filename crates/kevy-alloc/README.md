@@ -5,7 +5,9 @@ share-nothing engine. Pure Rust, zero dependencies, `no_std`-friendly.
 
 > **Status: experimental.** This is part of an ongoing v5 experiment, not
 > a settled design. Its premises are under test and may change. It is not
-> wired into kevy yet.
+> wired into kevy by default: `crates/kevy/src/main.rs:20` installs it
+> behind the off-by-default `kevy-alloc` feature, so a stock build
+> still runs on the system allocator.
 
 ## Why
 
@@ -67,7 +69,17 @@ Apple M4 Max, `--release`, medians over N samples
 | alloc+free 400 B | 5 ns | 18 ns |
 | alloc+free 4096 B | 5 ns | 16 ns |
 | churn 4096 × 400 B, interleaved free | 3.8 ns/op | 19.5 ns/op |
-| the same, **plus returning the pages** | 29.3 ns/op | — |
+| the same, **plus returning the pages** | 29.3 ns/op* | — |
+
+\* Taken on a machine whose page size is **16384**, while this crate
+computes its `madvise` ranges at 4096. Those ranges are not page
+aligned there; macOS answers 0 anyway and reclaims nothing, so the
+line timed a run of calls that could not do what it says. The reclaim
+path now refuses when the system page size is not `os::PAGE`, so the
+accounting no longer reports pages it did not return — and this row
+needs re-measuring on the 4096-page bench box before it means
+anything. It is left standing rather than deleted because a number
+that was wrong is evidence about how it was taken.
 
 The last row has no system column because there is nothing to compare it
 to: that is the operation glibc cannot perform at any price.

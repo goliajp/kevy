@@ -31,6 +31,7 @@ use kevy_resp_client::RespClient;
 /// primary node + one per replica node. Round-robins reads across
 /// the replica fleet (fallback to primary on empty fleet or
 /// `consistent = true`).
+#[derive(Debug)]
 pub struct ReadWriteClient {
     primary: RespClient,
     replicas: Vec<RespClient>,

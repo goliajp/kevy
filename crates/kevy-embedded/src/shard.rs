@@ -329,7 +329,11 @@ fn reshard(
     redistribute(&temp, n, stores);
     commit_reshard(dir, src_n, ShardsMeta { n, routing: Routing::KevyHash }, stores, &lay)?;
     // The merge scratch vlog is dead once the temp keyspace is gone.
+    // The attribute rides the same cfg as the code: a module-level one
+    // is unfulfilled in every build where this block is compiled out,
+    // and `expect` reports that as an error — correctly.
     #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
+    #[expect(clippy::let_underscore_must_use, reason = "the scratch dir is already dead")]
     if config.tier_budget.is_some() {
         drop(temp);
         let _ = std::fs::remove_dir_all(dir.join("tier").join(".reshard-merge"));

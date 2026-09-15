@@ -11,13 +11,14 @@
 use std::collections::{BTreeMap, HashMap};
 
 use crate::bm25::bm25_score;
-use crate::docblobs::put_varint;
+use crate::docblobs::{next_varint as read_varint, put_varint};
 use crate::positions::walk;
 use crate::segment::TextSegment;
 
 /// One slide batch's worth of frozen text entries: term → encoded
 /// posting payload, in term order (the segment builder's key order),
 /// plus the bucket's contribution to the corpus statistics.
+#[derive(Debug)]
 pub struct FrozenBucket {
     /// term → [`encode_posting`] payload, ascending by term.
     pub terms: BTreeMap<Vec<u8>, Vec<u8>>,
@@ -32,6 +33,7 @@ pub struct FrozenBucket {
 }
 
 /// One decoded cold posting entry.
+#[derive(Debug)]
 pub struct ColdEntry {
     /// The document's row key.
     pub key: Vec<u8>,
@@ -67,6 +69,7 @@ pub fn posting_df(payload: &[u8]) -> Option<u32> {
 
 /// One decoded forward record: the document's length, its terms, and
 /// its stored values (aligned with the declared VALUES order).
+#[derive(Debug)]
 pub struct FwdRecord {
     /// Document length (unweighted tokens).
     pub dl: u32,
@@ -260,23 +263,6 @@ pub fn highlight_fields(fields: &[Vec<u8>], query: &[u8]) -> Vec<(usize, Vec<(us
         }
     }
     out
-}
-
-fn read_varint(b: &[u8], at: &mut usize) -> Option<u32> {
-    let mut cur = 0u32;
-    let mut shift = 0u32;
-    loop {
-        let byte = *b.get(*at)?;
-        *at += 1;
-        cur |= u32::from(byte & 0x7f) << shift;
-        if byte & 0x80 == 0 {
-            return Some(cur);
-        }
-        shift += 7;
-        if shift > 28 {
-            return None;
-        }
-    }
 }
 
 impl TextSegment {

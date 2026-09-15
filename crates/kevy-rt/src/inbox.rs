@@ -6,6 +6,12 @@
 //! Split out so each file stays under the 500-LOC house rule without
 //! breaking the established two-impl-block layering.
 
+// Wakes and poller edits are advisory: a wake that does not land
+// delays the work to the next natural wakeup, and deleting an fd
+// the poller has already dropped reports what was wanted. Socket
+// options shape latency, not correctness.
+#![expect(clippy::let_underscore_must_use, reason = "a missed wake costs a tick, not a result")]
+
 use std::io;
 use std::sync::atomic::Ordering;
 

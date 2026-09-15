@@ -3,6 +3,14 @@
 //!
 //! [`RuntimeState`]: crate::RuntimeState
 
+// Best effort. What matters is reported by the path that owns the
+// outcome — the next read, the next tick, the returned value — and
+// this call is the notification, not the result.
+#![expect(
+    clippy::let_underscore_must_use,
+    reason = "best effort, with the real outcome reported elsewhere"
+)]
+
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::Path;
@@ -12,7 +20,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 /// One shard's observability slot. All atomics are `Relaxed`: these are
 /// statistics, never used to establish happens-before.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(crate) struct ShardStats {
     pub used_memory: AtomicU64,
     pub used_memory_peak: AtomicU64,
@@ -25,6 +33,9 @@ pub(crate) struct ShardStats {
     /// Live client conns on this shard right now (gauge, published per
     /// tick from the reactor's conn table; cluster-bus links excluded).
     pub clients_connected: AtomicU64,
+    /// Client conns parked in a blocking command on this shard right now
+    /// (gauge, published per tick alongside `clients_connected`).
+    pub blocked_clients: AtomicU64,
     /// High-water mark of the reactor tick's lateness (µs over its
     /// interval) — the single-iteration stall upper bound (V3 tail
     /// train). fetch_max'd from the tick, never reset.
@@ -43,12 +54,15 @@ pub(crate) struct ShardStats {
     /// This shard's tiering gauges (all zero when
     /// tiering is off — `tier_enabled` is the section gate).
     pub tier: TierGauges,
+    /// This shard's allocator terms (all zero, `reporting` included,
+    /// when kevy-alloc is not the global allocator).
+    pub alloc: AllocGauges,
 }
 
 /// One shard's `INFO # Tiering` slot — mirrors
 /// `kevy_store::TierStats`, published per tick alongside the memory
 /// gauges. All `Relaxed` (statistics, like everything else here).
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(crate) struct TierGauges {
     /// 1 when this shard's store has tiering enabled.
     pub enabled: AtomicU64,
@@ -68,6 +82,34 @@ pub(crate) struct TierGauges {
     pub vlog_epoch: AtomicU64,
 }
 
+/// One shard's `INFO # Allocator` slot — mirrors `kevy_alloc::Stats`,
+/// published per tick alongside the memory gauges by the shard thread
+/// that owns the heap being described (`thread_stats` answers for the
+/// calling thread only, so this is the one place it can be read).
+///
+/// The section exists because the accounting identity — every mapped
+/// byte in exactly one bucket — is the only way to say WHERE a resident
+/// ratio went. Without it, the one workload where this allocator loses
+/// to glibc can be measured but not explained.
+#[derive(Debug, Default)]
+pub(crate) struct AllocGauges {
+    /// 1 once this shard has published a real snapshot. The section
+    /// gate: a zeroed slot and a heap that genuinely holds nothing
+    /// are not the same answer.
+    pub reporting: AtomicU64,
+    pub mapped: AtomicU64,
+    pub live: AtomicU64,
+    pub rounding: AtomicU64,
+    pub cache: AtomicU64,
+    pub span_free: AtomicU64,
+    pub returned: AtomicU64,
+    pub virgin: AtomicU64,
+    pub hysteresis: AtomicU64,
+    pub segment_overhead: AtomicU64,
+    pub large_count: AtomicU64,
+    pub spans_assigned: AtomicU64,
+}
+
 /// Process-wide totals, summed across every shard slot.
 #[derive(Default)]
 pub(crate) struct Totals {
@@ -80,6 +122,8 @@ pub(crate) struct Totals {
     pub commands_processed: u64,
     pub connections_received: u64,
     pub clients_connected: u64,
+    /// SUM across shards — each blocked conn is registered on exactly one.
+    pub blocked_clients: u64,
     /// MAX across shards (a stall on one shard is the instance's
     /// answer — summing stalls would say something false).
     pub tick_gap_max_us: u64,
@@ -93,6 +137,10 @@ pub(crate) struct Totals {
     /// all do or none does — the config is process-wide).
     pub tier_enabled: bool,
     pub tier: TierTotals,
+    /// How many shards published an allocator snapshot. 0 = the section
+    /// is absent; it is also the denominator for reading the sums.
+    pub alloc_shards: u64,
+    pub alloc: AllocTotals,
 }
 
 /// The summed `# Tiering` gauges (budgets, floors and vlog gauges are
@@ -115,9 +163,62 @@ pub(crate) struct TierTotals {
     pub vlog_epoch: u64,
 }
 
+/// The summed allocator terms. Each shard has its own heap and the
+/// buckets are disjoint within one, so the sums stay an identity:
+/// `accounted` over all shards is comparable to `mapped` over all
+/// shards exactly as it is per-heap.
+#[derive(Default)]
+pub(crate) struct AllocTotals {
+    pub mapped: u64,
+    pub live: u64,
+    pub rounding: u64,
+    pub cache: u64,
+    pub span_free: u64,
+    pub returned: u64,
+    pub virgin: u64,
+    pub hysteresis: u64,
+    pub segment_overhead: u64,
+    pub large_count: u64,
+    pub spans_assigned: u64,
+}
+
+impl AllocTotals {
+    /// Fold one shard's heap into the totals. Every bucket is disjoint
+    /// within a heap and the heaps are disjoint from each other, so the
+    /// identity survives the sum term by term.
+    fn add(&mut self, g: &AllocGauges) {
+        self.mapped += g.mapped.load(Relaxed);
+        self.live += g.live.load(Relaxed);
+        self.rounding += g.rounding.load(Relaxed);
+        self.cache += g.cache.load(Relaxed);
+        self.span_free += g.span_free.load(Relaxed);
+        self.returned += g.returned.load(Relaxed);
+        self.virgin += g.virgin.load(Relaxed);
+        self.hysteresis += g.hysteresis.load(Relaxed);
+        self.segment_overhead += g.segment_overhead.load(Relaxed);
+        self.large_count += g.large_count.load(Relaxed);
+        self.spans_assigned += g.spans_assigned.load(Relaxed);
+    }
+
+    /// The sum the identity asserts, mirroring `Stats::accounted` — kept
+    /// separate from [`Self::mapped`] so a reader compares the two
+    /// rather than being handed a difference someone else computed.
+    pub fn accounted(&self) -> u64 {
+        self.live
+            + self.rounding
+            + self.cache
+            + self.span_free
+            + self.returned
+            + self.virgin
+            + self.hysteresis
+            + self.segment_overhead
+    }
+}
+
 /// Retained ops-per-sec samples — 16 × 100 ms default tick ≈ a 1.6 s window.
 const OPS_WINDOW: usize = 16;
 
+#[derive(Debug)]
 pub(crate) struct ObsState {
     /// Append-only ADMIN-command audit log. `None` = OFF (`[audit]
     /// log_path` empty, or the file failed to open at boot).
@@ -140,7 +241,7 @@ pub(crate) struct ObsState {
 
 /// One shard's per-tick replication view: its `master_repl_offset`
 /// plus a row per handshake-complete replica conn.
-#[derive(Clone, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct ReplShardView {
     pub(crate) offset: u64,
     pub(crate) replicas: Vec<kevy_rt::ReplicaViewRow>,
@@ -190,6 +291,7 @@ impl ObsState {
             t.commands_processed += s.commands_processed.load(Relaxed);
             t.connections_received += s.connections_received.load(Relaxed);
             t.clients_connected += s.clients_connected.load(Relaxed);
+            t.blocked_clients += s.blocked_clients.load(Relaxed);
             t.tick_gap_max_us = t.tick_gap_max_us.max(s.tick_gap_max_us.load(Relaxed));
             t.ticks_total += s.ticks_total.load(Relaxed);
             t.query_buffer_disconnections += s.query_buffer_disconnections.load(Relaxed);
@@ -208,6 +310,10 @@ impl ObsState {
             t.tier.vlog_bytes += s.tier.vlog_bytes.load(Relaxed);
             t.tier.vlog_live_bytes += s.tier.vlog_live_bytes.load(Relaxed);
             t.tier.vlog_epoch += s.tier.vlog_epoch.load(Relaxed);
+            if s.alloc.reporting.load(Relaxed) != 0 {
+                t.alloc_shards += 1;
+                t.alloc.add(&s.alloc);
+            }
         }
         t
     }
@@ -331,5 +437,40 @@ mod tests {
             obs.push_ops_sample(i);
         }
         assert_eq!(obs.ops_ring.lock().unwrap().len(), OPS_WINDOW);
+    }
+
+    /// The allocator fold, and its gate. The publisher is behind the
+    /// `kevy-alloc` feature and the fold is not, so with the feature off
+    /// — which is the default build, and how the coverage corpus runs —
+    /// nothing else here ever executes this path.
+    ///
+    /// The gate is the part worth asserting: a slot that never reported
+    /// holds nine zeroes, and nine zeroes are also a legitimate reading
+    /// of a heap. Counting the first as the second is what would let
+    /// INFO name an allocator that is not running.
+    #[test]
+    fn only_shards_that_reported_are_folded_in() {
+        let obs = ObsState::new(Path::new(""), 3);
+        let a = obs.slot(0).expect("slot 0");
+        a.alloc.mapped.store(8_388_608, Relaxed);
+        a.alloc.live.store(700_000, Relaxed);
+        a.alloc.hysteresis.store(7_688_608, Relaxed);
+        a.alloc.reporting.store(1, Relaxed);
+
+        let b = obs.slot(1).expect("slot 1");
+        b.alloc.mapped.store(4_194_304, Relaxed);
+        b.alloc.live.store(100_000, Relaxed);
+        b.alloc.hysteresis.store(4_094_304, Relaxed);
+        b.alloc.reporting.store(1, Relaxed);
+
+        // Shard 2 never published. Its zeroes must not be read as a
+        // third heap that happens to hold nothing.
+        let t = obs.aggregate();
+        assert_eq!(t.alloc_shards, 2, "a silent shard was counted as a reporting one");
+        assert_eq!(t.alloc.mapped, 12_582_912);
+        assert_eq!(t.alloc.live, 800_000);
+        // Disjoint within a heap and between heaps, so the identity
+        // survives the sum: this is the property the section rests on.
+        assert_eq!(t.alloc.accounted(), t.alloc.mapped, "the summed terms stopped partitioning");
     }
 }

@@ -21,7 +21,50 @@ use kevy_testnet::free_port;
 fn a_streaming_giant_frame_is_disconnected_at_the_cap() {
     // The override must be set BEFORE the runtime thread constructs its
     // shards (read once at shard build).
+    // SAFETY: `set_var` is unsafe because it is not thread-safe. This runs on the test's
+    // own thread before the runtime thread that reads the variable is spawned, so no
+    // other thread can be touching the environment at this point.
     unsafe { std::env::set_var("KEVY_DEBUG_INPUT_LIMIT", "4096") };
+    // The reactor's own stall dump, switched on for this binary only.
+    //
+    // This cell has failed in CI with the server's decision to close
+    // recorded (`client_query_buffer_limit_disconnections` counted it)
+    // and the close never reaching the client. Reading the source
+    // narrowed that to three possibilities and could not separate them:
+    // the conn never entered `uring_reap_closed`'s candidate list, or
+    // it entered and one of `writes_quiet` / `drained` stayed false, or
+    // both held and the fd was closed without a FIN going out. The dump
+    // prints each of those terms per closing conn, so a fourth failure
+    // arrives with the answer attached instead of needing a repro.
+    //
+    // Where the output goes was got wrong twice before it was checked.
+    // The runtime runs on a thread this test spawns, and Rust's output
+    // capture is thread-local — from which it does NOT follow that the
+    // dump reaches the real stderr, because a spawned thread inherits
+    // the capture. The harness holds it and prints it only when the test
+    // fails, under `---- <test name> stdout ----`. The archived failure
+    // log shows exactly that: `reactor = io_uring`, the AOF replay line,
+    // and both `query buffer exceeded` lines, all inside that block and
+    // absent from every passing run.
+    //
+    // Which is the arrangement worth having, not a limitation: the dump
+    // appears precisely when there is something to read, and costs a
+    // passing run nothing. 250ms then puts ~120 lines in a 30s failure,
+    // and the reactor backdates the first deadline so the opening
+    // heartbeat is at the top of that block rather than 250ms into it —
+    // a failure that lands quickly still carries one.
+    //
+    // Set only when the caller has not: the dump adds per-tick work
+    // (a formatted line and a walk of `conns`), and this cell is a race,
+    // so "does the instrument change the outcome" has to stay an
+    // answerable question. `KEVY_DEBUG_STALL_MS=0` from outside disables
+    // it — `parse_stall_dump_interval` folds zero into off — which makes
+    // an A/B possible without editing this file.
+    if std::env::var_os("KEVY_DEBUG_STALL_MS").is_none() {
+        // SAFETY: as above — the test's own thread, before the runtime thread that
+        // reads the variable is spawned.
+        unsafe { std::env::set_var("KEVY_DEBUG_STALL_MS", "250") };
+    }
     let port = free_port();
     let dir = std::env::temp_dir().join(format!(
         "kevy-qbuf-{}",

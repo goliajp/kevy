@@ -63,7 +63,8 @@ fn fold_explain_chunks(chunks: &[Vec<u8>]) -> (u64, bool, u8) {
     for c in chunks {
         if c.len() >= 11 {
             building |= c[1] != 0;
-            est_rows += u64::from_le_bytes(c[2..10].try_into().expect("8 bytes"));
+            est_rows +=
+                u64::from_le_bytes(c[2..10].try_into().expect("the len() >= 11 check above"));
             shape_b = c[10];
         }
     }
@@ -75,7 +76,7 @@ pub(super) fn reduce_count(chunks: &[Vec<u8>]) -> Vec<u8> {
     let total: u64 = chunks
         .iter()
         .filter_map(|c| c.get(1..9))
-        .map(|b| u64::from_le_bytes(b.try_into().expect("8 bytes")))
+        .map(|b| u64::from_le_bytes(b.try_into().expect("the get(1..9) above returned Some")))
         .sum();
     encode_integer(&mut out, total as i64);
     out
@@ -282,7 +283,9 @@ fn list_sums(chunks: &[Vec<u8>], n: usize) -> Vec<(bool, u64, u64, u64, u64)> {
             pos += 1;
             for slot in 1..=4 {
                 let Some(w) = c.get(pos..pos + 8) else { break };
-                let v = u64::from_le_bytes(w.try_into().expect("8 bytes"));
+                let v = u64::from_le_bytes(
+                    w.try_into().expect("the get(pos..pos + 8) above returned Some"),
+                );
                 match slot {
                     1 => s.1 += v,
                     2 => s.2 += v,
@@ -333,7 +336,9 @@ pub(super) fn reduce_verify(chunks: &[Vec<u8>]) -> Vec<u8> {
         let mut pos = 2usize;
         for slot in &mut sums {
             let Some(w) = c.get(pos..pos + 8) else { break };
-            *slot += u64::from_le_bytes(w.try_into().expect("8 bytes"));
+            *slot += u64::from_le_bytes(
+                w.try_into().expect("the get(pos..pos + 8) above returned Some"),
+            );
             pos += 8;
         }
     }

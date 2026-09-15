@@ -16,6 +16,7 @@ use kevy_scope::{MigrationState, MigrationTable, OwnershipTable, Routing, Scope}
 
 use super::{RuntimeState, ShardCtx};
 
+#[derive(Debug)]
 pub(crate) struct ScopeState {
     /// Ownership table. `None` when no scopes are declared.
     ownership: Option<OwnershipTable>,

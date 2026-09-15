@@ -31,6 +31,13 @@ MODE=${1:-gate}
 
 command -v cargo >/dev/null || { echo "deadgate: REFUSED — no cargo" >&2; exit 2; }
 
+# The atlas verifies itself before it is trusted to measure anything. Symbol
+# identity is what the whole ratchet holds, and it was computed by a regex
+# that silently collapsed `<Type as Trait>::method` to `::method` — one
+# identity absorbing every crate's `Debug`. The selftest carries a floor, so
+# deleting the examples fails rather than passes quietly.
+python3 "$ROOT/tools/coverage_atlas.py" --selftest || exit $?
+
 if [ ! -f "$COV" ]; then
   echo "deadgate: producing the corpus run (this is the slow part)"
   # shellcheck disable=SC2086
@@ -44,35 +51,74 @@ fi
 
 python3 "$ROOT/tools/coverage_atlas.py" "$COV" || exit $?
 
-# The register and the exemptions are two files, and nothing reconciled them.
-# `suite/dead-paths.toml` is what a person reads; `unstable` inside the
-# `unstable` block setratchet honours is carried through the atlas into
-# DEAD-SET.json and from there into the baseline. So the invariant to check
-# is the one the atlas just produced: comparing against the BASELINE fails
-# on every registration until the next run, because the baseline's copy is
-# always one atlas behind. Checked against the baseline first, and it
-# reported exactly that lag as a disagreement.
+# Every unstable declaration must exempt something that exists.
+#
+# This check used to compare `suite/dead-paths.toml` against the `unstable`
+# block inside DEAD-SET.json — and the atlas copies that block straight out
+# of the same TOML, so it was comparing the register with itself. It said
+# "register and this run agree" on every run it has ever made, and could
+# not have said anything else.
+#
+# What it missed, found the day the symbol scheme changed: the register
+# declared `kevy_geo::estimate_step`, and no symbol by that name has been in
+# the set for some time — the real one is `kevy_geo::search::estimate_step`.
+# A declaration that exempts nothing is a hole in the ratchet with a reason
+# attached, which reads to the next person like a hole that was considered.
+#
+# So the comparison is now against the symbols actually observed. A stale
+# declaration fails; so does an empty register, because a register that
+# reads as empty is a broken read and not an absence of exemptions.
 python3 - "$ROOT" <<'RECONCILE' || exit $?
 import json, pathlib, sys, tomllib
 root = pathlib.Path(sys.argv[1])
-reg = tomllib.loads((root / "suite/dead-paths.toml").read_text()).get("unstable", [])
-base = json.loads((root / "bench/DEAD-SET.json").read_text()).get("unstable", {})
+doc = tomllib.loads((root / "suite/dead-paths.toml").read_text())
+reg = doc.get("unstable", [])
+observed = json.loads((root / "bench/DEAD-SET.json").read_text()).get("symbols", {})
 if not reg:
     print("deadgate: REFUSED — suite/dead-paths.toml declares no unstable "
           "entries; an empty register is a broken read, not agreement",
           file=sys.stderr)
     sys.exit(2)
-want = {e["symbol"] for e in reg if "symbol" in e} | {e["prefix"] for e in reg if "prefix" in e}
-have = set(base.get("symbols", [])) | set(base.get("prefixes", []))
-only_reg, only_base = sorted(want - have), sorted(have - want)
-if only_reg or only_base:
-    print("deadgate: FAIL — the unstable register and this run's exemptions disagree")
-    for x in only_reg:
-        print(f"  registered in suite/dead-paths.toml, exempts nothing: {x}")
-    for x in only_base:
-        print(f"  exempt in this run, explained nowhere: {x}")
+if not observed:
+    print("deadgate: REFUSED — the atlas observed no symbols at all; there is "
+          "nothing for the register to be checked against", file=sys.stderr)
+    sys.exit(2)
+dead = []
+for kind in ("unstable", "dead"):
+    for e in doc.get(kind, []):
+        if "symbol" in e:
+            if e["symbol"] not in observed:
+                dead.append(f"[[{kind}]] symbol {e['symbol']!r}")
+        elif "prefix" in e:
+            if not any(k.startswith(e["prefix"]) for k in observed):
+                dead.append(f"[[{kind}]] prefix {e['prefix']!r}")
+# The other direction, for whole crates. `[[dead_crate]]` exists for the
+# case where every region in a crate has one explanation, and the atlas
+# already refuses an entry whose named gate file is gone. Nothing asked the
+# reverse: a crate that reads 100% dead and is explained NOWHERE. That is
+# the largest thing a register can be missing and the easiest to not
+# notice, because a crate with no coverage produces no failing line —
+# it produces no line at all.
+crates = json.loads((root / "bench/DEAD-SET.json").read_text()).get("crates", {})
+registered = {e["crate"] for e in doc.get("dead_crate", [])}
+for name, v in sorted(crates.items()):
+    if v.get("regions", 0) > 0 and v["dead"] == v["regions"] and name not in registered:
+        dead.append(f"[[dead_crate]] missing for {name!r}: {v['dead']} of "
+                    f"{v['regions']} regions dead, explained nowhere")
+
+if dead:
+    print("deadgate: FAIL — register entr(ies) naming nothing in this run")
+    for x in dead:
+        print(f"  {x}")
+    print("  An [[unstable]] one is a hole in the ratchet with a reason attached;")
+    print("  a [[dead]] one is a written reason for a region that is not there;")
+    print("  a missing [[dead_crate]] is a whole crate nothing has explained.")
+    print("  For the first two: either the symbol was renamed, or it left the")
+    print("  set and the entry can go. For the third: write the entry, naming")
+    print("  the gate that does cover the crate, or say that none does.")
     sys.exit(1)
-print(f"deadgate: {len(want)} unstable declaration(s), register and this run agree")
+n = len(reg) + len(doc.get("dead", []))
+print(f"deadgate: {n} register entr(ies), each naming a symbol this run observed")
 RECONCILE
 
 if [ "$MODE" = "--update-baseline" ]; then

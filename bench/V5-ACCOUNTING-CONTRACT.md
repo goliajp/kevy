@@ -28,6 +28,26 @@ Exported per process, summed across shards. Names are the wire names; the
 transport is INFO (a `# Allocator` section, following the capacity arc's
 `# Tiering` precedent) plus a direct accessor for the embedded API.
 
+**Landed in 6.4.0** (`INFO allocator`, wire names prefixed `alloc_`; the
+direct accessor is `kevy_alloc::thread_stats`, per-thread by nature).
+Written here in the v5 arc and unimplemented until then: M3 proved the
+identity inside the crate, which is a different claim from an operator
+being able to see which term a resident ratio went into. M9 gates the
+transport.
+
+Two things the section is careful about, both because an instrument that
+cannot fail is worse than none:
+
+* It is **absent** unless a shard reported, so a build on the system
+  allocator emits the bytes it emitted before the section existed.
+* "Reported" is `mapped > 0`, not "the snapshot existed". The feature
+  links the allocator; the `#[global_allocator]` attribute is what makes
+  it *the* allocator, and that lives in `main.rs` — so the library, its
+  tests, the embedded API and any FFI host can have the feature on and
+  allocate somewhere else entirely. `thread_stats` answers `Some` there,
+  with nine honest zeroes, and printing `allocator_impl:kevy-alloc`
+  over them would name an allocator that is not running.
+
 | field | definition |
 |---|---|
 | `mapped` | total bytes currently mapped from the OS. **The anchor** |
@@ -35,10 +55,32 @@ transport is INFO (a `# Allocator` section, following the capacity arc's
 | `rounding` | Σ (`slot size` − `Layout::size()`) over live allocations |
 | `cache` | bytes parked on foreign-free lists, waiting to be drained home |
 | `span_free` | free slots in spans that were handed out before and returned — **touched, therefore resident** |
-| `virgin` | span bytes at or above the bump cursor — mapped, never touched, **not resident** |
-| `returned` | free slots whose pages went back to the OS while their span stays live — mapped, **not resident** (the v2 term) |
-| `hysteresis` | retained rather than released: whole empty spans, and (T2-v8) parked large mappings in the process-wide retention pool — same policy, two scales |
+| `virgin` | mapped and never touched, **not resident**: span bytes at or above the bump cursor, plus whole spans carved with their segment that no class ever claimed |
+| `returned` | pages handed back to the OS — mapped, **not resident** (the v2 term): free slots inside a live span, plus whole spans emptied and retired |
+| `hysteresis` | retained rather than released and therefore **resident**: empty spans the per-sweep policy keeps for their class, spans whose discard the platform refused, and (T2-v8) parked large mappings in the process-wide retention pool |
 | `segment_overhead` | segment headers (one span per segment) |
+
+**Corrected in 6.4.0, and the correction is the point of the section.**
+`hysteresis` was every span with no class, which is three opposite
+things: never claimed (`virgin`), emptied and given back (`returned`),
+and emptied and kept (`hysteresis`). The identity balances whichever
+bucket they fall in, so no gate could see it. What an operator saw was
+`returned: 0` with 89 % of the map under `hysteresis` — and which of the
+three that 89 % really was depended on the host: given back on a 4 KiB
+page and reported as held, held on a 16 KiB page and subtracted from the
+residency prediction as though given back. One number, wrong in both
+directions.
+
+It had two further faces, both of which had been reported as PASS:
+
+* `predicted_resident()` **subtracted** `hysteresis`, so held memory read
+  as released. It now subtracts `virgin` and `returned` only.
+* M4 — "emptied spans give their pages back", the property the whole
+  experiment rests on — asserted `after.hysteresis > idle.hysteresis`
+  under a message reading "reclaim returned nothing". That is true on
+  both sides of the platform branch, so it passed on a 16 KiB-page
+  machine where `discard` is refused and reclaim hands back **nothing**.
+  The assertion now names the branch it is in.
 
 ### The identity M3 asserts
 

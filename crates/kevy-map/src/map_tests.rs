@@ -80,6 +80,86 @@ fn byte_string_keys_with_borrow_lookup() {
     assert!(!m.contains_key(b"bar".as_slice()));
 }
 
+/// The three probes agree — including the arm that a fix made cold.
+///
+/// One probe loop is written three times in `map_keyed.rs`, and the split
+/// is deliberate rather than accidental:
+///
+///  - `find_by_borrow` — lookup only, so it never tracks `DELETED`.
+///  - `probe_by_borrow_fast` — lookup plus an insert slot, no tombstones.
+///  - `probe_by_borrow_slow` — the same, remembering the first `DELETED`
+///    so a later insert reclaims it.
+///
+/// The middle two exist because a lookup should not pay for insert
+/// bookkeeping, and the third because tombstone tracking should not be paid
+/// when there are none. All three walk groups, match `h2`, compare the
+/// borrowed key and stop on `EMPTY`. What the rule against a second
+/// implementation warns about is exactly this: they evolve apart, disagree
+/// on some boundary, and both sets of tests stay green.
+///
+/// So this asks them the same question and requires the same answer, in
+/// both table states. The slow arm reached fifteen never-executed regions
+/// after the commit that stopped one `DEL` from putting the table on its
+/// slow probe permanently — the fix working, and a correctness path going
+/// quiet at the same time. `probe_by_borrow` is reached through
+/// `raw_entry_mut`, which is the only caller; `get` takes `find_by_borrow`
+/// instead, which is why a `get`-based test does not reach it at all.
+#[test]
+fn find_and_probe_agree_with_and_without_tombstones() {
+    // Scaled, like every other heavy test here: miri interprets each access
+    // and this crate's miri job is the CI wall clock. The paths this walks
+    // are entered the same way at 64 keys as at 400 — several probe groups,
+    // tombstones inside them — and the assertions below are derived from `n`
+    // so a count too small to force those paths fails rather than passes on
+    // less.
+    let n = crate::scaled(400) as u64;
+    let key = |i: u64| format!("key-{i:05}").into_bytes();
+    let mut m = KevyMap::<Vec<u8>, u64>::new();
+    for i in 0..n {
+        m.insert(key(i), i);
+    }
+
+    // Both arms of `probe_by_borrow` are exercised: this first pass has no
+    // tombstones, the second has 134 of them.
+    let mut checked = 0;
+    for phase in 0..2 {
+        if phase == 1 {
+            // Every third, so tombstones land inside groups rather than in
+            // one run the probe can step over.
+            let mut removed = 0;
+            for i in (0..n).step_by(3) {
+                assert_eq!(m.remove(key(i).as_slice()), Some(i), "removing {i}");
+                removed += 1;
+            }
+            assert!(
+                removed > 0 && (removed as u64) < n,
+                "both states must exist: {removed} of {n}"
+            );
+        }
+        for i in 0..n + 50 {
+            let k = key(i);
+            let by_find = m.find_by_borrow(k.as_slice()).is_some();
+            let by_probe =
+                matches!(m.probe_by_borrow(k.as_slice()), crate::map::ProbeOutcome::Found(_));
+            assert_eq!(
+                by_find, by_probe,
+                "phase {phase}, key {i}: find_by_borrow says {by_find}, \
+                 probe_by_borrow says {by_probe}"
+            );
+            let present = i < n && !(phase == 1 && i % 3 == 0);
+            assert_eq!(by_find, present, "phase {phase}, key {i}: expected present={present}");
+            checked += 1;
+        }
+    }
+    assert_eq!(checked, 2 * (n + 50), "both phases ran over the whole key range");
+
+    // And the slow arm's other job: a reinsert lands in a tombstone.
+    let before = m.len();
+    m.insert(key(0), 999);
+    assert_eq!(m.len(), before + 1);
+    assert_eq!(m.get(key(0).as_slice()), Some(&999));
+}
+
 #[test]
 fn iter_yields_all_entries() {
     let mut m = KevyMap::<u64, u64>::new();
@@ -588,4 +668,96 @@ fn raw_entry_mut_borrow_lookup_with_bytes_key() {
     }
     assert_eq!(m.get(b"alpha".as_slice()), None);
     assert_eq!(m.get(b"beta".as_slice()), Some(&2));
+}
+
+// ── growth under churn: the table may not ratchet on tombstones ──────
+//
+// The load check counts `occupied + deleted`, so a workload that keeps a
+// constant live set — the ordinary Redis shape of expiry, eviction and
+// DEL — drives the table through grow after grow on tombstones alone,
+// and every grow doubles. The live set never moves; the allocation does,
+// and never comes back.
+
+/// Insert and delete in step, so `len()` never moves, and the capacity
+/// must not either past the first settle.
+///
+/// A table at 7/8 load holds `cap` slots for `7cap/8` live entries, so
+/// the ceiling this asserts is 8/7 of what a full table would need. The
+/// number to beat is not tight — it is the difference between "bounded"
+/// and "doubling forever".
+#[test]
+fn churn_at_a_constant_live_set_does_not_grow_the_table() {
+    let mut m: KevyMap<Vec<u8>, u64> = KevyMap::new();
+    const LIVE: usize = 4096;
+    for i in 0..LIVE {
+        m.insert(format!("k{i}").into_bytes(), i as u64);
+    }
+    let settled = m.capacity();
+    assert!(settled >= LIVE, "sanity: the table holds what was put in it");
+
+    // Ten times the live set, in and out, one for one.
+    for i in LIVE..LIVE * 11 {
+        m.insert(format!("k{i}").into_bytes(), i as u64);
+        m.remove(format!("k{}", i - LIVE).as_bytes());
+        assert_eq!(m.len(), LIVE, "the live set is the invariant of this loop");
+    }
+
+    assert_eq!(
+        m.capacity(),
+        settled,
+        "the live set never moved, so neither should the table: {} slots for {LIVE} \
+         entries after 10x churn, settled at {settled}",
+        m.capacity()
+    );
+}
+
+/// The narrower half of the same question, isolated: one `DEL` must not
+/// leave the table permanently on its slow probe path.
+#[test]
+fn a_single_erase_leaves_no_tombstone_when_the_group_has_room() {
+    let mut m: KevyMap<Vec<u8>, u64> = KevyMap::new();
+    m.insert(b"only".to_vec(), 1);
+    assert_eq!(m.remove(b"only".as_slice()), Some(1));
+    assert_eq!(m.len(), 0);
+    assert_eq!(
+        m.tombstones(),
+        0,
+        "a group with fifteen empty slots has nowhere for a probe to continue to, \
+         so the erased slot is EMPTY and not DELETED"
+    );
+}
+
+/// The slow probe path still exists for the case that still needs it.
+///
+/// `erase_mark` writes `EMPTY` where no probe could have walked
+/// through, which is most single erases — and that is the point. But a
+/// dense table erased in the middle of a run leaves real tombstones,
+/// and the probe has to walk past them to the key beyond. Without a
+/// test that reaches it, the path went from three never-executed
+/// regions to fifteen, and deadgate said so.
+#[test]
+fn a_probe_walks_past_tombstones_to_the_key_beyond() {
+    let mut m: KevyMap<Vec<u8>, u64> = KevyMap::new();
+    // Enough to fill several groups so a run of full slots exists.
+    for i in 0..2048u64 {
+        m.insert(format!("k{i}").into_bytes(), i);
+    }
+    // Erase a long contiguous stretch of the key space. Some of these
+    // land inside runs and must become tombstones.
+    for i in 200..1400u64 {
+        m.remove(format!("k{i}").as_bytes());
+    }
+    assert!(m.tombstones() > 0, "a dense erase must leave some tombstone to probe past");
+    // Every survivor is still reachable, which is what a tombstone is for.
+    for i in (0..200u64).chain(1400..2048) {
+        assert_eq!(
+            m.get(format!("k{i}").as_bytes()),
+            Some(&i),
+            "k{i} became unreachable across the erased stretch"
+        );
+    }
+    // And the erased ones are gone, not merely hidden.
+    for i in 200..1400u64 {
+        assert_eq!(m.get(format!("k{i}").as_bytes()), None, "k{i} came back");
+    }
 }

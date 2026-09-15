@@ -15,6 +15,17 @@
 //! no race window per shard). No `Building` state embedded — create
 //! returns when the index serves.
 
+// The sidecar IS the catalog's persistence — `boot` reads it and a
+// directory without one "boots empty". So a rename that fails loses
+// the index definitions at the next start, after the command that
+// created them has already replied OK. That is a gap, not a
+// non-event, and it is written up as an open question rather than
+// silently accepted here: .claude/OPEN-QUESTIONS-6.4.md §3.
+#![expect(
+    clippy::let_underscore_must_use,
+    reason = "the catalog has no other home; see .claude/OPEN-QUESTIONS-6.4.md"
+)]
+
 use crate::{KevyError, KevyResult};
 use std::io;
 use std::sync::RwLock;
@@ -87,7 +98,7 @@ pub(crate) fn merge_page(mut all: Vec<(IndexValue, Vec<u8>)>, limit: usize) -> I
 /// Store-level index state: catalog + a version stamp the per-shard
 /// segment lists sync against, and each declared path's usage cell
 /// (the refusal log's dual — reclaim-face raw material).
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(crate) struct IndexReg {
     pub(crate) catalog: RwLock<(u64, Catalog)>,
     pub(crate) usage:
@@ -103,7 +114,7 @@ pub(crate) type WinRef<'a> = Option<&'a core::convert::Infallible>;
 
 /// Per-shard segment list, kept inside `Inner` (guarded by the shard
 /// lock).
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(crate) struct ShardSegs {
     pub(crate) version: u64,
     pub(crate) segs: Vec<(IndexSpec, Segment)>,

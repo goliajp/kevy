@@ -12,6 +12,11 @@
 //! the live image's estimated size after replay restores the growth
 //! rule's real meaning ("the log is pct% history") across processes.
 
+// `write!` into an in-memory buffer returns a `Result` because
+// `fmt::Write` / `io::Write` must, not because it can fail: the
+// `String` and `Vec` impls are infallible. Said once here.
+#![expect(clippy::let_underscore_must_use, reason = "writing to an in-memory buffer cannot fail")]
+
 use crate::SnapshotSource;
 use std::io::{self, Write};
 

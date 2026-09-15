@@ -4,6 +4,7 @@
 //! struct); split out so that file stays under the 500-LOC house rule.
 
 use crate::Commands;
+use crate::park_fence;
 use crate::shard::Shard;
 use crate::shard_lifecycle::Accepted;
 use kevy_persist::{load_snapshot, replay_aof};
@@ -11,7 +12,7 @@ use kevy_resp::ArgvView;
 use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering, fence};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 /// Work iterations between tick-clock checks. Shared by both reactors:
@@ -204,20 +205,20 @@ impl<C: Commands> Shard<C> {
             let timeout = if spinning {
                 Some(0)
             } else {
-                self.parked[me].store(true, Ordering::SeqCst);
-                // Close the park/wake race: the SeqCst fence pairs with
-                // the matching fence in `flush_wakes` on every other
-                // shard, so any push that lands BEFORE this drain on the
-                // peer's side is either (a) seen by `drain_inbound` here
-                // OR (b) the peer's parked-load saw `true` and a wake
-                // syscall is on the way. Without the fence, the lost-wake
-                // window was bounded by `PARK_TIMEOUT_MS` (50 ms) — the
-                // blocking wait below is now defense-in-depth (covers a
-                // missed eventfd write, OS scheduling glitch, etc.).
-                // Loom-verified by `tests/loom.rs::park_wake_fence_*`.
-                fence(Ordering::SeqCst);
+                // Close the park/wake race: the fence inside
+                // `publish_parked` pairs with `fence_before_wake_scan` in
+                // every other shard's `flush_wakes`, so any push that lands
+                // BEFORE the drain below is either (a) seen by
+                // `drain_inbound` here OR (b) the peer's parked-load saw
+                // `true` and a wake syscall is on the way. Without the
+                // fence, the lost-wake window was bounded by
+                // `PARK_TIMEOUT_MS` (50 ms) — the blocking wait below is
+                // now defense-in-depth (covers a missed eventfd write, OS
+                // scheduling glitch, etc.). Loom-verified: the functions
+                // called here are the ones `tests/loom.rs` schedules.
+                park_fence::publish_parked(&self.parked[me]);
                 if self.drain_inbound()? {
-                    self.parked[me].store(false, Ordering::SeqCst);
+                    park_fence::clear_parked(&self.parked[me]);
                     self.flush_backlog();
                     self.flush_dirty()?;
                     self.flush_wakes();
@@ -231,7 +232,7 @@ impl<C: Commands> Shard<C> {
             self.poller.wait(&mut self.events, timeout)?;
             slow.mark("poll");
             if !spinning {
-                self.parked[me].store(false, Ordering::SeqCst);
+                park_fence::clear_parked(&self.parked[me]);
             }
 
             let events_seen = self.events.len();

@@ -18,6 +18,7 @@ use crate::elector::{ElectConfig, ElectJitter, Elector, Outbound};
 use crate::message::Role;
 
 /// One node's place in the simulator.
+#[derive(Debug)]
 pub struct SimNode {
     /// The elector this node runs.
     pub elector: Elector,
@@ -27,6 +28,7 @@ pub struct SimNode {
 }
 
 /// Multi-node election simulator.
+#[derive(Debug)]
 pub struct Sim {
     nodes: HashMap<String, SimNode>,
     /// Symmetric undirected partition set — `(a, b)` in the set

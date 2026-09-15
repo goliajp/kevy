@@ -38,6 +38,7 @@ use crate::{SegError, SegMeta};
 ///
 /// std::fs::remove_file(&path).unwrap();
 /// ```
+#[derive(Debug)]
 pub struct SegBuilder {
     w: BufWriter<File>,
     page: Box<[u8; PAGE]>,
@@ -110,6 +111,24 @@ impl SegBuilder {
             return Err(SegError::Unsorted);
         }
         let inline = layout::inline_cell_len(key.len(), payload.len());
+        // The key is stored in the page whichever cell kind is chosen, so
+        // a key that fits neither form cannot be stored at all. Refused
+        // here, before anything measures or writes: the measurement is
+        // itself a write into a page-sized buffer, so an oversized key
+        // panicked inside it rather than being reported.
+        //
+        // Measured before this, pushing one key with a 7-byte payload:
+        // 4070 bytes fine; 4074 accepted by `push` and `finish`, opened
+        // cleanly, and unreadable — the slot directory lands on the tail
+        // of the cell and the page CRC is taken afterwards, so the page
+        // is internally consistent and wrong; 4075 and up panicked.
+        //
+        // Both are reachable from user data: an indexed document with a
+        // long run of non-separator bytes becomes one token and then one
+        // key, and `seg_key` concatenates two unbounded user strings.
+        if inline + 2 > PAGE_BUDGET && layout::overflow_cell_len(key.len()) + 2 > PAGE_BUDGET {
+            return Err(SegError::Corrupt("key too large for a page"));
+        }
         // A cell must fit a page together with its slot entry.
         if inline + 2 <= PAGE_BUDGET {
             self.push_cell(key, |page, off| layout::write_inline_cell(page, off, key, payload))?;
@@ -188,6 +207,10 @@ impl SegBuilder {
         if self.used + projected(cell_len, self.slots.len()) > PAGE_BUDGET + PAGE_HDR {
             self.seal_current_page()?;
         }
+        // No second fit-check here. `push` refuses a key that fits
+        // neither cell form before anything is measured, so by the time
+        // a cell reaches this function an empty page can always hold it.
+        // A check here as well was a branch nothing could reach.
         if self.slots.is_empty() {
             self.fences.push((self.pages_written, key.to_vec()));
         }

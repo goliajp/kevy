@@ -52,7 +52,7 @@ pub(crate) const TABLE_NONEMPTY: u32 = 1 << 5;
 
 /// The per-shard gate cache: bits valid for exactly one value of
 /// `RuntimeState`'s control epoch.
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct GateCache {
     epoch: u64,
     bits: u32,
@@ -91,7 +91,7 @@ fn rebuild_gate(state: &RuntimeState) -> u32 {
 }
 
 /// Per-shard private zone. See the module doc.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(crate) struct ShardCtx {
     /// This shard's id, written by `Commands::on_shard_start`. `None`
     /// outside a reactor thread (embedded / tests / the runtime main

@@ -78,6 +78,42 @@ fn read_reply(s: &mut std::net::TcpStream) -> Vec<u8> {
     out
 }
 
+/// Block until at least `n` clients are parked in a blocking command.
+///
+/// These tests used to sleep a flat 50 ms and assume the client had
+/// parked by then. That is a race, not a wait: under a full-workspace
+/// run — dozens of test binaries at once — it failed once here, and a
+/// test that fails for a reason unrelated to what it tests is worse than
+/// no test. `blocked_clients` in `INFO clients` is the condition itself,
+/// so this waits for the thing instead of for a duration.
+///
+/// The gauge is published on the shard tick, so observing it costs up to
+/// one tick. The deadline is generous because the failure it guards
+/// against is a hang, and a slow machine is not a bug.
+fn wait_for_blocked(srv: &Server, n: u64) {
+    let mut c = srv.connect();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        c.write_all(&req(&[b"INFO", b"clients"])).unwrap();
+        let body = read_reply(&mut c);
+        let text = String::from_utf8_lossy(&body);
+        let got: u64 = text
+            .lines()
+            .find_map(|l| l.trim_end().strip_prefix("blocked_clients:"))
+            .expect("INFO clients has no blocked_clients line")
+            .parse()
+            .expect("blocked_clients is a number");
+        if got >= n {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "only {got} of {n} client(s) parked within 10s"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+}
+
 struct Server {
     port: u16,
     dir: std::path::PathBuf,
@@ -166,7 +202,7 @@ fn blpop_woken_by_concurrent_push() {
     let mut producer = srv.connect();
     // Park the consumer with a generous timeout — wake must come first.
     consumer.write_all(&req(&[b"BLPOP", b"wakeable", b"5"])).unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(50));
+    wait_for_blocked(&srv, 1);
     producer.write_all(&req(&[b"LPUSH", b"wakeable", b"hello"])).unwrap();
     let _push_reply = read_reply(&mut producer); // :1
     let reply = read_reply(&mut consumer);
@@ -192,7 +228,7 @@ fn brpop_woken_by_concurrent_rpush() {
     let mut consumer = srv.connect();
     let mut producer = srv.connect();
     consumer.write_all(&req(&[b"BRPOP", b"q", b"5"])).unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(50));
+    wait_for_blocked(&srv, 1);
     producer.write_all(&req(&[b"RPUSH", b"q", b"x"])).unwrap();
     let _ = read_reply(&mut producer);
     let reply = read_reply(&mut consumer);
@@ -245,7 +281,7 @@ fn xread_block_woken_by_concurrent_xadd() {
     consumer
         .write_all(&req(&[b"XREAD", b"BLOCK", b"5000", b"STREAMS", b"stream", b"1-0"]))
         .unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(50));
+    wait_for_blocked(&srv, 1);
     producer.write_all(&req(&[b"XADD", b"stream", b"2-0", b"f", b"v2"])).unwrap();
     let _ = read_reply(&mut producer);
     let reply = read_reply(&mut consumer);
@@ -269,7 +305,7 @@ fn xread_block_dollar_id_wakes() {
     producer.write_all(&req(&[b"XADD", b"stream", b"1-0", b"f", b"v"])).unwrap();
     let _ = read_reply(&mut producer);
     consumer.write_all(&req(&[b"XREAD", b"BLOCK", b"5000", b"STREAMS", b"stream", b"$"])).unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(50));
+    wait_for_blocked(&srv, 1);
     producer.write_all(&req(&[b"XADD", b"stream", b"2-0", b"f", b"v2"])).unwrap();
     let _ = read_reply(&mut producer);
     let reply = read_reply(&mut consumer);
@@ -334,7 +370,7 @@ fn xreadgroup_block_woken_by_concurrent_xadd() {
             b">",
         ]))
         .unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(50));
+    wait_for_blocked(&srv, 1);
     producer.write_all(&req(&[b"XADD", b"stream2", b"2-0", b"f", b"v2"])).unwrap();
     let _ = read_reply(&mut producer);
     let reply = read_reply(&mut consumer);
@@ -367,7 +403,7 @@ fn blpop_multi_key_woken_on_second_key() {
     let mut consumer = srv.connect();
     let mut producer = srv.connect();
     consumer.write_all(&req(&[b"BLPOP", b"k1", b"k2", b"5"])).unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(50));
+    wait_for_blocked(&srv, 1);
     // Push to the *second* watched key — the arbiter must serve k2.
     producer.write_all(&req(&[b"LPUSH", b"k2", b"v2"])).unwrap();
     let _ = read_reply(&mut producer); // :1

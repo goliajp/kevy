@@ -12,6 +12,19 @@
 //! `33_regexp_family` probes run it end to end through funcgate, plus
 //! the unit tests below.
 #![allow(clippy::all, clippy::pedantic)]
+// `restriction` is not part of `clippy::all`, so the panic-family lints
+// reach in here even though everything else does not. The bodies stay as
+// upstream wrote them — the LOC waiver on `parse.rs` gives the reason:
+// re-shaping a tested matcher to satisfy a lint injects bugs and buys no
+// readability. Declared once here rather than per site so a re-sync from
+// spg stays a copy rather than a merge.
+//
+// `expect` and not `allow`: if a future upstream drops its own unwraps,
+// this stops being needed and the build says so instead of carrying a
+// permission nobody reads. It earned that on the first try — `expect_used`
+// and `panic` were in this list and the compiler refused them, because
+// neither fires here. An `allow` would have kept both, silently, forever.
+#![expect(clippy::unwrap_used, reason = "vendored spg ERE core, kept as upstream wrote it")]
 
 mod caps;
 mod classes;

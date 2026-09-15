@@ -20,6 +20,11 @@
 //! have missed. That is the 89 % / 76 % drift the lesson was paid for,
 //! measured on your own data instead of quoted from someone else's.
 
+// The progress report goes to stderr, and a stderr that has gone away
+// (a closed pipe, `| head`) is not a reason to abandon a backfill that
+// is otherwise succeeding. What matters is written to the store.
+#![expect(clippy::let_underscore_must_use, reason = "a report nobody is reading is not a failure")]
+
 use std::collections::BTreeSet;
 use std::io::{self, Write};
 use std::process::ExitCode;
@@ -27,6 +32,7 @@ use std::process::ExitCode;
 use kevy_resp_client::RespClient;
 
 /// Where a set of item names comes from.
+#[derive(Debug)]
 pub enum Source {
     /// The members of a set, sorted set, or list key.
     Index(String),
@@ -60,6 +66,7 @@ impl Source {
 }
 
 /// What one source contributed.
+#[derive(Debug)]
 pub struct SourceReport {
     /// How the source was named on the command line.
     pub label: String,
@@ -71,6 +78,7 @@ pub struct SourceReport {
 }
 
 /// The union, and where each name came from.
+#[derive(Debug)]
 pub struct Union {
     /// Every name, first-seen order, deduplicated.
     pub names: Vec<Vec<u8>>,

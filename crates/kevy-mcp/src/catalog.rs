@@ -41,6 +41,7 @@ pub enum Class {
 }
 
 /// The bootstrapped whitelist: every server verb, split by [`Class`].
+#[derive(Debug)]
 pub struct Catalog {
     /// Verbs with no `write` flag. Reachable through `kevy_read`.
     read: HashSet<String>,

@@ -56,8 +56,7 @@ impl<C: Commands> Shard<C> {
         // O(closing) per reap pass — typically 0-few entries at any
         // moment.
         //
-        // Conns whose write path hasn't drained yet are re-pushed to
-        // the closing set tail (so reap retries on a subsequent iter).
+        // A conn that is not yet quiet goes back on the set's tail.
         let candidates: Vec<u64> = std::mem::take(&mut self.closing_uring_conns);
         let mut done: Vec<u64> = Vec::with_capacity(candidates.len());
         let mut requeue: Vec<u64> = Vec::new();
@@ -65,17 +64,13 @@ impl<C: Commands> Shard<C> {
             // Already reaped (e.g. dedup on a doubly-pushed cid)?
             let Some(uc) = io.get(&cid) else { continue };
             let conn = self.conns.get(&cid);
-            let drained = conn
-                .is_none_or(|c| c.output.is_empty() && c.pending.is_empty() && c.write_pos == 0);
-            let closing = uc.closing || conn.is_some_and(|c| c.closing);
             // Sanity: cid was pushed because something flipped closing — but
             // accept-fail / EOF races could land it without `closing == true`.
             // Skip non-closing rather than reap.
-            if !closing {
+            if !(uc.closing || conn.is_some_and(|c| c.closing)) {
                 continue;
             }
-            let writes_quiet = !uc.write_inflight && uc.write_buf.is_empty();
-            if writes_quiet && drained {
+            if closing_conn_is_quiet(uc, conn) {
                 done.push(cid);
             } else {
                 requeue.push(cid);
@@ -99,5 +94,162 @@ impl<C: Commands> Shard<C> {
             // (the arm loop bails when both `conns.get_mut(&cid)` and
             // `io.get_mut(&cid)` return None).
         }
+    }
+}
+
+/// Whether a closing conn is finished with the ring and can be torn
+/// down: nothing of it still in flight, nothing of it still unsent.
+///
+/// The recv term is the one that was missing. [`Shard::uring_arm_conns`]
+/// cancels a closing conn's multishot recv precisely so that `close(fd)`
+/// sends a FIN, and its comment ends "the next reap closes cleanly" —
+/// but the next reap did not look at `recv_armed`. A reap landing in the
+/// window between the cancel being submitted and its terminal CQE
+/// arriving tore the conn down with the multishot still armed; the
+/// socket stayed pinned in the kernel, `close(fd)` sent nothing, and a
+/// client the server had decided to disconnect waited on a live socket
+/// forever.
+///
+/// Measured rather than reasoned. The query-buffer cell failed 5-7 times
+/// in 100 on Linux/io_uring, and in every one of those the reactor's own
+/// stall dump reported `conns=0` for all 121 heartbeats spanning the
+/// client's 30-second wait: the conn was already fully reaped while the
+/// client still saw the socket open. That rules out everything upstream
+/// of the reap and leaves the teardown itself.
+///
+/// Waiting here is bounded. The arm loop re-issues the cancel on every
+/// visit to a closing conn (idempotent — a redundant one returns
+/// `-ENOENT`) and keeps closing conns queued, and `recv_armed` clears on
+/// either that cancel's `-ECANCELED` or a multishot that stops
+/// delivering. If it somehow did not clear, the conn stays in
+/// `self.conns` and the stall dump names it — which is the failure worth
+/// having, the alternative being the silent half-open leak this fixes.
+fn closing_conn_is_quiet(uc: &UringConn, conn: Option<&crate::conn::Conn>) -> bool {
+    let drained =
+        conn.is_none_or(|c| c.output.is_empty() && c.pending.is_empty() && c.write_pos == 0);
+    let writes_quiet = !uc.write_inflight && uc.write_buf.is_empty();
+    let recv_quiet = !uc.recv_armed;
+    // The kernel-direct big-arg read holds a raw pointer into the body
+    // Vec this conn owns. Reaping while it is in flight frees that Vec
+    // under the kernel — a use-after-free the Rust side cannot see and
+    // no test would report as anything but corruption somewhere else.
+    let big_read_quiet = !uc.big_read_inflight;
+    writes_quiet && recv_quiet && big_read_quiet && drained
+}
+
+#[cfg(test)]
+mod tests {
+    use super::closing_conn_is_quiet;
+    use crate::uring_conn::UringConn;
+
+    /// A `Conn` for the cases that need one. `Conn::new` reads only
+    /// `peer_addr`, which is allowed to fail, so a listener on an
+    /// ephemeral port is the cheapest socket that will do — nothing
+    /// below touches the socket itself.
+    fn a_conn() -> crate::conn::Conn {
+        crate::conn::Conn::new(kevy_sys::tcp_listen([127, 0, 0, 1], 0, 1).unwrap())
+    }
+
+    fn a_pending_slot() -> crate::message_agg::PendingSlot {
+        crate::message_agg::PendingSlot {
+            remaining: 0,
+            agg: crate::message_agg::Agg::SumInt(0),
+            done: None,
+            proto: kevy_resp::RespVersion::default(),
+        }
+    }
+
+    /// A `None` conn is a conn already gone from `self.conns`, which the
+    /// reap treats as drained — so these cases isolate the three terms
+    /// that live on the `UringConn` side.
+    #[test]
+    fn a_fresh_conn_with_nothing_outstanding_is_quiet() {
+        assert!(closing_conn_is_quiet(&UringConn::new(), None));
+    }
+
+    /// The term this function was extracted to add. An armed multishot
+    /// recv pins the socket in the kernel, so reaping here closes the
+    /// descriptor without a FIN ever reaching the client — the
+    /// query-buffer disconnect that was decided and never landed.
+    #[test]
+    fn an_armed_recv_is_not_quiet() {
+        let mut uc = UringConn::new();
+        uc.recv_armed = true;
+        assert!(!closing_conn_is_quiet(&uc, None), "reaped with the recv still armed");
+    }
+
+    /// The term added after `recv_armed`, and found the same way: by
+    /// asking what else the kernel could still be holding.
+    ///
+    /// A kernel-direct big-arg read has a raw pointer into the body Vec
+    /// that `pending_big_arg` owns. Reaping frees it, and the kernel
+    /// then writes the client's SET body into freed memory. `CLIENT KILL`
+    /// against a connection stalled mid-body reaches it, and the window
+    /// is as long as the client cares to hold it.
+    ///
+    /// Note which flag does NOT protect this: `big_arg_read_pending`
+    /// means "queue an SQE next pass" and is cleared on submit, so it is
+    /// false for exactly the dangerous window.
+    #[test]
+    fn a_kernel_direct_big_read_in_flight_is_not_quiet() {
+        let mut uc = UringConn::new();
+        uc.big_read_inflight = true;
+        assert!(!closing_conn_is_quiet(&uc, None), "reaped with a read in the kernel");
+    }
+
+    /// And the flag that looks like it should have covered it does not,
+    /// stated as an assertion rather than left to a reader: a conn
+    /// waiting to QUEUE a read owns its body outright and is safe to
+    /// reap. Only a submitted one is not.
+    #[test]
+    fn a_big_read_merely_wanted_is_still_quiet() {
+        let mut uc = UringConn::new();
+        uc.big_arg_read_pending = true;
+        assert!(closing_conn_is_quiet(&uc, None));
+    }
+
+    #[test]
+    fn a_write_in_flight_is_not_quiet() {
+        let mut uc = UringConn::new();
+        uc.write_inflight = true;
+        assert!(!closing_conn_is_quiet(&uc, None));
+    }
+
+    #[test]
+    fn unsent_bytes_in_write_buf_are_not_quiet() {
+        let mut uc = UringConn::new();
+        uc.write_buf.push(b'x');
+        assert!(!closing_conn_is_quiet(&uc, None));
+    }
+
+    /// The `Some` side of the same question, and the reason it is not
+    /// covered by the cases above: `drained` is three terms of its own,
+    /// and the reap tears a conn down on all three.
+    #[test]
+    fn a_conn_with_nothing_left_to_send_is_quiet() {
+        assert!(closing_conn_is_quiet(&UringConn::new(), Some(&a_conn())));
+    }
+
+    #[test]
+    fn unsent_output_is_not_quiet() {
+        let mut c = a_conn();
+        c.output.push(b'x');
+        assert!(!closing_conn_is_quiet(&UringConn::new(), Some(&c)));
+    }
+
+    #[test]
+    fn an_unemitted_reply_is_not_quiet() {
+        let mut c = a_conn();
+        c.pending.push_back(a_pending_slot());
+        assert!(!closing_conn_is_quiet(&UringConn::new(), Some(&c)));
+    }
+
+    /// A half-written reply: `output` has been consumed up to
+    /// `write_pos`, so emptiness alone would call this drained.
+    #[test]
+    fn a_partly_written_reply_is_not_quiet() {
+        let mut c = a_conn();
+        c.write_pos = 1;
+        assert!(!closing_conn_is_quiet(&UringConn::new(), Some(&c)));
     }
 }

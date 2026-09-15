@@ -500,6 +500,29 @@ jobs:
       - name: Clippy (kevy-wasm's own feature set, which the workspace hides)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: cargo clippy -p kevy-wasm --all-targets -- -D warnings
+      # The step above is hand-written, and hand-written is how the next
+      # one was missed for a whole release line: kevy-alloc's `global`
+      # feature is off by default, so nothing in the tree turns it on, so
+      # `unsafe impl GlobalAlloc for KevyAlloc` — the most safety-critical
+      # impl here — was never linted and carried no SAFETY argument while
+      # the workspace reported clippy-zero on both platforms. This derives
+      # both lists from cargo metadata: every crate alone (what a
+      # dependent gets, which feature unification hides) and every
+      # off-by-default feature set (what nothing turns on).
+      #
+      # Both matrix legs, host-native (no --target, so it reuses the build
+      # cache the steps above filled). Running it on one runner would make
+      # it the other kind of partial green — the one measured on a single
+      # platform — which is the first mistake this pair of steps records.
+      - name: Clippy (the configurations --workspace never compiles)
+        run: python3 tools/check_feature_lints.py
+      # Library code only. The rule is scoped there, and a test that
+      # unwraps is stating a precondition rather than ducking one — the
+      # same survey read 2,425 `unwrap` sites with tests compiled and 71
+      # without. Both legs: a deny that holds on one platform says nothing
+      # about the code the other one compiles.
+      - name: Clippy (no unwrap, panic, or undocumented public item in library code)
+        run: cargo clippy --workspace --lib --bins --target ${{ matrix.target }} -- -D clippy::unwrap_used -D clippy::panic -D missing_docs
 
   # ───────────── contract gates: availability / AI / replication ─────────────
   # The executable behavior contracts: availgate's clamps (replication
@@ -807,6 +830,35 @@ jobs:
         env:
           MIRIFLAGS: "-Zmiri-disable-isolation"
         run: cargo miri test -p kevy-store --lib zset
+
+  # ───────────── loom: exhaustive interleaving search on the two ─────────────
+  # ───────────── lock-free handshakes                            ─────────────
+  # Both loom suites are `#![cfg(loom)]`, and until this job existed nothing
+  # anywhere passed `--cfg loom`. `cargo test --workspace` therefore ran them
+  # as "running 0 tests / test result: ok" — a pass — while three sites in
+  # kevy-rt cited a loom test by name as the argument for their SeqCst
+  # ordering. The gate demands the count: every #[test] in each loom.rs must
+  # have run, so silence cannot read as agreement again.
+  loom:
+    name: loom (kevy-ring SPSC + kevy-rt park/wake fence)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: loom-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            loom-
+
+      - name: loomgate (every loom test runs, and finishes clean)
+        run: python3 tools/check_loom.py
 
   # ───────────── fuzz smoke: 60s per target on every push ─────────────
   # The twelve libFuzzer targets (v3.18 T5a + the stone fuzz corpus) get a

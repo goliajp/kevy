@@ -18,12 +18,51 @@
 //!   38 % of its p99 budget in decode; a token + wildcopy design
 //!   measured ~8 GB/s in its naive form. Speed is a requirement of the
 //!   design, not a later optimisation.
+//!
+//!   **Met through [`Dict`], missed through [`decode`].** The cause was
+//!   never the token grammar: the dictionary is per-file state and every
+//!   entry point took it as a per-call argument. `examples/decode_budget`
+//!   measures held-out values against a trained dictionary — the shape
+//!   `kevy-vlog` produces — and reports, per value:
+//!
+//!   | path | `decode` | [`decode_with`] + [`Dict`] |
+//!   |---|---|---|
+//!   | fast | 0.543 GB/s | **2.079 GB/s** |
+//!   | compaction | 0.045 GB/s | **1.265 GB/s** |
+//!
+//!   `kevy-vlog` holds one `Dict` per file, so a cold read takes the
+//!   right column. `decode` stays for callers with nothing to hold it in,
+//!   and is honest about what it costs.
+//!
+//!   The earlier "order of magnitude above" reading came from
+//!   `examples/k1_sanity`, which trains the dictionary on the same value
+//!   it compresses; that decodes one long match out of the dictionary at
+//!   a 41x ratio, which no stored value ever does.
+//!
+//!   The write side had the same shape and is fixed the same way:
+//!   seeding the match table walks every dictionary position, so encode
+//!   time was flat in input size — an 8-byte value cost more than a
+//!   6 KiB one, because almost none of the work was about the value.
+//!
+//!   | path | `encode` | [`encode_with`] + [`Dict`] |
+//!   |---|---|---|
+//!   | fast | 35.2 us/value | **0.47 us** |
+//!   | compaction | 38.4 us/value | **2.86 us** |
+//!
+//!   The frames are identical either way — `examples/decode_budget`
+//!   asserts that before it reports a number, because a speedup that
+//!   changed what was written would be a different change.
 //! - **Never expand**: per-datum zlib on random 400 B values
 //!   *grows* them by 11 B. The raw-frame fallback is therefore part of
 //!   the format, not an optimisation.
 //! - **The dictionary carries the corpus claim**: match-finding refinements move
 //!   little; dictionary construction decides how much of the corpus
-//!   ceiling is captured. The `train` entry point is deliberately a
+//!   ceiling is captured. **Measured, this is the wrong way round on the
+//!   templated corpus**: a brute-force oracle over the same grammar
+//!   reaches 181.8 B/value where the shipped single-probe finder reaches
+//!   220.7 — 17.6 % of frame bytes — and `HT_BITS = 12` alone leaves
+//!   43.5 % of the dictionary's distinct 4-grams unreachable, so a
+//!   better `train` cannot cash in what it produces. The `train` entry point is deliberately a
 //!   replaceable policy behind a stable signature.
 //!
 //! # Format
@@ -80,8 +119,11 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 mod decode;
+mod dict;
 mod encode;
 mod huff;
+
+pub use dict::{Dict, decode_with, encode_high_with, encode_with};
 
 /// Frame tag: payload is the original bytes verbatim.
 pub const TAG_RAW: u8 = 0;
@@ -147,6 +189,22 @@ impl core::fmt::Display for Corrupt {
     }
 }
 
+/// Close a frame, or throw it away and store the input verbatim.
+///
+/// Never-expanding is a return value here, not a hope: an encoder that
+/// could not beat the input hands back a `TAG_RAW` frame rather than a
+/// larger one. Shared by all four entry points so the fallback cannot
+/// drift between them.
+fn finish_or_raw(frame: &mut Vec<u8>, tag: u8, ok: bool, input: &[u8]) {
+    if ok {
+        finish_header(frame, tag, input.len());
+    } else {
+        frame.clear();
+        push_header(frame, TAG_RAW, input.len());
+        frame.extend_from_slice(input);
+    }
+}
+
 /// Encode `input` into a frame, using `dict` as shared history when it
 /// pays. The result is **never longer than `input` plus the frame
 /// header**: when LZ cannot save a byte — incompressible input,
@@ -175,17 +233,11 @@ pub fn encode(dict: &[u8], input: &[u8]) -> Vec<u8> {
     let (_, content) = parse_dict(dict);
     let mut frame = Vec::with_capacity(input.len() + MAX_HEADER);
     let (tag, ok) = if input.len() >= encode::MIN_INPUT {
-        encode::try_lz(content, input, &mut frame)
+        encode::try_lz(content, None, input, &mut frame)
     } else {
         (TAG_RAW, false)
     };
-    if ok {
-        finish_header(&mut frame, tag, input.len());
-    } else {
-        frame.clear();
-        push_header(&mut frame, TAG_RAW, input.len());
-        frame.extend_from_slice(input);
-    }
+    finish_or_raw(&mut frame, tag, ok, input);
     frame
 }
 
@@ -210,17 +262,11 @@ pub fn encode_high(dict: &[u8], input: &[u8]) -> Vec<u8> {
     let (lens, content) = parse_dict(dict);
     let mut frame = Vec::with_capacity(input.len() + MAX_HEADER);
     let (tag, ok) = if input.len() >= encode::MIN_INPUT {
-        encode::try_high(content, lens.as_ref(), input, &mut frame)
+        encode::try_high(content, lens.as_ref(), None, input, &mut frame)
     } else {
         (TAG_RAW, false)
     };
-    if ok {
-        finish_header(&mut frame, tag, input.len());
-    } else {
-        frame.clear();
-        push_header(&mut frame, TAG_RAW, input.len());
-        frame.extend_from_slice(input);
-    }
+    finish_or_raw(&mut frame, tag, ok, input);
     frame
 }
 
@@ -240,24 +286,29 @@ pub fn encode_high(dict: &[u8], input: &[u8]) -> Vec<u8> {
 /// assert!(decode(b"", b"\xff\xff\xff").is_err());
 /// ```
 pub fn decode(dict: &[u8], frame: &[u8]) -> Result<Vec<u8>, Corrupt> {
-    let (lens, content) = parse_dict(dict);
+    // The tag first. `parse_dict` used to run above this line, so a
+    // `TAG_RAW` or `TAG_LZ` frame — which never reads the dictionary —
+    // still paid 128 header bytes unpacked into a 256-entry array and a
+    // Kraft sum over all of it. Measured at +0.138 us, which is 111% of
+    // a 400 B decode and 79% of a 64 B one.
     let (&tag, rest) = frame.split_first().ok_or(Corrupt)?;
     let (orig_len, payload) = read_varint(rest)?;
+    if matches!(tag, TAG_RAW | TAG_LZ) {
+        return match tag {
+            TAG_RAW if payload.len() == orig_len => Ok(payload.to_vec()),
+            TAG_RAW => Err(Corrupt),
+            _ => decode::lz(&[], payload, orig_len),
+        };
+    }
+    let (lens, content) = parse_dict(dict);
     match tag {
-        TAG_RAW => {
-            if payload.len() != orig_len {
-                return Err(Corrupt);
-            }
-            Ok(payload.to_vec())
-        }
-        TAG_LZ => decode::lz(&[], payload, orig_len),
         TAG_LZ_DICT => {
             if content.is_empty() {
                 return Err(Corrupt);
             }
             decode::lz(content, payload, orig_len)
         }
-        TAG_LZH => match decode::lz_high(&[], None, payload, orig_len) {
+        TAG_LZH => match decode::lz_high(&[], None, None, payload, orig_len) {
             // Compat: the 5.0.0 encoder could emit a shared-table
             // (flag 2) literal block under TAG_LZH — the tag missed
             // the dict dependency (fuzz crash 6b733e74; fixed in
@@ -265,7 +316,7 @@ pub fn decode(dict: &[u8], frame: &[u8]) -> Result<Vec<u8>, Corrupt> {
             // table: retry with it before declaring corrupt. The
             // record's CRC already vouched for the bytes.
             Err(Corrupt) if lens.is_some() => {
-                decode::lz_high(&[], lens.as_ref(), payload, orig_len)
+                decode::lz_high(&[], lens.as_ref(), None, payload, orig_len)
             }
             r => r,
         },
@@ -273,7 +324,7 @@ pub fn decode(dict: &[u8], frame: &[u8]) -> Result<Vec<u8>, Corrupt> {
             if content.is_empty() {
                 return Err(Corrupt);
             }
-            decode::lz_high(content, lens.as_ref(), payload, orig_len)
+            decode::lz_high(content, lens.as_ref(), None, payload, orig_len)
         }
         _ => Err(Corrupt),
     }

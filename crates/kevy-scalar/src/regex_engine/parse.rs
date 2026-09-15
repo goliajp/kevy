@@ -2,6 +2,21 @@
 #![allow(clippy::all, clippy::pedantic)]
 use super::*;
 
+/// Rewrite a parsed pattern so `(?i)` / `~*` match either case.
+///
+/// **ASCII only, and that is a decision rather than an omission.** Every
+/// test here is `is_ascii_alphabetic` and every fold is
+/// `to_ascii_lowercase`, so `(?i)é` does not match `É` and `(?i)[α-ω]`
+/// does not reach `Α-Ω`. It matches the rest of this engine, whose `\w`,
+/// `[[:alnum:]]` and `is_word_char` are all ASCII-scoped for the same
+/// reason — a case fold that covered Unicode while the classes did not
+/// would be inconsistent in a way callers cannot predict. Stated here
+/// because nothing else says it, and `case_folding_is_ascii_only` in
+/// `caps_tests.rs` is what holds it.
+///
+/// A `Backref` is not rewritten; it is marked `ci` and both sides are
+/// folded at match time, because what it must equal is not known until
+/// the group has captured.
 pub(crate) fn fold_case(node: &mut ReNode) {
     match node {
         ReNode::Literal(c) if c.is_ascii_alphabetic() => {

@@ -12,6 +12,7 @@ use crate::value::SmallBytes;
 /// Snapshot of `XAUTOCLAIM` work in progress: cursor for the next
 /// call, IDs successfully transferred, and IDs skipped because the
 /// stream has since deleted them.
+#[derive(Debug)]
 pub struct AutoclaimResult {
     /// Where the next `XAUTOCLAIM` should resume. `0-0` when the scan
     /// reached the end of the pending list.

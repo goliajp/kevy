@@ -137,6 +137,7 @@ pub fn with_current<T: 'static, R>(f: impl FnOnce(&mut T) -> R) -> Option<R> {
 /// `T` is whatever shard state the dispatch closure needs (`Store`,
 /// `KeyspaceStore`, …). It must outlive every `LuaHost::eval` call
 /// (trivially true: kevy holds the `&mut T` while delegating).
+#[derive(Debug)]
 pub struct LuaHost<T: 'static> {
     bridge: Bridge,
     _marker: PhantomData<fn() -> T>,
