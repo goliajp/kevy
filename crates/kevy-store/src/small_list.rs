@@ -30,7 +30,7 @@ use crate::nostd_prelude::*;
 use alloc::collections::VecDeque;
 
 /// Inline packed list storage. 24 bytes total.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct SmallListData {
     count: u8,
     used: u8,
@@ -118,6 +118,7 @@ impl SmallListData {
 }
 
 /// Iterator over [`SmallListData`].
+#[derive(Debug)]
 pub struct SmallListIter<'a> {
     buf: &'a [u8],
     cursor: usize,

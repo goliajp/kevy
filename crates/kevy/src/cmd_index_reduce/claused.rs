@@ -74,7 +74,13 @@ fn collect_facets(c: &[u8], mut pos: usize, n_fields: usize, out: &mut [Vec<Face
             let Some(id) = read_kbytes(c, &mut pos) else { return };
             let Some(label) = read_kbytes(c, &mut pos) else { return };
             let Some(cb) = c.get(pos..pos + 8) else { return };
-            field.push((id, label, u64::from_le_bytes(cb.try_into().expect("8 bytes"))));
+            field.push((
+                id,
+                label,
+                u64::from_le_bytes(
+                    cb.try_into().expect("the get(pos..pos + 8) above returned Some"),
+                ),
+            ));
             pos += 8;
         }
         part.push(field);

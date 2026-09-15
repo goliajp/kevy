@@ -1,6 +1,11 @@
 //! The table-catalog sidecar line codec. Split from `table.rs` to keep
 //! that file under the 500-LOC house rule.
 
+// `write!` into an in-memory buffer returns a `Result` because
+// `fmt::Write` / `io::Write` must, not because it can fail: the
+// `String` and `Vec` impls are infallible. Said once here.
+#![expect(clippy::let_underscore_must_use, reason = "writing to an in-memory buffer cannot fail")]
+
 use crate::catalog::{IndexKind, ValType};
 use crate::table::{OrderPath, TableIndex, TableSpec, WindowSpec};
 

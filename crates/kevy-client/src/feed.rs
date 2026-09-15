@@ -66,7 +66,10 @@ impl Connection {
                 match c.request_borrowed(&[b"FEED.TAIL", sh.as_bytes()])? {
                     Reply::Array(items) if items.len() == 2 => {
                         let mut it = items.into_iter();
-                        match (it.next().unwrap(), it.next().unwrap()) {
+                        match (
+                            it.next().expect("the items.len() check above"),
+                            it.next().expect("the items.len() check above"),
+                        ) {
                             (Reply::Int(g), Reply::Int(o)) => Ok((g as u64, o as u64)),
                             (a, _) => Err(unexpected(a)),
                         }
@@ -176,10 +179,13 @@ fn parse_batch(reply: Reply) -> KevyResult<FeedBatch> {
         return Err(KevyError::Protocol("FEED.READ: expected [gen, next, frames]".into()));
     }
     let mut it = items.into_iter();
-    let (Reply::Int(g), Reply::Int(next)) = (it.next().unwrap(), it.next().unwrap()) else {
+    let (Reply::Int(g), Reply::Int(next)) = (
+        it.next().expect("the items.len() check above"),
+        it.next().expect("the items.len() check above"),
+    ) else {
         return Err(KevyError::Protocol("FEED.READ: non-integer cursor".into()));
     };
-    let Reply::Array(raw_frames) = it.next().unwrap() else {
+    let Reply::Array(raw_frames) = it.next().expect("the items.len() check above") else {
         return Err(KevyError::Protocol("FEED.READ: frames not an array".into()));
     };
     let frames = raw_frames.into_iter().map(parse_frame).collect::<KevyResult<_>>()?;

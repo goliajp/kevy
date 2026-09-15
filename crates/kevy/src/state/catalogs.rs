@@ -12,6 +12,7 @@ use kevy_index::{
 
 use super::RuntimeState;
 
+#[derive(Debug)]
 pub(crate) struct CatalogState {
     /// Script cache shared across all shards: SCRIPT LOAD / EVAL write
     /// here, EVALSHA reads here and forwards the source to the

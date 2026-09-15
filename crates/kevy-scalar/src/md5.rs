@@ -36,8 +36,12 @@ pub fn md5_hex(input: &[u8]) -> String {
     // The digest is emitted little-endian per word (RFC 1321 §3.5).
     for word in [a, b, c, d] {
         for byte in word.to_le_bytes() {
-            out.push(char::from_digit((byte >> 4) as u32, 16).expect("nibble"));
-            out.push(char::from_digit((byte & 0xf) as u32, 16).expect("nibble"));
+            out.push(
+                char::from_digit((byte >> 4) as u32, 16).expect("a nibble is below the radix"),
+            );
+            out.push(
+                char::from_digit((byte & 0xf) as u32, 16).expect("a nibble is below the radix"),
+            );
         }
     }
     out
@@ -59,7 +63,9 @@ fn digest(input: &[u8]) -> [u32; 4] {
     for chunk in msg.as_chunks::<64>().0 {
         let mut m = [0u32; 16];
         for (i, w) in m.iter_mut().enumerate() {
-            *w = u32::from_le_bytes(chunk[i * 4..i * 4 + 4].try_into().expect("4 bytes"));
+            *w = u32::from_le_bytes(
+                chunk[i * 4..i * 4 + 4].try_into().expect("chunk is [u8; 64] and i < 16"),
+            );
         }
         let (mut a, mut b, mut c, mut d) = (a0, b0, c0, d0);
         for i in 0..64 {

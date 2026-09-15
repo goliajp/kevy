@@ -26,6 +26,7 @@ use kevy_resp_client::ReplyReadBuf;
 use crate::transport::{AsyncTransport, read, write_all};
 
 /// Buffered RESP3 codec over an [`AsyncTransport`].
+#[derive(Debug)]
 pub struct AsyncRespCodec<T> {
     transport: T,
     buf: ReplyReadBuf,

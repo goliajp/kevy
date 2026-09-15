@@ -98,9 +98,12 @@ fn prefetch_t0(ptr: *const u8) {
 /// at most `cap + GROUP_WIDTH - 2`.
 #[inline]
 pub(crate) fn table_layout<KV>(cap: usize) -> (Layout, usize) {
-    let slots = Layout::array::<MaybeUninit<KV>>(cap).expect("slots layout overflow");
-    let meta = Layout::array::<u8>(cap + GROUP_WIDTH).expect("metadata layout overflow");
-    let (combined, meta_offset) = slots.extend(meta).expect("layout extend overflow");
+    let slots = Layout::array::<MaybeUninit<KV>>(cap)
+        .expect("a capacity that overflows a Layout could not have been allocated");
+    let meta = Layout::array::<u8>(cap + GROUP_WIDTH)
+        .expect("a capacity that overflows a Layout could not have been allocated");
+    let (combined, meta_offset) =
+        slots.extend(meta).expect("both halves already fit, so their sum fits isize");
     (combined.pad_to_align(), meta_offset)
 }
 
@@ -156,6 +159,8 @@ pub struct KevyMap<K, V> {
 // `NonNull<...>` fields are conceptually `Box<[…]>` and inherit the same
 // Send/Sync bounds: send-K + send-V ⇒ KevyMap is Send. Same for Sync.
 unsafe impl<K: Send, V: Send> Send for KevyMap<K, V> {}
+// SAFETY: as above — the pointers are owning, not shared, so a `&KevyMap` grants
+// only reads of `K` and `V`, which `K: Sync + V: Sync` makes safe to share.
 unsafe impl<K: Sync, V: Sync> Sync for KevyMap<K, V> {}
 
 /// `(metadata, slots)` parallel-slice pair returned by [`KevyMap::as_slices`].
@@ -235,6 +240,8 @@ impl<K, V> KevyMap<K, V> {
         // SAFETY: i ∈ [0, cap); i2 ∈ [GROUP_WIDTH, cap + GROUP_WIDTH);
         // both in-bounds since metadata buffer length is cap + GROUP_WIDTH.
         let i2 = (i.wrapping_sub(GROUP_WIDTH) & self.mask) + GROUP_WIDTH;
+        // SAFETY: both indices are in range by the bound stated just above, and the
+        // metadata allocation is `cap + GROUP_WIDTH` bytes long.
         unsafe {
             *self.metadata_ptr.as_ptr().add(i) = v;
             *self.metadata_ptr.as_ptr().add(i2) = v;
@@ -420,6 +427,15 @@ impl<K, V> KevyMap<K, V> {
 
     /// 7/8 of the capacity — the inclusive max for `occupied + deleted`.
     #[inline]
+    /// Slots holding a tombstone: erased, but still probed through.
+    ///
+    /// A test's window onto the growth question — the load check counts
+    /// `occupied + deleted`, so this is half of what decides a grow.
+    #[must_use]
+    pub fn tombstones(&self) -> usize {
+        self.deleted
+    }
+
     pub(crate) fn threshold(&self) -> usize {
         self.cap - (self.cap / 8)
     }
@@ -439,7 +455,7 @@ where
 {
     type Output = V;
     fn index(&self, key: &Q) -> &V {
-        self.get(key).expect("no entry found for key")
+        self.get(key).expect("Index panics by contract; get is the fallible form")
     }
 }
 

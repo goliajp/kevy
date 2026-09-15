@@ -20,7 +20,7 @@
 
 #![cfg(test)]
 
-use crate::regex_engine::{max_group, re_compile, re_find_caps};
+use crate::regex_engine::{max_group, re_compile, re_find, re_find_caps};
 
 fn chars(s: &str) -> Vec<char> {
     s.chars().collect()
@@ -112,4 +112,448 @@ fn captures_hold_when_the_match_starts_late() {
     let (whole, g) = caps(r"(x)(y)", "aaaxy").expect("matches");
     assert_eq!(whole, "xy");
     assert_eq!(g, vec![Some("x".into()), Some("y".into())]);
+}
+
+/// Does `pat` find anything in `hay`? Compilation must succeed.
+fn hits(pat: &str, hay: &str) -> bool {
+    let node = re_compile(pat).unwrap_or_else(|_| panic!("{pat} must compile"));
+    let cs = chars(hay);
+    re_find(&node, &cs, 0).unwrap_or_else(|_| panic!("{pat} must not error")).is_some()
+}
+
+/// The message `pat` is refused with. Compilation must fail.
+fn refusal(pat: &str) -> String {
+    match re_compile(pat) {
+        Err(crate::regex_engine::ReErr::TypeMismatch { detail }) => detail,
+        Ok(_) => panic!("{pat} must not compile"),
+    }
+}
+
+// WRITTEN HERE: greedy and lazy choose opposite ends of the same set.
+//
+// `re_match_seq`'s quantifier arm collects every reachable repetition count
+// and then tries the tail at each — greedy walking high to low, lazy low to
+// high, both honouring the same `[min, max]`. 51 of its regions had never
+// executed.
+//
+// Telling the two apart needs a tail that can match in more than one place.
+// On `aaab` both `a*b` and `a*?b` take all three `a`s, because only one
+// position works; the difference is invisible. `(a*)a` and `(a*?)a` on
+// `aaa` are the pair that shows it.
+#[test]
+fn greedy_and_lazy_walk_the_repetition_counts_from_opposite_ends() {
+    // Greedy: as many as possible, then give back until the tail fits.
+    let (whole, g) = caps(r"(a*)a", "aaa").expect("matches");
+    assert_eq!(whole, "aaa");
+    assert_eq!(g, vec![Some("aa".into())], "greedy gives back exactly one");
+
+    // Lazy: as few as possible, then take more only when the tail fails.
+    let (whole, g) = caps(r"(a*?)a", "aaa").expect("matches");
+    assert_eq!(whole, "a", "lazy stops at the first tail that fits");
+    assert_eq!(g, vec![Some("".into())], "which is zero repetitions");
+
+    // `+` has a floor of one, so neither can reach zero.
+    let (whole, g) = caps(r"(a+)a", "aaa").expect("matches");
+    assert_eq!((whole.as_str(), &g), ("aaa", &vec![Some("aa".into())]));
+    let (whole, g) = caps(r"(a+?)a", "aaa").expect("matches");
+    assert_eq!((whole.as_str(), &g), ("aa", &vec![Some("a".into())]), "lazy still honours min");
+
+    // A bounded floor: greedy descends past `min` and stops; lazy climbs
+    // and skips the counts below it. Both must land on two.
+    let (_, g) = caps(r"(a{2,})a", "aaaa").expect("matches");
+    assert_eq!(g, vec![Some("aaa".into())], "greedy gives back to three, not below two");
+    let (whole, g) = caps(r"(a{2,}?)a", "aaaa").expect("matches");
+    assert_eq!(whole, "aaa", "lazy climbs to two and stops");
+    assert_eq!(g, vec![Some("aa".into())]);
+    assert!(caps(r"(a{2,})b", "ab").is_none(), "one a cannot satisfy a floor of two");
+
+    // The ceiling stops the collection.
+    let (whole, _) = caps(r"a{1,2}", "aaa").expect("matches");
+    assert_eq!(whole, "aa", "a ceiling of two takes two");
+
+    // The alternation arm backtracks across the tail: `a` matches first but
+    // leaves `c` facing `b`, so the second branch has to be tried.
+    let (whole, _) = caps(r"(a|ab)c", "abc").expect("matches");
+    assert_eq!(whole, "abc", "the losing branch is retried against the tail");
+
+    // The concat arm flattens nested sequences while preserving that
+    // backtracking across the boundary.
+    let (whole, g) = caps(r"((a|ab)c)d", "abcd").expect("matches");
+    assert_eq!(whole, "abcd");
+    assert_eq!(g, vec![Some("abc".into()), Some("ab".into())]);
+}
+
+// WRITTEN HERE: what `(?i)` reaches, and what it deliberately does not.
+//
+// `fold_case` walks the parsed pattern rewriting literals and classes into
+// both cases, recursing through quantifiers, groups, lookahead, concat and
+// alternation, and marking backreferences `ci` so both sides fold at match
+// time. 47 of its regions had never executed.
+//
+// The row that matters most is the last one. Every test in that function
+// is `is_ascii_alphabetic` and every fold is `to_ascii_lowercase`, so
+// `(?i)é` does not match `É`. That is deliberate — this engine's `\w`,
+// `[[:alnum:]]` and word boundaries are ASCII-scoped too — but nothing
+// said so and nothing checked it, which is exactly the state in which
+// someone widens one of the two and leaves the pair inconsistent.
+#[test]
+fn case_folding_is_ascii_only() {
+    // Literals, and each container fold_case recurses through.
+    assert!(hits("(?i)abc", "ABC"), "literal");
+    assert!(hits("(?i)(ab)+", "ABAB"), "group under a quantifier");
+    assert!(hits("(?i)a|b", "B"), "alternation");
+    assert!(hits("(?i)(?:ab)c", "ABC"), "non-capturing group");
+    assert!(hits("(?i)a(?=b)", "aB"), "lookahead");
+
+    // Class members: singles and ranges both.
+    assert!(hits("(?i)[abc]+", "ABC"), "class singles");
+    assert!(hits("(?i)[a-c]+", "ABC"), "class range");
+    assert!(hits("(?i)[^a-c]", "X"), "a negated class still folds its members");
+    assert!(!hits("(?i)[a-c]", "X"));
+
+    // A backreference is not rewritten — it is marked `ci` and both sides
+    // fold when the comparison happens, since what it must equal is not
+    // known until the group captures.
+    assert!(hits("(?i)(a)\\1", "aA"), "backreference folds at match time");
+    assert!(hits("(?i)(ab)\\1", "abAB"));
+    assert!(!hits("(?i)(a)\\1", "ab"));
+
+    // And the boundary. Non-ASCII letters are NOT folded.
+    assert!(hits("(?i)a", "A"), "ASCII folds");
+    assert!(!hits("(?i)é", "É"), "a non-ASCII letter does not fold");
+    assert!(hits("(?i)é", "é"), "it still matches itself");
+    assert!(!hits("(?i)[α-ω]", "Α"), "nor does a non-ASCII range");
+}
+
+// PORTED + WRITTEN HERE: the escape table, one row per arm.
+//
+// `re_parse_atom` carried 74 never-executed regions and most of them are
+// this table — twenty-odd escapes, each with a comment naming what PG18
+// does and several marked "verified against live PG18". The comments were
+// the only thing holding the semantics.
+//
+// The two that matter most are the two that are NOT what a PCRE reader
+// expects, and are the ones most likely to be "fixed" into agreement with
+// the wrong engine: in PG's ARE, `\b` is the BACKSPACE character and `\B`
+// is a literal backslash. Word boundaries are `\y \Y \m \M`.
+#[test]
+fn every_escape_means_what_the_comment_beside_it_says() {
+    // (pattern, haystack, must match)
+    let cases: &[(&str, &str, bool)] = &[
+        // Character-class shorthands.
+        (r"\d", "5", true),
+        (r"\d", "x", false),
+        (r"\D", "x", true),
+        (r"\D", "5", false),
+        (r"\w", "a", true),
+        (r"\w", "_", true),
+        (r"\w", "-", false),
+        (r"\W", "-", true),
+        (r"\s", " ", true),
+        (r"\s", "a", false),
+        (r"\S", "a", true),
+        // Character-entry escapes. `\b` and `\B` are the PCRE-surprising pair.
+        (r"\a", "\u{07}", true),
+        (r"\e", "\u{1b}", true),
+        (r"\f", "\u{0c}", true),
+        (r"\n", "\n", true),
+        (r"\r", "\r", true),
+        (r"\t", "\t", true),
+        (r"\v", "\u{0b}", true),
+        (r"\b", "\u{08}", true),
+        (r"\b", "ab", false),
+        (r"\B", "\\", true),
+        (r"\B", "ab", false),
+        // Numeric escapes.
+        (r"\x41", "A", true),
+        (r"\x41", "B", false),
+        (r"A", "A", true),
+        // Word boundaries — these are the real ones.
+        (r"\yfoo\y", "a foo b", true),
+        (r"\yfoo\y", "afoob", false),
+        (r"\mfoo", "foo bar", true),
+        (r"foo\M", "a foo", true),
+        // String anchors: `\A` is `^`, `\Z` is `$`.
+        (r"\Afoo", "foobar", true),
+        (r"\Afoo", "xfoo", false),
+        (r"bar\Z", "foobar", true),
+        (r"bar\Z", "barfoo", false),
+    ];
+
+    for (pat, hay, want) in cases {
+        assert_eq!(hits(pat, hay), *want, "{pat:?} against {hay:?}");
+    }
+    assert_eq!(cases.len(), 33, "the table shrank; a table-driven test that loses rows tests less");
+}
+
+// WRITTEN HERE: what the parser refuses, and with which message. The
+// message is the whole user-visible surface of a bad pattern.
+#[test]
+fn a_malformed_escape_or_group_is_refused_by_name() {
+    assert!(refusal("\\").contains("dangling backslash"), "{}", refusal("\\"));
+    assert!(refusal(r"\xZZ").contains("needs hex digits"), "{}", refusal(r"\xZZ"));
+    assert!(refusal(r"\uZZ").contains("needs hex digits"));
+    assert!(
+        refusal(r"\1").contains("invalid backreference number"),
+        "a backreference with no group before it"
+    );
+    assert!(refusal(r"(a)\2").contains("invalid backreference number"), "a forward reference");
+    assert!(refusal("(a").contains("not balanced"), "an unclosed group");
+
+    // `(?x` where x is none of `: = !`. PG splits these two ways: a letter
+    // reads as a bad embedded option, anything else as a `?` with no
+    // operand. Before this arm existed, `(?<name>h)` parsed the `?` as a
+    // literal and matched nothing at all.
+    assert!(refusal("(?P<n>a)").contains("invalid embedded option"), "PCRE named group");
+    assert!(refusal("(?<n>a)").contains("quantifier operand invalid"), "the `<` form");
+}
+
+// WRITTEN HERE: the three `(?...)` forms this engine does implement.
+#[test]
+fn non_capturing_groups_and_lookahead_parse_and_match() {
+    // `(?:` groups without capturing — the group count stays at zero, so a
+    // backreference to 1 is still invalid.
+    assert!(hits("(?:ab)+c", "ababc"));
+    assert!(refusal(r"(?:a)\1").contains("invalid backreference number"), "(?: does not capture");
+
+    // `(?=` and `(?!` are zero-width.
+    assert!(hits("a(?=b)", "ab"));
+    assert!(!hits("a(?=b)", "ac"));
+    assert!(hits("a(?!b)", "ac"));
+    assert!(!hits("a(?!b)", "ab"));
+}
+
+// WRITTEN HERE: a quantified capture group that a backreference then
+// constrains. This is the arm `caps.rs` documents with
+// `^(a*)\1$` on "aaaa" giving back group = "aa", and 138 of its regions
+// had never executed — the largest surviving block in this crate.
+//
+// The arm exists because a greedy `(a*)` would take all four `a`s and
+// leave nothing for `\1`. It has to enumerate the inner quantifier's
+// reachable ends, record `caps[idx]` at each repetition count, and try the
+// tail from each — a backtrack point the plain descent never needs,
+// because it has no captures for a backreference to refer to.
+#[test]
+fn a_quantified_group_backtracks_for_the_backreference_that_follows_it() {
+    // The documented case: greedy `(a*)` must give back to two.
+    let (whole, g) = caps(r"^(a*)\1$", "aaaa").expect("matches");
+    assert_eq!(whole, "aaaa");
+    assert_eq!(g, vec![Some("aa".into())], "the group gives back half");
+
+    // Odd length cannot split in two, at any give-back.
+    assert!(caps(r"^(a*)\1$", "aaa").is_none(), "three a's cannot be a doubled prefix");
+    assert!(caps(r"^(a*)\1$", "aaaaa").is_none());
+
+    // Zero is a reachable end: the empty group matches the empty string.
+    let (whole, g) = caps(r"^(a*)\1$", "").expect("empty matches with an empty group");
+    assert_eq!(whole, "");
+    assert_eq!(g, vec![Some("".into())]);
+
+    // Three copies: eight a's give back to two, not four.
+    let (whole, g) = caps(r"^(a*)\1\1$", "aaaaaa").expect("matches");
+    assert_eq!(whole, "aaaaaa");
+    assert_eq!(g, vec![Some("aa".into())], "six a's split three ways");
+
+    // `+` has a floor of one, so the empty end is not reachable.
+    assert!(caps(r"^(a+)\1$", "").is_none(), "a+ cannot match empty");
+    let (_, g) = caps(r"^(a+)\1$", "aaaa").expect("matches");
+    assert_eq!(g, vec![Some("aa".into())]);
+
+    // A multi-character body, so the enumeration is over repetitions of a
+    // group rather than of a single character.
+    let (whole, g) = caps(r"^(ab)+\1$", "ababab").expect("matches");
+    assert_eq!(whole, "ababab");
+    assert_eq!(g, vec![Some("ab".into())], "the last repetition is what \\1 sees");
+
+    // A bounded quantifier: the enumeration must stop at the ceiling.
+    let (_, g) = caps(r"^(a{1,2})\1$", "aaaa").expect("matches");
+    assert_eq!(g, vec![Some("aa".into())]);
+    assert!(caps(r"^(a{1,2})\1$", "aaaaaa").is_none(), "the ceiling of two is enforced");
+}
+
+/// The two descents agree — at the low level where they are the same
+/// algorithm, and at the high level where one of them routes.
+///
+/// `re_match_at` and `re_match_at_caps` are one backtracking descent
+/// written twice, the second threading a `Caps` array and an undo journal
+/// through it so a failed branch restores what it overwrote. Between them
+/// they carry 123 never-executed regions, and they are what every
+/// `regexp_matches` and every `regexp_replace` with a `\1` runs. Nothing
+/// checked that they answer the same question the same way. Two
+/// implementations of one descent is the shape
+/// `mod/no-second-implementation` warns about: they drift, disagree on a
+/// quantifier or a backtrack, and both stay green because each is tested
+/// alone.
+///
+/// **Backreferences are not one of those disagreements**, and finding that
+/// out is why this test has two halves. `re_match_at` answers `Ok(None)`
+/// for any `Backref` — it has no captures to compare against — so
+/// `(abc)\1` on `"abcabc"` returns no match there while the caps descent
+/// returns 6. That is not drift: `re_find` checks `has_backref` and routes
+/// those patterns to the capturing side, discarding the captures. The
+/// low-level half therefore compares only patterns without backreferences,
+/// which is the domain where the two are meant to be interchangeable, and
+/// the high-level half compares `re_find` against `re_find_caps` over
+/// everything — which is where the routing itself gets checked.
+///
+/// One difference is deliberate and is why this stays shallow:
+/// `MATCH_DEPTH_LIMIT` is 500 and `CAP_MATCH_DEPTH_LIMIT` is 300, so a
+/// pattern nested between those errors in one and matches in the other.
+#[test]
+fn the_capturing_and_non_capturing_descents_agree() {
+    use crate::regex_engine::{has_backref, re_find, re_find_caps, re_match_at, re_match_at_caps};
+
+    // Quantifiers, alternation, classes, anchors, backtracking, and the
+    // empty-match cases that separate a correct descent from a plausible one.
+    let patterns = [
+        "a*b",
+        "a+b",
+        "a?b",
+        "(a|b)+c",
+        "(a|ab)c",
+        "[a-z]{2,4}",
+        "^ab$",
+        "a{3}",
+        "[^x]+",
+        "(ab)*",
+        "(a*)*b",
+        "x|",
+        "()",
+        "a**",
+        "(a|b|c)d",
+        "[[:digit:]]+",
+        "a.c",
+        "(abc)\\1",
+        "^$",
+        "(a)(b)(c)",
+    ];
+    let inputs = [
+        "", "a", "b", "ab", "abc", "aab", "abab", "abcabc", "xyz", "aaaa", "a1b2", "ac", "d", "cd",
+        "123", "  ", "aXc",
+    ];
+
+    let (mut low, mut high, mut matched, mut backref_pats) = (0, 0, 0, 0);
+    for pat in patterns {
+        // A pattern this engine refuses to compile is not a disagreement
+        // between the descents, which is what this test is about.
+        let Ok(node) = re_compile(pat) else { continue };
+        let ngroups = max_group(&node);
+        let routed = has_backref(&node);
+        if routed {
+            backref_pats += 1;
+        }
+        for input in inputs {
+            let s = chars(input);
+
+            // High level: both entries, every pattern, routing included.
+            let plain_span = re_find(&node, &s, 0);
+            let caps_span = re_find_caps(&node, &s, 0, ngroups).map(|o| o.map(|(span, _)| span));
+            match (&plain_span, &caps_span) {
+                (Ok(a), Ok(b)) => assert_eq!(
+                    a, b,
+                    "pattern {pat:?} on {input:?}: re_find says {a:?}, re_find_caps says {b:?}"
+                ),
+                (Err(_), Err(_)) => {}
+                _ => {
+                    panic!("pattern {pat:?} on {input:?}: one entry errored and the other did not")
+                }
+            }
+            high += 1;
+
+            // Low level: only where the two are meant to be interchangeable.
+            if routed {
+                continue;
+            }
+            let mut steps_plain: u64 = 0;
+            let plain = re_match_at(&node, &s, 0, 0, &mut steps_plain);
+            let mut steps_caps: u64 = 0;
+            let mut caps: Vec<Option<(usize, usize)>> = vec![None; ngroups + 1];
+            let mut journal: Vec<(usize, Option<(usize, usize)>)> = Vec::new();
+            let capped =
+                re_match_at_caps(&node, &s, 0, 0, &mut steps_caps, &mut caps, &mut journal);
+            match (&plain, &capped) {
+                (Ok(a), Ok(b)) => {
+                    assert_eq!(
+                        a, b,
+                        "pattern {pat:?} on {input:?}: re_match_at says {a:?}, \
+                         re_match_at_caps says {b:?}"
+                    );
+                    if a.is_some() {
+                        matched += 1;
+                    }
+                }
+                (Err(_), Err(_)) => {}
+                _ => panic!(
+                    "pattern {pat:?} on {input:?}: one matcher errored and the other did not"
+                ),
+            }
+            low += 1;
+        }
+    }
+
+    assert_eq!(high, patterns.len() * inputs.len(), "every pair went through both entries");
+    assert!(
+        backref_pats > 0,
+        "the table must contain a backref pattern, or the routing half
+             of this test compares nothing"
+    );
+    assert!(low > 0 && low < high, "the low-level half must run and must skip the routed ones");
+    assert!(
+        matched > 40,
+        "only {matched} of {low} low-level pairs matched; a table where almost nothing \
+         matches compares two ways of saying no"
+    );
+}
+
+/// A group holding an alternation must retry its branches against the tail.
+///
+/// `(a|ab)c` on "abc" returned no match. Branch `a` matched, the tail `c`
+/// then faced `b` and failed, and nothing went back for `ab`. `(ab|a)c`
+/// on the same input matched — the only difference being which branch was
+/// written first, which is not a difference a regex is allowed to have.
+///
+/// Both `re_match_seq` and `re_match_seq_caps` retry branches when an
+/// `Alt` sits directly in the sequence. Neither reached that arm when the
+/// `Alt` was wrapped in parentheses: a `Group` fell to the catch-all,
+/// where `re_match_at*` returns the first branch that matches and offers
+/// no way back.
+///
+/// Worth recording how this survived: `the_capturing_and_non_capturing_
+/// descents_agree` runs `(a|ab)c` and passed, because BOTH descents were
+/// wrong in the same way. A differential test is blind to a defect the two
+/// implementations share, which is the one thing it cannot be asked to
+/// find.
+#[test]
+fn a_parenthesised_alternation_retries_its_branches_against_the_tail() {
+    // The case that was broken, and its mirror that was not.
+    let (whole, g) = caps(r"(a|ab)c", "abc").expect("the second branch must be tried");
+    assert_eq!(whole, "abc");
+    assert_eq!(g, vec![Some("ab".into())], "the branch that won is what was captured");
+    let (whole, g) = caps(r"(ab|a)c", "abc").expect("matches either way round");
+    assert_eq!((whole.as_str(), &g), ("abc", &vec![Some("ab".into())]));
+
+    // Branch order must not decide the answer.
+    for pat in [r"(a|ab|abc)d", r"(abc|ab|a)d", r"(ab|abc|a)d"] {
+        let (whole, g) = caps(pat, "abcd").unwrap_or_else(|| panic!("{pat} must match"));
+        assert_eq!(whole, "abcd", "{pat}");
+        assert_eq!(g, vec![Some("abc".into())], "{pat}: the branch the tail needs");
+    }
+
+    // Nested, so the retry has to cross more than one level.
+    let (whole, g) = caps(r"((a|ab)c)d", "abcd").expect("matches");
+    assert_eq!(whole, "abcd");
+    assert_eq!(g, vec![Some("abc".into()), Some("ab".into())]);
+
+    // A control, not a regression: `(?:` was never broken. A non-capturing
+    // group returns its inner node rather than a `Group`, so the `Alt`
+    // lands directly in the sequence where the correct arm already reached
+    // it. It is here to keep that distinction visible — only capturing
+    // parentheses were affected.
+    assert!(hits(r"(?:a|ab)c", "abc"), "non-capturing group was always right");
+    assert!(hits(r"(a|ab)c", "abc"), "capturing group through re_find");
+
+    // A first branch that still wins is not disturbed.
+    let (whole, g) = caps(r"(a|ab)b", "abb").expect("matches");
+    assert_eq!(whole, "ab", "the shorter branch is correct here and stays");
+    assert_eq!(g, vec![Some("a".into())]);
 }

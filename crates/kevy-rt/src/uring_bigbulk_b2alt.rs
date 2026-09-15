@@ -48,6 +48,10 @@ impl<C: Commands> Shard<C> {
         io: &mut KevyMap<u64, UringConn>,
     ) {
         let Some(uc) = io.get_mut(&cid) else { return };
+        // The completion IS the kernel handing the buffer back, on every
+        // path below including error and EOF — so this clears first and
+        // unconditionally rather than once per branch.
+        uc.big_read_inflight = false;
         if res <= 0 {
             // EOF or error mid-body — drop the conn (mirrors
             // `uring_on_recv` semantics; partial-body state is
@@ -269,11 +273,14 @@ pub(crate) struct ThreeSliceView<'a> {
 
 impl<'a> core::ops::Index<usize> for ThreeSliceView<'a> {
     type Output = [u8];
+    #[expect(clippy::panic, reason = "Index's contract is to panic")]
     fn index(&self, i: usize) -> &[u8] {
         match i {
             0 => self.verb,
             1 => self.key,
             2 => self.body,
+            // `Index::index` has no fallible form — panicking out of range
+            // is the trait's contract, the same one `[T]` and `Vec` keep.
             _ => panic!("ThreeSliceView index oob: {i}"),
         }
     }

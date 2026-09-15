@@ -47,6 +47,7 @@ pub enum FromOffset {
 }
 
 /// Bounded backlog of recent replicated mutations.
+#[derive(Debug)]
 pub struct ReplicationSource {
     next_offset: u64,
     bytes_in_buf: usize,
@@ -220,6 +221,7 @@ impl ReplicationSource {
 }
 
 /// Iterator over backlog frames returned by [`ReplicationSource::frames_from`].
+#[derive(Debug)]
 pub struct FramesIter<'a> {
     buf: &'a std::collections::VecDeque<Frame>,
     cursor: usize,

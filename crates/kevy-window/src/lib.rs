@@ -9,6 +9,10 @@
 //! and a restart drops the segment set and re-slides.
 
 //! Every public item here is documented and the lint holds it.
+// Best-effort removal, on paths where the file is being abandoned.
+// A file that will not delete is a stray the next sweep collects,
+// and refusing here would abandon the rest of the cleanup.
+#![expect(clippy::let_underscore_must_use, reason = "removing what is already meant to be gone")]
 #![warn(missing_docs)]
 use std::collections::HashMap;
 use std::path::Path;
@@ -28,6 +32,7 @@ use kevy_index::{
 };
 
 /// One index's window state on one shard.
+#[derive(Debug)]
 pub struct WindowRt {
     /// The declared window — width, column and retention — as the catalog
     /// recorded it. Fixed for the life of the index; everything else here

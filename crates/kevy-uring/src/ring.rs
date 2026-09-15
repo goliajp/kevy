@@ -8,12 +8,12 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use std::io;
 
 use crate::completion::Completion;
-use crate::ffi::{
-    self, IORING_ENTER_GETEVENTS, IORING_ENTER_SQ_WAKEUP, IORING_SQ_NEED_WAKEUP, SYS_IO_URING_ENTER,
-};
+use crate::enter_policy::{dropped_error, dropped_since, enter_flags_for, may_skip_enter};
+use crate::ffi::{self, IORING_ENTER_SQ_WAKEUP, IORING_SQ_NEED_WAKEUP, SYS_IO_URING_ENTER};
 use crate::layout::IoUringSqe;
 
 /// A Linux io_uring instance: one submission ring + one completion ring.
+#[derive(Debug)]
 pub struct IoUring {
     pub(crate) ring_fd: c_int,
     sq_mmap: *mut c_void,
@@ -39,6 +39,18 @@ pub struct IoUring {
     /// `IORING_SQ_NEED_WAKEUP` first and skip the syscall when the SQ poll
     /// thread is awake.
     sq_flags: Option<*const AtomicU32>,
+    /// The same word, kept unconditionally, because `IORING_SQ_CQ_OVERFLOW`
+    /// lives there in EVERY mode while the field above is `Some` only
+    /// under SQPOLL. Reading the overflow bit through that `Option` meant
+    /// it was physically unreadable in the mode this engine actually
+    /// runs.
+    flags_word: *const AtomicU32,
+    /// `sq_off.dropped`: submissions the kernel refused. Mapped by the
+    /// kernel since the beginning and read by nobody.
+    dropped: *const AtomicU32,
+    /// Last `dropped` reading, so a rise is reported once rather than on
+    /// every call for the life of the ring.
+    last_dropped: u32,
     /// `(index, enter_flag)` for a successful registered-ring-fd setup. When
     /// `Some((i, _))`, `submit_and_wait` passes `i` as the syscall fd and
     /// ORs `IORING_ENTER_REGISTERED_RING` into the enter flags — the kernel
@@ -128,6 +140,8 @@ impl IoUring {
         // SAFETY: `sq_off` / `cq_off` were filled by the kernel for this ring;
         // their byte offsets lie inside the just-mapped regions.
         let sq = unsafe { Self::sq_cursors(sq_mmap, &p) };
+        // SAFETY: as above — `cq_off` came from the same kernel-filled params and its
+        // offsets lie inside the completion-queue mapping.
         let cq = unsafe { Self::cq_cursors(cq_mmap, &p) };
         let sq_flags = if sqpoll.is_some() { Some(sq.flags) } else { None };
 
@@ -150,6 +164,9 @@ impl IoUring {
             cq_ktail: cq.ktail,
             cqes: cq.cqes,
             sq_flags,
+            flags_word: sq.flags,
+            dropped: sq.dropped,
+            last_dropped: 0,
             enter_ring: None,
             iters_since_enter: 0,
         };
@@ -202,6 +219,24 @@ impl IoUring {
         let to_submit = self.sq_tail.wrapping_sub(prev);
         // SAFETY: publishing our local tail to the kernel-shared atomic.
         unsafe { (*self.sq_ktail).store(self.sq_tail, Ordering::Release) };
+        if self.sq_flags.is_some() {
+            // Store-load, the one pair acquire/release does not order:
+            // the tail store above and the `sq_flags` load below are
+            // different addresses, so both this CPU and the compiler may
+            // let the load happen first — on x86 the tail is still in the
+            // store buffer while the load is satisfied from cache.
+            //
+            // The kernel's SQ-poll thread parks as: see SQ empty, set
+            // NEED_WAKEUP, re-check the tail, sleep. Without a barrier
+            // here each side can read the other's old value — we see
+            // NEED_WAKEUP clear and take the fast path with no syscall,
+            // the poll thread sees the old tail and sleeps. That
+            // submission then never runs and never completes: an
+            // operation that hangs with no error anywhere.
+            //
+            // liburing puts `io_uring_smp_mb()` at exactly this point.
+            core::sync::atomic::fence(Ordering::SeqCst);
+        }
 
         // Threshold-based enter skip. A syscall-tracepoint diagnostic
         // showed ~12 wasted io_uring_enter calls per actual op on the
@@ -223,7 +258,13 @@ impl IoUring {
         // closely enough to remain race-free, and even with this
         // counter as a safety net on top, a window remained where CQEs
         // piled up between bit-clear observations.
-        if to_submit == 0 && wait_nr == 0 && self.sq_flags.is_none() {
+        // The kernel parked completions on its overflow list because the
+        // CQ was full. They come back only on an enter that asks for
+        // events, so the skip below must not apply and the syscall must
+        // carry GETEVENTS — otherwise operations that have completed are
+        // never reported, and nothing anywhere says so.
+        let overflowed = self.cq_overflowed();
+        if may_skip_enter(overflowed, to_submit, wait_nr, self.sq_flags.is_some()) {
             self.iters_since_enter = self.iters_since_enter.saturating_add(1);
             if self.iters_since_enter < ENTER_SKIP_THRESHOLD {
                 return Ok(0);
@@ -232,13 +273,17 @@ impl IoUring {
             // below so task_work flushes. Counter resets after syscall.
         }
 
-        let mut enter_flags = if wait_nr > 0 { IORING_ENTER_GETEVENTS } else { 0 };
+        let mut enter_flags = enter_flags_for(wait_nr, overflowed);
         if let Some(sq_flags_ptr) = self.sq_flags {
             // SAFETY: `sq_flags_ptr` lives inside the SQ mmap, valid for ring
             // lifetime. Kernel writes IORING_SQ_NEED_WAKEUP on park; Acquire
             // pairs with the kernel's Release on update.
             let sq_flags = unsafe { (*sq_flags_ptr).load(Ordering::Acquire) };
-            if sq_flags & IORING_SQ_NEED_WAKEUP != 0 {
+            // Only wake the poll thread when there is something for it.
+            // Waking it for an empty submission is a syscall that buys
+            // nothing, and on an idle busy-poll loop it is one per
+            // iteration — which removes the entire point of SQPOLL.
+            if to_submit > 0 && sq_flags & IORING_SQ_NEED_WAKEUP != 0 {
                 enter_flags |= IORING_ENTER_SQ_WAKEUP;
             } else if wait_nr == 0 {
                 // SQ poll thread is awake and caller doesn't need to wait —
@@ -283,25 +328,82 @@ impl IoUring {
         };
         // Real enter happened — the skip counter resets.
         self.iters_since_enter = 0;
+        self.check_dropped()?;
         Ok(ret as u32)
     }
 
+    /// Whether the kernel has completions parked on its overflow list.
+    ///
+    /// Relaxed: this is a hint the kernel republishes, and the enter it
+    /// triggers is what actually orders anything.
+    fn cq_overflowed(&self) -> bool {
+        // SAFETY: `flags_word` points inside the SQ mapping, which lives
+        // as long as this ring.
+        let flags = unsafe { (*self.flags_word).load(Ordering::Relaxed) };
+        flags & crate::ffi::IORING_SQ_CQ_OVERFLOW != 0
+    }
+
+    /// Fail if the kernel refused any submission since the last check.
+    ///
+    /// A dropped SQE produces no completion, ever. Anything waiting on
+    /// one waits forever, and every scheme for tracking in-flight work —
+    /// including this crate's own — hangs on a count that will not come
+    /// down. Silence is the one response that cannot be right.
+    fn check_dropped(&mut self) -> io::Result<()> {
+        // SAFETY: `dropped` points inside the SQ mapping, which lives as
+        // long as this ring.
+        let now = unsafe { (*self.dropped).load(Ordering::Relaxed) };
+        let lost = dropped_since(self.last_dropped, now);
+        self.last_dropped = now;
+        dropped_error(lost)
+    }
+
     /// Reap every available completion, calling `f` for each; returns the count.
+    ///
+    /// The consumer head is published even if `f` panics, and each CQE is
+    /// counted consumed *before* `f` sees it. Both halves matter:
+    ///
+    /// * publishing only on the normal path left `cq_khead` where it was
+    ///   when a callback unwound, so the whole batch was delivered a
+    ///   second time on the next call. For a completion carrying a
+    ///   provided-buffer id that means recycling the same `bid` twice,
+    ///   which publishes one buffer to the ring twice and lets the kernel
+    ///   hand it to two receives at once — two concurrent kernel writes
+    ///   to one region.
+    /// * counting before the call makes delivery at-most-once rather than
+    ///   at-least-once. A lost completion stalls one operation, which is
+    ///   visible and diagnosable; a repeated one aliases memory inside
+    ///   the kernel. Given that asymmetry, the panicking CQE is consumed.
     pub fn for_each_completion<F: FnMut(Completion)>(&mut self, mut f: F) -> u32 {
+        /// Publishes the head on the way out, however that happens.
+        struct PublishHead {
+            khead: *const core::sync::atomic::AtomicU32,
+            head: u32,
+        }
+        impl Drop for PublishHead {
+            fn drop(&mut self) {
+                // SAFETY: `khead` is the kernel-shared consumer cursor,
+                // borrowed from the ring that outlives this guard (it is
+                // a local of one of that ring's own methods).
+                unsafe { (*self.khead).store(self.head, Ordering::Release) };
+            }
+        }
+
         // SAFETY: cq_khead / cq_ktail are the kernel-shared cursors.
-        let mut head = unsafe { (*self.cq_khead).load(Ordering::Relaxed) };
+        let head = unsafe { (*self.cq_khead).load(Ordering::Relaxed) };
+        // SAFETY: same kernel-shared cursor pair. `Acquire` on the tail pairs with the
+        // kernel's release, so every CQE it counts is fully written before we read it.
         let tail = unsafe { (*self.cq_ktail).load(Ordering::Acquire) };
+        let mut guard = PublishHead { khead: self.cq_khead, head };
         let mut n = 0;
-        while head != tail {
-            let idx = (head & self.cq_mask) as usize;
+        while guard.head != tail {
+            let idx = (guard.head & self.cq_mask) as usize;
             // SAFETY: `idx < cq_entries` by mask; cqes points to that array.
             let cqe = unsafe { *self.cqes.add(idx) };
-            f(cqe);
-            head = head.wrapping_add(1);
+            guard.head = guard.head.wrapping_add(1);
             n += 1;
+            f(cqe);
         }
-        // SAFETY: publish the consumer head to the kernel.
-        unsafe { (*self.cq_khead).store(head, Ordering::Release) };
         n
     }
 }

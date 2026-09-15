@@ -28,6 +28,7 @@ use std::process::ExitCode;
 use kevy_resp_client::{Reply, RespClient};
 
 /// What `doctor` concluded about one table.
+#[derive(Debug)]
 pub enum Health {
     /// Every counter where it should be.
     Ok,
@@ -48,6 +49,7 @@ pub enum Health {
 }
 
 /// One table's name and what was concluded about it.
+#[derive(Debug)]
 pub struct TableHealth {
     /// The declared table name.
     pub name: String,

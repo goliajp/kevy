@@ -46,6 +46,7 @@ async fn connect_default(host: &str, port: u16) -> io::Result<DefaultTransport> 
 
 /// Subscribed async TCP-RESP connection. Mirrors
 /// [`kevy_client::Subscriber`] for TCP backends.
+#[derive(Debug)]
 pub struct AsyncSubscriber {
     codec: AsyncRespCodec<DefaultTransport>,
     /// Events read while waiting for a subscribe ack, in arrival order.

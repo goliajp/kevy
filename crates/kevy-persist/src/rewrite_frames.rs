@@ -2,6 +2,11 @@
 //! that need the commands rather than an AOF file. Split from
 //! `rewrite_fmt` for the 500-LOC house rule.
 
+// `write!` into an in-memory buffer returns a `Result` because
+// `fmt::Write` / `io::Write` must, not because it can fail: the
+// `String` and `Vec` impls are infallible. Said once here.
+#![expect(clippy::let_underscore_must_use, reason = "writing to an in-memory buffer cannot fail")]
+
 use kevy_store::Value;
 
 use crate::rewrite_fmt::write_value_as_commands;

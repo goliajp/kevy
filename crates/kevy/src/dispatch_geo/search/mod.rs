@@ -210,8 +210,16 @@ fn in_shape(shape: Shape, clon: f64, clat: f64, mlon: f64, mlat: f64) -> bool {
 
 fn apply_sort(hits: &mut [Hit], sort: Sort) {
     match sort {
-        Sort::Asc => hits.sort_by(|a, b| a.dist_m.partial_cmp(&b.dist_m).unwrap()),
-        Sort::Desc => hits.sort_by(|a, b| b.dist_m.partial_cmp(&a.dist_m).unwrap()),
+        Sort::Asc => hits.sort_by(|a, b| {
+            a.dist_m.partial_cmp(&b.dist_m).expect(
+                "GEOADD rejects non-finite coordinates and a non-finite centre matches no cell",
+            )
+        }),
+        Sort::Desc => hits.sort_by(|a, b| {
+            b.dist_m.partial_cmp(&a.dist_m).expect(
+                "GEOADD rejects non-finite coordinates and a non-finite centre matches no cell",
+            )
+        }),
         Sort::None => {}
     }
 }
@@ -225,7 +233,11 @@ fn apply_count(hits: &mut Vec<Hit>, sort: Sort, count: Option<usize>, any: bool)
     // result set. ANY keeps the as-collected order (the documented
     // speed-vs-determinism trade).
     if matches!(sort, Sort::None) && !any {
-        hits.sort_by(|a, b| a.dist_m.partial_cmp(&b.dist_m).unwrap());
+        hits.sort_by(|a, b| {
+            a.dist_m.partial_cmp(&b.dist_m).expect(
+                "GEOADD rejects non-finite coordinates and a non-finite centre matches no cell",
+            )
+        });
     }
     hits.truncate(n);
 }

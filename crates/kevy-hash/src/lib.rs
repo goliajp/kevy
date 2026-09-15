@@ -111,7 +111,13 @@ fn mix(state: u64, word: u64) -> u64 {
 /// rustc-hash design assumes its consumer mixes again; we don't, so we
 /// avalanche ourselves — same property as the legacy [`FxHasher`] path).
 #[inline]
-// LOC-WAIVER: per-op hash hot body — the short/bulk paths stay fused in one frame for codegen.
+// A byte-faithful transcription of rustc-hash 2.x's `hash_bytes`
+// (verified identical for every length 0..200) with `fmix64` appended.
+// Splitting it would diverge from the upstream it is checked against,
+// which is the whole reason it can be checked at all. The reason given
+// here used to be codegen, which is not one of the two classes the rule
+// allows; this is the second one.
+// LOC-WAIVER: vendored engine core — see the note above.
 fn hash_bytes_pipelined(bytes: &[u8]) -> u64 {
     // Constants — digits of pi (matches rustc-hash 2.x for cross-bench
     // sanity; the actual choice doesn't matter beyond "non-zero, not
@@ -126,11 +132,13 @@ fn hash_bytes_pipelined(bytes: &[u8]) -> u64 {
     if len <= 16 {
         if len >= 8 {
             // Read first 8 and last 8 (may overlap when 8 ≤ len ≤ 15).
-            s0 ^= u64::from_le_bytes(bytes[0..8].try_into().unwrap());
-            s1 ^= u64::from_le_bytes(bytes[len - 8..].try_into().unwrap());
+            s0 ^= u64::from_le_bytes(bytes[0..8].try_into().expect("the len >= 8 arm"));
+            s1 ^= u64::from_le_bytes(bytes[len - 8..].try_into().expect("the len >= 8 arm"));
         } else if len >= 4 {
-            s0 ^= u64::from(u32::from_le_bytes(bytes[0..4].try_into().unwrap()));
-            s1 ^= u64::from(u32::from_le_bytes(bytes[len - 4..].try_into().unwrap()));
+            s0 ^= u64::from(u32::from_le_bytes(bytes[0..4].try_into().expect("the len >= 4 arm")));
+            s1 ^= u64::from(u32::from_le_bytes(
+                bytes[len - 4..].try_into().expect("the len >= 4 arm"),
+            ));
         } else if len > 0 {
             // 1-3 byte tail: form a 3-byte key (lo, mid, hi) that
             // distinguishes "ab" from "ba" etc.
@@ -147,8 +155,8 @@ fn hash_bytes_pipelined(bytes: &[u8]) -> u64 {
         // rustc-hash 2.x does; it makes the suffix path uniform).
         let mut bulk = &bytes[..len - 1];
         while let Some((chunk, rest)) = bulk.split_first_chunk::<16>() {
-            let x = u64::from_le_bytes(chunk[..8].try_into().unwrap());
-            let y = u64::from_le_bytes(chunk[8..].try_into().unwrap());
+            let x = u64::from_le_bytes(chunk[..8].try_into().expect("chunk is [u8; 16]"));
+            let y = u64::from_le_bytes(chunk[8..].try_into().expect("chunk is [u8; 16]"));
             let t = multiply_mix(s0 ^ x, ANTI_ZERO ^ y);
             s0 = s1;
             s1 = t;
@@ -156,8 +164,8 @@ fn hash_bytes_pipelined(bytes: &[u8]) -> u64 {
         }
         // Suffix 16 bytes (may overlap with last bulk iter).
         let suffix = &bytes[len - 16..];
-        s0 ^= u64::from_le_bytes(suffix[0..8].try_into().unwrap());
-        s1 ^= u64::from_le_bytes(suffix[8..16].try_into().unwrap());
+        s0 ^= u64::from_le_bytes(suffix[0..8].try_into().expect("suffix is the last 16 bytes"));
+        s1 ^= u64::from_le_bytes(suffix[8..16].try_into().expect("suffix is the last 16 bytes"));
     }
 
     let folded = multiply_mix(s0, s1) ^ (len as u64);
@@ -213,7 +221,43 @@ fn multiply_mix(x: u64, y: u64) -> u64 {
 /// split.write(b"efgh");
 /// assert_ne!(whole.finish(), split.finish());
 /// ```
-#[derive(Default)]
+/// # Not injective over byte strings
+///
+/// The absorb consumes whole words and zero-extends a short tail, and
+/// nothing folds in the total length — so distinct inputs share a value
+/// in three families, all with the same cause:
+///
+/// * a zero-extended 1–3 byte tail is indistinguishable from a 4-byte
+///   one: `"aaa"` and `"a\0\0\0aa"`;
+/// * `mix(0, 0) == 0`, so leading zero words are absorbed with no
+///   effect — `""`, `"\0\0\0\0"` and `"\0\0\0\0\0\0\0\0"` all hash to
+///   **0**, and prefixing any key with four NULs leaves its hash
+///   unchanged;
+/// * a 4-byte tail and an 8-byte word with four trailing zeros agree.
+///
+/// Measured: over the 1,093 strings of length ≤ 6 from `{a, b, NUL}`,
+/// **27 collision classes**. A uniform 64-bit hash on that many inputs
+/// would be expected to produce none.
+///
+/// Whether it reaches you depends on how `Hash` feeds the bytes.
+/// `Hash for [u8]` writes a length prefix, so `FxHashMap<Vec<u8>, _>`
+/// and `FxHashMap<SmallBytes, _>` — everything kevy itself uses — are
+/// unaffected, and the measurement above gives 0 classes for them.
+/// `Hash for str` writes only a `0xff` terminator, so **`&str` and
+/// `String` keys do reach it**, which is what the 27 are.
+///
+/// The fix is to fold the total length into [`Hasher::finish`], six
+/// lines, and it changes every value this type produces — which the note
+/// on [`KevyHash for [u8]`](KevyHash) says this path deliberately does
+/// not do. That is an owner decision, recorded with its costs in this
+/// repository's `.claude/OPEN-QUESTIONS-6.4.md`. Until it is taken, this
+/// section is here so the behaviour is chosen rather than discovered.
+///
+/// (One tempting non-fix, for the record: seeding the initial state to a
+/// non-zero constant. Measured, it makes all three families *worse* —
+/// 39 classes instead of 27 — because it removes the only case the
+/// zero-absorption collapsed.)
+#[derive(Debug, Default)]
 pub struct FxHasher(u64);
 
 impl Hasher for FxHasher {
@@ -226,12 +270,13 @@ impl Hasher for FxHasher {
     fn write(&mut self, mut bytes: &[u8]) {
         let mut state = self.0;
         while bytes.len() >= 8 {
-            let word = u64::from_le_bytes(bytes[..8].try_into().unwrap());
+            let word = u64::from_le_bytes(bytes[..8].try_into().expect("the len >= 8 loop guard"));
             state = mix(state, word);
             bytes = &bytes[8..];
         }
         if bytes.len() >= 4 {
-            let word = u64::from(u32::from_le_bytes(bytes[..4].try_into().unwrap()));
+            let word =
+                u64::from(u32::from_le_bytes(bytes[..4].try_into().expect("the len >= 4 guard")));
             state = mix(state, word);
             bytes = &bytes[4..];
         }
@@ -265,10 +310,21 @@ pub type FxBuildHasher = BuildHasherDefault<FxHasher>;
 /// friendly hash by exposing one method on each that produces the final mixed
 /// 64-bit value in one go.
 ///
-/// All impls must agree with feeding the value through [`FxHasher`] then
-/// calling `finish` — this lets us cut the trait dispatch without changing the
-/// hash function. `kevy-map` consumes both the full hash (for bucket index)
-/// and its top 7 bits (for the metadata byte).
+/// **The integer impls** agree with feeding the value through
+/// [`FxHasher`] and calling `finish`, so for those the trait is a
+/// dispatch shortcut and nothing more. **The `[u8]` impl does not** — it
+/// takes the two-stream pipelined path, and its own documentation says
+/// so.
+///
+/// That distinction used to be stated as "all impls must agree", forty
+/// lines above the note admitting one of them does not. This is not a
+/// typo to tidy: the sentence declared exactly the property that makes
+/// mixing the two safe, so a caller who used `FxHashMap` in one place
+/// and `kevy_hash()` in another and compared across them would have been
+/// silently wrong, on the strength of a guarantee written here.
+///
+/// `kevy-map` consumes both the full hash (for bucket index) and its top
+/// 7 bits (for the metadata byte).
 /// # Examples
 ///
 /// The point of the trait is that a leaf type hashes in one call, with no

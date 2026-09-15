@@ -32,6 +32,14 @@
 [suite]
 manifest_floor = 43
 
+# Declared durations are corrected from `target/suite-<tier>.json`, not
+# guessed. They had drifted far enough to matter: precommit's declarations
+# summed to 299s against its 300s budget while the tier really cost 134s,
+# so the next cheap check anyone tried to add was refused by padding
+# rather than by time — which is the one thing this budget must not do.
+# `version-alignment` declared 72s and costs 10.6s; `doc-toml` declared
+# 125s and costs 66.1s. Both now declare roughly twice their measurement:
+# headroom for a slower machine, without being fiction.
 [suite.budgets]
 precommit = 300
 prerelease = 5400
@@ -148,7 +156,7 @@ id = "version-alignment"
 area = "release-pins"
 tier = "precommit"
 cmd = "python3 tools/check_version_alignment.py"
-expected = 72
+expected = 25
 timeout = 120
 requires = []
 proves = "all six version layers agree, including vendored engine bytes"
@@ -347,6 +355,30 @@ timeout = 60
 requires = []
 proves = "every fuzz target in the tree runs in CI's fuzz-smoke matrix, and every matrix entry names a target that exists — nine of twenty-three were in the tree unrun, and the first run of one of them found two defects"
 
+# prerelease, not precommit, for a build-cache reason and not a time one:
+# `--cfg loom` changes RUSTFLAGS, and cargo rebuilds the whole release
+# profile whenever those change. Warm it is 22 s; run alternately with any
+# other release build it costs both of them a full rebuild every time.
+#
+# `expected` is an ESTIMATE and the only one in this file that is. The two
+# measurements in hand are 22 s warm on a workstation and 48-58 s for CI's
+# `loom` job including checkout and a cached build. Neither is the number
+# this row will actually cost, because inside the prerelease tier the
+# RUSTFLAGS switch lands on a release profile the preceding checks just
+# built, and the rebuild is the cost. 150 is that rebuild guessed at, not
+# timed. Replace it with `target/suite-prerelease.json`'s figure the first
+# time the tier runs with this row in it — the corrections at the top of
+# this file are what happens when nobody does.
+[[check]]
+id = "loomgate"
+area = "arch"
+tier = "prerelease"
+cmd = "python3 tools/check_loom.py"
+expected = 150
+timeout = 1800
+requires = []
+proves = "the two loom suites actually run, and every #[test] in them runs — both files are #![cfg(loom)] and nothing in this repository passed --cfg loom, so four exhaustive interleaving searches reported `0 passed; ok` while three production sites cited them by name as the argument for their memory ordering"
+
 [[check]]
 id = "lockgate"
 area = "release-pins"
@@ -398,7 +430,7 @@ tier = "precommit"
 # a config block that does not load hands a first-time reader a server
 # that refuses to start.
 cmd = "python3 tools/check_doc_toml.py"
-expected = 125
+expected = 100
 timeout = 180
 requires = ["server-debug"]
 proves = "every TOML block in the docs parses"
@@ -465,7 +497,72 @@ cmd = "cargo clippy --workspace --all-targets -- -D warnings"
 expected = 240
 timeout = 1800
 requires = []
-proves = "zero clippy findings across every target"
+proves = "zero clippy findings across every target, in the DEFAULT feature set"
+
+[[check]]
+id = "rulebook"
+area = "hygiene"
+tier = "full"
+# Not a gate: it counts. The rulebook has 50 rules and 9 of them are
+# refused by a gate; the other 41 were a claim with no reading behind
+# it until this existed. Ratcheting the counts comes after the counts
+# are driven down, not before — a ratchet on a number nobody has
+# attacked just freezes it.
+cmd = "python3 tools/rulebook_audit.py"
+expected = 20
+timeout = 300
+requires = []
+proves = "where this repository stands against every rule, including the ones no gate can see"
+
+[[check]]
+id = "fmtgate"
+area = "hygiene"
+tier = "precommit"
+# It was in CI and nowhere else, so the only thing that could catch an
+# unformatted push was the push itself — which is what happened: a red
+# CI run whose entire content was two `println!` calls wrapped
+# differently. The cheapest, most mechanical check in the repository
+# belongs in the tier that runs before every push, not in the one that
+# runs after.
+cmd = "cargo fmt --all --check"
+expected = 3
+timeout = 120
+requires = []
+proves = "every source file is formatted, before the push rather than after"
+
+[[check]]
+id = "panic-free"
+area = "hygiene"
+tier = "precommit"
+# --lib --bins, not --all-targets: the rule is scoped to library code, and
+# a test that unwraps is stating a precondition rather than ducking one.
+# Scoping by target is what makes the deny possible at all — the same
+# survey read 2,425 `unwrap` sites with tests compiled and 71 without.
+cmd = "cargo clippy --workspace --lib --bins -- -D clippy::unwrap_used -D clippy::panic -D missing_docs"
+expected = 30
+timeout = 900
+requires = []
+proves = "library code has no undeclared unwrap or panic, and no undocumented public item"
+
+[[check]]
+id = "expect-reasons"
+area = "hygiene"
+tier = "precommit"
+cmd = "python3 tools/check_expect_reasons.py"
+expected = 2
+timeout = 120
+requires = []
+proves = "no expect() in library code answers with a measurement or a conclusion"
+
+[[check]]
+id = "feature-lints"
+area = "hygiene"
+tier = "prerelease"
+cmd = "python3 tools/check_feature_lints.py"
+expected = 90
+timeout = 1800
+requires = []
+proves = "every crate alone, and every off-by-default feature, is clippy-zero too"
 
 [[check]]
 id = "workspace-tests"

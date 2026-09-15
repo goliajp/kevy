@@ -27,6 +27,23 @@ use crate::os::PAGE;
 /// 4 KiB pages per 64 KiB span.
 pub const PAGES_PER_SPAN: usize = SPAN_BYTES / PAGE;
 
+/// `discarded` with every page set — a whole span handed back at once,
+/// which is what retiring an emptied span does.
+///
+/// # Examples
+///
+/// One bit per page of the span, and no more — the field is a `u16` and
+/// a span is 16 pages, so an off-by-one here would either lose a page or
+/// set a bit that names nothing.
+///
+/// ```
+/// use kevy_alloc::pagemap::{ALL_PAGES_DISCARDED, PAGES_PER_SPAN};
+///
+/// assert_eq!(ALL_PAGES_DISCARDED.count_ones() as usize, PAGES_PER_SPAN);
+/// assert_eq!(ALL_PAGES_DISCARDED.trailing_ones() as usize, PAGES_PER_SPAN);
+/// ```
+pub const ALL_PAGES_DISCARDED: u16 = ((1u32 << PAGES_PER_SPAN) - 1) as u16;
+
 /// Bitmap words: enough for the smallest class (16 B → 4096 slots).
 pub const BITMAP_WORDS: usize = SPAN_BYTES / 16 / 64;
 
@@ -36,7 +53,7 @@ pub const NO_CLASS: u8 = 0xFF;
 /// Per-span bookkeeping. Deliberately *not* small: the bitmap is the
 /// price of page-granular reclaim, and it lives in the header span,
 /// which exists to be spent on exactly this.
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct SpanMeta {
     /// Size class this span serves, or [`NO_CLASS`].
     pub class: u8,
@@ -49,9 +66,43 @@ pub struct SpanMeta {
     /// Slots at or above this index have never been handed out; their
     /// pages were never touched and are not resident.
     pub high_water: u16,
-    /// Pages returned to the OS (`MADV_DONTNEED`) while the span stays
-    /// assigned. Cleared per page when an allocation lands back in one.
+    /// Pages returned to the OS (`MADV_DONTNEED`). Cleared per page when
+    /// an allocation lands back in one; set wholesale by
+    /// [`Heap::retire_empty_span`](crate::Heap) when the span is emptied
+    /// and its pages go back together.
     pub discarded: u16,
+    /// Set when this span was emptied and handed back to the free pool,
+    /// as opposed to never having been assigned at all.
+    ///
+    /// Both are `class == NO_CLASS`, and they are opposite kinds of
+    /// unassigned: one was never touched, the other was touched and then
+    /// either discarded or deliberately kept. Without this bit all three
+    /// collapse into one bucket, which is what they did — the identity
+    /// balances the same whichever way they fall, so nothing caught it.
+    ///
+    /// # Examples
+    ///
+    /// The three states a span with no class can be in, and the two
+    /// fields that tell them apart:
+    ///
+    /// ```
+    /// use kevy_alloc::pagemap::{ALL_PAGES_DISCARDED, NO_CLASS};
+    ///
+    /// // (class, retired, discarded) -> what it is
+    /// let never_claimed = (NO_CLASS, false, 0u16);
+    /// let given_back = (NO_CLASS, true, ALL_PAGES_DISCARDED);
+    /// let held = (NO_CLASS, true, 0u16);
+    ///
+    /// // All three read as "unassigned", and only `retired` plus the
+    /// // discard bitmap separate the one that was never touched from the
+    /// // one whose pages went back and the one still resident.
+    /// for (class, _, _) in [never_claimed, given_back, held] {
+    ///     assert_eq!(class, NO_CLASS);
+    /// }
+    /// assert!(!never_claimed.1);
+    /// assert_ne!(given_back.2, held.2);
+    /// ```
+    pub retired: bool,
     /// One bit per slot; set = live (or parked on a foreign list, which
     /// pins the page exactly as a live slot does).
     bitmap: [u64; BITMAP_WORDS],
@@ -65,6 +116,7 @@ impl SpanMeta {
             live: 0,
             high_water: 0,
             discarded: 0,
+            retired: false,
             bitmap: [0; BITMAP_WORDS],
         }
     }

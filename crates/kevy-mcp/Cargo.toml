@@ -7,6 +7,7 @@ rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+documentation = "https://docs.rs/kevy-mcp"
 homepage.workspace = true
 readme = "README.md"
 keywords = ["redis", "mcp", "agent", "kevy", "valkey"]
@@ -20,7 +21,7 @@ name = "kevy-mcp"
 path = "src/main.rs"
 
 [dependencies]
-kevy-resp-client = { path = "../kevy-resp-client", version = "6.3.0" }
+kevy-resp-client = { path = "../kevy-resp-client", version = "6.4.0" }
 
 [dev-dependencies]
-kevy-resp = { path = "../kevy-resp", version = "6.3.0" }
+kevy-resp = { path = "../kevy-resp", version = "6.4.0" }

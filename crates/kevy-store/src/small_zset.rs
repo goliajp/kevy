@@ -32,7 +32,7 @@
 //! - `buf` ([u8; 22]): packed `[score:8][len:1][member:len]` entries.
 
 /// Inline packed sorted-set storage. 24 bytes total.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct SmallZSetData {
     count: u8,
     used: u8,
@@ -169,6 +169,7 @@ impl SmallZSetData {
 }
 
 /// Iterator over [`SmallZSetData`] yielding `(member, score)`.
+#[derive(Debug)]
 pub struct SmallZSetIter<'a> {
     buf: &'a [u8],
     cursor: usize,

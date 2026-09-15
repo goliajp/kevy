@@ -26,6 +26,11 @@ pub(super) fn info_clients(cfg: &Config, totals: &crate::state::Totals, b: &mut 
     // Live client conns summed over every shard's per-tick gauge
     // (stale by at most one tick interval).
     b.push_str(&format!("connected_clients:{}\r\n", totals.clients_connected));
+    // Redis reports this in `# Clients` and kevy did not, which also left
+    // a blocking test with no condition to wait on: six of them slept a
+    // fixed 50 ms hoping the client had parked, and under a loaded
+    // machine that is a race rather than a wait.
+    b.push_str(&format!("blocked_clients:{}\r\n", totals.blocked_clients));
     b.push_str(&format!("maxclients:{}\r\n", cfg.server.max_clients));
     b.push_str("\r\n");
 }
@@ -73,6 +78,48 @@ pub(super) fn info_tiering(totals: &crate::state::Totals, b: &mut String) {
     b.push_str(&format!("promotions_total:{}\r\n", t.promotions_total));
     b.push_str(&format!("peek_preads_total:{}\r\n", t.peek_preads_total));
     b.push_str(&format!("batch_submissions_total:{}\r\n", t.batch_submissions_total));
+    b.push_str("\r\n");
+}
+
+/// `# Allocator`: the accounting identity, summed across the shard
+/// heaps that reported. Emitted only when at least one did — with the
+/// system allocator there is nothing to say, and an all-zero section
+/// would say something false.
+///
+/// Nine terms, disjoint by construction: every mapped byte is in
+/// exactly one of them. `alloc_accounted` is printed beside
+/// `alloc_mapped` rather than as a difference, because the two agreeing
+/// is the check — a reader compares them instead of trusting a residual
+/// somebody else computed.
+///
+/// This is the instrument the resident-ratio work needed and did not
+/// have: the one workload where this allocator loses to glibc could be
+/// measured, but not attributed to a term.
+pub(super) fn info_allocator(totals: &crate::state::Totals, b: &mut String) {
+    // Nothing reported: write nothing. An all-zero `# Allocator` under
+    // the system allocator would name an allocator that is not running,
+    // and it would change INFO's bytes for every build that does not
+    // have this one.
+    if totals.alloc_shards == 0 {
+        return;
+    }
+    let a = &totals.alloc;
+    b.push_str("# Allocator\r\n");
+    b.push_str("allocator_impl:kevy-alloc\r\n");
+    // The denominator: these are sums over this many independent heaps.
+    b.push_str(&format!("alloc_shards_reporting:{}\r\n", totals.alloc_shards));
+    b.push_str(&format!("alloc_mapped:{}\r\n", a.mapped));
+    b.push_str(&format!("alloc_accounted:{}\r\n", a.accounted()));
+    b.push_str(&format!("alloc_live:{}\r\n", a.live));
+    b.push_str(&format!("alloc_rounding:{}\r\n", a.rounding));
+    b.push_str(&format!("alloc_cache:{}\r\n", a.cache));
+    b.push_str(&format!("alloc_span_free:{}\r\n", a.span_free));
+    b.push_str(&format!("alloc_returned:{}\r\n", a.returned));
+    b.push_str(&format!("alloc_virgin:{}\r\n", a.virgin));
+    b.push_str(&format!("alloc_hysteresis:{}\r\n", a.hysteresis));
+    b.push_str(&format!("alloc_segment_overhead:{}\r\n", a.segment_overhead));
+    b.push_str(&format!("alloc_large_count:{}\r\n", a.large_count));
+    b.push_str(&format!("alloc_spans_assigned:{}\r\n", a.spans_assigned));
     b.push_str("\r\n");
 }
 
@@ -251,4 +298,90 @@ pub(super) fn info_keyspace(totals: &crate::state::Totals, b: &mut String) {
         b.push_str(&format!("db0:keys={},expires={},avg_ttl=0\r\n", totals.keys, totals.expires));
     }
     b.push_str("\r\n");
+}
+
+#[cfg(test)]
+mod allocator_section_tests {
+    use super::info_allocator;
+    use crate::state::Totals;
+
+    /// Both sides of the emptiness gate, and the identity in the
+    /// rendered bytes. This runs with the `kevy-alloc` feature OFF,
+    /// which is how the coverage corpus builds — the section is
+    /// compiled either way and only its publisher is gated, so the
+    /// renderer must not need the allocator to be testable.
+    #[test]
+    fn no_section_is_written_when_no_shard_reported() {
+        let mut quiet = String::new();
+        info_allocator(&Totals::default(), &mut quiet);
+        assert!(quiet.is_empty(), "wrote a section for zero heaps: {quiet:?}");
+    }
+
+    /// A heap's worth of terms that balance, so the assertions below are
+    /// about the rendering rather than about the fixture.
+    fn two_reporting_shards() -> Totals {
+        let mut t = Totals { alloc_shards: 2, ..Totals::default() };
+        t.alloc.mapped = 16_777_216;
+        t.alloc.live = 152_610;
+        t.alloc.rounding = 3_150;
+        t.alloc.span_free = 972_720;
+        t.alloc.virgin = 444_384;
+        t.alloc.hysteresis = 14_742_208;
+        t.alloc.segment_overhead = 262_144;
+        t.alloc.returned = 200_000;
+        // The terms are a partition, so this has to hold before the
+        // rendering is asked about — a fixture that does not balance
+        // would make the assertion below pass or fail for the wrong
+        // reason.
+        assert_eq!(t.alloc.accounted(), t.alloc.mapped, "the fixture must balance first");
+        t
+    }
+
+    #[test]
+    fn the_section_names_every_term_it_summed() {
+        let t = two_reporting_shards();
+        let mut out = String::new();
+        info_allocator(&t, &mut out);
+        assert!(out.starts_with("# Allocator\r\n"), "{out}");
+        assert!(out.ends_with("\r\n\r\n"), "a section ends with a blank line: {out:?}");
+        for line in [
+            "alloc_shards_reporting:2\r\n",
+            "alloc_mapped:16777216\r\n",
+            "alloc_accounted:16777216\r\n",
+            "alloc_hysteresis:14742208\r\n",
+            "alloc_returned:200000\r\n",
+        ] {
+            assert!(out.contains(line), "missing {line:?} in:\n{out}");
+        }
+    }
+
+    /// Read back from the text, not from the struct: the section is what
+    /// an operator gets, and a renderer that dropped a term would leave
+    /// the struct balanced regardless.
+    #[test]
+    fn the_printed_terms_sum_to_the_printed_map() {
+        let t = two_reporting_shards();
+        let mut out = String::new();
+        info_allocator(&t, &mut out);
+        let sum: u64 = [
+            "live",
+            "rounding",
+            "cache",
+            "span_free",
+            "returned",
+            "virgin",
+            "hysteresis",
+            "segment_overhead",
+        ]
+        .iter()
+        .map(|k| {
+            out.lines()
+                .find_map(|l| l.trim_end().strip_prefix(&format!("alloc_{k}:")))
+                .unwrap_or_else(|| panic!("no alloc_{k} in:\n{out}"))
+                .parse::<u64>()
+                .unwrap()
+        })
+        .sum();
+        assert_eq!(sum, t.alloc.mapped, "the printed terms do not sum to the printed map");
+    }
 }

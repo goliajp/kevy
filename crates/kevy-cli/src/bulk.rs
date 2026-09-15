@@ -12,6 +12,7 @@ use kevy_resp_client::RespClient;
 /// a full-bucket start lets a small job burn its whole burst
 /// unthrottled, defeating the point of `--rate` for short sweeps).
 /// `rate == 0` = unlimited.
+#[derive(Debug)]
 pub struct RateLimiter {
     rate: u64,
     tokens: f64,

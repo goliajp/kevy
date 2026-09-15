@@ -11,12 +11,14 @@ use kevy_store::glob_match;
 use crate::pubsub::PubsubFrame;
 
 /// Internal entry in the bus tables.
+#[derive(Debug)]
 struct BusEntry {
     id: u64,
     sender: Sender<PubsubFrame>,
 }
 
 /// The pub/sub registry, owned by `crate::store::Inner`.
+#[derive(Debug)]
 pub(crate) struct PubsubBus {
     next_id: u64,
     channels: HashMap<Vec<u8>, Vec<BusEntry>>,

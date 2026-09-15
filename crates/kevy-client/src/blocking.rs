@@ -115,7 +115,10 @@ fn pop_kv(reply: Reply) -> KevyResult<Option<(Vec<u8>, Vec<u8>)>> {
     match reply {
         Reply::Array(items) if items.len() == 2 => {
             let mut it = items.into_iter();
-            match (it.next().unwrap(), it.next().unwrap()) {
+            match (
+                it.next().expect("the items.len() check above"),
+                it.next().expect("the items.len() check above"),
+            ) {
                 (Reply::Bulk(k), Reply::Bulk(v)) => Ok(Some((k, v))),
                 (a, _) => Err(unexpected(a)),
             }
@@ -131,7 +134,11 @@ fn pop_kv_score(reply: Reply) -> KevyResult<Option<ZPopHit>> {
     match reply {
         Reply::Array(items) if items.len() == 3 => {
             let mut it = items.into_iter();
-            match (it.next().unwrap(), it.next().unwrap(), it.next().unwrap()) {
+            match (
+                it.next().expect("the items.len() check above"),
+                it.next().expect("the items.len() check above"),
+                it.next().expect("the items.len() check above"),
+            ) {
                 (Reply::Bulk(k), Reply::Bulk(m), Reply::Bulk(s)) => Ok(Some((k, m, num_f64(&s)?))),
                 (a, _, _) => Err(unexpected(a)),
             }

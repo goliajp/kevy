@@ -41,6 +41,7 @@ pub enum FeedRead {
 /// One decoded feed entry: the offset plus the frame's wire bytes
 /// (envelope + offset + RESP argv — same encoding replicas consume;
 /// [`crate::replica_decode`] parses it).
+#[derive(Debug)]
 pub struct FeedFrame<'a> {
     /// Offset the source assigned at push time.
     pub offset: u64,
@@ -51,6 +52,7 @@ pub struct FeedFrame<'a> {
 /// Generation-aware wrapper: owns the generation number alongside the
 /// backlog. The runtime persists `generation` via `kevy-persist`'s
 /// feed sidecars; this type only holds the in-memory value.
+#[derive(Debug)]
 pub struct FeedSource {
     generation: u64,
     source: ReplicationSource,

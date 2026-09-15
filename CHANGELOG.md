@@ -1,5 +1,929 @@
 # Changelog
 
+## 6.4.0 — the quality release: what a reader can check, and what a gate can
+
+Every command answers exactly as it did in 6.3.0, the data directory
+opens in both directions, and a 6.3.x replica pairs with a 6.4.0
+primary. One defect is fixed, on the io_uring path, and it is the last
+section here — it was found by an instrument this release built. Apart
+from that, this release is about the other thing a codebase owes its
+readers.
+
+The measure was deliberately put outside: not "does kevy meet kevy's
+rules" — that is a baseline you can pass while being unremarkable — but
+whether a Rust expert reading this repository cold would call it
+exemplary. Seven things earn that label, each with a named reference,
+and kevy had four of them.
+
+### Every unsafe block states its premise (378 of them did not)
+
+The heaviest item, because unsafe discipline is the first thing an expert
+checks. `clippy::all` being green said nothing about it:
+`undocumented_unsafe_blocks` is in the restriction group and off by
+default, which is how 378 unargued blocks accumulated without a gate
+noticing.
+
+The argument written is the premise, not the conclusion. `kevy-sys` — the
+one crate the charter lets touch libc — now says why each syscall is
+allowed: `Socket` owns its fd for its whole life so `self.fd` is open at
+every call site; `buf` is a live slice so the pointer is good for exactly
+`buf.len()` bytes; `SockaddrIn` is repr(C) over integers so the all-zero
+pattern is a valid inhabitant, which is what the kernel expects to be
+handed. `Waker: Sync` holds because a descriptor is an integer handle
+into a kernel table rather than a pointer into this process.
+
+The four binding crates state their foundation once per file — the JVM
+hands each export a live JNIEnv* for that call only; N-API handles reach
+us only as externals we made — and each block names which part it uses.
+
+`undocumented_unsafe_blocks = "deny"` now, workspace-wide, and the three
+crates that had never opted into `[workspace.lints]` do, so the table
+covers 47 of 47 rather than silently skipping three. The gate is
+ablation-tested: remove one comment and it reports one.
+
+### Every public type can be printed
+
+165 of 392 public types had no `Debug`, so a caller holding one could not
+put it in an assertion message or a log line. All of them can now. Seven
+needed a hand-written impl and each says why: `Ring<T>` holds
+`MaybeUninit` and only `[head, tail)` is initialised, so a derived
+`Debug` would read uninitialised memory — undefined behaviour, not merely
+unhelpful output.
+
+### A map for someone arriving
+
+`ARCHITECTURE.md`: two products and one engine, the 47 crates as a
+seven-level DAG whose dependencies only point down (checked — zero
+backward edges), and where one SET goes crate by crate. Two claims taken
+from the charter did not match the code, and the code won: libc is
+declared in five crates, not one, and the file names all five.
+
+### Four stone modules that teach
+
+Redis is model C because you can implement `listpack.c`'s format from its
+file header. kevy's crate headers already did that; its module headers
+did not. The HNSW graph, the hashtable probe, the distance kernels and
+the impact-bucketed posting lists now carry their layout and their
+invariants — including the ones that are corrections rather than
+optimisations, like one graph node per distinct vector rather than per
+key, without which a cluster of identical vectors larger than the link
+cap disconnects from the graph.
+
+### Registry metadata, and examples that run
+
+Thirteen of 41 publishable crates were missing metadata a registry needs
+to present them, and five had no README — which is what a reader lands on
+from crates.io. All 41 are complete. `kevy-vlog` had nineteen public
+functions and no runnable example; it has six, and because a rustdoc
+example is a doctest they fail when the API moves rather than rotting.
+
+### `INFO allocator`: which term a resident ratio went into
+
+The v5 accounting contract names nine terms whose sum is every mapped
+byte, and names INFO as the transport. The terms existed and the
+transport did not, so for a whole arc the one workload where kevy-alloc
+loses to glibc could be measured and not explained: 2.39× resident is a
+number, not an address.
+
+`INFO allocator` now reports them, summed across shard heaps, on a build
+with the `kevy-alloc` feature. Its first read on a two-shard server after
+2,000 200-byte SETs: 8,388,608 mapped against 708,582 live — and the gap
+is not spread thinly. `hysteresis` holds 3,932,160 of it, `span_free`
+2,034,304, and `returned` is 0. Whole empty spans being retained rather
+than released is the largest single term, and nothing had said so.
+
+`alloc_accounted` is printed beside `alloc_mapped` rather than as a
+difference, because the two agreeing is the check — a reader compares
+them instead of trusting a residual someone else computed, and a term
+dropped from the section shows up as a gap rather than migrating
+silently into another bucket.
+
+The section is absent unless a shard reported, so a build on the system
+allocator emits exactly what it emitted before. "Reported" is
+`mapped > 0` and not "a snapshot came back": compiling the feature in
+links the allocator, while the `#[global_allocator]` attribute is what
+makes it *the* allocator — and that lives in `main.rs`. The library, its
+tests, the embedded API and any FFI host can therefore have the feature
+on and allocate somewhere else, where `thread_stats` still answers with
+nine honest zeroes. The first version of this section gated on that
+answer existing, and reported `allocator_impl:kevy-alloc` over an
+allocator that was not running.
+
+### `returned: 0`, on a workload that had returned 89% of its map
+
+The first thing `INFO allocator` said was that page-granular reclaim —
+the v2 rewrite the whole allocator experiment rests on — produced
+nothing. Two shards, 20,000 values written and then all deleted: 16.8 MB
+mapped, 152 KB live, `returned` 0, and `hysteresis` holding 14.9 MB.
+
+`hysteresis` was not hysteresis. It was every span with no class
+assigned, and that is three opposite things at once: a span carved with
+its segment and never claimed (never touched — `virgin`), a span emptied
+and handed back to the OS (`returned`), and a span emptied and
+deliberately kept (`hysteresis`, the only one the name describes). Which
+of the three those 14.9 MB actually were depended on the machine, and the
+number could not say — on a 4 KiB-page host they had gone back to the OS
+and were being reported as held; on the 16 KiB-page host they were
+measured on they were genuinely held, and were being subtracted from the
+residency prediction as though they had gone back. One bucket, wrong in
+both directions. The accounting identity — the crate's central check, and
+M3's whole content — balances the same whichever bucket they land in, so
+nothing failed.
+
+It had two more faces, and both had been reporting PASS:
+
+`predicted_resident()` subtracted `hysteresis` as though it were memory
+handed back, which is the one direction it cannot be right in: the term
+is what the allocator has chosen to keep. It fell by exactly the amount
+the retention pool grew. It now subtracts `virgin` and `returned` only.
+
+M4 — "emptied spans give their pages back" — asserted that `hysteresis`
+grew, under a failure message reading "reclaim returned nothing". That
+assertion is true on both sides of a platform branch, so it passed on
+every Apple Silicon Mac, where the span-page arithmetic is written at
+4096, `sysconf` answers 16384, `discard` is correctly refused, and
+reclaim hands back **nothing at all**. The gate for the property the
+experiment rests on was green on a machine where the property does not
+hold. It now asserts the branch it is in and names which.
+
+The partition is `virgin` / `returned` / `hysteresis`, decided by one
+function that takes the two facts as arguments rather than reading the
+machine — so a test sees all three states anywhere, including the two the
+machine it runs on cannot produce. The reclaim sweep takes the platform's
+answer the same way, for the same reason.
+
+Read back from the same workload afterwards, on the same 16 KiB-page
+host: 16,777,216 mapped, 172,014 live, `returned` 0, `hysteresis`
+15,269,888, `virgin` 697,824. The zero is now a statement rather than an
+artefact — this machine returns nothing, and the section says which term
+is holding the map instead of implying it was handed back.
+
+### Two gates that were not where they could stop anything
+
+`cargo fmt --all --check` lived in CI and nowhere else, so the only thing
+that could catch an unformatted push was the push. That is exactly what
+happened during this release: a red CI run whose entire content was two
+`println!` calls wrapped differently. It is now the first check in
+`precommit`, the tier that runs before every push.
+
+Adding it failed the manifest audit, which was the more interesting
+finding. Tier cost here is arithmetic — declared durations are summed
+against a budget — and precommit's declarations summed to **299s against
+its 300s budget while the tier actually costs 134s**. Two rows carried
+the padding: `version-alignment` declared 72s and takes 10.6s, `doc-toml`
+declared 125s and takes 66.1s. So the next cheap check anyone tried to
+add would have been refused by stale numbers rather than by time — a
+budget doing the opposite of its job. The runner already writes every
+real duration to `target/suite-<tier>.json` for exactly this; the
+declarations are now corrected from it, at roughly twice measurement, and
+precommit declares 230s for its 134.
+
+### A huge-page hint that a 64 KiB-page kernel would have refused every time
+
+`kevy-madvise` hardcoded `const PAGE = 4096`, justified by a comment
+saying that on 16 KiB / 64 KiB systems "the wider alignment still happens
+to be a 4-KiB multiple, so this is correct, just slightly more
+conservative". That is backwards twice: what has to hold is that the
+address is a multiple of the **real** page size, which rounding to 4 KiB
+does not give — and rounding to a *smaller* granularity is less
+conservative, not more.
+
+`madvise` refuses a misaligned start with EINVAL, and the return value
+was discarded, so on a 64 KiB-page kernel fifteen hints in sixteen would
+have been refused in silence. `aarch64-unknown-linux-*` is a target this
+project publishes, and 64 KiB-page kernels are ordinary there.
+
+The page size is asked of the kernel once and cached now — the same
+`sysconf` pattern `kevy-alloc` already uses, and for the same reason it
+wrote down: a measuring device that fails in the shape of data.
+
+Two more from the same reading:
+
+* the threshold was two **base** pages, 8 KiB. `khugepaged` cannot
+  promote anything smaller than a whole aligned huge page, so every call
+  between 8 KiB and 2 MiB bought a syscall under the mmap write lock, and
+  a possible VMA split, in exchange for a promotion that could not
+  happen. It is two huge pages now.
+* the `SAFETY` note read "madvise … performs no writes", which is false
+  of `madvise` in general — `MADV_DONTNEED` zeroes the region — and true
+  only of this advice. It now states that premise, which is also the
+  reason this can be a safe function at all.
+
+The four existing tests all assert that a call returns cleanly, and one
+says so in a comment: "We cannot directly assert 'no syscall' without a
+hook". So they pass whether the kernel honours the advice or refuses
+every one. `last_advised_bytes` is that hook, and the new tests fail if
+the kernel accepted nothing.
+
+### Two of seven time units answered an offset that could not fit
+
+`@now-7d` and friends are query bounds a client supplies
+(`IDX.QUERY … RANGE`). Five of the seven units checked their arithmetic
+for overflow and returned nothing when it did not fit. `mo` and `y` did
+not.
+
+So the same impossible request was refused when written in days and
+answered when written in months: in a release build
+`@now+9223372036854775807mo` returned a timestamp in **1969**, and in a
+debug build it panicked — which for a query bound means a wrong row set
+or a shard going down, from a value that arrived straight from argv.
+
+Both are checked now, along with the day-count arithmetic underneath
+them, which overflows before the seconds multiply gets a chance. The
+public `add_months` keeps its signature and saturates rather than
+panicking; `checked_add_months` and `checked_epoch_from_civil` are new
+and are what `eval` uses.
+
+The test asserts the property that was false rather than a list of
+inputs: a longer unit can never succeed where a shorter one overflowed.
+It carries a floor, so a matrix where nothing overflows fails instead of
+passing vacuously, and it checks that ordinary offsets still work in the
+right direction — otherwise "refuse everything" would pass.
+
+### One flipped bit deleted segment files, silently
+
+A manifest record is `[len][crc][body]`, and the CRC covers the body. The
+four length bytes are covered by nothing — and the recovery rule, which
+decides whether a record that will not decode is a crash mid-append or
+damage, reads exactly those four bytes.
+
+Measured: flipping one bit in the **first** record's length took a
+five-entry, 220-byte ledger to **zero entries and zero bytes**, with
+`open()` returning `Ok`. `sweep()` then removes every `.seg` the ledger
+no longer names, so that is data gone from disk, from one bit, with no
+error anywhere. The control — a bit inside the body, which the CRC does
+cover — was correctly refused.
+
+The fix changes no bytes on disk. It uses the writer's own invariant:
+`append` is a single `write_all` followed by `sync_all`, so at most one
+record can ever be partly written. Three things therefore cannot be a
+torn tail — a length larger than any record `append` will write, more
+bytes remaining than one envelope can hold, and a decodable record
+appearing after the suspect one, since nothing follows a partial write.
+
+Over every bit of every length field: **96 flips silently dropped
+entries before, none after**. The 14 that remain are all in the *last*
+record, where nothing follows to contradict the claim; losing that one
+record is what a genuine torn tail costs anyway.
+
+The first version of that check refused a tail shorter than the length
+field itself — the most ordinary crash there is. An exhaustive sweep of
+every prefix of a real envelope caught it, and now guards it.
+
+### A key of 4074 bytes wrote a segment that could not be read
+
+`SegBuilder::push` sealed the page when a cell did not fit and then wrote
+regardless. With a 7-byte payload:
+
+| key bytes | result |
+|---|---|
+| ≤ 4070 | stored and read back |
+| **4074** | `push` Ok, `finish` Ok, `open` Ok, **read back fails** |
+| ≥ 4075 | **panic** |
+
+The middle row is the worse one: the slot directory lands on the tail of
+the cell and the page CRC is taken afterwards, so the page is internally
+consistent and wrong while the builder reports success. Both rows are
+reachable from user data — a document with a long run of non-separator
+bytes becomes one token and then one key.
+
+The bound is now checked arithmetically at the boundary, before anything
+measures the cell: the measurement is itself a write into a page-sized
+buffer, which is where the panic came from.
+
+### GEOSEARCH dropped members inside the radius, silently
+
+Placing 360 points at 98 % of a radius and asking for all of them back —
+they are inside it by construction, so every one must return:
+
+| latitude | radius | returned of 360 |
+|---|---|---|
+| 0, 60, 66 | 1 km | 360 |
+| 70 | 1 km | 297 |
+| 80 | 1 km | 171 |
+| **84** | 1 km | **94** |
+| −80 | 100 km | 247 |
+
+`estimate_step` did not take a latitude. A cell's longitude width in
+degrees is fixed, but the bounding box's longitude half-width is the
+latitude half-width divided by `cos(lat)`, which diverges toward the
+pole — so the nine cells that cover the box at the equator stop covering
+it further north, and the members outside them are never looked at. No
+error, no warning, just a shorter answer.
+
+Redis handles this with two latitude thresholds and a correction pass.
+The condition underneath both is directly checkable, so this checks it
+instead: the query point can sit anywhere in its cell, including on an
+edge, so the only margin the 3×3 block guarantees on any side is one
+whole cell — nine cells cover the box exactly when each half-extent fits
+within one cell's span. Widen until that holds.
+
+The width is measured at the box's **pole-most** latitude, not its
+centre: a circle on a sphere is widest in longitude at whichever edge is
+nearer the pole, and the centre-latitude version still lost 2 of 63 at
+latitude 84 with a 500 km radius.
+
+After: 133 latitude/radius combinations, 11,546 members, none lost.
+Ordinary queries did not get slower — latitude 40 with a 500 km radius
+returns 255 members in 0.130 ms.
+
+### `GEOSEARCH … BYRADIUS 0` scanned every member
+
+A zero radius short-circuited to the whole keyspace, making one client
+command an O(members) scan: **9.23 ms on a 200,000-member key, against
+0.05 ms for `BYRADIUS 1000` on the same key**. `estimate_step` already
+answered this case correctly — a non-positive radius gives the finest
+step, a single 52-bit cell — and a guard above it was overriding that.
+Now 0.026 ms.
+
+Two tests had pinned the wrong behaviour as contract, including one named
+`neighbor_ranges_for_zero_radius_returns_full_keyspace`. The replacement
+is red-green checked: with the widening disabled, 2,108 of 11,546 points
+inside the radius fall outside the searched ranges, and the test names
+them.
+
+### Four more unexecutable branches, closed rather than accepted
+
+Every one was a decision made inside a method where one side could never
+run on the machine that runs it, which is how a coverage ratchet ends up
+holding a permanently dead region:
+
+* `submit_and_wait`'s enter policy — on a healthy non-SQPOLL ring
+  `overflowed` and `sqpoll` are false forever. `may_skip_enter` and
+  `enter_flags_for` are pure now, with tests for every combination.
+* the dropped-submission report — on a healthy ring the counter never
+  moves, so the reporting arm was unexecutable. `dropped_error` is
+  separate and tested for both answers.
+* `discard_free_pages`'s refusal — the previous test freed everything, so
+  every span went to the retire branch and this one was never reached.
+  The new test leaves live slots in each span, which is what forces the
+  page-granular path.
+* `kevy-ranktree`'s post-merge guard, which was unreachable while its
+  invariant holds. Folded into the arithmetic — `total -= usize::from(removed)`
+  says the same thing with no arm at all.
+
+`ring.rs` crossed 500 lines doing this, and split at the seam that was
+already there: nothing in the new `enter_policy` module touches the ring.
+
+### Two io_uring counters the kernel maintained and nobody read
+
+**Completion-queue overflow was physically unreadable in the mode kevy
+runs.** When the CQ fills, the kernel parks the surplus on a side list
+and sets `IORING_SQ_CQ_OVERFLOW` in the shared flag word. Those entries
+return only on an `io_uring_enter` that asks for events. This reactor
+kept the flag word only when SQPOLL was enabled — and it does not enable
+SQPOLL — so the bit could not be read at all; and its steady-state call
+is `submit_and_wait(0)`, which never passed `IORING_ENTER_GETEVENTS`. A
+burst large enough to overflow the ring would have left completed
+operations unreported, with nothing anywhere to say so. The flag word is
+now kept in every mode, and an overflow forces the syscall and asks for
+events.
+
+**A refused submission was silent.** `sq_off.dropped` counts SQEs the
+kernel would not consume, and a dropped SQE produces no completion ever —
+so anything waiting on one waits forever, and any scheme that counts
+in-flight work hangs on a number that will not come down. The kernel has
+maintained that word since the ring was created and nothing had ever
+mapped it. It is read after every enter now, and a rise ends the shard's
+reactor loop with an error naming how many were lost, which is the
+failure worth having next to a permanent stall.
+
+The bit value was checked against `/usr/include/linux/io_uring.h` on the
+Linux box rather than taken from memory, and the delta arithmetic is a
+free function with tests for both answers — on a healthy ring the counter
+never moves, so the reporting branch would otherwise be code no coverage
+run could ever execute.
+
+### One rank descent instead of three
+
+`select`, the forward iterator and the reverse iterator each carried
+their own copy of "walk down to ascending rank r", differing only in what
+they pushed onto a stack on the way. They also end identically: all three
+use `(node, idx)` the same way whether the walk stopped at an offset
+inside a leaf or landed exactly on a separator, which is the part that
+made three copies look necessary and was not.
+
+There is one walk now, taking a callback for the per-level push — the
+forward iterator resumes at the separator to the right of the child it
+took, the reverse one at the separator to the left, and `select` passes a
+closure that does nothing.
+
+This is not a hypothetical tidy-up. `lib.rs` carries a note recording
+that one of those copies had come to document the opposite of what its
+code did, and that writing a runnable example is what caught it. Mirrored
+implementations diverge, and both sides' tests stay green while they do.
+
+### A B-tree node with room for 28 keys and a ceiling of 15
+
+`kevy-ranktree`'s nodes grew their key vectors from empty, and split by
+`split_off`. Both were measured rather than reasoned about, with a
+counting allocator over 10,000 inserts:
+
+| | allocations | bytes held |
+|---|---:|---:|
+| growing | 4,152 | 521,648 (6.52x payload) |
+| reserved | 1,393 | 291,792 (3.65x payload) |
+
+Three times fewer allocations and 44% fewer bytes — and the second half
+of that was not the expected trade. Reserving capacity normally buys
+fewer allocations by holding more memory. The reason it bought both here
+is `split_off`: it seeds the right half at exactly seven keys, and
+doubling from seven goes 7 → 14 → 28. A node whose ceiling is fifteen
+keys was ending up with room for twenty-eight. Asking for `MAX_KEYS + 1`
+once lands on sixteen and stays.
+
+The counting allocator lives in an integration test because the crate
+itself is `#![forbid(unsafe_code)]`, and both numbers are recorded as
+assertions with a floor, so a run that allocated nothing fails instead of
+satisfying every upper bound.
+
+### Two instruments that were checking less than they appeared to
+
+**The SIMD scanner's oracle could be comparing a function to itself.**
+`find_crlf` dispatches to AVX2, NEON, or a SWAR loop, and the test
+compared the *dispatcher* against SWAR. On x86_64 without AVX2 the
+dispatcher **is** the SWAR loop, so every input passed and nothing was
+verified — while looking exactly like an oracle that verifies something.
+The vector kernel is now driven directly rather than through the
+dispatcher, so a dispatcher that declined to use it can no longer hide a
+broken one, and a build with no vector tier says so instead of passing
+quietly. Red-green checked: a deliberately broken NEON kernel fails five
+of the eight cases.
+
+**The pipelined hash was guarded at one end only.** `kevy-map` takes its
+bucket index from the low bits and its metadata byte from the top seven.
+The low-bit distribution check ran on the legacy `FxHasher` absorb, and
+the check on the pipelined path — the one that actually indexes buckets —
+looked only at the top seven. Both ends are now checked on both paths.
+
+Also: `hash_bytes_pipelined`'s length waiver claimed codegen as its
+reason, which is not one of the two the rule allows. It is in fact the
+second — a byte-faithful transcription of rustc-hash 2.x, verified
+identical for every length 0..200 — and now says so.
+
+### One byte of inline capacity that the layout had all along
+
+`SmallBytes` stores short values inside itself: a 23-byte buffer and a
+one-byte tag, 24 bytes total. The bound was `INLINE_CAP - 1`, which would
+be right if the tag were carved out of the buffer — and it is not, they
+are sibling fields. So `data[22]` was written as zero, never read, and
+every 23-byte key or value paid for a malloc, a free, a pointer chase and
+an allocator header it did not need. A Redis key like
+`user:1234567890:session` is exactly 23 bytes.
+
+The bound is the buffer now. Asserted through the crate's own allocation
+counter — 23 bytes allocates zero, 24 still allocates — rather than by
+reading the constant back, so what is tested is the behaviour and not the
+arithmetic. Two existing boundary tests pinned the off-by-one at 22/23 and
+have moved to 23/24.
+
+This was only safe because the previous change removed the copy of that
+threshold from `kevy-store`; with the literal `22` still there, moving the
+boundary would have mis-charged every key with nothing failing to say so.
+
+### `INFO clients` reports `blocked_clients`
+
+Redis publishes it and kevy did not, and the gap had a second cost: six
+blocking tests had no condition to wait on, so each slept a flat 50 ms
+and assumed the client had parked by then. Under a full-workspace run —
+dozens of test binaries at once — that assumption failed once, and a test
+that fails for a reason unrelated to what it tests is worse than no test.
+
+The gauge is published per shard on the tick, summed across shards like
+the other client gauges. It counts each parked connection once: the
+in-shard registry is keyed by connection, and a client blocked on a
+remote or multi-key form is recorded on exactly one arbiter shard
+instead. Verified on a live server — 0 idle, 1 while a `BLPOP` waits,
+back to 0 when it times out.
+
+The tests now wait for that number instead of for a duration, which also
+took the blocking suite from about ten seconds to one.
+
+### Three more from the same reviews
+
+**A discarded `bool` that would have corrupted every later rank answer.**
+`kevy-ranktree`'s delete path merges two minimal children and then removes
+the key from the merged child, asserting via `debug_assert!` that it was
+found. The result was otherwise discarded, so the two builds disagreed
+about what happens if that invariant ever stopped holding: debug panicked,
+release decremented the subtree count anyway. A count one too low is not
+one wrong answer — it is every rank, select, len, count and range answer
+wrong, silently, for the life of the tree.
+
+**Two `unsafe impl`s that turned the compiler's own check off.**
+`kevy_sys::Waker` holds two file descriptors and nothing else, so it is
+`Send + Sync` by auto-derive; the manual impls were no-ops. But an
+explicit `unsafe impl` opts a type out of that check permanently, so the
+day someone adds a pointer or a `Cell` the compiler would have stayed
+silent about a type that had stopped being `Sync`. `Socket` and `Poller`
+have the same shape and carry no such impls. They are gone, their
+reasoning is kept, and a static assertion now states the requirement so
+it fails here rather than at a distant call site.
+
+**A heap allocation per iteration of the busy-poll loop.** Both pollers
+built a `Vec::with_capacity(1024)` for the kernel's event array on every
+`wait` — 32 KB malloc-and-free per call on kqueue, 12 KB on epoll, inside
+the loop body the shard runs continuously. It is a stack array now. The
+signature did not move, and no throughput claim is attached to this: what
+is claimed is that the allocation is gone.
+
+### Four io_uring paths where a failure had nowhere to be reported
+
+From the same review as the use-after-free below. None of these is known
+to have fired; each is a case where, if it did, the result would be
+corruption or a hang with nothing to read.
+
+**A panicking completion callback replayed the batch.** `for_each_completion`
+published the consumer head only on the normal path, so an unwinding
+callback left `cq_khead` where it was and the whole batch arrived again
+next call. For a completion carrying a provided-buffer id that means
+recycling the same buffer twice, which publishes it to the ring twice and
+lets the kernel hand it to two receives at once. The head is now published
+by a drop guard, and each completion is counted consumed *before* the
+callback sees it: a lost completion stalls one operation and can be
+diagnosed, a repeated one aliases memory inside the kernel.
+
+**Dropping a provided-buffer ring freed a slab the kernel could still
+write to.** `IORING_UNREGISTER_PBUF_RING` removes the group from the
+ring's table; it cancels no armed multishot receive and waits for none
+that has already selected a buffer. Nothing here can know whether one is
+outstanding, so the slab is now leaked rather than freed — the same
+doctrine the batched-read error path already used, and the honest price
+of a safe API that cannot prove the kernel is finished.
+
+**A full submission queue looped forever in release builds.**
+`read_file_batch` guarded that case with `debug_assert!`, so in release an
+empty chunk meant reaping nothing, advancing nothing, and retrying the
+same full queue for ever. It returns an error now.
+
+**And it validated completions by an index it did not check.**
+`for_each_completion` drains the entire queue, so a completion from any
+other submitter on the ring arrived in that callback and its `user_data`
+was used to index the read table directly. The reactor tags its own with
+`OP << 60 | cid`, which as an index is astronomically out of bounds; a
+smaller foreign value would have quietly validated the wrong read. The
+batch tags its submissions and ignores anything else.
+
+Plus the barrier `submit_and_wait` was missing on the SQPOLL path: the
+tail store and the `sq_flags` load are a store-load pair on different
+addresses, which release/acquire does not order. Both sides could read
+the other's old value — userspace skipping the syscall while the poll
+thread sleeps — and the submission would then never run and never
+complete. liburing puts a full barrier at exactly that point. While there,
+the poll thread is no longer woken for an empty submission, which on an
+idle loop was one syscall per iteration.
+
+### Structs the kernel reads, with nothing checking their shape
+
+`kevy-sys` and `kevy-uring` hand `#[repr(C)]` structs straight to the
+kernel and had no layout assertion between them. A field added, a type
+widened, an alignment changed — none of those fail a test. They produce a
+syscall reading the wrong memory, on whichever platform nobody happened
+to develop on.
+
+One declaration was already wrong: `sockaddr_un::sun_path` was `[u8; 108]`
+unconditionally, under a comment reading "108 bytes on Linux + macOS BSD",
+where macOS's own header says 104. Benign in practice — xnu bounds by
+`sun_len` into a larger buffer — but the crate's header claims these
+bindings match the platform ABI, and nothing in the build would have said
+otherwise.
+
+Compile-time assertions now cover `sockaddr_in`, `sockaddr_un`, `kevent`,
+`timespec`, `epoll_event` (whose packing is arch-conditional; losing it on
+x86_64 shifts `data` four bytes and routes every readiness event to the
+wrong connection), `io_uring_sqe`, `io_uring_cqe`, the ring-offset
+structs, `io_uring_buf_reg` and `__kernel_timespec`. The io_uring setup
+computes its mmap lengths from two of those sizes, so a drift there
+misaligns every ring read into arbitrary `user_data`.
+
+### `maxmemory` charged the length of a buffer, not its size
+
+`SmallBytes::heap_bytes` is what the eviction bound is computed from, and
+it returned `len`. `from_vec` adopts its argument's allocation as it
+stands, and `APPEND` grows a value with `extend_from_slice` — so the
+doubling ladder's slack arrives with it and was never charged.
+
+Measured through the store's own append path: on the eighth append to one
+key, 360 bytes reported against a 640-byte allocation. 1.78x. A server
+told to stop at a bound could sit well past it without evicting, and
+nothing outside the crate could see it — `Heap::capacity` is
+`pub(crate)`, so there was no second opinion to compare against.
+
+It now charges the allocation. The test drives the store's exact
+take-grow-rewrap loop and asserts the charge equals the capacity at every
+step, with a floor that fails if no step produced slack — otherwise it
+would be agreement between two numbers that happened to be equal.
+
+`kevy-store` had also copied the inline threshold out as the literal
+`22`, so moving that boundary would have mis-charged every key with
+nothing failing. It now asks `kevy-bytes` via `heap_bytes_for`.
+
+### The key hash decides which file a key lives in, and nothing pinned it
+
+`kevy_hash()` on a key selects its `aof-{i}.aof` and `dump-{i}.rdb`.
+`shards.meta` records the routing *scheme* precisely so that changing it
+triggers a lossless re-shard instead of stranding keys — but the tag is
+`"kevyhash"` for every version of the function. Change a constant and the
+recorded scheme still compares equal, no migration runs, and every key
+resolves to the wrong file.
+
+Nothing would have caught it. The tests here ask whether the output is
+deterministic, differs from a neighbour, and spreads evenly — all of
+which survive any constant change. Perturbing `ANTI_ZERO` by one left all
+24 green. The CRC-16 half of the same crate, probed the same way, killed
+four mutations out of four: it is pinned to a published check value.
+
+So the byte hash and the integer hashes are now pinned to frozen vectors,
+verified red-green against both mutations that can reach them. If it
+fails, the hash moved — put it back, or bump the routing tag in the same
+change so existing data directories migrate instead of misreading.
+
+### A second connection the reap could tear down under the kernel
+
+The disconnect defect below was fixed by adding the one term
+`closing_conn_is_quiet` was missing. Asking what *else* the kernel could
+still be holding found another, and this one is worse: a use-after-free.
+
+The kernel-direct big-argument read hands `io_uring` a raw pointer into
+the body `Vec` that the connection owns, and the kernel may write there
+until the completion is reaped. Nothing recorded that. `big_arg_read_pending`
+looks like it would, and is exactly inverted: it means "queue an SQE on
+the next arm pass" and is cleared the moment the SQE is submitted — so it
+is `false` for precisely the window in which the kernel owns the buffer.
+
+So a connection uploading a large `SET` body was, to the reap, quiet on
+all three terms it knew about: writes idle, nothing left to drain, and
+`recv_armed` false (the multishot is cancelled before this mode is
+entered — that is what the mode is for). `CLIENT KILL` sets `closing` and
+queues the reap without consulting any of it; the reap then drops the
+connection, frees the body, and leaves the kernel writing a client's
+bytes into freed memory. A client that stalls mid-body holds that window
+open for as long as it likes.
+
+`big_read_inflight` now records it — set on a successful submit, cleared
+when the completion arrives, including on the error and EOF paths, where
+the completion is still the kernel handing the buffer back. It is a term
+of the reap predicate and a field on the stall dump, because a dump that
+does not move with the predicate diagnoses the next wedge against a
+condition that stopped being the condition.
+
+Two tests, one per direction: a submitted read is not quiet, and a read
+merely *wanted* still is. The second exists because the flag that looks
+like it should have covered this is the one that does not.
+
+### A disconnect the server decided on and the client never received
+
+On Linux/io_uring, a connection the server chose to close — the
+query-buffer guard, the output-buffer guard, `CLIENT KILL` — could stay
+open on the client's side indefinitely. The server was not confused
+about it: it logged the decision, counted it in
+`client_query_buffer_limit_disconnections`, tore the connection down and
+forgot it. The socket simply never closed.
+
+The reactor cancels a closing connection's multishot receive precisely
+so that `close(fd)` sends a FIN — a comment at the cancel site has said
+so for a long time, ending "the next reap closes cleanly". The reap did
+not check. A reap landing in the window between the cancel's submission
+and its completion tore the connection down with the receive still
+armed, which pins the socket in the kernel: the descriptor closes, and
+nothing goes out on the wire. The client then waits on a socket the
+server believes is gone, until its own timeout.
+
+It is a race, so it was intermittent — 5 to 7 times in 100 on a
+GitHub-hosted runner, and 0 in 200 after the fix. Those numbers are
+measured rather than estimated; a manual `flake A/B` job runs the case N
+times per arm and refuses to report at all unless the runner took the
+io_uring path, because a rate measured on epoll would answer a different
+question.
+
+Three hypotheses read out of the source were raised and refuted before
+the real one arrived from a measurement. What produced it was the
+reactor's own stall dump — an opt-in diagnostic that existed already and
+skipped, by construction, every connection marked closing, which is to
+say the only shape it was built to name. With that corrected, the answer
+was one line: `conns=0`, on all 121 heartbeats spanning the client's
+30-second wait. The connection was already gone while the client still
+saw it open, which leaves only the teardown.
+
+### Four interleaving searches that reported success by never running
+
+kevy has two loom suites — one over `kevy-ring`'s SPSC handshake, one
+over the cross-shard park/wake fence — and between them they are the
+stated proof for the memory orderings on the hot cross-core path. Both
+files are `#![cfg(loom)]`, and nothing in this repository ever passed
+`--cfg loom`. So what every run of `cargo test --workspace` did with them
+was print `running 0 tests` / `test result: ok` and move on. Three
+production sites cite one of those tests by name as the argument for
+their `SeqCst` ordering: `shard_run.rs`, `shard_flush.rs`, `uring_park.rs`.
+
+`tools/check_loom.py` runs both under the cfg and demands the count. The
+floor is read from the source — the number of `#[test]` functions in each
+`loom.rs` — so a harness that goes silent again fails, and so does a new
+loom test the cfg build does not pick up; a hardcoded four would catch
+only the first. An abort with no summary line is a failure and not a
+missing opinion, which matters because that is exactly how loom reports a
+broken ordering: it panics inside a destructor during model cleanup, so
+the process dies on `SIGABRT` having printed no `test result:` at all.
+Red-green both ways: relaxing the `Release` on the ring's tail store
+makes the gate report the abort; a `#[test]` the cfg build cannot see
+makes it report `3 #[test] ... but only 2 ran`.
+
+**And the park/wake suite was testing a copy of the code.** Its two tests
+declared their own atomics and reproduced the fence pattern in the test
+body. That proves the pattern sound and says nothing about whether
+kevy-rt implements it — the fence could have been deleted from all three
+production sites and both tests would have stayed green, while all three
+sites pointed at them. The pairing now lives in one module,
+`kevy-rt/src/park_fence.rs`, whose four functions the three sites call
+and the loom suite schedules; under `--cfg loom` its flag becomes loom's
+instrumented atomic. Verified by removing each fence on its own: with
+either gone, both tests fail. The payload in the model is published at
+the ring's real `Release`/`Acquire` rather than at `SeqCst`, so the model
+is not a stronger machine than the one this runs on.
+
+Two claims in those files' headers were guesses, and measurement refused
+both. "Total wall-clock is on the order of 1-10s" — it is 0.00 s. And
+"bumping to 3+ explodes the state space combinatorially", which was the
+stated reason for leaving the preemption bound at its default: at bounds
+2/3/4/5 the ring suite costs 0.00/0.01/0.02/0.04 s and the park/wake
+suite does not leave 0.00 s at any bound through 6. The gate searches at
+5. A third claim, that production still lacked the fences and carried a
+50 ms lost-wake window, had been false for some time; it survived because
+nothing ran the file that would have said so.
+
+### The codec promised to catch corruption; 48% of flips get through
+
+`kevy-compress`'s acceptance criterion K3 read "truncations and bit flips
+are rejected, never mis-decoded into a wrong-but-plausible value", and the
+decoder's own header said the same. What checked it was five sampled byte
+positions with one bit pattern each, at the fast level, and four at the
+high level. Scanning every bit of every byte instead:
+
+    fast level   3,965 of 8,184 flips (48%)   decode to the wrong contents
+    high level   1,148 of 2,928 flips (39%)   at exactly the right length
+
+The sampled positions were not among them. At a 39-48% hit rate, four or
+five samples miss entirely about one time in seven, which is what happened.
+
+The promise was never implementable at that layer and does not belong
+there. A frame carries no checksum, and a flipped bit that leaves every
+offset and length in range produces a different, structurally valid token
+stream — returning it is the correct behaviour for a codec. Integrity is
+`kevy-vlog`'s per-record `crc32c`, checked in `verify_image` **before** the
+frame reaches `decode`. The layering was right; three statements of K3
+existed and only the fuzz target's was accurate ("must either error or
+produce a value, never panic, never overrun").
+
+Both levels now assert what holds. Every truncation is refused — that half
+is structural, caught by the closing `out.len() == orig_len`, and is now
+checked over every prefix rather than four. And each test carries
+`different > 0`: the assertion that the codec does **not** detect flips,
+which fails if the format ever grows a checksum. It reads backwards until
+you see what it defends — a future reader deleting the upstream CRC on the
+grounds that the codec catches corruption.
+
+### Two varint decoders with no shift guard, and a third that had one
+
+`kevy-text` had three decoders for one LEB128 stream. `cold.rs`'s stopped
+at `shift > 28`; `docblobs::get_varints` and `positions::walk` — the two
+that read the side-channel blobs — did not. Six bytes reach both:
+`80 80 80 80 80 01` puts the sixth at shift 35, which panics in a debug
+build and silently masks to shift 3 in a release one, returning `[8]`.
+`walk` had a second in the same loop: offsets are deltas summed into a
+`u32` with `acc += cur`. One decoder now, bounded, returning `Option`.
+
+### A page header that lied, and the CRC agreed with it
+
+`kevy-seg` checked each page's CRC and nothing else, and every slot walk
+indexes off the header that check does not examine. `n_slots` is two bytes
+at offset 0, inside the CRC's range, so a page rewritten by anything that
+recomputes the CRC is self-consistent whatever it claims. Claim 65535
+slots and slot 65534 sits at `4096 - 4 - 131070`, which is not a place:
+a debug build panics in the subtraction, a release build wraps and panics
+on the index. `page_shape_ok` is the check a CRC cannot be — the CRC says
+the bytes are the bytes that were written, this says they describe a page.
+
+Also in that crate: cell offsets are built from a `u16` and a `u32` read
+off disk, and on the 32-bit targets in CI's matrix that sum runs past the
+end of `usize`.
+
+### A ring that constructed cleanly and indexed out of bounds on first push
+
+`kevy_ring::ring(capacity)` rounds up to a power of two, and
+`next_power_of_two` panics on overflow in a debug build and returns
+**zero** in a release one. Zero makes `mask` `usize::MAX` and `buf` empty:
+a ring that constructs without complaint, answers `capacity()` wrongly,
+and goes out of bounds on the first push — reporting a fault in `push` for
+an argument passed to `ring`. Checked now, with `# Panics` stating the
+ceiling the docs had never given.
+
+### One probe loop, written three times
+
+`kevy-map` walks the same probe in three functions — lookup only, lookup
+plus an insert slot, and the same again while remembering the first
+tombstone. The split is deliberate (a lookup should not pay insert
+bookkeeping) which makes it the shape the rule against a second
+implementation warns about rather than exempt from it: they can drift
+apart, disagree on a boundary, and both sets of tests stay green. They now
+answer the same question over the same keys in both table states and must
+agree, red-green on each arm separately.
+
+Fifteen never-executed regions sat in the tombstone arm, and they arrived
+honestly: the change that stopped a single `DEL` from putting the table on
+its slow probe for the rest of its life left the arm almost never entered.
+A fix working and a correctness path going quiet are the same event.
+
+### Four instruments that were answering a different question
+
+None of these changes what kevy does. They change what this repository can
+tell you about itself, which is the release's subject.
+
+**A gate that compared the register with itself.** `deadgate.sh` ends by
+reconciling `suite/dead-paths.toml` — the file a person reads — against the
+exemptions the run applied. It compared the register against a copy of the
+register that the atlas had just written out of the same TOML. It printed
+"register and this run agree" on every run it has ever made and could not
+have printed anything else. What it was there to catch was sitting in the
+register the whole time: a `[[dead]]` entry naming
+`kevy_geo::estimate_step`, a symbol that has not existed since the function
+moved files, explaining a region that is executed now.
+
+**An identity that held every crate's `Debug`.** Symbol identity was
+computed with a regex that collapsed `<Type as Trait>::method` to
+`::method`. `::fmt` was one identity holding 241 dead regions across at
+least twelve crates, so a regression in one crate's `Debug` and an
+improvement in another's cancelled inside one number. Whether it collapsed
+was arbitrary — the pattern cannot see nested angle brackets, so a type
+carrying a generic parameter survived and a plain one did not.
+
+**An envelope that spanned three trees.** `setratchet envelope` takes the
+element-wise maximum across runs so noise cannot fail the gate. Across
+*different* trees that maximum restores dead regions a later commit
+covered. It now records and requires one tree, refuses a set that records
+none, and refuses a dirty working copy.
+
+**A crate with no coverage produces no failing line.** `[[dead_crate]]`
+explains a crate whose dead regions have one cause, and the atlas already
+refused an entry whose named gate had been deleted. Nothing asked the
+reverse. A crate at 100% dead shows up as no symbols, no growth, no name —
+there was one, unexplained.
+
+Alongside them, coverage where the corpus reached least: every msgpack
+wire tag (`cmsgpack.unpack` is a global on every script, so the tag byte
+comes off the wire, and 146 of its regions had never run), every missing
+field in the pubsub frame classifier, and two differential tests where one
+algorithm is written twice — `kevy-map`'s three probe loops and the regex
+engine's capturing and non-capturing descents, the second of which also
+pins the routing rule that sends backreference patterns to the capturing
+side.
+
+### A regex whose answer depended on which branch was written first
+
+```
+regexp_matches('abc', '(a|ab)c')  ->  NULL     -- wrong
+regexp_matches('abc', '(ab|a)c')  ->  {ab}     -- right
+```
+
+Same pattern, same input, opposite answers, and the only difference is the
+order of the alternation's branches. `(a|ab)c` matched branch `a`, put the
+tail `c` in front of a `b`, failed, and never went back for `ab`.
+
+Both sequence matchers retry an alternation's branches against the tail —
+that arm exists and is correct. Neither reached it when the alternation
+was in parentheses: a `Group` fell to the catch-all, where the matcher
+returns the first branch that succeeds and offers no way back. Fixed on
+both, differently, because they need different things: the non-capturing
+side flattens the group into the sequence (parentheses only group there),
+and the capturing side retries the branches in place so the group's span
+still records the branch that won — `(a|ab)c` now captures `ab`.
+
+Only **capturing** parentheses are affected. `(?:a|ab)c` was always
+right, because a non-capturing group returns its inner node rather than a
+`Group`, so the alternation sits directly in the sequence where the
+correct arm reaches it. The shape that breaks is `(A|B)tail` where `A` is
+a prefix of `B` and the tail fails after `A` but succeeds after `B` —
+across `regexp_matches`, `regexp_replace` and `regexp_split_to_array`.
+
+The same defect is in `spg`, which this engine is a byte-identical fork
+of; reproduced there and written up in that repository, not fixed there.
+
+**How it survived a differential test.** The same arc added a test
+asserting that this engine's capturing and non-capturing descents agree,
+and `(a|ab)c` is in its table. It passed, because both descents were wrong
+in the same way. A differential test cannot find a defect its two
+implementations share; that is a structural limit, not an oversight in
+this one. What found it was writing down what the answer should be — the
+case was serving as an example of alternation backtracking in a test about
+greedy and lazy quantifiers, and it did not match.
+
+### Deferred, with the reason
+
+`C-STRUCT-PRIVATE` — 740 public fields on public structs — is a real
+finding and cannot ship in a minor: adding a private field to an
+all-public struct is `struct-add-private-field-when-public`, MAJOR by
+Cargo's own table. It is recorded in `quality/API-GUIDELINES.md` with
+that identifier, as a v7 item rather than a thing that got dropped.
+
 ## 6.3.0 — the opponents, pinned; and three gaps they exposed
 
 A week of work on one question: what is kevy actually measured against,

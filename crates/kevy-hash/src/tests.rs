@@ -63,18 +63,31 @@ fn kevy_hash_integer_paths_differ_per_value() {
 }
 
 #[test]
-fn kevy_hash_top7_bits_distribute() {
-    // Same low-entropy clustering guard, but driven through `kevy_hash`
-    // on byte slices — the path kevy-map's metadata byte will use.
+fn kevy_hash_bits_distribute_at_both_ends() {
+    // The low-entropy clustering guard, driven through `kevy_hash` on
+    // byte slices — the two-stream pipelined path.
+    //
+    // This checked only the top 7 bits, while the low-bit check ran on
+    // the LEGACY `FxHasher` absorb, which is a different function. So the
+    // half of the word that picks the bucket had no guard on the path
+    // that actually picks buckets: `kevy-map` takes the index from the
+    // low bits and the metadata byte from the top 7, and only one end was
+    // being watched on each path.
+    let mut low = [0u32; 256];
     let mut top = [0u32; 128];
     for i in 0..4096u64 {
         let mut k = format!("key:{i}").into_bytes();
         k.resize(12, b'x');
         let hash = k.as_slice().kevy_hash();
+        low[(hash & 0xff) as usize] += 1;
         top[(hash >> 57) as usize] += 1;
     }
-    let max = *top.iter().max().unwrap();
-    assert!(max < 128, "top-7-bit skew {max} (mean 32) — avalanche failing");
+    let max_low = *low.iter().max().unwrap();
+    let max_top = *top.iter().max().unwrap();
+    // 4096 keys over 256 buckets is a mean of 16; over 128 control bytes,
+    // 32. Well-avalanched ⇒ no bucket past ~4x its mean.
+    assert!(max_low < 64, "low-bit skew {max_low} (mean 16) — avalanche failing");
+    assert!(max_top < 128, "top-7-bit skew {max_top} (mean 32) — avalanche failing");
 }
 
 #[test]
@@ -142,4 +155,64 @@ fn kevy_hash_usize_agrees_with_u64() {
     assert_eq!(n.kevy_hash(), (n as u64).kevy_hash());
     let m: usize = 43;
     assert_ne!(n.kevy_hash(), m.kevy_hash());
+}
+
+/// Frozen output. Not a property — the values themselves.
+///
+/// `kevy_hash()` on a key decides which `aof-{i}.aof` and `dump-{i}.rdb`
+/// that key lives in (`kevy-embedded/src/shard.rs`), and `shards.meta`
+/// records the routing SCHEME so a mismatch triggers a lossless
+/// re-shard rather than stranding every key. But the scheme tag is
+/// `"kevyhash"` for any version of this function: change a constant in
+/// `hash_bytes_pipelined` and `prev == target` still holds, no re-shard
+/// runs, and every key silently resolves to the wrong file.
+///
+/// Nothing caught that. Every other test here asks whether the output is
+/// deterministic, differs from a neighbour, or spreads — all of which
+/// survive any constant change. Perturbing `ANTI_ZERO` by one left all
+/// 24 tests green. The CRC-16 side, checked the same way, killed four
+/// mutations out of four, because it is pinned to a published value.
+///
+/// So this is the missing pin. If it fails, the hash moved: either put
+/// it back, or bump the `shards.meta` routing tag to `"kevyhash-2"` in
+/// the same change, so existing data directories take the migration path
+/// instead of reading their keys out of the wrong files.
+#[test]
+fn the_hash_is_frozen_because_data_directories_depend_on_it() {
+    // Bytes, by length: the boundaries of the 16-byte short path, the
+    // bulk loop's first and last iteration, and either side of each.
+    const BYTES: &[(usize, u64)] = &[
+        (0, 0xa47e_4914_af8c_afbc),
+        (1, 0xfd1f_9681_53ec_5dff),
+        (3, 0x71fd_0807_d152_cf82),
+        (4, 0x90fe_a4e1_40d5_fadc),
+        (7, 0x65c4_056d_74f3_a28c),
+        (8, 0x7dd8_25d7_01dd_6df2),
+        (15, 0x80a6_e4b1_284a_aa04),
+        (16, 0x1701_faea_6a41_d3e4),
+        (17, 0xe866_a80f_5ce8_b61a),
+        (32, 0x54e8_78d1_b9b0_f6d7),
+        (33, 0x3bb0_5e16_2e71_4e14),
+        (64, 0x85a5_2826_94af_6407),
+        (200, 0x263a_c48d_68ef_b8b3),
+    ];
+    for &(n, want) in BYTES {
+        let b: Vec<u8> = (0..n).map(|i| (i * 7 + 13) as u8).collect();
+        assert_eq!(
+            b.as_slice().kevy_hash(),
+            want,
+            "the byte hash moved at len {n} — see this test's note before changing it"
+        );
+    }
+
+    // The integer impls route too (shard-by-id paths), and they take a
+    // different code path from bytes, so a change to one need not show
+    // up in the other.
+    assert_eq!(0u64.kevy_hash(), 0x0000_0000_0000_0000);
+    assert_eq!(1u64.kevy_hash(), 0x37e8_d294_6949_7cd2);
+    assert_eq!(42u64.kevy_hash(), 0x2558_5839_4b61_ab76);
+    assert_eq!(u64::MAX.kevy_hash(), 0x92f9_6f6a_0392_ef8d);
+
+    // The floor: a table nobody walked would pass every assertion above.
+    assert_eq!(BYTES.len(), 13, "the vector table shrank");
 }

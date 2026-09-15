@@ -9,6 +9,13 @@
 //! the embedded facade (reads under shard locks) and the server's
 //! cross-shard gather reducer.
 
+// The discarded value is the operation's own count — how many fields
+// went, how many members landed — and the caller returns its own.
+#![expect(
+    clippy::let_underscore_must_use,
+    reason = "the discarded value is a count, not an error report"
+)]
+
 #[cfg(not(feature = "std"))]
 use crate::nostd_prelude::*;
 use crate::{Store, StoreError};

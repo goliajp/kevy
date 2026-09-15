@@ -209,6 +209,34 @@ def envelope(base_path, obs_paths, reason=""):
     if len(ids) != 1:
         refuse(f"the {len(docs)} observed sets do not share one identity: {ids}")
 
+    # One identity is not enough: they must also be runs of ONE TREE.
+    #
+    # The maximum below is there to absorb run-to-run noise. Taken across
+    # different trees it absorbs something else — a dead region a later
+    # commit covered comes back in from an earlier run's numbers, and the
+    # baseline records it as still dead. A ratchet that loosens itself is
+    # exactly what this file's docstring says must not exist, and it would
+    # do it silently, since every input is a real reading from the enforcing
+    # platform.
+    #
+    # A set recorded before `tree` existed has none, and is refused rather
+    # than assumed to match: "no tree recorded" and "the same tree" are the
+    # two things this must never confuse.
+    trees = [d.get("tree") for d in docs]
+    if any(x is None for x in trees):
+        refuse(f"{sum(x is None for x in trees)} of {len(docs)} observed set(s) "
+               "record no tree; re-record them with an atlas that does, because "
+               "an envelope over unknown trees can quietly restore dead regions "
+               "a later commit already covered")
+    if len(set(trees)) != 1:
+        refuse(f"the {len(docs)} observed sets come from {len(set(trees))} "
+               f"different trees: {sorted(set(trees))}. An envelope is several "
+               "runs of ONE tree; across trees the maximum re-absorbs regions "
+               "that were fixed in between")
+    if any(x.endswith("-dirty") for x in trees):
+        refuse("an observed set was recorded against a dirty working tree; "
+               "that reading cannot be reproduced, and a baseline has to be")
+
     merged = {}
     for d in docs:
         for k, v in d["symbols"].items():

@@ -47,6 +47,7 @@ async fn connect_default(host: &str, port: u16) -> io::Result<DefaultTransport> 
 /// Async TCP-RESP connection. Mirrors [`kevy_client::Connection`] but
 /// drops the `mem://` / `file://` embedded backends — those are
 /// synchronous and have no async story.
+#[derive(Debug)]
 pub struct AsyncConnection {
     codec: AsyncRespCodec<DefaultTransport>,
 }

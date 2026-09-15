@@ -45,6 +45,7 @@ use std::net::TcpStream;
 ///
 /// Holds the stream plus an incremental read buffer so multi-segment replies
 /// reassemble across `read` calls. Not `Sync`; one client per thread.
+#[derive(Debug)]
 pub struct RespClient {
     stream: TcpStream,
     /// Incremental read buffer with a consume cursor — replies are parsed

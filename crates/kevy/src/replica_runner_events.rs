@@ -7,6 +7,11 @@
 //! means — whether it raises or lowers the `-LOADING` gate, what apply it
 //! turns into, and which shard inbox it goes to.
 
+// An ack to a primary that has gone away. The connection's failure
+// surfaces on the next `next_event()`, which is where the reconnect
+// already lives; reporting here would duplicate it one beat early.
+#![expect(clippy::let_underscore_must_use, reason = "a lost ack is found by the next read")]
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 

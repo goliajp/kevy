@@ -28,6 +28,7 @@ use crate::value::{IndexValue, order_key};
 /// Everything a scalar query carries beyond its bounds. Field indices
 /// are positions into the spec's declared `VALUES` list; the caller
 /// resolves names (and errors on unknown ones) before building this.
+#[derive(Debug)]
 pub struct ScalarClauses<'a> {
     /// `(stored-value position, typed test)` per `FILTER`, ANDed.
     pub filters: &'a [(usize, ValueTest)],
@@ -53,6 +54,7 @@ impl ScalarClauses<'_> {
 /// One selected row: its key and indexed value, plus the sort /
 /// distinct keys the origin merge needs (only present when the query
 /// carried the clause).
+#[derive(Debug)]
 pub struct ScalarHit {
     /// Row key.
     pub key: Vec<u8>,
@@ -72,6 +74,7 @@ pub type FacetBucket = (Vec<u8>, Vec<u8>, u64);
 type FacetCounts = HashMap<Vec<u8>, (Vec<u8>, u64)>;
 
 /// One shard's clause-carrying page.
+#[derive(Debug)]
 pub struct ClausedPage {
     /// The selected hits (driving order, or sort order under `SORT`).
     pub hits: Vec<ScalarHit>,

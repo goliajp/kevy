@@ -25,6 +25,7 @@ type ShardUndoEntry = (usize, Vec<u8>, Option<(kevy_store::Value, Option<u64>)>)
 
 /// Context handed to the `atomic_all_shards` closure body. Methods
 /// route to the right shard by hashing the key.
+#[derive(Debug)]
 pub struct AtomicAllShards<'a> {
     pub(crate) guards: Vec<RwLockWriteGuard<'a, Inner>>,
     /// (shard_idx, serialised RESP-frame parts) queued for AOF commit.

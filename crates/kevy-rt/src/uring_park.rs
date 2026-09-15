@@ -4,8 +4,8 @@
 
 #![cfg(target_os = "linux")]
 
+use crate::park_fence;
 use std::io;
-use std::sync::atomic::{Ordering, fence};
 
 use kevy_uring::{IoUring, KernelTimespec};
 
@@ -27,11 +27,10 @@ impl<C: Commands> Shard<C> {
         park: &mut ParkState,
     ) -> io::Result<()> {
         let me = self.id;
-        self.parked[me].store(true, Ordering::SeqCst);
-        fence(Ordering::SeqCst);
+        park_fence::publish_parked(&self.parked[me]);
         if self.uring_drain_inbound() > 0 {
             // A push landed in the race window — process it, don't block.
-            self.parked[me].store(false, Ordering::SeqCst);
+            park_fence::clear_parked(&self.parked[me]);
             return Ok(());
         }
         if !park.waker_armed {
@@ -55,7 +54,7 @@ impl<C: Commands> Shard<C> {
         if park.waker_armed || park.timeout_inflight {
             ring.submit_and_wait(1)?;
         }
-        self.parked[me].store(false, Ordering::SeqCst);
+        park_fence::clear_parked(&self.parked[me]);
         Ok(())
     }
 

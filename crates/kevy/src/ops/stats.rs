@@ -60,8 +60,45 @@ pub(crate) fn publish_gauges(shard: &ShardCtx, store: &Store) {
             s.tier.vlog_live_bytes.store(ts.vlog_live_bytes, Relaxed);
             s.tier.vlog_epoch.store(ts.vlog_epoch, Relaxed);
         }
+        publish_alloc_gauges(s);
     });
 }
+
+/// Publish this shard's allocator terms. `thread_stats` answers for the
+/// CALLING thread, and each shard owns its own heap — so this has to
+/// happen here, on the shard thread, and cannot be done by whichever
+/// shard INFO lands on.
+///
+/// The gate is `mapped > 0`, not `Some`. Compiling the feature in links
+/// kevy-alloc; it does not make it the allocator — the
+/// `#[global_allocator]` attribute does, and that lives in the binary,
+/// so the library and everything that links it (tests, the embedded
+/// API, an FFI host) can have the feature on and route every allocation
+/// somewhere else. `thread_stats` still answers `Some` there: a heap is
+/// created on demand and reports nine honest zeroes. Reading that as
+/// "kevy-alloc, holding nothing" would have INFO name an allocator that
+/// is not running. A heap that has never mapped a byte has served
+/// nothing, so suppressing it costs no information.
+#[cfg(feature = "kevy-alloc")]
+fn publish_alloc_gauges(s: &crate::state::ShardStats) {
+    let Some(a) = kevy_alloc::thread_stats().filter(|a| a.mapped > 0) else { return };
+    s.alloc.mapped.store(a.mapped, Relaxed);
+    s.alloc.live.store(a.live, Relaxed);
+    s.alloc.rounding.store(a.rounding, Relaxed);
+    s.alloc.cache.store(a.cache, Relaxed);
+    s.alloc.span_free.store(a.span_free, Relaxed);
+    s.alloc.returned.store(a.returned, Relaxed);
+    s.alloc.virgin.store(a.virgin, Relaxed);
+    s.alloc.hysteresis.store(a.hysteresis, Relaxed);
+    s.alloc.segment_overhead.store(a.segment_overhead, Relaxed);
+    s.alloc.large_count.store(a.large_count, Relaxed);
+    s.alloc.spans_assigned.store(a.spans_assigned, Relaxed);
+    // Last, so a reader that sees `reporting` sees the terms behind it.
+    s.alloc.reporting.store(1, Relaxed);
+}
+
+#[cfg(not(feature = "kevy-alloc"))]
+fn publish_alloc_gauges(_s: &crate::state::ShardStats) {}
 
 // ───────────── instantaneous_ops_per_sec ─────────────
 //

@@ -78,6 +78,9 @@ type SetLongArrayRegionFn = unsafe extern "system" fn(JniEnv, JObject, JInt, JIn
 /// `env` must be the live `JNIEnv *` the VM passed to the current native
 /// call, used on the calling thread within that call.
 unsafe fn slot(env: JniEnv, idx: usize) -> *const c_void {
+    // SAFETY: `env` points at the JNI function table for this call (fact 1 of the
+    // module note), and `idx` is one of the hand-counted slot constants above, all
+    // of which are within the table JNI guarantees.
     unsafe { *(*env).add(idx) }
 }
 
@@ -87,14 +90,21 @@ unsafe fn slot(env: JniEnv, idx: usize) -> *const c_void {
 /// `env` as in [`slot`]; `arr` must be a live, non-null `byte[]` reference
 /// from the same call.
 pub(crate) unsafe fn get_byte_array(env: JniEnv, arr: JObject) -> Vec<u8> {
+    // SAFETY: the slot holds the function pointer JNI specifies for that index, and
+    // the type alias above is that exact signature — see the slot table.
     let len_fn: GetArrayLengthFn = unsafe { std::mem::transmute(slot(env, SLOT_GET_ARRAY_LENGTH)) };
+    // SAFETY: `env` is this call's and `arr` is the live reference JNI passed with it.
     let n = unsafe { len_fn(env, arr) };
     if n <= 0 {
         return Vec::new();
     }
     let mut v = vec![0u8; n as usize];
     let get_fn: GetByteArrayRegionFn =
+        // SAFETY: the slot holds the function pointer JNI specifies for that index, and
+        // the type alias above is that exact signature — see the slot table.
         unsafe { std::mem::transmute(slot(env, SLOT_GET_BYTE_ARRAY_REGION)) };
+    // SAFETY: `env` is this call's, `arr` is the live array reference JNI passed, and
+    // the buffer is a local sized to the length just read from that array.
     unsafe { get_fn(env, arr, 0, n, v.as_mut_ptr().cast::<JByte>()) };
     v
 }
@@ -106,14 +116,21 @@ pub(crate) unsafe fn get_byte_array(env: JniEnv, arr: JObject) -> Vec<u8> {
 /// `env` as in [`slot`]; `arr` must be a live, non-null `long[]` reference
 /// from the same call.
 pub(crate) unsafe fn get_long_array(env: JniEnv, arr: JObject) -> Vec<JLong> {
+    // SAFETY: the slot holds the function pointer JNI specifies for that index, and
+    // the type alias above is that exact signature — see the slot table.
     let len_fn: GetArrayLengthFn = unsafe { std::mem::transmute(slot(env, SLOT_GET_ARRAY_LENGTH)) };
+    // SAFETY: `env` is this call's and `arr` is the live reference JNI passed with it.
     let n = unsafe { len_fn(env, arr) };
     if n <= 0 {
         return Vec::new();
     }
     let mut v = vec![0 as JLong; n as usize];
     let get_fn: GetLongArrayRegionFn =
+        // SAFETY: the slot holds the function pointer JNI specifies for that index, and
+        // the type alias above is that exact signature — see the slot table.
         unsafe { std::mem::transmute(slot(env, SLOT_GET_LONG_ARRAY_REGION)) };
+    // SAFETY: `env` is this call's, `arr` is the live array reference JNI passed, and
+    // the buffer is a local sized to the length just read from that array.
     unsafe { get_fn(env, arr, 0, n, v.as_mut_ptr()) };
     v
 }
@@ -125,13 +142,20 @@ pub(crate) unsafe fn get_long_array(env: JniEnv, arr: JObject) -> Vec<JLong> {
 /// # Safety
 /// `env` as in [`slot`].
 pub(crate) unsafe fn new_byte_array(env: JniEnv, data: &[u8]) -> JObject {
+    // SAFETY: the slot holds the function pointer JNI specifies for that index, and
+    // the type alias above is that exact signature — see the slot table.
     let new_fn: NewByteArrayFn = unsafe { std::mem::transmute(slot(env, SLOT_NEW_BYTE_ARRAY)) };
+    // SAFETY: `env` is this call's and `arr` is the live reference JNI passed with it.
     let arr = unsafe { new_fn(env, data.len() as JInt) };
     if arr.is_null() || data.is_empty() {
         return arr;
     }
     let set_fn: SetByteArrayRegionFn =
+        // SAFETY: the slot holds the function pointer JNI specifies for that index, and
+        // the type alias above is that exact signature — see the slot table.
         unsafe { std::mem::transmute(slot(env, SLOT_SET_BYTE_ARRAY_REGION)) };
+    // SAFETY: `env` is this call's, `arr` is the live array reference JNI passed, and
+    // the buffer is a local sized to the length just read from that array.
     unsafe { set_fn(env, arr, 0, data.len() as JInt, data.as_ptr().cast::<JByte>()) };
     arr
 }
@@ -143,13 +167,20 @@ pub(crate) unsafe fn new_byte_array(env: JniEnv, data: &[u8]) -> JObject {
 /// # Safety
 /// `env` as in [`slot`].
 pub(crate) unsafe fn new_long_array(env: JniEnv, data: &[JLong]) -> JObject {
+    // SAFETY: the slot holds the function pointer JNI specifies for that index, and
+    // the type alias above is that exact signature — see the slot table.
     let new_fn: NewLongArrayFn = unsafe { std::mem::transmute(slot(env, SLOT_NEW_LONG_ARRAY)) };
+    // SAFETY: `env` is this call's and `arr` is the live reference JNI passed with it.
     let arr = unsafe { new_fn(env, data.len() as JInt) };
     if arr.is_null() || data.is_empty() {
         return arr;
     }
     let set_fn: SetLongArrayRegionFn =
+        // SAFETY: the slot holds the function pointer JNI specifies for that index, and
+        // the type alias above is that exact signature — see the slot table.
         unsafe { std::mem::transmute(slot(env, SLOT_SET_LONG_ARRAY_REGION)) };
+    // SAFETY: `env` is this call's, `arr` is the live array reference JNI passed, and
+    // the buffer is a local sized to the length just read from that array.
     unsafe { set_fn(env, arr, 0, data.len() as JInt, data.as_ptr()) };
     arr
 }
@@ -164,11 +195,19 @@ pub(crate) unsafe fn new_long_array(env: JniEnv, data: &[JLong]) -> JObject {
 /// # Safety
 /// `env` as in [`slot`]; call at most once per native invocation.
 pub(crate) unsafe fn throw(env: JniEnv, class_name: &CStr, msg: &CStr) {
+    // SAFETY: the slot holds the function pointer JNI specifies for that index, and
+    // the type alias above is that exact signature — see the slot table.
     let find_fn: FindClassFn = unsafe { std::mem::transmute(slot(env, SLOT_FIND_CLASS)) };
+    // SAFETY: `env` is this call's, `arr` is the live array reference JNI passed, and
+    // the buffer is a local sized to the length just read from that array.
     let class = unsafe { find_fn(env, class_name.as_ptr()) };
     if class.is_null() {
         return; // FindClass left a NoClassDefFoundError pending
     }
+    // SAFETY: the slot holds the function pointer JNI specifies for that index, and
+    // the type alias above is that exact signature — see the slot table.
     let throw_fn: ThrowNewFn = unsafe { std::mem::transmute(slot(env, SLOT_THROW_NEW)) };
+    // SAFETY: `env` is this call's, `arr` is the live array reference JNI passed, and
+    // the buffer is a local sized to the length just read from that array.
     unsafe { throw_fn(env, class, msg.as_ptr()) };
 }

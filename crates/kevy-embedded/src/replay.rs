@@ -8,6 +8,16 @@
 //! focused subset — only the mutating verbs we ever write into the AOF —
 //! so the embedded crate stays free of `kevy-rt` / `kevy-sys` deps.
 
+// Replay discards each command's return value, and it is the value —
+// the new counter, the new length — not an error report. An `Err` here
+// means the state this log was written against is not the state it is
+// being read into, which `apply` has no way to say: it returns `()`, and
+// both callers (startup AOF restore, replica frame application) take it
+// that way. Whether a diverged replay should abort rather than continue
+// is a design question with two defensible answers — Redis aborts — and
+// it is recorded rather than settled here.
+#![expect(clippy::let_underscore_must_use, reason = "replay has no channel to report on")]
+
 use kevy_persist::Argv;
 use kevy_store::{ScoreBound, Store};
 use std::time::Duration;

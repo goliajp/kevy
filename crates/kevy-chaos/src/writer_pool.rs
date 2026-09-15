@@ -1,5 +1,12 @@
 //! Concurrent writer pool that captures ACK logs for post-restart verification.
 
+// Teardown. `join` returns whatever the thread panicked with, and the
+// thread is already being abandoned; `shutdown` on a socket the peer
+// has closed reports what already happened. Neither has a caller left
+// to tell, and stopping halfway through a teardown leaves more behind
+// than finishing it blind.
+#![expect(clippy::let_underscore_must_use, reason = "teardown has nobody left to report to")]
+
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::{Arc, Mutex};
@@ -79,7 +86,9 @@ fn writer_loop(writer_id: usize, port: u16, log: AckLog, stop: Arc<std::sync::at
         }
         match stream.read(&mut reply_buf) {
             Ok(n) if n >= 5 && reply_buf[..5] == *b"+OK\r\n" => {
-                log.lock().unwrap().push(AckEntry { key, value, seq });
+                log.lock()
+                    .expect("the lock is only poisoned by a panic that already failed the process")
+                    .push(AckEntry { key, value, seq });
                 seq += 1;
             }
             _ => return,

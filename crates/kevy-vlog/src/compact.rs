@@ -11,6 +11,7 @@ use std::sync::atomic::Ordering;
 use crate::{CompactOwner, HEADER, MAX_BODY, Vlog, VlogFile, VlogRef, bad};
 
 /// Resumable position within the file currently being compacted.
+#[derive(Debug)]
 pub(crate) struct CompactCursor {
     /// Pinned so record reads never borrow `Vlog::files` (freeing the
     /// `&mut self` that `append` needs for the survivor).
@@ -153,7 +154,7 @@ impl Vlog {
 fn read_record(f: &VlogFile, offset: u64) -> io::Result<(Vec<u8>, Vec<u8>, u32)> {
     let mut header = [0u8; HEADER as usize];
     f.file.read_exact_at(&mut header, offset)?;
-    let body_len = u32::from_le_bytes(header[..4].try_into().unwrap());
+    let body_len = u32::from_le_bytes(header[..4].try_into().expect("header is [u8; HEADER]"));
     if body_len > MAX_BODY {
         return Err(bad(format!("vlog: scan hit absurd body_len {body_len}")));
     }

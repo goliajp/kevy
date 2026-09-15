@@ -20,6 +20,7 @@ mod ep {
 }
 
 /// Edge/level-readiness poller. macOS: kqueue. Linux: epoll. Same API on both.
+#[derive(Debug)]
 pub struct Poller {
     epfd: c_int,
 }
@@ -28,6 +29,8 @@ impl Poller {
     /// Creates a fresh epoll instance (`EPOLL_CLOEXEC`, closed on drop).
     /// Errors surface the raw OS error from `epoll_create1(2)`.
     pub fn new() -> io::Result<Self> {
+        // SAFETY: `epoll_create1(2)` takes one integer by value and dereferences nothing.
+        // A negative return is checked below before the fd is wrapped.
         let epfd = unsafe { ffi::epoll_create1(ep::EPOLL_CLOEXEC) };
         if epfd < 0 {
             return Err(io::Error::last_os_error());
@@ -48,6 +51,9 @@ impl Poller {
 
     fn ctl(&self, op: c_int, fd: i32, read: bool, write: bool) -> io::Result<()> {
         let mut ev = ffi::EpollEvent { events: Self::mask(read, write), data: fd as u64 };
+        // SAFETY: `self.epfd` is open for the life of this `Poller` — `Drop` is the only
+        // close. `ev` is a live local and `epoll_ctl(2)` reads it only for the
+        // duration of the call.
         let r = unsafe { ffi::epoll_ctl(self.epfd, op, fd, &raw mut ev) };
         if r < 0 {
             return Err(io::Error::last_os_error());
@@ -67,6 +73,9 @@ impl Poller {
 
     /// Deregister `fd` from the epoll set.
     pub fn delete(&self, fd: i32) -> io::Result<()> {
+        // SAFETY: `self.epfd` is open for the life of this `Poller` — `Drop` is the only
+        // close. `epoll_ctl(2)` with `EPOLL_CTL_DEL` ignores the event
+        // pointer, which is why null is the documented argument here.
         let r = unsafe { ffi::epoll_ctl(self.epfd, ep::EPOLL_CTL_DEL, fd, ptr::null_mut()) };
         if r < 0 {
             return Err(io::Error::last_os_error());
@@ -77,11 +86,20 @@ impl Poller {
     /// Wait for readiness, filling `out`. `timeout_ms == None` blocks forever.
     pub fn wait(&self, out: &mut Vec<Event>, timeout_ms: Option<i32>) -> io::Result<usize> {
         out.clear();
-        let mut raw: Vec<ffi::EpollEvent> = Vec::with_capacity(WAIT_CAPACITY);
+        // Stack, not heap: this runs on every iteration of the shard's
+        // busy-poll body, and a `Vec::with_capacity` here was one malloc
+        // plus one free of 12 KB per iteration. See the kqueue twin for
+        // the reasoning; no throughput claim is made, only that the
+        // allocation is gone and the signature is unchanged.
+        let mut raw =
+            [const { core::mem::MaybeUninit::<ffi::EpollEvent>::uninit() }; WAIT_CAPACITY];
+        // SAFETY: `self.epfd` is open for the life of this `Poller` — `Drop` is the only
+        // close. `raw` is `WAIT_CAPACITY` elements and that same number is passed as the
+        // array length, so the kernel writes only within it.
         let n = unsafe {
             ffi::epoll_wait(
                 self.epfd,
-                raw.as_mut_ptr(),
+                raw.as_mut_ptr().cast::<ffi::EpollEvent>(),
                 WAIT_CAPACITY as c_int,
                 timeout_ms.unwrap_or(-1),
             )
@@ -93,8 +111,12 @@ impl Poller {
             }
             return Err(e);
         }
-        unsafe { raw.set_len(n as usize) };
-        for ev in &raw {
+        // `n >= 0` was checked above and `n <= WAIT_CAPACITY` is the length we passed, so
+        // this slice is inside the array and every element of it was written by the kernel.
+        for ev in &raw[..n as usize] {
+            // SAFETY: `epoll_wait` reported `n` events, so each element here was
+            // initialised by the kernel before it returned.
+            let ev = unsafe { ev.assume_init_ref() };
             let flags = ev.events; // copy out (struct may be packed on x86_64)
             let fd = ev.data as i32;
             let hup = flags & (ep::EPOLLHUP | ep::EPOLLERR | ep::EPOLLRDHUP) != 0;
@@ -111,6 +133,8 @@ impl Poller {
 
 impl Drop for Poller {
     fn drop(&mut self) {
+        // SAFETY: `self.epfd` was open for the life of this `Poller` and this is the only
+        // close: `Poller` is neither `Copy` nor `Clone`.
         unsafe {
             ffi::close(self.epfd);
         }

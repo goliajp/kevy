@@ -29,8 +29,13 @@ pub(crate) struct SqCursors {
     pub(crate) array: *mut u32,
     pub(crate) mask: u32,
     pub(crate) tail: u32,
-    /// SQ flag word — `IORING_SQ_NEED_WAKEUP` lives here under SQPOLL.
+    /// SQ flag word. `IORING_SQ_NEED_WAKEUP` lives here under SQPOLL and
+    /// `IORING_SQ_CQ_OVERFLOW` in every mode.
     pub(crate) flags: *const AtomicU32,
+    /// Submissions the kernel refused to consume. A dropped SQE produces
+    /// no completion ever, so an operation waiting on one waits forever;
+    /// this word was mapped by the kernel and read by nobody.
+    pub(crate) dropped: *const AtomicU32,
 }
 
 /// Cursors recovered from the CQ ring mapping.
@@ -170,13 +175,14 @@ impl IoUring {
         let khead = at(p.sq_off.head);
         let ktail = at(p.sq_off.tail);
         let flags = at(p.sq_off.flags);
+        let dropped = at(p.sq_off.dropped);
         let array = (base + p.sq_off.array as usize) as *mut u32;
         // SAFETY: caller's invariant says `ring_mask` is inside the region.
         let mask = unsafe { *((base + p.sq_off.ring_mask as usize) as *const u32) };
         // SAFETY: ktail is published by the kernel; reading current tail at
         // construction lets us start the local cursor in sync.
         let tail = unsafe { (*ktail).load(Ordering::Acquire) };
-        SqCursors { khead, ktail, array, mask, tail, flags }
+        SqCursors { khead, ktail, array, mask, tail, flags, dropped }
     }
 
     /// Extract the CQ cursors from a just-mapped CQ region.

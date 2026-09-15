@@ -113,7 +113,9 @@ impl Hnsw {
                         }
                         stamps[n as usize] = epoch;
                         let dn = self.params.distance.eval(&self.nodes[n as usize].vec, tv);
-                        if result.len() < ef || dn < result.peek().expect("nonempty").0 {
+                        if result.len() < ef
+                            || dn < result.peek().expect("the result.len() < ef arm did not take").0
+                        {
                             result.push(Far(dn, n));
                             if result.len() > ef {
                                 result.pop();

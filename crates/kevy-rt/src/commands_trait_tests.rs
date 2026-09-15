@@ -46,4 +46,6 @@ fn the_optional_hooks_default_to_doing_nothing() {
     c.on_tick_gap(0);
     c.on_persist_stats(false, 0);
     c.on_aof_format(0);
+    c.on_conn_gauge(0);
+    c.on_blocked_gauge(0);
 }

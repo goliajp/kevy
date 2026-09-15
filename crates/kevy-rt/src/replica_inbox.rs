@@ -28,6 +28,12 @@
 //! froze, unmasked when `frames_from` went O(B) → O(log B) and the
 //! primary started feeding at full speed).
 
+// Wakes and poller edits are advisory: a wake that does not land
+// delays the work to the next natural wakeup, and deleting an fd
+// the poller has already dropped reports what was wanted. Socket
+// options shape latency, not correctness.
+#![expect(clippy::let_underscore_must_use, reason = "a missed wake costs a tick, not a result")]
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, SendError, Sender, channel};
 use std::sync::{Arc, OnceLock};
@@ -47,6 +53,7 @@ use crate::Argv;
 /// a shared line ping-pongs across cores at reactor frequency (the
 /// sadd L1-miss A/B that caught it).
 #[repr(align(64))]
+#[derive(Debug)]
 pub(crate) struct InboxSignal {
     pub(crate) waker: OnceLock<Arc<Waker>>,
     pub(crate) wake_pending: AtomicBool,
@@ -126,7 +133,7 @@ pub enum ReplicaApply {
 /// Sender end of a per-shard replica inbox. `Send + Clone + Sync`
 /// (one std::sync::mpsc::Sender, no extra state) so the embedder can
 /// hand it freely to runner threads.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ReplicaInboxSender {
     inner: Sender<ReplicaApply>,
     signal: Arc<InboxSignal>,
@@ -153,6 +160,7 @@ impl ReplicaInboxSender {
 /// Receiver end. Lives inside the (private) `Shard`; drained every
 /// reactor iteration. Constructed by [`replica_inbox_pair`] and
 /// handed to the runtime via `Runtime::with_replica_inboxes`.
+#[derive(Debug)]
 pub struct ReplicaInboxReceiver {
     pub(crate) inner: Receiver<ReplicaApply>,
     pub(crate) signal: Arc<InboxSignal>,

@@ -4,6 +4,10 @@
 //! the rest are the stateless pieces used across the runtime — set algebra,
 //! pub/sub framing, the seq-ring drain, and the shard hash.
 
+// `write!` into a `String` / `Vec` returns a `Result` because the
+// trait must, not because it can fail.
+#![expect(clippy::let_underscore_must_use, reason = "writing to an in-memory buffer cannot fail")]
+
 use crate::conn::Conn;
 use crate::message::{Agg, Gathered, MultiOp, SmallReply};
 use kevy_hash::KevyHash;
@@ -402,7 +406,7 @@ pub(crate) fn set_diff(sets: &[Vec<Vec<u8>>]) -> Vec<Vec<u8>> {
 /// Emit the contiguous prefix of completed slots in seq order.
 pub(crate) fn drain_front(conn: &mut Conn) {
     while matches!(conn.pending.front(), Some(s) if s.done.is_some()) {
-        let slot = conn.pending.pop_front().unwrap();
+        let slot = conn.pending.pop_front().expect("the front() matched Some in the loop guard");
         if let Some(bytes) = slot.done {
             conn.output.extend_from_slice(bytes.as_slice());
         }

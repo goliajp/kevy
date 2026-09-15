@@ -60,7 +60,7 @@ pub(crate) type Shards = Arc<Vec<Arc<RwLock<Inner>>>>;
 /// Every method takes `&self`. Sharding (see [`Config::with_shards`]) lets a
 /// multi-threaded consumer scale across cores; pub/sub is process-wide
 /// (handled on shard 0).
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Store {
     pub(crate) shards: Shards,
     /// Shared drop guard: signals + joins reaper and flushes AOFs when the

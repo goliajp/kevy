@@ -1,5 +1,10 @@
 //! Spawn + kill + restart a kevy child process. Public API is `Harness`.
 
+// `write!` into an in-memory buffer returns a `Result` because
+// `fmt::Write` must, not because it can fail — `String`'s and `Vec`'s
+// impls are infallible. Said once here rather than beside every line.
+#![expect(clippy::let_underscore_must_use, reason = "writing to an in-memory buffer cannot fail")]
+
 use std::io;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
@@ -320,6 +325,8 @@ fn apply_rlimits(nofile: u64, fsize: u64) -> io::Result<()> {
     }
     if fsize > 0 {
         let lim = RawRlimit { rlim_cur: fsize, rlim_max: fsize };
+        // SAFETY: `lim` is a live `RawRlimit` on this frame and `setrlimit(2)` only reads
+        // through the pointer for the duration of the call.
         let rc = unsafe { setrlimit(RLIMIT_FSIZE, &lim) };
         if rc != 0 {
             return Err(io::Error::last_os_error());

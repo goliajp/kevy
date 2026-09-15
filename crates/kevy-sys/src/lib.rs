@@ -57,6 +57,10 @@
 //! ```
 
 #![warn(missing_docs)]
+// Every `unsafe` block in this crate carries a `// SAFETY:` premise, and the
+// lint keeps it that way. This is the OS boundary: the one place where a
+// mistake is not caught by the type system, so the argument has to be written
+// down where the call is, not inferred later from the call site.
 
 pub(crate) mod addr;
 pub mod checksum;

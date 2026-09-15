@@ -169,7 +169,9 @@ fn reduce_stats(catalogs: &CatalogState, argv: &[Vec<u8>], chunks: &[Vec<u8>]) -
         let mut pos = 2usize;
         for slot in 0..3 {
             let Some(w) = c.get(pos..pos + 8) else { break };
-            let v = u64::from_le_bytes(w.try_into().expect("8 bytes"));
+            let v = u64::from_le_bytes(
+                w.try_into().expect("the get(pos..pos + 8) above returned Some"),
+            );
             match slot {
                 0 => members += v,
                 1 => bytes += v,
@@ -240,7 +242,9 @@ fn reduce_explain(catalogs: &CatalogState, argv: &[Vec<u8>], chunks: &[Vec<u8>])
         let mut pos = 2usize;
         for cnt in counts.iter_mut().take(n.min(nleaves)) {
             if let Some(w) = c.get(pos..pos + 8) {
-                *cnt += u64::from_le_bytes(w.try_into().expect("8 bytes"));
+                *cnt += u64::from_le_bytes(
+                    w.try_into().expect("the get(pos..pos + 8) above returned Some"),
+                );
             }
             pos += 8;
         }
@@ -287,7 +291,9 @@ fn reduce_hydrate(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> {
     let nf = argv
         .get(2)
         .and_then(|b| b.get(..4))
-        .map(|b| u32::from_le_bytes(b.try_into().expect("4 bytes")) as usize)
+        .map(|b| {
+            u32::from_le_bytes(b.try_into().expect("the get(..4) above returned Some")) as usize
+        })
         .unwrap_or(0);
     let fields: Vec<&[u8]> = argv[3..3 + nf].iter().map(Vec::as_slice).collect();
     let rows: Vec<&[Vec<u8>]> = argv[3 + nf..].chunks(3).collect();
@@ -321,22 +327,26 @@ fn decode_hydrated_rows(
 ) -> Vec<Option<Vec<Option<Vec<u8>>>>> {
     let mut hydrated: Vec<Option<Vec<Option<Vec<u8>>>>> = vec![None; nrows];
     for c in chunks {
-        let Some(hits) = c.get(1..5).map(|b| u32::from_le_bytes(b.try_into().expect("4"))) else {
+        let Some(hits) = c
+            .get(1..5)
+            .map(|b| u32::from_le_bytes(b.try_into().expect("the get(1..5) on this line")))
+        else {
             continue;
         };
         let mut pos = 5usize;
         for _ in 0..hits {
-            let Some(idx) =
-                c.get(pos..pos + 4).map(|b| u32::from_le_bytes(b.try_into().expect("4")) as usize)
-            else {
+            let Some(idx) = c.get(pos..pos + 4).map(|b| {
+                u32::from_le_bytes(b.try_into().expect("the get(pos..pos + 4) on this line"))
+                    as usize
+            }) else {
                 break;
             };
             pos += 4;
             let mut vals = Vec::with_capacity(nf);
             for _ in 0..nf {
-                let Some(len) =
-                    c.get(pos..pos + 4).map(|b| u32::from_le_bytes(b.try_into().expect("4")))
-                else {
+                let Some(len) = c.get(pos..pos + 4).map(|b| {
+                    u32::from_le_bytes(b.try_into().expect("the get(pos..pos + 4) on this line"))
+                }) else {
                     break;
                 };
                 pos += 4;

@@ -16,6 +16,11 @@
 //! clears the quiesce; the thread notices and stands down. Timeout
 //! (default 10s) rolls back to normal primary duty.
 
+// Teardown. `join` returns what the thread panicked with and the
+// thread is already being abandoned; a flush on the way out has
+// nowhere left to put its bytes. No caller remains to be told.
+#![expect(clippy::let_underscore_must_use, reason = "teardown has nobody left to report to")]
+
 use std::io::Write as _;
 use std::sync::Arc;
 

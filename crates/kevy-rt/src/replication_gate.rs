@@ -39,6 +39,7 @@ thread_local! {
 /// frame" for the guard's lifetime. The replica runner
 /// enters this scope before each `dispatch` call so the apply doesn't
 /// re-push the frame into this shard's own backlog.
+#[derive(Debug)]
 pub struct ReplicatedApplyGuard {
     /// Prior gate value — supports nesting (caller can enter a second
     /// scope without losing the outer one's intent; drop restores).

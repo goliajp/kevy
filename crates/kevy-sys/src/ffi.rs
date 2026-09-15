@@ -46,6 +46,7 @@ unsafe extern "C" {
 /// `struct timespec` — used by kqueue's `kevent` timeout (macOS only).
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 #[repr(C)]
+#[derive(Debug)]
 pub struct Timespec {
     pub tv_sec: isize,
     pub tv_nsec: isize,
@@ -53,6 +54,7 @@ pub struct Timespec {
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 #[repr(C)]
+#[derive(Debug)]
 pub struct Kevent {
     pub ident: usize,
     pub filter: i16,
@@ -101,6 +103,7 @@ unsafe extern "C" {
 #[cfg(any(target_os = "linux", target_os = "android"))]
 #[repr(C)]
 #[cfg_attr(target_arch = "x86_64", repr(packed))]
+#[derive(Debug)]
 pub struct EpollEvent {
     pub events: u32,
     pub data: u64,
@@ -117,3 +120,22 @@ unsafe extern "C" {
         timeout: c_int,
     ) -> c_int;
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// ABI assertions for the poller structs. Same reasoning as `addr.rs`:
+// the kernel reads these, so a layout change has to fail the build
+// rather than produce a syscall on the wrong bytes. `EpollEvent` is the
+// one that matters most — its packing is arch-conditional, and losing
+// the `packed` on x86_64 shifts `data` by four bytes, which silently
+// routes every readiness event to the wrong connection.
+// ─────────────────────────────────────────────────────────────────────
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+const _: () = assert!(size_of::<Timespec>() == 16);
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+const _: () = assert!(size_of::<Kevent>() == 32, "BSD kevent: 32 bytes");
+
+#[cfg(all(any(target_os = "linux", target_os = "android"), target_arch = "x86_64"))]
+const _: () = assert!(size_of::<EpollEvent>() == 12, "x86_64 epoll_event is packed");
+#[cfg(all(any(target_os = "linux", target_os = "android"), not(target_arch = "x86_64")))]
+const _: () = assert!(size_of::<EpollEvent>() == 16, "naturally aligned elsewhere");

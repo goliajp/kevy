@@ -184,6 +184,22 @@ pub(crate) struct UringConn {
     /// `prep_read` CQE leaves body bytes still pending. Cleared once
     /// the SQE is queued.
     pub(crate) big_arg_read_pending: bool,
+    /// A kernel-direct `prep_read` SQE is in flight: the kernel holds a
+    /// pointer into `pending_big_arg`'s body Vec and may write to it
+    /// until the matching `OP_BIG_READ` completion is reaped.
+    ///
+    /// This is NOT `big_arg_read_pending` inverted, and that distinction
+    /// is the whole point. That flag means "queue an SQE next arm pass"
+    /// and is cleared the moment the SQE is submitted — so it is FALSE
+    /// for exactly the window in which the kernel owns the buffer. Reap
+    /// used the three flags it had and none of them covered this, so a
+    /// `CLIENT KILL` against a client stalled mid-body dropped the
+    /// `UringConn`, freed the body, and left the kernel writing into it.
+    ///
+    /// Set on a successful submit, cleared when the completion arrives —
+    /// including the error and EOF paths, where the completion is still
+    /// the kernel handing the buffer back.
+    pub(crate) big_read_inflight: bool,
     /// The conn needs its multishot recv re-armed
     /// on the next [`Shard::uring_arm_conns`] visit (the big-arg body
     /// is fully received and the conn returns to normal recv mode).
@@ -236,6 +252,7 @@ impl UringConn {
             arm_queued: false,
             big_arg_cancel_pending: false,
             big_arg_read_pending: false,
+            big_read_inflight: false,
             big_arg_rearm_recv: false,
             pending_crlf_skip: 0,
             recv_zero_streak: 0,
@@ -260,4 +277,45 @@ pub(crate) struct ParkState {
     pub(crate) timeout_inflight: bool,
     pub(crate) wake_buf: [u8; 8],
     pub(crate) ts: KernelTimespec,
+}
+
+impl<C: crate::Commands> crate::shard::Shard<C> {
+    /// Take a freshly accepted socket into the shard: give it an id, a
+    /// [`Conn`], a [`UringConn`], and a place in the arm queue.
+    ///
+    /// One call rather than a run of statements in the reactor loop
+    /// because the order matters and is easy to get half-right: the
+    /// `UringConn` must exist before the id reaches `arm_pending`, and
+    /// `arm_queued` must be set with it, or the first arm visit sees a
+    /// conn with no state and drops it.
+    ///
+    /// `is_unix` skips `TCP_NODELAY`, which AF_UNIX does not have.
+    pub(crate) fn install_accepted(
+        &mut self,
+        io: &mut kevy_map::KevyMap<u64, UringConn>,
+        sock: kevy_sys::Socket,
+        cluster: bool,
+        is_unix: bool,
+    ) {
+        if !is_unix {
+            // Nagle off is a latency choice, not a correctness one: a
+            // kernel that declines it leaves a connection that still
+            // serves, with small writes coalesced.
+            #[expect(clippy::let_underscore_must_use, reason = "nodelay is advisory")]
+            let _ = sock.set_nodelay();
+        }
+        let ncid = self.next_conn_id;
+        self.next_conn_id += self.conn_id_step;
+        let mut conn = crate::conn::Conn::new(sock);
+        conn.cluster = cluster;
+        self.conns.insert(ncid, conn);
+        let mut uc = UringConn::new();
+        uc.arm_queued = true;
+        io.insert(ncid, uc);
+        self.arm_pending.push(ncid);
+        // Client connections only — the cluster bus is internal.
+        if !cluster {
+            self.commands.on_connection();
+        }
+    }
 }

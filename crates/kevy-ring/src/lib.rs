@@ -114,6 +114,11 @@ use sync::{Arc, AtomicUsize, Ordering, UnsafeCell};
 #[repr(align(128))]
 struct CachePadded<T>(T);
 
+/// The largest capacity a ring can have: the highest power of two a `usize`
+/// holds. Nothing can allocate one, but it is the bound `ring` documents and
+/// the number its panic names.
+const MAX_CAPACITY: usize = (usize::MAX >> 1) + 1;
+
 struct Ring<T> {
     /// `capacity` slots; only indices in `[head, tail)` (mod capacity) are init.
     buf: Box<[UnsafeCell<MaybeUninit<T>>]>,
@@ -132,12 +137,30 @@ struct Ring<T> {
 // accesses never alias. A `T: Send` may thus cross the producer→consumer thread
 // boundary, making the shared `Ring` safe to `Send` and `Sync`.
 unsafe impl<T: Send> Send for Ring<T> {}
+// SAFETY: as above — the producer and consumer touch disjoint index ranges, so the
+// `UnsafeCell` accesses reachable through a shared `&Ring<T>` never alias.
 unsafe impl<T: Send> Sync for Ring<T> {}
 
 impl<T> Ring<T> {
     fn with_capacity(cap: usize) -> Self {
         // At least 2 slots; round up to a power of two for masking.
-        let cap = cap.max(2).next_power_of_two();
+        //
+        // Checked, because the unchecked form returns **zero** on overflow in
+        // a release build rather than panicking as it does in debug. Zero
+        // makes `mask` `usize::MAX` and `buf` empty, which is a `Ring` that
+        // constructs without complaint and then indexes out of bounds on the
+        // first push — a fault reported in `push`, in a file the caller never
+        // touched, for an argument passed to `ring`.
+        //
+        // Saturating rather than panicking keeps the invariant this type is
+        // built on — `mask == cap - 1` and `buf.len() == cap`, always — and
+        // leaves the failure where it belongs. A `MAX_CAPACITY` ring is
+        // `2^63` slots; the `Vec::with_capacity` below refuses it the way
+        // `Vec` refuses any over-large request, which is a behaviour the
+        // standard library defines and this crate does not need to reinvent.
+        // The alternative was a `panic!` here, and this crate has a gate
+        // against those in library code for a reason.
+        let cap = cap.max(2).checked_next_power_of_two().unwrap_or(MAX_CAPACITY);
         let mut v = Vec::with_capacity(cap);
         for _ in 0..cap {
             v.push(UnsafeCell::new(MaybeUninit::uninit()));
@@ -182,6 +205,7 @@ impl<T> Drop for Ring<T> {
 /// assert_eq!(rx.pop(), Some(1));
 /// assert!(tx.push(3).is_ok());
 /// ```
+#[derive(Debug)]
 pub struct Producer<T> {
     inner: Arc<Ring<T>>,
     /// Cached snapshot of the consumer's `head`. Stale-OK: a value the
@@ -209,6 +233,7 @@ pub struct Producer<T> {
 /// assert_eq!(rx.pop(), Some("b"));
 /// assert!(rx.is_empty());
 /// ```
+#[derive(Debug)]
 pub struct Consumer<T> {
     inner: Arc<Ring<T>>,
     /// Cached snapshot of the producer's `tail`. Stale-OK in the same way as
@@ -248,6 +273,14 @@ pub struct Consumer<T> {
 /// assert_eq!(kevy_ring::ring::<u8>(8).0.capacity(), 8);
 /// assert_eq!(kevy_ring::ring::<u8>(0).0.capacity(), 2);
 /// ```
+///
+/// A `capacity` with no power of two above it — anything past
+/// `(usize::MAX >> 1) + 1` — saturates there rather than wrapping to zero,
+/// so `capacity()` is a power of two for every input. Allocating a ring
+/// that size is what fails, the way any over-large `Vec` request fails.
+/// This is stated because the rounding is where an out-of-range capacity is
+/// noticed, and it used to be noticed by returning a ring whose `mask` and
+/// `buf` disagreed.
 pub fn ring<T>(capacity: usize) -> (Producer<T>, Consumer<T>) {
     let r = Arc::new(Ring::with_capacity(capacity));
     (Producer { inner: r.clone(), head_cache: 0 }, Consumer { inner: r, tail_cache: 0 })
@@ -424,3 +457,22 @@ impl<T> Consumer<T> {
 
 #[cfg(test)]
 mod tests;
+
+impl<T> core::fmt::Debug for Ring<T> {
+    /// Reports the ring's shape, never its contents.
+    ///
+    /// `buf` holds `MaybeUninit<T>` and only the slots in `[head, tail)`
+    /// are initialised, so a derived `Debug` would read uninitialised
+    /// memory — undefined behaviour, not merely unhelpful output. The
+    /// indices are loaded `Relaxed` because this is a diagnostic:
+    /// ordering them against the SPSC protocol would give a number no
+    /// more true than the one taken without it.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        use core::sync::atomic::Ordering::Relaxed;
+        f.debug_struct("Ring")
+            .field("capacity", &(self.mask + 1))
+            .field("head", &self.head.0.load(Relaxed))
+            .field("tail", &self.tail.0.load(Relaxed))
+            .finish_non_exhaustive()
+    }
+}

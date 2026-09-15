@@ -3,6 +3,15 @@
 //! of `store.rs` to keep it under the 500-LOC project ceiling;
 //! behaviour unchanged).
 
+// A discarded fsync. A transient failure self-heals — `dirty` stays
+// set and the next tick retries — but a persistent one (full disk,
+// read-only remount, EIO) means `appendfsync everysec` has quietly
+// become "never" with nothing saying so. Open question §2.
+#![expect(
+    clippy::let_underscore_must_use,
+    reason = "a persistent fsync failure is invisible; see .claude/OPEN-QUESTIONS-6.4.md"
+)]
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::thread::JoinHandle;
@@ -21,7 +30,7 @@ use crate::store::{Shards, Store};
 /// Used by the URL-keyed registry in `kevy-client` so that multiple
 /// `Connection::connect("mem://name")` calls share the same backing store
 /// without leaking it when all strong handles go away.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct WeakStore {
     shards: Weak<Vec<Arc<RwLock<Inner>>>>,
     guard: Weak<DropGuard>,
@@ -79,6 +88,7 @@ impl Store {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct Inner {
     pub(crate) store: kevy_store::Store,
     #[cfg(feature = "persist")]
@@ -142,6 +152,7 @@ impl Inner {
 /// Owns the reaper-thread handle + the shards for the final AOF flush. Lives
 /// in an `Arc<DropGuard>` shared across every `Store` clone; the drop logic
 /// fires only when the last clone goes away.
+#[derive(Debug)]
 pub(crate) struct DropGuard {
     /// Set by [`Store::shutdown`]: every later write fails with
     /// `KevyError::Closed`. Shared across clones (it lives here so ANY

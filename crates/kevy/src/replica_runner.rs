@@ -18,6 +18,11 @@
 //! backlog decides whether the resume succeeds (offset still in
 //! backlog) or it triggers a fresh snapshot ship.
 
+// Teardown: `join` yields what a thread panicked with, and the thread
+// is already being abandoned; `shutdown` on a closed socket reports
+// what already happened.
+#![expect(clippy::let_underscore_must_use, reason = "teardown has nobody left to report to")]
+
 use std::net::{Shutdown, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -39,6 +44,7 @@ const RECONNECT_BACKOFF: Duration = Duration::from_millis(250);
 /// `Vec<ReplicaRunner>` in its `ReplicationState` so `REPLICAOF`
 /// can stop + replace runners at runtime and so the
 /// process exits cleanly via `Drop`.
+#[derive(Debug)]
 pub(crate) struct ReplicaRunner {
     handle: Option<JoinHandle<()>>,
     stop: Arc<AtomicBool>,

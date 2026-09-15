@@ -30,7 +30,7 @@ use super::wrong_args;
 /// `KevyCommands::on_replication_view`. Stale by at most one tick
 /// interval (default 100 ms); all-default when this shard has no
 /// `ReplicationSource` installed.
-#[derive(Clone, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct ReplicationView {
     /// Per-replica `(id, ipv4, port, sent_offset, ack)` — populated by
     /// `kevy_rt::Shard::tick_replication_view`. `ack` carries the

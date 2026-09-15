@@ -7,6 +7,17 @@
 //! synchronous builds, typed API (`Tree` passed directly — no text
 //! grammar in-process).
 
+// The sidecar IS the catalog's persistence — `boot` reads it and a
+// directory without one "boots empty". So a rename that fails loses
+// the index definitions at the next start, after the command that
+// created them has already replied OK. That is a gap, not a
+// non-event, and it is written up as an open question rather than
+// silently accepted here: .claude/OPEN-QUESTIONS-6.4.md §3.
+#![expect(
+    clippy::let_underscore_must_use,
+    reason = "the catalog has no other home; see .claude/OPEN-QUESTIONS-6.4.md"
+)]
+
 use crate::{KevyError, KevyResult};
 use std::io;
 use std::sync::RwLock;
@@ -19,13 +30,13 @@ use crate::ops_index::ShardSegs;
 use crate::store::{Store, lock_write};
 
 /// Store-level registry.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(crate) struct ViewReg {
     pub(crate) catalog: RwLock<(u64, ViewCatalog)>,
 }
 
 /// One shard's view states (inside `Inner`, guarded by the shard lock).
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(crate) struct ShardViews {
     pub(crate) version: u64,
     pub(crate) views: Vec<ViewState>,
@@ -37,6 +48,8 @@ pub(crate) struct ShardViews {
     #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
     pub(crate) reserved_cache: u64,
 }
+
+#[derive(Debug)]
 
 pub(crate) struct ViewState {
     spec: ViewSpec,

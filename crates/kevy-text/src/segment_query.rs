@@ -239,7 +239,7 @@ impl TextSegment {
                 && !skip_tfs.contains(&tf)
             {
                 let dl = f64::from(self.id_dl[id as usize]);
-                *scores.get_mut(&id).expect("accumulated") +=
+                *scores.get_mut(&id).expect("this id was inserted by the first term's pass") +=
                     bm25_score(f64::from(tf), df, ctx.n_docs, dl, ctx.avgdl);
             }
         }
@@ -294,7 +294,7 @@ impl TextSegment {
         }
         Some(Cand {
             score,
-            key: self.id_key[id as usize].as_deref().expect("live posting id"),
+            key: self.id_key[id as usize].as_deref().expect("a live id always has a key"),
             okey: sort.and_then(|s| self.stored(id, s.field).and_then(s.key)),
         })
     }

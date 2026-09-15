@@ -129,6 +129,23 @@ impl BitMask {
         self.0 == 0
     }
 
+    /// One bit per slot, low bit = slot 0.
+    ///
+    /// The two encodings differ — x86_64 packs one bit per slot, aarch64
+    /// one per nibble — and every consumer so far went through the
+    /// iterator, which hides that. A caller that needs to count runs of
+    /// slots cannot: `leading_zeros` on the raw word counts 48 padding
+    /// bits on x86_64 and quadruples the answer on aarch64. This
+    /// normalises once.
+    #[inline]
+    pub(crate) fn slot_mask(self) -> u16 {
+        let mut m: u16 = 0;
+        for s in self.iter() {
+            m |= 1u16 << s;
+        }
+        m
+    }
+
     /// Index of the lowest set slot, or `None` if empty.
     #[inline]
     pub(crate) fn lowest_set(self) -> Option<usize> {
@@ -180,6 +197,8 @@ mod tests {
             0xAB, 0x00, 0xAB, 0x01, 0xAB, 0xAB, 0x02, 0xAB, 0x03, 0x04, 0xAB, 0x05, 0xAB, 0xAB,
             0x06, 0xAB,
         ];
+        // SAFETY: `buf` is a live local of at least GROUP_WIDTH (16) bytes, which is what
+        // `Group::load` reads.
         let g = unsafe { Group::load(buf.as_ptr()) };
         let hits: Vec<usize> = g.match_byte(0xAB).iter().collect();
         let want: Vec<usize> =
@@ -190,6 +209,8 @@ mod tests {
     #[test]
     fn match_no_hits_is_empty() {
         let buf = [0u8; 16];
+        // SAFETY: `buf` is a live local of at least GROUP_WIDTH (16) bytes, which is what
+        // `Group::load` reads.
         let g = unsafe { Group::load(buf.as_ptr()) };
         let m = g.match_byte(0x42);
         assert!(m.is_empty());
@@ -200,6 +221,8 @@ mod tests {
     #[test]
     fn match_all_hits() {
         let buf = [0xFFu8; 16];
+        // SAFETY: `buf` is a live local of at least GROUP_WIDTH (16) bytes, which is what
+        // `Group::load` reads.
         let g = unsafe { Group::load(buf.as_ptr()) };
         let hits: Vec<usize> = g.match_byte(0xFF).iter().collect();
         assert_eq!(hits, (0..16).collect::<Vec<_>>());
@@ -213,6 +236,9 @@ mod tests {
             0xDE, 0xAB, 0x00, 0xAB, 0x01, 0xAB, 0xAB, 0x02, 0xAB, 0x03, 0x04, 0xAB, 0x05, 0xAB,
             0xAB, 0x06, 0xAB,
         ];
+        // SAFETY: `buf` is 17 bytes and the load starts at offset 1, leaving exactly the
+        // 16 bytes `Group::load` reads. The load is deliberately unaligned — that is what
+        // this test is for.
         let g = unsafe { Group::load(buf.as_ptr().add(1)) };
         let hits: Vec<usize> = g.match_byte(0xAB).iter().collect();
         // Same as buf[1..17] match_byte(0xAB):
@@ -224,6 +250,8 @@ mod tests {
     #[test]
     fn lowest_set_matches_first_iter() {
         let buf: [u8; 16] = [0, 0, 0, 0, 0xAA, 0, 0, 0, 0xAA, 0, 0, 0, 0, 0, 0, 0];
+        // SAFETY: `buf` is a live local of at least GROUP_WIDTH (16) bytes, which is what
+        // `Group::load` reads.
         let g = unsafe { Group::load(buf.as_ptr()) };
         let m = g.match_byte(0xAA);
         assert_eq!(m.lowest_set(), Some(4));

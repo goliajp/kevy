@@ -36,7 +36,7 @@ type ZKey = (Score, SmallBytes);
 /// A giant sorted set: sharded member→score map + ordered segment
 /// trees. Segments are non-empty and range-disjoint; `maxes[i]` caches
 /// `segs[i]`'s largest key for O(log segments) routing.
-#[derive(Clone, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct SegZSetData {
     by_member: SegMap<f64>,
     segs: Vec<Arc<RankTree<ZKey>>>,

@@ -396,7 +396,8 @@ fn read_ranked_segment(c: &[u8], pos: &mut usize) -> Vec<(f64, Vec<u8>, Hydrated
     for _ in 0..n {
         let Some(key) = read_kbytes(c, pos) else { break };
         let Some(sb) = c.get(*pos..*pos + 8) else { break };
-        let v = f64::from_le_bytes(sb.try_into().expect("8 bytes"));
+        let v =
+            f64::from_le_bytes(sb.try_into().expect("the get(*pos..*pos + 8) above returned Some"));
         *pos += 8;
         let Some(fv) = read_hydration(c, pos) else { break };
         out.push((v, key, fv));

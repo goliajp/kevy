@@ -175,6 +175,78 @@ fn m6_an_exhausted_class_refuses_instead_of_handing_back_a_wild_pointer() {
 }
 
 #[test]
+fn m4_a_refused_discard_returns_no_pages_from_a_live_span() {
+    require_mapping!();
+    let mut heap = Heap::new(0);
+    let size = 64;
+    let per_span = class::slots_per_span(class::index_of(size, 8).unwrap());
+    // Two spans' worth, then free only the second half of each: every
+    // span keeps live slots, so the sweep takes the page-granular path
+    // rather than retiring whole spans. That is the path the previous
+    // test never reaches — it frees everything, so every span is empty
+    // and goes to the retire branch instead.
+    let count = per_span * 2;
+    let mut given = Vec::with_capacity(count);
+    for _ in 0..count {
+        given.push(heap.alloc(size, 8).expect("filling spans"));
+    }
+    for (i, p) in given.into_iter().enumerate() {
+        if i % 2 == 1 {
+            // SAFETY: ours, this size.
+            unsafe { heap.dealloc(p, size, 8) };
+        }
+    }
+    let before = heap.snapshot();
+    assert!(before.live > 0, "every span must still hold live slots");
+
+    heap.reclaim_with(false);
+    let after = heap.snapshot();
+    assert!(after.balanced(), "{after:?}");
+    assert_eq!(after.returned, 0, "a refused discard reported pages as returned");
+    assert_eq!(after.live, before.live, "reclaim must not touch live slots");
+}
+
+#[test]
+fn m4_a_machine_that_cannot_discard_reports_held_not_returned() {
+    require_mapping!();
+    let mut heap = Heap::new(0);
+    let size = 64;
+    let count = class::slots_per_span(class::index_of(size, 8).unwrap()) * 12;
+    let mut given = Vec::with_capacity(count);
+    for _ in 0..count {
+        given.push(heap.alloc(size, 8).expect("filling spans"));
+    }
+    let full = heap.snapshot();
+    for p in given {
+        // SAFETY: ours, this size.
+        unsafe { heap.dealloc(p, size, 8) };
+    }
+    let idle = heap.snapshot();
+
+    // The branch this machine may not be able to take. Every Apple
+    // Silicon Mac takes it — `sysconf` answers 16384 while the span-page
+    // arithmetic is written at 4096 — and there page-granular reclaim
+    // hands back nothing. The accounting has to say so: nothing
+    // `returned`, and the emptied spans `hysteresis`, which is what
+    // "retained rather than released" means.
+    heap.reclaim_with(false);
+    let after = heap.snapshot();
+    assert!(after.balanced(), "{after:?}");
+    assert_eq!(after.returned, 0, "a refused discard was reported as a return");
+    assert!(
+        after.hysteresis > idle.hysteresis,
+        "the emptied spans went somewhere other than held: {} -> {}",
+        idle.hysteresis,
+        after.hysteresis
+    );
+    assert_eq!(
+        after.predicted_resident(),
+        full.predicted_resident(),
+        "residency was predicted to fall on a sweep that returned nothing"
+    );
+}
+
+#[test]
 fn m4_emptied_spans_have_their_pages_returned() {
     require_mapping!();
     let mut heap = Heap::new(0);
@@ -198,18 +270,64 @@ fn m4_emptied_spans_have_their_pages_returned() {
     heap.reclaim();
     let after = heap.snapshot();
     assert!(after.balanced(), "{after:?}");
-    assert!(
-        after.hysteresis > idle.hysteresis,
-        "reclaim returned nothing: hysteresis {} -> {}",
-        idle.hysteresis,
-        after.hysteresis
-    );
-    assert!(
-        after.predicted_resident() < full.predicted_resident(),
-        "predicted residency did not fall: {} -> {}",
-        full.predicted_resident(),
-        after.predicted_resident()
-    );
+    // This used to read `after.hysteresis > idle.hysteresis`, with a
+    // message that said "reclaim returned nothing" — the assertion said
+    // hysteresis and meant returned, which is how the two terms stayed
+    // swapped for the whole v5 arc. Worse, it was true on both sides of
+    // the branch below, so it passed on a machine where reclaim hands
+    // back nothing at all and reported that as the feature working.
+    //
+    // Which branch holds is a property of the machine, not of the
+    // allocator, so the test asserts the one that applies and names it.
+    if crate::os::page_size_matches() {
+        assert!(
+            after.returned > idle.returned,
+            "reclaim returned nothing: returned {} -> {}",
+            idle.returned,
+            after.returned
+        );
+        // And the policy really does hold some back rather than
+        // releasing everything: `EMPTY_SPAN_HYSTERESIS` spans stay
+        // assigned to their class, resident, per sweep. A version that
+        // released the lot would satisfy the assertion above and be an
+        // mmap storm.
+        assert!(
+            after.hysteresis > 0,
+            "the whole pool was released, so nothing absorbs the next burst"
+        );
+        assert!(
+            after.predicted_resident() < full.predicted_resident(),
+            "predicted residency did not fall: {} -> {}",
+            full.predicted_resident(),
+            after.predicted_resident()
+        );
+    } else {
+        // A 16 KiB-page machine (every Apple Silicon Mac) is one: the
+        // span-page arithmetic is written at `os::PAGE` = 4096, so the
+        // ranges are not page-aligned, `madvise` reclaims nothing, and
+        // `discard` is refused rather than lying about it. Page-granular
+        // reclaim is INERT here — the emptied spans stay resident, and
+        // saying so is the point of the branch.
+        assert_eq!(after.returned, 0, "a refused discard reported a return");
+        assert!(
+            after.hysteresis > idle.hysteresis,
+            "the emptied spans went somewhere other than held: {} -> {}",
+            idle.hysteresis,
+            after.hysteresis
+        );
+        // Nothing went back, so nothing should predict that it did.
+        // This assertion sat outside the branch and passed here, which
+        // is the third thing the swapped terms bought: `hysteresis` was
+        // subtracted from the prediction, so held memory read as
+        // released, so M4 — the gate for the property the whole
+        // experiment rests on — was green on a machine where the
+        // property does not hold at all.
+        assert_eq!(
+            after.predicted_resident(),
+            full.predicted_resident(),
+            "residency was predicted to fall on a machine that returned nothing"
+        );
+    }
 }
 
 #[test]
@@ -449,10 +567,34 @@ fn v2_pages_return_while_the_span_still_lives() {
     heap.reclaim();
     let after = heap.snapshot();
     assert!(after.balanced(), "{after:?}");
-    assert!(
-        after.returned > 0,
-        "a span with survivors returned nothing — the v1 failure, back: {after:?}"
-    );
+    // `returned` is the accounting, not the kernel. On a system whose
+    // page size is not `os::PAGE` the reclaim path refuses (it would
+    // otherwise report pages it cannot return), so the behaviour under
+    // test is not available here — and this assertion, which reads the
+    // accounting, would have passed on such a machine right up until
+    // the refusal landed. Say which case ran rather than pass either
+    // way.
+    if os::page_size_matches() {
+        assert!(
+            after.returned > 0,
+            "a span with survivors returned nothing — the v1 failure, back: {after:?}"
+        );
+    } else {
+        assert_eq!(
+            after.returned, 0,
+            "the reclaim path must not account pages it refused to return: {after:?}"
+        );
+        eprintln!(
+            "NOT EXERCISED: page return needs a {}-byte page; this system disagrees",
+            os::PAGE
+        );
+    }
+    if !os::page_size_matches() {
+        // The rest of this test is about how much came back, and nothing
+        // did. Returning here is the honest end — the alternative is a
+        // second reading of the same accounting under a different name.
+        return;
+    }
     // Almost all of the span's free bytes should be returned: only the
     // pages pinned by survivors (and slot-straddling edges) stay.
     assert!(
@@ -513,10 +655,18 @@ fn v2_densification_migrates_free_space_into_whole_pages() {
     heap.reclaim();
     let st = heap.snapshot();
     assert!(st.balanced(), "{st:?}");
-    assert!(
-        st.returned > 0,
-        "an interleaved churn produced no returnable page — densification is not happening: {st:?}"
-    );
+    // Same split as `v2_pages_return_while_the_span_still_lives`: this
+    // reads the accounting, and the accounting is only about the kernel
+    // on a system with the page size the geometry was built for.
+    if os::page_size_matches() {
+        assert!(
+            st.returned > 0,
+            "an interleaved churn produced no returnable page — densification is not happening: {st:?}"
+        );
+    } else {
+        assert_eq!(st.returned, 0, "accounted a page the reclaim path refused: {st:?}");
+        eprintln!("NOT EXERCISED: densification's page return needs a {}-byte page", os::PAGE);
+    }
     for p in live {
         // SAFETY: ours.
         unsafe { heap.dealloc(p, size, 8) };
@@ -636,6 +786,8 @@ fn claimed_word_recycles_locally_and_retires_honestly() {
             assert_eq!(p, prev, "short-lived churn must reuse the same lowest slot");
         }
         last = Some(p);
+        // SAFETY: `p` came from `h.alloc` with this same size and alignment and has not
+        // been freed yet, which is `dealloc`'s contract.
         unsafe { h.dealloc(p, 48, 8) };
     }
     // Identity balances with a claim in flight (no flush).
@@ -662,6 +814,8 @@ fn claims_span_words_and_never_strand_occupancy() {
         ptrs.push(h.alloc(64, 8).unwrap()); // > 64 slots ⇒ multiple words
     }
     for p in ptrs.drain(..) {
+        // SAFETY: `p` came from `h.alloc` with this same size and alignment and has not
+        // been freed yet, which is `dealloc`'s contract.
         unsafe { h.dealloc(p, 64, 8) };
     }
     h.flush_claims();
@@ -670,4 +824,47 @@ fn claims_span_words_and_never_strand_occupancy() {
     assert!(st.balanced(), "{st:?}");
     h.reclaim();
     assert!(h.snapshot().balanced());
+}
+
+// ── the reclaim path may not report pages it did not return ──────────
+
+/// `os::PAGE` is a constant and the running system's page size is not.
+///
+/// This machine reports 16384 and the bench box reports 4096, and the
+/// reclaim path computes `madvise` ranges at 4096 granularity. On the
+/// larger page those ranges are not page-aligned; macOS answers 0
+/// regardless and reclaims nothing, so a reclaim that ran anyway would
+/// mark the pages discarded and count them in `returned` for memory the
+/// kernel still holds.
+///
+/// This asserts the check exists and agrees with the system, which is
+/// the only part that can be checked from inside the process. What it
+/// cannot check is whether `madvise` did anything — that needs RSS, and
+/// `bench/allocgate-mem.sh` is where that lives.
+#[test]
+fn the_page_size_check_agrees_with_the_system() {
+    let matches = crate::os::page_size_matches();
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        // An independent reading, not the same call: the constant this
+        // crate was built around is 4096, and a system that disagrees
+        // must make `page_size_matches` false.
+        let out = std::process::Command::new("getconf").arg("PAGE_SIZE").output();
+        if let Ok(o) = out
+            && let Ok(text) = String::from_utf8(o.stdout)
+            && let Ok(sys) = text.trim().parse::<usize>()
+        {
+            assert_eq!(
+                matches,
+                sys == crate::os::PAGE,
+                "getconf says {sys}, the crate assumes {}, and page_size_matches() says {matches}",
+                crate::os::PAGE
+            );
+            return;
+        }
+    }
+    // No independent reading available: assert only that the answer is
+    // stable, since it is cached and a flapping answer would be worse
+    // than either value.
+    assert_eq!(matches, crate::os::page_size_matches());
 }

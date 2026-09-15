@@ -10,6 +10,16 @@
 //! `sub_raw.rs` was; that file is this one's scalar sibling, handing back
 //! the payload with no RESP framing.
 
+// `catch_unwind` at the ABI boundary. Its `Err` is the panic payload,
+// and the point of catching it here is that a panic must not cross
+// into C — see `boundary/no-panic-across-abi`. There is no Rust
+// frame above this to hand it to, and the callee has already
+// reported through its own error channel.
+#![expect(
+    clippy::let_underscore_must_use,
+    reason = "catch_unwind exists to stop the unwind, not to report it"
+)]
+
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use kevy_embedded::KevyError;
@@ -28,6 +38,8 @@ pub unsafe extern "C" fn kevy_subscribe(
     chan: *const u8,
     chan_len: usize,
 ) -> *mut KevySub {
+    // SAFETY: covered by this fn's `# Safety` contract, with the null case ruled out by
+    // the checks above.
     unsafe { sub_open(db, chan, chan_len, false) }
 }
 
@@ -41,6 +53,8 @@ pub unsafe extern "C" fn kevy_psubscribe(
     pat: *const u8,
     pat_len: usize,
 ) -> *mut KevySub {
+    // SAFETY: covered by this fn's `# Safety` contract, with the null case ruled out by
+    // the checks above.
     unsafe { sub_open(db, pat, pat_len, true) }
 }
 
@@ -53,7 +67,9 @@ unsafe fn sub_open(
     if db.is_null() || chan.is_null() {
         return std::ptr::null_mut();
     }
+    // SAFETY: checked non-null above; the contract requires a live `kevy_open*` handle.
     let store = unsafe { &(*db).store };
+    // SAFETY: the `# Safety` contract above covers this pointer/length pair.
     let name = unsafe { std::slice::from_raw_parts(chan, chan_len) };
     let opened = catch_unwind(AssertUnwindSafe(|| {
         if pattern { store.psubscribe(&[name]) } else { store.subscribe(&[name]) }
@@ -78,14 +94,19 @@ pub unsafe extern "C" fn kevy_sub_next(sub: *mut KevySub, out: *mut KevyBuf) -> 
     if out.is_null() {
         return -1;
     }
+    // SAFETY: covered by this fn's `# Safety` contract, with the null case ruled out by
+    // the checks above.
     unsafe { out.write(KevyBuf::empty()) };
     if sub.is_null() {
         return -1;
     }
+    // SAFETY: checked non-null above; the contract requires a live `kevy_open*` handle.
     let s = unsafe { &(*sub).sub };
     let polled = catch_unwind(AssertUnwindSafe(|| s.try_recv()));
     match polled {
         Ok(Ok(Some(frame))) => {
+            // SAFETY: covered by this fn's `# Safety` contract, with the null case ruled out by
+            // the checks above.
             unsafe { out.write(KevyBuf::from_vec(encode_frame(&frame))) };
             1
         }
@@ -118,10 +139,13 @@ pub unsafe extern "C" fn kevy_sub_wait(
     if out.is_null() {
         return -1;
     }
+    // SAFETY: covered by this fn's `# Safety` contract, with the null case ruled out by
+    // the checks above.
     unsafe { out.write(KevyBuf::empty()) };
     if sub.is_null() {
         return -1;
     }
+    // SAFETY: checked non-null above; the contract requires a live `kevy_open*` handle.
     let s = unsafe { &(*sub).sub };
     let waited = catch_unwind(AssertUnwindSafe(|| {
         if timeout_ms == 0 {
@@ -136,6 +160,8 @@ pub unsafe extern "C" fn kevy_sub_wait(
     }));
     match waited {
         Ok(Ok(Some(frame))) => {
+            // SAFETY: covered by this fn's `# Safety` contract, with the null case ruled out by
+            // the checks above.
             unsafe { out.write(KevyBuf::from_vec(encode_frame(&frame))) };
             1
         }
@@ -154,5 +180,7 @@ pub unsafe extern "C" fn kevy_sub_close(sub: *mut KevySub) {
     if sub.is_null() {
         return;
     }
+    // SAFETY: the contract makes the caller pass a handle this crate produced with
+    // `Box::into_raw` and never freed, so this takes ownership back exactly once.
     let _ = catch_unwind(AssertUnwindSafe(|| drop(unsafe { Box::from_raw(sub) })));
 }

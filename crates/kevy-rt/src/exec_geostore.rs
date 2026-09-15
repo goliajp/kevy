@@ -22,6 +22,7 @@ use crate::shard::Shard;
 /// Public: [`crate::Commands::geo_search`] returns it. The runtime never
 /// interprets the scores — the command layer decides whether they carry the
 /// source geohash or (with `STOREDIST`) the distance in the queried unit.
+#[derive(Debug)]
 pub enum GeoHits {
     /// `(member, score)` pairs to materialize at the destination. Empty =
     /// the search matched nothing, which deletes the destination (Redis

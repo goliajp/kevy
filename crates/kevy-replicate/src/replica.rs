@@ -93,6 +93,7 @@ pub enum ReplicaEvent {
 /// client behaves as an `Iterator<Item = Result<DecodedFrame, ReplicaError>>`
 /// yielding frames in offset order until the peer disconnects or a
 /// hard error surfaces.
+#[derive(Debug)]
 pub struct ReplicaClient {
     pub(crate) sock: TcpStream,
     /// Bytes pulled off the socket waiting to parse the next frame.

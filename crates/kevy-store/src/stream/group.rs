@@ -17,7 +17,7 @@ use crate::value::SmallBytes;
 
 /// One consumer group's state. Sorted PEL plus a map of known
 /// consumers (with cached pel_count for O(1) XINFO answers).
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ConsumerGroup {
     /// Highest ID delivered to any consumer in this group. Bumped by
     /// XREADGROUP with `>`; settable via XGROUP SETID.
@@ -108,6 +108,7 @@ pub enum GroupCreateMode {
 
 /// Summary form of `XPENDING key group` (only 3 args): total pending,
 /// min/max IDs across the PEL, and per-consumer aggregate counts.
+#[derive(Debug)]
 pub struct PendingSummary {
     /// Total pending entries across all consumers.
     pub total: u64,
@@ -119,12 +120,14 @@ pub struct PendingSummary {
 
 /// Extended form of `XPENDING key group [IDLE ms] start end count
 /// [consumer]`: one row per matching PEL entry.
+#[derive(Debug)]
 pub struct PendingExtended {
     /// Per-entry rows in ID-ascending order.
     pub rows: Vec<PendingExtendedRow>,
 }
 
 /// One row of the extended XPENDING reply.
+#[derive(Debug)]
 pub struct PendingExtendedRow {
     /// Entry ID.
     pub id: StreamId,
@@ -138,6 +141,7 @@ pub struct PendingExtendedRow {
 
 /// Knobs for [`crate::StreamData`]'s `xclaim`: `min-idle-ms` plus the
 /// `IDLE`/`TIME`/`RETRYCOUNT`/`FORCE`/`JUSTID` flag tail.
+#[derive(Debug)]
 pub struct XClaimOpts {
     /// Only claim entries idle for at least this many ms.
     pub min_idle_ms: u64,

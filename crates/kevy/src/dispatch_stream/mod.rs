@@ -9,6 +9,13 @@
 //! - `mod.rs` (this file) — dispatch entry + sprint A commands.
 //! - `group.rs` — sprint B (consumer-group commands).
 
+// The discarded value is the operation's own count — how many fields
+// went, how many members landed — and the caller returns its own.
+#![expect(
+    clippy::let_underscore_must_use,
+    reason = "the discarded value is a count, not an error report"
+)]
+
 mod claim;
 mod group;
 mod info;

@@ -53,7 +53,7 @@ use crate::reply::{vec2, vec3};
 /// Accumulating command builder. Created via
 /// [`AsyncConnection::pipeline`]. Owns no connection — that's bound
 /// at [`Pipeline::run`] time.
-#[derive(Default, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct Pipeline {
     cmds: Vec<Vec<Vec<u8>>>,
 }

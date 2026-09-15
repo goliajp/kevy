@@ -21,6 +21,7 @@ pub type LoadedPelEntry = (u64, u64, Vec<u8>, u64, u32);
 /// One consumer group decoded into primitive tuples — the dump/load wire
 /// form shared by snapshot v4, AOF-rewrite filtering, and reshard's
 /// in-memory redistribution.
+#[derive(Debug)]
 pub struct LoadedGroup {
     /// Group name.
     pub name: Vec<u8>,

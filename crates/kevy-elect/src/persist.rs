@@ -37,6 +37,7 @@ pub trait ElectorPersist {
 /// for unit tests and single-node / diskless embedded deployments
 /// where a restarted node re-joining an election it voted in is not
 /// a reachable scenario.
+#[derive(Debug)]
 pub struct NoPersist;
 
 impl ElectorPersist for NoPersist {

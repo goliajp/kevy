@@ -5,7 +5,7 @@
 /// `struct io_sqring_offsets` — byte offsets of each SQ cursor inside the SQ
 /// ring mapping, returned by `io_uring_setup`.
 #[repr(C)]
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct IoSqringOffsets {
     pub head: u32,
     pub tail: u32,
@@ -21,7 +21,7 @@ pub struct IoSqringOffsets {
 /// `struct io_cqring_offsets` — byte offsets of each CQ cursor inside the CQ
 /// ring mapping.
 #[repr(C)]
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct IoCqringOffsets {
     pub head: u32,
     pub tail: u32,
@@ -36,7 +36,7 @@ pub struct IoCqringOffsets {
 
 /// `struct io_uring_params` — `io_uring_setup`'s in/out parameter.
 #[repr(C)]
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct IoUringParams {
     pub sq_entries: u32,
     pub cq_entries: u32,
@@ -52,6 +52,7 @@ pub struct IoUringParams {
 
 /// `struct io_uring_sqe` — the 64-byte submission entry.
 #[repr(C)]
+#[derive(Debug)]
 pub struct IoUringSqe {
     pub opcode: u8,
     pub flags: u8,
@@ -117,7 +118,7 @@ impl IoUringSqe {
 /// assert!(t.tv_nsec < 1_000_000_000, "the remainder never carries a second");
 /// ```
 #[repr(C)]
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct KernelTimespec {
     /// Whole seconds of the (relative) timeout.
     pub tv_sec: i64,
@@ -145,6 +146,7 @@ impl KernelTimespec {
 /// `struct io_uring_buf_reg` — `io_uring_register(IORING_REGISTER_PBUF_RING,
 /// …)`'s argument layout.
 #[repr(C)]
+#[derive(Debug)]
 pub struct IoUringBufReg {
     pub ring_addr: u64,
     pub ring_entries: u32,
@@ -158,6 +160,7 @@ pub struct IoUringBufReg {
 /// at `offset` in the registered files table; `fds` points to `len` i32 fds
 /// (use -1 to clear a slot).
 #[repr(C)]
+#[derive(Debug)]
 pub struct IoUringFilesUpdate {
     pub offset: u32,
     pub resv: u32,
@@ -170,7 +173,7 @@ pub struct IoUringFilesUpdate {
 /// the assigned index back into `offset`. `nr_args` in the syscall is the
 /// number of entries in the array (we register one at a time).
 #[repr(C)]
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct IoUringRsrcUpdate {
     pub offset: u32,
     pub resv: u32,
@@ -183,7 +186,7 @@ pub struct IoUringRsrcUpdate {
 /// size. `data`/`tags` are unused for sparse registration. `nr_args` in the
 /// syscall must equal `sizeof::<Self>()` = 32.
 #[repr(C)]
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct IoUringRsrcRegister {
     pub nr: u32,
     pub flags: u32,
@@ -195,3 +198,22 @@ pub struct IoUringRsrcRegister {
 /// `IORING_RSRC_REGISTER_SPARSE` — tells the kernel "no initial fds, just
 /// give me an empty table of size `nr`."
 pub const IORING_RSRC_REGISTER_SPARSE: u32 = 1 << 0;
+
+// ─────────────────────────────────────────────────────────────────────
+// ABI assertions.
+//
+// `setup.rs` computes its mmap lengths from `size_of::<IoUringSqe>()`
+// and `size_of::<Completion>()`. A field added to either, or a reorder,
+// silently misaligns every ring read — which surfaces as arbitrary
+// `user_data`, i.e. completions routed to random connections. There is
+// no test that would catch it and no error it would raise.
+//
+// Sizes are the kernel's, from `<linux/io_uring.h>`.
+// ─────────────────────────────────────────────────────────────────────
+
+const _: () = assert!(size_of::<IoUringSqe>() == 64, "io_uring_sqe is 64 bytes");
+const _: () = assert!(align_of::<IoUringSqe>() == 8);
+const _: () = assert!(size_of::<IoUringBufReg>() == 40);
+const _: () = assert!(size_of::<KernelTimespec>() == 16);
+const _: () = assert!(size_of::<IoSqringOffsets>() == 40);
+const _: () = assert!(size_of::<IoCqringOffsets>() == 40);

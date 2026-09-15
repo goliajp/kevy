@@ -34,6 +34,14 @@
 //! command; [`Transaction::exec_typed`] returns a [`TransactionReplies`]
 //! cursor with typed extractors (`next_int`, `next_bulk`, …) instead.
 
+// Best effort. What matters is reported by the path that owns the
+// outcome — the next read, the next tick, the returned value — and
+// this call is the notification, not the result.
+#![expect(
+    clippy::let_underscore_must_use,
+    reason = "best effort, with the real outcome reported elsewhere"
+)]
+
 use crate::{KevyError, KevyResult};
 
 use kevy_resp::Reply;

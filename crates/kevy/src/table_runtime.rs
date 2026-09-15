@@ -36,6 +36,7 @@ pub(crate) fn on_write(ctx: &Ctx<'_>, store: &mut Store, key: &[u8]) {
 ///
 /// The index backfill's shape, for the same reason: a declaration has to
 /// reach rows that already exist, and there can be two million of them.
+#[derive(Debug)]
 pub(crate) struct PackJob {
     names: Vec<Vec<u8>>,
     keys: Vec<Vec<u8>>,
@@ -43,7 +44,7 @@ pub(crate) struct PackJob {
 }
 
 /// This shard's packing backfill.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(crate) struct PackBackfill {
     /// The table-catalog generation these jobs were built from.
     generation: u64,

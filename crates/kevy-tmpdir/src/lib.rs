@@ -24,6 +24,10 @@
 //! separates threads within a process and the pid separates processes. That is
 //! the whole trick, and it is why this is one crate instead of nine copies.
 
+// Best-effort removal, on paths where the file is being abandoned.
+// A file that will not delete is a stray the next sweep collects,
+// and refusing here would abandon the rest of the cleanup.
+#![expect(clippy::let_underscore_must_use, reason = "removing what is already meant to be gone")]
 #![warn(missing_docs)]
 
 use std::path::{Path, PathBuf};
@@ -60,8 +64,11 @@ static SEQ: AtomicU64 = AtomicU64::new(0);
 pub fn unique_dir(label: &str) -> PathBuf {
     let n = SEQ.fetch_add(1, Ordering::Relaxed);
     let p = std::env::temp_dir().join(format!("kevy-{label}-{}-{n}", std::process::id()));
+    // A leftover from a previous process that reused this pid: it is being
+    // replaced, so its removal failing is not this call's problem.
     let _ = std::fs::remove_dir_all(&p);
-    std::fs::create_dir_all(&p).expect("create temp dir");
+    std::fs::create_dir_all(&p)
+        .expect("a caller with nowhere to put its files has nothing to do next");
     p
 }
 
@@ -121,6 +128,8 @@ impl AsRef<Path> for TmpDir {
 
 impl Drop for TmpDir {
     fn drop(&mut self) {
+        // Drop cannot report, and a temp directory that outlives its process
+        // is the OS's to reclaim.
         let _ = std::fs::remove_dir_all(&self.0);
     }
 }

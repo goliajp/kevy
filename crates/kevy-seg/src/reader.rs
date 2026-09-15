@@ -12,6 +12,7 @@ use crate::{SegError, SegMeta};
 
 /// An open segment. Cheap to clone-by-Arc above this crate; internally
 /// one file handle plus the in-memory fence table.
+#[derive(Debug)]
 pub struct Seg {
     f: File,
     meta: SegMeta,
@@ -50,11 +51,13 @@ impl Seg {
         }
         let mut tr = [0u8; TRAILER];
         f.read_exact_at(&mut tr, len - TRAILER as u64)?;
-        if u32::from_le_bytes(tr[12..16].try_into().expect("4")) != layout::MAGIC {
+        if u32::from_le_bytes(tr[12..16].try_into().expect("tr is [u8; TRAILER]")) != layout::MAGIC
+        {
             return Err(SegError::Corrupt("bad magic"));
         }
-        let footer_off = u64::from_le_bytes(tr[0..8].try_into().expect("8"));
-        let footer_len = u32::from_le_bytes(tr[8..12].try_into().expect("4")) as usize;
+        let footer_off = u64::from_le_bytes(tr[0..8].try_into().expect("tr is [u8; TRAILER]"));
+        let footer_len =
+            u32::from_le_bytes(tr[8..12].try_into().expect("tr is [u8; TRAILER]")) as usize;
         // Checked: both values are attacker-controlled bytes at this
         // point, and a wrapping sum must refuse, not panic.
         let closes =
@@ -115,7 +118,7 @@ impl Seg {
         let n = layout::page_slots(&page);
         let (mut lo, mut hi) = (0u16, n);
         while lo < hi {
-            let mid = (lo + hi) / 2;
+            let mid = lo + (hi - lo) / 2;
             let cell = layout::read_cell(&page, layout::slot_offset(&page, mid))
                 .ok_or(SegError::Corrupt("cell shape"))?;
             match cell.key().cmp(key) {
@@ -218,6 +221,11 @@ impl Seg {
         if !layout::page_intact(&buf) {
             return Err(SegError::Corrupt("data page crc"));
         }
+        // The CRC says the bytes are unchanged; this says they are a page.
+        // Every slot walk below indexes off this header.
+        if !layout::page_shape_ok(&buf) {
+            return Err(SegError::Corrupt("data page slot count"));
+        }
         Ok(buf)
     }
 
@@ -229,7 +237,17 @@ impl Seg {
                 let mut out = Vec::with_capacity(layout::capped_capacity(total_len as usize));
                 for p in 0..n_pages {
                     let mut buf = vec![0u8; PAGE];
-                    self.f.read_exact_at(&mut buf, u64::from(first_page + p) * PAGE as u64)?;
+                    // `first_page` and `n_pages` both come off disk, so the sum
+                    // is arithmetic on untrusted numbers. It cannot actually
+                    // overflow a `u32`: reaching `p >= 1` means the read at
+                    // `p == 0` succeeded, so `first_page` is a page this file
+                    // has, and a file with `u32::MAX` pages is 17.6 TB. That
+                    // argument is the only thing standing between the debug
+                    // build and a panic, and it depends on a fact about file
+                    // sizes rather than about this expression. Widened, the
+                    // sum names the page it says regardless.
+                    let at = (u64::from(first_page) + u64::from(p)) * PAGE as u64;
+                    self.f.read_exact_at(&mut buf, at)?;
                     if !layout::page_intact(&buf) {
                         return Err(SegError::Corrupt("overflow page crc"));
                     }
@@ -246,6 +264,7 @@ impl Seg {
 }
 
 /// Ascending `(key, payload)` iterator over a closed range.
+#[derive(Debug)]
 pub struct RangeIter<'a> {
     seg: &'a Seg,
     page_ix: usize,

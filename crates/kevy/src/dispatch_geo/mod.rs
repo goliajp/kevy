@@ -185,7 +185,8 @@ fn apply_geoadd(
     let changed = to_write
         .iter()
         .filter(|(s, m)| {
-            let i = pairs.iter().position(|(_, mm)| mm == m).unwrap();
+            let i =
+                pairs.iter().position(|(_, mm)| mm == m).expect("to_write was built from pairs");
             // bit-exact float compare is the contract: "score differs from
             // what's already stored". Geo scores are quantized integer bits
             // packed into f64, so an epsilon would be wrong.

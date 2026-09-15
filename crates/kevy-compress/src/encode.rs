@@ -59,9 +59,42 @@ fn hash4(dict: &[u8], input: &[u8], v: usize) -> usize {
 /// Pass 1: the match finder. Returns the sequences, the closing
 /// literal run, and whether any match reached into the dictionary.
 fn collect(dict: &[u8], input: &[u8]) -> (Vec<Seq>, core::ops::Range<usize>, bool) {
-    let d = dict.len();
     let mut table = vec![0u32; 1 << HT_BITS];
     seed(dict, &mut table);
+    collect_with(&table, dict, input)
+}
+
+/// Seed a match table for `dict`, once, for a caller that will reuse it.
+///
+/// The truncation to `MAX_OFFSET` is the same one `try_lz` and
+/// `try_high` apply before they seed: a 16-bit offset cannot reach
+/// further back, and a table seeded over a longer slice would hold
+/// positions the encoder can never emit.
+pub(crate) fn seeded_table(dict: &[u8]) -> Vec<u32> {
+    let d = dict.len().min(MAX_OFFSET);
+    let dict = &dict[dict.len() - d..];
+    let mut table = vec![0u32; 1 << HT_BITS];
+    seed(dict, &mut table);
+    table
+}
+
+/// A table someone else seeded.
+///
+/// Seeding is a pure function of the dictionary and nothing else, and
+/// [`seed`] walks all of it — 65,532 hash-and-store for the 64 KiB one
+/// `kevy-vlog` trains, on EVERY record. It is why encode time was flat
+/// in input size: an 8-byte value cost more than a 6 KiB one, because
+/// almost none of the work was about the value.
+///
+/// The table is 16 KiB, so a caller holding a seeded template pays one
+/// memcpy of that instead.
+fn collect_with(
+    seeded: &[u32],
+    dict: &[u8],
+    input: &[u8],
+) -> (Vec<Seq>, core::ops::Range<usize>, bool) {
+    let d = dict.len();
+    let mut table = seeded.to_vec();
     let (mut v, end) = (d, d + input.len());
     let probe_end = end - TAIL_LITERALS.min(input.len());
     let mut lit_start = d;
@@ -182,10 +215,18 @@ fn serialize_high(
 /// Try to LZ-encode `input` into `out` at the fast level (payload
 /// only, no header). `(_, false)` when raw wins — never-expanding is
 /// a return value, not a hope.
-pub(crate) fn try_lz(dict: &[u8], input: &[u8], out: &mut Vec<u8>) -> (u8, bool) {
+pub(crate) fn try_lz(
+    dict: &[u8],
+    seeded: Option<&[u32]>,
+    input: &[u8],
+    out: &mut Vec<u8>,
+) -> (u8, bool) {
     let d = dict.len().min(MAX_OFFSET);
     let dict = &dict[dict.len() - d..];
-    let (seqs, tail, used_dict) = collect(dict, input);
+    let (seqs, tail, used_dict) = match seeded {
+        Some(t) => collect_with(t, dict, input),
+        None => collect(dict, input),
+    };
     match serialize_fast(dict, input, &seqs, &tail, input.len()) {
         Some(payload) => {
             *out = payload;
@@ -200,12 +241,16 @@ pub(crate) fn try_lz(dict: &[u8], input: &[u8], out: &mut Vec<u8>) -> (u8, bool)
 pub(crate) fn try_high(
     dict: &[u8],
     lens: Option<&[u8; 256]>,
+    seeded: Option<&[u32]>,
     input: &[u8],
     out: &mut Vec<u8>,
 ) -> (u8, bool) {
     let d = dict.len().min(MAX_OFFSET);
     let dict = &dict[dict.len() - d..];
-    let (seqs, tail, used_dict) = collect(dict, input);
+    let (seqs, tail, used_dict) = match seeded {
+        Some(t) => collect_with(t, dict, input),
+        None => collect(dict, input),
+    };
     let fast = serialize_fast(dict, input, &seqs, &tail, input.len());
     let cap = fast.as_ref().map_or(input.len(), Vec::len);
     if let Some((high, used_shared)) = serialize_high(dict, lens, input, &seqs, &tail, cap) {

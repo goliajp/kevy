@@ -220,12 +220,12 @@ fn parse_page(reply: Reply) -> KevyResult<IdxPage> {
         return Err(KevyError::Protocol("IDX.QUERY page: expected [cursor, rows]".into()));
     }
     let mut it = items.into_iter();
-    let cursor = match it.next().unwrap() {
+    let cursor = match it.next().expect("the items.len() check above") {
         Reply::Bulk(c) if c == b"0" => None,
         Reply::Bulk(c) => Some(c),
         other => return Err(unexpected(other)),
     };
-    let Reply::Array(flat) = it.next().unwrap() else {
+    let Reply::Array(flat) = it.next().expect("the items.len() check above") else {
         return Err(KevyError::Protocol("IDX.QUERY page: rows not an array".into()));
     };
     let mut rows = Vec::with_capacity(flat.len() / 2);

@@ -18,6 +18,11 @@
 //!
 //! Out of scope (Phase 1.5): TLS / auth / connection pooling.
 
+// Teardown. `join` returns what the thread panicked with and the
+// thread is already being abandoned; a flush on the way out has
+// nowhere left to put its bytes. No caller remains to be told.
+#![expect(clippy::let_underscore_must_use, reason = "teardown has nobody left to report to")]
+
 use std::net::TcpListener;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Sender, channel};
@@ -43,6 +48,7 @@ pub(crate) const READ_RETRY_BACKOFF: Duration = Duration::from_millis(100);
 /// election message from a peer, or a "the connection from $peer
 /// went down" notification (so the orchestrator can clear any
 /// state that assumed the link was up).
+#[derive(Debug)]
 pub enum InboundEvent {
     /// `(from_node_id, msg)`.
     Message(String, Message),
@@ -57,6 +63,7 @@ pub enum InboundEvent {
 /// the latest `epoch` / `repl_offset` for the next heartbeat
 /// without round-tripping through the orchestrator — but **only the
 /// orchestrator mutates** via `tick` / `on_message`.
+#[derive(Debug)]
 pub(crate) struct Shared {
     pub(crate) elector: Mutex<Elector>,
     /// Per-peer outbound queue. Indexed by `node_id`. Each worker
@@ -94,6 +101,7 @@ pub struct PeerAddr {
 /// Public handle to a running transport. Owns the orchestrator +
 /// listener + outbound worker threads. Dropping it signals stop
 /// and joins (best-effort within `JOIN_TIMEOUT`).
+#[derive(Debug)]
 pub struct Transport {
     stop: Arc<AtomicBool>,
     handles: Vec<JoinHandle<()>>,

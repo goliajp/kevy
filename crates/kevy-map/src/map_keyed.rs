@@ -1,9 +1,52 @@
-//! Key-trait-bound `KevyMap` operations: insert/grow/lookup/remove.
+//! Insert, grow, look up and remove — the operations that need to compare keys.
 //!
-//! Split out of [`crate::map`] for file-size hygiene. The raw / non-keyed
-//! impl block (allocation, metadata bookkeeping, iter, Drop, trait impls)
-//! stays in `map.rs`; everything that needs `K: KevyHash + Eq` or
-//! `K: Borrow<Q>, Q: KevyHash + Eq` lives here.
+//! The layout they operate on is documented in [`crate::map`]: `cap` metadata
+//! bytes plus a `GROUP_WIDTH` mirror tail, one byte per slot, `EMPTY` = 0xFF,
+//! `DELETED` = 0x80, and a full slot holding `h2(hash)` — the top seven bits,
+//! never 0x80 or 0xFF. This file is the probe that reads them.
+//!
+//! # The probe
+//!
+//! Probing is by **group of 16, then linear**, not by the more usual
+//! quadratic step:
+//!
+//! ```text
+//!   group_start = hash & mask
+//!   loop:
+//!     load 16 metadata bytes at group_start        (one SIMD word)
+//!     for each byte == h2(hash):  compare the key  (a real candidate)
+//!     if any byte == EMPTY:       stop             (the key is not here)
+//!     group_start = (group_start + 16) & mask      (next group, linear)
+//! ```
+//!
+//! Linear beats quadratic here because the scan is already group-aware: at
+//! this load factor the next group is usually the next cache line, and a
+//! quadratic step throws that away for a collision pattern the h2 filter has
+//! already broken up.
+//!
+//! # Three invariants the probe depends on
+//!
+//! 1. **`EMPTY` terminates, `DELETED` does not.** That is the whole reason
+//!    the two constants differ: a removed slot must stay walkable or every
+//!    key that probed past it becomes unreachable. Removal writes `DELETED`,
+//!    never `EMPTY`.
+//! 2. **The slot is marked `DELETED` *before* the value is moved out.**
+//!    `remove` writes the metadata byte first, then `ptr::read`s the pair.
+//!    The order is what makes the move sound: once the byte says `DELETED`,
+//!    nothing — not a later probe, not `Drop`, not a rehash — will read that
+//!    slot again, so moving the `(K, V)` out cannot become a double drop.
+//!    Reading first and marking second would leave a window in which the slot
+//!    claims to hold a value that has already been moved away.
+//! 3. **The mirror tail is kept in sync.** Every metadata write goes to both
+//!    `i` and its mirror index, so a group load starting near the end of the
+//!    table reads real bytes rather than falling off the allocation.
+//!
+//! # Growth
+//!
+//! Growth rebuilds rather than rehashes in place, and reinserts through
+//! `insert_known_unique`, which skips the key comparison entirely — the old
+//! table already proved every key distinct. That turns the rehash into one
+//! `match_byte(EMPTY)` per key.
 
 use core::borrow::Borrow;
 use core::ptr;
@@ -32,10 +75,14 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
             ProbeOutcome::Found(idx) => {
                 // SAFETY: slot is full ⇒ initialised. We replace only the V
                 // field; the old K is kept (std HashMap semantics).
+                // SAFETY: `idx` came from a probe that found a full metadata byte, so the
+                // slot at `idx` holds an initialised `(K, V)` inside the slot allocation.
                 let v_ptr = unsafe {
                     let kv: *mut (K, V) = self.slots_ptr.as_ptr().add(idx).cast::<(K, V)>();
                     ptr::addr_of_mut!((*kv).1)
                 };
+                // SAFETY: `v_ptr` points at that slot's initialised `V`, so the old value
+                // is a valid `V` to move out and the new one is written in its place.
                 let old_v = unsafe { ptr::replace(v_ptr, value) };
                 drop(key);
                 Some(old_v)
@@ -66,7 +113,9 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
         let new_cap = if self.cap == 0 {
             MIN_CAP
         } else {
-            self.cap.checked_mul(2).expect("kevy-map: capacity doubling overflow")
+            self.cap
+                .checked_mul(2)
+                .expect("a capacity that overflows usize could not have been allocated")
         };
         let mut new_table = Self::alloc_table(new_cap);
         // Move every live entry over. After ptr::read'ing a slot we mark its
@@ -86,6 +135,9 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
                 // SAFETY: full slot ⇒ initialised; we mark DELETED immediately
                 // so this byte is never re-read as occupied.
                 let (k, v) = unsafe { ptr::read(self.slots_ptr.as_ptr().add(i) as *const (K, V)) };
+                // SAFETY: `i < cap`, so this is inside the metadata range. Writing DELETED
+                // immediately is what keeps the `ptr::read` above from being a double move:
+                // the byte is never seen as occupied again.
                 unsafe { *self.metadata_ptr.as_ptr().add(i) = DELETED };
                 let hash = k.kevy_hash();
                 new_table.insert_known_unique(hash, k, v);
@@ -268,13 +320,59 @@ impl<K, V> KevyMap<K, V> {
         Q: KevyHash + Eq + ?Sized,
     {
         let idx = self.find_by_borrow(key)?;
-        self.set_meta(idx, DELETED);
+        let mark = self.erase_mark(idx);
+        self.set_meta(idx, mark);
         self.occupied -= 1;
-        self.deleted += 1;
+        if mark == DELETED {
+            self.deleted += 1;
+        }
         // SAFETY: slot was full, we just marked it DELETED so it won't be
         // read again; ptr::read moves the (K, V) out.
         let (_k, v) = unsafe { ptr::read(self.slots_ptr.as_ptr().add(idx) as *const (K, V)) };
         Some(v)
+    }
+
+    /// `EMPTY` or `DELETED` for a slot being erased.
+    ///
+    /// A tombstone exists to keep a probe going past a hole. When no
+    /// probe could have walked through this position, the hole stops
+    /// nothing and `EMPTY` is the honest mark — which frees the slot for
+    /// reuse and keeps it out of the load count.
+    ///
+    /// Writing `DELETED` unconditionally cost two things. `deleted` only
+    /// returns to zero at a grow, and both the insert probe and
+    /// `raw_entry` branch on `self.deleted == 0` — so ONE `DEL` put the
+    /// table on its slower probe for the rest of the table's life, an
+    /// extra SIMD compare and branch per group forever. And tombstones
+    /// count toward the load threshold, so they drive doubling: the
+    /// steady state under constant-live churn measured 3,048 tombstones
+    /// against a 3,072 headroom, 24 slots from a doubling that the live
+    /// set never asked for.
+    fn erase_mark(&self, idx: usize) -> u8 {
+        // hashbrown's rule, and the reason it is not "does this slot's
+        // group hold an EMPTY": probes here start at `hash & mask` and
+        // are NOT group-aligned, so the sequence that placed a later key
+        // may have entered from any of the `GROUP_WIDTH - 1` positions
+        // before this one. What decides it is whether a run of at least
+        // `GROUP_WIDTH` non-empty slots spans this position — if one
+        // does, some probe could have walked through, and the hole has
+        // to stay a tombstone.
+        //
+        // A simpler condition was tried and it lost a key:
+        // `clone_after_heavy_deletion_keeps_probes_correct` found it
+        // immediately, which is what that test is for.
+        let before = idx.wrapping_sub(GROUP_WIDTH) & self.mask;
+        // SAFETY: both indices are < cap and the metadata array is
+        // `cap + GROUP_WIDTH` bytes, so either group load is in bounds.
+        let (gb, ga) = unsafe {
+            (
+                Group::load(self.metadata_ptr.as_ptr().add(before)),
+                Group::load(self.metadata_ptr.as_ptr().add(idx)),
+            )
+        };
+        let empty_before = gb.match_byte(EMPTY).slot_mask().leading_zeros() as usize;
+        let empty_after = ga.match_byte(EMPTY).slot_mask().trailing_zeros() as usize;
+        if empty_before + empty_after >= GROUP_WIDTH { DELETED } else { EMPTY }
     }
 
     pub(crate) fn find_by_borrow<Q>(&self, key: &Q) -> Option<usize>

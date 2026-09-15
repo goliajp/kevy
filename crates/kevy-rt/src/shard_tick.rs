@@ -241,6 +241,13 @@ impl<C: Commands> Shard<C> {
     pub(crate) fn tick_conn_gauge(&mut self) {
         let live = self.conns.iter().filter(|(_, c)| !c.cluster).count() as u64;
         self.commands.on_conn_gauge(live);
+        // Both registries, and each blocked conn is in exactly one:
+        // `blocked` is the in-shard single-local-key fast path,
+        // `origin_blocks` the arbiter-side record for a conn blocked on a
+        // remote or multi-key form. Summed across shards this counts each
+        // parked connection once.
+        let blocked = self.blocked.blocked_conns() + self.origin_blocks.len();
+        self.commands.on_blocked_gauge(blocked as u64);
     }
 
     /// Disconnect any conn whose pending reply buffer has grown past

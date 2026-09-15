@@ -63,10 +63,19 @@ fn split_if_overfull<K>(node: &mut Node<K>) -> Split<K> {
         return None;
     }
     let mid = node.keys.len() / 2;
-    let right_keys = node.keys.split_off(mid + 1);
+    // `split_off` allocates exactly `len - mid - 1` — seven keys, which
+    // then walks 7 → 8 → 16 as the right half refills. Ask for the
+    // ceiling once instead.
+    let mut right_keys = alloc::vec::Vec::with_capacity(MAX_KEYS + 1);
+    right_keys.extend(node.keys.drain(mid + 1..));
     let median = node.keys.pop().expect("split point exists");
-    let right_children =
-        if node.is_leaf() { alloc::vec::Vec::new() } else { node.children.split_off(mid + 1) };
+    let right_children = if node.is_leaf() {
+        alloc::vec::Vec::new()
+    } else {
+        let mut c = alloc::vec::Vec::with_capacity(MAX_KEYS + 2);
+        c.extend(node.children.drain(mid + 1..));
+        c
+    };
     let mut right = Node { keys: right_keys, children: right_children, total: 0 };
     right.recount();
     node.recount();

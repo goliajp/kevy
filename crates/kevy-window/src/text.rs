@@ -18,6 +18,11 @@
 //! Cold text segments are derived spill (indexes rebuild on boot):
 //! a restart drops the previous run's set and re-freezes.
 
+// Best-effort removal, on paths where the file is being abandoned.
+// A file that will not delete is a stray the next sweep collects,
+// and refusing here would abandon the rest of the cleanup.
+#![expect(clippy::let_underscore_must_use, reason = "removing what is already meant to be gone")]
+
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
@@ -31,6 +36,7 @@ const TXT_TAG: &[u8] = b"txtcold:";
 
 /// One open cold segment with its LIVE corpus contribution — the
 /// frozen numbers minus every tombstoned document's exact share.
+#[derive(Debug)]
 pub(super) struct ColdSeg {
     pub(super) seg: kevy_seg::Seg,
     pub(super) seq: u32,
@@ -45,6 +51,7 @@ pub use query::{ColdHit, ColdPage, ColdPageQuery};
 /// The frozen text segments for one windowed full-text index on one
 /// shard, plus the bloom and tombstones that let a query skip or correct
 /// them without opening a file.
+#[derive(Debug)]
 pub struct TextColdDir {
     pub(super) segs: Vec<ColdSeg>,
     seq: u32,

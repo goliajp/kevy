@@ -17,6 +17,13 @@
 //! Scope: single-URL upstream = single primary shard. Multi-shard
 //! mirroring (N URLs, one runner per shard) is a follow-up.
 
+// Teardown. `join` returns whatever the thread panicked with, and the
+// thread is already being abandoned; `shutdown` on a socket the peer
+// has closed reports what already happened. Neither has a caller left
+// to tell, and stopping halfway through a teardown leaves more behind
+// than finishing it blind.
+#![expect(clippy::let_underscore_must_use, reason = "teardown has nobody left to report to")]
+
 use std::net::{Shutdown, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -31,6 +38,7 @@ use crate::store::{Shards, lock_write};
 /// Handle to the background thread streaming from the primary. Owned
 /// by `DropGuard` so the runner outlives the public [`crate::Store`]
 /// clones but is joined on the last drop.
+#[derive(Debug)]
 pub(crate) struct ReplicaRunner {
     stop: Arc<AtomicBool>,
     /// `try_clone`'d socket handle from the live `ReplicaClient`, used

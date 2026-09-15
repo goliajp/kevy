@@ -12,6 +12,15 @@
 //! then `send()` — so a slow receiver can't stall publishes on unrelated
 //! channels.
 
+// A send to a subscriber that has gone away is the normal end of a
+// subscription, not an error to handle: the receiver drops when the
+// client disconnects, and the bus removes it on the next sweep.
+// Reporting here would turn every ordinary disconnect into a log line.
+#![expect(
+    clippy::let_underscore_must_use,
+    reason = "a dropped receiver is how a subscription ends"
+)]
+
 use crate::{KevyError, KevyResult};
 use std::collections::HashSet;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError, channel};

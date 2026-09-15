@@ -29,20 +29,51 @@ pub(crate) fn put_varint(out: &mut Vec<u8>, mut v: u32) {
     }
 }
 
-/// Decode a varint stream back to the values that were pushed.
-pub(crate) fn get_varints(blob: &[u8]) -> Vec<u32> {
-    let mut out = Vec::new();
+/// The last shift a `u32` varint can legally take: 32 bits at 7 a byte
+/// leaves the fifth byte carrying bits 28..32, so a sixth continuation byte
+/// is by definition an overlong encoding.
+const VARINT_MAX_SHIFT: u32 = 28;
+
+/// Decode one varint at `at`, advancing it past what was consumed.
+///
+/// `None` for the two ways a stream can stop having a next value: it ended,
+/// or it ended mid-varint (a trailing continuation byte with nothing after
+/// it), or the varint is overlong.
+///
+/// **Why the shift is bounded.** `put_varint` cannot emit more than five
+/// bytes, so a sixth continuation byte cannot come from this encoder and the
+/// bound is unreachable by argument. It is here because "unreachable by
+/// argument" and "does something sensible if reached" have to both be true:
+/// without it, `1 << 35` panics in a debug build (`attempt to shift left
+/// with overflow`) and silently masks to `1 << 3` in a release one. Six
+/// bytes — `80 80 80 80 80 01` — was enough to get both. Two profiles giving
+/// two different wrong answers for the same input is the shape this refuses.
+pub(crate) fn next_varint(blob: &[u8], at: &mut usize) -> Option<u32> {
     let mut cur = 0u32;
     let mut shift = 0u32;
-    for &b in blob {
+    loop {
+        let b = *blob.get(*at)?;
+        *at += 1;
         cur |= u32::from(b & 0x7f) << shift;
         if b & 0x80 == 0 {
-            out.push(cur);
-            cur = 0;
-            shift = 0;
-        } else {
-            shift += 7;
+            return Some(cur);
         }
+        shift += 7;
+        if shift > VARINT_MAX_SHIFT {
+            return None;
+        }
+    }
+}
+
+/// Decode a varint stream back to the values that were pushed.
+///
+/// Stops at the first byte that is not part of a whole, well-formed varint.
+/// For a blob this crate wrote that is the end of the blob.
+pub(crate) fn get_varints(blob: &[u8]) -> Vec<u32> {
+    let mut at = 0;
+    let mut out = Vec::new();
+    while let Some(v) = next_varint(blob, &mut at) {
+        out.push(v);
     }
     out
 }
@@ -263,6 +294,41 @@ mod tests {
             }
             assert_eq!(get_varints(&blob), case, "roundtrip {case:?}");
         }
+    }
+
+    /// Six bytes that used to do two different wrong things.
+    ///
+    /// `80 80 80 80 80 01` is an overlong varint: five continuation bytes,
+    /// so the sixth is shifted by 35. In a debug build that panicked —
+    /// "attempt to shift left with overflow" — and in a release build the
+    /// shift silently masked to 3 and the decoder returned `[8]`, a value
+    /// nothing wrote. The blob is bytes; the two profiles disagreed about
+    /// what they meant.
+    #[test]
+    fn an_overlong_varint_ends_the_stream_rather_than_the_process() {
+        assert_eq!(get_varints(&[0x80, 0x80, 0x80, 0x80, 0x80, 0x01]), Vec::<u32>::new());
+        let mut at = 0;
+        assert_eq!(next_varint(&[0x80, 0x80, 0x80, 0x80, 0x80, 0x01], &mut at), None);
+    }
+
+    /// The largest value that is not overlong still decodes. Without this
+    /// the bound above could be off by one in the safe direction and no
+    /// test would say so — the guard would be rejecting legal input.
+    #[test]
+    fn a_five_byte_varint_is_legal_and_u32_max_survives_a_roundtrip() {
+        let mut blob = Vec::new();
+        put_varint(&mut blob, u32::MAX);
+        assert_eq!(blob.len(), 5, "u32::MAX needs every one of the five bytes");
+        assert_eq!(get_varints(&blob), vec![u32::MAX]);
+    }
+
+    /// A blob that ends mid-varint yields what came before it and stops.
+    #[test]
+    fn a_trailing_continuation_byte_yields_no_value() {
+        let mut blob = Vec::new();
+        put_varint(&mut blob, 9);
+        blob.push(0x80);
+        assert_eq!(get_varints(&blob), vec![9]);
     }
 
     #[test]

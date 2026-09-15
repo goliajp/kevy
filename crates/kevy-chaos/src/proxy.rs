@@ -16,6 +16,13 @@
 //! the accept loop polls a nonblocking listener against a shutdown flag so
 //! `Drop` can join everything cleanly.
 
+// Teardown. `join` returns whatever the thread panicked with, and the
+// thread is already being abandoned; `shutdown` on a socket the peer
+// has closed reports what already happened. Neither has a caller left
+// to tell, and stopping halfway through a teardown leaves more behind
+// than finishing it blind.
+#![expect(clippy::let_underscore_must_use, reason = "teardown has nobody left to report to")]
+
 use std::io::Write as _;
 use std::io::{self, Read};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
@@ -64,7 +71,10 @@ struct Shared {
 
 impl Shared {
     fn kill_connections(&self) {
-        let mut conns = self.conns.lock().unwrap();
+        let mut conns = self
+            .conns
+            .lock()
+            .expect("the lock is only poisoned by a panic that already failed the process");
         for stream in conns.drain(..) {
             let _ = stream.shutdown(Shutdown::Both);
         }
@@ -192,7 +202,10 @@ fn spawn_forwarders(
         return; // clone failed: both originals drop => connection refused
     };
     {
-        let mut conns = shared.conns.lock().unwrap();
+        let mut conns = shared
+            .conns
+            .lock()
+            .expect("the lock is only poisoned by a panic that already failed the process");
         conns.push(c_reg);
         conns.push(u_reg);
     }

@@ -54,27 +54,54 @@ pub fn seal_page(page: &mut [u8; PAGE], n_slots: u16) {
     page[PAGE - PAGE_CRC..].copy_from_slice(&crc.to_le_bytes());
 }
 
+/// The most slots a data page can carry.
+///
+/// The slot array grows backward from the CRC toward the header, two bytes
+/// each, so it can occupy at most the space between them. This is a
+/// geometric bound and not a tight one — every slot also needs a cell, and
+/// the smallest cell is six bytes — but it is the bound that has to hold
+/// for a slot offset to be a place in the page at all.
+pub const MAX_SLOTS: u16 = ((PAGE - PAGE_CRC - PAGE_HDR) / 2) as u16;
+
 /// Verify a page's CRC. `true` = intact.
 pub fn page_intact(page: &[u8]) -> bool {
     page.len() == PAGE && {
-        let want = u32::from_le_bytes(page[PAGE - PAGE_CRC..].try_into().expect("4 bytes"));
+        let want = u32::from_le_bytes(
+            page[PAGE - PAGE_CRC..].try_into().expect("guarded by page.len() == PAGE above"),
+        );
         kevy_sys::checksum::crc32c(&page[..PAGE - PAGE_CRC]) == want
     }
 }
 
+/// Does this page's header describe a page?
+///
+/// [`page_intact`] answers a different question: whether the bytes are the
+/// bytes that were written. It cannot answer whether they mean anything,
+/// and `n_slots` lives inside the range the CRC covers — so a page rewritten
+/// by anything that recomputes the CRC is self-consistent no matter what it
+/// claims. A claim of 65535 slots puts slot 65534 at `PAGE - PAGE_CRC -
+/// 2 * 65535`, which underflows: a debug build panicked in the subtraction,
+/// a release build wrapped to an enormous offset and panicked on the index.
+/// Both are a panic out of a library that returns `SegError` for everything
+/// else it cannot read.
+pub fn page_shape_ok(page: &[u8]) -> bool {
+    page.len() == PAGE && page_slots(page) <= MAX_SLOTS
+}
+
 /// Slot count of a sealed page.
 pub fn page_slots(page: &[u8]) -> u16 {
-    u16::from_le_bytes(page[0..2].try_into().expect("2 bytes"))
+    u16::from_le_bytes(page[0..2].try_into().expect("a sealed page is PAGE bytes"))
 }
 
 /// The `i`-th cell offset of a sealed page (slots grow backward from
 /// the CRC).
 pub fn slot_offset(page: &[u8], i: u16) -> usize {
     let pos = PAGE - PAGE_CRC - 2 * (i as usize + 1);
-    u16::from_le_bytes(page[pos..pos + 2].try_into().expect("2 bytes")) as usize
+    u16::from_le_bytes(page[pos..pos + 2].try_into().expect("a sealed page is PAGE bytes")) as usize
 }
 
 /// A decoded cell: the key slice and where its payload is.
+#[derive(Debug)]
 pub enum Cell<'a> {
     Inline { key: &'a [u8], payload: &'a [u8] },
     Overflow { key: &'a [u8], total_len: u32, first_page: u32, n_pages: u32 },
@@ -88,14 +115,37 @@ impl<'a> Cell<'a> {
     }
 }
 
+/// Where a field of `n` bytes starting at `at` ends, or `None` if that is
+/// not a number.
+///
+/// The lengths in a cell header come off disk as a `u16` and a `u32`, and
+/// the offsets built from them are `usize`. On the 32-bit targets this
+/// crate is built for — `armv7-unknown-linux-musleabihf` and
+/// `thumbv7em-none-eabihf` are both in CI's matrix — `off + 6 + klen +
+/// plen` with a `plen` near `u32::MAX` exceeds `usize`, and the two build
+/// profiles then disagree: debug panics on the addition, release wraps to
+/// a smaller end than start and the slice lookup happens to return `None`.
+/// Getting the right answer by wrapping into a second bug is not the same
+/// as getting the right answer.
+///
+/// Split out from the byte reads so it can be tested at all: on a 64-bit
+/// host the overflow needs an `at` no page will ever have, and a pure
+/// function can simply be handed one.
+pub(crate) fn field_end(at: usize, n: usize) -> Option<usize> {
+    at.checked_add(n)
+}
+
 /// Decode the cell at `off`. `None` = malformed (treated as corrupt by
 /// the caller; a CRC-intact page never yields it).
 pub fn read_cell(page: &[u8], off: usize) -> Option<Cell<'_>> {
-    let klen = u16::from_le_bytes(page.get(off..off + 2)?.try_into().ok()?) as usize;
-    let plen = u32::from_le_bytes(page.get(off + 2..off + 6)?.try_into().ok()?);
-    let key = page.get(off + 6..off + 6 + klen)?;
+    let klen = u16::from_le_bytes(page.get(off..field_end(off, 2)?)?.try_into().ok()?) as usize;
+    let plen =
+        u32::from_le_bytes(page.get(field_end(off, 2)?..field_end(off, 6)?)?.try_into().ok()?);
+    let key_at = field_end(off, 6)?;
+    let key = page.get(key_at..field_end(key_at, klen)?)?;
+    let after_key = field_end(key_at, klen)?;
     if plen == OVERFLOW {
-        let rest = page.get(off + 6 + klen..off + 6 + klen + 12)?;
+        let rest = page.get(after_key..field_end(after_key, 12)?)?;
         Some(Cell::Overflow {
             key,
             total_len: u32::from_le_bytes(rest[0..4].try_into().ok()?),
@@ -103,7 +153,7 @@ pub fn read_cell(page: &[u8], off: usize) -> Option<Cell<'_>> {
             n_pages: u32::from_le_bytes(rest[8..12].try_into().ok()?),
         })
     } else {
-        let payload = page.get(off + 6 + klen..off + 6 + klen + plen as usize)?;
+        let payload = page.get(after_key..field_end(after_key, plen as usize)?)?;
         Some(Cell::Inline { key, payload })
     }
 }
@@ -190,9 +240,12 @@ pub fn decode_footer(b: &[u8]) -> Option<(u64, u32, Vec<u8>, Vec<u8>, Vec<(u32, 
         return None;
     }
     let mut o = 0usize;
+    // Same reason as `read_cell`: every `n` here is a length read out of the
+    // file, so the running offset must not be assumed to stay a number.
     let take = |o: &mut usize, n: usize| -> Option<&[u8]> {
-        let s = body.get(*o..*o + n)?;
-        *o += n;
+        let end = field_end(*o, n)?;
+        let s = body.get(*o..end)?;
+        *o = end;
         Some(s)
     };
     let records = u64::from_le_bytes(take(&mut o, 8)?.try_into().ok()?);

@@ -198,6 +198,52 @@ fn invalid(msg: impl Into<String>) -> io::Error {
 mod tests {
     use super::*;
 
+    /// Every missing field names its own verb and its own field.
+    ///
+    /// `classify_pubsub` is six near-identical arms, each repeating the
+    /// verb's name in two or three error strings. That shape has one
+    /// characteristic defect — an arm copied from the one above it and not
+    /// fully renamed — and the error text is the only place it would show.
+    /// A `psubscribe` frame reporting "subscribe: missing channel" sends the
+    /// reader to the wrong arm, and nothing else in the type system or the
+    /// tests would notice.
+    ///
+    /// Table-driven over every arm and every truncation point, which is also
+    /// what covers the eighteen never-executed regions the coverage atlas
+    /// reports here: they are all the refusal side of `it.next()`.
+    #[test]
+    fn every_missing_field_names_its_own_verb_and_field() {
+        // (verb, the fields it consumes in order)
+        let arms: &[(&str, &[&str])] = &[
+            ("subscribe", &["channel", "count"]),
+            ("psubscribe", &["pattern", "count"]),
+            ("unsubscribe", &["channel", "count"]),
+            ("punsubscribe", &["pattern", "count"]),
+            ("message", &["channel", "payload"]),
+            ("pmessage", &["pattern", "channel", "payload"]),
+        ];
+
+        let mut checked = 0;
+        for (verb, fields) in arms {
+            for (n, missing) in fields.iter().enumerate() {
+                // The verb, then every field before the missing one, then
+                // nothing — so `it.next()` returns `None` exactly there.
+                let mut items = vec![Reply::Bulk(verb.as_bytes().to_vec())];
+                items.extend((0..n).map(|_| Reply::Bulk(b"x".to_vec())));
+                let err = classify_pubsub(Reply::Array(items))
+                    .expect_err("{verb} with {n} fields must not classify")
+                    .to_string();
+                let want = format!("{verb}: missing {missing}");
+                assert!(
+                    err.contains(&want),
+                    "a {verb} frame missing its {missing} said {err:?}, not {want:?}"
+                );
+                checked += 1;
+            }
+        }
+        assert_eq!(checked, 13, "every arm and truncation point was exercised");
+    }
+
     #[test]
     fn classify_subscribe_ack() {
         let r = Reply::Array(vec![

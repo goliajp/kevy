@@ -33,20 +33,23 @@ fn inline_one_byte() {
 }
 
 #[test]
-fn inline_at_boundary_22() {
-    let v: Vec<u8> = (0u8..22).collect();
+fn inline_at_boundary_23() {
+    let v: Vec<u8> = (0u8..23).collect();
     let s = SmallBytes::from_slice(&v);
     assert!(s.is_inline());
-    assert_eq!(s.len(), 22);
+    assert_eq!(s.len(), 23);
     assert_eq!(s.as_slice(), v);
 }
 
+/// One past the buffer. These two used to sit at 22 and 23, which pinned
+/// an off-by-one rather than the layout: the tag is a sibling field, so
+/// the buffer holds 23 payload bytes, not 22.
 #[test]
-fn heap_at_boundary_23() {
-    let v: Vec<u8> = (0u8..23).collect();
+fn heap_at_boundary_24() {
+    let v: Vec<u8> = (0u8..24).collect();
     let s = SmallBytes::from_slice(&v);
     assert!(!s.is_inline());
-    assert_eq!(s.len(), 23);
+    assert_eq!(s.len(), 24);
     assert_eq!(s.as_slice(), v);
 }
 
@@ -258,7 +261,7 @@ fn from_byte_slice_round_trip() {
 
 #[test]
 fn from_vec_dispatches_inline_or_heap() {
-    // ≤ 22 → inline (copies)
+    // ≤ 23 → inline (copies)
     let inline_src: SmallBytes = vec![1u8, 2, 3].into();
     assert!(inline_src.is_inline());
     assert_eq!(inline_src.as_slice(), &[1, 2, 3]);
@@ -324,7 +327,7 @@ fn to_vec_copies_inline_and_heap() {
 
 // ===== alloc-count test =====
 //
-// The whole point of SmallBytes' SSO is "no heap alloc when payload ≤ 22
+// The whole point of SmallBytes' SSO is "no heap alloc when payload ≤ 23
 // bytes". We can prove it by swapping in a counting allocator and asserting
 // the inline path produces ZERO Allocator::alloc calls. A heap-bound payload
 // produces at least one. Wrapping the system allocator (not replacing it
@@ -351,6 +354,9 @@ thread_local! {
     static THREAD_ALLOC_CALLS: Cell<usize> = const { Cell::new(0) };
 }
 
+// SAFETY: every method forwards to `System`, which is a correct `GlobalAlloc`; the
+// only addition is a thread-local counter that allocates nothing itself. Blocks are
+// therefore returned to the same allocator that produced them.
 unsafe impl GlobalAlloc for CountingAlloc {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         // `try_with` so if the TLS is being destroyed (process teardown)
@@ -417,7 +423,7 @@ fn heap_payload_does_allocate() {
 }
 
 /// REAL production incident: two legitimately-constructed
-/// `SmallBytes` values — one inline (≤22 B) and one heap (>22 B) — get
+/// `SmallBytes` values — one inline (≤23 B) and one heap (>23 B) — get
 /// compared by HashMap on a hash-collision. They have different
 /// lengths, so they land in different union arms. Pre-fix: the
 /// `unreachable!()` on the mixed arm panicked. Post-fix: falls back
@@ -488,4 +494,84 @@ fn partial_eq_unequal_length_across_inline_heap_is_false() {
     // return false because the lengths differ.
     assert_ne!(short_inline, long_heap);
     assert_ne!(long_heap, short_inline);
+}
+
+/// `heap_bytes` reports the ALLOCATION, and a buffer with slack is the
+/// case where that differs from the length.
+///
+/// `maxmemory` charges this number, and `from_vec` adopts its argument's
+/// buffer as it stands — so a value grown by `APPEND` arrives carrying
+/// the doubling ladder's slack. Reporting `len` charged 360 bytes for a
+/// 640-byte allocation on the eleventh append to one key.
+#[test]
+fn a_buffer_with_slack_is_charged_for_what_it_holds() {
+    let mut v = Vec::with_capacity(4096);
+    v.extend_from_slice(&[b'x'; 1000]);
+    let s = SmallBytes::from_vec(v);
+    assert_eq!(s.len(), 1000);
+    assert_eq!(s.heap_bytes(), 4096, "charged the length, not the allocation");
+
+    // The exact shape the store's APPEND takes: take, grow, re-wrap.
+    let mut acc = SmallBytes::from_slice(&[b'x'; 40]);
+    let mut ever_exceeded = false;
+    for _ in 0..12 {
+        let mut owned = core::mem::take(&mut acc).into_vec();
+        owned.extend_from_slice(&[b'y'; 40]);
+        let cap = owned.capacity();
+        acc = SmallBytes::from_vec(owned);
+        assert_eq!(acc.heap_bytes(), cap, "the charge left the allocation behind");
+        ever_exceeded |= cap > acc.len();
+    }
+    // The floor: if growth never left slack, the assertion above held
+    // for a reason that has nothing to do with what is being tested.
+    assert!(ever_exceeded, "no append produced slack, so nothing was proven");
+}
+
+/// An exact allocation still charges its length — the case the doc
+/// example shows, kept here so the two cannot drift apart.
+#[test]
+fn an_exact_allocation_charges_its_length() {
+    assert_eq!(SmallBytes::from_slice(&[b'x'; 1000]).heap_bytes(), 1000);
+    assert_eq!(SmallBytes::from_slice(b"user:1").heap_bytes(), 0);
+    assert_eq!(SmallBytes::heap_bytes_for(&[b'x'; 1000]), 1000);
+    assert_eq!(SmallBytes::heap_bytes_for(b"user:1"), 0);
+}
+
+/// The inline buffer is 23 bytes and the tag is a separate field, so a
+/// 23-byte value fits inline. It used to allocate.
+///
+/// `INLINE_LEN_MAX` was `INLINE_CAP - 1`. That `- 1` would be right if
+/// the tag were carved out of `data`, and it is not: `Inline` is
+/// `{ data: [u8; 23], tag: u8 }`, two sibling fields totalling 24. So
+/// `data[22]` was written as zero, never read, and one whole length
+/// bucket paid for a malloc, a free, a pointer chase and an allocator
+/// header it did not need.
+///
+/// Asserted through the crate's own allocation counter rather than by
+/// reading the constant back, so it is the behaviour under test and not
+/// the arithmetic.
+#[test]
+fn a_value_the_length_of_the_inline_buffer_stays_inline() {
+    assert_eq!(INLINE_CAP, 23);
+    assert_eq!(INLINE_LEN_MAX as usize, INLINE_CAP, "the tag is a field, not a byte of data");
+
+    let allocs = measure_allocs(|| {
+        let s = SmallBytes::from_slice(&[b'x'; 23]);
+        std::hint::black_box(&s);
+        std::hint::black_box(s.as_slice());
+    });
+    assert_eq!(allocs, 0, "a 23-byte value went to the heap");
+
+    // Round-trips, and the byte the old bound never used carries data.
+    let v = [7u8; 23];
+    let s = SmallBytes::from_slice(&v);
+    assert_eq!(s.as_slice(), &v);
+    assert_eq!(s.len(), 23);
+    assert_eq!(s.heap_bytes(), 0);
+
+    // And one more byte still goes to the heap — the boundary moved by
+    // exactly one, which is what makes this a bound and not a guess.
+    let over = SmallBytes::from_slice(&[b'x'; 24]);
+    assert_eq!(over.len(), 24);
+    assert!(over.heap_bytes() > 0, "24 bytes cannot fit a 23-byte buffer");
 }

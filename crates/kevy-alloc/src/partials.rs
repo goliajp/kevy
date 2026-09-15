@@ -18,7 +18,7 @@ const PARTIAL_RING: usize = 8;
 
 /// A small ring of (segment, span index) candidates believed to have
 /// room.
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct PartialRing {
     entries: [(usize, u8); PARTIAL_RING],
     len: u8,

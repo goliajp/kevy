@@ -6,6 +6,12 @@
 //!   gen_docs <repo-root> --check  — exit 1 if either file is stale
 //!                                    (the aigate phase-2 CI clamp)
 
+// `write!` into a `String` returns a `Result` because `fmt::Write` must,
+// not because it can fail: `String`'s impl is infallible. Discarding it
+// is the whole of the handling there is, and saying so once here beats
+// the same sentence beside every line.
+#![expect(clippy::let_underscore_must_use, reason = "writing to a String cannot fail")]
+
 use std::fmt::Write as _;
 use std::path::Path;
 use std::process::ExitCode;

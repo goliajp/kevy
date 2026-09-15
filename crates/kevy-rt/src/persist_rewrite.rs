@@ -4,6 +4,11 @@
 //! the Aof-side state transitions live in kevy-persist's
 //! `aof_rewrite.rs`; this file owns the reactor-side protocol.
 
+// Best-effort removal, on paths where the file is being abandoned.
+// A file that will not delete is a stray the next sweep collects,
+// and refusing here would abandon the rest of the cleanup.
+#![expect(clippy::let_underscore_must_use, reason = "removing what is already meant to be gone")]
+
 use crate::Commands;
 use crate::persist_worker::{PersistDone, PersistJob};
 use crate::shard::Shard;

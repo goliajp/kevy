@@ -38,6 +38,12 @@
 //! failure to bind is what turned a port collision into a test asserting
 //! against someone else's data.
 
+// Panicking IS this crate's product. It hands tests a port and the proof a
+// server took it; `assert_listening` says so in its name. A `Result` here
+// would move the failure to a `?` in forty-two test files, where it would
+// surface later as a connection refused somewhere else — which is the
+// accident this crate was written to stop.
+#![expect(clippy::panic, reason = "a test harness reports by failing the test")]
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::{Duration, Instant};

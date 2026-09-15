@@ -39,6 +39,7 @@ const MAGIC: u64 = 0x6b65_7679_616c_6c63; // "kevyallc"
 
 /// The header at the base of every segment.
 #[repr(C)]
+#[derive(Debug)]
 pub struct Segment {
     magic: u64,
     /// Intrusive list of a heap's segments — an allocator cannot use a
