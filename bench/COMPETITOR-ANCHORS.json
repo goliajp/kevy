@@ -243,7 +243,7 @@
       ]
     },
     "stackexchange-redis": {
-      "pinned": "3.1.31",
+      "pinned": "3.2.1",
       "role": "clientgate's .NET client; its first-class API is the evidence for several MUST verbs",
       "upstream": {
         "kind": "nuget",
