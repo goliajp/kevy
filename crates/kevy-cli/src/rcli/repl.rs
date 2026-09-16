@@ -97,7 +97,7 @@ fn run_line(s: &mut Session, argv: &[Vec<u8>], repeat: i64, skip: usize) -> Opti
         return Some(0);
     }
     if argv[0].first() == Some(&b':') {
-        super::help::preference(argv, false);
+        super::help::preference(argv, super::help::Origin::Prompt, s.pubsub_mode);
     } else if word("restart") {
         write_out(b"Use 'restart' only in Lua debugging mode.\n");
     } else if argv.len() == 3 && word("connect") {
@@ -123,10 +123,6 @@ fn wait_for_messages_or_stdin(s: &mut Session) {
         && (std::io::stdout().is_terminal() || std::env::var_os("FAKETTY").is_some());
     let color = show_info && std::env::var("TERM").is_ok_and(|t| t.contains("xterm"));
     while s.pubsub_mode {
-        // A line typed ahead is already read: it is the key press being waited for.
-        if super::input::typed_ahead() {
-            return;
-        }
         if !drain_buffered(s) {
             s.print_context_error();
             std::process::exit(1);
@@ -141,8 +137,13 @@ fn wait_for_messages_or_stdin(s: &mut Session) {
             }
         }
         s.arm_interrupt();
-        let ready = kevy_sys::wait_readable(&[fd, 0], Duration::from_secs(5))
-            .unwrap_or_else(|_| vec![false, true]);
+        // A line typed ahead is already out of the descriptor: it counts as
+        // input waiting, though a message that is also waiting goes first.
+        let typed = super::input::typed_ahead();
+        let wait = if typed { Duration::ZERO } else { Duration::from_secs(5) };
+        let mut ready =
+            kevy_sys::wait_readable(&[fd, 0], wait).unwrap_or_else(|_| vec![false, true]);
+        ready[1] |= typed;
         if show_info {
             write_out(b"\x1b[K");
         }

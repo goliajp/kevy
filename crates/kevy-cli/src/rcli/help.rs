@@ -117,24 +117,33 @@ impl super::session::Session {
     }
 }
 
-/// `:set hints` / `:set nohints`, and the messages redis-cli prints for
-/// anything else. `from_rc`: the line came from the preferences file, whose
-/// messages say so.
-pub(crate) fn preference(argv: &[Vec<u8>], from_rc: bool) {
+/// Where a `:` line came from; a line from the preferences file says so.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Origin {
+    Prompt,
+    File,
+}
+
+/// `:set hints` / `:set nohints`, `:get pubsub` (valkey-cli's; DEV-018), and
+/// the messages for anything else. `subscribed`: what `:get pubsub` reports.
+pub(crate) fn preference(argv: &[Vec<u8>], origin: Origin, subscribed: bool) {
     let is = |i: usize, w: &str| argv.get(i).is_some_and(|a| a.eq_ignore_ascii_case(w.as_bytes()));
-    let origin: &[u8] = if from_rc { b".kevyclirc: " } else { b"" };
+    let from: &[u8] = if origin == Origin::File { b".kevyclirc: " } else { b"" };
+    let say = |parts: &[&[u8]]| super::send::write_out(&[&[from], parts].concat().concat());
     if is(0, ":set") && argv.len() >= 2 {
         if is(1, "hints") || is(1, "nohints") {
             super::session::set_hints(is(1, "hints"));
         } else {
-            super::send::write_out(
-                &[origin, b"unknown kevy-cli preference '", argv[1].as_slice(), b"'\n"].concat(),
-            );
+            say(&[b"unknown kevy-cli preference '", &argv[1], b"'\n"]);
+        }
+    } else if is(0, ":get") && argv.len() >= 2 {
+        if is(1, "pubsub") {
+            super::send::write_out(if subscribed { b"1\n" } else { b"0\n" });
+        } else {
+            say(&[b"unknown kevy-cli get option '", &argv[1], b"'\n"]);
         }
     } else {
-        super::send::write_out(
-            &[origin, b"unknown kevy-cli internal command '", argv[0].as_slice(), b"'\n"].concat(),
-        );
+        say(&[b"unknown kevy-cli internal command '", &argv[0], b"'\n"]);
     }
 }
 
@@ -158,7 +167,7 @@ pub(crate) fn load_preferences() {
         if let Some(argv) = super::splitargs::split_args(line)
             && !argv.is_empty()
         {
-            preference(&argv, true);
+            preference(&argv, Origin::File, false);
         }
     }
 }
