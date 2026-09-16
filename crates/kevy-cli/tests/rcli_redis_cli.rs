@@ -265,7 +265,7 @@ fn option_errors_exit_with_redis_cli_messages() {
             "Invalid percentile '101' in --latency-percentiles (must be a number between 0 and 100)."
         )
     );
-    assert_eq!(err(&["--scan"]), one("kevy-cli: --scan is not implemented yet"));
+    assert_eq!(err(&["--stat"]), one("kevy-cli: --stat is not implemented yet"));
     let help = cli(&["--help"], b"", &[]);
     assert!(
         help.stdout.contains("-p <port>") && help.stdout.contains("sql compile") && help.code == 0
@@ -958,4 +958,186 @@ fn get_pubsub_reports_the_subscription() {
         out.stdout,
         "0\nunknown kevy-cli get option 'colour'\nunknown kevy-cli internal command ':unset'\nsubscribe\nc\n1\n1\n"
     );
+}
+
+#[test]
+fn scan_lists_keys_and_reports_what_it_cannot_read() {
+    let s = Srv::start();
+    let p = s.port();
+    cli(&["-p", &p, "MSET", "a", "1", "sp ace", "2", "k:1", "3"], b"", &[]);
+    let sorted = |out: String| {
+        let mut lines: Vec<String> = out.lines().map(str::to_string).collect();
+        lines.sort();
+        lines
+    };
+    assert_eq!(sorted(cli(&["-p", &p, "--scan"], b"", &[]).stdout), ["a", "k:1", "sp ace"]);
+    assert_eq!(
+        sorted(cli(&["-p", &p, "--scan", "--count", "1"], b"", TTY).stdout),
+        ["\"a\"", "\"k:1\"", "\"sp ace\""]
+    );
+    assert_eq!(
+        cli(&["-p", &p, "--scan", "--pattern", "k:*", "-i", "0.001"], b"", &[]).stdout,
+        "k:1\n"
+    );
+    // What SCAN answered, when it is not a page of keys.
+    for (reply, message) in [
+        (&b"-ERR no\r\n"[..], "SCAN error: ERR no\n"),
+        (b":1\r\n", "Non ARRAY response from SCAN!\n"),
+        (b"*1\r\n$1\r\n0\r\n", "Invalid element count from SCAN!\n"),
+        (b"*2\r\n:0\r\n*0\r\n", "Non ARRAY response from SCAN!\n"),
+        (b"*2\r\n$1\r\n0\r\n*1\r\n:5\r\n", "Non ARRAY response from SCAN!\n"),
+        (b"", "\nI/O error\n"),
+    ] {
+        let out = canned(reply, &["--scan"], b"");
+        assert_eq!((out.stderr.as_str(), out.code), (message, 1), "{reply:?}");
+    }
+    assert_eq!(cli(&["-p", "1", "--scan"], b"", &[]).code, 1);
+}
+
+#[test]
+fn ctrl_c_stops_a_scan_cleanly() {
+    // A server whose SCAN never finishes: every page points at the next.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port().to_string();
+    let server = std::thread::spawn(move || {
+        use std::io::Read;
+        let (mut conn, _) = listener.accept().unwrap();
+        let mut buf = [0u8; 256];
+        while matches!(conn.read(&mut buf), Ok(n) if n > 0) {
+            if conn.write_all(b"*2\r\n$1\r\n7\r\n*1\r\n$3\r\nkey\r\n").is_err() {
+                break;
+            }
+        }
+    });
+    let scan = Live::start(&["-p", &port, "--scan", "-i", "0.01"], &[]);
+    scan.wait_for("key\nkey\n");
+    scan.interrupt();
+    assert_eq!(scan.finish(), 0, "a stopped scan is a finished scan");
+    server.join().unwrap();
+}
+
+/// A server that answers each read with the next canned bytes, on one
+/// connection. A pipeline arrives as one write, so its replies go together.
+fn scripted_server(script: Vec<&'static [u8]>) -> (String, std::thread::JoinHandle<()>) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port().to_string();
+    let server = std::thread::spawn(move || {
+        use std::io::Read;
+        let (mut conn, _) = listener.accept().unwrap();
+        let mut buf = [0u8; 4096];
+        for reply in script {
+            if !matches!(conn.read(&mut buf), Ok(n) if n > 0) || conn.write_all(reply).is_err() {
+                return;
+            }
+        }
+    });
+    (port, server)
+}
+
+#[test]
+fn bigkeys_and_memkeys_report_and_explain_what_stopped_them() {
+    let s = Srv::start();
+    let p = s.port();
+    cli(&["-p", &p, "MSET", "s1", "x", "s2", "xxxxx"], b"", &[]);
+    cli(&["-p", &p, "RPUSH", "l", "a", "b"], b"", &[]);
+    let big = cli(&["-p", &p, "--bigkeys"], b"", &[]).stdout;
+    assert!(
+        big.contains("[00.00%] Biggest string found so far \"s2\" with 5 bytes\n")
+            || big.contains("found so far \"s1\" with 1 bytes\n"),
+        "{big}"
+    );
+    assert!(
+        big.contains(
+            "Sampled 3 keys in the keyspace!\nTotal key length in bytes is 5 (avg len 1.67)\n"
+        ),
+        "{big}"
+    );
+    assert!(big.ends_with("0 streams with 0 entries (00.00% of keys, avg size 0.00)\n"), "{big}");
+    let mem = cli(&["-p", &p, "--memkeys", "--memkeys-samples", "2"], b"", TTY).stdout;
+    assert!(
+        mem.contains("Keys sampled: 3\n")
+            && mem.contains("strings with ")
+            && mem.contains(" bytes ("),
+        "{mem}"
+    );
+    assert!(!mem.contains("Sampled 3 keys"), "a terminal already saw the count");
+
+    let fatal = |script: Vec<&'static [u8]>, message: &str| {
+        let (port, server) = scripted_server(script);
+        let out = cli(&["-p", &port, "--bigkeys"], b"", &[]);
+        assert_eq!((out.stderr.as_str(), out.code), (message, 1));
+        server.join().unwrap();
+    };
+    fatal(vec![b"-ERR no\r\n"], "Couldn't determine DBSIZE: ERR no\n");
+    fatal(vec![b"+OK\r\n"], "Non INTEGER response from DBSIZE!\n");
+    fatal(vec![b":1\r\n", b"-ERR busy\r\n"], "Error: ERR busy\n");
+    fatal(
+        vec![b":1\r\n", b"+OK\r\n", b"*2\r\n$1\r\n0\r\n*1\r\n$1\r\nk\r\n", b"-ERR type\r\n"],
+        "TYPE returned an error: ERR type\n",
+    );
+    fatal(vec![b":1\r\n", b"+OK\r\n", b"*2\r\n$1\r\n0\r\n*1\r\n$1\r\nk\r\n"], "\nI/O error\n");
+    fatal(
+        vec![b":1\r\n", b"+OK\r\n", b"*2\r\n$1\r\n0\r\n*1\r\n$1\r\nk\r\n", b"+string\r\n"],
+        "\nI/O error\n",
+    );
+    fatal(vec![], "\nI/O error\n");
+
+    // A size that fails is a warning, and the key counts with size 0.
+    let (port, server) = scripted_server(vec![
+        b":2\r\n",
+        b"-ERR unknown command 'READONLY'\r\n",
+        b"*2\r\n$1\r\n0\r\n*3\r\n$1\r\nk\r\n$4\r\ngone\r\n$1\r\nm\r\n",
+        b"+string\r\n+none\r\n+vectorset\r\n",
+        b"-WRONGTYPE\r\n",
+    ]);
+    let out = cli(&["-p", &port, "--bigkeys", "-i", "0.001"], b"", &[]);
+    assert_eq!(out.stderr, "Warning:  STRLEN on 'k' failed (may have changed type)\n");
+    assert!(
+        out.stdout.contains("Sampled 2 keys in the keyspace!\n")
+            && out.stdout.contains("1 vectorsets with 0 ? (50.00% of keys"),
+        "{}",
+        out.stdout
+    );
+    server.join().unwrap();
+}
+
+#[test]
+fn ctrl_c_ends_bigkeys_with_the_summary_so_far() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port().to_string();
+    let server = std::thread::spawn(move || {
+        use std::io::Read;
+        let (mut conn, _) = listener.accept().unwrap();
+        let mut buf = [0u8; 4096];
+        let mut n = 0;
+        while let Ok(got @ 1..) = conn.read(&mut buf) {
+            let asked = &buf[..got];
+            let reply: &[u8] = if asked.windows(6).any(|w| w == b"DBSIZE") {
+                b":1000\r\n"
+            } else if asked.windows(4).any(|w| w == b"SCAN") {
+                b"*2\r\n$1\r\n7\r\n*1\r\n$1\r\nk\r\n"
+            } else if asked.windows(4).any(|w| w == b"TYPE") {
+                b"+list\r\n"
+            } else if asked.windows(4).any(|w| w == b"LLEN") {
+                n += 1;
+                if n == 1 { b":5\r\n" } else { b":1\r\n" }
+            } else {
+                b"+OK\r\n"
+            };
+            if conn.write_all(reply).is_err() {
+                break;
+            }
+        }
+    });
+    let walk = Live::start(&["-p", &port, "--bigkeys"], &[]);
+    walk.wait_for("Biggest list   found so far \"k\" with 5 items\n");
+    walk.interrupt();
+    walk.wait_for(" keys in the keyspace!\n");
+    let seen = String::from_utf8_lossy(&walk.stdout.lock().unwrap()).into_owned();
+    assert!(
+        seen.contains("\n-------- summary -------\n\n["),
+        "stopped early, it says how far: {seen}"
+    );
+    assert_eq!(walk.finish(), 0);
+    server.join().unwrap();
 }

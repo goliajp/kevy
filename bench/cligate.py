@@ -99,7 +99,8 @@ def parse_cases(path: pathlib.Path):
         elif key == "stdin":
             cur["stdin"] += unescape(expand(value))
         elif key in ("run", "deviation", "kevy.stdout", "kevy.stderr", "kevy.exit",
-                     "kevy.stdout-contains", "kevy.stdout-replace", "timeline", "screen"):
+                     "kevy.stdout-contains", "kevy.stdout-replace", "timeline", "screen",
+                     "compare"):
             cur[key] = value
         else:
             sys.exit(f"cligate: {path}:{lineno}: unknown field {key!r}")
@@ -255,7 +256,8 @@ def own_name(text: bytes) -> bytes:
 
 def expected_kevy(case, ref):
     """What kevy-cli must print: redis-cli's bytes, or the deviation's."""
-    if "deviation" not in case:
+    if "deviation" not in case or (case.get("compare") == "lines-any-order"
+                                   and "kevy.stdout" not in case):
         return own_name(ref.stdout), own_name(ref.stderr), ref.returncode
     if "kevy.stdout-replace" in case:
         # A deviation in a few bytes of a long output: redis-cli's output with
@@ -276,6 +278,10 @@ def expected_kevy(case, ref):
 
 def agrees(case, want, got) -> bool:
     """A deviation may pin only a fragment of stdout (help text, version)."""
+    if case.get("compare") == "lines-any-order":
+        # A deviation in order only: the same lines, each as often.
+        return (sorted(want[0].split(b"\n")) == sorted(got[0].split(b"\n"))
+                and want[1:] == got[1:])
     if "kevy.stdout-contains" in case:
         return (unescape(case["kevy.stdout-contains"]) in got[0]
                 and want[1:] == got[1:])
@@ -364,7 +370,7 @@ def main() -> int:
                           f"(cases.txt:{case['line']}): {r.stdout[:120]!r} vs {again.stdout[:120]!r}")
                 continue
             pinned = "deviation" in case and not any(
-                k in case for k in ("kevy.stdout-contains", "kevy.stdout-replace"))
+                k in case for k in ("kevy.stdout-contains", "kevy.stdout-replace", "compare"))
             if r.returncode == 124 and r.stderr == b"<timed out>" and not pinned:
                 # Two CLIs that both hang agree on nothing. A deviation that
                 # pins kevy-cli's whole output does not read redis-cli's.

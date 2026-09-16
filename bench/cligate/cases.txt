@@ -9,6 +9,7 @@
 #           not stdout's bytes; each CLI gets its own empty history file
 #   deviation + kevy.stdout / kevy.stderr / kevy.exit / kevy.stdout-contains
 #           or kevy.stdout-replace (`old => new` over redis-cli's output)
+#   compare: lines-any-order — for a deviation in line order only
 #           when kevy-cli is meant to differ (see deviations.txt)
 # Ids refer to .claude/rfcs/2026-09-17-kevy-cli-superset/redis-cli-inventory.md §8.
 
@@ -965,3 +966,125 @@ screen: pty
 env: TERM=dumb
 timeline: 0.5 ; ping\r ; 0.4 ; \x04 ; 0.3
 run: -p $PORT
+
+# ─── P2 · --scan ─────────────────────────────────────────────────────────────
+
+[RC-073 scan-lists-every-key]
+setup: MSET a 1 b 2 "sp ace" 3 "q\"uote" 4 k:1 x k:2 y
+run: -p $PORT --scan
+
+[RC-073 scan-on-a-terminal-quotes-keys]
+setup: MSET a 1 b 2 "sp ace" 3 "q\"uote" 4 k:1 x k:2 y
+env: FAKETTY=1
+run: -p $PORT --scan
+
+[RC-074 scan-pattern]
+setup: MSET a 1 b 2 "sp ace" 3 "q\"uote" 4 k:1 x k:2 y
+run: -p $PORT --scan --pattern k:*
+
+[RC-075 scan-quoted-pattern]
+setup: MSET a 1 b 2 "sp ace" 3 "q\"uote" 4 k:1 x k:2 y
+run: -p $PORT --scan --quoted-pattern "\"sp *\""
+
+[RC-076 scan-a-key-per-page]
+setup: MSET a 1 b 2 "sp ace" 3 "q\"uote" 4 k:1 x k:2 y
+run: -p $PORT --scan --count 1
+
+[RC-073 scan-ignores-the-output-format]
+setup: MSET a 1 b 2 "sp ace" 3 "q\"uote" 4 k:1 x k:2 y
+run: -p $PORT --scan --json
+
+[RC-073 scan-with-an-interval]
+setup: MSET a 1 b 2 "sp ace" 3 "q\"uote" 4 k:1 x k:2 y
+run: -p $PORT --scan -i 0.01
+
+[RC-073 scan-refused]
+run: -p $AUTH_PORT --scan
+
+[RC-073 scan-without-a-server]
+run: -p 1 --scan
+
+[RC-073 scan-an-empty-keyspace]
+run: -p $PORT --scan
+
+[RC-073 scan-a-key-with-a-nul-byte]
+deviation: DEV-019
+setup: --quoted-input SET '"a\x00b"' v
+run: -p $PORT --scan
+kevy.stdout: a\x00b\n
+
+# ─── P2 · --bigkeys / --memkeys ──────────────────────────────────────────────
+# DEV-020: the summary lists types in kevy-cli's fixed order; redis-cli's
+# follows the state of its internal hash table. Lines compare in any order.
+
+[RC-077 bigkeys-report]
+deviation: DEV-020
+compare: lines-any-order
+setup: MSET s1 x s2 xxxxx
+setup: RPUSH l1 a b c
+setup: SADD st a
+setup: HSET h f v g w
+setup: ZADD z 1 a 2 b
+setup: XADD x 1-1 f v
+run: -p $PORT --bigkeys
+
+[RC-077 bigkeys-module-types]
+deviation: DEV-020
+compare: lines-any-order
+setup: SET s xyz
+setup: VADD v VALUES 2 1 2 e1
+setup: JSON.SET j $ {"a":1}
+run: -p $PORT --bigkeys
+
+[RC-077 bigkeys-an-empty-keyspace]
+deviation: DEV-020
+compare: lines-any-order
+run: -p $PORT --bigkeys
+
+[RC-077,RC-080 bigkeys-on-a-terminal]
+deviation: DEV-020
+compare: lines-any-order
+env: FAKETTY=1
+setup: MSET s1 x s2 xxxxx
+setup: RPUSH l1 a b c
+setup: SADD st a
+setup: HSET h f v g w
+setup: ZADD z 1 a 2 b
+setup: XADD x 1-1 f v
+run: -p $PORT --bigkeys
+
+[RC-077 bigkeys-with-pattern-and-count]
+deviation: DEV-020
+compare: lines-any-order
+setup: MSET s1 x s2 xxxxx
+setup: RPUSH l1 a b c
+setup: SADD st a
+setup: HSET h f v g w
+setup: ZADD z 1 a 2 b
+setup: XADD x 1-1 f v
+run: -p $PORT --bigkeys --pattern s* --count 2
+
+[RC-077 bigkeys-refused]
+run: -p $AUTH_PORT --bigkeys
+
+[RC-078 memkeys-report]
+deviation: DEV-020
+compare: lines-any-order
+setup: MSET s1 x s2 xxxxx
+setup: RPUSH l1 a b c
+setup: SADD st a
+setup: HSET h f v g w
+setup: ZADD z 1 a 2 b
+setup: XADD x 1-1 f v
+run: -p $PORT --memkeys
+
+[RC-078,RC-079 memkeys-with-samples]
+deviation: DEV-020
+compare: lines-any-order
+setup: MSET s1 x s2 xxxxx
+setup: RPUSH l1 a b c
+setup: SADD st a
+setup: HSET h f v g w
+setup: ZADD z 1 a 2 b
+setup: XADD x 1-1 f v
+run: -p $PORT --memkeys --memkeys-samples 3
