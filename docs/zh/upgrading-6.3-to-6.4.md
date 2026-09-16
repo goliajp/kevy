@@ -21,6 +21,7 @@ kevy-embedded = "6.4.0"
 | 抓取 `INFO` | `INFO clients` 多了 `blocked_clients`；新增 `INFO allocator` | 6 |
 | 从 Rust 直接嵌入 `kevy-seg`、`kevy-ring` 或 `kevy-time` | 三种原本会损坏数据或 panic 的输入，现在被拒绝或饱和处理 | 7 |
 | 拉 `ghcr.io/goliajp/kevy:latest` | 重新拉一次；这个 tag 现在指向 6.4.0 | — |
+| 从 npm 用 `@goliapkg/kevy-node`，或以嵌入方式用 `@goliapkg/kevy-ts` | 6.0.0–6.3.0 装得上但加载不了引擎；6.4.0 可以 | [npm](#npmkevy-node-与-kevy-ts-6063-加载不了) |
 
 ---
 
@@ -124,6 +125,21 @@ npm install @goliapkg/kevy-node@6.4.0     # Node 原生
 pip install kevy==6.4.0
 go get github.com/goliajp/kevy-go/v6@v6.4.0
 cargo install kevy --version 6.4.0        # 服务器二进制，从源码构建
+npm install -g @goliapkg/kevy-bin@6.4.0   # 服务器二进制，预编译
 ```
+
+`@goliapkg/kevy-bin` 从 6.4.0 起上了 npm：不装 Rust 工具链也能拿到 `kevy` 与 `kevy-cli`，
+平台跟 release 二进制一样是那三个，字节也完全相同。
+
+### npm：kevy-node 与 kevy-ts 6.0–6.3 加载不了
+
+`@goliapkg/kevy-node` 的原生引擎来自一个平台包（`@goliapkg/kevy-node-linux-x64` 等），
+版本钉在它自己的版本上。6.0.0 到 6.3.0 这些平台包从来没发布过——npm 上只有 5.1.0——
+所以 kevy-node 能装上，npm 跳过了找不到的可选依赖，第一次 `open()` 就报 `dlopen` 错误，
+错误里还是一个 `target/debug` 路径。`@goliapkg/kevy-ts` 钉的是同一组平台包，嵌入后端同样失败；
+它的远程客户端（`kevy://host:port`）不受影响。
+
+6.4.0 是第一个平台包在 npm 上的版本，2026-09-16 发布，并在 macOS arm64 与 Linux x86-64
+上从 registry 实际安装验证过。之前的版本事后修不了：请升级到 6.4.0。
 
 Linux（x86-64、arm64）与 macOS（arm64）的预编译服务器二进制，各带一个 SHA-256 文件，在 [v6.4.0 release](https://github.com/goliajp/kevy/releases/tag/v6.4.0) 上。用 `ghcr.io/goliajp/kevy:latest` 的容器用户，下次拉取就是 6.4.0；钉 tag 的话是 `ghcr.io/goliajp/kevy:6.4.0`。

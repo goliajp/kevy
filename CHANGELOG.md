@@ -946,6 +946,13 @@ Rust inputs that used to corrupt or panic — is in
 [docs/upgrading-6.3-to-6.4.md](docs/upgrading-6.3-to-6.4.md) (also in
 Chinese and Japanese), each measured against the published 6.3.0.
 
+If you install `@goliapkg/kevy-node`, or `@goliapkg/kevy-ts` with its
+embedded backend, from npm: 6.0.0 through 6.3.0 install and then fail to
+load, because the platform packages they pin were never published. 6.4.0's
+were published on 2026-09-16, after the tag, together with
+`@goliapkg/kevy-bin` — the server and CLI binaries through npm, never
+published before. The guide has the details.
+
 ## 6.3.0 — the opponents, pinned; and three gaps they exposed
 
 A week of work on one question: what is kevy actually measured against,

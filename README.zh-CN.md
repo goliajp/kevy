@@ -95,15 +95,36 @@ CI 里对一台真实服务器跑同一套梯子（**clientgate**）：
 各语言完整示例见 [docs/clients.md](docs/clients.md)（英文）。
 
 浏览器场景下引擎本身就是一个 npm 包——`npm install @goliapkg/kevy`
-（见[在浏览器里](#在浏览器里)）。Node、Python、Go、C#、Java、Swift、
-Kotlin、Flutter、React Native 的原生进程内绑定在 [`bindings/`](bindings)
-下，目前从源码构建，尚未进入各自语言的包仓库。
+（见[在浏览器里](#在浏览器里)）。Node、Python、C#、Go、Java、Kotlin、
+Flutter、React Native、Electron 的官方包在 [`bindings/`](bindings) 下，
+都已进入各自语言的包仓库：
+
+```sh
+npm i @goliapkg/kevy-ts                          # Node / TypeScript
+pip install kevy                                 # Python
+dotnet add package kevy                          # C#
+go get github.com/goliajp/kevy-go/v6             # Go
+flutter pub add flutter_kevy                     # Flutter
+npx expo install expo-kevy                       # React Native (Expo)
+npm i react-native-kevy-nitro                    # React Native (Nitro)
+npm i @goliapkg/kevy-electron                    # Electron
+```
+```xml
+<dependency>                                     <!-- Java / Kotlin -->
+  <groupId>jp.golia</groupId><artifactId>kevy</artifactId><version>6.4.0</version>
+</dependency>
+```
+
+Swift 没有包仓库可上：SwiftPM 直接从本仓库的 tag 解析 `KevyKit`
+（见 [bindings/apple/KevyKit](bindings/apple/KevyKit)）。
 
 Rust 侧已在 crates.io：
 
 ```sh
 # 服务器
 cargo install kevy
+# ……或者不装 Rust 工具链（Linux x86_64 / aarch64、macOS Apple Silicon）
+npm install -g @goliapkg/kevy-bin
 
 # 嵌入式库
 cargo add kevy-embedded
