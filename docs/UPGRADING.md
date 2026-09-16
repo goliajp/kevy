@@ -7,7 +7,8 @@ frozen) and **2.x → 3.x** (a capability major: everything carried
 over). Each chapter is explicit about what upgrades automatically,
 what needs a code change, and how to go back.
 
-**Coming from 6.2?** That hop is
+**Coming from 6.3 or 6.2?** Those hops are
+[upgrading-6.3-to-6.4.md](upgrading-6.3-to-6.4.md) and
 [upgrading-6.2-to-6.3.md](upgrading-6.2-to-6.3.md), not this page.
 
 ---
