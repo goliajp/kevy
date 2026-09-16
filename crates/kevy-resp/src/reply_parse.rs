@@ -97,6 +97,23 @@ pub fn parse_reply(buf: &[u8]) -> Result<Option<(Reply, usize)>, ProtocolError> 
 /// the server wrote it: `1e+300`, `1e300` and a 301-digit integer are one
 /// number. A client that shows replies as the server sent them — a CLI
 /// that must print what `redis-cli` prints — needs the bytes.
+///
+/// # Examples
+///
+/// ```
+/// use kevy_resp::{Reply, parse_reply_keeping_double_text};
+///
+/// let wire = b"*2\r\n,1e+300\r\n,inf\r\n";
+/// let (reply, used, texts) = parse_reply_keeping_double_text(wire)?.expect("a whole reply");
+/// assert_eq!(reply, Reply::Array(vec![Reply::Double(1e300), Reply::Double(f64::INFINITY)]));
+/// assert_eq!(used, wire.len());
+/// assert_eq!(texts, [b"1e+300".to_vec(), b"inf".to_vec()]);
+/// # Ok::<(), kevy_resp::ProtocolError>(())
+/// ```
+///
+/// # Errors
+///
+/// [`ProtocolError`] when the bytes are not RESP, exactly as [`parse_reply`].
 pub fn parse_reply_keeping_double_text(buf: &[u8]) -> Result<Option<TextedReply>, ProtocolError> {
     let mut texts = Vec::new();
     let parsed = parse_with(buf, &mut DoubleText(Some(&mut texts)))?;
@@ -104,6 +121,17 @@ pub fn parse_reply_keeping_double_text(buf: &[u8]) -> Result<Option<TextedReply>
 }
 
 /// A reply, the bytes it consumed, and the wire text of each double in it.
+///
+/// # Examples
+///
+/// ```
+/// use kevy_resp::{Reply, TextedReply, parse_reply_keeping_double_text};
+///
+/// let parsed: Option<TextedReply> = parse_reply_keeping_double_text(b",1.5\r\n")?;
+/// let (reply, used, texts) = parsed.expect("a whole reply");
+/// assert_eq!((reply, used, texts), (Reply::Double(1.5), 6, vec![b"1.5".to_vec()]));
+/// # Ok::<(), kevy_resp::ProtocolError>(())
+/// ```
 pub type TextedReply = (Reply, usize, Vec<Vec<u8>>);
 
 /// Where double text goes when a caller asked for it; nowhere otherwise.

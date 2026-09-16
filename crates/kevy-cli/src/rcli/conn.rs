@@ -20,8 +20,9 @@ pub(crate) enum LinkError {
     Eof,
     /// A socket error (`REDIS_ERR_IO`), with its `strerror` text.
     Io(io::ErrorKind, String),
-    /// Bytes that are not RESP.
-    Protocol,
+    /// Bytes that are not RESP; the byte where a reply should have started,
+    /// when that is where it went wrong.
+    Protocol(Option<u8>),
 }
 
 impl LinkError {
@@ -30,7 +31,12 @@ impl LinkError {
         match self {
             LinkError::Eof => "Server closed the connection".to_string(),
             LinkError::Io(_, text) => text.clone(),
-            LinkError::Protocol => "Protocol error".to_string(),
+            // hiredis: `Protocol error, got "<byte>" as reply type byte`.
+            LinkError::Protocol(Some(byte)) => {
+                let shown = String::from_utf8_lossy(&super::repr::repr(&[*byte])).into_owned();
+                format!("Protocol error, got {shown} as reply type byte")
+            }
+            LinkError::Protocol(None) => "Protocol error".to_string(),
         }
     }
 
@@ -58,6 +64,11 @@ pub(crate) struct Conn {
 
 /// `strerror` for an I/O error: Rust's text without ` (os error N)`.
 pub(crate) fn strerror(e: &io::Error) -> String {
+    // `connect_timeout` reports its own timeout without an errno, in
+    // lowercase; hiredis reports `strerror(ETIMEDOUT)`.
+    if e.kind() == io::ErrorKind::TimedOut && e.raw_os_error().is_none() {
+        return "Connection timed out".to_string();
+    }
     let text = e.to_string();
     let text = text.strip_prefix("failed to lookup address information: ").unwrap_or(&text);
     match text.rfind(" (os error ") {
@@ -70,7 +81,10 @@ impl Conn {
     /// `redisConnectWrapper`: TCP, optionally with a connect timeout.
     pub(crate) fn tcp(host: &[u8], port: i32, timeout: Option<f64>) -> Result<Conn, String> {
         let host = String::from_utf8_lossy(host).into_owned();
-        let port = u16::try_from(port).map_err(|_| "Invalid port".to_string())?;
+        // hiredis stores the port as an int and `htons` keeps its low 16
+        // bits, so `connect h 99999` in the REPL dials 34463 — and the
+        // message still names 99999. Only the REPL can hand over such a port.
+        let port = port as u16;
         let stream = match timeout {
             None => TcpStream::connect((host.as_str(), port)).map_err(|e| strerror(&e))?,
             Some(secs) => connect_with_timeout(&host, port, Duration::from_secs_f64(secs))?,
@@ -133,7 +147,11 @@ impl Conn {
     pub(crate) fn buffered_reply(&mut self) -> Result<Option<Parsed>, LinkError> {
         match self.buf.parse_next_keeping_double_text() {
             Ok(parsed) => Ok(parsed.map(|(reply, _, texts)| (reply, texts))),
-            Err(_) => Err(LinkError::Protocol),
+            Err(_) => {
+                const TYPE_BYTES: &[u8] = b"+-:$*%~,#=(_>!|";
+                let first = self.buf.pending().first().copied();
+                Err(LinkError::Protocol(first.filter(|b| !TYPE_BYTES.contains(b))))
+            }
         }
     }
 

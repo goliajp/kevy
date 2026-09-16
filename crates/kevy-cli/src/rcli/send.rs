@@ -31,7 +31,7 @@ impl Session {
             return true;
         }
         if self.conn.is_none() || self.link_error.is_some() {
-            if !self.connect(Connect::Force) {
+            if !self.connect(Connect::Report) {
                 self.print_context_error();
                 return false;
             }
@@ -227,12 +227,16 @@ impl Session {
 
     /// `cliPushHandler`.
     pub(crate) fn print_push(&self, reply: &Reply, texts: &[Vec<u8>]) {
-        let out = if self.opts.output == Output::Standard && is_invalidate(reply) {
+        write_out(&self.push_bytes(reply, texts));
+    }
+
+    /// What `cliPushHandler` prints for `reply`.
+    pub(crate) fn push_bytes(&self, reply: &Reply, texts: &[Vec<u8>]) -> Vec<u8> {
+        if self.opts.output == Output::Standard && is_invalidate(reply) {
             invalidate_tty(reply)
         } else {
             render(reply, texts, self.opts.output, &self.opts.delims, false)
-        };
-        write_out(&out);
+        }
     }
 }
 

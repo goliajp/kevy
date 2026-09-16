@@ -23,7 +23,7 @@ pub(crate) fn run(s: &mut Session) -> u8 {
         if eof && line.is_empty() {
             if s.pubsub_mode {
                 s.pubsub_mode = false;
-                if s.connect(Connect::Force) {
+                if s.connect(Connect::Report) {
                     continue;
                 }
             }
@@ -74,7 +74,7 @@ fn handle_line(s: &mut Session, line: &[u8]) -> Option<u8> {
     } else if argv.len() == 3 && word("connect") {
         s.opts.host = argv[1].clone();
         s.opts.port = super::cnum::atoi(&argv[2]);
-        s.connect(Connect::Force);
+        s.connect(Connect::Report);
     } else if argv.len() == 1 && word("clear") {
         write_out(b"\x1b[H\x1b[2J");
     } else {

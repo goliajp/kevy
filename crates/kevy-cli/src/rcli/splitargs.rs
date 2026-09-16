@@ -184,3 +184,16 @@ mod tests {
         assert_eq!(split_args(b"a b\0c"), Some(vec![b"a".to_vec(), b"b".to_vec()]));
     }
 }
+
+#[cfg(test)]
+mod escape_tests {
+    use super::split_args;
+
+    #[test]
+    fn every_c_escape_and_both_hex_cases() {
+        assert_eq!(
+            split_args(br#""\r\t\b\a\xAb\xcD""#),
+            Some(vec![b"\r\t\x08\x07\xab\xcd".to_vec()])
+        );
+    }
+}

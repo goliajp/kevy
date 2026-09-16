@@ -32,6 +32,21 @@ const _: () = assert!(size_of::<PollFd>() == 8, "struct pollfd is int + short + 
 /// An interrupted wait (`EINTR`) returns all `false`, like a timeout, so the
 /// caller's loop re-checks whatever the signal changed.
 ///
+/// # Examples
+///
+/// ```
+/// use std::io::Write;
+/// use std::os::fd::AsRawFd;
+/// use std::os::unix::net::UnixStream;
+/// use std::time::Duration;
+///
+/// let (mut tx, rx) = UnixStream::pair()?;
+/// tx.write_all(b"ping")?;
+/// let ready = kevy_sys::wait_readable(&[rx.as_raw_fd()], Duration::from_secs(1))?;
+/// assert_eq!(ready, [true]);
+/// # Ok::<(), std::io::Error>(())
+/// ```
+///
 /// # Errors
 ///
 /// The `poll(2)` error other than `EINTR`, e.g. `EINVAL` for too many fds.

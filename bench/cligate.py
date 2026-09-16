@@ -94,7 +94,7 @@ def parse_cases(path: pathlib.Path):
             k, _, v = value.partition("=")
             cur["env"][k] = v
         elif key == "stdin":
-            cur["stdin"] += unescape(value)
+            cur["stdin"] += unescape(expand(value))
         elif key in ("run", "deviation", "kevy.stdout", "kevy.stderr", "kevy.exit",
                      "kevy.stdout-contains"):
             cur[key] = value

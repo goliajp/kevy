@@ -1,0 +1,546 @@
+//! kevy-cli's redis-cli half against a real kevy server.
+//!
+//! The byte-for-byte comparison with redis-cli itself is `bench/cligate.py`,
+//! which needs docker and a Redis. These cases run under `cargo test`
+//! instead, so coverage sees the code. The expected bytes are written from
+//! redis-cli 8.10.1's output rules — the ones that gate checks against the
+//! real binary — not taken from kevy-cli's own output. Error texts that come
+//! from the server are matched by prefix, since kevy's wording is its own.
+
+use std::io::Write;
+use std::process::{Child, Command, Stdio};
+
+struct Srv {
+    child: Child,
+    port: u16,
+    dir: std::path::PathBuf,
+}
+
+impl Srv {
+    fn start() -> Srv {
+        let port = kevy_testnet::free_port();
+        let bin =
+            std::path::Path::new(env!("CARGO_BIN_EXE_kevy-cli")).parent().unwrap().join("kevy");
+        if !bin.exists() {
+            let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+            let status = Command::new(cargo)
+                .args(["build", "-p", "kevy", "--bin", "kevy"])
+                .status()
+                .expect("spawn cargo build");
+            assert!(status.success(), "cargo build -p kevy --bin kevy failed");
+        }
+        let dir = std::env::temp_dir().join(format!("kevy-rcli-{port}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let child = Command::new(&bin)
+            .args(["--port", &port.to_string(), "--threads", "1", "--no-aof"])
+            .args(["--dir", dir.to_str().unwrap()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn kevy server");
+        kevy_testnet::assert_listening(port, "the server under test");
+        Srv { child, port, dir }
+    }
+
+    fn port(&self) -> String {
+        self.port.to_string()
+    }
+}
+
+impl Drop for Srv {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+struct Out {
+    stdout: String,
+    stderr: String,
+    code: i32,
+}
+
+/// Run kevy-cli with `args`, `stdin` and extra environment, as a pipe (so
+/// stdout is not a terminal unless `FAKETTY` says otherwise).
+fn cli(args: &[&str], stdin: &[u8], env: &[(&str, &str)]) -> Out {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_kevy-cli"));
+    cmd.args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    for var in ["FAKETTY", "REDISCLI_AUTH", "VALKEYCLI_AUTH", "KEVYCLI_AUTH"] {
+        cmd.env_remove(var);
+    }
+    cmd.envs(env.iter().copied());
+    let mut child = cmd.spawn().expect("run kevy-cli");
+    child.stdin.take().unwrap().write_all(stdin).unwrap();
+    let out = child.wait_with_output().unwrap();
+    Out {
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        code: out.status.code().unwrap_or(-1),
+    }
+}
+
+const TTY: &[(&str, &str)] = &[("FAKETTY", "1")];
+
+#[test]
+fn output_mode_follows_the_terminal_and_the_flags() {
+    let s = Srv::start();
+    let p = s.port();
+    assert_eq!(cli(&["-p", &p, "SET", "k", "a b"], b"", &[]).stdout, "OK\n");
+    assert_eq!(cli(&["-p", &p, "GET", "k"], b"", &[]).stdout, "a b\n");
+    assert_eq!(cli(&["-p", &p, "GET", "k"], b"", TTY).stdout, "\"a b\"\n");
+    assert_eq!(cli(&["--no-raw", "-p", &p, "GET", "k"], b"", &[]).stdout, "\"a b\"\n");
+    assert_eq!(cli(&["--raw", "-p", &p, "GET", "k"], b"", TTY).stdout, "a b\n");
+    assert_eq!(cli(&["-p", &p, "GET", "missing"], b"", TTY).stdout, "(nil)\n");
+    assert_eq!(cli(&["-p", &p, "INCR", "n"], b"", TTY).stdout, "(integer) 1\n");
+    cli(&["-p", &p, "RPUSH", "l", "a", "b c", "1"], b"", &[]);
+    assert_eq!(
+        cli(&["--csv", "-p", &p, "LRANGE", "l", "0", "-1"], b"", &[]).stdout,
+        "\"a\",\"b c\",\"1\"\n"
+    );
+    assert_eq!(
+        cli(&["--json", "-p", &p, "LRANGE", "l", "0", "-1"], b"", &[]).stdout,
+        "[\"a\",\"b c\",\"1\"]\n"
+    );
+    assert_eq!(cli(&["--json", "-p", &p, "GET", "missing"], b"", &[]).stdout, "null\n");
+    assert_eq!(cli(&["-d", ",", "-p", &p, "LRANGE", "l", "0", "-1"], b"", &[]).stdout, "a,b c,1\n");
+    assert_eq!(
+        cli(&["-p", &p, "LRANGE", "l", "0", "-1"], b"", TTY).stdout,
+        "1) \"a\"\n2) \"b c\"\n3) \"1\"\n"
+    );
+    cli(&["-p", &p, "HSET", "h", "f", "v"], b"", &[]);
+    assert_eq!(cli(&["-3", "-p", &p, "HGETALL", "h"], b"", TTY).stdout, "1# \"f\" => \"v\"\n");
+    assert_eq!(cli(&["--json", "-p", &p, "HGETALL", "h"], b"", &[]).stdout, "{\"f\":\"v\"}\n");
+    assert_eq!(
+        cli(&["--quoted-json", "-x", "-p", &p, "ECHO"], b"a\nb\xff", &[]).stdout,
+        "\"a\\\\nb\\\\xff\"\n"
+    );
+}
+
+#[test]
+fn input_repeat_and_error_flags() {
+    let s = Srv::start();
+    let p = s.port();
+    assert_eq!(cli(&["-x", "-p", &p, "ECHO"], b"a\0b\xff", TTY).stdout, "\"a\\x00b\\xff\"\n");
+    assert_eq!(cli(&["-X", "TAG", "-p", &p, "SET", "k", "TAG"], b"payload", &[]).stdout, "OK\n");
+    assert_eq!(cli(&["-p", &p, "GET", "k"], b"", &[]).stdout, "payload\n");
+    let missing = cli(&["-X", "TAG", "-p", &p, "SET", "k", "v"], b"payload", &[]);
+    assert_eq!(
+        (missing.stderr.as_str(), missing.code),
+        ("Using -X option but stdin tag not match.\n", 1)
+    );
+    assert_eq!(
+        cli(&["-r", "3", "-i", "0.01", "-p", &p, "INCR", "c"], b"", &[]).stdout,
+        "1\n2\n3\n"
+    );
+    assert_eq!(cli(&["-r", "0", "-p", &p, "INCR", "c"], b"", &[]).stdout, "");
+    assert_eq!(cli(&["-D", "|", "-r", "2", "-p", &p, "INCR", "d"], b"", &[]).stdout, "1|2|");
+    let quoted = cli(&["--quoted-input", "-p", &p, "ECHO", "\"a\\x41\\n\""], b"", TTY);
+    assert_eq!(quoted.stdout, "\"aA\\n\"\n");
+    let bad = cli(&["--quoted-input", "-p", &p, "ECHO", "\"open"], b"", &[]);
+    assert_eq!((bad.stdout.as_str(), bad.code), ("Invalid quoted string\n", 1));
+
+    cli(&["-p", &p, "SET", "s", "word"], b"", &[]);
+    let soft = cli(&["-p", &p, "INCR", "s"], b"", TTY);
+    assert!(soft.stdout.starts_with("(error) ERR"), "{}", soft.stdout);
+    assert_eq!(soft.code, 0, "an error reply exits 0 without -e, as redis-cli");
+    let hard = cli(&["-e", "-r", "3", "-p", &p, "INCR", "s"], b"", TTY);
+    assert_eq!((hard.stdout.as_str(), hard.code), ("", 1));
+    assert!(hard.stderr.starts_with("ERR"), "{}", hard.stderr);
+}
+
+#[test]
+fn piped_repl_quotes_repeats_and_state() {
+    let s = Srv::start();
+    let p = s.port();
+    let lines = b"SET k \"a b\\x41\"\nGET k\n3 INCR n\n0 INCR n\nSET k \"open\n\nMULTI\nINCR n\nEXEC\nquit\nPING\n";
+    let out = cli(&["-p", &p], lines, &[]);
+    assert_eq!(
+        out.stdout,
+        "OK\na bA\n1\n2\n3\nInvalid kevy-cli repeat command option value.\nInvalid argument(s)\nOK\nQUEUED\n4\n"
+    );
+    assert_eq!(out.code, 0);
+    let formatted =
+        cli(&["-p", &p], b"GET k\nSELECT 0\n:set hints\n:set nope\n:nope\nrestart\n", TTY);
+    assert_eq!(
+        formatted.stdout,
+        "\"a bA\"\nOK\nunknown kevy-cli preference 'nope'\nunknown kevy-cli internal command ':nope'\nUse 'restart' only in Lua debugging mode.\n"
+    );
+    let e_ignored = cli(&["-e", "-p", &p], b"INCR k\nPING\n", &[]);
+    assert!(e_ignored.stdout.ends_with("PONG\n") && e_ignored.code == 0, "{}", e_ignored.stdout);
+    let sub = cli(&["-p", &p], b"SUBSCRIBE c\n", &[]);
+    assert_eq!(sub.stdout, "subscribe\nc\n1\n");
+}
+
+#[test]
+fn connection_options_and_session_setup() {
+    let s = Srv::start();
+    let p = s.port();
+    assert_eq!(cli(&["-h", "127.0.0.1", "-p", &p, "-t", "1.5", "PING"], b"", &[]).stdout, "PONG\n");
+    assert_eq!(
+        cli(&["-u", &format!("redis://127.0.0.1:{p}/0"), "PING"], b"", &[]).stdout,
+        "PONG\n"
+    );
+    assert_eq!(cli(&["-u", &format!("valkey://127.0.0.1:{p}"), "PING"], b"", &[]).stdout, "PONG\n");
+    assert_eq!(
+        cli(&["-n", "0", "--name", "rcli", "-p", &p, "CLIENT", "GETNAME"], b"", &[]).stdout,
+        "rcli\n"
+    );
+    assert_eq!(cli(&["-3", "-p", &p, "PING"], b"", &[]).stdout, "PONG\n");
+    let refused = cli(&["-p", "1", "PING"], b"", &[]);
+    assert_eq!(
+        (refused.stderr.as_str(), refused.code),
+        ("Could not connect to Redis at 127.0.0.1:1: Connection refused\n", 1)
+    );
+    let askpass = cli(&["--askpass", "-p", "1", "PING"], b"secret\n", &[]);
+    assert_eq!(askpass.code, 1);
+    let env_auth = cli(&["-p", &p, "PING"], b"", &[("REDISCLI_AUTH", "x")]);
+    assert!(env_auth.stderr.starts_with("AUTH failed: "), "kevy has no AUTH: {}", env_auth.stderr);
+    let warned = cli(&["-a", "x", "-p", "1", "PING"], b"", &[]);
+    assert!(
+        warned.stderr.starts_with("Warning: Using a password with '-a' or '-u' option"),
+        "{}",
+        warned.stderr
+    );
+}
+
+#[test]
+fn option_errors_exit_with_redis_cli_messages() {
+    let err = |args: &[&str]| {
+        let o = cli(args, b"", &[]);
+        (o.stderr, o.code)
+    };
+    let one = |msg: &str| (format!("{msg}\n"), 1);
+    assert_eq!(err(&["-2", "-3", "PING"]), one("Options -2 and -3 are mutually exclusive."));
+    assert_eq!(err(&["-x", "-X", "t", "PING"]), one("Options -x and -X are mutually exclusive."));
+    assert_eq!(err(&["-4", "-6", "PING"]), one("Options -4 and -6 are mutually exclusive."));
+    assert_eq!(
+        err(&["-c", "-s", "/tmp/x", "PING"]),
+        one("Options -c and -s are mutually exclusive.")
+    );
+    assert_eq!(err(&["-p", "70000", "PING"]), one("Invalid server port."));
+    assert_eq!(err(&["-p", "abc", "PING"]), one("Invalid server port."));
+    assert_eq!(err(&["-t", "soon", "PING"]), one("Invalid connection timeout for -t."));
+    assert_eq!(
+        err(&["--no-such"]),
+        one("Unrecognized option or bad number of args for: '--no-such'")
+    );
+    assert_eq!(err(&["-p"]), one("Unrecognized option or bad number of args for: '-p'"));
+    assert_eq!(err(&["-u", "http://x"]), one("Invalid URI scheme"));
+    assert_eq!(err(&["-u", "redis://a%zz@h"]), one("Illegal character in URI encoding"));
+    assert_eq!(err(&["-u", "redis://a%@h"]), one("Incomplete URI encoding"));
+    assert_eq!(
+        err(&["--tls", "PING"]),
+        one("kevy-cli: --tls is not supported: kevy-cli does not implement TLS")
+    );
+    assert_eq!(
+        err(&["--rdb", "a", "--functions-rdb", "b"]),
+        one("Option --functions-rdb and --rdb are mutually exclusive.")
+    );
+    assert_eq!(
+        err(&["--quoted-pattern", "\"x"]),
+        one("Invalid quoted string specified for --quoted-pattern.")
+    );
+    assert_eq!(err(&["--memkeys-samples", "3x"]), one("--memkeys-samples conversion error."));
+    assert_eq!(
+        err(&["--keystats-samples", "-1"]),
+        one("--keystats-samples value should be positive.")
+    );
+    assert_eq!(err(&["--cursor", "-5"]), one("--cursor should be followed by a positive integer."));
+    assert_eq!(err(&["--top", "1y"]), one("--top conversion error."));
+    assert_eq!(
+        err(&["--latency-percentiles", "50,101"]),
+        one(
+            "Invalid percentile '101' in --latency-percentiles (must be a number between 0 and 100)."
+        )
+    );
+    assert_eq!(err(&["--scan"]), one("kevy-cli: --scan is not implemented yet"));
+    let help = cli(&["--help"], b"", &[]);
+    assert!(
+        help.stdout.contains("-p <port>") && help.stdout.contains("sql compile") && help.code == 0
+    );
+    assert_eq!(cli(&["-v"], b"", &[]).stdout, format!("kevy-cli {}\n", env!("CARGO_PKG_VERSION")));
+}
+
+#[test]
+fn failure_paths_and_rare_modes() {
+    let s = Srv::start();
+    let p = s.port();
+    let select = cli(&["-n", "3", "-p", &p, "PING"], b"", &[]);
+    assert!(select.stderr.starts_with("SELECT 3 failed: ERR"), "{}", select.stderr);
+    assert_eq!(
+        select.stdout, "PONG\n",
+        "a failed handshake leaves the connection, as redis-cli's does"
+    );
+    let name = cli(&["--name", "a b", "-p", &p, "PING"], b"", &[]);
+    assert!(name.stderr.starts_with("CLIENT SETNAME failed: ERR"), "{}", name.stderr);
+    let unix = cli(&["-s", "/nonexistent/kevy.sock", "PING"], b"", &[]);
+    let unix_msg =
+        "Could not connect to Redis at /nonexistent/kevy.sock: No such file or directory\n";
+    assert_eq!((unix.stderr.as_str(), unix.code), (unix_msg, 1));
+    let v6 = cli(&["-u", "redis://[::1]:1", "PING"], b"", &[]);
+    assert_eq!(
+        (v6.stderr.as_str(), v6.code),
+        ("Could not connect to Redis at ::1:1: Connection refused\n", 1)
+    );
+    let timeout = cli(&["-t", "1", "-p", "1", "PING"], b"", &[]);
+    assert_eq!(timeout.stderr, "Could not connect to Redis at 127.0.0.1:1: Connection refused\n");
+
+    // The server hangs up. Which error the second QUIT meets is a race: the
+    // FIN reads as "closed", the RST answering the write after the close as
+    // "reset", and hiredis prints whichever arrives first — so does kevy-cli.
+    let hung_up = ["Error: Server closed the connection\n", "Error: Connection reset by peer\n"];
+    let quit = cli(&["-r", "2", "-p", &p, "QUIT"], b"", &[]);
+    assert_eq!((quit.stdout.as_str(), quit.code), ("OK\n", 1));
+    assert!(hung_up.contains(&quit.stderr.as_str()), "{}", quit.stderr);
+    // `QUIT` alone is the REPL's own exit; a repeat count sends it instead,
+    // and the next command reconnects.
+    let repl = cli(&["-p", &p], b"2 QUIT\nPING\n", &[]);
+    assert_eq!(repl.stdout, "OK\nPONG\n");
+    assert!(hung_up.contains(&repl.stderr.as_str()), "{}", repl.stderr);
+
+    // MONITOR the server refuses leaves monitor mode on the error.
+    let monitor = cli(&["-p", &p, "MONITOR"], b"", TTY);
+    assert!(monitor.stdout.starts_with("(error) ERR") && monitor.code == 0, "{}", monitor.stdout);
+
+    // The pub/sub prompt, with the terminal's colour.
+    let sub = cli(&["-p", &p], b"SUBSCRIBE c\n", &[("FAKETTY", "1"), ("TERM", "xterm")]);
+    let prompt =
+        "\x1b[1;90mReading messages... (press Ctrl-C to quit or any key to type command)\r\x1b[0m";
+    assert!(sub.stdout.contains(prompt), "{:?}", sub.stdout);
+
+    let help = cli(&["-p", &p, "help"], b"", &[]);
+    assert_eq!(help.stderr, "kevy-cli: help for commands is not implemented yet\n");
+}
+
+#[test]
+fn cluster_manager_flags_parse_before_the_mode_is_refused() {
+    let refused = |args: &[&str]| cli(args, b"", &[]).stderr;
+    let msg = "kevy-cli: --cluster is not implemented yet\n";
+    assert_eq!(
+        refused(&["--cluster", "create", "--cluster-replicas", "1", "h:1", "h:2", "--cluster-yes"]),
+        msg
+    );
+    assert_eq!(refused(&["--cluster", "create", "--cluster-yes", "h:1", "h:2", "stray"]), msg);
+    assert_eq!(refused(&["--cluster-weight", "a=1", "b=2", "--cluster", "rebalance", "h:1"]), msg);
+    assert_eq!(
+        refused(&["--cluster-weight", "a=1", "--cluster-weight", "b=1"]),
+        "WARNING: you cannot use --cluster-weight more than once.\nYou can set more weights by adding them as a space-separated list, ie:\n--cluster-weight n1=w n2=w\n"
+    );
+    assert_eq!(cli(&["--cluster"], b"", &[]).code, 1);
+}
+
+/// A server that answers every command with one canned byte string: enough
+/// to show kevy-cli frames kevy cannot send (a RESP3 push) and to listen on
+/// a unix socket, which the kevy server does not.
+fn fake_server(
+    reply: &'static [u8],
+    unix: Option<&std::path::Path>,
+) -> (u16, std::thread::JoinHandle<()>) {
+    use std::io::Read;
+    fn serve<S: Read + Write>(mut conn: S, reply: &[u8]) {
+        let mut buf = [0u8; 1024];
+        if matches!(conn.read(&mut buf), Ok(n) if n > 0) {
+            let _ = conn.write_all(reply);
+        }
+    }
+    match unix {
+        Some(path) => {
+            let listener = std::os::unix::net::UnixListener::bind(path).unwrap();
+            (0, std::thread::spawn(move || serve(listener.accept().unwrap().0, reply)))
+        }
+        None => {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            (port, std::thread::spawn(move || serve(listener.accept().unwrap().0, reply)))
+        }
+    }
+}
+
+#[test]
+fn unix_sockets_and_server_pushes() {
+    let dir = std::env::temp_dir().join(format!("kevy-rcli-unix-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let sock = dir.join("s.sock");
+    let (_, server) = fake_server(b"+PONG\r\n", Some(&sock));
+    assert_eq!(cli(&["-s", sock.to_str().unwrap(), "PING"], b"", &[]).stdout, "PONG\n");
+    server.join().unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+
+    // A client-side-caching invalidation arriving ahead of the reply is
+    // printed by the push handler, redis-cli's `-> invalidate:` line.
+    let push = b">2\r\n$10\r\ninvalidate\r\n*1\r\n$1\r\nk\r\n+PONG\r\n";
+    let (port, server) = fake_server(push, None);
+    let out = cli(&["-p", &port.to_string(), "PING"], b"", TTY);
+    assert_eq!(out.stdout, "-> invalidate: 'k'\nPONG\n");
+    server.join().unwrap();
+
+    // Name resolution fails before any connect: reported, exit 1.
+    let dns = cli(&["-t", "1", "-h", "no-such-host.invalid", "PING"], b"", &[]);
+    assert!(
+        dns.stderr.starts_with("Could not connect to Redis at no-such-host.invalid:6379: ")
+            && dns.code == 1,
+        "{}",
+        dns.stderr
+    );
+}
+
+#[test]
+fn repl_state_tracking_against_kevy() {
+    let s = Srv::start();
+    let p = s.port();
+    // The same lines bench/cligate.py runs against Redis, where kevy agrees.
+    let tx = cli(
+        &["-p", &p],
+        b"MULTI\nSET a 1\nDISCARD\nGET a\nWATCH k\nSET k 1\nMULTI\nINCR k\nEXEC\n",
+        &[],
+    );
+    assert_eq!(tx.stdout, "OK\nQUEUED\nOK\n\nOK\nOK\nOK\nQUEUED\n\n");
+    let sub = cli(&["-3", "-p", &p], b"SUBSCRIBE c\nPUBLISH c hi\nUNSUBSCRIBE c\nPING\n", &[]);
+    assert_eq!(sub.stdout, "subscribe\nc\n1\n1\nmessage\nc\nhi\nunsubscribe\nc\n0\nPONG\n");
+    let reset = cli(
+        &["-p", &p],
+        b"RESET\nHELLO 3\nHELLO 2\nAUTH x\nclear\nconnect 127.0.0.1 1\nPING\n",
+        &[],
+    );
+    assert!(reset.stdout.starts_with("ERR unknown command 'RESET'"), "{}", reset.stdout);
+    assert!(reset.stdout.contains("\x1b[H\x1b[2J"), "clear: {:?}", reset.stdout);
+    assert!(
+        reset.stderr.contains("Could not connect to Redis at 127.0.0.1:1: Connection refused"),
+        "{}",
+        reset.stderr
+    );
+    let slow = cli(&["-p", &p], b"DEBUG SLEEP 0.6\n", TTY);
+    assert!(slow.stdout.starts_with("OK\n(0.") && slow.stdout.ends_with("s)\n"), "{}", slow.stdout);
+    let pushes_on = cli(&["--show-pushes", "y", "-p", &p], b"SUBSCRIBE c\n", &[]);
+    assert_eq!(pushes_on.stdout, "subscribe\nc\n1\n");
+    assert_eq!(
+        cli(&["-p", &p, "SHUTDOWN", "NOSAVE"], b"", &[]).code,
+        0,
+        "SHUTDOWN's hang-up is its success"
+    );
+}
+
+#[test]
+fn handshake_and_protocol_failures() {
+    // AUTH with a user sends both; the canned reply refuses it.
+    let (port, server) = fake_server(b"-WRONGPASS invalid username-password pair\r\n", None);
+    let auth = cli(
+        &["--user", "u", "-a", "p", "--no-auth-warning", "-p", &port.to_string(), "PING"],
+        b"",
+        &[],
+    );
+    assert!(auth.stderr.starts_with("AUTH failed: WRONGPASS"), "{}", auth.stderr);
+    server.join().unwrap();
+
+    // HELLO 3 refused: fatal with -3, reported and tolerated with --json.
+    let (port, server) = fake_server(b"-NOPROTO unsupported protocol version\r\n", None);
+    let fatal = cli(&["-3", "-p", &port.to_string(), "PING"], b"", &[]);
+    assert!(fatal.stderr.starts_with("HELLO 3 failed: NOPROTO"), "{}", fatal.stderr);
+    server.join().unwrap();
+
+    // The server closes during the handshake.
+    let (port, server) = fake_server(b"", None);
+    let io = cli(&["-n", "1", "-p", &port.to_string(), "PING"], b"", &[]);
+    assert!(io.stderr.starts_with("\nI/O error\n"), "{:?}", io.stderr);
+    server.join().unwrap();
+
+    // A reply that is not RESP, in hiredis's words.
+    let (port, server) = fake_server(b"@nonsense\r\n", None);
+    let bad = cli(&["-p", &port.to_string(), "PING"], b"", &[]);
+    assert_eq!(
+        (bad.stderr.as_str(), bad.code),
+        ("Error: Protocol error, got \"@\" as reply type byte\n", 1)
+    );
+    server.join().unwrap();
+}
+
+#[test]
+fn rarer_repl_lines_against_kevy() {
+    let s = Srv::start();
+    let p = s.port();
+    let out = cli(&["-p", &p], b"   \nAUTH u p\nHELLO 9\nUNSUBSCRIBE c\nPING\n", TTY);
+    assert!(out.stdout.starts_with("(error) ERR"), "AUTH u p: {}", out.stdout);
+    assert!(out.stdout.ends_with("PONG\n"), "{}", out.stdout);
+    let askpass = cli(&["--askpass", "-p", &p, "PING"], b"", &[]);
+    assert_eq!(askpass.stdout, "PONG\n", "no password on stdin means no AUTH");
+    let killed = cli(&["-r", "2", "-p", &p, "SHUTDOWN", "NOSAVE"], b"", &[]);
+    assert_eq!(killed.code, 1, "the repeat has no connection left to send on");
+}
+
+/// Canned-reply cases: the server sends `reply` to the first command and
+/// hangs up.
+fn canned(reply: &'static [u8], args: &[&str], stdin: &[u8]) -> Out {
+    let (port, server) = fake_server(reply, None);
+    let port = port.to_string();
+    let mut full: Vec<&str> = vec!["-p", &port];
+    full.extend_from_slice(args);
+    let out = cli(&full, stdin, &[]);
+    server.join().unwrap();
+    out
+}
+
+#[test]
+fn servers_that_say_unusual_things() {
+    assert_eq!(canned(b"+RESET\r\n", &[], b"RESET\n").stdout, "RESET\n");
+    let nested = canned(b"*1\r\n@x\r\n", &["PING"], b"");
+    assert_eq!((nested.stderr.as_str(), nested.code), ("Error: Protocol error\n", 1));
+    let blob = canned(b"!8\r\nERR blob\r\n", &["-e", "PING"], b"");
+    assert_eq!((blob.stderr.as_str(), blob.code), ("ERR blob\n", 1));
+    let hello = canned(b"!7\r\nNOPROTO\r\n", &["-3", "PING"], b"");
+    assert!(hello.stderr.starts_with("HELLO 3 failed: NOPROTO\n"), "{}", hello.stderr);
+    let name = canned(b"!4\r\nERRx\r\n", &["--name", "n", "PING"], b"");
+    assert!(name.stderr.starts_with("CLIENT SETNAME failed: ERRx\n"), "{}", name.stderr);
+
+    let closed = "Error: Server closed the connection\n";
+    let confirm = b"*3\r\n$9\r\nsubscribe\r\n$1\r\nc\r\n:1\r\n";
+    let oneshot = canned(confirm, &["SUBSCRIBE", "c"], b"");
+    assert_eq!(
+        (oneshot.stdout.as_str(), oneshot.stderr.as_str(), oneshot.code),
+        ("subscribe\nc\n1\n", closed, 1)
+    );
+    let repl = canned(confirm, &[], b"SUBSCRIBE c\n");
+    assert_eq!((repl.stderr.as_str(), repl.code), (closed, 1));
+    let monitor = canned(b"+OK\r\n", &["MONITOR"], b"");
+    assert_eq!(
+        (monitor.stdout.as_str(), monitor.stderr.as_str(), monitor.code),
+        ("OK\n", closed, 1)
+    );
+    // While a subscribe confirmation is awaited: a push that is not pub/sub
+    // and a frame that only looks like one are both read past.
+    let noise = b">2\r\n$10\r\ninvalidate\r\n*0\r\n*3\r\n:1\r\n:2\r\n:3\r\n";
+    let skipped = canned(noise, &["SUBSCRIBE", "c"], b"");
+    assert_eq!(skipped.stdout, "invalidate\n\n1\n2\n3\n");
+}
+
+#[test]
+fn handshake_successes_and_pubsub_breakage() {
+    // SELECT answered +OK: the db is switched, then the server hangs up.
+    let selected = canned(b"+OK\r\n", &["-n", "2", "PING"], b"");
+    assert_eq!(selected.code, 1);
+    // HELLO met by a hang-up.
+    let hello = canned(b"", &["-3", "PING"], b"");
+    assert!(hello.stderr.starts_with("\nI/O error\n"), "{:?}", hello.stderr);
+    // A malformed frame right behind the subscribe confirmation, read by the
+    // pub/sub prompt's drain.
+    let broken =
+        canned(b"*3\r\n$9\r\nsubscribe\r\n$1\r\nc\r\n:1\r\n@bad\r\n", &[], b"SUBSCRIBE c\n");
+    assert_eq!(
+        (broken.stderr.as_str(), broken.code),
+        ("Error: Protocol error, got \"@\" as reply type byte\n", 1)
+    );
+
+    let s = Srv::start();
+    let p = s.port();
+    let plain = cli(&["-p", &p], b"SUBSCRIBE c\n", &[("FAKETTY", "1"), ("TERM", "dumb")]);
+    assert!(
+        plain.stdout.contains(
+            "Reading messages... (press Ctrl-C to quit or any key to type command)\r\x1b[K"
+        ),
+        "{:?}",
+        plain.stdout
+    );
+    // A password line without its newline is still the password: AUTH is sent.
+    let unterminated = cli(&["--askpass", "-p", &p, "PING"], b"no-newline", &[]);
+    assert!(unterminated.stderr.starts_with("AUTH failed: "), "{}", unterminated.stderr);
+}

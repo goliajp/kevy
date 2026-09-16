@@ -111,3 +111,7 @@ pub(crate) fn is_verbatim_command(argv: &[Vec<u8>]) -> bool {
 pub(crate) fn c_str(bytes: &[u8]) -> &[u8] {
     &bytes[..bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len())]
 }
+
+#[cfg(test)]
+#[path = "format_tests.rs"]
+mod tests;
