@@ -320,7 +320,7 @@ done
 note "crash failover: $NEWP won and opened writes"
 CONV=0
 for _ in $(seq 120); do
-    echo "$($CLI -p $OTHER GET postfail 2>/dev/null)" | grep -q '"v1"' && { CONV=1; break; }
+    echo "$($CLI -p $OTHER GET postfail 2>/dev/null)" | grep -qx v1 && { CONV=1; break; }
     sleep 0.5
 done
 [ $CONV = 1 ] || {
@@ -338,7 +338,7 @@ note "restart-role clamp holds writes"
 REJOIN=0
 for _ in $(seq 60); do
     if [ "$(role_of $N1)" = "slave" ]; then
-        echo "$($CLI -p $N1 GET postfail 2>/dev/null)" | grep -q '"v1"' && { REJOIN=1; break; }
+        echo "$($CLI -p $N1 GET postfail 2>/dev/null)" | grep -qx v1 && { REJOIN=1; break; }
     fi
     sleep 0.5
 done

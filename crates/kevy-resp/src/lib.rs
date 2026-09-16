@@ -63,7 +63,7 @@ pub use reply_encode_resp3::{
     encode_big_number, encode_blob_error, encode_boolean, encode_double, encode_map_header,
     encode_null, encode_push_header, encode_set_header, encode_verbatim,
 };
-pub use reply_parse::{Reply, parse_reply};
+pub use reply_parse::{Reply, TextedReply, parse_reply, parse_reply_keeping_double_text};
 pub use request::{MAX_BULK_LEN, MAX_MULTIBULK_LEN, parse_command, parse_command_into};
 pub use request_borrowed::parse_command_borrowed;
 

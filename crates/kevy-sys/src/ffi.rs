@@ -41,7 +41,16 @@ unsafe extern "C" {
     // signal(2) for SIGTERM / SIGINT handling. Variadic-ish
     // in glibc but the fixed two-arg form is universally supported.
     pub fn signal(signum: c_int, handler: extern "C" fn(c_int)) -> *mut c_void;
+    // poll(2) for kevy-cli's wait on a socket and stdin together.
+    pub fn poll(fds: *mut crate::wait::PollFd, nfds: NfdsT, timeout: c_int) -> c_int;
 }
+
+/// `nfds_t`: `unsigned long` on Linux, `unsigned int` on macOS.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub type NfdsT = core::ffi::c_ulong;
+/// `nfds_t`: `unsigned long` on Linux, `unsigned int` on macOS.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub type NfdsT = core::ffi::c_uint;
 
 /// `struct timespec` — used by kqueue's `kevent` timeout (macOS only).
 #[cfg(any(target_os = "macos", target_os = "ios"))]

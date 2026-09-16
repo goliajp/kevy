@@ -25,7 +25,7 @@ services:
     # the healthcheck is a one-liner; for older tags fall back to the
     # bash + /dev/tcp form (see git history).
     healthcheck:
-      test: ["CMD", "kevy-cli", "ping"]
+      test: ["CMD", "kevy-cli", "-e", "ping"]
       interval: 2s
       timeout: 1s
       retries: 15

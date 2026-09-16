@@ -10,7 +10,7 @@
 //! large append). The classic hiredis idiom, in safe index math — no
 //! `unsafe`.
 
-use kevy_resp::{ProtocolError, Reply, parse_reply};
+use kevy_resp::{ProtocolError, Reply, TextedReply, parse_reply, parse_reply_keeping_double_text};
 
 /// A growable read buffer that parses replies off its front via a
 /// consume cursor rather than front-draining after every reply.
@@ -47,6 +47,18 @@ impl ReplyReadBuf {
             }
             None => Ok(None),
         }
+    }
+
+    /// [`Self::parse_next`], also returning the wire text of each double in
+    /// the reply (see [`kevy_resp::parse_reply_keeping_double_text`]). The
+    /// `usize` is how many buffered bytes the reply took.
+    pub fn parse_next_keeping_double_text(&mut self) -> Result<Option<TextedReply>, ProtocolError> {
+        let parsed = parse_reply_keeping_double_text(&self.buf[self.pos..])?;
+        if let Some((_, used, _)) = &parsed {
+            self.pos += used;
+            self.reclaim_after_consume();
+        }
+        Ok(parsed)
     }
 
     /// Append freshly-read bytes. Compacts the consumed prefix first when
@@ -120,5 +132,17 @@ mod tests {
         let mut b = ReplyReadBuf::with_capacity(16);
         b.extend(b"!bogus\r\n");
         assert!(b.parse_next().is_err());
+    }
+
+    #[test]
+    fn double_text_survives_a_split_read() {
+        let mut b = ReplyReadBuf::with_capacity(8);
+        b.extend(b",1e+3");
+        assert!(matches!(b.parse_next_keeping_double_text(), Ok(None)));
+        b.extend(b"00\r\n+next\r\n");
+        let (reply, _, texts) = b.parse_next_keeping_double_text().unwrap().unwrap();
+        assert_eq!(reply, Reply::Double(1e300));
+        assert_eq!(texts, [b"1e+300".to_vec()]);
+        assert!(matches!(b.parse_next(), Ok(Some(Reply::Simple(s))) if s == b"next"));
     }
 }
