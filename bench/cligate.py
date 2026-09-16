@@ -34,6 +34,7 @@ import argparse
 import json
 import os
 import pathlib
+import re
 import shlex
 import subprocess
 import sys
@@ -100,7 +101,7 @@ def parse_cases(path: pathlib.Path):
             cur["stdin"] += unescape(expand(value))
         elif key in ("run", "deviation", "kevy.stdout", "kevy.stderr", "kevy.exit",
                      "kevy.stdout-contains", "kevy.stdout-replace", "timeline", "screen",
-                     "compare"):
+                     "compare", "mask", "head"):
             cur[key] = value
         else:
             sys.exit(f"cligate: {path}:{lineno}: unknown field {key!r}")
@@ -118,7 +119,8 @@ def expand(text: str) -> str:
 def timeline_script(timeline: str, program: str, argv, pty=False) -> str:
     """A shell pipeline that feeds the CLI over time: `;`-separated steps, each
     a number of seconds to wait, `INT` (SIGINT to the CLI), `KILL` (SIGKILL,
-    to keep the screen as it is), or bytes to type (C escapes). The CLI's own
+    to keep the screen as it is), `$ <command>` to run beside it, or bytes to
+    type (C escapes). The CLI's own
     exit code is the script's. With `pty`, the CLI runs on a pseudo-terminal
     of 80 columns (script(1)), as a person's would."""
     steps = []
@@ -128,6 +130,10 @@ def timeline_script(timeline: str, program: str, argv, pty=False) -> str:
         word = step.strip()
         if word in ("INT", "KILL"):
             steps.append(f"kill -{word} $(pidof {program})")
+        elif word.startswith("$ "):
+            # A command run beside the CLI (with redis-cli, whichever CLI is
+            # under test), its output discarded.
+            steps.append(f"{expand(word[2:])} >/dev/null 2>&1")
         elif word.replace(".", "", 1).isdigit():
             steps.append(f"sleep {word}")
         else:
@@ -236,6 +242,17 @@ class Reference:
             r = self.run(["-p", str(PORT), *shlex.split(expand(line))], b"", {})
             if r.returncode != 0:
                 sys.exit(f"cligate: setup failed: {line}: {r.stderr.decode()}")
+
+
+def normalized(case, result):
+    """Readings that change with time: `mask` (a regex) turns each match in
+    stdout into `#`, and `head` keeps only the first N lines."""
+    out = result.stdout
+    if "mask" in case:
+        out = re.sub(case["mask"].encode(), b"#", out)
+    if "head" in case:
+        out = b"".join(out.splitlines(keepends=True)[:int(case["head"])])
+    return subprocess.CompletedProcess(result.args, result.returncode, out, result.stderr)
 
 
 def on_screen(result, screen: bool):
@@ -352,8 +369,9 @@ def main() -> int:
             argv = argv_of(case)
             ref.reset(case["setup"])
             screen = case.get("screen")
-            r = on_screen(ref.run(argv, case["stdin"], case["env"], timeline=case.get("timeline"),
-                                  screen=screen), screen)
+            r = normalized(case, on_screen(ref.run(argv, case["stdin"], case["env"],
+                                                   timeline=case.get("timeline"), screen=screen),
+                                           screen))
             ref.reset(case["setup"])
             if args.show_reference:
                 print(f"[{','.join(case['ids'])} {case['name']}] exit={r.returncode}")
@@ -361,8 +379,9 @@ def main() -> int:
                 continue
             if args.determinism:
                 ref.reset(case["setup"])
-                again = on_screen(ref.run(argv, case["stdin"], case["env"],
-                                          timeline=case.get("timeline"), screen=screen), screen)
+                again = normalized(case, on_screen(ref.run(argv, case["stdin"], case["env"],
+                                                           timeline=case.get("timeline"),
+                                                           screen=screen), screen))
                 if (r.stdout, r.stderr, r.returncode) != (again.stdout, again.stderr,
                                                           again.returncode):
                     failed += 1
@@ -378,8 +397,10 @@ def main() -> int:
                 print(f"FAIL [{','.join(case['ids'])} {case['name']}] (cases.txt:{case['line']}): "
                       "redis-cli did not finish, so there is nothing to compare")
                 continue
-            k = on_screen(ref.run(argv, case["stdin"], case["env"], program="kevy-cli",
-                                  timeline=case.get("timeline"), screen=screen), screen)
+            k = normalized(case, on_screen(ref.run(argv, case["stdin"], case["env"],
+                                                   program="kevy-cli",
+                                                   timeline=case.get("timeline"), screen=screen),
+                                           screen))
             want = expected_kevy(case, r)
             got = (k.stdout, k.stderr, k.returncode)
             if agrees(case, want, got):
