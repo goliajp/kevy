@@ -213,7 +213,10 @@ jobs:
   npm:
     name: npm publish the wasm package
     runs-on: ubuntu-latest
-    needs: publish
+    # After npm-platform: kevy-node and kevy-ts, published below, pin
+    # platform packages by this version, and a main package that reaches the
+    # registry first installs cleanly and fails at load.
+    needs: [publish, npm-platform]
     env:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
@@ -384,6 +387,17 @@ jobs:
             echo "repository has doors, so something is being skipped that should not be"
             exit 1
           fi
+
+  # ───────────── npm platform packages (kevy-node natives, kevy-bin) ─────────────
+  # After release-notes, because kevy-bin's packages are cut from the
+  # binaries attached to the GitHub release rather than rebuilt.
+  npm-platform:
+    needs: release-notes
+    uses: ./.github/workflows/npm-platform.yml
+    with:
+      tag: ${{ github.ref_name }}
+    secrets:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   # ───────────── build the kevy server binary for every supported target ─────────────
   # All targets build NATIVELY on their respective GitHub-hosted runner — each
