@@ -1088,3 +1088,43 @@ setup: HSET h f v g w
 setup: ZADD z 1 a 2 b
 setup: XADD x 1-1 f v
 run: -p $PORT --memkeys --memkeys-samples 3
+
+# ─── P2 · --hotkeys ──────────────────────────────────────────────────────────
+# Under an LFU policy a new key's counter is 5 and its first read makes it 6,
+# deterministically; later reads increment only probabilistically.
+
+[RC-085 hotkeys-without-an-lfu-policy]
+setup: CONFIG SET maxmemory-policy noeviction
+setup: MSET a 1
+run: -p $PORT --hotkeys
+
+[RC-085 hotkeys-report]
+setup: CONFIG SET maxmemory-policy allkeys-lfu
+setup: MSET a 1 b 2 c 3 d 4
+setup: GET a
+setup: GET c
+run: -p $PORT --hotkeys
+
+[RC-085,RC-080 hotkeys-on-a-terminal]
+env: FAKETTY=1
+setup: CONFIG SET maxmemory-policy allkeys-lfu
+setup: MSET a 1 b 2 c 3 d 4
+setup: GET a
+setup: GET c
+run: -p $PORT --hotkeys
+
+[RC-085 hotkeys-with-a-pattern]
+setup: CONFIG SET maxmemory-policy allkeys-lfu
+setup: MSET a 1 b 2 c 3 d 4
+setup: GET a
+setup: GET c
+run: -p $PORT --hotkeys --pattern [ab]
+
+[RC-086 hotkeys-count]
+deviation: DEV-021
+setup: CONFIG SET maxmemory-policy allkeys-lfu
+setup: MSET a 1 b 2 c 3 d 4
+setup: GET a
+setup: GET c
+run: -p $PORT --hotkeys --hotkeys-count 1
+kevy.stdout-contains: Sampled 4 keys in the keyspace!\nhot key found with counter: 6\tkeyname: "a"\n

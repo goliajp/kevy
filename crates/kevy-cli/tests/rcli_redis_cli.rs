@@ -1141,3 +1141,36 @@ fn ctrl_c_ends_bigkeys_with_the_summary_so_far() {
     assert_eq!(walk.finish(), 0);
     server.join().unwrap();
 }
+
+#[test]
+fn hotkeys_keeps_the_hottest_and_stops_on_an_error() {
+    let page: &'static [u8] = b"*2\r\n$1\r\n0\r\n*3\r\n$1\r\na\r\n$1\r\nb\r\n$1\r\nc\r\n";
+    let (port, server) =
+        scripted_server(vec![b":3\r\n", b"+OK\r\n", page, b":6\r\n+nope\r\n:5\r\n"]);
+    let out = cli(&["-p", &port, "--hotkeys", "-i", "0.001"], b"", &[]);
+    assert_eq!(out.stderr, "Warning: OBJECT freq on '\"b\"' failed (may have been deleted)\n");
+    assert!(
+        out.stdout.ends_with("Sampled 3 keys in the keyspace!\nhot key found with counter: 6\tkeyname: \"a\"\nhot key found with counter: 5\tkeyname: \"c\"\n"),
+        "{}",
+        out.stdout
+    );
+    server.join().unwrap();
+
+    let (port, server) =
+        scripted_server(vec![b":3\r\n", b"+OK\r\n", page, b"-ERR no LFU\r\n:1\r\n:1\r\n"]);
+    let out = cli(&["-p", &port, "--hotkeys"], b"", TTY);
+    assert_eq!((out.stderr.as_str(), out.code), ("Error: ERR no LFU\n", 1));
+    server.join().unwrap();
+
+    let (port, server) = scripted_server(vec![b":3\r\n", b"+OK\r\n", page, b":7\r\n:1\r\n:2\r\n"]);
+    let out = cli(&["-p", &port, "--hotkeys", "--hotkeys-count", "2"], b"", TTY);
+    assert!(
+        out.stdout.contains("Keys sampled: 3\n")
+            && out.stdout.ends_with(
+                "counter: 7\tkeyname: \"a\"\nhot key found with counter: 2\tkeyname: \"c\"\n"
+            ),
+        "{:?}",
+        out.stdout
+    );
+    server.join().unwrap();
+}

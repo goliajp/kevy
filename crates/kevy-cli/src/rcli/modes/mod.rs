@@ -3,6 +3,7 @@
 
 mod bigkeys;
 pub(crate) mod dispatch;
+mod hotkeys;
 mod pages;
 mod progress;
 mod scan;
