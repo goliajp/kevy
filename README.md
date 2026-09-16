@@ -317,10 +317,14 @@ corpora, recall-aligned ([`bench/PERF-LEDGER.md`](bench/PERF-LEDGER.md)):
 A complete server is a 768 KB stripped binary that boots into under
 5 MB of RSS.
 
-**Upgrading?** [docs/upgrading-6.2-to-6.3.md](docs/upgrading-6.2-to-6.3.md)
-is the current hop: nothing to change, and what 6.3.0 added — `HRANDFIELD`,
-`notify-keyspace-events` over the wire, four RESP3 reply shapes and one
-`GEOPOS` reply corrected. [docs/UPGRADING.md](docs/UPGRADING.md) covers the
+**Upgrading?** [docs/upgrading-6.3-to-6.4.md](docs/upgrading-6.3-to-6.4.md)
+is the current hop: nothing to change in code and nothing on disk moves,
+but five answers that were wrong are now right — `GEOSEARCH` near the
+poles, `used_memory` for `APPEND`-grown strings, overflowing month and year
+bounds, a `regexp_*` alternation, and io_uring disconnects — each measured
+against 6.3.0. The hop before it is
+[docs/upgrading-6.2-to-6.3.md](docs/upgrading-6.2-to-6.3.md).
+[docs/UPGRADING.md](docs/UPGRADING.md) covers the
 older majors — 3.x → 4.0 (wire and disk carry over; the Rust
 API changed once, with a table and a rule for every rename) and
 2.x → 3.x (binary swap + dependency bump). Snapshots and AOF load
