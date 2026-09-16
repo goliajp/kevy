@@ -48,7 +48,18 @@ impl Srv {
 }
 
 impl Drop for Srv {
+    /// Ask the server to stop and wait for it; kill only one that will not.
+    ///
+    /// Killing outright raced a server already on its way out after a test's
+    /// SHUTDOWN: under coverage it was cut down while writing its profile, and
+    /// one torn profile makes llvm-profdata refuse to merge any of them.
     fn drop(&mut self) {
+        let pid = self.child.id().to_string();
+        let _ = Command::new("kill").args(["-TERM", &pid]).status(); // may have exited already
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while matches!(self.child.try_wait(), Ok(None)) && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
         let _ = self.child.kill();
         let _ = self.child.wait();
         let _ = std::fs::remove_dir_all(&self.dir);
@@ -647,4 +658,110 @@ fn handshake_successes_and_pubsub_breakage() {
     // A password line without its newline is still the password: AUTH is sent.
     let unterminated = cli(&["--askpass", "-p", &p, "PING"], b"no-newline", &[]);
     assert!(unterminated.stderr.starts_with("AUTH failed: "), "{}", unterminated.stderr);
+}
+
+/// A kevy-cli REPL driven over time: type, wait for output, send signals.
+struct Live {
+    child: Child,
+    stdout: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+}
+
+impl Live {
+    fn start(args: &[&str], env: &[(&str, &str)]) -> Live {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_kevy-cli"));
+        cmd.args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+        cmd.env_remove("FAKETTY").envs(env.iter().copied());
+        let mut child = cmd.spawn().expect("run kevy-cli");
+        let stdout = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (mut pipe, sink) = (child.stdout.take().unwrap(), stdout.clone());
+        std::thread::spawn(move || {
+            use std::io::Read;
+            let mut buf = [0u8; 4096];
+            while let Ok(n @ 1..) = pipe.read(&mut buf) {
+                sink.lock().unwrap().extend_from_slice(&buf[..n]);
+            }
+        });
+        Live { child, stdout }
+    }
+
+    fn type_line(&mut self, line: &str) {
+        self.child.stdin.as_mut().unwrap().write_all(line.as_bytes()).unwrap();
+    }
+
+    /// Wait until stdout contains `text`; panics with what it holds after 10s.
+    fn wait_for(&self, text: &str) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let seen = String::from_utf8_lossy(&self.stdout.lock().unwrap()).into_owned();
+            if seen.contains(text) {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "never printed {text:?}; printed {seen:?}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    fn interrupt(&self) {
+        let pid = self.child.id().to_string();
+        assert!(Command::new("kill").args(["-INT", &pid]).status().unwrap().success());
+    }
+
+    /// Close stdin and wait; the exit code.
+    fn finish(mut self) -> i32 {
+        drop(self.child.stdin.take());
+        self.child.wait().unwrap().code().unwrap_or(-1)
+    }
+}
+
+#[test]
+fn ctrl_c_cuts_a_stream_loose_and_ends_anything_else() {
+    let s = Srv::start();
+    let p = s.port();
+    // Subscribed: Ctrl-C drops the subscription for a fresh connection.
+    let mut sub = Live::start(&["-p", &p], TTY);
+    sub.type_line("SUBSCRIBE c\n");
+    sub.wait_for("Reading messages");
+    sub.interrupt();
+    sub.type_line("PING\n");
+    sub.wait_for("PONG");
+    assert_eq!(sub.finish(), 0);
+
+    // Monitoring: the same, against a server that streams until cut.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let mport = listener.local_addr().unwrap().port().to_string();
+    let server = std::thread::spawn(move || {
+        use std::io::Read;
+        let mut buf = [0u8; 256];
+        let (mut first, _) = listener.accept().unwrap();
+        let _ = first.read(&mut buf);
+        first.write_all(b"+OK\r\n").unwrap();
+        let (mut second, _) = listener.accept().unwrap();
+        let _ = second.read(&mut buf);
+        second.write_all(b"+PONG\r\n").unwrap();
+        drop(first);
+    });
+    let mut monitor = Live::start(&["-p", &mport], &[]);
+    monitor.type_line("MONITOR\n");
+    monitor.wait_for("OK\n");
+    monitor.interrupt();
+    monitor.type_line("PING\n");
+    monitor.wait_for("PONG\n");
+    assert_eq!(monitor.finish(), 0);
+    server.join().unwrap();
+
+    // Blocked in a command, or waiting at the prompt: Ctrl-C exits 1.
+    let mut blocked = Live::start(&["-p", &p], &[]);
+    blocked.type_line("CLIENT SETNAME blocked\n");
+    blocked.wait_for("OK");
+    blocked.type_line("BLPOP nokey 0\n");
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    blocked.interrupt();
+    assert_eq!(blocked.child.wait().unwrap().code(), Some(1));
+    let idle = Live::start(&["-p", &p], &[]);
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    idle.interrupt();
+    assert_eq!(idle.finish(), 1);
 }

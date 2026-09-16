@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 /// Run the REPL until the input ends or `quit`; the process exit code.
 pub(crate) fn run(s: &mut Session) -> u8 {
     s.interactive = true;
+    kevy_sys::install_interrupt(1);
     let mut input = Input::open();
     // Hints and completion are for a person at a prompt; a pipe never asks.
     let docs = input.keeps_history().then(|| s.docs());
@@ -25,6 +26,7 @@ pub(crate) fn run(s: &mut Session) -> u8 {
     let complete = |line: &[u8]| docs.as_deref().map_or_else(Vec::new, |d| d.completions(line));
     let assist = Assist { hint: &hint, complete: &complete };
     loop {
+        s.arm_interrupt();
         let prompt = super::prompt::prompt(s);
         match input.read(&prompt, &assist) {
             Outcome::Line(line) => {
@@ -133,10 +135,15 @@ fn wait_for_messages_or_stdin(s: &mut Session) {
                 write_out(info);
             }
         }
+        s.arm_interrupt();
         let ready = kevy_sys::wait_readable(&[fd, 0], Duration::from_secs(5))
             .unwrap_or_else(|_| vec![false, true]);
         if show_info {
             write_out(b"\x1b[K");
+        }
+        if kevy_sys::take_severed() {
+            s.recover_from_interrupt();
+            return;
         }
         if ready[0] {
             if let Read::Failed = s.read_reply(false) {
