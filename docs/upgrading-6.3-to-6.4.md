@@ -29,6 +29,7 @@ from the diff.
 | scrape `INFO` | `INFO clients` gains `blocked_clients`; `INFO allocator` is new | 6 |
 | embed `kevy-seg`, `kevy-ring` or `kevy-time` from Rust | three inputs that corrupted or panicked are refused or saturated | 7 |
 | pull `ghcr.io/goliajp/kevy:latest` | pull again; the tag now resolves to 6.4.0 | — |
+| use `@goliapkg/kevy-node`, or `@goliapkg/kevy-ts` embedded, from npm | 6.0.0–6.3.0 install but cannot load their engine; 6.4.0 can | [npm](#npm-kevy-node-and-kevy-ts-6063-did-not-load) |
 
 ---
 
@@ -195,7 +196,28 @@ npm install @goliapkg/kevy-node@6.4.0     # Node native
 pip install kevy==6.4.0
 go get github.com/goliajp/kevy-go/v6@v6.4.0
 cargo install kevy --version 6.4.0        # the server binary, from source
+npm install -g @goliapkg/kevy-bin@6.4.0   # the server binary, prebuilt
 ```
+
+`@goliapkg/kevy-bin` is new on npm with 6.4.0: `kevy` and `kevy-cli`
+without a Rust toolchain, on the same three platforms as the release
+binaries and byte-identical to them.
+
+### npm: kevy-node and kevy-ts 6.0–6.3 did not load
+
+`@goliapkg/kevy-node` takes its native engine from a platform package
+(`@goliapkg/kevy-node-linux-x64` and so on) pinned at its own version. From
+6.0.0 to 6.3.0 those platform packages were never published — npm served
+only 5.1.0 — so installing kevy-node succeeded, npm skipped the optional
+dependency it could not find, and the first `open()` failed with a
+`dlopen` error naming a `target/debug` path. `@goliapkg/kevy-ts` pins the
+same packages, so its embedded backend failed the same way; its remote
+client (`kevy://host:port`) was unaffected.
+
+6.4.0 is the first version whose platform packages are on npm, published
+on 2026-09-16 and checked by installing from the registry on macOS arm64
+and Linux x86-64. The earlier versions cannot be repaired after the fact:
+upgrade to 6.4.0.
 
 Prebuilt server binaries for Linux (x86-64, arm64) and macOS (arm64), each
 with a SHA-256 file, are on the

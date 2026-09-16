@@ -21,6 +21,7 @@ kevy-embedded = "6.4.0"
 | `INFO` を取得している | `INFO clients` に `blocked_clients` が加わり、`INFO allocator` が新設されます | 6 |
 | Rust から `kevy-seg`、`kevy-ring`、`kevy-time` を直接組み込んでいる | 壊れたり panic したりしていた 3 種類の入力が、拒否または飽和されます | 7 |
 | `ghcr.io/goliajp/kevy:latest` を pull している | もう一度 pull してください。このタグは 6.4.0 を指します | — |
+| npm から `@goliapkg/kevy-node`、または組み込みで `@goliapkg/kevy-ts` を使っている | 6.0.0〜6.3.0 は入るがエンジンを読み込めません。6.4.0 は読み込めます | [npm](#npmkevy-node-と-kevy-ts-6063-は読み込めなかった) |
 
 ---
 
@@ -124,6 +125,20 @@ npm install @goliapkg/kevy-node@6.4.0     # Node ネイティブ
 pip install kevy==6.4.0
 go get github.com/goliajp/kevy-go/v6@v6.4.0
 cargo install kevy --version 6.4.0        # サーバーバイナリ、ソースからビルド
+npm install -g @goliapkg/kevy-bin@6.4.0   # サーバーバイナリ、ビルド済み
 ```
+
+`@goliapkg/kevy-bin` は 6.4.0 から npm にあります。Rust ツールチェーンなしで `kevy` と `kevy-cli` が入り、
+対応プラットフォームは release のバイナリと同じ 3 つ、バイト列も同一です。
+
+### npm：kevy-node と kevy-ts 6.0〜6.3 は読み込めなかった
+
+`@goliapkg/kevy-node` はネイティブエンジンをプラットフォームパッケージ（`@goliapkg/kevy-node-linux-x64` など）から取り、
+その版は自分の版に固定されています。6.0.0 から 6.3.0 まで、これらのプラットフォームパッケージは一度も公開されておらず——npm にあったのは 5.1.0 だけ——
+kevy-node のインストールは成功し、npm は見つからない optional dependency を飛ばし、最初の `open()` が `target/debug` のパスを名指す `dlopen` エラーで失敗していました。
+`@goliapkg/kevy-ts` も同じパッケージを固定しているので、組み込みバックエンドは同じように失敗しました。リモートクライアント（`kevy://host:port`）は影響を受けていません。
+
+6.4.0 はプラットフォームパッケージが npm にある最初の版で、2026-09-16 に公開し、macOS arm64 と Linux x86-64 で registry から実際にインストールして確認しました。
+それ以前の版を後から直すことはできません。6.4.0 に上げてください。
 
 Linux（x86-64、arm64）と macOS（arm64）のビルド済みサーバーバイナリは、それぞれ SHA-256 ファイル付きで [v6.4.0 release](https://github.com/goliajp/kevy/releases/tag/v6.4.0) にあります。`ghcr.io/goliajp/kevy:latest` を使っているコンテナ利用者は、次の pull で 6.4.0 になります。タグを固定しているなら `ghcr.io/goliajp/kevy:6.4.0` です。
