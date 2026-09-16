@@ -3,7 +3,6 @@
 use super::opts_parse::unquote;
 use super::send::Read;
 use super::session::{Session, eprint_bytes};
-use std::io::Read as _;
 
 /// Run the command at `args`; the process exit code.
 pub(crate) fn run(s: &mut Session, args: &[Vec<u8>]) -> u8 {
@@ -42,11 +41,12 @@ pub(crate) fn run(s: &mut Session, args: &[Vec<u8>]) -> u8 {
 
 /// All of standard input, binary-safe (`-x` / `-X`).
 fn stdin_all() -> Vec<u8> {
-    let mut buf = Vec::new();
-    if let Err(e) = std::io::stdin().lock().read_to_end(&mut buf) {
-        let text = super::conn::strerror(&e);
-        eprint_bytes(&[b"Reading from standard input: ", text.as_bytes(), b"\n"]);
-        std::process::exit(1);
+    match super::input::read_all_typed() {
+        Ok(all) => all,
+        Err(e) => {
+            let text = super::conn::strerror(&e);
+            eprint_bytes(&[b"Reading from standard input: ", text.as_bytes(), b"\n"]);
+            std::process::exit(1);
+        }
     }
-    buf
 }

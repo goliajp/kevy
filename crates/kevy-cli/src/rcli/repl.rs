@@ -123,6 +123,10 @@ fn wait_for_messages_or_stdin(s: &mut Session) {
         && (std::io::stdout().is_terminal() || std::env::var_os("FAKETTY").is_some());
     let color = show_info && std::env::var("TERM").is_ok_and(|t| t.contains("xterm"));
     while s.pubsub_mode {
+        // A line typed ahead is already read: it is the key press being waited for.
+        if super::input::typed_ahead() {
+            return;
+        }
         if !drain_buffered(s) {
             s.print_context_error();
             std::process::exit(1);

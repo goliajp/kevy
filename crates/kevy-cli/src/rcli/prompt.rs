@@ -33,3 +33,53 @@ pub(crate) fn prompt(s: &Session) -> Vec<u8> {
     p.extend_from_slice(b"> ");
     p
 }
+
+#[cfg(test)]
+mod tests {
+    use super::prompt;
+    use crate::rcli::conn::Conn;
+    use crate::rcli::opts::Opts;
+    use crate::rcli::session::Session;
+
+    /// A session connected to a listener nobody serves: enough for a prompt.
+    fn session(opts: Opts, dir: &std::path::Path) -> (Session, std::os::unix::net::UnixListener) {
+        let path = dir.join("p.sock");
+        let _ = std::fs::remove_file(&path);
+        let listener = std::os::unix::net::UnixListener::bind(&path).expect("bind a test socket");
+        let mut s = Session::new(opts);
+        s.conn = Some(Conn::unix(path.as_os_str().as_encoded_bytes()).expect("connect to it"));
+        (s, listener)
+    }
+
+    #[test]
+    fn the_prompt_names_where_and_what_state() {
+        let dir = std::env::temp_dir().join(format!("kevy-cli-prompt-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let text = |s: &Session| String::from_utf8_lossy(&prompt(s)).into_owned();
+
+        let mut opts = Opts::defaults(false);
+        opts.port = 7000;
+        assert_eq!(text(&Session::new(opts.clone())), "not connected> ");
+        let (mut s, _l) = session(opts.clone(), &dir);
+        assert_eq!(text(&s), "127.0.0.1:7000> ");
+        s.dbnum = 3;
+        s.in_multi = true;
+        s.pubsub_mode = true;
+        assert_eq!(text(&s), "127.0.0.1:7000[3](TX)(subscribed mode)> ");
+
+        opts.host = b"::1".to_vec();
+        let (s, _l) = session(opts.clone(), &dir);
+        assert_eq!(text(&s), "[::1]:7000> ", "an IPv6 host is bracketed");
+
+        opts.socket = Some(b"/run/kevy.sock".to_vec());
+        let (s, _l) = session(opts.clone(), &dir);
+        assert_eq!(text(&s), "kevy /run/kevy.sock> ", "DEV-011");
+
+        opts.socket = Some(vec![b'x'; 300]);
+        let (s, _l) = session(opts, &dir);
+        let long = prompt(&s);
+        assert_eq!(long.len(), 127, "cut to fit, keeping the `> `");
+        assert!(long.ends_with(b"> "));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

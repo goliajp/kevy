@@ -3,8 +3,11 @@
 
 use super::edit::editor::{Assist, Outcome, no_assist, read_line};
 use super::edit::history::{History, history_path, is_sensitive};
-use std::io::{BufRead, IsTerminal, Write};
+use std::fs::File;
+use std::io::{BufRead, BufReader, IsTerminal, Write};
+use std::os::fd::AsFd;
 use std::path::PathBuf;
+use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 
 /// Terminal types that do not understand the editor's escape sequences.
 const DUMB_TERMS: &[&str] = &["dumb", "cons25", "emacs"];
@@ -135,9 +138,10 @@ fn edit_line(
 ) -> Outcome {
     let _raw = raw.then(|| kevy_sys::RawMode::enable(0).ok()).flatten();
     let cols = if raw { kevy_sys::terminal_columns(1).map_or(80, usize::from) } else { 80 };
-    let mut stdin = std::io::stdin().lock();
     let mut stdout = std::io::stdout().lock();
-    read_line(&mut stdin, &mut stdout, prompt, history, assist, cols, echo == Echo::Masked)
+    let mut typed = typed();
+    let Some(stdin) = typed.as_mut() else { return Outcome::Eof };
+    read_line(stdin, &mut stdout, prompt, history, assist, cols, echo == Echo::Masked)
         .unwrap_or(Outcome::Eof)
 }
 
@@ -145,7 +149,9 @@ fn edit_line(
 /// input with nothing read is the end.
 fn plain_line() -> Outcome {
     let mut line = Vec::new();
-    match std::io::stdin().lock().read_until(b'\n', &mut line) {
+    let mut typed = typed();
+    let Some(stdin) = typed.as_mut() else { return Outcome::Eof };
+    match stdin.read_until(b'\n', &mut line) {
         Ok(0) | Err(_) => Outcome::Eof,
         Ok(_) => {
             if line.last() == Some(&b'\n') {
@@ -155,4 +161,34 @@ fn plain_line() -> Outcome {
             Outcome::Line(line)
         }
     }
+}
+
+/// Standard input as every REPL line is read from it: one buffer, so the
+/// subscribed wait can see bytes typed or pasted ahead that are already out of
+/// the descriptor. `None` when standard input is closed.
+static TYPED: OnceLock<Mutex<Option<BufReader<File>>>> = OnceLock::new();
+
+fn typed() -> MutexGuard<'static, Option<BufReader<File>>> {
+    TYPED
+        .get_or_init(|| {
+            let fd = std::io::stdin().as_fd().try_clone_to_owned().ok();
+            Mutex::new(fd.map(|fd| BufReader::new(File::from(fd))))
+        })
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+}
+
+/// The rest of standard input (`-x` / `-X`), after anything already read
+/// from it, such as an `--askpass` line.
+pub(crate) fn read_all_typed() -> std::io::Result<Vec<u8>> {
+    let mut all = Vec::new();
+    if let Some(stdin) = typed().as_mut() {
+        std::io::Read::read_to_end(stdin, &mut all)?;
+    }
+    Ok(all)
+}
+
+/// Bytes already read from standard input and not yet part of a line.
+pub(crate) fn typed_ahead() -> bool {
+    typed().as_ref().is_some_and(|r| !r.buffer().is_empty())
 }
