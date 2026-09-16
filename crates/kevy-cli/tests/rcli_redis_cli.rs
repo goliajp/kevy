@@ -1174,3 +1174,63 @@ fn hotkeys_keeps_the_hottest_and_stops_on_an_error() {
     );
     server.join().unwrap();
 }
+
+#[test]
+fn keystats_reports_and_says_where_to_resume() {
+    let s = Srv::start();
+    let p = s.port();
+    cli(&["-p", &p, "MSET", "s1", "x", "s2", "xxxxxxxxxxxxxxxxxxxxxxxxxxxx"], b"", &[]);
+    cli(&["-p", &p, "RPUSH", "l1", "a", "b", "c"], b"", &[]);
+    let out = cli(&["-p", &p, "--keystats", "--top", "2"], b"", &[]).stdout;
+    for part in [
+        "100.00% keys scanned\nKeys sampled: 3\n",
+        "--- Top 2 key sizes ---\n  1 ",
+        "Key size Percentile Total keys\n",
+        "Total key length is 6B (2B avg)\n",
+        "string               2  66.67% ",
+    ] {
+        assert!(out.contains(part), "no {part:?} in {out}");
+    }
+    let screen = cli(&["-p", &p, "--keystats-samples", "2", "--keystats"], b"", TTY).stdout;
+    assert!(screen.contains("\x1b[2K\rKeys sampled: 3\n"), "{screen:?}");
+    let empty = cli(&["-p", &p, "--keystats", "--pattern", "nothing*"], b"", &[]).stdout;
+    assert!(
+        empty.contains("No key size samples collected\n") && empty.contains("(0 avg)"),
+        "{empty}"
+    );
+
+    // A walk that never ends, stopped: the report says which cursor to resume at.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port().to_string();
+    let server = std::thread::spawn(move || {
+        use std::io::Read;
+        let (mut conn, _) = listener.accept().unwrap();
+        let mut buf = [0u8; 4096];
+        while let Ok(got @ 1..) = conn.read(&mut buf) {
+            let asked = &buf[..got];
+            let has = |w: &[u8]| asked.windows(w.len()).any(|x| x == w);
+            let reply: &[u8] = if has(b"DBSIZE") {
+                b":1000\r\n"
+            } else if has(b"SCAN") {
+                b"*2\r\n$2\r\n42\r\n*1\r\n$1\r\nk\r\n"
+            } else if has(b"TYPE") {
+                b"+hash\r\n"
+            } else if has(b"MEMORY") {
+                b":64\r\n:2\r\n"
+            } else {
+                b"+OK\r\n"
+            };
+            if conn.write_all(reply).is_err() {
+                break;
+            }
+        }
+    });
+    let walk = Live::start(&["-p", &port, "--keystats", "--cursor", "9"], &[]);
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    walk.interrupt();
+    walk.wait_for("to restart from the last cursor.\n");
+    let seen = String::from_utf8_lossy(&walk.stdout.lock().unwrap()).into_owned();
+    assert!(seen.contains("\nScan interrupted:\nUse 'kevy-cli --keystats --cursor 42' to restart from the last cursor.\n"), "{seen}");
+    assert_eq!(walk.finish(), 0);
+    server.join().unwrap();
+}

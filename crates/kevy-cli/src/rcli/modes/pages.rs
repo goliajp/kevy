@@ -40,6 +40,12 @@ impl Pages {
         Pages { cursor, pattern, count: count.to_string().into_bytes(), finished: false }
     }
 
+    /// Where the next page starts: after an interrupted walk, the cursor to
+    /// resume from.
+    pub(crate) fn cursor(&self) -> u64 {
+        self.cursor
+    }
+
     /// The next page of keys; `None` once the walk is back at cursor 0.
     pub(crate) fn next(&mut self, s: &mut Session) -> Result<Option<Vec<Vec<u8>>>, PageError> {
         if self.finished {

@@ -28,13 +28,15 @@ enum Mode {
 /// Run the first special mode `s.opts` enables; `None` when there is none.
 pub(crate) fn run(s: &mut Session) -> Option<u8> {
     let (mode, flag) = first_mode(&s.opts)?;
-    let needs_server = matches!(mode, Mode::Scan | Mode::BigKeys | Mode::MemKeys | Mode::HotKeys);
+    let needs_server =
+        matches!(mode, Mode::Scan | Mode::BigKeys | Mode::MemKeys | Mode::KeyStats | Mode::HotKeys);
     if needs_server && !s.connect(Connect::Report) {
         return Some(1);
     }
     Some(match mode {
         Mode::Scan => super::scan::run(s),
         Mode::HotKeys => super::hotkeys::run(s),
+        Mode::KeyStats => super::keystats::run(s),
         Mode::BigKeys => super::bigkeys::run(s, Measure::Length),
         Mode::MemKeys => {
             super::bigkeys::run(s, Measure::Memory { samples: s.opts.modes.memkeys_samples })
