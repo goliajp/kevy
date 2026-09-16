@@ -9,7 +9,8 @@
 #           not stdout's bytes; each CLI gets its own empty history file
 #   deviation + kevy.stdout / kevy.stderr / kevy.exit / kevy.stdout-contains
 #           or kevy.stdout-replace (`old => new` over redis-cli's output)
-#   compare: lines-any-order — for a deviation in line order only
+#   compare: lines-any-order — line order is not the contract (a deviation in
+#           order, or an order the server does not keep stable)
 #           when kevy-cli is meant to differ (see deviations.txt)
 # Ids refer to .claude/rfcs/2026-09-17-kevy-cli-superset/redis-cli-inventory.md §8.
 
@@ -968,33 +969,42 @@ timeline: 0.5 ; ping\r ; 0.4 ; \x04 ; 0.3
 run: -p $PORT
 
 # ─── P2 · --scan ─────────────────────────────────────────────────────────────
+# The order keys come in is the server's SCAN order, which can change when the
+# keys are recreated between the two runs: lines compare in any order.
 
 [RC-073 scan-lists-every-key]
+compare: lines-any-order
 setup: MSET a 1 b 2 "sp ace" 3 "q\"uote" 4 k:1 x k:2 y
 run: -p $PORT --scan
 
 [RC-073 scan-on-a-terminal-quotes-keys]
+compare: lines-any-order
 setup: MSET a 1 b 2 "sp ace" 3 "q\"uote" 4 k:1 x k:2 y
 env: FAKETTY=1
 run: -p $PORT --scan
 
 [RC-074 scan-pattern]
+compare: lines-any-order
 setup: MSET a 1 b 2 "sp ace" 3 "q\"uote" 4 k:1 x k:2 y
 run: -p $PORT --scan --pattern k:*
 
 [RC-075 scan-quoted-pattern]
+compare: lines-any-order
 setup: MSET a 1 b 2 "sp ace" 3 "q\"uote" 4 k:1 x k:2 y
 run: -p $PORT --scan --quoted-pattern "\"sp *\""
 
 [RC-076 scan-a-key-per-page]
+compare: lines-any-order
 setup: MSET a 1 b 2 "sp ace" 3 "q\"uote" 4 k:1 x k:2 y
 run: -p $PORT --scan --count 1
 
 [RC-073 scan-ignores-the-output-format]
+compare: lines-any-order
 setup: MSET a 1 b 2 "sp ace" 3 "q\"uote" 4 k:1 x k:2 y
 run: -p $PORT --scan --json
 
 [RC-073 scan-with-an-interval]
+compare: lines-any-order
 setup: MSET a 1 b 2 "sp ace" 3 "q\"uote" 4 k:1 x k:2 y
 run: -p $PORT --scan -i 0.01
 
@@ -1099,6 +1109,7 @@ setup: MSET a 1
 run: -p $PORT --hotkeys
 
 [RC-085 hotkeys-report]
+compare: lines-any-order
 setup: CONFIG SET maxmemory-policy allkeys-lfu
 setup: MSET a 1 b 2 c 3 d 4
 setup: GET a
@@ -1106,6 +1117,7 @@ setup: GET c
 run: -p $PORT --hotkeys
 
 [RC-085,RC-080 hotkeys-on-a-terminal]
+compare: lines-any-order
 env: FAKETTY=1
 setup: CONFIG SET maxmemory-policy allkeys-lfu
 setup: MSET a 1 b 2 c 3 d 4
@@ -1114,6 +1126,7 @@ setup: GET c
 run: -p $PORT --hotkeys
 
 [RC-085 hotkeys-with-a-pattern]
+compare: lines-any-order
 setup: CONFIG SET maxmemory-policy allkeys-lfu
 setup: MSET a 1 b 2 c 3 d 4
 setup: GET a
@@ -1125,6 +1138,93 @@ deviation: DEV-021
 setup: CONFIG SET maxmemory-policy allkeys-lfu
 setup: MSET a 1 b 2 c 3 d 4
 setup: GET a
-setup: GET c
 run: -p $PORT --hotkeys --hotkeys-count 1
 kevy.stdout-contains: Sampled 4 keys in the keyspace!\nhot key found with counter: 6\tkeyname: "a"\n
+
+# ─── P2 · --keystats ─────────────────────────────────────────────────────────
+
+[RC-081 keystats-report]
+deviation: DEV-020
+compare: lines-any-order
+setup: CONFIG SET maxmemory-policy noeviction
+setup: MSET s1 x s2 xxxxxxxxxxxxxxxxxxxxxxxxxxxx
+setup: RPUSH l1 a b c d e f g h
+setup: HSET h f v g w
+setup: ZADD z 1 a 2 b
+setup: SADD st a b c d
+setup: XADD x 1-1 f v
+run: -p $PORT --keystats
+
+[RC-081 keystats-sizes-that-share-buckets-and-long-names]
+deviation: DEV-020
+compare: lines-any-order
+setup: DEBUG POPULATE 1 a 70000
+setup: DEBUG POPULATE 1 b 90000
+setup: DEBUG POPULATE 1 c 110000
+setup: SET nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn x
+setup: SET mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm y
+setup: RPUSH l a
+run: -p $PORT --keystats
+
+[RC-081 keystats-an-empty-keyspace]
+deviation: DEV-020
+compare: lines-any-order
+setup: CONFIG SET maxmemory-policy noeviction
+run: -p $PORT --keystats
+
+[RC-081,RC-080 keystats-on-a-terminal]
+deviation: DEV-020
+compare: lines-any-order
+env: FAKETTY=1
+setup: CONFIG SET maxmemory-policy noeviction
+setup: MSET s1 x s2 xxxxxxxxxxxxxxxxxxxxxxxxxxxx
+setup: RPUSH l1 a b c d e f g h
+setup: HSET h f v g w
+setup: ZADD z 1 a 2 b
+setup: SADD st a b c d
+setup: XADD x 1-1 f v
+run: -p $PORT --keystats
+
+[RC-082,RC-084 keystats-samples-and-top]
+deviation: DEV-020
+compare: lines-any-order
+setup: DEBUG POPULATE 1 a 70000
+setup: DEBUG POPULATE 1 b 90000
+setup: DEBUG POPULATE 1 c 110000
+setup: SET nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn x
+setup: SET mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm y
+setup: RPUSH l a
+run: -p $PORT --keystats --keystats-samples 3 --top 2
+
+[RC-084 keystats-top-zero]
+deviation: DEV-020
+compare: lines-any-order
+setup: CONFIG SET maxmemory-policy noeviction
+setup: MSET s1 x s2 xxxxxxxxxxxxxxxxxxxxxxxxxxxx
+setup: RPUSH l1 a b c d e f g h
+setup: HSET h f v g w
+setup: ZADD z 1 a 2 b
+setup: SADD st a b c d
+setup: XADD x 1-1 f v
+run: -p $PORT --keystats --top 0
+
+[RC-083 keystats-from-a-cursor]
+deviation: DEV-020
+compare: lines-any-order
+setup: DEBUG POPULATE 1 a 70000
+setup: DEBUG POPULATE 1 b 90000
+setup: DEBUG POPULATE 1 c 110000
+setup: SET nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn x
+setup: SET mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm y
+setup: RPUSH l a
+run: -p $PORT --keystats --cursor 5 --count 2
+
+[RC-081 keystats-module-types]
+deviation: DEV-020
+compare: lines-any-order
+setup: SET s xyz
+setup: VADD v VALUES 2 1 2 e1
+run: -p $PORT --keystats
+
+[RC-081 keystats-refused]
+run: -p $AUTH_PORT --keystats

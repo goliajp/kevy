@@ -32,6 +32,11 @@ impl Kind {
         Kind { name: name.to_vec(), command, unit, keys: 0, total: 0, biggest: None }
     }
 
+    /// Whether a length can be asked for keys of this kind.
+    pub(crate) fn has_length(&self) -> bool {
+        self.command.is_some()
+    }
+
     /// The unit sizes of this kind are reported in.
     pub(crate) fn unit(&self, measure: Measure) -> &'static str {
         match measure {
@@ -70,14 +75,17 @@ impl Tally {
     }
 }
 
-/// The type index and size of each key; `None` for a key gone before TYPE.
-/// `Err` carries the message of a fatal failure.
+/// A key's type (an index into the tally) and its size by each measure.
+pub(crate) type Measured = (usize, Vec<u64>);
+
+/// The type index of each key and its size by each of `measures`; `None`
+/// for a key gone before TYPE. `Err` carries the message of a fatal failure.
 pub(crate) fn measure(
     s: &mut Session,
     keys: &[Vec<u8>],
     tally: &mut Tally,
-    measure: Measure,
-) -> Result<Vec<Option<(usize, u64)>>, Vec<u8>> {
+    measures: &[Measure],
+) -> Result<Vec<Option<Measured>>, Vec<u8>> {
     let types = s
         .pipeline(&keys.iter().map(|k| vec![&b"TYPE"[..], k]).collect::<Vec<_>>())
         .map_err(|_| b"\nI/O error".to_vec())?;
@@ -91,42 +99,55 @@ pub(crate) fn measure(
             _ => None,
         });
     }
-    let sizes = sizes_of(s, keys, &kinds, tally, measure)?;
-    Ok(kinds.iter().zip(sizes).map(|(k, size)| k.map(|i| (i, size))).collect())
+    let sizes = sizes_of(s, keys, &kinds, tally, measures)?;
+    Ok(kinds.iter().zip(sizes).map(|(k, sizes)| k.map(|i| (i, sizes))).collect())
 }
 
-/// One size per key, 0 where there is nothing to ask or the answer failed.
+/// The command that measures `key` of `kind`, if there is one.
+fn command_for<'a>(
+    measure: Measure,
+    kind: &Kind,
+    key: &'a [u8],
+    samples: &'a Option<String>,
+) -> Option<Vec<&'a [u8]>> {
+    Some(match (measure, samples) {
+        (Measure::Memory { .. }, None) => vec![b"MEMORY", b"USAGE", key],
+        (Measure::Memory { .. }, Some(n)) => {
+            vec![b"MEMORY", b"USAGE", key, b"SAMPLES", n.as_bytes()]
+        }
+        (Measure::Length, _) => vec![kind.command?, key],
+    })
+}
+
+/// Sizes per key, one per measure, all in one pipeline; 0 where there is
+/// nothing to ask or the answer failed (with a warning).
 fn sizes_of(
     s: &mut Session,
     keys: &[Vec<u8>],
     kinds: &[Option<usize>],
     tally: &Tally,
-    measure: Measure,
-) -> Result<Vec<u64>, Vec<u8>> {
-    let samples = match measure {
-        Measure::Memory { samples } if samples > 0 => Some(samples.to_string()),
+    measures: &[Measure],
+) -> Result<Vec<Vec<u64>>, Vec<u8>> {
+    let samples = measures.iter().find_map(|m| match m {
+        Measure::Memory { samples } if *samples > 0 => Some(samples.to_string()),
         _ => None,
-    };
+    });
     let mut asked = Vec::new();
     let mut commands: Vec<Vec<&[u8]>> = Vec::new();
     for (i, (key, kind)) in keys.iter().zip(kinds).enumerate() {
         let Some(kind) = kind else { continue };
-        let argv: Vec<&[u8]> = match (measure, tally.kinds[*kind].command, &samples) {
-            (Measure::Memory { .. }, _, None) => vec![b"MEMORY", b"USAGE", key],
-            (Measure::Memory { .. }, _, Some(n)) => {
-                vec![b"MEMORY", b"USAGE", key, b"SAMPLES", n.as_bytes()]
+        for (m, measure) in measures.iter().enumerate() {
+            if let Some(argv) = command_for(*measure, &tally.kinds[*kind], key, &samples) {
+                asked.push((i, m));
+                commands.push(argv);
             }
-            (Measure::Length, Some(command), _) => vec![command, key],
-            (Measure::Length, None, _) => continue,
-        };
-        asked.push(i);
-        commands.push(argv);
+        }
     }
     let replies = s.pipeline(&commands).map_err(|_| b"\nI/O error".to_vec())?;
-    let mut sizes = vec![0u64; keys.len()];
-    for ((i, argv), reply) in asked.iter().zip(&commands).zip(replies) {
+    let mut sizes = vec![vec![0u64; measures.len()]; keys.len()];
+    for (((i, m), argv), reply) in asked.iter().zip(&commands).zip(replies) {
         match reply {
-            Reply::Int(n) => sizes[*i] = n.max(0) as u64,
+            Reply::Int(n) => sizes[*i][*m] = n.max(0) as u64,
             _ => {
                 let command: &[u8] = if argv[0] == b"MEMORY" { b"MEMORY USAGE" } else { argv[0] };
                 let key = &keys[*i];

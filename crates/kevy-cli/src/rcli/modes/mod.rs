@@ -3,7 +3,11 @@
 
 mod bigkeys;
 pub(crate) mod dispatch;
+mod hdr;
 mod hotkeys;
+mod human;
+mod keystats;
+mod keystats_report;
 mod pages;
 mod progress;
 mod scan;

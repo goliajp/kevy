@@ -50,7 +50,10 @@ fn walk(s: &mut Session, how: Measure) -> Result<(), Vec<u8>> {
         w.pct = percent(w.sampled, total);
         let Some(keys) = pages.next(s).map_err(|e| e.text())? else { break };
         loops += 1;
-        let found = measure(s, &keys, &mut w.tally, how)?;
+        let found: Vec<Option<(usize, u64)>> = measure(s, &keys, &mut w.tally, &[how])?
+            .into_iter()
+            .map(|hit| hit.map(|(kind, sizes)| (kind, sizes[0])))
+            .collect();
         let lines = record(&mut w, &keys, &found, how);
         if terminal {
             bar.maybe_draw(&progress_block(&w, total, how, false));
