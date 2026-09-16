@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# upgrade-interop — mixed-version 5.0 <-> 5.1 verification for the
+# upgrade-interop — mixed-version verification, previous release <-> this tree, for the
 # upgrade guide. Three scenarios:
 #
 #   A  old primary, new replica    — fresh join converges
@@ -43,6 +43,17 @@ fail() {
 }
 note() { echo "upgrade-interop: ok — $1"; }
 
+# The labels below come from the binaries, not from the script. They used to
+# be written in — "5.0 primary -> 5.1 replica" — and stayed that way through
+# every 6.x run, so a PASS for 6.3.0 <-> 6.4.0 printed version numbers from
+# two majors earlier. A report that pastes those lines names a comparison
+# nobody ran. Asking each binary what it is costs one process each.
+OLD_V=$("$OLD" --version 2>/dev/null | awk '{print $2}')
+NEW_V=$("$NEW" --version 2>/dev/null | awk '{print $2}')
+[ -n "$OLD_V" ] && [ -n "$NEW_V" ] || { echo "upgrade-interop: REFUSED — a binary did not report its version"; exit 2; }
+[ "$OLD_V" != "$NEW_V" ] || { echo "upgrade-interop: REFUSED — old and new are both $OLD_V; that is not a mixed-version run"; exit 2; }
+echo "upgrade-interop: old=$OLD_V new=$NEW_V"
+
 start_kevy() { # binary role port dir upstream_port_or_empty outname
     local bin=$1 role=$2 port=$3 d=$4 up=$5 out=$6
     mkdir -p "$DIR/$d"
@@ -79,7 +90,7 @@ for i in $(seq 1 50); do $CLI -p $PPORT SET a$i v >/dev/null; done
 $CLI -p $PPORT SET amark old-serves-new >/dev/null
 start_kevy "$NEW" replica $RPORT a-rep $PPORT a-rep
 wait_key $RPORT amark old-serves-new "scenario A: new replica never converged on old primary"
-note "A: 5.0 primary -> 5.1 replica converged"
+note "A: $OLD_V primary -> $NEW_V replica converged"
 stop_all
 
 # ---- scenario B: new primary, old replica ----
@@ -88,7 +99,7 @@ for i in $(seq 1 50); do $CLI -p $PPORT SET b$i v >/dev/null; done
 $CLI -p $PPORT SET bmark new-serves-old >/dev/null
 start_kevy "$OLD" replica $RPORT b-rep $PPORT b-rep
 wait_key $RPORT bmark new-serves-old "scenario B: old replica never converged on new primary"
-note "B: 5.1 primary -> 5.0 replica converged"
+note "B: $NEW_V primary -> $OLD_V replica converged"
 stop_all
 
 # ---- scenario C: replica carries a 5.0 counter-generation sidecar ----
@@ -136,7 +147,7 @@ $CLI -p $PPORT SET dmark round-trip >/dev/null
 stop_all
 start_kevy "$OLD" primary $PPORT d-dir "" d-old2
 $CLI -p $PPORT GET dmark | grep -q round-trip || fail "scenario D: new->old boot lost the marker"
-$CLI -p $PPORT GET nbig13 | grep -q "13\"$" || fail "scenario D: 5.1-written big value corrupt under 5.0"
+$CLI -p $PPORT GET nbig13 | grep -q "13\"$" || fail "scenario D: $NEW_V-written big value corrupt under $OLD_V"
 note "D: dir round-trip old->new->old intact (dbsize $OLD_DBSIZE, vlog-sized values verified)"
 stop_all
 
