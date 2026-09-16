@@ -85,7 +85,7 @@ use abi::*;
 
 /// `TCSANOW`, the same on both platforms. Not `TCSAFLUSH`: flushing would
 /// drop input already typed or pasted ahead of the editor.
-const TCSANOW: c_int = 0;
+pub(crate) const TCSANOW: c_int = 0;
 
 /// `struct winsize`.
 #[repr(C)]
@@ -104,6 +104,15 @@ const _: () = assert!(size_of::<Winsize>() == 8);
 /// Raw means: bytes arrive one at a time as typed (no line buffering), are
 /// not echoed, and Ctrl-C / Ctrl-Z / Ctrl-V arrive as bytes rather than as
 /// signals — the settings a line editor needs to handle every key itself.
+///
+/// # Examples
+///
+/// ```no_run
+/// // Raw for as long as the guard lives; the old mode is back after it.
+/// let raw = kevy_sys::RawMode::enable(0)?;
+/// drop(raw);
+/// # Ok::<(), std::io::Error>(())
+/// ```
 #[derive(Debug)]
 pub struct RawMode {
     fd: RawFd,
@@ -137,6 +146,7 @@ impl RawMode {
         raw.cc[VMIN] = 1;
         raw.cc[VTIME] = 0;
         set(fd, &raw)?;
+        crate::interrupt::remember_terminal(Some((fd, &saved)));
         Ok(RawMode { fd, saved })
     }
 }
@@ -145,6 +155,7 @@ impl Drop for RawMode {
     fn drop(&mut self) {
         // Restoring is best effort: the process is leaving the editor either
         // way, and a terminal that refuses its old mode has nobody to tell.
+        crate::interrupt::remember_terminal(None);
         let _ = set(self.fd, &self.saved);
     }
 }

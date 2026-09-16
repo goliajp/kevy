@@ -96,7 +96,7 @@ def parse_cases(path: pathlib.Path):
         elif key == "stdin":
             cur["stdin"] += unescape(expand(value))
         elif key in ("run", "deviation", "kevy.stdout", "kevy.stderr", "kevy.exit",
-                     "kevy.stdout-contains", "kevy.stdout-replace"):
+                     "kevy.stdout-contains", "kevy.stdout-replace", "timeline"):
             cur[key] = value
         else:
             sys.exit(f"cligate: {path}:{lineno}: unknown field {key!r}")
@@ -109,6 +109,24 @@ def parse_cases(path: pathlib.Path):
 def expand(text: str) -> str:
     return (text.replace("$AUTH_PORT", str(AUTH_PORT)).replace("$PORT", str(PORT))
             .replace("$SOCKET", SOCKET))
+
+
+def timeline_script(timeline: str, program: str, argv) -> str:
+    """A shell pipeline that feeds the CLI over time: `;`-separated steps, each
+    a number of seconds to wait, `INT` (SIGINT to the CLI), or bytes to type
+    (C escapes). The CLI's own exit code is the script's."""
+    steps = []
+    for step in (t.strip() for t in timeline.split(" ; ")):
+        if step == "INT":
+            steps.append(f"kill -INT $(pidof {program})")
+        elif step.replace(".", "", 1).isdigit():
+            steps.append(f"sleep {step}")
+        else:
+            octal = "".join(f"\\{b:03o}" for b in unescape(expand(step)))
+            steps.append(f"printf '{octal}'")
+    feed = "; ".join(steps)
+    cli = " ".join(shlex.quote(a) for a in [program, *argv])
+    return f"( {feed} ) | {cli}"
 
 
 def argv_of(case) -> list:
@@ -179,9 +197,13 @@ class Reference:
             time.sleep(0.1)
         return False
 
-    def run(self, argv, stdin, env, program="redis-cli"):
+    def run(self, argv, stdin, env, program="redis-cli", timeline=None):
         envs = [a for k, v in env.items() for a in ("-e", f"{k}={v}")]
         try:
+            if timeline:
+                script = timeline_script(timeline, program, argv)
+                return sh(["docker", "exec", *envs, self.cli, "sh", "-c", script],
+                          timeout=TIMEOUT_S)
             return sh(["docker", "exec", "-i", *envs, self.cli, program, *argv],
                       input=stdin, timeout=TIMEOUT_S)
         except subprocess.TimeoutExpired:
@@ -294,7 +316,7 @@ def main() -> int:
         for case in selected:
             argv = argv_of(case)
             ref.reset(case["setup"])
-            r = ref.run(argv, case["stdin"], case["env"])
+            r = ref.run(argv, case["stdin"], case["env"], timeline=case.get("timeline"))
             ref.reset(case["setup"])
             if args.show_reference:
                 print(f"[{','.join(case['ids'])} {case['name']}] exit={r.returncode}")
@@ -302,14 +324,15 @@ def main() -> int:
                 continue
             if args.determinism:
                 ref.reset(case["setup"])
-                again = ref.run(argv, case["stdin"], case["env"])
+                again = ref.run(argv, case["stdin"], case["env"], timeline=case.get("timeline"))
                 if (r.stdout, r.stderr, r.returncode) != (again.stdout, again.stderr,
                                                           again.returncode):
                     failed += 1
                     print(f"UNSTABLE [{','.join(case['ids'])} {case['name']}] "
                           f"(cases.txt:{case['line']}): {r.stdout[:120]!r} vs {again.stdout[:120]!r}")
                 continue
-            k = ref.run(argv, case["stdin"], case["env"], program="kevy-cli")
+            k = ref.run(argv, case["stdin"], case["env"], program="kevy-cli",
+                        timeline=case.get("timeline"))
             want = expected_kevy(case, r)
             got = (k.stdout, k.stderr, k.returncode)
             if agrees(case, want, got):

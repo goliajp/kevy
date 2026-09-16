@@ -43,6 +43,9 @@ unsafe extern "C" {
     pub fn signal(signum: c_int, handler: extern "C" fn(c_int)) -> *mut c_void;
     // poll(2) for kevy-cli's wait on a socket and stdin together.
     pub fn poll(fds: *mut crate::wait::PollFd, nfds: NfdsT, timeout: c_int) -> c_int;
+    // Ctrl-C in kevy-cli: cut a streaming connection loose, or leave.
+    pub fn shutdown(fd: c_int, how: c_int) -> c_int;
+    pub fn _exit(status: c_int) -> !;
     // Terminal control for kevy-cli's line editor.
     pub fn tcgetattr(fd: c_int, termios: *mut crate::term::Termios) -> c_int;
     pub fn tcsetattr(fd: c_int, action: c_int, termios: *const crate::term::Termios) -> c_int;

@@ -3,6 +3,8 @@
 #   setup:  repeatable; redis-cli -p $PORT <setup> after FLUSHALL
 #   env:    K=V, repeatable
 #   stdin:  C escapes (\n \r \t \\ \xHH), repeatable, concatenated
+#   timeline: instead of stdin, steps over time separated by ` ; `: seconds to
+#           wait, INT (SIGINT to the CLI), or bytes to type
 #   deviation + kevy.stdout / kevy.stderr / kevy.exit / kevy.stdout-contains
 #           or kevy.stdout-replace (`old => new` over redis-cli's output)
 #           when kevy-cli is meant to differ (see deviations.txt)
@@ -734,3 +736,22 @@ run: -p $PORT --test_hint_file /dev/stdin
 
 [RC-016 hint-file-unreadable]
 run: -p $PORT --test_hint_file /nonexistent
+
+# ─── P1 · Ctrl-C in the REPL ─────────────────────────────────────────────────
+
+[RC-152,RC-156 interrupt-while-subscribed-reconnects]
+env: FAKETTY=1
+timeline: SUBSCRIBE c\n ; 1 ; INT ; 1 ; PING\n ; 1
+run: -p $PORT --no-raw
+
+[RC-153,RC-156 interrupt-while-monitoring-reconnects]
+timeline: MONITOR\n ; 1 ; INT ; 1 ; PING\n ; 1
+run: -p $PORT
+
+[RC-156 interrupt-during-a-blocking-command-exits]
+timeline: BLPOP nokey 0\n ; 1 ; INT ; 1 ; PING\n ; 1
+run: -p $PORT
+
+[RC-156 interrupt-at-the-prompt-exits]
+timeline: 1 ; INT ; 1
+run: -p $PORT

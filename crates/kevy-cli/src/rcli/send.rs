@@ -12,6 +12,8 @@ pub(crate) enum Read {
     Reply(Reply),
     /// The connection is gone in a way the caller handles.
     Failed,
+    /// Ctrl-C cut a subscribed or monitoring connection; a fresh one replaced it.
+    Interrupted,
 }
 
 fn is(argv: &[Vec<u8>], i: usize, word: &str) -> bool {
@@ -96,6 +98,7 @@ impl Session {
                     return true;
                 }
                 Read::Reply(_) => {}
+                Read::Interrupted => return true,
                 Read::Failed => {
                     self.print_context_error();
                     std::process::exit(1);
@@ -117,6 +120,7 @@ impl Session {
         loop {
             let reply = match self.read_reply(verbatim) {
                 Read::Reply(r) => r,
+                Read::Interrupted => return true,
                 Read::Failed => return false,
             };
             if self.pubsub_mode || expected > 0 {
@@ -188,6 +192,7 @@ impl Session {
     /// One reply off the wire (pushes routed to the sink),
     /// printed in the current output mode.
     pub(crate) fn read_reply(&mut self, verbatim: bool) -> Read {
+        self.arm_interrupt();
         let (reply, texts) = loop {
             let Some(conn) = self.conn.as_mut() else { return Read::Failed };
             match conn.read_reply() {
@@ -212,6 +217,10 @@ impl Session {
     }
 
     fn read_failed(&mut self, e: super::conn::LinkError) -> Read {
+        if kevy_sys::take_severed() {
+            self.recover_from_interrupt();
+            return Read::Interrupted;
+        }
         if self.shutdown {
             self.conn = None;
             return Read::Reply(Reply::Nil);
@@ -223,6 +232,26 @@ impl Session {
         }
         self.print_context_error();
         std::process::exit(1);
+    }
+
+    /// Ctrl-C while subscribed or monitoring: leave the mode on a new
+    /// connection, or report and exit when there is none to be had.
+    pub(crate) fn recover_from_interrupt(&mut self) {
+        self.monitor_mode = false;
+        self.pubsub_mode = false;
+        if !self.connect(Connect::Report) {
+            self.print_context_error();
+            std::process::exit(1);
+        }
+        self.arm_interrupt();
+    }
+
+    /// Point Ctrl-C at the connection when it is streaming, else at exiting.
+    pub(crate) fn arm_interrupt(&self) {
+        let streaming = self.interactive && (self.monitor_mode || self.pubsub_mode);
+        kevy_sys::sever_on_interrupt(
+            self.conn.as_ref().filter(|_| streaming).map(super::conn::Conn::fd),
+        );
     }
 
     /// Print a push that arrived while a reply was awaited.
