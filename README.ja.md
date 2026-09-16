@@ -110,16 +110,36 @@ raw コマンド経路から届きます。うち6言語は、push のたびにC
 言語ごとの完全な例は [docs/clients.md](docs/clients.md)（英語）にあります。
 
 ブラウザではエンジン自体がnpmパッケージです——`npm install @goliapkg/kevy`
-（[ブラウザで](#ブラウザで)）。Node／Python／Go／C#／Java／Swift／
-Kotlin／Flutter／React Nativeのプロセス内ネイティブバインディングは
-[`bindings/`](bindings) にあり、現状はソースからのビルドで、各言語の
-レジストリにはまだ載っていません。
+（[ブラウザで](#ブラウザで)）。Node／Python／C#／Go／Java／Kotlin／
+Flutter／React Native／Electronの公式パッケージは [`bindings/`](bindings)
+にあり、いずれも各言語のレジストリに公開されています。
+
+```sh
+npm i @goliapkg/kevy-ts                          # Node / TypeScript
+pip install kevy                                 # Python
+dotnet add package kevy                          # C#
+go get github.com/goliajp/kevy-go/v6             # Go
+flutter pub add flutter_kevy                     # Flutter
+npx expo install expo-kevy                       # React Native (Expo)
+npm i react-native-kevy-nitro                    # React Native (Nitro)
+npm i @goliapkg/kevy-electron                    # Electron
+```
+```xml
+<dependency>                                     <!-- Java / Kotlin -->
+  <groupId>jp.golia</groupId><artifactId>kevy</artifactId><version>6.4.0</version>
+</dependency>
+```
+
+Swiftには載せるレジストリがありません。SwiftPMが本リポジトリのタグから
+`KevyKit`を解決します（[bindings/apple/KevyKit](bindings/apple/KevyKit)を参照）。
 
 Rust側はcrates.ioにあります。
 
 ```sh
 # サーバー
 cargo install kevy
+# ……またはRustツールチェーンなしで（Linux x86_64 / aarch64、macOS Apple Silicon）
+npm install -g @goliapkg/kevy-bin
 
 # 組み込みライブラリ
 cargo add kevy-embedded
