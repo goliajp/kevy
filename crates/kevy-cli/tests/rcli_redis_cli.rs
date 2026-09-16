@@ -311,9 +311,93 @@ fn failure_paths_and_rare_modes() {
     let prompt =
         "\x1b[1;90mReading messages... (press Ctrl-C to quit or any key to type command)\r\x1b[0m";
     assert!(sub.stdout.contains(prompt), "{:?}", sub.stdout);
+}
 
-    let help = cli(&["-p", &p, "help"], b"", &[]);
-    assert_eq!(help.stderr, "kevy-cli: help for commands is not implemented yet\n");
+/// The editor under `FAKETTY_WITH_PROMPT`, kept away from the user's history
+/// and preferences files.
+fn prompt_env(dir: &std::path::Path) -> Vec<(&'static str, String)> {
+    vec![
+        ("FAKETTY_WITH_PROMPT", "1".into()),
+        ("TERM", "xterm".into()),
+        ("KEVYCLI_HISTFILE", dir.join("history").to_string_lossy().into_owned()),
+        ("KEVYCLI_RCFILE", "/dev/null".into()),
+    ]
+}
+
+#[test]
+fn help_hints_and_completion_come_from_the_servers_reference() {
+    let s = Srv::start();
+    let p = s.port();
+    // A block per entry: bold name, grey syntax, yellow labels, CRLF lines.
+    let get = cli(&["-p", &p, "help", "get"], b"", &[]);
+    assert!(
+        get.stdout.starts_with(
+            "\r\n  \x1b[1mGET\x1b[0m \x1b[90mkey\x1b[0m\r\n  \x1b[33msummary:\x1b[0m "
+        ),
+        "{:?}",
+        get.stdout
+    );
+    assert!(get.stdout.ends_with("  \x1b[33mgroup:\x1b[0m string\r\n\r\n"), "{:?}", get.stdout);
+    // kevy's note on a command that differs from Redis is part of its help.
+    assert!(cli(&["-p", &p, "help", "hscan"], b"", &[]).stdout.contains("\x1b[33mcompat:\x1b[0m "));
+    let group = cli(&["-p", &p, "?", "@string"], b"", &[]).stdout;
+    assert!(group.contains("\x1b[1mINCRBY\x1b[0m") && !group.contains("group:"), "{group:?}");
+    assert_eq!(cli(&["-p", &p, "help", "nosuch"], b"", &[]).stdout, "\r\n");
+    let overview = cli(&["-p", &p, "help"], b"", &[]).stdout;
+    assert!(
+        overview.starts_with("kevy-cli ") && overview.contains("\"help @<group>\""),
+        "{overview}"
+    );
+    // No server: the same reference, embedded.
+    assert_eq!(cli(&["-p", "1", "help", "get"], b"", &[]).stdout, get.stdout);
+
+    // A kevy server documents syntax lines, shown until an argument is typed.
+    let hint = |input: &str| cli(&["-p", &p, "--test_hint", input], b"", &[]).stdout;
+    assert_eq!(hint("set "), "key value [EX seconds|PX milliseconds] [NX|XX]\n");
+    assert_eq!(hint("set k "), "\n");
+    assert_eq!(hint("nosuch "), "\n");
+
+    let dir = std::env::temp_dir().join(format!("kevy-rcli-hints-{}", s.port));
+    std::fs::create_dir_all(&dir).unwrap();
+    let cases = dir.join("hints.txt");
+    std::fs::write(&cases, "# kevy\n\"get \" \"key\"\n\"get \" \"wrong\"\n\n").unwrap();
+    let file = cli(&["-p", &p, "--verbose", "--test_hint_file", cases.to_str().unwrap()], b"", &[]);
+    assert_eq!(
+        file.stdout,
+        "Input: 'get ', Expected: 'key', Hint: 'key'\nInput: 'get ', Expected: 'wrong', Hint: 'key'\nFAILURE: 1/2 passed\n"
+    );
+    assert_eq!(
+        (file.stderr.as_str(), file.code),
+        ("Test case 'get ' FAILED: expected 'wrong', got 'key'\n", 1)
+    );
+    std::fs::write(&cases, "\"get \"\n").unwrap();
+    let missing = cli(&["-p", &p, "--test_hint_file", cases.to_str().unwrap()], b"", &[]);
+    assert_eq!(
+        (missing.stderr.as_str(), missing.code),
+        ("Missing expected hint for input 'get '\n", 255)
+    );
+    let absent = cli(&["-p", &p, "--test_hint_file", "/nonexistent/hints"], b"", &[]);
+    assert_eq!(
+        (absent.stderr.as_str(), absent.code),
+        ("Can't open file '/nonexistent/hints': No such file or directory\n", 255)
+    );
+
+    // At the prompt: the grey hint follows `get `, Tab turns `ge` into `GET`,
+    // and `:set nohints` turns hints off.
+    let env = prompt_env(&dir);
+    let env: Vec<(&str, &str)> = env.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    // Every line arrives in one read: the rest of it must wait for the next prompt.
+    let typed = cli(&["-p", &p], b"get \x15ec\t hi\r:set nohints\rget \x15\x04", &env);
+    assert!(typed.stdout.contains("get \x1b[0;90;49mkey"), "{:?}", typed.stdout);
+    assert!(typed.stdout.contains("> ECHO hi\r\x1b[24C\r\nhi\n"), "{:?}", typed.stdout);
+    let after_nohints = typed.stdout.rsplit(":set nohints").next().unwrap_or_default();
+    assert!(
+        after_nohints.contains("> get "),
+        "the line after :set nohints ran: {:?}",
+        typed.stdout
+    );
+    assert!(!after_nohints.contains("\x1b[0;90;49m"), "{:?}", after_nohints);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

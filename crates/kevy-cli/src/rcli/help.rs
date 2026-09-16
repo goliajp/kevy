@@ -1,7 +1,9 @@
 //! `--help`: kevy-cli's usage text (DEV-001 — it documents kevy-cli's tools
 //! as well as the redis-cli options, so it cannot be redis-cli's bytes).
 
+use super::docs::model::Docs;
 use std::io::Write;
+use std::rc::Rc;
 
 /// Print usage to stdout (`code` 0) or stderr (anything else); return `code`.
 pub(crate) fn usage(code: u8) -> u8 {
@@ -68,25 +70,95 @@ TLS is not implemented: --tls and its companion flags are refused.
 ",
 );
 
-/// `help` / `?` typed as a command. The command reference is P1 (RC-072,
-/// RC-148–151); until it lands this says so rather than printing nothing.
-pub(crate) fn command_help(_topic: &[Vec<u8>]) {
-    super::session::eprint_bytes(&[b"kevy-cli: help for commands is not implemented yet\n"]);
+impl super::session::Session {
+    /// `help` / `?` typed as a command: answered here, never sent.
+    pub(crate) fn print_help(&mut self, topic: &[Vec<u8>]) {
+        let text = if topic.is_empty() {
+            super::docs::help_text::overview()
+        } else {
+            super::docs::help_text::topic(&self.docs(), topic)
+        };
+        super::send::write_out(&text);
+    }
+
+    /// The command reference, read from the server once: `COMMAND DOCS` when
+    /// it answers with a table, else kevy's own. A subscribed connection
+    /// cannot be asked, so it gets kevy's own without keeping it.
+    pub(crate) fn docs(&mut self) -> Rc<Docs> {
+        if let Some(docs) = &self.docs {
+            return Rc::clone(docs);
+        }
+        if self.pubsub_mode || self.monitor_mode {
+            return Rc::new(Docs::offline());
+        }
+        if self.conn.is_none() {
+            self.connect(super::session::Connect::Quiet);
+        }
+        let docs = Rc::new(self.ask_docs().unwrap_or_else(Docs::offline));
+        self.docs = Some(Rc::clone(&docs));
+        docs
+    }
+
+    fn ask_docs(&mut self) -> Option<Docs> {
+        let conn = self.conn.as_mut()?;
+        let mut asked =
+            conn.send(&[b"COMMAND".to_vec(), b"DOCS".to_vec()]).and_then(|()| conn.read_reply());
+        // A push that was already on its way is not the answer.
+        while let Ok((kevy_resp::Reply::Push(_), _)) = &asked {
+            asked = conn.read_reply();
+        }
+        match asked {
+            Ok((reply, _)) => Docs::from_reply(&reply),
+            Err(e) => {
+                self.link_error = Some(e);
+                None
+            }
+        }
+    }
 }
 
-/// `:set hints` / `:set nohints` and the messages for anything else
-/// redis-cli prints. Hints themselves are P1.
-pub(crate) fn preference(argv: &[Vec<u8>]) {
+/// `:set hints` / `:set nohints`, and the messages redis-cli prints for
+/// anything else. `from_rc`: the line came from the preferences file, whose
+/// messages say so.
+pub(crate) fn preference(argv: &[Vec<u8>], from_rc: bool) {
     let is = |i: usize, w: &str| argv.get(i).is_some_and(|a| a.eq_ignore_ascii_case(w.as_bytes()));
+    let origin: &[u8] = if from_rc { b".kevyclirc: " } else { b"" };
     if is(0, ":set") && argv.len() >= 2 {
-        if !(is(1, "hints") || is(1, "nohints")) {
+        if is(1, "hints") || is(1, "nohints") {
+            super::session::set_hints(is(1, "hints"));
+        } else {
             super::send::write_out(
-                &[b"unknown kevy-cli preference '", argv[1].as_slice(), b"'\n"].concat(),
+                &[origin, b"unknown kevy-cli preference '", argv[1].as_slice(), b"'\n"].concat(),
             );
         }
     } else {
         super::send::write_out(
-            &[b"unknown kevy-cli internal command '", argv[0].as_slice(), b"'\n"].concat(),
+            &[origin, b"unknown kevy-cli internal command '", argv[0].as_slice(), b"'\n"].concat(),
         );
+    }
+}
+
+/// Apply the preferences file: `KEVYCLI_RCFILE`, `VALKEYCLI_RCFILE` or
+/// `REDISCLI_RCFILE` (the first non-empty one; `/dev/null` for none), else
+/// `~/.kevyclirc`. Each line is split like a REPL line.
+pub(crate) fn load_preferences() {
+    let named = ["KEVYCLI_RCFILE", "VALKEYCLI_RCFILE", "REDISCLI_RCFILE"]
+        .iter()
+        .find_map(|k| std::env::var_os(k).filter(|v| !v.is_empty()));
+    let path = match named {
+        Some(p) if p == "/dev/null" => return,
+        Some(p) => std::path::PathBuf::from(p),
+        None => match std::env::var_os("HOME").filter(|h| !h.is_empty()) {
+            Some(home) => std::path::PathBuf::from(home).join(".kevyclirc"),
+            None => return,
+        },
+    };
+    let Ok(text) = std::fs::read(path) else { return };
+    for line in text.split(|&b| b == b'\n') {
+        if let Some(argv) = super::splitargs::split_args(line)
+            && !argv.is_empty()
+        {
+            preference(&argv, true);
+        }
     }
 }

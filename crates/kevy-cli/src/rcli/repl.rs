@@ -1,41 +1,48 @@
-//! The REPL loop. Lines come from standard input;
-//! the terminal line editor is P1, so a terminal reads plain lines for now.
+//! The REPL loop: read a line, act on it, and between lines wait out
+//! pub/sub traffic.
 
 use super::cnum::strtoll;
+use super::docs::model::Docs;
+use super::edit::editor::{Assist, Outcome};
 use super::format::Output;
+use super::input::Input;
 use super::send::{Read, write_out};
 use super::session::{Connect, Session};
 use super::splitargs::split_args;
-use std::io::{BufRead, IsTerminal};
+use std::io::IsTerminal;
 use std::time::{Duration, Instant};
 
-/// Run the REPL until EOF or `quit`; the process exit code.
+/// Run the REPL until the input ends or `quit`; the process exit code.
 pub(crate) fn run(s: &mut Session) -> u8 {
     s.interactive = true;
-    let mut stdin = std::io::stdin().lock();
+    let mut input = Input::open();
+    // Hints and completion are for a person at a prompt; a pipe never asks.
+    let docs = input.keeps_history().then(|| s.docs());
+    if input.keeps_history() {
+        super::help::load_preferences();
+    }
+    let hint = |line: &[u8]| docs.as_deref().and_then(|d| hint_shown(d, line));
+    let complete = |line: &[u8]| docs.as_deref().map_or_else(Vec::new, |d| d.completions(line));
+    let assist = Assist { hint: &hint, complete: &complete };
     loop {
-        let mut line = Vec::new();
-        let eof = match stdin.read_until(b'\n', &mut line) {
-            Ok(0) => true,
-            Ok(_) => false,
-            Err(_) => true,
-        };
-        if eof && line.is_empty() {
-            if s.pubsub_mode {
-                s.pubsub_mode = false;
-                if s.connect(Connect::Report) {
-                    continue;
+        let prompt = super::prompt::prompt(s);
+        match input.read(&prompt, &assist) {
+            Outcome::Line(line) => {
+                if !line.is_empty()
+                    && let Some(code) = handle_line(s, &mut input, &line)
+                {
+                    return code;
                 }
             }
-            return 0;
-        }
-        if line.last() == Some(&b'\n') {
-            line.pop();
-        }
-        if !line.is_empty()
-            && let Some(code) = handle_line(s, &line)
-        {
-            return code;
+            Outcome::Eof | Outcome::Interrupted => {
+                if s.pubsub_mode {
+                    s.pubsub_mode = false;
+                    if s.connect(Connect::Report) {
+                        continue;
+                    }
+                }
+                return 0;
+            }
         }
         if s.pubsub_mode {
             wait_for_messages_or_stdin(s);
@@ -43,10 +50,23 @@ pub(crate) fn run(s: &mut Session) -> u8 {
     }
 }
 
+/// The hint as the editor shows it: after a space unless the line ends in one.
+fn hint_shown(docs: &Docs, line: &[u8]) -> Option<Vec<u8>> {
+    if !super::session::hints_on() {
+        return None;
+    }
+    let hint = docs.hint(line)?;
+    Some(match line.last() {
+        Some(b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r') => hint,
+        _ => [b" ".as_slice(), &hint].concat(),
+    })
+}
+
 /// One non-empty line. `Some(code)` ends the program.
-fn handle_line(s: &mut Session, line: &[u8]) -> Option<u8> {
+fn handle_line(s: &mut Session, input: &mut Input, line: &[u8]) -> Option<u8> {
     let Some(argv) = split_args(line) else {
         write_out(b"Invalid argument(s)\n");
+        input.remember(line, &[]);
         return None;
     };
     if argv.is_empty() {
@@ -63,12 +83,18 @@ fn handle_line(s: &mut Session, line: &[u8]) -> Option<u8> {
     } else {
         (1, 0)
     };
+    input.remember(line, &argv[skip..]);
+    run_line(s, &argv, repeat, skip)
+}
+
+/// The line's action: a REPL word, or the command, timed.
+fn run_line(s: &mut Session, argv: &[Vec<u8>], repeat: i64, skip: usize) -> Option<u8> {
     let word = |w: &str| argv[0].eq_ignore_ascii_case(w.as_bytes());
     if word("quit") || word("exit") {
         return Some(0);
     }
     if argv[0].first() == Some(&b':') {
-        super::help::preference(&argv);
+        super::help::preference(argv, false);
     } else if word("restart") {
         write_out(b"Use 'restart' only in Lua debugging mode.\n");
     } else if argv.len() == 3 && word("connect") {

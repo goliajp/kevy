@@ -96,7 +96,7 @@ def parse_cases(path: pathlib.Path):
         elif key == "stdin":
             cur["stdin"] += unescape(expand(value))
         elif key in ("run", "deviation", "kevy.stdout", "kevy.stderr", "kevy.exit",
-                     "kevy.stdout-contains"):
+                     "kevy.stdout-contains", "kevy.stdout-replace"):
             cur[key] = value
         else:
             sys.exit(f"cligate: {path}:{lineno}: unknown field {key!r}")
@@ -206,6 +206,18 @@ def expected_kevy(case, ref):
     """What kevy-cli must print: redis-cli's bytes, or the deviation's."""
     if "deviation" not in case:
         return own_name(ref.stdout), own_name(ref.stderr), ref.returncode
+    if "kevy.stdout-replace" in case:
+        # A deviation in a few bytes of a long output: redis-cli's output with
+        # `old => new` applied, everywhere it occurs, and at least once. `new`
+        # may be empty; a space at its start is written \x20.
+        old, sep, new = case["kevy.stdout-replace"].partition(" =>")
+        new = new.lstrip(" ")
+        stdout = own_name(ref.stdout)
+        if not sep or unescape(old) not in stdout:
+            sys.exit(f"cligate: case line {case['line']}: kevy.stdout-replace "
+                     f"{old!r} does not occur in redis-cli's output")
+        return (stdout.replace(unescape(old), unescape(new)), own_name(ref.stderr),
+                ref.returncode)
     return (unescape(case.get("kevy.stdout", "")),
             unescape(case.get("kevy.stderr", "")),
             int(case.get("kevy.exit", "0")))

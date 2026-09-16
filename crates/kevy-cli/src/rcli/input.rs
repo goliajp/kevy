@@ -1,0 +1,109 @@
+//! Where REPL lines come from: a pipe, a terminal that cannot take escape
+//! sequences, or a terminal with the line editor.
+
+use super::edit::editor::{Assist, Outcome, read_line};
+use super::edit::history::{History, history_path, is_sensitive};
+use std::io::{BufRead, IsTerminal, Write};
+use std::path::PathBuf;
+
+/// Terminal types that do not understand the editor's escape sequences.
+const DUMB_TERMS: &[&str] = &["dumb", "cons25", "emacs"];
+
+#[derive(Debug, PartialEq, Eq)]
+enum Mode {
+    /// Standard input is not a terminal: lines, no prompt, no history.
+    Pipe,
+    /// A terminal without escape sequences: a prompt, then a plain line.
+    Plain,
+    /// The line editor. `raw` is false under `FAKETTY_WITH_PROMPT`, which
+    /// edits a piped stdin that has no terminal mode to change.
+    Edit { raw: bool },
+}
+
+/// The REPL's line source, with the history it keeps.
+pub(crate) struct Input {
+    mode: Mode,
+    history: History,
+    history_file: Option<PathBuf>,
+}
+
+impl Input {
+    /// Pick the mode from the environment, and load history when the mode
+    /// keeps one.
+    pub(crate) fn open() -> Input {
+        let stdin_tty = std::io::stdin().is_terminal();
+        let faketty = std::env::var_os("FAKETTY_WITH_PROMPT").is_some();
+        let dumb = std::env::var("TERM")
+            .is_ok_and(|t| DUMB_TERMS.iter().any(|d| t.eq_ignore_ascii_case(d)));
+        let mode = match (stdin_tty || faketty, dumb) {
+            (false, _) => Mode::Pipe,
+            (true, true) => Mode::Plain,
+            (true, false) => Mode::Edit { raw: stdin_tty && !faketty },
+        };
+        let mut input = Input { mode, history: History::default(), history_file: None };
+        if input.keeps_history() {
+            input.history_file = history_path(|k: &str| std::env::var_os(k));
+            if let Some(path) = &input.history_file {
+                input.history.load(path);
+            }
+        }
+        input
+    }
+
+    /// History, and the preferences file, are for a person at a prompt.
+    pub(crate) fn keeps_history(&self) -> bool {
+        self.mode != Mode::Pipe
+    }
+
+    /// Read one line.
+    pub(crate) fn read(&mut self, prompt: &[u8], assist: &Assist<'_>) -> Outcome {
+        match self.mode {
+            Mode::Pipe => plain_line(),
+            Mode::Plain => {
+                super::send::write_out(prompt);
+                plain_line()
+            }
+            Mode::Edit { raw } => self.edit(prompt, assist, raw),
+        }
+    }
+
+    fn edit(&mut self, prompt: &[u8], assist: &Assist<'_>, raw: bool) -> Outcome {
+        let _raw = raw.then(|| kevy_sys::RawMode::enable(0).ok()).flatten();
+        let cols = if raw { kevy_sys::terminal_columns(1).map_or(80, usize::from) } else { 80 };
+        let mut stdin = std::io::stdin().lock();
+        let mut stdout = std::io::stdout().lock();
+        read_line(&mut stdin, &mut stdout, prompt, &self.history, assist, cols, false)
+            .unwrap_or(Outcome::Eof)
+    }
+
+    /// Record a line the user entered. `argv` is the command it ran (after a
+    /// repeat count), which decides whether the line may reach the file.
+    pub(crate) fn remember(&mut self, line: &[u8], argv: &[Vec<u8>]) {
+        if !self.keeps_history() {
+            return;
+        }
+        let sensitive = is_sensitive(argv);
+        self.history.add(line, sensitive);
+        if !sensitive && let Some(path) = &self.history_file {
+            // A history file that cannot be written is not a reason to stop
+            // the session; the line is still in memory.
+            let _ = self.history.save(path);
+        }
+    }
+}
+
+/// A line from a non-editing source: bytes to `\n`, which is dropped. End of
+/// input with nothing read is the end.
+fn plain_line() -> Outcome {
+    let mut line = Vec::new();
+    match std::io::stdin().lock().read_until(b'\n', &mut line) {
+        Ok(0) | Err(_) => Outcome::Eof,
+        Ok(_) => {
+            if line.last() == Some(&b'\n') {
+                line.pop();
+            }
+            let _ = std::io::stdout().flush(); // the prompt, if any, is already out
+            Outcome::Line(line)
+        }
+    }
+}
