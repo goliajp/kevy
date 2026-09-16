@@ -944,3 +944,18 @@ fn help_is_asked_for_once_and_not_on_a_subscribed_connection() {
     assert_eq!((file.stdout.as_str(), file.code), ("FAILURE: 1/2 passed\n", 1));
     let _ = std::fs::remove_file(&cases);
 }
+
+#[test]
+fn get_pubsub_reports_the_subscription() {
+    let s = Srv::start();
+    let p = s.port();
+    let out = cli(
+        &["-p", &p],
+        b":get pubsub\n:get colour\n:set hints\n:unset\nSUBSCRIBE c\n:get pubsub\n",
+        &[],
+    );
+    assert_eq!(
+        out.stdout,
+        "0\nunknown kevy-cli get option 'colour'\nunknown kevy-cli internal command ':unset'\nsubscribe\nc\n1\n1\n"
+    );
+}

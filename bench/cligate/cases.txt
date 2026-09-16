@@ -911,22 +911,22 @@ screen: pty
 timeline: 0.5 ; ping\r ; 0.4 ; clear\r ; 0.4 ; ping\r ; 0.4 ; \x04 ; 0.3
 run: -p $PORT
 
-[RC-138 prompt-shows-the-database]
+[RC-129 prompt-shows-the-database]
 screen: pty
 timeline: 0.5 ; select 3\r ; 0.4 ; multi\r ; 0.4 ; ping\r ; 0.4 ; KILL
 run: -p $PORT
 
-[RC-138 prompt-after-exec]
+[RC-129 prompt-after-exec]
 screen: pty
 timeline: 0.5 ; select 3\r ; 0.4 ; multi\r ; 0.4 ; exec\r ; 0.4 ; \x04 ; 0.3
 run: -p $PORT
 
-[RC-138 prompt-when-not-connected]
+[RC-128,RC-129 prompt-when-not-connected]
 screen: pty
 timeline: 0.5 ; ping\r ; 0.4 ; \x04 ; 0.3
 run: -p 1
 
-[RC-138 prompt-for-a-unix-socket]
+[RC-129 prompt-for-a-unix-socket]
 deviation: DEV-011
 screen: pty
 timeline: 0.5 ; ping\r ; 0.4 ; \x04 ; 0.3
@@ -941,3 +941,27 @@ run: --askpass -p $AUTH_PORT PING
 [RC-037 askpass-without-a-prompt]
 stdin: secret\n
 run: --askpass -p $AUTH_PORT PING
+
+[RC-134 set-preferences-and-unknown-words]
+stdin: :set hints\n:set nohints\n:set colours\n:unset\nPING\n
+run: -p $PORT
+
+[RC-135 get-pubsub]
+deviation: DEV-018
+stdin: :get pubsub\n:get colour\nSUBSCRIBE c\n:get pubsub\n
+run: -p $PORT
+kevy.stdout: 0\nunknown kevy-cli get option 'colour'\nsubscribe\nc\n1\n1\n
+
+[RC-142 preferences-file-messages]
+deviation: DEV-017
+screen: pty
+env: REDISCLI_RCFILE=/etc/hostname
+timeline: 0.5 ; \x04 ; 0.3
+run: -p $PORT
+kevy.stdout-replace: .redisclirc:  => .kevyclirc:\x20
+
+[RC-145 a-dumb-terminal-gets-a-plain-prompt]
+screen: pty
+env: TERM=dumb
+timeline: 0.5 ; ping\r ; 0.4 ; \x04 ; 0.3
+run: -p $PORT
