@@ -222,3 +222,7 @@ fn post_checks(o: &Opts) -> Step {
     }
     Step::Next(0)
 }
+
+#[cfg(test)]
+#[path = "opts_tests.rs"]
+mod tests;

@@ -18,14 +18,16 @@ pub(crate) enum PushSink {
     Return,
 }
 
-/// `cliConnect` flags.
+/// Whether a failed connect says why (`cliConnect`'s `CC_QUIET`).
+///
+/// Every connect here opens a new connection, dropping any old one: redis-cli
+/// also has a connect-only-if-needed form, used by modes that later phases
+/// implement, and it arrives with them.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Connect {
-    /// Connect only if not connected.
-    IfNeeded,
-    /// Reconnect even if connected.
-    Force,
-    /// Like `IfNeeded`, without printing why a connect failed.
+    /// Print `Could not connect to Redis at …` on failure.
+    Report,
+    /// Stay silent on failure.
     Quiet,
 }
 
@@ -72,10 +74,6 @@ impl Session {
 
     /// `cliConnect`. `true` when a usable connection is open afterwards.
     pub(crate) fn connect(&mut self, how: Connect) -> bool {
-        if self.conn.is_some() && how != Connect::Force {
-            self.arm_push();
-            return true;
-        }
         if self.conn.take().is_some() {
             self.dbnum = 0;
             self.in_multi = false;

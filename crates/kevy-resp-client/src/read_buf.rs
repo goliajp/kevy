@@ -61,6 +61,26 @@ impl ReplyReadBuf {
         Ok(parsed)
     }
 
+    /// The buffered bytes not yet consumed by a parse.
+    ///
+    /// For reporting a malformed frame the way a client library does — by
+    /// the byte it could not read — without re-reading the socket.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use kevy_resp_client::ReplyReadBuf;
+    ///
+    /// let mut buf = ReplyReadBuf::with_capacity(16);
+    /// buf.extend(b"+OK\r\n@bad");
+    /// assert!(buf.parse_next().is_ok());
+    /// assert_eq!(buf.pending(), b"@bad");
+    /// assert!(buf.parse_next().is_err());
+    /// ```
+    pub fn pending(&self) -> &[u8] {
+        &self.buf[self.pos..]
+    }
+
     /// Append freshly-read bytes. Compacts the consumed prefix first when
     /// the append is large relative to what's still buffered, so a deep
     /// pipeline can't grow the allocation without bound.

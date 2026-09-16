@@ -578,3 +578,47 @@ deviation: DEV-009
 setup: ZADD z +inf m
 run: --json -p $PORT ZSCORE z m
 kevy.stdout: "inf"\n
+
+[RC-154 repl-reconnects-after-the-server-hangs-up]
+stdin: 2 QUIT\nPING\n
+run: -p $PORT
+
+# ─── P0 · a push ahead of the reply (client-side caching) ────────────────────
+# Redis sends the invalidation to this same connection after the SET that
+# touched a key it has read: tracking on, GET, then SET in one REPL session.
+
+[RC-052,RC-059 invalidate-push-printed]
+stdin: CLIENT TRACKING on\nGET k\nSET k v\nPING\n
+env: FAKETTY=1
+run: -3 -p $PORT
+
+# ─── P0 · session state across REPL lines ────────────────────────────────────
+
+[RC-070 discard-and-a-watched-exec]
+stdin: MULTI\nSET a 1\nDISCARD\nGET a\nWATCH k\nSET k 1\nMULTI\nINCR k\nEXEC\n
+run: -p $PORT
+
+[RC-070 reset-returns-to-db-0]
+stdin: SELECT 3\nSET k v\nRESET\nDBSIZE\n
+run: -p $PORT
+
+[RC-070 auth-in-the-repl-reselects-the-db]
+stdin: AUTH secret\nSET k v\nDBSIZE\n
+run: -n 2 -p $AUTH_PORT
+
+[RC-066,RC-067 resp3-subscribe-publish-unsubscribe]
+stdin: SUBSCRIBE c\nPUBLISH c hi\nUNSUBSCRIBE c\nPING\n
+env: FAKETTY=1
+run: -3 -p $PORT
+
+[RC-136 repl-connect]
+stdin: connect 127.0.0.1 $AUTH_PORT\nPING\n
+run: -p $PORT
+
+[RC-137 repl-clear]
+stdin: clear\nPING\n
+run: -p $PORT
+
+[RC-136 repl-connect-to-an-impossible-port]
+stdin: connect 127.0.0.1 99999\nPING\n
+run: -p $PORT

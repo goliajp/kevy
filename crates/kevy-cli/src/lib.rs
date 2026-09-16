@@ -74,6 +74,13 @@ Docs: https://github.com/goliajp/kevy
 ";
 
 /// `kevy-cli [options] [command]`: the redis-cli half of the binary.
+///
+/// # Examples
+///
+/// ```
+/// // Parsing refuses what redis-cli refuses, with redis-cli's exit code.
+/// assert_eq!(kevy_cli::rcli::run(&[b"-2".to_vec(), b"-3".to_vec()]), 1);
+/// ```
 pub mod rcli;
 
 /// Where a subcommand connects when the caller says nothing. Shared

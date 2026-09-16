@@ -188,7 +188,7 @@ sleep 2
 LAG=$($CLI -p $RPORT INFO replication | grep -oE "slave_lag_frames:[0-9]+" | grep -oE "[0-9]+")
 [ "$LAG" = "0" ] || fail "lag did not converge ($LAG)"
 V=$($CLI -p $RPORT GET k200)
-echo "$V" | grep -q '"v"' || fail "data plane not converged (k200=$V)"
+echo "$V" | grep -qx v || fail "data plane not converged (k200=$V)"
 note "lag 0 + data plane converged"
 
 # ---- clamp 5: primary-side slave0 truth — acked catches up to sent

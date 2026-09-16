@@ -7,6 +7,15 @@ use super::session::{Connect, Session, eprint_bytes};
 use std::io::{BufRead, IsTerminal};
 
 /// Run redis-cli with `args` (without the program name); the exit code.
+///
+/// Output goes to the process's stdout and stderr, as redis-cli's does.
+///
+/// # Examples
+///
+/// ```
+/// // `--version` answers without a server and exits 0.
+/// assert_eq!(kevy_cli::rcli::run(&[b"--version".to_vec()]), 0);
+/// ```
 pub fn run(args: &[Vec<u8>]) -> u8 {
     let stdout_tty = std::io::stdout().is_terminal() || std::env::var_os("FAKETTY").is_some();
     let (mut opts, first) = match parse(args, stdout_tty) {
@@ -26,7 +35,7 @@ pub fn run(args: &[Vec<u8>]) -> u8 {
     let command = &args[first..];
     let mut session = Session::new(opts);
     if command.is_empty() {
-        session.connect(Connect::IfNeeded);
+        session.connect(Connect::Report);
         return super::repl::run(&mut session);
     }
     session.connect(Connect::Quiet);
