@@ -4,11 +4,14 @@
 #   env:    K=V, repeatable
 #   stdin:  C escapes (\n \r \t \\ \xHH), repeatable, concatenated
 #   timeline: instead of stdin, steps over time separated by ` ; `: seconds to
-#           wait, INT (SIGINT to the CLI), or bytes to type
+#           wait, INT (SIGINT to the CLI), KILL, `$ <command>` beside it, or
+#           bytes to type
 #   screen: yes — compare what a terminal would show (bench/cligate_screen.py),
 #           not stdout's bytes; each CLI gets its own empty history file
 #   deviation + kevy.stdout / kevy.stderr / kevy.exit / kevy.stdout-contains
 #           or kevy.stdout-replace (`old => new` over redis-cli's output)
+#   mask: a regex whose matches in stdout become `#`; head: compare the first N
+#           lines only (readings that change with time)
 #   compare: lines-any-order — line order is not the contract (a deviation in
 #           order, or an order the server does not keep stable)
 #           when kevy-cli is meant to differ (see deviations.txt)
@@ -1228,3 +1231,25 @@ run: -p $PORT --keystats
 
 [RC-081 keystats-refused]
 run: -p $AUTH_PORT --keystats
+
+# ─── P2 · --stat ─────────────────────────────────────────────────────────────
+# Numbers change with every reading, and so do their widths: each number and
+# the padding after it compare as `#`.
+
+[RC-087 stat-rows]
+screen: pty
+setup: MSET a 1 b 2
+timeline: 1.3 ; INT ; 0.3
+run: -p $PORT --stat -i 0.4
+mask: [0-9][0-9.]*[BKMG]?( \(\+[0-9]+\))? *
+head: 5
+
+[RC-087 stat-without-a-server]
+run: -p 1 --stat
+
+[RC-105 stat-reconnects-after-the-server-drops-it]
+screen: pty
+timeline: 0.7 ; $ redis-cli -p $PORT CLIENT KILL TYPE normal ; 2.0 ; INT ; 0.3
+run: -p $PORT --stat -i 0.3
+mask: [0-9][0-9.]*[BKMG]?( \(\+[0-9]+\))? *
+head: 4

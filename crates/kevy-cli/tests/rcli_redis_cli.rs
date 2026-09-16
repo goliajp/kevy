@@ -1234,3 +1234,63 @@ fn keystats_reports_and_says_where_to_resume() {
     assert_eq!(walk.finish(), 0);
     server.join().unwrap();
 }
+
+#[test]
+fn stat_prints_rows_reconnects_and_reports_refusals() {
+    let s = Srv::start();
+    let p = s.port();
+    cli(&["-p", &p, "MSET", "a", "1", "b", "2"], b"", &[]);
+    let stat = Live::start(&["-p", &p, "--stat", "-i", "0.05"], &[]);
+    stat.wait_for("keys       mem      clients blocked requests            connections          \n2          ");
+    stat.wait_for(" (+1)");
+    stat.interrupt();
+    let _ = stat.finish();
+
+    let body = "used_memory:100\r\ntotal_commands_processed:7\r\ndb0:keys=3,x=1\r\n";
+    let info: &'static [u8] = format!("${}\r\n{body}\r\n", body.len()).into_bytes().leak();
+    // CONFIG GET refused, INFO refused.
+    let (port, server) = scripted_server(vec![b"-ERR unknown subcommand\r\n", b"-ERR no info\r\n"]);
+    let out = cli(&["-p", &port, "--stat"], b"", &[]);
+    assert_eq!(
+        out.stderr,
+        "CONFIG GET databases fails: ERR unknown subcommand, use default value 16 instead\nERROR: ERR no info\n"
+    );
+    assert_eq!(out.code, 1);
+    server.join().unwrap();
+
+    // The first connection answers once and drops; the second is found again.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port().to_string();
+    let server = std::thread::spawn(move || {
+        use std::io::Read;
+        let mut buf = [0u8; 4096];
+        let (mut first, _) = listener.accept().unwrap();
+        let _ = first.read(&mut buf);
+        first.write_all(b"*2\r\n$9\r\ndatabases\r\n$1\r\n1\r\n").unwrap();
+        let _ = first.read(&mut buf);
+        first.write_all(info).unwrap();
+        let _ = first.read(&mut buf);
+        drop(first);
+        let (mut second, _) = listener.accept().unwrap();
+        while let Ok(1..) = second.read(&mut buf) {
+            if second.write_all(info).is_err() {
+                break;
+            }
+        }
+    });
+    let stat = Live::start(&["-p", &port, "--stat", "-i", "0.01"], &[]);
+    stat.wait_for("3          100B     0       0       7 (+0)              0           \n");
+    stat.wait_for("\r\x1b[0KReconnecting... 1\r");
+    stat.wait_for("\r\x1b[0K3          100B");
+    stat.interrupt();
+    let _ = stat.finish();
+    server.join().unwrap();
+    // A reply that is not RESP cannot be reconnected away.
+    let (port, server) = scripted_server(vec![b"*0\r\n", b"@@@\r\n"]);
+    let out = cli(&["-p", &port, "--stat"], b"", &[]);
+    assert_eq!(
+        (out.stderr.as_str(), out.code),
+        ("Error: Protocol error, got \"@\" as reply type byte\n", 1)
+    );
+    server.join().unwrap();
+}
