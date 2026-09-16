@@ -1,9 +1,9 @@
 //! Reply rendering: which formatter a reply goes through, and the
 //! commands whose replies are printed raw whatever the output mode.
 //!
-//! The formatters are ports of redis-cli 8.10.1's `cliFormatReplyTTY`,
-//! `cliFormatReplyRaw`, `cliFormatReplyCSV` and `cliFormatReplyJson`. Where
-//! redis-cli is wrong they are not ports, and each such place names its
+//! Each formatter produces the bytes redis-cli prints in that mode — the
+//! contract `bench/cligate.py` checks against the real binary. Where
+//! redis-cli is wrong they deliberately do not, and each such place names its
 //! deviation id from `bench/cligate/deviations.txt`.
 
 use kevy_resp::Reply;
@@ -46,7 +46,7 @@ impl<'a> Doubles<'a> {
     }
 }
 
-/// `cliFormatReply`: render one reply in `mode`, with the trailing
+/// Render one reply in `mode`, with the trailing
 /// delimiter each mode adds. `verbatim` is the raw-regardless list.
 pub(crate) fn render(
     reply: &Reply,
@@ -86,8 +86,8 @@ pub(crate) struct Delims {
     pub(crate) reply: Vec<u8>,
 }
 
-/// The commands whose reply redis-cli prints raw in every output mode
-/// (`cliSendCommand`, rc:2461-2489): their payload is already text meant
+/// The commands whose reply redis-cli prints raw in every output mode: their
+/// payload is already text meant
 /// for a human, and quoting it would turn line breaks into `\r\n`.
 pub(crate) fn is_verbatim_command(argv: &[Vec<u8>]) -> bool {
     let is =

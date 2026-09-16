@@ -1,5 +1,4 @@
-//! `main` (rc:11270-11533): defaults, options, environment, then the first
-//! enabled mode.
+//! Startup: defaults, options, environment, then the first enabled mode.
 
 use super::opts::Opts;
 use super::opts_parse::{Parsed, parse};

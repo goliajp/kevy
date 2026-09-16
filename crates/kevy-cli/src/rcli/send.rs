@@ -1,12 +1,12 @@
-//! Sending a command and reading what comes back: `issueCommandRepeat`,
-//! `cliSendCommand` and `cliReadReply` (rc:2295-2658, 3366-3406).
+//! Sending a command and reading what comes back, with the client-side
+//! bookkeeping redis-cli keeps around commands.
 
 use super::format::{Output, invalidate_tty, is_invalidate, is_verbatim_command, render};
 use super::session::{Connect, PushSink, Session, eprint_bytes};
 use kevy_resp::Reply;
 use std::io::Write;
 
-/// What `cliReadReply` decided.
+/// The outcome of reading one reply.
 pub(crate) enum Read {
     /// A reply was read (and printed unless suppressed).
     Reply(Reply),
@@ -24,7 +24,7 @@ pub(crate) fn write_out(bytes: &[u8]) {
 }
 
 impl Session {
-    /// `issueCommandRepeat`: `help` stays local, a lost link reconnects.
+    /// Run a command `repeat` times: `help` stays local, a lost link reconnects.
     pub(crate) fn issue(&mut self, argv: &[Vec<u8>], repeat: i64) -> bool {
         if is(argv, 0, "help") || is(argv, 0, "?") {
             super::help::command_help(&argv[1..]);
@@ -47,7 +47,7 @@ impl Session {
         true
     }
 
-    /// `cliSendCommand`.
+    /// Send, read, and track what the command changes client-side.
     fn send_command(&mut self, argv: &[Vec<u8>], mut repeat: i64) -> bool {
         let verbatim = is_verbatim_command(argv);
         if is(argv, 0, "shutdown") {
@@ -104,7 +104,7 @@ impl Session {
         }
     }
 
-    /// The read loop of `cliSendCommand`: skip pub/sub traffic until the
+    /// Read until this command's own reply: skip pub/sub traffic until the
     /// reply to this command, then update the tracked state.
     fn await_reply(
         &mut self,
@@ -185,7 +185,7 @@ impl Session {
         }
     }
 
-    /// `cliReadReply`: one reply off the wire (pushes routed to the sink),
+    /// One reply off the wire (pushes routed to the sink),
     /// printed in the current output mode.
     pub(crate) fn read_reply(&mut self, verbatim: bool) -> Read {
         let (reply, texts) = loop {
@@ -225,12 +225,12 @@ impl Session {
         std::process::exit(1);
     }
 
-    /// `cliPushHandler`.
+    /// Print a push that arrived while a reply was awaited.
     pub(crate) fn print_push(&self, reply: &Reply, texts: &[Vec<u8>]) {
         write_out(&self.push_bytes(reply, texts));
     }
 
-    /// What `cliPushHandler` prints for `reply`.
+    /// What is printed for a push that arrived while a reply was awaited.
     pub(crate) fn push_bytes(&self, reply: &Reply, texts: &[Vec<u8>]) -> Vec<u8> {
         if self.opts.output == Output::Standard && is_invalidate(reply) {
             invalidate_tty(reply)
@@ -240,7 +240,7 @@ impl Session {
     }
 }
 
-/// `isPubsubPush`: the kind (`message`, `subscribe`, …) of a pub/sub frame.
+/// The kind (`message`, `subscribe`, …) of a pub/sub frame, if it is one.
 fn pubsub_kind(r: &Reply, resp3: bool) -> Option<&[u8]> {
     let items = match (r, resp3) {
         (Reply::Push(items), true) | (Reply::Array(items), false) => items,

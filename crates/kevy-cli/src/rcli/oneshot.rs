@@ -1,4 +1,4 @@
-//! A command on the command line: `noninteractive` (rc:3709-3751).
+//! A command on the command line, run once (or `-r` times).
 
 use super::opts_parse::unquote;
 use super::send::Read;
@@ -40,7 +40,7 @@ pub(crate) fn run(s: &mut Session, args: &[Vec<u8>]) -> u8 {
     u8::from(!ok)
 }
 
-/// `readArgFromStdin`: all of standard input, binary-safe.
+/// All of standard input, binary-safe (`-x` / `-X`).
 fn stdin_all() -> Vec<u8> {
     let mut buf = Vec::new();
     if let Err(e) = std::io::stdin().lock().read_to_end(&mut buf) {
