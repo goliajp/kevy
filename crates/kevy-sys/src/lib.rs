@@ -80,7 +80,9 @@ mod poller_ep;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod poller_kq;
 
-pub use interrupt::{install_interrupt, sever_on_interrupt, take_severed};
+pub use interrupt::{
+    install_interrupt, note_interrupts, sever_on_interrupt, take_noted, take_severed,
+};
 pub use lockfile::flock_try_exclusive;
 pub use mem::{detected_memory_bound, fadvise_dontneed_all, malloc_trim_now, process_rss_bytes};
 #[cfg(any(target_os = "linux", target_os = "android"))]

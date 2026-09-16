@@ -18,6 +18,10 @@ use std::os::fd::RawFd;
 
 /// The descriptor a Ctrl-C shuts down; -1 means Ctrl-C exits instead.
 static SEVER: AtomicI32 = AtomicI32::new(-1);
+/// Ctrl-C only records that it happened (a long job stops at its next step).
+static JUST_NOTE: AtomicBool = AtomicBool::new(false);
+/// A Ctrl-C was noted and nobody has asked about it yet.
+static NOTED: AtomicBool = AtomicBool::new(false);
 /// The exit code when Ctrl-C exits.
 static EXIT_CODE: AtomicU8 = AtomicU8::new(1);
 /// A connection was severed and nobody has asked about it yet.
@@ -88,6 +92,32 @@ pub fn take_severed() -> bool {
     SEVERED.swap(false, Ordering::Relaxed)
 }
 
+/// Make Ctrl-C only note that it happened, for a job that stops cleanly at
+/// its next step and reports what it has; see [`take_noted`]. This overrides
+/// both exiting and severing until the process ends.
+///
+/// # Examples
+///
+/// ```
+/// kevy_sys::install_interrupt(1);
+/// kevy_sys::note_interrupts();
+/// assert!(!kevy_sys::take_noted());
+/// ```
+pub fn note_interrupts() {
+    JUST_NOTE.store(true, Ordering::Relaxed);
+}
+
+/// Whether a Ctrl-C was noted since the last call.
+///
+/// # Examples
+///
+/// ```
+/// assert!(!kevy_sys::take_noted());
+/// ```
+pub fn take_noted() -> bool {
+    NOTED.swap(false, Ordering::Relaxed)
+}
+
 /// Record the mode to restore on `fd` if the handler exits; `None` forgets it.
 pub(crate) fn remember_terminal(saved: Option<(RawFd, &Termios)>) {
     RESTORE.state.store(1, Ordering::SeqCst);
@@ -103,6 +133,10 @@ pub(crate) fn remember_terminal(saved: Option<(RawFd, &Termios)>) {
 }
 
 extern "C" fn on_interrupt(_signum: c_int) {
+    if JUST_NOTE.load(Ordering::Relaxed) {
+        NOTED.store(true, Ordering::Relaxed);
+        return;
+    }
     let fd = SEVER.load(Ordering::Relaxed);
     if fd >= 0 {
         // SAFETY: shutdown(2) is async-signal-safe and takes plain integers;
