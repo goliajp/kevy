@@ -1,0 +1,99 @@
+# The npm platform packages: what @goliapkg/kevy-node and @goliapkg/kevy-bin
+# resolve their native half out of.
+#
+# Until 6.4.0 nothing published them. kevy-node's three stayed at 5.1.0
+# while every kevy-node from 6.0.0 on pinned its own version, so installing
+# it succeeded and loading it failed; kevy-bin had never reached npm at all.
+# See packaging/npm/publish-platform-packages.sh for how that stayed green.
+#
+# Each target builds and smokes on its own runner — the only way a
+# linux-arm64 package is ever installed before a user installs it — and
+# the tarball that smoke installed is the one published. kevy-bin's
+# binaries are not rebuilt: they come from the GitHub release, checksum
+# verified, so npm and the release page serve the same bytes.
+#
+# Called by release.yml once the GitHub release has its binaries. Can be
+# dispatched for an existing tag, which is how 6.4.0 got its packages.
+name: npm platform packages
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+    secrets:
+      NPM_TOKEN:
+        required: true
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag whose GitHub release already has binaries (e.g. v6.4.0)'
+        type: string
+        required: true
+
+jobs:
+  stage:
+    name: stage + smoke ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-gnu, runner: ubuntu-latest }
+          - { target: aarch64-unknown-linux-gnu, runner: ubuntu-24.04-arm }
+          - { target: aarch64-apple-darwin, runner: macos-latest }
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: actions/setup-node@v7
+        with: { node-version: '22' }
+      - uses: oven-sh/setup-bun@v2
+      - name: Install Rust (stable)
+        run: rustup toolchain install stable --no-self-update && rustup default stable
+
+      - name: kevy-bin — the release's binaries, through the launcher
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          base="kevy-$TAG-${{ matrix.target }}"
+          gh release download "$TAG" -p "$base.tar.gz" -p "$base.tar.gz.sha256" -D rel
+          (cd rel && shasum -a 256 -c "$base.tar.gz.sha256" && tar -xzf "$base.tar.gz")
+          bash packaging/npm/smoke.sh "rel/$base/kevy" "rel/$base/kevy-cli" stage
+
+      - name: kevy-node — build the natives, smoke on Node and Bun
+        run: |
+          cargo build --release -p kevy-ffi -p kevy-napi
+          bash packaging/npm/smoke-node.sh stage
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: npm-platform-${{ matrix.target }}
+          path: stage/*.tgz
+          if-no-files-found: error
+
+  publish:
+    name: publish platform packages, then kevy-bin
+    needs: stage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+      - uses: actions/download-artifact@v8
+        with:
+          path: stage
+          pattern: npm-platform-*
+          merge-multiple: true
+      - name: Publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: bash packaging/npm/publish-platform-packages.sh "${TAG#v}" stage

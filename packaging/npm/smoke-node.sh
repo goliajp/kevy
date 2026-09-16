@@ -6,8 +6,14 @@
 # not the in-repo target/ fallback.
 #
 #   cargo build --release -p kevy-ffi -p kevy-napi
-#   bash packaging/npm/smoke-node.sh
+#   bash packaging/npm/smoke-node.sh [keep-dir]
+#
+# With keep-dir, the platform tarball this smoke installed is copied there
+# once both runtimes pass. The release workflow publishes that file, so npm
+# serves the exact bytes that were installed and run.
 set -euo pipefail
+KEEP="${1:-}"
+[ -z "$KEEP" ] || { mkdir -p "$KEEP" && KEEP="$(cd "$KEEP" && pwd)"; }
 cd "$(dirname "$0")/../.."
 
 # Non-interactive shells don't get nvm's lazy-loaded node/npm; fall back
@@ -55,4 +61,8 @@ echo "smoke-node: node…"
 (cd "$APP" && node smoke.mjs)
 echo "smoke-node: bun…"
 (cd "$APP" && bun smoke.mjs)
+if [ -n "$KEEP" ]; then
+    mkdir -p "$KEEP"
+    cp "$STAGE"/goliapkg-kevy-node-"$os"-"$cpu"-*.tgz "$KEEP/"
+fi
 echo "smoke-node: PASS ($os-$cpu, installed layout)"

@@ -373,18 +373,50 @@ FORMATS = [
 ]
 
 
+# Where manifests that ship live. Until 6.4 this was bindings/ alone, and two
+# npm doors sat outside it: @goliapkg/kevy-bin under packaging/ (the server
+# binaries through npm), unpublished from 4.0 to 6.4 with no gate noticing,
+# and @goliapkg/kevy under crates/kevy-wasm/pkg — the first npm package the
+# release publishes, current every time, and never once asked about.
+MANIFEST_ROOTS = ("bindings", "packaging", "crates")
+
+
 def binding_doors(excused):
-    """Doors found under bindings/, one glob per manifest format."""
+    """Doors found under MANIFEST_ROOTS, one glob per manifest format."""
     out = []
     for kind, pattern, read, probe in FORMATS:
-        for f in sorted((ROOT / "bindings").glob(pattern)):
-            if demo(f) or any(x in f.parents or x == f.parent for x in excused):
-                continue
-            got = read(f.read_text(encoding="utf-8"))
-            if not got:
-                continue
-            name, declared = got
-            out.append((kind, name or f.stem, probe, f, declared))
+        for base in MANIFEST_ROOTS:
+            for f in sorted((ROOT / base).glob(pattern)):
+                if demo(f) or any(x in f.parents or x == f.parent for x in excused):
+                    continue
+                got = read(f.read_text(encoding="utf-8"))
+                if not got:
+                    continue
+                name, declared = got
+                out.append((kind, name or f.stem, probe, f, declared))
+    return out
+
+
+def platform_doors(ds):
+    """The platform packages npm doors pin as optionalDependencies.
+
+    They are generated at release time, so no manifest for them exists in
+    the tree — and a gate that reads doors off the tree could not see them.
+    kevy-node's three stayed at 5.1.0 for five releases while kevy-node
+    itself was current here every day: install succeeded, load failed. A
+    main package is only as installed as the packages it pins, so each pin
+    to one of our own is a door, read off the main package's manifest.
+    """
+    out, seen = [], set()
+    for kind, name, _, src, _ in ds:
+        if kind != "npm":
+            continue
+        scope = name.split("/")[0] + "/" if name.startswith("@") else None
+        deps = json.loads(src.read_text(encoding="utf-8")).get("optionalDependencies") or {}
+        for dep, pin in sorted(deps.items()):
+            if scope and dep.startswith(scope) and dep not in seen:
+                seen.add(dep)
+                out.append(("npm", dep, on_npm, src, pin))
     return out
 
 
@@ -448,7 +480,8 @@ def doors():
     releases precisely because a version that does not move cannot be.
     """
     excused = {ROOT / k for k in NOT_PUBLISHED}
-    return binding_doors(excused) + crate_doors() + service_doors()
+    found = binding_doors(excused)
+    return found + platform_doors(found) + crate_doors() + service_doors()
 
 
 def unseen(ds):

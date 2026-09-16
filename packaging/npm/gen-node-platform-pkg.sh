@@ -11,8 +11,9 @@
 #          target/release/libkevy_napi.dylib target/release/libkevy_ffi.dylib \
 #          /tmp/npm-stage
 #
-# CI calls this once per release target, then `npm publish` each result
-# and the main package. Locally it feeds packaging/npm/smoke-node.sh.
+# Called by packaging/npm/smoke-node.sh, which CI runs on every push and
+# .github/workflows/npm-platform.yml runs on each release target before it
+# publishes the tarball that smoke installed.
 set -euo pipefail
 
 os="$1" cpu="$2" napi_lib="$3" ffi_lib="$4" outdir="$5"
