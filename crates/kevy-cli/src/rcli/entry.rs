@@ -33,6 +33,12 @@ pub fn run(args: &[Vec<u8>]) -> u8 {
     }
     let command = &args[first..];
     let mut session = Session::new(opts);
+    if let Some(input) = session.opts.modes.test_hint.clone() {
+        return super::hint_modes::print_hint(&mut session, &input);
+    }
+    if let Some(path) = session.opts.modes.test_hint_file.clone() {
+        return super::hint_modes::check_hints(&mut session, &path);
+    }
     if command.is_empty() {
         session.connect(Connect::Report);
         return super::repl::run(&mut session);
@@ -84,8 +90,6 @@ fn unimplemented_mode(o: &Opts) -> Option<&'static str> {
         (m.scan, "--scan"),
         (m.lru_test.is_some(), "--lru-test"),
         (m.intrinsic_latency.is_some(), "--intrinsic-latency"),
-        (m.test_hint.is_some(), "--test_hint"),
-        (m.test_hint_file.is_some(), "--test_hint_file"),
         (m.eval.is_some(), "--eval"),
         (o.cluster_mode, "-c"),
     ]

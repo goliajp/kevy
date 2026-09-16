@@ -67,8 +67,10 @@ pub mod checksum;
 pub(crate) mod ffi;
 mod lockfile;
 mod mem;
+mod pty;
 mod signal;
 mod socket;
+mod term;
 mod wait;
 mod waker;
 
@@ -83,8 +85,10 @@ pub use mem::{detected_memory_bound, fadvise_dontneed_all, malloc_trim_now, proc
 pub use poller_ep::Poller;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use poller_kq::Poller;
+pub use pty::open_pty;
 pub use signal::{SIGINT, SIGTERM, SIGXFSZ, install_signal_handler};
 pub use socket::{Socket, tcp_listen, tcp_listen_reuseport, unix_listen};
+pub use term::{RawMode, terminal_columns};
 pub use wait::wait_readable;
 pub use waker::{Waker, waker};
 

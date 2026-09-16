@@ -6,15 +6,20 @@
 
 mod cnum;
 mod conn;
+mod docs;
+mod edit;
 mod fmt_flat;
 mod fmt_json;
 mod fmt_tty;
 mod format;
 mod help;
+mod hint_modes;
+mod input;
 mod oneshot;
 mod opts;
 mod opts_modes;
 mod opts_parse;
+mod prompt;
 mod repl;
 mod repr;
 mod send;

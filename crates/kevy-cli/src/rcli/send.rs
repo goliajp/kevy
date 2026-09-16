@@ -27,7 +27,7 @@ impl Session {
     /// Run a command `repeat` times: `help` stays local, a lost link reconnects.
     pub(crate) fn issue(&mut self, argv: &[Vec<u8>], repeat: i64) -> bool {
         if is(argv, 0, "help") || is(argv, 0, "?") {
-            super::help::command_help(&argv[1..]);
+            self.print_help(&argv[1..]);
             return true;
         }
         if self.conn.is_none() || self.link_error.is_some() {

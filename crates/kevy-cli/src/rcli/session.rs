@@ -47,6 +47,19 @@ pub(crate) struct Session {
     pub(crate) push: PushSink,
     /// Standard input is being read as REPL lines (redis-cli's `interactive`).
     pub(crate) interactive: bool,
+    /// The command reference, once something has needed it.
+    pub(crate) docs: Option<std::rc::Rc<super::docs::model::Docs>>,
+}
+
+/// Whether the REPL shows argument hints (`:set hints` / `:set nohints`).
+static HINTS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+pub(crate) fn set_hints(on: bool) {
+    HINTS.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub(crate) fn hints_on() -> bool {
+    HINTS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Write to stderr; there is nowhere to report a failed diagnostic.
@@ -69,6 +82,7 @@ impl Session {
             current_resp3: false,
             push: PushSink::Discard,
             interactive: false,
+            docs: None,
         }
     }
 

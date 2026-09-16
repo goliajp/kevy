@@ -4,6 +4,7 @@
 #   env:    K=V, repeatable
 #   stdin:  C escapes (\n \r \t \\ \xHH), repeatable, concatenated
 #   deviation + kevy.stdout / kevy.stderr / kevy.exit / kevy.stdout-contains
+#           or kevy.stdout-replace (`old => new` over redis-cli's output)
 #           when kevy-cli is meant to differ (see deviations.txt)
 # Ids refer to .claude/rfcs/2026-09-17-kevy-cli-superset/redis-cli-inventory.md §8.
 
@@ -622,3 +623,114 @@ run: -p $PORT
 [RC-136 repl-connect-to-an-impossible-port]
 stdin: connect 127.0.0.1 99999\nPING\n
 run: -p $PORT
+
+# ─── P1 · help, from the server's COMMAND DOCS ───────────────────────────────
+
+[RC-072,RC-151 help-for-a-command]
+run: -p $PORT help set
+
+[RC-151 help-for-a-subcommand]
+run: -p $PORT help CLIENT kill
+
+[RC-151 help-lists-a-containers-subcommands]
+deviation: DEV-012
+run: -p $PORT help client
+kevy.stdout-replace: (null) =>
+
+[RC-150 help-for-a-group]
+run: -p $PORT help @string
+
+[RC-150 help-for-a-group-with-argumentless-commands]
+deviation: DEV-012
+run: -p $PORT help @Connection
+kevy.stdout-replace: (null) =>
+
+[RC-150,RC-151 help-for-nothing-known]
+run: -p $PORT help nosuch
+
+[RC-150 help-for-an-unknown-group]
+run: -p $PORT help @nosuch
+
+[RC-072 question-mark-is-help]
+run: -p $PORT ? get
+
+[RC-149 help-overview]
+deviation: DEV-015
+run: -p $PORT help
+kevy.stdout-contains: To get help about commands type:\n      "help @<group>" to get a list of commands in <group>\n
+
+[RC-149 help-overview-names-kevys-preferences-file]
+deviation: DEV-015
+run: -p $PORT help
+kevy.stdout-contains: Set your preferences in ~/.kevyclirc\n
+
+[RC-072,RC-148 help-in-a-piped-repl]
+stdin: help get\nPING\n
+run: -p $PORT
+
+[RC-148 help-without-a-server-is-kevys-reference]
+deviation: DEV-016
+run: -p 1 help get
+kevy.stdout-contains: \x1b[1mGET\x1b[0m \x1b[90mkey\x1b[0m\r\n
+
+# ─── P1 · hints ──────────────────────────────────────────────────────────────
+
+[RC-015,RC-147 hint-for-a-command]
+run: -p $PORT --test_hint "set "
+
+[RC-015,RC-147 hint-after-some-arguments]
+run: -p $PORT --test_hint "SET k v nx "
+
+[RC-015,RC-147 hint-ignores-the-word-being-typed]
+run: -p $PORT --test_hint "zadd k 1"
+
+[RC-015,RC-147 hint-inside-a-repeating-block]
+run: -p $PORT --test_hint "zadd k nx 1 m 2 "
+
+[RC-015,RC-147 hint-for-an-optional-in-progress]
+run: -p $PORT --test_hint "set k v ex "
+
+[RC-015,RC-147 hint-refuses-a-non-number]
+run: -p $PORT --test_hint "set k v ex soon "
+
+[RC-015,RC-147 hint-takes-a-leading-number]
+run: -p $PORT --test_hint "set k v ex 12abc "
+
+[RC-015,RC-147 hint-for-a-double]
+run: -p $PORT --test_hint "zadd k .5 m inf n -3 "
+
+[RC-015,RC-147 hint-for-a-subcommand]
+run: -p $PORT --test_hint "client kill "
+
+[RC-015,RC-147 hint-past-the-last-argument]
+run: -p $PORT --test_hint "get k extra "
+
+[RC-015,RC-147 hint-closes-the-brackets-it-opens]
+deviation: DEV-014
+run: -p $PORT --test_hint "acl dryrun u c a b "
+kevy.stdout-replace: ...]] => ...]
+
+[RC-015 hint-for-no-command]
+deviation: DEV-013
+run: -p $PORT --test_hint "nosuch "
+kevy.stdout: \n
+kevy.exit: 0
+
+[RC-016 hint-file-all-passing]
+stdin: # a comment\n"get " "key"\n\n"zadd k 1 " "member [score member ...]"\n
+run: -p $PORT --test_hint_file /dev/stdin
+
+[RC-016 hint-file-a-failure-is-the-exit-code]
+stdin: "get " "key"\n"get " "wrong"\n"set k v nx " "[GET] [EX seconds|PX milliseconds|EXAT unix-time-seconds|PXAT unix-time-milliseconds|KEEPTTL]"\n
+run: -p $PORT --test_hint_file /dev/stdin
+
+[RC-014,RC-016 hint-file-verbose-and-no-command]
+stdin: "nosuch " "x"\n"get " "key"\n
+run: -p $PORT --verbose --test_hint_file /dev/stdin
+
+[RC-016 hint-file-missing-expected]
+stdin: "get "\n
+run: -p $PORT --test_hint_file /dev/stdin
+
+[RC-016 hint-file-unreadable]
+run: -p $PORT --test_hint_file /nonexistent

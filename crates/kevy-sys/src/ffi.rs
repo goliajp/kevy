@@ -43,6 +43,16 @@ unsafe extern "C" {
     pub fn signal(signum: c_int, handler: extern "C" fn(c_int)) -> *mut c_void;
     // poll(2) for kevy-cli's wait on a socket and stdin together.
     pub fn poll(fds: *mut crate::wait::PollFd, nfds: NfdsT, timeout: c_int) -> c_int;
+    // Terminal control for kevy-cli's line editor.
+    pub fn tcgetattr(fd: c_int, termios: *mut crate::term::Termios) -> c_int;
+    pub fn tcsetattr(fd: c_int, action: c_int, termios: *const crate::term::Termios) -> c_int;
+    // Variadic in C; kevy only passes one pointer argument (TIOCGWINSZ).
+    pub fn ioctl(fd: c_int, request: core::ffi::c_ulong, ...) -> c_int;
+    // A pseudo-terminal for tests that drive a program needing a terminal.
+    pub fn posix_openpt(flags: c_int) -> c_int;
+    pub fn grantpt(fd: c_int) -> c_int;
+    pub fn unlockpt(fd: c_int) -> c_int;
+    pub fn ptsname(fd: c_int) -> *mut c_char;
 }
 
 /// `nfds_t`: `unsigned long` on Linux, `unsigned int` on macOS.
