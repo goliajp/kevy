@@ -843,3 +843,104 @@ impl PtyLive {
         self.child.wait().unwrap().code().unwrap_or(-1)
     }
 }
+
+#[test]
+fn prompt_forms_history_file_and_preferences() {
+    let s = Srv::start();
+    let p = s.port();
+    let dir = std::env::temp_dir().join(format!("kevy-rcli-prompt-{}", s.port));
+    std::fs::create_dir_all(&dir).unwrap();
+    let history = dir.join("history");
+    let rc = dir.join("rc");
+    std::fs::write(&rc, "# a comment\n:set nohints\n:set colours\n\n").unwrap();
+    let env = [
+        ("FAKETTY_WITH_PROMPT", "1"),
+        ("KEVYCLI_HISTFILE", history.to_str().unwrap()),
+        ("KEVYCLI_RCFILE", rc.to_str().unwrap()),
+    ];
+    let typed = b"MULTI\rPING\rEXEC\rAUTH secret\rHELLO 3 AUTH u pw\rSUBSCRIBE c\r\x04";
+    let out = cli(&["-p", &p], typed, &env).stdout;
+    // The preferences file speaks first, naming itself.
+    assert!(out.starts_with(".kevyclirc: unknown kevy-cli internal command '#'\n.kevyclirc: unknown kevy-cli preference 'colours'\n"), "{out:?}");
+    for form in [format!("127.0.0.1:{p}(TX)> "), format!("127.0.0.1:{p}(subscribed mode)> ")] {
+        assert!(out.contains(&form), "no {form:?} in {out:?}");
+    }
+    // The file keeps what was typed, minus the lines carrying credentials.
+    let kept = std::fs::read_to_string(&history).unwrap();
+    assert_eq!(kept, "MULTI\nPING\nEXEC\nSUBSCRIBE c\n");
+    use std::os::unix::fs::PermissionsExt;
+    assert_eq!(std::fs::metadata(&history).unwrap().permissions().mode() & 0o777, 0o600);
+    // Next session: the history is there to recall.
+    let again = cli(&["-p", &p], b"\x10\x10\r\x04", &env).stdout;
+    assert!(again.contains("> EXEC\r"), "the second-newest line comes back: {again:?}");
+    // No server: the prompt says so. A unix socket prompt names kevy (DEV-011).
+    assert!(cli(&["-p", "1"], b"PING\r\x04", &env).stdout.starts_with(".kevyclirc: "));
+    let none = [
+        ("FAKETTY_WITH_PROMPT", "1"),
+        ("KEVYCLI_HISTFILE", history.to_str().unwrap()),
+        ("KEVYCLI_RCFILE", "/dev/null"),
+    ];
+    assert!(cli(&["-p", "1"], b"\x04", &none).stdout.contains("not connected> "));
+    let sock = cli(&["-s", "/nonexistent/k.sock"], b"\x04", &none).stdout;
+    assert!(sock.contains("not connected> "), "{sock:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_line_typed_ahead_of_a_subscription_runs_while_subscribed() {
+    let s = Srv::start();
+    let p = s.port();
+    // Both lines in one write, and standard input stays open: the second
+    // line is already read into kevy-cli's buffer when the subscribed wait
+    // starts, so waiting on the descriptor alone would never see it.
+    let mut live = Live::start(&["-p", &p], &[]);
+    live.type_line("SUBSCRIBE c\nPING\n");
+    live.wait_for("subscribe\nc\n1\nPONG\n"); // kevy answers PING plainly when subscribed
+    assert_eq!(live.finish(), 0);
+}
+
+#[test]
+fn help_is_asked_for_once_and_not_on_a_subscribed_connection() {
+    let s = Srv::start();
+    let p = s.port();
+    // Over RESP3 the reply is a map; the help reads the same.
+    let resp2 = cli(&["-p", &p, "help", "get"], b"", &[]).stdout;
+    assert_eq!(cli(&["-3", "-p", &p, "help", "get"], b"", &[]).stdout, resp2);
+    // Asked twice, the second answer comes from the first.
+    let twice = cli(&["-p", &p], b"help get\nhelp get\n", &[]).stdout;
+    assert_eq!(twice, resp2.repeat(2));
+    // Subscribed, the connection cannot be asked: kevy's own reference answers.
+    let sub = cli(&["-p", &p], b"SUBSCRIBE c\nhelp get\n", &[]).stdout;
+    assert!(sub.ends_with(&resp2), "{sub:?}");
+
+    // The preferences file falls back to ~/.kevyclirc.
+    let home = std::env::temp_dir().join(format!("kevy-rcli-home-{}", s.port));
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(home.join(".kevyclirc"), ":set bogus\n").unwrap();
+    let env = [
+        ("FAKETTY_WITH_PROMPT", "1"),
+        ("HOME", home.to_str().unwrap()),
+        ("KEVYCLI_HISTFILE", "/nonexistent/h"),
+    ];
+    let out = cli(&["-p", &p], b"\x04", &env).stdout;
+    assert!(out.starts_with(".kevyclirc: unknown kevy-cli preference 'bogus'\n"), "{out:?}");
+    let valkey = [
+        ("FAKETTY_WITH_PROMPT", "1"),
+        ("VALKEYCLI_RCFILE", "/dev/null"),
+        ("HOME", home.to_str().unwrap()),
+        ("KEVYCLI_HISTFILE", "/nonexistent/h"),
+    ];
+    assert!(
+        !cli(&["-p", &p], b"\x04", &valkey).stdout.contains("bogus"),
+        "/dev/null reads nothing"
+    );
+    let _ = std::fs::remove_dir_all(&home);
+
+    // A hint file failing on a line that names no command shows `(null)`.
+    let cases = std::env::temp_dir().join(format!("kevy-rcli-nullhint-{}", s.port));
+    std::fs::write(&cases, "\"nosuch \" \"x\"\n\"get \" \"key\"\n").unwrap();
+    let file = cli(&["-p", &p, "--test_hint_file", cases.to_str().unwrap()], b"", &[]);
+    assert_eq!(file.stderr, "Test case 'nosuch ' FAILED: expected 'x', got '(null)'\n");
+    assert_eq!((file.stdout.as_str(), file.code), ("FAILURE: 1/2 passed\n", 1));
+    let _ = std::fs::remove_file(&cases);
+}

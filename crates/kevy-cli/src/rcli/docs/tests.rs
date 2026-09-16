@@ -324,3 +324,140 @@ fn the_overview_names_kevy_cli_and_its_preferences_file() {
     assert!(text.starts_with(concat!("kevy-cli ", env!("CARGO_PKG_VERSION"), "\n")), "{text}");
     assert!(text.ends_with("Set your preferences in ~/.kevyclirc\n"), "{text}");
 }
+
+/// RESP3 servers answer COMMAND DOCS with maps, sets and verbatim strings.
+#[test]
+fn a_resp3_shaped_table_reads_the_same() {
+    let flags = Reply::Set(vec![Reply::Simple(b"optional".to_vec())]);
+    let arg = Reply::Map(vec![
+        (s("name"), s("n")),
+        (s("display_text"), Reply::Verbatim { fmt: *b"txt", data: b"count".to_vec() }),
+        (s("type"), s("integer")),
+        (s("flags"), flags),
+    ]);
+    let spec = Reply::Map(vec![
+        (s("summary"), Reply::Verbatim { fmt: *b"txt", data: b"Pop.".to_vec() }),
+        (s("group"), s("list")),
+        (s("arguments"), Reply::Array(vec![arg])),
+    ]);
+    let d = Docs::from_reply(&Reply::Map(vec![(s("lpop"), spec)])).expect("a RESP3 table");
+    assert_eq!(d.entries[0].summary.as_deref(), Some(&b"Pop."[..]));
+    assert_eq!(d.hint(b"lpop ").as_deref(), Some(&b"[count]"[..]), "display_text names the value");
+}
+
+#[test]
+fn a_malformed_table_is_refused_whole() {
+    let bad = [
+        map(vec![]).clone(),
+        Reply::Array(vec![Reply::Int(1), map(vec![("summary", s("x"))])]),
+        Reply::Array(vec![s("a"), Reply::Int(1)]),
+        Reply::Array(vec![s("a"), Reply::Array(vec![Reply::Int(1), s("x")])]),
+        map(vec![("a", map(vec![("arguments", s("not a list"))]))]),
+        map(vec![("a", map(vec![("arguments", Reply::Array(vec![Reply::Int(3)]))]))]),
+        map(vec![(
+            "a",
+            map(vec![("arguments", Reply::Array(vec![map(vec![("flags", s("x"))])]))]),
+        )]),
+        map(vec![(
+            "a",
+            map(vec![(
+                "arguments",
+                Reply::Array(vec![map(vec![("flags", Reply::Array(vec![Reply::Int(1)]))])]),
+            )]),
+        )]),
+        map(vec![(
+            "a",
+            map(vec![("arguments", Reply::Array(vec![map(vec![("arguments", s("x"))])]))]),
+        )]),
+        map(vec![("a", map(vec![("subcommands", s("x"))]))]),
+        map(vec![(
+            "a",
+            map(vec![("subcommands", Reply::Array(vec![Reply::Int(1), map(vec![])]))]),
+        )]),
+        map(vec![("a", map(vec![("subcommands", map(vec![("a|b", s("x"))]))]))]),
+    ];
+    // The first is an empty table: valid, and empty.
+    assert_eq!(Docs::from_reply(&bad[0]).map(|d| d.entries.len()), Some(0));
+    for (i, reply) in bad.iter().enumerate().skip(1) {
+        assert_eq!(Docs::from_reply(reply), None, "case {i}");
+    }
+}
+
+#[test]
+fn unknown_fields_and_flags_are_ignored() {
+    let arg = map(vec![
+        ("name", s("k")),
+        ("type", s("key")),
+        ("key_spec_index", Reply::Int(0)),
+        ("flags", Reply::Array(vec![Reply::Simple(b"deprecated".to_vec())])),
+    ]);
+    let spec = map(vec![
+        ("summary", s("x")),
+        ("doc_flags", Reply::Array(vec![])),
+        ("arguments", Reply::Array(vec![arg])),
+    ]);
+    let d = Docs::from_reply(&map(vec![("get", spec)])).expect("a table");
+    assert_eq!(d.hint(b"get ").as_deref(), Some(&b"k"[..]));
+}
+
+#[test]
+fn subcommands_without_a_container_prefix_keep_their_name() {
+    let spec = map(vec![
+        ("summary", s("x")),
+        ("subcommands", map(vec![("list", command("L.", "g", vec![]))])),
+    ]);
+    let d = Docs::from_reply(&map(vec![("thing", spec)])).expect("a table");
+    assert!(d.entries.iter().any(|e| e.full == b"THING LIST"));
+}
+
+#[test]
+fn a_syntax_line_that_does_not_start_with_the_name_is_kept_whole() {
+    let spec = map(vec![("syntax", s("kevy extension: pops things"))]);
+    let d = Docs::from_reply(&map(vec![("zpop.below", spec)])).expect("a table");
+    assert_eq!(d.entries[0].params, Params::Syntax(b"kevy extension: pops things".to_vec()));
+}
+
+#[test]
+fn every_repeating_shape_renders() {
+    let shapes = command(
+        "x",
+        "g",
+        vec![
+            arg(
+                "flag",
+                "pure-token",
+                Some("F"),
+                &["optional", "multiple", "multiple_token"],
+                vec![],
+            ),
+            arg(
+                "choice",
+                "oneof",
+                None,
+                &["optional", "multiple"],
+                vec![
+                    arg("a", "pure-token", Some("A"), &[], vec![]),
+                    arg("b", "string", Some("B"), &[], vec![]),
+                ],
+            ),
+            arg("", "string", None, &["optional"], vec![]),
+            arg("unnamed", "pure-token", None, &["optional"], vec![]),
+        ],
+    );
+    let d = Docs::from_reply(&map(vec![("x", shapes)])).expect("a table");
+    let full = String::from_utf8_lossy(&d.hint(b"x ").unwrap_or_default()).into_owned();
+    // A pure token with no token of its own has nothing to show.
+    assert_eq!(full, r#"[F [F ...]] [A|B b [A|B b ...]] [""] []"#);
+}
+
+#[test]
+fn doubles_by_name_and_the_longest_command_wins() {
+    let d = docs();
+    assert_eq!(hint("zadd k INF m NaN n -inf o ").as_deref(), Some("[score member ...]"));
+    assert_eq!(hint("zadd k in ").as_deref(), Some(""), "`in` is not a number");
+    // CLIENT and CLIENT KILL both prefix `client kill x`; the longer names it.
+    assert_eq!(
+        d.lookup(&[b"CLIENT".to_vec(), b"KILL".to_vec(), b"x".to_vec()]).map(|e| e.full.clone()),
+        Some(b"CLIENT KILL".to_vec())
+    );
+}
