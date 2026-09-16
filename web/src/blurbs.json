@@ -34,7 +34,8 @@
     "upgrading-6.2.0-to-6.2.1": "Nothing on the server changes; two client crates finally reach crates.io at the engine's version.",
     "vector-search": "KNN over your keyspace. No embedding model included.",
     "views": "Materialised views, kept fresh by the write path.",
-    "wasm": "151 KB in a browser tab, persisted to OPFS."
+    "wasm": "151 KB in a browser tab, persisted to OPFS.",
+    "upgrading-6.3-to-6.4": "Nothing to change; five answers that were wrong are now right, from GEOSEARCH near the poles to a regexp alternation."
   },
   "ja": {
     "UPGRADING": "以前のメジャー——2.x から 3.x、および 3.x から 4.0。",
@@ -71,7 +72,8 @@
     "upgrading-6.2.0-to-6.2.1": "サーバーは無変更。2 つのクライアント crate がようやくエンジンと同じ番号で crates.io に届く。",
     "vector-search": "キー空間の上での KNN。embedding モデルは含まない。",
     "views": "マテリアライズドビュー。書き込みパスが鮮度を保つ。",
-    "wasm": "ブラウザのタブに 151 KB、OPFS へ永続化。"
+    "wasm": "ブラウザのタブに 151 KB、OPFS へ永続化。",
+    "upgrading-6.3-to-6.4": "コードの変更は不要。誤っていた 5 つの答えが正しくなりました。極付近の GEOSEARCH から regexp の選択まで。"
   },
   "zh": {
     "UPGRADING": "更早的大版本：2.x 到 3.x，以及 3.x 到 4.0。",
@@ -108,6 +110,7 @@
     "upgrading-6.2.0-to-6.2.1": "服务器什么都没变；两个客户端 crate 终于以引擎的版本号到达 crates.io。",
     "vector-search": "在你的键空间上做 KNN。不含 embedding 模型。",
     "views": "物化视图，由写路径顺手保持新鲜。",
-    "wasm": "浏览器标签页里的 151 KB，持久化到 OPFS。"
+    "wasm": "浏览器标签页里的 151 KB，持久化到 OPFS。",
+    "upgrading-6.3-to-6.4": "代码无需改动；五处原本答错的结果现在对了，从两极附近的 GEOSEARCH 到一个 regexp 交替。"
   }
 }

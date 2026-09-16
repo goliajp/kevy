@@ -2,12 +2,23 @@
 
 ## 6.4.0 — the quality release: what a reader can check, and what a gate can
 
-Every command answers exactly as it did in 6.3.0, the data directory
-opens in both directions, and a 6.3.x replica pairs with a 6.4.0
-primary. One defect is fixed, on the io_uring path, and it is the last
-section here — it was found by an instrument this release built. Apart
-from that, this release is about the other thing a codebase owes its
-readers.
+Nothing you have written stops working: the data directory opens in
+both directions, and a 6.3.0 node pairs with a 6.4.0 node in either
+role — both checked against the published 6.3.0 binary. But this release
+fixes real defects, and fixing a defect changes an answer. Five are
+observable from outside: `GEOSEARCH` near the poles returns members it
+used to drop, `used_memory` counts the spare capacity of strings grown by
+`APPEND`, month and year bounds too large to represent are refused rather
+than answered, a capturing alternation in `regexp_*` retries its branches,
+and on io_uring a disconnect the server decides on reaches the client.
+Each is measured against 6.3.0 in
+[docs/upgrading-6.3-to-6.4.md](docs/upgrading-6.3-to-6.4.md).
+
+This paragraph originally said every command answered exactly as in 6.3.0
+and that one defect was fixed. That was true of the release candidate and
+stopped being true as the arc went on; it shipped that way and was
+corrected after the tag. Apart from those defects, this release is about
+the other thing a codebase owes its readers.
 
 The measure was deliberately put outside: not "does kevy meet kevy's
 rules" — that is a baseline you can pass while being unremarkable — but
@@ -814,8 +825,11 @@ end of `usize`.
 **zero** in a release one. Zero makes `mask` `usize::MAX` and `buf` empty:
 a ring that constructs without complaint, answers `capacity()` wrongly,
 and goes out of bounds on the first push — reporting a fault in `push` for
-an argument passed to `ring`. Checked now, with `# Panics` stating the
-ceiling the docs had never given.
+an argument passed to `ring`. The rounding now saturates at the largest
+power of two a `usize` holds, which keeps `mask == capacity - 1` for every
+input; allocating a ring that size is what fails, the way any over-large
+`Vec` does. (The first fix panicked instead, and the gate against `panic!`
+in library code refused it.)
 
 ### One probe loop, written three times
 
@@ -923,6 +937,14 @@ finding and cannot ship in a minor: adding a private field to an
 all-public struct is `struct-add-private-field-when-public`, MAJOR by
 Cargo's own table. It is recorded in `quality/API-GUIDELINES.md` with
 that identifier, as a v7 item rather than a thing that got dropped.
+
+### Upgrading
+
+Nothing to change in code, and nothing on disk moves. What you may see
+differently — five answers that were wrong, `INFO` fields added, and three
+Rust inputs that used to corrupt or panic — is in
+[docs/upgrading-6.3-to-6.4.md](docs/upgrading-6.3-to-6.4.md) (also in
+Chinese and Japanese), each measured against the published 6.3.0.
 
 ## 6.3.0 — the opponents, pinned; and three gaps they exposed
 

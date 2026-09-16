@@ -138,7 +138,7 @@ kevy-embedded = "6.3.0"
 ```sh
 npm install @goliapkg/kevy@6.3.0          # wasm
 npm install @goliapkg/kevy-node@6.3.0     # Node 原生
-npm install @goliapkg/kevy-bin@6.3.0      # 服务器二进制
+cargo install kevy --version 6.3.0        # 服务器二进制
 pip install kevy==6.3.0
 go get github.com/goliajp/kevy-go/v6@v6.3.0
 ```
