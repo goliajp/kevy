@@ -295,6 +295,12 @@ fn failure_paths_and_rare_modes() {
     let dropped = canned(b"+OK\r\n", &["-r", "2", "PING"], b"");
     assert_eq!((dropped.stdout.as_str(), dropped.code), ("OK\n", 1));
     assert!(hung_up.contains(&dropped.stderr.as_str()), "{}", dropped.stderr);
+    // In the REPL the hang-up is reported and the next command reconnects.
+    let (port, server) = fake_server_seq(&[b"+OK\r\n", b"+PONG\r\n"], None);
+    let repl = cli(&["-p", &port.to_string()], b"2 PING\nPING\n", &[]);
+    assert_eq!(repl.stdout, "OK\nPONG\n");
+    assert!(hung_up.contains(&repl.stderr.as_str()), "{}", repl.stderr);
+    server.join().unwrap();
 
     // MONITOR the server refuses leaves monitor mode on the error.
     let monitor = cli(&["-p", &p, "MONITOR"], b"", TTY);
@@ -327,11 +333,19 @@ fn cluster_manager_flags_parse_before_the_mode_is_refused() {
     assert_eq!(cli(&["--cluster"], b"", &[]).code, 1);
 }
 
-/// A server that answers every command with one canned byte string: enough
-/// to show kevy-cli frames kevy cannot send (a RESP3 push) and to listen on
-/// a unix socket, which the kevy server does not.
+/// A server that answers the first command on each connection with one
+/// canned byte string and hangs up: enough to show kevy-cli frames kevy
+/// cannot send (a RESP3 push), a unix socket, which the kevy server does not
+/// listen on, and a reconnect, when given more than one reply.
 fn fake_server(
     reply: &'static [u8],
+    unix: Option<&std::path::Path>,
+) -> (u16, std::thread::JoinHandle<()>) {
+    fake_server_seq(&[reply], unix)
+}
+
+fn fake_server_seq(
+    replies: &[&'static [u8]],
     unix: Option<&std::path::Path>,
 ) -> (u16, std::thread::JoinHandle<()>) {
     use std::io::Read;
@@ -341,15 +355,26 @@ fn fake_server(
             let _ = conn.write_all(reply);
         }
     }
+    let replies = replies.to_vec();
     match unix {
         Some(path) => {
             let listener = std::os::unix::net::UnixListener::bind(path).unwrap();
-            (0, std::thread::spawn(move || serve(listener.accept().unwrap().0, reply)))
+            (
+                0,
+                std::thread::spawn(move || {
+                    replies.iter().for_each(|r| serve(listener.accept().unwrap().0, r))
+                }),
+            )
         }
         None => {
             let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
             let port = listener.local_addr().unwrap().port();
-            (port, std::thread::spawn(move || serve(listener.accept().unwrap().0, reply)))
+            (
+                port,
+                std::thread::spawn(move || {
+                    replies.iter().for_each(|r| serve(listener.accept().unwrap().0, r))
+                }),
+            )
         }
     }
 }
