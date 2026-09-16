@@ -1,74 +1,36 @@
-//! kevy-cli — a small redis-cli-style client for [kevy] or any RESP server.
+//! kevy-cli — redis-cli for [kevy] or any RESP server, plus kevy's tools.
 //!
 //! Pure Rust, zero third-party dependencies (just [kevy-resp] + `std`).
 //!
 //! ```text
-//! kevy-cli [-h host] [-p port] [command args...]
+//! kevy-cli [options] [command args...]     # what redis-cli does
+//! kevy-cli <tool> [tool options]           # sql, export, import, doctor, …
 //! ```
 //!
-//! With a trailing command it runs once and exits; otherwise it starts an
-//! interactive REPL.
-//!
-//! The protocol pieces (`RespClient`, `format_reply`) live in the sibling
-//! `kevy_cli` library so other tools / tests / scripts can reuse them
-//! without depending on the binary.
+//! The redis-cli half lives in the `kevy_cli::rcli` library module; its
+//! acceptance is a byte-for-byte comparison with redis-cli (`bench/cligate.py`).
 //!
 //! [kevy]: https://crates.io/crates/kevy
 //! [kevy-resp]: https://crates.io/crates/kevy-resp
-// Teardown. `join` returns what the thread panicked with and the
-// thread is already being abandoned; a flush on the way out has
-// nowhere left to put its bytes. No caller remains to be told.
-#![expect(clippy::let_underscore_must_use, reason = "teardown has nobody left to report to")]
 #![forbid(unsafe_code)]
 
-use kevy_cli::{Reply, format_reply};
-use kevy_resp_client::RespClient;
-use std::io::{self, BufRead, Write};
+use std::io;
 use std::process::ExitCode;
 
 use kevy_cli::{DEFAULT_HOST, DEFAULT_PORT};
 
-mod args;
 mod embed;
 mod sql_probe;
 mod sqlcmd;
 
-use args::{Config, print_help};
-
 fn main() -> ExitCode {
-    // --help / --version short-circuit BEFORE we touch TCP, so the binary
-    // works in healthchecks / image-smoke / `--help` exploration without a
-    // running server. `-h` keeps its redis-cli meaning (host); only the long
-    // `--help` and `-V` / `--version` short-circuit. Mirrors the kevy
-    // server binary's pattern.
-    for arg in std::env::args().skip(1) {
-        match arg.as_str() {
-            "--help" => {
-                print_help();
-                return ExitCode::SUCCESS;
-            }
-            "--version" | "-V" => {
-                println!("kevy-cli {}", env!("CARGO_PKG_VERSION"));
-                return ExitCode::SUCCESS;
-            }
-            _ => {}
-        }
-    }
-
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    use std::os::unix::ffi::OsStringExt;
+    let raw: Vec<Vec<u8>> = std::env::args_os().skip(1).map(OsStringExt::into_vec).collect();
+    let args: Vec<String> = raw.iter().map(|a| String::from_utf8_lossy(a).into_owned()).collect();
     if let Some(code) = route_subcommand(&args) {
         return code;
     }
-
-    let cfg = Config::from_args(std::env::args().skip(1));
-    let mut conn = match RespClient::connect(&cfg.host, cfg.port) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("kevy-cli: could not connect to {}:{}: {e}", cfg.host, cfg.port);
-            return ExitCode::FAILURE;
-        }
-    };
-    if cfg.command.is_empty() { repl(&mut conn, &cfg) } else { run_once(&mut conn, &cfg.command) }
+    ExitCode::from(kevy_cli::rcli::run(&raw))
 }
 
 /// Route the non-REPL subcommands. `Some(code)` = handled, exit with it;
@@ -133,62 +95,6 @@ fn route_subcommand(args: &[String]) -> Option<ExitCode> {
 }
 
 /// Run a single command, print its reply, exit non-zero on a RESP error.
-fn run_once(conn: &mut RespClient, command: &[Vec<u8>]) -> ExitCode {
-    match conn.request(command) {
-        Ok(reply) => {
-            println!("{}", format_reply(&reply, 0));
-            if matches!(reply, Reply::Error(_)) { ExitCode::FAILURE } else { ExitCode::SUCCESS }
-        }
-        Err(e) => {
-            eprintln!("kevy-cli: {e}");
-            ExitCode::FAILURE
-        }
-    }
-}
-
-/// Interactive read-eval-print loop.
-fn repl(conn: &mut RespClient, cfg: &Config) -> ExitCode {
-    let prompt = format!("{}:{}> ", cfg.host, cfg.port);
-    let stdin = io::stdin();
-    let mut line = String::new();
-    loop {
-        print!("{prompt}");
-        let _ = io::stdout().flush();
-        line.clear();
-        match stdin.lock().read_line(&mut line) {
-            Ok(0) => return ExitCode::SUCCESS, // EOF (Ctrl-D)
-            Ok(_) => {}
-            Err(e) => {
-                eprintln!("kevy-cli: {e}");
-                return ExitCode::FAILURE;
-            }
-        }
-        let args = split_args(line.trim_end());
-        if args.is_empty() {
-            continue;
-        }
-        if let [only] = args.as_slice()
-            && (only.eq_ignore_ascii_case(b"quit") || only.eq_ignore_ascii_case(b"exit"))
-        {
-            return ExitCode::SUCCESS;
-        }
-        match conn.request(&args) {
-            Ok(reply) => println!("{}", format_reply(&reply, 0)),
-            Err(e) => {
-                eprintln!("kevy-cli: {e}");
-                return ExitCode::FAILURE;
-            }
-        }
-    }
-}
-
-/// Split a line into arguments on ASCII whitespace (no quote handling yet).
-fn split_args(line: &str) -> Vec<Vec<u8>> {
-    line.split_whitespace().map(|s| s.as_bytes().to_vec()).collect()
-}
-
-// ───────────── backup / restore ─────────────
-
 fn run_backup_cli(args: &[String]) -> ExitCode {
     let (data_dir, out_path) = match parse_backup_args(args) {
         Ok(t) => t,

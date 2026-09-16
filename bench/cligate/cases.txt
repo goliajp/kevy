@@ -1,0 +1,580 @@
+# One case per [ids name] block. Fields:
+#   run:    argv (shlex); $PORT $AUTH_PORT $SOCKET expand
+#   setup:  repeatable; redis-cli -p $PORT <setup> after FLUSHALL
+#   env:    K=V, repeatable
+#   stdin:  C escapes (\n \r \t \\ \xHH), repeatable, concatenated
+#   deviation + kevy.stdout / kevy.stderr / kevy.exit / kevy.stdout-contains
+#           when kevy-cli is meant to differ (see deviations.txt)
+# Ids refer to .claude/rfcs/2026-09-17-kevy-cli-superset/redis-cli-inventory.md §8.
+
+# ─── P0 · connection and general options ─────────────────────────────────────
+
+[RC-001 host-and-port]
+run: -h 127.0.0.1 -p $PORT PING
+
+[RC-001 host-as-last-argument-prints-usage]
+deviation: DEV-001
+run: -h
+kevy.stdout-contains: kevy-cli
+kevy.exit: 0
+
+[RC-002 port-out-of-range]
+run: -p 70000 PING
+
+[RC-002 port-negative]
+run: -p -1 PING
+
+[RC-002 port-not-a-number]
+deviation: DEV-002
+run: -p abc PING
+kevy.stderr: Invalid server port.\n
+kevy.exit: 1
+
+[RC-003 connect-timeout-accepted]
+run: -t 1.5 -p $PORT PING
+
+[RC-003 connect-timeout-invalid]
+run: -t abc -p $PORT PING
+
+[RC-003 connect-timeout-negative]
+run: -t -1 -p $PORT PING
+
+[RC-004 unix-socket]
+run: -s $SOCKET PING
+
+[RC-004 unix-socket-missing]
+run: -s /cligate/nope.sock PING
+
+[RC-004,RC-032 socket-and-cluster-exclusive]
+run: -c -s $SOCKET PING
+
+[RC-005 uri-host-port-db]
+run: -u redis://127.0.0.1:$PORT/3 SET k v
+
+[RC-005 uri-selects-db]
+setup: SELECT 3
+run: -u redis://127.0.0.1:$PORT/3 DBSIZE
+
+[RC-005 uri-bad-scheme]
+run: -u http://127.0.0.1:$PORT PING
+
+[RC-005 uri-bad-percent]
+run: -u redis://al%zzice:pw@127.0.0.1:$PORT PING
+
+[RC-005 uri-incomplete-percent]
+run: -u redis://alice:pw%2@127.0.0.1:$PORT PING
+
+[RC-005 uri-bad-port]
+run: -u redis://127.0.0.1:99999 PING
+
+[RC-005,RC-035 uri-password]
+run: --no-auth-warning -u redis://:secret@127.0.0.1:$AUTH_PORT PING
+
+[RC-005,RC-036 uri-user-and-password]
+run: --no-auth-warning -u redis://alice:wonderland@127.0.0.1:$AUTH_PORT ACL WHOAMI
+
+[RC-005,RC-036 uri-percent-decoded-password]
+run: --no-auth-warning -u redis://alice:wonder%6cand@127.0.0.1:$AUTH_PORT ACL WHOAMI
+
+[RC-006 uri-empty-password-sends-no-auth]
+run: -u redis://alice:@127.0.0.1:$AUTH_PORT PING
+
+[RC-006 uri-empty-user-is-legacy-auth]
+run: --no-auth-warning -u redis://:secret@127.0.0.1:$AUTH_PORT ACL WHOAMI
+
+[RC-007 select-db]
+run: -n 2 SET k v
+
+[RC-007 select-db-effective]
+setup: SELECT 2
+run: -n 2 DBSIZE
+
+[RC-007 select-db-out-of-range]
+run: -n 99 PING
+
+[RC-009 resp3-map]
+setup: HSET h a 1 b 2
+env: FAKETTY=1
+run: -3 -p $PORT HGETALL h
+
+[RC-009 resp2-same-command]
+setup: HSET h a 1 b 2
+env: FAKETTY=1
+run: -2 -p $PORT HGETALL h
+
+[RC-009,RC-032 resp2-resp3-exclusive]
+run: -2 -3 PING
+
+[RC-010 prefer-ipv4-plain-connect]
+run: -4 -p $PORT PING
+
+[RC-010,RC-032 ipv4-ipv6-exclusive]
+run: -4 -6 PING
+
+[RC-011 client-name]
+run: --name cligate -p $PORT CLIENT GETNAME
+
+[RC-012 version]
+deviation: DEV-003
+run: -v
+kevy.stdout-contains: kevy-cli
+
+[RC-012 version-long]
+deviation: DEV-003
+run: --version
+kevy.stdout-contains: kevy-cli
+
+[RC-013 help]
+deviation: DEV-001
+run: --help
+kevy.stdout-contains: -p <port>
+
+[RC-014 verbose-has-no-effect-on-commands]
+run: --verbose -p $PORT PING
+
+# ─── P0 · input and execution ────────────────────────────────────────────────
+
+[RC-017 stdin-as-last-argument]
+stdin: hello\nworld\n
+run: -x -p $PORT ECHO
+
+[RC-017 stdin-binary-safe]
+stdin: a\x00b\xff
+env: FAKETTY=1
+run: -x -p $PORT ECHO
+
+[RC-018 stdin-tag]
+stdin: payload
+run: -X TAG -p $PORT SET k TAG
+
+[RC-018 stdin-tag-missing]
+stdin: payload
+run: -X TAG -p $PORT SET k v
+
+[RC-018,RC-032 x-and-X-exclusive]
+run: -x -X TAG PING
+
+[RC-019 quoted-input]
+env: FAKETTY=1
+run: --quoted-input -p $PORT ECHO "\"a\\x00b\\n\""
+
+[RC-019 quoted-input-invalid]
+run: --quoted-input -p $PORT ECHO "\"unterminated"
+
+[RC-020 repeat]
+run: -r 3 -p $PORT INCR k
+
+[RC-020 repeat-zero-sends-nothing]
+run: -r 0 -p $PORT INCR k
+
+[RC-021 repeat-with-interval]
+run: -r 2 -i 0.05 -p $PORT INCR k
+
+[RC-022 error-reply-without-e-exits-0]
+run: -p $PORT NOSUCHCOMMAND
+
+[RC-022 error-reply-with-e]
+run: -e -p $PORT NOSUCHCOMMAND
+
+[RC-022 e-stops-a-repeat]
+setup: SET k notanumber
+run: -e -r 3 -p $PORT INCR k
+
+# ─── P0 · output formats ─────────────────────────────────────────────────────
+
+[RC-023 raw-when-piped]
+setup: SET k "a b"
+run: -p $PORT GET k
+
+[RC-023,RC-161 faketty-is-standard]
+setup: SET k "a b"
+env: FAKETTY=1
+run: -p $PORT GET k
+
+[RC-023 no-raw]
+setup: SET k "a b"
+run: --no-raw -p $PORT GET k
+
+[RC-023 raw-overrides-faketty]
+setup: SET k "a b"
+env: FAKETTY=1
+run: --raw -p $PORT GET k
+
+[RC-023 last-output-flag-wins]
+setup: SET k "a b"
+run: --csv --raw -p $PORT GET k
+
+[RC-024 csv-array]
+setup: RPUSH l a "b c" 1
+run: --csv -p $PORT LRANGE l 0 -1
+
+[RC-024 csv-nil-int-error]
+run: --csv -p $PORT GET missing
+
+[RC-024 csv-error]
+run: --csv -p $PORT NOSUCHCOMMAND
+
+[RC-025 json-array]
+setup: RPUSH l a "b\"c" 1
+run: --json -p $PORT LRANGE l 0 -1
+
+[RC-025 json-map-resp3]
+setup: HSET h a 1 b 2
+run: --json -p $PORT HGETALL h
+
+[RC-025 json-nil]
+run: --json -p $PORT GET missing
+
+[RC-025 json-control-bytes]
+stdin: a\nb\x01c
+run: --json -x -p $PORT ECHO
+
+[RC-025,RC-055 json-error-is-valid-json]
+deviation: DEV-004
+run: --json -p $PORT NOSUCHCOMMAND
+kevy.stdout: {"error":"ERR unknown command 'NOSUCHCOMMAND'"}\n
+
+[RC-026 quoted-json]
+stdin: a\nb\xff
+run: --quoted-json -x -p $PORT ECHO
+
+[RC-026,RC-056 quoted-json-with-quote-is-valid-json]
+deviation: DEV-005
+stdin: a"b
+run: --quoted-json -x -p $PORT ECHO
+kevy.stdout: "a\\\\\\"b"\n
+
+[RC-027 multibulk-delimiter]
+setup: RPUSH l a b c
+run: -d , -p $PORT LRANGE l 0 -1
+
+[RC-028 reply-delimiter]
+run: -D "|" -r 2 -p $PORT INCR k
+
+[RC-029 show-pushes-invalid-is-not-fatal]
+run: --show-pushes maybe -p $PORT PING
+
+# ─── P0 · parsing rules ──────────────────────────────────────────────────────
+
+[RC-030 unrecognized-option]
+run: --no-such-flag PING
+
+[RC-030 value-flag-last]
+run: -p
+
+[RC-031 first-non-dash-ends-options]
+run: -p $PORT ECHO -p
+
+[RC-032 ldb-needs-eval]
+run: --ldb PING
+
+[RC-032 rdb-and-functions-rdb-exclusive]
+run: --rdb /tmp/a --functions-rdb /tmp/b
+
+# ─── P0 · authentication ─────────────────────────────────────────────────────
+
+[RC-033,RC-035 password-warning-and-auth]
+run: -a secret -p $AUTH_PORT PING
+
+[RC-033 no-auth-warning]
+run: -a secret --no-auth-warning -p $AUTH_PORT PING
+
+[RC-035 wrong-password]
+run: -a wrong --no-auth-warning -p $AUTH_PORT PING
+
+[RC-035 pass-alias]
+run: --pass secret --no-auth-warning -p $AUTH_PORT PING
+
+[RC-035 no-password-on-protected-server]
+run: -p $AUTH_PORT PING
+
+[RC-036 acl-user]
+run: --user alice -a wonderland --no-auth-warning -p $AUTH_PORT ACL WHOAMI
+
+[RC-036 user-without-password-sends-no-auth]
+run: --user alice -p $AUTH_PORT PING
+
+[RC-037 askpass-from-stdin]
+stdin: secret\n
+run: --askpass -p $AUTH_PORT PING
+
+[RC-038,RC-157 env-auth]
+env: REDISCLI_AUTH=secret
+run: -p $AUTH_PORT PING
+
+[RC-038 flag-beats-env]
+env: REDISCLI_AUTH=wrong
+run: -a secret --no-auth-warning -p $AUTH_PORT PING
+
+[RC-039 tls-refused]
+deviation: DEV-006
+run: --tls -p $PORT PING
+kevy.stderr: kevy-cli: --tls is not supported: kevy-cli does not implement TLS\n
+kevy.exit: 1
+
+[RC-040 sni-refused]
+deviation: DEV-006
+run: --sni example.com -p $PORT PING
+kevy.stderr: kevy-cli: --sni is not supported: kevy-cli does not implement TLS\n
+kevy.exit: 1
+
+[RC-041 cacert-refused]
+deviation: DEV-006
+run: --cacert /tmp/ca.pem -p $PORT PING
+kevy.stderr: kevy-cli: --cacert is not supported: kevy-cli does not implement TLS\n
+kevy.exit: 1
+
+[RC-042 cert-refused]
+deviation: DEV-006
+run: --cert /tmp/c.pem --key /tmp/k.pem -p $PORT PING
+kevy.stderr: kevy-cli: --cert is not supported: kevy-cli does not implement TLS\n
+kevy.exit: 1
+
+[RC-043 ciphers-refused]
+deviation: DEV-006
+run: --tls-ciphers DEFAULT -p $PORT PING
+kevy.stderr: kevy-cli: --tls-ciphers is not supported: kevy-cli does not implement TLS\n
+kevy.exit: 1
+
+[RC-044 insecure-refused]
+deviation: DEV-006
+run: --insecure -p $PORT PING
+kevy.stderr: kevy-cli: --insecure is not supported: kevy-cli does not implement TLS\n
+kevy.exit: 1
+
+[RC-005 rediss-refused]
+deviation: DEV-006
+run: -u rediss://127.0.0.1:$PORT PING
+kevy.stderr: kevy-cli: rediss:// is not supported: kevy-cli does not implement TLS\n
+kevy.exit: 1
+
+# ─── P0 · STANDARD formatter ─────────────────────────────────────────────────
+
+[RC-048 status]
+env: FAKETTY=1
+run: -p $PORT SET k v
+
+[RC-048 error]
+env: FAKETTY=1
+run: -p $PORT NOSUCHCOMMAND
+
+[RC-048 integer]
+env: FAKETTY=1
+run: -p $PORT INCR k
+
+[RC-048 string-with-escapes]
+stdin: a\nb\r\t"q"\\\x00\xff\x07\x08
+env: FAKETTY=1
+run: -x -p $PORT ECHO
+
+[RC-048,RC-057 repr-of-every-byte-class]
+stdin: \x01\x1f\x7f\x80 ~!
+env: FAKETTY=1
+run: -x -p $PORT ECHO
+
+[RC-048 nil]
+env: FAKETTY=1
+run: -p $PORT GET missing
+
+[RC-048 double-resp3]
+setup: ZADD z 1.5 m
+env: FAKETTY=1
+run: -3 -p $PORT ZSCORE z m
+
+[RC-048 double-resp3-large]
+setup: ZADD z 1e300 m
+env: FAKETTY=1
+run: -3 -p $PORT ZSCORE z m
+
+[RC-048 double-resp3-small]
+setup: ZADD z 0.000001 m
+env: FAKETTY=1
+run: -3 -p $PORT ZSCORE z m
+
+[RC-048 double-resp3-inf]
+setup: ZADD z +inf m
+env: FAKETTY=1
+run: -3 -p $PORT ZSCORE z m
+
+[RC-048 boolean-resp3]
+env: FAKETTY=1
+run: -3 -p $PORT DEBUG PROTOCOL true
+
+[RC-048 verbatim-resp3]
+env: FAKETTY=1
+run: -3 -p $PORT DEBUG PROTOCOL verbatim
+
+[RC-049 empty-array]
+env: FAKETTY=1
+run: -p $PORT LRANGE missing 0 -1
+
+[RC-049 empty-hash]
+env: FAKETTY=1
+run: -3 -p $PORT HGETALL missing
+
+[RC-049 empty-set]
+env: FAKETTY=1
+run: -3 -p $PORT SMEMBERS missing
+
+[RC-050 array-width-alignment]
+setup: RPUSH l 1 2 3 4 5 6 7 8 9 10 11
+env: FAKETTY=1
+run: -p $PORT LRANGE l 0 -1
+
+[RC-050 nested-array]
+setup: SET a 1
+env: FAKETTY=1
+run: -p $PORT SCAN 0
+
+[RC-050 debug-protocol-array]
+env: FAKETTY=1
+run: -p $PORT DEBUG PROTOCOL array
+
+[RC-051 set-resp3]
+setup: SADD s only
+env: FAKETTY=1
+run: -3 -p $PORT SMEMBERS s
+
+[RC-051 map-resp3]
+env: FAKETTY=1
+run: -3 -p $PORT DEBUG PROTOCOL map
+
+[RC-051 map-with-multiline-value]
+env: FAKETTY=1
+run: -3 -p $PORT COMMAND DOCS GET
+
+[RC-051 debug-protocol-set]
+env: FAKETTY=1
+run: -3 -p $PORT DEBUG PROTOCOL set
+
+[RC-048 debug-protocol-double]
+env: FAKETTY=1
+run: -3 -p $PORT DEBUG PROTOCOL double
+
+[RC-048 debug-protocol-null]
+env: FAKETTY=1
+run: -3 -p $PORT DEBUG PROTOCOL null
+
+# ─── P0 · RAW, CSV, JSON per reply type ──────────────────────────────────────
+
+[RC-053 raw-error-has-double-newline]
+run: -p $PORT NOSUCHCOMMAND
+
+[RC-053 raw-nil]
+run: -p $PORT GET missing
+
+[RC-053 raw-integer]
+run: -p $PORT INCR k
+
+[RC-053 raw-array-flattened]
+setup: SET a 1
+run: -p $PORT SCAN 0
+
+[RC-053 raw-map]
+setup: HSET h a 1 b 2
+run: -3 -p $PORT HGETALL h
+
+[RC-053 raw-boolean-double]
+run: -3 -p $PORT DEBUG PROTOCOL true
+
+[RC-054 csv-map-and-boolean]
+setup: HSET h a 1
+run: --csv -3 -p $PORT HGETALL h
+
+[RC-054 csv-double]
+run: --csv -3 -p $PORT DEBUG PROTOCOL double
+
+[RC-055 json-set-bool-double]
+run: --json -p $PORT DEBUG PROTOCOL set
+
+[RC-055 json-map-int-keys]
+run: --json -p $PORT DEBUG PROTOCOL map
+
+[RC-055 json-double]
+run: --json -p $PORT DEBUG PROTOCOL double
+
+[RC-058 verbatim-raw-command-error-unprefixed]
+env: FAKETTY=1
+run: -p $PORT CLUSTER INFO
+
+[RC-058 verbatim-raw-memory-doctor]
+env: FAKETTY=1
+run: -p $PORT MEMORY DOCTOR
+
+[RC-058 verbatim-raw-ignores-reply-delimiter]
+run: -D "|" -p $PORT MEMORY DOCTOR
+
+[RC-060 bignum-renders]
+deviation: DEV-007
+env: FAKETTY=1
+run: -3 -p $PORT DEBUG PROTOCOL bignum
+kevy.stdout: (bignum) 1234567999999999999999999999999999999\n
+
+[RC-061 attribute-renders-its-value]
+deviation: DEV-008
+env: FAKETTY=1
+run: -3 -p $PORT DEBUG PROTOCOL attrib
+kevy.stdout: "Some real reply following the attribute"\n
+
+[RC-062 connection-refused]
+run: -p 1 PING
+
+# ─── P0 · client-side interception ───────────────────────────────────────────
+
+[RC-064 shutdown-is-success]
+run: -p $PORT SHUTDOWN NOSAVE
+
+[RC-059,RC-066 subscribe-in-piped-repl]
+stdin: SUBSCRIBE c\n
+run: -p $PORT
+
+# ─── P0 · non-interactive REPL (stdin not a tty) ─────────────────────────────
+
+[RC-130 piped-repl]
+stdin: SET k v\nGET k\nINCR n\n
+run: -p $PORT
+
+[RC-130 piped-repl-faketty]
+stdin: SET k v\nGET k\n
+env: FAKETTY=1
+run: -p $PORT
+
+[RC-131 repl-double-quotes]
+stdin: SET k "a b\\n\\x41"\nGET k\n
+env: FAKETTY=1
+run: -p $PORT
+
+[RC-131 repl-single-quotes]
+stdin: SET k 'it\\'s'\nGET k\n
+env: FAKETTY=1
+run: -p $PORT
+
+[RC-131 repl-invalid-argument]
+stdin: SET k "unterminated\nPING\n
+run: -p $PORT
+
+[RC-132 repl-repeat-prefix]
+stdin: 3 INCR n\n
+run: -p $PORT
+
+[RC-132 repl-repeat-prefix-invalid]
+stdin: 0 INCR n\n
+run: -p $PORT
+
+[RC-133 repl-quit]
+stdin: PING\nquit\nPING\n
+run: -p $PORT
+
+[RC-133 repl-exit]
+stdin: exit\nPING\n
+run: -p $PORT
+
+[RC-022 e-has-no-effect-in-repl]
+stdin: NOSUCHCOMMAND\nPING\n
+run: -e -p $PORT
+
+[RC-055 json-infinite-double-is-a-string]
+deviation: DEV-009
+setup: ZADD z +inf m
+run: --json -p $PORT ZSCORE z m
+kevy.stdout: "inf"\n

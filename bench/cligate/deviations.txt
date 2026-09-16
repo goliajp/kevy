@@ -1,0 +1,11 @@
+# id       RC id    where kevy-cli deliberately differs from redis-cli 8.10.1, and why
+DEV-001  RC-013   Help text is kevy-cli's: it documents kevy-cli's tools and flags, so it cannot be redis-cli's bytes. Pinned by a fragment.
+DEV-002  RC-002   `-p abc` is refused with `Invalid server port.` (redis-cli takes it as port 0; valkey-cli 9.1.2 refuses, D1).
+DEV-003  RC-012   `-v` prints `kevy-cli <version>`.
+DEV-004  RC-055   `--json` prints an error reply as `{"error":"…"}`; redis-cli prints `error:"…"`, which is not JSON.
+DEV-005  RC-056   `--quoted-json`: the JSON string's value is redis-cli's quoted repr, escaped once as JSON, so `a"b` prints `"a\\\"b"` and parses; redis-cli doubles backslashes and emits `"a\\"b"`, which does not.
+DEV-006  RC-039   TLS flags and rediss:// are refused by name: kevy-cli does not implement TLS (owner decision D1, 2026-09-17).
+DEV-007  RC-060   A RESP3 big number renders as `(bignum) <digits>` / the digits; redis-cli exits 1 with `Unknown reply type: 13`.
+DEV-008  RC-061   A RESP3 attribute is skipped and the reply it annotates is printed; redis-cli exits 1 on a protocol error.
+DEV-009  RC-055   `--json` writes a RESP3 double of inf, -inf or nan as a string; redis-cli writes it bare, which is not JSON.
+DEV-010  RC-030   Messages in which redis-cli names itself (`Try redis-cli --help`, `Invalid redis-cli repeat command option value.`) name kevy-cli. Applied to every case by the gate, not per case.

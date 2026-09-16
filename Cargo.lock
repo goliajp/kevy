@@ -485,6 +485,7 @@ dependencies = [
  "kevy-resp-client",
  "kevy-scalar",
  "kevy-sql",
+ "kevy-sys",
  "kevy-testnet",
  "kevy-tmpdir",
 ]

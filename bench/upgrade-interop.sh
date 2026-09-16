@@ -78,7 +78,7 @@ stop_all() {
 
 wait_key() { # port key expected label
     for _ in $(seq 60); do
-        echo "$($CLI -p "$1" GET "$2" 2>/dev/null)" | grep -q "\"$3\"" && return 0
+        echo "$($CLI -p "$1" GET "$2" 2>/dev/null)" | grep -qx "$3" && return 0
         sleep 0.5
     done
     fail "$4"
@@ -122,7 +122,7 @@ SHIPS=$(grep -c "shipping snapshot" "$DIR/c-newpri.out" || true)
 # Stale pre-upgrade keys must be gone after the resync — the new
 # primary never wrote c*, so finding one means the replica MERGED the
 # new history onto its stale store instead of adopting it wholesale.
-if echo "$($CLI -p $RPORT GET c1 2>/dev/null)" | grep -q '"v"'; then
+if echo "$($CLI -p $RPORT GET c1 2>/dev/null)" | grep -qx v; then
     fail "scenario C: pre-upgrade key c1 survived the resync (fork not discarded)"
 fi
 note "C: counter-gen sidecar -> one-time snapshot resync self-healed ($SHIPS ship(s) logged)"
@@ -140,14 +140,14 @@ stop_all
 start_kevy "$NEW" primary $PPORT d-dir "" d-new1
 NEW_DBSIZE=$($CLI -p $PPORT DBSIZE)
 [ "$OLD_DBSIZE" = "$NEW_DBSIZE" ] || fail "scenario D: dbsize drift old->new ($OLD_DBSIZE vs $NEW_DBSIZE)"
-$CLI -p $PPORT GET big7 | grep -q "7\"$" || fail "scenario D: big7 corrupt after old->new boot"
+$CLI -p $PPORT GET big7 | grep -q "7$" || fail "scenario D: big7 corrupt after old->new boot"
 # New writes on the same dir, then back to the old binary.
 for i in $(seq 1 20); do $CLI -p $PPORT SET nbig$i "$BIG$i" >/dev/null; done
 $CLI -p $PPORT SET dmark round-trip >/dev/null
 stop_all
 start_kevy "$OLD" primary $PPORT d-dir "" d-old2
 $CLI -p $PPORT GET dmark | grep -q round-trip || fail "scenario D: new->old boot lost the marker"
-$CLI -p $PPORT GET nbig13 | grep -q "13\"$" || fail "scenario D: $NEW_V-written big value corrupt under $OLD_V"
+$CLI -p $PPORT GET nbig13 | grep -q "13$" || fail "scenario D: $NEW_V-written big value corrupt under $OLD_V"
 note "D: dir round-trip old->new->old intact (dbsize $OLD_DBSIZE, vlog-sized values verified)"
 stop_all
 
