@@ -1,4 +1,4 @@
-//! The STANDARD formatter: `cliFormatReplyTTY` (rc:1843-1976).
+//! The STANDARD formatter: numbered, quoted, typed — redis-cli on a terminal.
 
 use super::format::{Doubles, c_str};
 use super::repr::push_repr;
@@ -83,7 +83,7 @@ fn map(pairs: &[(Reply, Reply)], prefix: &[u8], d: &mut Doubles<'_>, out: &mut V
     for (i, (k, v)) in pairs.iter().enumerate() {
         index(i, width, b'#', prefix, out);
         tty(k, &nested, d, out);
-        out.pop(); // the key's trailing newline: `sdsrange(out,0,-2)`
+        out.pop(); // the key's trailing newline: key and value share a line
         out.extend_from_slice(b" => ");
         if is_multiline(v) {
             out.push(b'\n');
@@ -103,7 +103,7 @@ fn index(i: usize, width: usize, sep: u8, prefix: &[u8], out: &mut Vec<u8>) {
     out.push(b' ');
 }
 
-/// `cliIsMultilineValueTTY`.
+/// Whether a map value renders on more than one line, and so starts on its own.
 fn is_multiline(r: &Reply) -> bool {
     match r {
         Reply::Array(items) | Reply::Set(items) | Reply::Push(items) => match items.len() {
@@ -127,7 +127,7 @@ pub(crate) fn is_invalidate(r: &Reply) -> bool {
         && matches!(items[1], Reply::Array(_)))
 }
 
-/// `cliFormatInvalidateTTY`: `-> invalidate: 'k1', 'k2'`.
+/// A caching invalidation, as redis-cli shows it: `-> invalidate: 'k1', 'k2'`.
 pub(crate) fn invalidate_tty(r: &Reply) -> Vec<u8> {
     let mut out = b"-> invalidate: ".to_vec();
     if let Reply::Push(items) = r

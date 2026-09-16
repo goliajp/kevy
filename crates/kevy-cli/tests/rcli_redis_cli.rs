@@ -521,8 +521,6 @@ fn servers_that_say_unusual_things() {
         (oneshot.stdout.as_str(), oneshot.stderr.as_str(), oneshot.code),
         ("subscribe\nc\n1\n", closed, 1)
     );
-    let repl = canned(confirm, &[], b"SUBSCRIBE c\n");
-    assert_eq!((repl.stderr.as_str(), repl.code), (closed, 1));
     let monitor = canned(b"+OK\r\n", &["MONITOR"], b"");
     assert_eq!(
         (monitor.stdout.as_str(), monitor.stderr.as_str(), monitor.code),

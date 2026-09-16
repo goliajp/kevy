@@ -75,7 +75,7 @@ pub(crate) fn command_help(_topic: &[Vec<u8>]) {
 }
 
 /// `:set hints` / `:set nohints` and the messages for anything else
-/// (`cliSetPreferences`). Hints themselves are P1.
+/// redis-cli prints. Hints themselves are P1.
 pub(crate) fn preference(argv: &[Vec<u8>]) {
     let is = |i: usize, w: &str| argv.get(i).is_some_and(|a| a.eq_ignore_ascii_case(w.as_bytes()));
     if is(0, ":set") && argv.len() >= 2 {

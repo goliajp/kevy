@@ -1,7 +1,6 @@
-//! `sdssplitargs`: how redis-cli turns a line into arguments.
+//! How redis-cli turns a line into arguments.
 //!
-//! A byte-for-byte port of hiredis `hi_sdssplitargs` (redis 8.10.1,
-//! `deps/hiredis/sds.c`), because the REPL, `--quoted-input` and
+//! The same splitting redis-cli applies, because the REPL, `--quoted-input` and
 //! `--quoted-pattern` all promise redis-cli's quoting, and a user's muscle
 //! memory for `"a\x00b"` or `'it\'s'` is that function's behaviour, quirks
 //! included: a closing quote must be followed by a space or the end, an

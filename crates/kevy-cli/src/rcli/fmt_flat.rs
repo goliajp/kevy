@@ -1,4 +1,4 @@
-//! The RAW and CSV formatters: `cliFormatReplyRaw` / `cliFormatReplyCSV`.
+//! The RAW and CSV formatters.
 
 use super::format::{Doubles, c_str};
 use super::repr::push_repr;

@@ -1,8 +1,7 @@
-//! `sdscatrepr`: how redis-cli quotes a string for a human.
+//! How redis-cli quotes a string for a human.
 //!
-//! Port of hiredis `hi_sdscatrepr`. redis-cli never calls `setlocale`, so
-//! `isprint` is the "C" locale's and every byte from 0x80 up prints as
-//! `\xHH`.
+//! Printable ASCII as itself, the C escapes by name, and every other byte —
+//! 0x80 and up included — as `\xHH`, which is what redis-cli shows.
 
 /// Append the quoted representation of `bytes` to `out`.
 pub(crate) fn push_repr(out: &mut Vec<u8>, bytes: &[u8]) {

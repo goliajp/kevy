@@ -1,4 +1,4 @@
-//! `parseOptions` (rc:2706-3158): argv to [`Opts`], in redis-cli's order
+//! argv to [`Opts`]: redis-cli's flags, scanned in redis-cli's order
 //! and with its messages, so a script's stderr and exit code are the same.
 
 use super::cnum::{atof, atoi, atoll, strtod_full, strtoll};

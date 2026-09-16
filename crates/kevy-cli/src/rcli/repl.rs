@@ -1,4 +1,4 @@
-//! The REPL loop (`repl`, rc:3560-3707). Lines come from standard input;
+//! The REPL loop. Lines come from standard input;
 //! the terminal line editor is P1, so a terminal reads plain lines for now.
 
 use super::cnum::strtoll;
@@ -88,7 +88,7 @@ fn handle_line(s: &mut Session, line: &[u8]) -> Option<u8> {
     None
 }
 
-/// `cliWaitForMessagesOrStdin`: print pub/sub messages until input arrives.
+/// While subscribed: print messages until the user types something.
 fn wait_for_messages_or_stdin(s: &mut Session) {
     let show_info = s.opts.output != Output::Raw
         && (std::io::stdout().is_terminal() || std::env::var_os("FAKETTY").is_some());

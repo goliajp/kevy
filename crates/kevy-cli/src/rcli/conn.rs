@@ -1,6 +1,6 @@
-//! One connection to a RESP server, reporting failures in hiredis's words.
+//! One connection to a RESP server, reporting failures in redis-cli's words.
 //!
-//! redis-cli prints hiredis's `errstr` — `Connection refused`, `Server closed
+//! redis-cli prints `Connection refused`, `Server closed
 //! the connection` — and a script that matches on those lines should keep
 //! working, so the errors here are that text rather than Rust's `Display`,
 //! which appends ` (os error N)`.
@@ -26,12 +26,12 @@ pub(crate) enum LinkError {
 }
 
 impl LinkError {
-    /// hiredis's `errstr` for this failure.
+    /// What redis-cli prints for this failure.
     pub(crate) fn text(&self) -> String {
         match self {
             LinkError::Eof => "Server closed the connection".to_string(),
             LinkError::Io(_, text) => text.clone(),
-            // hiredis: `Protocol error, got "<byte>" as reply type byte`.
+            // redis-cli: `Protocol error, got "<byte>" as reply type byte`.
             LinkError::Protocol(Some(byte)) => {
                 let shown = String::from_utf8_lossy(&super::repr::repr(&[*byte])).into_owned();
                 format!("Protocol error, got {shown} as reply type byte")
@@ -65,7 +65,7 @@ pub(crate) struct Conn {
 /// `strerror` for an I/O error: Rust's text without ` (os error N)`.
 pub(crate) fn strerror(e: &io::Error) -> String {
     // `connect_timeout` reports its own timeout without an errno, in
-    // lowercase; hiredis reports `strerror(ETIMEDOUT)`.
+    // lowercase; redis-cli prints `Connection timed out`.
     if e.kind() == io::ErrorKind::TimedOut && e.raw_os_error().is_none() {
         return "Connection timed out".to_string();
     }
@@ -81,9 +81,9 @@ impl Conn {
     /// `redisConnectWrapper`: TCP, optionally with a connect timeout.
     pub(crate) fn tcp(host: &[u8], port: i32, timeout: Option<f64>) -> Result<Conn, String> {
         let host = String::from_utf8_lossy(host).into_owned();
-        // hiredis stores the port as an int and `htons` keeps its low 16
-        // bits, so `connect h 99999` in the REPL dials 34463 — and the
-        // message still names 99999. Only the REPL can hand over such a port.
+        // redis-cli keeps only the low 16 bits of the port, so `connect h
+        // 99999` in the REPL dials 34463 — and the message still names 99999.
+        // Only the REPL can hand over such a port.
         let port = port as u16;
         let stream = match timeout {
             None => TcpStream::connect((host.as_str(), port)).map_err(|e| strerror(&e))?,

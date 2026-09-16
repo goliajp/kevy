@@ -1,4 +1,4 @@
-//! `-u <uri>`: redis-cli's URI grammar (`parseRedisUri`, cli_common.c).
+//! `-u <uri>`: the URI forms redis-cli accepts, and what each part sets.
 //!
 //! Not `kevy_resp_client::parse_url`: that one is the kevy client's URL,
 //! which refuses credentials because kevy has none. This is redis-cli's,

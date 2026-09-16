@@ -1,5 +1,5 @@
 //! The client's session: the connection and what redis-cli tracks about it
-//! (`cliConnect`, `cliAuth`, `cliSelect`, `cliSwitchProto`, `cliSetName`).
+//! (connect, AUTH, SELECT, HELLO 3, CLIENT SETNAME, in that order).
 
 use super::conn::{Conn, LinkError};
 use super::opts::Opts;
@@ -7,18 +7,18 @@ use kevy_resp::Reply;
 use std::io::Write;
 
 /// What happens to a RESP3 push that arrives while a reply is awaited —
-/// hiredis's push callback.
+/// the client's push handling.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PushSink {
-    /// `cliPushHandler`: print it in the current output mode.
+    /// Print it in the current output mode.
     Print,
-    /// hiredis's default: free it unseen.
+    /// Drop it unseen (the default).
     Discard,
     /// No callback: return it as the reply (set while (un)subscribing).
     Return,
 }
 
-/// Whether a failed connect says why (`cliConnect`'s `CC_QUIET`).
+/// Whether a failed connect says why.
 ///
 /// Every connect here opens a new connection, dropping any old one: redis-cli
 /// also has a connect-only-if-needed form, used by modes that later phases
@@ -35,7 +35,7 @@ pub(crate) enum Connect {
 pub(crate) struct Session {
     pub(crate) opts: Opts,
     pub(crate) conn: Option<Conn>,
-    /// The last I/O failure, kept for `cliPrintContextError`.
+    /// The last I/O failure, kept to report as `Error: …`.
     pub(crate) link_error: Option<LinkError>,
     pub(crate) dbnum: i32,
     pub(crate) in_multi: bool,
@@ -72,7 +72,7 @@ impl Session {
         }
     }
 
-    /// `cliConnect`. `true` when a usable connection is open afterwards.
+    /// Open a connection and run the handshake. `true` when usable afterwards.
     pub(crate) fn connect(&mut self, how: Connect) -> bool {
         if self.conn.take().is_some() {
             self.dbnum = 0;
@@ -124,7 +124,7 @@ impl Session {
     }
 
     /// One command during the handshake: its reply, or `None` on I/O error
-    /// (reported as hiredis reports a NULL reply).
+    /// (reported as redis-cli reports a lost reply).
     fn handshake(&mut self, argv: &[&[u8]]) -> Option<Reply> {
         let conn = self.conn.as_mut()?;
         let argv: Vec<Vec<u8>> = argv.iter().map(|a| a.to_vec()).collect();
@@ -147,7 +147,7 @@ impl Session {
         expect_ok(reply, |msg| eprint_bytes(&[b"AUTH failed: ", msg, b"\n"]))
     }
 
-    /// `cliSelect`: only when the wanted db differs from the current one.
+    /// SELECT, only when the wanted db differs from the current one.
     pub(crate) fn select(&mut self) -> bool {
         if self.opts.input_dbnum == self.dbnum {
             return true;
@@ -163,7 +163,7 @@ impl Session {
         ok
     }
 
-    /// `cliSwitchProto`: `HELLO 3` for `-3` (fatal) or `--json` (tolerated).
+    /// `HELLO 3` for `-3` (failure is fatal) or `--json` (failure tolerated).
     fn switch_proto(&mut self) -> bool {
         if self.opts.resp3 == 0 || self.opts.resp2 {
             return true;
@@ -184,7 +184,7 @@ impl Session {
         expect_ok(reply, |msg| eprint_bytes(&[b"CLIENT SETNAME failed: ", msg, b"\n"]))
     }
 
-    /// `cliPrintContextError`: nothing when there is no connection.
+    /// Report the last I/O failure as `Error: …`; nothing without a connection.
     pub(crate) fn print_context_error(&self) {
         if let (Some(_), Some(e)) = (&self.conn, &self.link_error) {
             eprint_bytes(&[b"Error: ", e.text().as_bytes(), b"\n"]);

@@ -1,4 +1,4 @@
-//! The JSON and QUOTED-JSON formatters: `cliFormatReplyJson`, with the
+//! The JSON and QUOTED-JSON formatters, with the
 //! places redis-cli emits text that is not JSON corrected.
 
 use super::format::{Doubles, Output, c_str};
@@ -74,7 +74,7 @@ fn double(text: &[u8], out: &mut Vec<u8>) {
     }
 }
 
-/// A JSON string. `--json` escapes the bytes (`escapeJsonString`);
+/// A JSON string. `--json` escapes the bytes;
 /// `--quoted-json` makes the string's *value* redis-cli's quoted repr, so
 /// binary shows as `\xff` — and DEV-005: that value is then escaped as JSON
 /// once, where redis-cli doubles backslashes and breaks on a quote.
@@ -87,8 +87,8 @@ fn string(bytes: &[u8], mode: Output, out: &mut Vec<u8>) {
     }
 }
 
-/// `escapeJsonString` (cli_common.c:381): control bytes as `\u00XX`, the
-/// short escapes, and every other byte — including 0x80 and up — as is.
+/// redis-cli's JSON string escaping: control bytes as `\u00XX`, the short
+/// escapes, and every other byte — including 0x80 and up — as is.
 fn escape(bytes: &[u8], out: &mut Vec<u8>) {
     out.push(b'"');
     for &b in bytes {
