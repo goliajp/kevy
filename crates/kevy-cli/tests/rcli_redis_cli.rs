@@ -286,18 +286,15 @@ fn failure_paths_and_rare_modes() {
     let timeout = cli(&["-t", "1", "-p", "1", "PING"], b"", &[]);
     assert_eq!(timeout.stderr, "Could not connect to Redis at 127.0.0.1:1: Connection refused\n");
 
-    // The server hangs up. Which error the second QUIT meets is a race: the
-    // FIN reads as "closed", the RST answering the write after the close as
-    // "reset", and hiredis prints whichever arrives first — so does kevy-cli.
+    // The server hangs up after a reply. Which error the next command meets
+    // is a race: the FIN reads as "closed", the RST answering the write after
+    // the close as "reset", and hiredis prints whichever arrives first — so
+    // does kevy-cli. (A canned server, not QUIT to kevy: on Linux kevy has
+    // been seen answering a second QUIT before it closes.)
     let hung_up = ["Error: Server closed the connection\n", "Error: Connection reset by peer\n"];
-    let quit = cli(&["-r", "2", "-p", &p, "QUIT"], b"", &[]);
-    assert_eq!((quit.stdout.as_str(), quit.code), ("OK\n", 1));
-    assert!(hung_up.contains(&quit.stderr.as_str()), "{}", quit.stderr);
-    // `QUIT` alone is the REPL's own exit; a repeat count sends it instead,
-    // and the next command reconnects.
-    let repl = cli(&["-p", &p], b"2 QUIT\nPING\n", &[]);
-    assert_eq!(repl.stdout, "OK\nPONG\n");
-    assert!(hung_up.contains(&repl.stderr.as_str()), "{}", repl.stderr);
+    let dropped = canned(b"+OK\r\n", &["-r", "2", "PING"], b"");
+    assert_eq!((dropped.stdout.as_str(), dropped.code), ("OK\n", 1));
+    assert!(hung_up.contains(&dropped.stderr.as_str()), "{}", dropped.stderr);
 
     // MONITOR the server refuses leaves monitor mode on the error.
     let monitor = cli(&["-p", &p, "MONITOR"], b"", TTY);

@@ -77,6 +77,14 @@ mod tests {
     use std::os::unix::net::UnixStream;
     use std::time::Duration;
 
+    /// More descriptors than the process may open is `EINVAL` from poll(2),
+    /// and it comes back as the error rather than as "nothing ready".
+    #[test]
+    fn a_refused_wait_is_an_error() {
+        let fds = vec![0; 1 << 20];
+        assert!(wait_readable(&fds, Duration::from_millis(0)).is_err());
+    }
+
     #[test]
     fn reports_which_descriptor_has_data() {
         let (mut a, b) =
