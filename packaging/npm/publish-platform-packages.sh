@@ -22,6 +22,10 @@ set -euo pipefail
 V=${1:?usage: publish-platform-packages.sh <version> <stage-dir>}
 STAGE=${2:?usage: publish-platform-packages.sh <version> <stage-dir>}
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+# Absolute, because `npm publish stage/x.tgz` is read as the GitHub
+# shorthand user/repo and npm tries to ssh-clone it. That is how the first
+# dispatch for 6.4.0 failed, before publishing anything.
+STAGE="$(cd "$STAGE" && pwd)"
 MAINS="bindings/node/package.json packaging/npm/kevy-bin/package.json"
 
 owed=$(cd "$ROOT" && node -e '
