@@ -9,6 +9,7 @@ DEV-007  RC-060   A RESP3 big number renders as `(bignum) <digits>` / the digits
 DEV-008  RC-061   A RESP3 attribute is skipped and the reply it annotates is printed; redis-cli exits 1 on a protocol error.
 DEV-009  RC-055   `--json` writes a RESP3 double of inf, -inf or nan as a string; redis-cli writes it bare, which is not JSON.
 DEV-010  RC-030   Messages in which redis-cli names itself (`Try redis-cli --help`, `Invalid redis-cli repeat command option value.`) name kevy-cli. Applied to every case by the gate, not per case.
+DEV-011  RC-138   The REPL prompt for a unix socket reads `kevy <socket>`, where redis-cli's reads `redis <socket>`.
 DEV-012  RC-151   Help for a command the server documents no arguments for prints nothing after its name; redis-cli prints `(null)`.
 DEV-013  RC-015   `--test_hint` for a line that names no command prints an empty line and exits 0; redis-cli crashes (SIGSEGV).
 DEV-014  RC-147   A hint closes only the brackets it opens; after part of a repeating optional argument redis-cli prints an extra `]`.

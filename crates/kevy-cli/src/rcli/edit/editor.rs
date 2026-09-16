@@ -30,7 +30,6 @@ pub(crate) struct Assist<'a> {
 }
 
 /// No hints, no completion.
-#[cfg(test)]
 pub(crate) fn no_assist() -> Assist<'static> {
     Assist { hint: &|_| None, complete: &|_| Vec::new() }
 }
@@ -113,10 +112,11 @@ impl Session<'_> {
             let (mut used, typed) = (0, typed.to_vec());
             for &b in &typed {
                 used += 1;
+                // Escape leaves completion with the typed text back, and still
+                // starts a sequence: an arrow key restores, then moves.
                 if self.completion.is_some() && b == 0x1b {
                     self.restore_completion();
                     self.redraw(out, assist)?;
-                    continue;
                 }
                 let Some(key) = decoder.feed(b) else { continue };
                 if let Some(done) = self.key(key, out, assist)? {

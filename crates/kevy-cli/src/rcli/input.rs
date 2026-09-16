@@ -1,7 +1,7 @@
 //! Where REPL lines come from: a pipe, a terminal that cannot take escape
 //! sequences, or a terminal with the line editor.
 
-use super::edit::editor::{Assist, Outcome, read_line};
+use super::edit::editor::{Assist, Outcome, no_assist, read_line};
 use super::edit::history::{History, history_path, is_sensitive};
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::PathBuf;
@@ -31,16 +31,8 @@ impl Input {
     /// Pick the mode from the environment, and load history when the mode
     /// keeps one.
     pub(crate) fn open() -> Input {
-        let stdin_tty = std::io::stdin().is_terminal();
-        let faketty = std::env::var_os("FAKETTY_WITH_PROMPT").is_some();
-        let dumb = std::env::var("TERM")
-            .is_ok_and(|t| DUMB_TERMS.iter().any(|d| t.eq_ignore_ascii_case(d)));
-        let mode = match (stdin_tty || faketty, dumb) {
-            (false, _) => Mode::Pipe,
-            (true, true) => Mode::Plain,
-            (true, false) => Mode::Edit { raw: stdin_tty && !faketty },
-        };
-        let mut input = Input { mode, history: History::default(), history_file: None };
+        let mut input =
+            Input { mode: Mode::detect(), history: History::default(), history_file: None };
         if input.keeps_history() {
             input.history_file = history_path(|k: &str| std::env::var_os(k));
             if let Some(path) = &input.history_file {
@@ -48,6 +40,31 @@ impl Input {
             }
         }
         input
+    }
+
+    /// Standard input is a real terminal (not `FAKETTY_WITH_PROMPT`): only
+    /// then is the command reference fetched for hints and completion.
+    pub(crate) fn on_a_terminal(&self) -> bool {
+        std::io::stdin().is_terminal()
+    }
+
+    /// A password, typed at `prompt` with every character shown as `*` when
+    /// there is a prompt at all. `None` at end of input or Ctrl-C.
+    pub(crate) fn read_secret(prompt: &[u8]) -> Option<Vec<u8>> {
+        let outcome = match Mode::detect() {
+            Mode::Pipe => plain_line(),
+            Mode::Plain => {
+                super::send::write_out(prompt);
+                plain_line()
+            }
+            Mode::Edit { raw } => {
+                edit_line(prompt, &History::default(), &no_assist(), raw, Echo::Masked)
+            }
+        };
+        match outcome {
+            Outcome::Line(line) => Some(line),
+            Outcome::Eof | Outcome::Interrupted => None,
+        }
     }
 
     /// History, and the preferences file, are for a person at a prompt.
@@ -68,12 +85,7 @@ impl Input {
     }
 
     fn edit(&mut self, prompt: &[u8], assist: &Assist<'_>, raw: bool) -> Outcome {
-        let _raw = raw.then(|| kevy_sys::RawMode::enable(0).ok()).flatten();
-        let cols = if raw { kevy_sys::terminal_columns(1).map_or(80, usize::from) } else { 80 };
-        let mut stdin = std::io::stdin().lock();
-        let mut stdout = std::io::stdout().lock();
-        read_line(&mut stdin, &mut stdout, prompt, &self.history, assist, cols, false)
-            .unwrap_or(Outcome::Eof)
+        edit_line(prompt, &self.history, assist, raw, Echo::Plain)
     }
 
     /// Record a line the user entered. `argv` is the command it ran (after a
@@ -90,6 +102,43 @@ impl Input {
             let _ = self.history.save(path);
         }
     }
+}
+
+impl Mode {
+    fn detect() -> Mode {
+        let stdin_tty = std::io::stdin().is_terminal();
+        let faketty = std::env::var_os("FAKETTY_WITH_PROMPT").is_some();
+        let dumb = std::env::var("TERM")
+            .is_ok_and(|t| DUMB_TERMS.iter().any(|d| t.eq_ignore_ascii_case(d)));
+        match (stdin_tty || faketty, dumb) {
+            (false, _) => Mode::Pipe,
+            (true, true) => Mode::Plain,
+            (true, false) => Mode::Edit { raw: stdin_tty && !faketty },
+        }
+    }
+}
+
+/// Whether typed characters are shown.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Echo {
+    Plain,
+    Masked,
+}
+
+/// One line through the editor, in raw mode when there is a terminal to set.
+fn edit_line(
+    prompt: &[u8],
+    history: &History,
+    assist: &Assist<'_>,
+    raw: bool,
+    echo: Echo,
+) -> Outcome {
+    let _raw = raw.then(|| kevy_sys::RawMode::enable(0).ok()).flatten();
+    let cols = if raw { kevy_sys::terminal_columns(1).map_or(80, usize::from) } else { 80 };
+    let mut stdin = std::io::stdin().lock();
+    let mut stdout = std::io::stdout().lock();
+    read_line(&mut stdin, &mut stdout, prompt, history, assist, cols, echo == Echo::Masked)
+        .unwrap_or(Outcome::Eof)
 }
 
 /// A line from a non-editing source: bytes to `\n`, which is dropped. End of
