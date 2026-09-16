@@ -17,8 +17,9 @@ pub(crate) fn run(s: &mut Session) -> u8 {
     s.interactive = true;
     kevy_sys::install_interrupt(1);
     let mut input = Input::open();
-    // Hints and completion are for a person at a prompt; a pipe never asks.
-    let docs = input.keeps_history().then(|| s.docs());
+    // Hints and completion are for a person at a terminal: neither a pipe
+    // nor FAKETTY_WITH_PROMPT fetches the reference, as with redis-cli.
+    let docs = input.on_a_terminal().then(|| s.docs());
     if input.keeps_history() {
         super::help::load_preferences();
     }

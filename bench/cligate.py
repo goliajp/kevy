@@ -39,6 +39,9 @@ import subprocess
 import sys
 import time
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import cligate_screen  # noqa: E402  (a sibling file, not an installed module)
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 HERE = ROOT / "bench" / "cligate"
 PORT = 16390
@@ -96,7 +99,7 @@ def parse_cases(path: pathlib.Path):
         elif key == "stdin":
             cur["stdin"] += unescape(expand(value))
         elif key in ("run", "deviation", "kevy.stdout", "kevy.stderr", "kevy.exit",
-                     "kevy.stdout-contains", "kevy.stdout-replace", "timeline"):
+                     "kevy.stdout-contains", "kevy.stdout-replace", "timeline", "screen"):
             cur[key] = value
         else:
             sys.exit(f"cligate: {path}:{lineno}: unknown field {key!r}")
@@ -111,21 +114,29 @@ def expand(text: str) -> str:
             .replace("$SOCKET", SOCKET))
 
 
-def timeline_script(timeline: str, program: str, argv) -> str:
+def timeline_script(timeline: str, program: str, argv, pty=False) -> str:
     """A shell pipeline that feeds the CLI over time: `;`-separated steps, each
-    a number of seconds to wait, `INT` (SIGINT to the CLI), or bytes to type
-    (C escapes). The CLI's own exit code is the script's."""
+    a number of seconds to wait, `INT` (SIGINT to the CLI), `KILL` (SIGKILL,
+    to keep the screen as it is), or bytes to type (C escapes). The CLI's own
+    exit code is the script's. With `pty`, the CLI runs on a pseudo-terminal
+    of 80 columns (script(1)), as a person's would."""
     steps = []
-    for step in (t.strip() for t in timeline.split(" ; ")):
-        if step == "INT":
-            steps.append(f"kill -INT $(pidof {program})")
-        elif step.replace(".", "", 1).isdigit():
-            steps.append(f"sleep {step}")
+    # Split on ` ; ` exactly and strip nothing from typed text: `set  ; 1`
+    # types `set ` (a trailing space changes what a hint shows).
+    for step in timeline.split(" ; "):
+        word = step.strip()
+        if word in ("INT", "KILL"):
+            steps.append(f"kill -{word} $(pidof {program})")
+        elif word.replace(".", "", 1).isdigit():
+            steps.append(f"sleep {word}")
         else:
             octal = "".join(f"\\{b:03o}" for b in unescape(expand(step)))
             steps.append(f"printf '{octal}'")
     feed = "; ".join(steps)
     cli = " ".join(shlex.quote(a) for a in [program, *argv])
+    if pty:
+        inner = shlex.quote(f"stty cols 80 rows 24; exec {cli}")
+        return f"( {feed} ) | script -qec {inner} /dev/null"
     return f"( {feed} ) | {cli}"
 
 
@@ -197,11 +208,18 @@ class Reference:
             time.sleep(0.1)
         return False
 
-    def run(self, argv, stdin, env, program="redis-cli", timeline=None):
+    def run(self, argv, stdin, env, program="redis-cli", timeline=None, screen=None):
+        if screen:
+            # Each CLI keeps its own history file, empty at the start: with a
+            # prompt, both load and save one, and the second run must not
+            # recall the first run's lines.
+            history = f"/tmp/cligate-history-{program}"
+            sh(["docker", "exec", self.cli, "rm", "-f", history])
+            env = {**env, "REDISCLI_HISTFILE": history}
         envs = [a for k, v in env.items() for a in ("-e", f"{k}={v}")]
         try:
             if timeline:
-                script = timeline_script(timeline, program, argv)
+                script = timeline_script(timeline, program, argv, pty=screen == "pty")
                 return sh(["docker", "exec", *envs, self.cli, "sh", "-c", script],
                           timeout=TIMEOUT_S)
             return sh(["docker", "exec", "-i", *envs, self.cli, program, *argv],
@@ -217,6 +235,17 @@ class Reference:
             r = self.run(["-p", str(PORT), *shlex.split(expand(line))], b"", {})
             if r.returncode != 0:
                 sys.exit(f"cligate: setup failed: {line}: {r.stderr.decode()}")
+
+
+def on_screen(result, screen: bool):
+    """In a screen case stdout is compared as the terminal would show it."""
+    if screen not in ("yes", "pty"):
+        return result
+    try:
+        shown = cligate_screen.screen(result.stdout)
+    except ValueError as e:
+        shown = f"<screen model: {e}>\n".encode()
+    return subprocess.CompletedProcess(result.args, result.returncode, shown, result.stderr)
 
 
 def own_name(text: bytes) -> bytes:
@@ -316,7 +345,9 @@ def main() -> int:
         for case in selected:
             argv = argv_of(case)
             ref.reset(case["setup"])
-            r = ref.run(argv, case["stdin"], case["env"], timeline=case.get("timeline"))
+            screen = case.get("screen")
+            r = on_screen(ref.run(argv, case["stdin"], case["env"], timeline=case.get("timeline"),
+                                  screen=screen), screen)
             ref.reset(case["setup"])
             if args.show_reference:
                 print(f"[{','.join(case['ids'])} {case['name']}] exit={r.returncode}")
@@ -324,15 +355,25 @@ def main() -> int:
                 continue
             if args.determinism:
                 ref.reset(case["setup"])
-                again = ref.run(argv, case["stdin"], case["env"], timeline=case.get("timeline"))
+                again = on_screen(ref.run(argv, case["stdin"], case["env"],
+                                          timeline=case.get("timeline"), screen=screen), screen)
                 if (r.stdout, r.stderr, r.returncode) != (again.stdout, again.stderr,
                                                           again.returncode):
                     failed += 1
                     print(f"UNSTABLE [{','.join(case['ids'])} {case['name']}] "
                           f"(cases.txt:{case['line']}): {r.stdout[:120]!r} vs {again.stdout[:120]!r}")
                 continue
-            k = ref.run(argv, case["stdin"], case["env"], program="kevy-cli",
-                        timeline=case.get("timeline"))
+            pinned = "deviation" in case and not any(
+                k in case for k in ("kevy.stdout-contains", "kevy.stdout-replace"))
+            if r.returncode == 124 and r.stderr == b"<timed out>" and not pinned:
+                # Two CLIs that both hang agree on nothing. A deviation that
+                # pins kevy-cli's whole output does not read redis-cli's.
+                failed += 1
+                print(f"FAIL [{','.join(case['ids'])} {case['name']}] (cases.txt:{case['line']}): "
+                      "redis-cli did not finish, so there is nothing to compare")
+                continue
+            k = on_screen(ref.run(argv, case["stdin"], case["env"], program="kevy-cli",
+                                  timeline=case.get("timeline"), screen=screen), screen)
             want = expected_kevy(case, r)
             got = (k.stdout, k.stderr, k.returncode)
             if agrees(case, want, got):

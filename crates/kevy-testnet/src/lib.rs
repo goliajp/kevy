@@ -116,11 +116,28 @@ pub fn free_port() -> u16 {
             continue; // never the anchor
         }
         let p = base + off;
-        if TcpListener::bind(("127.0.0.1", p)).is_ok() {
+        if nobody_listens(p) {
             return p;
         }
     }
     panic!("kevy-testnet: no free port in this process's block {base}..{}", base + BLOCK)
+}
+
+/// Whether a connection to `port` is refused, i.e. nothing listens there.
+///
+/// Probing by binding a listener, as this once did, can hold the port it
+/// probes. On macOS a socket is created first and marked close-on-exec a
+/// moment later; a test thread that starts a program in that moment hands the
+/// program the probe, which then keeps the port for the program's lifetime.
+/// The server given the port fails to bind, and `assert_listening` connects to
+/// the leaked probe instead and passes. A refused connect leaks nothing that
+/// holds `port`.
+fn nobody_listens(port: u16) -> bool {
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    matches!(
+        TcpStream::connect_timeout(&addr, Duration::from_millis(200)),
+        Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused
+    )
 }
 
 /// Wait until something accepts on `port`. `true` if it did.

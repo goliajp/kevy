@@ -121,7 +121,16 @@ fn hints_and_completion() {
         line("cl"),
         "past the last, the original"
     );
-    assert_eq!(type_keys(b"cl\t\x1b!\r", &h, &assist, false).0, line("cl!"), "Esc restores");
+    assert_eq!(
+        type_keys(b"cl\t\x1b[D!\r", &h, &assist, false).0,
+        line("c!l"),
+        "an arrow restores the typed text, then moves"
+    );
+    assert_eq!(
+        type_keys(b"cl\t\x1bxy!\r", &h, &assist, false).0,
+        line("cl!"),
+        "Esc restores and, like any escape, takes the two bytes after it"
+    );
     assert_eq!(type_keys(b"cl\tX\r", &h, &assist, false).0, line("CLIENTX"), "another key accepts");
     assert_eq!(type_keys(b"zz\t\r", &h, &assist, false).0, line("zz"));
     let long = [b"GET ".as_slice(), &[b'x'; 40]].concat();

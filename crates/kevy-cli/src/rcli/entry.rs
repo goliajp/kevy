@@ -3,7 +3,7 @@
 use super::opts::Opts;
 use super::opts_parse::{Parsed, parse};
 use super::session::{Connect, Session, eprint_bytes};
-use std::io::{BufRead, IsTerminal};
+use std::io::IsTerminal;
 
 /// Run redis-cli with `args` (without the program name); the exit code.
 ///
@@ -56,19 +56,10 @@ fn auth_from_env() -> Option<Vec<u8>> {
         .map(OsStringExt::into_vec)
 }
 
-/// `--askpass`: a line from standard input. The masked terminal prompt is
-/// P1; off a terminal redis-cli reads the line without a prompt, as here.
+/// `--askpass`: the password typed at a masked prompt, or a line of piped
+/// input without one.
 fn ask_password() -> Option<Vec<u8>> {
-    let mut line = Vec::new();
-    match std::io::stdin().lock().read_until(b'\n', &mut line) {
-        Ok(0) | Err(_) => None,
-        Ok(_) => {
-            if line.last() == Some(&b'\n') {
-                line.pop();
-            }
-            Some(line)
-        }
-    }
+    super::input::Input::read_secret(b"Please input password: ")
 }
 
 /// The modes later phases implement, in redis-cli's dispatch order.

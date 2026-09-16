@@ -324,11 +324,9 @@ fn failure_paths_and_rare_modes() {
     assert!(sub.stdout.contains(prompt), "{:?}", sub.stdout);
 }
 
-/// The editor under `FAKETTY_WITH_PROMPT`, kept away from the user's history
-/// and preferences files.
+/// A prompt kept away from the user's history and preferences files.
 fn prompt_env(dir: &std::path::Path) -> Vec<(&'static str, String)> {
     vec![
-        ("FAKETTY_WITH_PROMPT", "1".into()),
         ("TERM", "xterm".into()),
         ("KEVYCLI_HISTFILE", dir.join("history").to_string_lossy().into_owned()),
         ("KEVYCLI_RCFILE", "/dev/null".into()),
@@ -393,21 +391,43 @@ fn help_hints_and_completion_come_from_the_servers_reference() {
         ("Can't open file '/nonexistent/hints': No such file or directory\n", 255)
     );
 
-    // At the prompt: the grey hint follows `get `, Tab turns `ge` into `GET`,
-    // and `:set nohints` turns hints off.
-    let env = prompt_env(&dir);
-    let env: Vec<(&str, &str)> = env.iter().map(|(k, v)| (*k, v.as_str())).collect();
-    // Every line arrives in one read: the rest of it must wait for the next prompt.
-    let typed = cli(&["-p", &p], b"get \x15ec\t hi\r:set nohints\rget \x15\x04", &env);
-    assert!(typed.stdout.contains("get \x1b[0;90;49mkey"), "{:?}", typed.stdout);
-    assert!(typed.stdout.contains("> ECHO hi\r\x1b[24C\r\nhi\n"), "{:?}", typed.stdout);
-    let after_nohints = typed.stdout.rsplit(":set nohints").next().unwrap_or_default();
+    // At a terminal: the grey hint follows `get `, Tab turns `ec` into `ECHO`,
+    // and `:set nohints` turns hints off. Each line waits for its prompt: between
+    // lines the terminal is not raw, and a Ctrl-U typed then is the terminal's.
+    let prompt = format!("127.0.0.1:{p}> ");
+    let mut term = PtyLive::start(&["-p", &p], &prompt_env(&dir));
+    term.wait_for(&prompt);
+    term.type_keys("get ");
+    term.wait_for("get \x1b[0;90;49mkey");
+    term.type_keys("\x15ec\t hi\r");
+    term.wait_for("\"hi\"\r\n");
+    term.type_keys(":set nohints\r");
+    term.wait_count(&prompt, 3);
+    term.type_keys("get x");
+    term.wait_for("get x");
     assert!(
-        after_nohints.contains("> get "),
-        "the line after :set nohints ran: {:?}",
-        typed.stdout
+        !term.output().rsplit(":set nohints").next().unwrap_or_default().contains("\x1b[0;90;49m")
     );
-    assert!(!after_nohints.contains("\x1b[0;90;49m"), "{:?}", after_nohints);
+    term.type_keys("\x15\x04");
+    assert_eq!(term.finish(), 0);
+    // FAKETTY_WITH_PROMPT edits a piped stdin but, as with redis-cli, fetches
+    // no reference: no hints there.
+    let faked = cli(
+        &["-p", &p],
+        b"get \x15\x04",
+        &[("FAKETTY_WITH_PROMPT", "1"), ("KEVYCLI_HISTFILE", "/dev/null/none")],
+    );
+    assert!(!faked.stdout.contains("\x1b[0;90;49m"), "{:?}", faked.stdout);
+    // --askpass at a prompt masks what is typed.
+    let mut ask = PtyLive::start(&["--askpass", "-p", &p, "PING"], &prompt_env(&dir));
+    ask.wait_for("Please input password: ");
+    ask.type_keys("abc");
+    ask.wait_for("***");
+    ask.type_keys("\r");
+    ask.wait_for("PONG");
+    let shown = ask.output();
+    assert!(!shown.contains("abc"), "{shown:?}");
+    assert_eq!(ask.finish(), 0);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -764,4 +784,62 @@ fn ctrl_c_cuts_a_stream_loose_and_ends_anything_else() {
     std::thread::sleep(std::time::Duration::from_millis(300));
     idle.interrupt();
     assert_eq!(idle.finish(), 1);
+}
+
+/// kevy-cli on a pseudo-terminal: stdin, stdout and stderr are the terminal.
+struct PtyLive {
+    child: Child,
+    keys: std::fs::File,
+    seen: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+}
+
+impl PtyLive {
+    fn start(args: &[&str], env: &[(&'static str, String)]) -> PtyLive {
+        let (parent, child) = kevy_sys::open_pty().expect("a pty");
+        let side = || child.try_clone().unwrap();
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_kevy-cli"));
+        cmd.args(args).stdin(side()).stdout(side()).stderr(side());
+        cmd.env_remove("FAKETTY").env_remove("FAKETTY_WITH_PROMPT");
+        cmd.envs(env.iter().map(|(k, v)| (*k, v.as_str())));
+        let child = cmd.spawn().expect("run kevy-cli on a pty");
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (mut out, sink) = (parent.try_clone().unwrap(), seen.clone());
+        std::thread::spawn(move || {
+            use std::io::Read;
+            let mut buf = [0u8; 4096];
+            // The parent side reads an error, not end of file, once the child is gone.
+            while let Ok(n @ 1..) = out.read(&mut buf) {
+                sink.lock().unwrap().extend_from_slice(&buf[..n]);
+            }
+        });
+        PtyLive { child, keys: parent, seen }
+    }
+
+    fn type_keys(&mut self, keys: &str) {
+        self.keys.write_all(keys.as_bytes()).unwrap();
+    }
+
+    fn output(&self) -> String {
+        String::from_utf8_lossy(&self.seen.lock().unwrap()).into_owned()
+    }
+
+    fn wait_count(&self, text: &str, count: usize) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while self.output().matches(text).count() < count {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "never printed {text:?} x{count}: {:?}",
+                self.output()
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    fn wait_for(&self, text: &str) {
+        self.wait_count(text, 1);
+    }
+
+    fn finish(mut self) -> i32 {
+        self.child.wait().unwrap().code().unwrap_or(-1)
+    }
 }

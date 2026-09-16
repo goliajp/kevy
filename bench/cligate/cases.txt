@@ -5,6 +5,8 @@
 #   stdin:  C escapes (\n \r \t \\ \xHH), repeatable, concatenated
 #   timeline: instead of stdin, steps over time separated by ` ; `: seconds to
 #           wait, INT (SIGINT to the CLI), or bytes to type
+#   screen: yes — compare what a terminal would show (bench/cligate_screen.py),
+#           not stdout's bytes; each CLI gets its own empty history file
 #   deviation + kevy.stdout / kevy.stderr / kevy.exit / kevy.stdout-contains
 #           or kevy.stdout-replace (`old => new` over redis-cli's output)
 #           when kevy-cli is meant to differ (see deviations.txt)
@@ -583,7 +585,10 @@ run: --json -p $PORT ZSCORE z m
 kevy.stdout: "inf"\n
 
 [RC-154 repl-reconnects-after-the-server-hangs-up]
-stdin: 2 QUIT\nPING\n
+# The server drops this very connection. (`2 QUIT` raced: a second QUIT that
+# reaches the server before it closes makes the close a reset, so the error
+# text depended on how fast the client is.)
+stdin: CLIENT KILL SKIPME no TYPE normal\nPING\nPING\n
 run: -p $PORT
 
 # ─── P0 · a push ahead of the reply (client-side caching) ────────────────────
@@ -755,3 +760,184 @@ run: -p $PORT
 [RC-156 interrupt-at-the-prompt-exits]
 timeline: 1 ; INT ; 1
 run: -p $PORT
+
+# ─── P1 · the prompt and line editing, compared as screens ──────────────────
+# On a pseudo-terminal (script(1), 80 columns), as a person would type: each
+# line waits for its prompt, since between lines the terminal is not raw.
+# `\x04` on an empty line ends the session; KILL keeps a screen mid-edit.
+
+[RC-143 type-a-command]
+screen: pty
+timeline: 0.5 ; set k v\r ; 0.4 ; get k\r ; 0.4 ; \x04 ; 0.3
+run: -p $PORT
+
+[RC-143 cursor-moves-and-inserts]
+screen: pty
+timeline: 0.5 ; et k v\x1b[D\x1b[D\x1b[Dx\x01s\x05z\x02\x02y\x06!\r ; 0.4 ; \x04 ; 0.3
+run: -p $PORT
+
+[RC-143 kills-and-transpose]
+screen: pty
+timeline: 0.5 ; echo one two three\x17\x17four\x02\x14\r ; 0.4 ; echo abc\x01\x0b\x1b[Cping\r ; 0.4 ; echo gone\x15ping\r ; 0.4 ; \x04 ; 0.3
+run: -p $PORT
+
+[RC-143 backspace-both-ways]
+screen: pty
+timeline: 0.5 ; pinng\x7f\x7f\x08g\r ; 0.4 ; \x04 ; 0.3
+run: -p $PORT
+
+[RC-143 delete-key-and-ctrl-d-in-a-line]
+screen: pty
+timeline: 0.5 ; pxing\x01\x1b[C\x1b[3~\x05\x02\x02\x04\x04\x15ping\r ; 0.4 ; \x04 ; 0.3
+run: -p $PORT
+
+[RC-143 home-and-end-sequences]
+screen: pty
+timeline: 0.5 ; ing\x1b[Hp\x1b[F!\x1b[1~\x1b[4~\x1bOH\x1bOF\x15ping\r ; 0.4 ; \x04 ; 0.3
+run: -p $PORT
+
+[RC-143 word-moves]
+screen: pty
+timeline: 0.5 ; echo alpha beta\x1bb\x1bbX\x1bfY\r ; 0.4 ; \x04 ; 0.3
+run: -p $PORT
+
+[RC-143 ctrl-l-clears-the-screen]
+screen: pty
+timeline: 0.5 ; ping\r ; 0.4 ; ping\x0c ; 0.4 ; KILL
+run: -p $PORT
+
+[RC-143 a-long-line-wraps]
+screen: pty
+timeline: 0.5 ; echo 0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789\r ; 0.4 ; \x04 ; 0.3
+run: -p $PORT
+
+[RC-143 editing-a-wrapped-line]
+screen: pty
+timeline: 0.5 ; echo 0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789\x01\x06\x06\x06\x06\x06X\r ; 0.4 ; \x04 ; 0.3
+run: -p $PORT
+
+[RC-140,RC-143 history-up-and-down]
+screen: pty
+timeline: 0.5 ; echo a\r ; 0.4 ; echo b\r ; 0.4 ; \x1b[A\x1b[A\x1b[B\r ; 0.4 ; \x04 ; 0.3
+run: -p $PORT
+
+[RC-140,RC-143 history-keeps-edits-while-browsing]
+screen: pty
+timeline: 0.5 ; echo a\r ; 0.4 ; echo b\r ; 0.4 ; \x10X\x10Y\x0e\r ; 0.4 ; \x04 ; 0.3
+run: -p $PORT
+
+[RC-144 reverse-search]
+screen: pty
+timeline: 0.5 ; echo apple\r ; 0.4 ; echo banana\r ; 0.4 ; echo cherry\r ; 0.4 ; \x12an\r ; 0.4 ; \x04 ; 0.3
+run: -p $PORT
+
+[RC-144 reverse-search-again-and-cancel]
+screen: pty
+timeline: 0.5 ; echo apple\r ; 0.4 ; echo banana\r ; 0.4 ; echo cherry\r ; 0.4 ; \x12e\x12\x12\x07ping\r ; 0.4 ; \x04 ; 0.3
+run: -p $PORT
+
+[RC-144 search-then-edit]
+screen: pty
+timeline: 0.5 ; echo apple\r ; 0.4 ; echo banana\r ; 0.4 ; \x12app\x1b[C!\r ; 0.4 ; \x04 ; 0.3
+run: -p $PORT
+
+[RC-144 search-mid-typing]
+screen: pty
+timeline: 0.5 ; echo apple\r ; 0.4 ; \x12ppl ; 0.4 ; KILL
+run: -p $PORT
+
+[RC-147 hint-for-the-command-word]
+screen: pty
+timeline: 0.5 ; set  ; 0.4 ; KILL
+run: -p $PORT
+
+[RC-147 hint-while-typing-an-argument]
+screen: pty
+timeline: 0.5 ; set k ; 0.4 ; KILL
+run: -p $PORT
+
+[RC-147 hint-after-arguments]
+screen: pty
+timeline: 0.5 ; set k v nx  ; 0.4 ; KILL
+run: -p $PORT
+
+[RC-147 hint-cut-at-the-edge]
+screen: pty
+timeline: 0.5 ; client kill  ; 0.4 ; KILL
+run: -p $PORT
+
+[RC-147 hint-off-with-set-nohints]
+screen: pty
+timeline: 0.5 ; :set nohints\r ; 0.4 ; set  ; 0.4 ; KILL
+run: -p $PORT
+
+[RC-146 tab-completes-a-command]
+screen: pty
+timeline: 0.5 ; ech\t hi\r ; 0.4 ; \x04 ; 0.3
+run: -p $PORT
+
+[RC-146 tab-cycles-back-to-the-typed-text]
+screen: pty
+timeline: 0.5 ; clie\t\t\t ; 0.4 ; KILL
+run: -p $PORT
+
+[RC-146 tab-shows-a-candidate]
+screen: pty
+timeline: 0.5 ; client ki\t ; 0.4 ; KILL
+run: -p $PORT
+
+[RC-146 escape-restores-the-typed-text]
+screen: pty
+timeline: 0.5 ; clie\t\t\x1bnt id\r ; 0.4 ; \x04 ; 0.3
+run: -p $PORT
+
+[RC-146 tab-with-nothing-to-offer]
+screen: pty
+timeline: 0.5 ; zzz\t\x15ping\r ; 0.4 ; \x04 ; 0.3
+run: -p $PORT
+
+[RC-146 tab-offers-help-topics]
+screen: pty
+timeline: 0.5 ; help @stri\t\r ; 0.4 ; \x04 ; 0.3
+run: -p $PORT
+
+[RC-072 help-at-the-prompt]
+screen: pty
+timeline: 0.5 ; help get\r ; 0.4 ; \x04 ; 0.3
+run: -p $PORT
+
+[RC-137 clear-at-the-prompt]
+screen: pty
+timeline: 0.5 ; ping\r ; 0.4 ; clear\r ; 0.4 ; ping\r ; 0.4 ; \x04 ; 0.3
+run: -p $PORT
+
+[RC-138 prompt-shows-the-database]
+screen: pty
+timeline: 0.5 ; select 3\r ; 0.4 ; multi\r ; 0.4 ; ping\r ; 0.4 ; KILL
+run: -p $PORT
+
+[RC-138 prompt-after-exec]
+screen: pty
+timeline: 0.5 ; select 3\r ; 0.4 ; multi\r ; 0.4 ; exec\r ; 0.4 ; \x04 ; 0.3
+run: -p $PORT
+
+[RC-138 prompt-when-not-connected]
+screen: pty
+timeline: 0.5 ; ping\r ; 0.4 ; \x04 ; 0.3
+run: -p 1
+
+[RC-138 prompt-for-a-unix-socket]
+deviation: DEV-011
+screen: pty
+timeline: 0.5 ; ping\r ; 0.4 ; \x04 ; 0.3
+run: -s $SOCKET
+kevy.stdout-replace: redis /cligate => kevy /cligate
+
+[RC-037 askpass-at-a-prompt-is-masked]
+screen: pty
+timeline: 0.5 ; secret\r ; 0.5
+run: --askpass -p $AUTH_PORT PING
+
+[RC-037 askpass-without-a-prompt]
+stdin: secret\n
+run: --askpass -p $AUTH_PORT PING
