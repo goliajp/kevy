@@ -107,16 +107,22 @@ Full examples per language: [docs/clients.md](docs/clients.md).
 
 For the browser, the engine itself ships as an npm package —
 `npm install @goliapkg/kevy` ([In the browser](#in-the-browser)).
-Native in-process bindings for Node, Python, Go, C#, Java, Swift,
-Kotlin, Flutter and React Native live under [`bindings/`](bindings).
-Four are on their language registries:
+First-party packages for Node, Python, C#, Go, Java, Kotlin, Flutter,
+React Native and Electron live under [`bindings/`](bindings), and are on
+their language registries:
 
 ```sh
 npm i @goliapkg/kevy-ts                          # Node / TypeScript
+pip install kevy                                 # Python
+dotnet add package kevy                          # C#
 go get github.com/goliajp/kevy-go/v6             # Go
+flutter pub add flutter_kevy                     # Flutter
+npx expo install expo-kevy                       # React Native (Expo)
+npm i react-native-kevy-nitro                    # React Native (Nitro)
+npm i @goliapkg/kevy-electron                    # Electron
 ```
 ```xml
-<dependency>                                     <!-- Java -->
+<dependency>                                     <!-- Java / Kotlin -->
   <groupId>jp.golia</groupId><artifactId>kevy</artifactId><version>6.4.0</version>
 </dependency>
 ```
@@ -124,15 +130,17 @@ go get github.com/goliajp/kevy-go/v6             # Go
 The Go module is the remote client; its embedded engine is cgo against
 a static library, which a Go module cannot carry, so that half builds
 from this tree with `-tags kevy_embedded` (see
-[bindings/go](bindings/go)). The rest — Python, C#, Swift, Kotlin,
-Flutter, React Native — build from source and are not on PyPI, NuGet,
-SwiftPM or pub.dev yet.
+[bindings/go](bindings/go)). Swift has no registry to be on: SwiftPM
+resolves `KevyKit` from this repository's tags (see
+[bindings/apple/KevyKit](bindings/apple/KevyKit)).
 
 The Rust surface is on crates.io:
 
 ```sh
 # Server
 cargo install kevy
+# …or without a Rust toolchain (Linux x86_64 / aarch64, macOS Apple Silicon)
+npm install -g @goliapkg/kevy-bin
 
 # Embedded library
 cargo add kevy-embedded
