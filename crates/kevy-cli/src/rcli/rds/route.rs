@@ -22,6 +22,10 @@ pub(crate) enum Tool {
     ImportCsv,
     ExportCsv,
     Feed,
+    ShowCreate,
+    Dump,
+    Restore,
+    SqlRun,
 }
 
 pub(crate) fn tool_named(name: &[u8]) -> Option<Tool> {
@@ -41,6 +45,9 @@ pub(crate) fn tool_named(name: &[u8]) -> Option<Tool> {
         b"import-csv" => Tool::ImportCsv,
         b"export-csv" => Tool::ExportCsv,
         b"feed" => Tool::Feed,
+        b"show-create" => Tool::ShowCreate,
+        b"dump" => Tool::Dump,
+        b"restore" => Tool::Restore,
         _ => return None,
     })
 }
@@ -48,6 +55,11 @@ pub(crate) fn tool_named(name: &[u8]) -> Option<Tool> {
 /// Run the tool `command` names; `None` when it names none.
 pub(crate) fn route(s: &mut Session, command: &[Vec<u8>]) -> Option<u8> {
     let (name, rest) = command.split_first()?;
+    // `sql run` is the one sql subcommand that needs a server; the others
+    // read files and are routed before the redis-cli half starts.
+    if name == b"sql" && rest.first().is_some_and(|w| w == b"run") {
+        return Some(run_tool(s, Tool::SqlRun, &rest[1..]));
+    }
     let tool = tool_named(name)?;
     Some(run_tool(s, tool, rest))
 }
@@ -94,6 +106,17 @@ fn dispatch(s: &mut Session, tool: Tool, common: &super::options::Common) -> u8 
         Tool::ImportCsv => super::import_csv::run(s, common),
         Tool::ExportCsv => super::export_csv::run(s, common),
         Tool::Feed => super::feed::run(s, common),
+        Tool::ShowCreate => super::schema::show_create(s, &common.args),
+        Tool::Dump => match common.args.split_first() {
+            Some((flag, rest)) if flag == b"--schema" => super::schema::dump_schema(s, rest),
+            Some((flag, rest)) if flag == b"--all" => super::dump_dir::dump_all(s, rest),
+            _ => {
+                eprint_bytes(&[b"usage: kevy-cli dump --schema [--table t]... [--as kevy|sql] | dump --all <dir>\n"]);
+                1
+            }
+        },
+        Tool::Restore => super::dump_dir::restore(s, &common.args, common),
+        Tool::SqlRun => super::sql_run::run(s, common),
     }
 }
 

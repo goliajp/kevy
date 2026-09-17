@@ -1,6 +1,12 @@
-//! `import-csv <file> --prefix p --pk col [--header] [--columns a,b]
-//! [--delimiter c] [--null-marker s] [--resume] [--strict]`: one hash per
-//! record, `<prefix><pk>`, written in pipelined batches.
+//! `import-csv <file> (--prefix p --pk col | --table t | --key-column c)
+//! [--header] [--columns a,b] [--delimiter c] [--null-marker s] [--resume]
+//! [--strict]`: one hash per record, `<prefix><pk>`, written in pipelined
+//! batches.
+//!
+//! `--table` reads the prefix, the primary key and the columns from
+//! `TABLE.DESCRIBE`, and writes only declared columns. `--key-column`
+//! takes each record's whole key from that column (what `export-csv`
+//! writes as `key`) and does not store it as a field.
 //!
 //! An empty cell (or the null marker) writes no field: a missing field is
 //! NULL. Progress is kept in `<file>.progress` as `import` keeps it.
@@ -19,6 +25,10 @@ struct Plan {
     file: Vec<u8>,
     prefix: Vec<u8>,
     pk: Vec<u8>,
+    table: Option<Vec<u8>>,
+    key_column: Option<Vec<u8>>,
+    /// With `--table`: the declared columns, the only ones written.
+    declared: Option<Vec<Vec<u8>>>,
     header: bool,
     columns: Vec<Vec<u8>>,
     delimiter: u8,
@@ -30,6 +40,9 @@ struct Plan {
 /// Run `import-csv`; the exit code.
 pub(crate) fn run(s: &mut Session, common: &Common) -> u8 {
     let Some(mut plan) = parse(&common.args) else { return 1 };
+    if plan.table.is_some() && !from_table(s, &mut plan) {
+        return 1;
+    }
     let path = std::path::PathBuf::from(String::from_utf8_lossy(&plan.file).into_owned());
     let text = match std::fs::read(&path) {
         Ok(t) => t,
@@ -50,8 +63,9 @@ pub(crate) fn run(s: &mut Session, common: &Common) -> u8 {
         plan.columns = head.fields;
         at = head.end;
     }
-    let Some(pk_at) = plan.columns.iter().position(|c| *c == plan.pk) else {
-        return fail(&[b"no column named '", &plan.pk, b"' (give --header or --columns)"]);
+    let key = plan.key_column.as_ref().unwrap_or(&plan.pk);
+    let Some(pk_at) = plan.columns.iter().position(|c| c == key) else {
+        return fail(&[b"no column named '", key, b"' (give --header or --columns)"]);
     };
     warn_if_declared(s, &plan.prefix);
     import(s, &plan, &path, &text, at, pk_at)
@@ -130,18 +144,47 @@ fn send(s: &mut Session, plan: &Plan, batch: &[Vec<Vec<u8>>]) -> Result<(u64, u6
     Ok((replies.len() as u64, errors))
 }
 
-/// `HSET <prefix><pk> col val …` for the non-empty cells; `None` for a
-/// record without a key.
-fn command(plan: &Plan, fields: &[Vec<u8>], pk_at: usize) -> Option<Vec<Vec<u8>>> {
-    let pk = fields.get(pk_at).filter(|v| !v.is_empty())?;
-    let mut cmd = vec![b"HSET".to_vec(), [plan.prefix.as_slice(), pk].concat()];
-    for (name, value) in plan.columns.iter().zip(fields) {
+/// `HSET <key> col val …` for the non-empty cells; `None` for a record
+/// without a key. The key is `<prefix><pk>`, or with `--key-column` that
+/// column's value, which is then not a field.
+fn command(plan: &Plan, fields: &[Vec<u8>], key_at: usize) -> Option<Vec<Vec<u8>>> {
+    let key = fields.get(key_at).filter(|v| !v.is_empty())?;
+    let key = match plan.key_column {
+        Some(_) => key.clone(),
+        None => [plan.prefix.as_slice(), key].concat(),
+    };
+    let mut cmd = vec![b"HSET".to_vec(), key];
+    for (i, (name, value)) in plan.columns.iter().zip(fields).enumerate() {
         let null = value.is_empty() || plan.null_marker.as_ref() == Some(value);
-        if !null {
+        let skipped = (plan.key_column.is_some() && i == key_at)
+            || plan.declared.as_ref().is_some_and(|d| !d.contains(name));
+        if !null && !skipped {
             cmd.extend([name.clone(), value.clone()]);
         }
     }
     Some(cmd)
+}
+
+/// `--table`: the prefix, primary key and declared columns from
+/// `TABLE.DESCRIBE`; `false` after saying why not.
+fn from_table(s: &mut Session, plan: &mut Plan) -> bool {
+    let table = plan.table.clone().unwrap_or_default();
+    let d = match super::described::fetch(s, super::described::Kind::Table, &table) {
+        Ok(Some(d)) => d,
+        Ok(None) => {
+            fail(&[b"no table named '", &table, b"'"]);
+            return false;
+        }
+        Err(()) => return false,
+    };
+    plan.prefix = d.text(b"prefix").unwrap_or_default().to_vec();
+    plan.pk = d.text(b"pk").unwrap_or_default().to_vec();
+    let declared: Vec<Vec<u8>> = d.columns().into_iter().map(|(c, _)| c).collect();
+    if !plan.header && plan.columns.is_empty() {
+        plan.columns.clone_from(&declared);
+    }
+    plan.declared = Some(declared);
+    true
 }
 
 /// Declared indexes on the prefix update on every row written.
@@ -168,10 +211,26 @@ fn fail(parts: &[&[u8]]) -> u8 {
 }
 
 fn parse(args: &[Vec<u8>]) -> Option<Plan> {
+    let plan = read_flags(args)?;
+    let keyed = plan.table.is_some()
+        || plan.key_column.is_some()
+        || (!plan.prefix.is_empty() && !plan.pk.is_empty());
+    let described = plan.header || !plan.columns.is_empty() || plan.table.is_some();
+    if plan.file.is_empty() || !keyed || !described {
+        return usage(b"");
+    }
+    Some(plan)
+}
+
+/// The flags and the file, as given; `parse` decides whether they suffice.
+fn read_flags(args: &[Vec<u8>]) -> Option<Plan> {
     let mut plan = Plan {
         file: Vec::new(),
         prefix: Vec::new(),
         pk: Vec::new(),
+        table: None,
+        key_column: None,
+        declared: None,
         header: false,
         columns: Vec::new(),
         delimiter: b',',
@@ -185,6 +244,8 @@ fn parse(args: &[Vec<u8>]) -> Option<Plan> {
         match (args[i].as_slice(), value) {
             (b"--prefix", Some(v)) => plan.prefix = v,
             (b"--pk", Some(v)) => plan.pk = v,
+            (b"--table", Some(v)) => plan.table = Some(v),
+            (b"--key-column", Some(v)) => plan.key_column = Some(v),
             (b"--columns", Some(v)) => {
                 plan.columns = v.split(|&b| b == b',').map(<[u8]>::to_vec).collect()
             }
@@ -209,10 +270,6 @@ fn parse(args: &[Vec<u8>]) -> Option<Plan> {
         }
         i += 2;
     }
-    let ready = !plan.file.is_empty() && !plan.prefix.is_empty() && !plan.pk.is_empty();
-    if !ready || (!plan.header && plan.columns.is_empty()) {
-        return usage(b"");
-    }
     Some(plan)
 }
 
@@ -220,6 +277,6 @@ fn usage<T>(bad: &[u8]) -> Option<T> {
     if !bad.is_empty() {
         eprint_bytes(&[b"kevy-cli: import-csv: unexpected '", bad, b"'\n"]);
     }
-    eprint_bytes(&[b"usage: kevy-cli import-csv <file> --prefix p --pk col (--header | --columns a,b,...) [--delimiter c] [--null-marker s] [--resume] [--strict]\n"]);
+    eprint_bytes(&[b"usage: kevy-cli import-csv <file> (--prefix p --pk col | --table t | --key-column c) (--header | --columns a,b,...) [--delimiter c] [--null-marker s] [--resume] [--strict]\n"]);
     None
 }

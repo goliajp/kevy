@@ -30,6 +30,23 @@ pub(crate) fn list(s: &mut Session, tool: Tool, common: &Common) -> u8 {
     0
 }
 
+/// The names one catalog verb lists, declaration order; `None` when the
+/// server does not answer it with rows.
+pub(crate) fn names(s: &mut Session, verb: &[u8]) -> Option<Vec<Vec<u8>>> {
+    let reply = s.request(&[verb]).ok()?;
+    let rows = from_pair_rows(&reply)?;
+    let at = rows.columns.iter().position(|c| c == b"name");
+    Some(
+        rows.rows
+            .iter()
+            .filter_map(|r| match at.map(|i| &r[i]) {
+                Some(Cell::Text(n)) => Some(n.clone()),
+                _ => None,
+            })
+            .collect(),
+    )
+}
+
 /// `table`, from an index named `<table>.<path>`, right after `name`.
 fn add_table_column(rows: &mut Rows) {
     let Some(name) = rows.columns.iter().position(|c| c == b"name") else { return };

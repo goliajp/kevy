@@ -1,6 +1,8 @@
-//! `export-csv --prefix p --columns a,b [--via "<IDX.QUERY …>"] <file|->`:
-//! hashes as CSV, key first. Without `--via` the keys come from SCAN — a
-//! walk of the whole keyspace; with it, from the query's pages.
+//! `export-csv (--prefix p --columns a,b | --table t) [--via "<IDX.QUERY …>"]
+//! <file|->`: hashes as CSV, key first. Without `--via` the keys come from
+//! SCAN — a walk of the whole keyspace; with it, from the query's pages.
+//! `--table` reads the prefix and, unless `--columns` names some, every
+//! declared column from `TABLE.DESCRIBE`.
 
 use super::csv;
 use super::options::Common;
@@ -10,16 +12,43 @@ use crate::rcli::session::{Session, eprint_bytes};
 use kevy_resp::Reply;
 use std::io::Write;
 
-struct Plan {
-    prefix: Vec<u8>,
-    columns: Vec<Vec<u8>>,
-    via: Option<Vec<Vec<u8>>>,
-    file: Vec<u8>,
+pub(crate) struct Plan {
+    pub(crate) prefix: Vec<u8>,
+    pub(crate) columns: Vec<Vec<u8>>,
+    pub(crate) via: Option<Vec<Vec<u8>>>,
+    pub(crate) file: Vec<u8>,
+    table: Option<Vec<u8>>,
+}
+
+impl Plan {
+    /// A SCAN export of `columns` under `prefix` into `file`.
+    pub(crate) fn scan(prefix: &[u8], columns: Vec<Vec<u8>>, file: Vec<u8>) -> Plan {
+        Plan { prefix: prefix.to_vec(), columns, via: None, file, table: None }
+    }
 }
 
 /// Run `export-csv`; the exit code.
 pub(crate) fn run(s: &mut Session, common: &Common) -> u8 {
-    let Some(plan) = parse(&common.args) else { return 1 };
+    let Some(mut plan) = parse(&common.args) else { return 1 };
+    if let Some(table) = plan.table.clone() {
+        let d = match super::described::fetch(s, super::described::Kind::Table, &table) {
+            Ok(Some(d)) => d,
+            Ok(None) => {
+                eprint_bytes(&[b"kevy-cli: export-csv: no table named '", &table, b"'\n"]);
+                return 1;
+            }
+            Err(()) => return 1,
+        };
+        plan.prefix = d.text(b"prefix").unwrap_or_default().to_vec();
+        if plan.columns.is_empty() {
+            plan.columns = d.columns().into_iter().map(|(c, _)| c).collect();
+        }
+    }
+    export(s, &plan)
+}
+
+/// Write the export `plan` describes; the exit code.
+pub(crate) fn export(s: &mut Session, plan: &Plan) -> u8 {
     let mut out: Box<dyn Write> = if plan.file == b"-" {
         Box::new(std::io::stdout().lock())
     } else {
@@ -41,8 +70,8 @@ pub(crate) fn run(s: &mut Session, common: &Common) -> u8 {
     let mut header = vec![b"key".to_vec()];
     header.extend(plan.columns.iter().cloned());
     let written = line(&mut out, &header).and_then(|()| match &plan.via {
-        Some(query) => via_query(s, &plan, query, &mut out),
-        None => via_scan(s, &plan, &mut out),
+        Some(query) => via_query(s, plan, query, &mut out),
+        None => via_scan(s, plan, &mut out),
     });
     match written.and_then(|n| out.flush().map(|()| n)) {
         Ok(n) => {
@@ -159,7 +188,7 @@ fn via_query(
 }
 
 fn parse(args: &[Vec<u8>]) -> Option<Plan> {
-    let mut plan = Plan { prefix: Vec::new(), columns: Vec::new(), via: None, file: Vec::new() };
+    let mut plan = Plan::scan(b"", Vec::new(), Vec::new());
     let mut i = 0;
     while i < args.len() {
         match (args[i].as_slice(), args.get(i + 1)) {
@@ -168,23 +197,24 @@ fn parse(args: &[Vec<u8>]) -> Option<Plan> {
                 plan.columns = v.split(|&b| b == b',').map(<[u8]>::to_vec).collect()
             }
             (b"--via", Some(v)) => plan.via = Some(crate::rcli::splitargs::split_args(v)?),
+            (b"--table", Some(v)) => plan.table = Some(v.clone()),
             (file, _) if plan.file.is_empty() && !file.starts_with(b"--") => {
                 plan.file = file.to_vec();
                 i += 1;
                 continue;
             }
             _ => {
-                eprint_bytes(&[b"usage: kevy-cli export-csv --prefix p --columns a,b [--via \"IDX.QUERY ...\"] <file|->\n"]);
+                eprint_bytes(&[b"usage: kevy-cli export-csv (--prefix p --columns a,b | --table t) [--via \"IDX.QUERY ...\"] <file|->\n"]);
                 return None;
             }
         }
         i += 2;
     }
     let ready = !plan.file.is_empty()
-        && !plan.columns.is_empty()
-        && (!plan.prefix.is_empty() || plan.via.is_some());
+        && (plan.table.is_some()
+            || (!plan.columns.is_empty() && (!plan.prefix.is_empty() || plan.via.is_some())));
     if !ready {
-        eprint_bytes(&[b"usage: kevy-cli export-csv --prefix p --columns a,b [--via \"IDX.QUERY ...\"] <file|->\n"]);
+        eprint_bytes(&[b"usage: kevy-cli export-csv (--prefix p --columns a,b | --table t) [--via \"IDX.QUERY ...\"] <file|->\n"]);
         return None;
     }
     Some(plan)

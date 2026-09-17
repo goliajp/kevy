@@ -25,8 +25,10 @@ RELATIONAL COMMANDS (after the connection options; in the REPL as \\dt, \\d, …
     tables [pattern]                            TABLE.LIST as rows
     indexes [table|pattern]                     IDX.LIST, with each index's table
     views [pattern]                             VIEW.LIST
-    describe[+] <table>                         a table and its access paths
-                                                (+ runs TABLE.VERIFY)
+    describe[+] <table|index|view>              columns and access paths, an
+                                                index's fields, a view's tree
+                                                (+ runs its VERIFY)
+    show-create <name> [--as kevy|sql]          the declaration that recreates it
     query [--all] [--max-rows n] <IDX.QUERY|VIEW.QUERY …>
                                                 rows, following the cursor
     explain <index> <shape…> | view <name>      the path a query takes
@@ -35,8 +37,17 @@ RELATIONAL COMMANDS (after the connection options; in the REPL as \\dt, \\d, …
     run [-f file]… [-c cmd]… [--force] [--echo] [--atomic]
                                                 commands in order; exit 3 on an
                                                 error reply, 2 on a lost link
-    import-csv <f> --prefix p --pk c (--header|--columns a,b)
-    export-csv --prefix p --columns a,b [--via \"IDX.QUERY …\"] <f|->
+    import-csv <f> (--prefix p --pk c | --table t | --key-column c)
+               (--header|--columns a,b)
+    export-csv (--prefix p --columns a,b | --table t) [--via \"IDX.QUERY …\"] <f|->
+    dump --schema [--table t]… [--as kevy|sql]  declarations as a script
+    dump --all <dir>                            schema + each table's declared
+                                                columns as CSV
+    restore <dir>                               rows, then declarations, then
+                                                wait-ready and doctor
+    sql run [--max-rows n] 'SELECT …'           one SELECT over declared paths,
+                                                sent as the IDX.QUERY that
+                                                answers it
     wait-ready [--index n|--table t|--all] [--timeout s]
     watch <seconds> [count] <command…>
     feed follow [--prefix p]… [--shard n|all] [--from tail|gen:off]
