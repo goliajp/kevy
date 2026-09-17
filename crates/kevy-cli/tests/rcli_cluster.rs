@@ -697,3 +697,118 @@ fn rebalance_moves_slots_one_at_a_time_on_older_servers() {
     let assigned = received(&shared, 2).iter().filter(|w| w.len() == 5 && w[3] == "NODE").count();
     assert_eq!(assigned, 540 + 539);
 }
+
+fn fix(entry: &str, extra: &[&str], stdin: &[u8]) -> Out {
+    cli(&[&["--cluster", "fix", entry][..], extra].concat(), stdin, &[])
+}
+
+#[test]
+fn fix_closes_open_slots_by_their_marks() {
+    let shared = cluster(3, 0);
+    {
+        let mut st = shared.lock().unwrap();
+        st.nodes[0].migrating = vec![(1, 1), (2, 1), (3, 1)];
+        st.nodes[1].importing = vec![(1, 0), (3, 0)];
+        st.nodes[2].importing = vec![(3, 0), (5, 0)];
+        st.nodes[1].migrating = vec![(5461, 2)];
+        st.nodes[2].importing.push((5461, 1));
+        st.nodes[0].importing = vec![(5462, 1)];
+        st.nodes[2].migrating = vec![(10930, 0)];
+        st.nodes[1].importing.push((10930, 2));
+        // A migrating mark on a node that does not own the slot: no case.
+        st.nodes[1].migrating.push((10, 2));
+    }
+    let ports = start(&shared);
+    let (p0, p1, p2) = (at(ports[0]), at(ports[1]), at(ports[2]));
+    let o = fix(&p0, &[], b"");
+    let cases = [
+        format!(
+            ">>> Fixing open slot 1\nSet as migrating in: {p0}\nSet as importing in: {p1}\n>>> Case 1: Moving slot 1 from {p0} to {p1}\nMoving slot 1 from {p0} to {p1}: \n"
+        ),
+        format!(
+            ">>> Fixing open slot 2\nSet as migrating in: {p0}\n>>> Case 4: Closing slot 2 on {p0}\n"
+        ),
+        format!(
+            ">>> Fixing open slot 3\nSet as migrating in: {p0}\nSet as importing in: {p1},{p2}\n>>> Case 3: Moving slot 3 from {p0} to {p1} and closing it on all the other importing nodes.\nMoving slot 3 from {p0} to {p1}: \n"
+        ),
+        format!(
+            ">>> Fixing open slot 5\nSet as importing in: {p2}\n>>> Case 2: Moving all the 5 slot keys to its owner {p0}\nMoving slot 5 from {p2} to {p0}: \n>>> Setting 5 as STABLE in {p2}\n"
+        ),
+        format!(
+            ">>> Fixing open slot 10930\nSet as migrating in: {p2}\nSet as importing in: {p1}\n>>> Case 1: Moving slot 10930 from {p2} to {p1}\n"
+        ),
+        format!(
+            ">>> Fixing open slot 10\nSet as migrating in: {p1}\n[ERR] Sorry, kevy-cli can't fix this slot yet (work in progress). Slot is set as migrating in {p1}, as importing in , owner is {p0}\n"
+        ),
+    ];
+    for case in &cases {
+        assert!(o.stdout.contains(case.as_str()), "missing:\n{case}\nin:\n{}", o.stdout);
+    }
+    assert_eq!(o.code, 0);
+}
+
+#[test]
+fn fix_settles_an_owner_by_keys_and_covers_slots() {
+    let shared = cluster(3, 0);
+    {
+        let mut st = shared.lock().unwrap();
+        st.nodes[1].importing = vec![(7, 0)];
+        st.nodes[1].key_slots = vec![7, 100];
+        st.nodes[0].slots = vec![(0, 99), (103, 5460)];
+        st.nodes[0].key_slots = vec![101];
+        st.nodes[2].key_slots = vec![101];
+        st.hook = Some(Box::new(|node, argv| {
+            (node == 2
+                && argv[0].eq_ignore_ascii_case(b"CLUSTER")
+                && argv[1].eq_ignore_ascii_case(b"COUNTKEYSINSLOT")
+                && argv[2] == b"101")
+                .then(|| b":3\r\n".to_vec())
+        }));
+    }
+    let ports = start(&shared);
+    let (p0, p1, p2) = (at(ports[0]), at(ports[1]), at(ports[2]));
+    let declined = fix(&p0, &[], b"no\n");
+    assert!(declined.stdout.contains(&format!("*** Found keys about slot 7 in non-owner node {p1}!\nSet as importing in: {p1}\n>>> No single clear owner for the slot, selecting an owner by # of keys...\n*** Configuring {p1} as the slot owner\n")), "{}", declined.stdout);
+    assert!(declined.stdout.ends_with("The following uncovered slots have no keys across the cluster:\n[102]\nFix these slots by covering with a random node? (type 'yes' to accept): ") && declined.code == 1, "{}", declined.stdout);
+    let fixed = fix(&p0, &[], b"yes\nyes\nyes\n");
+    let tail = format!(
+        ">>> Covering slot 102 with {p0}\nThe following uncovered slots have keys in just one node:\n[100]\nFix these slots by covering with those nodes? (type 'yes' to accept): >>> Covering slot 100 with {p1}\nThe following uncovered slots have keys in multiple nodes:\n[101]\nFix these slots by moving keys into a single node? (type 'yes' to accept): >>> Covering slot 101 moving keys to {p2}\nMoving slot 101 from {p0} to {p2}: \n"
+    );
+    assert!(fixed.stdout.ends_with(&tail) && fixed.code == 0, "{}", fixed.stdout);
+}
+
+#[test]
+fn fix_refuses_unreachable_masters_and_reports_owners_it_cannot_merge() {
+    let shared = cluster(3, 0);
+    shared.lock().unwrap().nodes[2].down = true;
+    let ports = start(&shared);
+    let o = fix(&at(ports[0]), &[], b"");
+    assert!(o.stdout.ends_with("*** Fixing slots coverage with 1 unreachable masters is dangerous: kevy-cli will assume that slots about masters that are not reachable are not covered, and will try to reassign them to the reachable nodes. This can cause data loss and is rarely what you want to do. If you really want to proceed use the --cluster-fix-with-unreachable-masters option.\n") && o.code == 1, "{}", o.stdout);
+    let shared = cluster(2, 0);
+    {
+        let mut st = shared.lock().unwrap();
+        // Node 0 owns slot 9 and holds more of its keys than node 1 does.
+        st.nodes[1].key_slots = vec![9];
+        st.hook =
+            Some(Box::new(|node, argv| match (node, argv[0].to_ascii_uppercase().as_slice()) {
+                (0, b"CLUSTER")
+                    if argv[1].eq_ignore_ascii_case(b"COUNTKEYSINSLOT") && argv[2] == b"9" =>
+                {
+                    Some(b":2\r\n".to_vec())
+                }
+                (1, b"CLUSTER") if argv[1].eq_ignore_ascii_case(b"GETKEYSINSLOT") => {
+                    Some(b"*1\r\n$1\r\nk\r\n".to_vec())
+                }
+                (1, b"MIGRATE") => Some(b"-MOVED 9 127.0.0.1:1\r\n".to_vec()),
+                _ => None,
+            }));
+    }
+    let ports = start(&shared);
+    let (p0, p1) = (at(ports[0]), at(ports[1]));
+    let owners = fix(&p0, &["--cluster-search-multiple-owners"], b"");
+    let tail = format!(
+        "[WARNING] Slot 9 has 2 owners:\n    {p0}\n    {p1}\n>>> Fixing multiple owners for slot 9...\n>>> Setting slot 9 owner: {p0}\nMoving slot 9 from {p1} to {p0}: \nNode {p1} replied with error:\nMOVED 9 127.0.0.1:1\n\nFailed to fix multiple owners for slot 9\n"
+    );
+    assert!(owners.stdout.ends_with(&tail), "{}", owners.stdout);
+    assert_eq!(owners.code, 1);
+}

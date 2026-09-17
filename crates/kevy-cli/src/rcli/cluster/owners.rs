@@ -29,8 +29,8 @@ pub(crate) fn find(c: &mut Cluster) -> Vec<(u16, Vec<usize>)> {
         .collect()
 }
 
-/// Print what [`find`] finds; `true` when every slot has at most one owner.
-pub(crate) fn report(c: &mut Cluster) -> bool {
+/// Print what [`find`] finds; the slots with more than one owner.
+pub(crate) fn report(c: &mut Cluster) -> Vec<(u16, Vec<usize>)> {
     let color = c.cfg.color;
     log::line(color, Level::Info, b">>> Check for multiple slot owners...");
     let found = find(c);
@@ -44,5 +44,5 @@ pub(crate) fn report(c: &mut Cluster) -> bool {
     if found.is_empty() {
         log::line(color, Level::Ok, b"[OK] No multiple owners found.");
     }
-    found.is_empty()
+    found
 }

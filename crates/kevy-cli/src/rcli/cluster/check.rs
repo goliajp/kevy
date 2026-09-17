@@ -19,6 +19,18 @@ pub(crate) fn run(c: &mut Cluster) -> bool {
 
 /// [`run`], with or without the node listing.
 pub(crate) fn run_with(c: &mut Cluster, listing: Listing) -> bool {
+    header(c, listing);
+    let mut ok = agreement(c);
+    ok &= open_slots(c).is_empty();
+    ok &= coverage(c);
+    if c.cfg.search_multiple_owners {
+        ok &= super::owners::report(c).is_empty();
+    }
+    ok
+}
+
+/// `>>> Performing Cluster Check`, and the nodes when listed.
+pub(crate) fn header(c: &Cluster, listing: Listing) {
     let color = c.cfg.color;
     let entry = c.nodes.first().map(|n| n.shown()).unwrap_or_default();
     log::line(
@@ -31,16 +43,9 @@ pub(crate) fn run_with(c: &mut Cluster, listing: Listing) -> bool {
             super::show::node(n);
         }
     }
-    let mut ok = agreement(c);
-    ok &= open_slots(c);
-    ok &= coverage(c);
-    if c.cfg.search_multiple_owners {
-        ok &= super::owners::report(c);
-    }
-    ok
 }
 
-fn agreement(c: &Cluster) -> bool {
+pub(crate) fn agreement(c: &Cluster) -> bool {
     let first = c.nodes.first().map(|n| &n.signature);
     let agree = c.nodes.iter().all(|n| Some(&n.signature) == first);
     if agree {
@@ -51,7 +56,8 @@ fn agreement(c: &Cluster) -> bool {
     agree
 }
 
-fn open_slots(c: &Cluster) -> bool {
+/// Report open slots; the slots, ascending (none when all are closed).
+pub(crate) fn open_slots(c: &Cluster) -> Vec<u16> {
     let color = c.cfg.color;
     log::line(color, Level::Info, b">>> Check for open slots...");
     let mut open: Vec<u16> = Vec::new();
@@ -81,15 +87,16 @@ fn open_slots(c: &Cluster) -> bool {
         }
     }
     if open.is_empty() {
-        return true;
+        return open;
     }
     open.sort_unstable();
-    let text = [&b"[WARNING] The following slots are open: "[..], &joined(open.into_iter()), b"."];
+    let text =
+        [&b"[WARNING] The following slots are open: "[..], &joined(open.iter().copied()), b"."];
     log::line(color, Level::Err, &text.concat());
-    false
+    open
 }
 
-fn coverage(c: &Cluster) -> bool {
+pub(crate) fn coverage(c: &Cluster) -> bool {
     let color = c.cfg.color;
     log::line(color, Level::Info, b">>> Check slots coverage...");
     let covered = covered(c).count();

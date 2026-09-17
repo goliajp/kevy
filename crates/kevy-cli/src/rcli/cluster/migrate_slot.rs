@@ -14,16 +14,8 @@ pub(crate) fn move_slot(
     progress: Progress,
 ) -> bool {
     let steps = progress == Progress::Steps;
-    let head = [
-        format!("Moving slot {slot} from ").as_bytes(),
-        &c.nodes[source].shown(),
-        b" to ",
-        &c.nodes[target].shown(),
-        b": ",
-    ]
-    .concat();
     if steps {
-        write_out(&head);
+        write_out(&header(c, (source, target), slot));
     }
     let number = slot.to_string();
     let (source_id, target_id) = (c.nodes[source].rec.id.clone(), c.nodes[target].rec.id.clone());
@@ -33,8 +25,7 @@ pub(crate) fn move_slot(
     ];
     for (node, argv) in marks {
         if let Some(why) = super::migrate::failure(&c.nodes[node].link.request(&argv)) {
-            write_out(b"\n");
-            super::migrate::report(c, &[&b"[ERR] Calling CLUSTER SETSLOT: "[..], &why].concat());
+            super::migrate::move_failed(c, node, &why);
             return false;
         }
     }
@@ -43,6 +34,29 @@ pub(crate) fn move_slot(
     }
     write_out(if steps { b"\n" } else { b"#" });
     assign(c, source, target, number.as_bytes(), &target_id);
+    true
+}
+
+/// `Moving slot N from source to target: `.
+fn header(c: &Cluster, (source, target): (usize, usize), slot: u16) -> Vec<u8> {
+    [
+        format!("Moving slot {slot} from ").as_bytes(),
+        &c.nodes[source].shown(),
+        b" to ",
+        &c.nodes[target].shown(),
+        b": ",
+    ]
+    .concat()
+}
+
+/// Move the keys of `slot` from `source` to `target` without changing who
+/// owns the slot, reporting as a reshard does.
+pub(crate) fn move_keys_only(c: &mut Cluster, (source, target): (usize, usize), slot: u16) -> bool {
+    write_out(&header(c, (source, target), slot));
+    if !move_keys(c, (source, target), slot.to_string().as_bytes(), Progress::Steps) {
+        return false;
+    }
+    write_out(b"\n");
     true
 }
 
@@ -64,11 +78,7 @@ fn move_keys(
             Ok(Reply::Array(keys)) => keys,
             other => {
                 let why = super::migrate::failure(&other).unwrap_or_default();
-                write_out(b"\n");
-                super::migrate::report(
-                    c,
-                    &[&b"[ERR] Calling CLUSTER GETKEYSINSLOT: "[..], &why].concat(),
-                );
+                super::migrate::move_failed(c, source, &why);
                 return false;
             }
         };
@@ -103,13 +113,13 @@ fn migrate_batch(
             write_out(b"*** Replacing target keys...\n");
             let again = migrate(c, source, target, keys, true);
             if let Some(why) = super::migrate::failure(&again) {
-                super::migrate::report(c, &[&b"[ERR] Calling MIGRATE: "[..], &why].concat());
+                super::migrate::node_error(c, source, &why);
+                write_out(b"\n");
                 return false;
             }
         }
         Some(why) => {
-            write_out(b"\n");
-            super::migrate::report(c, &[&b"[ERR] Calling MIGRATE: "[..], &why].concat());
+            super::migrate::move_failed(c, source, &why);
             return false;
         }
     }

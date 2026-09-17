@@ -31,6 +31,7 @@ pub(crate) fn run(s: &mut Session) -> u8 {
         "del-node" => super::del_node::run(&s.opts, cfg, args),
         "reshard" => super::reshard::run(&s.opts, cfg, args),
         "rebalance" => super::rebalance::run(&s.opts, cfg, args),
+        "fix" => super::fix::run(&s.opts, cfg, args),
         "call" | "set-timeout" => node_command(s, cfg, sub.name, args),
         _ => {
             eprint_bytes(&[b"kevy-cli: --cluster ", name, b" is not implemented yet\n"]);

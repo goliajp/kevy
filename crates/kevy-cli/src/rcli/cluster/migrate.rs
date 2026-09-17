@@ -59,6 +59,21 @@ pub(crate) fn report(c: &Cluster, text: &[u8]) {
     log::line(c.cfg.color, Level::Err, text);
 }
 
+/// `Node host:port replied with error:` and the error on its own line.
+pub(crate) fn node_error(c: &Cluster, node: usize, why: &[u8]) {
+    let at = c.nodes[node].shown();
+    crate::rcli::send::write_out(
+        &[&b"Node "[..], &at, b" replied with error:\n", why, b"\n"].concat(),
+    );
+}
+
+/// A step of a slot move failed: the error, then a blank line.
+pub(crate) fn move_failed(c: &Cluster, node: usize, why: &[u8]) {
+    crate::rcli::send::write_out(b"\n");
+    node_error(c, node, why);
+    crate::rcli::send::write_out(b"\n");
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

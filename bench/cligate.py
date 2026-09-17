@@ -320,11 +320,13 @@ def node_order_free(out: bytes) -> bytes:
     per-node reports, sorted. The order is the entry node's table, which a
     reset or freshly joined cluster fills in no fixed order."""
     result, run, kind = [], [], None
-    for line in out.split(b"\n"):
+    lines = out.split(b"\n")
+    for n, line in enumerate(lines):
+        last = n == len(lines) - 1
         if line.startswith((b"M: ", b"S: ")):
             this = "block"
         elif run and (kind == "block" and line.startswith(b"   ")
-                     or kind == "line" and line == b""):
+                     or kind == "line" and line == b"" and not last):
             # A block's indented lines; the blank line after an error reply.
             run[-1].append(line)
             continue
