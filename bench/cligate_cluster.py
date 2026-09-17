@@ -15,6 +15,7 @@ Shapes, over ports 17000-17007 (the cluster bus is port + 10000):
     3x1     3, plus 17003 replicating 17000, 17004 17001, 17005 17002
 
 Nodes outside the shape are reset and left alone, for create and add-node.
+Node ids are fixed too: node 17000 is 1700017000...17000.
 """
 
 import time
@@ -77,7 +78,11 @@ class Cluster:
         for port, name in zip(PORTS, self.names):
             # A config file, so CONFIG REWRITE (set-timeout) has one to write;
             # a replica's first sync starts at once rather than after 5 s.
-            conf = (f"printf 'port {port}\\ncluster-enabled yes\\ncluster-config-file "
+            # And a node id fixed ahead of time (the port, eight times), so
+            # outputs that name nodes are the same on every gate run.
+            conf = (f"printf '{str(port) * 8} :{port}@{port + 10000} myself,master - 0 0 0 "
+                    f"connected\\nvars currentEpoch 0 lastVoteEpoch 0\\n' > /data/nodes.conf && "
+                    f"printf 'port {port}\\ncluster-enabled yes\\ncluster-config-file "
                     f"nodes.conf\\ncluster-node-timeout 1000\\nrepl-diskless-sync-delay 0"
                     f"\\nsave \"\"\\nappendonly no\\n' > /data/redis.conf && "
                     f"exec redis-server /data/redis.conf")
@@ -91,6 +96,17 @@ class Cluster:
     def stop(self):
         if self.started:
             self.sh(["docker", "rm", "-f", *self.names])
+
+    def _own_nodes(self):
+        """The nodes answering are the ones started here: a stray server on
+        these ports would answer PING just as well, and every case would run
+        against it."""
+        ports = " ".join(map(str, PORTS))
+        ids = self._exec(f"for p in {ports}; do redis-cli -p $p CLUSTER MYID; done").split()
+        want = [str(p) * 8 for p in PORTS]
+        if ids != want:
+            raise RuntimeError(f"cluster fixture: ports {PORTS[0]}-{PORTS[-1]} are answered by "
+                               f"other servers (ids {ids[:2]}...); stop them first")
 
     def _up(self):
         """A case may SHUTDOWN a node (del-node does); start it again."""
@@ -110,6 +126,8 @@ class Cluster:
             raise RuntimeError(f"cluster fixture: unknown shape {shape!r}")
         if not self.started:
             self._start()
+            self._up()
+            self._own_nodes()
         self._up()
         self._exec(_script(RESET, PORTS=" ".join(map(str, PORTS))))
         masters, replicas = SHAPES[shape]

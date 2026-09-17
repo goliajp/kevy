@@ -433,12 +433,14 @@ fn help_hints_and_completion_come_from_the_servers_reference() {
 #[test]
 fn cluster_manager_flags_parse_before_the_mode_is_refused() {
     let refused = |args: &[&str]| cli(args, b"", &[]).stderr;
-    let msg = "kevy-cli: --cluster create is not implemented yet\n";
+    // The late run of addresses is create's: it tries the first one.
+    let msg = "Could not connect to Redis at 127.0.0.1:1: Connection refused\n";
+    let create = ["--cluster", "create", "--cluster-replicas", "1", "127.0.0.1:1", "127.0.0.1:2"];
+    assert_eq!(refused(&[&create[..], &["--cluster-yes"]].concat()), msg);
     assert_eq!(
-        refused(&["--cluster", "create", "--cluster-replicas", "1", "h:1", "h:2", "--cluster-yes"]),
+        refused(&["--cluster", "create", "--cluster-yes", "127.0.0.1:1", "127.0.0.1:2", "stray"]),
         msg
     );
-    assert_eq!(refused(&["--cluster", "create", "--cluster-yes", "h:1", "h:2", "stray"]), msg);
     assert_eq!(
         refused(&["--cluster-weight", "a=1", "b=2", "--cluster", "rebalance", "h:1"]),
         "kevy-cli: --cluster rebalance is not implemented yet\n"

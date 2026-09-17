@@ -106,7 +106,7 @@ fn nodes_of(link: &mut Conn, addr: &Addr, cfg: &Config) -> Option<(Vec<Record>, 
 }
 
 /// `id:ranges|id:ranges`, sorted by id, over nodes that own slots.
-fn signature(records: &[Record]) -> Vec<u8> {
+pub(crate) fn signature(records: &[Record]) -> Vec<u8> {
     let mut owners: Vec<Vec<u8>> = records
         .iter()
         .filter(|r| !r.slots.is_empty())

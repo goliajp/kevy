@@ -16,7 +16,7 @@ const ENTRY: &str = "<host:port> or <host> <port> - separated by either colon or
 pub(crate) const SUBS: &[Sub] = &[
     Sub {
         name: "create",
-        arity: -2,
+        arity: -1,
         args: "host1:port1 ... hostN:portN",
         options: &["replicas <arg>"],
     },

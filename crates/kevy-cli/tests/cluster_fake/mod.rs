@@ -28,6 +28,9 @@ pub struct Node {
     pub down: bool,
     /// Extra lines this node appends to its own CLUSTER NODES.
     pub extra_view: Vec<String>,
+    /// Alone: its CLUSTER NODES lists only itself until a MEET.
+    pub alone: bool,
+    pub epoch: u64,
 }
 
 /// A reply to override the default one: `(node, argv) -> RESP bytes`.
@@ -58,6 +61,15 @@ pub fn cluster(masters: usize, replicas: usize) -> Shared {
         n.id = format!("{:040x}", 0xa000 + i);
     }
     Arc::new(Mutex::new(State { nodes, log: Vec::new(), hook: None }))
+}
+
+/// `count` fresh nodes: alone, no slots, no keys.
+pub fn fresh(count: usize) -> Shared {
+    let shared = cluster(0, 0);
+    shared.lock().unwrap().nodes = (0..count)
+        .map(|i| Node { id: format!("{:040x}", 0xa000 + i), alone: true, ..Node::default() })
+        .collect();
+    shared
 }
 
 /// Give every node a port and start the ones not marked down.
@@ -125,6 +137,54 @@ fn answer(shared: &Shared, node: usize, argv: &[Vec<u8>]) -> Option<Vec<u8>> {
             format!(":{}\r\n", u8::from(st.nodes[node].key_slots.contains(&slot))).into_bytes()
         }
         ["CONFIG", "SET", ..] | ["CONFIG", "REWRITE"] => b"+OK\r\n".to_vec(),
+        ["CLUSTER", "INFO"] => {
+            let known =
+                if st.nodes[node].alone { 1 } else { st.nodes.iter().filter(|n| !n.alone).count() };
+            bulk(&format!("cluster_state:ok\r\ncluster_known_nodes:{known}\r\n"))
+        }
+        ["INFO", "KEYSPACE"] => {
+            let keys = st.nodes[node].keys;
+            bulk(&if keys > 0 {
+                format!("# Keyspace\r\ndb0:keys={keys},expires=0\r\n")
+            } else {
+                "# Keyspace\r\n".into()
+            })
+        }
+        ["CLUSTER", "ADDSLOTS", slots @ ..] => {
+            let mut nums: Vec<u16> = slots.iter().filter_map(|s| s.parse().ok()).collect();
+            nums.sort_unstable();
+            let n = &mut st.nodes[node];
+            for s in nums {
+                match n.slots.last_mut() {
+                    Some((_, hi)) if *hi + 1 == s => *hi = s,
+                    _ => n.slots.push((s, s)),
+                }
+            }
+            b"+OK\r\n".to_vec()
+        }
+        ["CLUSTER", "SET-CONFIG-EPOCH", e] => {
+            st.nodes[node].epoch = e.parse().unwrap_or(0);
+            b"+OK\r\n".to_vec()
+        }
+        ["CLUSTER", "MEET", _, port, ..] => {
+            let port: u16 = port.parse().unwrap_or(0);
+            let Some(other) = st.nodes.iter().position(|n| n.port == port) else {
+                return Some(b"-ERR Invalid node address specified\r\n".to_vec());
+            };
+            st.nodes[node].alone = false;
+            st.nodes[other].alone = false;
+            b"+OK\r\n".to_vec()
+        }
+        ["CLUSTER", "REPLICATE", id] => {
+            let id = id.to_ascii_lowercase();
+            match st.nodes.iter().position(|n| n.id == id) {
+                Some(m) => {
+                    st.nodes[node].master = Some(m);
+                    b"+OK\r\n".to_vec()
+                }
+                None => format!("-ERR Unknown node {id}\r\n").into_bytes(),
+            }
+        }
         _ => format!("-ERR unknown command '{}'\r\n", words[0]).into_bytes(),
     })
 }
@@ -137,6 +197,9 @@ pub fn bulk(text: &str) -> Vec<u8> {
 pub fn nodes_text(st: &State, me: usize) -> String {
     let mut out = String::new();
     for (i, n) in st.nodes.iter().enumerate() {
+        if i != me && (st.nodes[me].alone || n.alone) {
+            continue;
+        }
         let role = if n.master.is_some() { "slave" } else { "master" };
         let flags = if i == me { format!("myself,{role}") } else { role.to_string() };
         let master = n.master.map_or("-".to_string(), |m| st.nodes[m].id.clone());
