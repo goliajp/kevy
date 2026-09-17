@@ -82,7 +82,7 @@ command file, and bulk load:
 ```
 # generate rebuild frames from your RDS export (one HSET per row):
 #   HSET user:42 name ada email ada@example.com …
-kevy-cli import -p 6004 --strict rows.resp        # ≥200k cmd/s
+kevy-cli -p 6004 --kevy import --strict rows.resp        # ≥200k cmd/s
 ```
 
 **Import first, declare indexes after** (the deferred-index rule):
@@ -96,8 +96,8 @@ row. Then run the phase-1 declaration script and wait for
   `IDX.VERIFY` coercion/duplicate counts are the expected zeros; a
   sampled digest check — recompute a few hundred rows from the RDS
   and byte-compare against `HGETALL` — passes. If you stage through
-  an intermediate kevy, `kevy-cli diff` proves the hop.
-- **Rollback:** `kevy-cli delete-prefix` (or `FLUSHALL`) and redo.
+  an intermediate kevy, `kevy-cli --kevy diff` proves the hop.
+- **Rollback:** `kevy-cli --kevy delete-prefix` (or `FLUSHALL`) and redo.
   The RDS is still the truth.
 
 ### Phase 4 — Read cutover (canary, per endpoint)
@@ -128,7 +128,7 @@ Before the flip, seed sequence keys **above** the RDS high-water
 mark (`INCRBY seq:order <rds_max_id>` on a fresh key) — the classic
 auto-increment collision is phase 5's sharpest edge.
 
-- **Clamp:** `kevy-cli diff`-style sampling between kevy and the
+- **Clamp:** `kevy-cli --kevy diff`-style sampling between kevy and the
   mirrored RDS (digest a prefix, compare row samples); the business
   metrics you already alert on.
 - **Rollback:** within the mirror window, repoint the app at the RDS
@@ -187,14 +187,14 @@ AOF (+ feed-cursor recovery points) per
 # The toolchain (`kevy-cli`)
 
 ```
-kevy-cli export  -p 6379 --prefix user: dump.resp
-kevy-cli import  -p 6004 --strict dump.resp        # ≥200k cmd/s
-kevy-cli import  -p 6004 --resume dump.resp        # after interruption
-kevy-cli digest  -p 6004 user:
-kevy-cli diff    hostA:6379 hostB:6004 user: order:
-kevy-cli copy-prefix   -p 6004 --rate 5000 user: staging:user:
-kevy-cli delete-prefix -p 6004 --rate 5000 --dry-run tmp:
-kevy-cli inspect -p 6004 user:
+kevy-cli -p 6379 --kevy export  --prefix user: dump.resp
+kevy-cli -p 6004 --kevy import  --strict dump.resp        # ≥200k cmd/s
+kevy-cli -p 6004 --kevy import  --resume dump.resp        # after interruption
+kevy-cli -p 6004 --kevy digest  user:
+kevy-cli -h hostA -p 6379 --kevy diff    hostB:6004 user: order:
+kevy-cli -p 6004 --kevy copy-prefix   --rate 5000 user: staging:user:
+kevy-cli -p 6004 --kevy delete-prefix --rate 5000 --dry-run tmp:
+kevy-cli -p 6004 --kevy inspect user:
 ```
 
 Three more read and report rather than move anything, which is why they
@@ -202,12 +202,12 @@ sit outside the list above. They are the migration playbook's lessons
 made runnable — see [table-migration.md](table-migration.md):
 
 ```
-kevy-cli sql plan schema.sql                       # every query's fate
-kevy-cli backfill-keys --from-index i --from-prefix p:   # the union
-kevy-cli lint overlap --prefix mailbox:              # lesson 1
-kevy-cli lint columns ev                           # lesson 6
-kevy-cli shadow -p 6004 --old "…" --new "…"        # before cutover
-kevy-cli doctor -p 6004                            # VERIFY as a cron
+kevy-cli --kevy sql plan schema.sql                       # every query's fate
+kevy-cli --kevy backfill-keys --from-index i --from-prefix p:   # the union
+kevy-cli --kevy lint overlap --prefix mailbox:              # lesson 1
+kevy-cli --kevy lint columns ev                           # lesson 6
+kevy-cli -p 6004 --kevy shadow --old "…" --new "…"        # before cutover
+kevy-cli -p 6004 --kevy doctor                            # VERIFY as a cron
 ```
 
 ## Wire format
@@ -216,7 +216,7 @@ kevy-cli doctor -p 6004                            # VERIFY as a cron
 `DEL` + `SET`/`HSET`/`RPUSH`/`SADD`/`ZADD`, plus absolute `PEXPIREAT`
 for TTLs. That makes the file bidirectionally compatible with
 `redis-cli --pipe`: kevy exports feed a Redis, and any RESP command
-file feeds `kevy-cli import` — including one you generate yourself
+file feeds `kevy-cli --kevy import` — including one you generate yourself
 from an RDS dump (the playbook's phase 3).
 
 The leading `DEL` per key makes replay **rebuild from scratch** —
@@ -263,7 +263,7 @@ printing `copied N keys` is the same silence wearing a different verb.
 bytes (hash fields and set members sorted, zset by score bits then
 member, list in order — list order IS identity). It is insensitive to
 shard count and insert order, so it compares across topologies.
-`kevy-cli diff A:port B:port prefix…` exits non-zero on any mismatch.
+`kevy-cli -h A -p port --kevy diff B:port prefix…` exits non-zero on any mismatch.
 
 TTLs do not participate in the digest (they decay); values do.
 
@@ -294,11 +294,11 @@ million (measured: 200k mail-sized bodies in 17s).
 
 ### Verifying a whole migration in one command
 
-`kevy-cli diff` compares any number of prefixes across two live
+`kevy-cli --kevy diff` compares any number of prefixes across two live
 servers in one call — prefer it over per-prefix digest pairs:
 
 ```
-kevy-cli diff 127.0.0.1:6004 127.0.0.1:6005 msg: mbox: usr: tag: session:
+kevy-cli -p 6004 --kevy diff 127.0.0.1:6005 msg: mbox: usr: tag: session:
 ```
 
 ### Large exports
@@ -307,8 +307,8 @@ The dump is uncompressed RESP text (fast, greppable). For 10GB+
 keyspaces pipe through gzip — the format is stream-friendly:
 
 ```
-kevy-cli export -p 6004 /dev/stdout | gzip > dump.kevy.gz
-gunzip -c dump.kevy.gz | kevy-cli import -p 6005 --strict /dev/stdin
+kevy-cli -p 6004 --kevy export /dev/stdout | gzip > dump.kevy.gz
+gunzip -c dump.kevy.gz | kevy-cli -p 6005 --kevy import --strict /dev/stdin
 ```
 
 (`--resume` needs a real file for its .progress sidecar — decompress
@@ -320,7 +320,7 @@ measured), which beats paying per-write hook maintenance a million
 times. Order of operations, not a switch:
 
 ```
-kevy-cli import -p 6004 dump.resp
+kevy-cli -p 6004 --kevy import dump.resp
 kevy-cli -p 6004 IDX.CREATE users ON PREFIX user: FIELD age TYPE i64 KIND range
 ```
 

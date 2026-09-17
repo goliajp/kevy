@@ -146,7 +146,7 @@ HSET u:1 id 1 name ada age 34 dept eng
 
 # the ORDER BY dept, age DESC walk — one composite index, no planner
 IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20 FIELDS name age""",
-                    "note": "类型化列、二级索引、复合 ORDER BY 路径——连你的 PG/MySQL schema 文件也能编译（kevy-cli sql compile）。没有运行期 SQL，没有 join：那些留在 Postgres。",
+                    "note": "类型化列、二级索引、复合 ORDER BY 路径——连你的 PG/MySQL schema 文件也能编译（kevy-cli --kevy sql compile）。没有运行期 SQL，没有 join：那些留在 Postgres。",
                     "go": "单表服务型读",
                     "href": "use/app-store/",
                 },
@@ -355,21 +355,21 @@ PAGES["migrate"] = {
             "caption": "从 Redis 导出，导入 kevy，再校验两边一致。下面每一条命令都真的跑过。",
             "text": """# 1. dump what you want to move. it is a RESP file — readable,
 #    diffable, and it streams rather than loading into memory.
-kevy-cli export -p 6379 --prefix user: dump.resp
+kevy-cli -p 6379 --kevy export --prefix user: dump.resp
 -> exported 41023 keys -> dump.resp
 
 # 2. load it. --strict stops on the first error rather than
 #    limping onward with a half-migrated keyspace.
-kevy-cli import -p 6380 --strict dump.resp
+kevy-cli -p 6380 --kevy import --strict dump.resp
 -> imported 82046 ok, 0 errors, offset 4108331
 
 # 3. prove they agree, rather than hoping.
-kevy-cli digest -p 6379 user:
-kevy-cli digest -p 6380 user:
+kevy-cli -p 6379 --kevy digest user:
+kevy-cli -p 6380 --kevy digest user:
 -> 41023 keys 3bca92aa52269300     # the same hash, or you did not migrate
 
 # an interrupted import resumes where it stopped:
-kevy-cli import -p 6380 --resume dump.resp""",
+kevy-cli -p 6380 --kevy import --resume dump.resp""",
         },
         {
             "t": "prose",
@@ -425,7 +425,7 @@ kevy-cli import -p 6380 --resume dump.resp""",
             "kind": "note",
             "title": "如果你以后又想走",
             "body": (
-                "同样这三条命令，反过来跑一遍就行。<code>kevy-cli export</code> 写出的是一个"
+                "同样这三条命令，反过来跑一遍就行。<code>kevy-cli --kevy export</code> 写出的是一个"
                 "普通的 RESP 文件，任何 Redis 兼容的服务端都能导入，而 <code>digest</code> "
                 "能证明这份拷贝没有走样。<a href=\"~/docs/migration/\">迁移指南里，"
                 "搬出去这件事</a>写得和搬进来一样细——我们宁可你走得干净，"
@@ -520,7 +520,7 @@ PAGES["choose"] = {
                 },
                 {
                     "q": "如果我用得太大了，或者只是改主意了呢？",
-                    "a": "<code>kevy-cli export</code> 会把你的 keyspace 写成一个普通的 RESP 文件，任何 Redis 兼容的服务端都能导入它；<code>kevy-cli digest</code> 则在你扔掉任何东西之前，先证明这份拷贝没有走样。<a href=\"~/docs/migration/\">迁移指南</a>里，搬出去写得和搬进来一样细。",
+                    "a": "<code>kevy-cli --kevy export</code> 会把你的 keyspace 写成一个普通的 RESP 文件，任何 Redis 兼容的服务端都能导入它；<code>kevy-cli --kevy digest</code> 则在你扔掉任何东西之前，先证明这份拷贝没有走样。<a href=\"~/docs/migration/\">迁移指南</a>里，搬出去写得和搬进来一样细。",
                 },
             ],
         },
@@ -1196,7 +1196,7 @@ IDX.CREATE idx:status ON PREFIX order: FIELD status   TYPE str KIND range""",
             "items": [
                 {
                     "do": "列、索引、排序路径，一条声明写完",
-                    "note": "行仍是前缀下的普通 hash——缺列就是 NULL；kevy-cli sql compile schema.sql 会从 CREATE TABLE / CREATE INDEX 生成这一行。",
+                    "note": "行仍是前缀下的普通 hash——缺列就是 NULL；kevy-cli --kevy sql compile schema.sql 会从 CREATE TABLE / CREATE INDEX 生成这一行。",
                     "code": """TABLE.DECLARE orders PREFIX order: PK id COLUMN id str COLUMN customer i64 COLUMN status str COLUMN total f64 INDEX status range VALUES total customer ORDERPATH by_customer ON customer THEN total DESC
 -> OK""",
                 },
@@ -1217,7 +1217,7 @@ IDX.COUNT orders.status EQ open
             ],
             "cost": (
                 "<b>没有运行期 SQL，也没有 join。</b>服务端把 <code>SELECT</code> 当作"
-                "未知命令拒绝；<code>kevy-cli sql compile</code> 在构建期把 PG/MySQL "
+                "未知命令拒绝；<code>kevy-cli --kevy sql compile</code> 在构建期把 PG/MySQL "
                 "schema 文件变成上面这些声明，并按名拒绝 JOIN、子查询和 GROUP BY，"
                 "同时指向替代它们的配方。唯一性是校验而非强制，约束是配方而非引擎检查。"
                 "开着<a href=\"~/docs/tiering/\">分层存储</a>时，index-only 查询即使"

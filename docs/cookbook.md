@@ -242,7 +242,7 @@ this section is a special case of it.
 kevy-cli -p 6004 HSET order:1001 user_id 42
 kevy-cli -p 6004 RPUSH order:1001:items sku-7 sku-9
 kevy-cli -p 6004 SADD order:1001:tags urgent
-kevy-cli delete-prefix -p 6004 --rate 5000 order:1001:   # children gone, parent row stays
+kevy-cli -p 6004 --kevy delete-prefix --rate 5000 order:1001:   # children gone, parent row stays
 ```
 
 ## 11. The outbox you don't need
@@ -289,14 +289,14 @@ during a cutover — [migration playbook, phase 5](migration.md#phase-5--write-c
 During cutover, run a CDC consumer that mirrors kevy writes BACK to
 the old RDS (`FEED.READ` → UPDATE statements). Your rollback plan is
 then "repoint the app", not "reverse-migrate data". Decommission the
-mirror when confidence hardens; `kevy-cli diff` (per-prefix digests)
+mirror when confidence hardens; `kevy-cli --kevy diff` (per-prefix digests)
 is the confidence meter.
 
 ```console
 kevy-cli -p 6004 HSET user:42 name ada
 kevy-cli -p 6004 FEED.READ 0 $(kevy-cli -p 6004 FEED.TAIL 0 | head -1 | awk '{print $3}') 0 COUNT 10 PREFIX user:  # the mirror consumer's read loop
-kevy-cli diff 127.0.0.1:6004 127.0.0.1:6004 user:        # digests match: safe form of the check
-kevy-cli diff old-rds-mirror.internal:6379 127.0.0.1:6004 user:   # needs-external
+kevy-cli -p 6004 --kevy diff 127.0.0.1:6004 user:        # digests match: safe form of the check
+kevy-cli -h old-rds-mirror.internal -p 6379 --kevy diff 127.0.0.1:6004 user:   # needs-external
 ```
 
 ## 14. Analytics export
@@ -314,7 +314,7 @@ Serving and analytics don't share an engine. Export patterns:
 
 ```console
 kevy-cli -p 6004 HSET order:1001 user_id 42 total 1999
-kevy-cli export -p 6004 --prefix order: /tmp/orders.resp
+kevy-cli -p 6004 --kevy export --prefix order: /tmp/orders.resp
 kevy-cli -p 6004 FEED.READ 0 $(kevy-cli -p 6004 FEED.TAIL 0 | head -1 | awk '{print $3}') 0 COUNT 100 PREFIX order:  # the CDC-to-warehouse read loop
 ```
 
@@ -331,8 +331,8 @@ paying the write hook per imported row (docs/migration.md).
 kevy-cli -p 6004 HSET item:1 price 10
 kevy-cli -p 6004 HSET item:2 price 25
 kevy-cli -p 6004 HSET item:3 price 7
-kevy-cli export -p 6004 --prefix item: /tmp/items.resp
-kevy-cli import -p 6004 /tmp/items.resp   # bulk load FIRST: no index write hook to pay
+kevy-cli -p 6004 --kevy export --prefix item: /tmp/items.resp
+kevy-cli -p 6004 --kevy import /tmp/items.resp   # bulk load FIRST: no index write hook to pay
 kevy-cli -p 6004 IDX.CREATE item_price ON PREFIX item: FIELD price TYPE i64 KIND range   # declare AFTER: backfill
 kevy-cli -p 6004 IDX.QUERY item_price RANGE 0 100 LIMIT 10
 ```
@@ -631,7 +631,7 @@ you believe in is the invariant you have.
 DDL](rds-workloads.md#secondary-index-ddl).
 
 Everything recipes 1–8 do by hand, compiled from the SQL you already
-have. `kevy-sql` (and its `kevy-cli sql` face) is a **declaration-time
+have. `kevy-sql` (and its `kevy-cli --kevy sql` face) is a **declaration-time
 compiler**: it reads the schema ONCE, like a migration tool, and emits
 explicit `TABLE.DECLARE` / `VIEW.CREATE` commands plus *query cards* —
 ready-made `IDX.QUERY` templates with `$N` slots. Nothing runs
@@ -683,8 +683,8 @@ CREATE VIEW recent_orders_by_user AS
 Compile it, then apply the declarations to a server:
 
 ```console
-kevy-cli sql compile docs/examples/shop.sql
-kevy-cli sql compile docs/examples/shop.sql --apply --url 127.0.0.1:6004
+kevy-cli --kevy sql compile docs/examples/shop.sql
+kevy-cli -p 6004 --kevy sql compile docs/examples/shop.sql --apply
 ```
 
 The compiled script (verbatim). Each table folds its indexes into one
@@ -748,7 +748,7 @@ CREATE VIEW order_emails AS
 ```
 
 ```text
-$ kevy-cli sql compile join.sql
+$ kevy-cli --kevy sql compile join.sql
 kevy-cli sql: join.sql: line 6, col 3: JOIN is not compilable — kevy
 refuses query-time joins (Law 3); model the lookup with an indexed FK
 column (IDX.QUERY t.fk EQ …) or app-side assembly (cookbook §2)

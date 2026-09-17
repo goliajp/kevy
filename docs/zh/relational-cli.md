@@ -4,11 +4,11 @@ redis-cli 能做的事，kevy-cli 都能做。除此之外，它还带了一组�
 的关系型那一面——[表](tables.md)、[索引](indexes.md)和[视图](views.md)：把目录读成行、
 逐页跑查询、导出和恢复声明、CSV 导入导出。
 
-连接选项之后的第一个词，如果恰好是某个工具的小写名字，就运行这个工具；其他词一律当作
-服务端命令，和 redis-cli 一样：
+工具写在连接选项之后的 `--kevy` 后面，工具名之后的参数都归这个工具。不带 `--kevy` 时，
+第一个词就是服务端命令，和 redis-cli 完全一样：
 
 ```sh
-kevy-cli -p 6004 tables            # 工具
+kevy-cli -p 6004 --kevy tables     # 工具
 kevy-cli -p 6004 TABLE.LIST        # 命令，按 redis-cli 的格式输出
 ```
 
@@ -21,10 +21,10 @@ kevy-cli -p 6004 TABLE.LIST        # 命令，按 redis-cli 的格式输出
 还可以直接给表名。`describe` 接受表、索引或视图：
 
 ```sh
-kevy-cli -p 6004 tables 'user*'
-kevy-cli -p 6004 indexes users
-kevy-cli -p 6004 describe users      # 列、列的类型、读这一列的访问路径
-kevy-cli -p 6004 describe+ users     # 同上，再跑一次 TABLE.VERIFY
+kevy-cli -p 6004 --kevy tables 'user*'
+kevy-cli -p 6004 --kevy indexes users
+kevy-cli -p 6004 --kevy describe users      # 列、列的类型、读这一列的访问路径
+kevy-cli -p 6004 --kevy describe+ users     # 同上，再跑一次 TABLE.VERIFY
 ```
 
 对表，`describe` 显示前缀和主键，每一列的声明类型和读它的编译路径，以及每条访问路径的
@@ -37,11 +37,11 @@ kevy-cli -p 6004 describe+ users     # 同上，再跑一次 TABLE.VERIFY
 到 `--max-rows`（默认 10,000）时在整页边界停下，并告诉你从哪个游标接着取：
 
 ```sh
-kevy-cli -p 6004 query --all IDX.QUERY users.age RANGE 18 65 FIELDS name
-kevy-cli -p 6004 explain users.age RANGE 18 65
-kevy-cli -p 6004 explain --analyze IDX.QUERY users.age RANGE 18 65
-kevy-cli -p 6004 advise
-kevy-cli -p 6004 sql run "SELECT id, name FROM users WHERE age BETWEEN 18 AND 65"
+kevy-cli -p 6004 --kevy query --all IDX.QUERY users.age RANGE 18 65 FIELDS name
+kevy-cli -p 6004 --kevy explain users.age RANGE 18 65
+kevy-cli -p 6004 --kevy explain --analyze IDX.QUERY users.age RANGE 18 65
+kevy-cli -p 6004 --kevy advise
+kevy-cli -p 6004 --kevy sql run "SELECT id, name FROM users WHERE age BETWEEN 18 AND 65"
 ```
 
 `explain --analyze` 会真的跑一遍查询，报告的是这个客户端量到的数——往返次数、页数、行数、
@@ -49,37 +49,37 @@ kevy-cli -p 6004 sql run "SELECT id, name FROM users WHERE age BETWEEN 18 AND 65
 
 `sql run` 接受一条 `SELECT`，在客户端按已声明的表做规划，发出能回答它的 `IDX.QUERY`，
 只输出 SELECT 列出的列。服务端始终看不到 SQL。没有任何已声明路径能回答的查询会被拒绝，
-拒绝文本和 `kevy-cli sql plan` 给的一样，会说明该声明哪个索引——这里没有哪个工具会靠扫描
+拒绝文本和 `kevy-cli --kevy sql plan` 给的一样，会说明该声明哪个索引——这里没有哪个工具会靠扫描
 去补一个 `WHERE`。
 
 ## 把声明存成文件
 
 ```sh
-kevy-cli -p 6004 show-create users                # 能重建它的 TABLE.DECLARE
-kevy-cli -p 6004 show-create users --as sql       # CREATE TABLE / CREATE INDEX
-kevy-cli -p 6004 dump --schema > schema.kevy      # 先表，再索引，最后视图
-kevy-cli -p 6005 run -f schema.kevy               # 在另一台服务端上重放
-kevy-cli -p 6004 dump --all ./dump                # schema，加上每张表的行（CSV）
-kevy-cli -p 6005 restore ./dump                   # 行、声明、wait-ready、doctor
+kevy-cli -p 6004 --kevy show-create users                # 能重建它的 TABLE.DECLARE
+kevy-cli -p 6004 --kevy show-create users --as sql       # CREATE TABLE / CREATE INDEX
+kevy-cli -p 6004 --kevy dump --schema > schema.kevy      # 先表，再索引，最后视图
+kevy-cli -p 6005 --kevy run -f schema.kevy               # 在另一台服务端上重放
+kevy-cli -p 6004 --kevy dump --all ./dump                # schema，加上每张表的行（CSV）
+kevy-cli -p 6005 --kevy load ./dump                   # 行、声明、wait-ready、doctor
 ```
 
 kevy 形式是一行一条命令，加了引号，`run -f` 读回来是同样的词。SQL 形式是
-`kevy-cli sql compile` 会编译回同一份声明的 SQL；SQL 表达不了的部分——不是 `<table>:`
+`kevy-cli --kevy sql compile` 会编译回同一份声明的 SQL；SQL 表达不了的部分——不是 `<table>:`
 的键前缀、`WINDOW`、`AUTODECLARE`——会留成 `-- not carried by SQL` 注释，不会悄悄丢掉。
 由表编译出来的索引没有自己的声明：`show-create users.age` 会告诉你是哪张表。
 
 `dump --all` 只写入新目录或空目录：`schema.kevy`、`tables`，以及每张表一个
 `table-N.csv`。导出的只有表前缀下的行、而且只有已声明的列；要逐字节复制整个键空间，用
-`kevy-cli export`。`restore` 先导入行、再做声明，这样每个索引只从行构建一次，而不是每写
-一行更新一次。`restore --from … --to …` 仍然是离线的备份恢复。
+`kevy-cli --kevy export`。`load` 先导入行、再做声明，这样每个索引只从行构建一次，而不是每写
+一行更新一次。（`restore --from … --to …` 是离线的备份恢复，属于另一个层级。）
 
 ## CSV 导入导出
 
 ```sh
-kevy-cli -p 6004 import-csv users.csv --table users --header
-kevy-cli -p 6004 import-csv users.csv --prefix user: --pk id --columns id,name,age
-kevy-cli -p 6004 export-csv --table users users.csv
-kevy-cli -p 6004 export-csv --table users --via "IDX.QUERY users.age RANGE 18 65" -
+kevy-cli -p 6004 --kevy import-csv users.csv --table users --header
+kevy-cli -p 6004 --kevy import-csv users.csv --prefix user: --pk id --columns id,name,age
+kevy-cli -p 6004 --kevy export-csv --table users users.csv
+kevy-cli -p 6004 --kevy export-csv --table users --via "IDX.QUERY users.age RANGE 18 65" -
 ```
 
 `import-csv` 每条记录写一个 hash，512 条一批走 pipeline，进度记在 `<file>.progress`，
@@ -93,11 +93,11 @@ kevy-cli -p 6004 export-csv --table users --via "IDX.QUERY users.age RANGE 18 65
 ## 脚本、等待和轮询
 
 ```sh
-kevy-cli -p 6004 run -f migrate.kevy --atomic
-kevy-cli -p 6004 wait-ready --table users --timeout 60
-kevy-cli -p 6004 watch 2 IDX.LIST
-kevy-cli -p 6004 status
-kevy-cli -p 6004 feed follow --prefix user: --from tail --checkpoint feed.pos
+kevy-cli -p 6004 --kevy run -f migrate.kevy --atomic
+kevy-cli -p 6004 --kevy wait-ready --table users --timeout 60
+kevy-cli -p 6004 --kevy watch 2 IDX.LIST
+kevy-cli -p 6004 --kevy status
+kevy-cli -p 6004 --kevy feed follow --prefix user: --from tail --checkpoint feed.pos
 ```
 
 `run` 逐行执行 `-f` 文件和 `-c` 命令：全部成功退出 0，用法错误退出 1，连接断开退出 2，
@@ -107,7 +107,8 @@ kevy-cli -p 6004 feed follow --prefix user: --from tail --checkpoint feed.pos
 
 ## 在 REPL 里
 
-以反斜杠开头的行由 kevy-cli 自己处理，不会发给服务端：
+以反斜杠开头的行由 kevy-cli 自己处理，不会发给服务端：`\<tool> [args]` 和
+`--kevy <tool>` 一样可以运行任何工具，另外还有 psql 风格的简写：
 
 | 行 | 作用 |
 |---|---|
@@ -115,7 +116,7 @@ kevy-cli -p 6004 feed follow --prefix user: --from tail --checkpoint feed.pos
 | `\di [table\|pattern]` | `indexes` |
 | `\dv [pattern]` | `views` |
 | `\d name` / `\d+ name` | `describe` / `describe+` |
-| `\query …` / `\explain …` / `\advise` | `query` / `explain` / `advise` |
+| `\query …` / `\dump --schema` / 任意 `\<tool>` | 对应的工具 |
 | `\watch seconds command…` | `watch` |
 | `\i file` | `run -f file` |
 | `\conninfo` | `status` |
@@ -128,9 +129,9 @@ kevy-cli -p 6004 feed follow --prefix user: --from tail --checkpoint feed.pos
 ## 输出格式
 
 ```sh
-kevy-cli -p 6004 tables --format csv
-kevy-cli -p 6004 --json tables
-kevy-cli -p 6004 query IDX.QUERY users.age RANGE 18 65 --null NULL --expanded
+kevy-cli -p 6004 --kevy tables --format csv
+kevy-cli -p 6004 --json --kevy tables
+kevy-cli -p 6004 --kevy query IDX.QUERY users.age RANGE 18 65 --null NULL --expanded
 ```
 
 输出到终端时，行按对齐的表格显示；接管道时，输出制表符分隔的值。用
@@ -140,6 +141,12 @@ kevy-cli -p 6004 query IDX.QUERY users.age RANGE 18 65 --null NULL --expanded
 
 ## 工具名和服务端命令
 
-工具只认精确的小写名字，所以 `kevy-cli watch …`、`kevy-cli dump …`、
-`kevy-cli restore …` 运行的是工具，而 redis-cli 会发送 `WATCH`、`DUMP`、`RESTORE`。
-要发给服务端，就把命令写成大写：`kevy-cli -p 6004 DUMP mykey`。
+不带 `--kevy` 的词永远是服务端命令，大小写都一样：`watch`、`dump`、`restore` 是 Redis 和
+Valkey 的命令，`backup`、`digest` 是 Redis 8 的命令，而且命令表每个版本都在增长。所以 kevy
+的工具从不占用裸词，都放在 `--kevy` 这一个选项后面，就像 redis-cli 自己的集群管理放在
+`--cluster` 后面一样。
+
+kevy-cli 6.4 以裸词发布的工具（`kevy-cli doctor -p 6004`、`kevy-cli export …`、
+`kevy-cli sql compile …`）在 7.0 之前仍然可用，每次运行会打印一行提示，给出对应的
+`--kevy` 写法。`backup` 和 `restore` 只有在带自己的参数（`--data-dir`/`--to`、
+`--from`/`--to`）时才是工具；`digest <前缀>` 在 7.0 之前仍然是工具。

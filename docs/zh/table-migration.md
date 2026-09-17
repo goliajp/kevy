@@ -2,7 +2,7 @@
 
 这一章之所以存在，是因为一位生产环境的消费者完整做过这次迁移——一个邮件系统把应用代码里手工维护的二级索引（sorted set 与计数键）搬到了 `TABLE.DECLARE` 上——并把教训带了回来。这些教训属于引擎的文档，不属于他们的笔记本。下面每条规则都是付过学费的；排列顺序就是你将会需要它们的顺序。
 
-**在这一切之前，是第一公里：**`kevy-cli sql plan schema.sql` 读你手上已经有的那份 schema，报告你的每一条查询会变成什么——各由哪条声明路径服务，服务不了的那些，则给出正好该加的那条 `CREATE INDEX`。它是*这东西到底搬不搬得动*的十分钟答案，而且不需要起服务。见 [tables.md](tables.md#kevy-sql编译-schema而不是发送-schema)。
+**在这一切之前，是第一公里：**`kevy-cli --kevy sql plan schema.sql` 读你手上已经有的那份 schema，报告你的每一条查询会变成什么——各由哪条声明路径服务，服务不了的那些，则给出正好该加的那条 `CREATE INDEX`。它是*这东西到底搬不搬得动*的十分钟答案，而且不需要起服务。见 [tables.md](tables.md#kevy-sql编译-schema而不是发送-schema)。
 
 ## 先说为什么：只有引擎维护的索引才可验证
 
@@ -20,10 +20,10 @@
 
 对每个想让索引回答的查询，问它的维度是不是**行上的**单一值。答案通常不在行里，而在你的 id 推导或键构造代码里——这个邮件系统的"每邮箱一线程"看起来单值，读了 id 代码才发现一个线程可以住在多个邮箱里。若维度是多值的，任何列都载不动它：为每个 (owner, item) 建一条**成员行**——`member:{owner}:{item}`，把 owner、item 和排序属性作为列——让 ORDERPATH 去排它。先决定这个，才不会事后重declare整张表。
 
-**`kevy-cli lint overlap` 找的是症状，不是成因。** 成因在代码里、也留在那里——但一个多值的维度会在数据里留下机器读得到的痕迹：**同一个名字出现在不止一个 owner 之下**。把它对准你今天已有的那一族按 owner 分组的集合：
+**`kevy-cli --kevy lint overlap` 找的是症状，不是成因。** 成因在代码里、也留在那里——但一个多值的维度会在数据里留下机器读得到的痕迹：**同一个名字出现在不止一个 owner 之下**。把它对准你今天已有的那一族按 owner 分组的集合：
 
 ```console
-$ kevy-cli lint overlap -p 6004 --prefix mailbox:
+$ kevy-cli -p 6004 --kevy lint overlap --prefix mailbox:
 2 owner(s) under mailbox:, 3 distinct name(s)
 1 name(s) appear under more than one owner:
   t2  →  mailbox:1, mailbox:2
@@ -36,16 +36,16 @@ this dimension is multi-valued, so no column can hold it — model a membership 
 
 派生行由写它的人填充。切读之前，**枚举所有 writer**——每一条创建、修改、删除底层实体的代码路径——确认每一条都在写这张表所声明的行。会忘的那个 writer，就是在表存在之前写下的那个。（这正是 `TABLE.VERIFY` 的 `missing` 计数事后能抓到的类别；审计是让你不必在生产上遇见它的办法。）
 
-**这一步没有工具，而且是故意的。** 你需要的那个事实并不在 store 里——「哪些代码路径会写这张表」没有被记录在数据的任何地方，因为 writer 是代码，而引擎只看得见写入。工具*能*做的是抓住后果：`kevy-cli shadow` 会把一个被忘掉的 writer 报成「新路径缺的那一行」，而且是在切换之前而不是之后。用审计去避免意外，用影子运行去证明你避开了。
+**这一步没有工具，而且是故意的。** 你需要的那个事实并不在 store 里——「哪些代码路径会写这张表」没有被记录在数据的任何地方，因为 writer 是代码，而引擎只看得见写入。工具*能*做的是抓住后果：`kevy-cli --kevy shadow` 会把一个被忘掉的 writer 报成「新路径缺的那一行」，而且是在切换之前而不是之后。用审计去避免意外，用影子运行去证明你避开了。
 
 ### 3. 回填要取"所有能点名条目的来源"的并集
 
 遗留索引彼此不一致——这就是上面实测的 89% / 76%。从任何*单一*来源回填都会继承它的洞，而 `VERIFY` 看不见一条从未被写过的行。回填的键集合要从每一个能点名条目的结构（旧索引、主键空间扫描、归档）的**并集**构建，行的内容再从权威记录写入。
 
-**`kevy-cli backfill-keys` 就是造这个并集的**——而且只造这个。这一课自己就切成两半，后半留给你：什么是权威记录、一行长什么样，是住在你的应用里的知识；一个去猜的工具会很自信地写出错的行。
+**`kevy-cli --kevy backfill-keys` 就是造这个并集的**——而且只造这个。这一课自己就切成两半，后半留给你：什么是权威记录、一行长什么样，是住在你的应用里的知识；一个去猜的工具会很自信地写出错的行。
 
 ```console
-$ kevy-cli backfill-keys --from-index idx:threads --from-prefix mail: \
+$ kevy-cli --kevy backfill-keys --from-index idx:threads --from-prefix mail: \
       --from-file archive.txt > keys.txt
 601 name(s) in the union
   index idx:threads                3 name(s), 0 only here
@@ -62,10 +62,10 @@ $ kevy-cli backfill-keys --from-index idx:threads --from-prefix mail: \
 
 让读继续走旧路径，同时在旁边算出新答案并比较。不只比成员，还要比**顺序**：分数漂移产出的是顺序不同的同一集合，分页 UI 会把它变成用户可见的抖动。把第一处分歧连同**两边的排序键**一起写进日志——那一行日志立即点名漂移的 writer。
 
-**`kevy-cli shadow` 替你做这件事。** 把两条命令都给它，它会比较两边产出的行键顺序，只要有分歧就以非零退出——所以切换脚本可以直接 gate：
+**`kevy-cli --kevy shadow` 替你做这件事。** 把两条命令都给它，它会比较两边产出的行键顺序，只要有分歧就以非零退出——所以切换脚本可以直接 gate：
 
 ```console
-$ kevy-cli shadow -p 6004 \
+$ kevy-cli -p 6004 --kevy shadow \
     --old "ZRANGE old:act 0 -1 WITHSCORES" --old-pairs \
     --new "IDX.QUERY u.act RANGE 0 999 LIMIT 20" --samples 50
 shadow: 50 samples, 50 diverged (first at sample 0)
@@ -88,10 +88,10 @@ shadow: 50 samples, 50 diverged (first at sample 0)
 
 当新查询需要一个现有形态给不出的谓词时，手工时代的反射是"把这个值再写到一个地方"——那是在重建这次迁移刚刚消灭的"两个 writer、一份真相"问题。改为在同样的列上声明**另一条 ORDERPATH**（或索引）；引擎会在同一次写里、从同一行推导出两者。
 
-**`kevy-cli lint columns <table>` 找的是形状。** 两列在几乎每一行上都带同一个值，就是一列被复制出去换第二种排序：
+**`kevy-cli --kevy lint columns <table>` 找的是形状。** 两列在几乎每一行上都带同一个值，就是一列被复制出去换第二种排序：
 
 ```console
-$ kevy-cli lint columns -p 6004 ev
+$ kevy-cli -p 6004 --kevy lint columns ev
 ev: 43 row(s) sampled under ev:
   created_at and sort_ts agree on 93% (40/43)
 a column copied to get a second sort order is the shape lesson 6 warns about — the answer is another ORDERPATH; ask IDX.ADVISE which one
@@ -107,10 +107,10 @@ a column copied to get a second sort order is the shape lesson 6 warns about —
 
 这些计数每次调用都是新鲜的，便宜到可以挂在 cron 或 doctor 命令里：`drift` 和 `missing` 应当永远为零；`absent` / `excluded` / `coerce_failures` 点名每种排除原因夺走的行（精确语义见 [tables.md](tables.md)，包括 ORDERPATH 的 `duplicates` 非零意味着分页需要一个有界决胜列）。整个迁移的意义就在于这些数字*存在*。去读它们。
 
-**`kevy-cli doctor` 就是那个 cron。** 它对每张已声明的表跑 `VERIFY`，用退出码回答：
+**`kevy-cli --kevy doctor` 就是那个 cron。** 它对每张已声明的表跑 `VERIFY`，用退出码回答：
 
 ```console
-$ kevy-cli doctor -p 6004
+$ kevy-cli -p 6004 --kevy doctor
   OK       user  (rows 59999 · entries 59999 · absent 0 · excluded 0 · coerce_failures 0)
   WARN     ev    duplicates 1 — paging this path needs a bounded tie-break or pages repeat rows
   BUILDING new   — an index is still backfilling, not a verdict

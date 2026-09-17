@@ -145,18 +145,18 @@ IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20 FIELDS name email
 
 ## kevy-sql——スキーマは送るのではなく、コンパイルする
 
-`kevy-sql`（とその `kevy-cli sql` の顔）は**宣言時コンパイラ**です——マイグレーションツールのように、PG/MySQL 方言のスキーマファイルを一度だけ読み、明示的な宣言を出力します。
+`kevy-sql`（とその `kevy-cli --kevy sql` の顔）は**宣言時コンパイラ**です——マイグレーションツールのように、PG/MySQL 方言のスキーマファイルを一度だけ読み、明示的な宣言を出力します。
 
 ```console
-kevy-cli sql compile schema.sql                          # print the declarations
-kevy-cli sql compile schema.sql --apply --url 127.0.0.1:6004
-kevy-cli sql plan schema.sql                             # 各クエリがどうなるか
+kevy-cli --kevy sql compile schema.sql                          # print the declarations
+kevy-cli -p 6004 --kevy sql compile schema.sql --apply
+kevy-cli --kevy sql plan schema.sql                             # 各クエリがどうなるか
 ```
 
 `compile` と `plan` は同じファイルを読み、別の問いに答えます。`compile` はビルド時——実行するコマンドを生み出すので、供給できないビューが一つあればそれはエラーで、そこで止まります。`plan` は移行の当日です。**すべての**クエリの行き先を報告します。*「40 本のうち 34 本は動く、残り 6 本には何が要る」*こそ、スキーマを携えて来た人が実際に訊いていることだからです：
 
 ```console
-$ kevy-cli sql plan shop.sql
+$ kevy-cli --kevy sql plan shop.sql
 2 table(s) to declare:
   users
   orders

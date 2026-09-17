@@ -326,14 +326,14 @@ SQL-to-kevy mapping for each of those lives in
 
 ## kevy-sql: compile a schema, don't send one
 
-`kevy-sql` (and its `kevy-cli sql` face) is a **declaration-time
+`kevy-sql` (and its `kevy-cli --kevy sql` face) is a **declaration-time
 compiler** — it reads a PG/MySQL-dialect schema file once, like a
 migration tool, and emits the explicit declarations:
 
 ```console
-kevy-cli sql compile schema.sql                          # print the declarations
-kevy-cli sql compile schema.sql --apply --url 127.0.0.1:6004
-kevy-cli sql plan schema.sql                             # what becomes of every query
+kevy-cli --kevy sql compile schema.sql                          # print the declarations
+kevy-cli -p 6004 --kevy sql compile schema.sql --apply
+kevy-cli --kevy sql plan schema.sql                             # what becomes of every query
 ```
 
 `compile` and `plan` read the same file and answer different questions.
@@ -344,7 +344,7 @@ what the other 6 need"* is what someone arriving with a schema is
 actually asking:
 
 ```console
-$ kevy-cli sql plan shop.sql
+$ kevy-cli --kevy sql plan shop.sql
 2 table(s) to declare:
   users
   orders
