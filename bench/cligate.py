@@ -52,9 +52,13 @@ SOCKET = "/cligate/redis.sock"
 TIMEOUT_S = 10
 
 
+def anchor_image(name: str) -> str:
+    anchor = json.loads((ROOT / "bench/COMPETITOR-ANCHORS.json").read_text())["anchors"][name]
+    return anchor["image"].replace("{v}", anchor["pinned"])
+
+
 def redis_image() -> str:
-    anchors = json.loads((ROOT / "bench/COMPETITOR-ANCHORS.json").read_text())
-    return f"redis:{anchors['anchors']['redis']['pinned']}"
+    return anchor_image("redis")
 
 
 def unescape(text: str) -> bytes:
@@ -98,11 +102,14 @@ def parse_cases(path: pathlib.Path):
         elif key == "env":
             k, _, v = value.partition("=")
             cur["env"][k] = v
+        elif key == "kevy.stdout-replace":
+            cur.setdefault(key, []).append(value)
         elif key == "stdin":
             cur["stdin"] += unescape(expand(value))
         elif key in ("run", "deviation", "kevy.stdout", "kevy.stderr", "kevy.exit",
-                     "kevy.stdout-contains", "kevy.stdout-replace", "timeline", "screen",
-                     "compare", "mask", "head", "prepare", "cluster", "then"):
+                     "kevy.stdout-contains", "timeline", "screen",
+                     "compare", "mask", "head", "prepare", "cluster", "then", "reference",
+                     "timeout"):
             cur[key] = value
         else:
             sys.exit(f"cligate: {path}:{lineno}: unknown field {key!r}")
@@ -174,7 +181,7 @@ class Reference:
         self.server = f"cligate-server-{tag}"
         self.auth = f"cligate-auth-{tag}"
         self.cli = f"cligate-cli-{tag}"
-        self.cluster = cligate_cluster.Cluster(sh, image, self.cli, tag)
+        self.cluster = cligate_cluster.Cluster(sh, image, self.cli, tag, anchor_image("valkey"))
 
     def _start(self, name, *cmd):
         r = sh(["docker", "run", "-d", "--name", name, "--network", "host",
@@ -199,10 +206,27 @@ class Reference:
         if r.returncode != 0:
             self.__exit__()
             sys.exit(f"cligate: could not copy kevy-cli in: {r.stderr.decode()}")
+        if not self.add_valkey_cli():
+            self.__exit__()
+            sys.exit("cligate: could not install the pinned valkey-cli in the CLI container")
         if not self.ensure_up():
             self.__exit__()
             sys.exit("cligate: reference server never answered PING")
         return self
+
+    def add_valkey_cli(self) -> bool:
+        """The pinned valkey-cli beside redis-cli, for cases whose reference it
+        is (reference: valkey-cli): both images are the same Debian."""
+        holder = f"cligate-valkeycli-{os.getpid()}"
+        local = ROOT / "target" / "cligate" / "valkey-cli"
+        local.parent.mkdir(parents=True, exist_ok=True)
+        steps = [["docker", "create", "--name", holder, anchor_image("valkey")],
+                 ["docker", "cp", f"{holder}:/usr/local/bin/valkey-cli", str(local)],
+                 ["docker", "cp", "-L", str(local), f"{self.cli}:/usr/local/bin/valkey-cli"]]
+        ok = all(sh(step).returncode == 0 for step in steps)
+        sh(["docker", "rm", "-f", holder])
+        version = sh(["docker", "exec", self.cli, "valkey-cli", "--version"]).stdout
+        return ok and version.startswith(b"valkey-cli ")
 
     def __exit__(self, *exc):
         self.cluster.stop()
@@ -219,8 +243,9 @@ class Reference:
         return False
 
     def run(self, argv, stdin, env, program="redis-cli", timeline=None, screen=None,
-            prepare=None, then=None):
-        result = self._run(argv, stdin, env, program, timeline, screen, prepare)
+            prepare=None, then=None, timeout=None):
+        result = self._run(argv, stdin, env, program, timeline, screen, prepare,
+                           float(timeout or TIMEOUT_S))
         if then:
             # What the command left behind (a file it wrote), after its output.
             after = sh(["docker", "exec", self.cli, "sh", "-c", expand(then)])
@@ -229,7 +254,7 @@ class Reference:
                                                  result.stderr)
         return result
 
-    def _run(self, argv, stdin, env, program, timeline, screen, prepare):
+    def _run(self, argv, stdin, env, program, timeline, screen, prepare, timeout):
         if prepare:
             # A shell command run in the CLI's container first (a script file).
             sh(["docker", "exec", self.cli, "sh", "-c", expand(prepare)])
@@ -245,9 +270,9 @@ class Reference:
             if timeline:
                 script = timeline_script(timeline, program, argv, pty=screen == "pty")
                 return sh(["docker", "exec", *envs, self.cli, "sh", "-c", script],
-                          timeout=TIMEOUT_S)
+                          timeout=timeout)
             return sh(["docker", "exec", "-i", *envs, self.cli, program, *argv],
-                      input=stdin, timeout=TIMEOUT_S)
+                      input=stdin, timeout=timeout)
         except subprocess.TimeoutExpired:
             return subprocess.CompletedProcess(argv, 124, b"", b"<timed out>")
 
@@ -261,8 +286,7 @@ class Reference:
                 self.cluster.reset(case["cluster"])
             except RuntimeError as e:
                 sys.exit(f"cligate: case line {case['line']}: {e}")
-            group = cligate_cluster.LEGACY_PORTS if case["cluster"].startswith("legacy-") \
-                else cligate_cluster.PORTS
+            _, group = cligate_cluster.Cluster.group_of(case["cluster"])
             target = ["-c", "-p", str(group[0])]
         for line in case["setup"]:
             r = self.run([*target, *shlex.split(expand(line))], b"", {})
@@ -294,8 +318,8 @@ def on_screen(result, screen: bool):
 
 
 def own_name(text: bytes) -> bytes:
-    """DEV-010: where redis-cli names itself, kevy-cli names itself."""
-    return text.replace(b"redis-cli", b"kevy-cli")
+    """DEV-010: where the reference CLI names itself, kevy-cli names itself."""
+    return text.replace(b"redis-cli", b"kevy-cli").replace(b"valkey-cli", b"kevy-cli")
 
 
 def expected_kevy(case, ref):
@@ -305,16 +329,17 @@ def expected_kevy(case, ref):
         return own_name(ref.stdout), own_name(ref.stderr), ref.returncode
     if "kevy.stdout-replace" in case:
         # A deviation in a few bytes of a long output: redis-cli's output with
-        # `old => new` applied, everywhere it occurs, and at least once. `new`
-        # may be empty; a space at its start is written \x20.
-        old, sep, new = case["kevy.stdout-replace"].partition(" =>")
-        new = new.lstrip(" ")
+        # each `old => new` applied in turn, everywhere it occurs, and at least
+        # once. `new` may be empty; a space at its start is written \x20.
         stdout = own_name(ref.stdout)
-        if not sep or unescape(old) not in stdout:
-            sys.exit(f"cligate: case line {case['line']}: kevy.stdout-replace "
-                     f"{old!r} does not occur in redis-cli's output")
-        return (stdout.replace(unescape(old), unescape(new)), own_name(ref.stderr),
-                ref.returncode)
+        for pair in case["kevy.stdout-replace"]:
+            old, sep, new = pair.partition(" =>")
+            new = new.lstrip(" ")
+            if not sep or unescape(old) not in stdout:
+                sys.exit(f"cligate: case line {case['line']}: kevy.stdout-replace "
+                         f"{old!r} does not occur in the reference output")
+            stdout = stdout.replace(unescape(old), unescape(new))
+        return stdout, own_name(ref.stderr), ref.returncode
     return (unescape(case.get("kevy.stdout", "")),
             unescape(case.get("kevy.stderr", "")),
             int(case.get("kevy.exit", "0")))
@@ -444,7 +469,9 @@ def main() -> int:
             ref.reset(case)
             screen = case.get("screen")
             r = normalized(case, on_screen(ref.run(argv, case["stdin"], case["env"],
-                                                   timeline=case.get("timeline"), screen=screen, prepare=case.get("prepare"), then=case.get("then")),
+                                                   program=case.get("reference", "redis-cli"),
+                                                   timeline=case.get("timeline"), screen=screen, prepare=case.get("prepare"), then=case.get("then"),
+                                                   timeout=case.get("timeout")),
                                            screen))
             ref.reset(case)
             if args.show_reference:
@@ -454,8 +481,10 @@ def main() -> int:
             if args.determinism:
                 ref.reset(case)
                 again = normalized(case, on_screen(ref.run(argv, case["stdin"], case["env"],
+                                                           program=case.get("reference", "redis-cli"),
                                                            timeline=case.get("timeline"),
-                                                           screen=screen, prepare=case.get("prepare"), then=case.get("then")), screen))
+                                                           screen=screen, prepare=case.get("prepare"), then=case.get("then"),
+                                                   timeout=case.get("timeout")), screen))
                 if not agrees(case, (r.stdout, r.stderr, r.returncode),
                               (again.stdout, again.stderr, again.returncode)):
                     failed += 1
@@ -473,7 +502,8 @@ def main() -> int:
                 continue
             k = normalized(case, on_screen(ref.run(argv, case["stdin"], case["env"],
                                                    program="kevy-cli",
-                                                   timeline=case.get("timeline"), screen=screen, prepare=case.get("prepare"), then=case.get("then")),
+                                                   timeline=case.get("timeline"), screen=screen, prepare=case.get("prepare"), then=case.get("then"),
+                                                   timeout=case.get("timeout")),
                                            screen))
             want = expected_kevy(case, r)
             got = (k.stdout, k.stderr, k.returncode)

@@ -75,10 +75,30 @@ fn show_plan(c: &Cluster, sources: &[usize], target: usize, moves: &[(usize, u16
     write_out(b"  Destination node:\n");
     super::show::node_indented(&c.nodes[target], b"    ");
     write_out(b"  Resharding plan:\n");
+    if c.cfg.use_atomic_slot_migration {
+        plan_ranges(c, moves);
+        return;
+    }
     for &(s, slot) in moves {
         let text = [format!("    Moving slot {slot} from ").as_bytes(), &c.nodes[s].rec.id, b"\n"]
             .concat();
         write_out(&text);
+    }
+}
+
+/// With atomic slot migration the plan is shown as each source's ranges.
+fn plan_ranges(c: &Cluster, moves: &[(usize, u16)]) {
+    let mut k = 0;
+    while k < moves.len() {
+        let source = moves[k].0;
+        let end = k + moves[k..].iter().take_while(|m| m.0 == source).count();
+        let slots: Vec<u16> = moves[k..end].iter().map(|m| m.1).collect();
+        let ranges = super::migrate_valkey::ranges_text(&slots);
+        write_out(
+            &[&b"    Moving slot range "[..], &ranges, b" from ", &c.nodes[source].rec.id, b"\n"]
+                .concat(),
+        );
+        k = end;
     }
 }
 

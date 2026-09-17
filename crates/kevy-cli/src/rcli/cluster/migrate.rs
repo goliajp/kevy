@@ -22,6 +22,9 @@ pub(crate) fn move_slots(
     moves: &[(usize, u16)],
     progress: Progress,
 ) -> bool {
+    if c.cfg.use_atomic_slot_migration {
+        return super::migrate_valkey::run(c, target, moves, progress);
+    }
     if atomic_everywhere(c) {
         return super::migrate_atomic::run(c, target, moves, progress);
     }

@@ -18,7 +18,8 @@ Shapes, over the current group's ports 17000-17007 (the bus is port + 10000):
 
 `legacy-` before a shape builds it on the legacy group instead, ports
 17010-17017 running Redis 7.4.10: a version without atomic slot migration,
-where the cluster manager moves slots with MIGRATE.
+where the cluster manager moves slots with MIGRATE. `valkey-` builds it on
+ports 17020-17027 running the pinned Valkey, for valkey-cli's own features.
 
 Nodes outside the shape are reset and left alone, for create and add-node.
 Node ids are fixed too: node 17000 is 1700017000...17000.
@@ -29,6 +30,7 @@ import time
 PORTS = list(range(17000, 17008))
 LEGACY_PORTS = list(range(17010, 17018))
 LEGACY_IMAGE = "redis:7.4.10"
+VALKEY_PORTS = list(range(17020, 17028))
 # By node index within a group: masters (index, first slot, last slot),
 # replicas (index, master index).
 SHAPES = {
@@ -76,12 +78,21 @@ def _script(text, **subst):
 class Cluster:
     """Both groups; each starts on first use."""
 
-    def __init__(self, sh, image, cli, tag):
+    def __init__(self, sh, image, cli, tag, valkey_image):
         self.groups = {"": Group(sh, image, cli, tag, PORTS),
-                       "legacy-": Group(sh, LEGACY_IMAGE, cli, tag, LEGACY_PORTS)}
+                       "legacy-": Group(sh, LEGACY_IMAGE, cli, tag, LEGACY_PORTS),
+                       "valkey-": Group(sh, valkey_image, cli, tag, VALKEY_PORTS, "valkey-server")}
+
+    @staticmethod
+    def group_of(shape):
+        """The prefix naming a shape's group, and the group's ports."""
+        for prefix, ports in (("legacy-", LEGACY_PORTS), ("valkey-", VALKEY_PORTS)):
+            if shape.startswith(prefix):
+                return prefix, ports
+        return "", PORTS
 
     def reset(self, shape):
-        prefix = "legacy-" if shape.startswith("legacy-") else ""
+        prefix, _ = self.group_of(shape)
         self.groups[prefix].reset(shape[len(prefix):])
 
     def stop(self):
@@ -92,8 +103,8 @@ class Cluster:
 class Group:
     """One image's nodes. `reset(shape)` before each run of a cluster case."""
 
-    def __init__(self, sh, image, cli, tag, ports):
-        self.sh, self.image, self.cli, self.ports = sh, image, cli, ports
+    def __init__(self, sh, image, cli, tag, ports, server="redis-server"):
+        self.sh, self.image, self.cli, self.ports, self.server = sh, image, cli, ports, server
         self.names = [f"cligate-node{p}-{tag}" for p in ports]
         self.started = False
 
@@ -116,7 +127,7 @@ class Group:
                     f"nodes.conf\\ncluster-node-timeout 1000\\nrepl-diskless-sync-delay 0"
                     f"\\nenable-debug-command yes"
                     f"\\nsave \"\"\\nappendonly no\\n' > /data/redis.conf && "
-                    f"exec redis-server /data/redis.conf")
+                    f"exec {self.server} /data/redis.conf")
             r = self.sh(["docker", "run", "-d", "--name", name, "--network", "host",
                          "--entrypoint", "sh", self.image, "-c", conf])
             if r.returncode != 0:

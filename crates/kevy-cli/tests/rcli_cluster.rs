@@ -937,3 +937,80 @@ fn backup_saves_each_master_and_the_layout() {
     assert!(missing.stdout.ends_with("[ERR] The specified backup directory '/nonexistent' does not exist.\n[ERR] Failed to back cluster!\n") && missing.code == 1);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn valkey_names_atomic_migration_and_stdin_arguments() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let shared = cluster(2, 1);
+    let polls = std::sync::Arc::new(AtomicUsize::new(0));
+    let seen = polls.clone();
+    shared.lock().unwrap().hook = Some(Box::new(move |node, argv| {
+        let words: Vec<String> =
+            argv.iter().map(|a| String::from_utf8_lossy(a).to_uppercase()).collect();
+        match (node, words.iter().map(String::as_str).collect::<Vec<_>>().as_slice()) {
+            (0, ["CLUSTER", "MIGRATESLOTS", ..]) => Some(b"+OK\r\n".to_vec()),
+            (0, ["CLUSTER", "GETSLOTMIGRATIONS"]) => {
+                let state =
+                    if seen.fetch_add(1, Ordering::Relaxed) == 0 { "running" } else { "success" };
+                Some(format!("*1\r\n*6\r\n$9\r\noperation\r\n$6\r\nEXPORT\r\n$11\r\nslot_ranges\r\n$3\r\n0-2\r\n$5\r\nstate\r\n${}\r\n{state}\r\n", state.len()).into_bytes())
+            }
+            (_, ["ECHO", arg]) => Some(format!("${}\r\n{arg}\r\n", arg.len()).into_bytes()),
+            _ => None,
+        }
+    }));
+    let ports = start(&shared);
+    let (p0, p1) = (at(ports[0]), at(ports[1]));
+    let atomic = cli(
+        &[
+            "--cluster",
+            "reshard",
+            &p0,
+            "--cluster-from",
+            &id(0),
+            "--cluster-to",
+            &id(1),
+            "--cluster-slots",
+            "3",
+            "--cluster-yes",
+            "--cluster-use-atomic-slot-migration",
+        ],
+        b"",
+        &[],
+    );
+    let tail = format!(
+        "  Resharding plan:\n    Moving slot range 0-2 from {}\nMoving slot range 0-2 from {p0} to {p1} via atomic slot migration.###\n",
+        id(0)
+    );
+    assert!(atomic.stdout.ends_with(&tail) && atomic.code == 0, "{}", atomic.stdout);
+    let migrate = ["CLUSTER", "MIGRATESLOTS", "SLOTSRANGE", "0", "2", "NODE"].map(String::from);
+    assert!(
+        received(&shared, 0).iter().any(|w| w.len() == 7 && w[..6] == migrate && w[6] == id(1))
+    );
+    let primaries = cli(&["--cluster", "call", &p0, "PING", "--cluster-only-primaries"], b"", &[]);
+    assert_eq!(primaries.stdout, format!(">>> Calling PING\n{p0}: PONG\n{p1}: PONG\n"));
+    let echoed = cli(&["-x", "--cluster", "call", &p0, "ECHO"], b"hi", &[]);
+    assert!(
+        echoed.stdout.starts_with(&format!(">>> Calling ECHO hi\n{p0}: HI\n")),
+        "{}",
+        echoed.stdout
+    );
+    let tagged = cli(&["-X", "T", "--cluster", "call", &p0, "ECHO", "nope"], b"hi", &[]);
+    assert_eq!(
+        (tagged.stderr.as_str(), tagged.code),
+        ("Using -X option but stdin tag not match.\n", 1)
+    );
+    let named = cli(
+        &[
+            "--cluster",
+            "add-node",
+            "127.0.0.1:1",
+            &p0,
+            "--cluster-replica",
+            "--cluster-primary-id",
+            "zzz",
+        ],
+        b"",
+        &[],
+    );
+    assert!(named.stdout.ends_with("[ERR] No such master ID zzz\n"), "{}", named.stdout);
+}
