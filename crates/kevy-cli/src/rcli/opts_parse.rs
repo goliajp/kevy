@@ -59,6 +59,10 @@ pub(crate) fn value(argv: &[Vec<u8>], i: usize) -> Option<&[u8]> {
 
 fn step(o: &mut Opts, argv: &[Vec<u8>], i: usize) -> Step {
     let flag = argv[i].as_slice();
+    // `--kevy <tool> [args]`: everything after belongs to the tool.
+    if flag == b"--kevy" {
+        return Step::Stop;
+    }
     let found = connection_flag(o, argv, i)
         .or_else(|| output_flag(o, argv, i))
         .or_else(|| super::opts_modes::mode_flag(o, argv, i))
