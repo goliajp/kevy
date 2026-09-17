@@ -1341,3 +1341,72 @@ fn latency_modes_report_in_every_output_format() {
         let _ = dist.finish();
     }
 }
+
+#[test]
+fn load_and_local_measurement_modes() {
+    let s = Srv::start();
+    let p = s.port();
+    let lru = Live::start(&["-p", &p, "--lru-test", "100"], &[]);
+    lru.wait_for(" Gets/sec | Hits: ");
+    lru.interrupt();
+    let _ = lru.finish();
+
+    let local = cli(&["--intrinsic-latency", "0"], b"", &[]);
+    assert!(
+        local.stdout.starts_with("Max latency so far: ")
+            && local.stdout.contains(" total runs (avg latency: "),
+        "{}",
+        local.stdout
+    );
+    let stopped = Live::start(&["--intrinsic-latency", "100"], &[]);
+    stopped.wait_for("Max latency so far: ");
+    stopped.interrupt();
+    stopped.wait_for("longer than the average latency.\n");
+    assert_eq!(stopped.finish(), 0);
+
+    // kevy has no vector sets: VDIM is refused.
+    let refused = cli(&["-p", &p, "--vset-recall", "v"], b"", &[]);
+    assert_eq!(
+        (refused.stderr.as_str(), refused.code),
+        ("Error: Cannot get dimension for key v\n", 1)
+    );
+}
+
+#[test]
+fn vset_recall_compares_approximate_with_exact_search() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port().to_string();
+    let server = std::thread::spawn(move || {
+        use std::io::Read;
+        let (mut conn, _) = listener.accept().unwrap();
+        let mut buf = [0u8; 4096];
+        let mut answered_exact = false;
+        while let Ok(got @ 1..) = conn.read(&mut buf) {
+            let asked = &buf[..got];
+            let has = |w: &[u8]| asked.windows(w.len()).any(|x| x == w);
+            let reply: &[u8] = if has(b"VDIM") {
+                b":2\r\n"
+            } else if has(b"VRANDMEMBER") {
+                b"*2\r\n$1\r\na\r\n$1\r\nb\r\n"
+            } else if has(b"VEMB") {
+                b"*2\r\n$1\r\n1\r\n$3\r\n2.5\r\n*2\r\n,3\r\n:4\r\n"
+            } else if has(b"TRUTH") {
+                answered_exact = true;
+                // approximate finds a and c; exact is a and b: recall 50%
+                b"*2\r\n$1\r\na\r\n$1\r\nc\r\n*2\r\n$1\r\na\r\n$1\r\nb\r\n"
+            } else {
+                b"+OK\r\n"
+            };
+            if conn.write_all(reply).is_err() {
+                break;
+            }
+        }
+        assert!(answered_exact);
+    });
+    let recall = Live::start(&["-p", &port, "--vset-recall", "vs", "-i", "0.01"], &[]);
+    recall.wait_for("# Mixing 1 random element vectors, top 100 results, EF=500\n\nQueries: 1 | Avg recall: 50.00%\n");
+    recall.interrupt();
+    recall.wait_for("  50.0%          99.90%\n  60.0%           0.00%\n");
+    assert_eq!(recall.finish(), 0);
+    server.join().unwrap();
+}

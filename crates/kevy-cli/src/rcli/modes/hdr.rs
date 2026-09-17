@@ -41,6 +41,12 @@ impl Histogram {
         Histogram::new(4, 1 << 40)
     }
 
+    /// Recall percentages recorded as hundredths plus one: two significant
+    /// figures.
+    pub(crate) fn recalls() -> Histogram {
+        Histogram::new(2, 1_000_000)
+    }
+
     /// Microseconds: three significant figures, up to 60 s.
     pub(crate) fn latencies() -> Histogram {
         Histogram::new(3, 60_000_000)
@@ -98,6 +104,10 @@ impl Histogram {
     /// The value below which `percentile` percent of values fall: the
     /// highest value of the bucket holding that rank. 0 when empty.
     pub(crate) fn value_at_percentile(&self, percentile: f64) -> u64 {
+        if percentile <= 0.0 {
+            // At 0 the reference reports the lowest value of the first bucket.
+            return self.counts.keys().next().map_or(0, |&i| self.layout.value_at(i));
+        }
         let wanted = ((percentile.min(100.0) / 100.0 * self.total as f64 + 0.5) as u64).max(1);
         let mut cumulative = 0;
         for (&index, &count) in &self.counts {
@@ -107,6 +117,18 @@ impl Histogram {
             }
         }
         0
+    }
+
+    /// The lowest value of the lowest bucket used, and the highest of the
+    /// highest; `(0, 0)` when empty.
+    pub(crate) fn bounds(&self) -> (u64, u64) {
+        let low = self.counts.keys().next().map_or(0, |&i| self.layout.value_at(i));
+        let high = self
+            .counts
+            .keys()
+            .next_back()
+            .map_or(0, |&i| self.layout.highest_equivalent(self.layout.value_at(i)));
+        (low, high)
     }
 
     /// The mean and standard deviation, each value taken at the middle of
@@ -222,7 +244,13 @@ mod tests {
         let h = of(Histogram::latencies, &[100, 200, 300, 400]);
         assert_eq!(h.value_at_percentile(50.0), 200);
         assert_eq!(h.value_at_percentile(99.0), 400);
-        assert_eq!(h.value_at_percentile(0.0), 100, "at least the first");
+        assert_eq!(h.value_at_percentile(0.0), 100, "the lowest of the first bucket");
+        let r = of(Histogram::recalls, &[8001, 10001, 10001]);
+        assert_eq!(r.value_at_percentile(0.0), 8000);
+        assert_eq!(r.value_at_percentile(0.1), 8031);
+        assert_eq!(r.value_at_percentile(50.0), 10047);
+        assert_eq!(r.bounds(), (8000, 10047));
+        assert_eq!(Histogram::recalls().bounds(), (0, 0));
         assert_eq!(h.value_at_percentile(150.0), 400);
         assert_eq!(Histogram::latencies().value_at_percentile(50.0), 0);
     }

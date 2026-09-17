@@ -38,6 +38,8 @@ pub(crate) fn run(s: &mut Session) -> Option<u8> {
             | Mode::Stat
             | Mode::Latency
             | Mode::LatencyDist
+            | Mode::VsetRecall
+            | Mode::LruTest
     );
     if needs_server && !s.connect(Connect::Report) {
         return Some(1);
@@ -49,6 +51,14 @@ pub(crate) fn run(s: &mut Session) -> Option<u8> {
         Mode::Stat => super::stat::run(s),
         Mode::Latency => super::latency::run(s),
         Mode::LatencyDist => super::latency_dist::run(s),
+        Mode::VsetRecall => {
+            let key = s.opts.modes.vset_recall.clone().unwrap_or_default();
+            super::vset_recall::run(s, &key)
+        }
+        Mode::LruTest => super::lru_test::run(s, s.opts.modes.lru_test.unwrap_or(0)),
+        Mode::IntrinsicLatency => {
+            super::intrinsic::run(s.opts.modes.intrinsic_latency.unwrap_or(0))
+        }
         Mode::BigKeys => super::bigkeys::run(s, Measure::Length),
         Mode::MemKeys => {
             super::bigkeys::run(s, Measure::Memory { samples: s.opts.modes.memkeys_samples })
