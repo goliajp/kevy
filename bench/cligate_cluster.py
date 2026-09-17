@@ -182,11 +182,10 @@ class Group:
         members = [m[0] for m in masters] + [r[0] for r in replicas]
         if not members:
             return
-        self._meet(members, members[1:])
+        self._meet(members[0], members[1:])
         self._converge(members, lambda view: len(view) == len(members)
                        and all(" handshake" not in l and "fail" not in l for l in view),
-                       repair=lambda views: self._meet(members, [
-                           p for p in members[1:] if not any(f":{p}@" in l for l in views[0])]))
+                       repair=lambda views: self._remeet(members, views))
         for port, master in replicas:
             self._exec(f"redis-cli -p {port} CLUSTER REPLICATE "
                        f"$(redis-cli -p {master} CLUSTER MYID)")
@@ -198,9 +197,19 @@ class Group:
         self._wait(lambda: self._exec(f"{links or 'true'}; {states}", check=False)
                    .split().count("1") == want)
 
-    def _meet(self, members, ports):
+    def _meet(self, origin, ports):
         for port in ports:
-            self._exec(f"redis-cli -p {members[0]} CLUSTER MEET 127.0.0.1 {port}")
+            self._exec(f"redis-cli -p {origin} CLUSTER MEET 127.0.0.1 {port}")
+
+    def _remeet(self, members, views):
+        """Each member meets whoever its own table is missing. A handshake
+        can be lost in either direction: seen from 17000 the cluster was
+        whole while 17001 and 17002 knew only themselves, and 17000's
+        plain PINGs could not fix that - a node ignores them from a node
+        it does not know."""
+        for port, view in zip(members, views):
+            missing = [p for p in members if p != port and not any(f":{p}@" in l for l in view)]
+            self._meet(port, missing)
 
     def _converge(self, members, done, repair=None):
         """Every member holds the same table, and the table is `done`.
@@ -208,7 +217,8 @@ class Group:
         `repair` runs on the views every REPAIR_S while waiting. A node
         drops a handshake it cannot finish within node-timeout (1s here)
         and never retries it, so a MEET sent while the host is busy can be
-        lost for good; the first convergence re-sends the ones missing."""
+        lost for good; the first convergence re-sends the ones missing
+        (`_remeet`)."""
         # One exec reads every member's table: a docker exec per node per
         # poll is most of a reset's time.
         script = "; echo ==; ".join(_script(VIEW, PORT=str(p)) for p in members)
