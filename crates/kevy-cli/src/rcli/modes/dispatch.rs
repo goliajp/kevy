@@ -30,7 +30,14 @@ pub(crate) fn run(s: &mut Session) -> Option<u8> {
     let (mode, flag) = first_mode(&s.opts)?;
     let needs_server = matches!(
         mode,
-        Mode::Scan | Mode::BigKeys | Mode::MemKeys | Mode::KeyStats | Mode::HotKeys | Mode::Stat
+        Mode::Scan
+            | Mode::BigKeys
+            | Mode::MemKeys
+            | Mode::KeyStats
+            | Mode::HotKeys
+            | Mode::Stat
+            | Mode::Latency
+            | Mode::LatencyDist
     );
     if needs_server && !s.connect(Connect::Report) {
         return Some(1);
@@ -40,6 +47,8 @@ pub(crate) fn run(s: &mut Session) -> Option<u8> {
         Mode::HotKeys => super::hotkeys::run(s),
         Mode::KeyStats => super::keystats::run(s),
         Mode::Stat => super::stat::run(s),
+        Mode::Latency => super::latency::run(s),
+        Mode::LatencyDist => super::latency_dist::run(s),
         Mode::BigKeys => super::bigkeys::run(s, Measure::Length),
         Mode::MemKeys => {
             super::bigkeys::run(s, Measure::Memory { samples: s.opts.modes.memkeys_samples })

@@ -108,7 +108,7 @@ impl Stats {
             total,
             sampled: 0,
             memory: 0,
-            sizes: Histogram::default(),
+            sizes: Histogram::sizes(),
             name_bytes: 0,
             longest_name: 0,
             names: [0; NAME_BUCKETS.len()],

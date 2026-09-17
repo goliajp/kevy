@@ -8,6 +8,8 @@ mod hotkeys;
 mod human;
 mod keystats;
 mod keystats_report;
+mod latency;
+mod latency_dist;
 mod pages;
 mod progress;
 mod reconnect;

@@ -1253,3 +1253,59 @@ timeline: 0.7 ; $ redis-cli -p $PORT CLIENT KILL TYPE normal ; 2.0 ; INT ; 0.3
 run: -p $PORT --stat -i 0.3
 mask: [0-9][0-9.]*[BKMG]?( \(\+[0-9]+\))? *
 head: 4
+
+# ─── P2 · --latency family ───────────────────────────────────────────────────
+# Readings differ run to run: every number compares as `#`.
+
+[RC-088 latency-raw]
+run: -p $PORT --latency --raw -i 0.3
+mask: [0-9][0-9.]*
+
+[RC-088 latency-csv]
+run: -p $PORT --latency --csv -i 0.3
+mask: [0-9][0-9.]*
+
+[RC-088 latency-json]
+run: -p $PORT --latency --json -i 0.3
+mask: [0-9][0-9.]*
+
+[RC-088 latency-quoted-json-prints-nothing]
+run: -p $PORT --latency --quoted-json -i 0.3
+
+[RC-090 latency-percentiles-raw]
+run: -p $PORT --latency --raw -i 0.3 --latency-percentiles 50,99.9
+mask: [0-9]+\.[0-9]+ |[0-9]+\.[0-9]+$|[0-9]+ (?=[0-9])
+
+[RC-090 latency-percentiles-json]
+run: -p $PORT --latency --json -i 0.3 --latency-percentiles 50,99
+mask: : [0-9][0-9.]*
+
+[RC-090 latency-percentile-refused]
+run: -p $PORT --latency --latency-percentiles 50,abc
+
+[RC-088,RC-090 latency-on-a-terminal]
+screen: pty
+timeline: 0.6 ; INT ; 0.2
+run: -p $PORT --latency --latency-percentiles 50
+mask: [0-9][0-9.]*
+
+[RC-089 latency-history]
+screen: pty
+timeline: 1.1 ; INT ; 0.2
+run: -p $PORT --latency-history -i 0.4 --raw
+mask: [0-9][0-9.]*
+head: 1
+
+[RC-091 latency-dist]
+screen: pty
+timeline: 1.3 ; INT ; 0.2
+run: -p $PORT --latency-dist -i 0.4
+mask: [0-9]+
+head: 8
+
+[RC-091,RC-092 latency-dist-mono]
+screen: pty
+timeline: 1.3 ; INT ; 0.2
+run: -p $PORT --latency-dist --mono -i 0.4
+mask: [0-9]+
+head: 8

@@ -7,7 +7,7 @@ compares the screens.
 
 The model is a VT100 subset: printable bytes at the cursor with wrap at the
 right margin, CR, LF (as a terminal with ONLCR shows it: a new line), BS, and
-CSI A/B/C/D (moves), H (home, or row;col), J (erase below / whole screen), K
+CSI A/B/C/D (moves), G (column), H (home, or row;col), J (erase below / whole screen), K
 (erase right / left / line), m (SGR, kept per cell as the attribute string so
 a grey hint and a plain word are different screens). Anything else fails the
 case rather than being ignored: an unmodelled sequence is a question the
@@ -52,6 +52,8 @@ class Screen:
             self.col = min(self.cols - 1, self.col + n)
         elif final == "D":
             self.col = max(0, self.col - n)
+        elif final == "G":
+            self.col = (nums[0] - 1) if nums and nums[0] else 0
         elif final == "H":
             self.row = (nums[0] - 1) if len(nums) > 0 and nums[0] else 0
             self.col = (nums[1] - 1) if len(nums) > 1 and nums[1] else 0
