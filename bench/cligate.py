@@ -41,7 +41,8 @@ import sys
 import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-import cligate_screen  # noqa: E402  (a sibling file, not an installed module)
+import cligate_cluster  # noqa: E402  (sibling files, not installed modules)
+import cligate_screen  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 HERE = ROOT / "bench" / "cligate"
@@ -101,7 +102,7 @@ def parse_cases(path: pathlib.Path):
             cur["stdin"] += unescape(expand(value))
         elif key in ("run", "deviation", "kevy.stdout", "kevy.stderr", "kevy.exit",
                      "kevy.stdout-contains", "kevy.stdout-replace", "timeline", "screen",
-                     "compare", "mask", "head", "prepare"):
+                     "compare", "mask", "head", "prepare", "cluster"):
             cur[key] = value
         else:
             sys.exit(f"cligate: {path}:{lineno}: unknown field {key!r}")
@@ -173,6 +174,7 @@ class Reference:
         self.server = f"cligate-server-{tag}"
         self.auth = f"cligate-auth-{tag}"
         self.cli = f"cligate-cli-{tag}"
+        self.cluster = cligate_cluster.Cluster(sh, image, self.cli, tag)
 
     def _start(self, name, *cmd):
         r = sh(["docker", "run", "-d", "--name", name, "--network", "host",
@@ -203,6 +205,7 @@ class Reference:
         return self
 
     def __exit__(self, *exc):
+        self.cluster.stop()
         sh(["docker", "rm", "-f", self.server, self.auth, self.cli])
         sh(["docker", "volume", "rm", "-f", self.volume])
 
@@ -238,12 +241,19 @@ class Reference:
         except subprocess.TimeoutExpired:
             return subprocess.CompletedProcess(argv, 124, b"", b"<timed out>")
 
-    def reset(self, setup):
+    def reset(self, case):
         if not self.ensure_up():
             sys.exit("cligate: the reference server did not come back")
         self.run(["-p", str(PORT), "FLUSHALL"], b"", {})
-        for line in setup:
-            r = self.run(["-p", str(PORT), *shlex.split(expand(line))], b"", {})
+        target = ["-p", str(PORT)]
+        if "cluster" in case:
+            try:
+                self.cluster.reset(case["cluster"])
+            except RuntimeError as e:
+                sys.exit(f"cligate: case line {case['line']}: {e}")
+            target = ["-c", "-p", str(cligate_cluster.PORTS[0])]
+        for line in case["setup"]:
+            r = self.run([*target, *shlex.split(expand(line))], b"", {})
             if r.returncode != 0:
                 sys.exit(f"cligate: setup failed: {line}: {r.stderr.decode()}")
 
@@ -372,23 +382,23 @@ def main() -> int:
     with Reference(redis_image(), binary) as ref:
         for case in selected:
             argv = argv_of(case)
-            ref.reset(case["setup"])
+            ref.reset(case)
             screen = case.get("screen")
             r = normalized(case, on_screen(ref.run(argv, case["stdin"], case["env"],
                                                    timeline=case.get("timeline"), screen=screen, prepare=case.get("prepare")),
                                            screen))
-            ref.reset(case["setup"])
+            ref.reset(case)
             if args.show_reference:
                 print(f"[{','.join(case['ids'])} {case['name']}] exit={r.returncode}")
                 print(f"    stdout {r.stdout!r}\n    stderr {r.stderr!r}")
                 continue
             if args.determinism:
-                ref.reset(case["setup"])
+                ref.reset(case)
                 again = normalized(case, on_screen(ref.run(argv, case["stdin"], case["env"],
                                                            timeline=case.get("timeline"),
                                                            screen=screen, prepare=case.get("prepare")), screen))
-                if (r.stdout, r.stderr, r.returncode) != (again.stdout, again.stderr,
-                                                          again.returncode):
+                if not agrees(case, (r.stdout, r.stderr, r.returncode),
+                              (again.stdout, again.stderr, again.returncode)):
                     failed += 1
                     print(f"UNSTABLE [{','.join(case['ids'])} {case['name']}] "
                           f"(cases.txt:{case['line']}): {r.stdout[:120]!r} vs {again.stdout[:120]!r}")

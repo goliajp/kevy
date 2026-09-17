@@ -2,6 +2,9 @@
 #   run:    argv (shlex); $PORT $AUTH_PORT $SOCKET expand
 #   setup:  repeatable; redis-cli -p $PORT <setup> after FLUSHALL
 #   prepare: a shell command run in the CLI container before each run
+#   cluster: a shape (bench/cligate_cluster.py: empty, 3, 3x1) the cluster nodes
+#           on 17000-17007 are rebuilt to before each run; setup then goes
+#           through redis-cli -c -p 17000
 #   env:    K=V, repeatable
 #   stdin:  C escapes (\n \r \t \\ \xHH), repeatable, concatenated
 #   timeline: instead of stdin, steps over time separated by ` ; `: seconds to
@@ -1533,3 +1536,186 @@ run: -p $PORT --ldb --eval /tmp/cligate-ldb.lua k , v
 kevy.stdout: Lua debugging session started, please use:\nquit    -- End the session.\nrestart -- Restart the script in debug mode again.\nhelp    -- Show Lua script debugging commands.\n\n{0;37;49|* Stopped at 1, stop reason = step over}\n{0;33;49|-> 1   local a = 1}\nlua debugger> s\n{0;37;49|* Stopped at 2, stop reason = step over}\n{0;33;49|-> 2   redis.call("SET", KEYS[1], ARGV[1])}\nlua debugger> restart\n\nLua debugging session started, please use:\nquit    -- End the session.\nrestart -- Restart the script in debug mode again.\nhelp    -- Show Lua script debugging commands.\n\n{0;37;49|* Stopped at 1, stop reason = step over}\n{0;33;49|-> 1   local a = 1}\nlua debugger> quit\n
 kevy.exit: 0
 
+
+# ─── P4 · cluster ────────────────────────────────────────────────────────────
+
+[RC-008 redirect-follows-moved]
+cluster: 3
+run: -c -p 17000 SET foo bar
+
+[RC-008 redirect-repl-says-where-it-went]
+cluster: 3
+setup: SET foo bar
+stdin: get foo\nset a 1\nget a\nmget foo a\n
+run: -c -p 17000
+
+[RC-008 redirect-follows-ask-to-an-importing-node]
+cluster: 3
+setup: SET foo bar
+prepare: redis-cli -p 17001 CLUSTER SETSLOT 12182 IMPORTING $(redis-cli -p 17002 CLUSTER MYID) >/dev/null; redis-cli -p 17002 CLUSTER SETSLOT 12182 MIGRATING $(redis-cli -p 17001 CLUSTER MYID) >/dev/null; redis-cli -p 17002 DEL foo >/dev/null
+stdin: set foo z\nget foo\n
+run: -c -p 17000
+
+[RC-008 redirect-with-repeats-and-errexit]
+cluster: 3
+setup: SET foo bar
+run: -c -e -r 2 -p 17000 GET foo
+
+[RC-008 redirect-on-a-terminal-moves-the-prompt]
+cluster: 3
+screen: pty
+timeline: 0.5 ; get foo\r ; 0.3 ; \x04 ; 0.2
+run: -c -p 17000
+
+[RC-008 without-c-a-redirection-is-an-error]
+cluster: 3
+run: -p 17000 GET foo
+
+[RC-107 cluster-unknown-subcommand-is-case-sensitive]
+run: --cluster HELP
+
+[RC-107 cluster-too-few-arguments]
+run: --cluster info
+
+[RC-107 cluster-call-needs-a-command]
+run: --cluster call 127.0.0.1:17000
+
+[RC-107 cluster-address-without-port]
+run: --cluster info 127.0.0.1
+
+[RC-107 cluster-address-port-zero]
+run: --cluster info 127.0.0.1 0
+
+[RC-107 cluster-address-too-many-words]
+run: --cluster info 127.0.0.1:17000 extra
+
+[RC-107 cluster-node-address-must-be-one-word]
+run: --cluster call 127.0.0.1 PING
+
+[RC-107 cluster-address-port-is-read-leniently]
+cluster: 3
+run: --cluster info 127.0.0.1:17000x
+
+[RC-107 cluster-address-in-two-words]
+cluster: 3
+run: --cluster info 127.0.0.1 17001
+
+[RC-107 cluster-arguments-after-options]
+cluster: 3
+run: --cluster info --cluster-yes 127.0.0.1:17000
+
+[RC-107 cluster-negative-port]
+run: --cluster info 127.0.0.1:-1
+
+[RC-107 cluster-node-refuses]
+run: --cluster info 127.0.0.1:1
+
+[RC-107 cluster-node-without-cluster-support]
+run: --cluster info 127.0.0.1:$PORT
+
+[RC-108 cluster-help]
+run: --cluster help
+
+[RC-108 cluster-help-ignores-arguments]
+run: --cluster help extra
+
+[RC-111 cluster-info-counts-keys-and-replicas]
+cluster: 3x1
+setup: SET a 1
+setup: SET b 2
+setup: SET foo bar
+run: --cluster info 127.0.0.1:17000
+
+[RC-111 cluster-info-from-a-replica]
+# A reset replica relearns the other nodes by gossip, so its table's order
+# changes between the two runs; one line per master, compared as a set.
+cluster: 3x1
+compare: lines-any-order
+run: --cluster info 127.0.0.1:17004
+
+[RC-111 cluster-info-names-the-entry-as-given]
+cluster: 3
+run: --cluster info localhost:17000
+
+[RC-110 cluster-check-healthy]
+cluster: 3x1
+run: --cluster check 127.0.0.1:17000
+
+[RC-110 cluster-check-alone]
+cluster: empty
+run: --cluster check 127.0.0.1:17006
+
+[RC-110 cluster-check-open-slot]
+cluster: 3
+prepare: redis-cli -p 17001 CLUSTER SETSLOT 5 IMPORTING $(redis-cli -p 17000 CLUSTER MYID) >/dev/null; redis-cli -p 17000 CLUSTER SETSLOT 5 MIGRATING $(redis-cli -p 17001 CLUSTER MYID) >/dev/null
+run: --cluster check 127.0.0.1:17000
+
+[RC-110 cluster-check-uncovered-slots-and-ranges]
+cluster: 3
+# The other nodes learn of the dropped slots by gossip: wait until they have.
+prepare: redis-cli -p 17000 CLUSTER DELSLOTSRANGE 100 200 >/dev/null; redis-cli -p 17000 CLUSTER DELSLOTS 300 >/dev/null; for i in $(seq 100); do redis-cli -p 17001 CLUSTER NODES | grep -q '0-99 201-299 301-5460' && break; sleep 0.05; done; for i in $(seq 100); do redis-cli -p 17002 CLUSTER NODES | grep -q '0-99 201-299 301-5460' && break; sleep 0.05; done
+run: --cluster check 127.0.0.1:17000
+
+[RC-110 cluster-check-nodes-disagree]
+cluster: 3
+# 17001 claims slot 300 in its own view only; the others settle on it being
+# unowned.
+prepare: redis-cli -p 17000 CLUSTER DELSLOTS 300 >/dev/null; redis-cli -p 17001 CLUSTER ADDSLOTS 300 >/dev/null; for i in $(seq 100); do redis-cli -p 17001 CLUSTER NODES | grep -q '0-299 301-5460' && break; sleep 0.05; done; for i in $(seq 100); do redis-cli -p 17002 CLUSTER NODES | grep -q '0-299 301-5460' && break; sleep 0.05; done
+run: --cluster check 127.0.0.1:17000
+
+[RC-110 cluster-check-an-unreachable-replica]
+cluster: 3x1
+prepare: redis-cli -p 17005 SHUTDOWN NOSAVE >/dev/null 2>&1; sleep 0.2
+run: --cluster check 127.0.0.1:17000
+
+[RC-110 cluster-check-multiple-owners-none]
+cluster: 3
+run: --cluster check 127.0.0.1:17000 --cluster-search-multiple-owners
+
+[RC-120 cluster-call-everywhere]
+cluster: 3x1
+run: --cluster call 127.0.0.1:17000 CONFIG GET port
+
+[RC-120 cluster-call-errors-keep-their-blank-line]
+cluster: 3
+run: --cluster call 127.0.0.1:17000 SET a 1
+
+[RC-120 cluster-call-only-masters]
+cluster: 3x1
+setup: SET a 1
+run: --cluster call 127.0.0.1:17000 GET a --cluster-only-masters
+
+[RC-120 cluster-call-only-replicas]
+cluster: 3x1
+run: --cluster call 127.0.0.1:17003 ROLE --cluster-only-replicas
+mask: [0-9]{3,}
+
+[RC-120 cluster-call-with-a-delimiter]
+cluster: 3
+run: -d X --cluster call 127.0.0.1:17000 CONFIG GET port
+
+[RC-121 cluster-set-timeout-too-small]
+run: --cluster set-timeout 127.0.0.1:17000 99
+
+[RC-121 cluster-set-timeout-not-a-number]
+run: --cluster set-timeout 127.0.0.1:17000 abc
+
+[RC-121 cluster-set-timeout]
+cluster: 3x1
+run: --cluster set-timeout 127.0.0.1:17000 1000
+
+[RC-125 cluster-log-colours-on-an-xterm]
+cluster: 3
+env: TERM=xterm
+prepare: redis-cli -p 17001 CLUSTER SETSLOT 5 IMPORTING $(redis-cli -p 17000 CLUSTER MYID) >/dev/null
+run: --cluster check 127.0.0.1:17000 --cluster-search-multiple-owners
+
+[RC-125 cluster-call-colours-only-its-heading]
+cluster: 3
+env: TERM=xterm
+run: --cluster call 127.0.0.1:17000 PING
+
+[RC-125 cluster-set-timeout-colours]
+cluster: 3
+env: TERM=xterm
+run: --cluster set-timeout 127.0.0.1:17000 1000

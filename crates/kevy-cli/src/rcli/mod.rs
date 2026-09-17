@@ -4,6 +4,7 @@
 //! against the same server and compares the bytes; where kevy-cli differs on
 //! purpose, `bench/cligate/deviations.txt` says where and why.
 
+mod cluster;
 mod cnum;
 mod conn;
 mod docs;
@@ -22,6 +23,7 @@ mod opts;
 mod opts_modes;
 mod opts_parse;
 mod prompt;
+mod redirect;
 mod repl;
 mod repr;
 mod send;

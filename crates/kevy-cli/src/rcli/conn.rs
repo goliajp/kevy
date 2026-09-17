@@ -115,6 +115,30 @@ impl Conn {
         self.write_raw(&frame)
     }
 
+    /// Send `argv` and read its reply; pushes that arrive first are skipped.
+    pub(crate) fn request(&mut self, argv: &[&[u8]]) -> Result<Reply, LinkError> {
+        let mut replies = self.pipeline(&[argv.to_vec()])?;
+        replies.pop().ok_or(LinkError::Eof)
+    }
+
+    /// Send every command in one write, then read one reply for each, in
+    /// order: a batch costs one round trip, not one per command.
+    pub(crate) fn pipeline(&mut self, commands: &[Vec<&[u8]>]) -> Result<Vec<Reply>, LinkError> {
+        let mut frame = Vec::new();
+        for argv in commands {
+            kevy_resp::encode_command_borrowed(&mut frame, argv);
+        }
+        self.write_raw(&frame)?;
+        let mut replies = Vec::with_capacity(commands.len());
+        while replies.len() < commands.len() {
+            match self.read_reply()? {
+                (Reply::Push(_), _) => {}
+                (reply, _) => replies.push(reply),
+            }
+        }
+        Ok(replies)
+    }
+
     /// Write bytes as they are.
     pub(crate) fn write_raw(&mut self, bytes: &[u8]) -> Result<(), LinkError> {
         let r = match &mut self.stream {
