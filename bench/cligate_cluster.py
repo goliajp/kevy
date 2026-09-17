@@ -43,6 +43,7 @@ SHAPES = {
     "3+1": ([(0, 0, 6000), (1, 6001, 12000), (2, 12001, 16383), (3, None, None)], []),
 }
 CONVERGE_S = 20
+REPAIR_S = 3
 
 # Reset every node: replicas first (a reset replica becomes an empty master),
 # then masters, which must hold no keys. The node timeout set-timeout may have
@@ -181,10 +182,11 @@ class Group:
         members = [m[0] for m in masters] + [r[0] for r in replicas]
         if not members:
             return
-        for port in members[1:]:
-            self._exec(f"redis-cli -p {members[0]} CLUSTER MEET 127.0.0.1 {port}")
+        self._meet(members, members[1:])
         self._converge(members, lambda view: len(view) == len(members)
-                       and all(" handshake" not in l and "fail" not in l for l in view))
+                       and all(" handshake" not in l and "fail" not in l for l in view),
+                       repair=lambda views: self._meet(members, [
+                           p for p in members[1:] if not any(f":{p}@" in l for l in views[0])]))
         for port, master in replicas:
             self._exec(f"redis-cli -p {port} CLUSTER REPLICATE "
                        f"$(redis-cli -p {master} CLUSTER MYID)")
@@ -196,18 +198,34 @@ class Group:
         self._wait(lambda: self._exec(f"{links or 'true'}; {states}", check=False)
                    .split().count("1") == want)
 
-    def _converge(self, members, done):
-        """Every member holds the same table, and the table is `done`."""
+    def _meet(self, members, ports):
+        for port in ports:
+            self._exec(f"redis-cli -p {members[0]} CLUSTER MEET 127.0.0.1 {port}")
+
+    def _converge(self, members, done, repair=None):
+        """Every member holds the same table, and the table is `done`.
+
+        `repair` runs on the views every REPAIR_S while waiting. A node
+        drops a handshake it cannot finish within node-timeout (1s here)
+        and never retries it, so a MEET sent while the host is busy can be
+        lost for good; the first convergence re-sends the ones missing."""
         # One exec reads every member's table: a docker exec per node per
         # poll is most of a reset's time.
         script = "; echo ==; ".join(_script(VIEW, PORT=str(p)) for p in members)
 
         seen = []
 
+        last_repair = [time.time()]
+
         def agreed():
             views = [v.strip().splitlines() for v in self._exec(script).split("==\n")]
             seen[:] = views
-            return all(v == views[0] for v in views) and done(views[0])
+            if all(v == views[0] for v in views) and done(views[0]):
+                return True
+            if repair and time.time() - last_repair[0] > REPAIR_S:
+                repair(views)
+                last_repair[0] = time.time()
+            return False
         # When it does not converge, say what each member last saw.
         self._wait(agreed, lambda: "\n".join(
             f"  {p} sees:\n" + "\n".join(f"    {l}" for l in v) for p, v in zip(members, seen)))

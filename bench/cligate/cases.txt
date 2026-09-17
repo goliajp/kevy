@@ -930,8 +930,10 @@ timeline: 0.5 ; ping\r ; 0.4 ; clear\r ; 0.4 ; ping\r ; 0.4 ; \x04 ; 0.3
 run: -p $PORT
 
 [RC-129 prompt-shows-the-database]
+# KILL cuts the screen wherever the client has got to: under load 0.4s
+# after ping was too short for redis-cli to print QUEUED and the prompt.
 screen: pty
-timeline: 0.5 ; select 3\r ; 0.4 ; multi\r ; 0.4 ; ping\r ; 0.4 ; KILL
+timeline: 0.5 ; select 3\r ; 0.4 ; multi\r ; 0.4 ; ping\r ; 1.0 ; KILL
 run: -p $PORT
 
 [RC-129 prompt-after-exec]
