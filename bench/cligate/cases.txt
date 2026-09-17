@@ -1824,3 +1824,80 @@ run: --cluster create 127.0.0.1
 
 [RC-109 cluster-create-unreachable-node]
 run: --cluster create 127.0.0.1:1 127.0.0.1:2 127.0.0.1:3
+
+[RC-118 cluster-add-node-master]
+cluster: 3
+compare: cluster
+run: --cluster add-node 127.0.0.1:17003 127.0.0.1:17000
+
+[RC-118 cluster-add-node-copies-functions]
+cluster: 3
+compare: cluster
+prepare: redis-cli -p 17000 FUNCTION LOAD "$(printf '#!lua name=lib\nredis.register_function(\"f\", function() return 1 end)')" >/dev/null
+run: --cluster add-node 127.0.0.1:17003 127.0.0.1:17000
+
+[RC-118 cluster-add-node-with-functions-of-its-own]
+cluster: 3
+compare: cluster
+prepare: redis-cli -p 17003 FUNCTION LOAD "$(printf '#!lua name=lib\nredis.register_function(\"f\", function() return 1 end)')" >/dev/null
+run: --cluster add-node 127.0.0.1:17003 127.0.0.1:17000
+
+[RC-118 cluster-add-node-replica-of-a-named-master]
+cluster: 3
+compare: cluster
+mask: Waiting for the cluster to join\n\.*\n
+run: --cluster add-node 127.0.0.1:17003 127.0.0.1:17000 --cluster-slave --cluster-master-id 1700117001170011700117001170011700117001
+
+[RC-118 cluster-add-node-replica-of-the-least-replicated-master]
+# 17000 and 17001 get a replica each first, so 17002 is the one choice.
+cluster: 3
+compare: cluster
+mask: Waiting for the cluster to join\n\.*\n
+prepare: redis-cli -p 17000 CLUSTER MEET 127.0.0.1 17003 >/dev/null; redis-cli -p 17000 CLUSTER MEET 127.0.0.1 17004 >/dev/null; for i in $(seq 100); do redis-cli -p 17003 CLUSTER NODES | grep -q '1700217002170021700217002170021700217002' && break; sleep 0.05; done; for i in $(seq 100); do redis-cli -p 17004 CLUSTER NODES | grep -q '1700217002170021700217002170021700217002' && break; sleep 0.05; done; for i in $(seq 100); do [ $(redis-cli -p 17003 CLUSTER NODES | grep -c 'connected [0-9]') = 3 ] && break; sleep 0.05; done; for i in $(seq 100); do [ $(redis-cli -p 17004 CLUSTER NODES | grep -c 'connected [0-9]') = 3 ] && break; sleep 0.05; done; redis-cli -p 17003 CLUSTER REPLICATE 1700017000170001700017000170001700017000 >/dev/null; redis-cli -p 17004 CLUSTER REPLICATE 1700117001170011700117001170011700117001 >/dev/null; for i in $(seq 100); do redis-cli -p 17000 CLUSTER NODES | grep -q '17004@27004 slave' && break; sleep 0.05; done; for i in $(seq 100); do redis-cli -p 17000 CLUSTER NODES | grep -q '17003@27003 slave' && break; sleep 0.05; done
+run: --cluster add-node 127.0.0.1:17005 127.0.0.1:17000 --cluster-slave
+
+[RC-118 cluster-add-node-stops-when-the-check-fails]
+cluster: 3
+compare: cluster
+prepare: redis-cli -p 17001 CLUSTER SETSLOT 5 IMPORTING $(redis-cli -p 17000 CLUSTER MYID) >/dev/null
+run: --cluster add-node 127.0.0.1:17003 127.0.0.1:17000
+
+[RC-118 cluster-add-node-no-such-master]
+cluster: 3
+compare: cluster
+run: --cluster add-node 127.0.0.1:17003 127.0.0.1:17000 --cluster-slave --cluster-master-id abc
+
+[RC-118 cluster-add-node-that-is-already-a-member]
+cluster: 3
+compare: cluster
+run: --cluster add-node 127.0.0.1:17001 127.0.0.1:17000
+
+[RC-118 cluster-add-node-unreachable-new-node]
+cluster: 3
+compare: cluster
+run: --cluster add-node 127.0.0.1:1 127.0.0.1:17000
+
+[RC-118 cluster-add-node-unreachable-cluster]
+run: --cluster add-node 127.0.0.1:17003 127.0.0.1:1
+
+[RC-118 cluster-add-node-bad-address]
+run: --cluster add-node 127.0.0.1 127.0.0.1:17000
+
+[RC-119 cluster-del-node-replica]
+cluster: 3x1
+run: --cluster del-node 127.0.0.1:17000 1700317003170031700317003170031700317003
+
+[RC-119 cluster-del-node-with-slots]
+cluster: 3
+run: --cluster del-node 127.0.0.1:17000 1700117001170011700117001170011700117001
+
+[RC-119 cluster-del-node-no-such-node]
+cluster: 3
+run: --cluster del-node 127.0.0.1:17000 17000
+
+[RC-119 cluster-del-node-moves-its-replicas]
+# 17000 gives its slots up; its replica goes to 17002, the master with fewest
+# replicas once 17001 has two.
+cluster: 3x1
+prepare: redis-cli -p 17005 CLUSTER REPLICATE 1700117001170011700117001170011700117001 >/dev/null; redis-cli -p 17000 CLUSTER DELSLOTSRANGE 0 5460 >/dev/null; for i in $(seq 100); do redis-cli -p 17001 CLUSTER NODES | grep -q '17005@27005 slave 1700117001170011700117001170011700117001' && break; sleep 0.05; done
+run: --cluster del-node 127.0.0.1:17001 1700017000170001700017000170001700017000

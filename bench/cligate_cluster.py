@@ -41,6 +41,7 @@ for p in PORTS; do
 done
 for p in PORTS; do
   rc $p FLUSHALL >/dev/null
+  rc $p FUNCTION FLUSH >/dev/null
   rc $p CLUSTER RESET SOFT >/dev/null
   rc $p CONFIG SET cluster-node-timeout 1000 >/dev/null
 done

@@ -330,3 +330,97 @@ fn create_refuses_nodes_and_configurations_it_cannot_use() {
     );
     assert_eq!(refused.code, 1);
 }
+
+#[test]
+fn add_node_as_master_or_replica() {
+    let shared = cluster(2, 1);
+    shared.lock().unwrap().nodes.push(cluster_fake::Node {
+        id: id(3),
+        alone: true,
+        ..Default::default()
+    });
+    let ports = start(&shared);
+    let (new, existing) = (at(ports[3]), at(ports[0]));
+    let master = cli(&["--cluster", "add-node", &new, &existing], b"", &[]);
+    let tail = format!(
+        "[OK] All 16384 slots covered.\n>>> Getting functions from cluster\n>>> Send FUNCTION LIST to {new} to verify there is no functions in it\n>>> Send FUNCTION RESTORE to {new}\n>>> Send CLUSTER MEET to node {new} to make it join the cluster.\n[OK] New node added correctly.\n"
+    );
+    assert!(master.stdout.starts_with(&format!(
+        ">>> Adding node {new} to cluster {existing}\n>>> Performing Cluster Check"
+    )));
+    assert!(master.stdout.ends_with(&tail) && master.code == 0, "{}", master.stdout);
+    assert!(received(&shared, 3).contains(&vec![
+        "FUNCTION".into(),
+        "RESTORE".into(),
+        "payload".into()
+    ]));
+    // Joined now; make it alone again to add it as a replica of the master
+    // with fewest replicas (node 1: node 2 replicates node 0).
+    shared.lock().unwrap().nodes[3].alone = true;
+    let replica = cli(&["--cluster", "add-node", &new, &existing, "--cluster-slave"], b"", &[]);
+    let tail = format!(
+        "Automatically selected master {m}\n>>> Send CLUSTER MEET to node {new} to make it join the cluster.\nWaiting for the cluster to join\n\n>>> Configure node as replica of {m}.\n[OK] New node added correctly.\n",
+        m = at(ports[1])
+    );
+    assert!(replica.stdout.ends_with(&tail), "{}", replica.stdout);
+    assert_eq!(shared.lock().unwrap().nodes[3].master, Some(1));
+    let named = cli(
+        &[
+            "--cluster",
+            "add-node",
+            &new,
+            &existing,
+            "--cluster-slave",
+            "--cluster-master-id",
+            "nope",
+        ],
+        b"",
+        &[],
+    );
+    assert!(named.stdout.ends_with("[ERR] No such master ID nope\n") && named.code == 1);
+    let busy = cli(&["--cluster", "add-node", &at(ports[1]), &existing], b"", &[]);
+    assert!(busy.stdout.ends_with(&format!("[ERR] Node {} is not empty. Either the node already knows other nodes (check with CLUSTER NODES) or contains some key in database 0.\n", at(ports[1]))));
+    shared.lock().unwrap().nodes[1].importing = vec![(5, 0)];
+    let open = cli(&["--cluster", "add-node", &new, &existing], b"", &[]);
+    assert!(
+        open.stdout.ends_with(">>> Check slots coverage...\n[OK] All 16384 slots covered.\n")
+            && open.code == 1
+    );
+    shared.lock().unwrap().nodes[1].importing.clear();
+    let gone = cli(&["--cluster", "add-node", "127.0.0.1:1", &existing], b"", &[]);
+    assert!(
+        gone.stdout.ends_with("[ERR] Sorry, can't connect to node 127.0.0.1:1\n") && gone.code == 1
+    );
+    assert_eq!(gone.stderr, "Could not connect to Redis at 127.0.0.1:1: Connection refused\n");
+}
+
+#[test]
+fn del_node_moves_replicas_forgets_and_resets() {
+    let shared = cluster(3, 1);
+    shared.lock().unwrap().nodes[0].slots.clear();
+    shared.lock().unwrap().nodes.push(cluster_fake::Node {
+        id: id(4),
+        master: Some(1),
+        ..Default::default()
+    });
+    let ports = start(&shared);
+    let o = cli(&["--cluster", "del-node", &at(ports[1]), &id(0)], b"", &[]);
+    let want = format!(
+        ">>> Removing node {} from cluster {}\n>>> Sending CLUSTER FORGET messages to the cluster...\n>>> {} as replica of {}\n>>> Sending CLUSTER RESET SOFT to the deleted node.\n",
+        id(0),
+        at(ports[1]),
+        at(ports[3]),
+        at(ports[2])
+    );
+    assert_eq!((o.stdout.as_str(), o.code), (want.as_str(), 0));
+    assert_eq!(received(&shared, 0).last().unwrap(), &["CLUSTER", "RESET", "SOFT"]);
+    assert!(received(&shared, 2).iter().any(|w| w[..2] == ["CLUSTER", "FORGET"]));
+    let full = cli(&["--cluster", "del-node", &at(ports[0]), &id(1)], b"", &[]);
+    assert!(full.stdout.ends_with(&format!(
+        "[ERR] Node {} is not empty! Reshard data away and try again.\n",
+        at(ports[1])
+    )));
+    let none = cli(&["--cluster", "del-node", &at(ports[0]), "abc"], b"", &[]);
+    assert_eq!((none.stdout.ends_with("[ERR] No such node ID abc\n"), none.code), (true, 1));
+    assert_eq!(cli(&["--cluster", "del-node", "127.0.0.1", "abc"], b"", &[]).code, 1);
+}

@@ -91,7 +91,7 @@ fn meet(cfg: &Config, nodes: &mut [Fresh]) -> bool {
 }
 
 /// CLUSTER MEET takes an address, not a name.
-fn resolve(host: &[u8], port: i32) -> Option<String> {
+pub(crate) fn resolve(host: &[u8], port: i32) -> Option<String> {
     use std::net::ToSocketAddrs;
     let host = std::str::from_utf8(host).ok()?;
     let port = u16::try_from(port).ok()?;
@@ -107,9 +107,44 @@ fn roles_match(view: &[nodes_text::Record], ids: &[(Vec<u8>, Option<Vec<u8>>)]) 
     ids.iter().all(|(id, master)| view.iter().any(|r| r.id == *id && r.master == *master))
 }
 
-/// Poll every node's CLUSTER NODES until `done` holds, a dot a second.
+/// A dot a second while waiting.
+struct Dots(Instant);
+
+impl Dots {
+    fn new() -> Dots {
+        Dots(Instant::now())
+    }
+
+    /// Sleep before the next poll.
+    fn pause(&mut self) {
+        std::thread::sleep(Duration::from_millis(100));
+        if self.0.elapsed() >= Duration::from_secs(1) {
+            write_out(b".");
+            self.0 = Instant::now();
+        }
+    }
+}
+
+/// Poll one node until it knows `id`.
+pub(crate) fn wait_known(link: &mut crate::rcli::conn::Conn, id: &[u8]) {
+    let mut dots = Dots::new();
+    loop {
+        let known = match link.request(&[b"CLUSTER", b"NODES"]) {
+            Ok(reply) => super::link::text(&reply).is_some_and(|t| {
+                nodes_text::parse(t).iter().any(|r| r.id == id && !r.flags.handshake)
+            }),
+            Err(_) => false,
+        };
+        if known {
+            return;
+        }
+        dots.pause();
+    }
+}
+
+/// Poll every node's CLUSTER NODES until `done` holds.
 fn wait(nodes: &mut [Fresh], done: impl Fn(&[Vec<nodes_text::Record>]) -> bool) {
-    let mut last_dot = Instant::now();
+    let mut dots = Dots::new();
     loop {
         let views: Vec<Vec<nodes_text::Record>> = nodes
             .iter_mut()
@@ -121,10 +156,6 @@ fn wait(nodes: &mut [Fresh], done: impl Fn(&[Vec<nodes_text::Record>]) -> bool) 
         if done(&views) {
             return;
         }
-        std::thread::sleep(Duration::from_millis(100));
-        if last_dot.elapsed() >= Duration::from_secs(1) {
-            write_out(b".");
-            last_dot = Instant::now();
-        }
+        dots.pause();
     }
 }
