@@ -130,3 +130,24 @@ fn double_text_is_kept_in_walk_order() {
     assert_eq!(texts, [b"1e+300".to_vec(), b"0.000001".to_vec(), b"inf".to_vec(), b"-0".to_vec()]);
     assert_eq!(parse_reply_keeping_double_text(b"*2\r\n,1\r\n").unwrap(), None);
 }
+
+#[test]
+fn a_length_prefix_that_misses_the_crlf_is_a_protocol_error() {
+    // `$3` over a 4-byte value: lenient parsing read "abc" and resumed the
+    // stream at "d\r\n", one reply out of step with its request.
+    for (frame, what) in [
+        (&b"$3\r\nabcd\r\n"[..], "bulk payload not followed by CRLF"),
+        (b"=7\r\ntxt:abcd\r\n", "verbatim payload not followed by CRLF"),
+        (b"!3\r\nERRx\r\n", "blob error payload not followed by CRLF"),
+    ] {
+        assert!(
+            matches!(parse_reply(frame), Err(ProtocolError::Malformed(m)) if m == what),
+            "{}",
+            String::from_utf8_lossy(frame)
+        );
+    }
+    // The exact lengths still parse, and a partial frame still waits.
+    assert!(matches!(parse_reply(b"$4\r\nabcd\r\n"), Ok(Some(_))));
+    assert!(matches!(parse_reply(b"=8\r\ntxt:abcd\r\n"), Ok(Some(_))));
+    assert!(matches!(parse_reply(b"$4\r\nabcd\r"), Ok(None)));
+}

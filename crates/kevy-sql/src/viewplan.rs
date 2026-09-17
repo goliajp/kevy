@@ -280,14 +280,23 @@ fn push_sort(
         b.argv.push(if *d { "DESC" } else { "ASC" }.into());
         return Ok(true);
     }
-    fail.get_or_insert(format!(
-        "view '{}': ORDER BY {c}{} needs the column stored on the driving index \u{2014} add INCLUDE ({c}) to CREATE INDEX ON {} ({drive_col}), or declare CREATE INDEX ON {} ({drive_col}, {c}{})",
-        v.name,
-        if *d { " DESC" } else { "" },
-        t.name,
-        t.name,
-        if *d { " DESC" } else { "" },
-    ));
+    let advice = if c == drive_col {
+        // Descending on the driving column: the index is ordered by it, but
+        // a Range index reads one way; an order path reads the other.
+        format!(
+            "ORDER BY {c} DESC reads the index on {c} backwards, which a Range index does not do \u{2014} declare CREATE INDEX {c}_desc ON {} ({c} DESC)",
+            t.name
+        )
+    } else {
+        format!(
+            "ORDER BY {c}{} needs the column stored on the driving index \u{2014} add INCLUDE ({c}) to CREATE INDEX ON {} ({drive_col}), or declare CREATE INDEX ON {} ({drive_col}, {c}{})",
+            if *d { " DESC" } else { "" },
+            t.name,
+            t.name,
+            if *d { " DESC" } else { "" },
+        )
+    };
+    fail.get_or_insert(format!("view '{}': {advice}", v.name));
     Ok(false)
 }
 

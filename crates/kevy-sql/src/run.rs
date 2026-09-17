@@ -142,6 +142,17 @@ fn indexes(t: &Table, out: &mut String) -> Result<(), String> {
 /// plain index, so a one-column order path is noted instead.
 fn orderpaths(t: &Table, out: &mut String, lost: &mut Vec<String>) -> Result<(), String> {
     for op in &t.orderpaths {
+        if let [(c, true)] = op.on.as_slice() {
+            // One descending column reads back as the same order path.
+            let stmt = format!(
+                "CREATE INDEX {} ON {} ({} DESC);\n",
+                ident(&op.name)?,
+                ident(&t.name)?,
+                ident(c)?
+            );
+            out.push_str(&stmt);
+            continue;
+        }
         if op.on.len() < 2 {
             let on: Vec<String> = op
                 .on

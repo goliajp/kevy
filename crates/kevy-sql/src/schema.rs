@@ -313,20 +313,17 @@ fn attach_index(
             ));
         }
     }
-    if ix.cols.len() == 1 { attach_single(ix, t, notes) } else { attach_composite(ix, t) }
+    // A descending index is an order path even on one column: a Range index
+    // reads in one direction only, and `ORDER BY c DESC` needs the other.
+    if ix.cols.len() == 1 && !ix.cols[0].1 {
+        attach_single(ix, t, notes)
+    } else {
+        attach_composite(ix, t)
+    }
 }
 
 fn attach_single(ix: &CreateIndex, t: &mut Table, notes: &mut Vec<String>) -> Result<(), SqlError> {
-    let (col, desc) = &ix.cols[0];
-    if *desc {
-        return Err(SqlError::at(
-            ix.line,
-            ix.col,
-            format!(
-                "DESC on the single-column index ({col}) is not compilable \u{2014} a Range index serves both directions; order at read time (ORDER BY {col} DESC in the view / SORT \u{2026} DESC)"
-            ),
-        ));
-    }
+    let (col, _) = &ix.cols[0];
     for v in &ix.include {
         if t.column_type(v).is_none() {
             return Err(SqlError::at(
@@ -355,23 +352,25 @@ fn attach_composite(ix: &CreateIndex, t: &mut Table) -> Result<(), SqlError> {
         return Err(SqlError::at(
             ix.line,
             ix.col,
-            "a multi-column UNIQUE index is not compilable \u{2014} composite paths are Range; enforce the pair app-side (verify-not-enforce, cookbook \u{a7}6) or concatenate it into one column".to_string(),
+            "a multi-column or DESC UNIQUE index is not compilable \u{2014} order paths are Range; enforce uniqueness app-side (verify-not-enforce, cookbook \u{a7}6), declare the unique index ascending, or concatenate the columns into one".to_string(),
         ));
     }
     if !ix.include.is_empty() {
         return Err(SqlError::at(
             ix.line,
             ix.col,
-            "a multi-column index cannot carry INCLUDE \u{2014} composite paths store no VALUES; put INCLUDE on a single-column index, or extend the column chain".to_string(),
+            "a multi-column or DESC index cannot carry INCLUDE \u{2014} order paths store no VALUES; put INCLUDE on an ascending single-column index, or extend the column chain".to_string(),
         ));
     }
     if ix.cols.len() > MAX_COMPOSITE_COLS {
         return Err(SqlError::at(ix.line, ix.col, "a composite index supports at most 8 columns"));
     }
-    let name = ix
-        .name
-        .clone()
-        .unwrap_or_else(|| ix.cols.iter().map(|(c, _)| c.as_str()).collect::<Vec<_>>().join("_"));
+    let name = ix.name.clone().unwrap_or_else(|| match ix.cols.as_slice() {
+        // `CREATE INDEX ON t (c DESC)`: `c` alone would collide with an
+        // ascending index on the same column.
+        [(c, true)] => format!("{c}_desc"),
+        cols => cols.iter().map(|(c, _)| c.as_str()).collect::<Vec<_>>().join("_"),
+    });
     if t.orderpaths.iter().any(|o| o.name == name) {
         return Err(SqlError::at(ix.line, ix.col, format!("duplicate composite index '{name}'")));
     }

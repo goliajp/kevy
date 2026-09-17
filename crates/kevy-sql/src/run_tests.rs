@@ -25,18 +25,55 @@ fn the_sql_form_compiles_back_to_the_same_declaration() {
 
 #[test]
 fn what_sql_cannot_say_is_written_as_a_comment() {
-    let decl = "TABLE.DECLARE Ev PREFIX e: PK id COLUMN id str COLUMN at i64 ORDERPATH recent ON at DESC WINDOW at SPAN 60 BUCKET 10 AUTODECLARE 3";
+    let decl = "TABLE.DECLARE Ev PREFIX e: PK id COLUMN id str COLUMN at i64 ORDERPATH recent ON at DESC ORDERPATH first ON at WINDOW at SPAN 60 BUCKET 10 AUTODECLARE 3";
     let ddl = table_ddl(&words(decl)).expect("renders");
     assert_eq!(
         ddl,
         "CREATE TABLE \"Ev\" (\n    id text PRIMARY KEY,\n    at bigint\n);\n\
+         CREATE INDEX recent ON \"Ev\" (at DESC);\n\
          -- not carried by SQL: PREFIX e:\n\
-         -- not carried by SQL: ORDERPATH recent ON at DESC\n\
+         -- not carried by SQL: ORDERPATH first ON at\n\
          -- not carried by SQL: WINDOW at SPAN 60 BUCKET 10\n\
          -- not carried by SQL: AUTODECLARE 3\n"
     );
     let quote = "TABLE.DECLARE a\"b PREFIX a: PK id COLUMN id str";
     assert!(table_ddl(&words(quote)).unwrap_err().contains("no SQL spelling"));
+}
+
+#[test]
+fn a_descending_index_is_an_order_path_that_serves_order_by_desc() {
+    let schema = "CREATE TABLE ev (id bigint PRIMARY KEY, at bigint);\nCREATE INDEX ON ev (at);\n";
+    let refused = crate::plan(&format!(
+        "{schema}CREATE VIEW latest AS SELECT id FROM ev WHERE at >= $1 ORDER BY at DESC LIMIT 10;"
+    ))
+    .expect("parses");
+    let crate::Served::No { reason } = &refused.queries[0].served else {
+        panic!("no path reads backwards yet")
+    };
+    assert!(
+        reason.ends_with("ORDER BY at DESC reads the index on at backwards, which a Range index does not do \u{2014} declare CREATE INDEX at_desc ON ev (at DESC)"),
+        "{reason}"
+    );
+    let declared = format!("{schema}CREATE INDEX at_desc ON ev (at DESC);\n");
+    let compiled = crate::compile(&declared).expect("a DESC index compiles");
+    assert_eq!(
+        compiled.commands[0].join(" "),
+        "TABLE.DECLARE ev PREFIX ev: PK id COLUMN id i64 COLUMN at i64 INDEX at range ORDERPATH at_desc ON at DESC"
+    );
+    let card = select_card(
+        &compiled.commands,
+        "SELECT id FROM ev WHERE at >= 15 ORDER BY at DESC LIMIT 2",
+    )
+    .expect("served by the order path");
+    assert_eq!(
+        card.argv[..3],
+        ["IDX.QUERY".to_string(), "ev.at_desc".to_string(), "WHERE".to_string()]
+    );
+    let ddl = table_ddl(&compiled.commands[0]).expect("renders");
+    assert_eq!(crate::compile(&ddl).expect("reads back").commands, compiled.commands);
+    let unnamed =
+        crate::compile(&format!("{schema}CREATE INDEX ON ev (at DESC);\n")).expect("compiles");
+    assert!(unnamed.commands[0].join(" ").ends_with("ORDERPATH at_desc ON at DESC"));
 }
 
 #[test]
