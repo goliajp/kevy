@@ -23,3 +23,4 @@ DEV-021  RC-086   `--hotkeys-count <n>` is accepted, as valkey-cli accepts it; r
 DEV-022  RC-097   `--replica` prints every command the master sends after the snapshot; redis-cli 8.10.1 drops the first one (in practice the SELECT before the first write).
 DEV-023  RC-103   `restart` in a `--ldb` session runs the script again in a new session; redis-cli 8.10.1 aborts ("free(): invalid pointer").
 DEV-024  RC-109   `--cluster create` keeps its announced replica assignment when anti-affinity cannot improve it; redis-cli 8.10.1 swaps replicas at random, contradicting the `Adding replica` lines it printed.
+DEV-025  RC-113   `--cluster reshard` takes its answers from piped input; redis-cli 8.10.1 buffers the rest of the input away after the first answer and asks for the receiving node ID for ever.

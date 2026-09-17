@@ -251,7 +251,9 @@ class Reference:
                 self.cluster.reset(case["cluster"])
             except RuntimeError as e:
                 sys.exit(f"cligate: case line {case['line']}: {e}")
-            target = ["-c", "-p", str(cligate_cluster.PORTS[0])]
+            group = cligate_cluster.LEGACY_PORTS if case["cluster"].startswith("legacy-") \
+                else cligate_cluster.PORTS
+            target = ["-c", "-p", str(group[0])]
         for line in case["setup"]:
             r = self.run([*target, *shlex.split(expand(line))], b"", {})
             if r.returncode != 0:
@@ -448,8 +450,8 @@ def main() -> int:
                     print(f"UNSTABLE [{','.join(case['ids'])} {case['name']}] "
                           f"(cases.txt:{case['line']}): {r.stdout[:120]!r} vs {again.stdout[:120]!r}")
                 continue
-            pinned = "deviation" in case and not any(
-                k in case for k in ("kevy.stdout-contains", "kevy.stdout-replace", "compare"))
+            pinned = "deviation" in case and ("kevy.stdout" in case or not any(
+                k in case for k in ("kevy.stdout-contains", "kevy.stdout-replace", "compare")))
             if r.returncode == 124 and r.stderr == b"<timed out>" and not pinned:
                 # Two CLIs that both hang agree on nothing. A deviation that
                 # pins kevy-cli's whole output does not read redis-cli's.
