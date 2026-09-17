@@ -1,4 +1,4 @@
-//! `kevy-cli sql` — the kevy-sql declaration compiler as a subcommand.
+//! `sql` — the kevy-sql declaration compiler as a tool.
 //!
 //! Two shapes over the same file. `sql compile` is build-time: it
 //! produces commands, so one unservable view is an error. `sql plan` is
@@ -7,13 +7,15 @@
 //! someone arriving with a schema is actually looking for.
 //!
 //! `sql compile <file.sql>` prints the compiled script;
-//! `sql compile <file.sql> --apply --url <host:port>` additionally runs
-//! the declaration commands against a server, printing each reply, and
-//! exits non-zero on any error reply. Query cards are runtime
-//! templates — they are printed, never applied.
+//! `sql compile <file.sql> --apply` additionally runs the declaration
+//! commands on the connection, printing each reply, and exits non-zero on
+//! any error reply. Query cards are runtime templates — they are printed,
+//! never applied. `sql run` is a tool of its own (it needs a server);
+//! `eval` and `probe` read no schema at all.
 
-use kevy_cli::{Reply, format_reply};
-use kevy_resp_client::RespClient;
+use super::argscan::{Scan, unexpected};
+use crate::link::Link;
+use crate::{Reply, format_reply};
 use std::process::ExitCode;
 
 #[derive(PartialEq, Eq)]
@@ -26,39 +28,22 @@ struct SqlArgs {
     sub: Sub,
     file: String,
     apply: bool,
-    host: String,
-    port: u16,
 }
 
 fn parse_sql_args(args: &[String]) -> Result<SqlArgs, String> {
-    let mut it = args.iter();
-    let sub = match it.next().map(String::as_str) {
+    let mut scan = Scan::new(args);
+    let sub = match scan.next() {
         Some("compile") => Sub::Compile,
         Some("plan") => Sub::Plan,
         Some(other) => return Err(format!("unknown sql subcommand '{other}'")),
         None => return Err("missing subcommand".into()),
     };
-    let mut out = SqlArgs {
-        sub,
-        file: String::new(),
-        apply: false,
-        host: crate::DEFAULT_HOST.to_string(),
-        port: crate::DEFAULT_PORT,
-    };
-    while let Some(a) = it.next() {
-        match a.as_str() {
+    let mut out = SqlArgs { sub, file: String::new(), apply: false };
+    while let Some(a) = scan.next() {
+        match a {
             "--apply" => out.apply = true,
-            "--url" => {
-                let Some(url) = it.next() else { return Err("--url requires host:port".into()) };
-                let Some((h, p)) = url.rsplit_once(':') else {
-                    return Err(format!("--url '{url}' must be host:port"));
-                };
-                out.host = h.to_string();
-                out.port = p.parse().map_err(|_| format!("--url port '{p}' is not a port"))?;
-            }
-            other if other.starts_with('-') => return Err(format!("unknown flag {other}")),
-            other if out.file.is_empty() => out.file = other.to_string(),
-            other => return Err(format!("unexpected argument {other}")),
+            other if !other.starts_with('-') && out.file.is_empty() => out.file = other.to_string(),
+            other => return Err(unexpected(other)),
         }
     }
     if out.file.is_empty() {
@@ -70,29 +55,32 @@ fn parse_sql_args(args: &[String]) -> Result<SqlArgs, String> {
     Ok(out)
 }
 
-/// Entry: `kevy-cli sql …` (args exclude the leading `sql`).
-pub(crate) fn run_sql_cli(args: &[String]) -> ExitCode {
+fn usage(msg: &str) -> ExitCode {
+    eprintln!("kevy-cli sql: {msg}");
+    eprintln!("usage: kevy-cli --kevy sql compile <file.sql> [--apply]");
+    eprintln!("       kevy-cli --kevy sql plan <file.sql>");
+    eprintln!("       kevy-cli --kevy sql eval '<select-stmt>' [--at <ts>]");
+    eprintln!("       kevy-cli --kevy sql probe <corpus-dir>");
+    eprintln!("       kevy-cli --kevy sql run [--max-rows n] 'SELECT ...'");
+    ExitCode::FAILURE
+}
+
+/// `sql …` (args exclude the leading `sql`). `link` is the connection
+/// `compile --apply` declares on; every other shape reads files only.
+pub(crate) fn run(args: &[String], link: Option<&mut dyn Link>) -> ExitCode {
     match args.first().map(String::as_str) {
         Some("eval") => return run_eval(&args[1..]),
         Some("probe") => {
-            let Some(dir) = args.get(1) else {
-                eprintln!("usage: kevy-cli sql probe <corpus-dir>");
-                return ExitCode::FAILURE;
+            return match &args[1..] {
+                [dir] => super::sql_probe::run_probe(dir),
+                _ => usage("probe takes one corpus directory"),
             };
-            return crate::sql_probe::run_probe(dir);
         }
         _ => {}
     }
     let a = match parse_sql_args(args) {
         Ok(a) => a,
-        Err(msg) => {
-            eprintln!("kevy-cli sql: {msg}");
-            eprintln!("usage: kevy-cli sql compile <file.sql> [--apply --url <host:port>]");
-            eprintln!("       kevy-cli sql plan <file.sql>");
-            eprintln!("       kevy-cli sql eval '<select-stmt>' [--at <ts>]");
-            eprintln!("       kevy-cli sql probe <corpus-dir>");
-            return ExitCode::FAILURE;
-        }
+        Err(msg) => return usage(&msg),
     };
     let src = match std::fs::read_to_string(&a.file) {
         Ok(s) => s,
@@ -113,26 +101,22 @@ pub(crate) fn run_sql_cli(args: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    if !a.apply {
-        print!("{}", comp.render_script());
-        return ExitCode::SUCCESS;
+    match (a.apply, link) {
+        (false, _) => {
+            print!("{}", comp.render_script());
+            ExitCode::SUCCESS
+        }
+        (true, Some(link)) => apply(link, &a.file, &comp),
+        (true, None) => usage("--apply needs a server"),
     }
-    apply(&a, &comp)
 }
 
 /// Run the declaration commands in order; stop (and exit non-zero) on
 /// the first error reply — later declarations depend on earlier ones.
-fn apply(a: &SqlArgs, comp: &kevy_sql::Compilation) -> ExitCode {
-    let mut conn = match RespClient::connect(&a.host, a.port) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("kevy-cli sql: could not connect to {}:{}: {e}", a.host, a.port);
-            return ExitCode::FAILURE;
-        }
-    };
+fn apply(conn: &mut dyn Link, file: &str, comp: &kevy_sql::Compilation) -> ExitCode {
     for cmd in &comp.commands {
-        let argv: Vec<Vec<u8>> = cmd.iter().map(|s| s.clone().into_bytes()).collect();
-        let reply = match conn.request(&argv) {
+        let argv: Vec<&[u8]> = cmd.iter().map(|s| s.as_bytes()).collect();
+        let reply = match conn.request_borrowed(&argv) {
             Ok(r) => r,
             Err(e) => {
                 eprintln!("kevy-cli sql: {e}");
@@ -147,9 +131,8 @@ fn apply(a: &SqlArgs, comp: &kevy_sql::Compilation) -> ExitCode {
     }
     if !comp.query_cards.is_empty() {
         println!(
-            "{} query card(s) are runtime templates \u{2014} not applied; see `kevy-cli sql compile {}`",
+            "{} query card(s) are runtime templates \u{2014} not applied; see `kevy-cli --kevy sql compile {file}`",
             comp.query_cards.len(),
-            a.file
         );
     }
     ExitCode::SUCCESS
@@ -249,7 +232,7 @@ fn run_eval(args: &[String]) -> ExitCode {
         }
     }
     let Some(stmt) = stmt else {
-        eprintln!("usage: kevy-cli sql eval '<select-stmt>' [--at <ts>]");
+        eprintln!("usage: kevy-cli --kevy sql eval '<select-stmt>' [--at <ts>]");
         return ExitCode::FAILURE;
     };
     let now = at.unwrap_or_else(|| {

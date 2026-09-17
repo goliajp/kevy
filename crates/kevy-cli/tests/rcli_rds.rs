@@ -982,7 +982,9 @@ fn a_bare_word_is_a_server_command_and_tools_live_behind_kevy() {
     for name in TOOL_NAMES {
         let bare = cli(&["-p", &p, name, "users"], b"", &[]);
         assert!(
-            !bare.stderr.contains("kevy-cli") && !bare.stdout.is_empty() && !bare.stdout.contains("\t"),
+            !bare.stderr.contains("kevy-cli")
+                && !bare.stdout.is_empty()
+                && !bare.stdout.contains("\t"),
             "`{name}` went to a tool, not the server: {}{}",
             bare.stdout,
             bare.stderr

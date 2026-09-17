@@ -14,8 +14,8 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
+use crate::link::Link;
 use kevy_resp::{Reply, encode_command_borrowed};
-use kevy_resp_client::RespClient;
 
 const PIPELINE: usize = 512;
 
@@ -37,7 +37,7 @@ pub struct Export {
 /// frames to `out_path`, reporting both what went in and what could
 /// not.
 pub fn run_export(
-    client: &mut RespClient,
+    client: &mut dyn Link,
     prefix: Option<&[u8]>,
     out_path: &Path,
 ) -> io::Result<Export> {
@@ -83,7 +83,7 @@ pub fn run_export(
 /// caller can report what it is leaving behind rather than count it as
 /// a key that happened to vanish.
 fn export_key(
-    client: &mut RespClient,
+    client: &mut dyn Link,
     key: &[u8],
     out: &mut impl Write,
 ) -> io::Result<Option<Option<Vec<u8>>>> {
@@ -113,11 +113,7 @@ pub(crate) enum Rebuilt {
 /// Read `key` and produce DEL+rebuild frames addressed to `dst`
 /// (`dst == key` for export; a re-prefixed name for copy-prefix —
 /// the server has no COPY verb, so copying IS read+rebuild).
-pub(crate) fn rebuild_frames(
-    client: &mut RespClient,
-    key: &[u8],
-    dst: &[u8],
-) -> io::Result<Rebuilt> {
+pub(crate) fn rebuild_frames(client: &mut dyn Link, key: &[u8], dst: &[u8]) -> io::Result<Rebuilt> {
     let ty = match client.request_borrowed(&[b"TYPE", key])? {
         Reply::Simple(t) => t,
         _ => return Ok(Rebuilt::Vanished),
@@ -152,7 +148,7 @@ fn encoded_del_len(dst: &[u8]) -> usize {
 /// vanished mid-read; leaving `frame` untouched = no verb for this
 /// type, which the caller turns into `UnsupportedType`.
 fn encode_body(
-    client: &mut RespClient,
+    client: &mut dyn Link,
     key: &[u8],
     dst: &[u8],
     ty: &[u8],
@@ -201,7 +197,7 @@ fn encode_body(
 /// Issue `cmd` and unwrap its Array reply into bulk payloads.
 /// `None` when the reply isn't an array or the array is empty (the key
 /// vanished / changed type between TYPE and read).
-fn fetch_bulks(client: &mut RespClient, cmd: &[&[u8]]) -> io::Result<Option<Vec<Vec<u8>>>> {
+fn fetch_bulks(client: &mut dyn Link, cmd: &[&[u8]]) -> io::Result<Option<Vec<Vec<u8>>>> {
     let Reply::Array(items) = client.request_borrowed(cmd)? else {
         return Ok(None);
     };
@@ -238,7 +234,7 @@ fn encode_zadd(frame: &mut Vec<u8>, dst: &[u8], flat: &[Vec<u8>]) {
 
 /// TTL rides as an absolute PEXPIREAT follow-up.
 fn append_ttl_frame(
-    client: &mut RespClient,
+    client: &mut dyn Link,
     key: &[u8],
     dst: &[u8],
     frame: &mut Vec<u8>,
@@ -271,7 +267,7 @@ pub struct ImportReport {
 /// records the safely-applied byte offset after every batch (fsynced);
 /// `resume` starts there. Idempotent replay.
 pub fn run_import(
-    client: &mut RespClient,
+    client: &mut dyn Link,
     src: &Path,
     resume: bool,
     strict: bool,
@@ -311,7 +307,7 @@ pub fn run_import(
 }
 
 fn flush_batch(
-    client: &mut RespClient,
+    client: &mut dyn Link,
     raw: &[u8],
     n: usize,
     strict: bool,

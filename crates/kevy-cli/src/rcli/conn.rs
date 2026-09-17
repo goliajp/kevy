@@ -232,3 +232,31 @@ fn connect_with_timeout(host: &str, port: u16, timeout: Duration) -> Result<TcpS
     }
     Err(last)
 }
+
+/// The tools' request/reply interface over this connection; push messages
+/// that arrive before a reply are skipped, as [`Conn::pipeline`] skips them.
+impl crate::link::Link for Conn {
+    fn request_borrowed(&mut self, argv: &[&[u8]]) -> std::io::Result<Reply> {
+        self.request(argv).map_err(link_error)
+    }
+
+    fn pipeline_raw(&mut self, raw: &[u8], n: usize) -> std::io::Result<Vec<Reply>> {
+        self.write_raw(raw).map_err(link_error)?;
+        let mut replies = Vec::with_capacity(n);
+        while replies.len() < n {
+            match self.read_reply().map_err(link_error)? {
+                (Reply::Push(_), _) => {}
+                (reply, _) => replies.push(reply),
+            }
+        }
+        Ok(replies)
+    }
+}
+
+fn link_error(e: LinkError) -> std::io::Error {
+    match e {
+        LinkError::Io(kind, text) => std::io::Error::new(kind, text),
+        LinkError::Protocol(_) => std::io::Error::new(std::io::ErrorKind::InvalidData, e.text()),
+        LinkError::Eof => std::io::Error::new(std::io::ErrorKind::UnexpectedEof, e.text()),
+    }
+}

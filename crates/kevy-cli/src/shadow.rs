@@ -17,7 +17,7 @@ use std::io;
 
 use std::process::ExitCode;
 
-use kevy_resp_client::{Reply, RespClient};
+use kevy_resp_client::Reply;
 
 /// One side's reading of a reply: the row keys in order, each with the
 /// sort value it was ordered by (empty when the shape does not carry
@@ -138,7 +138,7 @@ pub struct ShadowReport {
 /// single disagreement is a lead rather than a verdict — the report
 /// carries the count so a rate can be read off it.
 pub fn run(
-    client: &mut RespClient,
+    client: &mut dyn crate::link::Link,
     old_cmd: &[Vec<u8>],
     new_cmd: &[Vec<u8>],
     old_shape: Shape,
@@ -212,17 +212,8 @@ pub fn print_report(r: &ShadowReport) {
     }
 }
 
-/// `shadow [-h host] [-p port] --old "<cmd>" --new "<cmd>"
-/// [--old-pairs] [--new-flat] [--samples n]`
-///
-/// Both sides are whole commands, quoted, because the old path is
-/// whatever the application already runs — a ZRANGE, an LRANGE, a
-/// SMEMBERS — and the new one is an IDX.QUERY. Nothing here knows
-/// which; it compares the two orders of row keys they produce.
 /// Everything `shadow` takes from the command line.
 struct ShadowArgs {
-    host: String,
-    port: u16,
     old: Option<String>,
     new: Option<String>,
     old_shape: Shape,
@@ -230,90 +221,66 @@ struct ShadowArgs {
     samples: u64,
 }
 
-fn parse_shadow_flags(args: &[String]) -> ShadowArgs {
+fn parse_shadow_flags(args: &[String]) -> Result<ShadowArgs, String> {
     // A kevy paged reply is recognised from its shape. The ambiguity
     // that needs declaring is member/score pairs versus a plain list,
     // and only on the old side in practice.
     let mut a = ShadowArgs {
-        host: crate::DEFAULT_HOST.to_string(),
-        port: crate::DEFAULT_PORT,
         old: None,
         new: None,
         old_shape: Shape::Flat,
         new_shape: Shape::Paged,
         samples: 1,
     };
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "-h" if i + 1 < args.len() => {
-                a.host = args[i + 1].clone();
-                i += 2;
-            }
-            "-p" if i + 1 < args.len() => {
-                a.port = args[i + 1].parse().unwrap_or(crate::DEFAULT_PORT);
-                i += 2;
-            }
-            "--old" if i + 1 < args.len() => {
-                a.old = Some(args[i + 1].clone());
-                i += 2;
-            }
-            "--new" if i + 1 < args.len() => {
-                a.new = Some(args[i + 1].clone());
-                i += 2;
-            }
-            "--old-pairs" => {
-                a.old_shape = Shape::Pairs;
-                i += 1;
-            }
-            "--new-flat" => {
-                a.new_shape = Shape::Flat;
-                i += 1;
-            }
-            "--samples" if i + 1 < args.len() => {
-                a.samples = args[i + 1].parse().unwrap_or(1);
-                i += 2;
-            }
-            _ => i += 1,
+    let mut scan = crate::tools::argscan::Scan::new(args);
+    while let Some(word) = scan.next() {
+        match word {
+            "--old" => a.old = Some(scan.value("--old")?.to_string()),
+            "--new" => a.new = Some(scan.value("--new")?.to_string()),
+            "--old-pairs" => a.old_shape = Shape::Pairs,
+            "--new-flat" => a.new_shape = Shape::Flat,
+            "--samples" => a.samples = scan.number("--samples")?,
+            other => return Err(crate::tools::argscan::unexpected(other)),
         }
     }
-    a
+    Ok(a)
 }
 
 /// `shadow [-h host] [-p port] --old "<cmd>" --new "<cmd>"
-/// [--old-pairs] [--new-flat] [--samples n]`
+/// [--old-pairs] [--new-flat] [--samples n]`: connects with its own
+/// `-h`/`-p` (the pre-`--kevy` form), then [`run_on`] the rest.
+pub fn run_shadow_cli(args: &[String]) -> ExitCode {
+    crate::tools::bare::with_private_connection("shadow", args, run_on)
+}
+
+/// `shadow --old "<cmd>" --new "<cmd>" [--old-pairs] [--new-flat]
+/// [--samples n]` on `client`.
 ///
 /// Both sides are whole commands, quoted, because the old path is
 /// whatever the application already runs — a ZRANGE, an LRANGE, a
 /// SMEMBERS — and the new one is an `IDX.QUERY`. Nothing here knows
-/// which; it compares the two orders of row keys they produce.
-///
-/// Exits non-zero on any divergence, so a cutover script can gate on
-/// it without parsing the text.
-pub fn run_shadow_cli(args: &[String]) -> ExitCode {
-    let ShadowArgs { host, port, old, new, old_shape, new_shape, samples } =
-        parse_shadow_flags(args);
-    let (Some(old), Some(new)) = (old, new) else {
+/// which; it compares the two orders of row keys they produce. Exits
+/// non-zero on any divergence, so a cutover script can gate on it
+/// without parsing the text.
+pub(crate) fn run_on(client: &mut dyn crate::link::Link, args: &[String]) -> ExitCode {
+    let parsed = parse_shadow_flags(args);
+    let Ok(ShadowArgs { old: Some(old), new: Some(new), old_shape, new_shape, samples }) = parsed
+    else {
+        if let Err(msg) = parsed {
+            eprintln!("kevy-cli shadow: {msg}");
+        }
         eprintln!(
-            "usage: kevy-cli shadow [-h host] [-p port] --old \"<command>\" \
-             --new \"<command>\" [--old-pairs] [--new-flat] [--samples n]"
+            "usage: kevy-cli --kevy shadow --old \"<command>\" --new \"<command>\" \
+             [--old-pairs] [--new-flat] [--samples n]"
         );
         return ExitCode::FAILURE;
     };
     let split =
         |s: &str| -> Vec<Vec<u8>> { s.split_whitespace().map(|t| t.as_bytes().to_vec()).collect() };
-    let mut client = match RespClient::connect(&host, port) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("kevy-cli: could not connect to {host}:{port}: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    match run(&mut client, &split(&old), &split(&new), old_shape, new_shape, samples) {
+    match run(client, &split(&old), &split(&new), old_shape, new_shape, samples) {
         Ok(report) => {
             print_report(&report);
-            // A divergence is a finding, not a crash: exit non-zero so a
-            // cutover script can gate on it without parsing the text.
+            // A divergence is a finding, not a crash.
             if report.diverged > 0 { ExitCode::FAILURE } else { ExitCode::SUCCESS }
         }
         Err(e) => {

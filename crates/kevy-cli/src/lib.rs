@@ -21,7 +21,10 @@ pub mod migrate;
 
 /// kevy-cli's own tools, the second half of `--help`.
 pub(crate) const TOOLS_HELP: &str = "\
-RELATIONAL COMMANDS (after the connection options; in the REPL as \\dt, \\d, …):
+KEVY TOOLS: kevy-cli [connection options] --kevy <tool> [args]
+    (in the REPL: \\<tool> [args]; a bare word is always a server command)
+
+  catalog
     tables [pattern]                            TABLE.LIST as rows
     indexes [table|pattern]                     IDX.LIST, with each index's table
     views [pattern]                             VIEW.LIST
@@ -29,72 +32,64 @@ RELATIONAL COMMANDS (after the connection options; in the REPL as \\dt, \\d, …
                                                 index's fields, a view's tree
                                                 (+ runs its VERIFY)
     show-create <name> [--as kevy|sql]          the declaration that recreates it
+
+  query
     query [--all] [--max-rows n] <IDX.QUERY|VIEW.QUERY …>
                                                 rows, following the cursor
     explain <index> <shape…> | view <name>      the path a query takes
     explain --analyze <query…>                  run it; measured by this client
     advise                                      paths refused queries asked for
-    run [-f file]… [-c cmd]… [--force] [--echo] [--atomic]
-                                                commands in order; exit 3 on an
-                                                error reply, 2 on a lost link
+    sql run [--max-rows n] 'SELECT …'           one SELECT over declared paths,
+                                                sent as the IDX.QUERY for it
+    sql compile <file.sql> [--apply]            CREATE TABLE/INDEX/VIEW as
+                                                TABLE.DECLARE / VIEW.CREATE and
+                                                query cards (--apply declares)
+    sql plan <file.sql>                         what becomes of every query
+    sql eval '<SELECT …>' [--at <ts>]           fold a table-free SELECT
+
+  data, one level per pair
+    backup --data-dir <d> --to <f>              a data directory, offline
+    restore --from <f> --to <d>
+    export [--prefix p] <file>                  the keyspace as RESP, online
+    import [--resume] [--strict] <file>
+    dump --schema [--table t]… [--as kevy|sql]  declarations as a script
+    dump --all <dir>                            + each table's declared columns
+    load <dir>                                  rows, declarations, wait-ready,
+                                                doctor
+    export-csv (--prefix p --columns a,b | --table t) [--via \"IDX.QUERY …\"] <f|->
     import-csv <f> (--prefix p --pk c | --table t | --key-column c)
                (--header|--columns a,b)
-    export-csv (--prefix p --columns a,b | --table t) [--via \"IDX.QUERY …\"] <f|->
-    dump --schema [--table t]… [--as kevy|sql]  declarations as a script
-    dump --all <dir>                            schema + each table's declared
-                                                columns as CSV
-    restore <dir>                               rows, then declarations, then
-                                                wait-ready and doctor
-    sql run [--max-rows n] 'SELECT …'           one SELECT over declared paths,
-                                                sent as the IDX.QUERY that
-                                                answers it
+    copy-prefix [--rate n] <from> <to>
+    delete-prefix [--rate n] [--dry-run] <prefix>
+
+  checks
+    digest <prefix>                             hash a prefix
+    diff <other host:port|redis://…> <prefix>…  compare it with another server
+    inspect <prefix>                            sample keys: types and sizes
+    doctor [--warn-is-failure] [--indexes] [--views]
+                                                VERIFY every table (and bare
+                                                index, view); exit code answers
+    lint overlap --prefix <p:>                  a name under more than one owner?
+    lint columns <table>                        column pairs that agree on most rows
+    backfill-keys --from-index <k> --from-prefix <p:> --from-file <f>
+                                                the union of every source
+    shadow --old <cmd> --new <cmd>              old and new read paths, compared
+                                                in membership and order
     wait-ready [--index n|--table t|--all] [--timeout s]
+    status                                      server, role, keys, catalogs
+
+  running
+    run [-f file]… [-c cmd]… [--force] [--echo] [--atomic]
+                                                exit 3 on an error reply, 2 on a
+                                                lost link
     watch <seconds> [count] <command…>
     feed follow [--prefix p]… [--shard n|all] [--from tail|gen:off]
                 [--checkpoint f] [--as json|resp] [--on-resync stop|jump]
-    status                                      server, role, keys, catalogs
-    Output: --format table|tsv|csv|json, --no-header, --null s,
-            --expanded, --timing (table on a terminal, tsv when piped)
 
-SQL COMPILER (declaration-time only — never per-query):
-    sql compile <file.sql>                      compile CREATE TABLE/INDEX/VIEW
-                                                into TABLE.DECLARE / VIEW.CREATE
-                                                commands + IDX.QUERY query cards
-    sql compile <file.sql> --apply --url <h:p>  additionally run the commands
-                                                against a server (exits non-zero
-                                                on any error reply)
-    sql plan <file.sql>                         what becomes of every query:
-                                                which path serves it, or the
-                                                CREATE INDEX it needs (no server)
-MIGRATION DAY (read and report; none of these moves data):
-    lint overlap --prefix <p:>                  does a name live under more than
-                                                one owner? then no column can
-                                                carry that dimension
-    lint columns <table>                        column pairs that agree on most
-                                                rows — one column copied to get
-                                                a second sort order
-    backfill-keys --from-index <k> --from-prefix <p:> --from-file <f>
-                                                the union of every source that
-                                                can name an item, and how many
-                                                names only one source had
-    shadow --old <cmd> --new <cmd>              compare the old read path with
-                                                the new one, in membership AND
-                                                in order, before cutting over
-    doctor [--warn-is-failure] [--indexes] [--views]
-                                                VERIFY every table (and bare
-                                                index, view) and answer with an
-                                                exit code
-
-MIGRATION TOOLS:
-    export  -p <port> [--prefix <p>] <file>     dump the keyspace to a RESP file
-    import  -p <port> [--strict|--resume] <f>   load one back in
-    digest  -p <port> <prefix>                  hash a prefix, to prove two
-                                                servers agree
-    diff    <hostA:port> <hostB:port> <prefix>… report where they do not
-
-    copy-prefix    -p <port> [--rate n] <from> <to>
-    delete-prefix  -p <port> [--rate n] [--dry-run] <prefix>
-    inspect -p <port> <key>                     type, size and TTL of one key
+  Rows: --format table|tsv|csv|json, --no-header, --null s, --expanded,
+        --timing (a table on a terminal, tsv when piped).
+  Until 7.0 the 6.4 forms (kevy-cli doctor -p 6004 …) still run, with a
+  deprecation line.
 
 EXAMPLES:
     kevy-cli                            # REPL against 127.0.0.1:6379
@@ -103,9 +98,9 @@ EXAMPLES:
     kevy-cli -p 6004 set greet hello    # one-shot SET, exits 0
 
     # move a keyspace, and prove it arrived
-    kevy-cli export -p 6379 --prefix user: dump.resp
-    kevy-cli import -p 6380 --strict dump.resp
-    kevy-cli digest -p 6379 user: && kevy-cli digest -p 6380 user:
+    kevy-cli -p 6379 --kevy export --prefix user: dump.resp
+    kevy-cli -p 6380 --kevy import --strict dump.resp
+    kevy-cli -p 6379 --kevy diff 127.0.0.1:6380 user:
 
 Docs: https://github.com/goliajp/kevy
 ";
@@ -140,20 +135,17 @@ pub mod shadow;
 pub mod backfill_keys;
 pub(crate) mod collections;
 pub mod doctor;
+pub mod link;
 pub mod lint;
+mod tools;
 
-/// Route the migration-playbook tools, which share a shape: they read
-/// and report, none of them moves data, and each exits with its own
-/// verdict. `None` when `args` names something else.
+/// Route a tool kevy-cli shipped as a bare word before `--kevy` (`sql`,
+/// `export`, `import`, `backup`, `restore`, `doctor`, `shadow`, `lint`,
+/// `backfill-keys`, `copy-prefix`, `delete-prefix`, `digest`, `diff`,
+/// `inspect`): kept through 6.x with a deprecation line, removed in 7.0.
+/// `None` when `args` names something else — a server command.
 pub fn route_tool(args: &[String]) -> Option<std::process::ExitCode> {
-    let rest = args.get(1..).unwrap_or(&[]);
-    match args.first().map(String::as_str)? {
-        "doctor" => Some(doctor::run_doctor_cli(rest)),
-        "shadow" => Some(shadow::run_shadow_cli(rest)),
-        "lint" => Some(lint::run_lint_cli(rest)),
-        "backfill-keys" => Some(backfill_keys::run_backfill_keys_cli(rest)),
-        _ => None,
-    }
+    tools::bare::route(args)
 }
 
 /// Pretty-print a reply roughly the way `redis-cli` does. Arrays are
