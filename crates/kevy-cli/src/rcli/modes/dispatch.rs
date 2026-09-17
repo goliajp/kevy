@@ -40,6 +40,7 @@ pub(crate) fn run(s: &mut Session) -> Option<u8> {
             | Mode::LatencyDist
             | Mode::VsetRecall
             | Mode::LruTest
+            | Mode::Pipe
     );
     if needs_server && !s.connect(Connect::Report) {
         return Some(1);
@@ -49,6 +50,7 @@ pub(crate) fn run(s: &mut Session) -> Option<u8> {
         Mode::HotKeys => super::hotkeys::run(s),
         Mode::KeyStats => super::keystats::run(s),
         Mode::Stat => super::stat::run(s),
+        Mode::Pipe => super::pipe::run(s),
         Mode::Latency => super::latency::run(s),
         Mode::LatencyDist => super::latency_dist::run(s),
         Mode::VsetRecall => {

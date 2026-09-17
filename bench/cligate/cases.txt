@@ -1411,3 +1411,29 @@ run: -p $PORT --eval /dev/stdin k , a
 [RC-102 eval-without-a-server]
 stdin: return {KEYS[1], ARGV[1], #KEYS, #ARGV}
 run: -p 1 --eval /dev/stdin k
+
+# ─── P3 · --pipe ─────────────────────────────────────────────────────────────
+
+[RC-100 pipe-resp]
+stdin: *3\r\n$3\r\nSET\r\n$1\r\na\r\n$1\r\n1\r\n*1\r\n$4\r\nPING\r\n
+run: -p $PORT --pipe
+
+[RC-100 pipe-inline-with-an-error]
+stdin: SET b 2\r\nINCR b\r\nNOSUCH\r\nGET b\r\n
+run: -p $PORT --pipe
+
+[RC-100 pipe-nothing]
+run: -p $PORT --pipe
+
+[RC-100 pipe-without-a-server]
+stdin: PING\r\n
+run: -p 1 --pipe
+
+[RC-100,RC-101 pipe-refused]
+# Without AUTH even the closing ECHO is refused, so only the timeout ends it.
+stdin: PING\r\n
+run: -p $AUTH_PORT --pipe --pipe-timeout 1
+
+[RC-101 pipe-timeout]
+stdin: BLPOP nokey 0\r\n
+run: -p $PORT --pipe --pipe-timeout 1

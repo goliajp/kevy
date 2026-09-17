@@ -1434,3 +1434,37 @@ fn eval_runs_a_script_file() {
     assert_eq!(cli(&["-p", &p, "--eval", path, "--ldb"], b"", &[]).code, 1);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn pipe_sends_input_as_it_is_and_counts_replies() {
+    let s = Srv::start();
+    let p = s.port();
+    let out =
+        cli(&["-p", &p, "--pipe"], b"SET b 2\r\n*2\r\n$4\r\nINCR\r\n$1\r\nb\r\nNOSUCH\r\n", &[]);
+    assert_eq!(
+        out.stdout,
+        "All data transferred. Waiting for the last reply...\nLast reply received from server.\nerrors: 1, replies: 3\n"
+    );
+    assert!(out.stderr.starts_with("ERR unknown command"), "{}", out.stderr);
+    assert_eq!(out.code, 1);
+    assert_eq!(cli(&["-p", &p, "GET", "b"], b"", &[]).stdout, "3\n");
+
+    // A server that never answers: the timeout ends the wait.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port().to_string();
+    let server = std::thread::spawn(move || {
+        use std::io::Read;
+        let (mut conn, _) = listener.accept().unwrap();
+        let mut buf = [0u8; 256];
+        while let Ok(1..) = conn.read(&mut buf) {}
+    });
+    let silent = cli(&["-p", &port, "--pipe", "--pipe-timeout", "1"], b"PING\r\n", &[]);
+    assert_eq!((silent.stderr.as_str(), silent.code), ("No replies for 1 seconds: exiting.\n", 1));
+    assert!(silent.stdout.ends_with("errors: 1, replies: 0\n"), "{}", silent.stdout);
+    server.join().unwrap();
+    // A server that hangs up.
+    let (port, server) = fake_server(b"", None);
+    let gone = cli(&["-p", &port.to_string(), "--pipe"], b"PING\r\n", &[]);
+    assert_eq!((gone.stderr.as_str(), gone.code), ("Error reading replies from server\n", 1));
+    server.join().unwrap();
+}
