@@ -192,6 +192,7 @@ fn parse_bulk_reply(buf: &[u8]) -> Result<Option<(Reply, usize)>, ProtocolError>
     if buf.len() < data_end + 2 {
         return Ok(None);
     }
+    payload_end(buf, data_end, "bulk payload not followed by CRLF")?;
     Ok(Some((Reply::Bulk(buf[data_start..data_end].to_vec()), data_end + 2)))
 }
 
@@ -338,6 +339,7 @@ fn parse_verbatim_reply(buf: &[u8]) -> Result<Option<(Reply, usize)>, ProtocolEr
     if buf.len() < data_end + 2 {
         return Ok(None);
     }
+    payload_end(buf, data_end, "verbatim payload not followed by CRLF")?;
     let body = &buf[data_start..data_end];
     if body[3] != b':' {
         return Err(ProtocolError::Malformed("verbatim missing fmt:data separator"));
@@ -374,7 +376,20 @@ fn parse_blob_error_reply(buf: &[u8]) -> Result<Option<(Reply, usize)>, Protocol
     if buf.len() < data_end + 2 {
         return Ok(None);
     }
+    payload_end(buf, data_end, "blob error payload not followed by CRLF")?;
     Ok(Some((Reply::BlobError(buf[data_start..data_end].to_vec()), data_end + 2)))
+}
+
+/// A length-prefixed payload ends in CRLF. A wrong length prefix would
+/// otherwise be read as a shorter payload and the rest of the stream
+/// parsed from the middle of a value — silently, a reply out of step with
+/// its request. The request parser has always refused this.
+fn payload_end(buf: &[u8], data_end: usize, what: &'static str) -> Result<(), ProtocolError> {
+    if &buf[data_end..data_end + 2] == b"\r\n" {
+        Ok(())
+    } else {
+        Err(ProtocolError::Malformed(what))
+    }
 }
 
 /// `|N\r\n<map of N pairs><reply>` — attributes decorate the next reply.
