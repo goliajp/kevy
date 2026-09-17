@@ -1368,3 +1368,46 @@ mask: [ ]*[0-9][0-9.]*
 [RC-093 vset-recall-not-a-vector-set]
 setup: SET s x
 run: -p $PORT --vset-recall s
+
+# ─── P3 · --eval ─────────────────────────────────────────────────────────────
+# The script file is /dev/stdin, so each case carries its own script.
+
+[RC-102 eval-keys-and-args]
+stdin: return {KEYS[1], ARGV[1], #KEYS, #ARGV}
+run: -p $PORT --eval /dev/stdin k1 k2 , a1 a2
+
+[RC-102 eval-a-comma-inside-a-word]
+stdin: return {KEYS[1], ARGV[1], #KEYS, #ARGV}
+run: -p $PORT --eval /dev/stdin k1, a1
+
+[RC-102 eval-args-only]
+stdin: return {KEYS[1], ARGV[1], #KEYS, #ARGV}
+run: -p $PORT --eval /dev/stdin , a1
+
+[RC-102 eval-a-second-comma-is-an-arg]
+stdin: return {KEYS[1], ARGV[1], #KEYS, #ARGV}
+run: -p $PORT --eval /dev/stdin k , a , b
+
+[RC-102 eval-a-missing-file]
+run: -p $PORT --eval /nonexistent.lua
+
+[RC-102 eval-an-error]
+stdin: return redis.call("nosuch")
+run: -p $PORT --eval /dev/stdin
+
+[RC-102 eval-an-error-with-e]
+stdin: return redis.call("nosuch")
+run: -e -p $PORT --eval /dev/stdin
+
+[RC-102 eval-repeated]
+stdin: return {KEYS[1], ARGV[1], #KEYS, #ARGV}
+run: -r 2 -p $PORT --eval /dev/stdin k , a
+
+[RC-102 eval-on-a-terminal]
+env: FAKETTY=1
+stdin: return {KEYS[1], ARGV[1], #KEYS, #ARGV}
+run: -p $PORT --eval /dev/stdin k , a
+
+[RC-102 eval-without-a-server]
+stdin: return {KEYS[1], ARGV[1], #KEYS, #ARGV}
+run: -p 1 --eval /dev/stdin k

@@ -3,6 +3,7 @@
 
 mod bigkeys;
 pub(crate) mod dispatch;
+pub(crate) mod eval;
 mod hdr;
 mod hotkeys;
 mod human;
