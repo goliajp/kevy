@@ -28,7 +28,7 @@ pub(crate) fn write_out(bytes: &[u8]) {
 impl Session {
     /// Run a command `repeat` times: `help` stays local, a lost link reconnects.
     pub(crate) fn issue(&mut self, argv: &[Vec<u8>], repeat: i64) -> bool {
-        if is(argv, 0, "help") || is(argv, 0, "?") {
+        if !self.ldb.active && (is(argv, 0, "help") || is(argv, 0, "?")) {
             self.print_help(&argv[1..]);
             return true;
         }
@@ -51,6 +51,7 @@ impl Session {
 
     /// Send, read, and track what the command changes client-side.
     fn send_command(&mut self, argv: &[Vec<u8>], mut repeat: i64) -> bool {
+        self.ldb_before(argv);
         let verbatim = is_verbatim_command(argv);
         if is(argv, 0, "shutdown") {
             self.shutdown = true;
@@ -205,6 +206,9 @@ impl Session {
                 Err(e) => return self.read_failed(e),
             }
         };
+        // The reply that ends a session is still shown the debugger's way.
+        let output = self.opts.output;
+        let reply = if self.ldb.active { self.ldb_reply(reply) } else { reply };
         if !self.interactive
             && self.opts.set_errcode
             && let Reply::Error(msg) | Reply::BlobError(msg) = &reply
@@ -212,7 +216,7 @@ impl Session {
             eprint_bytes(&[super::format::c_str(msg), b"\n"]);
             std::process::exit(1);
         }
-        write_out(&render(&reply, &texts, self.opts.output, &self.opts.delims, verbatim));
+        write_out(&render(&reply, &texts, output, &self.opts.delims, verbatim));
         Read::Reply(reply)
     }
 

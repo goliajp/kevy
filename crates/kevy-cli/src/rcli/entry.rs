@@ -1,7 +1,7 @@
 //! Startup: defaults, options, environment, then the first enabled mode.
 
 use super::opts_parse::{Parsed, parse};
-use super::session::{Connect, Session, eprint_bytes};
+use super::session::{Connect, Session};
 use std::io::IsTerminal;
 
 /// Run redis-cli with `args` (without the program name); the exit code.
@@ -38,10 +38,6 @@ pub fn run(args: &[Vec<u8>]) -> u8 {
         return code;
     }
     if let Some(file) = session.opts.modes.eval.clone() {
-        if session.opts.modes.eval_ldb {
-            eprint_bytes(&[b"kevy-cli: --ldb is not implemented yet\n"]);
-            return 1;
-        }
         return super::modes::eval::run(&mut session, &file, command);
     }
     if command.is_empty() {

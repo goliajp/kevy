@@ -265,7 +265,7 @@ fn option_errors_exit_with_redis_cli_messages() {
             "Invalid percentile '101' in --latency-percentiles (must be a number between 0 and 100)."
         )
     );
-    assert_eq!(err(&["--pipe"]), one("kevy-cli: --pipe is not implemented yet"));
+    assert_eq!(err(&["-c"]), one("kevy-cli: -c is not implemented yet"));
     let help = cli(&["--help"], b"", &[]);
     assert!(
         help.stdout.contains("-p <port>") && help.stdout.contains("sql compile") && help.code == 0
@@ -1431,7 +1431,79 @@ fn eval_runs_a_script_file() {
         (missing.stderr.as_str(), missing.code),
         ("Can't open file '/nonexistent/s.lua': No such file or directory\n", 1)
     );
-    assert_eq!(cli(&["-p", &p, "--eval", path, "--ldb"], b"", &[]).code, 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn ldb_sessions_speak_the_debugger_and_end_on_its_word() {
+    let dir = std::env::temp_dir().join(format!("kevy-rcli-ldb-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("s.lua");
+    std::fs::write(&file, "local a = 1\nreturn a + 1\n").unwrap();
+    let path = file.to_str().unwrap();
+    let (port, server) = scripted_server(vec![
+        b"+OK\r\n",
+        b"*2\r\n+* Stopped at 1\r\n+-> 1   local a = 1\r\n",
+        b"*1\r\n+<value> a = 1\r\n",
+        b"*1\r\n+<retval> 5\r\n",
+        b"*1\r\n+<endsession>\r\n:2\r\n",
+    ]);
+    let run = cli(
+        &["-p", &port, "--ldb-sync-mode", "--eval", path],
+        b"print\ne 2 + 3\nc\n",
+        &[("TERM", "xterm")],
+    );
+    assert_eq!(
+        run.stdout,
+        "Lua debugging session started, please use:\nquit    -- End the session.\n\
+         restart -- Restart the script in debug mode again.\n\
+         help    -- Show Lua script debugging commands.\n\n\
+         \x1b[0;37;49m* Stopped at 1\x1b[0m\n\x1b[0;33;49m-> 1   local a = 1\x1b[0m\n\
+         \x1b[0;35;49m<value> a = 1\x1b[0m\n\x1b[0;35;49m<retval> 5\x1b[0m\n\n\
+         (integer) 2\n\n(Lua debugging session ended)\n\n"
+    );
+    server.join().unwrap();
+    // `restart` connects again and starts a new session on the new connection.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port().to_string();
+    let server = std::thread::spawn(move || {
+        use std::io::Read;
+        let mut buf = [0u8; 4096];
+        let sessions: [&[&[u8]]; 2] = [
+            &[b"+OK\r\n", b"*1\r\n+* Stopped at 1\r\n"],
+            &[b"+OK\r\n", b"*1\r\n+* Stopped again\r\n", b"*1\r\n+<endsession>\r\n:2\r\n"],
+        ];
+        for script in sessions {
+            let (mut conn, _) = listener.accept().unwrap();
+            for reply in script {
+                assert!(matches!(conn.read(&mut buf), Ok(n) if n > 0));
+                conn.write_all(reply).unwrap();
+            }
+        }
+    });
+    let run = cli(&["-p", &port, "--ldb", "--eval", path], b"restart\nc\n", &[("TERM", "dumb")]);
+    assert!(
+        run.stdout.contains("* Stopped at 1\n\nLua debugging session started"),
+        "{}",
+        run.stdout
+    );
+    assert!(
+        run.stdout.ends_with(
+            "* Stopped again\n\n(integer) 2\n\n\
+         (Lua debugging session ended -- dataset changes rolled back)\n\n"
+        ),
+        "{}",
+        run.stdout
+    );
+    server.join().unwrap();
+    let (port, server) = scripted_server(vec![b"+OK\r\n", b"*1\r\n+<endsession>\r\n-ERR no\r\n"]);
+    let run = cli(&["-p", &port, "--ldb", "--eval", path], b"", &[]);
+    assert!(
+        run.stdout.ends_with("\nEval debugging session can't start:\n(error) ERR no\n"),
+        "{}",
+        run.stdout
+    );
+    server.join().unwrap();
     let _ = std::fs::remove_dir_all(&dir);
 }
 

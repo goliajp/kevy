@@ -19,7 +19,8 @@ pub(crate) fn run(s: &mut Session) -> u8 {
     let mut input = Input::open();
     // Hints and completion are for a person at a terminal: neither a pipe
     // nor FAKETTY_WITH_PROMPT fetches the reference, as with redis-cli.
-    let docs = input.on_a_terminal().then(|| s.docs());
+    // Not while debugging: the server takes only debugger commands then.
+    let docs = (input.on_a_terminal() && !s.ldb.active).then(|| s.docs());
     if input.keeps_history() {
         super::help::load_preferences();
     }
@@ -67,7 +68,12 @@ fn hint_shown(docs: &Docs, line: &[u8]) -> Option<Vec<u8>> {
 
 /// One non-empty line. `Some(code)` ends the program.
 fn handle_line(s: &mut Session, input: &mut Input, line: &[u8]) -> Option<u8> {
-    let Some(argv) = split_args(line) else {
+    let split = if s.ldb.active {
+        super::ldb::split_eval(line).or_else(|| split_args(line))
+    } else {
+        split_args(line)
+    };
+    let Some(argv) = split else {
         write_out(b"Invalid argument(s)\n");
         input.remember(line, &[]);
         return None;
@@ -99,6 +105,11 @@ fn run_line(s: &mut Session, argv: &[Vec<u8>], repeat: i64, skip: usize) -> Opti
     if argv[0].first() == Some(&b':') {
         super::help::preference(argv, super::help::Origin::Prompt, s.pubsub_mode);
     } else if word("restart") {
+        if s.opts.modes.eval.is_some() {
+            // Back to --eval, which starts the session again.
+            s.ldb.restart = true;
+            return Some(0);
+        }
         write_out(b"Use 'restart' only in Lua debugging mode.\n");
     } else if argv.len() == 3 && word("connect") {
         s.opts.host = argv[1].clone();
@@ -109,6 +120,12 @@ fn run_line(s: &mut Session, argv: &[Vec<u8>], repeat: i64, skip: usize) -> Opti
     } else {
         let started = Instant::now();
         s.issue(&argv[skip..], repeat);
+        if s.ldb.ended {
+            s.ldb.ended = false;
+            let _ = s.read_reply(false); // the EVAL's own reply, printed
+            let note = if s.ldb.sync { "" } else { " -- dataset changes rolled back" };
+            write_out(format!("\n(Lua debugging session ended{note})\n\n").as_bytes());
+        }
         let elapsed = started.elapsed();
         if elapsed >= Duration::from_millis(500) && s.opts.output == Output::Standard {
             write_out(format!("({:.2}s)\n", elapsed.as_millis() as f64 / 1000.0).as_bytes());

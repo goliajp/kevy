@@ -49,6 +49,8 @@ pub(crate) struct Session {
     pub(crate) interactive: bool,
     /// The command reference, once something has needed it.
     pub(crate) docs: Option<std::rc::Rc<super::docs::model::Docs>>,
+    /// The Lua debugger's state.
+    pub(crate) ldb: super::ldb::Ldb,
 }
 
 /// Whether the REPL shows argument hints (`:set hints` / `:set nohints`).
@@ -83,6 +85,7 @@ impl Session {
             push: PushSink::Discard,
             interactive: false,
             docs: None,
+            ldb: super::ldb::Ldb::default(),
         }
     }
 

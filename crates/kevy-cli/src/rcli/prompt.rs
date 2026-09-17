@@ -8,6 +8,9 @@ const MAX_PROMPT: usize = 127;
 /// `host:port[db](TX)(subscribed mode)> `, `kevy <socket>> …`, or
 /// `not connected> `.
 pub(crate) fn prompt(s: &Session) -> Vec<u8> {
+    if s.ldb.active {
+        return b"lua debugger> ".to_vec();
+    }
     if s.conn.is_none() {
         return b"not connected> ".to_vec();
     }
