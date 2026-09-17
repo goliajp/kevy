@@ -313,6 +313,29 @@ mod tests {
     }
 
     #[test]
+    fn every_flag_reaches_its_override() {
+        let (config, o) = parsed(
+            "--dir /data --accept-shards 3 --tiering-budget 70% --cluster --config=/etc/kevy.toml",
+        )
+        .unwrap();
+        assert_eq!(config, Some(PathBuf::from("/etc/kevy.toml")));
+        assert_eq!(
+            (o.data_dir, o.accept_shards, o.cluster),
+            (Some(PathBuf::from("/data")), Some(3), Some(true))
+        );
+        assert!(o.tiering_budget.is_some(), "--tiering-budget parsed");
+        assert_eq!(
+            parsed("--tiering-budget junk").err().as_deref(),
+            Some("--tiering-budget: tiering budget: size literal \"junk\" has no number")
+        );
+        assert_eq!(
+            parsed("--accept-shards two").err().as_deref(),
+            Some("--accept-shards takes a shard count, not 'two'")
+        );
+        assert_eq!(parsed("--dir").err().as_deref(), Some("--dir needs a value"));
+    }
+
+    #[test]
     fn loopback_classification() {
         // 127.0.0.0/8 is loopback per RFC 1122 — every octet in [1..255] is fine.
         assert!(is_loopback([127, 0, 0, 1]));

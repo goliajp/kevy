@@ -24,7 +24,7 @@ const OPTIONS_HELP: &str = concat!(
     " — a redis-cli for kevy or any RESP server, plus kevy's tools.
 
 Usage: kevy-cli [OPTIONS] [cmd [arg [arg ...]]]
-       kevy-cli <tool> [tool options]
+       kevy-cli [OPTIONS] --kevy <tool> [tool args]
 
   -h <hostname>      Server hostname (default: 127.0.0.1).
   -p <port>          Server port (default: 6379).
@@ -62,6 +62,9 @@ Usage: kevy-cli [OPTIONS] [cmd [arg [arg ...]]]
   --no-auth-warning  Don't show warning message when using password on
                      command line interface.
   --verbose          Verbose mode.
+  --kevy <tool>      Run one of kevy's own tools (listed below) instead of
+                     sending a command; everything after the tool name is
+                     the tool's.
   --help             Output this help and exit.
   -v, --version      Output version and exit.
 

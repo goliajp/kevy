@@ -176,6 +176,86 @@ fn the_backup_pair_and_sql_plan_need_no_server() {
 }
 
 #[test]
+fn shadow_and_lint_read_a_live_server() {
+    let s = Srv::start();
+    let p = s.port();
+    for (owner, members) in [("mailbox:a", ["m1", "m2"]), ("mailbox:b", ["m2", "m3"])] {
+        let set = cli(&[&["-p", &p, "SADD", owner][..], &members].concat());
+        assert_eq!(set.code, 0, "{}", set.stderr);
+    }
+    let overlap = cli(&["-p", &p, "--kevy", "lint", "overlap", "--prefix", "mailbox:"]);
+    assert!(
+        overlap.stdout.contains("2 owner(s) under mailbox:, 3 distinct name(s)")
+            && overlap.stdout.contains("1 name(s) appear under more than one owner:")
+            && overlap.code == 1,
+        "{}{}",
+        overlap.stdout,
+        overlap.stderr
+    );
+    three_rows(&p);
+    let declare = "TABLE.DECLARE u PREFIX u: PK id COLUMN id str COLUMN name str COLUMN alias str";
+    assert_eq!(cli(&[&["-p", &p][..], &declare.split(' ').collect::<Vec<_>>()].concat()).code, 0);
+    for i in 1..=3 {
+        cli(&[
+            "-p",
+            &p,
+            "HSET",
+            &format!("u:{i}"),
+            "id",
+            &i.to_string(),
+            "alias",
+            &format!("n{i}"),
+        ]);
+    }
+    let columns =
+        cli(&["-p", &p, "--kevy", "lint", "columns", "u", "--sample", "10", "--threshold", "50"]);
+    assert!(
+        columns.stdout.starts_with("u: 3 row(s) sampled under u:")
+            && columns.stdout.contains("alias and name agree on 100% (3/3)")
+            && columns.code == 0,
+        "{}{}",
+        columns.stdout,
+        columns.stderr
+    );
+    let agrees = cli(&[
+        "-p",
+        &p,
+        "--kevy",
+        "shadow",
+        "--old",
+        "SMEMBERS mailbox:a",
+        "--new",
+        "SMEMBERS mailbox:a",
+        "--new-flat",
+        "--samples",
+        "2",
+    ]);
+    assert!(
+        agrees.stdout.contains("shadow: 2 samples, 0 divergences") && agrees.code == 0,
+        "{}{}",
+        agrees.stdout,
+        agrees.stderr
+    );
+    let diverges = cli(&[
+        "-p",
+        &p,
+        "--kevy",
+        "shadow",
+        "--old",
+        "SMEMBERS mailbox:a",
+        "--new",
+        "SMEMBERS mailbox:b",
+        "--new-flat",
+    ]);
+    assert_eq!(diverges.code, 1, "different membership diverges: {}", diverges.stdout);
+    assert!(
+        diverges.stdout.contains("m1") || diverges.stdout.contains("m3"),
+        "{}",
+        diverges.stdout
+    );
+}
+
+#[test]
 fn tool_arguments_are_read_strictly() {
     let s = Srv::start();
     let p = s.port();
@@ -203,6 +283,12 @@ fn tool_arguments_are_read_strictly() {
         (&["export", "--resume", "f"][..], "kevy-cli export: unexpected '--resume'"),
         (&["diff", "nowhere", "u:"][..], "kevy-cli diff: 'nowhere' is not host:port"),
         (&["restore", "--from", "x"][..], "kevy-cli restore: --to missing"),
+        (&["backup", "--to", "x"][..], "kevy-cli backup: --data-dir missing"),
+        (&["backup", "--data-dir"][..], "kevy-cli backup: --data-dir needs a value"),
+        (&["diff", "127.0.0.1:1"][..], "kevy-cli diff: wrong arguments"),
+        (&["sql", "nonsense", "f.sql"][..], "kevy-cli sql: unknown sql subcommand 'nonsense'"),
+        (&["sql", "probe"][..], "kevy-cli sql: probe takes one corpus directory"),
+        (&["import"][..], "kevy-cli import: give the file"),
     ] {
         let out = cli(&[&["-p", &p, "--kevy"][..], args].concat());
         assert!(out.stderr.starts_with(text) && out.code == 1, "{args:?}: {}", out.stderr);

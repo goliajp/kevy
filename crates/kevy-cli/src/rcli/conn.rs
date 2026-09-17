@@ -260,3 +260,21 @@ fn link_error(e: LinkError) -> std::io::Error {
         LinkError::Eof => std::io::Error::new(std::io::ErrorKind::UnexpectedEof, e.text()),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{LinkError, link_error};
+    use std::io::ErrorKind;
+
+    #[test]
+    fn a_lost_link_keeps_its_kind_when_a_tool_reads_it() {
+        let io = link_error(LinkError::Io(ErrorKind::ConnectionReset, "Connection reset".into()));
+        assert_eq!(
+            (io.kind(), io.to_string()),
+            (ErrorKind::ConnectionReset, "Connection reset".into())
+        );
+        assert_eq!(link_error(LinkError::Eof).kind(), ErrorKind::UnexpectedEof);
+        // Bytes that are not RESP are data, not a closed socket.
+        assert_eq!(link_error(LinkError::Protocol(Some(b'x'))).kind(), ErrorKind::InvalidData);
+    }
+}
