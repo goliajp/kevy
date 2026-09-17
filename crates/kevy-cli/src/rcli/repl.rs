@@ -25,11 +25,20 @@ pub(crate) fn run(s: &mut Session) -> u8 {
         super::help::load_preferences();
     }
     let hint = |line: &[u8]| docs.as_deref().and_then(|d| hint_shown(d, line));
-    let complete = |line: &[u8]| docs.as_deref().map_or_else(Vec::new, |d| d.completions(line));
-    let assist = Assist { hint: &hint, complete: &complete };
     loop {
         s.arm_interrupt();
         let prompt = super::prompt::prompt(s);
+        // Declared object names complete after the verbs that take them;
+        // read afresh each prompt, so a table declared a line ago is there.
+        let catalog = catalog_for(s, docs.as_deref());
+        let complete = |line: &[u8]| {
+            let names = super::rds::complete::completions(&catalog, line);
+            if !names.is_empty() {
+                return names;
+            }
+            docs.as_deref().map_or_else(Vec::new, |d| d.completions(line))
+        };
+        let assist = Assist { hint: &hint, complete: &complete };
         match input.read(&prompt, &assist) {
             Outcome::Line(line) => {
                 if !line.is_empty()
@@ -54,6 +63,19 @@ pub(crate) fn run(s: &mut Session) -> u8 {
     }
 }
 
+/// Declared object names, for completion after the verbs that take them;
+/// read afresh each prompt, so a table declared a line ago is there. Only a
+/// server whose reference names TABLE.LIST is asked, so a Redis server sees
+/// no extra commands.
+fn catalog_for(s: &mut Session, docs: Option<&Docs>) -> super::rds::complete::Catalog {
+    let kevy = docs.is_some_and(|d| d.entries.iter().any(|e| e.full == b"TABLE.LIST"));
+    if kevy && s.conn.is_some() && !s.pubsub_mode && !s.in_multi {
+        super::rds::complete::load(s)
+    } else {
+        super::rds::complete::Catalog::default()
+    }
+}
+
 /// The hint as the editor shows it: after a space unless the line ends in one.
 fn hint_shown(docs: &Docs, line: &[u8]) -> Option<Vec<u8>> {
     if !super::session::hints_on() {
@@ -68,6 +90,11 @@ fn hint_shown(docs: &Docs, line: &[u8]) -> Option<Vec<u8>> {
 
 /// One non-empty line. `Some(code)` ends the program.
 fn handle_line(s: &mut Session, input: &mut Input, line: &[u8]) -> Option<u8> {
+    if line.first() == Some(&b'\\') && !s.ldb.active {
+        input.remember(line, &[]);
+        super::rds::meta::run(s, line);
+        return None;
+    }
     let split = if s.ldb.active {
         super::ldb::split_eval(line).or_else(|| split_args(line))
     } else {
@@ -127,7 +154,9 @@ fn run_line(s: &mut Session, argv: &[Vec<u8>], repeat: i64, skip: usize) -> Opti
             write_out(format!("\n(Lua debugging session ended{note})\n\n").as_bytes());
         }
         let elapsed = started.elapsed();
-        if elapsed >= Duration::from_millis(500) && s.opts.output == Output::Standard {
+        if s.rds.timing {
+            write_out(format!("Time: {:.3} ms\n", elapsed.as_secs_f64() * 1000.0).as_bytes());
+        } else if elapsed >= Duration::from_millis(500) && s.opts.output == Output::Standard {
             write_out(format!("({:.2}s)\n", elapsed.as_millis() as f64 / 1000.0).as_bytes());
         }
     }

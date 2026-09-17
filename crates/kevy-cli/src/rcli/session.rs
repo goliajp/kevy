@@ -51,6 +51,8 @@ pub(crate) struct Session {
     pub(crate) docs: Option<std::rc::Rc<super::docs::model::Docs>>,
     /// The Lua debugger's state.
     pub(crate) ldb: super::ldb::Ldb,
+    /// The REPL's display switches for the relational commands.
+    pub(crate) rds: super::rds::meta::Prefs,
 }
 
 /// Whether the REPL shows argument hints (`:set hints` / `:set nohints`).
@@ -86,6 +88,7 @@ impl Session {
             interactive: false,
             docs: None,
             ldb: super::ldb::Ldb::default(),
+            rds: super::rds::meta::Prefs::default(),
         }
     }
 

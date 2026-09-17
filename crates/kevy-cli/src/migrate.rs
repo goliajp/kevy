@@ -347,7 +347,7 @@ fn flush_batch(
 /// fresh import before its first batch lands and that stale EOF
 /// survives — a later `--resume` then seeks to the end, imports nothing,
 /// and reports success. The migration drill hit exactly that window.
-fn open_progress(src: &Path, resume: bool) -> io::Result<(File, u64)> {
+pub(crate) fn open_progress(src: &Path, resume: bool) -> io::Result<(File, u64)> {
     let path = {
         let mut os = src.as_os_str().to_owned();
         os.push(".progress");
@@ -364,7 +364,7 @@ fn open_progress(src: &Path, resume: bool) -> io::Result<(File, u64)> {
     Ok((f, start))
 }
 
-fn write_progress(f: &mut File, offset: u64) -> io::Result<()> {
+pub(crate) fn write_progress(f: &mut File, offset: u64) -> io::Result<()> {
     f.set_len(0)?;
     f.seek(SeekFrom::Start(0))?;
     f.write_all(offset.to_string().as_bytes())?;

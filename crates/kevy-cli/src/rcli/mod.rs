@@ -23,6 +23,7 @@ mod opts;
 mod opts_modes;
 mod opts_parse;
 mod prompt;
+mod rds;
 mod redirect;
 mod repl;
 mod repr;

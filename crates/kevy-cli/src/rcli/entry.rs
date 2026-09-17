@@ -40,6 +40,9 @@ pub fn run(args: &[Vec<u8>]) -> u8 {
     if let Some(file) = session.opts.modes.eval.clone() {
         return super::modes::eval::run(&mut session, &file, command);
     }
+    if let Some(code) = super::rds::route::route(&mut session, command) {
+        return code;
+    }
     if command.is_empty() {
         session.connect(Connect::Report);
         return super::repl::run(&mut session);

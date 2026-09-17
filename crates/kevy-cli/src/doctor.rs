@@ -89,7 +89,19 @@ pub fn table_names(client: &mut RespClient) -> io::Result<Vec<String>> {
 
 /// Verify one table and read its counters against lesson 8's mapping.
 pub fn check_table(client: &mut RespClient, name: &str) -> io::Result<TableHealth> {
-    let reply = client.request_borrowed(&[b"TABLE.VERIFY", name.as_bytes()])?;
+    check_with(client, b"TABLE.VERIFY", name)
+}
+
+/// The same reading for `IDX.VERIFY` or `VIEW.VERIFY`, whose replies are
+/// one group of counters rather than one per index.
+fn check_with(client: &mut RespClient, verb: &[u8], name: &str) -> io::Result<TableHealth> {
+    let reply = client.request_borrowed(&[verb, name.as_bytes()])?;
+    let reply = match reply {
+        Reply::Array(items) if matches!(items.first(), Some(Reply::Bulk(_))) => {
+            Reply::Array(vec![Reply::Array(items)])
+        }
+        other => other,
+    };
     if let Reply::Error(e) = &reply {
         let msg = String::from_utf8_lossy(e);
         let health = if msg.starts_with("INDEXBUILDING") {
@@ -146,7 +158,9 @@ fn classify(groups: &[Reply]) -> Health {
     }
     let get = |k: &str| sums.get(k).copied().unwrap_or(0);
     let (drift, missing, dups) = (get("drift"), get("missing"), get("duplicates"));
-    if drift > 0 || missing > 0 {
+    if get("rebuilding") > 0 {
+        Health::Building
+    } else if drift > 0 || missing > 0 {
         Health::Drift { detail: format!("drift {drift}, missing {missing}") }
     } else if dups > 0 {
         Health::NeedsTieBreak { duplicates: dups }
@@ -159,14 +173,73 @@ fn classify(groups: &[Reply]) -> Health {
 /// drift — a warning is information, and a cron that fails on
 /// information stops being read.
 pub fn run(client: &mut RespClient, warn_is_failure: bool) -> io::Result<ExitCode> {
-    let names = table_names(client)?;
-    if names.is_empty() {
-        println!("doctor: no tables declared — nothing to verify");
+    run_scoped(client, warn_is_failure, Scope { indexes: false, views: false })
+}
+
+/// What `doctor` verifies besides tables.
+#[derive(Clone, Copy, Debug)]
+pub struct Scope {
+    /// Indexes declared on their own (not compiled from a table).
+    pub indexes: bool,
+    /// Views.
+    pub views: bool,
+}
+
+/// [`run`], also verifying bare indexes and views when `scope` says so.
+pub fn run_scoped(
+    client: &mut RespClient,
+    warn_is_failure: bool,
+    scope: Scope,
+) -> io::Result<ExitCode> {
+    let tables = table_names(client)?;
+    let mut targets: Vec<(&[u8], &str, String)> =
+        tables.iter().map(|n| (&b"TABLE.VERIFY"[..], "", n.clone())).collect();
+    if scope.indexes {
+        let bare = listed_names(client, b"IDX.LIST")?
+            .into_iter()
+            .filter(|n| !tables.iter().any(|t| n.starts_with(&format!("{t}."))));
+        targets.extend(bare.map(|n| (&b"IDX.VERIFY"[..], "index ", n)));
+    }
+    if scope.views {
+        targets.extend(
+            listed_names(client, b"VIEW.LIST")?
+                .into_iter()
+                .map(|n| (&b"VIEW.VERIFY"[..], "view ", n)),
+        );
+    }
+    if targets.is_empty() {
+        // Tables only: the words the migration playbook quotes.
+        let what =
+            if scope.indexes || scope.views { "nothing declared" } else { "no tables declared" };
+        println!("doctor: {what} — nothing to verify");
         return Ok(ExitCode::SUCCESS);
     }
+    let noun = if scope.indexes || scope.views { "checked" } else { "table(s)" };
+    report(client, &targets, warn_is_failure, noun)
+}
+
+/// The `name` of every row a LIST verb answers.
+fn listed_names(client: &mut RespClient, verb: &[u8]) -> io::Result<Vec<String>> {
+    let Reply::Array(rows) = client.request_borrowed(&[verb])? else { return Ok(Vec::new()) };
+    Ok(rows
+        .iter()
+        .filter_map(|r| {
+            let Reply::Array(items) = r else { return None };
+            fields(items).into_iter().find(|(k, _)| k == "name").map(|(_, v)| v)
+        })
+        .collect())
+}
+
+fn report(
+    client: &mut RespClient,
+    targets: &[(&[u8], &str, String)],
+    warn_is_failure: bool,
+    noun: &str,
+) -> io::Result<ExitCode> {
     let (mut bad, mut warned, mut building) = (0u32, 0u32, 0u32);
-    for name in &names {
-        let h = check_table(client, name)?;
+    for (verb, kind, bare) in targets {
+        let h = check_with(client, verb, bare)?;
+        let name = format!("{kind}{bare}");
         match &h.health {
             Health::Ok => println!("  OK       {name}  ({})", h.reported),
             Health::Building => {
@@ -188,8 +261,8 @@ pub fn run(client: &mut RespClient, warn_is_failure: bool) -> io::Result<ExitCod
         }
     }
     println!(
-        "doctor: {} table(s) — {bad} drifted, {warned} warned, {building} still building",
-        names.len()
+        "doctor: {} {noun} — {bad} drifted, {warned} warned, {building} still building",
+        targets.len()
     );
     Ok(if bad > 0 || (warn_is_failure && warned > 0) {
         ExitCode::FAILURE
@@ -202,6 +275,7 @@ pub fn run(client: &mut RespClient, warn_is_failure: bool) -> io::Result<ExitCod
 pub fn run_doctor_cli(args: &[String]) -> ExitCode {
     let (mut host, mut port) = (crate::DEFAULT_HOST.to_string(), crate::DEFAULT_PORT);
     let mut strict = false;
+    let mut scope = Scope { indexes: false, views: false };
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -217,6 +291,14 @@ pub fn run_doctor_cli(args: &[String]) -> ExitCode {
                 strict = true;
                 i += 1;
             }
+            "--indexes" => {
+                scope.indexes = true;
+                i += 1;
+            }
+            "--views" => {
+                scope.views = true;
+                i += 1;
+            }
             _ => i += 1,
         }
     }
@@ -227,7 +309,7 @@ pub fn run_doctor_cli(args: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    match run(&mut client, strict) {
+    match run_scoped(&mut client, strict, scope) {
         Ok(code) => code,
         Err(e) => {
             eprintln!("kevy-cli doctor: {e}");
