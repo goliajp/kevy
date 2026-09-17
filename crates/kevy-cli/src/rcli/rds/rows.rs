@@ -209,6 +209,51 @@ mod tests {
     }
 
     #[test]
+    fn resp3_replies_read_like_their_resp2_twins() {
+        let map = Reply::Set(vec![Reply::Map(vec![
+            (
+                Reply::Simple(b"name".to_vec()),
+                Reply::Verbatim { fmt: *b"txt", data: b"u".to_vec() },
+            ),
+            (b("ratio"), Reply::Double(0.5)),
+            (b("ready"), Reply::Boolean(true)),
+            (b("gone"), Reply::Nil),
+        ])]);
+        let rows = from_pair_rows(&map).unwrap();
+        assert_eq!(cols(&rows), ["name", "ratio", "ready", "gone"]);
+        assert_eq!(rows.rows[0], [t("u"), t("0.5"), Cell::Int(1), Cell::Null]);
+        let keyless = Reply::Array(vec![Reply::Map(vec![(Reply::Int(1), b("x"))])]);
+        assert!(from_pair_rows(&keyless).is_none(), "a key must be text");
+        let pushed = Reply::Push(vec![arr(vec![b("kind"), b("range")])]);
+        assert_eq!(from_pair_rows(&pushed).unwrap().rows.len(), 1);
+    }
+
+    #[test]
+    fn replies_of_another_shape_are_refused_not_guessed() {
+        assert!(from_pair_rows(&b("OK")).is_none());
+        assert!(from_pair_list(&b("OK")).is_none());
+        let flat_explain = arr(vec![b("kind"), b("range"), b("est_rows"), b("3")]);
+        assert_eq!(from_pair_list(&flat_explain).unwrap().columns.len(), 2);
+        assert!(from_pair_list(&arr(vec![b("odd")])).is_none());
+        assert!(from_query(&b("OK"), b"value").is_none());
+        assert!(
+            from_query(&arr(vec![Reply::Int(0), b("k"), b("v")]), b"value").is_none(),
+            "cursor is text"
+        );
+        assert!(from_query(&arr(vec![]), b"value").is_none());
+        let short_row = arr(vec![b("0"), arr(vec![arr(vec![b("user:1")])])]);
+        assert!(from_query(&short_row, b"value").is_none(), "a row needs key and value");
+        let bad_field =
+            arr(vec![b("0"), arr(vec![arr(vec![b("k"), b("v"), Reply::Int(1), b("x")])])]);
+        assert!(from_query(&bad_field, b"value").is_none(), "a field name must be text");
+        let dangling = arr(vec![b("0"), arr(vec![arr(vec![b("k"), b("v"), b("name")])])]);
+        assert_eq!(from_query(&dangling, b"value").unwrap().1.columns.len(), 2);
+        assert!(from_advise(&b("OK")).is_none());
+        assert!(from_advise(&arr(vec![arr(vec![b("x")])])).is_none());
+        assert!(from_advise(&arr(vec![b("x")])).is_none());
+    }
+
+    #[test]
     fn explain_and_advise_shapes() {
         let explain = arr(vec![arr(vec![b("kind"), b("range")]), arr(vec![b("est_rows"), b("3")])]);
         let rows = from_pair_list(&explain).unwrap();

@@ -81,3 +81,53 @@ fn a_select_is_one_literal_query_over_a_declared_table() {
     let not_select = select_card(&decls, "DELETE FROM orders").unwrap_err();
     assert!(not_select.message.contains("expected SELECT"), "{not_select}");
 }
+
+#[test]
+fn a_declaration_that_does_not_read_is_refused_by_name() {
+    let refused = |line: &str| table_ddl(&words(line)).unwrap_err();
+    assert!(refused("TABLE.LIST").starts_with("not a TABLE.DECLARE declaration"));
+    let head = "TABLE.DECLARE t PREFIX t: PK id";
+    assert_eq!(refused(&format!("{head} COLUMN id str COLUMN x")), "COLUMN is cut short");
+    assert_eq!(
+        refused(&format!("{head} COLUMN id bool x")),
+        "column type 'bool' is not i64|f64|str"
+    );
+    assert_eq!(refused(&format!("{head} COLUMN id str INDEX id")), "INDEX is cut short");
+    assert_eq!(
+        refused(&format!("{head} COLUMN id str ORDERPATH p id")),
+        "ORDERPATH needs <name> ON <col>"
+    );
+    assert_eq!(refused(&format!("{head} COLUMN id str WINDOW id SPAN")), "WINDOW is cut short");
+    assert_eq!(refused(&format!("{head} COLUMN id str EXTRA x")), "unknown clause 'EXTRA'");
+    let err = select_card(&[words("TABLE.DECLARE t")], "SELECT * FROM t WHERE id = 1").unwrap_err();
+    assert!(err.message.starts_with("not a TABLE.DECLARE declaration"), "{err}");
+}
+
+#[test]
+fn a_name_sql_cannot_spell_is_refused_wherever_it_appears() {
+    let base = "TABLE.DECLARE t PREFIX t: PK id COLUMN id str COLUMN a str COLUMN b str";
+    for tail in [
+        "COLUMN q\"x str",
+        "INDEX a range VALUES q\"x",
+        "ORDERPATH p\"q ON a THEN b",
+        "ORDERPATH p ON a THEN q\"x",
+    ] {
+        let err = table_ddl(&words(&format!("{base} {tail}"))).unwrap_err();
+        assert!(err.contains("no SQL spelling"), "{tail}: {err}");
+    }
+    let quoted = table_ddl(&words("TABLE.DECLARE T PREFIX T: PK Id COLUMN Id str INDEX Id unique"))
+        .expect("renders");
+    assert_eq!(
+        quoted,
+        "CREATE TABLE \"T\" (\n    \"Id\" text PRIMARY KEY\n);\nCREATE UNIQUE INDEX ON \"T\" (\"Id\");\n"
+    );
+}
+
+#[test]
+fn a_select_that_does_not_lex_or_parse_says_where() {
+    let decls = [words(ORDERS)];
+    let lexed = select_card(&decls, "SELECT * FROM orders WHERE status = 'open").unwrap_err();
+    assert!(lexed.message.contains("unterminated"), "{lexed}");
+    let parsed = select_card(&decls, "SELECT * FROM orders WHERE").unwrap_err();
+    assert_eq!((parsed.line, parsed.col > 1), (1, true), "{parsed}");
+}

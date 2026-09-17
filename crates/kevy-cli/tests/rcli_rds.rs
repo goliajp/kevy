@@ -663,6 +663,227 @@ fn csv_by_table() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `(stderr, exit code)` of one tool run.
+fn refusal(p: &str, args: &[&str]) -> (String, i32) {
+    let out = cli(&[&["-p", p][..], args].concat(), b"", &[]);
+    (out.stderr, out.code)
+}
+
+#[test]
+fn tools_say_what_is_wrong_before_they_give_up() {
+    let s = Srv::start(false);
+    let p = s.port();
+    users_index_and_view(&p);
+    let closed = kevy_testnet::free_port().to_string();
+    assert_eq!(refusal(&closed, &["tables"]).1, 1, "no server");
+    let usage = |args: &[&str], text: &str, code: i32| {
+        let (stderr, got) = refusal(&p, args);
+        assert!(stderr.contains(text) && got == code, "{args:?}: {got} {stderr}");
+    };
+    usage(&["describe"], "describe needs a table, index or view name", 1);
+    usage(&["show-create"], "usage: kevy-cli show-create", 1);
+    usage(&["show-create", "nope"], "no table, index or view named 'nope'", 1);
+    usage(&["dump"], "usage: kevy-cli dump --schema", 1);
+    usage(&["dump", "--all"], "usage: kevy-cli dump --all <dir>", 1);
+    usage(&["dump", "--schema", "--bogus"], "usage: kevy-cli dump --schema", 1);
+    usage(&["restore"], "usage: kevy-cli restore <dir>", 1);
+    usage(&["explain", "--analyze"], "explain --analyze needs a query verb", 1);
+    usage(&["explain", "view", "nope"], "(error) ", 1);
+    usage(&["explain", "nope", "RANGE", "1", "2"], "(error) ", 1);
+    usage(&["explain"], "kevy-cli: explain <index>", 1);
+    usage(&["query"], "query needs a query verb", 1);
+    usage(&["query", "--max-rows", "x", "IDX.LIST"], "--max-rows needs a number", 1);
+    usage(&["query", "PING"], "the reply is not a query page", 1);
+    usage(&["run", "-f", "x", "--bogus"], "run: unexpected '--bogus'", 1);
+    usage(&["sql", "run"], "usage: kevy-cli sql run", 1);
+    usage(&["sql", "run", "--max-rows", "x", "SELECT 1"], "usage: kevy-cli sql run", 1);
+    usage(&["watch", "1"], "watch needs a command to run", 1);
+    usage(&["watch", "inf", "PING"], "watch <seconds> [count] <command ...>", 1);
+    usage(&["wait-ready", "--timeout", "inf"], "--timeout takes seconds, not 'inf'", 1);
+    usage(&["wait-ready", "--timeout", "soon"], "--timeout takes seconds, not 'soon'", 1);
+    for (flag, value) in [
+        ("--shard", "x"),
+        ("--from", "1-2"),
+        ("--as", "xml"),
+        ("--on-resync", "maybe"),
+        ("--limit", "x"),
+        ("--bogus", "1"),
+    ] {
+        let bad = if flag == "--bogus" { flag } else { value };
+        usage(&["feed", "follow", flag, value], &format!("feed: unexpected '{bad}'"), 1);
+    }
+    usage(&["export-csv", "--bogus"], "usage: kevy-cli export-csv", 1);
+    usage(
+        &["export-csv", "--table", "users", "--via", "IDX.QUERY \"open", "-"],
+        "cannot split --via 'IDX.QUERY \"open' (unbalanced quotes)",
+        1,
+    );
+    usage(
+        &["export-csv", "--table", "users", "/nonexistent-dir/x.csv"],
+        "export-csv: cannot create '/nonexistent-dir/x.csv'",
+        1,
+    );
+    usage(
+        &["import-csv", "/nonexistent-dir/x.csv", "--table", "users", "--header"],
+        "import-csv: cannot read '/nonexistent-dir/x.csv'",
+        1,
+    );
+    usage(
+        &["import-csv", "f.csv", "--table", "nope", "--header"],
+        "import-csv: no table named 'nope'",
+        1,
+    );
+    usage(&["import-csv", "f.csv", "--bogus"], "import-csv: unexpected '--bogus'", 1);
+    usage(&["import-csv", "f.csv", "g.csv"], "import-csv: unexpected 'g.csv'", 1);
+    let (_, timed) = refusal(&p, &["tables", "--timing"]);
+    assert_eq!(timed, 0);
+    assert!(cli(&["-p", &p, "tables", "--timing"], b"", &[]).stdout.contains("\nTime: "));
+}
+
+#[test]
+fn describe_reads_order_paths_windows_and_vectors() {
+    let s = Srv::start(false);
+    let p = s.port();
+    server(
+        &p,
+        &[
+            "TABLE.DECLARE",
+            "ev",
+            "PREFIX",
+            "ev:",
+            "PK",
+            "id",
+            "COLUMN",
+            "id",
+            "str",
+            "COLUMN",
+            "at",
+            "i64",
+            "COLUMN",
+            "who",
+            "str",
+            "ORDERPATH",
+            "recent",
+            "ON",
+            "who",
+            "THEN",
+            "at",
+            "DESC",
+            "INDEX",
+            "at",
+            "range",
+            "WINDOW",
+            "at",
+            "SPAN",
+            "100",
+            "BUCKET",
+            "10",
+        ],
+    );
+    server(
+        &p,
+        &[
+            "IDX.CREATE",
+            "emb",
+            "ON",
+            "PREFIX",
+            "v:",
+            "FIELD",
+            "vec",
+            "TYPE",
+            "vector",
+            "KIND",
+            "ann",
+            "DIM",
+            "2",
+        ],
+    );
+    let table = cli(&["-p", &p, "describe", "ev"], b"", &[]).stdout;
+    assert!(table.starts_with("Table \"ev\"\nprefix\tpk\tautodeclare\twindow\nev:\tid\t0\tcolumn=at span=100 bucket=10\n"), "{table}");
+    assert!(table.contains("\nat\ti64\t\tev.at, ev.recent\nwho\tstr\t\tev.recent\n"), "{table}");
+    let path = cli(&["-p", &p, "describe", "ev.recent"], b"", &[]).stdout;
+    assert!(
+        path.ends_with("Composite\ncolumn\ttype\torder\nwho\tstr\tasc\nat\ti64\tdesc\n"),
+        "{path}"
+    );
+    let ann = cli(&["-p", &p, "describe", "emb"], b"", &[]).stdout;
+    assert!(ann.contains("\tdim=2 distance=cosine m=16 ef=200\n"), "{ann}");
+    let sql = cli(&["-p", &p, "dump", "--schema", "--as", "sql"], b"", &[]).stdout;
+    assert!(sql.contains("-- not carried by SQL: WINDOW at SPAN 100 BUCKET 10\n-- not carried by SQL: IDX.CREATE emb ON PREFIX v: FIELD vec TYPE vector KIND ann DIM 2 DISTANCE cosine M 16 EF 200\n"), "{sql}");
+    let ready = cli(&["-p", &p, "wait-ready", "--all", "--timeout", "10"], b"", &[]);
+    assert_eq!(ready.code, 0, "{}", ready.stderr);
+    let resp3 = cli(&["-p", &p, "-3", "status"], b"", &[]);
+    assert_eq!(resp3.code, 0, "{}", resp3.stderr);
+    let limited = cli(
+        &["-p", &p, "sql", "run", "--max-rows", "1", "SELECT id FROM ev WHERE who = 'a'"],
+        b"",
+        &[],
+    );
+    assert_eq!(limited.code, 0, "{}", limited.stderr);
+}
+
+#[test]
+fn a_dump_directory_that_is_not_a_dump_is_refused() {
+    let s = Srv::start(false);
+    let p = s.port();
+    users(&p);
+    let dir = std::env::temp_dir().join(format!("kevy-rds-notdump-{}", s.port));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let d = dir.to_str().unwrap().to_string();
+    let (stderr, code) = refusal(&p, &["restore", &d]);
+    assert!(stderr.contains("holds no dump") && code == 1, "{stderr}");
+    std::fs::write(dir.join("schema.kevy"), format!("{USERS_DECLARATION}\n")).unwrap();
+    std::fs::write(dir.join("tables"), "table-1.csv\n").unwrap();
+    let (stderr, code) = refusal(&p, &["restore", &d]);
+    assert!(stderr.contains("a line of 'tables' is not <file> <table>") && code == 1, "{stderr}");
+    std::fs::write(dir.join("tables"), "table-1.csv orders\n").unwrap();
+    let (stderr, code) = refusal(&p, &["restore", &d]);
+    assert!(
+        stderr.contains("schema.kevy does not declare table 'orders'") && code == 1,
+        "{stderr}"
+    );
+    let (stderr, code) = refusal(&p, &["dump", "--all", &d]);
+    assert!(
+        stderr.contains("is not empty; a dump goes into a new directory") && code == 1,
+        "{stderr}"
+    );
+    let (stderr, code) = refusal(&p, &["dump", "--all", "/dev/null/dump"]);
+    assert!(stderr.contains("cannot create /dev/null/dump") && code == 1, "{stderr}");
+    server(&p, &["TABLE.DECLARE", "q\"t", "PREFIX", "q:", "PK", "id", "COLUMN", "id", "str"]);
+    let (stderr, code) = refusal(&p, &["dump", "--schema", "--as", "sql"]);
+    assert!(
+        stderr.contains("dump: table 'q\"t': the name 'q\"t' contains '\"'") && code == 1,
+        "{stderr}"
+    );
+    std::fs::write(dir.join("empty.csv"), "").unwrap();
+    let empty = dir.join("empty.csv");
+    let (stderr, code) =
+        refusal(&p, &["import-csv", empty.to_str().unwrap(), "--table", "users", "--header"]);
+    assert!(stderr.contains("the file has no header record") && code == 1, "{stderr}");
+    server(&p, &["SET", "user:77", "not a hash"]);
+    std::fs::write(dir.join("rows.csv"), "7,x,1\n77,y,2\n").unwrap();
+    let rows = dir.join("rows.csv");
+    let strict = cli(
+        &[
+            "-p",
+            &p,
+            "import-csv",
+            rows.to_str().unwrap(),
+            "--table",
+            "users",
+            "--delimiter",
+            ",",
+            "--strict",
+        ],
+        b"",
+        &[],
+    );
+    assert_eq!(strict.code, 3, "a WRONGTYPE reply stops --strict: {}", strict.stderr);
+    assert!(strict.stderr.contains("(error) WRONGTYPE"), "{}", strict.stderr);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Each shard's `(generation, offset)` tail.
 fn tails(p: &str) -> Vec<(i64, i64)> {
     let shards: usize = cli(&["-p", p, "FEED.SHARDS"], b"", &[]).stdout.trim().parse().unwrap();
@@ -795,7 +1016,7 @@ fn repl_backslash_commands_and_doctor_scope() {
     let script = dir.join("s.txt");
     std::fs::write(&script, "SET k v\nGET k\n").unwrap();
     let input = format!(
-        "\\dt\n\\x\n\\x\n\\timing\nPING\n\\timing\n\\i {}\n\\foo\n\\\nMULTI\n\\di\nDISCARD\n\\?\n",
+        "\\dt\n\\x\n\\x\n\\timing\nPING\n\\timing\n\\i {}\n\\foo\n\\\nMULTI\n\\di\nDISCARD\n\\?\n\\dv\n\\d+ users\n\\watch 0.01 1 PING\n\\i\n\\d \"open\n",
         script.display()
     );
     let repl = cli(&["-p", &p], input.as_bytes(), &[]);
@@ -803,6 +1024,12 @@ fn repl_backslash_commands_and_doctor_scope() {
     assert!(repl.stdout.starts_with(want), "{}", repl.stdout);
     assert!(repl.stdout.contains("Timing is off.\nOK\nv\nInvalid command \\foo. Try \\? for help.\nInvalid command \\. Try \\? for help.\nOK\nOK\n\\dt [pattern]      tables\n"), "{}", repl.stdout);
     assert!(repl.stderr.contains("relational commands do not run inside MULTI"));
+    assert!(repl.stdout.contains("\nVerification\nindex\t"), "{}", repl.stdout);
+    assert!(
+        repl.stdout.ends_with("PONG\n\\i: missing required argument\nInvalid argument(s)\n"),
+        "{}",
+        repl.stdout
+    );
     let doctor = cli(&["doctor", "-p", &p, "--indexes", "--views"], b"", &[]);
     assert!(
         doctor.stdout.contains("  OK       users  (")
