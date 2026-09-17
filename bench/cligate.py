@@ -346,21 +346,23 @@ def expected_kevy(case, ref):
 
 
 PER_NODE_LINE = re.compile(rb"^(\S+:\d+ \(|\*\*\* New timeout set for |ERR setting node-timeout "
-                           rb"for |\[WARNING\] Node |\S+:\d+: )")
+                           rb"for |\[WARNING\] Node |\S+:\d+: |>>> Node \S+ -> Saving RDB)")
 
 
 def node_order_free(out: bytes) -> bytes:
     """Cluster manager output with the node order taken out: each run of `M:`
     / `S:` blocks (the line and its indented lines), and each run of one-line
     per-node reports, sorted. The order is the entry node's table, which a
-    reset or freshly joined cluster fills in no fixed order."""
+    reset or freshly joined cluster fills in no fixed order. `backup` writes
+    one `SYNC sent to master` line and its `Transfer finished` line per node
+    to stderr, in the same order; those pairs are blocks too."""
     result, run, kind = [], [], None
     lines = out.split(b"\n")
     for n, line in enumerate(lines):
         last = n == len(lines) - 1
-        if line.startswith((b"M: ", b"S: ")):
+        if line.startswith((b"M: ", b"S: ", b"SYNC sent to master")):
             this = "block"
-        elif run and (kind == "block" and line.startswith(b"   ")
+        elif run and (kind == "block" and line.startswith((b"   ", b"Transfer finished"))
                      or kind == "line" and line == b"" and not last):
             # A block's indented lines; the blank line after an error reply.
             run[-1].append(line)
@@ -385,7 +387,8 @@ def agrees(case, want, got) -> bool:
     """A deviation may pin only a fragment of stdout (help text, version)."""
     if case.get("compare") == "cluster":
         return (node_order_free(want[0]) == node_order_free(got[0])
-                and want[1:] == got[1:])
+                and node_order_free(want[1]) == node_order_free(got[1])
+                and want[2:] == got[2:])
     if case.get("compare") == "lines-any-order":
         # A deviation in order only: the same lines, each as often.
         return (sorted(want[0].split(b"\n")) == sorted(got[0].split(b"\n"))
