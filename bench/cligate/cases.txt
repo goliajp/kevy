@@ -1437,3 +1437,42 @@ run: -p $AUTH_PORT --pipe --pipe-timeout 1
 [RC-101 pipe-timeout]
 stdin: BLPOP nokey 0\r\n
 run: -p $PORT --pipe --pipe-timeout 1
+
+# ─── P3 · --rdb / --functions-rdb / --replica ────────────────────────────────
+# repl-diskless-sync-delay 0 so a snapshot starts at once instead of after 5 s.
+
+[RC-098 rdb-to-a-file]
+setup: CONFIG SET repl-diskless-sync-delay 0
+setup: SET a 1
+run: -p $PORT --rdb /tmp/cligate.rdb
+
+[RC-098 rdb-to-stdout]
+# The snapshot carries its creation time; compare what is said, not the bytes.
+setup: CONFIG SET repl-diskless-sync-delay 0
+setup: SET a 1
+run: -p $PORT --rdb -
+head: 0
+
+[RC-098 rdb-to-a-path-that-cannot-be-opened]
+setup: CONFIG SET repl-diskless-sync-delay 0
+run: -p $PORT --rdb /nonexistent/dir/x.rdb
+
+[RC-098 rdb-refused]
+run: -p $AUTH_PORT --rdb /tmp/cligate-refused.rdb
+
+[RC-099 functions-rdb]
+setup: CONFIG SET repl-diskless-sync-delay 0
+setup: SET a 1
+run: -p $PORT --functions-rdb /tmp/cligate-functions.rdb
+
+[RC-097 replica-logs-replicated-commands]
+setup: CONFIG SET repl-diskless-sync-delay 0
+# DEV-022: redis-cli 8.10.1 does not print the first command the master
+# sends after the snapshot (here the SELECT before the first write); kevy-cli
+# prints every one. The snapshot's size includes replication state, so it
+# compares as `#`.
+deviation: DEV-022
+timeline: 2.0 ; $ redis-cli -p $PORT -n 3 SET b 2 ; $ redis-cli -p $PORT -n 3 INCR c ; 1.0 ; $ redis-cli -p $PORT CLIENT KILL TYPE replica ; 0.5
+run: -p $PORT --replica
+mask: after [0-9]+ bytes
+kevy.stdout-replace: "SET","b","2" => "SELECT","3"\n"SET","b","2"

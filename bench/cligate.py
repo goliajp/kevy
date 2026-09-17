@@ -246,13 +246,14 @@ class Reference:
 
 def normalized(case, result):
     """Readings that change with time: `mask` (a regex) turns each match in
-    stdout into `#`, and `head` keeps only the first N lines."""
-    out = result.stdout
+    stdout and stderr into `#`, and `head` keeps only the first N lines."""
+    out, err = result.stdout, result.stderr
     if "mask" in case:
         out = re.sub(case["mask"].encode(), b"#", out)
+        err = re.sub(case["mask"].encode(), b"#", err)
     if "head" in case:
         out = b"".join(out.splitlines(keepends=True)[:int(case["head"])])
-    return subprocess.CompletedProcess(result.args, result.returncode, out, result.stderr)
+    return subprocess.CompletedProcess(result.args, result.returncode, out, err)
 
 
 def on_screen(result, screen: bool):

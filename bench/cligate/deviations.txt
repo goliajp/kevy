@@ -20,3 +20,4 @@ DEV-018  RC-135   `:get pubsub` prints 0 or 1, as valkey-cli does; redis-cli 8.1
 DEV-019  RC-073   `--scan` prints a key with a NUL byte whole; redis-cli prints it with printf and stops at the NUL.
 DEV-020  RC-077   `--bigkeys` / `--memkeys` list types in a fixed order (string, list, set, zset, hash, stream, then others as found); redis-cli's order follows the state of its internal hash table, and differs between an empty keyspace and a full one.
 DEV-021  RC-086   `--hotkeys-count <n>` is accepted, as valkey-cli accepts it; redis-cli 8.10.1 does not have the flag.
+DEV-022  RC-097   `--replica` prints every command the master sends after the snapshot; redis-cli 8.10.1 drops the first one (in practice the SELECT before the first write).
