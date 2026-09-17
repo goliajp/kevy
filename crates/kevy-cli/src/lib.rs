@@ -21,6 +21,30 @@ pub mod migrate;
 
 /// kevy-cli's own tools, the second half of `--help`.
 pub(crate) const TOOLS_HELP: &str = "\
+RELATIONAL COMMANDS (after the connection options; in the REPL as \\dt, \\d, …):
+    tables [pattern]                            TABLE.LIST as rows
+    indexes [table|pattern]                     IDX.LIST, with each index's table
+    views [pattern]                             VIEW.LIST
+    describe[+] <table>                         a table and its access paths
+                                                (+ runs TABLE.VERIFY)
+    query [--all] [--max-rows n] <IDX.QUERY|VIEW.QUERY …>
+                                                rows, following the cursor
+    explain <index> <shape…> | view <name>      the path a query takes
+    explain --analyze <query…>                  run it; measured by this client
+    advise                                      paths refused queries asked for
+    run [-f file]… [-c cmd]… [--force] [--echo] [--atomic]
+                                                commands in order; exit 3 on an
+                                                error reply, 2 on a lost link
+    import-csv <f> --prefix p --pk c (--header|--columns a,b)
+    export-csv --prefix p --columns a,b [--via \"IDX.QUERY …\"] <f|->
+    wait-ready [--index n|--table t|--all] [--timeout s]
+    watch <seconds> [count] <command…>
+    feed follow [--prefix p]… [--shard n|all] [--from tail|gen:off]
+                [--checkpoint f] [--as json|resp] [--on-resync stop|jump]
+    status                                      server, role, keys, catalogs
+    Output: --format table|tsv|csv|json, --no-header, --null s,
+            --expanded, --timing (table on a terminal, tsv when piped)
+
 SQL COMPILER (declaration-time only — never per-query):
     sql compile <file.sql>                      compile CREATE TABLE/INDEX/VIEW
                                                 into TABLE.DECLARE / VIEW.CREATE
@@ -45,8 +69,10 @@ MIGRATION DAY (read and report; none of these moves data):
     shadow --old <cmd> --new <cmd>              compare the old read path with
                                                 the new one, in membership AND
                                                 in order, before cutting over
-    doctor [--warn-is-failure]                  TABLE.VERIFY every table and
-                                                answer with an exit code
+    doctor [--warn-is-failure] [--indexes] [--views]
+                                                VERIFY every table (and bare
+                                                index, view) and answer with an
+                                                exit code
 
 MIGRATION TOOLS:
     export  -p <port> [--prefix <p>] <file>     dump the keyspace to a RESP file
