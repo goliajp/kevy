@@ -265,7 +265,7 @@ fn option_errors_exit_with_redis_cli_messages() {
             "Invalid percentile '101' in --latency-percentiles (must be a number between 0 and 100)."
         )
     );
-    assert_eq!(err(&["--stat"]), one("kevy-cli: --stat is not implemented yet"));
+    assert_eq!(err(&["--pipe"]), one("kevy-cli: --pipe is not implemented yet"));
     let help = cli(&["--help"], b"", &[]);
     assert!(
         help.stdout.contains("-p <port>") && help.stdout.contains("sql compile") && help.code == 0
@@ -1293,4 +1293,51 @@ fn stat_prints_rows_reconnects_and_reports_refusals() {
         ("Error: Protocol error, got \"@\" as reply type byte\n", 1)
     );
     server.join().unwrap();
+}
+
+#[test]
+fn latency_modes_report_in_every_output_format() {
+    let s = Srv::start();
+    let p = s.port();
+    let shape = |args: &[&str]| -> String {
+        let mut full = vec!["-p", p.as_str(), "--latency", "-i", "0.05"];
+        full.extend_from_slice(args);
+        let out = cli(&full, b"", &[]);
+        assert_eq!(out.code, 0, "{args:?}");
+        out.stdout
+            .chars()
+            .map(|c| if c.is_ascii_digit() { '#' } else { c })
+            .collect::<String>()
+            .replace("#.###", "N")
+            .replace("##", "#")
+    };
+    assert!(shape(&["--raw"]).starts_with("N N N #"), "{}", shape(&["--raw"]));
+    assert!(shape(&["--csv", "--latency-percentiles", "50"]).starts_with("N,N,N,#"));
+    let json = shape(&["--json", "--latency-percentiles", "50,99.9"]);
+    assert!(
+        json.starts_with("{\"min\": N, \"max\": N, \"avg\": N, \"count\": #")
+            && json.contains("\"percentiles\": {\"#\": N, \"#.#\": N}}"),
+        "{json}"
+    );
+    assert_eq!(shape(&["--quoted-json"]), "");
+
+    let history = Live::start(&["-p", &p, "--latency-history", "-i", "0.1", "--raw"], &[]);
+    history.wait_for(" seconds range\n");
+    history.interrupt();
+    let _ = history.finish();
+    let terminal = Live::start(&["-p", &p, "--latency", "--latency-percentiles", "90"], TTY);
+    terminal.wait_for(" samples), p90: ");
+    terminal.interrupt();
+    let _ = terminal.finish();
+    for mono in [false, true] {
+        let mut args = vec!["-p", p.as_str(), "--latency-dist", "-i", "0.1"];
+        if mono {
+            args.push("--mono");
+        }
+        let dist = Live::start(&args, &[]);
+        dist.wait_for("From 0 to 100%: ");
+        dist.wait_for("\x1b[0m\n\x1b[38;5;0m");
+        dist.interrupt();
+        let _ = dist.finish();
+    }
 }
