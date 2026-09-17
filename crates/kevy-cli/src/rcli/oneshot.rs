@@ -17,16 +17,8 @@ pub(crate) fn run(s: &mut Session, args: &[Vec<u8>]) -> u8 {
     } else {
         args.to_vec()
     };
-    if s.opts.stdin_lastarg {
-        argv.push(stdin_all());
-    } else if let Some(tag) = s.opts.stdin_tag.clone() {
-        match argv.iter().position(|a| *a == tag) {
-            Some(i) => argv[i] = stdin_all(),
-            None => {
-                eprint_bytes(&[b"Using -X option but stdin tag not match.\n"]);
-                return 1;
-            }
-        }
+    if !with_stdin(&s.opts, &mut argv) {
+        return 1;
     }
     let repeat = s.opts.repeat;
     let ok = s.issue(&argv, repeat);
@@ -37,6 +29,23 @@ pub(crate) fn run(s: &mut Session, args: &[Vec<u8>]) -> u8 {
         }
     }
     u8::from(!ok)
+}
+
+/// `-x`: standard input as one more argument; `-X tag`: in place of the
+/// argument equal to `tag`. `false` after saying the tag is missing.
+pub(crate) fn with_stdin(opts: &super::opts::Opts, argv: &mut Vec<Vec<u8>>) -> bool {
+    if opts.stdin_lastarg {
+        argv.push(stdin_all());
+    } else if let Some(tag) = &opts.stdin_tag {
+        match argv.iter().position(|a| a == tag) {
+            Some(i) => argv[i] = stdin_all(),
+            None => {
+                eprint_bytes(&[b"Using -X option but stdin tag not match.\n"]);
+                return false;
+            }
+        }
+    }
+    true
 }
 
 /// All of standard input, binary-safe (`-x` / `-X`).

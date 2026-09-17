@@ -25,3 +25,4 @@ DEV-023  RC-103   `restart` in a `--ldb` session runs the script again in a new 
 DEV-024  RC-109   `--cluster create` keeps its announced replica assignment when anti-affinity cannot improve it; redis-cli 8.10.1 swaps replicas at random, contradicting the `Adding replica` lines it printed.
 DEV-025  RC-113   `--cluster reshard` takes its answers from piped input; redis-cli 8.10.1 buffers the rest of the input away after the first answer and asks for the receiving node ID for ever.
 DEV-026  RC-112   `--cluster fix` covers keyless uncovered slots in slot order, each with the master owning fewest slots; redis-cli 8.10.1 picks a random node and a random order.
+DEV-027  RC-115   `--cluster-use-atomic-slot-migration` ends each migration's line with a newline; valkey-cli 9.1.2 leaves it unterminated, so the next line runs on.

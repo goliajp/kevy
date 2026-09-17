@@ -236,11 +236,18 @@ const SWITCHES: &[&[u8]] = &[
     b"--cluster-use-empty-masters",
     b"--cluster-search-multiple-owners",
     b"--cluster-fix-with-unreachable-masters",
+    // valkey-cli's names for the same switches, and its atomic migration.
+    b"--cluster-only-primaries",
+    b"--cluster-replica",
+    b"--cluster-use-empty-primaries",
+    b"--cluster-fix-with-unreachable-primaries",
+    b"--cluster-use-atomic-slot-migration",
 ];
 /// `--cluster-*` flags that take one value.
 const VALUED: &[&[u8]] = &[
     b"--cluster-replicas",
     b"--cluster-master-id",
+    b"--cluster-primary-id",
     b"--cluster-from",
     b"--cluster-to",
     b"--cluster-from-user",

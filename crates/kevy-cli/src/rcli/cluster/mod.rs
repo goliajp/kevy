@@ -23,6 +23,7 @@ mod log;
 mod migrate;
 mod migrate_atomic;
 mod migrate_slot;
+mod migrate_valkey;
 mod move_plan;
 mod nodes_text;
 mod owner;

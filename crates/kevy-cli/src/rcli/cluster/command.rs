@@ -11,6 +11,11 @@ use crate::rcli::session::{Session, eprint_bytes};
 pub(crate) fn run(s: &mut Session) -> u8 {
     let words = s.opts.modes.cluster.clone().unwrap_or_default();
     let Some((name, args)) = words.split_first() else { return 1 };
+    let mut args = args.to_vec();
+    if !crate::rcli::oneshot::with_stdin(&s.opts, &mut args) {
+        return 1;
+    }
+    let args = args.as_slice();
     let Some(sub) = table::SUBS.iter().find(|t| t.name.as_bytes() == name.as_slice()) else {
         eprint_bytes(&[b"Unknown --cluster subcommand\n"]);
         return 1;
