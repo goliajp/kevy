@@ -4,7 +4,8 @@ use super::*;
 use crate::catalog::{AnnSpec, FieldSpec, ValueSpec};
 use crate::table::TableIndex;
 use crate::table_wire::parse_table_declare;
-use crate::view::Leaf;
+use crate::value::IndexValue;
+use crate::view::{Leaf, Tree, ViewMode, ViewSpec};
 
 fn words(ws: &[&str]) -> Vec<Vec<u8>> {
     ws.iter().map(|w| w.as_bytes().to_vec()).collect()

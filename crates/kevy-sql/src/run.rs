@@ -17,6 +17,19 @@ use crate::{KevyType, QueryCard, SqlError, parse_view, viewplan};
 /// A query no declared path serves is refused with the same text
 /// `sql plan` gives it. Never an engine view: a view is a declaration,
 /// and this answers a query now.
+///
+/// ```
+/// let orders: Vec<String> = "TABLE.DECLARE orders PREFIX orders: PK id COLUMN id i64 \
+///     COLUMN user_id i64 COLUMN total f64 INDEX user_id range VALUES total"
+///     .split_whitespace()
+///     .map(String::from)
+///     .collect();
+/// let card = kevy_sql::select_card(&[orders.clone()], "SELECT id FROM orders WHERE user_id = 7").unwrap();
+/// assert_eq!(card.argv.join(" "), "IDX.QUERY orders.user_id EQ 7 FIELDS id");
+///
+/// let refused = kevy_sql::select_card(&[orders], "SELECT id FROM orders WHERE total >= 1").unwrap_err();
+/// assert!(refused.message.contains("total"), "{refused}");
+/// ```
 pub fn select_card(declarations: &[Vec<String>], select: &str) -> Result<QueryCard, SqlError> {
     let v = parse_one_select(select)?;
     let tables = declarations
@@ -69,6 +82,21 @@ fn parse_one_select(select: &str) -> Result<CreateView, SqlError> {
 /// — a key prefix other than `<table>:`, `WINDOW`, `AUTODECLARE`, a
 /// one-column order path — is written as a `--` comment naming the
 /// clause, so a reader sees what the SQL form does not carry.
+///
+/// ```
+/// let decl: Vec<String> = "TABLE.DECLARE users PREFIX users: PK id COLUMN id i64 \
+///     COLUMN email str INDEX email unique"
+///     .split_whitespace()
+///     .map(String::from)
+///     .collect();
+/// let ddl = kevy_sql::table_ddl(&decl).unwrap();
+/// assert_eq!(
+///     ddl,
+///     "CREATE TABLE users (\n    id bigint PRIMARY KEY,\n    email text\n);\n\
+///      CREATE UNIQUE INDEX ON users (email);\n"
+/// );
+/// assert_eq!(kevy_sql::compile(&ddl).unwrap().commands, vec![decl]);
+/// ```
 pub fn table_ddl(declaration: &[String]) -> Result<String, String> {
     let d = declared::read(declaration)?;
     let t = &d.table;
