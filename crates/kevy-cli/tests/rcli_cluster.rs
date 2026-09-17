@@ -424,3 +424,173 @@ fn del_node_moves_replicas_forgets_and_resets() {
     assert_eq!((none.stdout.ends_with("[ERR] No such node ID abc\n"), none.code), (true, 1));
     assert_eq!(cli(&["--cluster", "del-node", "127.0.0.1", "abc"], b"", &[]).code, 1);
 }
+
+fn reshard_args<'a>(entry: &'a str, extra: &[&'a str]) -> Vec<&'a str> {
+    [&["--cluster", "reshard", entry][..], extra].concat()
+}
+
+#[test]
+fn reshard_moves_slots_atomically_and_reports_a_failed_task() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let shared = cluster(3, 0);
+    let polls = std::sync::Arc::new(AtomicUsize::new(0));
+    let seen = polls.clone();
+    shared.lock().unwrap().hook = Some(Box::new(move |node, argv| {
+        let words: Vec<String> =
+            argv.iter().map(|a| String::from_utf8_lossy(a).to_uppercase()).collect();
+        match (node, words.iter().map(String::as_str).collect::<Vec<_>>().as_slice()) {
+            (1, ["CLUSTER", "MIGRATION", "IMPORT", ..]) => Some(bulk("t1")),
+            (1, ["CLUSTER", "MIGRATION", "STATUS", ..]) => {
+                let state =
+                    if seen.fetch_add(1, Ordering::Relaxed) == 0 { "running" } else { "completed" };
+                Some(
+                    format!(
+                        "*1\r\n*4\r\n$5\r\nstate\r\n{}{}$10\r\nlast_error\r\n$0\r\n\r\n",
+                        format_args!("${}\r\n", state.len()),
+                        format_args!("{state}\r\n")
+                    )
+                    .into_bytes(),
+                )
+            }
+            (2, ["CLUSTER", "MIGRATION", "IMPORT", ..]) => Some(bulk("t2")),
+            (2, ["CLUSTER", "MIGRATION", "STATUS", ..]) => Some(
+                b"*1\r\n*4\r\n$5\r\nstate\r\n$6\r\nfailed\r\n$10\r\nlast_error\r\n$4\r\nboom\r\n"
+                    .to_vec(),
+            ),
+            _ => None,
+        }
+    }));
+    let ports = start(&shared);
+    let entry = at(ports[0]);
+    let o = cli(
+        &reshard_args(
+            &entry,
+            &[
+                "--cluster-from",
+                &id(0),
+                "--cluster-to",
+                &id(1),
+                "--cluster-slots",
+                "3",
+                "--cluster-yes",
+            ],
+        ),
+        b"",
+        &[],
+    );
+    let tail = format!(
+        "\nReady to move 3 slots.\n  Source nodes:\n    M: {i0} {p0}\n       slots:[0-5460] (5461 slots) master\n  Destination node:\n    M: {i1} {p1}\n       slots:[5461-10921] (5461 slots) master\n  Resharding plan:\n    Moving slot 0 from {i0}\n    Moving slot 1 from {i0}\n    Moving slot 2 from {i0}\nMoving 3 slots from {p0} to {p1}\nWaiting for migration task t1 to complete.\n",
+        i0 = id(0),
+        i1 = id(1),
+        p0 = at(ports[0]),
+        p1 = at(ports[1])
+    );
+    assert!(o.stdout.ends_with(&tail) && o.code == 0, "{}", o.stdout);
+    assert!(received(&shared, 1).contains(&vec![
+        "CLUSTER".into(),
+        "MIGRATION".into(),
+        "IMPORT".into(),
+        "0".into(),
+        "2".into()
+    ]));
+    assert!(polls.load(Ordering::Relaxed) >= 2);
+    let failed = cli(
+        &reshard_args(
+            &entry,
+            &[
+                "--cluster-from",
+                &id(0),
+                "--cluster-to",
+                &id(2),
+                "--cluster-slots",
+                "1",
+                "--cluster-yes",
+            ],
+        ),
+        b"",
+        &[],
+    );
+    assert!(
+        failed.stdout.ends_with(
+            "Waiting for migration task t2 to complete.\n[ERR] Migration task t2 failed: boom\n"
+        ) && failed.code == 1,
+        "{}",
+        failed.stdout
+    );
+}
+
+#[test]
+fn reshard_slot_by_slot_replaces_keys_whose_values_match() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let shared = cluster(2, 0);
+    shared.lock().unwrap().nodes[1].version = "7.4.10".into();
+    let calls = std::sync::Arc::new(AtomicUsize::new(0));
+    let n = calls.clone();
+    shared.lock().unwrap().hook = Some(Box::new(move |node, argv| {
+        let verb = String::from_utf8_lossy(&argv[0]).to_uppercase();
+        let sub =
+            argv.get(1).map(|a| String::from_utf8_lossy(a).to_uppercase()).unwrap_or_default();
+        match (node, verb.as_str(), sub.as_str()) {
+            (0, "CLUSTER", "GETKEYSINSLOT") if n.fetch_add(1, Ordering::Relaxed) == 0 => {
+                Some(b"*2\r\n$1\r\na\r\n$1\r\nb\r\n".to_vec())
+            }
+            (0, "CLUSTER", "GETKEYSINSLOT") => Some(b"*0\r\n".to_vec()),
+            (0, "MIGRATE", _) if !argv.iter().any(|a| a == b"REPLACE") => {
+                Some(b"-ERR Target instance replied with error: BUSYKEY Target key name already exists.\r\n".to_vec())
+            }
+            (0, "MIGRATE", _) => Some(b"+OK\r\n".to_vec()),
+            (_, "DEBUG", _) => Some(b"*2\r\n+abc\r\n+0000\r\n".to_vec()),
+            _ => None,
+        }
+    }));
+    let ports = start(&shared);
+    let entry = at(ports[0]);
+    let answers = format!("1\n{}\n{}\ndone\nyes\n", id(1), id(0));
+    let o = cli(&reshard_args(&entry, &["--cluster-pipeline", "2"]), answers.as_bytes(), &[]);
+    let tail = format!(
+        "Do you want to proceed with the proposed reshard plan (yes/no)? Moving slot 0 from {} to {}: \n*** Target key exists\n*** Checking key values on both nodes...\n*** Replacing target keys...\n..\n",
+        at(ports[0]),
+        at(ports[1])
+    );
+    assert!(o.stdout.ends_with(&tail) && o.code == 0, "{}", o.stdout);
+    assert!(o.stdout.contains("How many slots do you want to move (from 1 to 16384)? What is the receiving node ID? Please enter all the source node IDs.\n"));
+    assert!(
+        received(&shared, 1).iter().any(|w| w[..2] == ["CLUSTER", "SETSLOT"] && w[3] == "NODE")
+    );
+}
+
+#[test]
+fn reshard_refuses_what_it_cannot_do() {
+    let shared = cluster(2, 1);
+    let ports = start(&shared);
+    let entry = at(ports[0]);
+    let run = |extra: &[&str], stdin: &[u8]| cli(&reshard_args(&entry, extra), stdin, &[]);
+    let replica =
+        run(&["--cluster-from", "all", "--cluster-to", &id(2), "--cluster-slots", "1"], b"");
+    assert!(
+        replica.stdout.ends_with(&format!(
+            "*** The specified node ({}) is not known or not a master, please retry.\n",
+            id(2)
+        )) && replica.code == 1
+    );
+    let itself =
+        run(&["--cluster-from", &id(0), "--cluster-to", &id(0), "--cluster-slots", "1"], b"");
+    assert!(
+        itself.stdout.ends_with("*** It is not possible to use the target node as source node.\n")
+    );
+    assert_eq!(
+        (itself.stderr.as_str(), itself.code),
+        ("*** No source nodes given, operation aborted.\n", 1)
+    );
+    let asked = run(&[], format!("0\n2\n{}\n{}\nnope\n", id(1), id(1)).as_bytes());
+    assert!(asked.stdout.ends_with("*** It is not possible to use the target node as source node.\nSource node #1: *** The specified node (nope) is not known or not a master, please retry.\n"), "{}", asked.stdout);
+    let declined =
+        run(&["--cluster-from", "all", "--cluster-to", &id(1), "--cluster-slots", "1"], b"no\n");
+    assert!(declined.stdout.ends_with("(yes/no)? ") && declined.code == 1);
+    shared.lock().unwrap().nodes[1].importing = vec![(1, 0)];
+    let broken = run(&["--cluster-slots", "1"], b"");
+    assert_eq!(
+        (broken.stderr.as_str(), broken.code),
+        ("*** Please fix your cluster problems before resharding\n", 1)
+    );
+}

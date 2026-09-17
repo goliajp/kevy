@@ -2,9 +2,9 @@
 #   run:    argv (shlex); $PORT $AUTH_PORT $SOCKET expand
 #   setup:  repeatable; redis-cli -p $PORT <setup> after FLUSHALL
 #   prepare: a shell command run in the CLI container before each run
-#   cluster: a shape (bench/cligate_cluster.py: empty, 3, 3x1) the cluster nodes
-#           on 17000-17007 are rebuilt to before each run; setup then goes
-#           through redis-cli -c -p 17000
+#   cluster: a shape (bench/cligate_cluster.py: empty, 3, 3x1; legacy-3 etc. on
+#           Redis 7.4.10 at 17010-17017) the nodes are rebuilt to before each
+#           run; setup then goes through redis-cli -c to the group's first node
 #   env:    K=V, repeatable
 #   stdin:  C escapes (\n \r \t \\ \xHH), repeatable, concatenated
 #   timeline: instead of stdin, steps over time separated by ` ; `: seconds to
@@ -1901,3 +1901,123 @@ run: --cluster del-node 127.0.0.1:17000 17000
 cluster: 3x1
 prepare: redis-cli -p 17005 CLUSTER REPLICATE 1700117001170011700117001170011700117001 >/dev/null; redis-cli -p 17000 CLUSTER DELSLOTSRANGE 0 5460 >/dev/null; for i in $(seq 100); do redis-cli -p 17001 CLUSTER NODES | grep -q '17005@27005 slave 1700117001170011700117001170011700117001' && break; sleep 0.05; done
 run: --cluster del-node 127.0.0.1:17001 1700017000170001700017000170001700017000
+
+[RC-113,RC-114 cluster-reshard-with-flags]
+cluster: 3
+compare: cluster
+setup: SET {a}1 x
+setup: SET {b}2 y
+mask: task [0-9a-f]{40}
+run: --cluster reshard 127.0.0.1:17000 --cluster-from 1700217002170021700217002170021700217002 --cluster-to 1700117001170011700117001170011700117001 --cluster-slots 3 --cluster-yes
+
+[RC-113 cluster-reshard-from-all]
+cluster: 3
+compare: cluster
+mask: task [0-9a-f]{40}
+run: --cluster reshard 127.0.0.1:17000 --cluster-from all --cluster-to 1700117001170011700117001170011700117001 --cluster-slots 5 --cluster-yes
+
+[RC-113 cluster-reshard-declined]
+cluster: 3
+compare: cluster
+stdin: no\n
+run: --cluster reshard 127.0.0.1:17000 --cluster-from 1700017000170001700017000170001700017000,1700217002170021700217002170021700217002 --cluster-to 1700117001170011700117001170011700117001 --cluster-slots 2
+
+[RC-113 cluster-reshard-unknown-target]
+cluster: 3
+compare: cluster
+run: --cluster reshard 127.0.0.1:17000 --cluster-from all --cluster-to abc --cluster-slots 4 --cluster-yes
+
+[RC-113 cluster-reshard-unknown-source]
+cluster: 3
+compare: cluster
+run: --cluster reshard 127.0.0.1:17000 --cluster-from 1700017000170001700017000170001700017000,abc --cluster-to 1700117001170011700117001170011700117001 --cluster-slots 4 --cluster-yes
+
+[RC-113 cluster-reshard-target-as-source]
+cluster: 3
+compare: cluster
+run: --cluster reshard 127.0.0.1:17000 --cluster-from 1700117001170011700117001170011700117001 --cluster-to 1700117001170011700117001170011700117001 --cluster-slots 4 --cluster-yes
+
+[RC-113 cluster-reshard-a-replica-is-no-target]
+cluster: 3x1
+compare: cluster
+run: --cluster reshard 127.0.0.1:17000 --cluster-from all --cluster-to 1700317003170031700317003170031700317003 --cluster-slots 4 --cluster-yes
+
+[RC-113 cluster-reshard-refuses-a-cluster-with-problems]
+cluster: 3
+compare: cluster
+prepare: redis-cli -p 17001 CLUSTER SETSLOT 5 IMPORTING $(redis-cli -p 17000 CLUSTER MYID) >/dev/null
+run: --cluster reshard 127.0.0.1:17000 --cluster-from all --cluster-to 1700117001170011700117001170011700117001 --cluster-slots 4 --cluster-yes
+
+[RC-113 cluster-reshard-asks-on-a-terminal]
+cluster: 3
+compare: cluster
+screen: pty
+timeline: 1.0 ; 0\r ; 0.3 ; 99999\r ; 0.3 ; 2\r ; 0.3 ; 1700117001170011700117001170011700117001\r ; 0.3 ; 1700017000170001700017000170001700017000\r ; 0.3 ; done\r ; 0.5 ; no\r ; 0.5
+run: --cluster reshard 127.0.0.1:17000
+
+[RC-113 cluster-reshard-all-sources-on-a-terminal]
+cluster: 3
+compare: cluster
+screen: pty
+mask: task [0-9a-f]{40}
+timeline: 1.0 ; 1\r ; 0.3 ; 1700117001170011700117001170011700117001\r ; 0.3 ; all\r ; 0.5 ; yes\r ; 1.5
+run: --cluster reshard 127.0.0.1:17000
+
+[RC-113 cluster-reshard-asks-for-a-known-target]
+cluster: 3
+compare: cluster
+screen: pty
+timeline: 1.0 ; 2\r ; 0.3 ; abc\r ; 0.5
+run: --cluster reshard 127.0.0.1:17000
+
+[RC-113 cluster-reshard-asks-for-known-sources]
+cluster: 3
+compare: cluster
+screen: pty
+timeline: 1.0 ; 2\r ; 0.3 ; 1700117001170011700117001170011700117001\r ; 0.3 ; 1700117001170011700117001170011700117001\r ; 0.3 ; xyz\r ; 0.3 ; 1700017000170001700017000170001700017000\r ; 0.3 ; done\r ; 0.5 ; no\r ; 0.5
+run: --cluster reshard 127.0.0.1:17000
+
+[RC-113 cluster-reshard-answers-on-a-pipe]
+# DEV-025: redis-cli reads the first answer through a buffer that swallows
+# the rest of piped input, so it asks for the receiving node ID for ever.
+deviation: DEV-025
+cluster: 3
+compare: cluster
+stdin: 2\n1700117001170011700117001170011700117001\n1700017000170001700017000170001700017000\ndone\nno\n
+run: --cluster reshard 127.0.0.1:17000
+kevy.stdout: >>> Performing Cluster Check (using node 127.0.0.1:17000)\nM: 1700017000170001700017000170001700017000 127.0.0.1:17000\n   slots:[0-5460] (5461 slots) master\nM: 1700117001170011700117001170011700117001 127.0.0.1:17001\n   slots:[5461-10922] (5462 slots) master\nM: 1700217002170021700217002170021700217002 127.0.0.1:17002\n   slots:[10923-16383] (5461 slots) master\n[OK] All nodes agree about slots configuration.\n>>> Check for open slots...\n>>> Check slots coverage...\n[OK] All 16384 slots covered.\nHow many slots do you want to move (from 1 to 16384)? What is the receiving node ID? Please enter all the source node IDs.\n  Type 'all' to use all the nodes as source nodes for the hash slots.\n  Type 'done' once you entered all the source nodes IDs.\nSource node #1: Source node #2: \nReady to move 2 slots.\n  Source nodes:\n    M: 1700017000170001700017000170001700017000 127.0.0.1:17000\n       slots:[0-5460] (5461 slots) master\n  Destination node:\n    M: 1700117001170011700117001170011700117001 127.0.0.1:17001\n       slots:[5461-10922] (5462 slots) master\n  Resharding plan:\n    Moving slot 0 from 1700017000170001700017000170001700017000\n    Moving slot 1 from 1700017000170001700017000170001700017000\nDo you want to proceed with the proposed reshard plan (yes/no)?\x20
+kevy.exit: 1
+
+[RC-113,RC-116 cluster-reshard-slot-by-slot]
+cluster: legacy-3
+compare: cluster
+setup: SET {t5151}1 x
+setup: SET {t5151}2 y
+setup: SET {t5151}3 z
+setup: SET {t11011}1 x
+run: --cluster reshard 127.0.0.1:17010 --cluster-from 1701217012170121701217012170121701217012 --cluster-to 1701117011170111701117011170111701117011 --cluster-slots 2 --cluster-yes --cluster-pipeline 2
+
+[RC-116 cluster-reshard-slot-by-slot-busy-key]
+# The target already holds a key the slot's keys collide with.
+cluster: legacy-3
+compare: cluster
+setup: SET {t5151}1 x
+prepare: redis-cli -p 17011 CLUSTER SETSLOT 10923 IMPORTING 1701217012170121701217012170121701217012 >/dev/null; redis-cli -p 17011 ASKING >/dev/null; printf 'ASKING\nSET {t5151}1 other\n' | redis-cli -p 17011 >/dev/null; redis-cli -p 17011 CLUSTER SETSLOT 10923 STABLE >/dev/null
+run: --cluster reshard 127.0.0.1:17010 --cluster-from 1701217012170121701217012170121701217012 --cluster-to 1701117011170111701117011170111701117011 --cluster-slots 1 --cluster-yes
+
+[RC-116 cluster-reshard-slot-by-slot-replace]
+cluster: legacy-3
+compare: cluster
+setup: SET {t5151}1 x
+prepare: redis-cli -p 17011 CLUSTER SETSLOT 10923 IMPORTING 1701217012170121701217012170121701217012 >/dev/null; printf 'ASKING\nSET {t5151}1 other\n' | redis-cli -p 17011 >/dev/null; redis-cli -p 17011 CLUSTER SETSLOT 10923 STABLE >/dev/null
+run: --cluster reshard 127.0.0.1:17010 --cluster-from 1701217012170121701217012170121701217012 --cluster-to 1701117011170111701117011170111701117011 --cluster-slots 1 --cluster-yes --cluster-replace
+
+[RC-116 cluster-reshard-slot-by-slot-same-values]
+# The colliding key holds the same value on both sides: nothing is lost by
+# replacing it.
+cluster: legacy-3
+compare: cluster
+setup: SET {t5151}1 x
+setup: SET {t5151}2 y
+prepare: redis-cli -p 17011 CLUSTER SETSLOT 10923 IMPORTING 1701217012170121701217012170121701217012 >/dev/null; printf 'ASKING\nSET {t5151}1 x\n' | redis-cli -p 17011 >/dev/null; redis-cli -p 17011 CLUSTER SETSLOT 10923 STABLE >/dev/null
+run: --cluster reshard 127.0.0.1:17010 --cluster-from 1701217012170121701217012170121701217012 --cluster-to 1701117011170111701117011170111701117011 --cluster-slots 1 --cluster-yes

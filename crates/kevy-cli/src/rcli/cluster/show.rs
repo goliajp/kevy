@@ -7,16 +7,22 @@ use kevy_resp::Reply;
 
 /// `M: <id> host:port`, its slots, and its replicas or its master.
 pub(crate) fn node(n: &Node) {
+    node_indented(n, b"");
+}
+
+/// [`node`] with every line after `indent`.
+pub(crate) fn node_indented(n: &Node, indent: &[u8]) {
     let role: &[u8] = if n.is_master() { b"M" } else { b"S" };
-    log::plain(&[role, b": ", &n.rec.id, b" ", &n.shown()].concat());
+    log::plain(&[indent, role, b": ", &n.rec.id, b" ", &n.shown()].concat());
     let kind: &[u8] = if n.is_master() { b"master" } else { b"slave" };
     let count = format!(" ({} slots) ", n.rec.slots.count());
     let ranges = bracketed(&n.rec.slots.ranges());
-    log::plain(&[&b"   slots:"[..], &ranges, count.as_bytes(), kind].concat());
+    log::plain(&[indent, b"   slots:", &ranges, count.as_bytes(), kind].concat());
     if let Some(master) = &n.rec.master {
-        log::plain(&[b"   replicates ", master.as_slice()].concat());
+        log::plain(&[indent, b"   replicates ", master.as_slice()].concat());
     } else if n.replicas > 0 {
-        log::plain(format!("   {} additional replica(s)", n.replicas).as_bytes());
+        let text = format!("   {} additional replica(s)", n.replicas);
+        log::plain(&[indent, text.as_bytes()].concat());
     }
 }
 

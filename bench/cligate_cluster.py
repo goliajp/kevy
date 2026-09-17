@@ -1,4 +1,4 @@
-"""cligate's cluster fixture — eight cluster-enabled redis-servers.
+"""cligate's cluster fixture — cluster-enabled redis-servers in two groups.
 
 A cluster case names a shape (`cluster: 3x1`), and every run of it, redis-cli's
 and kevy-cli's, starts from that shape built fresh. What the cluster manager
@@ -8,11 +8,15 @@ nodes keep their ids across cases — a reset is CLUSTER RESET SOFT, which
 forgets every other node and every slot but not the node's own name — and
 the servers are started once per gate run, not per case.
 
-Shapes, over ports 17000-17007 (the cluster bus is port + 10000):
+Shapes, over the current group's ports 17000-17007 (the bus is port + 10000):
 
     empty   every node alone, no slots
     3       17000-17002 masters: 0-5460, 5461-10922, 10923-16383
     3x1     3, plus 17003 replicating 17000, 17004 17001, 17005 17002
+
+`legacy-` before a shape builds it on the legacy group instead, ports
+17010-17017 running Redis 7.4.10: a version without atomic slot migration,
+where the cluster manager moves slots with MIGRATE.
 
 Nodes outside the shape are reset and left alone, for create and add-node.
 Node ids are fixed too: node 17000 is 1700017000...17000.
@@ -21,11 +25,14 @@ Node ids are fixed too: node 17000 is 1700017000...17000.
 import time
 
 PORTS = list(range(17000, 17008))
+LEGACY_PORTS = list(range(17010, 17018))
+LEGACY_IMAGE = "redis:7.4.10"
+# By node index within a group: masters (index, first slot, last slot),
+# replicas (index, master index).
 SHAPES = {
     "empty": ([], []),
-    "3": ([(17000, 0, 5460), (17001, 5461, 10922), (17002, 10923, 16383)], []),
-    "3x1": ([(17000, 0, 5460), (17001, 5461, 10922), (17002, 10923, 16383)],
-            [(17003, 17000), (17004, 17001), (17005, 17002)]),
+    "3": ([(0, 0, 5460), (1, 5461, 10922), (2, 10923, 16383)], []),
+    "3x1": ([(0, 0, 5460), (1, 5461, 10922), (2, 10923, 16383)], [(3, 0), (4, 1), (5, 2)]),
 }
 CONVERGE_S = 20
 
@@ -61,11 +68,27 @@ def _script(text, **subst):
 
 
 class Cluster:
-    """Started on first use; `reset(shape)` before each run of a cluster case."""
+    """Both groups; each starts on first use."""
 
     def __init__(self, sh, image, cli, tag):
-        self.sh, self.image, self.cli = sh, image, cli
-        self.names = [f"cligate-node{p}-{tag}" for p in PORTS]
+        self.groups = {"": Group(sh, image, cli, tag, PORTS),
+                       "legacy-": Group(sh, LEGACY_IMAGE, cli, tag, LEGACY_PORTS)}
+
+    def reset(self, shape):
+        prefix = "legacy-" if shape.startswith("legacy-") else ""
+        self.groups[prefix].reset(shape[len(prefix):])
+
+    def stop(self):
+        for g in self.groups.values():
+            g.stop()
+
+
+class Group:
+    """One image's nodes. `reset(shape)` before each run of a cluster case."""
+
+    def __init__(self, sh, image, cli, tag, ports):
+        self.sh, self.image, self.cli, self.ports = sh, image, cli, ports
+        self.names = [f"cligate-node{p}-{tag}" for p in ports]
         self.started = False
 
     def _exec(self, script, check=True):
@@ -76,7 +99,7 @@ class Cluster:
         return r.stdout.decode()
 
     def _start(self):
-        for port, name in zip(PORTS, self.names):
+        for port, name in zip(self.ports, self.names):
             # A config file, so CONFIG REWRITE (set-timeout) has one to write;
             # a replica's first sync starts at once rather than after 5 s.
             # And a node id fixed ahead of time (the port, eight times), so
@@ -85,6 +108,7 @@ class Cluster:
                     f"connected\\nvars currentEpoch 0 lastVoteEpoch 0\\n' > /data/nodes.conf && "
                     f"printf 'port {port}\\ncluster-enabled yes\\ncluster-config-file "
                     f"nodes.conf\\ncluster-node-timeout 1000\\nrepl-diskless-sync-delay 0"
+                    f"\\nenable-debug-command yes"
                     f"\\nsave \"\"\\nappendonly no\\n' > /data/redis.conf && "
                     f"exec redis-server /data/redis.conf")
             r = self.sh(["docker", "run", "-d", "--name", name, "--network", "host",
@@ -102,23 +126,23 @@ class Cluster:
         """The nodes answering are the ones started here: a stray server on
         these ports would answer PING just as well, and every case would run
         against it."""
-        ports = " ".join(map(str, PORTS))
+        ports = " ".join(map(str, self.ports))
         ids = self._exec(f"for p in {ports}; do redis-cli -p $p CLUSTER MYID; done").split()
-        want = [str(p) * 8 for p in PORTS]
+        want = [str(p) * 8 for p in self.ports]
         if ids != want:
-            raise RuntimeError(f"cluster fixture: ports {PORTS[0]}-{PORTS[-1]} are answered by "
+            raise RuntimeError(f"cluster fixture: ports {self.ports[0]}-{self.ports[-1]} are answered by "
                                f"other servers (ids {ids[:2]}...); stop them first")
 
     def _up(self):
         """A case may SHUTDOWN a node (del-node does); start it again."""
-        ports = " ".join(map(str, PORTS))
+        ports = " ".join(map(str, self.ports))
         for _ in range(100):
             down = self._exec(f"for p in {ports}; do redis-cli -p $p PING >/dev/null 2>&1 "
                               f"|| echo $p; done", check=False).split()
             if not down:
                 return
             for p in down:
-                self.sh(["docker", "start", self.names[PORTS.index(int(p))]])
+                self.sh(["docker", "start", self.names[self.ports.index(int(p))]])
             time.sleep(0.1)
         raise RuntimeError("cluster fixture: nodes did not come back")
 
@@ -130,8 +154,10 @@ class Cluster:
             self._up()
             self._own_nodes()
         self._up()
-        self._exec(_script(RESET, PORTS=" ".join(map(str, PORTS))))
-        masters, replicas = SHAPES[shape]
+        self._exec(_script(RESET, PORTS=" ".join(map(str, self.ports))))
+        at = self.ports
+        masters = [(at[i], lo, hi) for i, lo, hi in SHAPES[shape][0]]
+        replicas = [(at[i], at[m]) for i, m in SHAPES[shape][1]]
         for port, lo, hi in masters:
             self._exec(f"redis-cli -p {port} CLUSTER ADDSLOTSRANGE {lo} {hi}")
         members = [m[0] for m in masters] + [r[0] for r in replicas]

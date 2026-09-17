@@ -31,6 +31,8 @@ pub struct Node {
     /// Alone: its CLUSTER NODES lists only itself until a MEET.
     pub alone: bool,
     pub epoch: u64,
+    /// `redis_version` in INFO server; empty means 8.10.1.
+    pub version: String,
 }
 
 /// A reply to override the default one: `(node, argv) -> RESP bytes`.
@@ -175,6 +177,12 @@ fn answer(shared: &Shared, node: usize, argv: &[Vec<u8>]) -> Option<Vec<u8>> {
             st.nodes[other].alone = false;
             b"+OK\r\n".to_vec()
         }
+        ["INFO", "SERVER"] => {
+            let v =
+                if st.nodes[node].version.is_empty() { "8.10.1" } else { &st.nodes[node].version };
+            bulk(&format!("# Server\r\nredis_version:{v}\r\n"))
+        }
+        ["CLUSTER", "SETSLOT", ..] => b"+OK\r\n".to_vec(),
         ["FUNCTION", "DUMP"] => bulk("payload"),
         ["FUNCTION", "LIST"] => b"*0\r\n".to_vec(),
         ["FUNCTION", "RESTORE", _] => b"+OK\r\n".to_vec(),

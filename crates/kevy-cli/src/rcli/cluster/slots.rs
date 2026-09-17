@@ -24,6 +24,10 @@ impl SlotSet {
         self.0[usize::from(slot) / 64] |= 1 << (slot % 64);
     }
 
+    pub(crate) fn remove(&mut self, slot: u16) {
+        self.0[usize::from(slot) / 64] &= !(1 << (slot % 64));
+    }
+
     pub(crate) fn contains(&self, slot: u16) -> bool {
         self.0[usize::from(slot) / 64] & (1 << (slot % 64)) != 0
     }
