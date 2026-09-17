@@ -16,6 +16,8 @@
 #           or kevy.stdout-replace (`old => new` over redis-cli's output)
 #   mask: a regex whose matches in stdout become `#`; head: compare the first N
 #           lines only (readings that change with time)
+#   compare: cluster — the order nodes are reported in is not the contract (the
+#           entry node's table, filled in no fixed order after a reset)
 #   compare: lines-any-order — line order is not the contract (a deviation in
 #           order, or an order the server does not keep stable)
 #           when kevy-cli is meant to differ (see deviations.txt)
@@ -1593,14 +1595,17 @@ run: --cluster info 127.0.0.1:17000 extra
 run: --cluster call 127.0.0.1 PING
 
 [RC-107 cluster-address-port-is-read-leniently]
+compare: cluster
 cluster: 3
 run: --cluster info 127.0.0.1:17000x
 
 [RC-107 cluster-address-in-two-words]
+compare: cluster
 cluster: 3
 run: --cluster info 127.0.0.1 17001
 
 [RC-107 cluster-arguments-after-options]
+compare: cluster
 cluster: 3
 run: --cluster info --cluster-yes 127.0.0.1:17000
 
@@ -1620,6 +1625,7 @@ run: --cluster help
 run: --cluster help extra
 
 [RC-111 cluster-info-counts-keys-and-replicas]
+compare: cluster
 cluster: 3x1
 setup: SET a 1
 setup: SET b 2
@@ -1634,10 +1640,12 @@ compare: lines-any-order
 run: --cluster info 127.0.0.1:17004
 
 [RC-111 cluster-info-names-the-entry-as-given]
+compare: cluster
 cluster: 3
 run: --cluster info localhost:17000
 
 [RC-110 cluster-check-healthy]
+compare: cluster
 cluster: 3x1
 run: --cluster check 127.0.0.1:17000
 
@@ -1646,17 +1654,20 @@ cluster: empty
 run: --cluster check 127.0.0.1:17006
 
 [RC-110 cluster-check-open-slot]
+compare: cluster
 cluster: 3
 prepare: redis-cli -p 17001 CLUSTER SETSLOT 5 IMPORTING $(redis-cli -p 17000 CLUSTER MYID) >/dev/null; redis-cli -p 17000 CLUSTER SETSLOT 5 MIGRATING $(redis-cli -p 17001 CLUSTER MYID) >/dev/null
 run: --cluster check 127.0.0.1:17000
 
 [RC-110 cluster-check-uncovered-slots-and-ranges]
+compare: cluster
 cluster: 3
 # The other nodes learn of the dropped slots by gossip: wait until they have.
 prepare: redis-cli -p 17000 CLUSTER DELSLOTSRANGE 100 200 >/dev/null; redis-cli -p 17000 CLUSTER DELSLOTS 300 >/dev/null; for i in $(seq 100); do redis-cli -p 17001 CLUSTER NODES | grep -q '0-99 201-299 301-5460' && break; sleep 0.05; done; for i in $(seq 100); do redis-cli -p 17002 CLUSTER NODES | grep -q '0-99 201-299 301-5460' && break; sleep 0.05; done
 run: --cluster check 127.0.0.1:17000
 
 [RC-110 cluster-check-nodes-disagree]
+compare: cluster
 cluster: 3
 # 17001 claims slot 300 in its own view only; the others settle on it being
 # unowned.
@@ -1664,33 +1675,39 @@ prepare: redis-cli -p 17000 CLUSTER DELSLOTS 300 >/dev/null; redis-cli -p 17001 
 run: --cluster check 127.0.0.1:17000
 
 [RC-110 cluster-check-an-unreachable-replica]
+compare: cluster
 cluster: 3x1
 prepare: redis-cli -p 17005 SHUTDOWN NOSAVE >/dev/null 2>&1; sleep 0.2
 run: --cluster check 127.0.0.1:17000
 
 [RC-110 cluster-check-multiple-owners-none]
+compare: cluster
 cluster: 3
 run: --cluster check 127.0.0.1:17000 --cluster-search-multiple-owners
 
 [RC-120 cluster-call-everywhere]
+compare: cluster
 cluster: 3x1
-run: --cluster call 127.0.0.1:17000 CONFIG GET port
+run: --cluster call 127.0.0.1:17000 CLUSTER MYID
 
 [RC-120 cluster-call-errors-keep-their-blank-line]
+compare: cluster
 cluster: 3
 run: --cluster call 127.0.0.1:17000 SET a 1
 
 [RC-120 cluster-call-only-masters]
+compare: cluster
 cluster: 3x1
 setup: SET a 1
 run: --cluster call 127.0.0.1:17000 GET a --cluster-only-masters
 
 [RC-120 cluster-call-only-replicas]
+compare: cluster
 cluster: 3x1
-run: --cluster call 127.0.0.1:17003 ROLE --cluster-only-replicas
-mask: [0-9]{3,}
+run: --cluster call 127.0.0.1:17003 CLUSTER MYID --cluster-only-replicas
 
 [RC-120 cluster-call-with-a-delimiter]
+compare: cluster
 cluster: 3
 run: -d X --cluster call 127.0.0.1:17000 CONFIG GET port
 
@@ -1701,21 +1718,109 @@ run: --cluster set-timeout 127.0.0.1:17000 99
 run: --cluster set-timeout 127.0.0.1:17000 abc
 
 [RC-121 cluster-set-timeout]
+compare: cluster
 cluster: 3x1
 run: --cluster set-timeout 127.0.0.1:17000 1000
 
 [RC-125 cluster-log-colours-on-an-xterm]
+# One node, so the reset sequences stay where the node order cannot move them.
+cluster: empty
+env: TERM=xterm
+prepare: redis-cli -p 17000 CLUSTER ADDSLOTSRANGE 0 100 >/dev/null; redis-cli -p 17000 CLUSTER SETSLOT 5 MIGRATING 1700117001170011700117001170011700117001 >/dev/null 2>&1; redis-cli -p 17000 CLUSTER SETSLOT 6 IMPORTING 1700117001170011700117001170011700117001 >/dev/null 2>&1
+run: --cluster check 127.0.0.1:17000 --cluster-search-multiple-owners
+
+[RC-125 cluster-open-slot-warnings-are-red]
+# The part before the agreement line lists nodes in no fixed order; it is
+# masked, and the rest is compared as it is.
 cluster: 3
 env: TERM=xterm
 prepare: redis-cli -p 17001 CLUSTER SETSLOT 5 IMPORTING $(redis-cli -p 17000 CLUSTER MYID) >/dev/null
-run: --cluster check 127.0.0.1:17000 --cluster-search-multiple-owners
+mask: (?s)\A.*All nodes agree
+run: --cluster check 127.0.0.1:17000
 
 [RC-125 cluster-call-colours-only-its-heading]
-cluster: 3
+cluster: empty
 env: TERM=xterm
 run: --cluster call 127.0.0.1:17000 PING
 
 [RC-125 cluster-set-timeout-colours]
-cluster: 3
+cluster: empty
 env: TERM=xterm
 run: --cluster set-timeout 127.0.0.1:17000 1000
+
+[RC-109 cluster-create-three-masters]
+compare: cluster
+cluster: empty
+mask: Waiting for the cluster to join\n\.*\n
+run: --cluster create 127.0.0.1:17000 127.0.0.1:17001 127.0.0.1:17002 --cluster-yes
+
+[RC-109 cluster-create-confirmed-on-stdin]
+compare: cluster
+cluster: empty
+stdin: yes\n
+mask: Waiting for the cluster to join\n\.*\n
+run: --cluster create 127.0.0.1:17000 127.0.0.1:17001@27001 127.0.0.1:17002
+
+[RC-109 cluster-create-declined]
+cluster: empty
+stdin: no\n
+run: --cluster create 127.0.0.1:17000 127.0.0.1:17001 127.0.0.1:17002
+
+[RC-109 cluster-create-at-end-of-input]
+cluster: empty
+run: --cluster create 127.0.0.1:17000 127.0.0.1:17001 127.0.0.1:17002 127.0.0.1:17003 127.0.0.1:17004
+
+[RC-109 cluster-create-replicas-on-two-hosts]
+cluster: empty
+run: --cluster create localhost:17000 localhost:17001 localhost:17002 127.0.0.1:17003 127.0.0.1:17004 127.0.0.1:17005 --cluster-replicas 1
+
+[RC-109 cluster-create-replicas-on-one-host]
+# DEV-024: redis-cli swaps replicas between masters at random when no swap
+# can reduce same-host pairs, so its final assignment contradicts the
+# `Adding replica` lines it printed and changes from run to run; kevy-cli
+# swaps only when a swap helps.
+deviation: DEV-024
+cluster: empty
+run: --cluster create 127.0.0.1:17000 127.0.0.1:17001 127.0.0.1:17002 127.0.0.1:17003 127.0.0.1:17004 127.0.0.1:17005 --cluster-replicas 1
+kevy.stdout: >>> Performing hash slots allocation on 6 nodes...\nMaster[0] -> Slots 0 - 5460\nMaster[1] -> Slots 5461 - 10922\nMaster[2] -> Slots 10923 - 16383\nAdding replica 127.0.0.1:17004 to 127.0.0.1:17000\nAdding replica 127.0.0.1:17005 to 127.0.0.1:17001\nAdding replica 127.0.0.1:17003 to 127.0.0.1:17002\n>>> Trying to optimize slaves allocation for anti-affinity\n[WARNING] Some slaves are in the same host as their master\nM: 1700017000170001700017000170001700017000 127.0.0.1:17000\n   slots:[0-5460] (5461 slots) master\nM: 1700117001170011700117001170011700117001 127.0.0.1:17001\n   slots:[5461-10922] (5462 slots) master\nM: 1700217002170021700217002170021700217002 127.0.0.1:17002\n   slots:[10923-16383] (5461 slots) master\nS: 1700317003170031700317003170031700317003 127.0.0.1:17003\n   replicates 1700217002170021700217002170021700217002\nS: 1700417004170041700417004170041700417004 127.0.0.1:17004\n   replicates 1700017000170001700017000170001700017000\nS: 1700517005170051700517005170051700517005 127.0.0.1:17005\n   replicates 1700117001170011700117001170011700117001\nCan I set the above configuration? (type 'yes' to accept):\x20
+
+[RC-109 cluster-create-extra-replicas]
+# DEV-024: redis-cli swaps replicas between masters at random when no swap
+# can reduce same-host pairs, so its final assignment contradicts the
+# `Adding replica` lines it printed and changes from run to run; kevy-cli
+# swaps only when a swap helps.
+deviation: DEV-024
+cluster: empty
+run: --cluster create localhost:17000 127.0.0.1:17001 localhost:17002 127.0.0.1:17003 localhost:17004 127.0.0.1:17005 127.0.0.1:17006 --cluster-replicas 1
+kevy.stdout: >>> Performing hash slots allocation on 7 nodes...\nMaster[0] -> Slots 0 - 5460\nMaster[1] -> Slots 5461 - 10922\nMaster[2] -> Slots 10923 - 16383\nAdding replica 127.0.0.1:17005 to localhost:17000\nAdding replica localhost:17004 to 127.0.0.1:17001\nAdding replica 127.0.0.1:17006 to localhost:17002\nAdding extra replicas...\nAdding replica 127.0.0.1:17003 to localhost:17000\n>>> Trying to optimize slaves allocation for anti-affinity\n[WARNING] Some slaves of the same master are in the same host\nM: 1700017000170001700017000170001700017000 localhost:17000\n   slots:[0-5460] (5461 slots) master\nM: 1700117001170011700117001170011700117001 127.0.0.1:17001\n   slots:[5461-10922] (5462 slots) master\nM: 1700217002170021700217002170021700217002 localhost:17002\n   slots:[10923-16383] (5461 slots) master\nS: 1700317003170031700317003170031700317003 127.0.0.1:17003\n   replicates 1700017000170001700017000170001700017000\nS: 1700417004170041700417004170041700417004 localhost:17004\n   replicates 1700117001170011700117001170011700117001\nS: 1700517005170051700517005170051700517005 127.0.0.1:17005\n   replicates 1700017000170001700017000170001700017000\nS: 1700617006170061700617006170061700617006 127.0.0.1:17006\n   replicates 1700217002170021700217002170021700217002\nCan I set the above configuration? (type 'yes' to accept):\x20
+
+[RC-109 cluster-create-replicas-joined]
+compare: cluster
+# DEV-024: redis-cli swaps replicas between masters at random when no swap
+# can reduce same-host pairs, so its final assignment contradicts the
+# `Adding replica` lines it printed and changes from run to run; kevy-cli
+# swaps only when a swap helps.
+deviation: DEV-024
+cluster: empty
+mask: Waiting for the cluster to join\n\.*\n
+run: --cluster create 127.0.0.1:17000 127.0.0.1:17001 127.0.0.1:17002 127.0.0.1:17003 127.0.0.1:17004 127.0.0.1:17005 --cluster-replicas 1 --cluster-yes
+kevy.stdout: >>> Performing hash slots allocation on 6 nodes...\nMaster[0] -> Slots 0 - 5460\nMaster[1] -> Slots 5461 - 10922\nMaster[2] -> Slots 10923 - 16383\nAdding replica 127.0.0.1:17004 to 127.0.0.1:17000\nAdding replica 127.0.0.1:17005 to 127.0.0.1:17001\nAdding replica 127.0.0.1:17003 to 127.0.0.1:17002\n>>> Trying to optimize slaves allocation for anti-affinity\n[WARNING] Some slaves are in the same host as their master\nM: 1700017000170001700017000170001700017000 127.0.0.1:17000\n   slots:[0-5460] (5461 slots) master\nM: 1700117001170011700117001170011700117001 127.0.0.1:17001\n   slots:[5461-10922] (5462 slots) master\nM: 1700217002170021700217002170021700217002 127.0.0.1:17002\n   slots:[10923-16383] (5461 slots) master\nS: 1700317003170031700317003170031700317003 127.0.0.1:17003\n   replicates 1700217002170021700217002170021700217002\nS: 1700417004170041700417004170041700417004 127.0.0.1:17004\n   replicates 1700017000170001700017000170001700017000\nS: 1700517005170051700517005170051700517005 127.0.0.1:17005\n   replicates 1700117001170011700117001170011700117001\n>>> Nodes configuration updated\n>>> Assign a different config epoch to each node\n>>> Sending CLUSTER MEET messages to join the cluster\n#>>> Performing Cluster Check (using node 127.0.0.1:17000)\nM: 1700017000170001700017000170001700017000 127.0.0.1:17000\n   slots:[0-5460] (5461 slots) master\n   1 additional replica(s)\nS: 1700417004170041700417004170041700417004 127.0.0.1:17004\n   slots: (0 slots) slave\n   replicates 1700017000170001700017000170001700017000\nS: 1700317003170031700317003170031700317003 127.0.0.1:17003\n   slots: (0 slots) slave\n   replicates 1700217002170021700217002170021700217002\nM: 1700117001170011700117001170011700117001 127.0.0.1:17001\n   slots:[5461-10922] (5462 slots) master\n   1 additional replica(s)\nM: 1700217002170021700217002170021700217002 127.0.0.1:17002\n   slots:[10923-16383] (5461 slots) master\n   1 additional replica(s)\nS: 1700517005170051700517005170051700517005 127.0.0.1:17005\n   slots: (0 slots) slave\n   replicates 1700117001170011700117001170011700117001\n[OK] All nodes agree about slots configuration.\n>>> Check for open slots...\n>>> Check slots coverage...\n[OK] All 16384 slots covered.\n
+
+[RC-109 cluster-create-too-few-masters]
+cluster: empty
+run: --cluster create 127.0.0.1:17000 127.0.0.1:17001 127.0.0.1:17002 127.0.0.1:17003 --cluster-replicas 1
+
+[RC-109 cluster-create-a-node-that-is-not-empty]
+compare: cluster
+cluster: 3
+run: --cluster create 127.0.0.1:17005 127.0.0.1:17000 127.0.0.1:17006
+
+[RC-109 cluster-create-a-node-without-cluster-support]
+cluster: empty
+run: --cluster create 127.0.0.1:17005 127.0.0.1:$PORT 127.0.0.1:17006
+
+[RC-109 cluster-create-bad-address]
+run: --cluster create 127.0.0.1
+
+[RC-109 cluster-create-unreachable-node]
+run: --cluster create 127.0.0.1:1 127.0.0.1:2 127.0.0.1:3

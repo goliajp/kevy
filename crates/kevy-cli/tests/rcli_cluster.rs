@@ -242,3 +242,91 @@ fn dash_c_follows_moved_and_ask_and_stays_where_it_went() {
     let without = cli(&["-p", &ports[0].to_string(), "GET", "k"], b"", &[]);
     assert_eq!(without.stdout, format!("MOVED 866 127.0.0.1:{p1}\n\n"));
 }
+
+fn ports_of(ports: &[u16], args: &[&str]) -> Vec<String> {
+    ports.iter().map(|p| at(*p)).chain(args.iter().map(|a| a.to_string())).collect()
+}
+
+#[test]
+fn create_plans_confirms_and_joins() {
+    let shared = cluster_fake::fresh(6);
+    let ports = start(&shared);
+    let mut args = vec!["--cluster".to_string(), "create".into()];
+    args.extend(ports_of(&ports, &["--cluster-replicas", "1"]));
+    let argv: Vec<&str> = args.iter().map(String::as_str).collect();
+    let declined = cli(&argv, b"no\n", &[]);
+    let (p, i) = (|n: usize| at(ports[n]), id);
+    let plan = format!(
+        ">>> Performing hash slots allocation on 6 nodes...\nMaster[0] -> Slots 0 - 5460\nMaster[1] -> Slots 5461 - 10922\nMaster[2] -> Slots 10923 - 16383\nAdding replica {} to {}\nAdding replica {} to {}\nAdding replica {} to {}\n>>> Trying to optimize slaves allocation for anti-affinity\n[WARNING] Some slaves are in the same host as their master\nM: {} {}\n   slots:[0-5460] (5461 slots) master\n",
+        p(4),
+        p(0),
+        p(5),
+        p(1),
+        p(3),
+        p(2),
+        i(0),
+        p(0)
+    );
+    assert!(declined.stdout.starts_with(&plan), "{}", declined.stdout);
+    let replica_line = format!("S: {} {}\n   replicates {}\n", i(3), p(3), i(2));
+    assert!(declined.stdout.contains(&replica_line));
+    assert!(
+        declined.stdout.ends_with("Can I set the above configuration? (type 'yes' to accept): ")
+    );
+    assert_eq!((declined.code, received(&shared, 0).len()), (0, 3));
+    let made = cli(&argv, b"yes\n", &[]);
+    assert!(made.stdout.contains(">>> Nodes configuration updated\n>>> Assign a different config epoch to each node\n>>> Sending CLUSTER MEET messages to join the cluster\nWaiting for the cluster to join\n"), "{}", made.stdout);
+    assert!(
+        made.stdout.ends_with("[OK] All 16384 slots covered.\n") && made.code == 0,
+        "{}",
+        made.stdout
+    );
+    let st = shared.lock().unwrap();
+    assert_eq!(
+        (st.nodes[1].slots.clone(), st.nodes[3].master, st.nodes[5].epoch),
+        (vec![(5461, 10922)], Some(2), 6)
+    );
+}
+
+#[test]
+fn create_refuses_nodes_and_configurations_it_cannot_use() {
+    let shared = cluster_fake::fresh(4);
+    shared.lock().unwrap().nodes[2].keys = 1;
+    let ports = start(&shared);
+    let run = |args: &[String]| {
+        let mut argv = vec!["--cluster", "create"];
+        argv.extend(args.iter().map(String::as_str));
+        cli(&argv, b"", &[])
+    };
+    let few = run(&ports_of(&ports[..2], &["--cluster-yes"]));
+    assert_eq!(
+        (few.stdout.as_str(), few.code),
+        (
+            "*** ERROR: Invalid configuration for cluster creation.\n*** Redis Cluster requires at least 3 master nodes.\n*** This is not possible with 2 nodes and 0 replicas per node.\n*** At least 3 nodes are required.\n",
+            1
+        )
+    );
+    let busy = run(&ports_of(&ports[..3], &[]));
+    let msg = format!(
+        "[ERR] Node {} is not empty. Either the node already knows other nodes (check with CLUSTER NODES) or contains some key in database 0.\n",
+        at(ports[2])
+    );
+    assert_eq!((busy.stdout, busy.code), (msg, 1));
+    let bad = run(&["127.0.0.1".to_string()]);
+    assert_eq!((bad.stderr.as_str(), bad.code), ("Invalid address format: 127.0.0.1\n", 1));
+    shared.lock().unwrap().hook = Some(Box::new(|node, argv| {
+        (node == 3 && argv[1].eq_ignore_ascii_case(b"ADDSLOTS"))
+            .then(|| b"-ERR Slot 1 is already busy\r\n".to_vec())
+    }));
+    shared.lock().unwrap().nodes[2].keys = 0;
+    let refused = run(&[at(ports[3]), at(ports[0]), at(ports[1]), "--cluster-yes".into()]);
+    assert!(
+        refused.stdout.ends_with(&format!(
+            "Node {} replied with error:\nERR Slot 1 is already busy\n",
+            at(ports[3])
+        )),
+        "{}",
+        refused.stdout
+    );
+    assert_eq!(refused.code, 1);
+}

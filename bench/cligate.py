@@ -308,8 +308,45 @@ def expected_kevy(case, ref):
             int(case.get("kevy.exit", "0")))
 
 
+PER_NODE_LINE = re.compile(rb"^(\S+:\d+ \(|\*\*\* New timeout set for |ERR setting node-timeout "
+                           rb"for |\[WARNING\] Node |\S+:\d+: )")
+
+
+def node_order_free(out: bytes) -> bytes:
+    """Cluster manager output with the node order taken out: each run of `M:`
+    / `S:` blocks (the line and its indented lines), and each run of one-line
+    per-node reports, sorted. The order is the entry node's table, which a
+    reset or freshly joined cluster fills in no fixed order."""
+    result, run, kind = [], [], None
+    for line in out.split(b"\n"):
+        if line.startswith((b"M: ", b"S: ")):
+            this = "block"
+        elif run and (kind == "block" and line.startswith(b"   ")
+                     or kind == "line" and line == b""):
+            # A block's indented lines; the blank line after an error reply.
+            run[-1].append(line)
+            continue
+        elif PER_NODE_LINE.match(line):
+            this = "line"
+        else:
+            this = None
+        if this != kind:
+            result += [l for block in sorted(run) for l in block]
+            run = []
+        kind = this
+        if this is None:
+            result.append(line)
+        else:
+            run.append([line])
+    result += [l for block in sorted(run) for l in block]
+    return b"\n".join(result)
+
+
 def agrees(case, want, got) -> bool:
     """A deviation may pin only a fragment of stdout (help text, version)."""
+    if case.get("compare") == "cluster":
+        return (node_order_free(want[0]) == node_order_free(got[0])
+                and want[1:] == got[1:])
     if case.get("compare") == "lines-any-order":
         # A deviation in order only: the same lines, each as often.
         return (sorted(want[0].split(b"\n")) == sorted(got[0].split(b"\n"))
@@ -321,7 +358,15 @@ def agrees(case, want, got) -> bool:
 
 
 def show(label, want, got):
-    return f"    {label}: redis-cli/expected {want!r}\n    {label}: kevy-cli          {got!r}"
+    text = f"    {label}: redis-cli/expected {want!r}\n    {label}: kevy-cli          {got!r}"
+    if isinstance(want, bytes) and max(len(want), len(got)) > 300:
+        # A long output differs somewhere in the middle: say where.
+        import difflib
+        lines = difflib.unified_diff(want.decode(errors="replace").splitlines(),
+                                     got.decode(errors="replace").splitlines(),
+                                     "expected", "kevy-cli", n=1, lineterm="")
+        text += "\n" + "\n".join(f"      {l}" for l in lines)
+    return text
 
 
 def check_floors(cases, only):
