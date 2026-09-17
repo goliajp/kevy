@@ -2,7 +2,7 @@
 
 use super::sizes::Measure;
 use crate::rcli::opts::Opts;
-use crate::rcli::session::{Connect, Session, eprint_bytes};
+use crate::rcli::session::{Connect, Session};
 
 /// The enabled special modes, in the order they take precedence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -22,12 +22,11 @@ enum Mode {
     Scan,
     LruTest,
     IntrinsicLatency,
-    ClusterRedirects,
 }
 
 /// Run the first special mode `s.opts` enables; `None` when there is none.
 pub(crate) fn run(s: &mut Session) -> Option<u8> {
-    let (mode, flag) = first_mode(&s.opts)?;
+    let mode = first_mode(&s.opts)?;
     let needs_server = matches!(
         mode,
         Mode::Scan
@@ -48,6 +47,7 @@ pub(crate) fn run(s: &mut Session) -> Option<u8> {
         return Some(1);
     }
     Some(match mode {
+        Mode::Cluster => crate::rcli::cluster::run(s),
         Mode::Scan => super::scan::run(s),
         Mode::HotKeys => super::hotkeys::run(s),
         Mode::KeyStats => super::keystats::run(s),
@@ -69,34 +69,29 @@ pub(crate) fn run(s: &mut Session) -> Option<u8> {
         Mode::MemKeys => {
             super::bigkeys::run(s, Measure::Memory { samples: s.opts.modes.memkeys_samples })
         }
-        _ => {
-            eprint_bytes(&[b"kevy-cli: ", flag.as_bytes(), b" is not implemented yet\n"]);
-            1
-        }
     })
 }
 
 // LOC-WAIVER: a table — one row per mode flag, in redis-cli's precedence.
-fn first_mode(o: &Opts) -> Option<(Mode, &'static str)> {
+fn first_mode(o: &Opts) -> Option<Mode> {
     let m = &o.modes;
     [
-        (m.cluster.is_some(), Mode::Cluster, "--cluster"),
-        (m.latency, Mode::Latency, "--latency"),
-        (m.latency_dist, Mode::LatencyDist, "--latency-dist"),
-        (m.vset_recall.is_some(), Mode::VsetRecall, "--vset-recall"),
-        (m.replica, Mode::Replica, "--replica"),
-        (m.getrdb || m.functions_rdb, Mode::Rdb, "--rdb"),
-        (m.pipe, Mode::Pipe, "--pipe"),
-        (m.bigkeys, Mode::BigKeys, "--bigkeys"),
-        (m.memkeys, Mode::MemKeys, "--memkeys"),
-        (m.keystats, Mode::KeyStats, "--keystats"),
-        (m.hotkeys, Mode::HotKeys, "--hotkeys"),
-        (m.stat, Mode::Stat, "--stat"),
-        (m.scan, Mode::Scan, "--scan"),
-        (m.lru_test.is_some(), Mode::LruTest, "--lru-test"),
-        (m.intrinsic_latency.is_some(), Mode::IntrinsicLatency, "--intrinsic-latency"),
-        (o.cluster_mode, Mode::ClusterRedirects, "-c"),
+        (m.cluster.is_some(), Mode::Cluster),
+        (m.latency, Mode::Latency),
+        (m.latency_dist, Mode::LatencyDist),
+        (m.vset_recall.is_some(), Mode::VsetRecall),
+        (m.replica, Mode::Replica),
+        (m.getrdb || m.functions_rdb, Mode::Rdb),
+        (m.pipe, Mode::Pipe),
+        (m.bigkeys, Mode::BigKeys),
+        (m.memkeys, Mode::MemKeys),
+        (m.keystats, Mode::KeyStats),
+        (m.hotkeys, Mode::HotKeys),
+        (m.stat, Mode::Stat),
+        (m.scan, Mode::Scan),
+        (m.lru_test.is_some(), Mode::LruTest),
+        (m.intrinsic_latency.is_some(), Mode::IntrinsicLatency),
     ]
     .into_iter()
-    .find_map(|(on, mode, flag)| on.then_some((mode, flag)))
+    .find_map(|(on, mode)| on.then_some(mode))
 }

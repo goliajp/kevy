@@ -265,7 +265,6 @@ fn option_errors_exit_with_redis_cli_messages() {
             "Invalid percentile '101' in --latency-percentiles (must be a number between 0 and 100)."
         )
     );
-    assert_eq!(err(&["-c"]), one("kevy-cli: -c is not implemented yet"));
     let help = cli(&["--help"], b"", &[]);
     assert!(
         help.stdout.contains("-p <port>") && help.stdout.contains("sql compile") && help.code == 0
@@ -434,13 +433,16 @@ fn help_hints_and_completion_come_from_the_servers_reference() {
 #[test]
 fn cluster_manager_flags_parse_before_the_mode_is_refused() {
     let refused = |args: &[&str]| cli(args, b"", &[]).stderr;
-    let msg = "kevy-cli: --cluster is not implemented yet\n";
+    let msg = "kevy-cli: --cluster create is not implemented yet\n";
     assert_eq!(
         refused(&["--cluster", "create", "--cluster-replicas", "1", "h:1", "h:2", "--cluster-yes"]),
         msg
     );
     assert_eq!(refused(&["--cluster", "create", "--cluster-yes", "h:1", "h:2", "stray"]), msg);
-    assert_eq!(refused(&["--cluster-weight", "a=1", "b=2", "--cluster", "rebalance", "h:1"]), msg);
+    assert_eq!(
+        refused(&["--cluster-weight", "a=1", "b=2", "--cluster", "rebalance", "h:1"]),
+        "kevy-cli: --cluster rebalance is not implemented yet\n"
+    );
     assert_eq!(
         refused(&["--cluster-weight", "a=1", "--cluster-weight", "b=1"]),
         "WARNING: you cannot use --cluster-weight more than once.\nYou can set more weights by adding them as a space-separated list, ie:\n--cluster-weight n1=w n2=w\n"

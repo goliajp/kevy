@@ -14,6 +14,15 @@ pub(crate) enum Read {
     Failed,
     /// Ctrl-C cut a subscribed or monitoring connection; a fresh one replaced it.
     Interrupted,
+    /// With `-c`, the reply redirects the command elsewhere (not printed).
+    Redirect(super::redirect::Redirect),
+}
+
+/// How waiting for a command's reply ended.
+enum Awaited {
+    Done,
+    Lost,
+    Redirected(super::redirect::Redirect),
 }
 
 fn is(argv: &[Vec<u8>], i: usize, word: &str) -> bool {
@@ -81,8 +90,17 @@ impl Session {
             } else {
                 0
             };
-            if !self.await_reply(argv, verbatim, expected, subscribe, unsubscribe) {
-                return false;
+            match self.await_reply(argv, verbatim, expected, subscribe, unsubscribe) {
+                Awaited::Done => {}
+                Awaited::Lost => return false,
+                Awaited::Redirected(to) => {
+                    // Sent again there; a redirection is not a repeat.
+                    if !self.follow(to) {
+                        return false;
+                    }
+                    repeat += 1;
+                    continue;
+                }
             }
             if self.opts.interval_us > 0 {
                 std::thread::sleep(std::time::Duration::from_micros(self.opts.interval_us));
@@ -94,7 +112,7 @@ impl Session {
     fn monitor_loop(&mut self, verbatim: bool) -> bool {
         loop {
             match self.read_reply(verbatim) {
-                Read::Reply(Reply::Error(_) | Reply::BlobError(_)) => {
+                Read::Reply(Reply::Error(_) | Reply::BlobError(_)) | Read::Redirect(_) => {
                     self.monitor_mode = false;
                     return true;
                 }
@@ -117,12 +135,13 @@ impl Session {
         mut expected: usize,
         subscribe: bool,
         unsubscribe: bool,
-    ) -> bool {
+    ) -> Awaited {
         loop {
             let reply = match self.read_reply(verbatim) {
                 Read::Reply(r) => r,
-                Read::Interrupted => return true,
-                Read::Failed => return false,
+                Read::Interrupted => return Awaited::Done,
+                Read::Failed => return Awaited::Lost,
+                Read::Redirect(to) => return Awaited::Redirected(to),
             };
             if self.pubsub_mode || expected > 0 {
                 if let Some(kind) = pubsub_kind(&reply, self.current_resp3) {
@@ -142,7 +161,7 @@ impl Session {
                 }
             }
             self.track_state(argv, &reply, subscribe || unsubscribe);
-            return true;
+            return Awaited::Done;
         }
     }
 
@@ -209,6 +228,11 @@ impl Session {
         // The reply that ends a session is still shown the debugger's way.
         let output = self.opts.output;
         let reply = if self.ldb.active { self.ldb_reply(reply) } else { reply };
+        if self.opts.cluster_mode
+            && let Some(to) = super::redirect::parse(&reply)
+        {
+            return Read::Redirect(to);
+        }
         if !self.interactive
             && self.opts.set_errcode
             && let Reply::Error(msg) | Reply::BlobError(msg) = &reply
