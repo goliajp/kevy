@@ -9,51 +9,48 @@ use kevy_resp::Reply;
 /// which differ (or why they could not be compared).
 pub(crate) fn same_values(c: &mut Cluster, source: usize, target: usize, keys: &[Vec<u8>]) -> bool {
     write_out(b"*** Checking key values on both nodes...\n");
-    let mut argv: Vec<&[u8]> = vec![b"DEBUG", b"DIGEST-VALUE"];
-    argv.extend(keys.iter().map(Vec::as_slice));
-    let mut digests = Vec::new();
-    let mut failed = false;
-    for node in [source, target] {
-        match c.nodes[node].link.request(&argv) {
-            Ok(Reply::Array(values)) => digests.push(values),
-            other => {
-                let why = super::migrate::failure(&other).unwrap_or_default();
-                write_out(
-                    &[
-                        &b"Node "[..],
-                        &c.nodes[node].shown(),
-                        b" replied with error:\n",
-                        &why,
-                        b"\n",
-                    ]
-                    .concat(),
-                );
-                failed = true;
-            }
-        }
-    }
-    if failed {
+    let Some(digests) = digests(c, [source, target], keys) else {
         write_out(b"*** Value check failed!\n\n");
         return false;
-    }
+    };
     // A key a node does not hold digests to all zeros: a key only one side
     // holds (MIGRATE may have moved part of the batch) is no collision.
-    let held = |d: Option<&Reply>| {
-        d.and_then(super::link::text).is_some_and(|t| t.iter().any(|&b| b != b'0'))
-    };
+    let held = |d: &Reply| super::link::text(d).is_some_and(|t| t.iter().any(|&b| b != b'0'));
     let differ: Vec<&Vec<u8>> = keys
         .iter()
-        .enumerate()
-        .filter(|(i, _)| {
-            let src = digests.first().and_then(|d| d.get(*i));
-            let dst = digests.get(1).and_then(|d| d.get(*i));
-            held(src) && held(dst) && src != dst
-        })
-        .map(|(_, k)| k)
+        .zip(digests[0].iter().zip(digests[1].iter()))
+        .filter(|(_, (src, dst))| held(src) && held(dst) && src != dst)
+        .map(|(k, _)| k)
         .collect();
     if differ.is_empty() {
         return true;
     }
+    report_differences(c, source, target, &differ);
+    false
+}
+
+/// DEBUG DIGEST-VALUE of `keys` on both nodes, or `None` after printing
+/// each node's refusal.
+fn digests(c: &mut Cluster, nodes: [usize; 2], keys: &[Vec<u8>]) -> Option<[Vec<Reply>; 2]> {
+    let mut argv: Vec<&[u8]> = vec![b"DEBUG", b"DIGEST-VALUE"];
+    argv.extend(keys.iter().map(Vec::as_slice));
+    let mut out: [Vec<Reply>; 2] = Default::default();
+    let mut failed = false;
+    for (slot, node) in out.iter_mut().zip(nodes) {
+        match c.nodes[node].link.request(&argv) {
+            Ok(Reply::Array(values)) => *slot = values,
+            other => {
+                let why = super::migrate::failure(&other).unwrap_or_default();
+                let at = c.nodes[node].shown();
+                write_out(&[&b"Node "[..], &at, b" replied with error:\n", &why, b"\n"].concat());
+                failed = true;
+            }
+        }
+    }
+    (!failed).then_some(out)
+}
+
+fn report_differences(c: &Cluster, source: usize, target: usize, differ: &[&Vec<u8>]) {
     let head = format!(
         "*** Found {} key(s) in both source node and target node having different values.\n",
         differ.len()
@@ -72,5 +69,4 @@ pub(crate) fn same_values(c: &mut Cluster, source: usize, target: usize, keys: &
     }
     text.extend_from_slice(b"Please fix the above key(s) manually and try again or relaunch the command \nwith --cluster-replace option to force key overriding.\n\n");
     write_out(&text);
-    false
 }
