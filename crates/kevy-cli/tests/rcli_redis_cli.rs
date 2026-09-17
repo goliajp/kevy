@@ -1571,3 +1571,83 @@ fn rdb_and_replica_modes_read_a_snapshot_stream() {
     server.join().unwrap();
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A server that answers each command it can count in a read (`*` frames, or
+/// inline lines) with `answer(command)`, for `reads` reads, then sends `last`
+/// and closes: long-running modes end through their error exits, which write
+/// a coverage profile where a SIGINT would not.
+fn counting_server(
+    reads: usize,
+    answer: fn(&[u8]) -> &'static [u8],
+    last: &'static [u8],
+) -> (String, std::thread::JoinHandle<()>) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port().to_string();
+    let server = std::thread::spawn(move || {
+        use std::io::Read;
+        let (mut conn, _) = listener.accept().unwrap();
+        let mut buf = vec![0u8; 1 << 20];
+        for _ in 0..reads {
+            let Ok(n @ 1..) = conn.read(&mut buf) else { return };
+            let mut out = Vec::new();
+            let text = &buf[..n];
+            let starts: Vec<usize> =
+                (0..n).filter(|&i| text[i] == b'*' && (i == 0 || text[i - 1] == b'\n')).collect();
+            for (k, &at) in starts.iter().enumerate() {
+                let end = starts.get(k + 1).copied().unwrap_or(n);
+                out.extend_from_slice(answer(&text[at..end]));
+            }
+            if conn.write_all(&out).is_err() {
+                return;
+            }
+        }
+        let _ = conn.write_all(last);
+    });
+    (port, server)
+}
+
+#[test]
+fn long_running_modes_end_on_a_server_that_misbehaves() {
+    fn info_or_config(cmd: &[u8]) -> &'static [u8] {
+        if cmd.windows(6).any(|w| w == b"CONFIG") {
+            b"*2\r\n$9\r\ndatabases\r\n$1\r\n2\r\n"
+        } else {
+            b"$83\r\nused_memory:2048\r\nconnected_clients:3\r\ntotal_commands_processed:9\r\ndb1:keys=4,e=0\r\n\r\n"
+        }
+    }
+    let (port, server) = counting_server(3, info_or_config, b"-ERR stop\r\n");
+    let stat = cli(&["-p", &port, "--stat", "-i", "0.01"], b"", &[]);
+    assert!(stat.stdout.contains("4          2.00K    3       0       9 (+0)"), "{}", stat.stdout);
+    assert_eq!((stat.stderr.as_str(), stat.code), ("ERROR: ERR stop\n", 1));
+    server.join().unwrap();
+
+    fn pong(_: &[u8]) -> &'static [u8] {
+        b"+PONG\r\n"
+    }
+    for args in [
+        &["--latency"][..],
+        &["--latency", "--latency-history", "-i", "0.02", "--csv"],
+        &["--latency-history", "-i", "0.02"],
+        &["--latency-dist", "-i", "0.02"],
+        &["--latency-dist", "--mono", "-i", "0.02"],
+    ] {
+        let (port, server) = counting_server(12, pong, b"@@@\r\n");
+        let mut full = vec!["-p", port.as_str()];
+        full.extend_from_slice(args);
+        let out = cli(&full, b"", TTY);
+        assert_eq!(
+            (out.stderr.as_str(), out.code),
+            ("Error: Protocol error, got \"@\" as reply type byte\n", 1),
+            "{args:?}"
+        );
+        server.join().unwrap();
+    }
+
+    fn lru(cmd: &[u8]) -> &'static [u8] {
+        if cmd.windows(3).any(|w| w == b"GET") { b"$1\r\nx\r\n" } else { b"+OK\r\n" }
+    }
+    let (port, server) = counting_server(40, lru, b"");
+    let out = cli(&["-p", &port, "--lru-test", "50"], b"", &[]);
+    assert_eq!((out.stderr.as_str(), out.code), ("I/O error during LRU test\n", 1));
+    server.join().unwrap();
+}
