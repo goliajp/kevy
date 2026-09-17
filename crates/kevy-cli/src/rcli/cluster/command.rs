@@ -27,6 +27,8 @@ pub(crate) fn run(s: &mut Session) -> u8 {
         }
         "info" | "check" => entry_command(s, cfg, sub.name, args),
         "create" => super::create::run(&s.opts, &cfg, args),
+        "add-node" => super::add_node::run(&s.opts, cfg, args),
+        "del-node" => super::del_node::run(&s.opts, cfg, args),
         "call" | "set-timeout" => node_command(s, cfg, sub.name, args),
         _ => {
             eprint_bytes(&[b"kevy-cli: --cluster ", name, b" is not implemented yet\n"]);

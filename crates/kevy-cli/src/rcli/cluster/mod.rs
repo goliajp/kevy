@@ -1,5 +1,6 @@
 //! `--cluster`: the cluster manager.
 
+mod add_node;
 mod addr;
 mod ask;
 mod call;
@@ -7,6 +8,7 @@ mod check;
 mod command;
 mod config;
 mod create;
+mod del_node;
 mod join;
 mod link;
 mod log;

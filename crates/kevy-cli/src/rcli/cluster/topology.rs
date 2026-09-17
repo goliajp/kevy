@@ -17,6 +17,8 @@ pub(crate) struct Node {
     pub(crate) replicas: usize,
     /// Who owns which slots, in this node's own view.
     pub(crate) signature: Vec<u8>,
+    /// The slots this node says it owns.
+    pub(crate) own_slots: super::slots::SlotSet,
     pub(crate) link: Conn,
 }
 
@@ -49,7 +51,8 @@ impl Cluster {
             Cluster { nodes: Vec::new(), unreachable_masters: 0, cfg, opts: opts.clone() };
         let myself = records.iter().find(|r| r.flags.myself)?;
         let rec = Record { host: entry.host.clone(), port: entry.port, ..myself.clone() };
-        cluster.nodes.push(Node { rec, replicas: 0, signature, link });
+        let own_slots = myself.slots.clone();
+        cluster.nodes.push(Node { rec, replicas: 0, signature, own_slots, link });
         for friend in records.iter().filter(|r| !r.flags.myself) {
             cluster.add_friend(friend);
         }
@@ -68,10 +71,11 @@ impl Cluster {
         };
         let Some((records, signature)) = nodes_of(&mut link, &addr, &self.cfg) else { return };
         let mut rec = rec.clone();
+        let mut own_slots = rec.slots.clone();
         if let Some(own) = records.into_iter().find(|r| r.flags.myself) {
-            (rec.migrating, rec.importing) = (own.migrating, own.importing);
+            (rec.migrating, rec.importing, own_slots) = (own.migrating, own.importing, own.slots);
         }
-        self.nodes.push(Node { rec, replicas: 0, signature, link });
+        self.nodes.push(Node { rec, replicas: 0, signature, own_slots, link });
     }
 
     fn count_replicas(&mut self) {

@@ -175,6 +175,10 @@ fn answer(shared: &Shared, node: usize, argv: &[Vec<u8>]) -> Option<Vec<u8>> {
             st.nodes[other].alone = false;
             b"+OK\r\n".to_vec()
         }
+        ["FUNCTION", "DUMP"] => bulk("payload"),
+        ["FUNCTION", "LIST"] => b"*0\r\n".to_vec(),
+        ["FUNCTION", "RESTORE", _] => b"+OK\r\n".to_vec(),
+        ["CLUSTER", "FORGET", _] | ["CLUSTER", "RESET", "SOFT"] => b"+OK\r\n".to_vec(),
         ["CLUSTER", "REPLICATE", id] => {
             let id = id.to_ascii_lowercase();
             match st.nodes.iter().position(|n| n.id == id) {

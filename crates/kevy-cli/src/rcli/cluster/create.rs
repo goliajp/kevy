@@ -60,18 +60,25 @@ fn open(opts: &Opts, cfg: &Config, arg: &[u8]) -> Option<Fresh> {
     };
     let addr = Addr { host: host.to_vec(), port };
     let mut link = super::link::open(opts, &addr)?;
+    let myself = vet(cfg, &mut link, &addr)?;
+    Some(Fresh { addr, bus, link, id: myself.id, slots: myself.slots })
+}
+
+/// A cluster node that knows no other node and holds no key: its own
+/// record, or `None` after saying which requirement failed.
+pub(crate) fn vet(cfg: &Config, link: &mut Conn, addr: &Addr) -> Option<nodes_text::Record> {
     let at = addr.shown();
-    let Some(myself) = own_record(&mut link) else {
+    let Some(myself) = own_record(link) else {
         let text = [&b"[ERR] Node "[..], &at, b" is not configured as a cluster node."].concat();
         log::line(cfg.color, Level::Err, &text);
         return None;
     };
-    if !is_empty(&mut link) {
+    if !is_empty(link) {
         let text = [&b"[ERR] Node "[..], &at, b" is not empty. Either the node already knows other nodes (check with CLUSTER NODES) or contains some key in database 0."].concat();
         log::line(cfg.color, Level::Err, &text);
         return None;
     }
-    Some(Fresh { addr, bus, link, id: myself.id, slots: myself.slots })
+    Some(myself)
 }
 
 fn own_record(link: &mut Conn) -> Option<nodes_text::Record> {
