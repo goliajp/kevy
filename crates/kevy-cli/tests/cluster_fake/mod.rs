@@ -183,6 +183,11 @@ fn answer(shared: &Shared, node: usize, argv: &[Vec<u8>]) -> Option<Vec<u8>> {
             bulk(&format!("# Server\r\nredis_version:{v}\r\n"))
         }
         ["CLUSTER", "SETSLOT", ..] => b"+OK\r\n".to_vec(),
+        ["MULTI"] => b"+OK\r\n".to_vec(),
+        ["EXEC"] => b"*0\r\n".to_vec(),
+        ["CLUSTER", "BUMPEPOCH"] => b"+BUMPED 2\r\n".to_vec(),
+        ["CLUSTER", "DELSLOTS", _] => b"+OK\r\n".to_vec(),
+        ["CLUSTER", "GETKEYSINSLOT", ..] => b"*0\r\n".to_vec(),
         ["FUNCTION", "DUMP"] => bulk("payload"),
         ["FUNCTION", "LIST"] => b"*0\r\n".to_vec(),
         ["FUNCTION", "RESTORE", _] => b"+OK\r\n".to_vec(),

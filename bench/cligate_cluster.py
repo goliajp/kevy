@@ -191,14 +191,19 @@ class Group:
         # poll is most of a reset's time.
         script = "; echo ==; ".join(_script(VIEW, PORT=str(p)) for p in members)
 
+        seen = []
+
         def agreed():
             views = [v.strip().splitlines() for v in self._exec(script).split("==\n")]
+            seen[:] = views
             return all(v == views[0] for v in views) and done(views[0])
-        self._wait(agreed)
+        # When it does not converge, say what each member last saw.
+        self._wait(agreed, lambda: "\n".join(
+            f"  {p} sees:\n" + "\n".join(f"    {l}" for l in v) for p, v in zip(members, seen)))
 
-    def _wait(self, cond):
+    def _wait(self, cond, explain=lambda: ""):
         deadline = time.time() + CONVERGE_S
         while not cond():
             if time.time() > deadline:
-                raise RuntimeError("cluster fixture: the cluster did not converge")
+                raise RuntimeError("cluster fixture: the cluster did not converge\n" + explain())
             time.sleep(0.05)

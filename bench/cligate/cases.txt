@@ -2068,3 +2068,85 @@ cluster: uneven
 compare: cluster
 prepare: redis-cli -p 17001 CLUSTER SETSLOT 5 IMPORTING 1700017000170001700017000170001700017000 >/dev/null
 run: --cluster rebalance 127.0.0.1:17000
+
+[RC-112 cluster-fix-healthy]
+cluster: 3
+compare: cluster
+run: --cluster fix 127.0.0.1:17000
+
+[RC-112 cluster-fix-interrupted-migration]
+cluster: legacy-3
+compare: cluster
+setup: SET {t69068}a 1
+setup: SET {t69068}b 2
+prepare: redis-cli -p 17011 CLUSTER SETSLOT 5 IMPORTING 1701017010170101701017010170101701017010 >/dev/null; redis-cli -p 17010 CLUSTER SETSLOT 5 MIGRATING 1701117011170111701117011170111701117011 >/dev/null
+run: --cluster fix 127.0.0.1:17010
+
+[RC-112 cluster-fix-importing-only]
+cluster: legacy-3
+compare: cluster
+setup: SET {t69068}a 1
+prepare: redis-cli -p 17011 CLUSTER SETSLOT 5 IMPORTING 1701017010170101701017010170101701017010 >/dev/null
+run: --cluster fix 127.0.0.1:17010
+
+[RC-112 cluster-fix-importing-on-two-nodes]
+cluster: legacy-3
+compare: cluster
+setup: SET {t69068}a 1
+prepare: redis-cli -p 17010 CLUSTER SETSLOT 5 MIGRATING 1701117011170111701117011170111701117011 >/dev/null; redis-cli -p 17011 CLUSTER SETSLOT 5 IMPORTING 1701017010170101701017010170101701017010 >/dev/null; redis-cli -p 17012 CLUSTER SETSLOT 5 IMPORTING 1701017010170101701017010170101701017010 >/dev/null
+mask: Set as importing in: .*
+run: --cluster fix 127.0.0.1:17010
+
+[RC-112 cluster-fix-migrating-only]
+cluster: legacy-3
+compare: cluster
+prepare: redis-cli -p 17010 CLUSTER SETSLOT 5 MIGRATING 1701117011170111701117011170111701117011 >/dev/null
+run: --cluster fix 127.0.0.1:17010
+
+[RC-112 cluster-fix-keys-on-a-non-owner]
+cluster: legacy-3
+compare: cluster
+prepare: redis-cli -p 17011 CLUSTER SETSLOT 5 IMPORTING 1701017010170101701017010170101701017010 >/dev/null; printf 'ASKING\nSET {t69068}x 2\n' | redis-cli -p 17011 >/dev/null
+run: --cluster fix 127.0.0.1:17010
+
+[RC-112 cluster-fix-uncovered-slots-with-keys]
+cluster: legacy-3
+compare: cluster
+setup: SET {t10648}a 1
+setup: SET {t28294}a 1
+prepare: redis-cli -p 17010 CLUSTER DELSLOTSRANGE 100 101 >/dev/null; redis-cli -p 17011 CLUSTER SETSLOT 101 IMPORTING 1701017010170101701017010170101701017010 >/dev/null; printf 'ASKING\nSET {t28294}b 2\n' | redis-cli -p 17011 >/dev/null; redis-cli -p 17011 CLUSTER SETSLOT 101 STABLE >/dev/null
+stdin: yes\nyes\n
+run: --cluster fix 127.0.0.1:17010
+
+[RC-112 cluster-fix-declined]
+cluster: legacy-3
+compare: cluster
+setup: SET {t10648}a 1
+prepare: redis-cli -p 17010 CLUSTER DELSLOTSRANGE 100 100 >/dev/null
+stdin: no\n
+run: --cluster fix 127.0.0.1:17010
+
+[RC-112 cluster-fix-with-an-unreachable-master]
+cluster: 3
+compare: cluster
+prepare: redis-cli -p 17002 SHUTDOWN NOSAVE >/dev/null 2>&1; sleep 0.3
+run: --cluster fix 127.0.0.1:17000
+
+[RC-112 cluster-fix-multiple-owners]
+cluster: legacy-3
+compare: cluster
+setup: SET {t69068}a 1
+prepare: redis-cli -p 17011 CLUSTER SETSLOT 5 IMPORTING 1701017010170101701017010170101701017010 >/dev/null; printf 'ASKING\nSET {t69068}b 2\n' | redis-cli -p 17011 >/dev/null; redis-cli -p 17011 CLUSTER SETSLOT 5 STABLE >/dev/null
+run: --cluster fix 127.0.0.1:17010 --cluster-search-multiple-owners
+
+[RC-112 cluster-fix-uncovered-slots-without-keys]
+# DEV-026: redis-cli covers slots without keys with a random node, in no
+# fixed order; kevy-cli covers them in slot order, each with the master that
+# owns fewest slots at that point.
+deviation: DEV-026
+cluster: 3
+compare: cluster
+prepare: redis-cli -p 17000 CLUSTER DELSLOTSRANGE 100 102 >/dev/null
+stdin: yes\n
+run: --cluster fix 127.0.0.1:17000
+kevy.stdout: 127.0.0.1:17000 (17000170...) -> 0 keys | 5458 slots | 0 slaves.\n127.0.0.1:17002 (17002170...) -> 0 keys | 5461 slots | 0 slaves.\n127.0.0.1:17001 (17001170...) -> 0 keys | 5462 slots | 0 slaves.\n[OK] 0 keys in 3 masters.\n0.00 keys per slot on average.\n>>> Performing Cluster Check (using node 127.0.0.1:17000)\nM: 1700017000170001700017000170001700017000 127.0.0.1:17000\n   slots:[0-99],[103-5460] (5458 slots) master\nM: 1700217002170021700217002170021700217002 127.0.0.1:17002\n   slots:[10923-16383] (5461 slots) master\nM: 1700117001170011700117001170011700117001 127.0.0.1:17001\n   slots:[5461-10922] (5462 slots) master\n[ERR] Nodes don't agree about configuration!\n>>> Check for open slots...\n>>> Check slots coverage...\n[ERR] Not all 16384 slots are covered by nodes.\n\n>>> Fixing slots coverage...\nThe following uncovered slots have no keys across the cluster:\n[100-102]\nFix these slots by covering with a random node? (type 'yes' to accept): >>> Covering slot 100 with 127.0.0.1:17000\n>>> Covering slot 101 with 127.0.0.1:17000\n>>> Covering slot 102 with 127.0.0.1:17000\n
