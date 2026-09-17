@@ -19,8 +19,9 @@ fn declare(ws: &[&str]) -> TableSpec {
 
 fn field<'a>(d: &'a Described, label: &str) -> &'a Described {
     let Described::Array(items) = d else { panic!("a describe reply is an array") };
-    let at = items.iter().position(|i| *i == Described::Bulk(label.as_bytes().to_vec()));
-    &items[at.expect("the label is present") + 1]
+    // Labels sit at even positions; a value can spell a label ("kind" ann).
+    let at = items.iter().step_by(2).position(|i| *i == Described::Bulk(label.as_bytes().to_vec()));
+    &items[at.expect("the label is present") * 2 + 1]
 }
 
 const FULL: &[&str] = &[
@@ -237,4 +238,144 @@ fn a_view_declaration_writes_the_tree_as_create_reads_it() {
     let d = describe_view(&v);
     assert_eq!(field(&d, "query"), &argv(expected[3..13].to_vec()));
     assert_eq!(field(&d, "topk"), &b("10"));
+}
+
+#[test]
+fn every_index_option_is_described_and_declared() {
+    let mut s = IndexSpec::single_field(
+        b"spend".to_vec(),
+        b"o:".to_vec(),
+        b"total".to_vec(),
+        ValType::F64,
+        IndexKind::Agg,
+    );
+    s.group_by = Some(b"who".to_vec());
+    assert_eq!(field(&describe_index(&s, []), "groupby"), &b("who"));
+    assert_eq!(
+        index_declaration(&s),
+        words(&[
+            "IDX.CREATE",
+            "spend",
+            "ON",
+            "PREFIX",
+            "o:",
+            "FIELD",
+            "total",
+            "TYPE",
+            "f64",
+            "KIND",
+            "agg",
+            "GROUPBY",
+            "who"
+        ])
+    );
+    let mut text = IndexSpec::single_field(
+        b"t".to_vec(),
+        b"d:".to_vec(),
+        b"body".to_vec(),
+        ValType::Str,
+        IndexKind::Text,
+    );
+    text.fields = vec![FieldSpec { name: b"body".to_vec(), weight: 3.0 }];
+    let declared = index_declaration(&text);
+    assert_eq!(
+        declared[5..9],
+        words(&["FIELDS", "body", "WEIGHTS", "3"]),
+        "one weighted field still needs FIELDS"
+    );
+    for (code, tag) in [(0, "cosine"), (1, "l2"), (2, "ip"), (9, "unknown")] {
+        let mut ann = IndexSpec::single_field(
+            b"e".to_vec(),
+            b"v:".to_vec(),
+            b"vec".to_vec(),
+            ValType::Vector,
+            IndexKind::Ann,
+        );
+        ann.ann = Some(AnnSpec { dim: 2, distance: code, m: 4, ef: 16 });
+        let d = describe_index(&ann, []);
+        let Described::Array(params) = field(&d, "ann") else { panic!("ann is a group") };
+        assert_eq!(params[3], b(tag), "distance code {code}");
+    }
+}
+
+#[test]
+fn a_composite_with_no_table_still_has_no_declaration() {
+    let spec = declare(FULL);
+    let recent = compile_table(&spec).expect("compiles").remove(2);
+    assert!(recent.composite.is_some());
+    let d = describe_index(&recent, []);
+    assert_eq!((field(&d, "table"), field(&d, "declaration")), (&b("-"), &b("-")));
+}
+
+#[test]
+fn a_virtual_view_with_or_and_text_bounds_and_via() {
+    let leaf = |index: &str, min: IndexValue, max: IndexValue| {
+        Box::new(Tree::Leaf(Leaf { index: index.as_bytes().to_vec(), min, max }))
+    };
+    let v = ViewSpec {
+        name: b"v".to_vec(),
+        tree: Tree::Or(
+            Box::new(Tree::And(
+                leaf(
+                    "city",
+                    IndexValue::Str(b"kyoto".to_vec()),
+                    IndexValue::Str(b"kyoto".to_vec()),
+                ),
+                leaf("age", IndexValue::I64(1), IndexValue::I64(2)),
+            )),
+            leaf("name", IndexValue::Str(b"a".to_vec()), IndexValue::Str(b"b".to_vec())),
+        ),
+        order_by: b"age".to_vec(),
+        desc: false,
+        mode: ViewMode::Virtual,
+        via: Some(b"u:{key}".to_vec()),
+    };
+    assert_eq!(
+        view_declaration(&v),
+        words(&[
+            "VIEW.CREATE",
+            "v",
+            "QUERY",
+            "(",
+            "OR",
+            "(",
+            "AND",
+            "city",
+            "EQ",
+            "kyoto",
+            "age",
+            "RANGE",
+            "1",
+            "2",
+            ")",
+            "name",
+            "RANGE",
+            "a",
+            "b",
+            ")",
+            "ORDER",
+            "BY",
+            "age",
+            "VIA",
+            "u:{key}",
+        ])
+    );
+    let d = describe_view(&v);
+    assert_eq!(
+        (field(&d, "mode"), field(&d, "topk"), field(&d, "via")),
+        (&b("virtual"), &b("0"), &b("u:{key}"))
+    );
+    let bare = ViewSpec { via: None, mode: ViewMode::Materialized { top_k: 0 }, ..v };
+    assert_eq!(field(&describe_view(&bare), "via"), &b("-"));
+    assert!(
+        !view_declaration(&bare).contains(&b"TOPK".to_vec()),
+        "an unbounded view writes no TOPK"
+    );
+}
+
+#[test]
+fn a_table_without_window_describes_it_as_absent() {
+    let spec = declare(&["TABLE.DECLARE", "t", "PREFIX", "t:", "PK", "id", "COLUMN", "id", "str"]);
+    let d = describe_table(&spec);
+    assert_eq!((field(&d, "window"), field(&d, "autodeclare")), (&b("-"), &b("0")));
 }

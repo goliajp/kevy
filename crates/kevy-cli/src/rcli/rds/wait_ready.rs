@@ -50,7 +50,16 @@ fn parse(args: &[Vec<u8>]) -> Option<(Which, Option<Duration>)> {
             (b"--index", Some(v)) => which = Which::Index(v.clone()),
             (b"--table", Some(v)) => which = Which::Table(v.clone()),
             (b"--timeout", Some(v)) => {
-                let secs: f64 = std::str::from_utf8(v).ok()?.parse().ok()?;
+                // `inf` and `NaN` parse as f64; a Duration cannot hold them.
+                let secs = std::str::from_utf8(v).ok().and_then(|t| t.parse::<f64>().ok());
+                let Some(secs) = secs.filter(|s| s.is_finite()) else {
+                    eprint_bytes(&[
+                        b"kevy-cli: wait-ready: --timeout takes seconds, not '",
+                        v,
+                        b"'\n",
+                    ]);
+                    return None;
+                };
                 timeout = Some(Duration::from_secs_f64(secs.max(0.0)));
             }
             (b"--all", _) => {

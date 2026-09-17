@@ -11,7 +11,8 @@ use std::time::Duration;
 pub(crate) fn run(s: &mut Session, common: &Common) -> u8 {
     let seconds =
         common.args.first().and_then(|v| std::str::from_utf8(v).ok()?.parse::<f64>().ok());
-    let Some(seconds) = seconds.filter(|s| *s > 0.0) else {
+    // `inf` and `NaN` parse as f64; a Duration cannot hold them.
+    let Some(seconds) = seconds.filter(|s| *s > 0.0 && s.is_finite()) else {
         eprint_bytes(&[b"kevy-cli: watch <seconds> [count] <command ...>\n"]);
         return 1;
     };

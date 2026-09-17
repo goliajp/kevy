@@ -15,10 +15,15 @@ use crate::rcli::session::{Session, eprint_bytes};
 
 /// Run `sql run`; the exit code.
 pub(crate) fn run(s: &mut Session, common: &Common) -> u8 {
-    let Some((paging, words)) = super::query::paging(&common.args) else { return 1 };
-    let [select] = words.as_slice() else {
-        eprint_bytes(&[b"usage: kevy-cli sql run [--max-rows n] 'SELECT ... FROM t WHERE ...'\n"]);
-        return 1;
+    let (max_rows, select) = match common.args.as_slice() {
+        [select] => (10_000, select),
+        [flag, n, select] if flag == b"--max-rows" => {
+            match std::str::from_utf8(n).ok().and_then(|t| t.parse().ok()) {
+                Some(n) => (n, select),
+                None => return usage(),
+            }
+        }
+        _ => return usage(),
     };
     let Some(select) = std::str::from_utf8(select).ok() else {
         eprint_bytes(&[b"kevy-cli: sql run: the statement is not UTF-8\n"]);
@@ -34,7 +39,7 @@ pub(crate) fn run(s: &mut Session, common: &Common) -> u8 {
     };
     let argv: Vec<Vec<u8>> = card.argv.iter().map(|w| w.clone().into_bytes()).collect();
     let limited = card.argv.iter().any(|w| w == "LIMIT");
-    let paging = Paging { all: !limited, max_rows: paging.max_rows };
+    let paging = Paging { all: !limited, max_rows };
     let Some(mut collected) = collect(s, &argv, &paging) else { return 1 };
     let selected = card.argv.iter().skip_while(|w| *w != "FIELDS").skip(1);
     project(&mut collected.rows, &selected.map(|w| w.as_bytes()).collect::<Vec<_>>());
@@ -47,6 +52,11 @@ pub(crate) fn run(s: &mut Session, common: &Common) -> u8 {
         .as_bytes()]);
     }
     0
+}
+
+fn usage() -> u8 {
+    eprint_bytes(&[b"usage: kevy-cli sql run [--max-rows n] 'SELECT ... FROM t WHERE ...'\n"]);
+    1
 }
 
 /// Keep only the SELECT list's columns, in its order: the key and the index

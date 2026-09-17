@@ -276,6 +276,16 @@ mod tests {
     }
 
     #[test]
+    fn backslashes_returns_and_control_bytes_are_escaped_per_format() {
+        let rows = Rows {
+            columns: vec![b"v".to_vec()],
+            rows: vec![vec![Cell::Text(b"a\\b\rc\x01".to_vec())]],
+        };
+        assert_eq!(text(&rows, &style(Format::Tsv)), "v\na\\\\b\\rc\x01\n");
+        assert_eq!(text(&rows, &style(Format::Json)), "[{\"v\":\"a\\\\b\\rc\\u0001\"}]\n");
+    }
+
+    #[test]
     fn expanded_blocks_per_record() {
         let s = Style { expanded: true, null: b"(null)".to_vec(), ..style(Format::Table) };
         let out = text(&sample(), &s);

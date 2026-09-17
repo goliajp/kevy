@@ -196,7 +196,17 @@ fn parse(args: &[Vec<u8>]) -> Option<Plan> {
             (b"--columns", Some(v)) => {
                 plan.columns = v.split(|&b| b == b',').map(<[u8]>::to_vec).collect()
             }
-            (b"--via", Some(v)) => plan.via = Some(crate::rcli::splitargs::split_args(v)?),
+            (b"--via", Some(v)) => match crate::rcli::splitargs::split_args(v) {
+                Some(words) => plan.via = Some(words),
+                None => {
+                    eprint_bytes(&[
+                        b"kevy-cli: export-csv: cannot split --via '",
+                        v,
+                        b"' (unbalanced quotes)\n",
+                    ]);
+                    return None;
+                }
+            },
             (b"--table", Some(v)) => plan.table = Some(v.clone()),
             (file, _) if plan.file.is_empty() && !file.starts_with(b"--") => {
                 plan.file = file.to_vec();

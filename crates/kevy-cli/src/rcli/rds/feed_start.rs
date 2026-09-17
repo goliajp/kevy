@@ -38,9 +38,9 @@ pub(crate) fn parse(args: &[Vec<u8>]) -> Option<Plan> {
         match flag.as_slice() {
             b"--prefix" => plan.prefixes.push(value.clone()),
             b"--shard" if value == b"all" => plan.shard = None,
-            b"--shard" => plan.shard = Some(number()?),
+            b"--shard" => plan.shard = Some(number().or_else(|| usage(value))?),
             b"--from" if value == b"tail" => plan.from = None,
-            b"--from" => plan.from = Some(position(value)?),
+            b"--from" => plan.from = Some(position(value).or_else(|| usage(value))?),
             b"--checkpoint" => {
                 plan.checkpoint = Some(String::from_utf8_lossy(value).into_owned().into())
             }
@@ -58,7 +58,7 @@ pub(crate) fn parse(args: &[Vec<u8>]) -> Option<Plan> {
                     _ => return usage(value),
                 }
             }
-            b"--limit" => plan.limit = Some(number()?),
+            b"--limit" => plan.limit = Some(number().or_else(|| usage(value))?),
             other => return usage(other),
         }
     }
