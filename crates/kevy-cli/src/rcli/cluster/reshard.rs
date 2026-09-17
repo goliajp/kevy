@@ -28,7 +28,7 @@ pub(crate) fn run(opts: &Opts, cfg: Config, args: &[Vec<u8>]) -> u8 {
     if !c.cfg.yes && !proceed() {
         return 1;
     }
-    u8::from(!super::migrate::move_slots(&mut c, target, &moves))
+    u8::from(!super::migrate::move_slots(&mut c, target, &moves, super::migrate::Progress::Steps))
 }
 
 /// `--cluster-slots`, or asked until it is between 1 and 16384.

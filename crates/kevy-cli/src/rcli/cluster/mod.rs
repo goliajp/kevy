@@ -20,6 +20,7 @@ mod move_plan;
 mod nodes_text;
 mod owners;
 mod plan;
+mod rebalance;
 mod reshard;
 mod reshard_sources;
 mod set_timeout;

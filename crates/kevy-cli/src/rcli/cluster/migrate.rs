@@ -6,13 +6,28 @@ use super::log::{self, Level};
 use super::topology::Cluster;
 use kevy_resp::Reply;
 
+/// Whether a move reports its steps (reshard) or only a `#` per slot
+/// (rebalance).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Progress {
+    Steps,
+    Hashes,
+}
+
 /// Move `(source, slot)` pairs to `target`; `false` when a move failed
 /// (after saying why).
-pub(crate) fn move_slots(c: &mut Cluster, target: usize, moves: &[(usize, u16)]) -> bool {
+pub(crate) fn move_slots(
+    c: &mut Cluster,
+    target: usize,
+    moves: &[(usize, u16)],
+    progress: Progress,
+) -> bool {
     if atomic_everywhere(c) {
-        return super::migrate_atomic::run(c, target, moves);
+        return super::migrate_atomic::run(c, target, moves, progress);
     }
-    moves.iter().all(|&(source, slot)| super::migrate_slot::move_slot(c, source, target, slot))
+    moves
+        .iter()
+        .all(|&(source, slot)| super::migrate_slot::move_slot(c, (source, target), slot, progress))
 }
 
 /// Every loaded node reports a version with CLUSTER MIGRATION (8.4.0+).

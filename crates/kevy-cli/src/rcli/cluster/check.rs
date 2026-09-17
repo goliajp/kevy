@@ -5,8 +5,20 @@ use super::log::{self, Level};
 use super::slots::{SLOTS, SlotSet};
 use super::topology::Cluster;
 
+/// Whether the check lists the nodes first.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Listing {
+    Show,
+    Hide,
+}
+
 /// Print the check; `true` when it found nothing wrong.
 pub(crate) fn run(c: &mut Cluster) -> bool {
+    run_with(c, Listing::Show)
+}
+
+/// [`run`], with or without the node listing.
+pub(crate) fn run_with(c: &mut Cluster, listing: Listing) -> bool {
     let color = c.cfg.color;
     let entry = c.nodes.first().map(|n| n.shown()).unwrap_or_default();
     log::line(
@@ -14,8 +26,10 @@ pub(crate) fn run(c: &mut Cluster) -> bool {
         Level::Info,
         &[b">>> Performing Cluster Check (using node ", &entry[..], b")"].concat(),
     );
-    for n in &c.nodes {
-        super::show::node(n);
+    if listing == Listing::Show {
+        for n in &c.nodes {
+            super::show::node(n);
+        }
     }
     let mut ok = agreement(c);
     ok &= open_slots(c);
