@@ -212,6 +212,12 @@ impl Store {
         g.1.iter().map(|s| (s.name.clone(), s.mode, s.tree.leaves())).collect()
     }
 
+    /// The declaration of the view named `name`, as the catalog holds it.
+    pub fn view_spec(&self, name: &[u8]) -> Option<kevy_index::ViewSpec> {
+        let g = self.views.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+        g.1.get(name).cloned()
+    }
+
     /// Summed member count across shards.
     pub fn view_count(&self, name: &[u8]) -> KevyResult<u64> {
         Ok(self.view_query(name, None, 100_000)?.0.len() as u64)

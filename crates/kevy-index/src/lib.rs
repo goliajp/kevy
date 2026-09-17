@@ -19,6 +19,7 @@ mod agg;
 mod catalog;
 mod catalog_sidecar;
 mod composite;
+mod describe;
 mod rowvalues;
 mod segcold;
 mod segment;
@@ -42,6 +43,10 @@ pub use catalog::{
 pub use composite::{
     CompositeCol, MAX_COMPOSITE_COLS, MAX_STR_COMPONENT, RowDerivation, WHERE_NOT_COMPOSITE,
     WhereClause, composite_bounds, composite_encode, parse_where,
+};
+pub use describe::{
+    Described, describe_index, describe_table, describe_view, index_declaration, owner_of,
+    table_declaration, view_declaration,
 };
 pub use segcold::{
     ColdBloom, WindowAudit, WindowShape, decode_seg_key, decode_seg_values, encode_seg_values,

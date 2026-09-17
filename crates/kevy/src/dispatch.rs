@@ -224,6 +224,9 @@ fn dispatch_conn<A: ArgvView + ?Sized>(
         b"TABLE.ENSURE" => crate::cmd_table::cmd_table_ensure(ctx, store, args, out),
         b"TABLE.REPLACE" => crate::cmd_table::cmd_table_replace(ctx, store, args, out),
         b"TABLE.DROP" => crate::cmd_table::cmd_table_drop(ctx, args, out),
+        b"TABLE.DESCRIBE" => crate::cmd_describe::cmd_table_describe(ctx, args, out),
+        b"IDX.DESCRIBE" => crate::cmd_describe::cmd_idx_describe(ctx, args, out),
+        b"VIEW.DESCRIBE" => crate::cmd_describe::cmd_view_describe(ctx, args, out),
         // Well-formed LIST/VERIFY ride the extension fan-out; only a
         // malformed arity falls through to these usage arms.
         b"TABLE.LIST" => encode_error(out, "ERR usage: TABLE.LIST"),

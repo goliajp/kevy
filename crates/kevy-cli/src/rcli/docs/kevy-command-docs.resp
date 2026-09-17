@@ -1,4 +1,4 @@
-*412
+*418
 $4
 KEYS
 *14
@@ -5895,6 +5895,40 @@ $5
 write
 $9
 extension
+$12
+IDX.DESCRIBE
+*14
+$7
+summary
+$149
+Read an index declaration back: prefix, kind, type, fields, stored values, options, the table that compiled it, and the IDX.CREATE that recreates it.
+$5
+since
+$5
+6.5.0
+$5
+group
+$5
+index
+$6
+syntax
+$17
+IDX.DESCRIBE name
+$10
+complexity
+$118
+O(declaration size), plus O(tables) compiles to name the owning table; at the origin — the catalog is process-global
+$6
+compat
+$9
+kevy-only
+$5
+flags
+*2
+$8
+readonly
+$9
+extension
 $8
 IDX.DROP
 *14
@@ -6201,6 +6235,40 @@ $5
 write
 $9
 extension
+$14
+TABLE.DESCRIBE
+*14
+$7
+summary
+$173
+Read a table declaration back: columns with types, indexes, order paths, window, and the TABLE.DECLARE that recreates it (auto-declared paths are listed but left out of it).
+$5
+since
+$5
+6.5.0
+$5
+group
+$5
+table
+$6
+syntax
+$19
+TABLE.DESCRIBE name
+$10
+complexity
+$67
+O(declaration size) at the origin — the catalog is process-global
+$6
+compat
+$50
+kevy-only: nearest is DESCRIBE / SHOW CREATE TABLE
+$5
+flags
+*2
+$8
+readonly
+$9
+extension
 $10
 TABLE.DROP
 *14
@@ -6335,6 +6403,40 @@ flags
 *2
 $5
 write
+$9
+extension
+$13
+VIEW.DESCRIBE
+*14
+$7
+summary
+$123
+Read a view declaration back: the composition tree, order, mode, hydration template, and the VIEW.CREATE that recreates it.
+$5
+since
+$5
+6.5.0
+$5
+group
+$4
+view
+$6
+syntax
+$18
+VIEW.DESCRIBE name
+$10
+complexity
+$67
+O(declaration size) at the origin — the catalog is process-global
+$6
+compat
+$38
+kevy-only: nearest is SHOW CREATE VIEW
+$5
+flags
+*2
+$8
+readonly
 $9
 extension
 $9

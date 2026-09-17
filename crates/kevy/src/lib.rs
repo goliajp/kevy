@@ -48,6 +48,7 @@ mod cmd_block_serve;
 mod cmd_class;
 mod cmd_command;
 mod cmd_data;
+mod cmd_describe;
 mod cmd_digest;
 mod cmd_failover;
 mod cmd_hash_ttl;

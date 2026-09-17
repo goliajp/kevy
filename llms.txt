@@ -35,7 +35,7 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - [WASM / browser](docs/wasm.md) · [Electron apps](docs/electron.md) · [Tauri apps](docs/tauri.md) · [IoT / embedded tiers](docs/iot.md)
 - [Error contract](docs/error-replies.md) · [Tuning](docs/tuning.md)
 
-## Verbs (206 total)
+## Verbs (209 total)
 
 ### scan
 
@@ -630,6 +630,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `IDX.CREATE name ON PREFIX prefix FIELD field TYPE i64|f64|str|vector KIND range|unique|text|ann|agg [MAXMEM bytes] [DIM dim] [DISTANCE cosine|l2|ip] [M m] [EF ef] [GROUPBY field]` [write,extension] — Declare a secondary index over a key prefix (catalog mutation, sidecar-persisted).
   - complexity: O(1) at the call; the build is asynchronous — each shard snapshots its matching keys (O(keys on that shard)) then backfills 2048 rows per tick. Per-row build cost: range/unique O(log N), text O(tokens), vector O(ef_construction * M * dim)
   - compat: kevy-only: nearest is RediSearch FT.CREATE — comparable declarative index-on-prefix, but RediSearch is a module (`redisearch.so`, auto-loaded in Redis 8 and running in the server's own process, not a separate index server) whose index is maintained asynchronously; kevy's catalog is part of the engine and the index is maintained in the write hook
+- `IDX.DESCRIBE name` [readonly,extension] — Read an index declaration back: prefix, kind, type, fields, stored values, options, the table that compiled it, and the IDX.CREATE that recreates it.
+  - complexity: O(declaration size), plus O(tables) compiles to name the owning table; at the origin — the catalog is process-global
+  - compat: kevy-only
 - `IDX.DROP name` [write,extension] — Drop a declared index (catalog mutation, sidecar-persisted).
   - complexity: O(catalog size)
   - compat: kevy-only: nearest is FT.DROPINDEX
@@ -660,6 +663,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `TABLE.REPLACE name PREFIX prefix PK col COLUMN name i64|f64|str [COLUMN ...] [INDEX ...] [ORDERPATH ...] [WINDOW ...] [AUTODECLARE n]` [write,extension] — Drop and redeclare in one verb, rebuilding every compiled index from the rows. Named for its cost: a full backfill, asked for explicitly. A bad spec refuses BEFORE the old table drops.
   - complexity: the migration verb: spec changed, rebuild wanted
   - compat: kevy-only: nearest is DROP TABLE + CREATE TABLE, atomic against a bad new spec
+- `TABLE.DESCRIBE name` [readonly,extension] — Read a table declaration back: columns with types, indexes, order paths, window, and the TABLE.DECLARE that recreates it (auto-declared paths are listed but left out of it).
+  - complexity: O(declaration size) at the origin — the catalog is process-global
+  - compat: kevy-only: nearest is DESCRIBE / SHOW CREATE TABLE
 - `TABLE.DROP name` [write,extension] — Drop a declared table and its compiled indexes (catalog mutation, sidecar-persisted).
   - complexity: O(catalog size + compiled indexes)
   - compat: kevy-only
@@ -675,6 +681,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `VIEW.CREATE name QUERY tree ORDER BY index [DESC] [MODE virtual|materialized] [TOPK k] [VIA template] (tree = '( AND|OR|DIFF sub sub )' | 'index RANGE min max' | 'index EQ value')` [write,extension] — Declare a composed view over indexes with an ORDER BY (catalog mutation, sidecar-persisted).
   - complexity: O(tree size) at the call. A materialized view builds lazily on the next tick (a full eval_tree plus an O(M log M) sort); a virtual view builds nothing, ever
   - compat: kevy-only: no Redis analogue. A view is neither a stored query nor a join — it is a named composition tree over declared indexes that stores membership and order only, never field values
+- `VIEW.DESCRIBE name` [readonly,extension] — Read a view declaration back: the composition tree, order, mode, hydration template, and the VIEW.CREATE that recreates it.
+  - complexity: O(declaration size) at the origin — the catalog is process-global
+  - compat: kevy-only: nearest is SHOW CREATE VIEW
 - `VIEW.DROP name` [write,extension] — Drop a declared view (catalog mutation, sidecar-persisted).
   - complexity: O(catalog size)
   - compat: kevy-only
