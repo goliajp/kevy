@@ -296,6 +296,31 @@ fn tool_arguments_are_read_strictly() {
 }
 
 #[test]
+fn a_type_no_rebuild_frame_covers_is_reported_not_dropped() {
+    let s = Srv::start();
+    let p = s.port();
+    three_rows(&p);
+    assert_eq!(cli(&["-p", &p, "XADD", "u:stream", "*", "f", "v"]).code, 0);
+    let dir = scratch("skipped");
+    let file = dir.join("u.resp");
+    let f = file.to_str().unwrap();
+    let out = cli(&["-p", &p, "--kevy", "export", "--prefix", "u:", f]);
+    assert_eq!(out.stdout, format!("exported 3 keys -> {f}\n"), "{}", out.stderr);
+    assert!(
+        out.stderr.contains("SKIPPED 1 key(s) of type 'stream' — nothing here rebuilds that type, so they were NOT carried"),
+        "{}",
+        out.stderr
+    );
+    let missing = cli(&["-p", &p, "--kevy", "import", "/nonexistent/u.resp"]);
+    assert!(
+        missing.stderr.starts_with("kevy-cli import failed:") && missing.code == 1,
+        "{}",
+        missing.stderr
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn bare_shipped_words_keep_working_with_a_deprecation_line() {
     let (a, b) = (Srv::start(), Srv::start());
     let (pa, pb) = (a.port(), b.port());
@@ -313,6 +338,28 @@ fn bare_shipped_words_keep_working_with_a_deprecation_line() {
     let dir = scratch("bare");
     let schema = dir.join("s.sql");
     std::fs::write(&schema, "CREATE TABLE t (id bigint PRIMARY KEY);\n").unwrap();
+    let closed = kevy_testnet::free_port().to_string();
+    let unreachable = cli(&["digest", "-p", &closed, "u:"]);
+    assert!(
+        unreachable
+            .stderr
+            .contains(&format!("kevy-cli digest: could not connect to 127.0.0.1:{closed}"))
+            && unreachable.code == 1,
+        "{}",
+        unreachable.stderr
+    );
+    let endpoint = cli(&["diff", "nothost", "u:"]);
+    assert!(
+        endpoint.stderr.contains("kevy-cli diff: 'nothost' is not host:port"),
+        "{}",
+        endpoint.stderr
+    );
+    let far = cli(&["diff", &ea, &format!("127.0.0.1:{closed}"), "u:"]);
+    assert!(
+        far.stderr.contains(&format!("could not connect to 127.0.0.1:{closed}")) && far.code == 1,
+        "{}",
+        far.stderr
+    );
     let applied = cli(&["sql", "compile", schema.to_str().unwrap(), "--apply", "--url", &ea]);
     assert_eq!(applied.stdout, "TABLE.DECLARE t → OK\n", "{}", applied.stderr);
     let _ = std::fs::remove_dir_all(&dir);
