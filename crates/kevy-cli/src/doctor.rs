@@ -177,15 +177,43 @@ pub fn run(client: &mut RespClient, warn_is_failure: bool) -> io::Result<ExitCod
 }
 
 /// What `doctor` verifies besides tables.
+///
+/// ```
+/// // `doctor --indexes --views`
+/// let everything = kevy_cli::doctor::Scope { indexes: true, views: true };
+/// assert!(everything.indexes && everything.views);
+/// ```
 #[derive(Clone, Copy, Debug)]
 pub struct Scope {
     /// Indexes declared on their own (not compiled from a table).
+    ///
+    /// ```
+    /// // `doctor --indexes`: an index `users.age` belongs to table `users`
+    /// // and is verified with it; only an index no table compiled is added.
+    /// let s = kevy_cli::doctor::Scope { indexes: true, views: false };
+    /// assert!(s.indexes);
+    /// ```
     pub indexes: bool,
     /// Views.
+    ///
+    /// ```
+    /// // `doctor --views`: VIEW.VERIFY for every view VIEW.LIST names.
+    /// let s = kevy_cli::doctor::Scope { indexes: false, views: true };
+    /// assert!(s.views);
+    /// ```
     pub views: bool,
 }
 
 /// [`run`], also verifying bare indexes and views when `scope` says so.
+///
+/// ```no_run
+/// // Needs a kevy server on 127.0.0.1:6004.
+/// use kevy_cli::doctor::{Scope, run_scoped};
+/// let mut client = kevy_resp_client::RespClient::connect("127.0.0.1", 6004)?;
+/// let code = run_scoped(&mut client, false, Scope { indexes: true, views: true })?;
+/// assert_eq!(code, std::process::ExitCode::SUCCESS);
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub fn run_scoped(
     client: &mut RespClient,
     warn_is_failure: bool,

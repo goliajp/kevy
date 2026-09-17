@@ -13,39 +13,78 @@
 
 use crate::catalog::{IndexKind, IndexSpec, ValType};
 use crate::table::{TableSpec, compile_table, dotted};
-use crate::value::IndexValue;
-use crate::view::{Tree, ViewMode, ViewSpec};
 
 /// One node of a describe reply. Numbers travel as bulk strings and an
 /// absent part as `-`, the same conventions `TABLE.LIST` uses, so a
 /// reader of one reads the other.
+///
+/// ```
+/// use kevy_index::{Described, describe_table, parse_table_declare};
+///
+/// let t = parse_table_declare(&[
+///     b"TABLE.DECLARE", b"t", b"PREFIX", b"t:", b"PK", b"id", b"COLUMN", b"id", b"i64",
+/// ])
+/// .unwrap();
+/// let Described::Array(fields) = describe_table(&t) else { unreachable!() };
+/// assert_eq!(fields[0], Described::Bulk(b"name".to_vec()));
+/// assert_eq!(fields[13], Described::Bulk(b"-".to_vec())); // no window
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Described {
-    /// A bulk string.
+    /// A bulk string — a name, a keyword, or a number in decimal.
+    ///
+    /// ```
+    /// # use kevy_index::Described;
+    /// let maxmem = Described::Bulk(b"1048576".to_vec());
+    /// assert!(matches!(maxmem, Described::Bulk(ref n) if n == b"1048576"));
+    /// ```
     Bulk(Vec<u8>),
-    /// A nested array.
+    /// A nested array — a list, or a label/value group.
+    ///
+    /// ```
+    /// # use kevy_index::Described;
+    /// let column = Described::Array(vec![
+    ///     Described::Bulk(b"age".to_vec()),
+    ///     Described::Bulk(b"i64".to_vec()),
+    /// ]);
+    /// assert!(matches!(column, Described::Array(ref pair) if pair.len() == 2));
+    /// ```
     Array(Vec<Described>),
 }
 
-fn b(v: impl AsRef<[u8]>) -> Described {
+pub(crate) fn b(v: impl AsRef<[u8]>) -> Described {
     Described::Bulk(v.as_ref().to_vec())
 }
 
-fn n(v: impl ToString) -> Described {
+pub(crate) fn n(v: impl ToString) -> Described {
     Described::Bulk(v.to_string().into_bytes())
 }
 
-fn flag(v: bool) -> Described {
+pub(crate) fn flag(v: bool) -> Described {
     n(u8::from(v))
 }
 
-fn argv(words: Vec<Vec<u8>>) -> Described {
+pub(crate) fn argv(words: Vec<Vec<u8>>) -> Described {
     Described::Array(words.into_iter().map(Described::Bulk).collect())
 }
 
 /// `TABLE.DESCRIBE`: `name prefix pk columns indexes orderpaths window
 /// autodeclare declaration`, label/value. Indexes and orderpaths carry
 /// the compiled path name and whether the auto loop added them.
+///
+/// ```
+/// use kevy_index::{Described, describe_table, parse_table_declare};
+///
+/// let t = parse_table_declare(&[
+///     b"TABLE.DECLARE", b"u", b"PREFIX", b"u:", b"PK", b"id",
+///     b"COLUMN", b"id", b"i64", b"COLUMN", b"age", b"i64", b"INDEX", b"age", b"range",
+/// ])
+/// .unwrap();
+/// let Described::Array(fields) = describe_table(&t) else { unreachable!() };
+/// let Described::Array(indexes) = &fields[9] else { unreachable!() };
+/// let Described::Array(index) = &indexes[0] else { unreachable!() };
+/// assert_eq!(index[1], Described::Bulk(b"u.age".to_vec()));
+/// ```
 pub fn describe_table(t: &TableSpec) -> Described {
     let columns = t.columns.iter().map(|(c, ty)| Described::Array(vec![b(c), b(ty.tag())]));
     let window = match &t.window {
@@ -119,6 +158,22 @@ fn table_orderpaths(t: &TableSpec) -> Described {
 }
 
 /// The `TABLE.DECLARE` argv that recreates `t` as written.
+///
+/// ```
+/// use kevy_index::{parse_table_declare, table_declaration};
+///
+/// // Keywords come back upper-case, kinds lower-case: the canonical form.
+/// let t = parse_table_declare(&[
+///     b"table.declare", b"u", b"prefix", b"u:", b"pk", b"id",
+///     b"column", b"id", b"I64", b"index", b"id", b"UNIQUE",
+/// ])
+/// .unwrap();
+/// let argv = table_declaration(&t);
+/// let refs: Vec<&[u8]> = argv.iter().map(Vec::as_slice).collect();
+/// assert_eq!(refs, [&b"TABLE.DECLARE"[..], b"u", b"PREFIX", b"u:", b"PK", b"id",
+///     b"COLUMN", b"id", b"i64", b"INDEX", b"id", b"unique"]);
+/// assert_eq!(parse_table_declare(&refs).unwrap(), t);
+/// ```
 pub fn table_declaration(t: &TableSpec) -> Vec<Vec<u8>> {
     let mut w: Vec<Vec<u8>> = vec![
         b"TABLE.DECLARE".to_vec(),
@@ -164,6 +219,17 @@ pub fn table_declaration(t: &TableSpec) -> Vec<Vec<u8>> {
 /// groupby ann composite table declaration`. An index a table compiled
 /// names that table and has no declaration of its own (`-`): it is
 /// recreated by its table, and a composite has no `IDX.CREATE` spelling.
+///
+/// ```
+/// use kevy_index::{Described, IndexKind, IndexSpec, ValType, describe_index};
+///
+/// let s = IndexSpec::single_field(
+///     b"age".to_vec(), b"user:".to_vec(), b"age".to_vec(), ValType::I64, IndexKind::Range,
+/// );
+/// let Described::Array(fields) = describe_index(&s, []) else { unreachable!() };
+/// assert_eq!(fields[22], Described::Bulk(b"table".to_vec()));
+/// assert_eq!(fields[23], Described::Bulk(b"-".to_vec()));
+/// ```
 pub fn describe_index<'a>(
     s: &IndexSpec,
     tables: impl IntoIterator<Item = &'a TableSpec>,
@@ -224,6 +290,19 @@ fn index_ann(s: &IndexSpec) -> Described {
 }
 
 /// The table whose compile produced the index named `index`.
+///
+/// ```
+/// use kevy_index::{owner_of, parse_table_declare};
+///
+/// let t = parse_table_declare(&[
+///     b"TABLE.DECLARE", b"u", b"PREFIX", b"u:", b"PK", b"id",
+///     b"COLUMN", b"id", b"i64", b"INDEX", b"id", b"unique",
+/// ])
+/// .unwrap();
+/// let tables = [t];
+/// assert_eq!(owner_of(&tables, b"u.id").map(|t| t.name.as_slice()), Some(&b"u"[..]));
+/// assert!(owner_of(&tables, b"age").is_none());
+/// ```
 pub fn owner_of<'a>(
     tables: impl IntoIterator<Item = &'a TableSpec>,
     index: &[u8],
@@ -234,6 +313,18 @@ pub fn owner_of<'a>(
 }
 
 /// The `IDX.CREATE` argv that recreates a directly declared index.
+///
+/// ```
+/// use kevy_index::{IndexKind, IndexSpec, ValType, index_declaration};
+///
+/// let mut s = IndexSpec::single_field(
+///     b"age".to_vec(), b"user:".to_vec(), b"age".to_vec(), ValType::I64, IndexKind::Range,
+/// );
+/// s.max_bytes = 4096;
+/// let line: Vec<String> =
+///     index_declaration(&s).iter().map(|w| String::from_utf8_lossy(w).into_owned()).collect();
+/// assert_eq!(line.join(" "), "IDX.CREATE age ON PREFIX user: FIELD age TYPE i64 KIND range MAXMEM 4096");
+/// ```
 pub fn index_declaration(s: &IndexSpec) -> Vec<Vec<u8>> {
     let mut w: Vec<Vec<u8>> =
         vec![b"IDX.CREATE".to_vec(), s.name.clone(), b"ON".to_vec(), b"PREFIX".to_vec()];
@@ -284,86 +375,6 @@ fn index_options(s: &IndexSpec, w: &mut Vec<Vec<u8>>) {
     }
 }
 
-/// `VIEW.DESCRIBE`: `name query order_by desc mode topk via
-/// declaration`. `query` is the tree as the tokens `VIEW.CREATE` reads.
-pub fn describe_view(v: &ViewSpec) -> Described {
-    let (mode, top_k) = match v.mode {
-        ViewMode::Virtual => ("virtual", 0),
-        ViewMode::Materialized { top_k } => ("materialized", top_k),
-    };
-    let mut query = Vec::new();
-    tree_words(&v.tree, &mut query);
-    Described::Array(vec![
-        b("name"),
-        b(&v.name),
-        b("query"),
-        argv(query),
-        b("order_by"),
-        b(&v.order_by),
-        b("desc"),
-        flag(v.desc),
-        b("mode"),
-        b(mode),
-        b("topk"),
-        n(top_k),
-        b("via"),
-        v.via.as_ref().map_or_else(|| b("-"), b),
-        b("declaration"),
-        argv(view_declaration(v)),
-    ])
-}
-
-/// The `VIEW.CREATE` argv that recreates `v`.
-pub fn view_declaration(v: &ViewSpec) -> Vec<Vec<u8>> {
-    let mut w: Vec<Vec<u8>> = vec![b"VIEW.CREATE".to_vec(), v.name.clone(), b"QUERY".to_vec()];
-    tree_words(&v.tree, &mut w);
-    w.extend([b"ORDER".to_vec(), b"BY".to_vec(), v.order_by.clone()]);
-    if v.desc {
-        w.push(b"DESC".to_vec());
-    }
-    if let ViewMode::Materialized { top_k } = v.mode {
-        w.extend([b"MODE".to_vec(), b"materialized".to_vec()]);
-        if top_k != 0 {
-            w.extend([b"TOPK".to_vec(), top_k.to_string().into()]);
-        }
-    }
-    if let Some(via) = &v.via {
-        w.extend([b"VIA".to_vec(), via.clone()]);
-    }
-    w
-}
-
-fn tree_words(t: &Tree, w: &mut Vec<Vec<u8>>) {
-    let (op, l, r) = match t {
-        Tree::Leaf(leaf) => {
-            w.push(leaf.index.clone());
-            if leaf.min == leaf.max {
-                w.extend([b"EQ".to_vec(), literal(&leaf.min)]);
-            } else {
-                w.extend([b"RANGE".to_vec(), literal(&leaf.min), literal(&leaf.max)]);
-            }
-            return;
-        }
-        Tree::And(l, r) => ("AND", l, r),
-        Tree::Or(l, r) => ("OR", l, r),
-        Tree::Diff(l, r) => ("DIFF", l, r),
-    };
-    w.extend([b"(".to_vec(), op.into()]);
-    tree_words(l, w);
-    tree_words(r, w);
-    w.push(b")".to_vec());
-}
-
-/// A bound as the literal that coerces back to it. Rust's float
-/// `Display` is the shortest text that parses back to the same bits.
-fn literal(v: &IndexValue) -> Vec<u8> {
-    match v {
-        IndexValue::I64(i) => i.to_string().into_bytes(),
-        IndexValue::F64(f) => f.to_string().into_bytes(),
-        IndexValue::Str(s) => s.clone(),
-    }
-}
-
 fn order(desc: bool) -> &'static str {
     if desc { "desc" } else { "asc" }
 }
@@ -380,6 +391,8 @@ fn distance_tag(code: u8) -> &'static str {
         _ => "unknown",
     }
 }
+
+pub use crate::describe_view::{describe_view, view_declaration};
 
 #[cfg(test)]
 #[path = "describe_tests.rs"]

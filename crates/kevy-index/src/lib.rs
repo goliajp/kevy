@@ -20,6 +20,7 @@ mod catalog;
 mod catalog_sidecar;
 mod composite;
 mod describe;
+mod describe_view;
 mod rowvalues;
 mod segcold;
 mod segment;
