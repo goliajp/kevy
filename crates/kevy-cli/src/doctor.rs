@@ -25,7 +25,8 @@
 use std::io;
 use std::process::ExitCode;
 
-use kevy_resp_client::{Reply, RespClient};
+use crate::link::Link;
+use kevy_resp_client::Reply;
 
 /// What `doctor` concluded about one table.
 #[derive(Debug)]
@@ -74,7 +75,7 @@ pub(crate) fn fields(items: &[Reply]) -> Vec<(String, String)> {
 }
 
 /// Every declared table's name, in declaration order.
-pub fn table_names(client: &mut RespClient) -> io::Result<Vec<String>> {
+pub fn table_names(client: &mut dyn Link) -> io::Result<Vec<String>> {
     let Reply::Array(tables) = client.request_borrowed(&[b"TABLE.LIST"])? else {
         return Ok(Vec::new());
     };
@@ -88,13 +89,13 @@ pub fn table_names(client: &mut RespClient) -> io::Result<Vec<String>> {
 }
 
 /// Verify one table and read its counters against lesson 8's mapping.
-pub fn check_table(client: &mut RespClient, name: &str) -> io::Result<TableHealth> {
+pub fn check_table(client: &mut dyn Link, name: &str) -> io::Result<TableHealth> {
     check_with(client, b"TABLE.VERIFY", name)
 }
 
 /// The same reading for `IDX.VERIFY` or `VIEW.VERIFY`, whose replies are
 /// one group of counters rather than one per index.
-fn check_with(client: &mut RespClient, verb: &[u8], name: &str) -> io::Result<TableHealth> {
+fn check_with(client: &mut dyn Link, verb: &[u8], name: &str) -> io::Result<TableHealth> {
     let reply = client.request_borrowed(&[verb, name.as_bytes()])?;
     let reply = match reply {
         Reply::Array(items) if matches!(items.first(), Some(Reply::Bulk(_))) => {
@@ -172,7 +173,7 @@ fn classify(groups: &[Reply]) -> Health {
 /// Check every table and print one line each. Exit non-zero only on
 /// drift — a warning is information, and a cron that fails on
 /// information stops being read.
-pub fn run(client: &mut RespClient, warn_is_failure: bool) -> io::Result<ExitCode> {
+pub fn run(client: &mut dyn Link, warn_is_failure: bool) -> io::Result<ExitCode> {
     run_scoped(client, warn_is_failure, Scope { indexes: false, views: false })
 }
 
@@ -215,7 +216,7 @@ pub struct Scope {
 /// # Ok::<(), std::io::Error>(())
 /// ```
 pub fn run_scoped(
-    client: &mut RespClient,
+    client: &mut dyn Link,
     warn_is_failure: bool,
     scope: Scope,
 ) -> io::Result<ExitCode> {
@@ -247,7 +248,7 @@ pub fn run_scoped(
 }
 
 /// The `name` of every row a LIST verb answers.
-fn listed_names(client: &mut RespClient, verb: &[u8]) -> io::Result<Vec<String>> {
+fn listed_names(client: &mut dyn Link, verb: &[u8]) -> io::Result<Vec<String>> {
     let Reply::Array(rows) = client.request_borrowed(&[verb])? else { return Ok(Vec::new()) };
     Ok(rows
         .iter()
@@ -259,7 +260,7 @@ fn listed_names(client: &mut RespClient, verb: &[u8]) -> io::Result<Vec<String>>
 }
 
 fn report(
-    client: &mut RespClient,
+    client: &mut dyn Link,
     targets: &[(&[u8], &str, String)],
     warn_is_failure: bool,
     noun: &str,
@@ -299,45 +300,32 @@ fn report(
     })
 }
 
-/// `doctor [-h host] [-p port] [--warn-is-failure]`
+/// `doctor [-h host] [-p port] [--warn-is-failure] [--indexes] [--views]`:
+/// connects with its own `-h`/`-p` (the pre-`--kevy` form), then
+/// [`run_on`] the rest.
 pub fn run_doctor_cli(args: &[String]) -> ExitCode {
-    let (mut host, mut port) = (crate::DEFAULT_HOST.to_string(), crate::DEFAULT_PORT);
+    crate::tools::bare::with_private_connection("doctor", args, run_on)
+}
+
+/// `doctor [--warn-is-failure] [--indexes] [--views]` on `client`.
+pub(crate) fn run_on(client: &mut dyn Link, args: &[String]) -> ExitCode {
     let mut strict = false;
     let mut scope = Scope { indexes: false, views: false };
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "-h" if i + 1 < args.len() => {
-                host = args[i + 1].clone();
-                i += 2;
+    for word in args {
+        match word.as_str() {
+            "--warn-is-failure" => strict = true,
+            "--indexes" => scope.indexes = true,
+            "--views" => scope.views = true,
+            other => {
+                eprintln!("kevy-cli doctor: {}", crate::tools::argscan::unexpected(other));
+                eprintln!(
+                    "usage: kevy-cli --kevy doctor [--warn-is-failure] [--indexes] [--views]"
+                );
+                return ExitCode::FAILURE;
             }
-            "-p" if i + 1 < args.len() => {
-                port = args[i + 1].parse().unwrap_or(crate::DEFAULT_PORT);
-                i += 2;
-            }
-            "--warn-is-failure" => {
-                strict = true;
-                i += 1;
-            }
-            "--indexes" => {
-                scope.indexes = true;
-                i += 1;
-            }
-            "--views" => {
-                scope.views = true;
-                i += 1;
-            }
-            _ => i += 1,
         }
     }
-    let mut client = match RespClient::connect(&host, port) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("kevy-cli: could not connect to {host}:{port}: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    match run_scoped(&mut client, strict, scope) {
+    match run_scoped(client, strict, scope) {
         Ok(code) => code,
         Err(e) => {
             eprintln!("kevy-cli doctor: {e}");

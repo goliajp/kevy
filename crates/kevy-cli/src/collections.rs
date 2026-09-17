@@ -6,7 +6,8 @@
 
 use std::io;
 
-use kevy_resp_client::{Reply, RespClient};
+use crate::link::Link;
+use kevy_resp_client::Reply;
 
 /// The bulk strings of an array reply, dropping anything else.
 pub(crate) fn bulks(reply: Reply) -> Vec<Vec<u8>> {
@@ -21,7 +22,7 @@ pub(crate) fn bulks(reply: Reply) -> Vec<Vec<u8>> {
 }
 
 /// Every key under a prefix, via SCAN so the server is never blocked.
-pub(crate) fn scan_prefix(client: &mut RespClient, prefix: &str) -> io::Result<Vec<Vec<u8>>> {
+pub(crate) fn scan_prefix(client: &mut dyn Link, prefix: &str) -> io::Result<Vec<Vec<u8>>> {
     let pattern = format!("{prefix}*");
     let mut cursor = String::from("0");
     let mut out = Vec::new();
@@ -43,7 +44,7 @@ pub(crate) fn scan_prefix(client: &mut RespClient, prefix: &str) -> io::Result<V
 }
 
 /// A key's type, as `TYPE` reports it (`none` when it is absent).
-pub(crate) fn key_type(client: &mut RespClient, key: &str) -> io::Result<String> {
+pub(crate) fn key_type(client: &mut dyn Link, key: &str) -> io::Result<String> {
     Ok(match client.request_borrowed(&[b"TYPE", key.as_bytes()])? {
         Reply::Simple(s) | Reply::Bulk(s) => String::from_utf8_lossy(&s).into_owned(),
         _ => String::new(),
@@ -68,7 +69,7 @@ fn read_verb<'a>(ty: &str, key: &'a [u8]) -> Option<Vec<&'a [u8]>> {
 /// The members of a key the caller **named**. Not being a collection is
 /// an error: a source that silently contributes nothing is the hole
 /// `backfill-keys` exists to close.
-pub(crate) fn members(client: &mut RespClient, key: &str) -> io::Result<Vec<Vec<u8>>> {
+pub(crate) fn members(client: &mut dyn Link, key: &str) -> io::Result<Vec<Vec<u8>>> {
     let ty = key_type(client, key)?;
     if ty == "none" {
         return Err(io::Error::other(format!("index '{key}' does not exist")));
@@ -89,7 +90,7 @@ pub(crate) fn members(client: &mut RespClient, key: &str) -> io::Result<Vec<Vec<
 /// a counter would make it unusable on the first real keyspace. The
 /// caller reports how many it skipped, so nothing is dropped quietly.
 pub(crate) fn members_if_collection(
-    client: &mut RespClient,
+    client: &mut dyn Link,
     key: &str,
 ) -> io::Result<Option<Vec<Vec<u8>>>> {
     let ty = key_type(client, key)?;

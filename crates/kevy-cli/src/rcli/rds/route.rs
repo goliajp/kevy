@@ -28,6 +28,8 @@ pub(crate) enum Tool {
     Dump,
     Load,
     SqlRun,
+    /// One of the tools shipped before `--kevy`.
+    Shipped(crate::tools::shipped::Shipped),
 }
 
 pub(crate) fn tool_named(name: &[u8]) -> Option<Tool> {
@@ -50,7 +52,7 @@ pub(crate) fn tool_named(name: &[u8]) -> Option<Tool> {
         b"show-create" => Tool::ShowCreate,
         b"dump" => Tool::Dump,
         b"load" => Tool::Load,
-        _ => return None,
+        other => return crate::tools::shipped::Shipped::named(other).map(Tool::Shipped),
     })
 }
 
@@ -85,6 +87,10 @@ pub(crate) fn run_kevy(s: &mut Session, argv: &[Vec<u8>]) -> u8 {
 /// Run `tool` with `args`, on the session's connection (opened if there is
 /// none, so a REPL keeps its MULTI and SELECT state).
 pub(crate) fn run_tool(s: &mut Session, tool: Tool, args: &[Vec<u8>]) -> u8 {
+    if let Tool::Shipped(shipped) = tool {
+        // Its own argument grammar and output; no shared row options.
+        return crate::tools::session::run(s, shipped, args);
+    }
     let Some(mut common) = super::options::parse(args, s.opts.output) else { return 1 };
     common.style.expanded |= s.rds.expanded;
     common.timing |= s.rds.timing;
@@ -135,6 +141,7 @@ fn dispatch(s: &mut Session, tool: Tool, common: &super::options::Common) -> u8 
         },
         Tool::Load => super::dump_dir::load(s, &common.args, common),
         Tool::SqlRun => super::sql_run::run(s, common),
+        Tool::Shipped(shipped) => crate::tools::session::run(s, shipped, &common.args),
     }
 }
 

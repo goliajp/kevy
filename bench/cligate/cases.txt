@@ -296,6 +296,21 @@ run: -p $PORT dump no-such-key
 [RC-031 a-lower-case-command-that-is-also-a-kevy-tool-name-restore]
 run: -p $PORT restore k 0 not-a-payload
 
+[RC-031 digest-stays-the-shipped-tool-until-7-0]
+deviation: DEV-028
+run: digest k
+kevy.stderr: kevy-cli: `kevy-cli digest ...` is deprecated and goes away in 7.0; use `kevy-cli [-h host] [-p port] --kevy digest ...`\nkevy-cli digest: could not connect to 127.0.0.1:6379: Connection refused (os error 111)\n
+kevy.exit: 1
+
+[RC-031 restore-in-its-backup-shape-stays-the-shipped-tool-until-7-0]
+deviation: DEV-028
+run: restore --from /nonexistent.kevybkp --to /tmp/cligate-restore
+kevy.stderr: kevy-cli: `kevy-cli restore ...` is deprecated and goes away in 7.0; use `kevy-cli [-h host] [-p port] --kevy restore ...`\nkevy-cli restore failed: No such file or directory (os error 2)\n
+kevy.exit: 1
+
+[RC-031 restore-in-its-command-shape-is-a-command]
+run: restore k 0 not-a-payload
+
 [RC-032 ldb-needs-eval]
 run: --ldb PING
 

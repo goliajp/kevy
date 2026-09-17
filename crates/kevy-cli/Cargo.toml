@@ -18,7 +18,7 @@ categories = ["command-line-utilities", "database"]
 # cannot declare, and `cargo package` would ship source that does not
 # compile. These four drive a live server through kevy-testnet, which is dev-only
 # scaffolding and never published.
-exclude = ["tests/backfill_keys_union.rs", "tests/lint_shapes.rs", "tests/migrate_roundtrip.rs", "tests/rcli_rds.rs", "tests/rcli_redis_cli.rs", "tests/sql_compile_apply.rs"]
+exclude = ["tests/backfill_keys_union.rs", "tests/kevy_tools.rs", "tests/lint_shapes.rs", "tests/migrate_roundtrip.rs", "tests/rcli_rds.rs", "tests/rcli_redis_cli.rs", "tests/sql_compile_apply.rs"]
 [lints]
 workspace = true
 

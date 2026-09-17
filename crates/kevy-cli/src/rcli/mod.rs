@@ -6,7 +6,7 @@
 
 mod cluster;
 mod cnum;
-mod conn;
+pub(crate) mod conn;
 mod docs;
 mod edit;
 mod fmt_flat;
@@ -19,7 +19,7 @@ mod input;
 mod ldb;
 mod modes;
 mod oneshot;
-mod opts;
+pub(crate) mod opts;
 mod opts_modes;
 mod opts_parse;
 mod prompt;
@@ -28,9 +28,9 @@ mod redirect;
 mod repl;
 mod repr;
 mod send;
-mod session;
+pub(crate) mod session;
 mod splitargs;
-mod uri;
+pub(crate) mod uri;
 
 mod entry;
 

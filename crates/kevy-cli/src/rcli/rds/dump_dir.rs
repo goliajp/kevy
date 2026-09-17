@@ -169,22 +169,11 @@ fn declared_prefix(schema: &[u8], table: &[u8]) -> Option<Vec<u8>> {
     })
 }
 
-/// doctor over TCP, checking tables, bare indexes and views.
-fn doctor(s: &Session) -> u8 {
-    if s.opts.socket.is_some() {
-        eprint_bytes(&[b"kevy-cli: load: doctor connects over TCP only; not run over a socket (run doctor -h <host> -p <port>)\n"]);
-        return 0;
-    }
-    let host = String::from_utf8_lossy(&s.opts.host).into_owned();
-    let Ok(port) = u16::try_from(s.opts.port) else {
-        return fail(&[b"load: the port is out of range for doctor"]);
-    };
-    let mut client = match kevy_resp_client::RespClient::connect(&host, port) {
-        Ok(c) => c,
-        Err(e) => return fail(&[b"load: doctor could not connect: ", e.to_string().as_bytes()]),
-    };
+/// doctor on the session's connection: tables, bare indexes and views.
+fn doctor(s: &mut Session) -> u8 {
+    let Some(conn) = s.conn.as_mut() else { return fail(&[b"load: the connection is gone"]) };
     let scope = crate::doctor::Scope { indexes: true, views: true };
-    match crate::doctor::run_scoped(&mut client, false, scope) {
+    match crate::doctor::run_scoped(conn, false, scope) {
         Ok(code) if code == std::process::ExitCode::SUCCESS => 0,
         Ok(_) => 3,
         Err(e) => fail(&[b"load: doctor: ", e.to_string().as_bytes()]),
