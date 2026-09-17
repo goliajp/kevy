@@ -45,15 +45,20 @@ fn shown(cell: &Cell, style: &Style) -> Vec<u8> {
     }
 }
 
-/// Control bytes as `\xHH`, so a value cannot break the layout.
+/// Control bytes and bytes that are not UTF-8 as `\xHH`, so a value
+/// cannot break the layout — a composite index's encoded value is binary.
 fn printable(text: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(text.len());
-    for &b in text {
-        if b < 0x20 || b == 0x7f {
-            out.extend_from_slice(format!("\\x{b:02x}").as_bytes());
-        } else {
-            out.push(b);
+    let hex = |out: &mut Vec<u8>, b: u8| out.extend_from_slice(format!("\\x{b:02x}").as_bytes());
+    for chunk in text.utf8_chunks() {
+        for &b in chunk.valid().as_bytes() {
+            if b < 0x20 || b == 0x7f {
+                hex(&mut out, b);
+            } else {
+                out.push(b);
+            }
         }
+        chunk.invalid().iter().for_each(|&b| hex(&mut out, b));
     }
     out
 }
@@ -212,6 +217,15 @@ pub(crate) fn json_string(text: &[u8]) -> String {
 mod tests {
     use super::{Format, Style, render};
     use crate::rcli::rds::rows::{Cell, Rows};
+
+    #[test]
+    fn a_table_shows_bytes_that_are_not_utf8_as_hex() {
+        assert_eq!(super::printable("n 中\u{7f}".as_bytes()), "n 中\\x7f".as_bytes());
+        assert_eq!(
+            super::printable(b"n 1\x00\x80\xff\xe4\xb8"),
+            br"n 1\x00\x80\xff\xe4\xb8".to_vec()
+        );
+    }
 
     fn sample() -> Rows {
         Rows {

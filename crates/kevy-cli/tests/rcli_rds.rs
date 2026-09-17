@@ -158,17 +158,17 @@ fn catalogs_describe_and_formats() {
     let table = cli(&["-p", &p, "describe+", "users"], b"", &[("FAKETTY", "1")]);
     assert!(
         table.stdout.starts_with(
-            "Table \"users\"\n prefix | pk | columns | indexes | orderpaths | window\n"
+            "Table \"users\"\n prefix | pk | autodeclare | window\n--------+----+-------------+--------\n user:  | id | 0           | -\n(1 row)\nColumns\n column | type | key | paths\n"
         ),
         "{}",
         table.stdout
     );
-    assert!(table.stdout.contains("Access paths\n name      | prefix | kind  | state | entries |"));
-    assert!(table.stdout.contains("Columns and their types are not readable over the wire until TABLE.DESCRIBE exists.\nVerification\n index     | entries |"));
+    assert!(table.stdout.contains("\n age    | i64  |     | users.age\n(3 rows)\nAccess paths\n name      | prefix | kind  | state | entries |"), "{}", table.stdout);
+    assert!(table.stdout.contains("\nVerification\n index     | entries |"), "{}", table.stdout);
     let missing = cli(&["-p", &p, "describe", "nope"], b"", &[]);
     assert_eq!(
         (missing.stderr.as_str(), missing.code),
-        ("kevy-cli: no such table 'nope' (tables lists them)\n", 1)
+        ("kevy-cli: no table, index or view named 'nope'\n", 1)
     );
     let expanded = cli(&["-p", &p, "views", "--expanded", "--format", "table"], b"", &[]);
     assert_eq!(expanded.stdout, "");
@@ -443,6 +443,223 @@ fn csv_in_and_out() {
         ["", "key,name", "user:1,n 1", "user:10,\"Ann, B\"", "user:11,Bo", "user:12,Cy"]
     );
     assert_eq!(cli(&["-p", &p, "export-csv", "--columns", "a", "-"], b"", &[]).code, 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A bare index and a view beside `users`, so every catalog has an entry.
+fn users_index_and_view(p: &str) {
+    users(p);
+    server(
+        p,
+        &[
+            "IDX.CREATE",
+            "city",
+            "ON",
+            "PREFIX",
+            "user:",
+            "FIELD",
+            "city",
+            "TYPE",
+            "str",
+            "KIND",
+            "unique",
+        ],
+    );
+    server(
+        p,
+        &[
+            "VIEW.CREATE",
+            "young",
+            "QUERY",
+            "users.age",
+            "RANGE",
+            "0",
+            "22",
+            "ORDER",
+            "BY",
+            "users.age",
+        ],
+    );
+    let ready = cli(&["-p", p, "wait-ready", "--all", "--timeout", "10"], b"", &[]);
+    assert_eq!(ready.code, 0, "{}", ready.stderr);
+}
+
+const USERS_DECLARATION: &str = "TABLE.DECLARE users PREFIX user: PK id COLUMN id i64 COLUMN name str COLUMN age i64 INDEX age range";
+
+#[test]
+fn describe_and_show_create_read_declarations_back() {
+    let s = Srv::start(false);
+    let p = s.port();
+    users_index_and_view(&p);
+    let table = cli(&["-p", &p, "describe", "users"], b"", &[]);
+    assert!(
+        table.stdout.starts_with(
+            "Table \"users\"\nprefix\tpk\tautodeclare\twindow\nuser:\tid\t0\t-\n\
+             Columns\ncolumn\ttype\tkey\tpaths\nid\ti64\tpk\t\nname\tstr\t\t\nage\ti64\t\tusers.age\n\
+             Access paths\nname\tprefix\tkind\tstate\tentries\tbytes\thits\tlast_hit\tauto\nusers.age\tuser:\trange\tready\t5\t"
+        ),
+        "{}",
+        table.stdout
+    );
+    let index = cli(&["-p", &p, "describe", "city"], b"", &[]);
+    assert_eq!(
+        index.stdout,
+        "Index \"city\"\nprefix\tkind\ttype\ttable\tpositions\tmaxmem\tgroupby\tann\nuser:\tunique\tstr\t-\t0\t0\t-\t-\nFields\nfield\tweight\ncity\t1\n"
+    );
+    let view = cli(&["-p", &p, "describe", "young"], b"", &[]);
+    assert_eq!(
+        view.stdout,
+        "View \"young\"\norder_by\tdesc\tmode\ttopk\tvia\tquery\nusers.age\t0\tvirtual\t0\t-\tusers.age RANGE 0 22\n"
+    );
+    let kevy = cli(&["-p", &p, "show-create", "users"], b"", &[]);
+    assert_eq!((kevy.stdout.as_str(), kevy.code), (format!("{USERS_DECLARATION}\n").as_str(), 0));
+    let sql = cli(&["-p", &p, "show-create", "users", "--as", "sql"], b"", &[]);
+    assert_eq!(
+        sql.stdout,
+        "CREATE TABLE users (\n    id bigint PRIMARY KEY,\n    name text,\n    age bigint\n);\n\
+         CREATE INDEX ON users (age);\n-- not carried by SQL: PREFIX user:\n"
+    );
+    let compiled = cli(&["-p", &p, "show-create", "users.age"], b"", &[]);
+    assert_eq!(
+        (compiled.stderr.as_str(), compiled.code),
+        (
+            "kevy-cli: show-create: index 'users.age' is compiled by table 'users'; show-create users declares it\n",
+            1
+        )
+    );
+    let bare = cli(&["-p", &p, "show-create", "city", "--as", "sql"], b"", &[]);
+    assert_eq!(
+        (bare.stderr.as_str(), bare.code),
+        (
+            "kevy-cli: show-create: an index has no SQL form here (SQL indexes and views compile from a table); --as kevy prints it\n",
+            1
+        )
+    );
+    let bad = cli(&["-p", &p, "show-create", "users", "--as", "yaml"], b"", &[]);
+    assert_eq!(
+        (bad.stderr.as_str(), bad.code),
+        ("kevy-cli: show-create: --as takes kevy or sql\n", 1)
+    );
+}
+
+#[test]
+fn dump_restore_and_sql_run() {
+    let a = Srv::start(false);
+    let b = Srv::start(false);
+    let (pa, pb) = (a.port(), b.port());
+    users_index_and_view(&pa);
+    server(&pa, &["HSET", "user:3", "city", "kyoto", "nickname", "not declared"]);
+    let schema = cli(&["-p", &pa, "dump", "--schema"], b"", &[]);
+    assert_eq!(
+        schema.stdout,
+        format!(
+            "# kevy-cli dump --schema: tables, indexes, views; replay with run -f\n{USERS_DECLARATION}\n\
+             IDX.CREATE city ON PREFIX user: FIELD city TYPE str KIND unique\n\
+             VIEW.CREATE young QUERY users.age RANGE 0 22 ORDER BY users.age\n"
+        )
+    );
+    let only = cli(&["-p", &pa, "dump", "--schema", "--table", "users", "--as", "sql"], b"", &[]);
+    assert!(
+        only.stdout.starts_with(
+            "-- kevy-cli dump --schema --as sql; compile with sql compile\nCREATE TABLE users ("
+        ),
+        "{}",
+        only.stdout
+    );
+    assert!(!only.stdout.contains("city"), "--table leaves bare indexes out: {}", only.stdout);
+    let dir = std::env::temp_dir().join(format!("kevy-rds-dump-{}", a.port));
+    let _ = std::fs::remove_dir_all(&dir);
+    let d = dir.to_str().unwrap();
+    let dumped = cli(&["-p", &pa, "dump", "--all", d], b"", &[]);
+    assert_eq!(
+        (dumped.stdout.as_str(), dumped.code),
+        (format!("dumped 1 table(s) to {d}\n").as_str(), 0),
+        "{}",
+        dumped.stderr
+    );
+    assert_eq!(std::fs::read_to_string(dir.join("tables")).unwrap(), "table-1.csv users\n");
+    assert_eq!(cli(&["-p", &pa, "dump", "--all", d], b"", &[]).code, 1, "a dump never overwrites");
+    let restored = cli(&["-p", &pb, "restore", d], b"", &[]);
+    assert_eq!(restored.code, 0, "{}{}", restored.stdout, restored.stderr);
+    assert!(
+        restored.stdout.starts_with("imported 5 rows into user: (0 errors)\n"),
+        "{}",
+        restored.stdout
+    );
+    assert!(
+        restored.stdout.contains("\nready\n")
+            && restored.stdout.contains("doctor: 3 checked — 0 drifted"),
+        "{}",
+        restored.stdout
+    );
+    assert_eq!(cli(&["-p", &pb, "dump", "--schema"], b"", &[]).stdout, schema.stdout);
+    // Declared columns travel; a field outside the declaration does not.
+    let row =
+        cli(&["-p", &pb, "HMGET", "user:3", "id", "name", "age", "city", "nickname"], b"", &[]);
+    assert_eq!(row.stdout, "3\nn 3\n23\n\n\n");
+    let rows = cli(
+        &["-p", &pb, "sql", "run", "SELECT name, id FROM users WHERE age BETWEEN 22 AND 23"],
+        b"",
+        &[],
+    );
+    assert_eq!(
+        (rows.stdout.as_str(), rows.code),
+        ("name\tid\nn 2\t2\nn 3\t3\n", 0),
+        "{}",
+        rows.stderr
+    );
+    let refused =
+        cli(&["-p", &pb, "sql", "run", "SELECT * FROM users WHERE name = 'n 1'"], b"", &[]);
+    assert_eq!(
+        (refused.stderr.as_str(), refused.code),
+        (
+            "kevy-cli: sql run: line 1, col 1: view 'select': WHERE (name EQ) matches no declared access path \u{2014} add: CREATE INDEX ON users (name)\n",
+            1
+        )
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn csv_by_table() {
+    let s = Srv::start(false);
+    let p = s.port();
+    users(&p);
+    let dir = std::env::temp_dir().join(format!("kevy-rds-table-csv-{}", s.port));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("in.csv");
+    std::fs::write(&file, "id,name,age,extra\n9,nine,29,x\n").unwrap();
+    let imported = cli(
+        &["-p", &p, "import-csv", file.to_str().unwrap(), "--table", "users", "--header"],
+        b"",
+        &[],
+    );
+    assert_eq!(
+        (imported.stdout.as_str(), imported.code),
+        ("imported 1 rows into user: (0 errors)\n", 0)
+    );
+    let row = cli(&["-p", &p, "HMGET", "user:9", "id", "name", "age", "extra"], b"", &[]);
+    assert_eq!(row.stdout, "9\nnine\n29\n\n", "only declared columns are written");
+    let exported = cli(
+        &[
+            "-p",
+            &p,
+            "export-csv",
+            "--table",
+            "users",
+            "--via",
+            "IDX.QUERY users.age RANGE 25 29",
+            "-",
+        ],
+        b"",
+        &[],
+    );
+    assert_eq!(exported.stdout, "key,id,name,age\r\nuser:5,5,n 5,25\r\nuser:9,9,nine,29\r\n");
+    let missing = cli(&["-p", &p, "export-csv", "--table", "nope", "-"], b"", &[]);
+    assert_eq!(
+        (missing.stderr.as_str(), missing.code),
+        ("kevy-cli: export-csv: no table named 'nope'\n", 1)
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
