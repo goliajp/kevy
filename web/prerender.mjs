@@ -47,7 +47,7 @@ const SECTIONS = [
      'replication', 'availability', 'cluster',
      'tiering', 'accept-shards', 'alloc', 'uds', 'async']],
   ['data', { en: 'Working with data', zh: '数据', ja: 'データ' },
-    ['indexes', 'tables', 'table-migration', 'vector-search', 'text-search', 'views',
+    ['indexes', 'tables', 'relational-cli', 'table-migration', 'vector-search', 'text-search', 'views',
      'cdc', 'pubsub', 'lua', 'packed-rows']],
   ['embed', { en: 'Embedding it', zh: '嵌入', ja: '組み込み' },
     ['wasm', 'embedded-listener', 'electron', 'tauri', 'iot']],

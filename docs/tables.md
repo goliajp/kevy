@@ -433,6 +433,8 @@ one untaken branch.
 ## See also
 
 - [indexes.md](indexes.md) — the index engine tables compile into.
+- [relational-cli.md](relational-cli.md) — kevy-cli's tools for tables:
+  describe, query, dump and restore, CSV, `sql run`.
 - [tiering.md](tiering.md) — the companion feature: indexes hot,
   rows cold.
 - [rds-workloads.md](rds-workloads.md) — the full SQL-vocabulary
