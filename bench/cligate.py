@@ -101,7 +101,7 @@ def parse_cases(path: pathlib.Path):
             cur["stdin"] += unescape(expand(value))
         elif key in ("run", "deviation", "kevy.stdout", "kevy.stderr", "kevy.exit",
                      "kevy.stdout-contains", "kevy.stdout-replace", "timeline", "screen",
-                     "compare", "mask", "head"):
+                     "compare", "mask", "head", "prepare"):
             cur[key] = value
         else:
             sys.exit(f"cligate: {path}:{lineno}: unknown field {key!r}")
@@ -215,7 +215,11 @@ class Reference:
             time.sleep(0.1)
         return False
 
-    def run(self, argv, stdin, env, program="redis-cli", timeline=None, screen=None):
+    def run(self, argv, stdin, env, program="redis-cli", timeline=None, screen=None,
+            prepare=None):
+        if prepare:
+            # A shell command run in the CLI's container first (a script file).
+            sh(["docker", "exec", self.cli, "sh", "-c", expand(prepare)])
         if screen:
             # Each CLI keeps its own history file, empty at the start: with a
             # prompt, both load and save one, and the second run must not
@@ -371,7 +375,7 @@ def main() -> int:
             ref.reset(case["setup"])
             screen = case.get("screen")
             r = normalized(case, on_screen(ref.run(argv, case["stdin"], case["env"],
-                                                   timeline=case.get("timeline"), screen=screen),
+                                                   timeline=case.get("timeline"), screen=screen, prepare=case.get("prepare")),
                                            screen))
             ref.reset(case["setup"])
             if args.show_reference:
@@ -382,7 +386,7 @@ def main() -> int:
                 ref.reset(case["setup"])
                 again = normalized(case, on_screen(ref.run(argv, case["stdin"], case["env"],
                                                            timeline=case.get("timeline"),
-                                                           screen=screen), screen))
+                                                           screen=screen, prepare=case.get("prepare")), screen))
                 if (r.stdout, r.stderr, r.returncode) != (again.stdout, again.stderr,
                                                           again.returncode):
                     failed += 1
@@ -400,7 +404,7 @@ def main() -> int:
                 continue
             k = normalized(case, on_screen(ref.run(argv, case["stdin"], case["env"],
                                                    program="kevy-cli",
-                                                   timeline=case.get("timeline"), screen=screen),
+                                                   timeline=case.get("timeline"), screen=screen, prepare=case.get("prepare")),
                                            screen))
             want = expected_kevy(case, r)
             got = (k.stdout, k.stderr, k.returncode)

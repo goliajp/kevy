@@ -1,6 +1,7 @@
 # One case per [ids name] block. Fields:
 #   run:    argv (shlex); $PORT $AUTH_PORT $SOCKET expand
 #   setup:  repeatable; redis-cli -p $PORT <setup> after FLUSHALL
+#   prepare: a shell command run in the CLI container before each run
 #   env:    K=V, repeatable
 #   stdin:  C escapes (\n \r \t \\ \xHH), repeatable, concatenated
 #   timeline: instead of stdin, steps over time separated by ` ; `: seconds to
@@ -1476,3 +1477,59 @@ timeline: 2.0 ; $ redis-cli -p $PORT -n 3 SET b 2 ; $ redis-cli -p $PORT -n 3 IN
 run: -p $PORT --replica
 mask: after [0-9]+ bytes
 kevy.stdout-replace: "SET","b","2" => "SELECT","3"\n"SET","b","2"
+
+# ─── P3 · --ldb ──────────────────────────────────────────────────────────────
+
+[RC-103 ldb-step-print-eval-continue]
+screen: pty
+env: TERM=xterm
+prepare: printf 'local a = 1\nredis.call("SET", KEYS[1], ARGV[1])\nreturn a + 1\n' > /tmp/cligate-ldb.lua
+timeline: 1.0 ; s\r ; 0.5 ; print\r ; 0.5 ; e redis.call("GET", "k")\r ; 0.5 ; r ping\r ; 0.5 ; c\r ; 0.8 ; \x04 ; 0.3
+run: -p $PORT --ldb --eval /tmp/cligate-ldb.lua k , v
+
+[RC-103 ldb-help-comes-from-the-server]
+screen: pty
+env: TERM=xterm
+prepare: printf 'local a = 1\nredis.call("SET", KEYS[1], ARGV[1])\nreturn a + 1\n' > /tmp/cligate-ldb.lua
+timeline: 1.0 ; help\r ; 0.6 ; KILL
+run: -p $PORT --ldb --eval /tmp/cligate-ldb.lua k , v
+
+[RC-103 ldb-quit]
+screen: pty
+env: TERM=xterm
+prepare: printf 'local a = 1\nredis.call("SET", KEYS[1], ARGV[1])\nreturn a + 1\n' > /tmp/cligate-ldb.lua
+timeline: 1.0 ; quit\r ; 0.8
+run: -p $PORT --ldb --eval /tmp/cligate-ldb.lua k , v
+
+[RC-103 ldb-an-unknown-command]
+screen: pty
+env: TERM=xterm
+prepare: printf 'local a = 1\nredis.call("SET", KEYS[1], ARGV[1])\nreturn a + 1\n' > /tmp/cligate-ldb.lua
+timeline: 1.0 ; foo bar\r ; 0.5 ; KILL
+run: -p $PORT --ldb --eval /tmp/cligate-ldb.lua k , v
+
+[RC-104 ldb-sync-mode]
+screen: pty
+env: TERM=xterm
+prepare: printf 'local a = 1\nredis.call("SET", KEYS[1], ARGV[1])\nreturn a + 1\n' > /tmp/cligate-ldb.lua
+timeline: 1.0 ; c\r ; 0.8 ; \x04 ; 0.3
+run: -p $PORT --ldb-sync-mode --eval /tmp/cligate-ldb.lua k , v
+
+[RC-103 ldb-a-script-that-does-not-compile]
+screen: pty
+prepare: printf 'retur 1' > /tmp/cligate-bad.lua
+timeline: 1.0
+run: -p $PORT --ldb --eval /tmp/cligate-bad.lua
+
+[RC-103 ldb-restart]
+# DEV-023: redis-cli 8.10.1 aborts on `restart` ("free(): invalid pointer");
+# kevy-cli reconnects and debugs the script again from its first line.
+deviation: DEV-023
+screen: pty
+env: TERM=xterm
+prepare: printf 'local a = 1\nredis.call("SET", KEYS[1], ARGV[1])\nreturn a + 1\n' > /tmp/cligate-ldb.lua
+timeline: 1.0 ; s\r ; 0.5 ; restart\r ; 1.5 ; quit\r ; 0.8
+run: -p $PORT --ldb --eval /tmp/cligate-ldb.lua k , v
+kevy.stdout: Lua debugging session started, please use:\nquit    -- End the session.\nrestart -- Restart the script in debug mode again.\nhelp    -- Show Lua script debugging commands.\n\n{0;37;49|* Stopped at 1, stop reason = step over}\n{0;33;49|-> 1   local a = 1}\nlua debugger> s\n{0;37;49|* Stopped at 2, stop reason = step over}\n{0;33;49|-> 2   redis.call("SET", KEYS[1], ARGV[1])}\nlua debugger> restart\n\nLua debugging session started, please use:\nquit    -- End the session.\nrestart -- Restart the script in debug mode again.\nhelp    -- Show Lua script debugging commands.\n\n{0;37;49|* Stopped at 1, stop reason = step over}\n{0;33;49|-> 1   local a = 1}\nlua debugger> quit\n
+kevy.exit: 0
+

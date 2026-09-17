@@ -15,6 +15,7 @@ mod format;
 mod help;
 mod hint_modes;
 mod input;
+mod ldb;
 mod modes;
 mod oneshot;
 mod opts;
