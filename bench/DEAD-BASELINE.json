@@ -2,14 +2,14 @@
   "corpus": "c1",
   "platform": "linux",
   "kind": "symbols/qualified-path",
-  "tree": "aacffd1706532ca58aa961f42157f3c9cf889047",
-  "total_regions": 173962,
-  "dead_regions": 25854,
-  "llvm_per_instantiation_dead": 26898,
+  "tree": "c1dadaeac4ad1b7ec92024921dc617dd090b3447",
+  "total_regions": 176942,
+  "dead_regions": 26168,
+  "llvm_per_instantiation_dead": 27252,
   "crates": {
     "kevy": {
       "regions": 30057,
-      "dead": 4838
+      "dead": 4837
     },
     "kevy-alloc": {
       "regions": 1804,
@@ -28,8 +28,8 @@
       "dead": 426
     },
     "kevy-cli": {
-      "regions": 10832,
-      "dead": 1673
+      "regions": 13794,
+      "dead": 2006
     },
     "kevy-client": {
       "regions": 4887,
@@ -57,7 +57,7 @@
     },
     "kevy-embedded": {
       "regions": 27695,
-      "dead": 3777
+      "dead": 3789
     },
     "kevy-ffi": {
       "regions": 843,
@@ -129,7 +129,7 @@
     },
     "kevy-rt": {
       "regions": 16534,
-      "dead": 4631
+      "dead": 4635
     },
     "kevy-scalar": {
       "regions": 4455,
@@ -137,7 +137,7 @@
     },
     "kevy-scope": {
       "regions": 629,
-      "dead": 56
+      "dead": 57
     },
     "kevy-seg": {
       "regions": 1301,
@@ -152,7 +152,7 @@
       "dead": 1488
     },
     "kevy-sys": {
-      "regions": 1030,
+      "regions": 1048,
       "dead": 148
     },
     "kevy-testnet": {
@@ -491,7 +491,7 @@
     "kevy::die::": 3,
     "kevy::dispatch::cmd_select::": 4,
     "kevy::dispatch::dispatch_conn::": 3,
-    "kevy::dispatch::dispatch_with_proto::": 14,
+    "kevy::dispatch::dispatch_with_proto::": 10,
     "kevy::dispatch_collections::cmd_brpoplpush::": 6,
     "kevy::dispatch_collections::cmd_lmove::": 5,
     "kevy::dispatch_collections::dispatch_hash::": 4,
@@ -906,16 +906,53 @@
     "kevy_cli::rcli::input::edit_line": 1,
     "kevy_cli::rcli::input::plain_line": 1,
     "kevy_cli::rcli::input::read_all_typed": 2,
+    "kevy_cli::rcli::modes::bigkeys::record": 3,
+    "kevy_cli::rcli::modes::bigkeys::summary": 2,
+    "kevy_cli::rcli::modes::bigkeys::walk": 5,
+    "kevy_cli::rcli::modes::dispatch::run": 6,
+    "kevy_cli::rcli::modes::hdr::Histogram::percentile_rows": 1,
+    "kevy_cli::rcli::modes::hdr::Layout::range_size": 1,
+    "kevy_cli::rcli::modes::hotkeys::Hottest::offer": 6,
+    "kevy_cli::rcli::modes::hotkeys::frequencies": 3,
+    "kevy_cli::rcli::modes::hotkeys::record": 3,
+    "kevy_cli::rcli::modes::hotkeys::report": 3,
+    "kevy_cli::rcli::modes::hotkeys::walk": 9,
+    "kevy_cli::rcli::modes::keystats::run": 4,
+    "kevy_cli::rcli::modes::keystats::walk": 11,
+    "kevy_cli::rcli::modes::keystats_report::percent": 1,
+    "kevy_cli::rcli::modes::keystats_report::tops": 2,
+    "kevy_cli::rcli::modes::keystats_report::type_table": 3,
+    "kevy_cli::rcli::modes::latency::reading": 8,
+    "kevy_cli::rcli::modes::latency::run": 13,
+    "kevy_cli::rcli::modes::latency_dist::legend": 14,
+    "kevy_cli::rcli::modes::latency_dist::run": 47,
+    "kevy_cli::rcli::modes::latency_dist::spectrum": 37,
+    "kevy_cli::rcli::modes::lru_test::run": 74,
+    "kevy_cli::rcli::modes::pages::split": 1,
+    "kevy_cli::rcli::modes::progress::Bar::maybe_draw": 4,
+    "kevy_cli::rcli::modes::server::allow_replica_reads": 1,
+    "kevy_cli::rcli::modes::sizes::measure": 1,
+    "kevy_cli::rcli::modes::sizes::sizes_of": 1,
+    "kevy_cli::rcli::modes::stat::database_count": 10,
+    "kevy_cli::rcli::modes::stat::line": 4,
+    "kevy_cli::rcli::modes::stat::run": 24,
+    "kevy_cli::rcli::modes::vset_recall::blend": 1,
+    "kevy_cli::rcli::modes::vset_recall::names": 4,
+    "kevy_cli::rcli::modes::vset_recall::numbers": 3,
+    "kevy_cli::rcli::modes::vset_recall::one_query": 13,
+    "kevy_cli::rcli::modes::vset_recall::run": 8,
     "kevy_cli::rcli::oneshot::stdin_all": 8,
     "kevy_cli::rcli::opts_modes::late_cluster_args": 1,
-    "kevy_cli::rcli::repl::drain_buffered": 10,
+    "kevy_cli::rcli::repl::drain_buffered": 1,
     "kevy_cli::rcli::repl::run": 1,
     "kevy_cli::rcli::repl::wait_for_messages_or_stdin": 8,
     "kevy_cli::rcli::session::Session::ask_docs": 6,
     "kevy_cli::rcli::session::Session::await_reply": 1,
     "kevy_cli::rcli::session::Session::handshake": 1,
+    "kevy_cli::rcli::session::Session::pipeline": 3,
     "kevy_cli::rcli::session::Session::read_reply": 2,
     "kevy_cli::rcli::session::Session::recover_from_interrupt": 3,
+    "kevy_cli::rcli::session::Session::request_reconnecting": 8,
     "kevy_cli::rcli::session::Session::send_command": 4,
     "kevy_cli::rcli::session::Session::track_state": 2,
     "kevy_cli::report_skipped": 7,
@@ -1765,7 +1802,7 @@
     "kevy_index::advise::narrow_advice": 1,
     "kevy_index::agg::AggBy::parse": 10,
     "kevy_index::agg::AggSegment::rows": 3,
-    "kevy_index::agg::AggSegment::top_groups": 12,
+    "kevy_index::agg::AggSegment::top_groups": 23,
     "kevy_index::agg::sort_groups": 48,
     "kevy_index::catalog::Catalog::coerce": 5,
     "kevy_index::catalog::Catalog::from_sidecar": 3,
@@ -2281,7 +2318,7 @@
     "kevy_rt::shard::Shard::build_zintercard::": 4,
     "kevy_rt::shard::Shard::cancel_xshard_on_close": 2,
     "kevy_rt::shard::Shard::check_repl_ack_waiters": 48,
-    "kevy_rt::shard::Shard::check_repl_apply_waiters": 28,
+    "kevy_rt::shard::Shard::check_repl_apply_waiters": 2,
     "kevy_rt::shard::Shard::check_tee_overrun": 27,
     "kevy_rt::shard::Shard::client_getname::": 10,
     "kevy_rt::shard::Shard::client_info": 5,
@@ -3421,6 +3458,12 @@
       "symbols": 2972,
       "regions": 25854,
       "reason": "kevy-cli redis-cli P0+P1 (feature/cli-superset, tree aacffd17): 54 new symbols, 155 never-executed regions. What no test can reach or no profile can record: kevy_sys::interrupt::on_interrupt's restore-and-_exit arm (16; _exit skips the profile write) and the severed-read arms around it (recover_from_interrupt, await_reply); OS I/O failure arms (Conn::read_reply/write_raw/fd, strerror, LinkError, History::save, read_all_typed/stdin_all read errors, open_pty/child_path/RawMode tcgetattr failures); in-memory writer ? arms in the line editor (read_line, run, key, redraw, finish); malformed-server arms already refused by COMMAND DOCS unit tests (docs model ?s, parse_with). Three server symbols grew only because they vary between runs of this tree (check_repl_apply_waiters 2/28/2, dispatch_with_proto 10/14/10, do_publish 1/1/4): replication and pub/sub test timing, not this branch."
+    },
+    {
+      "envelope_over": 3,
+      "symbols": 3009,
+      "regions": 26168,
+      "reason": "kevy-cli P2 analysis modes (tree c1dadaea, 591522ab): 37 symbols, 342 regions. Most are modes whose tests end the process with SIGINT, which writes no coverage profile: lru_test::run, latency_dist (run/spectrum/legend), stat::run, latency::run and their helpers (about 230 regions) \u2014 exercised by tests, not recorded; tests that end them through their error exits follow. The rest are I/O and malformed-reply arms of the SCAN walk, pipelines and request_reconnecting, terminal-only redraw arms, and vset_recall's VSIM error arms. kevy_index AggSegment::top_groups varies between runs of this tree (23/23/12), not this branch."
     }
   ]
 }
