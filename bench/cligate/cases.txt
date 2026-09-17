@@ -2021,3 +2021,50 @@ setup: SET {t5151}1 x
 setup: SET {t5151}2 y
 prepare: redis-cli -p 17011 CLUSTER SETSLOT 10923 IMPORTING 1701217012170121701217012170121701217012 >/dev/null; printf 'ASKING\nSET {t5151}1 x\n' | redis-cli -p 17011 >/dev/null; redis-cli -p 17011 CLUSTER SETSLOT 10923 STABLE >/dev/null
 run: --cluster reshard 127.0.0.1:17010 --cluster-from 1701217012170121701217012170121701217012 --cluster-to 1701117011170111701117011170111701117011 --cluster-slots 1 --cluster-yes
+
+[RC-117 cluster-rebalance-simulated]
+cluster: uneven
+compare: cluster
+run: --cluster rebalance 127.0.0.1:17000 --cluster-simulate --verbose
+
+[RC-117 cluster-rebalance-within-threshold]
+cluster: uneven
+compare: cluster
+run: --cluster rebalance 127.0.0.1:17000 --cluster-threshold 20
+
+[RC-117 cluster-rebalance-weights-by-id-prefix]
+cluster: uneven
+compare: cluster
+run: --cluster rebalance 127.0.0.1:17000 --cluster-weight 17002=2 --cluster-simulate --verbose
+
+[RC-117 cluster-rebalance-no-such-master]
+cluster: uneven
+run: --cluster rebalance 127.0.0.1:17000 --cluster-weight 99999=2
+
+[RC-117 cluster-rebalance-empty-masters]
+cluster: 3+1
+compare: cluster
+run: --cluster rebalance 127.0.0.1:17000 --cluster-use-empty-masters --cluster-simulate
+
+[RC-117 cluster-rebalance-ignores-empty-masters]
+cluster: 3+1
+compare: cluster
+run: --cluster rebalance 127.0.0.1:17000 --cluster-simulate
+
+[RC-117 cluster-rebalance-atomically]
+cluster: uneven
+compare: cluster
+setup: SET {t5151}1 x
+run: --cluster rebalance 127.0.0.1:17000
+
+[RC-117,RC-116 cluster-rebalance-slot-by-slot]
+cluster: legacy-uneven
+compare: cluster
+setup: SET {t5151}1 x
+run: --cluster rebalance 127.0.0.1:17010 --cluster-weight 17012=2 --cluster-pipeline 5
+
+[RC-117 cluster-rebalance-refuses-a-cluster-with-problems]
+cluster: uneven
+compare: cluster
+prepare: redis-cli -p 17001 CLUSTER SETSLOT 5 IMPORTING 1700017000170001700017000170001700017000 >/dev/null
+run: --cluster rebalance 127.0.0.1:17000

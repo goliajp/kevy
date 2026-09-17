@@ -594,3 +594,106 @@ fn reshard_refuses_what_it_cannot_do() {
         ("*** Please fix your cluster problems before resharding\n", 1)
     );
 }
+
+fn uneven(extra_empty_master: bool) -> Shared {
+    let shared = cluster(3, 0);
+    {
+        let mut st = shared.lock().unwrap();
+        st.nodes[0].slots = vec![(0, 6000)];
+        st.nodes[1].slots = vec![(6001, 12000)];
+        st.nodes[2].slots = vec![(12001, 16383)];
+        if extra_empty_master {
+            st.nodes.push(cluster_fake::Node { id: id(3), ..Default::default() });
+        }
+    }
+    shared
+}
+
+#[test]
+fn rebalance_plans_by_weight_and_threshold() {
+    let shared = uneven(true);
+    let ports = start(&shared);
+    let entry = at(ports[0]);
+    let run = |extra: &[&str]| {
+        cli(&[&["--cluster", "rebalance", entry.as_str()][..], extra].concat(), b"", &[])
+    };
+    let head = format!(
+        ">>> Performing Cluster Check (using node {entry})\n[OK] All nodes agree about slots configuration.\n>>> Check for open slots...\n>>> Check slots coverage...\n[OK] All 16384 slots covered.\n"
+    );
+    let sim = run(&["--cluster-simulate", "--verbose"]);
+    let want = format!(
+        "{head}>>> Rebalancing across 3 nodes. Total weight = 3.00\n{p2} balance is -1079 slots\n{p1} balance is 539 slots\n{p0} balance is 540 slots\nMoving 540 slots from {p0} to {p2}\n{}\nMoving 539 slots from {p1} to {p2}\n{}\n",
+        "#".repeat(540),
+        "#".repeat(539),
+        p0 = at(ports[0]),
+        p1 = at(ports[1]),
+        p2 = at(ports[2])
+    );
+    assert_eq!((sim.stdout.as_str(), sim.code), (want.as_str(), 0));
+    let within = run(&["--cluster-threshold", "30"]);
+    assert_eq!(
+        within.stdout,
+        format!("{head}*** No rebalancing needed! All nodes are within the 30.00% threshold.\n")
+    );
+    // Node 1 weighs 2 of 5: balances 2725, -553, 1107, -3276 plus the three
+    // slots rounding leaves, charged to the short nodes in table order.
+    let empty = run(&[
+        "--cluster-use-empty-masters",
+        "--cluster-simulate",
+        "--verbose",
+        "--cluster-weight",
+        &format!("{}=2", id(1)),
+    ]);
+    let order = format!(
+        ">>> Rebalancing across 4 nodes. Total weight = 5.00\n{p3} balance is -3277 slots\n{p1} balance is -555 slots\n{p2} balance is 1107 slots\n{p0} balance is 2725 slots\nMoving 2725 slots from {p0} to {p3}\n",
+        p0 = at(ports[0]),
+        p1 = at(ports[1]),
+        p2 = at(ports[2]),
+        p3 = at(ports[3])
+    );
+    assert!(empty.stdout.contains(&order), "{}", empty.stdout);
+    // A prefix every id shares picks the first master in table order.
+    let shared_prefix = run(&["--cluster-simulate", "--verbose", "--cluster-weight", "0000=2"]);
+    assert!(
+        shared_prefix.stdout.contains(&format!("{} balance is -2191 slots\n", at(ports[0]))),
+        "{}",
+        shared_prefix.stdout
+    );
+    let nobody = run(&["--cluster-weight", "ffff=2"]);
+    assert_eq!((nobody.stdout.as_str(), nobody.code), ("*** No such master node ffff\n", 1));
+    shared.lock().unwrap().nodes[1].importing = vec![(1, 0)];
+    let broken = run(&[]);
+    assert!(
+        broken.stdout.ends_with("*** Please fix your cluster problems before rebalancing\n")
+            && broken.code == 1
+    );
+}
+
+#[test]
+fn rebalance_moves_slots_one_at_a_time_on_older_servers() {
+    let shared = uneven(false);
+    {
+        let mut st = shared.lock().unwrap();
+        st.nodes[2].version = "7.4.10".into();
+        st.hook = Some(Box::new(|_, argv| {
+            argv.get(1)
+                .is_some_and(|a| a.eq_ignore_ascii_case(b"GETKEYSINSLOT"))
+                .then(|| b"*0\r\n".to_vec())
+        }));
+    }
+    let ports = start(&shared);
+    let o = cli(&["--cluster", "rebalance", &at(ports[0]), "--cluster-threshold", "20"], b"", &[]);
+    assert!(
+        o.stdout.ends_with(&format!(
+            "Moving 539 slots from {} to {}\n{}\n",
+            at(ports[1]),
+            at(ports[2]),
+            "#".repeat(539)
+        )),
+        "{}",
+        o.stdout
+    );
+    assert_eq!(o.code, 0);
+    let assigned = received(&shared, 2).iter().filter(|w| w.len() == 5 && w[3] == "NODE").count();
+    assert_eq!(assigned, 540 + 539);
+}

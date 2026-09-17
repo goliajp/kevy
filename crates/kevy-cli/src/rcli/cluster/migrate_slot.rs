@@ -1,12 +1,19 @@
 //! Moving one slot the classic way: mark it importing and migrating, MIGRATE
 //! its keys in batches, then give it to the target everywhere.
 
+use super::migrate::Progress;
 use super::topology::Cluster;
 use crate::rcli::send::write_out;
 use kevy_resp::Reply;
 
 /// Move `slot` from `source` to `target`; `false` after saying what failed.
-pub(crate) fn move_slot(c: &mut Cluster, source: usize, target: usize, slot: u16) -> bool {
+pub(crate) fn move_slot(
+    c: &mut Cluster,
+    (source, target): (usize, usize),
+    slot: u16,
+    progress: Progress,
+) -> bool {
+    let steps = progress == Progress::Steps;
     let head = [
         format!("Moving slot {slot} from ").as_bytes(),
         &c.nodes[source].shown(),
@@ -15,7 +22,9 @@ pub(crate) fn move_slot(c: &mut Cluster, source: usize, target: usize, slot: u16
         b": ",
     ]
     .concat();
-    write_out(&head);
+    if steps {
+        write_out(&head);
+    }
     let number = slot.to_string();
     let (source_id, target_id) = (c.nodes[source].rec.id.clone(), c.nodes[target].rec.id.clone());
     let marks = [
@@ -29,16 +38,21 @@ pub(crate) fn move_slot(c: &mut Cluster, source: usize, target: usize, slot: u16
             return false;
         }
     }
-    if !move_keys(c, source, target, number.as_bytes()) {
+    if !move_keys(c, (source, target), number.as_bytes(), progress) {
         return false;
     }
-    write_out(b"\n");
+    write_out(if steps { b"\n" } else { b"#" });
     assign(c, source, target, number.as_bytes(), &target_id);
     true
 }
 
 /// GETKEYSINSLOT and MIGRATE until the slot is empty, a dot per key.
-fn move_keys(c: &mut Cluster, source: usize, target: usize, slot: &[u8]) -> bool {
+fn move_keys(
+    c: &mut Cluster,
+    (source, target): (usize, usize),
+    slot: &[u8],
+    progress: Progress,
+) -> bool {
     let pipeline = c.cfg.pipeline.max(1).to_string();
     loop {
         let keys = match c.nodes[source].link.request(&[
@@ -63,7 +77,7 @@ fn move_keys(c: &mut Cluster, source: usize, target: usize, slot: &[u8]) -> bool
         }
         let names: Vec<Vec<u8>> =
             keys.iter().filter_map(super::link::text).map(<[u8]>::to_vec).collect();
-        if !migrate_batch(c, source, target, &names) {
+        if !migrate_batch(c, (source, target), &names, progress) {
             return false;
         }
     }
@@ -71,7 +85,12 @@ fn move_keys(c: &mut Cluster, source: usize, target: usize, slot: &[u8]) -> bool
 
 /// One MIGRATE of `keys`; on a key the target already has, compare values
 /// and replace only when they match or `--cluster-replace` says so.
-fn migrate_batch(c: &mut Cluster, source: usize, target: usize, keys: &[Vec<u8>]) -> bool {
+fn migrate_batch(
+    c: &mut Cluster,
+    (source, target): (usize, usize),
+    keys: &[Vec<u8>],
+    progress: Progress,
+) -> bool {
     let reply = migrate(c, source, target, keys, false);
     match super::migrate::failure(&reply) {
         None => {}
@@ -94,7 +113,9 @@ fn migrate_batch(c: &mut Cluster, source: usize, target: usize, keys: &[Vec<u8>]
             return false;
         }
     }
-    write_out(&vec![b'.'; keys.len()]);
+    if progress == Progress::Steps {
+        write_out(&vec![b'.'; keys.len()]);
+    }
     true
 }
 

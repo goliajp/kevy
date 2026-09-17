@@ -13,6 +13,8 @@ Shapes, over the current group's ports 17000-17007 (the bus is port + 10000):
     empty   every node alone, no slots
     3       17000-17002 masters: 0-5460, 5461-10922, 10923-16383
     3x1     3, plus 17003 replicating 17000, 17004 17001, 17005 17002
+    uneven  17000-17002 masters: 0-6000, 6001-12000, 12001-16383
+    3+1     uneven, plus 17003 a master without slots
 
 `legacy-` before a shape builds it on the legacy group instead, ports
 17010-17017 running Redis 7.4.10: a version without atomic slot migration,
@@ -33,6 +35,10 @@ SHAPES = {
     "empty": ([], []),
     "3": ([(0, 0, 5460), (1, 5461, 10922), (2, 10923, 16383)], []),
     "3x1": ([(0, 0, 5460), (1, 5461, 10922), (2, 10923, 16383)], [(3, 0), (4, 1), (5, 2)]),
+    # Every master owns a different number of slots, so a rebalance sorts
+    # them the same way whatever order a node's table lists them in.
+    "uneven": ([(0, 0, 6000), (1, 6001, 12000), (2, 12001, 16383)], []),
+    "3+1": ([(0, 0, 6000), (1, 6001, 12000), (2, 12001, 16383), (3, None, None)], []),
 }
 CONVERGE_S = 20
 
@@ -159,7 +165,8 @@ class Group:
         masters = [(at[i], lo, hi) for i, lo, hi in SHAPES[shape][0]]
         replicas = [(at[i], at[m]) for i, m in SHAPES[shape][1]]
         for port, lo, hi in masters:
-            self._exec(f"redis-cli -p {port} CLUSTER ADDSLOTSRANGE {lo} {hi}")
+            if lo is not None:
+                self._exec(f"redis-cli -p {port} CLUSTER ADDSLOTSRANGE {lo} {hi}")
         members = [m[0] for m in masters] + [r[0] for r in replicas]
         if not members:
             return

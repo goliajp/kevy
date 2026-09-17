@@ -1,6 +1,7 @@
 //! Atomic slot migration: the target imports each source's slot ranges as
 //! one task, and the client waits for the task to finish.
 
+use super::migrate::Progress;
 use super::topology::Cluster;
 use crate::rcli::send::write_out;
 use std::time::{Duration, Instant};
@@ -9,21 +10,35 @@ use std::time::{Duration, Instant};
 const DEFAULT_TIMEOUT_MS: u64 = 3_600_000;
 
 /// One task per source, in plan order.
-pub(crate) fn run(c: &mut Cluster, target: usize, moves: &[(usize, u16)]) -> bool {
+pub(crate) fn run(
+    c: &mut Cluster,
+    target: usize,
+    moves: &[(usize, u16)],
+    progress: Progress,
+) -> bool {
     let mut k = 0;
     while k < moves.len() {
         let source = moves[k].0;
         let end = k + moves[k..].iter().take_while(|m| m.0 == source).count();
         let slots: Vec<u16> = moves[k..end].iter().map(|m| m.1).collect();
-        if !one_task(c, source, target, &slots) {
+        if !one_task(c, (source, target), &slots, progress) {
             return false;
+        }
+        if progress == Progress::Hashes {
+            write_out(&vec![b'#'; slots.len()]);
         }
         k = end;
     }
     true
 }
 
-fn one_task(c: &mut Cluster, source: usize, target: usize, slots: &[u16]) -> bool {
+fn one_task(
+    c: &mut Cluster,
+    (source, target): (usize, usize),
+    slots: &[u16],
+    progress: Progress,
+) -> bool {
+    let steps = progress == Progress::Steps;
     let text = [
         format!("Moving {} slots from ", slots.len()).as_bytes(),
         &c.nodes[source].shown(),
@@ -32,7 +47,9 @@ fn one_task(c: &mut Cluster, source: usize, target: usize, slots: &[u16]) -> boo
         b"\n",
     ]
     .concat();
-    write_out(&text);
+    if steps {
+        write_out(&text);
+    }
     let bounds: Vec<Vec<u8>> = ranges(slots)
         .into_iter()
         .flat_map(|(a, b)| [a.to_string().into_bytes(), b.to_string().into_bytes()])
@@ -49,7 +66,9 @@ fn one_task(c: &mut Cluster, source: usize, target: usize, slots: &[u16]) -> boo
     }
     let task =
         reply.ok().and_then(|r| super::link::text(&r).map(<[u8]>::to_vec)).unwrap_or_default();
-    write_out(&[&b"Waiting for migration task "[..], &task, b" to complete.\n"].concat());
+    if steps {
+        write_out(&[&b"Waiting for migration task "[..], &task, b" to complete.\n"].concat());
+    }
     wait(c, source, target, &task)
 }
 
