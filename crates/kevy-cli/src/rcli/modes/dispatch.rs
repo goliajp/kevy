@@ -41,6 +41,8 @@ pub(crate) fn run(s: &mut Session) -> Option<u8> {
             | Mode::VsetRecall
             | Mode::LruTest
             | Mode::Pipe
+            | Mode::Rdb
+            | Mode::Replica
     );
     if needs_server && !s.connect(Connect::Report) {
         return Some(1);
@@ -51,6 +53,8 @@ pub(crate) fn run(s: &mut Session) -> Option<u8> {
         Mode::KeyStats => super::keystats::run(s),
         Mode::Stat => super::stat::run(s),
         Mode::Pipe => super::pipe::run(s),
+        Mode::Rdb => super::rdb::run(s, s.opts.modes.functions_rdb),
+        Mode::Replica => super::replica::run(s),
         Mode::Latency => super::latency::run(s),
         Mode::LatencyDist => super::latency_dist::run(s),
         Mode::VsetRecall => {

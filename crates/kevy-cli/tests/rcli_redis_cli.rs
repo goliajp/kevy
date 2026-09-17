@@ -1468,3 +1468,106 @@ fn pipe_sends_input_as_it_is_and_counts_replies() {
     assert_eq!((gone.stderr.as_str(), gone.code), ("Error reading replies from server\n", 1));
     server.join().unwrap();
 }
+
+/// A master that answers REPLCONF with +OK and SYNC with `sync`, sent in
+/// pieces a byte apart so marks and headers straddle reads, then `after`.
+fn fake_master(
+    sync: Vec<u8>,
+    after: &'static [u8],
+    refuse_filter: bool,
+) -> (String, std::thread::JoinHandle<()>) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port().to_string();
+    let server = std::thread::spawn(move || {
+        use std::io::Read;
+        let (mut conn, _) = listener.accept().unwrap();
+        let mut buf = [0u8; 4096];
+        while let Ok(n @ 1..) = conn.read(&mut buf) {
+            let asked = buf[..n].to_vec();
+            let has = |w: &[u8]| asked.windows(w.len()).any(|x| x == w);
+            if has(b"SYNC") {
+                for piece in sync.chunks(7) {
+                    if conn.write_all(piece).is_err() {
+                        return;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+                let _ = conn.write_all(after);
+                // Take the replica's ACK (or the client's end) before closing,
+                // so the close is not a reset over unread bytes.
+                let _ = conn.set_read_timeout(Some(std::time::Duration::from_secs(2)));
+                let _ = conn.read(&mut buf);
+                return;
+            }
+            let reply: &[u8] =
+                if refuse_filter && has(b"functions") { b"-ERR no filter\r\n" } else { b"+OK\r\n" };
+            if conn.write_all(reply).is_err() {
+                return;
+            }
+        }
+    });
+    (port, server)
+}
+
+#[test]
+fn rdb_and_replica_modes_read_a_snapshot_stream() {
+    let mark = "0123456789012345678901234567890123456789";
+    let dir = std::env::temp_dir().join(format!("kevy-rcli-rdb-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("dump.rdb");
+    std::fs::write(&file, vec![b'x'; 5000]).unwrap();
+    let path = file.to_str().unwrap();
+
+    let body = "REDIS0011snapshot-bytes";
+    let (port, server) =
+        fake_master(format!("\n\n$EOF:{mark}\r\n{body}{mark}").into_bytes(), b"", false);
+    let out = cli(&["-p", &port, "--rdb", path], b"", &[]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert!(out.stderr.ends_with(&format!("SYNC sent to master, writing bytes of bulk transfer until EOF marker to '{path}'\nTransfer finished with success after 23 bytes\n")), "{}", out.stderr);
+    assert_eq!(
+        std::fs::read(&file).unwrap(),
+        body.as_bytes(),
+        "an older, longer file is cut to the snapshot"
+    );
+    server.join().unwrap();
+
+    let (port, server) = fake_master(b"$5\r\nhello".to_vec(), b"", false);
+    let out = cli(&["-p", &port, "--functions-rdb", "-"], b"", &[]);
+    assert_eq!((out.stdout.as_str(), out.code), ("hello", 0));
+    assert!(out.stderr.contains("sending REPLCONF rdb-filter-only functions\nSYNC sent to master, writing 5 bytes to '-'\nTransfer finished with success.\n"), "{}", out.stderr);
+    server.join().unwrap();
+
+    let (port, server) = fake_master(Vec::new(), b"", true);
+    let out = cli(&["-p", &port, "--functions-rdb", path], b"", &[]);
+    assert!(out.stderr.ends_with("REPLCONF rdb-filter-only error: ERR no filter\nFailed requesting functions only RDB from server, aborting\n"), "{}", out.stderr);
+    server.join().unwrap();
+
+    let (port, server) = fake_master(b"-ERR busy\r\n".to_vec(), b"", false);
+    let out = cli(&["-p", &port, "--rdb", "/nonexistent/dir/x.rdb"], b"", &[]);
+    assert!(out.stderr.ends_with("SYNC with master failed: -ERR busy\r\n"), "{:?}", out.stderr);
+    server.join().unwrap();
+    let (port, server) = fake_master(format!("$EOF:{mark}\r\n{mark}").into_bytes(), b"", false);
+    let out = cli(&["-p", &port, "--rdb", "/nonexistent/dir/x.rdb"], b"", &[]);
+    assert!(
+        out.stderr.ends_with("Error opening '/nonexistent/dir/x.rdb': No such file or directory\n"),
+        "{}",
+        out.stderr
+    );
+    server.join().unwrap();
+
+    // A replica: the snapshot is discarded, then every frame prints as CSV.
+    let (port, server) = fake_master(
+        format!("$EOF:{mark}\r\nrdb{mark}*2\r\n$6\r\nSELECT\r\n$1\r\n3\r\n").into_bytes(),
+        b"*3\r\n$3\r\nSET\r\n$1\r\nb\r\n$1\r\n2\r\n",
+        false,
+    );
+    let out = cli(&["-p", &port, "--replica"], b"", &[]);
+    assert_eq!((out.stdout.as_str(), out.code), ("\"SELECT\",\"3\"\n\"SET\",\"b\",\"2\"\n", 1));
+    assert!(out.stderr.contains("Full resync done after 3 bytes. Logging commands from master.\nsending REPLCONF ACK 0\nError: Server closed the connection\n"), "{}", out.stderr);
+    server.join().unwrap();
+    let (port, server) = fake_master(b"$3\r\nrdb".to_vec(), b"", false);
+    let out = cli(&["-p", &port, "--replica"], b"", &[]);
+    assert!(out.stderr.contains("discarding 3 bytes of bulk transfer...\nFull resync done. Logging commands from master.\n"), "{}", out.stderr);
+    server.join().unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}

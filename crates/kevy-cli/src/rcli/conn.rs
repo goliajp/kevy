@@ -155,6 +155,22 @@ impl Conn {
         }
     }
 
+    /// Bytes straight from the socket, bypassing reply parsing (a replication
+    /// payload). Only once every reply before it has been read.
+    pub(crate) fn read_raw(&mut self, into: &mut [u8]) -> Result<usize, LinkError> {
+        let n = match &mut self.stream {
+            Stream::Tcp(s) => s.read(into),
+            Stream::Unix(s) => s.read(into),
+        }
+        .map_err(|e| LinkError::Io(e.kind(), strerror(&e)))?;
+        if n == 0 { Err(LinkError::Eof) } else { Ok(n) }
+    }
+
+    /// Hand bytes read raw back to reply parsing.
+    pub(crate) fn unread(&mut self, bytes: &[u8]) {
+        self.buf.extend(bytes);
+    }
+
     /// A second handle on the socket for another thread to write through.
     pub(crate) fn writer(&self) -> io::Result<Box<dyn Write + Send>> {
         Ok(match &self.stream {
