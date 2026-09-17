@@ -1410,3 +1410,27 @@ fn vset_recall_compares_approximate_with_exact_search() {
     assert_eq!(recall.finish(), 0);
     server.join().unwrap();
 }
+
+#[test]
+fn eval_runs_a_script_file() {
+    let s = Srv::start();
+    let p = s.port();
+    let dir = std::env::temp_dir().join(format!("kevy-rcli-eval-{}", s.port));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("s.lua");
+    std::fs::write(&file, "return {KEYS[1], ARGV[1], #KEYS, #ARGV}").unwrap();
+    let path = file.to_str().unwrap();
+    assert_eq!(
+        cli(&["-p", &p, "--eval", path, "k1", "k2", ",", "a1"], b"", &[]).stdout,
+        "k1\na1\n2\n1\n"
+    );
+    // ARGV[1] is nil, which ends the Lua table after KEYS[1].
+    assert_eq!(cli(&["-p", &p, "-r", "2", "--eval", path, "k", ","], b"", &[]).stdout, "k\nk\n");
+    let missing = cli(&["-p", &p, "--eval", "/nonexistent/s.lua"], b"", &[]);
+    assert_eq!(
+        (missing.stderr.as_str(), missing.code),
+        ("Can't open file '/nonexistent/s.lua': No such file or directory\n", 1)
+    );
+    assert_eq!(cli(&["-p", &p, "--eval", path, "--ldb"], b"", &[]).code, 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
