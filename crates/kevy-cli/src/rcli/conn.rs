@@ -155,6 +155,22 @@ impl Conn {
         }
     }
 
+    /// A second handle on the socket for another thread to write through.
+    pub(crate) fn writer(&self) -> io::Result<Box<dyn Write + Send>> {
+        Ok(match &self.stream {
+            Stream::Tcp(s) => Box::new(s.try_clone()?),
+            Stream::Unix(s) => Box::new(s.try_clone()?),
+        })
+    }
+
+    /// Bound how long a read may wait; `None` waits for ever.
+    pub(crate) fn set_read_timeout(&self, limit: Option<Duration>) -> io::Result<()> {
+        match &self.stream {
+            Stream::Tcp(s) => s.set_read_timeout(limit),
+            Stream::Unix(s) => s.set_read_timeout(limit),
+        }
+    }
+
     /// The socket, for waiting on it together with stdin.
     pub(crate) fn fd(&self) -> RawFd {
         match &self.stream {

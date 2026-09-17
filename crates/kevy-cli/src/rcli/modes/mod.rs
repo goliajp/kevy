@@ -14,6 +14,7 @@ mod latency;
 mod latency_dist;
 mod lru_test;
 mod pages;
+mod pipe;
 mod progress;
 mod random;
 mod reconnect;
