@@ -214,6 +214,7 @@ wire 形式（`db.cmd("TABLE.DECLARE", …)`）同样可用，用完全相同的
 ## 参见
 
 - [indexes.md](indexes.md)——表所编译到的索引引擎。
+- [relational-cli.md](relational-cli.md)——kevy-cli 里处理表的工具：describe、查询、导出与恢复、CSV、`sql run`。
 - [tiering.md](tiering.md)——与表一起设计的另一半：索引热、行冷。
 - [rds-workloads.md](rds-workloads.md)——完整的 SQL 词汇映射（什么可编译、什么是配方、什么被拒绝）。
 - [cookbook.md](cookbook.md)——复合排序与 schema 迁移配方。

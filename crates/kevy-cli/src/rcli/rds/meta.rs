@@ -15,7 +15,7 @@ pub(crate) struct Prefs {
     pub(crate) timing: bool,
 }
 
-const HELP: &[u8] = b"\\dt [pattern]      tables\n\\di [table|pattern] indexes\n\\dv [pattern]      views\n\\d  table          describe a table\n\\d+ table          describe, with VERIFY\n\\query [--all] ... a query's rows\n\\explain ...       a query's plan (--analyze to run it)\n\\advise            paths refused queries asked for\n\\i file            run the commands in a file\n\\watch s [n] cmd   run a command every s seconds\n\\conninfo          the connection and the server\n\\x                 expanded display on/off\n\\timing            timing on/off\n";
+const HELP: &[u8] = b"\\dt [pattern]      tables\n\\di [table|pattern] indexes\n\\dv [pattern]      views\n\\d  name           describe a table, index or view\n\\d+ name           describe, with VERIFY\n\\query [--all] ... a query's rows\n\\explain ...       a query's plan (--analyze to run it)\n\\advise            paths refused queries asked for\n\\i file            run the commands in a file\n\\watch s [n] cmd   run a command every s seconds\n\\conninfo          the connection and the server\n\\x                 expanded display on/off\n\\timing            timing on/off\n";
 
 /// Run the backslash command on `line` (the backslash included).
 pub(crate) fn run(s: &mut Session, line: &[u8]) {

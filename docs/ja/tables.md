@@ -214,6 +214,7 @@ store.table_drop(b"user");
 ## 参照
 
 - [indexes.md](indexes.md)——テーブルのコンパイル先であるインデックスエンジン。
+- [relational-cli.md](relational-cli.md)——テーブルを扱う kevy-cli のツール。describe、クエリ、ダンプと復元、CSV、`sql run`。
 - [tiering.md](tiering.md)——一緒に設計されたもう半分。インデックスはホット、行はコールド。
 - [rds-workloads.md](rds-workloads.md)——SQL 語彙の完全な対応表(何がコンパイルでき、何がレシピで、何が拒否されるか)。
 - [cookbook.md](cookbook.md)——複合順序とスキーマ移植のレシピ。
