@@ -16,6 +16,8 @@
 #           or kevy.stdout-replace (`old => new` over redis-cli's output)
 #   mask: a regex whose matches in stdout become `#`; head: compare the first N
 #           lines only (readings that change with time)
+#   then: a shell command run in the CLI container after the CLI; its output is
+#           appended to stdout (what the CLI left in a file)
 #   compare: cluster — the order nodes are reported in is not the contract (the
 #           entry node's table, filled in no fixed order after a reset)
 #   compare: lines-any-order — line order is not the contract (a deviation in
@@ -2150,3 +2152,79 @@ prepare: redis-cli -p 17000 CLUSTER DELSLOTSRANGE 100 102 >/dev/null
 stdin: yes\n
 run: --cluster fix 127.0.0.1:17000
 kevy.stdout: 127.0.0.1:17000 (17000170...) -> 0 keys | 5458 slots | 0 slaves.\n127.0.0.1:17002 (17002170...) -> 0 keys | 5461 slots | 0 slaves.\n127.0.0.1:17001 (17001170...) -> 0 keys | 5462 slots | 0 slaves.\n[OK] 0 keys in 3 masters.\n0.00 keys per slot on average.\n>>> Performing Cluster Check (using node 127.0.0.1:17000)\nM: 1700017000170001700017000170001700017000 127.0.0.1:17000\n   slots:[0-99],[103-5460] (5458 slots) master\nM: 1700217002170021700217002170021700217002 127.0.0.1:17002\n   slots:[10923-16383] (5461 slots) master\nM: 1700117001170011700117001170011700117001 127.0.0.1:17001\n   slots:[5461-10922] (5462 slots) master\n[ERR] Nodes don't agree about configuration!\n>>> Check for open slots...\n>>> Check slots coverage...\n[ERR] Not all 16384 slots are covered by nodes.\n\n>>> Fixing slots coverage...\nThe following uncovered slots have no keys across the cluster:\n[100-102]\nFix these slots by covering with a random node? (type 'yes' to accept): >>> Covering slot 100 with 127.0.0.1:17000\n>>> Covering slot 101 with 127.0.0.1:17000\n>>> Covering slot 102 with 127.0.0.1:17000\n
+
+[RC-122 cluster-import-moves-each-key-to-its-owner]
+cluster: 3
+compare: cluster
+prepare: redis-cli -p $PORT SET c v >/dev/null; redis-cli -p $PORT SET {t5151}x v >/dev/null; redis-cli -p $PORT SET a v >/dev/null
+run: --cluster import 127.0.0.1:17000 --cluster-from 127.0.0.1:$PORT
+
+[RC-122 cluster-import-stops-at-a-busy-key]
+cluster: 3
+compare: cluster
+setup: SET b other
+prepare: redis-cli -p $PORT SET c v >/dev/null; redis-cli -p $PORT SET b v >/dev/null
+run: --cluster import 127.0.0.1:17000 --cluster-from 127.0.0.1:$PORT
+
+[RC-122 cluster-import-copy-and-replace]
+cluster: 3
+compare: cluster
+setup: SET b other
+prepare: redis-cli -p $PORT SET b v >/dev/null; redis-cli -p $PORT SET c v >/dev/null
+run: --cluster import 127.0.0.1:17000 --cluster-from 127.0.0.1:$PORT --cluster-copy --cluster-replace
+
+[RC-122 cluster-import-with-a-password]
+cluster: 3
+compare: cluster
+prepare: redis-cli -p $AUTH_PORT -a secret --no-auth-warning FLUSHALL >/dev/null; redis-cli -p $AUTH_PORT -a secret --no-auth-warning SET k v >/dev/null
+run: --cluster import 127.0.0.1:17000 --cluster-from 127.0.0.1:$AUTH_PORT --cluster-from-user alice --cluster-from-pass wonderland
+
+[RC-122 cluster-import-needs-the-password]
+cluster: 3
+compare: cluster
+run: --cluster import 127.0.0.1:17000 --cluster-from 127.0.0.1:$AUTH_PORT
+
+[RC-122 cluster-import-from-a-cluster-node]
+cluster: 3
+compare: cluster
+run: --cluster import 127.0.0.1:17000 --cluster-from 127.0.0.1:17001
+
+[RC-122 cluster-import-from-nowhere]
+cluster: 3
+compare: cluster
+run: --cluster import 127.0.0.1:17000 --cluster-from 127.0.0.1:1
+
+[RC-122 cluster-import-bad-source-address]
+run: --cluster import 127.0.0.1:17000 --cluster-from nothost
+
+[RC-122 cluster-import-without-a-source]
+run: --cluster import 127.0.0.1:17000
+
+[RC-122 cluster-import-refuses-a-cluster-with-problems]
+cluster: 3
+compare: cluster
+prepare: redis-cli -p 17001 CLUSTER SETSLOT 5 IMPORTING $(redis-cli -p 17000 CLUSTER MYID) >/dev/null; redis-cli -p $PORT SET c v >/dev/null
+run: --cluster import 127.0.0.1:17000 --cluster-from 127.0.0.1:$PORT
+
+[RC-123 cluster-backup]
+cluster: 3x1
+compare: cluster
+prepare: rm -rf /tmp/cligate-backup && mkdir /tmp/cligate-backup
+mask: writing [0-9]+ bytes
+run: --cluster backup 127.0.0.1:17000 /tmp/cligate-backup
+
+[RC-123 cluster-backup-nodes-json]
+# The layout file itself, after the backup. Its objects follow the node
+# table's order, so they are put one per line and sorted; the snapshot
+# files are listed by name.
+cluster: 3x1
+compare: cluster
+prepare: rm -rf /tmp/cligate-backup && mkdir /tmp/cligate-backup && redis-cli -p 17001 CLUSTER SETSLOT 5 IMPORTING 1700017000170001700017000170001700017000 >/dev/null
+mask: writing [0-9]+ bytes
+run: --cluster backup 127.0.0.1:17000 /tmp/cligate-backup
+then: ls /tmp/cligate-backup; tr '\n' '~' < /tmp/cligate-backup/nodes.json | sed 's/^\[~//; s/~\]$//; s/},~/}\n/g' | sort
+
+[RC-123 cluster-backup-to-a-missing-directory]
+cluster: 3
+compare: cluster
+run: --cluster backup 127.0.0.1:17000 /nonexistent

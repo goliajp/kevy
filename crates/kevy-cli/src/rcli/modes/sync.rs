@@ -1,7 +1,7 @@
 //! Starting a replication SYNC as a client: the REPLCONF handshake, the raw
 //! SYNC request, and the header that says how the payload is delimited.
 
-use crate::rcli::conn::LinkError;
+use crate::rcli::conn::{Conn, LinkError};
 use crate::rcli::session::{Session, eprint_bytes};
 use kevy_resp::Reply;
 
@@ -30,8 +30,7 @@ pub(crate) fn replconf(s: &mut Session, name: &[u8], value: &[u8]) -> Result<(),
 
 /// Send SYNC and read the payload header, skipping the newlines a master
 /// sends while it prepares the snapshot.
-pub(crate) fn start(s: &mut Session) -> Result<Payload, Vec<u8>> {
-    let conn = s.conn.as_mut().ok_or_else(|| b"Error: not connected".to_vec())?;
+pub(crate) fn start(conn: &mut Conn) -> Result<Payload, Vec<u8>> {
     conn.write_raw(b"SYNC\r\n")
         .map_err(|e| [b"Error writing to master: ".as_slice(), e.text().as_bytes()].concat())?;
     loop {
@@ -59,7 +58,7 @@ fn header(rest: &[u8]) -> Result<Payload, Vec<u8>> {
 }
 
 /// One line, without its `\n`, a byte at a time so nothing past it is taken.
-fn read_line(conn: &mut crate::rcli::conn::Conn) -> Result<Vec<u8>, LinkError> {
+fn read_line(conn: &mut Conn) -> Result<Vec<u8>, LinkError> {
     let mut line = Vec::new();
     let mut byte = [0u8; 1];
     loop {
@@ -77,11 +76,10 @@ pub(crate) type Sink<'a> = dyn FnMut(&[u8]) -> Result<(), Vec<u8>> + 'a;
 /// Copy the payload to `sink` (or nowhere), handing anything read past its
 /// end back to reply parsing; the payload's length.
 pub(crate) fn transfer(
-    s: &mut Session,
+    conn: &mut Conn,
     payload: &Payload,
     sink: &mut Sink<'_>,
 ) -> Result<u64, Vec<u8>> {
-    let conn = s.conn.as_mut().ok_or_else(|| b"Error: not connected".to_vec())?;
     let mut chunk = vec![0u8; 64 * 1024];
     let read_failed =
         |e: LinkError| [b"Error reading from master: ".as_slice(), e.text().as_bytes()].concat();

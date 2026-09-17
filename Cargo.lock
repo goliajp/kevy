@@ -480,6 +480,7 @@ name = "kevy-cli"
 version = "6.4.0"
 dependencies = [
  "kevy-embedded",
+ "kevy-hash",
  "kevy-persist",
  "kevy-resp",
  "kevy-resp-client",

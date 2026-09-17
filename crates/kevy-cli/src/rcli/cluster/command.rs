@@ -32,7 +32,8 @@ pub(crate) fn run(s: &mut Session) -> u8 {
         "reshard" => super::reshard::run(&s.opts, cfg, args),
         "rebalance" => super::rebalance::run(&s.opts, cfg, args),
         "fix" => super::fix::run(&s.opts, cfg, args),
-        "call" | "set-timeout" => node_command(s, cfg, sub.name, args),
+        "import" => super::import::run(&s.opts, cfg, args),
+        "call" | "set-timeout" | "backup" => node_command(s, cfg, sub.name, args),
         _ => {
             eprint_bytes(&[b"kevy-cli: --cluster ", name, b" is not implemented yet\n"]);
             1
@@ -61,6 +62,9 @@ fn node_command(s: &Session, cfg: Config, name: &str, args: &[Vec<u8>]) -> u8 {
         return set_timeout(s, cfg, &entry, rest);
     }
     let Some(mut c) = Cluster::load(&s.opts, cfg, &entry) else { return 1 };
+    if name == "backup" {
+        return super::backup::run(&mut c, rest.first().map_or(&b""[..], Vec::as_slice));
+    }
     super::call::run(&mut c, rest)
 }
 

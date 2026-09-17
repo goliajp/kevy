@@ -2,6 +2,7 @@
 //! fetched over the replication protocol, into a file (`-` for stdout).
 
 use super::sync::{Payload, replconf, start, transfer};
+use crate::rcli::conn::Conn;
 use crate::rcli::session::{Session, eprint_bytes};
 use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
@@ -25,21 +26,30 @@ fn fetch(s: &mut Session, functions_only: bool) -> Result<(), Vec<u8>> {
     if functions_only && replconf(s, b"rdb-filter-only", b"functions").is_err() {
         return Err(b"Failed requesting functions only RDB from server, aborting".to_vec());
     }
-    let payload = start(s)?;
+    let conn = s.conn.as_mut().ok_or_else(|| b"Error: not connected".to_vec())?;
+    save(conn, &name)?;
+    s.conn = None;
+    Ok(())
+}
+
+/// SYNC on `conn` and write the snapshot to `name` (`-` for stdout), saying
+/// on stderr how much it writes and that it finished.
+pub(crate) fn save(conn: &mut Conn, name: &[u8]) -> Result<(), Vec<u8>> {
+    let payload = start(conn)?;
     match &payload {
         Payload::UntilMark(_) => eprint_bytes(&[
             b"SYNC sent to master, writing bytes of bulk transfer until EOF marker to '",
-            &name,
+            name,
             b"'\n",
         ]),
         Payload::Length(n) => eprint_bytes(&[
             format!("SYNC sent to master, writing {n} bytes to '").as_bytes(),
-            &name,
+            name,
             b"'\n",
         ]),
     }
-    let mut out = Output::open(&name)?;
-    let total = transfer(s, &payload, &mut |bytes| out.write(bytes))?;
+    let mut out = Output::open(name)?;
+    let total = transfer(conn, &payload, &mut |bytes| out.write(bytes))?;
     match payload {
         Payload::UntilMark(_) => {
             eprint_bytes(&[
@@ -48,8 +58,7 @@ fn fetch(s: &mut Session, functions_only: bool) -> Result<(), Vec<u8>> {
         }
         Payload::Length(_) => eprint_bytes(&[b"Transfer finished with success.\n"]),
     }
-    s.conn = None;
-    out.finish(&name, total)
+    out.finish(name, total)
 }
 
 /// Where the snapshot goes.

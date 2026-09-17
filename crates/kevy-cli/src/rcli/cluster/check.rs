@@ -19,14 +19,19 @@ pub(crate) fn run(c: &mut Cluster) -> bool {
 
 /// [`run`], with or without the node listing.
 pub(crate) fn run_with(c: &mut Cluster, listing: Listing) -> bool {
+    count_errors(c, listing) == 0
+}
+
+/// [`run_with`], counting the stages that found something wrong.
+pub(crate) fn count_errors(c: &mut Cluster, listing: Listing) -> usize {
     header(c, listing);
-    let mut ok = agreement(c);
-    ok &= open_slots(c).is_empty();
-    ok &= coverage(c);
+    let mut errors = usize::from(!agreement(c));
+    errors += usize::from(!open_slots(c).is_empty());
+    errors += usize::from(!coverage(c));
     if c.cfg.search_multiple_owners {
-        ok &= super::owners::report(c).is_empty();
+        errors += usize::from(!super::owners::report(c).is_empty());
     }
-    ok
+    errors
 }
 
 /// `>>> Performing Cluster Check`, and the nodes when listed.
