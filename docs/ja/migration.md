@@ -41,13 +41,13 @@
 ```
 # generate rebuild frames from your RDS export (one HSET per row):
 #   HSET user:42 name ada email ada@example.com …
-kevy-cli import -p 6004 --strict rows.resp        # ≥200k cmd/s
+kevy-cli -p 6004 --kevy import --strict rows.resp        # ≥200k cmd/s
 ```
 
 **インポートが先、インデックス宣言は後**（インデックス後回しの規則）。バックフィルは既存の行から各インデックスをバルク速度で構築します——インポートする行ごとに書き込みフックのコストを払うより桁違いに安上がりです。その後フェーズ1の宣言スクリプトを実行し、`IDX.LIST`が`state=ready`を報告するまで待ちます（詳細は[インデックス済みキー空間へのロード](#インデックス済みキー空間へのロード)）。
 
-- **クランプ：**`PREFIX.STATS`のカウントがテーブルごとに`SELECT COUNT(*)`と一致すること。`IDX.VERIFY`の型強制／重複カウントが想定どおりのゼロであること。サンプリングによるダイジェスト検査——数百行をRDSから再計算し、`HGETALL`とバイト比較——が通ること。中間kevyを経由する場合は`kevy-cli diff`がそのホップを証明します。
-- **ロールバック：**`kevy-cli delete-prefix`（または`FLUSHALL`）してやり直し。真実はまだRDSです。
+- **クランプ：**`PREFIX.STATS`のカウントがテーブルごとに`SELECT COUNT(*)`と一致すること。`IDX.VERIFY`の型強制／重複カウントが想定どおりのゼロであること。サンプリングによるダイジェスト検査——数百行をRDSから再計算し、`HGETALL`とバイト比較——が通ること。中間kevyを経由する場合は`kevy-cli --kevy diff`がそのホップを証明します。
+- **ロールバック：**`kevy-cli --kevy delete-prefix`（または`FLUSHALL`）してやり直し。真実はまだRDSです。
 
 ### フェーズ4——読み取りカットオーバー（エンドポイント単位のカナリア）
 
@@ -63,7 +63,7 @@ kevy-cli import -p 6004 --strict rows.resp        # ≥200k cmd/s
 
 切り替えの前に、シーケンスキーをRDSの最高水位より**上に**シードしてください（新しいキーに`INCRBY seq:order <rds_max_id>`）——古典的なauto-increment衝突が、フェーズ5のいちばん鋭い刃です。
 
-- **クランプ：**kevyとミラー先RDSの間での`kevy-cli diff`式サンプリング（プレフィックスをダイジェストし、行サンプルを比較）。それに、すでにアラートを張っているビジネスメトリクス。
+- **クランプ：**kevyとミラー先RDSの間での`kevy-cli --kevy diff`式サンプリング（プレフィックスをダイジェストし、行サンプルを比較）。それに、すでにアラートを張っているビジネスメトリクス。
 - **ロールバック：**ミラーウィンドウの内側であれば、アプリの向き先をRDSへ戻します（計測済みのミラーラグは受け入れます）。ミラーコンシューマは`-FEEDRESYNC`（kevyのクラッシュ再起動はフィード世代を進めます）を処理できなければなりません。影響を受けたプレフィックスをRDSへ再構築してから再開します——at-least-once＋冪等SQLがこれを安全にします。
 
 ### フェーズ6——退役
@@ -87,30 +87,30 @@ kevy-cli import -p 6004 --strict rows.resp        # ≥200k cmd/s
 # ツールチェーン（`kevy-cli`）
 
 ```
-kevy-cli export  -p 6379 --prefix user: dump.resp
-kevy-cli import  -p 6004 --strict dump.resp        # ≥200k cmd/s
-kevy-cli import  -p 6004 --resume dump.resp        # after interruption
-kevy-cli digest  -p 6004 user:
-kevy-cli diff    hostA:6379 hostB:6004 user: order:
-kevy-cli copy-prefix   -p 6004 --rate 5000 user: staging:user:
-kevy-cli delete-prefix -p 6004 --rate 5000 --dry-run tmp:
-kevy-cli inspect -p 6004 user:
+kevy-cli -p 6379 --kevy export  --prefix user: dump.resp
+kevy-cli -p 6004 --kevy import  --strict dump.resp        # ≥200k cmd/s
+kevy-cli -p 6004 --kevy import  --resume dump.resp        # after interruption
+kevy-cli -p 6004 --kevy digest  user:
+kevy-cli -h hostA -p 6379 --kevy diff    hostB:6004 user: order:
+kevy-cli -p 6004 --kevy copy-prefix   --rate 5000 user: staging:user:
+kevy-cli -p 6004 --kevy delete-prefix --rate 5000 --dry-run tmp:
+kevy-cli -p 6004 --kevy inspect user:
 ```
 
 もう三つは、読んで報告するだけで何も動かしません。だから上の一覧の外にあります。移行プレイブックの教訓を実行できる形にしたものです——[table-migration.md](table-migration.md) を参照：
 
 ```
-kevy-cli sql plan schema.sql                       # 各クエリの行き先
-kevy-cli backfill-keys --from-index i --from-prefix p:   # 和集合
-kevy-cli lint overlap --prefix mailbox:              # lesson 1
-kevy-cli lint columns ev                           # lesson 6
-kevy-cli shadow -p 6004 --old "…" --new "…"        # カットオーバー前に
-kevy-cli doctor -p 6004                            # VERIFY を cron に
+kevy-cli --kevy sql plan schema.sql                       # 各クエリの行き先
+kevy-cli --kevy backfill-keys --from-index i --from-prefix p:   # 和集合
+kevy-cli --kevy lint overlap --prefix mailbox:              # lesson 1
+kevy-cli --kevy lint columns ev                           # lesson 6
+kevy-cli -p 6004 --kevy shadow --old "…" --new "…"        # カットオーバー前に
+kevy-cli -p 6004 --kevy doctor                            # VERIFY を cron に
 ```
 
 ## ワイヤフォーマット
 
-`export`は再構築フレームのプレーンな**RESPコマンドストリーム**を書き出します——`DEL`＋`SET`/`HSET`/`RPUSH`/`SADD`/`ZADD`、TTLには絶対時刻の`PEXPIREAT`です。このためファイルは`redis-cli --pipe`と双方向に互換です。kevyのエクスポートはRedisに食わせられますし、どんなRESPコマンドファイルも`kevy-cli import`に食わせられます——RDSのダンプから自作したもの（プレイブックのフェーズ3）を含めて。
+`export`は再構築フレームのプレーンな**RESPコマンドストリーム**を書き出します——`DEL`＋`SET`/`HSET`/`RPUSH`/`SADD`/`ZADD`、TTLには絶対時刻の`PEXPIREAT`です。このためファイルは`redis-cli --pipe`と双方向に互換です。kevyのエクスポートはRedisに食わせられますし、どんなRESPコマンドファイルも`kevy-cli --kevy import`に食わせられます——RDSのダンプから自作したもの（プレイブックのフェーズ3）を含めて。
 
 キーごとに先頭へ置かれる`DEL`が、リプレイを**ゼロからの再構築**にします——**出力する型**については本物の冪等です（RPUSHのような追記verbは、そうしないと再インポートでリスト内容が倍になります）。
 
@@ -134,7 +134,7 @@ exported 4006 keys -> dump.resp
 
 ## 検証
 
-`PREFIX.DIGEST <prefix>`（サーバーおよび組み込みの`prefix_digest`）は`[count, hex64]`を返します。正準化した行バイトに対する順序非依存のチェックサムです（ハッシュフィールドとセットメンバーはソート、zsetはスコアビット→メンバー順、リストは並び順のまま——リストの順序は同一性そのものです）。シャード数にも挿入順にも影響されないので、トポロジをまたいだ比較ができます。`kevy-cli diff A:port B:port prefix…`は不一致が1つでもあれば非ゼロで終了します。
+`PREFIX.DIGEST <prefix>`（サーバーおよび組み込みの`prefix_digest`）は`[count, hex64]`を返します。正準化した行バイトに対する順序非依存のチェックサムです（ハッシュフィールドとセットメンバーはソート、zsetはスコアビット→メンバー順、リストは並び順のまま——リストの順序は同一性そのものです）。シャード数にも挿入順にも影響されないので、トポロジをまたいだ比較ができます。`kevy-cli -h A -p port --kevy diff B:port prefix…`は不一致が1つでもあれば非ゼロで終了します。
 
 TTLはダイジェストに参加しません（減衰するため）。値は参加します。
 
@@ -156,10 +156,10 @@ until kevy-cli -p 6004 IDX.LIST | grep -A1 my_index | grep -q ready; do sleep 1;
 
 ### 移行全体を1コマンドで検証する
 
-`kevy-cli diff`は、2つの稼働中サーバー間で任意個のプレフィックスを1回の呼び出しで比較します——プレフィックスごとのダイジェスト対よりこちらを使ってください。
+`kevy-cli --kevy diff`は、2つの稼働中サーバー間で任意個のプレフィックスを1回の呼び出しで比較します——プレフィックスごとのダイジェスト対よりこちらを使ってください。
 
 ```
-kevy-cli diff 127.0.0.1:6004 127.0.0.1:6005 msg: mbox: usr: tag: session:
+kevy-cli -p 6004 --kevy diff 127.0.0.1:6005 msg: mbox: usr: tag: session:
 ```
 
 ### 大きなエクスポート
@@ -167,8 +167,8 @@ kevy-cli diff 127.0.0.1:6004 127.0.0.1:6005 msg: mbox: usr: tag: session:
 ダンプは非圧縮のRESPテキストです（高速で、grep可能）。10GB超のキー空間ではgzipをパイプしてください——フォーマットはストリームフレンドリーです。
 
 ```
-kevy-cli export -p 6004 /dev/stdout | gzip > dump.kevy.gz
-gunzip -c dump.kevy.gz | kevy-cli import -p 6005 --strict /dev/stdin
+kevy-cli -p 6004 --kevy export /dev/stdout | gzip > dump.kevy.gz
+gunzip -c dump.kevy.gz | kevy-cli -p 6005 --kevy import --strict /dev/stdin
 ```
 
 （`--resume` は `.progress` サイドカーのために実ファイルが必要です——再開可能性が欲しければ、先にディスクへ展開してください。）
@@ -176,7 +176,7 @@ gunzip -c dump.kevy.gz | kevy-cli import -p 6005 --strict /dev/stdin
 インデックスの作成はバルクロードの**後**に。インデックスエンジンのバックフィルは既存データからバルク速度で構築し（実測で100万行あたり約7秒）、書き込みフックの維持コストを100万回払うのに勝ります。スイッチではなく、操作の順序の問題です。
 
 ```
-kevy-cli import -p 6004 dump.resp
+kevy-cli -p 6004 --kevy import dump.resp
 kevy-cli -p 6004 IDX.CREATE users ON PREFIX user: FIELD age TYPE i64 KIND range
 ```
 

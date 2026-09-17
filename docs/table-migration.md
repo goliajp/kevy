@@ -7,7 +7,7 @@ migration — a mail system moving its hand-rolled secondary indexes
 engine's documentation, not to their notebook. Every rule below was
 paid for; the order is the order you will need them in.
 
-**Before any of it, the first mile:** `kevy-cli sql plan schema.sql`
+**Before any of it, the first mile:** `kevy-cli --kevy sql plan schema.sql`
 reads the schema you already have and reports what becomes of every one
 of your queries — which declared path serves each, and for the rest, the
 exact `CREATE INDEX` that would. It is the ten-minute answer to *can
@@ -54,14 +54,14 @@ per (owner, item) — `member:{owner}:{item}` with the owner, the item
 and the sort attributes as columns — and let an ORDERPATH sort that.
 Deciding this first prevents re-declaring the whole table later.
 
-**`kevy-cli lint overlap` finds the symptom**, though not the cause.
+**`kevy-cli --kevy lint overlap` finds the symptom**, though not the cause.
 The cause is in code and stays there — but a dimension that is
 multi-valued leaves a mark in the data that a machine can read: *the
 same name appears under more than one owner*. Point it at the family of
 owner-keyed collections you have today:
 
 ```console
-$ kevy-cli lint overlap -p 6004 --prefix mailbox:
+$ kevy-cli -p 6004 --kevy lint overlap --prefix mailbox:
 2 owner(s) under mailbox:, 3 distinct name(s)
 1 name(s) appear under more than one owner:
   t2  →  mailbox:1, mailbox:2
@@ -89,7 +89,7 @@ is how you avoid meeting it in production.)
 hold the fact you need — "which code paths write this table" is not
 recorded anywhere in the data, because writers are code and the engine
 sees only writes. What a tool *can* do is catch the consequence:
-`kevy-cli shadow` reports a forgotten writer as a row the new path is
+`kevy-cli --kevy shadow` reports a forgotten writer as a row the new path is
 missing, before the cutover rather than after. Use the audit to avoid
 the surprise and the shadow run to prove you avoided it.
 
@@ -102,14 +102,14 @@ the backfill key-set from the **union** of every structure that can
 name an item (old indexes, the primary keyspace scan, archives), then
 write rows from the authoritative record.
 
-**`kevy-cli backfill-keys` builds that union**, and only that — the
+**`kevy-cli --kevy backfill-keys` builds that union**, and only that — the
 lesson splits itself, and the second half stays yours. What the
 authoritative record is, and what a row looks like, is knowledge that
 lives in your application; a tool that guessed would write the wrong
 rows confidently.
 
 ```console
-$ kevy-cli backfill-keys --from-index idx:threads --from-prefix mail: \
+$ kevy-cli --kevy backfill-keys --from-index idx:threads --from-prefix mail: \
       --from-file archive.txt > keys.txt
 601 name(s) in the union
   index idx:threads                3 name(s), 0 only here
@@ -141,12 +141,12 @@ paginated UI turns that into user-visible churn. Log the first
 divergence with **both sort keys** — that one log line names the
 drifting writer immediately.
 
-**`kevy-cli shadow` does this for you.** Give it both commands; it
+**`kevy-cli --kevy shadow` does this for you.** Give it both commands; it
 compares the two orders of row keys they produce and exits non-zero on
 any disagreement, so a cutover script can gate on it:
 
 ```console
-$ kevy-cli shadow -p 6004 \
+$ kevy-cli -p 6004 --kevy shadow \
     --old "ZRANGE old:act 0 -1 WITHSCORES" --old-pairs \
     --new "IDX.QUERY u.act RANGE 0 999 LIMIT 20" --samples 50
 shadow: 50 samples, 50 diverged (first at sample 0)
@@ -193,12 +193,12 @@ problem the migration just removed. Declare **another ORDERPATH**
 (or index) over the same columns instead; the engine derives both
 from the same row on the same write.
 
-**`kevy-cli lint columns <table>` finds the shape.** Two columns that
+**`kevy-cli --kevy lint columns <table>` finds the shape.** Two columns that
 carry the same value on nearly every row are one column copied to get a
 second sort order:
 
 ```console
-$ kevy-cli lint columns -p 6004 ev
+$ kevy-cli -p 6004 --kevy lint columns ev
 ev: 43 row(s) sampled under ev:
   created_at and sort_ts agree on 93% (40/43)
 a column copied to get a second sort order is the shape lesson 6 warns about — the answer is another ORDERPATH; ask IDX.ADVISE which one
@@ -229,11 +229,11 @@ semantics, including why non-zero `duplicates` on an ORDERPATH means
 your pagination needs a bounded tie-break). The point of the whole
 migration is that these numbers *exist*; read them.
 
-**`kevy-cli doctor` is that cron.** It verifies every declared table and
+**`kevy-cli --kevy doctor` is that cron.** It verifies every declared table and
 answers with an exit code:
 
 ```console
-$ kevy-cli doctor -p 6004
+$ kevy-cli -p 6004 --kevy doctor
   OK       user  (rows 59999 · entries 59999 · absent 0 · excluded 0 · coerce_failures 0)
   WARN     ev    duplicates 1 — paging this path needs a bounded tie-break or pages repeat rows
   BUILDING new   — an index is still backfilling, not a verdict

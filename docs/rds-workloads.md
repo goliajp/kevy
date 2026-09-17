@@ -191,7 +191,7 @@ Semantics and limits, honestly:
 
 SQL expressions in migrated queries lean on a scalar-function
 vocabulary, and kevy covers it **in the SQL face, not the engine**:
-`kevy-cli sql eval` (and the `sql` toolbox's constant folding) evaluate
+`kevy-cli --kevy sql eval` (and the `sql` toolbox's constant folding) evaluate
 expressions client-side with PostgreSQL-canonical semantics, and the
 serving engine never sees an expression — the same division of labor as
 everywhere else on this page.
@@ -365,7 +365,7 @@ reply; the default `everysec` windows up to 1s (the Redis trade).
 | `CHECK (expr)` | evaluate the invariant inside the atomic unit: Lua script (server) or `atomic` block (embedded) reads, decides, writes — the engine guarantees decision + commit are one unit (cookbook recipe 5) |
 | `UNIQUE` | fence + counted duplicates, or a hard `SET … NX` gate (above) |
 | `FOREIGN KEY` (existence) | not enforced; write parent-then-child inside one atomic unit if you need the invariant |
-| `ON DELETE CASCADE` | app pattern: atomic block (small), `kevy-cli delete-prefix` (bulk), or a CDC consumer reacting to parent deletes (async — cookbook recipe 10) |
+| `ON DELETE CASCADE` | app pattern: atomic block (small), `kevy-cli --kevy delete-prefix` (bulk), or a CDC consumer reacting to parent deletes (async — cookbook recipe 10) |
 | triggers | **CDC consumers**: `FEED.READ` delivers every committed write as a change frame — after commit, decoupled, replayable, and it can't corrupt the write path (cookbook recipes 10–12) |
 
 There is deliberately no server-side constraint or trigger DSL: Lua
@@ -411,7 +411,7 @@ not attached to it.
 
 | RDS | kevy |
 |---|---|
-| `mysqldump` / `pg_dump` | `kevy-cli export` (logical RESP stream, `redis-cli --pipe`-compatible) |
+| `mysqldump` / `pg_dump` | `kevy-cli --kevy export` (logical RESP stream, `redis-cli --pipe`-compatible) |
 | binary backup | snapshot files (`SAVE`/`BGSAVE` → `dump-<id>.rdb`) |
 | WAL / binlog | the AOF (append-only command log, per shard) |
 | `synchronous_commit` | `appendfsync always` (or `everysec` + `fsync_aof` barriers) |
@@ -420,7 +420,7 @@ not attached to it.
 Scope note on PITR: the feed window is an in-memory backlog
 (`feed_buffer_size`, caps 1 GiB/shard) — take snapshots at least as
 often as the window turns over if you rely on exact-point recovery.
-Verification is first-class: `PREFIX.DIGEST` / `kevy-cli diff` prove
+Verification is first-class: `PREFIX.DIGEST` / `kevy-cli --kevy diff` prove
 two keyspaces equal, order- and topology-insensitively.
 
 ## Replication and read scaling

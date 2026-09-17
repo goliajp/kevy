@@ -5,11 +5,11 @@ redis-cli にできることは、kevy-cli にもすべてできます。それ�
 [ビュー](views.md)——を扱うツールがあります。カタログを行として読む、クエリをページ単位で
 実行する、宣言をダンプして復元する、CSV を入出力する、といった用途です。
 
-接続オプションの後の最初の単語がツール名（小文字で完全一致）ならツールが動きます。それ以外の
-単語はすべてサーバーコマンドとして扱われ、redis-cli と同じです：
+ツールは接続オプションの後の `--kevy` に続けて書き、ツール名より後の引数はすべてそのツールの
+ものです。`--kevy` がなければ、最初の単語はサーバーコマンドで、redis-cli とまったく同じです：
 
 ```sh
-kevy-cli -p 6004 tables            # ツール
+kevy-cli -p 6004 --kevy tables     # ツール
 kevy-cli -p 6004 TABLE.LIST        # コマンド。redis-cli と同じ形式で表示
 ```
 
@@ -23,10 +23,10 @@ kevy-cli -p 6004 TABLE.LIST        # コマンド。redis-cli と同じ形式で
 ビューのどれでも受け付けます：
 
 ```sh
-kevy-cli -p 6004 tables 'user*'
-kevy-cli -p 6004 indexes users
-kevy-cli -p 6004 describe users      # 列、その型、その列を読むパス
-kevy-cli -p 6004 describe+ users     # 同じ内容のあと TABLE.VERIFY
+kevy-cli -p 6004 --kevy tables 'user*'
+kevy-cli -p 6004 --kevy indexes users
+kevy-cli -p 6004 --kevy describe users      # 列、その型、その列を読むパス
+kevy-cli -p 6004 --kevy describe+ users     # 同じ内容のあと TABLE.VERIFY
 ```
 
 テーブルに対しては、プレフィックスと主キー、各列の宣言された型とその列を読むコンパイル済み
@@ -41,11 +41,11 @@ kevy-cli -p 6004 describe+ users     # 同じ内容のあと TABLE.VERIFY
 区切りで止まって、続きを取るカーソルを示します：
 
 ```sh
-kevy-cli -p 6004 query --all IDX.QUERY users.age RANGE 18 65 FIELDS name
-kevy-cli -p 6004 explain users.age RANGE 18 65
-kevy-cli -p 6004 explain --analyze IDX.QUERY users.age RANGE 18 65
-kevy-cli -p 6004 advise
-kevy-cli -p 6004 sql run "SELECT id, name FROM users WHERE age BETWEEN 18 AND 65"
+kevy-cli -p 6004 --kevy query --all IDX.QUERY users.age RANGE 18 65 FIELDS name
+kevy-cli -p 6004 --kevy explain users.age RANGE 18 65
+kevy-cli -p 6004 --kevy explain --analyze IDX.QUERY users.age RANGE 18 65
+kevy-cli -p 6004 --kevy advise
+kevy-cli -p 6004 --kevy sql run "SELECT id, name FROM users WHERE age BETWEEN 18 AND 65"
 ```
 
 `explain --analyze` はクエリを実際に実行し、このクライアントが計測した値——往復回数、
@@ -54,40 +54,40 @@ kevy-cli -p 6004 sql run "SELECT id, name FROM users WHERE age BETWEEN 18 AND 65
 `sql run` は `SELECT` を 1 文受け取り、宣言済みのテーブルに対してクライアント側で計画を
 立て、それに答える `IDX.QUERY` を送ります。表示するのは SELECT で指定した列だけです。
 サーバーが SQL を見ることはありません。宣言済みのどのパスでも答えられないクエリは、
-`kevy-cli sql plan` と同じ文面で拒否され、宣言すべきインデックスが示されます——ここに、
+`kevy-cli --kevy sql plan` と同じ文面で拒否され、宣言すべきインデックスが示されます——ここに、
 スキャンで `WHERE` を補うツールはありません。
 
 ## 宣言をファイルにする
 
 ```sh
-kevy-cli -p 6004 show-create users                # それを再作成する TABLE.DECLARE
-kevy-cli -p 6004 show-create users --as sql       # CREATE TABLE / CREATE INDEX
-kevy-cli -p 6004 dump --schema > schema.kevy      # テーブル、インデックス、ビューの順
-kevy-cli -p 6005 run -f schema.kevy               # 別のサーバーで再実行
-kevy-cli -p 6004 dump --all ./dump                # スキーマと各テーブルの行（CSV）
-kevy-cli -p 6005 restore ./dump                   # 行、宣言、wait-ready、doctor
+kevy-cli -p 6004 --kevy show-create users                # それを再作成する TABLE.DECLARE
+kevy-cli -p 6004 --kevy show-create users --as sql       # CREATE TABLE / CREATE INDEX
+kevy-cli -p 6004 --kevy dump --schema > schema.kevy      # テーブル、インデックス、ビューの順
+kevy-cli -p 6005 --kevy run -f schema.kevy               # 別のサーバーで再実行
+kevy-cli -p 6004 --kevy dump --all ./dump                # スキーマと各テーブルの行（CSV）
+kevy-cli -p 6005 --kevy load ./dump                   # 行、宣言、wait-ready、doctor
 ```
 
 kevy 形式は 1 行 1 コマンドで、`run -f` が同じ単語として読み戻せるようにクォートされます。
-SQL 形式は `kevy-cli sql compile` が同じ宣言に戻せる SQL です。SQL で表せない部分——
+SQL 形式は `kevy-cli --kevy sql compile` が同じ宣言に戻せる SQL です。SQL で表せない部分——
 `<table>:` 以外のキープレフィックス、`WINDOW`、`AUTODECLARE`——は捨てずに
 `-- not carried by SQL` コメントとして残します。テーブルがコンパイルしたインデックスには
 独自の宣言がないため、`show-create users.age` はそのテーブルを示します。
 
 `dump --all` は新しいディレクトリか空のディレクトリにだけ書き込みます：`schema.kevy`、
 `tables`、テーブルごとの `table-N.csv` です。含まれるのはテーブルのプレフィックス下の行の、
-宣言された列だけです。キー空間をバイト単位でそのまま写すには `kevy-cli export` を使います。
-`restore` は先に行を取り込み、後で宣言するので、各インデックスは書き込みのたびに更新される
-のではなく、行から一度だけ構築されます。`restore --from … --to …` は従来どおり
-オフラインのバックアップ復元です。
+宣言された列だけです。キー空間をバイト単位でそのまま写すには `kevy-cli --kevy export` を使います。
+`load` は先に行を取り込み、後で宣言するので、各インデックスは書き込みのたびに更新される
+のではなく、行から一度だけ構築されます。（`restore --from … --to …` はオフラインの
+バックアップ復元で、別の層です。）
 
 ## CSV の入出力
 
 ```sh
-kevy-cli -p 6004 import-csv users.csv --table users --header
-kevy-cli -p 6004 import-csv users.csv --prefix user: --pk id --columns id,name,age
-kevy-cli -p 6004 export-csv --table users users.csv
-kevy-cli -p 6004 export-csv --table users --via "IDX.QUERY users.age RANGE 18 65" -
+kevy-cli -p 6004 --kevy import-csv users.csv --table users --header
+kevy-cli -p 6004 --kevy import-csv users.csv --prefix user: --pk id --columns id,name,age
+kevy-cli -p 6004 --kevy export-csv --table users users.csv
+kevy-cli -p 6004 --kevy export-csv --table users --via "IDX.QUERY users.age RANGE 18 65" -
 ```
 
 `import-csv` は 1 レコードにつき 1 つの hash を書き、512 件ずつパイプラインで送ります。
@@ -103,11 +103,11 @@ kevy-cli -p 6004 export-csv --table users --via "IDX.QUERY users.age RANGE 18 65
 ## スクリプト、待機、監視
 
 ```sh
-kevy-cli -p 6004 run -f migrate.kevy --atomic
-kevy-cli -p 6004 wait-ready --table users --timeout 60
-kevy-cli -p 6004 watch 2 IDX.LIST
-kevy-cli -p 6004 status
-kevy-cli -p 6004 feed follow --prefix user: --from tail --checkpoint feed.pos
+kevy-cli -p 6004 --kevy run -f migrate.kevy --atomic
+kevy-cli -p 6004 --kevy wait-ready --table users --timeout 60
+kevy-cli -p 6004 --kevy watch 2 IDX.LIST
+kevy-cli -p 6004 --kevy status
+kevy-cli -p 6004 --kevy feed follow --prefix user: --from tail --checkpoint feed.pos
 ```
 
 `run` は `-f` のファイルと `-c` のコマンドを 1 行ずつ実行し、すべて成功すれば 0、
@@ -118,7 +118,8 @@ kevy-cli -p 6004 feed follow --prefix user: --from tail --checkpoint feed.pos
 
 ## REPL では
 
-バックスラッシュで始まる行は kevy-cli が処理し、サーバーには送りません：
+バックスラッシュで始まる行は kevy-cli が処理し、サーバーには送りません。`\<tool> [args]`
+は `--kevy <tool>` と同じように任意のツールを実行し、psql 風の短縮形もあります：
 
 | 行 | 動作 |
 |---|---|
@@ -126,7 +127,7 @@ kevy-cli -p 6004 feed follow --prefix user: --from tail --checkpoint feed.pos
 | `\di [table\|pattern]` | `indexes` |
 | `\dv [pattern]` | `views` |
 | `\d name` / `\d+ name` | `describe` / `describe+` |
-| `\query …` / `\explain …` / `\advise` | `query` / `explain` / `advise` |
+| `\query …` / `\dump --schema` / 任意の `\<tool>` | そのツール |
 | `\watch seconds command…` | `watch` |
 | `\i file` | `run -f file` |
 | `\conninfo` | `status` |
@@ -140,9 +141,9 @@ kevy サーバーに接続していれば、Tab キーで、名前を受け取�
 ## 出力形式
 
 ```sh
-kevy-cli -p 6004 tables --format csv
-kevy-cli -p 6004 --json tables
-kevy-cli -p 6004 query IDX.QUERY users.age RANGE 18 65 --null NULL --expanded
+kevy-cli -p 6004 --kevy tables --format csv
+kevy-cli -p 6004 --json --kevy tables
+kevy-cli -p 6004 --kevy query IDX.QUERY users.age RANGE 18 65 --null NULL --expanded
 ```
 
 端末に出力するときは行を揃えた表として、パイプに流すときはタブ区切りで出力します。
@@ -152,7 +153,13 @@ kevy-cli -p 6004 query IDX.QUERY users.age RANGE 18 65 --null NULL --expanded
 
 ## ツール名とサーバーコマンド
 
-ツールは小文字の名前の完全一致で認識されるため、`kevy-cli watch …`、`kevy-cli dump …`、
-`kevy-cli restore …` はツールを実行します。redis-cli ならここで `WATCH`、`DUMP`、
-`RESTORE` を送ります。サーバーに送るには、コマンドを大文字で書いてください：
-`kevy-cli -p 6004 DUMP mykey`。
+`--kevy` のない単語は、大文字でも小文字でも常にサーバーコマンドです。`watch`、`dump`、
+`restore` は Redis と Valkey のコマンド、`backup` と `digest` は Redis 8 のコマンドで、
+コマンド表はリリースごとに増えます。そのため kevy のツールは裸の単語を使わず、すべて
+`--kevy` という一つのオプションの後ろに置きます。redis-cli 自身のクラスタ管理が
+`--cluster` の後ろにあるのと同じです。
+
+kevy-cli 6.4 が裸の単語で出していたツール（`kevy-cli doctor -p 6004`、`kevy-cli export …`、
+`kevy-cli sql compile …`）は 7.0 まで動き、実行のたびに `--kevy` での書き方を 1 行示します。
+`backup` と `restore` は自分のフラグの形（`--data-dir`/`--to`、`--from`/`--to`）のときだけ
+ツールです。`digest <prefix>` は 7.0 まではツールのままです。

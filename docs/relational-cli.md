@@ -5,11 +5,12 @@ for the relational side of kevy — [tables](tables.md), [indexes](indexes.md)
 and [views](views.md): reading the catalog as rows, running queries page by
 page, dumping and restoring declarations, CSV in and out.
 
-A tool runs when its exact lower-case name is the first word after the
-connection options. Every other word is a server command, as in redis-cli:
+A tool runs behind `--kevy`, after the connection options; everything after
+the tool name is the tool's. Without `--kevy`, the first word is a server
+command, exactly as in redis-cli:
 
 ```sh
-kevy-cli -p 6004 tables            # the tool
+kevy-cli -p 6004 --kevy tables     # the tool
 kevy-cli -p 6004 TABLE.LIST        # the command, printed as redis-cli prints it
 ```
 
@@ -24,10 +25,10 @@ on the name, and `indexes` also takes a table name. `describe` takes a table,
 an index or a view:
 
 ```sh
-kevy-cli -p 6004 tables 'user*'
-kevy-cli -p 6004 indexes users
-kevy-cli -p 6004 describe users      # columns, their types, the paths that read each
-kevy-cli -p 6004 describe+ users     # the same, then TABLE.VERIFY
+kevy-cli -p 6004 --kevy tables 'user*'
+kevy-cli -p 6004 --kevy indexes users
+kevy-cli -p 6004 --kevy describe users      # columns, their types, the paths that read each
+kevy-cli -p 6004 --kevy describe+ users     # the same, then TABLE.VERIFY
 ```
 
 For a table, `describe` shows its prefix and primary key, every column with its
@@ -43,11 +44,11 @@ follows the cursor page by page and stops at `--max-rows` (10,000 by default)
 on a page boundary, saying which cursor to continue from:
 
 ```sh
-kevy-cli -p 6004 query --all IDX.QUERY users.age RANGE 18 65 FIELDS name
-kevy-cli -p 6004 explain users.age RANGE 18 65
-kevy-cli -p 6004 explain --analyze IDX.QUERY users.age RANGE 18 65
-kevy-cli -p 6004 advise
-kevy-cli -p 6004 sql run "SELECT id, name FROM users WHERE age BETWEEN 18 AND 65"
+kevy-cli -p 6004 --kevy query --all IDX.QUERY users.age RANGE 18 65 FIELDS name
+kevy-cli -p 6004 --kevy explain users.age RANGE 18 65
+kevy-cli -p 6004 --kevy explain --analyze IDX.QUERY users.age RANGE 18 65
+kevy-cli -p 6004 --kevy advise
+kevy-cli -p 6004 --kevy sql run "SELECT id, name FROM users WHERE age BETWEEN 18 AND 65"
 ```
 
 `explain --analyze` runs the query and reports what this client measured —
@@ -56,22 +57,22 @@ round trips, pages, rows, wall time — not a server-side profile.
 `sql run` takes one `SELECT`, plans it on the client against the declared
 tables and sends the `IDX.QUERY` that answers it; it prints the selected
 columns only. The server never sees SQL. A query no declared path can serve is
-refused with the same text `kevy-cli sql plan` gives it, naming the index to
+refused with the same text `kevy-cli --kevy sql plan` gives it, naming the index to
 declare — no tool here fills a `WHERE` in by scanning.
 
 ## Declarations as files
 
 ```sh
-kevy-cli -p 6004 show-create users                # the TABLE.DECLARE that recreates it
-kevy-cli -p 6004 show-create users --as sql       # CREATE TABLE / CREATE INDEX
-kevy-cli -p 6004 dump --schema > schema.kevy      # tables, then indexes, then views
-kevy-cli -p 6005 run -f schema.kevy               # replay it on another server
-kevy-cli -p 6004 dump --all ./dump                # schema plus each table's rows as CSV
-kevy-cli -p 6005 restore ./dump                   # rows, declarations, wait-ready, doctor
+kevy-cli -p 6004 --kevy show-create users                # the TABLE.DECLARE that recreates it
+kevy-cli -p 6004 --kevy show-create users --as sql       # CREATE TABLE / CREATE INDEX
+kevy-cli -p 6004 --kevy dump --schema > schema.kevy      # tables, then indexes, then views
+kevy-cli -p 6005 --kevy run -f schema.kevy               # replay it on another server
+kevy-cli -p 6004 --kevy dump --all ./dump                # schema plus each table's rows as CSV
+kevy-cli -p 6005 --kevy load ./dump                   # rows, declarations, wait-ready, doctor
 ```
 
 The kevy form is one command per line, quoted so that `run -f` reads back the
-same words. The SQL form is what `kevy-cli sql compile` turns into the same
+same words. The SQL form is what `kevy-cli --kevy sql compile` turns into the same
 declaration; what SQL has no words for — a key prefix other than `<table>:`,
 `WINDOW`, `AUTODECLARE` — is kept as a `-- not carried by SQL` comment rather
 than dropped. An index that a table compiled has no declaration of its own:
@@ -79,18 +80,18 @@ than dropped. An index that a table compiled has no declaration of its own:
 
 `dump --all` writes into a new or empty directory: `schema.kevy`, `tables` and
 one `table-N.csv` per table. Only the declared columns of rows under a table's
-prefix are in it; `kevy-cli export` is the byte-for-byte copy of a keyspace.
-`restore` loads the rows first and declares afterwards, so each index is built
-once from the rows instead of updated on every write. `restore --from … --to …`
-is still the offline backup restore.
+prefix are in it; `kevy-cli --kevy export` is the byte-for-byte copy of a keyspace.
+`load` imports the rows first and declares afterwards, so each index is built
+once from the rows instead of updated on every write. (`restore --from … --to …`
+is the offline backup restore, a different level.)
 
 ## CSV in and out
 
 ```sh
-kevy-cli -p 6004 import-csv users.csv --table users --header
-kevy-cli -p 6004 import-csv users.csv --prefix user: --pk id --columns id,name,age
-kevy-cli -p 6004 export-csv --table users users.csv
-kevy-cli -p 6004 export-csv --table users --via "IDX.QUERY users.age RANGE 18 65" -
+kevy-cli -p 6004 --kevy import-csv users.csv --table users --header
+kevy-cli -p 6004 --kevy import-csv users.csv --prefix user: --pk id --columns id,name,age
+kevy-cli -p 6004 --kevy export-csv --table users users.csv
+kevy-cli -p 6004 --kevy export-csv --table users --via "IDX.QUERY users.age RANGE 18 65" -
 ```
 
 `import-csv` writes one hash per record, pipelined in batches of 512, and keeps
@@ -105,11 +106,11 @@ with `SCAN`, which walks the whole keyspace; with `--via` it pages the query.
 ## Scripts, waiting and watching
 
 ```sh
-kevy-cli -p 6004 run -f migrate.kevy --atomic
-kevy-cli -p 6004 wait-ready --table users --timeout 60
-kevy-cli -p 6004 watch 2 IDX.LIST
-kevy-cli -p 6004 status
-kevy-cli -p 6004 feed follow --prefix user: --from tail --checkpoint feed.pos
+kevy-cli -p 6004 --kevy run -f migrate.kevy --atomic
+kevy-cli -p 6004 --kevy wait-ready --table users --timeout 60
+kevy-cli -p 6004 --kevy watch 2 IDX.LIST
+kevy-cli -p 6004 --kevy status
+kevy-cli -p 6004 --kevy feed follow --prefix user: --from tail --checkpoint feed.pos
 ```
 
 `run` executes each line of `-f` files and `-c` commands and exits 0 when all
@@ -120,7 +121,9 @@ reply stopped it (`--force` carries on). `--atomic` wraps the script in
 
 ## In the REPL
 
-A line starting with a backslash is handled by kevy-cli, never sent:
+A line starting with a backslash is handled by kevy-cli, never sent: `\<tool>
+[args]` runs any tool as `--kevy <tool>` would, and psql's short forms sit on
+top:
 
 | line | does |
 |---|---|
@@ -128,7 +131,7 @@ A line starting with a backslash is handled by kevy-cli, never sent:
 | `\di [table\|pattern]` | `indexes` |
 | `\dv [pattern]` | `views` |
 | `\d name` / `\d+ name` | `describe` / `describe+` |
-| `\query …` / `\explain …` / `\advise` | `query` / `explain` / `advise` |
+| `\query …` / `\dump --schema` / any `\<tool>` | that tool |
 | `\watch seconds command…` | `watch` |
 | `\i file` | `run -f file` |
 | `\conninfo` | `status` |
@@ -142,9 +145,9 @@ commands that take them, and a table's columns after `FIELDS`, `FILTER`,
 ## Output formats
 
 ```sh
-kevy-cli -p 6004 tables --format csv
-kevy-cli -p 6004 --json tables
-kevy-cli -p 6004 query IDX.QUERY users.age RANGE 18 65 --null NULL --expanded
+kevy-cli -p 6004 --kevy tables --format csv
+kevy-cli -p 6004 --json --kevy tables
+kevy-cli -p 6004 --kevy query IDX.QUERY users.age RANGE 18 65 --null NULL --expanded
 ```
 
 On a terminal rows print as an aligned table; piped, as tab-separated values.
@@ -155,7 +158,14 @@ that are not UTF-8 as `\xHH`.
 
 ## Tool names and server commands
 
-Tools are recognised by their exact lower-case names, so `kevy-cli watch …`,
-`kevy-cli dump …` and `kevy-cli restore …` run tools where redis-cli would send
-`WATCH`, `DUMP` and `RESTORE`. Write the command in upper case to send it to
-the server: `kevy-cli -p 6004 DUMP mykey`.
+A bare word is always a server command, whatever its case: `watch`, `dump`
+and `restore` are Redis and Valkey commands, `backup` and `digest` are Redis
+8 commands, and the command table grows with every release. So kevy's tools
+never take bare names; they live behind one option, `--kevy`, the way
+redis-cli's own cluster manager lives behind `--cluster`.
+
+The tools kevy-cli 6.4 shipped as bare words (`kevy-cli doctor -p 6004`,
+`kevy-cli export …`, `kevy-cli sql compile …`) still run until 7.0, each
+printing one line with its `--kevy` form. `backup` and `restore` are tools
+only in their own flag shapes (`--data-dir`/`--to`, `--from`/`--to`);
+`digest <prefix>` stays the tool until 7.0.

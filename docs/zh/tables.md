@@ -145,18 +145,18 @@ IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20 FIELDS name email
 
 ## kevy-sql：编译 schema，而不是发送 schema
 
-`kevy-sql`（及其 `kevy-cli sql` 面）是一个**声明期编译器**——像迁移工具一样，把一份 PG/MySQL 方言的 schema 文件读一次，产出显式声明：
+`kevy-sql`（及其 `kevy-cli --kevy sql` 面）是一个**声明期编译器**——像迁移工具一样，把一份 PG/MySQL 方言的 schema 文件读一次，产出显式声明：
 
 ```console
-kevy-cli sql compile schema.sql                          # print the declarations
-kevy-cli sql compile schema.sql --apply --url 127.0.0.1:6004
-kevy-cli sql plan schema.sql                             # 每条查询会变成什么
+kevy-cli --kevy sql compile schema.sql                          # print the declarations
+kevy-cli -p 6004 --kevy sql compile schema.sql --apply
+kevy-cli --kevy sql plan schema.sql                             # 每条查询会变成什么
 ```
 
 `compile` 与 `plan` 读同一份文件，回答的却是两个问题。`compile` 是构建期：它产出的是要执行的命令，所以遇到一条服务不了的视图就是错误、就停在那里。`plan` 是迁移那天——它报告**每一条**查询的去向，因为*"你这 40 条里 34 条能跑，另外 6 条各缺什么"*才是一个拿着 schema 来的人真正在问的：
 
 ```console
-$ kevy-cli sql plan shop.sql
+$ kevy-cli --kevy sql plan shop.sql
 2 table(s) to declare:
   users
   orders

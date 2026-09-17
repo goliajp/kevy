@@ -175,7 +175,7 @@ kevy-cli -p 6004 HEXPIRE user:7 3600 FIELDS 1 profile.plan   # 字段级 TTL 在
 kevy-cli -p 6004 HSET order:1001 user_id 42
 kevy-cli -p 6004 RPUSH order:1001:items sku-7 sku-9
 kevy-cli -p 6004 SADD order:1001:tags urgent
-kevy-cli delete-prefix -p 6004 --rate 5000 order:1001:   # 子行清空,父行还在
+kevy-cli -p 6004 --kevy delete-prefix --rate 5000 order:1001:   # 子行清空,父行还在
 ```
 
 ## 11. 你不需要的 outbox
@@ -208,13 +208,13 @@ kevy-cli -p 6004 FEED.READ 0 $(kevy-cli -p 6004 FEED.TAIL 0 | head -1 | awk '{pr
 
 **SQL 对应物**：切换期间反向复制回旧主库——[迁移 playbook 阶段 5](migration.md)。
 
-切换期间，跑一个把 kevy 写入镜像回旧 RDS 的 CDC 消费者（`FEED.READ` → UPDATE 语句）。这样你的回滚方案是「把应用指回去」，不是「反向迁移数据」。信心固化后退役镜像；`kevy-cli diff`（按前缀摘要）就是信心仪表。
+切换期间，跑一个把 kevy 写入镜像回旧 RDS 的 CDC 消费者（`FEED.READ` → UPDATE 语句）。这样你的回滚方案是「把应用指回去」，不是「反向迁移数据」。信心固化后退役镜像；`kevy-cli --kevy diff`（按前缀摘要）就是信心仪表。
 
 ```console
 kevy-cli -p 6004 HSET user:42 name ada
 kevy-cli -p 6004 FEED.READ 0 $(kevy-cli -p 6004 FEED.TAIL 0 | head -1 | awk '{print $3}') 0 COUNT 10 PREFIX user:  # 镜像消费者的读循环
-kevy-cli diff 127.0.0.1:6004 127.0.0.1:6004 user:        # 摘要一致:安全形态的自检
-kevy-cli diff old-rds-mirror.internal:6379 127.0.0.1:6004 user:   # needs-external
+kevy-cli -p 6004 --kevy diff 127.0.0.1:6004 user:        # 摘要一致:安全形态的自检
+kevy-cli -h old-rds-mirror.internal -p 6379 --kevy diff 127.0.0.1:6004 user:   # needs-external
 ```
 
 ## 14. 分析导出
@@ -229,7 +229,7 @@ kevy-cli diff old-rds-mirror.internal:6379 127.0.0.1:6004 user:   # needs-extern
 
 ```console
 kevy-cli -p 6004 HSET order:1001 user_id 42 total 1999
-kevy-cli export -p 6004 --prefix order: /tmp/orders.resp
+kevy-cli -p 6004 --kevy export --prefix order: /tmp/orders.resp
 kevy-cli -p 6004 FEED.READ 0 $(kevy-cli -p 6004 FEED.TAIL 0 | head -1 | awk '{print $3}') 0 COUNT 100 PREFIX order:  # CDC 到数仓的读循环
 ```
 
@@ -243,8 +243,8 @@ kevy-cli -p 6004 FEED.READ 0 $(kevy-cli -p 6004 FEED.TAIL 0 | head -1 | awk '{pr
 kevy-cli -p 6004 HSET item:1 price 10
 kevy-cli -p 6004 HSET item:2 price 25
 kevy-cli -p 6004 HSET item:3 price 7
-kevy-cli export -p 6004 --prefix item: /tmp/items.resp
-kevy-cli import -p 6004 /tmp/items.resp   # 先批量载入:不付索引写钩子
+kevy-cli -p 6004 --kevy export --prefix item: /tmp/items.resp
+kevy-cli -p 6004 --kevy import /tmp/items.resp   # 先批量载入:不付索引写钩子
 kevy-cli -p 6004 IDX.CREATE item_price ON PREFIX item: FIELD price TYPE i64 KIND range   # 后声明:走回填
 kevy-cli -p 6004 IDX.QUERY item_price RANGE 0 100 LIMIT 10
 ```
@@ -446,7 +446,7 @@ if !report.is_clean() {
 
 **SQL 对应：**schema 文件本身——`CREATE TABLE`、`CREATE INDEX`、`CREATE VIEW`——[矩阵：二级索引 DDL](rds-workloads.md#二级索引-ddl)。
 
-配方 1–8 手工做的一切，从你**已经有**的那份 SQL 编译出来。`kevy-sql`（以及它的 `kevy-cli sql` 那张面孔）是一个**声明期编译器**：它像迁移工具一样把 schema **读一次**，产出显式的 `TABLE.DECLARE` / `VIEW.CREATE` 命令，外加*查询卡片*——带 `$N` 槽位的现成 `IDX.QUERY` 模板。服务器里**没有任何东西按查询运行**；运行期的 ad-hoc SQL 仍由引擎自己拒绝（Law 3）。
+配方 1–8 手工做的一切，从你**已经有**的那份 SQL 编译出来。`kevy-sql`（以及它的 `kevy-cli --kevy sql` 那张面孔）是一个**声明期编译器**：它像迁移工具一样把 schema **读一次**，产出显式的 `TABLE.DECLARE` / `VIEW.CREATE` 命令，外加*查询卡片*——带 `$N` 槽位的现成 `IDX.QUERY` 模板。服务器里**没有任何东西按查询运行**；运行期的 ad-hoc SQL 仍由引擎自己拒绝（Law 3）。
 
 这份 schema——[docs/examples/shop.sql](https://github.com/goliajp/kevy/blob/develop/docs/examples/shop.sql)，一份真实的 users/orders/order_items 精简版：
 
@@ -492,8 +492,8 @@ CREATE VIEW recent_orders_by_user AS
 编译它，然后把声明应用到一台服务器上：
 
 ```console
-kevy-cli sql compile docs/examples/shop.sql
-kevy-cli sql compile docs/examples/shop.sql --apply --url 127.0.0.1:6004
+kevy-cli --kevy sql compile docs/examples/shop.sql
+kevy-cli -p 6004 --kevy sql compile docs/examples/shop.sql --apply
 ```
 
 编译出来的脚本（原样）。每张表把它的索引折进**一条** `TABLE.DECLARE`；常量视图变成引擎视图；带参数的视图变成查询卡片；每一处粗粒度的类型映射都在 notes 里被**如实点名**（kevy 的列只有 `i64|f64|str`——时间戳由应用编码，`serial` 不会替你分配 id）：
@@ -544,7 +544,7 @@ CREATE VIEW order_emails AS
 ```
 
 ```text
-$ kevy-cli sql compile join.sql
+$ kevy-cli --kevy sql compile join.sql
 kevy-cli sql: join.sql: line 6, col 3: JOIN is not compilable — kevy
 refuses query-time joins (Law 3); model the lookup with an indexed FK
 column (IDX.QUERY t.fk EQ …) or app-side assembly (cookbook §2)

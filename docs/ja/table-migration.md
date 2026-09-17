@@ -2,7 +2,7 @@
 
 この章が存在するのは、ある本番の利用者が完全な移行——メールシステムが、アプリケーションコードで保守してきた手書きのセカンダリインデックス（sorted set とカウンタキー）を `TABLE.DECLARE` に載せ替える——をやり切り、その教訓を持ち帰ってきたからです。教訓はその人のノートではなく、エンジンのドキュメントに属します。以下のルールはどれも対価を払って得たもので、並び順は、あなたが必要とする順です。
 
-**そのすべてに先立つ最初の一マイル：**`kevy-cli sql plan schema.sql` は、あなたが既に持っているスキーマを読み、各クエリがどうなるかを報告します——それぞれどの宣言経路が供給するのか、供給できないものには、ちょうど追加すべき `CREATE INDEX` を。*そもそも移せるのか*への 10 分の答えであり、サーバを起こす必要もありません。[tables.md](tables.md#kevy-sqlスキーマは送るのではなくコンパイルする) を参照。
+**そのすべてに先立つ最初の一マイル：**`kevy-cli --kevy sql plan schema.sql` は、あなたが既に持っているスキーマを読み、各クエリがどうなるかを報告します——それぞれどの宣言経路が供給するのか、供給できないものには、ちょうど追加すべき `CREATE INDEX` を。*そもそも移せるのか*への 10 分の答えであり、サーバを起こす必要もありません。[tables.md](tables.md#kevy-sqlスキーマは送るのではなくコンパイルする) を参照。
 
 ## まず「なぜ」から：エンジンのインデックスだけが検証できる
 
@@ -20,10 +20,10 @@
 
 インデックスに答えさせたい各クエリを見て、その次元が**行の上で**単一の値かを問うてください。答えはたいてい行ではなく、id 導出やキー構築のコードにあります——このメールシステムの「メールボックスごとのスレッド」は単値に見えましたが、id のコードを読むと、ひとつのスレッドが複数のメールボックスに住めることが分かりました。次元が多値なら、どのカラムもそれを運べません：(owner, item) ごとの**メンバーシップ行**——`member:{owner}:{item}` に owner と item とソート属性をカラムとして持つ——をモデル化し、ORDERPATH にそれをソートさせてください。これを最初に決めることが、テーブル全体の再宣言を防ぎます。
 
-**`kevy-cli lint overlap` が見つけるのは症状であって、原因ではありません。** 原因はコードの中にあり、そこに留まります——しかし多値の次元は、機械が読める痕跡をデータに残します：**同じ名前が二つ以上の owner の下に現れる**。今あなたが持っている、owner ごとのコレクション群に向けてください：
+**`kevy-cli --kevy lint overlap` が見つけるのは症状であって、原因ではありません。** 原因はコードの中にあり、そこに留まります——しかし多値の次元は、機械が読める痕跡をデータに残します：**同じ名前が二つ以上の owner の下に現れる**。今あなたが持っている、owner ごとのコレクション群に向けてください：
 
 ```console
-$ kevy-cli lint overlap -p 6004 --prefix mailbox:
+$ kevy-cli -p 6004 --kevy lint overlap --prefix mailbox:
 2 owner(s) under mailbox:, 3 distinct name(s)
 1 name(s) appear under more than one owner:
   t2  →  mailbox:1, mailbox:2
@@ -36,16 +36,16 @@ this dimension is multi-valued, so no column can hold it — model a membership 
 
 導出された行は、それを書く者によって埋まります。読み取りを切り替える前に、**writer を枚挙してください**——基礎エンティティを作成・変更・削除するすべてのコードパスが、テーブルの宣言対象である行を書いていることを確認するのです。忘れる writer は、テーブルが存在する前に書かれた writer です。（これはまさに `TABLE.VERIFY` の `missing` カウンタが事後に捕まえるクラスです。監査は、それに本番で出会わないための手段です。）
 
-**これには、意図的にツールがありません。** あなたが必要とする事実をストアは持っていないからです——「このテーブルに書くコードパスはどれか」はデータのどこにも記録されていません。writer はコードであり、エンジンに見えるのは書き込みだけです。ツールに*できる*のは、その結果を捕まえることです：`kevy-cli shadow` は、忘れられた writer を「新経路に欠けている行」として、切り替えの後ではなく前に報告します。驚きを避けるために監査を使い、避けられたことを証明するためにシャドー実行を使ってください。
+**これには、意図的にツールがありません。** あなたが必要とする事実をストアは持っていないからです——「このテーブルに書くコードパスはどれか」はデータのどこにも記録されていません。writer はコードであり、エンジンに見えるのは書き込みだけです。ツールに*できる*のは、その結果を捕まえることです：`kevy-cli --kevy shadow` は、忘れられた writer を「新経路に欠けている行」として、切り替えの後ではなく前に報告します。驚きを避けるために監査を使い、避けられたことを証明するためにシャドー実行を使ってください。
 
 ### 3. バックフィルは、item を名指しできる全ソースの和集合から
 
 レガシーのインデックスは互いに食い違います——それが上の実測 89 % / 76 % です。どれか*ひとつ*からバックフィルすれば、その穴を相続します。そして `VERIFY` は、一度も書かれなかった行を見ることができません。バックフィルのキー集合は、item を名指しできるすべての構造（旧インデックス、プライマリキースペースのスキャン、アーカイブ）の**和集合**から作り、行は権威ある記録から書いてください。
 
-**その和集合を作るのが `kevy-cli backfill-keys` です**——そしてそれだけです。この教訓はそれ自身で二つに割れており、後半はあなたのものです。何が権威ある記録なのか、行がどんな形なのかは、アプリケーションの側に住む知識です。推測する道具は、間違った行を自信たっぷりに書きます。
+**その和集合を作るのが `kevy-cli --kevy backfill-keys` です**——そしてそれだけです。この教訓はそれ自身で二つに割れており、後半はあなたのものです。何が権威ある記録なのか、行がどんな形なのかは、アプリケーションの側に住む知識です。推測する道具は、間違った行を自信たっぷりに書きます。
 
 ```console
-$ kevy-cli backfill-keys --from-index idx:threads --from-prefix mail: \
+$ kevy-cli --kevy backfill-keys --from-index idx:threads --from-prefix mail: \
       --from-file archive.txt > keys.txt
 601 name(s) in the union
   index idx:threads                3 name(s), 0 only here
@@ -62,10 +62,10 @@ $ kevy-cli backfill-keys --from-index idx:threads --from-prefix mail: \
 
 旧経路から読みを供しつつ、新しい答えを横で計算して比較してください。メンバーシップだけでなく**順序**も比較すること：スコアのドリフトは、同一の集合を異なる順序で生みます。ページネーションされた UI はそれをユーザーに見える揺れに変えます。最初の食い違いを**両方のソートキー**つきでログに残してください——その 1 行が、ドリフトしている writer を即座に名指しします。
 
-**`kevy-cli shadow` がこれを代わりにやります。** 両方のコマンドを渡すと、それぞれが返す行キーの順序を比較し、食い違いがあれば非ゼロで終了します——カットオーバーのスクリプトはそれをそのままゲートにできます：
+**`kevy-cli --kevy shadow` がこれを代わりにやります。** 両方のコマンドを渡すと、それぞれが返す行キーの順序を比較し、食い違いがあれば非ゼロで終了します——カットオーバーのスクリプトはそれをそのままゲートにできます：
 
 ```console
-$ kevy-cli shadow -p 6004 \
+$ kevy-cli -p 6004 --kevy shadow \
     --old "ZRANGE old:act 0 -1 WITHSCORES" --old-pairs \
     --new "IDX.QUERY u.act RANGE 0 999 LIMIT 20" --samples 50
 shadow: 50 samples, 50 diverged (first at sample 0)
@@ -88,10 +88,10 @@ shadow: 50 samples, 50 diverged (first at sample 0)
 
 新しいクエリが現在の形では出せない述語を必要とするとき、手書き時代の反射は「その値をもう 1 か所にも書く」ことです——それは、この移行が消したばかりの「writer 2 つ、真実 1 つ」問題の再生産です。代わりに同じカラムの上に**もうひとつの ORDERPATH**（またはインデックス）を宣言してください。エンジンは同じ書き込みで、同じ行から両方を導出します。
 
-**`kevy-cli lint columns <table>` が見つけるのは形です。** ほぼすべての行で同じ値を持つ二つの列は、第二のソート順を得るために複製された一つの列です：
+**`kevy-cli --kevy lint columns <table>` が見つけるのは形です。** ほぼすべての行で同じ値を持つ二つの列は、第二のソート順を得るために複製された一つの列です：
 
 ```console
-$ kevy-cli lint columns -p 6004 ev
+$ kevy-cli -p 6004 --kevy lint columns ev
 ev: 43 row(s) sampled under ev:
   created_at and sort_ts agree on 93% (40/43)
 a column copied to get a second sort order is the shape lesson 6 warns about — the answer is another ORDERPATH; ask IDX.ADVISE which one
@@ -107,10 +107,10 @@ a column copied to get a second sort order is the shape lesson 6 warns about —
 
 カウンタは呼び出しごとに新鮮で、cron や doctor コマンドから回せるほど安価です：`drift` と `missing` は永遠にゼロであるべきで、`absent` / `excluded` / `coerce_failures` は各除外原因が奪った行を名指しします（正確な意味論は [tables.md](tables.md)。ORDERPATH の `duplicates` が非ゼロならページネーションに有界のタイブレークが要る、という話も含めて）。この移行全体の眼目は、これらの数字が*存在する*ことです。読んでください。
 
-**`kevy-cli doctor` がその cron です。** 宣言済みのすべてのテーブルに `VERIFY` を回し、終了コードで答えます：
+**`kevy-cli --kevy doctor` がその cron です。** 宣言済みのすべてのテーブルに `VERIFY` を回し、終了コードで答えます：
 
 ```console
-$ kevy-cli doctor -p 6004
+$ kevy-cli -p 6004 --kevy doctor
   OK       user  (rows 59999 · entries 59999 · absent 0 · excluded 0 · coerce_failures 0)
   WARN     ev    duplicates 1 — paging this path needs a bounded tie-break or pages repeat rows
   BUILDING new   — an index is still backfilling, not a verdict

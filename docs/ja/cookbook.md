@@ -175,7 +175,7 @@ kevy-cli -p 6004 HEXPIRE user:7 3600 FIELDS 1 profile.plan   # per-field TTL sur
 kevy-cli -p 6004 HSET order:1001 user_id 42
 kevy-cli -p 6004 RPUSH order:1001:items sku-7 sku-9
 kevy-cli -p 6004 SADD order:1001:tags urgent
-kevy-cli delete-prefix -p 6004 --rate 5000 order:1001:   # children gone, parent row stays
+kevy-cli -p 6004 --kevy delete-prefix --rate 5000 order:1001:   # children gone, parent row stays
 ```
 
 ## 11. 不要になるアウトボックス
@@ -208,13 +208,13 @@ kevy-cli -p 6004 FEED.READ 0 $(kevy-cli -p 6004 FEED.TAIL 0 | head -1 | awk '{pr
 
 **SQL相当：**カットオーバー中の旧プライマリへの逆レプリケーション——[移行プレイブックのフェーズ5](migration.md)。
 
-カットオーバー中は、kevyへの書き込みを旧RDSへ書き戻すCDCコンシューマ（`FEED.READ`→UPDATE文）を走らせます。こうしておけばロールバック計画は「アプリの向き先を戻す」であって、「データを逆移行する」ではなくなります。確信が固まったらミラーを退役させます。`kevy-cli diff`（プレフィックスごとのダイジェスト）が確信の計器です。
+カットオーバー中は、kevyへの書き込みを旧RDSへ書き戻すCDCコンシューマ（`FEED.READ`→UPDATE文）を走らせます。こうしておけばロールバック計画は「アプリの向き先を戻す」であって、「データを逆移行する」ではなくなります。確信が固まったらミラーを退役させます。`kevy-cli --kevy diff`（プレフィックスごとのダイジェスト）が確信の計器です。
 
 ```console
 kevy-cli -p 6004 HSET user:42 name ada
 kevy-cli -p 6004 FEED.READ 0 $(kevy-cli -p 6004 FEED.TAIL 0 | head -1 | awk '{print $3}') 0 COUNT 10 PREFIX user:  # ミラー消費者の読み取りループ
-kevy-cli diff 127.0.0.1:6004 127.0.0.1:6004 user:        # digests match: safe form of the check
-kevy-cli diff old-rds-mirror.internal:6379 127.0.0.1:6004 user:   # needs-external
+kevy-cli -p 6004 --kevy diff 127.0.0.1:6004 user:        # digests match: safe form of the check
+kevy-cli -h old-rds-mirror.internal -p 6379 --kevy diff 127.0.0.1:6004 user:   # needs-external
 ```
 
 ## 14. 分析エクスポート
@@ -229,7 +229,7 @@ kevy-cli diff old-rds-mirror.internal:6379 127.0.0.1:6004 user:   # needs-extern
 
 ```console
 kevy-cli -p 6004 HSET order:1001 user_id 42 total 1999
-kevy-cli export -p 6004 --prefix order: /tmp/orders.resp
+kevy-cli -p 6004 --kevy export --prefix order: /tmp/orders.resp
 kevy-cli -p 6004 FEED.READ 0 $(kevy-cli -p 6004 FEED.TAIL 0 | head -1 | awk '{print $3}') 0 COUNT 100 PREFIX order:  # CDC からウェアハウスへの読み取りループ
 ```
 
@@ -243,8 +243,8 @@ kevy-cli -p 6004 FEED.READ 0 $(kevy-cli -p 6004 FEED.TAIL 0 | head -1 | awk '{pr
 kevy-cli -p 6004 HSET item:1 price 10
 kevy-cli -p 6004 HSET item:2 price 25
 kevy-cli -p 6004 HSET item:3 price 7
-kevy-cli export -p 6004 --prefix item: /tmp/items.resp
-kevy-cli import -p 6004 /tmp/items.resp   # bulk load FIRST: no index write hook to pay
+kevy-cli -p 6004 --kevy export --prefix item: /tmp/items.resp
+kevy-cli -p 6004 --kevy import /tmp/items.resp   # bulk load FIRST: no index write hook to pay
 kevy-cli -p 6004 IDX.CREATE item_price ON PREFIX item: FIELD price TYPE i64 KIND range   # declare AFTER: backfill
 kevy-cli -p 6004 IDX.QUERY item_price RANGE 0 100 LIMIT 10
 ```
@@ -446,7 +446,7 @@ if !report.is_clean() {
 
 **SQL 対応：**スキーマファイルそのもの——`CREATE TABLE`、`CREATE INDEX`、`CREATE VIEW`——[マトリクス：セカンダリインデックスの DDL](rds-workloads.md#セカンダリインデックスのddl)。
 
-レシピ 1–8 が手でやることのすべてを、**すでに手元にある** SQL からコンパイルします。`kevy-sql`（そして `kevy-cli sql` という顔）は**宣言時のコンパイラ**です：移行ツールのようにスキーマを**一度だけ**読み、明示的な `TABLE.DECLARE` / `VIEW.CREATE` コマンドと*クエリカード*——`$N` の枠を残した既製の `IDX.QUERY` テンプレート——を出します。サーバの中でクエリごとに走るものは**何もありません**。実行時の場当たり SQL は、エンジン自身が拒み続けます（Law 3）。
+レシピ 1–8 が手でやることのすべてを、**すでに手元にある** SQL からコンパイルします。`kevy-sql`（そして `kevy-cli --kevy sql` という顔）は**宣言時のコンパイラ**です：移行ツールのようにスキーマを**一度だけ**読み、明示的な `TABLE.DECLARE` / `VIEW.CREATE` コマンドと*クエリカード*——`$N` の枠を残した既製の `IDX.QUERY` テンプレート——を出します。サーバの中でクエリごとに走るものは**何もありません**。実行時の場当たり SQL は、エンジン自身が拒み続けます（Law 3）。
 
 対象のスキーマ——[docs/examples/shop.sql](https://github.com/goliajp/kevy/blob/develop/docs/examples/shop.sql)、実在の users/orders/order_items を削ったもの：
 
@@ -492,8 +492,8 @@ CREATE VIEW recent_orders_by_user AS
 コンパイルし、宣言をサーバに適用します：
 
 ```console
-kevy-cli sql compile docs/examples/shop.sql
-kevy-cli sql compile docs/examples/shop.sql --apply --url 127.0.0.1:6004
+kevy-cli --kevy sql compile docs/examples/shop.sql
+kevy-cli -p 6004 --kevy sql compile docs/examples/shop.sql --apply
 ```
 
 コンパイル結果のスクリプト（そのまま）。各テーブルは自分のインデックスを**ひとつの** `TABLE.DECLARE` に畳み込みます。定数のビューはエンジンのビューに、パラメータ付きのビューはクエリカードになります。粗い型の対応づけは、どれも notes で**正直に名指し**されます（kevy の列は `i64|f64|str` だけ——タイムスタンプはアプリ側の符号化で、`serial` は id を割り当ててくれません）：
@@ -544,7 +544,7 @@ CREATE VIEW order_emails AS
 ```
 
 ```text
-$ kevy-cli sql compile join.sql
+$ kevy-cli --kevy sql compile join.sql
 kevy-cli sql: join.sql: line 6, col 3: JOIN is not compilable — kevy
 refuses query-time joins (Law 3); model the lookup with an indexed FK
 column (IDX.QUERY t.fk EQ …) or app-side assembly (cookbook §2)
