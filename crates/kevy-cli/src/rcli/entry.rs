@@ -28,6 +28,17 @@ pub fn run(args: &[Vec<u8>]) -> u8 {
     }
     let command = &args[first..];
     let mut session = Session::new(opts);
+    if let Some((flag, tool)) = command.split_first()
+        && flag == b"--kevy"
+    {
+        if super::modes::dispatch::any(&session.opts) {
+            super::session::eprint_bytes(&[
+                b"kevy-cli: --kevy runs one tool; it cannot be combined with a special mode (--scan, --stat, --cluster, --eval, ...)\n",
+            ]);
+            return 1;
+        }
+        return super::rds::route::run_kevy(&mut session, tool);
+    }
     if let Some(input) = session.opts.modes.test_hint.clone() {
         return super::hint_modes::print_hint(&mut session, &input);
     }
@@ -39,9 +50,6 @@ pub fn run(args: &[Vec<u8>]) -> u8 {
     }
     if let Some(file) = session.opts.modes.eval.clone() {
         return super::modes::eval::run(&mut session, &file, command);
-    }
-    if let Some(code) = super::rds::route::route(&mut session, command) {
-        return code;
     }
     if command.is_empty() {
         session.connect(Connect::Report);

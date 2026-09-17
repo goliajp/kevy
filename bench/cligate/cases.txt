@@ -286,6 +286,16 @@ run: -p
 [RC-031 first-non-dash-ends-options]
 run: -p $PORT ECHO -p
 
+[RC-031 a-lower-case-command-that-is-also-a-kevy-tool-name-watch]
+# kevy's tools are reached with --kevy (RFC §13); a bare word is a command.
+run: -p $PORT watch k
+
+[RC-031 a-lower-case-command-that-is-also-a-kevy-tool-name-dump]
+run: -p $PORT dump no-such-key
+
+[RC-031 a-lower-case-command-that-is-also-a-kevy-tool-name-restore]
+run: -p $PORT restore k 0 not-a-payload
+
 [RC-032 ldb-needs-eval]
 run: --ldb PING
 

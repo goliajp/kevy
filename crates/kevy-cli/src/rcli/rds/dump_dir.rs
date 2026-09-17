@@ -1,4 +1,4 @@
-//! `dump --all <dir>` and `restore <dir>`: a relational dump as files.
+//! `dump --all <dir>` and `load <dir>`: a relational dump as files.
 //!
 //! The directory holds `schema.kevy` (the declarations, replayable with
 //! `run -f`), one `table-N.csv` per table (its rows, key first, as
@@ -8,7 +8,7 @@
 //! beyond them is not part of the table. `kevy-cli export` carries the whole
 //! keyspace byte for byte.
 //!
-//! `restore` loads in the order that costs least: the rows, then the
+//! `load` works in the order that costs least: the rows, then the
 //! declarations (so each index backfills once instead of updating per
 //! row), then waits for every index, then runs doctor.
 
@@ -41,7 +41,7 @@ fn dir_of(args: &[Vec<u8>], tool: &str) -> Option<PathBuf> {
 
 /// `dump --all <dir>`; the exit code. The directory must be new or empty.
 pub(crate) fn dump_all(s: &mut Session, args: &[Vec<u8>]) -> u8 {
-    let Some(dir) = dir_of(args, "dump --all") else { return 1 };
+    let Some(dir) = dir_of(args, "--kevy dump --all") else { return 1 };
     if let Err(why) = empty_dir(&dir) {
         return fail(&[b"dump: ", why.as_bytes()]);
     }
@@ -97,14 +97,14 @@ fn dump_table(s: &mut Session, table: &[u8], path: &Path) -> u8 {
     export_csv::export(s, &Plan::scan(prefix, columns, file))
 }
 
-/// `restore <dir>`; the exit code of the first step that fails.
-pub(crate) fn restore(s: &mut Session, args: &[Vec<u8>], common: &Common) -> u8 {
-    let Some(dir) = dir_of(args, "restore") else { return 1 };
+/// `load <dir>`; the exit code of the first step that fails.
+pub(crate) fn load(s: &mut Session, args: &[Vec<u8>], common: &Common) -> u8 {
+    let Some(dir) = dir_of(args, "--kevy load") else { return 1 };
     let read = |name: &str| std::fs::read(dir.join(name));
     let (Ok(schema), Ok(listing)) = (read(SCHEMA), read(TABLES)) else {
         let shown = dir.display().to_string();
         return fail(&[
-            b"restore: ",
+            b"load: ",
             shown.as_bytes(),
             b" holds no dump (schema.kevy and tables, as dump --all writes them)",
         ]);
@@ -130,10 +130,10 @@ fn import_rows(s: &mut Session, common: &Common, dir: &Path, schema: &[u8], list
     for line in listing.split(|&b| b == b'\n').filter(|l| !l.is_empty()) {
         let words = crate::rcli::splitargs::split_args(line);
         let Some([file, table]) = words.and_then(|w| <[Vec<u8>; 2]>::try_from(w).ok()) else {
-            return fail(&[b"restore: a line of 'tables' is not <file> <table>: ", line]);
+            return fail(&[b"load: a line of 'tables' is not <file> <table>: ", line]);
         };
         let Some(prefix) = declared_prefix(schema, &table) else {
-            return fail(&[b"restore: schema.kevy does not declare table '", &table, b"'"]);
+            return fail(&[b"load: schema.kevy does not declare table '", &table, b"'"]);
         };
         let path = dir.join(String::from_utf8_lossy(&file).as_ref());
         let path = path.to_string_lossy().into_owned();
@@ -172,21 +172,21 @@ fn declared_prefix(schema: &[u8], table: &[u8]) -> Option<Vec<u8>> {
 /// doctor over TCP, checking tables, bare indexes and views.
 fn doctor(s: &Session) -> u8 {
     if s.opts.socket.is_some() {
-        eprint_bytes(&[b"kevy-cli: restore: doctor connects over TCP only; not run over a socket (run doctor -h <host> -p <port>)\n"]);
+        eprint_bytes(&[b"kevy-cli: load: doctor connects over TCP only; not run over a socket (run doctor -h <host> -p <port>)\n"]);
         return 0;
     }
     let host = String::from_utf8_lossy(&s.opts.host).into_owned();
     let Ok(port) = u16::try_from(s.opts.port) else {
-        return fail(&[b"restore: the port is out of range for doctor"]);
+        return fail(&[b"load: the port is out of range for doctor"]);
     };
     let mut client = match kevy_resp_client::RespClient::connect(&host, port) {
         Ok(c) => c,
-        Err(e) => return fail(&[b"restore: doctor could not connect: ", e.to_string().as_bytes()]),
+        Err(e) => return fail(&[b"load: doctor could not connect: ", e.to_string().as_bytes()]),
     };
     let scope = crate::doctor::Scope { indexes: true, views: true };
     match crate::doctor::run_scoped(&mut client, false, scope) {
         Ok(code) if code == std::process::ExitCode::SUCCESS => 0,
         Ok(_) => 3,
-        Err(e) => fail(&[b"restore: doctor: ", e.to_string().as_bytes()]),
+        Err(e) => fail(&[b"load: doctor: ", e.to_string().as_bytes()]),
     }
 }

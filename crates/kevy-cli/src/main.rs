@@ -55,9 +55,6 @@ fn route_subcommand(args: &[String]) -> Option<ExitCode> {
     if !args.is_empty() && args[0] == "backup" {
         return Some(run_backup_cli(&args[1..]));
     }
-    // `restore --from <file> --to <dir>` is the offline backup restore;
-    // `restore <dir>` loads a relational dump into a server and is one of
-    // the redis-cli half's tools.
     if !args.is_empty() && args[0] == "restore" && args.iter().any(|a| a == "--from" || a == "--to")
     {
         return Some(run_restore_cli(&args[1..]));
@@ -74,7 +71,7 @@ fn route_subcommand(args: &[String]) -> Option<ExitCode> {
     }
     // `sql compile <file.sql> [--apply --url h:p]`: the declaration-time
     // SQL compiler (kevy-sql). File-first; TCP only under --apply.
-    if !args.is_empty() && args[0] == "sql" && args.get(1).map(String::as_str) != Some("run") {
+    if !args.is_empty() && args[0] == "sql" {
         return Some(sqlcmd::run_sql_cli(&args[1..]));
     }
     // The migration-playbook tools: doctor, shadow, lint, backfill-keys.

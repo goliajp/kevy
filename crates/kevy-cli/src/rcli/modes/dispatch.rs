@@ -73,6 +73,14 @@ pub(crate) fn run(s: &mut Session) -> Option<u8> {
 }
 
 // LOC-WAIVER: a table — one row per mode flag, in redis-cli's precedence.
+/// Whether any special mode, `--eval` or a `--test-hint*` is enabled.
+pub(crate) fn any(o: &Opts) -> bool {
+    first_mode(o).is_some()
+        || o.modes.eval.is_some()
+        || o.modes.test_hint.is_some()
+        || o.modes.test_hint_file.is_some()
+}
+
 fn first_mode(o: &Opts) -> Option<Mode> {
     let m = &o.modes;
     [
