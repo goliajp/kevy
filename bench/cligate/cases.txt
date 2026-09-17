@@ -593,7 +593,9 @@ kevy.stdout: "inf"\n
 # The server drops this very connection. (`2 QUIT` raced: a second QUIT that
 # reaches the server before it closes makes the close a reset, so the error
 # text depended on how fast the client is.)
-stdin: CLIENT KILL SKIPME no TYPE normal\nPING\nPING\n
+# Each line waits for the one before to finish: a PING that reached the
+# server before it closed the killed connection made the close a reset.
+timeline: CLIENT KILL SKIPME no TYPE normal\n ; 0.4 ; PING\n ; 0.4 ; PING\n ; 0.4
 run: -p $PORT
 
 # ─── P0 · a push ahead of the reply (client-side caching) ────────────────────
@@ -1309,3 +1311,60 @@ timeline: 1.3 ; INT ; 0.2
 run: -p $PORT --latency-dist --mono -i 0.4
 mask: [0-9]+
 head: 8
+
+# ─── P2 · --intrinsic-latency, --lru-test, --vset-recall ─────────────────────
+
+[RC-096 intrinsic-latency]
+run: --intrinsic-latency 1
+mask: (Max latency so far: [0-9]+ microseconds\.\n)+|[0-9][0-9.]*|inf
+
+[RC-096 intrinsic-latency-of-no-seconds]
+run: --intrinsic-latency abc
+mask: (Max latency so far: [0-9]+ microseconds\.\n)+|[0-9][0-9.]*|inf
+
+[RC-095 lru-test]
+screen: pty
+timeline: 2.4 ; INT ; 0.2
+run: -p $PORT --lru-test 1000
+mask: [0-9][0-9.]*
+head: 2
+
+[RC-093,RC-094 vset-recall]
+screen: pty
+setup: VADD vs VALUES 2 1 3 e1
+setup: VADD vs VALUES 2 2 6 e2
+setup: VADD vs VALUES 2 3 2 e3
+setup: VADD vs VALUES 2 4 5 e4
+setup: VADD vs VALUES 2 5 1 e5
+setup: VADD vs VALUES 2 6 4 e6
+setup: VADD vs VALUES 2 7 0 e7
+setup: VADD vs VALUES 2 8 3 e8
+setup: VADD vs VALUES 2 9 6 e9
+setup: VADD vs VALUES 2 10 2 e10
+setup: VADD vs VALUES 2 11 5 e11
+setup: VADD vs VALUES 2 12 1 e12
+setup: VADD vs VALUES 2 13 4 e13
+setup: VADD vs VALUES 2 14 0 e14
+setup: VADD vs VALUES 2 15 3 e15
+setup: VADD vs VALUES 2 16 6 e16
+setup: VADD vs VALUES 2 17 2 e17
+setup: VADD vs VALUES 2 18 5 e18
+setup: VADD vs VALUES 2 19 1 e19
+setup: VADD vs VALUES 2 20 4 e20
+setup: VADD vs VALUES 2 21 0 e21
+setup: VADD vs VALUES 2 22 3 e22
+setup: VADD vs VALUES 2 23 6 e23
+setup: VADD vs VALUES 2 24 2 e24
+setup: VADD vs VALUES 2 25 5 e25
+setup: VADD vs VALUES 2 26 1 e26
+setup: VADD vs VALUES 2 27 4 e27
+setup: VADD vs VALUES 2 28 0 e28
+setup: VADD vs VALUES 2 29 3 e29
+setup: VADD vs VALUES 2 30 6 e30
+timeline: 1.2 ; INT ; 0.3
+run: -p $PORT --vset-recall vs --vset-recall-count 5 --vset-recall-ele 3 --vset-recall-ef 50 -i 0.2
+mask: [ ]*[0-9][0-9.]*
+
+[RC-093 vset-recall-not-a-vector-set]
+setup: SET s x
+run: -p $PORT --vset-recall s
