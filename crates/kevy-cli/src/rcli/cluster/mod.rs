@@ -3,6 +3,7 @@
 mod add_node;
 mod addr;
 mod ask;
+mod backup;
 mod busy_keys;
 mod call;
 mod check;
@@ -15,6 +16,7 @@ mod fix_cover;
 mod fix_open;
 mod fix_open_cases;
 mod fix_owners;
+mod import;
 mod join;
 mod link;
 mod log;

@@ -17,7 +17,7 @@ mod pages;
 mod pipe;
 mod progress;
 mod random;
-mod rdb;
+pub(crate) mod rdb;
 mod reconnect;
 mod replica;
 mod scan;

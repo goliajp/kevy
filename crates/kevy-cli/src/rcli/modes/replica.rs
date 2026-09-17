@@ -17,7 +17,8 @@ pub(crate) fn run(s: &mut Session) -> u8 {
 fn follow(s: &mut Session) -> Result<(), Vec<u8>> {
     let _ = replconf(s, b"capa", b"eof"); // a server without it sends a sized payload
     let _ = replconf(s, b"rdb-filter-only", b""); // no keys wanted, only commands
-    let payload = start(s)?;
+    let not_connected = || b"Error: not connected".to_vec();
+    let payload = start(s.conn.as_mut().ok_or_else(not_connected)?)?;
     match &payload {
         Payload::UntilMark(_) => eprint_bytes(&[
             b"Full resync with master, discarding bytes of bulk transfer until EOF marker...\n",
@@ -27,7 +28,7 @@ fn follow(s: &mut Session) -> Result<(), Vec<u8>> {
         )
         .as_bytes()]),
     }
-    let total = transfer(s, &payload, &mut |_| Ok(()))?;
+    let total = transfer(s.conn.as_mut().ok_or_else(not_connected)?, &payload, &mut |_| Ok(()))?;
     if let Payload::UntilMark(_) = payload {
         eprint_bytes(&[format!(
             "Full resync done after {total} bytes. Logging commands from master.\n"

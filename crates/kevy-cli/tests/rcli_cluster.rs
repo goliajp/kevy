@@ -812,3 +812,128 @@ fn fix_refuses_unreachable_masters_and_reports_owners_it_cannot_merge() {
     assert!(owners.stdout.ends_with(&tail), "{}", owners.stdout);
     assert_eq!(owners.code, 1);
 }
+
+#[test]
+fn import_migrates_each_key_to_its_slots_owner() {
+    let shared = cluster(2, 0);
+    // Node 2 stands for the standalone source.
+    shared.lock().unwrap().nodes.push(cluster_fake::Node {
+        id: id(2),
+        alone: true,
+        ..Default::default()
+    });
+    shared.lock().unwrap().hook = Some(Box::new(|node, argv| {
+        let verb = argv[0].to_ascii_uppercase();
+        match (node, verb.as_slice()) {
+            (2, b"AUTH") if argv.last().is_some_and(|p| p == b"wrong") => Some(b"-WRONGPASS invalid username-password pair\r\n".to_vec()),
+            (2, b"AUTH") => Some(b"+OK\r\n".to_vec()),
+            (2, b"INFO") => Some(bulk("# Cluster\r\ncluster_enabled:0\r\n")),
+            (2, b"DBSIZE") => Some(b":3\r\n".to_vec()),
+            (2, b"SCAN") => Some(b"*2\r\n$1\r\n0\r\n*3\r\n$1\r\na\r\n$1\r\nb\r\n$3\r\nbad\r\n".to_vec()),
+            (2, b"MIGRATE") if argv[3] == b"bad" => Some(b"-ERR Target instance replied with error: BUSYKEY Target key name already exists.\r\n".to_vec()),
+            (2, b"MIGRATE") => Some(b"+OK\r\n".to_vec()),
+            _ => None,
+        }
+    }));
+    let ports = start(&shared);
+    let (p0, p1, src) = (at(ports[0]), at(ports[1]), at(ports[2]));
+    let o = cli(
+        &[
+            "--cluster",
+            "import",
+            &p0,
+            "--cluster-from",
+            &src,
+            "--cluster-copy",
+            "--cluster-replace",
+            "--cluster-from-pass",
+            "pw",
+        ],
+        b"",
+        &[],
+    );
+    // a is slot 15495 and b 3300: node 1 owns the upper half.
+    let tail = format!(
+        "*** Importing 3 keys from DB 0\nMigrating a to {p1}: OK\nMigrating b to {p0}: OK\nMigrating bad to {p1}: Source {src} replied with error:\nERR Target instance replied with error: BUSYKEY Target key name already exists.\n"
+    );
+    assert!(o.stdout.ends_with(&tail), "{}", o.stdout);
+    assert_eq!(o.code, 1);
+    assert!(
+        received(&shared, 2).contains(
+            &["MIGRATE", "127.0.0.1", &ports[1].to_string(), "a", "0", "60000", "COPY", "REPLACE"]
+                .map(String::from)
+                .to_vec()
+        )
+    );
+    let refused = cli(
+        &["--cluster", "import", &p0, "--cluster-from", &src, "--cluster-from-pass", "wrong"],
+        b"",
+        &[],
+    );
+    assert!(
+        refused.stdout.ends_with(&format!(
+            "Source {src} replied with error:\nWRONGPASS invalid username-password pair\n"
+        )) && refused.code == 1
+    );
+    let member = cli(&["--cluster", "import", &p0, "--cluster-from", &p1], b"", &[]);
+    assert!(
+        member
+            .stdout
+            .ends_with(&format!("Source {p1} replied with error:\nERR unknown command 'INFO'\n")),
+        "{}",
+        member.stdout
+    );
+    let gone = cli(&["--cluster", "import", &p0, "--cluster-from", "127.0.0.1:1"], b"", &[]);
+    assert_eq!(
+        (gone.stderr.as_str(), gone.code),
+        ("Could not connect to Redis at 127.0.0.1:1: Connection refused.\n", 1)
+    );
+    let bad = cli(&["--cluster", "import", &p0, "--cluster-from", "nothost"], b"", &[]);
+    assert_eq!(
+        bad.stderr,
+        "[ERR] Invalid --cluster-from host. You need to pass a valid address (ie. 120.0.0.1:7000).\n"
+    );
+    let missing = cli(&["--cluster", "import", &p0], b"", &[]);
+    assert_eq!(
+        missing.stderr,
+        "[ERR] Option '--cluster-from' is required for subcommand 'import'.\n"
+    );
+}
+
+#[test]
+fn backup_saves_each_master_and_the_layout() {
+    let shared = cluster(2, 1);
+    shared.lock().unwrap().nodes[1].importing = vec![(9000, 0)];
+    shared.lock().unwrap().hook = Some(Box::new(|_, argv| {
+        argv[0].eq_ignore_ascii_case(b"SYNC").then(|| b"$5\r\nhello".to_vec())
+    }));
+    let ports = start(&shared);
+    let dir = std::env::temp_dir().join(format!("kevy-rcli-backup-{}", ports[0]));
+    std::fs::create_dir_all(&dir).unwrap();
+    let d = dir.to_str().unwrap();
+    let o = cli(&["--cluster", "backup", &at(ports[0]), d], b"", &[]);
+    let tail = format!(
+        ">>> Node {p0} -> Saving RDB...\n>>> Node {p1} -> Saving RDB...\nSaving cluster configuration to: {d}/nodes.json\n*** Cluster seems to have some problems, please be aware of it if you're going to restore this backup.\n[OK] Backup created into: {d}\n",
+        p0 = at(ports[0]),
+        p1 = at(ports[1])
+    );
+    assert!(o.stdout.ends_with(&tail) && o.code == 0, "{}", o.stdout);
+    let file = dir.join(format!("redis-node-127.0.0.1-{}-{}.rdb", ports[0], id(0)));
+    assert_eq!(std::fs::read(file).unwrap(), b"hello");
+    let json = std::fs::read_to_string(dir.join("nodes.json")).unwrap();
+    let node1 = format!(
+        "  {{\n    \"name\": \"{}\",\n    \"host\": \"127.0.0.1\",\n    \"port\": {},\n    \"replicate\": null,\n    \"slots\": [[8192,16383]],\n    \"slots_count\": 8192,\n    \"flags\": \"master\",\n    \"current_epoch\": 1,\n    \"cluster_errors\": 1,\n    \"importing\": {{\"9000\": \"{}\"}}\n  }}",
+        id(1),
+        ports[1],
+        id(0)
+    );
+    assert!(
+        json.starts_with("[\n  {\n") && json.ends_with("\n]") && json.contains(&node1),
+        "{json}"
+    );
+    assert!(json.contains(&format!("\"replicate\": \"{}\"", id(0))));
+    assert_eq!(o.stderr.matches("SYNC sent to master, writing 5 bytes to '").count(), 2);
+    let missing = cli(&["--cluster", "backup", &at(ports[0]), "/nonexistent"], b"", &[]);
+    assert!(missing.stdout.ends_with("[ERR] The specified backup directory '/nonexistent' does not exist.\n[ERR] Failed to back cluster!\n") && missing.code == 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
