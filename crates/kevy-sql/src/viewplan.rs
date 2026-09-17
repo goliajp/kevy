@@ -31,19 +31,7 @@ pub(crate) fn plan_view(
     t: &Table,
     notes: &mut Vec<String>,
 ) -> Result<Planned, SqlError> {
-    let fields = resolve_fields(v, t)?;
-    check_counts(v)?;
-    let order = resolve_order(v, t)?;
-    if v.preds.is_empty() {
-        return Err(err_v(
-            v,
-            format!(
-                "a view with no WHERE would scan the table \u{2014} kevy has no scans; add a driving predicate, or page an index directly (IDX.QUERY {}.<col> RANGE \u{2026})",
-                t.name
-            ),
-        ));
-    }
-    let preds = normalize(v, t)?;
+    let (fields, order, preds) = prepare(v, t)?;
     let constant = !preds.iter().any(ColPred::has_param);
     if constant
         && v.offset.is_none()
@@ -52,17 +40,59 @@ pub(crate) fn plan_view(
         notes.push(view_read_note(v, &fields));
         return Ok(Planned::View(argv));
     }
+    plan_card(v, t, &preds, order.as_ref(), &fields).map(Planned::Card)
+}
+
+/// One query as an `IDX.QUERY` card, never an engine view: what a
+/// query answered now needs, where a view would be a declaration.
+pub(crate) fn card_for(v: &CreateView, t: &Table) -> Result<QueryCard, SqlError> {
+    let (fields, order, preds) = prepare(v, t)?;
+    plan_card(v, t, &preds, order.as_ref(), &fields)
+}
+
+type Prepared = (Vec<String>, Option<(String, bool)>, Vec<ColPred>);
+
+/// The checks every query passes before a path is chosen: the select
+/// list and ORDER BY name declared columns, and a WHERE exists.
+fn prepare(v: &CreateView, t: &Table) -> Result<Prepared, SqlError> {
+    let fields = resolve_fields(v, t)?;
+    check_counts(v)?;
+    let order = resolve_order(v, t)?;
+    if v.preds.is_empty() {
+        return Err(no_where(v, t));
+    }
+    Ok((fields, order, normalize(v, t)?))
+}
+
+/// The card paths 1–3 below, in order, or the error naming what to add.
+fn plan_card(
+    v: &CreateView,
+    t: &Table,
+    preds: &[ColPred],
+    order: Option<&(String, bool)>,
+    fields: &[String],
+) -> Result<QueryCard, SqlError> {
     let mut fail: Option<String> = None;
-    if let Some(card) = card_direct(v, t, &preds, order.as_ref(), &fields, &mut fail)? {
-        return Ok(Planned::Card(card));
+    if let Some(card) = card_direct(v, t, preds, order, fields, &mut fail)? {
+        return Ok(card);
     }
-    if let Some(card) = card_orderpath(v, t, &preds, order.as_ref(), &fields)? {
-        return Ok(Planned::Card(card));
+    if let Some(card) = card_orderpath(v, t, preds, order, fields)? {
+        return Ok(card);
     }
-    if let Some(card) = card_residual(v, t, &preds, order.as_ref(), &fields, &mut fail)? {
-        return Ok(Planned::Card(card));
+    if let Some(card) = card_residual(v, t, preds, order, fields, &mut fail)? {
+        return Ok(card);
     }
-    Err(no_path_error(v, t, &preds, order.as_ref(), fail))
+    Err(no_path_error(v, t, preds, order, fail))
+}
+
+fn no_where(v: &CreateView, t: &Table) -> SqlError {
+    err_v(
+        v,
+        format!(
+            "a view with no WHERE would scan the table \u{2014} kevy has no scans; add a driving predicate, or page an index directly (IDX.QUERY {}.<col> RANGE \u{2026})",
+            t.name
+        ),
+    )
 }
 
 fn err_v(v: &CreateView, msg: impl std::fmt::Display) -> SqlError {
