@@ -445,6 +445,12 @@ def run_tier(suite, checks, tier, only=None, area=None):
     # Real durations land beside the build products so the declared
     # expectations can be corrected from measurement, and cleaning the
     # build cleans this too.
+    # Only a whole tier writes the tier's ledger. `--only` and `--area` run a
+    # subset, and a subset that overwrites the file destroys the record it is
+    # not a substitute for: three of these files were one row each by the time
+    # anyone looked, and suite-full.json's single `mcpgate` row — read for a
+    # while as "one row in the old format" — was a `--only mcpgate` standing
+    # where 99 measurements had been.
     out = ROOT / f"target/suite-{tier}.json"
     out.parent.mkdir(exist_ok=True)
     # `seconds` is a measurement only where `measured` says so, and each
@@ -456,11 +462,12 @@ def run_tier(suite, checks, tier, only=None, area=None):
     # as refusing to answer; the two FAIL rows this runner synthesises after
     # the tier carry no duration at all. None of those four is what the
     # check costs, and all four used to be filed as though they were.
-    out.write_text(json.dumps(
-        [{"id": c["id"], "status": s, "seconds": round(t, 1),
-          "measured": m,
-          "ceiling": c["timeout"] if s == "TIMEOUT" else None} for c, s, t, _, m in results],
-        indent=1))
+    if not only and not area:
+        out.write_text(json.dumps(
+            [{"id": c["id"], "status": s, "seconds": round(t, 1),
+              "measured": m,
+              "ceiling": c["timeout"] if s == "TIMEOUT" else None} for c, s, t, _, m in results],
+            indent=1))
 
     budget = suite["budgets"].get(tier)
     print(f"\nsuite {tier}: {len(passed)} passed, {len(fails)} failed, "
