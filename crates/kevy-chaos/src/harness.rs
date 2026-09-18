@@ -221,12 +221,22 @@ impl Harness {
             if self.answers_ping(&addr) {
                 return Ok(());
             }
-            if let Some(status) = self.child.as_mut().and_then(|c| c.try_wait().ok()).flatten() {
-                return Err(io::Error::other(format!(
-                    "kevy exited with {status} before it listened on {}: {}",
-                    self.config.port,
-                    self.stderr_tail()
-                )));
+            match self.child.as_mut().map(Child::try_wait) {
+                Some(Ok(Some(status))) => {
+                    return Err(io::Error::other(format!(
+                        "kevy exited with {status} before it listened on {}: {}",
+                        self.config.port,
+                        self.stderr_tail()
+                    )));
+                }
+                // Not "still starting": we asked and were refused, and a probe
+                // that cannot ask is not a probe that got a no.
+                Some(Err(e)) => {
+                    return Err(io::Error::other(format!(
+                        "cannot tell whether kevy is still running: {e}"
+                    )));
+                }
+                Some(Ok(None)) | None => {}
             }
             if Instant::now() > deadline {
                 return Err(io::Error::new(
