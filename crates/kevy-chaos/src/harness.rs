@@ -389,10 +389,15 @@ fn apply_rlimits(nofile: u64, fsize: u64) -> io::Result<()> {
     Ok(())
 }
 
-/// Pick an ephemeral free port (bind 127.0.0.1:0 → return port → drop).
-pub fn pick_free_port() -> io::Result<u16> {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
-    let port = listener.local_addr()?.port();
-    drop(listener);
-    Ok(port)
+/// A port for a server this process is about to start.
+///
+/// [`kevy_testnet::free_port`], which is the one implementation of this
+/// question in the workspace. What stood here was the other one: bind
+/// `127.0.0.1:0`, read the port, drop the listener — which leaves the port
+/// unowned between that drop and the server's own bind, and under a parallel
+/// `cargo test --workspace` something else can be in the gap. free_port hands
+/// out from a block this process owns alone and probes by connecting, so it
+/// holds nothing it hands over.
+pub fn pick_free_port() -> u16 {
+    kevy_testnet::free_port()
 }

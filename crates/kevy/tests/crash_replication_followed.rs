@@ -38,9 +38,9 @@ use kevy_chaos::{
 #[ignore = "chaos test — opt-in via --ignored, needs `cargo build --release -p kevy` first"]
 fn crash_replication_followed_no_corruption() {
     let bin_path = resolve_kevy_bin();
-    let primary_port = pick_free_port().expect("primary port");
-    let replica_port = pick_free_port().expect("replica port");
-    let primary_replication_base = pick_free_port().expect("primary repl port");
+    let primary_port = pick_free_port();
+    let replica_port = pick_free_port();
+    let primary_replication_base = pick_free_port();
     let primary_tmp = std::env::temp_dir().join(format!("kevy-chaos-primary-{primary_port}"));
     let replica_tmp = std::env::temp_dir().join(format!("kevy-chaos-replica-{replica_port}"));
     let _ = std::fs::remove_dir_all(&primary_tmp);

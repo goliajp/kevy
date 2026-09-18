@@ -474,6 +474,9 @@ dependencies = [
 [[package]]
 name = "kevy-chaos"
 version = "6.4.0"
+dependencies = [
+ "kevy-testnet",
+]
 
 [[package]]
 name = "kevy-cli"

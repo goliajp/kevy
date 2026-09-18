@@ -21,7 +21,10 @@ struct Server {
 
 impl Server {
     fn start() -> Self {
-        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        // Not a bind probe: the listener that took the port is dropped before the
+        // server takes it, and under a parallel run something else can be in that
+        // gap. free_port hands out from a block this process owns alone.
+        let port = kevy_testnet::free_port();
         let dir = std::env::temp_dir().join(format!(
             "kevy-describe-e2e-{}",
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()

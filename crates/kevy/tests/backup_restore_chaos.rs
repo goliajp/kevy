@@ -34,7 +34,7 @@ use kevy_cli::backup;
 #[ignore = "chaos test — opt-in via --ignored, needs `cargo build --release -p kevy` first"]
 fn backup_restore_round_trip_no_fabrication() {
     let bin_path = resolve_kevy_bin();
-    let port = pick_free_port().expect("free port");
+    let port = pick_free_port();
     let tmp = std::env::temp_dir().join(format!("kevy-chaos-backup-{port}"));
     let _ = std::fs::remove_dir_all(&tmp);
 
@@ -79,7 +79,7 @@ fn backup_restore_round_trip_no_fabrication() {
     h.kill(KillSignal::Sigkill).expect("kill primary");
 
     // Restore into a fresh dir + start a NEW kevy against it.
-    let restored_port = pick_free_port().expect("restored port");
+    let restored_port = pick_free_port();
     let restored_dir = std::env::temp_dir().join(format!("kevy-chaos-restored-{restored_port}"));
     let _ = std::fs::remove_dir_all(&restored_dir);
     backup::unpack(&backup_path, &restored_dir).expect("unpack");
