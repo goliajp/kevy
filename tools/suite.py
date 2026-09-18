@@ -62,8 +62,8 @@ def tier_checks(checks, tier):
 # Each answers (available, why-not). Detection is cheap and honest:
 # where we cannot know, the answer is "not here", said as such.
 
-def _have_server(profile):
-    """Build the binary, rather than judge whether the one on disk is current.
+def _have_binaries(profile):
+    """Build the binaries, rather than judge whether those on disk are current.
 
     Existence alone was not enough: a `target/debug/kevy` from an earlier
     checkout satisfied it while `doc-toml` used that binary to load the
@@ -81,16 +81,25 @@ def _have_server(profile):
     So this asks cargo, which is the tool whose job that is. A fresh tree
     costs ~0.1 s; a stale one costs a build, which is the honest price of
     the guarantee.
+
+    Both binaries, because the gates that name this need both and the
+    guarantee only ever covered one. A two-day-old `target/release/kevy-cli`
+    failed cookbook, crossgate and site-commands in one prerelease run, each
+    in a way that reads as a defect in the tree: cookbook reported the CLI
+    refusing `-e`, an option the same tree had added. The requirement was
+    called `server-*` while ten checks under it drive kevy-cli, which is why
+    it is not called that any more.
     """
     flags = ["--release"] if profile == "release" else []
-    r = subprocess.run(["cargo", "build", "-p", "kevy", "--bin", "kevy", "--quiet", *flags],
-                       cwd=ROOT, capture_output=True, text=True)
-    if r.returncode != 0:
-        tail = (r.stderr or r.stdout).strip().splitlines()
-        why = tail[-1] if tail else f"cargo build --bin kevy failed ({r.returncode})"
-        return False, f"target/{profile}/kevy does not build: {why[:120]}"
-    if not (ROOT / f"target/{profile}/kevy").exists():
-        return False, f"cargo build succeeded but target/{profile}/kevy is not there"
+    for pkg, bin_name in (("kevy", "kevy"), ("kevy-cli", "kevy-cli")):
+        r = subprocess.run(["cargo", "build", "-p", pkg, "--bin", bin_name, "--quiet", *flags],
+                           cwd=ROOT, capture_output=True, text=True)
+        if r.returncode != 0:
+            tail = (r.stderr or r.stdout).strip().splitlines()
+            why = tail[-1] if tail else f"cargo build --bin {bin_name} failed ({r.returncode})"
+            return False, f"target/{profile}/{bin_name} does not build: {why[:120]}"
+        if not (ROOT / f"target/{profile}/{bin_name}").exists():
+            return False, f"cargo build succeeded but target/{profile}/{bin_name} is not there"
     return True, ""
 
 
@@ -194,8 +203,8 @@ def requirement_gap(check):
     """The first unmet requirement, or None."""
     for r in check.get("requires", []):
         ok, why = {
-            "server-debug": lambda: _have_server("debug"),
-            "server-release": lambda: _have_server("release"),
+            "binaries-debug": lambda: _have_binaries("debug"),
+            "binaries-release": lambda: _have_binaries("release"),
             "linux": _have_linux,
             "box": _have_box,
             "node": _have_node,
