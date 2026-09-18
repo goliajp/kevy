@@ -441,6 +441,8 @@ def run_tier(suite, checks, tier, only=None, area=None):
     notrun = [r for r in results if r[1] == "NOT-RUN"]
     advis = [r for r in results if r[1] == "ADVISORY"]
     passed = [r for r in results if r[1] == "PASS"]
+    timeouts = [r for r in results if r[1] == "TIMEOUT"]
+    skipped = [r for r in results if r[1] == "SKIPPED"]
 
     # Real durations land beside the build products so the declared
     # expectations can be corrected from measurement, and cleaning the
@@ -471,8 +473,19 @@ def run_tier(suite, checks, tier, only=None, area=None):
 
     budget = suite["budgets"].get(tier)
     print(f"\nsuite {tier}: {len(passed)} passed, {len(fails)} failed, "
-          f"{len(advis)} advisory, {len(notrun)} not-run — "
+          f"{len(timeouts)} timed out, {len(advis)} advisory, "
+          f"{len(skipped)} skipped, {len(notrun)} not-run — "
           f"{wall:.0f}s" + (f" (budget {budget}s)" if budget else ""))
+    # The tally must account for every check that was selected. It did not:
+    # a TIMEOUT and a SKIPPED were in neither the counts nor the failed list,
+    # so `workspace-tests` hit its 5400s ceiling and 53 checks were reported
+    # as "43 passed, 2 failed, 1 advisory, 5 not-run". Eleven short of the
+    # truth, in a line whose whole job is to be the truth.
+    counted = len(passed) + len(fails) + len(timeouts) + len(advis) + len(skipped) + len(notrun)
+    if counted != len(results):
+        print(f"  ✗ the tally covers {counted} of {len(results)} checks — a status this "
+              f"runner does not count is a check that disappeared from its own report")
+        return 1
     if notrun:
         print("  not run here (loudly, not silently):")
         for c, _, _, why, _ in notrun:
@@ -489,10 +502,14 @@ def run_tier(suite, checks, tier, only=None, area=None):
             reason = " ".join(c.get("advisory_reason", "").split())
             if reason:
                 print(f"      advisory because: {reason[:180]}")
-    if fails:
+    if fails or timeouts:
         print("  failed:")
         for c, _, _, _, _ in fails:
             print(f"    ✗ {c['id']}")
+        # A check that hit its ceiling did not pass, and did not report a
+        # verdict either. Counting it as neither is how one vanished.
+        for c, _, _, _, _ in timeouts:
+            print(f"    ✗ {c['id']} — timed out at {c['timeout']}s, never finished")
         return 1
     if budget and wall > budget:
         print(f"  ✗ the tier ran over its own budget ({wall:.0f}s > {budget}s) — "
