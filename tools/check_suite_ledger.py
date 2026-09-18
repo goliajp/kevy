@@ -33,7 +33,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 def main() -> int:
     manifest = tomllib.loads((ROOT / "suite" / "manifest.toml").read_text())
     declared = {c["id"]: c for c in manifest["check"]}
-    bad, stale, silent, seen = [], [], [], 0
+    bad, stale, silent, contended, seen = [], [], [], [], 0
 
     for path in sorted((ROOT / "target").glob("suite-*.json")):
         rows = json.loads(path.read_text())
@@ -67,8 +67,23 @@ def main() -> int:
                 bad.append(f"{path.name}: {row['id']} recorded {row['seconds']}s above its own "
                            f"{c['timeout']}s timeout — that is not a completed run")
             if c and c.get("expected") and row["seconds"] > c["expected"] * 8:
-                bad.append(f"{path.name}: {row['id']} recorded {row['seconds']}s against a declared "
-                           f"{c['expected']}s — 8x out. Re-measure before trusting it as a target")
+                # Wall clock over an idle machine is a cost; wall clock over
+                # a busy one is mostly waiting. differential-embedded filed
+                # 5.9s in one tier and 578.2s in the next from the same tree,
+                # and by hand it is 0.14s of test inside 27s of wall and 1.9s
+                # of CPU, because another cargo held the target lock. Where
+                # the row carries its own CPU, that distinction is available
+                # and a contended row is named as contended, not as a target.
+                cpu = row.get("cpu_seconds")
+                if cpu is not None and cpu > 0 and row["seconds"] > cpu * 3:
+                    contended.append(
+                        f"{path.name}: {row['id']} took {row['seconds']}s over {cpu}s of CPU — "
+                        f"most of that row is waiting for something else on the machine, so it "
+                        f"is not a measurement of what the check costs")
+                else:
+                    bad.append(f"{path.name}: {row['id']} recorded {row['seconds']}s against a "
+                               f"declared {c['expected']}s — 8x out. Re-measure before trusting "
+                               f"it as a target")
 
     if not seen:
         print("check_suite_ledger: no recorded runs yet — nothing to verify")
@@ -76,6 +91,8 @@ def main() -> int:
     for line in stale:
         print(f"  STALE FORMAT {line}", file=sys.stderr)
     for line in silent:
+        print(f"  {line}")
+    for line in contended:
         print(f"  {line}")
     for line in bad:
         print(f"  {line}", file=sys.stderr)
