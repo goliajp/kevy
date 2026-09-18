@@ -68,7 +68,7 @@ def loads(body):
 def main():
     if not KEVY.exists():
         # Refuse, do not skip. The suite already declines to run this row
-        # when `server-debug` is absent, so reaching here means the binary
+        # when `binaries-debug` is absent, so reaching here means the binary
         # was expected and is not there — and a skip that exits 0 is
         # indistinguishable from "48 TOML blocks all load" to everything
         # downstream, including the tier's verdict line.

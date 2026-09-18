@@ -20,7 +20,7 @@
 #   timeout   hard per-check ceiling (seconds)
 #   requires  infrastructure this needs; a missing requirement is a loud
 #             NOT-RUN, never a silent pass:
-#             server-debug | server-release | linux | box | node |
+#             binaries-debug | binaries-release | linux | box | node |
 #             chromium | docker | device | ci
 #   advisory  true = reported but does not fail the tier (used only for
 #             checks whose red can be a legitimate state, e.g. the
@@ -62,8 +62,8 @@ prerelease = 5400
 [suite.requirements]
 "linux" = "CI's Linux jobs, and the lx64 box"
 "box" = "the lx64 box, as kevybench with TMPDIR=$HOME/captmp"
-"server-release" = "anywhere after cargo build --release -p kevy --bin kevy"
-"server-debug" = "anywhere after cargo build -p kevy --bin kevy"
+"binaries-release" = "anywhere after cargo build --release -p kevy -p kevy-cli"
+"binaries-debug" = "anywhere after cargo build -p kevy -p kevy-cli"
 "docker" = "CI's Linux jobs, and the lx64 box"
 "node" = "CI's site job (actions/setup-node), and any workstation with node"
 "web-deps" = "CI's site job, after npm ci in web/"
@@ -232,7 +232,7 @@ tier = "precommit"
 cmd = "python3 tools/export_site_commands.py --check"
 expected = 4
 timeout = 120
-requires = ["server-debug"]
+requires = ["binaries-debug"]
 proves = "the site's command reference is the engine's own COMMAND DOCS, not a hand-kept copy"
 
 [[check]]
@@ -432,7 +432,7 @@ tier = "precommit"
 cmd = "python3 tools/check_doc_toml.py"
 expected = 100
 timeout = 180
-requires = ["server-debug"]
+requires = ["binaries-debug"]
 proves = "every TOML block in the docs parses"
 
 [[check]]
@@ -484,7 +484,7 @@ tier = "precommit"
 cmd = "bash bench/dialectgate.sh target/debug/kevy"
 expected = 2
 timeout = 300
-requires = ["server-debug"]
+requires = ["binaries-debug"]
 proves = "Lua 5.1–5.5 each serve their own surface and wording; the string.rep DoS stays fixed"
 
 # ── prerelease: build health ─────────────────────────────────────────
@@ -593,7 +593,7 @@ tier = "prerelease"
 cmd = "python3 tools/check_site_commands.py"
 expected = 30
 timeout = 600
-requires = ["server-debug", "node", "web-deps"]
+requires = ["binaries-debug", "node", "web-deps"]
 proves = "every RESP example the site shows runs against a real server"
 
 [[check]]
@@ -629,7 +629,7 @@ tier = "prerelease"
 cmd = "bash bench/crashgate.sh"
 expected = 600
 timeout = 3600
-requires = ["linux", "server-release"]
+requires = ["linux", "binaries-debug"]
 proves = "kill -9 at any point loses nothing the server acknowledged"
 
 [[check]]
@@ -639,7 +639,7 @@ tier = "prerelease"
 cmd = "bash bench/perfgate.sh target/release/kevy"
 expected = 420
 timeout = 3600
-requires = ["box", "server-release"]
+requires = ["box", "binaries-release"]
 proves = "throughput holds the recorded baselines, angle by angle"
 
 [[check]]
@@ -649,7 +649,7 @@ tier = "prerelease"
 cmd = "bash bench/tailgate.sh target/release/kevy"
 expected = 900
 timeout = 5400
-requires = ["box", "server-release"]
+requires = ["box", "binaries-release"]
 proves = "tail latency stays inside the shipped bars on a real disk"
 
 [[check]]
@@ -659,7 +659,7 @@ tier = "prerelease"
 cmd = "bash bench/repligate.sh"
 expected = 300
 timeout = 1800
-requires = ["linux", "server-release"]
+requires = ["linux", "binaries-release"]
 proves = "a replica ships a snapshot, follows frames, and converges"
 
 [[check]]
@@ -669,7 +669,7 @@ tier = "prerelease"
 cmd = "bash bench/availgate.sh target/release/kevy"
 expected = 420
 timeout = 3600
-requires = ["box", "server-release"]
+requires = ["box", "binaries-release"]
 proves = "failover converges; WAIT tells the truth; staleness is bounded"
 
 # ── prerelease: compat + cases + doors that pin the release ──────────
@@ -681,7 +681,7 @@ tier = "prerelease"
 cmd = "bash bench/cookbook_smoke.sh"
 expected = 120
 timeout = 1200
-requires = ["server-debug"]
+requires = ["binaries-release"]
 proves = "every kevy-cli line in the cookbook runs green as written"
 
 [[check]]
@@ -695,7 +695,7 @@ tier = "prerelease"
 cmd = "bash bench/crossgate.sh"
 expected = 9
 timeout = 300
-requires = ["server-release", "node", "wasm-artifact"]
+requires = ["binaries-release", "node", "wasm-artifact"]
 proves = "an AOF written by either engine replays in the other, both directions"
 
 [[check]]
@@ -740,7 +740,7 @@ tier = "full"
 cmd = "bash bench/perfgate-median.sh target/release/kevy"
 expected = 2400
 timeout = 10800
-requires = ["box", "server-release"]
+requires = ["box", "binaries-release"]
 proves = "per-angle medians over N perfgate runs — the noise-resistant verdict"
 
 [[check]]
@@ -750,7 +750,7 @@ tier = "full"
 cmd = "bash bench/arena.sh target/release/kevy"
 expected = 1800
 timeout = 7200
-requires = ["box", "server-release", "docker"]
+requires = ["box", "binaries-release", "docker"]
 proves = "kevy vs valkey/redis/dragonfly, core-pinned, median-of-5, server-side counters"
 
 [[check]]
@@ -760,7 +760,7 @@ tier = "full"
 cmd = "bash bench/kevy_ab.sh target/release/kevy suite"
 expected = 900
 timeout = 3600
-requires = ["box", "server-release"]
+requires = ["box", "binaries-release"]
 proves = "epoll vs io_uring on one binary, isolated cores"
 
 # ── full: memory ─────────────────────────────────────────────────────
@@ -772,7 +772,7 @@ tier = "full"
 cmd = "bash bench/memgate.sh target/release/kevy"
 expected = 900
 timeout = 3600
-requires = ["linux", "server-release"]
+requires = ["linux", "binaries-release"]
 proves = "bytes/entry match each declared memory formula within tolerance"
 
 [[check]]
@@ -790,7 +790,7 @@ Red-first, by design: the acceptance lines exist before the crate does, so the c
 cmd = "bash -c 'eval \"$(bash bench/allocgate-prep.sh)\" && bash bench/allocgate.sh'"
 expected = 600
 timeout = 3600
-requires = ["linux"]
+requires = ["linux", "binaries-release"]
 proves = "the allocator's fragmentation and RSS budget"
 
 [[check]]
@@ -805,7 +805,7 @@ The memory half of the same red-first experiment; same reason, same closing cond
 cmd = "bash -c 'eval \"$(bash bench/allocgate-prep.sh)\" && bash bench/allocgate-mem.sh'"
 expected = 600
 timeout = 3600
-requires = ["linux"]
+requires = ["linux", "binaries-release"]
 proves = "the memory half of the allocator experiment, both builds"
 
 [[check]]
@@ -825,7 +825,7 @@ tier = "full"
 cmd = "bash bench/replaymemgate.sh"
 expected = 600
 timeout = 3600
-requires = ["linux", "server-release"]
+requires = ["linux", "binaries-release"]
 proves = "streaming replay's memory promise, measured"
 
 [[check]]
@@ -847,7 +847,7 @@ tier = "full"
 cmd = "bash bench/diskgate.sh target/release/kevy"
 expected = 900
 timeout = 5400
-requires = ["linux", "server-release"]
+requires = ["linux", "binaries-release"]
 proves = "disk growth bounds and persistence latency at envelope scale"
 
 [[check]]
@@ -857,7 +857,7 @@ tier = "full"
 cmd = "bash bench/chaosfsck.sh target/release/kevy"
 expected = 600
 timeout = 3600
-requires = ["linux", "server-release"]
+requires = ["linux", "binaries-release"]
 proves = "derived-state honesty after a hard kill"
 
 [[check]]
@@ -867,7 +867,7 @@ tier = "full"
 cmd = "bash bench/restore-drill.sh target/release/kevy"
 expected = 600
 timeout = 3600
-requires = ["linux", "server-release"]
+requires = ["linux", "binaries-release"]
 proves = "snapshot S + (gen, O) is an exact restore point, executed"
 
 # ── full: compat ─────────────────────────────────────────────────────
@@ -879,7 +879,7 @@ tier = "full"
 cmd = "bash bench/compat3.sh"
 expected = 900
 timeout = 3600
-requires = ["docker", "server-release"]
+requires = ["docker", "binaries-release"]
 proves = "the same command sequence answers identically on kevy, valkey and redis"
 
 [[check]]
@@ -889,7 +889,7 @@ tier = "full"
 cmd = "bash bench/resp3gate.sh target/release/kevy"
 expected = 60
 timeout = 900
-requires = ["docker", "server-release"]
+requires = ["docker", "binaries-release"]
 proves = "kevy changes reply shape under HELLO 3 exactly where the pinned redis does"
 
 [[check]]
@@ -899,7 +899,7 @@ tier = "full"
 cmd = "bash bench/clientgate.sh"
 expected = 900
 timeout = 3600
-requires = ["node", "docker"]
+requires = ["node", "docker", "binaries-release"]
 proves = "bring-your-redis-client, executable: real client libraries against kevy"
 
 [[check]]
@@ -909,7 +909,7 @@ tier = "full"
 cmd = "bash -c 'eval \"$(bash bench/upgrade-prep.sh)\" && bash bench/upgrade-interop.sh \"$UPGRADE_PREV_BIN\" target/release/kevy'"
 expected = 900
 timeout = 3600
-requires = ["linux", "server-release"]
+requires = ["linux", "binaries-release"]
 proves = "mixed-version primary/replica pairs interoperate across the upgrade boundary"
 
 [[check]]
@@ -919,7 +919,7 @@ tier = "full"
 cmd = "bash -c 'eval \"$(bash bench/upgrade-prep.sh)\" && bash bench/upgradegate.sh \"$UPGRADE_OLD_BIN\" target/release/kevy'"
 expected = 600
 timeout = 3600
-requires = ["linux", "server-release"]
+requires = ["linux", "binaries-release"]
 proves = "swapping the binary on a live directory is the whole upgrade"
 
 [[check]]
@@ -932,7 +932,7 @@ timeout = 7200
 # Not "docker": the bench account deliberately has no docker socket
 # (root-equivalence on a shared box). The container is started by root
 # once; what this check needs is the LISTENER and the psycopg venv.
-requires = ["box", "pgcmp-infra"]
+requires = ["box", "pgcmp-infra", "binaries-release"]
 proves = "the RDS workloads against PostgreSQL, numbers as they fall"
 
 # ── full: kevy's own features ────────────────────────────────────────
@@ -944,7 +944,7 @@ tier = "full"
 cmd = "bash bench/idxgate.sh target/release/kevy"
 expected = 600
 timeout = 3600
-requires = ["linux", "server-release"]
+requires = ["linux", "binaries-release"]
 proves = "secondary-index perf clamps and memory bounds"
 
 [[check]]
@@ -954,7 +954,7 @@ tier = "full"
 cmd = "bash bench/textgate.sh target/release/kevy"
 expected = 600
 timeout = 3600
-requires = ["linux", "server-release"]
+requires = ["linux", "binaries-release"]
 proves = "full-text clamps against a real server"
 
 [[check]]
@@ -964,7 +964,7 @@ tier = "full"
 cmd = "bash bench/vectorgate.sh target/release/kevy"
 expected = 600
 timeout = 3600
-requires = ["linux", "server-release"]
+requires = ["linux", "binaries-release"]
 proves = "ANN recall and latency clamps"
 
 [[check]]
@@ -974,7 +974,7 @@ tier = "full"
 cmd = "bash bench/viewgate.sh target/release/kevy"
 expected = 600
 timeout = 3600
-requires = ["linux", "server-release"]
+requires = ["linux", "binaries-release"]
 proves = "view maintenance clamps"
 
 [[check]]
@@ -984,7 +984,7 @@ tier = "full"
 cmd = "bash bench/agggate.sh target/release/kevy"
 expected = 600
 timeout = 3600
-requires = ["linux", "server-release"]
+requires = ["linux", "binaries-release"]
 proves = "aggregate-kind clamps"
 
 [[check]]
@@ -994,7 +994,7 @@ tier = "full"
 cmd = "bash bench/tablegate.sh"
 expected = 600
 timeout = 3600
-requires = ["linux", "server-release"]
+requires = ["linux", "binaries-release"]
 proves = "TABLE.* and the RDS views"
 
 [[check]]
@@ -1013,7 +1013,7 @@ Red-first, by design (crashgate precedent): the acceptance lines exist before th
 cmd = "bash bench/tiergate.sh"
 expected = 900
 timeout = 5400
-requires = ["linux", "server-release"]
+requires = ["linux", "binaries-release"]
 proves = "transparent tiering: budgets, demotion, cold reads"
 
 [[check]]
@@ -1023,7 +1023,7 @@ tier = "full"
 cmd = "bash bench/topogate.sh"
 expected = 600
 timeout = 3600
-requires = ["linux", "server-release"]
+requires = ["linux", "binaries-release"]
 proves = "topology declarations, true two-process"
 
 [[check]]
@@ -1033,7 +1033,7 @@ tier = "full"
 cmd = "bash bench/uringgate.sh"
 expected = 600
 timeout = 3600
-requires = ["linux", "server-release"]
+requires = ["linux", "binaries-release"]
 proves = "the io_uring data-plane contract"
 
 [[check]]
@@ -1043,7 +1043,7 @@ tier = "full"
 cmd = "bash bench/servinggate.sh target/release/kevy"
 expected = 900
 timeout = 5400
-requires = ["linux", "server-release"]
+requires = ["linux", "binaries-release"]
 proves = "the serving-engine headline lines"
 
 [[check]]
@@ -1053,7 +1053,7 @@ tier = "full"
 cmd = "bash bench/funcgate.sh"
 expected = 300
 timeout = 1800
-requires = ["server-debug"]
+requires = ["binaries-debug"]
 proves = "the scalar-function surface against the 89-probe corpus: capability ratchet + zero wrong answers"
 
 # ── full: classic cases ──────────────────────────────────────────────
@@ -1065,7 +1065,7 @@ tier = "full"
 cmd = "bash bench/migrationgate.sh"
 expected = 900
 timeout = 5400
-requires = ["linux", "server-release", "docker"]
+requires = ["linux", "binaries-release", "docker"]
 proves = "migration day end to end, repeatable"
 
 [[check]]
@@ -1075,7 +1075,7 @@ tier = "full"
 cmd = "bash bench/drill_mailrs.sh"
 expected = 900
 timeout = 5400
-requires = ["linux", "server-release"]
+requires = ["linux", "binaries-release"]
 proves = "a mailrs-shaped migration rehearsal, end to end"
 
 [[check]]
@@ -1085,7 +1085,7 @@ tier = "full"
 cmd = "bash bench/onrampgate.sh"
 expected = 600
 timeout = 3600
-requires = ["server-debug"]
+requires = ["binaries-release"]
 proves = "the on-ramp clamps with the real CLI binary"
 
 [[check]]
@@ -1095,7 +1095,7 @@ tier = "full"
 cmd = "bash bench/scalesoak.sh target/release/kevy"
 expected = 3600
 timeout = 14400
-requires = ["box", "server-release"]
+requires = ["box", "binaries-release"]
 proves = "the serving stack at declared scale, soaked"
 
 [[check]]
@@ -1105,7 +1105,7 @@ tier = "full"
 cmd = "bash bench/capacity-envelope.sh"
 expected = 1800
 timeout = 7200
-requires = ["box", "server-release"]
+requires = ["box", "binaries-release"]
 proves = "the capacity-arc envelope holds at 30M keys"
 
 # ── full: doors ──────────────────────────────────────────────────────
@@ -1137,7 +1137,7 @@ tier = "full"
 cmd = "bash -c 'cargo build -q -p kevy-mcp && bash bench/mcpgate.sh target/debug/kevy'"
 expected = 300
 timeout = 1800
-requires = ["node", "server-debug"]
+requires = ["node", "binaries-debug"]
 proves = "the MCP protocol end to end"
 
 [[check]]
