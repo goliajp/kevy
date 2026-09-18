@@ -2,10 +2,10 @@
   "corpus": "c1",
   "platform": "linux",
   "kind": "symbols/qualified-path",
-  "tree": "a2fbe128f4a75597e7c924f4419cce4963a3c43d",
-  "total_regions": 191073,
-  "dead_regions": 26050,
-  "llvm_per_instantiation_dead": 27126,
+  "tree": "5cb014661ab5dcfc12f9d8a17abeba8a8b1fc9da",
+  "total_regions": 191121,
+  "dead_regions": 26008,
+  "llvm_per_instantiation_dead": 27099,
   "crates": {
     "kevy": {
       "regions": 30292,
@@ -24,12 +24,12 @@
       "dead": 17
     },
     "kevy-chaos": {
-      "regions": 1086,
+      "regions": 1134,
       "dead": 426
     },
     "kevy-cli": {
       "regions": 26383,
-      "dead": 2067
+      "dead": 2066
     },
     "kevy-client": {
       "regions": 4887,
@@ -73,7 +73,7 @@
     },
     "kevy-index": {
       "regions": 6530,
-      "dead": 446
+      "dead": 435
     },
     "kevy-jni": {
       "regions": 526,
@@ -129,7 +129,7 @@
     },
     "kevy-rt": {
       "regions": 16534,
-      "dead": 4696
+      "dead": 4675
     },
     "kevy-scalar": {
       "regions": 4455,
@@ -149,7 +149,7 @@
     },
     "kevy-store": {
       "regions": 19253,
-      "dead": 1485
+      "dead": 1488
     },
     "kevy-sys": {
       "regions": 1048,
@@ -489,7 +489,7 @@
     "kevy::die::": 3,
     "kevy::dispatch::cmd_select::": 4,
     "kevy::dispatch::dispatch_conn::": 3,
-    "kevy::dispatch::dispatch_with_proto::": 14,
+    "kevy::dispatch::dispatch_with_proto::": 10,
     "kevy::dispatch_collections::cmd_brpoplpush::": 6,
     "kevy::dispatch_collections::cmd_lmove::": 5,
     "kevy::dispatch_collections::dispatch_hash::": 4,
@@ -768,7 +768,7 @@
     "kevy_alloc::large::with_pool::": 1,
     "kevy_alloc::os::discard": 1,
     "kevy_alloc::os::map_aligned": 4,
-    "kevy_alloc::os::trim": 3,
+    "kevy_alloc::os::trim": 1,
     "kevy_alloc::os::unmap": 1,
     "kevy_alloc::outbound::Outbound::flush": 9,
     "kevy_alloc::pagemap::SpanMeta::alloc_slot": 1,
@@ -780,15 +780,16 @@
     "kevy_bytes::SmallBytes::clone_heap": 2,
     "kevy_bytes::SmallBytes::eq_heap_heap": 1,
     "kevy_bytes::find_crlf::find_crlf": 4,
-    "kevy_chaos::harness::Harness::build_child_toml": 10,
+    "kevy_chaos::harness::Harness::answers_ping": 1,
+    "kevy_chaos::harness::Harness::build_child_toml": 9,
     "kevy_chaos::harness::Harness::drop": 1,
     "kevy_chaos::harness::Harness::kill": 17,
     "kevy_chaos::harness::Harness::port": 3,
     "kevy_chaos::harness::Harness::restart": 11,
-    "kevy_chaos::harness::Harness::spawn": 1,
     "kevy_chaos::harness::Harness::start_child": 7,
+    "kevy_chaos::harness::Harness::stderr_tail": 2,
     "kevy_chaos::harness::Harness::wait_exit": 21,
-    "kevy_chaos::harness::Harness::wait_ready": 4,
+    "kevy_chaos::harness::Harness::wait_ready": 3,
     "kevy_chaos::harness::HarnessConfig::with_threads": 4,
     "kevy_chaos::harness::apply_rlimits": 23,
     "kevy_chaos::harness::default_kevy_bin": 3,
@@ -1168,7 +1169,7 @@
     "kevy_cli::tools::prefix::usage": 1,
     "kevy_cli::tools::prefix::words": 1,
     "kevy_cli::tools::session::other": 4,
-    "kevy_cli::tools::session::run": 7,
+    "kevy_cli::tools::session::run": 6,
     "kevy_cli::tools::sql::apply": 3,
     "kevy_cli::tools::sql::parse_sql_args": 2,
     "kevy_cli::tools::sql::print_entries": 2,
@@ -2511,9 +2512,9 @@
     "kevy_rt::shard::Shard::build_xread_targets": 2,
     "kevy_rt::shard::Shard::build_zalgebra_store::": 4,
     "kevy_rt::shard::Shard::build_zintercard::": 4,
-    "kevy_rt::shard::Shard::cancel_xshard_on_close": 8,
+    "kevy_rt::shard::Shard::cancel_xshard_on_close": 2,
     "kevy_rt::shard::Shard::check_repl_ack_waiters": 53,
-    "kevy_rt::shard::Shard::check_repl_apply_waiters": 28,
+    "kevy_rt::shard::Shard::check_repl_apply_waiters": 2,
     "kevy_rt::shard::Shard::check_tee_overrun": 27,
     "kevy_rt::shard::Shard::client_getname::": 10,
     "kevy_rt::shard::Shard::client_info": 5,
@@ -2539,7 +2540,7 @@
     "kevy_rt::shard::Shard::drain_inbound": 1,
     "kevy_rt::shard::Shard::drain_inbound_core_slow::": 50,
     "kevy_rt::shard::Shard::drain_persist_on_shutdown": 1,
-    "kevy_rt::shard::Shard::drain_replica_inbox": 3,
+    "kevy_rt::shard::Shard::drain_replica_inbox": 4,
     "kevy_rt::shard::Shard::drain_store_notify": 15,
     "kevy_rt::shard::Shard::drain_streaming_outputs": 9,
     "kevy_rt::shard::Shard::dump_closing_conn": 23,
@@ -2552,7 +2553,6 @@
     "kevy_rt::shard::Shard::epoll_aof_setup": 10,
     "kevy_rt::shard::Shard::epoll_aof_tick": 12,
     "kevy_rt::shard::Shard::epoll_stamp_hold": 5,
-    "kevy_rt::shard::Shard::epoll_tick_persist": 2,
     "kevy_rt::shard::Shard::exec_abort_if_dirty": 1,
     "kevy_rt::shard::Shard::exec_client_kill": 43,
     "kevy_rt::shard::Shard::exec_client_list": 1,
@@ -2647,7 +2647,7 @@
     "kevy_rt::shard::Shard::repl_waiter_reply": 5,
     "kevy_rt::shard::Shard::replica_conn_is_live": 11,
     "kevy_rt::shard::Shard::replica_io_failed": 8,
-    "kevy_rt::shard::Shard::replica_readable": 27,
+    "kevy_rt::shard::Shard::replica_readable": 24,
     "kevy_rt::shard::Shard::replica_writable": 13,
     "kevy_rt::shard::Shard::replicas_brief": 29,
     "kevy_rt::shard::Shard::reply_feed_error": 13,
@@ -3176,7 +3176,7 @@
     "kevy_store::stream::StreamData::pending_summary": 1,
     "kevy_store::stream::StreamData::read_after": 1,
     "kevy_store::stream::StreamData::readgroup": 2,
-    "kevy_store::stream::StreamData::resolve_xadd_id": 2,
+    "kevy_store::stream::StreamData::resolve_xadd_id": 3,
     "kevy_store::stream::StreamData::revrange": 5,
     "kevy_store::stream::StreamData::trim_maxlen": 2,
     "kevy_store::stream::StreamData::trim_minid": 1,
@@ -3417,7 +3417,7 @@
     "tokio::net::tcp::stream::TcpStream::poll_flush": 5,
     "tokio::net::tcp::stream::TcpStream::poll_read": 2
   },
-  "envelope_runs": 4,
+  "envelope_runs": 3,
   "history": [
     {
       "accepted": [
@@ -3691,6 +3691,12 @@
       "symbols": 3206,
       "regions": 26050,
       "reason": "Four readings of tree a2fbe128 (the D4 baseline commit; same code, the JSON only). kevy::replica_runner_events::maybe_ack is dead in three of the four and executed in the fourth: a replica ack that a run either reaches in time or does not, which is what an envelope exists to absorb. The three-reading envelope recorded a moment earlier happened to catch the run where it executed, and CI's fourth reading then joined it."
+    },
+    {
+      "envelope_over": 3,
+      "symbols": 3206,
+      "regions": 26008,
+      "reason": "answers_ping's write-failure return and stderr_tail's unreadable arm join the set: both are error paths on a socket and a file this harness creates itself, neither can be made to fail from a test, and an unreachable-by-argument branch still has to be there"
     }
   ]
 }
