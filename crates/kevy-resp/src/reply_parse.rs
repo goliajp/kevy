@@ -380,10 +380,13 @@ fn parse_blob_error_reply(buf: &[u8]) -> Result<Option<(Reply, usize)>, Protocol
     Ok(Some((Reply::BlobError(buf[data_start..data_end].to_vec()), data_end + 2)))
 }
 
-/// A length-prefixed payload ends in CRLF. A wrong length prefix would
-/// otherwise be read as a shorter payload and the rest of the stream
-/// parsed from the middle of a value — silently, a reply out of step with
-/// its request. The request parser has always refused this.
+/// A length-prefixed payload ends in CRLF. A reader that only steps over
+/// `len + 2` bytes without looking survives the frame and then parses the
+/// stream from the middle of a value — silently, every later reply one out
+/// of step with its request, which is worse than the error it declined to
+/// raise. Two bytes of comparison refuse nothing conformant: RESP requires
+/// the terminator, and this is what the request parser has always done to
+/// the other direction.
 fn payload_end(buf: &[u8], data_end: usize, what: &'static str) -> Result<(), ProtocolError> {
     if &buf[data_end..data_end + 2] == b"\r\n" {
         Ok(())
