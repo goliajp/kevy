@@ -340,7 +340,7 @@ def run_tier(suite, checks, tier, only=None, area=None):
     for c in selected:
         gap = requirement_gap(c)
         if gap:
-            results.append((c, "NOT-RUN", 0.0, gap))
+            results.append((c, "NOT-RUN", 0.0, gap, False))
             print(f"  ⊘ {c['id']:<22} NOT-RUN  ({gap})")
             continue
         t0 = time.monotonic()
@@ -366,7 +366,7 @@ def run_tier(suite, checks, tier, only=None, area=None):
             r = subprocess.CompletedProcess(c["cmd"], proc.returncode, out, err)
             took = time.monotonic() - t0
             if r.returncode == 0:
-                results.append((c, "PASS", took, ""))
+                results.append((c, "PASS", took, "", True))
                 print(f"  ✓ {c['id']:<22} {took:6.1f}s")
             elif r.returncode == 2 and c.get("skip_is_exit_2"):
                 # Exit 2 means "I did not answer the question", not "the answer
@@ -374,19 +374,19 @@ def run_tier(suite, checks, tier, only=None, area=None):
                 # not read as a failure, and must not read as a pass either.
                 # The row carries the reason, the way a NOT-RUN does.
                 why = ((r.stdout + r.stderr).strip().splitlines() or ["exit 2"])[-1]
-                results.append((c, "SKIPPED", took, why))
+                results.append((c, "SKIPPED", took, why, False))
                 print(f"  ⊘ {c['id']:<22} {took:6.1f}s  SKIPPED — {why[:80]}")
             else:
                 tail = (r.stdout + r.stderr).strip().splitlines()[-6:]
                 status = "ADVISORY" if c.get("advisory") else "FAIL"
-                results.append((c, status, took, "\n".join(tail)))
+                results.append((c, status, took, "\n".join(tail), True))
                 mark = "△" if status == "ADVISORY" else "✗"
                 print(f"  {mark} {c['id']:<22} {took:6.1f}s  {status}")
                 for line in tail:
                     print(f"      {line[:140]}")
         except subprocess.TimeoutExpired:
             took = time.monotonic() - t0
-            results.append((c, "TIMEOUT", took, f"timed out after {c['timeout']}s"))
+            results.append((c, "TIMEOUT", took, f"timed out after {c['timeout']}s", False))
             print(f"  ✗ {c['id']:<22} {took:6.1f}s  TIMEOUT ({c['timeout']}s)")
 
     # Exit hygiene: the tier leaves the tree as it found it. rootgate
@@ -416,13 +416,13 @@ def run_tier(suite, checks, tier, only=None, area=None):
                 except (ValueError, ProcessLookupError, PermissionError):
                     pass
             results.append(({"id": "exit-hygiene-procs", "area": "hygiene"},
-                            "FAIL", 0.0, "\n".join(leaked_rows[:4])))
+                            "FAIL", 0.0, "\n".join(leaked_rows[:4]), False))
         sweep = subprocess.run(["bash", "bench/rootgate.sh"], cwd=ROOT,
                                capture_output=True, text=True)
         if sweep.returncode != 0:
             tail = sweep.stdout.strip().splitlines()[:4]
             results.append(({"id": "exit-hygiene", "area": "hygiene"},
-                            "FAIL", 0.0, "\n".join(tail)))
+                            "FAIL", 0.0, "\n".join(tail), False))
             print(f"  ✗ exit-hygiene: the tier itself left residue behind")
             for line in tail:
                 print(f"      {line[:140]}")
@@ -438,15 +438,19 @@ def run_tier(suite, checks, tier, only=None, area=None):
     # build cleans this too.
     out = ROOT / f"target/suite-{tier}.json"
     out.parent.mkdir(exist_ok=True)
-    # `seconds` is a measurement only when the check ran to completion. A
-    # TIMEOUT row's seconds is the ceiling it hit, and recording the two in
-    # one field is how 120.1 s of timeout became "this gate costs two
-    # minutes" in a later decomposition. `measured` is the witness: read
-    # `seconds` only where it is true.
+    # `seconds` is a measurement only where `measured` says so, and each
+    # row decides that where it is appended rather than here, because the
+    # answer does not follow from the status alone. A TIMEOUT row's seconds
+    # is the ceiling it hit, and recording the two in one field is how
+    # 120.1 s of timeout became "this gate costs two minutes" in a later
+    # decomposition. A NOT-RUN row never ran; a SKIPPED one ran only as far
+    # as refusing to answer; the two FAIL rows this runner synthesises after
+    # the tier carry no duration at all. None of those four is what the
+    # check costs, and all four used to be filed as though they were.
     out.write_text(json.dumps(
         [{"id": c["id"], "status": s, "seconds": round(t, 1),
-          "measured": s != "TIMEOUT",
-          "ceiling": c["timeout"] if s == "TIMEOUT" else None} for c, s, t, _ in results],
+          "measured": m,
+          "ceiling": c["timeout"] if s == "TIMEOUT" else None} for c, s, t, _, m in results],
         indent=1))
 
     budget = suite["budgets"].get(tier)
@@ -455,7 +459,7 @@ def run_tier(suite, checks, tier, only=None, area=None):
           f"{wall:.0f}s" + (f" (budget {budget}s)" if budget else ""))
     if notrun:
         print("  not run here (loudly, not silently):")
-        for c, _, _, why in notrun:
+        for c, _, _, why, _ in notrun:
             reqs = suite.get("requirements", {})
             where = [reqs.get(r, "") for r in c.get("requires", [])]
             where = [w for w in where if w]
@@ -463,7 +467,7 @@ def run_tier(suite, checks, tier, only=None, area=None):
                    "  — runs in NO environment this project has"
             print(f"    ⊘ {c['id']}: {why}{tail}")
     if advis:
-        for c, _, _, why in advis:
+        for c, _, _, why, _ in advis:
             print(f"  △ advisory {c['id']}: {why.splitlines()[-1][:120] if why else ''}")
             # Why it cannot redden the tier, at the moment it did not.
             reason = " ".join(c.get("advisory_reason", "").split())
@@ -471,7 +475,7 @@ def run_tier(suite, checks, tier, only=None, area=None):
                 print(f"      advisory because: {reason[:180]}")
     if fails:
         print("  failed:")
-        for c, _, _, _ in fails:
+        for c, _, _, _, _ in fails:
             print(f"    ✗ {c['id']}")
         return 1
     if budget and wall > budget:

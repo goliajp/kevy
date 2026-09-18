@@ -33,7 +33,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 def main() -> int:
     manifest = tomllib.loads((ROOT / "suite" / "manifest.toml").read_text())
     declared = {c["id"]: c for c in manifest["check"]}
-    bad, stale, seen = [], [], 0
+    bad, stale, silent, seen = [], [], [], 0
 
     for path in sorted((ROOT / "target").glob("suite-*.json")):
         rows = json.loads(path.read_text())
@@ -51,6 +51,14 @@ def main() -> int:
                          f"split — largest is {worst['id']} at {worst.get('seconds')}s, which "
                          f"may be a timeout kill. Re-run that tier before using it as a target")
             continue
+        unmeasured = [r["id"] for r in rows if not r["measured"]]
+        if unmeasured:
+            # Said out loud, not failed: a row with no duration is honest.
+            # What is not honest is a reader taking `seconds` from it, which
+            # is what a silent skip here invites.
+            silent.append(f"{path.name}: {len(unmeasured)} row(s) carry no duration "
+                          f"(not run, skipped, or timed out) — {', '.join(unmeasured[:6])}"
+                          f"{'…' if len(unmeasured) > 6 else ''}")
         for row in rows:
             if not row["measured"]:
                 continue
@@ -67,6 +75,8 @@ def main() -> int:
         return 0
     for line in stale:
         print(f"  STALE FORMAT {line}", file=sys.stderr)
+    for line in silent:
+        print(f"  {line}")
     for line in bad:
         print(f"  {line}", file=sys.stderr)
     print(f"check_suite_ledger: {'FAIL' if bad else 'ok'} — {seen} ledger(s), "
