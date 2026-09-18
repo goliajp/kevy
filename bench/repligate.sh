@@ -85,7 +85,7 @@ kill -STOP $WPID
 # exactly 2s on an idle box) that turned load-sensitive on slow runners.
 D1=""; D2=""
 for _ in $(seq 30); do
-    D2=$($CLI digest -p $REPPORT p:)
+    D2=$($CLI -p $REPPORT --kevy digest p:)
     [ -n "$D1" ] && [ "$D1" = "$D2" ] && break
     D1="$D2"
     sleep 1
@@ -96,7 +96,7 @@ if [ "$D1" != "$D2" ] || [ -z "$D1" ]; then
 fi
 # and it must STAY stable — one more read a second later.
 sleep 1
-D2=$($CLI digest -p $REPPORT p:)
+D2=$($CLI -p $REPPORT --kevy digest p:)
 if [ "$D1" != "$D2" ]; then
     echo "repligate: FAIL — replica digest moved after convergence ($D1 vs $D2)"
     exit 1
@@ -121,13 +121,13 @@ kill -STOP $WPID
 # same bounded convergence as clamp 1.
 D3=""; D4=""
 for _ in $(seq 30); do
-    D4=$($CLI digest -p $REPPORT p:)
+    D4=$($CLI -p $REPPORT --kevy digest p:)
     [ -n "$D3" ] && [ "$D3" = "$D4" ] && break
     D3="$D4"
     sleep 1
 done
 sleep 1
-D4B=$($CLI digest -p $REPPORT p:)
+D4B=$($CLI -p $REPPORT --kevy digest p:)
 if [ "$D3" != "$D4" ] || [ "$D4" != "$D4B" ] || [ "$N" -lt 50003 ]; then
     echo "repligate: FAIL — post-restart digest unstable ($D3 vs $D4 vs $D4B)"
     exit 1
@@ -172,13 +172,13 @@ done
 kill -STOP $WPID
 D5=""; D6=""
 for _ in $(seq 30); do
-    D6=$($CLI digest -p $REPPORT p:)
+    D6=$($CLI -p $REPPORT --kevy digest p:)
     [ -n "$D5" ] && [ "$D5" = "$D6" ] && break
     D5="$D6"
     sleep 1
 done
 sleep 1
-D6B=$($CLI digest -p $REPPORT p:)
+D6B=$($CLI -p $REPPORT --kevy digest p:)
 if [ "$D5" != "$D6" ] || [ "$D6" != "$D6B" ] || [ -z "$D5" ]; then
     echo "repligate: FAIL — post-SIGKILL-restart digest unstable ($D5 vs $D6 vs $D6B)"
     exit 1
