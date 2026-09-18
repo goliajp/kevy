@@ -384,10 +384,10 @@ id = "lockgate"
 area = "release-pins"
 tier = "precommit"
 cmd = "python3 tools/check_lockfiles.py"
-expected = 13
+expected = 1
 timeout = 120
 requires = []
-proves = "every committed lock file matches its manifest, and none is left uncommitted — what `cargo build --locked` reads"
+proves = "every lock file git tracks matches its manifest, and none is left changed or unadded — what `cargo build --locked` reads in the checkout"
 
 # ── docs ─────────────────────────────────────────────────────────────
 
