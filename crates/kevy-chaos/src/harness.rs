@@ -202,30 +202,74 @@ impl Harness {
         toml
     }
 
-    fn wait_ready(&self) -> io::Result<()> {
+    /// Wait until the child answers PING.
+    ///
+    /// A child that died and a child that is slow are not the same failure,
+    /// and a probe that only connects reports them as one. Two primaries
+    /// timed out here in a parallel `cargo test --workspace` and left an
+    /// empty stderr log and a data dir holding nothing, so "kevy ready
+    /// timeout" was the whole of what ten seconds could be asked about. Each
+    /// round now asks the child whether it is still running, and an exit is
+    /// reported as an exit.
+    fn wait_ready(&mut self) -> io::Result<()> {
         let deadline = Instant::now() + self.config.spawn_timeout;
         let addr = (format!("127.0.0.1:{}", self.config.port).as_str())
             .to_socket_addrs()?
             .next()
             .expect("addr resolves");
         loop {
-            if let Ok(mut s) = TcpStream::connect_timeout(&addr, Duration::from_millis(200)) {
-                use std::io::{Read, Write};
-                let _ = s.set_read_timeout(Some(Duration::from_millis(200)));
-                if s.write_all(b"*1\r\n$4\r\nPING\r\n").is_ok() {
-                    let mut buf = [0u8; 16];
-                    if let Ok(n) = s.read(&mut buf)
-                        && n > 0
-                        && buf.starts_with(b"+PONG")
-                    {
-                        return Ok(());
-                    }
-                }
+            if self.answers_ping(&addr) {
+                return Ok(());
+            }
+            if let Some(status) = self.child.as_mut().and_then(|c| c.try_wait().ok()).flatten() {
+                return Err(io::Error::other(format!(
+                    "kevy exited with {status} before it listened on {}: {}",
+                    self.config.port,
+                    self.stderr_tail()
+                )));
             }
             if Instant::now() > deadline {
-                return Err(io::Error::new(io::ErrorKind::TimedOut, "kevy ready timeout"));
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!(
+                        "kevy ready timeout: still running after {:?}, never answered PING \
+                         on {}: {}",
+                        self.config.spawn_timeout,
+                        self.config.port,
+                        self.stderr_tail()
+                    ),
+                ));
             }
             std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// One PING round trip; false for any failure, which is a reason to keep
+    /// waiting rather than a diagnosis.
+    fn answers_ping(&self, addr: &std::net::SocketAddr) -> bool {
+        use std::io::{Read, Write};
+        let Ok(mut s) = TcpStream::connect_timeout(addr, Duration::from_millis(200)) else {
+            return false;
+        };
+        let _ = s.set_read_timeout(Some(Duration::from_millis(200)));
+        if s.write_all(b"*1\r\n$4\r\nPING\r\n").is_err() {
+            return false;
+        }
+        let mut buf = [0u8; 16];
+        matches!(s.read(&mut buf), Ok(n) if n > 0 && buf.starts_with(b"+PONG"))
+    }
+
+    /// The last of what the child wrote to stderr, or that it wrote nothing
+    /// — which is itself worth reading, and was the case both times.
+    fn stderr_tail(&self) -> String {
+        let path = self.config.data_dir.join("kevy.stderr.log");
+        match std::fs::read_to_string(&path) {
+            Ok(text) if !text.trim().is_empty() => {
+                let tail: Vec<&str> = text.trim().lines().rev().take(3).collect();
+                format!("stderr: {}", tail.into_iter().rev().collect::<Vec<_>>().join(" | "))
+            }
+            Ok(_) => "stderr empty".into(),
+            Err(e) => format!("stderr unreadable: {e}"),
         }
     }
 
