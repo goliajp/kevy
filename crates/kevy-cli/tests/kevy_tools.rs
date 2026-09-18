@@ -364,3 +364,88 @@ fn bare_shipped_words_keep_working_with_a_deprecation_line() {
     assert_eq!(applied.stdout, "TABLE.DECLARE t → OK\n", "{}", applied.stderr);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// One `*N\r\n$len\r\n…` request; None until the whole of it is in `buf`.
+fn read_argv(buf: &[u8]) -> Option<(Vec<String>, usize)> {
+    let line = |at: usize| buf[at..].windows(2).position(|w| w == b"\r\n").map(|i| at + i);
+    let end = line(0)?;
+    if buf.first() != Some(&b'*') {
+        return None;
+    }
+    let n: usize = std::str::from_utf8(&buf[1..end]).ok()?.parse().ok()?;
+    let mut at = end + 2;
+    let mut argv = Vec::with_capacity(n);
+    for _ in 0..n {
+        let hdr = line(at)?;
+        let len: usize = std::str::from_utf8(&buf[at + 1..hdr]).ok()?.parse().ok()?;
+        if buf.len() < hdr + 2 + len + 2 {
+            return None;
+        }
+        argv.push(String::from_utf8_lossy(&buf[hdr + 2..hdr + 2 + len]).into_owned());
+        at = hdr + 2 + len + 2;
+    }
+    Some((argv, at))
+}
+
+/// A server that answers AUTH with `to_auth`, a PREFIX.DIGEST with an empty
+/// prefix and anything else with `+OK`; it hands back every request it read,
+/// in order, which is how the connection's own traffic can be asserted on.
+fn auth_server(to_auth: &'static [u8]) -> (u16, std::thread::JoinHandle<Vec<Vec<String>>>) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = std::thread::spawn(move || {
+        use std::io::{Read, Write};
+        let (mut conn, _) = listener.accept().unwrap();
+        let (mut buf, mut seen, mut chunk) = (Vec::new(), Vec::new(), [0u8; 4096]);
+        loop {
+            match conn.read(&mut chunk) {
+                Ok(0) | Err(_) => return seen,
+                Ok(n) => buf.extend_from_slice(&chunk[..n]),
+            }
+            while let Some((argv, used)) = read_argv(&buf) {
+                buf.drain(..used);
+                let reply: &[u8] = match argv[0].to_uppercase().as_str() {
+                    "AUTH" => to_auth,
+                    "PREFIX.DIGEST" => b"*2\r\n:0\r\n$1\r\n-\r\n",
+                    _ => b"+OK\r\n",
+                };
+                seen.push(argv);
+                if conn.write_all(reply).is_err() {
+                    return seen;
+                }
+            }
+        }
+    });
+    (port, handle)
+}
+
+#[test]
+fn a_refused_auth_stops_a_tool_before_it_sends_its_own_command() {
+    let (port, server) = auth_server(b"-WRONGPASS invalid username-password pair\r\n");
+    let refused = cli(&[
+        "--user",
+        "u",
+        "-a",
+        "p",
+        "--no-auth-warning",
+        "-p",
+        &port.to_string(),
+        "--kevy",
+        "digest",
+        "u:",
+    ]);
+    assert!(refused.stderr.starts_with("AUTH failed: WRONGPASS"), "{}", refused.stderr);
+    assert_ne!(refused.code, 0);
+    assert_eq!(server.join().unwrap(), [["AUTH", "u", "p"]], "AUTH, and nothing after it");
+}
+
+#[test]
+fn an_accepted_auth_leaves_the_tool_working_on_the_same_connection() {
+    let (port, server) = auth_server(b"+OK\r\n");
+    let done =
+        cli(&["-a", "p", "--no-auth-warning", "-p", &port.to_string(), "--kevy", "digest", "u:"]);
+    assert!(done.stdout.starts_with("0 keys "), "{}{}", done.stdout, done.stderr);
+    let sent = server.join().unwrap();
+    assert_eq!(sent[0], ["AUTH", "p"], "a one-argument AUTH without --user");
+    assert_eq!(sent[1..], [["PREFIX.DIGEST".to_string(), "u:".to_string()]], "{sent:?}");
+}
