@@ -48,7 +48,7 @@ fn wire_torture_parser_fuzz_1m() {
 #[ignore = "chaos test — opt-in via --ignored, needs `cargo build --release -p kevy` first"]
 fn wire_torture_live_kevy_pathological_frames() {
     let bin_path = resolve_kevy_bin();
-    let port = pick_free_port().expect("free port");
+    let port = pick_free_port();
     let tmp = std::env::temp_dir().join(format!("kevy-chaos-torture-{port}"));
     let _ = std::fs::remove_dir_all(&tmp);
 

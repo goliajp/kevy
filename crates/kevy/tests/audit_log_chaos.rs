@@ -33,7 +33,7 @@ const N_ADMIN_CALLS: usize = 200;
 #[ignore = "chaos test — opt-in via --ignored, needs `cargo build --release -p kevy` first"]
 fn audit_log_captures_admin_calls_in_order() {
     let bin_path = resolve_kevy_bin();
-    let port = pick_free_port().expect("free port");
+    let port = pick_free_port();
     let tmp = std::env::temp_dir().join(format!("kevy-chaos-audit-{port}"));
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(&tmp).expect("mkdir tmp");

@@ -32,7 +32,7 @@ use kevy_chaos::{
 #[ignore = "chaos test — opt-in via --ignored, needs `cargo build --release -p kevy` first"]
 fn sigterm_drains_cleanly_no_lost_writes() {
     let bin_path = resolve_kevy_bin();
-    let port = pick_free_port().expect("free port");
+    let port = pick_free_port();
     let tmp = std::env::temp_dir().join(format!("kevy-chaos-sigterm-{port}"));
     let _ = std::fs::remove_dir_all(&tmp);
 

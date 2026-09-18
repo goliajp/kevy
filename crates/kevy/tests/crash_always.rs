@@ -41,7 +41,7 @@ fn crash_always_fsync_zero_loss() {
         }
     });
 
-    let port = pick_free_port().expect("free port");
+    let port = pick_free_port();
     let tmp = std::env::temp_dir().join(format!("kevy-chaos-always-{port}"));
     let _ = std::fs::remove_dir_all(&tmp);
 

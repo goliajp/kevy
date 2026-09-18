@@ -30,7 +30,7 @@ fn stand_in(name: &str, body: &str) -> PathBuf {
 const ROOM_FOR_TWO_ROUNDS: Duration = Duration::from_millis(2000);
 
 fn config(bin: PathBuf, dir: &str) -> kevy_chaos::HarnessConfig {
-    let port = kevy_chaos::pick_free_port().expect("a port");
+    let port = kevy_chaos::pick_free_port();
     let dir = std::env::temp_dir().join(format!("{dir}-{port}"));
     let _ = std::fs::remove_dir_all(&dir);
     kevy_chaos::HarnessConfig {

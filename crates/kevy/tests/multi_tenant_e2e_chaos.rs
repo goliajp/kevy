@@ -41,7 +41,7 @@ const SETS_PER_WRITER: usize = 250;
 #[ignore = "chaos test — opt-in via --ignored, needs `cargo build --release -p kevy` first"]
 fn multi_tenant_e2e_isolation_and_fairness() {
     let bin_path = resolve_kevy_bin();
-    let port = pick_free_port().expect("free port");
+    let port = pick_free_port();
     let tmp = std::env::temp_dir().join(format!("kevy-chaos-tenant-{port}"));
     let _ = std::fs::remove_dir_all(&tmp);
 

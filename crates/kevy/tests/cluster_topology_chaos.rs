@@ -27,7 +27,7 @@ use kevy_chaos::{Harness, HarnessConfig, pick_free_port};
 #[ignore = "chaos test — opt-in via --ignored, needs `cargo build --release -p kevy` first"]
 fn cluster_topology_routing_under_chaos() {
     let bin_path = resolve_kevy_bin();
-    let main_port = pick_free_port().expect("free port");
+    let main_port = pick_free_port();
     // Reserve a block of consecutive ports for shard-specific cluster
     // listeners: port_base, port_base+1, port_base+2, port_base+3.
     let cluster_port_base = free_port_block(8);
