@@ -23,6 +23,7 @@ Exit code: 1 on any hard FAIL or audit violation; 0 otherwise (the
 verdict still lists NOT-RUN and advisory rows by name).
 """
 
+import os
 import functools
 import json
 import pathlib
@@ -116,7 +117,6 @@ def _have_box():
 
 
 def os_cpus():
-    import os
     try:
         return len(os.sched_getaffinity(0))  # type: ignore[attr-defined]
     except AttributeError:
@@ -193,10 +193,23 @@ def _have_pgcmp_infra():
 
 
 def _have_device():
-    import os
     if os.environ.get("KEVY_DEVICE") == "1":
         return True, ""
     return False, "no device session (set KEVY_DEVICE=1 on the machine that has one)"
+
+
+def children_cpu():
+    """CPU the checks' own subprocesses have used, user plus system.
+
+    A duration is only a cost when the machine was the check's. `cargo test
+    -p kevy --test differential_server_vs_embedded` took 5.9s in prerelease
+    and 578.2s in full, from the same tree minutes apart: run by hand it is
+    0.14s of test inside 27s of wall and 1.9s of CPU, because another cargo
+    on this machine held the target lock. Recording wall alone makes that row
+    read as a check that costs ten minutes.
+    """
+    t = os.times()
+    return t.children_user + t.children_system
 
 
 def requirement_gap(check):
@@ -344,7 +357,7 @@ def run_tier(suite, checks, tier, only=None, area=None):
     if area:
         selected = [c for c in selected if c["area"] == area]
 
-    results = []
+    results, cpu_of = [], {}
     t_start = time.monotonic()
     for c in selected:
         gap = requirement_gap(c)
@@ -352,7 +365,7 @@ def run_tier(suite, checks, tier, only=None, area=None):
             results.append((c, "NOT-RUN", 0.0, gap, False))
             print(f"  ⊘ {c['id']:<22} NOT-RUN  ({gap})")
             continue
-        t0 = time.monotonic()
+        t0, cpu0 = time.monotonic(), children_cpu()
         try:
             # Its own process group, so a timeout kills the whole tree.
             # The first timeout this runner ever fired killed the check's
@@ -360,7 +373,7 @@ def run_tier(suite, checks, tier, only=None, area=None):
             # went on writing runtime files into the repo root, and the
             # NEXT check (rootgate) failed for it. A kill that leaves the
             # children alive converts one red into two, a run apart.
-            import os, signal
+            import signal
             proc = subprocess.Popen(
                 c["cmd"], shell=True, cwd=ROOT,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
@@ -374,6 +387,7 @@ def run_tier(suite, checks, tier, only=None, area=None):
                 raise
             r = subprocess.CompletedProcess(c["cmd"], proc.returncode, out, err)
             took = time.monotonic() - t0
+            cpu_of[c["id"]] = children_cpu() - cpu0
             if r.returncode == 0:
                 results.append((c, "PASS", took, "", True))
                 print(f"  ✓ {c['id']:<22} {took:6.1f}s")
@@ -395,6 +409,7 @@ def run_tier(suite, checks, tier, only=None, area=None):
                     print(f"      {line[:140]}")
         except subprocess.TimeoutExpired:
             took = time.monotonic() - t0
+            cpu_of[c["id"]] = children_cpu() - cpu0
             results.append((c, "TIMEOUT", took, f"timed out after {c['timeout']}s", False))
             print(f"  ✗ {c['id']:<22} {took:6.1f}s  TIMEOUT ({c['timeout']}s)")
 
@@ -410,7 +425,7 @@ def run_tier(suite, checks, tier, only=None, area=None):
         # some earlier check had leaked. Only processes running THIS
         # repo's binaries are ours to kill; another session's servers are
         # not, and pgrep's own invocation must not match itself.
-        import os, signal as sig
+        import signal as sig
         leaked = subprocess.run(
             ["pgrep", "-af", str(ROOT / "target")],
             capture_output=True, text=True).stdout.strip()
@@ -467,6 +482,7 @@ def run_tier(suite, checks, tier, only=None, area=None):
     if not only and not area:
         out.write_text(json.dumps(
             [{"id": c["id"], "status": s, "seconds": round(t, 1),
+              "cpu_seconds": round(cpu_of.get(c["id"], 0.0), 1),
               "measured": m,
               "ceiling": c["timeout"] if s == "TIMEOUT" else None} for c, s, t, _, m in results],
             indent=1))
