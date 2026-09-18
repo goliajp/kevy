@@ -189,7 +189,7 @@ kevy-cli -p 6004 --kevy delete-prefix --rate 5000 order:1001:   # children gone,
 kevy-cli -p 6004 HSET order:9001 status paid
 kevy-cli -p 6004 FEED.SHARDS
 kevy-cli -p 6004 FEED.TAIL 0                             # a fresh consumer's starting cursor
-kevy-cli -p 6004 FEED.READ 0 $(kevy-cli -p 6004 FEED.TAIL 0 | head -1 | awk '{print $3}') 0 COUNT 10 PREFIX order:  # generation は FEED.TAIL から:カウンタではなく識別子
+kevy-cli -p 6004 FEED.READ 0 $(kevy-cli -p 6004 FEED.TAIL 0 | head -1) 0 COUNT 10 PREFIX order:  # generation は FEED.TAIL から:カウンタではなく識別子
 ```
 
 ## 12. 監査履歴
@@ -201,7 +201,7 @@ CDCの保持期間こそが監査ログです。フレームはコミット順�
 ```console
 kevy-cli -p 6004 HSET acct:7 balance 100
 kevy-cli -p 6004 HSET acct:7 balance 90
-kevy-cli -p 6004 FEED.READ 0 $(kevy-cli -p 6004 FEED.TAIL 0 | head -1 | awk '{print $3}') 0 COUNT 100 PREFIX acct:  # 誰が何をいつ書いたか、コミット順に
+kevy-cli -p 6004 FEED.READ 0 $(kevy-cli -p 6004 FEED.TAIL 0 | head -1) 0 COUNT 100 PREFIX acct:  # 誰が何をいつ書いたか、コミット順に
 ```
 
 ## 13. ロールバックウィンドウ（逆方向ミラー）
@@ -212,7 +212,7 @@ kevy-cli -p 6004 FEED.READ 0 $(kevy-cli -p 6004 FEED.TAIL 0 | head -1 | awk '{pr
 
 ```console
 kevy-cli -p 6004 HSET user:42 name ada
-kevy-cli -p 6004 FEED.READ 0 $(kevy-cli -p 6004 FEED.TAIL 0 | head -1 | awk '{print $3}') 0 COUNT 10 PREFIX user:  # ミラー消費者の読み取りループ
+kevy-cli -p 6004 FEED.READ 0 $(kevy-cli -p 6004 FEED.TAIL 0 | head -1) 0 COUNT 10 PREFIX user:  # ミラー消費者の読み取りループ
 kevy-cli -p 6004 --kevy diff 127.0.0.1:6004 user:        # digests match: safe form of the check
 kevy-cli -h old-rds-mirror.internal -p 6379 --kevy diff 127.0.0.1:6004 user:   # needs-external
 ```
@@ -230,7 +230,7 @@ kevy-cli -h old-rds-mirror.internal -p 6379 --kevy diff 127.0.0.1:6004 user:   #
 ```console
 kevy-cli -p 6004 HSET order:1001 user_id 42 total 1999
 kevy-cli -p 6004 --kevy export --prefix order: /tmp/orders.resp
-kevy-cli -p 6004 FEED.READ 0 $(kevy-cli -p 6004 FEED.TAIL 0 | head -1 | awk '{print $3}') 0 COUNT 100 PREFIX order:  # CDC からウェアハウスへの読み取りループ
+kevy-cli -p 6004 FEED.READ 0 $(kevy-cli -p 6004 FEED.TAIL 0 | head -1) 0 COUNT 100 PREFIX order:  # CDC からウェアハウスへの読み取りループ
 ```
 
 ## 15. ロード順序（インデックス後回しの規則）
@@ -266,7 +266,7 @@ kevy-cli -p 6004 EXPIRE session:a7 3600
 kevy-cli -p 6004 HSET session:a7 turns 7 messages 'refund approved; awaiting confirmation'
 kevy-cli -p 6004 EXPIRE session:a7 3600                       # renew the lease on every turn
 kevy-cli -p 6004 FEED.TAIL 0                                  # audit cursor: where the log ends now
-kevy-cli -p 6004 FEED.READ 0 $(kevy-cli -p 6004 FEED.TAIL 0 | head -1 | awk '{print $3}') 0 COUNT 100 PREFIX session:  # generation は FEED.TAIL から:カウンタではなく識別子
+kevy-cli -p 6004 FEED.READ 0 $(kevy-cli -p 6004 FEED.TAIL 0 | head -1) 0 COUNT 100 PREFIX session:  # generation は FEED.TAIL から:カウンタではなく識別子
 ```
 
 `messages`フィールドの中身は、あなたのコンパクションステップが生成する要約なら何でも構いません。書き換えは`HSET`1回で、しかもすべての改訂はすでにコミット順の変更フレームになっています——多くのエージェントフレームワークが後付けする「会話履歴」テーブルは、レシピ12の監査ログとしてタダで手に入ります。
@@ -360,7 +360,7 @@ kevy-cli -p 6004 IDX.QUERY zone_w GROUPS BY sum LIMIT 10  # zones ranked by load
 ```console
 # needs [feed] enabled = true in kevy.toml (docs/cdc.md)
 kevy-cli -p 6004 FEED.TAIL 0
-kevy-cli -p 6004 FEED.READ 0 $(kevy-cli -p 6004 FEED.TAIL 0 | head -1 | awk '{print $3}') 0 COUNT 100 PREFIX reading:  # アップリンクのループ
+kevy-cli -p 6004 FEED.READ 0 $(kevy-cli -p 6004 FEED.TAIL 0 | head -1) 0 COUNT 100 PREFIX reading:  # アップリンクのループ
 ```
 
 レシピ19の`MAXLEN`キャップとTTLを組み合わせてください。生の読み取り値はノード上で有界に保たれ、集計行は小さいまま、フィードカーソルは再起動を生き延びます——kevyそれ自体の他に可動部品ゼロの、エッジの物語の全部です。
