@@ -25,17 +25,29 @@ fn stand_in(name: &str, body: &str) -> PathBuf {
     path
 }
 
-/// Long enough for a probe round — one connect attempt is up to 400ms — to
-/// happen at least twice, so the answer is the harness's and not the clock's.
-const ROOM_FOR_TWO_ROUNDS: Duration = Duration::from_millis(2000);
+/// The two tests want opposite things from the deadline, which is why they
+/// do not share one.
+///
+/// The exit case only has to outlast the child: the harness returns the
+/// moment it sees the exit, so a generous ceiling costs nothing and a tight
+/// one turns a busy machine into a wrong answer. It did — at 2s, under a load
+/// average of 22, `/bin/sh` had not been scheduled long enough to run `echo`
+/// and `exit 3`, so the harness reported the timeout it was being tested for
+/// NOT reporting. Ten seconds is the harness's own default.
+const LONGER_THAN_A_CHILD_TAKES_TO_DIE: Duration = Duration::from_secs(10);
+/// The timeout case has to wait its deadline out, every time, so it is short.
+/// It is satisfied by any child that is alive and not listening — one that is
+/// sleeping and one that is starved of CPU look the same to it, and both are
+/// the thing it asks about.
+const SHORT_ENOUGH_TO_WAIT_OUT: Duration = Duration::from_millis(1500);
 
-fn config(bin: PathBuf, dir: &str) -> kevy_chaos::HarnessConfig {
+fn config(bin: PathBuf, dir: &str, spawn_timeout: Duration) -> kevy_chaos::HarnessConfig {
     let port = kevy_chaos::pick_free_port();
     let dir = std::env::temp_dir().join(format!("{dir}-{port}"));
     let _ = std::fs::remove_dir_all(&dir);
     kevy_chaos::HarnessConfig {
         kevy_bin: bin,
-        spawn_timeout: ROOM_FOR_TWO_ROUNDS,
+        spawn_timeout,
         ..kevy_chaos::HarnessConfig::new(dir, port)
     }
 }
@@ -43,7 +55,7 @@ fn config(bin: PathBuf, dir: &str) -> kevy_chaos::HarnessConfig {
 #[test]
 fn a_child_that_exits_is_reported_as_an_exit_and_not_as_a_timeout() {
     let bin = stand_in("exits", "echo 'could not bind' >&2\nexit 3");
-    let cfg = config(bin.clone(), "kevy-chaos-exits");
+    let cfg = config(bin.clone(), "kevy-chaos-exits", LONGER_THAN_A_CHILD_TAKES_TO_DIE);
     let dir = cfg.data_dir.clone();
     let err = kevy_chaos::Harness::spawn(cfg).err().expect("the stand-in never listens");
     let said = err.to_string();
@@ -59,7 +71,7 @@ fn a_child_that_exits_is_reported_as_an_exit_and_not_as_a_timeout() {
 fn a_child_that_stays_up_without_listening_is_reported_as_a_timeout() {
     // `exec`, so killing the child kills the sleep rather than orphaning it.
     let bin = stand_in("hangs", "exec sleep 60");
-    let cfg = config(bin.clone(), "kevy-chaos-hangs");
+    let cfg = config(bin.clone(), "kevy-chaos-hangs", SHORT_ENOUGH_TO_WAIT_OUT);
     let dir = cfg.data_dir.clone();
     let err = kevy_chaos::Harness::spawn(cfg).err().expect("the stand-in never listens");
     let said = err.to_string();
