@@ -116,7 +116,6 @@ def skip(path: pathlib.Path) -> bool:
 # manifests, scripts, and the documents that tell a reader what to import.
 HISTORICAL = (
     "CHANGELOG.md",
-    ".claude/ROADMAP.md",
     "bench/FINDING-",
     "bench/PERF-",
 )
@@ -125,6 +124,14 @@ HISTORICAL = (
 def historical(p) -> bool:
     rel = str(p.relative_to(ROOT))
     return any(rel == h or rel.startswith(h) for h in HISTORICAL)
+
+
+def tracked():
+    """Every file git tracks. Layer 7 is about what the repository tells a
+    reader to import; a local file git does not carry tells nobody."""
+    out = subprocess.run(["git", "-C", str(ROOT), "ls-files", "-z"],
+                         capture_output=True, text=True, check=True).stdout
+    return sorted(ROOT / p for p in out.split("\0") if p)
 
 
 def layer1_cargo(v: str, bad: list) -> int:
@@ -391,7 +398,7 @@ def layer7_go_module_major(v: str, bad: list) -> int:
     want = f"/v{major}"
     used = re.compile(r"github\.com/goliajp/kevy-go/v(\d+)")
     checked = 0
-    for pth in sorted(walk(ROOT)):
+    for pth in tracked():
         if pth.is_dir() or skip(pth) or historical(pth) or pth.suffix not in (
                 ".go", ".mod", ".sh", ".md", ".yml", ".yaml"):
             continue

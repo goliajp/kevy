@@ -26,7 +26,6 @@
 #   compare: lines-any-order — line order is not the contract (a deviation in
 #           order, or an order the server does not keep stable)
 #           when kevy-cli is meant to differ (see deviations.txt)
-# Ids refer to .claude/rfcs/2026-09-17-kevy-cli-superset/redis-cli-inventory.md §8.
 
 # ─── P0 · connection and general options ─────────────────────────────────────
 

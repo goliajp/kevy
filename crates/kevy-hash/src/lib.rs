@@ -249,8 +249,7 @@ fn multiply_mix(x: u64, y: u64) -> u64 {
 /// The fix is to fold the total length into [`Hasher::finish`], six
 /// lines, and it changes every value this type produces — which the note
 /// on [`KevyHash for [u8]`](KevyHash) says this path deliberately does
-/// not do. That is an owner decision, recorded with its costs in this
-/// repository's `.claude/OPEN-QUESTIONS-6.4.md`. Until it is taken, this
+/// not do. That is an owner decision, still open. Until it is taken, this
 /// section is here so the behaviour is chosen rather than discovered.
 ///
 /// (One tempting non-fix, for the record: seeding the initial state to a

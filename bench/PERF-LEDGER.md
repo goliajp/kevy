@@ -710,8 +710,7 @@ win.
 The reason for three runs: run 1 read SADD at 4,591,850 and INCR at
 5,841,583, both far under the 6.2.0 entry. Before recording that, the
 serving path was diffed between the two tags — `git diff v6.2.0 v6.2.2 --
-crates/*/src` is comment-only in every serving crate (`.claude/` path
-references removed from doc comments) plus fifteen lines in
+crates/*/src` is comment-only in every serving crate plus fifteen lines in
 `runtime_run.rs` that take the new data-directory lock once at startup.
 **No executable serving-path change exists between 6.2.0 and 6.2.2**, so
 a 20% drop could not be the engine, and re-measuring was the only honest

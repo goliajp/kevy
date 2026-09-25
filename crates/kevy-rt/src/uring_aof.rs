@@ -26,7 +26,7 @@
 // become "never" with nothing saying so. Open question §2.
 #![expect(
     clippy::let_underscore_must_use,
-    reason = "a persistent fsync failure is invisible; see .claude/OPEN-QUESTIONS-6.4.md"
+    reason = "a persistent fsync failure is invisible; an open question"
 )]
 #![cfg(target_os = "linux")]
 

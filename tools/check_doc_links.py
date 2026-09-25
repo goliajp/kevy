@@ -26,11 +26,8 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 # What this gate is for: the docs a reader is handed. `site/` is
 # generated (check_links.py holds it) and untracked build output is not
-# ours to fix. `.claude/` is excluded on purpose — private working notes
-# and dated audit records, some of which cite documents that were
-# deliberately deleted; freezing their paths would be rewriting a record
-# to please a linter.
-SKIP_DIRS = ("site/", ".claude/")
+# ours to fix.
+SKIP_DIRS = ("site/",)
 SKIP_LINKS = ("http://", "https://", "mailto:", "data:", "javascript:", "tel:")
 
 # [text](target) — inline links only. Reference-style links and bare
@@ -129,9 +126,7 @@ def main():
             path, _, frag = raw.partition("#")
             n_links += 1
             # An absolute target is a machine-specific path, not a
-            # repo-internal doc link. `.claude/` was skipped here too; it is
-            # not any more, because that directory is now entirely out of
-            # git and a link into it is exactly the dead link a reader hits.
+            # repo-internal doc link.
             if path.startswith("/"):
                 continue
             target = f if not path else (f.parent / path).resolve()

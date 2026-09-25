@@ -3239,8 +3239,7 @@ The polish wave — docs and toolchain truth:
   pages) polished to natural です・ます with full-width kutōten.
 - README benchmark SET row synced to the v3.17.0 release arena
   (6.39 M/s, 4.00x vs valkey 9.1).
-- .claude hygiene discipline (runtime residue + release gating)
-  recorded as hard rules; 16 committed AOF residue files purged and
+- Runtime-residue hygiene recorded as hard rules; 16 committed AOF residue files purged and
   the repo root now ignores runtime data files.
 
 ## 3.17.3
@@ -6581,7 +6580,7 @@ Specific axes:
 
 ### Methodology — global doc upgrade
 
-`~/.claude-shared/global/methodology/perf-decomposition-vs-polish.md` upgraded **v1.1 → v1.2**:
+The perf decomposition methodology upgraded **v1.1 → v1.2**:
 - §1 triggers blacklist gained 3 new anti-patterns: **"memcpys are the gap"** / **"structural Rust type forces memcpy"** / **"single run shows -X% loss"** (each session-derived).
 - New §8 case study: "kevy bigval-SET / pub/sub 9 轮 autorun 周期" (parallel to luna fib_28 §7). Records the 7-commit chain + 4 Discovery findings + Top-N prediction-vs-measured table.
 - New §9: **Phase A → Phase B 双 gate 协议**. Pre-Phase-A gate: must measure competitor baseline variance (median-of-3 + stdev) before reporting a gap. Pre-Phase-B gate: must perf-record verify Top-1 attack target ≥ 10 pp self-time before any code change.

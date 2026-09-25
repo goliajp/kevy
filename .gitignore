@@ -15,9 +15,6 @@ feed-*.meta
 index-catalog.meta
 .premigration/
 
-# Claude Code workspace — kept entirely local, not part of the public repo.
-.claude/
-
 # Development-collaboration documents. This repository's git surface is what
 # a USER needs; how the work is organised is not part of that. They stay on
 # disk — they are just not published.
