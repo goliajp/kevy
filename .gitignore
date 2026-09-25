@@ -29,7 +29,9 @@ index-catalog.meta
 # They are how the work was done, not something a user of kevy needs, and a
 # removal that is not backed by a rule here survives exactly until the next
 # `git add -A`. The published evidence surface stays: the ledgers the READMEs
-# and the site quote, the atlases the gates read, and bench/REPORT.md.
+# and the site quote, the JSON baselines the gates read, and bench/REPORT.md.
+# The human-readable atlases and reports the tools generate are written under
+# target/reports/, not into the tree.
 bench/FINDING-*.md
 bench/PERF-FINDING-*.md
 bench/PERF-DECOMP-*.md

@@ -1,6 +1,6 @@
 # `kevy-replicate` — wire format
 
-Status: Phase 1 (v3-cluster). Locked for v1.18.0.
+Stable since v1.18.0.
 
 ## Goals
 
@@ -60,7 +60,7 @@ parse_command_into` reconstructs the same `Argv` the primary applied.
   starts a new offset epoch (`epoch` field of `+ACK`, future work) so
   replicas detect the discontinuity and full-sync. v1.18.0 ships
   without epoch tracking; operators rebuild replicas manually when the
-  primary's data dir is wiped. Tracked in plan T1.20.
+  primary's data dir is wiped.
 
 ### Inner payload
 
@@ -106,7 +106,7 @@ fn encode_frame(offset: u64, argv: &Argv) -> Vec<u8>
 Returns a freshly allocated `Vec<u8>` of exactly the bytes shown
 above. Hot-path callers should prefer a future `encode_frame_into(&mut
 Vec<u8>, offset, &Argv)` variant (deferred until benchmarks justify
-the second entry point — Phase 1 source-side code path builds the
+the second entry point — the source-side code path builds the
 vector once per outgoing frame and is not allocation-sensitive).
 
 ## Errors

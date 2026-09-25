@@ -159,7 +159,7 @@ export async function runNitroBench(): Promise<string[]> {
       // MMKV's mmap file IS its durability; the in-memory kv above is not a
       // fair opponent for writes. dir-open = AOF + appendfsync everysec —
       // buffered append, background fsync ≤1 s: comparable-to-stricter
-      // durability vs MMKV's OS-writeback pages (bench/mmkvgate/LEDGER.md).
+      // durability vs MMKV's OS-writeback pages.
       // Fresh dir each run: no replay tax on open, no cross-run growth.
       const kvdDir = `${documentDirectory}kevy-nitrogate`;
       await deleteAsync(kvdDir, { idempotent: true }).catch(() => undefined);

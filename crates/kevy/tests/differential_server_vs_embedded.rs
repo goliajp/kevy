@@ -1,7 +1,7 @@
 //! The differential harness: does the embedded facade answer what the server
 //! answers?
 //!
-//! The clone atlas (`bench/CLONE-ATLAS.md`, 2026-08-27) found one pair
+//! The clone atlas (`tools/clone_atlas.py`, 2026-08-27) found one pair
 //! dominating every other duplication signal in the workspace:
 //! `kevy-embedded` against `kevy`, 35 of the top 60 cross-crate pairs and 751
 //! shared fingerprints, an order of magnitude past anything else. The matches

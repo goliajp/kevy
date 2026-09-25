@@ -1,6 +1,6 @@
 //! The accounting contract, as a type.
 //!
-//! `bench/V5-ACCOUNTING-CONTRACT.md` §1 fixes these fields before this
+//! The accounting contract fixed these fields before this
 //! crate existed, because both v5 RFCs state their ceiling as a
 //! decomposition and a gate that cannot assert *"these terms sum to the
 //! observed gap"* cannot check the only claim that matters.

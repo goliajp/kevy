@@ -935,8 +935,7 @@ greedy and lazy quantifiers, and it did not match.
 `C-STRUCT-PRIVATE` — 740 public fields on public structs — is a real
 finding and cannot ship in a minor: adding a private field to an
 all-public struct is `struct-add-private-field-when-public`, MAJOR by
-Cargo's own table. It is recorded in `quality/API-GUIDELINES.md` with
-that identifier, as a v7 item rather than a thing that got dropped.
+Cargo's own table. It is recorded with that identifier as a v7 item rather than a thing that got dropped.
 
 ### Upgrading
 
@@ -2907,8 +2906,8 @@ failure is now closed, each behind an executable gate.
   partial state came from the shape of the commit loop, not from when it
   synced.
 - Both were reported by a consumer evaluating kevy-embedded as a primary
-  store, with an empirical reproduction against the published 3.18.0:
-  `docs/DEFECT-REPORT-2026-07-20-ATOMIC-ERROR-PATH.md`. **3.18.0 is
+  store, with an empirical reproduction against the published 3.18.0.
+  **3.18.0 is
   affected and has no fix released.**
 
 - **A transaction could not read the collections it was writing.**
@@ -3218,8 +3217,7 @@ verification depth the high-blast-radius stones always deserved:
 - miri now also covers kevy-ring and kevy-store's zset suite in CI;
   all 18 stone crates enforce #![warn(missing_docs)]; a ~380-item
   clippy pedantic sweep (90 real fixes, everything else waivered
-  with written reasons); microbench baselines for the six stones in
-  bench/STONE-BENCH.md.
+  with written reasons); microbench baselines for the six stones.
 - Toolchain: Rust 1.97.0 (rust-version now actually inherited by
   all 32 crates), every GitHub Action on its current major, Docker
   base image current.
