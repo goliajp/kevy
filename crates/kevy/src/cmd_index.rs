@@ -18,10 +18,10 @@
 // the index definitions at the next start, after the command that
 // created them has already replied OK. That is a gap, not a
 // non-event, and it is written up as an open question rather than
-// silently accepted here: .claude/OPEN-QUESTIONS-6.4.md §3.
+// silently accepted here.
 #![expect(
     clippy::let_underscore_must_use,
-    reason = "the catalog has no other home; see .claude/OPEN-QUESTIONS-6.4.md"
+    reason = "the catalog has no other home; an open question"
 )]
 
 use std::path::Path;

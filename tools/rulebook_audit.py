@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """Where this repository stands against the rulebook, rule by rule.
 
-The rulebook (`~/.claude-shared/global/methodology/module-craft.md`) has
-50 rules. Six of them are locked by a gate here. The rest had never been
-counted, which meant "we follow the rulebook" was a claim with no
-reading behind it — and a claim like that is the thing the rulebook
-exists to replace.
+The rulebook has 50 rules. Six of them are locked by a gate here. The
+rest had never been counted, which meant "we follow the rulebook" was
+a claim with no reading behind it — and a claim like that is the thing
+the rulebook exists to replace.
 
 This produces the reading. Three verdicts, and the third is not a
 failure:

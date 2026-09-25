@@ -191,8 +191,7 @@ published numbers are worth.
   frozen since 2024 and two carried no version at all. The harness now
   asks each engine what version it is and refuses to produce a number on
   a mismatch, so a published table names its opponent to the patch.
-  Raising a pin is a documented procedure rather than an edit —
-  `.claude/skills/competitor-anchors/SKILL.md`.
+  Raising a pin is a documented procedure rather than an edit.
 - **Every command the pinned Redis serves is now accounted for.** Of its
   599 commands and subcommands, kevy implements 206 verbs; of the rest,
   256 are exempt with a written reason each and 80 are owned by a named
