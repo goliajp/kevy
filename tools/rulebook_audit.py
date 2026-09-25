@@ -260,7 +260,8 @@ def main() -> int:
             rows.append((rid, scope, "READING", extra))
             reading += 1
 
-    out = ROOT / "quality/RULEBOOK-STATUS.md"
+    out = ROOT / "target/reports/RULEBOOK-STATUS.md"
+    out.parent.mkdir(parents=True, exist_ok=True)
     with out.open("w") as f:
         f.write("# The rulebook against this repository\n\n")
         f.write(f"{len(RULES)} rules. **{locked} locked by a gate**, "

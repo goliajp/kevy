@@ -1,6 +1,6 @@
 //! `INFO allocator` — the accounting identity on a live server.
 //!
-//! `bench/V5-ACCOUNTING-CONTRACT.md` specifies INFO as the transport for
+//! The accounting contract specifies INFO as the transport for
 //! kevy-alloc's nine terms. The contract was written first and the
 //! section did not exist, so the one workload where this allocator loses
 //! to glibc could be measured and not attributed.

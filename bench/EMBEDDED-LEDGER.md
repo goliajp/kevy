@@ -1,7 +1,7 @@
 # EMBEDDED-LEDGER — kevy embedded scalar path vs per-language native stores
 
-The server-language companion to `bench/mmkvgate/LEDGER.md` (the mobile
-track, kevy vs MMKV, real-device measured). This ledger records kevy's
+The server-language companion to the mobile track (kevy vs MMKV,
+real-device measured). This ledger records kevy's
 embedded scalar `get`/`set` head-to-head against each language's native
 embedded store, **losing axes named, not hidden** — the north star
 (roadmap t4) is to beat the native store on every axis; the honest starting
@@ -188,8 +188,8 @@ loses large (SQLite's WAL batch vs kevy's per-op AOF — the engine gap).
   fsync at commit) its WAL append of large blobs beats kevy's per-op AOF
   append. This is **the known architectural SET cost**: kevy copies the
   value twice per SET (into the store + into the AOF BufWriter) and the
-  page-cache copy scales with size — exactly what `bench/mmkvgate/LEDGER.md`
-  decomposition #2 named and what the mmap-AOF attack tried (and was
+  page-cache copy scales with size — exactly what the mobile
+  track's decomposition named and what the mmap-AOF attack tried (and was
   refuted) to close. kevy still **wins amortized SET at ≤256 B** (1.4–1.6×);
   the crossover is at ~4 KB. Named, not hidden — the north-star gap on this
   track is large-value batched writes.

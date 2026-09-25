@@ -56,7 +56,7 @@ mapped == live + rounding + cache + span_free + virgin
 
 `Stats::balanced()` asserts it. Only `rounding` scales with the data;
 `virgin` is mapped-but-never-touched, so it is address space rather than
-memory. The full contract is `bench/V5-ACCOUNTING-CONTRACT.md`.
+memory.
 
 ## Measured
 

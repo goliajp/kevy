@@ -1,4 +1,4 @@
-# kevy-elect protocol (v1.19.0 / v3-cluster Phase 1.5)
+# kevy-elect protocol (since v1.19.0)
 
 Quorum-based primary failover. Detect a primary's death by majority
 heartbeat, elect a successor by **highest offset → lowest node-id**,
@@ -41,7 +41,7 @@ per-shard** (a node's "I am primary" / "I am replica" flag applies
 to all its shards in lock-step). Shard 0's elect port is the
 canonical listener; other shards' ports exist only for symmetry
 with the listener layout, and accept connections only for parity
-with future per-shard quorum (Phase 2+).
+with a future per-shard quorum.
 
 ## Node identity
 

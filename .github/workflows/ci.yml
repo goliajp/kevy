@@ -110,10 +110,20 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: dead-set-linux
-          path: |
-            bench/DEAD-SET.json
-            bench/DEAD-ATLAS.md
+          path: bench/DEAD-SET.json
           if-no-files-found: error
+      # The human-readable atlas is not tracked, so it travels as its own
+      # artifact. Kept apart from the dead set because a second path outside
+      # bench/ would change that artifact's layout, and the stonereport job
+      # downloads it into bench/.
+      - name: upload dead atlas
+        if: always() && (steps.deadgate.outcome == 'success' || steps.deadgate.outcome == 'failure')
+        uses: actions/upload-artifact@v7
+        with:
+          name: dead-atlas-linux
+          path: target/reports/DEAD-ATLAS.md
+          # warn: a gate that stopped before writing it has already failed the job
+          if-no-files-found: warn
 
   # ───────────── the stone bar, on the enforcing platform ─────────────
   # Taken on Linux, and only on Linux. Code switched off by cfg is ABSENT
@@ -180,10 +190,18 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: stone-report-linux
-          path: |
-            bench/STONE-REPORT.json
-            bench/STONE-REPORT.md
+          path: bench/STONE-REPORT.json
           if-no-files-found: error
+      # The table is not tracked; it travels on its own so the JSON above
+      # keeps the flat layout the "commit it" step below relies on.
+      - name: upload stone table
+        if: always() && (steps.stonereport.outcome == 'success' || steps.stonereport.outcome == 'failure')
+        uses: actions/upload-artifact@v7
+        with:
+          name: stone-table-linux
+          path: target/reports/STONE-REPORT.md
+          # warn: a gate that stopped before writing it has already failed the job
+          if-no-files-found: warn
       # The one thing stonegate above cannot see.
       #
       # `stone_report.py` overwrites bench/STONE-REPORT.json before

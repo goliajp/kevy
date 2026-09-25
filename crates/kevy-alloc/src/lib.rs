@@ -28,8 +28,7 @@
 //! Part of an experiment, not a settled design. Every claim here is
 //! under test, and a premise that measurement kills gets changed rather
 //! than worked around — see the allocator RFC
-//! and ROADMAP rule ⑤. The gate is `bench/allocgate.sh`; the accounting
-//! it checks is fixed by `bench/V5-ACCOUNTING-CONTRACT.md`.
+//! and ROADMAP rule ⑤. The gate is `bench/allocgate.sh`.
 //!
 //! # Standing on shoulders, and where we step off
 //!
