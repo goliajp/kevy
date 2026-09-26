@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# pre-commit: enforce kevy's CLAUDE.md hard rules on staged files.
+# pre-commit: enforce kevy's source-size rules on staged files.
 #
 # Currently enforces:
 #   - crates/<x>/src/**/*.rs ≤ 500 LOC (non-test sources only;
@@ -60,7 +60,7 @@ while IFS= read -r f; do
   fi
   loc=$(git cat-file blob "$blob" | wc -l | tr -d ' ')
   if [ "$loc" -gt "$LOC_LIMIT" ]; then
-    echo "✗ $f: $loc LOC > $LOC_LIMIT (CLAUDE.md hard rule)" >&2
+    echo "✗ $f: $loc lines exceeds the $LOC_LIMIT-line limit" >&2
     failed=1
   fi
 done <<EOF
