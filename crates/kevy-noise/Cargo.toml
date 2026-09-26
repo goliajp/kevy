@@ -1,0 +1,20 @@
+[package]
+name = "kevy-noise"
+description = "The Noise IK handshake and transport (Noise_IK_25519_ChaChaPoly_BLAKE2s) without I/O, on kevy-crypto."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+documentation = "https://docs.rs/kevy-noise"
+readme = "README.md"
+keywords = ["noise", "handshake", "x25519", "chacha20poly1305", "blake2s"]
+categories = ["cryptography", "network-programming"]
+homepage.workspace = true
+authors.workspace = true
+
+[dependencies]
+kevy-crypto = { path = "../kevy-crypto", version = "6.4.0" }
+
+[lints]
+workspace = true

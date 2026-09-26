@@ -644,6 +644,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "kevy-noise"
+version = "6.4.0"
+dependencies = [
+ "kevy-crypto",
+]
+
+[[package]]
 name = "kevy-persist"
 version = "6.4.0"
 dependencies = [
