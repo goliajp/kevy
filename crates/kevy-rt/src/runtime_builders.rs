@@ -119,6 +119,34 @@ impl<C: Commands> Runtime<C> {
         }
     }
 
+    /// Let a front end that relays clients from elsewhere set the address
+    /// `CLIENT LIST` shows for each one: `CLIENT SETPEER <token> <ip:port>`,
+    /// with `token` as 64 hex characters, rewrites the calling
+    /// connection's peer. Without a token the subcommand does not exist.
+    ///
+    /// ```
+    /// use kevy_rt::{ArgvView, Commands, Route, Runtime, Store, TxnKind};
+    ///
+    /// #[derive(Clone)]
+    /// struct Minimal;
+    /// impl Commands for Minimal {
+    ///     fn route<A: ArgvView + ?Sized>(&self, _a: &A) -> Route { Route::Local }
+    ///     fn dispatch<A: ArgvView + ?Sized>(&self, _s: &mut Store, _a: &A) -> Vec<u8> {
+    ///         b"+OK\r\n".to_vec()
+    ///     }
+    ///     fn is_quit<A: ArgvView + ?Sized>(&self, _a: &A) -> bool { false }
+    ///     fn is_write<A: ArgvView + ?Sized>(&self, _a: &A) -> bool { false }
+    ///     fn txn_kind<A: ArgvView + ?Sized>(&self, _a: &A) -> TxnKind { TxnKind::Other }
+    /// }
+    ///
+    /// let _rt = Runtime::builder(Minimal).with_peer_token([7; 32]);
+    /// ```
+    #[must_use]
+    pub fn with_peer_token(mut self, token: [u8; 32]) -> Self {
+        self.peer_token = Some(token);
+        self
+    }
+
     /// Per-shard SlotTable reconnect window in milliseconds — the
     /// grace period a disconnected replica's slot is retained for so
     /// a reconnect within the window can be correlated against its

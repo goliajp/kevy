@@ -37,6 +37,8 @@ kevy-hash = { path = "../kevy-hash", version = "6.4.0" }
 # (the canonical client-shared pieces); only those pure modules are
 # used — the blocking TCP client itself is not touched here.
 kevy-resp-client = { path = "../kevy-resp-client", version = "6.4.0" }
+kevy-noise = { path = "../kevy-noise", version = "6.4.0" }
+kevy-sys = { path = "../kevy-sys", version = "6.4.0" }
 
 # Phase 4 tasks T4.5/T4.6/T4.7 add the runtime deps with their inline
 # `# EXEMPTION — see feedback-pure-rust-no-c-principle.md` comments.

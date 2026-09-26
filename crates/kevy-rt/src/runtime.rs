@@ -90,6 +90,9 @@ pub struct Runtime<C: Commands> {
     /// useful for benchmarks). Default `None`.
     pub(crate) replication_port_base: Option<u16>,
     pub(crate) replication_security: Option<std::sync::Arc<crate::ReplicationSecurity>>,
+    /// `CLIENT SETPEER` exists only when this is set; see
+    /// [`Runtime::with_peer_token`].
+    pub(crate) peer_token: Option<[u8; 32]>,
     /// Per-shard SlotTable reconnect-window in ms. After a
     /// streaming replica disconnects, its `(replica_id, sent_offset)`
     /// is recorded in the shard's `slots` map; slots past this age
@@ -156,6 +159,7 @@ impl<C: Commands> Runtime<C> {
             replication_buffer_size: 256 * 1024 * 1024,
             replication_port_base: None,
             replication_security: None,
+            peer_token: None,
             replication_reconnect_window_ms: 60_000,
             unix_socket_path: None,
             tier_budget: None,

@@ -9,7 +9,7 @@ use crate::conn::AsyncConnection;
 use crate::reply::{array_to_bulks, string, unexpected};
 use crate::transport::AsyncTransport;
 
-impl AsyncConnection {
+impl<T: crate::AsyncTransport> AsyncConnection<T> {
     /// `SADD key member [member ...]`. Returns count of newly added.
     pub async fn sadd(&mut self, key: &[u8], members: &[&[u8]]) -> io::Result<usize> {
         set_multi(self.codec_mut(), b"SADD", key, members).await

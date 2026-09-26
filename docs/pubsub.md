@@ -259,10 +259,10 @@ can reach the same backing `Store`, so `Subscriber::connect_channels` rejects
 it with `KevyError::Unsupported`. Use `mem://<some-name>` whenever
 you intend to publish.
 
-`rediss://`, `kevys://`, and `redis://user:pass@…` are rejected for
-the same reason: kevy ships without TLS or `AUTH`. Front the socket
-with stunnel + IP allowlist at the network boundary if you need
-either.
+`rediss://` and `redis://user:pass@…` are rejected too: kevy ships
+without TLS or `AUTH`. Front the socket with stunnel + IP allowlist at
+the network boundary if you need either. `kevys://` subscribes over the
+server's encrypted client port ([encrypted-links.md](encrypted-links.md)).
 
 The `mem://<name>` and `file:///` registries are **per-process**:
 two unrelated OS processes that open the same name see two

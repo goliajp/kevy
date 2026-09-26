@@ -1,10 +1,12 @@
-# Encrypted links between kevy nodes
+# Encrypted links
 
-Replication and the election control plane can run over kevy's own
-encrypted, mutually authenticated links. Both are **off unless you turn
-them on**, and turning them on changes nothing about client connections:
-kevy still has no TLS and no AUTH for clients, which go through a proxy as
-[deploy-behind-a-proxy.md](deploy-behind-a-proxy.md) describes.
+Replication, the election control plane and client connections can each
+run over kevy's own encrypted, authenticated links. All of them are **off
+unless you turn them on**. There is still no TLS and no AUTH: a client that
+needs TLS goes through a proxy as
+[deploy-behind-a-proxy.md](deploy-behind-a-proxy.md) describes, and the
+plaintext client port behaves the same whether or not the encrypted one is
+open.
 
 ## What it covers
 
@@ -12,7 +14,8 @@ kevy still has no TLS and no AUTH for clients, which go through a proxy as
 |---|---|---|
 | election (`elect_port_base`) | `[cluster] secure = true` | both ends, by their keys in `peer_keys` |
 | replication (`listen_port_base + i`) | `[replication] secure = true` | the primary by `upstream_key` or a peer key; the replica by `replica_keys` when set |
-| clients (`port`, cluster ports, unix socket) | never | nobody — use a proxy |
+| clients on `[secure] listen_port` | always | the server by its key; the client by `client_keys` when set |
+| clients on `port`, cluster ports, unix socket | never | nobody — use a proxy |
 
 The protocol is Noise `IK` with X25519, ChaCha20-Poly1305 and BLAKE2s. The
 initiator knows the responder's public key before it connects, the
@@ -110,6 +113,60 @@ let replica = Store::open(
 - `Keypair::from_secret` takes the 32 bytes that `kevy keygen` writes
   as hex; where the application keeps them is up to it.
 
+## Clients
+
+`[secure] listen_port` opens a second client port that speaks only the
+encrypted protocol; the plaintext `port` stays as it is. Clients connect
+with a `kevys://` URL naming the server's public key:
+
+```toml
+[secure]
+private_key_file = "/etc/kevy/node.key"
+listen_port      = 6404
+client_keys      = []   # client public keys allowed; empty accepts any, still encrypted
+```
+
+```text
+kevys://10.0.0.11:6404?server_key=d5c015b88401b6b33f5cb292b01ff3034e5f1de008b2e3f77faed23c31f16a4c
+kevys://10.0.0.11:6404/0?server_key=<hex>&client_key_file=/etc/app/kevy.key
+```
+
+- A client without `client_key_file` draws a fresh key pair for each
+  connection. That is enough when `client_keys` is empty; when it is not,
+  create the client's key with `kevy keygen` and list its public half.
+- The Rust clients accept `kevys://`: `kevy-resp-client`
+  (`RespClient::connect_url`, or `SecureStream` under any RESP code),
+  `kevy-client` (`Connection` and `Subscriber`), and `kevy-client-async`
+  (`AsyncConnection::connect_secure_url`,
+  `AsyncSubscriber::connect_secure_url`). The other language bindings and
+  `kevy-cli` do not; use a TLS proxy for them.
+- `CLIENT LIST`, `CLIENT INFO` and `CLIENT KILL ADDR` show the client's own
+  address, not the server's.
+- The port needs `private_key_file`, and must differ from `port`; either
+  mistake stops the server at startup.
+
+## Cost
+
+The encryption runs on its own threads beside the reactors: each
+connection's bytes are decrypted there and passed to the plaintext port
+over loopback, and the replies are sealed on the way back. The plaintext
+path is the same code whether or not this port is open, and an encrypted
+connection pays for one extra loopback round trip besides the crypto.
+
+Measured on one Linux host, client and server on loopback, four shards:
+
+| | plaintext port | encrypted port |
+|---|---:|---:|
+| one request, round trip | 10 µs | 25 µs |
+| 256 KB `GET`, one connection | 3.0 GB/s | 0.32 GB/s |
+| new connection plus `PING` | 38 µs | 0.58 ms |
+
+Most of the round trip is the extra hop; sealing and opening a small
+message takes about half a microsecond. Large values are limited by the
+cipher, which is a portable implementation; the handshake is dominated by
+X25519. Connection pools, which keep connections open, pay the handshake
+once.
+
 ## Mixing secure and plain nodes
 
 A secure node does not talk to a plain one. A plain replica connecting to
@@ -137,6 +194,6 @@ On three nodes, one shard each, election and replication both secure:
 
 ## See also
 
-- [deploy-behind-a-proxy.md](deploy-behind-a-proxy.md) — TLS for client connections
+- [deploy-behind-a-proxy.md](deploy-behind-a-proxy.md) — TLS for clients that cannot use `kevys://`
 - [replication.md](replication.md) — replication itself
 - [availability.md](availability.md) — elections and failover

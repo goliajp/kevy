@@ -432,8 +432,9 @@ permanently out of scope and there is no plan to add them:
   authentication proxy if you need either —
   [`docs/deploy-behind-a-proxy.md`](docs/deploy-behind-a-proxy.md) is
   the recipe, including why an HTTP reverse proxy cannot do this job.
-  Replication and election links between kevy nodes can be encrypted by
-  kevy itself, off unless configured:
+  kevy's own encryption is optional and off unless configured: an
+  encrypted client port for Rust clients over `kevys://`, and encrypted
+  replication and election links between nodes —
   [`docs/encrypted-links.md`](docs/encrypted-links.md).
 - **Multi-DC active-active and cross-DC replication.** Single-DC only.
 - **Multi-database `SELECT`.** One keyspace per server.

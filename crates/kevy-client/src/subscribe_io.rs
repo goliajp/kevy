@@ -9,8 +9,8 @@
 //! close as [`KevyError::Closed`].
 
 use crate::{KevyError, KevyResult};
+use kevy_resp_client::ClientStream;
 use std::io::{Read, Write};
-use std::net::TcpStream;
 
 use kevy_embedded::PubsubFrame;
 use kevy_resp::{Reply, encode_command};
@@ -22,7 +22,7 @@ use crate::subscribe::PubsubEvent;
 /// frame. No buffering — the caller is expected to follow up with
 /// `recv_remote` (server replies with a `subscribe`/`psubscribe`
 /// confirmation frame per channel/pattern).
-pub(crate) fn send_to(stream: &mut TcpStream, verb: &[u8], args: &[&[u8]]) -> KevyResult<()> {
+pub(crate) fn send_to(stream: &mut ClientStream, verb: &[u8], args: &[&[u8]]) -> KevyResult<()> {
     let mut argv = Vec::with_capacity(args.len() + 1);
     argv.push(verb.to_vec());
     argv.extend(args.iter().map(|a| a.to_vec()));
@@ -52,7 +52,7 @@ pub(crate) fn send_to(stream: &mut TcpStream, verb: &[u8], args: &[&[u8]]) -> Ke
 /// unchanged — `subscribe` simply now costs the round trip it always
 /// implied.
 pub(crate) fn await_acks(
-    stream: &mut std::net::TcpStream,
+    stream: &mut ClientStream,
     buf: &mut ReplyReadBuf,
     pending: &mut std::collections::VecDeque<PubsubEvent>,
     n: usize,
@@ -75,7 +75,7 @@ pub(crate) fn await_acks(
 }
 
 pub(crate) fn recv_remote(
-    stream: &mut TcpStream,
+    stream: &mut ClientStream,
     buf: &mut ReplyReadBuf,
 ) -> KevyResult<PubsubEvent> {
     let mut chunk = [0u8; 8192];

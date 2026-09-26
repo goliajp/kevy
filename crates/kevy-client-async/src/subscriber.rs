@@ -24,31 +24,16 @@ use crate::codec::AsyncRespCodec;
 use crate::pubsub::{PubsubEvent, classify};
 use crate::url::parse_url;
 
-#[cfg(feature = "tokio")]
-type DefaultTransport = tokio::net::TcpStream;
-#[cfg(feature = "smol")]
-type DefaultTransport = smol::net::TcpStream;
-#[cfg(feature = "async-std")]
-type DefaultTransport = async_std::net::TcpStream;
-
-#[cfg(feature = "tokio")]
-async fn connect_default(host: &str, port: u16) -> io::Result<DefaultTransport> {
-    crate::rt_tokio::connect(host, port).await
-}
-#[cfg(feature = "smol")]
-async fn connect_default(host: &str, port: u16) -> io::Result<DefaultTransport> {
-    crate::rt_smol::connect(host, port).await
-}
-#[cfg(feature = "async-std")]
-async fn connect_default(host: &str, port: u16) -> io::Result<DefaultTransport> {
-    crate::rt_async_std::connect(host, port).await
-}
+use crate::conn::{DefaultTransport, connect_default};
 
 /// Subscribed async TCP-RESP connection. Mirrors
 /// [`kevy_client::Subscriber`] for TCP backends.
+///
+/// The transport defaults to the runtime's `TcpStream`;
+/// [`Self::connect_secure_url`] gives one over [`crate::AsyncSecure`].
 #[derive(Debug)]
-pub struct AsyncSubscriber {
-    codec: AsyncRespCodec<DefaultTransport>,
+pub struct AsyncSubscriber<T = DefaultTransport> {
+    codec: AsyncRespCodec<T>,
     /// Events read while waiting for a subscribe ack, in arrival order.
     /// See [`Self::subscribe`].
     pending: std::collections::VecDeque<PubsubEvent>,
@@ -78,7 +63,30 @@ impl AsyncSubscriber {
         s.subscribe(channels).await?;
         Ok(s)
     }
+}
 
+impl AsyncSubscriber<crate::AsyncSecure<DefaultTransport>> {
+    /// [`AsyncSubscriber::connect`] for a `kevys://` URL: the same
+    /// subscriber, over the server's encrypted client port.
+    ///
+    /// ```no_run
+    /// # async fn demo() -> std::io::Result<()> {
+    /// use kevy_client_async::subscriber::AsyncSubscriber;
+    /// let url = format!("kevys://10.0.0.5:6404?server_key={}", "ab".repeat(32));
+    /// let mut s = AsyncSubscriber::connect_secure_url(&url).await?;
+    /// s.subscribe(&[b"news"]).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn connect_secure_url(url: &str) -> io::Result<Self> {
+        let (transport, _) = crate::conn::connect_secure(url).await?;
+        Ok(Self {
+            codec: AsyncRespCodec::new(transport),
+            pending: std::collections::VecDeque::new(),
+        })
+    }
+}
+
+impl<T: crate::AsyncTransport> AsyncSubscriber<T> {
     /// `SUBSCRIBE channel [channel ...]`. Returns once the server has
     /// acked every channel — you are subscribed when this resolves.
     ///

@@ -9,7 +9,7 @@ use crate::conn::AsyncConnection;
 use crate::reply::{array_to_bulks, string, unexpected};
 use crate::transport::AsyncTransport;
 
-impl AsyncConnection {
+impl<T: crate::AsyncTransport> AsyncConnection<T> {
     /// `LPUSH key value [value ...]`. Returns new list length.
     pub async fn lpush(&mut self, key: &[u8], values: &[&[u8]]) -> io::Result<usize> {
         list_push(self.codec_mut(), b"LPUSH", key, values).await

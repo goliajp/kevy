@@ -7,7 +7,7 @@ use kevy_resp::Reply;
 use crate::conn::AsyncConnection;
 use crate::reply::{array_to_bulks, string, unexpected};
 
-impl AsyncConnection {
+impl<T: crate::AsyncTransport> AsyncConnection<T> {
     /// `HSET key field value [field value ...]`. Returns count of
     /// fields newly created (overwrites don't count).
     pub async fn hset(&mut self, key: &[u8], pairs: &[(&[u8], &[u8])]) -> io::Result<usize> {

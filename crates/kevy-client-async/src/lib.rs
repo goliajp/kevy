@@ -69,6 +69,7 @@ pub mod conn;
 pub mod pipeline;
 pub mod pubsub;
 mod reply;
+mod secure;
 pub mod subscriber;
 pub mod transport;
 pub mod url;
@@ -84,6 +85,8 @@ pub mod rt_async_std;
 
 pub use codec::AsyncRespCodec;
 pub use conn::AsyncConnection;
+pub use kevy_noise::Keypair;
+pub use secure::AsyncSecure;
 pub use transport::{AsyncRead, AsyncTransport, AsyncWrite, read, write_all};
 
 // Compile-time runtime selection gate. We enforce
