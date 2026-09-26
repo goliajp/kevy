@@ -80,7 +80,7 @@ UDS 的信任边界是**文件系统**——Unix socket 上没有 RESP 层的 AU
 | 可观测性 | `lsof` / `ss -xl` | `ss -tln`、`netstat`、`tcpdump` |
 | 客户端配置 | `unix:///path` 或 `-s /path` | `host:port` |
 
-吞吐收益取决于负载形态——小载荷、低连接数的格子收益最大（loopback 的每操作税在它们身上占大头）；CPU 已饱和的格子收益较小（瓶颈本来就不在传输）。实测数据见 [bench/REPORT.md](https://github.com/goliajp/kevy/blob/develop/bench/REPORT.md)。
+吞吐收益取决于负载形态——小载荷、低连接数的格子收益最大（loopback 的每操作税在它们身上占大头）；CPU 已饱和的格子收益较小（瓶颈本来就不在传输）。实测数据见 [PERFORMANCE.md](https://github.com/goliajp/kevy/blob/develop/PERFORMANCE.md)。
 
 ## FAQ
 

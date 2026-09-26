@@ -124,7 +124,7 @@ kevy の 4 つの hash 表現すべて（パック行を含む）で動くので
 | ZADD | 3,242,967/s | 2,818,626/s | 1.15x |
 | LPUSH | 3,142,699/s | 2,860,306/s | 1.10x |
 
-7 セルすべてで、kevy の最も悪い巡回がどの対戦相手の最も良い巡回にも勝ちます。最も狭いのは LPUSH と ZADD で、Redis に対して 1.08x。このリリースで配信経路は変わっていないので、これは 6.2.2 の数字を速くしたものではなく、測り直したものです。valkey と Dragonfly、巡回間のばらつきを含む完全な記録は `bench/PERF-LEDGER.md` にあります。
+7 セルすべてで、kevy の最も悪い巡回がどの対戦相手の最も良い巡回にも勝ちます。最も狭いのは LPUSH と ZADD で、Redis に対して 1.08x。このリリースで配信経路は変わっていないので、これは 6.2.2 の数字を速くしたものではなく、測り直したものです。valkey と Dragonfly、巡回間のばらつきを含む完全な表は [PERFORMANCE.md](https://github.com/goliajp/kevy/blob/develop/PERFORMANCE.md) にあります。
 
 ---
 

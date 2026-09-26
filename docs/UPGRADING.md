@@ -497,7 +497,7 @@ ladder — [docs/availability.md](availability.md)), and the migration
 toolchain (`kevy-cli import/export/--verify/diff/
 inspect/digest`). Start at [docs/designing-on-kevy.md](designing-on-kevy.md)
 and [docs/cookbook.md](cookbook.md); performance receipts live in
-[bench/PERF-LEDGER.md](../bench/PERF-LEDGER.md).
+[PERFORMANCE.md](https://github.com/goliajp/kevy/blob/develop/PERFORMANCE.md).
 
 None of these activate implicitly: a 3.x server with a 2.x workload
 has an empty catalog, and the index hook on an empty catalog is on

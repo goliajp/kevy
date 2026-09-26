@@ -78,7 +78,7 @@ RAMだけで答えます。
 行リストページのp99 < 1ms、書き込みファンアウトのp99 < 200µs、
 ANN recall ≥ 0.9 — [設計マップ](docs/designing-on-kevy.md)、
 [クックブック](docs/cookbook.md)、
-[検証台帳](bench/VALIDATION-LEDGER.md)を参照してください。
+[性能ページ](PERFORMANCE.md)を参照してください。
 
 ## どれを使えばよいか
 
@@ -284,7 +284,7 @@ featureで段階化されており（`core` / `persist` / `index` / `text` /
 loopback）。下記のKV行は`bench/arena.sh`を2026-07-19に再測定した値で、
 median-of-5、スループットは各サーバー自身のコマンドカウンタを計測窓で
 読んだものです。詳細な手法、全ワークロード、注意点は
-[`bench/REPORT.md`](bench/REPORT.md)にあり、すべての数値は
+[`PERFORMANCE.md`](PERFORMANCE.md)にあり、すべての数値は
 [`bench/`](bench/)のスクリプトから再現可能です。
 
 | ワークロード | kevy | valkey 9.1 | 比率 |
@@ -297,7 +297,7 @@ median-of-5、スループットは各サーバー自身のコマンドカウン
 同じ`GET -c 50 -P 16`の面を、同一マシン上で四つのエンジンと対戦
 ——kevyは7.24 M/sでそれぞれに対して（median-of-5。手法と
 エンジンごとのサイクル記録は
-[`bench/REPORT.md`](bench/REPORT.md)）：
+[`PERFORMANCE.md`](PERFORMANCE.md)）：
 
 | エンジン | kevyのリード |
 |---|---:|
@@ -317,7 +317,7 @@ Pub/subと組み込みの2行はそれぞれ別のハーネスによるもので
 再測定の対象外です。
 
 サービング面はredis-stack 7.4.7（RediSearch）と同一シード・
-同一コーパスでrecallを揃えて比較（[`bench/PERF-LEDGER.md`](bench/PERF-LEDGER.md)）：
+同一コーパスでrecallを揃えて比較（[`PERFORMANCE.md`](PERFORMANCE.md)）：
 
 | クエリ種別 | kevy | RediSearch | 判定 |
 |---|---:|---:|---|

@@ -9,7 +9,7 @@
 // made, no hedging, no filler connectives — those read as translationese
 // in Chinese and Japanese and as padding in English.
 //
-// Every number here is measured and sourced. bench/REPORT.md holds the
+// Every number here is measured and sourced. PERFORMANCE.md holds the
 // throughput figures (precision bench, n=1M x 10 runs); the command count
 // comes from site/data/commands.json, which is generated from VERB_META.
 

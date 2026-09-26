@@ -124,7 +124,7 @@ kevy 的四种 hash 表示（包括打包行）它都能处理，所以你不必
 | ZADD | 3,242,967/s | 2,818,626/s | 1.15x |
 | LPUSH | 3,142,699/s | 2,860,306/s | 1.10x |
 
-七格里 kevy 最差的一轮都赢过每个对手最好的一轮；最窄的是 LPUSH 与 ZADD，对 Redis 1.08x。本次发布没有改动服务路径，所以这是把 6.2.2 的数字重测了一遍、而不是变快了——完整条目（含 valkey、Dragonfly 与轮间离散度）在 `bench/PERF-LEDGER.md`。
+七格里 kevy 最差的一轮都赢过每个对手最好的一轮；最窄的是 LPUSH 与 ZADD，对 Redis 1.08x。本次发布没有改动服务路径，所以这是把 6.2.2 的数字重测了一遍、而不是变快了——完整的表（含 valkey、Dragonfly 与轮间离散度）在 [PERFORMANCE.md](https://github.com/goliajp/kevy/blob/develop/PERFORMANCE.md)。
 
 ---
 

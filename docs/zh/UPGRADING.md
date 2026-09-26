@@ -267,7 +267,7 @@ kevy 3.x 是 2.x 的超集：每一个 2.x 负载原样可跑，服务器侧的�
 
 ## 3.x 加了什么（你为什么要升）
 
-带补水的声明式索引（`IDX.*`）、具名视图（`VIEW.*`）、写入时聚合（GROUP BY / 分布式 top-K）、无词典的 CJK 全文检索加 BM25、HNSW 向量 KNN（外加 BM25 + KNN 的混合融合）、带恢复点契约的 CDC feed（`FEED.*`）、embedded 作为主节点的复制、机器可读的契约（`COMMAND DOCS`、生成式参考文档、`kevy-mcp` 这个 MCP 服务器）、可用性这条弧（复制滞后真值、`FAILOVER`、多数派崩溃选举，以及 `WAIT` / `REPL.TOKEN` / `REPL.WAIT` 一致性阶梯——见 [availability.md](availability.md)），还有迁移工具链（`kevy-cli import/export/--verify/diff/inspect/digest`）。从 [designing-on-kevy.md](designing-on-kevy.md) 和 [cookbook.md](cookbook.md) 开始读；性能凭据在 [bench/PERF-LEDGER.md](https://github.com/goliajp/kevy/blob/develop/bench/PERF-LEDGER.md)。
+带补水的声明式索引（`IDX.*`）、具名视图（`VIEW.*`）、写入时聚合（GROUP BY / 分布式 top-K）、无词典的 CJK 全文检索加 BM25、HNSW 向量 KNN（外加 BM25 + KNN 的混合融合）、带恢复点契约的 CDC feed（`FEED.*`）、embedded 作为主节点的复制、机器可读的契约（`COMMAND DOCS`、生成式参考文档、`kevy-mcp` 这个 MCP 服务器）、可用性这条弧（复制滞后真值、`FAILOVER`、多数派崩溃选举，以及 `WAIT` / `REPL.TOKEN` / `REPL.WAIT` 一致性阶梯——见 [availability.md](availability.md)），还有迁移工具链（`kevy-cli import/export/--verify/diff/inspect/digest`）。从 [designing-on-kevy.md](designing-on-kevy.md) 和 [cookbook.md](cookbook.md) 开始读；性能实测数字在 [PERFORMANCE.md](https://github.com/goliajp/kevy/blob/develop/PERFORMANCE.md)。
 
 这些没有一个是隐式生效的：一台跑着 2.x 负载的 3.x 服务器，目录是空的，而空目录上的索引钩子被 perfgate 棘轮盯着（相对 2.x 无回归）。
 

@@ -527,7 +527,7 @@ outcome.
   **1 shard** when your write patterns span arbitrary keys: you keep
   full atomicity and pay no cross-shard coordination. The ceiling of
   the 1-shard config is single-core write throughput; measured
-  numbers live in `bench/REPORT.md`.
+  numbers live in [PERFORMANCE.md](https://github.com/goliajp/kevy/blob/develop/PERFORMANCE.md).
 - **`Store::atomic_all_shards(body)`** — multi-shard transaction:
   acquires **every** shard's write lock in shard-index order
   (deterministic order = no deadlock), commits per-shard AOF batches

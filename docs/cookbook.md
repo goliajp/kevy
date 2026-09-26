@@ -8,7 +8,7 @@ carries it.
 The design stance behind all of them: **model the access paths, not
 the schema**. An RDS lets you defer that decision to a query planner;
 kevy makes you state it — and pays you back with microsecond pages
-at serving time (`bench/VALIDATION-LEDGER.md` has the measured
+at serving time ([PERFORMANCE.md](https://github.com/goliajp/kevy/blob/develop/PERFORMANCE.md) has the measured
 numbers).
 
 Every command block runs as-is against a fresh local kevy
