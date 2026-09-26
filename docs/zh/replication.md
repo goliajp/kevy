@@ -164,6 +164,9 @@ Embed 连到同一个 `listen_port_base` 对应的 shard，帧到即应用，读
 | `min_replicas_to_write` | `0`（关） | 健康副本（有活跃连接且已 ACK）不足 N 个时，主节点以 `-NOREPLICAS` 拒绝写。阶梯第 4 级。 |
 | `min_replicas_max_lag_ms` | `10000` | `min_replicas_to_write` 的新鲜度窗口：副本只有在最近一次 ACK 比这个界限新时才算健康——连接还挂着但已停摆的副本会从计数里老化出去。 |
 | `single_source` | `false` | 上游是单端口上的一条流（embedded writer），不走 per-shard 端口群——见下文“以 embedded 作主节点”。 |
+| `secure` | `false` | 用 Noise 给本节点的复制链路加密并认证，见 [`docs/encrypted-links.md`](encrypted-links.md)。需要 `[secure] private_key_file`。 |
+| `upstream_key` | 未设置 | 主节点的公钥，加密的 replica 必须设置。 |
+| `replica_keys` | 空 | 在加密的主节点上：允许连接的 replica 公钥。留空则任何 replica 都可连接，链路照样加密。 |
 
 因为两种角色都会绑定复制端口段，同一台机器上共同托管多个实例时，客户端端口之间至少要间隔 `nshards`——否则它们默认的复制端口段（客户端端口 + 10000 … + 10000 + nshards − 1）会撞在一起。
 
@@ -174,6 +177,8 @@ Embed 连到同一个 `listen_port_base` 对应的 shard，帧到即应用，读
 | `node_id` | 未设置 | 本节点的稳定 id（≤ 32 B ASCII）。选举中作平局裁决。 |
 | `elect_port_base` | `0`（= 客户端端口 + 200） | 控制面 TCP 端口，承载心跳与选票——每节点一个监听。 |
 | `peers` | 空 | `id@host:elect_port:client_port[:repl_port_base],…`，集群里每个节点都要列出，包括自己。留空则选举器休眠。 |
+| `secure` | `false` | 给选举链路加密并认证；其他每个节点都要在 `peer_keys` 里有一项。 |
+| `peer_keys` | 空 | `["id=<公钥>", …]`：每个节点的公钥，由 `kevy keygen` 生成。 |
 
 peer 请写成扩展的三字段语法：选举流量走 elect 端口，切换上游和 `-MISDIRECTED` 回复用客户端端口。旧式 `id@host:port` 写法假定两者相等，这基本不会是你要的效果。
 

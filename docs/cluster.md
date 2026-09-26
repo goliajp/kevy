@@ -246,6 +246,8 @@ It drives two failover surfaces:
 | `node_id` | This node's stable identifier (≤ 32 B ASCII; scope owners and elections reference it) | required |
 | `peers` | `<node_id>@<host>:<elect_port>:<client_port>[:<repl_port_base>]` list of every cluster member | required |
 | `elect_port_base` | TCP port the election control plane binds (one listener per node) | `0` = client port + 200 |
+| `secure` | Encrypt and authenticate the election links ([`docs/encrypted-links.md`](encrypted-links.md)) | `false` |
+| `peer_keys` | Each node's public key, `["id=<key>", …]` | empty |
 
 ### Manual rejoin recovery
 
@@ -310,6 +312,8 @@ The full key list (backlog sizing, `replica_read_only`, `replica_max_staleness_m
 | `[cluster] peers` | `<node_id>@<host>:<elect_port>:<client_port>[:<repl_port_base>]` list of every cluster member (legacy two-field form: both ports equal). |
 | `[cluster] scopes` | `prefix=writer[\|fallback]` entries, comma-separated. |
 | `[cluster] elect_port_base` | TCP port the election control plane binds; `0` (default) = `port` + 200. |
+| `[cluster] secure` | Encrypt and authenticate the election links; `false` (default) = plaintext. |
+| `[cluster] peer_keys` | `["id=<public key>", …]` for every other node, from `kevy keygen`. |
 
 Election timings (heartbeat 200 ms, DOWN after 5 s, election timeout 3 s) are fixed constants, not config keys.
 

@@ -386,8 +386,11 @@ recall 对齐（[`bench/PERF-LEDGER.md`](bench/PERF-LEDGER.md)）：
 kevy 对自己不做什么很诚实。按章程，以下事项**永久**不在范围内，
 也没有添加计划：
 
-- **AUTH 和 TLS。** kevy 假设运行在可信网络上。如果需要任一，
-  请在前面放一个 TLS 终止 sidecar（envoy、stunnel）和一个认证代理。
+- **面向客户端的 AUTH 和 TLS。** kevy 假设运行在可信网络上。如果需要任一，
+  请在前面放一个 TLS 终止 sidecar（envoy、stunnel）和一个认证代理，
+  做法见 [`docs/deploy-behind-a-proxy.md`](docs/zh/deploy-behind-a-proxy.md)。
+  kevy 节点之间的复制和选举链路可以由 kevy 自己加密，默认关闭，
+  见 [`docs/encrypted-links.md`](docs/zh/encrypted-links.md)。
 - **多 DC active-active 与跨 DC 复制。** 仅单 DC。
 - **多数据库 `SELECT`。** 一台服务器只有一个 keyspace。
 - **ACL。** 单一信任域。
