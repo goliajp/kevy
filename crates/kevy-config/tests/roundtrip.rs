@@ -233,3 +233,10 @@ fn secure_links_config_round_trips_and_refuses_malformed_keys() {
         !off.cluster.secure && !off.replication.secure && off.secure.private_key_file.is_none()
     );
 }
+
+#[test]
+fn non_ascii_string_values_survive_parsing() {
+    let src = "[secure]\nprivate_key_file = \"/srv/データ/鍵\\t.key\"\n";
+    let cfg = Config::from_toml_str(src, None).unwrap();
+    assert_eq!(cfg.secure.private_key_file, Some(PathBuf::from("/srv/データ/鍵\t.key")));
+}
