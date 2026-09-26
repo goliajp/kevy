@@ -111,3 +111,25 @@ fn unlisted_clients_and_a_wrong_server_key_get_no_session() {
     assert!(matches!(p.read(&mut buf), Ok(0) | Err(_)));
     let _ = std::fs::remove_dir_all(&s.dir);
 }
+
+#[test]
+fn kevy_client_connections_and_subscribers_work_over_kevys() {
+    let s = start();
+    let url = format!(
+        "kevys://127.0.0.1:{}?server_key={}&client_key_file={}",
+        s.secure_port,
+        hex(&s.server_key),
+        s.client_key_file.display()
+    );
+    let mut c = kevy_client::Connection::connect(&url).unwrap();
+    c.set(b"sk", b"sv").unwrap();
+    assert_eq!(c.get(b"sk").unwrap().as_deref(), Some(&b"sv"[..]));
+
+    let mut sub = kevy_client::Subscriber::connect_channels(&url, &[b"news"]).unwrap();
+    sub.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let mut plain =
+        kevy_client::Connection::connect(&format!("kevy://127.0.0.1:{}", s.port)).unwrap();
+    assert_eq!(plain.publish(b"news", b"sealed").unwrap(), 1);
+    assert_eq!(sub.recv_message().unwrap(), (b"news".to_vec(), b"sealed".to_vec()));
+    let _ = std::fs::remove_dir_all(&s.dir);
+}

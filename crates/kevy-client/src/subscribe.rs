@@ -30,7 +30,6 @@
 use crate::{KevyError, KevyResult};
 use std::collections::VecDeque;
 use std::io::{Read, Write};
-use std::net::TcpStream;
 use std::time::Duration;
 
 use kevy_embedded::Subscription;
@@ -52,7 +51,7 @@ pub struct Subscriber {
 enum Inner {
     /// TCP RESP2 connection, drained one reply at a time.
     Remote {
-        stream: TcpStream,
+        stream: kevy_resp_client::ClientStream,
         buf: ReplyReadBuf,
         /// Events read while waiting for a subscribe ack, held in arrival
         /// order for [`Subscriber::recv`]. Waiting for the ack means
@@ -94,9 +93,8 @@ impl Subscriber {
                 timeout: None,
             },
             Target::Remote(remote_url) => {
-                let (host, port) = remote_host_port(&remote_url)?;
-                let stream = TcpStream::connect((host.as_str(), port))?;
-                stream.set_nodelay(true).ok();
+                check_no_userinfo(&remote_url)?;
+                let stream = kevy_resp_client::ClientStream::connect_url(&remote_url)?;
                 Inner::Remote {
                     stream,
                     buf: ReplyReadBuf::with_capacity(8192),
@@ -282,7 +280,7 @@ impl Subscriber {
     /// `TimedOut` when no frame arrives within `dur`.
     pub fn set_read_timeout(&mut self, dur: Option<Duration>) -> KevyResult<()> {
         match &mut self.inner {
-            Inner::Remote { stream, .. } => Ok(stream.set_read_timeout(dur)?),
+            Inner::Remote { stream, .. } => Ok(stream.socket().set_read_timeout(dur)?),
             Inner::Embedded { timeout, .. } => {
                 *timeout = dur;
                 Ok(())
@@ -371,27 +369,18 @@ fn classify_hello3_reply(reply: Reply) -> KevyResult<PubsubEvent> {
 // is global, not db-scoped — any /N path segment is ignored).
 // ─────────────────────────────────────────────────────────────────────────
 
-fn remote_host_port(url: &str) -> KevyResult<(String, u16)> {
-    let (_scheme, rest) =
-        url.split_once("://").ok_or_else(|| KevyError::InvalidInput("URL missing '://'".into()))?;
-    if rest.contains('@') {
+/// kevy has no AUTH: a `user:pass@` in the host part is refused before
+/// connecting. Only the host part is looked at, since a `kevys://` key
+/// file path may itself contain `@`.
+fn check_no_userinfo(url: &str) -> KevyResult<()> {
+    let rest = url.split_once("://").map_or(url, |(_, r)| r);
+    let authority = rest.split(['/', '?']).next().unwrap_or("");
+    if authority.contains('@') {
         return Err(KevyError::Unsupported(
             "userinfo (user:pass@host) is unsupported — kevy has no AUTH".into(),
         ));
     }
-    let authority = rest.split('/').next().unwrap_or("");
-    let (host, port) = match authority.rsplit_once(':') {
-        Some((h, p)) => {
-            let port: u16 =
-                p.parse().map_err(|_| KevyError::InvalidInput(format!("bad port: {p}")))?;
-            (h.to_string(), port)
-        }
-        None => (authority.to_string(), 6379),
-    };
-    if host.is_empty() {
-        return Err(KevyError::InvalidInput("empty host".into()));
-    }
-    Ok((host, port))
+    Ok(())
 }
 
 #[cfg(test)]
