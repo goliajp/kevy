@@ -62,13 +62,24 @@ fn invalid(e: impl std::fmt::Display) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, e.to_string())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn fresh_secret() -> io::Result<[u8; 32]> {
+    let mut secret = [0u8; 32];
+    kevy_sys::fill_random(&mut secret)?;
+    Ok(secret)
+}
+
+// no entropy source, and no TCP replication to protect, on wasm32
+#[cfg(target_arch = "wasm32")]
+fn fresh_secret() -> io::Result<[u8; 32]> {
+    Err(io::ErrorKind::Unsupported.into())
+}
+
 pub(crate) fn handshake(
     sock: &mut TcpStream,
     sec: &ReplicaSecurity,
 ) -> Result<ClientNoise, ReplicaError> {
-    let mut secret = [0u8; 32];
-    kevy_sys::fill_random(&mut secret)?;
-    let ephemeral = Keypair::from_secret(secret);
+    let ephemeral = Keypair::from_secret(fresh_secret()?);
     let (m1, init) = Initiator::start(&sec.local, &sec.primary_key, ephemeral, PROLOGUE, b"")
         .map_err(invalid)?;
     sock.write_all(&frame(&m1).map_err(invalid)?)?;
