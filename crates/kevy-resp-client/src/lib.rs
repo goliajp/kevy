@@ -41,13 +41,52 @@ use kevy_resp::{encode_command, encode_command_borrowed};
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
 
+/// Plaintext or encrypted; both are byte streams under RESP.
+#[derive(Debug)]
+enum Conn {
+    Plain(TcpStream),
+    Secure(Box<SecureStream>),
+}
+
+impl Read for Conn {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        match self {
+            Conn::Plain(s) => s.read(buf),
+            Conn::Secure(s) => s.read(buf),
+        }
+    }
+}
+
+impl Write for Conn {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        match self {
+            Conn::Plain(s) => s.write(buf),
+            Conn::Secure(s) => s.write(buf),
+        }
+    }
+
+    fn write_all(&mut self, buf: &[u8]) -> io::Result<()> {
+        match self {
+            Conn::Plain(s) => s.write_all(buf),
+            Conn::Secure(s) => s.write_all(buf),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match self {
+            Conn::Plain(s) => s.flush(),
+            Conn::Secure(s) => s.flush(),
+        }
+    }
+}
+
 /// A blocking RESP2 connection over `TcpStream`.
 ///
 /// Holds the stream plus an incremental read buffer so multi-segment replies
 /// reassemble across `read` calls. Not `Sync`; one client per thread.
 #[derive(Debug)]
 pub struct RespClient {
-    stream: TcpStream,
+    stream: Conn,
     /// Incremental read buffer with a consume cursor — replies are parsed
     /// off the front by advancing a `pos` cursor rather than
     /// front-draining per reply (O(N²) on deep `pipeline_raw` batches).
@@ -69,12 +108,37 @@ impl RespClient {
     pub fn connect(host: &str, port: u16) -> io::Result<Self> {
         let stream = TcpStream::connect((host, port))?;
         stream.set_nodelay(true).ok();
-        Ok(Self {
+        Ok(Self::over(Conn::Plain(stream)))
+    }
+
+    /// Connect to a server's encrypted client port (`[secure] listen_port`).
+    /// `server_key` is the server's public key; `client` is this side's
+    /// key pair when the server lists `client_keys`, `None` otherwise.
+    ///
+    /// ```no_run
+    /// use kevy_resp_client::RespClient;
+    ///
+    /// let mut c = RespClient::connect_secure("10.0.0.5", 6404, [0xab; 32], None)?;
+    /// c.request_borrowed(&[b"PING"])?;
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
+    pub fn connect_secure(
+        host: &str,
+        port: u16,
+        server_key: [u8; 32],
+        client: Option<&Keypair>,
+    ) -> io::Result<Self> {
+        let s = SecureStream::connect(host, port, server_key, client)?;
+        Ok(Self::over(Conn::Secure(Box::new(s))))
+    }
+
+    fn over(stream: Conn) -> Self {
+        Self {
             stream,
             buf: ReplyReadBuf::with_capacity(8192),
             write_buf: Vec::with_capacity(1024),
             chunk: vec![0u8; 8192].into_boxed_slice(),
-        })
+        }
     }
 
     /// Send one command (`args` is RESP-encoded as a multibulk array) and
@@ -152,10 +216,19 @@ impl RespClient {
     /// issued before returning the client. For non-zero indices kevy will
     /// reply with its "only supports DB 0" error and `connect_url`
     /// propagates that as [`io::ErrorKind::Other`].
+    ///
+    /// `kevys://host:port?server_key=<hex>[&client_key_file=<path>]`
+    /// connects to the encrypted client port; see [`parse_secure_url`].
     pub fn connect_url(url: &str) -> io::Result<Self> {
-        let parsed = parse_url(url)?;
-        let mut client = Self::connect(&parsed.host, parsed.port)?;
-        if let Some(db) = parsed.db {
+        let (mut client, db) = if url.starts_with("kevys://") {
+            let u = parse_secure_url(url)?;
+            let me = u.client_key_file.as_deref().map(load_client_key).transpose()?;
+            (Self::connect_secure(&u.host, u.port, u.server_key, me.as_ref())?, u.db)
+        } else {
+            let parsed = parse_url(url)?;
+            (Self::connect(&parsed.host, parsed.port)?, parsed.db)
+        };
+        if let Some(db) = db {
             let reply = client.request(&[b"SELECT".to_vec(), db.to_string().into_bytes()])?;
             if let Reply::Error(msg) = reply {
                 let text = String::from_utf8_lossy(&msg);
@@ -168,6 +241,10 @@ impl RespClient {
 
 mod url;
 pub use url::{ParsedUrl, parse_url};
+
+mod secure;
+pub use kevy_noise::Keypair;
+pub use secure::{SecureStream, SecureUrl, load_client_key, parse_secure_url};
 
 mod pubsub_event;
 pub use pubsub_event::{PubsubEvent, classify_pubsub};
