@@ -7229,14 +7229,6 @@ floor / valkey absorbed / structural ceiling / RTT-bound hides X"
 claims, replaced with file:line + atomic-op-count + named fix paths
 per the methodology's R2.
 
-### v1.25 — Methodology rule + memory artifacts
-
-- R1-R8 codified rules for kevy +
-  any future vs-FOSS project. CLAUDE.md project link added.
-- Auto-memory entry `feedback-perf-vs-foss-decomposition` records
-  the methodology + my own pre-adoption mistakes (V125-AXIS-* dev
-  trail) as negative-learning case studies.
-
 ---
 
 ## [v1.24.1] — UNRELEASED, superseded by v1.25.0 (autorun perf sprint on top of v1.24.0)
@@ -8692,7 +8684,7 @@ change).
 Patch release rolling up the v1.4.1 follow-ups: an XREAD BLOCK bug fix,
 two CI/release hardening jobs that catch the exact failure modes the
 v1.4.0 → v1.4.1 sequence exposed, and a workspace-wide src/*.rs ≤ 500
-LOC sweep (every production file now matches the CLAUDE.md house rule;
+LOC sweep (every production file now stays within 500 lines;
 test files exempt per Rust community norm).
 
 No public API breaks. New trait method `Commands::resolve_block_argv`
@@ -8735,7 +8727,7 @@ recompile unchanged.
 ### Changed — internal refactor (no API surface)
 
 - All production `src/*.rs` files now ≤ 500 LOC and every `fn` ≤ 50
-  LOC, matching the CLAUDE.md house rule. Test files (`tests.rs`
+  LOC. Test files (`tests.rs`
   modules) are exempt per the Rust community norm and remain
   uncapped.
 - New sibling modules carry the lifted-out code; each keeps its

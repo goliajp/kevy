@@ -3,8 +3,8 @@
 //! [`crate::dispatch`] alongside the main `dispatch_into` router; this
 //! split keeps each file under the 500-LOC house rule.
 //!
-//! Each handler is a pure dispatch-table function (CLAUDE.md's listed
-//! `match`-table exception to the 50-LOC fn cap): it owns one `match`
+//! Each handler is a pure dispatch-table function (the `match`-table
+//! exception to the 50-LOC fn cap): it owns one `match`
 //! over the verbs it implements, delegates to a `cmd::*` helper or a
 //! direct `store::*` call, and returns whether the verb was handled.
 
