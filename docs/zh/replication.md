@@ -173,7 +173,7 @@ Embed 连到同一个 `listen_port_base` 对应的 shard，帧到即应用，读
 |---|---|---|
 | `node_id` | 未设置 | 本节点的稳定 id（≤ 32 B ASCII）。选举中作平局裁决。 |
 | `elect_port_base` | `0`（= 客户端端口 + 200） | 控制面 TCP 端口，承载心跳与选票——每节点一个监听。 |
-| `peers` | 空 | `id@host:elect_port:client_port,…`，集群里每个节点都要列出，包括自己。留空则选举器休眠。 |
+| `peers` | 空 | `id@host:elect_port:client_port[:repl_port_base],…`，集群里每个节点都要列出，包括自己。留空则选举器休眠。 |
 
 peer 请写成扩展的三字段语法：选举流量走 elect 端口，切换上游和 `-MISDIRECTED` 回复用客户端端口。旧式 `id@host:port` 写法假定两者相等，这基本不会是你要的效果。
 
@@ -187,7 +187,7 @@ peer 请写成扩展的三字段语法：选举流量走 elect 端口，切换�
 
 移动主节点角色有两条路径，都建立在上述流机制之上；操作细节（步骤、时序、错误契约）在 [`docs/availability.md`](availability.md)。
 
-**计划内：`FAILOVER host port [TIMEOUT ms] | ABORT`**（v3.15）。在主节点上执行，参数是目标副本的**客户端**地址；它回答 `+OK`，交接在后台线程完成：静默写入（`-QUIESCED`），轮询目标的 `INFO replication` 直到追平（`slave_lag_frames:0`），提升目标（`REPLICAOF NO ONE`），然后自己作为副本跟随过去。交接会把上游切到“客户端端口 + 10000”，所以目标必须用默认的 `listen_port_base` 运行。超时（默认 10000 ms）会回滚静默。
+**计划内：`FAILOVER host port [TIMEOUT ms] | ABORT`**（v3.15）。在主节点上执行，参数是目标副本的**客户端**地址；它回答 `+OK`，交接在后台线程完成：静默写入（`-QUIESCED`），轮询目标的 `INFO replication` 直到追平（`slave_lag_frames:0`），提升目标（`REPLICAOF NO ONE`），然后自己作为副本跟随过去。交接时跟随目标在 `INFO replication` 里报告的 `repl_port_base`。超时（默认 10000 ms）会回滚静默。
 
 **崩溃：多数派选举**（v3.15）。每个节点都配好 `[cluster]` 块之后，各 peer 检测到主节点死亡，选出已应用复制 offset 最高的副本（平局时 `node_id` 最小者胜出）；胜者打开写入并递增自己的 feed generation，败者自动切换上游。重新加入的前主节点如果流位置**领先**于新主（一段从未复制出去的分叉后缀），会得到一次**替换式**快照重同步——加载前先 `FLUSHALL`——而不是被判定损坏后关闭：分叉丢弃，节点收敛到多数派的历史。
 
