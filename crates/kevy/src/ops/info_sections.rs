@@ -212,7 +212,17 @@ pub(super) fn info_replication(ctx: &Ctx<'_>, b: &mut String) {
         Some((host, port)) => info_repl_replica(ctx, b, host, port),
         None => info_repl_master(ctx, b),
     }
+    info_repl_listener(&ctx.state.config(), b);
     b.push_str("\r\n");
+}
+
+/// Where this node accepts replicas, so a peer that promotes it can
+/// follow it without assuming the default base.
+fn info_repl_listener(cfg: &Config, b: &mut String) {
+    if cfg.replication.role != kevy_config::ReplicationRole::Standalone {
+        let base = crate::replication::replication_port_base(cfg);
+        b.push_str(&format!("repl_port_base:{base}\r\n"));
+    }
 }
 
 /// The replica-side (`role:slave`) half of `INFO replication`.

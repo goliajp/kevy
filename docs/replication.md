@@ -173,7 +173,7 @@ When [`kevy-elect`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-ele
 |---|---|---|
 | `node_id` | unset | Stable id of this node (≤ 32 B ASCII). Used as the tie-breaker in elections. |
 | `elect_port_base` | `0` (= client port + 200) | Control-plane TCP port for heartbeats and ballots — one listener per node. |
-| `peers` | empty | `id@host:elect_port:client_port,…` for every node in the cluster including self. Empty means the elector is dormant. |
+| `peers` | empty | `id@host:elect_port:client_port[:repl_port_base],…` for every node in the cluster including self. Empty means the elector is dormant. |
 
 Use the extended three-field peer syntax: election traffic rides the elect port, while retargeting and `-MISDIRECTED` replies use the client port. The legacy `id@host:port` form assumes both are equal, which is almost never what you want.
 
@@ -190,7 +190,7 @@ One consequence to plan for: in an elect quorum, `[replication] role = "primary"
 
 Two paths move the primary role, both built on the stream mechanics above; the operational detail (steps, timings, error contract) lives in [`docs/availability.md`](https://github.com/goliajp/kevy/blob/develop/docs/availability.md).
 
-**Planned: `FAILOVER host port [TIMEOUT ms] | ABORT`** (v3.15). Run on the primary with the target replica's *client* address; it answers `+OK` and hands over on a background thread: quiesce writes (`-QUIESCED`), poll the target's `INFO replication` until drained (`slave_lag_frames:0`), promote it (`REPLICAOF NO ONE`), then follow it as a replica. The handover retargets to `client port + 10000`, so the target must run with the default `listen_port_base`. Timeout (default 10 000 ms) rolls the quiesce back.
+**Planned: `FAILOVER host port [TIMEOUT ms] | ABORT`** (v3.15). Run on the primary with the target replica's *client* address; it answers `+OK` and hands over on a background thread: quiesce writes (`-QUIESCED`), poll the target's `INFO replication` until drained (`slave_lag_frames:0`), promote it (`REPLICAOF NO ONE`), then follow it as a replica. The handover follows the replication base the target reports as `repl_port_base` in `INFO replication`. Timeout (default 10 000 ms) rolls the quiesce back.
 
 **Crash: quorum election** (v3.15). With the `[cluster]` block on every node, peers detect a dead primary and elect the replica with the highest applied replication offset (lowest `node_id` breaks ties); the winner opens writes and bumps its feed generation, losers retarget automatically. A rejoining ex-primary whose stream is *ahead* of the new primary (a forked suffix of never-replicated writes) gets a **replacing** snapshot resync — `FLUSHALL` before load — instead of a corrupt-close: the fork is discarded and the node converges on the majority's history.
 
