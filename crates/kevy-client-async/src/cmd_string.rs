@@ -11,7 +11,7 @@ use kevy_resp::Reply;
 use crate::conn::AsyncConnection;
 use crate::reply::{string, unexpected};
 
-impl AsyncConnection {
+impl<T: crate::AsyncTransport> AsyncConnection<T> {
     /// `SET key value`. Unconditional set; returns on `+OK`.
     pub async fn set(&mut self, key: &[u8], value: &[u8]) -> io::Result<()> {
         match self.codec_mut().request_borrowed(&[b"SET", key, value]).await? {
