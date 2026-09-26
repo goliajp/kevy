@@ -216,6 +216,9 @@ pub(crate) struct Shard<C: Commands> {
     /// `Some`: every accepted replica link must complete a Noise handshake
     /// before anything it sends is read.
     pub(crate) repl_security: Option<std::sync::Arc<crate::ReplicationSecurity>>,
+    /// `Some`: `CLIENT SETPEER` with this token rewrites a connection's
+    /// peer address.
+    pub(crate) peer_token: Option<[u8; 32]>,
     /// Active replica connections (handshake-pending or streaming).
     /// Vec rather than KevyMap — N < 16 in practice, linear scan
     /// beats hashing at that size.

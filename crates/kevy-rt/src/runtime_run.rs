@@ -354,6 +354,7 @@ impl<C: Commands> Runtime<C> {
                 },
                 replication_listener,
                 repl_security: self.replication_security.clone(),
+                peer_token: self.peer_token,
                 replicas: Vec::new(),
                 slots: kevy_replicate::slot::SlotTable::new(),
                 replication_reconnect_window_ms: self.replication_reconnect_window_ms,
