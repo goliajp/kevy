@@ -1,0 +1,7 @@
+# source: https://www.rfc-editor.org/rfc/rfc7693.txt, Appendix B and Appendix E
+# sha256 of source: c943754888364fe29bbd0bb3c71c6658ef392371497eaa4a9d9dde015b0721e5
+abc 508c5e8c327c14e2e1a72ba34eeb452f37458b209ed63a294d999b4c86675982
+selftest_grand_hash 6a411f08ce25adcdfb02aba641451cec53c598b24f4fc787fbdc88797f4c1dfe
+selftest_md_len 16,20,28,32
+selftest_in_len 0,3,64,65,255,1024
+selftest_seq_multiplier 0xDEAD4BAD

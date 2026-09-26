@@ -536,6 +536,10 @@ name = "kevy-config"
 version = "6.4.0"
 
 [[package]]
+name = "kevy-crypto"
+version = "6.4.0"
+
+[[package]]
 name = "kevy-elect"
 version = "6.4.0"
 dependencies = [
