@@ -3931,9 +3931,8 @@ test result: ok. 1 passed; 0 failed in 3600.46s
 | v1.45.x MISDIRECTED elect_port | v1.45 | CLOSED in v1.55 |
 | v1.49.x INFO memory empty | v1.49 | CLOSED in v2.0.1 (not a bug) |
 | v1.52.x CLIENT SETNAME persistence | v1.52 | CLOSED in v2.0.16 |
-| Linux CI `blocking_cross_shard.rs` | session-recent | CLOSED at v2.0.14 |
 
-**Total v1.x findings closed**: 8 of 8 (+ the bonus Linux CI follow-up). **Net v2-arc + v2.0.x patch line**: every open finding from the v2 chaos suite + every mailrs-feedback gap closed.
+**Total v1.x findings closed**: 8 of 8. **Net v2-arc + v2.0.x patch line**: every open finding from the v2 chaos suite + every mailrs-feedback gap closed.
 
 ### Fix — crates.io publish chain unblocked
 
@@ -4126,7 +4125,6 @@ jedis: CLIENT GETNAME = "$14\r\njedis-client-1\r\n"
 |---|---|---|
 | v1.52.x CLIENT SETNAME | v1.52.0 | **CLOSED in v2.0.16** |
 | v1.33.x Linux replication | v1.33.0 | CLOSED in v2.0.15 |
-| Linux CI `blocking_cross_shard.rs` | session-recent | CLOSED at v2.0.14 |
 | v1.49.x INFO memory empty | v1.49.0 | CLOSED in v2.0.1 |
 | v1.34.x 1h opt-in soak | v1.34.0 | **running on lx64 background** at v2.0.15 |
 
@@ -4169,7 +4167,6 @@ Pre-fix: `redis-cli PING` hung indefinitely; the chaos test recorded 0 primary-A
 | # | Surfaced | Status |
 |---|---|---|
 | v1.33.x Linux replication chaos | v1.33.0 | **CLOSED in v2.0.15** |
-| Linux CI `blocking_cross_shard.rs` failures | session-recent | **CLOSED at v2.0.14** (resolved by an earlier ship; verified passing 8/8 on lx64 at v2.0.14) |
 | v1.34.x 1h opt-in soak on lx64 | v1.34.0 | open — runtime budget |
 | v1.49.x INFO memory empty when keyspace empty | v1.49.0 | CLOSED in v2.0.1 (not a bug) |
 | v1.52.x CLIENT SETNAME persistence | v1.52.0 | open — needs `dispatch_into` trait refactor |
