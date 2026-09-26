@@ -33,6 +33,8 @@ use std::time::Duration;
 use kevy_persist::Argv;
 use kevy_replicate::replica::{ReplicaClient, ReplicaEvent};
 
+use crate::config_secure::LinkKeys;
+use crate::replica_wire::Dialer;
 use crate::store::{Shards, lock_write};
 
 /// Handle to the background thread streaming from the primary. Owned
@@ -84,6 +86,7 @@ impl ReplicaRunner {
         replica_id: String,
         backoff_min: Duration,
         backoff_max: Duration,
+        keys: Option<LinkKeys>,
     ) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let sock_clone = Arc::new(Mutex::new(None::<TcpStream>));
@@ -94,7 +97,7 @@ impl ReplicaRunner {
 
         let stop_c = Arc::clone(&stop);
         let sock_c = Arc::clone(&sock_clone);
-        let upstream_c = Arc::clone(&upstream_slot);
+        let dialer = Dialer::new(Arc::clone(&upstream_slot), replica_id, keys);
         let force_c = Arc::clone(&force_reconnect);
         let offset_c = Arc::clone(&applied_offset);
         let link_c = Arc::clone(&link_up);
@@ -104,8 +107,7 @@ impl ReplicaRunner {
             .spawn(move || {
                 run_loop(
                     shards,
-                    upstream_c,
-                    replica_id,
+                    dialer,
                     stop_c,
                     sock_c,
                     force_c,
@@ -178,8 +180,7 @@ impl ReplicaRunner {
 #[allow(clippy::too_many_arguments)]
 fn run_loop(
     shards: Shards,
-    upstream: Arc<Mutex<String>>,
-    replica_id: String,
+    mut dialer: Dialer,
     stop: Arc<AtomicBool>,
     sock_clone: Arc<Mutex<Option<TcpStream>>>,
     force_reconnect: Arc<AtomicBool>,
@@ -201,7 +202,7 @@ fn run_loop(
         // an immediate try with the new URL; clear the flag here so a
         // failed connect re-arms the backoff normally.
         force_reconnect.store(false, Ordering::Relaxed);
-        match dial(&upstream, &replica_id, data_gen, &applied_offset) {
+        match dialer.dial(data_gen, applied_offset.load(Ordering::Relaxed)) {
             Ok(mut client) => {
                 backoff = backoff_min;
                 run_session(
@@ -223,19 +224,6 @@ fn run_loop(
             }
         }
     }
-}
-
-/// One reconnect attempt: read the live upstream + resume cursor and
-/// handshake with the data's generation.
-fn dial(
-    upstream: &Arc<Mutex<String>>,
-    replica_id: &str,
-    data_gen: u64,
-    applied_offset: &Arc<AtomicU64>,
-) -> Result<ReplicaClient, kevy_replicate::replica::ReplicaError> {
-    let from_offset = applied_offset.load(Ordering::Relaxed);
-    let target = upstream.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
-    ReplicaClient::connect_at(&target, replica_id, data_gen, from_offset, Duration::from_secs(5))
 }
 
 /// One connected session: publish the socket clone + link-up flag,

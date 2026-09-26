@@ -557,8 +557,10 @@ version = "6.4.0"
 dependencies = [
  "kevy",
  "kevy-client",
+ "kevy-crypto",
  "kevy-hash",
  "kevy-index",
+ "kevy-noise",
  "kevy-persist",
  "kevy-replicate",
  "kevy-resp",

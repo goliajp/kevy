@@ -58,6 +58,10 @@ struct Server {
 
 impl Server {
     fn start() -> Server {
+        Self::start_with(None)
+    }
+
+    fn start_with(security: Option<kevy_rt::ReplicationSecurity>) -> Server {
         let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         // SAFETY: integration test owns its own process state; setting
         // an env var here is safe since no other thread reads
@@ -80,7 +84,8 @@ impl Server {
                 .with_data_dir(dir_path)
                 .with_aof(false)
                 .with_replication(true, 1024 * 1024)
-                .with_replication_listener(replication_base);
+                .with_replication_listener(replication_base)
+                .with_replication_security_opt(security);
             let _ = rt.run(stop_t);
         });
         // Wait for both ports.
@@ -357,5 +362,45 @@ fn embed_restart_resumes_via_fresh_handshake() {
         "restarted embed never re-applied the existing backlog via snapshot ship"
     );
     drop(r2);
+    server.shutdown();
+}
+
+fn secure_embed_replica_of_secure_server(trusted: [u8; 32]) -> (Server, Store) {
+    use kevy_embedded::{Keypair, LinkKeys};
+    let primary = Keypair::from_secret([1; 32]);
+    let replica = Keypair::from_secret([2; 32]);
+    let server = Server::start_with(Some(kevy_rt::ReplicationSecurity {
+        local: primary,
+        replica_keys: vec![replica.public()],
+    }));
+    let cfg = Config::default()
+        .without_aof()
+        .with_replica_upstream(format!("127.0.0.1:{}", server.replication_base))
+        .with_replica_reconnect(Duration::from_millis(50), Duration::from_millis(200))
+        .with_replica_security(LinkKeys { local: replica, peers: vec![trusted] });
+    (server, Store::open(cfg).unwrap())
+}
+
+#[test]
+fn secure_server_primary_streams_to_secure_embed_replica() {
+    let (server, replica) = secure_embed_replica_of_secure_server(
+        kevy_embedded::Keypair::from_secret([1; 32]).public(),
+    );
+    server.cmd(&[b"SET", b"key-s", b"sealed"]);
+    assert!(wait_for(Duration::from_secs(5), || {
+        replica.get(b"key-s").unwrap().as_deref() == Some(b"sealed".as_slice())
+    }));
+    drop(replica);
+    server.shutdown();
+}
+
+#[test]
+fn secure_embed_replica_expecting_another_key_gets_nothing_from_the_server() {
+    let (server, replica) = secure_embed_replica_of_secure_server(
+        kevy_embedded::Keypair::from_secret([9; 32]).public(),
+    );
+    server.cmd(&[b"SET", b"key-s", b"sealed"]);
+    assert!(!wait_for(Duration::from_millis(1500), || replica.get(b"key-s").unwrap().is_some()));
+    drop(replica);
     server.shutdown();
 }
