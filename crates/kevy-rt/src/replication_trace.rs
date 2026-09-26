@@ -33,7 +33,7 @@ impl<C: Commands> Shard<C> {
             "shard {} fd {} in AckSent: {} B output pending",
             self.id,
             conn.fd,
-            conn.output.len() - conn.write_off,
+            conn.pending_out(),
         ));
     }
 

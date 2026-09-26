@@ -200,3 +200,36 @@ fn replication_unknown_role_errors() {
         other => panic!("expected Schema, got {other:?}"),
     }
 }
+
+#[test]
+fn secure_links_config_round_trips_and_refuses_malformed_keys() {
+    let (a, b) = ("ab".repeat(32), "cd".repeat(32));
+    let src = format!(
+        "[secure]\nprivate_key_file = \"/etc/kevy/node.key\"\n\
+         [cluster]\nsecure = true\npeer_keys = [\"n2={a}\", \"n3={b}\"]\n\
+         [replication]\nsecure = true\nupstream_key = \"{a}\"\nreplica_keys = [\"{b}\"]\n"
+    );
+    let cfg = Config::from_toml_str(&src, None).unwrap();
+    assert!(cfg.cluster.secure && cfg.replication.secure);
+    assert_eq!(cfg.cluster.peer_keys, vec![("n2".into(), [0xab; 32]), ("n3".into(), [0xcd; 32])]);
+    assert_eq!(cfg.replication.upstream_key, Some([0xab; 32]));
+    assert_eq!(cfg.replication.replica_keys, vec![[0xcd; 32]]);
+    let again = Config::from_toml_str(&cfg.to_toml_string(), None).unwrap();
+    assert_eq!(
+        (again.cluster, again.replication, again.secure),
+        (cfg.cluster, cfg.replication, cfg.secure)
+    );
+
+    for bad in [
+        "[cluster]\npeer_keys = [\"n2=abc\"]\n".to_string(),
+        format!("[cluster]\npeer_keys = [\"{a}\"]\n"),
+        "[replication]\nupstream_key = \"zz\"\n".to_string(),
+        "[secure]\nkey_file = \"x\"\n".to_string(),
+    ] {
+        assert!(Config::from_toml_str(&bad, None).is_err(), "accepted: {bad}");
+    }
+    let off = Config::default();
+    assert!(
+        !off.cluster.secure && !off.replication.secure && off.secure.private_key_file.is_none()
+    );
+}

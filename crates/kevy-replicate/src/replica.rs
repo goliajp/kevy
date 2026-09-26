@@ -35,6 +35,8 @@ pub use crate::replica_error::ReplicaError;
 use kevy_resp::Argv;
 use std::io::{self, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
+
+pub use crate::replica_secure::ReplicaSecurity;
 use std::time::Duration;
 
 /// A decoded mutation frame the replica should apply to its local
@@ -121,6 +123,8 @@ pub struct ReplicaClient {
     /// [`ReplicaError::UnexpectedInSnapshot`] — interleaving live
     /// frames inside a snapshot is forbidden (`docs/snapshot.md`).
     pub(crate) in_snapshot: bool,
+    /// `Some` on a Noise-protected link.
+    pub(crate) noise: Option<crate::replica_secure::ClientNoise>,
 }
 
 impl ReplicaClient {
@@ -189,6 +193,7 @@ impl ReplicaClient {
             primary_gen_at_handshake: primary_gen,
             expected_offset: from_offset,
             in_snapshot: false,
+            noise: None,
         })
     }
 
@@ -228,7 +233,11 @@ impl ReplicaClient {
     /// received frame offset + 1 (i.e. the next offset you expect).
     pub fn send_ack(&mut self, offset: u64) -> std::io::Result<()> {
         use std::io::Write as _;
-        self.sock.write_all(&crate::wire::encode_replconf_ack(offset))
+        let ack = crate::wire::encode_replconf_ack(offset);
+        match self.noise.as_mut() {
+            Some(n) => n.write(&mut self.sock, &ack),
+            None => self.sock.write_all(&ack),
+        }
     }
 
     /// The offset the next frame should carry. Advances on every
@@ -278,7 +287,7 @@ impl Iterator for ReplicaClient {
 
 /// Resolve + connect with timeout. `ToSocketAddrs` returns an
 /// iterator; try each address until one succeeds.
-fn connect_stream<A: ToSocketAddrs>(
+pub(crate) fn connect_stream<A: ToSocketAddrs>(
     addr: A,
     connect_timeout: Duration,
 ) -> Result<TcpStream, ReplicaError> {
@@ -297,7 +306,11 @@ fn connect_stream<A: ToSocketAddrs>(
 /// Compose a `REPLICATE FROM <gen> <offset> ID <id>` RESP2
 /// multi-bulk request — symmetric to
 /// `handshake::parse_replicate_from` on the primary side.
-fn encode_replicate_from(generation: u64, from_offset: u64, replica_id: &str) -> Vec<u8> {
+pub(crate) fn encode_replicate_from(
+    generation: u64,
+    from_offset: u64,
+    replica_id: &str,
+) -> Vec<u8> {
     let mut v = Vec::with_capacity(80 + replica_id.len());
     v.extend_from_slice(b"*6\r\n");
     let gen_str = generation.to_string();
@@ -345,7 +358,7 @@ fn read_ack(sock: &mut TcpStream) -> Result<(u64, u64), ReplicaError> {
     parse_ack_line(&line)
 }
 
-fn parse_ack_line(line: &[u8]) -> Result<(u64, u64), ReplicaError> {
+pub(crate) fn parse_ack_line(line: &[u8]) -> Result<(u64, u64), ReplicaError> {
     let body = line.strip_suffix(b"\r\n").ok_or(ReplicaError::AckMalformed)?;
     let body = body.strip_prefix(b"+ACK ").ok_or(ReplicaError::AckMalformed)?;
     let s = std::str::from_utf8(body).map_err(|_| ReplicaError::AckMalformed)?;
@@ -371,6 +384,7 @@ impl ReplicaClient {
             primary_gen_at_handshake: 1,
             expected_offset,
             in_snapshot: false,
+            noise: None,
         }
     }
 }

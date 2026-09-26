@@ -22,6 +22,7 @@ use kevy_config::{CliOverrides, Config};
 static GLOBAL: kevy_alloc::KevyAlloc = kevy_alloc::KevyAlloc;
 
 fn main() -> ! {
+    handle_keygen();
     handle_help_and_version();
     let mut cfg = resolve_config();
     let threads = resolve_thread_count(&mut cfg);
@@ -50,6 +51,29 @@ fn handle_help_and_version() {
                 std::process::exit(0);
             }
             _ => {}
+        }
+    }
+}
+
+/// `kevy keygen <file>`: write a private key for the encrypted links and
+/// print its public key, the value peers put in their configuration.
+fn handle_keygen() {
+    let mut args = std::env::args().skip(1);
+    if args.next().as_deref() != Some("keygen") {
+        return;
+    }
+    let Some(path) = args.next() else {
+        eprintln!("usage: kevy keygen <file>");
+        std::process::exit(2);
+    };
+    match kevy::secure::keygen(std::path::Path::new(&path)) {
+        Ok(public) => {
+            println!("{}", kevy_config::key_to_hex(&public));
+            std::process::exit(0);
+        }
+        Err(e) => {
+            eprintln!("kevy: keygen {path}: {e}");
+            std::process::exit(1);
         }
     }
 }
@@ -110,6 +134,7 @@ kevy {v} — pure-Rust Redis-compatible KV server.
 
 USAGE:
     kevy [OPTIONS]
+    kevy keygen <FILE>  Write a private key for encrypted links; prints its public key
 
 OPTIONS:
     --config <PATH>     TOML config file (auto-detected: ./kevy.toml,

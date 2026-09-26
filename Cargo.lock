@@ -429,6 +429,7 @@ dependencies = [
  "kevy-index",
  "kevy-lua",
  "kevy-lua-host",
+ "kevy-noise",
  "kevy-persist",
  "kevy-replicate",
  "kevy-resp",
@@ -543,7 +544,10 @@ version = "6.4.0"
 name = "kevy-elect"
 version = "6.4.0"
 dependencies = [
+ "kevy-crypto",
+ "kevy-noise",
  "kevy-resp",
+ "kevy-sys",
  "kevy-testnet",
 ]
 
@@ -672,7 +676,9 @@ version = "6.4.0"
 name = "kevy-replicate"
 version = "6.4.0"
 dependencies = [
+ "kevy-noise",
  "kevy-resp",
+ "kevy-sys",
 ]
 
 [[package]]
@@ -703,8 +709,10 @@ name = "kevy-rt"
 version = "6.4.0"
 dependencies = [
  "kevy-config",
+ "kevy-crypto",
  "kevy-hash",
  "kevy-map",
+ "kevy-noise",
  "kevy-persist",
  "kevy-replicate",
  "kevy-resp",

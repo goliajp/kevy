@@ -55,6 +55,7 @@ pub mod handshake;
 pub mod replica;
 mod replica_decode;
 mod replica_error;
+mod replica_secure;
 pub mod slot;
 pub mod source;
 pub mod wire;

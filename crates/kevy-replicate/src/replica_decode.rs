@@ -31,14 +31,20 @@ impl ReplicaClient {
             }
             // Need more bytes off the socket.
             let mut chunk = [0u8; 4096];
-            match self.sock.read(&mut chunk) {
+            let read = match self.noise.as_mut() {
+                Some(noise) => noise.read(&mut self.sock, &mut chunk, &mut self.buf),
+                None => {
+                    self.sock.read(&mut chunk).inspect(|&n| self.buf.extend_from_slice(&chunk[..n]))
+                }
+            };
+            match read {
                 Ok(0) => {
                     if self.cursor < self.buf.len() {
                         return Some(Err(ReplicaError::Truncated));
                     }
                     return None;
                 }
-                Ok(n) => self.buf.extend_from_slice(&chunk[..n]),
+                Ok(_) => {}
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
                 Err(e) => return Some(Err(ReplicaError::Io(e))),
             }

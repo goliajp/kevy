@@ -353,6 +353,7 @@ impl<C: Commands> Runtime<C> {
                     None
                 },
                 replication_listener,
+                repl_security: self.replication_security.clone(),
                 replicas: Vec::new(),
                 slots: kevy_replicate::slot::SlotTable::new(),
                 replication_reconnect_window_ms: self.replication_reconnect_window_ms,

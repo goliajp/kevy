@@ -89,6 +89,7 @@ pub struct Runtime<C: Commands> {
     /// without a network surface, backlog accumulates and evicts —
     /// useful for benchmarks). Default `None`.
     pub(crate) replication_port_base: Option<u16>,
+    pub(crate) replication_security: Option<std::sync::Arc<crate::ReplicationSecurity>>,
     /// Per-shard SlotTable reconnect-window in ms. After a
     /// streaming replica disconnects, its `(replica_id, sent_offset)`
     /// is recorded in the shard's `slots` map; slots past this age
@@ -154,6 +155,7 @@ impl<C: Commands> Runtime<C> {
             replica_inboxes: Vec::new(),
             replication_buffer_size: 256 * 1024 * 1024,
             replication_port_base: None,
+            replication_security: None,
             replication_reconnect_window_ms: 60_000,
             unix_socket_path: None,
             tier_budget: None,

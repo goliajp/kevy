@@ -23,6 +23,13 @@ pub struct Keypair {
     public: [u8; 32],
 }
 
+// the secret never reaches a log line
+impl core::fmt::Debug for Keypair {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Keypair").field("public", &self.public).finish_non_exhaustive()
+    }
+}
+
 impl Keypair {
     /// Derive the public key of `secret`.
     ///

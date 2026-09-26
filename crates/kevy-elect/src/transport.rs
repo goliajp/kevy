@@ -66,6 +66,8 @@ pub enum InboundEvent {
 #[derive(Debug)]
 pub(crate) struct Shared {
     pub(crate) elector: Mutex<Elector>,
+    /// `Some` when every election link must be Noise-authenticated.
+    pub(crate) secure: Option<crate::link::SecureLinks>,
     /// Per-peer outbound queue. Indexed by `node_id`. Each worker
     /// drains its own queue + writes onto the persistent TCP
     /// stream; on stream death the queue is held until the worker
@@ -147,8 +149,51 @@ impl Transport {
         peers: Vec<PeerAddr>,
         on_change: TopologyCallback,
     ) -> std::io::Result<Self> {
+        Self::spawn_inner(elector, hb_interval, listen_addr, peers, on_change, None)
+    }
+
+    /// Like [`Self::spawn_with_callback`], with every link encrypted and
+    /// both ends authenticated by their keys (Noise IK). A connection from
+    /// a key not in `secure.peer_keys` is dropped before anything it sends
+    /// is read, and a message claiming a sender other than the key's node
+    /// closes the link.
+    ///
+    /// ```
+    /// use std::net::{IpAddr, Ipv4Addr};
+    /// use std::time::Duration;
+    /// use kevy_elect::{ElectConfig, ElectJitter, Elector, Role, SecureLinks, Transport};
+    /// use kevy_noise::Keypair;
+    ///
+    /// let elector = Elector::new("a", vec!["a".to_string()], "127.0.0.1:0", Role::Primary,
+    ///     ElectConfig::default(), ElectJitter::Fixed(Duration::ZERO));
+    /// let secure = SecureLinks { local: Keypair::from_secret([1; 32]), peer_keys: vec![] };
+    /// let t = Transport::spawn_secure(elector, Duration::from_millis(50),
+    ///     (IpAddr::V4(Ipv4Addr::LOCALHOST), 0), vec![], Box::new(|_, _, _| {}), secure).unwrap();
+    /// assert_eq!(t.state_snapshot().role, Role::Primary);
+    /// t.shutdown();
+    /// ```
+    pub fn spawn_secure(
+        elector: Elector,
+        hb_interval: Duration,
+        listen_addr: (std::net::IpAddr, u16),
+        peers: Vec<PeerAddr>,
+        on_change: TopologyCallback,
+        secure: crate::link::SecureLinks,
+    ) -> std::io::Result<Self> {
+        Self::spawn_inner(elector, hb_interval, listen_addr, peers, on_change, Some(secure))
+    }
+
+    fn spawn_inner(
+        elector: Elector,
+        hb_interval: Duration,
+        listen_addr: (std::net::IpAddr, u16),
+        peers: Vec<PeerAddr>,
+        on_change: TopologyCallback,
+        secure: Option<crate::link::SecureLinks>,
+    ) -> std::io::Result<Self> {
         let shared = Arc::new(Shared {
             elector: Mutex::new(elector),
+            secure,
             out_queues: Mutex::new(std::collections::HashMap::new()),
         });
         let stop = Arc::new(AtomicBool::new(false));
@@ -157,7 +202,7 @@ impl Transport {
 
         let listener = TcpListener::bind(listen_addr)?;
         listener.set_nonblocking(false)?;
-        spawn_listener_thread(listener, inbound_tx.clone(), stop.clone(), &mut handles)?;
+        spawn_listener_thread(listener, inbound_tx.clone(), stop.clone(), &shared, &mut handles)?;
         spawn_outbound_threads(&peers, &shared, &stop, &mut handles)?;
 
         let orch_stop = stop.clone();
@@ -252,11 +297,13 @@ fn spawn_listener_thread(
     listener: TcpListener,
     tx: Sender<InboundEvent>,
     stop: Arc<AtomicBool>,
+    shared: &Arc<Shared>,
     handles: &mut Vec<JoinHandle<()>>,
 ) -> std::io::Result<()> {
+    let shared = Arc::clone(shared);
     handles.push(std::thread::Builder::new().name("kevy-elect-listener".to_string()).spawn(
         move || {
-            accept_loop(listener, tx, stop);
+            accept_loop(listener, tx, stop, shared);
         },
     )?);
     Ok(())

@@ -58,6 +58,67 @@ impl<C: Commands> Runtime<C> {
         self
     }
 
+    /// Require a Noise IK handshake on every replica link before any
+    /// replication bytes flow; everything after it is encrypted. Off unless
+    /// called.
+    ///
+    /// ```
+    /// use kevy_noise::Keypair;
+    /// use kevy_rt::{ArgvView, Commands, ReplicationSecurity, Route, Runtime, Store, TxnKind};
+    ///
+    /// #[derive(Clone)]
+    /// struct Minimal;
+    /// impl Commands for Minimal {
+    ///     fn route<A: ArgvView + ?Sized>(&self, _a: &A) -> Route { Route::Local }
+    ///     fn dispatch<A: ArgvView + ?Sized>(&self, _s: &mut Store, _a: &A) -> Vec<u8> {
+    ///         b"+OK\r\n".to_vec()
+    ///     }
+    ///     fn is_quit<A: ArgvView + ?Sized>(&self, _a: &A) -> bool { false }
+    ///     fn is_write<A: ArgvView + ?Sized>(&self, _a: &A) -> bool { false }
+    ///     fn txn_kind<A: ArgvView + ?Sized>(&self, _a: &A) -> TxnKind { TxnKind::Other }
+    /// }
+    ///
+    /// let sec = ReplicationSecurity { local: Keypair::from_secret([1; 32]), replica_keys: Vec::new() };
+    /// let _rt = Runtime::builder(Minimal).with_replication_listener(16004).with_replication_security(sec);
+    /// ```
+    #[must_use]
+    pub fn with_replication_security(mut self, security: crate::ReplicationSecurity) -> Self {
+        self.replication_security = Some(std::sync::Arc::new(security));
+        self
+    }
+
+    /// [`Self::with_replication_security`] when `security` is `Some`; a
+    /// no-op otherwise, so a caller can pass its configuration straight
+    /// through.
+    ///
+    /// ```
+    /// use kevy_rt::{ArgvView, Commands, Route, Runtime, Store, TxnKind};
+    ///
+    /// #[derive(Clone)]
+    /// struct Minimal;
+    /// impl Commands for Minimal {
+    ///     fn route<A: ArgvView + ?Sized>(&self, _a: &A) -> Route { Route::Local }
+    ///     fn dispatch<A: ArgvView + ?Sized>(&self, _s: &mut Store, _a: &A) -> Vec<u8> {
+    ///         b"+OK\r\n".to_vec()
+    ///     }
+    ///     fn is_quit<A: ArgvView + ?Sized>(&self, _a: &A) -> bool { false }
+    ///     fn is_write<A: ArgvView + ?Sized>(&self, _a: &A) -> bool { false }
+    ///     fn txn_kind<A: ArgvView + ?Sized>(&self, _a: &A) -> TxnKind { TxnKind::Other }
+    /// }
+    ///
+    /// let _plain = Runtime::builder(Minimal).with_replication_security_opt(None);
+    /// ```
+    #[must_use]
+    pub fn with_replication_security_opt(
+        self,
+        security: Option<crate::ReplicationSecurity>,
+    ) -> Self {
+        match security {
+            Some(s) => self.with_replication_security(s),
+            None => self,
+        }
+    }
+
     /// Per-shard SlotTable reconnect window in milliseconds — the
     /// grace period a disconnected replica's slot is retained for so
     /// a reconnect within the window can be correlated against its

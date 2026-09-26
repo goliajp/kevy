@@ -412,6 +412,12 @@ pub struct Config {
     /// `[tiering]` settings — the transparent-tiering RAM budget
     /// (capacity arc). No budget = tiering off.
     pub tiering: crate::tiering::TieringSection,
+    /// `[secure]` — where this node's key for the encrypted links lives.
+    ///
+    /// ```
+    /// assert_eq!(kevy_config::Config::default().secure, kevy_config::SecureSection::default());
+    /// ```
+    pub secure: crate::secure::SecureSection,
     /// Path the config was loaded from (for `CONFIG REWRITE`). `None` =
     /// loaded from defaults only / from in-memory string.
     pub source_path: Option<PathBuf>,
