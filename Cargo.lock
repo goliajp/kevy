@@ -511,8 +511,10 @@ dependencies = [
  "async-std",
  "kevy-client",
  "kevy-hash",
+ "kevy-noise",
  "kevy-resp",
  "kevy-resp-client",
+ "kevy-sys",
  "smol",
  "tokio",
 ]
