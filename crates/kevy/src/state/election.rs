@@ -314,6 +314,15 @@ fn peer_to_addr(p: &PeerEntry) -> PeerAddr {
 mod tests {
     use super::*;
 
+    #[test]
+    fn advertised_host_prefers_the_announce_address() {
+        let mut cfg = Config::default();
+        cfg.server.bind = [10, 0, 0, 5];
+        assert_eq!(advertised_host(&cfg), "10.0.0.5");
+        cfg.cluster.announce_ip = Some([203, 0, 113, 7]);
+        assert_eq!(advertised_host(&cfg), "203.0.113.7");
+    }
+
     fn cfg_with(node_id: &str, peers: &str) -> Config {
         let mut c = Config::default();
         c.cluster.node_id = node_id.to_string();
