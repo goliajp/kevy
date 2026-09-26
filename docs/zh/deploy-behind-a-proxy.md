@@ -1,6 +1,6 @@
 # 把 kevy 放在代理后面部署
 
-kevy 没有 AUTH，也没有 TLS。**认证和加密都在进程前面做。** 这一章就是做法，照抄即可，不需要自己改编。
+kevy 没有 AUTH，也没有 TLS。**认证和加密都在进程前面做。** 这一章就是做法，照抄即可，不需要自己改编。（Rust 客户端也可以改用 kevy 自己的加密客户端端口，走 `kevys://`，见 [encrypted-links.md](encrypted-links.md)。）
 
 ## kevy 会开什么
 

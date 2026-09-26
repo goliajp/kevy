@@ -1,6 +1,6 @@
-# kevy ノード間の暗号化リンク
+# 暗号化リンク
 
-レプリケーションと選挙のコントロールプレーンは、kevy 自身の、暗号化され相互に認証されたリンクの上で動かせます。どちらも**明示的に有効にしない限りオフ**で、有効にしてもクライアント接続には何も影響しません。クライアントに対して kevy は今も TLS も AUTH も持たず、クライアントは [deploy-behind-a-proxy.md](deploy-behind-a-proxy.md) のとおりプロキシ経由で接続します。
+レプリケーション、選挙のコントロールプレーン、クライアント接続は、それぞれ kevy 自身の暗号化され認証されたリンクの上で動かせます。どれも**明示的に有効にしない限りオフ**です。TLS と AUTH は今もありません。TLS が必要なクライアントは [deploy-behind-a-proxy.md](deploy-behind-a-proxy.md) のとおりプロキシ経由で接続し、暗号化ポートを開いても開かなくても平文のクライアントポートの振る舞いは変わりません。
 
 ## 対象となるリンク
 
@@ -8,7 +8,8 @@
 |---|---|---|
 | 選挙（`elect_port_base`） | `[cluster] secure = true` | 両端。`peer_keys` の鍵による |
 | レプリケーション（`listen_port_base + i`） | `[replication] secure = true` | プライマリは `upstream_key` かピアの鍵で、レプリカは `replica_keys` を設定したときに認証される |
-| クライアント（`port`、クラスタポート、unix ソケット） | 暗号化しない | 認証しない。プロキシを使う |
+| `[secure] listen_port` のクライアント | 常に暗号化 | サーバーは自分の鍵で、`client_keys` を設定したときはクライアントも認証される |
+| `port`、クラスタポート、unix ソケットのクライアント | 暗号化しない | 認証しない。プロキシを使う |
 
 プロトコルは Noise `IK` で、X25519、ChaCha20-Poly1305、BLAKE2s を使います。イニシエータは接続前に相手の公開鍵を知っており、レスポンダは最初のメッセージからイニシエータの公開鍵を知り、応答する前に拒否できます。この 1 往復のあとの通信はすべて暗号化され、認証されます。暗号プリミティブは kevy 自身の実装で依存はなく、公開されたテストベクタや他の実装と照合済みですが、第三者の監査は受けていません。
 
@@ -83,6 +84,41 @@ let replica = Store::open(
 - レプリカでは、`peers` は信頼するプライマリの一覧で、応答があるまで順に試します。空だと開くときに失敗します。ライターでは、接続を許すレプリカの一覧で、空ならすべて許可します。
 - `Keypair::from_secret` が受け取る 32 バイトは、`kevy keygen` が hex で書き出すものです。どこに保管するかはアプリケーションが決めます。
 
+## クライアント
+
+`[secure] listen_port` は暗号化プロトコルだけを話す 2 つ目のクライアントポートを開きます。平文の `port` はそのままです。クライアントはサーバーの公開鍵を含む `kevys://` URL で接続します。
+
+```toml
+[secure]
+private_key_file = "/etc/kevy/node.key"
+listen_port      = 6404
+client_keys      = []   # 許可するクライアントの公開鍵。空ならすべて許可し、それでも暗号化される
+```
+
+```text
+kevys://10.0.0.11:6404?server_key=d5c015b88401b6b33f5cb292b01ff3034e5f1de008b2e3f77faed23c31f16a4c
+kevys://10.0.0.11:6404/0?server_key=<hex>&client_key_file=/etc/app/kevy.key
+```
+
+- `client_key_file` のないクライアントは、接続ごとに新しい鍵ペアを作ります。`client_keys` が空ならそれで足ります。空でないときは `kevy keygen` でクライアントの鍵を作り、その公開鍵を列挙してください。
+- `kevys://` を受け付けるのは Rust クライアントです。`kevy-resp-client`（`RespClient::connect_url`、または任意の RESP コードの下に `SecureStream` を置く）、`kevy-client`（`Connection` と `Subscriber`）、`kevy-client-async`（`AsyncConnection::connect_secure_url`、`AsyncSubscriber::connect_secure_url`）です。ほかの言語のバインディングと `kevy-cli` は対応していないので、TLS プロキシを使ってください。
+- `CLIENT LIST`、`CLIENT INFO`、`CLIENT KILL ADDR` にはサーバーではなくクライアント自身のアドレスが表示されます。
+- このポートには `private_key_file` が必要で、`port` と同じにはできません。どちらの設定ミスでも、サーバーは起動時に停止します。
+
+## コスト
+
+暗号処理はリアクタとは別のスレッドで動きます。各接続のバイトはそこで復号されてループバック経由で平文ポートに渡され、応答は戻る途中で暗号化されます。このポートを開いても開かなくても平文の経路は同じコードで、暗号化接続は暗号処理のほかにループバックの往復を 1 回余分に払います。
+
+1 台の Linux ホストで、クライアントとサーバーをループバックで結び、4 シャードで計測しました。
+
+| | 平文ポート | 暗号化ポート |
+|---|---:|---:|
+| 1 リクエストの往復 | 10 µs | 25 µs |
+| 1 接続での 256 KB `GET` | 3.0 GB/s | 0.32 GB/s |
+| 新規接続と `PING` 1 回 | 38 µs | 0.58 ms |
+
+往復で増えた時間の大半はその余分な 1 ホップで、小さなメッセージの暗号化と復号は合わせて約 0.5 µs です。大きな値は移植性のある実装の暗号で頭打ちになり、ハンドシェイクの時間はほぼ X25519 です。接続を開いたまま使うコネクションプールなら、ハンドシェイクは 1 回で済みます。
+
 ## 暗号化ノードと平文ノードの混在
 
 暗号化ノードは平文ノードと通信しません。平文のレプリカが暗号化プライマリに接続しても応答はなく、他ノードの `peer_keys` にない鍵を持つノードの声は選挙で誰にも届きません。クラスタを暗号化に切り替えるには、新しい設定で全ノードを再起動してください。
@@ -98,6 +134,6 @@ let replica = Store::open(
 
 ## 参照
 
-- [deploy-behind-a-proxy.md](deploy-behind-a-proxy.md)：クライアント接続の TLS
+- [deploy-behind-a-proxy.md](deploy-behind-a-proxy.md)：`kevys://` を使えないクライアントの TLS
 - [replication.md](replication.md)：レプリケーションそのもの
 - [availability.md](availability.md)：選挙とフェイルオーバー
