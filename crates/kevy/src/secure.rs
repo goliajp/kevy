@@ -193,39 +193,23 @@ mod tests {
         }
     }
 
-    fn secure_primary(local: Keypair) -> (u16, std::sync::Arc<std::sync::atomic::AtomicBool>) {
-        let port = kevy_testnet::free_port_block(1);
-        let repl = port + 1;
-        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let stop_thread = std::sync::Arc::clone(&stop);
-        let dir = dir("links-primary");
-        std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::builder(crate::KevyCommands::sharded(1))
-                .bind([127, 0, 0, 1], port)
-                .shards(1)
-                .with_data_dir(dir)
-                .with_aof(false)
-                .with_replication(true, 1 << 20)
-                .with_replication_listener(repl)
-                .with_replication_security(kevy_rt::ReplicationSecurity {
-                    local,
-                    replica_keys: Vec::new(),
-                });
-            let _ = rt.run(stop_thread);
-        });
-        for _ in 0..2000 {
-            if std::net::TcpStream::connect(("127.0.0.1", repl)).is_ok() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        (repl, stop)
+    // an embedded writer is a secure replication primary on a port the OS
+    // picks, so no port has to be reserved ahead of time
+    fn secure_primary(local: Keypair) -> (kevy_embedded::Store, u16) {
+        let store = kevy_embedded::Store::open(
+            kevy_embedded::Config::default()
+                .with_embed_writer("127.0.0.1:0")
+                .with_writer_security(kevy_embedded::LinkKeys { local, peers: Vec::new() }),
+        )
+        .unwrap();
+        let port = store.writer_addr().unwrap().port();
+        (store, port)
     }
 
     #[test]
     fn repl_links_try_each_trusted_primary_and_remember_the_one_that_answered() {
         let primary = Keypair::from_secret([5; 32]);
-        let (repl, stop) = secure_primary(primary.clone());
+        let (_primary, repl) = secure_primary(primary.clone());
         let me = Keypair::from_secret([6; 32]);
         let mut cfg = Config::default();
         cfg.replication.upstream_key = Some([9; 32]); // a stale key first
@@ -239,7 +223,6 @@ mod tests {
         cfg.cluster.peer_keys.clear();
         let strangers = ReplLinks::from_config(&cfg, &me);
         assert!(strangers.connect(addr, "r", 0, 0).is_err(), "no trusted key, no link");
-        stop.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
     #[test]

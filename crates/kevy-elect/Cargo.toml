@@ -17,7 +17,7 @@ categories = ["database", "network-programming"]
 # v6 — not packaged: these reference a dependency the published manifest
 # cannot declare, and `cargo package` would ship source that does not
 # compile. Needs kevy-testnet, which is never published.
-exclude = ["tests/transport_e2e.rs"]
+exclude = ["tests/transport_e2e.rs", "tests/secure_links.rs"]
 [lints]
 workspace = true
 
