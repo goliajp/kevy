@@ -43,6 +43,7 @@ members = [
     "crates/kevy-testnet",
     "crates/kevy-time",
     "crates/kevy-crypto",
+    "crates/kevy-noise",
     "crates/kevy-scalar",
     "crates/kevy-sys",
     "crates/kevy-seg",
