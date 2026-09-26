@@ -61,6 +61,9 @@ pub struct Runtime<C: Commands> {
     /// → contiguous ranges) + one deterministic extra listener per shard at
     /// `cluster_port_base + id`. `None` = off (default, zero change).
     pub(crate) cluster_port_base: Option<u16>,
+    /// Advertised `(ip, port_base)` overriding the bind address and the
+    /// listening ports in cluster replies. `None` = advertise what is bound.
+    pub(crate) cluster_announce: (Option<[u8; 4]>, Option<u16>),
     /// Replication: when `true`, each shard runs a
     /// `ReplicationSource` with `replication_buffer_size` byte budget;
     /// every applied mutation is pushed to the backlog. This wires
@@ -144,6 +147,7 @@ impl<C: Commands> Runtime<C> {
             slowlog_slower_than_micros: -1,
             slowlog_max_len: 128,
             cluster_port_base: None,
+            cluster_announce: (None, None),
             enable_replication: false,
             feed_enabled: false,
             feed_buffer_size: 64 * 1024 * 1024,

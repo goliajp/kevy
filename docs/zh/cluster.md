@@ -42,7 +42,7 @@ kevy 的集群能力分两层，彼此独立——**单节点多 shard 暴露**�
                   └─────────────────────────────────────────┘
 ```
 
-shard `i` 固定绑定 `port_base + 1 + i`（`port_base` 可在 TOML 里覆盖）。主端口保留代理行为，服务不讲集群协议的客户端；per-shard 端口在键落错持有者时应答 `-MOVED <slot> <host:port>`。
+shard `i` 绑定 `port_base + i`，`port_base` 默认是 `port + 1`（可在 TOML 里覆盖）。主端口保留代理行为，服务不讲集群协议的客户端；per-shard 端口在键落错持有者时应答 `-MOVED <slot> <host:port>`。放在代理或 NAT 后面时，用 `announce_ip` 和 `announce_port_base` 让这些回复写出客户端真正能连到的地址，见 [deploy-behind-a-proxy.md](deploy-behind-a-proxy.md)。
 
 全键空间命令（`KEYS`、`SCAN`、`DBSIZE`、`FLUSHALL`）在任何端口上都仍作用于整个键空间——kevy 在内部完成扇出，客户端无需自己动手。
 
@@ -55,7 +55,7 @@ port = 6004
 
 [cluster]
 enabled   = true
-# port_base = 6004   # defaults to `port`; shards live at port_base + 1 + i
+# port_base = 6005   # first shard port; defaults to `port + 1`, shard i at port_base + i
 ```
 
 等价的 CLI / env：

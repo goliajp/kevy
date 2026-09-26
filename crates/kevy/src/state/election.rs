@@ -304,15 +304,11 @@ fn resolved_elect_port_base(cfg: &Config) -> u16 {
 }
 
 fn advertised_host(cfg: &Config) -> String {
-    // Use the bind address as the advertised host. Operators behind
-    // NAT will want to set an external IP via a future config knob —
-    // if the bind is 0.0.0.0 (all interfaces), the advertised string
-    // is still 0.0.0.0 (caller-resolved by the peer's hostname
-    // mapping).
-    format!(
-        "{}.{}.{}.{}",
-        cfg.server.bind[0], cfg.server.bind[1], cfg.server.bind[2], cfg.server.bind[3]
-    )
+    // `[cluster].announce_ip` for a node behind NAT or a proxy, else the
+    // bind address. A 0.0.0.0 bind stays 0.0.0.0 here; peers resolve the
+    // new primary from their own member table, not from this string.
+    let [a, b, c, d] = cfg.cluster.announce_ip.unwrap_or(cfg.server.bind);
+    format!("{a}.{b}.{c}.{d}")
 }
 
 fn peer_to_addr(p: &PeerEntry) -> PeerAddr {
@@ -322,6 +318,15 @@ fn peer_to_addr(p: &PeerEntry) -> PeerAddr {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn advertised_host_prefers_the_announce_address() {
+        let mut cfg = Config::default();
+        cfg.server.bind = [10, 0, 0, 5];
+        assert_eq!(advertised_host(&cfg), "10.0.0.5");
+        cfg.cluster.announce_ip = Some([203, 0, 113, 7]);
+        assert_eq!(advertised_host(&cfg), "203.0.113.7");
+    }
 
     #[test]
     fn peer_repl_port_base_uses_the_declared_base_else_the_default() {

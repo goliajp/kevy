@@ -37,11 +37,25 @@ fn node_id(i: usize) -> String {
     format!("{:040x}", i + 1)
 }
 
-/// Advertised IPv4: the bind address, with `127.0.0.1` substituted for a
-/// `0.0.0.0` wildcard (an unroutable advertise would strand every client).
+/// Advertised IPv4: `[cluster].announce_ip` when set, else the bind
+/// address with `127.0.0.1` substituted for a `0.0.0.0` wildcard (an
+/// unroutable advertise would strand every client).
 fn advertised_ip(cfg: &Config) -> String {
-    let [a, b, c, d] = cfg.server.bind;
-    if [a, b, c, d] == [0, 0, 0, 0] { "127.0.0.1".into() } else { format!("{a}.{b}.{c}.{d}") }
+    let [a, b, c, d] = match cfg.cluster.announce_ip {
+        Some(ip) => ip,
+        None if cfg.server.bind == [0, 0, 0, 0] => [127, 0, 0, 1],
+        None => cfg.server.bind,
+    };
+    format!("{a}.{b}.{c}.{d}")
+}
+
+/// First advertised cluster port: `[cluster].announce_port_base` when
+/// set, else the port shard 0 listens on.
+fn advertised_port_base(cfg: &Config) -> u16 {
+    match cfg.cluster.announce_port_base {
+        0 => crate::cluster_port_base(cfg),
+        base => base,
+    }
 }
 
 // LOC-WAIVER: data-driven subcommand dispatch table — one reply-emitter arm per subcommand.
@@ -136,7 +150,7 @@ pub(crate) fn cmd_cluster<A: ArgvView + ?Sized>(
 /// `SHARDS`) format from: `f(i, ip, port, start, end)` per virtual node.
 fn for_each_node(cfg: &Config, n: usize, mut f: impl FnMut(usize, &str, i64, u16, u16)) {
     let ip = advertised_ip(cfg);
-    let base = i64::from(crate::cluster_port_base(cfg));
+    let base = i64::from(advertised_port_base(cfg));
     for i in 0..n {
         let (start, end) = kevy_rt::shard_slot_range(i, n);
         f(i, &ip, base + i as i64, start, end);

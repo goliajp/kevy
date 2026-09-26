@@ -211,13 +211,15 @@ impl<C: Commands> Runtime<C> {
         Ok(())
     }
 
-    /// Advertised cluster topology (None = cluster off). A 0.0.0.0 bind
-    /// advertises 127.0.0.1 — an unroutable redirect target would strand
-    /// every cluster client (single-machine scope; no announce-ip knob).
+    /// Advertised cluster topology (None = cluster off). The announce
+    /// address wins; otherwise a 0.0.0.0 bind advertises 127.0.0.1, since
+    /// an unroutable redirect target would strand every cluster client.
     fn cluster_topo(&self) -> Option<crate::cluster::ClusterTopo> {
+        let (announce_ip, announce_base) = self.cluster_announce;
+        let bound = if self.ip == [0, 0, 0, 0] { [127, 0, 0, 1] } else { self.ip };
         self.cluster_port_base.map(|base| crate::cluster::ClusterTopo {
-            ip: if self.ip == [0, 0, 0, 0] { [127, 0, 0, 1] } else { self.ip },
-            port_base: base,
+            ip: announce_ip.unwrap_or(bound),
+            port_base: announce_base.unwrap_or(base),
         })
     }
 

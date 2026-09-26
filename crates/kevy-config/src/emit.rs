@@ -282,6 +282,10 @@ fn push_cluster(v: &mut Vec<CanonicalPair>, cfg: &Config) {
     push(v, "cluster", "port_base", cl.port_base.to_string());
     push(v, "cluster", "node_id", toml_string(&cl.node_id));
     push(v, "cluster", "elect_port_base", cl.elect_port_base.to_string());
+    if let Some([a, b, c, d]) = cl.announce_ip {
+        push(v, "cluster", "announce_ip", format!("\"{a}.{b}.{c}.{d}\""));
+    }
+    push(v, "cluster", "announce_port_base", cl.announce_port_base.to_string());
     let peers: Vec<String> = cl.peers.iter().map(PeerEntry::to_token).collect();
     push(v, "cluster", "peers", toml_array(&peers));
     let scopes: Vec<String> = cl.scopes.iter().map(ScopeEntry::to_token).collect();
