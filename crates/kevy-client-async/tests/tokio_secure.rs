@@ -85,3 +85,16 @@ async fn a_wrong_server_key_is_refused() {
     assert!(refused.is_err());
     let _ = TcpStream::connect(("127.0.0.1", port)).await;
 }
+
+#[tokio::test]
+async fn a_kevys_url_with_a_db_selects_it_first() {
+    let (port, key) = fake_server(vec![b"+OK\r\n".to_vec(), b"+PONG\r\n".to_vec()]).await;
+    let url = format!("kevys://127.0.0.1:{port}/0?server_key={}", hex(&key));
+    let mut c = AsyncConnection::connect_secure_url(&url).await.unwrap();
+    c.ping().await.unwrap();
+
+    let (port, key) = fake_server(vec![b"-ERR DB index is out of range\r\n".to_vec()]).await;
+    let url = format!("kevys://127.0.0.1:{port}/3?server_key={}", hex(&key));
+    let e = AsyncConnection::connect_secure_url(&url).await.unwrap_err();
+    assert!(e.to_string().contains("SELECT 3 rejected"), "{e}");
+}
