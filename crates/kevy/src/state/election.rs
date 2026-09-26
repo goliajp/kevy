@@ -175,7 +175,7 @@ fn make_topology_callback(
         .cluster
         .peers
         .iter()
-        .map(|p| (p.node_id.clone(), p.host.clone(), p.client_port.unwrap_or(p.port)))
+        .map(|p| (p.node_id.clone(), p.host.clone(), peer_repl_port_base(p)))
         .collect();
     let my_id = cfg.cluster.node_id.clone();
     Box::new(move |role, primary, quorum| {
@@ -214,20 +214,25 @@ fn make_topology_callback(
     })
 }
 
+/// Where a peer accepts replicas: its declared base, else the default
+/// client port + 10000.
+fn peer_repl_port_base(p: &PeerEntry) -> u16 {
+    p.repl_port_base.unwrap_or_else(|| p.client_port.unwrap_or(p.port).saturating_add(10_000))
+}
+
 /// Retarget this node's replica runners at a newly announced
 /// primary, resolving its replication address from the static
-/// member table (client port + 10000, the replication-base
-/// convention).
+/// member table.
 fn follow_new_primary(
     replication: &ReplicationState,
     member_table: &[(String, String, u16)],
     pid: &str,
 ) {
-    let Some((_, host, cport)) = member_table.iter().find(|(id, _, _)| id == pid) else {
+    let Some((_, host, repl_base)) = member_table.iter().find(|(id, _, _)| id == pid) else {
         eprintln!("kevy: elect — primary '{pid}' not in the member table; not retargeting");
         return;
     };
-    let upstream = format!("{host}:{}", cport + 10_000);
+    let upstream = format!("{host}:{repl_base}");
     match crate::replication::retarget_upstream(replication, &upstream) {
         Ok(()) => {
             eprintln!("kevy: elect — following new primary '{pid}' at {upstream}");
@@ -321,6 +326,13 @@ mod tests {
         assert_eq!(advertised_host(&cfg), "10.0.0.5");
         cfg.cluster.announce_ip = Some([203, 0, 113, 7]);
         assert_eq!(advertised_host(&cfg), "203.0.113.7");
+    }
+
+    #[test]
+    fn peer_repl_port_base_uses_the_declared_base_else_the_default() {
+        let peers = PeerEntry::parse_list("a@h:6204:6004:7100,b@h:6204:6004,c@h:6204").unwrap();
+        let bases: Vec<u16> = peers.iter().map(peer_repl_port_base).collect();
+        assert_eq!(bases, [7100, 16004, 16204]);
     }
 
     fn cfg_with(node_id: &str, peers: &str) -> Config {

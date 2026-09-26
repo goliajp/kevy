@@ -15,6 +15,13 @@
   `port_base + i`, with `port_base` defaulting to `port + 1`.
 - The warning printed for a non-loopback bind no longer says AUTH/TLS is
   coming in a later version.
+- **`FAILOVER` and election failover follow a non-default replication port.**
+  Both used to assume the new primary accepts replicas at its client port
+  + 10000, so a node with a different `[replication].listen_port_base` was
+  followed at the wrong port and the old primary never caught up.
+  `INFO replication` now reports `repl_port_base`, `FAILOVER` reads it from
+  the target, and a `[cluster] peers` entry takes an optional fourth field,
+  `id@host:elect_port:client_port:repl_port_base`, for election failover.
 
 ## 6.4.0 — the quality release: what a reader can check, and what a gate can
 
