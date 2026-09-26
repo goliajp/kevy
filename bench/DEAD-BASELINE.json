@@ -4,7 +4,7 @@
   "kind": "symbols/qualified-path",
   "tree": "9516ed5938b5e5815ad3d47dd6654a9ecd0c8de6",
   "total_regions": 167399,
-  "dead_regions": 27181,
+  "dead_regions": 27337,
   "llvm_per_instantiation_dead": 27930,
   "crates": {
     "kevy": {
@@ -695,7 +695,7 @@
     "kevy::resolve_config": 19,
     "kevy::resolve_thread_count": 9,
     "kevy::resolve_tier_budget": 5,
-    "kevy::serve": 54,
+    "kevy::serve": 60,
     "kevy::state::KevyCommands::dispatch_into::": 7,
     "kevy::state::KevyCommands::extension_reduce": 4,
     "kevy::state::KevyCommands::live_runtime_config": 1,
@@ -3199,7 +3199,35 @@
     "kevy_rt::replication_secure::ReplNoise::seal": 6,
     "kevy_rt::replication_secure::ReplNoise::wrote": 1,
     "kevy_rt::replication_secure::fresh_ephemeral": 2,
-    "kevy_sys::random::fill_random": 6
+    "kevy_sys::random::fill_random": 6,
+    "kevy::secure_front::start::": 59,
+    "kevy_rt::runtime::Runtime::with_peer_token": 4,
+    "kevy::secure_front::accept_loop": 1,
+    "kevy::secure_front::client_to_upstream": 3,
+    "kevy::secure_front::handshake": 7,
+    "kevy::secure_front::open_upstream": 4,
+    "kevy::secure_front::serve_conn": 2,
+    "kevy::secure_front::upstream_to_client": 4,
+    "kevy_client_async::conn::AsyncConnection::connect_secure_url": 1,
+    "kevy_client_async::conn::connect_secure": 3,
+    "kevy_client_async::secure::AsyncSecure::handshake": 9,
+    "kevy_client_async::secure::AsyncSecure::poll_drain": 3,
+    "kevy_client_async::secure::AsyncSecure::poll_read": 2,
+    "kevy_client_async::secure::AsyncSecure::poll_write": 4,
+    "kevy_client_async::secure::bad::": 6,
+    "kevy_client_async::secure::random32": 1,
+    "kevy_client_async::subscriber::AsyncSubscriber::connect_secure_url": 1,
+    "kevy_noise::transport::seal_with": 1,
+    "kevy_resp_client::ClientStream::flush": 3,
+    "kevy_resp_client::ClientStream::open": 4,
+    "kevy_resp_client::ClientStream::write": 4,
+    "kevy_resp_client::RespClient::connect_secure": 1,
+    "kevy_resp_client::secure::SecureStream::connect": 9,
+    "kevy_resp_client::secure::SecureStream::read": 2,
+    "kevy_resp_client::secure::SecureStream::write": 3,
+    "kevy_resp_client::secure::SecureStream::write_all": 2,
+    "kevy_resp_client::secure::bad::": 6,
+    "kevy_resp_client::secure::random32": 1
   },
   "envelope_runs": 3,
   "history": [
@@ -3512,6 +3540,47 @@
       ],
       "reason": "Error arms of calls that cannot fail on a healthy loopback socket: the ? and map_err branches after socket reads, writes and timeouts, after getrandom / getentropy (kevy_sys::fill_random and every caller that draws an ephemeral key), after DH and seal on keys a completed handshake already accepted, and after framing a message the caller already bounded. Two are unreachable by construction: key_from_hex's from_str_radix error follows a check that every character is a hex digit, and consume_string's UTF-8 error follows copying bytes of a &str between ASCII delimiters. Every refusal a peer can cause is tested: wrong keys, unlisted replicas, plaintext peers, altered handshake bytes, oversized messages, exhausted nonces, wrongly shaped keys in kevy.toml.",
       "delta": 117
+    },
+    {
+      "accepted": [
+        "kevy::secure_front::start::",
+        "kevy::serve",
+        "kevy_rt::runtime::Runtime::with_peer_token"
+      ],
+      "reason": "Server bootstrap for the encrypted client port: secure_front::start binds the port, draws the peer token and hands it to the runtime through Runtime::with_peer_token, and serve calls it. They run only inside a spawned server, which tests/secure_clients.rs drives end to end (kevys:// set and get of a 300 KB value, CLIENT INFO naming the real client, refused keys, kevy-client over kevys://); the relay's per-connection logic is tested in process against a fake upstream.",
+      "delta": 69
+    },
+    {
+      "accepted": [
+        "kevy::secure_front::accept_loop",
+        "kevy::secure_front::client_to_upstream",
+        "kevy::secure_front::handshake",
+        "kevy::secure_front::open_upstream",
+        "kevy::secure_front::serve_conn",
+        "kevy::secure_front::upstream_to_client",
+        "kevy_client_async::conn::AsyncConnection::connect_secure_url",
+        "kevy_client_async::conn::connect_secure",
+        "kevy_client_async::secure::AsyncSecure::handshake",
+        "kevy_client_async::secure::AsyncSecure::poll_drain",
+        "kevy_client_async::secure::AsyncSecure::poll_read",
+        "kevy_client_async::secure::AsyncSecure::poll_write",
+        "kevy_client_async::secure::bad::",
+        "kevy_client_async::secure::random32",
+        "kevy_client_async::subscriber::AsyncSubscriber::connect_secure_url",
+        "kevy_noise::transport::seal_with",
+        "kevy_resp_client::ClientStream::flush",
+        "kevy_resp_client::ClientStream::open",
+        "kevy_resp_client::ClientStream::write",
+        "kevy_resp_client::RespClient::connect_secure",
+        "kevy_resp_client::secure::SecureStream::connect",
+        "kevy_resp_client::secure::SecureStream::read",
+        "kevy_resp_client::secure::SecureStream::write",
+        "kevy_resp_client::secure::SecureStream::write_all",
+        "kevy_resp_client::secure::bad::",
+        "kevy_resp_client::secure::random32"
+      ],
+      "reason": "Error arms of calls that cannot fail on a healthy loopback socket: the ? and map_err branches after socket reads, writes, timeouts and try_clone, after getrandom / getentropy, after sealing or opening on a session a completed handshake produced, and after framing a message the caller already bounded; plus ClientStream's plaintext arms of write and flush, which RespClient never calls (it writes with write_all). Every refusal a peer can cause is tested: wrong server key, unlisted or missing client key, plaintext client on the encrypted port, the server refusing the relay's token, the plaintext port being down, malformed kevys:// URLs, a bad key file.",
+      "delta": 87
     }
   ]
 }
