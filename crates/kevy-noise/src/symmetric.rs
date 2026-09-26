@@ -109,3 +109,39 @@ impl SymmetricState {
         (CipherState::keyed(k1), CipherState::keyed(k2), self.h)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_protocol_name_of_at_most_32_bytes_is_padded_not_hashed() {
+        let s = SymmetricState::new(b"Noise_NN");
+        let mut want = [0u8; 32];
+        want[..8].copy_from_slice(b"Noise_NN");
+        assert_eq!(s.h, want);
+        assert_eq!(s.ck, want);
+        let long = b"Noise_IK_25519_ChaChaPoly_BLAKE2s";
+        assert_eq!(SymmetricState::new(long).h, blake2s::hash(long));
+    }
+
+    #[test]
+    fn without_a_key_both_directions_pass_bytes_through() {
+        let mut cs = CipherState::empty();
+        let mut buf = b"clear".to_vec();
+        cs.encrypt(b"", &mut buf).unwrap();
+        assert_eq!(buf, b"clear");
+        cs.decrypt(b"", &mut buf).unwrap();
+        assert_eq!(buf, b"clear");
+    }
+
+    #[test]
+    fn the_last_nonce_is_never_used() {
+        let mut cs = CipherState { k: Some([1; 32]), n: u64::MAX - 1 };
+        let mut buf = b"x".to_vec();
+        cs.encrypt(b"", &mut buf).unwrap();
+        assert_eq!(cs.encrypt(b"", &mut b"y".to_vec()), Err(Error::NonceExhausted));
+        let mut rx = CipherState { k: Some([1; 32]), n: u64::MAX };
+        assert_eq!(rx.decrypt(b"", &mut buf), Err(Error::NonceExhausted));
+    }
+}

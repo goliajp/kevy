@@ -223,6 +223,9 @@ mod tests {
         cfg.cluster.peer_keys.clear();
         let strangers = ReplLinks::from_config(&cfg, &me);
         assert!(strangers.connect(addr, "r", 0, 0).is_err(), "no trusted key, no link");
+        let shown = format!("{strangers:?}");
+        assert!(shown.contains("primaries: 1"), "{shown}");
+        assert!(!shown.contains(&format!("{:?}", [6u8; 32])), "{shown}");
     }
 
     #[test]

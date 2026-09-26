@@ -240,3 +240,26 @@ fn non_ascii_string_values_survive_parsing() {
     let cfg = Config::from_toml_str(src, None).unwrap();
     assert_eq!(cfg.secure.private_key_file, Some(PathBuf::from("/srv/データ/鍵\t.key")));
 }
+
+#[test]
+fn secure_keys_of_the_wrong_shape_are_schema_errors() {
+    let good = "ab".repeat(32);
+    for (src, names) in [
+        ("[secure]\nprivate_key_file = 5\n".to_string(), "private_key_file"),
+        ("[cluster]\nsecure = \"yes\"\n".to_string(), "secure"),
+        ("[cluster]\npeer_keys = 5\n".to_string(), "peer_keys"),
+        ("[replication]\nsecure = 1\n".to_string(), "secure"),
+        ("[replication]\nupstream_key = 5\n".to_string(), "upstream_key"),
+        (format!("[replication]\nreplica_keys = [\"{good}\", \"zz\"]\n"), "replica_keys"),
+        ("[replication]\nreplica_keys = \"x\"\n".to_string(), "replica_keys"),
+    ] {
+        let err = Config::from_toml_str(&src, None).unwrap_err();
+        assert!(matches!(err, ConfigError::Schema { .. }), "{src}: {err:?}");
+        assert!(err.to_string().contains(names), "{src}: {err}");
+    }
+    let ok = format!("[replication]\nreplica_keys = [\"{good}\"]\n");
+    assert_eq!(
+        Config::from_toml_str(&ok, None).unwrap().replication.replica_keys,
+        vec![[0xab; 32]]
+    );
+}

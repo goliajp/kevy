@@ -167,3 +167,26 @@ impl Link {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::TcpListener;
+
+    #[test]
+    fn dialing_a_peer_without_a_configured_key_fails_before_sending() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let stream = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut accepted, _) = listener.accept().unwrap();
+        let secure = SecureLinks {
+            local: kevy_noise::Keypair::from_secret([1; 32]),
+            peer_keys: vec![("n2".into(), [2; 32])],
+        };
+        let err = initiate(stream, &secure, "n3").err().unwrap();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(err.to_string().contains("n3"));
+        // nothing reached the wire: the dropped stream reads as a clean close
+        let mut buf = [0u8; 1];
+        assert_eq!(accepted.read(&mut buf).unwrap(), 0);
+    }
+}
