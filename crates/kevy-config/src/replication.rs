@@ -55,6 +55,33 @@ pub struct ReplicationSection {
     /// per-shard port fleet: one routing runner fans frames into local
     /// shards by key hash. Only meaningful when `role = "replica"`.
     pub single_source: bool,
+    /// Encrypt and authenticate this node's replication links with Noise:
+    /// the link to its upstream, and the links its replicas open. Needs
+    /// `[secure] private_key_file`.
+    ///
+    /// ```
+    /// assert!(!kevy_config::Config::default().replication.secure);
+    /// ```
+    pub secure: bool,
+    /// The upstream's public key, which a replica checks the primary
+    /// against. Required on a secure replica.
+    ///
+    /// ```
+    /// let cfg = kevy_config::Config::from_toml_str(
+    ///     &format!("[replication]\nupstream_key = \"{}\"\n", "cd".repeat(32)),
+    ///     None,
+    /// )
+    /// .unwrap();
+    /// assert_eq!(cfg.replication.upstream_key, Some([0xcd; 32]));
+    /// ```
+    pub upstream_key: Option<[u8; 32]>,
+    /// The replicas a secure primary accepts, by public key. Empty: any
+    /// replica may connect, and the link is only encrypted.
+    ///
+    /// ```
+    /// assert!(kevy_config::Config::default().replication.replica_keys.is_empty());
+    /// ```
+    pub replica_keys: Vec<[u8; 32]>,
 }
 
 impl Default for ReplicationSection {
@@ -70,6 +97,9 @@ impl Default for ReplicationSection {
             replica_max_staleness_ms: 0,
             replica_read_only: true,
             single_source: false,
+            secure: false,
+            upstream_key: None,
+            replica_keys: Vec::new(),
         }
     }
 }

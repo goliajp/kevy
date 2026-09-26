@@ -23,6 +23,9 @@ workspace = true
 
 [dependencies]
 kevy-resp = { path = "../kevy-resp", version = "6.4.0" }
+kevy-crypto = { path = "../kevy-crypto", version = "6.4.0" }
+kevy-noise = { path = "../kevy-noise", version = "6.4.0" }
+kevy-sys = { path = "../kevy-sys", version = "6.4.0" }
 
 [dev-dependencies]
 kevy-testnet = { path = "../kevy-testnet" }

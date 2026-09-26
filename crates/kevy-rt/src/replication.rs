@@ -53,6 +53,9 @@ pub struct ReplicaConn {
     /// Used by `tick_replication_view` to enrich the per-shard view
     /// the command layer reads for `ROLE` / `INFO replication`.
     pub peer: (std::net::Ipv4Addr, u16),
+    /// `Some` on a Noise-protected link: sits between the socket and the
+    /// plaintext `input` / `output` above.
+    pub(crate) noise: Option<crate::replication_secure::ReplNoise>,
 }
 
 /// Replication conn lifecycle. See [`ReplicaConn`] doc for the
@@ -180,7 +183,28 @@ impl ReplicaConn {
             state: ReplicaState::HandshakePending,
             last_ping: None,
             peer,
+            noise: None,
         }
+    }
+
+    /// Bytes still to reach the socket: plaintext not yet written or sealed,
+    /// plus sealed bytes not yet written.
+    /// Everything queued has reached the socket: reset the output buffer,
+    /// and a connection that was waiting for its `+ACK` to drain starts
+    /// streaming.
+    pub(crate) fn drained(&mut self) {
+        self.output.clear();
+        self.write_off = 0;
+        if let ReplicaState::AckSent { replica_id, from_offset, generation } = &self.state {
+            let rid = replica_id.clone();
+            let (off, generation) = (*from_offset, *generation);
+            self.state = ReplicaState::Streaming { replica_id: rid, sent_offset: off, generation };
+        }
+    }
+
+    pub(crate) fn pending_out(&self) -> usize {
+        let sealed = self.noise.as_ref().map_or(0, |n| n.wire().len());
+        self.output.len() - self.write_off + sealed
     }
 
     /// Transition to [`ReplicaState::Closed`] while preserving the
@@ -259,6 +283,7 @@ mod tests {
             state: ReplicaState::HandshakePending,
             last_ping: None,
             peer: (std::net::Ipv4Addr::UNSPECIFIED, 0),
+            noise: None,
         }
     }
 

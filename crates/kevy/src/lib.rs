@@ -83,6 +83,7 @@ mod replica_runner_events;
 mod replica_runner_routed;
 mod replica_trace;
 mod replication;
+pub mod secure;
 mod state;
 mod table_runtime;
 mod tier_read;
@@ -195,12 +196,22 @@ fn install_signal_handlers(_stop: Arc<AtomicBool>) {
 /// shard; the CLI resolves auto to `available_parallelism()` before
 /// calling in.
 pub fn serve(cfg: Arc<kevy_config::Config>) -> ! {
+    // a secure link without its keys refuses to start, never falls back to plaintext
+    let link_key = secure::link_keypair(&cfg).unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(1);
+    });
     let state = boot_state(&cfg);
+    if cfg.replication.secure
+        && let Some(key) = &link_key
+    {
+        state.replication.set_links(secure::ReplLinks::from_config(&cfg, key));
+    }
     let runtime = build_runtime(&cfg, KevyCommands::with_state(Arc::clone(&state)));
     // Spawn the kevy-elect control plane when the operator configured
     // `[cluster] peers = "..."` + `node_id`. Opt-in; empty peers
     // leaves the subsystem dormant.
-    state.election.maybe_start(&cfg, &state.replication);
+    state.election.maybe_start(&cfg, &state.replication, link_key.as_ref());
     let stop = Arc::new(AtomicBool::new(false));
     // Install SIGTERM + SIGINT handlers that flip `stop`,
     // triggering the runtime's existing drain path (fsync AOF, close

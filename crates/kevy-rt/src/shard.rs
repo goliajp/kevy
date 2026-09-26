@@ -213,6 +213,9 @@ pub(crate) struct Shard<C: Commands> {
     /// Accepted connections enter the [`crate::replication::ReplicaConn`]
     /// state machine — handshake → live frame streaming.
     pub(crate) replication_listener: Option<Socket>,
+    /// `Some`: every accepted replica link must complete a Noise handshake
+    /// before anything it sends is read.
+    pub(crate) repl_security: Option<std::sync::Arc<crate::ReplicationSecurity>>,
     /// Active replica connections (handshake-pending or streaming).
     /// Vec rather than KevyMap — N < 16 in practice, linear scan
     /// beats hashing at that size.

@@ -213,7 +213,7 @@ impl<C: Commands> Shard<C> {
             // ahead cursor sat "caught up" with heartbeats flowing
             // and never converged (the availgate failover wedge).
         }
-        let pending = self.replicas[idx].output.len() - self.replicas[idx].write_off;
+        let pending = self.replicas[idx].pending_out();
         if pending >= STREAMING_OUTPUT_CAP / 2 {
             return; // backpressure — let the socket drain first
         }
@@ -299,7 +299,7 @@ impl<C: Commands> Shard<C> {
             ) {
                 continue;
             }
-            if self.replicas[idx].output.len() <= self.replicas[idx].write_off {
+            if self.replicas[idx].pending_out() == 0 {
                 continue;
             }
             if let Err(e) = self.replica_writable(idx) {
@@ -308,7 +308,7 @@ impl<C: Commands> Shard<C> {
             }
             let conn = &self.replicas[idx];
             if matches!(conn.state, ReplicaState::Streaming { .. })
-                && conn.output.len() - conn.write_off >= STREAMING_OUTPUT_CAP
+                && conn.pending_out() >= STREAMING_OUTPUT_CAP
             {
                 eprintln!(
                     "kevy: streaming replica fd {} output cap ({} B) reached; \
@@ -411,7 +411,7 @@ impl<C: Commands> Shard<C> {
     // LOC-WAIVER: snapshot-ship chunk state machine (worker recv /
     // chunk emit / end-marker transition) — one indivisible unit.
     fn pump_snapshot_chunks(&mut self, idx: usize) {
-        let pending = self.replicas[idx].output.len() - self.replicas[idx].write_off;
+        let pending = self.replicas[idx].pending_out();
         if pending >= STREAMING_OUTPUT_CAP / 2 {
             return;
         }
