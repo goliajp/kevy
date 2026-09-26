@@ -80,6 +80,8 @@ fn cluster_announce_keys_parse_and_reject_a_non_ipv4() {
     let re = Config::from_toml_str(&cfg.to_toml_string(), None).unwrap();
     assert_eq!(re.cluster, cfg.cluster);
     assert!(Config::from_toml_str("[cluster]\nannounce_ip = \"db.example\"\n", None).is_err());
+    assert!(Config::from_toml_str("[cluster]\nannounce_ip = 5\n", None).is_err());
+    assert!(Config::from_toml_str("[cluster]\nannounce_port_base = \"x\"\n", None).is_err());
     assert_eq!(Config::default().cluster.announce_ip, None);
 }
 

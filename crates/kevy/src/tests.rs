@@ -460,3 +460,11 @@ fn every_verb_the_engine_logs_can_be_replayed() {
         );
     }
 }
+
+#[test]
+fn announce_port_base_is_none_until_set() {
+    let mut cfg = kevy_config::Config::default();
+    assert_eq!(crate::announce_port_base(&cfg), None);
+    cfg.cluster.announce_port_base = 7001;
+    assert_eq!(crate::announce_port_base(&cfg), Some(7001));
+}
