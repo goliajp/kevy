@@ -352,6 +352,9 @@ fn push_secure(v: &mut Vec<CanonicalPair>, cfg: &Config) {
     if let Some(p) = &cfg.secure.private_key_file {
         push(v, "secure", "private_key_file", toml_string(&p.display().to_string()));
     }
+    push(v, "secure", "listen_port", cfg.secure.listen_port.to_string());
+    let keys: Vec<String> = cfg.secure.client_keys.iter().map(crate::key_to_hex).collect();
+    push(v, "secure", "client_keys", toml_array(&keys));
 }
 
 fn push(v: &mut Vec<CanonicalPair>, section: &'static str, key: &'static str, value: String) {

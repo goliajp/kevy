@@ -84,6 +84,7 @@ mod replica_runner_routed;
 mod replica_trace;
 mod replication;
 pub mod secure;
+mod secure_front;
 mod state;
 mod table_runtime;
 mod tier_read;
@@ -208,6 +209,7 @@ pub fn serve(cfg: Arc<kevy_config::Config>) -> ! {
         state.replication.set_links(secure::ReplLinks::from_config(&cfg, key));
     }
     let runtime = build_runtime(&cfg, KevyCommands::with_state(Arc::clone(&state)));
+    let runtime = secure_front::start(&cfg, link_key.as_ref(), runtime);
     // Spawn the kevy-elect control plane when the operator configured
     // `[cluster] peers = "..."` + `node_id`. Opt-in; empty peers
     // leaves the subsystem dormant.

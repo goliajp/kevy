@@ -82,7 +82,12 @@ port_base = 0
 # peer_keys = ["n1=<public key>", "n3=<public key>"]
 
 # [secure]
-# This node's private key for encrypted links between nodes, written by
-# `kevy keygen <file>`. Only read when a link sets secure = true; client
-# connections are never encrypted by kevy (front them with a TLS proxy).
+# This node's private key, written by `kevy keygen <file>`. Only read when
+# a link sets secure = true or listen_port is set.
 # private_key_file = "/etc/kevy/node.key"
+# A second client port that only speaks kevy's encrypted protocol
+# (kevys:// URLs); the plaintext port stays as it is. 0 = off.
+# listen_port = 0
+# Client public keys allowed on that port; empty accepts any client,
+# still encrypted.
+# client_keys = []

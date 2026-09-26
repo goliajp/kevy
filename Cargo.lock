@@ -422,6 +422,7 @@ dependencies = [
  "kevy-cli",
  "kevy-client",
  "kevy-config",
+ "kevy-crypto",
  "kevy-elect",
  "kevy-embedded",
  "kevy-geo",
@@ -695,7 +696,9 @@ dependencies = [
 name = "kevy-resp-client"
 version = "6.4.0"
 dependencies = [
+ "kevy-noise",
  "kevy-resp",
+ "kevy-sys",
 ]
 
 [[package]]
