@@ -4,7 +4,7 @@
   "kind": "symbols/qualified-path",
   "tree": "9516ed5938b5e5815ad3d47dd6654a9ecd0c8de6",
   "total_regions": 167399,
-  "dead_regions": 26928,
+  "dead_regions": 26930,
   "llvm_per_instantiation_dead": 27930,
   "crates": {
     "kevy": {
@@ -306,7 +306,7 @@
     "kevy::cmd_digest::extension_reduce": 4,
     "kevy::cmd_digest::row_digest": 6,
     "kevy::cmd_failover::cmd_failover::": 78,
-    "kevy::cmd_failover::run_handover": 48,
+    "kevy::cmd_failover::run_handover": 50,
     "kevy::cmd_failover::send_verb": 13,
     "kevy::cmd_failover::target_drained": 20,
     "kevy::cmd_hash_ttl::cmd_hpersist::": 8,
@@ -3393,6 +3393,13 @@
       "symbols": 2950,
       "regions": 26928,
       "reason": "First recording under the qualified-path symbol scheme. The previous baseline names a trait method `::fmt` \u2014 one identity holding 241 dead regions across twelve crates \u2014 and this one names `kevy_elect::vote::Ballot::fmt`; the two sets answer different questions, which is why setratchet refused to compare them rather than reporting thousands of symbols joining and leaving.\n\nEnvelope over THREE runs of ONE tree (9516ed5938b5e5815ad3d47dd6654a9ecd0c8de6), which the tool now enforces: 26895 / 26924 / 26874 dead regions, 2949 / 2950 / 2949 symbols. Nine symbols differ between the first two runs alone, all in kevy-rt (+21 regions) and kevy-embedded (+12) \u2014 the crates the register's four unstable prefixes name. Eight of the nine are covered by those declarations; the ninth, kevy_store::set_read::seg_srandmember, is absorbed by the maximum. Growth against this baseline therefore means worse than the worst of three, which is a claim about the code rather than about which run it was.\n\nThe register was migrated in the same arc: five bare-name entries that named nothing after symbol_of was fixed, plus the <kevy_rt::shard::Shard>:: prefix, each remapped against a real run's symbol list; one [[dead]] entry for a region that is executed now was deleted; and one missing [[dead_crate]] was written."
+    },
+    {
+      "accepted": [
+        "kevy::cmd_failover::run_handover"
+      ],
+      "reason": "FAILOVER's drain loop now carries the target's replication base out of the loop (two regions in run_handover). The handover runs only inside a spawned server (tests/failover_port_base.rs), which the in-process coverage corpus does not see; the decision it acts on is the pure drained_repl_base, tested in process. Every other symbol keeps the prior envelope.",
+      "delta": 2
     }
   ]
 }

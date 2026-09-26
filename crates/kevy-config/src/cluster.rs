@@ -142,6 +142,11 @@ impl ScopeEntry {
 /// the client so the client can actually reconnect to the writer.
 /// Without the extended form, MISDIRECTED reports `host:elect_port`
 /// (documented legacy behaviour, retained for compat).
+///
+/// A fourth field, `id@host:elect_port:client_port:repl_port_base`,
+/// names where the peer accepts replicas when it does not use the
+/// default base (client port + 10000). A node that follows a newly
+/// elected primary dials this address.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PeerEntry {
     /// Peer's stable node id.
@@ -157,61 +162,62 @@ pub struct PeerEntry {
     /// replies fall back to `port` in that case. Set via extended
     /// syntax `id@host:elect_port:client_port`.
     pub client_port: Option<u16>,
+    /// Peer's `[replication].listen_port_base`. `None` = the default,
+    /// client port + 10000.
+    ///
+    /// ```
+    /// use kevy_config::PeerEntry;
+    ///
+    /// let p = PeerEntry::parse_one("n1@10.0.0.1:6204:6004:7100").unwrap();
+    /// assert_eq!(p.repl_port_base, Some(7100));
+    /// assert_eq!(PeerEntry::parse_one("n1@10.0.0.1:6204:6004").unwrap().repl_port_base, None);
+    /// ```
+    pub repl_port_base: Option<u16>,
 }
 
 impl PeerEntry {
-    /// Render back to the `id@host:port[:client_port]` token shape —
+    /// Render back to the `id@host:port[:client_port[:repl_port_base]]` token shape —
     /// exact inverse of [`Self::parse_one`] for entries it produced.
     pub fn to_token(&self) -> String {
-        match self.client_port {
-            Some(cp) => format!("{}@{}:{}:{cp}", self.node_id, self.host, self.port),
-            None => format!("{}@{}:{}", self.node_id, self.host, self.port),
+        let mut t = format!("{}@{}:{}", self.node_id, self.host, self.port);
+        if let Some(cp) = self.client_port {
+            t.push_str(&format!(":{cp}"));
+            if let Some(rb) = self.repl_port_base {
+                t.push_str(&format!(":{rb}"));
+            }
         }
+        t
     }
 
-    /// Parse one peer token. Accepts two shapes:
+    /// Parse one peer token. Accepts three shapes:
     /// - **Legacy**: `id@host:port` (`port` = elect port).
     /// - **Extended**: `id@host:elect_port:client_port` (sets
     ///   `client_port` so MISDIRECTED reports a port the client
     ///   can actually connect to).
+    /// - **With replication base**: `id@host:elect_port:client_port:repl_port_base`.
     ///
     /// Returns `None` on any shape problem (empty fields, non-numeric
     /// ports, port overflow).
     pub fn parse_one(token: &str) -> Option<Self> {
         let (node_id, rest) = token.split_once('@')?;
-        if node_id.is_empty() {
+        let mut fields = rest.split(':');
+        let host = fields.next()?;
+        if node_id.is_empty() || host.is_empty() {
             return None;
         }
-        // Find the last colon (== client_port if extended, else elect_port).
-        let last_colon = rest.rfind(':')?;
-        let after_last: u16 = rest[last_colon + 1..].parse().ok()?;
-        let before_last = &rest[..last_colon];
-        // Try the extended form: split `before_last` on its own last colon.
-        if let Some(second_last) = before_last.rfind(':') {
-            // before_last = `host:elect_port`; after_last = `client_port`.
-            let host = &before_last[..second_last];
-            if host.is_empty() {
-                return None;
-            }
-            if let Ok(elect) = before_last[second_last + 1..].parse::<u16>() {
-                return Some(PeerEntry {
-                    node_id: node_id.to_string(),
-                    host: host.to_string(),
-                    port: elect,
-                    client_port: Some(after_last),
-                });
-            }
-        }
-        // Legacy form: `host:port` (port = elect).
-        let host = before_last;
-        if host.is_empty() {
-            return None;
-        }
+        let ports = fields.map(|f| f.parse::<u16>().ok()).collect::<Option<Vec<u16>>>()?;
+        let (port, client_port, repl_port_base) = match ports[..] {
+            [elect] => (elect, None, None),
+            [elect, client] => (elect, Some(client), None),
+            [elect, client, repl] => (elect, Some(client), Some(repl)),
+            _ => return None,
+        };
         Some(PeerEntry {
             node_id: node_id.to_string(),
             host: host.to_string(),
-            port: after_last,
-            client_port: None,
+            port,
+            client_port,
+            repl_port_base,
         })
     }
 
@@ -267,6 +273,15 @@ mod peer_entry_tests {
         assert_eq!(p.host, "db-east.local");
         assert_eq!(p.port, 6011);
         assert_eq!(p.client_port, Some(6004));
+    }
+
+    #[test]
+    fn parse_one_four_fields_sets_repl_port_base() {
+        let p = PeerEntry::parse_one("node-1@10.0.0.1:6011:6004:7100").unwrap();
+        assert_eq!((p.port, p.client_port, p.repl_port_base), (6011, Some(6004), Some(7100)));
+        assert_eq!(p.to_token(), "node-1@10.0.0.1:6011:6004:7100");
+        assert!(PeerEntry::parse_one("node-1@10.0.0.1:1:2:3:4").is_none());
+        assert!(PeerEntry::parse_one("node-1@10.0.0.1:6011:6004:x").is_none());
     }
 
     #[test]

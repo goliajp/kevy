@@ -76,7 +76,7 @@ fn run_handover(repl: &ReplicationState, host: String, port: u16, timeout_ms: u6
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
     let target = format!("{host}:{port}");
     // Phase 1: wait for the target to drain (lag 0, link up).
-    loop {
+    let repl_base = loop {
         if !repl.quiesce_active() {
             eprintln!("kevy: FAILOVER to {target} aborted");
             return;
@@ -89,21 +89,21 @@ fn run_handover(repl: &ReplicationState, host: String, port: u16, timeout_ms: u6
             return;
         }
         match target_drained(&host, port) {
-            Ok(true) => break,
-            Ok(false) => std::thread::sleep(std::time::Duration::from_millis(100)),
+            Ok(Some(base)) => break base,
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(100)),
             Err(e) => {
                 eprintln!("kevy: FAILOVER probe of {target} failed ({e}); retrying");
                 std::thread::sleep(std::time::Duration::from_millis(250));
             }
         }
-    }
+    };
     // Phase 2: promote the target, then follow it.
     if let Err(e) = send_verb(&host, port, &[b"REPLICAOF", b"NO", b"ONE"]) {
         eprintln!("kevy: FAILOVER promote of {target} failed ({e}); resuming primary duty");
         repl.set_quiesce(None);
         return;
     }
-    let upstream = format!("{host}:{}", port + 10_000);
+    let upstream = format!("{host}:{repl_base}");
     match crate::replication::retarget_upstream(repl, &upstream) {
         Ok(()) => {
             repl.set_quiesce(None);
@@ -121,15 +121,27 @@ fn run_handover(repl: &ReplicationState, host: String, port: u16, timeout_ms: u6
     }
 }
 
-/// One INFO probe: is the target's replication link up with zero lag?
-fn target_drained(host: &str, port: u16) -> std::io::Result<bool> {
+/// One INFO probe: once the target's replication link is up with zero
+/// lag, the replication port base it listens on.
+fn target_drained(host: &str, port: u16) -> std::io::Result<Option<u16>> {
     let mut c = kevy_resp_client::RespClient::connect(host, port)?;
     let reply = c.request_borrowed(&[b"INFO", b"replication"])?;
     let kevy_resp::Reply::Bulk(body) = reply else {
-        return Ok(false);
+        return Ok(None);
     };
-    let text = String::from_utf8_lossy(&body);
-    Ok(text.contains("master_link_status:up") && text.contains("slave_lag_frames:0"))
+    Ok(drained_repl_base(&String::from_utf8_lossy(&body), port))
+}
+
+/// From a target's INFO replication body: once its link is up with zero
+/// lag, the replication port base it reports. A target older than the
+/// `repl_port_base` field listens at the default, client port + 10000.
+fn drained_repl_base(info: &str, client_port: u16) -> Option<u16> {
+    if !(info.contains("master_link_status:up") && info.contains("slave_lag_frames:0")) {
+        return None;
+    }
+    let reported =
+        info.lines().find_map(|l| l.strip_prefix("repl_port_base:")?.trim().parse().ok());
+    Some(reported.unwrap_or_else(|| client_port.saturating_add(10_000)))
 }
 
 fn send_verb(host: &str, port: u16, argv: &[&[u8]]) -> std::io::Result<()> {
@@ -137,4 +149,22 @@ fn send_verb(host: &str, port: u16, argv: &[&[u8]]) -> std::io::Result<()> {
     let _ = c.request_borrowed(argv)?;
     let _ = std::io::stderr().flush();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::drained_repl_base;
+
+    #[test]
+    fn drained_repl_base_waits_for_the_drain_then_prefers_the_reported_base() {
+        let lagging = "role:slave\r\nmaster_link_status:up\r\nslave_lag_frames:3\r\n";
+        assert_eq!(drained_repl_base(lagging, 6004), None);
+        let down = "role:slave\r\nmaster_link_status:down\r\nslave_lag_frames:0\r\n";
+        assert_eq!(drained_repl_base(down, 6004), None);
+        let reported =
+            "role:slave\r\nmaster_link_status:up\r\nslave_lag_frames:0\r\nrepl_port_base:7100\r\n";
+        assert_eq!(drained_repl_base(reported, 6004), Some(7100));
+        let older = "role:slave\r\nmaster_link_status:up\r\nslave_lag_frames:0\r\n";
+        assert_eq!(drained_repl_base(older, 6004), Some(16004));
+    }
 }
