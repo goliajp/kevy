@@ -74,22 +74,15 @@ impl ElectionState {
         let self_id = cfg.cluster.node_id.as_str();
         let peers: Vec<PeerAddr> =
             cfg.cluster.peers.iter().filter(|p| p.node_id != self_id).map(peer_to_addr).collect();
-        let listen = (
-            IpAddr::V4(Ipv4Addr::new(
-                cfg.server.bind[0],
-                cfg.server.bind[1],
-                cfg.server.bind[2],
-                cfg.server.bind[3],
-            )),
-            listen_port,
-        );
+        let [a, b, c, d] = cfg.server.bind;
+        let listen = (IpAddr::V4(Ipv4Addr::new(a, b, c, d)), listen_port);
         let on_change = make_topology_callback(cfg, Arc::clone(replication));
-        let spawned = match link_key.filter(|_| cfg.cluster.secure) {
-            Some(local) => {
-                let secure = kevy_elect::SecureLinks {
-                    local: local.clone(),
-                    peer_keys: cfg.cluster.peer_keys.clone(),
-                };
+        let secure = link_key.filter(|_| cfg.cluster.secure).map(|local| kevy_elect::SecureLinks {
+            local: local.clone(),
+            peer_keys: cfg.cluster.peer_keys.clone(),
+        });
+        let spawned = match secure {
+            Some(secure) => {
                 Transport::spawn_secure(elector, hb_interval, listen, peers, on_change, secure)
             }
             None => Transport::spawn_with_callback(elector, hb_interval, listen, peers, on_change),
