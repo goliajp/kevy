@@ -9,11 +9,11 @@
 /// on: shard `i` is reachable at `ip:(port_base + i)`.
 #[derive(Clone)]
 pub(crate) struct ClusterTopo {
-    /// Advertised IPv4 address. `Runtime::run` substitutes `127.0.0.1` for
-    /// a `0.0.0.0` bind — an unroutable advertise would strand every
-    /// redirect (no `cluster-announce-ip` knob yet; single-machine scope).
+    /// Advertised IPv4 address: the announce address when configured,
+    /// else the bind address with `127.0.0.1` for a `0.0.0.0` bind.
     pub(crate) ip: [u8; 4],
-    /// First cluster port; shard `i` listens at `port_base + i`.
+    /// First advertised cluster port; shard `i` is reached at
+    /// `port_base + i`.
     pub(crate) port_base: u16,
 }
 
