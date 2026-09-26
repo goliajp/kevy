@@ -4,7 +4,7 @@
   "kind": "symbols/qualified-path",
   "tree": "9516ed5938b5e5815ad3d47dd6654a9ecd0c8de6",
   "total_regions": 167399,
-  "dead_regions": 26930,
+  "dead_regions": 26934,
   "llvm_per_instantiation_dead": 27930,
   "crates": {
     "kevy": {
@@ -263,7 +263,7 @@
     "gen_docs::verb_reference": 37,
     "kevy::arg_value": 19,
     "kevy::boot_state": 32,
-    "kevy::build_runtime": 73,
+    "kevy::build_runtime": 77,
     "kevy::cmd::arg_f64": 1,
     "kevy::cmd::arg_i64": 1,
     "kevy::cmd::cmd_zrangebyscore::": 22,
@@ -3400,6 +3400,13 @@
       ],
       "reason": "FAILOVER's drain loop now carries the target's replication base out of the loop (two regions in run_handover). The handover runs only inside a spawned server (tests/failover_port_base.rs), which the in-process coverage corpus does not see; the decision it acts on is the pure drained_repl_base, tested in process. Every other symbol keeps the prior envelope.",
       "delta": 2
+    },
+    {
+      "accepted": [
+        "kevy::build_runtime"
+      ],
+      "reason": "build_runtime is the server bootstrap and never runs in the in-process coverage corpus, so any line added to it is dead there. The added call passes announce_ip and announce_port_base(cfg); announce_port_base is tested in process, and the announce addresses are tested end to end in tests/cluster.rs. Every other symbol keeps the prior envelope.",
+      "delta": 4
     }
   ]
 }

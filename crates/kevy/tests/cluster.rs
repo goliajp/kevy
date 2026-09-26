@@ -77,6 +77,15 @@ struct Server {
 
 impl Server {
     fn start(nshards: usize, cluster: bool, dir: Option<std::path::PathBuf>) -> Server {
+        Self::start_announcing(nshards, cluster, dir, None)
+    }
+
+    fn start_announcing(
+        nshards: usize,
+        cluster: bool,
+        dir: Option<std::path::PathBuf>,
+        announce: Option<([u8; 4], u16)>,
+    ) -> Server {
         let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let port = free_port_block(if cluster { nshards } else { 0 });
         let cluster_base = port + 1;
@@ -98,6 +107,10 @@ impl Server {
         if cluster {
             cfg.cluster.enabled = true;
             cfg.cluster.port_base = cluster_base;
+            if let Some((ip, base)) = announce {
+                cfg.cluster.announce_ip = Some(ip);
+                cfg.cluster.announce_port_base = base;
+            }
         }
         let state = Arc::new(
             kevy::RuntimeState::new(Arc::new(cfg), std::path::PathBuf::new(), nshards).unwrap(),
@@ -112,6 +125,9 @@ impl Server {
                 .with_data_dir(dir_thread);
             if cluster {
                 rt = rt.with_cluster(cluster_base);
+                if let Some((ip, base)) = announce {
+                    rt = rt.with_cluster_announce(Some(ip), Some(base));
+                }
             }
             rt.run(stop_thread).unwrap();
         });
@@ -205,6 +221,31 @@ fn cluster_port_moves_wrong_shard_key_and_serves_own() {
     let mut c2 = srv.connect_shard(2);
     c2.write_all(&req(&[b"SET", remote_key.as_bytes(), b"v2"])).unwrap();
     read_reply(&mut c2, b"+OK\r\n");
+}
+
+#[test]
+fn announce_address_is_advertised_while_kevy_listens_on_its_own_ports() {
+    let n = 4;
+    let srv = Server::start_announcing(n, true, None, Some(([10, 1, 2, 3], 20000)));
+
+    let (remote_key, slot) = key_for_shard(2, n);
+    let mut c0 = srv.connect_shard(0);
+    c0.write_all(&req(&[b"SET", remote_key.as_bytes(), b"v"])).unwrap();
+    assert_eq!(read_line(&mut c0), format!("-MOVED {slot} 10.1.2.3:20002\r\n"));
+
+    let mut c = srv.connect();
+    c.write_all(&req(&[b"CLUSTER", b"SLOTS"])).unwrap();
+    let want = build_cluster_slots_reply(n, 20000).replace("$9\r\n127.0.0.1", "$8\r\n10.1.2.3");
+    read_reply(&mut c, want.as_bytes());
+
+    c.write_all(&req(&[b"CLUSTER", b"NODES"])).unwrap();
+    let mut buf = [0u8; 2048];
+    let got = c.read(&mut buf).unwrap();
+    let text = String::from_utf8_lossy(&buf[..got]).to_string();
+    for i in 0..n {
+        assert!(text.contains(&format!(" 10.1.2.3:{p}@{p} ", p = 20000 + i)), "{text}");
+    }
+    assert!(!text.contains("127.0.0.1"), "{text}");
 }
 
 #[test]

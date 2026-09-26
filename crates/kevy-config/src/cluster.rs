@@ -37,6 +37,30 @@ pub struct ClusterSection {
     /// `elect_port_base + i`. Default `0` → `server.port + 200`
     /// (locked by the `resolved_elect_port_base` unit test).
     pub elect_port_base: u16,
+    /// Address advertised in `CLUSTER SLOTS/NODES/SHARDS` and `-MOVED`
+    /// instead of the bind address — for a node reached through a
+    /// proxy or NAT. `None` (default) advertises the bind address, with
+    /// `127.0.0.1` for a `0.0.0.0` bind.
+    ///
+    /// ```
+    /// let cfg = kevy_config::Config::from_toml_str(
+    ///     "[cluster]\nenabled = true\nannounce_ip = \"203.0.113.7\"\n",
+    ///     None,
+    /// )
+    /// .unwrap();
+    /// assert_eq!(cfg.cluster.announce_ip, Some([203, 0, 113, 7]));
+    /// ```
+    pub announce_ip: Option<[u8; 4]>,
+    /// First advertised cluster port, paired with `announce_ip` when the
+    /// proxy maps the per-shard ports to a different range. `0`
+    /// (default) advertises the ports kevy listens on.
+    ///
+    /// ```
+    /// let cfg =
+    ///     kevy_config::Config::from_toml_str("[cluster]\nannounce_port_base = 7001\n", None).unwrap();
+    /// assert_eq!(cfg.cluster.announce_port_base, 7001);
+    /// ```
+    pub announce_port_base: u16,
     /// Operator-declared peer list for `kevy-elect`. Empty when
     /// failover is not configured. Each entry is one cluster node
     /// (including potentially *this* node — kevy-elect filters

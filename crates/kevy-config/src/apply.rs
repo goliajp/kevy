@@ -202,6 +202,13 @@ impl Config {
             "port_base" => self.cluster.port_base = value_as_u16(item)?,
             "node_id" => self.cluster.node_id = value_as_string(item)?,
             "elect_port_base" => self.cluster.elect_port_base = value_as_u16(item)?,
+            "announce_ip" => {
+                let ip = parse_ipv4(&value_as_string(item)?).ok_or_else(|| {
+                    schema_err(item, "announce_ip must be a dotted-quad IPv4 string")
+                })?;
+                self.cluster.announce_ip = Some(ip);
+            }
+            "announce_port_base" => self.cluster.announce_port_base = value_as_u16(item)?,
             // Both accept `["a", "b"]` and the legacy `"a,b"`. Neither a peer
             // (`id@host:port`) nor a scope (`prefix=writer|fallback`) may itself
             // contain a comma, so re-joining an array and handing it to the
