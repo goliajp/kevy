@@ -2,7 +2,9 @@
 
 kevy has no AUTH and no TLS. Everything that authenticates or encrypts
 happens **in front of** the process. This chapter is the recipe for
-that, and it is meant to be copied rather than adapted.
+that, and it is meant to be copied rather than adapted. (Rust clients can
+instead use kevy's own encrypted client port over `kevys://`; see
+[encrypted-links.md](encrypted-links.md).)
 
 ## What kevy exposes
 
