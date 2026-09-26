@@ -129,17 +129,37 @@ fn target_drained(host: &str, port: u16) -> std::io::Result<Option<u16>> {
     let kevy_resp::Reply::Bulk(body) = reply else {
         return Ok(None);
     };
-    let text = String::from_utf8_lossy(&body);
-    if !(text.contains("master_link_status:up") && text.contains("slave_lag_frames:0")) {
-        return Ok(None);
-    }
-    Ok(Some(repl_port_base(&text).unwrap_or_else(|| port.saturating_add(10_000))))
+    Ok(drained_repl_base(&String::from_utf8_lossy(&body), port))
 }
 
-/// `repl_port_base` from an INFO replication body. A target older than
-/// the field listens at the default base, client port + 10000.
-fn repl_port_base(info: &str) -> Option<u16> {
-    info.lines().find_map(|l| l.strip_prefix("repl_port_base:")?.trim().parse().ok())
+/// From a target's INFO replication body: once its link is up with zero
+/// lag, the replication port base it reports. A target older than the
+/// `repl_port_base` field listens at the default, client port + 10000.
+fn drained_repl_base(info: &str, client_port: u16) -> Option<u16> {
+    if !(info.contains("master_link_status:up") && info.contains("slave_lag_frames:0")) {
+        return None;
+    }
+    let reported =
+        info.lines().find_map(|l| l.strip_prefix("repl_port_base:")?.trim().parse().ok());
+    Some(reported.unwrap_or_else(|| client_port.saturating_add(10_000)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::drained_repl_base;
+
+    #[test]
+    fn drained_repl_base_waits_for_the_drain_then_prefers_the_reported_base() {
+        let lagging = "role:slave\r\nmaster_link_status:up\r\nslave_lag_frames:3\r\n";
+        assert_eq!(drained_repl_base(lagging, 6004), None);
+        let down = "role:slave\r\nmaster_link_status:down\r\nslave_lag_frames:0\r\n";
+        assert_eq!(drained_repl_base(down, 6004), None);
+        let reported =
+            "role:slave\r\nmaster_link_status:up\r\nslave_lag_frames:0\r\nrepl_port_base:7100\r\n";
+        assert_eq!(drained_repl_base(reported, 6004), Some(7100));
+        let older = "role:slave\r\nmaster_link_status:up\r\nslave_lag_frames:0\r\n";
+        assert_eq!(drained_repl_base(older, 6004), Some(16004));
+    }
 }
 
 fn send_verb(host: &str, port: u16, argv: &[&[u8]]) -> std::io::Result<()> {

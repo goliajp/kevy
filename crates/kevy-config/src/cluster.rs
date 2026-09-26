@@ -164,6 +164,14 @@ pub struct PeerEntry {
     pub client_port: Option<u16>,
     /// Peer's `[replication].listen_port_base`. `None` = the default,
     /// client port + 10000.
+    ///
+    /// ```
+    /// use kevy_config::PeerEntry;
+    ///
+    /// let p = PeerEntry::parse_one("n1@10.0.0.1:6204:6004:7100").unwrap();
+    /// assert_eq!(p.repl_port_base, Some(7100));
+    /// assert_eq!(PeerEntry::parse_one("n1@10.0.0.1:6204:6004").unwrap().repl_port_base, None);
+    /// ```
     pub repl_port_base: Option<u16>,
 }
 

@@ -115,6 +115,25 @@ fn info_replication_master_default_shape() {
 }
 
 #[test]
+fn info_replication_reports_the_replication_base_only_when_replication_is_on() {
+    let c = crate::KevyCommands::new();
+    let standalone = String::from_utf8(run_on(&c, b"INFO", &[b"replication"])).unwrap();
+    assert!(!standalone.contains("repl_port_base"), "got: {standalone}");
+
+    let mut cfg = kevy_config::Config::default();
+    cfg.replication.role = kevy_config::ReplicationRole::Primary;
+    cfg.replication.listen_port_base = 7100;
+    c.state().config_replace(std::sync::Arc::new(cfg.clone()));
+    let s = String::from_utf8(run_on(&c, b"INFO", &[b"replication"])).unwrap();
+    assert!(s.contains("repl_port_base:7100\r\n"), "got: {s}");
+
+    cfg.replication.listen_port_base = 0;
+    c.state().config_replace(std::sync::Arc::new(cfg));
+    let s = String::from_utf8(run_on(&c, b"INFO", &[b"replication"])).unwrap();
+    assert!(s.contains("repl_port_base:16004\r\n"), "default is client port + 10000: {s}");
+}
+
+#[test]
 fn cluster_info_carries_standalone_markers() {
     let out = run(b"CLUSTER", &[b"INFO"]);
     let s = String::from_utf8(out).unwrap();
