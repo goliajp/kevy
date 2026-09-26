@@ -233,3 +233,23 @@ fn a_key_pair_prints_its_public_half_only() {
     assert!(shown.contains(&format!("{:?}", kp.public())));
     assert!(!shown.contains(&format!("{:?}", [7u8; 32])));
 }
+
+#[test]
+fn split_halves_keep_each_direction_in_order() {
+    let (server, client) = pair();
+    let (m1, init) =
+        Initiator::start(&client, &server.public(), Keypair::from_secret([3; 32]), b"", b"")
+            .unwrap();
+    let (_, r) = Responder::accept(&server, Keypair::from_secret([4; 32]), b"", &m1).unwrap();
+    let (m2, s) = r.finish(b"").unwrap();
+    let (_, c) = init.finish(&m2).unwrap();
+    let ((mut c_tx, mut c_rx), (mut s_tx, mut s_rx)) = (c.split(), s.split());
+    let up: Vec<_> = (0..3u8).map(|i| c_tx.seal(&[i]).unwrap()).collect();
+    let down = s_tx.seal(b"reply").unwrap();
+    assert_eq!(c_rx.open(&down).unwrap(), b"reply");
+    for (i, m) in up.iter().enumerate() {
+        assert_eq!(s_rx.open(m).unwrap(), [i as u8]);
+    }
+    assert_eq!(s_rx.open(&up[0]), Err(Error::Decrypt), "a replay is refused");
+    assert_eq!(c_tx.seal(&vec![0; crate::MAX_MESSAGE]).err(), Some(Error::TooLong));
+}

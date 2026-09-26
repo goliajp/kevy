@@ -39,7 +39,7 @@ mod transport;
 mod tests;
 
 pub use handshake::{Initiator, Keypair, Responder};
-pub use transport::{Frames, MAX_MESSAGE, Transport, frame};
+pub use transport::{Frames, MAX_MESSAGE, Opener, Sealer, Transport, frame};
 
 /// Why a handshake or transport message was refused.
 ///
