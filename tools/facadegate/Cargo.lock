@@ -39,8 +39,10 @@ name = "kevy-client-async"
 version = "6.4.0"
 dependencies = [
  "kevy-hash",
+ "kevy-noise",
  "kevy-resp",
  "kevy-resp-client",
+ "kevy-sys",
  "tokio",
 ]
 
@@ -49,11 +51,17 @@ name = "kevy-compress"
 version = "6.4.0"
 
 [[package]]
+name = "kevy-crypto"
+version = "6.4.0"
+
+[[package]]
 name = "kevy-embedded"
 version = "6.4.0"
 dependencies = [
+ "kevy-crypto",
  "kevy-hash",
  "kevy-index",
+ "kevy-noise",
  "kevy-persist",
  "kevy-replicate",
  "kevy-resp",
@@ -88,6 +96,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "kevy-noise"
+version = "6.4.0"
+dependencies = [
+ "kevy-crypto",
+]
+
+[[package]]
 name = "kevy-persist"
 version = "6.4.0"
 dependencies = [
@@ -104,7 +119,9 @@ version = "6.4.0"
 name = "kevy-replicate"
 version = "6.4.0"
 dependencies = [
+ "kevy-noise",
  "kevy-resp",
+ "kevy-sys",
 ]
 
 [[package]]
@@ -118,7 +135,9 @@ dependencies = [
 name = "kevy-resp-client"
 version = "6.4.0"
 dependencies = [
+ "kevy-noise",
  "kevy-resp",
+ "kevy-sys",
 ]
 
 [[package]]
