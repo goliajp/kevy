@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+- **Cluster mode works behind a proxy or NAT.** `[cluster] announce_ip` and
+  `announce_port_base` set the address and first port that `CLUSTER
+  SLOTS`, `CLUSTER NODES`, `CLUSTER SHARDS` and `-MOVED` advertise, so a
+  key-aware client follows redirects to the proxy instead of to kevy's own
+  ports. Both are unset by default, and nothing changes until you set them.
+- `docs/deploy-behind-a-proxy.md` now requires client certificates in all
+  three terminator configurations and shows how to issue them. Without
+  them the proxy encrypts traffic for anyone who connects, and kevy has no
+  AUTH of its own.
+- `docs/cluster.md` said shard `i` binds `port_base + 1 + i`; it binds
+  `port_base + i`, with `port_base` defaulting to `port + 1`.
+- The warning printed for a non-loopback bind no longer says AUTH/TLS is
+  coming in a later version.
+
 ## 6.4.0 — the quality release: what a reader can check, and what a gate can
 
 Nothing you have written stops working: the data directory opens in

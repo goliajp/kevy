@@ -50,7 +50,7 @@ Top wins:
 | `[memory]` | `maxmemory` · `maxmemory_policy` · `maxmemory_samples` |
 | `[expiry]` | `hz` · `sample` |
 | `[log]` | `level` · `output` |
-| `[cluster]` | `enabled` · `port_base` · `node_id` · `peers` · `scopes` · `elect_port_base` |
+| `[cluster]` | `enabled` · `port_base` · `node_id` · `peers` · `scopes` · `elect_port_base` · `announce_ip` · `announce_port_base` |
 | `[replication]` | `role` · `upstream` · `listen_port_base` · `backlog_bytes` |
 | `[metrics]` | `enabled` · `bind` · `port` |
 | `[lua]` | `enabled` · `time_budget_ms` · `memory_budget_kb` |

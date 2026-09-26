@@ -285,7 +285,10 @@ fn build_runtime(cfg: &kevy_config::Config, commands: KevyCommands) -> Runtime<K
         )
         .with_slowlog(cfg.slowlog.slower_than_micros, cfg.slowlog.max_len);
     if cfg.cluster.enabled {
-        runtime = runtime.with_cluster(cluster_port_base(cfg));
+        runtime = runtime.with_cluster(cluster_port_base(cfg)).with_cluster_announce(
+            cfg.cluster.announce_ip,
+            (cfg.cluster.announce_port_base != 0).then_some(cfg.cluster.announce_port_base),
+        );
     }
     if cfg.feed.enabled {
         runtime = runtime.with_feed(true, cfg.feed.feed_buffer_size);

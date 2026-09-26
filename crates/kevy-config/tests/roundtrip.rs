@@ -69,6 +69,21 @@ fn precedence_chain_cli_beats_env_beats_file_beats_default() {
 }
 
 #[test]
+fn cluster_announce_keys_parse_and_reject_a_non_ipv4() {
+    let cfg = Config::from_toml_str(
+        "[cluster]\nenabled = true\nannounce_ip = \"203.0.113.7\"\nannounce_port_base = 17001\n",
+        None,
+    )
+    .unwrap();
+    assert_eq!(cfg.cluster.announce_ip, Some([203, 0, 113, 7]));
+    assert_eq!(cfg.cluster.announce_port_base, 17001);
+    let re = Config::from_toml_str(&cfg.to_toml_string(), None).unwrap();
+    assert_eq!(re.cluster, cfg.cluster);
+    assert!(Config::from_toml_str("[cluster]\nannounce_ip = \"db.example\"\n", None).is_err());
+    assert_eq!(Config::default().cluster.announce_ip, None);
+}
+
+#[test]
 fn empty_toml_yields_defaults() {
     let cfg = Config::from_toml_str("", None).unwrap();
     assert_eq!(cfg, Config::default());
