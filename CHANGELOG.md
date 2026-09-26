@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- **Cluster mode works behind a proxy or NAT.** `[cluster] announce_ip` and
+  `announce_port_base` set the address and first port that `CLUSTER
+  SLOTS`, `CLUSTER NODES`, `CLUSTER SHARDS` and `-MOVED` advertise, so a
+  key-aware client follows redirects to the proxy instead of to kevy's own
+  ports. Both are unset by default, and nothing changes until you set them.
+- `docs/deploy-behind-a-proxy.md` now requires client certificates in all
+  three terminator configurations and shows how to issue them. Without
+  them the proxy encrypts traffic for anyone who connects, and kevy has no
+  AUTH of its own.
+- The same chapter shows how to run replication and election between hosts
+  through stunnel with client certificates, including failover: peers are
+  named by their local tunnel ports, with the replication port in the new
+  fourth `peers` field. Verified with three nodes of one shard each.
+- `docs/cluster.md` said shard `i` binds `port_base + 1 + i`; it binds
+  `port_base + i`, with `port_base` defaulting to `port + 1`.
+- The warning printed for a non-loopback bind no longer says AUTH/TLS is
+  coming in a later version.
 - **`FAILOVER` and election failover follow a non-default replication port.**
   Both used to assume the new primary accepts replicas at its client port
   + 10000, so a node with a different `[replication].listen_port_base` was

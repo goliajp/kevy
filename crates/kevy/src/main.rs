@@ -223,12 +223,12 @@ fn is_loopback(bind: [u8; 4]) -> bool {
 /// stunnel/nginx + IP allowlist.
 fn warn_unprotected_bind(bind: [u8; 4]) {
     let [a, b, c, d] = bind;
-    eprintln!("kevy WARN: bind={a}.{b}.{c}.{d} is not loopback and kevy has no AUTH/TLS yet.");
+    eprintln!("kevy WARN: bind={a}.{b}.{c}.{d} is not loopback, and kevy has no AUTH or TLS.");
     eprintln!("kevy WARN: anyone who can reach this socket can read/write every key.");
     eprintln!("kevy WARN: safe only on trust-bounded networks (docker-compose internal,");
     eprintln!("kevy WARN: kubernetes pod network, VPC private subnet). Do NOT expose to");
-    eprintln!("kevy WARN: the public internet. Front with stunnel/nginx + IP allowlist");
-    eprintln!("kevy WARN: until AUTH/TLS lands in v0.3+.");
+    eprintln!("kevy WARN: the public internet: put a TLS proxy that checks client");
+    eprintln!("kevy WARN: certificates in front (see docs/deploy-behind-a-proxy.md).");
 }
 
 #[cfg(test)]
