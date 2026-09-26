@@ -244,7 +244,7 @@ writer.set(b"app:billing:invoice:42", b"...")?;
 | ノブ | 意味 | デフォルト |
 |------|---------|---------|
 | `node_id` | このノードの安定識別子（32BまでのASCII。スコープ所有者と選挙が参照する） | 必須 |
-| `peers` | 全クラスタメンバーの`<node_id>@<host>:<elect_port>:<client_port>`リスト | 必須 |
+| `peers` | 全クラスタメンバーの`<node_id>@<host>:<elect_port>:<client_port>[:<repl_port_base>]`リスト | 必須 |
 | `elect_port_base` | 選挙コントロールプレーンがbindするTCPポート（ノードごとに1リスナー） | `0` = クライアントポート + 200 |
 
 ### 手動でのrejoinリカバリ
@@ -307,7 +307,7 @@ TOMLのみです。レプリケーションのCLIフラグや環境変数はあ�
 | TOML | 意味 |
 |------|---------|
 | `[cluster] node_id` | このノードの安定識別子（32BまでのASCII）。 |
-| `[cluster] peers` | 全クラスタメンバーの`<node_id>@<host>:<elect_port>:<client_port>`リスト（レガシーの2フィールド形式では両ポートが等しいとみなす）。 |
+| `[cluster] peers` | 全クラスタメンバーの`<node_id>@<host>:<elect_port>:<client_port>[:<repl_port_base>]`リスト（レガシーの2フィールド形式では両ポートが等しいとみなす）。 |
 | `[cluster] scopes` | `prefix=writer[\|fallback]`エントリ、カンマ区切り。 |
 | `[cluster] elect_port_base` | 選挙コントロールプレーンがbindするTCPポート。`0`（デフォルト）= `port` + 200。 |
 
