@@ -100,6 +100,8 @@
 #![warn(missing_docs)]
 
 mod config;
+#[cfg(feature = "replicate")]
+mod config_secure;
 mod dispatch;
 mod info;
 // Unconditional: `OpenReport` rides the DropGuard and the Store
@@ -162,6 +164,8 @@ mod replica_glue;
 mod replica_runner;
 #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
 mod replica_source;
+#[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
+mod replica_wire;
 mod shard;
 #[cfg(feature = "persist")]
 mod shard_restore;
@@ -175,6 +179,8 @@ mod store_wire;
 #[cfg(feature = "tier")]
 pub use config::TierBudgetSpec;
 pub use config::{Config, EvictionPolicy, TtlReaperMode};
+#[cfg(feature = "replicate")]
+pub use config_secure::{Keypair, LinkKeys};
 #[cfg(feature = "tier")]
 mod config_tier;
 #[cfg(feature = "persist")]

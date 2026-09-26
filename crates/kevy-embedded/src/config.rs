@@ -139,6 +139,11 @@ pub struct Config {
     /// exercise the guard rails.
     #[cfg(feature = "replicate")]
     pub embed_writer_listen_addr: Option<String>,
+    /// Noise keys for either replication direction; both plaintext by
+    /// default. Set via [`Self::with_replica_security`] and
+    /// [`Self::with_writer_security`].
+    #[cfg(feature = "replicate")]
+    pub(crate) link_security: crate::config_secure::LinkSecurity,
     /// CDC feed (changes_since / changes_tail). Default off.
     #[cfg(feature = "replicate")]
     pub feed_enabled: bool,
@@ -195,6 +200,8 @@ impl Default for Config {
             replica_reconnect_max: Duration::from_secs(5),
             #[cfg(feature = "replicate")]
             embed_writer_listen_addr: None,
+            #[cfg(feature = "replicate")]
+            link_security: Default::default(),
             #[cfg(feature = "replicate")]
             feed_enabled: false,
             #[cfg(feature = "replicate")]
