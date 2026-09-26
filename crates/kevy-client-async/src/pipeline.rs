@@ -224,7 +224,7 @@ impl Pipeline {
 
 // ── AsyncConnection entry point ───────────────────────────────────
 
-impl AsyncConnection {
+impl<T: crate::AsyncTransport> AsyncConnection<T> {
     /// Open a [`Pipeline`] builder bound to this connection. Chain
     /// command-queue methods on the returned [`Pipeline`] then call
     /// `.run(&mut conn).await`.

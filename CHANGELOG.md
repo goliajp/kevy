@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- **An encrypted client port, off unless configured.** `[secure]
+  listen_port` opens a second client port that speaks only kevy's Noise IK
+  protocol, and `client_keys` limits which client keys may use it; the
+  plaintext port is unchanged. The Rust clients connect with
+  `kevys://host:port?server_key=<hex>[&client_key_file=<path>]`:
+  `kevy-resp-client` (`RespClient::connect_url`, `SecureStream`,
+  `ClientStream`), `kevy-client` (`Connection`, `Subscriber`) and
+  `kevy-client-async` (`AsyncConnection::connect_secure_url`,
+  `AsyncSubscriber::connect_secure_url`). `CLIENT LIST` shows each
+  encrypted client's own address. See `docs/encrypted-links.md` for the
+  measured cost.
+- `CLIENT SETPEER`, enabled only by `Runtime::with_peer_token`, lets a
+  relaying front end name the client it relays for.
+- `AsyncConnection` and `AsyncSubscriber` take a transport type parameter
+  that defaults to the runtime's `TcpStream`, so existing code keeps its
+  types.
+- `kevy_noise::Transport::split` separates the sending and receiving
+  halves of a session.
 - **Encrypted links between kevy nodes, off unless configured.** Replication
   and the election control plane can run over Noise IK (X25519,
   ChaCha20-Poly1305, BLAKE2s) with both ends authenticated by their keys.

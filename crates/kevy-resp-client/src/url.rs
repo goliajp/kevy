@@ -50,9 +50,13 @@ fn split_scheme(url: &str) -> io::Result<(&str, &str)> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "URL missing '://'"))?;
     match scheme {
         "kevy" | "redis" | "tcp" => Ok((scheme, rest)),
-        "rediss" | "kevys" => Err(io::Error::new(
+        "rediss" => Err(io::Error::new(
             io::ErrorKind::Unsupported,
-            "TLS schemes (rediss://, kevys://) are unsupported — kevy has no TLS",
+            "rediss:// is unsupported: kevy has no TLS; put a TLS proxy in front, or use kevys:// for kevy's own encrypted port",
+        )),
+        "kevys" => Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "kevys:// carries keys: parse it with parse_secure_url, or connect with RespClient::connect_url",
         )),
         other => Err(io::Error::new(
             io::ErrorKind::InvalidInput,

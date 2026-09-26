@@ -352,7 +352,7 @@ fn value_as_bool(item: &Item) -> Result<bool, ConfigError> {
     }
 }
 
-fn value_as_u16(item: &Item) -> Result<u16, ConfigError> {
+pub(crate) fn value_as_u16(item: &Item) -> Result<u16, ConfigError> {
     let n = value_as_i64(item)?;
     u16::try_from(n).map_err(|_| schema_err(item, format!("value {n} out of range for u16")))
 }

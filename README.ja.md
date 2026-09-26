@@ -425,8 +425,8 @@ kevyはやらないことについて正直です。チャーターにより、�
 - **クライアント向けのAUTHとTLS。** kevyは信頼されたネットワークを前提とします。どちらかが
   必要なら、TLS終端のサイドカー（envoy、stunnel）と認証プロキシを前段に
   置いてください。手順は[`docs/deploy-behind-a-proxy.md`](docs/ja/deploy-behind-a-proxy.md)にあります。
-  kevyノード間のレプリケーションと選挙のリンクは、kevy自身で暗号化できます。設定しない限りオフです。
-  [`docs/encrypted-links.md`](docs/ja/encrypted-links.md)を参照してください。
+  kevy自身の暗号化は任意で、設定しない限りオフです。Rustクライアント向けの暗号化クライアントポート（`kevys://`）と、
+  ノード間のレプリケーションと選挙の暗号化リンクがあります。[`docs/encrypted-links.md`](docs/ja/encrypted-links.md)を参照してください。
 - **マルチDCのアクティブ-アクティブおよびDC間レプリケーション。** 単一DCのみです。
 - **マルチデータベース`SELECT`。** サーバーごとに一つのキースペースです。
 - **ACL。** 信頼ドメインは一つです。

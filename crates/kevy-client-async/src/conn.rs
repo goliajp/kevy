@@ -13,6 +13,7 @@ use std::io;
 
 use kevy_resp::Reply;
 
+use crate::AsyncSecure;
 use crate::codec::AsyncRespCodec;
 use crate::url::parse_url;
 
@@ -23,22 +24,22 @@ use crate::url::parse_url;
 // unambiguously defined.
 
 #[cfg(feature = "tokio")]
-type DefaultTransport = tokio::net::TcpStream;
+pub(crate) type DefaultTransport = tokio::net::TcpStream;
 #[cfg(feature = "smol")]
-type DefaultTransport = smol::net::TcpStream;
+pub(crate) type DefaultTransport = smol::net::TcpStream;
 #[cfg(feature = "async-std")]
-type DefaultTransport = async_std::net::TcpStream;
+pub(crate) type DefaultTransport = async_std::net::TcpStream;
 
 #[cfg(feature = "tokio")]
-async fn connect_default(host: &str, port: u16) -> io::Result<DefaultTransport> {
+pub(crate) async fn connect_default(host: &str, port: u16) -> io::Result<DefaultTransport> {
     crate::rt_tokio::connect(host, port).await
 }
 #[cfg(feature = "smol")]
-async fn connect_default(host: &str, port: u16) -> io::Result<DefaultTransport> {
+pub(crate) async fn connect_default(host: &str, port: u16) -> io::Result<DefaultTransport> {
     crate::rt_smol::connect(host, port).await
 }
 #[cfg(feature = "async-std")]
-async fn connect_default(host: &str, port: u16) -> io::Result<DefaultTransport> {
+pub(crate) async fn connect_default(host: &str, port: u16) -> io::Result<DefaultTransport> {
     crate::rt_async_std::connect(host, port).await
 }
 
@@ -47,9 +48,12 @@ async fn connect_default(host: &str, port: u16) -> io::Result<DefaultTransport> 
 /// Async TCP-RESP connection. Mirrors [`kevy_client::Connection`] but
 /// drops the `mem://` / `file://` embedded backends — those are
 /// synchronous and have no async story.
+///
+/// The transport defaults to the runtime's `TcpStream`;
+/// [`Self::connect_secure_url`] gives one over [`AsyncSecure`] instead.
 #[derive(Debug)]
-pub struct AsyncConnection {
-    codec: AsyncRespCodec<DefaultTransport>,
+pub struct AsyncConnection<T = DefaultTransport> {
+    codec: AsyncRespCodec<T>,
 }
 
 impl AsyncConnection {
@@ -77,7 +81,46 @@ impl AsyncConnection {
     pub fn from_transport(transport: DefaultTransport) -> Self {
         Self { codec: AsyncRespCodec::new(transport) }
     }
+}
 
+impl AsyncConnection<AsyncSecure<DefaultTransport>> {
+    /// Connect to a server's encrypted client port:
+    /// `kevys://host[:port][/db]?server_key=<hex>[&client_key_file=<path>]`.
+    /// Every command method works the same as on a plaintext connection.
+    ///
+    /// ```no_run
+    /// # async fn demo() -> std::io::Result<()> {
+    /// use kevy_client_async::AsyncConnection;
+    /// let url = format!("kevys://10.0.0.5:6404?server_key={}", "ab".repeat(32));
+    /// let mut c = AsyncConnection::connect_secure_url(&url).await?;
+    /// c.ping().await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn connect_secure_url(url: &str) -> io::Result<Self> {
+        let (transport, db) = connect_secure(url).await?;
+        let mut codec = AsyncRespCodec::new(transport);
+        if let Some(db) = db {
+            let reply = codec.request(&[b"SELECT".to_vec(), db.to_string().into_bytes()]).await?;
+            if let Reply::Error(msg) = reply {
+                let text = String::from_utf8_lossy(&msg);
+                return Err(io::Error::other(format!("SELECT {db} rejected: {text}")));
+            }
+        }
+        Ok(Self { codec })
+    }
+}
+
+/// Dial and handshake a `kevys://` URL; also returns its `/db`, if any.
+pub(crate) async fn connect_secure(
+    url: &str,
+) -> io::Result<(AsyncSecure<DefaultTransport>, Option<u32>)> {
+    let u = kevy_resp_client::parse_secure_url(url)?;
+    let me = u.client_key_file.as_deref().map(kevy_resp_client::load_client_key).transpose()?;
+    let tcp = connect_default(&u.host, u.port).await?;
+    Ok((AsyncSecure::handshake(tcp, u.server_key, me.as_ref()).await?, u.db))
+}
+
+impl<T: crate::AsyncTransport> AsyncConnection<T> {
     /// `PING`. Returns `Ok(())` on `+PONG`.
     pub async fn ping(&mut self) -> io::Result<()> {
         let reply = self.codec.request(&[b"PING".to_vec()]).await?;
@@ -86,7 +129,7 @@ impl AsyncConnection {
 
     /// Borrow the underlying codec — exposed so the pipeline and
     /// subscriber adapters can share the connection state machine.
-    pub fn codec_mut(&mut self) -> &mut AsyncRespCodec<DefaultTransport> {
+    pub fn codec_mut(&mut self) -> &mut AsyncRespCodec<T> {
         &mut self.codec
     }
 }

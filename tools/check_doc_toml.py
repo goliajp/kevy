@@ -101,7 +101,8 @@ def main():
                 continue
             is_kevy = re.search(
                 r"(?m)^\s*\[(server|lua|cluster|replication|persistence|"
-                r"limits|index|feed|log)\b", body
+                r"limits|index|feed|log|advanced|slowlog|tiering|metrics|"
+                r"audit|secure|memory|expiry|notification)\b", body
             ) or re.search(r"(?im)^\s*#.*kevy[\w.-]*\.toml", body)
             if not is_kevy:
                 continue

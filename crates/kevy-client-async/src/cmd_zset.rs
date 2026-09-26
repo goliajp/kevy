@@ -8,7 +8,7 @@ use crate::cmd_set::set_multi;
 use crate::conn::AsyncConnection;
 use crate::reply::{array_to_bulks, string, unexpected};
 
-impl AsyncConnection {
+impl<T: crate::AsyncTransport> AsyncConnection<T> {
     /// `ZADD key score member [score member ...]`. Returns count of
     /// newly added (overwrites don't count).
     pub async fn zadd(&mut self, key: &[u8], pairs: &[(f64, &[u8])]) -> io::Result<usize> {

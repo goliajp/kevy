@@ -92,7 +92,7 @@ redis-cli -s /tmp/kevy.sock SET foo bar
 
 服务器是双绑定的：TCP 继续服务远程客户端，UDS 负责本地客户端，RESP 语义和 shard 运行时都完全一样。本地客户端负载上的收益很大（小载荷下 loopback TCP 路径是最大的开销来源）；完整数据、权限模型，以及 UDS 不适用的场景，见 [docs/uds.md](uds.md)。
 
-**绑定地址警告。** kevy 目前既没有 AUTH 也没有 TLS。绑定到非 loopback 地址（`--bind 0.0.0.0` 或任何公网接口）会在启动时打印警告，因为此时网络上的任何一方都能直接下发命令。请把 kevy 放在私有网络边界之内，或者放在负责认证的代理后面。
+**绑定地址警告。** kevy 既没有 AUTH 也没有 TLS。绑定到非 loopback 地址（`--bind 0.0.0.0` 或任何公网接口）会在启动时打印警告，因为此时网络上的任何一方都能直接下发命令。请把 kevy 放在私有网络边界之内，或者放在负责认证的代理后面。开启加密客户端端口（[encrypted-links.md](encrypted-links.md)）并不会关掉明文端口，所以这条警告照样适用。
 
 **连接内省。**`INFO clients` 报告跨全部 shard 求和的实时 `connected_clients` 与 `blocked_clients` 仪表（`blocked_clients` 对每条停在阻塞命令里的连接只计一次，无论它登记在哪）。`CLIENT LIST` / `CLIENT INFO` 为每条真实客户端连接渲染一行 Redis 7.x 形状的记录——对端地址、全局唯一 `id`、`name`、订阅计数、MULTI 队列深度、输入/输出缓冲大小（`cmd=NULL`：不跟踪最近命令名）。`CLIENT SETNAME` 给连接打标签供 LIST 查看；`CLIENT KILL ID <id> | ADDR <ip:port> | LADDR <ip:port>`（或旧式位置参数 `CLIENT KILL <ip:port>`）关闭所有匹配的连接，包括停在阻塞命令里的连接。拆连接前会等受害者的待发输出排空，所以杀掉自己的连接依然能收到自己那条回复。
 

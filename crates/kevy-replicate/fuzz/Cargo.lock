@@ -61,14 +61,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "kevy-crypto"
+version = "6.4.0"
+
+[[package]]
 name = "kevy-hash"
 version = "6.4.0"
+
+[[package]]
+name = "kevy-noise"
+version = "6.4.0"
+dependencies = [
+ "kevy-crypto",
+]
 
 [[package]]
 name = "kevy-replicate"
 version = "6.4.0"
 dependencies = [
+ "kevy-noise",
  "kevy-resp",
+ "kevy-sys",
 ]
 
 [[package]]
@@ -85,6 +98,10 @@ version = "6.4.0"
 dependencies = [
  "kevy-bytes",
 ]
+
+[[package]]
+name = "kevy-sys"
+version = "6.4.0"
 
 [[package]]
 name = "libc"
