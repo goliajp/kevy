@@ -159,6 +159,64 @@ listen kevy-shard1
 
 这样 `CLUSTER SLOTS`、`CLUSTER NODES`、`CLUSTER SHARDS` 和所有 `-MOVED` 里写的都是 `203.0.113.7:7001` 和 `203.0.113.7:7002`。不设 `announce_ip` 时，kevy 公布的是自己的绑定地址，`0.0.0.0` 绑定时公布 `127.0.0.1`：同一台主机上的客户端没问题，从别处就连不上。
 
+## 跨主机的复制与选举
+
+复制和选举控制面各有自己的端口，两者都不加密，也不认证。跨主机部署时，让每个节点只在回环地址上监听，并为它的每个对端各准备一个本地隧道入口。每个节点需要：
+
+- 入站：自己对外提供的每个本地端口各一个 TLS 服务，包括客户端端口（给 `FAILOVER` 探测用）、选举端口，以及**每个 shard 一个**复制端口；
+- 出站：对每个对端的上述每个端口，各开一个客户端模式的服务，本地端口自己挑；
+- `peers` 列表里用**本地**隧道端口来写每个对端，复制端口写在第四段。这样跟随新主的节点连的是隧道，而不是直接连对端。
+
+以三节点中的 `n2` 为例，每个节点一个 shard，对端 `n1` 和 `n3` 分别映射到本地端口 `8010-8012` 和 `8030-8032`：
+
+```toml
+[server]
+bind = "127.0.0.1"
+port = 6004
+
+[replication]
+role     = "replica"
+upstream = "127.0.0.1:8012"          # n1's replication port, through the tunnel
+
+[cluster]
+enabled         = true
+node_id         = "n2"
+elect_port_base = 6204
+peers = "n1@127.0.0.1:8011:8010:8012,n2@127.0.0.1:6204:6004:16004,n3@127.0.0.1:8031:8030:8032"
+```
+
+```ini
+foreground = yes
+
+; inbound: what peers reach on this host
+[in-client]
+accept      = 0.0.0.0:7004
+connect     = 127.0.0.1:6004
+cert        = /etc/kevy/tls/server.crt
+key         = /etc/kevy/tls/server.key
+CAfile      = /etc/kevy/tls/ca.crt
+verifyChain = yes
+requireCert = yes
+; [in-elect] 7204 -> 6204 and [in-repl] 17004 -> 16004, same options
+
+; outbound: n1's three ports as local ports on this host
+[to-n1-client]
+client      = yes
+accept      = 127.0.0.1:8010
+connect     = n1.internal:7004
+cert        = /etc/kevy/tls/n2.crt
+key         = /etc/kevy/tls/n2.key
+CAfile      = /etc/kevy/tls/ca.crt
+verifyChain = yes
+checkHost   = n1.internal
+; [to-n1-elect] 8011 -> n1.internal:7204, [to-n1-repl] 8012 -> n1.internal:17004,
+; and the same three for n3 on 8030-8032
+```
+
+TLS 相关选项要像上面这样写在每个服务里。stunnel 5.76 在全局段里放这些选项、同一个文件又有客户端模式服务时，启动就会崩溃。
+
+实测过的：三个节点、每节点一个 shard，所有链路都经 stunnel 并要求客户端证书。主节点上的写入到达了两个 replica；主机之间网络上的抓包里，写入了 200 次的标记值一次都没出现，而同一时间在主节点回环上的抓包里出现了 600 次；杀掉主节点后，`n2` 在 6 秒内当选，`n3` 经本地隧道跟随它，并收到了切换之后的写入。没有实测的：每个节点多于一个 shard 的情况。
+
 ## 哪些实测过，哪些没有
 
 在当前代码上实测，终止器用 HAProxy 3.4.5、nginx 1.30.5 和 stunnel 5.76，客户端是 redis-cli 8.0.2，证书由 OpenSSL 3.5.7 签发：

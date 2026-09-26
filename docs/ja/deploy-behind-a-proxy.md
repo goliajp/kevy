@@ -159,6 +159,64 @@ listen kevy-shard1
 
 これで `CLUSTER SLOTS`、`CLUSTER NODES`、`CLUSTER SHARDS` とすべての `-MOVED` が `203.0.113.7:7001` と `203.0.113.7:7002` を示すようになります。`announce_ip` がなければ、kevy はバインドしているアドレスを広告し、`0.0.0.0` のバインドなら `127.0.0.1` を広告します。同じホストのクライアントには正しくても、ほかの場所からは届きません。
 
+## ホスト間のレプリケーションと選挙
+
+レプリケーションと選挙のコントロールプレーンはそれぞれ専用のポートを持ち、どちらも暗号化も認証もされません。ホストをまたぐ場合は、各ノードをループバックでだけ待ち受けさせ、ピアごとにローカルのトンネル入口を用意します。各ノードに必要なものは次のとおりです。
+
+- 受信側：このノードが提供するローカルポートごとに 1 つの TLS サービス。クライアントポート（`FAILOVER` の問い合わせ用）、選挙ポート、そして**シャードごとに 1 つ**のレプリケーションポート。
+- 送信側：各ピアのそれらのポートごとに 1 つのクライアントモードのサービス。ローカルポートは自由に選べます。
+- `peers` リストでは各ピアを**ローカル**のトンネルポートで書き、レプリケーションポートは 4 つ目のフィールドに入れます。こうすると、新しく選ばれたプライマリに追従するノードは、ピアに直接ではなくトンネルに接続します。
+
+3 ノードのうち `n2` の例です。各ノード 1 シャードで、ピア `n1` と `n3` をそれぞれローカルポート `8010-8012` と `8030-8032` に割り当てます。
+
+```toml
+[server]
+bind = "127.0.0.1"
+port = 6004
+
+[replication]
+role     = "replica"
+upstream = "127.0.0.1:8012"          # n1's replication port, through the tunnel
+
+[cluster]
+enabled         = true
+node_id         = "n2"
+elect_port_base = 6204
+peers = "n1@127.0.0.1:8011:8010:8012,n2@127.0.0.1:6204:6004:16004,n3@127.0.0.1:8031:8030:8032"
+```
+
+```ini
+foreground = yes
+
+; inbound: what peers reach on this host
+[in-client]
+accept      = 0.0.0.0:7004
+connect     = 127.0.0.1:6004
+cert        = /etc/kevy/tls/server.crt
+key         = /etc/kevy/tls/server.key
+CAfile      = /etc/kevy/tls/ca.crt
+verifyChain = yes
+requireCert = yes
+; [in-elect] 7204 -> 6204 and [in-repl] 17004 -> 16004, same options
+
+; outbound: n1's three ports as local ports on this host
+[to-n1-client]
+client      = yes
+accept      = 127.0.0.1:8010
+connect     = n1.internal:7004
+cert        = /etc/kevy/tls/n2.crt
+key         = /etc/kevy/tls/n2.key
+CAfile      = /etc/kevy/tls/ca.crt
+verifyChain = yes
+checkHost   = n1.internal
+; [to-n1-elect] 8011 -> n1.internal:7204, [to-n1-repl] 8012 -> n1.internal:17004,
+; and the same three for n3 on 8030-8032
+```
+
+TLS のオプションは上のように各サービスに書いてください。stunnel 5.76 は、これらをグローバルセクションに置き、同じファイルにクライアントモードのサービスもあると、起動時にクラッシュしました。
+
+実測したこと：3 ノード、各ノード 1 シャードで、すべてのリンクを stunnel とクライアント証明書経由にした構成。プライマリへの書き込みは両方のレプリカに届き、ホスト間のネットワークのキャプチャには 200 回書いたマーカー値が一度も現れませんでした。同じ時間にプライマリのループバックで取ったキャプチャには 600 回現れています。プライマリを停止すると、`n2` が 6 秒で選ばれ、`n3` はローカルのトンネル経由で追従し、フェイルオーバー後の書き込みも受け取りました。実測していないこと：ノードあたり 2 シャード以上の構成。
+
 ## 実測したこと、していないこと
 
 このツリーで、HAProxy 3.4.5、nginx 1.30.5、stunnel 5.76 を kevy の前に置き、クライアントに redis-cli 8.0.2、証明書の発行に OpenSSL 3.5.7 を使って実測しました。

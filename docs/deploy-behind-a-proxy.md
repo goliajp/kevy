@@ -202,6 +202,82 @@ now name `203.0.113.7:7001` and `203.0.113.7:7002`. Without
 `0.0.0.0` bind — correct for clients on the same host, unreachable from
 anywhere else.
 
+## Replication and election between hosts
+
+Replication and the election control plane have their own ports, and
+neither is encrypted or authenticated. Across hosts, give every node a
+local tunnel endpoint for each of its peers and let every node listen
+only on loopback. Each node then needs:
+
+- inbound, one TLS service per local port it serves: the client port
+  (for `FAILOVER` probes), the election port, and one replication port
+  **per shard**;
+- outbound, one client-mode service per peer for each of those ports,
+  on a local port of your choosing;
+- a `peers` list that names every peer by its **local** tunnel ports,
+  using the fourth field for the replication port, so a node following
+  a newly elected primary dials the tunnel rather than the peer.
+
+For node `n2` of three, one shard each, peers `n1` and `n3` reached on
+local ports `8010-8012` and `8030-8032`:
+
+```toml
+[server]
+bind = "127.0.0.1"
+port = 6004
+
+[replication]
+role     = "replica"
+upstream = "127.0.0.1:8012"          # n1's replication port, through the tunnel
+
+[cluster]
+enabled         = true
+node_id         = "n2"
+elect_port_base = 6204
+peers = "n1@127.0.0.1:8011:8010:8012,n2@127.0.0.1:6204:6004:16004,n3@127.0.0.1:8031:8030:8032"
+```
+
+```ini
+foreground = yes
+
+; inbound: what peers reach on this host
+[in-client]
+accept      = 0.0.0.0:7004
+connect     = 127.0.0.1:6004
+cert        = /etc/kevy/tls/server.crt
+key         = /etc/kevy/tls/server.key
+CAfile      = /etc/kevy/tls/ca.crt
+verifyChain = yes
+requireCert = yes
+; [in-elect] 7204 -> 6204 and [in-repl] 17004 -> 16004, same options
+
+; outbound: n1's three ports as local ports on this host
+[to-n1-client]
+client      = yes
+accept      = 127.0.0.1:8010
+connect     = n1.internal:7004
+cert        = /etc/kevy/tls/n2.crt
+key         = /etc/kevy/tls/n2.key
+CAfile      = /etc/kevy/tls/ca.crt
+verifyChain = yes
+checkHost   = n1.internal
+; [to-n1-elect] 8011 -> n1.internal:7204, [to-n1-repl] 8012 -> n1.internal:17004,
+; and the same three for n3 on 8030-8032
+```
+
+Put the TLS options in every service, as above. stunnel 5.76 crashed on
+start when they sat in the global section of a file that also had
+client-mode services.
+
+Verified: three nodes, one shard each, every link through stunnel with
+client certificates. Writes on the primary reached both replicas; a
+capture on the network between the hosts never contained a marker value
+written 200 times, while a capture on the primary's loopback, taken at
+the same time, contained it 600 times; after the primary was killed,
+`n2` was elected in 6 s and `n3` followed it through its local tunnel
+and received writes made after the failover. Not verified: more than
+one shard per node.
+
 ## What was verified, and what was not
 
 Measured against this tree, with HAProxy 3.4.5, nginx 1.30.5 and
