@@ -46,7 +46,7 @@ L3  kevy-persist  kevy-replicate  kevy-elect  kevy-resp-client
 L2  kevy-store  kevy-resp  kevy-window  kevy-sql
 L1  kevy-map  kevy-bytes  kevy-seg  kevy-vlog  kevy-index  kevy-scalar
                                                           kevy-lua-host
-L0  kevy-alloc  kevy-hash  kevy-ring  kevy-sys  kevy-uring  kevy-time
+L0  kevy-alloc  kevy-hash  kevy-ring  kevy-sys  kevy-uring  kevy-time  kevy-crypto
     kevy-geo  kevy-text  kevy-vector  kevy-ranktree  kevy-compress
     kevy-config  kevy-madvise  kevy-tmpdir  kevy-lua  kevy-scope
     kevy-chaos  kevy-bench  kevy-testnet  kevy-pubsub-bench
@@ -56,7 +56,8 @@ L0  kevy-alloc  kevy-hash  kevy-ring  kevy-sys  kevy-uring  kevy-time
 keyspace, or about each other's callers, and several are published for
 their own sake — `kevy-map` is a Swiss-table, `kevy-ranktree` an
 order-statistic B-tree, `kevy-seg` an immutable segment file, `kevy-time`
-calendar arithmetic. A change here is felt by every caller, so they carry the
+calendar arithmetic. `kevy-crypto` holds the primitives of an encrypted
+transport: ChaCha20-Poly1305, X25519 and BLAKE2s, with no dependencies. A change here is felt by every caller, so they carry the
 strictest rules and the most tests.
 
 **L2–L4 know the domain.** A keyspace, values with expiry, a wire protocol,
