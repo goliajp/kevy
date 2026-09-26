@@ -54,6 +54,10 @@ impl<C: Commands> Shard<C> {
                 self.client_info(conn_id);
                 true
             }
+            b"SETPEER" if self.peer_token.is_some() => {
+                self.client_setpeer(conn_id, args);
+                true
+            }
             _ => false,
         }
     }
@@ -77,6 +81,29 @@ impl<C: Commands> Shard<C> {
             kevy_resp::RespVersion::V3 => kevy_resp::encode_verbatim(&mut out, *b"txt", &row),
         }
         self.immediate_reply(conn_id, out);
+    }
+
+    /// `CLIENT SETPEER <token> <ip:port>` — the front end relaying this
+    /// connection names the client it relays for.
+    fn client_setpeer<A: ArgvView + ?Sized>(&mut self, conn_id: u64, args: &A) {
+        let reply: &[u8] = match (args.len(), self.peer_token, args.get(2), args.get(3)) {
+            (4, Some(want), Some(token), Some(addr)) => {
+                let token_ok = token_matches(token, &want);
+                let addr = std::str::from_utf8(addr)
+                    .ok()
+                    .and_then(|a| a.parse::<std::net::SocketAddrV4>().ok());
+                match (token_ok, addr, self.conns.get_mut(&conn_id)) {
+                    (true, Some(a), Some(c)) => {
+                        c.peer = (*a.ip(), a.port());
+                        b"+OK\r\n"
+                    }
+                    (false, ..) => b"-ERR invalid peer token\r\n",
+                    _ => b"-ERR invalid peer address\r\n",
+                }
+            }
+            _ => b"-ERR wrong number of arguments for 'client|setpeer'\r\n",
+        };
+        self.immediate_reply(conn_id, reply.to_vec());
     }
 
     /// `CLIENT SETNAME <name>` arm — extracted verbatim from
@@ -131,5 +158,41 @@ impl<C: Commands> Shard<C> {
         } else {
             self.immediate_reply(conn_id, b"$0\r\n\r\n".to_vec());
         }
+    }
+}
+
+/// Decode all 64 hex characters first, then compare in constant time, so
+/// the reply's timing says nothing about how much of the token was right.
+fn token_matches(hex: &[u8], want: &[u8; 32]) -> bool {
+    let mut got = [0u8; 32];
+    if hex.len() != 64 {
+        return false;
+    }
+    for (i, b) in got.iter_mut().enumerate() {
+        let pair = std::str::from_utf8(&hex[2 * i..2 * i + 2]).ok();
+        match pair.and_then(|h| u8::from_str_radix(h, 16).ok()) {
+            Some(v) => *b = v,
+            None => return false,
+        }
+    }
+    kevy_crypto::ct_eq(&got, want)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::token_matches;
+
+    #[test]
+    fn a_peer_token_matches_only_its_own_64_hex_characters() {
+        let want = [0xab; 32];
+        let hex = "ab".repeat(32);
+        assert!(token_matches(hex.as_bytes(), &want));
+        assert!(token_matches(hex.to_uppercase().as_bytes(), &want));
+        let mut last_off = hex.clone().into_bytes();
+        last_off[63] = b'c';
+        assert!(!token_matches(&last_off, &want));
+        assert!(!token_matches(&hex.as_bytes()[..62], &want));
+        assert!(!token_matches("zz".repeat(32).as_bytes(), &want));
+        assert!(!token_matches("é".repeat(32).as_bytes(), &want));
     }
 }
