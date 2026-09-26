@@ -144,6 +144,13 @@ fn drained_repl_base(info: &str, client_port: u16) -> Option<u16> {
     Some(reported.unwrap_or_else(|| client_port.saturating_add(10_000)))
 }
 
+fn send_verb(host: &str, port: u16, argv: &[&[u8]]) -> std::io::Result<()> {
+    let mut c = kevy_resp_client::RespClient::connect(host, port)?;
+    let _ = c.request_borrowed(argv)?;
+    let _ = std::io::stderr().flush();
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::drained_repl_base;
@@ -160,11 +167,4 @@ mod tests {
         let older = "role:slave\r\nmaster_link_status:up\r\nslave_lag_frames:0\r\n";
         assert_eq!(drained_repl_base(older, 6004), Some(16004));
     }
-}
-
-fn send_verb(host: &str, port: u16, argv: &[&[u8]]) -> std::io::Result<()> {
-    let mut c = kevy_resp_client::RespClient::connect(host, port)?;
-    let _ = c.request_borrowed(argv)?;
-    let _ = std::io::stderr().flush();
-    Ok(())
 }
