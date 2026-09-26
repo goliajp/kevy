@@ -164,6 +164,9 @@ Server-side TOML keys under `[replication]`:
 | `min_replicas_to_write` | `0` (off) | The primary refuses writes with `-NOREPLICAS` when fewer than N replicas are healthy (live connection that has ACKed). Ladder rung 4. |
 | `min_replicas_max_lag_ms` | `10000` | Freshness window for `min_replicas_to_write`: a replica counts as healthy only if its latest ACK is younger than this bound, so a stalled replica ages out of the count even while its connection stays up. |
 | `single_source` | `false` | The upstream is ONE stream on one port (an embedded writer) instead of the per-shard fleet — see *Embedded-as-primary* below. |
+| `secure` | `false` | Encrypt and authenticate this node's replication links with Noise — see [`docs/encrypted-links.md`](encrypted-links.md). Needs `[secure] private_key_file`. |
+| `upstream_key` | unset | The primary's public key, required on a secure replica. |
+| `replica_keys` | empty | On a secure primary: the replica public keys allowed to connect. Empty admits any replica, still encrypted. |
 
 Because both roles bind the replication range, co-hosting several instances on one machine requires client ports at least `nshards` apart — otherwise their default replication ranges (`client port + 10000 … + 10000 + nshards − 1`) collide.
 
@@ -174,6 +177,8 @@ When [`kevy-elect`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-ele
 | `node_id` | unset | Stable id of this node (≤ 32 B ASCII). Used as the tie-breaker in elections. |
 | `elect_port_base` | `0` (= client port + 200) | Control-plane TCP port for heartbeats and ballots — one listener per node. |
 | `peers` | empty | `id@host:elect_port:client_port[:repl_port_base],…` for every node in the cluster including self. Empty means the elector is dormant. |
+| `secure` | `false` | Encrypt and authenticate the election links; needs a `peer_keys` entry for every other node. |
+| `peer_keys` | empty | `["id=<public key>", …]` — each node's public key, from `kevy keygen`. |
 
 Use the extended three-field peer syntax: election traffic rides the elect port, while retargeting and `-MISDIRECTED` replies use the client port. The legacy `id@host:port` form assumes both are equal, which is almost never what you want.
 

@@ -54,7 +54,7 @@ const SECTIONS = [
   ['clients', { en: 'Clients', zh: '客户端', ja: 'クライアント' },
     ['clients', 'bindings', 'client-contract']],
   ['ref', { en: 'Reference', zh: '参考', ja: 'リファレンス' },
-    ['boundaries', 'error-replies', 'rds-workloads', 'deploy-behind-a-proxy',
+    ['boundaries', 'error-replies', 'rds-workloads', 'deploy-behind-a-proxy', 'encrypted-links',
      'migration']],
 ]
 

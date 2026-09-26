@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- **Encrypted links between kevy nodes, off unless configured.** Replication
+  and the election control plane can run over Noise IK (X25519,
+  ChaCha20-Poly1305, BLAKE2s) with both ends authenticated by their keys.
+  `kevy keygen <file>` writes a node key; `[secure] private_key_file`,
+  `[cluster] secure` / `peer_keys` and `[replication] secure` /
+  `upstream_key` / `replica_keys` turn it on. A link turned on without the
+  keys it needs refuses to start instead of falling back to plaintext, and
+  replicas follow a failover to the new primary without new
+  configuration. Client connections are unchanged: still no TLS or AUTH,
+  still fronted by a proxy. See `docs/encrypted-links.md`.
+- Embedded stores encrypt the same links in code:
+  `Config::with_writer_security` and `Config::with_replica_security` take
+  a `LinkKeys` (this store's `Keypair` and the keys it accepts). The
+  handshake matches the server's, so embedded replicas can follow a secure
+  server and server replicas a secure embedded writer.
+- Config string values keep non-ASCII characters: a `kevy.toml` path or
+  value with Chinese or Japanese text was read back garbled.
+- New crates `kevy-crypto` (the primitives, no dependencies, checked against
+  the RFC, Wycheproof and BLAKE2 vectors) and `kevy-noise` (the IK handshake
+  and transport without I/O, checked against the cacophony and snow
+  vectors).
+- `kevy-sys` gains `fill_random` (getrandom(2) on Linux and Android,
+  getentropy(3) on macOS and iOS).
 - **Cluster mode works behind a proxy or NAT.** `[cluster] announce_ip` and
   `announce_port_base` set the address and first port that `CLUSTER
   SLOTS`, `CLUSTER NODES`, `CLUSTER SHARDS` and `-MOVED` advertise, so a

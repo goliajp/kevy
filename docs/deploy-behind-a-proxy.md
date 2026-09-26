@@ -204,8 +204,10 @@ anywhere else.
 
 ## Replication and election between hosts
 
-Replication and the election control plane have their own ports, and
-neither is encrypted or authenticated. Across hosts, give every node a
+Replication and the election control plane have their own ports. kevy
+can encrypt and authenticate both itself — see
+[encrypted-links.md](encrypted-links.md), which needs no tunnels. Without
+that, neither is encrypted or authenticated. Across hosts, give every node a
 local tunnel endpoint for each of its peers and let every node listen
 only on loopback. Each node then needs:
 
