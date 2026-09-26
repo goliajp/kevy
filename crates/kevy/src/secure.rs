@@ -250,5 +250,12 @@ mod tests {
         cfg.replication.secure = true;
         cfg.replication.role = ReplicationRole::Replica;
         assert!(link_keypair(&cfg).unwrap_err().contains("upstream_key"));
+
+        let mut clients = Config::default();
+        clients.secure.listen_port = clients.server.port;
+        clients.secure.private_key_file = cfg.secure.private_key_file.clone();
+        assert!(link_keypair(&clients).unwrap_err().contains("must differ"));
+        clients.secure.listen_port = clients.server.port + 400;
+        assert!(link_keypair(&clients).unwrap().is_some(), "the client port alone needs the key");
     }
 }

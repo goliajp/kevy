@@ -331,4 +331,22 @@ mod tests {
         assert_eq!(block_on(read(&mut conn, &mut back)).unwrap(), 0, "end of stream");
         assert!(format!("{conn:?}").contains("unwritten: 0"));
     }
+
+    #[test]
+    fn flush_and_close_write_out_what_is_still_sealed() {
+        let wrote = Arc::new(Mutex::new(Vec::new()));
+        let mem = Mem { wrote: Arc::clone(&wrote), to_read: Vec::new(), flip: false };
+        let (mut conn, _, mut s_rx) = pair(mem);
+        let mut cx = Context::from_waker(Waker::noop());
+        conn.out = frame(&conn.tx.seal(b"queued").unwrap()).unwrap();
+        while Pin::new(&mut conn).poll_flush(&mut cx).is_pending() {}
+        assert!(conn.out.is_empty());
+        conn.out = frame(&conn.tx.seal(b"last").unwrap()).unwrap();
+        while Pin::new(&mut conn).poll_close(&mut cx).is_pending() {}
+        assert!(conn.out.is_empty(), "nothing left behind at close");
+        let mut f = Frames::default();
+        f.push(&wrote.lock().unwrap());
+        assert_eq!(s_rx.open(&f.next().unwrap()).unwrap(), b"queued");
+        assert_eq!(s_rx.open(&f.next().unwrap()).unwrap(), b"last");
+    }
 }

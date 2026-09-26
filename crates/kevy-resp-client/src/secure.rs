@@ -283,3 +283,110 @@ fn random32() -> io::Result<[u8; 32]> {
 fn random32() -> io::Result<[u8; 32]> {
     Err(io::ErrorKind::Unsupported.into())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ClientStream;
+    use kevy_noise::Responder;
+    use std::net::TcpListener;
+
+    const SERVER: [u8; 32] = [1; 32];
+
+    /// One-connection Noise echo server: returns every message sealed back,
+    /// and closes the connection when a message reads `close`.
+    fn echo_server() -> (u16, [u8; 32]) {
+        let key = Keypair::from_secret(SERVER);
+        let public = key.public();
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let (mut s, _) = l.accept().unwrap();
+            let mut frames = Frames::default();
+            let mut chunk = [0u8; 4096];
+            let mut next = |s: &mut TcpStream, f: &mut Frames| loop {
+                if let Some(m) = f.next() {
+                    return Some(m);
+                }
+                let n = s.read(&mut chunk).ok()?;
+                if n == 0 {
+                    return None;
+                }
+                f.push(&chunk[..n]);
+            };
+            let m1 = next(&mut s, &mut frames).unwrap();
+            let (_, r) =
+                Responder::accept(&key, Keypair::from_secret([2; 32]), PROLOGUE, &m1).unwrap();
+            let (m2, mut t) = r.finish(b"").unwrap();
+            s.write_all(&frame(&m2).unwrap()).unwrap();
+            while let Some(m) = next(&mut s, &mut frames) {
+                let plain = t.open(&m).unwrap();
+                if plain == b"close" {
+                    return;
+                }
+                s.write_all(&frame(&t.seal(&plain).unwrap()).unwrap()).unwrap();
+            }
+        });
+        (port, public)
+    }
+
+    fn read_n(r: &mut impl Read, n: usize) -> Vec<u8> {
+        let mut out = vec![0u8; n];
+        r.read_exact(&mut out).unwrap();
+        out
+    }
+
+    #[test]
+    fn a_secure_stream_writes_in_message_sized_pieces_and_sees_the_close() {
+        let (port, key) = echo_server();
+        let mut s = SecureStream::connect("127.0.0.1", port, key, None).unwrap();
+        assert!(format!("{s:?}").starts_with("SecureStream"));
+        let big: Vec<u8> = (0..70_000u32).map(|i| i as u8).collect();
+        let first = s.write(&big).unwrap();
+        assert_eq!(first, MAX_MESSAGE - TAG, "one Noise message per write");
+        s.write_all(&big[first..]).unwrap();
+        s.flush().unwrap();
+        assert_eq!(read_n(&mut s, big.len()), big);
+        s.write_all(b"close").unwrap();
+        let mut buf = [0u8; 4];
+        assert_eq!(s.read(&mut buf).unwrap(), 0, "end of stream after the server closes");
+    }
+
+    #[test]
+    fn a_client_stream_opens_kevys_with_a_key_file() {
+        let (port, key) = echo_server();
+        let dir = std::env::temp_dir().join(format!("kevy-resp-client-key-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("client.key");
+        std::fs::write(&file, format!("{}\n", "cd".repeat(32))).unwrap();
+        let hex: String = key.iter().map(|b| format!("{b:02x}")).collect();
+        let url =
+            format!("kevys://127.0.0.1:{port}?server_key={hex}&client_key_file={}", file.display());
+        let mut c = ClientStream::connect_url(&url).unwrap();
+        assert!(matches!(c, ClientStream::Secure(_)));
+        assert!(c.socket().peer_addr().is_ok());
+        assert_eq!(c.write(b"ping").unwrap(), 4);
+        c.flush().unwrap();
+        assert_eq!(read_n(&mut c, 4), b"ping");
+        std::fs::write(&file, "not a key").unwrap();
+        assert!(ClientStream::connect_url(&url).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn malformed_kevys_urls_are_refused_before_connecting() {
+        let k = "ab".repeat(32);
+        for url in [
+            "kevy://h:1".to_string(),
+            "kevys://h:1".to_string(),
+            "kevys://h:1?server_key=abc".to_string(),
+            format!("kevys://h:1?server_key={k}&colour=blue"),
+            format!("kevys://:1?server_key={k}"),
+            format!("kevys://h:1?server_key={}", "zz".repeat(32)),
+        ] {
+            let e = parse_secure_url(&url).unwrap_err();
+            assert_eq!(e.kind(), io::ErrorKind::InvalidInput, "{url}");
+        }
+        assert!(load_client_key(Path::new("/nonexistent/kevy.key")).is_err());
+    }
+}

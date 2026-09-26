@@ -253,6 +253,8 @@ fn secure_keys_of_the_wrong_shape_are_schema_errors() {
         ("[replication]\nupstream_key = 5\n".to_string(), "upstream_key"),
         (format!("[replication]\nreplica_keys = [\"{good}\", \"zz\"]\n"), "replica_keys"),
         ("[replication]\nreplica_keys = \"x\"\n".to_string(), "replica_keys"),
+        ("[secure]\nlisten_port = \"x\"\n".to_string(), "listen_port"),
+        ("[secure]\nclient_keys = [\"ab\"]\n".to_string(), "client_keys"),
     ] {
         let err = Config::from_toml_str(&src, None).unwrap_err();
         assert!(matches!(err, ConfigError::Schema { .. }), "{src}: {err:?}");

@@ -206,6 +206,12 @@ mod tests {
     /// Stands in for the plaintext port: records the SETPEER line, answers
     /// +OK, then echoes everything back.
     fn fake_upstream() -> (SocketAddr, std::sync::mpsc::Receiver<String>) {
+        fake_upstream_answering(b"+OK\r\n")
+    }
+
+    fn fake_upstream_answering(
+        answer: &'static [u8],
+    ) -> (SocketAddr, std::sync::mpsc::Receiver<String>) {
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = l.local_addr().unwrap();
         let (tx, rx) = std::sync::mpsc::channel();
@@ -215,7 +221,7 @@ mod tests {
                 let mut head = vec![0u8; 256];
                 let n = s.read(&mut head).unwrap();
                 tx.send(String::from_utf8_lossy(&head[..n]).into_owned()).unwrap();
-                s.write_all(b"+OK\r\n").unwrap();
+                s.write_all(answer).unwrap();
                 let mut back = s.try_clone().unwrap();
                 std::thread::spawn(move || {
                     let _ = io::copy(&mut s, &mut back);
@@ -228,7 +234,13 @@ mod tests {
     fn front(
         client_keys: Vec<[u8; 32]>,
     ) -> (SocketAddr, Keypair, std::sync::mpsc::Receiver<String>) {
-        let (upstream, seen) = fake_upstream();
+        front_over(client_keys, fake_upstream())
+    }
+
+    fn front_over(
+        client_keys: Vec<[u8; 32]>,
+        (upstream, seen): (SocketAddr, std::sync::mpsc::Receiver<String>),
+    ) -> (SocketAddr, Keypair, std::sync::mpsc::Receiver<String>) {
         let local = Keypair::from_secret([1; 32]);
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = l.local_addr().unwrap();
@@ -298,5 +310,23 @@ mod tests {
         let mut buf = [0u8; 16];
         assert!(matches!(s.read(&mut buf), Ok(0) | Err(_)));
         assert!(seen.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_client_is_closed_when_the_server_refuses_the_token_or_is_down() {
+        let refusing = fake_upstream_answering(b"-ERR invalid peer token\r\n");
+        let (addr, server, _seen) = front_over(Vec::new(), refusing);
+        let (mut s, _) = connect(addr, &Keypair::from_secret([2; 32]), &server).unwrap();
+        let mut buf = [0u8; 8];
+        assert_eq!(s.read(&mut buf).unwrap(), 0, "closed, never relayed");
+
+        // nothing listens where the plaintext port should be
+        let gone = TcpListener::bind("127.0.0.1:0").unwrap();
+        let dead = gone.local_addr().unwrap();
+        drop(gone);
+        let (_tx, rx) = std::sync::mpsc::channel();
+        let (addr, server, _) = front_over(Vec::new(), (dead, rx));
+        let (mut s, _) = connect(addr, &Keypair::from_secret([2; 32]), &server).unwrap();
+        assert!(matches!(s.read(&mut buf), Ok(0) | Err(_)));
     }
 }
