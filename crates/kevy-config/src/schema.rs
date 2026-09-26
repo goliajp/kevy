@@ -175,8 +175,7 @@ impl Default for LogSection {
 /// `[advanced]` section — reactor-loop tuning knobs that used to be
 /// hardcoded `const`s in `kevy-rt`. Defaults match the previously
 /// hardcoded values, so the existing benchmark numbers
-/// translate one-to-one. Tune only if you know what you're doing
-/// (`bench/REPORT.md` documents the trade-offs).
+/// translate one-to-one. Tune only if you know what you're doing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AdvancedSection {
     /// Iterations the per-core reactor spins on `poll(timeout=0)`

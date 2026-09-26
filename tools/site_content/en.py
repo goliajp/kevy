@@ -17,7 +17,7 @@
 # barely ahead (LPUSH: 10%), what we refuse to do (no cluster, no AUTH, no TLS),
 # and which commands do not behave the way Redis's docs say.
 #
-# Numbers: bench/PERF-LEDGER.md. Sizes: ls -l site/demo/pkg/kevy.wasm.
+# Numbers: PERFORMANCE.md. Sizes: ls -l site/demo/pkg/kevy.wasm.
 
 PAGES = {}
 

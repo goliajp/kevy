@@ -64,7 +64,7 @@ index-only 查询即使全表皆冷也只读 RAM。见
 每个 headline 指标都有门禁，并在每列 train 上复测：hydrated
 行列表页 p99 < 1ms、写扇出 p99 < 200µs、ANN recall ≥ 0.9——见
 [设计地图](docs/designing-on-kevy.md)、[cookbook](docs/cookbook.md)
-与[验证对账表](bench/VALIDATION-LEDGER.md)。
+与[性能页](PERFORMANCE.md)。
 
 ## 我应该选哪一个
 
@@ -258,7 +258,7 @@ loader API 与 ABI 契约见 [docs/zh/wasm.md](docs/zh/wasm.md)；
 客户端分别 pin 在不相交的核心上，TCP loopback）。下面的 KV 行来自
 `bench/arena.sh`，2026-07-19 重测：median-of-5，吞吐读的是各服务端
 自己的命令计数器在计时窗口内的增量。完整方法、每种 workload 以及
-注意事项见 [`bench/REPORT.md`](bench/REPORT.md)；每个数字都可以由
+注意事项见 [`PERFORMANCE.md`](PERFORMANCE.md)；每个数字都可以由
 [`bench/`](bench/) 里的脚本复现。
 
 | Workload | kevy | valkey 9.1 | 比值 |
@@ -270,7 +270,7 @@ loader API 与 ABI 契约见 [docs/zh/wasm.md](docs/zh/wasm.md)；
 
 同一个 `GET -c 50 -P 16` 面，同一台机器上对打四个引擎——kevy
 以 7.24 M/s 分别对阵（median-of-5；方法与逐引擎的 cycle 记账见
-[`bench/REPORT.md`](bench/REPORT.md)）：
+[`PERFORMANCE.md`](PERFORMANCE.md)）：
 
 | 引擎 | kevy 领先 |
 |---|---:|
@@ -287,7 +287,7 @@ loader API 与 ABI 契约见 [docs/zh/wasm.md](docs/zh/wasm.md)；
 Pub/sub 与嵌入式两行来自各自的测试台，不在本次重测范围内。
 
 Serving 面对打 redis-stack 7.4.7（RediSearch），同种子同语料、
-recall 对齐（[`bench/PERF-LEDGER.md`](bench/PERF-LEDGER.md)）：
+recall 对齐（[`PERFORMANCE.md`](PERFORMANCE.md)）：
 
 | 查询类 | kevy | RediSearch | 判定 |
 |---|---:|---:|---|

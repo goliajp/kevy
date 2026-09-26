@@ -13,7 +13,7 @@
 #     redis-benchmark pinned per shard via {tag}. `--cluster` client mode is
 #     client-bound (~6.6M) and skews keys across nodes when -t lists several
 #     tests; short N under-amortises ramp by ~30%. Never measure with those.
-#   * legacy 8sh fixed-key angle — historical comparability (REPORT.md).
+#   * legacy 8sh fixed-key angle — historical comparability.
 #     Since v4 T4 the same topology also gates the five arena cells
 #     (INCR/SADD/HSET/LPUSH/ZADD) so the observation items ratchet
 #     automatically instead of living as per-release ledger footnotes.

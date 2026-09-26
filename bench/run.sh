@@ -4,7 +4,7 @@
 # clone can verify "it runs and answers". NOT a perf benchmark — docker NAT
 # softirq, no pipelining, and short N depress kevy's busy-poll path. For
 # headline perf numbers use `bench/loopback_c50.sh` (host-loopback, pinned,
-# isolated; see bench/REPORT.md).
+# isolated; see PERFORMANCE.md).
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -15,7 +15,7 @@ cat <<'BANNER'
 ### NOTE: this is a portability smoke (docker-bridge, no pipeline). It is NOT
 ### the perf harness — for headline kevy-vs-valkey numbers run
 ###   bash bench/loopback_c50.sh   # host-loopback, pinned, isolated
-### See bench/REPORT.md for the methodology and current numbers.
+### See PERFORMANCE.md for the methodology and current numbers.
 BANNER
 
 echo "### Bringing up valkey 9.1.2 + kevy (building kevy --release) ..."
@@ -62,7 +62,7 @@ cat <<'FOOTER'
 ### Reminder: this is a smoke run, not a perf measurement. docker-bridge NAT
 ### and `-P1` favour blocking servers and depress kevy's busy-poll path; on
 ### host-loopback with pinning + pipelining (bench/loopback_c50.sh) kevy
-### currently leads valkey ~1.5×/2.0× GET/SET at -c50 -P16. See bench/REPORT.md.
+### currently leads valkey ~1.5×/2.0× GET/SET at -c50 -P16. See PERFORMANCE.md.
 
 FOOTER
 

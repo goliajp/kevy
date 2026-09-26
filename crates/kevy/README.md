@@ -261,7 +261,7 @@ bash bench/loopback_c50.sh     # headline TCP loopback vs valkey/redis
 ```
 
 Full method and the workload-by-workload table are in
-[`bench/REPORT.md`](https://github.com/goliajp/kevy/blob/develop/bench/REPORT.md).
+[`PERFORMANCE.md`](https://github.com/goliajp/kevy/blob/develop/PERFORMANCE.md).
 
 ## Library entry-point
 

@@ -13,7 +13,7 @@ RDSからの移行を考えているなら、まずこのページを読み、�
 | **P2 — インデックス** | 宣言型のセカンダリインデックス、4種類（`range`、`unique`、`text`（CJK bigram + BM25）、`ann`（HNSW））。構成上の派生物（書き込みフックで維持され、ドリフトはゼロ）、ワンホップのhydration（`FIELDS`）、バックフィルによる再構築。 | docs/indexes.md、docs/text-search.md、docs/vector-search.md |
 | **P3 — ビューと代数** | インデックス上の名前付き合成（virtual / materialized top-K）、Redisセマンティクスをそのまま持つzset/set代数。 | docs/views.md |
 | **P4 — フロー** | `(generation, offset)`カーソルを持つCDCフィード（組み込みのoutbox）、ブロッキングpop、ハッシュフィールドTTL、スナップショット読み出しビュー、組み込みの読み取り専用RESPリスナー。 | docs/cdc.md、docs/embedded-listener.md |
-| **P5 — 証拠** | 宣言した行はすべて計測され、突き合わされる。クラッシュ整合性のカオスゲート、30Mキーの混在スタックsoak。 | bench/VALIDATION-LEDGER.md |
+| **P5 — 証拠** | 宣言した行はすべて計測され、突き合わされる。クラッシュ整合性のカオスゲート、30Mキーの混在スタックsoak。 | [PERFORMANCE.md](https://github.com/goliajp/kevy/blob/develop/PERFORMANCE.md) |
 | **P6 — 可用性** | ackされたオフセットの真実とハートビートを持つレプリケーション、計画的なハンドオーバー（`FAILOVER`）とクラッシュフェイルオーバー（クォーラム選挙、選挙のみが書き込み権限を与える、フォークの破棄）、そしてオプトインの整合性ラダー（`WAIT`、read-your-writesトークン（`REPL.TOKEN`/`REPL.WAIT`）、有界ステイルネス（`-STALE`）、クォーラムリースによる書き込みフェンス）。13個の実行可能なclamp（availgate）がCIで走る。 | docs/availability.md、docs/replication.md |
 
 ## 3つの法
@@ -47,7 +47,7 @@ kevyが「出来の悪いRDS」へ滑り落ちるのを防いできた——そ�
 
 ## サービング憲章（恒久的にゲートされるもの）
 
-数値はラチェットです。床は上がることしかありません。定常ライン（計測値は`bench/VALIDATION-LEDGER.md`）は次のとおりです。
+数値はラチェットです。床は上がることしかありません。定常ライン（計測値は[PERFORMANCE.md](https://github.com/goliajp/kevy/blob/develop/PERFORMANCE.md)）は次のとおりです。
 
 - Redisパリティのスループット。12アングルのperfgate、床 = ベースライン×0.92。
 - hydrated行リストのページ p99 < 1ms、ビューのページ < 1ms、index+viewフック経由の書き込みファンアウト p99 < 200µs——フルスタックを載せた1台のサーバー上で。

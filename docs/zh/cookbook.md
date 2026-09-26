@@ -2,7 +2,7 @@
 
 你正在把一个关系型数据模型搬上 kevy。下面每个 recipe 用的都是已交付的原语——没有 roadmap 功能，没有「即将推出」。每一条都点名它替代的 RDS 概念，和承接它的 kevy 模式。
 
-所有 recipe 背后的设计立场是：**建模访问路径，而不是 schema**。RDS 允许你把这个决定推迟给查询规划器；kevy 要你把它说出来——回报是服务时的微秒级页面（实测数字见 `bench/VALIDATION-LEDGER.md`）。
+所有 recipe 背后的设计立场是：**建模访问路径，而不是 schema**。RDS 允许你把这个决定推迟给查询规划器；kevy 要你把它说出来——回报是服务时的微秒级页面（实测数字见 [PERFORMANCE.md](https://github.com/goliajp/kevy/blob/develop/PERFORMANCE.md)）。
 
 每个命令块都能对一台新起的本地 kevy 原样运行（`kevy --port 6004`；recipe 11–14、16 和 20 还需要 `kevy.toml` 里 `[feed] enabled = true`——见 [docs/cdc.md](cdc.md)）。`bench/cookbook_smoke.sh` 会把（英文版）cookbook 里的每一行 `kevy-cli` 对一台一次性服务器执行一遍，保证这些命令块永远诚实。
 
