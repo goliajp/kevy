@@ -67,13 +67,17 @@ pub(crate) fn load_keypair(path: &Path) -> Result<Keypair, String> {
 /// secure link has the keys it will need. `Ok(None)`: nothing is secure.
 pub(crate) fn link_keypair(cfg: &Config) -> Result<Option<Keypair>, String> {
     let (cluster, repl) = (cfg.cluster.secure, cfg.replication.secure);
-    if !cluster && !repl {
+    let clients = cfg.secure.listen_port != 0;
+    if !cluster && !repl && !clients {
         return Ok(None);
     }
     let path = cfg.secure.private_key_file.as_deref().ok_or_else(|| {
         "kevy: a link is secure but [secure] private_key_file is not set (create one with `kevy keygen <file>`)"
             .to_string()
     })?;
+    if clients && cfg.secure.listen_port == cfg.server.port {
+        return Err("kevy: [secure] listen_port must differ from the plaintext port".to_string());
+    }
     if cluster {
         for p in cfg.cluster.peers.iter().filter(|p| p.node_id != cfg.cluster.node_id) {
             if !cfg.cluster.peer_keys.iter().any(|(id, _)| *id == p.node_id) {

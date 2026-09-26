@@ -205,7 +205,7 @@ fn replication_unknown_role_errors() {
 fn secure_links_config_round_trips_and_refuses_malformed_keys() {
     let (a, b) = ("ab".repeat(32), "cd".repeat(32));
     let src = format!(
-        "[secure]\nprivate_key_file = \"/etc/kevy/node.key\"\n\
+        "[secure]\nprivate_key_file = \"/etc/kevy/node.key\"\nlisten_port = 6404\nclient_keys = [\"{b}\"]\n\
          [cluster]\nsecure = true\npeer_keys = [\"n2={a}\", \"n3={b}\"]\n\
          [replication]\nsecure = true\nupstream_key = \"{a}\"\nreplica_keys = [\"{b}\"]\n"
     );
@@ -214,6 +214,7 @@ fn secure_links_config_round_trips_and_refuses_malformed_keys() {
     assert_eq!(cfg.cluster.peer_keys, vec![("n2".into(), [0xab; 32]), ("n3".into(), [0xcd; 32])]);
     assert_eq!(cfg.replication.upstream_key, Some([0xab; 32]));
     assert_eq!(cfg.replication.replica_keys, vec![[0xcd; 32]]);
+    assert_eq!((cfg.secure.listen_port, cfg.secure.client_keys.clone()), (6404, vec![[0xcd; 32]]));
     let again = Config::from_toml_str(&cfg.to_toml_string(), None).unwrap();
     assert_eq!(
         (again.cluster, again.replication, again.secure),

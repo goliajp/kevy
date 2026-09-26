@@ -1,6 +1,7 @@
-//! `[secure]`: this node's static key for the encrypted links. Nothing is
-//! encrypted until a link's own `secure = true` is set (`[cluster]`,
-//! `[replication]`); this section only says where the key lives.
+//! `[secure]`: this node's static key for the encrypted links, and the
+//! encrypted client port. Nothing is encrypted until a link's own
+//! `secure = true` is set (`[cluster]`, `[replication]`) or `listen_port`
+//! is given.
 
 use std::path::PathBuf;
 
@@ -23,6 +24,24 @@ pub struct SecureSection {
     /// assert_eq!(kevy_config::Config::default().secure.private_key_file, None);
     /// ```
     pub private_key_file: Option<PathBuf>,
+    /// The port for encrypted client connections, on the same address as
+    /// the plaintext one. `0` (default): no encrypted client port.
+    ///
+    /// ```
+    /// let cfg = kevy_config::Config::from_toml_str("[secure]\nlisten_port = 6404\n", None).unwrap();
+    /// assert_eq!(cfg.secure.listen_port, 6404);
+    /// assert_eq!(kevy_config::Config::default().secure.listen_port, 0);
+    /// ```
+    pub listen_port: u16,
+    /// Client public keys allowed on the encrypted port. Empty (default):
+    /// any client may connect, and the connection is still encrypted.
+    ///
+    /// ```
+    /// let src = format!("[secure]\nclient_keys = [\"{}\"]\n", "ab".repeat(32));
+    /// let cfg = kevy_config::Config::from_toml_str(&src, None).unwrap();
+    /// assert_eq!(cfg.secure.client_keys, vec![[0xab; 32]]);
+    /// ```
+    pub client_keys: Vec<[u8; 32]>,
 }
 
 /// A 32-byte public key from its 64-character hex form.
@@ -83,6 +102,8 @@ impl Config {
             "private_key_file" => {
                 self.secure.private_key_file = Some(PathBuf::from(value_as_string(item)?))
             }
+            "listen_port" => self.secure.listen_port = crate::apply::value_as_u16(item)?,
+            "client_keys" => self.secure.client_keys = keys_item(item)?,
             k => return Err(schema_err(item, format!("unknown [secure] key: {k}"))),
         }
         Ok(())
