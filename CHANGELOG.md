@@ -11,6 +11,10 @@
   three terminator configurations and shows how to issue them. Without
   them the proxy encrypts traffic for anyone who connects, and kevy has no
   AUTH of its own.
+- The same chapter shows how to run replication and election between hosts
+  through stunnel with client certificates, including failover: peers are
+  named by their local tunnel ports, with the replication port in the new
+  fourth `peers` field. Verified with three nodes of one shard each.
 - `docs/cluster.md` said shard `i` binds `port_base + 1 + i`; it binds
   `port_base + i`, with `port_base` defaulting to `port + 1`.
 - The warning printed for a non-loopback bind no longer says AUTH/TLS is
