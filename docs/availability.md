@@ -38,7 +38,7 @@ peers           = "n1@10.0.0.1:6204:6004,n2@10.0.0.2:6204:6004,n3@10.0.0.3:6204:
 
 Membership is **static** (the operator-declared `peers` table); roles are **dynamic** (elections move the primary around inside that table). Quorum is `N/2 + 1` — N=2 cannot survive any failure (either node down locks the survivor read-only), so a deployment that needs failover uses N ≥ 3.
 
-Use the extended peer syntax `id@host:elect_port:client_port`: election traffic rides the elect port, while retargeting and `-MISDIRECTED` replies use the client port. With the legacy two-field form the client port is assumed equal to the elect port, which is almost never what you want.
+Use the extended peer syntax `id@host:elect_port:client_port`: election traffic rides the elect port, while retargeting and `-MISDIRECTED` replies use the client port. With the legacy two-field form the client port is assumed equal to the elect port, which is almost never what you want. A node whose `[replication].listen_port_base` is not the default (client port + 10000) adds it as a fourth field, `id@host:elect_port:client_port:repl_port_base`, so the nodes that follow it after an election dial the right port.
 
 **Election-only write authority.** In an elect quorum, `[replication] role = "primary"` is only an initial *preference*. Every quorum member configured as primary starts **read-only** and holds writes until it wins an election — including on a cold start, where the cluster pays one election round (a few seconds) before the first write is accepted. This unconditional clamp is what prevents the classic "restarted empty primary erases the cluster" accident: a node that crashed and lost its disk can never come back writable on config alone.
 
@@ -111,12 +111,12 @@ Run on the primary; answers `+OK` at once and runs the handover on a background 
 
 1. **Quiesce** — every new client write answers `-QUIESCED migrating to <host:port>`; the [`kevy-cluster-rw`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-cluster-rw) client already retries these with backoff, so writers stall rather than fail.
 2. **Drain** — the old primary polls the target's `INFO replication` until `master_link_status:up` and `slave_lag_frames:0`. With writes quiesced, converged gauges are exact — this is the zero-loss step.
-3. **Promote + follow** — `REPLICAOF NO ONE` is sent to the target (its feed generation bumps, fencing stale tokens), then the old primary retargets itself at the target's replication port and becomes the read-only replica.
+3. **Promote + follow** — `REPLICAOF NO ONE` is sent to the target (its feed generation bumps, fencing stale tokens), then the old primary retargets itself at the replication port the target reports as `repl_port_base` and becomes the read-only replica.
 4. Un-quiesce. Stray writes still aimed at the old node now get `-READONLY` and reroute.
 
 `FAILOVER ABORT` clears the quiesce at any point before promotion; the background thread notices and stands down. If the target never drains within `TIMEOUT` (default 10 000 ms), the quiesce rolls back and the node resumes primary duty — the failed attempt costs one write-availability blip and nothing else.
 
-One addressing constraint: the handover retargets to `client port + 10000`, so the target must be running with the default `listen_port_base` (see port conventions below).
+The handover reads the target's `repl_port_base` from its `INFO replication`, so the target may run with any `listen_port_base`.
 
 ### Crash: quorum election
 
@@ -159,7 +159,7 @@ Two rules of thumb: every one of these is **retryable by design** (nothing was a
 | replication | `listen_port_base + shard_i`; default base = client port + 10000 | `nshards` consecutive ports; since v3.15 **replicas bind this listener too** (promotion symmetry) |
 | election | `elect_port_base`; default = client port + 200 | one control-plane listener per node |
 
-Both automatic retarget (election) and `FAILOVER` assume the `client port + 10000` replication convention — leave `listen_port_base` at its default in any failover-enabled deployment. Running several instances on one host: keep client ports at least `nshards` apart, or the instances' replication port ranges collide.
+`FAILOVER` learns the target's replication base from the target itself; automatic retarget after an election takes it from the peer's fourth field, and assumes client port + 10000 when that field is absent. Running several instances on one host: keep client ports at least `nshards` apart, or the instances' replication port ranges collide.
 
 ### Config keys
 
@@ -192,6 +192,7 @@ Both automatic retarget (election) and `FAILOVER` assume the `client port + 1000
 | `slave_read_only` | the `-READONLY` gate |
 | `slave_repl_offset` | applied stream position |
 | `slave_lag_frames` | primary's announced tail minus applied — **0 means caught up** |
+| `repl_port_base` | where this node accepts replicas (`[replication].listen_port_base`, default client port + 10000); present on primaries and replicas alike |
 
 `INFO replication` on a **primary**:
 

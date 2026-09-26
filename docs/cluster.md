@@ -244,7 +244,7 @@ It drives two failover surfaces:
 | Knob | Meaning | Default |
 |------|---------|---------|
 | `node_id` | This node's stable identifier (≤ 32 B ASCII; scope owners and elections reference it) | required |
-| `peers` | `<node_id>@<host>:<elect_port>:<client_port>` list of every cluster member | required |
+| `peers` | `<node_id>@<host>:<elect_port>:<client_port>[:<repl_port_base>]` list of every cluster member | required |
 | `elect_port_base` | TCP port the election control plane binds (one listener per node) | `0` = client port + 200 |
 
 ### Manual rejoin recovery
@@ -307,7 +307,7 @@ The full key list (backlog sizing, `replica_read_only`, `replica_max_staleness_m
 | TOML | Meaning |
 |------|---------|
 | `[cluster] node_id` | This node's stable identifier (≤ 32 B ASCII). |
-| `[cluster] peers` | `<node_id>@<host>:<elect_port>:<client_port>` list of every cluster member (legacy two-field form: both ports equal). |
+| `[cluster] peers` | `<node_id>@<host>:<elect_port>:<client_port>[:<repl_port_base>]` list of every cluster member (legacy two-field form: both ports equal). |
 | `[cluster] scopes` | `prefix=writer[\|fallback]` entries, comma-separated. |
 | `[cluster] elect_port_base` | TCP port the election control plane binds; `0` (default) = `port` + 200. |
 
