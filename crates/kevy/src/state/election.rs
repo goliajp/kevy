@@ -57,7 +57,12 @@ impl ElectionState {
     /// startup error — kevy-elect's failure mode is "no automatic
     /// failover available"; the data plane keeps working with the
     /// manual `REPLICAOF` semantics.
-    pub(crate) fn maybe_start(&self, cfg: &Config, replication: &Arc<ReplicationState>) {
+    pub(crate) fn maybe_start(
+        &self,
+        cfg: &Config,
+        replication: &Arc<ReplicationState>,
+        link_key: Option<&kevy_noise::Keypair>,
+    ) {
         if !is_configured(cfg) {
             return;
         }
@@ -69,25 +74,29 @@ impl ElectionState {
         let self_id = cfg.cluster.node_id.as_str();
         let peers: Vec<PeerAddr> =
             cfg.cluster.peers.iter().filter(|p| p.node_id != self_id).map(peer_to_addr).collect();
-        let listen = (
-            IpAddr::V4(Ipv4Addr::new(
-                cfg.server.bind[0],
-                cfg.server.bind[1],
-                cfg.server.bind[2],
-                cfg.server.bind[3],
-            )),
-            listen_port,
-        );
+        let [a, b, c, d] = cfg.server.bind;
+        let listen = (IpAddr::V4(Ipv4Addr::new(a, b, c, d)), listen_port);
         let on_change = make_topology_callback(cfg, Arc::clone(replication));
-        match Transport::spawn_with_callback(elector, hb_interval, listen, peers, on_change) {
+        let secure = link_key.filter(|_| cfg.cluster.secure).map(|local| kevy_elect::SecureLinks {
+            local: local.clone(),
+            peer_keys: cfg.cluster.peer_keys.clone(),
+        });
+        let spawned = match secure {
+            Some(secure) => {
+                Transport::spawn_secure(elector, hb_interval, listen, peers, on_change, secure)
+            }
+            None => Transport::spawn_with_callback(elector, hb_interval, listen, peers, on_change),
+        };
+        match spawned {
             Ok(t) => {
                 *self.transport.write().expect("elect transport poisoned") = Some(t);
                 eprintln!(
-                    "kevy: kevy-elect transport up on {}:{} ({} peers, role={})",
+                    "kevy: kevy-elect transport up on {}:{} ({} peers, role={}{})",
                     cfg.server.bind[0],
                     listen_port,
                     cfg.cluster.peers.len().saturating_sub(1),
                     if matches!(start_role, Role::Primary) { "primary" } else { "replica" },
+                    if cfg.cluster.secure { ", links encrypted" } else { "" },
                 );
             }
             Err(e) => {

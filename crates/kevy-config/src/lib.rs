@@ -34,6 +34,7 @@ mod parse;
 mod preserve;
 mod replication;
 mod schema;
+mod secure;
 mod size;
 mod tiering;
 
@@ -44,6 +45,7 @@ pub use schema::{
     LogOutput, LogSection, LuaSection, MemorySection, NotificationFlags, NotificationSection,
     PersistenceSection, ServerSection, SlowlogSection, parse_notification_flags,
 };
+pub use secure::{SecureSection, key_from_hex, key_to_hex};
 pub use size::parse_size;
 pub use tiering::{TierBudgetSpec, TieringSection};
 

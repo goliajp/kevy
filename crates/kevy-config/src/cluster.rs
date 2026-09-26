@@ -61,6 +61,25 @@ pub struct ClusterSection {
     /// assert_eq!(cfg.cluster.announce_port_base, 7001);
     /// ```
     pub announce_port_base: u16,
+    /// Encrypt and authenticate the election links with Noise. Needs
+    /// `[secure] private_key_file` and a `peer_keys` entry for every peer.
+    ///
+    /// ```
+    /// assert!(!kevy_config::Config::default().cluster.secure);
+    /// ```
+    pub secure: bool,
+    /// Each peer's public key, as `(node_id, key)`. A peer whose election
+    /// link does not present its key is refused.
+    ///
+    /// ```
+    /// let cfg = kevy_config::Config::from_toml_str(
+    ///     &format!("[cluster]\npeer_keys = [\"n2={}\"]\n", "ab".repeat(32)),
+    ///     None,
+    /// )
+    /// .unwrap();
+    /// assert_eq!(cfg.cluster.peer_keys, vec![("n2".to_string(), [0xab; 32])]);
+    /// ```
+    pub peer_keys: Vec<(String, [u8; 32])>,
     /// Operator-declared peer list for `kevy-elect`. Empty when
     /// failover is not configured. Each entry is one cluster node
     /// (including potentially *this* node — kevy-elect filters

@@ -246,6 +246,8 @@ embed 会在传给 `with_embed_writer` 的地址上开一个复制监听。其�
 | `node_id` | 本节点的稳定标识（≤ 32 B ASCII；作用域持有者与选举都引用它） | 必填 |
 | `peers` | 集群全体成员的 `<node_id>@<host>:<elect_port>:<client_port>[:<repl_port_base>]` 列表 | 必填 |
 | `elect_port_base` | 选举控制面绑定的 TCP 端口（每节点一个监听） | `0` = 客户端端口 + 200 |
+| `secure` | 给选举链路加密并认证（[`docs/encrypted-links.md`](encrypted-links.md)） | `false` |
+| `peer_keys` | 每个节点的公钥，`["id=<公钥>", …]` | 空 |
 
 ### 手工 rejoin 恢复
 
@@ -310,6 +312,8 @@ MOVE-SCOPE <prefix> from <from-node-id> to <to-node-id>
 | `[cluster] peers` | 集群全体成员的 `<node_id>@<host>:<elect_port>:<client_port>[:<repl_port_base>]` 列表（旧式两字段形式：两个端口取同一值）。 |
 | `[cluster] scopes` | `prefix=writer[\|fallback]` 条目，逗号分隔。 |
 | `[cluster] elect_port_base` | 选举控制面绑定的 TCP 端口；`0`（默认）= `port` + 200。 |
+| `[cluster] secure` | 给选举链路加密并认证；`false`（默认）为明文。 |
+| `[cluster] peer_keys` | 其他每个节点的 `["id=<公钥>", …]`，由 `kevy keygen` 生成。 |
 
 选举时序（心跳 200 ms、静默 5 s 判 DOWN、选举超时 3 s）是固定常量，不是配置键。
 

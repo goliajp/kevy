@@ -71,6 +71,11 @@ pub(crate) fn wire_replication(
     Option<crate::replica_source::ReplicaSource>,
     Option<Arc<std::sync::Mutex<kevy_replicate::feed::FeedSource>>>,
 )> {
+    if config.link_security.replica.as_ref().is_some_and(|k| k.peers.is_empty()) {
+        return Err(crate::KevyError::InvalidInput(
+            "replica_security needs at least one trusted primary key".into(),
+        ));
+    }
     let replica_runner = crate::replica_glue::spawn_replica_runner(config, shards);
     let replica_source = spawn_writer_source(config, shards)?;
     let feed = crate::store::Store::feed_open(config)?;
@@ -108,6 +113,7 @@ fn spawn_writer_source(
         addr,
         config.embed_writer_backlog_bytes,
         snapshot,
+        config.link_security.writer.clone(),
     )?;
     let shared = rs.shared_source();
     for shard in shards.iter() {

@@ -883,6 +883,8 @@ jobs:
           - { crate: kevy-hash,      target: key_hash_slot }
           - { crate: kevy-index,     target: table_spec }
           - { crate: kevy-map,       target: map_ops }
+          - { crate: kevy-noise,     target: frames_open }
+          - { crate: kevy-noise,     target: handshake_accept }
           - { crate: kevy-persist,   target: replay_aof }
           - { crate: kevy-persist,   target: shards_meta }
           - { crate: kevy-persist,   target: snapshot_load }

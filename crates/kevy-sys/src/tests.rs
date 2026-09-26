@@ -101,3 +101,15 @@ fn reuseport_allows_shared_port() {
     let l2 = tcp_listen_reuseport([127, 0, 0, 1], port, 16).unwrap();
     assert_eq!(l2.local_port().unwrap(), port);
 }
+
+#[test]
+fn fill_random_fills_more_than_one_getentropy_chunk() {
+    let mut buf = [0u8; 1000];
+    crate::fill_random(&mut buf).unwrap();
+    // a zero byte has probability 1/256; the tail past the first 256-byte
+    // request must have been written too
+    assert!(buf[256..].iter().filter(|&&b| b != 0).count() > 600);
+    let mut again = [0u8; 1000];
+    crate::fill_random(&mut again).unwrap();
+    assert_ne!(buf, again);
+}
