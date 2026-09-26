@@ -165,6 +165,8 @@ mod uring_bigbulk_b2alt;
 mod uring_bigbulk_probe;
 #[cfg(target_os = "linux")]
 mod uring_conn;
+#[cfg(any(target_os = "linux", test))] // `test` too: pure, tested everywhere
+mod uring_idle;
 #[cfg(target_os = "linux")]
 mod uring_inbox;
 #[cfg(target_os = "linux")]
