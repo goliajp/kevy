@@ -139,6 +139,7 @@ mod replication_apply;
 mod replication_gate;
 mod replication_io;
 mod replication_pump;
+mod replication_secure;
 mod replication_trace;
 mod reshard;
 mod route;
@@ -221,6 +222,7 @@ pub use replica_inbox::{
     ReplicaApply, ReplicaInboxReceiver, ReplicaInboxSender, SnapshotGate, replica_inbox_pair,
 };
 pub use replication_gate::ReplicatedApplyGuard;
+pub use replication_secure::ReplicationSecurity;
 pub use route::{Route, ScanArgs, XGroupCtx};
 pub use runtime::Runtime;
 pub use types::{

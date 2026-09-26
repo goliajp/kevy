@@ -16,6 +16,7 @@
 
 pub mod elector;
 mod elector_inbound;
+mod link;
 pub mod message;
 pub mod persist;
 #[cfg(test)]
@@ -24,6 +25,7 @@ pub mod transport;
 mod transport_loops;
 pub mod wire;
 
+pub use link::SecureLinks;
 pub use transport::{ElectorSnapshot, PeerAddr, TopologyCallback, Transport};
 
 #[cfg(test)]

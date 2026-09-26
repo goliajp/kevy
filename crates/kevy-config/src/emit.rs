@@ -21,8 +21,8 @@ use crate::schema::{Config, LogOutput};
 /// The sections emitted from [`canonical_pairs`] rather than the
 /// hand-aligned template below — single source of truth for both the
 /// template and the preserving splice path.
-const SERVICE_SECTIONS: [&str; 7] =
-    ["cluster", "replication", "lua", "metrics", "audit", "feed", "tiering"];
+const SERVICE_SECTIONS: [&str; 8] =
+    ["cluster", "replication", "lua", "metrics", "audit", "feed", "tiering", "secure"];
 
 impl Config {
     /// Render the current config as a standard-template TOML file —
@@ -200,6 +200,7 @@ pub(crate) fn canonical_pairs(cfg: &Config) -> Vec<CanonicalPair> {
     push_audit(&mut v, cfg);
     push_feed(&mut v, cfg);
     push_tiering(&mut v, cfg);
+    push_secure(&mut v, cfg);
     v
 }
 
@@ -286,6 +287,10 @@ fn push_cluster(v: &mut Vec<CanonicalPair>, cfg: &Config) {
         push(v, "cluster", "announce_ip", format!("\"{a}.{b}.{c}.{d}\""));
     }
     push(v, "cluster", "announce_port_base", cl.announce_port_base.to_string());
+    push(v, "cluster", "secure", cl.secure.to_string());
+    let keys: Vec<String> =
+        cl.peer_keys.iter().map(|(id, k)| format!("{id}={}", crate::key_to_hex(k))).collect();
+    push(v, "cluster", "peer_keys", toml_array(&keys));
     let peers: Vec<String> = cl.peers.iter().map(PeerEntry::to_token).collect();
     push(v, "cluster", "peers", toml_array(&peers));
     let scopes: Vec<String> = cl.scopes.iter().map(ScopeEntry::to_token).collect();
@@ -306,6 +311,12 @@ fn push_replication(v: &mut Vec<CanonicalPair>, cfg: &Config) {
     push(v, "replication", "replica_max_staleness_ms", r.replica_max_staleness_ms.to_string());
     push(v, "replication", "replica_read_only", r.replica_read_only.to_string());
     push(v, "replication", "single_source", r.single_source.to_string());
+    push(v, "replication", "secure", r.secure.to_string());
+    if let Some(k) = &r.upstream_key {
+        push(v, "replication", "upstream_key", toml_string(&crate::key_to_hex(k)));
+    }
+    let keys: Vec<String> = r.replica_keys.iter().map(crate::key_to_hex).collect();
+    push(v, "replication", "replica_keys", toml_array(&keys));
 }
 
 fn push_lua(v: &mut Vec<CanonicalPair>, cfg: &Config) {
@@ -334,6 +345,12 @@ fn push_tiering(v: &mut Vec<CanonicalPair>, cfg: &Config) {
     }
     if let Some(dir) = &cfg.tiering.spill_dir {
         push(v, "tiering", "spill_dir", toml_string(&dir.display().to_string()));
+    }
+}
+
+fn push_secure(v: &mut Vec<CanonicalPair>, cfg: &Config) {
+    if let Some(p) = &cfg.secure.private_key_file {
+        push(v, "secure", "private_key_file", toml_string(&p.display().to_string()));
     }
 }
 

@@ -141,14 +141,17 @@ impl<'a> Lexer<'a> {
 
     fn consume_string(&mut self, quote: u8, line: usize, col: usize) -> Result<Token, ConfigError> {
         self.advance(); // consume opening quote
-        let mut buf = String::new();
+        // raw bytes, so a multi-byte UTF-8 character is copied whole
+        let mut buf = Vec::new();
         loop {
             let Some(&b) = self.bytes.get(self.pos) else {
                 return Err(parse_err(line, col, "unterminated string"));
             };
             if b == quote {
                 self.advance();
-                return Ok(Token::Str(buf));
+                let s = String::from_utf8(buf)
+                    .map_err(|_| parse_err(line, col, "string is not valid UTF-8"))?;
+                return Ok(Token::Str(s));
             }
             if b == b'\n' {
                 return Err(parse_err(
@@ -177,11 +180,11 @@ impl<'a> Lexer<'a> {
                         ));
                     }
                 };
-                buf.push(decoded);
+                buf.extend_from_slice(decoded.encode_utf8(&mut [0; 4]).as_bytes());
                 self.advance();
                 continue;
             }
-            buf.push(b as char);
+            buf.push(b);
             self.advance();
         }
     }

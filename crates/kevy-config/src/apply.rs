@@ -30,6 +30,7 @@ impl Config {
             "lua" => self.apply_lua(item),
             "metrics" => self.apply_metrics(item),
             "audit" => self.apply_audit(item),
+            "secure" => self.apply_secure(item),
             other => Err(schema_err(item, format!("unknown section [{other}]"))),
         }
     }
@@ -209,6 +210,8 @@ impl Config {
                 self.cluster.announce_ip = Some(ip);
             }
             "announce_port_base" => self.cluster.announce_port_base = value_as_u16(item)?,
+            "secure" => self.cluster.secure = value_as_bool(item)?,
+            "peer_keys" => self.cluster.peer_keys = crate::secure::peer_keys_item(item)?,
             // Both accept `["a", "b"]` and the legacy `"a,b"`. Neither a peer
             // (`id@host:port`) nor a scope (`prefix=writer|fallback`) may itself
             // contain a comma, so re-joining an array and handing it to the
@@ -272,6 +275,9 @@ impl Config {
             "replica_read_only" => {
                 self.replication.replica_read_only = value_as_bool(item)?;
             }
+            "secure" => self.replication.secure = value_as_bool(item)?,
+            "upstream_key" => self.replication.upstream_key = Some(crate::secure::key_item(item)?),
+            "replica_keys" => self.replication.replica_keys = crate::secure::keys_item(item)?,
             k => return Err(schema_err(item, format!("unknown [replication] key: {k}"))),
         }
         Ok(())
@@ -390,7 +396,7 @@ fn value_as_size(item: &Item) -> Result<u64, ConfigError> {
 ///
 /// Empty entries are dropped either way, so a trailing comma in the string form
 /// (`"a,b,"`) means the same as it does in the array form.
-fn value_as_list(item: &Item) -> Result<Vec<String>, ConfigError> {
+pub(crate) fn value_as_list(item: &Item) -> Result<Vec<String>, ConfigError> {
     match &item.value {
         Value::Arr(v) => {
             Ok(v.iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())

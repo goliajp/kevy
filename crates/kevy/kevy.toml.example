@@ -76,3 +76,13 @@ output   = "stderr"
 enabled   = false
 # First cluster port. 0 (default) = server port + 1.
 port_base = 0
+# Encrypt and authenticate the election links (off by default). Needs
+# [secure] private_key_file and every other node's key:
+# secure    = true
+# peer_keys = ["n1=<public key>", "n3=<public key>"]
+
+# [secure]
+# This node's private key for encrypted links between nodes, written by
+# `kevy keygen <file>`. Only read when a link sets secure = true; client
+# connections are never encrypted by kevy (front them with a TLS proxy).
+# private_key_file = "/etc/kevy/node.key"

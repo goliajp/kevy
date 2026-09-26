@@ -10,6 +10,14 @@ use kevy_rt::{Commands, Runtime};
 
 use crate::state::{ReplicationState, RuntimeState};
 
+/// The primary-side keys when `[replication] secure` is on.
+fn link_security(repl: &ReplicationState) -> Option<kevy_rt::ReplicationSecurity> {
+    repl.links().map(|l| kevy_rt::ReplicationSecurity {
+        local: l.local.clone(),
+        replica_keys: l.replicas.clone(),
+    })
+}
+
 /// Resolved replication listener base port: `[replication].listen_port_base`,
 /// or `server.port + 10000` when left at the `0` default. Shard `i`
 /// listens at this + `i` (per Issue Ledger I2 — per-shard listener).
@@ -53,6 +61,7 @@ pub(crate) fn apply<C: Commands>(
             runtime
                 .with_replication(true, cfg.replication.replication_buffer_size)
                 .with_replication_listener(replication_port_base(cfg))
+                .with_replication_security_opt(link_security(repl))
                 .with_replication_reconnect_window(cfg.replication.reconnect_window_ms)
         }
         ReplicationRole::Replica => {
@@ -68,6 +77,7 @@ pub(crate) fn apply<C: Commands>(
             runtime
                 .with_replication(true, cfg.replication.replication_buffer_size)
                 .with_replication_listener(replication_port_base(cfg))
+                .with_replication_security_opt(link_security(repl))
                 .with_replication_reconnect_window(cfg.replication.reconnect_window_ms)
         }
         ReplicationRole::Standalone => runtime,

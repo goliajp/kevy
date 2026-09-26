@@ -45,18 +45,24 @@ Top wins:
 
 | Section | Keys |
 |---|---|
-| `[server]` | `bind` · `port` · `threads` · `data_dir` · `accept_shards` |
-| `[persistence]` | `aof` · `appendfsync` · `auto_aof_rewrite_percentage` · `auto_aof_rewrite_min_size` |
-| `[memory]` | `maxmemory` · `maxmemory_policy` · `maxmemory_samples` |
+| `[server]` | `bind` · `port` · `threads` · `accept_shards` · `packed_rows` · `max_clients` · `data_dir` |
+| `[persistence]` | `aof` · `appendfsync` · `auto_aof_rewrite_percentage` · `auto_aof_rewrite_min_size` · `auto_aof_rewrite_bytes` · `auto_aof_rewrite_interval_secs` · `replay_resync` |
+| `[memory]` | `maxmemory` · `maxmemory_policy` |
 | `[expiry]` | `hz` · `sample` |
 | `[log]` | `level` · `output` |
-| `[cluster]` | `enabled` · `port_base` · `node_id` · `peers` · `scopes` · `elect_port_base` · `announce_ip` · `announce_port_base` |
-| `[replication]` | `role` · `upstream` · `listen_port_base` · `backlog_bytes` |
-| `[metrics]` | `enabled` · `bind` · `port` |
-| `[lua]` | `enabled` · `time_budget_ms` · `memory_budget_kb` |
-| `[slowlog]` | `enabled` · `slower_than_us` · `max_len` |
+| `[notification]` | `notify_keyspace_events` |
+| `[advanced]` | `spin_limit` · `park_timeout_ms` · `tick_check_every` · `ring_capacity` |
+| `[slowlog]` | `slower_than_micros` · `max_len` |
+| `[cluster]` | `enabled` · `port_base` · `node_id` · `elect_port_base` · `announce_ip` · `announce_port_base` · `secure` · `peer_keys` · `peers` · `scopes` |
+| `[replication]` | `role` · `upstream` · `listen_port_base` · `replication_buffer_size` · `reconnect_window_ms` · `single_source` · `min_replicas_to_write` · `replica_max_staleness_ms` · `min_replicas_max_lag_ms` · `replica_read_only` · `secure` · `upstream_key` · `replica_keys` |
+| `[feed]` | `enabled` · `feed_buffer_size` |
+| `[tiering]` | `budget` · `spill_dir` |
+| `[lua]` | `time_limit_ms` · `allow_dialects` |
+| `[metrics]` | `listen_port` |
+| `[audit]` | `log_path` |
+| `[secure]` | `private_key_file` |
 
-The fully annotated reference lives at
+An annotated starter config lives at
 [`crates/kevy/kevy.toml.example`](https://github.com/goliajp/kevy/blob/develop/crates/kevy/kevy.toml.example).
 
 ## TOML subset

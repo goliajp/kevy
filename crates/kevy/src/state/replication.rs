@@ -110,6 +110,9 @@ pub(crate) struct ReplicationState {
     /// write/read-gating authority field bumps it (two-step writer
     /// protocol: write the field, then `fetch_add(1, Release)`).
     control_epoch: Arc<AtomicU64>,
+    /// Set once at boot when `[replication] secure`: every link this node
+    /// opens or accepts is Noise-protected.
+    links: std::sync::OnceLock<Arc<crate::secure::ReplLinks>>,
 }
 
 impl ReplicationState {
@@ -141,6 +144,7 @@ impl ReplicationState {
             progress: Arc::new(ReplicaProgress::with_epoch(Arc::clone(&control_epoch))),
             self_port: AtomicU32::new(u32::from(self_port)),
             control_epoch,
+            links: std::sync::OnceLock::new(),
         }
     }
 
@@ -238,11 +242,22 @@ impl ReplicationState {
     /// replicas in distinct ack slots + names one INFO entry per
     /// process. Single-source spawns one routing runner; the fleet
     /// model spawns one runner per shard at `port_base + shard_id`.
+    /// Install the secure-link keys; boot calls this once, before any
+    /// runner or listener exists.
+    pub(crate) fn set_links(&self, links: crate::secure::ReplLinks) {
+        let _ = self.links.set(Arc::new(links));
+    }
+
+    pub(crate) fn links(&self) -> Option<&Arc<crate::secure::ReplLinks>> {
+        self.links.get()
+    }
+
     fn spawn_fleet(&self, host: IpAddr, port_base: u16) -> Vec<ReplicaRunner> {
+        let links = self.links.get().cloned();
         let self_port = self.self_port.load(Ordering::Relaxed);
         if self.single_source {
             return vec![ReplicaRunner::spawn_routed(
-                (host, port_base),
+                crate::replica_runner::Dial { addr: (host, port_base), links },
                 format!("kevy-replica-{self_port}#s"),
                 self.senders.clone(),
                 0,
@@ -253,7 +268,7 @@ impl ReplicationState {
         for (shard_id, sender) in self.senders.iter().enumerate() {
             let port = port_base.saturating_add(u16::try_from(shard_id).unwrap_or(u16::MAX));
             fleet.push(ReplicaRunner::spawn(
-                (host, port),
+                crate::replica_runner::Dial { addr: (host, port), links: links.clone() },
                 format!("kevy-replica-{self_port}#{shard_id}"),
                 sender.clone(),
                 shard_id,

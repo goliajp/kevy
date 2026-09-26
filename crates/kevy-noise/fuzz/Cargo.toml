@@ -1,0 +1,31 @@
+[package]
+name = "kevy-noise-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+# isolated from the main workspace: libfuzzer-sys is third-party
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.kevy-noise]
+path = ".."
+
+[[bin]]
+name = "handshake_accept"
+path = "fuzz_targets/handshake_accept.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "frames_open"
+path = "fuzz_targets/frames_open.rs"
+test = false
+doc = false
+bench = false

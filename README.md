@@ -410,6 +410,7 @@ server's own metadata — the same rows `COMMAND DOCS` serves).
 | Replication | [`docs/replication.md`](docs/replication.md) |
 | Cluster mode | [`docs/cluster.md`](docs/cluster.md) |
 | Deploying behind a proxy (TLS) | [`docs/deploy-behind-a-proxy.md`](docs/deploy-behind-a-proxy.md) |
+| Encrypted links between nodes | [`docs/encrypted-links.md`](docs/encrypted-links.md) |
 | Lua scripting | [`docs/lua.md`](docs/lua.md) |
 | Unix-domain socket | [`docs/uds.md`](docs/uds.md) |
 | Async client | [`docs/async.md`](docs/async.md) |
@@ -431,6 +432,9 @@ permanently out of scope and there is no plan to add them:
   authentication proxy if you need either —
   [`docs/deploy-behind-a-proxy.md`](docs/deploy-behind-a-proxy.md) is
   the recipe, including why an HTTP reverse proxy cannot do this job.
+  Replication and election links between kevy nodes can be encrypted by
+  kevy itself, off unless configured:
+  [`docs/encrypted-links.md`](docs/encrypted-links.md).
 - **Multi-DC active-active and cross-DC replication.** Single-DC only.
 - **Multi-database `SELECT`.** One keyspace per server.
 - **ACL.** Single trust domain.

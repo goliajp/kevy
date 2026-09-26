@@ -1,0 +1,17 @@
+[package]
+name = "kevy-crypto"
+description = "ChaCha20-Poly1305, X25519, BLAKE2s and Noise's HMAC/HKDF in pure Rust with no dependencies."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+documentation = "https://docs.rs/kevy-crypto"
+readme = "README.md"
+keywords = ["chacha20poly1305", "x25519", "blake2s", "noise", "no-std"]
+categories = ["cryptography", "no-std"]
+homepage.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
