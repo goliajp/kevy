@@ -212,3 +212,24 @@ fn errors_describe_themselves() {
         assert!(!e.to_string().is_empty());
     }
 }
+
+#[test]
+fn a_message_longer_than_noise_allows_is_refused_before_sealing() {
+    let (server, client) = pair();
+    let (m1, init) =
+        Initiator::start(&client, &server.public(), Keypair::from_secret([3; 32]), b"", b"")
+            .unwrap();
+    let (_, r) = Responder::accept(&server, Keypair::from_secret([4; 32]), b"", &m1).unwrap();
+    let (m2, _) = r.finish(b"").unwrap();
+    let (_, mut c) = init.finish(&m2).unwrap();
+    assert!(c.seal(&vec![0; crate::MAX_MESSAGE - 16]).is_ok());
+    assert_eq!(c.seal(&vec![0; crate::MAX_MESSAGE - 15]).err(), Some(Error::TooLong));
+}
+
+#[test]
+fn a_key_pair_prints_its_public_half_only() {
+    let kp = Keypair::from_secret([7; 32]);
+    let shown = format!("{kp:?}");
+    assert!(shown.contains(&format!("{:?}", kp.public())));
+    assert!(!shown.contains(&format!("{:?}", [7u8; 32])));
+}

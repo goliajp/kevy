@@ -145,3 +145,59 @@ impl ReplNoise {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kevy_noise::Initiator;
+
+    #[test]
+    fn the_primary_side_handshakes_seals_and_tracks_partial_writes() {
+        let primary = Keypair::from_secret([1; 32]);
+        let replica = Keypair::from_secret([2; 32]);
+        let sec =
+            ReplicationSecurity { local: primary.clone(), replica_keys: vec![replica.public()] };
+        let mut noise = ReplNoise::pending();
+        assert_eq!(format!("{noise:?}"), "ReplNoise::Pending");
+        assert!(noise.seal(b"too early").is_err());
+        assert!(noise.seal(b"").is_ok());
+
+        let (m1, init) = Initiator::start(
+            &replica,
+            &primary.public(),
+            Keypair::from_secret([3; 32]),
+            PROLOGUE,
+            b"",
+        )
+        .unwrap();
+        let m1 = frame(&m1).unwrap();
+        let mut plain = Vec::new();
+        let (head, tail) = m1.split_at(10);
+        noise.on_bytes(&sec, head, &mut plain).unwrap();
+        assert!(matches!(noise, ReplNoise::Pending(_)));
+        noise.on_bytes(&sec, tail, &mut plain).unwrap();
+        let reply = noise.wire().to_vec();
+        assert!(!reply.is_empty());
+        let shown = format!("{noise:?}");
+        assert!(shown.contains(&format!("unwritten: {}", reply.len())));
+        assert!(!shown.contains(&format!("{:?}", [1u8; 32])));
+
+        // the reply leaves in two writes; the queue empties only after both
+        noise.wrote(3);
+        assert_eq!(noise.wire(), &reply[3..]);
+        noise.wrote(reply.len() - 3);
+        assert!(noise.wire().is_empty());
+        // and the buffer is released, not kept growing behind the offset
+        assert!(matches!(&noise, ReplNoise::Up(s) if s.wire.is_empty() && s.wire_off == 0));
+
+        let mut frames = Frames::default();
+        frames.push(&reply);
+        let (_, mut client) = init.finish(&frames.next().unwrap()).unwrap();
+        let sealed = frame(&client.seal(b"REPLICATE").unwrap()).unwrap();
+        noise.on_bytes(&sec, &sealed, &mut plain).unwrap();
+        assert_eq!(plain, b"REPLICATE");
+        noise.seal(b"+ACK").unwrap();
+        frames.push(noise.wire());
+        assert_eq!(client.open(&frames.next().unwrap()).unwrap(), b"+ACK");
+    }
+}
