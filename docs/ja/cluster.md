@@ -42,7 +42,7 @@ kevyのクラスタ機能には独立した2つのレイヤがあります。**�
                   └─────────────────────────────────────────┘
 ```
 
-シャード`i`は常に`port_base + 1 + i`にbindします（`port_base`はTOMLで上書きできます）。メインポートは、クラスタを話さないクライアント向けにプロキシとしての挙動を保ちます。シャード別ポートは、間違った所有者にキーが届くと`-MOVED <slot> <host:port>`を返します。
+シャード`i`は`port_base + i`にbindし、`port_base`の既定値は`port + 1`です（TOMLで上書きできます）。メインポートは、クラスタを話さないクライアント向けにプロキシとしての挙動を保ちます。シャード別ポートは、間違った所有者にキーが届くと`-MOVED <slot> <host:port>`を返します。プロキシやNATの後ろに置く場合は、`announce_ip`と`announce_port_base`で、これらの応答にクライアントが実際に到達できるアドレスを書かせます。[deploy-behind-a-proxy.md](deploy-behind-a-proxy.md)を参照してください。
 
 キー空間全体を対象とするコマンド（`KEYS`、`SCAN`、`DBSIZE`、`FLUSHALL`）は、どのポートで実行してもキー空間全体を対象とし続けます。kevyが内部でファンアウトするので、クライアントが面倒を見る必要はありません。
 
@@ -55,7 +55,7 @@ port = 6004
 
 [cluster]
 enabled   = true
-# port_base = 6004   # 既定は `port`。シャードは port_base + 1 + i に存在。
+# port_base = 6005   # 最初のシャードのポート。既定は `port + 1`、シャード i は port_base + i
 ```
 
 CLI/環境変数での同等指定：

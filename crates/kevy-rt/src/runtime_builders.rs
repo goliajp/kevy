@@ -98,6 +98,36 @@ impl<C: Commands> Runtime<C> {
         self
     }
 
+    /// Advertise `ip` and/or `port_base` in `-MOVED` redirects instead of
+    /// the bind address and the listening ports — for a node reached
+    /// through a proxy or NAT. Only meaningful with [`Self::with_cluster`].
+    ///
+    /// ```
+    /// use kevy_rt::{ArgvView, Commands, Route, Runtime, Store, TxnKind};
+    ///
+    /// #[derive(Clone)]
+    /// struct Minimal;
+    /// impl Commands for Minimal {
+    ///     fn route<A: ArgvView + ?Sized>(&self, _a: &A) -> Route { Route::Local }
+    ///     fn dispatch<A: ArgvView + ?Sized>(&self, _s: &mut Store, _a: &A) -> Vec<u8> {
+    ///         b"+OK\r\n".to_vec()
+    ///     }
+    ///     fn is_quit<A: ArgvView + ?Sized>(&self, _a: &A) -> bool { false }
+    ///     fn is_write<A: ArgvView + ?Sized>(&self, _a: &A) -> bool { false }
+    ///     fn txn_kind<A: ArgvView + ?Sized>(&self, _a: &A) -> TxnKind { TxnKind::Other }
+    /// }
+    ///
+    /// // shards listen on 6005.., clients are told 203.0.113.7:7001..
+    /// let _rt = Runtime::builder(Minimal)
+    ///     .with_cluster(6005)
+    ///     .with_cluster_announce(Some([203, 0, 113, 7]), Some(7001));
+    /// ```
+    #[must_use]
+    pub fn with_cluster_announce(mut self, ip: Option<[u8; 4]>, port_base: Option<u16>) -> Self {
+        self.cluster_announce = (ip, port_base);
+        self
+    }
+
     /// SLOWLOG tuning (`[slowlog]` config section). Default
     /// `slower_than_micros = -1` (OFF) so the hot path never reads the
     /// clock — every enabled command otherwise pays an `Instant::now()`
