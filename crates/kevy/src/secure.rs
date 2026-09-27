@@ -75,8 +75,8 @@ pub(crate) fn link_keypair(cfg: &Config) -> Result<Option<Keypair>, String> {
         "kevy: a link is secure but [secure] private_key_file is not set (create one with `kevy keygen <file>`)"
             .to_string()
     })?;
-    if clients && cfg.secure.listen_port == cfg.server.port {
-        return Err("kevy: [secure] listen_port must differ from the plaintext port".to_string());
+    if clients {
+        check_client_ports(cfg)?;
     }
     if cluster {
         for p in cfg.cluster.peers.iter().filter(|p| p.node_id != cfg.cluster.node_id) {
@@ -95,6 +95,35 @@ pub(crate) fn link_keypair(cfg: &Config) -> Result<Option<Keypair>, String> {
         return Err("kevy: [replication] secure on a replica needs upstream_key".to_string());
     }
     load_keypair(path).map(Some)
+}
+
+/// The encrypted ports must not collide with each other or with the
+/// plaintext ports, cluster ranges included.
+fn check_client_ports(cfg: &Config) -> Result<(), String> {
+    let n = if cfg.cluster.enabled { u32::from(cfg.server.threads.max(1) as u16) } else { 0 };
+    let mut taken: Vec<(u32, u32, &str)> = vec![(u32::from(cfg.server.port), 1, "port")];
+    if n > 0 {
+        taken.push((u32::from(crate::cluster_port_base(cfg)), n, "the cluster ports"));
+    }
+    let mut ours: Vec<(u32, u32, &str)> =
+        vec![(u32::from(cfg.secure.listen_port), 1, "[secure] listen_port")];
+    if n > 0 {
+        let base = u32::from(crate::secure_front::secure_cluster_port_base(cfg));
+        if base + n > 65536 {
+            return Err(format!("kevy: the encrypted cluster ports from {base} run past 65535"));
+        }
+        ours.push((base, n, "the encrypted cluster ports"));
+    }
+    let overlaps =
+        |(a, al, _): (u32, u32, &str), (b, bl, _): (u32, u32, &str)| a < b + bl && b < a + al;
+    for (i, &x) in ours.iter().enumerate() {
+        for &y in taken.iter().chain(&ours[i + 1..]) {
+            if overlaps(x, y) {
+                return Err(format!("kevy: {} overlaps {}", x.2, y.2));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The keys a secure replication link needs on this node: its own, the
@@ -254,8 +283,18 @@ mod tests {
         let mut clients = Config::default();
         clients.secure.listen_port = clients.server.port;
         clients.secure.private_key_file = cfg.secure.private_key_file.clone();
-        assert!(link_keypair(&clients).unwrap_err().contains("must differ"));
+        assert!(link_keypair(&clients).unwrap_err().contains("overlaps port"));
         clients.secure.listen_port = clients.server.port + 400;
         assert!(link_keypair(&clients).unwrap().is_some(), "the client port alone needs the key");
+        // in cluster mode the plaintext cluster ports start at port + 1
+        clients.cluster.enabled = true;
+        clients.server.threads = 4;
+        clients.secure.listen_port = clients.server.port + 2;
+        assert!(link_keypair(&clients).unwrap_err().contains("overlaps the cluster ports"));
+        clients.secure.listen_port = clients.server.port + 400;
+        clients.secure.cluster_port_base = 65534;
+        assert!(link_keypair(&clients).unwrap_err().contains("past 65535"));
+        clients.secure.cluster_port_base = 0; // listen_port + 1 ..= + 4
+        assert!(link_keypair(&clients).unwrap().is_some());
     }
 }

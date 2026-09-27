@@ -23,9 +23,41 @@ struct Front {
     token_hex: String,
 }
 
-/// Bind the encrypted client port when `[secure] listen_port` is set, and
-/// hand the runtime the token its relayed connections present to name
-/// their real clients. A port that cannot be bound stops the server.
+/// The first encrypted cluster port: `[secure] cluster_port_base`, else
+/// `listen_port + 1`.
+pub(crate) fn secure_cluster_port_base(cfg: &Config) -> u16 {
+    match cfg.secure.cluster_port_base {
+        0 => cfg.secure.listen_port.saturating_add(1),
+        base => base,
+    }
+}
+
+/// The first encrypted cluster port told to clients:
+/// `announce_cluster_port_base` when set, else the one bound.
+pub(crate) fn advertised_secure_cluster_base(cfg: &Config) -> u16 {
+    match cfg.secure.announce_cluster_port_base {
+        0 => secure_cluster_port_base(cfg),
+        base => base,
+    }
+}
+
+/// Every encrypted port and the plaintext port it relays to: the client
+/// port, and in cluster mode one per shard beside each cluster port.
+pub(crate) fn port_pairs(cfg: &Config) -> Vec<(u16, u16)> {
+    let mut pairs = vec![(cfg.secure.listen_port, cfg.server.port)];
+    if cfg.cluster.enabled {
+        let (secure, plain) = (secure_cluster_port_base(cfg), crate::cluster_port_base(cfg));
+        for i in 0..cfg.server.threads.max(1) as u16 {
+            pairs.push((secure.saturating_add(i), plain.saturating_add(i)));
+        }
+    }
+    pairs
+}
+
+/// Bind the encrypted client port when `[secure] listen_port` is set (and
+/// in cluster mode an encrypted twin of every cluster port), and hand the
+/// runtime the token its relayed connections present to name their real
+/// clients. A port that cannot be bound stops the server.
 pub(crate) fn start<C: kevy_rt::Commands>(
     cfg: &Config,
     key: Option<&Keypair>,
@@ -36,31 +68,44 @@ pub(crate) fn start<C: kevy_rt::Commands>(
         return runtime;
     }
     let mut token = [0u8; 32];
-    let bound = kevy_sys::fill_random(&mut token)
-        .and_then(|()| TcpListener::bind((Ipv4Addr::from(cfg.server.bind), port)));
-    let listener = bound.unwrap_or_else(|e| {
-        eprintln!("kevy: encrypted client port {port}: {e}");
-        std::process::exit(1);
-    });
+    if let Err(e) = kevy_sys::fill_random(&mut token) {
+        exit_on(port, &e);
+    }
     let host = match Ipv4Addr::from(cfg.server.bind) {
         a if a.is_unspecified() => Ipv4Addr::LOCALHOST,
         a => a,
     };
-    let front = Arc::new(Front {
-        local: local.clone(),
-        client_keys: cfg.secure.client_keys.clone(),
-        upstream: SocketAddr::from((host, cfg.server.port)),
-        token_hex: kevy_config::key_to_hex(&token),
-    });
-    let spawned = std::thread::Builder::new()
-        .name("kevy-secure-accept".into())
-        .spawn(move || accept_loop(&listener, &front));
-    if let Err(e) = spawned {
-        eprintln!("kevy: encrypted client port {port}: {e}");
-        std::process::exit(1);
+    for (listen, upstream) in port_pairs(cfg) {
+        let front = Arc::new(Front {
+            local: local.clone(),
+            client_keys: cfg.secure.client_keys.clone(),
+            upstream: SocketAddr::from((host, upstream)),
+            token_hex: kevy_config::key_to_hex(&token),
+        });
+        let listener = TcpListener::bind((Ipv4Addr::from(cfg.server.bind), listen))
+            .unwrap_or_else(|e| exit_on(listen, &e));
+        let spawned = std::thread::Builder::new()
+            .name("kevy-secure-accept".into())
+            .spawn(move || accept_loop(&listener, &front));
+        if let Err(e) = spawned {
+            exit_on(listen, &e);
+        }
+    }
+    let runtime = runtime.with_peer_token(token);
+    if cfg.cluster.enabled {
+        eprintln!(
+            "kevy: encrypted client port on {port}, encrypted cluster ports from {}",
+            secure_cluster_port_base(cfg)
+        );
+        return runtime.with_secure_cluster_announce(advertised_secure_cluster_base(cfg));
     }
     eprintln!("kevy: encrypted client port on {port}");
-    runtime.with_peer_token(token)
+    runtime
+}
+
+fn exit_on(port: u16, e: &io::Error) -> ! {
+    eprintln!("kevy: encrypted client port {port}: {e}");
+    std::process::exit(1);
 }
 
 fn accept_loop(listener: &TcpListener, front: &Arc<Front>) {
