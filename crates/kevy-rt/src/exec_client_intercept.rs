@@ -95,6 +95,7 @@ impl<C: Commands> Shard<C> {
                 match (token_ok, addr, self.conns.get_mut(&conn_id)) {
                     (true, Some(a), Some(c)) => {
                         c.peer = (*a.ip(), a.port());
+                        c.relayed = true;
                         b"+OK\r\n"
                     }
                     (false, ..) => b"-ERR invalid peer token\r\n",

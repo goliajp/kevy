@@ -40,6 +40,9 @@ pub struct ReadWriteClient {
     /// after-write pattern that pins to a single replica is accepted
     /// (no fairness guarantee).
     rr_counter: usize,
+    /// Some node was reached over `kevys://`: a redirect to a node this
+    /// client has no key for is refused rather than followed in plaintext.
+    encrypted: bool,
     /// v3-cluster Phase 3 scope cache: `host:port` → live
     /// `RespClient`. Populated on demand when a write returns
     /// `-MISDIRECTED writer is <host:port>` — the client opens a
@@ -89,6 +92,33 @@ impl ReadWriteClient {
             primary: primary_conn,
             replicas: replica_conns,
             rr_counter: 0,
+            encrypted: false,
+            scope_writers: HashMap::new(),
+            scope_key_targets: HashMap::new(),
+        })
+    }
+
+    /// [`Self::connect`] by URL, one per node: `kevy://host:port`, or
+    /// `kevys://host:port?server_key=<hex>[&client_key_file=<path>]` for a
+    /// node's encrypted client port (each node has its own key).
+    ///
+    /// ```no_run
+    /// use kevy_cluster_rw::ReadWriteClient;
+    /// let key = "ab".repeat(32);
+    /// let c = ReadWriteClient::connect_urls(
+    ///     &format!("kevys://10.0.0.11:6404?server_key={key}"),
+    ///     &[&format!("kevys://10.0.0.12:6404?server_key={key}")],
+    /// )?;
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
+    pub fn connect_urls(primary: &str, replicas: &[&str]) -> io::Result<Self> {
+        let replica_conns =
+            replicas.iter().map(|u| RespClient::connect_url(u)).collect::<io::Result<Vec<_>>>()?;
+        Ok(Self {
+            primary: RespClient::connect_url(primary)?,
+            replicas: replica_conns,
+            rr_counter: 0,
+            encrypted: std::iter::once(&primary).chain(replicas).any(|u| u.starts_with("kevys://")),
             scope_writers: HashMap::new(),
             scope_key_targets: HashMap::new(),
         })
@@ -157,6 +187,12 @@ impl ReadWriteClient {
     /// caller deserves to see the error rather than burn round-trips.
     fn request_via_writer(&mut self, addr: &str, args: &[Vec<u8>]) -> io::Result<Reply> {
         if !self.scope_writers.contains_key(addr) {
+            if self.encrypted {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    format!("MISDIRECTED to {addr}, which this encrypted client has no key for"),
+                ));
+            }
             let (host, port) = split_host_port(addr).ok_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -309,6 +345,24 @@ fn split_host_port(addr: &str) -> Option<(&str, u16)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_encrypted_client_refuses_a_redirect_it_has_no_key_for() {
+        // a node that accepts and never answers: the refusal must come
+        // before any request is sent anywhere
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("kevy://{}", l.local_addr().unwrap());
+        let mut c = ReadWriteClient::connect_urls(&url, &[&url]).unwrap();
+        assert!(!c.encrypted, "plain URLs are not encrypted");
+        assert_eq!(c.replica_count(), 1);
+        c.encrypted = true;
+        // nothing listens at port 1: following the redirect would fail
+        // with ConnectionRefused, not PermissionDenied
+        let e = c.request_via_writer("127.0.0.1:1", &[b"SET".to_vec()]).unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::PermissionDenied);
+        assert!(e.to_string().contains("no key"), "{e}");
+        drop(l);
+    }
 
     #[test]
     fn writes_classified_correctly() {

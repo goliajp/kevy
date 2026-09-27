@@ -47,14 +47,42 @@ impl ClusterClient {
     /// Connect via a seed node, discover the topology (`CLUSTER SLOTS`), and
     /// open one connection per shard.
     pub fn connect(host: &str, port: u16) -> KevyResult<Self> {
-        let mut seed = RespClient::connect(host, port)?;
+        Self::build(RespClient::connect(host, port)?, RespClient::connect)
+    }
+
+    /// [`Self::connect`] by URL: `kevy://host:port` for a cluster port, or
+    /// `kevys://host:port?server_key=<hex>[&client_key_file=<path>]` for an
+    /// encrypted cluster port. Encrypted, every shard is reached through the
+    /// encrypted port the server advertises, with the same keys.
+    ///
+    /// ```no_run
+    /// let url = format!("kevys://10.0.0.5:6411?server_key={}", "ab".repeat(32));
+    /// let mut c = kevy_client::ClusterClient::connect_url(&url)?;
+    /// c.ping()?;
+    /// # Ok::<(), kevy_client::KevyError>(())
+    /// ```
+    pub fn connect_url(url: &str) -> KevyResult<Self> {
+        if url.starts_with("kevys://") {
+            let u = kevy_resp_client::parse_secure_url(url)?;
+            let me =
+                u.client_key_file.as_deref().map(kevy_resp_client::load_client_key).transpose()?;
+            let me = me.as_ref();
+            let seed = RespClient::connect_secure(&u.host, u.port, u.server_key, me)?;
+            return Self::build(seed, |h, p| RespClient::connect_secure(h, p, u.server_key, me));
+        }
+        let p = kevy_resp_client::parse_url(url)?;
+        Self::build(RespClient::connect(&p.host, p.port)?, RespClient::connect)
+    }
+
+    /// Ask the seed for `CLUSTER SLOTS`, then open one connection per shard.
+    fn build(
+        mut seed: RespClient,
+        dial: impl Fn(&str, u16) -> std::io::Result<RespClient>,
+    ) -> KevyResult<Self> {
         let reply = seed.request(&[b"CLUSTER".to_vec(), b"SLOTS".to_vec()])?;
         let ranges = parse_cluster_slots(reply)?;
         let (nodes, slot_to_shard) = build_topology(&ranges)?;
-        let shards = nodes
-            .iter()
-            .map(|(h, p)| RespClient::connect(h, *p))
-            .collect::<std::io::Result<Vec<_>>>()?;
+        let shards = nodes.iter().map(|(h, p)| dial(h, *p)).collect::<std::io::Result<Vec<_>>>()?;
         Ok(Self { shards, slot_to_shard })
     }
 

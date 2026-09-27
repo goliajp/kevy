@@ -105,6 +105,31 @@ kevys://10.0.0.11:6404/0?server_key=<hex>&client_key_file=/etc/app/kevy.key
 - `CLIENT LIST`、`CLIENT INFO` 和 `CLIENT KILL ADDR` 显示的是客户端自己的地址，不是服务端的。
 - 这个端口需要 `private_key_file`，并且不能和 `port` 相同；两种配置错误都会让服务端在启动时停下。
 
+## 集群模式
+
+集群模式下，每个 shard 的集群端口都有一个加密的孪生端口，转发到对应的明文集群端口，所以加密客户端和明文客户端一样按 slot 路由：
+
+```toml
+[cluster]
+enabled = true              # shard i 在 port_base + i（默认 port + 1）
+
+[secure]
+private_key_file  = "/etc/kevy/node.key"
+listen_port       = 6404
+cluster_port_base = 6405    # shard i 的加密端口是 6405 + i；0 = listen_port + 1
+```
+
+经加密端口进来的客户端，看到的是加密端口：`-MOVED` 和 `CLUSTER SLOTS` / `NODES` / `SHARDS` 给出的都是孪生端口；明文客户端看到的仍是明文端口。放在代理或 NAT 后面时，用 `announce_cluster_port_base` 设置对外通告的起始端口。加密端口区间之间、以及它们和客户端端口、明文集群端口之间都不能重叠，重叠时服务端拒绝启动。
+
+`kevy_client::ClusterClient::connect_url`、`kevy_client_async::cluster::AsyncClusterClient::connect_secure_url`、`kevy-cli -c` 和 `kevy-cli --cluster` 工具，接受一个指向某个加密集群端口的 `kevys://` URL，并用同一组密钥连接所有 shard：
+
+```text
+kevy-cli -c -u "kevys://10.0.0.11:6405?server_key=<hex>" SET user:1 alice
+kevy-cli -u "kevys://10.0.0.11:6405?server_key=<hex>" --cluster info 10.0.0.11:6405
+```
+
+`kevy_cluster_rw::ReadWriteClient::connect_urls` 每个节点一个 URL，各带该节点的公钥。加密时，遇到指向没有公钥的节点的 `-MISDIRECTED`，它会拒绝，而不是改用明文去连。
+
 ## 代价
 
 加解密在 reactor 旁边的独立线程上完成：每条连接的字节在那里解密，经本机回环交给明文端口，回复在返回途中加密。开不开这个端口，明文路径都是同一套代码；加密连接除了加解密本身，还要多付一次本机往返。

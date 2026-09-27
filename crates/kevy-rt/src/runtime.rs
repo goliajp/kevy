@@ -93,6 +93,9 @@ pub struct Runtime<C: Commands> {
     /// `CLIENT SETPEER` exists only when this is set; see
     /// [`Runtime::with_peer_token`].
     pub(crate) peer_token: Option<[u8; 32]>,
+    /// First advertised encrypted cluster port; see
+    /// [`Runtime::with_secure_cluster_announce`].
+    pub(crate) secure_cluster_announce: Option<u16>,
     /// Per-shard SlotTable reconnect-window in ms. After a
     /// streaming replica disconnects, its `(replica_id, sent_offset)`
     /// is recorded in the shard's `slots` map; slots past this age
@@ -160,6 +163,7 @@ impl<C: Commands> Runtime<C> {
             replication_port_base: None,
             replication_security: None,
             peer_token: None,
+            secure_cluster_announce: None,
             replication_reconnect_window_ms: 60_000,
             unix_socket_path: None,
             tier_budget: None,

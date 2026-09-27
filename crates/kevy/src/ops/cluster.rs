@@ -52,6 +52,11 @@ fn advertised_ip(cfg: &Config) -> String {
 /// First advertised cluster port: `[cluster].announce_port_base` when
 /// set, else the port shard 0 listens on.
 fn advertised_port_base(cfg: &Config) -> u16 {
+    // a client relayed by the encrypted front end is told the encrypted
+    // twins, so its redirects stay encrypted
+    if kevy_rt::relayed_client() && cfg.secure.listen_port != 0 {
+        return crate::secure_front::advertised_secure_cluster_base(cfg);
+    }
     match cfg.cluster.announce_port_base {
         0 => crate::cluster_port_base(cfg),
         base => base,

@@ -147,6 +147,33 @@ impl<C: Commands> Runtime<C> {
         self
     }
 
+    /// In cluster mode, where encrypted clients reach shard `i`: a
+    /// relayed client (see [`Self::with_peer_token`]) is redirected to
+    /// `port_base + i` instead of the plaintext cluster port.
+    ///
+    /// ```
+    /// use kevy_rt::{ArgvView, Commands, Route, Runtime, Store, TxnKind};
+    ///
+    /// #[derive(Clone)]
+    /// struct Minimal;
+    /// impl Commands for Minimal {
+    ///     fn route<A: ArgvView + ?Sized>(&self, _a: &A) -> Route { Route::Local }
+    ///     fn dispatch<A: ArgvView + ?Sized>(&self, _s: &mut Store, _a: &A) -> Vec<u8> {
+    ///         b"+OK\r\n".to_vec()
+    ///     }
+    ///     fn is_quit<A: ArgvView + ?Sized>(&self, _a: &A) -> bool { false }
+    ///     fn is_write<A: ArgvView + ?Sized>(&self, _a: &A) -> bool { false }
+    ///     fn txn_kind<A: ArgvView + ?Sized>(&self, _a: &A) -> TxnKind { TxnKind::Other }
+    /// }
+    ///
+    /// let _rt = Runtime::builder(Minimal).with_cluster(6005).with_secure_cluster_announce(6410);
+    /// ```
+    #[must_use]
+    pub fn with_secure_cluster_announce(mut self, port_base: u16) -> Self {
+        self.secure_cluster_announce = Some(port_base);
+        self
+    }
+
     /// Per-shard SlotTable reconnect window in milliseconds — the
     /// grace period a disconnected replica's slot is retained for so
     /// a reconnect within the window can be correlated against its

@@ -15,50 +15,76 @@ use crate::cluster_topology::{build_topology, parse_cluster_slots};
 use crate::codec::AsyncRespCodec;
 use crate::reply::{string, unexpected, vec2, vec3};
 
-#[cfg(feature = "tokio")]
-type DefaultTransport = tokio::net::TcpStream;
-#[cfg(feature = "smol")]
-type DefaultTransport = smol::net::TcpStream;
-#[cfg(feature = "async-std")]
-type DefaultTransport = async_std::net::TcpStream;
-
-#[cfg(feature = "tokio")]
-async fn connect_default(host: &str, port: u16) -> io::Result<DefaultTransport> {
-    crate::rt_tokio::connect(host, port).await
-}
-#[cfg(feature = "smol")]
-async fn connect_default(host: &str, port: u16) -> io::Result<DefaultTransport> {
-    crate::rt_smol::connect(host, port).await
-}
-#[cfg(feature = "async-std")]
-async fn connect_default(host: &str, port: u16) -> io::Result<DefaultTransport> {
-    crate::rt_async_std::connect(host, port).await
-}
+use crate::conn::{DefaultTransport, connect_default};
+use crate::{AsyncSecure, AsyncTransport};
 
 /// One open connection per distinct shard node + a slot→shard table.
+///
+/// The transport defaults to the runtime's `TcpStream`;
+/// [`Self::connect_secure_url`] gives one over [`AsyncSecure`] instead.
 #[derive(Debug)]
-pub struct AsyncClusterClient {
-    shards: Vec<AsyncRespCodec<DefaultTransport>>,
+pub struct AsyncClusterClient<T = DefaultTransport> {
+    shards: Vec<AsyncRespCodec<T>>,
     slot_to_shard: Vec<u16>,
+}
+
+/// `CLUSTER SLOTS` from the seed: each shard's address and the slot table.
+async fn topology<T: AsyncTransport>(
+    seed: &mut AsyncRespCodec<T>,
+) -> io::Result<(Vec<(String, u16)>, Vec<u16>)> {
+    let reply = seed.request(&[b"CLUSTER".to_vec(), b"SLOTS".to_vec()]).await?;
+    build_topology(&parse_cluster_slots(reply)?)
 }
 
 impl AsyncClusterClient {
     /// Connect via a seed node, discover topology, open one connection
     /// per shard.
     pub async fn connect(host: &str, port: u16) -> io::Result<Self> {
-        let mut seed_codec = AsyncRespCodec::new(connect_default(host, port).await?);
-        let reply = seed_codec.request(&[b"CLUSTER".to_vec(), b"SLOTS".to_vec()]).await?;
-        let ranges = parse_cluster_slots(reply)?;
-        let (nodes, slot_to_shard) = build_topology(&ranges)?;
-
+        let mut seed = AsyncRespCodec::new(connect_default(host, port).await?);
+        let (nodes, slot_to_shard) = topology(&mut seed).await?;
         let mut shards = Vec::with_capacity(nodes.len());
         for (h, p) in &nodes {
-            let transport = connect_default(h, *p).await?;
-            shards.push(AsyncRespCodec::new(transport));
+            shards.push(AsyncRespCodec::new(connect_default(h, *p).await?));
         }
         Ok(Self { shards, slot_to_shard })
     }
+}
 
+impl AsyncClusterClient<AsyncSecure<DefaultTransport>> {
+    /// [`AsyncClusterClient::connect`] through encrypted cluster ports:
+    /// `kevys://host:port?server_key=<hex>[&client_key_file=<path>]` names
+    /// one of them, and every shard is reached through the encrypted port
+    /// the server advertises, with the same keys.
+    ///
+    /// ```no_run
+    /// # async fn demo() -> std::io::Result<()> {
+    /// use kevy_client_async::cluster::AsyncClusterClient;
+    /// let url = format!("kevys://10.0.0.5:6411?server_key={}", "ab".repeat(32));
+    /// let mut c = AsyncClusterClient::connect_secure_url(&url).await?;
+    /// c.ping().await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn connect_secure_url(url: &str) -> io::Result<Self> {
+        let u = kevy_resp_client::parse_secure_url(url)?;
+        let me = u.client_key_file.as_deref().map(kevy_resp_client::load_client_key).transpose()?;
+        let dial = |h: String, p: u16| {
+            let me = me.clone();
+            async move {
+                let tcp = connect_default(&h, p).await?;
+                AsyncSecure::handshake(tcp, u.server_key, me.as_ref()).await
+            }
+        };
+        let mut seed = AsyncRespCodec::new(dial(u.host.clone(), u.port).await?);
+        let (nodes, slot_to_shard) = topology(&mut seed).await?;
+        let mut shards = Vec::with_capacity(nodes.len());
+        for (h, p) in nodes {
+            shards.push(AsyncRespCodec::new(dial(h, p).await?));
+        }
+        Ok(Self { shards, slot_to_shard })
+    }
+}
+
+impl<T: AsyncTransport> AsyncClusterClient<T> {
     /// Number of distinct shard nodes.
     pub fn shard_count(&self) -> usize {
         self.shards.len()

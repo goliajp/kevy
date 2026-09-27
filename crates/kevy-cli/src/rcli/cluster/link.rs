@@ -1,5 +1,6 @@
-//! Connections to cluster nodes: plain TCP, authenticated when `-a` says so,
-//! and nothing else (no SELECT, no HELLO) — a node is spoken to in RESP2.
+//! Connections to cluster nodes: plain TCP (or kevy's encrypted port when
+//! `-u kevys://…` gave the keys), authenticated when `-a` says so, and
+//! nothing else (no SELECT, no HELLO) — a node is spoken to in RESP2.
 
 use super::addr::Addr;
 use crate::rcli::conn::Conn;
@@ -12,6 +13,9 @@ pub(crate) fn open(opts: &Opts, addr: &Addr) -> Option<Conn> {
     let opened = if addr.port < 0 {
         // A negative port is a service name the resolver does not know.
         Err("Servname not supported for ai_socktype".to_string())
+    } else if let Some(target) = &opts.secure {
+        // `-u kevys://…` gave the keys: every node is reached encrypted
+        Conn::secure(&addr.host, addr.port, opts.connect_timeout, target)
     } else {
         Conn::tcp(&addr.host, addr.port, opts.connect_timeout)
     };
