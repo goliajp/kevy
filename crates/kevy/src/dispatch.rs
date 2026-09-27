@@ -198,6 +198,17 @@ fn record_instead(p: kevy_rt::propagation::Propagate) {
     kevy_rt::propagation::set_override(p);
 }
 
+/// Record an `SPOP` by the members it removed, for a reply path that pops
+/// outside [`kevy_verbs::exec`]; an empty pop records nothing.
+pub(crate) fn record_spop(key: &[u8], popped: &[Vec<u8>]) {
+    record_instead(if popped.is_empty() {
+        kevy_rt::propagation::Propagate::Suppress
+    } else {
+        let frame = kevy_verbs::aof::spop_effect(key, popped);
+        kevy_rt::propagation::Propagate::Replace(frame.into_iter().map(<[u8]>::to_vec).collect())
+    });
+}
+
 // `try_resp3_overrides` + the `emit_*_resp3` helpers live in
 // [`crate::dispatch_resp3`] — split out so this file stays under the
 // 500-LOC house rule. Same dispatch fan-out, same call shape; the

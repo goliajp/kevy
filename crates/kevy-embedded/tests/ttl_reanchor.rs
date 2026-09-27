@@ -139,3 +139,22 @@ fn typed_expireat_survives_replay_without_reanchoring() {
     assert!(ttl > 0, "key survived: {ttl}");
     assert!(ttl <= 100_000 - 1_000, "EXPIREAT re-anchored on replay: {ttl}ms");
 }
+
+/// A typed conditional HEXPIRE records only the fields it moved: the one
+/// its condition refused keeps its own deadline after a restart.
+#[test]
+fn typed_conditional_hexpire_records_only_what_it_moved() {
+    use kevy_embedded::HExpireCond;
+    let dir = kevy_tmpdir::TmpDir::new("ttl-reanchor-hexpire-nx");
+    let store = Store::open(Config::default().with_persist(dir.path())).expect("open");
+    store.hset(b"h", &[(b"f", b"v"), (b"g", b"w")]).unwrap();
+    store.hexpire(b"h", &[b"g"], Duration::from_secs(100), HExpireCond::Always).unwrap();
+    let codes =
+        store.hexpire(b"h", &[b"f", b"g"], Duration::from_secs(500), HExpireCond::Nx).unwrap();
+    assert_eq!(codes, [1, 0], "NX moves f and refuses g");
+    drop(store);
+    let store = Store::open(Config::default().with_persist(dir.path())).expect("reopen");
+    let ttl = store.hpttl(b"h", &[b"f", b"g"]).unwrap();
+    assert!(ttl[0] > 100_000, "f keeps the deadline it took: {ttl:?}");
+    assert!(ttl[1] > 0 && ttl[1] <= 100_000, "g took a deadline it refused: {ttl:?}");
+}
