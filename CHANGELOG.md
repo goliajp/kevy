@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **io_uring: no more 200 µs stalls for clients that pause between
+  batches.** After a batch of work forwarded from other shards, an owner
+  shard used to sleep for 200 µs, deaf to new input; a client whose keys
+  lived on another shard and that paused between pipelined batches — any
+  application doing work on the replies, and every client behind a proxy
+  — waited out that sleep on every batch (measured: 298 µs per batch of
+  32 instead of 32 µs). The owner now keeps polling for those 200 µs and
+  picks up new work at once. The cost is CPU: up to 200 µs of one core
+  after each burst of forwarded work, before the shard parks.
 - **An encrypted client port, off unless configured.** `[secure]
   listen_port` opens a second client port that speaks only kevy's Noise IK
   protocol, and `client_keys` limits which client keys may use it; the
