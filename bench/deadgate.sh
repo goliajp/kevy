@@ -83,14 +83,22 @@ if not observed:
     print("deadgate: REFUSED — the atlas observed no symbols at all; there is "
           "nothing for the register to be checked against", file=sys.stderr)
     sys.exit(2)
+# An [[unstable]] entry names something dead in SOME runs; this run may have
+# covered it. Its entry is stale only when the symbol is gone from the code,
+# so it is checked against every symbol the run saw, dead or not. A [[dead]]
+# entry explains a region that must be dead now, so it stays on the dead set.
+present = set(json.loads((root / "target/reports/DEAD-PRESENT.json").read_text()))
+if not present:
+    print("deadgate: REFUSED — the atlas recorded no symbols present", file=sys.stderr)
+    sys.exit(2)
 dead = []
-for kind in ("unstable", "dead"):
+for kind, pool in (("unstable", present), ("dead", observed)):
     for e in doc.get(kind, []):
         if "symbol" in e:
-            if e["symbol"] not in observed:
+            if e["symbol"] not in pool:
                 dead.append(f"[[{kind}]] symbol {e['symbol']!r}")
         elif "prefix" in e:
-            if not any(k.startswith(e["prefix"]) for k in observed):
+            if not any(k.startswith(e["prefix"]) for k in pool):
                 dead.append(f"[[{kind}]] prefix {e['prefix']!r}")
 # The other direction, for whole crates. `[[dead_crate]]` exists for the
 # case where every region in a crate has one explanation, and the atlas

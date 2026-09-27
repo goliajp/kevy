@@ -256,6 +256,8 @@ fn secure_keys_of_the_wrong_shape_are_schema_errors() {
         ("[replication]\nreplica_keys = \"x\"\n".to_string(), "replica_keys"),
         ("[secure]\nlisten_port = \"x\"\n".to_string(), "listen_port"),
         ("[secure]\nclient_keys = [\"ab\"]\n".to_string(), "client_keys"),
+        ("[secure]\ncluster_port_base = \"x\"\n".to_string(), "cluster_port_base"),
+        ("[secure]\nannounce_cluster_port_base = -1\n".to_string(), "announce_cluster_port_base"),
     ] {
         let err = Config::from_toml_str(&src, None).unwrap_err();
         assert!(matches!(err, ConfigError::Schema { .. }), "{src}: {err:?}");

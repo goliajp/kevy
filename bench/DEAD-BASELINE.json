@@ -4,7 +4,7 @@
   "kind": "symbols/qualified-path",
   "tree": "5cb014661ab5dcfc12f9d8a17abeba8a8b1fc9da",
   "total_regions": 191121,
-  "dead_regions": 26551,
+  "dead_regions": 26600,
   "llvm_per_instantiation_dead": 27099,
   "crates": {
     "kevy": {
@@ -866,7 +866,7 @@
     "kevy_cli::migrate::export_key::": 3,
     "kevy_cli::migrate::fetch_bulks": 4,
     "kevy_cli::migrate::flush_batch": 9,
-    "kevy_cli::migrate::open_progress": 1,
+    "kevy_cli::migrate::open_progress": 2,
     "kevy_cli::migrate::rebuild_frames": 6,
     "kevy_cli::migrate::run_export": 8,
     "kevy_cli::migrate::run_import": 7,
@@ -959,13 +959,13 @@
     "kevy_cli::rcli::cluster::topology::Cluster::add_friend": 3,
     "kevy_cli::rcli::cluster::topology::Cluster::load": 1,
     "kevy_cli::rcli::cluster::topology::nodes_of": 10,
-    "kevy_cli::rcli::conn::Conn::fd": 3,
+    "kevy_cli::rcli::conn::Conn::fd": 6,
     "kevy_cli::rcli::conn::Conn::pipeline": 2,
     "kevy_cli::rcli::conn::Conn::pipeline_raw": 3,
-    "kevy_cli::rcli::conn::Conn::read_raw": 10,
+    "kevy_cli::rcli::conn::Conn::read_raw": 14,
     "kevy_cli::rcli::conn::Conn::set_read_timeout": 4,
     "kevy_cli::rcli::conn::Conn::write_raw": 4,
-    "kevy_cli::rcli::conn::Conn::writer": 6,
+    "kevy_cli::rcli::conn::Conn::writer": 7,
     "kevy_cli::rcli::conn::LinkError::is_reconnectable": 6,
     "kevy_cli::rcli::conn::LinkError::text": 3,
     "kevy_cli::rcli::conn::strerror": 4,
@@ -3483,7 +3483,19 @@
     "kevy_resp_client::secure::SecureStream::write": 3,
     "kevy_resp_client::secure::SecureStream::write_all": 2,
     "kevy_resp_client::secure::bad::": 6,
-    "kevy_resp_client::secure::random32": 1
+    "kevy_resp_client::secure::random32": 1,
+    "kevy::secure_front::exit_on": 3,
+    "kevy_cli::rcli::conn::Conn::read_stream": 3,
+    "kevy_cli::rcli::conn::Conn::secure": 6,
+    "kevy_client::cluster::ClusterClient::build::": 4,
+    "kevy_client::cluster::ClusterClient::connect_url": 5,
+    "kevy_client_async::cluster::AsyncClusterClient::connect_secure_url": 5,
+    "kevy_client_async::cluster::topology::": 1,
+    "kevy_cluster_rw::ReadWriteClient::connect_urls": 2,
+    "kevy_resp_client::secure::SecureStream::handshake": 7,
+    "kevy_resp_client::secure::SecureStream::writer": 1,
+    "kevy_resp_client::secure::SecureWriter::write": 1,
+    "kevy_resp_client::secure::send_sealed": 2
   },
   "envelope_runs": 3,
   "history": [
@@ -3885,6 +3897,34 @@
       ],
       "reason": "Error arms of calls that cannot fail on a healthy loopback socket: the ? and map_err branches after socket reads, writes, timeouts and try_clone, after getrandom / getentropy, after sealing or opening on a session a completed handshake produced, and after framing a message the caller already bounded; plus ClientStream's plaintext arms of write and flush, which RespClient never calls (it writes with write_all). Every refusal a peer can cause is tested: wrong server key, unlisted or missing client key, plaintext client on the encrypted port, the server refusing the relay's token, the plaintext port being down, malformed kevys:// URLs, a bad key file.",
       "delta": 87
+    },
+    {
+      "accepted": [
+        "kevy::secure_front::exit_on",
+        "kevy_cli::rcli::conn::Conn::fd",
+        "kevy_cli::rcli::conn::Conn::read_raw",
+        "kevy_cli::rcli::conn::Conn::writer"
+      ],
+      "reason": "Arms no test reaches over the encrypted port or at all: Conn::fd and Conn::read_raw on a secure stream serve the REPL's pub/sub wait and --rdb / --replica, and their Unix-socket arms were already unreached; Conn::writer's socket-clone failure; secure_front::exit_on, the startup exit when an encrypted port cannot be bound. The secure read path itself is covered (one-shot commands, a 50 KB value, --pipe, and a unit test that no decrypted bytes stay in the stream).",
+      "delta": 11
+    },
+    {
+      "accepted": [
+        "kevy_cli::migrate::open_progress",
+        "kevy_cli::rcli::conn::Conn::read_stream",
+        "kevy_cli::rcli::conn::Conn::secure",
+        "kevy_client::cluster::ClusterClient::build::",
+        "kevy_client::cluster::ClusterClient::connect_url",
+        "kevy_client_async::cluster::AsyncClusterClient::connect_secure_url",
+        "kevy_client_async::cluster::topology::",
+        "kevy_cluster_rw::ReadWriteClient::connect_urls",
+        "kevy_resp_client::secure::SecureStream::handshake",
+        "kevy_resp_client::secure::SecureStream::writer",
+        "kevy_resp_client::secure::SecureWriter::write",
+        "kevy_resp_client::secure::send_sealed"
+      ],
+      "reason": "Error arms of calls that cannot fail against a healthy loopback server: the ? branches after dialing, handshakes, entropy, CLUSTER SLOTS parsing, key-file loading and sealing, in the kevys:// constructors of kevy-resp-client, kevy-client, kevy-client-async, kevy-cluster-rw and kevy-cli, plus open_progress now running after the source opened. Refusals a peer can cause are tested: wrong server keys, unlisted client keys, malformed URLs, bad key files, a missing import source.",
+      "delta": 38
     }
   ]
 }
