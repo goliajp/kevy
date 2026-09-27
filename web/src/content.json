@@ -72,7 +72,7 @@
               "go": "Single-table serving",
               "href": "use/app-store/",
               "label": "Tables",
-              "note": "Typed columns, secondary indexes, composite ORDER BY paths — even your PG/MySQL schema file, via kevy-cli sql compile. No runtime SQL, no joins: those stay in Postgres."
+              "note": "Typed columns, secondary indexes, composite ORDER BY paths — even your PG/MySQL schema file, via kevy-cli --kevy sql compile. No runtime SQL, no joins: those stay in Postgres."
             },
             {
               "code": "# kevy.toml — a RAM budget for the whole store\n[tiering]\nbudget = \"70%\"               # or \"4gb\", or \"auto\"\n\n# past the budget, the coldest values spill to a disk log\n# and page back on access. a cold key is an ordinary key:\nGET archive:2019:q3          # pays one disk read, same reply\nTTL archive:2019:q3          # metadata answers from RAM\nSCAN 0 MATCH archive:*       # sees cold keys — one key table",
@@ -103,7 +103,7 @@
           "eyebrow": "Why you can replace Redis",
           "h2": "Same protocol. More throughput.",
           "id": "swap",
-          "intro": "RESP2 and RESP3, 206 commands — redis-cli and your client library connect unchanged. One machine, 16 cores, loopback, median of five.",
+          "intro": "RESP2 and RESP3, 209 commands — redis-cli and your client library connect unchanged. One machine, 16 cores, loopback, median of five.",
           "note": "<b>LPUSH and ZADD are only 10% and 15% ahead.</b> If lists or sorted sets are your hot path, speed is not the reason to switch. <a href=\"~/benchmarks/\">Full table, against valkey and Dragonfly too.</a> Migration is three commands — <a href=\"~/migrate/\">export, import, digest</a> — and works in both directions.",
           "rows": [
             [
@@ -443,7 +443,7 @@
           "h2": "Third — what are you giving up?",
           "items": [
             {
-              "a": "On the wire, yes — RESP2 and RESP3, 206 commands, and your client library will not notice. In behaviour, mostly, and the exceptions are the point. A cross-shard <code>RENAME</code> is not atomic — multi-key writes are atomic per shard, not globally. And a SCAN cursor is only valid on the server that issued it, the same per-node property Redis Cluster has. <a href=\"~/docs/commands/\">All 206 commands carry their real deviation and their real cost</a>, read out of the implementation rather than copied from Redis's documentation.",
+              "a": "On the wire, yes — RESP2 and RESP3, 209 commands, and your client library will not notice. In behaviour, mostly, and the exceptions are the point. A cross-shard <code>RENAME</code> is not atomic — multi-key writes are atomic per shard, not globally. And a SCAN cursor is only valid on the server that issued it, the same per-node property Redis Cluster has. <a href=\"~/docs/commands/\">All 209 commands carry their real deviation and their real cost</a>, read out of the implementation rather than copied from Redis's documentation.",
               "q": "Is it really a drop-in replacement for Redis?"
             },
             {
@@ -463,7 +463,7 @@
               "q": "Is there authentication?"
             },
             {
-              "a": "<code>kevy-cli export</code> writes your keyspace to a plain RESP file that any Redis-compatible server will import, and <code>kevy-cli digest</code> proves the copy is faithful before you throw anything away. <a href=\"~/docs/migration/\">The migration guide</a> covers moving out as carefully as moving in.",
+              "a": "<code>kevy-cli --kevy export</code> writes your keyspace to a plain RESP file that any Redis-compatible server will import, and <code>kevy-cli --kevy digest</code> proves the copy is faithful before you throw anything away. <a href=\"~/docs/migration/\">The migration guide</a> covers moving out as carefully as moving in.",
               "q": "What if I outgrow it, or just change my mind?"
             }
           ],
@@ -490,7 +490,7 @@
         },
         {
           "body": [
-            "<b>Your client does not change.</b> kevy speaks RESP2 and RESP3 and answers 206 commands. Point your existing library at it, keep your code, keep your redis-cli. There is no SDK to adopt and no new protocol to learn.",
+            "<b>Your client does not change.</b> kevy speaks RESP2 and RESP3 and answers 209 commands. Point your existing library at it, keep your code, keep your redis-cli. There is no SDK to adopt and no new protocol to learn.",
             "<b>So the only real question is what you gain.</b> Four things, and if none of them is worth anything to you, then stay on Redis — it is a superb piece of software and switching for its own sake is a waste of your week."
           ],
           "h2": "Coming from Redis",
@@ -531,7 +531,7 @@
           "caption": "Export from Redis, import into kevy, and check the two agree. Every command below was run.",
           "h2": "How to move, from Redis",
           "t": "code",
-          "text": "# 1. dump what you want to move. it is a RESP file — readable,\n#    diffable, and it streams rather than loading into memory.\nkevy-cli export -p 6379 --prefix user: dump.resp\n-> exported 41023 keys -> dump.resp\n\n# 2. load it. --strict stops on the first error rather than\n#    limping onward with a half-migrated keyspace.\nkevy-cli import -p 6380 --strict dump.resp\n-> imported 82046 ok, 0 errors, offset 4108331\n\n# 3. prove they agree, rather than hoping.\nkevy-cli digest -p 6379 user:\nkevy-cli digest -p 6380 user:\n-> 41023 keys 3bca92aa52269300     # the same hash, or you did not migrate\n\n# an interrupted import resumes where it stopped:\nkevy-cli import -p 6380 --resume dump.resp"
+          "text": "# 1. dump what you want to move. it is a RESP file — readable,\n#    diffable, and it streams rather than loading into memory.\nkevy-cli -p 6379 --kevy export --prefix user: dump.resp\n-> exported 41023 keys -> dump.resp\n\n# 2. load it. --strict stops on the first error rather than\n#    limping onward with a half-migrated keyspace.\nkevy-cli -p 6380 --kevy import --strict dump.resp\n-> imported 82046 ok, 0 errors, offset 4108331\n\n# 3. prove they agree, rather than hoping.\nkevy-cli -p 6379 --kevy digest user:\nkevy-cli -p 6380 --kevy digest user:\n-> 41023 keys 3bca92aa52269300     # the same hash, or you did not migrate\n\n# an interrupted import resumes where it stopped:\nkevy-cli -p 6380 --kevy import --resume dump.resp"
         },
         {
           "body": [
@@ -608,7 +608,7 @@
           "text": "# 1. pick ONE workload. sessions are the usual first, because\n#    nothing joins against them and losing one is survivable.\n\n# 2. write to both for a week. reads still come from Postgres.\n#    you are checking that the shapes match, not that it is fast.\n\n# 3. flip reads to kevy. keep the dual write.\nredis-cli SET session:$SID \"$JSON\" EX 3600\n\n# 4. when it has been boring for a fortnight, drop the table.\n\n# then do the next workload. rate limits, then queues, then\n# whichever of your read paths a secondary index can answer."
         },
         {
-          "body": "The same three commands run in the other direction. <code>kevy-cli export</code> writes a plain RESP file that any Redis-compatible server will import, and <code>digest</code> proves the copy is faithful. <a href=\"~/docs/migration/\">The migration guide covers moving out</a> as carefully as moving in — we would much rather you leave cleanly than stay because you are stuck.",
+          "body": "The same three commands run in the other direction. <code>kevy-cli --kevy export</code> writes a plain RESP file that any Redis-compatible server will import, and <code>digest</code> proves the copy is faithful. <a href=\"~/docs/migration/\">The migration guide covers moving out</a> as carefully as moving in — we would much rather you leave cleanly than stay because you are stuck.",
           "kind": "note",
           "t": "callout",
           "title": "And if you want to leave again"
@@ -800,7 +800,7 @@
           "t": "recipe"
         },
         {
-          "cost": "<b>No runtime SQL and no joins.</b> The server refuses <code>SELECT</code> as an unknown command; <code>kevy-cli sql compile</code> turns a PG/MySQL schema file into these declarations at build time and refuses JOIN, subqueries and GROUP BY by name, pointing at the recipe that replaces each. Uniqueness is verify-not-enforce, and constraints are recipes, not engine checks. With <a href=\"~/docs/tiering/\">tiering</a> on, index-only queries answer from RAM even when every row is cold — only the final <code>FIELDS</code> page reads cold rows, one read per row.",
+          "cost": "<b>No runtime SQL and no joins.</b> The server refuses <code>SELECT</code> as an unknown command; <code>kevy-cli --kevy sql compile</code> turns a PG/MySQL schema file into these declarations at build time and refuses JOIN, subqueries and GROUP BY by name, pointing at the recipe that replaces each. Uniqueness is verify-not-enforce, and constraints are recipes, not engine checks. With <a href=\"~/docs/tiering/\">tiering</a> on, index-only queries answer from RAM even when every row is cold — only the final <code>FIELDS</code> page reads cold rows, one read per row.",
           "cost_t": "Cost & limits",
           "goal": "The read path of a relational table — indexed WHERE, residual filter, ORDER BY, pagination, COUNT — compiled onto named indexes by one declaration. Or by your existing schema file.",
           "h2": "Declare the whole table once",
@@ -808,7 +808,7 @@
             {
               "code": "TABLE.DECLARE orders PREFIX order: PK id COLUMN id str COLUMN customer i64 COLUMN status str COLUMN total f64 INDEX status range VALUES total customer ORDERPATH by_customer ON customer THEN total DESC\n-> OK",
               "do": "Columns, indexes and sort paths, in one declaration",
-              "note": "Rows stay ordinary hashes under the prefix — a missing column is NULL, and kevy-cli sql compile schema.sql emits this line from CREATE TABLE / CREATE INDEX."
+              "note": "Rows stay ordinary hashes under the prefix — a missing column is NULL, and kevy-cli --kevy sql compile schema.sql emits this line from CREATE TABLE / CREATE INDEX."
             },
             {
               "code": "IDX.QUERY orders.status EQ open FILTER total RANGE 2000 inf LIMIT 20\n-> 1) \"0\"\n   2) 1) \"order:1001\"  2) \"open\"\n\nIDX.COUNT orders.status EQ open\n-> (integer) 2",
@@ -986,7 +986,7 @@
               "title": "Persistence"
             },
             {
-              "body": "206 commands, each with its real cost and its deviation from Redis.",
+              "body": "209 commands, each with its real cost and its deviation from Redis.",
               "go": "Look it up",
               "href": "docs/commands/",
               "kicker": "Reference",
@@ -1373,7 +1373,7 @@
               "go": "単一テーブルの配信",
               "href": "use/app-store/",
               "label": "テーブル",
-              "note": "型付きカラム、セカンダリインデックス、複合 ORDER BY パス——kevy-cli sql compile なら PG/MySQL のスキーマファイルまでコンパイルできます。ランタイム SQL も join もありません。それは Postgres の仕事です。"
+              "note": "型付きカラム、セカンダリインデックス、複合 ORDER BY パス——kevy-cli --kevy sql compile なら PG/MySQL のスキーマファイルまでコンパイルできます。ランタイム SQL も join もありません。それは Postgres の仕事です。"
             },
             {
               "code": "# kevy.toml — a RAM budget for the whole store\n[tiering]\nbudget = \"70%\"               # or \"4gb\", or \"auto\"\n\n# past the budget, the coldest values spill to a disk log\n# and page back on access. a cold key is an ordinary key:\nGET archive:2019:q3          # pays one disk read, same reply\nTTL archive:2019:q3          # metadata answers from RAM\nSCAN 0 MATCH archive:*       # sees cold keys — one key table",
@@ -1404,7 +1404,7 @@
           "eyebrow": "なぜ Redis を置き換えられるのか",
           "h2": "プロトコルは同じ。スループットは上。",
           "id": "swap",
-          "intro": "RESP2 と RESP3、206 個のコマンド——redis-cli も、クライアントライブラリも、そのままつながります。1 台のマシン、16 コア、ループバック、5 回実行した中央値です。",
+          "intro": "RESP2 と RESP3、209 個のコマンド——redis-cli も、クライアントライブラリも、そのままつながります。1 台のマシン、16 コア、ループバック、5 回実行した中央値です。",
           "note": "<b>LPUSH と ZADD は、10% と 15% しか上回っていません。</b>リストやソート済みセットがホットパスなら、速さは乗り換える理由になりません。<a href=\"~/benchmarks/\">valkey や Dragonfly も含めた、完全な表はこちら。</a>移行はコマンド 3 つ——<a href=\"~/migrate/\">export、import、digest</a>——で、どちらの向きにも動きます。",
           "rows": [
             [
@@ -1744,7 +1744,7 @@
           "h2": "最後に——何を差し出すことになるか",
           "items": [
             {
-              "a": "ワイヤの上では、なります。RESP2 と RESP3、206 個のコマンドに対応し、クライアントライブラリは違いに気づきません。挙動もおおむね同じですが、その例外こそが要点です。シャードをまたぐ <code>RENAME</code> は原子的ではありません——複数キーの書き込みは shard 単位でのみ原子的です。また SCAN のカーソルは発行したサーバーでのみ有効で、これは Redis Cluster のノード単位の性質と同じです。<a href=\"~/docs/commands/\">206 個すべてのコマンドに、本当の差異と本当のコストを併記してあります</a>。Redis の文書から書き写したものではなく、実装から読み出したものです。",
+              "a": "ワイヤの上では、なります。RESP2 と RESP3、209 個のコマンドに対応し、クライアントライブラリは違いに気づきません。挙動もおおむね同じですが、その例外こそが要点です。シャードをまたぐ <code>RENAME</code> は原子的ではありません——複数キーの書き込みは shard 単位でのみ原子的です。また SCAN のカーソルは発行したサーバーでのみ有効で、これは Redis Cluster のノード単位の性質と同じです。<a href=\"~/docs/commands/\">206 個すべてのコマンドに、本当の差異と本当のコストを併記してあります</a>。Redis の文書から書き写したものではなく、実装から読み出したものです。",
               "q": "本当に Redis のドロップイン置き換えになりますか"
             },
             {
@@ -1764,7 +1764,7 @@
               "q": "認証はありますか"
             },
             {
-              "a": "<code>kevy-cli export</code> がキースペースをプレーンな RESP ファイルに書き出し、Redis 互換のサーバーなら、どれでもそれを取り込めます。そして <code>kevy-cli digest</code> が、何かを捨ててしまう前に、コピーが忠実であることを証明します。<a href=\"~/docs/migration/\">移行ガイド</a>は、入ってくる手順と同じ丁寧さで、出ていく手順も扱っています。",
+              "a": "<code>kevy-cli --kevy export</code> がキースペースをプレーンな RESP ファイルに書き出し、Redis 互換のサーバーなら、どれでもそれを取り込めます。そして <code>kevy-cli --kevy digest</code> が、何かを捨ててしまう前に、コピーが忠実であることを証明します。<a href=\"~/docs/migration/\">移行ガイド</a>は、入ってくる手順と同じ丁寧さで、出ていく手順も扱っています。",
               "q": "手狭になったら、あるいは気が変わったら"
             }
           ],
@@ -1791,7 +1791,7 @@
         },
         {
           "body": [
-            "<b>クライアントは変わりません。</b>kevy は RESP2 と RESP3 を話し、206 個のコマンドに応答します。既存のライブラリの接続先を変えるだけで、コードもそのまま、redis-cli もそのままです。新しく覚える SDK もプロトコルもありません。",
+            "<b>クライアントは変わりません。</b>kevy は RESP2 と RESP3 を話し、209 個のコマンドに応答します。既存のライブラリの接続先を変えるだけで、コードもそのまま、redis-cli もそのままです。新しく覚える SDK もプロトコルもありません。",
             "<b>だから本当の問題は、何が得られるのかだけです。</b>得られるものは 4 つあります。そのどれにも価値を感じないなら、Redis に留まってください。あれは見事なソフトウェアであり、乗り換えのための乗り換えは 1 週間の浪費です。"
           ],
           "h2": "Redis から移る",
@@ -1832,7 +1832,7 @@
           "caption": "Redis から export し、kevy に import して、両者が一致することを確かめます。以下のコマンドは、すべて実行したものです。",
           "h2": "移行の手順——Redis から",
           "t": "code",
-          "text": "# 1. dump what you want to move. it is a RESP file — readable,\n#    diffable, and it streams rather than loading into memory.\nkevy-cli export -p 6379 --prefix user: dump.resp\n-> exported 41023 keys -> dump.resp\n\n# 2. load it. --strict stops on the first error rather than\n#    limping onward with a half-migrated keyspace.\nkevy-cli import -p 6380 --strict dump.resp\n-> imported 82046 ok, 0 errors, offset 4108331\n\n# 3. prove they agree, rather than hoping.\nkevy-cli digest -p 6379 user:\nkevy-cli digest -p 6380 user:\n-> 41023 keys 3bca92aa52269300     # the same hash, or you did not migrate\n\n# an interrupted import resumes where it stopped:\nkevy-cli import -p 6380 --resume dump.resp"
+          "text": "# 1. dump what you want to move. it is a RESP file — readable,\n#    diffable, and it streams rather than loading into memory.\nkevy-cli -p 6379 -p 6380 -p 6379 -p 6380 --kevy export --prefix user: dump.resp\n-> exported 41023 keys -> dump.resp\n\n# 2. load it. --strict stops on the first error rather than\n#    limping onward with a half-migrated keyspace.\nkevy-cli import --strict dump.resp\n-> imported 82046 ok, 0 errors, offset 4108331\n\n# 3. prove they agree, rather than hoping.\nkevy-cli digest user:\nkevy-cli digest user:\n-> 41023 keys 3bca92aa52269300     # the same hash, or you did not migrate\n\n# an interrupted import resumes where it stopped:\nkevy-cli import -p 6380 --resume dump.resp"
         },
         {
           "body": [
@@ -1909,7 +1909,7 @@
           "text": "# 1. pick ONE workload. sessions are the usual first, because\n#    nothing joins against them and losing one is survivable.\n\n# 2. write to both for a week. reads still come from Postgres.\n#    you are checking that the shapes match, not that it is fast.\n\n# 3. flip reads to kevy. keep the dual write.\nredis-cli SET session:$SID \"$JSON\" EX 3600\n\n# 4. when it has been boring for a fortnight, drop the table.\n\n# then do the next workload. rate limits, then queues, then\n# whichever of your read paths a secondary index can answer."
         },
         {
-          "body": "同じ 3 つのコマンドが、逆向きにも使えます。<code>kevy-cli export</code> はプレーンな RESP ファイルを書き出し、Redis 互換のサーバーなら、どれでもそれを取り込めます。そして <code>digest</code> が、コピーが忠実であることを証明します。<a href=\"~/docs/migration/\">移行ガイドは、入ってくる手順と同じ丁寧さで、出ていく手順も扱っています</a>——動けなくなって留まられるより、きれいに出ていってもらうほうが、私たちとしてもずっといいと考えています。",
+          "body": "同じ 3 つのコマンドが、逆向きにも使えます。<code>kevy-cli --kevy export</code> はプレーンな RESP ファイルを書き出し、Redis 互換のサーバーなら、どれでもそれを取り込めます。そして <code>digest</code> が、コピーが忠実であることを証明します。<a href=\"~/docs/migration/\">移行ガイドは、入ってくる手順と同じ丁寧さで、出ていく手順も扱っています</a>——動けなくなって留まられるより、きれいに出ていってもらうほうが、私たちとしてもずっといいと考えています。",
           "kind": "note",
           "t": "callout",
           "title": "また出ていきたくなったら"
@@ -2101,7 +2101,7 @@
           "t": "recipe"
         },
         {
-          "cost": "<b>ランタイム SQL も join もありません。</b>サーバーは <code>SELECT</code> を未知のコマンドとして拒否します。<code>kevy-cli sql compile</code> はビルド時に PG/MySQL のスキーマファイルを上の宣言に変え、JOIN、サブクエリ、GROUP BY を名前つきで拒否して、それぞれを置き換えるレシピを指し示します。一意性は強制ではなく検証で、制約はエンジンのチェックではなくレシピです。<a href=\"~/docs/tiering/\">ティアリング</a>をオンにすれば、index-only クエリは全行コールドでも RAM だけで答えます——コールドな行を読むのは最後の <code>FIELDS</code> ページだけ、1 行 1 回です。",
+          "cost": "<b>ランタイム SQL も join もありません。</b>サーバーは <code>SELECT</code> を未知のコマンドとして拒否します。<code>kevy-cli --kevy sql compile</code> はビルド時に PG/MySQL のスキーマファイルを上の宣言に変え、JOIN、サブクエリ、GROUP BY を名前つきで拒否して、それぞれを置き換えるレシピを指し示します。一意性は強制ではなく検証で、制約はエンジンのチェックではなくレシピです。<a href=\"~/docs/tiering/\">ティアリング</a>をオンにすれば、index-only クエリは全行コールドでも RAM だけで答えます——コールドな行を読むのは最後の <code>FIELDS</code> ページだけ、1 行 1 回です。",
           "cost_t": "コストと制約",
           "goal": "リレーショナルなテーブルの読み取りパス——インデックスされた WHERE、残りのフィルタ、ORDER BY、ページング、COUNT——を、宣言 1 つで名前つきインデックスへコンパイルします。手元のスキーマファイルからでも。",
           "h2": "テーブル全体を、一度で宣言する",
@@ -2109,7 +2109,7 @@
             {
               "code": "TABLE.DECLARE orders PREFIX order: PK id COLUMN id str COLUMN customer i64 COLUMN status str COLUMN total f64 INDEX status range VALUES total customer ORDERPATH by_customer ON customer THEN total DESC\n-> OK",
               "do": "カラムも、インデックスも、ソートパスも、宣言 1 つで",
-              "note": "行はプレフィックス配下の普通のハッシュのままです——欠けたカラムは NULL。kevy-cli sql compile schema.sql が、CREATE TABLE / CREATE INDEX からこの行を出力します。"
+              "note": "行はプレフィックス配下の普通のハッシュのままです——欠けたカラムは NULL。kevy-cli --kevy sql compile schema.sql が、CREATE TABLE / CREATE INDEX からこの行を出力します。"
             },
             {
               "code": "IDX.QUERY orders.status EQ open FILTER total RANGE 2000 inf LIMIT 20\n-> 1) \"0\"\n   2) 1) \"order:1001\"  2) \"open\"\n\nIDX.COUNT orders.status EQ open\n-> (integer) 2",
@@ -2287,7 +2287,7 @@
               "title": "永続化"
             },
             {
-              "body": "206 個のコマンド。それぞれの本当のコストと、Redis との差異つき。",
+              "body": "209 個のコマンド。それぞれの本当のコストと、Redis との差異つき。",
               "go": "調べる",
               "href": "docs/commands/",
               "kicker": "リファレンス",
@@ -2674,7 +2674,7 @@
               "go": "单表服务型读",
               "href": "use/app-store/",
               "label": "表",
-              "note": "类型化列、二级索引、复合 ORDER BY 路径——连你的 PG/MySQL schema 文件也能编译（kevy-cli sql compile）。没有运行期 SQL，没有 join：那些留在 Postgres。"
+              "note": "类型化列、二级索引、复合 ORDER BY 路径——连你的 PG/MySQL schema 文件也能编译（kevy-cli --kevy sql compile）。没有运行期 SQL，没有 join：那些留在 Postgres。"
             },
             {
               "code": "# kevy.toml — a RAM budget for the whole store\n[tiering]\nbudget = \"70%\"               # or \"4gb\", or \"auto\"\n\n# past the budget, the coldest values spill to a disk log\n# and page back on access. a cold key is an ordinary key:\nGET archive:2019:q3          # pays one disk read, same reply\nTTL archive:2019:q3          # metadata answers from RAM\nSCAN 0 MATCH archive:*       # sees cold keys — one key table",
@@ -2705,7 +2705,7 @@
           "eyebrow": "为什么可以直接替换 Redis",
           "h2": "同样的协议。更高的吞吐。",
           "id": "swap",
-          "intro": "RESP2 和 RESP3，206 条命令——redis-cli 和你的客户端库不用改就能连。一台机器，16 核，loopback，五次取中位数。",
+          "intro": "RESP2 和 RESP3，209 条命令——redis-cli 和你的客户端库不用改就能连。一台机器，16 核，loopback，五次取中位数。",
           "note": "<b>LPUSH 和 ZADD 只领先 10% 和 15%。</b>如果 list 或者 sorted set 是你的热路径，那么性能就不是换过来的理由。<a href=\"~/benchmarks/\">完整的表格在这里，valkey 和 Dragonfly 也一起打了。</a>迁移只有三条命令——<a href=\"~/migrate/\">export、import、digest</a>——而且两个方向都能走。",
           "rows": [
             [
@@ -3045,7 +3045,7 @@
           "h2": "第三步——你要放弃什么",
           "items": [
             {
-              "a": "在协议层面，是的——RESP2 和 RESP3，206 条命令，你的客户端库不会察觉。在行为层面，大体上是，而例外恰恰是重点。跨 shard 的 <code>RENAME</code> 不是原子的——多键写只在单个 shard 内原子。另外 SCAN 的游标只在签发它的服务器上有效，与 Redis Cluster 的按节点性质相同。<a href=\"~/docs/commands/\">全部 206 条命令都标着真实的偏差和真实的代价</a>，这些是从实现里读出来的，不是从 Redis 的文档里抄来的。",
+              "a": "在协议层面，是的——RESP2 和 RESP3，209 条命令，你的客户端库不会察觉。在行为层面，大体上是，而例外恰恰是重点。跨 shard 的 <code>RENAME</code> 不是原子的——多键写只在单个 shard 内原子。另外 SCAN 的游标只在签发它的服务器上有效，与 Redis Cluster 的按节点性质相同。<a href=\"~/docs/commands/\">全部 209 条命令都标着真实的偏差和真实的代价</a>，这些是从实现里读出来的，不是从 Redis 的文档里抄来的。",
               "q": "它真的能直接替换 Redis 吗？"
             },
             {
@@ -3065,7 +3065,7 @@
               "q": "有认证吗？"
             },
             {
-              "a": "<code>kevy-cli export</code> 会把你的 keyspace 写成一个普通的 RESP 文件，任何 Redis 兼容的服务端都能导入它；<code>kevy-cli digest</code> 则在你扔掉任何东西之前，先证明这份拷贝没有走样。<a href=\"~/docs/migration/\">迁移指南</a>里，搬出去写得和搬进来一样细。",
+              "a": "<code>kevy-cli --kevy export</code> 会把你的 keyspace 写成一个普通的 RESP 文件，任何 Redis 兼容的服务端都能导入它；<code>kevy-cli --kevy digest</code> 则在你扔掉任何东西之前，先证明这份拷贝没有走样。<a href=\"~/docs/migration/\">迁移指南</a>里，搬出去写得和搬进来一样细。",
               "q": "如果我用得太大了，或者只是改主意了呢？"
             }
           ],
@@ -3092,7 +3092,7 @@
         },
         {
           "body": [
-            "<b>你的客户端不用改。</b>kevy 说 RESP2 和 RESP3，实现了 206 条命令。把你现有的库指过来就行，代码不动，redis-cli 不换。没有新的 SDK 要接，也没有新协议要学。",
+            "<b>你的客户端不用改。</b>kevy 说 RESP2 和 RESP3，实现了 209 条命令。把你现有的库指过来就行，代码不动，redis-cli 不换。没有新的 SDK 要接，也没有新协议要学。",
             "<b>所以真正要问的只有一句：你能换到什么。</b>只有四样。如果这四样对你都没有价值，那就留在 Redis——它是一件极好的软件，为换而换，只是白白搭进去一个星期。"
           ],
           "h2": "从 Redis 过来",
@@ -3133,7 +3133,7 @@
           "caption": "从 Redis 导出，导入 kevy，再校验两边一致。下面每一条命令都真的跑过。",
           "h2": "怎么从 Redis 搬过来",
           "t": "code",
-          "text": "# 1. dump what you want to move. it is a RESP file — readable,\n#    diffable, and it streams rather than loading into memory.\nkevy-cli export -p 6379 --prefix user: dump.resp\n-> exported 41023 keys -> dump.resp\n\n# 2. load it. --strict stops on the first error rather than\n#    limping onward with a half-migrated keyspace.\nkevy-cli import -p 6380 --strict dump.resp\n-> imported 82046 ok, 0 errors, offset 4108331\n\n# 3. prove they agree, rather than hoping.\nkevy-cli digest -p 6379 user:\nkevy-cli digest -p 6380 user:\n-> 41023 keys 3bca92aa52269300     # the same hash, or you did not migrate\n\n# an interrupted import resumes where it stopped:\nkevy-cli import -p 6380 --resume dump.resp"
+          "text": "# 1. dump what you want to move. it is a RESP file — readable,\n#    diffable, and it streams rather than loading into memory.\nkevy-cli -p 6379 --kevy export --prefix user: dump.resp\n-> exported 41023 keys -> dump.resp\n\n# 2. load it. --strict stops on the first error rather than\n#    limping onward with a half-migrated keyspace.\nkevy-cli -p 6380 --kevy import --strict dump.resp\n-> imported 82046 ok, 0 errors, offset 4108331\n\n# 3. prove they agree, rather than hoping.\nkevy-cli -p 6379 --kevy digest user:\nkevy-cli -p 6380 --kevy digest user:\n-> 41023 keys 3bca92aa52269300     # the same hash, or you did not migrate\n\n# an interrupted import resumes where it stopped:\nkevy-cli -p 6380 --kevy import --resume dump.resp"
         },
         {
           "body": [
@@ -3210,7 +3210,7 @@
           "text": "# 1. pick ONE workload. sessions are the usual first, because\n#    nothing joins against them and losing one is survivable.\n\n# 2. write to both for a week. reads still come from Postgres.\n#    you are checking that the shapes match, not that it is fast.\n\n# 3. flip reads to kevy. keep the dual write.\nredis-cli SET session:$SID \"$JSON\" EX 3600\n\n# 4. when it has been boring for a fortnight, drop the table.\n\n# then do the next workload. rate limits, then queues, then\n# whichever of your read paths a secondary index can answer."
         },
         {
-          "body": "同样这三条命令，反过来跑一遍就行。<code>kevy-cli export</code> 写出的是一个普通的 RESP 文件，任何 Redis 兼容的服务端都能导入，而 <code>digest</code> 能证明这份拷贝没有走样。<a href=\"~/docs/migration/\">迁移指南里，搬出去这件事</a>写得和搬进来一样细——我们宁可你走得干净，也不希望你是因为被卡住才留下。",
+          "body": "同样这三条命令，反过来跑一遍就行。<code>kevy-cli --kevy export</code> 写出的是一个普通的 RESP 文件，任何 Redis 兼容的服务端都能导入，而 <code>digest</code> 能证明这份拷贝没有走样。<a href=\"~/docs/migration/\">迁移指南里，搬出去这件事</a>写得和搬进来一样细——我们宁可你走得干净，也不希望你是因为被卡住才留下。",
           "kind": "note",
           "t": "callout",
           "title": "如果你以后又想走"
@@ -3402,7 +3402,7 @@
           "t": "recipe"
         },
         {
-          "cost": "<b>没有运行期 SQL，也没有 join。</b>服务端把 <code>SELECT</code> 当作未知命令拒绝；<code>kevy-cli sql compile</code> 在构建期把 PG/MySQL schema 文件变成上面这些声明，并按名拒绝 JOIN、子查询和 GROUP BY，同时指向替代它们的配方。唯一性是校验而非强制，约束是配方而非引擎检查。开着<a href=\"~/docs/tiering/\">分层存储</a>时，index-only 查询即使全部行都是冷的也只读 RAM——只有最后的 <code>FIELDS</code> 页会读冷行，每行一次。",
+          "cost": "<b>没有运行期 SQL，也没有 join。</b>服务端把 <code>SELECT</code> 当作未知命令拒绝；<code>kevy-cli --kevy sql compile</code> 在构建期把 PG/MySQL schema 文件变成上面这些声明，并按名拒绝 JOIN、子查询和 GROUP BY，同时指向替代它们的配方。唯一性是校验而非强制，约束是配方而非引擎检查。开着<a href=\"~/docs/tiering/\">分层存储</a>时，index-only 查询即使全部行都是冷的也只读 RAM——只有最后的 <code>FIELDS</code> 页会读冷行，每行一次。",
           "cost_t": "成本与限制",
           "goal": "一张关系型表的读路径——索引化的 WHERE、余下的过滤、ORDER BY、翻页、COUNT——由一条声明编译到具名索引上。或者直接由你现成的 schema 文件编译。",
           "h2": "整张表，一次声明",
@@ -3410,7 +3410,7 @@
             {
               "code": "TABLE.DECLARE orders PREFIX order: PK id COLUMN id str COLUMN customer i64 COLUMN status str COLUMN total f64 INDEX status range VALUES total customer ORDERPATH by_customer ON customer THEN total DESC\n-> OK",
               "do": "列、索引、排序路径，一条声明写完",
-              "note": "行仍是前缀下的普通 hash——缺列就是 NULL；kevy-cli sql compile schema.sql 会从 CREATE TABLE / CREATE INDEX 生成这一行。"
+              "note": "行仍是前缀下的普通 hash——缺列就是 NULL；kevy-cli --kevy sql compile schema.sql 会从 CREATE TABLE / CREATE INDEX 生成这一行。"
             },
             {
               "code": "IDX.QUERY orders.status EQ open FILTER total RANGE 2000 inf LIMIT 20\n-> 1) \"0\"\n   2) 1) \"order:1001\"  2) \"open\"\n\nIDX.COUNT orders.status EQ open\n-> (integer) 2",
@@ -3588,7 +3588,7 @@
               "title": "持久化"
             },
             {
-              "body": "206 条命令，每一条都标着真实代价和相对 Redis 的偏差。",
+              "body": "209 条命令，每一条都标着真实代价和相对 Redis 的偏差。",
               "go": "去查",
               "href": "docs/commands/",
               "kicker": "参考",

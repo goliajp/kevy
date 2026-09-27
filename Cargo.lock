@@ -476,17 +476,23 @@ dependencies = [
 [[package]]
 name = "kevy-chaos"
 version = "6.4.0"
+dependencies = [
+ "kevy-testnet",
+]
 
 [[package]]
 name = "kevy-cli"
 version = "6.4.0"
 dependencies = [
  "kevy-embedded",
+ "kevy-hash",
  "kevy-persist",
  "kevy-resp",
  "kevy-resp-client",
  "kevy-scalar",
  "kevy-sql",
+ "kevy-store",
+ "kevy-sys",
  "kevy-testnet",
  "kevy-tmpdir",
 ]

@@ -22,7 +22,7 @@
 #     comparison stays like-for-like. See
 #   - competitor version recorded in the output header.
 #
-# Output: markdown table rows for bench/PERF-LEDGER.md.
+# Output: markdown table rows in the shape of PERFORMANCE.md's key-value table.
 # Usage (lx64): bash bench/arena.sh <kevy-binary>
 set -u
 # ROOT: arena is the one documented exception to "bench scripts do not run

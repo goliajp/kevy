@@ -291,6 +291,15 @@ const CORPUS: &[&str] = &[
     "VIEW.CREATE wv QUERY wt.city EQ tokyo ORDER BY wt.city",
     "VIEW.LIST",
     "VIEW.INFO wv",
+    "TABLE.DESCRIBE wt",
+    "IDX.DESCRIBE wt.city",
+    "VIEW.DESCRIBE wv",
+    "TABLE.DESCRIBE nope",
+    "IDX.DESCRIBE nope",
+    "VIEW.DESCRIBE nope",
+    "IDX.CREATE wage ON PREFIX wrow: FIELD age TYPE i64 KIND range",
+    "IDX.DESCRIBE wage",
+    "IDX.DROP wage",
     "VIEW.DROP wv",
     "TABLE.DROP wt",
     // keyspace
@@ -672,14 +681,17 @@ fn embedded_answers_what_the_wire_answers() {
 const OWN_USAGE_LINE: &[&str] = &[
     "FAILOVER",
     "IDX.CREATE",
+    "IDX.DESCRIBE",
     "IDX.DROP",
     "REPL.WAIT",
     "TABLE.DECLARE",
+    "TABLE.DESCRIBE",
     "TABLE.DROP",
     "TABLE.ENSURE",
     "TABLE.REPLACE",
     "TABLE.VERIFY",
     "VIEW.CREATE",
+    "VIEW.DESCRIBE",
     "VIEW.DROP",
 ];
 

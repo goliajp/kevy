@@ -17,7 +17,7 @@
 # barely ahead (LPUSH: 10%), what we refuse to do (no cluster, no AUTH, no TLS),
 # and which commands do not behave the way Redis's docs say.
 #
-# Numbers: bench/PERF-LEDGER.md. Sizes: ls -l site/demo/pkg/kevy.wasm.
+# Numbers: PERFORMANCE.md. Sizes: ls -l site/demo/pkg/kevy.wasm.
 
 PAGES = {}
 
@@ -135,7 +135,7 @@ HSET u:1 id 1 name ada age 34 dept eng
 
 # the ORDER BY dept, age DESC walk — one composite index, no planner
 IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20 FIELDS name age""",
-                    "note": "Typed columns, secondary indexes, composite ORDER BY paths — even your PG/MySQL schema file, via kevy-cli sql compile. No runtime SQL, no joins: those stay in Postgres.",
+                    "note": "Typed columns, secondary indexes, composite ORDER BY paths — even your PG/MySQL schema file, via kevy-cli --kevy sql compile. No runtime SQL, no joins: those stay in Postgres.",
                     "go": "Single-table serving",
                     "href": "use/app-store/",
                 },
@@ -192,7 +192,7 @@ let mut store = Store::new_in(&mut arena);""",
             "eyebrow": "Why you can replace Redis",
             "h2": "Same protocol. More throughput.",
             "intro": (
-                "RESP2 and RESP3, 206 commands — redis-cli and your client library "
+                "RESP2 and RESP3, 209 commands — redis-cli and your client library "
                 "connect unchanged. One machine, 16 cores, loopback, median of five."
             ),
             "rows": [
@@ -290,7 +290,7 @@ PAGES["migrate"] = {
             "h2": "Coming from Redis",
             "body": [
                 "<b>Your client does not change.</b> kevy speaks RESP2 and RESP3 and "
-                "answers 206 commands. Point your existing library at it, keep your "
+                "answers 209 commands. Point your existing library at it, keep your "
                 "code, keep your redis-cli. There is no SDK to adopt and no new "
                 "protocol to learn.",
                 "<b>So the only real question is what you gain.</b> Four things, and "
@@ -352,21 +352,21 @@ PAGES["migrate"] = {
             "caption": "Export from Redis, import into kevy, and check the two agree. Every command below was run.",
             "text": """# 1. dump what you want to move. it is a RESP file — readable,
 #    diffable, and it streams rather than loading into memory.
-kevy-cli export -p 6379 --prefix user: dump.resp
+kevy-cli -p 6379 --kevy export --prefix user: dump.resp
 -> exported 41023 keys -> dump.resp
 
 # 2. load it. --strict stops on the first error rather than
 #    limping onward with a half-migrated keyspace.
-kevy-cli import -p 6380 --strict dump.resp
+kevy-cli -p 6380 --kevy import --strict dump.resp
 -> imported 82046 ok, 0 errors, offset 4108331
 
 # 3. prove they agree, rather than hoping.
-kevy-cli digest -p 6379 user:
-kevy-cli digest -p 6380 user:
+kevy-cli -p 6379 --kevy digest user:
+kevy-cli -p 6380 --kevy digest user:
 -> 41023 keys 3bca92aa52269300     # the same hash, or you did not migrate
 
 # an interrupted import resumes where it stopped:
-kevy-cli import -p 6380 --resume dump.resp""",
+kevy-cli -p 6380 --kevy import --resume dump.resp""",
         },
         {
             "t": "prose",
@@ -430,7 +430,7 @@ kevy-cli import -p 6380 --resume dump.resp""",
             "title": "And if you want to leave again",
             "body": (
                 "The same three commands run in the other direction. "
-                "<code>kevy-cli export</code> writes a plain RESP file that any "
+                "<code>kevy-cli --kevy export</code> writes a plain RESP file that any "
                 "Redis-compatible server will import, and <code>digest</code> proves "
                 "the copy is faithful. <a href=\"~/docs/migration/\">The migration "
                 "guide covers moving out</a> as carefully as moving in — we would much "
@@ -513,7 +513,7 @@ PAGES["choose"] = {
             "items": [
                 {
                     "q": "Is it really a drop-in replacement for Redis?",
-                    "a": "On the wire, yes — RESP2 and RESP3, 206 commands, and your client library will not notice. In behaviour, mostly, and the exceptions are the point. A cross-shard <code>RENAME</code> is not atomic — multi-key writes are atomic per shard, not globally. And a SCAN cursor is only valid on the server that issued it, the same per-node property Redis Cluster has. <a href=\"~/docs/commands/\">All 206 commands carry their real deviation and their real cost</a>, read out of the implementation rather than copied from Redis's documentation.",
+                    "a": "On the wire, yes — RESP2 and RESP3, 209 commands, and your client library will not notice. In behaviour, mostly, and the exceptions are the point. A cross-shard <code>RENAME</code> is not atomic — multi-key writes are atomic per shard, not globally. And a SCAN cursor is only valid on the server that issued it, the same per-node property Redis Cluster has. <a href=\"~/docs/commands/\">All 209 commands carry their real deviation and their real cost</a>, read out of the implementation rather than copied from Redis's documentation.",
                 },
                 {
                     "q": "Does the dataset have to fit in RAM?",
@@ -533,7 +533,7 @@ PAGES["choose"] = {
                 },
                 {
                     "q": "What if I outgrow it, or just change my mind?",
-                    "a": "<code>kevy-cli export</code> writes your keyspace to a plain RESP file that any Redis-compatible server will import, and <code>kevy-cli digest</code> proves the copy is faithful before you throw anything away. <a href=\"~/docs/migration/\">The migration guide</a> covers moving out as carefully as moving in.",
+                    "a": "<code>kevy-cli --kevy export</code> writes your keyspace to a plain RESP file that any Redis-compatible server will import, and <code>kevy-cli --kevy digest</code> proves the copy is faithful before you throw anything away. <a href=\"~/docs/migration/\">The migration guide</a> covers moving out as carefully as moving in.",
                 },
             ],
         },
@@ -719,7 +719,7 @@ HGETALL flags""",
             "items": [
                 {"kicker": "Guide", "title": "The cookbook", "body": "Working recipes for sessions, rate limits, leaderboards and feeds.", "go": "Read it", "href": "docs/cookbook/"},
                 {"kicker": "Guide", "title": "Persistence", "body": "What survives a kill -9, and what the fsync policy costs you.", "go": "Read it", "href": "docs/persistence/"},
-                {"kicker": "Reference", "title": "Every command", "body": "206 commands, each with its real cost and its deviation from Redis.", "go": "Look it up", "href": "docs/commands/"},
+                {"kicker": "Reference", "title": "Every command", "body": "209 commands, each with its real cost and its deviation from Redis.", "go": "Look it up", "href": "docs/commands/"},
             ],
         },
     ],
@@ -1249,7 +1249,7 @@ IDX.CREATE idx:status ON PREFIX order: FIELD status   TYPE str KIND range""",
             "items": [
                 {
                     "do": "Columns, indexes and sort paths, in one declaration",
-                    "note": "Rows stay ordinary hashes under the prefix — a missing column is NULL, and kevy-cli sql compile schema.sql emits this line from CREATE TABLE / CREATE INDEX.",
+                    "note": "Rows stay ordinary hashes under the prefix — a missing column is NULL, and kevy-cli --kevy sql compile schema.sql emits this line from CREATE TABLE / CREATE INDEX.",
                     "code": """TABLE.DECLARE orders PREFIX order: PK id COLUMN id str COLUMN customer i64 COLUMN status str COLUMN total f64 INDEX status range VALUES total customer ORDERPATH by_customer ON customer THEN total DESC
 -> OK""",
                 },
@@ -1270,7 +1270,7 @@ IDX.COUNT orders.status EQ open
             ],
             "cost": (
                 "<b>No runtime SQL and no joins.</b> The server refuses "
-                "<code>SELECT</code> as an unknown command; <code>kevy-cli sql "
+                "<code>SELECT</code> as an unknown command; <code>kevy-cli --kevy sql "
                 "compile</code> turns a PG/MySQL schema file into these declarations "
                 "at build time and refuses JOIN, subqueries and GROUP BY by name, "
                 "pointing at the recipe that replaces each. Uniqueness is "

@@ -12,10 +12,10 @@
 // the index definitions at the next start, after the command that
 // created them has already replied OK. That is a gap, not a
 // non-event, and it is written up as an open question rather than
-// silently accepted here: .claude/OPEN-QUESTIONS-6.4.md §3.
+// silently accepted here.
 #![expect(
     clippy::let_underscore_must_use,
-    reason = "the catalog has no other home; see .claude/OPEN-QUESTIONS-6.4.md"
+    reason = "the catalog has no other home; an open question"
 )]
 
 use crate::{KevyError, KevyResult};
@@ -210,6 +210,12 @@ impl Store {
     pub fn view_list(&self) -> Vec<(Vec<u8>, ViewMode, usize)> {
         let g = self.views.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         g.1.iter().map(|s| (s.name.clone(), s.mode, s.tree.leaves())).collect()
+    }
+
+    /// The declaration of the view named `name`, as the catalog holds it.
+    pub fn view_spec(&self, name: &[u8]) -> Option<kevy_index::ViewSpec> {
+        let g = self.views.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+        g.1.get(name).cloned()
     }
 
     /// Summed member count across shards.

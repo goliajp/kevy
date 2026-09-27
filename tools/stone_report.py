@@ -44,7 +44,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 ARCH = ROOT / "suite/architecture.toml"
 DEADSET = ROOT / "bench/DEAD-SET.json"
 DOCDIR = ROOT / "target/doc"
-OUT_MD = ROOT / "bench/STONE-REPORT.md"
+OUT_MD = ROOT / "target/reports/STONE-REPORT.md"
 OUT_JSON = ROOT / "bench/STONE-REPORT.json"
 
 
@@ -239,6 +239,7 @@ def write_md(rows, version, dead_platform):
                    f"{d.get('documented', 0)}/{d.get('items', 0)} "
                    f"({d.get('pct', 0):.0f}%) | {d.get('examples', 0)} | "
                    f"{dr} | {sv} |")
+    OUT_MD.parent.mkdir(parents=True, exist_ok=True)
     OUT_MD.write_text("\n".join(out) + "\n")
 
 

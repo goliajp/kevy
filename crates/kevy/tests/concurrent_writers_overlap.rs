@@ -48,7 +48,7 @@ const RUN_SECONDS: u64 = 3;
 #[ignore = "chaos test — opt-in via --ignored, needs `cargo build --release -p kevy` first"]
 fn concurrent_writers_overlap_no_fabrication() {
     let bin_path = resolve_kevy_bin();
-    let port = pick_free_port().expect("free port");
+    let port = pick_free_port();
     let tmp = std::env::temp_dir().join(format!("kevy-chaos-overlap-{port}"));
     let _ = std::fs::remove_dir_all(&tmp);
 

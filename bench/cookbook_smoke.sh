@@ -62,7 +62,9 @@ while IFS= read -r line; do
     # kevy-cli call in a $() substitution (the FEED recipes read the
     # shard generation that way), and a reader's PATH has kevy-cli
     # where this harness has a build product.
-    run=${run//kevy-cli/$CLI}
+    # `-e`: like redis-cli, kevy-cli exits 0 after printing an error reply
+    # unless asked not to, and this loop judges a recipe by its exit code.
+    run=${run//kevy-cli/$CLI -e}
     tries=0
     while :; do
         out=$(eval "$run" 2>&1)

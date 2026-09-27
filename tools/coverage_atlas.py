@@ -45,7 +45,7 @@ import tomllib
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 CORPUS = ROOT / "suite/corpus.toml"
 REGISTER = ROOT / "suite/dead-paths.toml"
-OUT_MD = ROOT / "bench/DEAD-ATLAS.md"
+OUT_MD = ROOT / "target/reports/DEAD-ATLAS.md"
 OUT_SET = ROOT / "bench/DEAD-SET.json"
 
 CODE_REGION = 0
@@ -581,6 +581,7 @@ def write_outputs(cfg, counts, rows, llvm_dead):
         crate = r["file"].split("/")[1] if r["file"].startswith("crates/") else "?"
         ev = r["evidence"].replace("|", "\\|")[:70]
         out.append(f"| {crate} | `{r['symbol']}` | {r['file']}:{r['line']} | {r['kind']} | `{ev}` |")
+    OUT_MD.parent.mkdir(parents=True, exist_ok=True)
     OUT_MD.write_text("\n".join(out) + "\n")
 
 

@@ -235,3 +235,26 @@ fn verb_arity_is_the_same_column_as_verb_meta() {
         .collect();
     assert!(mismatched.is_empty(), "the two arity columns disagree: {mismatched:?}");
 }
+
+/// kevy-cli answers `help` without a server from a copy of this server's
+/// `COMMAND DOCS` reply, byte for byte. A verb added here without refreshing
+/// that copy would be missing from offline help; this fails instead, and
+/// `KEVY_BLESS_CLI_DOCS=1` rewrites the copy.
+#[test]
+fn kevy_cli_offline_docs_are_this_servers_command_docs() {
+    let mut out = Vec::new();
+    let mut args = kevy_resp::Argv::with_capacity(2, 16);
+    args.push(b"COMMAND");
+    args.push(b"DOCS");
+    crate::cmd_command::cmd_command(&args, &mut out);
+    let copy = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../kevy-cli/src/rcli/docs/kevy-command-docs.resp");
+    if std::env::var_os("KEVY_BLESS_CLI_DOCS").is_some() {
+        std::fs::write(&copy, &out).expect("the kevy-cli copy is writable when blessing");
+    }
+    let held = std::fs::read(&copy).expect("kevy-cli's offline docs copy exists in the workspace");
+    assert!(
+        held == out,
+        "kevy-cli's offline COMMAND DOCS copy is stale: rerun with KEVY_BLESS_CLI_DOCS=1"
+    );
+}

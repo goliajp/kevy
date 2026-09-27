@@ -81,14 +81,32 @@ port() { python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));pri
 
 # One shard, so the log the wasm engine wrote is read as-is rather than
 # re-homed across sixteen: this gate is about the record format, not about
+# Wait for the server on $1, whose output is in $2, or fail saying which.
+# The loop this replaces broke on success and fell through on failure, so a
+# server that never came up produced writes that went nowhere and a node step
+# that tripped over the AOF file those writes would have made. That is the
+# error the gate reported: ENOENT on rev/aof-0.aof, a hundred lines from the
+# server that never started.
+await_server() {
+    for _ in $(seq 1 100); do
+        python3 -c "import socket,sys;s=socket.socket();s.settimeout(0.2);sys.exit(0 if s.connect_ex(('127.0.0.1',$1))==0 else 1)" && return 0
+        kill -0 "$SRV_PID" 2>/dev/null || {
+            echo "crossgate: FAIL — the server exited before it listened on $1:"
+            tail -3 "$2"
+            exit 1
+        }
+        sleep 0.1
+    done
+    echo "crossgate: FAIL — the server never accepted on $1 within 10s:"
+    tail -3 "$2"
+    exit 1
+}
+
 # the reshard path (which has its own tests).
 P=$(port)
 "$KBIN" --threads 1 --port "$P" --dir "$WORK/fwd" >"$WORK/fwd.log" 2>&1 &
 SRV_PID=$!
-for _ in $(seq 1 50); do
-    python3 -c "import socket,sys;s=socket.socket();s.settimeout(0.2);sys.exit(0 if s.connect_ex(('127.0.0.1',$P))==0 else 1)" && break
-    sleep 0.1
-done
+await_server "$P" "$WORK/fwd.log"
 
 FAIL=0
 say() { # name expected actual
@@ -131,10 +149,7 @@ mkdir -p "$WORK/rev"
 P=$(port)
 "$KBIN" --threads 1 --port "$P" --dir "$WORK/rev" >"$WORK/rev.log" 2>&1 &
 SRV_PID=$!
-for _ in $(seq 1 50); do
-    python3 -c "import socket,sys;s=socket.socket();s.settimeout(0.2);sys.exit(0 if s.connect_ex(('127.0.0.1',$P))==0 else 1)" && break
-    sleep 0.1
-done
+await_server "$P" "$WORK/rev.log"
 q SET back:str "written by the native engine" >/dev/null
 q RPUSH back:list one two >/dev/null
 q ZADD back:zset 2.5 bob >/dev/null

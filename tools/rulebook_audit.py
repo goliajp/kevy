@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """Where this repository stands against the rulebook, rule by rule.
 
-The rulebook (`~/.claude-shared/global/methodology/module-craft.md`) has
-50 rules. Six of them are locked by a gate here. The rest had never been
-counted, which meant "we follow the rulebook" was a claim with no
-reading behind it — and a claim like that is the thing the rulebook
-exists to replace.
+The rulebook has 50 rules. Six of them are locked by a gate here. The
+rest had never been counted, which meant "we follow the rulebook" was
+a claim with no reading behind it — and a claim like that is the thing
+the rulebook exists to replace.
 
 This produces the reading. Three verdicts, and the third is not a
 failure:
@@ -260,7 +259,8 @@ def main() -> int:
             rows.append((rid, scope, "READING", extra))
             reading += 1
 
-    out = ROOT / "quality/RULEBOOK-STATUS.md"
+    out = ROOT / "target/reports/RULEBOOK-STATUS.md"
+    out.parent.mkdir(parents=True, exist_ok=True)
     with out.open("w") as f:
         f.write("# The rulebook against this repository\n\n")
         f.write(f"{len(RULES)} rules. **{locked} locked by a gate**, "

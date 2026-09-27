@@ -15,6 +15,8 @@
 //! separate, intentionally narrower surface and stays untouched.
 
 mod bitmap;
+#[cfg(feature = "index")]
+mod describe;
 mod hash;
 #[cfg(feature = "index")]
 mod idx;
@@ -87,6 +89,7 @@ fn dispatch_index(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>) -> 
         || idx_query::dispatch(s, up, argv, out)
         || view::dispatch(s, up, argv, out)
         || table::dispatch(s, up, argv, out)
+        || describe::dispatch(s, up, argv, out)
 }
 
 #[cfg(not(feature = "index"))]
@@ -257,10 +260,12 @@ pub(crate) const DISPATCH_VERBS: &[&str] = &[
     "IDX.ADVISE",
     "IDX.COUNT",
     "IDX.CREATE",
+    "IDX.DESCRIBE",
     "IDX.DROP",
     "IDX.LIST",
     "IDX.QUERY",
     "VIEW.CREATE",
+    "VIEW.DESCRIBE",
     "VIEW.DROP",
     "VIEW.LIST",
     "VIEW.QUERY",
@@ -270,6 +275,7 @@ pub(crate) const DISPATCH_VERBS: &[&str] = &[
     "TABLE.DROP",
     "TABLE.LIST",
     "TABLE.VERIFY",
+    "TABLE.DESCRIBE",
     // conn face
     "ECHO",
     "PING",

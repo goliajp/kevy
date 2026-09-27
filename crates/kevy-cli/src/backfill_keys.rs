@@ -29,7 +29,7 @@ use std::collections::BTreeSet;
 use std::io::{self, Write};
 use std::process::ExitCode;
 
-use kevy_resp_client::RespClient;
+use crate::link::Link;
 
 /// Where a set of item names comes from.
 #[derive(Debug)]
@@ -87,7 +87,7 @@ pub struct Union {
 }
 
 /// Read every source and union their names.
-pub fn collect(client: &mut RespClient, sources: &[Source]) -> io::Result<Union> {
+pub fn collect(client: &mut dyn Link, sources: &[Source]) -> io::Result<Union> {
     let mut per_source: Vec<BTreeSet<Vec<u8>>> = Vec::with_capacity(sources.len());
     let mut names: Vec<Vec<u8>> = Vec::new();
     let mut seen: BTreeSet<Vec<u8>> = BTreeSet::new();
@@ -124,7 +124,7 @@ fn account(labels: &[String], per_source: &[BTreeSet<Vec<u8>>]) -> Vec<SourceRep
         .collect()
 }
 
-fn read_source(client: &mut RespClient, s: &Source) -> io::Result<Vec<Vec<u8>>> {
+fn read_source(client: &mut dyn Link, s: &Source) -> io::Result<Vec<Vec<u8>>> {
     match s {
         Source::Index(key) => crate::collections::members(client, key),
         Source::Prefix { prefix, keep } => read_prefix(client, prefix, *keep),
@@ -140,7 +140,7 @@ fn read_source(client: &mut RespClient, s: &Source) -> io::Result<Vec<Vec<u8>>> 
 /// Every key under a prefix, stripped unless the caller wants the key
 /// itself: stripped names line up with the members of an index, which
 /// is what makes the union meaningful.
-fn read_prefix(client: &mut RespClient, prefix: &str, keep: bool) -> io::Result<Vec<Vec<u8>>> {
+fn read_prefix(client: &mut dyn Link, prefix: &str, keep: bool) -> io::Result<Vec<Vec<u8>>> {
     Ok(crate::collections::scan_prefix(client, prefix)?
         .into_iter()
         .map(|k| if keep { k } else { k[prefix.len().min(k.len())..].to_vec() })
@@ -169,40 +169,23 @@ pub fn print_report(u: &Union) {
     };
 }
 
-/// The command line: host, port, and the sources in the order given.
-fn parse_args(args: &[String]) -> (String, u16, Vec<Source>) {
-    let (mut host, mut port) = (crate::DEFAULT_HOST.to_string(), crate::DEFAULT_PORT);
+/// The sources, in the order given.
+fn parse_args(args: &[String]) -> Result<Vec<Source>, String> {
     let (mut sources, mut keep) = (Vec::new(), false);
-    let mut i = 0;
-    while i < args.len() {
-        let has_val = i + 1 < args.len();
-        match args[i].as_str() {
-            "-h" if has_val => {
-                host = args[i + 1].clone();
-                i += 2;
+    let mut scan = crate::tools::argscan::Scan::new(args);
+    while let Some(word) = scan.next() {
+        match word {
+            "--keep-prefix" => keep = true,
+            "--from-index" => sources.push(Source::Index(scan.value(word)?.to_string())),
+            "--from-prefix" => {
+                sources.push(Source::Prefix { prefix: scan.value(word)?.to_string(), keep: false })
             }
-            "-p" if has_val => {
-                port = args[i + 1].parse().unwrap_or(crate::DEFAULT_PORT);
-                i += 2;
-            }
-            "--keep-prefix" => {
-                keep = true;
-                i += 1;
-            }
-            "--from-index" if has_val => {
-                sources.push(Source::Index(args[i + 1].clone()));
-                i += 2;
-            }
-            "--from-prefix" if has_val => {
-                sources.push(Source::Prefix { prefix: args[i + 1].clone(), keep: false });
-                i += 2;
-            }
-            "--from-file" if has_val => {
-                sources.push(Source::File(args[i + 1].clone()));
-                i += 2;
-            }
-            _ => i += 1,
+            "--from-file" => sources.push(Source::File(scan.value(word)?.to_string())),
+            other => return Err(crate::tools::argscan::unexpected(other)),
         }
+    }
+    if sources.is_empty() {
+        return Err("give at least one source".into());
     }
     if keep {
         for s in &mut sources {
@@ -211,36 +194,34 @@ fn parse_args(args: &[String]) -> (String, u16, Vec<Source>) {
             }
         }
     }
-    (host, port, sources)
+    Ok(sources)
 }
 
 /// `backfill-keys [-h host] [-p port] --from-index K --from-prefix P
-/// [--keep-prefix] --from-file F …`
+/// [--keep-prefix] --from-file F …`: connects with its own `-h`/`-p` (the
+/// pre-`--kevy` form), then [`run_on`] the rest.
 pub fn run_backfill_keys_cli(args: &[String]) -> ExitCode {
-    let (host, port, sources) = parse_args(args);
-    if sources.is_empty() {
-        eprintln!("kevy-cli backfill-keys: give at least one source");
-        eprintln!(
-            "usage: kevy-cli backfill-keys [-h host] [-p port] \
-             [--from-index <key>] [--from-prefix <p> [--keep-prefix]] [--from-file <path>] …"
-        );
-        return ExitCode::FAILURE;
-    }
-    emit(&host, port, &sources)
+    crate::tools::bare::with_private_connection("backfill-keys", args, run_on)
 }
 
-/// Names to stdout, accounting to stderr. A source that cannot be read
-/// is an error rather than an empty contribution — a silently empty
-/// source is exactly the hole this command exists to close.
-fn emit(host: &str, port: u16, sources: &[Source]) -> ExitCode {
-    let mut client = match RespClient::connect(host, port) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("kevy-cli backfill-keys: could not connect to {host}:{port}: {e}");
+/// `backfill-keys --from-index K --from-prefix P [--keep-prefix]
+/// --from-file F …` on `client`. Names to stdout, accounting to stderr. A
+/// source that cannot be read is an error rather than an empty
+/// contribution — a silently empty source is exactly the hole this command
+/// exists to close.
+pub(crate) fn run_on(client: &mut dyn Link, args: &[String]) -> ExitCode {
+    let sources = match parse_args(args) {
+        Ok(s) => s,
+        Err(msg) => {
+            eprintln!("kevy-cli backfill-keys: {msg}");
+            eprintln!(
+                "usage: kevy-cli --kevy backfill-keys [--from-index <key>] \
+                 [--from-prefix <p> [--keep-prefix]] [--from-file <path>] …"
+            );
             return ExitCode::FAILURE;
         }
     };
-    let u = match collect(&mut client, sources) {
+    let u = match collect(client, &sources) {
         Ok(u) => u,
         Err(e) => {
             eprintln!("kevy-cli backfill-keys: {e}");

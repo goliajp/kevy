@@ -26,7 +26,7 @@ range|unique [MAXMEM <bytes>]`
 - `IDX.COUNT <name> RANGE|EQ …`——不物化键，直接计数。
 - **非标量 kind 用自己的词表回答 `VERIFY`。** `KIND agg` 答 `rows / bytes / excluded / groups`；`KIND text` 答 `docs / bytes / postings / tokens`；`KIND ann` 答 `vectors / bytes / tombstones / links / rebuild_recommended`。它们都**不打印** `drift` / `missing`——审计的那个问题（"这个条目所指的行还派生这个值吗"）适用于按行键的条目，而它们的条目是组、倒排项和图节点。（这些数字曾被贴着标量标签打印：一个健康的 3 文档 text 索引答过 `coerce_failures 7, duplicates 7`——那是它的 postings 与 token 数，却穿着完整性告警的名字。）
 - **这对聚合的计数值意味着什么**：运行中的累计值**在运行时从不与键空间重算**，所以它与现实是否一致，靠的是每一条写路径都维护了它——而这件事 `IDX.VERIFY` 对这个 kind **证伪不了**。替它做这件事的是测试：`index_write_path_coverage` 在每个动词之后把组的计数与真实存活的行对账。
-- `IDX.VERIFY <name>`——汇总统计：entries、bytes、coerce_failures、duplicates，外加**审计的两个方向**：`drift`（条目所指的行已经没了、不再能强制转换、或转换成了另一个值）在 `checked` 个条目上，以及 `missing`（前缀下能派生出值、却没有条目的行）。健康的索引上两者都应为零；**`missing` 是走索引自己的条目那一趟看不见的方向**。`kevy-cli doctor` 把这句话变成一个对所有已声明表的退出码，于是「应当为零」可以是一条 cron，而不是某个人记得去查的事（[table-migration.md](table-migration.md#8-让-verify-成为运维的一部分而不是迁移的一步)）。
+- `IDX.VERIFY <name>`——汇总统计：entries、bytes、coerce_failures、duplicates，外加**审计的两个方向**：`drift`（条目所指的行已经没了、不再能强制转换、或转换成了另一个值）在 `checked` 个条目上，以及 `missing`（前缀下能派生出值、却没有条目的行）。健康的索引上两者都应为零；**`missing` 是走索引自己的条目那一趟看不见的方向**。`kevy-cli --kevy doctor` 把这句话变成一个对所有已声明表的退出码，于是「应当为零」可以是一条 cron，而不是某个人记得去查的事（[table-migration.md](table-migration.md#8-让-verify-成为运维的一部分而不是迁移的一步)）。
 - `IDX.LIST`——目录，加上每个索引的状态 / 条目数 / 字节数。
 - 游标契约属于 SCAN 类：整趟遍历期间稳定存在的行**恰好**被看到一次；并发的插入 / 删除可能出现，也可能不出现。`"0"` = 起点 / 已耗尽。
 

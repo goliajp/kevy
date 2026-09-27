@@ -139,20 +139,20 @@ $CLI -p $SRC DBSIZE
 
 echo "== step 2: export (timed) =="
 T0=$(date +%s)
-$CLI export -p $SRC "$DIR/dump.kevy" || { echo "drill: EXPORT FAILED"; exit 1; }
+$CLI -p $SRC --kevy export "$DIR/dump.kevy" || { echo "drill: EXPORT FAILED"; exit 1; }
 echo "export took $(( $(date +%s) - T0 ))s, size: $(du -h "$DIR/dump.kevy" | cut -f1)"
 
 echo "== step 3: import --strict into fresh server (timed) =="
 DPID=$(start_server $DST "$DIR/dst")
 T0=$(date +%s)
-$CLI import -p $DST --strict "$DIR/dump.kevy" || { echo "drill: IMPORT FAILED"; exit 1; }
+$CLI -p $DST --kevy import --strict "$DIR/dump.kevy" || { echo "drill: IMPORT FAILED"; exit 1; }
 echo "import took $(( $(date +%s) - T0 ))s"
 
 echo "== step 4: per-prefix digest/diff both ends =="
 DIFF_OK=1
 for pfx in msg: mbox: usr: tag: session:; do
-    A=$($CLI digest -p $SRC $pfx)
-    B=$($CLI digest -p $DST $pfx)
+    A=$($CLI -p $SRC --kevy digest $pfx)
+    B=$($CLI -p $DST --kevy digest $pfx)
     # session: TTLs decay but digest excludes TTL; counts must match
     if [ "$A" = "$B" ]; then
         echo "  $pfx OK ($A)"
@@ -168,17 +168,17 @@ stop_server $DPID $DST
 rm -rf "$DIR/dst"; mkdir -p "$DIR/dst"
 DPID=$(start_server $DST "$DIR/dst")
 rm -f "$DIR/dump.kevy.progress"
-( $CLI import -p $DST --strict "$DIR/dump.kevy" >/dev/null 2>&1 ) &
+( $CLI -p $DST --kevy import --strict "$DIR/dump.kevy" >/dev/null 2>&1 ) &
 IMP=$!
 sleep 3
 kill -9 $IMP 2>/dev/null
 MID=$($CLI -p $DST DBSIZE)
 echo "  killed importer mid-flight at dbsize=$MID"
 T0=$(date +%s)
-$CLI import -p $DST --resume --strict "$DIR/dump.kevy" || { echo "drill: RESUME FAILED"; exit 1; }
+$CLI -p $DST --kevy import --resume --strict "$DIR/dump.kevy" || { echo "drill: RESUME FAILED"; exit 1; }
 echo "  resume took $(( $(date +%s) - T0 ))s"
-A=$($CLI digest -p $SRC msg:)
-B=$($CLI digest -p $DST msg:)
+A=$($CLI -p $SRC --kevy digest msg:)
+B=$($CLI -p $DST --kevy digest msg:)
 if [ "$A" = "$B" ]; then
     echo "  post-resume msg: digest OK"
 else
@@ -221,10 +221,10 @@ $CLI -p $DST IDX.QUERY m_ts RANGE 1700000000 1700000100 LIMIT 5 | head -3
 
 echo "== step 7: copy-prefix --rate / delete-prefix round trip =="
 T0=$(date +%s)
-$CLI copy-prefix -p $DST usr: usrbak: --rate 5000 || { echo "drill: COPY FAILED"; exit 1; }
+$CLI -p $DST --kevy copy-prefix usr: usrbak: --rate 5000 || { echo "drill: COPY FAILED"; exit 1; }
 echo "  copy-prefix 20k @5000/s took $(( $(date +%s) - T0 ))s (expect ~4s)"
-$CLI digest -p $DST usrbak: | grep -q "20000" && echo "  usrbak: count OK"
-$CLI delete-prefix -p $DST usrbak: --rate 10000 >/dev/null
-$CLI digest -p $DST usrbak: | grep -q "^0 " && echo "  delete-prefix clean"
+$CLI -p $DST --kevy digest usrbak: | grep -q "20000" && echo "  usrbak: count OK"
+$CLI -p $DST --kevy delete-prefix usrbak: --rate 10000 >/dev/null
+$CLI -p $DST --kevy digest usrbak: | grep -q "^0 " && echo "  delete-prefix clean"
 
 echo "drill: ALL STEPS PASS"

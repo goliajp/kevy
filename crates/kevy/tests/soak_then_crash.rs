@@ -46,7 +46,7 @@ fn soak_then_crash_no_corruption_no_degradation() {
     let soak_seconds: u64 =
         std::env::var("SOAK_SECONDS").ok().and_then(|s| s.parse().ok()).unwrap_or(30);
     let bin_path = resolve_kevy_bin();
-    let port = pick_free_port().expect("free port");
+    let port = pick_free_port();
     let tmp = std::env::temp_dir().join(format!("kevy-chaos-soak-{port}"));
     let _ = std::fs::remove_dir_all(&tmp);
 

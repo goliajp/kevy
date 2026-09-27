@@ -80,7 +80,7 @@ UDSの信頼境界は**ファイルシステム**です。UnixソケットにRES
 | 観測 | `lsof` / `ss -xl` | `ss -tln`、`netstat`、`tcpdump` |
 | クライアント設定 | `unix:///path`または`-s /path` | `host:port` |
 
-スループットの利得はワークロードの形に依存します。最も得をするのは小ペイロード・低コネクション数のセル（ループバックのopあたりの税が支配的だったところ）で、CPU飽和セルの利得は小さくなります（トランスポートがフロアではなかったためです）。実測値は[bench/REPORT.md](https://github.com/goliajp/kevy/blob/develop/bench/REPORT.md)を参照してください。
+スループットの利得はワークロードの形に依存します。最も得をするのは小ペイロード・低コネクション数のセル（ループバックのopあたりの税が支配的だったところ）で、CPU飽和セルの利得は小さくなります（トランスポートがフロアではなかったためです）。実測値は[PERFORMANCE.md](https://github.com/goliajp/kevy/blob/develop/PERFORMANCE.md)を参照してください。
 
 ## FAQ
 

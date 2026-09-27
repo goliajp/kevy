@@ -65,12 +65,16 @@
 pub(crate) mod addr;
 pub mod checksum;
 pub(crate) mod ffi;
+mod interrupt;
 mod lockfile;
 mod mem;
+mod pty;
 #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos", target_os = "ios"))]
 mod random;
 mod signal;
 mod socket;
+mod term;
+mod wait;
 mod waker;
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -78,12 +82,16 @@ mod poller_ep;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod poller_kq;
 
+pub use interrupt::{
+    install_interrupt, note_interrupts, sever_on_interrupt, take_noted, take_severed,
+};
 pub use lockfile::flock_try_exclusive;
 pub use mem::{detected_memory_bound, fadvise_dontneed_all, malloc_trim_now, process_rss_bytes};
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub use poller_ep::Poller;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use poller_kq::Poller;
+pub use pty::open_pty;
 #[cfg(any(
     target_os = "linux",
     target_os = "android",
@@ -93,6 +101,8 @@ pub use poller_kq::Poller;
 pub use random::fill_random;
 pub use signal::{SIGINT, SIGTERM, SIGXFSZ, install_signal_handler};
 pub use socket::{Socket, tcp_listen, tcp_listen_reuseport, unix_listen};
+pub use term::{RawMode, terminal_columns};
+pub use wait::wait_readable;
 pub use waker::{Waker, waker};
 
 // ---- Poller ----------------------------------------------------------------

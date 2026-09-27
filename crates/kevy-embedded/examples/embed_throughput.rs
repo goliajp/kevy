@@ -7,8 +7,8 @@
 //!
 //! The architectures aren't apples-to-apples — valkey and redis have
 //! no in-process mode, so the only fair statement is "embed skips the
-//! wire layer; here is how much that saves." The 3-way table in
-//! `bench/REPORT.md` lays it out explicitly.
+//! wire layer; here is how much that saves." PERFORMANCE.md has the
+//! same-caller table.
 //!
 //! Run: `cargo run -p kevy-embedded --example embed_throughput --release`
 //!

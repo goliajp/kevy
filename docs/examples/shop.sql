@@ -1,5 +1,5 @@
 -- The shop schema, ported from PG (docs/cookbook.md §22).
--- Compile: kevy-cli sql compile docs/examples/shop.sql
+-- Compile: kevy-cli --kevy sql compile docs/examples/shop.sql
 
 CREATE TABLE users (
   id     bigserial PRIMARY KEY,

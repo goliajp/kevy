@@ -103,10 +103,10 @@ PYEOF
 
 # ---- clamp 1+2: export → import, throughput ----
 T0=$(date +%s.%N)
-$CLI export -p $PA --prefix mig: "$DIR/dump.resp" || exit 1
+$CLI -p $PA --kevy export --prefix mig: "$DIR/dump.resp" || exit 1
 T1=$(date +%s.%N)
 echo "onrampgate: export took $(echo "$T1 - $T0" | bc)s"
-IMP_OUT=$($CLI import -p $PB --strict "$DIR/dump.resp") || exit 1
+IMP_OUT=$($CLI -p $PB --kevy import --strict "$DIR/dump.resp") || exit 1
 T2=$(date +%s.%N)
 echo "onrampgate: $IMP_OUT"
 CMDS=$(echo "$IMP_OUT" | grep -oE "[0-9]+ ok" | grep -oE "[0-9]+")
@@ -117,8 +117,8 @@ if [ "$RATE" -lt 200000 ]; then
     echo "onrampgate: FAIL — import rate ${RATE}/s < 200k/s"
     exit 1
 fi
-DA=$($CLI digest -p $PA mig:)
-DB=$($CLI digest -p $PB mig:)
+DA=$($CLI -p $PA --kevy digest mig:)
+DB=$($CLI -p $PB --kevy digest mig:)
 echo "onrampgate: digest A=$DA B=$DB"
 if [ "$DA" != "$DB" ]; then
     echo "onrampgate: FAIL — round-trip digest mismatch"
@@ -126,9 +126,9 @@ if [ "$DA" != "$DB" ]; then
 fi
 
 # ---- clamp 3: kill -9 mid-import → resume ----
-$CLI delete-prefix -p $PB mig: >/dev/null
+$CLI -p $PB --kevy delete-prefix mig: >/dev/null
 rm -f "$DIR/dump.resp.progress"
-$CLI import -p $PB "$DIR/dump.resp" >/dev/null 2>&1 &
+$CLI -p $PB --kevy import "$DIR/dump.resp" >/dev/null 2>&1 &
 IMP=$!
 # Kill once progress is REAL, not after a fixed nap: a fresh import now
 # writes offset 0 at open, and on a cold page cache the first batch can
@@ -147,8 +147,8 @@ if [ "$OFF" = "0" ]; then
     echo "onrampgate: FAIL — no progress recorded before kill"
     exit 1
 fi
-$CLI import -p $PB --resume --strict "$DIR/dump.resp" >/dev/null || exit 1
-DB2=$($CLI digest -p $PB mig:)
+$CLI -p $PB --kevy import --resume --strict "$DIR/dump.resp" >/dev/null || exit 1
+DB2=$($CLI -p $PB --kevy digest mig:)
 if [ "$DA" != "$DB2" ]; then
     echo "onrampgate: FAIL — post-resume digest mismatch ($DA vs $DB2)"
     exit 1
@@ -157,7 +157,7 @@ echo "onrampgate: resume after kill -9 converged"
 
 # ---- clamp 4: rate accuracy ±20% (2000 keys @ 1000/s ≈ 2s) ----
 T0=$(date +%s.%N)
-$CLI delete-prefix -p $PB --rate 1000 mig:h: >/dev/null || exit 1
+$CLI -p $PB --kevy delete-prefix --rate 1000 mig:h: >/dev/null || exit 1
 T1=$(date +%s.%N)
 SECS=$(echo "$T1 - $T0" | bc)
 echo "onrampgate: rated delete of 20k keys @1000/s took ${SECS}s (expect ~20s ±20%)"

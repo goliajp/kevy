@@ -1888,7 +1888,7 @@ fn wait_replica_gen_learned(replica_port: u16) -> u64 {
 /// for this test crate) — the faithful topology for primary+replica
 /// pairs (one server per process, each with its own state).
 fn spawn_primary_process(replication_base: u16) -> (kevy_chaos::Harness, u16, std::path::PathBuf) {
-    let port = kevy_chaos::pick_free_port().expect("primary port");
+    let port = kevy_chaos::pick_free_port();
     let dir = std::env::temp_dir().join(format!("kevy-v316-primary-{port}"));
     let _ = std::fs::remove_dir_all(&dir);
     let cfg = kevy_chaos::HarnessConfig {
@@ -1927,7 +1927,7 @@ fn wait_with_no_replica_times_out_to_zero_and_wait_zero_is_immediate() {
 
 #[test]
 fn wait_one_with_live_replica_returns_at_least_one() {
-    let replication_base = kevy_chaos::pick_free_port().expect("repl port");
+    let replication_base = kevy_chaos::pick_free_port();
     let (primary, pport, pdir) = spawn_primary_process(replication_base);
     let replica = AttachedReplica::start(replication_base);
     let mut c = std::net::TcpStream::connect(("127.0.0.1", pport)).unwrap();
@@ -1968,7 +1968,7 @@ fn repl_token_on_primary_reports_live_per_shard_pairs() {
 
 #[test]
 fn repl_wait_read_your_writes_and_future_token_misdirects() {
-    let replication_base = kevy_chaos::pick_free_port().expect("repl port");
+    let replication_base = kevy_chaos::pick_free_port();
     let (primary, pport, pdir) = spawn_primary_process(replication_base);
     let replica = AttachedReplica::start(replication_base);
     let _gen = wait_replica_gen_learned(replica.port);

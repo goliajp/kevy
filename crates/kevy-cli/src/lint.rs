@@ -31,7 +31,8 @@ use std::collections::BTreeMap;
 use std::io;
 use std::process::ExitCode;
 
-use kevy_resp_client::{Reply, RespClient};
+use crate::link::Link;
+use kevy_resp_client::Reply;
 
 /// What the owner-keyed collections under a prefix look like together.
 #[derive(Debug)]
@@ -51,7 +52,7 @@ pub struct Overlap {
 }
 
 /// Read every collection under `prefix` and see whether they intersect.
-pub fn overlap(client: &mut RespClient, prefix: &str) -> io::Result<Overlap> {
+pub fn overlap(client: &mut dyn Link, prefix: &str) -> io::Result<Overlap> {
     let keys = crate::collections::scan_prefix(client, prefix)?;
     let mut owners_of: BTreeMap<Vec<u8>, Vec<String>> = BTreeMap::new();
     let (mut owners, mut skipped) = (0usize, 0usize);
@@ -113,7 +114,7 @@ impl Coincidence {
 /// Sample rows under a prefix and find column pairs that nearly always
 /// carry the same value.
 pub fn column_pairs(
-    client: &mut RespClient,
+    client: &mut dyn Link,
     prefix: &str,
     sample: usize,
     threshold: u32,
@@ -154,7 +155,7 @@ fn coincidences(rows: &[BTreeMap<String, Vec<u8>>], threshold: u32) -> Vec<Coinc
     out
 }
 
-fn hgetall(client: &mut RespClient, key: &[u8]) -> io::Result<BTreeMap<String, Vec<u8>>> {
+fn hgetall(client: &mut dyn Link, key: &[u8]) -> io::Result<BTreeMap<String, Vec<u8>>> {
     let reply = client.request_borrowed(&[b"HGETALL", key])?;
     let flat = crate::collections::bulks(reply);
     Ok(flat
@@ -165,7 +166,7 @@ fn hgetall(client: &mut RespClient, key: &[u8]) -> io::Result<BTreeMap<String, V
 }
 
 /// The declared prefix of a table, from `TABLE.LIST`.
-fn table_prefix(client: &mut RespClient, table: &str) -> io::Result<String> {
+fn table_prefix(client: &mut dyn Link, table: &str) -> io::Result<String> {
     let Reply::Array(tables) = client.request_borrowed(&[b"TABLE.LIST"])? else {
         return Err(io::Error::other("TABLE.LIST did not answer with a list"));
     };
@@ -180,57 +181,65 @@ fn table_prefix(client: &mut RespClient, table: &str) -> io::Result<String> {
     Err(io::Error::other(format!("no declared table named '{table}'")))
 }
 
-/// `lint overlap --prefix <p>` / `lint columns <table> [--sample N]
-/// [--threshold PCT]`
+/// `lint [-h host] [-p port] overlap --prefix <p>` / `lint [-h host] [-p port]
+/// columns <table> [--sample N] [--threshold PCT]`: connects with its own
+/// `-h`/`-p` (the pre-`--kevy` form), then [`run_on`] the rest.
 pub fn run_lint_cli(args: &[String]) -> ExitCode {
-    let (mut host, mut port) = (crate::DEFAULT_HOST.to_string(), crate::DEFAULT_PORT);
-    let (mut prefix, mut table) = (String::new(), String::new());
-    let (mut sample, mut threshold) = (1000usize, 90u32);
-    let sub = args.first().cloned().unwrap_or_default();
-    let mut i = 1;
-    while i < args.len() {
-        let val = args.get(i + 1);
-        match (args[i].as_str(), val) {
-            ("-h", Some(v)) => host = v.clone(),
-            ("-p", Some(v)) => port = v.parse().unwrap_or(crate::DEFAULT_PORT),
-            ("--prefix", Some(v)) => prefix = v.clone(),
-            ("--sample", Some(v)) => sample = v.parse().unwrap_or(sample),
-            ("--threshold", Some(v)) => threshold = v.parse().unwrap_or(threshold),
-            (other, _) if !other.starts_with('-') && table.is_empty() => {
-                table = other.to_string();
-                i += 1;
-                continue;
-            }
-            _ => {
-                i += 1;
-                continue;
-            }
+    crate::tools::bare::with_private_connection("lint", args, run_on)
+}
+
+/// What `lint` takes besides the connection.
+struct LintArgs {
+    sub: String,
+    prefix: String,
+    table: String,
+    sample: usize,
+    threshold: u32,
+}
+
+fn parse_lint(args: &[String]) -> Result<LintArgs, String> {
+    let mut scan = crate::tools::argscan::Scan::new(args);
+    let sub = scan.next().unwrap_or_default().to_string();
+    let mut a =
+        LintArgs { sub, prefix: String::new(), table: String::new(), sample: 1000, threshold: 90 };
+    while let Some(word) = scan.next() {
+        match word {
+            "--prefix" => a.prefix = scan.value("--prefix")?.to_string(),
+            "--sample" => a.sample = scan.number("--sample")?,
+            "--threshold" => a.threshold = scan.number("--threshold")?,
+            w if !w.starts_with('-') && a.table.is_empty() => a.table = w.to_string(),
+            other => return Err(crate::tools::argscan::unexpected(other)),
         }
-        i += 2;
     }
-    let mut client = match RespClient::connect(&host, port) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("kevy-cli lint: could not connect to {host}:{port}: {e}");
-            return ExitCode::FAILURE;
-        }
+    Ok(a)
+}
+
+/// `lint overlap --prefix <p>` / `lint columns <table> [--sample N]
+/// [--threshold PCT]` on `client`.
+pub(crate) fn run_on(client: &mut dyn Link, args: &[String]) -> ExitCode {
+    let a = match parse_lint(args) {
+        Ok(a) => a,
+        Err(msg) => return lint_usage(&msg),
     };
-    match sub.as_str() {
-        "overlap" => run_overlap(&mut client, &prefix),
-        "columns" => run_columns(&mut client, &table, sample, threshold),
-        other => {
-            eprintln!("kevy-cli lint: unknown subcommand '{other}'");
-            eprintln!("usage: kevy-cli lint overlap --prefix <p>");
-            eprintln!("       kevy-cli lint columns <table> [--sample N] [--threshold PCT]");
-            ExitCode::FAILURE
-        }
+    match a.sub.as_str() {
+        "overlap" if a.table.is_empty() => run_overlap(client, &a.prefix),
+        "overlap" => lint_usage(&format!("unexpected '{}'", a.table)),
+        "columns" => run_columns(client, &a.table, a.sample, a.threshold),
+        other => lint_usage(&format!("unknown subcommand '{other}'")),
     }
+}
+
+fn lint_usage(msg: &str) -> ExitCode {
+    eprintln!("kevy-cli lint: {msg}");
+    eprintln!("usage: kevy-cli --kevy lint overlap --prefix <p>");
+    eprintln!("       kevy-cli --kevy lint columns <table> [--sample N] [--threshold PCT]");
+    ExitCode::FAILURE
 }
 
 /// Overlap is an answer, not a hint: a column cannot carry a dimension
 /// that names more than one owner, so a non-empty intersection exits
 /// non-zero and a declaring script stops.
-fn run_overlap(client: &mut RespClient, prefix: &str) -> ExitCode {
+fn run_overlap(client: &mut dyn Link, prefix: &str) -> ExitCode {
     if prefix.is_empty() {
         eprintln!("kevy-cli lint overlap: --prefix names the family of owner keys");
         return ExitCode::FAILURE;
@@ -267,7 +276,7 @@ fn run_overlap(client: &mut RespClient, prefix: &str) -> ExitCode {
 
 /// Coincidence is a suspicion — two columns may legitimately agree —
 /// so this reports and exits zero whatever it finds.
-fn run_columns(client: &mut RespClient, table: &str, sample: usize, threshold: u32) -> ExitCode {
+fn run_columns(client: &mut dyn Link, table: &str, sample: usize, threshold: u32) -> ExitCode {
     if table.is_empty() {
         eprintln!("kevy-cli lint columns: name a declared table");
         return ExitCode::FAILURE;

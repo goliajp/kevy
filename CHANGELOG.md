@@ -1012,8 +1012,7 @@ greedy and lazy quantifiers, and it did not match.
 `C-STRUCT-PRIVATE` — 740 public fields on public structs — is a real
 finding and cannot ship in a minor: adding a private field to an
 all-public struct is `struct-add-private-field-when-public`, MAJOR by
-Cargo's own table. It is recorded in `quality/API-GUIDELINES.md` with
-that identifier, as a v7 item rather than a thing that got dropped.
+Cargo's own table. It is recorded with that identifier as a v7 item rather than a thing that got dropped.
 
 ### Upgrading
 
@@ -2844,7 +2843,7 @@ touches the cold tier.
   multi-KB durable blobs (4 KB ~5-10× — the AOF appends every value
   byte, mmap re-dirties a page). In-memory kevy wins every size.
 - **Measured against the native embedded stores, per language** (a new
-  `bench/embeddedgate` harness + `bench/EMBEDDED-LEDGER.md`): kevy's
+  `bench/embeddedgate` harness; results in PERFORMANCE.md): kevy's
   scalar path vs Go's bbolt / badger, Node's better-sqlite3, and LMDB
   (from C directly and from C# via LightningDB), losing axes named.
   kevy's `kevy_get_shared` zero-copy read is flat ~12 ns at every value
@@ -2984,8 +2983,8 @@ failure is now closed, each behind an executable gate.
   partial state came from the shape of the commit loop, not from when it
   synced.
 - Both were reported by a consumer evaluating kevy-embedded as a primary
-  store, with an empirical reproduction against the published 3.18.0:
-  `docs/DEFECT-REPORT-2026-07-20-ATOMIC-ERROR-PATH.md`. **3.18.0 is
+  store, with an empirical reproduction against the published 3.18.0.
+  **3.18.0 is
   affected and has no fix released.**
 
 - **A transaction could not read the collections it was writing.**
@@ -3097,7 +3096,7 @@ failure is now closed, each behind an executable gate.
   3.60×). kevy's own throughput went *up* (GET 6.39 → 7.24 M/s); the
   competitors' went up more. SET is unchanged at 4.00×. Still 7/7 wins
   across GET/SET/INCR/SADD/HSET/ZADD/LPUSH. Raw run in
-  `bench/ARENA-2026-07-19.txt`, ledger entry in `bench/PERF-LEDGER.md`.
+  `bench/ARENA-2026-07-19.txt`.
 - The method line lost its "precision-mode with CI95 < 1%" claim for
   those rows: the arena is median-of-5 with per-cell stdev, and kevy's
   GET cell sits at 3.1%. Quoting a precision figure from a different
@@ -3295,8 +3294,7 @@ verification depth the high-blast-radius stones always deserved:
 - miri now also covers kevy-ring and kevy-store's zset suite in CI;
   all 18 stone crates enforce #![warn(missing_docs)]; a ~380-item
   clippy pedantic sweep (90 real fixes, everything else waivered
-  with written reasons); microbench baselines for the six stones in
-  bench/STONE-BENCH.md.
+  with written reasons); microbench baselines for the six stones.
 - Toolchain: Rust 1.97.0 (rust-version now actually inherited by
   all 32 crates), every GitHub Action on its current major, Docker
   base image current.
@@ -3318,8 +3316,7 @@ The polish wave — docs and toolchain truth:
   pages) polished to natural です・ます with full-width kutōten.
 - README benchmark SET row synced to the v3.17.0 release arena
   (6.39 M/s, 4.00x vs valkey 9.1).
-- .claude hygiene discipline (runtime residue + release gating)
-  recorded as hard rules; 16 committed AOF residue files purged and
+- Runtime-residue hygiene recorded as hard rules; 16 committed AOF residue files purged and
   the repo root now ignores runtime data files.
 
 ## 3.17.3
@@ -3509,7 +3506,7 @@ full ledger below). Highlights per train follow.
 Every train since v3.0.0 in one release. The arc's charter: measure
 the REAL gaps against living competitors (valkey 9.1, redis-stack
 7.4.7 / RediSearch), attack only what measurement confirms, and keep
-every win under a ratchet. The account (bench/PERF-LEDGER.md):
+every win under a ratchet:
 
 - **Bare face vs valkey 9.1** — kevy sweeps all 7 command classes at
   1.6-3.3× (GET 3.0×, SET 3.33×), fair-fight protocol, gaps far
@@ -3576,7 +3573,7 @@ lists · v3.6 ANN campaign · v3.8 this ledger close.
 
 ### v3.3 — baseline arena (the real gap table)
 
-- bench/PERF-LEDGER.md: kevy vs valkey 9.1 and vs redis-stack 7.4.7
+- kevy vs valkey 9.1 and vs redis-stack 7.4.7
   (RediSearch) under a fair-fight protocol. Bare face: kevy sweeps
   1.6-3.3×. Serving face: FTS tie+21% qps, AGG 110×, NUMERIC 2.3×,
   ANN behind 3.8× — the v3.6 campaign target.
@@ -3642,7 +3639,7 @@ ratchet), each merged only fully green. This release is the sum:
 - **Validation arc** (v2.11): servinggate (row-list 0.24ms / write
   fan-out 64µs on the full stack), chaosfsck (crash-survivor ==
   fresh rebuild), 32M-key mixed soak (13ms worst rewrite stall),
-  and the cross-train VALIDATION-LEDGER.
+  and a cross-train reconciliation of every declared line.
 
 New docs arc: designing-on-kevy (six planes + the three laws +
 REFUSED table), the RDS→kevy cookbook (15 recipes), migration,
@@ -3693,7 +3690,7 @@ train, versions bump at ship time.
   ANN) + a materialized view on ONE server — mixed p99 rowlist
   0.45ms / view 0.31ms / knn 7.5ms / get 0.083ms; worst PING stall
   through BGREWRITEAOF at 32M keys: 13ms (vs the 2s envelope).
-- **bench/VALIDATION-LEDGER.md**: cross-train reconciliation — every
+- **Validation**: cross-train reconciliation — every
   declared perf line, memory formula, durability contract and
   documented approximation vs its measured value.
 
@@ -4011,9 +4008,8 @@ test result: ok. 1 passed; 0 failed in 3600.46s
 | v1.45.x MISDIRECTED elect_port | v1.45 | CLOSED in v1.55 |
 | v1.49.x INFO memory empty | v1.49 | CLOSED in v2.0.1 (not a bug) |
 | v1.52.x CLIENT SETNAME persistence | v1.52 | CLOSED in v2.0.16 |
-| Linux CI `blocking_cross_shard.rs` | session-recent | CLOSED at v2.0.14 |
 
-**Total v1.x findings closed**: 8 of 8 (+ the bonus Linux CI follow-up). **Net v2-arc + v2.0.x patch line**: every open finding from the v2 chaos suite + every mailrs-feedback gap closed.
+**Total v1.x findings closed**: 8 of 8. **Net v2-arc + v2.0.x patch line**: every open finding from the v2 chaos suite + every mailrs-feedback gap closed.
 
 ### Fix — crates.io publish chain unblocked
 
@@ -4206,7 +4202,6 @@ jedis: CLIENT GETNAME = "$14\r\njedis-client-1\r\n"
 |---|---|---|
 | v1.52.x CLIENT SETNAME | v1.52.0 | **CLOSED in v2.0.16** |
 | v1.33.x Linux replication | v1.33.0 | CLOSED in v2.0.15 |
-| Linux CI `blocking_cross_shard.rs` | session-recent | CLOSED at v2.0.14 |
 | v1.49.x INFO memory empty | v1.49.0 | CLOSED in v2.0.1 |
 | v1.34.x 1h opt-in soak | v1.34.0 | **running on lx64 background** at v2.0.15 |
 
@@ -4249,7 +4244,6 @@ Pre-fix: `redis-cli PING` hung indefinitely; the chaos test recorded 0 primary-A
 | # | Surfaced | Status |
 |---|---|---|
 | v1.33.x Linux replication chaos | v1.33.0 | **CLOSED in v2.0.15** |
-| Linux CI `blocking_cross_shard.rs` failures | session-recent | **CLOSED at v2.0.14** (resolved by an earlier ship; verified passing 8/8 on lx64 at v2.0.14) |
 | v1.34.x 1h opt-in soak on lx64 | v1.34.0 | open — runtime budget |
 | v1.49.x INFO memory empty when keyspace empty | v1.49.0 | CLOSED in v2.0.1 (not a bug) |
 | v1.52.x CLIENT SETNAME persistence | v1.52.0 | open — needs `dispatch_into` trait refactor |
@@ -4853,7 +4847,7 @@ test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; finished in 0.21s
 
 ### Why this is a v2.0.x patch, not part of v1.57
 
-The v1.57 ship validated the new behaviour via a new chaos test (`cluster_known_nodes_count.rs`) but never re-ran the gated-off unit tests under the new binary. The release workflow caught it; the local autorun shipped through v1.58 / v1.59 / v2.0.0 / v2.0.1 with red Release jobs (caught at v2.0.1 retrospect). Fixing it now keeps the production v2.0.x line cleanly green.
+The v1.57 ship validated the new behaviour via a new chaos test (`cluster_known_nodes_count.rs`) but never re-ran the gated-off unit tests under the new binary. The release workflow caught it; local releases shipped through v1.58 / v1.59 / v2.0.0 / v2.0.1 with red Release jobs (caught at v2.0.1 retrospect). Fixing it now keeps the production v2.0.x line cleanly green.
 
 ### v2.0.x patch cadence
 
@@ -4912,7 +4906,7 @@ The canonical narrative — what v2.0 changes, what it doesn't, the acceptance g
 ### TL;DR
 
 - **Drop-in upgrade from any v1.x.** Same config file, same data dir, same wire format. AOF replays cleanly across the v1.x → v2.0 boundary (validated by the v1.47 AOF-compat chaos test).
-- **Same performance as v1.45 baseline.** The v2 arc was hardening, not micro-optimization. Bench headlines in [`bench/REPORT.md`](bench/REPORT.md).
+- **Same performance as v1.45 baseline.** The v2 arc was hardening, not micro-optimization. Bench headlines in [`PERFORMANCE.md`](PERFORMANCE.md).
 - **0 deps stays 0 deps.** Same three carved exemptions (`kevy-client-async`, `kevy-lua`, `kevy-lua-host`); default server stack remains zero third-party deps.
 - **AUTH / TLS stays out of scope** per project charter. Single-DC, intranet-only.
 
@@ -5666,7 +5660,7 @@ The MISDIRECTED reply contains nodeA's **elect_port** address (`127.0.0.1:51957`
 
 ## [v1.44.0] — 2026-06-30 (v2 roadmap Phase C step 2 — kevy-elect peer formation + node-death survivor chaos)
 
-**Theme**: v2 roadmap Phase C step 2 of 5. Chaos test for kevy-elect peer formation in a 3-node cluster + node-death survivor invariant. v1.44.0 ships a tighter scope (peer formation + survivor) than the original XL "replication failover + quorum vote" scope — that becomes v1.44.x or v1.45+. The tightening lets autorun progress toward v1.47 / Phase D without blocking on a multi-week sprint.
+**Theme**: v2 roadmap Phase C step 2 of 5. Chaos test for kevy-elect peer formation in a 3-node cluster + node-death survivor invariant. v1.44.0 ships a tighter scope (peer formation + survivor) than the original XL "replication failover + quorum vote" scope — that becomes v1.44.x or v1.45+.
 
 ### Added
 
@@ -6636,9 +6630,9 @@ A3 (16.7 conns/shard) is the sweet spot per the RFC heuristic `accept_shards ≈
 
 The architectural changes are doing real work. Throughput stays neutral because the saved cycles overlap with kernel TCP work (rep_movs at 16 %, nft_do_chain 2.4 %, syscall path) and don't shorten the total per-op cycle.
 
-### Verified — methodology v1.2 §9 Pre-Phase-B gate compliance
+### Verified — where c100 GET spends its time
 
-`perf record` on c100 GET (`--call-graph dwarf,32768`) found **NO actionable userspace symbol ≥ 10 pp self-time**. The 40 % `run_uring` aggregate decomposes to ~50 % syscall chain (`tcp_sendmsg_locked` 21.22 % inclusive → `__tcp_transmit_skb` 17.76 % → softirq), ~25 % `spin_loop` PAUSE, ~10 % softirq processing, ~5-15 % actual userspace dispatch. Every ≥ 10 pp symbol is kernel-side or already-attacked. Methodology gate says NO Phase B userspace attack is justified.
+`perf record` on c100 GET (`--call-graph dwarf,32768`) found **NO actionable userspace symbol ≥ 10 pp self-time**. The 40 % `run_uring` aggregate decomposes to ~50 % syscall chain (`tcp_sendmsg_locked` 21.22 % inclusive → `__tcp_transmit_skb` 17.76 % → softirq), ~25 % `spin_loop` PAUSE, ~10 % softirq processing, ~5-15 % actual userspace dispatch. Every ≥ 10 pp symbol is kernel-side or already-attacked, so no further userspace change is justified by this profile.
 
 ### Project standing perf claim — first doc-of-record
 
@@ -6651,19 +6645,12 @@ Specific axes:
 - Collections (SADD/HSET/ZADD/LPUSH/RPUSH/LRANGE): kevy 2-core ties valkey 10-core (per-core kevy more efficient)
 - Pub/sub fan-out: kevy 4-7× ahead at small msg; **+8.9 % ahead** at subs=50 size=4 KB (yesterday's "-3 % loss" was valkey 24% noise misread)
 - Tail latency: kevy clearly better at c100-P1 SET (max 0.559 ms vs valkey 1.207 ms) and c50-P16 pipelined (2.5× p50)
-- `-d 65536 SET`: kevy 2-core -5 %, 10-core fair-core -13 % (loopback-bound; 3 Phase B attacks all throughput-neutral via methodology v1.2 §9 gate compliance)
+- `-d 65536 SET`: kevy 2-core -5 %, 10-core fair-core -13 % (loopback-bound; three userspace changes were all throughput-neutral)
 
 ### Reverted / not shipped
 
 - **B3 C2+C3** (bareset enum + dispatch_bareset_owned via dispatch_batch fallback) — implemented round 5, perf-record showed userspace memcpy REGRESSED 6.93 pp (synthesize_set_frame on cross-shard fallback added a memcpy). REVERTED 2026-06-29. Replaced by B2-alt + Option A which avoid the cross-shard regression.
-- **A7 conn-density-aware spin_limit** — implemented round 15, throughput-neutral on both targeted workloads (bigval-SET fair-core: -1.2 %, c100 GET: -0.5 %, both within noise). REVERTED 2026-06-29. The c100 GET decomposition's "conn-density tax" was source-only Phase A reasoning; methodology v1.2 §9 gate added in round 10 would have caught it before implementation (the gate was added BECAUSE of rounds 1-5 findings; rounds 18-19 applied it correctly on c100 GET v1.29 binary).
-
-### Methodology — global doc upgrade
-
-`~/.claude-shared/global/methodology/perf-decomposition-vs-polish.md` upgraded **v1.1 → v1.2**:
-- §1 triggers blacklist gained 3 new anti-patterns: **"memcpys are the gap"** / **"structural Rust type forces memcpy"** / **"single run shows -X% loss"** (each session-derived).
-- New §8 case study: "kevy bigval-SET / pub/sub 9 轮 autorun 周期" (parallel to luna fib_28 §7). Records the 7-commit chain + 4 Discovery findings + Top-N prediction-vs-measured table.
-- New §9: **Phase A → Phase B 双 gate 协议**. Pre-Phase-A gate: must measure competitor baseline variance (median-of-3 + stdev) before reporting a gap. Pre-Phase-B gate: must perf-record verify Top-1 attack target ≥ 10 pp self-time before any code change.
+- **A7 conn-density-aware spin_limit** — implemented round 15, throughput-neutral on both targeted workloads (bigval-SET fair-core: -1.2 %, c100 GET: -0.5 %, both within noise). REVERTED 2026-06-29. The "conn-density tax" it targeted was inferred from source, not measured.
 
 ### Per-crate bumps
 
@@ -6785,7 +6772,7 @@ SSCAN/HSCAN/ZSCAN) is included transitively in v1.27.6's tag.
 
 ## [v1.27.5] — 2026-06-24 (Sidekiq + node-redlock ecosystem unblock)
 
-User: "都跑" — run BOTH Sidekiq (Ruby) and node-redlock end-to-end against kevy. Surfaced 4 more missing commands; all fixed in this same session per the no-defer rule.
+Sidekiq (Ruby) and node-redlock run end to end against kevy. The run surfaced 4 more missing commands; all are fixed in this release.
 
 ### node-redlock — **9/9 passed**
 Acquire / release / mutual-exclusion / extend-TTL / multi-key with shared `{hashtag}` / `using()` callback pattern. All canonical Redlock Lua scripts ran clean through kevy v1.27.4's EVAL stack.
@@ -6819,8 +6806,7 @@ Wired in `dispatch_collections_v127.rs` next to v1.27.3's BullMQ helpers. Route/
 
 ## [v1.27.4] — 2026-06-24 (multi-shard EVAL routing — BullMQ on default 16-shard)
 
-Closes the v1.27.3 multi-shard EVAL inner-call gap **in the same
-session**. v1.27.3 worked under `--threads 1`; the silent
+Closes the v1.27.3 multi-shard EVAL inner-call gap. v1.27.3 worked under `--threads 1`; the silent
 mis-route on `--threads > 1` is now fixed.
 
 ### Two changes
@@ -7233,7 +7219,7 @@ reached crates.io / GH Releases. Two changes vs the v1.25.0 tag:
   bare-metal runner the perf work already runs on; 16 cores / 64 GB
   RAM, no ENOMEM).
 - Comprehensive doc sweep landing on top: README.md (en/ja/zh),
-  bench/REPORT.md, crates/kevy-embedded/README.md, kevy-sys + kevy
+  crates/kevy-embedded/README.md, kevy-sys + kevy
   READMEs, docs/tuning.md (en/ja/zh), and a new docs/uds.md (en/ja/zh)
   covering precision-bench numbers + embed-server联合 deployment
   shapes — see commit `25e074b`.
@@ -7251,8 +7237,7 @@ Everything below remains true (it's the v1.25.0 entry, unchanged).
 ## [v1.25.0] — 2026-06-22 (decomposition-driven perf sprint + UDS support)
 
 This release adopts and ships the
-**decomposition-then-attack methodology** (
-adapted from the SPG project's `PERF_METHODOLOGY_VS_FOSS.md`). Every
+**decomposition-then-attack method**. Every
 v1.25 attack started from a per-axis Phase A decomposition
 that enumerated 18+ stages of
 the kevy and valkey paths side-by-side, file:line × atomic-op-count,
@@ -7306,22 +7291,13 @@ Both negative results are recorded as R3 ★ flipped predictions.
 
 11 bench docs rewritten in commit `dcaeadc`: removed "tied / kernel-bound / loopback
 floor / valkey absorbed / structural ceiling / RTT-bound hides X"
-claims, replaced with file:line + atomic-op-count + named fix paths
-per the methodology's R2.
-
-### v1.25 — Methodology rule + memory artifacts
-
-- R1-R8 codified rules for kevy +
-  any future vs-FOSS project. CLAUDE.md project link added.
-- Auto-memory entry `feedback-perf-vs-foss-decomposition` records
-  the methodology + my own pre-adoption mistakes (V125-AXIS-* dev
-  trail) as negative-learning case studies.
+claims, replaced with file:line + atomic-op-count + named fix paths.
 
 ---
 
-## [v1.24.1] — UNRELEASED, superseded by v1.25.0 (autorun perf sprint on top of v1.24.0)
+## [v1.24.1] — UNRELEASED, superseded by v1.25.0 (perf sprint on top of v1.24.0)
 
-User-authorized **autorun** continuation of the v1.23 → v1.24 perf
+A continuation of the v1.23 → v1.24 perf
 sprint, layered on top of E13 (THP-aligned mmap, v1.24.0). 11 perf
 attacks shipped, 3 retired-with-rationale, 3 audit-closed, 1 deferred.
 
@@ -8695,7 +8671,7 @@ Minor release: AOF `appendfsync always` group commit. Workspace 1.5.1 →
   is not on disk until `end_group`, then fully durable). Full workspace
   tests + clippy green; compat3 differential 135/135 vs valkey 9.1 + redis
   7.4. Regression A/B (lx64): no GET/SET hot-path change; 3-way still leads
-  (kevy io_uring ~2.2× valkey / ~1.7× redis). See `bench/REPORT.md`.
+  (kevy io_uring ~2.2× valkey / ~1.7× redis).
 
 ## [v1.5.1] — 2026-06-07
 
@@ -8772,7 +8748,7 @@ change).
 Patch release rolling up the v1.4.1 follow-ups: an XREAD BLOCK bug fix,
 two CI/release hardening jobs that catch the exact failure modes the
 v1.4.0 → v1.4.1 sequence exposed, and a workspace-wide src/*.rs ≤ 500
-LOC sweep (every production file now matches the CLAUDE.md house rule;
+LOC sweep (every production file now stays within 500 lines;
 test files exempt per Rust community norm).
 
 No public API breaks. New trait method `Commands::resolve_block_argv`
@@ -8815,7 +8791,7 @@ recompile unchanged.
 ### Changed — internal refactor (no API surface)
 
 - All production `src/*.rs` files now ≤ 500 LOC and every `fn` ≤ 50
-  LOC, matching the CLAUDE.md house rule. Test files (`tests.rs`
+  LOC. Test files (`tests.rs`
   modules) are exempt per the Rust community norm and remain
   uncapped.
 - New sibling modules carry the lifted-out code; each keeps its

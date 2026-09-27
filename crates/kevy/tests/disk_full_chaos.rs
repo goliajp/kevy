@@ -32,7 +32,7 @@ const FSIZE_CAP_BYTES: u64 = 256 * 1024;
 #[ignore = "chaos test (Unix) — opt-in via --ignored, needs `cargo build --release -p kevy` first"]
 fn disk_full_kevy_stays_alive_after_rlimit_fsize() {
     let bin_path = resolve_kevy_bin();
-    let port = pick_free_port().expect("free port");
+    let port = pick_free_port();
     let tmp = std::env::temp_dir().join(format!("kevy-chaos-diskfull-{port}"));
     let _ = std::fs::remove_dir_all(&tmp);
 
@@ -135,7 +135,7 @@ fn disk_full_kevy_stays_alive_after_rlimit_fsize() {
     drop(h);
 
     // Strict: a fresh kevy on the same data dir MUST come back.
-    let port2 = pick_free_port().expect("free port");
+    let port2 = pick_free_port();
     let mut cfg2 = HarnessConfig::new(tmp.clone(), port2).with_fsync("everysec");
     cfg2.kevy_bin = resolve_kevy_bin();
     cfg2.threads = 1;

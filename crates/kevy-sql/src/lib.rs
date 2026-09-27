@@ -35,6 +35,7 @@
 #![warn(missing_docs)]
 
 mod ast;
+mod declared;
 mod fold;
 mod fold_parse;
 mod lex;
@@ -43,6 +44,7 @@ mod parse_dump;
 mod parse_view;
 mod plan;
 mod render;
+mod run;
 mod schema;
 mod typemap;
 mod viewplan;
@@ -158,6 +160,7 @@ impl Compilation {
 pub use fold::{Folded, fold_select};
 pub use kevy_scalar::Scalar;
 pub use plan::{Plan, PlanEntry, Served, plan};
+pub use run::{select_card, table_ddl};
 
 /// Compile a whole SQL schema file into a [`Compilation`].
 ///

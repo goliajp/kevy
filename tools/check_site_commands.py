@@ -99,6 +99,35 @@ def split_argv(line):
     return out
 
 
+def await_server(srv):
+    """The connection, once the server accepts; None after saying why not.
+
+    This slept 1.5s and then connected once. Under a load average of 22 the
+    server had not finished starting, the connect was refused, and the gate
+    reported a ConnectionRefusedError traceback — which reads as a defect in
+    the tree rather than as a busy machine. Polling also lets a server that
+    died be told apart from one still starting; the two produce the same
+    refusal on the port, and only one of them is worth a stack trace.
+    """
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        if srv.poll() is not None:
+            err = (srv.stderr.read() or "").strip().splitlines()
+            print(f"check_site_commands: the server exited with {srv.returncode} before it "
+                  f"listened: {err[-1] if err else 'it said nothing'}")
+            return None
+        try:
+            s = socket.create_connection(("127.0.0.1", PORT), timeout=3)
+            s.settimeout(3)
+            return s
+        except OSError:
+            time.sleep(0.05)
+    srv.kill()
+    print(f"check_site_commands: the server was still running after 30s and never accepted "
+          f"on {PORT}")
+    return None
+
+
 def main():
     if not KEVY.exists():
         # Not a skip. `check_doc_toml` had this exact shape — print SKIP,
@@ -184,13 +213,13 @@ def main():
 
     srv = subprocess.Popen(
         [str(KEVY), "--port", str(PORT), "--dir", "/tmp/kevy-cmdgate"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
     )
-    time.sleep(1.5)
     bad, n = [], 0
     try:
-        s = socket.create_connection(("127.0.0.1", PORT), timeout=3)
-        s.settimeout(3)
+        s = await_server(srv)
+        if s is None:
+            return 1
         for f, body in blocks:
             for line in commands_in(body):
                 argv = split_argv(PLACEHOLDER.sub("x", line))

@@ -34,7 +34,7 @@ const OFFERED_CONNS: usize = 500;
 #[ignore = "chaos test (Unix) — opt-in via --ignored, needs `cargo build --release -p kevy` first"]
 fn fd_exhaust_kevy_stays_alive_refuses_cleanly() {
     let bin_path = resolve_kevy_bin();
-    let port = pick_free_port().expect("free port");
+    let port = pick_free_port();
     let tmp = std::env::temp_dir().join(format!("kevy-chaos-fdex-{port}"));
     let _ = std::fs::remove_dir_all(&tmp);
 

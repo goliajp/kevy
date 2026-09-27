@@ -30,8 +30,7 @@ pub const SIGXFSZ: c_int = 25;
 /// **This obligation is on the caller and this function is safe, which
 /// is a mismatch.** A safe function that admits undefined behaviour when
 /// its (unenforceable) precondition is broken should be `unsafe`, and
-/// making it so is a breaking change this crate has not taken yet — see
-/// `.claude/OPEN-QUESTIONS-6.4.md`. Every caller in this workspace is an
+/// making it so is a breaking change this crate has not taken yet. Every caller in this workspace is an
 /// atomic store or a no-op, so nothing is wrong today; what is missing
 /// is anything making that a requirement rather than a coincidence.
 ///

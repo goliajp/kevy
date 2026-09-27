@@ -41,13 +41,13 @@
 ```
 # 从你的 RDS 导出生成重建帧（每行一条 HSET）：
 #   HSET user:42 name ada email ada@example.com …
-kevy-cli import -p 6004 --strict rows.resp        # ≥200k cmd/s
+kevy-cli -p 6004 --kevy import --strict rows.resp        # ≥200k cmd/s
 ```
 
 **先导入，后声明索引**（延迟索引规则）：回填以批量速度从既有行构建每个索引——比给每条导入行付一次写钩子便宜几个数量级。然后跑阶段 1 的声明脚本，等 `IDX.LIST` 报告 `state=ready`（细节见[载入带索引的 keyspace](#载入带索引的-keyspace)）。
 
-- **钳位**：`PREFIX.STATS` 计数与每张表的 `SELECT COUNT(*)` 一致；`IDX.VERIFY` 的强转/重复计数是预期的零；抽样摘要检查——从 RDS 重算几百行、与 `HGETALL` 逐字节比对——通过。若中途经过一台中转 kevy，用 `kevy-cli diff` 证明这一跳。
-- **回滚**：`kevy-cli delete-prefix`（或 `FLUSHALL`）后重来。RDS 仍是事实源。
+- **钳位**：`PREFIX.STATS` 计数与每张表的 `SELECT COUNT(*)` 一致；`IDX.VERIFY` 的强转/重复计数是预期的零；抽样摘要检查——从 RDS 重算几百行、与 `HGETALL` 逐字节比对——通过。若中途经过一台中转 kevy，用 `kevy-cli --kevy diff` 证明这一跳。
+- **回滚**：`kevy-cli --kevy delete-prefix`（或 `FLUSHALL`）后重来。RDS 仍是事实源。
 
 ### 阶段 4——读切换（按端点金丝雀）
 
@@ -63,7 +63,7 @@ kevy-cli import -p 6004 --strict rows.resp        # ≥200k cmd/s
 
 翻转之前，把序列 key 播种到 RDS 高水位**之上**（对新 key `INCRBY seq:order <rds_max_id>`）——经典的 auto-increment 冲突是阶段 5 最锋利的一条边。
 
-- **钳位**：在 kevy 与镜像 RDS 之间做 `kevy-cli diff` 式抽样（对前缀做摘要、比对行样本）；再加上你本来就在告警的业务指标。
+- **钳位**：在 kevy 与镜像 RDS 之间做 `kevy-cli --kevy diff` 式抽样（对前缀做摘要、比对行样本）；再加上你本来就在告警的业务指标。
 - **回滚**：镜像窗口内，把应用指回 RDS（接受镜像滞后——你正在测量它）。镜像消费者必须处理 `-FEEDRESYNC`（kevy 崩溃重启会递增 feed generation）：把受影响前缀重建进 RDS 后继续——at-least-once 加幂等 SQL 让这一步是安全的。
 
 ### 阶段 6——退役
@@ -87,30 +87,30 @@ kevy-cli import -p 6004 --strict rows.resp        # ≥200k cmd/s
 # 工具链（`kevy-cli`）
 
 ```
-kevy-cli export  -p 6379 --prefix user: dump.resp
-kevy-cli import  -p 6004 --strict dump.resp        # ≥200k cmd/s
-kevy-cli import  -p 6004 --resume dump.resp        # 中断之后续传
-kevy-cli digest  -p 6004 user:
-kevy-cli diff    hostA:6379 hostB:6004 user: order:
-kevy-cli copy-prefix   -p 6004 --rate 5000 user: staging:user:
-kevy-cli delete-prefix -p 6004 --rate 5000 --dry-run tmp:
-kevy-cli inspect -p 6004 user:
+kevy-cli -p 6379 --kevy export  --prefix user: dump.resp
+kevy-cli -p 6004 --kevy import  --strict dump.resp        # ≥200k cmd/s
+kevy-cli -p 6004 --kevy import  --resume dump.resp        # 中断之后续传
+kevy-cli -p 6004 --kevy digest  user:
+kevy-cli -h hostA -p 6379 --kevy diff    hostB:6004 user: order:
+kevy-cli -p 6004 --kevy copy-prefix   --rate 5000 user: staging:user:
+kevy-cli -p 6004 --kevy delete-prefix --rate 5000 --dry-run tmp:
+kevy-cli -p 6004 --kevy inspect user:
 ```
 
 另有三条只读取和报告、不搬动任何东西，所以不在上面那份清单里。它们是迁移手册里的课变成可以跑的东西——见 [table-migration.md](table-migration.md)：
 
 ```
-kevy-cli sql plan schema.sql                       # 每条查询的去向
-kevy-cli backfill-keys --from-index i --from-prefix p:   # 并集
-kevy-cli lint overlap --prefix mailbox:              # lesson 1
-kevy-cli lint columns ev                           # lesson 6
-kevy-cli shadow -p 6004 --old "…" --new "…"        # 切换之前
-kevy-cli doctor -p 6004                            # 把 VERIFY 挂进 cron
+kevy-cli --kevy sql plan schema.sql                       # 每条查询的去向
+kevy-cli --kevy backfill-keys --from-index i --from-prefix p:   # 并集
+kevy-cli --kevy lint overlap --prefix mailbox:              # lesson 1
+kevy-cli --kevy lint columns ev                           # lesson 6
+kevy-cli -p 6004 --kevy shadow --old "…" --new "…"        # 切换之前
+kevy-cli -p 6004 --kevy doctor                            # 把 VERIFY 挂进 cron
 ```
 
 ## 线格式
 
-`export` 写出一条纯 **RESP 命令流**的重建帧——`DEL` + `SET`/`HSET`/`RPUSH`/`SADD`/`ZADD`，TTL 用绝对 `PEXPIREAT`。这让文件与 `redis-cli --pipe` 双向兼容：kevy 的导出能喂 Redis，任何 RESP 命令文件也能喂 `kevy-cli import`——包括你自己从 RDS dump 生成的那份（playbook 的阶段 3）。
+`export` 写出一条纯 **RESP 命令流**的重建帧——`DEL` + `SET`/`HSET`/`RPUSH`/`SADD`/`ZADD`，TTL 用绝对 `PEXPIREAT`。这让文件与 `redis-cli --pipe` 双向兼容：kevy 的导出能喂 Redis，任何 RESP 命令文件也能喂 `kevy-cli --kevy import`——包括你自己从 RDS dump 生成的那份（playbook 的阶段 3）。
 
 每个 key 打头的 `DEL` 让重放**从零重建**——对它**发出的**每种类型都真正幂等（否则 RPUSH 这类追加 verb 会在重复导入时把列表内容翻倍）。
 
@@ -134,7 +134,7 @@ exported 4006 keys -> dump.resp
 
 ## 验证
 
-`PREFIX.DIGEST <prefix>`（服务器 + embedded 的 `prefix_digest`）返回 `[count, hex64]`——对规范化行字节的顺序不敏感校验和（hash 字段与 set 成员排序，zset 按 score 位再按成员，list 按顺序——list 的顺序就是身份）。它对 shard 数与插入顺序不敏感，所以能跨拓扑比较。`kevy-cli diff A:port B:port prefix…` 在任何不一致时以非零退出。
+`PREFIX.DIGEST <prefix>`（服务器 + embedded 的 `prefix_digest`）返回 `[count, hex64]`——对规范化行字节的顺序不敏感校验和（hash 字段与 set 成员排序，zset 按 score 位再按成员，list 按顺序——list 的顺序就是身份）。它对 shard 数与插入顺序不敏感，所以能跨拓扑比较。`kevy-cli -h A -p port --kevy diff B:port prefix…` 在任何不一致时以非零退出。
 
 TTL 不参与摘要（它们会衰减）；值参与。
 
@@ -156,10 +156,10 @@ until kevy-cli -p 6004 IDX.LIST | grep -A1 my_index | grep -q ready; do sleep 1;
 
 ### 一条命令验证整场迁移
 
-`kevy-cli diff` 一次调用即可跨两台在线服务器比较任意多个前缀——优先用它，而不是逐前缀的摘要对：
+`kevy-cli --kevy diff` 一次调用即可跨两台在线服务器比较任意多个前缀——优先用它，而不是逐前缀的摘要对：
 
 ```
-kevy-cli diff 127.0.0.1:6004 127.0.0.1:6005 msg: mbox: usr: tag: session:
+kevy-cli -p 6004 --kevy diff 127.0.0.1:6005 msg: mbox: usr: tag: session:
 ```
 
 ### 大导出
@@ -167,8 +167,8 @@ kevy-cli diff 127.0.0.1:6004 127.0.0.1:6005 msg: mbox: usr: tag: session:
 dump 是未压缩的 RESP 文本（快、可 grep）。10GB+ 的 keyspace 用 gzip 管道——格式是流友好的：
 
 ```
-kevy-cli export -p 6004 /dev/stdout | gzip > dump.kevy.gz
-gunzip -c dump.kevy.gz | kevy-cli import -p 6005 --strict /dev/stdin
+kevy-cli -p 6004 --kevy export /dev/stdout | gzip > dump.kevy.gz
+gunzip -c dump.kevy.gz | kevy-cli -p 6005 --kevy import --strict /dev/stdin
 ```
 
 （`--resume` 需要真实文件来放 .progress 边车——要可续传就先解压到磁盘。）
@@ -176,7 +176,7 @@ gunzip -c dump.kevy.gz | kevy-cli import -p 6005 --strict /dev/stdin
 索引在批量载入**之后**创建：索引引擎的回填以批量速度从既有数据构建（实测约 7s/百万行），胜过付一百万次逐写钩子维护。这是操作顺序，不是开关：
 
 ```
-kevy-cli import -p 6004 dump.resp
+kevy-cli -p 6004 --kevy import dump.resp
 kevy-cli -p 6004 IDX.CREATE users ON PREFIX user: FIELD age TYPE i64 KIND range
 ```
 

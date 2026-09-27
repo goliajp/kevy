@@ -23,7 +23,7 @@ fn hex(k: &[u8; 32]) -> String {
 }
 
 fn start() -> Server {
-    let (port, secure_port) = (pick_free_port().unwrap(), pick_free_port().unwrap());
+    let (port, secure_port) = (pick_free_port(), pick_free_port());
     let dir = std::env::temp_dir().join(format!("kevy-secure-clients-{port}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();

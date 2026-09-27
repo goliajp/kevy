@@ -14,6 +14,11 @@ pub(crate) struct P<'a> {
 }
 
 impl<'a> P<'a> {
+    /// A cursor at the first token.
+    pub(crate) fn new(toks: &'a [Token]) -> P<'a> {
+        P { toks, i: 0 }
+    }
+
     pub(crate) fn peek(&self) -> &'a Token {
         &self.toks[self.i]
     }
@@ -102,7 +107,7 @@ impl<'a> P<'a> {
 
 /// Parse a whole script into statements.
 pub(crate) fn parse_script(toks: &[Token]) -> Result<Vec<Stmt>, SqlError> {
-    let mut p = P { toks, i: 0 };
+    let mut p = P::new(toks);
     let mut out = Vec::new();
     loop {
         while p.eat_sym(';') {}
