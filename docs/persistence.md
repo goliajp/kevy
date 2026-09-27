@@ -12,7 +12,7 @@ Reach for this doc when you are:
 - Wiring an embedded `kevy_embedded::Store` into a host application and want to know what survives a process crash, what doesn't, and how to observe it from inside the host.
 - Looking at a key whose TTL behaves oddly across restarts.
 
-If you only want a quick "does it survive `kill -9`?" answer: yes. Under the default policy a killed process loses at most about the last second of writes, and a power loss about one second plus the time one fsync takes.
+If you only want a quick "does it survive `kill -9`?" answer: yes. Under the default policy a killed process loses at most one tick (~100 ms) of writes, and a power loss about one second plus the time one fsync takes.
 
 ## Core idea
 
@@ -189,12 +189,12 @@ whose writes are single-shard by construction.
 | Policy | Durability | Cost |
 |---|---|---|
 | `Always` | Zero-loss — every write fsynced before its reply | ~50% throughput |
-| `EverySec` (default) | Power loss: about 1 s plus one tick plus the time one fsync takes. Process crash: only writes still in user-space buffers (see the durability contract) | Cheap |
+| `EverySec` (default) | Power loss: about 1 s plus one tick plus the time one fsync takes. Process crash: at most one tick of writes — every tick writes buffered records into the kernel | Cheap |
 | `No` | Every tick writes buffered records into the kernel, never fsyncs: a killed process loses at most one tick of writes; after a power loss the OS decides what reached the disk | Cheapest |
 
 ## Trade-offs and limits
 
-**Per-policy throughput vs data loss.** `Always` blocks each reply on `fsync`; it is the only policy that survives `kill -9` with zero command loss, and it cuts SET-heavy throughput roughly in half on typical NVMe. `EverySec` fsyncs about once a second in the background without blocking writes, so a power loss can lose that second plus whatever arrived while the fsync itself ran — the default precisely because it matches the Redis trade and the lost window is usually tolerable. `No` writes buffered records into the kernel every tick and leaves the disk to the kernel; throughput is highest and a killed process loses at most one tick of writes, but a power loss can lose anything the kernel had not yet written back, potentially many seconds.
+**Per-policy throughput vs data loss.** `Always` blocks each reply on `fsync`; it is the only policy that survives `kill -9` with zero command loss, and it cuts SET-heavy throughput roughly in half on typical NVMe. `EverySec` fsyncs about once a second in the background without blocking writes, so a power loss can lose that second plus whatever arrived while the fsync itself ran, while a killed process loses at most one tick of writes — the default precisely because it matches the Redis trade and the lost window is usually tolerable. `No` writes buffered records into the kernel every tick and leaves the disk to the kernel; throughput is highest and a killed process loses at most one tick of writes, but a power loss can lose anything the kernel had not yet written back, potentially many seconds.
 
 **What `AppendFsync` does and does not govern.** It sets the power-loss
 window for individual commands. It has never had anything to do with
@@ -332,10 +332,9 @@ Process crash (SIGKILL) never loses acknowledged writes under `always`.
 Under the other policies it loses only what had not yet left user space.
 The server's default reactors hand appends to the kernel every reactor
 iteration, so a killed server loses only the last iteration's writes.
-The embedded engine buffers appends per shard (up to 256 KiB): under
-`no` every tick writes the buffer into the kernel, so a killed process
-loses at most one tick of writes; under `everysec` the buffer is written
-at each sync, so it can lose about one second plus one tick (the server
+The embedded engine buffers appends per shard (up to 256 KiB), and
+under both `no` and `everysec` every tick writes the buffer into the
+kernel, so a killed process loses at most one tick of writes (the server
 behaves the same way with `KEVY_AOF_OFFLOAD=0`). The AOF tail is
 replayed on the next open, and a torn final frame is truncated away
 on open, never silently applied (see the crash-consistency contract
