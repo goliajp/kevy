@@ -21,7 +21,8 @@ const fn v(name: &'static str, write: bool) -> Verb {
 const RD: bool = false;
 const WR: bool = true;
 
-/// Every verb [`crate::exec`] answers, sorted by name.
+/// Every verb [`crate::exec`] answers, sorted by name. The stream and geo
+/// rows are there only with the `streams-geo` feature.
 ///
 /// ```
 /// let names: Vec<&str> = kevy_verbs::VERBS.iter().map(|v| v.name).collect();
@@ -47,6 +48,22 @@ pub const VERBS: &[Verb] = &[
     v("EXPIREAT", WR),
     v("FLUSHALL", WR),
     v("FLUSHDB", WR),
+    #[cfg(feature = "streams-geo")]
+    v("GEOADD", WR),
+    #[cfg(feature = "streams-geo")]
+    v("GEODIST", RD),
+    #[cfg(feature = "streams-geo")]
+    v("GEOHASH", RD),
+    #[cfg(feature = "streams-geo")]
+    v("GEOPOS", RD),
+    #[cfg(feature = "streams-geo")]
+    v("GEORADIUS", WR),
+    #[cfg(feature = "streams-geo")]
+    v("GEORADIUSBYMEMBER", WR),
+    #[cfg(feature = "streams-geo")]
+    v("GEOSEARCH", RD),
+    #[cfg(feature = "streams-geo")]
+    v("GEOSEARCHSTORE", WR),
     v("GET", RD),
     v("GETBIT", RD),
     v("GETDEL", WR),
@@ -117,6 +134,36 @@ pub const VERBS: &[Verb] = &[
     v("TTL", RD),
     v("TYPE", RD),
     v("UNLINK", WR),
+    #[cfg(feature = "streams-geo")]
+    v("XACK", WR),
+    #[cfg(feature = "streams-geo")]
+    v("XADD", WR),
+    #[cfg(feature = "streams-geo")]
+    v("XAUTOCLAIM", WR),
+    #[cfg(feature = "streams-geo")]
+    v("XCLAIM", WR),
+    #[cfg(feature = "streams-geo")]
+    v("XDEL", WR),
+    #[cfg(feature = "streams-geo")]
+    v("XGROUP", WR),
+    #[cfg(feature = "streams-geo")]
+    v("XINFO", RD),
+    #[cfg(feature = "streams-geo")]
+    v("XLEN", RD),
+    #[cfg(feature = "streams-geo")]
+    v("XPENDING", RD),
+    #[cfg(feature = "streams-geo")]
+    v("XRANGE", RD),
+    #[cfg(feature = "streams-geo")]
+    v("XREAD", RD),
+    #[cfg(feature = "streams-geo")]
+    v("XREADGROUP", WR),
+    #[cfg(feature = "streams-geo")]
+    v("XREVRANGE", RD),
+    #[cfg(feature = "streams-geo")]
+    v("XSETID", WR),
+    #[cfg(feature = "streams-geo")]
+    v("XTRIM", WR),
     v("ZADD", WR),
     v("ZCARD", RD),
     v("ZCOUNT", RD),
@@ -143,4 +190,17 @@ pub const VERBS: &[Verb] = &[
 /// ```
 pub fn verb(upper: &[u8]) -> Option<&'static Verb> {
     VERBS.binary_search_by(|v| v.name.as_bytes().cmp(upper)).ok().map(|i| &VERBS[i])
+}
+
+/// Whether an uppercase verb is a stream (`X*`) or geo (`GEO*`) verb,
+/// the family [`crate::exec`] runs only with the `streams-geo` feature.
+/// The answer does not depend on the feature, so a caller that shares a
+/// build with one that turned it on can still keep the family out.
+///
+/// ```
+/// assert!(kevy_verbs::is_streams_geo(b"XADD") && kevy_verbs::is_streams_geo(b"GEOPOS"));
+/// assert!(!kevy_verbs::is_streams_geo(b"GET"));
+/// ```
+pub fn is_streams_geo(upper: &[u8]) -> bool {
+    upper.first() == Some(&b'X') || upper.starts_with(b"GEO")
 }

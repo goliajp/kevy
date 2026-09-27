@@ -164,7 +164,7 @@ fn route_for_verb<A: ArgvView + ?Sized>(repl: &ReplicationState, upper: &[u8], a
         // the source's shard, write on the destination's); the query-only
         // forms fall through to the single-key route.
         b"GEOSEARCHSTORE" | b"GEORADIUS" | b"GEORADIUSBYMEMBER" => {
-            crate::dispatch_geo::geo_store_route(upper, args)
+            crate::geo_store::geo_store_route(upper, args)
                 .unwrap_or(if args.len() >= 2 { Route::Single(1) } else { Route::Local })
         }
         b"IDX.QUERY" if args.len() >= 4 => Route::Extension,

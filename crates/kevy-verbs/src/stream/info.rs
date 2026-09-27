@@ -8,7 +8,7 @@ use kevy_resp::{
 };
 use kevy_store::{ConsumerGroup, ConsumerState, Store, StreamData, now_unix_ms};
 
-use crate::cmd::{store_err, wrong_args};
+use crate::reply::{store_err, wrong_args};
 
 pub(super) fn cmd_xinfo<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
     if args.len() < 2 {

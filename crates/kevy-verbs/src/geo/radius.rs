@@ -8,7 +8,9 @@
 use kevy_resp::{ArgvView, CmdError, encode_error, encode_integer};
 use kevy_store::Store;
 
-use crate::cmd::{arg_f64, store_err};
+use crate::Effect;
+use crate::args::arg_f64;
+use crate::reply::store_err;
 
 use super::parse_unit;
 use super::search;
@@ -20,8 +22,8 @@ pub(super) fn cmd_georadius<A: ArgvView + ?Sized>(
     args: &A,
     out: &mut Vec<u8>,
     read_only: bool,
-) {
-    run_radius(store, out, plan_radius(args, false), read_only);
+) -> Effect {
+    run_radius(store, out, plan_radius(args, false), read_only)
 }
 
 /// `GEORADIUSBYMEMBER key member radius unit [...]` — legacy.
@@ -30,8 +32,8 @@ pub(super) fn cmd_georadiusbymember<A: ArgvView + ?Sized>(
     args: &A,
     out: &mut Vec<u8>,
     read_only: bool,
-) {
-    run_radius(store, out, plan_radius(args, true), read_only);
+) -> Effect {
+    run_radius(store, out, plan_radius(args, true), read_only)
 }
 
 /// Parse a legacy `GEORADIUS[BYMEMBER]` argv into `(source key, options +
@@ -64,29 +66,41 @@ pub(super) fn plan_radius<A: ArgvView + ?Sized>(
     Ok((args[1].to_vec(), parsed))
 }
 
+/// `Write` only when the query stored its hits into a destination.
 fn run_radius(
     store: &mut Store,
     out: &mut Vec<u8>,
     planned: Result<(Vec<u8>, LegacyRadiusParsed), CmdError>,
     read_only: bool,
-) {
+) -> Effect {
     let (key, parsed) = match planned {
         Ok(p) => p,
-        Err(msg) => return encode_error(out, msg.as_wire()),
+        Err(msg) => {
+            encode_error(out, msg.as_wire());
+            return Effect::Read;
+        }
     };
     if read_only && parsed.store_dst.is_some() {
-        return encode_error(out, "ERR can't store result in the _RO variant");
+        encode_error(out, "ERR can't store result in the _RO variant");
+        return Effect::Read;
     }
     let hits = match search::run_search(store, &key, &parsed.opts) {
         Ok(h) => h,
         Err(SearchError::NoMember) => {
-            return encode_error(out, "ERR could not decode requested zset member");
+            encode_error(out, "ERR could not decode requested zset member");
+            return Effect::Read;
         }
-        Err(SearchError::Store(e)) => return store_err(out, e),
+        Err(SearchError::Store(e)) => {
+            store_err(out, e);
+            return Effect::Read;
+        }
     };
     match search::emit_or_store(out, store, &hits, &parsed) {
-        RadiusReply::Replied => {}
-        RadiusReply::Stored(n) => encode_integer(out, n as i64),
+        RadiusReply::Replied => Effect::Read,
+        RadiusReply::Stored(n) => {
+            encode_integer(out, n as i64);
+            Effect::Write
+        }
     }
 }
 

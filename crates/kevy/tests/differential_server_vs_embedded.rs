@@ -283,7 +283,8 @@ fn every_shared_layer_verb_is_driven_or_server_only() {
     let mut silent = Vec::new();
     for v in kevy_verbs::VERBS {
         let refused = embedded_reply(&embedded, &argv(v.name)).starts_with(b"-ERR unknown command");
-        if server_only.contains(v.name) {
+        // the stream and geo commands are the server's alone for now
+        if server_only.contains(v.name) || kevy_verbs::is_streams_geo(v.name.as_bytes()) {
             assert!(refused, "{}: named server-only but the embedded engine serves it", v.name);
         } else if !driven.contains(v.name) {
             silent.push(v.name);

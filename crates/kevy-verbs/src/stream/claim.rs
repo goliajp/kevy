@@ -7,7 +7,7 @@ use kevy_store::{
     EntryBatch, Store, StreamId, XClaimOpts, now_unix_ms, parse_explicit_id, parse_range_start,
 };
 
-use crate::cmd::{store_err, wrong_args};
+use crate::reply::{store_err, wrong_args};
 
 use super::emit_entries;
 

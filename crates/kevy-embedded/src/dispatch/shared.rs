@@ -37,7 +37,8 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
     let Some(v) = kevy_verbs::verb(up) else {
         return false;
     };
-    if SERVER_ONLY.contains(&up) {
+    // the stream and geo commands are the server's alone for now
+    if SERVER_ONLY.contains(&up) || kevy_verbs::is_streams_geo(up) {
         return false;
     }
     run(s, v, up, argv, out);

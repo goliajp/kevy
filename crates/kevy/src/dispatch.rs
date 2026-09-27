@@ -1,10 +1,11 @@
 //! The command dispatch table: maps one parsed command to its RESP reply.
 //!
 //! [`dispatch`] is a thin router that tries each category handler in turn.
-//! The single-shard data commands are executed by `kevy_verbs::exec`, the
-//! same code the embedded engine runs; what stays here is what only a
-//! server has — connection state, the ops and cluster verbs, RESP3 reply
-//! shapes, geo, streams, Lua, scope routing and the `maxmemory` bracket.
+//! The single-shard data commands, streams and geo among them, are executed
+//! by `kevy_verbs::exec`, the same code the embedded engine runs; what
+//! stays here is what only a server has — connection state, the ops and
+//! cluster verbs, RESP3 reply shapes, Lua, scope routing and the
+//! `maxmemory` bracket.
 
 use crate::cmd::{OOM_ERR, cmd_hello, is_growing_write_verb, store_err, upper_verb, wrong_args};
 use crate::state::Ctx;
@@ -147,8 +148,7 @@ fn dispatch_with_proto<A: ArgvView + ?Sized>(
         || dispatch_conn(ctx, cmd, store, args, out)
         || crate::ops::dispatch_ops(ctx, cmd, store, args, out)
         || exec_shared(cmd, store, args, out)
-        || crate::dispatch_geo::dispatch_geo(cmd, store, args, out)
-        || crate::dispatch_stream::dispatch_stream(cmd, store, args, out)
+        || kevy_verbs::geo::exec_read_only(cmd, store, args, out)
         // EVAL / EVALSHA / EVAL_RO / EVALSHA_RO / SCRIPT.
         || crate::cmd_lua::dispatch_lua(ctx, cmd, store, args, out)
         || crate::dispatch_replay::dispatch_multikey_stub(cmd, out);

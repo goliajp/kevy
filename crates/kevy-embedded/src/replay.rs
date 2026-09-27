@@ -25,7 +25,8 @@ pub(crate) fn apply(store: &mut Store, args: &Argv) {
     let Some(name) = args.first() else { return };
     let mut buf = [0u8; 32];
     let verb = kevy_verbs::args::upper_verb(name, &mut buf);
-    if !kevy_verbs::verb(verb).is_some_and(|v| v.write) {
+    // the stream and geo writes are the server's alone for now
+    if !kevy_verbs::verb(verb).is_some_and(|v| v.write) || kevy_verbs::is_streams_geo(verb) {
         return;
     }
     REPLY.with(|r| {
@@ -38,7 +39,11 @@ pub(crate) fn apply(store: &mut Store, args: &Argv) {
 /// Every verb [`apply`] applies: the shared layer's writes.
 #[cfg(test)]
 pub(crate) fn replay_verbs() -> Vec<&'static str> {
-    kevy_verbs::VERBS.iter().filter(|v| v.write).map(|v| v.name).collect()
+    kevy_verbs::VERBS
+        .iter()
+        .filter(|v| v.write && !kevy_verbs::is_streams_geo(v.name.as_bytes()))
+        .map(|v| v.name)
+        .collect()
 }
 
 #[cfg(test)]

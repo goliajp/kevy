@@ -11,6 +11,9 @@
 //! replies with Redis's wording, for the commands that live outside
 //! this crate.
 //!
+//! The stream (`X*`) and geo (`GEO*`) commands are behind the
+//! `streams-geo` feature, off by default.
+//!
 //! ```
 //! use kevy_verbs::{Effect, exec};
 //!
@@ -28,6 +31,8 @@ pub mod aof;
 pub mod args;
 mod bitmap;
 pub mod cmd;
+#[cfg(feature = "streams-geo")]
+pub mod geo;
 mod hash;
 mod hash_ttl;
 mod keyspace;
@@ -35,12 +40,14 @@ mod list;
 mod list_move;
 pub mod reply;
 mod set;
+#[cfg(feature = "streams-geo")]
+mod stream;
 mod strings;
 mod verbs;
 mod zset;
 mod zset_range;
 
-pub use verbs::{VERBS, Verb, verb};
+pub use verbs::{VERBS, Verb, is_streams_geo, verb};
 
 /// What a command did, for a caller that records writes.
 ///
@@ -111,7 +118,18 @@ pub fn exec<A: ArgvView + ?Sized>(
     if let Some(e) = zset::exec(verb, store, args, out) {
         return Some(e);
     }
-    keyspace::exec(verb, store, args, out)
+    if let Some(e) = keyspace::exec(verb, store, args, out) {
+        return Some(e);
+    }
+    #[cfg(feature = "streams-geo")]
+    if let Some(e) = geo::exec(verb, store, args, out) {
+        return Some(e);
+    }
+    #[cfg(feature = "streams-geo")]
+    if let Some(e) = stream::exec(verb, store, args, out) {
+        return Some(e);
+    }
+    None
 }
 
 /// `Write` when `changed`, `Unchanged` otherwise.
