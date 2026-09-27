@@ -64,7 +64,8 @@ pub fn deadline_frame(store: &mut Store, key: &[u8]) -> Option<Argv> {
 /// Key deadlines (`EXPIRE`, `PEXPIRE`, `SETEX`, `PSETEX`, `SET … EX|PX`,
 /// `GETEX … EX|PX`) are followed by `PEXPIREAT`. Field deadlines
 /// (`HEXPIRE`, `HPEXPIRE`) are followed by `HPEXPIREAT … FIELDS`, one
-/// frame per deadline the named fields hold now, with no condition: the
+/// frame per deadline the named fields hold now, as stored, with no
+/// condition: the
 /// command's own record re-evaluates `NX|XX|GT|LT` on replay, and the
 /// deadline frames then put every field back where it stood.
 ///
@@ -112,14 +113,14 @@ fn relative_ttl<A: ArgvView + ?Sized>(args: &A) -> bool {
 
 /// `HPEXPIREAT key <unix-ms> FIELDS n field…` for each deadline the
 /// fields named by a relative `HEXPIRE` / `HPEXPIRE` hold after it ran.
-fn field_deadline_frames<A: ArgvView + ?Sized>(store: &mut Store, args: &A) -> Vec<Argv> {
+fn field_deadline_frames<A: ArgvView + ?Sized>(store: &Store, args: &A) -> Vec<Argv> {
     let Some(fields) = named_fields(args) else { return Vec::new() };
-    let Ok(ttls) = store.hpttl(&args[1], &fields) else { return Vec::new() };
-    let now = now_unix_ms();
+    // read, never purge: an expired field is the expiry sweep's to remove,
+    // since the sweep is what tells the indexes
+    let deadlines = store.hash_field_deadlines(&args[1], &fields);
     let mut by_deadline: Vec<(u64, Vec<&[u8]>)> = Vec::new();
-    for (f, ttl) in fields.iter().zip(ttls) {
-        let Ok(ms) = u64::try_from(ttl) else { continue };
-        let at = now.saturating_add(ms);
+    for (f, deadline) in fields.iter().zip(deadlines) {
+        let Some(at) = deadline else { continue };
         match by_deadline.iter_mut().find(|(d, _)| *d == at) {
             Some((_, group)) => group.push(f),
             None => by_deadline.push((at, vec![f])),
@@ -160,6 +161,25 @@ mod tests {
 
     // a field record the replay could not apply is worse than none: every
     // malformed or inapplicable shape produces no frame at all
+    // recording a write must not change the keyspace: a field whose
+    // deadline has passed is removed by the expiry sweep, which tells the
+    // indexes; removed here, silently, an index keeps its covering copy
+    #[test]
+    fn recording_a_field_ttl_leaves_an_expired_field_to_the_sweep() {
+        let mut store = Store::new();
+        let mut out = Vec::new();
+        crate::exec(&mut store, b"HSET", &argv(&[b"HSET", b"h", b"f", b"v"]), &mut out);
+        let set = argv(&[b"HPEXPIRE", b"h", b"1", b"FIELDS", b"1", b"f"]);
+        crate::exec(&mut store, b"HPEXPIRE", &set, &mut out);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let f = ttl_followup(&mut store, &set);
+        assert_eq!(f.len(), 1, "a passed deadline is still recorded, and replays as a removal");
+        assert!(
+            store.hash_field_deadlines(b"h", &[b"f"])[0].is_some(),
+            "the record must not purge the field"
+        );
+    }
+
     #[test]
     fn a_field_record_needs_fields_that_hold_a_deadline() {
         let mut store = Store::new();
