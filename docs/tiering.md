@@ -265,10 +265,21 @@ server and embedded listener.
 | `promotions_total` | values paged back in since boot |
 | `peek_preads_total` | no-promote cold reads (one per cold **row**) |
 | `batch_submissions_total` | batched cold-read submissions (hydration pages) |
+| `vlog_raw_bytes` | value bytes before compression, over the vlog files on disk |
+| `vlog_payload_bytes` | compressed payload bytes on disk |
+| `vlog_frame_header_bytes` | per-record frame headers on disk (tag + original length) |
+| `vlog_dict_bytes` | compression dictionaries held in memory, one per vlog file |
 
 `vlog_size_bytes / cold_bytes` is the space-amplification ratio the
 acceptance gate clamps at ≤ 2.0×; `peek_preads_total` is how you
 verify a hydration page paid one read per row, not per field.
+
+`(vlog_payload_bytes + vlog_frame_header_bytes) / vlog_raw_bytes` is the
+compression ratio over what the vlog holds, dead records included. What
+compression leaves is those two terms plus the dictionaries; the payload is
+the data's own entropy plus whatever repetition the encoder did not find,
+and the two cannot be told apart from inside the log. The rest of
+`vlog_size_bytes` is record framing: 12 bytes and the key per record.
 
 ## Performance expectations
 

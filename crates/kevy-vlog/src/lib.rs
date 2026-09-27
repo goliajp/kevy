@@ -102,7 +102,9 @@ pub(crate) fn split_body(body: Vec<u8>) -> io::Result<(Vec<u8>, Vec<u8>)> {
     Ok((key, payload))
 }
 
+mod accounting;
 mod record;
+pub use accounting::CompressionStats;
 pub use record::{CompactOwner, VlogFile, VlogRef, verify_image};
 
 /// Owner-side per-file accounting (bytes are header-inclusive).
@@ -111,6 +113,7 @@ struct FileState {
     handle: Arc<VlogFile>,
     bytes: u64,
     live: u64,
+    compression: CompressionStats,
 }
 
 /// Aggregate gauges for INFO (`vlog_size` / `vlog_dead_bytes` feeders).
@@ -193,6 +196,7 @@ impl Vlog {
     }
 
     fn open_next_file(&mut self, dict: Vec<u8>) -> io::Result<()> {
+        let compression = CompressionStats { dict_bytes: dict.len() as u64, ..Default::default() };
         let id = self.next_id;
         self.next_id += 1;
         let path = self.dir.join(format!("vlog-{id:08}.dat"));
@@ -207,6 +211,7 @@ impl Vlog {
             }),
             bytes: 0,
             live: 0,
+            compression,
         });
         Ok(())
     }
@@ -291,6 +296,7 @@ impl Vlog {
         state.handle.file.write_all_at(&record, offset)?;
         state.bytes += record.len() as u64;
         state.live += record.len() as u64;
+        state.compression.add_record(payload.len(), frame.len());
         Ok(VlogRef { file_id: state.handle.id, offset, len: body_len as u32 })
     }
 
@@ -403,6 +409,12 @@ impl Vlog {
             live_bytes: self.files.iter().map(|s| s.live).sum(),
             epoch: self.epoch,
         }
+    }
+
+    /// Where the value bytes went, over the files still on disk: see
+    /// [`CompressionStats`].
+    pub fn compression(&self) -> CompressionStats {
+        self.files.iter().fold(CompressionStats::default(), |a, s| a.sum(s.compression))
     }
 }
 

@@ -252,6 +252,12 @@ mod enabled {
             }
         }
 
+        /// The value log's compression accounting (see
+        /// [`kevy_vlog::CompressionStats`]); all zero when tiering is off.
+        pub fn tier_compression(&self) -> kevy_vlog::CompressionStats {
+            self.tier.as_ref().map(|t| t.vlog.compression()).unwrap_or_default()
+        }
+
         /// Whether the LRU/LFU access clock must advance: eviction
         /// (`maxmemory > 0`) or tiering (demotion scoring) needs it.
         /// Same single-branch cost as the old `maxmemory > 0` test.
