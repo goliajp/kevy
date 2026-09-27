@@ -47,8 +47,9 @@ for angle in $(awk '{print $1}' "$OUT/samples" | sort -u); do
   c=$(median_col "$angle" 2)
   r=$(median_col "$angle" 3)
   n=$(awk -v a="$angle" '$1==a' "$OUT/samples" | wc -l | tr -d ' ')
-  verdict=$(awk -v c="$c" -v r="$r" -v f="$FLOOR" \
-    'BEGIN {print (c >= r*f) ? "PASS" : "FAIL"}')
+  lat=0; [[ $angle == *_us ]] && lat=1   # a latency: lower is better
+  verdict=$(awk -v c="$c" -v r="$r" -v f="$FLOOR" -v lat="$lat" \
+    'BEGIN {ok = lat ? (c <= r/f) : (c >= r*f); print ok ? "PASS" : "FAIL"}')
   [ "$verdict" = FAIL ] && fail=1
   awk -v a="$angle" -v c="$c" -v r="$r" -v v="$verdict" -v n="$n" \
     'BEGIN {printf "  %-24s %s  median %d vs ref %d (%+.1f%%, n=%d)\n", a, v, c, r, 100*(c/r-1), n}'
