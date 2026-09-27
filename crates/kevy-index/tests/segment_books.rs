@@ -110,3 +110,9 @@ fn lookups_by_borrowed_key() {
     assert_eq!(s.verify_entry(&long), None);
     assert_eq!(s.stats().entries, 2);
 }
+
+#[test]
+fn a_segment_can_cross_threads() {
+    fn send_sync<T: Send + Sync + std::panic::UnwindSafe + std::panic::RefUnwindSafe>() {}
+    send_sync::<Segment>();
+}
