@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- `kevy-cli --kevy import` of a file that does not exist no longer leaves a
+  `<file>.progress` behind.
+- `kevy-cli -u kevys://host:port[/db]?server_key=<hex>[&client_key_file=<path>]`
+  connects to kevy's encrypted client port, for one-shot commands, the
+  REPL and `--pipe` alike. `kevy-resp-client` gains `SecureStream::handshake`
+  over an already-open socket, `SecureStream::buffered` and
+  `SecureStream::writer` (a `SecureWriter` for a second thread, sealing in
+  wire order).
 - **io_uring: no more 200 µs stalls for clients that pause between
   batches.** After a batch of work forwarded from other shards, an owner
   shard used to sleep for 200 µs, deaf to new input; a client whose keys

@@ -272,8 +272,9 @@ pub fn run_import(
     resume: bool,
     strict: bool,
 ) -> io::Result<ImportReport> {
-    let (mut progress, start) = open_progress(src, resume)?;
+    // the source first: a missing one must not leave a progress file behind
     let mut f = File::open(src)?;
+    let (mut progress, start) = open_progress(src, resume)?;
     f.seek(SeekFrom::Start(start))?;
     let mut pending: Vec<u8> = Vec::with_capacity(1 << 20);
     let mut report = ImportReport { sent: 0, errors: 0, offset: start };

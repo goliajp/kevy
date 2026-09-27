@@ -101,7 +101,7 @@ kevys://10.0.0.11:6404/0?server_key=<hex>&client_key_file=/etc/app/kevy.key
 ```
 
 - `client_key_file` のないクライアントは、接続ごとに新しい鍵ペアを作ります。`client_keys` が空ならそれで足ります。空でないときは `kevy keygen` でクライアントの鍵を作り、その公開鍵を列挙してください。
-- `kevys://` を受け付けるのは Rust クライアントです。`kevy-resp-client`（`RespClient::connect_url`、または任意の RESP コードの下に `SecureStream` を置く）、`kevy-client`（`Connection` と `Subscriber`）、`kevy-client-async`（`AsyncConnection::connect_secure_url`、`AsyncSubscriber::connect_secure_url`）です。ほかの言語のバインディングと `kevy-cli` は対応していないので、TLS プロキシを使ってください。
+- `kevys://` を受け付けるのは Rust クライアントです。`kevy-resp-client`（`RespClient::connect_url`、または任意の RESP コードの下に `SecureStream` を置く）、`kevy-client`（`Connection` と `Subscriber`）、`kevy-client-async`（`AsyncConnection::connect_secure_url`、`AsyncSubscriber::connect_secure_url`）です。`kevy-cli -u` も受け付けます。ほかの言語のバインディングは対応していないので、TLS プロキシを使ってください。
 - `CLIENT LIST`、`CLIENT INFO`、`CLIENT KILL ADDR` にはサーバーではなくクライアント自身のアドレスが表示されます。
 - このポートには `private_key_file` が必要で、`port` と同じにはできません。どちらの設定ミスでも、サーバーは起動時に停止します。
 
