@@ -23,7 +23,7 @@
 Linux 上 io_uring 可用时，`appendfsync everysec`(或 `no`)的 AOF
 追加改为排队到分片自己的 ring 上，不再在 reactor 线程同步写。这是
 本版本尾延迟头条背后的改动；耐久语义不变(`everysec` 的崩溃窗口
-仍 ≤ 1 秒，crash 门双模式验证)。
+没有变，crash 门双模式验证)。
 
 - `KEVY_AOF_OFFLOAD=0` 恢复 4.x 同步路径。
 - `appendfsync always` 按语义保持同步路径。
