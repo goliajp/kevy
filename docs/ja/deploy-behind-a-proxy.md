@@ -119,7 +119,7 @@ TLS を有効にした標準の Redis クライアントなら、終端器の後
 redis-cli --tls --cacert ca.crt --cert billing.crt --key billing.key -h kevy.internal -p 6379 PING
 ```
 
-**`kevy-cli` はできません。** `rediss://` に対して `Unsupported` を返します。kevy は TLS なしで出荷され、CLI にも使える TLS 実装がないからです。使う段になって気づくのではなく、先に段取りしておくべき運用上の帰結です。ホスト上で直接操作するか、SSH トンネルを使ってください。
+**`kevy-cli` はできません。** `rediss://` に対して `Unsupported` を返します。kevy は TLS なしで出荷され、CLI にも使える TLS 実装がないからです。使う段になって気づくのではなく、先に段取りしておくべき運用上の帰結です。ホスト上で直接操作するか、kevy 自身の暗号化クライアントポート（`kevy-cli -u kevys://…`。[encrypted-links.md](encrypted-links.md) を参照）を使うか、SSH トンネルを使ってください。
 
 ```console
 ssh -N -L 6004:127.0.0.1:6004 you@host   # そのあと：kevy-cli -p 6004

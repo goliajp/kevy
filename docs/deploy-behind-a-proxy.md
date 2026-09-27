@@ -152,7 +152,9 @@ redis-cli --tls --cacert ca.crt --cert billing.crt --key billing.key -h kevy.int
 **`kevy-cli` cannot.** It rejects `rediss://` with `Unsupported`,
 because kevy ships without TLS and the CLI has no TLS stack to lend it.
 That is an operational consequence worth planning for rather than
-discovering: administer from the host itself, or over an SSH tunnel:
+discovering: administer from the host itself, over kevy's own encrypted
+client port (`kevy-cli -u kevys://…`, see
+[encrypted-links.md](encrypted-links.md)), or over an SSH tunnel:
 
 ```console
 ssh -N -L 6004:127.0.0.1:6004 you@host   # then: kevy-cli -p 6004
