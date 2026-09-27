@@ -132,7 +132,7 @@ impl Server {
         assert!(n > 0, "no reply to {parts:?}");
         let head = buf[0];
         assert!(
-            head == b'+' || head == b'$' || head == b':',
+            head == b'+' || head == b'$' || head == b':' || head == b'*',
             "unexpected reply head {head:?} for {parts:?}: {:?}",
             String::from_utf8_lossy(&buf[..n]),
         );
@@ -167,6 +167,53 @@ fn server_primary_streams_to_embed_replica() {
     });
     assert!(saw_both, "embed replica never observed both SET writes within timeout");
 
+    drop(replica);
+    server.shutdown();
+}
+
+/// The primary's stream and geo writes reach the replica, groups and a
+/// stored geo search included; a replica without them would answer an
+/// empty keyspace here.
+#[cfg(feature = "streams-geo")]
+#[test]
+fn server_stream_and_geo_writes_reach_the_embed_replica() {
+    let server = Server::start();
+    let upstream = format!("127.0.0.1:{}", server.replication_base);
+    let replica = Store::open_replica(&upstream).unwrap();
+    server.cmd(&[b"XADD", b"s", b"1-1", b"f", b"v"]);
+    server.cmd(&[b"XADD", b"s", b"2-1", b"f", b"w"]);
+    server.cmd(&[b"XGROUP", b"CREATE", b"s", b"g", b"0"]);
+    server.cmd(&[b"XREADGROUP", b"GROUP", b"g", b"c", b"COUNT", b"1", b"STREAMS", b"s", b">"]);
+    server.cmd(&[b"GEOADD", b"geo", b"13.361389", b"38.115556", b"Palermo"]);
+    server.cmd(&[
+        b"GEOSEARCHSTORE",
+        b"near",
+        b"geo",
+        b"FROMLONLAT",
+        b"13",
+        b"38",
+        b"BYRADIUS",
+        b"100",
+        b"km",
+    ]);
+    let read = |cmd: &[&[u8]]| {
+        let argv: Vec<Vec<u8>> = cmd.iter().map(|p| p.to_vec()).collect();
+        let mut out = Vec::new();
+        replica.dispatch_argv(&argv, &mut out);
+        out
+    };
+    let pending = b"*4\r\n:1\r\n$3\r\n1-1\r\n$3\r\n1-1\r\n*1\r\n*2\r\n$1\r\nc\r\n$1\r\n1\r\n";
+    let arrived = wait_for(Duration::from_secs(5), || {
+        read(&[b"XPENDING", b"s", b"g"]) == pending
+            && read(&[b"XLEN", b"s"]) == b":2\r\n"
+            && read(&[b"ZRANGE", b"near", b"0", b"-1"]) == b"*1\r\n$7\r\nPalermo\r\n"
+    });
+    assert!(
+        arrived,
+        "the replica never caught up: {:?} {:?}",
+        String::from_utf8_lossy(&read(&[b"XPENDING", b"s", b"g"])),
+        String::from_utf8_lossy(&read(&[b"ZRANGE", b"near", b"0", b"-1"])),
+    );
     drop(replica);
     server.shutdown();
 }

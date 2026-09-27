@@ -393,12 +393,15 @@ fn load_snapshot_into_shard0(shards: &Shards, payload: &[u8]) -> bool {
 /// command, argv[1] is the key for almost every mutation kevy supports
 /// (SET k v, DEL k, INCR k, HSET k …, LPUSH k …, ZADD k …). Keyless
 /// commands (FLUSHALL, PUBLISH) fall back to shard 0 — same convention
-/// `crate::store::lock()` uses for the pub/sub bus.
+/// `crate::store::lock()` uses for the pub/sub bus. The stream commands
+/// that name their stream later are routed by it.
 fn route_shard(argv: &Argv, n: usize) -> usize {
     if n <= 1 {
         return 0;
     }
-    let Some(key) = argv.get(1) else {
+    let mut buf = [0u8; 32];
+    let up = kevy_verbs::args::upper_verb(argv.first().unwrap_or_default(), &mut buf);
+    let Some(key) = crate::verb_keys::shard_key(up, argv) else {
         return 0;
     };
     (kevy_hash::key_hash_slot(key) as usize) % n
@@ -446,5 +449,23 @@ mod tests {
         let b = argv(&[b"DEL", b"k1"]);
         // Same key → same shard regardless of command name.
         assert_eq!(route_shard(&a, 8), route_shard(&b, 8));
+    }
+
+    #[test]
+    fn a_stream_command_routes_by_its_stream() {
+        // keys chosen so the literal first argument lands elsewhere
+        let key = (0..64)
+            .map(|i| format!("s{i}"))
+            .find(|k| {
+                let at = route_shard(&argv(&[b"XADD", k.as_bytes()]), 8);
+                at != route_shard(&argv(&[b"X", b"GROUP"]), 8)
+                    && at != route_shard(&argv(&[b"X", b"CREATE"]), 8)
+            })
+            .expect("a key apart from the subcommand words");
+        let k = key.as_bytes();
+        let home = route_shard(&argv(&[b"XADD", k, b"*", b"f", b"v"]), 8);
+        let group = argv(&[b"xgroup", b"CREATE", k, b"g", b"0"]);
+        let read = argv(&[b"XREADGROUP", b"GROUP", b"g", b"c", b"STREAMS", k, b">"]);
+        assert_eq!((route_shard(&group, 8), route_shard(&read, 8)), (home, home));
     }
 }

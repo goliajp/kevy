@@ -302,6 +302,53 @@ pub(crate) const DISPATCH_VERBS: &[&str] = &[
     "TABLE.LIST",
     "TABLE.VERIFY",
     "TABLE.DESCRIBE",
+    // streams + geo
+    #[cfg(feature = "streams-geo")]
+    "GEOADD",
+    #[cfg(feature = "streams-geo")]
+    "GEODIST",
+    #[cfg(feature = "streams-geo")]
+    "GEOHASH",
+    #[cfg(feature = "streams-geo")]
+    "GEOPOS",
+    #[cfg(feature = "streams-geo")]
+    "GEORADIUS",
+    #[cfg(feature = "streams-geo")]
+    "GEORADIUSBYMEMBER",
+    #[cfg(feature = "streams-geo")]
+    "GEOSEARCH",
+    #[cfg(feature = "streams-geo")]
+    "GEOSEARCHSTORE",
+    #[cfg(feature = "streams-geo")]
+    "XACK",
+    #[cfg(feature = "streams-geo")]
+    "XADD",
+    #[cfg(feature = "streams-geo")]
+    "XAUTOCLAIM",
+    #[cfg(feature = "streams-geo")]
+    "XCLAIM",
+    #[cfg(feature = "streams-geo")]
+    "XDEL",
+    #[cfg(feature = "streams-geo")]
+    "XGROUP",
+    #[cfg(feature = "streams-geo")]
+    "XINFO",
+    #[cfg(feature = "streams-geo")]
+    "XLEN",
+    #[cfg(feature = "streams-geo")]
+    "XPENDING",
+    #[cfg(feature = "streams-geo")]
+    "XRANGE",
+    #[cfg(feature = "streams-geo")]
+    "XREAD",
+    #[cfg(feature = "streams-geo")]
+    "XREADGROUP",
+    #[cfg(feature = "streams-geo")]
+    "XREVRANGE",
+    #[cfg(feature = "streams-geo")]
+    "XSETID",
+    #[cfg(feature = "streams-geo")]
+    "XTRIM",
     // conn face
     "ECHO",
     "PING",
