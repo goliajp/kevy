@@ -4,6 +4,8 @@
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 use std::time::Instant;
 
 use kevy_resp::ArgvView;
@@ -29,10 +31,10 @@ pub const AOF_MAGIC: &[u8; 9] = b"KEVYAOF1\n";
 /// its time in the `write` syscall (perf-measured: SET 4 KiB, 52% in
 /// `write`/`ksys_write`, on both tmpfs and ext4). MMKV's mmap append
 /// pays no syscall at all; a larger buffer amortises the write across
-/// many appends the same way, without changing durability — `EverySec`
-/// still flushes + fsyncs once a second, so the crash window is
-/// unchanged (≤ 1 s) regardless of buffer size. 256 KiB holds ~64 4 KiB
-/// appends per syscall; per-shard cost is one such buffer.
+/// many appends the same way. `No` empties the buffer on every tick and
+/// `EverySec` at every sync, so its size does not widen either window.
+/// 256 KiB holds ~64 4 KiB appends per syscall; per-shard cost is one
+/// such buffer.
 pub(crate) const AOF_BUF_CAP: usize = 256 * 1024;
 
 /// When to fsync the AOF to disk.
@@ -40,9 +42,11 @@ pub(crate) const AOF_BUF_CAP: usize = 256 * 1024;
 pub enum Fsync {
     /// fsync after every write — safest, slowest.
     Always,
-    /// fsync at most once per second (call [`Aof::maybe_sync`] periodically).
+    /// fsync about once per second (call [`Aof::tick`] or
+    /// [`Aof::maybe_sync`] periodically).
     EverySec,
-    /// Never fsync explicitly; leave it to the OS.
+    /// Never fsync explicitly: each [`Aof::tick`] writes the buffer into
+    /// the kernel, and the OS decides when it reaches the disk.
     No,
 }
 
@@ -67,6 +71,10 @@ pub struct Aof {
     pub(crate) fsync: Fsync,
     pub(crate) dirty: bool,
     pub(crate) last_sync: Instant,
+    /// `EverySec` syncs handed out by `tick`, and the highest one whose
+    /// fsync completed (shared with the handed-out [`crate::PendingSync`]).
+    pub(crate) sync_started: u64,
+    pub(crate) sync_confirmed: Arc<AtomicU64>,
     /// Estimated bytes currently in the AOF file (existing + appended since
     /// open). Maintained without fstat() syscalls per append.
     pub(crate) size_bytes: u64,
@@ -213,6 +221,8 @@ impl Aof {
             fsync,
             dirty: false,
             last_sync: Instant::now(),
+            sync_started: 0,
+            sync_confirmed: Arc::new(AtomicU64::new(0)),
             size_bytes: size,
             size_at_last_rewrite: size,
             rewrites_total: 0,
@@ -263,11 +273,12 @@ impl Aof {
         if upgrading_to_always {
             self.flush_queued()?;
         }
-        if upgrading_to_always && self.dirty {
+        if upgrading_to_always && (self.dirty || self.sync_unconfirmed()) {
             self.file.flush()?;
             self.file.get_ref().sync_data()?;
             self.dirty = false;
             self.last_sync = Instant::now();
+            self.confirm_started_syncs();
         }
         Ok(())
     }
