@@ -37,6 +37,9 @@ impl<C: Commands> Shard<C> {
         let in_multi = c.multi.is_some();
         let proto = c.proto;
         let cluster_conn = c.cluster;
+        if self.cluster.is_some() {
+            crate::cluster::set_relayed_client(c.relayed);
+        }
         if !in_multi && matches!(resolved.txn_kind, TxnKind::Other | TxnKind::Watch) {
             let seq = c.next_seq;
             c.next_seq += 1;
