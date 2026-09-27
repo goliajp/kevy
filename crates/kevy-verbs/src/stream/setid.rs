@@ -7,7 +7,7 @@ use kevy_resp::CmdError;
 use kevy_resp::{ArgvView, encode_error, encode_simple_string};
 use kevy_store::{Store, StreamId, parse_explicit_id};
 
-use crate::cmd::{store_err, wrong_args};
+use crate::reply::{store_err, wrong_args};
 
 pub(super) fn cmd_xsetid<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
     if !matches!(args.len(), 3 | 5 | 7) {

@@ -172,7 +172,7 @@ impl Commands for KevyCommands {
     }
 
     fn geo_search(&self, store: &mut Store, argv: &[Vec<u8>]) -> kevy_rt::GeoHits {
-        crate::dispatch_geo::geo_search(store, argv)
+        crate::geo_store::geo_search(store, argv)
     }
 
     fn extension_op(&self, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {

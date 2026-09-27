@@ -16,7 +16,7 @@ use kevy_geo::{EARTH_RADIUS_METERS, decode_score, haversine_meters, neighbor_sco
 use kevy_resp::{ArgvView, CmdError, encode_array_len, encode_bulk, encode_error, encode_integer};
 use kevy_store::{ScoreBound, Store};
 
-use crate::cmd::{store_err, wrong_args};
+use crate::reply::{store_err, wrong_args};
 
 use super::score_to_point;
 

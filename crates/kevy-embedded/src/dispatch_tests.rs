@@ -69,7 +69,8 @@ fn every_shared_layer_verb_is_served_unless_named() {
     let server_only: BTreeSet<&[u8]> = super::shared::SERVER_ONLY.iter().copied().collect();
     for v in kevy_verbs::VERBS {
         let refused = run(&s, &[v.name.as_bytes()]).starts_with(b"-ERR unknown command");
-        let named = server_only.contains(v.name.as_bytes());
+        let named = server_only.contains(v.name.as_bytes())
+            || kevy_verbs::is_streams_geo(v.name.as_bytes());
         assert_eq!(refused, named, "{}: served {} but named server-only {named}", v.name, !refused);
         assert_eq!(table.contains(v.name), !named, "{}: DISPATCH_VERBS disagrees", v.name);
     }

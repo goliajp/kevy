@@ -14,7 +14,7 @@ use kevy_store::{
     parse_range_start,
 };
 
-use crate::cmd::{store_err, wrong_args};
+use crate::reply::{store_err, wrong_args};
 
 use super::emit_entries;
 
