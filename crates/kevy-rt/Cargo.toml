@@ -22,6 +22,7 @@ kevy-crypto = { path = "../kevy-crypto", version = "6.4.0" }
 kevy-noise = { path = "../kevy-noise", version = "6.4.0" }
 kevy-store = { path = "../kevy-store", version = "6.4.0" }
 kevy-resp = { path = "../kevy-resp", version = "6.4.0" }
+kevy-verbs = { path = "../kevy-verbs", version = "6.4.0" }
 kevy-ring = { path = "../kevy-ring", version = "6.4.0" }
 kevy-persist = { path = "../kevy-persist", version = "6.4.0" }
 kevy-hash = { path = "../kevy-hash", version = "6.4.0" }

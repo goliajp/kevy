@@ -6,11 +6,10 @@
 //! the shard(s) that own its keys, executing one op against the local store,
 //! and folding sub-results into each connection's seq-ordered ring.
 
-use crate::exec_fold::relative_ttl_write;
 use crate::message::{Agg, DispatchMeta, Inbound, Op, Part, PendingSlot, SmallReply};
 use crate::shard::Shard;
 use crate::{Commands, ResolvedCmd, Route, TxnKind};
-use kevy_resp::{Argv, ArgvView, RespVersion};
+use kevy_resp::{ArgvView, RespVersion};
 
 impl<C: Commands> Shard<C> {
     /// Apply transaction state (queue inside MULTI), else dispatch the command.
@@ -302,69 +301,21 @@ impl<C: Commands> Shard<C> {
         }
     }
 
-    /// Like [`Self::log`] but TTL-persistence-safe. After logging `args`, if
-    /// it is a *relative*-TTL write (`EXPIRE`/`PEXPIRE`/`SETEX`/`PSETEX`/
-    /// `SET … EX|PX`) it appends an absolute `PEXPIREAT key <unix_ms>` derived
-    /// from the key's post-exec deadline. AOF replay re-anchors a relative TTL
-    /// to restart-time — resetting every key to a fresh full TTL (a
-    /// production incident root cause) — so the absolute follow-up overwrites that with the
-    /// original wall-clock deadline. Already-absolute writes (`EXPIREAT`/
-    /// `PEXPIREAT`) replay correctly and need no follow-up.
+    /// Like [`Self::log`] but TTL-persistence-safe: a write that moved a
+    /// deadline by a relative amount (`EXPIRE`, `SET … EX`, `HEXPIRE`, …)
+    /// is followed by the absolute deadline it set, so a replay lands on
+    /// the original wall-clock instant instead of counting the TTL from
+    /// replay time (a production incident root cause). The rule is the
+    /// one the embedded engine records its writes by.
     pub(crate) fn log_write<A: ArgvView + ?Sized>(&mut self, args: &A) {
         self.log(args);
-        // Hash field-TTL relative forms get the same absolute
-        // follow-up discipline — `HPEXPIREAT key <abs> FIELDS …`
-        // re-anchors the replay-time deadline to the original wall
-        // clock. HPEXPIREAT itself is already absolute.
-        if args.get(0).is_some_and(|v| {
-            v.eq_ignore_ascii_case(b"HEXPIRE") || v.eq_ignore_ascii_case(b"HPEXPIRE")
-        }) {
-            self.log_hash_ttl_followup(args);
-            return;
+        if let Some(followup) = kevy_verbs::aof::ttl_followup(&mut self.store, args) {
+            self.log(&followup);
         }
-        if !relative_ttl_write(args) {
-            return;
-        }
-        let Some(key) = args.get(1) else { return };
-        let pttl = self.store.pttl(key);
-        if pttl < 0 {
-            return; // command left no live TTL (key gone / TTL cleared)
-        }
-        let abs = kevy_store::now_unix_ms().saturating_add(pttl as u64);
-        let key = key.to_vec();
-        let mut c = Argv::with_capacity(3, 0);
-        c.push(b"PEXPIREAT");
-        c.push(&key);
-        c.push(abs.to_string().as_bytes());
-        self.log(&c);
-    }
-
-    /// log_write helper: rewrite a relative `HEXPIRE`/`HPEXPIRE`
-    /// frame's deadline as absolute unix-ms and append the canonical
-    /// `HPEXPIREAT` follow-up (fields tail copied verbatim).
-    fn log_hash_ttl_followup<A: ArgvView + ?Sized>(&mut self, args: &A) {
-        if args.len() < 6 {
-            return;
-        }
-        let Some(raw) = std::str::from_utf8(&args[2]).ok().and_then(|s| s.parse::<i64>().ok())
-        else {
-            return;
-        };
-        let ms =
-            if args[0].eq_ignore_ascii_case(b"HEXPIRE") { raw.saturating_mul(1000) } else { raw };
-        let abs = kevy_store::now_unix_ms().saturating_add_signed(ms);
-        let mut c = Argv::with_capacity(args.len(), 0);
-        c.push(b"HPEXPIREAT");
-        c.push(&args[1]);
-        c.push(abs.to_string().as_bytes());
-        for i in 3..args.len() {
-            c.push(&args[i]);
-        }
-        self.log(&c);
     }
 
     // `fold` (the seq-ordered result reducer) + `protocol_error` and the
-    // `relative_ttl_write` / `decode_continuation` free fns live in
+    // `decode_continuation` free fn live in
     // [`crate::exec_fold`] — same `impl<C: Commands> Shard<C>`, split out
     // so this file stays under the 500-LOC house rule.
 }

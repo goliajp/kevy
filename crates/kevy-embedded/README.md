@@ -407,7 +407,8 @@ store.set(b"k", b"v")?;
 ### Embed as a read replica
 
 Subscribe to a kevy server primary's replication stream. Every applied
-mutation flows into the in-process `Store` over RESP. Local reads pay
+mutation flows into the in-process `Store` over RESP, except stream and
+geo writes, which the embedded engine has no type for. Local reads pay
 zero network round-trip; local writes return `READONLY`.
 
 ```rust

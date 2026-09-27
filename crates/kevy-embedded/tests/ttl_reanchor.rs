@@ -94,7 +94,9 @@ fn conditional_set_with_ttl_is_one_frame_and_survives_replay() {
     assert!(ttl <= 100_000 - 1_000, "conditional SET re-anchored on replay: {ttl}ms");
     let aof = aof_bytes(dir.path());
     let count = |pat: &[u8]| aof.windows(pat.len()).filter(|w| *w == pat).count();
-    assert_eq!(count(b"$2\r\nPX\r\n"), 2, "each applied SET carries its TTL in its own frame");
+    // the frame is the SET as it was run, so the TTL option is EX or PX
+    let ttl_frames = count(b"$2\r\nEX\r\n") + count(b"$2\r\nPX\r\n");
+    assert_eq!(ttl_frames, 2, "each applied SET carries its TTL in its own frame");
     assert_eq!(count(b"PEXPIREAT"), 2, "and each is pinned to an absolute deadline");
     assert_eq!(count(b"$4\r\ngone"), 0, "a vetoed SET is not logged");
 }

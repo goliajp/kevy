@@ -123,7 +123,8 @@ fn spop_rand<A: ArgvView + ?Sized>(
     } else if items.is_empty() {
         Effect::Skip
     } else {
-        Effect::Record(crate::aof::spop_effect(&args[1], items))
+        let frame = crate::aof::spop_effect(&args[1], &items);
+        Effect::Record(frame.into_iter().map(<[u8]>::to_vec).collect())
     }
 }
 

@@ -736,6 +736,7 @@ dependencies = [
  "kevy-store",
  "kevy-sys",
  "kevy-uring",
+ "kevy-verbs",
  "loom",
 ]
 

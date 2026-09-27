@@ -1,54 +1,16 @@
-//! Set-family verbs, including the read + `*STORE` algebra forms.
+//! The set algebra, which reads or writes several keys and so spans
+//! shards: SINTER / SUNION / SDIFF and their `STORE` forms. The
+//! single-key set verbs run through `shared`.
 
 use crate::KevyResult;
 use crate::store::Store;
 
-use super::{emit_bulk_array, emit_int, kevy_err, rest, verb_name};
-use kevy_resp::{encode_bulk, encode_error, encode_null_bulk};
-use kevy_verbs::args::arg_i64;
-use kevy_verbs::reply::{ERR_NOT_INT, wrong_args};
+use super::{emit_bulk_array, emit_int, rest, verb_name};
+use kevy_verbs::reply::wrong_args;
 
-/// One set-family request; `false` = verb not in this group.
-// LOC-WAIVER: data-driven verb dispatch table — one arm per set verb.
+/// One set-algebra request; `false` = verb not in this group.
 pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>) -> bool {
     match up {
-        b"SADD" => {
-            if argv.len() < 3 {
-                wrong_args(out, "sadd");
-            } else {
-                emit_int(out, s.sadd(&argv[1], &rest(argv, 2)).map(|n| n as i64));
-            }
-        }
-        b"SREM" => {
-            if argv.len() < 3 {
-                wrong_args(out, "srem");
-            } else {
-                emit_int(out, s.srem(&argv[1], &rest(argv, 2)).map(|n| n as i64));
-            }
-        }
-        b"SCARD" => {
-            if argv.len() == 2 {
-                emit_int(out, s.scard(&argv[1]).map(|n| n as i64));
-            } else {
-                wrong_args(out, "scard");
-            }
-        }
-        b"SISMEMBER" => {
-            if argv.len() == 3 {
-                emit_int(out, s.sismember(&argv[1], &argv[2]).map(i64::from));
-            } else {
-                wrong_args(out, "sismember");
-            }
-        }
-        b"SMEMBERS" => {
-            if argv.len() == 2 {
-                emit_bulk_array(out, s.smembers(&argv[1]));
-            } else {
-                wrong_args(out, "smembers");
-            }
-        }
-        b"SPOP" => cmd_spop_rand(s, argv, true, out),
-        b"SRANDMEMBER" => cmd_spop_rand(s, argv, false, out),
         b"SINTER" => cmd_algebra_read(s, argv, out, "sinter", Store::sinter),
         b"SUNION" => cmd_algebra_read(s, argv, out, "sunion", Store::sunion),
         b"SDIFF" => cmd_algebra_read(s, argv, out, "sdiff", Store::sdiff),
@@ -58,62 +20,6 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
         _ => return false,
     }
     true
-}
-
-/// `SPOP`/`SRANDMEMBER key [count]` — single reply without count,
-/// array with it; a NEGATIVE `SRANDMEMBER` count samples with
-/// repetition (composed from single draws over the typed facade).
-fn cmd_spop_rand(s: &Store, argv: &[Vec<u8>], remove: bool, out: &mut Vec<u8>) {
-    let name = if remove { "spop" } else { "srandmember" };
-    if argv.len() < 2 || argv.len() > 3 {
-        return wrong_args(out, name);
-    }
-    let count_given = argv.len() == 3;
-    let raw = if count_given {
-        match arg_i64(&argv[2]) {
-            Some(c) => c,
-            None => return encode_error(out, ERR_NOT_INT),
-        }
-    } else {
-        1
-    };
-    if raw < 0 && remove {
-        return encode_error(out, "ERR value is out of range, must be positive");
-    }
-    let count = raw.unsigned_abs() as usize;
-    let res = if remove {
-        s.spop(&argv[1], count)
-    } else if raw < 0 {
-        srandmember_with_repeats(s, &argv[1], count)
-    } else {
-        s.srandmember(&argv[1], count)
-    };
-    match res {
-        Err(e) => kevy_err(out, &e),
-        Ok(items) => {
-            if count_given {
-                emit_bulk_array(out, Ok(items));
-            } else {
-                match items.into_iter().next() {
-                    Some(v) => encode_bulk(out, &v),
-                    None => encode_null_bulk(out),
-                }
-            }
-        }
-    }
-}
-
-/// Sample-with-replacement: `count` independent single draws.
-fn srandmember_with_repeats(s: &Store, key: &[u8], count: usize) -> KevyResult<Vec<Vec<u8>>> {
-    let mut items = Vec::with_capacity(count);
-    for _ in 0..count {
-        let mut one = s.srandmember(key, 1)?;
-        match one.pop() {
-            Some(m) => items.push(m),
-            None => break, // empty set — nothing to repeat
-        }
-    }
-    Ok(items)
 }
 
 /// The set-algebra op shapes, named so the dispatch helpers' signatures

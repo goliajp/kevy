@@ -6,10 +6,12 @@
 //! conn-face verbs the in-process engine can honestly serve (PING /
 //! ECHO / PUBLISH) — enforced both ways by `dispatch_tests.rs`
 //! (every manifest verb has an arm; the arm table is a superset).
-//! Reply bytes and error wording mirror the real server; the oracle
-//! test in `tests/dispatch_oracle.rs` replays one deterministic
-//! command sequence against `target/debug/kevy` and this dispatcher
-//! and compares the wire bytes.
+//! Single-key data commands run through `kevy_verbs::exec`, the code
+//! the server runs them with (see `shared`); what stays in the arms
+//! here spans shards, reads under the facade's lock policy, or has no
+//! server counterpart. The oracle test in `tests/dispatch_oracle.rs`
+//! replays one command sequence against `target/debug/kevy` and this
+//! dispatcher and compares the wire bytes.
 //!
 //! The read-only listener whitelist (`listener/verbs.rs`) is a
 //! separate, intentionally narrower surface and stays untouched.
@@ -17,7 +19,6 @@
 mod bitmap;
 #[cfg(feature = "index")]
 mod describe;
-mod hash;
 #[cfg(feature = "index")]
 mod idx;
 #[cfg(feature = "index")]
@@ -27,15 +28,14 @@ mod idx_create;
 #[cfg(feature = "index")]
 mod idx_query;
 mod keyspace;
-mod list;
 mod misc;
 mod set;
+mod shared;
 mod strings;
 #[cfg(feature = "index")]
 mod table;
 #[cfg(feature = "index")]
 mod view;
-mod zset;
 mod zset_algebra;
 
 use kevy_resp::{encode_array_len, encode_bulk, encode_error, encode_integer, encode_null_bulk};
@@ -54,13 +54,11 @@ pub(crate) fn dispatch(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     let mut vbuf = [0u8; 32];
     let up = kevy_verbs::args::upper_verb(verb, &mut vbuf);
     let handled = strings::dispatch(s, up, argv, out)
-        || hash::dispatch(s, up, argv, out)
-        || list::dispatch(s, up, argv, out)
         || set::dispatch(s, up, argv, out)
-        || zset::dispatch(s, up, argv, out)
         || zset_algebra::dispatch(s, up, argv, out)
         || bitmap::dispatch(s, up, argv, out)
         || keyspace::dispatch(s, up, argv, out)
+        || shared::dispatch(s, up, argv, out)
         || misc::dispatch(s, up, argv, out)
         || dispatch_index(s, up, argv, out);
     if !handled {
@@ -139,36 +137,22 @@ fn rest(argv: &[Vec<u8>], from: usize) -> Vec<&[u8]> {
     argv[from..].iter().map(Vec::as_slice).collect()
 }
 
-// ---- helpers shared by the scan-shaped verbs ---------------------------
+/// An argv as the shared command layer reads it.
+struct Args<'a>(&'a [Vec<u8>]);
 
-/// `[MATCH pattern] [COUNT n]` modifiers from `start` on. COUNT is
-/// validated then ignored (one-batch scans, the server's shape).
-/// `None` = syntax error.
-fn parse_match_count(argv: &[Vec<u8>], start: usize) -> Option<Option<Vec<u8>>> {
-    let mut pat: Option<Vec<u8>> = None;
-    let mut i = start;
-    while i < argv.len() {
-        let tok = &argv[i];
-        if tok.eq_ignore_ascii_case(b"MATCH") {
-            pat = Some(argv.get(i + 1)?.clone());
-            i += 2;
-        } else if tok.eq_ignore_ascii_case(b"COUNT") {
-            kevy_verbs::args::arg_i64(argv.get(i + 1)?)?;
-            i += 2;
-        } else {
-            return None;
-        }
+impl core::ops::Index<usize> for Args<'_> {
+    type Output = [u8];
+    fn index(&self, i: usize) -> &[u8] {
+        &self.0[i]
     }
-    Some(pat)
 }
 
-/// `[cursor, [elems…]]` — the H/Z/S-SCAN reply envelope.
-fn emit_scan_page(out: &mut Vec<u8>, cursor: &[u8], elems: &[Vec<u8>]) {
-    encode_array_len(out, 2);
-    encode_bulk(out, cursor);
-    encode_array_len(out, elems.len() as i64);
-    for e in elems {
-        encode_bulk(out, e);
+impl kevy_resp::ArgvView for Args<'_> {
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+    fn get(&self, i: usize) -> Option<&[u8]> {
+        self.0.get(i).map(Vec::as_slice)
     }
 }
 
