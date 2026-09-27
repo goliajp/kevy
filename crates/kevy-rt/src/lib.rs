@@ -104,6 +104,7 @@ mod exec_listmove;
 mod exec_mutated;
 mod exec_notify;
 mod exec_op;
+mod exec_propagate;
 mod exec_pubsub;
 mod exec_pubsub_pattern;
 mod exec_rename;

@@ -2,9 +2,9 @@
 //! as they were: the same entries under the same IDs, the same groups,
 //! pending lists and cursors, the same stored geo results.
 //!
-//! Every write here is one whose effect does not depend on when it runs.
-//! A `*` ID and a claim with a minimum idle time do depend on it, and the
-//! log records their argv; they are left out.
+//! Writes whose effect depends on when they ran, a generated `XADD` ID and
+//! a claim gated on idle time, are recorded as what they did, and replay to
+//! the same IDs, owners and counts.
 
 #![cfg(all(feature = "persist", feature = "streams-geo"))]
 
@@ -162,6 +162,53 @@ fn stream_and_geo_writes_survive_a_restart() {
 #[test]
 fn stream_and_geo_writes_survive_a_restart_across_shards() {
     round_trip(4);
+}
+
+fn time_dependent_round_trip(shards: usize) {
+    const READS: &[&str] =
+        &["XRANGE s - +", "XRANGE s2 - +", "XPENDING s g - + 10", "XINFO GROUPS s"];
+    let dir = kevy_tmpdir::TmpDir::new("replay-streams-time");
+    let before: Vec<String> = {
+        let s = open(dir.path(), shards);
+        for i in 0..4 {
+            ok(&s, &format!("XADD s * f {i}"));
+            std::thread::sleep(std::time::Duration::from_millis(3));
+        }
+        ok(&s, "XADD s MAXLEN ~ 3 * f 4");
+        assert!(call(&s, "XADD s2 7-* f v").starts_with(b"$3\r\n7-0"));
+        assert!(call(&s, "XADD s2 7-* f w").starts_with(b"$3\r\n7-1"));
+        ok(&s, "XGROUP CREATE s g 0");
+        ok(&s, "XREADGROUP GROUP g c1 STREAMS s >");
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        let first = String::from_utf8_lossy(&call(&s, "XRANGE s - + COUNT 1")).into_owned();
+        let id = first.split("\r\n").nth(3).expect("an entry").to_string();
+        let claimed = call(&s, &format!("XCLAIM s g c2 100 {id} JUSTID"));
+        assert!(claimed.starts_with(b"*1\r\n"), "{}", String::from_utf8_lossy(&claimed));
+        // the second entry goes while pending: the claim below drops it
+        // and takes the third, two records from one command
+        let all = String::from_utf8_lossy(&call(&s, "XRANGE s - +")).into_owned();
+        let second = all.split("\r\n").nth(11).expect("a second entry").to_string();
+        assert_eq!(call(&s, &format!("XDEL s {second}")), b":1\r\n");
+        let auto =
+            String::from_utf8_lossy(&call(&s, "XAUTOCLAIM s g c3 100 0 COUNT 3")).into_owned();
+        assert!(auto.ends_with(&format!("*1\r\n$15\r\n{second}\r\n")), "{auto}");
+        READS.iter().map(|r| blank_idle(&String::from_utf8_lossy(&call(&s, r)))).collect()
+    };
+    let s = open(dir.path(), shards);
+    for (read, b) in READS.iter().zip(&before) {
+        let a = blank_idle(&String::from_utf8_lossy(&call(&s, read)));
+        assert_eq!(&a, b, "{shards} shard(s), {read}: changed across the restart");
+    }
+    assert!(before[0].starts_with("*2\r\n"), "{}", before[0]);
+    assert!(before[2].contains("c2") && before[2].contains("c3"), "{}", before[2]);
+    assert!(before[2].starts_with("*2\r\n"), "the dropped entry left the list: {}", before[2]);
+}
+
+/// A generated ID and an idle-gated claim replay as they were answered.
+#[test]
+fn generated_ids_and_idle_claims_survive_a_restart() {
+    time_dependent_round_trip(1);
+    time_dependent_round_trip(4);
 }
 
 /// A host feeding a server's stream frames back in: each lands on its

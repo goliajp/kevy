@@ -170,8 +170,8 @@ fn dispatch_with_proto<A: ArgvView + ?Sized>(
 }
 
 /// The single-shard data commands, run by the layer the embedded engine
-/// shares. A command whose effect is random asks for a different record
-/// than its argv; the runtime's post-write step reads that override.
+/// shares. A command whose effect is random or clock-bound asks for a
+/// different record than its argv; the runtime's post-write step reads that override.
 #[inline]
 fn exec_shared<A: ArgvView + ?Sized>(
     cmd: &[u8],
@@ -185,6 +185,10 @@ fn exec_shared<A: ArgvView + ?Sized>(
             record_instead(kevy_rt::propagation::Propagate::Replace(frame));
             true
         }
+        Some(Effect::RecordAll(frames)) => {
+            record_all_instead(frames);
+            true
+        }
         Some(Effect::Skip) => {
             record_instead(kevy_rt::propagation::Propagate::Suppress);
             true
@@ -196,6 +200,11 @@ fn exec_shared<A: ArgvView + ?Sized>(
 #[cold]
 fn record_instead(p: kevy_rt::propagation::Propagate) {
     kevy_rt::propagation::set_override(p);
+}
+
+#[cold]
+fn record_all_instead(frames: Vec<Vec<Vec<u8>>>) {
+    kevy_rt::propagation::set_override_frames(frames);
 }
 
 /// Record an `SPOP` by the members it removed, for a reply path that pops
