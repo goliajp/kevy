@@ -29,7 +29,7 @@ workspace = true
 # every other feature adds one subsystem back. `default` keeps the full
 # 3.x surface so existing consumers see no change.
 [features]
-default = ["core", "persist", "index", "text", "vector", "replicate", "listener", "tier"]
+default = ["core", "persist", "index", "text", "vector", "replicate", "listener", "tier", "streams-geo"]
 # Marker for the base surface (KV + TTL + pubsub + atomic/pipeline).
 # Always on in practice — named so the minimal archetype is spellable.
 core = []
@@ -52,6 +52,13 @@ listener = []
 # wasm / mem:// stores reject the config at open. kevy-sys provides
 # the memory-bound probe behind the `auto` / percent budget forms.
 tier = ["persist", "dep:kevy-sys"]
+# The stream (X*) and geo (GEO*) commands on `dispatch_argv`, and in the
+# replay of a log or a primary's stream that carries them. On by default:
+# without it a replica drops its primary's stream and geo writes. The
+# code is linked only where a dispatch or a replay reaches it; the
+# browser build leaves the feature out, where it adds about an eighth to
+# the module.
+streams-geo = ["kevy-verbs/streams-geo"]
 
 [dependencies]
 kevy-store = { path = "../kevy-store", version = "6.4.0" }

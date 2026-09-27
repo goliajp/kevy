@@ -175,6 +175,7 @@ mod store_inner;
 mod store_persist;
 mod store_tick;
 mod store_wire;
+mod verb_keys;
 
 #[cfg(feature = "tier")]
 pub use config::TierBudgetSpec;

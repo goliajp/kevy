@@ -9,6 +9,7 @@
 use std::collections::BTreeSet;
 
 use kevy_resp::ops_table::{ops_with, surface};
+use kevy_verbs::is_streams_geo;
 
 use crate::op_manifest::ESTORE_OPS;
 use crate::ops_atomic::ATOMIC_OPS;
@@ -48,9 +49,17 @@ fn estore_manifest_matches_table() {
     diff("ESTORE", ESTORE_OPS, surface::ESTORE);
 }
 
+/// The registry's replay column describes a build with every family; the
+/// stream and geo rows are this build's only with `streams-geo`.
 #[test]
 fn replay_manifest_matches_table() {
-    diff("REPLAY", &replay_verbs(), surface::REPLAY);
+    let mut manifest = replay_verbs();
+    if !cfg!(feature = "streams-geo") {
+        let off = ops_with(surface::REPLAY).into_iter().filter(|n| is_streams_geo(n.as_bytes()));
+        assert_eq!(off.clone().count(), 13, "the family's replay rows moved");
+        manifest.extend(off);
+    }
+    diff("REPLAY", &manifest, surface::REPLAY);
 }
 
 /// Grounding: every verb the replay claims is one it really applies —

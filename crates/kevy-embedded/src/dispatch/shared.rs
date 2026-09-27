@@ -6,6 +6,11 @@
 //! lock when the eviction policy allows (the facade's lock policy);
 //! `DEL`, `UNLINK`, `EXISTS`, `TOUCH`, `MSET`, `RENAME`, `RENAMENX`,
 //! `DBSIZE` and `FLUSHALL` span shards. Those keep their facade arms.
+//!
+//! The stream and geo commands are served with the `streams-geo`
+//! feature. A stream read that asks to block is refused (there is no
+//! connection to park), and so is a multi-key stream read or geo store
+//! whose keys live on different shards.
 
 use kevy_verbs::{Effect, Verb};
 
@@ -37,8 +42,8 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
     let Some(v) = kevy_verbs::verb(up) else {
         return false;
     };
-    // the stream and geo commands are the server's alone for now
-    if SERVER_ONLY.contains(&up) || kevy_verbs::is_streams_geo(up) {
+    if SERVER_ONLY.contains(&up) || !cfg!(feature = "streams-geo") && kevy_verbs::is_streams_geo(up)
+    {
         return false;
     }
     run(s, v, up, argv, out);
@@ -53,10 +58,14 @@ fn run(s: &Store, v: &Verb, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>) {
     {
         return super::kevy_err(out, &e);
     }
-    let key = argv.get(1).map_or(&[][..], Vec::as_slice);
-    let mut g = s.wshard(key);
+    #[cfg(feature = "streams-geo")]
+    if let Some(msg) = refusal(s, up, argv) {
+        return kevy_resp::encode_error(out, msg);
+    }
+    let args = Args(argv);
+    let mut g = s.wshard(crate::verb_keys::shard_key(up, &args).unwrap_or_default());
     let mark = out.len();
-    let effect = kevy_verbs::exec(&mut g.store, up, &Args(argv), out);
+    let effect = kevy_verbs::exec(&mut g.store, up, &args, out);
     if out.get(mark) == Some(&b'-') {
         return; // a refused command changed nothing
     }
@@ -72,6 +81,28 @@ fn run(s: &Store, v: &Verb, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>) {
         out.truncate(mark);
         super::kevy_err(out, &e);
     }
+}
+
+/// Why this engine refuses a stream or geo call it would otherwise run:
+/// it cannot park a caller, and it runs a command under one shard's lock.
+#[cfg(feature = "streams-geo")]
+fn refusal(s: &Store, up: &[u8], argv: &[Vec<u8>]) -> Option<&'static str> {
+    if !kevy_verbs::is_streams_geo(up) {
+        return None;
+    }
+    let args = Args(argv);
+    if crate::verb_keys::blocks(up, &args) {
+        return Some("ERR the embedded engine cannot block; call without BLOCK");
+    }
+    let n = s.shards.len();
+    let apart = |a: &[u8], b: &[u8]| crate::shard::shard_idx(a, n) != crate::shard::shard_idx(b, n);
+    let split = match up {
+        _ if n == 1 => false,
+        b"XREAD" | b"XREADGROUP" => crate::verb_keys::stream_keys(up, &args)
+            .is_some_and(|keys| keys.clone().any(|i| apart(&argv[keys.start], &argv[i]))),
+        _ => kevy_verbs::geo::store_keys(up, &args).is_some_and(|(src, dst)| apart(&src, &dst)),
+    };
+    split.then_some("CROSSSLOT Keys in request don't hash to the same slot")
 }
 
 /// Record a write as the argv it ran with, then the absolute deadline
