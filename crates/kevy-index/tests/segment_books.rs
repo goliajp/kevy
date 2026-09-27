@@ -116,3 +116,21 @@ fn a_segment_can_cross_threads() {
     fn send_sync<T: Send + Sync + std::panic::UnwindSafe + std::panic::RefUnwindSafe>() {}
     send_sync::<Segment>();
 }
+
+/// The same operations report the same size in every segment: each hash
+/// table has its own seed, so a figure read off where its removals landed
+/// would differ between two otherwise identical indexes.
+#[test]
+fn the_reported_size_does_not_depend_on_the_hash_seed() {
+    let build = || {
+        let mut s = windowed();
+        for k in [&b"a"[..], b"c", b"e", b"g"] {
+            s.remove(k);
+        }
+        s.stats()
+    };
+    let first = build();
+    for _ in 0..64 {
+        assert_eq!(build(), first);
+    }
+}
