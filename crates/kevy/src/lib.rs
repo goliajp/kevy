@@ -145,6 +145,7 @@ static STOP_FLAGS: std::sync::Mutex<Vec<std::sync::Weak<AtomicBool>>> =
 /// `stop` flag via a polling bridge thread.
 #[cfg(unix)]
 fn install_signal_handlers(stop: Arc<AtomicBool>) {
+    // NO-UNWIND: signal handler: one atomic store
     extern "C" fn handler(_: std::ffi::c_int) {
         SIGNAL_RECEIVED.store(true, std::sync::atomic::Ordering::SeqCst);
     }
@@ -156,6 +157,7 @@ fn install_signal_handlers(stop: Arc<AtomicBool>) {
     // failing write returns EFBIG to the AOF writer (logged and
     // ignored), kevy keeps serving reads and continues attempting
     // writes. One bad write does not bring down the whole server.
+    // NO-UNWIND: signal handler with an empty body
     extern "C" fn xfsz_noop(_: std::ffi::c_int) {}
     kevy_sys::install_signal_handler(kevy_sys::SIGXFSZ, xfsz_noop);
     // Register this run's stop flag and clear any signal left over
