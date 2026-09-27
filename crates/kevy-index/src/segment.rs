@@ -1,12 +1,12 @@
 //! [`Segment`] — one shard's slice of one index (index-follows-key).
 //! Range = `BTreeSet<(value, key)>`; Unique = the same
 //! tree (point lookups are a 1-value range) plus a duplicate counter
-//! for the declarative fence.
+//! for the declarative fence, kept by looking at a value's neighbours
+//! in the tree rather than in a per-value table.
 //!
 //! The runtime keeps a reverse map `key → value` inside the segment so
 //! `apply` can remove a row's OLD entry without re-reading history.
 
-use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::ops::Bound;
@@ -46,7 +46,6 @@ const ENTRY_OVERHEAD: usize = 48;
 pub struct Segment {
     tree: BTreeSet<(IndexValue, Vec<u8>)>,
     back: HashMap<Vec<u8>, IndexValue>,
-    value_counts: BTreeMap<IndexValue, u32>,
     stats: SegmentStats,
     /// The stored-value side-channel — `Some` only when the index
     /// declared `VALUES`. An index without the declaration holds `None`
@@ -114,13 +113,13 @@ impl Segment {
     /// any previous entry for the key.
     pub fn apply(&mut self, key: &[u8], new: Option<IndexValue>) {
         if let Some(old) = self.back.remove(key) {
+            self.dec_count(&old);
             self.tree.remove(&(old.clone(), key.to_vec()));
             self.stats.entries -= 1;
             self.stats.approx_bytes = self
                 .stats
                 .approx_bytes
                 .saturating_sub((old.approx_bytes() + key.len() + ENTRY_OVERHEAD) as u64);
-            self.dec_count(&old);
         }
         match new {
             Some(v) => {
@@ -163,6 +162,10 @@ impl Segment {
         let kept = self.tree.split_off(&(bound.clone(), Vec::new()));
         let evicted: Vec<(IndexValue, Vec<u8>)> =
             core::mem::replace(&mut self.tree, kept).into_iter().collect();
+        // the cut is by value, so every holder of an evicted value leaves
+        // with it: each run of two or more in the batch was one duplicate
+        let dups = evicted.chunk_by(|a, b| a.0 == b.0).filter(|run| run.len() > 1).count();
+        self.stats.duplicates -= dups as u64;
         for (v, k) in &evicted {
             self.back.remove(k);
             self.stats.entries -= 1;
@@ -170,7 +173,6 @@ impl Segment {
                 .stats
                 .approx_bytes
                 .saturating_sub((v.approx_bytes() + k.len() + ENTRY_OVERHEAD) as u64);
-            self.dec_count(v);
             if let Some(rv) = &mut self.values {
                 rv.clear(k);
             }
@@ -184,33 +186,33 @@ impl Segment {
             rv.clear(key);
         }
         if let Some(old) = self.back.remove(key) {
+            self.dec_count(&old);
             self.tree.remove(&(old.clone(), key.to_vec()));
             self.stats.entries -= 1;
             self.stats.approx_bytes = self
                 .stats
                 .approx_bytes
                 .saturating_sub((old.approx_bytes() + key.len() + ENTRY_OVERHEAD) as u64);
-            self.dec_count(&old);
         }
     }
 
+    /// How many keys hold `v`, counted no further than `cap`.
+    fn holders(&self, v: &IndexValue, cap: usize) -> usize {
+        let lower = Bound::Included((v.clone(), Vec::new()));
+        self.tree.range((lower, Bound::Unbounded)).take_while(|(x, _)| x == v).take(cap).count()
+    }
+
+    /// Call before `v` gains a holder in the tree.
     fn inc_count(&mut self, v: &IndexValue) {
-        let c = self.value_counts.entry(v.clone()).or_insert(0);
-        *c += 1;
-        if *c == 2 {
+        if self.holders(v, 2) == 1 {
             self.stats.duplicates += 1;
         }
     }
 
+    /// Call before `v` loses a holder in the tree.
     fn dec_count(&mut self, v: &IndexValue) {
-        if let Some(c) = self.value_counts.get_mut(v) {
-            if *c == 2 {
-                self.stats.duplicates -= 1;
-            }
-            *c -= 1;
-            if *c == 0 {
-                self.value_counts.remove(v);
-            }
+        if self.holders(v, 3) == 2 {
+            self.stats.duplicates -= 1;
         }
     }
 
