@@ -69,6 +69,7 @@ dependencies = [
  "kevy-sys",
  "kevy-text",
  "kevy-vector",
+ "kevy-verbs",
  "kevy-window",
 ]
 
@@ -174,6 +175,14 @@ version = "6.4.0"
 [[package]]
 name = "kevy-vector"
 version = "6.4.0"
+
+[[package]]
+name = "kevy-verbs"
+version = "6.4.0"
+dependencies = [
+ "kevy-resp",
+ "kevy-store",
+]
 
 [[package]]
 name = "kevy-vlog"

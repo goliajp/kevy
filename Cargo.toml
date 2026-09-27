@@ -53,6 +53,7 @@ members = [
     "crates/kevy-resp",
     "crates/kevy-ring",
     "crates/kevy-store",
+    "crates/kevy-verbs",
     "crates/kevy-compress",
     "crates/kevy-vlog",
     "crates/kevy-rt",

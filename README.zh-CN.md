@@ -353,7 +353,7 @@ recall 对齐（[`PERFORMANCE.md`](PERFORMANCE.md)）：
 | [`kevy-wasm`](crates/kevy-wasm) | 浏览器构建：手写 C ABI + `@goliapkg/kevy` loader |
 | [`kevy-lua`](crates/kevy-lua) | Lua 脚本桥接（基于 [luna](https://github.com/goliajp/luna) 运行时） |
 
-其余 crate（`kevy-store`、`kevy-rt`、`kevy-persist`、`kevy-sys`、
+其余 crate（`kevy-store`、`kevy-verbs`、`kevy-rt`、`kevy-persist`、`kevy-sys`、
 `kevy-elect`、`kevy-replicate`、`kevy-scope`、`kevy-lua-host`、
 `kevy-chaos`、`kevy-bench`、`kevy-pubsub-bench`）是服务器和嵌入式
 库的内部基础设施——之所以发布它们是为了让 workspace 能可复现地

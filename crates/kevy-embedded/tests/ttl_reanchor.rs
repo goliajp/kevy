@@ -94,7 +94,9 @@ fn conditional_set_with_ttl_is_one_frame_and_survives_replay() {
     assert!(ttl <= 100_000 - 1_000, "conditional SET re-anchored on replay: {ttl}ms");
     let aof = aof_bytes(dir.path());
     let count = |pat: &[u8]| aof.windows(pat.len()).filter(|w| *w == pat).count();
-    assert_eq!(count(b"$2\r\nPX\r\n"), 2, "each applied SET carries its TTL in its own frame");
+    // the frame is the SET as it was run, so the TTL option is EX or PX
+    let ttl_frames = count(b"$2\r\nEX\r\n") + count(b"$2\r\nPX\r\n");
+    assert_eq!(ttl_frames, 2, "each applied SET carries its TTL in its own frame");
     assert_eq!(count(b"PEXPIREAT"), 2, "and each is pinned to an absolute deadline");
     assert_eq!(count(b"$4\r\ngone"), 0, "a vetoed SET is not logged");
 }
@@ -121,4 +123,19 @@ fn conditional_set_on_a_closed_store_is_refused() {
     assert!(s.set_with_ttl(b"k", b"v", Duration::from_secs(1)).is_err());
     let reply = dispatch(&s, &[b"SET", b"k", b"v", b"NX", b"EX", b"1"]);
     assert!(reply.starts_with(b"-"), "{:?}", String::from_utf8_lossy(&reply));
+}
+
+/// The typed EXPIREAT names an absolute second: it survives a restart
+/// without being re-counted, and a missing key is not given one.
+#[test]
+fn typed_expireat_survives_replay_without_reanchoring() {
+    let dir = kevy_tmpdir::TmpDir::new("ttl-reanchor-expireat");
+    let at = kevy_store::now_unix_ms() / 1000 + 100;
+    let ttl = reopened_ttl_after(dir.path(), |s| {
+        assert!(!s.expireat(b"k", at).unwrap(), "no key, no deadline");
+        s.set(b"k", b"v").unwrap();
+        assert!(s.expireat(b"k", at).unwrap());
+    });
+    assert!(ttl > 0, "key survived: {ttl}");
+    assert!(ttl <= 100_000 - 1_000, "EXPIREAT re-anchored on replay: {ttl}ms");
 }
