@@ -42,6 +42,24 @@ pub struct SecureSection {
     /// assert_eq!(cfg.secure.client_keys, vec![[0xab; 32]]);
     /// ```
     pub client_keys: Vec<[u8; 32]>,
+    /// With `[cluster] enabled`, the first encrypted cluster port: shard
+    /// `i` is reached encrypted at `cluster_port_base + i`, relayed to its
+    /// plaintext cluster port. `0` (default): `listen_port + 1`.
+    ///
+    /// ```
+    /// let cfg = kevy_config::Config::from_toml_str("[secure]\ncluster_port_base = 6410\n", None).unwrap();
+    /// assert_eq!(cfg.secure.cluster_port_base, 6410);
+    /// ```
+    pub cluster_port_base: u16,
+    /// The first encrypted cluster port to advertise in `-MOVED` and
+    /// `CLUSTER SLOTS` / `NODES` / `SHARDS` to encrypted clients, when a
+    /// proxy or NAT maps it. `0` (default): `cluster_port_base`.
+    ///
+    /// ```
+    /// let cfg = kevy_config::Config::from_toml_str("[secure]\nannounce_cluster_port_base = 7410\n", None).unwrap();
+    /// assert_eq!(cfg.secure.announce_cluster_port_base, 7410);
+    /// ```
+    pub announce_cluster_port_base: u16,
 }
 
 /// A 32-byte public key from its 64-character hex form.
@@ -104,6 +122,12 @@ impl Config {
             }
             "listen_port" => self.secure.listen_port = crate::apply::value_as_u16(item)?,
             "client_keys" => self.secure.client_keys = keys_item(item)?,
+            "cluster_port_base" => {
+                self.secure.cluster_port_base = crate::apply::value_as_u16(item)?
+            }
+            "announce_cluster_port_base" => {
+                self.secure.announce_cluster_port_base = crate::apply::value_as_u16(item)?
+            }
             k => return Err(schema_err(item, format!("unknown [secure] key: {k}"))),
         }
         Ok(())
