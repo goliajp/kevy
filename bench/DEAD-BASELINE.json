@@ -4,7 +4,7 @@
   "kind": "symbols/qualified-path",
   "tree": "5cb014661ab5dcfc12f9d8a17abeba8a8b1fc9da",
   "total_regions": 191121,
-  "dead_regions": 26615,
+  "dead_regions": 26634,
   "llvm_per_instantiation_dead": 27099,
   "crates": {
     "kevy": {
@@ -3499,7 +3499,12 @@
     "kevy_embedded::store::Store::set_opts": 3,
     "kevy_embedded::store_glue::Parts::get": 6,
     "kevy_persist::crc32c::crc32c_append": 4,
-    "kevy_sys::checksum::try_crc32c_hw_append": 2
+    "kevy_sys::checksum::try_crc32c_hw_append": 2,
+    "dyn kevy_index::segment_entry::RowRef::eq": 4,
+    "dyn kevy_index::segment_entry::RowRef::partial_cmp": 4,
+    "kevy_index::segment_entry::ByValue::eq": 4,
+    "kevy_index::segment_entry::ByValue::partial_cmp": 4,
+    "kevy_index::value::IndexValue::approx_bytes": 3
   },
   "envelope_runs": 3,
   "history": [
@@ -3939,6 +3944,17 @@
       ],
       "reason": "Store::set_opts carries the three commit_write error arms Store::set_with_ttl had (its 3 regions left the set when SET with NX/XX/TTL became one operation); an AOF write failure is not injected in the corpus. crc32c_append and try_crc32c_hw_append are the software fallback of the piecewise CRC, which runs only on machines without hardware CRC, the same arms crc32c and try_crc32c_hw already carry. Parts::get is the ArgvView method the frame writer never calls (it indexes); a test written only to execute it would not check anything. The frame writer's own error arms are covered by a sink that fails once.",
       "delta": 15
+    },
+    {
+      "accepted": [
+        "dyn kevy_index::segment_entry::RowRef::eq",
+        "dyn kevy_index::segment_entry::RowRef::partial_cmp",
+        "kevy_index::segment_entry::ByValue::eq",
+        "kevy_index::segment_entry::ByValue::partial_cmp",
+        "kevy_index::value::IndexValue::approx_bytes"
+      ],
+      "reason": "An index row is now stored once and shared by the ordered tree and the reverse set. The tree orders rows through a trait object, and Ord requires PartialEq and PartialOrd, but BTreeSet only ever calls cmp: the eq and partial_cmp of dyn RowRef and ByValue exist for the trait bound and never run. IndexValue::approx_bytes lost its segment caller (a segment now counts its own row bytes); its only caller is the view's member formula, and no view in the corpus sorts by a string, so the Str arm moved out of coverage rather than into the product. An unused RowRef impl for the owned row tuple was deleted instead of accepted.",
+      "delta": 19
     }
   ]
 }
