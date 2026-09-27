@@ -32,9 +32,10 @@ done
 #   hexpire_at  tests_tier::a_packed_row_answers_the_field_ttl_precheck
 #   hpttl       reads the field-TTL sidecar, never the row
 #   hpersist    reads the field-TTL sidecar, never the row
+#   hash_field_deadlines  reads the field-TTL sidecar, never the row
 # A flat list, not an associative array: this runs on the box's bash and
 # on a Mac's bash 3.2, and the second one has no associative arrays.
-EXEMPT="hexpire_at hpttl hpersist"
+EXEMPT="hexpire_at hpttl hpersist hash_field_deadlines"
 
 verbs=$(grep -ho "    pub fn h[a-z_]*(" "${SRC[@]}" | sed 's/.*pub fn \(h[a-z_]*\)(.*/\1/' | sort -u)
 [ -n "$verbs" ] || { echo "formgate: FAIL — found no hash verbs; the search is broken"; exit 1; }

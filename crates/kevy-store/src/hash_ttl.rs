@@ -114,6 +114,23 @@ impl Store {
         Ok(codes)
     }
 
+    /// Each field's absolute deadline (unix ms) as stored, `None` for a
+    /// field with no TTL. A read with no side effects: unlike [`Self::hpttl`]
+    /// it purges nothing, so a deadline already passed is still reported,
+    /// and removing that field stays the expiry sweep's job.
+    ///
+    /// ```
+    /// let mut s = kevy_store::Store::new();
+    /// s.hset(b"h", &[(b"f", b"v"), (b"g", b"w")]).unwrap();
+    /// let at = kevy_store::now_unix_ms() + 60_000;
+    /// s.hexpire_at(b"h", &[b"f"], at, kevy_store::HExpireCond::Always).unwrap();
+    /// assert_eq!(s.hash_field_deadlines(b"h", &[b"f", b"g"]), [Some(at), None]);
+    /// ```
+    pub fn hash_field_deadlines(&self, key: &[u8], fields: &[&[u8]]) -> Vec<Option<u64>> {
+        let per_key = self.hfttl.get(key);
+        fields.iter().map(|f| per_key.and_then(|m| m.get(*f)).copied()).collect()
+    }
+
     /// Remaining TTL per field: `-2` key/field missing, `-1` no TTL,
     /// else remaining ms.
     pub fn hpttl(&mut self, key: &[u8], fields: &[&[u8]]) -> Result<Vec<i64>, StoreError> {
