@@ -26,6 +26,10 @@ fn a_logged_set_keeps_its_relative_ttl_until_the_deadline_frame() {
     // the deadline frame that follows wins, and a past one drops the key
     apply(&mut s, &argv(&[b"PEXPIREAT", b"k", b"1000"]));
     assert_eq!(s.get(b"k").unwrap(), None);
+    // a TTL option without a usable number sets the value without a TTL
+    apply(&mut s, &argv(&[b"SET", b"bare", b"v", b"EX"]));
+    apply(&mut s, &argv(&[b"SET", b"junk", b"v", b"PX", b"soon"]));
+    assert_eq!((s.pttl(b"bare"), s.pttl(b"junk")), (-1, -1));
     // NX/XX in a logged frame are moot: the SET happened
     apply(&mut s, &argv(&[b"SET", b"s", b"w", b"NX"]));
     assert_eq!(s.get(b"s").unwrap(), Some(Cow::Borrowed(&b"w"[..])));

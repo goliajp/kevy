@@ -4,7 +4,7 @@
   "kind": "symbols/qualified-path",
   "tree": "5cb014661ab5dcfc12f9d8a17abeba8a8b1fc9da",
   "total_regions": 191121,
-  "dead_regions": 26600,
+  "dead_regions": 26615,
   "llvm_per_instantiation_dead": 27099,
   "crates": {
     "kevy": {
@@ -3495,7 +3495,11 @@
     "kevy_resp_client::secure::SecureStream::handshake": 7,
     "kevy_resp_client::secure::SecureStream::writer": 1,
     "kevy_resp_client::secure::SecureWriter::write": 1,
-    "kevy_resp_client::secure::send_sealed": 2
+    "kevy_resp_client::secure::send_sealed": 2,
+    "kevy_embedded::store::Store::set_opts": 3,
+    "kevy_embedded::store_glue::Parts::get": 6,
+    "kevy_persist::crc32c::crc32c_append": 4,
+    "kevy_sys::checksum::try_crc32c_hw_append": 2
   },
   "envelope_runs": 3,
   "history": [
@@ -3925,6 +3929,16 @@
       ],
       "reason": "Error arms of calls that cannot fail against a healthy loopback server: the ? branches after dialing, handshakes, entropy, CLUSTER SLOTS parsing, key-file loading and sealing, in the kevys:// constructors of kevy-resp-client, kevy-client, kevy-client-async, kevy-cluster-rw and kevy-cli, plus open_progress now running after the source opened. Refusals a peer can cause are tested: wrong server keys, unlisted client keys, malformed URLs, bad key files, a missing import source.",
       "delta": 38
+    },
+    {
+      "accepted": [
+        "kevy_embedded::store::Store::set_opts",
+        "kevy_embedded::store_glue::Parts::get",
+        "kevy_persist::crc32c::crc32c_append",
+        "kevy_sys::checksum::try_crc32c_hw_append"
+      ],
+      "reason": "Store::set_opts carries the three commit_write error arms Store::set_with_ttl had (its 3 regions left the set when SET with NX/XX/TTL became one operation); an AOF write failure is not injected in the corpus. crc32c_append and try_crc32c_hw_append are the software fallback of the piecewise CRC, which runs only on machines without hardware CRC, the same arms crc32c and try_crc32c_hw already carry. Parts::get is the ArgvView method the frame writer never calls (it indexes); a test written only to execute it would not check anything. The frame writer's own error arms are covered by a sink that fails once.",
+      "delta": 15
     }
   ]
 }
