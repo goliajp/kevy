@@ -12,9 +12,11 @@ use std::path::PathBuf;
 pub enum AppendFsync {
     /// `fsync` after every write command. Zero data-loss but ~50% throughput.
     Always,
-    /// Background `fsync` every second. Lose at most 1s on crash. Default.
+    /// Background `fsync` about every second. A power loss loses about 1s
+    /// plus the time one fsync takes. Default.
     EverySec,
-    /// No explicit `fsync`; let OS pagecache flush. Lose ~30s on crash.
+    /// No explicit `fsync`; the OS decides when data reaches the disk. A
+    /// power loss can lose ~30s.
     No,
 }
 

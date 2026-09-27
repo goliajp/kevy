@@ -508,7 +508,7 @@ PAGES["choose"] = {
                 },
                 {
                     "q": "机器挂了会怎么样？",
-                    "a": "每一次写都先落进一份 append-only 日志，启动时重放这份日志。在默认的 <code>everysec</code> fsync 策略下，被硬杀最多丢一秒的写；把 <code>appendfsync = \"always\"</code> 打开就一条都不丢，代价是吞吐。快照存在的唯一目的，是给重放时间设一个上界。<a href=\"~/docs/persistence/\">持久化指南</a>里有具体数字。",
+                    "a": "每一次写都先落进一份 append-only 日志，启动时重放这份日志。在默认的 <code>everysec</code> fsync 策略下，被硬杀最多丢约一秒的写；把 <code>appendfsync = \"always\"</code> 打开就一条都不丢，代价是吞吐。快照存在的唯一目的，是给重放时间设一个上界。<a href=\"~/docs/persistence/\">持久化指南</a>里有具体数字。",
                 },
                 {
                     "q": "机器故障能扛过去吗？",

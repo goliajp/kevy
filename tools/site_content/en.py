@@ -521,7 +521,7 @@ PAGES["choose"] = {
                 },
                 {
                     "q": "What happens when the machine dies?",
-                    "a": "Every write goes to an append-only log first, and the log replays on boot. With the default <code>everysec</code> fsync you lose at most a second of writes to a hard kill; set <code>appendfsync = \"always\"</code> and you lose nothing, at a cost in throughput. Snapshots exist only to bound how long the replay takes. <a href=\"~/docs/persistence/\">The persistence guide</a> has the numbers.",
+                    "a": "Every write goes to an append-only log first, and the log replays on boot. With the default <code>everysec</code> fsync you lose at most about a second of writes to a hard kill; set <code>appendfsync = \"always\"</code> and you lose nothing, at a cost in throughput. Snapshots exist only to bound how long the replay takes. <a href=\"~/docs/persistence/\">The persistence guide</a> has the numbers.",
                 },
                 {
                     "q": "Can I survive a machine failure?",
