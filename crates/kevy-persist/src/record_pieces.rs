@@ -141,4 +141,47 @@ mod tests {
         want.extend_from_slice(b"*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$1\r\nv\r\n");
         assert_eq!(got, want);
     }
+
+    // a sink that fails exactly once, when `budget` bytes are spent, and
+    // accepts everything after: a swallowed error shows up as bytes past
+    // the failure point instead of hiding behind the next failed write
+    struct Budget {
+        out: Vec<u8>,
+        budget: usize,
+        failed: bool,
+    }
+
+    impl Write for Budget {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            let room = if self.failed { usize::MAX } else { self.budget - self.out.len() };
+            let n = buf.len().min(room);
+            if n == 0 && !buf.is_empty() {
+                self.failed = true;
+                return Err(io::Error::other("sink full"));
+            }
+            self.out.extend_from_slice(&buf[..n]);
+            Ok(n)
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    // a write that fails anywhere in the record reports it, and what did
+    // land is a prefix of the record, never other bytes
+    #[test]
+    fn a_failing_sink_surfaces_every_error() {
+        let a = argv(&[b"SET", b"key", b"value"]);
+        let head = record_header(&a);
+        let mut full = Vec::new();
+        write_frame(&mut full, Some(&head), &a).unwrap();
+        for budget in 0..full.len() {
+            let mut w = Budget { out: Vec::new(), budget, failed: false };
+            assert!(write_frame(&mut w, Some(&head), &a).is_err(), "budget {budget}");
+            assert_eq!(w.out, full[..budget], "budget {budget}");
+        }
+        let mut w = Budget { out: Vec::new(), budget: full.len(), failed: false };
+        write_frame(&mut w, Some(&head), &a).unwrap();
+        assert_eq!(w.out, full);
+    }
 }
