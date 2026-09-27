@@ -5,7 +5,7 @@ use crate::KevyResult;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 #[cfg(feature = "persist")]
-use kevy_persist::{Aof, Argv};
+use kevy_persist::Aof;
 use kevy_store::StoreError;
 
 use crate::store::Inner;
@@ -21,11 +21,33 @@ pub(crate) fn lock_read(shard: &RwLock<Inner>) -> RwLockReadGuard<'_, Inner> {
     shard.read().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+/// The caller's argument slices as an argv, so the log encodes from them
+/// without an owned copy.
+#[cfg(feature = "persist")]
+struct Parts<'a, 'b>(&'a [&'b [u8]]);
+
+#[cfg(feature = "persist")]
+impl core::ops::Index<usize> for Parts<'_, '_> {
+    type Output = [u8];
+    fn index(&self, i: usize) -> &[u8] {
+        self.0[i]
+    }
+}
+
+#[cfg(feature = "persist")]
+impl kevy_resp::ArgvView for Parts<'_, '_> {
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+    fn get(&self, i: usize) -> Option<&[u8]> {
+        self.0.get(i).copied()
+    }
+}
+
 #[cfg(feature = "persist")]
 fn log_argv(aof: &mut Option<Aof>, parts: &[&[u8]]) -> KevyResult<()> {
     if let Some(aof) = aof {
-        let argv = Argv::from(parts.iter().map(|p| p.to_vec()).collect::<Vec<_>>());
-        aof.append(&argv)?;
+        aof.append(&Parts(parts))?;
     }
     Ok(())
 }
