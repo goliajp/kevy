@@ -1,7 +1,9 @@
-//! String `SET` variants (`SETNX`, `APPEND`, `STRLEN`), hash
+//! String `SET` variants (`SETNX`, SET with NX/XX/TTL, `APPEND`, `STRLEN`), hash
 //! conditional set (`HSETNX`), decrement helpers (`DECR`, `DECRBY`,
 //! `INCRBYFLOAT`), and the seconds-precision TTL accessor
 //! (`ttl_secs`).
+
+use std::time::Duration;
 
 use crate::{KevyError, KevyResult};
 
@@ -20,6 +22,37 @@ impl Store {
         let ok = g.store.set(key, value.to_vec(), None, /*nx=*/ true, /*xx=*/ false);
         if ok {
             commit_write(&mut g, &[b"SET", key, value, b"NX"])?;
+        }
+        Ok(ok)
+    }
+
+    /// `SET key value [NX|XX]` with an optional TTL, as one operation under
+    /// one lock, so no other thread sees the value without its TTL. The AOF
+    /// gets the server's shape: `SET key value PX ms` carries the TTL in the
+    /// value's own frame, so a crash before the second frame still leaves an
+    /// expiring key, and `PEXPIREAT` then pins the absolute deadline. Only
+    /// a SET that happened is logged, so the frame needs no NX/XX.
+    pub(crate) fn set_opts(
+        &self,
+        key: &[u8],
+        value: &[u8],
+        ttl: Option<Duration>,
+        nx: bool,
+        xx: bool,
+    ) -> KevyResult<bool> {
+        ensure_writable(self)?;
+        let mut g = self.wshard(key);
+        let ok = g.store.set(key, value.to_vec(), ttl, nx, xx);
+        if ok {
+            match ttl {
+                None => commit_write(&mut g, &[b"SET", key, value])?,
+                Some(ttl) => {
+                    let ms = ttl.as_millis().min(u128::from(u64::MAX)) as u64;
+                    let deadline = kevy_store::now_unix_ms().saturating_add(ms).to_string();
+                    commit_write(&mut g, &[b"SET", key, value, b"PX", ms.to_string().as_bytes()])?;
+                    commit_write(&mut g, &[b"PEXPIREAT", key, deadline.as_bytes()])?;
+                }
+            }
         }
         Ok(ok)
     }

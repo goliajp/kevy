@@ -43,14 +43,7 @@ impl Store {
     /// fresh full duration on every restart (seen as a production
     /// incident: cache keys never expired across restarts).
     pub fn set_with_ttl(&self, key: &[u8], value: &[u8], ttl: Duration) -> KevyResult<bool> {
-        ensure_writable(self)?;
-        let mut g = self.wshard(key);
-        let ok = g.store.set(key, value.to_vec(), Some(ttl), false, false);
-        let ms = ttl.as_millis().min(u128::from(u64::MAX)) as u64;
-        let deadline = kevy_store::now_unix_ms().saturating_add(ms);
-        commit_write(&mut g, &[b"SET", key, value])?;
-        commit_write(&mut g, &[b"PEXPIREAT", key, deadline.to_string().as_bytes()])?;
-        Ok(ok)
+        self.set_opts(key, value, Some(ttl), false, false)
     }
 
     /// `GET key` — `Some(bytes)` on hit, `None` on miss or expired.
