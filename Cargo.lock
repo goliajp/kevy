@@ -486,6 +486,7 @@ version = "6.4.0"
 dependencies = [
  "kevy-embedded",
  "kevy-hash",
+ "kevy-noise",
  "kevy-persist",
  "kevy-resp",
  "kevy-resp-client",

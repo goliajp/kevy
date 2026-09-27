@@ -99,9 +99,12 @@ impl Session {
             self.in_multi = false;
             self.pubsub_mode = false;
         }
-        let opened = match &self.opts.socket {
-            Some(path) => Conn::unix(path),
-            None => Conn::tcp(&self.opts.host, self.opts.port, self.opts.connect_timeout),
+        let opened = match (&self.opts.socket, &self.opts.secure) {
+            (Some(path), _) => Conn::unix(path),
+            (None, Some(t)) => {
+                Conn::secure(&self.opts.host, self.opts.port, self.opts.connect_timeout, t)
+            }
+            (None, None) => Conn::tcp(&self.opts.host, self.opts.port, self.opts.connect_timeout),
         };
         let conn = match opened {
             Ok(c) => c,

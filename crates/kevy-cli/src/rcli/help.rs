@@ -37,7 +37,9 @@ Usage: kevy-cli [OPTIONS] [cmd [arg [arg ...]]]
   --user <username>  Used to send ACL style 'AUTH username pass'. Needs -a.
   --askpass          Force user to input password with mask from STDIN.
   -u <uri>           Server URI: redis://[[user]:password@]host[:port][/db]
-                     (valkey:// is accepted too).
+                     (valkey:// is accepted too), or kevy's encrypted port:
+                     kevys://host[:port][/db]?server_key=<hex>
+                     [&client_key_file=<path>].
   -r <repeat>        Execute specified command N times (negative = forever).
   -i <interval>      When -r is used, waits <interval> seconds per command.
   -n <db>            Database number.
