@@ -52,6 +52,22 @@ fn log_argv(aof: &mut Option<Aof>, parts: &[&[u8]]) -> KevyResult<()> {
     Ok(())
 }
 
+/// Whether a write on this shard is recorded anywhere a frame of it
+/// would reach: the AOF, the embed-as-writer replication source, or the
+/// change feed.
+pub(crate) fn records_writes(inner: &Inner) -> bool {
+    #[cfg(feature = "persist")]
+    if inner.aof.is_some() {
+        return true;
+    }
+    #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
+    if inner.writer_source.is_some() || inner.feed.is_some() {
+        return true;
+    }
+    let _ = inner;
+    false
+}
+
 /// Complete a write on one shard: AOF-log the canonical RESP command,
 /// publish to the embed-as-writer replication source (if configured),
 /// then run that shard's post-write eviction sweep.

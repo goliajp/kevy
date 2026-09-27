@@ -105,6 +105,48 @@ fn logging_a_set_allocates_nothing_on_the_callers_thread() {
     assert_eq!(disk_big, mem_big, "first SET of 1 MiB: (allocations, bytes)");
 }
 
+/// Allocations for 100 `XADD`s through the argv path, explicit IDs then
+/// generated ones of the same length (the reply formats both the same way).
+#[cfg(feature = "streams-geo")]
+fn xadd_costs(store: &Store) -> (u64, u64) {
+    let argv = |id: &str| -> Vec<Vec<u8>> {
+        ["XADD", "s", id, "f", "v"].iter().map(|p| p.as_bytes().to_vec()).collect()
+    };
+    let explicit: Vec<_> =
+        (0..200).map(|i| argv(&format!("{}-0", 1_000_000_000_000u64 + i))).collect();
+    let star = argv("*");
+    let mut out = Vec::with_capacity(4096);
+    let mut run = |a: &Vec<Vec<u8>>| {
+        out.clear();
+        store.dispatch_argv(a, &mut out);
+        assert_eq!(out.first(), Some(&b'$'), "{:?}", String::from_utf8_lossy(&out));
+    };
+    explicit[..100].iter().for_each(&mut run);
+    let with_id = count(|| explicit[100..].iter().for_each(&mut run)).0;
+    (0..100).for_each(|_| run(&star));
+    let with_star = count(|| (0..100).for_each(|_| run(&star))).0;
+    (with_id, with_star)
+}
+
+/// A generated `XADD` ID is recorded as the ID it gave without a frame
+/// built for it: the record is the argv viewed from the stack with the
+/// ID swapped in, so it costs what an explicit ID does, logged or not.
+#[cfg(feature = "streams-geo")]
+#[test]
+fn a_generated_stream_id_is_recorded_for_what_an_explicit_one_costs() {
+    let mem = Store::open(Config::default().with_shards(1)).expect("open memory store");
+    let (mem_id, mem_star) = xadd_costs(&mem);
+    let dir = kevy_tmpdir::TmpDir::new("aof-append-xadd");
+    let cfg = Config::default()
+        .with_shards(1)
+        .with_persist(dir.path())
+        .with_appendfsync(AppendFsync::EverySec)
+        .with_auto_aof_rewrite_disabled();
+    let (disk_id, disk_star) = xadd_costs(&Store::open(cfg).expect("open persistent store"));
+    assert!(mem_id >= 100, "the counter must see the entries: {mem_id}");
+    assert_eq!((mem_star, disk_star), (mem_id, disk_id), "100 XADDs: generated vs explicit");
+}
+
 /// The log an embedded store writes is the canonical record stream, byte
 /// for byte: magic, then one checksummed multibulk record per write.
 #[test]

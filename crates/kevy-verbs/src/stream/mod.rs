@@ -78,10 +78,7 @@ fn effect(cmd: &[u8]) -> Effect {
 /// <id|*> field value [field value ...]`
 ///
 /// An ID the command generated (`*`, `ms-*`) is recorded as the ID it
-/// gave, every other argument as it came: the clock at a replay cannot
-/// pick it again. The trim options stay in the record and are run again
-/// on replay, which gives the same result: a trim here is exact, `~`
-/// included, and depends only on the entries.
+/// gave ([`Effect::RecordId`]), every other argument as it came.
 fn cmd_xadd<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) -> Effect {
     if args.len() < 5 {
         wrong_args(out, "xadd");
@@ -110,14 +107,8 @@ fn cmd_xadd<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>
     if let Some(trim) = parsed.trim {
         apply_trim(store, &args[1], trim);
     }
-    let encoded = id.encode();
-    encode_bulk(out, &encoded);
-    if !generated {
-        return Effect::Write;
-    }
-    let mut frame: Vec<Vec<u8>> = (0..args.len()).map(|i| args[i].to_vec()).collect();
-    frame[parsed.id_at] = encoded;
-    Effect::Record(frame)
+    encode_bulk(out, crate::aof::id_bytes(&mut [0u8; 41], id));
+    if generated { Effect::RecordId(parsed.id_at, id) } else { Effect::Write }
 }
 
 fn xadd_err(out: &mut Vec<u8>, e: kevy_store::StoreError) {

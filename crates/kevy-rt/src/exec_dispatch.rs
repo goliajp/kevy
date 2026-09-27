@@ -421,7 +421,7 @@ impl<C: Commands> Shard<C> {
                 src.push_mutation(args);
             }
         } else {
-            self.record_propagation_override(prop);
+            self.record_propagation_override(prop, args);
         }
         self.maybe_notify_dispatch(args);
         // BLOCK wake: if this write targets a key a waiter is parked on,

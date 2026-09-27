@@ -20,12 +20,19 @@ fn frame(f: &[Vec<u8>]) -> String {
     f.iter().map(|p| String::from_utf8_lossy(p)).collect::<Vec<_>>().join(" ")
 }
 
-/// Every frame the effect records, as text; the argv itself for a write.
-fn records(cmd: &str, e: Option<Effect>) -> Vec<String> {
+/// Every frame the effect of `cmd` records, as text; the argv itself for
+/// a write. Built right after the command, as a recording caller does.
+fn records(store: &mut Store, cmd: &str, e: Option<Effect>) -> Vec<String> {
     match e {
         Some(Effect::Write) => vec![cmd.to_string()],
         Some(Effect::Record(f)) => vec![frame(&f)],
-        Some(Effect::RecordAll(fs)) => fs.iter().map(|f| frame(f)).collect(),
+        Some(e @ (Effect::RecordId(..) | Effect::RecordClaim(_))) => {
+            let frames = crate::aof::deferred_frames(store, &argv(cmd), &e);
+            frames
+                .iter()
+                .map(|f| frame(&(0..f.len()).map(|i| f[i].to_vec()).collect::<Vec<_>>()))
+                .collect()
+        }
         _ => Vec::new(),
     }
 }
@@ -37,9 +44,12 @@ fn a_generated_id_is_recorded_as_the_id_it_gave() {
     assert_eq!(e, Some(Effect::Unchanged), "{reply}");
     let (e, reply) = run(&mut s, "XADD s MAXLEN ~ 2 * f v");
     let id = reply.split("\r\n").nth(1).unwrap().to_string();
-    assert_eq!(records("", e), vec![format!("XADD s MAXLEN ~ 2 {id} f v")]);
+    assert_eq!(
+        records(&mut s, "XADD s MAXLEN ~ 2 * f v", e),
+        vec![format!("XADD s MAXLEN ~ 2 {id} f v")]
+    );
     let (e, _) = run(&mut s, "XADD s2 7-* f v");
-    assert_eq!(records("", e), vec!["XADD s2 7-0 f v".to_string()]);
+    assert_eq!(records(&mut s, "XADD s2 7-* f v", e), vec!["XADD s2 7-0 f v".to_string()]);
     let (e, _) = run(&mut s, "XADD s2 8-1 f v");
     assert_eq!(e, Some(Effect::Write), "an explicit ID is recorded as typed");
     let (e, reply) = run(&mut s, "XADD s2 1-* f v");
@@ -56,21 +66,21 @@ fn claim_records_replay_to_the_same_pending_list() {
     let mut log: Vec<String> = Vec::new();
     for c in setup.iter().chain(&["XREADGROUP GROUP g a STREAMS s >"]) {
         let (e, _) = run(&mut live, c);
-        log.extend(records(c, e));
+        log.extend(records(&mut live, c, e));
     }
     let (_, gone) = run(&mut live, "XDEL s 3-1");
     assert_eq!(gone, ":1\r\n");
     log.push("XDEL s 3-1".into());
     // 4-1 was never delivered: only FORCE puts it in the list
     let (e, _) = run(&mut live, "XADD s 4-1 d 4");
-    log.extend(records("XADD s 4-1 d 4", e));
+    log.extend(records(&mut live, "XADD s 4-1 d 4", e));
     for c in [
         "XCLAIM s g b 0 1-1 2-1 RETRYCOUNT 7",
         "XAUTOCLAIM s g c 0 2-1 COUNT 5 JUSTID",
         "XCLAIM s g e 0 4-1 FORCE JUSTID",
     ] {
         let (e, _) = run(&mut live, c);
-        let rec = records(c, e);
+        let rec = records(&mut live, c, e);
         assert!(!rec.is_empty() && rec.iter().all(|f| f.starts_with("XCLAIM s g ")), "{rec:?}");
         log.extend(rec);
     }
@@ -120,7 +130,8 @@ fn a_claim_that_changes_nothing_records_nothing() {
     }
     // the consumer is new: that much changed
     let (e, _) = run(&mut s, "XAUTOCLAIM s g idle 999999 0");
-    assert_eq!(records("", e), vec!["XGROUP CREATECONSUMER s g idle".to_string()]);
+    let rec = records(&mut s, "XAUTOCLAIM s g idle 999999 0", e);
+    assert_eq!(rec, vec!["XGROUP CREATECONSUMER s g idle".to_string()]);
     let (e, _) = run(&mut s, "XAUTOCLAIM s g idle 999999 0");
     assert_eq!(e, Some(Effect::Skip));
     let (e, _) = run(&mut s, "XCLAIM s g a 999999 1-1");
@@ -139,5 +150,6 @@ fn a_dropped_entry_is_recorded_as_a_drop() {
     run(&mut s, "XDEL s 1-1");
     let (e, reply) = run(&mut s, "XCLAIM s g a 0 1-1 JUSTID");
     assert_eq!(reply, "*0\r\n");
-    assert_eq!(records("", e), vec!["XCLAIM s g a 0 1-1 JUSTID".to_string()]);
+    let rec = records(&mut s, "XCLAIM s g a 0 1-1 JUSTID", e);
+    assert_eq!(rec, vec!["XCLAIM s g a 0 1-1 JUSTID".to_string()]);
 }

@@ -185,8 +185,8 @@ fn exec_shared<A: ArgvView + ?Sized>(
             record_instead(kevy_rt::propagation::Propagate::Replace(frame));
             true
         }
-        Some(Effect::RecordAll(frames)) => {
-            record_all_instead(frames);
+        Some(e @ (Effect::RecordId(..) | Effect::RecordClaim(_))) => {
+            record_deferred(e);
             true
         }
         Some(Effect::Skip) => {
@@ -202,9 +202,11 @@ fn record_instead(p: kevy_rt::propagation::Propagate) {
     kevy_rt::propagation::set_override(p);
 }
 
+/// A record the runtime builds only if it records the write: nothing is
+/// built with the AOF off and no replicas.
 #[cold]
-fn record_all_instead(frames: Vec<Vec<Vec<u8>>>) {
-    kevy_rt::propagation::set_override_frames(frames);
+fn record_deferred(effect: Effect) {
+    kevy_rt::propagation::set_override_deferred(effect);
 }
 
 /// Record an `SPOP` by the members it removed, for a reply path that pops

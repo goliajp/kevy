@@ -25,7 +25,7 @@
 //! ```
 
 use kevy_resp::ArgvView;
-use kevy_store::Store;
+use kevy_store::{Store, StreamId};
 
 pub mod aof;
 pub mod args;
@@ -38,6 +38,7 @@ mod hash_ttl;
 mod keyspace;
 mod list;
 mod list_move;
+mod record;
 pub mod reply;
 mod set;
 #[cfg(feature = "streams-geo")]
@@ -76,11 +77,25 @@ pub enum Effect {
     /// random (`SPOP`) is recorded as what it did (`SREM key member…`),
     /// so replaying the record cannot pick differently.
     Record(Vec<Vec<u8>>),
-    /// Record these frames, in order, instead of the argv: a command whose
-    /// effect depends on the clock, recorded as what it did. A claim gated
-    /// on idle time is one `XCLAIM … TIME t RETRYCOUNT n FORCE JUSTID` per
-    /// outcome, so a replay at another time gives the same owners and
-    /// counts.
+    /// Record the argv with argument `.0` replaced by the ID `.1`: an `XADD`
+    /// whose ID was generated (`*`, `ms-*`), recorded as the ID it gave so
+    /// a replay's clock cannot pick another. Carries no frame: a caller
+    /// that records builds it with [`aof::deferred_frames`].
+    ///
+    /// ```
+    /// use kevy_verbs::{Effect, exec};
+    /// if kevy_verbs::verb(b"XADD").is_none() {
+    ///     return; // built without the `streams-geo` feature
+    /// }
+    /// let mut store = kevy_store::Store::new();
+    /// let argv = kevy_resp::Argv::from(vec![b"XADD".to_vec(), b"s".to_vec(), b"7-*".to_vec(), b"f".to_vec(), b"v".to_vec()]);
+    /// let id = kevy_store::StreamId { ms: 7, seq: 0 };
+    /// assert_eq!(exec(&mut store, b"XADD", &argv, &mut Vec::new()), Some(Effect::RecordId(2, id)));
+    /// ```
+    RecordId(usize, StreamId),
+    /// Record a claim as its outcome: an `XCLAIM` / `XAUTOCLAIM`, which
+    /// picks by idle time and stamps with the clock. Carries no frame: a
+    /// caller that records builds them with [`aof::deferred_frames`].
     ///
     /// ```
     /// use kevy_verbs::{Effect, exec};
@@ -94,12 +109,13 @@ pub enum Effect {
     ///     exec(&mut store, up, &argv(c), &mut Vec::new());
     /// }
     /// let claim = argv("XCLAIM s g b 0 1-1 JUSTID");
-    /// let Some(Effect::RecordAll(frames)) = exec(&mut store, b"XCLAIM", &claim, &mut Vec::new()) else {
-    ///     panic!("a claim is recorded as its outcome")
-    /// };
-    /// assert_eq!(&frames[0][..6], [&b"XCLAIM"[..], b"s", b"g", b"b", b"0", b"1-1"]);
+    /// let effect = exec(&mut store, b"XCLAIM", &claim, &mut Vec::new()).unwrap();
+    /// assert!(matches!(effect, Effect::RecordClaim(_)));
+    /// let frames = kevy_verbs::aof::deferred_frames(&mut store, &claim, &effect);
+    /// let head: Vec<&[u8]> = (0..6).map(|i| &frames[0][i]).collect();
+    /// assert_eq!(head, [&b"XCLAIM"[..], b"s", b"g", b"b", b"0", b"1-1"]);
     /// ```
-    RecordAll(Vec<Vec<Vec<u8>>>),
+    RecordClaim(Box<aof::Claim>),
     /// Record nothing, not even the argv: a random command that removed
     /// nothing, or a claim that changed nothing.
     Skip,

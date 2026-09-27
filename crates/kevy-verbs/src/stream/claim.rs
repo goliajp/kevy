@@ -41,7 +41,7 @@ pub(super) fn cmd_xclaim<A: ArgvView + ?Sized>(
     emit_claim_reply(out, &claimed, justid);
     let taken: Vec<StreamId> = claimed.iter().map(|(id, _)| *id).collect();
     let dropped = before.dropped(store, &args[1], &args[2], &taken);
-    claim_effect(store, args, &before, &taken, &dropped)
+    claim_effect(&before, taken, dropped)
 }
 
 pub(super) fn cmd_xautoclaim<A: ArgvView + ?Sized>(
@@ -78,7 +78,7 @@ pub(super) fn cmd_xautoclaim<A: ArgvView + ?Sized>(
     };
     emit_autoclaim_reply(out, cursor, &payloads, &deleted, justid);
     let taken: Vec<StreamId> = payloads.iter().map(|(id, _)| *id).collect();
-    claim_effect(store, args, &before, &taken, &deleted)
+    claim_effect(&before, taken, deleted)
 }
 
 /// `min-idle-time` at argv[4], or the refusal written to `out`.
