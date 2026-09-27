@@ -98,3 +98,51 @@ async fn a_kevys_url_with_a_db_selects_it_first() {
     let e = AsyncConnection::connect_secure_url(&url).await.unwrap_err();
     assert!(e.to_string().contains("SELECT 3 rejected"), "{e}");
 }
+
+/// A one-shard encrypted cluster node: every connection handshakes, then
+/// CLUSTER SLOTS names this node's own port for all slots, and any other
+/// request gets `reply`.
+async fn fake_cluster_node(reply: &'static [u8]) -> (u16, [u8; 32]) {
+    let key = Keypair::from_secret([1; 32]);
+    let public = key.public();
+    let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = l.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        loop {
+            let (mut s, _) = l.accept().await.unwrap();
+            let key = key.clone();
+            tokio::spawn(async move {
+                let mut frames = Frames::default();
+                let m1 = next_message(&mut s, &mut frames).await.unwrap();
+                let (_, r) =
+                    Responder::accept(&key, Keypair::from_secret([2; 32]), PROLOGUE, &m1).unwrap();
+                let (m2, t) = r.finish(b"").unwrap();
+                s.write_all(&frame(&m2).unwrap()).await.unwrap();
+                let (mut tx, mut rx) = t.split();
+                while let Some(m) = next_message(&mut s, &mut frames).await {
+                    let req = rx.open(&m).unwrap();
+                    let out = if req.windows(5).any(|w| w == b"SLOTS") {
+                        format!("*1\r\n*3\r\n:0\r\n:16383\r\n*2\r\n$9\r\n127.0.0.1\r\n:{port}\r\n")
+                            .into_bytes()
+                    } else {
+                        reply.to_vec()
+                    };
+                    s.write_all(&frame(&tx.seal(&out).unwrap()).unwrap()).await.unwrap();
+                }
+            });
+        }
+    });
+    (port, public)
+}
+
+#[tokio::test]
+async fn an_encrypted_cluster_client_reaches_its_shard_through_the_advertised_port() {
+    use kevy_client_async::cluster::AsyncClusterClient;
+    let (port, key) = fake_cluster_node(b"$6\r\nsealed\r\n").await;
+    let url = format!("kevys://127.0.0.1:{port}?server_key={}", hex(&key));
+    let mut c = AsyncClusterClient::connect_secure_url(&url).await.unwrap();
+    assert_eq!(c.shard_count(), 1);
+    assert_eq!(c.get(b"any").await.unwrap(), Some(b"sealed".to_vec()));
+    let wrong = format!("kevys://127.0.0.1:{port}?server_key={}", "ab".repeat(32));
+    assert!(AsyncClusterClient::connect_secure_url(&wrong).await.is_err());
+}

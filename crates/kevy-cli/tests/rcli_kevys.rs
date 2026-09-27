@@ -35,8 +35,23 @@ fn keygen(bin: &Path, file: &Path) -> String {
 
 impl Srv {
     fn start() -> Srv {
+        Srv::start_with(false)
+    }
+
+    /// Four shards in cluster mode: port, cluster ports +1..=+4, the
+    /// encrypted port +6 and its cluster twins +7..=+10.
+    fn start_cluster() -> Srv {
+        Srv::start_with(true)
+    }
+
+    fn start_with(cluster: bool) -> Srv {
         let bin = kevy_bin();
-        let (port, secure_port) = (kevy_testnet::free_port(), kevy_testnet::free_port());
+        let (port, secure_port) = if cluster {
+            let base = kevy_testnet::free_port_block(11);
+            (base, base + 6)
+        } else {
+            (kevy_testnet::free_port(), kevy_testnet::free_port())
+        };
         let dir = std::env::temp_dir().join(format!("kevy-rcli-kevys-{port}"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -47,20 +62,27 @@ impl Srv {
         std::fs::write(
             &conf,
             format!(
-                "[secure]\nprivate_key_file = \"{}\"\nlisten_port = {secure_port}\nclient_keys = [\"{client_pub}\"]\n",
+                "{}[secure]\nprivate_key_file = \"{}\"\nlisten_port = {secure_port}\nclient_keys = [\"{client_pub}\"]\n",
+                if cluster { "[cluster]\nenabled = true\n" } else { "" },
                 dir.join("server.key").display()
             ),
         )
         .unwrap();
         let child = Command::new(&bin)
             .args(["--config", conf.to_str().unwrap()])
-            .args(["--port", &port.to_string(), "--threads", "1", "--no-aof"])
+            .args(["--port", &port.to_string(), "--threads", if cluster { "4" } else { "1" }])
+            .arg("--no-aof")
             .args(["--dir", dir.join("data").to_str().unwrap()])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
             .expect("spawn kevy server");
         kevy_testnet::assert_listening(secure_port, "the encrypted client port");
+        if cluster {
+            for p in secure_port + 1..=secure_port + 4 {
+                kevy_testnet::assert_listening(p, "an encrypted cluster port");
+            }
+        }
         Srv { child, secure_port, server_pub, client_key, dir }
     }
 
@@ -160,4 +182,39 @@ fn a_missing_client_key_a_wrong_server_key_and_a_bad_url_are_refused() {
     let bad = cli(&["-u", &format!("kevys://127.0.0.1:{}", s.secure_port), "PING"], b"");
     assert_eq!(bad.code, 1);
     assert!(bad.stderr.contains("server_key"), "{}", bad.stderr);
+}
+
+#[test]
+fn cluster_mode_follows_redirects_through_encrypted_ports() {
+    let s = Srv::start_cluster();
+    // the encrypted twin of shard 0's cluster port
+    let url = s.url(Some(&s.client_key)).replacen(
+        &format!(":{}?", s.secure_port),
+        &format!(":{}?", s.secure_port + 1),
+        1,
+    );
+    let twins = s.secure_port + 1..=s.secure_port + 4;
+    // without -c a key another shard owns comes back as a MOVED to its twin
+    let moved = (0..200)
+        .map(|k| cli(&["-u", &url, "GET", &format!("k{k}")], b"").stdout)
+        .find(|out| out.starts_with("MOVED") || out.contains("MOVED"))
+        .expect("some key lives on another shard");
+    let port: u16 = moved.trim_end().rsplit(':').next().unwrap().parse().unwrap();
+    assert!(twins.contains(&port), "{moved}");
+    // with -c every key lands, wherever it lives
+    for k in 0..40 {
+        let out = cli(&["-c", "-u", &url, "SET", &format!("c{k}"), &format!("v{k}")], b"");
+        assert_eq!(out.stdout, "OK\n", "{}", out.stderr);
+    }
+    for k in 0..40 {
+        let out = cli(&["-c", "-u", &url, "GET", &format!("c{k}")], b"");
+        assert_eq!(out.stdout, format!("v{k}\n"), "{}", out.stderr);
+    }
+    // --cluster tools reach every node with the keys from -u
+    let first = format!("127.0.0.1:{}", s.secure_port + 1);
+    let info = cli(&["-u", &url, "--cluster", "info", &first], b"");
+    assert_eq!(info.code, 0, "{}{}", info.stdout, info.stderr);
+    for p in twins {
+        assert!(info.stdout.contains(&format!(":{p}")), "{}", info.stdout);
+    }
 }
