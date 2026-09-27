@@ -220,6 +220,7 @@ impl<C: Commands> Runtime<C> {
         self.cluster_port_base.map(|base| crate::cluster::ClusterTopo {
             ip: announce_ip.unwrap_or(bound),
             port_base: announce_base.unwrap_or(base),
+            secure_port_base: self.secure_cluster_announce,
         })
     }
 

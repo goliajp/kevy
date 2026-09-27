@@ -91,3 +91,8 @@ port_base = 0
 # Client public keys allowed on that port; empty accepts any client,
 # still encrypted.
 # client_keys = []
+# With [cluster] enabled, shard i also gets an encrypted cluster port at
+# cluster_port_base + i (0 = listen_port + 1); announce_cluster_port_base
+# is the first port told to clients behind a proxy or NAT (0 = the same).
+# cluster_port_base = 0
+# announce_cluster_port_base = 0
