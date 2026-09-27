@@ -83,12 +83,14 @@ impl KevyBuf {
 pub const KEVY_ABI: u32 = 1;
 
 /// Returns the ABI version ([`KEVY_ABI`]).
+// NO-UNWIND: returns a constant
 #[unsafe(no_mangle)]
 pub extern "C" fn kevy_abi() -> u32 {
     KEVY_ABI
 }
 
 /// Returns the engine version as a static NUL-terminated string.
+// NO-UNWIND: returns a pointer to a static string
 #[unsafe(no_mangle)]
 pub extern "C" fn kevy_version() -> *const std::ffi::c_char {
     static V: &str = concat!(env!("CARGO_PKG_VERSION"), "\0");
@@ -101,6 +103,7 @@ pub extern "C" fn kevy_version() -> *const std::ffi::c_char {
 ///
 /// # Safety
 /// `dir` must point to `dir_len` readable bytes.
+// NO-UNWIND: the store is opened inside open_with, which catches; the rest is a UTF-8 check
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kevy_open(dir: *const u8, dir_len: usize) -> *mut KevyDb {
     if dir.is_null() {
@@ -116,6 +119,7 @@ pub unsafe extern "C" fn kevy_open(dir: *const u8, dir_len: usize) -> *mut KevyD
 }
 
 /// Open a pure in-memory store: no directory, nothing survives the process.
+// NO-UNWIND: the store is opened inside open_with, which catches
 #[unsafe(no_mangle)]
 pub extern "C" fn kevy_open_mem() -> *mut KevyDb {
     open_with(Config::default)
@@ -212,6 +216,7 @@ pub unsafe extern "C" fn kevy_cmd(
 ///
 /// # Safety
 /// The triple must be exactly as returned, freed exactly once.
+// NO-UNWIND: drops a byte buffer, which cannot panic
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kevy_buf_free(ptr: *mut u8, len: usize, cap: usize) {
     if ptr.is_null() {
@@ -328,6 +333,7 @@ pub unsafe extern "C" fn kevy_get_shared(
 ///
 /// # Safety
 /// `cap` must be a value produced by [`kevy_get_shared`], freed exactly once.
+// NO-UNWIND: drops a byte buffer or an Arc of one, which cannot panic
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kevy_buf_free_shared(ptr: *mut u8, len: usize, cap: usize) {
     if cap == 0 {

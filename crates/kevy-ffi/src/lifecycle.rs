@@ -53,6 +53,7 @@ fn apply(opts: &KevyOpenOptions, mut cfg: Config) -> Config {
 /// # Safety
 /// `dir`, when non-null, must point to `dir_len` readable bytes; `opts`,
 /// when non-null, must point to a readable [`KevyOpenOptions`].
+// NO-UNWIND: the store is opened inside open_with, which catches; the rest is a UTF-8 check and plain field copies
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kevy_open_with(
     dir: *const u8,

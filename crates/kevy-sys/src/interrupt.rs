@@ -132,6 +132,7 @@ pub(crate) fn remember_terminal(saved: Option<(RawFd, &Termios)>) {
     }
 }
 
+// NO-UNWIND: signal handler: atomics and async-signal-safe syscalls only, then _exit
 extern "C" fn on_interrupt(_signum: c_int) {
     if JUST_NOTE.load(Ordering::Relaxed) {
         NOTED.store(true, Ordering::Relaxed);
