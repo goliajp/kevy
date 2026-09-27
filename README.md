@@ -278,9 +278,10 @@ sensor-cache example.
 
 A representative slice from the bare-metal benchmark suite (16-core
 Linux box, server and client pinned to disjoint cores, TCP loopback).
-The KV rows below are `bench/arena.sh`, re-measured 2026-07-19:
-median-of-5, throughput read from each server's own command counter
-over a timed window. Full method, every workload, and the caveats live
+The KV rows below are `bench/arena.sh`, re-measured 2026-09-07 (kevy 6.3.0):
+three full runs, median of 5 within each run and the per-cell median
+across the three, throughput read from each server's own command
+counter over a timed window. Full method, every workload, and the caveats live
 in [`PERFORMANCE.md`](PERFORMANCE.md); every figure is reproducible
 from a script in [`bench/`](bench/).
 
@@ -291,15 +292,14 @@ from a script in [`bench/`](bench/).
 | Pub/sub fan-out (50 subs) | 23.1 M/s | 5.1 M/s | **4.52×** |
 | Embedded `get` (hit) | 9.0 M/s | — | (no in-process Redis) |
 
-The same `GET -c 50 -P 16` face, four engines on one box — kevy at 7.49 M/s against each (median-of-5; method and per-engine cycle
-accounting in
+The same `GET -c 50 -P 16` face, four engines on one box — kevy at 7.49 M/s against each (the same runs; method in
 [`PERFORMANCE.md`](PERFORMANCE.md)):
 
 | Engine | kevy's lead |
 |---|---:|
-| valkey 9.1.2 | **2.34×** |
-| redis 8.10.1 | **1.26×** |
-| dragonfly 1.40.2 | **2.62×** |
+| valkey 9.1.2 | **2.51×** |
+| redis 8.10.1 | **1.33×** |
+| dragonfly 1.40.2 | **2.63×** |
 
 These ratios are **lower than the ones published before 2026-07-19**,
 and the reason is the ruler, not the engines. The earlier figures read
