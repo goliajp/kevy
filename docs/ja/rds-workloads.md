@@ -309,7 +309,7 @@ PITRについてのスコープ上の注意：フィードの窓はインメモ�
 > + Σ インデックスごとの式 + ビューのメンバー数 × エントリサイズ ——そのうえで、
 > ロード済みのサンプル上で`MEMORY USAGE` / `IDX.LIST`のバイト数と突き合わせて検証すること。
 
-サブシステムごとの式（それぞれCIで実測RSSに対してゲートされています）：rangeインデックスは概算で`rows × (value_width + avg_key_len + 48)`。textとANNの式は[text-search](text-search.md) / [vector-search](vector-search.md)にあります（1M × 1024次元のベクトルでおよそ4.1 GiB）。aggはグループ数が支配的です（[indexes](indexes.md)）。ビューのメンバーは概算で`order_value_width + key_len + 48`です（[views](views.md)）。`maxmemory`とエビクションポリシーを設定するか、`-OOM`による拒否を受け入れてください（書き込みは受付の時点で拒否されます。既存のデータが壊れることはありません）。
+サブシステムごとの式（それぞれCIで実測RSSに対してゲートされています）：rangeインデックスは概算で`rows × (avg_key_len + string_value_len + 82…93)`。textとANNの式は[text-search](text-search.md) / [vector-search](vector-search.md)にあります（1M × 1024次元のベクトルでおよそ4.1 GiB）。aggはグループ数が支配的です（[indexes](indexes.md)）。ビューのメンバーは概算で`order_value_width + key_len + 48`です（[views](views.md)）。`maxmemory`とエビクションポリシーを設定するか、`-OOM`による拒否を受け入れてください（書き込みは受付の時点で拒否されます。既存のデータが壊れることはありません）。
 
 **サービングの余力。** v3.18.0のリリースアリーナ（kevy対valkey 9.1、fair-fightプロトコル、5回の中央値）：GET 3.00倍、SET 3.99倍、INCR 3.00倍、SADD 2.50倍、HSET 2.25倍、ZADD 1.73倍、LPUSH 1.64倍——レプリケーション/ハートビートのパイプラインを載せきったうえで、7戦7勝です。ディスクファーストのRDSに対するポイント読み出しでは、差はさらに大きくなります。ただしそこでの正直な比較は、クエリ単位のベンチマークではなく、「kevyはキャッシュ層*と*運用系クエリの両方を置き換える」というものです。
 

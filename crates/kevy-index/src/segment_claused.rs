@@ -189,15 +189,12 @@ impl Segment {
         max: &IndexValue,
         cursor: Option<&Cursor>,
     ) -> impl Iterator<Item = (&'s IndexValue, &'s [u8])> {
-        let lower: Bound<(IndexValue, Vec<u8>)> = match cursor {
-            Some(c) => Bound::Excluded((c.value.clone(), c.key.clone())),
-            None => Bound::Included((min.clone(), Vec::new())),
+        let lower = match cursor {
+            Some(c) => Bound::Excluded((&c.value, c.key.as_slice())),
+            None => Bound::Included((min, &[][..])),
         };
         let max = max.clone();
-        self.tree()
-            .range((lower, Bound::Unbounded))
-            .take_while(move |(v, _)| *v <= max)
-            .map(|(v, k)| (v, k.as_slice()))
+        self.walk(lower, Bound::Unbounded).take_while(move |(v, _)| **v <= max)
     }
 
     /// Credit one passing candidate to every facet bucket it has a
