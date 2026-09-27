@@ -82,9 +82,7 @@ impl Store {
         let val = g.store.get(key).map_err(store_err)?.as_deref().map(<[u8]>::to_vec);
         if val.is_some() {
             g.store.expire(key, ttl);
-            let ms = ttl.as_millis().min(u128::from(u64::MAX)) as u64;
-            let deadline = kevy_store::now_unix_ms().saturating_add(ms);
-            commit_write(&mut g, &[b"PEXPIREAT", key, deadline.to_string().as_bytes()])?;
+            crate::store_glue::commit_deadline(&mut g, key)?;
         }
         Ok(val)
     }

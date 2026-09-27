@@ -100,7 +100,7 @@ const CORPUS: &[&str] = &[
     "SISMEMBER s a",
     "SCARD s",
     "SREM s a",
-    // zset — dispatch/zset.rs against cmd_zadd.rs
+    // zset
     "ZADD z 1 one 2 two 3 three",
     "ZSCORE z two",
     "ZCARD z",

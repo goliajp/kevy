@@ -59,6 +59,25 @@ fn every_dispatch_verb_probes_as_known() {
     }
 }
 
+/// The shared command layer's verbs are this surface's too, except the
+/// ones it names as server-only: the arm table lists every one, and the
+/// router refuses exactly the named ones.
+#[test]
+fn every_shared_layer_verb_is_served_unless_named() {
+    let s = mem_store();
+    let table: BTreeSet<&str> = DISPATCH_VERBS.iter().copied().collect();
+    let server_only: BTreeSet<&[u8]> = super::shared::SERVER_ONLY.iter().copied().collect();
+    for v in kevy_verbs::VERBS {
+        let refused = run(&s, &[v.name.as_bytes()]).starts_with(b"-ERR unknown command");
+        let named = server_only.contains(v.name.as_bytes());
+        assert_eq!(refused, named, "{}: served {} but named server-only {named}", v.name, !refused);
+        assert_eq!(table.contains(v.name), !named, "{}: DISPATCH_VERBS disagrees", v.name);
+    }
+    for name in &server_only {
+        assert!(kevy_verbs::verb(name).is_some(), "a server-only name the shared layer lacks");
+    }
+}
+
 #[test]
 fn verb_matching_is_case_insensitive() {
     let s = mem_store();

@@ -9,6 +9,7 @@ use crate::{KevyError, KevyResult};
 
 use crate::store::ensure_writable;
 use crate::store::{Store, commit_write, store_err};
+use crate::store_glue::commit_deadline;
 
 impl Store {
     // ---- string SET variants ----------------------------------------
@@ -47,10 +48,9 @@ impl Store {
             match ttl {
                 None => commit_write(&mut g, &[b"SET", key, value])?,
                 Some(ttl) => {
-                    let ms = ttl.as_millis().min(u128::from(u64::MAX)) as u64;
-                    let deadline = kevy_store::now_unix_ms().saturating_add(ms).to_string();
-                    commit_write(&mut g, &[b"SET", key, value, b"PX", ms.to_string().as_bytes()])?;
-                    commit_write(&mut g, &[b"PEXPIREAT", key, deadline.as_bytes()])?;
+                    let ms = ttl.as_millis().min(u128::from(u64::MAX)).to_string();
+                    commit_write(&mut g, &[b"SET", key, value, b"PX", ms.as_bytes()])?;
+                    commit_deadline(&mut g, key)?;
                 }
             }
         }

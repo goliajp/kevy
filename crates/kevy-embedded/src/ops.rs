@@ -150,9 +150,7 @@ impl Store {
         let mut g = self.wshard(key);
         let touched = g.store.expire(key, ttl);
         if touched {
-            let ms = ttl.as_millis().min(u128::from(u64::MAX)) as u64;
-            let deadline = kevy_store::now_unix_ms().saturating_add(ms);
-            commit_write(&mut g, &[b"PEXPIREAT", key, deadline.to_string().as_bytes()])?;
+            crate::store_glue::commit_deadline(&mut g, key)?;
         }
         Ok(touched)
     }

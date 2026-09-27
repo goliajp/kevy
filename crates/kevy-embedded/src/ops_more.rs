@@ -34,11 +34,7 @@ impl Store {
         let mut g = self.wshard(key);
         let popped = g.store.spop(key, count).map_err(store_err)?;
         if !popped.is_empty() {
-            let mut argv: Vec<&[u8]> = Vec::with_capacity(2 + popped.len());
-            argv.push(b"SREM");
-            argv.push(key);
-            argv.extend(popped.iter().map(Vec::as_slice));
-            commit_write(&mut g, &argv)?;
+            commit_write(&mut g, &kevy_verbs::aof::spop_effect(key, &popped))?;
         }
         Ok(popped)
     }
