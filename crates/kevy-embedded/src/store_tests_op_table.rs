@@ -14,7 +14,7 @@ use crate::op_manifest::ESTORE_OPS;
 use crate::ops_atomic::ATOMIC_OPS;
 use crate::ops_atomic_all::ATOMIC_ALL_OPS;
 use crate::ops_pipeline::PIPELINE_OPS;
-use crate::replay::REPLAY_VERBS;
+use crate::replay::replay_verbs;
 
 fn diff(surface_name: &str, manifest: &[&str], flag: u16) {
     let m: BTreeSet<&str> = manifest.iter().copied().collect();
@@ -50,16 +50,21 @@ fn estore_manifest_matches_table() {
 
 #[test]
 fn replay_manifest_matches_table() {
-    diff("REPLAY", REPLAY_VERBS, surface::REPLAY);
+    diff("REPLAY", &replay_verbs(), surface::REPLAY);
 }
 
-/// Grounding: every manifest verb the replay claims must actually
-/// have a literal arm in replay.rs source.
+/// Grounding: every verb the replay claims is one it really applies —
+/// a frame of it changes an empty keyspace or is refused, never skipped.
 #[test]
-fn replay_manifest_verbs_have_source_arms() {
-    let src = include_str!("replay.rs");
-    for v in REPLAY_VERBS {
-        let lit = format!("b\"{v}\"");
-        assert!(src.contains(&lit), "REPLAY_VERBS lists {v} but replay.rs has no {lit} arm");
+fn replay_manifest_verbs_are_applied() {
+    let verbs = replay_verbs();
+    assert!(verbs.len() > 50, "the replay claims only {} verbs", verbs.len());
+    for v in verbs {
+        let mut buf = [0u8; 32];
+        let up = kevy_verbs::args::upper_verb(v.as_bytes(), &mut buf);
+        let argv = kevy_persist::Argv::from(vec![v.as_bytes().to_vec()]);
+        let mut out = Vec::new();
+        let ran = kevy_verbs::exec(&mut kevy_store::Store::new(), up, &argv, &mut out);
+        assert!(ran.is_some() && !out.is_empty(), "the replay lists {v} but nothing runs it");
     }
 }
