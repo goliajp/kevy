@@ -309,7 +309,7 @@ impl<C: Commands> Shard<C> {
     /// one the embedded engine records its writes by.
     pub(crate) fn log_write<A: ArgvView + ?Sized>(&mut self, args: &A) {
         self.log(args);
-        if let Some(followup) = kevy_verbs::aof::ttl_followup(&mut self.store, args) {
+        for followup in kevy_verbs::aof::ttl_followup(&mut self.store, args) {
             self.log(&followup);
         }
     }
