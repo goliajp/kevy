@@ -76,8 +76,32 @@ pub enum Effect {
     /// random (`SPOP`) is recorded as what it did (`SREM key member…`),
     /// so replaying the record cannot pick differently.
     Record(Vec<Vec<u8>>),
+    /// Record these frames, in order, instead of the argv: a command whose
+    /// effect depends on the clock, recorded as what it did. A claim gated
+    /// on idle time is one `XCLAIM … TIME t RETRYCOUNT n FORCE JUSTID` per
+    /// outcome, so a replay at another time gives the same owners and
+    /// counts.
+    ///
+    /// ```
+    /// use kevy_verbs::{Effect, exec};
+    /// if kevy_verbs::verb(b"XCLAIM").is_none() {
+    ///     return; // built without the `streams-geo` feature
+    /// }
+    /// let mut store = kevy_store::Store::new();
+    /// let argv = |s: &str| kevy_resp::Argv::from(s.split(' ').map(|p| p.as_bytes().to_vec()).collect::<Vec<_>>());
+    /// for c in ["XADD s 1-1 f v", "XGROUP CREATE s g 0", "XREADGROUP GROUP g a STREAMS s >"] {
+    ///     let up = c.split(' ').next().unwrap().as_bytes();
+    ///     exec(&mut store, up, &argv(c), &mut Vec::new());
+    /// }
+    /// let claim = argv("XCLAIM s g b 0 1-1 JUSTID");
+    /// let Some(Effect::RecordAll(frames)) = exec(&mut store, b"XCLAIM", &claim, &mut Vec::new()) else {
+    ///     panic!("a claim is recorded as its outcome")
+    /// };
+    /// assert_eq!(&frames[0][..6], [&b"XCLAIM"[..], b"s", b"g", b"b", b"0", b"1-1"]);
+    /// ```
+    RecordAll(Vec<Vec<Vec<u8>>>),
     /// Record nothing, not even the argv: a random command that removed
-    /// nothing.
+    /// nothing, or a claim that changed nothing.
     Skip,
 }
 

@@ -75,6 +75,10 @@ fn run(s: &Store, v: &Verb, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>) {
             let parts: Vec<&[u8]> = frame.iter().map(Vec::as_slice).collect();
             commit_write(&mut g, &parts)
         }
+        Some(Effect::RecordAll(frames)) => frames.iter().try_for_each(|frame| {
+            let parts: Vec<&[u8]> = frame.iter().map(Vec::as_slice).collect();
+            commit_write(&mut g, &parts)
+        }),
         _ => Ok(()),
     };
     if let Err(e) = recorded {

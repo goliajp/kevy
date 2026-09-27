@@ -44,6 +44,10 @@ thread_local! {
     /// The pending override for the command currently executing on
     /// this thread. `None` = no verb asked for one = `AsIs`.
     static OVERRIDE: Cell<Option<Propagate>> = const { Cell::new(None) };
+    /// Frames to record after the `Replace` in [`OVERRIDE`]; empty
+    /// whenever it holds anything else.
+    static MORE: core::cell::RefCell<Vec<Vec<Vec<u8>>>> =
+        const { core::cell::RefCell::new(Vec::new()) };
 }
 
 /// Install a propagation override for the command currently executing.
@@ -51,6 +55,37 @@ thread_local! {
 /// the post-write housekeeping of that same command.
 pub fn set_override(p: Propagate) {
     OVERRIDE.with(|c| c.set(Some(p)));
+    MORE.with(|m| m.borrow_mut().clear());
+}
+
+/// Install several frames to record, in order, in place of the command's
+/// argv: a verb whose effect takes more than one frame to state (a claim
+/// recorded as one `XCLAIM` per outcome). An empty list records nothing,
+/// as [`Propagate::Suppress`] does.
+///
+/// ```
+/// use kevy_rt::propagation::{discard_override, set_override_frames};
+/// set_override_frames(vec![
+///     vec![b"XCLAIM".to_vec(), b"s".to_vec()],
+///     vec![b"XCLAIM".to_vec(), b"s".to_vec()],
+/// ]);
+/// // a dispatch site that records nothing drops both
+/// discard_override();
+/// ```
+pub fn set_override_frames(mut frames: Vec<Vec<Vec<u8>>>) {
+    if frames.is_empty() {
+        set_override(Propagate::Suppress);
+        return;
+    }
+    let first = frames.remove(0);
+    set_override(Propagate::Replace(first));
+    MORE.with(|m| *m.borrow_mut() = frames);
+}
+
+/// The frames [`set_override_frames`] queued after the first, taken with
+/// the [`Propagate::Replace`] that carries the first.
+pub(crate) fn take_more_frames() -> Vec<Vec<Vec<u8>>> {
+    MORE.with(|m| core::mem::take(&mut *m.borrow_mut()))
 }
 
 /// Take (and clear) the pending override — [`Propagate::AsIs`] when no
@@ -68,6 +103,7 @@ pub(crate) fn take_override() -> Propagate {
 /// armed for whatever command runs next on the thread.
 pub fn discard_override() {
     OVERRIDE.with(Cell::take);
+    MORE.with(|m| m.borrow_mut().clear());
 }
 
 #[cfg(test)]
@@ -95,6 +131,22 @@ mod tests {
         set_override(Propagate::Suppress);
         discard_override();
         assert!(matches!(take_override(), Propagate::AsIs));
+    }
+
+    #[test]
+    fn several_frames_come_out_in_order_and_do_not_linger() {
+        set_override_frames(vec![vec![b"A".to_vec()], vec![b"B".to_vec()], vec![b"C".to_vec()]]);
+        let Propagate::Replace(first) = take_override() else { panic!("expected Replace") };
+        assert_eq!(first, vec![b"A".to_vec()]);
+        assert_eq!(take_more_frames(), vec![vec![b"B".to_vec()], vec![b"C".to_vec()]]);
+        set_override_frames(vec![vec![b"A".to_vec()], vec![b"B".to_vec()]]);
+        discard_override();
+        assert!(take_more_frames().is_empty(), "a discard drops the queued frames too");
+        set_override_frames(vec![vec![b"A".to_vec()], vec![b"B".to_vec()]]);
+        set_override(Propagate::Suppress);
+        assert!(take_more_frames().is_empty(), "a later override drops them");
+        set_override_frames(Vec::new());
+        assert!(matches!(take_override(), Propagate::Suppress));
     }
 
     #[test]

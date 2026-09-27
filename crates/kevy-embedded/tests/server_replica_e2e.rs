@@ -116,7 +116,7 @@ impl Server {
     /// Send one RESP command over the compat port and read enough of
     /// the reply to confirm it. We only care that the write applied,
     /// so anything that starts with `+OK` / `$` / `:` is success.
-    fn cmd(&self, parts: &[&[u8]]) {
+    fn cmd(&self, parts: &[&[u8]]) -> Vec<u8> {
         let mut s = std::net::TcpStream::connect(("127.0.0.1", self.port)).unwrap();
         s.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
         let mut req: Vec<u8> = Vec::new();
@@ -136,6 +136,7 @@ impl Server {
             "unexpected reply head {head:?} for {parts:?}: {:?}",
             String::from_utf8_lossy(&buf[..n]),
         );
+        buf[..n].to_vec()
     }
 }
 
@@ -214,6 +215,42 @@ fn server_stream_and_geo_writes_reach_the_embed_replica() {
         String::from_utf8_lossy(&read(&[b"XPENDING", b"s", b"g"])),
         String::from_utf8_lossy(&read(&[b"ZRANGE", b"near", b"0", b"-1"])),
     );
+    drop(replica);
+    server.shutdown();
+}
+
+/// An ID the primary generated reaches the replica as that ID, not as a
+/// `*` the replica fills in from its own clock.
+#[cfg(feature = "streams-geo")]
+#[test]
+fn a_generated_stream_id_reaches_the_replica_unchanged() {
+    let server = Server::start();
+    let upstream = format!("127.0.0.1:{}", server.replication_base);
+    let replica = Store::open_replica(&upstream).unwrap();
+    // a replica that filled in `*` from its own clock would agree only
+    // while it applied each frame inside the primary's millisecond; over
+    // two hundred entries some frame lands in the next one
+    const N: usize = 200;
+    let mut want = format!("*{N}\r\n").into_bytes();
+    for i in 0..N {
+        let v = i.to_string();
+        let id = server.cmd(&[b"XADD", b"s", b"*", b"f", v.as_bytes()]);
+        assert!(id.starts_with(b"$"), "{:?}", String::from_utf8_lossy(&id));
+        want.extend_from_slice(b"*2\r\n");
+        want.extend_from_slice(&id);
+        want.extend_from_slice(format!("*2\r\n$1\r\nf\r\n${}\r\n{v}\r\n", v.len()).as_bytes());
+        std::thread::sleep(Duration::from_micros(500));
+    }
+    let read = || {
+        let mut out = Vec::new();
+        let argv = [b"XRANGE".to_vec(), b"s".to_vec(), b"-".to_vec(), b"+".to_vec()];
+        replica.dispatch_argv(&argv, &mut out);
+        out
+    };
+    let head = format!("*{N}\r\n");
+    let arrived = wait_for(Duration::from_secs(5), || read().starts_with(head.as_bytes()));
+    assert!(arrived, "the replica never saw every entry");
+    assert_eq!(String::from_utf8_lossy(&read()), String::from_utf8_lossy(&want));
     drop(replica);
     server.shutdown();
 }
