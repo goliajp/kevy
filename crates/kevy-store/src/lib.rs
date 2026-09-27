@@ -144,6 +144,8 @@ mod tier_serve;
 pub use segrows::SealedRows;
 
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+pub use kevy_vlog::CompressionStats;
+#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 pub use segwindow::apply_segmented;
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 pub use tier::TierStats;

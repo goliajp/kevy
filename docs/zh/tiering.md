@@ -138,8 +138,14 @@ cold key ≈ 96 B (entry overhead) + key heap bytes     # value fully reclaimed
 | `promotions_total` | 启动以来换回的值数 |
 | `peek_preads_total` | 不 promote 的冷读次数（每个冷**行**一次） |
 | `batch_submissions_total` | 批量冷读提交次数（hydration 页） |
+| `vlog_raw_bytes` | 磁盘上各 vlog 文件里的值在压缩前的字节数 |
+| `vlog_payload_bytes` | 磁盘上压缩后的负载字节数 |
+| `vlog_frame_header_bytes` | 磁盘上每条记录的帧头（标记字节 + 原始长度） |
+| `vlog_dict_bytes` | 内存里的压缩字典，每个 vlog 文件一份 |
 
 `vlog_size_bytes / cold_bytes` 是空间放大比，验收门禁把它压在 ≤ 2.0×；`peek_preads_total` 是你验证一页 hydration 每行只付一次读、而不是每字段一次的办法。
+
+`(vlog_payload_bytes + vlog_frame_header_bytes) / vlog_raw_bytes` 是 vlog 当前所存内容（含已死记录）的压缩比。压缩之后剩下的就是这两项加上字典；负载里既有数据本身的熵，也有编码器没找到的重复，这两部分在日志内部分不开。`vlog_size_bytes` 的其余部分是记录封装：每条记录 12 字节加上键。
 
 ## 性能预期
 
