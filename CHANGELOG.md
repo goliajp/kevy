@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **Persistent embedded writes copy the value twice, not five times.**
+  Logging a write used to copy every argument into an owned argv, copy it
+  again into that argv's buffer, and encode the frame into a scratch
+  buffer before the AOF write buffer took it. The record is now encoded
+  from the caller's slices straight into the write buffer, and its length
+  and CRC32C are computed over the same pieces; the server's append path
+  loses its scratch copy the same way. Logging a `SET` no longer allocates
+  on the calling thread (it made 6 allocations). A 4 KiB `SET` under
+  `everysec` went from 1.22 to 0.96 µs, and a 16-byte one from 195 to
+  94 ns (medians of ten interleaved rounds, Apple M4 Max). The bytes
+  written to the AOF and when it is fsynced are unchanged.
+  `kevy_sys::checksum::try_crc32c_hw_append` continues a CRC32C across
+  pieces.
 - **Encrypted clients in cluster mode.** Every shard's cluster port gets an
   encrypted twin (`[secure] cluster_port_base`, `announce_cluster_port_base`),
   and a client that came in encrypted is told those ports in `-MOVED` and
