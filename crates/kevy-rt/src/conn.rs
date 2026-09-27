@@ -82,6 +82,9 @@ pub(crate) struct Conn {
     /// SO_REUSEPORT compat port). Cluster conns get `-MOVED` for
     /// wrong-shard single-key commands instead of transparent forwarding.
     pub(crate) cluster: bool,
+    /// Relayed by the encrypted front end (named by `CLIENT SETPEER`):
+    /// cluster replies advertise encrypted ports to it.
+    pub(crate) relayed: bool,
     /// Dedup flag for `Shard::dirty`. PUBLISH fan-out at
     /// N subscribers × M pipelined publishes used to push `N×M` ids onto
     /// the dirty list, then `flush_dirty` paid `N×M` `HashMap::get_mut`
@@ -164,6 +167,7 @@ impl Conn {
             proto: RespVersion::default(),
             blocked: false,
             cluster: false,
+            relayed: false,
             pending_write: false,
         }
     }

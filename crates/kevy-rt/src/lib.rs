@@ -209,7 +209,7 @@ pub(crate) const CLIENT_INPUT_HARD_LIMIT: usize = 1024 * 1024 * 1024;
 
 pub use blocked::{BlockHint, BlockKind};
 pub use client_ops::ClientKillFilter;
-pub use cluster::shard_slot_range;
+pub use cluster::{relayed_client, shard_slot_range};
 pub use exec_geostore::GeoHits;
 pub use exec_slowlog::{SlowlogSub, parse_slowlog_sub};
 pub use kevy_config::NotificationFlags;

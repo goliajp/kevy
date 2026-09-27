@@ -15,15 +15,44 @@ pub(crate) struct ClusterTopo {
     /// First advertised cluster port; shard `i` is reached at
     /// `port_base + i`.
     pub(crate) port_base: u16,
+    /// First advertised ENCRYPTED cluster port, when the encrypted front
+    /// end serves cluster ports; relayed clients are sent there.
+    pub(crate) secure_port_base: Option<u16>,
 }
 
 impl ClusterTopo {
-    /// `-MOVED <slot> <ip>:<port>\r\n` pointing at `shard`'s cluster port.
+    /// `-MOVED <slot> <ip>:<port>\r\n` pointing at `shard`'s cluster port —
+    /// its encrypted twin for a client the front end relays.
     pub(crate) fn moved(&self, slot: u16, shard: usize) -> Vec<u8> {
         let [a, b, c, d] = self.ip;
-        format!("-MOVED {slot} {a}.{b}.{c}.{d}:{}\r\n", self.port_base as usize + shard)
-            .into_bytes()
+        let base = match self.secure_port_base {
+            Some(s) if relayed_client() => s,
+            _ => self.port_base,
+        };
+        format!("-MOVED {slot} {a}.{b}.{c}.{d}:{}\r\n", base as usize + shard).into_bytes()
     }
+}
+
+thread_local! {
+    static RELAYED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Mark whether the command about to run on this shard thread came from a
+/// relayed (encrypted) client.
+pub(crate) fn set_relayed_client(relayed: bool) {
+    RELAYED.with(|r| r.set(relayed));
+}
+
+/// Whether the command being dispatched on this thread came from a client
+/// the encrypted front end relays (see `Runtime::with_peer_token`). Cluster
+/// replies use it to advertise encrypted ports; it is only kept up to date
+/// in cluster mode, and reads `false` otherwise.
+///
+/// ```
+/// assert!(!kevy_rt::relayed_client());
+/// ```
+pub fn relayed_client() -> bool {
+    RELAYED.with(std::cell::Cell::get)
 }
 
 /// The contiguous slot range `[start, end]` (inclusive, CLUSTER SLOTS shape)
@@ -59,7 +88,7 @@ mod tests {
 
     #[test]
     fn moved_reply_shape() {
-        let topo = ClusterTopo { ip: [127, 0, 0, 1], port_base: 6005 };
+        let topo = ClusterTopo { ip: [127, 0, 0, 1], port_base: 6005, secure_port_base: None };
         assert_eq!(topo.moved(12182, 5), b"-MOVED 12182 127.0.0.1:6010\r\n".to_vec());
     }
 }
