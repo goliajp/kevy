@@ -69,6 +69,14 @@ pub struct KevyTierInfo {
 /// names mirror the last four lines of the server's `INFO # Tiering`.
 /// Payload plus frame headers against raw bytes is the ratio; the
 /// dictionaries are memory, one per vlog file.
+/// # Examples
+///
+/// ```
+/// use kevy_embedded::{Config, Store};
+/// // untiered: the section does not exist, so neither do its terms
+/// let s = Store::open(Config::default()).unwrap();
+/// assert!(s.tier_compression().is_none());
+/// ```
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct KevyTierCompression {
@@ -138,6 +146,20 @@ impl Store {
 
     /// The value log's compression accounting summed across shards, or
     /// `None` when tiering is off. See [`KevyTierCompression`].
+    /// # Examples
+    ///
+    /// ```
+    /// use kevy_embedded::{Config, Store};
+    /// let dir = kevy_tmpdir::TmpDir::new("tier-compression-doc");
+    /// let cfg = Config::default().with_persist(dir.path()).with_tier_budget(1 << 20);
+    /// let s = Store::open(cfg).unwrap();
+    /// s.set(b"cold", &[b'x'; 4096]).unwrap();
+    /// assert!(s.debug_force_demote(b"cold"));
+    /// let c = s.tier_compression().unwrap();
+    /// assert_eq!(c.vlog_raw_bytes, 4096);
+    /// // a run of one byte keeps a small fraction of itself
+    /// assert!(c.vlog_payload_bytes < 4096);
+    /// ```
     #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
     pub fn tier_compression(&self) -> Option<KevyTierCompression> {
         self.config.tier_budget?;
