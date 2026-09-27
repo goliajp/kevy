@@ -60,7 +60,7 @@ Top wins:
 | `[lua]` | `time_limit_ms` · `allow_dialects` |
 | `[metrics]` | `listen_port` |
 | `[audit]` | `log_path` |
-| `[secure]` | `private_key_file` · `listen_port` · `client_keys` |
+| `[secure]` | `private_key_file` · `listen_port` · `client_keys` · `cluster_port_base` · `announce_cluster_port_base` |
 
 An annotated starter config lives at
 [`crates/kevy/kevy.toml.example`](https://github.com/goliajp/kevy/blob/develop/crates/kevy/kevy.toml.example).

@@ -355,6 +355,9 @@ fn push_secure(v: &mut Vec<CanonicalPair>, cfg: &Config) {
     push(v, "secure", "listen_port", cfg.secure.listen_port.to_string());
     let keys: Vec<String> = cfg.secure.client_keys.iter().map(crate::key_to_hex).collect();
     push(v, "secure", "client_keys", toml_array(&keys));
+    push(v, "secure", "cluster_port_base", cfg.secure.cluster_port_base.to_string());
+    let announce = cfg.secure.announce_cluster_port_base.to_string();
+    push(v, "secure", "announce_cluster_port_base", announce);
 }
 
 fn push(v: &mut Vec<CanonicalPair>, section: &'static str, key: &'static str, value: String) {
