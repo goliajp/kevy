@@ -13,6 +13,17 @@ use crate::value::IndexValue;
 
 type Row = (IndexValue, Box<[u8]>);
 
+/// Buckets std's hash table allocates to hold `rows`: a power of two it
+/// fills to at most 7/8, with 4 and 8 as the small sizes.
+pub(crate) fn table_buckets(rows: usize) -> usize {
+    match rows {
+        0 => 0,
+        1..=3 => 4,
+        4..=7 => 8,
+        _ => (rows * 8 / 7).next_power_of_two(),
+    }
+}
+
 /// Heap bytes one row costs: the shared allocation (two reference
 /// counts in front of the row) plus the key and any string value.
 pub(crate) fn row_bytes(v: &IndexValue, key: &[u8]) -> u64 {
@@ -148,5 +159,26 @@ impl Hash for ByKey {
 impl Borrow<[u8]> for ByKey {
     fn borrow(&self) -> &[u8] {
         &self.0.1
+    }
+}
+
+#[cfg(test)]
+mod bucket_tests {
+    use super::table_buckets;
+
+    // the model against std itself: with no removals, a table's reported
+    // capacity is exactly what its bucket count allows
+    #[test]
+    fn table_buckets_matches_std_growth() {
+        for rows in 0..300usize {
+            // one insert at a time, the way an index grows
+            let mut set = std::collections::HashSet::new();
+            for r in 0..rows {
+                set.insert(r);
+            }
+            let b = table_buckets(rows);
+            let cap = if b < 8 { b.saturating_sub(1) } else { b / 8 * 7 };
+            assert_eq!(set.capacity(), cap, "{rows} rows");
+        }
     }
 }
