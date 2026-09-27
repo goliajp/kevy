@@ -85,3 +85,78 @@ pub fn parse_score_bound(b: &[u8]) -> Option<ScoreBound> {
 pub fn rest_borrowed<A: ArgvView + ?Sized>(args: &A, from: usize) -> Vec<&[u8]> {
     (from..args.len()).map(|i| &args[i]).collect()
 }
+
+/// The `[MATCH pattern] [COUNT n]` tail of `HSCAN` / `SSCAN` / `ZSCAN`
+/// from `start` on. COUNT is checked and then ignored: these scans
+/// answer in one batch. `None` = a syntax error.
+pub(crate) fn scan_match<A: ArgvView + ?Sized>(args: &A, start: usize) -> Option<Option<Vec<u8>>> {
+    let mut pat = None;
+    let mut i = start;
+    while i < args.len() {
+        let tok = &args[i];
+        let val = args.get(i + 1)?;
+        if tok.eq_ignore_ascii_case(b"MATCH") {
+            pat = Some(val.to_vec());
+        } else if tok.eq_ignore_ascii_case(b"COUNT") {
+            arg_i64(val)?;
+        } else {
+            return None;
+        }
+        i += 2;
+    }
+    Some(pat)
+}
+
+/// The options of `SCAN cursor [MATCH pattern] [COUNT count] [TYPE type]`.
+///
+/// ```
+/// let argv = kevy_resp::Argv::from(vec![b"SCAN".to_vec(), b"7".to_vec(), b"MATCH".to_vec(), b"a*".to_vec()]);
+/// let o = kevy_verbs::args::scan_opts(&argv).unwrap();
+/// assert_eq!(o.pattern.as_deref(), Some(&b"a*"[..]));
+/// assert_eq!(o.count, 10);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScanOpts {
+    /// Where to resume.
+    pub cursor: u64,
+    /// The work bound per call; Redis's default is 10.
+    pub count: usize,
+    /// A glob over key names.
+    pub pattern: Option<Vec<u8>>,
+    /// Keep only keys of this type (`string`, `hash`, …).
+    pub type_filter: Option<Vec<u8>>,
+}
+
+/// Parse `SCAN`'s argv. `Err` carries the refusal in Redis's words.
+///
+/// ```
+/// let argv = kevy_resp::Argv::from(vec![b"SCAN".to_vec(), b"0".to_vec(), b"COUNT".to_vec(), b"5".to_vec()]);
+/// let o = kevy_verbs::args::scan_opts(&argv).unwrap();
+/// assert_eq!((o.cursor, o.count), (0, 5));
+/// ```
+pub fn scan_opts<A: ArgvView + ?Sized>(args: &A) -> Result<ScanOpts, &'static str> {
+    let cursor = args.get(1).and_then(arg_u64).ok_or("ERR invalid cursor")?;
+    let mut opts = ScanOpts { cursor, count: 10, pattern: None, type_filter: None };
+    let mut i = 2;
+    while i < args.len() {
+        let opt = &args[i];
+        let Some(val) = args.get(i + 1) else {
+            return Err("ERR syntax error");
+        };
+        if opt.eq_ignore_ascii_case(b"MATCH") {
+            opts.pattern = Some(val.to_vec());
+        } else if opt.eq_ignore_ascii_case(b"COUNT") {
+            let n = arg_i64(val).ok_or("ERR value is not an integer or out of range")?;
+            if n < 1 {
+                return Err("ERR syntax error");
+            }
+            opts.count = n as usize;
+        } else if opt.eq_ignore_ascii_case(b"TYPE") {
+            opts.type_filter = Some(val.to_vec());
+        } else {
+            return Err("ERR syntax error");
+        }
+        i += 2;
+    }
+    Ok(opts)
+}

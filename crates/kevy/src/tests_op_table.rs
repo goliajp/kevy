@@ -87,10 +87,11 @@ fn wake_set_matches_table() {
     }
 }
 
-/// Every non-test Rust source under `src/`, concatenated, with the file
-/// count beside it. Test files are excluded: a verb named only in test
-/// data is not a dispatch site, and counting it would let the check pass
-/// on a verb nothing implements.
+/// Every non-test Rust source under `src/`, and under the `src/` of the
+/// shared command layer the server runs its data commands through,
+/// concatenated, with the file count beside it. Test files are excluded:
+/// a verb named only in test data is not a dispatch site, and counting it
+/// would let the check pass on a verb nothing implements.
 fn server_sources() -> (String, usize) {
     // Every read here panics rather than skipping. A walk that steps
     // over an unreadable file answers a smaller question than the one
@@ -120,6 +121,7 @@ fn server_sources() -> (String, usize) {
     }
     let (mut out, mut files) = (String::new(), 0);
     walk(std::path::Path::new("src"), &mut out, &mut files);
+    walk(std::path::Path::new("../kevy-verbs/src"), &mut out, &mut files);
     (out, files)
 }
 
