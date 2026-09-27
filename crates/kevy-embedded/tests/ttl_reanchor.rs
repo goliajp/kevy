@@ -149,7 +149,8 @@ fn typed_conditional_hexpire_records_only_what_it_moved() {
     let store = Store::open(Config::default().with_persist(dir.path())).expect("open");
     store.hset(b"h", &[(b"f", b"v"), (b"g", b"w")]).unwrap();
     store.hexpire(b"h", &[b"g"], Duration::from_secs(100), HExpireCond::Always).unwrap();
-    let codes = store.hexpire(b"h", &[b"f", b"g"], Duration::from_secs(500), HExpireCond::Nx).unwrap();
+    let codes =
+        store.hexpire(b"h", &[b"f", b"g"], Duration::from_secs(500), HExpireCond::Nx).unwrap();
     assert_eq!(codes, [1, 0], "NX moves f and refuses g");
     drop(store);
     let store = Store::open(Config::default().with_persist(dir.path())).expect("reopen");

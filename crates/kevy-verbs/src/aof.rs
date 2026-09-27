@@ -149,3 +149,42 @@ fn named_fields<A: ArgvView + ?Sized>(args: &A) -> Option<Vec<&[u8]>> {
     let first = at + 2;
     Some((first..args.len().min(first + n)).map(|i| &args[i]).collect())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn argv(parts: &[&[u8]]) -> Argv {
+        Argv::from(parts.iter().map(|p| p.to_vec()).collect::<Vec<_>>())
+    }
+
+    // a field record the replay could not apply is worse than none: every
+    // malformed or inapplicable shape produces no frame at all
+    #[test]
+    fn a_field_record_needs_fields_that_hold_a_deadline() {
+        let mut store = Store::new();
+        let mut out = Vec::new();
+        crate::exec(&mut store, b"HSET", &argv(&[b"HSET", b"h", b"f", b"v", b"g", b"w"]), &mut out);
+        crate::exec(&mut store, b"SET", &argv(&[b"SET", b"s", b"v"]), &mut out);
+        for bad in [
+            &[&b"HEXPIRE"[..], b"h", b"9"][..],
+            &[b"HEXPIRE", b"h", b"9", b"NX"],
+            &[b"HEXPIRE", b"h", b"9", b"FIELDS"],
+            &[b"HEXPIRE", b"h", b"9", b"FIELDS", b"two", b"f"],
+            &[b"HEXPIRE", b"s", b"9", b"FIELDS", b"1", b"f"],
+            &[b"HEXPIRE", b"h", b"9", b"FIELDS", b"1", b"gone"],
+            &[b"HEXPIRE", b"h", b"9", b"FIELDS", b"1", b"f"],
+        ] {
+            assert!(ttl_followup(&mut store, &argv(bad)).is_empty(), "{bad:?}");
+        }
+        // a count past the fields given is refused by the command itself
+        let over = argv(&[b"HEXPIRE", b"h", b"60", b"FIELDS", b"9", b"f", b"g"]);
+        crate::exec(&mut store, b"HEXPIRE", &over, &mut out);
+        assert!(ttl_followup(&mut store, &over).is_empty());
+        let set = argv(&[b"HEXPIRE", b"h", b"60", b"FIELDS", b"2", b"f", b"g"]);
+        crate::exec(&mut store, b"HEXPIRE", &set, &mut out);
+        let f = ttl_followup(&mut store, &set);
+        assert_eq!(f.len(), 1, "one deadline, one frame");
+        assert_eq!((&f[0][3], &f[0][4], f[0].len()), (&b"FIELDS"[..], &b"2"[..], 7));
+    }
+}

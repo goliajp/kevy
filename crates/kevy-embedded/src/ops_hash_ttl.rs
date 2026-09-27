@@ -41,8 +41,12 @@ impl Store {
         // the record names only the fields that changed (set, or deleted by
         // a past deadline): it carries no condition, so a field the
         // condition refused must not appear in it
-        let changed: Vec<&[u8]> =
-            fields.iter().zip(&codes).filter(|&(_, &c)| c == 1 || c == 2).map(|(f, _)| *f).collect();
+        let changed: Vec<&[u8]> = fields
+            .iter()
+            .zip(&codes)
+            .filter(|&(_, &c)| c == 1 || c == 2)
+            .map(|(f, _)| *f)
+            .collect();
         if !changed.is_empty() {
             let ms = deadline_ms.to_string();
             let n = changed.len().to_string();
