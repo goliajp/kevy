@@ -70,15 +70,17 @@ fn run(s: &Store, v: &Verb, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>) {
         return; // a refused command changed nothing
     }
     let recorded = match effect {
-        Some(Effect::Write) => record(&mut g, argv),
+        Some(Effect::Write) => record(&mut g, argv, None),
         Some(Effect::Record(frame)) => {
             let parts: Vec<&[u8]> = frame.iter().map(Vec::as_slice).collect();
             commit_write(&mut g, &parts)
         }
-        Some(Effect::RecordAll(frames)) => frames.iter().try_for_each(|frame| {
-            let parts: Vec<&[u8]> = frame.iter().map(Vec::as_slice).collect();
-            commit_write(&mut g, &parts)
-        }),
+        Some(Effect::RecordId(at, id)) => {
+            let mut buf = [0u8; 41];
+            let id = kevy_verbs::aof::id_bytes(&mut buf, id);
+            record(&mut g, argv, Some((at, id)))
+        }
+        Some(claim @ Effect::RecordClaim(_)) => record_claim(&mut g, argv, &claim),
         _ => Ok(()),
     };
     if let Err(e) = recorded {
@@ -109,23 +111,46 @@ fn refusal(s: &Store, up: &[u8], argv: &[Vec<u8>]) -> Option<&'static str> {
     split.then_some("CROSSSLOT Keys in request don't hash to the same slot")
 }
 
-/// Record a write as the argv it ran with, then the absolute deadline
-/// it set when it moved one by a relative amount.
-fn record(g: &mut Inner, argv: &[Vec<u8>]) -> KevyResult<()> {
+/// Record a write as the argv it ran with, argument `swap.0` replaced by
+/// `swap.1` when given, then the absolute deadline it set when it moved
+/// one by a relative amount.
+fn record(g: &mut Inner, argv: &[Vec<u8>], swap: Option<(usize, &[u8])>) -> KevyResult<()> {
     // the common short argv is viewed from the stack: logging a write
     // allocates nothing on the calling thread
     const INLINE: usize = 8;
     if argv.len() <= INLINE {
         let mut parts: [&[u8]; INLINE] = [&[]; INLINE];
-        for (slot, a) in parts.iter_mut().zip(argv) {
-            *slot = a;
+        for (i, (slot, a)) in parts.iter_mut().zip(argv).enumerate() {
+            *slot = swapped(swap, i, a);
         }
         commit_write(g, &parts[..argv.len()])?;
     } else {
-        let parts: Vec<&[u8]> = argv.iter().map(Vec::as_slice).collect();
+        let parts: Vec<&[u8]> = argv.iter().enumerate().map(|(i, a)| swapped(swap, i, a)).collect();
         commit_write(g, &parts)?;
     }
     for f in kevy_verbs::aof::ttl_followup(&mut g.store, &Args(argv)) {
+        let parts: Vec<&[u8]> = (0..f.len()).map(|i| &f[i]).collect();
+        commit_write(g, &parts)?;
+    }
+    Ok(())
+}
+
+/// Argument `i` of a record: `a`, or the replacement `swap` names for it.
+fn swapped<'a>(swap: Option<(usize, &'a [u8])>, i: usize, a: &'a [u8]) -> &'a [u8] {
+    match swap {
+        Some((at, v)) if at == i => v,
+        _ => a,
+    }
+}
+
+/// Record a claim as its outcome where the write is recorded (the AOF, a
+/// replica source, the change feed); elsewhere the argv runs the commit's
+/// other steps, and no frame is built.
+fn record_claim(g: &mut Inner, argv: &[Vec<u8>], claim: &Effect) -> KevyResult<()> {
+    if !crate::store_glue::records_writes(g) {
+        return record(g, argv, None);
+    }
+    for f in kevy_verbs::aof::deferred_frames(&mut g.store, &Args(argv), claim) {
         let parts: Vec<&[u8]> = (0..f.len()).map(|i| &f[i]).collect();
         commit_write(g, &parts)?;
     }

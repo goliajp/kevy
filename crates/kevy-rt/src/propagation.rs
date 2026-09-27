@@ -44,10 +44,10 @@ thread_local! {
     /// The pending override for the command currently executing on
     /// this thread. `None` = no verb asked for one = `AsIs`.
     static OVERRIDE: Cell<Option<Propagate>> = const { Cell::new(None) };
-    /// Frames to record after the `Replace` in [`OVERRIDE`]; empty
-    /// whenever it holds anything else.
-    static MORE: core::cell::RefCell<Vec<Vec<Vec<u8>>>> =
-        const { core::cell::RefCell::new(Vec::new()) };
+    /// A record left for the cold path to build, set only together with a
+    /// `Suppress` in [`OVERRIDE`]: a write with nowhere to be recorded
+    /// never has its frames built.
+    static DEFERRED: Cell<Option<kevy_verbs::Effect>> = const { Cell::new(None) };
 }
 
 /// Install a propagation override for the command currently executing.
@@ -55,37 +55,31 @@ thread_local! {
 /// the post-write housekeeping of that same command.
 pub fn set_override(p: Propagate) {
     OVERRIDE.with(|c| c.set(Some(p)));
-    MORE.with(|m| m.borrow_mut().clear());
+    DEFERRED.with(Cell::take);
 }
 
-/// Install several frames to record, in order, in place of the command's
-/// argv: a verb whose effect takes more than one frame to state (a claim
-/// recorded as one `XCLAIM` per outcome). An empty list records nothing,
-/// as [`Propagate::Suppress`] does.
+/// Record the command currently executing by the frames its `effect`
+/// describes ([`kevy_verbs::Effect::RecordId`], [`kevy_verbs::Effect::RecordClaim`]),
+/// built only if the shard records the write at all: with the AOF off
+/// and no replicas the frames are never made. Any other effect records
+/// nothing.
 ///
 /// ```
-/// use kevy_rt::propagation::{discard_override, set_override_frames};
-/// set_override_frames(vec![
-///     vec![b"XCLAIM".to_vec(), b"s".to_vec()],
-///     vec![b"XCLAIM".to_vec(), b"s".to_vec()],
-/// ]);
-/// // a dispatch site that records nothing drops both
+/// use kevy_rt::propagation::{discard_override, set_override_deferred};
+/// let id = kevy_store::StreamId { ms: 1, seq: 0 };
+/// set_override_deferred(kevy_verbs::Effect::RecordId(2, id));
+/// // a dispatch site that records nothing drops it unbuilt
 /// discard_override();
 /// ```
-pub fn set_override_frames(mut frames: Vec<Vec<Vec<u8>>>) {
-    if frames.is_empty() {
-        set_override(Propagate::Suppress);
-        return;
-    }
-    let first = frames.remove(0);
-    set_override(Propagate::Replace(first));
-    MORE.with(|m| *m.borrow_mut() = frames);
+pub fn set_override_deferred(effect: kevy_verbs::Effect) {
+    OVERRIDE.with(|c| c.set(Some(Propagate::Suppress)));
+    DEFERRED.with(|d| d.set(Some(effect)));
 }
 
-/// The frames [`set_override_frames`] queued after the first, taken with
-/// the [`Propagate::Replace`] that carries the first.
-pub(crate) fn take_more_frames() -> Vec<Vec<Vec<u8>>> {
-    MORE.with(|m| core::mem::take(&mut *m.borrow_mut()))
+/// The effect [`set_override_deferred`] left, taken with the `Suppress`
+/// that marks it.
+pub(crate) fn take_deferred() -> Option<kevy_verbs::Effect> {
+    DEFERRED.with(Cell::take)
 }
 
 /// Take (and clear) the pending override — [`Propagate::AsIs`] when no
@@ -103,7 +97,7 @@ pub(crate) fn take_override() -> Propagate {
 /// armed for whatever command runs next on the thread.
 pub fn discard_override() {
     OVERRIDE.with(Cell::take);
-    MORE.with(|m| m.borrow_mut().clear());
+    DEFERRED.with(Cell::take);
 }
 
 #[cfg(test)]
@@ -134,19 +128,17 @@ mod tests {
     }
 
     #[test]
-    fn several_frames_come_out_in_order_and_do_not_linger() {
-        set_override_frames(vec![vec![b"A".to_vec()], vec![b"B".to_vec()], vec![b"C".to_vec()]]);
-        let Propagate::Replace(first) = take_override() else { panic!("expected Replace") };
-        assert_eq!(first, vec![b"A".to_vec()]);
-        assert_eq!(take_more_frames(), vec![vec![b"B".to_vec()], vec![b"C".to_vec()]]);
-        set_override_frames(vec![vec![b"A".to_vec()], vec![b"B".to_vec()]]);
-        discard_override();
-        assert!(take_more_frames().is_empty(), "a discard drops the queued frames too");
-        set_override_frames(vec![vec![b"A".to_vec()], vec![b"B".to_vec()]]);
-        set_override(Propagate::Suppress);
-        assert!(take_more_frames().is_empty(), "a later override drops them");
-        set_override_frames(Vec::new());
+    fn a_deferred_record_rides_a_suppress_and_does_not_linger() {
+        let id = kevy_store::StreamId { ms: 1, seq: 0 };
+        set_override_deferred(kevy_verbs::Effect::RecordId(2, id));
         assert!(matches!(take_override(), Propagate::Suppress));
+        assert_eq!(take_deferred(), Some(kevy_verbs::Effect::RecordId(2, id)));
+        set_override_deferred(kevy_verbs::Effect::RecordId(2, id));
+        discard_override();
+        assert_eq!(take_deferred(), None, "a discard drops it");
+        set_override_deferred(kevy_verbs::Effect::RecordId(2, id));
+        set_override(Propagate::Replace(vec![b"SREM".to_vec()]));
+        assert_eq!(take_deferred(), None, "a later override replaces it");
     }
 
     #[test]
