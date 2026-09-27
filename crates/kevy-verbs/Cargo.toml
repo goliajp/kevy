@@ -1,0 +1,21 @@
+[package]
+name = "kevy-verbs"
+description = "The single-shard command layer kevy's server and embedded engine share — argv parsing, reply wording, execution against one keyspace."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/kevy-verbs"
+readme = "README.md"
+keywords = ["kevy", "redis", "resp", "commands"]
+categories = ["database-implementations"]
+
+[lints]
+workspace = true
+
+[dependencies]
+kevy-store = { path = "../kevy-store", version = "6.4.0" }
+kevy-resp = { path = "../kevy-resp", version = "6.4.0" }

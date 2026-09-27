@@ -1,29 +1,15 @@
 //! Command helpers shared by the dispatcher.
 
 use kevy_resp::{
-    ArgvView, RespVersion, encode_array_len, encode_bulk, encode_double, encode_error,
-    encode_integer,
+    ArgvView, RespVersion, encode_array_len, encode_bulk, encode_error, encode_integer,
 };
-use kevy_store::{ScoreBound, Store, StoreError};
+use kevy_store::Store;
 
-/// Uppercase a command verb into the caller's stack buffer — no per-command heap
-/// allocation (verbs are short). An over-long token yields an empty slice, which
-/// matches no command literal (i.e. it is treated as unknown — the correct
-/// behavior for routing, write-classification, and txn-classification).
-pub(crate) fn upper_verb<'a>(name: &[u8], buf: &'a mut [u8; 32]) -> &'a [u8] {
-    let n = name.len();
-    if n <= buf.len() {
-        buf[..n].copy_from_slice(name);
-        buf[..n].make_ascii_uppercase();
-        &buf[..n]
-    } else {
-        &buf[..0]
-    }
-}
-
-pub(crate) fn wrong_args(out: &mut Vec<u8>, cmd: &str) {
-    encode_error(out, &format!("ERR wrong number of arguments for '{cmd}' command"));
-}
+pub(crate) use kevy_verbs::args::{arg_f64, arg_i64, parse_score_bound, rest_borrowed, upper_verb};
+pub(crate) use kevy_verbs::reply::{
+    ERR_NOT_INT, OOM_ERR, emit_bulk_array, emit_int_result, emit_zrange, fmt_score, store_err,
+    wrong_args,
+};
 
 /// Nothing in the local dispatch chain handled this verb — say which of
 /// the two reasons that is.
@@ -71,52 +57,10 @@ pub(crate) fn cmd_hello(out: &mut Vec<u8>) {
     encode_array_len(out, 0);
 }
 
-pub(crate) const ERR_NOT_INT: &str = "ERR value is not an integer or out of range";
-pub(crate) const WRONGTYPE: &str =
-    "WRONGTYPE Operation against a key holding the wrong kind of value";
-/// Redis's classic OOM reply for write attempts under `NoEviction`. Matches
-/// the wording valkey clients (redis-cli, jedis, go-redis) detect.
-pub(crate) const OOM_ERR: &str = "OOM command not allowed when used memory > 'maxmemory'.";
-
 /// Verb classification tables (`is_write_verb` / `notify_class_for_verb` /
 /// `is_growing_write_verb`) live in [`crate::cmd_class`]; re-exported here
 /// so dispatchers keep their `cmd::*` paths.
 pub(crate) use crate::cmd_class::{is_growing_write_verb, is_write_verb, notify_class_for_verb};
-
-/// Encode a `StoreError` as its RESP error reply.
-pub(crate) fn store_err(out: &mut Vec<u8>, e: StoreError) {
-    let msg = match e {
-        StoreError::WrongType => WRONGTYPE,
-        StoreError::NotInteger => ERR_NOT_INT,
-        StoreError::Overflow => "ERR increment or decrement would overflow",
-        StoreError::OutOfRange => "ERR index out of range",
-        StoreError::NoSuchKey => "ERR no such key",
-        StoreError::NotFloat => "ERR value is not a valid float",
-        StoreError::OutOfMemory => OOM_ERR,
-    };
-    encode_error(out, msg);
-}
-
-/// Encode an integer-or-error result as `:n\r\n` or the mapped error.
-pub(crate) fn emit_int_result(res: Result<i64, StoreError>, out: &mut Vec<u8>) {
-    match res {
-        Ok(n) => encode_integer(out, n),
-        Err(e) => store_err(out, e),
-    }
-}
-
-/// Encode a `Vec<Vec<u8>>` as a RESP array of bulk strings, or the mapped error.
-pub(crate) fn emit_bulk_array(res: Result<Vec<Vec<u8>>, StoreError>, out: &mut Vec<u8>) {
-    match res {
-        Ok(items) => {
-            encode_array_len(out, items.len() as i64);
-            for it in &items {
-                encode_bulk(out, it);
-            }
-        }
-        Err(e) => store_err(out, e),
-    }
-}
 
 /// `HSET key field value [field value ...]`. Borrowed-pair path: the pair
 /// list holds `&[u8]` slices into argv, avoiding a `Vec<u8>` alloc per
@@ -264,99 +208,6 @@ fn parse_zrbs_modifiers<A: ArgvView + ?Sized>(
         }
     }
     Some((withscores, limit))
-}
-
-/// Encode a `(member, score)` list per `withscores` + `proto`:
-///
-/// | mode                  | wire shape                                                          |
-/// |-----------------------|---------------------------------------------------------------------|
-/// | no WITHSCORES (both)  | `*N\r\n$<m>...` — flat array of bulks                              |
-/// | WITHSCORES + V2       | `*2N\r\n$<m>\r\n$<s>...` — interleaved bulks (Redis legacy)        |
-/// | WITHSCORES + V3       | `*N\r\n*2\r\n$<m>\r\n,<s>\r\n...` — array of [bulk, double] pairs  |
-///
-/// The V3 nested-array shape is what RESP3 clients expect; the V2 flat
-/// interleaving is preserved bit-for-bit so unmigrated clients stay
-/// happy.
-pub(crate) fn emit_zrange(
-    res: Result<Vec<(Vec<u8>, f64)>, StoreError>,
-    withscores: bool,
-    proto: RespVersion,
-    out: &mut Vec<u8>,
-) {
-    match res {
-        Err(e) => store_err(out, e),
-        Ok(items) => match (withscores, proto) {
-            (false, _) => {
-                encode_array_len(out, items.len() as i64);
-                for (m, _) in &items {
-                    encode_bulk(out, m);
-                }
-            }
-            (true, RespVersion::V2) => {
-                encode_array_len(out, (items.len() * 2) as i64);
-                for (m, sc) in &items {
-                    encode_bulk(out, m);
-                    encode_bulk(out, &fmt_score(*sc));
-                }
-            }
-            (true, RespVersion::V3) => {
-                encode_array_len(out, items.len() as i64);
-                for (m, sc) in &items {
-                    encode_array_len(out, 2);
-                    encode_bulk(out, m);
-                    encode_double(out, *sc);
-                }
-            }
-        },
-    }
-}
-
-/// Parse an f64 score argument (accepts `inf`/`-inf`); rejects NaN.
-pub(crate) fn arg_f64(b: &[u8]) -> Option<f64> {
-    let s = std::str::from_utf8(b).ok()?.trim();
-    let f: f64 = match s.to_ascii_lowercase().as_str() {
-        "inf" | "+inf" | "infinity" | "+infinity" => f64::INFINITY,
-        "-inf" | "-infinity" => f64::NEG_INFINITY,
-        _ => s.parse().ok()?,
-    };
-    if f.is_nan() { None } else { Some(f) }
-}
-
-/// Parse a `ZRANGEBYSCORE`/`ZCOUNT` bound: a leading `(` means exclusive.
-pub(crate) fn parse_score_bound(b: &[u8]) -> Option<ScoreBound> {
-    match b.strip_prefix(b"(") {
-        Some(rest) => Some(ScoreBound { value: arg_f64(rest)?, exclusive: true }),
-        None => Some(ScoreBound { value: arg_f64(b)?, exclusive: false }),
-    }
-}
-
-/// Format a score the way Redis does: integral values without a decimal point.
-pub(crate) fn fmt_score(s: f64) -> Vec<u8> {
-    if s.is_infinite() {
-        return if s > 0.0 { b"inf".to_vec() } else { b"-inf".to_vec() };
-    }
-    // Bit-exact integer-valued check; epsilon would change the wire shape.
-    #[allow(clippy::float_cmp)]
-    let is_integer_valued = s == s.trunc();
-    if is_integer_valued && s.abs() < 1e17 {
-        return (s as i64).to_string().into_bytes();
-    }
-    format!("{s}").into_bytes()
-}
-
-/// Borrowed `args[from..]` as `Vec<&[u8]>` — zero per-member heap
-/// alloc. Mirrors valkey's `c->argv[j]`-without-copy hand-off (`t_set.c:611`
-/// `setTypeAdd(set, objectGetVal(c->argv[j]))`). Paired with the Store
-/// `*_borrowed` family that takes `&[&[u8]]`; the Store then materialises
-/// `SmallBytes` per member once at insert (same as before), but the dispatch
-/// hand-off no longer pays a `Vec<u8>` per arg.
-pub(crate) fn rest_borrowed<A: ArgvView + ?Sized>(args: &A, from: usize) -> Vec<&[u8]> {
-    (from..args.len()).map(|i| &args[i]).collect()
-}
-
-/// Parse an `i64` argument from raw bytes.
-pub(crate) fn arg_i64(b: &[u8]) -> Option<i64> {
-    std::str::from_utf8(b).ok()?.parse::<i64>().ok()
 }
 
 /// Parse `SCAN cursor [MATCH pattern] [COUNT count] [TYPE type]` into

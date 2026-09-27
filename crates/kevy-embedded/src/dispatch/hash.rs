@@ -6,10 +6,10 @@ use crate::store::Store;
 
 use kevy_store::{HExpireCond, now_unix_ms};
 
-use super::util::{
-    ERR_NOT_FLOAT, ERR_NOT_INT, ERR_SYNTAX, arg_f64, arg_i64, arr, bulk, emit_bulk_array, emit_int,
-    err, fmt_score, int, kevy_err, opt_bulk, rest, wrong_args,
-};
+use super::{emit_bulk_array, emit_int, kevy_err, opt_bulk, rest};
+use kevy_resp::{encode_array_len, encode_bulk, encode_error, encode_integer};
+use kevy_verbs::args::{arg_f64, arg_i64};
+use kevy_verbs::reply::{ERR_NOT_FLOAT, ERR_NOT_INT, ERR_SYNTAX, fmt_score, wrong_args};
 
 /// One hash-family request; `false` = verb not in this group.
 // LOC-WAIVER: data-driven verb dispatch table — one arm per hash verb.
@@ -29,7 +29,7 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
         b"HSETNX" => {
             if argv.len() == 4 {
                 match s.hsetnx(&argv[1], &argv[2], &argv[3]) {
-                    Ok(set) => int(out, i64::from(set)),
+                    Ok(set) => encode_integer(out, i64::from(set)),
                     Err(e) => kevy_err(out, &e),
                 }
             } else {
@@ -73,7 +73,7 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
             } else if let Some(d) = arg_i64(&argv[3]) {
                 emit_int(out, s.hincrby(&argv[1], &argv[2], d));
             } else {
-                err(out, ERR_NOT_INT);
+                encode_error(out, ERR_NOT_INT);
             }
         }
         b"HINCRBYFLOAT" => {
@@ -81,11 +81,11 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
                 wrong_args(out, "hincrbyfloat");
             } else if let Some(d) = arg_f64(&argv[3]) {
                 match s.hincrbyfloat(&argv[1], &argv[2], d) {
-                    Ok(v) => bulk(out, &fmt_score(v)),
+                    Ok(v) => encode_bulk(out, &fmt_score(v)),
                     Err(e) => kevy_err(out, &e),
                 }
             } else {
-                err(out, ERR_NOT_FLOAT);
+                encode_error(out, ERR_NOT_FLOAT);
             }
         }
         b"HRANDFIELD" => {
@@ -97,16 +97,16 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
             } else if argv.len() == 2 {
                 match s.hrandfield(&argv[1], 1, false) {
                     Ok(v) if v.is_empty() => out.extend_from_slice(b"$-1\r\n"),
-                    Ok(v) => bulk(out, &v[0].0),
+                    Ok(v) => encode_bulk(out, &v[0].0),
                     Err(e) => kevy_err(out, &e),
                 }
             } else {
                 match arg_i64(&argv[2]) {
-                    None => err(out, ERR_NOT_INT),
+                    None => encode_error(out, ERR_NOT_INT),
                     Some(count) => {
                         let with_values = argv.len() == 4;
                         if with_values && !argv[3].eq_ignore_ascii_case(b"WITHVALUES") {
-                            err(out, "ERR syntax error");
+                            encode_error(out, "ERR syntax error");
                         } else {
                             match s.hrandfield(&argv[1], count, with_values) {
                                 Err(e) => kevy_err(out, &e),
@@ -114,9 +114,9 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
                                     let n = if with_values { items.len() * 2 } else { items.len() };
                                     out.extend_from_slice(format!("*{n}\r\n").as_bytes());
                                     for (f, v) in &items {
-                                        bulk(out, f);
+                                        encode_bulk(out, f);
                                         if with_values {
-                                            bulk(out, v);
+                                            encode_bulk(out, v);
                                         }
                                     }
                                 }
@@ -144,10 +144,10 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
             if argv.len() == 2 {
                 match s.hgetall(&argv[1]) {
                     Ok(pairs) => {
-                        arr(out, pairs.len() * 2);
+                        encode_array_len(out, (pairs.len() * 2) as i64);
                         for (f, v) in pairs {
-                            bulk(out, &f);
-                            bulk(out, &v);
+                            encode_bulk(out, &f);
+                            encode_bulk(out, &v);
                         }
                     }
                     Err(e) => kevy_err(out, &e),
@@ -162,7 +162,7 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
             } else {
                 match s.hmget(&argv[1], &rest(argv, 2)) {
                     Ok(vals) => {
-                        arr(out, vals.len());
+                        encode_array_len(out, vals.len() as i64);
                         for v in vals {
                             opt_bulk(out, v);
                         }
@@ -194,10 +194,10 @@ fn cmd_hscan(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
         return wrong_args(out, "hscan");
     }
     if arg_i64(&argv[2]).is_none() {
-        return err(out, ERR_NOT_INT);
+        return encode_error(out, ERR_NOT_INT);
     }
     let Some(pat) = super::parse_match_count(argv, 3) else {
-        return err(out, ERR_SYNTAX);
+        return encode_error(out, ERR_SYNTAX);
     };
     match s.hgetall(&argv[1]) {
         Err(e) => kevy_err(out, &e),
@@ -256,9 +256,9 @@ fn parse_cond_fields(
 }
 
 fn emit_codes(out: &mut Vec<u8>, codes: &[i8]) {
-    arr(out, codes.len());
+    encode_array_len(out, codes.len() as i64);
     for c in codes {
-        int(out, i64::from(*c));
+        encode_integer(out, i64::from(*c));
     }
 }
 
@@ -275,11 +275,11 @@ fn cmd_hexpire(
         return wrong_args(out, name);
     }
     let Some(raw) = arg_i64(&argv[2]) else {
-        return err(out, ERR_NOT_INT);
+        return encode_error(out, ERR_NOT_INT);
     };
     let (cond, idx) = match parse_cond_fields(argv, 3) {
         Ok(t) => t,
-        Err(e) => return err(out, e),
+        Err(e) => return encode_error(out, e),
     };
     let fields: Vec<&[u8]> = idx.iter().map(|&i| argv[i].as_slice()).collect();
     match s.hpexpire_at(&argv[1], &fields, to_abs_ms(raw), cond) {
@@ -294,16 +294,16 @@ fn cmd_httl(s: &Store, argv: &[Vec<u8>], in_secs: bool, name: &str, out: &mut Ve
     }
     let (_, idx) = match parse_cond_fields(argv, 2) {
         Ok(t) => t,
-        Err(e) => return err(out, e),
+        Err(e) => return encode_error(out, e),
     };
     let fields: Vec<&[u8]> = idx.iter().map(|&i| argv[i].as_slice()).collect();
     match s.hpttl(&argv[1], &fields) {
         Err(e) => kevy_err(out, &e),
         Ok(ttls) => {
-            arr(out, ttls.len());
+            encode_array_len(out, ttls.len() as i64);
             for ms in ttls {
                 // -2 / -1 sentinels pass through untouched.
-                int(out, if in_secs && ms >= 0 { (ms + 500) / 1000 } else { ms });
+                encode_integer(out, if in_secs && ms >= 0 { (ms + 500) / 1000 } else { ms });
             }
         }
     }
@@ -315,7 +315,7 @@ fn cmd_hpersist(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     }
     let (_, idx) = match parse_cond_fields(argv, 2) {
         Ok(t) => t,
-        Err(e) => return err(out, e),
+        Err(e) => return encode_error(out, e),
     };
     let fields: Vec<&[u8]> = idx.iter().map(|&i| argv[i].as_slice()).collect();
     match s.hpersist(&argv[1], &fields) {

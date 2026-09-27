@@ -13,14 +13,14 @@ use super::idx::{badargs, spec_of, unhex};
 #[cfg(all(feature = "text", feature = "vector"))]
 use super::idx::no_such_index;
 use super::idx_query::{emit_row, idx_err, parse_bounds};
-use super::util::{arr, bulk, err};
+use kevy_resp::{encode_array_len, encode_bulk, encode_error};
 
 /// `IDX.QUERY COMPOSE AND|OR a <shape> b <shape> [LIMIT n] [CURSOR k]
 /// [FIELDS f…]` — key-ordered set algebra over two indexes; the cursor
 /// is a plain hex key point.
 pub(super) fn compose(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     let Some(cq) = parse_compose(s, argv) else {
-        return err(out, "ERR bad IDX arguments");
+        return encode_error(out, "ERR bad IDX arguments");
     };
     let (and, a, b, limit, cursor_key, fields) = cq;
     let a_hits = match s.idx_query(&a.0, &a.1, &a.2, None, 100_000) {
@@ -54,9 +54,9 @@ pub(super) fn compose(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     } else {
         b"0".to_vec()
     };
-    arr(out, 2);
-    bulk(out, &next);
-    arr(out, keys.len());
+    encode_array_len(out, 2);
+    encode_bulk(out, &next);
+    encode_array_len(out, keys.len() as i64);
     for k in &keys {
         emit_row(s, out, k, None, &fields);
     }
@@ -127,7 +127,7 @@ pub(super) fn hybrid(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
 fn hybrid_impl(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     use std::collections::HashMap;
     let Some(q) = parse_hybrid(argv) else {
-        return err(out, "ERR bad IDX arguments");
+        return encode_error(out, "ERR bad IDX arguments");
     };
     let depth = q.limit * 4;
     let matches = match s.idx_match(&q.text_idx, &q.text, depth) {

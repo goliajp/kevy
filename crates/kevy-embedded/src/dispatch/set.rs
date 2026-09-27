@@ -3,10 +3,10 @@
 use crate::KevyResult;
 use crate::store::Store;
 
-use super::util::{
-    ERR_NOT_INT, arg_i64, bulk, emit_bulk_array, emit_int, err, kevy_err, nil, rest, verb_name,
-    wrong_args,
-};
+use super::{emit_bulk_array, emit_int, kevy_err, rest, verb_name};
+use kevy_resp::{encode_bulk, encode_error, encode_null_bulk};
+use kevy_verbs::args::arg_i64;
+use kevy_verbs::reply::{ERR_NOT_INT, wrong_args};
 
 /// One set-family request; `false` = verb not in this group.
 // LOC-WAIVER: data-driven verb dispatch table — one arm per set verb.
@@ -72,13 +72,13 @@ fn cmd_spop_rand(s: &Store, argv: &[Vec<u8>], remove: bool, out: &mut Vec<u8>) {
     let raw = if count_given {
         match arg_i64(&argv[2]) {
             Some(c) => c,
-            None => return err(out, ERR_NOT_INT),
+            None => return encode_error(out, ERR_NOT_INT),
         }
     } else {
         1
     };
     if raw < 0 && remove {
-        return err(out, "ERR value is out of range, must be positive");
+        return encode_error(out, "ERR value is out of range, must be positive");
     }
     let count = raw.unsigned_abs() as usize;
     let res = if remove {
@@ -95,8 +95,8 @@ fn cmd_spop_rand(s: &Store, argv: &[Vec<u8>], remove: bool, out: &mut Vec<u8>) {
                 emit_bulk_array(out, Ok(items));
             } else {
                 match items.into_iter().next() {
-                    Some(v) => bulk(out, &v),
-                    None => nil(out),
+                    Some(v) => encode_bulk(out, &v),
+                    None => encode_null_bulk(out),
                 }
             }
         }
