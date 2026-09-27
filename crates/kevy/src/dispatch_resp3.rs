@@ -8,7 +8,7 @@
 //! and short-circuits on a hit, so adding an override is a 1:1 swap
 //! from a V2 helper to a RESP3 helper.
 
-use crate::cmd::{arg_f64, arg_i64, cmd_zrange, cmd_zrangebyscore, store_err, wrong_args};
+use crate::cmd::{arg_f64, arg_i64, store_err, wrong_args};
 use crate::state::Ctx;
 use kevy_resp::{
     ArgvView, RespVersion, encode_bulk, encode_double, encode_error, encode_map_header,
@@ -61,7 +61,7 @@ pub(crate) fn try_resp3_overrides<A: ArgvView + ?Sized>(
             // Only the INCR form changes shape: it returns the new score,
             // which is a Double in RESP3 and a bulk string in RESP2. Plain
             // ZADD returns an integer in both, so it falls through.
-            match crate::cmd_zadd::parse_zadd_flags(args) {
+            match kevy_verbs::cmd::parse_zadd_flags(args) {
                 Ok((flags, true, first)) if args.len() == first + 2 => {
                     match arg_f64(&args[first]) {
                         Some(delta) => emit_zadd_incr_resp3(
@@ -159,13 +159,13 @@ pub(crate) fn try_resp3_overrides<A: ArgvView + ?Sized>(
         // array of [member, score] 2-element nested arrays (each score
         // a Double `,N`), vs the V2 flat interleaved bulk array. The
         // no-WITHSCORES form is the same plain `*N` array of bulks on
-        // both protos (cmd_zrange handles that branch internally).
+        // both protos (the zrange body handles that branch internally).
         b"ZRANGE" => {
-            cmd_zrange(store, args, out, RespVersion::V3);
+            kevy_verbs::cmd::zrange(store, args, out, RespVersion::V3);
             true
         }
         b"ZRANGEBYSCORE" => {
-            cmd_zrangebyscore(store, args, out, RespVersion::V3);
+            kevy_verbs::cmd::zrangebyscore(store, args, out, RespVersion::V3);
             true
         }
         // RESP3 carries multi-line text replies as Verbatim strings
