@@ -2,7 +2,6 @@
 
 use std::time::Duration;
 
-use crate::KevyResult;
 use crate::store::Store;
 
 use super::util::{
@@ -162,34 +161,10 @@ fn cmd_set(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     if nx && xx {
         return err(out, ERR_SYNTAX);
     }
-    match set_composed(s, &argv[1], &argv[2], expire, nx, xx) {
+    match s.set_opts(&argv[1], &argv[2], expire, nx, xx) {
         Ok(true) => simple(out, "OK"),
         Ok(false) => nil(out), // NX/XX condition not met
         Err(e) => kevy_err(out, &e),
-    }
-}
-
-fn set_composed(
-    s: &Store,
-    key: &[u8],
-    val: &[u8],
-    expire: Option<Duration>,
-    nx: bool,
-    xx: bool,
-) -> KevyResult<bool> {
-    if nx {
-        let ok = s.setnx(key, val)?;
-        if ok && let Some(d) = expire {
-            s.expire(key, d)?;
-        }
-        return Ok(ok);
-    }
-    if xx && s.exists(&[key])? == 0 {
-        return Ok(false);
-    }
-    match expire {
-        Some(d) => s.set_with_ttl(key, val, d),
-        None => s.set(key, val),
     }
 }
 

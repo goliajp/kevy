@@ -15,6 +15,23 @@ fn set_get_through_apply() {
 }
 
 #[test]
+fn a_logged_set_keeps_its_relative_ttl_until_the_deadline_frame() {
+    let mut s = Store::new();
+    // a crash after this frame: the key must still expire
+    apply(&mut s, &argv(&[b"SET", b"k", b"v", b"PX", b"60000"]));
+    let ttl = s.pttl(b"k");
+    assert!(ttl > 58_000 && ttl <= 60_000, "{ttl}");
+    apply(&mut s, &argv(&[b"SET", b"s", b"v", b"NX", b"EX", b"60"]));
+    assert!(s.pttl(b"s") > 58_000);
+    // the deadline frame that follows wins, and a past one drops the key
+    apply(&mut s, &argv(&[b"PEXPIREAT", b"k", b"1000"]));
+    assert_eq!(s.get(b"k").unwrap(), None);
+    // NX/XX in a logged frame are moot: the SET happened
+    apply(&mut s, &argv(&[b"SET", b"s", b"w", b"NX"]));
+    assert_eq!(s.get(b"s").unwrap(), Some(Cow::Borrowed(&b"w"[..])));
+}
+
+#[test]
 fn all_basic_types_replay() {
     let mut s = Store::new();
     apply(&mut s, &argv(&[b"SET", b"str", b"hello"]));

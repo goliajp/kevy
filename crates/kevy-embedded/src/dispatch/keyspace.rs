@@ -125,13 +125,11 @@ fn cmd_expire(s: &Store, argv: &[Vec<u8>], unit_ms: i64, name: &str, out: &mut V
     let Some(n) = arg_i64(&argv[2]) else {
         return err(out, ERR_NOT_INT);
     };
+    // each branch is one store call: a separate existence check would be a
+    // second lock, and the reply would describe a key another thread changed
     let res = (|| {
-        if s.exists(&[argv[1].as_slice()])? == 0 {
-            return Ok(0);
-        }
         if n <= 0 {
-            s.del(&[argv[1].as_slice()])?;
-            return Ok(1);
+            return Ok(i64::from(s.del(&[argv[1].as_slice()])? > 0));
         }
         let ms = n.saturating_mul(unit_ms) as u64;
         Ok(i64::from(s.expire(&argv[1], Duration::from_millis(ms))?))
@@ -149,9 +147,6 @@ fn cmd_expireat(s: &Store, argv: &[Vec<u8>], in_secs: bool, name: &str, out: &mu
         return err(out, ERR_NOT_INT);
     };
     let res = (|| {
-        if s.exists(&[argv[1].as_slice()])? == 0 {
-            return Ok(0);
-        }
         let at = n.max(0) as u64;
         let ok = if in_secs { s.expireat(&argv[1], at)? } else { s.pexpireat(&argv[1], at)? };
         Ok(i64::from(ok))
