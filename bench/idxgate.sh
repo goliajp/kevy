@@ -1,5 +1,5 @@
 #!/bin/bash
-# v2.5 index-engine gate — the RFC's two perf clamps + the memory
+# v2.5 index-engine gate — a latency clamp and the index memory
 # accounting, measured against a real server:
 #
 #   1. IDX.QUERY latency: p99 < 2ms against a 1M-row i64 range index
