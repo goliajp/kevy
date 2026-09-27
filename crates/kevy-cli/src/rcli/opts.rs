@@ -6,6 +6,14 @@
 
 use super::format::{Delims, Output};
 
+/// Where `-u kevys://…` points: the key the server must hold, and the file
+/// with this client's key when the server lists client keys.
+#[derive(Clone, Debug)]
+pub(crate) struct SecureTarget {
+    pub(crate) server_key: [u8; 32],
+    pub(crate) client_key_file: Option<std::path::PathBuf>,
+}
+
 /// Connection and session options.
 #[derive(Clone, Debug)]
 pub(crate) struct Opts {
@@ -39,6 +47,9 @@ pub(crate) struct Opts {
     pub(crate) prefer_ipv4: bool,
     pub(crate) prefer_ipv6: bool,
     pub(crate) client_name: Option<Vec<u8>>,
+    /// `-u kevys://…`: the server's public key and this client's key file,
+    /// for kevy's encrypted client port.
+    pub(crate) secure: Option<SecureTarget>,
     pub(crate) modes: Modes,
 }
 
@@ -117,6 +128,7 @@ impl Opts {
             prefer_ipv4: false,
             prefer_ipv6: false,
             client_name: None,
+            secure: None,
             modes: Modes {
                 vset_recall_ele: 1,
                 vset_recall_count: 100,

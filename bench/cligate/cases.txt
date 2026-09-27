@@ -78,6 +78,12 @@ run: -u redis://127.0.0.1:$PORT/3 DBSIZE
 [RC-005 uri-bad-scheme]
 run: -u http://127.0.0.1:$PORT PING
 
+[RC-005 uri-kevys-needs-a-server-key]
+deviation: DEV-029
+run: -u kevys://127.0.0.1:$PORT PING
+kevy.stderr: kevy-cli: kevys:// needs server_key=<the server's public key>\n
+kevy.exit: 1
+
 [RC-005 uri-bad-percent]
 run: -u redis://al%zzice:pw@127.0.0.1:$PORT PING
 

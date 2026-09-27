@@ -53,6 +53,8 @@ pub(crate) type Parsed = (Reply, Vec<Vec<u8>>);
 enum Stream {
     Tcp(TcpStream),
     Unix(UnixStream),
+    /// kevy's encrypted client port (`-u kevys://…`).
+    Secure(Box<kevy_resp_client::SecureStream>),
 }
 
 /// An open connection plus its reply buffer.
@@ -80,17 +82,31 @@ pub(crate) fn strerror(e: &io::Error) -> String {
 impl Conn {
     /// `redisConnectWrapper`: TCP, optionally with a connect timeout.
     pub(crate) fn tcp(host: &[u8], port: i32, timeout: Option<f64>) -> Result<Conn, String> {
-        let host = String::from_utf8_lossy(host).into_owned();
         // redis-cli keeps only the low 16 bits of the port, so `connect h
         // 99999` in the REPL dials 34463 — and the message still names 99999.
         // Only the REPL can hand over such a port.
-        let port = port as u16;
-        let stream = match timeout {
-            None => TcpStream::connect((host.as_str(), port)).map_err(|e| strerror(&e))?,
-            Some(secs) => connect_with_timeout(&host, port, Duration::from_secs_f64(secs))?,
+        Ok(Conn::over(Stream::Tcp(dial_tcp(host, port as u16, timeout)?)))
+    }
+
+    /// Dial like [`Conn::tcp`], then run the Noise handshake that kevy's
+    /// encrypted client port expects.
+    pub(crate) fn secure(
+        host: &[u8],
+        port: i32,
+        timeout: Option<f64>,
+        target: &super::opts::SecureTarget,
+    ) -> Result<Conn, String> {
+        let me = match &target.client_key_file {
+            Some(path) => Some(
+                kevy_resp_client::load_client_key(path)
+                    .map_err(|e| format!("client key {}: {}", path.display(), strerror(&e)))?,
+            ),
+            None => None,
         };
-        let _ = stream.set_nodelay(true); // latency tuning only; a refusal changes nothing a user sees
-        Ok(Conn::over(Stream::Tcp(stream)))
+        let tcp = dial_tcp(host, port as u16, timeout)?;
+        let s = kevy_resp_client::SecureStream::handshake(tcp, target.server_key, me.as_ref())
+            .map_err(|e| strerror(&e))?;
+        Ok(Conn::over(Stream::Secure(Box::new(s))))
     }
 
     /// `redisConnectUnixWrapper`.
@@ -144,6 +160,7 @@ impl Conn {
         let r = match &mut self.stream {
             Stream::Tcp(s) => s.write_all(bytes),
             Stream::Unix(s) => s.write_all(bytes),
+            Stream::Secure(s) => s.write_all(bytes),
         };
         r.map_err(|e| LinkError::Io(e.kind(), strerror(&e)))
     }
@@ -155,16 +172,30 @@ impl Conn {
             if let Some(parsed) = self.buffered_reply()? {
                 return Ok(parsed);
             }
-            let n = match &mut self.stream {
-                Stream::Tcp(s) => s.read(&mut self.chunk),
-                Stream::Unix(s) => s.read(&mut self.chunk),
-            }
-            .map_err(|e| LinkError::Io(e.kind(), strerror(&e)))?;
+            let n = self.read_stream().map_err(|e| LinkError::Io(e.kind(), strerror(&e)))?;
             if n == 0 {
                 return Err(LinkError::Eof);
             }
-            self.buf.extend(&self.chunk[..n]);
         }
+    }
+
+    /// One read, appended to the reply buffer; `0` at end of stream. An
+    /// encrypted stream may hold decrypted bytes beyond what the chunk took;
+    /// they are appended too, so none wait where a caller polling the
+    /// socket could not see them.
+    fn read_stream(&mut self) -> io::Result<usize> {
+        let n = match &mut self.stream {
+            Stream::Tcp(s) => s.read(&mut self.chunk)?,
+            Stream::Unix(s) => s.read(&mut self.chunk)?,
+            Stream::Secure(s) => s.read(&mut self.chunk)?,
+        };
+        self.buf.extend(&self.chunk[..n]);
+        if let Stream::Secure(s) = &mut self.stream {
+            let mut more = vec![0u8; s.buffered()];
+            s.read_exact(&mut more)?;
+            self.buf.extend(&more);
+        }
+        Ok(n)
     }
 
     /// A reply already buffered, without reading (`redisGetReplyFromReader`).
@@ -185,6 +216,7 @@ impl Conn {
         let n = match &mut self.stream {
             Stream::Tcp(s) => s.read(into),
             Stream::Unix(s) => s.read(into),
+            Stream::Secure(s) => s.read(into),
         }
         .map_err(|e| LinkError::Io(e.kind(), strerror(&e)))?;
         if n == 0 { Err(LinkError::Eof) } else { Ok(n) }
@@ -200,6 +232,7 @@ impl Conn {
         Ok(match &self.stream {
             Stream::Tcp(s) => Box::new(s.try_clone()?),
             Stream::Unix(s) => Box::new(s.try_clone()?),
+            Stream::Secure(s) => Box::new(s.writer()?),
         })
     }
 
@@ -208,6 +241,7 @@ impl Conn {
         match &self.stream {
             Stream::Tcp(s) => s.set_read_timeout(limit),
             Stream::Unix(s) => s.set_read_timeout(limit),
+            Stream::Secure(s) => s.socket().set_read_timeout(limit),
         }
     }
 
@@ -216,8 +250,20 @@ impl Conn {
         match &self.stream {
             Stream::Tcp(s) => s.as_raw_fd(),
             Stream::Unix(s) => s.as_raw_fd(),
+            Stream::Secure(s) => s.socket().as_raw_fd(),
         }
     }
+}
+
+/// `redisConnectWrapper`'s dial: TCP, optionally with a connect timeout.
+fn dial_tcp(host: &[u8], port: u16, timeout: Option<f64>) -> Result<TcpStream, String> {
+    let host = String::from_utf8_lossy(host).into_owned();
+    let stream = match timeout {
+        None => TcpStream::connect((host.as_str(), port)).map_err(|e| strerror(&e))?,
+        Some(secs) => connect_with_timeout(&host, port, Duration::from_secs_f64(secs))?,
+    };
+    let _ = stream.set_nodelay(true); // latency tuning only; a refusal changes nothing a user sees
+    Ok(stream)
 }
 
 /// Resolve, then try each address within `timeout`.
@@ -276,5 +322,51 @@ mod tests {
         assert_eq!(link_error(LinkError::Eof).kind(), ErrorKind::UnexpectedEof);
         // Bytes that are not RESP are data, not a closed socket.
         assert_eq!(link_error(LinkError::Protocol(Some(b'x'))).kind(), ErrorKind::InvalidData);
+    }
+
+    /// A connection to a one-shot Noise responder that answers the first
+    /// request with `replies`, all sealed as ONE message, and then waits.
+    fn secure_conn_answering(replies: Vec<u8>) -> super::Conn {
+        use kevy_noise::{Frames, Keypair, Responder, frame};
+        use std::io::{Read, Write};
+        let key = Keypair::from_secret([1; 32]);
+        let public = key.public();
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let (mut s, _) = l.accept().unwrap();
+            let (mut frames, mut chunk) = (Frames::default(), [0u8; 4096]);
+            let mut next = |s: &mut std::net::TcpStream, f: &mut Frames| loop {
+                if let Some(m) = f.next() {
+                    return m;
+                }
+                let n = s.read(&mut chunk).unwrap();
+                f.push(&chunk[..n]);
+            };
+            let m1 = next(&mut s, &mut frames);
+            let prologue = b"kevy-client\x001";
+            let (_, r) =
+                Responder::accept(&key, Keypair::from_secret([2; 32]), prologue, &m1).unwrap();
+            let (m2, mut t) = r.finish(b"").unwrap();
+            s.write_all(&frame(&m2).unwrap()).unwrap();
+            let _request = t.open(&next(&mut s, &mut frames)).unwrap();
+            s.write_all(&frame(&t.seal(&replies).unwrap()).unwrap()).unwrap();
+            std::thread::sleep(std::time::Duration::from_secs(5)); // hold the socket open
+        });
+        let target = super::super::opts::SecureTarget { server_key: public, client_key_file: None };
+        super::Conn::secure(b"127.0.0.1", i32::from(port), None, &target).unwrap()
+    }
+
+    #[test]
+    fn one_read_leaves_no_decrypted_bytes_behind_in_the_stream() {
+        let replies = b"+OK\r\n".repeat(4000); // 20 KB, more than one read takes
+        let mut conn = secure_conn_answering(replies);
+        conn.send(&[b"PING".to_vec()]).unwrap();
+        assert!(conn.read_reply().is_ok());
+        // the other 3999 are parsed from the buffer alone: a caller that
+        // waited on the socket for them would wait for ever
+        for i in 1..4000 {
+            assert!(matches!(conn.buffered_reply(), Ok(Some(_))), "reply {i} was not buffered");
+        }
     }
 }
