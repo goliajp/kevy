@@ -56,6 +56,9 @@ fn listener_reads_live_store_rejects_writes() {
     let r = cmd(&mut c, &[b"ZRANGE", b"z:1", b"0", b"-1", b"WITHSCORES"]);
     assert!(String::from_utf8_lossy(&r).contains("m2"), "{r:?}");
     assert_eq!(cmd(&mut c, &[b"DBSIZE"]), b":5\r\n");
+    // untiered: no tiering section at all, not one with zeroes in it
+    let info = cmd(&mut c, &[b"INFO"]);
+    assert!(!String::from_utf8_lossy(&info).contains("Tiering"), "{info:?}");
 
     // live visibility: a write AFTER connect is immediately readable
     store.set(b"greeting", b"updated").unwrap();
@@ -101,7 +104,7 @@ fn listener_reads_live_store_rejects_writes() {
 /// The listener's `INFO # Tiering` must carry the SAME field set as the
 /// server's section — docs/tiering.md promises "identical on server and
 /// embedded listener". The honesty audit (2026-07-25) found the listener
-/// silently dropping the two T6 counters; this pins all 15 fields on the
+/// silently dropping the two T6 counters; this pins all 19 fields on the
 /// listener wire so the section can never drift shorter again.
 #[test]
 fn listener_info_tiering_carries_every_documented_field() {
