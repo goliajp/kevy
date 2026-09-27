@@ -205,9 +205,8 @@ fn geodist_palermo_catania_kilometres() {
     add_sicily(&mut c);
     c.write_all(&req(&[b"GEODIST", b"Sicily", b"Palermo", b"Catania", b"km"])).unwrap();
     let r = read_reply(&mut c);
-    // Distance ≈ 166.27 km. Reply is a bulk string with 4 decimals.
-    let s = String::from_utf8_lossy(&r);
-    assert!(s.contains("166."), "expected ~166 km, got: {s}");
+    // the value and the four decimals Redis documents for this pair
+    assert_eq!(r, b"$8\r\n166.2742\r\n", "got: {}", String::from_utf8_lossy(&r));
 }
 
 #[test]
@@ -576,11 +575,25 @@ fn georadius_ro_rejects_store() {
     ]))
     .unwrap();
     let r = read_reply(&mut c);
-    assert!(
-        r.starts_with(b"-ERR"),
+    // an unknown verb is an -ERR too, so the words are what shows the
+    // variant ran and refused
+    assert_eq!(
+        r,
+        b"-ERR can't store result in the _RO variant\r\n",
         "_RO variant must reject STORE: {:?}",
         String::from_utf8_lossy(&r),
     );
+}
+
+#[test]
+fn the_read_only_radius_variants_answer_a_query() {
+    let srv = Server::start(1);
+    let mut c = srv.connect();
+    add_sicily(&mut c);
+    c.write_all(&req(&[b"GEORADIUS_RO", b"Sicily", b"15", b"37", b"200", b"km", b"ASC"])).unwrap();
+    assert_eq!(read_reply(&mut c), b"*2\r\n$7\r\nCatania\r\n$7\r\nPalermo\r\n");
+    c.write_all(&req(&[b"GEORADIUSBYMEMBER_RO", b"Sicily", b"Palermo", b"10", b"km"])).unwrap();
+    assert_eq!(read_reply(&mut c), b"*1\r\n$7\r\nPalermo\r\n");
 }
 
 #[test]
