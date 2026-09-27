@@ -21,6 +21,9 @@ pub(crate) fn apply_uri(o: &mut Opts, uri: &[u8]) -> Option<Step> {
             b" is not supported: kevy-cli does not implement TLS",
         ]));
     }
+    if lower.starts_with(b"kevys://") {
+        return kevys(o, uri);
+    }
     let rest = if lower.starts_with(b"redis://") {
         &uri[8..]
     } else if lower.starts_with(b"valkey://") {
@@ -112,4 +115,26 @@ fn percent_decode(s: &[u8]) -> Result<Vec<u8>, Step> {
         i += 3;
     }
     Ok(out)
+}
+
+/// `kevys://host[:port][/db]?server_key=<hex>[&client_key_file=<path>]`:
+/// kevy's encrypted client port. Parsed by the client library, so the
+/// CLI and the Rust clients accept exactly the same URLs.
+fn kevys(o: &mut Opts, uri: &[u8]) -> Option<Step> {
+    let text = String::from_utf8_lossy(uri);
+    match kevy_resp_client::parse_secure_url(&text) {
+        Ok(u) => {
+            o.host = u.host.into_bytes();
+            o.port = i32::from(u.port);
+            if let Some(db) = u.db {
+                o.input_dbnum = i32::try_from(db).unwrap_or(i32::MAX);
+            }
+            o.secure = Some(super::opts::SecureTarget {
+                server_key: u.server_key,
+                client_key_file: u.client_key_file,
+            });
+            None
+        }
+        Err(e) => Some(fail(&[b"kevy-cli: ", e.to_string().as_bytes()])),
+    }
 }

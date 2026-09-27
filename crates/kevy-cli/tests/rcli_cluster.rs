@@ -933,8 +933,15 @@ fn backup_saves_each_master_and_the_layout() {
     );
     assert!(json.contains(&format!("\"replicate\": \"{}\"", id(0))));
     assert_eq!(o.stderr.matches("SYNC sent to master, writing 5 bytes to '").count(), 2);
-    let missing = cli(&["--cluster", "backup", &at(ports[0]), "/nonexistent"], b"", &[]);
-    assert!(missing.stdout.ends_with("[ERR] The specified backup directory '/nonexistent' does not exist.\n[ERR] Failed to back cluster!\n") && missing.code == 1);
+    // a directory that surely does not exist: `/nonexistent` does, on a
+    // box where a service runs with that as its home
+    let absent = dir.join("absent");
+    let a = absent.to_str().unwrap();
+    let missing = cli(&["--cluster", "backup", &at(ports[0]), a], b"", &[]);
+    let want = format!(
+        "[ERR] The specified backup directory '{a}' does not exist.\n[ERR] Failed to back cluster!\n"
+    );
+    assert!(missing.stdout.ends_with(&want) && missing.code == 1, "{}", missing.stdout);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

@@ -138,8 +138,8 @@ kevys://10.0.0.11:6404/0?server_key=<hex>&client_key_file=/etc/app/kevy.key
   (`RespClient::connect_url`, or `SecureStream` under any RESP code),
   `kevy-client` (`Connection` and `Subscriber`), and `kevy-client-async`
   (`AsyncConnection::connect_secure_url`,
-  `AsyncSubscriber::connect_secure_url`). The other language bindings and
-  `kevy-cli` do not; use a TLS proxy for them.
+  `AsyncSubscriber::connect_secure_url`), and so does `kevy-cli -u`. The
+  other language bindings do not; use a TLS proxy for them.
 - `CLIENT LIST`, `CLIENT INFO` and `CLIENT KILL ADDR` show the client's own
   address, not the server's.
 - The port needs `private_key_file`, and must differ from `port`; either

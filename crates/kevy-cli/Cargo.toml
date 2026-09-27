@@ -44,3 +44,4 @@ kevy-sys = { path = "../kevy-sys", version = "6.4.0" }
 
 [dev-dependencies]
 kevy-testnet = { path = "../kevy-testnet" }
+kevy-noise = { path = "../kevy-noise", version = "6.4.0" }

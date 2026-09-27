@@ -119,7 +119,7 @@ openssl x509 -req -in billing.csr -CA ca.crt -CAkey ca.key -CAcreateserial -days
 redis-cli --tls --cacert ca.crt --cert billing.crt --key billing.key -h kevy.internal -p 6379 PING
 ```
 
-**`kevy-cli` 不行。** 它对 `rediss://` 直接报 `Unsupported`：kevy 出厂就没有 TLS，CLI 也没有 TLS 实现可用。这个运维上的后果最好提前安排，别等到用的时候才发现：要么在主机上直接管理，要么走 SSH 隧道：
+**`kevy-cli` 不行。** 它对 `rediss://` 直接报 `Unsupported`：kevy 出厂就没有 TLS，CLI 也没有 TLS 实现可用。这个运维上的后果最好提前安排，别等到用的时候才发现：要么在主机上直接管理，要么经 kevy 自己的加密客户端端口（`kevy-cli -u kevys://…`，见 [encrypted-links.md](encrypted-links.md)），要么走 SSH 隧道：
 
 ```console
 ssh -N -L 6004:127.0.0.1:6004 you@host   # 然后：kevy-cli -p 6004

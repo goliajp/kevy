@@ -311,12 +311,14 @@ fn a_type_no_rebuild_frame_covers_is_reported_not_dropped() {
         "{}",
         out.stderr
     );
-    let missing = cli(&["-p", &p, "--kevy", "import", "/nonexistent/u.resp"]);
+    let absent = dir.join("absent.resp");
+    let missing = cli(&["-p", &p, "--kevy", "import", absent.to_str().unwrap()]);
     assert!(
         missing.stderr.starts_with("kevy-cli import failed:") && missing.code == 1,
         "{}",
         missing.stderr
     );
+    assert!(!dir.join("absent.resp.progress").exists(), "a failed import left a progress file");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

@@ -101,7 +101,7 @@ kevys://10.0.0.11:6404/0?server_key=<hex>&client_key_file=/etc/app/kevy.key
 ```
 
 - 不带 `client_key_file` 的客户端，每条连接各自生成一对新密钥。`client_keys` 为空时这就够了；不为空时，用 `kevy keygen` 为客户端生成密钥，并把公钥列进去。
-- 接受 `kevys://` 的是 Rust 客户端：`kevy-resp-client`（`RespClient::connect_url`，或者把 `SecureStream` 放在任何 RESP 代码下面）、`kevy-client`（`Connection` 和 `Subscriber`）、`kevy-client-async`（`AsyncConnection::connect_secure_url`、`AsyncSubscriber::connect_secure_url`）。其他语言的绑定和 `kevy-cli` 不支持，请用 TLS 代理。
+- 接受 `kevys://` 的是 Rust 客户端：`kevy-resp-client`（`RespClient::connect_url`，或者把 `SecureStream` 放在任何 RESP 代码下面）、`kevy-client`（`Connection` 和 `Subscriber`）、`kevy-client-async`（`AsyncConnection::connect_secure_url`、`AsyncSubscriber::connect_secure_url`）。`kevy-cli -u` 也接受。其他语言的绑定不支持，请用 TLS 代理。
 - `CLIENT LIST`、`CLIENT INFO` 和 `CLIENT KILL ADDR` 显示的是客户端自己的地址，不是服务端的。
 - 这个端口需要 `private_key_file`，并且不能和 `port` 相同；两种配置错误都会让服务端在启动时停下。
 
