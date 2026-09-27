@@ -979,6 +979,44 @@ fn relative_ttl_frames_do_not_reanchor_on_replay() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A conditional `HEXPIRE` keeps its absolute deadlines across a restart:
+/// the field it moved does not count its TTL from replay time, and the
+/// field its condition refused keeps the deadline it already had.
+#[test]
+fn conditional_field_ttl_keeps_its_deadlines_across_replay() {
+    let dir = std::env::temp_dir().join(format!(
+        "kevy-field-ttl-reanchor-{}",
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let ints = |c: &mut std::net::TcpStream| -> Vec<i64> {
+        let mut buf = [0u8; 128];
+        let n = c.read(&mut buf).unwrap();
+        String::from_utf8_lossy(&buf[..n])
+            .split("\r\n")
+            .filter_map(|l| l.strip_prefix(':').and_then(|v| v.parse().ok()))
+            .collect()
+    };
+    with_runtime(free_port(), &dir, 1, |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        c.write_all(&req(&[b"HSET", b"h", b"f", b"v", b"g", b"w"])).unwrap();
+        assert_eq!(ints(&mut c), [2]);
+        c.write_all(&req(&[b"HEXPIRE", b"h", b"100", b"FIELDS", b"1", b"g"])).unwrap();
+        assert_eq!(ints(&mut c), [1]);
+        c.write_all(&req(&[b"HEXPIRE", b"h", b"200", b"NX", b"FIELDS", b"2", b"f", b"g"])).unwrap();
+        assert_eq!(ints(&mut c), [1, 0], "NX moves f and refuses g");
+    });
+    std::thread::sleep(std::time::Duration::from_millis(2500));
+    with_runtime(free_port(), &dir, 1, |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        c.write_all(&req(&[b"HPTTL", b"h", b"FIELDS", b"2", b"f", b"g"])).unwrap();
+        let ttl = ints(&mut c);
+        assert!(ttl[0] > 0 && ttl[0] <= 200_000 - 2_000, "f re-anchored on replay: {ttl:?}");
+        assert!(ttl[1] > 0 && ttl[1] <= 100_000 - 2_000, "g took a deadline it refused: {ttl:?}");
+    });
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `MSET` and a same-shard `RENAME` must survive a restart.
 ///
 /// Both are served to clients by the routing layer, and the op records
