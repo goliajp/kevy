@@ -21,6 +21,16 @@ pub fn try_crc32c_hw(data: &[u8]) -> Option<u32> {
 /// `data` (0 for none), and the result is the checksum of both together,
 /// so a record split into pieces checksums without being joined first.
 /// `None` when this machine has no checksum instructions.
+/// # Examples
+///
+/// ```
+/// use kevy_sys::checksum::{try_crc32c_hw, try_crc32c_hw_append};
+/// let (head, tail) = (b"hello ".as_slice(), b"world".as_slice());
+/// // two pieces continue to the checksum of the joined bytes, on machines
+/// // with checksum instructions; elsewhere both answers are None
+/// let pieces = try_crc32c_hw_append(0, head).and_then(|c| try_crc32c_hw_append(c, tail));
+/// assert_eq!(pieces, try_crc32c_hw(b"hello world"));
+/// ```
 #[must_use]
 pub fn try_crc32c_hw_append(crc: u32, data: &[u8]) -> Option<u32> {
     #[cfg(target_arch = "aarch64")]
