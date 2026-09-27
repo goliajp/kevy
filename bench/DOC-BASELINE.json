@@ -5,7 +5,7 @@
   },
   "kind": "doc-deficit",
   "platform": "linux",
-  "total_regions": 2697,
+  "total_regions": 2713,
   "min_total": 1344,
   "public_items": 2689,
   "documented": 2689,
@@ -55,7 +55,8 @@
     "kevy-vector/without-example": 12,
     "kevy-vlog/without-example": 25,
     "kevy-wasm/without-example": 41,
-    "kevy-window/without-example": 34
+    "kevy-window/without-example": 34,
+    "kevy-verbs/without-example": 16
   },
   "history": [
     {
@@ -79,6 +80,13 @@
       ],
       "reason": "The tiering INFO gained its compression terms: kevy-vlog's CompressionStats and kevy-embedded's KevyTierCompression each carry four public fields (raw, payload, frame header, dictionary bytes), and rustdoc counts a field as an item that has no example. The struct and the methods that return them all carry executable examples (Vlog::compression, KevyTierCompression, Store::tier_compression); only the eight fields are new growth, four per crate.",
       "delta": 8
+    },
+    {
+      "accepted": [
+        "kevy-verbs/without-example"
+      ],
+      "reason": "kevy-verbs is new: the single-shard command layer the server and the embedded engine share. Every function, the Verb type, the VERBS table and the args, reply, aof and cmd modules carry executable examples. The 16 counted here are items rustdoc reports but no example can hang off: the five reply-wording constants, the six public fields of ScanOpts and Verb, and the five variants of Effect.",
+      "delta": 16
     }
   ]
 }

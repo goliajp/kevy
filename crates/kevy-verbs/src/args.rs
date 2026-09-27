@@ -1,4 +1,12 @@
 //! Reading argv tokens: verb case-folding, numbers, score bounds.
+//!
+//! ```
+//! use kevy_verbs::args::{arg_i64, upper_verb};
+//! let mut buf = [0u8; 32];
+//! assert_eq!(upper_verb(b"hset", &mut buf), b"HSET");
+//! // a value past i64 is not an integer, as Redis answers it
+//! assert_eq!((arg_i64(b"-7"), arg_i64(b"9223372036854775808")), (Some(-7), None));
+//! ```
 
 use kevy_resp::ArgvView;
 use kevy_store::ScoreBound;

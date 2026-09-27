@@ -1,4 +1,10 @@
 //! RESP replies in Redis's shapes and words.
+//!
+//! ```
+//! let mut out = Vec::new();
+//! kevy_verbs::reply::wrong_args(&mut out, "get");
+//! assert_eq!(out, b"-ERR wrong number of arguments for 'get' command\r\n");
+//! ```
 
 use kevy_resp::{
     RespVersion, encode_array_len, encode_bulk, encode_double, encode_error, encode_integer,

@@ -4,6 +4,16 @@
 //! `SET … EX 100`) would, replayed later, count its TTL from the time of
 //! the replay. So the record of such a write is followed by a frame
 //! naming the absolute deadline it set, which a replay applies last.
+//!
+//! ```
+//! use kevy_resp::Argv;
+//! let mut store = kevy_store::Store::new();
+//! let set = Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec(), b"EX".to_vec(), b"100".to_vec()]);
+//! let mut out = Vec::new();
+//! kevy_verbs::exec(&mut store, b"SET", &set, &mut out);
+//! let follow = kevy_verbs::aof::ttl_followup(&mut store, &set).expect("a relative TTL gets a deadline frame");
+//! assert_eq!(&follow[0], b"PEXPIREAT");
+//! ```
 
 use kevy_resp::{Argv, ArgvView};
 use kevy_store::{Store, now_unix_ms};

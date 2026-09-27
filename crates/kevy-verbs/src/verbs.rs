@@ -1,6 +1,11 @@
 //! The table of verbs [`crate::exec`] answers.
 
 /// One verb the shared layer executes.
+///
+/// ```
+/// let v = kevy_verbs::verb(b"GET").unwrap();
+/// assert_eq!((v.name, v.write), ("GET", false));
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Verb {
     /// The verb, uppercase.
@@ -17,6 +22,12 @@ const RD: bool = false;
 const WR: bool = true;
 
 /// Every verb [`crate::exec`] answers, sorted by name.
+///
+/// ```
+/// let names: Vec<&str> = kevy_verbs::VERBS.iter().map(|v| v.name).collect();
+/// assert!(names.windows(2).all(|w| w[0] < w[1]), "sorted, so lookup can bisect");
+/// assert!(kevy_verbs::VERBS.iter().any(|v| v.name == "LPUSH" && v.write));
+/// ```
 #[rustfmt::skip]
 // LOC-WAIVER: pure data table — one row per shared verb.
 pub const VERBS: &[Verb] = &[
