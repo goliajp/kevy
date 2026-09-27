@@ -261,7 +261,7 @@ Memory formulas the capacity docs use, against measured RSS growth:
 
 | structure | formula | measured / formula |
 |---|---|---|
-| scalar index | entries × (value + key + 48) | within ±20 % |
+| scalar index | entries × (key + string value + 82…93) | 1.37 (Linux, release build, 1 M rows; the gate allows 0.9–1.6) |
 | view members | 8 + key + 48 per member | 1.00 |
 | text index | Σ terms (len + 48) + postings × 64 + docs × (key + text + 72) | 0.54 |
 | vector graph | vectors × (dim × 4 + 40) + links × 8 + vectors × 32 | 0.87 |

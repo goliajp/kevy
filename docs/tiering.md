@@ -175,9 +175,10 @@ from the capacity model:
   stub it leaves behind. Narrow records are the case to size by hand.
 - **Worked example (sized from the model, not measured into it)**:
   10 M rows × ~1 KiB (≈10 GB of data) with 2
-  secondary indexes + stored VALUES columns fits a **3 GB** budget:
-  stub floor 10 M × ~108 B ≈ 1.1 GB, index floor 10 M × (68 + 68 +
-  ~30 VALUES bytes) ≈ 1.7 GB ≈ 2.8 GB ≤ 3 GB. At 4 KiB values the
+  secondary indexes + stored VALUES columns fits a **4 GB** budget:
+  stub floor 10 M × ~108 B ≈ 1.1 GB, index floor 10 M × (2 × 94–105
+  per index at a ~12-byte key + ~30 VALUES bytes) ≈ 2.2–2.4 GB
+  ≈ 3.3–3.5 GB ≤ 4 GB. At 4 KiB values the
   ratio gate is ≥ 10× data:RAM (5 M × 4 KiB = 20 GB on a 2 GB
   budget; stub floor ≈ 540 MB). Per-key fixed costs dominate narrow
   rows: size a deployment from the formulas above — the stub and
