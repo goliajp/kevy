@@ -102,7 +102,13 @@ pub(crate) fn try_resp3_overrides<A: ArgvView + ?Sized>(
             // Only the counted form: `SPOP key` is a single bulk in both
             // protocols, `SPOP key N` is an array in RESP2 and a Set in RESP3.
             match arg_i64(&args[2]) {
-                Some(c) if c >= 0 => emit_spop_set_resp3(store.spop(&args[1], c as usize), out),
+                Some(c) if c >= 0 => {
+                    let res = store.spop(&args[1], c as usize);
+                    if let Ok(popped) = &res {
+                        crate::dispatch::record_spop(&args[1], popped);
+                    }
+                    emit_spop_set_resp3(res, out)
+                }
                 Some(_) => encode_error(out, "ERR value is out of range, must be positive"),
                 None => encode_error(out, "ERR value is not an integer or out of range"),
             }
