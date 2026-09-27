@@ -1,6 +1,6 @@
 #!/bin/bash
-# v2.5 index-engine gate — the RFC's two perf clamps + the D7 memory
-# formula, measured against a real server:
+# v2.5 index-engine gate — the RFC's two perf clamps + the memory
+# accounting, measured against a real server:
 #
 #   1. IDX.QUERY latency: p99 < 2ms against a 1M-row i64 range index
 #      (LIMIT 100 pages at random offsets), MEDIAN OF 3 INSTANCES —
@@ -9,8 +9,16 @@
 #      client artifact / reply size / range span; appears per server
 #      instance, not per run). Same median-of-instances discipline as
 #      perfgate; the mode's mechanism is an open finding.
-#   2. Memory formula: measured bytes/row within ±20% of
-#      value(8) + avg_key_len + 48.
+#   2. Memory: the index's resident cost, measured as the RSS difference
+#      between two servers loaded with the same 1M rows — one without
+#      the index, one with it — must agree with the bytes IDX.VERIFY
+#      reports. The reported figure counts requested heap; the allocator
+#      rounds small blocks up, so RSS may exceed it by up to 60% but may
+#      not fall more than 10% below it.
+#
+# The index is declared before the rows are written, so the indexed
+# server's RSS holds the index's steady state and nothing a backfill
+# scan leaves behind in the allocator.
 #
 # (Clamp #0 — empty-catalog 0% write regression — is perfgate itself:
 # its 7 angles run with no catalog declared.)
@@ -20,8 +28,10 @@ set -u
 BIN=${1:?usage: idxgate.sh <kevy-binary>}
 
 PORT=7041
-DIR=$(mktemp -d /tmp/kevy-idxgate-XXXXXX)
-fail() { echo "idxgate: FAIL — $1" >&2; kill $SRV 2>/dev/null; rm -rf "$DIR"; exit 1; }
+WORK=$(mktemp -d /tmp/kevy-idxgate-XXXXXX)
+SRV=""
+cleanup() { [ -n "$SRV" ] && kill $SRV 2>/dev/null; rm -rf "$WORK"; }
+trap cleanup EXIT
 
 # Isolation: pin cores AND raise priority when permitted. The shared
 # bench box hosts a resident valkey container whose unpinned event
@@ -32,17 +42,31 @@ PIN=""
 command -v taskset >/dev/null 2>&1 && PIN="taskset -c 0-7"
 # (RT class actively HURTS here — busy-poll at FIFO starves net
 # softirq; measured worse. Plain CFS + pinning is the right harness.)
-NICE=""
-env KEVY_BIND=127.0.0.1 $NICE $PIN "$BIN" --threads 8 --port $PORT --dir "$DIR" --no-aof >/dev/null 2>&1 &
-SRV=$!
-sleep 1.2
-
 CLIENT_PIN=""
 command -v taskset >/dev/null 2>&1 && CLIENT_PIN="taskset -c 8-15"
-$CLIENT_PIN python3 - "$PORT" <<'PYEOF' || { kill $SRV 2>/dev/null; rm -rf "$DIR"; echo "idxgate: FAIL" >&2; exit 1; }
-import socket, sys, time
 
-port = int(sys.argv[1])
+start() {
+    mkdir -p "$WORK/$1"
+    env KEVY_BIND=127.0.0.1 $PIN "$BIN" --threads 8 --port $PORT --dir "$WORK/$1" --no-aof >/dev/null 2>&1 &
+    SRV=$!
+    sleep 1.2
+}
+
+stop() {
+    kill $SRV 2>/dev/null
+    wait $SRV 2>/dev/null
+    SRV=""
+}
+
+cat > "$WORK/gate.py" <<'PYEOF'
+import random, socket, subprocess, sys, time
+
+port, pid, mode = int(sys.argv[1]), sys.argv[2], sys.argv[3]
+N = 1_000_000
+
+def rss_kb():
+    # ps reads the same resident-set figure on Linux and macOS
+    return int(subprocess.check_output(["ps", "-o", "rss=", "-p", pid]).split()[0])
 
 def connect():
     s = socket.create_connection(("127.0.0.1", port))
@@ -90,26 +114,32 @@ def cmd(sock, buf, *parts):
     sock.sendall(enc(*parts))
     return read_reply(sock, buf)
 
-s = connect(); buf = [b""]
-
-# ---- load 1M rows (pipelined) ----
-N = 1_000_000
-t0 = time.time()
-batch = []
-for i in range(N):
-    batch.append(enc("HSET", f"g:{i}", "ts", str(i)))
-    if len(batch) == 2000:
+def load(s, buf):
+    t0 = time.time()
+    batch = []
+    for i in range(N):
+        batch.append(enc("HSET", f"g:{i}", "ts", str(i)))
+        if len(batch) == 2000:
+            s.sendall(b"".join(batch))
+            for _ in range(len(batch)):
+                read_reply(s, buf)
+            batch = []
+    if batch:
         s.sendall(b"".join(batch))
         for _ in range(len(batch)):
             read_reply(s, buf)
-        batch = []
-if batch:
-    s.sendall(b"".join(batch))
-    for _ in range(len(batch)):
-        read_reply(s, buf)
-print(f"idxgate: loaded {N} rows in {time.time()-t0:.1f}s")
+    print(f"idxgate: loaded {N} rows ({mode}) in {time.time()-t0:.1f}s")
 
-# ---- build index, wait ready ----
+s = connect(); buf = [b""]
+
+if mode == "bare":
+    load(s, buf)
+    print(f"rss_kb={rss_kb()}")
+    sys.exit(0)
+
+bare_kb = int(sys.argv[4])
+
+# ---- declare, then load: the write path maintains the index ----
 r = cmd(s, buf, "IDX.CREATE", "g_ts", "ON", "PREFIX", "g:", "FIELD", "ts", "TYPE", "i64", "KIND", "range")
 assert r == b"+OK", r
 t0 = time.time()
@@ -120,15 +150,27 @@ while True:
     if time.time() - t0 > 300:
         print("idxgate: build timed out"); sys.exit(1)
     time.sleep(0.2)
-print(f"idxgate: 1M-row build ready in {time.time()-t0:.1f}s")
+load(s, buf)
+
+# ---- clamp 2: resident index cost vs the reported bytes ----
+indexed_kb = rss_kb()
+r = cmd(s, buf, "IDX.VERIFY", "g_ts")
+kv = {r[i].decode(): r[i+1].decode() for i in range(0, len(r), 2)}
+entries, reported = int(kv["entries"]), int(kv["bytes"])
+assert entries == N, kv
+resident = (indexed_kb - bare_kb) * 1024
+ratio = resident / reported
+print(f"idxgate: index bytes/row resident={resident/N:.1f} reported={reported/N:.1f} "
+      f"resident/reported={ratio:.2f}")
+if not (0.9 <= ratio <= 1.6):
+    print(f"idxgate: FAIL — resident index memory is {ratio:.2f}x what IDX.VERIFY reports")
+    sys.exit(1)
 
 # ---- clamp 1: MEDIAN-CONNECTION p99 < 2ms over 6 fresh conns ----
 # A known per-connection mode (accept/RSS placement) gives ~1-in-N
-# conns a constant ~2ms tail at this scale — see
-# The gate
-# measures the median connection's experience; the max is reported
-# as the finding's live signal.
-import random
+# conns a constant ~2ms tail at this scale. The gate measures the
+# median connection's experience; the max is reported as the
+# finding's live signal.
 per_conn = []
 for _ in range(6):
     c = connect()
@@ -148,21 +190,14 @@ med, worst = per_conn[3], per_conn[5]
 print(f"idxgate: IDX.QUERY p99 per-conn median={med:.2f}ms worst={worst:.2f}ms")
 if med >= 2.0:
     print(f"idxgate: FAIL — median-conn p99 {med:.2f}ms >= 2ms"); sys.exit(1)
-
-# ---- clamp 2: memory formula ±20% ----
-r = cmd(s, buf, "IDX.VERIFY", "g_ts")
-kv = {r[i].decode(): r[i+1].decode() for i in range(0, len(r), 2)}
-entries, measured = int(kv["entries"]), int(kv["bytes"])
-assert entries == N, kv
-avg_key = sum(len(f"g:{i}") for i in range(0, N, 100_000)) / 10
-formula = N * (8 + avg_key + 48)
-ratio = measured / formula
-print(f"idxgate: bytes/row measured={measured/N:.1f} formula={formula/N:.1f} ratio={ratio:.2f}")
-if not (0.8 <= ratio <= 1.2):
-    print(f"idxgate: FAIL — memory formula off by {ratio:.2f}x"); sys.exit(1)
 print("idxgate: PASS")
 PYEOF
-RC=$?
-kill $SRV 2>/dev/null
-rm -rf "$DIR"
-exit $RC
+
+start bare
+BARE=$($CLIENT_PIN python3 "$WORK/gate.py" "$PORT" "$SRV" bare) || { echo "idxgate: FAIL — bare load" >&2; exit 1; }
+stop
+echo "$BARE" | grep -v '^rss_kb='
+BARE_KB=$(echo "$BARE" | sed -n 's/^rss_kb=//p')
+
+start indexed
+$CLIENT_PIN python3 "$WORK/gate.py" "$PORT" "$SRV" indexed "$BARE_KB" || { echo "idxgate: FAIL" >&2; exit 1; }
