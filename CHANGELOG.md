@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Encrypted clients in cluster mode.** Every shard's cluster port gets an
+  encrypted twin (`[secure] cluster_port_base`, `announce_cluster_port_base`),
+  and a client that came in encrypted is told those ports in `-MOVED` and
+  `CLUSTER SLOTS` / `NODES` / `SHARDS`, while plaintext clients still see the
+  plaintext ones. `ClusterClient::connect_url`,
+  `AsyncClusterClient::connect_secure_url`, `kevy-cli -c`, the `kevy-cli
+  --cluster` tools and `ReadWriteClient::connect_urls` accept `kevys://`.
+  `kevy_rt::relayed_client` and `Runtime::with_secure_cluster_announce`
+  carry this through the runtime.
 - `kevy-cli --kevy import` of a file that does not exist no longer leaves a
   `<file>.progress` behind.
 - `kevy-cli -u kevys://host:port[/db]?server_key=<hex>[&client_key_file=<path>]`

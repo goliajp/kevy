@@ -145,6 +145,42 @@ kevys://10.0.0.11:6404/0?server_key=<hex>&client_key_file=/etc/app/kevy.key
 - The port needs `private_key_file`, and must differ from `port`; either
   mistake stops the server at startup.
 
+## Cluster mode
+
+In cluster mode every shard's cluster port gets an encrypted twin, relayed
+to it, so encrypted clients route by slot exactly as plaintext ones do:
+
+```toml
+[cluster]
+enabled = true              # shard i on port_base + i (default port + 1)
+
+[secure]
+private_key_file  = "/etc/kevy/node.key"
+listen_port       = 6404
+cluster_port_base = 6405    # shard i encrypted on 6405 + i; 0 = listen_port + 1
+```
+
+A client that came in through an encrypted port is told the encrypted
+ports: `-MOVED` and `CLUSTER SLOTS` / `NODES` / `SHARDS` name the twins,
+while plaintext clients still see the plaintext ports. Behind a proxy or
+NAT, `announce_cluster_port_base` sets the first port advertised. The
+encrypted ranges may not overlap each other, the client port or the
+plaintext cluster ports; the server refuses to start if they do.
+
+`kevy_client::ClusterClient::connect_url`,
+`kevy_client_async::cluster::AsyncClusterClient::connect_secure_url`,
+`kevy-cli -c` and the `kevy-cli --cluster` tools take a `kevys://` URL for
+one encrypted cluster port and reach every shard with the same keys:
+
+```text
+kevy-cli -c -u "kevys://10.0.0.11:6405?server_key=<hex>" SET user:1 alice
+kevy-cli -u "kevys://10.0.0.11:6405?server_key=<hex>" --cluster info 10.0.0.11:6405
+```
+
+`kevy_cluster_rw::ReadWriteClient::connect_urls` takes one URL per node,
+each with that node's key. Encrypted, it refuses a `-MISDIRECTED` to a
+node it has no key for rather than following it in plaintext.
+
 ## Cost
 
 The encryption runs on its own threads beside the reactors: each
