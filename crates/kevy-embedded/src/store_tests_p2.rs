@@ -119,7 +119,10 @@ fn zrange_by_score_excl_honors_each_bound() {
     s.zadd(b"z", &[(1.0, b"a"), (2.0, b"b"), (3.0, b"c")]).unwrap();
     let b = |value, exclusive| ScoreBound { value, exclusive };
     let names = |r: Vec<(Vec<u8>, f64)>| r.into_iter().map(|(m, _)| m).collect::<Vec<_>>();
-    assert_eq!(names(s.zrange_by_score_excl(b"z", b(1.0, true), b(3.0, false)).unwrap()), [b"b", b"c"]);
+    assert_eq!(
+        names(s.zrange_by_score_excl(b"z", b(1.0, true), b(3.0, false)).unwrap()),
+        [b"b", b"c"]
+    );
     assert_eq!(names(s.zrange_by_score_excl(b"z", b(1.0, true), b(3.0, true)).unwrap()), [b"b"]);
     assert!(s.zrange_by_score_excl(b"z", b(2.0, true), b(2.0, false)).unwrap().is_empty());
 }
