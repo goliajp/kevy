@@ -105,6 +105,31 @@ kevys://10.0.0.11:6404/0?server_key=<hex>&client_key_file=/etc/app/kevy.key
 - `CLIENT LIST`、`CLIENT INFO`、`CLIENT KILL ADDR` にはサーバーではなくクライアント自身のアドレスが表示されます。
 - このポートには `private_key_file` が必要で、`port` と同じにはできません。どちらの設定ミスでも、サーバーは起動時に停止します。
 
+## クラスタモード
+
+クラスタモードでは、各シャードのクラスタポートに暗号化された双子のポートが付き、そこから平文のクラスタポートへ中継されます。暗号化クライアントも平文クライアントと同じくスロットでルーティングします。
+
+```toml
+[cluster]
+enabled = true              # シャード i は port_base + i（既定は port + 1）
+
+[secure]
+private_key_file  = "/etc/kevy/node.key"
+listen_port       = 6404
+cluster_port_base = 6405    # シャード i の暗号化ポートは 6405 + i。0 = listen_port + 1
+```
+
+暗号化ポートから入ったクライアントには暗号化ポートが示されます。`-MOVED` と `CLUSTER SLOTS` / `NODES` / `SHARDS` は双子のポートを返し、平文クライアントには今までどおり平文ポートが示されます。プロキシや NAT の後ろでは、`announce_cluster_port_base` で通知する先頭ポートを設定します。暗号化ポートの範囲どうし、およびクライアントポートや平文クラスタポートと重なってはならず、重なるとサーバーは起動しません。
+
+`kevy_client::ClusterClient::connect_url`、`kevy_client_async::cluster::AsyncClusterClient::connect_secure_url`、`kevy-cli -c`、`kevy-cli --cluster` ツールは、暗号化クラスタポートの 1 つを指す `kevys://` URL を受け取り、同じ鍵ですべてのシャードに接続します。
+
+```text
+kevy-cli -c -u "kevys://10.0.0.11:6405?server_key=<hex>" SET user:1 alice
+kevy-cli -u "kevys://10.0.0.11:6405?server_key=<hex>" --cluster info 10.0.0.11:6405
+```
+
+`kevy_cluster_rw::ReadWriteClient::connect_urls` はノードごとに URL を 1 つ受け取り、それぞれにそのノードの鍵を付けます。暗号化時には、鍵を持たないノードへの `-MISDIRECTED` を平文でたどらず、拒否します。
+
 ## コスト
 
 暗号処理はリアクタとは別のスレッドで動きます。各接続のバイトはそこで復号されてループバック経由で平文ポートに渡され、応答は戻る途中で暗号化されます。このポートを開いても開かなくても平文の経路は同じコードで、暗号化接続は暗号処理のほかにループバックの往復を 1 回余分に払います。
