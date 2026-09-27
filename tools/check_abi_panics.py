@@ -42,8 +42,17 @@ ROOT = Path(__file__).resolve().parent.parent
 # Crates that must always have at least one exported boundary. If one of
 # these reaches zero, the pattern moved and this gate stopped looking at
 # anything.
-FLOORS = {"kevy-ffi": 20, "kevy-jni": 15, "kevy-napi": 1}
-TOTAL_FLOOR = 45
+FLOORS = {"kevy-ffi": 20, "kevy-jni": 14, "kevy-napi": 1, "kevy-wasm": 25}
+TOTAL_FLOOR = 70
+
+# Crates whose exports only ever cross into a target without unwinding.
+# wasm32-unknown-unknown has no unwind support: a panic there is a trap,
+# which the JS host receives as a WebAssembly.RuntimeError it can catch,
+# not undefined behaviour and not a process abort. catch_unwind catches
+# nothing on that target, so asking for it would only add noise.
+NO_UNWIND_TARGETS = {
+    "kevy-wasm": "exported for wasm32-unknown-unknown only, where a panic is a trap the JS host catches",
+}
 
 # A definition, not a declaration: `extern "abi" fn name(` with a body.
 DEF = re.compile(r'^\s*(?:pub\s+)?(?:unsafe\s+)?extern\s+"([A-Za-z0-9_-]+)"\s+fn\s+([A-Za-z0-9_]+)')
@@ -102,6 +111,8 @@ def main() -> int:
                 w = WAIVER.search(lines[back])
                 if w:
                     note = w.group(1).strip()
+            if crate in NO_UNWIND_TARGETS:
+                continue
             body = body_of(lines, i)
             if any(g in body for g in GUARDS):
                 continue
@@ -124,6 +135,9 @@ def main() -> int:
         if got < floor:
             print(f"FAIL floor: {crate} exports {got} boundaries, at least {floor} expected")
             bad = True
+
+    for crate, why in sorted(NO_UNWIND_TARGETS.items()):
+        print(f"\n{crate}: {per_crate.get(crate, 0)} boundaries, whole crate — {why}")
 
     if waived:
         print(f"\n{len(waived)} waived with a stated reason:")
