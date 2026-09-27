@@ -407,6 +407,12 @@ jobs:
       - name: fuzzgate (every fuzz target is in the fuzz-smoke matrix)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: python3 tools/check_fuzz_matrix.py
+      # Written and never wired in: it failed on its first day (a floor one
+      # above the real count, 43 boundaries without a stated reason) and
+      # nothing said so for three weeks.
+      - name: no panic crosses an exported ABI boundary
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: python3 tools/check_abi_panics.py
       # The READMEs quote benchmark numbers. They were hand-written from a
       # v4-era run and still showing it under a 5.1.0 release, because
       # nothing tied them to a measurement. They come from the ledger now.
