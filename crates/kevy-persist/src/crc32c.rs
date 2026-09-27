@@ -9,15 +9,22 @@
 /// CRC32C of `data` (init all-ones, final xor all-ones).
 #[inline]
 pub(crate) fn crc32c(data: &[u8]) -> u32 {
+    crc32c_append(0, data)
+}
+
+/// Continue a CRC32C: `crc` is the finished checksum of the preceding
+/// bytes (0 for none); the result covers them and `data` together.
+#[inline]
+pub(crate) fn crc32c_append(crc: u32, data: &[u8]) -> u32 {
     #[cfg(not(target_arch = "wasm32"))]
-    if let Some(crc) = kevy_sys::checksum::try_crc32c_hw(data) {
+    if let Some(crc) = kevy_sys::checksum::try_crc32c_hw_append(crc, data) {
         return crc;
     }
-    crc32c_sw(data)
+    crc32c_sw(crc, data)
 }
 
 /// Slicing-by-8 software fallback: 8 tables built once, 8 bytes per step.
-fn crc32c_sw(data: &[u8]) -> u32 {
+fn crc32c_sw(crc: u32, data: &[u8]) -> u32 {
     use std::sync::OnceLock;
     static TABLES: OnceLock<[[u32; 256]; 8]> = OnceLock::new();
     let t = TABLES.get_or_init(|| {
@@ -36,7 +43,7 @@ fn crc32c_sw(data: &[u8]) -> u32 {
         }
         t
     });
-    let mut crc = !0u32;
+    let mut crc = !crc;
     let (chunks, tail) = data.as_chunks::<8>();
     for c in chunks {
         let lo = u32::from_le_bytes(c[..4].try_into().expect("c is [u8; 8] from as_chunks")) ^ crc;
@@ -63,11 +70,24 @@ mod tests {
     // Known-answer vector (RFC 3720) + hw/sw agreement on this host's path.
     #[test]
     fn known_answers_and_hw_sw_agreement() {
-        assert_eq!(crc32c_sw(b"123456789"), 0xE306_9283);
-        assert_eq!(crc32c_sw(b""), 0);
+        assert_eq!(crc32c_sw(0, b"123456789"), 0xE306_9283);
+        assert_eq!(crc32c_sw(0, b""), 0);
         let long: Vec<u8> = (0..1024u32).map(|i| (i % 251) as u8).collect();
         assert_eq!(crc32c(b"123456789"), 0xE306_9283);
-        assert_eq!(crc32c(&long), crc32c_sw(&long));
-        assert_eq!(crc32c(&long[1..]), crc32c_sw(&long[1..])); // unaligned
+        assert_eq!(crc32c(&long), crc32c_sw(0, &long));
+        assert_eq!(crc32c(&long[1..]), crc32c_sw(0, &long[1..])); // unaligned
+    }
+
+    // a checksum continued piece by piece equals the one-shot checksum, on
+    // both the host path and the table path
+    #[test]
+    fn append_over_pieces_equals_whole() {
+        let long: Vec<u8> = (0..4099u32).map(|i| (i % 253) as u8).collect();
+        let whole = crc32c(&long);
+        for cut in [0, 1, 7, 8, 9, 2048, 4098, 4099] {
+            let (a, b) = long.split_at(cut);
+            assert_eq!(crc32c_append(crc32c_append(0, a), b), whole, "cut at {cut}");
+            assert_eq!(crc32c_sw(crc32c_sw(0, a), b), whole, "sw cut at {cut}");
+        }
     }
 }

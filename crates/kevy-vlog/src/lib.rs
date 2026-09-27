@@ -413,6 +413,18 @@ impl Vlog {
 
     /// Where the value bytes went, over the files still on disk: see
     /// [`CompressionStats`].
+    /// # Examples
+    ///
+    /// ```
+    /// use kevy_vlog::Vlog;
+    /// let dir = kevy_tmpdir::TmpDir::new("vlog-compression-fn");
+    /// let mut v = Vlog::open(dir.path(), 1 << 20).unwrap();
+    /// assert_eq!(v.compression().raw_bytes, 0);
+    /// v.append(b"k", b"value").unwrap();
+    /// // a 5-byte value: one tag byte and one length byte of frame header
+    /// assert_eq!(v.compression().raw_bytes, 5);
+    /// assert_eq!(v.compression().frame_header_bytes, 2);
+    /// ```
     pub fn compression(&self) -> CompressionStats {
         self.files.iter().fold(CompressionStats::default(), |a, s| a.sum(s.compression))
     }

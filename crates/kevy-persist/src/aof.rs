@@ -9,7 +9,8 @@ use std::time::Instant;
 use kevy_resp::ArgvView;
 use kevy_store::Store;
 
-use crate::{estimate_multibulk_bytes, write_multibulk};
+use crate::estimate_multibulk_bytes;
+use crate::record_pieces::{record_header, write_frame};
 
 /// 9-byte file-format header written at the start of every kevy-managed
 /// AOF. `replay_aof` strips it before parsing RESP, so
@@ -112,9 +113,6 @@ pub struct Aof {
     /// file keeps appending V1 until its first rewrite upgrades it —
     /// mixing formats within one file would corrupt it.
     pub(crate) format: crate::AofFormat,
-    /// Reusable payload buffer for V2 envelope encoding (and the tee,
-    /// which is always V2 because the rewrite output it lands in is).
-    scratch: Vec<u8>,
     /// `Some` = queued-append mode (RFC v3-aof-offload S1): encoded
     /// record bytes accumulate here instead of hitting `file`, and the
     /// DRIVER (the io_uring reactor) drains them via
@@ -226,7 +224,6 @@ impl Aof {
             open_quarantine: quarantined,
             last_rewrite_at: Instant::now(),
             format,
-            scratch: Vec::new(),
             queue: None,
             queued_offset: size,
             queued_seq: 0,
@@ -275,44 +272,23 @@ impl Aof {
         Ok(())
     }
 
-    /// Write the encoded scratch frame straight to the file (the
-    /// non-queued path): V2 = length + CRC header then payload, V1 = bare.
-    fn write_scratch_to_file(&mut self) -> io::Result<()> {
-        match self.format {
-            crate::AofFormat::V2 => {
-                self.file.write_all(&(self.scratch.len() as u32).to_le_bytes())?;
-                self.file.write_all(&crate::crc32c::crc32c(&self.scratch).to_le_bytes())?;
-                self.file.write_all(&self.scratch)
-            }
-            crate::AofFormat::V1 => self.file.write_all(&self.scratch),
-        }
-    }
-
     /// Append one command, applying the fsync policy. V2 files get the
     /// checksummed record envelope; a V1 file keeps its bare-RESP form
     /// until a rewrite upgrades it.
     pub fn append<A: ArgvView + ?Sized>(&mut self, args: &A) -> io::Result<()> {
-        // One multibulk encode either way: V2 wraps the scratch bytes in an
-        // envelope, V1 writes them bare. The tee is ALWAYS V2 — its bytes
-        // land in the rewrite output, which is V2 by contract.
-        self.scratch.clear();
-        write_multibulk(&mut self.scratch, args)?;
+        // the frame goes from the caller's slices into each sink directly;
+        // the tee is always V2 because the rewrite output it lands in is
+        let v2 = matches!(self.format, crate::AofFormat::V2);
+        let head = (v2 || self.rewrite_tee.is_some()).then(|| record_header(args));
+        let own = if v2 { head.as_ref() } else { None };
         if let Some(q) = &mut self.queue {
-            // Queued mode: the same bytes, into the driver's chunk.
-            match self.format {
-                crate::AofFormat::V2 => {
-                    q.extend_from_slice(&(self.scratch.len() as u32).to_le_bytes());
-                    q.extend_from_slice(&crate::crc32c::crc32c(&self.scratch).to_le_bytes());
-                    q.extend_from_slice(&self.scratch);
-                }
-                crate::AofFormat::V1 => q.extend_from_slice(&self.scratch),
-            }
+            write_frame(q, own, args)?;
             self.queued_seq += 1;
         } else {
-            self.write_scratch_to_file()?;
+            write_frame(&mut self.file, own, args)?;
         }
-        if let Some(tee) = &mut self.rewrite_tee {
-            crate::record::write_record(tee, &self.scratch)?;
+        if let (Some(tee), Some(h)) = (&mut self.rewrite_tee, &head) {
+            write_frame(tee, Some(h), args)?;
         }
         let overhead = match self.format {
             crate::AofFormat::V2 => crate::record::RECORD_HEADER as u64,

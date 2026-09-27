@@ -112,3 +112,13 @@ fn expire_replies_describe_what_happened() {
     assert_eq!(dispatch(&s, &[b"EXPIRE", b"k", b"-1"]), b":1\r\n");
     assert_eq!(s.get(b"k").unwrap(), None);
 }
+
+/// A closed store refuses a conditional SET before touching the keyspace.
+#[test]
+fn conditional_set_on_a_closed_store_is_refused() {
+    let s = Store::open(Config::default()).expect("open");
+    s.shutdown().unwrap();
+    assert!(s.set_with_ttl(b"k", b"v", Duration::from_secs(1)).is_err());
+    let reply = dispatch(&s, &[b"SET", b"k", b"v", b"NX", b"EX", b"1"]);
+    assert!(reply.starts_with(b"-"), "{:?}", String::from_utf8_lossy(&reply));
+}
