@@ -138,8 +138,14 @@ cold key ≈ 96 B (entry overhead) + key heap bytes     # value fully reclaimed
 | `promotions_total` | 起動以来、ページインで戻された値の数 |
 | `peek_preads_total` | promote しないコールド読み取り（コールドな**行**につき 1 回） |
 | `batch_submissions_total` | バッチのコールド読み取り提出数（hydration ページ） |
+| `vlog_raw_bytes` | ディスク上の vlog ファイルにある値の圧縮前のバイト数 |
+| `vlog_payload_bytes` | ディスク上の圧縮後ペイロードのバイト数 |
+| `vlog_frame_header_bytes` | ディスク上のレコードごとのフレームヘッダ（タグ + 元の長さ） |
+| `vlog_dict_bytes` | メモリ上の圧縮辞書、vlog ファイルごとに 1 つ |
 
 `vlog_size_bytes / cold_bytes` は空間増幅率で、受け入れゲートが ≤ 2.0× に締めています。`peek_preads_total` は、hydration のページがフィールドごとではなく行ごとに 1 読み取りを払ったことを検証する手段です。
+
+`(vlog_payload_bytes + vlog_frame_header_bytes) / vlog_raw_bytes` は、vlog が今持っている内容（死んだレコードを含む）の圧縮率です。圧縮後に残るのはこの 2 項と辞書です。ペイロードにはデータ自体のエントロピーと、エンコーダが見つけられなかった繰り返しの両方が入っていて、ログの内側からは両者を分けられません。`vlog_size_bytes` の残りはレコードの枠で、1 レコードあたり 12 バイトとキーです。
 
 ## 性能の見通し
 

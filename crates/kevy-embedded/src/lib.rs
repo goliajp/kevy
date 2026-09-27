@@ -185,7 +185,7 @@ pub use config_secure::{Keypair, LinkKeys};
 mod config_tier;
 #[cfg(feature = "persist")]
 pub use config::AppendFsync;
-pub use info::{KevyInfo, KevyTierInfo};
+pub use info::{KevyInfo, KevyTierCompression, KevyTierInfo};
 #[cfg(feature = "index")]
 pub use kevy_index::{AggBy, AnnSpec, GroupStats, Leaf as ViewLeaf, Tree as ViewTree, ViewMode};
 #[cfg(feature = "index")]

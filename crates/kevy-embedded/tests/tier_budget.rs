@@ -108,6 +108,7 @@ fn info_gauges_present_when_tiered_absent_when_not() {
     let plain = Store::open(Config::default().with_ttl_reaper_manual()).unwrap();
     assert!(plain.info().tiering.is_none());
     assert!(plain.tier_info().is_none());
+    assert!(plain.tier_compression().is_none());
 
     let dir = kevy_tmpdir::TmpDir::new("tier-t5-info");
     let budget = 1_000_000u64;
@@ -128,6 +129,13 @@ fn info_gauges_present_when_tiered_absent_when_not() {
     assert!(t.vlog_size_bytes > 0 && t.vlog_size_bytes < 4096, "{}", t.vlog_size_bytes);
     assert_eq!(t.vlog_live_bytes, t.vlog_size_bytes);
     assert_eq!(t.vlog_epoch, 0);
+    // The compression terms account for every byte that is not record
+    // framing: 8 B header, 4 B key length, the 4 B key.
+    let c = s.tier_compression().expect("tiered store reports compression");
+    assert_eq!(c.vlog_raw_bytes, 4096);
+    assert_eq!(c.vlog_frame_header_bytes, 3, "a tag byte and 4096 in two LEB128 bytes");
+    assert_eq!(t.vlog_size_bytes, 8 + 4 + 4 + c.vlog_frame_header_bytes + c.vlog_payload_bytes);
+    assert_eq!(c.vlog_dict_bytes, 0, "the first file has nothing to train on");
     assert_eq!(t.index_reserved_bytes, 0, "no indexes declared yet");
     assert_eq!(
         t.tier_effective_target,

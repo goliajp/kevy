@@ -144,6 +144,10 @@ fn listener_info_tiering_carries_every_documented_field() {
         "promotions_total",
         "peek_preads_total",
         "batch_submissions_total",
+        "vlog_raw_bytes",
+        "vlog_payload_bytes",
+        "vlog_frame_header_bytes",
+        "vlog_dict_bytes",
     ] {
         assert!(body.contains(&format!("{field}:")), "listener INFO missing `{field}`:\n{body}");
     }

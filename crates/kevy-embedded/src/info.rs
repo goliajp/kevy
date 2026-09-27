@@ -65,6 +65,23 @@ pub struct KevyTierInfo {
     pub batch_submissions_total: u64,
 }
 
+/// The value log's compression accounting, summed across shards; field
+/// names mirror the last four lines of the server's `INFO # Tiering`.
+/// Payload plus frame headers against raw bytes is the ratio; the
+/// dictionaries are memory, one per vlog file.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct KevyTierCompression {
+    /// Value bytes before encoding, over the vlog files on disk.
+    pub vlog_raw_bytes: u64,
+    /// Encoded payload bytes on disk, frame headers excluded.
+    pub vlog_payload_bytes: u64,
+    /// Frame header bytes on disk (tag + LEB128 length per record).
+    pub vlog_frame_header_bytes: u64,
+    /// Dictionary bytes in memory.
+    pub vlog_dict_bytes: u64,
+}
+
 impl Store {
     /// One-shot snapshot of the store's introspection counters. See
     /// [`KevyInfo`]. Takes the embedded mutex once; safe to call from a
@@ -116,6 +133,28 @@ impl Store {
     /// No tier backend compiled in — never a section.
     #[cfg(not(all(feature = "tier", not(target_arch = "wasm32"))))]
     pub fn tier_info(&self) -> Option<KevyTierInfo> {
+        None
+    }
+
+    /// The value log's compression accounting summed across shards, or
+    /// `None` when tiering is off. See [`KevyTierCompression`].
+    #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
+    pub fn tier_compression(&self) -> Option<KevyTierCompression> {
+        self.config.tier_budget?;
+        let mut t = KevyTierCompression::default();
+        for shard in self.shards.iter() {
+            let c = crate::store::lock_read(shard).store.tier_compression();
+            t.vlog_raw_bytes += c.raw_bytes;
+            t.vlog_payload_bytes += c.payload_bytes;
+            t.vlog_frame_header_bytes += c.frame_header_bytes;
+            t.vlog_dict_bytes += c.dict_bytes;
+        }
+        Some(t)
+    }
+
+    /// No tier backend compiled in — never a section.
+    #[cfg(not(all(feature = "tier", not(target_arch = "wasm32"))))]
+    pub fn tier_compression(&self) -> Option<KevyTierCompression> {
         None
     }
 
