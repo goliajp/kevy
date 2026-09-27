@@ -11,8 +11,8 @@
 //! let set = Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec(), b"EX".to_vec(), b"100".to_vec()]);
 //! let mut out = Vec::new();
 //! kevy_verbs::exec(&mut store, b"SET", &set, &mut out);
-//! let follow = kevy_verbs::aof::ttl_followup(&mut store, &set).expect("a relative TTL gets a deadline frame");
-//! assert_eq!(&follow[0], b"PEXPIREAT");
+//! let follow = kevy_verbs::aof::ttl_followup(&mut store, &set);
+//! assert_eq!(&follow[0][0], b"PEXPIREAT", "a relative TTL gets a deadline frame");
 //! ```
 
 use kevy_resp::{Argv, ArgvView};
@@ -57,30 +57,33 @@ pub fn deadline_frame(store: &mut Store, key: &[u8]) -> Option<Argv> {
     Some(f)
 }
 
-/// The frame that must follow the record of `args`, run against
-/// `store` just now: the absolute deadline a relative-TTL write set.
-/// `None` for every other write.
+/// The frames that must follow the record of `args`, run against
+/// `store` just now: the absolute deadlines a relative-TTL write set.
+/// Empty for every other write.
 ///
 /// Key deadlines (`EXPIRE`, `PEXPIRE`, `SETEX`, `PSETEX`, `SET … EX|PX`,
-/// `GETEX … EX|PX`) are followed by `PEXPIREAT`; field deadlines
-/// (`HEXPIRE`, `HPEXPIRE`) by `HPEXPIREAT` with the same fields.
+/// `GETEX … EX|PX`) are followed by `PEXPIREAT`. Field deadlines
+/// (`HEXPIRE`, `HPEXPIRE`) are followed by `HPEXPIREAT … FIELDS`, one
+/// frame per deadline the named fields hold now, with no condition: the
+/// command's own record re-evaluates `NX|XX|GT|LT` on replay, and the
+/// deadline frames then put every field back where it stood.
 ///
 /// ```
 /// let mut store = kevy_store::Store::new();
 /// let set = kevy_resp::Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec(), b"EX".to_vec(), b"60".to_vec()]);
 /// kevy_verbs::exec(&mut store, b"SET", &set, &mut Vec::new());
-/// let f = kevy_verbs::aof::ttl_followup(&mut store, &set).unwrap();
-/// assert_eq!(&f[0], b"PEXPIREAT");
+/// let f = kevy_verbs::aof::ttl_followup(&mut store, &set);
+/// assert_eq!(&f[0][0], b"PEXPIREAT");
 /// ```
-pub fn ttl_followup<A: ArgvView + ?Sized>(store: &mut Store, args: &A) -> Option<Argv> {
-    let verb = args.get(0)?;
+pub fn ttl_followup<A: ArgvView + ?Sized>(store: &mut Store, args: &A) -> Vec<Argv> {
+    let Some(verb) = args.get(0) else { return Vec::new() };
     if verb.eq_ignore_ascii_case(b"HEXPIRE") || verb.eq_ignore_ascii_case(b"HPEXPIRE") {
-        return field_deadline_frame(args);
+        return field_deadline_frames(store, args);
     }
     if !relative_ttl(args) {
-        return None;
+        return Vec::new();
     }
-    deadline_frame(store, args.get(1)?)
+    args.get(1).and_then(|k| deadline_frame(store, k)).into_iter().collect()
 }
 
 /// Whether `args` moves a key's deadline by a relative amount.
@@ -107,21 +110,42 @@ fn relative_ttl<A: ArgvView + ?Sized>(args: &A) -> bool {
         .any(|i| args[i].eq_ignore_ascii_case(b"EX") || args[i].eq_ignore_ascii_case(b"PX"))
 }
 
-/// `HPEXPIREAT key <unix-ms> …` for a relative `HEXPIRE` / `HPEXPIRE`,
-/// the tail after the TTL copied as it was given.
-fn field_deadline_frame<A: ArgvView + ?Sized>(args: &A) -> Option<Argv> {
-    if args.len() < 6 {
-        return None;
+/// `HPEXPIREAT key <unix-ms> FIELDS n field…` for each deadline the
+/// fields named by a relative `HEXPIRE` / `HPEXPIRE` hold after it ran.
+fn field_deadline_frames<A: ArgvView + ?Sized>(store: &mut Store, args: &A) -> Vec<Argv> {
+    let Some(fields) = named_fields(args) else { return Vec::new() };
+    let Ok(ttls) = store.hpttl(&args[1], &fields) else { return Vec::new() };
+    let now = now_unix_ms();
+    let mut by_deadline: Vec<(u64, Vec<&[u8]>)> = Vec::new();
+    for (f, ttl) in fields.iter().zip(ttls) {
+        let Ok(ms) = u64::try_from(ttl) else { continue };
+        let at = now.saturating_add(ms);
+        match by_deadline.iter_mut().find(|(d, _)| *d == at) {
+            Some((_, group)) => group.push(f),
+            None => by_deadline.push((at, vec![f])),
+        }
     }
-    let raw = crate::args::arg_i64(&args[2])?;
-    let ms = if args[0].eq_ignore_ascii_case(b"HEXPIRE") { raw.saturating_mul(1000) } else { raw };
-    let abs = now_unix_ms().saturating_add_signed(ms);
-    let mut f = Argv::with_capacity(args.len(), 0);
-    f.push(b"HPEXPIREAT");
-    f.push(&args[1]);
-    f.push(abs.to_string().as_bytes());
-    for i in 3..args.len() {
-        f.push(&args[i]);
-    }
-    Some(f)
+    by_deadline
+        .into_iter()
+        .map(|(at, group)| {
+            let mut f = Argv::with_capacity(5 + group.len(), 0);
+            f.push(b"HPEXPIREAT");
+            f.push(&args[1]);
+            f.push(at.to_string().as_bytes());
+            f.push(b"FIELDS");
+            f.push(group.len().to_string().as_bytes());
+            for field in group {
+                f.push(field);
+            }
+            f
+        })
+        .collect()
+}
+
+/// The fields after `FIELDS n`, as many as `n` says and the argv holds.
+fn named_fields<A: ArgvView + ?Sized>(args: &A) -> Option<Vec<&[u8]>> {
+    let at = (3..args.len()).find(|&i| args[i].eq_ignore_ascii_case(b"FIELDS"))?;
+    let n = usize::try_from(crate::args::arg_i64(args.get(at + 1)?)?).ok()?;
+    let first = at + 2;
+    Some((first..args.len().min(first + n)).map(|i| &args[i]).collect())
 }

@@ -89,7 +89,7 @@ fn record(g: &mut Inner, argv: &[Vec<u8>]) -> KevyResult<()> {
         let parts: Vec<&[u8]> = argv.iter().map(Vec::as_slice).collect();
         commit_write(g, &parts)?;
     }
-    if let Some(f) = kevy_verbs::aof::ttl_followup(&mut g.store, &Args(argv)) {
+    for f in kevy_verbs::aof::ttl_followup(&mut g.store, &Args(argv)) {
         let parts: Vec<&[u8]> = (0..f.len()).map(|i| &f[i]).collect();
         commit_write(g, &parts)?;
     }

@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **A counted `SPOP` over RESP3 is recorded by the members it removed.**
+  The RESP3 reply path for `SPOP key count` wrote the command itself to the
+  AOF and to replicas, so a restart or a replica popped different random
+  members. It now records `SREM key member…`, as the RESP2 path always did,
+  and an empty pop records nothing.
+- **A conditional `HEXPIRE` keeps its deadlines across a restart.** The
+  absolute-deadline frame that follows a relative `HEXPIRE`/`HPEXPIRE`
+  copied the command's `NX|XX|GT|LT`; on replay the condition refused it,
+  and the field counted its TTL again from the replay. The frame now names
+  each field's deadline as it stands after the command, with no condition.
+  The embedded `hexpire`/`hpexpire_at` no longer record fields their
+  condition refused, which a replay used to give the new deadline.
+
 - **Scalar and ORDERPATH indexes hold each row once.** An index kept every
   row's key and value twice (once in the ordered tree, once in the
   key-to-value map) and, for the duplicate count, a third copy of every
