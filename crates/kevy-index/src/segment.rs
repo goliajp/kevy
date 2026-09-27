@@ -17,7 +17,7 @@ use std::mem::size_of;
 use std::ops::Bound;
 
 use crate::rowvalues::RowValues;
-use crate::segment_entry::{ByKey, ByValue, RowRef, row_bytes, share};
+use crate::segment_entry::{ByKey, ByValue, RowRef, row_bytes, share, table_buckets};
 use crate::value::IndexValue;
 
 /// Opaque pagination cursor: the last `(value, key)` served. Encoded
@@ -60,6 +60,10 @@ pub(crate) type Walk<'s> =
 pub struct Segment {
     tree: BTreeSet<ByValue>,
     back: HashSet<ByKey>,
+    /// The most rows the reverse set has held. Its table never shrinks, so
+    /// this sizes its buckets; reading `capacity()` instead depends on
+    /// where the seeded hash put the removals' tombstones.
+    back_peak: usize,
     /// `approx_bytes` here counts the rows alone; [`Segment::stats`]
     /// adds the two containers' slots.
     stats: SegmentStats,
@@ -146,6 +150,7 @@ impl Segment {
         self.stats.approx_bytes += row_bytes(&v, key);
         let (by_value, by_key) = share(v, key);
         self.back.insert(by_key);
+        self.back_peak = self.back_peak.max(self.back.len());
         self.tree.insert(by_value);
     }
 
@@ -314,11 +319,8 @@ impl Segment {
     /// when) the index declared `VALUES`.
     pub fn stats(&self) -> SegmentStats {
         let mut s = self.stats;
-        // std's hash table fills at most 7/8 of a power-of-two bucket
-        // count, so its capacity plus a seventh recovers the buckets;
         // each bucket is one pointer and one control byte
-        let cap = self.back.capacity();
-        let buckets = cap + cap / 7;
+        let buckets = table_buckets(self.back_peak);
         s.approx_bytes +=
             (self.tree.len() * TREE_BYTES_PER_ROW + buckets * (size_of::<ByKey>() + 1)) as u64;
         if let Some(rv) = &self.values {
