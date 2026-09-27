@@ -36,16 +36,6 @@ impl Store {
         Ok(ok)
     }
 
-    /// `SET key value PX ms` — overwrites + sets TTL. The AOF records an
-    /// **absolute** `PEXPIREAT` deadline (not the relative `ttl`) so the key
-    /// expires at the same wall-clock instant after a restart — a relative
-    /// `PEXPIRE` would be re-anchored to replay-time, resetting the TTL to a
-    /// fresh full duration on every restart (seen as a production
-    /// incident: cache keys never expired across restarts).
-    pub fn set_with_ttl(&self, key: &[u8], value: &[u8], ttl: Duration) -> KevyResult<bool> {
-        self.set_opts(key, value, Some(ttl), false, false)
-    }
-
     /// `GET key` — `Some(bytes)` on hit, `None` on miss or expired.
     ///
     /// The lock is **policy-gated** (see [`Self::reads_use_shared_lock`]):

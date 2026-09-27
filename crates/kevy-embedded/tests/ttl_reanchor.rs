@@ -124,3 +124,18 @@ fn conditional_set_on_a_closed_store_is_refused() {
     let reply = dispatch(&s, &[b"SET", b"k", b"v", b"NX", b"EX", b"1"]);
     assert!(reply.starts_with(b"-"), "{:?}", String::from_utf8_lossy(&reply));
 }
+
+/// The typed EXPIREAT names an absolute second: it survives a restart
+/// without being re-counted, and a missing key is not given one.
+#[test]
+fn typed_expireat_survives_replay_without_reanchoring() {
+    let dir = kevy_tmpdir::TmpDir::new("ttl-reanchor-expireat");
+    let at = kevy_store::now_unix_ms() / 1000 + 100;
+    let ttl = reopened_ttl_after(dir.path(), |s| {
+        assert!(!s.expireat(b"k", at).unwrap(), "no key, no deadline");
+        s.set(b"k", b"v").unwrap();
+        assert!(s.expireat(b"k", at).unwrap());
+    });
+    assert!(ttl > 0, "key survived: {ttl}");
+    assert!(ttl <= 100_000 - 1_000, "EXPIREAT re-anchored on replay: {ttl}ms");
+}
