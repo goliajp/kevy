@@ -98,3 +98,17 @@ fn conditional_set_with_ttl_is_one_frame_and_survives_replay() {
     assert_eq!(count(b"PEXPIREAT"), 2, "and each is pinned to an absolute deadline");
     assert_eq!(count(b"$4\r\ngone"), 0, "a vetoed SET is not logged");
 }
+
+/// The EXPIRE replies come from the one store call that acted, not from an
+/// existence check taken under a different lock.
+#[test]
+fn expire_replies_describe_what_happened() {
+    let s = Store::open(Config::default()).expect("open");
+    assert_eq!(dispatch(&s, &[b"EXPIRE", b"none", b"10"]), b":0\r\n");
+    assert_eq!(dispatch(&s, &[b"EXPIRE", b"none", b"0"]), b":0\r\n");
+    assert_eq!(dispatch(&s, &[b"PEXPIREAT", b"none", b"1"]), b":0\r\n");
+    s.set(b"k", b"v").unwrap();
+    assert_eq!(dispatch(&s, &[b"EXPIRE", b"k", b"10"]), b":1\r\n");
+    assert_eq!(dispatch(&s, &[b"EXPIRE", b"k", b"-1"]), b":1\r\n");
+    assert_eq!(s.get(b"k").unwrap(), None);
+}
