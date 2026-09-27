@@ -50,6 +50,7 @@ mod dump_cache;
 pub mod feed_meta;
 pub mod layout;
 mod record;
+mod record_pieces;
 mod replay;
 mod replay_log;
 mod replay_resync;
