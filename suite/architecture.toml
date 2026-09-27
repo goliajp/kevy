@@ -42,6 +42,7 @@ steel = [
   "kevy-store",    # the keyspace
   "kevy-vlog",     # value log (cold values)
   "kevy-resp",     # RESP protocol + ops table
+  "kevy-verbs",    # single-shard command layer (server + embedded)
   "kevy-resp-client",
   "kevy-persist",  # AOF + snapshots
   "kevy-index",    # secondary indexes

@@ -4,8 +4,9 @@
 //! shapes and error wording mirror `crates/kevy/src/cmd_table.rs`
 //! byte-for-byte (the dispatch oracle compares them).
 
-use super::util::{arr, bulk, err, int, kevy_err};
+use super::kevy_err;
 use crate::store::Store;
+use kevy_resp::{encode_array_len, encode_bulk, encode_error, encode_integer};
 
 /// One TABLE request; `false` = verb not in this group (which the
 /// caller renders as unknown-command — matching the server, where a
@@ -17,21 +18,21 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
         b"TABLE.REPLACE" => cmd_replace(s, argv, out),
         b"TABLE.DROP" => {
             if argv.len() != 2 {
-                err(out, "ERR usage: TABLE.DROP name");
+                encode_error(out, "ERR usage: TABLE.DROP name");
             } else {
-                int(out, i64::from(s.table_drop(&argv[1])));
+                encode_integer(out, i64::from(s.table_drop(&argv[1])));
             }
         }
         b"TABLE.LIST" => {
             if argv.len() != 1 {
-                err(out, "ERR usage: TABLE.LIST");
+                encode_error(out, "ERR usage: TABLE.LIST");
             } else {
                 cmd_list(s, out);
             }
         }
         b"TABLE.VERIFY" => {
             if argv.len() != 2 {
-                err(out, "ERR usage: TABLE.VERIFY name");
+                encode_error(out, "ERR usage: TABLE.VERIFY name");
             } else {
                 cmd_verify(s, &argv[1], out);
             }
@@ -46,7 +47,7 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
 fn cmd_declare(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     let refs: Vec<&[u8]> = argv.iter().map(Vec::as_slice).collect();
     match kevy_index::parse_table_declare(&refs) {
-        Err(e) => err(out, &e),
+        Err(e) => encode_error(out, &e),
         Ok(spec) => match s.table_declare(spec) {
             Ok(()) => out.extend_from_slice(b"+OK\r\n"),
             Err(e) => kevy_err(out, &e),
@@ -59,7 +60,7 @@ fn cmd_declare(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
 fn cmd_ensure(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     let refs: Vec<&[u8]> = argv.iter().map(Vec::as_slice).collect();
     match kevy_index::parse_table_declare(&refs) {
-        Err(e) => err(out, &e),
+        Err(e) => encode_error(out, &e),
         Ok(spec) => match s.table_ensure(spec) {
             Ok(kevy_index::TableEnsure::Created) => out.extend_from_slice(b"+OK\r\n"),
             Ok(kevy_index::TableEnsure::Unchanged) => out.extend_from_slice(b"+UNCHANGED\r\n"),
@@ -73,7 +74,7 @@ fn cmd_ensure(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
 fn cmd_replace(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     let refs: Vec<&[u8]> = argv.iter().map(Vec::as_slice).collect();
     match kevy_index::parse_table_declare(&refs) {
-        Err(e) => err(out, &e),
+        Err(e) => encode_error(out, &e),
         Ok(spec) => match s.table_replace(spec) {
             Ok(()) => out.extend_from_slice(b"+OK\r\n"),
             Err(e) => kevy_err(out, &e),
@@ -84,28 +85,28 @@ fn cmd_replace(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
 /// `TABLE.LIST` — 14-field rows matching the server's reduce.
 fn cmd_list(s: &Store, out: &mut Vec<u8>) {
     let tables = s.table_list();
-    arr(out, tables.len());
+    encode_array_len(out, tables.len() as i64);
     for t in &tables {
-        arr(out, 14);
-        bulk(out, b"name");
-        bulk(out, &t.name);
-        bulk(out, b"prefix");
-        bulk(out, &t.prefix);
-        bulk(out, b"pk");
-        bulk(out, &t.pk);
-        bulk(out, b"columns");
-        bulk(out, t.columns.len().to_string().as_bytes());
-        bulk(out, b"indexes");
-        bulk(out, t.indexes.len().to_string().as_bytes());
-        bulk(out, b"orderpaths");
-        bulk(out, t.orderpaths.len().to_string().as_bytes());
-        bulk(out, b"window");
+        encode_array_len(out, 14);
+        encode_bulk(out, b"name");
+        encode_bulk(out, &t.name);
+        encode_bulk(out, b"prefix");
+        encode_bulk(out, &t.prefix);
+        encode_bulk(out, b"pk");
+        encode_bulk(out, &t.pk);
+        encode_bulk(out, b"columns");
+        encode_bulk(out, t.columns.len().to_string().as_bytes());
+        encode_bulk(out, b"indexes");
+        encode_bulk(out, t.indexes.len().to_string().as_bytes());
+        encode_bulk(out, b"orderpaths");
+        encode_bulk(out, t.orderpaths.len().to_string().as_bytes());
+        encode_bulk(out, b"window");
         match &t.window {
-            None => bulk(out, b"-"),
+            None => encode_bulk(out, b"-"),
             Some(w) => {
                 let mut f = w.column.clone();
                 f.extend_from_slice(format!(":{}:{}", w.span, w.bucket).as_bytes());
-                bulk(out, &f);
+                encode_bulk(out, &f);
             }
         }
     }
@@ -158,23 +159,23 @@ fn cmd_verify(s: &Store, name: &[u8], out: &mut Vec<u8>) {
     ];
     let Ok(report) = s.table_verify_report(name) else {
         let n = String::from_utf8_lossy(name);
-        return err(out, &format!("ERR no such table '{n}' (TABLE.LIST enumerates them)"));
+        return encode_error(out, &format!("ERR no such table '{n}' (TABLE.LIST enumerates them)"));
     };
     let spot = [report.spot_rows, report.spot_type_mismatches];
     let per_index = index_counts(report.per_index);
-    arr(out, per_index.len() + 1);
+    encode_array_len(out, (per_index.len() + 1) as i64);
     for (iname, sums) in &per_index {
-        arr(out, 22);
-        bulk(out, b"index");
-        bulk(out, iname);
+        encode_array_len(out, 22);
+        encode_bulk(out, b"index");
+        encode_bulk(out, iname);
         for (label, v) in LABELS.iter().zip(sums.iter()) {
-            bulk(out, label);
-            bulk(out, v.to_string().as_bytes());
+            encode_bulk(out, label);
+            encode_bulk(out, v.to_string().as_bytes());
         }
     }
-    arr(out, 4);
-    bulk(out, b"spotcheck_rows");
-    bulk(out, spot[0].to_string().as_bytes());
-    bulk(out, b"spotcheck_type_mismatches");
-    bulk(out, spot[1].to_string().as_bytes());
+    encode_array_len(out, 4);
+    encode_bulk(out, b"spotcheck_rows");
+    encode_bulk(out, spot[0].to_string().as_bytes());
+    encode_bulk(out, b"spotcheck_type_mismatches");
+    encode_bulk(out, spot[1].to_string().as_bytes());
 }

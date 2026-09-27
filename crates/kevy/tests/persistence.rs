@@ -930,7 +930,7 @@ fn save_at_shutdown_drains_to_disk() {
 }
 
 /// Probe written while auditing a consumer's TTL-inflation report: a
-/// RELATIVE ttl frame (SETEX) must not re-anchor on replay — the AOF
+/// RELATIVE ttl frame (SETEX, SET … EX, GETEX … EX) must not re-anchor on replay — the AOF
 /// carries whatever the write path logged, and if that is the verb
 /// itself, every restart hands the key its full TTL back. The rewrite
 /// path already normalizes to absolute PEXPIREAT; this pins the
@@ -947,6 +947,12 @@ fn relative_ttl_frames_do_not_reanchor_on_replay() {
         let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
         c.write_all(&req(&[b"SETEX", b"grey", b"100", b"v"])).unwrap();
         read_reply(&mut c, b"+OK\r\n");
+        c.write_all(&req(&[b"SET", b"grey3", b"v", b"EX", b"100"])).unwrap();
+        read_reply(&mut c, b"+OK\r\n");
+        c.write_all(&req(&[b"SET", b"grey4", b"v"])).unwrap();
+        read_reply(&mut c, b"+OK\r\n");
+        c.write_all(&req(&[b"GETEX", b"grey4", b"EX", b"100"])).unwrap();
+        read_reply(&mut c, b"$1\r\nv\r\n");
         c.write_all(&req(&[b"EXPIRE", b"grey2", b"100"])).unwrap(); // no such key: 0
         let mut buf = [0u8; 64];
         let _ = c.read(&mut buf).unwrap();
@@ -955,17 +961,20 @@ fn relative_ttl_frames_do_not_reanchor_on_replay() {
     let port = free_port();
     with_runtime(port, &dir, 1, |p| {
         let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
-        c.write_all(&req(&[b"PTTL", b"grey"])).unwrap();
-        let mut buf = [0u8; 64];
-        let n = c.read(&mut buf).unwrap();
-        let s = String::from_utf8_lossy(&buf[..n]);
-        let ttl: i64 = s.trim_start_matches(':').trim().parse().expect("integer PTTL");
-        assert!(ttl > 0, "key survived the restart: {s}");
-        assert!(
-            ttl <= 100_000 - 2_000,
-            "TTL re-anchored on replay: read {ttl}ms of an original 100000ms \
-             after >=2.5s elapsed — the AOF frame must carry an absolute deadline"
-        );
+        for key in [&b"grey"[..], b"grey3", b"grey4"] {
+            c.write_all(&req(&[b"PTTL", key])).unwrap();
+            let mut buf = [0u8; 64];
+            let n = c.read(&mut buf).unwrap();
+            let s = String::from_utf8_lossy(&buf[..n]);
+            let ttl: i64 = s.trim_start_matches(':').trim().parse().expect("integer PTTL");
+            let key = String::from_utf8_lossy(key);
+            assert!(ttl > 0, "{key} survived the restart: {s}");
+            assert!(
+                ttl <= 100_000 - 2_000,
+                "{key}: TTL re-anchored on replay: read {ttl}ms of an original 100000ms \
+                 after >=2.5s elapsed — the AOF frame must carry an absolute deadline"
+            );
+        }
     });
     let _ = std::fs::remove_dir_all(&dir);
 }

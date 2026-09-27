@@ -386,7 +386,7 @@ kevyに対してエンドツーエンドで検証済みのクライアントラ�
 | [`kevy-wasm`](crates/kevy-wasm) | ブラウザビルド。手書きC ABI + `@goliapkg/kevy`ローダー |
 | [`kevy-lua`](crates/kevy-lua) | Luaスクリプトブリッジ（[luna](https://github.com/goliajp/luna)ランタイムによる） |
 
-残りのクレート（`kevy-store`、`kevy-rt`、`kevy-persist`、`kevy-sys`、
+残りのクレート（`kevy-store`、`kevy-verbs`、`kevy-rt`、`kevy-persist`、`kevy-sys`、
 `kevy-elect`、`kevy-replicate`、`kevy-scope`、`kevy-lua-host`、
 `kevy-chaos`、`kevy-bench`、`kevy-pubsub-bench`）はサーバーと組み込み
 ライブラリのための内部インフラです。ワークスペースが再現可能にビルド

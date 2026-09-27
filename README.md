@@ -387,7 +387,7 @@ All run unmodified against a default `kevy --port 6379` instance.
 | [`kevy-wasm`](crates/kevy-wasm) | The browser build: hand-written C ABI + the `@goliapkg/kevy` loader |
 | [`kevy-lua`](crates/kevy-lua) | Lua scripting bridge (backed by the [luna](https://github.com/goliajp/luna) runtime) |
 
-The remaining crates (`kevy-store`, `kevy-rt`, `kevy-persist`,
+The remaining crates (`kevy-store`, `kevy-verbs`, `kevy-rt`, `kevy-persist`,
 `kevy-sys`, `kevy-elect`, `kevy-replicate`, `kevy-scope`,
 `kevy-lua-host`, `kevy-chaos`, `kevy-bench`, `kevy-pubsub-bench`) are
 internal infrastructure for the server and embedded library — they are

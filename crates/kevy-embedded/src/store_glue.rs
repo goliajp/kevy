@@ -90,6 +90,17 @@ pub(crate) fn commit_write(inner: &mut Inner, parts: &[&[u8]]) -> KevyResult<()>
     Ok(())
 }
 
+/// Record the absolute deadline `key` has now (`PEXPIREAT`), so a
+/// relative TTL set a moment ago replays to the same instant. Nothing is
+/// recorded when the key has no deadline.
+pub(crate) fn commit_deadline(inner: &mut Inner, key: &[u8]) -> KevyResult<()> {
+    let Some(f) = kevy_verbs::aof::deadline_frame(&mut inner.store, key) else {
+        return Ok(());
+    };
+    let parts: Vec<&[u8]> = (0..f.len()).map(|i| &f[i]).collect();
+    commit_write(inner, &parts)
+}
+
 pub(crate) fn store_err(e: StoreError) -> kevy_store::KevyError {
     kevy_store::KevyError::Store(e)
 }

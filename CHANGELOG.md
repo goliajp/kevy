@@ -28,6 +28,29 @@
   the index and one without; before, it compared the figure with the
   formula that produced it.
 
+- **One implementation of each single-key command.** The server and the
+  embedded engine now run their single-key data commands through the same
+  code, the new `kevy-verbs` crate: argv grammar, checks, the store call,
+  the reply and its error wording. `Store::dispatch_argv` — the path every
+  language binding uses — records such a write as the command it ran,
+  followed by `PEXPIREAT` / `HPEXPIREAT` when it moved a deadline by a
+  relative amount; the CDC feed carries those frames as well. The typed
+  `Store` methods record what they did before. Server replies are
+  unchanged. Over `dispatch_argv`, `INCRBYFLOAT` now answers with the
+  stored value's own digits, as the server does, and a malformed write on
+  a closed or replica store is refused as closed or `READONLY` rather than
+  for its arity.
+- **An embedded replica applies every write its primary records, except
+  stream and geo.** `SETEX`, `PSETEX`, `SETNX`, `MSET`, `HMSET`, `GETEX`,
+  `UNLINK`, `RPOPLPUSH`, `LMOVE`, the blocking pops and `ZPOPMIN.BELOW`
+  used to be skipped on replay. A logged `SET … NX` / `XX` is now applied
+  with its condition, as the primary ran it: a primary also logs a
+  `SET NX` that lost, and applying that one unconditionally handed a held
+  key to the caller that lost it.
+- **Server: `GETEX key EX|PX` keeps its deadline across a restart.** The
+  AOF now follows it with the absolute `PEXPIREAT`, as it does for
+  `EXPIRE` and `SET … EX`; before, a restart counted the TTL again from
+  the replay.
 - **Persistent embedded writes copy the value twice, not five times.**
   Logging a write used to copy every argument into an owned argv, copy it
   again into that argv's buffer, and encode the frame into a scratch
