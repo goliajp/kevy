@@ -50,7 +50,9 @@ fn a_write_lands_while_the_everysec_sync_is_outstanding() {
         let _ = tx.send(());
     });
     rx.recv_timeout(Duration::from_secs(10)).expect("the write must not wait for the fsync");
-    sync.run().unwrap();
+    super::run_tick_sync(Some(sync));
+    // the window restarted with that sync, so the next tick owes none
+    super::run_tick_sync(upkeep(&store.shards[0]));
 
     drop(store);
     let reopened = Store::open(config).unwrap();

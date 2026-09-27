@@ -30,6 +30,18 @@ fn no_tick_writes_the_buffer_into_the_kernel() {
 }
 
 #[test]
+fn always_tick_owes_nothing() {
+    // every append already reached the disk, so the tick has no sync to hand out
+    let path = temp_file("sync-always");
+    let mut aof = Aof::open(&path, Fsync::Always).unwrap();
+    let header = on_disk(&path);
+    aof.append(&set(b"a")).unwrap();
+    assert!(on_disk(&path) > header, "always writes through on append");
+    assert!(aof.tick().unwrap().is_none());
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
 fn no_maybe_sync_writes_the_buffer_into_the_kernel() {
     // the server's synchronous reactor path ticks through maybe_sync
     let path = temp_file("sync-no-maybe");
