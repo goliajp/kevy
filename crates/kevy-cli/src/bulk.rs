@@ -5,8 +5,8 @@
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
+use crate::link::Link;
 use kevy_resp::Reply;
-use kevy_resp_client::RespClient;
 
 /// Token bucket: `rate` ops/second, starting EMPTY (strict pacing —
 /// a full-bucket start lets a small job burn its whole burst
@@ -46,7 +46,7 @@ impl RateLimiter {
 }
 
 fn scan_page(
-    client: &mut RespClient,
+    client: &mut dyn Link,
     cursor: &[u8],
     pattern: &[u8],
 ) -> io::Result<(Vec<u8>, Vec<Vec<u8>>)> {
@@ -66,7 +66,7 @@ fn scan_page(
 
 /// `delete-prefix`: SCAN + UNLINK, rate-limited. Returns deleted count.
 pub fn run_delete_prefix(
-    client: &mut RespClient,
+    client: &mut dyn Link,
     prefix: &[u8],
     rate: u64,
     dry_run: bool,
@@ -103,7 +103,7 @@ pub fn run_delete_prefix(
 /// `export`, for the same reason: the rebuild set does not cover every
 /// type, and a copy that quietly drops one is worse than a refusal.
 pub fn run_copy_prefix(
-    client: &mut RespClient,
+    client: &mut dyn Link,
     src_prefix: &[u8],
     dst_prefix: &[u8],
     rate: u64,
@@ -159,7 +159,7 @@ fn count_commands(mut b: &[u8]) -> usize {
 }
 
 /// `digest <prefix>` → (count, hex).
-pub fn run_digest(client: &mut RespClient, prefix: &[u8]) -> io::Result<(i64, String)> {
+pub fn run_digest(client: &mut dyn Link, prefix: &[u8]) -> io::Result<(i64, String)> {
     let r = client.request_borrowed(&[b"PREFIX.DIGEST", prefix])?;
     let Reply::Array(items) = r else {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "PREFIX.DIGEST reply"));
@@ -173,8 +173,8 @@ pub fn run_digest(client: &mut RespClient, prefix: &[u8]) -> io::Result<(i64, St
 /// `diff`: compare prefixes across two servers. Returns mismatching
 /// prefixes.
 pub fn run_diff(
-    a: &mut RespClient,
-    b: &mut RespClient,
+    a: &mut dyn Link,
+    b: &mut dyn Link,
     prefixes: &[Vec<u8>],
     out: &mut impl Write,
 ) -> io::Result<Vec<Vec<u8>>> {
@@ -197,7 +197,7 @@ pub fn run_diff(
 }
 
 /// `inspect <prefix>`: sample keys, type distribution, sizes.
-pub fn run_inspect(client: &mut RespClient, prefix: &[u8], out: &mut impl Write) -> io::Result<()> {
+pub fn run_inspect(client: &mut dyn Link, prefix: &[u8], out: &mut impl Write) -> io::Result<()> {
     let mut pattern = prefix.to_vec();
     pattern.push(b'*');
     let mut cursor: Vec<u8> = b"0".to_vec();

@@ -61,10 +61,10 @@ fn wait_for(what: &str, mut ok: impl FnMut() -> bool) {
 
 #[test]
 fn failover_retargets_at_the_targets_configured_replication_base() {
-    let p_port = pick_free_port().expect("port");
-    let p_repl = pick_free_port().expect("port");
-    let r_port = pick_free_port().expect("port");
-    let r_repl = pick_free_port().expect("port");
+    let p_port = pick_free_port();
+    let p_repl = pick_free_port();
+    let r_port = pick_free_port();
+    let r_repl = pick_free_port();
     assert_ne!(r_repl, r_port + 10_000, "the test needs a non-default base");
 
     let (_p, _pd) =

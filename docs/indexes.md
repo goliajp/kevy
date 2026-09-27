@@ -78,7 +78,7 @@ range|unique [MAXMEM <bytes>]`
   a different value) over `checked` entries, and `missing` (rows under
   the prefix that derive a value and have no entry). Both should be
   zero on a healthy index; `missing` is the direction a walk over the
-  index's own entries cannot see. `kevy-cli doctor` turns that into an
+  index's own entries cannot see. `kevy-cli --kevy doctor` turns that into an
   exit code over every declared table, so "should be zero" can be a
   cron rather than a thing someone remembers to check
   ([table-migration.md](table-migration.md#8-make-verify-part-of-operations-not-part-of-the-migration)).

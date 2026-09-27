@@ -14,7 +14,7 @@ use crate::segment::{FIRST_DATA_SPAN, NO_CLASS, SEGMENT_BYTES, SPANS_PER_SEGMENT
 use crate::stats::Stats;
 
 impl Heap {
-    /// Where every mapped byte is (`bench/V5-ACCOUNTING-CONTRACT.md` §1).
+    /// Where every mapped byte is.
     ///
     /// Walks the segments rather than maintaining seven counters on the
     /// hot path: only `live` and `rounding` depend on the requested size

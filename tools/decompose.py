@@ -121,11 +121,13 @@ def main() -> int:
         lines.append(f"| {u['crate']} | `{u['unit']}` | {'stone' if u['stone'] else ''} "
                      f"| {u['files']} | {u['loc']} |")
 
-    (ROOT / "quality/DECOMPOSITION.md").write_text("\n".join(lines) + "\n")
+    out = ROOT / "target/reports/DECOMPOSITION.md"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text("\n".join(lines) + "\n")
     print(f"decompose: {len(us)} units, {len(ready)} readable, {len(split)} need cutting")
     for u in split:
         print(f"  SPLIT  {u['crate']}/{u['unit']:22s} {u['loc']:6d} lines, {u['files']} files")
-    print(f"\n-> quality/DECOMPOSITION.md")
+    print(f"\n-> {out.relative_to(ROOT)}")
     return 0
 
 

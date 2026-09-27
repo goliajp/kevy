@@ -314,7 +314,7 @@ fn show(b: &[u8]) -> String {
 }
 
 /// `<table>.<suffix>` — the compiled access-path name.
-fn dotted(table: &[u8], suffix: &[u8]) -> Vec<u8> {
+pub(crate) fn dotted(table: &[u8], suffix: &[u8]) -> Vec<u8> {
     let mut n = table.to_vec();
     n.push(b'.');
     n.extend_from_slice(suffix);

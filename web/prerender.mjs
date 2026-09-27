@@ -47,7 +47,7 @@ const SECTIONS = [
      'replication', 'availability', 'cluster',
      'tiering', 'accept-shards', 'alloc', 'uds', 'async']],
   ['data', { en: 'Working with data', zh: '数据', ja: 'データ' },
-    ['indexes', 'tables', 'table-migration', 'vector-search', 'text-search', 'views',
+    ['indexes', 'tables', 'relational-cli', 'table-migration', 'vector-search', 'text-search', 'views',
      'cdc', 'pubsub', 'lua', 'packed-rows']],
   ['embed', { en: 'Embedding it', zh: '嵌入', ja: '組み込み' },
     ['wasm', 'embedded-listener', 'electron', 'tauri', 'iot']],
@@ -60,15 +60,9 @@ const SECTIONS = [
 
 const LANGS = ['en', 'zh', 'ja']
 
-// Engineering correspondence, and one page the command reference replaced.
-// They live in the repository for the people who go looking; putting dated
-// defect reports in a nav would be filing them as documentation.
+// A page the command reference replaced.
 const EXCLUDE = new Set([
   'verb-reference',
-  'DEFECT-REPORT-2026-07-20-ATOMIC-ERROR-PATH-RESPONSE',
-  'REPORT-FROM-GOLIAJP-2026-07-20-EMBEDDED-AS-PRIMARY-STORE',
-  'REPORT-RESPONSE-2026-07-20-EMBEDDED-AS-PRIMARY-STORE',
-  'SUPPORT-LINE-3X-VS-4X-2026-07-20',
 ])
 
 function docDir(lang) {

@@ -104,7 +104,7 @@ WATCH + MULTI/EXEC check-then-write           # CAS loop (cookbook recipe 4)
 
 ## Scalar functions
 
-迁移过来的查询里，SQL 表达式依赖一套标量函数词汇，kevy 在 **SQL 面而非引擎里**覆盖它：`kevy-cli sql eval`（以及 `sql` 工具箱的常量折叠）在客户端按 PostgreSQL 规范语义求值表达式，服务引擎从不接触表达式——与本页其它地方一样的分工。
+迁移过来的查询里，SQL 表达式依赖一套标量函数词汇，kevy 在 **SQL 面而非引擎里**覆盖它：`kevy-cli --kevy sql eval`（以及 `sql` 工具箱的常量折叠）在客户端按 PostgreSQL 规范语义求值表达式，服务引擎从不接触表达式——与本页其它地方一样的分工。
 
 当前覆盖（函数名大小写不敏感，同 PG 的折叠规则）：
 
@@ -200,7 +200,7 @@ kevy 的事务故事就是 Redis 的（Law 1），对到 SQL 上是这样：
 | `CHECK (expr)` | 在原子单元内检验不变量：Lua 脚本（服务端）或 `atomic` 块（嵌入式）完成读、判、写——引擎保证判定与提交是一个单元（cookbook 配方 5）|
 | `UNIQUE` | 围栏 + 计数的重复项，或一道硬性 `SET … NX` 闸门（见上）|
 | `FOREIGN KEY`（存在性）| 不强制；需要这个不变量时，在一个原子单元里先写父、后写子 |
-| `ON DELETE CASCADE` | 应用侧模式：atomic 块（小规模）、`kevy-cli delete-prefix`（批量），或用一个 CDC 消费者响应父行删除（异步——cookbook 配方 10）|
+| `ON DELETE CASCADE` | 应用侧模式：atomic 块（小规模）、`kevy-cli --kevy delete-prefix`（批量），或用一个 CDC 消费者响应父行删除（异步——cookbook 配方 10）|
 | 触发器 | **CDC 消费者**：`FEED.READ` 把每次已提交的写当作变更帧投递——发生在提交之后、彼此解耦、可重放，而且它不可能腐蚀写路径（cookbook 配方 10–12）|
 
 服务端约束和触发器 DSL 是有意不提供的：Lua 脚本是仅有的服务端逻辑，而且它*作为写入本身*运行，不是挂在写入上。
@@ -230,13 +230,13 @@ kevy 的事务故事就是 Redis 的（Law 1），对到 SQL 上是这样：
 
 | RDS | kevy |
 |---|---|
-| `mysqldump` / `pg_dump` | `kevy-cli export`（逻辑 RESP 流，兼容 `redis-cli --pipe`）|
+| `mysqldump` / `pg_dump` | `kevy-cli --kevy export`（逻辑 RESP 流，兼容 `redis-cli --pipe`）|
 | 二进制备份 | 快照文件（`SAVE`/`BGSAVE` → `dump-<id>.rdb`）|
 | WAL / binlog | AOF（追加式命令日志，按 shard）|
 | `synchronous_commit` | `appendfsync always`（或 `everysec` + `fsync_aof` 栅栏）|
 | PITR（基线 + WAL 重放）| **恢复点契约**：快照 + 从快照记录的游标起的 CDC 帧 = 之后任意游标处的精确状态（[persistence](persistence.md)）|
 
-PITR 的范围说明：feed 窗口是内存里的 backlog（`feed_buffer_size`，上限 1 GiB/shard）——要依赖精确时点恢复，快照频率至少得跟上窗口的翻转。校验是一等公民：`PREFIX.DIGEST` / `kevy-cli diff` 能证明两个键空间相等，而且对顺序和拓扑都不敏感。
+PITR 的范围说明：feed 窗口是内存里的 backlog（`feed_buffer_size`，上限 1 GiB/shard）——要依赖精确时点恢复，快照频率至少得跟上窗口的翻转。校验是一等公民：`PREFIX.DIGEST` / `kevy-cli --kevy diff` 能证明两个键空间相等，而且对顺序和拓扑都不敏感。
 
 ## 复制与读扩展
 

@@ -3,8 +3,7 @@
 //! Exercises the public API of the high-blast-radius stone crates
 //! (kevy-map / kevy-ring / kevy-config / kevy-text / kevy-store /
 //! kevy-vector, plus kevy-alloc from the v5 experiment) with fixed-seed
-//! data and reports median ± stdev per operation. Numbers feed
-//! `bench/STONE-BENCH.md`.
+//! data and reports median ± stdev per operation.
 //!
 //! ```text
 //! cargo run -p kevy-bench --release --example stones            # all six

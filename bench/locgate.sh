@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # locgate — the LOC-debt ratchet (v3.18 T3).
 #
-# Hard rules (project CLAUDE.md): src files ≤ 500 LOC; functions
+# Hard rules: src files ≤ 500 LOC; functions
 # ≤ 50 LOC unless the line right above `fn` carries a waiver comment
 # naming the reason. Two sanctioned classes: (1) pure data-driven
 # dispatch/match tables; (2) vendored third-party engine core —

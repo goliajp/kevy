@@ -53,6 +53,6 @@ EXPOSE 6379
 # accepting RESP. Honoured by `docker compose` (HEALTHCHECK directive),
 # kubernetes (exec liveness probe — see docs/), and `docker inspect`.
 HEALTHCHECK --interval=5s --timeout=2s --start-period=2s --retries=3 \
-    CMD kevy-cli -p ${KEVY_PORT:-6379} ping || exit 1
+    CMD kevy-cli -e -p ${KEVY_PORT:-6379} ping || exit 1
 
 ENTRYPOINT ["kevy"]

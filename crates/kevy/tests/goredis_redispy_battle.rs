@@ -40,7 +40,7 @@ use kevy_chaos::{Harness, HarnessConfig, pick_free_port};
 #[ignore = "battle test — opt-in via --ignored, needs `cargo build --release -p kevy` first"]
 fn goredis_v9_golden_path() {
     let bin_path = resolve_kevy_bin();
-    let port = pick_free_port().expect("free port");
+    let port = pick_free_port();
     let tmp = std::env::temp_dir().join(format!("kevy-chaos-goredis-{port}"));
     let _ = std::fs::remove_dir_all(&tmp);
 
@@ -115,7 +115,7 @@ fn goredis_v9_golden_path() {
 #[ignore = "battle test — opt-in via --ignored, needs `cargo build --release -p kevy` first"]
 fn redispy_5x_golden_path() {
     let bin_path = resolve_kevy_bin();
-    let port = pick_free_port().expect("free port");
+    let port = pick_free_port();
     let tmp = std::env::temp_dir().join(format!("kevy-chaos-redispy-{port}"));
     let _ = std::fs::remove_dir_all(&tmp);
 

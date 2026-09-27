@@ -1,7 +1,6 @@
 # `kevy-replicate` — snapshot ship protocol
 
-Status: Phase 1.E (v3-cluster). Wire-layer protocol locked for v1.18.0;
-reactor + store wiring lands at T1.23/T1.24/T1.25/T1.26.
+Wire-layer protocol stable since v1.18.0.
 
 ## When the primary sends a snapshot
 
@@ -115,7 +114,7 @@ sends *only* snapshot bytes between `+SNAPSHOT` and `+SNAPSHOT_END`.
 No live `*2\r\n` frames are interleaved. The replica's parser is
 free to assume "one segment at a time".
 
-T1.25 will revisit this — the primary may need to interleave live
+A later version may revisit this — the primary may need to interleave live
 frames with the snapshot so a slow snapshot doesn't lag fresh writes
 past the backlog window. The wire format already allows this (a
 chunk's bulk-string framing is unambiguous; control lines parse
@@ -146,5 +145,5 @@ new event-returning iterator; see `crate::replica::ReplicaClient::next_event`.
   offset on the begin marker would let it resume.
 - **Snapshot compression**: gzip / zstd around the chunk bytes. Same
   envelope, new chunk type byte. Measure before adding.
-- **Interleaved live frames during snapshot**: T1.25; needs a per-
+- **Interleaved live frames during snapshot**: needs a per-
   frame type tag the replica parser can fork on.

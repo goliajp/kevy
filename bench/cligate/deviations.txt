@@ -1,0 +1,29 @@
+# id       RC id    where kevy-cli deliberately differs from redis-cli 8.10.1, and why
+DEV-001  RC-013   Help text is kevy-cli's: it documents kevy-cli's tools and flags, so it cannot be redis-cli's bytes. Pinned by a fragment.
+DEV-002  RC-002   `-p abc` is refused with `Invalid server port.` (redis-cli takes it as port 0; valkey-cli 9.1.2 refuses, D1).
+DEV-003  RC-012   `-v` prints `kevy-cli <version>`.
+DEV-004  RC-055   `--json` prints an error reply as `{"error":"…"}`; redis-cli prints `error:"…"`, which is not JSON.
+DEV-005  RC-056   `--quoted-json`: the JSON string's value is redis-cli's quoted repr, escaped once as JSON, so `a"b` prints `"a\\\"b"` and parses; redis-cli doubles backslashes and emits `"a\\"b"`, which does not.
+DEV-006  RC-039   TLS flags and rediss:// are refused by name: kevy-cli does not implement TLS (owner decision D1, 2026-09-17).
+DEV-007  RC-060   A RESP3 big number renders as `(bignum) <digits>` / the digits; redis-cli exits 1 with `Unknown reply type: 13`.
+DEV-008  RC-061   A RESP3 attribute is skipped and the reply it annotates is printed; redis-cli exits 1 on a protocol error.
+DEV-009  RC-055   `--json` writes a RESP3 double of inf, -inf or nan as a string; redis-cli writes it bare, which is not JSON.
+DEV-010  RC-030   Messages in which redis-cli names itself (`Try redis-cli --help`, `Invalid redis-cli repeat command option value.`) name kevy-cli. Applied to every case by the gate, not per case.
+DEV-011  RC-129   The REPL prompt for a unix socket reads `kevy <socket>`, where redis-cli's reads `redis <socket>`.
+DEV-012  RC-151   Help for a command the server documents no arguments for prints nothing after its name; redis-cli prints `(null)`.
+DEV-013  RC-015   `--test_hint` for a line that names no command prints an empty line and exits 0; redis-cli crashes (SIGSEGV).
+DEV-014  RC-147   A hint closes only the brackets it opens; after part of a repeating optional argument redis-cli prints an extra `]`.
+DEV-015  RC-149   `help` alone names kevy-cli, its version and `~/.kevyclirc`, and says "commands" rather than "Redis commands".
+DEV-016  RC-148   With no server to ask, help and hints come from kevy's own command reference (embedded from kevy's COMMAND DOCS), not a copy of Redis's.
+DEV-017  RC-142   Lines of the preferences file are reported as `.kevyclirc: …`: kevy-cli's own file name, whichever file was read.
+DEV-018  RC-135   `:get pubsub` prints 0 or 1, as valkey-cli does; redis-cli 8.10.1 reports `:get` as an unknown internal command.
+DEV-019  RC-073   `--scan` prints a key with a NUL byte whole; redis-cli prints it with printf and stops at the NUL.
+DEV-020  RC-077   `--bigkeys` / `--memkeys` list types in a fixed order (string, list, set, zset, hash, stream, then others as found); redis-cli's order follows the state of its internal hash table, and differs between an empty keyspace and a full one.
+DEV-021  RC-086   `--hotkeys-count <n>` is accepted, as valkey-cli accepts it; redis-cli 8.10.1 does not have the flag.
+DEV-022  RC-097   `--replica` prints every command the master sends after the snapshot; redis-cli 8.10.1 drops the first one (in practice the SELECT before the first write).
+DEV-023  RC-103   `restart` in a `--ldb` session runs the script again in a new session; redis-cli 8.10.1 aborts ("free(): invalid pointer").
+DEV-024  RC-109   `--cluster create` keeps its announced replica assignment when anti-affinity cannot improve it; redis-cli 8.10.1 swaps replicas at random, contradicting the `Adding replica` lines it printed.
+DEV-025  RC-113   `--cluster reshard` takes its answers from piped input; redis-cli 8.10.1 buffers the rest of the input away after the first answer and asks for the receiving node ID for ever.
+DEV-026  RC-112   `--cluster fix` covers keyless uncovered slots in slot order, each with the master owning fewest slots; redis-cli 8.10.1 picks a random node and a random order.
+DEV-027  RC-115   `--cluster-use-atomic-slot-migration` ends each migration's line with a newline; valkey-cli 9.1.2 leaves it unterminated, so the next line runs on.
+DEV-028  RC-031   Until 7.0 the bare words kevy-cli 6.4 shipped as tools stay tools, with a deprecation line: `digest <prefix>` (redis 8.10.1's DIGEST has the same shape), `backup --data-dir … --to …` and `restore --from … --to …`; redis-cli sends DIGEST, BACKUP and RESTORE. Other shapes of backup and restore are commands. The tools are `--kevy digest|backup|restore`.

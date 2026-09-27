@@ -2,7 +2,6 @@
 # allocgate — the v5 memory-experiment gate for kevy-alloc.
 #
 # Measures M1..M8 of the kevy-alloc contract.
-# Accounting contract: bench/V5-ACCOUNTING-CONTRACT.md §1
 #
 # One line per acceptance criterion; a line is either a real assertion or
 # PENDING(<train>). The gate is RED until every line it owns is green —
@@ -47,7 +46,6 @@ line() { # name, status, detail
 }
 
 echo "allocgate — kevy-alloc acceptance (RFC 2026-07-26-v5-kevy-alloc §8)"
-echo "contract: bench/V5-ACCOUNTING-CONTRACT.md §1"
 echo
 
 # ── Does the crate even exist yet? Every line below is PENDING until it
@@ -312,7 +310,7 @@ m9() {
 }
 m9_out=$(m9)
 line "M9-info-transport" "${m9_out%% *}" \
-  "INFO allocator reports the nine terms and alloc_mapped == alloc_accounted on a live server — ${m9_out#* } [contract: bench/V5-ACCOUNTING-CONTRACT.md]"
+  "INFO allocator reports the nine terms and alloc_mapped == alloc_accounted on a live server — ${m9_out#* }"
 
 echo
 if [ "$fail" -ne 0 ]; then

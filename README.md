@@ -74,7 +74,7 @@ Every headline number is gated and re-measured on every train:
 hydrated row-list pages p99 < 1ms, write fan-out p99 < 200µs, ANN
 recall ≥ 0.9 — see [the design map](docs/designing-on-kevy.md),
 [the cookbook](docs/cookbook.md), and
-[the validation ledger](bench/VALIDATION-LEDGER.md).
+[the performance page](PERFORMANCE.md).
 
 ## Which one do I want?
 
@@ -281,7 +281,7 @@ Linux box, server and client pinned to disjoint cores, TCP loopback).
 The KV rows below are `bench/arena.sh`, re-measured 2026-07-19:
 median-of-5, throughput read from each server's own command counter
 over a timed window. Full method, every workload, and the caveats live
-in [`bench/REPORT.md`](bench/REPORT.md); every figure is reproducible
+in [`PERFORMANCE.md`](PERFORMANCE.md); every figure is reproducible
 from a script in [`bench/`](bench/).
 
 | Workload | kevy | valkey 9.1 | Ratio |
@@ -293,7 +293,7 @@ from a script in [`bench/`](bench/).
 
 The same `GET -c 50 -P 16` face, four engines on one box — kevy at 7.49 M/s against each (median-of-5; method and per-engine cycle
 accounting in
-[`bench/REPORT.md`](bench/REPORT.md)):
+[`PERFORMANCE.md`](PERFORMANCE.md)):
 
 | Engine | kevy's lead |
 |---|---:|
@@ -313,7 +313,7 @@ The pub/sub and embedded rows are from their own harnesses and were
 not part of this re-measurement.
 
 And the serving face vs redis-stack 7.4.7 (RediSearch), same seeded
-corpora, recall-aligned ([`bench/PERF-LEDGER.md`](bench/PERF-LEDGER.md)):
+corpora, recall-aligned ([`PERFORMANCE.md`](PERFORMANCE.md)):
 
 | Query class | kevy | RediSearch | Verdict |
 |---|---:|---:|---|

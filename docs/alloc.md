@@ -14,7 +14,7 @@ no runtime toggle. The default build does not carry it.
 ## What it buys
 
 Measured on the reference bench box (io_uring, 8-shard); the harness and
-protocol are in `bench/REPORT.md`:
+protocol are in the benchmark scripts under `bench/`:
 
 - **Fragmentation / RSS**: long-running churn workloads hold ~2.16× the live
   data size in RSS vs glibc's 2.40× — roughly a 10 % smaller resident

@@ -25,7 +25,8 @@
 use std::io;
 use std::process::ExitCode;
 
-use kevy_resp_client::{Reply, RespClient};
+use crate::link::Link;
+use kevy_resp_client::Reply;
 
 /// What `doctor` concluded about one table.
 #[derive(Debug)]
@@ -74,7 +75,7 @@ pub(crate) fn fields(items: &[Reply]) -> Vec<(String, String)> {
 }
 
 /// Every declared table's name, in declaration order.
-pub fn table_names(client: &mut RespClient) -> io::Result<Vec<String>> {
+pub fn table_names(client: &mut dyn Link) -> io::Result<Vec<String>> {
     let Reply::Array(tables) = client.request_borrowed(&[b"TABLE.LIST"])? else {
         return Ok(Vec::new());
     };
@@ -88,8 +89,20 @@ pub fn table_names(client: &mut RespClient) -> io::Result<Vec<String>> {
 }
 
 /// Verify one table and read its counters against lesson 8's mapping.
-pub fn check_table(client: &mut RespClient, name: &str) -> io::Result<TableHealth> {
-    let reply = client.request_borrowed(&[b"TABLE.VERIFY", name.as_bytes()])?;
+pub fn check_table(client: &mut dyn Link, name: &str) -> io::Result<TableHealth> {
+    check_with(client, b"TABLE.VERIFY", name)
+}
+
+/// The same reading for `IDX.VERIFY` or `VIEW.VERIFY`, whose replies are
+/// one group of counters rather than one per index.
+fn check_with(client: &mut dyn Link, verb: &[u8], name: &str) -> io::Result<TableHealth> {
+    let reply = client.request_borrowed(&[verb, name.as_bytes()])?;
+    let reply = match reply {
+        Reply::Array(items) if matches!(items.first(), Some(Reply::Bulk(_))) => {
+            Reply::Array(vec![Reply::Array(items)])
+        }
+        other => other,
+    };
     if let Reply::Error(e) = &reply {
         let msg = String::from_utf8_lossy(e);
         let health = if msg.starts_with("INDEXBUILDING") {
@@ -146,7 +159,9 @@ fn classify(groups: &[Reply]) -> Health {
     }
     let get = |k: &str| sums.get(k).copied().unwrap_or(0);
     let (drift, missing, dups) = (get("drift"), get("missing"), get("duplicates"));
-    if drift > 0 || missing > 0 {
+    if get("rebuilding") > 0 {
+        Health::Building
+    } else if drift > 0 || missing > 0 {
         Health::Drift { detail: format!("drift {drift}, missing {missing}") }
     } else if dups > 0 {
         Health::NeedsTieBreak { duplicates: dups }
@@ -158,15 +173,102 @@ fn classify(groups: &[Reply]) -> Health {
 /// Check every table and print one line each. Exit non-zero only on
 /// drift — a warning is information, and a cron that fails on
 /// information stops being read.
-pub fn run(client: &mut RespClient, warn_is_failure: bool) -> io::Result<ExitCode> {
-    let names = table_names(client)?;
-    if names.is_empty() {
-        println!("doctor: no tables declared — nothing to verify");
+pub fn run(client: &mut dyn Link, warn_is_failure: bool) -> io::Result<ExitCode> {
+    run_scoped(client, warn_is_failure, Scope { indexes: false, views: false })
+}
+
+/// What `doctor` verifies besides tables.
+///
+/// ```
+/// // `doctor --indexes --views`
+/// let everything = kevy_cli::doctor::Scope { indexes: true, views: true };
+/// assert!(everything.indexes && everything.views);
+/// ```
+#[derive(Clone, Copy, Debug)]
+pub struct Scope {
+    /// Indexes declared on their own (not compiled from a table).
+    ///
+    /// ```
+    /// // `doctor --indexes`: an index `users.age` belongs to table `users`
+    /// // and is verified with it; only an index no table compiled is added.
+    /// let s = kevy_cli::doctor::Scope { indexes: true, views: false };
+    /// assert!(s.indexes);
+    /// ```
+    pub indexes: bool,
+    /// Views.
+    ///
+    /// ```
+    /// // `doctor --views`: VIEW.VERIFY for every view VIEW.LIST names.
+    /// let s = kevy_cli::doctor::Scope { indexes: false, views: true };
+    /// assert!(s.views);
+    /// ```
+    pub views: bool,
+}
+
+/// [`run`], also verifying bare indexes and views when `scope` says so.
+///
+/// ```no_run
+/// // Needs a kevy server on 127.0.0.1:6004.
+/// use kevy_cli::doctor::{Scope, run_scoped};
+/// let mut client = kevy_resp_client::RespClient::connect("127.0.0.1", 6004)?;
+/// let code = run_scoped(&mut client, false, Scope { indexes: true, views: true })?;
+/// assert_eq!(code, std::process::ExitCode::SUCCESS);
+/// # Ok::<(), std::io::Error>(())
+/// ```
+pub fn run_scoped(
+    client: &mut dyn Link,
+    warn_is_failure: bool,
+    scope: Scope,
+) -> io::Result<ExitCode> {
+    let tables = table_names(client)?;
+    let mut targets: Vec<(&[u8], &str, String)> =
+        tables.iter().map(|n| (&b"TABLE.VERIFY"[..], "", n.clone())).collect();
+    if scope.indexes {
+        let bare = listed_names(client, b"IDX.LIST")?
+            .into_iter()
+            .filter(|n| !tables.iter().any(|t| n.starts_with(&format!("{t}."))));
+        targets.extend(bare.map(|n| (&b"IDX.VERIFY"[..], "index ", n)));
+    }
+    if scope.views {
+        targets.extend(
+            listed_names(client, b"VIEW.LIST")?
+                .into_iter()
+                .map(|n| (&b"VIEW.VERIFY"[..], "view ", n)),
+        );
+    }
+    if targets.is_empty() {
+        // Tables only: the words the migration playbook quotes.
+        let what =
+            if scope.indexes || scope.views { "nothing declared" } else { "no tables declared" };
+        println!("doctor: {what} — nothing to verify");
         return Ok(ExitCode::SUCCESS);
     }
+    let noun = if scope.indexes || scope.views { "checked" } else { "table(s)" };
+    report(client, &targets, warn_is_failure, noun)
+}
+
+/// The `name` of every row a LIST verb answers.
+fn listed_names(client: &mut dyn Link, verb: &[u8]) -> io::Result<Vec<String>> {
+    let Reply::Array(rows) = client.request_borrowed(&[verb])? else { return Ok(Vec::new()) };
+    Ok(rows
+        .iter()
+        .filter_map(|r| {
+            let Reply::Array(items) = r else { return None };
+            fields(items).into_iter().find(|(k, _)| k == "name").map(|(_, v)| v)
+        })
+        .collect())
+}
+
+fn report(
+    client: &mut dyn Link,
+    targets: &[(&[u8], &str, String)],
+    warn_is_failure: bool,
+    noun: &str,
+) -> io::Result<ExitCode> {
     let (mut bad, mut warned, mut building) = (0u32, 0u32, 0u32);
-    for name in &names {
-        let h = check_table(client, name)?;
+    for (verb, kind, bare) in targets {
+        let h = check_with(client, verb, bare)?;
+        let name = format!("{kind}{bare}");
         match &h.health {
             Health::Ok => println!("  OK       {name}  ({})", h.reported),
             Health::Building => {
@@ -188,8 +290,8 @@ pub fn run(client: &mut RespClient, warn_is_failure: bool) -> io::Result<ExitCod
         }
     }
     println!(
-        "doctor: {} table(s) — {bad} drifted, {warned} warned, {building} still building",
-        names.len()
+        "doctor: {} {noun} — {bad} drifted, {warned} warned, {building} still building",
+        targets.len()
     );
     Ok(if bad > 0 || (warn_is_failure && warned > 0) {
         ExitCode::FAILURE
@@ -198,36 +300,32 @@ pub fn run(client: &mut RespClient, warn_is_failure: bool) -> io::Result<ExitCod
     })
 }
 
-/// `doctor [-h host] [-p port] [--warn-is-failure]`
+/// `doctor [-h host] [-p port] [--warn-is-failure] [--indexes] [--views]`:
+/// connects with its own `-h`/`-p` (the pre-`--kevy` form), then
+/// [`run_on`] the rest.
 pub fn run_doctor_cli(args: &[String]) -> ExitCode {
-    let (mut host, mut port) = (crate::DEFAULT_HOST.to_string(), crate::DEFAULT_PORT);
+    crate::tools::bare::with_private_connection("doctor", args, run_on)
+}
+
+/// `doctor [--warn-is-failure] [--indexes] [--views]` on `client`.
+pub(crate) fn run_on(client: &mut dyn Link, args: &[String]) -> ExitCode {
     let mut strict = false;
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "-h" if i + 1 < args.len() => {
-                host = args[i + 1].clone();
-                i += 2;
+    let mut scope = Scope { indexes: false, views: false };
+    for word in args {
+        match word.as_str() {
+            "--warn-is-failure" => strict = true,
+            "--indexes" => scope.indexes = true,
+            "--views" => scope.views = true,
+            other => {
+                eprintln!("kevy-cli doctor: {}", crate::tools::argscan::unexpected(other));
+                eprintln!(
+                    "usage: kevy-cli --kevy doctor [--warn-is-failure] [--indexes] [--views]"
+                );
+                return ExitCode::FAILURE;
             }
-            "-p" if i + 1 < args.len() => {
-                port = args[i + 1].parse().unwrap_or(crate::DEFAULT_PORT);
-                i += 2;
-            }
-            "--warn-is-failure" => {
-                strict = true;
-                i += 1;
-            }
-            _ => i += 1,
         }
     }
-    let mut client = match RespClient::connect(&host, port) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("kevy-cli: could not connect to {host}:{port}: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    match run(&mut client, strict) {
+    match run_scoped(client, strict, scope) {
         Ok(code) => code,
         Err(e) => {
             eprintln!("kevy-cli doctor: {e}");

@@ -175,7 +175,7 @@ Measured envelope (receipts in the bench tree):
   at EF 400 holding simultaneously (both clamps at once — a fast
   wrong answer doesn't pass), plus the memory formula against real
   RSS growth (0.5-1.5×).
-- [`bench/PERF-LEDGER.md`](../bench/PERF-LEDGER.md) records the
+- [`PERFORMANCE.md`](https://github.com/goliajp/kevy/blob/develop/PERFORMANCE.md) records the
   comparative shootout: recall-aligned at 1.000, KNN answers in
   0.48 ms vs 0.79 ms — **1.64× ahead** of the RediSearch HNSW in
   redis-stack 7.4.7, on the same corpus.

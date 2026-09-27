@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import pathlib
 import re
+import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -71,7 +72,6 @@ def record(f: pathlib.Path, txt: str, changes: list) -> None:
 # manifests, scripts, and the documents that tell a reader what to import.
 HISTORICAL = (
     "CHANGELOG.md",
-    ".claude/ROADMAP.md",
     "bench/FINDING-",
     "bench/PERF-",
 )
@@ -80,6 +80,14 @@ HISTORICAL = (
 def historical(p) -> bool:
     rel = str(p.relative_to(ROOT))
     return any(rel == h or rel.startswith(h) for h in HISTORICAL)
+
+
+def tracked():
+    """Every file git tracks. Layer 7 is about what the repository tells a
+    reader to import; a local file git does not carry tells nobody."""
+    out = subprocess.run(["git", "-C", str(ROOT), "ls-files", "-z"],
+                         capture_output=True, text=True, check=True).stdout
+    return sorted(ROOT / p for p in out.split("\0") if p)
 
 
 def cargo_files():
@@ -252,7 +260,7 @@ def bump_go_module_major(new: str, changes: list) -> None:
         return
     used = re.compile(r"(github\.com/goliajp/kevy-go)/v\d+")
     want = rf"\1/v{major}"
-    for f in sorted(ROOT.glob("**/*")):
+    for f in tracked():
         if f.is_dir() or skip(f) or historical(f) or f.suffix not in (
                 ".go", ".mod", ".sh", ".md", ".yml", ".yaml"):
             continue

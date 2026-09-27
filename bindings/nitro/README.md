@@ -116,8 +116,8 @@ parks in the kernel via `kevy_sub_wait_raw` (a spin-poll build burned ~one core)
 ratios are the story and hold on both platforms — batched push = 1.3× poll,
 per-message push < poll.)
 
-See `bench/pubsubgate/LEDGER.md` in the kevy repo for the full method and
-raw numbers.
+Published numbers and how to reproduce them are in
+[`PERFORMANCE.md`](https://github.com/goliajp/kevy/blob/develop/PERFORMANCE.md).
 
 ## Build
 
@@ -156,8 +156,8 @@ bash bench/mobilegate.sh expo android    # Android emulator (SDK)
 Because a native build + device boot is heavy and toolchain-bound, this is
 a **developer / CI-on-macOS gate**, not part of the per-push matrix — the
 same status as every other mobile door. It cannot run on a host without a
-booted simulator/emulator. Perf method and raw numbers:
-`bench/pubsubgate/LEDGER.md`.
+booted simulator/emulator. Published numbers:
+[`PERFORMANCE.md`](https://github.com/goliajp/kevy/blob/develop/PERFORMANCE.md).
 
 (The sibling raw JVM/JNI door, `bindings/android`, is pure-JVM and *is*
 host-runnable — see `bench/jnigate.sh`.)

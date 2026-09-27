@@ -92,7 +92,7 @@ PAGES[""] = {
                 {
                     "label": 'テーブル',
                     "code": '# a table is a declaration — compiled to named indexes, once\nTABLE.DECLARE user PREFIX u: PK id COLUMN id str COLUMN name str COLUMN age i64 COLUMN dept str INDEX age range VALUES dept name ORDERPATH by_dept_age ON dept THEN age DESC\n\nHSET u:1 id 1 name ada age 34 dept eng\n\n# the ORDER BY dept, age DESC walk — one composite index, no planner\nIDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20 FIELDS name age',
-                    "note": '型付きカラム、セカンダリインデックス、複合 ORDER BY パス——kevy-cli sql compile なら PG/MySQL のスキーマファイルまでコンパイルできます。ランタイム SQL も join もありません。それは Postgres の仕事です。',
+                    "note": '型付きカラム、セカンダリインデックス、複合 ORDER BY パス——kevy-cli --kevy sql compile なら PG/MySQL のスキーマファイルまでコンパイルできます。ランタイム SQL も join もありません。それは Postgres の仕事です。',
                     "go": '単一テーブルの配信',
                     "href": 'use/app-store/',
                 },
@@ -125,7 +125,7 @@ PAGES[""] = {
             "eyebrow": "なぜ Redis を置き換えられるのか",
             "h2": "プロトコルは同じ。スループットは上。",
             "intro": (
-                "RESP2 と RESP3、206 個のコマンド——redis-cli も、クライアント"
+                "RESP2 と RESP3、209 個のコマンド——redis-cli も、クライアント"
                 "ライブラリも、そのままつながります。1 台のマシン、16 コア、"
                 "ループバック、5 回実行した中央値です。"
             ),
@@ -217,7 +217,7 @@ PAGES["migrate"] = {
             "h2": "Redis から移る",
             "body": [
                 "<b>クライアントは変わりません。</b>kevy は RESP2 と RESP3 を話し、"
-                "206 個のコマンドに応答します。既存のライブラリの接続先を変えるだけで、"
+                "209 個のコマンドに応答します。既存のライブラリの接続先を変えるだけで、"
                 "コードもそのまま、redis-cli もそのままです。新しく覚える SDK も"
                 "プロトコルもありません。",
                 "<b>だから本当の問題は、何が得られるのかだけです。</b>得られるものは "
@@ -278,7 +278,7 @@ PAGES["migrate"] = {
             "t": "code",
             "h2": "移行の手順——Redis から",
             "caption": "Redis から export し、kevy に import して、両者が一致することを確かめます。以下のコマンドは、すべて実行したものです。",
-            "text": '# 1. dump what you want to move. it is a RESP file — readable,\n#    diffable, and it streams rather than loading into memory.\nkevy-cli export -p 6379 --prefix user: dump.resp\n-> exported 41023 keys -> dump.resp\n\n# 2. load it. --strict stops on the first error rather than\n#    limping onward with a half-migrated keyspace.\nkevy-cli import -p 6380 --strict dump.resp\n-> imported 82046 ok, 0 errors, offset 4108331\n\n# 3. prove they agree, rather than hoping.\nkevy-cli digest -p 6379 user:\nkevy-cli digest -p 6380 user:\n-> 41023 keys 3bca92aa52269300     # the same hash, or you did not migrate\n\n# an interrupted import resumes where it stopped:\nkevy-cli import -p 6380 --resume dump.resp',
+            "text": '# 1. dump what you want to move. it is a RESP file — readable,\n#    diffable, and it streams rather than loading into memory.\nkevy-cli -p 6379 -p 6380 -p 6379 -p 6380 --kevy export --prefix user: dump.resp\n-> exported 41023 keys -> dump.resp\n\n# 2. load it. --strict stops on the first error rather than\n#    limping onward with a half-migrated keyspace.\nkevy-cli import --strict dump.resp\n-> imported 82046 ok, 0 errors, offset 4108331\n\n# 3. prove they agree, rather than hoping.\nkevy-cli digest user:\nkevy-cli digest user:\n-> 41023 keys 3bca92aa52269300     # the same hash, or you did not migrate\n\n# an interrupted import resumes where it stopped:\nkevy-cli import -p 6380 --resume dump.resp',
         },
         {
             "t": "prose",
@@ -345,7 +345,7 @@ PAGES["migrate"] = {
             "title": "また出ていきたくなったら",
             "body": (
                 "同じ 3 つのコマンドが、逆向きにも使えます。"
-                "<code>kevy-cli export</code> はプレーンな RESP ファイルを書き出し、"
+                "<code>kevy-cli --kevy export</code> はプレーンな RESP ファイルを書き出し、"
                 "Redis 互換のサーバーなら、どれでもそれを取り込めます。そして "
                 "<code>digest</code> が、コピーが忠実であることを証明します。"
                 "<a href=\"~/docs/migration/\">移行ガイドは、入ってくる手順と同じ"
@@ -431,7 +431,7 @@ PAGES["choose"] = {
             "items": [
                 {
                     "q": "本当に Redis のドロップイン置き換えになりますか",
-                    "a": "ワイヤの上では、なります。RESP2 と RESP3、206 個のコマンドに対応し、クライアントライブラリは違いに気づきません。挙動もおおむね同じですが、その例外こそが要点です。シャードをまたぐ <code>RENAME</code> は原子的ではありません——複数キーの書き込みは shard 単位でのみ原子的です。また SCAN のカーソルは発行したサーバーでのみ有効で、これは Redis Cluster のノード単位の性質と同じです。<a href=\"~/docs/commands/\">206 個すべてのコマンドに、本当の差異と本当のコストを併記してあります</a>。Redis の文書から書き写したものではなく、実装から読み出したものです。",
+                    "a": "ワイヤの上では、なります。RESP2 と RESP3、209 個のコマンドに対応し、クライアントライブラリは違いに気づきません。挙動もおおむね同じですが、その例外こそが要点です。シャードをまたぐ <code>RENAME</code> は原子的ではありません——複数キーの書き込みは shard 単位でのみ原子的です。また SCAN のカーソルは発行したサーバーでのみ有効で、これは Redis Cluster のノード単位の性質と同じです。<a href=\"~/docs/commands/\">206 個すべてのコマンドに、本当の差異と本当のコストを併記してあります</a>。Redis の文書から書き写したものではなく、実装から読み出したものです。",
                 },
                 {
                     "q": "データセットは RAM に収まっている必要がありますか",
@@ -451,7 +451,7 @@ PAGES["choose"] = {
                 },
                 {
                     "q": "手狭になったら、あるいは気が変わったら",
-                    "a": "<code>kevy-cli export</code> がキースペースをプレーンな RESP ファイルに書き出し、Redis 互換のサーバーなら、どれでもそれを取り込めます。そして <code>kevy-cli digest</code> が、何かを捨ててしまう前に、コピーが忠実であることを証明します。<a href=\"~/docs/migration/\">移行ガイド</a>は、入ってくる手順と同じ丁寧さで、出ていく手順も扱っています。",
+                    "a": "<code>kevy-cli --kevy export</code> がキースペースをプレーンな RESP ファイルに書き出し、Redis 互換のサーバーなら、どれでもそれを取り込めます。そして <code>kevy-cli --kevy digest</code> が、何かを捨ててしまう前に、コピーが忠実であることを証明します。<a href=\"~/docs/migration/\">移行ガイド</a>は、入ってくる手順と同じ丁寧さで、出ていく手順も扱っています。",
                 },
             ],
         },
@@ -642,7 +642,7 @@ HGETALL flags""",
             "items": [
                 {"kicker": "ガイド", "title": "クックブック", "body": "セッション、レート制限、リーダーボード、フィードの実用レシピ。", "go": "読む", "href": "docs/cookbook/"},
                 {"kicker": "ガイド", "title": "永続化", "body": "kill -9 で何が残り、fsync の方針が何を代償にするのか。", "go": "読む", "href": "docs/persistence/"},
-                {"kicker": "リファレンス", "title": "全コマンド", "body": "206 個のコマンド。それぞれの本当のコストと、Redis との差異つき。", "go": "調べる", "href": "docs/commands/"},
+                {"kicker": "リファレンス", "title": "全コマンド", "body": "209 個のコマンド。それぞれの本当のコストと、Redis との差異つき。", "go": "調べる", "href": "docs/commands/"},
             ],
         },
     ],
@@ -1181,7 +1181,7 @@ IDX.CREATE idx:status ON PREFIX order: FIELD status   TYPE str KIND range""",
             "items": [
                 {
                     "do": "カラムも、インデックスも、ソートパスも、宣言 1 つで",
-                    "note": "行はプレフィックス配下の普通のハッシュのままです——欠けたカラムは NULL。kevy-cli sql compile schema.sql が、CREATE TABLE / CREATE INDEX からこの行を出力します。",
+                    "note": "行はプレフィックス配下の普通のハッシュのままです——欠けたカラムは NULL。kevy-cli --kevy sql compile schema.sql が、CREATE TABLE / CREATE INDEX からこの行を出力します。",
                     "code": """TABLE.DECLARE orders PREFIX order: PK id COLUMN id str COLUMN customer i64 COLUMN status str COLUMN total f64 INDEX status range VALUES total customer ORDERPATH by_customer ON customer THEN total DESC
 -> OK""",
                 },
@@ -1203,7 +1203,7 @@ IDX.COUNT orders.status EQ open
             "cost": (
                 "<b>ランタイム SQL も join もありません。</b>サーバーは "
                 "<code>SELECT</code> を未知のコマンドとして拒否します。"
-                "<code>kevy-cli sql compile</code> はビルド時に PG/MySQL のスキーマ"
+                "<code>kevy-cli --kevy sql compile</code> はビルド時に PG/MySQL のスキーマ"
                 "ファイルを上の宣言に変え、JOIN、サブクエリ、GROUP BY を名前つきで"
                 "拒否して、それぞれを置き換えるレシピを指し示します。一意性は強制では"
                 "なく検証で、制約はエンジンのチェックではなくレシピです。"

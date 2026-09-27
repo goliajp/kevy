@@ -362,7 +362,7 @@ resync 模式下，回放跳过损坏区：向前扫描，直到长度前缀、C
 
 ## 原子性章程（嵌入式 serving-store，v2.1）
 
-- **`Store::atomic(body)`**——单 shard 事务：闭包期间持有该 shard 的写锁，闭包内的读能看到自己刚写的内容，AOF 追加先攒着、**提交时一次 fsync** 落盘（`always` 下）。事务触及的所有键必须哈希到同一个 shard——所以写模式跨任意键时，serving-store 的钦定配置就是 **1 shard**：原子性完整保留，又不付跨 shard 协调的成本。1 shard 配置的天花板是单核写吞吐；实测数字见 `bench/REPORT.md`。
+- **`Store::atomic(body)`**——单 shard 事务：闭包期间持有该 shard 的写锁，闭包内的读能看到自己刚写的内容，AOF 追加先攒着、**提交时一次 fsync** 落盘（`always` 下）。事务触及的所有键必须哈希到同一个 shard——所以写模式跨任意键时，serving-store 的钦定配置就是 **1 shard**：原子性完整保留，又不付跨 shard 协调的成本。1 shard 配置的天花板是单核写吞吐；实测数字见 [PERFORMANCE.md](https://github.com/goliajp/kevy/blob/develop/PERFORMANCE.md)。
 - **`Store::atomic_all_shards(body)`**——多 shard 事务：按 shard 索引顺序拿下**所有** shard 的写锁（顺序确定 = 不会死锁），返回时按 shard 提交 AOF 批次。代价：闭包期间阻塞其他所有读写——用于维护跨 shard 不变量，别当默认写路径。
 - **`Store::pipeline()`**——**不**原子：每个操作各自拿锁，其他写者会穿插进来。它只负责合批 fsync（N 个操作 → 至多 shard 数次 fsync），仅此而已。
 - 两种原子形式都把条件操作（`ZADD GT`、`SPOP`）的**效果**记成无条件 verb，重放和副本应用因此在构造上就是确定性的。
