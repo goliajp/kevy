@@ -75,12 +75,13 @@ impl PendingSync {
 impl Aof {
     /// The per-tick upkeep of the fsync policy. Call it once per tick.
     ///
-    /// - `No`: writes the user-space buffer into the kernel (no fsync),
-    ///   so a killed process keeps everything appended before the tick.
-    /// - `EverySec`: once a second has passed since the last sync
-    ///   started, writes the buffer into the kernel and returns the
-    ///   fsync as a [`PendingSync`] for the caller to run, typically
-    ///   after releasing whatever lock guards this log.
+    /// - `No` and `EverySec`: writes the user-space buffer into the
+    ///   kernel (no fsync), so a killed process keeps everything appended
+    ///   before the tick.
+    /// - `EverySec`, in addition: once a second has passed since the last
+    ///   sync started, returns the fsync as a [`PendingSync`] for the
+    ///   caller to run, typically after releasing whatever lock guards
+    ///   this log.
     /// - `Always`: nothing to do; every append already synced.
     ///
     /// ```
@@ -101,18 +102,18 @@ impl Aof {
     /// # }
     /// ```
     pub fn tick(&mut self) -> io::Result<Option<PendingSync>> {
+        if matches!(self.fsync, Fsync::Always) {
+            return Ok(None);
+        }
+        self.file.flush()?;
         match self.fsync {
-            Fsync::No => {
-                self.file.flush()?;
-                Ok(None)
-            }
             Fsync::EverySec => self.start_everysec_sync(),
-            Fsync::Always => Ok(None),
+            Fsync::No | Fsync::Always => Ok(None),
         }
     }
 
-    /// Flush+fsync if the `EverySec` window has elapsed; under `No`,
-    /// write the buffer into the kernel. Call once per loop tick. The
+    /// Write the buffer into the kernel (`No`, `EverySec`), and fsync
+    /// if the `EverySec` window has elapsed. Call once per loop tick. The
     /// fsync runs inline — [`Self::tick`] is the variant that hands it
     /// back.
     pub fn maybe_sync(&mut self) -> io::Result<()> {
@@ -122,26 +123,27 @@ impl Aof {
         Ok(())
     }
 
+    // `tick` has just written every buffered record into the kernel, and
+    // all writes go through that one buffer in append order, so the file
+    // in the kernel is always a prefix of the log: the fsync on the handle
+    // taken here covers everything appended before this tick and can never
+    // cover a record whose predecessors are still in user space
     fn start_everysec_sync(&mut self) -> io::Result<Option<PendingSync>> {
         let retry = self.sync_unconfirmed();
         let due = self.dirty && self.last_sync.elapsed() >= Duration::from_secs(1);
         if !(due || retry) {
             return Ok(None);
         }
-        // every record appended so far goes into the kernel before the
-        // handle is taken; all writes go through this one buffer in
-        // append order, so the file in the kernel is always a prefix of
-        // the log and the fsync can never cover a record whose
-        // predecessors are still in user space
-        let file = self.file.flush().and_then(|()| self.file.get_ref().try_clone())?;
-        self.dirty = false;
-        self.last_sync = Instant::now();
-        self.sync_started += 1;
-        Ok(Some(PendingSync {
-            file,
-            generation: self.sync_started,
-            confirmed: Arc::clone(&self.sync_confirmed),
-        }))
+        self.file.get_ref().try_clone().map(|file| {
+            self.dirty = false;
+            self.last_sync = Instant::now();
+            self.sync_started += 1;
+            Some(PendingSync {
+                file,
+                generation: self.sync_started,
+                confirmed: Arc::clone(&self.sync_confirmed),
+            })
+        })
     }
 
     /// A sync was started whose fsync has not been confirmed — still

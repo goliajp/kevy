@@ -54,6 +54,18 @@ fn no_maybe_sync_writes_the_buffer_into_the_kernel() {
 }
 
 #[test]
+fn everysec_tick_writes_the_buffer_inside_the_window() {
+    let path = temp_file("sync-everysec-write");
+    let mut aof = Aof::open(&path, Fsync::EverySec).unwrap();
+    let header = on_disk(&path);
+    aof.append(&set(b"a")).unwrap();
+    assert!(aof.tick().unwrap().is_none(), "the fsync window has not elapsed");
+    assert!(on_disk(&path) > header, "the tick still writes the buffer into the kernel");
+    assert!(aof.dirty, "written is not synced: the next due tick still owes the fsync");
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
 fn everysec_tick_waits_for_the_window() {
     let path = temp_file("sync-window");
     let mut aof = Aof::open(&path, Fsync::EverySec).unwrap();

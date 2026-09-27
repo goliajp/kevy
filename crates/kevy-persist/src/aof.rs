@@ -31,8 +31,8 @@ pub const AOF_MAGIC: &[u8; 9] = b"KEVYAOF1\n";
 /// its time in the `write` syscall (perf-measured: SET 4 KiB, 52% in
 /// `write`/`ksys_write`, on both tmpfs and ext4). MMKV's mmap append
 /// pays no syscall at all; a larger buffer amortises the write across
-/// many appends the same way. `No` empties the buffer on every tick and
-/// `EverySec` at every sync, so its size does not widen either window.
+/// many appends the same way. `No` and `EverySec` empty the buffer on
+/// every tick, so its size does not widen the loss window.
 /// 256 KiB holds ~64 4 KiB appends per syscall; per-shard cost is one
 /// such buffer.
 pub(crate) const AOF_BUF_CAP: usize = 256 * 1024;
@@ -42,8 +42,8 @@ pub(crate) const AOF_BUF_CAP: usize = 256 * 1024;
 pub enum Fsync {
     /// fsync after every write — safest, slowest.
     Always,
-    /// fsync about once per second (call [`Aof::tick`] or
-    /// [`Aof::maybe_sync`] periodically).
+    /// fsync about once per second; each [`Aof::tick`] (or
+    /// [`Aof::maybe_sync`]) writes the buffer into the kernel.
     EverySec,
     /// Never fsync explicitly: each [`Aof::tick`] writes the buffer into
     /// the kernel, and the OS decides when it reaches the disk.
