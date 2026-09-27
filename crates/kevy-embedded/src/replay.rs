@@ -236,11 +236,21 @@ pub(crate) fn apply(store: &mut Store, args: &Argv) {
 
 fn apply_set(store: &mut Store, args: &Argv) {
     if let (Some(k), Some(v)) = (args.get(1), args.get(2)) {
-        // The AOF dump emits plain SET key value (no NX/EX/PX trailing);
-        // server append also logs the raw arg list. Either way, the keyspace
-        // semantics are "overwrite with no TTL" — which is what we replay.
-        store.set(k, v.to_vec(), None, false, false);
+        // A logged SET happened, so NX/XX are moot. A relative EX/PX is
+        // honored so a crash before the PEXPIREAT that follows it still
+        // leaves an expiring key; that frame, when present, then pins the
+        // absolute deadline.
+        store.set(k, v.to_vec(), set_ttl(args), false, false);
     }
+}
+
+/// The relative TTL of a logged `SET … EX s | PX ms`, if any.
+fn set_ttl(args: &Argv) -> Option<Duration> {
+    let i = (3..args.len())
+        .find(|&i| args[i].eq_ignore_ascii_case(b"EX") || args[i].eq_ignore_ascii_case(b"PX"))?;
+    let n = parse_u64(args.get(i + 1)?)?;
+    let unit = if args[i].eq_ignore_ascii_case(b"EX") { 1000 } else { 1 };
+    Some(Duration::from_millis(n.saturating_mul(unit)))
 }
 
 fn apply_incr_by(store: &mut Store, args: &Argv, negate: bool) {

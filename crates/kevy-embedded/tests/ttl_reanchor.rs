@@ -53,3 +53,48 @@ fn set_with_ttl_survives_replay_without_reanchoring() {
     assert!(ttl > 0, "key survived: {ttl}");
     assert!(ttl <= 100_000 - 1_000, "set_with_ttl re-anchored on replay: {ttl}ms of 100000ms");
 }
+
+fn dispatch(s: &Store, parts: &[&[u8]]) -> Vec<u8> {
+    let argv: Vec<Vec<u8>> = parts.iter().map(|p| p.to_vec()).collect();
+    let mut out = Vec::new();
+    s.dispatch_argv(&argv, &mut out);
+    out
+}
+
+/// Every byte of every AOF file under `dir`.
+fn aof_bytes(dir: &std::path::Path) -> Vec<u8> {
+    let mut all = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else {
+                all.extend(std::fs::read(&p).unwrap());
+            }
+        }
+    }
+    all
+}
+
+/// SET with NX/XX and a TTL is one operation, logged in the server's shape:
+/// the value's own frame carries the TTL, then PEXPIREAT pins the deadline,
+/// so no crash point leaves the value without a TTL.
+#[test]
+fn conditional_set_with_ttl_is_one_frame_and_survives_replay() {
+    let dir = kevy_tmpdir::TmpDir::new("ttl-reanchor-setnx");
+    let ttl = reopened_ttl_after(dir.path(), |s| {
+        assert_eq!(dispatch(s, &[b"SET", b"k", b"v", b"NX", b"EX", b"100"]), b"+OK\r\n");
+        assert_eq!(dispatch(s, &[b"SET", b"k", b"w", b"NX", b"EX", b"100"]), b"$-1\r\n");
+        assert_eq!(dispatch(s, &[b"SET", b"k", b"v", b"XX", b"PX", b"100000"]), b"+OK\r\n");
+        assert_eq!(dispatch(s, &[b"SET", b"gone", b"v", b"XX", b"EX", b"5"]), b"$-1\r\n");
+    });
+    assert!(ttl > 0, "key survived: {ttl}");
+    assert!(ttl <= 100_000 - 1_000, "conditional SET re-anchored on replay: {ttl}ms");
+    let aof = aof_bytes(dir.path());
+    let count = |pat: &[u8]| aof.windows(pat.len()).filter(|w| *w == pat).count();
+    assert_eq!(count(b"$2\r\nPX\r\n"), 2, "each applied SET carries its TTL in its own frame");
+    assert_eq!(count(b"PEXPIREAT"), 2, "and each is pinned to an absolute deadline");
+    assert_eq!(count(b"$4\r\ngone"), 0, "a vetoed SET is not logged");
+}
