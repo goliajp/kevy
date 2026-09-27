@@ -306,7 +306,9 @@ pub use url::{ParsedUrl, parse_url};
 
 mod secure;
 pub use kevy_noise::Keypair;
-pub use secure::{SecureStream, SecureUrl, load_client_key, parse_secure_url};
+pub use secure::{SecureStream, SecureWriter};
+mod secure_url;
+pub use secure_url::{SecureUrl, load_client_key, parse_secure_url};
 
 mod pubsub_event;
 pub use pubsub_event::{PubsubEvent, classify_pubsub};
