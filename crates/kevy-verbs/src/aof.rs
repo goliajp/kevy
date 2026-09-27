@@ -171,6 +171,7 @@ mod tests {
             &[b"HEXPIRE", b"h", b"9", b"NX"],
             &[b"HEXPIRE", b"h", b"9", b"FIELDS"],
             &[b"HEXPIRE", b"h", b"9", b"FIELDS", b"two", b"f"],
+            &[b"HEXPIRE", b"h", b"9", b"FIELDS", b"-1", b"f"],
             &[b"HEXPIRE", b"s", b"9", b"FIELDS", b"1", b"f"],
             &[b"HEXPIRE", b"h", b"9", b"FIELDS", b"1", b"gone"],
             &[b"HEXPIRE", b"h", b"9", b"FIELDS", b"1", b"f"],
