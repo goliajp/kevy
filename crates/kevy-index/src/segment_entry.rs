@@ -30,15 +30,6 @@ pub(crate) trait RowRef {
     fn key(&self) -> &[u8];
 }
 
-impl RowRef for Row {
-    fn value(&self) -> &IndexValue {
-        &self.0
-    }
-    fn key(&self) -> &[u8] {
-        &self.1
-    }
-}
-
 impl RowRef for (&IndexValue, &[u8]) {
     fn value(&self) -> &IndexValue {
         self.0
