@@ -531,7 +531,7 @@ the serving tier. Capacity planning in one line:
 > against `MEMORY USAGE` / `IDX.LIST` bytes on a loaded sample.
 
 The per-subsystem formulas (each gated against measured RSS in CI):
-range index ≈ `rows × (value_width + avg_key_len + 48)`; text and ANN
+range index ≈ `rows × (avg_key_len + string_value_len + 82…93)`; text and ANN
 formulas in [text-search](text-search.md) /
 [vector-search](vector-search.md) (1M × 1024d vectors ≈ 4.1 GiB);
 agg ≈ groups-dominated ([indexes](indexes.md)); view members ≈
