@@ -4,10 +4,12 @@ use std::time::Duration;
 
 use crate::store::Store;
 
-use super::util::{
-    ERR_NOT_FLOAT, ERR_NOT_INT, ERR_SYNTAX, arg_f64, arg_i64, arr, bulk, emit_int, err, fmt_score,
-    kevy_err, nil, opt_bulk, rest, simple, wrong_args,
+use super::{emit_int, kevy_err, opt_bulk, rest};
+use kevy_resp::{
+    encode_array_len, encode_bulk, encode_error, encode_null_bulk, encode_simple_string,
 };
+use kevy_verbs::args::{arg_f64, arg_i64};
+use kevy_verbs::reply::{ERR_NOT_FLOAT, ERR_NOT_INT, ERR_SYNTAX, fmt_score, wrong_args};
 
 /// One string-family request; `false` = verb not in this group.
 // LOC-WAIVER: data-driven verb dispatch table — one arm per string verb.
@@ -54,11 +56,11 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
                 wrong_args(out, "incrbyfloat");
             } else if let Some(d) = arg_f64(&argv[2]) {
                 match s.incrbyfloat(&argv[1], d) {
-                    Ok(v) => bulk(out, &fmt_score(v)),
+                    Ok(v) => encode_bulk(out, &fmt_score(v)),
                     Err(e) => kevy_err(out, &e),
                 }
             } else {
-                err(out, ERR_NOT_FLOAT);
+                encode_error(out, ERR_NOT_FLOAT);
             }
         }
         b"GETSET" => {
@@ -87,11 +89,11 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
                 wrong_args(out, "getrange");
             } else if let (Some(a), Some(b)) = (arg_i64(&argv[2]), arg_i64(&argv[3])) {
                 match s.getrange(&argv[1], a, b) {
-                    Ok(v) => bulk(out, &v),
+                    Ok(v) => encode_bulk(out, &v),
                     Err(e) => kevy_err(out, &e),
                 }
             } else {
-                err(out, ERR_NOT_INT);
+                encode_error(out, ERR_NOT_INT);
             }
         }
         b"SETRANGE" => cmd_setrange(s, argv, out),
@@ -101,7 +103,7 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
             } else {
                 match s.mget(&rest(argv, 1)) {
                     Ok(vals) => {
-                        arr(out, vals.len());
+                        encode_array_len(out, vals.len() as i64);
                         for v in vals {
                             opt_bulk(out, v);
                         }
@@ -119,7 +121,7 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
                     .map(|i| (argv[i].as_slice(), argv[i + 1].as_slice()))
                     .collect();
                 match s.mset(&pairs) {
-                    Ok(()) => simple(out, "OK"),
+                    Ok(()) => encode_simple_string(out, "OK"),
                     Err(e) => kevy_err(out, &e),
                 }
             }
@@ -145,25 +147,25 @@ fn cmd_set(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
             b"XX" => xx = true,
             opt @ (b"EX" | b"PX") => {
                 let Some(raw) = argv.get(i + 1) else {
-                    return err(out, ERR_SYNTAX);
+                    return encode_error(out, ERR_SYNTAX);
                 };
                 let Some(n) = arg_i64(raw).filter(|&n| n > 0) else {
-                    return err(out, "ERR invalid expire time in 'set' command");
+                    return encode_error(out, "ERR invalid expire time in 'set' command");
                 };
                 let ms = if opt == b"EX" { n.saturating_mul(1000) } else { n };
                 expire = Some(Duration::from_millis(ms as u64));
                 i += 1;
             }
-            _ => return err(out, ERR_SYNTAX),
+            _ => return encode_error(out, ERR_SYNTAX),
         }
         i += 1;
     }
     if nx && xx {
-        return err(out, ERR_SYNTAX);
+        return encode_error(out, ERR_SYNTAX);
     }
     match s.set_opts(&argv[1], &argv[2], expire, nx, xx) {
-        Ok(true) => simple(out, "OK"),
-        Ok(false) => nil(out), // NX/XX condition not met
+        Ok(true) => encode_simple_string(out, "OK"),
+        Ok(false) => encode_null_bulk(out), // NX/XX condition not met
         Err(e) => kevy_err(out, &e),
     }
 }
@@ -180,11 +182,11 @@ fn cmd_incr_by(s: &Store, argv: &[Vec<u8>], negate: bool, name: &str, out: &mut 
         return wrong_args(out, name);
     }
     let Some(mut delta) = arg_i64(&argv[2]) else {
-        return err(out, ERR_NOT_INT);
+        return encode_error(out, ERR_NOT_INT);
     };
     if negate {
         let Some(neg) = delta.checked_neg() else {
-            return err(out, "ERR decrement would overflow");
+            return encode_error(out, "ERR decrement would overflow");
         };
         delta = neg;
     }
@@ -203,10 +205,10 @@ fn cmd_getex(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
         4 => {
             let opt = argv[2].to_ascii_uppercase();
             if opt != b"EX" && opt != b"PX" {
-                return err(out, ERR_SYNTAX);
+                return encode_error(out, ERR_SYNTAX);
             }
             let Some(n) = arg_i64(&argv[3]).filter(|&n| n > 0) else {
-                return err(out, "ERR invalid expire time in 'getex' command");
+                return encode_error(out, "ERR invalid expire time in 'getex' command");
             };
             let ms = if opt == b"EX" { n.saturating_mul(1000) } else { n };
             match s.getex(&argv[1], Duration::from_millis(ms as u64)) {
@@ -215,7 +217,7 @@ fn cmd_getex(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
             }
         }
         0 | 1 => wrong_args(out, "getex"),
-        _ => err(out, ERR_SYNTAX),
+        _ => encode_error(out, ERR_SYNTAX),
     }
 }
 
@@ -224,10 +226,10 @@ fn cmd_setrange(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
         return wrong_args(out, "setrange");
     }
     let Some(off) = arg_i64(&argv[2]) else {
-        return err(out, ERR_NOT_INT);
+        return encode_error(out, ERR_NOT_INT);
     };
     if off < 0 {
-        return err(out, "ERR offset is out of range");
+        return encode_error(out, "ERR offset is out of range");
     }
     emit_int(out, s.setrange(&argv[1], off as u64, &argv[3]).map(|n| n as i64));
 }

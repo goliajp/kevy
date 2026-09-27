@@ -2,10 +2,12 @@
 
 use crate::store::Store;
 
-use super::util::{
-    ERR_NOT_INT, ERR_SYNTAX, arg_i64, bulk, emit_bulk_array, emit_int, err, kevy_err, nil,
-    nil_array, opt_bulk, rest, simple, wrong_args,
+use super::{emit_bulk_array, emit_int, kevy_err, opt_bulk, rest};
+use kevy_resp::{
+    encode_array_len, encode_bulk, encode_error, encode_null_bulk, encode_simple_string,
 };
+use kevy_verbs::args::arg_i64;
+use kevy_verbs::reply::{ERR_NOT_INT, ERR_SYNTAX, wrong_args};
 
 /// One list-family request; `false` = verb not in this group.
 // LOC-WAIVER: data-driven verb dispatch table — one arm per list verb.
@@ -43,7 +45,7 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
                     Err(e) => kevy_err(out, &e),
                 }
             } else {
-                err(out, ERR_NOT_INT);
+                encode_error(out, ERR_NOT_INT);
             }
         }
         b"LRANGE" => {
@@ -52,7 +54,7 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
             } else if let (Some(a), Some(b)) = (arg_i64(&argv[2]), arg_i64(&argv[3])) {
                 emit_bulk_array(out, s.lrange(&argv[1], a, b));
             } else {
-                err(out, ERR_NOT_INT);
+                encode_error(out, ERR_NOT_INT);
             }
         }
         b"LSET" => {
@@ -60,11 +62,11 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
                 wrong_args(out, "lset");
             } else if let Some(i) = arg_i64(&argv[2]) {
                 match s.lset(&argv[1], i, &argv[3]) {
-                    Ok(()) => simple(out, "OK"),
+                    Ok(()) => encode_simple_string(out, "OK"),
                     Err(e) => kevy_err(out, &e),
                 }
             } else {
-                err(out, ERR_NOT_INT);
+                encode_error(out, ERR_NOT_INT);
             }
         }
         b"LREM" => {
@@ -73,7 +75,7 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
             } else if let Some(c) = arg_i64(&argv[2]) {
                 emit_int(out, s.lrem(&argv[1], c, &argv[3]).map(|n| n as i64));
             } else {
-                err(out, ERR_NOT_INT);
+                encode_error(out, ERR_NOT_INT);
             }
         }
         b"LTRIM" => {
@@ -81,11 +83,11 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
                 wrong_args(out, "ltrim");
             } else if let (Some(a), Some(b)) = (arg_i64(&argv[2]), arg_i64(&argv[3])) {
                 match s.ltrim(&argv[1], a, b) {
-                    Ok(()) => simple(out, "OK"),
+                    Ok(()) => encode_simple_string(out, "OK"),
                     Err(e) => kevy_err(out, &e),
                 }
             } else {
-                err(out, ERR_NOT_INT);
+                encode_error(out, ERR_NOT_INT);
             }
         }
         b"LINSERT" => cmd_linsert(s, argv, out),
@@ -105,7 +107,7 @@ fn cmd_pop(s: &Store, argv: &[Vec<u8>], tail: bool, out: &mut Vec<u8>) {
     let count = if count_given {
         match arg_i64(&argv[2]) {
             Some(c) if c >= 0 => c as usize,
-            _ => return err(out, "ERR value is out of range, must be positive"),
+            _ => return encode_error(out, "ERR value is out of range, must be positive"),
         }
     } else {
         1
@@ -116,14 +118,14 @@ fn cmd_pop(s: &Store, argv: &[Vec<u8>], tail: bool, out: &mut Vec<u8>) {
         Ok(items) => {
             if count_given {
                 if items.is_empty() {
-                    nil_array(out); // key absent / empty
+                    encode_array_len(out, -1); // key absent / empty
                 } else {
                     emit_bulk_array(out, Ok(items));
                 }
             } else {
                 match items.into_iter().next() {
-                    Some(v) => bulk(out, &v),
-                    None => nil(out),
+                    Some(v) => encode_bulk(out, &v),
+                    None => encode_null_bulk(out),
                 }
             }
         }
@@ -140,7 +142,7 @@ fn cmd_linsert(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     } else if argv[2].eq_ignore_ascii_case(b"AFTER") {
         false
     } else {
-        return err(out, ERR_SYNTAX);
+        return encode_error(out, ERR_SYNTAX);
     };
     emit_int(out, s.linsert(&argv[1], before, &argv[3], &argv[4]));
 }

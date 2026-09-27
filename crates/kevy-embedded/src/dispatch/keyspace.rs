@@ -5,10 +5,12 @@ use std::time::Duration;
 
 use crate::store::Store;
 
-use super::util::{
-    ERR_NOT_INT, ERR_SYNTAX, arg_i64, arg_u64, arr, bulk, emit_int, err, int, kevy_err, opt_bulk,
-    rest, simple, wrong_args,
+use super::{emit_int, kevy_err, opt_bulk, rest};
+use kevy_resp::{
+    encode_array_len, encode_bulk, encode_error, encode_integer, encode_simple_string,
 };
+use kevy_verbs::args::{arg_i64, arg_u64};
+use kevy_verbs::reply::{ERR_NOT_INT, ERR_SYNTAX, wrong_args};
 
 /// One keyspace request; `false` = verb not in this group.
 // LOC-WAIVER: data-driven verb dispatch table — one arm per keyspace verb.
@@ -38,7 +40,7 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
         }
         b"TYPE" => {
             if argv.len() == 2 {
-                simple(out, s.type_of(&argv[1]));
+                encode_simple_string(out, s.type_of(&argv[1]));
             } else {
                 wrong_args(out, "type");
             }
@@ -52,7 +54,7 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
         b"PERSIST" => {
             if argv.len() == 2 {
                 match s.persist(&argv[1]) {
-                    Ok(touched) => int(out, i64::from(touched)),
+                    Ok(touched) => encode_integer(out, i64::from(touched)),
                     Err(e) => kevy_err(out, &e),
                 }
             } else {
@@ -62,9 +64,9 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
         b"KEYS" => {
             if argv.len() == 2 {
                 let keys = s.keys(Some(&argv[1]), None);
-                arr(out, keys.len());
+                encode_array_len(out, keys.len() as i64);
                 for k in keys {
-                    bulk(out, &k);
+                    encode_bulk(out, &k);
                 }
             } else {
                 wrong_args(out, "keys");
@@ -90,15 +92,15 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
         }
         b"TIME" => {
             let (secs, micros) = s.time();
-            arr(out, 2);
-            bulk(out, secs.to_string().as_bytes());
-            bulk(out, micros.to_string().as_bytes());
+            encode_array_len(out, 2);
+            encode_bulk(out, secs.to_string().as_bytes());
+            encode_bulk(out, micros.to_string().as_bytes());
         }
         // The server answers DBSIZE / FLUSHALL regardless of extra
         // args — mirror that tolerance.
-        b"DBSIZE" => int(out, s.dbsize() as i64),
+        b"DBSIZE" => encode_integer(out, s.dbsize() as i64),
         b"FLUSHALL" => match s.flushall() {
-            Ok(()) => simple(out, "OK"),
+            Ok(()) => encode_simple_string(out, "OK"),
             Err(e) => kevy_err(out, &e),
         },
         _ => return false,
@@ -113,7 +115,7 @@ fn cmd_ttl(s: &Store, argv: &[Vec<u8>], in_secs: bool, name: &str, out: &mut Vec
         return wrong_args(out, name);
     }
     let ms = s.ttl_ms(&argv[1]);
-    int(out, if in_secs && ms >= 0 { (ms + 500) / 1000 } else { ms });
+    encode_integer(out, if in_secs && ms >= 0 { (ms + 500) / 1000 } else { ms });
 }
 
 /// `EXPIRE`/`PEXPIRE`: a non-positive TTL deletes the key (returning 1
@@ -123,7 +125,7 @@ fn cmd_expire(s: &Store, argv: &[Vec<u8>], unit_ms: i64, name: &str, out: &mut V
         return wrong_args(out, name);
     }
     let Some(n) = arg_i64(&argv[2]) else {
-        return err(out, ERR_NOT_INT);
+        return encode_error(out, ERR_NOT_INT);
     };
     // each branch is one store call: a separate existence check would be a
     // second lock, and the reply would describe a key another thread changed
@@ -144,7 +146,7 @@ fn cmd_expireat(s: &Store, argv: &[Vec<u8>], in_secs: bool, name: &str, out: &mu
         return wrong_args(out, name);
     }
     let Some(n) = arg_i64(&argv[2]) else {
-        return err(out, ERR_NOT_INT);
+        return encode_error(out, ERR_NOT_INT);
     };
     let res = (|| {
         let at = n.max(0) as u64;
@@ -162,7 +164,7 @@ fn cmd_scan(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
         return wrong_args(out, "scan");
     }
     let Some(cursor) = arg_u64(&argv[1]) else {
-        return err(out, "ERR invalid cursor");
+        return encode_error(out, "ERR invalid cursor");
     };
     let mut pattern: Option<&[u8]> = None;
     let mut count = 10usize; // Redis default work bound
@@ -170,22 +172,22 @@ fn cmd_scan(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     let mut i = 2;
     while i < argv.len() {
         let Some(val) = argv.get(i + 1) else {
-            return err(out, ERR_SYNTAX);
+            return encode_error(out, ERR_SYNTAX);
         };
         if argv[i].eq_ignore_ascii_case(b"MATCH") {
             pattern = Some(val.as_slice());
         } else if argv[i].eq_ignore_ascii_case(b"COUNT") {
             let Some(n) = arg_i64(val) else {
-                return err(out, ERR_NOT_INT);
+                return encode_error(out, ERR_NOT_INT);
             };
             if n < 1 {
-                return err(out, ERR_SYNTAX);
+                return encode_error(out, ERR_SYNTAX);
             }
             count = n as usize;
         } else if argv[i].eq_ignore_ascii_case(b"TYPE") {
             type_filter = Some(val.as_slice());
         } else {
-            return err(out, ERR_SYNTAX);
+            return encode_error(out, ERR_SYNTAX);
         }
         i += 2;
     }
@@ -193,11 +195,11 @@ fn cmd_scan(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     if let Some(t) = type_filter {
         keys.retain(|k| s.type_of(k).as_bytes() == t);
     }
-    arr(out, 2);
-    bulk(out, next.to_string().as_bytes());
-    arr(out, keys.len());
+    encode_array_len(out, 2);
+    encode_bulk(out, next.to_string().as_bytes());
+    encode_array_len(out, keys.len() as i64);
     for k in keys {
-        bulk(out, &k);
+        encode_bulk(out, &k);
     }
 }
 
@@ -210,9 +212,9 @@ fn cmd_rename(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>, nx: bool) {
     }
     let res = if nx { s.renamenx(&argv[1], &argv[2]) } else { s.rename(&argv[1], &argv[2]) };
     match res {
-        Ok(true) if nx => int(out, 1),
-        Ok(true) => simple(out, "OK"),
-        Ok(false) => int(out, 0), // NX: destination exists
+        Ok(true) if nx => encode_integer(out, 1),
+        Ok(true) => encode_simple_string(out, "OK"),
+        Ok(false) => encode_integer(out, 0), // NX: destination exists
         Err(e) => kevy_err(out, &e),
     }
 }
@@ -222,7 +224,7 @@ fn cmd_copy(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     let replace = match argv.len() {
         3 => false,
         4 if argv[3].eq_ignore_ascii_case(b"REPLACE") => true,
-        4 => return err(out, ERR_SYNTAX),
+        4 => return encode_error(out, ERR_SYNTAX),
         _ => return wrong_args(out, "copy"),
     };
     // Redis refuses a key copied onto itself, and says which two
@@ -232,10 +234,10 @@ fn cmd_copy(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     // already there". The `Store::copy` API method is unchanged: this
     // is the protocol face matching the protocol.
     if argv[1] == argv[2] {
-        return err(out, "ERR source and destination objects are the same");
+        return encode_error(out, "ERR source and destination objects are the same");
     }
     match s.copy(&argv[1], &argv[2], replace) {
-        Ok(copied) => int(out, i64::from(copied)),
+        Ok(copied) => encode_integer(out, i64::from(copied)),
         Err(e) => kevy_err(out, &e),
     }
 }

@@ -42,7 +42,7 @@ publishable on their own.
 L6  kevy-jni  kevy-napi                       ← language ABIs
 L5  kevy  kevy-cli  kevy-client  kevy-ffi  kevy-wasm
 L4  kevy-rt  kevy-embedded  kevy-client-async  kevy-cluster-rw  kevy-mcp
-L3  kevy-persist  kevy-replicate  kevy-elect  kevy-resp-client
+L3  kevy-persist  kevy-replicate  kevy-elect  kevy-resp-client  kevy-verbs
 L2  kevy-store  kevy-resp  kevy-window  kevy-sql
 L1  kevy-map  kevy-bytes  kevy-seg  kevy-vlog  kevy-index  kevy-scalar
                                                           kevy-lua-host
