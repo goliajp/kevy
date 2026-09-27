@@ -374,4 +374,24 @@ mod tests {
         let (mut s, _) = connect(addr, &Keypair::from_secret([2; 32]), &server).unwrap();
         assert!(matches!(s.read(&mut buf), Ok(0) | Err(_)));
     }
+
+    #[test]
+    fn encrypted_cluster_ports_follow_their_settings() {
+        let mut cfg = Config::default();
+        cfg.cluster.enabled = true;
+        cfg.server.threads = 3;
+        cfg.secure.listen_port = 7000;
+        assert_eq!(secure_cluster_port_base(&cfg), 7001, "listen_port + 1 by default");
+        assert_eq!(advertised_secure_cluster_base(&cfg), 7001, "advertised as bound");
+        cfg.secure.cluster_port_base = 7100;
+        cfg.secure.announce_cluster_port_base = 9100;
+        assert_eq!(advertised_secure_cluster_base(&cfg), 9100, "a NAT's port is told");
+        let plain = crate::cluster_port_base(&cfg);
+        assert_eq!(
+            port_pairs(&cfg),
+            vec![(7000, cfg.server.port), (7100, plain), (7101, plain + 1), (7102, plain + 2)]
+        );
+        cfg.cluster.enabled = false;
+        assert_eq!(port_pairs(&cfg), vec![(7000, cfg.server.port)]);
+    }
 }

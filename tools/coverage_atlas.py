@@ -47,6 +47,10 @@ CORPUS = ROOT / "suite/corpus.toml"
 REGISTER = ROOT / "suite/dead-paths.toml"
 OUT_MD = ROOT / "target/reports/DEAD-ATLAS.md"
 OUT_SET = ROOT / "bench/DEAD-SET.json"
+# Every symbol this run has a region for, dead or not. An [[unstable]]
+# register entry names a symbol that is dead in SOME runs, so it is checked
+# against this, not against the dead set it may be absent from this time.
+OUT_PRESENT = ROOT / "target/reports/DEAD-PRESENT.json"
 
 CODE_REGION = 0
 PANIC = re.compile(r"\b(unreachable!|panic!|todo!|unimplemented!|abort\(|\.expect\(|\.unwrap\(\))")
@@ -483,8 +487,11 @@ def build(path):
             excluded += 1
             continue
         dead[k] = v
-    names = {n for k in dead for n in owners[k]}
+    names = {n for ns in owners.values() for n in ns}
     dm = demangle(names)
+    OUT_PRESENT.parent.mkdir(parents=True, exist_ok=True)
+    present = sorted({symbol_of(d) for d in dm.values()})
+    OUT_PRESENT.write_text(json.dumps(present, indent=0) + "\n")
     gated = gated_modules(ROOT / "crates")
     _, by_crate = register()
     cache, rows = {}, []
