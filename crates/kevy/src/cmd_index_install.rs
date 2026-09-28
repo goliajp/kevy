@@ -2,19 +2,54 @@
 //! the new index into the catalog every shard reads. Split from
 //! `cmd_index.rs` for the 500-line cap.
 
+use std::collections::HashMap;
+
 use kevy_index::{IndexSpec, Partitioning, order_key, splits_from_sample};
-use kevy_resp::encode_error;
+use kevy_resp::{ArgvView, encode_error};
 use kevy_store::Store;
 
-use crate::index_runtime;
+use crate::index_runtime::{self, SAMPLE_PER_PARTITION};
 use crate::state::Ctx;
 
 /// The partitioning an IDX.CREATE asked for, before its split values are
 /// encoded in the index's order.
 #[derive(Default)]
 pub(crate) struct PartitionOpt {
-    global: bool,
-    split: Vec<Vec<u8>>,
+    pub(crate) global: bool,
+    pub(crate) split: Vec<Vec<u8>>,
+}
+
+/// Where a sampled global index's split points come from.
+pub(crate) enum Sampler<'a> {
+    /// The rows of the shard running the command.
+    Shard(&'a mut Store),
+    /// What every shard sent in the first phase of the two-phase form:
+    /// samples per index name, and whether any shard's tiering floor
+    /// refuses a new index.
+    Gathered { samples: &'a HashMap<Vec<u8>, Vec<Vec<u8>>>, tier_blocked: bool },
+}
+
+impl Sampler<'_> {
+    /// Encoded values sampled for `spec`, up to [`SAMPLE_PER_PARTITION`]
+    /// per partition of `nshards`.
+    pub(crate) fn sample(&mut self, spec: &IndexSpec, nshards: usize) -> Vec<Vec<u8>> {
+        match self {
+            Sampler::Shard(store) => {
+                index_runtime::sample_values(store, spec, SAMPLE_PER_PARTITION * nshards)
+            }
+            Sampler::Gathered { samples, .. } => {
+                samples.get(&spec.name).cloned().unwrap_or_default()
+            }
+        }
+    }
+
+    /// Whether the tiering floor refuses a new index.
+    pub(crate) fn tier_blocked(&self) -> bool {
+        match self {
+            Sampler::Shard(store) => store.tier_index_floor_blocked(0),
+            Sampler::Gathered { tier_blocked, .. } => *tier_blocked,
+        }
+    }
 }
 
 /// `PARTITION local|global` or `SPLIT v`: `None` when `opt` is neither, so
@@ -56,7 +91,7 @@ pub(crate) fn is_partition_opt(a: &[u8]) -> bool {
 /// of a sample of this shard's rows (none when there are no rows yet).
 fn partitioning(
     p: PartitionOpt,
-    store: &mut Store,
+    sampler: &mut Sampler<'_>,
     spec: &IndexSpec,
     nshards: usize,
     out: &mut Vec<u8>,
@@ -64,9 +99,7 @@ fn partitioning(
     let ty = spec.ty;
     if p.global && p.split.is_empty() {
         let n = nshards.max(1);
-        let sample =
-            index_runtime::sample_values(store, spec, index_runtime::SAMPLE_PER_PARTITION * n);
-        return Ok(Partitioning::Global { splits: splits_from_sample(sample, n) });
+        return Ok(Partitioning::Global { splits: splits_from_sample(sampler.sample(spec, n), n) });
     }
     if !p.global {
         if !p.split.is_empty() {
@@ -90,16 +123,34 @@ fn partitioning(
     Ok(Partitioning::Global { splits })
 }
 
+/// `IDX.CREATE` with the split points of a sampled global index taken
+/// from `sampler`: this shard's rows, or every shard's (the two-phase
+/// form, `crate::cmd_global_sample`).
+pub(crate) fn create<A: ArgvView + ?Sized>(
+    ctx: &Ctx<'_>,
+    sampler: &mut Sampler<'_>,
+    args: &A,
+    out: &mut Vec<u8>,
+) {
+    let Some((spec, part)) = crate::cmd_index::parse_create(args, out) else {
+        return;
+    };
+    if sampler.tier_blocked() {
+        return encode_error(out, crate::cmd_index::TIER_FLOOR_REFUSAL);
+    }
+    install_new_index(ctx, sampler, spec, part, out);
+}
+
 /// Clone the catalog, add `spec` with its partitioning, and on success
 /// persist + install it.
 pub(crate) fn install_new_index(
     ctx: &Ctx<'_>,
-    store: &mut Store,
+    sampler: &mut Sampler<'_>,
     spec: IndexSpec,
     part: PartitionOpt,
     out: &mut Vec<u8>,
 ) {
-    let Ok(partitioning) = partitioning(part, store, &spec, ctx.state.nshards(), out) else {
+    let Ok(partitioning) = partitioning(part, sampler, &spec, ctx.state.nshards(), out) else {
         return;
     };
     let mut cat = ctx.state.catalogs.index().map(|c| (*c).clone()).unwrap_or_default();

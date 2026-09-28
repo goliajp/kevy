@@ -31,6 +31,7 @@ use kevy_resp::{ArgvView, encode_array_len, encode_bulk, encode_error, encode_in
 use kevy_rt::ExtensionReduced;
 use kevy_store::Store;
 
+use crate::cmd_index_install::Sampler;
 use crate::cmd_index_query::{ST_BUILDING, ST_NOINDEX, ST_OK};
 use crate::state::{CatalogState, Ctx, RuntimeState};
 
@@ -60,13 +61,32 @@ pub(crate) fn persist_sidecar(dir: Option<&Path>, cat: &TableCatalog) {
     }
 }
 
+/// `TABLE.DECLARE` / `ENSURE` / `REPLACE` dispatched on the shard that
+/// runs them: a sampled `GLOBAL` path samples this shard's rows (the
+/// router sends such a declaration through the two-phase form, so this is
+/// the path inside a transaction).
+pub(crate) fn cmd_table_local<A: ArgvView + ?Sized>(
+    ctx: &Ctx<'_>,
+    upper: &[u8],
+    store: &mut Store,
+    args: &A,
+    out: &mut Vec<u8>,
+) {
+    let sampler = &mut Sampler::Shard(store);
+    match upper {
+        b"TABLE.DECLARE" => cmd_table_declare(ctx, sampler, args, out),
+        b"TABLE.ENSURE" => cmd_table_ensure(ctx, sampler, args, out),
+        _ => cmd_table_replace(ctx, sampler, args, out),
+    }
+}
+
 /// `TABLE.DECLARE <name> PREFIX <p> PK <col> COLUMN <n> <ty> …` — the
 /// full grammar and every named refusal live in `kevy_index`. Atomic:
 /// the table AND all its compiled indexes admit into cloned catalogs
 /// first; nothing installs on any error.
 pub(crate) fn cmd_table_declare<A: ArgvView + ?Sized>(
     ctx: &Ctx<'_>,
-    store: &mut kevy_store::Store,
+    sampler: &mut Sampler<'_>,
     args: &A,
     out: &mut Vec<u8>,
 ) {
@@ -77,8 +97,8 @@ pub(crate) fn cmd_table_declare<A: ArgvView + ?Sized>(
     };
     // The tiering floor discipline IDX.CREATE keeps (RFC §4 row 16):
     // compiled indexes are the fixed layer demotion cannot reclaim.
-    if crate::cmd_index::tier_floor_refused(store, out) {
-        return;
+    if sampler.tier_blocked() {
+        return encode_error(out, crate::cmd_index::TIER_FLOOR_REFUSAL);
     }
     let mut tcat = ctx.state.catalogs.table().map(|c| (*c).clone()).unwrap_or_default();
     if let Err(e) = tcat.create(spec.clone()) {
@@ -90,7 +110,7 @@ pub(crate) fn cmd_table_declare<A: ArgvView + ?Sized>(
         Err(e) => return encode_error(out, &e),
     };
     let n = ctx.state.nshards();
-    if let Err(e) = crate::cmd_table_global::admit(&mut icat, compiled, &globals, store, n) {
+    if let Err(e) = crate::cmd_table_global::admit(&mut icat, compiled, &globals, sampler, n) {
         return encode_error(out, &e);
     }
     persist_sidecar(ctx.state.sidecar_dir(), &tcat);
@@ -107,7 +127,7 @@ pub(crate) fn cmd_table_declare<A: ArgvView + ?Sized>(
 /// its own verb ([`cmd_table_replace`]).
 pub(crate) fn cmd_table_ensure<A: ArgvView + ?Sized>(
     ctx: &Ctx<'_>,
-    store: &mut kevy_store::Store,
+    sampler: &mut Sampler<'_>,
     args: &A,
     out: &mut Vec<u8>,
 ) {
@@ -118,7 +138,7 @@ pub(crate) fn cmd_table_ensure<A: ArgvView + ?Sized>(
     };
     let existing = ctx.state.catalogs.table().and_then(|c| c.get(&spec.name).cloned());
     match existing {
-        None => cmd_table_declare(ctx, store, args, out),
+        None => cmd_table_declare(ctx, sampler, args, out),
         Some(cur) if cur.sans_auto() == spec => {
             let names = compile_table(&spec).map(|c| c.into_iter().map(|i| i.name).collect());
             let icat = ctx.state.catalogs.index().map(|c| (*c).clone()).unwrap_or_default();
@@ -143,7 +163,7 @@ pub(crate) fn cmd_table_ensure<A: ArgvView + ?Sized>(
 /// so a bad replacement leaves the old one standing.
 pub(crate) fn cmd_table_replace<A: ArgvView + ?Sized>(
     ctx: &Ctx<'_>,
-    store: &mut kevy_store::Store,
+    sampler: &mut Sampler<'_>,
     args: &A,
     out: &mut Vec<u8>,
 ) {
@@ -160,7 +180,7 @@ pub(crate) fn cmd_table_replace<A: ArgvView + ?Sized>(
         let mut scratch = Vec::new();
         cmd_table_drop_by_name(ctx, &spec.name, &mut scratch);
     }
-    cmd_table_declare(ctx, store, args, out);
+    cmd_table_declare(ctx, sampler, args, out);
 }
 
 /// The drop body, callable with a bare name (REPLACE's first half).

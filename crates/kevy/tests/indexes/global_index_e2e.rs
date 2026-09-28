@@ -557,12 +557,10 @@ fn sampled_partitions_start_even_drift_shows_and_a_rebuild_evens_them_again() {
     load(&mut w, 0, 40_000, |i| (i.wrapping_mul(2_654_435_761) >> 8) % 1_000_000);
     create(&mut w, b"g", &[b"PARTITION", b"global"]);
     wait_ready(&mut w, b"g");
-    // CREATE samples the shard it runs on: 2,500 rows here, about 156 per
-    // partition, so a partition's share varies by about 8% and the largest
-    // of 16 lands near two of those; a rebuild samples every shard
+    // every shard sends 512 rows' values: 8,192 samples, 512 per partition
     let (max, mean) = spread(&mut w, "g");
-    eprintln!("uniform, N=16, one shard's sample: max/mean {:.3}", max / mean);
-    assert!(max / mean <= 1.3, "uniform: {max} / {mean}");
+    eprintln!("uniform, N=16: max/mean {:.3}", max / mean);
+    assert!(max / mean <= 1.1, "uniform: {max} / {mean}");
     // append-only drift: new rows all above the old largest value
     load(&mut w, 40_000, 60_000, |i| 1_000_000 + i);
     let (max, mean) = spread(&mut w, "g");
@@ -636,4 +634,17 @@ fn a_shard_holding_512_rows_per_partition_samples_even_partitions() {
     let (max, mean) = spread(&mut w, "g");
     eprintln!("uniform, N=4: max/mean {:.3}", max / mean);
     assert!(max / mean <= 1.1, "{max} / {mean}");
+}
+
+#[test]
+fn a_sampled_global_index_created_inside_multi() {
+    let srv = Server::start(4);
+    let mut w = srv.wire();
+    load(&mut w, 0, 2_000, |i| i % 100);
+    assert_eq!(run(&mut w, "MULTI"), "+OK\r\n");
+    let create = "IDX.CREATE g ON PREFIX user: FIELD age TYPE i64 KIND range PARTITION global";
+    assert_eq!(run(&mut w, create), "+QUEUED\r\n");
+    assert_eq!(run(&mut w, "EXEC"), "*1\r\n+OK\r\n");
+    wait_ready(&mut w, b"g");
+    assert_eq!(described_splits(&mut w, b"g"), [25, 50, 75]);
 }
