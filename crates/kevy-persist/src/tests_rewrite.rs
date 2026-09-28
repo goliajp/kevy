@@ -651,3 +651,31 @@ fn a_concurrent_rewrite_keeps_per_field_ttls() {
     assert_eq!(deadlines, store.hash_field_deadlines(b"h", &[b"f1", b"f2"]));
     assert!(deadlines[0].is_some() && deadlines[1].is_none());
 }
+
+#[test]
+fn rewrite_writes_a_packed_row_and_an_integer_score_back() {
+    let path = temp_aof("rewrite-packed");
+    let mut src = Store::new();
+    src.set_packed_rows(true);
+    src.hset(
+        b"row",
+        &[(b"id".as_slice(), b"7".as_slice()), (b"name".as_slice(), b"ann".as_slice())],
+    )
+    .unwrap();
+    src.pack_row(b"row", &[b"id".to_vec(), b"name".to_vec()]);
+    // an integer-valued score is written in its integer form
+    src.zadd(b"z", &[(3.0, b"a".as_slice()), (-2.5, b"b".as_slice())]).unwrap();
+    let mut aof = Aof::open(&path, Fsync::Always).unwrap();
+    aof.rewrite_from(&src).unwrap();
+    drop(aof);
+    let log = std::fs::read(&path).unwrap();
+    assert!(log.windows(5).any(|w| w == b"$1\r\n3"), "the score is written as 3");
+
+    let mut dst = Store::new();
+    replay_aof(&path, |args| apply_for_test(&mut dst, &args)).unwrap();
+    assert_eq!(dst.hget(b"row", b"id").unwrap(), Some(&b"7"[..]));
+    assert_eq!(dst.hget(b"row", b"name").unwrap(), Some(&b"ann"[..]));
+    assert_eq!(dst.zscore(b"z", b"a").unwrap(), Some(3.0));
+    assert_eq!(dst.zscore(b"z", b"b").unwrap(), Some(-2.5));
+    let _ = std::fs::remove_file(&path);
+}
