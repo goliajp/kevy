@@ -193,6 +193,61 @@ def _have_pgcmp_infra():
     return True, ""
 
 
+def _have_nightly_rustdoc():
+    r = subprocess.run(["rustup", "run", "nightly", "rustdoc", "--version"],
+                       capture_output=True, text=True)
+    if r.returncode == 0:
+        return True, ""
+    return False, "no nightly toolchain (rustup toolchain install nightly)"
+
+
+def _have_doc_coverage():
+    if list((ROOT / "target/doc").glob("*.txt")):
+        return True, ""
+    return False, ("no rustdoc coverage tables in target/doc (RUSTDOCFLAGS='-Z unstable-options "
+                   "--show-coverage' cargo +nightly doc --workspace --no-deps)")
+
+
+def _have_semver_checks():
+    if shutil.which("cargo-semver-checks"):
+        return True, ""
+    return False, "cargo-semver-checks is not installed"
+
+
+# Set when a tier starts: an input another row produces must come from this
+# run, not from the copy git tracks.
+RUN_STARTED = 0.0
+
+
+def _fresh_stone_report():
+    """The report stone-report wrote in this run. The file is tracked, so
+    existing proves nothing: stonegate would judge the checked-in copy."""
+    p = ROOT / "bench/STONE-REPORT.json"
+    if p.exists() and p.stat().st_mtime >= RUN_STARTED:
+        return True, ""
+    return False, "stone-report did not write bench/STONE-REPORT.json in this run"
+
+
+PROBES = {
+    "binaries-debug": lambda: _have_binaries("debug"),
+    "binaries-release": lambda: _have_binaries("release"),
+    "linux": lambda: _have_linux(),
+    "box": lambda: _have_box(),
+    "node": lambda: _have_node(),
+    "chromium": lambda: _have_chromium(),
+    "docker": lambda: _have_docker(),
+    "web-deps": lambda: _have_web_deps(),
+    "pgcmp-infra": lambda: _have_pgcmp_infra(),
+    "wasm-artifact": lambda: _have_wasm_artifact(),
+    "device": lambda: _have_device(),
+    "nightly rustdoc": lambda: _have_nightly_rustdoc(),
+    "nightly rustdoc coverage tables in target/doc": lambda: _have_doc_coverage(),
+    "cargo-semver-checks": lambda: _have_semver_checks(),
+    "bench/STONE-REPORT.json from stone-report": lambda: _fresh_stone_report(),
+    "ci": lambda: (False, "runs in CI, not locally"),
+}
+
+
 def _have_device():
     if os.environ.get("KEVY_DEVICE") == "1":
         return True, ""
@@ -216,20 +271,7 @@ def children_cpu():
 def requirement_gap(check):
     """The first unmet requirement, or None."""
     for r in check.get("requires", []):
-        ok, why = {
-            "binaries-debug": lambda: _have_binaries("debug"),
-            "binaries-release": lambda: _have_binaries("release"),
-            "linux": _have_linux,
-            "box": _have_box,
-            "node": _have_node,
-            "chromium": _have_chromium,
-            "docker": _have_docker,
-            "web-deps": _have_web_deps,
-            "pgcmp-infra": _have_pgcmp_infra,
-            "wasm-artifact": _have_wasm_artifact,
-            "device": _have_device,
-            "ci": lambda: (False, "runs in CI, not locally"),
-        }[r]()
+        ok, why = PROBES[r]()
         if not ok:
             return f"{r}: {why}"
     return None
@@ -310,6 +352,9 @@ def audit(suite, checks):
     for r in sorted(used - set(declared)):
         bad.append(f"requirement {r!r} is named by a check but not declared in "
                    f"[suite.requirements] — nothing says where it is met")
+    for r in sorted(used - set(PROBES)):
+        bad.append(f"requirement {r!r} has no probe in tools/suite.py — a tier "
+                   f"that reaches a check asking for it stops with a KeyError")
     for r in sorted(set(declared) - used):
         bad.append(f"requirement {r!r} is declared but no check asks for it — "
                    f"the list rotted")
@@ -361,6 +406,8 @@ def run_tier(suite, checks, tier, only=None, area=None):
 
     results, cpu_of = [], {}
     t_start = time.monotonic()
+    global RUN_STARTED
+    RUN_STARTED = time.time()
     for c in selected:
         gap = requirement_gap(c)
         if gap:

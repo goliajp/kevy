@@ -45,6 +45,7 @@ def refuse(msg):
 def norm(cmd):
     """One comparable form: no quiet flags, no leading env assignments, and
     a bench script is itself whatever arguments it is handed."""
+    cmd = re.split(r" \|\|| \| | 2>&1", cmd)[0]
     toks = [t for t in cmd.split() if t != "-q"]
     while toks and ENV_ASSIGN.match(toks[0]):
         toks.pop(0)
@@ -57,6 +58,7 @@ def ci_commands():
     out = []
     for n, line in enumerate(CI.read_text(encoding="utf-8").splitlines(), 1):
         s = re.sub(r"^(-\s+)?run:\s*", "", line.strip())
+        s = re.sub(r"^([A-Z_][A-Z0-9_]*=\S*\s+)+", "", s)
         if VERDICT.match(s) and not s.startswith("cargo build"):
             out.append((n, norm(s.rstrip("\\").strip())))
     return out
@@ -86,7 +88,7 @@ def main():
         refuse(f"read no commands from {CI.relative_to(ROOT)}")
     bad, used = [], set()
     for line, cmd in seen:
-        hits = [(i, t) for i, t, rc in rows if cmd == rc or cmd.startswith(rc + " ")]
+        hits = [(i, t) for i, t, rc in rows if cmd == rc]
         if hits:
             late = [i for i, t in hits if rank[t] > rank["premerge"]]
             if len(late) == len(hits):
