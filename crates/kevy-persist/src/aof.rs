@@ -209,15 +209,16 @@ impl Aof {
         Self::open_after_replay(path, fsync, resync, None)
     }
 
-    /// [`Self::open_with_repair`] for a file a replay just walked to its
-    /// end: `whole` is its length then. A v2 file still that long has no
-    /// tail to repair — the repair would re-walk it with the same parser
-    /// and stop at the same byte — so the second walk is skipped.
+    /// [`Self::open_with_repair`] for a file a replay just walked: `settled`
+    /// is where it stopped, when it dropped nothing, so anything past it is
+    /// a mapped log's unused zero preallocation. A v2 file is cut back to
+    /// that length without the second walk the repair would make — with
+    /// the same parser, it would stop at the same byte.
     pub fn open_after_replay(
         path: &Path,
         fsync: Fsync,
         resync: bool,
-        whole: Option<u64>,
+        settled: Option<u64>,
     ) -> io::Result<Self> {
         let mut file = OpenOptions::new().create(true).append(true).open(path)?;
         let mut size = file.metadata().map_or(0, |m| m.len());
@@ -233,9 +234,16 @@ impl Aof {
             // Existing file: keep appending in ITS format. V1 (magic'd or
             // legacy bare-RESP) upgrades to V2 at the next rewrite.
             format = crate::replay::sniff_format(path)?;
-            let walked = whole == Some(size) && format == crate::AofFormat::V2;
-            if !walked {
-                quarantined = crate::aof_util::repair_tail(path, &mut file, &mut size, resync)?;
+            match settled.filter(|&s| s <= size && format == crate::AofFormat::V2) {
+                Some(s) if s < size => {
+                    file.set_len(s)?;
+                    file.sync_data()?;
+                    size = s;
+                }
+                Some(_) => {}
+                None => {
+                    quarantined = crate::aof_util::repair_tail(path, &mut file, &mut size, resync)?;
+                }
             }
         }
         Ok(Aof {

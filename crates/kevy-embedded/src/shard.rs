@@ -144,8 +144,8 @@ fn build_shards_persist(
 
 /// Open each shard's live AOF for append (if persistence is on). The
 /// open repairs (quarantines + truncates) any dropped tail replay just
-/// tolerated — the quarantine paths land in `report`. `walked[i]` is shard
-/// i's AOF length when its replay consumed all of it.
+/// tolerated — the quarantine paths land in `report`. `walked[i]` is where shard
+/// i's replay stopped, when it dropped nothing.
 #[cfg(feature = "persist")]
 fn open_live_aofs(
     config: &Config,

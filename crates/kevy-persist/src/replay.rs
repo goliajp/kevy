@@ -170,6 +170,7 @@ fn replay_v1_slice(
         bytes: total as u64,
         replayed_bytes: pos as u64,
         dropped_bytes: (total - pos) as u64,
+        zero_tail: 0,
         corrupt,
         resynced_ranges: Vec::new(),
     })
@@ -203,8 +204,11 @@ pub struct ReplayReport {
     /// Bytes actually replayed (the valid prefix).
     pub replayed_bytes: u64,
     /// Bytes past the last complete frame — dropped, then quarantined and
-    /// truncated by [`crate::Aof::open`].
+    /// truncated by [`crate::Aof::open`]. The zero tail is not among them.
     pub dropped_bytes: u64,
+    /// Zeros from the last record to the end of the file: the unused part
+    /// of a mapped log's preallocation, cut off without quarantine.
+    pub zero_tail: u64,
     /// True when the stop was a corrupt frame (vs a clean end or a
     /// partial trailing frame).
     pub corrupt: bool,
@@ -299,29 +303,32 @@ fn stream_v2(
         commands: w.replayed,
         bytes: total,
         replayed_bytes: end,
-        dropped_bytes: total.saturating_sub(end),
+        dropped_bytes: total.saturating_sub(end).saturating_sub(w.zero_tail),
+        zero_tail: w.zero_tail,
         corrupt,
         resynced_ranges: ranges,
     })
 }
 
-pub(crate) fn valid_prefix_len_of_file(path: &Path, resync: bool) -> io::Result<u64> {
+/// The valid prefix's length and the zero tail after it (always 0 for v1).
+pub(crate) fn valid_prefix_len_of_file(path: &Path, resync: bool) -> io::Result<(u64, u64)> {
     // v2 streams (O(largest record) memory — the same walk replay does, so
     // the truncation point and the replay stop can never disagree). Under
     // resync the point is "after the LAST recoverable record", so interior
     // corruption stays put and only trailing garbage is repaired away.
     if matches!(sniff_format(path)?, crate::AofFormat::V2) {
-        return Ok(stream_v2(path, None, resync, false)?.replayed_bytes);
+        let r = stream_v2(path, None, resync, false)?;
+        return Ok((r.replayed_bytes, r.zero_tail));
     }
     let mut data = Vec::new();
     match File::open(path) {
         Ok(mut f) => {
             f.read_to_end(&mut data)?;
         }
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(0),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok((0, 0)),
         Err(e) => return Err(e),
     }
-    Ok(valid_prefix_len(&data) as u64)
+    Ok((valid_prefix_len(&data) as u64, 0))
 }
 
 /// Offset after the last complete frame in `data` (magic-aware). Mirrors

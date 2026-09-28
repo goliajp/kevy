@@ -12,8 +12,8 @@ use crate::metric::OpenReport;
 use kevy_store::Store as Keyspace;
 
 /// One shard's full restore: segment directory, snapshot, AOF replay,
-/// orphan sweep, watermark drain. Returns the AOF's length when the replay
-/// consumed all of it (see [`kevy_persist::Aof::open_after_replay`]).
+/// orphan sweep, watermark drain. Returns where the replay stopped when it
+/// dropped nothing (see [`kevy_persist::Aof::open_after_replay`]).
 pub(crate) fn restore_one_shard(
     dir: &Path,
     config: &Config,
@@ -115,7 +115,7 @@ fn replay_shard_aof(
     })?;
     applier.finish(i)?;
     fold_replay_report(report, &r);
-    Ok((r.replayed_bytes == r.bytes).then_some(r.bytes))
+    Ok((r.dropped_bytes == 0).then_some(r.replayed_bytes))
 }
 
 /// Attach shard `i`'s staging ring to its freshly opened AOF, first

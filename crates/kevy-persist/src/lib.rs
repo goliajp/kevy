@@ -218,3 +218,5 @@ mod tests_sync;
 mod tests_tier_stream;
 #[cfg(test)]
 mod tests_txn_tail;
+#[cfg(all(test, unix))]
+mod tests_zero_tail;
