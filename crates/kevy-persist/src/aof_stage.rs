@@ -223,6 +223,9 @@ impl Aof {
                 settled = i + 1;
             }
         }
+        if settled == 0 {
+            return Ok(0);
+        }
         let file = self.file.get_mut();
         for rec in &records[..settled] {
             file.write_all(rec)?;
