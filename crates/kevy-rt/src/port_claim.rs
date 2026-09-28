@@ -52,6 +52,14 @@ mod tests {
     }
 
     #[test]
+    fn a_server_binding_every_address_asks_loopback() {
+        let held = std::net::TcpListener::bind("0.0.0.0:0").unwrap();
+        let port = held.local_addr().unwrap().port();
+        let err = refuse_if_listened([0, 0, 0, 0], port).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::AddrInUse);
+    }
+
+    #[test]
     fn a_listener_that_goes_away_within_the_grace_is_not_a_holder() {
         let held = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = held.local_addr().unwrap().port();
