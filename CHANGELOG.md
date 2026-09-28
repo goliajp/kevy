@@ -7,6 +7,10 @@
   the stop signal, so every close waited up to the reaper interval
   (100 ms by default) — on an iPhone 15, closing a store just after
   opening it took 110 ms. The reaper now wakes when the store closes.
+  Freeing the keys, the rest of the cost, now happens on a thread after
+  the close returns: closing 100,000 keys went from 7.4 ms to 0.04 ms on
+  an M-series Mac. The AOF and the tier log still close before the call
+  returns, and a close after writes still waits for their final fsync.
 
 - **Opening an embedded store is about 2.8× faster.** Two passes over the
   data were redundant: open serialised the whole keyspace to estimate the
