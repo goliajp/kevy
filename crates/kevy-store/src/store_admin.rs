@@ -2,9 +2,35 @@
 //! and eviction entrypoints, and the WATCH version ledger. Split from
 //! `lib.rs` to keep that file under the 500-LOC house rule.
 
-use crate::{ENTRY_OVERHEAD, EvictionPolicy, Store, StoreError, evict, now_ns};
+use crate::{Entry, ENTRY_OVERHEAD, EvictionPolicy, Store, StoreError, evict, now_ns};
+use crate::value::SmallBytes;
+use kevy_map::KevyMap;
+
+/// A store's entries, moved out for teardown. It holds memory only — no
+/// file — so it can be dropped on any thread, whenever.
+#[derive(Debug)]
+pub struct DetachedEntries(KevyMap<SmallBytes, Entry>);
+
+impl DetachedEntries {
+    /// How many entries it holds.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Whether it holds none.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
 
 impl Store {
+    /// Move every entry out, leaving the keyspace empty, so a host closing
+    /// the store can free them off its own thread. The accounting is left
+    /// as it was: this is for a store on its way to being dropped.
+    pub fn detach_entries(&mut self) -> DetachedEntries {
+        DetachedEntries(core::mem::take(&mut self.map))
+    }
+
     /// An empty store with default settings: no maxmemory bound, no
     /// tiering budget, and no persistence attached — the caller wires
     /// those on afterwards.

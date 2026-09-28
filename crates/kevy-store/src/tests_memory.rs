@@ -141,3 +141,20 @@ fn memory_usage_reports_key_bytes() {
     assert!(big > small, "large value should report more bytes: {small} vs {big}");
     assert_eq!(st.estimate_key_bytes(b"missing"), None);
 }
+
+#[test]
+fn detached_entries_take_every_key_and_leave_none() {
+    let mut st = Store::new();
+    for i in 0..1000 {
+        st.set(format!("k{i}").as_bytes(), vec![b'v'; 64], None, false, false);
+    }
+    st.rpush(b"list", &[b"a".as_slice(), b"b"]).unwrap();
+    let detached = st.detach_entries();
+    assert_eq!(detached.len(), 1001);
+    assert!(st.get(b"k0").unwrap().is_none());
+    assert_eq!(st.dbsize(), 0);
+    // the store stays usable for what a closing host still does with it
+    st.set(b"after", b"x".to_vec(), None, false, false);
+    assert_eq!(st.get(b"after").unwrap().as_deref(), Some(&b"x"[..]));
+    drop(detached);
+}

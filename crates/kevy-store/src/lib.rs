@@ -97,6 +97,7 @@ pub mod evict;
 pub mod expire;
 pub(crate) use entry::Entry;
 pub use expire::ExpireStats;
+pub use store_admin::DetachedEntries;
 mod hash;
 mod hash_read;
 pub use hash_read::FieldValuePairs;
