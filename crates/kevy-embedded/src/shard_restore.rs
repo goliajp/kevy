@@ -38,11 +38,64 @@ pub(crate) fn restore_one_shard(
     Ok(whole)
 }
 
+/// Applies logged frames to one shard's keyspace, for the AOF replay and
+/// for what a staging ring owes it: the SEGMENTED stitch, every other
+/// write through the shared command layer, and the tiering watermark every
+/// so many frames — the embedded replay applies straight to the bare store,
+/// with no dispatch glue to run the per-write demote hook.
+struct FrameApplier<'a> {
+    store: &'a mut Keyspace,
+    #[cfg(not(target_arch = "wasm32"))]
+    segs_dir: std::path::PathBuf,
+    #[cfg(not(target_arch = "wasm32"))]
+    torn: Option<String>,
+    frames: u64,
+}
+
+impl<'a> FrameApplier<'a> {
+    fn new(dir: &Path, i: usize, store: &'a mut Keyspace) -> Self {
+        let _ = (dir, i);
+        FrameApplier {
+            store,
+            #[cfg(not(target_arch = "wasm32"))]
+            segs_dir: layout::segs_dir(dir, i),
+            #[cfg(not(target_arch = "wasm32"))]
+            torn: None,
+            frames: 0,
+        }
+    }
+
+    fn apply(&mut self, args: &mut kevy_persist::Argv) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(f) = kevy_persist::segmented_frame(args) {
+            // The SEGMENTED stitch: re-do the hot-layer eviction; a
+            // manifest miss is a named refusal after the walk (the
+            // rows' durable copy is unreachable).
+            if let Err(e) = kevy_store::apply_segmented(self.store, &self.segs_dir, f) {
+                self.torn.get_or_insert(e);
+            }
+            return;
+        }
+        crate::replay::apply(self.store, args);
+        self.frames += 1;
+        if self.frames.is_multiple_of(kevy_persist::REPLAY_DEMOTE_INTERVAL) {
+            self.store.demote_to_watermark();
+        }
+    }
+
+    fn finish(self, i: usize) -> io::Result<()> {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(e) = self.torn {
+            return Err(io::Error::other(format!("shard {i}: {e}")));
+        }
+        let _ = i;
+        Ok(())
+    }
+}
+
 /// Replay one shard's AOF into its store, folding the outcome into
-/// `report`. In-replay demotion: the embedded replay applies straight
-/// to the bare store (no dispatch glue, so no per-write demote hook) —
-/// check the watermark every K frames; the caller drains once more
-/// after the log ends.
+/// `report`; the caller drains the demote watermark once more after the
+/// log ends.
 fn replay_shard_aof(
     dir: &Path,
     config: &Config,
@@ -51,41 +104,45 @@ fn replay_shard_aof(
     aof: &Path,
     report: &mut OpenReport,
 ) -> io::Result<Option<u64>> {
-    let _ = (dir, i);
-    let mut frames = 0u64;
-    #[cfg(not(target_arch = "wasm32"))]
-    let segs_dir = layout::segs_dir(dir, i);
-    #[cfg(not(target_arch = "wasm32"))]
-    let mut torn: Option<String> = None;
-    let apply = |args: &mut kevy_persist::Argv| {
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Some(f) = kevy_persist::segmented_frame(args) {
-            // The SEGMENTED stitch: re-do the hot-layer eviction; a
-            // manifest miss is a named refusal after the walk (the
-            // rows' durable copy is unreachable).
-            if let Err(e) = kevy_store::apply_segmented(store, &segs_dir, f) {
-                torn.get_or_insert(e);
-            }
-            return;
-        }
-        crate::replay::apply(store, args);
-        frames += 1;
-        if frames.is_multiple_of(kevy_persist::REPLAY_DEMOTE_INTERVAL) {
-            store.demote_to_watermark();
-        }
-    };
+    let mut applier = FrameApplier::new(dir, i, store);
     // A registered metric sink receives the replay numbers as data
     // (`KevyMetric`), so the informational stderr summary would be a
     // duplicate on every open — a real cost for per-command CLI
     // processes. The corrupt-frame WARN prints regardless.
     let quiet = config.metric_sink.is_some();
-    let r = kevy_persist::replay_aof_in_place(aof, config.replay_resync, quiet, apply)?;
-    #[cfg(not(target_arch = "wasm32"))]
-    if let Some(e) = torn {
-        return Err(io::Error::other(format!("shard {i}: {e}")));
-    }
+    let r = kevy_persist::replay_aof_in_place(aof, config.replay_resync, quiet, |a| {
+        applier.apply(a);
+    })?;
+    applier.finish(i)?;
     fold_replay_report(report, &r);
     Ok((r.replayed_bytes == r.bytes).then_some(r.bytes))
+}
+
+/// Attach shard `i`'s staging ring to its freshly opened AOF, first
+/// replaying into `store` whatever the ring the last process left owes
+/// the log. A config that does not stage settles that ring and removes it.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn open_stage(
+    dir: &Path,
+    config: &Config,
+    i: usize,
+    store: &mut Keyspace,
+    aof: &mut kevy_persist::Aof,
+    report: &mut OpenReport,
+) -> io::Result<()> {
+    let path = layout::stage_path(dir, i);
+    let stages = config.stage_bytes > 0 && config.appendfsync != crate::config::AppendFsync::Always;
+    let mut applier = FrameApplier::new(dir, i, store);
+    let found = if stages {
+        aof.open_stage(&path, config.stage_bytes, |a| applier.apply(a))?
+    } else {
+        aof.settle_stage(&path, |a| applier.apply(a))?
+    };
+    applier.finish(i)?;
+    store.demote_to_watermark();
+    report.stage_recovered += found.recovered;
+    report.stage_discarded += u64::from(found.discarded.is_some());
+    Ok(())
 }
 
 /// Fold one shard's replay outcome into the open report.

@@ -118,6 +118,12 @@ fn build_shards_persist(
     let (mut report, walked) = load_or_reshard(&dir, config, n, &mut stores)?;
 
     let mut aofs = open_live_aofs(config, &dir, &walked, &mut report)?;
+    #[cfg(not(target_arch = "wasm32"))]
+    for (i, (aof, store)) in aofs.iter_mut().zip(stores.iter_mut()).enumerate() {
+        if let Some(aof) = aof {
+            crate::shard_restore::open_stage(&dir, config, i, store, aof, &mut report)?;
+        }
+    }
     // Anchor each AOF's growth-rule baseline to the live image's estimated
     // rewrite size. `Aof::open` can only baseline at the file size, which
     // for a short-lived process re-opening the same directory resets the
@@ -322,6 +328,20 @@ fn load_in_place(
 /// the sources backed up (`.premigration.<nanos>`) and the temps finalized.
 /// A crash at any point either leaves the old layout intact or is rolled
 /// forward by `build_shards`' recovery on the next open. Each shard's fresh
+/// Before the layout changes, each old shard's staging ring hands what it
+/// owes to that shard's AOF, which the merge then reads; the ring goes.
+#[cfg(not(target_arch = "wasm32"))]
+fn settle_stages(dir: &Path, config: &Config, src_n: usize) -> io::Result<()> {
+    for i in 0..src_n {
+        let stage = layout::stage_path(dir, i);
+        if stage.exists() {
+            let mut aof = Aof::open(&layout::aof_path(dir, i), config.appendfsync)?;
+            aof.settle_stage(&stage, |_| {})?;
+        }
+    }
+    Ok(())
+}
+
 /// AOF opens after this returns; the snapshot is the full migrated state.
 #[cfg(feature = "persist")]
 fn reshard(
@@ -334,6 +354,8 @@ fn reshard(
     let lay = EmbLayout;
     // Source layout: prior shard files, or a legacy single AOF/snapshot.
     let src_n = prev_n.unwrap_or(1);
+    #[cfg(not(target_arch = "wasm32"))]
+    settle_stages(dir, config, src_n)?;
     let (temp, report) = merge_into_temp(dir, config, src_n)?;
     redistribute(&temp, n, stores);
     commit_reshard(dir, src_n, ShardsMeta { n, routing: Routing::KevyHash }, stores, &lay)?;

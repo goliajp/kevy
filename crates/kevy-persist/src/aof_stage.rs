@@ -51,17 +51,45 @@ impl Aof {
     /// transaction only whole, once its commit marker is seen) and appended
     /// to the log. Call once, right after the log itself was replayed.
     ///
-    /// Only a v2 log that is not `Always` and not in queued mode stages.
+    /// A v1 log, or one in queued mode, settles the ring instead of staging
+    /// ([`Self::settle_stage`]); under `Always` appends bypass the ring.
     pub fn open_stage(
         &mut self,
         path: &Path,
         cap: u64,
+        apply: impl FnMut(&mut Argv),
+    ) -> io::Result<StageOpen> {
+        if self.format != crate::AofFormat::V2 || self.queue.is_some() {
+            return self.settle_stage(path, apply);
+        }
+        let found = self.recover_stage(path, apply)?;
+        let (ino, len) = self.identity()?;
+        let ring = StageRing::create(path, cap, ino, len)?;
+        self.stage = Some(Stage { ring, path: path.to_path_buf(), overflow: false });
+        Ok(found)
+    }
+
+    /// Settle what a ring at `path` owes this log, as [`Self::open_stage`]
+    /// does, then remove the ring: for a log that no longer stages, or whose
+    /// shard layout is about to change.
+    pub fn settle_stage(
+        &mut self,
+        path: &Path,
+        apply: impl FnMut(&mut Argv),
+    ) -> io::Result<StageOpen> {
+        let found = self.recover_stage(path, apply)?;
+        match std::fs::remove_file(path) {
+            Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
+            _ => Ok(found),
+        }
+    }
+
+    fn recover_stage(
+        &mut self,
+        path: &Path,
         mut apply: impl FnMut(&mut Argv),
     ) -> io::Result<StageOpen> {
         let mut found = StageOpen::default();
-        if self.format != crate::AofFormat::V2 || self.queue.is_some() {
-            return Ok(found);
-        }
         self.file.flush()?;
         let (ino, len) = self.identity()?;
         if let Some((ring, head)) = StageRing::open_existing(path)? {
@@ -74,9 +102,6 @@ impl Aof {
                 }
             }
         }
-        let (ino, len) = self.identity()?;
-        let ring = StageRing::create(path, cap, ino, len)?;
-        self.stage = Some(Stage { ring, path: path.to_path_buf(), overflow: false });
         Ok(found)
     }
 

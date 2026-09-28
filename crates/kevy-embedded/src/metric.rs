@@ -31,6 +31,14 @@ pub struct OpenReport {
     /// Bytes the resync replay hopped over (corrupt regions between valid
     /// records, summed across shards). Zero under strict replay.
     pub resynced_bytes: u64,
+    /// Writes the staging rings held that the AOFs did not — appended
+    /// before the last process was killed and not yet drained — replayed
+    /// and appended to the logs at this open, summed across shards.
+    pub stage_recovered: u64,
+    /// Staging rings set aside because they could not show where they
+    /// continue their log; only a power loss or a log changed by hand
+    /// leaves one.
+    pub stage_discarded: u64,
 }
 
 /// A persistence event worth observing. More variants may be added; match

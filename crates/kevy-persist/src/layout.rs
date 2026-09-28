@@ -32,6 +32,12 @@ pub fn aof_path(dir: &Path, i: usize) -> PathBuf {
     dir.join(aof_file(i))
 }
 
+/// Shard `i`'s staging ring path under `dir`: the AOF's name plus
+/// `.stage`.
+pub fn stage_path(dir: &Path, i: usize) -> PathBuf {
+    dir.join(format!("{}.stage", aof_file(i)))
+}
+
 /// The advisory-lock file's path under `dir` ([`crate::DirLock`]).
 ///
 /// ```
