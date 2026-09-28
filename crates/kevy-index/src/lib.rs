@@ -20,6 +20,7 @@ mod catalog;
 mod catalog_sidecar;
 mod composite;
 mod describe;
+mod describe_table;
 mod describe_view;
 mod partition;
 #[cfg(test)]
@@ -50,9 +51,9 @@ pub use composite::{
     WhereClause, composite_bounds, composite_encode, parse_where,
 };
 pub use describe::{
-    Described, describe_index, describe_index_partitioned, describe_table, describe_view,
-    index_declaration, index_declaration_partitioned, owner_of, table_declaration,
-    view_declaration,
+    Described, describe_index, describe_index_partitioned, describe_table,
+    describe_table_partitioned, describe_view, index_declaration, index_declaration_partitioned,
+    owner_of, table_declaration, table_declaration_partitioned, view_declaration,
 };
 pub use partition::{Partitioning, partition_owner, splits_from_sample};
 pub use segcold::{
@@ -69,7 +70,9 @@ pub use table::{
     window_driver, window_for, window_text_for,
 };
 pub use table_verify::{IndexVerify, TableEnsure, TableVerify, spec_diff};
-pub use table_wire::{TABLE_DECLARE_USAGE, parse_table_declare};
+pub use table_wire::{
+    GlobalPath, TABLE_DECLARE_USAGE, parse_table_declare, parse_table_declare_partitioned,
+};
 pub use value::{IndexValue, ValueTest, coerce_bound, order_key, parse_literal_bound};
 pub use view::{
     Leaf, MAX_TREE_DEPTH, MAX_TREE_LEAVES, MAX_VIEWS, MaterializedSet, Tree, ViewCatalog, ViewMode,

@@ -136,3 +136,29 @@ fn a_value_holding_more_than_its_share_is_not_split() {
     assert!(splits.windows(2).all(|w| w[0] < w[1]));
     assert!(splits.len() < 3, "{splits:?}");
 }
+
+#[test]
+fn a_store_whose_paths_are_all_local_refuses_global_by_name() {
+    let argv: [&[u8]; 12] = [
+        b"TABLE.DECLARE",
+        b"u",
+        b"PREFIX",
+        b"u:",
+        b"PK",
+        b"id",
+        b"COLUMN",
+        b"id",
+        b"i64",
+        b"INDEX",
+        b"id",
+        b"range",
+    ];
+    let mut global = argv.to_vec();
+    global.push(b"GLOBAL");
+    let err = crate::parse_table_declare(&global).unwrap_err();
+    assert!(err.contains("GLOBAL is a server feature"), "{err}");
+    assert!(crate::parse_table_declare(&argv).is_ok());
+    // a bare SPLIT without AT is not the grammar
+    global.extend_from_slice(&[b"SPLIT".as_slice(), b"5"]);
+    assert!(crate::parse_table_declare_partitioned(&global).unwrap_err().contains("usage"));
+}
