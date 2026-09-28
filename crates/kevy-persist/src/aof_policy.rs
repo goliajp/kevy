@@ -12,6 +12,16 @@ use crate::aof::Aof;
 /// sluggish for long-lived instances: a 2.2 GB log must reach 4.4 GB before
 /// 100% growth fires, and a real deployment rode that to 12-second replays
 /// and an OOM loop — the absolute and time rules exist to cap exactly that.
+///
+/// ```
+/// use kevy_persist::RewritePolicy;
+///
+/// let p = RewritePolicy { pct: 100, min_size: 64 << 20, bytes: 0, interval_secs: 0 };
+/// // a 1 MiB log reaches 64 MiB only by growing past any baseline
+/// assert!(!p.baseline_matters(1 << 20));
+/// assert!(p.baseline_matters(48 << 20));
+/// assert!(RewritePolicy { interval_secs: 3600, ..p }.baseline_matters(0));
+/// ```
 #[derive(Debug, Clone, Copy)]
 pub struct RewritePolicy {
     /// Growth percentage past the last-rewrite baseline (0 = rule off).

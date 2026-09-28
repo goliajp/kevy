@@ -34,6 +34,15 @@ pub fn aof_path(dir: &Path, i: usize) -> PathBuf {
 
 /// Shard `i`'s staging ring path under `dir`: the AOF's name plus
 /// `.stage`.
+///
+/// ```
+/// use std::path::Path;
+/// use kevy_persist::layout::{aof_path, stage_path};
+///
+/// let ring = stage_path(Path::new("/data"), 2);
+/// assert_eq!(ring, Path::new("/data/aof-2.aof.stage"));
+/// assert_eq!(ring.with_extension(""), aof_path(Path::new("/data"), 2));
+/// ```
 pub fn stage_path(dir: &Path, i: usize) -> PathBuf {
     dir.join(format!("{}.stage", aof_file(i)))
 }
