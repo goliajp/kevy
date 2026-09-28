@@ -11,6 +11,7 @@
 //! the grammar needs them, the auto loop's additions left out (they are
 //! runtime provenance, not declaration intent — [`TableSpec::sans_auto`]).
 
+use crate::Partitioning;
 use crate::catalog::{IndexKind, IndexSpec, ValType};
 use crate::table::{TableSpec, compile_table, dotted};
 
@@ -234,6 +235,28 @@ pub fn describe_index<'a>(
     s: &IndexSpec,
     tables: impl IntoIterator<Item = &'a TableSpec>,
 ) -> Described {
+    describe_index_partitioned(s, &Partitioning::Local, tables)
+}
+
+/// [`describe_index`] for an index spread as `part` says: a trailing
+/// `partitioning` pair names it (`local`, or `global` with the split
+/// values), and the declaration carries the `PARTITION` options.
+///
+/// ```
+/// use kevy_index::{Described, IndexKind, IndexSpec, Partitioning, ValType, describe_index_partitioned, order_key};
+///
+/// let s = IndexSpec::single_field(
+///     b"age".to_vec(), b"user:".to_vec(), b"age".to_vec(), ValType::I64, IndexKind::Range,
+/// );
+/// let p = Partitioning::Global { splits: vec![order_key(ValType::I64, b"30").unwrap()] };
+/// let Described::Array(fields) = describe_index_partitioned(&s, &p, []) else { unreachable!() };
+/// assert_eq!(fields[26], Described::Bulk(b"partitioning".to_vec()));
+/// ```
+pub fn describe_index_partitioned<'a>(
+    s: &IndexSpec,
+    part: &Partitioning,
+    tables: impl IntoIterator<Item = &'a TableSpec>,
+) -> Described {
     let owner = owner_of(tables, &s.name);
     let fields = s.fields.iter().map(|f| Described::Array(vec![b(&f.name), n(f.weight)]));
     let values = s.values.iter().map(|v| Described::Array(vec![b(&v.name), b(v.ty.tag())]));
@@ -271,7 +294,19 @@ pub fn describe_index<'a>(
         b("table"),
         owner.map_or_else(|| b("-"), |t| b(&t.name)),
         b("declaration"),
-        if owner.is_some() || s.composite.is_some() { b("-") } else { argv(index_declaration(s)) },
+        if owner.is_some() || s.composite.is_some() {
+            b("-")
+        } else {
+            argv(index_declaration_partitioned(s, part))
+        },
+        b("partitioning"),
+        match part {
+            Partitioning::Local => b("local"),
+            Partitioning::Global { .. } => {
+                let splits = part.split_values(s.ty).into_iter().map(b).collect();
+                Described::Array(vec![b("global"), Described::Array(splits)])
+            }
+        },
     ])
 }
 
@@ -326,6 +361,26 @@ pub fn owner_of<'a>(
 /// assert_eq!(line.join(" "), "IDX.CREATE age ON PREFIX user: FIELD age TYPE i64 KIND range MAXMEM 4096");
 /// ```
 pub fn index_declaration(s: &IndexSpec) -> Vec<Vec<u8>> {
+    index_declaration_partitioned(s, &Partitioning::Local)
+}
+
+/// [`index_declaration`] with the `PARTITION global` / `SPLIT` options a
+/// global index needs to be recreated as it is.
+///
+/// ```
+/// use kevy_index::{IndexKind, IndexSpec, Partitioning, ValType, index_declaration_partitioned, order_key};
+///
+/// let s = IndexSpec::single_field(
+///     b"age".to_vec(), b"user:".to_vec(), b"age".to_vec(), ValType::I64, IndexKind::Range,
+/// );
+/// let p = Partitioning::Global { splits: vec![order_key(ValType::I64, b"30").unwrap()] };
+/// let line: Vec<String> = index_declaration_partitioned(&s, &p)
+///     .iter()
+///     .map(|w| String::from_utf8_lossy(w).into_owned())
+///     .collect();
+/// assert!(line.join(" ").ends_with("KIND range PARTITION global SPLIT 30"));
+/// ```
+pub fn index_declaration_partitioned(s: &IndexSpec, part: &Partitioning) -> Vec<Vec<u8>> {
     let mut w: Vec<Vec<u8>> =
         vec![b"IDX.CREATE".to_vec(), s.name.clone(), b"ON".to_vec(), b"PREFIX".to_vec()];
     w.push(s.prefix.clone());
@@ -345,6 +400,12 @@ pub fn index_declaration(s: &IndexSpec) -> Vec<Vec<u8>> {
     }
     w.extend([b"TYPE".to_vec(), s.ty.tag().into(), b"KIND".to_vec(), s.kind.tag().into()]);
     index_options(s, &mut w);
+    if part.is_global() {
+        w.extend([b"PARTITION".to_vec(), b"global".to_vec()]);
+        for v in part.split_values(s.ty) {
+            w.extend([b"SPLIT".to_vec(), v]);
+        }
+    }
     w
 }
 

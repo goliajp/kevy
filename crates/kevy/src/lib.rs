@@ -53,6 +53,7 @@ mod cmd_failover;
 mod cmd_hello;
 mod cmd_index;
 mod cmd_index_advise;
+mod cmd_index_install;
 mod cmd_index_query;
 mod cmd_index_reduce;
 mod cmd_lua;

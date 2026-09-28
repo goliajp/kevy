@@ -157,7 +157,7 @@ pub(crate) fn cmd_idx_create<A: ArgvView + ?Sized>(
     {
         return encode_error(out, CREATE_USAGE);
     }
-    let Ok(opts) = parse_create_opts(args, type_pos + 4, out) else {
+    let Ok(mut opts) = parse_create_opts(args, type_pos + 4, out) else {
         return;
     };
     let Ok((ty, kind)) = parse_type_kind(args, type_pos, out) else {
@@ -166,9 +166,10 @@ pub(crate) fn cmd_idx_create<A: ArgvView + ?Sized>(
     let Ok(ann) = validate_kind_combo(kind, ty, &opts, out) else {
         return;
     };
+    let part = std::mem::take(&mut opts.partition);
     let spec = build_spec(args, fields, ty, kind, ann, opts);
     if !tier_floor_refused(store, out) {
-        install_new_index(ctx, spec, out);
+        crate::cmd_index_install::install_new_index(ctx, spec, part, out);
     }
 }
 
@@ -212,19 +213,6 @@ pub(crate) fn tier_floor_refused(store: &kevy_store::Store, out: &mut Vec<u8>) -
     false
 }
 
-/// Clone the catalog, add `spec`, and on success persist + install it.
-fn install_new_index(ctx: &Ctx<'_>, spec: IndexSpec, out: &mut Vec<u8>) {
-    let mut cat = ctx.state.catalogs.index().map(|c| (*c).clone()).unwrap_or_default();
-    match cat.create(spec) {
-        Ok(()) => {
-            persist_sidecar(ctx.state.sidecar_dir(), &cat);
-            ctx.state.install_index_catalog(cat);
-            out.extend_from_slice(b"+OK\r\n");
-        }
-        Err(e) => encode_error(out, e),
-    }
-}
-
 /// TYPE / KIND / PREFIX validation for IDX.CREATE; an error reply is
 /// already written on `Err`.
 fn parse_type_kind<A: ArgvView + ?Sized>(
@@ -259,6 +247,7 @@ struct CreateOpts {
     group_by: Option<Vec<u8>>,
     with_positions: bool,
     values: Vec<kevy_index::ValueSpec>,
+    partition: crate::cmd_index_install::PartitionOpt,
 }
 
 /// The option keywords the CREATE tail understands — the boundary the
@@ -279,7 +268,7 @@ fn is_create_opt(a: &[u8]) -> bool {
             return true;
         }
     }
-    false
+    crate::cmd_index_install::is_partition_opt(a)
 }
 
 /// `VALUES f…`: stored field names up to the next option keyword.
@@ -361,6 +350,7 @@ fn parse_create_opts<A: ArgvView + ?Sized>(
         group_by: None,
         with_positions: false,
         values: Vec::new(),
+        partition: Default::default(),
     };
     let mut i = start;
     while i < args.len() {
@@ -391,6 +381,10 @@ fn apply_create_opt(
     o: &mut CreateOpts,
     out: &mut Vec<u8>,
 ) -> Result<(), ()> {
+    if let Some(r) = crate::cmd_index_install::apply_partition_opt(opt, val, &mut o.partition, out)
+    {
+        return r;
+    }
     let parsed: Option<u64> = std::str::from_utf8(val).ok().and_then(|s| s.parse().ok());
     if opt.eq_ignore_ascii_case(b"WITH") {
         // A bare flag written as a key/value pair so it fits the

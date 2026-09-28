@@ -50,8 +50,9 @@ pub use composite::{
     WhereClause, composite_bounds, composite_encode, parse_where,
 };
 pub use describe::{
-    Described, describe_index, describe_table, describe_view, index_declaration, owner_of,
-    table_declaration, view_declaration,
+    Described, describe_index, describe_index_partitioned, describe_table, describe_view,
+    index_declaration, index_declaration_partitioned, owner_of, table_declaration,
+    view_declaration,
 };
 pub use partition::{Partitioning, partition_owner};
 pub use segcold::{

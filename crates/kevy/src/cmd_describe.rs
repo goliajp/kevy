@@ -4,7 +4,7 @@
 //! built in `kevy_index` (shared with the embedded dispatch); this file
 //! only looks the object up and encodes.
 
-use kevy_index::{Described, describe_index, describe_table, describe_view};
+use kevy_index::{Described, describe_index_partitioned, describe_table, describe_view};
 use kevy_resp::{ArgvView, encode_array_len, encode_bulk, encode_error};
 
 use crate::state::Ctx;
@@ -28,8 +28,14 @@ pub(crate) fn cmd_idx_describe<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, ou
     }
     let indexes = ctx.state.catalogs.index();
     let tables = ctx.state.catalogs.table();
-    match indexes.as_deref().and_then(|c| c.get(&args[1])) {
-        Some((spec, _)) => encode(out, &describe_index(spec, tables.iter().flat_map(|c| c.iter()))),
+    match indexes
+        .as_deref()
+        .and_then(|c| c.get(&args[1]).map(|(s, _)| (s, c.partitioning(&args[1]))))
+    {
+        Some((spec, part)) => encode(
+            out,
+            &describe_index_partitioned(spec, part, tables.iter().flat_map(|c| c.iter())),
+        ),
         None => missing(out, "index", &args[1], "IDX.LIST"),
     }
 }
