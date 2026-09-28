@@ -2,19 +2,26 @@
 //! same binary, so the format needs no version: it is private to a running
 //! server.
 //!
-//! `name_len u16 | name | partition u16 | op u8 | key_len u32 | key`, and
-//! for an upsert `value | n u16 | n × (present u8 [len u32 | bytes])`, the
-//! value as `tag u8` then 8 bytes (i64, f64 bits) or `len u32 | bytes`.
+//! `name_len u16 | name | incarnation u64 | partition u16 | op u8`, then
+//! for a delete or an upsert `key_len u32 | key`, for an upsert also
+//! `value | n u16 | n × (present u8 [len u32 | bytes])` — the value as
+//! `tag u8` then 8 bytes (i64, f64 bits) or `len u32 | bytes` — and for a
+//! finished build the sending shard as `u16`.
 
 use kevy_index::IndexValue;
 
 use super::global::Delta;
 
-pub(crate) fn encode(name: &[u8], p: u16, delta: &Delta) -> Vec<u8> {
+pub(crate) fn encode(name: &[u8], inc: u64, p: u16, delta: &Delta) -> Vec<u8> {
     let mut out = Vec::with_capacity(64);
     put_bytes16(&mut out, name);
+    out.extend_from_slice(&inc.to_le_bytes());
     out.extend_from_slice(&p.to_le_bytes());
     match delta {
+        Delta::Built { from } => {
+            out.push(2);
+            out.extend_from_slice(&(*from as u16).to_le_bytes());
+        }
         Delta::Delete { key } => {
             out.push(0);
             put_bytes32(&mut out, key);
@@ -51,13 +58,20 @@ pub(crate) fn encode(name: &[u8], p: u16, delta: &Delta) -> Vec<u8> {
     out
 }
 
-/// The index name, partition and delta; `None` for bytes this encoder did
-/// not write.
-pub(crate) fn decode(bytes: &[u8]) -> Option<(Vec<u8>, usize, Delta)> {
+/// One decoded message: index name, incarnation, partition, delta.
+pub(crate) type Message = (Vec<u8>, u64, usize, Delta);
+
+/// The message; `None` for bytes this encoder did not write.
+pub(crate) fn decode(bytes: &[u8]) -> Option<Message> {
     let mut r = Reader(bytes);
     let name = r.bytes16()?.to_vec();
+    let inc = u64::from_le_bytes(r.take(8)?.try_into().ok()?);
     let p = usize::from(u16::from_le_bytes(r.take(2)?.try_into().ok()?));
     let op = r.take(1)?[0];
+    if op == 2 {
+        let from = usize::from(u16::from_le_bytes(r.take(2)?.try_into().ok()?));
+        return r.0.is_empty().then_some((name, inc, p, Delta::Built { from }));
+    }
     let key = r.bytes32()?.to_vec();
     let delta = match op {
         0 => Delta::Delete { key },
@@ -82,7 +96,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Option<(Vec<u8>, usize, Delta)> {
         }
         _ => return None,
     };
-    r.0.is_empty().then_some((name, p, delta))
+    r.0.is_empty().then_some((name, inc, p, delta))
 }
 
 fn put_bytes16(out: &mut Vec<u8>, b: &[u8]) {
@@ -134,10 +148,11 @@ mod tests {
                 value: IndexValue::Str(b"\x00\xff".to_vec()),
                 values: vec![None],
             },
+            Delta::Built { from: 63 },
         ];
         for d in deltas {
-            let bytes = encode(b"idx", 7, &d);
-            assert_eq!(decode(&bytes), Some((b"idx".to_vec(), 7, d)));
+            let bytes = encode(b"idx", 1 << 40, 7, &d);
+            assert_eq!(decode(&bytes), Some((b"idx".to_vec(), 1 << 40, 7, d)));
             assert_eq!(decode(&bytes[..bytes.len() - 1]), None, "a cut message is refused");
         }
     }

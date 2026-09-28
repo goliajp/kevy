@@ -54,6 +54,11 @@ pub(crate) struct CatalogState {
     /// unrelated catalog changes. The served-query path pays one
     /// uncontended read-lock and two relaxed stores.
     usage: RwLock<HashMap<Vec<u8>, Arc<UsageCell>>>,
+    /// Per global index, which incarnation of it the catalog holds: a new
+    /// number whenever its spec or partitioning changes, or it is dropped
+    /// and created again. Every message between shards carries it, so one
+    /// sent for an earlier incarnation is never applied to a later one.
+    incarnations: Mutex<(u64, HashMap<Vec<u8>, u64>)>,
 }
 
 impl CatalogState {
@@ -68,7 +73,42 @@ impl CatalogState {
             table_gen: AtomicU64::new(0),
             advise: Mutex::new(AdviseLog::new()),
             usage: RwLock::new(HashMap::new()),
+            incarnations: Mutex::new((0, HashMap::new())),
         }
+    }
+
+    /// The incarnation of global index `name` in the installed catalog
+    /// (0 for a local or unknown one).
+    pub(crate) fn incarnation(&self, name: &[u8]) -> u64 {
+        let incs = self.incarnations.lock().unwrap_or_else(PoisonError::into_inner);
+        incs.1.get(name).copied().unwrap_or(0)
+    }
+
+    /// Number the global indexes of catalog `new`: one unchanged since `old`
+    /// keeps its incarnation, any other gets a fresh one.
+    fn number_incarnations(&self, old: Option<&Catalog>, new: &Catalog) {
+        let mut incs = self.incarnations.lock().unwrap_or_else(PoisonError::into_inner);
+        let (next, prev) = &mut *incs;
+        let mut map = HashMap::new();
+        for (spec, _) in new.iter() {
+            let part = new.partitioning(&spec.name);
+            if !part.is_global() {
+                continue;
+            }
+            let same = old.is_some_and(|o| {
+                o.get(&spec.name).is_some_and(|(s, _)| s == spec)
+                    && o.partitioning(&spec.name) == part
+            });
+            let inc = match (same, prev.get(&spec.name)) {
+                (true, Some(&inc)) => inc,
+                _ => {
+                    *next += 1;
+                    *next
+                }
+            };
+            map.insert(spec.name.clone(), inc);
+        }
+        *prev = map;
     }
 
     /// The usage cell for a declared path (None = not declared).
@@ -203,6 +243,9 @@ impl RuntimeState {
     /// next command).
     pub(crate) fn install_index_catalog(&self, c: Catalog) {
         let names: Vec<Vec<u8>> = c.iter().map(|(s, _)| s.name.clone()).collect();
+        // numbered before the generation moves, so a shard that sees the
+        // new catalog reads the incarnations that go with it
+        self.catalogs.number_incarnations(self.catalogs.index().as_deref(), &c);
         *self.catalogs.index.write().unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(c));
         self.catalogs.index_gen.fetch_add(1, Ordering::Release);
         self.bump_control_epoch();
@@ -228,5 +271,52 @@ impl RuntimeState {
         self.catalogs.table_gen.fetch_add(1, Ordering::Release);
         self.bump_control_epoch();
         self.catalogs.advise_clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kevy_index::{IndexKind, IndexSpec, Partitioning, ValType, order_key};
+
+    use super::*;
+
+    fn with(global: &[&[u8]], split: &[u8]) -> Catalog {
+        let mut c = Catalog::new();
+        for name in global {
+            let spec = IndexSpec::single_field(
+                name.to_vec(),
+                b"u:".to_vec(),
+                b"age".to_vec(),
+                ValType::I64,
+                IndexKind::Range,
+            );
+            let splits = vec![order_key(ValType::I64, split).unwrap()];
+            c.create_with(spec, Partitioning::Global { splits }).unwrap();
+        }
+        c
+    }
+
+    #[test]
+    fn an_index_keeps_its_incarnation_only_while_it_stays_the_same() {
+        let cats = CatalogState::new();
+        let number = |old: Option<&Catalog>, new: &Catalog| cats.number_incarnations(old, new);
+        let first = with(&[b"a", b"b"], b"10");
+        number(None, &first);
+        let (a, b) = (cats.incarnation(b"a"), cats.incarnation(b"b"));
+        assert!(a > 0 && b > 0 && a != b);
+        // another index created: these two unchanged
+        let more = with(&[b"a", b"b", b"c"], b"10");
+        number(Some(&first), &more);
+        assert_eq!((cats.incarnation(b"a"), cats.incarnation(b"b")), (a, b));
+        // split points moved (a rebuild): every one of them is new
+        let moved = with(&[b"a", b"b", b"c"], b"20");
+        number(Some(&more), &moved);
+        assert!(cats.incarnation(b"a") > a && cats.incarnation(b"b") > b);
+        // dropped, then created the same again: new
+        let (a2, dropped) = (cats.incarnation(b"a"), with(&[b"b", b"c"], b"20"));
+        number(Some(&moved), &dropped);
+        assert_eq!(cats.incarnation(b"a"), 0);
+        number(Some(&dropped), &moved);
+        assert!(cats.incarnation(b"a") > a2);
     }
 }

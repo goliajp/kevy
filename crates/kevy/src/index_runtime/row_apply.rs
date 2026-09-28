@@ -232,11 +232,15 @@ pub(super) fn advance_backfill(store: &mut Store, si: &mut ShardIndex, batch: us
     }
     if done {
         si.build = BuildState::Ready;
+        if let Some(g) = &mut si.global {
+            g.finish_build(&si.spec);
+        }
     }
 }
 
 fn apply_row_backfill(store: &mut Store, si: &mut ShardIndex, key: &[u8]) {
-    if si.text.is_some() || si.ann.is_some() || si.agg.is_some() {
+    // a global index's entries go to their partitions' owners
+    if si.global.is_some() || si.text.is_some() || si.ann.is_some() || si.agg.is_some() {
         apply_row(store, si, key);
         return;
     }

@@ -294,3 +294,36 @@ fn a_global_index_answers_fields_from_its_values_and_refuses_the_rest() {
     let plan = text(&call(&mut w, &[b"IDX.EXPLAIN", b"age_g", b"RANGE", b"30", b"60"]));
     assert!(plan.contains("partition(s) 1..=2 of 4"), "{plan}");
 }
+
+#[test]
+fn a_global_index_over_existing_rows_answers_all_of_them_or_says_it_is_building() {
+    let srv = Server::start(4);
+    let mut w = srv.wire();
+    // enough rows that each shard's backfill takes several ticks
+    for chunk in 0..40u32 {
+        let mut q: Vec<Vec<u8>> = vec![b"MSET".to_vec()];
+        for i in chunk * 500..(chunk + 1) * 500 {
+            q.push(format!("pad:{i}").into_bytes());
+            q.push(b"x".to_vec());
+        }
+        let argv: Vec<&[u8]> = q.iter().map(Vec::as_slice).collect();
+        call(&mut w, &argv);
+    }
+    for i in 0..20_000u32 {
+        let (key, age) = (format!("user:{i}"), (i % 100).to_string());
+        call(&mut w, &[b"HSET", key.as_bytes(), b"age", age.as_bytes()]);
+    }
+    create(&mut w, b"age_g", &[b"PARTITION", b"global", b"SPLIT", b"25", b"SPLIT", b"50"]);
+    let count = |w: &mut Wire| call(w, &[b"IDX.COUNT", b"age_g", b"RANGE", b"0", b"100"]);
+    let (mut building, mut answers) = (0, 0);
+    while answers < 20 {
+        let r = count(&mut w);
+        if r.starts_with(b"-INDEXBUILDING") {
+            building += 1;
+            continue;
+        }
+        assert_eq!(text(&r), ":20000\r\n", "an answer before every shard's rows arrived");
+        answers += 1;
+    }
+    assert!(building > 0, "the build finished before the first query: nothing was tested");
+}

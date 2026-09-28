@@ -8,6 +8,11 @@
 //! and a delete plus an upsert when it moved. The messages leave through
 //! the runtime's hook-message channel; a client's write waits for them to
 //! be applied before it replies.
+//!
+//! A partition is built from every shard's rows. Each shard, once its
+//! backfill has sent its last entry, tells every owner so; messages from
+//! one shard to another arrive in order, so an owner that has heard from
+//! all N holds every entry, and answers reads only then.
 
 use std::collections::HashMap;
 
@@ -25,6 +30,9 @@ pub(crate) enum Delta {
     Delete { key: Vec<u8> },
     /// The row's entry in the partition is now this.
     Upsert { key: Vec<u8>, value: IndexValue, values: Vec<Option<Vec<u8>>> },
+    /// Shard `from` has sent the entries of every row it held when the
+    /// index was created.
+    Built { from: usize },
 }
 
 /// This shard's part in one global index.
@@ -33,6 +41,11 @@ pub(crate) struct GlobalRole {
     part: Partitioning,
     shard: usize,
     nshards: usize,
+    /// The catalog's incarnation of this index; messages for another are
+    /// dropped.
+    pub(crate) inc: u64,
+    /// Per shard, whether it has sent all its rows' entries.
+    built: Vec<bool>,
     /// The partitions this shard owns, each with its entries.
     pub(crate) owned: Vec<(usize, Segment)>,
     /// This shard's rows: the partition each entry went to, and a hash of
@@ -43,7 +56,8 @@ pub(crate) struct GlobalRole {
 }
 
 impl GlobalRole {
-    pub(crate) fn new(spec: &IndexSpec, part: &Partitioning, shard: usize, nshards: usize) -> Self {
+    pub(crate) fn new(spec: &IndexSpec, part: &Partitioning, at: (usize, usize), inc: u64) -> Self {
+        let (shard, nshards) = at;
         let owned = (0..part.partitions())
             .filter(|&p| partition_owner(&spec.name, p, nshards) == shard)
             .map(|p| (p, super::new_scalar_seg(spec)))
@@ -52,15 +66,30 @@ impl GlobalRole {
             part: part.clone(),
             shard,
             nshards,
+            inc,
+            built: vec![false; nshards],
             owned,
             placed: HashMap::new(),
             outbox: Vec::new(),
         }
     }
 
-    /// Whether this role was built for `part` on this shard layout.
-    pub(crate) fn fits(&self, part: &Partitioning, shard: usize, nshards: usize) -> bool {
-        self.part == *part && self.shard == shard && self.nshards == nshards
+    /// Whether this role is incarnation `inc`, on this shard layout.
+    pub(crate) fn fits(&self, at: (usize, usize), inc: u64) -> bool {
+        (self.shard, self.nshards) == at && self.inc == inc
+    }
+
+    /// Whether this shard's partition holds every row's entry: every shard
+    /// has finished sending (a shard owning none has nothing to wait for).
+    pub(crate) fn ready(&self) -> bool {
+        self.owned.is_empty() || self.built.iter().all(|&b| b)
+    }
+
+    /// This shard's backfill has sent every entry: tell each owner.
+    pub(crate) fn finish_build(&mut self, spec: &IndexSpec) {
+        for p in 0..self.part.partitions() {
+            self.send(spec, p as u16, Delta::Built { from: self.shard });
+        }
     }
 
     /// The row at `key` was written (or removed): queue what its entry's
@@ -99,8 +128,15 @@ impl GlobalRole {
 
     /// Apply a delta a row's shard sent for partition `p`.
     pub(crate) fn apply(&mut self, p: usize, delta: Delta) {
+        if let Delta::Built { from } = delta {
+            if let Some(b) = self.built.get_mut(from) {
+                *b = true;
+            }
+            return;
+        }
         let Some((_, seg)) = self.owned.iter_mut().find(|(q, _)| *q == p) else { return };
         match delta {
+            Delta::Built { .. } => {}
             Delta::Delete { key } => seg.remove(&key),
             Delta::Upsert { key, value, values } if values.is_empty() => {
                 seg.apply(&key, Some(value))
@@ -114,7 +150,7 @@ impl GlobalRole {
 
     fn send(&mut self, spec: &IndexSpec, p: u16, delta: Delta) {
         let to = partition_owner(&spec.name, p as usize, self.nshards);
-        self.outbox.push((to, super::global_wire::encode(&spec.name, p, &delta)));
+        self.outbox.push((to, super::global_wire::encode(&spec.name, self.inc, p, &delta)));
     }
 }
 
@@ -173,13 +209,12 @@ pub(crate) fn take_ext_out(ctx: &Ctx<'_>) -> Vec<(usize, Vec<u8>)> {
 /// Apply a delta another shard's hook sent for a partition this shard owns
 /// (`Commands::apply_ext`).
 pub(crate) fn apply_ext(ctx: &Ctx<'_>, store: &mut Store, payload: &[u8]) {
-    let Some((name, p, delta)) = super::global_wire::decode(payload) else { return };
+    let Some((name, inc, p, delta)) = super::global_wire::decode(payload) else { return };
     let mut st = ctx.shard.indexes.borrow_mut();
     super::refresh(ctx, &mut st, store);
     let st = &mut *st;
-    if let Some(g) =
-        st.idx.iter_mut().find(|si| si.spec.name == name).and_then(|si| si.global.as_mut())
-    {
+    let role = st.idx.iter_mut().find(|si| si.spec.name == name).and_then(|si| si.global.as_mut());
+    if let Some(g) = role.filter(|g| g.inc == inc) {
         g.apply(p, delta);
         st.stats_dirty = true;
     }
