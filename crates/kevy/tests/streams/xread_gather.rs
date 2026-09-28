@@ -87,7 +87,7 @@ impl Server {
 
     /// Start against an existing data dir (restart-survival tests).
     fn start_in(dir: std::path::PathBuf) -> Self {
-        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let port = kevy_testnet::free_port();
         std::fs::create_dir_all(&dir).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
         let st = stop.clone();
