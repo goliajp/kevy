@@ -92,6 +92,23 @@ impl Store {
         g.store.get_shared_owned(key).map_err(store_err)
     }
 
+    /// [`Self::get_shared_owned`] that lends the value to `f` under the
+    /// shard's lock instead of handing out an owner — for a binding that
+    /// copies the bytes into its own reply and would otherwise allocate a
+    /// small value's owner only to drop it.
+    ///
+    /// ```
+    /// let s = kevy_embedded::Store::open(kevy_embedded::Config::default()).unwrap();
+    /// s.set(b"k", b"v").unwrap();
+    /// assert_eq!(s.get_with(b"k", |v| v.map(<[u8]>::to_vec)).unwrap(), Some(b"v".to_vec()));
+    /// ```
+    pub fn get_with<R>(&self, key: &[u8], f: impl FnOnce(Option<&[u8]>) -> R) -> KevyResult<R> {
+        if self.reads_use_shared_lock() {
+            return self.rshard(key).store.get_shared_with(key, f).map_err(store_err);
+        }
+        self.wshard(key).store.get_shared_with(key, f).map_err(store_err)
+    }
+
     /// `DEL key1 [key2 ...]`. Returns the count of keys actually removed.
     /// Keys fan out to their owning shards.
     pub fn del(&self, keys: &[&[u8]]) -> KevyResult<usize> {

@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- **Android: batch reads and writes no longer go through the command
+  path.** `KevyDB.mget` used to encode an `MGET`, run it and parse the RESP
+  reply in Kotlin; it now makes one native call that hands back the values
+  packed, copied once. The typed surface gains `KevyDB.mset(vararg pairs)`,
+  on the same kind of lane. A `get` of a short key allocates nothing of its
+  own: the key is read onto the stack and the value copied straight from
+  the store into the new array. Measured on a Galaxy S22 (SM-S9010, Android 16)
+  against MMKV 2.4.2 (`bench/mmkvgate`): a 256-byte batch read went from 2.0× MMKV's time to
+  about even, a batch write from 1.5× to 1.26×, and a 16-byte read from
+  1.09× to 0.77×.
+
+- **An embedded `MSET` logs one frame per shard.** Each key used to be set
+  under its own lock and logged as its own `SET`, so a crash could keep any
+  prefix of the pairs. Now the pairs of one shard are set under one lock
+  and logged as one `MSET` frame: a shard's share survives a crash whole or
+  not at all (across shards there is still no such guarantee, as in Redis
+  Cluster). The AOF, a replica and the change feed see `MSET` frames where
+  they used to see one `SET` per key; a feed consumer that reads only `SET`
+  events should read `MSET` too, as it already must for a server.
+
 - **Global indexes: one index spread over the shards by value.** A default
   index is local — every shard indexes its own rows, so every read goes to
   every shard and the origin merges their pages. `IDX.CREATE … PARTITION

@@ -4,7 +4,6 @@ package jp.golia.kevy.mmkvgate
 
 import com.tencent.mmkv.MMKV
 import jp.golia.kevy.KevyDB
-import jp.golia.kevy.KevyValue
 import java.io.File
 import java.util.UUID
 
@@ -15,13 +14,7 @@ class KevyEngine(root: File, tag: String) {
     fun set(k: String, v: ByteArray) = db.set(k, v)
     fun get(k: String): ByteArray? = db.get(k)
 
-    fun mset(keys: List<String>, v: ByteArray) {
-        val argv = ArrayList<ByteArray>(1 + keys.size * 2)
-        argv.add("MSET".toByteArray())
-        for (k in keys) { argv.add(k.toByteArray()); argv.add(v) }
-        val r = db.cmdBytes(argv)
-        check(r == KevyValue.Simple("OK")) { "MSET: $r" }
-    }
+    fun mset(keys: List<String>, v: ByteArray) = db.mset(*Array(keys.size) { keys[it] to v })
 
     fun mget(keys: List<String>): List<ByteArray?> = db.mget(*keys.toTypedArray())
 

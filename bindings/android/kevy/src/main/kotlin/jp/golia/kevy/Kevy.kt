@@ -220,9 +220,44 @@ class KevyDB private constructor(private var handle: Long) : AutoCloseable {
     }
 
     /** Values for [keys], null per missing key. */
+    /** Set every pair in one call; the pairs of one shard are set and
+     *  logged together. A key given twice takes its last value. */
+    fun mset(vararg pairs: Pair<String, ByteArray>) {
+        if (pairs.isEmpty()) return
+        val argv = arrayOfNulls<ByteArray>(pairs.size * 2)
+        pairs.forEachIndexed { i, (k, v) ->
+            argv[2 * i] = k.toByteArray(Charsets.UTF_8)
+            argv[2 * i + 1] = v
+        }
+        @Suppress("UNCHECKED_CAST")
+        val rc = KevyNative.mset(live(), KevyNative.pack(*(argv as Array<ByteArray>)))
+        if (rc != 0) throw KevyException("kevy: mset failed ($rc)")
+    }
+
     fun mget(vararg keys: String): List<ByteArray?> {
-        val v = want(cmd("MGET", *keys)) as? KevyValue.Array ?: return emptyList()
-        return v.items.map { (it as? KevyValue.Bulk)?.bytes }
+        if (keys.isEmpty()) {
+            // the framed path answers the arity error
+            val v = want(cmd("MGET")) as? KevyValue.Array ?: return emptyList()
+            return v.items.map { (it as? KevyValue.Bulk)?.bytes }
+        }
+        val packed = KevyNative.pack(*Array(keys.size) { keys[it].toByteArray(Charsets.UTF_8) })
+        val reply = KevyNative.mget(live(), packed) ?: throw KevyException("kevy: mget failed")
+        val out = ArrayList<ByteArray?>(keys.size)
+        var pos = 0
+        while (pos < reply.size) {
+            val len = (reply[pos].toInt() and 0xff) or
+                ((reply[pos + 1].toInt() and 0xff) shl 8) or
+                ((reply[pos + 2].toInt() and 0xff) shl 16) or
+                ((reply[pos + 3].toInt() and 0xff) shl 24)
+            pos += 4
+            if (len == -1) {
+                out.add(null)
+            } else {
+                out.add(reply.copyOfRange(pos, pos + len))
+                pos += len
+            }
+        }
+        return out
     }
 
     /** Live key count. */

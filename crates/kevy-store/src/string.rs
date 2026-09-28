@@ -100,6 +100,46 @@ impl Store {
         }
     }
 
+    /// [`Store::get_shared_owned`] that lends the value to `f` instead of
+    /// handing out an owner: the bytes as the store holds them for a hot
+    /// value (an integer formatted on the stack), a read copy for a cold
+    /// one. For a caller that copies the bytes somewhere of its own anyway —
+    /// a binding building its reply — this saves the allocation a small
+    /// value's owner would cost. Non-mutating, like the owner lane.
+    ///
+    /// ```
+    /// let mut s = kevy_store::Store::new();
+    /// s.set(b"k", b"v".to_vec(), None, false, false);
+    /// assert_eq!(s.get_shared_with(b"k", |v| v.map(<[u8]>::len)), Ok(Some(1)));
+    /// assert_eq!(s.get_shared_with(b"none", |v| v.is_none()), Ok(true));
+    /// ```
+    pub fn get_shared_with<R>(
+        &self,
+        key: &[u8],
+        f: impl FnOnce(Option<&[u8]>) -> R,
+    ) -> Result<R, StoreError> {
+        let Some(e) =
+            self.map.get(key).filter(|e| !e.is_expired(self.cached_clock, self.cached_ns))
+        else {
+            return Ok(f(None));
+        };
+        match &e.value {
+            Value::ArcBulk(a) => Ok(f(Some(a))),
+            Value::Str(v) => Ok(f(Some(v.as_slice()))),
+            Value::Int(n) => {
+                let mut tmp = itoa_i64_stack();
+                Ok(f(Some(format_i64_into(*n, &mut tmp))))
+            }
+            Value::Cold(c) if c.type_tag == crate::value::COLD_TAG_STRING => {
+                match self.tier_peek_value(key, &e.value).expect("cold peek") {
+                    Value::ArcBulk(a) => Ok(f(Some(&a))),
+                    v => Ok(f(Some(&cold_string_bytes(&v)))),
+                }
+            }
+            _ => Err(StoreError::WrongType),
+        }
+    }
+
     /// Fused GET-into-output. Skips the [`GetReply`] enum tag
     /// round-trip + caller match arm by writing the RESP frame directly into
     /// `output` (header + bytes + CRLF for Str/Int) or pushing the Arc into
@@ -278,5 +318,32 @@ fn cold_string_bytes(v: &Value) -> Vec<u8> {
             format_i64_into(*n, &mut tmp).to_vec()
         }
         _ => unreachable!("string-tagged cold record decodes to a string class"),
+    }
+}
+
+#[cfg(test)]
+mod lend_tests {
+    use super::*;
+
+    fn owned(s: &Store, k: &[u8]) -> Result<Option<Vec<u8>>, StoreError> {
+        s.get_shared_owned(k).map(|g| {
+            g.map(|g| match g {
+                GetShared::Arc(a) => a.to_vec(),
+                GetShared::Bytes(b) => b,
+            })
+        })
+    }
+
+    #[test]
+    fn the_lent_bytes_are_the_owned_ones_for_every_string_class() {
+        let mut s = Store::new();
+        s.set(b"small", b"v".to_vec(), None, false, false);
+        s.set(b"bulk", vec![7u8; 4096], None, false, false);
+        s.set(b"int", b"-12345".to_vec(), None, false, false);
+        s.rpush(b"list", &[b"x"]).unwrap();
+        for k in [&b"small"[..], b"bulk", b"int", b"missing", b"list"] {
+            let lent = s.get_shared_with(k, |v| v.map(<[u8]>::to_vec));
+            assert_eq!(lent, owned(&s, k), "{}", String::from_utf8_lossy(k));
+        }
     }
 }

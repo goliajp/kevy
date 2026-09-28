@@ -109,6 +109,37 @@ pub(crate) unsafe fn get_byte_array(env: JniEnv, arr: JObject) -> Vec<u8> {
     v
 }
 
+/// Lend a whole Java `byte[]` to `f`: copied onto the stack when it is at
+/// most 64 bytes — a key, usually — so the call allocates nothing, and
+/// into a `Vec` otherwise.
+///
+/// # Safety
+/// As for [`get_byte_array`].
+pub(crate) unsafe fn with_byte_array<R>(
+    env: JniEnv,
+    arr: JObject,
+    f: impl FnOnce(&[u8]) -> R,
+) -> R {
+    // SAFETY: the slot holds the function pointer JNI specifies for that index, and
+    // the type alias above is that exact signature — see the slot table.
+    let len_fn: GetArrayLengthFn = unsafe { std::mem::transmute(slot(env, SLOT_GET_ARRAY_LENGTH)) };
+    // SAFETY: `env` is this call's and `arr` is the live reference JNI passed with it.
+    let n = unsafe { len_fn(env, arr) }.max(0);
+    if n > 64 {
+        // SAFETY: the caller's contract is `get_byte_array`'s.
+        return f(&unsafe { get_byte_array(env, arr) });
+    }
+    let mut buf = [0u8; 64];
+    let get_fn: GetByteArrayRegionFn =
+        // SAFETY: the slot holds the function pointer JNI specifies for that index, and
+        // the type alias above is that exact signature — see the slot table.
+        unsafe { std::mem::transmute(slot(env, SLOT_GET_BYTE_ARRAY_REGION)) };
+    // SAFETY: `env` is this call's, `arr` the live array JNI passed, and `n` (just read
+    // from that array) is at most the 64 bytes `buf` holds.
+    unsafe { get_fn(env, arr, 0, n, buf.as_mut_ptr().cast::<JByte>()) };
+    f(&buf[..n as usize])
+}
+
 /// Copy a whole Java `long[]` into a Rust `Vec` — the open options' inbound
 /// twin of [`get_byte_array`].
 ///
