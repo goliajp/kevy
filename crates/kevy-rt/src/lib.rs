@@ -78,6 +78,7 @@
 // the lint rather than let it fail every normal build.
 #![allow(unexpected_cfgs)]
 mod bio;
+mod port_claim;
 mod block_xshard;
 mod block_xshard_confirm;
 #[cfg(debug_assertions)]
