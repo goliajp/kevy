@@ -57,6 +57,14 @@ stop() {
     $CLI shutdown nosave >/dev/null 2>&1 || true
     wait "$SRV_PID" 2>/dev/null || true
     SRV_PID=""
+    # an io_uring listener outlives its process by a few ms; a release that
+    # does not wait for the port joins it through SO_REUSEPORT, and the
+    # connections the kernel hands the dying one are reset
+    for _ in $(seq 200); do
+        ss -Hltn "sport = :$PORT" | grep -q . || return 0
+        sleep 0.01
+    done
+    fail "port $PORT still listening 2 s after shutdown"
 }
 
 write_generation() { # $1 = tag
@@ -74,7 +82,12 @@ write_generation() { # $1 = tag
 snapshot() { # stdout: a canonical text image of every generation present
     local tag
     for tag in gen-old gen-new; do
-        $CLI exists "str:$tag" | grep -q 1 || continue
+        # an error here is not an absent generation
+        case $($CLI exists "str:$tag" 2>&1) in
+            1) ;;
+            0) continue ;;
+            *) fail "EXISTS str:$tag did not answer 0 or 1" ;;
+        esac
         echo "== $tag =="
         echo "str: $($CLI get "str:$tag")"
         echo "big: $($CLI strlen "big:$tag")"
