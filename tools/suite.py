@@ -448,6 +448,16 @@ def requirement_needs_infra(check):
 
 # ── run ──────────────────────────────────────────────────────────────
 
+def keep_log(tier, check_id, text):
+    """A failed row's whole output. The verdict shows six lines, and a
+    flake's cause is rarely in the last six; rerunning to see it again is
+    how the evidence of an intermittent failure gets lost."""
+    path = ROOT / "target" / "suite-logs" / f"{tier}-{check_id}.log"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path.relative_to(ROOT)
+
+
 def run_tier(suite, checks, tier, only=None, area=None):
     selected = tier_checks(checks, tier)
     if only:
@@ -485,7 +495,8 @@ def run_tier(suite, checks, tier, only=None, area=None):
                 out, err = proc.communicate(timeout=c["timeout"])
             except subprocess.TimeoutExpired:
                 os.killpg(proc.pid, signal.SIGKILL)
-                proc.wait()
+                out, err = proc.communicate()
+                keep_log(tier, c["id"], (out or "") + (err or ""))
                 raise
             r = subprocess.CompletedProcess(c["cmd"], proc.returncode, out, err)
             took = time.monotonic() - t0
@@ -506,14 +517,16 @@ def run_tier(suite, checks, tier, only=None, area=None):
                 status = "ADVISORY" if c.get("advisory") else "FAIL"
                 results.append((c, status, took, "\n".join(tail), True))
                 mark = "△" if status == "ADVISORY" else "✗"
-                print(f"  {mark} {c['id']:<22} {took:6.1f}s  {status}")
+                log = keep_log(tier, c["id"], r.stdout + r.stderr)
+                print(f"  {mark} {c['id']:<22} {took:6.1f}s  {status}  (whole output: {log})")
                 for line in tail:
                     print(f"      {line[:140]}")
         except subprocess.TimeoutExpired:
             took = time.monotonic() - t0
             cpu_of[c["id"]] = children_cpu() - cpu0
             results.append((c, "TIMEOUT", took, f"timed out after {c['timeout']}s", False))
-            print(f"  ✗ {c['id']:<22} {took:6.1f}s  TIMEOUT ({c['timeout']}s)")
+            print(f"  ✗ {c['id']:<22} {took:6.1f}s  TIMEOUT ({c['timeout']}s)  "
+                  f"(output so far: target/suite-logs/{tier}-{c['id']}.log)")
 
     # Exit hygiene: the tier leaves the tree as it found it. rootgate
     # runs first as a check, but residue produced BY the tier lands
