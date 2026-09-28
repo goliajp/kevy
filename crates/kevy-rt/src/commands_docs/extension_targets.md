@@ -3,7 +3,7 @@ before this hook existed. An index spread over the shards by value names
 only the shards holding the value range asked for. Default: `None`.
 
 The runtime asks again for every follow-up phase
-([`ExtensionReduced::Continue`](crate::ExtensionReduced::Continue)) with
+(`ExtensionReduced::Continue`) with
 that phase's argv, so a read that walks the shards in order names one
 shard per phase. A list names each shard once and at least one shard: the
 reply waits for a chunk from every shard named.
