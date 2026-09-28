@@ -161,6 +161,17 @@ impl Commands for KevyCommands {
         }
     }
 
+    fn take_ext_out(&self) -> Vec<(usize, Vec<u8>)> {
+        if self.gate_bits() & crate::state::IDX_NONEMPTY == 0 {
+            return Vec::new();
+        }
+        crate::index_runtime::take_ext_out(&self.ctx())
+    }
+
+    fn apply_ext(&self, store: &mut Store, payload: &[u8]) {
+        crate::index_runtime::apply_ext(&self.ctx(), store, payload);
+    }
+
     fn on_flush(&self, store: &mut Store) {
         let bits = self.gate_bits();
         if bits & crate::state::IDX_NONEMPTY != 0 {

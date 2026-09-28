@@ -53,6 +53,11 @@ pub(super) fn apply_scalar_row(store: &mut Store, spec: &IndexSpec, seg: &mut Se
 /// Index one row: read the field from the hash at `key`, coerce,
 /// apply. A missing key / non-hash / missing field clears the row.
 pub(super) fn apply_row(store: &mut Store, si: &mut ShardIndex, key: &[u8]) {
+    // Global: the entry goes to its partition's owner, not into `seg`.
+    if let Some(g) = &mut si.global {
+        g.on_row(store, &si.spec, key);
+        return;
+    }
     // Agg kind: both fields must resolve — the aggregated value
     // coerces per the declared type, the group key is raw bytes.
     if let Some(a) = &mut si.agg {
