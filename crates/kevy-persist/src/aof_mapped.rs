@@ -45,6 +45,7 @@ impl Mapped {
     }
 
     fn extend_from(&mut self, start: u64, len: u64) -> io::Result<()> {
+        kevy_sys::preallocate(&self.file, len)?;
         self.file.set_len(start + len)?;
         let map = FileMap::map_at(&self.file, start, len as usize)?;
         self.chunks.push((start, map));
