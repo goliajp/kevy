@@ -14,17 +14,22 @@
 //!
 //! With `NOACK` no pending entries are made, so only the `SETID` frame is
 //! recorded. A read of history (an explicit ID) changes no pending entry
-//! and moves nothing; like every read it creates its consumer, and a
-//! consumer it created and no frame above created is recorded as `XGROUP
-//! CREATECONSUMER key group consumer`. A read that changed nothing is not
-//! recorded at all.
+//! and moves nothing.
+//!
+//! A read is the consumer's latest contact with the group, and creates the
+//! consumer if missing. A stream the read delivered from, or made the
+//! consumer on, has its frames start with `XINTERNAL.CONSUMERSEEN key group
+//! consumer t`, `t` that contact: the frames after it find the consumer
+//! and leave its time be. A read that delivered nothing and made no
+//! consumer is not recorded at all, so a consumer that only polls comes
+//! back from a restart with the contact of its last recorded read.
 
 use std::ops::Bound;
 
 use kevy_resp::{Argv, ArgvView};
 use kevy_store::{Store, StreamId};
 
-use crate::record::{create_consumer, taken_frames};
+use crate::record::{seen_frame, taken_frames};
 
 /// The frames for an `XREADGROUP` `args` just run, `marks` holding, per
 /// stream in `STREAMS` order, the group's last-delivered ID before the
@@ -37,9 +42,10 @@ pub(crate) fn read_frames<A: ArgvView + ?Sized>(
     let Some(shape) = Shape::of(args) else { return Vec::new() };
     let (group, consumer) = (&args[2], &args[3]);
     let mut frames = Vec::new();
-    for (k, (prev, new_consumer)) in marks.iter().enumerate().take(shape.streams) {
+    for (k, (prev, made)) in marks.iter().enumerate().take(shape.streams) {
         let key = &args[shape.keys + k];
         let mut claims = Vec::new();
+        let mut moved = None;
         if &args[shape.keys + shape.streams + k] == b">"
             && let Some(g) = store.stream_group_peek(key, group)
             && g.last_delivered_id != *prev
@@ -54,11 +60,12 @@ pub(crate) fn read_frames<A: ArgvView + ?Sized>(
             for part in [&b"XGROUP"[..], b"SETID", key, group, &last.encode()] {
                 setid.push(part);
             }
-            frames.push(setid);
+            moved = Some(setid);
         }
-        if claims.is_empty() && *new_consumer {
-            frames.push(create_consumer(key, group, consumer));
+        if moved.is_some() || *made {
+            frames.extend(seen_frame(store, key, group, consumer));
         }
+        frames.extend(moved);
         frames.extend(claims);
     }
     frames

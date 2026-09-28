@@ -149,6 +149,7 @@ fn dispatch_with_proto<A: ArgvView + ?Sized>(
         || crate::ops::dispatch_ops(ctx, cmd, store, args, out)
         || exec_shared(cmd, store, args, out)
         || kevy_verbs::geo::exec_read_only(cmd, store, args, out)
+        || internal_record(cmd, store, args, out)
         // EVAL / EVALSHA / EVAL_RO / EVALSHA_RO / SCRIPT.
         || crate::cmd_lua::dispatch_lua(ctx, cmd, store, args, out)
         || crate::dispatch_replay::dispatch_multikey_stub(cmd, out);
@@ -189,7 +190,8 @@ fn exec_shared<A: ArgvView + ?Sized>(
             e @ (Effect::RecordId(..)
             | Effect::RecordClaim(_)
             | Effect::RecordRead(..)
-            | Effect::RecordReads(_)),
+            | Effect::RecordReads(_)
+            | Effect::RecordSeen),
         ) => {
             record_deferred(e);
             true
@@ -200,6 +202,31 @@ fn exec_shared<A: ArgvView + ?Sized>(
         }
         Some(_) => true,
     }
+}
+
+/// An internal record verb: applied when this thread replays the AOF or
+/// applies a frame from a primary, refused from a client (a connection,
+/// a script, a transaction).
+fn internal_record<A: ArgvView + ?Sized>(
+    cmd: &[u8],
+    store: &mut Store,
+    args: &A,
+    out: &mut Vec<u8>,
+) -> bool {
+    if cmd != kevy_resp::ops_table::CONSUMER_SEEN.as_bytes() {
+        return false;
+    }
+    if kevy_rt::applying_record() {
+        kevy_verbs::aof::apply_internal(store, args, out);
+    } else {
+        refuse_internal(out);
+    }
+    true
+}
+
+#[cold]
+fn refuse_internal(out: &mut Vec<u8>) {
+    encode_error(out, kevy_verbs::aof::INTERNAL_REFUSAL);
 }
 
 #[cold]
