@@ -147,6 +147,15 @@ pub fn parse_split_point(spec: &IndexSpec, raw: &[u8]) -> Option<Vec<u8>> {
 }
 
 /// A split point as [`parse_split_point`] reads it back.
+///
+/// ```
+/// use kevy_index::{IndexKind, IndexSpec, ValType, order_key, split_point_text};
+///
+/// let s = IndexSpec::single_field(
+///     b"t".to_vec(), b"u:".to_vec(), b"t".to_vec(), ValType::F64, IndexKind::Range,
+/// );
+/// assert_eq!(split_point_text(&s, &order_key(ValType::F64, b"2.5").unwrap()), b"2.5");
+/// ```
 pub fn split_point_text(spec: &IndexSpec, enc: &[u8]) -> Vec<u8> {
     if spec.composite.is_none() {
         return decode_order_key(spec.ty, enc);
