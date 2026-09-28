@@ -23,16 +23,21 @@ use super::emit_entries;
 // ───────────── XGROUP ─────────────
 
 /// `XGROUP CREATE | DESTROY | SETID | CREATECONSUMER | DELCONSUMER`
-pub(super) fn cmd_xgroup<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
+pub(super) fn cmd_xgroup<A: ArgvView + ?Sized>(
+    store: &mut Store,
+    args: &A,
+    out: &mut Vec<u8>,
+) -> Effect {
     if args.len() < 2 {
-        return wrong_args(out, "xgroup");
+        wrong_args(out, "xgroup");
+        return Effect::Write;
     }
     let sub = args[1].to_ascii_uppercase();
     match sub.as_slice() {
         b"CREATE" => xgroup_create(store, args, out),
         b"DESTROY" => xgroup_destroy(store, args, out),
         b"SETID" => xgroup_setid(store, args, out),
-        b"CREATECONSUMER" => xgroup_create_consumer(store, args, out),
+        b"CREATECONSUMER" => return xgroup_create_consumer(store, args, out),
         b"DELCONSUMER" => xgroup_del_consumer(store, args, out),
         other => encode_error(
             out,
@@ -42,6 +47,7 @@ pub(super) fn cmd_xgroup<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out:
             ),
         ),
     }
+    Effect::Write
 }
 
 fn xgroup_create<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
@@ -94,15 +100,46 @@ fn xgroup_setid<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec
     }
 }
 
-fn xgroup_create_consumer<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
-    if args.len() != 5 {
-        return wrong_args(out, "xgroup|createconsumer");
-    }
-    match store.xgroup_create_consumer(&args[2], &args[3], &args[4], now_unix_ms()) {
-        Ok(true) => encode_integer(out, 1),
-        Ok(false) => encode_integer(out, 0),
+/// `XGROUP CREATECONSUMER key group consumer [TIME unix-ms]`. `TIME` sets
+/// the consumer's last contact with the group, created or not: it is how
+/// a record of that contact replays, the way `XCLAIM … TIME` replays a
+/// delivery. Without it a consumer this creates is recorded with the time
+/// it was created at.
+fn xgroup_create_consumer<A: ArgvView + ?Sized>(
+    store: &mut Store,
+    args: &A,
+    out: &mut Vec<u8>,
+) -> Effect {
+    let (key, group, consumer) = match args.len() {
+        5 | 7 => (&args[2], &args[3], &args[4]),
+        _ => {
+            wrong_args(out, "xgroup|createconsumer");
+            return Effect::Write;
+        }
+    };
+    let created = if args.len() == 7 {
+        if !args[5].eq_ignore_ascii_case(b"TIME") {
+            encode_error(out, "ERR syntax error");
+            return Effect::Write;
+        }
+        let Some(at) = crate::args::arg_u64(&args[6]) else {
+            encode_error(out, "ERR value is not an integer or out of range");
+            return Effect::Write;
+        };
+        store.xgroup_consumer_seen(key, group, consumer, at)
+    } else {
+        store.xgroup_create_consumer(key, group, consumer, now_unix_ms())
+    };
+    let effect = match (args.len(), &created) {
+        (5, Ok(true)) => Effect::RecordSeen,
+        (5, Ok(false)) => Effect::Unchanged,
+        _ => Effect::Write,
+    };
+    match created {
+        Ok(made) => encode_integer(out, i64::from(made)),
         Err(e) => store_err(out, e),
     }
+    effect
 }
 
 fn xgroup_del_consumer<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
@@ -150,11 +187,11 @@ pub(super) fn cmd_xreadgroup<A: ArgvView + ?Sized>(
     let streams = std::mem::take(&mut parsed.streams);
     let mut marks = ReadMarks::default();
     for (key, last_seen_arg) in streams {
-        let mark = ReadMarks::read(store, &key, &parsed.group, &parsed.consumer);
+        let mark = ReadMarks::read(store, &key, &parsed.group);
         let Ok(entries) = xreadgroup_one_stream(store, &parsed, &key, &last_seen_arg, out) else {
             return Effect::Write;
         };
-        marks.push(mark, !entries.is_empty());
+        marks.push(mark);
         if !entries.is_empty() {
             reply.push((key, entries));
         }

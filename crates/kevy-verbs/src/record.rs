@@ -95,7 +95,8 @@ pub fn id_bytes(buf: &mut [u8; 41], id: StreamId) -> &[u8] {
 /// The frames to record for `effect`, the effect of `args` run against
 /// `store` just now: one for [`Effect::RecordId`], one or more for
 /// [`Effect::RecordClaim`], [`Effect::RecordRead`] and
-/// [`Effect::RecordReads`], none for every other effect. It only reads
+/// [`Effect::RecordReads`], one for [`Effect::RecordSeen`], none for every
+/// other effect. It only reads
 /// `store`, and with no side effects: recording a write never changes
 /// what the write left (a stream is never spilled to the cold tier, so
 /// the groups it reads are resident).
@@ -120,9 +121,8 @@ pub fn deferred_frames<A: ArgvView + ?Sized>(
             vec![f]
         }
         Effect::RecordClaim(c) => claim_frames(store, args, c),
-        Effect::RecordRead(prev, new_consumer) => {
-            crate::record_read::read_frames(store, args, &[(*prev, *new_consumer)])
-        }
+        Effect::RecordSeen => seen_frame(store, &args[2], &args[3], &args[4]).into_iter().collect(),
+        Effect::RecordRead(prev) => crate::record_read::read_frames(store, args, &[*prev]),
         Effect::RecordReads(marks) => crate::record_read::read_frames(store, args, marks),
         _ => Vec::new(),
     }
@@ -136,8 +136,9 @@ fn claim_frames<A: ArgvView + ?Sized>(store: &Store, args: &A, c: &Claim) -> Vec
         f.push(b"JUSTID");
         frames.push(f);
     }
-    if frames.is_empty() && c.new_consumer {
-        frames.push(create_consumer(key, group, consumer));
+    // first, so the XCLAIM frames find the consumer and leave its time be
+    if c.new_consumer {
+        frames.splice(0..0, seen_frame(store, key, group, consumer));
     }
     frames
 }
@@ -160,13 +161,18 @@ pub(crate) fn claim_head(
     f
 }
 
-/// `XGROUP CREATECONSUMER key group consumer`.
-pub(crate) fn create_consumer(key: &[u8], group: &[u8], consumer: &[u8]) -> Argv {
-    let mut f = Argv::with_capacity(5, 0);
-    for part in [&b"XGROUP"[..], b"CREATECONSUMER", key, group, consumer] {
+/// `XGROUP CREATECONSUMER key group consumer TIME t`, `t` the consumer's
+/// last contact with the group as it stands now: replayed, the consumer
+/// exists with that time, whatever the replay's clock says. `None` when
+/// the group or the consumer is gone.
+pub(crate) fn seen_frame(store: &Store, key: &[u8], group: &[u8], consumer: &[u8]) -> Option<Argv> {
+    let seen = store.stream_group_peek(key, group)?.consumers.get(consumer)?.last_seen_ms();
+    let mut f = Argv::with_capacity(7, 0);
+    for part in [&b"XGROUP"[..], b"CREATECONSUMER", key, group, consumer, b"TIME"] {
         f.push(part);
     }
-    f
+    f.push(seen.to_string().as_bytes());
+    Some(f)
 }
 
 /// One `XCLAIM … TIME t RETRYCOUNT n FORCE JUSTID` per `(delivery time,

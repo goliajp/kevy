@@ -3866,16 +3866,16 @@ $6
 stream
 $6
 syntax
-$151
-XGROUP CREATE key group id|$ [MKSTREAM] | DESTROY key group | SETID key group id|$ | CREATECONSUMER key group consumer | DELCONSUMER key group consumer
+$181
+XGROUP CREATE key group id|$ [MKSTREAM] | DESTROY key group | SETID key group id|$ | CREATECONSUMER key group consumer [TIME unix-time-milliseconds] | DELCONSUMER key group consumer
 $10
 complexity
 $94
 CREATE / DESTROY: O(1) plus an O(N*F) reweigh. SETID / CREATECONSUMER: O(1). DELCONSUMER: O(P)
 $6
 compat
-$210
-differs: CREATE / SETID / DESTROY / CREATECONSUMER / DELCONSUMER / MKSTREAM are supported, but on a missing key the non-CREATE subcommands return 0 or NOGROUP instead of Redis's error, and XGROUP HELP is absent
+$355
+differs: CREATE / SETID / DESTROY / CREATECONSUMER / DELCONSUMER / MKSTREAM are supported, but on a missing key the non-CREATE subcommands return 0 or NOGROUP instead of Redis's error, and XGROUP HELP is absent; CREATECONSUMER also takes TIME, which sets the consumer's last contact with the group (how that contact is recorded to the AOF and to replicas)
 $5
 flags
 *1

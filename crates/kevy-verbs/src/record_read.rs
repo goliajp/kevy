@@ -14,31 +14,35 @@
 //!
 //! With `NOACK` no pending entries are made, so only the `SETID` frame is
 //! recorded. A read of history (an explicit ID) changes no pending entry
-//! and moves nothing; like every read it creates its consumer, and a
-//! consumer it created and no frame above created is recorded as `XGROUP
-//! CREATECONSUMER key group consumer`. A read that changed nothing is not
-//! recorded at all.
+//! and moves nothing.
+//!
+//! Every read, of any form and whatever it finds, is the consumer's
+//! latest contact with the group, and creates the consumer if missing. So
+//! each stream's frames start with `XGROUP CREATECONSUMER key group
+//! consumer TIME t`, `t` that contact: the frames after it find the
+//! consumer and leave its time be.
 
 use std::ops::Bound;
 
 use kevy_resp::{Argv, ArgvView};
 use kevy_store::{Store, StreamId};
 
-use crate::record::{create_consumer, taken_frames};
+use crate::record::{seen_frame, taken_frames};
 
 /// The frames for an `XREADGROUP` `args` just run, `marks` holding, per
 /// stream in `STREAMS` order, the group's last-delivered ID before the
-/// read and whether the read created the consumer.
+/// read.
 pub(crate) fn read_frames<A: ArgvView + ?Sized>(
     store: &Store,
     args: &A,
-    marks: &[(StreamId, bool)],
+    marks: &[StreamId],
 ) -> Vec<Argv> {
     let Some(shape) = Shape::of(args) else { return Vec::new() };
     let (group, consumer) = (&args[2], &args[3]);
     let mut frames = Vec::new();
-    for (k, (prev, new_consumer)) in marks.iter().enumerate().take(shape.streams) {
+    for (k, prev) in marks.iter().enumerate().take(shape.streams) {
         let key = &args[shape.keys + k];
+        frames.extend(seen_frame(store, key, group, consumer));
         let mut claims = Vec::new();
         if &args[shape.keys + shape.streams + k] == b">"
             && let Some(g) = store.stream_group_peek(key, group)
@@ -55,9 +59,6 @@ pub(crate) fn read_frames<A: ArgvView + ?Sized>(
                 setid.push(part);
             }
             frames.push(setid);
-        }
-        if claims.is_empty() && *new_consumer {
-            frames.push(create_consumer(key, group, consumer));
         }
         frames.extend(claims);
     }

@@ -205,3 +205,81 @@ fn delivery_times_survive_a_restart() {
     assert!(groups.contains("$1\r\nn\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:0"), "{groups}");
     assert!(before[2].contains("newbie"), "{}", before[2]);
 }
+
+/// `(consumer, idle)` pairs of an `XINFO CONSUMERS` reply, by name.
+fn consumer_idles(reply: &str) -> Vec<(String, i64)> {
+    let t: Vec<&str> = reply.split("\r\n").collect();
+    let mut out: Vec<(String, i64)> = (0..t.len())
+        .filter(|&i| t[i] == "name" && t.get(i + 7) == Some(&"idle"))
+        .map(|i| (t[i + 2].to_string(), t[i + 8][1..].parse().unwrap()))
+        .collect();
+    out.sort();
+    out
+}
+
+/// The consumers' idle times, read now, and when they were read.
+fn seen(c: &mut Conn) -> (Vec<(String, i64)>, std::time::Instant) {
+    (consumer_idles(&c.call("XINFO CONSUMERS s g")), std::time::Instant::now())
+}
+
+/// Each consumer's idle time went on by what passed since `at`.
+fn assert_went_on(before: &[(String, i64)], after: &[(String, i64)], at: std::time::Instant) {
+    let elapsed = at.elapsed().as_millis() as i64;
+    assert_eq!(before.len(), 6, "six consumers: {before:?}");
+    for ((name, b), (other, a)) in before.iter().zip(after) {
+        assert_eq!(name, other);
+        let gap = a - b;
+        assert!(
+            (elapsed - 80..=elapsed + 80).contains(&gap),
+            "{name}: idle went {b} -> {a} over {elapsed} ms: it started over instead of going on"
+        );
+    }
+}
+
+/// A consumer's last contact with its group comes back from the log as
+/// it was, however the consumer came about or was last seen: a read that
+/// delivered, a read that found nothing, a history read, `CREATECONSUMER`,
+/// and the claims that create their consumer. Twice: from the log as
+/// written, and from the log `BGREWRITEAOF` compacts it to.
+#[test]
+fn consumer_seen_times_survive_a_restart() {
+    let dir = kevy_tmpdir::TmpDir::new("stream-seen");
+    let mut first = (Vec::new(), std::time::Instant::now());
+    with_runtime(free_port(), dir.path(), 1, |p| {
+        let mut c = Conn::open(p);
+        for id in ["1-1", "2-1", "3-1"] {
+            assert!(c.call(&format!("XADD s {id} f v")).starts_with('$'));
+        }
+        assert_eq!(c.call("XGROUP CREATE s g 0"), "+OK\r\n");
+        assert!(c.call("XREADGROUP GROUP g reader COUNT 2 STREAMS s >").starts_with("*1"));
+        assert_eq!(c.call("XGROUP CREATECONSUMER s g made"), ":1\r\n");
+        std::thread::sleep(Duration::from_millis(60));
+        assert!(c.call("XREADGROUP GROUP g idler STREAMS s 0").starts_with('*'));
+        assert!(c.call("XCLAIM s g claimer 0 1-1 JUSTID").starts_with("*1"));
+        assert!(c.call("XAUTOCLAIM s g auto 0 2-1 COUNT 1 JUSTID").starts_with("*3"));
+        std::thread::sleep(Duration::from_millis(60));
+        // an existing consumer is seen again by an empty read
+        assert!(c.call("XREADGROUP GROUP g late COUNT 1 STREAMS s >").starts_with("*1"));
+        assert_eq!(c.call("XREADGROUP GROUP g reader STREAMS s >"), "*-1\r\n");
+        std::thread::sleep(Duration::from_millis(300));
+        first = seen(&mut c);
+    });
+    let mut second = (Vec::new(), std::time::Instant::now());
+    with_runtime(free_port(), dir.path(), 1, |p| {
+        let mut c = Conn::open(p);
+        let (now, _) = seen(&mut c);
+        assert_went_on(&first.0, &now, first.1);
+        second = seen(&mut c);
+        assert_eq!(c.call("BGREWRITEAOF"), "+OK\r\n");
+        let aof = dir.path().join("aof-0.aof");
+        let compacted = (0..1000).any(|_| {
+            std::thread::sleep(Duration::from_millis(10));
+            std::fs::read(&aof).is_ok_and(|b| b.windows(8).any(|w| w == b"MKSTREAM"))
+        });
+        assert!(compacted, "the rewritten AOF never swapped in");
+    });
+    with_runtime(free_port(), dir.path(), 1, |p| {
+        let (now, _) = seen(&mut Conn::open(p));
+        assert_went_on(&second.0, &now, second.1);
+    });
+}

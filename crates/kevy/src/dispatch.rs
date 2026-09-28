@@ -189,7 +189,8 @@ fn exec_shared<A: ArgvView + ?Sized>(
             e @ (Effect::RecordId(..)
             | Effect::RecordClaim(_)
             | Effect::RecordRead(..)
-            | Effect::RecordReads(_)),
+            | Effect::RecordReads(_)
+            | Effect::RecordSeen),
         ) => {
             record_deferred(e);
             true

@@ -264,6 +264,10 @@ fn embed_writer_sends_stream_writes_as_what_they_did() {
         || std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis();
     let (from, read, to) = (now(), call("XREADGROUP GROUP g c STREAMS s >"), now());
     assert!(read.starts_with("*1\r\n"), "{read}");
+    let seen = words(&next_frame(&mut client, Duration::from_secs(2)));
+    assert_eq!(seen[..6], ["XGROUP", "CREATECONSUMER", "s", "g", "c", "TIME"]);
+    let met: u128 = seen[6].parse().expect("a contact time");
+    assert!((from..=to).contains(&met), "seen at {met}, read between {from} and {to}");
     let setid = words(&next_frame(&mut client, Duration::from_secs(2)));
     assert_eq!(setid, ["XGROUP", "SETID", "s", "g", &id]);
     let claim = words(&next_frame(&mut client, Duration::from_secs(2)));
@@ -276,6 +280,7 @@ fn embed_writer_sends_stream_writes_as_what_they_did() {
     let frames = [
         vec![b"XADD".to_vec(), b"s".to_vec(), id.as_bytes().to_vec(), b"f".to_vec(), b"v".to_vec()],
         ["XGROUP", "CREATE", "s", "g", "0"].iter().map(|p| p.as_bytes().to_vec()).collect(),
+        seen.iter().map(|p| p.as_bytes().to_vec()).collect(),
         setid.iter().map(|p| p.as_bytes().to_vec()).collect(),
         claim.iter().map(|p| p.as_bytes().to_vec()).collect(),
     ];
