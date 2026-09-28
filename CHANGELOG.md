@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Writes made after a `BGSAVE` survive a restart on macOS, and on Linux
+  without io_uring.** On the epoll and kqueue reactors a writer thread
+  appends AOF records through its own handle to the log. `BGSAVE` resets
+  the log by renaming a fresh file over it, but the writer thread kept its
+  handle to the old file, so every write after the reset went to a file
+  that no longer had a name and was gone at the next start. The thread now
+  switches to the new file when the reset lands, as it already did after
+  `BGREWRITEAOF`. Affected since 5.1.0; the io_uring reactor and
+  `KEVY_AOF_OFFLOAD=0` were not affected.
+
 - **A server refuses a port another server already holds.** Every shard
   listens with `SO_REUSEPORT`, and on its own that let a second kevy
   started by the same user on the same port join the first one's
