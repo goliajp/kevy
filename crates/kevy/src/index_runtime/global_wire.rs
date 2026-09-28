@@ -156,4 +156,25 @@ mod tests {
             assert_eq!(decode(&bytes[..bytes.len() - 1]), None, "a cut message is refused");
         }
     }
+
+    #[test]
+    fn a_message_this_encoder_did_not_write_is_refused() {
+        let good = encode(
+            b"idx",
+            1,
+            0,
+            &Delta::Upsert { key: b"k".to_vec(), value: IndexValue::I64(1), values: vec![] },
+        );
+        // the op byte sits after the name (2 + 3), incarnation (8) and partition (2)
+        let mut bad_op = good.clone();
+        bad_op[15] = 9;
+        assert_eq!(decode(&bad_op), None);
+        // the value's tag follows the key (4 + 1)
+        let mut bad_tag = good.clone();
+        bad_tag[21] = 7;
+        assert_eq!(decode(&bad_tag), None);
+        let mut trailing = good;
+        trailing.push(0);
+        assert_eq!(decode(&trailing), None, "bytes past the message");
+    }
 }

@@ -196,3 +196,33 @@ fn an_orderpath_split_point_reads_back_from_its_hex() {
         assert_eq!(crate::parse_split_point(&spec, bad), None, "{}", String::from_utf8_lossy(bad));
     }
 }
+
+#[test]
+fn a_split_point_reads_back_in_its_column_type() {
+    for (ty, raw) in [(ValType::F64, &b"-2.5"[..]), (ValType::Str, b"tokyo"), (ValType::I64, b"-7")]
+    {
+        let s = IndexSpec::single_field(
+            b"i".to_vec(),
+            b"u:".to_vec(),
+            b"f".to_vec(),
+            ty,
+            IndexKind::Range,
+        );
+        let enc = crate::parse_split_point(&s, raw).unwrap();
+        assert_eq!(crate::split_point_text(&s, &enc), raw);
+        let part = Partitioning::Global { splits: vec![enc] };
+        assert_eq!(part.split_values(ty), [raw.to_vec()]);
+    }
+}
+
+#[test]
+fn a_sidecar_with_a_partition_column_it_cannot_read_is_refused() {
+    let mut c = Catalog::new();
+    c.create_with(spec("g", IndexKind::Range), global(&[b"\x80"])).unwrap();
+    let text = c.to_sidecar();
+    assert!(Catalog::from_sidecar(&text).is_some());
+    for (from, to) in [("\tg,80", "\tq,80"), ("\tg,80", "\tg,8"), ("\tg,80", "\tg,zz")] {
+        assert!(text.contains(from), "{text}");
+        assert!(Catalog::from_sidecar(&text.replace(from, to)).is_none(), "{to}");
+    }
+}

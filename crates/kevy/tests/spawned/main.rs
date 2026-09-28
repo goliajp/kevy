@@ -7,6 +7,7 @@ mod cluster_crossslot_mget;
 mod cluster_known_nodes_count;
 mod concurrent_writers_overlap;
 mod failover_port_base;
+mod global_index_restart;
 mod goredis_redispy_battle;
 mod jedis_stackex_battle;
 mod port_claim;

@@ -19,6 +19,12 @@ impl Server {
     fn start(shards: usize) -> Self {
         let port = kevy_testnet::free_port();
         let dir = std::env::temp_dir().join(format!("kevy-gidx-{}-{port}", std::process::id()));
+        Self::start_at(dir, shards)
+    }
+
+    /// A server over `dir`, which it removes when dropped.
+    fn start_at(dir: std::path::PathBuf, shards: usize) -> Self {
+        let port = kevy_testnet::free_port();
         std::fs::create_dir_all(&dir).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
         let (stop_thread, dir_thread) = (stop.clone(), dir.clone());
@@ -41,13 +47,19 @@ impl Server {
     }
 }
 
-impl Drop for Server {
-    fn drop(&mut self) {
+impl Server {
+    fn halt(&mut self) {
         self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
         let _ = std::net::TcpStream::connect(("127.0.0.1", self.port));
         if let Some(h) = self.handle.take() {
             let _ = h.join();
         }
+    }
+}
+
+impl Drop for Server {
+    fn drop(&mut self) {
+        self.halt();
         let _ = std::fs::remove_dir_all(&self.dir);
     }
 }
@@ -328,11 +340,14 @@ fn a_global_index_over_existing_rows_answers_all_of_them_or_says_it_is_building(
     assert!(building > 0, "the build finished before the first query: nothing was tested");
 }
 
-/// The split values `IDX.DESCRIBE` names, as integers.
+/// The split values of `name`'s `partitioning` pair in `IDX.DESCRIBE`, as
+/// integers (empty for a local index or a global one with one partition).
 fn described_splits(w: &mut Wire, name: &[u8]) -> Vec<i64> {
     let d = text(&call(w, &[b"IDX.DESCRIBE", name]));
-    let decl = d.rsplit("PARTITION").next().unwrap_or_default().to_string();
-    decl.split("SPLIT\r\n").skip(1).filter_map(|s| s.split("\r\n").nth(1)?.parse().ok()).collect()
+    let Some(at) = d.find("$6\r\nglobal\r\n*") else { return Vec::new() };
+    let lines: Vec<&str> = d[at..].split("\r\n").collect();
+    let n: usize = lines[2][1..].parse().unwrap();
+    (0..n).map(|i| lines[4 + 2 * i].parse().unwrap()).collect()
 }
 
 fn wait_ready(w: &mut Wire, name: &[u8]) {
@@ -689,4 +704,45 @@ fn a_global_index_counts_its_placement_table_in_its_bytes() {
     // the partitions hold what the local index holds; the rest is placement
     let placement = gb.saturating_sub(lb) as f64 / 20_000.0;
     assert!(placement > 20.0, "the placement table is counted: {placement:.1} bytes a row");
+}
+
+#[test]
+fn partition_options_that_cannot_apply_are_refused_by_name() {
+    let srv = Server::start(4);
+    let mut w = srv.wire();
+    let base = "IDX.CREATE x ON PREFIX user: FIELD age TYPE i64 KIND range";
+    for (tail, why) in [
+        ("PARTITION sideways", "PARTITION must be local|global"),
+        ("SPLIT 5", "SPLIT requires PARTITION global"),
+        ("PARTITION global SPLIT five", "does not coerce to the index TYPE"),
+    ] {
+        let r = run(&mut w, &format!("{base} {tail}"));
+        assert!(r.contains(why), "{tail}: {r}");
+    }
+    assert_eq!(run(&mut w, &format!("{base} PARTITION local")), "+OK\r\n");
+    assert!(run(&mut w, "IDX.DESCRIBE x").contains("partitioning\r\n$5\r\nlocal"));
+    // a selection reaches every partition met, and the plan says so
+    create(
+        &mut w,
+        b"g",
+        &[b"PARTITION", b"global", b"SPLIT", b"50", b"VALUES", b"age", b"TYPES", b"i64"],
+    );
+    let plan = run(&mut w, "IDX.EXPLAIN g RANGE 0 100 SORT age DESC");
+    assert!(plan.contains("partition(s) 0..=1 of 2, each partition met answers"), "{plan}");
+}
+
+#[test]
+fn a_table_replaced_with_a_sampled_global_path_samples_every_shard() {
+    let srv = Server::start(4);
+    let mut w = srv.wire();
+    load(&mut w, 0, 8_000, |i| (i * 7919) % 1000);
+    let declare = "TABLE.DECLARE u PREFIX user: PK id COLUMN id i64 COLUMN age i64 INDEX age range";
+    assert_eq!(run(&mut w, declare), "+OK\r\n");
+    let replace = format!("{} GLOBAL", declare.replacen("DECLARE", "REPLACE", 1));
+    assert_eq!(run(&mut w, &replace), "+OK\r\n");
+    let splits = described_splits(&mut w, b"u.age");
+    assert_eq!(splits.len(), 3, "{splits:?}");
+    for (s, want) in splits.iter().zip([250, 500, 750]) {
+        assert!((s - want).abs() < 60, "split {s}, expected near {want}");
+    }
 }
