@@ -59,6 +59,24 @@ range|unique [MAXMEM <bytes>]`
 
 一个按"每张表一条"读起来要 58 条索引的 schema，按"每种全局查询形状一条"读通常不到 20 条。如果你在逼近 64，该问的问题是：**它们里面有几条其实是披着索引外衣的父子导航。**
 
+## 全局索引（`PARTITION global`）
+
+索引默认是本地的：每个 shard 只索引自己持有的行，所以每次查询都要发给所有 shard，再在发起端把各页归并。**全局**索引按值切成若干分区，每个 shard 一个。行仍然留在它的键哈希到的 shard 上，它的索引条目放在它的值所落的分区里。
+
+```
+IDX.CREATE by_age ON PREFIX user: FIELD age TYPE i64 KIND range PARTITION global SPLIT 30 SPLIT 60
+TABLE.DECLARE user PREFIX user: PK id COLUMN id i64 COLUMN age i64 INDEX age range GLOBAL SPLIT AT 30 60
+```
+
+- **分裂点。** `SPLIT v`（每个点写一次，因为 `IDX.CREATE` 的选项成对出现）或 `GLOBAL SPLIT AT v…`，最多比 shard 数少一个。不写的话，kevy 从行里采样（每个分区 512 个）取分位点，分区一开始就大致均匀。在没有行的时候创建的索引只有一个分区，直到 `IDX.REBUILD` 重新采样。同一个值的条目都在同一个分区里，所以一个值占的行比它应得的份额多时，它无法被拆开。`ORDERPATH … GLOBAL` 总是采样。
+- **读。** `EQ`，或者落在一个分区之内的 `RANGE`，只读一个 shard。按 `(value, key)` 顺序翻页时，依次走需要的分区，把各段直接拼接，不做 N 路归并。`IDX.COUNT` 和选择子句（`SORT`、`DISTINCT`、`FACET`、`OFFSET`）只发给范围覆盖到的分区。`IDX.EXPLAIN` 会写出是哪些。
+- **写。** 改变了行的条目的写入，给条目所在分区发一条消息（条目换分区时两条），客户端的回复等分区应用完才返回：回复之后发出的读一定能看到这次写入。
+- **`FIELDS` 取自 `VALUES`。** 分区持有的是条目，不是行，所以全局索引用它存下的列回答 `FIELDS`。没存的字段会被点名拒绝，`IDX.ADVISE` 会建议把它加进 `VALUES`。
+- **种类与限制。** 只支持 `range` 和 `unique`。不能用于 `COMPOSE` 和视图（两者都要求行的条目和行在同一个 shard），不能用于窗口表，也不能用于嵌入式存储，都会点名拒绝。
+- **建造。** 在每个 shard 都把自己已有行的条目发完之前，查询回答 `-INDEXBUILDING`；查询不会看到不完整的分区。
+- **运维。** `IDX.LIST` 给每个索引报 `partitioning`，全局索引另外报 `partitions`、`max_entries`、`mean_entries`，倾斜程度就是后两者之比。`IDX.REBUILD <name>` 重新采样并重建。`IDX.VERIFY` 把每一行和它所在分区持有的条目逐一对账，所以 `drift` 和 `missing` 是精确值，全局唯一索引的 `duplicates` 覆盖整个键空间（本地唯一索引只看得到同一个 shard 内的重复）。分区数多于 shard 数时重启，会均匀保留一部分分裂点。
+- **内存。** 条目本身的开销和本地索引一样；此外，行所在的 shard 为每个全局索引保存每行键的一份拷贝，连同它的分区号和条目哈希，用来判断一次写入要发哪些消息。
+
 ## 一致性与成本模型
 
 - 一次写入和它引发的索引更新，在所属 shard 内是原子的（单 reactor 线程 / shard 锁）。跨 shard 查询逐 shard 归并，没有全局快照（SCAN 类，和 DBSIZE 同级）。
