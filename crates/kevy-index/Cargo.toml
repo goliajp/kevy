@@ -17,4 +17,5 @@ categories = ["data-structures", "database-implementations"]
 workspace = true
 
 [dependencies]
+kevy-hash = { path = "../kevy-hash", version = "6.4.0" }
 kevy-time = { path = "../kevy-time", version = "6.4.0" }
