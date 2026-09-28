@@ -277,9 +277,7 @@ impl<C: Commands> Shard<C> {
                 self.id,
                 crate::CLIENT_OUTPUT_HARD_LIMIT,
             );
-            if let Some(c) = self.conns.get_mut(&id) {
-                c.closing = true;
-            }
+            self.mark_closing(id);
             self.dirty.push(id);
         }
     }

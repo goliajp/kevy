@@ -321,8 +321,8 @@ impl<C: Commands> Shard<C> {
         // queued cmds also emit RESP3 shapes. AOF logging + WATCH bump
         // happen inside `exec_op`, driven by `meta`.
         let proto = self.conns.get(&conn_id).map_or(RespVersion::V2, |c| c.proto);
-        if is_quit && let Some(c) = self.conns.get_mut(&conn_id) {
-            c.closing = true;
+        if is_quit {
+            self.mark_closing(conn_id);
         }
         if shard == self.id {
             let part = self.run_dispatch(args, proto, meta);
@@ -352,9 +352,9 @@ impl<C: Commands> Shard<C> {
                 slot.remaining = remaining;
                 slot.agg = agg;
             }
-            if is_quit {
-                c.closing = true;
-            }
+        }
+        if is_quit {
+            self.mark_closing(conn_id);
         }
         if targets.is_empty() {
             self.fold(conn_id, seq, Part::Int(0));

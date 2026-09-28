@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **A `QUIT` queued inside `MULTI` closes the connection on io_uring.**
+  After `EXEC` ran it, the io_uring reactor sent the replies and then kept
+  the socket open until the client hung up, because the reactor only
+  cancels a connection's pending read when it closes the connection itself.
+  It now closes as it does on epoll, and the disconnect for exceeding the
+  output buffer limit takes the same path. Affected since 1.25.0.
+
 - **A server refuses a port another server already holds.** Every shard
   listens with `SO_REUSEPORT`, and on its own that let a second kevy
   started by the same user on the same port join the first one's
