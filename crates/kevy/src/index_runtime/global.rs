@@ -38,7 +38,7 @@ pub(crate) enum Delta {
 /// This shard's part in one global index.
 #[derive(Debug)]
 pub(crate) struct GlobalRole {
-    part: Partitioning,
+    pub(super) part: Partitioning,
     shard: usize,
     nshards: usize,
     /// The catalog's incarnation of this index; messages for another are
@@ -105,7 +105,7 @@ impl GlobalRole {
         };
         let enc = value_order_bytes(&value);
         let p = self.part.partition_of(&enc) as u16;
-        let h = entry_hash(&enc, &values);
+        let h = entry_hash(&enc, values.iter().map(|v| v.as_deref()));
         if prev == Some((p, h)) {
             return;
         }
@@ -175,7 +175,7 @@ pub(crate) fn sample(store: &mut Store, spec: &IndexSpec, max: usize) -> Vec<Vec
 
 /// The row's entry: its index value and stored VALUES, or `None` when the
 /// row is gone, not a hash, or excluded (a missing or uncoercible field).
-fn derive(
+pub(super) fn derive(
     store: &mut Store,
     spec: &IndexSpec,
     key: &[u8],
@@ -187,8 +187,12 @@ fn derive(
     Some((value, vals.split_off(w)))
 }
 
-/// FNV-1a over the entry's encoded value and stored columns.
-fn entry_hash(enc: &[u8], values: &[Option<Vec<u8>>]) -> u64 {
+/// FNV-1a over the entry's encoded value and stored columns — computed
+/// the same on the row's shard and, for `IDX.VERIFY`, on the owner.
+pub(super) fn entry_hash<'a>(
+    enc: &[u8],
+    values: impl IntoIterator<Item = Option<&'a [u8]>>,
+) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     let mut eat = |bytes: &[u8]| {
         for &b in (bytes.len() as u64).to_le_bytes().iter().chain(bytes) {

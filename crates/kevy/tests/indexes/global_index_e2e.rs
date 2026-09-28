@@ -405,3 +405,56 @@ fn idx_list_shows_how_a_global_index_is_spread() {
         assert!(g.contains(pair), "{pair} in {g}");
     }
 }
+
+/// VERIFY's counters by label.
+fn verified(w: &mut Wire, name: &[u8]) -> std::collections::HashMap<String, u64> {
+    let r = text(&call(w, &[b"IDX.VERIFY", name]));
+    let words: Vec<&str> = r.split("\r\n").filter(|s| !s.starts_with(['*', '$'])).collect();
+    words.chunks(2).filter_map(|kv| Some((kv[0].to_string(), kv.get(1)?.parse().ok()?))).collect()
+}
+
+#[test]
+fn verify_on_a_global_index_matches_every_row_to_its_entry() {
+    let srv = Server::start(4);
+    let mut w = srv.wire();
+    for i in 0..600u32 {
+        let key = format!("user:{i}");
+        // every 50th row cannot be indexed; every 100th shares its email
+        let age = if i % 50 == 7 { "old".to_string() } else { (i % 90).to_string() };
+        let email = if i % 100 == 0 { "shared@x".to_string() } else { format!("u{i}@x") };
+        call(
+            &mut w,
+            &[b"HSET", key.as_bytes(), b"age", age.as_bytes(), b"email", email.as_bytes()],
+        );
+    }
+    create(&mut w, b"age_l", &[]);
+    create(&mut w, b"age_g", &[b"PARTITION", b"global"]);
+    let unique: &[&[u8]] = &[
+        b"IDX.CREATE",
+        b"email_g",
+        b"ON",
+        b"PREFIX",
+        b"user:",
+        b"FIELD",
+        b"email",
+        b"TYPE",
+        b"str",
+        b"KIND",
+        b"unique",
+        b"PARTITION",
+        b"global",
+    ];
+    assert_eq!(call(&mut w, unique), b"+OK\r\n");
+    for name in [&b"age_l"[..], b"age_g", b"email_g"] {
+        wait_ready(&mut w, name);
+    }
+    let (g, l) = (verified(&mut w, b"age_g"), verified(&mut w, b"age_l"));
+    assert_eq!((g["drift"], g["missing"]), (0, 0), "{g:?}");
+    for label in ["entries", "coerce_failures", "checked"] {
+        assert_eq!(g[label], l[label], "{label}: global {g:?} local {l:?}");
+    }
+    assert_eq!(g["entries"], 588);
+    // six rows share one email: one value held by more than one key
+    let u = verified(&mut w, b"email_g");
+    assert_eq!((u["entries"], u["duplicates"], u["drift"]), (600, 1, 0), "{u:?}");
+}
