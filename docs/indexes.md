@@ -171,7 +171,9 @@ TABLE.DECLARE user PREFIX user: PK id COLUMN id i64 COLUMN age i64 INDEX age ran
   quantiles: the largest partition starts within about 10% of the mean. An index created over no rows has one partition until
   `IDX.REBUILD` samples again. Every entry of one value lives in one
   partition, so a value held by more than its share of rows cannot be
-  split. An `ORDERPATH … GLOBAL` always samples.
+  split. An `ORDERPATH … GLOBAL` samples, or takes `SPLIT AT` points
+  written the way `TABLE.DESCRIBE` writes them: `0x` and the path's
+  encoded order bytes, since a point there spans several columns.
 - **Reads.** An `EQ`, or a `RANGE` inside one partition, reads one shard.
   A page in `(value, key)` order walks the partitions it needs one after
   another and concatenates them — no merge of N pages. `IDX.COUNT` and

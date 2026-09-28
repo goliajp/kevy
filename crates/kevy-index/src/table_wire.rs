@@ -6,7 +6,7 @@ use crate::catalog::{IndexKind, ValType};
 use crate::table::{OrderPath, TableIndex, TableSpec, WindowSpec, dotted};
 
 /// The usage line every malformed `TABLE.DECLARE` answers with.
-pub const TABLE_DECLARE_USAGE: &str = "ERR usage: TABLE.DECLARE name PREFIX p PK col COLUMN name i64|f64|str [COLUMN ...] [INDEX col range|unique [VALUES col ...] [GLOBAL [SPLIT AT v ...]]] [ORDERPATH name ON col [DESC] [THEN col [DESC]] ... [GLOBAL]] [WINDOW col SPAN n BUCKET n] [AUTODECLARE n]";
+pub const TABLE_DECLARE_USAGE: &str = "ERR usage: TABLE.DECLARE name PREFIX p PK col COLUMN name i64|f64|str [COLUMN ...] [INDEX col range|unique [VALUES col ...] [GLOBAL [SPLIT AT v ...]]] [ORDERPATH name ON col [DESC] [THEN col [DESC]] ... [GLOBAL [SPLIT AT 0xhex ...]]] [WINDOW col SPAN n BUCKET n] [AUTODECLARE n]";
 
 /// A table path declared `GLOBAL`: spread over the shards by value, as
 /// `IDX.CREATE … PARTITION global` spreads an index.

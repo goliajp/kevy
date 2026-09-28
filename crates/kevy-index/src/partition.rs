@@ -118,6 +118,46 @@ pub fn splits_from_sample(mut sample: Vec<Vec<u8>>, parts: usize) -> Vec<Vec<u8>
     out
 }
 
+/// The split point `raw`, as written after `SPLIT` or `SPLIT AT`, in
+/// `spec`'s order encoding: a value of the index's type, or — for a
+/// composite (`ORDERPATH`) index, whose points are frames of several
+/// columns — `0x` and the encoded bytes in hex. `None` when it does not
+/// read as either.
+///
+/// ```
+/// use kevy_index::{IndexKind, IndexSpec, ValType, parse_split_point, split_point_text};
+///
+/// let s = IndexSpec::single_field(
+///     b"age".to_vec(), b"u:".to_vec(), b"age".to_vec(), ValType::I64, IndexKind::Range,
+/// );
+/// let enc = parse_split_point(&s, b"40").unwrap();
+/// assert_eq!(split_point_text(&s, &enc), b"40");
+/// assert_eq!(parse_split_point(&s, b"forty"), None);
+/// ```
+pub fn parse_split_point(spec: &IndexSpec, raw: &[u8]) -> Option<Vec<u8>> {
+    if spec.composite.is_none() {
+        return crate::order_key(spec.ty, raw);
+    }
+    let hex = raw.strip_prefix(b"0x")?;
+    if hex.len() % 2 != 0 {
+        return None;
+    }
+    let digit = |c: u8| (c as char).to_digit(16).map(|d| d as u8);
+    hex.chunks(2).map(|p| Some(digit(p[0])? << 4 | digit(p[1])?)).collect()
+}
+
+/// A split point as [`parse_split_point`] reads it back.
+pub fn split_point_text(spec: &IndexSpec, enc: &[u8]) -> Vec<u8> {
+    if spec.composite.is_none() {
+        return decode_order_key(spec.ty, enc);
+    }
+    let mut out = b"0x".to_vec();
+    for b in enc {
+        out.extend_from_slice(format!("{b:02x}").as_bytes());
+    }
+    out
+}
+
 /// The text form of one order-encoded value of type `ty`.
 fn decode_order_key(ty: crate::ValType, enc: &[u8]) -> Vec<u8> {
     let word = || u64::from_be_bytes(enc.try_into().unwrap_or([0; 8]));

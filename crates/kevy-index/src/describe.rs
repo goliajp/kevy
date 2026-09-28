@@ -11,9 +11,9 @@
 //! the grammar needs them, the auto loop's additions left out (they are
 //! runtime provenance, not declaration intent — [`TableSpec::sans_auto`]).
 
-use crate::Partitioning;
 use crate::catalog::{IndexKind, IndexSpec, ValType};
 use crate::table::{TableSpec, compile_table};
+use crate::{Partitioning, split_point_text};
 
 /// One node of a describe reply. Numbers travel as bulk strings and an
 /// absent part as `-`, the same conventions `TABLE.LIST` uses, so a
@@ -168,8 +168,8 @@ fn declaration_described(from_table: bool, s: &IndexSpec, part: &Partitioning) -
 fn partitioning_described(s: &IndexSpec, part: &Partitioning) -> Described {
     match part {
         Partitioning::Local => b("local"),
-        Partitioning::Global { .. } => {
-            let splits = part.split_values(s.ty).into_iter().map(b).collect();
+        Partitioning::Global { splits } => {
+            let splits = splits.iter().map(|p| b(split_point_text(s, p))).collect();
             Described::Array(vec![b("global"), Described::Array(splits)])
         }
     }
@@ -265,10 +265,10 @@ pub fn index_declaration_partitioned(s: &IndexSpec, part: &Partitioning) -> Vec<
     }
     w.extend([b"TYPE".to_vec(), s.ty.tag().into(), b"KIND".to_vec(), s.kind.tag().into()]);
     index_options(s, &mut w);
-    if part.is_global() {
+    if let Partitioning::Global { splits } = part {
         w.extend([b"PARTITION".to_vec(), b"global".to_vec()]);
-        for v in part.split_values(s.ty) {
-            w.extend([b"SPLIT".to_vec(), v]);
+        for p in splits {
+            w.extend([b"SPLIT".to_vec(), split_point_text(s, p)]);
         }
     }
     w
