@@ -16,7 +16,9 @@ pub(crate) use args::{
     ComposeQuery, FilterArg, FilterShape, HybridArgs, KnnArgs, MatchArgs, Query, parse_groups_args,
     parse_match_score,
 };
-pub(crate) use global::{PART_ORIG, PART_VERB, targets as global_targets, walk as global_walk};
+pub(crate) use global::{
+    PART_ORIG, PART_VERB, REBUILD_TAG, targets as global_targets, walk as global_walk,
+};
 pub(crate) use wire::{decode_value, decode_view_cursor, encode_value, hex, peek_hydration};
 
 use kevy_store::Store;
@@ -81,6 +83,15 @@ pub(crate) fn probe_window(
     }
 }
 
+/// `IDX.REBUILD <name>`: a global index re-samples its split points, an ANN
+/// index compacts its tombstones.
+fn op_rebuild(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
+    match argv.get(1) {
+        Some(name) if global::is_global(ctx, name) => global::op_rebuild(ctx, store, name),
+        _ => ops::op_rebuild(ctx, store, argv),
+    }
+}
+
 /// Per-shard half: parse the IDX.* argv, run against this shard's
 /// segment, emit a status-tagged chunk.
 pub(crate) fn extension_op(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
@@ -127,9 +138,8 @@ pub(crate) fn extension_op(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -
     if argv.first().is_some_and(|v| v.eq_ignore_ascii_case(b"AGG.FETCH")) {
         return ops::op_agg_fetch(ctx, store, argv);
     }
-    // IDX.REBUILD <name> (ANN tombstone compaction)
     if argv.first().is_some_and(|v| v.eq_ignore_ascii_case(b"IDX.REBUILD")) {
-        return ops::op_rebuild(ctx, store, argv);
+        return op_rebuild(ctx, store, argv);
     }
     query::op_query(ctx, store, argv, verb)
 }

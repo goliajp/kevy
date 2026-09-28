@@ -65,6 +65,11 @@ pub(crate) fn extension_reduce(
         return ExtensionReduced::Reply(ranked::reduce_ranked(argv, &chunks, true));
     }
     // REBUILD: all shards OK → +OK.
+    if argv.first().is_some_and(|v| v.eq_ignore_ascii_case(b"IDX.REBUILD"))
+        && let Some(reply) = global::rebuild(state, argv, &chunks)
+    {
+        return ExtensionReduced::Reply(reply);
+    }
     if argv.first().is_some_and(|v| v.eq_ignore_ascii_case(b"IDX.REBUILD")) {
         return ExtensionReduced::Reply(query::reduce_rebuild(&chunks));
     }

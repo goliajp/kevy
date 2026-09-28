@@ -2,10 +2,11 @@
 //! the new index into the catalog every shard reads. Split from
 //! `cmd_index.rs` for the 500-line cap.
 
-use kevy_index::{IndexSpec, Partitioning, ValType, order_key};
-
+use kevy_index::{IndexSpec, Partitioning, order_key, splits_from_sample};
 use kevy_resp::encode_error;
+use kevy_store::Store;
 
+use crate::index_runtime;
 use crate::state::Ctx;
 
 /// The partitioning an IDX.CREATE asked for, before its split values are
@@ -51,12 +52,22 @@ pub(crate) fn is_partition_opt(a: &[u8]) -> bool {
 
 /// Encode the split values in the index's order and hold them to the
 /// shard count: `P - 1` points make `P` partitions, at most one per shard.
+/// A global index given no split points takes the shard count's quantiles
+/// of a sample of this shard's rows (none when there are no rows yet).
 fn partitioning(
     p: PartitionOpt,
-    ty: ValType,
+    store: &mut Store,
+    spec: &IndexSpec,
     nshards: usize,
     out: &mut Vec<u8>,
 ) -> Result<Partitioning, ()> {
+    let ty = spec.ty;
+    if p.global && p.split.is_empty() {
+        let n = nshards.max(1);
+        let sample =
+            index_runtime::sample_values(store, spec, index_runtime::SAMPLE_PER_PARTITION * n);
+        return Ok(Partitioning::Global { splits: splits_from_sample(sample, n) });
+    }
     if !p.global {
         if !p.split.is_empty() {
             encode_error(out, "ERR SPLIT requires PARTITION global");
@@ -83,11 +94,12 @@ fn partitioning(
 /// persist + install it.
 pub(crate) fn install_new_index(
     ctx: &Ctx<'_>,
+    store: &mut Store,
     spec: IndexSpec,
     part: PartitionOpt,
     out: &mut Vec<u8>,
 ) {
-    let Ok(partitioning) = partitioning(part, spec.ty, ctx.state.nshards(), out) else {
+    let Ok(partitioning) = partitioning(part, store, &spec, ctx.state.nshards(), out) else {
         return;
     };
     let mut cat = ctx.state.catalogs.index().map(|c| (*c).clone()).unwrap_or_default();
@@ -98,5 +110,53 @@ pub(crate) fn install_new_index(
             out.extend_from_slice(b"+OK\r\n");
         }
         Err(e) => encode_error(out, e),
+    }
+}
+
+/// A global index persisted with more partitions than there are shards now
+/// keeps `n - 1` of its split points, evenly spread, so each shard still
+/// owns at most one partition. Whether any index changed.
+pub(crate) fn fit_partitions(cat: &mut kevy_index::Catalog, n: usize) -> bool {
+    let over: Vec<(Vec<u8>, Vec<Vec<u8>>)> = cat
+        .iter()
+        .filter_map(|(spec, _)| match cat.partitioning(&spec.name) {
+            kevy_index::Partitioning::Global { splits } if splits.len() >= n.max(1) => {
+                Some((spec.name.clone(), splits.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    for (name, splits) in &over {
+        cat.set_splits(name, kevy_index::splits_from_sample(splits.clone(), n.max(1)));
+    }
+    !over.is_empty()
+}
+
+#[cfg(test)]
+mod tests {
+    use kevy_index::{Catalog, IndexKind, IndexSpec, Partitioning, ValType};
+
+    #[test]
+    fn a_catalog_from_more_shards_keeps_one_partition_per_shard() {
+        let spec = |name: &[u8]| {
+            IndexSpec::single_field(
+                name.to_vec(),
+                b"u:".to_vec(),
+                b"a".to_vec(),
+                ValType::Str,
+                IndexKind::Range,
+            )
+        };
+        let splits: Vec<Vec<u8>> = (1..8u8).map(|b| vec![b]).collect();
+        let mut cat = Catalog::new();
+        cat.create_with(spec(b"wide"), Partitioning::Global { splits }).unwrap();
+        cat.create_with(spec(b"narrow"), Partitioning::Global { splits: vec![vec![5]] }).unwrap();
+        assert!(super::fit_partitions(&mut cat, 4));
+        assert_eq!(cat.partitioning(b"wide").partitions(), 4);
+        let Partitioning::Global { splits } = cat.partitioning(b"wide") else { unreachable!() };
+        // eight even partitions merged two by two
+        assert_eq!(splits, &[vec![2], vec![4], vec![6]]);
+        assert_eq!(cat.partitioning(b"narrow").partitions(), 2, "one that fits is left alone");
+        assert!(!super::fit_partitions(&mut cat, 4), "and a fitted catalog stays");
     }
 }

@@ -473,7 +473,7 @@ use window_slide::{
     window_for,
 };
 mod global;
-pub(crate) use global::{apply_ext, take_ext_out};
+pub(crate) use global::{SAMPLE_PER_PARTITION, apply_ext, sample as sample_values, take_ext_out};
 mod global_wire;
 mod row_apply;
 pub(crate) use row_apply::{RowValue, row_value};

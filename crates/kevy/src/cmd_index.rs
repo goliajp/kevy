@@ -38,9 +38,12 @@ const SIDECAR: &str = "index-catalog.meta";
 pub(crate) fn boot(state: &RuntimeState) {
     let Some(dir) = state.sidecar_dir() else { return };
     if let Ok(text) = std::fs::read_to_string(dir.join(SIDECAR))
-        && let Some(cat) = Catalog::from_sidecar(&text)
+        && let Some(mut cat) = Catalog::from_sidecar(&text)
         && !cat.is_empty()
     {
+        if crate::cmd_index_install::fit_partitions(&mut cat, state.nshards()) {
+            persist_sidecar(Some(dir), &cat);
+        }
         state.install_index_catalog(cat);
     }
 }
@@ -135,7 +138,7 @@ fn parse_weights<A: ArgvView + ?Sized>(
 
 pub(crate) fn cmd_idx_create<A: ArgvView + ?Sized>(
     ctx: &Ctx<'_>,
-    store: &kevy_store::Store,
+    store: &mut kevy_store::Store,
     args: &A,
     out: &mut Vec<u8>,
 ) {
@@ -169,7 +172,7 @@ pub(crate) fn cmd_idx_create<A: ArgvView + ?Sized>(
     let part = std::mem::take(&mut opts.partition);
     let spec = build_spec(args, fields, ty, kind, ann, opts);
     if !tier_floor_refused(store, out) {
-        crate::cmd_index_install::install_new_index(ctx, spec, part, out);
+        crate::cmd_index_install::install_new_index(ctx, store, spec, part, out);
     }
 }
 

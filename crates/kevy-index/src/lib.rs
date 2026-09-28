@@ -54,7 +54,7 @@ pub use describe::{
     index_declaration, index_declaration_partitioned, owner_of, table_declaration,
     view_declaration,
 };
-pub use partition::{Partitioning, partition_owner};
+pub use partition::{Partitioning, partition_owner, splits_from_sample};
 pub use segcold::{
     ColdBloom, WindowAudit, WindowShape, decode_seg_key, decode_seg_values, encode_seg_values,
     seg_bounds, seg_key, value_order_bytes, window_bound, window_value_of,

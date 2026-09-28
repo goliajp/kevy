@@ -154,6 +154,25 @@ impl GlobalRole {
     }
 }
 
+/// Rows sampled per partition when split points are chosen: a
+/// partition's share of the rows then varies by about `1/sqrt(512)`.
+pub(crate) const SAMPLE_PER_PARTITION: usize = 512;
+
+/// Up to `max` of this shard's encoded index values for `spec`, taken at an
+/// even stride over its rows. Keys land on shards by hash, whatever their
+/// values, so one shard's rows sample the value distribution of all.
+pub(crate) fn sample(store: &mut Store, spec: &IndexSpec, max: usize) -> Vec<Vec<u8>> {
+    let mut pat = spec.prefix.clone();
+    pat.push(b'*');
+    let keys = store.collect_keys(Some(&pat), None);
+    let stride = keys.len().div_ceil(max.max(1)).max(1);
+    keys.iter()
+        .step_by(stride)
+        .filter_map(|k| derive(store, spec, k))
+        .map(|(v, _)| value_order_bytes(&v))
+        .collect()
+}
+
 /// The row's entry: its index value and stored VALUES, or `None` when the
 /// row is gone, not a hash, or excluded (a missing or uncoercible field).
 fn derive(

@@ -277,7 +277,7 @@ fn cmd_time(out: &mut Vec<u8>) {
 fn dispatch_conn<A: ArgvView + ?Sized>(
     ctx: &Ctx<'_>,
     cmd: &[u8],
-    store: &Store,
+    store: &mut Store,
     args: &A,
     out: &mut Vec<u8>,
 ) -> bool {
