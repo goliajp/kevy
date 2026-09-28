@@ -142,15 +142,28 @@ pub(crate) fn cmd_idx_create<A: ArgvView + ?Sized>(
     args: &A,
     out: &mut Vec<u8>,
 ) {
+    crate::cmd_index_install::create(
+        ctx,
+        &mut crate::cmd_index_install::Sampler::Shard(store),
+        args,
+        out,
+    );
+}
+
+/// The spec and partitioning an `IDX.CREATE` argv declares; `None` with
+/// the error in `out`.
+pub(crate) fn parse_create<A: ArgvView + ?Sized>(
+    args: &A,
+    out: &mut Vec<u8>,
+) -> Option<(IndexSpec, crate::cmd_index_install::PartitionOpt)> {
     if args.len() < 11
         || !args[2].eq_ignore_ascii_case(b"ON")
         || !args[3].eq_ignore_ascii_case(b"PREFIX")
     {
-        return encode_error(out, CREATE_USAGE);
+        encode_error(out, CREATE_USAGE);
+        return None;
     }
-    let Ok((fields, type_pos)) = parse_fields(args, out) else {
-        return;
-    };
+    let (fields, type_pos) = parse_fields(args, out).ok()?;
     // After the field clause: TYPE t KIND k [opts…]. `type_pos` names
     // the TYPE keyword; opts start four past it and come in pairs.
     if args.len() < type_pos + 4
@@ -158,22 +171,14 @@ pub(crate) fn cmd_idx_create<A: ArgvView + ?Sized>(
         || !args[type_pos + 2].eq_ignore_ascii_case(b"KIND")
         || !(args.len() - (type_pos + 4)).is_multiple_of(2)
     {
-        return encode_error(out, CREATE_USAGE);
+        encode_error(out, CREATE_USAGE);
+        return None;
     }
-    let Ok(mut opts) = parse_create_opts(args, type_pos + 4, out) else {
-        return;
-    };
-    let Ok((ty, kind)) = parse_type_kind(args, type_pos, out) else {
-        return;
-    };
-    let Ok(ann) = validate_kind_combo(kind, ty, &opts, out) else {
-        return;
-    };
+    let mut opts = parse_create_opts(args, type_pos + 4, out).ok()?;
+    let (ty, kind) = parse_type_kind(args, type_pos, out).ok()?;
+    let ann = validate_kind_combo(kind, ty, &opts, out).ok()?;
     let part = std::mem::take(&mut opts.partition);
-    let spec = build_spec(args, fields, ty, kind, ann, opts);
-    if !tier_floor_refused(store, out) {
-        crate::cmd_index_install::install_new_index(ctx, store, spec, part, out);
-    }
+    Some((build_spec(args, fields, ty, kind, ann, opts), part))
 }
 
 /// The parsed CREATE's spec. Composite stays `None` here: composite
@@ -202,19 +207,12 @@ fn build_spec<A: ArgvView + ?Sized>(
     }
 }
 
-/// Tiering floor refusal: indexes are the premium
-/// fixed layer demotion can never reclaim — when the existing floor
-/// already exhausts the tier's demotable headroom, a new index is
-/// refused by name (the FailedOverBudget discipline, moved up to
-/// declaration time). Answered from this shard's per-tick gauges; a
-/// no-tier store never refuses. `true` = refused (error written).
-pub(crate) fn tier_floor_refused(store: &kevy_store::Store, out: &mut Vec<u8>) -> bool {
-    if store.tier_index_floor_blocked(0) {
-        encode_error(out, "ERR index memory floor exceeds the tiering budget");
-        return true;
-    }
-    false
-}
+/// Tiering floor refusal: indexes are the premium fixed layer demotion
+/// can never reclaim — when the existing floor already exhausts the
+/// tier's demotable headroom, a new index is refused by name (the
+/// FailedOverBudget discipline, moved up to declaration time). Answered
+/// from the shards' per-tick gauges; a no-tier store never refuses.
+pub(crate) const TIER_FLOOR_REFUSAL: &str = "ERR index memory floor exceeds the tiering budget";
 
 /// TYPE / KIND / PREFIX validation for IDX.CREATE; an error reply is
 /// already written on `Err`.

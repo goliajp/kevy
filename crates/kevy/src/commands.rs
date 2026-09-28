@@ -192,16 +192,7 @@ impl Commands for KevyCommands {
     }
 
     fn extension_op(&self, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
-        if argv.first().is_some_and(|v| v.eq_ignore_ascii_case(b"PREFIX.DIGEST")) {
-            return crate::cmd_digest::extension_op(store, argv);
-        }
-        if argv.first().is_some_and(|v| v.len() > 5 && v[..5].eq_ignore_ascii_case(b"VIEW.")) {
-            return crate::cmd_view::extension_op(&self.ctx(), store, argv);
-        }
-        if argv.first().is_some_and(|v| v.len() > 6 && v[..6].eq_ignore_ascii_case(b"TABLE.")) {
-            return crate::cmd_table::extension_op(&self.ctx(), store, argv);
-        }
-        crate::cmd_index_query::extension_op(&self.ctx(), store, argv)
+        crate::commands_ext::op(&self.ctx(), store, argv)
     }
 
     fn extension_reduce(
@@ -210,26 +201,7 @@ impl Commands for KevyCommands {
         chunks: Vec<Vec<u8>>,
         proto: kevy_resp::RespVersion,
     ) -> ExtensionReduced {
-        let catalogs = &self.state().catalogs;
-        let reduced = if argv.first().is_some_and(|v| v.eq_ignore_ascii_case(b"PREFIX.DIGEST")) {
-            ExtensionReduced::Reply(crate::cmd_digest::extension_reduce(chunks))
-        } else if argv.first().is_some_and(|v| v.len() > 5 && v[..5].eq_ignore_ascii_case(b"VIEW."))
-        {
-            crate::cmd_view::extension_reduce(catalogs, argv, chunks)
-        } else if argv
-            .first()
-            .is_some_and(|v| v.len() > 6 && v[..6].eq_ignore_ascii_case(b"TABLE."))
-        {
-            crate::cmd_table::extension_reduce(catalogs, argv, chunks)
-        } else {
-            crate::cmd_index_reduce::extension_reduce(self.state(), argv, chunks)
-        };
-        match reduced {
-            ExtensionReduced::Reply(reply) if proto == kevy_resp::RespVersion::V3 => {
-                ExtensionReduced::Reply(crate::cmd_index_reduce::resp3_upgrade(argv, reply))
-            }
-            other => other,
-        }
+        crate::commands_ext::reduce(&self.ctx(), argv, chunks, proto)
     }
 
     fn write_denied(&self) -> Option<Vec<u8>> {

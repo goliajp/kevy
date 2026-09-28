@@ -4,10 +4,8 @@
 //! sampled from this shard's rows — the same two ways `IDX.CREATE …
 //! PARTITION global` takes.
 
+use crate::cmd_index_install::Sampler;
 use kevy_index::{Catalog, GlobalPath, IndexSpec, Partitioning, order_key, splits_from_sample};
-use kevy_store::Store;
-
-use crate::index_runtime::{SAMPLE_PER_PARTITION, sample_values};
 
 /// Admit a table's `compiled` indexes into `icat`, the `GLOBAL` ones with
 /// their partitioning. `Err` is the wire error.
@@ -15,14 +13,14 @@ pub(crate) fn admit(
     icat: &mut Catalog,
     compiled: Vec<IndexSpec>,
     globals: &[GlobalPath],
-    store: &mut Store,
+    sampler: &mut Sampler<'_>,
     nshards: usize,
 ) -> Result<(), String> {
     for ispec in compiled {
         match globals.iter().find(|g| g.path == ispec.name) {
             None => icat.create(ispec)?,
             Some(g) => {
-                let part = partitioning(&ispec, g, store, nshards)?;
+                let part = partitioning(&ispec, g, sampler, nshards)?;
                 icat.create_with(ispec, part)?;
             }
         }
@@ -33,12 +31,12 @@ pub(crate) fn admit(
 fn partitioning(
     spec: &IndexSpec,
     g: &GlobalPath,
-    store: &mut Store,
+    sampler: &mut Sampler<'_>,
     nshards: usize,
 ) -> Result<Partitioning, String> {
     let n = nshards.max(1);
     if g.split_at.is_empty() {
-        let sample = sample_values(store, spec, SAMPLE_PER_PARTITION * n);
+        let sample = sampler.sample(spec, n);
         return Ok(Partitioning::Global { splits: splits_from_sample(sample, n) });
     }
     Ok(Partitioning::Global { splits: explicit_splits(spec, g, n)? })

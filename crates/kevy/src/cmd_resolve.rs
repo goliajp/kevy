@@ -167,6 +167,12 @@ fn route_for_verb<A: ArgvView + ?Sized>(repl: &ReplicationState, upper: &[u8], a
             crate::geo_store::geo_store_route(upper, args)
                 .unwrap_or(if args.len() >= 2 { Route::Single(1) } else { Route::Local })
         }
+        // a global index sampled from every shard: two phases, not Local
+        b"IDX.CREATE" | b"TABLE.DECLARE" | b"TABLE.ENSURE" | b"TABLE.REPLACE"
+            if crate::cmd_global_sample::samples(upper, args) =>
+        {
+            Route::Extension
+        }
         b"IDX.QUERY" if args.len() >= 4 => Route::Extension,
         b"IDX.EXPLAIN" if args.len() >= 2 => Route::Extension,
         b"IDX.REBUILD" if args.len() == 2 => Route::Extension,
