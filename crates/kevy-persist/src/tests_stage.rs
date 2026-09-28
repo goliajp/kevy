@@ -45,7 +45,7 @@ fn a_record_that_would_straddle_the_end_starts_again_at_the_front() {
         let mut ring = StageRing::create(&path, CAP, 1, 9).unwrap();
         let filler = record(&vec![b'f'; (CAP - gap) as usize - 8]);
         assert!(push(&mut ring, &filler));
-        ring.mark_drained(ring.head().commit, 100);
+        ring.mark_drained(ring.head().commit, 100, ring.head().log_id);
         // what an earlier lap left in the gap, written through the file,
         // which the shared mapping sees
         let f = std::fs::File::options().write(true).open(&path).unwrap();
@@ -68,7 +68,7 @@ fn a_full_ring_refuses_until_it_is_drained() {
     }
     assert_eq!(n, CAP as usize / rec.len());
     let end = ring.for_each_pending(|_| {});
-    ring.mark_drained(end, 9);
+    ring.mark_drained(end, 9, ring.head().log_id);
     assert!(push(&mut ring, &rec));
     assert!(!ring.push(CAP as usize + 1, |_| unreachable!()), "a record larger than the ring");
 }
@@ -83,7 +83,7 @@ fn an_existing_ring_reopens_as_it_was_left() {
     drop(ring);
     let (again, found) = StageRing::open_existing(&path).unwrap().unwrap();
     assert_eq!(found, head);
-    assert_eq!((found.aof_ino, found.aof_len), (42, 900));
+    assert_eq!((found.log_id, found.aof_len), (42, 900));
     assert_eq!(pending(&again), rec);
     std::fs::write(&path, b"not a ring").unwrap();
     assert!(StageRing::open_existing(&path).unwrap().is_none());
@@ -155,4 +155,18 @@ fn recovery_stops_at_a_record_that_fails_its_checksum() {
         recover(&ring, found, 5, 100, &[]),
         Recovery::Replay { records: recs[..1].to_vec(), torn: true }
     );
+}
+
+#[test]
+fn a_state_written_but_not_selected_is_not_the_head() {
+    let path = temp_file("stage-select");
+    let mut ring = StageRing::create(&path, CAP, 5, 100).unwrap();
+    assert!(push(&mut ring, &record(b"one")));
+    ring.mark_drained(ring.head().commit, 140, ring.head().log_id);
+    let head = ring.head();
+    ring.write_unselected([5, 999, 0]);
+    drop(ring);
+    let (_, found) = StageRing::open_existing(&path).unwrap().unwrap();
+    assert_eq!(found, head, "the half-written slot must not be read");
+    assert_eq!((found.aof_len, found.drained), (140, head.commit));
 }

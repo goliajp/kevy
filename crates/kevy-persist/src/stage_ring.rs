@@ -10,6 +10,12 @@
 //! area: when it does not fit, an 8-byte wrap marker (length 0, CRC 0 —
 //! never a valid record) fills the gap, or nothing does when fewer than 8
 //! bytes remain, and the record starts again at the beginning.
+//!
+//! The header's state — which log, how long, how far drained — is three
+//! words that must move together: a kill between writing a new length and
+//! a new drain offset would replay records the log already holds. So the
+//! state lives in two slots, a new one is written into the slot not in use,
+//! and one aligned store of the selector publishes it.
 
 use std::fs::File;
 use std::io::{self, Write};
@@ -21,22 +27,23 @@ use kevy_sys::FileMap;
 use crate::crc32c::crc32c;
 use crate::record::{MAX_RECORD, RECORD_HEADER};
 
-const MAGIC: &[u8; 8] = b"KEVYSTG1";
+const MAGIC: &[u8; 8] = b"KEVYSTG2";
 /// The header page; the data area starts right after it.
 pub(crate) const HEADER: usize = 4096;
 const OFF_CAP: usize = 8;
-const OFF_AOF_INO: usize = 16;
-const OFF_AOF_LEN: usize = 24;
-const OFF_DRAINED: usize = 32;
-const OFF_COMMIT: usize = 40;
+const OFF_COMMIT: usize = 16;
+const OFF_SELECT: usize = 24;
+const OFF_SLOTS: usize = 32;
+/// A slot: the log's id, its length, the drain offset.
+const SLOT: usize = 24;
 
 /// What a ring's header said: which log it continues, how long that log
 /// was when the ring was last drained into it, and the ring's two
 /// logical offsets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct StageHead {
-    /// The inode of the AOF this ring continues.
-    pub(crate) aof_ino: u64,
+    /// The id of the AOF this ring continues (see `Aof::log_id`).
+    pub(crate) log_id: u64,
     /// The AOF's length right after the last drain.
     pub(crate) aof_len: u64,
     /// Everything before this logical offset is in the AOF.
@@ -74,13 +81,13 @@ impl StageRing {
     }
 
     /// Create (or reset) the ring at `path` with `cap` data bytes, empty
-    /// and continuing the log `aof_ino` at length `aof_len`. A new file is
+    /// and continuing the log `log_id` at length `aof_len`. A new file is
     /// written through once with zeros, so every later store into it lands
     /// on blocks the filesystem has already allocated.
     pub(crate) fn create(
         path: &Path,
         cap: u64,
-        aof_ino: u64,
+        log_id: u64,
         aof_len: u64,
     ) -> io::Result<StageRing> {
         assert!(cap.is_power_of_two() && cap >= 64 * 1024, "ring capacity {cap}");
@@ -100,9 +107,8 @@ impl StageRing {
         }
         let mut ring = StageRing { map: FileMap::map(&file, total as usize)?, cap };
         ring.put_word(OFF_CAP, cap);
-        ring.put_word(OFF_AOF_INO, aof_ino);
-        ring.put_word(OFF_AOF_LEN, aof_len);
-        ring.put_word(OFF_DRAINED, 0);
+        ring.put_slot(0, [log_id, aof_len, 0]);
+        ring.select_cell().store(0, Ordering::Release);
         ring.commit_cell().store(0, Ordering::Release);
         ring.put_bytes(0, MAGIC);
         Ok(ring)
@@ -110,10 +116,11 @@ impl StageRing {
 
     /// The header as it stands.
     pub(crate) fn head(&self) -> StageHead {
+        let at = OFF_SLOTS + SLOT * (self.select_cell().load(Ordering::Acquire) & 1) as usize;
         StageHead {
-            aof_ino: self.word(OFF_AOF_INO),
-            aof_len: self.word(OFF_AOF_LEN),
-            drained: self.word(OFF_DRAINED),
+            log_id: self.word(at),
+            aof_len: self.word(at + 8),
+            drained: self.word(at + 16),
             commit: self.commit_cell().load(Ordering::Acquire),
         }
     }
@@ -170,19 +177,36 @@ impl StageRing {
     }
 
     /// Record a drain: the records before `to` are in the AOF, which is now
-    /// `aof_len` bytes long.
-    pub(crate) fn mark_drained(&mut self, to: u64, aof_len: u64) {
-        self.put_word(OFF_AOF_LEN, aof_len);
-        self.put_word(OFF_DRAINED, to);
+    /// `aof_len` bytes long and has the id `log_id`.
+    pub(crate) fn mark_drained(&mut self, to: u64, aof_len: u64, log_id: u64) {
+        self.publish([log_id, aof_len, to]);
     }
 
     /// Point the ring at a new log (a rewrite or reset replaced the file):
     /// everything committed counts as drained.
-    pub(crate) fn rebase(&mut self, aof_ino: u64, aof_len: u64) {
+    pub(crate) fn rebase(&mut self, log_id: u64, aof_len: u64) {
         let commit = self.head().commit;
-        self.put_word(OFF_AOF_INO, aof_ino);
-        self.put_word(OFF_AOF_LEN, aof_len);
-        self.put_word(OFF_DRAINED, commit);
+        self.publish([log_id, aof_len, commit]);
+    }
+
+    /// Write `state` into the slot not in use, then select it.
+    fn publish(&mut self, state: [u64; 3]) {
+        let next = (self.select_cell().load(Ordering::Acquire) & 1) ^ 1;
+        self.put_slot(next as usize, state);
+        self.select_cell().store(next, Ordering::Release);
+    }
+
+    /// A kill between writing a slot and selecting it, for tests.
+    #[cfg(test)]
+    pub(crate) fn write_unselected(&mut self, state: [u64; 3]) {
+        let next = (self.select_cell().load(Ordering::Acquire) & 1) ^ 1;
+        self.put_slot(next as usize, state);
+    }
+
+    fn put_slot(&mut self, slot: usize, state: [u64; 3]) {
+        for (i, w) in state.into_iter().enumerate() {
+            self.put_word(OFF_SLOTS + SLOT * slot + 8 * i, w);
+        }
     }
 
     /// The next record at or after logical `pos` and before `end`, skipping
@@ -246,5 +270,9 @@ impl StageRing {
 
     fn commit_cell(&self) -> &AtomicU64 {
         self.map.atomic_u64(OFF_COMMIT)
+    }
+
+    fn select_cell(&self) -> &AtomicU64 {
+        self.map.atomic_u64(OFF_SELECT)
     }
 }
