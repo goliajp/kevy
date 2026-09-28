@@ -92,7 +92,8 @@
   platforms that is the AOF itself (next entry); elsewhere it is a staging
   ring: a small file (`aof-<i>.aof.stage`, 4 MiB by default) mapped into
   memory. The ring drains into the AOF on every tick, and the next open
-  replays whatever a killed process left in it. A burst of writes that
+  replays whatever a killed process left in it — in the directory itself
+  or in a copy of it taken after the kill, as a backup is. A burst of writes that
   fits in the ring no longer calls `write()` on the caller's thread; a
   sustained stream larger than the ring is still bounded by how fast the
   drain can `write()` it. Power loss is bounded as before, by the fsync

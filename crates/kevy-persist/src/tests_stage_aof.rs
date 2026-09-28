@@ -91,6 +91,45 @@ fn a_killed_process_keeps_every_staged_append() {
 }
 
 #[test]
+fn a_copied_directory_keeps_every_staged_append() {
+    let (aof, ring) = (temp_file("stage-copy-aof"), temp_file("stage-copy-ring"));
+    let (mut log, _, _) = reopen(&aof, &ring);
+    log.append(&set(0, 50)).unwrap();
+    let _ = log.tick().unwrap();
+    for i in 1..6 {
+        log.append(&set(i, 50)).unwrap();
+    }
+    std::mem::forget(log);
+    // a copy is a new file: another inode, the same bytes
+    let (aof2, ring2) = (temp_file("stage-copy-aof2"), temp_file("stage-copy-ring2"));
+    std::fs::copy(&aof, &aof2).unwrap();
+    std::fs::copy(&ring, &ring2).unwrap();
+    let (_, found, got) = reopen(&aof2, &ring2);
+    assert_eq!((found.recovered, got.len(), found.discarded), (5, 5, None));
+    assert_eq!(replayed(&aof2).len(), 6);
+}
+
+#[test]
+fn a_log_of_the_same_length_but_other_bytes_is_not_the_rings() {
+    let (aof, ring) = (temp_file("stage-other-aof"), temp_file("stage-other-ring"));
+    let (mut log, _, _) = reopen(&aof, &ring);
+    log.append(&cmd(&[b"SET", b"k", b"vvvv"])).unwrap();
+    let _ = log.tick().unwrap();
+    log.append(&set(1, 50)).unwrap();
+    std::mem::forget(log);
+    let before = std::fs::metadata(&aof).unwrap().len();
+    std::fs::remove_file(&aof).unwrap();
+    let mut other = Aof::open(&aof, Fsync::EverySec).unwrap();
+    other.append(&cmd(&[b"SET", b"k", b"wwww"])).unwrap();
+    other.sync_now().unwrap();
+    drop(other);
+    assert_eq!(std::fs::metadata(&aof).unwrap().len(), before);
+    let (_, found, got) = reopen(&aof, &ring);
+    assert_eq!((found.recovered, got.len()), (0, 0));
+    assert!(found.discarded.is_some());
+}
+
+#[test]
 fn a_kill_between_a_drain_and_its_header_is_not_replayed_twice() {
     let (aof, ring) = (temp_file("stage-half-aof"), temp_file("stage-half-ring"));
     let (mut log, _, _) = reopen(&aof, &ring);
@@ -102,7 +141,7 @@ fn a_kill_between_a_drain_and_its_header_is_not_replayed_twice() {
     std::mem::forget(log);
     // put the header back as it was before the drain moved it
     let (mut r, _) = StageRing::open_existing(&ring).unwrap().unwrap();
-    r.mark_drained(before.drained, before.aof_len);
+    r.mark_drained(before.drained, before.aof_len, before.log_id);
     drop(r);
     let (_, found, got) = reopen(&aof, &ring);
     assert_eq!((found.recovered, got.len(), found.discarded), (0, 0, None));

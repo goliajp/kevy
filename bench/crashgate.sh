@@ -140,7 +140,7 @@ acked_cell() { # $1 = cell name, rest = writer flags
     local name=$1; shift
     local dir="$WORK/$name" log="$WORK/$name.log"
     mkdir -p "$dir"
-    "$WRITER" "$dir" --acked "$@" > "$log" 2>/dev/null &
+    "$WRITER" "$dir" --acked --no-sync "$@" > "$log" 2>/dev/null &
     WPID=$!
     for _ in $(seq 100); do grep -q "ACKED" "$log" 2>/dev/null && break; sleep 0.1; done
     sleep 1.2
@@ -155,6 +155,28 @@ acked_cell() { # $1 = cell name, rest = writer flags
         || verdict 1 "$name/acked" "recovered ${rec:-0} < acked $acked"
 }
 
+# The same kill, then a copy of the directory: a backup is a file copy, and
+# a copied file is a new inode with the same bytes. No fsync barriers, so
+# the kill lands among staged appends rather than inside a sync.
+acked_copy_cell() { # $1 = cell name, rest = writer flags
+    local name=$1; shift
+    local dir="$WORK/$name" log="$WORK/$name.log"
+    mkdir -p "$dir"
+    "$WRITER" "$dir" --acked --no-sync "$@" > "$log" 2>/dev/null &
+    WPID=$!
+    for _ in $(seq 100); do grep -q "ACKED" "$log" 2>/dev/null && break; sleep 0.1; done
+    sleep 1.2
+    kill -9 "$WPID" 2>/dev/null; wait "$WPID" 2>/dev/null; WPID=""
+    local acked rec
+    acked=$(grep ACKED "$log" | tail -1 | awk '{print $2}')
+    [ -n "$acked" ] && [ "$acked" -gt 0 ] \
+        || { verdict 1 "$name/setup" "writer never acknowledged a write (got '${acked:-none}')"; return; }
+    cp -R "$dir" "$dir.copy"
+    rec=$("$CHECK" "$dir.copy" 2>/dev/null | awk '/^RECOVERED/{print $2}')
+    [ "${rec:-0}" -ge "$acked" ] && verdict 0 "$name/acked" "copy recovered $rec >= acked $acked" \
+        || verdict 1 "$name/acked" "copy recovered ${rec:-0} < acked $acked"
+}
+
 cell append-everysec
 cell append-always --always
 cell append-4shard --shards 4
@@ -165,6 +187,8 @@ acked_cell ring-everysec --ring
 acked_cell ring-4shard --shards 4 --ring
 acked_cell mapped-everysec --mapped
 acked_cell mapped-4shard --shards 4 --mapped
+acked_copy_cell ring-copy --ring
+acked_copy_cell mapped-copy --mapped
 
 echo "== crashgate: windowed SIGKILL cells (R2c) =="
 window_cell window-everysec-a

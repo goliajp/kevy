@@ -10,7 +10,6 @@
 //! a transaction whose begin marker the file's half holds.
 
 use std::io::{self, Read, Seek, SeekFrom, Write};
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use kevy_resp::Argv;
@@ -20,6 +19,9 @@ use crate::aof::Aof;
 use crate::replay_walk::{Sink, V2Walk, apply_record};
 use crate::stage_recover::{Recovery, recover};
 use crate::stage_ring::StageRing;
+
+/// How many of the log's first bytes its id covers.
+const ID_SPAN: u64 = 4096;
 
 /// The ring behind a staged log.
 #[derive(Debug)]
@@ -83,8 +85,8 @@ impl Aof {
             return self.settle_stage(path, apply);
         }
         let found = self.recover_stage(path, apply)?;
-        let (ino, len) = self.identity()?;
-        let ring = StageRing::create(path, cap, ino, len)?;
+        let (id, len) = self.identity()?;
+        let ring = StageRing::create(path, cap, id, len)?;
         self.stage = Some(Stage { ring, path: path.to_path_buf(), overflow: false });
         Ok(found)
     }
@@ -128,10 +130,12 @@ impl Aof {
     ) -> io::Result<StageOpen> {
         let mut found = StageOpen::default();
         self.file.flush()?;
-        let (ino, len) = self.identity()?;
+        let len = self.file.get_ref().metadata()?.len();
         if let Some((ring, head)) = StageRing::open_existing(path)? {
+            let span = head.log_id >> 32;
+            let id = if span <= len { log_id(&self.path, span)? } else { 0 };
             let tail = self.tail_after(head.aof_len, len, ring.cap())?;
-            match recover(&ring, head, ino, len, &tail) {
+            match recover(&ring, head, id, len, &tail) {
                 Recovery::Discard(why) => found.discarded = Some(why),
                 Recovery::Replay { records, torn } => {
                     found.torn = torn;
@@ -179,7 +183,12 @@ impl Aof {
             return Err(e);
         }
         let len = file.metadata()?.len();
-        stage.ring.mark_drained(end, len);
+        // the id grows with a young log until it spans ID_SPAN bytes: one
+        // taken over a fresh log's magic alone would match any other log
+        let id = stage.ring.head().log_id;
+        let id =
+            if (id >> 32) < ID_SPAN.min(len) { log_id(&self.path, len.min(ID_SPAN))? } else { id };
+        stage.ring.mark_drained(end, len, id);
         if self.in_txn {
             stage.overflow = true;
         }
@@ -212,9 +221,9 @@ impl Aof {
             return Ok(());
         }
         self.file.flush()?;
-        let (ino, len) = self.identity()?;
+        let (id, len) = self.identity()?;
         if let Some(stage) = &mut self.stage {
-            stage.ring.rebase(ino, len);
+            stage.ring.rebase(id, len);
         }
         Ok(())
     }
@@ -233,9 +242,14 @@ impl Aof {
         self.stage.as_ref().map(|s| s.path.as_path())
     }
 
+    /// The log's id and length. The id is a checksum of the log's first
+    /// bytes, and the count of them: a copy of the directory keeps it, and
+    /// a rewrite or a reset, which start the file over, change it. An inode
+    /// did the first and not the second — a ring in a copied directory was
+    /// set aside with every write it owed.
     fn identity(&self) -> io::Result<(u64, u64)> {
-        let meta = self.file.get_ref().metadata()?;
-        Ok((meta.ino(), meta.len()))
+        let len = self.file.get_ref().metadata()?.len();
+        Ok((log_id(&self.path, len.min(ID_SPAN))?, len))
     }
 
     /// The log's bytes in `[from, to)`, or none when that span is not one a
@@ -280,4 +294,11 @@ impl Aof {
         self.size_bytes += records[..settled].iter().map(|r| r.len() as u64).sum::<u64>();
         Ok(settled as u64)
     }
+}
+
+/// A checksum of the log's first `span` bytes, with `span` in the high word.
+fn log_id(path: &Path, span: u64) -> io::Result<u64> {
+    let mut head = vec![0u8; span as usize];
+    std::fs::File::open(path)?.read_exact(&mut head)?;
+    Ok(span << 32 | u64::from(crate::crc32c::crc32c(&head)))
 }

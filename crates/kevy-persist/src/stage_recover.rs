@@ -27,16 +27,17 @@ pub(crate) enum Recovery {
     },
 }
 
-/// Decide what the ring owes a log with inode `aof_ino` and `aof_len`
-/// valid bytes, of which `aof_tail` are the ones past `head.aof_len`.
+/// Decide what the ring owes a log whose id, taken over the span the
+/// ring's id names, is `log_id`, with `aof_len` valid bytes, of which
+/// `aof_tail` are the ones past `head.aof_len`.
 pub(crate) fn recover(
     ring: &StageRing,
     head: StageHead,
-    aof_ino: u64,
+    log_id: u64,
     aof_len: u64,
     aof_tail: &[u8],
 ) -> Recovery {
-    if head.aof_ino != aof_ino {
+    if head.log_id != log_id {
         // a rewrite or reset replaced the log after the ring's last rebase;
         // the new file already reflects every record the ring held
         return Recovery::Discard("the ring continues another log");
