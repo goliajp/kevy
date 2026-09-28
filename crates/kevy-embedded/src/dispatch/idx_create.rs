@@ -164,6 +164,8 @@ fn is_create_opt(a: &[u8]) -> bool {
         b"DISTANCE",
         b"VALUES",
         b"TYPES",
+        b"PARTITION",
+        b"SPLIT",
     ] {
         if a.eq_ignore_ascii_case(kw) {
             return true;
@@ -277,6 +279,15 @@ fn apply_create_opt(opt: &[u8], val: &[u8], o: &mut CreateOpts) -> Result<(), &'
             return Err("ERR GROUPBY requires a field");
         }
         o.group_by = Some(val.to_vec());
+    } else if opt.eq_ignore_ascii_case(b"PARTITION") && val.eq_ignore_ascii_case(b"LOCAL") {
+        // every embedded index is local; saying so is fine
+    } else if opt.eq_ignore_ascii_case(b"PARTITION") || opt.eq_ignore_ascii_case(b"SPLIT") {
+        // a global index saves a server the fan-out to every shard; an
+        // embedded store reads every index under its own locks, so there
+        // is nothing for it to save
+        return Err(
+            "ERR PARTITION global is a server feature; an embedded store's indexes are local",
+        );
     } else if opt.eq_ignore_ascii_case(b"DISTANCE") {
         o.distance = if val.eq_ignore_ascii_case(b"cosine") {
             0
