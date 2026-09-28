@@ -228,6 +228,15 @@ fn scan_all(s: &Store) -> Vec<Vec<u8>> {
     }
 }
 
+/// The log's bytes: a file that maps its appends ends in the zeros of its
+/// preallocation while the store is open, and no record ends in a zero.
+fn log_bytes(path: &std::path::Path) -> Vec<u8> {
+    let mut bytes = std::fs::read(path).unwrap();
+    let end = bytes.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1);
+    bytes.truncate(end);
+    bytes
+}
+
 /// The persistence payoff: a rewrite drops cold-row data from the AOF
 /// (trailing SEGMENTED frames re-establish the stubs), and a snapshot
 /// carries stub records so a SAVE'd store restarts cold without the
@@ -251,9 +260,9 @@ fn rewrite_and_snapshot_stop_carrying_cold_rows() {
 
     // Rewrite: the log sheds the cold rows' data and gains the frames.
     s.fsync_aof().expect("fsync");
-    let before = std::fs::metadata(d.path().join("aof-0.aof")).unwrap().len();
+    let before = log_bytes(&d.path().join("aof-0.aof")).len();
     s.rewrite_aof().expect("rewrite").expect("stats");
-    let aof = std::fs::read(d.path().join("aof-0.aof")).unwrap();
+    let aof = log_bytes(&d.path().join("aof-0.aof"));
     assert!(aof.len() < before as usize, "rewrite did not shrink: {} -> {}", before, aof.len());
     let text = String::from_utf8_lossy(&aof).into_owned();
     assert!(!text.contains("row number 10"), "cold row data re-entered the rewritten log");

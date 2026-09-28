@@ -132,9 +132,10 @@ window_cell() { # $1 = cell name, rest = writer flags
 }
 
 echo "== crashgate: SIGKILL matrix =="
-# The process-crash contract under the staging ring: every write the
-# writer saw return survives SIGKILL, fsync or not — the ring is a shared
-# mapping, so the kernel holds it the moment the append returns.
+# The process-crash contract under the staging ring and under a mapped
+# log: every write the writer saw return survives SIGKILL, fsync or not —
+# both are shared mappings, so the kernel holds a write the moment the
+# append returns.
 acked_cell() { # $1 = cell name, rest = writer flags
     local name=$1; shift
     local dir="$WORK/$name" log="$WORK/$name.log"
@@ -160,8 +161,10 @@ cell append-4shard --shards 4
 cell rewrite-everysec --rewrite
 cell snapshot-everysec --snapshot
 cell feed-everysec --feed
-acked_cell stage-everysec
-acked_cell stage-4shard --shards 4
+acked_cell ring-everysec --ring
+acked_cell ring-4shard --shards 4 --ring
+acked_cell mapped-everysec --mapped
+acked_cell mapped-4shard --shards 4 --mapped
 
 echo "== crashgate: windowed SIGKILL cells (R2c) =="
 window_cell window-everysec-a

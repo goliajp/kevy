@@ -21,6 +21,18 @@ impl Config {
         self
     }
 
+    /// Append through a mapping of the AOF (`true`) or through `write()`.
+    /// See [`Config::mapped_aof`].
+    ///
+    /// ```
+    /// let config = kevy_embedded::Config::default().with_mapped_aof(false);
+    /// assert!(!config.mapped_aof);
+    /// ```
+    pub fn with_mapped_aof(mut self, on: bool) -> Self {
+        self.mapped_aof = on;
+        self
+    }
+
     /// The auto-rewrite rules this config asks for.
     #[cfg(feature = "persist")]
     pub(crate) fn rewrite_policy(&self) -> kevy_persist::RewritePolicy {

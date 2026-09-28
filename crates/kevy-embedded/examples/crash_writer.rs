@@ -4,14 +4,15 @@
 //! the last SYNCED line survives the kill".
 //!
 //!   crash_writer <dir> [--shards N] [--always] [--feed] [--rewrite] [--snapshot]
-//!                      [--acked] [--no-stage]
+//!                      [--acked] [--ring | --mapped | --no-stage]
 //!
 //! Modes stack: --rewrite / --snapshot fold a background compaction /
 //! snapshot into the write loop so the kill can land mid-rewrite or
 //! mid-snapshot; --feed opens the CDC ring so the kill can land mid-emit.
-//! --acked prints `ACKED <n>` once each write has returned: with the
-//! staging ring on (the default), a process kill loses none of those;
-//! --no-stage turns the ring off, for a control run.
+//! --acked prints `ACKED <n>` once each write has returned: through the
+//! staging ring (--ring) or a mapped log (--mapped) a process kill loses
+//! none of those; --no-stage turns both off, for a control run. Without
+//! any of the three the platform default applies.
 use std::io::Write as _;
 
 use kevy_embedded::{AppendFsync, Config, Store};
@@ -25,7 +26,8 @@ fn main() {
     let mut shards = 1usize;
     let mut fsync = AppendFsync::EverySec;
     let (mut feed, mut rewrite, mut snapshot) = (false, false, false);
-    let (mut acked, mut stage) = (false, true);
+    let mut acked = false;
+    let mut path: Option<(u64, bool)> = None; // (ring bytes, mapped)
     while let Some(a) = args.next() {
         match a.as_str() {
             "--shards" => shards = args.next().unwrap().parse().unwrap(),
@@ -34,7 +36,9 @@ fn main() {
             "--rewrite" => rewrite = true,
             "--snapshot" => snapshot = true,
             "--acked" => acked = true,
-            "--no-stage" => stage = false,
+            "--ring" => path = Some((4 << 20, false)),
+            "--mapped" => path = Some((4 << 20, true)),
+            "--no-stage" => path = Some((0, false)),
             other => panic!("unknown flag {other}"),
         }
     }
@@ -42,8 +46,8 @@ fn main() {
     if feed {
         cfg = cfg.with_feed(16 << 20);
     }
-    if !stage {
-        cfg = cfg.with_stage_ring(0);
+    if let Some((ring, mapped)) = path {
+        cfg = cfg.with_stage_ring(ring).with_mapped_aof(mapped);
     }
     let store = Store::open(cfg).expect("open");
 
