@@ -51,16 +51,19 @@ use std::time::{Duration, Instant};
 mod mock;
 pub use mock::read_request;
 
-/// Ports per process block. Wide enough that a test binary never wraps
-/// into a neighbour's block during one run.
-const BLOCK: u16 = 64;
+/// Ports per process block. The counter wraps inside the block, and a
+/// wrapped offset can name a port handed out moments ago that its server
+/// has not bound yet — both probes read that port as free. At 64 the
+/// replication tests drew 69 in one run and collided with themselves; the
+/// block is sized so no test binary comes near it.
+const BLOCK: u16 = 512;
 /// First port of the first block. Above the registered range and below
 /// the ephemeral range Linux hands out by default (32768+), so this
 /// scheme and the kernel's own allocator never draw from the same pool.
 const FLOOR: u16 = 20_000;
 /// How many blocks the space is divided into. `FLOOR + BLOCKS * BLOCK`
 /// must stay under 32768.
-const BLOCKS: u16 = 190;
+const BLOCKS: u16 = 24;
 
 /// The listener that proves this block is ours, held for the life of the
 /// process, and the block's base.
