@@ -54,9 +54,38 @@ pub(crate) struct V2Walk {
     /// marker makes "was this transaction finished" a property of the
     /// log rather than of how much of it happened to be flushed.
     pub(crate) txn: Option<Vec<Argv>>,
+    /// Where the open transaction's begin marker starts.
+    pub(crate) txn_at: u64,
     /// Transactions dropped because the log ended before their commit
     /// marker. Surfaced in the report rather than passed over silently.
     pub(crate) txn_discarded: u64,
+}
+
+impl V2Walk {
+    /// A walk that has applied nothing yet, positioned at `pos`.
+    pub(crate) fn at(pos: u64) -> V2Walk {
+        V2Walk {
+            txn: None,
+            txn_at: 0,
+            txn_discarded: 0,
+            stop: ReplayStop::Clean,
+            pos,
+            replayed: 0,
+            preview: [0u8; 16],
+            preview_len: 0,
+        }
+    }
+}
+
+impl V2Walk {
+    /// Where the log's settled part ends: before a transaction the log
+    /// ended inside of, whose records replay dropped. A log reopened for
+    /// appends must continue from here — appended after an open begin
+    /// marker, new records would be read as part of that transaction and
+    /// dropped with it.
+    pub(crate) fn settled_end(&self) -> u64 {
+        if self.txn.is_some() { self.txn_at } else { self.pos }
+    }
 }
 
 /// Capture up to 16 bytes of the offending bytes for the WARN preview.
@@ -79,15 +108,7 @@ pub(crate) fn walk_v2(
     start_pos: u64,
     apply: &mut Option<Sink<'_>>,
 ) -> io::Result<V2Walk> {
-    let mut w = V2Walk {
-        txn: None,
-        txn_discarded: 0,
-        stop: ReplayStop::Clean,
-        pos: start_pos,
-        replayed: 0,
-        preview: [0u8; 16],
-        preview_len: 0,
-    };
+    let mut w = V2Walk::at(start_pos);
     let mut payload: Vec<u8> = Vec::new();
     // one argv for the whole walk: its buffers stay warm across frames
     let mut args = Argv::default();
@@ -146,6 +167,7 @@ pub(crate) fn apply_record(
                         w.txn_discarded += 1;
                     }
                     w.txn = Some(Vec::new());
+                    w.txn_at = w.pos;
                 }
                 Some(TxnMarker::Commit) => {
                     if let Some(buffered) = w.txn.take()

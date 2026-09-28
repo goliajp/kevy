@@ -275,9 +275,15 @@ fn stream_v2(
     }
     // A skipped range IS corruption — it is the only thing resync skips.
     let corrupt = corrupt || !ranges.is_empty();
+    // after a resync hop the records past the damage were applied one by
+    // one, so the open transaction no longer marks where the log settles
+    let end = if ranges.is_empty() { w.settled_end() } else { w.pos };
     let elapsed_ms = start.elapsed().as_millis();
     // quiet_info silences only the informational outcomes; the corrupt
     // WARN always prints.
+    if apply.is_some() && !quiet_info && end < w.pos {
+        crate::replay_log::log_open_transaction(path, w.pos - end);
+    }
     if apply.is_some() && (corrupt || !quiet_info) {
         log_replay_summary(
             path,
@@ -292,8 +298,8 @@ fn stream_v2(
     Ok(ReplayReport {
         commands: w.replayed,
         bytes: total,
-        replayed_bytes: w.pos,
-        dropped_bytes: total.saturating_sub(w.pos),
+        replayed_bytes: end,
+        dropped_bytes: total.saturating_sub(end),
         corrupt,
         resynced_ranges: ranges,
     })

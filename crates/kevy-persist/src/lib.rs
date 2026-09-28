@@ -207,4 +207,6 @@ mod tests_stage;
 #[cfg(test)]
 mod tests_sync;
 #[cfg(test)]
+mod tests_txn_tail;
+#[cfg(test)]
 mod tests_tier_stream;
