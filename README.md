@@ -325,12 +325,15 @@ corpora, recall-aligned ([`PERFORMANCE.md`](PERFORMANCE.md)):
 A complete server is a 768 KB stripped binary that boots into under
 5 MB of RSS.
 
-**Upgrading?** [docs/upgrading-6.3-to-6.4.md](docs/upgrading-6.3-to-6.4.md)
-is the current hop: nothing to change in code and nothing on disk moves,
-but five answers that were wrong are now right — `GEOSEARCH` near the
-poles, `used_memory` for `APPEND`-grown strings, overflowing month and year
-bounds, a `regexp_*` alternation, and io_uring disconnects — each measured
-against 6.3.0. The hop before it is
+**Upgrading?** [docs/upgrading-6.4-to-7.0.md](docs/upgrading-6.4-to-7.0.md)
+is the current hop: nothing to change for a wire client and the data
+directory opens as it is. A Rust caller that builds `kevy_config` structs
+literally names their new fields, and a script that runs `kevy-cli doctor`
+or another tool as a bare word puts it after `--kevy`; the guide also says
+what to do before going back to 6.4, why index sizes now read larger, and
+which data-losing defects were fixed.
+The hops before it are
+[docs/upgrading-6.3-to-6.4.md](docs/upgrading-6.3-to-6.4.md) and
 [docs/upgrading-6.2-to-6.3.md](docs/upgrading-6.2-to-6.3.md).
 [docs/UPGRADING.md](docs/UPGRADING.md) covers the
 older majors — 3.x → 4.0 (wire and disk carry over; the Rust
