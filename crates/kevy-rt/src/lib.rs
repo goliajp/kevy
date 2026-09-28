@@ -80,6 +80,7 @@
 mod bio;
 mod block_xshard;
 mod block_xshard_confirm;
+mod port_claim;
 #[cfg(debug_assertions)]
 pub use block_xshard_confirm::counters as serve_counters;
 mod aof_writer;
