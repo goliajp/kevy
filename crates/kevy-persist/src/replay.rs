@@ -282,22 +282,8 @@ fn stream_v2(
     // after a resync hop the records past the damage were applied one by
     // one, so the open transaction no longer marks where the log settles
     let end = if ranges.is_empty() { w.settled_end() } else { w.pos };
-    let elapsed_ms = start.elapsed().as_millis();
-    // quiet_info silences only the informational outcomes; the corrupt
-    // WARN always prints.
-    if apply.is_some() && !quiet_info && end < w.pos {
-        crate::replay_log::log_open_transaction(path, w.pos - end);
-    }
-    if apply.is_some() && (corrupt || !quiet_info) {
-        log_replay_summary(
-            path,
-            total as usize,
-            w.pos as usize,
-            w.replayed,
-            &w.preview[..w.preview_len],
-            w.stop,
-            elapsed_ms,
-        );
+    if apply.is_some() {
+        log_v2_outcome(path, &w, total, end, corrupt, quiet_info, start.elapsed().as_millis());
     }
     Ok(ReplayReport {
         commands: w.replayed,
@@ -311,6 +297,34 @@ fn stream_v2(
 }
 
 /// The valid prefix's length and the zero tail after it (always 0 for v1).
+/// The replay's summary lines. `quiet_info` silences only the
+/// informational outcomes; the corrupt WARN always prints.
+fn log_v2_outcome(
+    path: &Path,
+    w: &crate::replay_walk::V2Walk,
+    total: u64,
+    end: u64,
+    corrupt: bool,
+    quiet_info: bool,
+    elapsed_ms: u128,
+) {
+    if !quiet_info && end < w.pos {
+        crate::replay_log::log_open_transaction(path, w.pos - end);
+    }
+    if corrupt || !quiet_info {
+        let preview = &w.preview[..w.preview_len];
+        log_replay_summary(
+            path,
+            total as usize,
+            w.pos as usize,
+            w.replayed,
+            preview,
+            w.stop.clone(),
+            elapsed_ms,
+        );
+    }
+}
+
 pub(crate) fn valid_prefix_len_of_file(path: &Path, resync: bool) -> io::Result<(u64, u64)> {
     // v2 streams (O(largest record) memory — the same walk replay does, so
     // the truncation point and the replay stop can never disagree). Under

@@ -51,6 +51,28 @@ pub(crate) fn rewrite_tmp_path(path: &Path) -> PathBuf {
     p
 }
 
+/// Cut the file back to where a replay settled, when it dropped nothing
+/// (the rest is a mapped log's zero tail); otherwise repair the tail.
+pub(crate) fn settle_tail(
+    path: &Path,
+    file: &mut File,
+    size: &mut u64,
+    settled: Option<u64>,
+    resync: bool,
+) -> io::Result<Option<PathBuf>> {
+    match settled.filter(|&s| s <= *size) {
+        Some(s) => {
+            if s < *size {
+                file.set_len(s)?;
+                file.sync_data()?;
+                *size = s;
+            }
+            Ok(None)
+        }
+        None => repair_tail(path, file, size, resync),
+    }
+}
+
 /// The tail-repair half of [`crate::Aof::open_with_repair`]. A crash —
 /// power loss, or a VM/process kill with un-fsynced `EverySec`
 /// pages — can leave a partial frame, or a zero-filled region,

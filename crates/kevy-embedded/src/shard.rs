@@ -118,10 +118,26 @@ fn build_shards_persist(
     let (mut report, walked) = load_or_reshard(&dir, config, n, &mut stores)?;
 
     let mut aofs = open_live_aofs(config, &dir, &walked, &mut report)?;
+    prepare_aofs(config, &dir, &mut stores, &mut aofs, &mut report)?;
+    Ok((into_inners(stores, aofs), report))
+}
+
+/// Settle each AOF's staging ring and set how it takes appends, then anchor
+/// its growth-rule baseline.
+#[cfg(feature = "persist")]
+fn prepare_aofs(
+    config: &Config,
+    dir: &Path,
+    stores: &mut [Keyspace],
+    aofs: &mut [Option<Aof>],
+    report: &mut OpenReport,
+) -> io::Result<()> {
+    #[cfg(target_arch = "wasm32")]
+    let _ = (dir, &report);
     #[cfg(not(target_arch = "wasm32"))]
     for (i, (aof, store)) in aofs.iter_mut().zip(stores.iter_mut()).enumerate() {
         if let Some(aof) = aof {
-            crate::shard_restore::open_stage(&dir, config, i, store, aof, &mut report)?;
+            crate::shard_restore::open_stage(dir, config, i, store, aof, report)?;
         }
     }
     // Anchor each AOF's growth-rule baseline to the live image's estimated
@@ -139,7 +155,7 @@ fn build_shards_persist(
             aof.anchor_rewrite_baseline(kevy_persist::estimate_rewrite_size(store));
         }
     }
-    Ok((into_inners(stores, aofs), report))
+    Ok(())
 }
 
 /// Open each shard's live AOF for append (if persistence is on). The

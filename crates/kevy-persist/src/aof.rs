@@ -229,32 +229,7 @@ impl Aof {
         resync: bool,
         settled: Option<u64>,
     ) -> io::Result<Self> {
-        let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-        let mut size = file.metadata().map_or(0, |m| m.len());
-        let mut quarantined = None;
-        let mut format = crate::AofFormat::V2;
-        if size == 0 {
-            // Fresh file: stamp the (v2) magic header so the replayer can
-            // distinguish kevy-written AOFs from accidental writes.
-            file.write_all(crate::record::AOF2_MAGIC)?;
-            file.sync_data()?;
-            size = crate::record::AOF2_MAGIC.len() as u64;
-        } else {
-            // Existing file: keep appending in ITS format. V1 (magic'd or
-            // legacy bare-RESP) upgrades to V2 at the next rewrite.
-            format = crate::replay::sniff_format(path)?;
-            match settled.filter(|&s| s <= size && format == crate::AofFormat::V2) {
-                Some(s) if s < size => {
-                    file.set_len(s)?;
-                    file.sync_data()?;
-                    size = s;
-                }
-                Some(_) => {}
-                None => {
-                    quarantined = crate::aof_util::repair_tail(path, &mut file, &mut size, resync)?;
-                }
-            }
-        }
+        let (file, size, format, quarantined) = Self::prepare_file(path, resync, settled)?;
         Ok(Aof {
             in_txn: false,
             file: BufWriter::with_capacity(AOF_BUF_CAP, file),
@@ -283,6 +258,32 @@ impl Aof {
             #[cfg(not(target_arch = "wasm32"))]
             maps: false,
         })
+    }
+
+    /// Open `path` for appending: a fresh file gets the v2 magic, an existing
+    /// one keeps its format (v1 upgrades at the next rewrite) and has its
+    /// tail settled. Returns the file, its length, its format and where a
+    /// repaired tail was quarantined.
+    fn prepare_file(
+        path: &Path,
+        resync: bool,
+        settled: Option<u64>,
+    ) -> io::Result<(File, u64, crate::AofFormat, Option<PathBuf>)> {
+        let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+        let mut size = file.metadata().map_or(0, |m| m.len());
+        if size == 0 {
+            // stamp the magic so the replayer can tell a kevy-written log
+            // from an accidental write
+            file.write_all(crate::record::AOF2_MAGIC)?;
+            file.sync_data()?;
+            size = crate::record::AOF2_MAGIC.len() as u64;
+            return Ok((file, size, crate::AofFormat::V2, None));
+        }
+        let format = crate::replay::sniff_format(path)?;
+        let settled = settled.filter(|_| format == crate::AofFormat::V2);
+        let quarantined =
+            crate::aof_util::settle_tail(path, &mut file, &mut size, settled, resync)?;
+        Ok((file, size, format, quarantined))
     }
 
     /// The quarantine file `open` wrote while repairing a dropped tail, if

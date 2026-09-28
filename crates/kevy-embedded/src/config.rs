@@ -171,6 +171,7 @@ pub struct Config {
 }
 
 impl Default for Config {
+    // LOC-WAIVER: pure field-default table, one line (and its cfg) per field
     fn default() -> Self {
         Self {
             #[cfg(feature = "listener")]

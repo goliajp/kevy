@@ -14,6 +14,7 @@ use crate::replay_txn::{TxnMarker, txn_marker};
 
 /// Outcome of an AOF replay run — drives the summary log shape (rendered
 /// in `replay_log.rs`).
+#[derive(Clone)]
 pub(crate) enum ReplayStop {
     Clean,
     TruncatedTail,
@@ -117,33 +118,10 @@ pub(crate) fn walk_v2(
     // one argv for the whole walk: its buffers stay warm across frames
     let mut args = Argv::default();
     w.stop = loop {
-        let mut header = [0u8; 8];
-        match read_fully(r, &mut header) {
-            Ok(0) => break ReplayStop::Clean,
-            Ok(n) if n < header.len() && header[..n].iter().all(|&b| b == 0) => {
-                w.zero_tail = n as u64;
-                break ReplayStop::Clean;
-            }
-            Ok(n) if n < header.len() => break ReplayStop::TruncatedTail,
-            Ok(_) => {}
-            Err(e) => return Err(e),
-        }
-        let len = u32::from_le_bytes(header[..4].try_into().expect("header is a fixed-size array"));
-        let crc = u32::from_le_bytes(header[4..].try_into().expect("header is a fixed-size array"));
-        // no record has length 0, so zeros from here to the end of the file
-        // are the unused preallocation of a mapped log; zeros followed by
-        // anything else are damage
-        if len == 0
-            && crc == 0
-            && let Some(rest) = zeros_to_end(r)?
-        {
-            w.zero_tail = header.len() as u64 + rest;
-            break ReplayStop::Clean;
-        }
-        if len == 0 || len > crate::record::MAX_RECORD {
-            w.preview_len = preview_of(&header, &mut w.preview);
-            break ReplayStop::CorruptFrame(String::from("record length out of range"));
-        }
+        let (len, crc) = match next_header(r, &mut w)? {
+            Ok(h) => h,
+            Err(stop) => break stop,
+        };
         payload.clear();
         payload.resize(len as usize, 0);
         match read_fully(r, &mut payload) {
@@ -230,6 +208,38 @@ impl Sink<'_> {
             Sink::InPlace(f) => f(frame),
         }
     }
+}
+
+/// Read the next record header: its `(len, crc)`, or why the walk stops
+/// here — a clean end, a zero tail, a torn or impossible header.
+fn next_header(r: &mut impl Read, w: &mut V2Walk) -> io::Result<Result<(u32, u32), ReplayStop>> {
+    let mut header = [0u8; 8];
+    match read_fully(r, &mut header)? {
+        0 => return Ok(Err(ReplayStop::Clean)),
+        n if n < header.len() && header[..n].iter().all(|&b| b == 0) => {
+            w.zero_tail = n as u64;
+            return Ok(Err(ReplayStop::Clean));
+        }
+        n if n < header.len() => return Ok(Err(ReplayStop::TruncatedTail)),
+        _ => {}
+    }
+    let len = u32::from_le_bytes(header[..4].try_into().expect("header is a fixed-size array"));
+    let crc = u32::from_le_bytes(header[4..].try_into().expect("header is a fixed-size array"));
+    // no record has length 0, so zeros from here to the end of the file
+    // are the unused preallocation of a mapped log; zeros followed by
+    // anything else are damage
+    if len == 0
+        && crc == 0
+        && let Some(rest) = zeros_to_end(r)?
+    {
+        w.zero_tail = header.len() as u64 + rest;
+        return Ok(Err(ReplayStop::Clean));
+    }
+    if len == 0 || len > crate::record::MAX_RECORD {
+        w.preview_len = preview_of(&header, &mut w.preview);
+        return Ok(Err(ReplayStop::CorruptFrame(String::from("record length out of range"))));
+    }
+    Ok(Ok((len, crc)))
 }
 
 /// Read `r` to its end; `Some(bytes read)` when every one was zero.
