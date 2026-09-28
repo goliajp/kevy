@@ -5,7 +5,7 @@ use kevy_index::{IndexSpec, IndexValue, SegmentStats};
 use kevy_store::Store;
 
 use super::args::{KnnArgs, Query, Shape, parse_groups_args};
-use super::wire::{encode_hydration_row, encode_value, peek_hydration};
+use super::wire::{HydrationRow, encode_hydration_row, encode_value, peek_hydration};
 use super::{ST_BADARGS, ST_BUILDING, ST_NOINDEX, ST_OK, ST_OVERBUDGET};
 use crate::index_runtime;
 use crate::state::Ctx;
@@ -35,6 +35,12 @@ pub(super) fn op_query(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>], verb:
     let Some(q) = Query::parse(argv) else {
         return vec![ST_BADARGS];
     };
+    run_parsed(ctx, store, &q, verb)
+}
+
+/// [`op_query`] past the parse, for a query whose page size the
+/// caller set (a global index's continuation, `IDX.PART`).
+pub(super) fn run_parsed(ctx: &Ctx<'_>, store: &mut Store, q: &Query, verb: &[u8]) -> Vec<u8> {
     // IDX.COUNT applies FILTER (the claused count — the total a
     // claused query's pages would reach, materializing nothing) and
     // refuses every clause it would not apply: SORT/DISTINCT/OFFSET
@@ -46,7 +52,7 @@ pub(super) fn op_query(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>], verb:
             return vec![ST_BADARGS];
         }
         if !q.filters.is_empty() {
-            return super::query_claused::run_claused_count(ctx, store, &q);
+            return super::query_claused::run_claused_count(ctx, store, q);
         }
     }
     // Pure grammar, refused before the segment is consulted: the
@@ -61,9 +67,9 @@ pub(super) fn op_query(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>], verb:
         return chunk;
     }
     if q.has_clauses() {
-        return super::query_claused::run_claused_query(ctx, store, &q);
+        return super::query_claused::run_claused_query(ctx, store, q);
     }
-    run_scalar_query(ctx, store, &q, verb)
+    run_scalar_query(ctx, store, q, verb)
 }
 
 /// Aggregate / ANN / text indexes answer VERIFY with their own stats
@@ -119,6 +125,7 @@ fn verify_kind_stats(ctx: &Ctx<'_>, store: &mut Store, name: &[u8]) -> Option<Ve
 
 /// Range / Eq / scalar-Verify against this shard's segment.
 fn run_scalar_query(ctx: &Ctx<'_>, store: &mut Store, q: &Query, verb: &[u8]) -> Vec<u8> {
+    let global = super::global::is_global(ctx, &q.name);
     let res =
         index_runtime::with_ready_segment(ctx, store, &q.name, |spec, seg, win| match q.shape {
             Shape::Range { .. } | Shape::Eq { .. } | Shape::Where(_) => {
@@ -128,7 +135,10 @@ fn run_scalar_query(ctx: &Ctx<'_>, store: &mut Store, q: &Query, verb: &[u8]) ->
                     Err(chunk) => return HitsOrChunk::Chunk(chunk),
                 };
                 super::probe_window(ctx, &q.name, win, &min);
-                scalar_range_or_count(q, verb, spec, seg, win, &min, &max)
+                match scalar_range_or_count(q, verb, spec, seg, win, &min, &max) {
+                    HitsOrChunk::Hits(hits) if global => stored_hits_chunk(spec, seg, &hits, q),
+                    other => other,
+                }
             }
             // VERIFY answers "does the index still agree with the keyspace?".
             // The segment cannot be walked and the store re-read at the same time
@@ -152,7 +162,7 @@ fn run_scalar_query(ctx: &Ctx<'_>, store: &mut Store, q: &Query, verb: &[u8]) ->
         });
     match res {
         Ok(HitsOrChunk::Chunk(chunk)) => chunk,
-        Ok(HitsOrChunk::Hits(hits)) => encode_hits_chunk(store, &hits, &q.fields),
+        Ok(HitsOrChunk::Hits(hits)) => local_hits_chunk(store, &hits, &q.fields),
         Ok(HitsOrChunk::Verify { spec, entries, stats, window }) => {
             encode_verify_chunk(store, &spec, &entries, &stats, window)
         }
@@ -217,24 +227,46 @@ fn merge_cold(
     out
 }
 
-/// Hydration happens OUTSIDE the segment borrow: the hits' rows live
-/// on this shard, plain hash reads.
-fn encode_hits_chunk(
+/// A global index's page: its `FIELDS` come from the partition's stored
+/// values, read while the segment is borrowed.
+fn stored_hits_chunk(
+    spec: &IndexSpec,
+    seg: &kevy_index::Segment,
+    hits: &[(Vec<u8>, IndexValue)],
+    q: &Query,
+) -> HitsOrChunk {
+    let keys: Vec<&[u8]> = hits.iter().map(|(k, _)| k.as_slice()).collect();
+    HitsOrChunk::Chunk(match super::global::stored_page(spec, seg, &keys, &q.fields) {
+        Ok(rows) => encode_hits_chunk(hits, q.fields.len(), &rows),
+        Err(chunk) => chunk,
+    })
+}
+
+/// A local index's page: its hydration rows are read outside the segment
+/// borrow — the hits' rows live on this shard, one batched page of hash
+/// reads (cold rows coalesce into one submission).
+fn local_hits_chunk(
     store: &mut Store,
     hits: &[(Vec<u8>, IndexValue)],
     fields: &[Vec<u8>],
 ) -> Vec<u8> {
+    let keys: Vec<&[u8]> = hits.iter().map(|(k, _)| k.as_slice()).collect();
+    encode_hits_chunk(hits, fields.len(), &peek_hydration(store, &keys, fields))
+}
+
+/// The plain hit chunk.
+fn encode_hits_chunk(
+    hits: &[(Vec<u8>, IndexValue)],
+    nfields: usize,
+    rows: &[HydrationRow],
+) -> Vec<u8> {
     let mut chunk = vec![ST_OK];
     chunk.extend_from_slice(&(hits.len() as u32).to_le_bytes());
-    // Hydration rows prefetched as ONE batched page (cold rows
-    // coalesce into one submission), then encoded in hit order.
-    let keys: Vec<&[u8]> = hits.iter().map(|(k, _)| k.as_slice()).collect();
-    let rows = peek_hydration(store, &keys, fields);
     for (i, (k, v)) in hits.iter().enumerate() {
         chunk.extend_from_slice(&(k.len() as u32).to_le_bytes());
         chunk.extend_from_slice(k);
         encode_value(&mut chunk, v);
-        encode_hydration_row(&mut chunk, fields.len(), &rows[i]);
+        encode_hydration_row(&mut chunk, nfields, &rows[i]);
     }
     chunk
 }

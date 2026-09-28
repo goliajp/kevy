@@ -70,6 +70,7 @@ pub(super) fn run_claused_count(ctx: &Ctx<'_>, store: &mut Store, q: &Query) -> 
 }
 
 pub(super) fn run_claused_query(ctx: &Ctx<'_>, store: &mut Store, q: &Query) -> Vec<u8> {
+    let global = super::global::is_global(ctx, &q.name);
     let res = index_runtime::with_ready_segment(ctx, store, &q.name, |spec, seg, win| {
         let now = (kevy_store::now_unix_ms() / 1000) as i64;
         let (min, max) = q.bounds_for(spec, now)?;
@@ -96,11 +97,20 @@ pub(super) fn run_claused_query(ctx: &Ctx<'_>, store: &mut Store, q: &Query) -> 
                 Err(_) => return Err(vec![super::ST_NOINDEX]),
             }
         }
-        Ok(page)
+        // a global index's FIELDS come from the partition's stored values
+        let keys: Vec<&[u8]> = page.hits.iter().map(|h| h.key.as_slice()).collect();
+        let stored = global.then(|| super::global::stored_page(spec, seg, &keys, &q.fields));
+        Ok((page, stored.transpose()?))
     });
     match res {
         Ok(Err(chunk)) => chunk,
-        Ok(Ok(page)) => encode_claused_chunk(store, q, &page),
+        Ok(Ok((page, stored))) => {
+            let rows = stored.unwrap_or_else(|| {
+                let keys: Vec<&[u8]> = page.hits.iter().map(|h| h.key.as_slice()).collect();
+                peek_hydration(store, &keys, &q.fields)
+            });
+            encode_claused_chunk(q, &page, &rows)
+        }
         Err(e) if e.as_wire().starts_with("INDEXBUILDING") => vec![ST_BUILDING],
         Err(e) if e.as_wire().starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
         Err(_) => vec![ST_NOINDEX],
@@ -137,15 +147,16 @@ fn merge_cold_claused(
 }
 
 /// Hit block (+ per-hit clause keys when the query carried the clause),
-/// then the facet block. Hydration happens outside the segment borrow —
-/// the hits' rows live on this shard, plain hash reads.
-fn encode_claused_chunk(store: &mut Store, q: &Query, page: &kevy_index::ClausedPage) -> Vec<u8> {
+/// then the facet block. A local index's hydration rows are read outside
+/// the segment borrow as one batched page (cold rows coalesce into one
+/// submission); a global index's come from the partition's stored values.
+fn encode_claused_chunk(
+    q: &Query,
+    page: &kevy_index::ClausedPage,
+    rows: &[super::wire::HydrationRow],
+) -> Vec<u8> {
     let mut chunk = vec![ST_OK];
     chunk.extend_from_slice(&(page.hits.len() as u32).to_le_bytes());
-    // Hydration rows prefetched as ONE batched page (cold rows
-    // coalesce into one submission), then encoded in hit order.
-    let keys: Vec<&[u8]> = page.hits.iter().map(|h| h.key.as_slice()).collect();
-    let rows = peek_hydration(store, &keys, &q.fields);
     for (i, h) in page.hits.iter().enumerate() {
         chunk.extend_from_slice(&(h.key.len() as u32).to_le_bytes());
         chunk.extend_from_slice(&h.key);

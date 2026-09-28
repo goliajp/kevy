@@ -8,6 +8,7 @@ mod advise;
 mod agg;
 mod chunk;
 mod claused;
+mod global;
 mod query;
 mod ranked;
 
@@ -34,6 +35,13 @@ pub(crate) fn extension_reduce(
     chunks: Vec<Vec<u8>>,
 ) -> ExtensionReduced {
     let catalogs = &state.catalogs;
+    if argv.first().is_some_and(|v| v.eq_ignore_ascii_case(crate::cmd_index_query::PART_VERB)) {
+        let orig = &argv[crate::cmd_index_query::PART_ORIG..];
+        if let Some(err) = triage_status(orig, &chunks) {
+            return ExtensionReduced::Reply(err);
+        }
+        return global::next_phase(state, argv, &chunks);
+    }
     if let Some(err) = triage_status(argv, &chunks) {
         advise::on_refused(state, argv, &chunks);
         return ExtensionReduced::Reply(err);
@@ -76,6 +84,10 @@ pub(crate) fn extension_reduce(
     // IDX.QUERY COMPOSE: merge key-ordered chunks.
     if argv.get(1).is_some_and(|a| a.eq_ignore_ascii_case(b"COMPOSE")) {
         return ExtensionReduced::Reply(query::reduce_compose(argv, &chunks));
+    }
+    // A global index's page in order: partitions concatenate, never merge.
+    if let Some(reduced) = global::first_phase(state, argv, &chunks) {
+        return reduced;
     }
     // IDX.QUERY: k-way merge by (value, key), global LIMIT + cursor.
     ExtensionReduced::Reply(query::reduce_query(argv, &chunks))

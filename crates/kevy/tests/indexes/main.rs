@@ -4,6 +4,7 @@
 mod common;
 
 mod describe_e2e;
+mod extension_targets;
 mod global_index_e2e;
 mod hook_message_ack;
 mod idx_advise_e2e;

@@ -37,10 +37,7 @@ pub(super) fn reduce_explain(
         _ => "query",
     };
     let state = if building { "building" } else { "ready" };
-    let plan = format!(
-        "single-index scan: kind={kind} shape={shape}, {} shard(s) fan-out, merge at origin",
-        chunks.len()
-    );
+    let plan = plan_line(catalogs, argv, &kind, shape, chunks.len());
     encode_array_len(&mut out, 4);
     for (k, v) in [
         ("kind", kind.as_str()),
@@ -53,6 +50,32 @@ pub(super) fn reduce_explain(
         encode_bulk(&mut out, v.as_bytes());
     }
     out
+}
+
+/// EXPLAIN's plan: which shards a read goes to, and how the origin
+/// assembles their answers.
+fn plan_line(
+    catalogs: &CatalogState,
+    argv: &[Vec<u8>],
+    kind: &str,
+    shape: &str,
+    n: usize,
+) -> String {
+    let Some((w, part)) = crate::cmd_index_query::global_walk(catalogs, argv) else {
+        return format!(
+            "single-index scan: kind={kind} shape={shape}, {n} shard(s) fan-out, merge at origin"
+        );
+    };
+    let assembly = match w.in_order {
+        true => "one partition per phase from the cursor's, pages concatenated at origin",
+        false => "each partition met answers, merge at origin",
+    };
+    format!(
+        "global index scan: kind={kind} shape={shape}, partition(s) {}..={} of {}, {assembly}",
+        w.first,
+        w.last,
+        part.partitions()
+    )
 }
 
 /// Sum the per-shard EXPLAIN chunks: `(est_rows, building, shape byte)`.

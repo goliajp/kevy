@@ -5,6 +5,7 @@
 //! [`query`] scalar query + admin, [`wire`] chunk/cursor encoding).
 
 mod args;
+mod global;
 mod ops;
 mod ops_clauses;
 mod query;
@@ -15,6 +16,7 @@ pub(crate) use args::{
     ComposeQuery, FilterArg, FilterShape, HybridArgs, KnnArgs, MatchArgs, Query, parse_groups_args,
     parse_match_score,
 };
+pub(crate) use global::{PART_ORIG, PART_VERB, targets as global_targets, walk as global_walk};
 pub(crate) use wire::{decode_value, decode_view_cursor, encode_value, hex, peek_hydration};
 
 use kevy_store::Store;
@@ -85,6 +87,9 @@ pub(crate) fn extension_op(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -
     let verb = argv.first().map(Vec::as_slice).unwrap_or(b"");
     if verb.eq_ignore_ascii_case(b"IDX.LIST") {
         return query::op_list(ctx, store);
+    }
+    if verb.eq_ignore_ascii_case(PART_VERB) {
+        return global::op_part(ctx, store, argv);
     }
     if argv.get(1).is_some_and(|a| a.eq_ignore_ascii_case(b"HYBRID")) {
         return ops::op_hybrid(ctx, store, argv);

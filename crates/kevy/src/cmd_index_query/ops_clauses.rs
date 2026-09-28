@@ -45,7 +45,7 @@ fn clause_error(clause: &str, bad: &[u8], verb: &str, offered: &[&[u8]]) -> Vec<
 /// [`clause_error`]'s field-not-STORED sibling: same explanation, but
 /// tagged ST_NOFIELD with the field carried structurally, so the
 /// origin reduce can feed the advise log without parsing prose.
-fn nofield_error(clause: &str, bad: &[u8], offered: &[&[u8]]) -> Vec<u8> {
+pub(super) fn nofield_error(clause: &str, bad: &[u8], offered: &[&[u8]]) -> Vec<u8> {
     let mut chunk = vec![crate::cmd_index_query::ST_NOFIELD];
     let f = &bad[..bad.len().min(255)];
     chunk.push(f.len() as u8);

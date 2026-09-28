@@ -166,3 +166,131 @@ fn a_global_index_describes_its_splits_and_refuses_more_than_the_shards_hold() {
             .contains("SPLIT allows at most one point fewer than the shard count")
     );
 }
+
+/// 200 rows over four partitions, a global index and a local one over the
+/// same field, both storing `name` (and `age`, the local one's FIELDS
+/// read the row, the global one's the stored copy).
+fn seeded() -> (Server, Wire) {
+    let srv = Server::start(4);
+    let mut w = srv.wire();
+    let values: &[&[u8]] = &[b"VALUES", b"name", b"TYPES", b"str"];
+    create(&mut w, b"age_l", values);
+    let mut g = values.to_vec();
+    g.extend_from_slice(&[
+        b"PARTITION",
+        b"global",
+        b"SPLIT",
+        b"25",
+        b"SPLIT",
+        b"50",
+        b"SPLIT",
+        b"75",
+    ]);
+    create(&mut w, b"age_g", &g);
+    ready(&mut w, &[b"IDX.QUERY", b"age_g", b"RANGE", b"0", b"0", b"LIMIT", b"1"]);
+    ready(&mut w, &[b"IDX.QUERY", b"age_l", b"RANGE", b"0", b"0", b"LIMIT", b"1"]);
+    for i in 0..200u32 {
+        // partition 1 (25..50) stays sparse, so pages cross it quickly
+        let age = match i % 10 {
+            0 => 30 + i % 5,
+            _ => (i * 13) % 100,
+        };
+        let (key, age, name) = (format!("user:{i}"), age.to_string(), format!("n{i}"));
+        call(&mut w, &[b"HSET", key.as_bytes(), b"age", age.as_bytes(), b"name", name.as_bytes()]);
+    }
+    (srv, w)
+}
+
+/// Every page of `query` (with `LIMIT` and the cursor appended), in order.
+fn pages(w: &mut Wire, name: &[u8], shape: &[&[u8]], tail: &[&[u8]]) -> Vec<String> {
+    let mut cursor = b"0".to_vec();
+    let mut out = Vec::new();
+    for _ in 0..200 {
+        let mut q: Vec<&[u8]> = vec![b"IDX.QUERY", name];
+        q.extend_from_slice(shape);
+        q.extend_from_slice(&[b"LIMIT", b"7"]);
+        if cursor != b"0" {
+            q.extend_from_slice(&[b"CURSOR", &cursor]);
+        }
+        q.extend_from_slice(tail);
+        let r = call(w, &q);
+        // *2 then $<len>\r\n<cursor>\r\n
+        let head = text(&r);
+        let next = head.split("\r\n").nth(2).expect("a cursor").as_bytes().to_vec();
+        out.push(head.splitn(4, "\r\n").nth(3).unwrap_or_default().to_string());
+        if next == b"0" {
+            return out;
+        }
+        cursor = next;
+    }
+    panic!("the pages never ended");
+}
+
+#[test]
+fn a_global_index_pages_in_the_order_a_local_one_does() {
+    let (_srv, mut w) = seeded();
+    for shape in [
+        &[&b"RANGE"[..], b"0", b"100"][..],
+        &[b"RANGE", b"20", b"60"],
+        &[b"RANGE", b"26", b"49"],
+        &[b"EQ", b"31"],
+    ] {
+        for tail in [&[][..], &[&b"FIELDS"[..], b"name"]] {
+            let (g, l) =
+                (pages(&mut w, b"age_g", shape, tail), pages(&mut w, b"age_l", shape, tail));
+            assert!(g.len() > 1 || shape[0] == b"EQ", "{shape:?} fits one page: nothing crossed");
+            assert_eq!(g, l, "{shape:?} {tail:?}");
+        }
+    }
+    let filtered: &[&[u8]] = &[b"FILTER", b"name", b"RANGE", b"n1", b"n5"];
+    let range: &[&[u8]] = &[b"RANGE", b"0", b"100"];
+    assert_eq!(pages(&mut w, b"age_g", range, filtered), pages(&mut w, b"age_l", range, filtered));
+}
+
+#[test]
+fn counts_and_selections_meet_every_partition_in_range() {
+    let (_srv, mut w) = seeded();
+    for (lo, hi) in [("0", "100"), ("20", "60"), ("26", "49"), ("80", "10")] {
+        let count = |w: &mut Wire, name: &[u8]| {
+            call(w, &[b"IDX.COUNT", name, b"RANGE", lo.as_bytes(), hi.as_bytes()])
+        };
+        assert_eq!(count(&mut w, b"age_g"), count(&mut w, b"age_l"), "{lo}..{hi}");
+        let sorted = |w: &mut Wire, name: &[u8]| {
+            let q: &[&[u8]] = &[
+                b"IDX.QUERY",
+                name,
+                b"RANGE",
+                lo.as_bytes(),
+                hi.as_bytes(),
+                b"LIMIT",
+                b"15",
+                b"SORT",
+                b"name",
+                b"DESC",
+                b"FIELDS",
+                b"name",
+            ];
+            text(&call(w, q))
+        };
+        assert_eq!(sorted(&mut w, b"age_g"), sorted(&mut w, b"age_l"), "{lo}..{hi}");
+    }
+}
+
+#[test]
+fn a_global_index_answers_fields_from_its_values_and_refuses_the_rest() {
+    let (_srv, mut w) = seeded();
+    let q = |name: &'static [u8], f: &'static [u8]| -> Vec<&'static [u8]> {
+        vec![b"IDX.QUERY", name, b"RANGE", b"0", b"100", b"LIMIT", b"3", b"FIELDS", f]
+    };
+    let (g, l) = (call(&mut w, &q(b"age_g", b"name")), call(&mut w, &q(b"age_l", b"name")));
+    assert_eq!(text(&g), text(&l), "the stored copy answers what the row does");
+    assert!(text(&g).contains("$4\r\nname"), "{}", text(&g));
+    let refused = text(&call(&mut w, &q(b"age_g", b"age")));
+    assert!(
+        refused.contains("FIELDS on a global index names field 'age'")
+            && refused.contains("stores: name"),
+        "{refused}"
+    );
+    let plan = text(&call(&mut w, &[b"IDX.EXPLAIN", b"age_g", b"RANGE", b"30", b"60"]));
+    assert!(plan.contains("partition(s) 1..=2 of 4"), "{plan}");
+}
