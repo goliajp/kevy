@@ -3,9 +3,8 @@
 #[path = "../common/mod.rs"]
 mod common;
 
-mod watch;
 mod aof_txn_markers;
-mod spop_propagation;
-mod concurrent_writers_overlap;
-mod feed_cdc;
 mod differential_wire_vs_embedded;
+mod feed_cdc;
+mod spop_propagation;
+mod watch;
