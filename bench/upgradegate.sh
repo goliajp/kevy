@@ -40,8 +40,11 @@ cleanup() {
 }
 trap cleanup EXIT
 
-start() { # $1 = binary, $2 = dir
-    "$1" --port "$PORT" --dir "$2" --appendfsync always >"$DIR/srv.log" 2>&1 &
+# fsync is not a CLI flag on any release, so it rides in a config file
+printf '[persistence]\nappendfsync = "%s"\n' "${UPGRADEGATE_FSYNC:-always}" >"$DIR/fsync.toml"
+
+start() { # $1 = binary, $2 = dir, $3 = config (omit for none)
+    "$1" ${3:+--config "$3"} --port "$PORT" --dir "$2" >"$DIR/srv.log" 2>&1 &
     SRV_PID=$!
     for _ in $(seq 1 100); do
         $CLI ping >/dev/null 2>&1 && return 0
@@ -95,26 +98,26 @@ echo "upgradegate: old=$("$OLD_BIN" --version 2>/dev/null | head -1 || echo "$OL
 echo "upgradegate: new=$("$NEW_BIN" --version 2>/dev/null | head -1 || echo "$NEW_BIN")"
 
 # A — the last release writes its world.
-start "$OLD_BIN" "$DIR/data"
+start "$OLD_BIN" "$DIR/data" "$DIR/fsync.toml"
 write_generation gen-old
 snapshot >"$DIR/snap-a.txt"
 stop
 
 # B — the candidate opens it (UPGRADE), then writes its own generation.
-start "$NEW_BIN" "$DIR/data"
+start "$NEW_BIN" "$DIR/data" "$DIR/fsync.toml"
 check "$DIR/snap-a.txt" "upgrade: new binary serves the old generation"
 write_generation gen-new
 snapshot >"$DIR/snap-ab.txt"
 stop
 
 # C — the last release opens BOTH generations (DOWNGRADE).
-start "$OLD_BIN" "$DIR/data"
+start "$OLD_BIN" "$DIR/data" "$DIR/fsync.toml"
 check "$DIR/snap-ab.txt" "downgrade: old binary serves both generations"
 stop
 
 # D — backup is a file copy.
 cp -R "$DIR/data" "$DIR/backup"
-start "$NEW_BIN" "$DIR/backup"
+start "$NEW_BIN" "$DIR/backup" "$DIR/fsync.toml"
 check "$DIR/snap-ab.txt" "backup: a copied directory serves identically"
 stop
 
