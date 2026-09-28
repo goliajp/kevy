@@ -52,7 +52,27 @@ fn request_len(b: &[u8]) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::request_len;
+    use super::{read_request, request_len};
+    use std::io::Write;
+
+    #[test]
+    fn a_client_that_leaves_mid_request_sent_none() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut client = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        client.write_all(b"*2\r\n$3\r\nGET\r\n").unwrap();
+        drop(client);
+        let (mut sock, _) = listener.accept().unwrap();
+        let mut pending = Vec::new();
+        assert!(!read_request(&mut sock, &mut pending));
+        assert_eq!(pending, b"*2\r\n$3\r\nGET\r\n", "what did arrive is kept");
+    }
+
+    #[test]
+    fn a_header_that_is_not_a_count_never_completes() {
+        assert_eq!(request_len(b"*x\r\n"), None);
+        assert_eq!(request_len(b"*\xff\r\n"), None);
+        assert_eq!(request_len(b"*1\r\n$y\r\nab\r\n"), None);
+    }
 
     #[test]
     fn a_request_is_complete_only_with_its_last_crlf() {

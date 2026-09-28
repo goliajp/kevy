@@ -201,11 +201,6 @@ def _have_nightly_rustdoc():
     return False, "no nightly toolchain (rustup toolchain install nightly)"
 
 
-def _have_doc_coverage():
-    if list((ROOT / "target/doc").glob("*.txt")):
-        return True, ""
-    return False, ("no rustdoc coverage tables in target/doc (RUSTDOCFLAGS='-Z unstable-options "
-                   "--show-coverage' cargo +nightly doc --workspace --no-deps)")
 
 
 def _have_semver_checks():
@@ -217,6 +212,22 @@ def _have_semver_checks():
 # Set when a tier starts: an input another row produces must come from this
 # run, not from the copy git tracks.
 RUN_STARTED = 0.0
+
+
+def _fresh_doc_coverage():
+    tables = list((ROOT / "target/doc").glob("*.txt"))
+    if tables and min(t.stat().st_mtime for t in tables) >= RUN_STARTED:
+        return True, ""
+    return False, "rustdoc-coverage did not write the tables in target/doc in this run"
+
+
+def _fresh_dead_set():
+    """deadgate's reading of this run's corpus. The file is tracked, so a
+    stone report over it without a fresh run reads another tree's corpus."""
+    p = ROOT / "bench/DEAD-SET.json"
+    if p.exists() and p.stat().st_mtime >= RUN_STARTED:
+        return True, ""
+    return False, "deadgate did not write bench/DEAD-SET.json in this run"
 
 
 def _fresh_stone_report():
@@ -256,7 +267,17 @@ def _have_miri():
     return False, "rustup component add miri rust-src --toolchain nightly"
 
 
+def _fresh_web_dist():
+    """The site site-build wrote in this run; a dist left from an earlier
+    build is a different tree's site."""
+    p = ROOT / "web/dist"
+    if p.exists() and p.stat().st_mtime >= RUN_STARTED:
+        return True, ""
+    return False, "site-build did not write web/dist in this run"
+
+
 PROBES = {
+    "web/dist from site-build": lambda: _fresh_web_dist(),
     "wasm targets": lambda: _have_targets("wasm32-unknown-unknown", "wasm32-wasip1"),
     "iot toolchain": lambda: _have_iot_toolchain(),
     "nightly miri": lambda: _have_miri(),
@@ -272,7 +293,8 @@ PROBES = {
     "wasm-artifact": lambda: _have_wasm_artifact(),
     "device": lambda: _have_device(),
     "nightly rustdoc": lambda: _have_nightly_rustdoc(),
-    "nightly rustdoc coverage tables in target/doc": lambda: _have_doc_coverage(),
+    "rustdoc coverage tables from rustdoc-coverage": lambda: _fresh_doc_coverage(),
+    "bench/DEAD-SET.json from deadgate": lambda: _fresh_dead_set(),
     "cargo-semver-checks": lambda: _have_semver_checks(),
     "bench/STONE-REPORT.json from stone-report": lambda: _fresh_stone_report(),
     "ci": lambda: (False, "runs in CI, not locally"),

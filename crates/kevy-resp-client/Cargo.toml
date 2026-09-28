@@ -12,6 +12,9 @@ documentation = "https://docs.rs/kevy-resp-client"
 readme = "README.md"
 keywords = ["redis", "resp", "client", "valkey", "tcp"]
 categories = ["network-programming", "database"]
+# Not packaged: its mock server reads requests with kevy-testnet, which is
+# never published, so `cargo package` would ship a test that cannot compile.
+exclude = ["tests/roundtrip.rs"]
 
 [lints]
 workspace = true
