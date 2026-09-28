@@ -78,6 +78,10 @@ pub(super) fn info_tiering(totals: &crate::state::Totals, b: &mut String) {
     b.push_str(&format!("promotions_total:{}\r\n", t.promotions_total));
     b.push_str(&format!("peek_preads_total:{}\r\n", t.peek_preads_total));
     b.push_str(&format!("batch_submissions_total:{}\r\n", t.batch_submissions_total));
+    b.push_str(&format!("vlog_raw_bytes:{}\r\n", t.vlog_raw_bytes));
+    b.push_str(&format!("vlog_payload_bytes:{}\r\n", t.vlog_payload_bytes));
+    b.push_str(&format!("vlog_frame_header_bytes:{}\r\n", t.vlog_frame_header_bytes));
+    b.push_str(&format!("vlog_dict_bytes:{}\r\n", t.vlog_dict_bytes));
     b.push_str("\r\n");
 }
 

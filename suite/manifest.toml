@@ -555,6 +555,16 @@ requires = []
 proves = "no expect() in library code answers with a measurement or a conclusion"
 
 [[check]]
+id = "abi-panics"
+area = "hygiene"
+tier = "precommit"
+cmd = "python3 tools/check_abi_panics.py"
+expected = 1
+timeout = 60
+requires = []
+proves = "every exported ABI function catches panics or states why it cannot panic"
+
+[[check]]
 id = "feature-lints"
 area = "hygiene"
 tier = "prerelease"

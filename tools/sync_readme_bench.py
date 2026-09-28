@@ -250,6 +250,40 @@ def export_site_json(check):
     )
 
 
+def patterns(name, t, date, version):
+    """(what, regex, replacement) for one README; each must match once."""
+    rows = "\n".join(t["vs"].split("\n")[2:])
+    lead = "\n".join(t["lead"].split("\n")[2:]).replace("\\", "\\\\")
+    ver = r"[\d.]+"
+    common = [
+        # matched on their own two rows so this cannot land on the lead table
+        ("kevy-vs-valkey rows",
+         r"\| `GET -c 50 -P 16` \|[^\n]*\n\| `SET -c 50 -P 16` \|[^\n]*", rows),
+        ("four-engine lead table",
+         rf"\| valkey {ver} \| \*\*[\d.]+×\*\* \|\n\| redis {ver} \| \*\*[\d.]+×\*\* \|\n"
+         rf"\| dragonfly {ver} \| \*\*[\d.]+×\*\* \|", lead),
+    ]
+    rate = t["rate"]
+    own = {
+        "README.md": [
+            ("dated sentence", r"re-measured \d{4}-\d{2}-\d{2} \(kevy [\d.]+\)",
+             f"re-measured {date} (kevy {version})"),
+            ("quoted rate", r"(kevy at\s*)[\d.]+ M/s( against each)", rf"\g<1>{rate}\g<2>"),
+        ],
+        "README.zh-CN.md": [
+            ("dated sentence", r"\d{4}-\d{2}-\d{2} 重测（kevy [\d.]+）",
+             f"{date} 重测（kevy {version}）"),
+            ("quoted rate", r"(kevy\s*以 )[\d.]+ M/s", rf"\g<1>{rate}"),
+        ],
+        "README.ja.md": [
+            ("dated sentence", r"を\d{4}-\d{2}-\d{2}に再測定した値（kevy [\d.]+）",
+             f"を{date}に再測定した値（kevy {version}）"),
+            ("quoted rate", r"(kevyは)[\d.]+ M/s(で)", rf"\g<1>{rate}\g<2>"),
+        ],
+    }
+    return common + own[name]
+
+
 def main():
     check = "--check" in sys.argv
     date, version, rows = latest_arena()
@@ -262,24 +296,16 @@ def main():
         before = s
         t = tables[name]
 
-        # The kevy-vs-valkey rows. Matched on their own two rows so the
-        # replacement cannot land on the four-engine table below.
-        s = re.sub(
-            r"\| `GET -c 50 -P 16` \|[^\n]*\n\| `SET -c 50 -P 16` \|[^\n]*",
-            "\n".join(t["vs"].split("\n")[2:]),
-            s,
-        )
-        # The four-engine lead table.
-        s = re.sub(
-            r"\| valkey 9\.1 \| \*\*[\d.]+×\*\* \|\n\| redis 8 \| \*\*[\d.]+×\*\* \|\n"
-            r"\| dragonfly \| \*\*[\d.]+×\*\* \|",
-            "\n".join(t["lead"].split("\n")[2:]),
-            s,
-        )
-        # The rate quoted in the prose beside it.
-        s = re.sub(r"kevy at\n?\s*[\d.]+ M/s against each", f"kevy at {t['rate']} against each", s)
-        s = re.sub(r"[\d.]+ M/s で各エンジンに対し", f"{t['rate']} で各エンジンに対し", s)
-        s = re.sub(r"kevy 以 [\d.]+ M/s", f"kevy 以 {t['rate']}", s)
+        # Every pattern must land exactly once. A pattern that matches
+        # nothing rewrites nothing, and the check then reports the stale
+        # text as current: the lead table kept an older run's ratios beside
+        # the 6.3.0 rows that way, once its engine labels gained full
+        # versions and stopped matching.
+        for what, pat, rep in patterns(name, t, date, version):
+            s, n = re.subn(pat, rep, s)
+            if n != 1:
+                sys.exit(f"sync_readme_bench: {name}: the {what} pattern matched "
+                         f"{n} times, not once — the prose moved; update patterns()")
 
         if s != before:
             if check:

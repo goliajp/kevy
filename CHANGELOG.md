@@ -2,6 +2,104 @@
 
 ## Unreleased
 
+- **The embedded `everysec` fsync no longer holds the shard lock.** The
+  background reaper ran `fdatasync` (`F_FULLFSYNC` on Apple platforms)
+  while holding the shard's write lock, so every write to that shard
+  waited for the disk. It now writes the buffer into the kernel under the
+  lock and runs the fsync after releasing it. Writes that arrive while the
+  fsync runs are covered by the next one, so the power-loss window is
+  about one second plus one reaper tick plus the time one fsync takes. The
+  documented "≤ 1 s" never included the tick or the fsync; the docs now
+  state the window this way, and state what a killed process loses
+  separately. `Store::fsync_aof()` still returns only once every earlier
+  write is on disk. `kevy-persist` adds `Aof::tick` and `PendingSync` for
+  callers that want the same split.
+- **`appendfsync no` and `everysec` write the AOF buffer into the kernel
+  on every tick.** The embedded engine, and the server with
+  `KEVY_AOF_OFFLOAD=0`, kept records in the 256 KiB user-space buffer
+  until it filled (or, under `everysec`, until the next fsync), so a
+  killed process could lose writes made seconds or minutes earlier under
+  `no`, and about a second of writes under `everysec`. A killed process
+  now loses at most one tick of writes (100 ms by default
+  in the embedded engine; one reactor iteration on the server). Power
+  loss is unchanged: under `no` the OS decides when the data reaches the
+  disk, and the `everysec` fsync keeps its once-a-second cadence.
+
+- **A counted `SPOP` over RESP3 is recorded by the members it removed.**
+  The RESP3 reply path for `SPOP key count` wrote the command itself to the
+  AOF and to replicas, so a restart or a replica popped different random
+  members. It now records `SREM key member…`, as the RESP2 path always did,
+  and an empty pop records nothing.
+- **A conditional `HEXPIRE` keeps its deadlines across a restart.** The
+  absolute-deadline frame that follows a relative `HEXPIRE`/`HPEXPIRE`
+  copied the command's `NX|XX|GT|LT`; on replay the condition refused it,
+  and the field counted its TTL again from the replay. The frame now names
+  each field's deadline as it stands after the command, with no condition.
+  The embedded `hexpire`/`hpexpire_at` no longer record fields their
+  condition refused, which a replay used to give the new deadline.
+
+- **Scalar and ORDERPATH indexes hold each row once.** An index kept every
+  row's key and value twice (once in the ordered tree, once in the
+  key-to-value map) and, for the duplicate count, a third copy of every
+  distinct value. Both lookup directions now point at one shared row, and
+  the duplicate count reads the tree. Counted on the heap, an `i64` index
+  with short keys drops from 155–211 to 92–102 bytes per row, and an
+  ORDERPATH index (a string department plus a timestamp) from 265–321 to
+  109–119; the ranges are the two ends of the hash table's growth steps.
+  Re-applying the value a key already holds no longer touches the index.
+- **An index's reported size is now its real size, which is two to four
+  times the old figure.** `approx_bytes` (the `bytes` of `IDX.VERIFY`,
+  `IDX.LIST` and `TABLE.VERIFY`) used to be `value + key + 48` per row and
+  undercounted the heap. It is now the shared row (56 bytes plus the key
+  and any string value), one ordered-tree slot and the reverse set's
+  buckets: about `key + string value + 82…93` bytes per row. The same
+  figure feeds a `MAXMEM` budget and the tiering reservation for indexes
+  (`index_reserved_bytes`), so after upgrading an index declared with a
+  tight `MAXMEM` can fail its build with `-INDEXOVERBUDGET`, and a tiered
+  store sized close to its index floor keeps less data hot or refuses a
+  new index. Re-check budgets against `IDX.LIST` on a loaded sample; the
+  per-row formula is in `docs/indexes.md`.
+- `bench/idxgate.sh` checks the reported index size against the server's
+  resident memory, measured as the RSS difference between a server with
+  the index and one without; before, it compared the figure with the
+  formula that produced it.
+
+- **One implementation of each single-key command.** The server and the
+  embedded engine now run their single-key data commands through the same
+  code, the new `kevy-verbs` crate: argv grammar, checks, the store call,
+  the reply and its error wording. `Store::dispatch_argv` — the path every
+  language binding uses — records such a write as the command it ran,
+  followed by `PEXPIREAT` / `HPEXPIREAT` when it moved a deadline by a
+  relative amount; the CDC feed carries those frames as well. The typed
+  `Store` methods record what they did before. Server replies are
+  unchanged. Over `dispatch_argv`, `INCRBYFLOAT` now answers with the
+  stored value's own digits, as the server does, and a malformed write on
+  a closed or replica store is refused as closed or `READONLY` rather than
+  for its arity.
+- **An embedded replica applies every write its primary records, except
+  stream and geo.** `SETEX`, `PSETEX`, `SETNX`, `MSET`, `HMSET`, `GETEX`,
+  `UNLINK`, `RPOPLPUSH`, `LMOVE`, the blocking pops and `ZPOPMIN.BELOW`
+  used to be skipped on replay. A logged `SET … NX` / `XX` is now applied
+  with its condition, as the primary ran it: a primary also logs a
+  `SET NX` that lost, and applying that one unconditionally handed a held
+  key to the caller that lost it.
+- **Server: `GETEX key EX|PX` keeps its deadline across a restart.** The
+  AOF now follows it with the absolute `PEXPIREAT`, as it does for
+  `EXPIRE` and `SET … EX`; before, a restart counted the TTL again from
+  the replay.
+- **Persistent embedded writes copy the value twice, not five times.**
+  Logging a write used to copy every argument into an owned argv, copy it
+  again into that argv's buffer, and encode the frame into a scratch
+  buffer before the AOF write buffer took it. The record is now encoded
+  from the caller's slices straight into the write buffer, and its length
+  and CRC32C are computed over the same pieces; the server's append path
+  loses its scratch copy the same way. Logging a `SET` no longer allocates
+  on the calling thread (it made 6 allocations). A 4 KiB `SET` under
+  `everysec` went from 1.22 to 0.96 µs, and a 16-byte one from 195 to
+  94 ns (medians of ten interleaved rounds, Apple M4 Max). The bytes
+  written to the AOF and when it is fsynced are unchanged.
+  `kevy_sys::checksum::try_crc32c_hw_append` continues a CRC32C across
+  pieces.
 - **Encrypted clients in cluster mode.** Every shard's cluster port gets an
   encrypted twin (`[secure] cluster_port_base`, `announce_cluster_port_base`),
   and a client that came in encrypted is told those ports in `-MOVED` and

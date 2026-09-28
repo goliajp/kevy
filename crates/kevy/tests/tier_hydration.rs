@@ -278,4 +278,12 @@ fn cold_table_digest_backfill_and_hydration_match_the_hot_twin() {
     let vc = cmd(&mut cc, &[b"IDX.VERIFY", b"byn"]);
     assert_eq!(vc, vh, "IDX.VERIFY over cold rows must match the hot twin");
     assert_eq!(common::at_rest("promotions_total", || info_gauge(&mut cc, "promotions_total")), 0);
+
+    // The compression terms: frame headers and payload are what is left of
+    // the vlog once record framing (header, key length, key) is taken out.
+    const COMP: &[&str] =
+        &["vlog_size_bytes", "vlog_raw_bytes", "vlog_payload_bytes", "vlog_frame_header_bytes"];
+    let c = common::snapshot_at_rest("compression gauges", || info_gauges(&mut cc, COMP));
+    assert!(c[1] > 0, "cold rows were written to the vlog: {c:?}");
+    assert!(c[2] + c[3] < c[0], "framing is the rest of the bytes on disk: {c:?}");
 }

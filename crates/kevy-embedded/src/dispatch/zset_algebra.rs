@@ -7,7 +7,10 @@ use crate::store::Store;
 
 use kevy_store::ZAggregate;
 
-use super::util::{ERR_SYNTAX, arg_u64, emit_int, err, verb_name, wrong_args};
+use super::{emit_int, verb_name};
+use kevy_resp::encode_error;
+use kevy_verbs::args::arg_u64;
+use kevy_verbs::reply::{ERR_SYNTAX, wrong_args};
 
 const ERR_NUMKEYS: &str = "ERR numkeys should be greater than 0";
 const ERR_KEYS_GT_ARGS: &str = "ERR Number of keys can't be greater than number of args";
@@ -35,15 +38,15 @@ fn cmd_zstore(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>, diff_form: bool, o
         return wrong_args(out, &verb_name(argv));
     }
     let Some(numkeys) = arg_u64(&argv[2]).map(|n| n as usize).filter(|&n| n > 0) else {
-        return err(out, ERR_NUMKEYS);
+        return encode_error(out, ERR_NUMKEYS);
     };
     if argv.len() < 3 + numkeys {
-        return err(out, ERR_KEYS_GT_ARGS);
+        return encode_error(out, ERR_KEYS_GT_ARGS);
     }
     let keys: Vec<&[u8]> = argv[3..3 + numkeys].iter().map(Vec::as_slice).collect();
     let (weights, aggregate) = match parse_tail(argv, diff_form, numkeys) {
         Ok(t) => t,
-        Err(msg) => return err(out, msg),
+        Err(msg) => return encode_error(out, msg),
     };
     emit_int(out, op(s, &argv[1], &keys, weights.as_deref(), aggregate).map(|n| n as i64));
 }
@@ -98,10 +101,10 @@ fn cmd_zintercard(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
         return wrong_args(out, &verb_name(argv));
     }
     let Some(numkeys) = arg_u64(&argv[1]).map(|n| n as usize).filter(|&n| n > 0) else {
-        return err(out, ERR_NUMKEYS);
+        return encode_error(out, ERR_NUMKEYS);
     };
     if argv.len() < 2 + numkeys {
-        return err(out, ERR_KEYS_GT_ARGS);
+        return encode_error(out, ERR_KEYS_GT_ARGS);
     }
     let keys: Vec<&[u8]> = argv[2..2 + numkeys].iter().map(Vec::as_slice).collect();
     let mut limit = 0usize;
@@ -109,12 +112,12 @@ fn cmd_zintercard(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     while i < argv.len() {
         if argv[i].eq_ignore_ascii_case(b"LIMIT") {
             let Some(n) = argv.get(i + 1).and_then(|v| arg_u64(v)) else {
-                return err(out, "ERR LIMIT can't be negative");
+                return encode_error(out, "ERR LIMIT can't be negative");
             };
             limit = n as usize;
             i += 2;
         } else {
-            return err(out, ERR_SYNTAX);
+            return encode_error(out, ERR_SYNTAX);
         }
     }
     emit_int(out, s.zintercard(&keys, limit).map(|n| n as i64));

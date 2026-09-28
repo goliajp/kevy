@@ -39,7 +39,7 @@ fn read_crlf_line(s: &mut TcpStream) -> Vec<u8> {
     }
 }
 
-/// Minimal RESP2 reply reader — just the shapes these tests receive.
+/// Minimal reply reader — just the shapes these tests receive.
 #[derive(Debug, PartialEq)]
 enum Resp {
     Simple(Vec<u8>),
@@ -64,11 +64,14 @@ fn read_value(s: &mut TcpStream) -> Resp {
             payload.truncate(n as usize);
             Resp::Bulk(Some(payload))
         }
-        b'*' => {
+        // a RESP3 set reads as an array; a map as its key/value run
+        b'*' | b'~' | b'%' => {
             let n: i64 = std::str::from_utf8(rest).unwrap().parse().unwrap();
+            let n = if tag == b'%' { n * 2 } else { n };
             let items = (0..n.max(0)).map(|_| read_value(s)).collect();
             Resp::Array(items)
         }
+        b'_' => Resp::Bulk(None),
         other => panic!("unexpected RESP tag {other:?}"),
     }
 }
@@ -204,5 +207,33 @@ fn spop_effect_survives_aof_restart() {
             );
         }
         assert_eq!(cmd(&mut c, &[b"GET", b"marker"]), Resp::Bulk(Some(b"fence-value".to_vec())));
+    });
+}
+
+/// The counted SPOP has its own RESP3 reply path (a Set); it records its
+/// effect the same way, so a restart reproduces the set exactly.
+#[test]
+fn resp3_counted_spop_records_its_effect() {
+    let dir = kevy_tmpdir::TmpDir::new("spop-aof-resp3");
+    let mut survivors = Vec::new();
+    with_runtime(free_port(), dir.path(), |p| {
+        let mut c = TcpStream::connect(("127.0.0.1", p)).unwrap();
+        let Resp::Array(_) = cmd(&mut c, &[b"HELLO", b"3"]) else { panic!("HELLO 3") };
+        let all: Vec<Vec<u8>> = (0..20).map(|i| format!("m{i:02}").into_bytes()).collect();
+        let mut argv: Vec<&[u8]> = vec![b"SADD", b"s"];
+        argv.extend(all.iter().map(Vec::as_slice));
+        assert_eq!(cmd(&mut c, &argv), Resp::Int(20));
+        let Resp::Array(popped) = cmd(&mut c, &[b"SPOP", b"s", b"5"]) else { panic!("SPOP") };
+        assert_eq!(popped.len(), 5);
+        assert_eq!(cmd(&mut c, &[b"SPOP", b"nosuchset", b"3"]), Resp::Array(vec![]));
+        survivors = members(cmd(&mut c, &[b"SMEMBERS", b"s"]));
+        assert_eq!(survivors.len(), 15);
+    });
+    let aof = std::fs::read(dir.path().join("aof-0.aof")).unwrap();
+    assert!(!aof.windows(4).any(|w| w.eq_ignore_ascii_case(b"SPOP")), "SPOP reached the AOF");
+    assert!(!aof.windows(9).any(|w| w == b"nosuchset"), "an empty pop left a frame");
+    with_runtime(free_port(), dir.path(), |p| {
+        let mut c = TcpStream::connect(("127.0.0.1", p)).unwrap();
+        assert_eq!(members(cmd(&mut c, &[b"SMEMBERS", b"s"])), survivors);
     });
 }

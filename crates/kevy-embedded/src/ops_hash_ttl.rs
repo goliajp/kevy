@@ -38,17 +38,25 @@ impl Store {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
         let codes = g.store.hexpire_at(key, fields, deadline_ms, cond).map_err(store_err)?;
-        // Log only when something changed (set or immediate-delete).
-        if codes.iter().any(|&c| c == 1 || c == 2) {
+        // the record names only the fields that changed (set, or deleted by
+        // a past deadline): it carries no condition, so a field the
+        // condition refused must not appear in it
+        let changed: Vec<&[u8]> = fields
+            .iter()
+            .zip(&codes)
+            .filter(|&(_, &c)| c == 1 || c == 2)
+            .map(|(f, _)| *f)
+            .collect();
+        if !changed.is_empty() {
             let ms = deadline_ms.to_string();
-            let n = fields.len().to_string();
-            let mut argv: Vec<&[u8]> = Vec::with_capacity(5 + fields.len());
+            let n = changed.len().to_string();
+            let mut argv: Vec<&[u8]> = Vec::with_capacity(5 + changed.len());
             argv.push(b"HPEXPIREAT");
             argv.push(key);
             argv.push(ms.as_bytes());
             argv.push(b"FIELDS");
             argv.push(n.as_bytes());
-            argv.extend(fields.iter().copied());
+            argv.extend(changed);
             commit_write(&mut g, &argv)?;
         }
         Ok(codes)

@@ -157,7 +157,7 @@ fn reaper_loop(
         for (shard_i, shard) in shards.iter().enumerate() {
             #[cfg(not(all(feature = "index", feature = "persist", not(target_arch = "wasm32"))))]
             let _ = shard_i;
-            shard_upkeep(
+            run_tick_sync(shard_upkeep(
                 shard,
                 samples,
                 rounds,
@@ -165,7 +165,7 @@ fn reaper_loop(
                 shards.len(),
                 #[cfg(all(feature = "index", feature = "persist", not(target_arch = "wasm32")))]
                 win.as_ref().map(|(t, d)| (t, kevy_persist::layout::segs_dir(d, shard_i))),
-            );
+            ));
             // Non-blocking: holds the lock only for begin/finish, not the spill.
             #[cfg(feature = "persist")]
             concurrent_auto_rewrite(shard, policy, sink.as_ref());
@@ -173,8 +173,26 @@ fn reaper_loop(
     }
 }
 
+/// The everysec fsync [`shard_upkeep`] started, if one was due.
+#[cfg(feature = "persist")]
+type TickSync = Option<kevy_persist::PendingSync>;
+#[cfg(not(feature = "persist"))]
+type TickSync = ();
+
+/// Run the fsync the tick handed back. The shard lock is already
+/// released, so writes keep landing in the buffer while it runs.
+#[cfg(feature = "persist")]
+fn run_tick_sync(sync: TickSync) {
+    if let Some(sync) = sync {
+        let _ = sync.run();
+    }
+}
+#[cfg(not(feature = "persist"))]
+fn run_tick_sync(_: TickSync) {}
+
 /// One shard's locked tick body: TTL sweeps, the window tick, tiering
-/// upkeep, and the everysec AOF window check.
+/// upkeep, and the AOF tick (`no` writes the buffer into the kernel;
+/// a due `everysec` fsync is returned to run after the lock drops).
 fn shard_upkeep(
     shard: &Arc<RwLock<Inner>>,
     samples: usize,
@@ -185,7 +203,7 @@ fn shard_upkeep(
         &Arc<crate::ops_table::TableReg>,
         std::path::PathBuf,
     )>,
-) {
+) -> TickSync {
     #[cfg(not(all(feature = "tier", not(target_arch = "wasm32"))))]
     let _ = (tier, nshards);
     let mut g = lock_inner(shard);
@@ -213,12 +231,15 @@ fn shard_upkeep(
     crate::shard::tier_tick_upkeep(&mut g, tier, nshards);
     let _ = g.store.demote_step();
     let _ = g.store.tier_compact_tick();
-    // EverySec AOF fsync window check — runs from the same tick.
-    #[cfg(feature = "persist")]
-    if let Some(aof) = &mut g.aof {
-        let _ = aof.maybe_sync();
-    }
+    tick_aof(&mut g)
 }
+
+#[cfg(feature = "persist")]
+fn tick_aof(g: &mut Inner) -> TickSync {
+    g.aof.as_mut().and_then(|aof| aof.tick().ok().flatten())
+}
+#[cfg(not(feature = "persist"))]
+fn tick_aof(_: &mut Inner) -> TickSync {}
 
 /// **Non-blocking** auto-`BGREWRITEAOF`. Three phases bracket the lock so the
 /// slow disk write happens with the lock *released* — application writes keep
@@ -313,3 +334,7 @@ fn begin_rewrite(
 pub(crate) fn lock_inner(inner: &Arc<RwLock<Inner>>) -> RwLockWriteGuard<'_, Inner> {
     inner.write().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
+
+#[cfg(all(test, feature = "persist"))]
+#[path = "reaper_tests.rs"]
+mod tests;

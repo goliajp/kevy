@@ -5,8 +5,8 @@
 
 use kevy_index::{Described, describe_index, describe_table, describe_view};
 
-use super::util::{arr, bulk, err};
 use crate::store::Store;
+use kevy_resp::{encode_array_len, encode_bulk, encode_error};
 
 /// One DESCRIBE request; `false` = verb not in this group.
 pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>) -> bool {
@@ -18,7 +18,7 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
     };
     if argv.len() != 2 {
         let verb = String::from_utf8_lossy(up);
-        err(out, &format!("ERR usage: {verb} name"));
+        encode_error(out, &format!("ERR usage: {verb} name"));
         return true;
     }
     let name = &argv[1];
@@ -32,7 +32,7 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
         Some(d) => encode(out, &d),
         None => {
             let shown = String::from_utf8_lossy(name);
-            err(out, &format!("ERR no such {noun} '{shown}' ({lister} enumerates them)"));
+            encode_error(out, &format!("ERR no such {noun} '{shown}' ({lister} enumerates them)"));
         }
     }
     true
@@ -40,9 +40,9 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
 
 fn encode(out: &mut Vec<u8>, d: &Described) {
     match d {
-        Described::Bulk(b) => bulk(out, b),
+        Described::Bulk(b) => encode_bulk(out, b),
         Described::Array(items) => {
-            arr(out, items.len());
+            encode_array_len(out, items.len() as i64);
             for item in items {
                 encode(out, item);
             }

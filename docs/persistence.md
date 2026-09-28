@@ -12,7 +12,7 @@ Reach for this doc when you are:
 - Wiring an embedded `kevy_embedded::Store` into a host application and want to know what survives a process crash, what doesn't, and how to observe it from inside the host.
 - Looking at a key whose TTL behaves oddly across restarts.
 
-If you only want a quick "does it survive `kill -9`?" answer: yes, with at most one second of writes lost under the default policy.
+If you only want a quick "does it survive `kill -9`?" answer: yes. Under the default policy a killed process loses at most one tick (~100 ms) of writes, and a power loss about one second plus the time one fsync takes.
 
 ## Core idea
 
@@ -172,7 +172,7 @@ whose writes are single-shard by construction.
 | Auto-rewrite staleness | `auto_aof_rewrite_interval_secs` | `with_auto_rewrite_interval(d)` | `0` (off) | Independent trigger: rewrite when this long has passed since the last rewrite AND the log has grown since. Live-tunable. |
 | Resync replay | `replay_resync` (`[persistence]`) | `with_replay_resync(true)` | `false` (strict) | Boot-time only. Recovers the good tail behind a mid-file corrupt region instead of stopping at it — see the resync section. |
 | Persistence directory | `data_dir` / env `KEVY_DIR` | `with_persist(path)` | `./data` (server); none (embedded) | One directory per kevy instance. |
-| Reactor / reaper cadence | reactor tick, ~100 ms | background reaper, or your `Store::tick` calls | ~100 ms | Drives `EverySec` flush, auto-rewrite checks, TTL eviction. |
+| Reactor / reaper cadence | reactor tick, ~100 ms | background reaper, or your `Store::tick` calls | ~100 ms | Drives the `EverySec` fsync, the `No` buffer write, auto-rewrite checks, TTL eviction. |
 
 ### Trigger surface
 
@@ -189,12 +189,12 @@ whose writes are single-shard by construction.
 | Policy | Durability | Cost |
 |---|---|---|
 | `Always` | Zero-loss — every write fsynced before its reply | ~50% throughput |
-| `EverySec` (default) | At most ~1 second of writes lost on a crash | Cheap |
-| `No` | Defers to the OS pagecache flush | Cheapest |
+| `EverySec` (default) | Power loss: about 1 s plus one tick plus the time one fsync takes. Process crash: at most one tick of writes — every tick writes buffered records into the kernel | Cheap |
+| `No` | Every tick writes buffered records into the kernel, never fsyncs: a killed process loses at most one tick of writes; after a power loss the OS decides what reached the disk | Cheapest |
 
 ## Trade-offs and limits
 
-**Per-policy throughput vs data loss.** `Always` blocks each reply on `fsync`; it is the only policy that survives `kill -9` with zero command loss, and it cuts SET-heavy throughput roughly in half on typical NVMe. `EverySec` runs a background flush every second and loses up to that window on a crash — the default precisely because it matches the Redis trade and the lost window is usually tolerable. `No` lets the kernel decide; throughput is highest but a crash can lose anything still in pagecache, potentially many seconds.
+**Per-policy throughput vs data loss.** `Always` blocks each reply on `fsync`; it is the only policy that survives `kill -9` with zero command loss, and it cuts SET-heavy throughput roughly in half on typical NVMe. `EverySec` fsyncs about once a second in the background without blocking writes, so a power loss can lose that second plus whatever arrived while the fsync itself ran, while a killed process loses at most one tick of writes — the default precisely because it matches the Redis trade and the lost window is usually tolerable. `No` writes buffered records into the kernel every tick and leaves the disk to the kernel; throughput is highest and a killed process loses at most one tick of writes, but a power loss can lose anything the kernel had not yet written back, potentially many seconds.
 
 **What `AppendFsync` does and does not govern.** It sets the power-loss
 window for individual commands. It has never had anything to do with
@@ -207,14 +207,14 @@ reading. A consumer storing financial data selected `Always` on first
 contact, reasoning that acknowledged writes must not be lost, and got a
 setting that costs the most and — before 4.0 — bought nothing at all for
 the block atomicity they actually needed. Pick `Always` when you cannot
-lose a single acknowledged command; pick `EverySec` when a one-second
-window is tolerable. Neither choice affects transactions.
+lose a single acknowledged command; pick `EverySec` when a window of about
+one second is tolerable. Neither choice affects transactions.
 
 **AOF replay cost vs snapshot load cost.** Without a snapshot, boot time grows linearly with the AOF byte count: a 4 GiB AOF replays in a few seconds on local NVMe, a 40 GiB one in a minute or more. A snapshot caps that — load is one streaming read plus a short tail of post-snapshot AOF — but costs a transient view freeze (O(keys), nanoseconds per key, because collection values are refcount-shared) plus a one-time copy of any collection first mutated while the snapshot is in flight. For write-heavy workloads, prefer leaning on auto-rewrite to keep the AOF bounded rather than running periodic `BGSAVE`s: rewrite gives you the same boot-time bound with no second file to manage.
 
 **Background-job concurrency.** Each shard runs at most one background save or rewrite at a time. A duplicate request that arrives mid-job is skipped with a log line, never queued.
 
-**AOF writes and the reactor thread.** Appends and fsyncs stay off the reactor on every reactor: with io_uring they ride the shard's own ring as queued operations; on the epoll/kqueue reactors a per-shard writer thread drains the same queue with sequential appends (byte-identical on disk). Either way the reactor never blocks in `write(2)` or `fsync(2)` on the hot path — which is what used to park it for seconds under GB/s ingest (the 5.0 tail-latency work; measured end-to-end in `bench/`'s finding documents). Durability is unchanged: the `everysec` crash window is still ≤ 1 s, and under `always` a write's reply is held until the fsync covering it completes — the reply itself still guarantees durability, the reactor just no longer waits alongside it, and concurrent connections share fsync rounds (group commit). `KEVY_AOF_OFFLOAD=0` restores the classic synchronous path on any reactor.
+**AOF writes and the reactor thread.** Appends and fsyncs stay off the reactor on every reactor: with io_uring they ride the shard's own ring as queued operations; on the epoll/kqueue reactors a per-shard writer thread drains the same queue with sequential appends (byte-identical on disk). Either way the reactor never blocks in `write(2)` or `fsync(2)` on the hot path — which is what used to park it for seconds under GB/s ingest (the 5.0 tail-latency work; measured end-to-end in `bench/`'s finding documents). Durability is unchanged: `everysec` still fsyncs about once a second, and under `always` a write's reply is held until the fsync covering it completes — the reply itself still guarantees durability, the reactor just no longer waits alongside it, and concurrent connections share fsync rounds (group commit). `KEVY_AOF_OFFLOAD=0` restores the classic synchronous path on any reactor.
 
 **Rewrites defer under saturating ingest (5.0).** A rewrite must fold the writes that land while it runs; when the append rate provably outruns that fold, 5.0 defers the rewrite instead of paying an unbounded stall: the growth rule re-anchors at the current size and retries after the next growth factor. Explicit `BGREWRITEAOF` is never gated. The observable trade: under sustained write saturation the AOF grows past its usual rewrite point and shrinks once pressure eases — disk is refundable, a stall is not. Around a rewrite you may briefly see `<aof>.rewrite` (the image under construction) and `<aof>.trashN` (a hardlink that moves the old log's multi-gigabyte free off the serving thread); both clean themselves up, and orphans from a crash are reclaimed by the next rewrite. Exclude `*.rewrite` / `*.trash*` from backups.
 
@@ -310,16 +310,16 @@ store.evictions_total();        // total evicted by maxmemory
 ## Durability contract (v2.1)
 
 What "the call returned OK" guarantees, per `appendfsync` × write path.
-"Durable" = on stable storage (`fdatasync` completed); "windowed" = in
-the OS page cache, lost only if the *machine* (not just the process)
-dies inside the window.
+"Durable" = on stable storage (`fdatasync` completed); "windowed" = not
+yet fsynced, so a power loss or OS crash inside the window can lose it.
+What a killed *process* loses is narrower; see below the table.
 
 | Write path | `always` | `everysec` | `no` |
 |---|---|---|---|
-| Server command reply | durable before the reply leaves the shard (group-committed per batch) | windowed ≤ 1 s | OS-paced |
-| Embedded facade op (`set`, `zadd`, …) | durable on return | windowed ≤ 1 s | OS-paced |
-| Embedded `atomic` / `atomic_all_shards` block | durable on commit (one fsync per touched shard) | windowed ≤ 1 s | OS-paced |
-| Embedded `Pipeline::commit` | durable on return, fsyncs batched per shard | windowed ≤ 1 s | OS-paced |
+| Server command reply | durable before the reply leaves the shard (group-committed per batch) | windowed, ≤ ~1 s + one tick + one fsync | OS-paced, in the kernel within one tick |
+| Embedded facade op (`set`, `zadd`, …) | durable on return | windowed, ≤ ~1 s + one tick + one fsync | OS-paced, in the kernel within one tick |
+| Embedded `atomic` / `atomic_all_shards` block | durable on commit (one fsync per touched shard) | windowed, ≤ ~1 s + one tick + one fsync | OS-paced, in the kernel within one tick |
+| Embedded `Pipeline::commit` | durable on return, fsyncs batched per shard | windowed, ≤ ~1 s + one tick + one fsync | OS-paced, in the kernel within one tick |
 | …any of the above + **`Store::fsync_aof()`** | no-op | **durable at the barrier** | **durable at the barrier** |
 
 `Store::fsync_aof()` is the per-write durability escape hatch
@@ -328,8 +328,14 @@ deployment on `everysec` for throughput, and place the barrier after
 the few writes that must survive a machine crash the moment they are
 acknowledged. Cost: one `fdatasync` per dirty shard.
 
-Process crash (SIGKILL) never loses acknowledged writes under `always`
-and loses at most the fsync window otherwise; the AOF tail is
+Process crash (SIGKILL) never loses acknowledged writes under `always`.
+Under the other policies it loses only what had not yet left user space.
+The server's default reactors hand appends to the kernel every reactor
+iteration, so a killed server loses only the last iteration's writes.
+The embedded engine buffers appends per shard (up to 256 KiB), and
+under both `no` and `everysec` every tick writes the buffer into the
+kernel, so a killed process loses at most one tick of writes (the server
+behaves the same way with `KEVY_AOF_OFFLOAD=0`). The AOF tail is
 replayed on the next open, and a torn final frame is truncated away
 on open, never silently applied (see the crash-consistency contract
 below for the full state machine).
@@ -374,8 +380,9 @@ on commit and are the tool when a group of writes must land together.
 feed backlog is not rebuilt from the AOF at open; only its
 `(generation, offset)` cursor survives a restart. Frames are emitted
 at apply time, **before** the AOF bytes recording the same write are
-fsynced — under `everysec` a consumer can observe up to ~1 s of
-writes that a crash will roll back (`always`: zero; `no`: unbounded).
+fsynced — under `everysec` a consumer can observe about one second
+(plus one fsync) of writes that a crash will roll back (`always`: zero;
+`no`: unbounded after a power loss).
 A crash bumps the feed generation, so every pre-crash cursor gets
 `-FEEDRESYNC` / `FeedError::Resync` and the consumer must rebuild
 from a scan of the recovered store. Treat a delivered frame as a

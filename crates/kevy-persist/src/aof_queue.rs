@@ -4,10 +4,9 @@
 //! line; the mode's contract lives on the `queue` field's doc.
 
 use std::io::{self, Write};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use super::aof::Aof;
-use crate::Fsync;
 
 impl Aof {
     /// Switch this log to queued-append mode (see the `queue` field
@@ -125,25 +124,12 @@ impl Aof {
     /// `Always` on every op. No-op cost when nothing is dirty.
     pub fn sync_now(&mut self) -> io::Result<()> {
         self.flush_queued()?;
-        if self.dirty {
+        if self.dirty || self.sync_unconfirmed() {
             self.file.flush()?;
             self.file.get_ref().sync_data()?;
             self.dirty = false;
             self.last_sync = Instant::now();
-        }
-        Ok(())
-    }
-
-    /// Flush+fsync if the `EverySec` window has elapsed. Call once per loop tick.
-    pub fn maybe_sync(&mut self) -> io::Result<()> {
-        if matches!(self.fsync, Fsync::EverySec)
-            && self.dirty
-            && self.last_sync.elapsed() >= Duration::from_secs(1)
-        {
-            self.file.flush()?;
-            self.file.get_ref().sync_data()?;
-            self.dirty = false;
-            self.last_sync = Instant::now();
+            self.confirm_started_syncs();
         }
         Ok(())
     }

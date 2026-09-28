@@ -51,7 +51,7 @@ index lookup was published as 212 µs against PostgreSQL's 126 and is now a
 tie within 4%.
 
 Read the rows as separate findings, because they point different ways. kevy
-absorbs writes **41× faster** if one second of loss is acceptable — that is
+absorbs writes **41× faster** if about one second of loss is acceptable — that is
 the pressure that puts a cache in front of an RDS in the first place. At
 matched per-write durability **PostgreSQL is 2.0× faster**: it group-commits
 its WAL, kevy fsyncs per command. On the indexed lookup the two engines are
@@ -353,7 +353,7 @@ use `WATCH` (CAS) or Lua (one unit) where that matters.
 
 Durability of a "commit": see [persistence](persistence.md) — with
 `appendfsync always` an acknowledged write is on disk before the
-reply; the default `everysec` windows up to 1s (the Redis trade).
+reply; the default `everysec` windows about 1s plus one fsync (the Redis trade).
 `Store::fsync_aof()` (embedded) is the per-transaction
 `synchronous_commit` escape hatch.
 
@@ -531,7 +531,7 @@ the serving tier. Capacity planning in one line:
 > against `MEMORY USAGE` / `IDX.LIST` bytes on a loaded sample.
 
 The per-subsystem formulas (each gated against measured RSS in CI):
-range index ≈ `rows × (value_width + avg_key_len + 48)`; text and ANN
+range index ≈ `rows × (avg_key_len + string_value_len + 82…93)`; text and ANN
 formulas in [text-search](text-search.md) /
 [vector-search](vector-search.md) (1M × 1024d vectors ≈ 4.1 GiB);
 agg ≈ groups-dominated ([indexes](indexes.md)); view members ≈
