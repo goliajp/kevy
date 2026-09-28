@@ -99,6 +99,20 @@ fn spawn_loop(
     })
 }
 
+/// Sleep one tick, waking early when `stop` is raised. Closing a store
+/// joins this thread, so a plain sleep made every close wait out the rest
+/// of the interval (up to 100 ms by default); the closer unparks it.
+fn nap(interval: Duration, stop: &AtomicBool) {
+    let deadline = std::time::Instant::now() + interval;
+    loop {
+        let now = std::time::Instant::now();
+        if now >= deadline || stop.load(Ordering::Relaxed) {
+            return;
+        }
+        std::thread::park_timeout(deadline - now);
+    }
+}
+
 /// The auto-rewrite policy + metric sink, captured from config.
 #[cfg(feature = "persist")]
 fn rewrite_slot(config: &Config) -> (kevy_persist::RewritePolicy, Option<MetricSink>) {
@@ -150,7 +164,7 @@ fn reaper_loop(
     #[allow(clippy::let_unit_value)]
     let _ = tier;
     while !stop.load(Ordering::Relaxed) {
-        std::thread::sleep(interval);
+        nap(interval, &stop);
         if stop.load(Ordering::Relaxed) {
             break;
         }

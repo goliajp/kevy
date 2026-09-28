@@ -61,3 +61,16 @@ fn a_write_lands_while_the_everysec_sync_is_outstanding() {
     drop(reopened);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn closing_a_store_does_not_wait_out_the_reaper_tick() {
+    let config = Config::default()
+        .with_persist(tmp_dir("reaper-close"))
+        .with_reaper_interval(Duration::from_secs(10));
+    let store = Store::open(config).unwrap();
+    store.set(b"k", b"v").unwrap();
+    let t0 = std::time::Instant::now();
+    drop(store);
+    // a close that sleeps out the tick takes the full ten seconds
+    assert!(t0.elapsed() < Duration::from_secs(1), "close took {:?}", t0.elapsed());
+}
