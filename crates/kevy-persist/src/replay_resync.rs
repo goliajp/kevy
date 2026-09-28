@@ -17,7 +17,7 @@ use crate::replay_walk::{ReplayStop, V2Walk};
 pub(crate) fn resync_fallback(
     path: &Path,
     w: &mut V2Walk,
-    apply: &mut Option<&mut dyn FnMut(Argv)>,
+    apply: &mut Option<&mut dyn FnMut(&mut Argv)>,
     ranges: &mut Vec<(u64, u64)>,
 ) -> io::Result<()> {
     let mut rest = Vec::new();
@@ -51,7 +51,7 @@ pub(crate) fn resync_fallback(
 fn resync_slice(
     rest: &[u8],
     base: u64,
-    apply: &mut Option<&mut dyn FnMut(Argv)>,
+    apply: &mut Option<&mut dyn FnMut(&mut Argv)>,
     ranges: &mut Vec<(u64, u64)>,
 ) -> (u64, u64, bool) {
     let mut good_end = 0usize; // local offset after the last applied record
@@ -69,9 +69,9 @@ fn resync_slice(
             match crate::record::next_record(rest, w) {
                 crate::record::RecordStep::Ok { payload, consumed } => {
                     match kevy_resp::parse_command(payload) {
-                        Ok(Some((args, used))) if used == payload.len() => {
+                        Ok(Some((mut args, used))) if used == payload.len() => {
                             if let Some(f) = apply.as_deref_mut() {
-                                f(args);
+                                f(&mut args);
                             }
                             w += consumed;
                             applied += 1;

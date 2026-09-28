@@ -43,12 +43,26 @@ use kevy_resp::Argv;
 /// signal — an unexpected count of replayed commands at boot is the
 /// operator's cue to inspect the AOF byte-by-byte.
 pub fn replay_aof<F: FnMut(Argv)>(path: &Path, mut apply: F) -> io::Result<ReplayReport> {
+    replay_aof_in_place(path, false, false, |a| apply(std::mem::take(a)))
+}
+
+/// The replay behind [`replay_aof`], [`replay_aof_quiet`] and
+/// [`replay_aof_resync`], handing each frame to `apply` by reference. The
+/// frame's buffers are reused for the next one, so an `apply` that only
+/// reads the frame costs no allocation per frame; one that keeps it takes
+/// it with `std::mem::take`.
+pub fn replay_aof_in_place<F: FnMut(&mut Argv)>(
+    path: &Path,
+    resync: bool,
+    quiet_info: bool,
+    mut apply: F,
+) -> io::Result<ReplayReport> {
     // v2 files stream record-by-record: peak memory is O(largest record),
     // not O(file) — a 2 GB log replays in a container the old read_to_end
     // would have OOM'd. v1 (legacy) keeps the whole-file read; its first
     // rewrite upgrades it out of that world.
     if matches!(sniff_format(path)?, crate::AofFormat::V2) {
-        return stream_v2(path, Some(&mut apply), false, false);
+        return stream_v2(path, Some(&mut apply), resync, quiet_info);
     }
     let mut data = Vec::new();
     match File::open(path) {
@@ -58,7 +72,7 @@ pub fn replay_aof<F: FnMut(Argv)>(path: &Path, mut apply: F) -> io::Result<Repla
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(ReplayReport::default()),
         Err(e) => return Err(e),
     }
-    replay_v1_slice(path, &data, &mut apply, false)
+    replay_v1_slice(path, &data, &mut apply, quiet_info)
 }
 
 /// [`replay_aof`] (or, with `resync`, [`replay_aof_resync`]) with the
@@ -72,32 +86,22 @@ pub fn replay_aof_quiet<F: FnMut(Argv)>(
     resync: bool,
     mut apply: F,
 ) -> io::Result<ReplayReport> {
-    if matches!(sniff_format(path)?, crate::AofFormat::V2) {
-        return stream_v2(path, Some(&mut apply), resync, true);
-    }
-    let mut data = Vec::new();
-    match File::open(path) {
-        Ok(mut f) => {
-            f.read_to_end(&mut data)?;
-        }
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(ReplayReport::default()),
-        Err(e) => return Err(e),
-    }
-    replay_v1_slice(path, &data, &mut apply, true)
+    replay_aof_in_place(path, resync, true, |a| apply(std::mem::take(a)))
 }
 
 /// The v1 frame loop: parse-apply until clean end, truncated tail, or a
 /// corrupt frame. Advances `pos`; returns the stop and the applied count.
-fn v1_walk<F: FnMut(Argv)>(data: &[u8], pos: &mut usize, apply: &mut F) -> (ReplayStop, u64) {
+fn v1_walk<F: FnMut(&mut Argv)>(data: &[u8], pos: &mut usize, apply: &mut F) -> (ReplayStop, u64) {
     let total = data.len();
     let mut replayed: u64 = 0;
+    let mut args = Argv::default();
     let stop = loop {
         if *pos >= total {
             break ReplayStop::Clean;
         }
-        match kevy_resp::parse_command(&data[*pos..]) {
-            Ok(Some((args, consumed))) => {
-                apply(args);
+        match kevy_resp::parse_command_into(&data[*pos..], &mut args) {
+            Ok(Some(consumed)) => {
+                apply(&mut args);
                 *pos += consumed;
                 replayed += 1;
             }
@@ -109,7 +113,7 @@ fn v1_walk<F: FnMut(Argv)>(data: &[u8], pos: &mut usize, apply: &mut F) -> (Repl
 }
 
 /// The v1 (bare-RESP) replay walk over a whole-file slice.
-fn replay_v1_slice<F: FnMut(Argv)>(
+fn replay_v1_slice<F: FnMut(&mut Argv)>(
     path: &Path,
     data: &[u8],
     apply: &mut F,
@@ -153,10 +157,7 @@ fn replay_v1_slice<F: FnMut(Argv)>(
 /// v1 files have no checksums to anchor on: they replay strictly here
 /// too (their first rewrite upgrades them into resync's world).
 pub fn replay_aof_resync<F: FnMut(Argv)>(path: &Path, mut apply: F) -> io::Result<ReplayReport> {
-    if matches!(sniff_format(path)?, crate::AofFormat::V2) {
-        return stream_v2(path, Some(&mut apply), true, false);
-    }
-    replay_aof(path, apply)
+    replay_aof_in_place(path, true, false, |a| apply(std::mem::take(a)))
 }
 
 /// What one [`replay_aof`] pass restored — and, crucially, what it could
@@ -221,7 +222,7 @@ pub(crate) fn sniff_format(path: &Path) -> io::Result<crate::AofFormat> {
 /// lying_length` and `resync_on_a_genuine_torn_tail_adds_nothing`.
 fn stream_v2(
     path: &Path,
-    mut apply: Option<&mut dyn FnMut(Argv)>,
+    mut apply: Option<&mut dyn FnMut(&mut Argv)>,
     resync: bool,
     quiet_info: bool,
 ) -> io::Result<ReplayReport> {
