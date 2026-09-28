@@ -33,6 +33,9 @@
 #     calling instance spread "the dominant noise axis" was reading the
 #     ruler, not the box. These angles now take throughput from the server's
 #     own command counter over a wall window timed here, which has no grid.
+#   * one latency angle, hybrid_p95_us: IDX.QUERY HYBRID p95 from a single
+#     closed-loop client, on a topology that shares no physical core
+#     (perfgate-hybrid.sh says why the default one cannot measure it).
 #
 # Exit codes: 0 = PASS (or baseline updated), 1 = FAIL/regression, 2 = refused
 # (dirty box / missing tools / bad usage).
@@ -76,65 +79,16 @@ fail()   { echo "perfgate: FAIL — $1" >&2; exit 1; }
 # baselines get recorded on lx64 (kevybench discipline) when the T9
 # envelope lands the workload; until then the gate SKIPS them with a
 # notice (never invents a number, never crashes on the hole).
+# A metric named *_us is a latency: lower is better, and its band is the
+# reference / tolerance instead of the reference x tolerance.
 METRICS="pinned_cluster_get pinned_cluster_set pinned_compat_get pinned_compat_set \
 legacy_8sh_get legacy_8sh_set \
 legacy_8sh_incr legacy_8sh_sadd legacy_8sh_hset legacy_8sh_lpush legacy_8sh_zadd \
-zalg_zinterstore \
+zalg_zinterstore hybrid_p95_us \
 table_point_get table_filter_sort_page table_write_tax \
 tiered_hotset_get tiered_hotset_set"
 
-# ---------- preflight: never measure on a dirty box ----------
-# A perf comparison of two userland binaries never legitimately needs the
-# ability to SIGTERM init. Running this as root is what turned a foot-gun
-# into three site outages (
-# hard rule 4) — the privilege is the difference between "killed my own
-# processes" and "killed sshd". No override flag: an escape hatch here would
-# be used, and then it would be the default again.
-[ "$(id -u)" -ne 0 ] || refuse "refusing to run as root — use an unprivileged \
-bench account (lx64: kevybench, checkout ~/kevy)"
-# Per-run scratch. A fixed /tmp/perfgate_* path is unwritable the moment a
-# different account ran the gate before you — which is exactly what the
-# root-to-kevybench migration produced.
-RUNDIR=$(mktemp -d "${TMPDIR:-/tmp}/perfgate-XXXXXX")
-# Kept on a failed/refused run — the server log in there is the only
-# evidence of why it did not come up.
-on_exit() {
-  local rc=$?
-  if [ $rc -eq 0 ]; then rm -rf "$RUNDIR"
-  else echo "perfgate: scratch kept at $RUNDIR" >&2; fi
-}
-trap on_exit EXIT
-command -v redis-benchmark >/dev/null || refuse "redis-benchmark not installed"
-command -v redis-cli >/dev/null || refuse "redis-cli not installed (the --threads angles read the server's counter through it)"
-[ -x "$BIN" ] || refuse "$BIN is not executable"
-# The sweep pattern "kevy" also matches the bench ACCOUNT NAME inside
-# a driver's `sudo -u kevybench …` cmdline — a wrapper script that
-# never touched a server would be refused as a leftover. Exclude the
-# sudo wrapper line itself; real leftover servers/benchmarks are
-# direct processes, not sudo shells.
-# …and exclude this gate's own ANCESTRY. A runner that invokes the gate
-# (tools/suite.py, a wrapper shell, nohup) has "kevy" in its cmdline by
-# way of the repo path, and the name-based excludes above cannot know
-# every runner's name — the suite's first box run was refused because
-# the sweep matched the suite itself. Real leftovers are never our own
-# ancestors.
-ANCESTORS=""
-APID=$$
-while [ "$APID" -gt 1 ] 2>/dev/null; do
-  ANCESTORS="$ANCESTORS|^$APID "
-  APID=$(awk '{print $4}' "/proc/$APID/stat" 2>/dev/null || echo 1)
-done
-LEFTOVER=$(pgrep -af "kevy|redis-benchmark" | grep -Ev "${ANCESTORS#|}" \
-  | grep -v perfgate | grep -v claude | grep -v kevypgcmp | grep -v suite.py \
-  | grep -v "sudo -u kevybench" || true)
-[ -n "$LEFTOVER" ] && refuse "leftover bench processes (sweep first):
-$LEFTOVER"
-# Instantaneous idle%, not 1-min loadavg: loadavg measures the past, so a
-# back-to-back run (baseline then gate) would refuse on its own wake. Two
-# /proc/stat samples 1s apart = what the box is doing RIGHT NOW.
-read -r _ u1 n1 s1 i1 _ < /proc/stat; sleep 1; read -r _ u2 n2 s2 i2 _ < /proc/stat
-IDLE=$(( (i2 - i1) * 100 / ( (u2-u1) + (n2-n1) + (s2-s1) + (i2-i1) ) ))
-[ "$IDLE" -ge 80 ] || refuse "box busy (idle ${IDLE}% < 80%)"
+. "$HERE/perfgate-preflight.sh"
 
 server_stop() {
   # HARD GUARD: an empty $BIN makes "^$BIN" == "^", which pkill -f matches
@@ -159,8 +113,8 @@ server_start() { # $1 = extra flags
   # files there forever (2336 of them by 2026-08-02). Instances are
   # meant to be fresh — the angles prepopulate everything they measure.
   rm -rf "$RUNDIR/data" && mkdir -p "$RUNDIR/data"
-  env KEVY_IO_URING=1 KEVY_BIND=127.0.0.1 taskset -c 0-7 \
-    "$BIN" --threads 8 --port 7001 $1 --no-aof --dir "$RUNDIR/data" >"$RUNDIR/srv.log" 2>&1 &
+  env KEVY_IO_URING=1 KEVY_BIND=127.0.0.1 taskset -c "${SRV_CPUS:-0-7}" \
+    "$BIN" --threads "${SRV_THREADS:-8}" --port 7001 $1 --no-aof --dir "$RUNDIR/data" >"$RUNDIR/srv.log" 2>&1 &
   SRV=$!
   for _ in $(seq 1 100); do
     timeout 2 redis-benchmark -p 7001 -t ping -n 1 -c 1 -q >/dev/null 2>&1 && return 0
@@ -193,64 +147,7 @@ run_pinned() { # $1 = get|set, $2 = cluster|compat -> echoes total rps
   sum_rps "${outs[@]}"
 }
 
-# The server's own view of how much work it did. `--threads` makes
-# redis-benchmark's reported rps a quantized, understated number (see the
-# header); the command counter does not lie about that. Two INFO calls per
-# measurement are lost in the noise of tens of millions of ops.
-#
-# The timeout is not decoration. A shard saturated by a heavy workload can
-# leave a fresh connection's INFO queued for a very long time, and an
-# unbounded read here parks the whole gate behind it — which is exactly how
-# the first run of this harness hung for an hour.
-srv_cmds() {
-  # Up to 3 probes: a heavy pipelined angle (zalg's ZINTERSTORE at
-  # -P 16) can starve a fresh INFO connection past one 5s timeout —
-  # observed twice (2026-08-02), both times only on that angle. The
-  # counter window stays sound under retries because the caller takes
-  # its timestamp AFTER the read returns; a retried probe is printed
-  # so the starvation stays visible instead of vanishing into a pass.
-  local n try
-  for try in 1 2 3; do
-    n=$(timeout 5 redis-cli -p 7001 INFO stats 2>/dev/null | tr -d '\r' \
-      | awk -F: '/^total_commands_processed:/ {print $2}')
-    if [ -n "$n" ]; then
-      [ "$try" -gt 1 ] \
-        && echo "perfgate: INFO answered on probe $try — heavy-angle starvation" >&2
-      echo "$n"
-      return 0
-    fi
-  done
-  return 0
-}
-
-# Drive the load, then read the server counter across a window we time
-# ourselves. The load generator is left running for the whole window and
-# killed afterwards, so N only has to be large enough to outlast RAMP +
-# WINDOW at THIS angle's rate — it is not the unit of measurement any more.
-# The generator is killed before the samples are judged, so a failed read
-# cannot leave a 60M-request benchmark running behind the gate.
-steady_rps() { # $1... = the redis-benchmark argv after the pinning
-  local bpid c0 t0 c1 t1
-  taskset -c 8-15 "$@" >/dev/null 2>&1 &
-  bpid=$!
-  sleep "$RAMP"
-  c0=$(srv_cmds); t0=$(date +%s%N)
-  sleep "$WINDOW"
-  c1=$(srv_cmds); t1=$(date +%s%N)
-  kill "$bpid" 2>/dev/null
-  wait "$bpid" 2>/dev/null
-  # This runs inside a command substitution, so `refuse` here would exit only
-  # the subshell and the caller would carry on with an empty sample. Emit 0
-  # instead and let the measure loop refuse on it — an unmeasured angle must
-  # stop the gate, never pass quietly.
-  if [ -z "$c0" ] || [ -z "$c1" ]; then
-    echo "perfgate: INFO stats unreadable during '$*' — is a shard wedged?" >&2
-    printf "0"
-    return
-  fi
-  awk -v c0="$c0" -v c1="$c1" -v t0="$t0" -v t1="$t1" \
-    'BEGIN {printf "%.0f", (c1 - c0) / ((t1 - t0) / 1e9)}'
-}
+. "$HERE/perfgate-counter.sh"
 
 run_legacy() { # $1 = get|set|incr|... -> steady-state ops/s (fixed key, REUSEPORT)
   steady_rps redis-benchmark -h 127.0.0.1 -p 7001 -t "$1" \
@@ -274,32 +171,8 @@ run_zalg() {
 
 median_of() { printf "%s\n" "$@" | sort -n | awk '{a[NR]=$1} END {print a[int((NR+1)/2)]}'; }
 
-# ---------- the reference binary ----------
-# The gate is RELATIVE: the candidate is compared against a binary built from
-# the baseline's own commit, measured on this box in this session. Comparing
-# today's number against a number recorded weeks ago cannot work here — the
-# box drifts (2026-07-12: the SAME code measured 24.3M when the baseline was
-# taken and 21.0M three weeks later, a 13% slide that dwarfs the 8% gate).
-# Interleaving the two binaries makes that drift cancel instead of deciding
-# the verdict.
-ref_binary() {
-  # Two statements, not one: `local` expands ALL its arguments before it
-  # assigns any of them, so an `out=...${sha}` sharing the line with
-  # `sha=$1` reads sha BEFORE it exists — under `set -u` that aborts the
-  # gate ("sha: unbound variable"), which is exactly what it did.
-  local sha=$1
-  local cache="$HERE/.perfgate-ref" out="$HERE/.perfgate-ref/kevy-${sha:0:12}"
-  [ -x "$out" ] && { printf "%s" "$out"; return 0; }
-  mkdir -p "$cache"
-  local wt="$cache/wt-${sha:0:12}"
-  git -C "$HERE/.." worktree add -f --detach "$wt" "$sha" >/dev/null 2>&1 \
-    || refuse "cannot check out the baseline commit $sha (fetch it first?)"
-  ( cd "$wt" && cargo build -q --profile release-perf -p kevy --bin kevy ) \
-    || { git -C "$HERE/.." worktree remove --force "$wt" >/dev/null 2>&1; refuse "reference build failed at $sha"; }
-  cp "$wt/target/release-perf/kevy" "$out"
-  git -C "$HERE/.." worktree remove --force "$wt" >/dev/null 2>&1
-  printf "%s" "$out"
-}
+. "$HERE/perfgate-ref.sh"
+. "$HERE/perfgate-hybrid.sh"
 
 # ---------- measure ----------
 # One instance pass = boot a fresh server, warm it, measure every angle once.
@@ -356,6 +229,7 @@ angle_run() { # $1 = metric name -> ops/s on stdout
     legacy_8sh_lpush)   run_legacy lpush ;;
     legacy_8sh_zadd)    run_legacy zadd ;;
     zalg_zinterstore)   run_zalg ;;
+    hybrid_p95_us)      run_hybrid ;;
     *) printf "0" ;;
   esac
 }
@@ -390,6 +264,12 @@ legacy_8sh_hset legacy_8sh_lpush legacy_8sh_zadd"
       sample "$who" zalg_zinterstore "$(run_zalg)"
     fi
   fi
+  if want_angle hybrid_p95_us; then
+    for _ in $(seq 1 "$HYBRID_PER_PASS"); do
+      hybrid_server_start
+      sample "$who" hybrid_p95_us "$(run_hybrid)"
+    done
+  fi
   server_stop
 }
 
@@ -402,6 +282,7 @@ measure_single() { # $1 = cand|ref, $2 = binary, $3 = metric
   case $m in
     pinned_*) server_start "--cluster"; warm_cluster ;;
     zalg_*)   server_start "";          warm_legacy; warm_zalg ;;
+    hybrid_*) hybrid_server_start ;;
     *)        server_start "";          warm_legacy ;;
   esac
   sample "$who" "$m" "$(angle_run "$m")"
@@ -493,7 +374,12 @@ TOL=$(python3 -c "import json;print(json.load(open('$BASELINE'))['tolerance'])")
 below_floor() { # $1 = metric -> 0 iff below
   local got=${MED[$1]} ref=${REF_MED[$1]:-}
   { [ -z "$ref" ] || [ "$ref" -eq 0 ]; } 2>/dev/null && return 1
-  [ "$got" -lt "$(awk -v b="$ref" -v t="$TOL" 'BEGIN{printf "%.0f", b*t}')" ]
+  if [[ $1 == *_us ]]; then [ "$got" -gt "$(band "$1" "$ref")" ]
+  else [ "$got" -lt "$(band "$1" "$ref")" ]; fi
+}
+band() { # $1 = metric, $2 = reference median -> the floor (or latency ceiling)
+  if [[ $1 == *_us ]]; then awk -v b="$2" -v t="$LAT_TOL" 'BEGIN{printf "%.0f", b/t}'
+  else awk -v b="$2" -v t="$TOL" 'BEGIN{printf "%.0f", b*t}'; fi
 }
 
 # ---------- targeted retest ----------
@@ -528,7 +414,7 @@ if [ -n "$FAILED_ANGLES" ]; then
 fi
 
 STATUS=0
-echo "perfgate: gate — candidate vs reference ${REF_SHA:0:12}, both measured just now (floor = reference x $TOL)"
+echo "perfgate: gate — candidate vs reference ${REF_SHA:0:12}, both measured just now (floor = reference x $TOL; latency ceiling = reference / $LAT_TOL)"
 for k in $METRICS; do
   if [ -n "${SKIPPED[$k]:-}" ]; then
     echo "  ~ $k: SKIPPED (no measurement body yet — baseline pending, recorded on lx64)"
@@ -542,10 +428,10 @@ for k in $METRICS; do
     echo "  ~ $k: $GOT (reference produced no sample — angle is new to the reference commit)"
     continue
   fi
-  FLOOR=$(awk -v b="$REF" -v t="$TOL" 'BEGIN{printf "%.0f", b*t}')
+  FLOOR=$(band "$k" "$REF")
   RATIO=$(awk -v g="$GOT" -v b="$REF" 'BEGIN{printf "%+.1f%%", (g/b - 1) * 100}')
-  if [ "$GOT" -lt "$FLOOR" ]; then
-    echo "  ✗ $k: $GOT vs ref $REF ($RATIO) — below floor $FLOOR$RETESTED"; STATUS=1
+  if below_floor "$k"; then
+    echo "  ✗ $k: $GOT vs ref $REF ($RATIO) — past the band $FLOOR$RETESTED"; STATUS=1
   else
     echo "  ✓ $k: $GOT vs ref $REF ($RATIO)$RETESTED"
   fi
