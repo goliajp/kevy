@@ -417,6 +417,8 @@ impl<C: Commands> Shard<C> {
                         eprintln!("kevy: shard {} bgsave aof reset failed: {e}", self.id);
                         aof.abort_concurrent_rewrite();
                         let _ = std::fs::remove_file(&reset_tmp);
+                    } else {
+                        self.on_aof_reopened();
                     }
                 }
             }
