@@ -125,6 +125,8 @@ impl Aof {
             f.sync_all()?;
         }
         spent.push(tee);
+        // the old file's mapping must not outlive its name
+        self.unmap()?;
         std::fs::rename(tmp, &self.path)?;
         let f = OpenOptions::new().append(true).open(&self.path)?;
         let bytes = f.metadata().map_or(0, |m| m.len());
@@ -136,7 +138,7 @@ impl Aof {
         self.last_rewrite_at = Instant::now();
         self.dirty = false;
         self.rewrites_total = self.rewrites_total.saturating_add(1);
-        self.rebase_stage()?;
+        self.after_file_change()?;
         Ok((RewriteStats { keys, bytes }, spent))
     }
 
@@ -204,7 +206,7 @@ impl Aof {
         self.last_rewrite_at = Instant::now();
         self.dirty = false;
         self.rewrites_total = self.rewrites_total.saturating_add(1);
-        self.rebase_stage()?;
+        self.after_file_change()?;
         Ok(RewriteStats { keys, bytes })
     }
 
