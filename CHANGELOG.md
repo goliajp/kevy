@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **With `packed-rows yes`, every shard packs a declared table's rows.**
+  `TABLE.DECLARE` published the index catalog and then the table catalog,
+  and only the first told the shards to re-read their state. A shard that
+  looked in between kept running as if no table were declared: rows
+  already on it stayed in the unpacked form, and rows written to it later
+  were not packed either, until some other declaration or setting change
+  reached it. Only memory was affected — an unpacked row answers the same.
+  Affected since 5.4.0.
+
 - **A hash field's own TTL survives a background AOF rewrite.** The
   non-blocking rewrite, which an embedded store runs whenever the log
   outgrows its auto-rewrite threshold, builds the new log in memory; that
