@@ -88,10 +88,13 @@ impl NotifyClass {
 pub enum ExtensionReduced {
     /// The final RESP reply bytes for the client.
     Reply(Vec<u8>),
-    /// Not final yet: fan `argv` out to every shard as a follow-up
-    /// extension phase and reduce again when its chunks land. Phase
+    /// Not final yet: fan `argv` out as a follow-up extension phase —
+    /// to the shards [`Commands::extension_targets`] names for it, every
+    /// shard by default — and reduce again when its chunks land. Phase
     /// state rides inside the argv itself, so the runtime holds no
     /// per-phase bookkeeping.
+    ///
+    /// [`Commands::extension_targets`]: crate::Commands::extension_targets
     Continue(Vec<Vec<u8>>),
 }
 

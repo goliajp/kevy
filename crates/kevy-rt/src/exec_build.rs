@@ -90,8 +90,7 @@ impl<C: Commands> Shard<C> {
             Route::Extension => {
                 let argv: std::sync::Arc<[Vec<u8>]> =
                     (0..args.len()).map(|i| args[i].to_vec()).collect();
-                let targets =
-                    (0..self.nshards).map(|s| (s, Op::Extension { argv: argv.clone() })).collect();
+                let targets = self.extension_fanout(&argv);
                 (targets, Agg::ExtensionGather { argv, chunks: Vec::new() })
             }
             // REPL.TOKEN: every shard reports its live
