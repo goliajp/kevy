@@ -50,7 +50,7 @@ services:
       ]
 
   redis:
-    image: redis:8.10.1
+    image: redis:8.10.2
     network_mode: host
     cpuset: "0-9"
     profiles: ["redis"]

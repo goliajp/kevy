@@ -4,7 +4,7 @@
   "_updated": "2026-09-07",
   "anchors": {
     "redis": {
-      "pinned": "8.10.1",
+      "pinned": "8.10.2",
       "role": "the original; the strongest competitor on the bare read/write face",
       "upstream": {
         "kind": "github",
@@ -165,7 +165,7 @@
       ]
     },
     "dragonfly": {
-      "pinned": "1.40.2",
+      "pinned": "2.0.0",
       "role": "the multi-threaded rewrite; the fourth engine of the position plot",
       "upstream": {
         "kind": "github",
@@ -215,7 +215,7 @@
       "note": "Debian trixie, which is what the official `postgres:latest` points at as of 2026-09-07. The bookworm variant was the same Postgres on an older base; pgcompare stores no baseline (it prints a comparison rather than ratcheting a number), so following the default variant costs nothing and keeps 'latest stable' meaning the whole tag."
     },
     "redis-stack": {
-      "pinned": "8.10.1",
+      "pinned": "8.10.2",
       "role": "RediSearch / query-engine oracle for the FT and vector faces (arena_serving.py, arena_ann.py)",
       "upstream": {
         "kind": "github",
@@ -243,7 +243,7 @@
       ]
     },
     "stackexchange-redis": {
-      "pinned": "3.2.1",
+      "pinned": "3.3.1",
       "role": "clientgate's .NET client; its first-class API is the evidence for several MUST verbs",
       "upstream": {
         "kind": "nuget",

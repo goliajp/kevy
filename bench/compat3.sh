@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 3-way differential compatibility: run the SAME command sequence against
-# valkey 9.1.2, redis 8.10.1, and kevy (all in Docker, driven by the neutral
+# valkey 9.1.2, redis 8.10.2, and kevy (all in Docker, driven by the neutral
 # valkey-cli) and diff the replies. valkey & redis are the reference (a Redis
 # fork + the original); kevy is the subject. All start empty, so an identical
 # sequence must yield identical replies.

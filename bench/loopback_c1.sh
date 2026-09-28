@@ -48,8 +48,8 @@ docker run -d --rm --name bench_v --network host --cpuset-cpus "$SRV_CORES" \
   valkey/valkey:9.1.2 valkey-server --port 7002 --save '' --appendonly no >/dev/null 2>&1
 run 7002 "valkey-def"; docker rm -f bench_v >/dev/null 2>&1
 
-echo "=== redis 8.10.1 (default) ==="
+echo "=== redis 8.10.2 (default) ==="
 docker run -d --rm --name bench_r --network host --cpuset-cpus "$SRV_CORES" \
-  redis:8.10.1 redis-server --port 7003 --save '' --appendonly no >/dev/null 2>&1
+  redis:8.10.2 redis-server --port 7003 --save '' --appendonly no >/dev/null 2>&1
 run 7003 "redis-def"; docker rm -f bench_r >/dev/null 2>&1
 echo "### C1_DONE"
