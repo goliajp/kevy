@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""The kevy test suite runner — three tiers, one manifest, no dark areas.
+"""The kevy test suite runner — four tiers, one manifest, no dark areas.
 
     python3 tools/suite.py precommit            run a tier
+    python3 tools/suite.py premerge             everything CI checks on a push
     python3 tools/suite.py prerelease --list    show what a tier would run
     python3 tools/suite.py --audit              verify the manifest's invariants
 
@@ -41,7 +42,7 @@ print = functools.partial(print, flush=True)
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 MANIFEST = ROOT / "suite/manifest.toml"
 
-TIERS = ["precommit", "prerelease", "full"]
+TIERS = ["precommit", "premerge", "prerelease", "full"]
 AREAS = {
     "hygiene", "release-pins", "arch", "doc", "perf", "mem", "disk",
     "compat", "dialect", "feature", "case", "doors", "cov",
@@ -277,9 +278,9 @@ def audit(suite, checks):
     # Budgets are arithmetic: the declared expected-durations of a tier
     # must fit its budget, and the tiers must order strictly.
     budgets = suite["budgets"]
-    if not budgets["precommit"] < budgets["prerelease"]:
-        bad.append("budget order violated: precommit must be < prerelease")
-    for tier in ("precommit", "prerelease"):
+    if not budgets["precommit"] < budgets["premerge"] < budgets["prerelease"]:
+        bad.append("budget order violated: precommit < premerge < prerelease")
+    for tier in ("precommit", "premerge", "prerelease"):
         total = sum(c["expected"] for c in tier_checks(checks, tier)
                     if not requirement_needs_infra(c))
         if total > budgets[tier]:
@@ -335,7 +336,8 @@ def audit(suite, checks):
         return 1
     n = {t: len(tier_checks(checks, t)) for t in TIERS}
     print(f"suite audit: ok — {len(checks)} checks "
-          f"(precommit {n['precommit']} ⊆ prerelease {n['prerelease']} ⊆ full {n['full']}), "
+          f"(precommit {n['precommit']} ⊆ premerge {n['premerge']} ⊆ prerelease {n['prerelease']} "
+          f"⊆ full {n['full']}), "
           f"{len(covered)} areas covered, budgets hold")
     return 0
 
