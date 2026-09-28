@@ -1,11 +1,12 @@
 # The kevy test suite — the single source of truth for what is checked.
 #
-# Read by tools/suite.py. Three tiers, by inheritance: a check declares
+# Read by tools/suite.py. Four tiers, by inheritance: a check declares
 # the LOWEST tier it runs in and runs in every tier above it, so
-# checks(precommit) ⊆ checks(prerelease) ⊆ checks(full) holds by
-# construction rather than by discipline.
+# checks(precommit) ⊆ checks(premerge) ⊆ checks(prerelease) ⊆ checks(full)
+# holds by construction rather than by discipline.
 #
 #   precommit   pins the current version's goals + fast regressions.
+#   premerge    adds everything CI runs on a push (tools/check_ci_parity.py).
 #   prerelease  adds the release claims and iron rules.
 #   full        adds everything: the problem-hunting surface.
 #
@@ -42,6 +43,8 @@ manifest_floor = 43
 # headroom for a slower machine, without being fiction.
 [suite.budgets]
 precommit = 300
+# everything CI checks on a push to develop
+premerge = 4800
 prerelease = 5400
 
 
@@ -59,6 +62,23 @@ prerelease = 5400
 # entry here must be named by some check. A `met` of "" is a declaration
 # that the row runs nowhere — allowed, because saying so is the point, and
 # loud in the audit's summary rather than silent in a NOT-RUN line.
+# Commands CI runs that no local tier can: tools/check_ci_parity.py fails on
+# any CI command that is in neither a row by premerge nor this table.
+[suite.ci_only]
+"cargo +nightly doc --workspace --no-deps" = "the stone report's rustdoc input, built inside CI's stonereport job for stone-report"
+"cargo check --target ${{ matrix.target }} *" = "wasm32 cross-checks; the targets are installed only by CI's wasm job"
+"cargo check --target aarch64-unknown-linux-musl *" = "IoT cross-checks; the musl targets are installed only by CI's iot job"
+"cargo check --target armv7-unknown-linux-musleabihf *" = "IoT cross-checks; the musl targets are installed only by CI's iot job"
+"cargo check --target arm-unknown-linux-musleabihf *" = "IoT cross-checks; the musl targets are installed only by CI's iot job"
+"cargo check --target thumbv7em-none-eabihf *" = "no_std cross-checks; the Cortex-M target is installed only by CI's iot job"
+"cargo check -p kevy-embedded --no-default-features *" = "the IoT feature archetypes, a matrix CI's iot job loops over"
+"cargo run --release 2>&1 | tee /tmp/mcu.log" = "the Cortex-M consumer under an emulator only CI's iot job installs"
+"cargo miri test *" = "nightly miri, single-threaded interpretation; CI's miri job"
+"cargo +nightly fuzz run *" = "cargo-fuzz on nightly; CI's fuzz-smoke matrix, which fuzzgate keeps complete"
+"bash bench/run.sh" = "the Docker benchmark smoke against valkey; measures, gives no verdict on the code"
+"cargo test" = "the Tauri plugin, a standalone crate outside the workspace that needs Tauri's system libraries"
+"python3 tools/suite.py --audit" = "the runner audits the manifest before every tier"
+
 [suite.requirements]
 "linux" = "CI's Linux jobs, and the lx64 box"
 "box" = "the lx64 box, as kevybench with TMPDIR=$HOME/captmp"
@@ -198,7 +218,7 @@ proves = "every competitor version in the tree matches bench/COMPETITOR-ANCHORS.
 [[check]]
 id = "anchor-currency"
 area = "release-pins"
-tier = "prerelease"
+tier = "premerge"
 cmd = "python3 tools/check_competitor_anchors.py"
 expected = 8
 timeout = 180
@@ -208,7 +228,7 @@ proves = "the pinned competitors are each project's current latest stable — as
 [[check]]
 id = "command-coverage"
 area = "compat"
-tier = "prerelease"
+tier = "premerge"
 cmd = "python3 tools/check_command_coverage.py"
 expected = 2
 timeout = 60
@@ -268,9 +288,9 @@ proves = "every non-kevy dependency declared with a reason; no shipping third-pa
 [[check]]
 id = "stone-report"
 area = "arch"
-tier = "full"
+tier = "premerge"
 cmd = "python3 tools/stone_report.py"
-expected = 420
+expected = 150
 timeout = 3600
 requires = ["linux", "nightly rustdoc coverage tables in target/doc", "cargo-semver-checks"]
 proves = "each stone measured four ways: lifts outside the workspace, semver-clean, documented, and its dead-region count"
@@ -278,7 +298,7 @@ proves = "each stone measured four ways: lifts outside the workspace, semver-cle
 [[check]]
 id = "stonegate"
 area = "arch"
-tier = "full"
+tier = "premerge"
 cmd = "python3 tools/check_stones.py"
 expected = 1
 timeout = 60
@@ -306,11 +326,22 @@ requires = []
 proves = "the embedded facade and the server produce identical RESP bytes, or the difference is named with a reason"
 
 [[check]]
+id = "covgate"
+area = "cov"
+tier = "premerge"
+cmd = "bash -c 'KEVY_IO_URING=0 KEVY_COV_JSON=$PWD/target/llvm-cov-c1.json bash bench/covgate.sh'"
+expected = 450
+timeout = 14400
+requires = ["linux"]
+proves = "line coverage holds the ratchet"
+
+[[check]]
 id = "deadgate"
 area = "cov"
-tier = "full"
-cmd = "bash bench/deadgate.sh"
-expected = 3600
+tier = "premerge"
+# reads the region export covgate just wrote to deadgate's default path
+cmd = "bash -c 'KEVY_IO_URING=0 bash bench/deadgate.sh'"
+expected = 30
 timeout = 14400
 requires = ["linux"]
 proves = "the set of never-executed symbols may only shrink — what covgate's percentage cannot hold"
@@ -318,9 +349,9 @@ proves = "the set of never-executed symbols may only shrink — what covgate's p
 [[check]]
 id = "doctestgate"
 area = "doc"
-tier = "full"
+tier = "premerge"
 cmd = "bash bench/doctestgate.sh"
-expected = 300
+expected = 30
 timeout = 1800
 requires = ["linux", "nightly rustdoc"]
 proves = "what the documentation owes — items with no doc, items with no executable example — may only shrink"
@@ -328,9 +359,9 @@ proves = "what the documentation owes — items with no doc, items with no execu
 [[check]]
 id = "doctest-run"
 area = "doc"
-tier = "prerelease"
+tier = "premerge"
 cmd = "bash bench/doctestrun.sh"
-expected = 420
+expected = 60
 timeout = 2400
 requires = []
 proves = "every example in the documentation compiles and runs — the claim doctestgate's count rests on, and which nothing in this repository checked"
@@ -344,6 +375,15 @@ expected = 2
 timeout = 60
 requires = []
 proves = "no published crate ships a source file importing a dependency its published manifest drops"
+
+[[check]]
+id = "ci-parity"
+area = "hygiene"
+tier = "precommit"
+cmd = "python3 tools/check_ci_parity.py"
+expected = 1
+timeout = 60
+proves = "every command CI runs on a push is a row by premerge, or says why only CI can run it"
 
 [[check]]
 id = "fuzzgate"
@@ -372,7 +412,7 @@ proves = "every fuzz target in the tree runs in CI's fuzz-smoke matrix, and ever
 [[check]]
 id = "loomgate"
 area = "arch"
-tier = "prerelease"
+tier = "premerge"
 cmd = "python3 tools/check_loom.py"
 expected = 150
 timeout = 1800
@@ -492,9 +532,9 @@ proves = "Lua 5.1–5.5 each serve their own surface and wording; the string.rep
 [[check]]
 id = "clippy"
 area = "hygiene"
-tier = "prerelease"
+tier = "premerge"
 cmd = "cargo clippy --workspace --all-targets -- -D warnings"
-expected = 240
+expected = 120
 timeout = 1800
 requires = []
 proves = "zero clippy findings across every target, in the DEFAULT feature set"
@@ -567,7 +607,7 @@ proves = "every exported ABI function catches panics or states why it cannot pan
 [[check]]
 id = "feature-lints"
 area = "hygiene"
-tier = "prerelease"
+tier = "premerge"
 cmd = "python3 tools/check_feature_lints.py"
 expected = 90
 timeout = 1800
@@ -577,9 +617,9 @@ proves = "every crate alone, and every off-by-default feature, is clippy-zero to
 [[check]]
 id = "workspace-tests"
 area = "feature"
-tier = "prerelease"
+tier = "premerge"
 cmd = "cargo test --workspace --lib --tests"
-expected = 1800
+expected = 360
 timeout = 5400
 requires = []
 proves = "the whole workspace's unit and integration tests, in parallel"
@@ -599,7 +639,7 @@ proves = "the site builds reproducibly, every page at the tree's version, and a 
 [[check]]
 id = "site-commands"
 area = "doc"
-tier = "prerelease"
+tier = "premerge"
 cmd = "python3 tools/check_site_commands.py"
 expected = 30
 timeout = 600
@@ -609,7 +649,7 @@ proves = "every RESP example the site shows runs against a real server"
 [[check]]
 id = "site-parity"
 area = "doc"
-tier = "prerelease"
+tier = "premerge"
 cmd = "python3 tools/check_site_content_parity.py"
 expected = 5
 timeout = 120
@@ -635,9 +675,9 @@ proves = "whether the built wasm is the published one — divergence is a releas
 [[check]]
 id = "crashgate"
 area = "disk"
-tier = "prerelease"
+tier = "premerge"
 cmd = "bash bench/crashgate.sh"
-expected = 600
+expected = 120
 timeout = 3600
 requires = ["linux", "binaries-debug"]
 proves = "kill -9 at any point loses nothing the server acknowledged"
@@ -665,9 +705,9 @@ proves = "tail latency stays inside the shipped bars on a real disk"
 [[check]]
 id = "repligate"
 area = "feature"
-tier = "prerelease"
+tier = "premerge"
 cmd = "bash bench/repligate.sh"
-expected = 300
+expected = 90
 timeout = 1800
 requires = ["linux", "binaries-release"]
 proves = "a replica ships a snapshot, follows frames, and converges"
@@ -675,7 +715,7 @@ proves = "a replica ships a snapshot, follows frames, and converges"
 [[check]]
 id = "availgate"
 area = "feature"
-tier = "prerelease"
+tier = "premerge"
 cmd = "bash bench/availgate.sh target/release/kevy"
 expected = 420
 timeout = 3600
@@ -711,7 +751,7 @@ proves = "an AOF written by either engine replays in the other, both directions"
 [[check]]
 id = "vendorgate"
 area = "doors"
-tier = "prerelease"
+tier = "premerge"
 cmd = "bash bench/vendorgate.sh"
 expected = 30
 timeout = 600
@@ -721,7 +761,7 @@ proves = "vendored native artifacts match the current ABI and version"
 [[check]]
 id = "ffigate-contract"
 area = "doors"
-tier = "prerelease"
+tier = "premerge"
 cmd = "bash bench/ffigate-contract.sh"
 expected = 180
 timeout = 1800
@@ -731,7 +771,7 @@ proves = "one contract table, six language doors, checked"
 [[check]]
 id = "propgate"
 area = "feature"
-tier = "prerelease"
+tier = "premerge"
 # Static analysis over the source, not a server gate — it finished in
 # under a second and the first manifest draft had it down for two
 # minutes with a server requirement it never had.
@@ -821,7 +861,7 @@ proves = "the memory half of the allocator experiment, both builds"
 [[check]]
 id = "compressgate"
 area = "mem"
-tier = "full"
+tier = "premerge"
 cmd = "bash bench/compressgate.sh"
 expected = 600
 timeout = 3600
@@ -885,9 +925,9 @@ proves = "snapshot S + (gen, O) is an exact restore point, executed"
 [[check]]
 id = "compat3"
 area = "compat"
-tier = "full"
+tier = "premerge"
 cmd = "bash bench/compat3.sh"
-expected = 900
+expected = 300
 timeout = 3600
 requires = ["docker", "binaries-release"]
 proves = "the same command sequence answers identically on kevy, valkey and redis"
@@ -905,9 +945,9 @@ proves = "kevy changes reply shape under HELLO 3 exactly where the pinned redis 
 [[check]]
 id = "clientgate"
 area = "compat"
-tier = "full"
+tier = "premerge"
 cmd = "bash bench/clientgate.sh"
-expected = 900
+expected = 150
 timeout = 3600
 requires = ["node", "docker", "binaries-release"]
 proves = "bring-your-redis-client, executable: real client libraries against kevy"
@@ -1039,9 +1079,9 @@ proves = "topology declarations, true two-process"
 [[check]]
 id = "uringgate"
 area = "feature"
-tier = "full"
+tier = "premerge"
 cmd = "bash bench/uringgate.sh"
-expected = 600
+expected = 150
 timeout = 3600
 requires = ["linux", "binaries-release"]
 proves = "the io_uring data-plane contract"
@@ -1123,9 +1163,9 @@ proves = "the capacity-arc envelope holds at 30M keys"
 [[check]]
 id = "consumergate"
 area = "doors"
-tier = "full"
+tier = "premerge"
 cmd = "bash bench/consumergate.sh"
-expected = 600
+expected = 30
 timeout = 3600
 requires = []
 proves = "the facade builds and runs from a consumer's position"
@@ -1133,9 +1173,9 @@ proves = "the facade builds and runs from a consumer's position"
 [[check]]
 id = "jnigate"
 area = "doors"
-tier = "full"
+tier = "premerge"
 cmd = "bash bench/jnigate.sh"
-expected = 600
+expected = 60
 timeout = 3600
 requires = ["node"]
 proves = "the raw Android/JVM door opens on the host"
@@ -1143,7 +1183,7 @@ proves = "the raw Android/JVM door opens on the host"
 [[check]]
 id = "mcpgate"
 area = "doors"
-tier = "full"
+tier = "premerge"
 cmd = "bash -c 'cargo build -q -p kevy-mcp && bash bench/mcpgate.sh target/debug/kevy'"
 expected = 300
 timeout = 1800
@@ -1163,21 +1203,66 @@ proves = "three frameworks × two platforms on real simulators/emulators"
 # ── full: coverage + fuzz ────────────────────────────────────────────
 
 [[check]]
-id = "covgate"
-area = "cov"
-tier = "full"
-cmd = "bash bench/covgate.sh"
-expected = 3600
-timeout = 14400
-requires = ["linux"]
-proves = "line coverage holds the ratchet"
-
-[[check]]
 id = "fuzz-smoke"
 area = "feature"
-tier = "full"
+tier = "premerge"
 cmd = "true"
 expected = 1
 timeout = 60
 requires = ["ci"]
 proves = "fuzz targets run in CI on every push and weekly with a crash-artifact gate — this row keeps the area accounted for"
+
+[[check]]
+id = "door-changelogs"
+area = "doc"
+tier = "precommit"
+cmd = "python3 tools/check_door_changelogs.py"
+expected = 1
+timeout = 60
+proves = "each door's changelog names the version its manifest ships"
+
+[[check]]
+id = "compat-claim"
+area = "compat"
+tier = "precommit"
+cmd = "python3 tools/check_compat_claim.py"
+expected = 1
+timeout = 60
+proves = "the documents quote the verb count the three-way differential actually runs"
+
+[[check]]
+id = "gen-docs"
+area = "doc"
+tier = "premerge"
+cmd = "cargo run -q -p kevy --bin gen_docs -- . --check"
+expected = 30
+timeout = 600
+proves = "llms.txt and the verb reference are what the engine's own verb table generates"
+
+[[check]]
+id = "clippy-wasm"
+area = "hygiene"
+tier = "premerge"
+cmd = "cargo clippy -p kevy-wasm --all-targets -- -D warnings"
+expected = 30
+timeout = 600
+proves = "kevy-wasm is clippy-zero in its own feature set, which the workspace clippy unifies away"
+
+[[check]]
+id = "aigate"
+area = "feature"
+tier = "premerge"
+cmd = "bash -c 'cargo build -q --release -p kevy-mcp && bash bench/aigate.sh target/release/kevy'"
+expected = 120
+timeout = 900
+requires = ["binaries-release"]
+proves = "the AI-facing doors, wire and MCP, answer as their contract says"
+
+[[check]]
+id = "release-tests"
+area = "feature"
+tier = "premerge"
+cmd = "cargo test --workspace --release --lib --tests"
+expected = 600
+timeout = 3600
+proves = "the suite passes with optimizations on, where debug-only checks are gone and timing moves"
