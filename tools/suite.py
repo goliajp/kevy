@@ -112,9 +112,16 @@ def _have_linux():
 
 def _have_box():
     import platform
-    if platform.system() == "Linux" and (os_cpus() or 0) >= 16:
-        return True, ""
-    return False, "needs the 16-core Linux box (quiet, core-pinnable)"
+    if platform.system() != "Linux" or (os_cpus() or 0) < 16:
+        return False, "needs the 16-core Linux box (quiet, core-pinnable)"
+    # A box gate measures; on a box other work is loading, it measures the
+    # neighbours. Busy is NOT-RUN, said with the load, never a number.
+    limit = float(os.environ.get("KEVY_SUITE_BOX_LOAD_MAX", "2.0"))
+    with open("/proc/loadavg") as f:
+        load = float(f.read().split()[0])
+    if load > limit:
+        return False, f"the box is busy (1-minute load {load:.1f} > {limit:.1f}); a measurement now would measure the other work"
+    return True, ""
 
 
 def os_cpus():
