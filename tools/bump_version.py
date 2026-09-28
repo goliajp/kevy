@@ -74,6 +74,11 @@ HISTORICAL = (
     "CHANGELOG.md",
     "bench/FINDING-",
     "bench/PERF-",
+    # an upgrade guide is the record of one hop: its `go get …/v6@v6.4.0`
+    # names the release it upgrades to, and stays right after the next major
+    "docs/upgrading-",
+    "docs/zh/upgrading-",
+    "docs/ja/upgrading-",
 )
 
 
