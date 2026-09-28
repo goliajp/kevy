@@ -43,7 +43,11 @@ fn where_the_baseline_does_not_matter_it_decides_nothing() {
                     aof.size_at_last_rewrite = len;
                     let at_len = aof.rewrite_due(p);
                     aof.size_at_last_rewrite = est;
-                    assert_eq!(at_len, aof.rewrite_due(p), "pct {pct} min {min} len {len} est {est} cur {cur}");
+                    assert_eq!(
+                        at_len,
+                        aof.rewrite_due(p),
+                        "pct {pct} min {min} len {len} est {est} cur {cur}"
+                    );
                     checked += 1;
                 }
             }
