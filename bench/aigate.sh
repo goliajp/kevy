@@ -158,6 +158,62 @@ clamp("HYBRID with RRFK + FIELDS hydrates", isinstance(h2, list) and len(h2) == 
 e3 = cmd(s, buf, "IDX.QUERY", "HYBRID", "hb_t", "MATCH", "h0", "nope", "KNN", mvec())
 clamp("HYBRID missing ann index is self-explaining", e3.startswith(b"-ERR"), e3[:50].decode())
 
+# ---- clamp 4b: fusion QUALITY — recall against a labelled corpus.
+# Per topic: 8 relevant rows carry the topic word AND sit near the topic's
+# vector; 30 carry only the word; 30 are only near. Each leg alone ranks
+# 38 look-alikes, so its top-10 holds about a quarter of the relevant
+# rows. Rows are written in shuffled order: ties rank by key, and relevant
+# rows written first would win the text leg's ties by their key alone.
+# The KNN leg is approximate, so the exact claim is about the rows both
+# legs return inside their 4x-LIMIT windows: fusion must rank every one of
+# them into its top 10. A fusion that dropped a leg would read ~0.3.
+TOPICS, REL, NOISE, FDIM = 12, 8, 30, 32
+rnd = random.Random(47)
+def unit(v):
+    n = sum(x * x for x in v) ** 0.5
+    return [x / n for x in v]
+cent = [unit([rnd.gauss(0, 1) for _ in range(FDIM)]) for _ in range(TOPICS)]
+def near(c, eps):
+    return struct.pack(f"<{FDIM}f", *unit([x + rnd.gauss(0, eps) for x in c]))
+far = lambda: struct.pack(f"<{FDIM}f", *unit([rnd.gauss(0, 1) for _ in range(FDIM)]))
+filler = lambda: " ".join(f"zz{rnd.randrange(40)}" for _ in range(7))
+rows = [(t, kind) for t in range(TOPICS)
+        for kind, count in (("rel", REL), ("txt", NOISE), ("vec", NOISE)) for _ in range(count)]
+rnd.shuffle(rows)
+relevant = {t: set() for t in range(TOPICS)}
+for n, (t, kind) in enumerate(rows):
+    key = f"fq:{n}"
+    body = filler() + (f" fq{t}" if kind != "vec" else " zz99")
+    vec = near(cent[t], 0.08) if kind != "txt" else far()
+    cmd(s, buf, "HSET", key, "body", body, "v", vec)
+    if kind == "rel":
+        relevant[t].add(key.encode())
+cmd(s, buf, "IDX.CREATE", "fq_t", "ON", "PREFIX", "fq:", "FIELD", "body", "TYPE", "str", "KIND", "text")
+cmd(s, buf, "IDX.CREATE", "fq_v", "ON", "PREFIX", "fq:", "FIELD", "v", "TYPE", "vector", "KIND", "ann", "DIM", str(FDIM), "DISTANCE", "l2")
+qv = lambda t: struct.pack(f"<{FDIM}f", *cent[t])
+t0 = time.time()
+while time.time() - t0 < 60:
+    if isinstance(cmd(s, buf, "IDX.QUERY", "fq_t", "MATCH", "fq0", "LIMIT", "1"), list) and \
+       isinstance(cmd(s, buf, "IDX.QUERY", "fq_v", "KNN", qv(0), "LIMIT", "1"), list):
+        break
+    time.sleep(0.5)
+def rel(t, reply):
+    return set(keys_of(reply)) & relevant[t]
+rm = rk = rh = cover = 0.0
+for t in range(TOPICS):
+    m10 = rel(t, cmd(s, buf, "IDX.QUERY", "fq_t", "MATCH", f"fq{t}", "LIMIT", "10"))
+    k10 = rel(t, cmd(s, buf, "IDX.QUERY", "fq_v", "KNN", qv(t), "LIMIT", "10"))
+    h10 = rel(t, cmd(s, buf, "IDX.QUERY", "HYBRID", "fq_t", "MATCH", f"fq{t}", "fq_v", "KNN", qv(t), "LIMIT", "10"))
+    both = rel(t, cmd(s, buf, "IDX.QUERY", "fq_t", "MATCH", f"fq{t}", "LIMIT", "40")) \
+         & rel(t, cmd(s, buf, "IDX.QUERY", "fq_v", "KNN", qv(t), "LIMIT", "40"))
+    rm += len(m10) / REL; rk += len(k10) / REL; rh += len(h10) / REL; cover += len(both) / REL
+    if not both <= h10:
+        clamp("fusion keeps every row both legs found", False, f"topic {t}: {sorted(both - h10)}")
+rm, rk, rh, cover = (x / TOPICS for x in (rm, rk, rh, cover))
+clamp("fusion recall@10 >= each leg's", rh >= rm and rh >= rk, f"hybrid {rh:.2f} match {rm:.2f} knn {rk:.2f}")
+clamp("fusion recall@10 >= the rows both legs return", rh >= cover, f"hybrid {rh:.2f} both-legs {cover:.2f}")
+clamp("the corpus puts most relevant rows in both legs", cover >= 0.9, f"both-legs {cover:.2f}")
+
 # ---- clamp 5: RESP3 maps
 s3, buf3 = conn()
 h = cmd(s3, buf3, "HELLO", "3")
