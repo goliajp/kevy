@@ -1,56 +1,102 @@
-//! `GEOADD` / `GEOPOS` / `GEODIST` / `GEOHASH` / `GEOSEARCH` — the
-//! Redis GEO command family. Geo data is stored in a regular `ZSet`
-//! keyed by member with a 52-bit interleaved-geohash score (the same
-//! wire encoding Redis uses), so we layer entirely on the existing
-//! `Store::zadd` / `zscore` / `zrange_by_score` API — no new value
-//! variant.
+//! The geo commands: `GEOADD`, `GEOPOS`, `GEODIST`, `GEOHASH`,
+//! `GEOSEARCH`, `GEOSEARCHSTORE` and the legacy `GEORADIUS` family.
 //!
-//! Sub-module layout:
-//! - `mod.rs` — dispatch table + the four basic commands (GEOADD,
-//!   GEOPOS, GEODIST, GEOHASH).
-//! - `search.rs` — GEOSEARCH, by far the largest single command in
-//!   this family (radius/box modes, six option flags). Split out so
-//!   each file stays under the project's ≤500-LOC rule.
-//! - `store.rs` — the cross-shard half of the `*STORE` family: which two
-//!   keys a STORE form touches (routing) and the source-shard search the
-//!   runtime calls back for.
+//! A geo key is a sorted set whose scores are 52-bit interleaved
+//! geohashes, the encoding Redis uses, so every command here is built on
+//! the sorted-set calls of `kevy_store::Store`. [`store_keys`] and
+//! [`store_search`] split a storing command into its two halves for a
+//! caller whose source and destination keys may live apart.
+//!
+//! ```
+//! let mut store = kevy_store::Store::new();
+//! let argv = |s: &str| kevy_resp::Argv::from(s.split(' ').map(|p| p.as_bytes().to_vec()).collect::<Vec<_>>());
+//! let mut out = Vec::new();
+//! kevy_verbs::exec(&mut store, b"GEOADD", &argv("GEOADD g 13.361389 38.115556 Palermo"), &mut out);
+//! assert_eq!(out, b":1\r\n");
+//! out.clear();
+//! kevy_verbs::exec(&mut store, b"GEODIST", &argv("GEODIST g Palermo Palermo"), &mut out);
+//! assert_eq!(out, b"$6\r\n0.0000\r\n");
+//! ```
 
 mod radius;
 mod search;
 mod store;
 
-pub(crate) use store::{geo_search, geo_store_route};
+pub use store::{store_keys, store_search};
 
 use kevy_geo::{decode_score, encode_base32_geohash, encode_score, haversine_meters};
 use kevy_resp::CmdError;
 use kevy_resp::{ArgvView, encode_array_len, encode_bulk, encode_error, encode_null_bulk};
 use kevy_store::Store;
 
-use crate::cmd::{arg_f64, store_err, wrong_args};
+use crate::Effect;
+use crate::args::arg_f64;
+use crate::reply::{store_err, wrong_args};
 
-/// Dispatch table for the geo verbs. Returns `true` if the command was
-/// recognised (and a reply has been written to `out`).
-pub(crate) fn dispatch_geo<A: ArgvView + ?Sized>(
+/// One geo command; `None` = the verb is not in this group.
+pub(crate) fn exec<A: ArgvView + ?Sized>(
     cmd: &[u8],
     store: &mut Store,
     args: &A,
     out: &mut Vec<u8>,
+) -> Option<Effect> {
+    Some(match cmd {
+        b"GEOADD" => {
+            cmd_geoadd(store, args, out);
+            Effect::Write
+        }
+        b"GEOPOS" => {
+            cmd_geopos(store, args, out);
+            Effect::Read
+        }
+        b"GEODIST" => {
+            cmd_geodist(store, args, out);
+            Effect::Read
+        }
+        b"GEOHASH" => {
+            cmd_geohash(store, args, out);
+            Effect::Read
+        }
+        b"GEOSEARCH" => {
+            search::cmd_geosearch(store, args, out);
+            Effect::Read
+        }
+        b"GEOSEARCHSTORE" => {
+            search::cmd_geosearchstore(store, args, out);
+            Effect::Write
+        }
+        b"GEORADIUS" => radius::cmd_georadius(store, args, out, false),
+        b"GEORADIUSBYMEMBER" => radius::cmd_georadiusbymember(store, args, out, false),
+        _ => return None,
+    })
+}
+
+/// The read-only twins of the legacy radius queries, `GEORADIUS_RO` and
+/// `GEORADIUSBYMEMBER_RO`, which refuse a `STORE` option. They are not
+/// in [`crate::VERBS`], whose rows mirror kevy's command registry, and
+/// the registry has no row for them. `false` = `verb` is neither.
+///
+/// ```
+/// let mut store = kevy_store::Store::new();
+/// let argv = kevy_resp::Argv::from(
+///     "GEORADIUS_RO g 13 38 10 km".split(' ').map(|s| s.as_bytes().to_vec()).collect::<Vec<_>>(),
+/// );
+/// let mut out = Vec::new();
+/// assert!(kevy_verbs::geo::exec_read_only(b"GEORADIUS_RO", &mut store, &argv, &mut out));
+/// assert_eq!(out, b"*0\r\n");
+/// assert!(!kevy_verbs::geo::exec_read_only(b"GEORADIUS", &mut store, &argv, &mut out));
+/// ```
+pub fn exec_read_only<A: ArgvView + ?Sized>(
+    verb: &[u8],
+    store: &mut Store,
+    args: &A,
+    out: &mut Vec<u8>,
 ) -> bool {
-    match cmd {
-        b"GEOADD" => cmd_geoadd(store, args, out),
-        b"GEOPOS" => cmd_geopos(store, args, out),
-        b"GEODIST" => cmd_geodist(store, args, out),
-        b"GEOHASH" => cmd_geohash(store, args, out),
-        b"GEOSEARCH" => search::cmd_geosearch(store, args, out),
-        b"GEOSEARCHSTORE" => search::cmd_geosearchstore(store, args, out),
-        b"GEORADIUS" | b"GEORADIUS_RO" => {
-            radius::cmd_georadius(store, args, out, cmd == b"GEORADIUS_RO");
-        }
-        b"GEORADIUSBYMEMBER" | b"GEORADIUSBYMEMBER_RO" => {
-            radius::cmd_georadiusbymember(store, args, out, cmd == b"GEORADIUSBYMEMBER_RO");
-        }
+    match verb {
+        b"GEORADIUS_RO" => radius::cmd_georadius(store, args, out, true),
+        b"GEORADIUSBYMEMBER_RO" => radius::cmd_georadiusbymember(store, args, out, true),
         _ => return false,
-    }
+    };
     true
 }
 

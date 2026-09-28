@@ -9,7 +9,7 @@ use kevy_resp::CmdError;
 use kevy_resp::{ArgvView, encode_array_len, encode_bulk, encode_error};
 use kevy_store::{Store, parse_explicit_id};
 
-use crate::cmd::{store_err, wrong_args};
+use crate::reply::{store_err, wrong_args};
 
 use super::{StreamReply, emit_entries};
 

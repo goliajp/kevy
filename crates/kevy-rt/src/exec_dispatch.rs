@@ -421,7 +421,7 @@ impl<C: Commands> Shard<C> {
                 src.push_mutation(args);
             }
         } else {
-            self.record_propagation_override(prop);
+            self.record_propagation_override(prop, args);
         }
         self.maybe_notify_dispatch(args);
         // BLOCK wake: if this write targets a key a waiter is parked on,
@@ -440,31 +440,6 @@ impl<C: Commands> Shard<C> {
         let lua_wakes = crate::lua_wake_bridge::drain_lua_wake_buffer();
         for key in lua_wakes {
             self.wake_key(&key);
-        }
-    }
-
-    /// Cold sibling of the AsIs arm in [`Self::post_write_housekeeping`]:
-    /// record a `Replace` effect frame to the AOF + replication backlog
-    /// (same gates as the AsIs path), or record nothing (`Suppress`).
-    /// Out-of-line — only nondeterministic verbs (SPOP) land here.
-    #[cold]
-    #[inline(never)]
-    fn record_propagation_override(&mut self, prop: crate::propagation::Propagate) {
-        let crate::propagation::Propagate::Replace(frame) = prop else {
-            return; // Suppress: nothing recorded, nothing pushed.
-        };
-        let total: usize = frame.iter().map(Vec::len).sum();
-        let mut argv = kevy_resp::Argv::with_capacity(frame.len(), total);
-        for part in &frame {
-            argv.push(part);
-        }
-        if self.aof.is_some() {
-            self.log_write(&argv);
-        }
-        if let Some(src) = self.replicate.as_mut().map(|f| f.source_mut())
-            && !crate::replication_gate::is_applying_replicated()
-        {
-            src.push_mutation(&argv);
         }
     }
 

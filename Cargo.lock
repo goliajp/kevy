@@ -816,6 +816,7 @@ version = "6.4.0"
 name = "kevy-verbs"
 version = "6.4.0"
 dependencies = [
+ "kevy-geo",
  "kevy-resp",
  "kevy-store",
 ]

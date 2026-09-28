@@ -11,6 +11,9 @@
 //! replies with Redis's wording, for the commands that live outside
 //! this crate.
 //!
+//! The stream (`X*`) and geo (`GEO*`) commands are behind the
+//! `streams-geo` feature, off by default.
+//!
 //! ```
 //! use kevy_verbs::{Effect, exec};
 //!
@@ -22,25 +25,31 @@
 //! ```
 
 use kevy_resp::ArgvView;
-use kevy_store::Store;
+use kevy_store::{Store, StreamId};
 
 pub mod aof;
 pub mod args;
 mod bitmap;
 pub mod cmd;
+#[cfg(feature = "streams-geo")]
+pub mod geo;
 mod hash;
 mod hash_ttl;
 mod keyspace;
 mod list;
 mod list_move;
+mod record;
+mod record_read;
 pub mod reply;
 mod set;
+#[cfg(feature = "streams-geo")]
+mod stream;
 mod strings;
 mod verbs;
 mod zset;
 mod zset_range;
 
-pub use verbs::{VERBS, Verb, verb};
+pub use verbs::{VERBS, Verb, is_streams_geo, verb};
 
 /// What a command did, for a caller that records writes.
 ///
@@ -69,8 +78,92 @@ pub enum Effect {
     /// random (`SPOP`) is recorded as what it did (`SREM key member…`),
     /// so replaying the record cannot pick differently.
     Record(Vec<Vec<u8>>),
+    /// Record the argv with argument `.0` replaced by the ID `.1`: an `XADD`
+    /// whose ID was generated (`*`, `ms-*`), recorded as the ID it gave so
+    /// a replay's clock cannot pick another. Carries no frame: a caller
+    /// that records builds it with [`aof::deferred_frames`].
+    ///
+    /// ```
+    /// use kevy_verbs::{Effect, exec};
+    /// if kevy_verbs::verb(b"XADD").is_none() {
+    ///     return; // built without the `streams-geo` feature
+    /// }
+    /// let mut store = kevy_store::Store::new();
+    /// let argv = kevy_resp::Argv::from(vec![b"XADD".to_vec(), b"s".to_vec(), b"7-*".to_vec(), b"f".to_vec(), b"v".to_vec()]);
+    /// let id = kevy_store::StreamId { ms: 7, seq: 0 };
+    /// assert_eq!(exec(&mut store, b"XADD", &argv, &mut Vec::new()), Some(Effect::RecordId(2, id)));
+    /// ```
+    RecordId(usize, StreamId),
+    /// Record a claim as its outcome: an `XCLAIM` / `XAUTOCLAIM`, which
+    /// picks by idle time and stamps with the clock. Carries no frame: a
+    /// caller that records builds them with [`aof::deferred_frames`].
+    ///
+    /// ```
+    /// use kevy_verbs::{Effect, exec};
+    /// if kevy_verbs::verb(b"XCLAIM").is_none() {
+    ///     return; // built without the `streams-geo` feature
+    /// }
+    /// let mut store = kevy_store::Store::new();
+    /// let argv = |s: &str| kevy_resp::Argv::from(s.split(' ').map(|p| p.as_bytes().to_vec()).collect::<Vec<_>>());
+    /// for c in ["XADD s 1-1 f v", "XGROUP CREATE s g 0", "XREADGROUP GROUP g a STREAMS s >"] {
+    ///     let up = c.split(' ').next().unwrap().as_bytes();
+    ///     exec(&mut store, up, &argv(c), &mut Vec::new());
+    /// }
+    /// let claim = argv("XCLAIM s g b 0 1-1 JUSTID");
+    /// let effect = exec(&mut store, b"XCLAIM", &claim, &mut Vec::new()).unwrap();
+    /// assert!(matches!(effect, Effect::RecordClaim(_)));
+    /// let frames = kevy_verbs::aof::deferred_frames(&mut store, &claim, &effect);
+    /// let head: Vec<&[u8]> = (0..6).map(|i| &frames[0][i]).collect();
+    /// assert_eq!(head, [&b"XCLAIM"[..], b"s", b"g", b"b", b"0", b"1-1"]);
+    /// ```
+    RecordClaim(Box<aof::Claim>),
+    /// Record a one-stream `XREADGROUP` as what it left, not as a read a
+    /// replay would stamp with its own clock: `.0` is the group's
+    /// last-delivered ID before the read, `.1` whether the read created
+    /// its consumer. Carries no frame: a caller that records builds them
+    /// with [`aof::deferred_frames`].
+    ///
+    /// ```
+    /// use kevy_verbs::{Effect, exec};
+    /// if kevy_verbs::verb(b"XREADGROUP").is_none() {
+    ///     return; // built without the `streams-geo` feature
+    /// }
+    /// let mut store = kevy_store::Store::new();
+    /// let argv = |s: &str| kevy_resp::Argv::from(s.split(' ').map(|p| p.as_bytes().to_vec()).collect::<Vec<_>>());
+    /// for c in ["XADD s 1-1 f v", "XGROUP CREATE s g 0"] {
+    ///     exec(&mut store, c.split(' ').next().unwrap().as_bytes(), &argv(c), &mut Vec::new());
+    /// }
+    /// let read = argv("XREADGROUP GROUP g a STREAMS s >");
+    /// let effect = exec(&mut store, b"XREADGROUP", &read, &mut Vec::new()).unwrap();
+    /// assert_eq!(effect, Effect::RecordRead(kevy_store::StreamId::MIN, true));
+    /// let frames = kevy_verbs::aof::deferred_frames(&store, &read, &effect);
+    /// let verbs: Vec<&[u8]> = frames.iter().map(|f| &f[0]).collect();
+    /// assert_eq!(verbs, [&b"XGROUP"[..], b"XCLAIM"], "the group's move, then the delivery");
+    /// ```
+    RecordRead(StreamId, bool),
+    /// [`Effect::RecordRead`] for an `XREADGROUP` over several streams:
+    /// one `(last-delivered before, consumer created)` pair per stream, in
+    /// `STREAMS` order.
+    ///
+    /// ```
+    /// use kevy_verbs::{Effect, exec};
+    /// if kevy_verbs::verb(b"XREADGROUP").is_none() {
+    ///     return; // built without the `streams-geo` feature
+    /// }
+    /// let mut store = kevy_store::Store::new();
+    /// let argv = |s: &str| kevy_resp::Argv::from(s.split(' ').map(|p| p.as_bytes().to_vec()).collect::<Vec<_>>());
+    /// for c in ["XADD a 1-1 f v", "XADD b 1-1 f v", "XGROUP CREATE a g 0", "XGROUP CREATE b g 0"] {
+    ///     exec(&mut store, c.split(' ').next().unwrap().as_bytes(), &argv(c), &mut Vec::new());
+    /// }
+    /// let read = argv("XREADGROUP GROUP g c STREAMS a b > >");
+    /// let Some(Effect::RecordReads(marks)) = exec(&mut store, b"XREADGROUP", &read, &mut Vec::new()) else {
+    ///     panic!("a read of two streams is marked per stream")
+    /// };
+    /// assert_eq!(marks.len(), 2);
+    /// ```
+    RecordReads(Vec<(StreamId, bool)>),
     /// Record nothing, not even the argv: a random command that removed
-    /// nothing.
+    /// nothing, or a claim that changed nothing.
     Skip,
 }
 
@@ -111,7 +204,18 @@ pub fn exec<A: ArgvView + ?Sized>(
     if let Some(e) = zset::exec(verb, store, args, out) {
         return Some(e);
     }
-    keyspace::exec(verb, store, args, out)
+    if let Some(e) = keyspace::exec(verb, store, args, out) {
+        return Some(e);
+    }
+    #[cfg(feature = "streams-geo")]
+    if let Some(e) = geo::exec(verb, store, args, out) {
+        return Some(e);
+    }
+    #[cfg(feature = "streams-geo")]
+    if let Some(e) = stream::exec(verb, store, args, out) {
+        return Some(e);
+    }
+    None
 }
 
 /// `Write` when `changed`, `Unchanged` otherwise.

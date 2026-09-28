@@ -50,6 +50,27 @@ impl Store {
         }
     }
 
+    /// A stream's consumer group as stored, read with no side effects:
+    /// unlike [`Self::stream_view`] it expires nothing and promotes
+    /// nothing, so a caller recording a write can read what the write
+    /// left without changing it. `None` when the key holds no resident
+    /// stream or the group is missing.
+    ///
+    /// ```
+    /// use kevy_store::{GroupCreateMode, StreamId, XAddIdSpec};
+    /// let mut s = kevy_store::Store::new();
+    /// s.xadd(b"s", XAddIdSpec::Explicit(StreamId { ms: 1, seq: 1 }), vec![(b"f".to_vec(), b"v".to_vec())], false, 0).unwrap();
+    /// s.xgroup_create(b"s", b"g", GroupCreateMode::AtId(StreamId::MIN), false).unwrap();
+    /// assert_eq!(s.stream_group_peek(b"s", b"g").unwrap().pending_count(), 0);
+    /// assert!(s.stream_group_peek(b"s", b"nope").is_none());
+    /// ```
+    pub fn stream_group_peek(&self, key: &[u8], group: &[u8]) -> Option<&super::ConsumerGroup> {
+        match &self.map.get(key)?.value {
+            Value::Stream(s) => s.group(group),
+            _ => None,
+        }
+    }
+
     /// Read-only access to a stream's `StreamData`, used by `XINFO`
     /// to inspect entries / groups / consumers without going through
     /// the wrapper layer. Returns `Ok(None)` for a missing key,

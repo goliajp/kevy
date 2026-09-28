@@ -1,10 +1,11 @@
 //! The command dispatch table: maps one parsed command to its RESP reply.
 //!
 //! [`dispatch`] is a thin router that tries each category handler in turn.
-//! The single-shard data commands are executed by `kevy_verbs::exec`, the
-//! same code the embedded engine runs; what stays here is what only a
-//! server has — connection state, the ops and cluster verbs, RESP3 reply
-//! shapes, geo, streams, Lua, scope routing and the `maxmemory` bracket.
+//! The single-shard data commands, streams and geo among them, are executed
+//! by `kevy_verbs::exec`, the same code the embedded engine runs; what
+//! stays here is what only a server has — connection state, the ops and
+//! cluster verbs, RESP3 reply shapes, Lua, scope routing and the
+//! `maxmemory` bracket.
 
 use crate::cmd::{OOM_ERR, cmd_hello, is_growing_write_verb, store_err, upper_verb, wrong_args};
 use crate::state::Ctx;
@@ -147,8 +148,7 @@ fn dispatch_with_proto<A: ArgvView + ?Sized>(
         || dispatch_conn(ctx, cmd, store, args, out)
         || crate::ops::dispatch_ops(ctx, cmd, store, args, out)
         || exec_shared(cmd, store, args, out)
-        || crate::dispatch_geo::dispatch_geo(cmd, store, args, out)
-        || crate::dispatch_stream::dispatch_stream(cmd, store, args, out)
+        || kevy_verbs::geo::exec_read_only(cmd, store, args, out)
         // EVAL / EVALSHA / EVAL_RO / EVALSHA_RO / SCRIPT.
         || crate::cmd_lua::dispatch_lua(ctx, cmd, store, args, out)
         || crate::dispatch_replay::dispatch_multikey_stub(cmd, out);
@@ -170,8 +170,8 @@ fn dispatch_with_proto<A: ArgvView + ?Sized>(
 }
 
 /// The single-shard data commands, run by the layer the embedded engine
-/// shares. A command whose effect is random asks for a different record
-/// than its argv; the runtime's post-write step reads that override.
+/// shares. A command whose effect is random or clock-bound asks for a
+/// different record than its argv; the runtime's post-write step reads that override.
 #[inline]
 fn exec_shared<A: ArgvView + ?Sized>(
     cmd: &[u8],
@@ -185,6 +185,15 @@ fn exec_shared<A: ArgvView + ?Sized>(
             record_instead(kevy_rt::propagation::Propagate::Replace(frame));
             true
         }
+        Some(
+            e @ (Effect::RecordId(..)
+            | Effect::RecordClaim(_)
+            | Effect::RecordRead(..)
+            | Effect::RecordReads(_)),
+        ) => {
+            record_deferred(e);
+            true
+        }
         Some(Effect::Skip) => {
             record_instead(kevy_rt::propagation::Propagate::Suppress);
             true
@@ -196,6 +205,13 @@ fn exec_shared<A: ArgvView + ?Sized>(
 #[cold]
 fn record_instead(p: kevy_rt::propagation::Propagate) {
     kevy_rt::propagation::set_override(p);
+}
+
+/// A record the runtime builds only if it records the write: nothing is
+/// built with the AOF off and no replicas.
+#[cold]
+fn record_deferred(effect: Effect) {
+    kevy_rt::propagation::set_override_deferred(effect);
 }
 
 /// Record an `SPOP` by the members it removed, for a reply path that pops

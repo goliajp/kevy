@@ -44,6 +44,10 @@ thread_local! {
     /// The pending override for the command currently executing on
     /// this thread. `None` = no verb asked for one = `AsIs`.
     static OVERRIDE: Cell<Option<Propagate>> = const { Cell::new(None) };
+    /// A record left for the cold path to build, set only together with a
+    /// `Suppress` in [`OVERRIDE`]: a write with nowhere to be recorded
+    /// never has its frames built.
+    static DEFERRED: Cell<Option<kevy_verbs::Effect>> = const { Cell::new(None) };
 }
 
 /// Install a propagation override for the command currently executing.
@@ -51,6 +55,31 @@ thread_local! {
 /// the post-write housekeeping of that same command.
 pub fn set_override(p: Propagate) {
     OVERRIDE.with(|c| c.set(Some(p)));
+    DEFERRED.with(Cell::take);
+}
+
+/// Record the command currently executing by the frames its `effect`
+/// describes ([`kevy_verbs::Effect::RecordId`], [`kevy_verbs::Effect::RecordClaim`]),
+/// built only if the shard records the write at all: with the AOF off
+/// and no replicas the frames are never made. Any other effect records
+/// nothing.
+///
+/// ```
+/// use kevy_rt::propagation::{discard_override, set_override_deferred};
+/// let id = kevy_store::StreamId { ms: 1, seq: 0 };
+/// set_override_deferred(kevy_verbs::Effect::RecordId(2, id));
+/// // a dispatch site that records nothing drops it unbuilt
+/// discard_override();
+/// ```
+pub fn set_override_deferred(effect: kevy_verbs::Effect) {
+    OVERRIDE.with(|c| c.set(Some(Propagate::Suppress)));
+    DEFERRED.with(|d| d.set(Some(effect)));
+}
+
+/// The effect [`set_override_deferred`] left, taken with the `Suppress`
+/// that marks it.
+pub(crate) fn take_deferred() -> Option<kevy_verbs::Effect> {
+    DEFERRED.with(Cell::take)
 }
 
 /// Take (and clear) the pending override — [`Propagate::AsIs`] when no
@@ -68,6 +97,7 @@ pub(crate) fn take_override() -> Propagate {
 /// armed for whatever command runs next on the thread.
 pub fn discard_override() {
     OVERRIDE.with(Cell::take);
+    DEFERRED.with(Cell::take);
 }
 
 #[cfg(test)]
@@ -95,6 +125,20 @@ mod tests {
         set_override(Propagate::Suppress);
         discard_override();
         assert!(matches!(take_override(), Propagate::AsIs));
+    }
+
+    #[test]
+    fn a_deferred_record_rides_a_suppress_and_does_not_linger() {
+        let id = kevy_store::StreamId { ms: 1, seq: 0 };
+        set_override_deferred(kevy_verbs::Effect::RecordId(2, id));
+        assert!(matches!(take_override(), Propagate::Suppress));
+        assert_eq!(take_deferred(), Some(kevy_verbs::Effect::RecordId(2, id)));
+        set_override_deferred(kevy_verbs::Effect::RecordId(2, id));
+        discard_override();
+        assert_eq!(take_deferred(), None, "a discard drops it");
+        set_override_deferred(kevy_verbs::Effect::RecordId(2, id));
+        set_override(Propagate::Replace(vec![b"SREM".to_vec()]));
+        assert_eq!(take_deferred(), None, "a later override replaces it");
     }
 
     #[test]

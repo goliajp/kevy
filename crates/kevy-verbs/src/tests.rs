@@ -23,6 +23,21 @@ fn the_table_is_sorted_and_unique() {
     }
 }
 
+/// The feature's rows are exactly the verbs `is_streams_geo` names, so a
+/// caller filtering by it keeps out the whole family and nothing else.
+#[test]
+fn the_feature_rows_are_the_streams_geo_names() {
+    let named = VERBS.iter().filter(|v| crate::is_streams_geo(v.name.as_bytes())).count();
+    assert_eq!(named, if cfg!(feature = "streams-geo") { 23 } else { 0 });
+    for name in ["GET", "GETEX", "EXPIRE", "PEXPIREAT", "HEXPIRE"] {
+        assert!(!crate::is_streams_geo(name.as_bytes()), "{name}");
+    }
+    // the read-only radius twins have no registry row, so no table row
+    for name in ["GEORADIUS_RO", "GEORADIUSBYMEMBER_RO"] {
+        assert_eq!(run(&mut Store::new(), name).0, None, "{name}");
+    }
+}
+
 /// The table and `exec` answer for the same verbs: every row runs, and
 /// nothing outside the table does. The candidates are every registry
 /// row plus the table itself, so a verb added to one and not the other
