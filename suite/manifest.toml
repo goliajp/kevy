@@ -43,9 +43,10 @@ manifest_floor = 43
 # headroom for a slower machine, without being fiction.
 [suite.budgets]
 precommit = 300
-# everything CI checks on a push to develop
-premerge = 4800
-prerelease = 5400
+# everything CI checks on a push to develop; declared from CI step times,
+# to be corrected from the durations a premerge run records
+premerge = 5300
+prerelease = 6000
 
 
 # ── where each requirement is met ────────────────────────────────────
@@ -66,20 +67,15 @@ prerelease = 5400
 # any CI command that is in neither a row by premerge nor this table.
 [suite.ci_only]
 "cargo +nightly doc --workspace --no-deps" = "the stone report's rustdoc input, built inside CI's stonereport job for stone-report"
-"cargo check --target ${{ matrix.target }} *" = "wasm32 cross-checks; the targets are installed only by CI's wasm job"
-"cargo check --target aarch64-unknown-linux-musl *" = "IoT cross-checks; the musl targets are installed only by CI's iot job"
-"cargo check --target armv7-unknown-linux-musleabihf *" = "IoT cross-checks; the musl targets are installed only by CI's iot job"
-"cargo check --target arm-unknown-linux-musleabihf *" = "IoT cross-checks; the musl targets are installed only by CI's iot job"
-"cargo check --target thumbv7em-none-eabihf *" = "no_std cross-checks; the Cortex-M target is installed only by CI's iot job"
-"cargo check -p kevy-embedded --no-default-features *" = "the IoT feature archetypes, a matrix CI's iot job loops over"
-"cargo run --release" = "the Cortex-M consumer under an emulator only CI's iot job installs"
-"cargo miri test *" = "nightly miri, single-threaded interpretation; CI's miri job"
 "cargo +nightly fuzz run *" = "cargo-fuzz on nightly; CI's fuzz-smoke matrix, which fuzzgate keeps complete"
 "bash bench/run.sh" = "the Docker benchmark smoke against valkey; measures, gives no verdict on the code"
 "cargo test" = "the Tauri plugin, a standalone crate outside the workspace that needs Tauri's system libraries"
 "python3 tools/suite.py --audit" = "the runner audits the manifest before every tier"
 
 [suite.requirements]
+"wasm targets" = "CI's wasm job, and the lx64 box"
+"iot toolchain" = "CI's iot job, and the lx64 box"
+"nightly miri" = "CI's miri job, and the lx64 box"
 "linux" = "CI's Linux jobs, and the lx64 box"
 "box" = "the lx64 box, as kevybench with TMPDIR=$HOME/captmp"
 "binaries-release" = "anywhere after cargo build --release -p kevy -p kevy-cli"
@@ -1267,3 +1263,33 @@ cmd = "cargo test --workspace --release --lib --tests"
 expected = 600
 timeout = 3600
 proves = "the suite passes with optimizations on, where debug-only checks are gone and timing moves"
+
+[[check]]
+id = "wasmcheck"
+area = "feature"
+tier = "premerge"
+cmd = "bash bench/wasmcheck.sh"
+expected = 120
+timeout = 1800
+requires = ["wasm targets"]
+proves = "every wasm-eligible crate compiles for both wasm targets"
+
+[[check]]
+id = "iotcheck"
+area = "feature"
+tier = "premerge"
+cmd = "bash bench/iotcheck.sh"
+expected = 300
+timeout = 3600
+requires = ["iot toolchain"]
+proves = "the embedded cut compiles on every claimed board, and kevy-store boots on a Cortex-M4 under QEMU"
+
+[[check]]
+id = "mirigate"
+area = "feature"
+tier = "premerge"
+cmd = "bash bench/mirigate.sh"
+expected = 300
+timeout = 3600
+requires = ["nightly miri"]
+proves = "the unsafe stones run clean under miri: map and bytes slots, the SPSC ring, the zset encoding"
