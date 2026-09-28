@@ -44,6 +44,11 @@ impl<C: Commands> Shard<C> {
         if out.is_empty() {
             return None;
         }
+        // Commands forwarded earlier wait in this iteration's request
+        // batches; ship them first, or a message sent now would reach their
+        // shard ahead of them and apply out of the client's order (the same
+        // reason WAIT flushes before it arms).
+        self.flush_requests();
         let remote = out.iter().filter(|(to, _)| *to != self.id).count() as u32;
         let token = if ack && remote > 0 {
             self.ext_waits.next += 1;
