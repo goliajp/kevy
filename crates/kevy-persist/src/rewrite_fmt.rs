@@ -169,6 +169,8 @@ pub fn dump_store_to_buf<S: crate::SnapshotSource>(
         let _ = write_value_as_commands(&mut buf, key, value, ttl_ms, fmt, &mut scratch);
         keys += 1;
     });
+    // the per-field deadlines, as `dump_aof` writes them after the values
+    let _ = write_hash_ttl_frames(&mut buf, src, fmt, &mut scratch);
     (buf, keys)
 }
 
