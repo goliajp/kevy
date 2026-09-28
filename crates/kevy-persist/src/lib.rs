@@ -41,6 +41,10 @@ mod aof;
 mod aof_policy;
 mod aof_queue;
 mod aof_rewrite;
+#[cfg(not(target_arch = "wasm32"))]
+mod aof_stage;
+#[cfg(target_arch = "wasm32")]
+mod aof_stage_off;
 mod aof_sync;
 mod aof_txn;
 mod aof_util;
@@ -75,6 +79,8 @@ mod stage_ring;
 
 pub use aof::{AOF_MAGIC, Aof, Fsync, RewritePlan, RewriteStats};
 pub use aof_policy::RewritePolicy;
+#[cfg(not(target_arch = "wasm32"))]
+pub use aof_stage::StageOpen;
 pub use aof_sync::PendingSync;
 pub use aof_util::write_aof_base;
 pub use baseline::estimate_rewrite_size;
@@ -204,9 +210,11 @@ mod tests_policy;
 mod tests_rewrite;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests_stage;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests_stage_aof;
 #[cfg(test)]
 mod tests_sync;
 #[cfg(test)]
-mod tests_txn_tail;
-#[cfg(test)]
 mod tests_tier_stream;
+#[cfg(test)]
+mod tests_txn_tail;

@@ -136,6 +136,7 @@ impl Aof {
         self.last_rewrite_at = Instant::now();
         self.dirty = false;
         self.rewrites_total = self.rewrites_total.saturating_add(1);
+        self.rebase_stage()?;
         Ok((RewriteStats { keys, bytes }, spent))
     }
 
@@ -203,6 +204,7 @@ impl Aof {
         self.last_rewrite_at = Instant::now();
         self.dirty = false;
         self.rewrites_total = self.rewrites_total.saturating_add(1);
+        self.rebase_stage()?;
         Ok(RewriteStats { keys, bytes })
     }
 

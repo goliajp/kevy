@@ -11,7 +11,12 @@ use std::time::Instant;
 use kevy_resp::ArgvView;
 use kevy_store::Store;
 
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use crate::aof_stage::Stage;
+#[cfg(target_arch = "wasm32")]
+pub(crate) use crate::aof_stage_off::Stage;
 use crate::estimate_multibulk_bytes;
+use crate::record::RECORD_HEADER;
 use crate::record_pieces::{record_header, write_frame};
 
 /// 9-byte file-format header written at the start of every kevy-managed
@@ -121,6 +126,9 @@ pub struct Aof {
     /// file keeps appending V1 until its first rewrite upgrades it —
     /// mixing formats within one file would corrupt it.
     pub(crate) format: crate::AofFormat,
+    /// `Some` = staged appends (see `aof_stage`): records land in a shared
+    /// mapping first and reach `file` on each drain.
+    pub(crate) stage: Option<Stage>,
     /// `Some` = queued-append mode (RFC v3-aof-offload S1): encoded
     /// record bytes accumulate here instead of hitting `file`, and the
     /// DRIVER (the io_uring reactor) drains them via
@@ -253,6 +261,7 @@ impl Aof {
             queue: None,
             queued_offset: size,
             queued_seq: 0,
+            stage: None,
         })
     }
 
@@ -311,6 +320,15 @@ impl Aof {
         if let Some(q) = &mut self.queue {
             write_frame(q, own, args)?;
             self.queued_seq += 1;
+        } else if let Some(h) = own.filter(|_| self.stage.is_some()) {
+            let len = RECORD_HEADER + u32::from_le_bytes([h[0], h[1], h[2], h[3]]) as usize;
+            let staged = self.stage_record(len, |mut slot| {
+                write_frame(&mut slot, Some(h), args).expect("the slot is the record's exact size");
+            })?;
+            if !staged {
+                write_frame(&mut self.file, own, args)?;
+                self.stage_bypassed()?;
+            }
         } else {
             write_frame(&mut self.file, own, args)?;
         }
@@ -357,7 +375,7 @@ impl Aof {
         self.queued_offset = self.size_bytes;
         self.size_at_last_rewrite = crate::record::AOF2_MAGIC.len() as u64;
         self.last_rewrite_at = Instant::now();
-        Ok(())
+        self.rebase_stage()
     }
 
     /// Estimated current AOF size in bytes (file content as of last append).
@@ -431,6 +449,7 @@ impl Aof {
         self.last_rewrite_at = Instant::now();
         self.dirty = false;
         self.rewrites_total = self.rewrites_total.saturating_add(1);
+        self.rebase_stage()?;
         Ok(RewriteStats { keys, bytes })
     }
 

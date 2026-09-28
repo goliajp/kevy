@@ -56,10 +56,11 @@ impl Aof {
                     q.extend_from_slice(&crate::crc32c::crc32c(&frame).to_le_bytes());
                     q.extend_from_slice(&frame);
                     self.queued_seq += 1;
-                } else {
+                } else if !self.stage_marker(&frame)? {
                     self.file.write_all(&(frame.len() as u32).to_le_bytes())?;
                     self.file.write_all(&crate::crc32c::crc32c(&frame).to_le_bytes())?;
                     self.file.write_all(&frame)?;
+                    self.stage_bypassed()?;
                 }
                 // A concurrent rewrite's diff buffer must carry the
                 // markers too, or the post-rewrite log would replay the
@@ -113,9 +114,13 @@ impl Aof {
         // Commit marker BEFORE the sync: replay treats a transaction as
         // committed only once this record is present and intact, so it
         // must be inside the same durable run as the frames it closes.
+        // Still inside the transaction while its marker is written: a drain
+        // the marker forces then sends the marker to the file after the
+        // records it closes, never alone into the ring.
         if self.in_txn {
-            self.in_txn = false;
             self.append_marker(Self::TXN_COMMIT)?;
+            self.in_txn = false;
+            self.stage_txn_closed();
         }
         if self.deferred {
             self.deferred = false;
@@ -130,5 +135,15 @@ impl Aof {
             }
         }
         Ok(())
+    }
+
+    /// Stage an enveloped marker frame; `false` when it goes to the file.
+    fn stage_marker(&mut self, frame: &[u8]) -> io::Result<bool> {
+        let crc = crate::crc32c::crc32c(frame);
+        self.stage_record(crate::record::RECORD_HEADER + frame.len(), |slot| {
+            slot[..4].copy_from_slice(&(frame.len() as u32).to_le_bytes());
+            slot[4..8].copy_from_slice(&crc.to_le_bytes());
+            slot[8..].copy_from_slice(frame);
+        })
     }
 }
