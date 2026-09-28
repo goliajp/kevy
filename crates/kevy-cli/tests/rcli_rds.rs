@@ -159,7 +159,7 @@ fn catalogs_describe_and_formats() {
     );
     assert_eq!(cli(&["-p", &p, "--kevy", "tables", "nope*", "--no-header"], b"", &[]).stdout, "");
     let indexes = cli(&["-p", &p, "--kevy", "indexes", "users", "--format", "csv"], b"", &[]);
-    assert!(indexes.stdout.starts_with("name,table,prefix,kind,state,entries,bytes,hits,last_hit,auto\r\nusers.age,users,user:,range,ready,5,"), "{}", indexes.stdout);
+    assert!(indexes.stdout.starts_with("name,table,prefix,kind,state,entries,bytes,hits,last_hit,auto,partitioning\r\nusers.age,users,user:,range,ready,5,"), "{}", indexes.stdout);
     let table = cli(&["-p", &p, "--kevy", "describe+", "users"], b"", &[("FAKETTY", "1")]);
     assert!(
         table.stdout.starts_with(
@@ -547,7 +547,7 @@ fn describe_and_show_create_read_declarations_back() {
         table.stdout.starts_with(
             "Table \"users\"\nprefix\tpk\tautodeclare\twindow\nuser:\tid\t0\t-\n\
              Columns\ncolumn\ttype\tkey\tpaths\nid\ti64\tpk\t\nname\tstr\t\t\nage\ti64\t\tusers.age\n\
-             Access paths\nname\tprefix\tkind\tstate\tentries\tbytes\thits\tlast_hit\tauto\nusers.age\tuser:\trange\tready\t5\t"
+             Access paths\nname\tprefix\tkind\tstate\tentries\tbytes\thits\tlast_hit\tauto\tpartitioning\nusers.age\tuser:\trange\tready\t5\t"
         ),
         "{}",
         table.stdout
