@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **Stream consumers keep their idle times across a restart and on a
+  replica.** Replaying the AOF, or applying a primary's stream, gave every
+  consumer the replay's clock as its last contact, so after a restart
+  `XINFO CONSUMERS` showed every consumer as just seen. Each contact that
+  changes a group — a read that moves the group's cursor or creates a
+  consumer, a claim, `XGROUP CREATECONSUMER` — is now recorded with its time
+  as an internal `XINTERNAL.CONSUMERSEEN` frame, which a client that sends
+  it is refused. A group read that changes nothing is not recorded, so that
+  contact alone is not carried over. An older kevy replaying an AOF written by this one
+  skips these frames, and loses consumers made only by `XGROUP
+  CREATECONSUMER`.
+
 - **A server refuses a port another server already holds.** Every shard
   listens with `SO_REUSEPORT`, and on its own that let a second kevy
   started by the same user on the same port join the first one's
