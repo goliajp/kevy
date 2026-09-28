@@ -218,6 +218,8 @@ pub const MAX_INDEXES: usize = 64;
 #[derive(Debug, Clone, Default)]
 pub struct Catalog {
     pub(crate) specs: Vec<(IndexSpec, IndexState)>,
+    /// The global indexes' partitionings, by name; any other is local.
+    pub(crate) parts: Vec<(Vec<u8>, crate::Partitioning)>,
 }
 
 /// What one row looks like to an index: each declared field's raw bytes
@@ -328,6 +330,7 @@ impl Catalog {
     pub fn drop_index(&mut self, name: &[u8]) -> bool {
         let before = self.specs.len();
         self.specs.retain(|(s, _)| s.name != name);
+        self.parts.retain(|(n, _)| n != name);
         self.specs.len() != before
     }
 
