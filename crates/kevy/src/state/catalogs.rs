@@ -220,9 +220,13 @@ impl RuntimeState {
 
     /// Swap in a new table catalog, and tell the shards a declaration
     /// changed so the packing backfill picks up the rows that preceded it.
+    /// Moves the control epoch like the other installs: `TABLE_NONEMPTY`
+    /// derives from this catalog, and a shard that re-read its gate after
+    /// the index catalog's install would otherwise keep a gate without it.
     pub(crate) fn install_table_catalog(&self, c: TableCatalog) {
         *self.catalogs.table.write().unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(c));
         self.catalogs.table_gen.fetch_add(1, Ordering::Release);
+        self.bump_control_epoch();
         self.catalogs.advise_clear();
     }
 }

@@ -342,6 +342,36 @@ mod tests {
         assert_eq!(shard.gate_bits(state) & WRITE_GATED, 0);
     }
 
+    /// TABLE.DECLARE installs the index catalog, then the table catalog. A
+    /// shard reading its gate between the two must still learn of the
+    /// table: the second install has to move the epoch too, or the shard
+    /// keeps a gate with no table bit under the current tag, and its packing
+    /// backfill never runs.
+    #[test]
+    fn a_table_installed_after_the_index_catalog_reaches_a_shard_gate() {
+        let c = crate::KevyCommands::new();
+        let state = c.state();
+        let shard = ShardCtx::default();
+        state.install_index_catalog(kevy_index::Catalog::new());
+        assert_eq!(shard.gate_bits(state) & TABLE_NONEMPTY, 0);
+        let mut tables = kevy_index::TableCatalog::new();
+        tables
+            .create(kevy_index::TableSpec {
+                name: b"t".to_vec(),
+                prefix: b"t:".to_vec(),
+                pk: b"id".to_vec(),
+                columns: vec![(b"id".to_vec(), kevy_index::ValType::Str)],
+                indexes: vec![],
+                orderpaths: vec![],
+                window: None,
+                autodeclare: 0,
+                auto_added: vec![],
+            })
+            .unwrap();
+        state.install_table_catalog(tables);
+        assert_ne!(shard.gate_bits(state) & TABLE_NONEMPTY, 0);
+    }
+
     #[test]
     fn healthy_replica_count_requires_an_ack() {
         let shard = ShardCtx::default();
