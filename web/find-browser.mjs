@@ -32,6 +32,8 @@ export function findBrowser() {
         'chrome-mac/Chromium.app/Contents/MacOS/Chromium',
         'chrome-mac-arm64/Chromium.app/Contents/MacOS/Chromium',
         'chrome-linux/chrome',
+        // the Chrome for Testing layout newer Playwright installs
+        'chrome-linux64/chrome',
       ]) {
         const p = join(cache, dir, rel)
         if (existsSync(p)) return p

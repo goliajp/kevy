@@ -228,7 +228,38 @@ def _fresh_stone_report():
     return False, "stone-report did not write bench/STONE-REPORT.json in this run"
 
 
+def _have_targets(*triples):
+    r = subprocess.run(["rustup", "target", "list", "--installed"], capture_output=True, text=True)
+    missing = [t for t in triples if t not in r.stdout.split()]
+    if missing:
+        return False, f"rustup target add {' '.join(missing)}"
+    return True, ""
+
+
+def _have_iot_toolchain():
+    ok, why = _have_targets("aarch64-unknown-linux-musl", "armv7-unknown-linux-musleabihf",
+                            "arm-unknown-linux-musleabihf", "x86_64-unknown-linux-musl",
+                            "riscv64gc-unknown-linux-musl", "thumbv7em-none-eabihf")
+    if not ok:
+        return ok, why
+    missing = [t for t in ("riscv64-linux-gnu-gcc", "qemu-system-arm") if not shutil.which(t)]
+    if missing:
+        return False, f"not installed: {', '.join(missing)}"
+    return True, ""
+
+
+def _have_miri():
+    r = subprocess.run(["rustup", "component", "list", "--toolchain", "nightly", "--installed"],
+                       capture_output=True, text=True)
+    if any(l.startswith("miri") for l in r.stdout.splitlines()):
+        return True, ""
+    return False, "rustup component add miri rust-src --toolchain nightly"
+
+
 PROBES = {
+    "wasm targets": lambda: _have_targets("wasm32-unknown-unknown", "wasm32-wasip1"),
+    "iot toolchain": lambda: _have_iot_toolchain(),
+    "nightly miri": lambda: _have_miri(),
     "binaries-debug": lambda: _have_binaries("debug"),
     "binaries-release": lambda: _have_binaries("release"),
     "linux": lambda: _have_linux(),
