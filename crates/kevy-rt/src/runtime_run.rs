@@ -236,6 +236,10 @@ impl<C: Commands> Runtime<C> {
         bio_send: &kevy_store::BioDropSender,
         mut unix_listener: Option<kevy_sys::Socket>,
     ) -> io::Result<Vec<Shard<C>>> {
+        // a reuseport bind would join another process's listeners here; refuse
+        if self.port != 0 {
+            drop(kevy_sys::tcp_listen(self.ip, self.port, 1)?);
+        }
         let topo = self.cluster_topo();
         let mut shards = Vec::with_capacity(n);
         for id in 0..n {
