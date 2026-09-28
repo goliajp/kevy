@@ -472,6 +472,8 @@ use window_slide::{
     evict_and_slide, freeze_text_batches, shard_segs_dir, table_of, text_window_for, window_driver,
     window_for,
 };
+mod global_verify;
+pub(crate) use global_verify::{Placed, VERIFY_TAG, verify_chunk as global_verify_chunk};
 mod global;
 pub(crate) use global::{SAMPLE_PER_PARTITION, apply_ext, sample as sample_values, take_ext_out};
 mod global_wire;

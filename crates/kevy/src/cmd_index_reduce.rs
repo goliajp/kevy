@@ -9,6 +9,7 @@ mod agg;
 mod chunk;
 mod claused;
 mod global;
+mod global_verify;
 mod query;
 mod ranked;
 
@@ -113,7 +114,7 @@ fn reduce_admin(catalogs: &CatalogState, argv: &[Vec<u8>], chunks: &[Vec<u8>]) -
         return Some(query::reduce_list(catalogs, chunks));
     }
     if verb.eq_ignore_ascii_case(b"IDX.VERIFY") {
-        return Some(query::reduce_verify(chunks));
+        return Some(global_verify::reduce(chunks).unwrap_or_else(|| query::reduce_verify(chunks)));
     }
     None
 }

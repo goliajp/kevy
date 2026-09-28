@@ -62,7 +62,8 @@ pub(super) fn run_parsed(ctx: &Ctx<'_>, store: &mut Store, q: &Query, verb: &[u8
         return super::query_claused::clause_chunk(super::query_claused::CURSOR_CLAUSE_CONFLICT);
     }
     if matches!(q.shape, Shape::Verify)
-        && let Some(chunk) = verify_kind_stats(ctx, store, &q.name)
+        && let Some(chunk) = index_runtime::global_verify_chunk(ctx, store, &q.name)
+            .or_else(|| verify_kind_stats(ctx, store, &q.name))
     {
         return chunk;
     }
