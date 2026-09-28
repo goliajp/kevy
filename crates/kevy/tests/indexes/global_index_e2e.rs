@@ -532,3 +532,108 @@ fn a_global_path_is_refused_by_name_where_it_cannot_apply() {
     assert!(bad.contains("does not coerce"), "{bad}");
     assert!(run(&mut w, "TABLE.LIST").starts_with("*0"), "nothing was admitted");
 }
+
+/// `(max_entries, mean_entries)` of `name` from `IDX.LIST`.
+fn spread(w: &mut Wire, name: &str) -> (f64, f64) {
+    let list = text(&call(w, &[b"IDX.LIST"]));
+    let at = list.find(&format!("\r\n{name}\r\n")).expect("listed");
+    let row: Vec<&str> = list[at..].split("\r\n").filter(|s| !s.starts_with(['*', '$'])).collect();
+    let get = |k: &str| row.iter().position(|s| *s == k).map(|i| row[i + 1].parse().unwrap());
+    (get("max_entries").unwrap(), get("mean_entries").unwrap())
+}
+
+fn load(w: &mut Wire, from: u32, to: u32, value: impl Fn(u32) -> u32) {
+    for i in from..to {
+        let (key, v) = (format!("user:{i}"), value(i).to_string());
+        call(w, &[b"HSET", key.as_bytes(), b"age", v.as_bytes()]);
+    }
+}
+
+#[test]
+fn sampled_partitions_start_even_drift_shows_and_a_rebuild_evens_them_again() {
+    let srv = Server::start(16);
+    let mut w = srv.wire();
+    // uniform over 0..1_000_000, scrambled against the key order
+    load(&mut w, 0, 40_000, |i| (i.wrapping_mul(2_654_435_761) >> 8) % 1_000_000);
+    create(&mut w, b"g", &[b"PARTITION", b"global"]);
+    wait_ready(&mut w, b"g");
+    // CREATE samples the shard it runs on: 2,500 rows here, about 156 per
+    // partition, so a partition's share varies by about 8% and the largest
+    // of 16 lands near two of those; a rebuild samples every shard
+    let (max, mean) = spread(&mut w, "g");
+    eprintln!("uniform, N=16, one shard's sample: max/mean {:.3}", max / mean);
+    assert!(max / mean <= 1.3, "uniform: {max} / {mean}");
+    // append-only drift: new rows all above the old largest value
+    load(&mut w, 40_000, 60_000, |i| 1_000_000 + i);
+    let (max, mean) = spread(&mut w, "g");
+    eprintln!("after drift: max/mean {:.3}", max / mean);
+    assert!(max / mean > 4.0, "the last partition took every new row: {max} / {mean}");
+    assert_eq!(call(&mut w, &[b"IDX.REBUILD", b"g"]), b"+OK\r\n");
+    wait_ready(&mut w, b"g");
+    let (max, mean) = spread(&mut w, "g");
+    eprintln!("rebuilt: max/mean {:.3}", max / mean);
+    assert!(max / mean <= 1.1, "rebuilt: {max} / {mean}");
+}
+
+#[test]
+fn a_skewed_domain_is_as_even_as_its_heaviest_value_allows() {
+    let srv = Server::start(16);
+    let mut w = srv.wire();
+    // Zipf-like: value v held by about 1/v of the rows
+    let zipf = |i: u32| {
+        let u = (i.wrapping_mul(2_654_435_761) >> 8) % 1_000_000;
+        (1_000_000 / (u + 1)).min(100_000)
+    };
+    load(&mut w, 0, 40_000, zipf);
+    let heaviest = (0..40_000u32).filter(|&i| zipf(i) == 1).count() as f64;
+    create(&mut w, b"z", &[b"PARTITION", b"global"]);
+    wait_ready(&mut w, b"z");
+    let (max, mean) = spread(&mut w, "z");
+    eprintln!("zipf, N=16: max/mean {:.3}, heaviest value {heaviest} rows", max / mean);
+    assert!(max <= (heaviest.max(mean) + 0.1 * mean).ceil(), "{max} / {mean}, heaviest {heaviest}");
+}
+
+#[test]
+fn eq_on_a_global_unique_index_finds_every_holder_of_the_value() {
+    let srv = Server::start(8);
+    let mut w = srv.wire();
+    let unique: &[&[u8]] = &[
+        b"IDX.CREATE",
+        b"email",
+        b"ON",
+        b"PREFIX",
+        b"user:",
+        b"FIELD",
+        b"email",
+        b"TYPE",
+        b"str",
+        b"KIND",
+        b"unique",
+        b"PARTITION",
+        b"global",
+    ];
+    for i in 0..400u32 {
+        let (key, email) = (format!("user:{i}"), format!("e{}", i % 50));
+        call(&mut w, &[b"HSET", key.as_bytes(), b"email", email.as_bytes()]);
+    }
+    assert_eq!(call(&mut w, unique), b"+OK\r\n");
+    wait_ready(&mut w, b"email");
+    let holders = text(&call(&mut w, &[b"IDX.QUERY", b"email", b"EQ", b"e7", b"LIMIT", b"100"]));
+    let keys: Vec<&str> = holders.split("\r\n").filter(|s| s.starts_with("user:")).collect();
+    assert_eq!(keys.len(), 8, "every key whose email is e7, from one partition: {holders}");
+    let v = verified(&mut w, b"email");
+    assert_eq!(v["duplicates"], 50, "{v:?}");
+}
+
+#[test]
+fn a_shard_holding_512_rows_per_partition_samples_even_partitions() {
+    let srv = Server::start(4);
+    let mut w = srv.wire();
+    // 12,000 rows: about 3,000 on the shard that runs CREATE, over 2,048
+    load(&mut w, 0, 12_000, |i| (i.wrapping_mul(2_654_435_761) >> 8) % 1_000_000);
+    create(&mut w, b"g", &[b"PARTITION", b"global"]);
+    wait_ready(&mut w, b"g");
+    let (max, mean) = spread(&mut w, "g");
+    eprintln!("uniform, N=4: max/mean {:.3}", max / mean);
+    assert!(max / mean <= 1.1, "{max} / {mean}");
+}
