@@ -60,7 +60,7 @@ AOF policy is controlled by `appendfsync` (config file or `CONFIG SET`). The thr
 | `appendfsync` | Durability | Cost |
 |---------------|------------|------|
 | `always` | every write `fsync`-ed before reply | highest latency; bounded by NVMe sync latency |
-| `everysec` (default) | `fsync` once per second on a background thread | bounded data loss window of 1 s; near-zero hot-path cost |
+| `everysec` (default) | `fsync` about once per second on a background thread | power-loss window of about 1 s plus one `fsync`; near-zero hot-path cost |
 | `no` | never `fsync`; kernel flushes on its own schedule | fastest; data loss window = page-cache flush interval |
 
 The background `fsync` for `everysec` runs on a dedicated bio thread off the shard hot path, so shard tail latency is not coupled to disk latency. For a pure cache or a read-replica, also consider disabling AOF entirely with `--no-aof` (no AOF file is written at all, not even buffered).
@@ -188,7 +188,7 @@ On Linux ≥ 5.19 with a workload that batches submissions, yes, materially. On 
 
 **What's the production sweet spot for `appendfsync`?**
 
-`everysec` for almost everyone. It bounds data loss to one second, runs the `fsync` off the hot path, and has near-zero impact on tail latency. Use `always` only when your durability story actually requires zero data loss (and accept that NVMe `fsync` latency now bounds your tail latency). Use `no` only for pure caches where the AOF exists just for warm-restart speed.
+`everysec` for almost everyone. It bounds data loss to about one second plus one `fsync`, runs the `fsync` off the hot path, and has near-zero impact on tail latency. Use `always` only when your durability story actually requires zero data loss (and accept that NVMe `fsync` latency now bounds your tail latency). Use `no` only for pure caches where the AOF exists just for warm-restart speed.
 
 **When do I need `MADV_HUGEPAGE`?**
 
