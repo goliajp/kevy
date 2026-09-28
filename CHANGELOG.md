@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- **The embedded `everysec` fsync no longer holds the shard lock.** The
+  background reaper ran `fdatasync` (`F_FULLFSYNC` on Apple platforms)
+  while holding the shard's write lock, so every write to that shard
+  waited for the disk. It now writes the buffer into the kernel under the
+  lock and runs the fsync after releasing it. Writes that arrive while the
+  fsync runs are covered by the next one, so the power-loss window is
+  about one second plus one reaper tick plus the time one fsync takes. The
+  documented "≤ 1 s" never included the tick or the fsync; the docs now
+  state the window this way, and state what a killed process loses
+  separately. `Store::fsync_aof()` still returns only once every earlier
+  write is on disk. `kevy-persist` adds `Aof::tick` and `PendingSync` for
+  callers that want the same split.
+- **`appendfsync no` and `everysec` write the AOF buffer into the kernel
+  on every tick.** The embedded engine, and the server with
+  `KEVY_AOF_OFFLOAD=0`, kept records in the 256 KiB user-space buffer
+  until it filled (or, under `everysec`, until the next fsync), so a
+  killed process could lose writes made seconds or minutes earlier under
+  `no`, and about a second of writes under `everysec`. A killed process
+  now loses at most one tick of writes (100 ms by default
+  in the embedded engine; one reactor iteration on the server). Power
+  loss is unchanged: under `no` the OS decides when the data reaches the
+  disk, and the `everysec` fsync keeps its once-a-second cadence.
+
 - **A counted `SPOP` over RESP3 is recorded by the members it removed.**
   The RESP3 reply path for `SPOP key count` wrote the command itself to the
   AOF and to replicas, so a restart or a replica popped different random

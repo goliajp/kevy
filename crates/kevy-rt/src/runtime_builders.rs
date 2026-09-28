@@ -338,9 +338,10 @@ impl<C: Commands> Runtime<C> {
         self
     }
 
-    /// fsync policy for the AOF. Default `EverySec` matches Redis (lose at
-    /// most ~1 s of writes on a crash). `Always` is zero-loss but ~50 %
-    /// throughput; `No` defers everything to the OS pagecache.
+    /// fsync policy for the AOF. Default `EverySec` matches Redis (a power
+    /// loss loses about 1 s of writes plus the time one fsync takes).
+    /// `Always` is zero-loss but ~50 % throughput; `No` never fsyncs and
+    /// leaves the disk to the OS.
     #[must_use]
     pub fn with_appendfsync(mut self, fsync: Fsync) -> Self {
         self.appendfsync = fsync;

@@ -124,7 +124,11 @@ fn cli(args: &[&str], stdin: &[u8]) -> Out {
         .stderr(Stdio::piped())
         .spawn()
         .expect("run kevy-cli");
-    child.stdin.take().unwrap().write_all(stdin).unwrap();
+    // a command that never reads stdin may exit before the write lands
+    match child.stdin.take().unwrap().write_all(stdin) {
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {}
+        written => written.unwrap(),
+    }
     let out = child.wait_with_output().unwrap();
     Out {
         stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
