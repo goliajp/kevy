@@ -25,6 +25,7 @@ mod describe_view;
 mod partition;
 #[cfg(test)]
 mod partition_tests;
+mod placement;
 mod rowvalues;
 mod segcold;
 mod segment;
@@ -56,6 +57,7 @@ pub use describe::{
     owner_of, table_declaration, table_declaration_partitioned, view_declaration,
 };
 pub use partition::{Partitioning, partition_owner, splits_from_sample};
+pub use placement::PlacementTable;
 pub use segcold::{
     ColdBloom, WindowAudit, WindowShape, decode_seg_key, decode_seg_values, encode_seg_values,
     seg_bounds, seg_key, value_order_bytes, window_bound, window_value_of,
