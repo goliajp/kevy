@@ -3,19 +3,17 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+mod advanced_config;
 mod cmd_matrix;
 mod commands;
+mod config_set;
 mod geo;
-mod rename;
+mod hash_ttl_e2e;
+mod keyspace_notify;
 mod randomkey_is_random;
+mod rename;
 mod scan_is_incremental;
+mod skeleton;
 mod spop_is_random;
 mod srandmember_repeats;
 mod zrank_scales;
-mod hash_ttl_e2e;
-mod keyspace_notify;
-mod config_set;
-mod advanced_config;
-mod client_setname_persistence;
-mod skeleton;
-mod port_claim;
