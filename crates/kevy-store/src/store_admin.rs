@@ -2,8 +2,8 @@
 //! and eviction entrypoints, and the WATCH version ledger. Split from
 //! `lib.rs` to keep that file under the 500-LOC house rule.
 
-use crate::{Entry, ENTRY_OVERHEAD, EvictionPolicy, Store, StoreError, evict, now_ns};
 use crate::value::SmallBytes;
+use crate::{ENTRY_OVERHEAD, Entry, EvictionPolicy, Store, StoreError, evict, now_ns};
 use kevy_map::KevyMap;
 
 /// A store's entries, moved out for teardown. It holds memory only — no
