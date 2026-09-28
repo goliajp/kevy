@@ -39,6 +39,11 @@ pub(super) const SERVER_ONLY: &[&[u8]] = &[
 
 /// One single-key command; `false` = the verb is not served here.
 pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>) -> bool {
+    // an internal record verb is applied from a record, never from here
+    if up == kevy_resp::ops_table::CONSUMER_SEEN.as_bytes() {
+        kevy_resp::encode_error(out, kevy_verbs::aof::INTERNAL_REFUSAL);
+        return true;
+    }
     let Some(v) = kevy_verbs::verb(up) else {
         return false;
     };

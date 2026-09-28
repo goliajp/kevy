@@ -16,11 +16,13 @@
 //! recorded. A read of history (an explicit ID) changes no pending entry
 //! and moves nothing.
 //!
-//! Every read, of any form and whatever it finds, is the consumer's
-//! latest contact with the group, and creates the consumer if missing. So
-//! each stream's frames start with `XGROUP CREATECONSUMER key group
-//! consumer TIME t`, `t` that contact: the frames after it find the
-//! consumer and leave its time be.
+//! A read is the consumer's latest contact with the group, and creates the
+//! consumer if missing. A stream the read delivered from, or made the
+//! consumer on, has its frames start with `XINTERNAL.CONSUMERSEEN key group
+//! consumer t`, `t` that contact: the frames after it find the consumer
+//! and leave its time be. A read that delivered nothing and made no
+//! consumer is not recorded at all, so a consumer that only polls comes
+//! back from a restart with the contact of its last recorded read.
 
 use std::ops::Bound;
 
@@ -31,19 +33,19 @@ use crate::record::{seen_frame, taken_frames};
 
 /// The frames for an `XREADGROUP` `args` just run, `marks` holding, per
 /// stream in `STREAMS` order, the group's last-delivered ID before the
-/// read.
+/// read and whether the read created the consumer.
 pub(crate) fn read_frames<A: ArgvView + ?Sized>(
     store: &Store,
     args: &A,
-    marks: &[StreamId],
+    marks: &[(StreamId, bool)],
 ) -> Vec<Argv> {
     let Some(shape) = Shape::of(args) else { return Vec::new() };
     let (group, consumer) = (&args[2], &args[3]);
     let mut frames = Vec::new();
-    for (k, prev) in marks.iter().enumerate().take(shape.streams) {
+    for (k, (prev, made)) in marks.iter().enumerate().take(shape.streams) {
         let key = &args[shape.keys + k];
-        frames.extend(seen_frame(store, key, group, consumer));
         let mut claims = Vec::new();
+        let mut moved = None;
         if &args[shape.keys + shape.streams + k] == b">"
             && let Some(g) = store.stream_group_peek(key, group)
             && g.last_delivered_id != *prev
@@ -58,8 +60,12 @@ pub(crate) fn read_frames<A: ArgvView + ?Sized>(
             for part in [&b"XGROUP"[..], b"SETID", key, group, &last.encode()] {
                 setid.push(part);
             }
-            frames.push(setid);
+            moved = Some(setid);
         }
+        if moved.is_some() || *made {
+            frames.extend(seen_frame(store, key, group, consumer));
+        }
+        frames.extend(moved);
         frames.extend(claims);
     }
     frames

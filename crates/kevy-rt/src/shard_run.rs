@@ -39,6 +39,7 @@ pub(crate) fn replay_dispatch<C: Commands, A: ArgvView + ?Sized>(
     store: &mut kevy_store::Store,
     args: &A,
 ) {
+    let _replaying = crate::replication_gate::RecordApplyGuard::enter();
     commands.dispatch(store, args);
     crate::propagation::discard_override();
 }

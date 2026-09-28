@@ -242,6 +242,8 @@ const CORPUS: &[&str] = &[
     "GEORADIUS g 15 37 200 km ASC WITHCOORD",
     "GEORADIUSBYMEMBER g Palermo 200 km STORE gr",
     "ZRANGE gr 0 -1 WITHSCORES",
+    // the internal record verb: both refuse it from a caller, in one wording
+    "XINTERNAL.CONSUMERSEEN st g c 1",
     "TYPE q",
     "FLUSHALL",
     "DBSIZE",

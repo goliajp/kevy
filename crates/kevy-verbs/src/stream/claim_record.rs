@@ -47,34 +47,47 @@ impl Before {
 }
 
 /// What an `XREADGROUP` needs to know about each stream it reads, taken
-/// before the read: the group's last-delivered ID. One stream is kept
-/// inline, so the common read notes its mark without a heap allocation.
+/// before the read: the group's last-delivered ID and whether the consumer
+/// is new. One stream is kept inline, so the common read notes its marks
+/// without a heap allocation.
 #[derive(Default)]
 pub(super) struct ReadMarks {
-    first: Option<StreamId>,
-    more: Vec<StreamId>,
+    first: Option<(StreamId, bool)>,
+    more: Vec<(StreamId, bool)>,
+    changed: bool,
 }
 
 impl ReadMarks {
     /// The mark for one stream, read without side effects.
-    pub(super) fn read(store: &Store, key: &[u8], group: &[u8]) -> StreamId {
-        store.stream_group_peek(key, group).map_or(StreamId::MIN, |g| g.last_delivered_id)
+    pub(super) fn read(
+        store: &Store,
+        key: &[u8],
+        group: &[u8],
+        consumer: &[u8],
+    ) -> (StreamId, bool) {
+        match store.stream_group_peek(key, group) {
+            Some(g) => (g.last_delivered_id, g.consumers.get(consumer).is_none()),
+            None => (StreamId::MIN, false),
+        }
     }
 
-    /// Note a stream's mark.
-    pub(super) fn push(&mut self, mark: StreamId) {
+    /// Note a stream's mark and whether the read delivered from it.
+    pub(super) fn push(&mut self, mark: (StreamId, bool), delivered: bool) {
+        self.changed |= delivered || mark.1;
         match self.first {
             None => self.first = Some(mark),
             Some(_) => self.more.push(mark),
         }
     }
 
-    /// The effect of the read. Every read that ran is the consumer's
-    /// latest contact with the group, so there is always one to record.
+    /// The effect of the read: nothing to record when it delivered
+    /// nothing and created no consumer. Its contact with the group is
+    /// then not recorded either: a consumer that only polls comes back
+    /// from a restart with the contact of its last recorded read.
     pub(super) fn effect(self) -> Effect {
-        let Some(first) = self.first else { return Effect::Skip };
+        let Some(first) = self.first.filter(|_| self.changed) else { return Effect::Skip };
         if self.more.is_empty() {
-            return Effect::RecordRead(first);
+            return Effect::RecordRead(first.0, first.1);
         }
         let mut all = Vec::with_capacity(1 + self.more.len());
         all.push(first);

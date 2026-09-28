@@ -33,6 +33,7 @@
 //! assert_eq!(&frames[0][2], b"5-1");
 //! ```
 
+use kevy_resp::ops_table::CONSUMER_SEEN;
 use kevy_resp::{Argv, ArgvView};
 use kevy_store::{Store, StreamId};
 
@@ -122,7 +123,9 @@ pub fn deferred_frames<A: ArgvView + ?Sized>(
         }
         Effect::RecordClaim(c) => claim_frames(store, args, c),
         Effect::RecordSeen => seen_frame(store, &args[2], &args[3], &args[4]).into_iter().collect(),
-        Effect::RecordRead(prev) => crate::record_read::read_frames(store, args, &[*prev]),
+        Effect::RecordRead(prev, made) => {
+            crate::record_read::read_frames(store, args, &[(*prev, *made)])
+        }
         Effect::RecordReads(marks) => crate::record_read::read_frames(store, args, marks),
         _ => Vec::new(),
     }
@@ -161,18 +164,64 @@ pub(crate) fn claim_head(
     f
 }
 
-/// `XGROUP CREATECONSUMER key group consumer TIME t`, `t` the consumer's
-/// last contact with the group as it stands now: replayed, the consumer
-/// exists with that time, whatever the replay's clock says. `None` when
-/// the group or the consumer is gone.
+/// `XINTERNAL.CONSUMERSEEN key group consumer t`, `t` the consumer's last
+/// contact with the group as it stands now: replayed, the consumer exists
+/// with that time, whatever the replay's clock says. `None` when the group
+/// or the consumer is gone.
 pub(crate) fn seen_frame(store: &Store, key: &[u8], group: &[u8], consumer: &[u8]) -> Option<Argv> {
     let seen = store.stream_group_peek(key, group)?.consumers.get(consumer)?.last_seen_ms();
-    let mut f = Argv::with_capacity(7, 0);
-    for part in [&b"XGROUP"[..], b"CREATECONSUMER", key, group, consumer, b"TIME"] {
+    let mut f = Argv::with_capacity(5, 0);
+    for part in [CONSUMER_SEEN.as_bytes(), key, group, consumer] {
         f.push(part);
     }
     f.push(seen.to_string().as_bytes());
     Some(f)
+}
+
+/// The refusal a client gets for sending an internal record verb.
+///
+/// ```
+/// assert!(kevy_verbs::aof::INTERNAL_REFUSAL.starts_with("ERR "));
+/// ```
+pub const INTERNAL_REFUSAL: &str = "ERR XINTERNAL.CONSUMERSEEN is written by kevy to its own records and is not accepted from a client";
+
+/// Apply an internal record frame, one kevy writes and no client may send
+/// (see [`kevy_resp::ops_table::CONSUMER_SEEN`]), appending its reply to
+/// `out`. `false` = `args` is not an internal record frame; `out` is
+/// untouched. Only a caller applying a record — a replay, a replica —
+/// calls this; a client's command goes through [`crate::exec`], which does
+/// not answer these verbs.
+///
+/// ```
+/// if kevy_verbs::verb(b"XGROUP").is_none() {
+///     return; // built without the `streams-geo` feature
+/// }
+/// let mut store = kevy_store::Store::new();
+/// let argv = |s: &str| kevy_resp::Argv::from(s.split(' ').map(|p| p.as_bytes().to_vec()).collect::<Vec<_>>());
+/// let mut out = Vec::new();
+/// kevy_verbs::exec(&mut store, b"XGROUP", &argv("XGROUP CREATE s g $ MKSTREAM"), &mut out);
+/// out.clear();
+/// assert!(kevy_verbs::aof::apply_internal(&mut store, &argv("XINTERNAL.CONSUMERSEEN s g c 40"), &mut out));
+/// assert_eq!(out, b":1\r\n", "the consumer was made, seen at 40");
+/// assert!(!kevy_verbs::aof::apply_internal(&mut store, &argv("GET s"), &mut out));
+/// ```
+pub fn apply_internal<A: ArgvView + ?Sized>(
+    store: &mut Store,
+    args: &A,
+    out: &mut Vec<u8>,
+) -> bool {
+    if !args.get(0).is_some_and(|v| v.eq_ignore_ascii_case(CONSUMER_SEEN.as_bytes())) {
+        return false;
+    }
+    let Some(seen) = (args.len() == 5).then(|| crate::args::arg_u64(&args[4])).flatten() else {
+        kevy_resp::encode_error(out, "ERR malformed internal consumer record");
+        return true;
+    };
+    match store.xgroup_consumer_seen(&args[1], &args[2], &args[3], seen) {
+        Ok(made) => kevy_resp::encode_integer(out, i64::from(made)),
+        Err(e) => crate::reply::store_err(out, e),
+    }
+    true
 }
 
 /// One `XCLAIM … TIME t RETRYCOUNT n FORCE JUSTID` per `(delivery time,

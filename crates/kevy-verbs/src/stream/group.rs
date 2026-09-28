@@ -100,46 +100,31 @@ fn xgroup_setid<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec
     }
 }
 
-/// `XGROUP CREATECONSUMER key group consumer [TIME unix-ms]`. `TIME` sets
-/// the consumer's last contact with the group, created or not: it is how
-/// a record of that contact replays, the way `XCLAIM … TIME` replays a
-/// delivery. Without it a consumer this creates is recorded with the time
-/// it was created at.
+/// `XGROUP CREATECONSUMER key group consumer`. A consumer this creates
+/// is recorded with the time it was created at ([`Effect::RecordSeen`]).
 fn xgroup_create_consumer<A: ArgvView + ?Sized>(
     store: &mut Store,
     args: &A,
     out: &mut Vec<u8>,
 ) -> Effect {
-    let (key, group, consumer) = match args.len() {
-        5 | 7 => (&args[2], &args[3], &args[4]),
-        _ => {
-            wrong_args(out, "xgroup|createconsumer");
-            return Effect::Write;
-        }
-    };
-    let created = if args.len() == 7 {
-        if !args[5].eq_ignore_ascii_case(b"TIME") {
-            encode_error(out, "ERR syntax error");
-            return Effect::Write;
-        }
-        let Some(at) = crate::args::arg_u64(&args[6]) else {
-            encode_error(out, "ERR value is not an integer or out of range");
-            return Effect::Write;
-        };
-        store.xgroup_consumer_seen(key, group, consumer, at)
-    } else {
-        store.xgroup_create_consumer(key, group, consumer, now_unix_ms())
-    };
-    let effect = match (args.len(), &created) {
-        (5, Ok(true)) => Effect::RecordSeen,
-        (5, Ok(false)) => Effect::Unchanged,
-        _ => Effect::Write,
-    };
-    match created {
-        Ok(made) => encode_integer(out, i64::from(made)),
-        Err(e) => store_err(out, e),
+    if args.len() != 5 {
+        wrong_args(out, "xgroup|createconsumer");
+        return Effect::Write;
     }
-    effect
+    match store.xgroup_create_consumer(&args[2], &args[3], &args[4], now_unix_ms()) {
+        Ok(true) => {
+            encode_integer(out, 1);
+            Effect::RecordSeen
+        }
+        Ok(false) => {
+            encode_integer(out, 0);
+            Effect::Unchanged
+        }
+        Err(e) => {
+            store_err(out, e);
+            Effect::Write
+        }
+    }
 }
 
 fn xgroup_del_consumer<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
@@ -187,11 +172,12 @@ pub(super) fn cmd_xreadgroup<A: ArgvView + ?Sized>(
     let streams = std::mem::take(&mut parsed.streams);
     let mut marks = ReadMarks::default();
     for (key, last_seen_arg) in streams {
-        let mark = ReadMarks::read(store, &key, &parsed.group);
+        let mark = ReadMarks::read(store, &key, &parsed.group, &parsed.consumer);
         let Ok(entries) = xreadgroup_one_stream(store, &parsed, &key, &last_seen_arg, out) else {
             return Effect::Write;
         };
-        marks.push(mark);
+        // a read of history re-sends pending entries; it delivers nothing new
+        marks.push(mark, !entries.is_empty() && last_seen_arg == b">");
         if !entries.is_empty() {
             reply.push((key, entries));
         }

@@ -20,6 +20,15 @@ fn frame(f: &[Vec<u8>]) -> String {
     f.iter().map(|p| String::from_utf8_lossy(p)).collect::<Vec<_>>().join(" ")
 }
 
+/// Apply one recorded frame the way a replay does: an internal record
+/// frame by [`crate::aof::apply_internal`], anything else by `exec`.
+fn replay(store: &mut Store, frame: &str) {
+    let mut out = Vec::new();
+    if !crate::aof::apply_internal(store, &argv(frame), &mut out) {
+        run(store, frame);
+    }
+}
+
 /// Every frame the effect of `cmd` records, as text; the argv itself for
 /// a write. Built right after the command, as a recording caller does.
 fn records(store: &mut Store, cmd: &str, e: Option<Effect>) -> Vec<String> {
@@ -88,7 +97,7 @@ fn claim_records_replay_to_the_same_pending_list() {
         let (e, _) = run(&mut live, c);
         let rec = records(&mut live, c, e);
         let ours = |f: &String| {
-            f.starts_with("XCLAIM s g ") || f.starts_with("XGROUP CREATECONSUMER s g ")
+            f.starts_with("XCLAIM s g ") || f.starts_with("XINTERNAL.CONSUMERSEEN s g ")
         };
         assert!(!rec.is_empty() && rec.iter().all(ours), "{rec:?}");
         log.extend(rec);
@@ -97,7 +106,7 @@ fn claim_records_replay_to_the_same_pending_list() {
     std::thread::sleep(std::time::Duration::from_millis(5));
     let mut replayed = Store::new();
     for f in &log {
-        run(&mut replayed, f);
+        replay(&mut replayed, f);
     }
     let read = "XPENDING s g - + 10";
     let blank = |s: String| {
@@ -191,7 +200,7 @@ fn a_read_of_several_streams_replays_stream_by_stream() {
     std::thread::sleep(std::time::Duration::from_millis(5));
     let mut replayed = Store::new();
     for f in &log {
-        run(&mut replayed, f);
+        replay(&mut replayed, f);
     }
     for (key, group) in [(&b"a"[..], &b"g"[..]), (b"b", b"g"), (b"a", b"n"), (b"b", b"n")] {
         let want = group_rows(&live, key, group);
@@ -255,7 +264,7 @@ fn read_records_replay_to_the_same_group() {
     std::thread::sleep(std::time::Duration::from_millis(5));
     let mut replayed = Store::new();
     for f in &log {
-        run(&mut replayed, f);
+        replay(&mut replayed, f);
     }
     assert_eq!(pel(&mut replayed), pel(&mut live), "{log:#?}");
     let owners: Vec<Vec<u8>> = pel(&mut live).into_iter().map(|r| r.1).collect();
@@ -270,6 +279,41 @@ fn read_records_replay_to_the_same_group() {
     }
 }
 
+/// A read that delivers nothing and makes no consumer is not recorded,
+/// its contact with the group included: a consumer that only polls comes
+/// back from a restart with the contact of its last recorded read. A read
+/// that makes its consumer is recorded as that consumer's contact alone.
+#[test]
+fn an_empty_read_records_nothing() {
+    let mut s = Store::new();
+    for c in ["XADD s 1-1 a 1", "XGROUP CREATE s g 0", "XREADGROUP GROUP g a STREAMS s >"] {
+        run(&mut s, c);
+    }
+    for poll in ["XREADGROUP GROUP g a STREAMS s >", "XREADGROUP GROUP g a STREAMS s 0"] {
+        let (e, _) = run(&mut s, poll);
+        assert_eq!(e, Some(Effect::Skip), "{poll}");
+    }
+    let history = "XREADGROUP GROUP g newbie STREAMS s 0";
+    let (e, _) = run(&mut s, history);
+    let rec = records(&mut s, history, e);
+    assert_eq!(rec.len(), 1, "{rec:?}");
+    assert!(rec[0].starts_with("XINTERNAL.CONSUMERSEEN s g newbie "), "{rec:?}");
+}
+
+/// A client cannot send the internal record verb through `exec`: it is
+/// not a verb `exec` answers.
+#[test]
+fn the_internal_record_verb_is_not_a_client_verb() {
+    let mut s = Store::new();
+    run(&mut s, "XGROUP CREATE s g $ MKSTREAM");
+    assert_eq!(run(&mut s, "XINTERNAL.CONSUMERSEEN s g c 40").0, None);
+    let mut out = Vec::new();
+    let malformed = argv("XINTERNAL.CONSUMERSEEN s g c soon");
+    assert!(crate::aof::apply_internal(&mut s, &malformed, &mut out));
+    assert!(out.starts_with(b"-ERR"), "{}", String::from_utf8_lossy(&out));
+    assert!(consumers(&s, b"s", b"g").is_empty(), "a malformed record made a consumer");
+}
+
 #[test]
 fn a_claim_that_changes_nothing_records_nothing() {
     let mut s = Store::new();
@@ -280,7 +324,7 @@ fn a_claim_that_changes_nothing_records_nothing() {
     let (e, _) = run(&mut s, "XAUTOCLAIM s g idle 999999 0");
     let rec = records(&mut s, "XAUTOCLAIM s g idle 999999 0", e);
     assert_eq!(rec.len(), 1, "{rec:?}");
-    assert!(rec[0].starts_with("XGROUP CREATECONSUMER s g idle TIME "), "{rec:?}");
+    assert!(rec[0].starts_with("XINTERNAL.CONSUMERSEEN s g idle "), "{rec:?}");
     let (e, _) = run(&mut s, "XAUTOCLAIM s g idle 999999 0");
     assert_eq!(e, Some(Effect::Skip));
     let (e, _) = run(&mut s, "XCLAIM s g a 999999 1-1");

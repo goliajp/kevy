@@ -103,15 +103,14 @@ pub(crate) fn apply_for_test(store: &mut Store, args: &Argv) {
                     .xgroup_create(&args[2], &args[3], kevy_store::GroupCreateMode::AtId(at), true)
                     .unwrap();
             }
-            b"CREATECONSUMER" => {
-                assert_eq!(args[5].to_ascii_uppercase(), b"TIME");
-                let seen = std::str::from_utf8(&args[6]).unwrap().parse().unwrap();
-                store.xgroup_consumer_seen(&args[2], &args[3], &args[4], seen).unwrap();
-            }
             other => {
                 panic!("unexpected XGROUP sub in AOF rewrite: {:?}", String::from_utf8_lossy(other))
             }
         },
+        b"XINTERNAL.CONSUMERSEEN" => {
+            let seen = std::str::from_utf8(&args[4]).unwrap().parse().unwrap();
+            store.xgroup_consumer_seen(&args[1], &args[2], &args[3], seen).unwrap();
+        }
         b"XCLAIM" => {
             // Fixed rewrite shape:
             // XCLAIM key g consumer 0 id TIME t RETRYCOUNT n FORCE JUSTID

@@ -93,6 +93,19 @@ const WR: bool = true; // write
 const GROW: bool = true;
 const NG: bool = false; // non-growing
 
+/// The internal record verb that carries a stream consumer's last contact
+/// with its group: `XINTERNAL.CONSUMERSEEN key group consumer unix-ms`.
+/// kevy writes it to the AOF, the replication stream and the feed, and
+/// applies it on replay and on a replica; a client that sends it is
+/// refused. It is not a Redis command and is not documented as one.
+///
+/// ```
+/// use kevy_resp::ops_table::{CONSUMER_SEEN, spec, surface};
+/// let row = spec(CONSUMER_SEEN).unwrap();
+/// assert!(row.write && row.surfaces == surface::REPLAY, "applied, never served");
+/// ```
+pub const CONSUMER_SEEN: &str = "XINTERNAL.CONSUMERSEEN";
+
 /// The registry. One row per command. Kept grouped by type family and
 /// alphabetical inside each group so a missing row is easy to spot.
 #[rustfmt::skip]
@@ -230,6 +243,8 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("XREVRANGE",    RD, NG,   None,            None,    SERVER),
     op("XSETID",       WR, NG,   Some(N::Stream), None,    SERVER | REPLAY | REWRITE),
     op("XTRIM",        WR, NG,   Some(N::Stream), None,    SERVER | REPLAY),
+    // internal: applied from a record, refused from a client
+    op(CONSUMER_SEEN,  WR, NG,   None,            None,    REPLAY),
     // ---- geo (zset-backed; embedded replay as streams) ----------------
     op("GEOADD",       WR, GROW, Some(N::Zset),   None,    SERVER | REPLAY),
     op("GEODIST",      RD, NG,   None,            None,    SERVER),

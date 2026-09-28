@@ -420,9 +420,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `XDEL key id [id ...]` [write] — Delete entries from a stream by ID.
   - complexity: O(D log N + N*F) for D ids — NOT O(1): the trailing weight recompute is linear in the whole stream
   - compat: full
-- `XGROUP CREATE key group id|$ [MKSTREAM] | DESTROY key group | SETID key group id|$ | CREATECONSUMER key group consumer [TIME unix-time-milliseconds] | DELCONSUMER key group consumer` [write] — Manage stream consumer groups.
+- `XGROUP CREATE key group id|$ [MKSTREAM] | DESTROY key group | SETID key group id|$ | CREATECONSUMER key group consumer | DELCONSUMER key group consumer` [write] — Manage stream consumer groups.
   - complexity: CREATE / DESTROY: O(1) plus an O(N*F) reweigh. SETID / CREATECONSUMER: O(1). DELCONSUMER: O(P)
-  - compat: differs: CREATE / SETID / DESTROY / CREATECONSUMER / DELCONSUMER / MKSTREAM are supported, but on a missing key the non-CREATE subcommands return 0 or NOGROUP instead of Redis's error, and XGROUP HELP is absent; CREATECONSUMER also takes TIME, which sets the consumer's last contact with the group (how that contact is recorded to the AOF and to replicas)
+  - compat: differs: CREATE / SETID / DESTROY / CREATECONSUMER / DELCONSUMER / MKSTREAM are supported, but on a missing key the non-CREATE subcommands return 0 or NOGROUP instead of Redis's error, and XGROUP HELP is absent
 - `XINFO STREAM key | GROUPS key | CONSUMERS key group | HELP` [readonly] — Introspect a stream, its groups, or its consumers.
   - complexity: STREAM: O(1). GROUPS: O(G*N) — 'lag' is a linear walk of every entry, once per group. CONSUMERS: O(C)
   - compat: differs: STREAM / GROUPS / CONSUMERS / HELP only — XINFO STREAM FULL is absent; radix-tree-keys and nodes are synthetic (we have no radix tree), entries-read is approximated, and CONSUMERS omits 'inactive'
