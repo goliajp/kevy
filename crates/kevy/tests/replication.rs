@@ -1095,11 +1095,19 @@ fn multi_shard_listener_binds_per_shard_port() {
     // With nshards=3 each shard binds replication_base + i. Connect to
     // each independently and run a handshake; all should ACK.
     let server = Server::start(3);
-    for i in 0..server.nshards {
-        let port = server.replication_base + i as u16;
-        let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
-        s.write_all(&replicate_from(live_generation(port), "0", &format!("replica-{i}"))).unwrap();
-        let reply = read_to_eof(&mut s);
+    // the shards are read side by side: each read watches its socket for
+    // the same three seconds, and three in a row cost nine
+    let conns: Vec<_> = (0..server.nshards)
+        .map(|i| {
+            let port = server.replication_base + i as u16;
+            let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+            s.write_all(&replicate_from(live_generation(port), "0", &format!("replica-{i}")))
+                .unwrap();
+            std::thread::spawn(move || read_to_eof(&mut s))
+        })
+        .collect();
+    for c in conns {
+        let reply = c.join().unwrap();
         let (_, ack_off, rest) = parse_ack(&reply);
         assert_eq!(ack_off, 0);
         let ack_len = reply.len() - rest.len();
