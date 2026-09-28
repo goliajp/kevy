@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **Writes made after a crash inside a transaction survive the next
+  restart.** A process that died between a transaction's begin and commit
+  markers — an embedded `atomic()` block, a server `MULTI`/`EXEC`, a batch
+  of pipelined writes — could leave the begin marker and part of the
+  transaction in the AOF. Replay rightly dropped that part, but the open
+  kept it in the log, so the next session appended after an open begin
+  marker; at the restart after that, replay read every one of those writes
+  as part of the unfinished transaction and dropped them too, up to the
+  next transaction. The open now cuts the unfinished transaction off the
+  log (it is kept aside in the quarantine file, as a torn tail is) before
+  anything new is appended. Affected since 4.0.0.
+
 - **Closing an embedded store returns at once.** Closing joins the
   background reaper thread, which slept out its tick without looking at
   the stop signal, so every close waited up to the reaper interval
