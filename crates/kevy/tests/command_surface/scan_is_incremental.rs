@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// Serialize server startup across this binary's parallel tests (see
-/// `tests/sharded.rs` for the SO_REUSEPORT race rationale).
+/// `tests/clusters/sharded.rs` for the SO_REUSEPORT race rationale).
 static START_GATE: Mutex<()> = Mutex::new(());
 
 use kevy_testnet::free_port;

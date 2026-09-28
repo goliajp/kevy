@@ -169,6 +169,20 @@ pub fn assert_listening(port: u16, what: &str) {
     assert_listening_within(port, what, Duration::from_secs(10));
 }
 
+/// `base` scaled by `KEVY_TEST_PATIENCE` (1 when unset), for waits on
+/// background work: an instrumented or heavily loaded run is slower by a
+/// factor, and a fixed budget that holds on a quiet box fails there.
+///
+/// ```
+/// let d = kevy_testnet::patience(std::time::Duration::from_secs(4));
+/// assert!(d >= std::time::Duration::from_secs(4) || std::env::var("KEVY_TEST_PATIENCE").is_ok());
+/// ```
+pub fn patience(base: Duration) -> Duration {
+    let factor: f64 =
+        std::env::var("KEVY_TEST_PATIENCE").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0);
+    base.mul_f64(factor)
+}
+
 /// [`assert_listening`] with a caller-chosen budget.
 ///
 /// ```should_panic

@@ -25,7 +25,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-mod common;
+use super::common;
 
 static START_GATE: Mutex<()> = Mutex::new(());
 
@@ -48,7 +48,7 @@ impl Server {
     /// One shard, on purpose — see the module docs.
     fn start_single_shard() -> Self {
         let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let port = kevy_testnet::free_port();
         let dir = std::env::temp_dir().join(format!(
             "kevy-diffwire-{}",
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
