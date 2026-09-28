@@ -38,6 +38,20 @@ they are in [§9](#9-defects-fixed-that-lost-data).
 
 ---
 
+## What carries over
+
+Measured against the 6.4.0 release binary:
+
+- **Mixed-version replication.** A 6.4.0 primary with a 7.0.0 replica
+  converges, and so does a 7.0.0 primary with a 6.4.0 replica, so a
+  rolling upgrade can take the replicas first or the primary first.
+- **The data directory, both ways.** A directory 6.4.0 wrote opens under
+  7.0.0, and after 7.0.0 has written to it, opens again under 6.4.0 with
+  both generations intact: strings (including values large enough for the
+  value log), hashes, lists, sets, sorted sets and TTLs. §1 lists the three
+  exceptions.
+- **A backup is a copy.** A copied directory serves what the original did.
+
 ## 1. Going back to 6.4: what the directory may hold
 
 A killed process used to lose the writes still waiting in a user-space
@@ -55,7 +69,10 @@ append returns:
   the directory itself, or in a copy of it taken after the kill, as a
   backup is.
 
-6.4 knows neither. After a crash or a kill, open the directory once with
+6.4 knows neither. Given a directory straight after a kill, it loses what
+was still in the ring; on Apple platforms it keeps every write but reports
+the zeros as a corrupt tail and sets them aside in a quarantine file. So
+after a crash or a kill, open the directory once with
 7.0 and close it cleanly before going back to 6.4: that drains the ring
 and truncates the tail, and leaves files 6.4 reads as it always did.
 `Config::with_stage_ring(0)` and `Config::with_mapped_aof(false)` turn the
