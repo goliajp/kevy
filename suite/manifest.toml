@@ -1315,4 +1315,4 @@ cmd = "bash bench/mirigate.sh"
 expected = 338
 timeout = 3600
 requires = ["nightly miri"]
-proves = "the unsafe stones run clean under miri: map and bytes slots, the SPSC ring, the zset encoding"
+proves = "the unsafe stones run clean under miri: map and bytes slots, the SPSC ring, the zset encoding, the index row"

@@ -149,11 +149,12 @@ fn measure(rows: &Rows) -> Held {
 }
 
 /// The ceiling one row may cost, from the layout rather than a fitted
-/// constant: a shared entry (two reference counts, the value, a boxed
-/// key), the key and value bytes, one pointer slot in the ordered tree,
-/// and one pointer slot plus a control byte in the reverse set.
+/// constant: one allocation holding a 32-bit count, the key's 32-bit
+/// length, the value and the key's bytes, padded to 8; any string value's
+/// bytes; one pointer slot in the ordered tree; and one pointer slot plus a
+/// control byte in the reverse set.
 fn ceiling(rows: &Rows) -> f64 {
-    let entry = (2 * size_of::<usize>() + size_of::<IndexValue>() + size_of::<Box<[u8]>>()) as f64;
+    let entry = (2 * size_of::<u32>() + size_of::<IndexValue>() + 7) as f64;
     let ptr = size_of::<usize>() as f64;
     // every B-tree node but the root fills at least 5 of its 11 slots; a
     // leaf is the slots behind a 16-byte header, an internal node adds 12
@@ -194,14 +195,15 @@ fn check(label: &str, rows: &Rows, max_allocs: f64) {
 #[test]
 fn a_scalar_row_is_one_entry_and_one_key() {
     for n in [FULL, JUST_GROWN] {
-        check("i64, short key", &scalar_rows(n, false), 2.2);
-        check("i64, long key", &scalar_rows(n, true), 2.2);
+        // the row, and the tree's and table's share of their nodes
+        check("i64, short key", &scalar_rows(n, false), 1.2);
+        check("i64, long key", &scalar_rows(n, true), 1.2);
     }
 }
 
 #[test]
 fn a_composite_row_holds_its_value_once() {
     for n in [FULL, JUST_GROWN] {
-        check("composite", &composite_rows(n), 3.2);
+        check("composite", &composite_rows(n), 2.2);
     }
 }

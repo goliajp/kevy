@@ -217,10 +217,11 @@ TABLE.DECLARE user PREFIX user: PK id COLUMN id i64 COLUMN age i64 INDEX age ran
 - An **empty catalog costs one untaken branch per write** (a Relaxed
   atomic load). With indexes declared, a write in an indexed domain
   pays one hash-field read + one B-tree update per matching index.
-- Memory per index ≈ `rows × (avg_key_len + string_value_len + 82…93)`
-  bytes of heap: a 56-byte row shared by both lookup directions, about
-  16 bytes of ordered-tree slot, and 10–21 bytes of hash-table slot
-  (`string_value_len` is 0 for `i64` / `f64`). The table grows by
+- Memory per index ≈ `rows × (avg_key_len + string_value_len + 58…69)`
+  bytes of heap: one allocation per row shared by both lookup directions
+  — a 32-byte header with the key right behind it, rounded up to 8 bytes
+  — about 16 bytes of ordered-tree slot, and 10–21 bytes of hash-table
+  slot (`string_value_len` is 0 for `i64` / `f64`). The table grows by
   doubling, so where a row count falls between two growth steps moves
   the per-row figure inside that range; plan with the top of it. The
   allocator rounds small blocks up, so resident memory runs above the
