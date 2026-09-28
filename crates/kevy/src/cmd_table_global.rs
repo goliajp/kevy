@@ -1,8 +1,8 @@
 //! The `GLOBAL` paths of a `TABLE.DECLARE`: each compiled index the
 //! declaration names `GLOBAL` enters the catalog spread over the shards by
 //! value, with the split points written after `SPLIT AT` or, without them,
-//! sampled from this shard's rows — the same two ways `IDX.CREATE …
-//! PARTITION global` takes.
+//! taken from a sample of the rows (`crate::cmd_global_sample`) — the same
+//! two ways `IDX.CREATE … PARTITION global` takes.
 
 use crate::cmd_index_install::Sampler;
 use kevy_index::{Catalog, GlobalPath, IndexSpec, Partitioning, order_key, splits_from_sample};
