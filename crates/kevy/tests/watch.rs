@@ -467,8 +467,8 @@ fn watched_exec_quit_inside_multi_closes_after_drain() {
     read_reply(&mut c, b"*2\r\n+OK\r\n+OK\r\n");
     // The conn now closes — a subsequent read returns 0 bytes (EOF).
     let mut buf = [0u8; 32];
-    let n = c.read(&mut buf).unwrap_or(0);
-    assert_eq!(n, 0, "expected EOF after queued QUIT inside EXEC");
+    let got = c.read(&mut buf);
+    assert!(matches!(got, Ok(0)), "expected EOF after queued QUIT inside EXEC, got {got:?}");
 }
 
 #[test]
