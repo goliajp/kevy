@@ -10,6 +10,13 @@
 # on and off the client's sibling. Four threads on 0-3 with the client alone
 # on 5 leaves no core shared.
 N_HYBRID=${N_HYBRID:-20000}
+# Fresh servers per pass: the p95 moves by about 9% between instances of
+# one binary (230-273 µs, one build, a quiet box), so the verdict needs
+# more instances than the throughput angles and a wider band. Latency
+# lines are judged at reference / LAT_TOL, about +20%: a real regression
+# of that size is caught, instance scatter is not.
+HYBRID_PER_PASS=${HYBRID_PER_PASS:-2}
+LAT_TOL=${LAT_TOL:-0.83}
 
 hybrid_server_start() {
   SRV_CPUS=0-3 SRV_THREADS=4 server_start ""

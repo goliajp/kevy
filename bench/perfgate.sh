@@ -265,8 +265,10 @@ legacy_8sh_hset legacy_8sh_lpush legacy_8sh_zadd"
     fi
   fi
   if want_angle hybrid_p95_us; then
-    hybrid_server_start
-    sample "$who" hybrid_p95_us "$(run_hybrid)"
+    for _ in $(seq 1 "$HYBRID_PER_PASS"); do
+      hybrid_server_start
+      sample "$who" hybrid_p95_us "$(run_hybrid)"
+    done
   fi
   server_stop
 }
@@ -376,7 +378,7 @@ below_floor() { # $1 = metric -> 0 iff below
   else [ "$got" -lt "$(band "$1" "$ref")" ]; fi
 }
 band() { # $1 = metric, $2 = reference median -> the floor (or latency ceiling)
-  if [[ $1 == *_us ]]; then awk -v b="$2" -v t="$TOL" 'BEGIN{printf "%.0f", b/t}'
+  if [[ $1 == *_us ]]; then awk -v b="$2" -v t="$LAT_TOL" 'BEGIN{printf "%.0f", b/t}'
   else awk -v b="$2" -v t="$TOL" 'BEGIN{printf "%.0f", b*t}'; fi
 }
 
@@ -412,7 +414,7 @@ if [ -n "$FAILED_ANGLES" ]; then
 fi
 
 STATUS=0
-echo "perfgate: gate — candidate vs reference ${REF_SHA:0:12}, both measured just now (floor = reference x $TOL)"
+echo "perfgate: gate — candidate vs reference ${REF_SHA:0:12}, both measured just now (floor = reference x $TOL; latency ceiling = reference / $LAT_TOL)"
 for k in $METRICS; do
   if [ -n "${SKIPPED[$k]:-}" ]; then
     echo "  ~ $k: SKIPPED (no measurement body yet — baseline pending, recorded on lx64)"
