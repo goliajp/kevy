@@ -48,6 +48,9 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::{Duration, Instant};
 
+mod mock;
+pub use mock::read_request;
+
 /// Ports per process block. Wide enough that a test binary never wraps
 /// into a neighbour's block during one run.
 const BLOCK: u16 = 64;
@@ -160,9 +163,20 @@ pub fn wait_listening(port: u16, timeout: Duration) -> bool {
 /// surfaced later, somewhere else, as a connection refused or — worse —
 /// as an assertion about another server's data.
 pub fn assert_listening(port: u16, what: &str) {
-    if !wait_listening(port, Duration::from_secs(10)) {
+    assert_listening_within(port, what, Duration::from_secs(10));
+}
+
+/// [`assert_listening`] with a caller-chosen budget.
+///
+/// ```should_panic
+/// // nothing listens on a port this process just drew and never bound
+/// let port = kevy_testnet::free_port();
+/// kevy_testnet::assert_listening_within(port, "nobody", std::time::Duration::from_millis(50));
+/// ```
+pub fn assert_listening_within(port: u16, what: &str, budget: Duration) {
+    if !wait_listening(port, budget) {
         panic!(
-            "kevy-testnet: {what} never accepted on 127.0.0.1:{port} within 10s. \
+            "kevy-testnet: {what} never accepted on 127.0.0.1:{port} within {budget:?}. \
              Either it failed to start, or another process took the port between \
              free_port() handing it out and {what} binding it."
         );
