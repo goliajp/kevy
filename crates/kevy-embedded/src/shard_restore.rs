@@ -5,7 +5,7 @@
 use std::io;
 use std::path::Path;
 
-use kevy_persist::{layout, load_snapshot, replay_aof};
+use kevy_persist::{layout, load_snapshot};
 
 use crate::config::Config;
 use crate::metric::OpenReport;
@@ -57,9 +57,9 @@ fn replay_shard_aof(
     let segs_dir = layout::segs_dir(dir, i);
     #[cfg(not(target_arch = "wasm32"))]
     let mut torn: Option<String> = None;
-    let apply = |args: kevy_persist::Argv| {
+    let apply = |args: &mut kevy_persist::Argv| {
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(f) = kevy_persist::segmented_frame(&args) {
+        if let Some(f) = kevy_persist::segmented_frame(args) {
             // The SEGMENTED stitch: re-do the hot-layer eviction; a
             // manifest miss is a named refusal after the walk (the
             // rows' durable copy is unreachable).
@@ -68,7 +68,7 @@ fn replay_shard_aof(
             }
             return;
         }
-        crate::replay::apply(store, &args);
+        crate::replay::apply(store, args);
         frames += 1;
         if frames.is_multiple_of(kevy_persist::REPLAY_DEMOTE_INTERVAL) {
             store.demote_to_watermark();
@@ -78,13 +78,8 @@ fn replay_shard_aof(
     // (`KevyMetric`), so the informational stderr summary would be a
     // duplicate on every open — a real cost for per-command CLI
     // processes. The corrupt-frame WARN prints regardless.
-    let r = if config.metric_sink.is_some() {
-        kevy_persist::replay_aof_quiet(aof, config.replay_resync, apply)?
-    } else if config.replay_resync {
-        kevy_persist::replay_aof_resync(aof, apply)?
-    } else {
-        replay_aof(aof, apply)?
-    };
+    let quiet = config.metric_sink.is_some();
+    let r = kevy_persist::replay_aof_in_place(aof, config.replay_resync, quiet, apply)?;
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(e) = torn {
         return Err(io::Error::other(format!("shard {i}: {e}")));

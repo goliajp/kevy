@@ -75,7 +75,9 @@ pub use aof_sync::PendingSync;
 pub use aof_util::write_aof_base;
 pub use baseline::estimate_rewrite_size;
 pub use record::{AOF2_MAGIC, AofFormat, RecordStep, next_record, write_record_multibulk};
-pub use replay::{ReplayReport, replay_aof, replay_aof_quiet, replay_aof_resync};
+pub use replay::{
+    ReplayReport, replay_aof, replay_aof_in_place, replay_aof_quiet, replay_aof_resync,
+};
 pub use segmented::{SEGMENTED, segmented_argv, segmented_frame};
 
 /// How often bulk-load paths check the tiering demote watermark:

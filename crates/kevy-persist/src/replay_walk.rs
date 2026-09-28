@@ -77,7 +77,7 @@ fn outran(claimed: u32, available: usize) -> ReplayStop {
 pub(crate) fn walk_v2(
     r: &mut impl Read,
     start_pos: u64,
-    apply: &mut Option<&mut dyn FnMut(Argv)>,
+    apply: &mut Option<&mut dyn FnMut(&mut Argv)>,
 ) -> io::Result<V2Walk> {
     let mut w = V2Walk {
         txn: None,
@@ -89,6 +89,8 @@ pub(crate) fn walk_v2(
         preview_len: 0,
     };
     let mut payload: Vec<u8> = Vec::new();
+    // one argv for the whole walk: its buffers stay warm across frames
+    let mut args = Argv::default();
     w.stop = loop {
         let mut header = [0u8; 8];
         match read_fully(r, &mut header) {
@@ -114,7 +116,7 @@ pub(crate) fn walk_v2(
             w.preview_len = preview_of(&payload, &mut w.preview);
             break ReplayStop::CorruptFrame(String::from("record checksum mismatch"));
         }
-        if !apply_record(&payload, len, apply, &mut w) {
+        if !apply_record(&payload, len, &mut args, apply, &mut w) {
             break ReplayStop::CorruptFrame(String::from(
                 "checksummed record does not hold exactly one command",
             ));
@@ -128,12 +130,13 @@ pub(crate) fn walk_v2(
 pub(crate) fn apply_record(
     payload: &[u8],
     len: u32,
-    apply: &mut Option<&mut dyn FnMut(Argv)>,
+    args: &mut Argv,
+    apply: &mut Option<&mut dyn FnMut(&mut Argv)>,
     w: &mut V2Walk,
 ) -> bool {
-    match kevy_resp::parse_command(payload) {
-        Ok(Some((args, used))) if used == payload.len() => {
-            let marker = txn_marker(&args);
+    match kevy_resp::parse_command_into(payload, args) {
+        Ok(Some(used)) if used == payload.len() => {
+            let marker = txn_marker(args);
             match marker {
                 Some(TxnMarker::Begin) => {
                     // A begin inside a begin cannot happen from this
@@ -148,13 +151,13 @@ pub(crate) fn apply_record(
                     if let Some(buffered) = w.txn.take()
                         && let Some(f) = apply.as_deref_mut()
                     {
-                        for a in buffered {
-                            f(a);
+                        for mut a in buffered {
+                            f(&mut a);
                         }
                     }
                 }
                 None => match w.txn.as_mut() {
-                    Some(buf) => buf.push(args),
+                    Some(buf) => buf.push(std::mem::take(args)),
                     None => {
                         if let Some(f) = apply.as_deref_mut() {
                             f(args);
