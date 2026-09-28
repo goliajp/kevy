@@ -68,7 +68,7 @@ IDX.CREATE by_age ON PREFIX user: FIELD age TYPE i64 KIND range PARTITION global
 TABLE.DECLARE user PREFIX user: PK id COLUMN id i64 COLUMN age i64 INDEX age range GLOBAL SPLIT AT 30 60
 ```
 
-- **分裂点。** `SPLIT v`（每个点写一次，因为 `IDX.CREATE` 的选项成对出现）或 `GLOBAL SPLIT AT v…`，最多比 shard 数少一个。不写的话，每个 shard 各交一份自己行的样本（每个 shard 512 行，合起来每个分区 512 个），kevy 取分位点，最大分区和均值相差大约一成以内。在没有行的时候创建的索引只有一个分区，直到 `IDX.REBUILD` 重新采样。同一个值的条目都在同一个分区里，所以一个值占的行比它应得的份额多时，它无法被拆开。`ORDERPATH … GLOBAL` 总是采样。
+- **分裂点。** `SPLIT v`（每个点写一次，因为 `IDX.CREATE` 的选项成对出现）或 `GLOBAL SPLIT AT v…`，最多比 shard 数少一个。不写的话，每个 shard 各交一份自己行的样本（每个 shard 512 行，合起来每个分区 512 个），kevy 取分位点，最大分区和均值相差大约一成以内。在没有行的时候创建的索引只有一个分区，直到 `IDX.REBUILD` 重新采样。同一个值的条目都在同一个分区里，所以一个值占的行比它应得的份额多时，它无法被拆开。`ORDERPATH … GLOBAL` 采样，或者接受 `TABLE.DESCRIBE` 写出的那种 `SPLIT AT`：`0x` 加上这条路径的顺序编码字节，因为那里的一个点横跨好几列。
 - **读。** `EQ`，或者落在一个分区之内的 `RANGE`，只读一个 shard。按 `(value, key)` 顺序翻页时，依次走需要的分区，把各段直接拼接，不做 N 路归并。`IDX.COUNT` 和选择子句（`SORT`、`DISTINCT`、`FACET`、`OFFSET`）只发给范围覆盖到的分区。`IDX.EXPLAIN` 会写出是哪些。
 - **写。** 改变了行的条目的写入，给条目所在分区发一条消息（条目换分区时两条），客户端的回复等分区应用完才返回：回复之后发出的读一定能看到这次写入。
 - **`FIELDS` 取自 `VALUES`。** 分区持有的是条目，不是行，所以全局索引用它存下的列回答 `FIELDS`。没存的字段会被点名拒绝，`IDX.ADVISE` 会建议把它加进 `VALUES`。

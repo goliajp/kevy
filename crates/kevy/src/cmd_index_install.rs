@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use kevy_index::{IndexSpec, Partitioning, order_key, splits_from_sample};
+use kevy_index::{IndexSpec, Partitioning, parse_split_point, splits_from_sample};
 use kevy_resp::{ArgvView, encode_error};
 use kevy_store::Store;
 
@@ -96,7 +96,6 @@ fn partitioning(
     nshards: usize,
     out: &mut Vec<u8>,
 ) -> Result<Partitioning, ()> {
-    let ty = spec.ty;
     if p.global && p.split.is_empty() {
         let n = nshards.max(1);
         return Ok(Partitioning::Global { splits: splits_from_sample(sampler.sample(spec, n), n) });
@@ -114,7 +113,7 @@ fn partitioning(
     }
     let mut splits = Vec::with_capacity(p.split.len());
     for raw in &p.split {
-        let Some(enc) = order_key(ty, raw) else {
+        let Some(enc) = parse_split_point(spec, raw) else {
             encode_error(out, "ERR SPLIT value does not coerce to the index TYPE");
             return Err(());
         };

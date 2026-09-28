@@ -511,9 +511,21 @@ fn a_table_declares_its_paths_global_and_reads_the_declaration_back() {
     assert_eq!(run(&mut w, DECLARE.replacen("DECLARE", "ENSURE", 1).as_str()), "+UNCHANGED\r\n");
     let local = DECLARE.replace(" GLOBAL SPLIT AT 30 60", "");
     assert!(run(&mut w, &local.replacen("DECLARE", "ENSURE", 1)).contains("spread differently"));
+    assert!(table.contains("GLOBAL\r\n$5\r\nSPLIT\r\n$2\r\nAT\r\n$"), "orderpath splits: {table}");
+    assert!(table.matches("0x").count() >= 3, "the sampled orderpath splits, in hex: {table}");
     assert_eq!(run(&mut w, "TABLE.DROP u"), ":1\r\n");
-    assert_eq!(run(&mut w, DECLARE), "+OK\r\n");
-    assert_eq!(run(&mut w, "TABLE.DESCRIBE u"), table);
+    let replay = described_declaration(&table);
+    let refs: Vec<&[u8]> = replay.iter().map(Vec::as_slice).collect();
+    assert_eq!(text(&call(&mut w, &refs)), "+OK\r\n");
+    assert_eq!(run(&mut w, "TABLE.DESCRIBE u"), table, "the replay recreates the same table");
+}
+
+/// The `declaration` argv of a TABLE.DESCRIBE reply.
+fn described_declaration(reply: &str) -> Vec<Vec<u8>> {
+    let lines: Vec<&str> = reply.split("\r\n").collect();
+    let at = lines.iter().position(|l| *l == "declaration").expect("a declaration");
+    let n: usize = lines[at + 1][1..].parse().unwrap();
+    (0..n).map(|i| lines[at + 3 + 2 * i].as_bytes().to_vec()).collect()
 }
 
 #[test]
@@ -525,7 +537,7 @@ fn a_global_path_is_refused_by_name_where_it_cannot_apply() {
         run(&mut w, &format!("{base} INDEX at range GLOBAL WINDOW at SPAN 50 BUCKET 10"));
     assert!(windowed.contains("GLOBAL cannot apply to a windowed table"), "{windowed}");
     let op = run(&mut w, &format!("{base} ORDERPATH o ON at GLOBAL SPLIT AT 5"));
-    assert!(op.contains("SPLIT AT applies to an INDEX path"), "{op}");
+    assert!(op.contains("ORDERPATH's SPLIT AT values are its encoded order bytes"), "{op}");
     let many = run(&mut w, &format!("{base} INDEX at range GLOBAL SPLIT AT 1 2 3 4"));
     assert!(many.contains("at most one point fewer than the shard count"), "{many}");
     let bad = run(&mut w, &format!("{base} INDEX at range GLOBAL SPLIT AT x"));

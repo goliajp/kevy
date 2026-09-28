@@ -162,3 +162,37 @@ fn a_store_whose_paths_are_all_local_refuses_global_by_name() {
     global.extend_from_slice(&[b"SPLIT".as_slice(), b"5"]);
     assert!(crate::parse_table_declare_partitioned(&global).unwrap_err().contains("usage"));
 }
+
+#[test]
+fn an_orderpath_split_point_reads_back_from_its_hex() {
+    let t = crate::parse_table_declare(&[
+        b"TABLE.DECLARE",
+        b"u",
+        b"PREFIX",
+        b"u:",
+        b"PK",
+        b"id",
+        b"COLUMN",
+        b"id",
+        b"i64",
+        b"COLUMN",
+        b"city",
+        b"str",
+        b"ORDERPATH",
+        b"by_city",
+        b"ON",
+        b"city",
+        b"THEN",
+        b"id",
+    ])
+    .unwrap();
+    let spec = crate::compile_table(&t).unwrap().into_iter().find(|s| s.name == b"u.by_city");
+    let spec = spec.expect("the orderpath compiles");
+    let point = vec![0x00, 0x61, 0xff, 0x10];
+    let text = crate::split_point_text(&spec, &point);
+    assert_eq!(text, b"0x0061ff10");
+    assert_eq!(crate::parse_split_point(&spec, &text), Some(point));
+    for bad in [&b"0061ff10"[..], b"0x061", b"0xzz"] {
+        assert_eq!(crate::parse_split_point(&spec, bad), None, "{}", String::from_utf8_lossy(bad));
+    }
+}

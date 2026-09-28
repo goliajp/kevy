@@ -1,9 +1,10 @@
 //! `TABLE.DESCRIBE` and the declaration that recreates a table. Split
 //! from `describe.rs` for the 500-line cap.
 
-use crate::catalog::{Catalog, ValType};
+use crate::catalog::Catalog;
 use crate::describe::{Described, argv, b, flag, n, order};
 use crate::table::{OrderPath, TableIndex, TableSpec, dotted};
+use crate::{Partitioning, split_point_text};
 
 /// `TABLE.DESCRIBE`: `name prefix pk columns indexes orderpaths window
 /// autodeclare declaration`, label/value. Indexes and orderpaths carry
@@ -181,18 +182,28 @@ fn index_clause(t: &TableSpec, ix: &TableIndex, cat: &Catalog, w: &mut Vec<Vec<u
         w.push(b"VALUES".to_vec());
         w.extend(ix.values.iter().cloned());
     }
-    let part = cat.partitioning(&dotted(&t.name, &ix.column));
-    if part.is_global() {
-        w.push(b"GLOBAL".to_vec());
-        let splits = part.split_values(t.column_type(&ix.column).unwrap_or(ValType::Str));
-        if !splits.is_empty() {
-            w.extend([b"SPLIT".to_vec(), b"AT".to_vec()]);
-            w.extend(splits);
-        }
+    global_clause(cat, &dotted(&t.name, &ix.column), w);
+}
+
+/// `GLOBAL [SPLIT AT …]` for the compiled path `name`, when it is global:
+/// every split point in the text [`parse_split_point`] reads back, so a
+/// replay places every value where it was.
+///
+/// [`parse_split_point`]: crate::parse_split_point
+fn global_clause(cat: &Catalog, name: &[u8], w: &mut Vec<Vec<u8>>) {
+    let (Partitioning::Global { splits }, Some((spec, _))) =
+        (cat.partitioning(name), cat.get(name))
+    else {
+        return;
+    };
+    w.push(b"GLOBAL".to_vec());
+    if !splits.is_empty() {
+        w.extend([b"SPLIT".to_vec(), b"AT".to_vec()]);
+        w.extend(splits.iter().map(|p| split_point_text(spec, p)));
     }
 }
 
-/// `ORDERPATH name ON col [DESC] [THEN col [DESC]]… [GLOBAL]`.
+/// `ORDERPATH name ON col [DESC] [THEN col [DESC]]… [GLOBAL [SPLIT AT …]]`.
 fn orderpath_clause(t: &TableSpec, op: &OrderPath, cat: &Catalog, w: &mut Vec<Vec<u8>>) {
     w.extend([b"ORDERPATH".to_vec(), op.name.clone(), b"ON".to_vec()]);
     for (i, (c, desc)) in op.on.iter().enumerate() {
@@ -204,7 +215,5 @@ fn orderpath_clause(t: &TableSpec, op: &OrderPath, cat: &Catalog, w: &mut Vec<Ve
             w.push(b"DESC".to_vec());
         }
     }
-    if cat.partitioning(&dotted(&t.name, &op.name)).is_global() {
-        w.push(b"GLOBAL".to_vec());
-    }
+    global_clause(cat, &dotted(&t.name, &op.name), w);
 }

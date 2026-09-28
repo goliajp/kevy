@@ -56,7 +56,9 @@ pub use describe::{
     describe_table_partitioned, describe_view, index_declaration, index_declaration_partitioned,
     owner_of, table_declaration, table_declaration_partitioned, view_declaration,
 };
-pub use partition::{Partitioning, partition_owner, splits_from_sample};
+pub use partition::{
+    Partitioning, parse_split_point, partition_owner, split_point_text, splits_from_sample,
+};
 pub use placement::PlacementTable;
 pub use segcold::{
     ColdBloom, WindowAudit, WindowShape, decode_seg_key, decode_seg_values, encode_seg_values,
