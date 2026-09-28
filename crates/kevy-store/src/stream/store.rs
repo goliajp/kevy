@@ -303,6 +303,26 @@ impl Store {
         Ok(s.group_create_consumer(group, consumer, now_ms))
     }
 
+    /// `XGROUP CREATECONSUMER key group consumer TIME seen`: see
+    /// [`StreamData::group_consumer_seen`]. `false` on a missing key too.
+    ///
+    /// ```
+    /// let mut s = kevy_store::Store::new();
+    /// assert!(!s.xgroup_consumer_seen(b"missing", b"g", b"c", 1).unwrap());
+    /// ```
+    pub fn xgroup_consumer_seen(
+        &mut self,
+        key: &[u8],
+        group: &[u8],
+        consumer: &[u8],
+        seen_ms: u64,
+    ) -> Result<bool, StoreError> {
+        let Some(s) = self.stream_mut(key, false)? else {
+            return Ok(false);
+        };
+        Ok(s.group_consumer_seen(group, consumer, seen_ms))
+    }
+
     /// `XGROUP DELCONSUMER key group consumer`. Returns dropped PEL count.
     pub fn xgroup_del_consumer(
         &mut self,

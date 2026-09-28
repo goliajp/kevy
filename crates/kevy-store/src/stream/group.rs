@@ -202,6 +202,40 @@ impl StreamData {
         true
     }
 
+    /// `XGROUP CREATECONSUMER key group consumer TIME seen`: the
+    /// consumer's last contact with the group set to `seen_ms` (unix ms),
+    /// the consumer created with it when missing. Returns `true` if it was
+    /// created, `false` if it existed or the group is missing.
+    ///
+    /// ```
+    /// use kevy_store::{GroupCreateMode, StreamId, XAddIdSpec};
+    /// let mut s = kevy_store::Store::new();
+    /// s.xadd(b"s", XAddIdSpec::Explicit(StreamId { ms: 1, seq: 1 }), vec![(b"f".to_vec(), b"v".to_vec())], false, 0).unwrap();
+    /// s.xgroup_create(b"s", b"g", GroupCreateMode::AtId(StreamId::MIN), false).unwrap();
+    /// assert!(s.xgroup_consumer_seen(b"s", b"g", b"c", 40).unwrap());
+    /// assert!(!s.xgroup_consumer_seen(b"s", b"g", b"c", 90).unwrap());
+    /// let g = s.stream_group_peek(b"s", b"g").unwrap();
+    /// assert_eq!(g.consumers_iter().next().unwrap().1.last_seen_ms(), 90);
+    /// ```
+    pub fn group_consumer_seen(&mut self, group: &[u8], consumer: &[u8], seen_ms: u64) -> bool {
+        let Some(g) = self.groups.get_mut(group) else {
+            return false;
+        };
+        if let Some(cs) = g.consumers.get_mut(consumer) {
+            cs.last_seen_ms = seen_ms;
+            return false;
+        }
+        g.consumers.insert(
+            SmallBytes::from_slice(consumer),
+            Box::new(ConsumerState {
+                name: SmallBytes::from_slice(consumer),
+                last_seen_ms: seen_ms,
+                pel_count: 0,
+            }),
+        );
+        true
+    }
+
     /// `XGROUP CREATECONSUMER key group consumer`. Returns `true` if a
     /// new consumer was inserted, `false` if it already existed or the
     /// group is missing.

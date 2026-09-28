@@ -104,7 +104,9 @@ pub(crate) fn apply_for_test(store: &mut Store, args: &Argv) {
                     .unwrap();
             }
             b"CREATECONSUMER" => {
-                store.xgroup_create_consumer(&args[2], &args[3], &args[4], 7_777).unwrap();
+                assert_eq!(args[5].to_ascii_uppercase(), b"TIME");
+                let seen = std::str::from_utf8(&args[6]).unwrap().parse().unwrap();
+                store.xgroup_consumer_seen(&args[2], &args[3], &args[4], seen).unwrap();
             }
             other => {
                 panic!("unexpected XGROUP sub in AOF rewrite: {:?}", String::from_utf8_lossy(other))

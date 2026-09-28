@@ -370,3 +370,65 @@ fn a_blocking_read_is_refused_and_a_plain_one_served() {
     assert!(r.starts_with(b"-ERR the embedded engine cannot block"), "{r:?}");
     assert!(call(&s, "XREAD STREAMS s 0").starts_with(b"*1\r\n"));
 }
+
+/// `(consumer, idle)` pairs of `XINFO CONSUMERS s g`, by name, and when
+/// they were read.
+fn seen(s: &Store) -> (Vec<(String, i64)>, std::time::Instant) {
+    let reply = String::from_utf8_lossy(&call(s, "XINFO CONSUMERS s g")).into_owned();
+    let t: Vec<&str> = reply.split("\r\n").collect();
+    let mut out: Vec<(String, i64)> = (0..t.len())
+        .filter(|&i| t[i] == "name" && t.get(i + 7) == Some(&"idle"))
+        .map(|i| (t[i + 2].to_string(), t[i + 8][1..].parse().expect("an idle time")))
+        .collect();
+    out.sort();
+    (out, std::time::Instant::now())
+}
+
+/// Each consumer's idle time went on by what passed since `before.1`.
+fn assert_went_on(before: &(Vec<(String, i64)>, std::time::Instant), after: &[(String, i64)]) {
+    let elapsed = before.1.elapsed().as_millis() as i64;
+    assert_eq!(before.0.len(), 6, "six consumers: {before:?}");
+    for ((name, b), (other, a)) in before.0.iter().zip(after) {
+        assert_eq!(name, other);
+        let gap = a - b;
+        assert!(
+            (elapsed - 80..=elapsed + 80).contains(&gap),
+            "{name}: idle went {b} -> {a} over {elapsed} ms: it started over instead of going on"
+        );
+    }
+}
+
+/// A consumer's last contact with its group comes back from the log as
+/// it was, however the consumer came about or was last seen, from the log
+/// as written and from the log a rewrite compacts it to.
+#[test]
+fn consumer_seen_times_survive_a_restart() {
+    let dir = kevy_tmpdir::TmpDir::new("replay-streams-seen");
+    let first = {
+        let s = open(dir.path(), 1);
+        for id in ["1-1", "2-1", "3-1"] {
+            ok(&s, &format!("XADD s {id} f v"));
+        }
+        ok(&s, "XGROUP CREATE s g 0");
+        ok(&s, "XREADGROUP GROUP g reader COUNT 2 STREAMS s >");
+        ok(&s, "XGROUP CREATECONSUMER s g made");
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        ok(&s, "XREADGROUP GROUP g idler STREAMS s 0");
+        ok(&s, "XCLAIM s g claimer 0 1-1 JUSTID");
+        ok(&s, "XAUTOCLAIM s g auto 0 2-1 COUNT 1 JUSTID");
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        ok(&s, "XREADGROUP GROUP g late COUNT 1 STREAMS s >");
+        assert_eq!(call(&s, "XREADGROUP GROUP g reader STREAMS s >"), b"*-1\r\n");
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        seen(&s)
+    };
+    let second = {
+        let s = open(dir.path(), 1);
+        assert_went_on(&first, &seen(&s).0);
+        let second = seen(&s);
+        s.rewrite_aof().expect("rewrite");
+        second
+    };
+    let s = open(dir.path(), 1);
+    assert_went_on(&second, &seen(&s).0);
+}
