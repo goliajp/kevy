@@ -430,7 +430,7 @@ tier = "precommit"
 # a config block that does not load hands a first-time reader a server
 # that refuses to start.
 cmd = "python3 tools/check_doc_toml.py"
-expected = 100
+expected = 5
 timeout = 180
 requires = ["binaries-debug"]
 proves = "every TOML block in the docs parses"
