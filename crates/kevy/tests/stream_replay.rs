@@ -126,3 +126,82 @@ fn generated_ids_and_idle_claims_replay_as_answered() {
     assert!(before[0].starts_with("*2\r\n"), "{}", before[0]);
     assert!(pending.starts_with("*2\r\n"), "the dropped entry left the list: {pending}");
 }
+
+/// The idle column of the extended `XPENDING` rows.
+fn idles(reply: &str) -> Vec<i64> {
+    let t: Vec<&str> = reply.split("\r\n").collect();
+    (0..t.len())
+        .filter(|&i| t[i] == "*4" && t.get(i + 5).is_some_and(|x| x.starts_with(':')))
+        .map(|i| t[i + 5][1..].parse().unwrap())
+        .collect()
+}
+
+/// `XINFO CONSUMERS`' idle column, which counts from the consumer's last
+/// contact, blanked.
+fn blank_consumer_idle(reply: &str) -> String {
+    let mut t: Vec<String> = reply.split("\r\n").map(str::to_string).collect();
+    for i in 0..t.len() {
+        if t[i] == "idle" && i + 1 < t.len() {
+            t[i + 1] = ":idle".into();
+        }
+    }
+    t.join("\r\n")
+}
+
+const DELIVERY_READS: &[&str] = &["XPENDING s g - + 10", "XINFO GROUPS s", "XINFO CONSUMERS s g"];
+
+fn delivery_state(c: &mut Conn) -> Vec<String> {
+    DELIVERY_READS.iter().map(|r| blank_consumer_idle(&blank_idle(&c.call(r)))).collect()
+}
+
+/// An entry delivered by `XREADGROUP` keeps its delivery time across a
+/// restart: its idle time goes on from where it was instead of starting
+/// over. A `NOACK` read moves the group without a pending entry, and a
+/// history read changes nothing but the consumer list.
+#[test]
+fn delivery_times_survive_a_restart() {
+    let dir = kevy_tmpdir::TmpDir::new("stream-delivery");
+    let (mut before, mut idle_before, mut at) = (Vec::new(), Vec::new(), None);
+    with_runtime(free_port(), dir.path(), 1, |p| {
+        let mut c = Conn::open(p);
+        for id in ["1-1", "2-1", "3-1"] {
+            assert!(c.call(&format!("XADD s {id} f v")).starts_with('$'));
+        }
+        assert_eq!(c.call("XGROUP CREATE s g 0"), "+OK\r\n");
+        assert_eq!(c.call("XGROUP CREATE s n 0"), "+OK\r\n");
+        assert!(c.call("XREADGROUP GROUP g c1 COUNT 2 STREAMS s >").starts_with("*1"));
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(c.call("XREADGROUP GROUP g c2 STREAMS s >").starts_with("*1"));
+        assert!(c.call("XREADGROUP GROUP n c9 NOACK STREAMS s >").starts_with("*1"));
+        assert!(c.call("XREADGROUP GROUP g newbie STREAMS s 0").starts_with("*"));
+        assert_eq!(c.call("XREADGROUP GROUP g c1 STREAMS s >"), "*-1\r\n");
+        std::thread::sleep(Duration::from_millis(300));
+        idle_before = idles(&c.call("XPENDING s g - + 10"));
+        at = Some(std::time::Instant::now());
+        before = delivery_state(&mut c);
+        before.push(c.call("XINFO GROUPS s"));
+    });
+    let (mut after, mut idle_after, mut elapsed) = (Vec::new(), Vec::new(), 0);
+    with_runtime(free_port(), dir.path(), 1, |p| {
+        let mut c = Conn::open(p);
+        idle_after = idles(&c.call("XPENDING s g - + 10"));
+        elapsed = at.expect("the first run read").elapsed().as_millis() as i64;
+        after = delivery_state(&mut c);
+    });
+    for ((read, b), a) in DELIVERY_READS.iter().zip(&before).zip(&after) {
+        assert_eq!(a, b, "{read} changed across the restart");
+    }
+    assert_eq!(idle_before.len(), 3, "three pending entries: {before:?}");
+    for (b, a) in idle_before.iter().zip(&idle_after) {
+        let gap = a - b;
+        assert!(
+            (elapsed - 60..=elapsed + 60).contains(&gap),
+            "idle went {b} -> {a} over {elapsed} ms: it started over instead of going on"
+        );
+    }
+    // the NOACK group moved to the end with nothing pending, and the
+    // history read made a consumer
+    let groups = &before[3];
+    assert!(groups.contains("$1\r\nn\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:0"), "{groups}");
+    assert!(before[2].contains("newbie"), "{}", before[2]);
+}

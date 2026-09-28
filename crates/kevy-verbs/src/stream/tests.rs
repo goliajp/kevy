@@ -26,8 +26,13 @@ fn records(store: &mut Store, cmd: &str, e: Option<Effect>) -> Vec<String> {
     match e {
         Some(Effect::Write) => vec![cmd.to_string()],
         Some(Effect::Record(f)) => vec![frame(&f)],
-        Some(e @ (Effect::RecordId(..) | Effect::RecordClaim(_))) => {
-            let frames = crate::aof::deferred_frames(store, &argv(cmd), &e);
+        Some(
+            e @ (Effect::RecordId(..)
+            | Effect::RecordClaim(_)
+            | Effect::RecordRead(..)
+            | Effect::RecordReads(_)),
+        ) => {
+            let frames = crate::aof::deferred_frames(&*store, &argv(cmd), &e);
             frames
                 .iter()
                 .map(|f| frame(&(0..f.len()).map(|i| f[i].to_vec()).collect::<Vec<_>>()))
@@ -120,6 +125,49 @@ fn pel(store: &mut Store) -> Vec<(String, Vec<u8>, u64, u32)> {
             (String::from_utf8(id.encode()).unwrap(), owner, p.delivery_time_ms, p.delivery_count)
         })
         .collect()
+}
+
+/// Group reads replayed from their records, later than they ran, leave
+/// the pending list and the group where the reads left them: delivery
+/// times included, an entry a NOACK read passed over left with its owner.
+#[test]
+fn read_records_replay_to_the_same_group() {
+    let mut live = Store::new();
+    let mut log: Vec<String> = Vec::new();
+    for c in [
+        "XADD s 1-1 a 1",
+        "XADD s 2-1 b 2",
+        "XADD s 3-1 c 3",
+        "XGROUP CREATE s g 0",
+        "XREADGROUP GROUP g c1 COUNT 1 STREAMS s >",
+        "XREADGROUP GROUP g c2 STREAMS s >",
+        "XGROUP SETID s g 0",
+        // 1-1 again, past its owner c1: NOACK takes nothing into the list
+        "XREADGROUP GROUP g c3 NOACK COUNT 1 STREAMS s >",
+        "XREADGROUP GROUP g c4 STREAMS s 0",
+        "XREADGROUP GROUP g c1 STREAMS s 0",
+    ] {
+        let (e, _) = run(&mut live, c);
+        log.extend(records(&mut live, c, e));
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    assert!(!log.iter().any(|f| f.starts_with("XREADGROUP")), "{log:#?}");
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    let mut replayed = Store::new();
+    for f in &log {
+        run(&mut replayed, f);
+    }
+    assert_eq!(pel(&mut replayed), pel(&mut live), "{log:#?}");
+    let owners: Vec<Vec<u8>> = pel(&mut live).into_iter().map(|r| r.1).collect();
+    assert_eq!(owners, [b"c1".to_vec(), b"c2".to_vec(), b"c2".to_vec()]);
+    for read in ["XINFO GROUPS s", "XINFO CONSUMERS s g"] {
+        let (_, want) = run(&mut live, read);
+        let (_, got) = run(&mut replayed, read);
+        let blank = |s: &str| -> Vec<String> {
+            s.split("\r\n").filter(|t| !t.starts_with(':')).map(str::to_string).collect()
+        };
+        assert_eq!(blank(&got), blank(&want), "{read}");
+    }
 }
 
 #[test]

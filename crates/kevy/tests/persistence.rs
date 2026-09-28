@@ -656,16 +656,16 @@ fn stream_groups_survive_bgrewriteaof_restart() {
         read_reply(&mut c, b"+OK\r\n");
         // Background rewrite: wait for the compacted file to swap in
         // before stopping the runtime. Discriminator: the rewritten
-        // image reconstructs PELs via XCLAIM frames, which this test
-        // never issues — so their PRESENCE proves the swap landed.
-        // (The old "no XREADGROUP" check assumed appends hit the disk
-        // synchronously; under the AOF offload the on-disk file LAGS
-        // the replies, and an early read of the not-yet-written log
-        // matched spuriously — the recurring flake in the ledger.)
+        // image recreates each group with `XGROUP CREATE … MKSTREAM`,
+        // which this test never issues, and carries no XDEL frame — so the
+        // one's PRESENCE and the other's ABSENCE prove the swap landed.
+        // (The log itself records a group read as XCLAIM frames, so
+        // XCLAIM tells nothing; and appends reach the disk after the
+        // replies, so a check on the log alone matches too early.)
         wait_for("rewritten AOF to swap in", || {
             std::fs::read(dir.join("aof-0.aof")).is_ok_and(|now| {
-                now.windows(6).any(|w| w == b"XCLAIM")
-                    && !now.windows(10).any(|w| w == b"XREADGROUP")
+                now.windows(8).any(|w| w == b"MKSTREAM")
+                    && !now.windows(10).any(|w| w == b"$4\r\nXDEL\r\n")
             })
         });
     });

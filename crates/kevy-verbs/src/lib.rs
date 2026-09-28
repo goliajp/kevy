@@ -39,6 +39,7 @@ mod keyspace;
 mod list;
 mod list_move;
 mod record;
+mod record_read;
 pub mod reply;
 mod set;
 #[cfg(feature = "streams-geo")]
@@ -116,6 +117,51 @@ pub enum Effect {
     /// assert_eq!(head, [&b"XCLAIM"[..], b"s", b"g", b"b", b"0", b"1-1"]);
     /// ```
     RecordClaim(Box<aof::Claim>),
+    /// Record a one-stream `XREADGROUP` as what it left, not as a read a
+    /// replay would stamp with its own clock: `.0` is the group's
+    /// last-delivered ID before the read, `.1` whether the read created
+    /// its consumer. Carries no frame: a caller that records builds them
+    /// with [`aof::deferred_frames`].
+    ///
+    /// ```
+    /// use kevy_verbs::{Effect, exec};
+    /// if kevy_verbs::verb(b"XREADGROUP").is_none() {
+    ///     return; // built without the `streams-geo` feature
+    /// }
+    /// let mut store = kevy_store::Store::new();
+    /// let argv = |s: &str| kevy_resp::Argv::from(s.split(' ').map(|p| p.as_bytes().to_vec()).collect::<Vec<_>>());
+    /// for c in ["XADD s 1-1 f v", "XGROUP CREATE s g 0"] {
+    ///     exec(&mut store, c.split(' ').next().unwrap().as_bytes(), &argv(c), &mut Vec::new());
+    /// }
+    /// let read = argv("XREADGROUP GROUP g a STREAMS s >");
+    /// let effect = exec(&mut store, b"XREADGROUP", &read, &mut Vec::new()).unwrap();
+    /// assert_eq!(effect, Effect::RecordRead(kevy_store::StreamId::MIN, true));
+    /// let frames = kevy_verbs::aof::deferred_frames(&store, &read, &effect);
+    /// let verbs: Vec<&[u8]> = frames.iter().map(|f| &f[0]).collect();
+    /// assert_eq!(verbs, [&b"XGROUP"[..], b"XCLAIM"], "the group's move, then the delivery");
+    /// ```
+    RecordRead(StreamId, bool),
+    /// [`Effect::RecordRead`] for an `XREADGROUP` over several streams:
+    /// one `(last-delivered before, consumer created)` pair per stream, in
+    /// `STREAMS` order.
+    ///
+    /// ```
+    /// use kevy_verbs::{Effect, exec};
+    /// if kevy_verbs::verb(b"XREADGROUP").is_none() {
+    ///     return; // built without the `streams-geo` feature
+    /// }
+    /// let mut store = kevy_store::Store::new();
+    /// let argv = |s: &str| kevy_resp::Argv::from(s.split(' ').map(|p| p.as_bytes().to_vec()).collect::<Vec<_>>());
+    /// for c in ["XADD a 1-1 f v", "XADD b 1-1 f v", "XGROUP CREATE a g 0", "XGROUP CREATE b g 0"] {
+    ///     exec(&mut store, c.split(' ').next().unwrap().as_bytes(), &argv(c), &mut Vec::new());
+    /// }
+    /// let read = argv("XREADGROUP GROUP g c STREAMS a b > >");
+    /// let Some(Effect::RecordReads(marks)) = exec(&mut store, b"XREADGROUP", &read, &mut Vec::new()) else {
+    ///     panic!("a read of two streams is marked per stream")
+    /// };
+    /// assert_eq!(marks.len(), 2);
+    /// ```
+    RecordReads(Vec<(StreamId, bool)>),
     /// Record nothing, not even the argv: a random command that removed
     /// nothing, or a claim that changed nothing.
     Skip,

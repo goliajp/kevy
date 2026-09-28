@@ -80,7 +80,9 @@ fn run(s: &Store, v: &Verb, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>) {
             let id = kevy_verbs::aof::id_bytes(&mut buf, id);
             record(&mut g, argv, Some((at, id)))
         }
-        Some(claim @ Effect::RecordClaim(_)) => record_claim(&mut g, argv, &claim),
+        Some(e @ (Effect::RecordClaim(_) | Effect::RecordRead(..) | Effect::RecordReads(_))) => {
+            record_outcome(&mut g, argv, &e)
+        }
         _ => Ok(()),
     };
     if let Err(e) = recorded {
@@ -143,14 +145,14 @@ fn swapped<'a>(swap: Option<(usize, &'a [u8])>, i: usize, a: &'a [u8]) -> &'a [u
     }
 }
 
-/// Record a claim as its outcome where the write is recorded (the AOF, a
-/// replica source, the change feed); elsewhere the argv runs the commit's
-/// other steps, and no frame is built.
-fn record_claim(g: &mut Inner, argv: &[Vec<u8>], claim: &Effect) -> KevyResult<()> {
+/// Record a claim or a group read as its outcome where the write is
+/// recorded (the AOF, a replica source, the change feed); elsewhere the
+/// argv runs the commit's other steps, and no frame is built.
+fn record_outcome(g: &mut Inner, argv: &[Vec<u8>], outcome: &Effect) -> KevyResult<()> {
     if !crate::store_glue::records_writes(g) {
         return record(g, argv, None);
     }
-    for f in kevy_verbs::aof::deferred_frames(&mut g.store, &Args(argv), claim) {
+    for f in kevy_verbs::aof::deferred_frames(&g.store, &Args(argv), outcome) {
         let parts: Vec<&[u8]> = (0..f.len()).map(|i| &f[i]).collect();
         commit_write(g, &parts)?;
     }
