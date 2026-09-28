@@ -22,6 +22,14 @@
   `BGREWRITEAOF`. Affected since 5.1.0; the io_uring reactor and
   `KEVY_AOF_OFFLOAD=0` were not affected.
 
+- **An embedded replica opened with more than one shard reads every key.**
+  A replica placed each replicated write with the cluster slot hash and
+  loaded a full snapshot into its first shard, while its reads look a key
+  up by the store's own hash; with more than one shard most keys were
+  written where reads never look. Writes and snapshots now land in the
+  shard the store's reads use. Single-shard replicas (the default) were
+  not affected.
+
 - **A server refuses a port another server already holds.** Every shard
   listens with `SO_REUSEPORT`, and on its own that let a second kevy
   started by the same user on the same port join the first one's
