@@ -70,8 +70,15 @@ pub(crate) fn repair_tail(
     size: &mut u64,
     resync: bool,
 ) -> io::Result<Option<PathBuf>> {
-    let valid = crate::replay::valid_prefix_len_of_file(path, resync)?;
+    let (valid, zero_tail) = crate::replay::valid_prefix_len_of_file(path, resync)?;
     if valid >= *size {
+        return Ok(None);
+    }
+    if valid + zero_tail == *size {
+        // only a mapped log's unused preallocation: not data, nothing to keep
+        file.set_len(valid)?;
+        file.sync_data()?;
+        *size = valid;
         return Ok(None);
     }
     let q = crate::aof_util::quarantine_dropped_tail(path, valid)?;

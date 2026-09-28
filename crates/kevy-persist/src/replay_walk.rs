@@ -56,6 +56,9 @@ pub(crate) struct V2Walk {
     pub(crate) txn: Option<Vec<Argv>>,
     /// Where the open transaction's begin marker starts.
     pub(crate) txn_at: u64,
+    /// Zeros from the last record to the end of the file: the unused part
+    /// of a mapped log's preallocation, not data.
+    pub(crate) zero_tail: u64,
     /// Transactions dropped because the log ended before their commit
     /// marker. Surfaced in the report rather than passed over silently.
     pub(crate) txn_discarded: u64,
@@ -67,6 +70,7 @@ impl V2Walk {
         V2Walk {
             txn: None,
             txn_at: 0,
+            zero_tail: 0,
             txn_discarded: 0,
             stop: ReplayStop::Clean,
             pos,
@@ -116,12 +120,26 @@ pub(crate) fn walk_v2(
         let mut header = [0u8; 8];
         match read_fully(r, &mut header) {
             Ok(0) => break ReplayStop::Clean,
+            Ok(n) if n < header.len() && header[..n].iter().all(|&b| b == 0) => {
+                w.zero_tail = n as u64;
+                break ReplayStop::Clean;
+            }
             Ok(n) if n < header.len() => break ReplayStop::TruncatedTail,
             Ok(_) => {}
             Err(e) => return Err(e),
         }
         let len = u32::from_le_bytes(header[..4].try_into().expect("header is a fixed-size array"));
         let crc = u32::from_le_bytes(header[4..].try_into().expect("header is a fixed-size array"));
+        // no record has length 0, so zeros from here to the end of the file
+        // are the unused preallocation of a mapped log; zeros followed by
+        // anything else are damage
+        if len == 0
+            && crc == 0
+            && let Some(rest) = zeros_to_end(r)?
+        {
+            w.zero_tail = header.len() as u64 + rest;
+            break ReplayStop::Clean;
+        }
         if len == 0 || len > crate::record::MAX_RECORD {
             w.preview_len = preview_of(&header, &mut w.preview);
             break ReplayStop::CorruptFrame(String::from("record length out of range"));
@@ -210,6 +228,22 @@ impl Sink<'_> {
         match self {
             Sink::Owned(f) => f(std::mem::take(frame)),
             Sink::InPlace(f) => f(frame),
+        }
+    }
+}
+
+/// Read `r` to its end; `Some(bytes read)` when every one was zero.
+fn zeros_to_end(r: &mut impl Read) -> io::Result<Option<u64>> {
+    let mut buf = vec![0u8; 64 * 1024];
+    let mut n = 0u64;
+    loop {
+        let got = read_fully(r, &mut buf)?;
+        if buf[..got].iter().any(|&b| b != 0) {
+            return Ok(None);
+        }
+        n += got as u64;
+        if got < buf.len() {
+            return Ok(Some(n));
         }
     }
 }
