@@ -33,6 +33,13 @@ if [ "${WORK_FSTYPE:-}" = "tmpfs" ] && [ -z "${TAILGATE_ALLOW_TMPFS:-}" ]; then
     rm -rf "$WORK"
     exit 2
 fi
+# the prober is an example, which no binaries requirement builds; a missing
+# one would read as three cells with no measurement
+cargo build -q --release -p kevy --example tail_probe || {
+    echo "tailgate: REFUSED — the prober (examples/tail_probe) did not build"
+    rm -rf "$WORK"
+    exit 2
+}
 SRV=""
 BENCH=""
 fail=0
