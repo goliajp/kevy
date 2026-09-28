@@ -458,6 +458,20 @@ fn estimate_matches_the_real_dump() {
     apply_for_test(&mut store, &argv(&[b"RPUSH", b"l", b"a", b"b", b"c"]));
     apply_for_test(&mut store, &argv(&[b"SADD", b"s", b"m1", b"m2"]));
     apply_for_test(&mut store, &argv(&[b"ZADD", b"z", b"1.5", b"member"]));
+    apply_for_test(&mut store, &argv(&[b"SET", b"n", b"12345"]));
+    apply_for_test(&mut store, &argv(&[b"SET", b"big", &[b'x'; 5000]]));
+    let later = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap()
+        + std::time::Duration::from_secs(100))
+    .as_millis()
+    .to_string();
+    apply_for_test(&mut store, &argv(&[b"PEXPIREAT", b"big", later.as_bytes()]));
+    apply_for_test(
+        &mut store,
+        &argv(&[b"HPEXPIREAT", b"h", later.as_bytes(), b"FIELDS", b"1", b"f1"]),
+    );
+    for i in 0..300 {
+        apply_for_test(&mut store, &argv(&[b"RPUSH", b"long", format!("item-{i}").as_bytes()]));
+    }
     let (buf, _) = crate::dump_store_to_buf(&store, crate::AofFormat::V2);
     assert_eq!(
         crate::estimate_rewrite_size(&store),
@@ -608,4 +622,32 @@ fn tee_pool_recycles_buffers_and_teardown_drains() {
     assert!(!aof.is_rewriting());
     let _ = std::fs::remove_file(&path);
     let _ = std::fs::remove_file(&plan.tmp);
+}
+
+/// The non-blocking rewrite builds its image in memory. A field's own TTL
+/// has to be in that image, as it is in the one the synchronous rewrite
+/// writes to disk, or the field outlives its deadline after a restart.
+#[test]
+fn a_concurrent_rewrite_keeps_per_field_ttls() {
+    let path = crate::tests::temp_file("rewrite-concurrent-fttl");
+    let mut aof = Aof::open(&path, Fsync::No).unwrap();
+    let mut store = Store::new();
+    let later = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap()
+        + std::time::Duration::from_secs(100))
+    .as_millis()
+    .to_string();
+    apply_for_test(&mut store, &argv(&[b"HSET", b"h", b"f1", b"v1", b"f2", b"v2"]));
+    apply_for_test(
+        &mut store,
+        &argv(&[b"HPEXPIREAT", b"h", later.as_bytes(), b"FIELDS", b"1", b"f1"]),
+    );
+    let plan = aof.begin_concurrent_rewrite(&store).unwrap();
+    std::fs::write(&plan.tmp, &plan.body).unwrap();
+    aof.finish_concurrent_rewrite(&plan.tmp, plan.keys).unwrap();
+    drop(aof);
+    let mut back = Store::new();
+    crate::replay_aof(&path, |a| apply_for_test(&mut back, &a)).unwrap();
+    let deadlines = back.hash_field_deadlines(b"h", &[b"f1", b"f2"]);
+    assert_eq!(deadlines, store.hash_field_deadlines(b"h", &[b"f1", b"f2"]));
+    assert!(deadlines[0].is_some() && deadlines[1].is_none());
 }
