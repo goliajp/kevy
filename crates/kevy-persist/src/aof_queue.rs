@@ -104,6 +104,7 @@ impl Aof {
     /// operation. In-flight chunks already taken are the driver's to
     /// order — the contract on the `queue` field.
     pub(crate) fn flush_queued(&mut self) -> io::Result<()> {
+        self.drain_stage()?;
         let Some(q) = &mut self.queue else {
             return Ok(());
         };

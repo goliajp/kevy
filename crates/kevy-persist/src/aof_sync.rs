@@ -105,6 +105,7 @@ impl Aof {
         if matches!(self.fsync, Fsync::Always) {
             return Ok(None);
         }
+        self.drain_stage()?;
         self.file.flush()?;
         match self.fsync {
             Fsync::EverySec => self.start_everysec_sync(),
