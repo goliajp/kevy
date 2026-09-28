@@ -188,12 +188,16 @@ pub(crate) fn with_ready_segment<R>(
     let mut st = ctx.shard.indexes.borrow_mut();
     refresh(ctx, &mut st, store);
     let si = st.idx.iter().find(|si| si.spec.name == name).ok_or("ERR no such index")?;
-    match si.build {
-        BuildState::Ready => Ok(f(&si.spec, si.entries(), si.window.as_ref())),
-        BuildState::Backfilling { .. } => {
-            Err(CmdError::Wire("INDEXBUILDING index is still building"))
+    // an owner of a global index answers once every shard has sent its
+    // rows' entries (its own among them), whatever its own backfill's state
+    let building = Err(CmdError::Wire("INDEXBUILDING index is still building"));
+    match (&si.global, &si.build) {
+        (Some(g), _) if !g.ready() => building,
+        (Some(_), _) | (None, BuildState::Ready) => {
+            Ok(f(&si.spec, si.entries(), si.window.as_ref()))
         }
-        BuildState::FailedOverBudget => {
+        (None, BuildState::Backfilling { .. }) => building,
+        (None, BuildState::FailedOverBudget) => {
             Err(CmdError::Wire("INDEXOVERBUDGET index build exceeded MAXMEM"))
         }
     }
@@ -322,10 +326,11 @@ pub(crate) fn with_two_ready_segments<R>(
 pub(crate) fn segment_building(ctx: &Ctx<'_>, store: &mut Store, name: &[u8]) -> bool {
     let mut st = ctx.shard.indexes.borrow_mut();
     refresh(ctx, &mut st, store);
-    st.idx
-        .iter()
-        .find(|si| si.spec.name == name)
-        .is_some_and(|si| matches!(si.build, BuildState::Backfilling { .. }))
+    st.idx.iter().find(|si| si.spec.name == name).is_some_and(|si| match &si.global {
+        // an owner waits for every shard; its own rows are one of them
+        Some(g) => !g.ready(),
+        None => matches!(si.build, BuildState::Backfilling { .. }),
+    })
 }
 
 /// A fresh scalar segment for `spec` — with the stored-value
@@ -391,9 +396,10 @@ fn refresh(ctx: &Ctx<'_>, st: &mut ShardIndexes, store: &mut Store) {
     if let Some(cat) = cat {
         for (spec, _state) in cat.iter() {
             let part = cat.partitioning(&spec.name);
+            let inc = catalogs.incarnation(&spec.name);
             let same = |si: &ShardIndex| {
                 si.spec == *spec
-                    && si.global.as_ref().map_or(!part.is_global(), |g| g.fits(part, shard, n))
+                    && si.global.as_ref().map_or(!part.is_global(), |g| g.fits((shard, n), inc))
             };
             match st.idx.iter().position(same) {
                 Some(i) => {
@@ -415,8 +421,9 @@ fn refresh(ctx: &Ctx<'_>, st: &mut ShardIndexes, store: &mut Store) {
                 }
                 None => {
                     let mut si = fresh_shard_index(catalogs, spec, store);
-                    si.global =
-                        part.is_global().then(|| global::GlobalRole::new(spec, part, shard, n));
+                    si.global = part
+                        .is_global()
+                        .then(|| global::GlobalRole::new(spec, part, (shard, n), inc));
                     next.push(si);
                 }
             }
