@@ -6,7 +6,11 @@
   check that refuses a port another server listens on opened a listener
   for a moment and closed it; a connect that arrived in that moment was
   accepted into it and then reset. The check now connects to the port
-  instead, which answers the same question and accepts nothing.
+  instead, which answers the same question and accepts nothing. It also
+  gives a listener that is going away 200 ms to go: io_uring releases a
+  killed server's listeners about 10 ms after the process exits, and a
+  restart inside that window was refused as if another server held the
+  port.
 
 - **Writes made during an AOF rewrite's final swap reach the new log.**
   The rewrite renames the new log over the old one on a background thread

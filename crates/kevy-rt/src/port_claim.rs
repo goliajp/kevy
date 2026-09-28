@@ -2,7 +2,7 @@
 
 use std::io;
 use std::net::{SocketAddr, TcpStream};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// `Err(AddrInUse)` when something already accepts connections on
 /// `ip:port`; `Ok` otherwise.
@@ -16,14 +16,25 @@ use std::time::Duration;
 pub(crate) fn refuse_if_listened(ip: [u8; 4], port: u16) -> io::Result<()> {
     let host = if ip == [0, 0, 0, 0] { [127, 0, 0, 1] } else { ip };
     let addr = SocketAddr::from((host, port));
-    // a closed port refuses at once; the timeout only bounds a silent one
-    match TcpStream::connect_timeout(&addr, Duration::from_millis(200)) {
-        Ok(_) => Err(io::Error::new(
-            io::ErrorKind::AddrInUse,
-            format!("Address already in use: another server listens on {addr}"),
-        )),
-        Err(_) => Ok(()),
+    // io_uring tears a dead process's ring down asynchronously, and its
+    // listeners outlive the process by ~10 ms (measured 0-13 ms); a restart
+    // inside that window must not read them as another server
+    let deadline = Instant::now() + Duration::from_millis(200);
+    while listened(&addr) {
+        if Instant::now() >= deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::AddrInUse,
+                format!("Address already in use: another server listens on {addr}"),
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(10));
     }
+    Ok(())
+}
+
+fn listened(addr: &SocketAddr) -> bool {
+    // a closed port refuses at once; the timeout only bounds a silent one
+    TcpStream::connect_timeout(addr, Duration::from_millis(200)).is_ok()
 }
 
 #[cfg(test)]
@@ -38,5 +49,17 @@ mod tests {
         assert_eq!(err.kind(), std::io::ErrorKind::AddrInUse);
         drop(held);
         refuse_if_listened([127, 0, 0, 1], port).unwrap();
+    }
+
+    #[test]
+    fn a_listener_that_goes_away_within_the_grace_is_not_a_holder() {
+        let held = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = held.local_addr().unwrap().port();
+        let dying = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            drop(held);
+        });
+        refuse_if_listened([127, 0, 0, 1], port).unwrap();
+        dying.join().unwrap();
     }
 }
