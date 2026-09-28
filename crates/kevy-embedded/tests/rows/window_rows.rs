@@ -263,7 +263,7 @@ fn rewrite_and_snapshot_stop_carrying_cold_rows() {
     let before = log_bytes(&d.path().join("aof-0.aof")).len();
     s.rewrite_aof().expect("rewrite").expect("stats");
     let aof = log_bytes(&d.path().join("aof-0.aof"));
-    assert!(aof.len() < before as usize, "rewrite did not shrink: {} -> {}", before, aof.len());
+    assert!(aof.len() < before, "rewrite did not shrink: {} -> {}", before, aof.len());
     let text = String::from_utf8_lossy(&aof).into_owned();
     assert!(!text.contains("row number 10"), "cold row data re-entered the rewritten log");
     assert!(text.contains("KEVYSEGMENTED"), "rewritten log carries no stitch frame");
