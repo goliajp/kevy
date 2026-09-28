@@ -316,8 +316,12 @@ jobs:
           restore-keys: |
             cargo-${{ matrix.target }}-
 
+      # Each runner's host triple is its matrix target, so no --target:
+      # with one, every step that builds for the host (gen_docs, the
+      # uringgate server, the feature lints) compiled the workspace again
+      # into a second tree.
       - name: Build (workspace)
-        run: cargo build --workspace --target ${{ matrix.target }}
+        run: cargo build --workspace
 
       - name: Test (workspace, --lib --tests)
         # KEVY_TEST_PATIENCE widens the replication tests' catch-up budgets:
@@ -327,7 +331,7 @@ jobs:
         # this for the same reason; the plain test job needs it too.
         env:
           KEVY_TEST_PATIENCE: "3"
-        run: cargo test --workspace --lib --tests --target ${{ matrix.target }}
+        run: cargo test --workspace --lib --tests
       # `--lib --tests` is exactly the pair that EXCLUDES doctests, so until
       # this step existed every example in the documentation was compiled by
       # nobody — including the ones a gate counts as verification.
@@ -515,7 +519,7 @@ jobs:
       # before any lint runs. A step name that claims a stricter check than
       # the command performs is a label nobody can act on.
       - name: Clippy (workspace, all targets, default features)
-        run: cargo clippy --workspace --all-targets --target ${{ matrix.target }} -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
       # A workspace build unifies features, so every crate is linted with the
       # union of what anything in the tree asks for. kevy-wasm takes
       # kevy-embedded WITHOUT `tier`, and that configuration — the one the
@@ -546,7 +550,7 @@ jobs:
       # without. Both legs: a deny that holds on one platform says nothing
       # about the code the other one compiles.
       - name: Clippy (no unwrap, panic, or undocumented public item in library code)
-        run: cargo clippy --workspace --lib --bins --target ${{ matrix.target }} -- -D clippy::unwrap_used -D clippy::panic -D missing_docs
+        run: cargo clippy --workspace --lib --bins -- -D clippy::unwrap_used -D clippy::panic -D missing_docs
 
   # ───────────── contract gates: availability / AI / replication ─────────────
   # The executable behavior contracts: availgate's clamps (replication
