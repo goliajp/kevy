@@ -9,7 +9,7 @@
 //! under those scopes must answer `-MISDIRECTED`. The actual
 //! "follow to correct writer" path is tested by
 //! `kevy_cluster_rw::parse_misdirected` unit tests + the smoke
-//! test in `tests/scope_move_e2e.rs`.
+//! test in `tests/clusters/scope_move_e2e.rs`.
 
 #![cfg(not(target_arch = "wasm32"))]
 
