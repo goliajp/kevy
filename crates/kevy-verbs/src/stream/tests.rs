@@ -1,5 +1,5 @@
 use kevy_resp::Argv;
-use kevy_store::Store;
+use kevy_store::{Store, StreamId};
 
 use crate::{Effect, exec};
 
@@ -125,6 +125,88 @@ fn pel(store: &mut Store) -> Vec<(String, Vec<u8>, u64, u32)> {
             (String::from_utf8(id.encode()).unwrap(), owner, p.delivery_time_ms, p.delivery_count)
         })
         .collect()
+}
+
+/// `(id, owner, delivery time, delivery count)`.
+type PelRow = (StreamId, Vec<u8>, u64, u32);
+
+/// The pending rows of `group` on `key`, and the group's last-delivered ID.
+fn group_rows(store: &Store, key: &[u8], group: &[u8]) -> (Vec<PelRow>, StreamId) {
+    let g = store.stream_group_peek(key, group).expect("the group");
+    let rows = g
+        .pel
+        .iter()
+        .map(|(id, p)| (*id, p.consumer.as_slice().to_vec(), p.delivery_time_ms, p.delivery_count))
+        .collect();
+    (rows, g.last_delivered_id)
+}
+
+/// One `XREADGROUP` over several streams is recorded stream by stream:
+/// a stream it delivered from, a stream it delivered nothing from, and a
+/// NOACK read of both each replay to where the read left them — including
+/// when the stream that delivered is not the first one named.
+#[test]
+fn a_read_of_several_streams_replays_stream_by_stream() {
+    let mut live = Store::new();
+    let mut log: Vec<String> = Vec::new();
+    for c in [
+        "XADD a 1-1 x 1",
+        "XADD a 2-1 x 2",
+        "XADD b 1-1 y 1",
+        "XGROUP CREATE a g 0",
+        "XGROUP CREATE b g $",
+        "XGROUP CREATE a n 0",
+        "XGROUP CREATE b n 0",
+        // a delivers two, b nothing
+        "XREADGROUP GROUP g c1 STREAMS a b > >",
+        // NOACK: both move, neither keeps a pending entry
+        "XREADGROUP GROUP n c2 NOACK COUNT 1 STREAMS a b > >",
+        "XADD b 2-1 y 2",
+        // the first stream named delivers nothing, the second one entry
+        "XREADGROUP GROUP g c3 STREAMS a b > >",
+    ] {
+        let (e, _) = run(&mut live, c);
+        if c.starts_with("XREADGROUP") {
+            assert!(matches!(e, Some(Effect::RecordReads(_))), "{c}: {e:?}");
+        }
+        log.extend(records(&mut live, c, e));
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    let mut replayed = Store::new();
+    for f in &log {
+        run(&mut replayed, f);
+    }
+    for (key, group) in [(&b"a"[..], &b"g"[..]), (b"b", b"g"), (b"a", b"n"), (b"b", b"n")] {
+        let want = group_rows(&live, key, group);
+        assert_eq!(group_rows(&replayed, key, group), want, "{key:?} {group:?}: {log:#?}");
+    }
+    let (b_rows, b_last) = group_rows(&live, b"b", b"g");
+    assert_eq!((b_rows.len(), b_last), (1, StreamId { ms: 2, seq: 1 }), "b delivered 2-1 to c3");
+    assert_eq!(b_rows[0].1, b"c3");
+    let (a_rows, a_last) = group_rows(&live, b"a", b"n");
+    assert_eq!(
+        (a_rows.len(), a_last),
+        (0, StreamId { ms: 1, seq: 1 }),
+        "NOACK moved a, kept nothing"
+    );
+}
+
+/// A server trims to `maxmemory` after a growing write and before it
+/// records it, so the stream a claim just wrote can be gone by then:
+/// nothing is left to state, and the record is empty rather than wrong.
+#[test]
+fn a_claim_whose_stream_is_gone_by_the_record_records_nothing() {
+    let mut s = Store::new();
+    for c in ["XADD s 1-1 a 1", "XGROUP CREATE s g 0", "XREADGROUP GROUP g a STREAMS s >"] {
+        run(&mut s, c);
+    }
+    let claim = "XCLAIM s g a 0 1-1 JUSTID";
+    let (e, reply) = run(&mut s, claim);
+    assert!(matches!(e, Some(Effect::RecordClaim(_))), "{reply}");
+    run(&mut s, "DEL s");
+    let frames = crate::aof::deferred_frames(&s, &argv(claim), &e.expect("an effect"));
+    assert!(frames.is_empty(), "{} frames for a stream that is gone", frames.len());
 }
 
 /// Group reads replayed from their records, later than they ran, leave
