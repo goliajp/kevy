@@ -209,11 +209,11 @@ impl<C: Commands> Shard<C> {
     }
 
     pub(crate) fn protocol_error(&mut self, conn_id: u64) {
+        self.mark_closing(conn_id);
         let seq = match self.conns.get_mut(&conn_id) {
             Some(c) => {
                 let s = c.next_seq;
                 c.next_seq += 1;
-                c.closing = true;
                 let proto = c.proto;
                 c.pending.push_back(PendingSlot {
                     remaining: 1,

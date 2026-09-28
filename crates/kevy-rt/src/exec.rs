@@ -219,10 +219,21 @@ impl<C: Commands> Shard<C> {
         if let Some(c) = self.conns.get_mut(&conn_id) {
             let proto = c.proto;
             c.pending.push_back(PendingSlot { remaining, agg, done: None, proto });
-            if is_quit {
-                c.closing = true;
-            }
         }
+        if is_quit {
+            self.mark_closing(conn_id);
+        }
+    }
+
+    /// Close `conn_id` once its replies are out. The io_uring reactor
+    /// reaps only the conns on its closing set, so the flag alone would
+    /// leave the socket open until the client hung up; the epoll reactor
+    /// clears the set every pass.
+    pub(crate) fn mark_closing(&mut self, conn_id: u64) {
+        if let Some(c) = self.conns.get_mut(&conn_id) {
+            c.closing = true;
+        }
+        self.closing_uring_conns.push(conn_id);
     }
 
     /// Fan a built target list out: locally exec on this shard, or send the

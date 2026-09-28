@@ -60,6 +60,7 @@ impl<C: Commands> Shard<C> {
         let candidates: Vec<u64> = std::mem::take(&mut self.closing_uring_conns);
         let mut done: Vec<u64> = Vec::with_capacity(candidates.len());
         let mut requeue: Vec<u64> = Vec::new();
+        let mut adopt: Vec<u64> = Vec::new();
         for cid in candidates {
             // Already reaped (e.g. dedup on a doubly-pushed cid)?
             let Some(uc) = io.get(&cid) else { continue };
@@ -72,12 +73,20 @@ impl<C: Commands> Shard<C> {
             }
             if closing_conn_is_quiet(uc, conn) {
                 done.push(cid);
-            } else {
+            } else if uc.closing {
                 requeue.push(cid);
+            } else {
+                // Closed by the command layer (a QUIT queued in a
+                // transaction, a protocol error) after its recv was armed
+                // again: only a ring-side mark cancels that recv.
+                adopt.push(cid);
             }
         }
         // Restore retries for the next reap pass.
         self.closing_uring_conns.append(&mut requeue);
+        for cid in adopt {
+            self.uring_mark_closing(cid, io);
+        }
         for cid in done {
             // Use the shared teardown (not a local conns.remove): it also
             // cancels block waiters (local + cross-shard arbiter) and drops
