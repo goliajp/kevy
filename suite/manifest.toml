@@ -45,7 +45,7 @@ manifest_floor = 43
 precommit = 300
 # everything CI checks on a push to develop; declared from CI step times,
 # to be corrected from the durations a premerge run records
-premerge = 5300
+premerge = 3300
 prerelease = 6000
 
 
@@ -1281,11 +1281,11 @@ proves = "the AI-facing doors, wire and MCP, answer as their contract says"
 [[check]]
 id = "release-tests"
 area = "feature"
-tier = "premerge"
+tier = "prerelease"
 cmd = "cargo test --workspace --release --lib --tests"
 expected = 2263
 timeout = 3600
-proves = "the suite passes with optimizations on, where debug-only checks are gone and timing moves"
+proves = "the suite passes with optimizations on, where debug-only checks are gone and timing moves; CI runs it on release and hotfix branches"
 
 [[check]]
 id = "wasmcheck"

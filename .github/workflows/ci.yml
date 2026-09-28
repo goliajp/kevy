@@ -902,8 +902,43 @@ jobs:
   # StackExchange.Redis, redis-py and hiredis each run the same ladder
   # (typed ops per family, a pub/sub round trip, an extended verb raw)
   # against one kevy server.
+  # ───────────── the release server, built once for the jobs that drive it ─────────────
+  # Fifteen jobs spawn target/release/kevy (clientgate, go-mirror, the
+  # client-conformance legs); each built it on its own, a minute apiece on
+  # an org whose runners are shared, so the rest of this workflow queued
+  # behind fifteen copies of the same build.
+  server-release:
+    name: release server + cli (built once, handed to the jobs that drive it)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust (stable)
+        run: |
+          rustup toolchain install stable --no-self-update
+          rustup default stable
+      - name: Cache cargo registry + build artifacts
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            target
+          key: server-release-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            server-release-
+      - name: Build server + cli (release)
+        run: cargo build --release -p kevy --bin kevy -p kevy-cli --bin kevy-cli
+      - uses: actions/upload-artifact@v7
+        with:
+          name: server-release
+          path: |
+            target/release/kevy
+            target/release/kevy-cli
+          retention-days: 1
+
   clientgate:
     name: clientgate (six redis clients, one kevy server)
+    needs: server-release
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -919,8 +954,12 @@ jobs:
             ~/.cargo/registry
             target
           key: clientgate-${{ hashFiles('Cargo.lock') }}
-      - name: Build server + cli (release)
-        run: cargo build --release -p kevy --bin kevy -p kevy-cli --bin kevy-cli
+      - name: Fetch the release server
+        uses: actions/download-artifact@v8
+        with:
+          name: server-release
+          path: target/release
+      - run: chmod +x target/release/kevy target/release/kevy-cli
       - uses: actions/setup-node@v7
         with:
           node-version: 'lts/*'
@@ -1083,6 +1122,7 @@ jobs:
   # verbatim — no invented flags.
   client-conformance:
     name: client-conformance (${{ matrix.name }})
+    needs: server-release
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -1126,8 +1166,12 @@ jobs:
 
       # Every leg's remote-backend tests spawn `target/release/kevy` — the same
       # binary the ports' harnesses locate under target/release first.
-      - name: Build the kevy server (release)
-        run: cargo build --release -p kevy --bin kevy
+      - name: Fetch the release server
+        uses: actions/download-artifact@v8
+        with:
+          name: server-release
+          path: target/release
+      - run: chmod +x target/release/kevy target/release/kevy-cli
 
       # kevy-ffi (Go/C++ staticlib, Python/Bun/C# cdylib) or kevy-napi (Node
       # addon), debug — where each port's harness looks first (target/debug).
@@ -1427,6 +1471,7 @@ jobs:
   # its first user.
   go-mirror:
     name: kevy-go mirror (pure-Go, standalone)
+    needs: server-release
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -1447,8 +1492,12 @@ jobs:
       # The mirror's remote tests need a server to talk to. Without one
       # they skip, and a fully skipped suite is also green — so the
       # generator treats a missing binary as a failure, not a skip.
-      - name: Build the server the mirror's tests talk to
-        run: cargo build --release -p kevy --bin kevy
+      - name: Fetch the release server
+        uses: actions/download-artifact@v8
+        with:
+          name: server-release
+          path: target/release
+      - run: chmod +x target/release/kevy target/release/kevy-cli
       - run: bash scripts/mirror-go-module.sh
 
   # ───────────── the website cannot go stale ─────────────
