@@ -24,6 +24,21 @@ pub struct RewritePolicy {
     pub interval_secs: u64,
 }
 
+impl RewritePolicy {
+    /// Whether the growth-rule baseline can change any decision for a log
+    /// that is `len` bytes long at open. It cannot when the staleness rule
+    /// is off and `len` is so far under `min_size` that growth past the
+    /// baseline is already implied by reaching `min_size`: the rule then
+    /// fires at `min_size` whatever the baseline, provided the baseline is
+    /// at most `len`. Open paths skip the O(keys) baseline estimate then.
+    pub fn baseline_matters(&self, len: u64) -> bool {
+        self.interval_secs > 0
+            || (self.pct > 0
+                && len.saturating_mul(100u64.saturating_add(u64::from(self.pct)))
+                    > self.min_size.saturating_mul(100))
+    }
+}
+
 impl Aof {
     /// Should this AOF be auto-compacted under `policy`? See
     /// [`RewritePolicy`] for the three rules. Always false while a

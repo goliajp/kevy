@@ -116,15 +116,7 @@ fn nap(interval: Duration, stop: &AtomicBool) {
 /// The auto-rewrite policy + metric sink, captured from config.
 #[cfg(feature = "persist")]
 fn rewrite_slot(config: &Config) -> (kevy_persist::RewritePolicy, Option<MetricSink>) {
-    (
-        kevy_persist::RewritePolicy {
-            pct: config.auto_aof_rewrite_pct,
-            min_size: config.auto_aof_rewrite_min_size,
-            bytes: config.auto_aof_rewrite_bytes,
-            interval_secs: config.auto_aof_rewrite_interval_secs,
-        },
-        config.metric_sink.clone(),
-    )
+    (config.rewrite_policy(), config.metric_sink.clone())
 }
 
 /// The reaper's tiering-config slot: the budget spec when the tier

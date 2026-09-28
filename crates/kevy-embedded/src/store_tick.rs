@@ -47,12 +47,7 @@ impl Store {
             #[cfg(feature = "persist")]
             crate::reaper::concurrent_auto_rewrite(
                 shard,
-                kevy_persist::RewritePolicy {
-                    pct: self.config.auto_aof_rewrite_pct,
-                    min_size: self.config.auto_aof_rewrite_min_size,
-                    bytes: self.config.auto_aof_rewrite_bytes,
-                    interval_secs: self.config.auto_aof_rewrite_interval_secs,
-                },
+                self.config.rewrite_policy(),
                 self.config.metric_sink.as_ref(),
             );
         }

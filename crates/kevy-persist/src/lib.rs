@@ -189,6 +189,8 @@ mod tests;
 #[cfg(test)]
 mod tests_aof;
 #[cfg(test)]
+mod tests_policy;
+#[cfg(test)]
 mod tests_rewrite;
 #[cfg(test)]
 mod tests_sync;
