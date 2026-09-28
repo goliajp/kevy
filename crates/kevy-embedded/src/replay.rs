@@ -25,13 +25,19 @@ pub(crate) fn apply(store: &mut Store, args: &Argv) {
     let Some(name) = args.first() else { return };
     let mut buf = [0u8; 32];
     let verb = kevy_verbs::args::upper_verb(name, &mut buf);
-    if !kevy_verbs::verb(verb).is_some_and(|v| v.write) || !serves_family(verb) {
+    if !serves_family(verb) {
         return;
     }
     REPLY.with(|r| {
         let mut out = r.borrow_mut();
         out.clear();
-        let _ = kevy_verbs::exec(store, verb, args, &mut out);
+        // an internal record frame is applied here, never from a client
+        if kevy_verbs::aof::apply_internal(store, args, &mut out) {
+            return;
+        }
+        if kevy_verbs::verb(verb).is_some_and(|v| v.write) {
+            let _ = kevy_verbs::exec(store, verb, args, &mut out);
+        }
     });
 }
 
@@ -42,13 +48,17 @@ fn serves_family(verb: &[u8]) -> bool {
     cfg!(feature = "streams-geo") || !kevy_verbs::is_streams_geo(verb)
 }
 
-/// Every verb [`apply`] applies: the shared layer's writes.
+/// Every verb [`apply`] applies: the shared layer's writes and the
+/// internal record verbs.
 #[cfg(test)]
 pub(crate) fn replay_verbs() -> Vec<&'static str> {
+    let internal = kevy_resp::ops_table::CONSUMER_SEEN;
     kevy_verbs::VERBS
         .iter()
-        .filter(|v| v.write && serves_family(v.name.as_bytes()))
+        .filter(|v| v.write)
         .map(|v| v.name)
+        .chain([internal])
+        .filter(|name| serves_family(name.as_bytes()))
         .collect()
 }
 

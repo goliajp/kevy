@@ -265,8 +265,8 @@ fn embed_writer_sends_stream_writes_as_what_they_did() {
     let (from, read, to) = (now(), call("XREADGROUP GROUP g c STREAMS s >"), now());
     assert!(read.starts_with("*1\r\n"), "{read}");
     let seen = words(&next_frame(&mut client, Duration::from_secs(2)));
-    assert_eq!(seen[..6], ["XGROUP", "CREATECONSUMER", "s", "g", "c", "TIME"]);
-    let met: u128 = seen[6].parse().expect("a contact time");
+    assert_eq!(seen[..4], ["XINTERNAL.CONSUMERSEEN", "s", "g", "c"]);
+    let met: u128 = seen[4].parse().expect("a contact time");
     assert!((from..=to).contains(&met), "seen at {met}, read between {from} and {to}");
     let setid = words(&next_frame(&mut client, Duration::from_secs(2)));
     assert_eq!(setid, ["XGROUP", "SETID", "s", "g", &id]);

@@ -224,7 +224,7 @@ pub use repl_trace::{repl_trace, repl_trace_line};
 pub use replica_inbox::{
     ReplicaApply, ReplicaInboxReceiver, ReplicaInboxSender, SnapshotGate, replica_inbox_pair,
 };
-pub use replication_gate::ReplicatedApplyGuard;
+pub use replication_gate::{RecordApplyGuard, ReplicatedApplyGuard, applying_record};
 pub use replication_secure::ReplicationSecurity;
 pub use route::{Route, ScanArgs, XGroupCtx};
 pub use runtime::Runtime;

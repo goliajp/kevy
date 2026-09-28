@@ -12,8 +12,9 @@ use kevy_resp::ops_table::{OP_TABLE, surface};
 use crate::verb_meta::{VERB_META, verb_meta};
 
 /// Verbs dispatch reaches that are deliberately NOT documented:
-/// internal fan-out continuations (not wire-facing top-level verbs).
-const UNDOCUMENTED_INTERNAL: &[&str] = &["AGG.FETCH", "VIEW.HYDRATE"];
+/// internal fan-out continuations and internal record verbs (not
+/// wire-facing top-level verbs).
+const UNDOCUMENTED_INTERNAL: &[&str] = &["AGG.FETCH", "VIEW.HYDRATE", "XINTERNAL.CONSUMERSEEN"];
 
 #[test]
 fn op_table_server_verbs_all_documented() {

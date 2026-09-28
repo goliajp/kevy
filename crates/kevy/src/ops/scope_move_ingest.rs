@@ -73,6 +73,8 @@ fn apply_ingest_frames(
     store: &mut Store,
     bulk: &[u8],
 ) -> Result<usize, IngestError> {
+    // the frames are a record another node wrote, internal verbs included
+    let _record = kevy_rt::RecordApplyGuard::enter();
     let mut buf = bulk.to_vec();
     let mut applied = 0usize;
     let mut scratch = Vec::with_capacity(256);

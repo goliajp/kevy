@@ -114,15 +114,16 @@ pub enum Effect {
     /// assert!(matches!(effect, Effect::RecordClaim(_)));
     /// let frames = kevy_verbs::aof::deferred_frames(&mut store, &claim, &effect);
     /// // b is new, so its contact comes first, then the claim
-    /// assert_eq!(&frames[0][1], b"CREATECONSUMER");
+    /// assert_eq!(&frames[0][0], b"XINTERNAL.CONSUMERSEEN");
     /// let head: Vec<&[u8]> = (0..6).map(|i| &frames[1][i]).collect();
     /// assert_eq!(head, [&b"XCLAIM"[..], b"s", b"g", b"b", b"0", b"1-1"]);
     /// ```
     RecordClaim(Box<aof::Claim>),
     /// Record a one-stream `XREADGROUP` as what it left, not as a read a
     /// replay would stamp with its own clock: `.0` is the group's
-    /// last-delivered ID before the read. Carries no frame: a caller that
-    /// records builds them with [`aof::deferred_frames`].
+    /// last-delivered ID before the read, `.1` whether the read created its
+    /// consumer. Carries no frame: a caller that records builds them with
+    /// [`aof::deferred_frames`].
     ///
     /// ```
     /// use kevy_verbs::{Effect, exec};
@@ -136,16 +137,16 @@ pub enum Effect {
     /// }
     /// let read = argv("XREADGROUP GROUP g a STREAMS s >");
     /// let effect = exec(&mut store, b"XREADGROUP", &read, &mut Vec::new()).unwrap();
-    /// assert_eq!(effect, Effect::RecordRead(kevy_store::StreamId::MIN));
+    /// assert_eq!(effect, Effect::RecordRead(kevy_store::StreamId::MIN, true));
     /// let frames = kevy_verbs::aof::deferred_frames(&store, &read, &effect);
     /// let verbs: Vec<&[u8]> = frames.iter().map(|f| &f[0]).collect();
     /// // the consumer's contact, the group's move, then the delivery
-    /// assert_eq!(verbs, [&b"XGROUP"[..], b"XGROUP", b"XCLAIM"]);
+    /// assert_eq!(verbs, [&b"XINTERNAL.CONSUMERSEEN"[..], b"XGROUP", b"XCLAIM"]);
     /// ```
-    RecordRead(StreamId),
+    RecordRead(StreamId, bool),
     /// [`Effect::RecordRead`] for an `XREADGROUP` over several streams:
-    /// the last-delivered ID before the read per stream, in `STREAMS`
-    /// order.
+    /// one `(last-delivered before, consumer created)` pair per stream, in
+    /// `STREAMS` order.
     ///
     /// ```
     /// use kevy_verbs::{Effect, exec};
@@ -163,11 +164,11 @@ pub enum Effect {
     /// };
     /// assert_eq!(marks.len(), 2);
     /// ```
-    RecordReads(Vec<StreamId>),
+    RecordReads(Vec<(StreamId, bool)>),
     /// Record an `XGROUP CREATECONSUMER` that created its consumer as
-    /// `XGROUP CREATECONSUMER key group consumer TIME t`, `t` the time it
-    /// was created at, so a replay does not create it at its own. Carries
-    /// no frame: a caller that records builds it with
+    /// `XINTERNAL.CONSUMERSEEN key group consumer t`, `t` the time it was
+    /// created at, so a replay does not create it at its own. Carries no
+    /// frame: a caller that records builds it with
     /// [`aof::deferred_frames`].
     ///
     /// ```
@@ -182,7 +183,7 @@ pub enum Effect {
     /// let effect = exec(&mut store, b"XGROUP", &create, &mut Vec::new()).unwrap();
     /// assert_eq!(effect, Effect::RecordSeen);
     /// let frame = &kevy_verbs::aof::deferred_frames(&store, &create, &effect)[0];
-    /// assert_eq!((frame.len(), &frame[5]), (7, &b"TIME"[..]));
+    /// assert_eq!((frame.len(), &frame[0]), (5, &b"XINTERNAL.CONSUMERSEEN"[..]));
     /// ```
     RecordSeen,
     /// Record nothing, not even the argv: a random command that removed

@@ -91,6 +91,7 @@ pub(crate) fn is_write_verb(cmd: &[u8]) -> bool {
             | b"XACK"
             | b"XCLAIM"
             | b"XAUTOCLAIM"
+            | b"XINTERNAL.CONSUMERSEEN"
             | b"MSET"
             // EVAL/EVALSHA count as writes so the Lua wake-bridge drains.
             | b"EVAL" | b"EVALSHA"

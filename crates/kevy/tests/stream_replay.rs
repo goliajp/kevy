@@ -222,13 +222,25 @@ fn seen(c: &mut Conn) -> (Vec<(String, i64)>, std::time::Instant) {
     (consumer_idles(&c.call("XINFO CONSUMERS s g")), std::time::Instant::now())
 }
 
-/// Each consumer's idle time went on by what passed since `at`.
-fn assert_went_on(before: &[(String, i64)], after: &[(String, i64)], at: std::time::Instant) {
+/// Each consumer's idle time went on by what passed since `at`, except
+/// `polled`'s, whose last contact was an empty read.
+fn assert_went_on(
+    before: &[(String, i64)],
+    after: &[(String, i64)],
+    at: std::time::Instant,
+    polled: Option<&str>,
+) {
     let elapsed = at.elapsed().as_millis() as i64;
     assert_eq!(before.len(), 6, "six consumers: {before:?}");
     for ((name, b), (other, a)) in before.iter().zip(after) {
         assert_eq!(name, other);
         let gap = a - b;
+        if polled == Some(name.as_str()) {
+            // its last contact was an empty read, which is not recorded:
+            // it comes back from its last delivering read, well before
+            assert!(gap > elapsed + 60, "{name}: the empty read was recorded ({b} -> {a})");
+            continue;
+        }
         assert!(
             (elapsed - 80..=elapsed + 80).contains(&gap),
             "{name}: idle went {b} -> {a} over {elapsed} ms: it started over instead of going on"
@@ -238,9 +250,11 @@ fn assert_went_on(before: &[(String, i64)], after: &[(String, i64)], at: std::ti
 
 /// A consumer's last contact with its group comes back from the log as
 /// it was, however the consumer came about or was last seen: a read that
-/// delivered, a read that found nothing, a history read, `CREATECONSUMER`,
-/// and the claims that create their consumer. Twice: from the log as
-/// written, and from the log `BGREWRITEAOF` compacts it to.
+/// delivered, a history read that made its consumer, `CREATECONSUMER`,
+/// and the claims that create their consumer. A read that delivered
+/// nothing is not recorded, so a consumer last seen by one comes back with
+/// its earlier contact. Twice: from the log as written, and from the log
+/// `BGREWRITEAOF` compacts it to.
 #[test]
 fn consumer_seen_times_survive_a_restart() {
     let dir = kevy_tmpdir::TmpDir::new("stream-seen");
@@ -268,7 +282,7 @@ fn consumer_seen_times_survive_a_restart() {
     with_runtime(free_port(), dir.path(), 1, |p| {
         let mut c = Conn::open(p);
         let (now, _) = seen(&mut c);
-        assert_went_on(&first.0, &now, first.1);
+        assert_went_on(&first.0, &now, first.1, Some("reader"));
         second = seen(&mut c);
         assert_eq!(c.call("BGREWRITEAOF"), "+OK\r\n");
         let aof = dir.path().join("aof-0.aof");
@@ -280,6 +294,26 @@ fn consumer_seen_times_survive_a_restart() {
     });
     with_runtime(free_port(), dir.path(), 1, |p| {
         let (now, _) = seen(&mut Conn::open(p));
-        assert_went_on(&second.0, &now, second.1);
+        assert_went_on(&second.0, &now, second.1, None);
+    });
+}
+
+/// The internal record verb is refused from a client — over the wire and
+/// from a script — and changes nothing; the same frame read back from the
+/// AOF is applied (the restart tests above).
+#[test]
+fn the_internal_record_verb_is_refused_from_a_client() {
+    let dir = kevy_tmpdir::TmpDir::new("stream-internal");
+    with_runtime(free_port(), dir.path(), 1, |p| {
+        let mut c = Conn::open(p);
+        assert_eq!(c.call("XGROUP CREATE s g $ MKSTREAM"), "+OK\r\n");
+        let want = format!("-{}\r\n", kevy_verbs::aof::INTERNAL_REFUSAL);
+        assert_eq!(c.call("XINTERNAL.CONSUMERSEEN s g c 1"), want);
+        assert_eq!(c.call("xinternal.consumerseen s g c 1"), want);
+        // the call splits on spaces, so the script has none
+        let script = "return(redis.call('XINTERNAL.CONSUMERSEEN','s','g','c','1'))";
+        let reply = c.call(&format!("EVAL {script} 0"));
+        assert!(reply.starts_with('-') && reply.contains("not accepted from a client"), "{reply}");
+        assert_eq!(c.call("XINFO CONSUMERS s g"), "*0\r\n", "a refused record made a consumer");
     });
 }
