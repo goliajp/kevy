@@ -246,5 +246,23 @@ impl Drop for DropGuard {
         if let Some((feed, dir)) = &self.feed_close {
             Store::feed_write_close_marker(feed, dir);
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        self.free_entries_off_thread();
+    }
+}
+
+impl DropGuard {
+    /// Freeing the entries is most of the cost of closing a large store,
+    /// and nothing after the close depends on it, so a thread does it. The
+    /// parts that hold files (the AOF, the tier log) stay behind and close
+    /// here, before the directory lock is released. If the thread cannot
+    /// start, the closure holding the entries drops here instead.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn free_entries_off_thread(&self) {
+        let entries: Vec<kevy_store::DetachedEntries> =
+            self.shards_for_flush.iter().map(|s| lock_write(s).store.detach_entries()).collect();
+        let _ = std::thread::Builder::new()
+            .name(String::from("kevy-embedded-free"))
+            .spawn(move || drop(entries));
     }
 }
