@@ -17,7 +17,7 @@ use super::kevy_err;
 use crate::store::Store;
 use kevy_resp::encode_error;
 
-pub(super) const CREATE_USAGE: &str = "ERR usage: IDX.CREATE name ON PREFIX p FIELD f | FIELDS f… [WEIGHTS w…] TYPE i64|f64|str|vector KIND range|unique|text|ann [WITH POSITIONS] [VALUES f… [TYPES t…]] [MAXMEM b] [DIM d] [DISTANCE c] [M m] [EF e]";
+pub(super) const CREATE_USAGE: &str = "ERR usage: IDX.CREATE name ON PREFIX p FIELD f | FIELDS f… [WEIGHTS w…] TYPE i64|f64|str|vector KIND range|unique|text|ann [WITH POSITIONS] [VALUES f… [TYPES t…]] [MAXMEM b] [DIM d] [DISTANCE c] [M m] [EF e] [PARTITION local|global] [SPLIT v]…";
 
 /// Optional CREATE tail, parsed out. MAXMEM is accepted then ignored
 /// (the embedded build is synchronous, with no budget). Without the
