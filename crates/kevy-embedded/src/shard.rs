@@ -346,7 +346,7 @@ fn load_in_place(
 /// forward by `build_shards`' recovery on the next open. Each shard's fresh
 /// Before the layout changes, each old shard's staging ring hands what it
 /// owes to that shard's AOF, which the merge then reads; the ring goes.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "persist", not(target_arch = "wasm32")))]
 fn settle_stages(dir: &Path, config: &Config, src_n: usize) -> io::Result<()> {
     for i in 0..src_n {
         let stage = layout::stage_path(dir, i);
