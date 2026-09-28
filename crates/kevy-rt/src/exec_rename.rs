@@ -43,8 +43,7 @@ impl<C: Commands> Shard<C> {
             self.push_pending_slot(conn_id, 1, Agg::First(None), false);
             let op = Op::Rename { src, dst, nx };
             if src_shard == self.id {
-                let part = self.exec_op(op);
-                self.fold(conn_id, seq, part);
+                self.exec_local(conn_id, seq, op);
             } else {
                 self.send_to(
                     src_shard,
@@ -91,8 +90,7 @@ impl<C: Commands> Shard<C> {
         }
         let take_op = Op::RenameTake(src);
         if src_shard == self.id {
-            let part = self.exec_op(take_op);
-            self.fold(conn_id, seq, part);
+            self.exec_local(conn_id, seq, take_op);
         } else {
             self.send_to(
                 src_shard,
@@ -167,8 +165,7 @@ impl<C: Commands> Shard<C> {
         }
         let put_op = Op::RenamePut { dst, value, ttl_ms, nx };
         if dst_shard == self.id {
-            let part = self.exec_op(put_op);
-            self.fold(conn_id, seq, part);
+            self.exec_local(conn_id, seq, put_op);
         } else {
             self.send_to(
                 dst_shard,
@@ -245,8 +242,7 @@ impl<C: Commands> Shard<C> {
         }
         let restore_op = Op::RenamePut { dst: src, value, ttl_ms, nx: false };
         if src_shard == self.id {
-            let part = self.exec_op(restore_op);
-            self.fold(conn_id, seq, part);
+            self.exec_local(conn_id, seq, restore_op);
         } else {
             self.send_to(
                 src_shard,

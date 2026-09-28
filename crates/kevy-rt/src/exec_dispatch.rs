@@ -101,7 +101,7 @@ impl<C: Commands> Shard<C> {
             // dispatch straight off the borrowed argv — no owned
             // materialise needed.
             let part = self.run_dispatch(args, proto, meta);
-            self.fold(conn_id, seq, part);
+            self.fold_unless_held(conn_id, seq, part);
         } else {
             self.forward_to(shard, conn_id, seq, args, proto, meta);
         }
@@ -256,6 +256,9 @@ impl<C: Commands> Shard<C> {
         self.slowlog_maybe(t0, args);
         if meta.is_write {
             self.post_write_housekeeping(args, meta);
+            if let Some(t) = self.send_ext(true) {
+                self.hold_inline_reply(conn_id, out_pre_len, t);
+            }
         }
         true
     }

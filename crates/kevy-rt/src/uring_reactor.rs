@@ -272,6 +272,8 @@ impl<C: Commands> Shard<C> {
             // discarded; with the dirty-set arm loop, the marks are
             // load-bearing.
             self.flush_backlog();
+            // unacknowledged hook messages (see `exec_ext`)
+            self.send_ext(false);
             self.flush_requests();
             self.flush_publish();
             self.flush_wakes();

@@ -52,8 +52,7 @@ impl<C: Commands> Shard<C> {
         }
         for (shard, op) in targets {
             if shard == self.id {
-                let part = self.exec_op(op);
-                self.fold(conn_id, seq, part);
+                self.exec_local(conn_id, seq, op);
             } else {
                 self.send_to(shard, Inbound::Request { origin: self.id, conn: conn_id, seq, op });
             }
@@ -159,8 +158,7 @@ impl<C: Commands> Shard<C> {
     ) {
         let op = Op::CheckWatch(pairs);
         if shard == self.id {
-            let part = self.exec_op(op);
-            self.fold(conn_id, seq, part);
+            self.exec_local(conn_id, seq, op);
         } else {
             self.send_to(shard, Inbound::Request { origin: self.id, conn: conn_id, seq, op });
         }

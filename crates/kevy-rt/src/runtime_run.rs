@@ -306,6 +306,7 @@ impl<C: Commands> Runtime<C> {
                 rewrite_rate_mark: None,
                 rewrite_calm_ticks: 0,
                 xshard_inflight: 0,
+                ext_waits: Default::default(),
                 id,
                 nshards: n,
                 cluster: topo.clone(),

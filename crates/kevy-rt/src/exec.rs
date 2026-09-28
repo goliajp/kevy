@@ -258,8 +258,7 @@ impl<C: Commands> Shard<C> {
         self.flush_requests();
         for (shard, op) in targets {
             if shard == self.id {
-                let part = self.exec_op(op);
-                self.fold(conn_id, seq, part);
+                self.exec_local(conn_id, seq, op);
             } else {
                 // Multi-key ops (Del/MSet/Gather/…) use the unbatched path.
                 self.xshard_inflight += 1;

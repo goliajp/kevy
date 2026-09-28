@@ -40,6 +40,8 @@ pub(crate) struct Shard<C: Commands> {
     /// multi-shard owner-starvation regression; see the legacy8sh
     /// owner-starvation PERF-DECOMP note in bench/).
     pub(crate) xshard_inflight: u64,
+    /// Replies held until their write's hook messages are applied.
+    pub(crate) ext_waits: crate::exec_ext::ExtWaits,
     pub(crate) id: usize,
     pub(crate) nshards: usize,
     /// Cluster mode (`Some` = on): switches key→shard routing from KevyHash

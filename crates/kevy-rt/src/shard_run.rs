@@ -311,6 +311,9 @@ impl<C: Commands> Shard<C> {
             slow.mark("inbound");
             // Re-push anything that overflowed a full ring last iteration.
             self.flush_backlog();
+            // Hook messages no client waits on (expiry, replica apply,
+            // backfill) go out unacknowledged, ahead of the batch below.
+            self.send_ext(false);
             // Send this iteration's batched single-key dispatches (one per target).
             self.flush_requests();
             // Send this iteration's batched pub/sub deliveries (one per target).

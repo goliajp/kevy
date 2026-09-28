@@ -140,8 +140,7 @@ impl<C: Commands> Shard<C> {
             return;
         }
         if shard == self.id {
-            let part = self.exec_op(op);
-            self.fold(conn_id, seq, part);
+            self.exec_local(conn_id, seq, op);
         } else {
             self.send_to(
                 shard,
