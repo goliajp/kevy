@@ -91,7 +91,7 @@ cold key ≈ 96 B (entry overhead) + key heap bytes     # value fully reclaimed
 **那 96 B 究竟是什么，决定了杠杆在哪里。** 它是**键空间条目**（`ENTRY_OVERHEAD`：内联的键单元加上那个 `Entry`），是**每一个**键无论有没有被分层都要付的——冷 stub 本身 24 B 内联、不占堆。分层能把值还回来，却永远还不回那个给值命名的键，所以**没有任何分层旋钮能移动这个数字**；能移动它的只有 store 的条目布局，而改动它意味着改动每一种工况下每一个键的代价。
 
   **256 B 时预算不是紧，而是根本守不住**：20 万条就越过 16 MB 预算，80 万条时用到 77 MB——因为降级一个 256 B 值省下的还不够它留下的 stub。窄记录要手算着定预算。
-- **算例（按模型推算，不是实测）**：10 M 行 × 约 1 KiB（约 10 GB 数据）加 2 个二级索引和存储的 VALUES 列，装进 **3 GB** 预算：stub 下限 10 M × 约 108 B ≈ 1.1 GB，索引下限 10 M ×（68 + 68 + 约 30 VALUES 字节）≈ 1.7 GB，合计 ≈ 2.8 GB ≤ 3 GB。值为 4 KiB 时，比例门禁是 ≥ 10× `data:RAM`（5 M × 4 KiB = 20 GB 对 2 GB 预算；stub 下限 ≈ 540 MB）。窄行由每键固定成本主导——在相信任何预算之前，先把 stub 下限和索引下限算一遍，这正是公式放在前面的原因。
+- **算例（按模型推算，不是实测）**：10 M 行 × 约 1 KiB（约 10 GB 数据）加 2 个二级索引和存储的 VALUES 列，装进 **4 GB** 预算：stub 下限 10 M × 约 108 B ≈ 1.1 GB，索引下限 10 M ×（键长约 12 字节时每个索引 94–105 字节 × 2 + 约 30 VALUES 字节）≈ 2.2–2.4 GB，合计 ≈ 3.3–3.5 GB ≤ 4 GB。值为 4 KiB 时，比例门禁是 ≥ 10× `data:RAM`（5 M × 4 KiB = 20 GB 对 2 GB 预算；stub 下限 ≈ 540 MB）。窄行由每键固定成本主导——在相信任何预算之前，先把 stub 下限和索引下限算一遍，这正是公式放在前面的原因。
 
 ## 冷键上的语义
 
@@ -138,8 +138,14 @@ cold key ≈ 96 B (entry overhead) + key heap bytes     # value fully reclaimed
 | `promotions_total` | 启动以来换回的值数 |
 | `peek_preads_total` | 不 promote 的冷读次数（每个冷**行**一次） |
 | `batch_submissions_total` | 批量冷读提交次数（hydration 页） |
+| `vlog_raw_bytes` | 磁盘上各 vlog 文件里的值在压缩前的字节数 |
+| `vlog_payload_bytes` | 磁盘上压缩后的负载字节数 |
+| `vlog_frame_header_bytes` | 磁盘上每条记录的帧头（标记字节 + 原始长度） |
+| `vlog_dict_bytes` | 内存里的压缩字典，每个 vlog 文件一份 |
 
 `vlog_size_bytes / cold_bytes` 是空间放大比，验收门禁把它压在 ≤ 2.0×；`peek_preads_total` 是你验证一页 hydration 每行只付一次读、而不是每字段一次的办法。
+
+`(vlog_payload_bytes + vlog_frame_header_bytes) / vlog_raw_bytes` 是 vlog 当前所存内容（含已死记录）的压缩比。压缩之后剩下的就是这两项加上字典；负载里既有数据本身的熵，也有编码器没找到的重复，这两部分在日志内部分不开。`vlog_size_bytes` 的其余部分是记录封装：每条记录 12 字节加上键。
 
 ## 性能预期
 

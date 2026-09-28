@@ -6,7 +6,6 @@ use crate::Commands;
 use crate::message::{Agg, Part, PendingSlot, SmallReply};
 use crate::reduce::{drain_front, materialize};
 use crate::shard::Shard;
-use kevy_resp::ArgvView;
 
 impl<C: Commands> Shard<C> {
     /// Fold a sub-result into its slot; emit completed replies in seq order.
@@ -228,29 +227,6 @@ impl<C: Commands> Shard<C> {
         };
         self.fold(conn_id, seq, Part::Reply(SmallReply::from_slice(b"-ERR Protocol error\r\n")));
     }
-}
-
-/// Does `args` set a TTL via a *relative* duration (vs absolute `*AT`)? Such
-/// writes need an absolute `PEXPIREAT` follow-up in the AOF — see
-/// [`Shard::log_write`]. `SET … EXAT|PXAT` aren't parsed by the server's SET,
-/// so only `EX`/`PX` count here.
-pub(crate) fn relative_ttl_write<A: ArgvView + ?Sized>(args: &A) -> bool {
-    if args.len() < 3 {
-        return false;
-    }
-    let verb = &args[0];
-    if verb.eq_ignore_ascii_case(b"EXPIRE")
-        || verb.eq_ignore_ascii_case(b"PEXPIRE")
-        || verb.eq_ignore_ascii_case(b"SETEX")
-        || verb.eq_ignore_ascii_case(b"PSETEX")
-    {
-        return true;
-    }
-    if verb.eq_ignore_ascii_case(b"SET") {
-        return (3..args.len())
-            .any(|i| args[i].eq_ignore_ascii_case(b"EX") || args[i].eq_ignore_ascii_case(b"PX"));
-    }
-    false
 }
 
 /// Uniform in `0..n` from one raw draw (Lemire's multiply-shift, no rejection).

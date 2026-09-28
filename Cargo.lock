@@ -445,6 +445,7 @@ dependencies = [
  "kevy-tmpdir",
  "kevy-uring",
  "kevy-vector",
+ "kevy-verbs",
  "kevy-window",
 ]
 
@@ -582,6 +583,7 @@ dependencies = [
  "kevy-text",
  "kevy-tmpdir",
  "kevy-vector",
+ "kevy-verbs",
  "kevy-window",
 ]
 
@@ -734,6 +736,7 @@ dependencies = [
  "kevy-store",
  "kevy-sys",
  "kevy-uring",
+ "kevy-verbs",
  "loom",
 ]
 
@@ -808,6 +811,14 @@ dependencies = [
 [[package]]
 name = "kevy-vector"
 version = "6.4.0"
+
+[[package]]
+name = "kevy-verbs"
+version = "6.4.0"
+dependencies = [
+ "kevy-resp",
+ "kevy-store",
+]
 
 [[package]]
 name = "kevy-vlog"

@@ -13,8 +13,9 @@
 
 use kevy_index::{FieldSpec, IndexKind, ValType, ValueSpec};
 
-use super::util::{err, kevy_err};
+use super::kevy_err;
 use crate::store::Store;
+use kevy_resp::encode_error;
 
 pub(super) const CREATE_USAGE: &str = "ERR usage: IDX.CREATE name ON PREFIX p FIELD f | FIELDS f… [WEIGHTS w…] TYPE i64|f64|str|vector KIND range|unique|text|ann [WITH POSITIONS] [VALUES f… [TYPES t…]] [MAXMEM b] [DIM d] [DISTANCE c] [M m] [EF e]";
 
@@ -47,7 +48,7 @@ struct Parsed {
 pub(super) fn cmd_idx_create(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     match parse(argv) {
         Ok(p) => route(s, argv, &p, out),
-        Err(msg) => err(out, msg),
+        Err(msg) => encode_error(out, msg),
     }
 }
 
@@ -326,7 +327,7 @@ fn route(s: &Store, argv: &[Vec<u8>], p: &Parsed, out: &mut Vec<u8>) {
     // the typed `idx_create_agg` / `idx_create_ann` capabilities do not
     // carry a values list to be refused downstream.
     if !p.opts.values.is_empty() && matches!(p.kind, IndexKind::Agg | IndexKind::Ann) {
-        return err(out, "ERR VALUES requires KIND text|range|unique");
+        return encode_error(out, "ERR VALUES requires KIND text|range|unique");
     }
     let res = match p.kind {
         #[cfg(feature = "text")]
@@ -347,7 +348,7 @@ fn route(s: &Store, argv: &[Vec<u8>], p: &Parsed, out: &mut Vec<u8>) {
             },
         ),
         #[cfg(not(feature = "vector"))]
-        IndexKind::Ann => return err(out, "ERR vector indexes need the `vector` feature"),
+        IndexKind::Ann => return encode_error(out, "ERR vector indexes need the `vector` feature"),
         // range / unique (and text / ann when their feature is off — the
         // Store returns the same feature error the server would).
         _ if p.opts.values.is_empty() => s.idx_create(name, prefix, field0, p.ty, p.kind),

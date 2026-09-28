@@ -41,6 +41,7 @@ mod aof;
 mod aof_policy;
 mod aof_queue;
 mod aof_rewrite;
+mod aof_sync;
 mod aof_txn;
 mod aof_util;
 mod baseline;
@@ -50,6 +51,7 @@ mod dump_cache;
 pub mod feed_meta;
 pub mod layout;
 mod record;
+mod record_pieces;
 mod replay;
 mod replay_log;
 mod replay_resync;
@@ -69,6 +71,7 @@ mod snapshot_write;
 
 pub use aof::{AOF_MAGIC, Aof, Fsync, RewritePlan, RewriteStats};
 pub use aof_policy::RewritePolicy;
+pub use aof_sync::PendingSync;
 pub use aof_util::write_aof_base;
 pub use baseline::estimate_rewrite_size;
 pub use record::{AOF2_MAGIC, AofFormat, RecordStep, next_record, write_record_multibulk};
@@ -187,5 +190,7 @@ mod tests;
 mod tests_aof;
 #[cfg(test)]
 mod tests_rewrite;
+#[cfg(test)]
+mod tests_sync;
 #[cfg(test)]
 mod tests_tier_stream;

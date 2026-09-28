@@ -25,6 +25,7 @@ mod rowvalues;
 mod segcold;
 mod segment;
 mod segment_claused;
+mod segment_entry;
 mod table;
 mod table_sidecar;
 mod table_verify;

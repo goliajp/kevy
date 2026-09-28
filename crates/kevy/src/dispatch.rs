@@ -1,20 +1,16 @@
 //! The command dispatch table: maps one parsed command to its RESP reply.
 //!
-//! [`dispatch`] is a thin router that tries each category handler in turn. Each
-//! handler (`dispatch_string`, `dispatch_hash`, …) owns a `match` over the verbs
-//! it implements and reports whether it handled the command, so no single
-//! function carries the whole command set. Command bodies delegate to the
-//! helpers in [`crate::cmd`].
+//! [`dispatch`] is a thin router that tries each category handler in turn.
+//! The single-shard data commands are executed by `kevy_verbs::exec`, the
+//! same code the embedded engine runs; what stays here is what only a
+//! server has — connection state, the ops and cluster verbs, RESP3 reply
+//! shapes, geo, streams, Lua, scope routing and the `maxmemory` bracket.
 
-use crate::cmd::{
-    OOM_ERR, cmd_expire, cmd_expireat, cmd_hello, cmd_set, cmd_spop_rand, cmd_ttl, emit_bulk_array,
-    emit_int_result, is_growing_write_verb, rest_borrowed, store_err, upper_verb, wrong_args,
-};
+use crate::cmd::{OOM_ERR, cmd_hello, is_growing_write_verb, store_err, upper_verb, wrong_args};
 use crate::state::Ctx;
-use kevy_resp::{
-    ArgvView, encode_bulk, encode_error, encode_integer, encode_null_bulk, encode_simple_string,
-};
+use kevy_resp::{ArgvView, encode_bulk, encode_error, encode_null_bulk, encode_simple_string};
 use kevy_store::Store;
+use kevy_verbs::Effect;
 
 /// Map one command to its RESP reply bytes.
 pub(crate) fn dispatch<A: ArgvView + ?Sized>(
@@ -127,10 +123,10 @@ fn dispatch_with_proto<A: ArgvView + ?Sized>(
                     encode_error(out, OOM_ERR);
                     return;
                 }
-                cmd_set(store, args, out);
+                kevy_verbs::cmd::set(store, args, out);
                 store.try_evict_after_write();
             } else {
-                cmd_set(store, args, out);
+                kevy_verbs::cmd::set(store, args, out);
             }
             // Tiering's demotion twin: internally gated on
             // `tier.is_some()` — one not-taken branch when off.
@@ -150,18 +146,12 @@ fn dispatch_with_proto<A: ArgvView + ?Sized>(
         && crate::dispatch_resp3::try_resp3_overrides(ctx, cmd, store, args, out))
         || dispatch_conn(ctx, cmd, store, args, out)
         || crate::ops::dispatch_ops(ctx, cmd, store, args, out)
-        || crate::dispatch_strings::dispatch_string(cmd, store, args, out)
-        || crate::dispatch_bitmap::dispatch_bitmap(cmd, store, args, out)
-        || crate::dispatch_collections::dispatch_hash(cmd, store, args, out)
-        || crate::dispatch_collections::dispatch_list(cmd, store, args, out)
-        || dispatch_set(cmd, store, args, out)
-        || crate::dispatch_collections::dispatch_zset(cmd, store, args, out)
+        || exec_shared(cmd, store, args, out)
         || crate::dispatch_geo::dispatch_geo(cmd, store, args, out)
         || crate::dispatch_stream::dispatch_stream(cmd, store, args, out)
         // EVAL / EVALSHA / EVAL_RO / EVALSHA_RO / SCRIPT.
         || crate::cmd_lua::dispatch_lua(ctx, cmd, store, args, out)
-        || dispatch_generic(cmd, store, args, out)
-        || crate::dispatch_replay::dispatch_multikey_stub(cmd, store, args, out);
+        || crate::dispatch_replay::dispatch_multikey_stub(cmd, out);
     if !handled {
         crate::cmd::unhandled_verb(out, name, args.len());
         return;
@@ -177,6 +167,46 @@ fn dispatch_with_proto<A: ArgvView + ?Sized>(
     if is_grow {
         store.try_demote_after_write();
     }
+}
+
+/// The single-shard data commands, run by the layer the embedded engine
+/// shares. A command whose effect is random asks for a different record
+/// than its argv; the runtime's post-write step reads that override.
+#[inline]
+fn exec_shared<A: ArgvView + ?Sized>(
+    cmd: &[u8],
+    store: &mut Store,
+    args: &A,
+    out: &mut Vec<u8>,
+) -> bool {
+    match kevy_verbs::exec(store, cmd, args, out) {
+        None => false,
+        Some(Effect::Record(frame)) => {
+            record_instead(kevy_rt::propagation::Propagate::Replace(frame));
+            true
+        }
+        Some(Effect::Skip) => {
+            record_instead(kevy_rt::propagation::Propagate::Suppress);
+            true
+        }
+        Some(_) => true,
+    }
+}
+
+#[cold]
+fn record_instead(p: kevy_rt::propagation::Propagate) {
+    kevy_rt::propagation::set_override(p);
+}
+
+/// Record an `SPOP` by the members it removed, for a reply path that pops
+/// outside [`kevy_verbs::exec`]; an empty pop records nothing.
+pub(crate) fn record_spop(key: &[u8], popped: &[Vec<u8>]) {
+    record_instead(if popped.is_empty() {
+        kevy_rt::propagation::Propagate::Suppress
+    } else {
+        let frame = kevy_verbs::aof::spop_effect(key, popped);
+        kevy_rt::propagation::Propagate::Replace(frame.into_iter().map(<[u8]>::to_vec).collect())
+    });
 }
 
 // `try_resp3_overrides` + the `emit_*_resp3` helpers live in
@@ -285,127 +315,4 @@ fn cmd_select<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
         // — this one is a real parser error, not a kevy-specific limit.
         Err(_) => encode_error(out, "ERR value is not an integer or out of range"),
     }
-}
-
-/// Set commands (single-key; multi-key SINTER/SUNION/SDIFF are runtime gathers).
-// LOC-WAIVER: data-driven verb dispatch table — one arm per set verb.
-fn dispatch_set<A: ArgvView + ?Sized>(
-    cmd: &[u8],
-    store: &mut Store,
-    args: &A,
-    out: &mut Vec<u8>,
-) -> bool {
-    match cmd {
-        b"SADD" => {
-            if args.len() < 3 {
-                wrong_args(out, "sadd");
-            } else {
-                emit_int_result(
-                    store.sadd(&args[1], &rest_borrowed(args, 2)).map(|n| n as i64),
-                    out,
-                );
-            }
-        }
-        b"SREM" => {
-            if args.len() < 3 {
-                wrong_args(out, "srem");
-            } else {
-                emit_int_result(
-                    store.srem(&args[1], &rest_borrowed(args, 2)).map(|n| n as i64),
-                    out,
-                );
-            }
-        }
-        b"SCARD" => {
-            if args.len() == 2 {
-                emit_int_result(store.scard(&args[1]).map(|n| n as i64), out);
-            } else {
-                wrong_args(out, "scard");
-            }
-        }
-        b"SISMEMBER" => {
-            if args.len() == 3 {
-                emit_int_result(store.sismember(&args[1], &args[2]).map(i64::from), out);
-            } else {
-                wrong_args(out, "sismember");
-            }
-        }
-        b"SMEMBERS" => {
-            if args.len() == 2 {
-                emit_bulk_array(store.smembers(&args[1]), out);
-            } else {
-                wrong_args(out, "smembers");
-            }
-        }
-        b"SPOP" => cmd_spop_rand(store, args, true, out),
-        b"SRANDMEMBER" => cmd_spop_rand(store, args, false, out),
-        _ => return false,
-    }
-    true
-}
-
-/// Type-agnostic key commands.
-// LOC-WAIVER: data-driven verb dispatch table — one arm per generic verb.
-fn dispatch_generic<A: ArgvView + ?Sized>(
-    cmd: &[u8],
-    store: &mut Store,
-    args: &A,
-    out: &mut Vec<u8>,
-) -> bool {
-    match cmd {
-        // UNLINK is the Redis 4.0+ async-delete variant; kevy's
-        // single-thread-per-shard model makes the "async" part
-        // moot (no other reactor steps happen during DEL), so it
-        // aliases DEL byte-for-byte. Sidekiq's heartbeat depends
-        // on it.
-        b"DEL" | b"UNLINK" => {
-            let verb = if cmd == b"DEL" { "del" } else { "unlink" };
-            if args.len() < 2 {
-                wrong_args(out, verb);
-            } else {
-                encode_integer(out, store.del(&rest_borrowed(args, 1)) as i64);
-            }
-        }
-        // TOUCH counts the keys that exist, and the existence check is
-        // what refreshes the eviction bookkeeping on each owning shard
-        // — so in this engine it IS `exists`, which is what the embedded
-        // facade's `touch` says in one line (`ops_keyspace.rs`, it calls
-        // `self.exists`). Two arms answering identically would be two
-        // places to keep identical.
-        b"EXISTS" | b"TOUCH" => {
-            let verb = if cmd == b"EXISTS" { "exists" } else { "touch" };
-            if args.len() < 2 {
-                wrong_args(out, verb);
-            } else {
-                encode_integer(out, store.exists(&rest_borrowed(args, 1)) as i64);
-            }
-        }
-        b"EXPIRE" => cmd_expire(store, args, 1000, "expire", out),
-        b"PEXPIRE" => cmd_expire(store, args, 1, "pexpire", out),
-        b"EXPIREAT" => cmd_expireat(store, args, 1000, "expireat", out),
-        b"PEXPIREAT" => cmd_expireat(store, args, 1, "pexpireat", out),
-        b"TTL" => cmd_ttl(store, args, true, "ttl", out),
-        b"PTTL" => cmd_ttl(store, args, false, "pttl", out),
-        b"PERSIST" => {
-            if args.len() == 2 {
-                encode_integer(out, i64::from(store.persist(&args[1])));
-            } else {
-                wrong_args(out, "persist");
-            }
-        }
-        b"TYPE" => {
-            if args.len() == 2 {
-                encode_simple_string(out, store.type_of(&args[1]));
-            } else {
-                wrong_args(out, "type");
-            }
-        }
-        b"DBSIZE" => encode_integer(out, store.dbsize() as i64),
-        b"FLUSHDB" | b"FLUSHALL" => {
-            store.flushall();
-            encode_simple_string(out, "OK");
-        }
-        _ => return false,
-    }
-    true
 }

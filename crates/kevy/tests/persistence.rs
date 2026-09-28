@@ -930,7 +930,7 @@ fn save_at_shutdown_drains_to_disk() {
 }
 
 /// Probe written while auditing a consumer's TTL-inflation report: a
-/// RELATIVE ttl frame (SETEX) must not re-anchor on replay — the AOF
+/// RELATIVE ttl frame (SETEX, SET … EX, GETEX … EX) must not re-anchor on replay — the AOF
 /// carries whatever the write path logged, and if that is the verb
 /// itself, every restart hands the key its full TTL back. The rewrite
 /// path already normalizes to absolute PEXPIREAT; this pins the
@@ -947,6 +947,12 @@ fn relative_ttl_frames_do_not_reanchor_on_replay() {
         let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
         c.write_all(&req(&[b"SETEX", b"grey", b"100", b"v"])).unwrap();
         read_reply(&mut c, b"+OK\r\n");
+        c.write_all(&req(&[b"SET", b"grey3", b"v", b"EX", b"100"])).unwrap();
+        read_reply(&mut c, b"+OK\r\n");
+        c.write_all(&req(&[b"SET", b"grey4", b"v"])).unwrap();
+        read_reply(&mut c, b"+OK\r\n");
+        c.write_all(&req(&[b"GETEX", b"grey4", b"EX", b"100"])).unwrap();
+        read_reply(&mut c, b"$1\r\nv\r\n");
         c.write_all(&req(&[b"EXPIRE", b"grey2", b"100"])).unwrap(); // no such key: 0
         let mut buf = [0u8; 64];
         let _ = c.read(&mut buf).unwrap();
@@ -955,17 +961,58 @@ fn relative_ttl_frames_do_not_reanchor_on_replay() {
     let port = free_port();
     with_runtime(port, &dir, 1, |p| {
         let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
-        c.write_all(&req(&[b"PTTL", b"grey"])).unwrap();
-        let mut buf = [0u8; 64];
+        for key in [&b"grey"[..], b"grey3", b"grey4"] {
+            c.write_all(&req(&[b"PTTL", key])).unwrap();
+            let mut buf = [0u8; 64];
+            let n = c.read(&mut buf).unwrap();
+            let s = String::from_utf8_lossy(&buf[..n]);
+            let ttl: i64 = s.trim_start_matches(':').trim().parse().expect("integer PTTL");
+            let key = String::from_utf8_lossy(key);
+            assert!(ttl > 0, "{key} survived the restart: {s}");
+            assert!(
+                ttl <= 100_000 - 2_000,
+                "{key}: TTL re-anchored on replay: read {ttl}ms of an original 100000ms \
+                 after >=2.5s elapsed — the AOF frame must carry an absolute deadline"
+            );
+        }
+    });
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A conditional `HEXPIRE` keeps its absolute deadlines across a restart:
+/// the field it moved does not count its TTL from replay time, and the
+/// field its condition refused keeps the deadline it already had.
+#[test]
+fn conditional_field_ttl_keeps_its_deadlines_across_replay() {
+    let dir = std::env::temp_dir().join(format!(
+        "kevy-field-ttl-reanchor-{}",
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let ints = |c: &mut std::net::TcpStream| -> Vec<i64> {
+        let mut buf = [0u8; 128];
         let n = c.read(&mut buf).unwrap();
-        let s = String::from_utf8_lossy(&buf[..n]);
-        let ttl: i64 = s.trim_start_matches(':').trim().parse().expect("integer PTTL");
-        assert!(ttl > 0, "key survived the restart: {s}");
-        assert!(
-            ttl <= 100_000 - 2_000,
-            "TTL re-anchored on replay: read {ttl}ms of an original 100000ms \
-             after >=2.5s elapsed — the AOF frame must carry an absolute deadline"
-        );
+        String::from_utf8_lossy(&buf[..n])
+            .split("\r\n")
+            .filter_map(|l| l.strip_prefix(':').and_then(|v| v.parse().ok()))
+            .collect()
+    };
+    with_runtime(free_port(), &dir, 1, |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        c.write_all(&req(&[b"HSET", b"h", b"f", b"v", b"g", b"w"])).unwrap();
+        assert_eq!(ints(&mut c), [2]);
+        c.write_all(&req(&[b"HEXPIRE", b"h", b"100", b"FIELDS", b"1", b"g"])).unwrap();
+        assert_eq!(ints(&mut c), [1]);
+        c.write_all(&req(&[b"HEXPIRE", b"h", b"200", b"NX", b"FIELDS", b"2", b"f", b"g"])).unwrap();
+        assert_eq!(ints(&mut c), [1, 0], "NX moves f and refuses g");
+    });
+    std::thread::sleep(std::time::Duration::from_millis(2500));
+    with_runtime(free_port(), &dir, 1, |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        c.write_all(&req(&[b"HPTTL", b"h", b"FIELDS", b"2", b"f", b"g"])).unwrap();
+        let ttl = ints(&mut c);
+        assert!(ttl[0] > 0 && ttl[0] <= 200_000 - 2_000, "f re-anchored on replay: {ttl:?}");
+        assert!(ttl[1] > 0 && ttl[1] <= 100_000 - 2_000, "g took a deadline it refused: {ttl:?}");
     });
     let _ = std::fs::remove_dir_all(&dir);
 }

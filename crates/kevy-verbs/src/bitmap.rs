@@ -1,32 +1,28 @@
 //! Bit-level access to a string value: `GETBIT` / `SETBIT` /
-//! `BITCOUNT` / `BITPOS`.
-//!
-//! One file per layer, same name at each: `kevy-store/src/bitmap.rs`
-//! holds the engine, `kevy-embedded/src/dispatch/bitmap.rs` the
-//! facade's table, and this one the server's. The wording of every
-//! refusal below is Redis's, because the two surfaces are compared
-//! byte for byte in `differential_wire_vs_embedded.rs` and Redis is
-//! what both are being compatible with.
+//! `BITCOUNT` / `BITPOS`. Every refusal is worded as Redis words it.
 
-use crate::cmd::{ERR_NOT_INT, arg_i64, emit_int_result, store_err, wrong_args};
 use kevy_resp::{ArgvView, encode_error, encode_integer};
 use kevy_store::Store;
 
-/// Parse an unsigned bit offset. Redis names the offset, not the type,
-/// when it refuses.
+use crate::Effect;
+use crate::args::arg_i64;
+use crate::reply::{ERR_NOT_INT, ERR_SYNTAX, emit_int_result, store_err, wrong_args};
+
+/// An unsigned bit offset, read as a signed integer first so `-0` and
+/// `+5` parse the way Redis parses them.
 fn arg_u64<A: ArgvView + ?Sized>(args: &A, i: usize) -> Option<u64> {
     arg_i64(&args[i]).and_then(|n| u64::try_from(n).ok())
 }
 
-/// One bitmap command; `false` = the verb is not in this group.
+/// One bitmap command; `None` = the verb is not in this group.
 // LOC-WAIVER: data-driven verb dispatch table — one arm per bitmap verb.
-pub(crate) fn dispatch_bitmap<A: ArgvView + ?Sized>(
+pub(crate) fn exec<A: ArgvView + ?Sized>(
     cmd: &[u8],
     store: &mut Store,
     args: &A,
     out: &mut Vec<u8>,
-) -> bool {
-    match cmd {
+) -> Option<Effect> {
+    Some(match cmd {
         b"GETBIT" => {
             if args.len() != 3 {
                 wrong_args(out, "getbit");
@@ -35,26 +31,36 @@ pub(crate) fn dispatch_bitmap<A: ArgvView + ?Sized>(
             } else {
                 encode_error(out, "ERR bit offset is not an integer or out of range");
             }
+            Effect::Read
         }
-        b"SETBIT" => cmd_setbit(store, args, out),
-        b"BITCOUNT" => match args.len() {
-            2 => emit_int_result(store.bitcount(&args[1], None).map(|n| n as i64), out),
-            4 => match (arg_i64(&args[2]), arg_i64(&args[3])) {
-                (Some(a), Some(b)) => {
-                    emit_int_result(store.bitcount(&args[1], Some((a, b))).map(|n| n as i64), out);
-                }
-                _ => encode_error(out, ERR_NOT_INT),
-            },
-            0 | 1 => wrong_args(out, "bitcount"),
-            _ => encode_error(out, "ERR syntax error"),
-        },
-        b"BITPOS" => cmd_bitpos(store, args, out),
-        _ => return false,
-    }
-    true
+        b"SETBIT" => {
+            setbit(store, args, out);
+            Effect::Write
+        }
+        b"BITCOUNT" => {
+            match args.len() {
+                2 => emit_int_result(store.bitcount(&args[1], None).map(|n| n as i64), out),
+                4 => match (arg_i64(&args[2]), arg_i64(&args[3])) {
+                    (Some(a), Some(b)) => emit_int_result(
+                        store.bitcount(&args[1], Some((a, b))).map(|n| n as i64),
+                        out,
+                    ),
+                    _ => encode_error(out, ERR_NOT_INT),
+                },
+                0 | 1 => wrong_args(out, "bitcount"),
+                _ => encode_error(out, ERR_SYNTAX),
+            }
+            Effect::Read
+        }
+        b"BITPOS" => {
+            bitpos(store, args, out);
+            Effect::Read
+        }
+        _ => return None,
+    })
 }
 
-fn cmd_setbit<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
+fn setbit<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
     if args.len() != 4 {
         return wrong_args(out, "setbit");
     }
@@ -69,7 +75,7 @@ fn cmd_setbit<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u
 
 /// `BITPOS key bit [start [end]]`. A missing end means "to the end",
 /// which is `-1` in the engine's range language.
-fn cmd_bitpos<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
+fn bitpos<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
     if !(3..=5).contains(&args.len()) {
         return wrong_args(out, "bitpos");
     }

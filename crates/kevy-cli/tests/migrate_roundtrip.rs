@@ -36,7 +36,7 @@ impl Srv {
         // into the test binary's cwd, which is this crate's source
         // directory. Nothing here declares a table today, so nothing
         // lands — but that is a property of the test, not of the setup.
-        let dir = std::env::temp_dir().join(format!("kevy-mig-{port}"));
+        let dir = std::env::temp_dir().join(format!("kevy-mig-{port}-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         // Keep the server's output. It used to go to /dev/null, and when
         // this test failed with ConnectionRefused under full-workspace

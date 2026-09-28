@@ -109,18 +109,18 @@ pub const OP_TABLE: &[OpSpec] = &[
     // off the verb, so any class here would publish a name Redis does
     // not have. The column stayed Some(String) while the verb was
     // ESTORE-only and nothing on the server could act on it.
-    op("GETEX",        WR, NG,   None,            None,    SERVER | ESTORE),
+    op("GETEX",        WR, NG,   None,            None,    SERVER | ESTORE | REPLAY),
     op("GETRANGE",     RD, NG,   None,            None,    SERVER | ESTORE),
     op("GETSET",       WR, GROW, Some(N::String), None,    SERVER | ESTORE | REPLAY),
     op("INCR",         WR, GROW, Some(N::String), None,    SERVER | ESTORE | PIPE | ATOMIC | REPLAY),
     op("INCRBY",       WR, GROW, Some(N::String), None,    SERVER | ESTORE | PIPE | ATOMIC | REPLAY),
     op("INCRBYFLOAT",  WR, GROW, Some(N::String), None,    SERVER | ESTORE | REPLAY),
     op("MGET",         RD, NG,   None,            None,    SERVER | ESTORE),
-    op("MSET",         WR, GROW, None,            None,    SERVER | ESTORE),
-    op("PSETEX",       WR, GROW, Some(N::String), None,    SERVER),
+    op("MSET",         WR, GROW, None,            None,    SERVER | ESTORE | REPLAY),
+    op("PSETEX",       WR, GROW, Some(N::String), None,    SERVER | REPLAY),
     op("SET",          WR, GROW, Some(N::String), None,    SERVER | ESTORE | PIPE | ATOMIC | REPLAY | REWRITE),
-    op("SETEX",        WR, GROW, Some(N::String), None,    SERVER),
-    op("SETNX",        WR, GROW, Some(N::String), None,    SERVER | ESTORE),
+    op("SETEX",        WR, GROW, Some(N::String), None,    SERVER | REPLAY),
+    op("SETNX",        WR, GROW, Some(N::String), None,    SERVER | ESTORE | REPLAY),
     op("SETRANGE",     WR, GROW, Some(N::String),            None,    SERVER | ESTORE | REPLAY),
     op("STRLEN",       RD, NG,   None,            None,    SERVER | ESTORE),
     // ---- bitmap (string-backed) ---------------------------------------
@@ -140,14 +140,13 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("HKEYS",        RD, NG,   None,            None,    SERVER | ESTORE),
     op("HLEN",         RD, NG,   None,            None,    SERVER | ESTORE),
     op("HMGET",        RD, NG,   None,            None,    SERVER | ESTORE | ATOMIC),
-    op("HMSET",        WR, GROW, Some(N::Hash),   None,    SERVER),
+    op("HMSET",        WR, GROW, Some(N::Hash),   None,    SERVER | REPLAY),
     op("HSCAN",        RD, NG,   None,            None,    SERVER | ESTORE),
     op("HSET",         WR, GROW, Some(N::Hash),   None,    SERVER | ESTORE | PIPE | ATOMIC | REPLAY | REWRITE),
-    // Hash field TTLs (Redis 7.4). Relative forms are
-    // effect-logged as the absolute HPEXPIREAT (exemption below);
-    // HPEXPIREAT is the canonical replay/rewrite carrier.
-    op("HEXPIRE",      WR, NG,   Some(N::Hash),   None,    SERVER | ESTORE),
-    op("HPEXPIRE",     WR, NG,   Some(N::Hash),   None,    SERVER | ESTORE),
+    // Hash field TTLs (Redis 7.4). A relative form is followed in the
+    // log by the absolute HPEXPIREAT it set, the replay/rewrite carrier.
+    op("HEXPIRE",      WR, NG,   Some(N::Hash),   None,    SERVER | ESTORE | REPLAY),
+    op("HPEXPIRE",     WR, NG,   Some(N::Hash),   None,    SERVER | ESTORE | REPLAY),
     op("HPEXPIREAT",   WR, NG,   Some(N::Hash),   None,    SERVER | ESTORE | REPLAY | REWRITE),
     op("HTTL",         RD, NG,   None,            None,    SERVER | ESTORE),
     op("HPTTL",        RD, NG,   None,            None,    SERVER | ESTORE),
@@ -157,14 +156,14 @@ pub const OP_TABLE: &[OpSpec] = &[
     // ---- lists --------------------------------------------------------
     // BLPOP/BRPOP never write directly: the blocked-serve path
     // executes (and AOF-logs) the effect as a plain LPOP/RPOP.
-    op("BLPOP",        RD, NG,   None,            None,    SERVER),
-    op("BRPOP",        RD, NG,   None,            None,    SERVER),
+    op("BLPOP",        RD, NG,   None,            None,    SERVER | REPLAY),
+    op("BRPOP",        RD, NG,   None,            None,    SERVER | REPLAY),
     // Blocking form notifies via its executed effect, not the verb.
-    op("BRPOPLPUSH",   WR, GROW, None,            None,    SERVER),
+    op("BRPOPLPUSH",   WR, GROW, None,            None,    SERVER | REPLAY),
     op("LINDEX",       RD, NG,   None,            None,    SERVER | ESTORE),
     op("LINSERT",      WR, GROW, Some(N::List),            None,    SERVER | ESTORE | REPLAY),
     op("LLEN",         RD, NG,   None,            None,    SERVER | ESTORE | ATOMIC),
-    op("LMOVE",        WR, GROW, Some(N::List),   None,    SERVER),
+    op("LMOVE",        WR, GROW, Some(N::List),   None,    SERVER | REPLAY),
     op("LPOP",         WR, NG,   Some(N::List),   None,    SERVER | ESTORE | REPLAY),
     op("LPOS",         RD, NG,   None,            None,    SERVER),
     op("LPUSH",        WR, GROW, Some(N::List),   Some(1), SERVER | ESTORE | PIPE | ATOMIC | REPLAY),
@@ -173,7 +172,7 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("LSET",         WR, GROW, Some(N::List),   None,    SERVER | ESTORE | REPLAY),
     op("LTRIM",        WR, NG,   Some(N::List),   None,    SERVER | ESTORE | REPLAY),
     op("RPOP",         WR, NG,   Some(N::List),   None,    SERVER | ESTORE | REPLAY),
-    op("RPOPLPUSH",    WR, GROW, Some(N::List),   None,    SERVER),
+    op("RPOPLPUSH",    WR, GROW, Some(N::List),   None,    SERVER | REPLAY),
     op("RPUSH",        WR, GROW, Some(N::List),   Some(1), SERVER | ESTORE | PIPE | ATOMIC | REPLAY | REWRITE),
     // ---- sets ---------------------------------------------------------
     op("SADD",         WR, GROW, Some(N::Set),    None,    SERVER | ESTORE | PIPE | ATOMIC | REPLAY | REWRITE),
@@ -191,7 +190,7 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("SUNIONSTORE",  WR, GROW, Some(N::Set),    None,    SERVER | ESTORE),
     op("SDIFFSTORE",   WR, GROW, Some(N::Set),    None,    SERVER | ESTORE),
     // ---- zsets --------------------------------------------------------
-    op("BZPOPMIN",     WR, NG,   None,            None,    SERVER),
+    op("BZPOPMIN",     WR, NG,   None,            None,    SERVER | REPLAY),
     op("ZADD",         WR, GROW, Some(N::Zset),   Some(1), SERVER | ESTORE | PIPE | ATOMIC | REPLAY | REWRITE),
     op("ZCARD",        RD, NG,   None,            None,    SERVER | ESTORE | ATOMIC),
     op("ZCOUNT",       RD, NG,   None,            None,    SERVER | ESTORE),
@@ -200,7 +199,7 @@ pub const OP_TABLE: &[OpSpec] = &[
     // REPLAY arm of their own is needed (the effect verbs replay).
     op("ZINTERSTORE",  WR, GROW, Some(N::Zset),   None,    SERVER | ESTORE),
     // Delayed-job primitive; embedded logs the ZREM effect.
-    op("ZPOPMIN.BELOW", WR, NG,  Some(N::Zset),   None,    SERVER | ESTORE),
+    op("ZPOPMIN.BELOW", WR, NG,  Some(N::Zset),   None,    SERVER | ESTORE | REPLAY),
     op("ZUNIONSTORE",  WR, GROW, Some(N::Zset),   None,    SERVER | ESTORE),
     op("ZDIFFSTORE",   WR, GROW, Some(N::Zset),   None,    SERVER | ESTORE),
     op("ZINTERCARD",   RD, NG,   None,            None,    SERVER | ESTORE),
@@ -313,7 +312,7 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("TOUCH",        RD, NG,   None,            None,    SERVER | ESTORE),
     op("TTL",          RD, NG,   None,            None,    SERVER | ESTORE),
     op("TYPE",         RD, NG,   None,            None,    SERVER | ESTORE),
-    op("UNLINK",       WR, NG,   Some(N::Generic), None,   SERVER | ESTORE),
+    op("UNLINK",       WR, NG,   Some(N::Generic), None,   SERVER | ESTORE | REPLAY),
 ];
 
 /// A confirmed should-exist-but-doesn't hole: `(op, surface, reason)`.
@@ -329,21 +328,8 @@ pub const KNOWN_GAPS: &[(&str, u16, &str)] = &[
         "manifest sweep 2026-07-03: scan/hscan/zscan facades exist, sscan missing",
     ),
     // F2 — server-propagatable writes an embed-as-replica cannot
-    // apply (replay verbs missing). Until closed, embed-as-replica is
-    // only safe for the basic-type verb set.
-    ("SETNX", surface::REPLAY, "F2: replica-apply hole"),
-    ("SETEX", surface::REPLAY, "F2"),
-    ("PSETEX", surface::REPLAY, "F2"),
-    ("MSET", surface::REPLAY, "F2"),
-    ("HMSET", surface::REPLAY, "F2"),
-    ("RPOPLPUSH", surface::REPLAY, "F2"),
-    ("BRPOPLPUSH", surface::REPLAY, "F2"),
-    ("LMOVE", surface::REPLAY, "F2"),
-    ("BLPOP", surface::REPLAY, "F2"),
-    ("BRPOP", surface::REPLAY, "F2"),
-    ("BZPOPMIN", surface::REPLAY, "F2"),
-    ("UNLINK", surface::REPLAY, "F2"),
-    ("GETEX", surface::REPLAY, "F2: embedded getex TTL side-effect logs?  verify at closure"),
+    // apply (replay verbs missing): the geo and stream writes, which the
+    // embedded engine has no executor for.
     ("GEOADD", surface::REPLAY, "F2"),
     ("GEOSEARCHSTORE", surface::REPLAY, "F2"),
     ("GEORADIUS", surface::REPLAY, "F2"),
@@ -421,16 +407,18 @@ mod tests {
             let ledgered =
                 KNOWN_GAPS.iter().any(|(n, f, _)| n == &o.name && f & surface::REPLAY != 0);
             // Ops whose AOF form is a DIFFERENT verb (documented effect
-            // logging): SPOP→SREM handled by SPOP retaining REPLAY for
-            // legacy frames; MSET/SETNX/GETEX log SET/PEXPIREAT forms.
+            // logging): BITOP and COPY log the SET of the result, and
+            // the algebra stores log DEL + plain ZADD/SADD.
             let logs_as_other_verb = matches!(
                 o.name,
-                "MSET" | "SETNX" | "GETEX" | "BITOP" | "COPY" | "UNLINK" | "TOUCH"
-                    // Algebra stores: effect-logged as DEL + plain ZADD/SADD.
-                    | "ZINTERSTORE" | "ZUNIONSTORE" | "ZDIFFSTORE"
-                    | "ZPOPMIN.BELOW"
-                    | "HEXPIRE" | "HPEXPIRE"
-                    | "SINTERSTORE" | "SUNIONSTORE" | "SDIFFSTORE"
+                "BITOP"
+                    | "COPY"
+                    | "ZINTERSTORE"
+                    | "ZUNIONSTORE"
+                    | "ZDIFFSTORE"
+                    | "SINTERSTORE"
+                    | "SUNIONSTORE"
+                    | "SDIFFSTORE"
             );
             assert!(
                 replayable || ledgered || logs_as_other_verb,

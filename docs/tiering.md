@@ -175,9 +175,10 @@ from the capacity model:
   stub it leaves behind. Narrow records are the case to size by hand.
 - **Worked example (sized from the model, not measured into it)**:
   10 M rows × ~1 KiB (≈10 GB of data) with 2
-  secondary indexes + stored VALUES columns fits a **3 GB** budget:
-  stub floor 10 M × ~108 B ≈ 1.1 GB, index floor 10 M × (68 + 68 +
-  ~30 VALUES bytes) ≈ 1.7 GB ≈ 2.8 GB ≤ 3 GB. At 4 KiB values the
+  secondary indexes + stored VALUES columns fits a **4 GB** budget:
+  stub floor 10 M × ~108 B ≈ 1.1 GB, index floor 10 M × (2 × 94–105
+  per index at a ~12-byte key + ~30 VALUES bytes) ≈ 2.2–2.4 GB
+  ≈ 3.3–3.5 GB ≤ 4 GB. At 4 KiB values the
   ratio gate is ≥ 10× data:RAM (5 M × 4 KiB = 20 GB on a 2 GB
   budget; stub floor ≈ 540 MB). Per-key fixed costs dominate narrow
   rows: size a deployment from the formulas above — the stub and
@@ -265,10 +266,21 @@ server and embedded listener.
 | `promotions_total` | values paged back in since boot |
 | `peek_preads_total` | no-promote cold reads (one per cold **row**) |
 | `batch_submissions_total` | batched cold-read submissions (hydration pages) |
+| `vlog_raw_bytes` | value bytes before compression, over the vlog files on disk |
+| `vlog_payload_bytes` | compressed payload bytes on disk |
+| `vlog_frame_header_bytes` | per-record frame headers on disk (tag + original length) |
+| `vlog_dict_bytes` | compression dictionaries held in memory, one per vlog file |
 
 `vlog_size_bytes / cold_bytes` is the space-amplification ratio the
 acceptance gate clamps at ≤ 2.0×; `peek_preads_total` is how you
 verify a hydration page paid one read per row, not per field.
+
+`(vlog_payload_bytes + vlog_frame_header_bytes) / vlog_raw_bytes` is the
+compression ratio over what the vlog holds, dead records included. What
+compression leaves is those two terms plus the dictionaries; the payload is
+the data's own entropy plus whatever repetition the encoder did not find,
+and the two cannot be told apart from inside the log. The rest of
+`vlog_size_bytes` is record framing: 12 bytes and the key per record.
 
 ## Performance expectations
 

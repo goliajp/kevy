@@ -160,9 +160,16 @@ parent-child navigation wearing an index costume.
 - An **empty catalog costs one untaken branch per write** (a Relaxed
   atomic load). With indexes declared, a write in an indexed domain
   pays one hash-field read + one B-tree update per matching index.
-- Memory per index ≈ `rows × (value_width + avg_key_len + 48)` bytes
-  (the constant is per-entry structure overhead). `IDX.LIST` reports
-  measured bytes; `bench/idxgate.sh` gates the formula.
+- Memory per index ≈ `rows × (avg_key_len + string_value_len + 82…93)`
+  bytes of heap: a 56-byte row shared by both lookup directions, about
+  16 bytes of ordered-tree slot, and 10–21 bytes of hash-table slot
+  (`string_value_len` is 0 for `i64` / `f64`). The table grows by
+  doubling, so where a row count falls between two growth steps moves
+  the per-row figure inside that range; plan with the top of it. The
+  allocator rounds small blocks up, so resident memory runs above the
+  heap figure, by up to about half for short keys and string values.
+  `IDX.LIST` and `IDX.VERIFY` report the heap figure;
+  `bench/idxgate.sh` checks it against the server's measured RSS.
 
 ## Aggregate kind (`KIND agg`) — write-time GROUP BY
 

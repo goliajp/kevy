@@ -256,8 +256,9 @@ loader API 与 ABI 契约见 [docs/zh/wasm.md](docs/zh/wasm.md)；
 
 来自裸机基准测试套件的一段代表性切片（16 核 Linux 机器，服务器和
 客户端分别 pin 在不相交的核心上，TCP loopback）。下面的 KV 行来自
-`bench/arena.sh`，2026-07-19 重测：median-of-5，吞吐读的是各服务端
-自己的命令计数器在计时窗口内的增量。完整方法、每种 workload 以及
+`bench/arena.sh`，2026-09-07 重测（kevy 6.3.0）：完整跑三轮，每轮内取
+5 次的中位数，再取三轮逐格的中位数；吞吐读的是各服务端自己的命令计数器
+在计时窗口内的增量。完整方法、每种 workload 以及
 注意事项见 [`PERFORMANCE.md`](PERFORMANCE.md)；每个数字都可以由
 [`bench/`](bench/) 里的脚本复现。
 
@@ -269,14 +270,14 @@ loader API 与 ABI 契约见 [docs/zh/wasm.md](docs/zh/wasm.md)；
 | 嵌入式 `get`（命中） | 9.0 M/s | — | （Redis 无进程内形态） |
 
 同一个 `GET -c 50 -P 16` 面，同一台机器上对打四个引擎——kevy
-以 7.24 M/s 分别对阵（median-of-5；方法与逐引擎的 cycle 记账见
+以 7.49 M/s 分别对阵（同一批运行；方法见
 [`PERFORMANCE.md`](PERFORMANCE.md)）：
 
 | 引擎 | kevy 领先 |
 |---|---:|
-| valkey 9.1.2 | **2.34×** |
-| redis 8.10.1 | **1.26×** |
-| dragonfly 1.40.2 | **2.62×** |
+| valkey 9.1.2 | **2.51×** |
+| redis 8.10.1 | **1.33×** |
+| dragonfly 1.40.2 | **2.63×** |
 
 这些比值**低于 2026-07-19 之前公布的数字**，原因在尺子，不在引擎。
 早先的数字读的是 `redis-benchmark` 自报速率，而它在 `--threads` 下
@@ -352,7 +353,7 @@ recall 对齐（[`PERFORMANCE.md`](PERFORMANCE.md)）：
 | [`kevy-wasm`](crates/kevy-wasm) | 浏览器构建：手写 C ABI + `@goliapkg/kevy` loader |
 | [`kevy-lua`](crates/kevy-lua) | Lua 脚本桥接（基于 [luna](https://github.com/goliajp/luna) 运行时） |
 
-其余 crate（`kevy-store`、`kevy-rt`、`kevy-persist`、`kevy-sys`、
+其余 crate（`kevy-store`、`kevy-verbs`、`kevy-rt`、`kevy-persist`、`kevy-sys`、
 `kevy-elect`、`kevy-replicate`、`kevy-scope`、`kevy-lua-host`、
 `kevy-chaos`、`kevy-bench`、`kevy-pubsub-bench`）是服务器和嵌入式
 库的内部基础设施——之所以发布它们是为了让 workspace 能可复现地

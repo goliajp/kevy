@@ -192,6 +192,16 @@ pub(crate) fn dispatch(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
                     t.batch_submissions_total,
                 ));
             }
+            if let Some(c) = s.tier_compression() {
+                body.push_str(&format!(
+                    "vlog_raw_bytes:{}\r\nvlog_payload_bytes:{}\r\n\
+                     vlog_frame_header_bytes:{}\r\nvlog_dict_bytes:{}\r\n",
+                    c.vlog_raw_bytes,
+                    c.vlog_payload_bytes,
+                    c.vlog_frame_header_bytes,
+                    c.vlog_dict_bytes,
+                ));
+            }
             bulk(out, body.as_bytes());
         }
         _ => err(out, "ERR READONLY embedded listener"),

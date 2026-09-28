@@ -60,7 +60,7 @@ AOF 策略由 `appendfsync` 控制（配置文件或 `CONFIG SET`）。三个取
 | `appendfsync` | 耐久性 | 代价 |
 |---------------|--------|------|
 | `always` | 每次写入都先 `fsync` 再回复 | 延迟最高；下限是 NVMe 的 sync 延迟 |
-| `everysec`（默认） | 后台线程每秒 `fsync` 一次 | 数据丢失窗口不超过 1 s；热路径开销近乎为零 |
+| `everysec`（默认） | 后台线程大约每秒 `fsync` 一次 | 断电丢失窗口约 1 s 加一次 `fsync`；热路径开销近乎为零 |
 | `no` | 从不 `fsync`，内核按自己的节奏落盘 | 最快；数据丢失窗口 = page-cache 的刷盘间隔 |
 
 `everysec` 的后台 `fsync` 跑在独立的 bio 线程上，不在 shard 热路径里，所以 shard 的尾延迟不会跟磁盘延迟耦合。纯缓存或只读副本还可以用 `--no-aof` 彻底关掉 AOF（完全不写 AOF 文件，连缓冲都没有）。
@@ -188,7 +188,7 @@ addr2line -e ./target/release-perf/kevy -f -i 0x<addr>
 
 **生产环境 `appendfsync` 的甜点在哪？**
 
-对绝大多数人都是 `everysec`。它把数据丢失限制在一秒内，把 `fsync` 挪出热路径，对尾延迟几乎没有影响。只有当你的耐久性要求真的是零数据丢失时才用 `always`（并接受尾延迟从此受 NVMe `fsync` 延迟托底）。`no` 只用于纯缓存——那里 AOF 存在的意义只是加快热重启。
+对绝大多数人都是 `everysec`。它把数据丢失限制在约一秒加一次 `fsync` 之内，把 `fsync` 挪出热路径，对尾延迟几乎没有影响。只有当你的耐久性要求真的是零数据丢失时才用 `always`（并接受尾延迟从此受 NVMe `fsync` 延迟托底）。`no` 只用于纯缓存——那里 AOF 存在的意义只是加快热重启。
 
 **什么时候需要 `MADV_HUGEPAGE`？**
 

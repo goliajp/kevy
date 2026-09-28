@@ -234,8 +234,8 @@ SAVE BGSAVE BGREWRITEAOF
 | `appendfsync` | Guarantee | Throughput cost |
 |---|---|---|
 | `always` | **0 bytes** lost — every write is on disk before `+OK` returns | ~50 % vs `everysec` |
-| `everysec` (default) | ≤ **1 second** of writes lost (matches Redis) | baseline |
-| `no` | up to ~30 s (kernel pagecache flush window) | slightly faster than `everysec` |
+| `everysec` (default) | power loss: about **1 second** plus one fsync; a killed process loses only writes not yet handed to the kernel | baseline |
+| `no` | a killed process loses only writes not yet handed to the kernel; power loss: the kernel writeback window (up to ~30 s) | slightly faster than `everysec` |
 
 ### Crash-safety contract
 

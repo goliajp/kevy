@@ -5,9 +5,9 @@
 use kevy_index::{IndexValue, WhereClause};
 
 use super::super::idx::{arity_err, badargs, no_such_index, spec_of};
-use super::super::util::{err, int};
 use super::{idx_err, parse_bounds};
 use crate::store::Store;
+use kevy_resp::{encode_error, encode_integer};
 
 /// The scalar clause keywords (the server's `is_scalar_keyword` set —
 /// what a `WHERE` block collects up to).
@@ -56,14 +56,14 @@ pub(super) fn driving_bounds(
     if let Some(w) = where_clause {
         let n = String::from_utf8_lossy(name);
         let Some(cols) = &spec.composite else {
-            err(out, &format!("ERR {verb} '{n}': {}", kevy_index::WHERE_NOT_COMPOSITE));
+            encode_error(out, &format!("ERR {verb} '{n}': {}", kevy_index::WHERE_NOT_COMPOSITE));
             return None;
         };
         let now = (kevy_store::now_unix_ms() / 1000) as i64;
         return match kevy_index::composite_bounds(cols, w, now) {
             Ok((lo, hi)) => Some((IndexValue::Str(lo), IndexValue::Str(hi))),
             Err(e) => {
-                err(out, &format!("ERR {verb} '{n}': {e}"));
+                encode_error(out, &format!("ERR {verb} '{n}': {e}"));
                 None
             }
         };
@@ -99,19 +99,19 @@ pub(super) fn cmd_idx_count(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     };
     if tail.filters.is_empty() {
         return match s.idx_count(name, &min, &max) {
-            Ok(n) => int(out, n as i64),
+            Ok(n) => encode_integer(out, n as i64),
             Err(e) => idx_err(out, name, &e),
         };
     }
     let filters: Vec<crate::ValueFilter> =
         tail.filters.iter().map(super::tail::FilterClause::as_value_filter).collect();
     match s.idx_count_claused(name, &min, &max, &filters) {
-        Ok(n) => int(out, n as i64),
+        Ok(n) => encode_integer(out, n as i64),
         Err(crate::KevyError::InvalidInput(m)) => {
             // A clause this index cannot answer — the server frames it
             // as `ERR <verb> '<name>': <explanation>`.
             let n = String::from_utf8_lossy(name);
-            err(out, &format!("ERR IDX.COUNT '{n}': {m}"));
+            encode_error(out, &format!("ERR IDX.COUNT '{n}': {m}"));
         }
         Err(e) => idx_err(out, name, &e),
     }

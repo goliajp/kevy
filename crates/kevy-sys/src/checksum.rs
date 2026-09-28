@@ -14,31 +14,50 @@
 /// falls back to its software table).
 #[must_use]
 pub fn try_crc32c_hw(data: &[u8]) -> Option<u32> {
+    try_crc32c_hw_append(0, data)
+}
+
+/// Continue a CRC32C: `crc` is the finished checksum of the bytes before
+/// `data` (0 for none), and the result is the checksum of both together,
+/// so a record split into pieces checksums without being joined first.
+/// `None` when this machine has no checksum instructions.
+/// # Examples
+///
+/// ```
+/// use kevy_sys::checksum::{try_crc32c_hw, try_crc32c_hw_append};
+/// let (head, tail) = (b"hello ".as_slice(), b"world".as_slice());
+/// // two pieces continue to the checksum of the joined bytes, on machines
+/// // with checksum instructions; elsewhere both answers are None
+/// let pieces = try_crc32c_hw_append(0, head).and_then(|c| try_crc32c_hw_append(c, tail));
+/// assert_eq!(pieces, try_crc32c_hw(b"hello world"));
+/// ```
+#[must_use]
+pub fn try_crc32c_hw_append(crc: u32, data: &[u8]) -> Option<u32> {
     #[cfg(target_arch = "aarch64")]
     {
         if std::arch::is_aarch64_feature_detected!("crc") {
             // SAFETY: the `crc` target feature was just detected at runtime.
-            return Some(unsafe { crc32c_aarch64(data) });
+            return Some(unsafe { crc32c_aarch64(crc, data) });
         }
     }
     #[cfg(target_arch = "x86_64")]
     {
         if std::arch::is_x86_feature_detected!("sse4.2") {
             // SAFETY: SSE4.2 was just detected at runtime.
-            return Some(unsafe { crc32c_x86(data) });
+            return Some(unsafe { crc32c_x86(crc, data) });
         }
     }
     #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
-    let _ = data;
+    let _ = (crc, data);
     #[allow(unreachable_code)]
     None
 }
 
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "crc")]
-unsafe fn crc32c_aarch64(data: &[u8]) -> u32 {
+unsafe fn crc32c_aarch64(crc: u32, data: &[u8]) -> u32 {
     use std::arch::aarch64::{__crc32cb, __crc32cd};
-    let mut crc = !0u32;
+    let mut crc = !crc;
     let (chunks, tail) = data.as_chunks::<8>();
     for c in chunks {
         crc = __crc32cd(crc, u64::from_le_bytes(*c));
@@ -51,9 +70,9 @@ unsafe fn crc32c_aarch64(data: &[u8]) -> u32 {
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse4.2")]
-unsafe fn crc32c_x86(data: &[u8]) -> u32 {
+unsafe fn crc32c_x86(crc: u32, data: &[u8]) -> u32 {
     use std::arch::x86_64::{_mm_crc32_u8, _mm_crc32_u64};
-    let mut crc = !0u64;
+    let mut crc = u64::from(!crc);
     let (chunks, tail) = data.as_chunks::<8>();
     for c in chunks {
         crc = _mm_crc32_u64(crc, u64::from_le_bytes(*c));
@@ -124,5 +143,16 @@ mod crc_front_tests {
         let long: Vec<u8> = (0..4096u32).map(|i| (i % 251) as u8).collect();
         assert_eq!(super::crc32c(&long), super::crc32c_sw(&long));
         assert_eq!(super::crc32c(&long[3..]), super::crc32c_sw(&long[3..]));
+    }
+
+    #[test]
+    fn append_over_pieces_equals_whole() {
+        let long: Vec<u8> = (0..4099u32).map(|i| (i % 253) as u8).collect();
+        let Some(whole) = super::try_crc32c_hw(&long) else { return };
+        for cut in [0, 1, 7, 8, 9, 2048, 4098, 4099] {
+            let (a, b) = long.split_at(cut);
+            let first = super::try_crc32c_hw_append(0, a).expect("hw present");
+            assert_eq!(super::try_crc32c_hw_append(first, b), Some(whole), "cut at {cut}");
+        }
     }
 }

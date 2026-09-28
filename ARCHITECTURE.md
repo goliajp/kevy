@@ -42,7 +42,7 @@ publishable on their own.
 L6  kevy-jni  kevy-napi                       ← language ABIs
 L5  kevy  kevy-cli  kevy-client  kevy-ffi  kevy-wasm
 L4  kevy-rt  kevy-embedded  kevy-client-async  kevy-cluster-rw  kevy-mcp
-L3  kevy-persist  kevy-replicate  kevy-elect  kevy-resp-client
+L3  kevy-persist  kevy-replicate  kevy-elect  kevy-resp-client  kevy-verbs
 L2  kevy-store  kevy-resp  kevy-window  kevy-sql
 L1  kevy-map  kevy-bytes  kevy-seg  kevy-vlog  kevy-index  kevy-scalar
                                                           kevy-lua-host
@@ -79,8 +79,10 @@ One `SET` from a client socket, on the server:
    they talk over `kevy-ring` SPSC queues when a key belongs to another shard.
 3. **`kevy-resp`** — bytes to argv and back. Sans-IO: it never reads a socket,
    which is why it can be tested exhaustively.
-4. **`kevy`'s dispatch** — argv to a verb, arity and type checks, the RESP2 vs
-   RESP3 reply shape.
+4. **`kevy`'s dispatch** — argv to a verb. A data command on one shard runs in
+   **`kevy-verbs`**: arity and type checks, the store call, the reply, the
+   same code the embedded engine runs. The server adds what only it has: the
+   RESP3 reply shapes, connection state, the cluster and ops verbs.
 5. **`kevy-store`** — the keyspace itself: `kevy-map` for the table,
    `kevy-bytes` for small values, expiry, and the tiering path down to
    `kevy-vlog` / `kevy-seg` when a value gets cold.
@@ -114,7 +116,7 @@ you hand it, or at step 5 with a typed call.
 
 | You want to… | Start here |
 |---|---|
-| add or fix a Redis command | `crates/kevy/src/dispatch*` + `verb_meta`, then `kevy-store` |
+| add or fix a Redis command | `kevy-verbs` for a data command on one shard, `crates/kevy/src/dispatch*` for the rest; then `verb_meta` and `kevy-store` |
 | change how a value is stored | `kevy-store`, and `kevy-bytes` if it is small |
 | touch the wire format | `kevy-resp` — and read `bench/resp3gate.sh` first |
 | change the reactor or sharding | `kevy-rt` |

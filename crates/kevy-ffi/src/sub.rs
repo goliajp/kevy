@@ -32,6 +32,7 @@ use crate::{KevyBuf, KevyDb, KevySub};
 ///
 /// # Safety
 /// `chan` must point to `chan_len` readable bytes; `db` must be live.
+// NO-UNWIND: the subscription is opened inside sub_open, which catches
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kevy_subscribe(
     db: *mut KevyDb,
@@ -47,6 +48,7 @@ pub unsafe extern "C" fn kevy_subscribe(
 ///
 /// # Safety
 /// Same contract as [`kevy_subscribe`].
+// NO-UNWIND: the subscription is opened inside sub_open, which catches
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kevy_psubscribe(
     db: *mut KevyDb,
