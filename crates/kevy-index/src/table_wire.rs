@@ -10,6 +10,17 @@ pub const TABLE_DECLARE_USAGE: &str = "ERR usage: TABLE.DECLARE name PREFIX p PK
 
 /// A table path declared `GLOBAL`: spread over the shards by value, as
 /// `IDX.CREATE … PARTITION global` spreads an index.
+///
+/// ```
+/// use kevy_index::{GlobalPath, parse_table_declare_partitioned};
+///
+/// let (_, global) = parse_table_declare_partitioned(&[
+///     b"TABLE.DECLARE", b"t", b"PREFIX", b"t:", b"PK", b"id", b"COLUMN", b"id", b"i64",
+///     b"COLUMN", b"at", b"i64", b"INDEX", b"at", b"range", b"GLOBAL",
+/// ])
+/// .unwrap();
+/// assert_eq!(global, [GlobalPath { path: b"t.at".to_vec(), split_at: vec![] }]);
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GlobalPath {
     /// The compiled index's name, `<table>.<column>` or `<table>.<orderpath>`.

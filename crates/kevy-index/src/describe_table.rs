@@ -144,9 +144,26 @@ pub fn table_declaration(t: &TableSpec) -> Vec<Vec<u8>> {
 }
 
 /// [`table_declaration`] with each path's `GLOBAL` clause, as the index
-/// catalog `cat` holds it: an index path names its split points (sampled
-/// ones too, so a replay places every value where it was), an order path
-/// only `GLOBAL` — its split points are composite bytes, sampled again.
+/// catalog `cat` holds it, split points included (sampled ones too), so a
+/// replay places every value where it was.
+///
+/// ```
+/// use kevy_index::{Catalog, Partitioning, compile_table, order_key, parse_table_declare,
+///     table_declaration_partitioned, ValType};
+///
+/// let t = parse_table_declare(&[
+///     b"TABLE.DECLARE", b"u", b"PREFIX", b"u:", b"PK", b"id", b"COLUMN", b"id", b"i64",
+///     b"INDEX", b"id", b"range",
+/// ])
+/// .unwrap();
+/// let mut cat = Catalog::new();
+/// for spec in compile_table(&t).unwrap() {
+///     let splits = vec![order_key(ValType::I64, b"100").unwrap()];
+///     cat.create_with(spec, Partitioning::Global { splits }).unwrap();
+/// }
+/// let argv = table_declaration_partitioned(&t, &cat);
+/// assert_eq!(argv[argv.len() - 4..], [b"GLOBAL".to_vec(), b"SPLIT".to_vec(), b"AT".to_vec(), b"100".to_vec()]);
+/// ```
 pub fn table_declaration_partitioned(t: &TableSpec, cat: &Catalog) -> Vec<Vec<u8>> {
     let mut w: Vec<Vec<u8>> = vec![
         b"TABLE.DECLARE".to_vec(),
