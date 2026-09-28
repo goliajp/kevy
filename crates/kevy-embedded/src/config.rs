@@ -89,6 +89,10 @@ pub struct Config {
     /// record (length + CRC + parse all agree) instead of dropping the
     /// good tail behind it. Default false (strict).
     pub replay_resync: bool,
+    /// Size in bytes of each shard's staging ring (0 = off): appends land
+    /// in a shared file mapping, so a process that is killed keeps every
+    /// write that returned. Only `EverySec` and `No` stage. Default 4 MiB.
+    pub stage_bytes: u64,
     /// Optional push-style metric callback (replay / rewrite events). Default
     /// `None`. Set via [`Self::with_metric_sink`]; not part of `Debug` output.
     #[cfg(feature = "persist")]
@@ -187,6 +191,7 @@ impl Default for Config {
             auto_aof_rewrite_bytes: 0,
             auto_aof_rewrite_interval_secs: 0,
             replay_resync: false,
+            stage_bytes: 4 * 1024 * 1024,
             #[cfg(feature = "persist")]
             metric_sink: None,
             shards: 1,
@@ -213,17 +218,6 @@ impl Default for Config {
 }
 
 impl Config {
-    /// The auto-rewrite rules this config asks for.
-    #[cfg(feature = "persist")]
-    pub(crate) fn rewrite_policy(&self) -> kevy_persist::RewritePolicy {
-        kevy_persist::RewritePolicy {
-            pct: self.auto_aof_rewrite_pct,
-            min_size: self.auto_aof_rewrite_min_size,
-            bytes: self.auto_aof_rewrite_bytes,
-            interval_secs: self.auto_aof_rewrite_interval_secs,
-        }
-    }
-
     /// Enable the read-only RESP listener on `addr`
     /// (e.g. `"127.0.0.1:6009".parse().unwrap()`).
     #[cfg(feature = "listener")]

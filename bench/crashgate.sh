@@ -132,12 +132,36 @@ window_cell() { # $1 = cell name, rest = writer flags
 }
 
 echo "== crashgate: SIGKILL matrix =="
+# The process-crash contract under the staging ring: every write the
+# writer saw return survives SIGKILL, fsync or not — the ring is a shared
+# mapping, so the kernel holds it the moment the append returns.
+acked_cell() { # $1 = cell name, rest = writer flags
+    local name=$1; shift
+    local dir="$WORK/$name" log="$WORK/$name.log"
+    mkdir -p "$dir"
+    "$WRITER" "$dir" --acked "$@" > "$log" 2>/dev/null &
+    WPID=$!
+    for _ in $(seq 100); do grep -q "ACKED" "$log" 2>/dev/null && break; sleep 0.1; done
+    sleep 1.2
+    kill -9 "$WPID" 2>/dev/null; wait "$WPID" 2>/dev/null; WPID=""
+    local acked rec checkflags=()
+    acked=$(grep ACKED "$log" | tail -1 | awk '{print $2}')
+    [ -n "$acked" ] && [ "$acked" -gt 0 ] \
+        || { verdict 1 "$name/setup" "writer never acknowledged a write (got '${acked:-none}')"; return; }
+    [ "${1:-}" = "--shards" ] && checkflags+=(--shards "$2")
+    rec=$("$CHECK" "$dir" ${checkflags[@]+"${checkflags[@]}"} 2>/dev/null | awk '/^RECOVERED/{print $2}')
+    [ "${rec:-0}" -ge "$acked" ] && verdict 0 "$name/acked" "recovered $rec >= acked $acked" \
+        || verdict 1 "$name/acked" "recovered ${rec:-0} < acked $acked"
+}
+
 cell append-everysec
 cell append-always --always
 cell append-4shard --shards 4
 cell rewrite-everysec --rewrite
 cell snapshot-everysec --snapshot
 cell feed-everysec --feed
+acked_cell stage-everysec
+acked_cell stage-4shard --shards 4
 
 echo "== crashgate: windowed SIGKILL cells (R2c) =="
 window_cell window-everysec-a

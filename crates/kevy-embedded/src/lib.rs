@@ -102,6 +102,7 @@
 mod config;
 #[cfg(feature = "replicate")]
 mod config_secure;
+mod config_stage;
 mod dispatch;
 mod info;
 // Unconditional: `OpenReport` rides the DropGuard and the Store

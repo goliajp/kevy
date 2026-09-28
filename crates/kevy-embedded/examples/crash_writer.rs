@@ -4,10 +4,14 @@
 //! the last SYNCED line survives the kill".
 //!
 //!   crash_writer <dir> [--shards N] [--always] [--feed] [--rewrite] [--snapshot]
+//!                      [--acked] [--no-stage]
 //!
 //! Modes stack: --rewrite / --snapshot fold a background compaction /
 //! snapshot into the write loop so the kill can land mid-rewrite or
 //! mid-snapshot; --feed opens the CDC ring so the kill can land mid-emit.
+//! --acked prints `ACKED <n>` once each write has returned: with the
+//! staging ring on (the default), a process kill loses none of those;
+//! --no-stage turns the ring off, for a control run.
 use std::io::Write as _;
 
 use kevy_embedded::{AppendFsync, Config, Store};
@@ -21,6 +25,7 @@ fn main() {
     let mut shards = 1usize;
     let mut fsync = AppendFsync::EverySec;
     let (mut feed, mut rewrite, mut snapshot) = (false, false, false);
+    let (mut acked, mut stage) = (false, true);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--shards" => shards = args.next().unwrap().parse().unwrap(),
@@ -28,12 +33,17 @@ fn main() {
             "--feed" => feed = true,
             "--rewrite" => rewrite = true,
             "--snapshot" => snapshot = true,
+            "--acked" => acked = true,
+            "--no-stage" => stage = false,
             other => panic!("unknown flag {other}"),
         }
     }
     let mut cfg = Config::default().with_persist(&dir).with_shards(shards).with_appendfsync(fsync);
     if feed {
         cfg = cfg.with_feed(16 << 20);
+    }
+    if !stage {
+        cfg = cfg.with_stage_ring(0);
     }
     let store = Store::open(cfg).expect("open");
 
@@ -48,6 +58,10 @@ fn main() {
         n += 1;
         store.set(format!("k{}", n % 1000).as_bytes(), &val).expect("set");
         store.set(b"seq", n.to_string().as_bytes()).expect("seq");
+        if acked {
+            writeln!(out, "ACKED {n}").unwrap();
+            out.flush().unwrap();
+        }
         if n.is_multiple_of(SYNC_EVERY) {
             store.fsync_aof().expect("fsync");
             writeln!(out, "SYNCED {n}").unwrap();
