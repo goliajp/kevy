@@ -16,4 +16,3 @@ mod scan_is_incremental;
 mod skeleton;
 mod spop_is_random;
 mod srandmember_repeats;
-mod zrank_scales;
