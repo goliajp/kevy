@@ -127,7 +127,7 @@ impl Aof {
         self.flush_queued()?;
         if self.dirty || self.sync_unconfirmed() {
             self.file.flush()?;
-            self.file.get_ref().sync_data()?;
+            self.sync_file()?;
             self.dirty = false;
             self.last_sync = Instant::now();
             self.confirm_started_syncs();

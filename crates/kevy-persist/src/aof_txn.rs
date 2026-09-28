@@ -56,6 +56,8 @@ impl Aof {
                     q.extend_from_slice(&crate::crc32c::crc32c(&frame).to_le_bytes());
                     q.extend_from_slice(&frame);
                     self.queued_seq += 1;
+                } else if let Some(m) = &mut self.mapped {
+                    crate::record::write_record(m, &frame)?;
                 } else if !self.stage_marker(&frame)? {
                     self.file.write_all(&(frame.len() as u32).to_le_bytes())?;
                     self.file.write_all(&crate::crc32c::crc32c(&frame).to_le_bytes())?;

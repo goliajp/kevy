@@ -38,6 +38,8 @@
 #![warn(missing_docs)]
 
 mod aof;
+#[cfg(not(target_arch = "wasm32"))]
+mod aof_mapped;
 mod aof_policy;
 mod aof_queue;
 mod aof_rewrite;
@@ -204,6 +206,8 @@ impl SnapshotSource for kevy_store::SnapshotView {
 mod tests;
 #[cfg(test)]
 mod tests_aof;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests_mapped;
 #[cfg(test)]
 mod tests_policy;
 #[cfg(test)]

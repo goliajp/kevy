@@ -12,9 +12,11 @@ use kevy_resp::ArgvView;
 use kevy_store::Store;
 
 #[cfg(not(target_arch = "wasm32"))]
+pub(crate) use crate::aof_mapped::{MapHandle, Mapped, sync_handles};
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use crate::aof_stage::Stage;
 #[cfg(target_arch = "wasm32")]
-pub(crate) use crate::aof_stage_off::Stage;
+pub(crate) use crate::aof_stage_off::{MapHandle, Mapped, Stage, sync_handles};
 use crate::estimate_multibulk_bytes;
 use crate::record::RECORD_HEADER;
 use crate::record_pieces::{record_header, write_frame};
@@ -129,6 +131,13 @@ pub struct Aof {
     /// `Some` = staged appends (see `aof_stage`): records land in a shared
     /// mapping first and reach `file` on each drain.
     pub(crate) stage: Option<Stage>,
+    /// `Some` = mapped appends (see `aof_mapped`): records are copied into a
+    /// mapping of the file's preallocated tail; `file` is never written.
+    pub(crate) mapped: Option<Mapped>,
+    /// This log maps its appends whenever it can: kept while the mapping is
+    /// taken down around a file swap, so the swap maps the new file.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) maps: bool,
     /// `Some` = queued-append mode (RFC v3-aof-offload S1): encoded
     /// record bytes accumulate here instead of hitting `file`, and the
     /// DRIVER (the io_uring reactor) drains them via
@@ -270,6 +279,9 @@ impl Aof {
             queued_offset: size,
             queued_seq: 0,
             stage: None,
+            mapped: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            maps: false,
         })
     }
 
@@ -305,6 +317,7 @@ impl Aof {
         self.fsync = fsync;
         if upgrading_to_always {
             self.flush_queued()?;
+            self.stop_mapping()?;
         }
         if upgrading_to_always && (self.dirty || self.sync_unconfirmed()) {
             self.file.flush()?;
@@ -328,6 +341,8 @@ impl Aof {
         if let Some(q) = &mut self.queue {
             write_frame(q, own, args)?;
             self.queued_seq += 1;
+        } else if let Some(m) = &mut self.mapped {
+            write_frame(m, own, args)?;
         } else if let Some(h) = own.filter(|_| self.stage.is_some()) {
             let len = RECORD_HEADER + u32::from_le_bytes([h[0], h[1], h[2], h[3]]) as usize;
             let staged = self.stage_record(len, |mut slot| {
@@ -371,6 +386,7 @@ impl Aof {
     /// the freshly-trimmed log still identify as kevy-managed.
     pub fn truncate(&mut self) -> io::Result<()> {
         self.flush_queued()?;
+        self.unmap()?;
         self.file.flush()?;
         let f = self.file.get_mut();
         f.set_len(0)?;
@@ -383,7 +399,7 @@ impl Aof {
         self.queued_offset = self.size_bytes;
         self.size_at_last_rewrite = crate::record::AOF2_MAGIC.len() as u64;
         self.last_rewrite_at = Instant::now();
-        self.rebase_stage()
+        self.after_file_change()
     }
 
     /// Estimated current AOF size in bytes (file content as of last append).
@@ -439,6 +455,7 @@ impl Aof {
         // Flush any pending writes to the OLD file first so the snapshot
         // accounts for everything the caller intended to durabilise.
         self.flush_queued()?;
+        self.unmap()?;
         self.file.flush()?;
 
         let tmp = crate::aof_util::rewrite_tmp_path(&self.path);
@@ -457,7 +474,7 @@ impl Aof {
         self.last_rewrite_at = Instant::now();
         self.dirty = false;
         self.rewrites_total = self.rewrites_total.saturating_add(1);
-        self.rebase_stage()?;
+        self.after_file_change()?;
         Ok(RewriteStats { keys, bytes })
     }
 

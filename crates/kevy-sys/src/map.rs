@@ -6,6 +6,7 @@
 use std::fs::File;
 use std::io;
 use std::os::fd::AsRawFd;
+use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
 use core::ffi::{c_int, c_void};
@@ -37,25 +38,74 @@ unsafe extern "C" {
 /// page past the end of the file is a `SIGBUS`, not an error.
 #[derive(Debug)]
 pub struct FileMap {
+    region: Arc<Region>,
+}
+
+/// A handle that can only put a mapping's pages on the medium. It keeps
+/// the mapping alive, so a sync can run on another thread while the
+/// [`FileMap`] goes on being written — `msync` is the kernel reading the
+/// pages, not an access by this process.
+#[derive(Debug, Clone)]
+pub struct MapSync {
+    region: Arc<Region>,
+}
+
+/// The mapped range itself; unmapped when the last holder drops it.
+#[derive(Debug)]
+struct Region {
     ptr: *mut u8,
     len: usize,
 }
 
-// SAFETY: the mapping is plain memory owned by this value; moving it to
-// another thread moves that ownership. Shared access goes through raw
-// pointers the caller synchronises.
-unsafe impl Send for FileMap {}
-// SAFETY: `&FileMap` only hands out the base pointer and the length; any
-// access through them is the caller's to synchronise.
-unsafe impl Sync for FileMap {}
+// SAFETY: the region is plain memory owned by the mapping; nothing about it
+// is tied to the thread that created it.
+unsafe impl Send for Region {}
+// SAFETY: a shared `Region` is only read for its address and length, and
+// passed to `msync`; the bytes are reached through `FileMap`'s borrows.
+unsafe impl Sync for Region {}
+
+impl Region {
+    fn sync(&self) -> io::Result<()> {
+        // SAFETY: the range is exactly the live mapping this region owns.
+        if unsafe { msync(self.ptr.cast(), self.len, MS_SYNC) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+}
+
+impl Drop for Region {
+    fn drop(&mut self) {
+        // SAFETY: the range is the mapping `map_at` returned, and this is its
+        // last holder, so no pointer into it is used afterwards.
+        unsafe { munmap(self.ptr.cast(), self.len) };
+    }
+}
+
+impl MapSync {
+    /// Write every dirty page of the mapping to the file and wait
+    /// (`msync(MS_SYNC)`).
+    pub fn sync(&self) -> io::Result<()> {
+        self.region.sync()
+    }
+}
 
 impl FileMap {
     /// Map the first `len` bytes of `file`, which must be open for reading
     /// and writing and at least `len` bytes long.
     pub fn map(file: &File, len: usize) -> io::Result<FileMap> {
+        FileMap::map_at(file, 0, len)
+    }
+
+    /// Map `len` bytes of `file` starting at `offset`, which must be a
+    /// multiple of the page size (64 KiB is one on every platform kevy
+    /// runs on). The file must reach `offset + len`.
+    pub fn map_at(file: &File, offset: u64, len: usize) -> io::Result<FileMap> {
         if len == 0 {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "an empty mapping"));
         }
+        let offset = i64::try_from(offset)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "offset past i64"))?;
         // SAFETY: a null hint, a length, flags and a live fd by value; the
         // kernel picks the address and reports failure as MAP_FAILED.
         let p = unsafe {
@@ -65,24 +115,24 @@ impl FileMap {
                 PROT_READ | PROT_WRITE,
                 MAP_SHARED,
                 file.as_raw_fd(),
-                0,
+                offset,
             )
         };
         if p as isize == -1 {
             return Err(io::Error::last_os_error());
         }
-        Ok(FileMap { ptr: p.cast(), len })
+        Ok(FileMap { region: Arc::new(Region { ptr: p.cast(), len }) })
     }
 
     /// The first byte of the mapping; valid for `len()` bytes while `self`
     /// lives.
     pub fn as_ptr(&self) -> *mut u8 {
-        self.ptr
+        self.region.ptr
     }
 
     /// The mapping's length in bytes.
     pub fn len(&self) -> usize {
-        self.len
+        self.region.len
     }
 
     /// Always false: a mapping is never empty.
@@ -95,50 +145,48 @@ impl FileMap {
     /// Another process mapping the same file can change these bytes at any
     /// time; the file is this process's to write, as with any file it owns.
     pub fn bytes(&self, off: usize, len: usize) -> &[u8] {
-        assert!(off.checked_add(len).is_some_and(|e| e <= self.len), "read past the mapping");
+        assert!(
+            off.checked_add(len).is_some_and(|e| e <= self.region.len),
+            "read past the mapping"
+        );
         // SAFETY: the range was just checked against the live mapping, and
         // the borrow of `self` keeps the mapping alive and unwritten through
         // this value for as long as the slice lives.
-        unsafe { std::slice::from_raw_parts(self.ptr.add(off), len) }
+        unsafe { std::slice::from_raw_parts(self.region.ptr.add(off), len) }
     }
 
     /// `len` writable bytes at `off`. Panics when the range leaves the
     /// mapping.
     pub fn bytes_mut(&mut self, off: usize, len: usize) -> &mut [u8] {
-        assert!(off.checked_add(len).is_some_and(|e| e <= self.len), "write past the mapping");
+        assert!(
+            off.checked_add(len).is_some_and(|e| e <= self.region.len),
+            "write past the mapping"
+        );
         // SAFETY: the range was just checked against the live mapping, and
         // the exclusive borrow of `self` rules out any other view of it.
-        unsafe { std::slice::from_raw_parts_mut(self.ptr.add(off), len) }
+        unsafe { std::slice::from_raw_parts_mut(self.region.ptr.add(off), len) }
     }
 
     /// The 8 bytes at `off` as an atomic. Panics when `off` is not a
     /// multiple of 8 or the cell leaves the mapping. Those bytes should
     /// then be read and written only through the atomic.
     pub fn atomic_u64(&self, off: usize) -> &AtomicU64 {
-        assert!(off.is_multiple_of(8) && off + 8 <= self.len, "a misplaced atomic cell");
+        assert!(off.is_multiple_of(8) && off + 8 <= self.region.len, "a misplaced atomic cell");
         // SAFETY: the mapping is page-aligned, so an offset that is a multiple
         // of 8 is 8-byte aligned; the cell lies inside the live mapping, which
         // the borrow of `self` keeps alive.
-        unsafe { &*self.ptr.add(off).cast::<AtomicU64>() }
+        unsafe { &*self.region.ptr.add(off).cast::<AtomicU64>() }
     }
 
     /// Write every dirty page of the mapping to the file and wait
     /// (`msync(MS_SYNC)`).
     pub fn sync(&self) -> io::Result<()> {
-        // SAFETY: the range is exactly the live mapping this value owns.
-        if unsafe { msync(self.ptr.cast(), self.len, MS_SYNC) } != 0 {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(())
+        self.region.sync()
     }
-}
 
-impl Drop for FileMap {
-    fn drop(&mut self) {
-        // SAFETY: the range is the mapping `map` returned and nothing else
-        // unmaps it; after this no pointer from `as_ptr` may be used, which
-        // the borrow on `self` already guarantees for safe callers.
-        unsafe { munmap(self.ptr.cast(), self.len) };
+    /// A handle that syncs this mapping from anywhere, keeping it mapped.
+    pub fn sync_handle(&self) -> MapSync {
+        MapSync { region: Arc::clone(&self.region) }
     }
 }
 
@@ -165,6 +213,23 @@ mod tests {
         let mut got = [0u8; 4];
         f.seek(SeekFrom::Start(5000)).unwrap();
         f.read_exact(&mut got).unwrap();
+        assert_eq!(&got, b"kevy");
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn a_mapping_at_an_offset_sees_that_part_of_the_file() {
+        let path = tmp("offset");
+        let f =
+            File::options().read(true).write(true).create(true).truncate(true).open(&path).unwrap();
+        f.set_len(128 * 1024).unwrap();
+        let mut m = FileMap::map_at(&f, 64 * 1024, 64 * 1024).unwrap();
+        m.bytes_mut(10, 4).copy_from_slice(b"kevy");
+        m.sync().unwrap();
+        drop(m);
+        let mut got = [0u8; 4];
+        use std::os::unix::fs::FileExt;
+        f.read_exact_at(&mut got, 64 * 1024 + 10).unwrap();
         assert_eq!(&got, b"kevy");
         std::fs::remove_file(&path).unwrap();
     }
