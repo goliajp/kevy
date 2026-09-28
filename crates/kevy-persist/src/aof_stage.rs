@@ -32,6 +32,11 @@ pub(crate) struct Stage {
 }
 
 /// What [`Aof::open_stage`] found in the ring the last process left.
+///
+/// ```
+/// let found = kevy_persist::StageOpen::default();
+/// assert_eq!((found.recovered, found.discarded, found.torn), (0, None, false));
+/// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct StageOpen {
@@ -53,6 +58,21 @@ impl Aof {
     ///
     /// A v1 log, or one in queued mode, settles the ring instead of staging
     /// ([`Self::settle_stage`]); under `Always` appends bypass the ring.
+    ///
+    /// ```
+    /// use kevy_persist::{Aof, Argv, Fsync};
+    ///
+    /// let dir = std::env::temp_dir().join(format!("stage-doc-{}", std::process::id()));
+    /// std::fs::create_dir_all(&dir)?;
+    /// let mut log = Aof::open(&dir.join("doc.aof"), Fsync::EverySec)?;
+    /// let found = log.open_stage(&dir.join("doc.stage"), 64 * 1024, |_| {})?;
+    /// assert_eq!(found.recovered, 0, "a fresh ring owes nothing");
+    /// log.append(&Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()]))?;
+    /// assert_eq!(log.stage_path(), Some(dir.join("doc.stage").as_path()));
+    /// # drop(log);
+    /// # std::fs::remove_dir_all(&dir)?;
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub fn open_stage(
         &mut self,
         path: &Path,
@@ -72,6 +92,23 @@ impl Aof {
     /// Settle what a ring at `path` owes this log, as [`Self::open_stage`]
     /// does, then remove the ring: for a log that no longer stages, or whose
     /// shard layout is about to change.
+    ///
+    /// ```
+    /// use kevy_persist::{Aof, Fsync};
+    ///
+    /// let dir = std::env::temp_dir().join(format!("settle-doc-{}", std::process::id()));
+    /// std::fs::create_dir_all(&dir)?;
+    /// let ring = dir.join("doc.stage");
+    /// let mut log = Aof::open(&dir.join("doc.aof"), Fsync::EverySec)?;
+    /// log.open_stage(&ring, 64 * 1024, |_| {})?;
+    /// drop(log);
+    /// let mut log = Aof::open(&dir.join("doc.aof"), Fsync::EverySec)?;
+    /// log.settle_stage(&ring, |_| {})?;
+    /// assert!(!ring.exists());
+    /// # drop(log);
+    /// # std::fs::remove_dir_all(&dir)?;
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub fn settle_stage(
         &mut self,
         path: &Path,
@@ -183,6 +220,15 @@ impl Aof {
     }
 
     /// Where the ring lives, when this log stages.
+    ///
+    /// ```
+    /// let path = std::env::temp_dir().join(format!("stage-path-doc-{}.aof", std::process::id()));
+    /// let log = kevy_persist::Aof::open(&path, kevy_persist::Fsync::No)?;
+    /// assert_eq!(log.stage_path(), None, "a log stages only once asked to");
+    /// # drop(log);
+    /// # std::fs::remove_file(&path)?;
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub fn stage_path(&self) -> Option<&Path> {
         self.stage.as_ref().map(|s| s.path.as_path())
     }

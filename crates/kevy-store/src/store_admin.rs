@@ -8,6 +8,12 @@ use kevy_map::KevyMap;
 
 /// A store's entries, moved out for teardown. It holds memory only — no
 /// file — so it can be dropped on any thread, whenever.
+///
+/// ```
+/// let mut store = kevy_store::Store::new();
+/// let none = store.detach_entries();
+/// assert!(none.is_empty());
+/// ```
 #[derive(Debug)]
 pub struct DetachedEntries(KevyMap<SmallBytes, Entry>);
 
@@ -27,6 +33,15 @@ impl Store {
     /// Move every entry out, leaving the keyspace empty, so a host closing
     /// the store can free them off its own thread. The accounting is left
     /// as it was: this is for a store on its way to being dropped.
+    ///
+    /// ```
+    /// let mut store = kevy_store::Store::new();
+    /// store.set(b"k", b"v".to_vec(), None, false, false);
+    /// let entries = store.detach_entries();
+    /// assert_eq!(entries.len(), 1);
+    /// assert_eq!(store.dbsize(), 0);
+    /// std::thread::spawn(move || drop(entries)).join().unwrap();
+    /// ```
     pub fn detach_entries(&mut self) -> DetachedEntries {
         DetachedEntries(core::mem::take(&mut self.map))
     }

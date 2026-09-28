@@ -77,7 +77,12 @@ impl StageRing {
     /// and continuing the log `aof_ino` at length `aof_len`. A new file is
     /// written through once with zeros, so every later store into it lands
     /// on blocks the filesystem has already allocated.
-    pub(crate) fn create(path: &Path, cap: u64, aof_ino: u64, aof_len: u64) -> io::Result<StageRing> {
+    pub(crate) fn create(
+        path: &Path,
+        cap: u64,
+        aof_ino: u64,
+        aof_len: u64,
+    ) -> io::Result<StageRing> {
         assert!(cap.is_power_of_two() && cap >= 64 * 1024, "ring capacity {cap}");
         let total = HEADER as u64 + cap;
         let mut file =

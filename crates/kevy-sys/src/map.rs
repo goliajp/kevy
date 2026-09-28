@@ -36,6 +36,21 @@ unsafe extern "C" {
 ///
 /// The file must already be at least `len` bytes long: touching a mapped
 /// page past the end of the file is a `SIGBUS`, not an error.
+///
+/// ```
+/// use std::io::Read;
+/// let path = std::env::temp_dir().join(format!("filemap-doc-{}", std::process::id()));
+/// let mut f = std::fs::File::options().read(true).write(true).create(true).truncate(true).open(&path)?;
+/// f.set_len(4096)?;
+/// let mut map = kevy_sys::FileMap::map(&f, 4096)?;
+/// map.bytes_mut(0, 4).copy_from_slice(b"kevy");
+/// map.sync()?;
+/// let mut head = [0u8; 4];
+/// f.read_exact(&mut head)?;
+/// assert_eq!(&head, b"kevy", "a store into the mapping is in the file");
+/// # std::fs::remove_file(&path)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
 #[derive(Debug)]
 pub struct FileMap {
     region: Arc<Region>,
@@ -45,6 +60,19 @@ pub struct FileMap {
 /// the mapping alive, so a sync can run on another thread while the
 /// [`FileMap`] goes on being written — `msync` is the kernel reading the
 /// pages, not an access by this process.
+///
+/// ```
+/// let path = std::env::temp_dir().join(format!("mapsync-doc-{}", std::process::id()));
+/// let f = std::fs::File::options().read(true).write(true).create(true).truncate(true).open(&path)?;
+/// f.set_len(65536)?;
+/// let mut map = kevy_sys::FileMap::map(&f, 65536)?;
+/// let handle = map.sync_handle();
+/// let syncer = std::thread::spawn(move || handle.sync());
+/// map.bytes_mut(100, 3).copy_from_slice(b"new");
+/// syncer.join().unwrap()?;
+/// # std::fs::remove_file(&path)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
 #[derive(Debug, Clone)]
 pub struct MapSync {
     region: Arc<Region>,
@@ -193,6 +221,15 @@ impl FileMap {
 /// Reserve `len` bytes of disk past the file's allocated end, so pages
 /// later written through a mapping land on blocks that already exist
 /// (`F_PREALLOCATE`). Elsewhere there is nothing to ask, and it is a no-op.
+///
+/// ```
+/// let path = std::env::temp_dir().join(format!("prealloc-doc-{}", std::process::id()));
+/// let f = std::fs::File::create(&path)?;
+/// kevy_sys::preallocate(&f, 1 << 20)?;
+/// assert_eq!(f.metadata()?.len(), 0, "reserving space does not grow the file");
+/// # std::fs::remove_file(&path)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub fn preallocate(file: &File, len: u64) -> io::Result<()> {
     #[repr(C)]
@@ -225,6 +262,15 @@ pub fn preallocate(file: &File, len: u64) -> io::Result<()> {
 }
 
 /// Nothing to reserve ahead on this platform.
+///
+/// ```
+/// let path = std::env::temp_dir().join(format!("prealloc-doc-{}", std::process::id()));
+/// let f = std::fs::File::create(&path)?;
+/// kevy_sys::preallocate(&f, 1 << 20)?;
+/// assert_eq!(f.metadata()?.len(), 0, "reserving space does not grow the file");
+/// # std::fs::remove_file(&path)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
 pub fn preallocate(_file: &File, _len: u64) -> io::Result<()> {
     Ok(())
