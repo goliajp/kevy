@@ -360,9 +360,10 @@ pub(super) fn op_list(ctx: &Ctx<'_>, store: &mut Store) -> Vec<u8> {
             })
             .unwrap_or_default()
         } else {
+            let placed = index_runtime::placed_bytes(ctx, store, &spec.name);
             index_runtime::with_ready_segment(ctx, store, &spec.name, |_, seg, _| {
                 let st = seg.stats();
-                (st.entries, st.approx_bytes, st.coerce_failures, st.duplicates)
+                (st.entries, st.approx_bytes + placed, st.coerce_failures, st.duplicates)
             })
             .unwrap_or_default()
         };

@@ -14,10 +14,9 @@
 //! one shard to another arrive in order, so an owner that has heard from
 //! all N holds every entry, and answers reads only then.
 
-use std::collections::HashMap;
-
 use kevy_index::{
-    IndexSpec, IndexValue, Partitioning, Segment, partition_owner, value_order_bytes,
+    IndexSpec, IndexValue, Partitioning, PlacementTable, Segment, partition_owner,
+    value_order_bytes,
 };
 use kevy_store::Store;
 
@@ -50,7 +49,7 @@ pub(crate) struct GlobalRole {
     pub(crate) owned: Vec<(usize, Segment)>,
     /// This shard's rows: the partition each entry went to, and a hash of
     /// the entry, so an unchanged write sends nothing.
-    placed: HashMap<Vec<u8>, (u16, u64)>,
+    placed: PlacementTable,
     /// Messages waiting for the runtime to take.
     pub(crate) outbox: Vec<(usize, Vec<u8>)>,
 }
@@ -69,7 +68,7 @@ impl GlobalRole {
             inc,
             built: vec![false; nshards],
             owned,
-            placed: HashMap::new(),
+            placed: PlacementTable::new(),
             outbox: Vec::new(),
         }
     }
@@ -95,7 +94,7 @@ impl GlobalRole {
     /// The row at `key` was written (or removed): queue what its entry's
     /// partition owners must apply.
     pub(crate) fn on_row(&mut self, store: &mut Store, spec: &IndexSpec, key: &[u8]) {
-        let prev = self.placed.get(key).copied();
+        let prev = self.placed.get(key);
         let Some((value, values)) = derive(store, spec, key) else {
             if let Some((p, _)) = prev {
                 self.placed.remove(key);
@@ -114,7 +113,7 @@ impl GlobalRole {
         {
             self.send(spec, q, Delta::Delete { key: key.to_vec() });
         }
-        self.placed.insert(key.to_vec(), (p, h));
+        self.placed.insert(key, p, h);
         self.send(spec, p, Delta::Upsert { key: key.to_vec(), value, values });
     }
 
@@ -124,6 +123,12 @@ impl GlobalRole {
         for (_, seg) in &mut self.owned {
             *seg = super::new_scalar_seg(spec);
         }
+    }
+
+    /// Heap bytes of this shard's placement table — the part of a global
+    /// index kept on the rows' side, which no partition's segment counts.
+    pub(crate) fn placed_bytes(&self) -> u64 {
+        self.placed.approx_bytes()
     }
 
     /// Apply a delta a row's shard sent for partition `p`.

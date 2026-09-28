@@ -30,7 +30,8 @@ pub(crate) fn verify_chunk(ctx: &Ctx<'_>, store: &mut Store, name: &[u8]) -> Opt
     if !g.ready() {
         return Some(vec![crate::cmd_index_query::ST_BUILDING]);
     }
-    let (held, stats) = held(g);
+    let (held, mut stats) = held(g);
+    stats.1 += g.placed_bytes();
     let (owed, coerce_failures) = owed(store, &si.spec, g);
     let mut chunk = vec![crate::cmd_index_query::ST_OK, VERIFY_TAG];
     for n in [stats.0, stats.1, coerce_failures, stats.2] {

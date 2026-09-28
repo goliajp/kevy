@@ -200,9 +200,11 @@ TABLE.DECLARE user PREFIX user: PK id COLUMN id i64 COLUMN age i64 INDEX age ran
   sees duplicates within a shard). A server restarted with fewer shards
   than an index has partitions keeps an even subset of its split points.
 - **Memory.** Beside the entries, which cost what a local index's do,
-  the row's shard keeps, per global index, a copy of each row's key with
-  its partition and a hash of its entry — how it knows which messages a
-  write needs.
+  the row's shard keeps, per global index, each row's key with its
+  partition and a hash of its entry — how it knows which messages a write
+  needs: about `key_len + 28…64` bytes a row (a 24-byte slot at the
+  table's load, and the key). `IDX.LIST` and `IDX.VERIFY` count it in
+  `bytes`.
 
 ## Consistency + cost model
 
