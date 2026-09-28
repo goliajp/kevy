@@ -288,6 +288,54 @@ fn delivery_times_survive_a_restart() {
     delivery_round_trip(4);
 }
 
+/// One `XREADGROUP` over two streams comes back from the log stream by
+/// stream: the stream that delivered keeps its pending entries and their
+/// delivery times, the one that did not keeps its place, and a NOACK read
+/// of both moves both. One shard, so both streams share it.
+#[test]
+fn a_read_of_two_streams_survives_a_restart() {
+    const READS: &[&str] = &[
+        "XPENDING a g - + 10",
+        "XPENDING b g - + 10",
+        "XINFO GROUPS a",
+        "XINFO GROUPS b",
+        "XINFO CONSUMERS b g",
+    ];
+    let text = |s: &Store, r: &str| String::from_utf8_lossy(&call(s, r)).into_owned();
+    let read_all = |s: &Store| -> Vec<String> {
+        READS.iter().map(|r| blank_consumer_idle(&blank_idle(&text(s, r)))).collect()
+    };
+    let dir = kevy_tmpdir::TmpDir::new("replay-streams-two");
+    let (before, idle_before, at) = {
+        let s = open(dir.path(), 1);
+        for w in ["XADD a 1-1 x 1", "XADD a 2-1 x 2", "XADD b 1-1 y 1"] {
+            ok(&s, w);
+        }
+        for g in ["XGROUP CREATE a g 0", "XGROUP CREATE b g $", "XGROUP CREATE a n 0"] {
+            ok(&s, g);
+        }
+        ok(&s, "XGROUP CREATE b n 0");
+        ok(&s, "XREADGROUP GROUP g c1 STREAMS a b > >");
+        ok(&s, "XREADGROUP GROUP n c2 NOACK COUNT 1 STREAMS a b > >");
+        ok(&s, "XADD b 2-1 y 2");
+        // the first stream named delivers nothing, the second one entry
+        ok(&s, "XREADGROUP GROUP g c3 STREAMS a b > >");
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let idle = idles(&text(&s, "XPENDING b g - + 10"));
+        (read_all(&s), idle, std::time::Instant::now())
+    };
+    let s = open(dir.path(), 1);
+    let idle_after = idles(&text(&s, "XPENDING b g - + 10"));
+    let elapsed = at.elapsed().as_millis() as i64;
+    for ((read, b), a) in READS.iter().zip(&before).zip(read_all(&s)) {
+        assert_eq!(&a, b, "{read}: changed across the restart");
+    }
+    assert_eq!(idle_before.len(), 1, "b delivered one entry to c3: {before:?}");
+    let gap = idle_after[0] - idle_before[0];
+    assert!((elapsed - 60..=elapsed + 60).contains(&gap), "idle {idle_before:?} -> {idle_after:?}");
+    assert!(before[4].contains("c3"), "{}", before[4]);
+}
+
 /// A host feeding a server's stream frames back in: each lands on its
 /// stream's shard, where the reads look for it.
 #[test]
