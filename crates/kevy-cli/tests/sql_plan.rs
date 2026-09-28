@@ -40,7 +40,7 @@ fn plan(sql: &str) -> (bool, String) {
     let file = dir.join("schema.sql");
     std::fs::write(&file, sql).unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_kevy-cli"))
-        .args(["sql", "plan"])
+        .args(["--kevy", "sql", "plan"])
         .arg(&file)
         .output()
         .expect("run kevy-cli");
@@ -80,7 +80,7 @@ fn a_schema_that_does_not_parse_is_an_error_with_a_position() {
 #[test]
 fn plan_refuses_apply_rather_than_ignoring_it() {
     let out = Command::new(env!("CARGO_BIN_EXE_kevy-cli"))
-        .args(["sql", "plan", "whatever.sql", "--apply"])
+        .args(["--kevy", "sql", "plan", "whatever.sql", "--apply"])
         .output()
         .expect("run kevy-cli");
     assert!(!out.status.success());

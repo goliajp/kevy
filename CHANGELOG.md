@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- **kevy-cli: a bare tool word is a server command.** The tools kevy-cli
+  6.4 shipped as bare words (`kevy-cli doctor -p 6004`, `kevy-cli export …`,
+  `kevy-cli sql compile … --url h:p`, `kevy-cli digest <prefix>`, and
+  `backup`/`restore` in their file shapes) printed a deprecation line
+  through 6.x and are gone: the word goes to the server, as it does in
+  redis-cli. Write `kevy-cli [-h host] [-p port] --kevy <tool> …`. The
+  library entry points that served them — `kevy_cli::route_tool`,
+  `doctor::run_doctor_cli`, `shadow::run_shadow_cli`, `lint::run_lint_cli`
+  and `backfill_keys::run_backfill_keys_cli` — are removed with them.
+
+- **kevy-config: new fields on the section structs.** `ClusterSection`
+  gains `announce_ip`, `announce_port_base`, `secure` and `peer_keys`;
+  `PeerEntry` gains `repl_port_base`; `ReplicationSection` gains `secure`,
+  `upstream_key` and `replica_keys`; `Config` gains `secure`
+  (`SecureSection`). A struct literal that names every field no longer
+  compiles; add the new ones, or end it with `..Default::default()` where
+  the struct has a default (all of them but `PeerEntry`). This is the
+  change that makes the release 7.0.
+
 - **Android: batch reads and writes no longer go through the command
   path.** `KevyDB.mget` used to encode an `MGET`, run it and parse the RESP
   reply in Kotlin; it now makes one native call that hands back the values

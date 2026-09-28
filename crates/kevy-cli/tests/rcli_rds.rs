@@ -1165,7 +1165,7 @@ fn repl_backslash_commands_and_doctor_scope() {
         "{}",
         repl.stdout
     );
-    let doctor = cli(&["doctor", "-p", &p, "--indexes", "--views"], b"", &[]);
+    let doctor = cli(&["-p", &p, "--kevy", "doctor", "--indexes", "--views"], b"", &[]);
     assert!(
         doctor.stdout.contains("  OK       users  (")
             && doctor.stdout.contains("  OK       index bare  ("),
@@ -1176,7 +1176,7 @@ fn repl_backslash_commands_and_doctor_scope() {
         doctor.stdout.ends_with("doctor: 2 checked — 0 drifted, 0 warned, 0 still building\n")
             && doctor.code == 0
     );
-    let tables_only = cli(&["doctor", "-p", &p], b"", &[]);
+    let tables_only = cli(&["-p", &p, "--kevy", "doctor"], b"", &[]);
     assert!(
         tables_only
             .stdout

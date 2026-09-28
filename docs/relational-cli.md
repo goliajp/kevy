@@ -35,7 +35,7 @@ For a table, `describe` shows its prefix and primary key, every column with its
 declared type and the compiled paths that read it, and each access path's build
 state. For an index it shows the fields, stored values and the table that
 compiled it; for a view, its composition tree and order. The columns come from
-`TABLE.DESCRIBE`, which a server older than 6.5 does not have.
+`TABLE.DESCRIBE`, which a server older than 7.0 does not have.
 
 ## Queries
 
@@ -164,8 +164,7 @@ and `restore` are Redis and Valkey commands, `backup` and `digest` are Redis
 never take bare names; they live behind one option, `--kevy`, the way
 redis-cli's own cluster manager lives behind `--cluster`.
 
-The tools kevy-cli 6.4 shipped as bare words (`kevy-cli doctor -p 6004`,
-`kevy-cli export …`, `kevy-cli sql compile …`) still run until 7.0, each
-printing one line with its `--kevy` form. `backup` and `restore` are tools
-only in their own flag shapes (`--data-dir`/`--to`, `--from`/`--to`);
-`digest <prefix>` stays the tool until 7.0.
+kevy-cli 6.4 shipped these tools as bare words (`kevy-cli doctor -p 6004`,
+`kevy-cli export …`, `kevy-cli sql compile … --url h:p`). Since 7.0 those
+words are sent to the server like any other: put the connection options
+first and the tool after `--kevy` — `kevy-cli -p 6004 --kevy doctor`.

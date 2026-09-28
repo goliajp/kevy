@@ -1,9 +1,8 @@
 //! The tools kevy-cli shipped before `--kevy`: one dispatch, reached from
-//! `--kevy <tool>` on the session's connection and, for the rest of 6.x,
-//! from the bare word with its own `-h`/`-p` (RFC §13).
+//! `--kevy <tool>` on the session's connection. A bare word is a server
+//! command.
 
 pub(crate) mod argscan;
-pub(crate) mod bare;
 mod data;
 mod prefix;
 pub(crate) mod session;

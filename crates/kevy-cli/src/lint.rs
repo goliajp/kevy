@@ -181,12 +181,6 @@ fn table_prefix(client: &mut dyn Link, table: &str) -> io::Result<String> {
     Err(io::Error::other(format!("no declared table named '{table}'")))
 }
 
-/// `lint [-h host] [-p port] overlap --prefix <p>` / `lint [-h host] [-p port]
-/// columns <table> [--sample N] [--threshold PCT]`: connects with its own
-/// `-h`/`-p` (the pre-`--kevy` form), then [`run_on`] the rest.
-pub fn run_lint_cli(args: &[String]) -> ExitCode {
-    crate::tools::bare::with_private_connection("lint", args, run_on)
-}
 
 /// What `lint` takes besides the connection.
 struct LintArgs {
