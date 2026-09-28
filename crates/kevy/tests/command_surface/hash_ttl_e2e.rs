@@ -52,7 +52,7 @@ fn cmd(s: &mut std::net::TcpStream, parts: &[&[u8]]) -> Vec<u8> {
 
 use kevy_testnet::free_port;
 
-mod common;
+use super::common;
 
 fn boot(port: u16, dir: std::path::PathBuf, stop: Arc<AtomicBool>) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {

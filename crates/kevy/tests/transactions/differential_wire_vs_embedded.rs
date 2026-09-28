@@ -25,7 +25,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-mod common;
+use super::common;
 
 static START_GATE: Mutex<()> = Mutex::new(());
 

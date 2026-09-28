@@ -27,7 +27,7 @@ use std::io::{Read, Write};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
-mod common;
+use super::common;
 
 static START_GATE: Mutex<()> = Mutex::new(());
 

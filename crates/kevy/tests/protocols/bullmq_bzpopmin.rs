@@ -11,7 +11,7 @@
 //!
 //! All tests spin a real in-process kevy runtime + TCP socket so the
 //! BlockHint resolve / arm / wake / pop chain is exercised end-to-end —
-//! same harness shape as `tests/blocking.rs`.
+//! same harness shape as `tests/streams/blocking.rs`.
 
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
