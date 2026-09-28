@@ -90,8 +90,10 @@ fn maybe_autodeclare(state: &RuntimeState, name: &[u8], shape: AdviseShape, coun
         None => &ledger[..],
     };
     let Some(ispec) = compiled.into_iter().find(|s| s.name == path) else { return };
+    // a path rebuilt for its new VALUES keeps how it was spread
+    let part = icat.partitioning(path).clone();
     icat.drop_index(path);
-    if icat.create(ispec).is_err() {
+    if icat.create_with(ispec, part).is_err() {
         return;
     }
     crate::cmd_table::persist_sidecar(state.sidecar_dir(), &new_tcat);

@@ -4,7 +4,9 @@
 //! built in `kevy_index` (shared with the embedded dispatch); this file
 //! only looks the object up and encodes.
 
-use kevy_index::{Described, describe_index_partitioned, describe_table, describe_view};
+use kevy_index::{
+    Described, describe_index_partitioned, describe_table_partitioned, describe_view,
+};
 use kevy_resp::{ArgvView, encode_array_len, encode_bulk, encode_error};
 
 use crate::state::Ctx;
@@ -15,8 +17,9 @@ pub(crate) fn cmd_table_describe<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, 
         return encode_error(out, "ERR usage: TABLE.DESCRIBE name");
     }
     let tables = ctx.state.catalogs.table();
+    let indexes = ctx.state.catalogs.index().unwrap_or_default();
     match tables.as_deref().and_then(|c| c.get(&args[1])) {
-        Some(spec) => encode(out, &describe_table(spec)),
+        Some(spec) => encode(out, &describe_table_partitioned(spec, &indexes)),
         None => missing(out, "table", &args[1], "TABLE.LIST"),
     }
 }

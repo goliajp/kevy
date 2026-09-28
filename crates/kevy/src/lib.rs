@@ -60,6 +60,7 @@ mod cmd_lua;
 mod cmd_repl;
 mod cmd_resolve;
 mod cmd_table;
+mod cmd_table_global;
 mod cmd_table_verify;
 mod cmd_view;
 mod cmd_view_reduce;

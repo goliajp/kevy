@@ -458,3 +458,77 @@ fn verify_on_a_global_index_matches_every_row_to_its_entry() {
     let u = verified(&mut w, b"email_g");
     assert_eq!((u["entries"], u["duplicates"], u["drift"]), (600, 1, 0), "{u:?}");
 }
+
+fn words(line: &str) -> Vec<Vec<u8>> {
+    line.split(' ').map(|w| w.as_bytes().to_vec()).collect()
+}
+
+fn run(w: &mut Wire, line: &str) -> String {
+    let argv = words(line);
+    let refs: Vec<&[u8]> = argv.iter().map(Vec::as_slice).collect();
+    text(&call(w, &refs))
+}
+
+const DECLARE: &str = "TABLE.DECLARE u PREFIX user: PK id COLUMN id i64 COLUMN age i64 \
+    COLUMN city str INDEX age range GLOBAL SPLIT AT 30 60 ORDERPATH by_city ON city THEN age GLOBAL";
+
+#[test]
+fn a_table_declares_its_paths_global_and_reads_the_declaration_back() {
+    let srv = Server::start(4);
+    let mut w = srv.wire();
+    for i in 0..300u32 {
+        let (key, age, city) = (format!("user:{i}"), (i % 90).to_string(), format!("c{}", i % 7));
+        call(
+            &mut w,
+            &[
+                b"HSET",
+                key.as_bytes(),
+                b"id",
+                &key.as_bytes()[5..],
+                b"age",
+                age.as_bytes(),
+                b"city",
+                city.as_bytes(),
+            ],
+        );
+    }
+    assert_eq!(run(&mut w, DECLARE), "+OK\r\n");
+    let age = run(&mut w, "IDX.DESCRIBE u.age");
+    assert!(age.contains("$6\r\nglobal\r\n*2\r\n$2\r\n30\r\n$2\r\n60"), "{age}");
+    assert!(run(&mut w, "IDX.DESCRIBE u.by_city").contains("global"));
+    create(&mut w, b"age_l", &[]);
+    wait_ready(&mut w, b"u.age");
+    wait_ready(&mut w, b"age_l");
+    assert_eq!(
+        run(&mut w, "IDX.QUERY u.age RANGE 20 70 LIMIT 500"),
+        run(&mut w, "IDX.QUERY age_l RANGE 20 70 LIMIT 500")
+    );
+
+    // the declaration read back recreates the same table
+    let table = run(&mut w, "TABLE.DESCRIBE u");
+    assert!(table.contains("GLOBAL\r\n$5\r\nSPLIT\r\n$2\r\nAT\r\n$2\r\n30\r\n$2\r\n60"), "{table}");
+    assert!(run(&mut w, DECLARE).starts_with("-ERR"), "declared twice");
+    assert_eq!(run(&mut w, DECLARE.replacen("DECLARE", "ENSURE", 1).as_str()), "+UNCHANGED\r\n");
+    let local = DECLARE.replace(" GLOBAL SPLIT AT 30 60", "");
+    assert!(run(&mut w, &local.replacen("DECLARE", "ENSURE", 1)).contains("spread differently"));
+    assert_eq!(run(&mut w, "TABLE.DROP u"), ":1\r\n");
+    assert_eq!(run(&mut w, DECLARE), "+OK\r\n");
+    assert_eq!(run(&mut w, "TABLE.DESCRIBE u"), table);
+}
+
+#[test]
+fn a_global_path_is_refused_by_name_where_it_cannot_apply() {
+    let srv = Server::start(4);
+    let mut w = srv.wire();
+    let base = "TABLE.DECLARE e PREFIX ev: PK id COLUMN id i64 COLUMN at i64";
+    let windowed =
+        run(&mut w, &format!("{base} INDEX at range GLOBAL WINDOW at SPAN 50 BUCKET 10"));
+    assert!(windowed.contains("GLOBAL cannot apply to a windowed table"), "{windowed}");
+    let op = run(&mut w, &format!("{base} ORDERPATH o ON at GLOBAL SPLIT AT 5"));
+    assert!(op.contains("SPLIT AT applies to an INDEX path"), "{op}");
+    let many = run(&mut w, &format!("{base} INDEX at range GLOBAL SPLIT AT 1 2 3 4"));
+    assert!(many.contains("at most one point fewer than the shard count"), "{many}");
+    let bad = run(&mut w, &format!("{base} INDEX at range GLOBAL SPLIT AT x"));
+    assert!(bad.contains("does not coerce"), "{bad}");
+    assert!(run(&mut w, "TABLE.LIST").starts_with("*0"), "nothing was admitted");
+}

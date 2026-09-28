@@ -6150,8 +6150,8 @@ $5
 table
 $6
 syntax
-$216
-TABLE.DECLARE name PREFIX prefix PK col COLUMN name i64|f64|str [COLUMN ...] [INDEX col range|unique [VALUES col ...]] [ORDERPATH name ON col [DESC] [THEN col [DESC]] ...] [WINDOW col SPAN n BUCKET n] [AUTODECLARE n]
+$251
+TABLE.DECLARE name PREFIX prefix PK col COLUMN name i64|f64|str [COLUMN ...] [INDEX col range|unique [VALUES col ...] [GLOBAL [SPLIT AT v ...]]] [ORDERPATH name ON col [DESC] [THEN col [DESC]] ... [GLOBAL]] [WINDOW col SPAN n BUCKET n] [AUTODECLARE n]
 $10
 complexity
 $234

@@ -24,7 +24,9 @@
 
 use std::path::Path;
 
-use kevy_index::{Catalog, TableCatalog, TableSpec, compile_table, parse_table_declare, spec_diff};
+use kevy_index::{
+    Catalog, TableCatalog, TableSpec, compile_table, parse_table_declare_partitioned, spec_diff,
+};
 use kevy_resp::{ArgvView, encode_array_len, encode_bulk, encode_error, encode_integer};
 use kevy_rt::ExtensionReduced;
 use kevy_store::Store;
@@ -64,12 +66,12 @@ pub(crate) fn persist_sidecar(dir: Option<&Path>, cat: &TableCatalog) {
 /// first; nothing installs on any error.
 pub(crate) fn cmd_table_declare<A: ArgvView + ?Sized>(
     ctx: &Ctx<'_>,
-    store: &kevy_store::Store,
+    store: &mut kevy_store::Store,
     args: &A,
     out: &mut Vec<u8>,
 ) {
     let argv: Vec<&[u8]> = (0..args.len()).map(|i| &args[i] as &[u8]).collect();
-    let spec = match parse_table_declare(&argv) {
+    let (spec, globals) = match parse_table_declare_partitioned(&argv) {
         Ok(s) => s,
         Err(e) => return encode_error(out, &e),
     };
@@ -87,10 +89,9 @@ pub(crate) fn cmd_table_declare<A: ArgvView + ?Sized>(
         Ok(c) => c,
         Err(e) => return encode_error(out, &e),
     };
-    for ispec in compiled {
-        if let Err(e) = icat.create(ispec) {
-            return encode_error(out, e);
-        }
+    let n = ctx.state.nshards();
+    if let Err(e) = crate::cmd_table_global::admit(&mut icat, compiled, &globals, store, n) {
+        return encode_error(out, &e);
     }
     persist_sidecar(ctx.state.sidecar_dir(), &tcat);
     crate::cmd_index::persist_sidecar(ctx.state.sidecar_dir(), &icat);
@@ -106,19 +107,32 @@ pub(crate) fn cmd_table_declare<A: ArgvView + ?Sized>(
 /// its own verb ([`cmd_table_replace`]).
 pub(crate) fn cmd_table_ensure<A: ArgvView + ?Sized>(
     ctx: &Ctx<'_>,
-    store: &kevy_store::Store,
+    store: &mut kevy_store::Store,
     args: &A,
     out: &mut Vec<u8>,
 ) {
     let argv: Vec<&[u8]> = (0..args.len()).map(|i| &args[i] as &[u8]).collect();
-    let spec = match parse_table_declare(&argv) {
+    let (spec, globals) = match parse_table_declare_partitioned(&argv) {
         Ok(s) => s,
         Err(e) => return encode_error(out, &e),
     };
     let existing = ctx.state.catalogs.table().and_then(|c| c.get(&spec.name).cloned());
     match existing {
         None => cmd_table_declare(ctx, store, args, out),
-        Some(cur) if cur.sans_auto() == spec => out.extend_from_slice(b"+UNCHANGED\r\n"),
+        Some(cur) if cur.sans_auto() == spec => {
+            let names = compile_table(&spec).map(|c| c.into_iter().map(|i| i.name).collect());
+            let icat = ctx.state.catalogs.index().map(|c| (*c).clone()).unwrap_or_default();
+            if names.is_ok_and(|n: Vec<Vec<u8>>| {
+                crate::cmd_table_global::same_spread(&icat, &n, &globals)
+            }) {
+                out.extend_from_slice(b"+UNCHANGED\r\n");
+            } else {
+                encode_error(
+                    out,
+                    "ERR table exists with its paths spread differently (GLOBAL); TABLE.REPLACE rebuilds them",
+                );
+            }
+        }
         Some(cur) => encode_error(out, &spec_diff(&cur.sans_auto(), &spec)),
     }
 }
@@ -129,13 +143,13 @@ pub(crate) fn cmd_table_ensure<A: ArgvView + ?Sized>(
 /// so a bad replacement leaves the old one standing.
 pub(crate) fn cmd_table_replace<A: ArgvView + ?Sized>(
     ctx: &Ctx<'_>,
-    store: &kevy_store::Store,
+    store: &mut kevy_store::Store,
     args: &A,
     out: &mut Vec<u8>,
 ) {
     let argv: Vec<&[u8]> = (0..args.len()).map(|i| &args[i] as &[u8]).collect();
-    let spec = match parse_table_declare(&argv) {
-        Ok(s) => s,
+    let spec = match parse_table_declare_partitioned(&argv) {
+        Ok((s, _)) => s,
         Err(e) => return encode_error(out, &e),
     };
     if let Err(e) = compile_table(&spec) {
