@@ -88,7 +88,7 @@ pub(crate) fn is_partition_opt(a: &[u8]) -> bool {
 /// Encode the split values in the index's order and hold them to the
 /// shard count: `P - 1` points make `P` partitions, at most one per shard.
 /// A global index given no split points takes the shard count's quantiles
-/// of a sample of this shard's rows (none when there are no rows yet).
+/// of `sampler`'s sample (none when there are no rows yet).
 fn partitioning(
     p: PartitionOpt,
     sampler: &mut Sampler<'_>,
