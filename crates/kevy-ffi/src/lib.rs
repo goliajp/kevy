@@ -38,7 +38,7 @@ mod publish;
 mod report;
 mod sub;
 mod sub_raw;
-pub use dispatch::dispatch_packed;
+pub use dispatch::{MGET_MISS, dispatch_packed, get_lent, mget_packed, mset_packed};
 pub use lifecycle::{KevyOpenOptions, kevy_open_with, kevy_shutdown};
 pub use publish::kevy_publish;
 pub use report::{KevyOpenReport, kevy_open_report};

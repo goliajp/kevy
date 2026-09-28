@@ -53,6 +53,27 @@ public final class Smoke {
         if (fv == null || !Arrays.equals(fv, b("fv"))) fail("fast get");
         if (KevyNative.get(db, b("fast:none")) != null) fail("fast get miss");
 
+        // MSET lane: pairs set, a lone key refused
+        if (KevyNative.mset(db, KevyNative.pack(b("ms:a"), b("1"), b("ms:b"), b("22"))) != 0) fail("mset lane");
+        if (KevyNative.mset(db, KevyNative.pack(b("ms:a"))) != -1) fail("mset odd count");
+        expect(cmd(db, "GET", "ms:b"), "$2\r\n22\r\n", "mset value");
+
+        // MGET lane: a hit, a miss, and a non-string, each in its slot
+        expect(cmd(db, "RPUSH", "fast:list", "x"), ":1\r\n", "RPUSH");
+        byte[] mg = KevyNative.mget(db, KevyNative.pack(b("fast:k"), b("fast:none"), b("fast:list")));
+        byte[] want = {2, 0, 0, 0, 'f', 'v', -1, -1, -1, -1, -1, -1, -1, -1};
+        if (mg == null || !Arrays.equals(mg, want)) fail("mget lane");
+
+        // scalar GET on a non-string signals instead of answering a miss (the
+        // signal class lives in the Kotlin shell, absent from this Java-only run)
+        boolean signalled = false;
+        try {
+            KevyNative.get(db, b("fast:list"));
+        } catch (Throwable t) {
+            signalled = t.getClass().getName().endsWith("ScalarGetSignal") || t instanceof NoClassDefFoundError;
+        }
+        if (!signalled) fail("wrongtype get did not signal");
+
         // unknown verb: a protocol error is a reply, not a misuse
         byte[] err = cmd(db, "NOSUCHVERB");
         if (err.length == 0 || err[0] != '-') fail("unknown verb");

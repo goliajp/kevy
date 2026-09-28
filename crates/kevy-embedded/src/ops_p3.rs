@@ -17,18 +17,36 @@ use crate::store::{Store, commit_write, store_err};
 impl Store {
     // ---- multi-key string ops ---------------------------------------
 
-    /// `MSET key value [key value ...]` — set every pair atomically
-    /// per-key. Each pair is logged independently to its shard's
-    /// AOF (no cross-shard atomic guarantee — a crash mid-call may
-    /// leave a prefix applied; matches Redis Cluster semantics).
+    /// `MSET key value [key value ...]` — set every pair. The pairs of one
+    /// shard are set under one lock and logged as one `MSET` frame, so a
+    /// crash leaves each shard's share whole or absent; across shards there
+    /// is no such guarantee (Redis Cluster's semantics). A key given twice
+    /// takes its last value.
     pub fn mset(&self, pairs: &[(&[u8], &[u8])]) -> KevyResult<()> {
         ensure_writable(self)?;
-        for (k, v) in pairs {
-            let mut g = self.wshard(k);
-            g.store.set(k, v.to_vec(), None, false, false);
-            commit_write(&mut g, &[b"SET", k, v])?;
+        let n = self.shards.len();
+        if n == 1 {
+            return self.mset_shard(0, pairs);
+        }
+        let mut by_shard: Vec<Vec<(&[u8], &[u8])>> = vec![Vec::new(); n];
+        for &(k, v) in pairs {
+            by_shard[crate::shard::shard_idx(k, n)].push((k, v));
+        }
+        for (i, group) in by_shard.iter().enumerate().filter(|(_, g)| !g.is_empty()) {
+            self.mset_shard(i, group)?;
         }
         Ok(())
+    }
+
+    fn mset_shard(&self, i: usize, pairs: &[(&[u8], &[u8])]) -> KevyResult<()> {
+        let mut g = crate::store::lock_write(&self.shards[i]);
+        let mut frame: Vec<&[u8]> = Vec::with_capacity(1 + 2 * pairs.len());
+        frame.push(b"MSET");
+        for &(k, v) in pairs {
+            g.store.set(k, v.to_vec(), None, false, false);
+            frame.extend([k, v]);
+        }
+        commit_write(&mut g, &frame)
     }
 
     /// `MGET key [key ...]` — return `Some(value)` per requested key
@@ -42,19 +60,38 @@ impl Store {
     /// surfaces came to disagree in `differential_wire_vs_embedded`.
     pub fn mget(&self, keys: &[&[u8]]) -> KevyResult<Vec<Option<Vec<u8>>>> {
         let mut out = Vec::with_capacity(keys.len());
+        self.mget_with(keys.iter().copied(), |v| out.push(v.map(<[u8]>::to_vec)))?;
+        Ok(out)
+    }
+
+    /// [`Store::mget`] that lends each value to `f`, in key order, instead
+    /// of copying it out — for a caller that packs the values somewhere of
+    /// its own (a binding's reply buffer) and would otherwise copy twice.
+    ///
+    /// ```
+    /// let s = kevy_embedded::Store::open(kevy_embedded::Config::default()).unwrap();
+    /// s.set(b"a", b"1").unwrap();
+    /// let mut seen = Vec::new();
+    /// s.mget_with([&b"a"[..], b"nope"], |v| seen.push(v.map(<[u8]>::len))).unwrap();
+    /// assert_eq!(seen, [Some(1), None]);
+    /// ```
+    pub fn mget_with<'k>(
+        &self,
+        keys: impl IntoIterator<Item = &'k [u8]>,
+        mut f: impl FnMut(Option<&[u8]>),
+    ) -> KevyResult<()> {
         for k in keys {
-            let got = match self.wshard(k).store.get(k) {
-                Ok(v) => v.as_deref().map(<[u8]>::to_vec),
-                Err(kevy_store::StoreError::WrongType) => None,
+            match self.wshard(k).store.get(k) {
+                Ok(v) => f(v.as_deref()),
+                Err(kevy_store::StoreError::WrongType) => f(None),
                 // Not reachable through a hot keyspace, and it stays:
                 // `Store::get` propagates the tiering path's errors
                 // too, and a cold-tier read that failed must not be
                 // answered as "this key holds nothing".
                 Err(e) => return Err(store_err(e)),
-            };
-            out.push(got);
+            }
         }
-        Ok(out)
+        Ok(())
     }
 
     // ---- keyspace introspection -------------------------------------

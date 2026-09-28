@@ -90,37 +90,6 @@ unsafe fn take_buf(env: JniEnv, buf: KevyBuf) -> JObject {
     arr
 }
 
-/// Copy a **shared-lane** reply buffer into a fresh `byte[]`, then free it
-/// through the shared reclaimer. Mirrors [`take_buf`] but pairs with
-/// [`kevy_ffi::kevy_buf_free_shared`], never [`kevy_ffi::kevy_buf_free`]:
-/// the shared GET hands back a view whose `cap` is an OPAQUE owner handle (an
-/// `Arc` raw pointer for bulk, a tagged `Vec` capacity for small), so routing
-/// it through the plain free would corrupt the allocator — UB. The bytes are
-/// still copied into the JVM-owned array (a `byte[]` must own its storage);
-/// what the shared lane saves is the engine-side clone into a fresh `Vec`.
-///
-/// # Safety
-/// `env` must be the current call's `JNIEnv *`; `buf` must be exactly as
-/// returned by [`kevy_ffi::kevy_get_shared`], consumed exactly once.
-unsafe fn take_buf_shared(env: JniEnv, buf: KevyBuf) -> JObject {
-    let arr = if buf.len == 0 {
-        // SAFETY: `env` is the JNI env for this call and every argument is a live local —
-        // see the module note.
-        unsafe { new_byte_array(env, &[]) }
-    } else {
-        // SAFETY: `env` is the JNI env for this call and every argument is a live local —
-        // see the module note.
-        let s = unsafe { std::slice::from_raw_parts(buf.ptr, buf.len) };
-        // SAFETY: `env` is the JNI env for this call and every argument is a live local —
-        // see the module note.
-        unsafe { new_byte_array(env, s) }
-    };
-    // SAFETY: the handle came from `kevy_open*` and each pointer/length pair is a
-    // local still in scope, which is what the callee's `# Safety` requires.
-    unsafe { kevy_ffi::kevy_buf_free_shared(buf.ptr, buf.len, buf.cap) };
-    arr
-}
-
 /// `KevyNative.version()` — the engine version as UTF-8 bytes.
 ///
 /// # Safety

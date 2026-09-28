@@ -52,6 +52,20 @@ public final class KevyNative {
     public static native byte[] cmd(long db, byte[] packedArgv);
 
     /**
+     * MGET without RESP: keys packed per {@link #pack}; the reply has one slot
+     * per key, in order — a u32-LE length and the value's bytes, or the length
+     * 0xFFFFFFFF alone for a key that is absent or not a string. Null on misuse
+     * or a store error.
+     */
+    public static native byte[] mget(long db, byte[] packedKeys);
+
+    /**
+     * MSET without RESP: key, value, key, value… packed per {@link #pack}.
+     * 0 = ok, -1 = misuse (including an odd count), -2 = store error.
+     */
+    public static native int mset(long db, byte[] packedPairs);
+
+    /**
      * Scalar fast-path GET: raw value bytes, or null on a miss. A store error
      * (GET on a non-string key, i.e. WRONGTYPE) is thrown as a
      * {@link ScalarGetSignal} — the lane can't fold a typed error into a
