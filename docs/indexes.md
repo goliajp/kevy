@@ -151,6 +151,59 @@ needs under 20 read as "one per global query shape". If you are
 approaching 64, the question to ask is which of them are really
 parent-child navigation wearing an index costume.
 
+## Global indexes (`PARTITION global`)
+
+An index is local by default: every shard indexes the rows it holds, so
+every query goes to every shard and the origin merges their pages. A
+**global** index is cut by value into partitions, one per shard. A row
+stays on the shard its key hashes to; its entry lives in the partition
+its value falls in.
+
+```
+IDX.CREATE by_age ON PREFIX user: FIELD age TYPE i64 KIND range PARTITION global SPLIT 30 SPLIT 60
+TABLE.DECLARE user PREFIX user: PK id COLUMN id i64 COLUMN age i64 INDEX age range GLOBAL SPLIT AT 30 60
+```
+
+- **Split points.** `SPLIT v` (one per point, as the option pairs of
+  `IDX.CREATE` require) or `GLOBAL SPLIT AT v…`: at most one fewer than
+  the shard count. Without them kevy samples the rows — 512 per
+  partition — and takes their quantiles, so the partitions start about
+  even. An index created over no rows has one partition until
+  `IDX.REBUILD` samples again. Every entry of one value lives in one
+  partition, so a value held by more than its share of rows cannot be
+  split. An `ORDERPATH … GLOBAL` always samples.
+- **Reads.** An `EQ`, or a `RANGE` inside one partition, reads one shard.
+  A page in `(value, key)` order walks the partitions it needs one after
+  another and concatenates them — no merge of N pages. `IDX.COUNT` and
+  the selection clauses (`SORT`, `DISTINCT`, `FACET`, `OFFSET`) go to the
+  partitions the range meets. `IDX.EXPLAIN` names them.
+- **Writes.** A write that changes a row's entry sends one message to the
+  entry's partition (two when the entry moves partitions), and the
+  client's reply waits until the partition has applied it: a read sent
+  after the reply sees the write.
+- **`FIELDS` come from `VALUES`.** The partition holds the entry, not the
+  row, so a global index answers `FIELDS` from the columns it stores. A
+  field it does not store is refused by name, and `IDX.ADVISE` suggests
+  adding it to `VALUES`.
+- **Kinds and limits.** `range` and `unique` only. Not with `COMPOSE` or
+  views (both need a row's entries on the row's own shard), not on a
+  windowed table, not in an embedded store — each refused by name.
+- **Building.** Queries answer `-INDEXBUILDING` until every shard has
+  sent the entries of the rows it held; a query never sees a partial
+  partition.
+- **Operating.** `IDX.LIST` reports `partitioning` for every index, and
+  for a global one `partitions`, `max_entries` and `mean_entries` —
+  skew shows as the ratio of the last two. `IDX.REBUILD <name>` samples
+  again and rebuilds. `IDX.VERIFY` matches every row against the entry
+  its partition holds, so `drift` and `missing` are exact, and a global
+  unique index counts `duplicates` across the whole keyspace (a local one
+  sees duplicates within a shard). A server restarted with fewer shards
+  than an index has partitions keeps an even subset of its split points.
+- **Memory.** Beside the entries, which cost what a local index's do,
+  the row's shard keeps, per global index, a copy of each row's key with
+  its partition and a hash of its entry — how it knows which messages a
+  write needs.
+
 ## Consistency + cost model
 
 - A write and its index update are atomic within the owning shard

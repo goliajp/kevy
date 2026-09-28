@@ -2,6 +2,49 @@
 
 ## Unreleased
 
+- **Global indexes: one index spread over the shards by value.** A default
+  index is local — every shard indexes its own rows, so every read goes to
+  every shard and the origin merges their pages. `IDX.CREATE … PARTITION
+  global [SPLIT v]…` and `TABLE.DECLARE … INDEX col kind GLOBAL [SPLIT AT
+  v…]` (or `ORDERPATH … GLOBAL`) cut the index into value-ordered
+  partitions, one per shard; a row stays where its key hashes, its entry
+  goes to its value's partition. An `EQ`, or a `RANGE` inside one
+  partition, reads one shard; a page in order walks the partitions it
+  needs one after another and concatenates them; `COUNT` and the
+  selection clauses go only to the partitions the range meets, and
+  `IDX.EXPLAIN` names them. A write replies once its entry's owner has
+  applied it. Without split points, kevy takes them from a sample of the
+  rows; `IDX.REBUILD` samples again, and `IDX.LIST` shows the spread
+  (`partitions`, `max_entries`, `mean_entries`). `FIELDS` on a global
+  index answer from its `VALUES`, and a field not stored there is refused
+  by name, with `IDX.ADVISE` suggesting it. `IDX.VERIFY` matches every row
+  against the entry its owner holds, and a global unique index counts
+  duplicates across the whole keyspace. Range and unique kinds only; not
+  for `COMPOSE`, views, windowed tables or embedded stores, each refused
+  by name. `IDX.LIST` now names every index's `partitioning`, `local` or
+  `global`. A catalog with a global index is written in a sidecar format
+  6.4 cannot read: a 6.4 server given it starts with no indexes, a table's
+  compiled paths included, until they are declared again.
+
+- **kevy-rt: commands can send messages between shards and hold a reply
+  until they are applied.** `Commands::take_ext_out` hands the runtime
+  what a write's hooks queued for other shards, `Commands::apply_ext`
+  applies one on its shard, and a client's write replies after every
+  shard it sent to has applied it. `Commands::extension_targets` names the
+  shards an extension read (and each of its follow-up phases) needs,
+  instead of all of them. All three default to the old behaviour.
+
+- **On Apple platforms, an embedded store appends through a map of its
+  AOF.** `write()` on a file on iOS and macOS costs several microseconds
+  per call, and a sustained stream of large values was bounded by it. The
+  AOF now keeps a preallocated tail (4 MiB, doubling to 64 MiB) mapped into
+  memory, and an append is a copy into it; `fsync` becomes `msync` plus
+  `F_FULLFSYNC`. A killed process leaves the tail's unused part as zeros,
+  which the next open trims; a clean close truncates the file to its
+  records. `Config::with_mapped_aof(false)` goes back to `write()` and a
+  staging ring. 6.4 does not know the zero tail: downgrade only after this
+  version has opened and closed the store cleanly.
+
 - **With `packed-rows yes`, every shard packs a declared table's rows.**
   `TABLE.DECLARE` published the index catalog and then the table catalog,
   and only the first told the shards to re-read their state. A shard that
@@ -25,9 +68,10 @@
   Under `EverySec` and `No`, appends used to wait in a user-space buffer
   until the next tick or fsync, so a process killed in between — a crash,
   `SIGKILL`, the iOS or Android memory killer — lost them. Appends now land
-  in a staging ring first: a small file (`aof-<i>.aof.stage`, 4 MiB by
-  default) mapped into memory, which the kernel owns the moment the append
-  returns. The ring drains into the AOF on every tick, and the next open
+  in memory the kernel owns the moment the append returns. On Apple
+  platforms that is the AOF itself (next entry); elsewhere it is a staging
+  ring: a small file (`aof-<i>.aof.stage`, 4 MiB by default) mapped into
+  memory. The ring drains into the AOF on every tick, and the next open
   replays whatever a killed process left in it. A burst of writes that
   fits in the ring no longer calls `write()` on the caller's thread; a
   sustained stream larger than the ring is still bounded by how fast the
