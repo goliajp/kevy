@@ -4,7 +4,7 @@
   "kind": "symbols/qualified-path",
   "tree": "5cb014661ab5dcfc12f9d8a17abeba8a8b1fc9da",
   "total_regions": 191121,
-  "dead_regions": 27383,
+  "dead_regions": 27385,
   "llvm_per_instantiation_dead": 27099,
   "crates": {
     "kevy": {
@@ -2579,7 +2579,7 @@
     "kevy_rt::shard::Shard::finalize_zstore_agg": 1,
     "kevy_rt::shard::Shard::finish_list_move": 3,
     "kevy_rt::shard::Shard::finish_rename_put": 8,
-    "kevy_rt::shard::Shard::finish_rewrite_swap": 36,
+    "kevy_rt::shard::Shard::finish_rewrite_swap": 38,
     "kevy_rt::shard::Shard::finish_terminal": 3,
     "kevy_rt::shard::Shard::flush_backlog": 3,
     "kevy_rt::shard::Shard::flush_backlog_slow": 37,
@@ -4226,6 +4226,13 @@
       ],
       "reason": "The stream and geo command bodies moved from the server (kevy::dispatch_stream, kevy::dispatch_geo) into kevy-verbs behind its streams-geo feature, and their never-run argument and wrong-type arms moved with them under new symbol names; the set as a whole shrank from 26922 to 25239 regions. The rest: the AOF-failure arm of an embedded outcome record; the short-circuited operands of two conditions; a data-table assertion's message arguments; the port claim's error arm, which tests/port_claim.rs drives in a child process the coverage corpus cannot see; the fallback arm of deferred_frames, which is only ever handed a recording effect; and the missing-PEL-row continue of taken_frames, unreachable because the ids it is given were claimed from that same PEL by the command just run. kevy_rt, kevy_sys::wait and kevy_alloc::os symbols that appear or grow between runs are timing-covered and not accepted.",
       "delta": 461
+    },
+    {
+      "accepted": [
+        "kevy_rt::shard::Shard::finish_rewrite_swap"
+      ],
+      "reason": "The synchronous rewrite swap now moves the epoll writer lane onto the new log after the rename, as the off-thread swap already did. That swap runs with the AOF offload off or with the persist worker gone, and no test in the corpus takes either, so the added call is never run.",
+      "delta": 2
     }
   ]
 }
