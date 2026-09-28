@@ -93,6 +93,12 @@ pub struct Config {
     /// in a shared file mapping, so a process that is killed keeps every
     /// write that returned. Only `EverySec` and `No` stage. Default 4 MiB.
     pub stage_bytes: u64,
+    /// Append by copying into a mapping of the AOF's preallocated tail
+    /// instead of `write()`, under `EverySec` and `No`. It keeps a killed
+    /// process's writes as the staging ring does, and replaces it. On by
+    /// default on Apple platforms only, where a fresh mapped page is cheap;
+    /// on Linux the page fault makes it slower than `write()`.
+    pub mapped_aof: bool,
     /// Optional push-style metric callback (replay / rewrite events). Default
     /// `None`. Set via [`Self::with_metric_sink`]; not part of `Debug` output.
     #[cfg(feature = "persist")]
@@ -192,6 +198,7 @@ impl Default for Config {
             auto_aof_rewrite_interval_secs: 0,
             replay_resync: false,
             stage_bytes: 4 * 1024 * 1024,
+            mapped_aof: cfg!(target_vendor = "apple"),
             #[cfg(feature = "persist")]
             metric_sink: None,
             shards: 1,

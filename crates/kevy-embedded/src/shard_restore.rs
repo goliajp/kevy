@@ -118,9 +118,10 @@ fn replay_shard_aof(
     Ok((r.dropped_bytes == 0).then_some(r.replayed_bytes))
 }
 
-/// Attach shard `i`'s staging ring to its freshly opened AOF, first
-/// replaying into `store` whatever the ring the last process left owes
-/// the log. A config that does not stage settles that ring and removes it.
+/// Set how shard `i`'s freshly opened AOF takes appends: through a mapping,
+/// through a staging ring, or straight through `write()`. First, whatever
+/// a ring the last process left owes the log is replayed into `store`;
+/// a log that does not stage then removes that ring.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn open_stage(
     dir: &Path,
@@ -131,7 +132,9 @@ pub(crate) fn open_stage(
     report: &mut OpenReport,
 ) -> io::Result<()> {
     let path = layout::stage_path(dir, i);
-    let stages = config.stage_bytes > 0 && config.appendfsync != crate::config::AppendFsync::Always;
+    let always = config.appendfsync == crate::config::AppendFsync::Always;
+    let maps = config.mapped_aof && !always;
+    let stages = !maps && config.stage_bytes > 0 && !always;
     let mut applier = FrameApplier::new(dir, i, store);
     let found = if stages {
         aof.open_stage(&path, config.stage_bytes, |a| applier.apply(a))?
@@ -142,6 +145,9 @@ pub(crate) fn open_stage(
     store.demote_to_watermark();
     report.stage_recovered += found.recovered;
     report.stage_discarded += u64::from(found.discarded.is_some());
+    if maps {
+        aof.map_appends()?;
+    }
     Ok(())
 }
 
