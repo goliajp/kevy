@@ -5878,8 +5878,8 @@ $5
 index
 $6
 syntax
-$178
-IDX.CREATE name ON PREFIX prefix FIELD field TYPE i64|f64|str|vector KIND range|unique|text|ann|agg [MAXMEM bytes] [DIM dim] [DISTANCE cosine|l2|ip] [M m] [EF ef] [GROUPBY field]
+$220
+IDX.CREATE name ON PREFIX prefix FIELD field TYPE i64|f64|str|vector KIND range|unique|text|ann|agg [MAXMEM bytes] [DIM dim] [DISTANCE cosine|l2|ip] [M m] [EF ef] [GROUPBY field] [PARTITION local|global] [SPLIT value]…
 $10
 complexity
 $240

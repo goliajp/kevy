@@ -59,7 +59,7 @@ pub(crate) fn persist_sidecar(dir: Option<&Path>, cat: &Catalog) {
 /// TYPE <t> KIND <k> [WITH POSITIONS] [VALUES f… [TYPES t…]] [MAXMEM b] [DIM d] [DISTANCE cosine|l2|ip] [M m] [EF ef]`.
 /// `FIELDS` and `WITH POSITIONS` are text-only; every other kind takes
 /// one `FIELD` and no positions.
-const CREATE_USAGE: &str = "ERR usage: IDX.CREATE name ON PREFIX p FIELD f | FIELDS f… [WEIGHTS w…] TYPE i64|f64|str|vector KIND range|unique|text|ann [WITH POSITIONS] [VALUES f… [TYPES t…]] [MAXMEM b] [DIM d] [DISTANCE c] [M m] [EF e]";
+const CREATE_USAGE: &str = "ERR usage: IDX.CREATE name ON PREFIX p FIELD f | FIELDS f… [WEIGHTS w…] TYPE i64|f64|str|vector KIND range|unique|text|ann [WITH POSITIONS] [VALUES f… [TYPES t…]] [MAXMEM b] [DIM d] [DISTANCE c] [M m] [EF e] [PARTITION local|global] [SPLIT v]…";
 
 /// Parse the field clause and return the fields plus the argv index of
 /// the `TYPE` keyword that follows it.
