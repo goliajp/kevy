@@ -12,6 +12,13 @@
 use crate::catalog::{Catalog, IndexKind, IndexSpec};
 
 /// How an index is spread over the shards.
+///
+/// ```
+/// use kevy_index::Partitioning;
+/// assert_eq!(Partitioning::default(), Partitioning::Local);
+/// let p = Partitioning::Global { splits: vec![b"m".to_vec()] };
+/// assert_eq!((p.partition_of(b"a"), p.partition_of(b"z")), (0, 1));
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Partitioning {
     /// Every shard holds the entries of the rows it owns.
@@ -29,11 +36,23 @@ static LOCAL: Partitioning = Partitioning::Local;
 
 impl Partitioning {
     /// Whether the index is split by value.
+    ///
+    /// ```
+    /// use kevy_index::Partitioning;
+    /// assert!(Partitioning::Global { splits: vec![] }.is_global());
+    /// assert!(!Partitioning::Local.is_global());
+    /// ```
     pub fn is_global(&self) -> bool {
         matches!(self, Partitioning::Global { .. })
     }
 
     /// How many partitions there are: 1 for a local index.
+    ///
+    /// ```
+    /// use kevy_index::Partitioning;
+    /// assert_eq!(Partitioning::Local.partitions(), 1);
+    /// assert_eq!(Partitioning::Global { splits: vec![b"m".to_vec()] }.partitions(), 2);
+    /// ```
     pub fn partitions(&self) -> usize {
         match self {
             Partitioning::Local => 1,
@@ -120,6 +139,19 @@ impl Catalog {
     /// [`Catalog::create`] with a partitioning. A global one is refused by
     /// name where it cannot apply: kinds whose segments are not a
     /// `(value, key)` order, and split points out of order.
+    ///
+    /// ```
+    /// use kevy_index::{Catalog, IndexKind, IndexSpec, Partitioning, ValType, order_key};
+    ///
+    /// let spec = IndexSpec::single_field(
+    ///     b"age".to_vec(), b"user:".to_vec(), b"age".to_vec(), ValType::I64, IndexKind::Range,
+    /// );
+    /// let mut c = Catalog::new();
+    /// let split = order_key(ValType::I64, b"40").unwrap();
+    /// c.create_with(spec, Partitioning::Global { splits: vec![split] }).unwrap();
+    /// assert_eq!(c.partitioning(b"age").partitions(), 2);
+    /// assert!(!c.partitioning(b"other").is_global());
+    /// ```
     pub fn create_with(
         &mut self,
         spec: IndexSpec,
@@ -145,6 +177,18 @@ impl Catalog {
     /// Re-split a global index (a rebuild re-sampled it). `false` when
     /// `name` is not a global index of this catalog, or `splits` are out
     /// of order.
+    ///
+    /// ```
+    /// use kevy_index::{Catalog, IndexKind, IndexSpec, Partitioning, ValType};
+    ///
+    /// let spec = IndexSpec::single_field(
+    ///     b"name".to_vec(), b"user:".to_vec(), b"name".to_vec(), ValType::Str, IndexKind::Range,
+    /// );
+    /// let mut c = Catalog::new();
+    /// c.create_with(spec, Partitioning::Global { splits: vec![] }).unwrap();
+    /// assert!(c.set_splits(b"name", vec![b"h".to_vec(), b"q".to_vec()]));
+    /// assert_eq!(c.partitioning(b"name").partition_of(b"mia"), 1);
+    /// ```
     pub fn set_splits(&mut self, name: &[u8], splits: Vec<Vec<u8>>) -> bool {
         if splits.windows(2).any(|w| w[0] >= w[1]) {
             return false;

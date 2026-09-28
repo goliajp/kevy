@@ -119,6 +119,22 @@ impl Aof {
     /// switch to `Always` turns it back. Only a v2 log that is not in queued
     /// mode maps; call it after the log was replayed and any staging ring it
     /// had was settled, so no record is still on its way through `write()`.
+    ///
+    /// ```
+    /// use kevy_persist::{Aof, Argv, Fsync, replay_aof};
+    ///
+    /// let path = std::env::temp_dir().join(format!("mapped-doc-{}.aof", std::process::id()));
+    /// let mut log = Aof::open(&path, Fsync::EverySec)?;
+    /// assert!(log.map_appends()?);
+    /// assert!(log.maps_appends());
+    /// log.append(&Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()]))?;
+    /// drop(log); // a clean close cuts the unused preallocation off
+    /// let mut n = 0;
+    /// replay_aof(&path, |_| n += 1)?;
+    /// assert_eq!(n, 1);
+    /// # std::fs::remove_file(&path)?;
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub fn map_appends(&mut self) -> io::Result<bool> {
         let can = self.format == crate::AofFormat::V2
             && self.queue.is_none()
@@ -137,6 +153,15 @@ impl Aof {
     }
 
     /// Whether appends go into a mapping.
+    ///
+    /// ```
+    /// let path = std::env::temp_dir().join(format!("maps-doc-{}.aof", std::process::id()));
+    /// let log = kevy_persist::Aof::open(&path, kevy_persist::Fsync::No)?;
+    /// assert!(!log.maps_appends(), "a log maps only once asked to");
+    /// # drop(log);
+    /// # std::fs::remove_file(&path)?;
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub fn maps_appends(&self) -> bool {
         self.mapped.is_some()
     }

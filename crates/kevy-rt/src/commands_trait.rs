@@ -245,18 +245,15 @@ pub trait Commands: Clone + Send + 'static {
     /// implementations must be cheap when their feature is off.
     fn on_write(&self, _store: &mut Store, _key: &[u8]) {}
 
-    /// Messages the write hooks queued for other shards since the last
-    /// take, as `(target shard, payload)`. A client's write that queued any
-    /// holds its reply until each is applied (see `exec_ext`). Default: none.
+    #[doc = include_str!("commands_docs/take_ext_out.md")]
     fn take_ext_out(&self) -> Vec<(usize, Vec<u8>)> {
         Vec::new()
     }
 
-    /// Apply one message another shard's hook queued for this one.
-    /// Default: no-op.
+    #[doc = include_str!("commands_docs/apply_ext.md")]
     fn apply_ext(&self, _store: &mut Store, _payload: &[u8]) {}
 
-    /// The shards an extension read needs; `None` = every shard.
+    #[doc = include_str!("commands_docs/extension_targets.md")]
     fn extension_targets(&self, _argv: &[Vec<u8>]) -> Option<Vec<usize>> {
         None
     }
