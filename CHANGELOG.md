@@ -229,17 +229,20 @@
   row's key and value twice (once in the ordered tree, once in the
   key-to-value map) and, for the duplicate count, a third copy of every
   distinct value. Both lookup directions now point at one shared row, and
-  the duplicate count reads the tree. Counted on the heap, an `i64` index
-  with short keys drops from 155–211 to 92–102 bytes per row, and an
-  ORDERPATH index (a string department plus a timestamp) from 265–321 to
-  109–119; the ranges are the two ends of the hash table's growth steps.
-  Re-applying the value a key already holds no longer touches the index.
+  the duplicate count reads the tree, and a row — its count, its value and
+  its key — is one allocation whatever the key's length. Counted on the
+  heap, an `i64` index with short keys drops from 155–211 to 73–84 bytes
+  per row, one with 36-byte keys to 99–109, and an ORDERPATH index (a
+  string department plus a timestamp) from 265–321 to 91–101; the ranges
+  are the two ends of the hash table's growth steps. Re-applying the value
+  a key already holds no longer touches the index.
 - **An index's reported size is now its real size, which is two to four
   times the old figure.** `approx_bytes` (the `bytes` of `IDX.VERIFY`,
   `IDX.LIST` and `TABLE.VERIFY`) used to be `value + key + 48` per row and
-  undercounted the heap. It is now the shared row (56 bytes plus the key
-  and any string value), one ordered-tree slot and the reverse set's
-  buckets: about `key + string value + 82…93` bytes per row. The same
+  undercounted the heap. It is now the shared row (a 32-byte header and
+  the key, rounded up to 8, plus any string value), one ordered-tree slot
+  and the reverse set's buckets: about `key + string value + 58…69` bytes
+  per row. The same
   figure feeds a `MAXMEM` budget and the tiering reservation for indexes
   (`index_reserved_bytes`), so after upgrading an index declared with a
   tight `MAXMEM` can fail its build with `-INDEXOVERBUDGET`, and a tiered

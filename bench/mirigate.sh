@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # mirigate — the unsafe stones under miri: slot management in kevy-map and
-# kevy-bytes, the SPSC ring's atomics, and the zset encoding in kevy-store.
+# kevy-bytes, the SPSC ring's atomics, the zset encoding in kevy-store, and
+# the index row in kevy-index.
 # CI's miri job and the suite both run this file.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -21,4 +22,8 @@ cargo +nightly miri test -p kevy-ring --lib
 # tests (snapshot, memory pause and accounting sweeps) run for hours under
 # miri's ~1000x interpretation overhead.
 cargo +nightly miri test -p kevy-store --lib zset
+# An index row is one hand-laid allocation (count, key length, value, key
+# bytes) shared by two handles; the segment tests build, share, move and
+# free rows through every path the index takes.
+cargo +nightly miri test -p kevy-index --lib segment
 echo "mirigate: PASS"
