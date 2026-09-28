@@ -21,6 +21,9 @@ mod catalog_sidecar;
 mod composite;
 mod describe;
 mod describe_view;
+mod partition;
+#[cfg(test)]
+mod partition_tests;
 mod rowvalues;
 mod segcold;
 mod segment;
@@ -50,6 +53,7 @@ pub use describe::{
     Described, describe_index, describe_table, describe_view, index_declaration, owner_of,
     table_declaration, view_declaration,
 };
+pub use partition::{Partitioning, partition_owner};
 pub use segcold::{
     ColdBloom, WindowAudit, WindowShape, decode_seg_key, decode_seg_values, encode_seg_values,
     seg_bounds, seg_key, value_order_bytes, window_bound, window_value_of,

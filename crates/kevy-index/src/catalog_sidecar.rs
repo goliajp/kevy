@@ -30,11 +30,14 @@ impl Catalog {
         // composite (ORDERPATH) indexes — a catalog using neither
         // serializes byte-identically to the v4 writer (A5) and stays
         // readable by every earlier binary.
+        let needs_v7 = !self.parts.is_empty();
         let needs_v6 = self.specs.iter().any(|(s, _)| s.composite.is_some());
         let needs_v5 = self.specs.iter().any(|(s, _)| {
             matches!(s.kind, IndexKind::Range | IndexKind::Unique) && !s.values.is_empty()
         });
-        let header = if needs_v6 {
+        let header = if needs_v7 {
+            "kevy-index-catalog v7\n"
+        } else if needs_v6 {
             "kevy-index-catalog v6\n"
         } else if needs_v5 {
             "kevy-index-catalog v5\n"
@@ -69,6 +72,19 @@ impl Catalog {
                 // Text (v3+) and, from v5, the scalar kinds: the same
                 // `pos|-,name:ty,…` column, `pos` being text-only.
                 let _ = write!(out, "\t{col}");
+            } else if self.partitioning(&s.name).is_global() {
+                // an empty 7th column holds the place of the 8th
+                out.push('\t');
+            }
+            // v7: a global index's 8th column, `g` then `,<hex>` per split
+            if let crate::Partitioning::Global { splits } = self.partitioning(&s.name) {
+                out.push_str("\tg");
+                for sp in splits {
+                    out.push(',');
+                    for b in sp {
+                        let _ = write!(out, "{b:02x}");
+                    }
+                }
             }
             out.push('\n');
         }
@@ -88,6 +104,7 @@ impl Catalog {
         // positions flag on top of v2's weighted fields. v1/v2 stay
         // readable forever; only the writer moves to the newest form.
         let version: u8 = match lines.next()? {
+            "kevy-index-catalog v7" => 7,
             "kevy-index-catalog v6" => 6,
             "kevy-index-catalog v5" => 5,
             "kevy-index-catalog v4" => 4,
@@ -101,10 +118,35 @@ impl Catalog {
             if line.is_empty() {
                 continue;
             }
-            c.create(spec_from_line(line, version)?).ok()?;
+            let (line, part) = partition_col(line, version)?;
+            c.create_with(spec_from_line(&line, version)?, part).ok()?;
         }
         Some(c)
     }
+}
+
+/// Split a v7 line's 8th column (a global index's partitioning) off the
+/// rest, which then parses as any earlier line does; an empty 7th column
+/// only held its place.
+fn partition_col(line: &str, version: u8) -> Option<(String, crate::Partitioning)> {
+    let parts: Vec<&str> = line.split('\t').collect();
+    if version < 7 || parts.len() != 8 {
+        return Some((line.to_string(), crate::Partitioning::Local));
+    }
+    let mut cols = parts[7].split(',');
+    if cols.next()? != "g" {
+        return None;
+    }
+    let splits = cols.map(unhex).collect::<Option<Vec<_>>>()?;
+    let keep = if parts[6].is_empty() { &parts[..6] } else { &parts[..7] };
+    Some((keep.join("\t"), crate::Partitioning::Global { splits }))
+}
+
+fn unhex(s: &str) -> Option<Vec<u8>> {
+    if !s.len().is_multiple_of(2) {
+        return None;
+    }
+    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok()).collect()
 }
 
 fn spec_from_line(line: &str, version: u8) -> Option<IndexSpec> {
