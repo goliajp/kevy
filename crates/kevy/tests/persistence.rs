@@ -979,6 +979,90 @@ fn relative_ttl_frames_do_not_reanchor_on_replay() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Writes that arrive after a BGSAVE has finished and swapped in the reset
+/// AOF land in that new log and survive a restart.
+#[test]
+fn writes_after_the_bgsave_swap_survive_a_restart() {
+    let dir = std::env::temp_dir().join(format!(
+        "kevy-bgsave-after-{}",
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let nshards = 4;
+    with_runtime(free_port(), &dir, nshards, |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        for i in 0..20u32 {
+            c.write_all(&req(&[b"SET", format!("pre{i}").as_bytes(), b"v"])).unwrap();
+            read_reply(&mut c, b"+OK\r\n");
+        }
+        c.write_all(&req(&[b"BGSAVE"])).unwrap();
+        read_reply(&mut c, b"+OK\r\n");
+        wait_for("the reset logs to be swapped in", || {
+            (0..nshards).all(|s| {
+                dir.join(format!("dump-{s}.rdb")).exists()
+                    && std::fs::read(dir.join(format!("aof-{s}.aof")))
+                        .is_ok_and(|b| !b.windows(3).any(|w| w == b"pre"))
+            })
+        });
+        for i in 0..40u32 {
+            c.write_all(&req(&[b"SET", format!("post{i}").as_bytes(), b"v"])).unwrap();
+            read_reply(&mut c, b"+OK\r\n");
+        }
+    });
+    with_runtime(free_port(), &dir, nshards, |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        c.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+        c.write_all(&req(&[b"DBSIZE"])).unwrap();
+        read_reply(&mut c, b":60\r\n");
+    });
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Writes that arrive after a BGREWRITEAOF has swapped in the compacted
+/// log land in that new log and survive a restart.
+#[test]
+fn writes_after_the_rewrite_swap_survive_a_restart() {
+    let dir = std::env::temp_dir().join(format!(
+        "kevy-rewrite-after-{}",
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let nshards = 4;
+    with_runtime(free_port(), &dir, nshards, |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        for rev in 0..50u32 {
+            for i in 0..20u32 {
+                c.write_all(&req(&[
+                    b"SET",
+                    format!("pre{i}").as_bytes(),
+                    format!("r{rev}").as_bytes(),
+                ]))
+                .unwrap();
+                read_reply(&mut c, b"+OK\r\n");
+            }
+        }
+        c.write_all(&req(&[b"BGREWRITEAOF"])).unwrap();
+        read_reply(&mut c, b"+OK\r\n");
+        wait_for("every compacted log to be swapped in", || {
+            (0..nshards).all(|s| {
+                std::fs::read(dir.join(format!("aof-{s}.aof")))
+                    .is_ok_and(|b| !b.windows(3).any(|w| w == b"r48"))
+            })
+        });
+        for i in 0..40u32 {
+            c.write_all(&req(&[b"SET", format!("post{i}").as_bytes(), b"v"])).unwrap();
+            read_reply(&mut c, b"+OK\r\n");
+        }
+    });
+    with_runtime(free_port(), &dir, nshards, |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        c.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+        c.write_all(&req(&[b"DBSIZE"])).unwrap();
+        read_reply(&mut c, b":60\r\n");
+    });
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A conditional `HEXPIRE` keeps its absolute deadlines across a restart:
 /// the field it moved does not count its TTL from replay time, and the
 /// field its condition refused keeps the deadline it already had.
