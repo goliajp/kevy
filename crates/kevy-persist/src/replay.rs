@@ -42,8 +42,18 @@ use kevy_resp::Argv;
 /// will parse as a valid (if nonsense) command. The summary line is the
 /// signal — an unexpected count of replayed commands at boot is the
 /// operator's cue to inspect the AOF byte-by-byte.
-pub fn replay_aof<F: FnMut(Argv)>(path: &Path, mut apply: F) -> io::Result<ReplayReport> {
-    replay_aof_in_place(path, false, false, |a| apply(std::mem::take(a)))
+pub fn replay_aof<F: FnMut(Argv)>(path: &Path, apply: F) -> io::Result<ReplayReport> {
+    replay_aof_in_place(path, false, false, owned(apply))
+}
+
+/// An owned-frame `apply` as an in-place one: each frame is moved out, so
+/// the next parses into a fresh buffer — what the owned entries cost
+/// before the in-place replay existed.
+fn owned<F: FnMut(Argv)>(mut apply: F) -> impl FnMut(&mut Argv) {
+    move |frame: &mut Argv| {
+        let taken = std::mem::take(frame);
+        apply(taken);
+    }
 }
 
 /// The replay behind [`replay_aof`], [`replay_aof_quiet`] and
@@ -51,6 +61,25 @@ pub fn replay_aof<F: FnMut(Argv)>(path: &Path, mut apply: F) -> io::Result<Repla
 /// frame's buffers are reused for the next one, so an `apply` that only
 /// reads the frame costs no allocation per frame; one that keeps it takes
 /// it with `std::mem::take`.
+///
+/// ```
+/// let dir = std::env::temp_dir().join(format!("replay-doc-{}", std::process::id()));
+/// std::fs::create_dir_all(&dir).unwrap();
+/// let path = dir.join("doc.aof");
+/// let mut aof = kevy_persist::Aof::open(&path, kevy_persist::Fsync::No).unwrap();
+/// aof.append(&kevy_persist::Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()]))
+///     .unwrap();
+/// drop(aof);
+///
+/// let mut verbs = Vec::new();
+/// let report = kevy_persist::replay_aof_in_place(&path, false, true, |frame| {
+///     verbs.push(frame[0].to_vec());
+/// })
+/// .unwrap();
+/// assert_eq!(report.commands, 1);
+/// assert_eq!(verbs, [b"SET".to_vec()]);
+/// # std::fs::remove_dir_all(&dir).unwrap();
+/// ```
 pub fn replay_aof_in_place<F: FnMut(&mut Argv)>(
     path: &Path,
     resync: bool,
@@ -84,9 +113,9 @@ pub fn replay_aof_in_place<F: FnMut(&mut Argv)>(
 pub fn replay_aof_quiet<F: FnMut(Argv)>(
     path: &Path,
     resync: bool,
-    mut apply: F,
+    apply: F,
 ) -> io::Result<ReplayReport> {
-    replay_aof_in_place(path, resync, true, |a| apply(std::mem::take(a)))
+    replay_aof_in_place(path, resync, true, owned(apply))
 }
 
 /// The v1 frame loop: parse-apply until clean end, truncated tail, or a
@@ -156,8 +185,8 @@ fn replay_v1_slice<F: FnMut(&mut Argv)>(
 /// frames over one bad record — this is the lane that gets them back.
 /// v1 files have no checksums to anchor on: they replay strictly here
 /// too (their first rewrite upgrades them into resync's world).
-pub fn replay_aof_resync<F: FnMut(Argv)>(path: &Path, mut apply: F) -> io::Result<ReplayReport> {
-    replay_aof_in_place(path, true, false, |a| apply(std::mem::take(a)))
+pub fn replay_aof_resync<F: FnMut(Argv)>(path: &Path, apply: F) -> io::Result<ReplayReport> {
+    replay_aof_in_place(path, true, false, owned(apply))
 }
 
 /// What one [`replay_aof`] pass restored — and, crucially, what it could
