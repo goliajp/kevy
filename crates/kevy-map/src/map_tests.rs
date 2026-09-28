@@ -688,7 +688,11 @@ fn raw_entry_mut_borrow_lookup_with_bytes_key() {
 #[test]
 fn churn_at_a_constant_live_set_does_not_grow_the_table() {
     let mut m: KevyMap<Vec<u8>, u64> = KevyMap::new();
-    const LIVE: usize = 4096;
+    // Under miri the loop is interpreted, so a smaller set; it stays a
+    // power of two so the table settles at the same half load as 4096
+    // does. 409 would sit above 7/8 of 512 and grow once on its first
+    // tombstones, which is not the ratchet this looks for.
+    const LIVE: usize = if cfg!(miri) { 512 } else { 4096 };
     for i in 0..LIVE {
         m.insert(format!("k{i}").into_bytes(), i as u64);
     }

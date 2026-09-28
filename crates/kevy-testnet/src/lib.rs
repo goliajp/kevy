@@ -48,16 +48,22 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::{Duration, Instant};
 
-/// Ports per process block. Wide enough that a test binary never wraps
-/// into a neighbour's block during one run.
-const BLOCK: u16 = 64;
+mod mock;
+pub use mock::read_request;
+
+/// Ports per process block. The counter wraps inside the block, and a
+/// wrapped offset can name a port handed out moments ago that its server
+/// has not bound yet — both probes read that port as free. At 64 the
+/// replication tests drew 69 in one run and collided with themselves; the
+/// block is sized so no test binary comes near it.
+const BLOCK: u16 = 512;
 /// First port of the first block. Above the registered range and below
 /// the ephemeral range Linux hands out by default (32768+), so this
 /// scheme and the kernel's own allocator never draw from the same pool.
 const FLOOR: u16 = 20_000;
 /// How many blocks the space is divided into. `FLOOR + BLOCKS * BLOCK`
 /// must stay under 32768.
-const BLOCKS: u16 = 190;
+const BLOCKS: u16 = 24;
 
 /// The listener that proves this block is ours, held for the life of the
 /// process, and the block's base.
@@ -160,9 +166,20 @@ pub fn wait_listening(port: u16, timeout: Duration) -> bool {
 /// surfaced later, somewhere else, as a connection refused or — worse —
 /// as an assertion about another server's data.
 pub fn assert_listening(port: u16, what: &str) {
-    if !wait_listening(port, Duration::from_secs(10)) {
+    assert_listening_within(port, what, Duration::from_secs(10));
+}
+
+/// [`assert_listening`] with a caller-chosen budget.
+///
+/// ```should_panic
+/// // nothing listens on a port this process just drew and never bound
+/// let port = kevy_testnet::free_port();
+/// kevy_testnet::assert_listening_within(port, "nobody", std::time::Duration::from_millis(50));
+/// ```
+pub fn assert_listening_within(port: u16, what: &str, budget: Duration) {
+    if !wait_listening(port, budget) {
         panic!(
-            "kevy-testnet: {what} never accepted on 127.0.0.1:{port} within 10s. \
+            "kevy-testnet: {what} never accepted on 127.0.0.1:{port} within {budget:?}. \
              Either it failed to start, or another process took the port between \
              free_port() handing it out and {what} binding it."
         );

@@ -1,11 +1,12 @@
 # The kevy test suite — the single source of truth for what is checked.
 #
-# Read by tools/suite.py. Three tiers, by inheritance: a check declares
+# Read by tools/suite.py. Four tiers, by inheritance: a check declares
 # the LOWEST tier it runs in and runs in every tier above it, so
-# checks(precommit) ⊆ checks(prerelease) ⊆ checks(full) holds by
-# construction rather than by discipline.
+# checks(precommit) ⊆ checks(premerge) ⊆ checks(prerelease) ⊆ checks(full)
+# holds by construction rather than by discipline.
 #
 #   precommit   pins the current version's goals + fast regressions.
+#   premerge    adds everything CI runs on a push (tools/check_ci_parity.py).
 #   prerelease  adds the release claims and iron rules.
 #   full        adds everything: the problem-hunting surface.
 #
@@ -42,7 +43,10 @@ manifest_floor = 43
 # headroom for a slower machine, without being fiction.
 [suite.budgets]
 precommit = 300
-prerelease = 5400
+# everything CI checks on a push to develop; declared from CI step times,
+# to be corrected from the durations a premerge run records
+premerge = 5300
+prerelease = 6000
 
 
 # ── where each requirement is met ────────────────────────────────────
@@ -59,7 +63,21 @@ prerelease = 5400
 # entry here must be named by some check. A `met` of "" is a declaration
 # that the row runs nowhere — allowed, because saying so is the point, and
 # loud in the audit's summary rather than silent in a NOT-RUN line.
+# Commands CI runs that no local tier can: tools/check_ci_parity.py fails on
+# any CI command that is in neither a row by premerge nor this table.
+[suite.ci_only]
+"cargo +nightly fuzz run *" = "cargo-fuzz on nightly; CI's fuzz-smoke matrix, which fuzzgate keeps complete"
+"bash bench/run.sh" = "the Docker benchmark smoke against valkey; measures, gives no verdict on the code"
+"cargo test" = "the Tauri plugin, a standalone crate outside the workspace that needs Tauri's system libraries"
+"python3 tools/suite.py --audit" = "the runner audits the manifest before every tier"
+
 [suite.requirements]
+"rustdoc coverage tables from rustdoc-coverage" = "wherever rustdoc-coverage ran earlier in the same tier"
+"bench/DEAD-SET.json from deadgate" = "wherever deadgate ran earlier in the same tier"
+"web/dist from site-build" = "wherever site-build ran earlier in the same tier"
+"wasm targets" = "CI's wasm job, and the lx64 box"
+"iot toolchain" = "CI's iot job, and the lx64 box"
+"nightly miri" = "CI's miri job, and the lx64 box"
 "linux" = "CI's Linux jobs, and the lx64 box"
 "box" = "the lx64 box, as kevybench with TMPDIR=$HOME/captmp"
 "binaries-release" = "anywhere after cargo build --release -p kevy -p kevy-cli"
@@ -70,7 +88,6 @@ prerelease = 5400
 "chromium" = "CI's site job, via npx playwright install chromium"
 "wasm-artifact" = "CI's site job, after npm run engine in web/"
 "nightly rustdoc" = "CI's docdeficit job"
-"nightly rustdoc coverage tables in target/doc" = "CI's stonereport job"
 "cargo-semver-checks" = "CI's stonereport job"
 "bench/STONE-REPORT.json from stone-report" = "CI's stonereport job, uploaded as stone-report-linux"
 "pgcmp-infra" = "the lx64 box, where the kevy-pgcmp container is resident"
@@ -84,7 +101,7 @@ id = "rootgate"
 area = "hygiene"
 tier = "precommit"
 cmd = "bash bench/rootgate.sh"
-expected = 14
+expected = 1
 timeout = 60
 requires = []
 proves = "the repo root and worktree hold no runtime residue"
@@ -94,7 +111,7 @@ id = "secretgate"
 area = "hygiene"
 tier = "precommit"
 cmd = "bash bench/secretgate.sh"
-expected = 0
+expected = 1
 timeout = 60
 requires = []
 proves = "no credential file is tracked or staged, and no token literal is in tracked content"
@@ -104,7 +121,7 @@ id = "nostdgate"
 area = "hygiene"
 tier = "precommit"
 cmd = "bash bench/nostdgate.sh"
-expected = 0
+expected = 3
 timeout = 300
 requires = []
 proves = "the no_std checks CI runs compile here, before CI runs them"
@@ -114,7 +131,7 @@ id = "formgate"
 area = "hygiene"
 tier = "precommit"
 cmd = "bash bench/formgate.sh"
-expected = 0
+expected = 1
 timeout = 60
 requires = []
 proves = "every hash verb is exercised against the packed row, or says where it is covered"
@@ -124,7 +141,7 @@ id = "locgate"
 area = "hygiene"
 tier = "precommit"
 cmd = "bash bench/locgate.sh"
-expected = 2
+expected = 1
 timeout = 120
 requires = []
 proves = "files ≤ 500 LOC, functions ≤ 50 or waivered"
@@ -144,7 +161,7 @@ id = "killgate"
 area = "hygiene"
 tier = "precommit"
 cmd = "bash bench/killgate.sh"
-expected = 2
+expected = 1
 timeout = 120
 requires = []
 proves = "the mechanical form of the hard rules holds"
@@ -156,7 +173,7 @@ id = "version-alignment"
 area = "release-pins"
 tier = "precommit"
 cmd = "python3 tools/check_version_alignment.py"
-expected = 25
+expected = 2
 timeout = 120
 requires = []
 proves = "all six version layers agree, including vendored engine bytes"
@@ -166,7 +183,7 @@ id = "publish-order"
 area = "release-pins"
 tier = "precommit"
 cmd = "python3 tools/check_publish_order.py"
-expected = 2
+expected = 1
 timeout = 60
 requires = []
 proves = "the publish chain is a topological order and every crate is publishable"
@@ -176,7 +193,7 @@ id = "action-versions"
 area = "release-pins"
 tier = "precommit"
 cmd = "python3 tools/check_action_versions.py"
-expected = 2
+expected = 1
 timeout = 60
 requires = []
 proves = "workflow actions agree on one major each"
@@ -208,9 +225,9 @@ proves = "the pinned competitors are each project's current latest stable — as
 [[check]]
 id = "command-coverage"
 area = "compat"
-tier = "prerelease"
+tier = "premerge"
 cmd = "python3 tools/check_command_coverage.py"
-expected = 2
+expected = 1
 timeout = 60
 requires = []
 proves = "every command the pinned Redis serves is implemented, exempt by a written decision, or owned by an RFC — and the unclassified count only goes down"
@@ -220,7 +237,7 @@ id = "capability-claim"
 area = "doc"
 tier = "precommit"
 cmd = "python3 tools/check_capability_claim.py"
-expected = 2
+expected = 1
 timeout = 60
 requires = []
 proves = "the command count the site publishes is the count the engine answers"
@@ -230,7 +247,7 @@ id = "site-commands-derived"
 area = "doc"
 tier = "precommit"
 cmd = "python3 tools/export_site_commands.py --check"
-expected = 4
+expected = 1
 timeout = 120
 requires = ["binaries-debug"]
 proves = "the site's command reference is the engine's own COMMAND DOCS, not a hand-kept copy"
@@ -240,7 +257,7 @@ id = "suite-ledger"
 area = "hygiene"
 tier = "precommit"
 cmd = "python3 tools/check_suite_ledger.py"
-expected = 2
+expected = 1
 timeout = 60
 requires = []
 proves = "a recorded duration is a duration — a timeout kill is not filed in the same field"
@@ -250,7 +267,7 @@ id = "architecture"
 area = "arch"
 tier = "precommit"
 cmd = "python3 tools/check_architecture.py"
-expected = 2
+expected = 1
 timeout = 60
 requires = []
 proves = "every crate classified; shipping deps point down the stone/steel/cement layers"
@@ -264,26 +281,6 @@ expected = 1
 timeout = 60
 requires = []
 proves = "every non-kevy dependency declared with a reason; no shipping third-party crate inside a stone"
-
-[[check]]
-id = "stone-report"
-area = "arch"
-tier = "full"
-cmd = "python3 tools/stone_report.py"
-expected = 420
-timeout = 3600
-requires = ["linux", "nightly rustdoc coverage tables in target/doc", "cargo-semver-checks"]
-proves = "each stone measured four ways: lifts outside the workspace, semver-clean, documented, and its dead-region count"
-
-[[check]]
-id = "stonegate"
-area = "arch"
-tier = "full"
-cmd = "python3 tools/check_stones.py"
-expected = 1
-timeout = 60
-requires = ["linux", "bench/STONE-REPORT.json from stone-report"]
-proves = "every stone meets the bar or carries a waiver with a reason; no waiver outlives the problem"
 
 [[check]]
 id = "clone-atlas"
@@ -306,21 +303,63 @@ requires = []
 proves = "the embedded facade and the server produce identical RESP bytes, or the difference is named with a reason"
 
 [[check]]
+id = "covgate"
+area = "cov"
+tier = "premerge"
+cmd = "bash -c 'KEVY_IO_URING=0 KEVY_COV_JSON=$PWD/target/llvm-cov-c1.json bash bench/covgate.sh'"
+expected = 219
+timeout = 14400
+requires = ["linux"]
+proves = "line coverage holds the ratchet"
+
+[[check]]
 id = "deadgate"
 area = "cov"
-tier = "full"
-cmd = "bash bench/deadgate.sh"
-expected = 3600
+tier = "premerge"
+# reads the region export covgate just wrote
+cmd = "bash -c 'KEVY_IO_URING=0 KEVY_COV_JSON=$PWD/target/llvm-cov-c1.json bash bench/deadgate.sh'"
+expected = 30
 timeout = 14400
 requires = ["linux"]
 proves = "the set of never-executed symbols may only shrink — what covgate's percentage cannot hold"
 
 [[check]]
+id = "rustdoc-coverage"
+area = "doc"
+tier = "premerge"
+# the tables stone-report reads, from this tree
+cmd = "bash -c \"RUSTDOCFLAGS='-Z unstable-options --show-coverage' cargo +nightly doc --workspace --no-deps\""
+expected = 60
+timeout = 1200
+requires = ["nightly rustdoc"]
+proves = "rustdoc can report per-crate documentation coverage for this tree"
+
+[[check]]
+id = "stone-report"
+area = "arch"
+tier = "premerge"
+cmd = "python3 tools/stone_report.py"
+expected = 142
+timeout = 3600
+requires = ["linux", "rustdoc coverage tables from rustdoc-coverage", "bench/DEAD-SET.json from deadgate", "cargo-semver-checks"]
+proves = "each stone measured four ways: lifts outside the workspace, semver-clean, documented, and its dead-region count"
+
+[[check]]
+id = "stonegate"
+area = "arch"
+tier = "premerge"
+cmd = "python3 tools/check_stones.py"
+expected = 1
+timeout = 60
+requires = ["linux", "bench/STONE-REPORT.json from stone-report"]
+proves = "every stone meets the bar or carries a waiver with a reason; no waiver outlives the problem"
+
+[[check]]
 id = "doctestgate"
 area = "doc"
-tier = "full"
+tier = "premerge"
 cmd = "bash bench/doctestgate.sh"
-expected = 300
+expected = 10
 timeout = 1800
 requires = ["linux", "nightly rustdoc"]
 proves = "what the documentation owes — items with no doc, items with no executable example — may only shrink"
@@ -328,9 +367,9 @@ proves = "what the documentation owes — items with no doc, items with no execu
 [[check]]
 id = "doctest-run"
 area = "doc"
-tier = "prerelease"
+tier = "premerge"
 cmd = "bash bench/doctestrun.sh"
-expected = 420
+expected = 49
 timeout = 2400
 requires = []
 proves = "every example in the documentation compiles and runs — the claim doctestgate's count rests on, and which nothing in this repository checked"
@@ -344,6 +383,15 @@ expected = 2
 timeout = 60
 requires = []
 proves = "no published crate ships a source file importing a dependency its published manifest drops"
+
+[[check]]
+id = "ci-parity"
+area = "hygiene"
+tier = "precommit"
+cmd = "python3 tools/check_ci_parity.py"
+expected = 1
+timeout = 60
+proves = "every command CI runs on a push is a row by premerge, or says why only CI can run it"
 
 [[check]]
 id = "fuzzgate"
@@ -372,9 +420,9 @@ proves = "every fuzz target in the tree runs in CI's fuzz-smoke matrix, and ever
 [[check]]
 id = "loomgate"
 area = "arch"
-tier = "prerelease"
+tier = "premerge"
 cmd = "python3 tools/check_loom.py"
-expected = 150
+expected = 97
 timeout = 1800
 requires = []
 proves = "the two loom suites actually run, and every #[test] in them runs — both files are #![cfg(loom)] and nothing in this repository passed --cfg loom, so four exhaustive interleaving searches reported `0 passed; ok` while three production sites cited them by name as the argument for their memory ordering"
@@ -384,7 +432,7 @@ id = "lockgate"
 area = "release-pins"
 tier = "precommit"
 cmd = "python3 tools/check_lockfiles.py"
-expected = 1
+expected = 2
 timeout = 120
 requires = []
 proves = "every lock file git tracks matches its manifest, and none is left changed or unadded — what `cargo build --locked` reads in the checkout"
@@ -396,7 +444,7 @@ id = "doc-links"
 area = "doc"
 tier = "precommit"
 cmd = "python3 tools/check_doc_links.py"
-expected = 2
+expected = 1
 timeout = 120
 requires = []
 proves = "no dead markdown link anywhere in the tree"
@@ -406,7 +454,7 @@ id = "cjk-punct"
 area = "doc"
 tier = "precommit"
 cmd = "python3 tools/check_cjk_punct.py"
-expected = 2
+expected = 1
 timeout = 120
 requires = []
 proves = "no half-width punctuation in CJK prose, site sources included"
@@ -416,7 +464,7 @@ id = "doc-i18n"
 area = "doc"
 tier = "precommit"
 cmd = "python3 tools/check_doc_i18n.py"
-expected = 2
+expected = 1
 timeout = 120
 requires = []
 proves = "every translated chapter carries its English chapter's sections"
@@ -430,7 +478,7 @@ tier = "precommit"
 # a config block that does not load hands a first-time reader a server
 # that refuses to start.
 cmd = "python3 tools/check_doc_toml.py"
-expected = 100
+expected = 1
 timeout = 180
 requires = ["binaries-debug"]
 proves = "every TOML block in the docs parses"
@@ -440,7 +488,7 @@ id = "md-port"
 area = "doc"
 tier = "precommit"
 cmd = "python3 tools/check_md_port.py"
-expected = 3
+expected = 2
 timeout = 300
 requires = ["node", "web-deps"]
 proves = "the Python and TypeScript markdown renderers agree byte-for-byte"
@@ -450,7 +498,7 @@ id = "wasm-size"
 area = "doc"
 tier = "precommit"
 cmd = "python3 tools/check_wasm_size.py"
-expected = 2
+expected = 1
 timeout = 60
 requires = ["wasm-artifact"]
 proves = "every stated wasm size is within 10% of the built artifact"
@@ -460,7 +508,7 @@ id = "readme-bench"
 area = "doc"
 tier = "precommit"
 cmd = "python3 tools/sync_readme_bench.py --check"
-expected = 2
+expected = 1
 timeout = 60
 requires = []
 proves = "READMEs and the site quote the ledger's latest measured run"
@@ -470,7 +518,7 @@ id = "content-export"
 area = "doc"
 tier = "precommit"
 cmd = "python3 tools/export_site_content.py --check"
-expected = 2
+expected = 1
 timeout = 60
 requires = []
 proves = "the site content export matches the Python sources"
@@ -482,7 +530,7 @@ id = "dialectgate"
 area = "dialect"
 tier = "precommit"
 cmd = "bash bench/dialectgate.sh target/debug/kevy"
-expected = 2
+expected = 1
 timeout = 300
 requires = ["binaries-debug"]
 proves = "Lua 5.1–5.5 each serve their own surface and wording; the string.rep DoS stays fixed"
@@ -492,9 +540,9 @@ proves = "Lua 5.1–5.5 each serve their own surface and wording; the string.rep
 [[check]]
 id = "clippy"
 area = "hygiene"
-tier = "prerelease"
+tier = "premerge"
 cmd = "cargo clippy --workspace --all-targets -- -D warnings"
-expected = 240
+expected = 26
 timeout = 1800
 requires = []
 proves = "zero clippy findings across every target, in the DEFAULT feature set"
@@ -525,7 +573,7 @@ tier = "precommit"
 # belongs in the tier that runs before every push, not in the one that
 # runs after.
 cmd = "cargo fmt --all --check"
-expected = 3
+expected = 5
 timeout = 120
 requires = []
 proves = "every source file is formatted, before the push rather than after"
@@ -539,7 +587,7 @@ tier = "precommit"
 # Scoping by target is what makes the deny possible at all — the same
 # survey read 2,425 `unwrap` sites with tests compiled and 71 without.
 cmd = "cargo clippy --workspace --lib --bins -- -D clippy::unwrap_used -D clippy::panic -D missing_docs"
-expected = 30
+expected = 17
 timeout = 900
 requires = []
 proves = "library code has no undeclared unwrap or panic, and no undocumented public item"
@@ -549,7 +597,7 @@ id = "expect-reasons"
 area = "hygiene"
 tier = "precommit"
 cmd = "python3 tools/check_expect_reasons.py"
-expected = 2
+expected = 1
 timeout = 120
 requires = []
 proves = "no expect() in library code answers with a measurement or a conclusion"
@@ -567,9 +615,9 @@ proves = "every exported ABI function catches panics or states why it cannot pan
 [[check]]
 id = "feature-lints"
 area = "hygiene"
-tier = "prerelease"
+tier = "premerge"
 cmd = "python3 tools/check_feature_lints.py"
-expected = 90
+expected = 133
 timeout = 1800
 requires = []
 proves = "every crate alone, and every off-by-default feature, is clippy-zero too"
@@ -577,9 +625,9 @@ proves = "every crate alone, and every off-by-default feature, is clippy-zero to
 [[check]]
 id = "workspace-tests"
 area = "feature"
-tier = "prerelease"
-cmd = "cargo test --workspace --lib --tests"
-expected = 1800
+tier = "premerge"
+cmd = "bash -c 'KEVY_TEST_PATIENCE=3 cargo test --workspace --lib --tests'"
+expected = 225
 timeout = 5400
 requires = []
 proves = "the whole workspace's unit and integration tests, in parallel"
@@ -597,23 +645,33 @@ requires = ["node", "chromium"]
 proves = "the site builds reproducibly, every page at the tree's version, and a real browser runs the engine"
 
 [[check]]
+id = "site-build"
+area = "doc"
+tier = "premerge"
+cmd = "npm --prefix web run build"
+expected = 120
+timeout = 1200
+requires = ["node", "web-deps"]
+proves = "the site builds from the tree: engine, typecheck, bundle, prerender"
+
+[[check]]
 id = "site-commands"
 area = "doc"
-tier = "prerelease"
+tier = "premerge"
 cmd = "python3 tools/check_site_commands.py"
 expected = 30
 timeout = 600
-requires = ["binaries-debug", "node", "web-deps"]
+requires = ["binaries-debug", "web/dist from site-build"]
 proves = "every RESP example the site shows runs against a real server"
 
 [[check]]
 id = "site-parity"
 area = "doc"
-tier = "prerelease"
+tier = "premerge"
 cmd = "python3 tools/check_site_content_parity.py"
 expected = 5
 timeout = 120
-requires = ["node", "web-deps"]
+requires = ["web/dist from site-build"]
 proves = "every written fragment reached the built site"
 
 [[check]]
@@ -635,9 +693,10 @@ proves = "whether the built wasm is the published one — divergence is a releas
 [[check]]
 id = "crashgate"
 area = "disk"
-tier = "prerelease"
-cmd = "bash bench/crashgate.sh"
-expected = 600
+tier = "premerge"
+# strict as CI runs it: a pending cell is a failure
+cmd = "bash -c 'PENDING_STRICT=1 bash bench/crashgate.sh'"
+expected = 80
 timeout = 3600
 requires = ["linux", "binaries-debug"]
 proves = "kill -9 at any point loses nothing the server acknowledged"
@@ -665,9 +724,9 @@ proves = "tail latency stays inside the shipped bars on a real disk"
 [[check]]
 id = "repligate"
 area = "feature"
-tier = "prerelease"
+tier = "premerge"
 cmd = "bash bench/repligate.sh"
-expected = 300
+expected = 54
 timeout = 1800
 requires = ["linux", "binaries-release"]
 proves = "a replica ships a snapshot, follows frames, and converges"
@@ -675,9 +734,9 @@ proves = "a replica ships a snapshot, follows frames, and converges"
 [[check]]
 id = "availgate"
 area = "feature"
-tier = "prerelease"
+tier = "premerge"
 cmd = "bash bench/availgate.sh target/release/kevy"
-expected = 420
+expected = 101
 timeout = 3600
 requires = ["box", "binaries-release"]
 proves = "failover converges; WAIT tells the truth; staleness is bounded"
@@ -711,9 +770,9 @@ proves = "an AOF written by either engine replays in the other, both directions"
 [[check]]
 id = "vendorgate"
 area = "doors"
-tier = "prerelease"
+tier = "premerge"
 cmd = "bash bench/vendorgate.sh"
-expected = 30
+expected = 1
 timeout = 600
 requires = []
 proves = "vendored native artifacts match the current ABI and version"
@@ -721,9 +780,9 @@ proves = "vendored native artifacts match the current ABI and version"
 [[check]]
 id = "ffigate-contract"
 area = "doors"
-tier = "prerelease"
+tier = "premerge"
 cmd = "bash bench/ffigate-contract.sh"
-expected = 180
+expected = 1
 timeout = 1800
 requires = []
 proves = "one contract table, six language doors, checked"
@@ -731,12 +790,12 @@ proves = "one contract table, six language doors, checked"
 [[check]]
 id = "propgate"
 area = "feature"
-tier = "prerelease"
+tier = "premerge"
 # Static analysis over the source, not a server gate — it finished in
 # under a second and the first manifest draft had it down for two
 # minutes with a server requirement it never had.
 cmd = "bash bench/propgate.sh"
-expected = 2
+expected = 1
 timeout = 120
 requires = []
 proves = "a durable effect is a propagated effect, unless it is named"
@@ -821,8 +880,9 @@ proves = "the memory half of the allocator experiment, both builds"
 [[check]]
 id = "compressgate"
 area = "mem"
-tier = "full"
-cmd = "bash bench/compressgate.sh"
+tier = "premerge"
+# the unit half, as CI runs it; K1 and K5 need a full-scale capacity run
+cmd = "bash -c 'COMPRESSGATE_UNIT_ONLY=1 bash bench/compressgate.sh'"
 expected = 600
 timeout = 3600
 requires = ["linux"]
@@ -885,9 +945,9 @@ proves = "snapshot S + (gen, O) is an exact restore point, executed"
 [[check]]
 id = "compat3"
 area = "compat"
-tier = "full"
+tier = "premerge"
 cmd = "bash bench/compat3.sh"
-expected = 900
+expected = 203
 timeout = 3600
 requires = ["docker", "binaries-release"]
 proves = "the same command sequence answers identically on kevy, valkey and redis"
@@ -905,9 +965,9 @@ proves = "kevy changes reply shape under HELLO 3 exactly where the pinned redis 
 [[check]]
 id = "clientgate"
 area = "compat"
-tier = "full"
+tier = "premerge"
 cmd = "bash bench/clientgate.sh"
-expected = 900
+expected = 41
 timeout = 3600
 requires = ["node", "docker", "binaries-release"]
 proves = "bring-your-redis-client, executable: real client libraries against kevy"
@@ -1039,9 +1099,9 @@ proves = "topology declarations, true two-process"
 [[check]]
 id = "uringgate"
 area = "feature"
-tier = "full"
+tier = "premerge"
 cmd = "bash bench/uringgate.sh"
-expected = 600
+expected = 16
 timeout = 3600
 requires = ["linux", "binaries-release"]
 proves = "the io_uring data-plane contract"
@@ -1123,9 +1183,9 @@ proves = "the capacity-arc envelope holds at 30M keys"
 [[check]]
 id = "consumergate"
 area = "doors"
-tier = "full"
+tier = "premerge"
 cmd = "bash bench/consumergate.sh"
-expected = 600
+expected = 16
 timeout = 3600
 requires = []
 proves = "the facade builds and runs from a consumer's position"
@@ -1133,9 +1193,9 @@ proves = "the facade builds and runs from a consumer's position"
 [[check]]
 id = "jnigate"
 area = "doors"
-tier = "full"
+tier = "premerge"
 cmd = "bash bench/jnigate.sh"
-expected = 600
+expected = 3
 timeout = 3600
 requires = ["node"]
 proves = "the raw Android/JVM door opens on the host"
@@ -1143,9 +1203,9 @@ proves = "the raw Android/JVM door opens on the host"
 [[check]]
 id = "mcpgate"
 area = "doors"
-tier = "full"
+tier = "premerge"
 cmd = "bash -c 'cargo build -q -p kevy-mcp && bash bench/mcpgate.sh target/debug/kevy'"
-expected = 300
+expected = 3
 timeout = 1800
 requires = ["node", "binaries-debug"]
 proves = "the MCP protocol end to end"
@@ -1163,21 +1223,96 @@ proves = "three frameworks × two platforms on real simulators/emulators"
 # ── full: coverage + fuzz ────────────────────────────────────────────
 
 [[check]]
-id = "covgate"
-area = "cov"
-tier = "full"
-cmd = "bash bench/covgate.sh"
-expected = 3600
-timeout = 14400
-requires = ["linux"]
-proves = "line coverage holds the ratchet"
-
-[[check]]
 id = "fuzz-smoke"
 area = "feature"
-tier = "full"
+tier = "premerge"
 cmd = "true"
 expected = 1
 timeout = 60
 requires = ["ci"]
 proves = "fuzz targets run in CI on every push and weekly with a crash-artifact gate — this row keeps the area accounted for"
+
+[[check]]
+id = "door-changelogs"
+area = "doc"
+tier = "precommit"
+cmd = "python3 tools/check_door_changelogs.py"
+expected = 1
+timeout = 60
+proves = "each door's changelog names the version its manifest ships"
+
+[[check]]
+id = "compat-claim"
+area = "compat"
+tier = "precommit"
+cmd = "python3 tools/check_compat_claim.py"
+expected = 1
+timeout = 60
+proves = "the documents quote the verb count the three-way differential actually runs"
+
+[[check]]
+id = "gen-docs"
+area = "doc"
+tier = "premerge"
+cmd = "cargo run -q -p kevy --bin gen_docs -- . --check"
+expected = 1
+timeout = 600
+proves = "llms.txt and the verb reference are what the engine's own verb table generates"
+
+[[check]]
+id = "clippy-wasm"
+area = "hygiene"
+tier = "premerge"
+cmd = "cargo clippy -p kevy-wasm --all-targets -- -D warnings"
+expected = 1
+timeout = 600
+proves = "kevy-wasm is clippy-zero in its own feature set, which the workspace clippy unifies away"
+
+[[check]]
+id = "aigate"
+area = "feature"
+tier = "premerge"
+cmd = "bash -c 'cargo build -q --release -p kevy-mcp && bash bench/aigate.sh target/release/kevy'"
+expected = 14
+timeout = 900
+requires = ["binaries-release"]
+proves = "the AI-facing doors, wire and MCP, answer as their contract says"
+
+[[check]]
+id = "release-tests"
+area = "feature"
+tier = "premerge"
+cmd = "cargo test --workspace --release --lib --tests"
+expected = 2263
+timeout = 3600
+proves = "the suite passes with optimizations on, where debug-only checks are gone and timing moves"
+
+[[check]]
+id = "wasmcheck"
+area = "feature"
+tier = "premerge"
+cmd = "bash bench/wasmcheck.sh"
+expected = 23
+timeout = 1800
+requires = ["wasm targets"]
+proves = "every wasm-eligible crate compiles for both wasm targets"
+
+[[check]]
+id = "iotcheck"
+area = "feature"
+tier = "premerge"
+cmd = "bash bench/iotcheck.sh"
+expected = 90
+timeout = 3600
+requires = ["iot toolchain"]
+proves = "the embedded cut compiles on every claimed board, and kevy-store boots on a Cortex-M4 under QEMU"
+
+[[check]]
+id = "mirigate"
+area = "feature"
+tier = "premerge"
+cmd = "bash bench/mirigate.sh"
+expected = 338
+timeout = 3600
+requires = ["nightly miri"]
+proves = "the unsafe stones run clean under miri: map and bytes slots, the SPSC ring, the zset encoding"

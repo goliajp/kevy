@@ -140,8 +140,9 @@ the thing they check:
 - `tools/` — the version-alignment gate across seven layers, command coverage
   against the pinned Redis, channel parity that asks each registry rather
   than reading the tree.
-- `suite/manifest.toml` — three tiers: `precommit`, `prerelease`, `full`.
-  `python3 tools/suite.py precommit` is what runs before every push.
+- `suite/manifest.toml` — four tiers: `precommit`, `premerge`, `prerelease`,
+  `full`. `python3 tools/suite.py precommit` is what runs before every push;
+  `premerge` is everything CI checks on a push, run before a merge.
 
 ## Reading order
 

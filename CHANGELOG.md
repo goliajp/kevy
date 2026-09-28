@@ -49,6 +49,14 @@
   It now closes as it does on epoll, and the disconnect for exceeding the
   output buffer limit takes the same path. Affected since 1.25.0.
 
+- **A `premerge` suite tier holds everything CI checks on a push.** The
+  coverage and documentation ratchets, the doctest run, the feature-lint
+  clippy and the generated-docs check ran in CI but in no tier run before a
+  merge, so a merge could be green locally and red on develop.
+  `python3 tools/suite.py premerge` now runs them, and `ci-parity` fails
+  when CI gains a check no tier runs, unless the manifest says why only CI
+  can run it.
+
 - **A server refuses a port another server already holds.** Every shard
   listens with `SO_REUSEPORT`, and on its own that let a second kevy
   started by the same user on the same port join the first one's

@@ -710,6 +710,7 @@ dependencies = [
  "kevy-noise",
  "kevy-resp",
  "kevy-sys",
+ "kevy-testnet",
 ]
 
 [[package]]
