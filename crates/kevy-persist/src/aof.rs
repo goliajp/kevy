@@ -198,6 +198,19 @@ impl Aof {
     /// quarantined + truncated — so a mid-file corruption no longer costs
     /// the good tail behind it.
     pub fn open_with_repair(path: &Path, fsync: Fsync, resync: bool) -> io::Result<Self> {
+        Self::open_after_replay(path, fsync, resync, None)
+    }
+
+    /// [`Self::open_with_repair`] for a file a replay just walked to its
+    /// end: `whole` is its length then. A v2 file still that long has no
+    /// tail to repair — the repair would re-walk it with the same parser
+    /// and stop at the same byte — so the second walk is skipped.
+    pub fn open_after_replay(
+        path: &Path,
+        fsync: Fsync,
+        resync: bool,
+        whole: Option<u64>,
+    ) -> io::Result<Self> {
         let mut file = OpenOptions::new().create(true).append(true).open(path)?;
         let mut size = file.metadata().map_or(0, |m| m.len());
         let mut quarantined = None;
@@ -212,7 +225,10 @@ impl Aof {
             // Existing file: keep appending in ITS format. V1 (magic'd or
             // legacy bare-RESP) upgrades to V2 at the next rewrite.
             format = crate::replay::sniff_format(path)?;
-            quarantined = crate::aof_util::repair_tail(path, &mut file, &mut size, resync)?;
+            let walked = whole == Some(size) && format == crate::AofFormat::V2;
+            if !walked {
+                quarantined = crate::aof_util::repair_tail(path, &mut file, &mut size, resync)?;
+            }
         }
         Ok(Aof {
             in_txn: false,

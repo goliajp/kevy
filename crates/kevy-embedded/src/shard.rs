@@ -115,9 +115,9 @@ fn build_shards_persist(
     // wipe-at-open contract precedes the refill, so a reopen never
     // double-counts.
     enable_tiering(config, &dir, &mut stores)?;
-    let mut report = load_or_reshard(&dir, config, n, &mut stores)?;
+    let (mut report, walked) = load_or_reshard(&dir, config, n, &mut stores)?;
 
-    let mut aofs = open_live_aofs(config, &dir, n, &mut report)?;
+    let mut aofs = open_live_aofs(config, &dir, &walked, &mut report)?;
     // Anchor each AOF's growth-rule baseline to the live image's estimated
     // rewrite size. `Aof::open` can only baseline at the file size, which
     // for a short-lived process re-opening the same directory resets the
@@ -138,27 +138,31 @@ fn build_shards_persist(
 
 /// Open each shard's live AOF for append (if persistence is on). The
 /// open repairs (quarantines + truncates) any dropped tail replay just
-/// tolerated — the quarantine paths land in `report`.
+/// tolerated — the quarantine paths land in `report`. `walked[i]` is shard
+/// i's AOF length when its replay consumed all of it.
 #[cfg(feature = "persist")]
 fn open_live_aofs(
     config: &Config,
     dir: &Path,
-    n: usize,
+    walked: &[Option<u64>],
     report: &mut OpenReport,
 ) -> io::Result<Vec<Option<Aof>>> {
     let aofs: Vec<Option<Aof>> = if config.aof {
-        (0..n)
-            .map(|i| {
-                Aof::open_with_repair(
+        walked
+            .iter()
+            .enumerate()
+            .map(|(i, &whole)| {
+                Aof::open_after_replay(
                     &layout::aof_path(dir, i),
                     config.appendfsync,
                     config.replay_resync,
+                    whole,
                 )
                 .map(Some)
             })
             .collect::<io::Result<_>>()?
     } else {
-        (0..n).map(|_| None).collect()
+        walked.iter().map(|_| None).collect()
     };
     for aof in aofs.iter().flatten() {
         if let Some(q) = aof.open_quarantine() {
@@ -261,7 +265,7 @@ fn load_or_reshard(
     config: &Config,
     n: usize,
     stores: &mut [Keyspace],
-) -> io::Result<OpenReport> {
+) -> io::Result<(OpenReport, Vec<Option<u64>>)> {
     let meta_path = layout::shards_meta_path(dir);
     let prev = read_shards_meta(&meta_path);
     // The embedded store always routes by KevyHash; a dir written by a
@@ -275,9 +279,9 @@ fn load_or_reshard(
     };
 
     if same_layout {
-        let report = load_in_place(dir, config, n, stores)?;
+        let loaded = load_in_place(dir, config, n, stores)?;
         write_shards_meta(&meta_path, ShardsMeta { n, routing: Routing::KevyHash })?;
-        return Ok(report);
+        return Ok(loaded);
     }
     {
         let src_n = prev.map(|m| m.n).or_else(|| {
@@ -288,7 +292,7 @@ fn load_or_reshard(
         // stale meta from a larger prior n would otherwise trigger a second
         // re-shard next open, whose sources were already renamed to
         // `.premigration` (the shrink-to-one open would come up empty).
-        reshard(dir, config, n, src_n, stores)
+        Ok((reshard(dir, config, n, src_n, stores)?, vec![None; n]))
     }
 }
 
@@ -299,15 +303,16 @@ fn load_in_place(
     config: &Config,
     _n: usize,
     stores: &mut [Keyspace],
-) -> io::Result<OpenReport> {
+) -> io::Result<(OpenReport, Vec<Option<u64>>)> {
     let mut report = OpenReport::default();
     let start = Instant::now();
+    let mut walked = Vec::with_capacity(stores.len());
     for (i, store) in stores.iter_mut().enumerate() {
-        crate::shard_restore::restore_one_shard(dir, config, i, store, &mut report)?;
+        walked.push(crate::shard_restore::restore_one_shard(dir, config, i, store, &mut report)?);
     }
     report.elapsed_ms = start.elapsed().as_millis() as u64;
     emit_replay(config, &report);
-    Ok(report)
+    Ok((report, walked))
 }
 
 /// Re-shard: load every source file into one temp keyspace, redistribute

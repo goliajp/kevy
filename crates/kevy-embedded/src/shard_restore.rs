@@ -12,14 +12,15 @@ use crate::metric::OpenReport;
 use kevy_store::Store as Keyspace;
 
 /// One shard's full restore: segment directory, snapshot, AOF replay,
-/// orphan sweep, watermark drain.
+/// orphan sweep, watermark drain. Returns the AOF's length when the replay
+/// consumed all of it (see [`kevy_persist::Aof::open_after_replay`]).
 pub(crate) fn restore_one_shard(
     dir: &Path,
     config: &Config,
     i: usize,
     store: &mut Keyspace,
     report: &mut OpenReport,
-) -> io::Result<()> {
+) -> io::Result<Option<u64>> {
     #[cfg(not(target_arch = "wasm32"))]
     store.enable_seg_rows(&layout::segs_dir(dir, i)).map_err(io::Error::other)?;
     let snap = layout::snapshot_path(dir, i);
@@ -27,13 +28,14 @@ pub(crate) fn restore_one_shard(
         load_snapshot(store, &snap)?;
     }
     let aof = layout::aof_path(dir, i);
+    let mut whole = None;
     if aof.exists() {
-        replay_shard_aof(dir, config, i, store, &aof, report)?;
+        whole = replay_shard_aof(dir, config, i, store, &aof, report)?;
     }
     #[cfg(not(target_arch = "wasm32"))]
     store.sweep_orphan_row_segs();
     store.demote_to_watermark();
-    Ok(())
+    Ok(whole)
 }
 
 /// Replay one shard's AOF into its store, folding the outcome into
@@ -48,7 +50,7 @@ fn replay_shard_aof(
     store: &mut Keyspace,
     aof: &Path,
     report: &mut OpenReport,
-) -> io::Result<()> {
+) -> io::Result<Option<u64>> {
     let _ = (dir, i);
     let mut frames = 0u64;
     #[cfg(not(target_arch = "wasm32"))]
@@ -88,7 +90,7 @@ fn replay_shard_aof(
         return Err(io::Error::other(format!("shard {i}: {e}")));
     }
     fold_replay_report(report, &r);
-    Ok(())
+    Ok((r.replayed_bytes == r.bytes).then_some(r.bytes))
 }
 
 /// Fold one shard's replay outcome into the open report.
