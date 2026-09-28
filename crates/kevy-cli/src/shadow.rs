@@ -246,12 +246,6 @@ fn parse_shadow_flags(args: &[String]) -> Result<ShadowArgs, String> {
     Ok(a)
 }
 
-/// `shadow [-h host] [-p port] --old "<cmd>" --new "<cmd>"
-/// [--old-pairs] [--new-flat] [--samples n]`: connects with its own
-/// `-h`/`-p` (the pre-`--kevy` form), then [`run_on`] the rest.
-pub fn run_shadow_cli(args: &[String]) -> ExitCode {
-    crate::tools::bare::with_private_connection("shadow", args, run_on)
-}
 
 /// `shadow --old "<cmd>" --new "<cmd>" [--old-pairs] [--new-flat]
 /// [--samples n]` on `client`.

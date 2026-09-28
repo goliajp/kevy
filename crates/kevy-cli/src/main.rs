@@ -32,9 +32,5 @@ fn main() -> ExitCode {
         let cmd: Vec<Vec<u8>> = args[2..].iter().map(|s| s.clone().into_bytes()).collect();
         return embed::run_embed_cli(&dir, &cmd);
     }
-    // The bare tool words shipped before --kevy (deprecated through 6.x).
-    if let Some(code) = kevy_cli::route_tool(&args) {
-        return code;
-    }
     ExitCode::from(kevy_cli::rcli::run(&raw))
 }

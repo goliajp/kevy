@@ -300,12 +300,6 @@ fn report(
     })
 }
 
-/// `doctor [-h host] [-p port] [--warn-is-failure] [--indexes] [--views]`:
-/// connects with its own `-h`/`-p` (the pre-`--kevy` form), then
-/// [`run_on`] the rest.
-pub fn run_doctor_cli(args: &[String]) -> ExitCode {
-    crate::tools::bare::with_private_connection("doctor", args, run_on)
-}
 
 /// `doctor [--warn-is-failure] [--indexes] [--views]` on `client`.
 pub(crate) fn run_on(client: &mut dyn Link, args: &[String]) -> ExitCode {

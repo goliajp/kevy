@@ -88,8 +88,6 @@ KEVY TOOLS: kevy-cli [connection options] --kevy <tool> [args]
 
   Rows: --format table|tsv|csv|json, --no-header, --null s, --expanded,
         --timing (a table on a terminal, tsv when piped).
-  Until 7.0 the 6.4 forms (kevy-cli doctor -p 6004 …) still run, with a
-  deprecation line.
 
 EXAMPLES:
     kevy-cli                            # REPL against 127.0.0.1:6379
@@ -139,14 +137,6 @@ pub mod link;
 pub mod lint;
 mod tools;
 
-/// Route a tool kevy-cli shipped as a bare word before `--kevy` (`sql`,
-/// `export`, `import`, `backup`, `restore`, `doctor`, `shadow`, `lint`,
-/// `backfill-keys`, `copy-prefix`, `delete-prefix`, `digest`, `diff`,
-/// `inspect`): kept through 6.x with a deprecation line, removed in 7.0.
-/// `None` when `args` names something else — a server command.
-pub fn route_tool(args: &[String]) -> Option<std::process::ExitCode> {
-    tools::bare::route(args)
-}
 
 /// Pretty-print a reply roughly the way `redis-cli` does. Arrays are
 /// numbered + indented; bulk strings are quoted; nil shows as `(nil)`.

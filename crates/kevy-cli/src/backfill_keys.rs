@@ -197,12 +197,6 @@ fn parse_args(args: &[String]) -> Result<Vec<Source>, String> {
     Ok(sources)
 }
 
-/// `backfill-keys [-h host] [-p port] --from-index K --from-prefix P
-/// [--keep-prefix] --from-file F …`: connects with its own `-h`/`-p` (the
-/// pre-`--kevy` form), then [`run_on`] the rest.
-pub fn run_backfill_keys_cli(args: &[String]) -> ExitCode {
-    crate::tools::bare::with_private_connection("backfill-keys", args, run_on)
-}
 
 /// `backfill-keys --from-index K --from-prefix P [--keep-prefix]
 /// --from-file F …` on `client`. Names to stdout, accounting to stderr. A

@@ -1,5 +1,5 @@
 //! The tools kevy-cli shipped before `--kevy`, reached through it on the
-//! session's connection, and their deprecated bare forms (RFC §13).
+//! session's connection; a bare tool word is a server command.
 
 use std::process::{Child, Command, Stdio};
 
@@ -323,46 +323,36 @@ fn a_type_no_rebuild_frame_covers_is_reported_not_dropped() {
 }
 
 #[test]
-fn bare_shipped_words_keep_working_with_a_deprecation_line() {
+fn a_bare_tool_word_is_a_server_command() {
     let (a, b) = (Srv::start(), Srv::start());
     let (pa, pb) = (a.port(), b.port());
     three_rows(&pa);
-    const WARNING: &str = "kevy-cli: `kevy-cli digest ...` is deprecated and goes away in 7.0; use `kevy-cli [-h host] [-p port] --kevy digest ...`\n";
-    let digest = cli(&["digest", "-p", &pa, "u:"]);
-    assert!(digest.stdout.starts_with("3 keys ") && digest.stderr == WARNING, "{}", digest.stderr);
-    let bad = cli(&["digest", "-p", "abc", "u:"]);
-    assert_eq!(
-        (bad.stderr.strip_prefix(WARNING), bad.code),
-        (Some("kevy-cli digest: -p takes a port, not 'abc'\n"), 1)
-    );
-    let (ea, eb) = (format!("127.0.0.1:{pa}"), format!("127.0.0.1:{pb}"));
-    assert!(cli(&["diff", &ea, &eb, "u:"]).stdout.contains("MISMATCH"));
-    let dir = scratch("bare");
-    let schema = dir.join("s.sql");
-    std::fs::write(&schema, "CREATE TABLE t (id bigint PRIMARY KEY);\n").unwrap();
+    for words in [&["doctor"][..], &["backup", "--data-dir", "d", "--to", "t"], &["digest", "u:"]] {
+        let out = cli(&[&["-p", &pa][..], words].concat());
+        assert!(
+            !out.stderr.contains("deprecated") && !out.stdout.starts_with("3 keys "),
+            "{words:?} ran as a tool: {} {}",
+            out.stdout,
+            out.stderr
+        );
+    }
+    let doctor = cli(&["-p", &pa, "doctor"]);
+    assert!(doctor.stdout.to_lowercase().contains("unknown command"), "{}", doctor.stdout);
+    let digest = cli(&["-p", &pa, "--kevy", "digest", "u:"]);
+    assert!(digest.stdout.starts_with("3 keys ") && digest.stderr.is_empty(), "{}", digest.stderr);
+    let eb = format!("127.0.0.1:{pb}");
+    assert!(cli(&["-p", &pa, "--kevy", "diff", &eb, "u:"]).stdout.contains("MISMATCH"));
     let closed = kevy_testnet::free_port().to_string();
-    let unreachable = cli(&["digest", "-p", &closed, "u:"]);
-    assert!(
-        unreachable
-            .stderr
-            .contains(&format!("kevy-cli digest: could not connect to 127.0.0.1:{closed}"))
-            && unreachable.code == 1,
-        "{}",
-        unreachable.stderr
-    );
-    let endpoint = cli(&["diff", "nothost", "u:"]);
-    assert!(
-        endpoint.stderr.contains("kevy-cli diff: 'nothost' is not host:port"),
-        "{}",
-        endpoint.stderr
-    );
-    let far = cli(&["diff", &ea, &format!("127.0.0.1:{closed}"), "u:"]);
+    let far = cli(&["-p", &pa, "--kevy", "diff", &format!("127.0.0.1:{closed}"), "u:"]);
     assert!(
         far.stderr.contains(&format!("could not connect to 127.0.0.1:{closed}")) && far.code == 1,
         "{}",
         far.stderr
     );
-    let applied = cli(&["sql", "compile", schema.to_str().unwrap(), "--apply", "--url", &ea]);
+    let dir = scratch("bare");
+    let schema = dir.join("s.sql");
+    std::fs::write(&schema, "CREATE TABLE t (id bigint PRIMARY KEY);\n").unwrap();
+    let applied = cli(&["-p", &pa, "--kevy", "sql", "compile", schema.to_str().unwrap(), "--apply"]);
     assert_eq!(applied.stdout, "TABLE.DECLARE t → OK\n", "{}", applied.stderr);
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -1312,19 +1312,23 @@ fn latency_modes_report_in_every_output_format() {
         full.extend_from_slice(args);
         let out = cli(&full, b"", &[]);
         assert_eq!(out.code, 0, "{args:?}");
-        out.stdout
-            .chars()
-            .map(|c| if c.is_ascii_digit() { '#' } else { c })
-            .collect::<String>()
-            .replace("#.###", "N")
-            .replace("##", "#")
+        // a digit run is one '#', whatever its width: a loaded machine
+        // turns 0.123 into 12.345, and the shape is what is asserted
+        let mut shaped = String::new();
+        for c in out.stdout.chars() {
+            let c = if c.is_ascii_digit() { '#' } else { c };
+            if !(c == '#' && shaped.ends_with('#')) {
+                shaped.push(c);
+            }
+        }
+        shaped.replace("#.#", "N")
     };
     assert!(shape(&["--raw"]).starts_with("N N N #"), "{}", shape(&["--raw"]));
     assert!(shape(&["--csv", "--latency-percentiles", "50"]).starts_with("N,N,N,#"));
     let json = shape(&["--json", "--latency-percentiles", "50,99.9"]);
     assert!(
         json.starts_with("{\"min\": N, \"max\": N, \"avg\": N, \"count\": #")
-            && json.contains("\"percentiles\": {\"#\": N, \"#.#\": N}}"),
+            && json.contains("\"percentiles\": {\"#\": N, \"N\": N}}"),
         "{json}"
     );
     assert_eq!(shape(&["--quoted-json"]), "");

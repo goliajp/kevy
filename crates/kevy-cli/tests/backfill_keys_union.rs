@@ -60,7 +60,7 @@ impl Drop for Srv {
 
 fn run(port: u16, args: &[&str]) -> (bool, String, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_kevy-cli"))
-        .args(["backfill-keys", "-p", &port.to_string()])
+        .args(["-p", &port.to_string(), "--kevy", "backfill-keys"])
         .args(args)
         .output()
         .expect("run kevy-cli");
