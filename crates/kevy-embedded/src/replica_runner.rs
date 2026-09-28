@@ -35,6 +35,7 @@ use kevy_replicate::replica::{ReplicaClient, ReplicaEvent};
 
 use crate::config_secure::LinkKeys;
 use crate::replica_wire::Dialer;
+use crate::shard::shard_idx;
 use crate::store::{Shards, lock_write};
 
 /// Handle to the background thread streaming from the primary. Owned
@@ -349,7 +350,8 @@ fn begin_snapshot(shards: &Shards) -> Vec<u8> {
     Vec::new()
 }
 
-/// SnapshotEnd: decode the accumulated image into shard 0 and publish
+/// SnapshotEnd: decode the accumulated image into the shards that own its
+/// keys and publish
 /// the ack offset. `false` = decode error — drop the link; reconnect
 /// either lands in the backlog or triggers another snapshot ship.
 fn finish_snapshot(
@@ -358,7 +360,7 @@ fn finish_snapshot(
     ack_offset: u64,
     applied_offset: &Arc<AtomicU64>,
 ) -> bool {
-    if !load_snapshot_into_shard0(shards, buf) {
+    if !load_snapshot_into_shards(shards, buf) {
         return false;
     }
     applied_offset.store(ack_offset, Ordering::Relaxed);
@@ -382,11 +384,13 @@ fn apply_frame(shards: &Shards, argv: &Argv) {
 /// follow-up and will route each upstream shard's snapshot to its
 /// matching local shard. Returns `false` on decode error (caller drops
 /// the link).
-fn load_snapshot_into_shard0(shards: &Shards, payload: &[u8]) -> bool {
-    let shard = &shards[0];
-    let mut g = lock_write(shard);
-    let cursor = std::io::Cursor::new(payload);
-    kevy_persist::load_snapshot_from(&mut g.store, cursor).is_ok()
+fn load_snapshot_into_shards(shards: &Shards, payload: &[u8]) -> bool {
+    let n = shards.len();
+    shards.iter().enumerate().all(|(i, shard)| {
+        let mut g = lock_write(shard);
+        let cursor = std::io::Cursor::new(payload);
+        kevy_persist::load_snapshot_filtered(&mut g.store, cursor, |k| shard_idx(k, n) == i).is_ok()
+    })
 }
 
 /// Route a mutation argv to its destination shard. argv[0] is the
@@ -404,7 +408,7 @@ fn route_shard(argv: &Argv, n: usize) -> usize {
     let Some(key) = crate::verb_keys::shard_key(up, argv) else {
         return 0;
     };
-    (kevy_hash::key_hash_slot(key) as usize) % n
+    shard_idx(key, n)
 }
 
 /// Sleep `dur` in slices of `slice`, checking `stop` between slices.

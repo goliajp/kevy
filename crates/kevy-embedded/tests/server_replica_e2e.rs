@@ -314,6 +314,51 @@ fn embed_replica_streams_multiple_writes_on_same_connection() {
     server.shutdown();
 }
 
+/// A replica store opened with several shards reads back every key the
+/// primary wrote: a frame lands in the shard that store's own reads look
+/// in, not one chosen by a different hash.
+#[test]
+fn a_sharded_embed_replica_reads_every_replicated_key() {
+    let server = Server::start();
+    let upstream = format!("127.0.0.1:{}", server.replication_base);
+    let cfg = Config::default()
+        .with_shards(4)
+        .with_replica_upstream(&upstream)
+        .with_replica_reconnect(Duration::from_millis(30), Duration::from_millis(100));
+    let replica = Store::open(cfg).unwrap();
+    for i in 0..50 {
+        server.cmd(&[b"SET", format!("k{i}").as_bytes(), b"v"]);
+    }
+    let all = || (0..50).all(|i| replica.get(format!("k{i}").as_bytes()).unwrap().is_some());
+    assert!(
+        wait_for(Duration::from_secs(5), all),
+        "a sharded replica lost keys to the wrong shard"
+    );
+    drop(replica);
+    server.shutdown();
+}
+
+/// A sharded replica that has to start from a snapshot (the primary's
+/// backlog has rolled past offset 0) puts every key where its reads look.
+#[test]
+fn a_sharded_embed_replica_loads_a_snapshot_into_every_shard() {
+    let server = Server::start();
+    let value = vec![b'x'; 1024];
+    for i in 0..1500 {
+        server.cmd(&[b"SET", format!("s{i}").as_bytes(), &value]);
+    }
+    let upstream = format!("127.0.0.1:{}", server.replication_base);
+    let cfg = Config::default()
+        .with_shards(4)
+        .with_replica_upstream(&upstream)
+        .with_replica_reconnect(Duration::from_millis(30), Duration::from_millis(100));
+    let replica = Store::open(cfg).unwrap();
+    let all = || (0..1500).all(|i| replica.get(format!("s{i}").as_bytes()).unwrap().is_some());
+    assert!(wait_for(Duration::from_secs(10), all), "a snapshot loaded into one shard of four");
+    drop(replica);
+    server.shutdown();
+}
+
 #[test]
 fn fresh_embed_catches_up_against_existing_primary_backlog() {
     // An embed that opens AFTER the primary has already
