@@ -172,6 +172,11 @@ impl Commands for KevyCommands {
         crate::index_runtime::apply_ext(&self.ctx(), store, payload);
     }
 
+    fn extension_targets(&self, argv: &[Vec<u8>]) -> Option<Vec<usize>> {
+        let state = self.state();
+        crate::cmd_index_query::global_targets(&state.catalogs, state.nshards(), argv)
+    }
+
     fn on_flush(&self, store: &mut Store) {
         let bits = self.gate_bits();
         if bits & crate::state::IDX_NONEMPTY != 0 {

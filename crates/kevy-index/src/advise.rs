@@ -23,7 +23,9 @@ pub enum AdviseShape {
     Where(Vec<Vec<u8>>),
     /// `MATCH` on an undeclared text path.
     Match,
-    /// A `FILTER` naming a field the (existing) path does not store.
+    /// A clause naming a field the (existing) path does not store: a
+    /// `FILTER`, or `FIELDS` on a global index, which answers them from
+    /// its stored values.
     Filter(Vec<u8>),
 }
 
