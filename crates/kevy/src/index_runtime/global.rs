@@ -1,0 +1,186 @@
+//! Global indexes: one index spread over the shards by value order. A row
+//! stays on the shard its key hashes to, but its index entry lives in the
+//! partition its value falls in, on the shard that partition's owner is.
+//!
+//! The row's shard keeps, per global index, which partition each of its
+//! rows went to and a hash of what was sent, so a write sends nothing when
+//! the entry did not change, one upsert when it stayed in its partition,
+//! and a delete plus an upsert when it moved. The messages leave through
+//! the runtime's hook-message channel; a client's write waits for them to
+//! be applied before it replies.
+
+use std::collections::HashMap;
+
+use kevy_index::{
+    IndexSpec, IndexValue, Partitioning, Segment, partition_owner, value_order_bytes,
+};
+use kevy_store::Store;
+
+use crate::state::Ctx;
+
+/// One entry change, as the row's shard sends it to a partition's owner.
+#[derive(Debug, PartialEq)]
+pub(crate) enum Delta {
+    /// The row left the partition.
+    Delete { key: Vec<u8> },
+    /// The row's entry in the partition is now this.
+    Upsert { key: Vec<u8>, value: IndexValue, values: Vec<Option<Vec<u8>>> },
+}
+
+/// This shard's part in one global index.
+#[derive(Debug)]
+pub(crate) struct GlobalRole {
+    part: Partitioning,
+    shard: usize,
+    nshards: usize,
+    /// The partitions this shard owns, each with its entries.
+    pub(crate) owned: Vec<(usize, Segment)>,
+    /// This shard's rows: the partition each entry went to, and a hash of
+    /// the entry, so an unchanged write sends nothing.
+    placed: HashMap<Vec<u8>, (u16, u64)>,
+    /// Messages waiting for the runtime to take.
+    pub(crate) outbox: Vec<(usize, Vec<u8>)>,
+}
+
+impl GlobalRole {
+    pub(crate) fn new(spec: &IndexSpec, part: &Partitioning, shard: usize, nshards: usize) -> Self {
+        let owned = (0..part.partitions())
+            .filter(|&p| partition_owner(&spec.name, p, nshards) == shard)
+            .map(|p| (p, super::new_scalar_seg(spec)))
+            .collect();
+        GlobalRole {
+            part: part.clone(),
+            shard,
+            nshards,
+            owned,
+            placed: HashMap::new(),
+            outbox: Vec::new(),
+        }
+    }
+
+    /// Whether this role was built for `part` on this shard layout.
+    pub(crate) fn fits(&self, part: &Partitioning, shard: usize, nshards: usize) -> bool {
+        self.part == *part && self.shard == shard && self.nshards == nshards
+    }
+
+    /// The row at `key` was written (or removed): queue what its entry's
+    /// partition owners must apply.
+    pub(crate) fn on_row(&mut self, store: &mut Store, spec: &IndexSpec, key: &[u8]) {
+        let prev = self.placed.get(key).copied();
+        let Some((value, values)) = derive(store, spec, key) else {
+            if let Some((p, _)) = prev {
+                self.placed.remove(key);
+                self.send(spec, p, Delta::Delete { key: key.to_vec() });
+            }
+            return;
+        };
+        let enc = value_order_bytes(&value);
+        let p = self.part.partition_of(&enc) as u16;
+        let h = entry_hash(&enc, &values);
+        if prev == Some((p, h)) {
+            return;
+        }
+        if let Some((q, _)) = prev
+            && q != p
+        {
+            self.send(spec, q, Delta::Delete { key: key.to_vec() });
+        }
+        self.placed.insert(key.to_vec(), (p, h));
+        self.send(spec, p, Delta::Upsert { key: key.to_vec(), value, values });
+    }
+
+    /// Every row and entry gone (FLUSHALL / FLUSHDB runs on every shard).
+    pub(crate) fn clear(&mut self, spec: &IndexSpec) {
+        self.placed.clear();
+        for (_, seg) in &mut self.owned {
+            *seg = super::new_scalar_seg(spec);
+        }
+    }
+
+    /// Apply a delta a row's shard sent for partition `p`.
+    pub(crate) fn apply(&mut self, p: usize, delta: Delta) {
+        let Some((_, seg)) = self.owned.iter_mut().find(|(q, _)| *q == p) else { return };
+        match delta {
+            Delta::Delete { key } => seg.remove(&key),
+            Delta::Upsert { key, value, values } if values.is_empty() => {
+                seg.apply(&key, Some(value))
+            }
+            Delta::Upsert { key, value, values } => {
+                let refs: Vec<Option<&[u8]>> = values.iter().map(|v| v.as_deref()).collect();
+                seg.apply_with_values(&key, Some(value), &refs);
+            }
+        }
+    }
+
+    fn send(&mut self, spec: &IndexSpec, p: u16, delta: Delta) {
+        let to = partition_owner(&spec.name, p as usize, self.nshards);
+        self.outbox.push((to, super::global_wire::encode(&spec.name, p, &delta)));
+    }
+}
+
+/// The row's entry: its index value and stored VALUES, or `None` when the
+/// row is gone, not a hash, or excluded (a missing or uncoercible field).
+fn derive(
+    store: &mut Store,
+    spec: &IndexSpec,
+    key: &[u8],
+) -> Option<(IndexValue, Vec<Option<Vec<u8>>>)> {
+    let names = spec.scalar_read_names();
+    let w = spec.primary_width();
+    let mut vals = store.peek_hash_fields(key, &names).ok()??;
+    let value = spec.derive_scalar(&vals[..w])?;
+    Some((value, vals.split_off(w)))
+}
+
+/// FNV-1a over the entry's encoded value and stored columns.
+fn entry_hash(enc: &[u8], values: &[Option<Vec<u8>>]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut eat = |bytes: &[u8]| {
+        for &b in (bytes.len() as u64).to_le_bytes().iter().chain(bytes) {
+            h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+        }
+    };
+    eat(enc);
+    for v in values {
+        // a tag first, so an absent column and an empty one differ
+        match v {
+            Some(b) => {
+                eat(&[1]);
+                eat(b);
+            }
+            None => eat(&[0]),
+        }
+    }
+    h
+}
+
+/// The deltas this shard's global indexes queued since the last take
+/// (`Commands::take_ext_out`). Nothing to walk when no index is global.
+pub(crate) fn take_ext_out(ctx: &Ctx<'_>) -> Vec<(usize, Vec<u8>)> {
+    let mut st = ctx.shard.indexes.borrow_mut();
+    if !st.any_global {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for si in &mut st.idx {
+        if let Some(g) = &mut si.global {
+            out.append(&mut g.outbox);
+        }
+    }
+    out
+}
+
+/// Apply a delta another shard's hook sent for a partition this shard owns
+/// (`Commands::apply_ext`).
+pub(crate) fn apply_ext(ctx: &Ctx<'_>, store: &mut Store, payload: &[u8]) {
+    let Some((name, p, delta)) = super::global_wire::decode(payload) else { return };
+    let mut st = ctx.shard.indexes.borrow_mut();
+    super::refresh(ctx, &mut st, store);
+    let st = &mut *st;
+    if let Some(g) =
+        st.idx.iter_mut().find(|si| si.spec.name == name).and_then(|si| si.global.as_mut())
+    {
+        g.apply(p, delta);
+        st.stats_dirty = true;
+    }
+}

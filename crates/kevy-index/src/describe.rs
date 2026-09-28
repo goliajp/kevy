@@ -238,9 +238,10 @@ pub fn describe_index<'a>(
     describe_index_partitioned(s, &Partitioning::Local, tables)
 }
 
-/// [`describe_index`] for an index spread as `part` says: a trailing
-/// `partitioning` pair names it (`local`, or `global` with the split
-/// values), and the declaration carries the `PARTITION` options.
+/// [`describe_index`] for an index spread as `part` says: a
+/// `partitioning` pair before the declaration names it (`local`, or
+/// `global` with the split values), and the declaration carries the
+/// `PARTITION` options.
 ///
 /// ```
 /// use kevy_index::{Described, IndexKind, IndexSpec, Partitioning, ValType, describe_index_partitioned, order_key};
@@ -250,7 +251,7 @@ pub fn describe_index<'a>(
 /// );
 /// let p = Partitioning::Global { splits: vec![order_key(ValType::I64, b"30").unwrap()] };
 /// let Described::Array(fields) = describe_index_partitioned(&s, &p, []) else { unreachable!() };
-/// assert_eq!(fields[26], Described::Bulk(b"partitioning".to_vec()));
+/// assert_eq!(fields[24], Described::Bulk(b"partitioning".to_vec()));
 /// ```
 pub fn describe_index_partitioned<'a>(
     s: &IndexSpec,
@@ -293,10 +294,10 @@ pub fn describe_index_partitioned<'a>(
         composite,
         b("table"),
         owner.map_or_else(|| b("-"), |t| b(&t.name)),
-        b("declaration"),
-        declaration_described(owner.is_some(), s, part),
         b("partitioning"),
         partitioning_described(s, part),
+        b("declaration"),
+        declaration_described(owner.is_some(), s, part),
     ])
 }
 

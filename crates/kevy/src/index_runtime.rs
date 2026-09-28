@@ -50,6 +50,9 @@ struct ShardIndex {
     ann: Option<kevy_vector::Hnsw>,
     /// Populated instead of `seg` for KIND agg.
     agg: Option<kevy_index::AggSegment>,
+    /// This shard's part in a global index (its entries then live in the
+    /// owned partitions, not in `seg`).
+    global: Option<global::GlobalRole>,
     build: BuildState,
 }
 
@@ -67,6 +70,8 @@ pub(crate) struct ShardIndexes {
     /// a consumer's measured 300-500× idle-CPU term (F16a).
     stats_dirty: bool,
     reserved_cache: u64,
+    /// Some index is global, so writes may queue deltas for other shards.
+    any_global: bool,
 }
 
 /// The write-path hook body (`Commands::on_write`). The caller gates
@@ -75,7 +80,7 @@ pub(crate) struct ShardIndexes {
 #[inline]
 pub(crate) fn on_write(ctx: &Ctx<'_>, store: &mut Store, key: &[u8]) {
     let mut st = ctx.shard.indexes.borrow_mut();
-    refresh(&ctx.state.catalogs, &mut st, store);
+    refresh(ctx, &mut st, store);
     let st = &mut *st;
     for si in &mut st.idx {
         if key.starts_with(&si.spec.prefix) {
@@ -89,7 +94,7 @@ pub(crate) fn on_write(ctx: &Ctx<'_>, store: &mut Store, key: &[u8]) {
 /// any windowed index whose boundary moved. Gated like [`on_write`].
 pub(crate) fn on_tick(ctx: &Ctx<'_>, store: &mut Store) {
     let mut st = ctx.shard.indexes.borrow_mut();
-    refresh(&ctx.state.catalogs, &mut st, store);
+    refresh(ctx, &mut st, store);
     let st = &mut *st;
     let segs_dir = shard_segs_dir(ctx.state, ctx.shard.shard_id());
     // Pass 1: backfills, then the scalar slide. The eviction batch's
@@ -133,13 +138,16 @@ pub(crate) fn on_tick(ctx: &Ctx<'_>, store: &mut Store) {
 /// to Ready: its snapshot's keys no longer exist.
 pub(crate) fn on_flush(ctx: &Ctx<'_>, store: &mut Store) {
     let mut st = ctx.shard.indexes.borrow_mut();
-    refresh(&ctx.state.catalogs, &mut st, store);
+    refresh(ctx, &mut st, store);
     let st = &mut *st;
     for si in &mut st.idx {
         si.seg = new_scalar_seg(&si.spec);
         si.text = new_text_seg(&si.spec);
         si.ann = new_ann_seg(&si.spec);
         si.agg = (si.spec.kind == kevy_index::IndexKind::Agg).then(kevy_index::AggSegment::new);
+        if let Some(g) = &mut si.global {
+            g.clear(&si.spec);
+        }
         si.build = BuildState::Ready;
         st.stats_dirty = true;
     }
@@ -149,7 +157,7 @@ pub(crate) fn on_flush(ctx: &Ctx<'_>, store: &mut Store) {
 /// nothing.
 pub(crate) fn reserved_bytes(ctx: &Ctx<'_>, store: &mut Store) -> u64 {
     let mut st = ctx.shard.indexes.borrow_mut();
-    refresh(&ctx.state.catalogs, &mut st, store);
+    refresh(ctx, &mut st, store);
     if !st.stats_dirty {
         return st.reserved_cache;
     }
@@ -157,7 +165,7 @@ pub(crate) fn reserved_bytes(ctx: &Ctx<'_>, store: &mut Store) -> u64 {
         .idx
         .iter()
         .map(|si| {
-            si.seg.stats().approx_bytes
+            si.entries().stats().approx_bytes
                 + si.text.as_ref().map_or(0, |t| t.stats().approx_bytes)
                 + si.ann.as_ref().map_or(0, |g| g.stats().approx_bytes)
                 + si.agg.as_ref().map_or(0, |a| a.stats().approx_bytes)
@@ -178,10 +186,10 @@ pub(crate) fn with_ready_segment<R>(
     f: impl FnOnce(&IndexSpec, &Segment, Option<&kevy_window::WindowRt>) -> R,
 ) -> Result<R, CmdError> {
     let mut st = ctx.shard.indexes.borrow_mut();
-    refresh(&ctx.state.catalogs, &mut st, store);
+    refresh(ctx, &mut st, store);
     let si = st.idx.iter().find(|si| si.spec.name == name).ok_or("ERR no such index")?;
     match si.build {
-        BuildState::Ready => Ok(f(&si.spec, &si.seg, si.window.as_ref())),
+        BuildState::Ready => Ok(f(&si.spec, si.entries(), si.window.as_ref())),
         BuildState::Backfilling { .. } => {
             Err(CmdError::Wire("INDEXBUILDING index is still building"))
         }
@@ -199,7 +207,7 @@ pub(crate) fn with_ready_agg<R>(
     f: impl FnOnce(&kevy_index::AggSegment) -> R,
 ) -> Result<R, CmdError> {
     let mut st = ctx.shard.indexes.borrow_mut();
-    refresh(&ctx.state.catalogs, &mut st, store);
+    refresh(ctx, &mut st, store);
     let si = st.idx.iter().find(|si| si.spec.name == name).ok_or("ERR no such index")?;
     match (&si.build, &si.agg) {
         (BuildState::Ready, Some(a)) => Ok(f(a)),
@@ -221,7 +229,7 @@ pub(crate) fn with_ready_ann<R>(
     f: impl FnOnce(&mut kevy_vector::Hnsw) -> R,
 ) -> Result<R, CmdError> {
     let mut st = ctx.shard.indexes.borrow_mut();
-    refresh(&ctx.state.catalogs, &mut st, store);
+    refresh(ctx, &mut st, store);
     let si = st.idx.iter_mut().find(|si| si.spec.name == name).ok_or("ERR no such index")?;
     match (&si.build, &mut si.ann) {
         (BuildState::Ready, Some(g)) => Ok(f(g)),
@@ -248,7 +256,7 @@ pub(crate) fn with_ready_text_segment<R>(
     ) -> R,
 ) -> Result<R, CmdError> {
     let mut st = ctx.shard.indexes.borrow_mut();
-    refresh(&ctx.state.catalogs, &mut st, store);
+    refresh(ctx, &mut st, store);
     let si = st.idx.iter().find(|si| si.spec.name == name).ok_or("ERR no such index")?;
     match (&si.build, &si.text) {
         (BuildState::Ready, Some(ts)) => Ok(f(store, ts, &si.spec, si.cold_text.as_ref())),
@@ -271,11 +279,14 @@ pub(crate) fn with_segment_resolver<R>(
     f: impl for<'s> FnOnce(&'s dyn Fn(&[u8]) -> Option<&'s Segment>) -> R,
 ) -> R {
     let mut st = ctx.shard.indexes.borrow_mut();
-    refresh(&ctx.state.catalogs, &mut st, store);
+    refresh(ctx, &mut st, store);
     let idx = &st.idx;
+    // a view probes the rows of this shard, which a global index's
+    // entries are not: it resolves to nothing, and the view refuses it
     let resolver = |name: &[u8]| -> Option<&Segment> {
         idx.iter()
             .find(|si| si.spec.name == name && matches!(si.build, BuildState::Ready))
+            .filter(|si| si.global.is_none())
             .map(|si| &si.seg)
     };
     f(&resolver)
@@ -291,12 +302,16 @@ pub(crate) fn with_two_ready_segments<R>(
     f: impl FnOnce(&IndexSpec, &Segment, &IndexSpec, &Segment) -> R,
 ) -> Result<R, CmdError> {
     let mut st = ctx.shard.indexes.borrow_mut();
-    refresh(&ctx.state.catalogs, &mut st, store);
+    refresh(ctx, &mut st, store);
     let ia = st.idx.iter().position(|si| si.spec.name == a).ok_or("ERR no such index")?;
     let ib = st.idx.iter().position(|si| si.spec.name == b).ok_or("ERR no such index")?;
     for i in [ia, ib] {
         if matches!(st.idx[i].build, BuildState::Backfilling { .. }) {
             return Err(CmdError::Wire("INDEXBUILDING index is still building"));
+        }
+        // intersecting per shard needs both entries of a row on the row's shard
+        if st.idx[i].global.is_some() {
+            return Err(CmdError::Wire("ERR COMPOSE does not read a global index"));
         }
     }
     let (sa, sb) = (&st.idx[ia], &st.idx[ib]);
@@ -306,7 +321,7 @@ pub(crate) fn with_two_ready_segments<R>(
 /// Whether this shard's slice of `name` is still backfilling.
 pub(crate) fn segment_building(ctx: &Ctx<'_>, store: &mut Store, name: &[u8]) -> bool {
     let mut st = ctx.shard.indexes.borrow_mut();
-    refresh(&ctx.state.catalogs, &mut st, store);
+    refresh(ctx, &mut st, store);
     st.idx
         .iter()
         .find(|si| si.spec.name == name)
@@ -363,7 +378,9 @@ fn new_text_seg(spec: &kevy_index::IndexSpec) -> Option<kevy_text::TextSegment> 
 /// Reconcile this shard's segment list with the shared catalog:
 /// keep segments whose spec is unchanged, start backfills for new
 /// ones, drop removed ones.
-fn refresh(catalogs: &CatalogState, st: &mut ShardIndexes, store: &mut Store) {
+fn refresh(ctx: &Ctx<'_>, st: &mut ShardIndexes, store: &mut Store) {
+    let catalogs = &ctx.state.catalogs;
+    let (shard, n) = (ctx.shard.shard_id(), ctx.state.nshards());
     let generation = catalogs.index_gen();
     if st.generation == generation {
         return;
@@ -373,7 +390,12 @@ fn refresh(catalogs: &CatalogState, st: &mut ShardIndexes, store: &mut Store) {
     let mut next: Vec<ShardIndex> = Vec::new();
     if let Some(cat) = cat {
         for (spec, _state) in cat.iter() {
-            match st.idx.iter().position(|si| si.spec == *spec) {
+            let part = cat.partitioning(&spec.name);
+            let same = |si: &ShardIndex| {
+                si.spec == *spec
+                    && si.global.as_ref().map_or(!part.is_global(), |g| g.fits(part, shard, n))
+            };
+            match st.idx.iter().position(same) {
                 Some(i) => {
                     let mut si = st.idx.swap_remove(i);
                     // The index spec survived, but the table's WINDOW
@@ -391,12 +413,30 @@ fn refresh(catalogs: &CatalogState, st: &mut ShardIndexes, store: &mut Store) {
                     }
                     next.push(si);
                 }
-                None => next.push(fresh_shard_index(catalogs, spec, store)),
+                None => {
+                    let mut si = fresh_shard_index(catalogs, spec, store);
+                    si.global =
+                        part.is_global().then(|| global::GlobalRole::new(spec, part, shard, n));
+                    next.push(si);
+                }
             }
         }
     }
+    st.any_global = next.iter().any(|si| si.global.is_some());
     st.idx = next;
     st.generation = generation;
+}
+
+impl ShardIndex {
+    /// The entries this shard answers for: its own rows' for a local
+    /// index, the partition it owns for a global one (none when it owns
+    /// none — P ≤ N, and each partition has its own shard).
+    fn entries(&self) -> &Segment {
+        match &self.global {
+            Some(g) => g.owned.first().map_or(&self.seg, |(_, seg)| seg),
+            None => &self.seg,
+        }
+    }
 }
 
 /// A just-declared index's runtime entry. Snapshots the domain's keys
@@ -413,6 +453,7 @@ fn fresh_shard_index(catalogs: &CatalogState, spec: &IndexSpec, store: &mut Stor
         seg: new_scalar_seg(spec),
         window: window_for(catalogs, spec).map(|(w, sh)| kevy_window::WindowRt::new(w, sh)),
         cold_text: text_window_for(catalogs, spec).then(TextColdDir::new),
+        global: None,
         spec: spec.clone(),
         build: BuildState::Backfilling { keys, pos: 0 },
     }
@@ -424,6 +465,9 @@ use window_slide::{
     evict_and_slide, freeze_text_batches, shard_segs_dir, table_of, text_window_for, window_driver,
     window_for,
 };
+mod global;
+pub(crate) use global::{apply_ext, take_ext_out};
+mod global_wire;
 mod row_apply;
 pub(crate) use row_apply::{RowValue, row_value};
 use row_apply::{advance_backfill, apply_row};
