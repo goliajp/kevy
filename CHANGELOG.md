@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- **Closing an embedded store returns at once.** Closing joins the
+  background reaper thread, which slept out its tick without looking at
+  the stop signal, so every close waited up to the reaper interval
+  (100 ms by default) — on an iPhone 15, closing a store just after
+  opening it took 110 ms. The reaper now wakes when the store closes.
+
+- **Opening an embedded store is about 2.8× faster.** Two passes over the
+  data were redundant: open serialised the whole keyspace to estimate the
+  auto-rewrite baseline, which cannot change any rewrite decision while
+  the log is under half of `auto_aof_rewrite_min_size` (64 MiB by
+  default) and no staleness trigger is set; and it walked each AOF a
+  second time to find a torn tail the replay had just shown was not
+  there. Replay also reuses one argument buffer across records instead of
+  allocating one per record. Opening 10,000 keys of 256 bytes went from
+  5.4 ms to 1.9 ms on an M-series Mac; 50,000 from 32 ms to 9.4 ms.
+  `kevy_persist::replay_aof_in_place` is the new by-reference replay
+  entry.
+
 - **A client connecting while the server starts is no longer reset.** The
   check that refuses a port another server listens on opened a listener
   for a moment and closed it; a connect that arrived in that moment was
