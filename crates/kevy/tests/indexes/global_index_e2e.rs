@@ -648,3 +648,33 @@ fn a_sampled_global_index_created_inside_multi() {
     wait_ready(&mut w, b"g");
     assert_eq!(described_splits(&mut w, b"g"), [25, 50, 75]);
 }
+
+/// `(entries, bytes)` of `name` from `IDX.LIST`.
+fn listed_size(w: &mut Wire, name: &str) -> (u64, u64) {
+    let list = text(&call(w, &[b"IDX.LIST"]));
+    let at = list.find(&format!("\r\n{name}\r\n")).expect("listed");
+    let row: Vec<&str> = list[at..].split("\r\n").filter(|s| !s.starts_with(['*', '$'])).collect();
+    let get = |k: &str| row.iter().position(|s| *s == k).map(|i| row[i + 1].parse().unwrap());
+    (get("entries").unwrap(), get("bytes").unwrap())
+}
+
+#[test]
+fn a_global_index_counts_its_placement_table_in_its_bytes() {
+    let srv = Server::start(4);
+    let mut w = srv.wire();
+    create(&mut w, b"age_l", &[]);
+    create(
+        &mut w,
+        b"age_g",
+        &[b"PARTITION", b"global", b"SPLIT", b"25", b"SPLIT", b"50", b"SPLIT", b"75"],
+    );
+    load(&mut w, 0, 20_000, |i| i % 100);
+    let (le, lb) = listed_size(&mut w, "age_l");
+    let (ge, gb) = listed_size(&mut w, "age_g");
+    assert_eq!((le, ge), (20_000, 20_000));
+    let per_row = |b: u64| b as f64 / 20_000.0;
+    eprintln!("bytes per row: local {:.1}, global {:.1}", per_row(lb), per_row(gb));
+    // the partitions hold what the local index holds; the rest is placement
+    let placement = gb.saturating_sub(lb) as f64 / 20_000.0;
+    assert!(placement > 20.0, "the placement table is counted: {placement:.1} bytes a row");
+}

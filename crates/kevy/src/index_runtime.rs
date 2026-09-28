@@ -166,6 +166,7 @@ pub(crate) fn reserved_bytes(ctx: &Ctx<'_>, store: &mut Store) -> u64 {
         .iter()
         .map(|si| {
             si.entries().stats().approx_bytes
+                + si.global.as_ref().map_or(0, |g| g.placed_bytes())
                 + si.text.as_ref().map_or(0, |t| t.stats().approx_bytes)
                 + si.ann.as_ref().map_or(0, |g| g.stats().approx_bytes)
                 + si.agg.as_ref().map_or(0, |a| a.stats().approx_bytes)
@@ -320,6 +321,15 @@ pub(crate) fn with_two_ready_segments<R>(
     }
     let (sa, sb) = (&st.idx[ia], &st.idx[ib]);
     Ok(f(&sa.spec, &sa.seg, &sb.spec, &sb.seg))
+}
+
+/// The placement table's bytes of global index `name` on this shard (0 for
+/// a local index): IDX.LIST adds it to the entries' bytes.
+pub(crate) fn placed_bytes(ctx: &Ctx<'_>, store: &mut Store, name: &[u8]) -> u64 {
+    let mut st = ctx.shard.indexes.borrow_mut();
+    refresh(ctx, &mut st, store);
+    let si = st.idx.iter().find(|si| si.spec.name == name);
+    si.and_then(|si| si.global.as_ref()).map_or(0, |g| g.placed_bytes())
 }
 
 /// Whether this shard's slice of `name` is still backfilling.

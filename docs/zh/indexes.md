@@ -75,7 +75,7 @@ TABLE.DECLARE user PREFIX user: PK id COLUMN id i64 COLUMN age i64 INDEX age ran
 - **种类与限制。** 只支持 `range` 和 `unique`。不能用于 `COMPOSE` 和视图（两者都要求行的条目和行在同一个 shard），不能用于窗口表，也不能用于嵌入式存储，都会点名拒绝。
 - **建造。** 在每个 shard 都把自己已有行的条目发完之前，查询回答 `-INDEXBUILDING`；查询不会看到不完整的分区。
 - **运维。** `IDX.LIST` 给每个索引报 `partitioning`，全局索引另外报 `partitions`、`max_entries`、`mean_entries`，倾斜程度就是后两者之比。`IDX.REBUILD <name>` 重新采样并重建。`IDX.VERIFY` 把每一行和它所在分区持有的条目逐一对账，所以 `drift` 和 `missing` 是精确值，全局唯一索引的 `duplicates` 覆盖整个键空间（本地唯一索引只看得到同一个 shard 内的重复）。分区数多于 shard 数时重启，会均匀保留一部分分裂点。
-- **内存。** 条目本身的开销和本地索引一样；此外，行所在的 shard 为每个全局索引保存每行键的一份拷贝，连同它的分区号和条目哈希，用来判断一次写入要发哪些消息。
+- **内存。** 条目本身的开销和本地索引一样；此外，行所在的 shard 为每个全局索引保存每行的键，连同它的分区号和条目哈希，用来判断一次写入要发哪些消息：每行约 `key_len + 28…64` 字节（一个 24 字节的槽位按表的负载摊开，再加上键）。`IDX.LIST` 和 `IDX.VERIFY` 的 `bytes` 包含这一部分。
 
 ## 一致性与成本模型
 
