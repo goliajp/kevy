@@ -55,8 +55,7 @@ impl<C: Commands> Shard<C> {
             }
         }
         if dst_shard == self.id {
-            let part = self.exec_op(op);
-            self.fold(conn_id, seq, part);
+            self.exec_local(conn_id, seq, op);
         } else {
             self.send_to(dst_shard, Inbound::Request { origin: self.id, conn: conn_id, seq, op });
         }

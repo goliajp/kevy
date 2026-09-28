@@ -294,20 +294,31 @@ pub fn describe_index_partitioned<'a>(
         b("table"),
         owner.map_or_else(|| b("-"), |t| b(&t.name)),
         b("declaration"),
-        if owner.is_some() || s.composite.is_some() {
-            b("-")
-        } else {
-            argv(index_declaration_partitioned(s, part))
-        },
+        declaration_described(owner.is_some(), s, part),
         b("partitioning"),
-        match part {
-            Partitioning::Local => b("local"),
-            Partitioning::Global { .. } => {
-                let splits = part.split_values(s.ty).into_iter().map(b).collect();
-                Described::Array(vec![b("global"), Described::Array(splits)])
-            }
-        },
+        partitioning_described(s, part),
     ])
+}
+
+/// The `IDX.CREATE` that recreates the index — `-` for one a table
+/// compiled (its table recreates it) or a composite (no such spelling).
+fn declaration_described(from_table: bool, s: &IndexSpec, part: &Partitioning) -> Described {
+    if from_table || s.composite.is_some() {
+        b("-")
+    } else {
+        argv(index_declaration_partitioned(s, part))
+    }
+}
+
+/// `local`, or `global` with its split values.
+fn partitioning_described(s: &IndexSpec, part: &Partitioning) -> Described {
+    match part {
+        Partitioning::Local => b("local"),
+        Partitioning::Global { .. } => {
+            let splits = part.split_values(s.ty).into_iter().map(b).collect();
+            Described::Array(vec![b("global"), Described::Array(splits)])
+        }
+    }
 }
 
 fn index_ann(s: &IndexSpec) -> Described {

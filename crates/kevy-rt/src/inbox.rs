@@ -275,8 +275,12 @@ impl<C: Commands> Shard<C> {
                 match msg {
                     Inbound::Request { origin, conn, seq, op } => {
                         let part = self.exec_op(op);
-                        self.send_to(origin, Inbound::Response { conn, seq, part });
+                        self.reply_forwarded(origin, None, conn, seq, part);
                     }
+                    Inbound::ExtDelta { from, token, payload } => {
+                        self.on_ext_delta(from, token, &payload)
+                    }
+                    Inbound::ExtAck { token } => self.on_ext_ack_flush::<DIRECT_FLUSH>(token)?,
                     Inbound::Response { conn, seq, part } => {
                         self.xshard_inflight = self.xshard_inflight.saturating_sub(1);
                         self.fold(conn, seq, part);
@@ -306,6 +310,10 @@ impl<C: Commands> Shard<C> {
                         self.aof_begin_fsync_window();
                         for (conn, seq, argv, proto, meta) in reqs {
                             let part = self.run_dispatch(&argv, proto, meta);
+                            let Some(part) = self.part_unless_held(origin, w0, conn, seq, part)
+                            else {
+                                continue;
+                            };
                             // The spent argv husk rides home with the reply;
                             // the origin pools it (see `RespBatch`).
                             resps.push((conn, seq, part, argv));

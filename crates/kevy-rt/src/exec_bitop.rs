@@ -69,8 +69,7 @@ impl<C: Commands> Shard<C> {
         self.push_pending_slot(conn_id, targets.len() as u32, agg, false);
         for (shard, op) in targets {
             if shard == self.id {
-                let part = self.exec_op(op);
-                self.fold(conn_id, seq, part);
+                self.exec_local(conn_id, seq, op);
             } else {
                 let origin = self.id;
                 self.send_to(shard, Inbound::Request { origin, conn: conn_id, seq, op });
@@ -135,8 +134,7 @@ impl<C: Commands> Shard<C> {
         self.rearm_bitop_slot(conn_id, seq);
         let put = Op::BitOpResult { key: dst, value };
         if dst_shard == self.id {
-            let part = self.exec_op(put);
-            self.fold(conn_id, seq, part);
+            self.exec_local(conn_id, seq, put);
         } else {
             let origin = self.id;
             self.send_to(dst_shard, Inbound::Request { origin, conn: conn_id, seq, op: put });

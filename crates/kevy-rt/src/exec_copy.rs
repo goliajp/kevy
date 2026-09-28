@@ -161,8 +161,7 @@ impl<C: Commands> Shard<C> {
     /// Run `op` here, or ship it to the shard that owns the key.
     fn send_or_run(&mut self, conn_id: u64, seq: u64, shard: usize, op: Op) {
         if shard == self.id {
-            let part = self.exec_op(op);
-            self.fold(conn_id, seq, part);
+            self.exec_local(conn_id, seq, op);
         } else {
             let origin = self.id;
             self.send_to(shard, Inbound::Request { origin, conn: conn_id, seq, op });

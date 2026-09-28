@@ -122,8 +122,7 @@ impl<C: Commands> Shard<C> {
     /// as a cross-core request. Both arms land in `fold`.
     fn dispatch_op(&mut self, conn_id: u64, seq: u64, shard: usize, op: Op) {
         if shard == self.id {
-            let part = self.exec_op(op);
-            self.fold(conn_id, seq, part);
+            self.exec_local(conn_id, seq, op);
         } else {
             self.send_to(shard, Inbound::Request { origin: self.id, conn: conn_id, seq, op });
         }

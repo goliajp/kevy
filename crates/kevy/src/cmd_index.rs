@@ -367,7 +367,11 @@ fn parse_create_opts<A: ArgvView + ?Sized>(
         if i + 1 >= args.len() {
             break;
         }
-        apply_create_opt(&args[i], &args[i + 1], &mut o, out)?;
+        let (opt, val) = (&args[i], &args[i + 1]);
+        match crate::cmd_index_install::apply_partition_opt(opt, val, &mut o.partition, out) {
+            Some(r) => r?,
+            None => apply_create_opt(opt, val, &mut o, out)?,
+        }
         i += 2;
     }
     Ok(o)
@@ -381,10 +385,6 @@ fn apply_create_opt(
     o: &mut CreateOpts,
     out: &mut Vec<u8>,
 ) -> Result<(), ()> {
-    if let Some(r) = crate::cmd_index_install::apply_partition_opt(opt, val, &mut o.partition, out)
-    {
-        return r;
-    }
     let parsed: Option<u64> = std::str::from_utf8(val).ok().and_then(|s| s.parse().ok());
     if opt.eq_ignore_ascii_case(b"WITH") {
         // A bare flag written as a key/value pair so it fits the

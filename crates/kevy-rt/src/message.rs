@@ -384,6 +384,18 @@ pub(crate) enum Inbound {
         origin: usize,
         conn: u64,
     },
+    /// A command layer's hook message for this shard
+    /// ([`crate::Commands::apply_ext`]); a nonzero `token` is acknowledged
+    /// with [`Inbound::ExtAck`] once applied.
+    ExtDelta {
+        from: usize,
+        token: u64,
+        payload: Vec<u8>,
+    },
+    /// A shard applied an [`Inbound::ExtDelta`] this shard waits on.
+    ExtAck {
+        token: u64,
+    },
     /// origin → src's shard: a cross-shard RENAME's put committed on the
     /// destination, so the source may now record its half (the delete).
     /// Sent only after the put succeeded — see

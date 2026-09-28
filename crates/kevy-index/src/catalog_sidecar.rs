@@ -46,49 +46,55 @@ impl Catalog {
         };
         let mut out = String::from(header);
         for (s, _) in &self.specs {
-            let _ = write!(
-                out,
-                "{}\t{}\t{}\t{}\t{}\t{}",
-                esc(&s.name),
-                esc(&s.prefix),
-                fields_to_col(&s.fields),
-                s.ty.tag(),
-                s.kind.tag(),
-                s.max_bytes
-            );
-            // 7th column is kind-interpreted: ann params for Ann,
-            // escaped group field for Agg, and `pos` for a text index
-            // created WITH POSITIONS (v3). The three are mutually
-            // exclusive — a kind is at most one of Ann / Agg / Text.
-            if let Some(a) = &s.ann {
-                let _ = write!(out, "\t{},{},{},{}", a.dim, a.distance, a.m, a.ef);
-            } else if let Some(g) = &s.group_by {
-                let _ = write!(out, "\t{}", esc(g));
-            } else if let Some(cols) = &s.composite {
-                // v6: a composite (ORDERPATH) index's 7th column —
-                // head `comp`, then `name:ty:a|d` per column.
-                let _ = write!(out, "\t{}", composite_col_text(cols));
-            } else if let Some(col) = values_col(s) {
-                // Text (v3+) and, from v5, the scalar kinds: the same
-                // `pos|-,name:ty,…` column, `pos` being text-only.
-                let _ = write!(out, "\t{col}");
-            } else if self.partitioning(&s.name).is_global() {
-                // an empty 7th column holds the place of the 8th
-                out.push('\t');
-            }
-            // v7: a global index's 8th column, `g` then `,<hex>` per split
-            if let crate::Partitioning::Global { splits } = self.partitioning(&s.name) {
-                out.push_str("\tg");
-                for sp in splits {
-                    out.push(',');
-                    for b in sp {
-                        let _ = write!(out, "{b:02x}");
-                    }
-                }
-            }
-            out.push('\n');
+            self.write_line(&mut out, s);
         }
         out
+    }
+
+    /// One index's sidecar line: six columns, the kind's 7th, and a global
+    /// index's 8th.
+    fn write_line(&self, out: &mut String, s: &IndexSpec) {
+        let _ = write!(
+            out,
+            "{}\t{}\t{}\t{}\t{}\t{}",
+            esc(&s.name),
+            esc(&s.prefix),
+            fields_to_col(&s.fields),
+            s.ty.tag(),
+            s.kind.tag(),
+            s.max_bytes
+        );
+        // 7th column is kind-interpreted: ann params for Ann,
+        // escaped group field for Agg, and `pos` for a text index
+        // created WITH POSITIONS (v3). The three are mutually
+        // exclusive — a kind is at most one of Ann / Agg / Text.
+        if let Some(a) = &s.ann {
+            let _ = write!(out, "\t{},{},{},{}", a.dim, a.distance, a.m, a.ef);
+        } else if let Some(g) = &s.group_by {
+            let _ = write!(out, "\t{}", esc(g));
+        } else if let Some(cols) = &s.composite {
+            // v6: a composite (ORDERPATH) index's 7th column —
+            // head `comp`, then `name:ty:a|d` per column.
+            let _ = write!(out, "\t{}", composite_col_text(cols));
+        } else if let Some(col) = values_col(s) {
+            // Text (v3+) and, from v5, the scalar kinds: the same
+            // `pos|-,name:ty,…` column, `pos` being text-only.
+            let _ = write!(out, "\t{col}");
+        } else if self.partitioning(&s.name).is_global() {
+            // an empty 7th column holds the place of the 8th
+            out.push('\t');
+        }
+        // v7: a global index's 8th column, `g` then `,<hex>` per split
+        if let crate::Partitioning::Global { splits } = self.partitioning(&s.name) {
+            out.push_str("\tg");
+            for sp in splits {
+                out.push(',');
+                for b in sp {
+                    let _ = write!(out, "{b:02x}");
+                }
+            }
+        }
+        out.push('\n');
     }
 
     /// Parse the sidecar text form; all indexes load as `Building`
