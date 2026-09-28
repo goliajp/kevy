@@ -7,7 +7,8 @@ runs, so merges that were green locally went red on develop, several in a
 row. The `premerge` tier holds what CI runs; this keeps it that way.
 
 Every verdict-bearing command in `.github/workflows/ci.yml` must either be
-the command of a manifest row in `premerge` or below, or be listed under
+the command of a manifest row in `premerge` or below (`prerelease` for a job
+CI runs only on release and hotfix branches), or be listed under
 `[suite.ci_only]` with the reason it cannot run there. A key matches its
 command exactly, or every command it prefixes when it ends in ` *` — a
 bare `cargo test` must not excuse the next unlisted `cargo test -p …`. A
@@ -62,10 +63,14 @@ def norm(cmd):
 
 
 def ci_commands():
-    """(line, command, env keys the command runs under)."""
-    out, env, env_indent = [], set(), None
+    """(line, command, env keys the command runs under, the tier it needs)."""
+    out, env, env_indent, tier = [], set(), None, "premerge"
     for n, line in enumerate(CI.read_text(encoding="utf-8").splitlines(), 1):
         indent = len(line) - len(line.lstrip())
+        if re.match(r"^  [a-z0-9_-]+:\s*$", line):
+            tier = "premerge"
+        if re.match(r"^    if:.*refs/heads/release/", line):
+            tier = "prerelease"
         if re.match(r"^\s*- ", line):
             env, env_indent = set(), None
         if env_indent is not None:
@@ -81,7 +86,7 @@ def ci_commands():
         inline = set(re.findall(r"^([A-Z_][A-Z0-9_]*)=", s))
         s = re.sub(r"^([A-Z_][A-Z0-9_]*=\S*\s+)+", "", s)
         if VERDICT.match(s) and not s.startswith("cargo build"):
-            out.append((n, norm(s.rstrip("\\").strip()), (env | inline) - CREDENTIALS))
+            out.append((n, norm(s.rstrip("\\").strip()), (env | inline) - CREDENTIALS, tier))
     return out
 
 
@@ -108,13 +113,17 @@ def main():
     if not seen:
         refuse(f"read no commands from {CI.relative_to(ROOT)}")
     bad, used = [], set()
-    for line, cmd, env in seen:
+    for line, cmd, env, need in seen:
         hits = [(i, t, raw) for i, t, rc, raw in rows if cmd == rc]
         if hits:
-            late = [i for i, t, _ in hits if rank[t] > rank["premerge"]]
+            late = [i for i, t, _ in hits if rank[t] > rank[need]]
             if len(late) == len(hits):
                 bad.append(f"ci.yml:{line}: `{cmd}` is row {late[0]}, which runs only in "
-                           f"{hits[0][1]} — CI runs it on every push")
+                           f"{hits[0][1]} — CI runs it by {need}")
+            early = [i for i, t, _ in hits if need == "prerelease" and rank[t] < rank[need]]
+            for i in early:
+                bad.append(f"ci.yml:{line}: row {i} runs `{cmd}` before prerelease, but CI "
+                           f"runs it only on release and hotfix branches")
             for i, _, raw in hits:
                 missing = sorted(k for k in env if f"{k}=" not in raw)
                 if missing:
@@ -134,7 +143,7 @@ def main():
         print(f"ci-parity: {b}")
     if bad:
         return 1
-    print(f"ci-parity: ok — {len(seen)} CI commands, each in a row by premerge "
+    print(f"ci-parity: ok — {len(seen)} CI commands, each in a row by the tier CI runs it at "
           f"or under one of {len(used)} CI-only reasons")
     return 0
 
