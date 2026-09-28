@@ -37,7 +37,7 @@ impl Drop for Server {
 }
 
 fn start() -> Server {
-    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let port = kevy_testnet::free_port();
     let dir = std::env::temp_dir().join(format!("kevy-uds-{port}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();

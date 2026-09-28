@@ -20,7 +20,7 @@ fn cmd(s: &mut std::net::TcpStream, parts: &[&[u8]]) -> Vec<u8> {
 
 #[test]
 fn listener_reads_live_store_rejects_writes() {
-    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let port = kevy_testnet::free_port();
     let addr: std::net::SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
     let store = Store::open(
         Config::default().with_ttl_reaper_manual().with_resp_listener(addr).with_feed(1 << 20),
@@ -109,7 +109,7 @@ fn listener_reads_live_store_rejects_writes() {
 #[test]
 fn listener_info_tiering_carries_every_documented_field() {
     let dir = kevy_tmpdir::TmpDir::new("listener-tier-info");
-    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let port = kevy_testnet::free_port();
     let addr: std::net::SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
     let store = Store::open(
         Config::default()

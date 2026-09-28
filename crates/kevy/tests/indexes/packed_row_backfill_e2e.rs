@@ -48,13 +48,13 @@ struct Server {
 
 impl Server {
     fn start() -> Self {
-        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let port = kevy_testnet::free_port();
         Self::spawn(port, std::env::temp_dir().join(format!("kevy-packbf-{port}")), true)
     }
 
     /// A server over an existing data directory — the restart half.
     fn start_in(dir: &std::path::Path) -> Self {
-        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let port = kevy_testnet::free_port();
         Self::spawn(port, dir.to_path_buf(), false)
     }
 
