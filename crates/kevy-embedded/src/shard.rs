@@ -123,9 +123,13 @@ fn build_shards_persist(
     // for a short-lived process re-opening the same directory resets the
     // growth ratio every run — the log then grows without bound while the
     // live keyspace stays tiny (a CLI reusing one store directory paid
-    // 100 MB of file for 3 live keys). The estimate is O(keys), zero-alloc.
+    // 100 MB of file for 3 live keys). The estimate serialises every key,
+    // so it runs only where the baseline can change a decision.
+    let policy = config.rewrite_policy();
     for (aof, store) in aofs.iter_mut().zip(stores.iter()) {
-        if let Some(aof) = aof {
+        if let Some(aof) = aof
+            && policy.baseline_matters(aof.size_bytes())
+        {
             aof.anchor_rewrite_baseline(kevy_persist::estimate_rewrite_size(store));
         }
     }

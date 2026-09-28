@@ -213,6 +213,17 @@ impl Default for Config {
 }
 
 impl Config {
+    /// The auto-rewrite rules this config asks for.
+    #[cfg(feature = "persist")]
+    pub(crate) fn rewrite_policy(&self) -> kevy_persist::RewritePolicy {
+        kevy_persist::RewritePolicy {
+            pct: self.auto_aof_rewrite_pct,
+            min_size: self.auto_aof_rewrite_min_size,
+            bytes: self.auto_aof_rewrite_bytes,
+            interval_secs: self.auto_aof_rewrite_interval_secs,
+        }
+    }
+
     /// Enable the read-only RESP listener on `addr`
     /// (e.g. `"127.0.0.1:6009".parse().unwrap()`).
     #[cfg(feature = "listener")]
