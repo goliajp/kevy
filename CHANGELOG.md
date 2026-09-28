@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **A server refuses a port another server already holds.** Every shard
+  listens with `SO_REUSEPORT`, and on its own that let a second kevy
+  started by the same user on the same port join the first one's
+  listeners: both ran, and each took a share of the connections, so writes
+  seemed to vanish from whichever one a client read back. The server now
+  claims the port once without `SO_REUSEPORT` before its shards bind, and
+  a port in use stops startup with `Address already in use`, as Redis
+  does.
+
 - **The embedded `everysec` fsync no longer holds the shard lock.** The
   background reaper ran `fdatasync` (`F_FULLFSYNC` on Apple platforms)
   while holding the shard's write lock, so every write to that shard
