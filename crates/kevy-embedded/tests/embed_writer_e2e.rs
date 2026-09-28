@@ -232,3 +232,60 @@ fn writer_restart_generation_fence_ships_instead_of_aliasing() {
         );
     }
 }
+
+/// A writer with no AOF still records a stream write for its subscribers
+/// as what it did: a generated ID as the ID it gave, a group read as the
+/// group's move and the delivery with its time. A subscriber applying the
+/// frames holds the writer's IDs and pending list.
+#[cfg(feature = "streams-geo")]
+#[test]
+fn embed_writer_sends_stream_writes_as_what_they_did() {
+    let (writer, addr) = open_writer(Config::default());
+    writer.set(b"seed", b"x").unwrap();
+    let mut client = ReplicaClient::connect(addr.as_str(), "sub-streams", 0).unwrap();
+    drain_snapshot(&mut client);
+    let call = |cmd: &str| {
+        let argv: Vec<Vec<u8>> = cmd.split(' ').map(|p| p.as_bytes().to_vec()).collect();
+        let mut out = Vec::new();
+        writer.dispatch_argv(&argv, &mut out);
+        String::from_utf8_lossy(&out).into_owned()
+    };
+    let words = |f: &kevy_replicate::replica::DecodedFrame| -> Vec<String> {
+        argv_to_vecvec(&f.argv).iter().map(|p| String::from_utf8_lossy(p).into_owned()).collect()
+    };
+    let id = call("XADD s * f v").split("\r\n").nth(1).expect("an id").to_string();
+    assert_eq!(
+        words(&next_frame(&mut client, Duration::from_secs(2))),
+        ["XADD", "s", &id, "f", "v"]
+    );
+    assert_eq!(call("XGROUP CREATE s g 0"), "+OK\r\n");
+    next_frame(&mut client, Duration::from_secs(2));
+    let now =
+        || std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis();
+    let (from, read, to) = (now(), call("XREADGROUP GROUP g c STREAMS s >"), now());
+    assert!(read.starts_with("*1\r\n"), "{read}");
+    let setid = words(&next_frame(&mut client, Duration::from_secs(2)));
+    assert_eq!(setid, ["XGROUP", "SETID", "s", "g", &id]);
+    let claim = words(&next_frame(&mut client, Duration::from_secs(2)));
+    assert_eq!(claim[..6], ["XCLAIM", "s", "g", "c", "0", &id]);
+    assert_eq!(claim[8..], ["RETRYCOUNT", "1", "FORCE", "JUSTID"]);
+    let at: u128 = claim[7].parse().expect("a delivery time");
+    assert!((from..=to).contains(&at), "delivered at {at}, read between {from} and {to}");
+    // a store applying what the subscriber got holds the writer's state
+    let mirror = Store::open(Config::default()).unwrap();
+    let frames = [
+        vec![b"XADD".to_vec(), b"s".to_vec(), id.as_bytes().to_vec(), b"f".to_vec(), b"v".to_vec()],
+        ["XGROUP", "CREATE", "s", "g", "0"].iter().map(|p| p.as_bytes().to_vec()).collect(),
+        setid.iter().map(|p| p.as_bytes().to_vec()).collect(),
+        claim.iter().map(|p| p.as_bytes().to_vec()).collect(),
+    ];
+    for f in frames {
+        mirror.apply_frame(&kevy_persist::Argv::from(f));
+    }
+    for read in ["XRANGE s - +", "XINFO GROUPS s", "XPENDING s g"] {
+        let argv: Vec<Vec<u8>> = read.split(' ').map(|p| p.as_bytes().to_vec()).collect();
+        let mut out = Vec::new();
+        mirror.dispatch_argv(&argv, &mut out);
+        assert_eq!(String::from_utf8_lossy(&out), call(read), "{read}");
+    }
+}

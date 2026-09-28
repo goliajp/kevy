@@ -1,13 +1,9 @@
-//! `XADD` / `XLEN` / `XRANGE` / `XREVRANGE` / `XDEL` / `XTRIM` /
-//! `XREAD` + the consumer-group family (`XGROUP` / `XREADGROUP` /
-//! `XACK` / `XPENDING` / `XCLAIM` / `XAUTOCLAIM`) — v2-7 sprints A
-//! (basics) and B (groups). XINFO + blocking reads land in sprints C
-//! and D respectively. Backed by `kevy_store::StreamData` — no new
-//! store value variant.
-//!
-//! Sub-modules:
-//! - `mod.rs` (this file) — dispatch entry + sprint A commands.
-//! - `group.rs` — sprint B (consumer-group commands).
+//! The stream commands: `XADD`, `XLEN`, `XRANGE`, `XREVRANGE`, `XDEL`,
+//! `XTRIM`, `XSETID`, `XREAD` and the consumer-group family (`XGROUP`,
+//! `XREADGROUP`, `XACK`, `XPENDING`, `XCLAIM`, `XAUTOCLAIM`, `XINFO`),
+//! over `kevy_store::StreamData`. A read with `BLOCK` that finds nothing
+//! new writes no reply at all, so a caller that can park a connection
+//! does so and runs the command again when the stream grows.
 
 // The discarded value is the operation's own count — how many fields
 // went, how many members landed — and the caller returns its own.
@@ -17,6 +13,7 @@
 )]
 
 mod claim;
+mod claim_record;
 mod group;
 mod info;
 mod read;
@@ -36,18 +33,18 @@ use kevy_store::{
 /// stream (key + entries).
 pub(super) type StreamReply = (Vec<u8>, EntryBatch);
 
-use crate::cmd::{store_err, wrong_args};
+use crate::Effect;
+use crate::reply::{store_err, wrong_args};
 
-/// Dispatch table for the basic XADD/range/read verbs. Returns `true`
-/// if `cmd` matched (and a reply was written).
-pub(crate) fn dispatch_stream<A: ArgvView + ?Sized>(
+/// One stream command; `None` = the verb is not in this group.
+pub(crate) fn exec<A: ArgvView + ?Sized>(
     cmd: &[u8],
     store: &mut Store,
     args: &A,
     out: &mut Vec<u8>,
-) -> bool {
+) -> Option<Effect> {
     match cmd {
-        b"XADD" => cmd_xadd(store, args, out),
+        b"XADD" => return Some(cmd_xadd(store, args, out)),
         b"XLEN" => cmd_xlen(store, args, out),
         b"XRANGE" => cmd_range(store, args, out, /*rev=*/ false),
         b"XREVRANGE" => cmd_range(store, args, out, /*rev=*/ true),
@@ -56,49 +53,78 @@ pub(crate) fn dispatch_stream<A: ArgvView + ?Sized>(
         b"XSETID" => setid::cmd_xsetid(store, args, out),
         b"XREAD" => cmd_xread(store, args, out),
         b"XGROUP" => group::cmd_xgroup(store, args, out),
-        b"XREADGROUP" => group::cmd_xreadgroup(store, args, out),
+        b"XREADGROUP" => return Some(group::cmd_xreadgroup(store, args, out)),
         b"XACK" => group::cmd_xack(store, args, out),
         b"XPENDING" => group::cmd_xpending(store, args, out),
-        b"XCLAIM" => claim::cmd_xclaim(store, args, out),
-        b"XAUTOCLAIM" => claim::cmd_xautoclaim(store, args, out),
+        b"XCLAIM" => return Some(claim::cmd_xclaim(store, args, out)),
+        b"XAUTOCLAIM" => return Some(claim::cmd_xautoclaim(store, args, out)),
         b"XINFO" => info::cmd_xinfo(store, args, out),
-        _ => return false,
+        _ => return None,
     }
-    true
+    Some(effect(cmd))
+}
+
+/// What a stream command that ran is recorded as: its argv for every
+/// verb that can change a stream or a group, nothing for a read. `XADD`,
+/// `XREADGROUP` and the claims decide their own record.
+fn effect(cmd: &[u8]) -> Effect {
+    let write = matches!(cmd, b"XDEL" | b"XTRIM" | b"XSETID" | b"XGROUP" | b"XACK");
+    if write { Effect::Write } else { Effect::Read }
 }
 
 // ───────────── XADD ─────────────
 
 /// `XADD key [NOMKSTREAM] [MAXLEN [=|~] N | MINID [=|~] id [LIMIT N]]
 /// <id|*> field value [field value ...]`
-fn cmd_xadd<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
+///
+/// An ID the command generated (`*`, `ms-*`) is recorded as the ID it
+/// gave ([`Effect::RecordId`]), every other argument as it came.
+fn cmd_xadd<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) -> Effect {
     if args.len() < 5 {
-        return wrong_args(out, "xadd");
+        wrong_args(out, "xadd");
+        return Effect::Write;
     }
     let parsed = match parse_xadd_argv(args) {
         Ok(p) => p,
-        Err(msg) => return encode_error(out, msg.as_wire()),
+        Err(msg) => {
+            encode_error(out, msg.as_wire());
+            return Effect::Write;
+        }
     };
+    let generated = !matches!(parsed.id, XAddIdSpec::Explicit(_));
     let id = match store.xadd(&args[1], parsed.id, parsed.fields, parsed.nomkstream, now_unix_ms())
     {
         Ok(Some(id)) => id,
-        Ok(None) => return encode_null_bulk(out), // NOMKSTREAM + missing key
-        Err(kevy_store::StoreError::OutOfRange) => {
-            return encode_error(
-                out,
-                "ERR The ID specified in XADD is equal or smaller than the target stream top item",
-            );
+        Ok(None) => {
+            encode_null_bulk(out); // NOMKSTREAM + missing key
+            return Effect::Unchanged;
         }
-        Err(e) => return store_err(out, e),
+        Err(e) => {
+            xadd_err(out, e);
+            return Effect::Write;
+        }
     };
     if let Some(trim) = parsed.trim {
         apply_trim(store, &args[1], trim);
     }
-    encode_bulk(out, &id.encode());
+    encode_bulk(out, crate::aof::id_bytes(&mut [0u8; 41], id));
+    if generated { Effect::RecordId(parsed.id_at, id) } else { Effect::Write }
+}
+
+fn xadd_err(out: &mut Vec<u8>, e: kevy_store::StoreError) {
+    match e {
+        kevy_store::StoreError::OutOfRange => encode_error(
+            out,
+            "ERR The ID specified in XADD is equal or smaller than the target stream top item",
+        ),
+        e => store_err(out, e),
+    }
 }
 
 struct XAddParsed {
     nomkstream: bool,
+    /// Where the ID argument sits.
+    id_at: usize,
     trim: Option<TrimSpec>,
     id: XAddIdSpec,
     fields: Vec<(Vec<u8>, Vec<u8>)>,
@@ -136,6 +162,7 @@ fn parse_xadd_argv<A: ArgvView + ?Sized>(args: &A) -> Result<XAddParsed, CmdErro
     if i + 2 >= args.len() {
         return Err(CmdError::Wire("ERR wrong number of arguments for 'xadd' command"));
     }
+    let id_at = i;
     let id = parse_xadd_id(&args[i])
         .map_err(|_| "ERR Invalid stream ID specified as stream command argument")?;
     i += 1;
@@ -148,7 +175,7 @@ fn parse_xadd_argv<A: ArgvView + ?Sized>(args: &A) -> Result<XAddParsed, CmdErro
         fields.push((args[i].to_vec(), args[i + 1].to_vec()));
         i += 2;
     }
-    Ok(XAddParsed { nomkstream, trim, id, fields })
+    Ok(XAddParsed { nomkstream, id_at, trim, id, fields })
 }
 
 /// Skip the optional `=` / `~` modifier and parse the trim threshold.
@@ -318,3 +345,6 @@ pub(super) fn emit_entries(out: &mut Vec<u8>, entries: &EntryBatch) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

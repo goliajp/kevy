@@ -163,7 +163,9 @@ impl Store {
             }
             return;
         }
-        if let Some(key) = args.get(1) {
+        let mut buf = [0u8; 32];
+        let up = kevy_verbs::args::upper_verb(verb, &mut buf);
+        if let Some(key) = crate::verb_keys::shard_key(up, args) {
             crate::replay::apply(&mut self.wshard(key).store, args);
         }
     }

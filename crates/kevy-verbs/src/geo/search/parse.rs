@@ -6,20 +6,18 @@
 use kevy_resp::ArgvView;
 use kevy_resp::CmdError;
 
-use crate::cmd::arg_f64;
+use crate::args::arg_f64;
 
 use super::super::parse_unit;
 use super::{Anchor, LegacyRadiusParsed, Opts, Shape, Sort};
 
-pub(in crate::dispatch_geo) fn parse_opts<A: ArgvView + ?Sized>(
-    args: &A,
-) -> Result<Opts, CmdError> {
+pub(in crate::geo) fn parse_opts<A: ArgvView + ?Sized>(args: &A) -> Result<Opts, CmdError> {
     parse_opts_at(args, 2)
 }
 
 /// Same as [`parse_opts`] but starts scanning at `start` instead of `2`.
 /// `GEOSEARCHSTORE` uses `start=3` (verb, dst, src); GEOSEARCH uses 2.
-pub(in crate::dispatch_geo) fn parse_opts_at<A: ArgvView + ?Sized>(
+pub(in crate::geo) fn parse_opts_at<A: ArgvView + ?Sized>(
     args: &A,
     start: usize,
 ) -> Result<Opts, CmdError> {
@@ -35,7 +33,7 @@ pub(in crate::dispatch_geo) fn parse_opts_at<A: ArgvView + ?Sized>(
 /// Translate a `GEORADIUS[BYMEMBER]` argv (legacy: fixed prefix then
 /// flag soup, `STORE key` / `STOREDIST key` recognised as positional
 /// dst keys) into the structured `Opts` the search core expects.
-pub(in crate::dispatch_geo) fn parse_legacy_radius<A: ArgvView + ?Sized>(
+pub(in crate::geo) fn parse_legacy_radius<A: ArgvView + ?Sized>(
     args: &A,
     start: usize,
     anchor: Anchor,
