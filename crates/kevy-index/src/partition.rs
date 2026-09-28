@@ -56,6 +56,33 @@ impl Partitioning {
             Partitioning::Global { splits } => splits.partition_point(|s| s.as_slice() <= enc),
         }
     }
+
+    /// The split points as `SPLIT` values of type `ty` — the inverse of the
+    /// order encoding they are stored in.
+    ///
+    /// ```
+    /// use kevy_index::{Partitioning, ValType, order_key};
+    /// let p = Partitioning::Global { splits: vec![order_key(ValType::I64, b"-40").unwrap()] };
+    /// assert_eq!(p.split_values(ValType::I64), [b"-40".to_vec()]);
+    /// ```
+    pub fn split_values(&self, ty: crate::ValType) -> Vec<Vec<u8>> {
+        let Partitioning::Global { splits } = self else { return Vec::new() };
+        splits.iter().map(|s| decode_order_key(ty, s)).collect()
+    }
+}
+
+/// The text form of one order-encoded value of type `ty`.
+fn decode_order_key(ty: crate::ValType, enc: &[u8]) -> Vec<u8> {
+    let word = || u64::from_be_bytes(enc.try_into().unwrap_or([0; 8]));
+    match ty {
+        crate::ValType::I64 => (((word() ^ (1 << 63)) as i64).to_string()).into_bytes(),
+        crate::ValType::F64 => {
+            let m = word();
+            let bits = if m >> 63 == 1 { m & !(1 << 63) } else { !m };
+            f64::from_bits(bits).to_string().into_bytes()
+        }
+        _ => enc.to_vec(),
+    }
 }
 
 /// The shard partition `p` of the index `name` lives on, of `n` shards.
