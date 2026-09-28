@@ -333,8 +333,8 @@ let store = Store::open(
 | `AppendFsync` | Max data loss on crash | Throughput vs `EverySec` |
 |---|---|---|
 | `Always` | 0 bytes | ~50% |
-| `EverySec` (default) | ≤ 1 second | baseline |
-| `No` | up to ~30 s (kernel pagecache flush) | slightly faster |
+| `EverySec` (default) | power loss: about 1 s + one reaper tick + one fsync; killed process: at most one reaper tick (~100 ms) of writes | baseline |
+| `No` | killed process: at most one reaper tick (~100 ms) of writes; power loss: whatever the kernel had not written back (up to ~30 s) | slightly faster |
 
 Compaction:
 
