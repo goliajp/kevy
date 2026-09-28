@@ -1008,6 +1008,13 @@ fn writes_after_the_bgsave_swap_survive_a_restart() {
             c.write_all(&req(&[b"SET", format!("post{i}").as_bytes(), b"v"])).unwrap();
             read_reply(&mut c, b"+OK\r\n");
         }
+        wait_for("the later writes to reach the new logs while running", || {
+            let posts = |s: usize| {
+                std::fs::read(dir.join(format!("aof-{s}.aof")))
+                    .map_or(0, |b| b.windows(4).filter(|w| *w == b"post").count())
+            };
+            (0..nshards).map(posts).sum::<usize>() == 40
+        });
     });
     with_runtime(free_port(), &dir, nshards, |p| {
         let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
@@ -1053,6 +1060,13 @@ fn writes_after_the_rewrite_swap_survive_a_restart() {
             c.write_all(&req(&[b"SET", format!("post{i}").as_bytes(), b"v"])).unwrap();
             read_reply(&mut c, b"+OK\r\n");
         }
+        wait_for("the later writes to reach the new logs while running", || {
+            let posts = |s: usize| {
+                std::fs::read(dir.join(format!("aof-{s}.aof")))
+                    .map_or(0, |b| b.windows(4).filter(|w| *w == b"post").count())
+            };
+            (0..nshards).map(posts).sum::<usize>() == 40
+        });
     });
     with_runtime(free_port(), &dir, nshards, |p| {
         let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();

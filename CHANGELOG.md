@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Writes made during an AOF rewrite's final swap reach the new log.**
+  The rewrite renames the new log over the old one on a background thread
+  and holds appends until the rename lands. On the io_uring reactor the
+  hold did not stop appends: a write in that window went to the old file
+  and was gone at the next start. On both reactors, a write in that window
+  also kept the swap from ever completing, so the shard stopped writing
+  its AOF until shutdown, and a crash lost everything since. Appends now
+  wait for the rename, and the swap completes with them queued. Affected
+  since 5.0.0, for `BGREWRITEAOF` and automatic rewrites alike.
+
 - **Writes made after a `BGSAVE` survive a restart on macOS, and on Linux
   without io_uring.** On the epoll and kqueue reactors a writer thread
   appends AOF records through its own handle to the log. `BGSAVE` resets
