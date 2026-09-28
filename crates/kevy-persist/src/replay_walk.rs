@@ -77,7 +77,7 @@ fn outran(claimed: u32, available: usize) -> ReplayStop {
 pub(crate) fn walk_v2(
     r: &mut impl Read,
     start_pos: u64,
-    apply: &mut Option<&mut dyn FnMut(&mut Argv)>,
+    apply: &mut Option<Sink<'_>>,
 ) -> io::Result<V2Walk> {
     let mut w = V2Walk {
         txn: None,
@@ -131,7 +131,7 @@ pub(crate) fn apply_record(
     payload: &[u8],
     len: u32,
     args: &mut Argv,
-    apply: &mut Option<&mut dyn FnMut(&mut Argv)>,
+    apply: &mut Option<Sink<'_>>,
     w: &mut V2Walk,
 ) -> bool {
     match kevy_resp::parse_command_into(payload, args) {
@@ -149,18 +149,18 @@ pub(crate) fn apply_record(
                 }
                 Some(TxnMarker::Commit) => {
                     if let Some(buffered) = w.txn.take()
-                        && let Some(f) = apply.as_deref_mut()
+                        && let Some(f) = apply.as_mut()
                     {
                         for mut a in buffered {
-                            f(&mut a);
+                            f.deliver(&mut a);
                         }
                     }
                 }
                 None => match w.txn.as_mut() {
                     Some(buf) => buf.push(std::mem::take(args)),
                     None => {
-                        if let Some(f) = apply.as_deref_mut() {
-                            f(args);
+                        if let Some(f) = apply.as_mut() {
+                            f.deliver(args);
                         }
                     }
                 },
@@ -172,6 +172,22 @@ pub(crate) fn apply_record(
         _ => {
             w.preview_len = preview_of(payload, &mut w.preview);
             false
+        }
+    }
+}
+
+/// Where replayed frames go: moved out to an owner, or lent in place, in
+/// which case the frame's buffers are reused for the next record.
+pub(crate) enum Sink<'a> {
+    Owned(&'a mut dyn FnMut(Argv)),
+    InPlace(&'a mut dyn FnMut(&mut Argv)),
+}
+
+impl Sink<'_> {
+    pub(crate) fn deliver(&mut self, frame: &mut Argv) {
+        match self {
+            Sink::Owned(f) => f(std::mem::take(frame)),
+            Sink::InPlace(f) => f(frame),
         }
     }
 }
