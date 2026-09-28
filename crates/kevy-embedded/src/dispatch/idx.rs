@@ -173,10 +173,11 @@ pub(super) fn badargs(out: &mut Vec<u8>, verb: &str, name: &[u8]) {
     );
 }
 
-/// `IDX.LIST` — 18-field rows matching the server's reduce. Embedded
-/// builds are synchronous, so `state` is always `ready`; entry/byte
-/// stats are the scalar-segment sums (kind-specific stats stay 0);
-/// hits/last_hit read the usage dual.
+/// `IDX.LIST` — 20-field rows matching the server's reduce for a local
+/// index, the only kind an embedded store holds. Embedded builds are
+/// synchronous, so `state` is always `ready`; entry/byte stats are the
+/// scalar-segment sums (kind-specific stats stay 0); hits/last_hit read
+/// the usage dual.
 fn cmd_idx_list(s: &Store, out: &mut Vec<u8>) {
     let specs: Vec<IndexSpec> = {
         let g = s.indexes.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -186,7 +187,7 @@ fn cmd_idx_list(s: &Store, out: &mut Vec<u8>) {
     for spec in &specs {
         let stats = s.idx_stats(&spec.name).unwrap_or_default();
         let (hits, last, _) = s.idx_usage(&spec.name).unwrap_or((0, 0, 0));
-        encode_array_len(out, 18);
+        encode_array_len(out, 20);
         encode_bulk(out, b"name");
         encode_bulk(out, &spec.name);
         encode_bulk(out, b"prefix");
@@ -205,5 +206,7 @@ fn cmd_idx_list(s: &Store, out: &mut Vec<u8>) {
         encode_bulk(out, last.to_string().as_bytes());
         encode_bulk(out, b"auto");
         encode_bulk(out, if s.is_auto_path(&spec.name) { b"1" } else { b"0" });
+        encode_bulk(out, b"partitioning");
+        encode_bulk(out, b"local");
     }
 }

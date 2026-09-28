@@ -375,3 +375,33 @@ fn a_global_index_without_split_points_samples_them_and_a_rebuild_resamples() {
     wait_ready(&mut w, b"late");
     assert_eq!(all(&mut w, b"late"), all(&mut w, b"age_l"));
 }
+
+#[test]
+fn idx_list_shows_how_a_global_index_is_spread() {
+    let srv = Server::start(4);
+    let mut w = srv.wire();
+    create(&mut w, b"age_l", &[]);
+    create(&mut w, b"age_g", &[b"PARTITION", b"global", b"SPLIT", b"50"]);
+    for i in 0..100u32 {
+        // 70 below the split, 30 above
+        let (key, age) = (format!("user:{i}"), if i < 70 { "10" } else { "90" });
+        call(&mut w, &[b"HSET", key.as_bytes(), b"age", age.as_bytes()]);
+    }
+    wait_ready(&mut w, b"age_g");
+    let list = text(&call(&mut w, &[b"IDX.LIST"]));
+    let row = |name: &str| {
+        let at = list.find(&format!("\r\n{name}\r\n")).unwrap();
+        list[at..].split("*").next().unwrap().to_string()
+    };
+    let (g, l) = (row("age_g"), row("age_l"));
+    assert!(l.contains("partitioning\r\n$5\r\nlocal") && !l.contains("max_entries"), "{l}");
+    for pair in [
+        "partitioning\r\n$6\r\nglobal",
+        "partitions\r\n$1\r\n2",
+        "max_entries\r\n$2\r\n70",
+        "mean_entries\r\n$4\r\n50.0",
+        "entries\r\n$3\r\n100",
+    ] {
+        assert!(g.contains(pair), "{pair} in {g}");
+    }
+}
