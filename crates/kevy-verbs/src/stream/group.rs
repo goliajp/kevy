@@ -14,8 +14,10 @@ use kevy_store::{
     parse_range_start,
 };
 
+use crate::Effect;
 use crate::reply::{store_err, wrong_args};
 
+use super::claim_record::ReadMarks;
 use super::emit_entries;
 
 // ───────────── XGROUP ─────────────
@@ -125,10 +127,17 @@ fn parse_id_or_dollar(s: &[u8]) -> Result<GroupCreateMode, CmdError> {
 // ───────────── XREADGROUP ─────────────
 
 /// `XREADGROUP GROUP g c [COUNT n] [BLOCK ms] [NOACK] STREAMS key [...] id [...]`
-pub(super) fn cmd_xreadgroup<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
+pub(super) fn cmd_xreadgroup<A: ArgvView + ?Sized>(
+    store: &mut Store,
+    args: &A,
+    out: &mut Vec<u8>,
+) -> Effect {
     let mut parsed = match parse_xreadgroup_argv(args) {
         Ok(p) => p,
-        Err(msg) => return encode_error(out, msg.as_wire()),
+        Err(msg) => {
+            encode_error(out, msg.as_wire());
+            return Effect::Write;
+        }
     };
     let mut reply: Vec<super::StreamReply> = Vec::new();
     // BLOCK only takes effect when at least one stream is reading new
@@ -139,18 +148,26 @@ pub(super) fn cmd_xreadgroup<A: ArgvView + ?Sized>(store: &mut Store, args: &A, 
     let any_new_stream = parsed.streams.iter().any(|(_, id)| id == b">");
     let blocking = parsed.block_ms.is_some() && any_new_stream;
     let streams = std::mem::take(&mut parsed.streams);
+    let mut marks = ReadMarks::default();
     for (key, last_seen_arg) in streams {
+        let mark = ReadMarks::read(store, &key, &parsed.group, &parsed.consumer);
         let Ok(entries) = xreadgroup_one_stream(store, &parsed, &key, &last_seen_arg, out) else {
-            return;
+            return Effect::Write;
         };
+        marks.push(mark, !entries.is_empty());
         if !entries.is_empty() {
             reply.push((key, entries));
         }
     }
+    emit_group_reply(out, &reply, blocking);
+    marks.effect()
+}
+
+/// The XREADGROUP reply. BLOCK with nothing fresh leaves `out` untouched,
+/// so the dispatcher registers the conn as a waiter on the first stream
+/// key; the next XADD on that key wakes it and re-runs the read.
+fn emit_group_reply(out: &mut Vec<u8>, reply: &[super::StreamReply], blocking: bool) {
     if reply.is_empty() && blocking {
-        // BLOCK + new-mode + nothing fresh → leave out untouched so the
-        // dispatcher registers the conn as a waiter on the first stream
-        // key. Next XADD on that key wakes us and re-runs xreadgroup.
         return;
     }
     if reply.is_empty() {
@@ -158,7 +175,7 @@ pub(super) fn cmd_xreadgroup<A: ArgvView + ?Sized>(store: &mut Store, args: &A, 
         return;
     }
     encode_array_len(out, reply.len() as i64);
-    for (key, entries) in &reply {
+    for (key, entries) in reply {
         encode_array_len(out, 2);
         encode_bulk(out, key);
         emit_entries(out, entries);

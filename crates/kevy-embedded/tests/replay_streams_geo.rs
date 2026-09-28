@@ -211,6 +211,83 @@ fn generated_ids_and_idle_claims_survive_a_restart() {
     time_dependent_round_trip(4);
 }
 
+/// The idle column of the extended `XPENDING` rows.
+fn idles(reply: &str) -> Vec<i64> {
+    let t: Vec<&str> = reply.split("\r\n").collect();
+    (0..t.len())
+        .filter(|&i| t[i] == "*4" && t.get(i + 5).is_some_and(|x| x.starts_with(':')))
+        .map(|i| t[i + 5][1..].parse().expect("an idle time"))
+        .collect()
+}
+
+/// `XINFO CONSUMERS`' idle column, which counts from the consumer's last
+/// contact, blanked.
+fn blank_consumer_idle(reply: &str) -> String {
+    let mut t: Vec<String> = reply.split("\r\n").map(str::to_string).collect();
+    for i in 0..t.len() {
+        if t[i] == "idle" && i + 1 < t.len() {
+            t[i + 1] = ":idle".into();
+        }
+    }
+    t.join("\r\n")
+}
+
+fn delivery_round_trip(shards: usize) {
+    const READS: &[&str] = &["XPENDING s g - + 10", "XINFO GROUPS s", "XINFO CONSUMERS s g"];
+    let text = |s: &Store, r: &str| String::from_utf8_lossy(&call(s, r)).into_owned();
+    let read_all = |s: &Store| -> Vec<String> {
+        READS.iter().map(|r| blank_consumer_idle(&blank_idle(&text(s, r)))).collect()
+    };
+    let dir = kevy_tmpdir::TmpDir::new("replay-streams-delivery");
+    let (before, idle_before, at) = {
+        let s = open(dir.path(), shards);
+        for id in ["1-1", "2-1", "3-1"] {
+            ok(&s, &format!("XADD s {id} f v"));
+        }
+        ok(&s, "XGROUP CREATE s g 0");
+        ok(&s, "XGROUP CREATE s n 0");
+        ok(&s, "XREADGROUP GROUP g c1 COUNT 2 STREAMS s >");
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        ok(&s, "XREADGROUP GROUP g c2 STREAMS s >");
+        ok(&s, "XREADGROUP GROUP n c9 NOACK STREAMS s >");
+        ok(&s, "XREADGROUP GROUP g newbie STREAMS s 0");
+        assert_eq!(call(&s, "XREADGROUP GROUP g c1 STREAMS s >"), b"*-1\r\n");
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let idle = idles(&text(&s, "XPENDING s g - + 10"));
+        let at = std::time::Instant::now();
+        let mut before = read_all(&s);
+        before.push(text(&s, "XINFO GROUPS s"));
+        (before, idle, at)
+    };
+    let s = open(dir.path(), shards);
+    let idle_after = idles(&text(&s, "XPENDING s g - + 10"));
+    let elapsed = at.elapsed().as_millis() as i64;
+    for ((read, b), a) in READS.iter().zip(&before).zip(read_all(&s)) {
+        assert_eq!(&a, b, "{shards} shard(s), {read}: changed across the restart");
+    }
+    assert_eq!(idle_before.len(), 3, "three pending entries: {before:?}");
+    for (b, a) in idle_before.iter().zip(&idle_after) {
+        let gap = a - b;
+        assert!(
+            (elapsed - 60..=elapsed + 60).contains(&gap),
+            "{shards} shard(s): idle went {b} -> {a} over {elapsed} ms: it started over"
+        );
+    }
+    // the NOACK group moved to the end with nothing pending, and the
+    // history read made a consumer
+    let groups = &before[3];
+    assert!(groups.contains("$1\r\nn\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:0"), "{groups}");
+    assert!(before[2].contains("newbie"), "{}", before[2]);
+}
+
+/// An entry delivered by `XREADGROUP` keeps its delivery time across a
+/// restart: its idle time goes on instead of starting over.
+#[test]
+fn delivery_times_survive_a_restart() {
+    delivery_round_trip(1);
+    delivery_round_trip(4);
+}
+
 /// A host feeding a server's stream frames back in: each lands on its
 /// stream's shard, where the reads look for it.
 #[test]

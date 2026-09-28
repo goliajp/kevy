@@ -39,7 +39,7 @@ impl<C: Commands> Shard<C> {
         if self.aof.is_none() && !replicating {
             return;
         }
-        for frame in kevy_verbs::aof::deferred_frames(&mut self.store, args, &effect) {
+        for frame in kevy_verbs::aof::deferred_frames(&self.store, args, &effect) {
             self.record_frame(&frame);
         }
     }

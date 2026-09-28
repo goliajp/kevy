@@ -185,7 +185,12 @@ fn exec_shared<A: ArgvView + ?Sized>(
             record_instead(kevy_rt::propagation::Propagate::Replace(frame));
             true
         }
-        Some(e @ (Effect::RecordId(..) | Effect::RecordClaim(_))) => {
+        Some(
+            e @ (Effect::RecordId(..)
+            | Effect::RecordClaim(_)
+            | Effect::RecordRead(..)
+            | Effect::RecordReads(_)),
+        ) => {
             record_deferred(e);
             true
         }

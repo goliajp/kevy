@@ -94,15 +94,19 @@ pub fn id_bytes(buf: &mut [u8; 41], id: StreamId) -> &[u8] {
 
 /// The frames to record for `effect`, the effect of `args` run against
 /// `store` just now: one for [`Effect::RecordId`], one or more for
-/// [`Effect::RecordClaim`], none for every other effect.
+/// [`Effect::RecordClaim`], [`Effect::RecordRead`] and
+/// [`Effect::RecordReads`], none for every other effect. It only reads
+/// `store`, and with no side effects: recording a write never changes
+/// what the write left (a stream is never spilled to the cold tier, so
+/// the groups it reads are resident).
 ///
 /// ```
-/// let mut store = kevy_store::Store::new();
+/// let store = kevy_store::Store::new();
 /// let argv = kevy_resp::Argv::from(vec![b"GET".to_vec(), b"k".to_vec()]);
-/// assert!(kevy_verbs::aof::deferred_frames(&mut store, &argv, &kevy_verbs::Effect::Read).is_empty());
+/// assert!(kevy_verbs::aof::deferred_frames(&store, &argv, &kevy_verbs::Effect::Read).is_empty());
 /// ```
 pub fn deferred_frames<A: ArgvView + ?Sized>(
-    store: &mut Store,
+    store: &Store,
     args: &A,
     effect: &Effect,
 ) -> Vec<Argv> {
@@ -116,65 +120,85 @@ pub fn deferred_frames<A: ArgvView + ?Sized>(
             vec![f]
         }
         Effect::RecordClaim(c) => claim_frames(store, args, c),
+        Effect::RecordRead(prev, new_consumer) => {
+            crate::record_read::read_frames(store, args, &[(*prev, *new_consumer)])
+        }
+        Effect::RecordReads(marks) => crate::record_read::read_frames(store, args, marks),
         _ => Vec::new(),
     }
 }
 
-fn claim_frames<A: ArgvView + ?Sized>(store: &mut Store, args: &A, c: &Claim) -> Vec<Argv> {
-    let head = |ids: &[StreamId], tail: usize| {
-        let mut f = Argv::with_capacity(5 + ids.len() + tail, 0);
-        for part in [&b"XCLAIM"[..], &args[1], &args[2], &args[3], b"0"] {
-            f.push(part);
-        }
-        for id in ids {
-            f.push(&id.encode());
-        }
-        f
-    };
-    let mut frames = Vec::new();
-    for ((time, count), ids) in bookkeeping(store, &args[1], &args[2], &c.taken) {
-        let mut f = head(&ids, 6);
-        f.push(b"TIME");
-        f.push(time.to_string().as_bytes());
-        f.push(b"RETRYCOUNT");
-        f.push(count.to_string().as_bytes());
-        f.push(b"FORCE");
-        f.push(b"JUSTID");
-        frames.push(f);
-    }
+fn claim_frames<A: ArgvView + ?Sized>(store: &Store, args: &A, c: &Claim) -> Vec<Argv> {
+    let (key, group, consumer) = (&args[1], &args[2], &args[3]);
+    let mut frames = taken_frames(store, key, group, consumer, &c.taken);
     if !c.dropped.is_empty() {
-        let mut f = head(&c.dropped, 1);
+        let mut f = claim_head(key, group, consumer, &c.dropped, 1);
         f.push(b"JUSTID");
         frames.push(f);
     }
     if frames.is_empty() && c.new_consumer {
-        let mut f = Argv::with_capacity(5, 0);
-        for part in [&b"XGROUP"[..], b"CREATECONSUMER", &args[1], &args[2], &args[3]] {
-            f.push(part);
-        }
-        frames.push(f);
+        frames.push(create_consumer(key, group, consumer));
     }
     frames
 }
 
-/// The taken IDs grouped by the `(delivery time, delivery count)` their
-/// pending rows hold now, in the order the groups first appear.
-fn bookkeeping(
-    store: &mut Store,
+/// `XCLAIM key group consumer 0 id…`, with room for `tail` more parts.
+pub(crate) fn claim_head(
     key: &[u8],
     group: &[u8],
-    taken: &[StreamId],
-) -> Vec<((u64, u32), Vec<StreamId>)> {
-    let Ok(Some(s)) = store.stream_view(key) else { return Vec::new() };
-    let Some(g) = s.group(group) else { return Vec::new() };
-    let mut out: Vec<((u64, u32), Vec<StreamId>)> = Vec::new();
-    for id in taken {
+    consumer: &[u8],
+    ids: &[StreamId],
+    tail: usize,
+) -> Argv {
+    let mut f = Argv::with_capacity(5 + ids.len() + tail, 0);
+    for part in [&b"XCLAIM"[..], key, group, consumer, b"0"] {
+        f.push(part);
+    }
+    for id in ids {
+        f.push(&id.encode());
+    }
+    f
+}
+
+/// `XGROUP CREATECONSUMER key group consumer`.
+pub(crate) fn create_consumer(key: &[u8], group: &[u8], consumer: &[u8]) -> Argv {
+    let mut f = Argv::with_capacity(5, 0);
+    for part in [&b"XGROUP"[..], b"CREATECONSUMER", key, group, consumer] {
+        f.push(part);
+    }
+    f
+}
+
+/// One `XCLAIM … TIME t RETRYCOUNT n FORCE JUSTID` per `(delivery time,
+/// delivery count)` the pending rows of `ids` hold now, in the order those
+/// pairs first appear.
+pub(crate) fn taken_frames(
+    store: &Store,
+    key: &[u8],
+    group: &[u8],
+    consumer: &[u8],
+    ids: &[StreamId],
+) -> Vec<Argv> {
+    let Some(g) = store.stream_group_peek(key, group) else { return Vec::new() };
+    let mut by: Vec<((u64, u32), Vec<StreamId>)> = Vec::new();
+    for id in ids {
         let Some(row) = g.pel.get(id) else { continue };
         let at = (row.delivery_time_ms, row.delivery_count);
-        match out.iter_mut().find(|(k, _)| *k == at) {
-            Some((_, ids)) => ids.push(*id),
-            None => out.push((at, vec![*id])),
+        match by.iter_mut().find(|(k, _)| *k == at) {
+            Some((_, same)) => same.push(*id),
+            None => by.push((at, vec![*id])),
         }
     }
-    out
+    by.into_iter()
+        .map(|((time, count), ids)| {
+            let mut f = claim_head(key, group, consumer, &ids, 6);
+            f.push(b"TIME");
+            f.push(time.to_string().as_bytes());
+            f.push(b"RETRYCOUNT");
+            f.push(count.to_string().as_bytes());
+            f.push(b"FORCE");
+            f.push(b"JUSTID");
+            f
+        })
+        .collect()
 }
