@@ -83,3 +83,66 @@ fn a_reshard_after_a_kill_carries_what_the_ring_owed() {
 fn a_ring_size_that_cannot_work_is_refused() {
     let _ = Config::default().with_stage_ring(100_000);
 }
+
+fn call(s: &Store, argv: &[&[u8]]) -> Vec<u8> {
+    let owned: Vec<Vec<u8>> = argv.iter().map(|a| a.to_vec()).collect();
+    let mut reply = Vec::new();
+    s.dispatch_argv(&owned, &mut reply);
+    reply
+}
+
+#[cfg(feature = "index")]
+#[test]
+fn a_window_eviction_the_ring_still_owed_survives_a_kill() {
+    use kevy_index::{IndexKind, TableIndex, TableSpec, ValType, WindowSpec};
+    let dir = kevy_tmpdir::TmpDir::new("killed-window");
+    let cfg = || config(dir.path()).with_stage_ring(64 * 1024).with_mapped_aof(false);
+    let s = Store::open(cfg()).expect("open");
+    s.table_declare(TableSpec {
+        name: b"ev".to_vec(),
+        prefix: b"r:".to_vec(),
+        pk: b"id".to_vec(),
+        columns: vec![(b"id".to_vec(), ValType::Str), (b"at".to_vec(), ValType::I64)],
+        indexes: vec![TableIndex {
+            column: b"at".to_vec(),
+            kind: IndexKind::Range,
+            values: vec![],
+        }],
+        orderpaths: vec![],
+        window: Some(WindowSpec { column: b"at".to_vec(), span: 50, bucket: 10 }),
+        autodeclare: 0,
+        auto_added: vec![],
+    })
+    .expect("declare");
+    for n in 1..=200u32 {
+        let (key, at) = (format!("r:{n}"), n.to_string());
+        let reply =
+            call(&s, &[b"HSET", key.as_bytes(), b"id", key.as_bytes(), b"at", at.as_bytes()]);
+        assert_eq!(reply, b":2\r\n");
+    }
+    // a manual tick slides the window but leaves the ring undrained: the
+    // SEGMENTED frame is owed by the ring, its segment already sealed
+    s.tick();
+    let log = std::fs::read(dir.path().join("aof-0.aof")).expect("the log");
+    assert!(
+        !log.windows(9).any(|w| w == b"SEGMENTED"),
+        "the frame reached the log; this test would not test the ring"
+    );
+    let segs = std::fs::read_dir(dir.path().join("segs-0")).expect("segments");
+    assert!(segs.flatten().any(|e| e.file_name().to_string_lossy().starts_with("row-")));
+    std::mem::forget(s);
+    std::fs::remove_file(dir.path().join("LOCK")).expect("the directory lock file");
+
+    // the second open, after a clean close, must not lose what the first
+    // recovered
+    for round in 0..2 {
+        let s = Store::open(cfg()).expect("reopen");
+        assert_eq!(s.open_report().stage_recovered > 0, round == 0);
+        for n in 1..=200u32 {
+            let key = format!("r:{n}");
+            let at = n.to_string();
+            let want = [format!("${}\r\n", at.len()).as_bytes(), at.as_bytes(), b"\r\n"].concat();
+            assert_eq!(call(&s, &[b"HGET", key.as_bytes(), b"at"]), want, "{key}");
+        }
+    }
+}

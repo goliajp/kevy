@@ -1,5 +1,5 @@
 //! Per-shard restore: segment directory, snapshot, AOF replay (with
-//! the SEGMENTED stitch), orphan sweep. Split from `shard.rs` for the
+//! the SEGMENTED stitch), then what the staging ring owes. Split from `shard.rs` for the
 //! 500-LOC house rule.
 
 use std::io;
@@ -11,8 +11,9 @@ use crate::config::Config;
 use crate::metric::OpenReport;
 use kevy_store::Store as Keyspace;
 
-/// One shard's full restore: segment directory, snapshot, AOF replay,
-/// orphan sweep, watermark drain. Returns where the replay stopped when it
+/// One shard's restore from its files: segment directory, snapshot, AOF
+/// replay, watermark drain. The orphan sweep waits for the staging ring,
+/// which may still owe a SEGMENTED frame. Returns where the replay stopped when it
 /// dropped nothing (see [`kevy_persist::Aof::open_after_replay`]).
 pub(crate) fn restore_one_shard(
     dir: &Path,
@@ -32,8 +33,6 @@ pub(crate) fn restore_one_shard(
     if aof.exists() {
         whole = replay_shard_aof(dir, config, i, store, &aof, report)?;
     }
-    #[cfg(not(target_arch = "wasm32"))]
-    store.sweep_orphan_row_segs();
     store.demote_to_watermark();
     Ok(whole)
 }

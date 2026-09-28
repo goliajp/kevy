@@ -122,8 +122,8 @@ fn build_shards_persist(
     Ok((into_inners(stores, aofs), report))
 }
 
-/// Settle each AOF's staging ring and set how it takes appends, then anchor
-/// its growth-rule baseline.
+/// Settle each AOF's staging ring and set how it takes appends, sweep the
+/// segments no frame claimed, then anchor each AOF's growth-rule baseline.
 #[cfg(feature = "persist")]
 fn prepare_aofs(
     config: &Config,
@@ -139,6 +139,10 @@ fn prepare_aofs(
         if let Some(aof) = aof {
             crate::shard_restore::open_stage(dir, config, i, store, aof, report)?;
         }
+        // Only now is a sealed segment with no SEGMENTED frame an orphan:
+        // the ring may have owed the log that frame, and a segment swept
+        // before it lands leaves the frame naming nothing.
+        store.sweep_orphan_row_segs();
     }
     // Anchor each AOF's growth-rule baseline to the live image's estimated
     // rewrite size. `Aof::open` can only baseline at the file size, which
