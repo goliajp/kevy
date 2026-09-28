@@ -72,6 +72,8 @@ mod tests {
         assert_eq!(request_len(b"*x\r\n"), None);
         assert_eq!(request_len(b"*\xff\r\n"), None);
         assert_eq!(request_len(b"*1\r\n$y\r\nab\r\n"), None);
+        assert_eq!(request_len(b"\r\n"), None, "an empty header line");
+        assert_eq!(request_len(b"*1\r\n\r\nab\r\n"), None, "an empty element header");
     }
 
     #[test]
