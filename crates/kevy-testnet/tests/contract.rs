@@ -1,9 +1,16 @@
+use std::time::Duration;
+
 #[test]
 #[should_panic(expected = "never accepted on 127.0.0.1")]
 fn a_server_that_never_binds_is_loud() {
     // Nothing is started here on purpose: the old loops polled, gave up,
     // and returned as if the server were ready.
-    kevy_testnet::assert_listening(kevy_testnet::free_port(), "a server nobody started");
+    let port = kevy_testnet::free_port();
+    kevy_testnet::assert_listening_within(
+        port,
+        "a server nobody started",
+        Duration::from_millis(200),
+    );
 }
 
 #[test]

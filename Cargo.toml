@@ -157,6 +157,12 @@ cast_sign_loss = "allow"
 cast_precision_loss = "allow"
 cast_possible_wrap = "allow"
 
+# the vector index's recall test runs 2000 inserts and a brute-force scan
+# through f32 distance loops; unoptimized, that one test is a tenth of the
+# workspace test run. debug-assertions and overflow-checks stay on
+[profile.dev.package.kevy-vector]
+opt-level = 2
+
 [profile.release]
 opt-level = 3
 lto = "fat"

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""The kevy test suite runner — three tiers, one manifest, no dark areas.
+"""The kevy test suite runner — four tiers, one manifest, no dark areas.
 
     python3 tools/suite.py precommit            run a tier
+    python3 tools/suite.py premerge             everything CI checks on a push
     python3 tools/suite.py prerelease --list    show what a tier would run
     python3 tools/suite.py --audit              verify the manifest's invariants
 
@@ -41,7 +42,7 @@ print = functools.partial(print, flush=True)
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 MANIFEST = ROOT / "suite/manifest.toml"
 
-TIERS = ["precommit", "prerelease", "full"]
+TIERS = ["precommit", "premerge", "prerelease", "full"]
 AREAS = {
     "hygiene", "release-pins", "arch", "doc", "perf", "mem", "disk",
     "compat", "dialect", "feature", "case", "doors", "cov",
@@ -192,6 +193,114 @@ def _have_pgcmp_infra():
     return True, ""
 
 
+def _have_nightly_rustdoc():
+    r = subprocess.run(["rustup", "run", "nightly", "rustdoc", "--version"],
+                       capture_output=True, text=True)
+    if r.returncode == 0:
+        return True, ""
+    return False, "no nightly toolchain (rustup toolchain install nightly)"
+
+
+
+
+def _have_semver_checks():
+    if shutil.which("cargo-semver-checks"):
+        return True, ""
+    return False, "cargo-semver-checks is not installed"
+
+
+# Set when a tier starts: an input another row produces must come from this
+# run, not from the copy git tracks.
+RUN_STARTED = 0.0
+
+
+def _fresh_doc_coverage():
+    tables = list((ROOT / "target/doc").glob("*.txt"))
+    if tables and min(t.stat().st_mtime for t in tables) >= RUN_STARTED:
+        return True, ""
+    return False, "rustdoc-coverage did not write the tables in target/doc in this run"
+
+
+def _fresh_dead_set():
+    """deadgate's reading of this run's corpus. The file is tracked, so a
+    stone report over it without a fresh run reads another tree's corpus."""
+    p = ROOT / "bench/DEAD-SET.json"
+    if p.exists() and p.stat().st_mtime >= RUN_STARTED:
+        return True, ""
+    return False, "deadgate did not write bench/DEAD-SET.json in this run"
+
+
+def _fresh_stone_report():
+    """The report stone-report wrote in this run. The file is tracked, so
+    existing proves nothing: stonegate would judge the checked-in copy."""
+    p = ROOT / "bench/STONE-REPORT.json"
+    if p.exists() and p.stat().st_mtime >= RUN_STARTED:
+        return True, ""
+    return False, "stone-report did not write bench/STONE-REPORT.json in this run"
+
+
+def _have_targets(*triples):
+    r = subprocess.run(["rustup", "target", "list", "--installed"], capture_output=True, text=True)
+    missing = [t for t in triples if t not in r.stdout.split()]
+    if missing:
+        return False, f"rustup target add {' '.join(missing)}"
+    return True, ""
+
+
+def _have_iot_toolchain():
+    ok, why = _have_targets("aarch64-unknown-linux-musl", "armv7-unknown-linux-musleabihf",
+                            "arm-unknown-linux-musleabihf", "x86_64-unknown-linux-musl",
+                            "riscv64gc-unknown-linux-musl", "thumbv7em-none-eabihf")
+    if not ok:
+        return ok, why
+    missing = [t for t in ("riscv64-linux-gnu-gcc", "qemu-system-arm") if not shutil.which(t)]
+    if missing:
+        return False, f"not installed: {', '.join(missing)}"
+    return True, ""
+
+
+def _have_miri():
+    r = subprocess.run(["rustup", "component", "list", "--toolchain", "nightly", "--installed"],
+                       capture_output=True, text=True)
+    if any(l.startswith("miri") for l in r.stdout.splitlines()):
+        return True, ""
+    return False, "rustup component add miri rust-src --toolchain nightly"
+
+
+def _fresh_web_dist():
+    """The site site-build wrote in this run; a dist left from an earlier
+    build is a different tree's site."""
+    p = ROOT / "web/dist"
+    if p.exists() and p.stat().st_mtime >= RUN_STARTED:
+        return True, ""
+    return False, "site-build did not write web/dist in this run"
+
+
+PROBES = {
+    "web/dist from site-build": lambda: _fresh_web_dist(),
+    "wasm targets": lambda: _have_targets("wasm32-unknown-unknown", "wasm32-wasip1"),
+    "iot toolchain": lambda: _have_iot_toolchain(),
+    "nightly miri": lambda: _have_miri(),
+    "binaries-debug": lambda: _have_binaries("debug"),
+    "binaries-release": lambda: _have_binaries("release"),
+    "linux": lambda: _have_linux(),
+    "box": lambda: _have_box(),
+    "node": lambda: _have_node(),
+    "chromium": lambda: _have_chromium(),
+    "docker": lambda: _have_docker(),
+    "web-deps": lambda: _have_web_deps(),
+    "pgcmp-infra": lambda: _have_pgcmp_infra(),
+    "wasm-artifact": lambda: _have_wasm_artifact(),
+    "device": lambda: _have_device(),
+    "nightly rustdoc": lambda: _have_nightly_rustdoc(),
+    "rustdoc coverage tables from rustdoc-coverage": lambda: _fresh_doc_coverage(),
+    "bench/DEAD-SET.json from deadgate": lambda: _fresh_dead_set(),
+    "cargo-semver-checks": lambda: _have_semver_checks(),
+    "bench/STONE-REPORT.json from stone-report": lambda: _fresh_stone_report(),
+    "ci": lambda: (False, "runs in CI, not locally"),
+}
+
+
 def _have_device():
     if os.environ.get("KEVY_DEVICE") == "1":
         return True, ""
@@ -215,20 +324,7 @@ def children_cpu():
 def requirement_gap(check):
     """The first unmet requirement, or None."""
     for r in check.get("requires", []):
-        ok, why = {
-            "binaries-debug": lambda: _have_binaries("debug"),
-            "binaries-release": lambda: _have_binaries("release"),
-            "linux": _have_linux,
-            "box": _have_box,
-            "node": _have_node,
-            "chromium": _have_chromium,
-            "docker": _have_docker,
-            "web-deps": _have_web_deps,
-            "pgcmp-infra": _have_pgcmp_infra,
-            "wasm-artifact": _have_wasm_artifact,
-            "device": _have_device,
-            "ci": lambda: (False, "runs in CI, not locally"),
-        }[r]()
+        ok, why = PROBES[r]()
         if not ok:
             return f"{r}: {why}"
     return None
@@ -277,9 +373,9 @@ def audit(suite, checks):
     # Budgets are arithmetic: the declared expected-durations of a tier
     # must fit its budget, and the tiers must order strictly.
     budgets = suite["budgets"]
-    if not budgets["precommit"] < budgets["prerelease"]:
-        bad.append("budget order violated: precommit must be < prerelease")
-    for tier in ("precommit", "prerelease"):
+    if not budgets["precommit"] < budgets["premerge"] < budgets["prerelease"]:
+        bad.append("budget order violated: precommit < premerge < prerelease")
+    for tier in ("precommit", "premerge", "prerelease"):
         total = sum(c["expected"] for c in tier_checks(checks, tier)
                     if not requirement_needs_infra(c))
         if total > budgets[tier]:
@@ -309,6 +405,9 @@ def audit(suite, checks):
     for r in sorted(used - set(declared)):
         bad.append(f"requirement {r!r} is named by a check but not declared in "
                    f"[suite.requirements] — nothing says where it is met")
+    for r in sorted(used - set(PROBES)):
+        bad.append(f"requirement {r!r} has no probe in tools/suite.py — a tier "
+                   f"that reaches a check asking for it stops with a KeyError")
     for r in sorted(set(declared) - used):
         bad.append(f"requirement {r!r} is declared but no check asks for it — "
                    f"the list rotted")
@@ -335,7 +434,8 @@ def audit(suite, checks):
         return 1
     n = {t: len(tier_checks(checks, t)) for t in TIERS}
     print(f"suite audit: ok — {len(checks)} checks "
-          f"(precommit {n['precommit']} ⊆ prerelease {n['prerelease']} ⊆ full {n['full']}), "
+          f"(precommit {n['precommit']} ⊆ premerge {n['premerge']} ⊆ prerelease {n['prerelease']} "
+          f"⊆ full {n['full']}), "
           f"{len(covered)} areas covered, budgets hold")
     return 0
 
@@ -359,6 +459,8 @@ def run_tier(suite, checks, tier, only=None, area=None):
 
     results, cpu_of = [], {}
     t_start = time.monotonic()
+    global RUN_STARTED
+    RUN_STARTED = time.time()
     for c in selected:
         gap = requirement_gap(c)
         if gap:

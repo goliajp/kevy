@@ -316,8 +316,12 @@ jobs:
           restore-keys: |
             cargo-${{ matrix.target }}-
 
+      # Each runner's host triple is its matrix target, so no --target:
+      # with one, every step that builds for the host (gen_docs, the
+      # uringgate server, the feature lints) compiled the workspace again
+      # into a second tree.
       - name: Build (workspace)
-        run: cargo build --workspace --target ${{ matrix.target }}
+        run: cargo build --workspace
 
       - name: Test (workspace, --lib --tests)
         # KEVY_TEST_PATIENCE widens the replication tests' catch-up budgets:
@@ -327,7 +331,7 @@ jobs:
         # this for the same reason; the plain test job needs it too.
         env:
           KEVY_TEST_PATIENCE: "3"
-        run: cargo test --workspace --lib --tests --target ${{ matrix.target }}
+        run: cargo test --workspace --lib --tests
       # `--lib --tests` is exactly the pair that EXCLUDES doctests, so until
       # this step existed every example in the documentation was compiled by
       # nobody — including the ones a gate counts as verification.
@@ -515,7 +519,7 @@ jobs:
       # before any lint runs. A step name that claims a stricter check than
       # the command performs is a label nobody can act on.
       - name: Clippy (workspace, all targets, default features)
-        run: cargo clippy --workspace --all-targets --target ${{ matrix.target }} -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
       # A workspace build unifies features, so every crate is linted with the
       # union of what anything in the tree asks for. kevy-wasm takes
       # kevy-embedded WITHOUT `tier`, and that configuration — the one the
@@ -546,7 +550,7 @@ jobs:
       # without. Both legs: a deny that holds on one platform says nothing
       # about the code the other one compiles.
       - name: Clippy (no unwrap, panic, or undocumented public item in library code)
-        run: cargo clippy --workspace --lib --bins --target ${{ matrix.target }} -- -D clippy::unwrap_used -D clippy::panic -D missing_docs
+        run: cargo clippy --workspace --lib --bins -- -D clippy::unwrap_used -D clippy::panic -D missing_docs
 
   # ───────────── contract gates: availability / AI / replication ─────────────
   # The executable behavior contracts: availgate's clamps (replication
@@ -663,16 +667,7 @@ jobs:
             cargo-${{ matrix.target }}-
 
       - name: Check wasm-eligible crates
-        run: |
-          cargo check --target ${{ matrix.target }} -p kevy-bytes
-          cargo check --target ${{ matrix.target }} -p kevy-hash
-          cargo check --target ${{ matrix.target }} -p kevy-map
-          cargo check --target ${{ matrix.target }} -p kevy-store
-          cargo check --target ${{ matrix.target }} -p kevy-persist
-          cargo check --target ${{ matrix.target }} -p kevy-resp
-          cargo check --target ${{ matrix.target }} -p kevy-verbs
-          cargo check --target ${{ matrix.target }} -p kevy-embedded
-          cargo check --target ${{ matrix.target }} -p kevy-wasm
+        run: bash bench/wasmcheck.sh ${{ matrix.target }}
 
   # ───────────── crashgate: the crash-consistency contract, executed ─────────────
   # SIGKILL matrix + injected torn-tail / mid-file / payload damage against
@@ -745,63 +740,10 @@ jobs:
           restore-keys: |
             cargo-iot-
 
-      - name: Check kevy-embedded on the Tier A musl targets (full surface)
-        # ARMv6 (arm-unknown-linux-musleabihf) is the Pi Zero / Pi 1 class
-        # and was previously ungated even though the docs name that board.
-        run: |
-          cargo check --target aarch64-unknown-linux-musl -p kevy-embedded
-          cargo check --target armv7-unknown-linux-musleabihf -p kevy-embedded
-          cargo check --target arm-unknown-linux-musleabihf -p kevy-embedded
-
-      - name: Check the no_std core stones (thumbv7em, alloc + external-clock)
-        # kevy-store pulls kevy-hash / -bytes / -map / -madvise with the
-        # same no-default feature set, so one check proves all five;
-        # kevy-madvise is also checked standalone (store only reaches it
-        # through kevy-map).
-        run: |
-          cargo check --target thumbv7em-none-eabihf -p kevy-store --no-default-features --features alloc,external-clock
-          cargo check --target thumbv7em-none-eabihf -p kevy-madvise --no-default-features --features alloc
-
-      - name: Check the six kevy-embedded feature archetypes
-        run: |
-          for f in core core,persist core,index core,index,text,vector core,persist,replicate core,listener; do
-            echo "== features: $f =="
-            cargo check -p kevy-embedded --no-default-features --features "$f"
-          done
-
-      - name: Build the standalone consumer on every shipped IoT target
-        # The real delivery shape: a crate outside the workspace whose only
-        # dependency is kevy-embedded. Building a workspace *example* pulls
-        # dev-dependencies (the `kevy` server crate) and inflated the measured
-        # size by ~60%, so the consumer is what iotgate sizes and what CI
-        # must prove compiles on every board we claim.
-        working-directory: bench/iot-consumer
-        run: |
-          for t in x86_64-unknown-linux-musl aarch64-unknown-linux-musl \
-                   armv7-unknown-linux-musleabihf arm-unknown-linux-musleabihf; do
-            echo "== consumer (core) on $t =="
-            cargo build --release --no-default-features --features core --target "$t"
-          done
-          echo "== consumer (core) on riscv64gc-unknown-linux-musl =="
-          CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_MUSL_LINKER=riscv64-linux-gnu-gcc \
-          RUSTFLAGS="-C target-feature=+crt-static" \
-            cargo build --release --no-default-features --features core \
-              --target riscv64gc-unknown-linux-musl
-
-      - name: Run kevy-store on a bare-metal Cortex-M4 (QEMU)
-        # The no_std claim used to rest on `cargo check`. This BOOTS the
-        # stone on an MCU — hand-written vector table, bump allocator,
-        # panic handler, semihosting — and fails the build if the KV or
-        # TTL surface misbehaves there.
-        working-directory: bench/mcu-probe
-        run: |
-          set -o pipefail
-          cargo run --release 2>&1 | tee /tmp/mcu.log
-          # A zero exit code alone does not prove the firmware ran: a lockup or a
-          # QEMU that never reached main can still leave one behind. Demand the
-          # sentinel the firmware only prints after the KV + TTL checks pass.
-          grep -q '^== kevy-store RUNS on a bare-metal MCU ==$' /tmp/mcu.log \
-            || { echo '::error::the MCU probe did not reach its success sentinel'; exit 1; }
+      # musl checks, the no_std stones, the feature archetypes, the
+      # standalone consumer on every board, and the Cortex-M boot under QEMU
+      - name: iotcheck (the embedded cut compiles, and boots, on every board it claims)
+        run: bash bench/iotcheck.sh
 
   # ───────────── miri on the unsafe stones (catches UB in slot mgmt, ─────────────
   # ───────────── SPSC ring atomics, and the zset encoding face)      ─────────────
@@ -828,33 +770,8 @@ jobs:
           restore-keys: |
             miri-
 
-      - name: cargo miri test -p kevy-map
-        env:
-          MIRIFLAGS: "-Zmiri-disable-isolation"
-        run: cargo miri test -p kevy-map --lib
-
-      - name: cargo miri test -p kevy-bytes
-        env:
-          MIRIFLAGS: "-Zmiri-disable-isolation"
-        run: cargo miri test -p kevy-bytes --lib
-
-      # v3.18 T5b: the two-thread stress tests run with cfg(miri)-reduced N
-      # (2k iterations instead of 200k/1M) — miri's race detector needs the
-      # full/empty boundary crossings, not the iteration count.
-      - name: cargo miri test -p kevy-ring
-        env:
-          MIRIFLAGS: "-Zmiri-disable-isolation"
-        run: cargo miri test -p kevy-ring --lib
-
-      # v3.18 T5b: zset subset only (the RFC's named surface — encoding
-      # roundtrip, skiplist/listpack switch, score ordering; ~2 s native).
-      # Time-box note: the full kevy-store lib suite is NOT miri-runnable —
-      # large-N tests (tests_snapshot / tests_memory pause + accounting
-      # sweeps) run for hours under miri's ~1000x interpretation overhead.
-      - name: cargo miri test -p kevy-store (zset subset)
-        env:
-          MIRIFLAGS: "-Zmiri-disable-isolation"
-        run: cargo miri test -p kevy-store --lib zset
+      - name: mirigate (kevy-map, kevy-bytes, kevy-ring, kevy-store zset under miri)
+        run: bash bench/mirigate.sh
 
   # ───────────── loom: exhaustive interleaving search on the two ─────────────
   # ───────────── lock-free handshakes                            ─────────────

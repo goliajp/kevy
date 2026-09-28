@@ -47,6 +47,8 @@ echo "covgate: measuring workspace line coverage (instrumented build + tests)...
 # rather than two runs that disagree.
 if [ -n "${KEVY_COV_JSON:-}" ]; then
     COVJSON="$KEVY_COV_JSON"
+    # a failed run must not leave the last run's export for deadgate to read
+    rm -f "$COVJSON"
     SUMMARY_ONLY=""
     KEEP_JSON=1
 else
