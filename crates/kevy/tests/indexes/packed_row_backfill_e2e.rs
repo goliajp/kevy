@@ -48,13 +48,13 @@ struct Server {
 
 impl Server {
     fn start() -> Self {
-        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let port = kevy_testnet::free_port();
         Self::spawn(port, std::env::temp_dir().join(format!("kevy-packbf-{port}")), true)
     }
 
     /// A server over an existing data directory — the restart half.
     fn start_in(dir: &std::path::Path) -> Self {
-        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let port = kevy_testnet::free_port();
         Self::spawn(port, dir.to_path_buf(), false)
     }
 
@@ -156,14 +156,17 @@ fn declare(c: &mut std::net::TcpStream) -> Vec<u8> {
 
 /// Wait for `key` to cost less than it did, or give up. Returns the cost.
 fn wait_shrunk(c: &mut std::net::TcpStream, key: &[u8], was: i64) -> i64 {
-    for _ in 0..80 {
+    // the backfill runs on the tick, in batches, behind whatever else the
+    // process is doing
+    let deadline =
+        std::time::Instant::now() + kevy_testnet::patience(std::time::Duration::from_secs(4));
+    loop {
         std::thread::sleep(std::time::Duration::from_millis(50));
         let now = int(&cmd(c, &[b"MEMORY", b"USAGE", key]));
-        if now < was {
+        if now < was || std::time::Instant::now() >= deadline {
             return now;
         }
     }
-    int(&cmd(c, &[b"MEMORY", b"USAGE", key]))
 }
 
 #[test]
@@ -186,7 +189,7 @@ fn a_declaration_reaches_the_rows_that_preceded_it() {
     // The last row, to show the backfill runs to the end of its key list
     // rather than converting the first batch and stopping.
     let last = format!("row:{}", ROWS - 1);
-    assert!(int(&cmd(&mut c, &[b"MEMORY", b"USAGE", last.as_bytes()])) < before);
+    assert!(wait_shrunk(&mut c, last.as_bytes(), before) < before);
 
     // And the rows still answer. A backfill that packed them into
     // something unreadable would satisfy every assertion above.

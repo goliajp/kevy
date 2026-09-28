@@ -6,7 +6,7 @@ use std::io::{Read, Write};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
-mod common;
+use super::common;
 
 static START_GATE: Mutex<()> = Mutex::new(());
 
@@ -61,7 +61,7 @@ struct Server {
 impl Server {
     fn start() -> Self {
         let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let port = kevy_testnet::free_port();
         let dir = std::env::temp_dir().join(format!(
             "kevy-idx-{}",
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()

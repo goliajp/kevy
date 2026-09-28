@@ -8,7 +8,7 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-mod common;
+use super::common;
 
 use common::Wire;
 
