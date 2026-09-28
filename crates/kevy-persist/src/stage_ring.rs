@@ -34,20 +34,20 @@ const OFF_COMMIT: usize = 40;
 /// was when the ring was last drained into it, and the ring's two
 /// logical offsets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct StageHead {
+pub(crate) struct StageHead {
     /// The inode of the AOF this ring continues.
-    pub aof_ino: u64,
+    pub(crate) aof_ino: u64,
     /// The AOF's length right after the last drain.
-    pub aof_len: u64,
+    pub(crate) aof_len: u64,
     /// Everything before this logical offset is in the AOF.
-    pub drained: u64,
+    pub(crate) drained: u64,
     /// Everything before this logical offset was appended and returned.
-    pub commit: u64,
+    pub(crate) commit: u64,
 }
 
 /// An open staging ring.
 #[derive(Debug)]
-pub struct StageRing {
+pub(crate) struct StageRing {
     map: FileMap,
     cap: u64,
 }
@@ -55,7 +55,7 @@ pub struct StageRing {
 impl StageRing {
     /// Open an existing ring as it was left, for recovery. `None` when
     /// there is no file or it does not hold a ring.
-    pub fn open_existing(path: &Path) -> io::Result<Option<(StageRing, StageHead)>> {
+    pub(crate) fn open_existing(path: &Path) -> io::Result<Option<(StageRing, StageHead)>> {
         let file = match File::options().read(true).write(true).open(path) {
             Ok(f) => f,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -77,7 +77,7 @@ impl StageRing {
     /// and continuing the log `aof_ino` at length `aof_len`. A new file is
     /// written through once with zeros, so every later store into it lands
     /// on blocks the filesystem has already allocated.
-    pub fn create(path: &Path, cap: u64, aof_ino: u64, aof_len: u64) -> io::Result<StageRing> {
+    pub(crate) fn create(path: &Path, cap: u64, aof_ino: u64, aof_len: u64) -> io::Result<StageRing> {
         assert!(cap.is_power_of_two() && cap >= 64 * 1024, "ring capacity {cap}");
         let total = HEADER as u64 + cap;
         let mut file =
@@ -104,7 +104,7 @@ impl StageRing {
     }
 
     /// The header as it stands.
-    pub fn head(&self) -> StageHead {
+    pub(crate) fn head(&self) -> StageHead {
         StageHead {
             aof_ino: self.word(OFF_AOF_INO),
             aof_len: self.word(OFF_AOF_LEN),
@@ -114,7 +114,7 @@ impl StageRing {
     }
 
     /// The data area's size in bytes.
-    pub fn cap(&self) -> u64 {
+    pub(crate) fn cap(&self) -> u64 {
         self.cap
     }
 
@@ -122,7 +122,7 @@ impl StageRing {
     /// is handed. `false`, with nothing written, when the undrained bytes
     /// leave no room; the caller drains and asks again. A record larger
     /// than the ring never fits.
-    pub fn push(&mut self, len: usize, fill: impl FnOnce(&mut [u8])) -> bool {
+    pub(crate) fn push(&mut self, len: usize, fill: impl FnOnce(&mut [u8])) -> bool {
         let h = self.head();
         let at = h.commit % self.cap;
         let to_end = self.cap - at;
@@ -143,7 +143,7 @@ impl StageRing {
     /// Call `each` with the undrained records, as runs of whole records in
     /// logical order — the bytes a drain writes to the AOF. Returns the
     /// logical offset the runs end at.
-    pub fn for_each_pending(&self, mut each: impl FnMut(&[u8])) -> u64 {
+    pub(crate) fn for_each_pending(&self, mut each: impl FnMut(&[u8])) -> u64 {
         let h = self.head();
         let mut run: Option<(u64, u64)> = None;
         let mut pos = h.drained;
@@ -166,14 +166,14 @@ impl StageRing {
 
     /// Record a drain: the records before `to` are in the AOF, which is now
     /// `aof_len` bytes long.
-    pub fn mark_drained(&mut self, to: u64, aof_len: u64) {
+    pub(crate) fn mark_drained(&mut self, to: u64, aof_len: u64) {
         self.put_word(OFF_AOF_LEN, aof_len);
         self.put_word(OFF_DRAINED, to);
     }
 
     /// Point the ring at a new log (a rewrite or reset replaced the file):
     /// everything committed counts as drained.
-    pub fn rebase(&mut self, aof_ino: u64, aof_len: u64) {
+    pub(crate) fn rebase(&mut self, aof_ino: u64, aof_len: u64) {
         let commit = self.head().commit;
         self.put_word(OFF_AOF_INO, aof_ino);
         self.put_word(OFF_AOF_LEN, aof_len);

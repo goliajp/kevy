@@ -11,7 +11,7 @@ use crate::stage_ring::{StageHead, StageRing};
 
 /// The verdict on a ring found at open.
 #[derive(Debug, PartialEq, Eq)]
-pub enum Recovery {
+pub(crate) enum Recovery {
     /// Nothing in the ring is owed to the store, for the reason given.
     Discard(&'static str),
     /// These whole AOF records were committed and never reached the AOF:
@@ -29,7 +29,7 @@ pub enum Recovery {
 
 /// Decide what the ring owes a log with inode `aof_ino` and `aof_len`
 /// valid bytes, of which `aof_tail` are the ones past `head.aof_len`.
-pub fn recover(
+pub(crate) fn recover(
     ring: &StageRing,
     head: StageHead,
     aof_ino: u64,
