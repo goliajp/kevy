@@ -22,8 +22,9 @@ categories = ["database", "caching", "api-bindings"]
 
 # v6 — not packaged: these reference a dependency the published manifest
 # cannot declare, and `cargo package` would ship source that does not
-# compile. Drives a live server through kevy-testnet, which is never published.
-exclude = ["tests/wrap_parity.rs"]
+# compile. They use kevy-testnet (a live server, or a mock that reads whole
+# requests), which is never published.
+exclude = ["tests/wrap_parity.rs", "tests/subscribe.rs", "tests/transaction.rs"]
 [lints]
 workspace = true
 

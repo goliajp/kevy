@@ -14,6 +14,11 @@ bare `cargo test` must not excuse the next unlisted `cargo test -p …`. A
 listed command that CI no longer runs fails too: an exemption must not
 outlive its step.
 
+A step's `env:` is part of its command: CI ran compressgate with
+COMPRESSGATE_UNIT_ONLY=1 while the row ran it without, and failed on lines
+CI never asks about. Every variable a CI step sets must be set by the row's
+command too (credentials excepted).
+
 `cargo build` lines are prerequisites, not verdicts: a row that needs a
 binary builds it or declares the requirement.
 
@@ -35,6 +40,8 @@ MANIFEST = ROOT / "suite/manifest.toml"
 TIERS = ["precommit", "premerge", "prerelease", "full"]
 VERDICT = re.compile(r"^(cargo |bash bench/|python3 tools/)")
 ENV_ASSIGN = re.compile(r"^[A-Z_][A-Z0-9_]*=")
+# set by CI for its own access, not part of what the check checks
+CREDENTIALS = {"GITHUB_TOKEN"}
 
 
 def refuse(msg):
@@ -46,7 +53,7 @@ def norm(cmd):
     """One comparable form: no quiet flags, no leading env assignments, and
     a bench script is itself whatever arguments it is handed."""
     cmd = re.split(r" \|\|| \| | 2>&1", cmd)[0]
-    toks = [t for t in cmd.split() if t != "-q"]
+    toks = [t for t in shlex.split(cmd) if t != "-q"]
     while toks and ENV_ASSIGN.match(toks[0]):
         toks.pop(0)
     if len(toks) >= 2 and toks[0] == "bash" and toks[1].startswith("bench/"):
@@ -55,12 +62,26 @@ def norm(cmd):
 
 
 def ci_commands():
-    out = []
+    """(line, command, env keys the command runs under)."""
+    out, env, env_indent = [], set(), None
     for n, line in enumerate(CI.read_text(encoding="utf-8").splitlines(), 1):
+        indent = len(line) - len(line.lstrip())
+        if re.match(r"^\s*- ", line):
+            env, env_indent = set(), None
+        if env_indent is not None:
+            m = re.match(r"^\s+([A-Z_][A-Z0-9_]*):", line)
+            if m and indent > env_indent:
+                env.add(m.group(1))
+                continue
+            env_indent = None
+        if re.match(r"^\s+env:\s*$", line):
+            env_indent = indent
+            continue
         s = re.sub(r"^(-\s+)?run:\s*", "", line.strip())
+        inline = set(re.findall(r"^([A-Z_][A-Z0-9_]*)=", s))
         s = re.sub(r"^([A-Z_][A-Z0-9_]*=\S*\s+)+", "", s)
         if VERDICT.match(s) and not s.startswith("cargo build"):
-            out.append((n, norm(s.rstrip("\\").strip())))
+            out.append((n, norm(s.rstrip("\\").strip()), (env | inline) - CREDENTIALS))
     return out
 
 
@@ -81,19 +102,24 @@ def excuses(key, cmd):
 def main():
     m = tomllib.loads(MANIFEST.read_text(encoding="utf-8"))
     rank = {t: i for i, t in enumerate(TIERS)}
-    rows = [(c["id"], c["tier"], rc) for c in m["check"] for rc in row_commands(c["cmd"])]
+    rows = [(c["id"], c["tier"], rc, c["cmd"]) for c in m["check"] for rc in row_commands(c["cmd"])]
     exempt = m["suite"].get("ci_only", {})
     seen = ci_commands()
     if not seen:
         refuse(f"read no commands from {CI.relative_to(ROOT)}")
     bad, used = [], set()
-    for line, cmd in seen:
-        hits = [(i, t) for i, t, rc in rows if cmd == rc]
+    for line, cmd, env in seen:
+        hits = [(i, t, raw) for i, t, rc, raw in rows if cmd == rc]
         if hits:
-            late = [i for i, t in hits if rank[t] > rank["premerge"]]
+            late = [i for i, t, _ in hits if rank[t] > rank["premerge"]]
             if len(late) == len(hits):
                 bad.append(f"ci.yml:{line}: `{cmd}` is row {late[0]}, which runs only in "
                            f"{hits[0][1]} — CI runs it on every push")
+            for i, _, raw in hits:
+                missing = sorted(k for k in env if f"{k}=" not in raw)
+                if missing:
+                    bad.append(f"ci.yml:{line}: CI runs `{cmd}` with {', '.join(missing)} set; "
+                               f"row {i} does not")
             continue
         key = next((k for k in exempt if excuses(k, cmd)), None)
         if key is None:
