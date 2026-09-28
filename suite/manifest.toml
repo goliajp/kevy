@@ -72,7 +72,7 @@ prerelease = 5400
 "cargo check --target arm-unknown-linux-musleabihf *" = "IoT cross-checks; the musl targets are installed only by CI's iot job"
 "cargo check --target thumbv7em-none-eabihf *" = "no_std cross-checks; the Cortex-M target is installed only by CI's iot job"
 "cargo check -p kevy-embedded --no-default-features *" = "the IoT feature archetypes, a matrix CI's iot job loops over"
-"cargo run --release 2>&1 | tee /tmp/mcu.log" = "the Cortex-M consumer under an emulator only CI's iot job installs"
+"cargo run --release" = "the Cortex-M consumer under an emulator only CI's iot job installs"
 "cargo miri test *" = "nightly miri, single-threaded interpretation; CI's miri job"
 "cargo +nightly fuzz run *" = "cargo-fuzz on nightly; CI's fuzz-smoke matrix, which fuzzgate keeps complete"
 "bash bench/run.sh" = "the Docker benchmark smoke against valkey; measures, gives no verdict on the code"
@@ -218,7 +218,7 @@ proves = "every competitor version in the tree matches bench/COMPETITOR-ANCHORS.
 [[check]]
 id = "anchor-currency"
 area = "release-pins"
-tier = "premerge"
+tier = "prerelease"
 cmd = "python3 tools/check_competitor_anchors.py"
 expected = 8
 timeout = 180
@@ -676,7 +676,8 @@ proves = "whether the built wasm is the published one — divergence is a releas
 id = "crashgate"
 area = "disk"
 tier = "premerge"
-cmd = "bash bench/crashgate.sh"
+# strict as CI runs it: a pending cell is a failure
+cmd = "bash -c 'PENDING_STRICT=1 bash bench/crashgate.sh'"
 expected = 120
 timeout = 3600
 requires = ["linux", "binaries-debug"]
