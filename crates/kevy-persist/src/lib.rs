@@ -68,6 +68,10 @@ mod snapshot_fmt;
 mod snapshot_payload;
 mod snapshot_read;
 mod snapshot_write;
+#[cfg(not(target_arch = "wasm32"))]
+mod stage_recover;
+#[cfg(not(target_arch = "wasm32"))]
+mod stage_ring;
 
 pub use aof::{AOF_MAGIC, Aof, Fsync, RewritePlan, RewriteStats};
 pub use aof_policy::RewritePolicy;
@@ -79,6 +83,10 @@ pub use replay::{
     ReplayReport, replay_aof, replay_aof_in_place, replay_aof_quiet, replay_aof_resync,
 };
 pub use segmented::{SEGMENTED, segmented_argv, segmented_frame};
+#[cfg(not(target_arch = "wasm32"))]
+pub use stage_recover::{Recovery, recover};
+#[cfg(not(target_arch = "wasm32"))]
+pub use stage_ring::{StageHead, StageRing};
 
 /// How often bulk-load paths check the tiering demote watermark:
 /// every this many applied frames/records, the loading store runs
@@ -194,6 +202,8 @@ mod tests_aof;
 mod tests_policy;
 #[cfg(test)]
 mod tests_rewrite;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests_stage;
 #[cfg(test)]
 mod tests_sync;
 #[cfg(test)]
