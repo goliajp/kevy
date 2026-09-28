@@ -107,6 +107,31 @@ pub(super) fn op_part(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec
     super::query::run_parsed(ctx, store, &q, b"IDX.QUERY")
 }
 
+/// The tag after the status byte of a global index's `IDX.REBUILD` chunk.
+pub(crate) const REBUILD_TAG: u8 = b'g';
+
+/// A shard's half of `IDX.REBUILD` on a global index: a sample of its
+/// rows' values, `[ST_OK][REBUILD_TAG][n u32][(len u32, value)…]`, from
+/// which the origin takes new split points.
+pub(super) fn op_rebuild(ctx: &Ctx<'_>, store: &mut Store, name: &[u8]) -> Vec<u8> {
+    let Some(spec) = ctx.state.catalogs.index().and_then(|c| c.get(name).map(|(s, _)| s.clone()))
+    else {
+        return vec![super::ST_NOINDEX];
+    };
+    let sample = crate::index_runtime::sample_values(
+        store,
+        &spec,
+        crate::index_runtime::SAMPLE_PER_PARTITION,
+    );
+    let mut chunk = vec![super::ST_OK, REBUILD_TAG];
+    chunk.extend_from_slice(&(sample.len() as u32).to_le_bytes());
+    for v in &sample {
+        chunk.extend_from_slice(&(v.len() as u32).to_le_bytes());
+        chunk.extend_from_slice(v);
+    }
+    chunk
+}
+
 /// Each `FIELDS` name's position among the stored `VALUES`, or the
 /// refusal naming the first one not stored (and what is): the owner
 /// holds the partition, not the rows, so it cannot read a row's hash.

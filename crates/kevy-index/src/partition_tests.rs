@@ -93,3 +93,46 @@ fn every_value_has_one_partition_and_every_partition_one_owner() {
         assert_eq!(owners, (0..n).collect::<Vec<_>>(), "n = {n}");
     }
 }
+
+/// Largest partition over the mean, for `population` cut by `splits`.
+fn max_over_mean(population: &[Vec<u8>], splits: Vec<Vec<u8>>) -> f64 {
+    let part = Partitioning::Global { splits };
+    let mut sizes = vec![0usize; part.partitions()];
+    for v in population {
+        sizes[part.partition_of(v)] += 1;
+    }
+    let max = *sizes.iter().max().unwrap() as f64;
+    max / (population.len() as f64 / sizes.len() as f64)
+}
+
+#[test]
+fn quantiles_of_a_strided_sample_cut_even_partitions() {
+    // 100_000 distinct values in a scrambled order, as a key walk sees them
+    let mut x: u64 = 0x9e37_79b9_7f4a_7c15;
+    let population: Vec<Vec<u8>> = (0..100_000u64)
+        .map(|_| {
+            x = x.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+            (x >> 16).to_be_bytes().to_vec()
+        })
+        .collect();
+    // 512 samples per partition: a partition's share then varies by about
+    // 1/sqrt(512) ≈ 4.4%, and the largest of 16 lands near 2σ
+    for parts in [2, 4, 8, 16] {
+        let stride = population.len() / (512 * parts);
+        let sample: Vec<Vec<u8>> = population.iter().step_by(stride).cloned().collect();
+        let splits = crate::splits_from_sample(sample, parts);
+        assert_eq!(splits.len(), parts - 1);
+        let skew = max_over_mean(&population, splits);
+        assert!(skew < 1.1, "P={parts}: largest partition {skew:.3}× the mean");
+    }
+}
+
+#[test]
+fn a_value_holding_more_than_its_share_is_not_split() {
+    // half the rows share one value: it stays whole, the rest still splits
+    let mut sample: Vec<Vec<u8>> = vec![vec![50]; 500];
+    sample.extend((0..500u32).map(|v| vec![(v % 100) as u8]));
+    let splits = crate::splits_from_sample(sample, 4);
+    assert!(splits.windows(2).all(|w| w[0] < w[1]));
+    assert!(splits.len() < 3, "{splits:?}");
+}

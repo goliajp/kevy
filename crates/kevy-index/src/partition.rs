@@ -90,6 +90,34 @@ impl Partitioning {
     }
 }
 
+/// Split points that cut the values `sample` stands for into `parts`
+/// partitions of about equal size: its `parts`-quantiles, strictly
+/// increasing. Fewer come back when the sample has fewer distinct values —
+/// every entry of one value lives in one partition, so a value holding
+/// more than its share cannot be split — and none for an empty sample.
+///
+/// ```
+/// use kevy_index::splits_from_sample;
+///
+/// let sample: Vec<Vec<u8>> = (0..100u8).map(|v| vec![v]).collect();
+/// assert_eq!(splits_from_sample(sample, 4), [vec![25], vec![50], vec![75]]);
+/// assert_eq!(splits_from_sample(vec![vec![7]; 50], 4), Vec::<Vec<u8>>::new());
+/// ```
+pub fn splits_from_sample(mut sample: Vec<Vec<u8>>, parts: usize) -> Vec<Vec<u8>> {
+    sample.sort_unstable();
+    let m = sample.len();
+    let mut out: Vec<Vec<u8>> = Vec::with_capacity(parts.saturating_sub(1));
+    for k in 1..parts {
+        let q = &sample[k * m / parts.max(1)..];
+        let Some(v) = q.first() else { break };
+        // a point at the smallest value would leave partition 0 empty
+        if Some(v) > sample.first() && out.last() < Some(v) {
+            out.push(v.clone());
+        }
+    }
+    out
+}
+
 /// The text form of one order-encoded value of type `ty`.
 fn decode_order_key(ty: crate::ValType, enc: &[u8]) -> Vec<u8> {
     let word = || u64::from_be_bytes(enc.try_into().unwrap_or([0; 8]));

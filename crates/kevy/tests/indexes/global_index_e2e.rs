@@ -327,3 +327,51 @@ fn a_global_index_over_existing_rows_answers_all_of_them_or_says_it_is_building(
     }
     assert!(building > 0, "the build finished before the first query: nothing was tested");
 }
+
+/// The split values `IDX.DESCRIBE` names, as integers.
+fn described_splits(w: &mut Wire, name: &[u8]) -> Vec<i64> {
+    let d = text(&call(w, &[b"IDX.DESCRIBE", name]));
+    let decl = d.rsplit("PARTITION").next().unwrap_or_default().to_string();
+    decl.split("SPLIT\r\n").skip(1).filter_map(|s| s.split("\r\n").nth(1)?.parse().ok()).collect()
+}
+
+fn wait_ready(w: &mut Wire, name: &[u8]) {
+    ready(w, &[b"IDX.COUNT", name, b"RANGE", b"0", b"0"]);
+}
+
+#[test]
+fn a_global_index_without_split_points_samples_them_and_a_rebuild_resamples() {
+    let srv = Server::start(4);
+    let mut w = srv.wire();
+    for i in 0..8000u32 {
+        let (key, age) = (format!("user:{i}"), ((i * 7919) % 1000).to_string());
+        call(&mut w, &[b"HSET", key.as_bytes(), b"age", age.as_bytes()]);
+    }
+    create(&mut w, b"age_g", &[b"PARTITION", b"global"]);
+    create(&mut w, b"age_l", &[]);
+    let splits = described_splits(&mut w, b"age_g");
+    assert_eq!(splits.len(), 3, "the shard count's quartiles: {splits:?}");
+    for (s, want) in splits.iter().zip([250, 500, 750]) {
+        assert!((s - want).abs() < 60, "split {s}, expected near {want}");
+    }
+    wait_ready(&mut w, b"age_g");
+    wait_ready(&mut w, b"age_l");
+    let all = |w: &mut Wire, name: &[u8]| {
+        text(&call(w, &[b"IDX.QUERY", name, b"RANGE", b"0", b"1000", b"LIMIT", b"10000"]))
+    };
+    assert_eq!(all(&mut w, b"age_g"), all(&mut w, b"age_l"));
+
+    // created over nothing: one partition, until a rebuild samples the rows
+    call(&mut w, &[b"FLUSHALL"]);
+    create(&mut w, b"late", &[b"PARTITION", b"global"]);
+    assert!(described_splits(&mut w, b"late").is_empty());
+    for i in 0..8000u32 {
+        let (key, age) = (format!("user:{i}"), (i % 400).to_string());
+        call(&mut w, &[b"HSET", key.as_bytes(), b"age", age.as_bytes()]);
+    }
+    assert_eq!(call(&mut w, &[b"IDX.REBUILD", b"late"]), b"+OK\r\n");
+    let splits = described_splits(&mut w, b"late");
+    assert_eq!(splits.len(), 3, "{splits:?}");
+    wait_ready(&mut w, b"late");
+    assert_eq!(all(&mut w, b"late"), all(&mut w, b"age_l"));
+}

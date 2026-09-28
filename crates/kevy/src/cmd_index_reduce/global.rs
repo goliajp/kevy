@@ -6,7 +6,7 @@
 
 use kevy_rt::ExtensionReduced;
 
-use crate::cmd_index_query::{PART_ORIG, PART_VERB, global_walk};
+use crate::cmd_index_query::{PART_ORIG, PART_VERB, REBUILD_TAG, global_walk};
 use crate::state::RuntimeState;
 
 /// The first phase of an `IDX.QUERY` on a global index: `None` unless it
@@ -64,6 +64,37 @@ fn step(
         return ExtensionReduced::Continue(next);
     }
     ExtensionReduced::Reply(super::query::reduce_query(orig, &[page]))
+}
+
+/// `IDX.REBUILD` on a global index: new split points from every shard's
+/// sample, installed as a new incarnation — every shard then sends its rows'
+/// entries again, and the index answers once they all have. `None` when
+/// the chunks are not a global rebuild's.
+pub(super) fn rebuild(
+    state: &RuntimeState,
+    argv: &[Vec<u8>],
+    chunks: &[Vec<u8>],
+) -> Option<Vec<u8>> {
+    if !chunks.iter().all(|c| c.get(1) == Some(&REBUILD_TAG)) {
+        return None;
+    }
+    let name = argv.get(1)?;
+    let mut sample = Vec::new();
+    for c in chunks {
+        let mut pos = 2;
+        let n = super::chunk::read_u32_at(c, &mut pos)?;
+        for _ in 0..n {
+            sample.push(super::chunk::read_kbytes_at(c, &mut pos)?);
+        }
+    }
+    let splits = kevy_index::splits_from_sample(sample, state.nshards().max(1));
+    let mut cat = (*state.catalogs.index()?).clone();
+    if !cat.set_splits(name, splits) {
+        return None;
+    }
+    crate::cmd_index::persist_sidecar(state.sidecar_dir(), &cat);
+    state.install_index_catalog(cat);
+    Some(b"+OK\r\n".to_vec())
 }
 
 /// Two plain hit chunks (`[status][n u32][rows…]`) as one; an empty
