@@ -224,6 +224,7 @@ impl Drop for DropGuard {
         if let Some(j) =
             self.reaper_join.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
         {
+            j.thread().unpark();
             let _ = j.join();
         }
         #[cfg(feature = "persist")]
