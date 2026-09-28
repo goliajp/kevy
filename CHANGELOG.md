@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+- **A hash field's own TTL survives a background AOF rewrite.** The
+  non-blocking rewrite, which an embedded store runs whenever the log
+  outgrows its auto-rewrite threshold, builds the new log in memory; that
+  image carried every value and key TTL but not the per-field deadlines
+  set with `HEXPIRE` and its siblings, so after the rewrite and a restart
+  those fields never expired. The wasm package's host-mediated log image
+  is built the same way and lost them too. The synchronous rewrite
+  (`BGREWRITEAOF` on a server, `rewrite_aof` on an embedded store) was not
+  affected. Affected since 3.0.0.
+
+- **An embedded store that is killed keeps every write that returned.**
+  Under `EverySec` and `No`, appends used to wait in a user-space buffer
+  until the next tick or fsync, so a process killed in between — a crash,
+  `SIGKILL`, the iOS or Android memory killer — lost them. Appends now land
+  in a staging ring first: a small file (`aof-<i>.aof.stage`, 4 MiB by
+  default) mapped into memory, which the kernel owns the moment the append
+  returns. The ring drains into the AOF on every tick, and the next open
+  replays whatever a killed process left in it. A burst of writes that
+  fits in the ring no longer calls `write()` on the caller's thread; a
+  sustained stream larger than the ring is still bounded by how fast the
+  drain can `write()` it. Power loss is bounded as before, by the fsync
+  policy. `Always` does not stage; `Config::with_stage_ring(0)` turns
+  staging off. A store opened by 6.4 or earlier ignores the ring: after a
+  process kill, downgrade only once the store has been opened and closed
+  cleanly by this version.
+
 - **Writes made after a crash inside a transaction survive the next
   restart.** A process that died between a transaction's begin and commit
   markers — an embedded `atomic()` block, a server `MULTI`/`EXEC`, a batch
