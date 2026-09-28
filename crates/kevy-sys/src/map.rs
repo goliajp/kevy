@@ -190,6 +190,46 @@ impl FileMap {
     }
 }
 
+/// Reserve `len` bytes of disk past the file's allocated end, so pages
+/// later written through a mapping land on blocks that already exist
+/// (`F_PREALLOCATE`). Elsewhere there is nothing to ask, and it is a no-op.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub fn preallocate(file: &File, len: u64) -> io::Result<()> {
+    #[repr(C)]
+    struct FStore {
+        fst_flags: u32,
+        fst_posmode: c_int,
+        fst_offset: i64,
+        fst_length: i64,
+        fst_bytesalloc: i64,
+    }
+    const F_PREALLOCATE: c_int = 42;
+    const F_ALLOCATEALL: u32 = 4;
+    const F_PEOFPOSMODE: c_int = 3;
+    let mut store = FStore {
+        fst_flags: F_ALLOCATEALL,
+        fst_posmode: F_PEOFPOSMODE,
+        fst_offset: 0,
+        fst_length: i64::try_from(len)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "length past i64"))?,
+        fst_bytesalloc: 0,
+    };
+    // SAFETY: F_PREALLOCATE takes a pointer to an fstore_t, which `FStore`
+    // lays out field for field; it lives across the call.
+    let rc =
+        unsafe { crate::ffi::fcntl(file.as_raw_fd(), F_PREALLOCATE, &mut store as *mut FStore) };
+    if rc == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Nothing to reserve ahead on this platform.
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+pub fn preallocate(_file: &File, _len: u64) -> io::Result<()> {
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
