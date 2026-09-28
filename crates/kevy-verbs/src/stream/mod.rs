@@ -52,7 +52,7 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
         b"XTRIM" => cmd_xtrim(store, args, out),
         b"XSETID" => setid::cmd_xsetid(store, args, out),
         b"XREAD" => cmd_xread(store, args, out),
-        b"XGROUP" => group::cmd_xgroup(store, args, out),
+        b"XGROUP" => return Some(group::cmd_xgroup(store, args, out)),
         b"XREADGROUP" => return Some(group::cmd_xreadgroup(store, args, out)),
         b"XACK" => group::cmd_xack(store, args, out),
         b"XPENDING" => group::cmd_xpending(store, args, out),
@@ -68,7 +68,7 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
 /// verb that can change a stream or a group, nothing for a read. `XADD`,
 /// `XREADGROUP` and the claims decide their own record.
 fn effect(cmd: &[u8]) -> Effect {
-    let write = matches!(cmd, b"XDEL" | b"XTRIM" | b"XSETID" | b"XGROUP" | b"XACK");
+    let write = matches!(cmd, b"XDEL" | b"XTRIM" | b"XSETID" | b"XACK");
     if write { Effect::Write } else { Effect::Read }
 }
 

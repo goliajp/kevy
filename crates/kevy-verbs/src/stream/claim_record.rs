@@ -47,9 +47,9 @@ impl Before {
 }
 
 /// What an `XREADGROUP` needs to know about each stream it reads, taken
-/// before the read: the group's last-delivered ID and whether the
-/// consumer is new. One stream is kept inline, so the common read notes
-/// its marks without a heap allocation.
+/// before the read: the group's last-delivered ID and whether the consumer
+/// is new. One stream is kept inline, so the common read notes its marks
+/// without a heap allocation.
 #[derive(Default)]
 pub(super) struct ReadMarks {
     first: Option<(StreamId, bool)>,
@@ -81,7 +81,9 @@ impl ReadMarks {
     }
 
     /// The effect of the read: nothing to record when it delivered
-    /// nothing and created no consumer.
+    /// nothing and created no consumer. Its contact with the group is
+    /// then not recorded either: a consumer that only polls comes back
+    /// from a restart with the contact of its last recorded read.
     pub(super) fn effect(self) -> Effect {
         let Some(first) = self.first.filter(|_| self.changed) else { return Effect::Skip };
         if self.more.is_empty() {

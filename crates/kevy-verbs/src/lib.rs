@@ -113,15 +113,17 @@ pub enum Effect {
     /// let effect = exec(&mut store, b"XCLAIM", &claim, &mut Vec::new()).unwrap();
     /// assert!(matches!(effect, Effect::RecordClaim(_)));
     /// let frames = kevy_verbs::aof::deferred_frames(&mut store, &claim, &effect);
-    /// let head: Vec<&[u8]> = (0..6).map(|i| &frames[0][i]).collect();
+    /// // b is new, so its contact comes first, then the claim
+    /// assert_eq!(&frames[0][0], b"XINTERNAL.CONSUMERSEEN");
+    /// let head: Vec<&[u8]> = (0..6).map(|i| &frames[1][i]).collect();
     /// assert_eq!(head, [&b"XCLAIM"[..], b"s", b"g", b"b", b"0", b"1-1"]);
     /// ```
     RecordClaim(Box<aof::Claim>),
     /// Record a one-stream `XREADGROUP` as what it left, not as a read a
     /// replay would stamp with its own clock: `.0` is the group's
-    /// last-delivered ID before the read, `.1` whether the read created
-    /// its consumer. Carries no frame: a caller that records builds them
-    /// with [`aof::deferred_frames`].
+    /// last-delivered ID before the read, `.1` whether the read created its
+    /// consumer. Carries no frame: a caller that records builds them with
+    /// [`aof::deferred_frames`].
     ///
     /// ```
     /// use kevy_verbs::{Effect, exec};
@@ -138,7 +140,8 @@ pub enum Effect {
     /// assert_eq!(effect, Effect::RecordRead(kevy_store::StreamId::MIN, true));
     /// let frames = kevy_verbs::aof::deferred_frames(&store, &read, &effect);
     /// let verbs: Vec<&[u8]> = frames.iter().map(|f| &f[0]).collect();
-    /// assert_eq!(verbs, [&b"XGROUP"[..], b"XCLAIM"], "the group's move, then the delivery");
+    /// // the consumer's contact, the group's move, then the delivery
+    /// assert_eq!(verbs, [&b"XINTERNAL.CONSUMERSEEN"[..], b"XGROUP", b"XCLAIM"]);
     /// ```
     RecordRead(StreamId, bool),
     /// [`Effect::RecordRead`] for an `XREADGROUP` over several streams:
@@ -162,6 +165,27 @@ pub enum Effect {
     /// assert_eq!(marks.len(), 2);
     /// ```
     RecordReads(Vec<(StreamId, bool)>),
+    /// Record an `XGROUP CREATECONSUMER` that created its consumer as
+    /// `XINTERNAL.CONSUMERSEEN key group consumer t`, `t` the time it was
+    /// created at, so a replay does not create it at its own. Carries no
+    /// frame: a caller that records builds it with
+    /// [`aof::deferred_frames`].
+    ///
+    /// ```
+    /// use kevy_verbs::{Effect, exec};
+    /// if kevy_verbs::verb(b"XGROUP").is_none() {
+    ///     return; // built without the `streams-geo` feature
+    /// }
+    /// let mut store = kevy_store::Store::new();
+    /// let argv = |s: &str| kevy_resp::Argv::from(s.split(' ').map(|p| p.as_bytes().to_vec()).collect::<Vec<_>>());
+    /// exec(&mut store, b"XGROUP", &argv("XGROUP CREATE s g $ MKSTREAM"), &mut Vec::new());
+    /// let create = argv("XGROUP CREATECONSUMER s g c");
+    /// let effect = exec(&mut store, b"XGROUP", &create, &mut Vec::new()).unwrap();
+    /// assert_eq!(effect, Effect::RecordSeen);
+    /// let frame = &kevy_verbs::aof::deferred_frames(&store, &create, &effect)[0];
+    /// assert_eq!((frame.len(), &frame[0]), (5, &b"XINTERNAL.CONSUMERSEEN"[..]));
+    /// ```
+    RecordSeen,
     /// Record nothing, not even the argv: a random command that removed
     /// nothing, or a claim that changed nothing.
     Skip,

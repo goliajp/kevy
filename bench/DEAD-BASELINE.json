@@ -4,7 +4,7 @@
   "kind": "symbols/qualified-path",
   "tree": "5cb014661ab5dcfc12f9d8a17abeba8a8b1fc9da",
   "total_regions": 191121,
-  "dead_regions": 27385,
+  "dead_regions": 27400,
   "llvm_per_instantiation_dead": 27099,
   "crates": {
     "kevy": {
@@ -3607,7 +3607,7 @@
     "kevy_verbs::stream::group::parse_xreadgroup_argv::": 6,
     "kevy_verbs::stream::group::parse_xreadgroup_streams::": 1,
     "kevy_verbs::stream::group::xgroup_create::": 11,
-    "kevy_verbs::stream::group::xgroup_create_consumer::": 7,
+    "kevy_verbs::stream::group::xgroup_create_consumer::": 9,
     "kevy_verbs::stream::group::xgroup_del_consumer::": 7,
     "kevy_verbs::stream::group::xgroup_destroy::": 7,
     "kevy_verbs::stream::group::xgroup_setid::": 14,
@@ -3626,7 +3626,12 @@
     "kevy_verbs::stream::read::xread_parse_kv_u64::": 1,
     "kevy_verbs::stream::read::xread_parse_kv_usize::": 1,
     "kevy_verbs::stream::read::xread_parse_streams::": 1,
-    "kevy_verbs::stream::setid::cmd_xsetid::": 18
+    "kevy_verbs::stream::setid::cmd_xsetid::": 18,
+    "kevy_store::Store::xgroup_consumer_seen": 2,
+    "kevy_store::stream::StreamData::group_consumer_seen": 4,
+    "kevy_verbs::record::apply_internal::": 4,
+    "kevy_verbs::record::seen_frame": 2,
+    "kevy_verbs::record_read::read_frames::": 1
   },
   "envelope_runs": 3,
   "history": [
@@ -4233,6 +4238,18 @@
       ],
       "reason": "The synchronous rewrite swap now moves the epoll writer lane onto the new log after the rename, as the off-thread swap already did. That swap runs with the AOF offload off or with the persist worker gone, and no test in the corpus takes either, so the added call is never run.",
       "delta": 2
+    },
+    {
+      "accepted": [
+        "kevy_store::Store::xgroup_consumer_seen",
+        "kevy_store::stream::StreamData::group_consumer_seen",
+        "kevy_verbs::record::apply_internal::",
+        "kevy_verbs::record::seen_frame",
+        "kevy_verbs::record_read::read_frames::",
+        "kevy_verbs::stream::group::xgroup_create_consumer::"
+      ],
+      "reason": "A stream consumer's last contact is now recorded by an internal verb. Its never-run regions are edge arms: the seen frame's early returns when the group or the consumer is gone by the time the record is built; the applier's arm for a key holding another type; the store's missing-key and missing-group returns and its update of a consumer that already exists, which only doctests reach and the corpus does not run; the wrong-arity, already-exists and error arms of XGROUP CREATECONSUMER; and the false arm of the group-read condition, unreachable because a read that neither moved the cursor nor made a consumer is skipped before its frames are built.",
+      "delta": 15
     }
   ]
 }

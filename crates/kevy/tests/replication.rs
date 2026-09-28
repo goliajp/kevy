@@ -1452,6 +1452,51 @@ fn server_as_replica_applies_upstream_writes() {
     replica.shutdown();
 }
 
+/// A server replica applies the internal record verb its primary writes
+/// for a new stream consumer, which it would refuse from a client: the
+/// consumer arrives, with its contact time.
+#[test]
+fn server_replica_applies_the_internal_consumer_record() {
+    let primary = Server::start(1);
+    let replica = ReplicaServer::start(primary.replication_base);
+    let mut writer = std::net::TcpStream::connect(("127.0.0.1", primary.port)).unwrap();
+    let mut reader = replica.connect_or_explain("replica accept loop");
+    // poll the replica until `probe` answers `want`
+    let mut until = |probe: &[&[u8]], want: &[u8]| {
+        (0..500).any(|_| {
+            send_resp(&mut reader, probe);
+            let done = read_line(&mut reader) == want;
+            if !done {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            done
+        })
+    };
+    // once the replica holds this, it is on the live stream, not a snapshot
+    send_resp(&mut writer, &[b"SET", b"ready", b"1"]);
+    assert_eq!(read_line(&mut writer), b"+OK\r\n");
+    assert!(until(&[b"EXISTS", b"ready"], b":1\r\n"), "the replica never came up");
+    for (cmd, want) in [
+        (&[&b"XADD"[..], b"s", b"1-1", b"f", b"v"][..], &b"$3\r\n"[..]),
+        (&[b"XGROUP", b"CREATE", b"s", b"g", b"0"], b"+OK\r\n"),
+        (&[b"XGROUP", b"CREATECONSUMER", b"s", b"g", b"c"], b":1\r\n"),
+        // a marker after the consumer's record: when it lands, so has that
+        (&[b"XADD", b"s", b"2-1", b"f", b"v"], b"$3\r\n"),
+    ] {
+        send_resp(&mut writer, cmd);
+        assert_eq!(read_line(&mut writer), want);
+        if want.starts_with(b"$") {
+            let _ = read_line(&mut writer);
+        }
+    }
+    assert!(until(&[b"XLEN", b"s"], b":2\r\n"), "the replica never caught up to the marker");
+    assert!(until(&[b"XINFO", b"CONSUMERS", b"s", b"g"], b"*1\r\n"), "the record was not applied");
+    drop(reader);
+    drop(writer);
+    primary.shutdown();
+    replica.shutdown();
+}
+
 /// Read one RESP2 reply off `s`, returning any bulk payloads it
 /// carried: an array of bulks (SMEMBERS / count-form SPOP) yields each
 /// member, a bare bulk yields one, a null bulk / `+OK` / `:n` yields

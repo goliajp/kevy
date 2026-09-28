@@ -370,3 +370,97 @@ fn a_blocking_read_is_refused_and_a_plain_one_served() {
     assert!(r.starts_with(b"-ERR the embedded engine cannot block"), "{r:?}");
     assert!(call(&s, "XREAD STREAMS s 0").starts_with(b"*1\r\n"));
 }
+
+/// `(consumer, idle)` pairs of `XINFO CONSUMERS s g`, by name, and when
+/// they were read.
+fn seen(s: &Store) -> (Vec<(String, i64)>, std::time::Instant) {
+    let reply = String::from_utf8_lossy(&call(s, "XINFO CONSUMERS s g")).into_owned();
+    let t: Vec<&str> = reply.split("\r\n").collect();
+    let mut out: Vec<(String, i64)> = (0..t.len())
+        .filter(|&i| t[i] == "name" && t.get(i + 7) == Some(&"idle"))
+        .map(|i| (t[i + 2].to_string(), t[i + 8][1..].parse().expect("an idle time")))
+        .collect();
+    out.sort();
+    (out, std::time::Instant::now())
+}
+
+/// Each consumer's idle time went on by what passed since `before.1`,
+/// except `polled`'s, whose last contact was an empty read.
+fn assert_went_on(
+    before: &(Vec<(String, i64)>, std::time::Instant),
+    after: &[(String, i64)],
+    polled: Option<&str>,
+) {
+    let elapsed = before.1.elapsed().as_millis() as i64;
+    assert_eq!(before.0.len(), 6, "six consumers: {before:?}");
+    for ((name, b), (other, a)) in before.0.iter().zip(after) {
+        assert_eq!(name, other);
+        let gap = a - b;
+        if polled == Some(name.as_str()) {
+            // its last contact was an empty read, which is not recorded:
+            // it comes back from its last delivering read, well before
+            assert!(gap > elapsed + 60, "{name}: the empty read was recorded ({b} -> {a})");
+            continue;
+        }
+        assert!(
+            (elapsed - 80..=elapsed + 80).contains(&gap),
+            "{name}: idle went {b} -> {a} over {elapsed} ms: it started over instead of going on"
+        );
+    }
+}
+
+/// A consumer's last contact with its group comes back from the log as
+/// it was, however the consumer came about or was last seen, from the log
+/// as written and from the log a rewrite compacts it to. A read that
+/// delivered nothing is not recorded, so a consumer last seen by one comes
+/// back with its earlier contact.
+#[test]
+fn consumer_seen_times_survive_a_restart() {
+    let dir = kevy_tmpdir::TmpDir::new("replay-streams-seen");
+    let first = {
+        let s = open(dir.path(), 1);
+        for id in ["1-1", "2-1", "3-1"] {
+            ok(&s, &format!("XADD s {id} f v"));
+        }
+        ok(&s, "XGROUP CREATE s g 0");
+        ok(&s, "XREADGROUP GROUP g reader COUNT 2 STREAMS s >");
+        ok(&s, "XGROUP CREATECONSUMER s g made");
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        ok(&s, "XREADGROUP GROUP g idler STREAMS s 0");
+        ok(&s, "XCLAIM s g claimer 0 1-1 JUSTID");
+        ok(&s, "XAUTOCLAIM s g auto 0 2-1 COUNT 1 JUSTID");
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        ok(&s, "XREADGROUP GROUP g late COUNT 1 STREAMS s >");
+        assert_eq!(call(&s, "XREADGROUP GROUP g reader STREAMS s >"), b"*-1\r\n");
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        seen(&s)
+    };
+    let second = {
+        let s = open(dir.path(), 1);
+        assert_went_on(&first, &seen(&s).0, Some("reader"));
+        let second = seen(&s);
+        s.rewrite_aof().expect("rewrite");
+        second
+    };
+    let s = open(dir.path(), 1);
+    assert_went_on(&second, &seen(&s).0, None);
+}
+
+/// The internal record verb is refused from a caller of `dispatch_argv`
+/// and changes nothing; fed back as a frame, it is applied.
+#[test]
+fn the_internal_record_verb_is_refused_from_a_caller_and_applied_from_a_frame() {
+    let dir = kevy_tmpdir::TmpDir::new("replay-streams-internal");
+    let s = open(dir.path(), 1);
+    ok(&s, "XGROUP CREATE s g $ MKSTREAM");
+    let want = format!("-{}\r\n", kevy_verbs::aof::INTERNAL_REFUSAL);
+    assert_eq!(String::from_utf8_lossy(&call(&s, "XINTERNAL.CONSUMERSEEN s g c 1")), want);
+    assert_eq!(call(&s, "XINFO CONSUMERS s g"), b"*0\r\n", "a refused record made a consumer");
+    let frame: Vec<Vec<u8>> = ["XINTERNAL.CONSUMERSEEN", "s", "g", "c", "1"]
+        .iter()
+        .map(|p| p.as_bytes().to_vec())
+        .collect();
+    s.apply_frame(&kevy_resp::Argv::from(frame));
+    let consumers = String::from_utf8_lossy(&call(&s, "XINFO CONSUMERS s g")).into_owned();
+    assert!(consumers.starts_with("*1\r\n") && consumers.contains("$1\r\nc\r\n"), "{consumers}");
+}

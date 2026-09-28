@@ -56,7 +56,8 @@ fn replay_manifest_matches_table() {
     let mut manifest = replay_verbs();
     if !cfg!(feature = "streams-geo") {
         let off = ops_with(surface::REPLAY).into_iter().filter(|n| is_streams_geo(n.as_bytes()));
-        assert_eq!(off.clone().count(), 13, "the family's replay rows moved");
+        // the thirteen stream and geo writes and the internal record verb
+        assert_eq!(off.clone().count(), 14, "the family's replay rows moved");
         manifest.extend(off);
     }
     diff("REPLAY", &manifest, surface::REPLAY);
@@ -73,7 +74,9 @@ fn replay_manifest_verbs_are_applied() {
         let up = kevy_verbs::args::upper_verb(v.as_bytes(), &mut buf);
         let argv = kevy_persist::Argv::from(vec![v.as_bytes().to_vec()]);
         let mut out = Vec::new();
-        let ran = kevy_verbs::exec(&mut kevy_store::Store::new(), up, &argv, &mut out);
-        assert!(ran.is_some() && !out.is_empty(), "the replay lists {v} but nothing runs it");
+        let mut store = kevy_store::Store::new();
+        let ran = kevy_verbs::aof::apply_internal(&mut store, &argv, &mut out)
+            || kevy_verbs::exec(&mut store, up, &argv, &mut out).is_some();
+        assert!(ran && !out.is_empty(), "the replay lists {v} but nothing runs it");
     }
 }

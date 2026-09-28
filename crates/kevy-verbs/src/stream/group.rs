@@ -23,16 +23,21 @@ use super::emit_entries;
 // ───────────── XGROUP ─────────────
 
 /// `XGROUP CREATE | DESTROY | SETID | CREATECONSUMER | DELCONSUMER`
-pub(super) fn cmd_xgroup<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
+pub(super) fn cmd_xgroup<A: ArgvView + ?Sized>(
+    store: &mut Store,
+    args: &A,
+    out: &mut Vec<u8>,
+) -> Effect {
     if args.len() < 2 {
-        return wrong_args(out, "xgroup");
+        wrong_args(out, "xgroup");
+        return Effect::Write;
     }
     let sub = args[1].to_ascii_uppercase();
     match sub.as_slice() {
         b"CREATE" => xgroup_create(store, args, out),
         b"DESTROY" => xgroup_destroy(store, args, out),
         b"SETID" => xgroup_setid(store, args, out),
-        b"CREATECONSUMER" => xgroup_create_consumer(store, args, out),
+        b"CREATECONSUMER" => return xgroup_create_consumer(store, args, out),
         b"DELCONSUMER" => xgroup_del_consumer(store, args, out),
         other => encode_error(
             out,
@@ -42,6 +47,7 @@ pub(super) fn cmd_xgroup<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out:
             ),
         ),
     }
+    Effect::Write
 }
 
 fn xgroup_create<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
@@ -94,14 +100,30 @@ fn xgroup_setid<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec
     }
 }
 
-fn xgroup_create_consumer<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
+/// `XGROUP CREATECONSUMER key group consumer`. A consumer this creates
+/// is recorded with the time it was created at ([`Effect::RecordSeen`]).
+fn xgroup_create_consumer<A: ArgvView + ?Sized>(
+    store: &mut Store,
+    args: &A,
+    out: &mut Vec<u8>,
+) -> Effect {
     if args.len() != 5 {
-        return wrong_args(out, "xgroup|createconsumer");
+        wrong_args(out, "xgroup|createconsumer");
+        return Effect::Write;
     }
     match store.xgroup_create_consumer(&args[2], &args[3], &args[4], now_unix_ms()) {
-        Ok(true) => encode_integer(out, 1),
-        Ok(false) => encode_integer(out, 0),
-        Err(e) => store_err(out, e),
+        Ok(true) => {
+            encode_integer(out, 1);
+            Effect::RecordSeen
+        }
+        Ok(false) => {
+            encode_integer(out, 0);
+            Effect::Unchanged
+        }
+        Err(e) => {
+            store_err(out, e);
+            Effect::Write
+        }
     }
 }
 
@@ -154,7 +176,8 @@ pub(super) fn cmd_xreadgroup<A: ArgvView + ?Sized>(
         let Ok(entries) = xreadgroup_one_stream(store, &parsed, &key, &last_seen_arg, out) else {
             return Effect::Write;
         };
-        marks.push(mark, !entries.is_empty());
+        // a read of history re-sends pending entries; it delivers nothing new
+        marks.push(mark, !entries.is_empty() && last_seen_arg == b">");
         if !entries.is_empty() {
             reply.push((key, entries));
         }
