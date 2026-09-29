@@ -8,6 +8,7 @@ use std::cmp::Ordering;
 /// One indexed scalar. Ordering is total within a type; the catalog
 /// guarantees a segment only ever holds one variant.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum IndexValue {
     /// `TYPE i64`.
     I64(i64),
@@ -89,6 +90,87 @@ impl IndexValue {
             IndexValue::I64(_) | IndexValue::F64(_) => 8,
             IndexValue::Str(s) => s.len(),
         }
+    }
+
+    /// The text a reply shows for this value: decimal for `i64`, Rust's
+    /// shortest round-trip form for `f64`, the raw bytes for `str`.
+    ///
+    /// ```
+    /// use kevy_index::IndexValue;
+    /// assert_eq!(IndexValue::I64(-7).render(), b"-7");
+    /// assert_eq!(IndexValue::F64(2.5).render(), b"2.5");
+    /// assert_eq!(IndexValue::Str(b"kyoto".to_vec()).render(), b"kyoto");
+    /// ```
+    pub fn render(&self) -> Vec<u8> {
+        match self {
+            IndexValue::I64(i) => i.to_string().into_bytes(),
+            IndexValue::F64(f) => format!("{f}").into_bytes(),
+            IndexValue::Str(s) => s.clone(),
+        }
+    }
+
+    /// Append the tagged binary form cursors and shard replies carry:
+    /// a tag byte (0 `i64`, 1 `f64`, 2 `str`), then the value — eight
+    /// little-endian bytes, or a `u32` little-endian length and the bytes.
+    ///
+    /// ```
+    /// use kevy_index::IndexValue;
+    /// let mut out = Vec::new();
+    /// IndexValue::I64(1).encode(&mut out);
+    /// assert_eq!(out, [0, 1, 0, 0, 0, 0, 0, 0, 0]);
+    /// ```
+    pub fn encode(&self, out: &mut Vec<u8>) {
+        match self {
+            IndexValue::I64(i) => {
+                out.push(0);
+                out.extend_from_slice(&i.to_le_bytes());
+            }
+            IndexValue::F64(f) => {
+                out.push(1);
+                out.extend_from_slice(&f.to_le_bytes());
+            }
+            IndexValue::Str(s) => {
+                out.push(2);
+                out.extend_from_slice(&(s.len() as u32).to_le_bytes());
+                out.extend_from_slice(s);
+            }
+        }
+    }
+
+    /// Read one [`encode`](Self::encode)d value at `*pos`, advancing
+    /// `pos` past it; `None` on an unknown tag or truncated bytes.
+    ///
+    /// ```
+    /// use kevy_index::IndexValue;
+    /// let mut buf = Vec::new();
+    /// IndexValue::Str(b"ab".to_vec()).encode(&mut buf);
+    /// IndexValue::F64(0.5).encode(&mut buf);
+    /// let mut pos = 0;
+    /// assert_eq!(IndexValue::decode(&buf, &mut pos), Some(IndexValue::Str(b"ab".to_vec())));
+    /// assert_eq!(IndexValue::decode(&buf, &mut pos), Some(IndexValue::F64(0.5)));
+    /// assert_eq!((pos, IndexValue::decode(&buf, &mut pos)), (buf.len(), None));
+    /// ```
+    pub fn decode(b: &[u8], pos: &mut usize) -> Option<IndexValue> {
+        let tag = *b.get(*pos)?;
+        let body = pos.checked_add(1)?;
+        let (v, end) = match tag {
+            0 => (
+                IndexValue::I64(i64::from_le_bytes(b.get(body..body + 8)?.try_into().ok()?)),
+                body + 8,
+            ),
+            1 => (
+                IndexValue::F64(f64::from_le_bytes(b.get(body..body + 8)?.try_into().ok()?)),
+                body + 8,
+            ),
+            2 => {
+                let n = u32::from_le_bytes(b.get(body..body + 4)?.try_into().ok()?) as usize;
+                let start = body + 4;
+                (IndexValue::Str(b.get(start..start.checked_add(n)?)?.to_vec()), start + n)
+            }
+            _ => return None,
+        };
+        *pos = end;
+        Some(v)
     }
 }
 

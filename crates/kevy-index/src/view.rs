@@ -15,10 +15,20 @@
 use crate::segment::Segment;
 use crate::value::IndexValue;
 
+use kevy_text::SortOrder;
+
+pub use crate::view_materialized::{MaterializedSet, Membership};
 pub use crate::view_sidecar::{MAX_VIEWS, ViewCatalog};
 
 /// One leaf: a declared index + the shape it contributes.
+///
+/// ```
+/// use kevy_index::{IndexValue, Leaf};
+/// let adults = Leaf::new("age", IndexValue::I64(18), IndexValue::I64(i64::MAX));
+/// assert_eq!(adults.index, b"age");
+/// ```
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Leaf {
     /// Index name (resolved by the runtime).
     pub index: Vec<u8>,
@@ -27,6 +37,20 @@ pub struct Leaf {
     pub min: IndexValue,
     /// Upper bound.
     pub max: IndexValue,
+}
+
+impl Leaf {
+    /// Rows of index `index` whose value lies in `min..=max` (EQ is
+    /// `min == max`), bounds already coerced to the index's type.
+    ///
+    /// ```
+    /// use kevy_index::{IndexValue, Leaf};
+    /// let eq = Leaf::new("city", IndexValue::Str(b"kyoto".to_vec()), IndexValue::Str(b"kyoto".to_vec()));
+    /// assert_eq!(eq.min, eq.max);
+    /// ```
+    pub fn new(index: impl Into<Vec<u8>>, min: IndexValue, max: IndexValue) -> Leaf {
+        Leaf { index: index.into(), min, max }
+    }
 }
 
 /// The composition tree. Depth ≤ 3, leaves ≤ 4 (declarative caps,
@@ -44,6 +68,46 @@ pub enum Tree {
 }
 
 impl Tree {
+    /// Evaluate `tree` against one shard's segments: `seg` resolves an
+    /// index name to its [`Segment`] (None = unknown index → empty leaf —
+    /// the runtime validates names at CREATE, so this is defensive).
+    /// Returns the member keys (unordered set semantics).
+    ///
+    /// ```
+    /// use kevy_index::{IndexValue, Leaf, Segment, Tree};
+    /// let mut age = Segment::new();
+    /// age.apply(b"u:1", Some(IndexValue::I64(30)));
+    /// age.apply(b"u:2", Some(IndexValue::I64(70)));
+    /// let t = Tree::Leaf(Leaf::new("age", IndexValue::I64(18), IndexValue::I64(65)));
+    /// let seg = |name: &[u8]| (name == b"age").then_some(&age);
+    /// assert_eq!(t.eval(&seg), vec![b"u:1".to_vec()]);
+    /// assert!(t.contains(b"u:1", &seg) && !t.contains(b"u:2", &seg));
+    /// ```
+    pub fn eval<'a>(&self, seg: &impl Fn(&[u8]) -> Option<&'a Segment>) -> Vec<Vec<u8>> {
+        eval_tree(self, seg)
+    }
+
+    /// Re-evaluate ONE key's membership (the materialized write hook):
+    /// every leaf is a point probe via the segment's reverse map.
+    pub fn contains<'a>(&self, key: &[u8], seg: &impl Fn(&[u8]) -> Option<&'a Segment>) -> bool {
+        key_in_tree(self, key, seg)
+    }
+
+    /// [`Tree::contains`] variant over PRE-FETCHED per-index values — the
+    /// write hook probes each referenced index ONCE per key and evaluates
+    /// every view against the same small table (bounds compares only; no
+    /// per-view re-hashing).
+    ///
+    /// ```
+    /// use kevy_index::{IndexValue, Leaf, Tree};
+    /// let t = Tree::Leaf(Leaf::new("age", IndexValue::I64(18), IndexValue::I64(65)));
+    /// assert!(t.contains_values(&|_: &[u8]| Some(IndexValue::I64(40))));
+    /// assert!(!t.contains_values(&|_: &[u8]| None));
+    /// ```
+    pub fn contains_values(&self, vals: &impl Fn(&[u8]) -> Option<IndexValue>) -> bool {
+        key_in_tree_vals(self, vals)
+    }
+
     /// Number of leaves.
     pub fn leaves(&self) -> usize {
         match self {
@@ -73,7 +137,8 @@ impl Tree {
 }
 
 /// View mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum ViewMode {
     /// Evaluate the tree at query time.
     Virtual,
@@ -84,8 +149,34 @@ pub enum ViewMode {
     },
 }
 
+impl ViewMode {
+    /// The mode as `VIEW.CREATE … MODE` and the describe replies spell it.
+    ///
+    /// ```
+    /// use kevy_index::ViewMode;
+    /// assert_eq!(ViewMode::Virtual.name(), "virtual");
+    /// assert_eq!(ViewMode::Materialized { top_k: 5 }.name(), "materialized");
+    /// ```
+    pub fn name(&self) -> &'static str {
+        match self {
+            ViewMode::Virtual => "virtual",
+            ViewMode::Materialized { .. } => "materialized",
+        }
+    }
+}
+
 /// A declared view.
+///
+/// ```
+/// use kevy_index::{IndexValue, Leaf, SortOrder, Tree, ViewMode, ViewSpec};
+/// let leaf = Leaf::new("age", IndexValue::I64(18), IndexValue::I64(65));
+/// let v = ViewSpec::new("adults", Tree::Leaf(leaf), "age")
+///     .with_order(SortOrder::Desc)
+///     .with_mode(ViewMode::Materialized { top_k: 100 });
+/// assert!(v.validate().is_ok());
+/// ```
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct ViewSpec {
     /// Catalog name.
     pub name: Vec<u8>,
@@ -94,8 +185,8 @@ pub struct ViewSpec {
     /// Index whose coerced value orders the view (a row absent from
     /// this index is excluded — declaratively, counted).
     pub order_by: Vec<u8>,
-    /// Descending order?
-    pub desc: bool,
+    /// Direction of that order.
+    pub order: SortOrder,
     /// Virtual or materialized.
     pub mode: ViewMode,
     /// Optional `VIA` hydration byte-template (`{key}` / `{key.N}`
@@ -109,6 +200,65 @@ pub const MAX_TREE_DEPTH: usize = 3;
 pub const MAX_TREE_LEAVES: usize = 4;
 
 impl ViewSpec {
+    /// A virtual view `name` over `tree`, ascending by index `order_by`.
+    ///
+    /// ```
+    /// use kevy_index::{IndexValue, Leaf, SortOrder, Tree, ViewMode, ViewSpec};
+    /// let v = ViewSpec::new("v", Tree::Leaf(Leaf::new("a", IndexValue::I64(0), IndexValue::I64(9))), "a");
+    /// assert_eq!((v.order, v.mode, v.via), (SortOrder::Asc, ViewMode::Virtual, None));
+    /// ```
+    pub fn new(name: impl Into<Vec<u8>>, tree: Tree, order_by: impl Into<Vec<u8>>) -> ViewSpec {
+        ViewSpec {
+            name: name.into(),
+            tree,
+            order_by: order_by.into(),
+            order: SortOrder::Asc,
+            mode: ViewMode::Virtual,
+            via: None,
+        }
+    }
+
+    /// This view ordered in `order`.
+    ///
+    /// ```
+    /// # use kevy_index::{IndexValue, Leaf, SortOrder, Tree, ViewSpec};
+    /// # let t = Tree::Leaf(Leaf::new("a", IndexValue::I64(0), IndexValue::I64(9)));
+    /// assert_eq!(ViewSpec::new("v", t, "a").with_order(SortOrder::Desc).order, SortOrder::Desc);
+    /// ```
+    #[must_use]
+    pub fn with_order(mut self, order: SortOrder) -> ViewSpec {
+        self.order = order;
+        self
+    }
+
+    /// This view evaluated as `mode`.
+    ///
+    /// ```
+    /// # use kevy_index::{IndexValue, Leaf, Tree, ViewMode, ViewSpec};
+    /// # let t = Tree::Leaf(Leaf::new("a", IndexValue::I64(0), IndexValue::I64(9)));
+    /// let m = ViewMode::Materialized { top_k: 0 };
+    /// assert_eq!(ViewSpec::new("v", t, "a").with_mode(m).mode, m);
+    /// ```
+    #[must_use]
+    pub fn with_mode(mut self, mode: ViewMode) -> ViewSpec {
+        self.mode = mode;
+        self
+    }
+
+    /// This view hydrated through the `VIA` byte-template `via`.
+    ///
+    /// ```
+    /// # use kevy_index::{IndexValue, Leaf, Tree, ViewSpec};
+    /// # let t = Tree::Leaf(Leaf::new("a", IndexValue::I64(0), IndexValue::I64(9)));
+    /// let v = ViewSpec::new("v", t, "a").with_via(b"doc:{key}".to_vec());
+    /// assert_eq!(v.via.as_deref(), Some(&b"doc:{key}"[..]));
+    /// ```
+    #[must_use]
+    pub fn with_via(mut self, via: Vec<u8>) -> ViewSpec {
+        self.via = Some(via);
+        self
+    }
+
     /// Validate the structural caps.
     pub fn validate(&self) -> Result<(), &'static str> {
         if self.tree.depth() > MAX_TREE_DEPTH {
@@ -121,11 +271,10 @@ impl ViewSpec {
     }
 }
 
-/// Evaluate `tree` against one shard's segments: `seg` resolves an
-/// index name to its [`Segment`] (None = unknown index → empty leaf —
-/// the runtime validates names at CREATE, so this is defensive).
-/// Returns the member keys (unordered set semantics).
-pub fn eval_tree<'a>(tree: &Tree, seg: &impl Fn(&[u8]) -> Option<&'a Segment>) -> Vec<Vec<u8>> {
+pub(crate) fn eval_tree<'a>(
+    tree: &Tree,
+    seg: &impl Fn(&[u8]) -> Option<&'a Segment>,
+) -> Vec<Vec<u8>> {
     match tree {
         Tree::Leaf(l) => match seg(&l.index) {
             Some(s) => {
@@ -137,22 +286,22 @@ pub fn eval_tree<'a>(tree: &Tree, seg: &impl Fn(&[u8]) -> Option<&'a Segment>) -
         Tree::And(a, b) => {
             // Engine may re-order (locked clause): drive the smaller
             // side, probe the larger.
-            let (xa, xb) = (eval_tree(a, seg), eval_tree(b, seg));
+            let (xa, xb) = (a.eval(seg), b.eval(seg));
             let (mut drive, probe) = if xa.len() <= xb.len() { (xa, xb) } else { (xb, xa) };
             let set: std::collections::HashSet<&[u8]> = probe.iter().map(Vec::as_slice).collect();
             drive.retain(|k| set.contains(k.as_slice()));
             drive
         }
         Tree::Or(a, b) => {
-            let mut xa = eval_tree(a, seg);
-            xa.extend(eval_tree(b, seg));
+            let mut xa = a.eval(seg);
+            xa.extend(b.eval(seg));
             xa.sort();
             xa.dedup();
             xa
         }
         Tree::Diff(a, b) => {
-            let mut xa = eval_tree(a, seg);
-            let xb = eval_tree(b, seg);
+            let mut xa = a.eval(seg);
+            let xb = b.eval(seg);
             let set: std::collections::HashSet<&[u8]> = xb.iter().map(Vec::as_slice).collect();
             xa.retain(|k| !set.contains(k.as_slice()));
             xa
@@ -160,9 +309,7 @@ pub fn eval_tree<'a>(tree: &Tree, seg: &impl Fn(&[u8]) -> Option<&'a Segment>) -
     }
 }
 
-/// Re-evaluate ONE key's membership (the materialized write hook):
-/// every leaf is a point probe via the segment's reverse map.
-pub fn key_in_tree<'a>(
+pub(crate) fn key_in_tree<'a>(
     tree: &Tree,
     key: &[u8],
     seg: &impl Fn(&[u8]) -> Option<&'a Segment>,
@@ -171,160 +318,18 @@ pub fn key_in_tree<'a>(
         Tree::Leaf(l) => seg(&l.index)
             .and_then(|s| s.verify_entry(key))
             .is_some_and(|v| *v >= l.min && *v <= l.max),
-        Tree::And(a, b) => key_in_tree(a, key, seg) && key_in_tree(b, key, seg),
-        Tree::Or(a, b) => key_in_tree(a, key, seg) || key_in_tree(b, key, seg),
-        Tree::Diff(a, b) => key_in_tree(a, key, seg) && !key_in_tree(b, key, seg),
+        Tree::And(a, b) => a.contains(key, seg) && b.contains(key, seg),
+        Tree::Or(a, b) => a.contains(key, seg) || b.contains(key, seg),
+        Tree::Diff(a, b) => a.contains(key, seg) && !b.contains(key, seg),
     }
 }
 
-/// [`key_in_tree`] variant over PRE-FETCHED per-index values — the
-/// write hook probes each referenced index ONCE per key and evaluates
-/// every view against the same small table (bounds compares only; no
-/// per-view re-hashing).
-pub fn key_in_tree_vals(tree: &Tree, vals: &impl Fn(&[u8]) -> Option<IndexValue>) -> bool {
+pub(crate) fn key_in_tree_vals(tree: &Tree, vals: &impl Fn(&[u8]) -> Option<IndexValue>) -> bool {
     match tree {
         Tree::Leaf(l) => vals(&l.index).is_some_and(|v| v >= l.min && v <= l.max),
-        Tree::And(a, b) => key_in_tree_vals(a, vals) && key_in_tree_vals(b, vals),
-        Tree::Or(a, b) => key_in_tree_vals(a, vals) || key_in_tree_vals(b, vals),
-        Tree::Diff(a, b) => key_in_tree_vals(a, vals) && !key_in_tree_vals(b, vals),
-    }
-}
-
-/// One shard's materialized result set: ordered `(order_value, key)`
-/// members with the bounded top-K discipline (keep `K + Δ` where
-/// `Δ = K/4`; underflow requests a local rebuild from the base
-/// indexes — RFC §2).
-#[derive(Debug, Default)]
-pub struct MaterializedSet {
-    set: std::collections::BTreeSet<(IndexValue, Vec<u8>)>,
-    back: std::collections::HashMap<Vec<u8>, IndexValue>,
-    /// 0 = unbounded.
-    top_k: u32,
-    /// DESC view: the bound keeps the LARGEST members (evict the
-    /// smallest past the cap); ASC keeps the smallest.
-    desc: bool,
-    /// Members excluded because they're absent from the order index.
-    pub order_excluded: u64,
-}
-
-impl MaterializedSet {
-    /// New set with the declared bound (0 = unbounded) and order
-    /// direction (the bound evicts from the view's WORST end).
-    pub fn new(top_k: u32, desc: bool) -> Self {
-        Self { top_k, desc, ..Default::default() }
-    }
-
-    fn cap(&self) -> usize {
-        if self.top_k == 0 { usize::MAX } else { (self.top_k + self.top_k / 4) as usize }
-    }
-
-    /// Apply one key's membership verdict + order value. Returns
-    /// `true` if the set UNDERFLOWED below K after a removal (the
-    /// caller must schedule a local rebuild).
-    pub fn apply(&mut self, key: &[u8], member: bool, order: Option<IndexValue>) -> bool {
-        // Bounded fast path: a NON-member of a full top-K set whose
-        // value is worse than the current worst can neither enter nor
-        // change anything — one comparison, no tree ops, no allocs.
-        // This is the write-tax fast path for hot-list views (most
-        // writes touch rows outside the top K).
-        if self.top_k != 0
-            && member
-            && !self.back.contains_key(key)
-            && self.set.len() >= self.cap()
-            && let Some(v) = &order
-        {
-            let enters = if self.desc {
-                self.set.iter().next().is_some_and(|(worst, _)| v > worst)
-            } else {
-                self.set.iter().next_back().is_some_and(|(worst, _)| v < worst)
-            };
-            if !enters {
-                return false;
-            }
-        }
-        if let Some(old) = self.back.remove(key) {
-            self.set.remove(&(old, key.to_vec()));
-        }
-        match (member, order) {
-            (true, Some(v)) => {
-                self.back.insert(key.to_vec(), v.clone());
-                self.set.insert((v, key.to_vec()));
-                self.evict_past_cap();
-                false
-            }
-            (true, None) => {
-                self.order_excluded += 1;
-                false
-            }
-            _ => self.top_k != 0 && self.set.len() < self.top_k as usize,
-        }
-    }
-
-    /// Bound: evict the view's WORST member past K+Δ — the largest
-    /// for ASC, the SMALLEST for DESC.
-    fn evict_past_cap(&mut self) {
-        if self.set.len() > self.cap() {
-            let worst = if self.desc {
-                self.set.iter().next().cloned()
-            } else {
-                self.set.iter().next_back().cloned()
-            };
-            if let Some(w) = worst {
-                self.set.remove(&w);
-                self.back.remove(&w.1);
-            }
-        }
-    }
-
-    /// Ordered page. `desc = false`: ascending from just past `after`;
-    /// `desc = true`: DESCENDING from just below `after` (a DESC view
-    /// must take each shard's LARGEST members — taking the ascending
-    /// head and reversing at the merge yields the wrong member set).
-    pub fn page(
-        &self,
-        after: Option<&(IndexValue, Vec<u8>)>,
-        limit: usize,
-        desc: bool,
-    ) -> Vec<(IndexValue, Vec<u8>)> {
-        if desc {
-            let iter: Box<dyn Iterator<Item = &(IndexValue, Vec<u8>)>> = match after {
-                Some(c) => Box::new(
-                    self.set
-                        .range((std::ops::Bound::Unbounded, std::ops::Bound::Excluded(c.clone())))
-                        .rev(),
-                ),
-                None => Box::new(self.set.iter().rev()),
-            };
-            return iter.take(limit).cloned().collect();
-        }
-        let iter: Box<dyn Iterator<Item = &(IndexValue, Vec<u8>)>> = match after {
-            Some(c) => Box::new(
-                self.set.range((std::ops::Bound::Excluded(c.clone()), std::ops::Bound::Unbounded)),
-            ),
-            None => Box::new(self.set.iter()),
-        };
-        iter.take(limit).cloned().collect()
-    }
-
-    /// Member count.
-    pub fn len(&self) -> usize {
-        self.set.len()
-    }
-
-    /// Empty?
-    pub fn is_empty(&self) -> bool {
-        self.set.is_empty()
-    }
-
-    /// Wipe (rebuild path).
-    pub fn clear(&mut self) {
-        self.set.clear();
-        self.back.clear();
-    }
-
-    /// Approximate heap bytes (RFC §5 formula's measured side).
-    pub fn approx_bytes(&self) -> u64 {
-        self.set.iter().map(|(v, k)| (v.approx_bytes() + k.len() + 48) as u64).sum()
+        Tree::And(a, b) => a.contains_values(vals) && b.contains_values(vals),
+        Tree::Or(a, b) => a.contains_values(vals) || b.contains_values(vals),
+        Tree::Diff(a, b) => a.contains_values(vals) && !b.contains_values(vals),
     }
 }
 

@@ -28,7 +28,7 @@ pub use text::{ColdHit, ColdPage, ColdPageQuery, TextColdDir};
 use kevy_index::{
     ColdBloom, ColdEntryRow, FacetBucket, IndexValue, ScalarClauses, ScalarHit, ValType,
     WindowAudit, WindowShape, WindowSpec, claused_over, decode_seg_key, decode_seg_values,
-    encode_seg_values, seg_bounds, seg_key, values_pass, window_bound, window_value_of,
+    encode_seg_values, seg_bounds, seg_key, values_pass, window_bound,
 };
 
 /// One index's window state on one shard.
@@ -163,7 +163,7 @@ impl WindowRt {
                 }
             }
         }
-        Some(WindowAudit { boundary: self.w, shape: self.shape, cold_live })
+        Some(WindowAudit::new(self.w, self.shape, cold_live))
     }
 
     /// Cold count of values in `[min, max]`: fast whole-segment
@@ -296,7 +296,7 @@ impl WindowRt {
     /// the index, so a failed row eviction leaves both layers hot and
     /// the next tick retries the whole batch. No state changes.
     pub fn pending_rows(&self, seg: &kevy_index::Segment) -> Option<Vec<Vec<u8>>> {
-        let max = window_value_of(seg.max_value()?, self.shape)?;
+        let max = seg.max_value()?.window_value(self.shape)?;
         let target = bucket_floor(max.saturating_sub(self.spec.span), self.spec.bucket);
         if target <= self.w {
             return None;
@@ -316,7 +316,7 @@ impl WindowRt {
         seg: &mut kevy_index::Segment,
         segs_dir: &Path,
     ) -> Result<bool, String> {
-        let Some(max) = seg.max_value().and_then(|v| window_value_of(v, self.shape)) else {
+        let Some(max) = seg.max_value().and_then(|v| v.window_value(self.shape)) else {
             self.idle_ticks += 1;
             return Ok(false);
         };

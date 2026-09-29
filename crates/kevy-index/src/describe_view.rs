@@ -11,14 +11,8 @@ use crate::view::{Tree, ViewMode, ViewSpec};
 /// ```
 /// use kevy_index::{Described, IndexValue, Leaf, Tree, ViewMode, ViewSpec, describe_view};
 ///
-/// let v = ViewSpec {
-///     name: b"adults".to_vec(),
-///     tree: Tree::Leaf(Leaf { index: b"age".to_vec(), min: IndexValue::I64(18), max: IndexValue::I64(99) }),
-///     order_by: b"age".to_vec(),
-///     desc: false,
-///     mode: ViewMode::Virtual,
-///     via: None,
-/// };
+/// let leaf = Leaf::new("age", IndexValue::I64(18), IndexValue::I64(99));
+/// let v = ViewSpec::new("adults", Tree::Leaf(leaf), "age").with_mode(ViewMode::Virtual);
 /// let Described::Array(fields) = describe_view(&v) else { unreachable!() };
 /// let query = Described::Array(
 ///     ["age", "RANGE", "18", "99"].iter().map(|w| Described::Bulk(w.as_bytes().to_vec())).collect(),
@@ -26,10 +20,11 @@ use crate::view::{Tree, ViewMode, ViewSpec};
 /// assert_eq!(fields[3], query);
 /// ```
 pub fn describe_view(v: &ViewSpec) -> Described {
-    let (mode, top_k) = match v.mode {
-        ViewMode::Virtual => ("virtual", 0),
-        ViewMode::Materialized { top_k } => ("materialized", top_k),
+    let top_k = match v.mode {
+        ViewMode::Materialized { top_k } => top_k,
+        ViewMode::Virtual => 0,
     };
+    let mode = v.mode.name();
     let mut query = Vec::new();
     tree_words(&v.tree, &mut query);
     Described::Array(vec![
@@ -40,7 +35,7 @@ pub fn describe_view(v: &ViewSpec) -> Described {
         b("order_by"),
         b(&v.order_by),
         b("desc"),
-        flag(v.desc),
+        flag(v.order == kevy_text::SortOrder::Desc),
         b("mode"),
         b(mode),
         b("topk"),
@@ -55,19 +50,12 @@ pub fn describe_view(v: &ViewSpec) -> Described {
 /// The `VIEW.CREATE` argv that recreates `v`.
 ///
 /// ```
-/// use kevy_index::{IndexValue, Leaf, Tree, ViewMode, ViewSpec, view_declaration};
+/// use kevy_index::{IndexValue, Leaf, SortOrder, Tree, ViewMode, ViewSpec, view_declaration};
 ///
-/// let leaf = |i: &str, v: i64| {
-///     Box::new(Tree::Leaf(Leaf { index: i.into(), min: IndexValue::I64(v), max: IndexValue::I64(v) }))
-/// };
-/// let v = ViewSpec {
-///     name: b"both".to_vec(),
-///     tree: Tree::And(leaf("a", 1), leaf("b", 2)),
-///     order_by: b"a".to_vec(),
-///     desc: true,
-///     mode: ViewMode::Materialized { top_k: 0 },
-///     via: None,
-/// };
+/// let leaf = |i: &str, v: i64| Box::new(Tree::Leaf(Leaf::new(i, IndexValue::I64(v), IndexValue::I64(v))));
+/// let v = ViewSpec::new("both", Tree::And(leaf("a", 1), leaf("b", 2)), "a")
+///     .with_order(SortOrder::Desc)
+///     .with_mode(ViewMode::Materialized { top_k: 0 });
 /// let line: Vec<String> =
 ///     view_declaration(&v).iter().map(|w| String::from_utf8_lossy(w).into_owned()).collect();
 /// assert_eq!(line.join(" "), "VIEW.CREATE both QUERY ( AND a EQ 1 b EQ 2 ) ORDER BY a DESC MODE materialized");
@@ -76,7 +64,7 @@ pub fn view_declaration(v: &ViewSpec) -> Vec<Vec<u8>> {
     let mut w: Vec<Vec<u8>> = vec![b"VIEW.CREATE".to_vec(), v.name.clone(), b"QUERY".to_vec()];
     tree_words(&v.tree, &mut w);
     w.extend([b"ORDER".to_vec(), b"BY".to_vec(), v.order_by.clone()]);
-    if v.desc {
+    if v.order == kevy_text::SortOrder::Desc {
         w.push(b"DESC".to_vec());
     }
     if let ViewMode::Materialized { top_k } = v.mode {

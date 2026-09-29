@@ -23,7 +23,7 @@ use std::io;
 use std::sync::RwLock;
 
 use kevy_index::{
-    IndexValue, MaterializedSet, Tree, ViewCatalog, ViewMode, ViewSpec, eval_tree, key_in_tree,
+    IndexValue, MaterializedSet, Membership, SortOrder, Tree, ViewCatalog, ViewMode, ViewSpec,
 };
 
 use crate::ops_index::ShardSegs;
@@ -105,14 +105,8 @@ impl Store {
         mode: ViewMode,
     ) -> KevyResult<()> {
         self.check_view_refs(&tree, order_by)?;
-        let spec = ViewSpec {
-            name: name.to_vec(),
-            tree,
-            order_by: order_by.to_vec(),
-            desc,
-            mode,
-            via: None,
-        };
+        let order = if desc { SortOrder::Desc } else { SortOrder::Asc };
+        let spec = ViewSpec::new(name, tree, order_by).with_order(order).with_mode(mode);
         {
             let mut g =
                 self.views.catalog.write().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -188,9 +182,9 @@ impl Store {
                 rebuild(&mut inner.view_segs.views[i], &inner.idx_segs);
             }
             let vs = &inner.view_segs.views[i];
-            desc = vs.spec.desc;
+            desc = vs.spec.order == SortOrder::Desc;
             match &vs.mat {
-                Some(m) => all.extend(m.page(after, limit, vs.spec.desc)),
+                Some(m) => all.extend(m.page(after, limit)),
                 None => stream_virtual(&vs.spec, &inner.idx_segs, after, limit, &mut all),
             }
         }
@@ -257,12 +251,12 @@ impl Store {
 }
 
 fn resolver<'a>(segs: &'a ShardSegs) -> impl Fn(&[u8]) -> Option<&'a kevy_index::Segment> {
-    move |name: &[u8]| segs.segs.iter().find(|(s, _)| s.name == name).map(|(_, seg)| seg)
+    move |name: &[u8]| segs.segs.iter().find(|(s, _)| s.name() == name).map(|(_, seg)| seg)
 }
 
 fn eval_shard(spec: &ViewSpec, segs: &ShardSegs) -> Vec<(IndexValue, Vec<u8>)> {
     let r = resolver(segs);
-    let members = eval_tree(&spec.tree, &&r);
+    let members = spec.tree.eval(&&r);
     members
         .into_iter()
         .filter_map(|k| r(&spec.order_by).and_then(|s| s.verify_entry(&k)).map(|v| (v.clone(), k)))
@@ -281,10 +275,10 @@ fn stream_virtual(
 ) {
     let r = resolver(segs);
     if let Some(order_seg) = r(&spec.order_by) {
-        let cursor = after.map(|(v, k)| kevy_index::Cursor { value: v.clone(), key: k.clone() });
+        let cursor = after.map(|(v, k)| kevy_index::Cursor::new(v.clone(), k.clone()));
         let mut got = 0usize;
-        for (v, k) in order_seg.scan(cursor.as_ref(), spec.desc) {
-            if key_in_tree(&spec.tree, k, &&r) {
+        for (v, k) in order_seg.scan(cursor.as_ref(), spec.order) {
+            if spec.tree.contains(k, &&r) {
                 all.push((v.clone(), k.to_vec()));
                 got += 1;
                 if got == limit {
@@ -307,13 +301,13 @@ fn rebuild(vs: &mut ViewState, segs: &ShardSegs) {
     if let ViewMode::Materialized { top_k } = spec.mode
         && top_k > 0
     {
-        if spec.desc {
+        if spec.order == SortOrder::Desc {
             rows.reverse();
         }
         rows.truncate((top_k + top_k / 4) as usize);
     }
     for (v, k) in rows {
-        mat.apply(&k, true, Some(v));
+        mat.apply(&k, Membership::Member(Some(v)));
     }
     vs.needs_rebuild = false;
 }
@@ -331,11 +325,12 @@ pub(crate) fn sync_views(reg: &ViewReg, sv: &mut ShardViews, segs: &ShardSegs) {
         match sv.views.iter().position(|v| v.spec == *spec) {
             Some(i) => next.push(sv.views.swap_remove(i)),
             None => {
+                // only a materialized view keeps a set; every other mode reads at query time
                 let mat = match spec.mode {
-                    ViewMode::Virtual => None,
                     ViewMode::Materialized { top_k } => {
-                        Some(MaterializedSet::new(top_k, spec.desc))
+                        Some(MaterializedSet::new(top_k, spec.order))
                     }
+                    _ => None,
                 };
                 let mut vs = ViewState { spec: spec.clone(), needs_rebuild: mat.is_some(), mat };
                 if vs.needs_rebuild {
@@ -376,9 +371,12 @@ pub(crate) fn on_commit(reg: &ViewReg, sv: &mut ShardViews, segs: &ShardSegs, pa
             let Some(mat) = &mut vs.mat else { continue };
             touched = true;
             let r = resolver(segs);
-            let member = key_in_tree(&vs.spec.tree, key, &&r);
-            let order = r(&vs.spec.order_by).and_then(|s| s.verify_entry(key)).cloned();
-            if mat.apply(key, member, order) {
+            let membership = if vs.spec.tree.contains(key, &&r) {
+                Membership::Member(r(&vs.spec.order_by).and_then(|s| s.verify_entry(key)).cloned())
+            } else {
+                Membership::NonMember
+            };
+            if mat.apply(key, membership) {
                 vs.needs_rebuild = true;
             }
         }

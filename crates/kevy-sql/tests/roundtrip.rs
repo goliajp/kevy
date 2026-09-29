@@ -1,6 +1,6 @@
 //! The drift net: every `TABLE.DECLARE` argv this compiler emits must
 //! parse through kevy-index's OWN wire parser (`parse_table_declare`)
-//! and compile through `compile_table` — the engine is the authority on
+//! and compile through `TableSpec::compile` — the engine is the authority on
 //! the grammar, and this test is where a divergence fails loudly.
 //! (kevy-index is a dev-dependency only; the runtime crate stays
 //! pure-std 0-dep.)
@@ -43,10 +43,10 @@ fn assert_roundtrips(sql: &str, expect_tables: usize) {
             .unwrap_or_else(|e| panic!("engine refused compiled declare: {e}\nargv: {argv:?}"));
         // The compiled access paths derive without panicking and carry
         // the dotted `<table>.<suffix>` names.
-        let specs = kevy_index::compile_table(&spec).expect("valid spec compiles");
+        let specs = spec.compile().expect("valid spec compiles");
         assert_eq!(specs.len(), spec.indexes.len() + spec.orderpaths.len());
         for s in &specs {
-            let name = String::from_utf8(s.name.clone()).unwrap();
+            let name = String::from_utf8(s.name().to_vec()).unwrap();
             let table = String::from_utf8(spec.name.clone()).unwrap();
             assert!(name.starts_with(&format!("{table}.")), "{name}");
         }
@@ -76,9 +76,10 @@ fn compiled_composite_matches_engine_where_bounds() {
     .unwrap();
     let raw: Vec<&[u8]> = c.commands[0].iter().map(|s| s.as_bytes()).collect();
     let spec = kevy_index::parse_table_declare(&raw).unwrap();
-    let specs = kevy_index::compile_table(&spec).expect("valid spec compiles");
-    let comp = specs.iter().find(|s| s.name == b"t.p").expect("orderpath spec");
-    let cols = comp.composite.as_ref().expect("composite");
-    let w = kevy_index::WhereClause { eqs: vec![(b"a".to_vec(), b"x".to_vec())], range: None };
+    let specs = spec.compile().expect("valid spec compiles");
+    let comp = specs.iter().find(|s| s.name() == b"t.p").expect("orderpath spec");
+    let cols = comp.composite().expect("composite");
+    let mut w = kevy_index::WhereClause::default();
+    w.eqs.push((b"a".to_vec(), b"x".to_vec()));
     kevy_index::composite_bounds(cols, &w, 0).expect("engine accepts the compiled prefix");
 }

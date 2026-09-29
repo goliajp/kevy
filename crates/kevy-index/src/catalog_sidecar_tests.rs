@@ -7,13 +7,10 @@ mod sidecar_v2_tests {
     use crate::IndexState;
 
     fn spec(name: &str) -> IndexSpec {
-        IndexSpec::single_field(
-            name.into(),
-            b"user:".to_vec(),
-            b"age".to_vec(),
-            ValType::I64,
-            IndexKind::Range,
-        )
+        IndexSpec::builder(name, b"user:".to_vec(), IndexKind::Range, ValType::I64)
+            .with_field(b"age".to_vec())
+            .build()
+            .unwrap()
     }
 
     /// The point of the version bump: a sidecar written before
@@ -70,21 +67,17 @@ mod sidecar_v2_tests {
     /// grows a spurious 7th column that would collide with ann/agg.
     #[test]
     fn positions_flag_round_trips_on_v3() {
-        let mut with = IndexSpec::single_field(
-            b"phrase".into(),
-            b"doc:".to_vec(),
-            b"body".to_vec(),
-            ValType::Str,
-            IndexKind::Text,
-        );
+        let mut with =
+            IndexSpec::builder(b"phrase".to_vec(), b"doc:".to_vec(), IndexKind::Text, ValType::Str)
+                .with_field(b"body".to_vec())
+                .build()
+                .unwrap();
         with.with_positions = true;
-        let plain = IndexSpec::single_field(
-            b"plain".into(),
-            b"doc:".to_vec(),
-            b"body".to_vec(),
-            ValType::Str,
-            IndexKind::Text,
-        );
+        let plain =
+            IndexSpec::builder(b"plain".to_vec(), b"doc:".to_vec(), IndexKind::Text, ValType::Str)
+                .with_field(b"body".to_vec())
+                .build()
+                .unwrap();
         let mut c = Catalog::new();
         c.create(with).unwrap();
         c.create(plain).unwrap();
@@ -220,11 +213,11 @@ mod sidecar_v4_tests {
             s.ty = ValType::I64;
             assert!(Catalog::new().create(s).is_ok(), "VALUES on {kind:?}");
         }
-        let mut s = text_spec("agg", false, &["price"]);
-        s.kind = IndexKind::Agg;
-        s.ty = ValType::I64;
-        s.group_by = Some(b"g".to_vec());
-        assert_eq!(Catalog::new().create(s), Err("ERR VALUES requires KIND text|range|unique"));
+        let s = IndexSpec::builder("agg", "doc:", IndexKind::Agg, ValType::I64)
+            .with_field("body")
+            .with_group_by("g")
+            .with_values(vec![ValueSpec::new("price")]);
+        assert_eq!(s.build().err(), Some("ERR VALUES requires KIND text|range|unique"));
     }
 }
 
@@ -232,13 +225,10 @@ mod sidecar_v5_tests {
     use super::super::*;
 
     fn scalar_spec(name: &str, kind: IndexKind, values: &[(&str, ValType)]) -> IndexSpec {
-        let mut s = IndexSpec::single_field(
-            name.into(),
-            b"user:".to_vec(),
-            b"age".to_vec(),
-            ValType::I64,
-            kind,
-        );
+        let mut s = IndexSpec::builder(name, b"user:".to_vec(), kind, ValType::I64)
+            .with_field(b"age".to_vec())
+            .build()
+            .unwrap();
         s.values = values
             .iter()
             .map(|(n, ty)| ValueSpec { name: n.as_bytes().to_vec(), ty: *ty })
@@ -371,17 +361,15 @@ mod sidecar_v6_tests {
     use crate::composite::CompositeCol;
 
     fn composite_spec(name: &str) -> IndexSpec {
-        let mut s = IndexSpec::single_field(
-            name.into(),
-            b"t:".to_vec(),
-            b"de,pt".to_vec(),
-            ValType::Str,
-            crate::IndexKind::Range,
-        );
+        let mut s = IndexSpec::builder(name, b"t:".to_vec(), crate::IndexKind::Range, ValType::Str)
+            .with_field(b"de,pt".to_vec())
+            .build()
+            .unwrap();
         s.composite = Some(vec![
-            CompositeCol { name: b"de,pt".to_vec(), ty: ValType::Str, desc: false },
-            CompositeCol { name: b"a:ge".to_vec(), ty: ValType::I64, desc: true },
-            CompositeCol { name: b"score".to_vec(), ty: ValType::F64, desc: false },
+            CompositeCol::new(b"de,pt".to_vec(), ValType::Str),
+            CompositeCol::new(b"a:ge".to_vec(), ValType::I64)
+                .with_order(kevy_text::SortOrder::Desc),
+            CompositeCol::new(b"score".to_vec(), ValType::F64),
         ]);
         s
     }
@@ -390,13 +378,17 @@ mod sidecar_v6_tests {
     fn composite_round_trips_through_v6() {
         let mut c = Catalog::new();
         c.create(composite_spec("op")).unwrap();
-        c.create(IndexSpec::single_field(
-            b"plain".to_vec(),
-            b"t:".to_vec(),
-            b"n".to_vec(),
-            ValType::I64,
-            crate::IndexKind::Range,
-        ))
+        c.create(
+            IndexSpec::builder(
+                b"plain".to_vec(),
+                b"t:".to_vec(),
+                crate::IndexKind::Range,
+                ValType::I64,
+            )
+            .with_field(b"n".to_vec())
+            .build()
+            .unwrap(),
+        )
         .unwrap();
         let text = c.to_sidecar();
         assert!(text.starts_with("kevy-index-catalog v6\n"), "{text}");
@@ -417,13 +409,17 @@ mod sidecar_v6_tests {
     #[test]
     fn a5_no_composite_catalog_keeps_the_old_header() {
         let mut c = Catalog::new();
-        c.create(IndexSpec::single_field(
-            b"i".to_vec(),
-            b"p:".to_vec(),
-            b"f".to_vec(),
-            ValType::I64,
-            crate::IndexKind::Range,
-        ))
+        c.create(
+            IndexSpec::builder(
+                b"i".to_vec(),
+                b"p:".to_vec(),
+                crate::IndexKind::Range,
+                ValType::I64,
+            )
+            .with_field(b"f".to_vec())
+            .build()
+            .unwrap(),
+        )
         .unwrap();
         assert_eq!(
             c.to_sidecar(),

@@ -102,8 +102,11 @@ fn parse_fields(argv: &[Vec<u8>]) -> Result<(Vec<FieldSpec>, usize), &'static st
     if i < argv.len() && argv[i].eq_ignore_ascii_case(b"WEIGHTS") {
         i = parse_weights(argv, i + 1, &mut weights)?;
     }
-    let fields =
-        names.into_iter().zip(weights).map(|(name, weight)| FieldSpec { name, weight }).collect();
+    let fields = names
+        .into_iter()
+        .zip(weights)
+        .map(|(name, w)| FieldSpec::new(name).with_weight(w))
+        .collect();
     Ok((fields, i))
 }
 
@@ -351,12 +354,10 @@ fn route(s: &Store, argv: &[Vec<u8>], p: &Parsed, out: &mut Vec<u8>) {
             name,
             prefix,
             field0,
-            kevy_index::AnnSpec {
-                dim: p.opts.dim,
-                distance: p.opts.distance,
-                m: p.opts.m,
-                ef: p.opts.ef,
-            },
+            kevy_index::AnnSpec::new(p.opts.dim)
+                .with_distance(p.opts.distance)
+                .with_m(p.opts.m)
+                .with_ef(p.opts.ef),
         ),
         #[cfg(not(feature = "vector"))]
         IndexKind::Ann => return encode_error(out, "ERR vector indexes need the `vector` feature"),

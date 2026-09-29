@@ -80,11 +80,7 @@ pub(super) fn emit_row(
 }
 
 pub(super) fn value_repr(v: &IndexValue) -> Vec<u8> {
-    match v {
-        IndexValue::I64(i) => i.to_string().into_bytes(),
-        IndexValue::F64(f) => format!("{f}").into_bytes(),
-        IndexValue::Str(s) => s.clone(),
-    }
+    v.render()
 }
 
 /// The view reduce reuses the (value,key) cursor encoding.

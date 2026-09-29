@@ -10,6 +10,7 @@
 //! backfill (2048 rows/tick) or a live hook re-derive can never thrash
 //! the hot tier.
 
+use kevy_index::AggRow;
 use kevy_index::{IndexSpec, IndexValue, Segment};
 use kevy_store::Store;
 
@@ -40,7 +41,7 @@ pub(super) fn apply_scalar_row(store: &mut Store, spec: &IndexSpec, seg: &mut Se
             let primary = spec.derive_scalar(&vals[..w]);
             match primary {
                 None => seg.apply_with_values(key, None, &[]),
-                Some(v) if spec.values.is_empty() => seg.apply(key, Some(v)),
+                Some(v) if spec.values().is_empty() => seg.apply(key, Some(v)),
                 Some(v) => {
                     let refs: Vec<Option<&[u8]>> = vals[w..].iter().map(|o| o.as_deref()).collect();
                     seg.apply_with_values(key, Some(v), &refs);
@@ -113,10 +114,10 @@ fn apply_row_text(
     key: &[u8],
 ) {
     let names: Vec<&[u8]> = spec
-        .fields
+        .fields()
         .iter()
         .map(|f| f.name.as_slice())
-        .chain(spec.values.iter().map(|v| v.name.as_slice()))
+        .chain(spec.values().iter().map(|v| v.name.as_slice()))
         .collect();
     let fetched = store.peek_hash_fields(key, &names).ok().flatten();
     let (fields, values) = spec.read_row(|f| {
@@ -140,18 +141,19 @@ fn apply_row_agg(store: &mut Store, spec: &IndexSpec, a: &mut kevy_index::AggSeg
     // the old `exists()` probe answered: missing key = not a row
     // (retract); a present hash missing/failing a field = excluded,
     // counted; a present non-hash = excluded, counted.
-    let group_field = spec.group_by.as_deref().unwrap_or_default();
+    let group_field = spec.group_by().unwrap_or_default();
     match store.peek_hash_fields(key, &[group_field, spec.field()]) {
         Ok(Some(mut vals)) => {
             let group = vals[0].take();
-            let val = vals[1].take().and_then(|raw| kevy_index::IndexValue::coerce(spec.ty, &raw));
+            let val =
+                vals[1].take().and_then(|raw| kevy_index::IndexValue::coerce(spec.ty(), &raw));
             match (group, val) {
-                (Some(g), Some(v)) => a.apply(key, Some((g, v)), false),
-                _ => a.apply(key, None, true),
+                (Some(g), Some(v)) => a.apply(key, AggRow::Member { group: g, value: v }),
+                _ => a.apply(key, AggRow::Excluded),
             }
         }
-        Ok(None) => a.apply(key, None, false),
-        Err(_) => a.apply(key, None, true),
+        Ok(None) => a.apply(key, AggRow::Removed),
+        Err(_) => a.apply(key, AggRow::Excluded),
     }
 }
 
@@ -165,7 +167,7 @@ pub(crate) fn row_value(store: &mut Store, spec: &IndexSpec, key: &[u8]) -> RowV
     // Composite (ORDERPATH) indexes: VERIFY recomputes the whole byte
     // derivation from the declared columns — one row peek, drift stays
     // falsifiable for the mechanical encoding too.
-    if spec.composite.is_some() {
+    if spec.composite().is_some() {
         let names = spec.scalar_read_names();
         return match store.peek_hash_fields(key, &names[..spec.primary_width()]) {
             Ok(None) | Err(_) => RowValue::Gone,
@@ -178,7 +180,7 @@ pub(crate) fn row_value(store: &mut Store, spec: &IndexSpec, key: &[u8]) -> RowV
     match store.hget(key, spec.field()) {
         Ok(Some(raw)) => {
             let raw = raw.to_vec();
-            match IndexValue::coerce(spec.ty, &raw) {
+            match IndexValue::coerce(spec.ty(), &raw) {
                 Some(v) => RowValue::Value(v),
                 None => RowValue::CoerceFailed,
             }
@@ -223,7 +225,7 @@ pub(super) fn advance_backfill(store: &mut Store, si: &mut ShardIndex, batch: us
     // growing segment leaves the tier no demotable headroom fails the
     // same declarative way (the per-tick `reserved_bytes` feed already
     // counts this segment's current size).
-    if (si.spec.max_bytes > 0 && si.seg.stats().approx_bytes > si.spec.max_bytes)
+    if (si.spec.max_bytes() > 0 && si.seg.stats().approx_bytes > si.spec.max_bytes())
         || store.tier_index_floor_blocked(0)
     {
         si.seg = Segment::new();

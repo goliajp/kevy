@@ -55,7 +55,7 @@ pub(super) fn driving_bounds(
     };
     if let Some(w) = where_clause {
         let n = String::from_utf8_lossy(name);
-        let Some(cols) = &spec.composite else {
+        let Some(cols) = &spec.composite() else {
             encode_error(out, &format!("ERR {verb} '{n}': {}", kevy_index::WHERE_NOT_COMPOSITE));
             return None;
         };
@@ -68,7 +68,7 @@ pub(super) fn driving_bounds(
             }
         };
     }
-    match parse_bounds(spec.ty, &argv[2], argv, 3) {
+    match parse_bounds(spec.ty(), &argv[2], argv, 3) {
         Some((min, max, _)) => Some((min, max)),
         None => {
             badargs(out, verb, name);

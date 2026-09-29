@@ -103,12 +103,13 @@ fn filter_pages_with_a_cursor_in_driving_order() {
 #[test]
 fn sort_orders_by_the_stored_key_missing_last_both_directions() {
     let s = seeded();
-    let c = ScalarClauses { sort: Some((0, false, ValType::Str)), ..clauses() };
+    let c = ScalarClauses { sort: Some((0, kevy_text::SortOrder::Asc, ValType::Str)), ..clauses() };
     let page = s.query_claused(&i(0), &i(100), None, &c);
     // kyoto, osaka, tokyo(u1), tokyo(u4 — key tiebreak), then the
     // valueless u3 LAST.
     assert_eq!(keys(&page.hits), vec![&b"u5"[..], b"u2", b"u1", b"u4", b"u3"]);
-    let c = ScalarClauses { sort: Some((0, true, ValType::Str)), ..clauses() };
+    let c =
+        ScalarClauses { sort: Some((0, kevy_text::SortOrder::Desc, ValType::Str)), ..clauses() };
     let page = s.query_claused(&i(0), &i(100), None, &c);
     // Descending flips the valued rows; missing stays LAST.
     assert_eq!(keys(&page.hits), vec![&b"u1"[..], b"u4", b"u2", b"u5", b"u3"]);
@@ -119,10 +120,10 @@ fn sort_key_is_numeric_under_a_numeric_declaration() {
     let mut s = Segment::with_values(1);
     s.apply_with_values(b"a", Some(i(1)), &[Some(b"9")]);
     s.apply_with_values(b"b", Some(i(2)), &[Some(b"10")]);
-    let c = ScalarClauses { sort: Some((0, false, ValType::I64)), ..clauses() };
+    let c = ScalarClauses { sort: Some((0, kevy_text::SortOrder::Asc, ValType::I64)), ..clauses() };
     let page = s.query_claused(&i(0), &i(100), None, &c);
     assert_eq!(keys(&page.hits), vec![&b"a"[..], b"b"], "9 < 10 numerically");
-    let c = ScalarClauses { sort: Some((0, false, ValType::Str)), ..clauses() };
+    let c = ScalarClauses { sort: Some((0, kevy_text::SortOrder::Asc, ValType::Str)), ..clauses() };
     let page = s.query_claused(&i(0), &i(100), None, &c);
     assert_eq!(keys(&page.hits), vec![&b"b"[..], b"a"], "\"10\" < \"9\" as text");
 }
@@ -155,7 +156,7 @@ fn distinct_under_sort_keeps_the_best_group_representative() {
     s.apply_with_values(b"b", Some(i(2)), &[Some(b"g1"), Some(b"1")]);
     s.apply_with_values(b"c", Some(i(3)), &[Some(b"g2"), Some(b"3")]);
     let c = ScalarClauses {
-        sort: Some((1, false, ValType::I64)),
+        sort: Some((1, kevy_text::SortOrder::Asc, ValType::I64)),
         distinct: Some((0, ValType::Str)),
         ..clauses()
     };
@@ -198,7 +199,11 @@ fn filter_reduces_facet_counts_distinct_does_not() {
 #[test]
 fn selection_clauses_carry_no_cursor() {
     let s = seeded();
-    let c = ScalarClauses { sort: Some((0, false, ValType::Str)), fetch: 2, ..clauses() };
+    let c = ScalarClauses {
+        sort: Some((0, kevy_text::SortOrder::Asc, ValType::Str)),
+        fetch: 2,
+        ..clauses()
+    };
     let page = s.query_claused(&i(0), &i(100), None, &c);
     assert_eq!(page.hits.len(), 2);
     assert!(page.cursor.is_none());
@@ -224,7 +229,6 @@ fn merge_orders_collapses_offsets_and_cuts() {
     let merged = merge_claused(
         vec![hit(b"b", 2, None, None), hit(b"a", 1, None, None), hit(b"c", 1, None, None)],
         None,
-        false,
         0,
         10,
     );
@@ -238,8 +242,7 @@ fn merge_orders_collapses_offsets_and_cuts() {
             hit(b"s3", 3, None, None),
             hit(b"s4", 4, Some(b"z"), Some(b"h")),
         ],
-        Some(false),
-        true,
+        Some(kevy_text::SortOrder::Asc),
         1,
         2,
     );
@@ -247,7 +250,7 @@ fn merge_orders_collapses_offsets_and_cuts() {
     // collapsed [s2, s4, s3] → offset 1 → [s4, s3] → limit 2.
     assert_eq!(keys(&merged), [b"s4".to_vec(), b"s3".to_vec()]);
     // Past-the-end offset = empty, not an error.
-    let merged = merge_claused(vec![hit(b"a", 1, None, None)], None, false, 99, 5);
+    let merged = merge_claused(vec![hit(b"a", 1, None, None)], None, 99, 5);
     assert!(merged.is_empty());
 }
 
@@ -265,20 +268,6 @@ fn facet_fold_sums_by_identity_across_shards() {
         vec![(b"id2".to_vec(), b"7".to_vec(), 9), (b"id1".to_vec(), b"1".to_vec(), 5),],
         "summed by identity; the label is the first spelling seen"
     );
-}
-
-#[test]
-fn scalar_sorted_order_agrees_with_the_text_contract() {
-    use std::cmp::Ordering;
-    let o = scalar_sorted_order;
-    assert_eq!(o((Some(b"a"), b"k1"), (Some(b"b"), b"k2"), false), Ordering::Less);
-    assert_eq!(o((Some(b"a"), b"k1"), (Some(b"b"), b"k2"), true), Ordering::Greater);
-    // A row WITH a value outranks one without, in BOTH directions.
-    assert_eq!(o((Some(b"z"), b"k1"), (None, b"k2"), false), Ordering::Less);
-    assert_eq!(o((Some(b"z"), b"k1"), (None, b"k2"), true), Ordering::Less);
-    // Ties break by row key so the merged page is stable.
-    assert_eq!(o((Some(b"a"), b"k1"), (Some(b"a"), b"k2"), true), Ordering::Less);
-    assert_eq!(o((None, b"k1"), (None, b"k2"), true), Ordering::Less);
 }
 
 /// count_claused = the length of the claused query's full result,
@@ -326,12 +315,12 @@ fn claused_over_matches_the_hot_walk_for_the_same_entries() {
     let filters = [(0usize, ValueTest::eq(ValType::Str, b"tokyo").unwrap())];
     let shapes: &[ScalarClauses] = &[
         ScalarClauses { filters: &filters, ..clauses() },
-        ScalarClauses { sort: Some((0, true, ValType::Str)), ..clauses() },
+        ScalarClauses { sort: Some((0, kevy_text::SortOrder::Desc, ValType::Str)), ..clauses() },
         ScalarClauses { distinct: Some((0, ValType::Str)), ..clauses() },
         ScalarClauses { facets: &[(0, ValType::Str)], ..clauses() },
         ScalarClauses {
             filters: &filters,
-            sort: Some((0, false, ValType::Str)),
+            sort: Some((0, kevy_text::SortOrder::Asc, ValType::Str)),
             distinct: Some((0, ValType::Str)),
             facets: &[(0, ValType::Str)],
             fetch: 2,

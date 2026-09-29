@@ -88,11 +88,16 @@ pub(crate) fn merge_page(mut all: Vec<(IndexValue, Vec<u8>)>, limit: usize) -> I
     all.sort();
     all.truncate(limit);
     let next = if all.len() == limit {
-        all.last().map(|(v, k)| Cursor { value: v.clone(), key: k.clone() })
+        all.last().map(|(v, k)| Cursor::new(v.clone(), k.clone()))
     } else {
         None
     };
     (all.into_iter().map(|(v, k)| (k, v)).collect(), next)
+}
+
+/// A spec from `b`, its refusal reported as the catalog's are.
+pub(crate) fn built(b: kevy_index::IndexSpecBuilder) -> KevyResult<IndexSpec> {
+    Ok(b.build().map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?)
 }
 
 /// Store-level index state: catalog + a version stamp the per-shard
@@ -196,20 +201,7 @@ impl Store {
         if kind == IndexKind::Ann {
             return Err(KevyError::Unsupported("vector indexes need the `vector` feature".into()));
         }
-        let spec = IndexSpec {
-            name: name.to_vec(),
-            prefix: prefix.to_vec(),
-            fields: vec![kevy_index::FieldSpec::new(field.to_vec())],
-            ty,
-            kind,
-            max_bytes: 0,
-            ann: None,
-            group_by: None,
-            with_positions: false,
-            values: Vec::new(),
-            composite: None,
-        };
-        self.register_spec(spec)
+        self.register_spec(built(IndexSpec::builder(name, prefix, kind, ty).with_field(field))?)
     }
 
     pub(crate) fn register_spec(&self, spec: IndexSpec) -> KevyResult<()> {
@@ -250,24 +242,13 @@ impl Store {
         if params.dim == 0 || params.distance > 2 || params.m == 1 {
             return Err(KevyError::InvalidInput("bad ann parameters".into()));
         }
-        let spec = IndexSpec {
-            name: name.to_vec(),
-            prefix: prefix.to_vec(),
-            fields: vec![kevy_index::FieldSpec::new(field.to_vec())],
-            ty: ValType::Vector,
-            kind: IndexKind::Ann,
-            max_bytes: 0,
-            ann: Some(kevy_index::AnnSpec {
-                m: if params.m == 0 { 16 } else { params.m },
-                ef: if params.ef == 0 { 200 } else { params.ef },
-                ..params
-            }),
-            group_by: None,
-            with_positions: false,
-            values: Vec::new(),
-            composite: None,
-        };
-        self.register_spec(spec)
+        let ann = params
+            .with_m(if params.m == 0 { 16 } else { params.m })
+            .with_ef(if params.ef == 0 { 200 } else { params.ef });
+        let spec = IndexSpec::builder(name, prefix, IndexKind::Ann, ValType::Vector)
+            .with_field(field)
+            .with_ann(ann);
+        self.register_spec(built(spec)?)
     }
 
     /// `IDX.DROP` equivalent; `false` if absent. On a hit the catalog
@@ -326,33 +307,23 @@ impl Store {
         if !matches!(ty, ValType::I64 | ValType::F64) || group_by.is_empty() {
             return Err(KevyError::InvalidInput("agg requires numeric type + group field".into()));
         }
-        let spec = IndexSpec {
-            name: name.to_vec(),
-            prefix: prefix.to_vec(),
-            fields: vec![kevy_index::FieldSpec::new(field.to_vec())],
-            ty,
-            kind: IndexKind::Agg,
-            max_bytes: 0,
-            ann: None,
-            group_by: Some(group_by.to_vec()),
-            with_positions: false,
-            values: Vec::new(),
-            composite: None,
-        };
-        self.register_spec(spec)
+        let spec = IndexSpec::builder(name, prefix, IndexKind::Agg, ty)
+            .with_field(field)
+            .with_group_by(group_by);
+        self.register_spec(built(spec)?)
     }
 
     /// One group's merged stats across shards.
     pub fn idx_group(&self, name: &[u8], group: &[u8]) -> KevyResult<kevy_index::GroupStats> {
-        let mut merged = kevy_index::GroupStats { count: 0, sum: 0.0, min: None, max: None };
+        let mut merged = kevy_index::GroupStats::default();
         let mut found = false;
         for shard in self.shards.iter() {
             let mut g = lock_write(shard);
             let inner = &mut *g;
             sync_segs(&self.indexes, &mut inner.idx_segs, &mut inner.store);
-            if let Some((_, a)) = inner.idx_segs.agg.iter().find(|(s, _)| s.name == name) {
+            if let Some((_, a)) = inner.idx_segs.agg.iter().find(|(s, _)| s.name() == name) {
                 found = true;
-                kevy_index::merge_group(&mut merged, &a.group(group));
+                merged.merge(&a.group(group));
             }
         }
         if !found {
@@ -378,11 +349,11 @@ impl Store {
             let mut g = lock_write(shard);
             let inner = &mut *g;
             sync_segs(&self.indexes, &mut inner.idx_segs, &mut inner.store);
-            if let Some((_, a)) = inner.idx_segs.agg.iter().find(|(s, _)| s.name == name) {
+            if let Some((_, a)) = inner.idx_segs.agg.iter().find(|(s, _)| s.name() == name) {
                 found = true;
                 for (gk, st) in a.all_groups() {
                     match merged.get_mut(&gk) {
-                        Some(m) => kevy_index::merge_group(m, &st),
+                        Some(m) => m.merge(&st),
                         None => {
                             merged.insert(gk, st);
                         }
@@ -416,7 +387,7 @@ impl Store {
             let mut g = lock_write(shard);
             let inner = &mut *g;
             sync_segs(&self.indexes, &mut inner.idx_segs, &mut inner.store);
-            if let Some((_, graph)) = inner.idx_segs.ann.iter().find(|(s, _)| s.name == name) {
+            if let Some((_, graph)) = inner.idx_segs.ann.iter().find(|(s, _)| s.name() == name) {
                 found = true;
                 all.extend(graph.knn(query, k, ef));
             }
@@ -443,7 +414,7 @@ impl Store {
             let mut g = lock_write(shard);
             let inner = &mut *g;
             sync_segs(&self.indexes, &mut inner.idx_segs, &mut inner.store);
-            if let Some((_, seg)) = inner.idx_segs.segs.iter().find(|(s, _)| s.name == name) {
+            if let Some((_, seg)) = inner.idx_segs.segs.iter().find(|(s, _)| s.name() == name) {
                 found = true;
                 f(seg);
             }

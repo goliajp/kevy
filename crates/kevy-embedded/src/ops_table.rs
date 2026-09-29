@@ -1,6 +1,6 @@
 //! Embedded `TABLE.*` capability — the declaration
 //! object, the compile call and the verify sweep. The grammar, the
-//! validation and [`kevy_index::compile_table`] all live in
+//! validation and [`kevy_index::TableSpec::compile`] all live in
 //! `kevy-index`: ONE implementation shared with the server, so the two
 //! engines cannot compile a table differently (the IDX.CREATE parity
 //! lesson; the dispatch oracle byte-compares the wire faces anyway).
@@ -18,9 +18,7 @@
 
 use std::sync::{Mutex, RwLock};
 
-use kevy_index::{
-    AdviseLog, IndexVerify, TableCatalog, TableEnsure, TableSpec, TableVerify, compile_table,
-};
+use kevy_index::{AdviseLog, IndexVerify, TableCatalog, TableEnsure, TableSpec, TableVerify};
 
 use crate::store::{Store, lock_write};
 use crate::{KevyError, KevyResult};
@@ -63,9 +61,9 @@ impl Store {
         // installs nothing.
         #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
         crate::ops_index_sync::tier_floor_check(&self.shards)?;
-        // compile_table validates for itself — a bad spec is a named
+        // TableSpec::compile validates for itself — a bad spec is a named
         // refusal here, never a panic downstream (dogfood F9).
-        let compiled = compile_table(&spec).map_err(KevyError::InvalidInput)?;
+        let compiled = spec.compile().map_err(KevyError::InvalidInput)?;
         {
             let g = self.tables.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
             if g.get(&spec.name).is_some() {
@@ -132,7 +130,7 @@ impl Store {
     /// table is dropped, so a bad replacement leaves the old one
     /// standing.
     pub fn table_replace(&self, spec: TableSpec) -> KevyResult<()> {
-        compile_table(&spec).map_err(KevyError::InvalidInput)?;
+        spec.compile().map_err(KevyError::InvalidInput)?;
         self.table_drop(&spec.name);
         self.table_declare(spec)
     }
@@ -144,8 +142,8 @@ impl Store {
             let g = self.tables.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
             g.get(name)
                 .map(|s| {
-                    compile_table(s)
-                        .map(|c| c.into_iter().map(|i| i.name).collect())
+                    s.compile()
+                        .map(|c| c.into_iter().map(|i| i.name().to_vec()).collect())
                         .unwrap_or_default() // catalog entries were admitted validated
                 })
                 .unwrap_or_default()
@@ -208,9 +206,9 @@ impl Store {
             g.get(name).cloned()
         }
         .ok_or_else(|| KevyError::NotFound("no such table".into()))?;
-        let compiled = compile_table(&spec).map_err(KevyError::InvalidInput)?;
+        let compiled = spec.compile().map_err(KevyError::InvalidInput)?;
         let mut per_index: Vec<(Vec<u8>, [u64; 10])> =
-            compiled.iter().map(|i| (i.name.clone(), [0u64; 10])).collect();
+            compiled.iter().map(|i| (i.name().to_vec(), [0u64; 10])).collect();
         let mut spot = [0u64; 2];
         for shard in self.shards.iter() {
             let mut g = lock_write(shard);
@@ -223,26 +221,19 @@ impl Store {
             spot[0] += r;
             spot[1] += m;
         }
-        Ok(TableVerify {
-            per_index: per_index
-                .into_iter()
-                .map(|(name, s)| IndexVerify {
-                    name,
-                    entries: s[0],
-                    approx_bytes: s[1],
-                    coerce_failures: s[2],
-                    duplicates: s[3],
-                    drift: s[4],
-                    checked: s[5],
-                    excluded: s[6],
-                    absent: s[7],
-                    rows: s[8],
-                    missing: s[9],
-                })
-                .collect(),
-            spot_rows: spot[0],
-            spot_type_mismatches: spot[1],
-        })
+        let mut report = TableVerify::default();
+        report.per_index = per_index
+            .into_iter()
+            .map(|(name, s)| {
+                let mut v = IndexVerify::new(name);
+                (v.entries, v.approx_bytes, v.coerce_failures) = (s[0], s[1], s[2]);
+                (v.duplicates, v.drift, v.checked) = (s[3], s[4], s[5]);
+                (v.excluded, v.absent, v.rows, v.missing) = (s[6], s[7], s[8], s[9]);
+                v
+            })
+            .collect();
+        (report.spot_rows, report.spot_type_mismatches) = (spot[0], spot[1]);
+        Ok(report)
     }
 
     #[cfg(feature = "persist")]
@@ -331,8 +322,7 @@ fn classify_prefix_rows(
                         Ok(Some(vals)) => spec.derive_scalar(&vals),
                         _ => None,
                     };
-                    v.and_then(|v| kevy_index::window_value_of(&v, wa.shape))
-                        .is_some_and(|wv| wv < wa.boundary)
+                    v.and_then(|v| v.window_value(wa.shape)).is_some_and(|wv| wv < wa.boundary)
                 });
                 if !indexed.contains(key.as_slice()) {
                     if slid {
@@ -383,7 +373,8 @@ fn shard_index_counts(
     ispec: &kevy_index::IndexSpec,
     sums: &mut [u64; 10],
 ) {
-    let Some((spec, seg)) = inner.idx_segs.segs.iter().find(|(s, _)| s.name == ispec.name) else {
+    let Some((spec, seg)) = inner.idx_segs.segs.iter().find(|(s, _)| s.name() == ispec.name())
+    else {
         return;
     };
     let stats = seg.stats();
@@ -392,10 +383,10 @@ fn shard_index_counts(
     let indexed: std::collections::HashSet<&[u8]> =
         entries.iter().map(|(k, _)| k.as_slice()).collect();
     let spec = spec.clone();
-    let mut pat = spec.prefix.clone();
+    let mut pat = spec.prefix().to_vec();
     pat.push(b'*');
     let row_keys = inner.store.collect_keys(Some(&pat), None);
-    let window = hot_floor_of(inner, &spec.name, spec.ty);
+    let window = hot_floor_of(inner, &spec.name(), spec.ty());
     let store = &mut inner.store;
     let (drift, fresh) = store.peek_scope(|s| {
         let names = spec.scalar_read_names();

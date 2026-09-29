@@ -91,22 +91,22 @@ impl CatalogState {
         let (next, prev) = &mut *incs;
         let mut map = HashMap::new();
         for (spec, _) in new.iter() {
-            let part = new.partitioning(&spec.name);
+            let part = new.partitioning(&spec.name());
             if !part.is_global() {
                 continue;
             }
             let same = old.is_some_and(|o| {
-                o.get(&spec.name).is_some_and(|(s, _)| s == spec)
-                    && o.partitioning(&spec.name) == part
+                o.get(spec.name()).is_some_and(|(s, _)| s == spec)
+                    && o.partitioning(spec.name()) == part
             });
-            let inc = match (same, prev.get(&spec.name)) {
+            let inc = match (same, prev.get(spec.name())) {
                 (true, Some(&inc)) => inc,
                 _ => {
                     *next += 1;
                     *next
                 }
             };
-            map.insert(spec.name.clone(), inc);
+            map.insert(spec.name().to_vec(), inc);
         }
         *prev = map;
     }
@@ -118,15 +118,14 @@ impl CatalogState {
 
     /// Every declared path's `(name, hits, last_hit_s, declared_s,
     /// min_margin)`.
-    pub(crate) fn usage_snapshot(&self) -> Vec<(Vec<u8>, u64, i64, i64, i64)> {
+    pub(crate) fn usage_snapshot(&self) -> Vec<(Vec<u8>, u64, i64, i64, Option<i64>)> {
         self.usage
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .iter()
             .map(|(n, c)| {
                 let (hits, last, declared) = c.read();
-                let margin = c.min_margin.load(std::sync::atomic::Ordering::Relaxed);
-                (n.clone(), hits, last, declared, margin)
+                (n.clone(), hits, last, declared, c.min_margin())
             })
             .collect()
     }
@@ -242,7 +241,7 @@ impl RuntimeState {
     /// — every shard's gate bits re-derive `IDX_NONEMPTY` on their
     /// next command).
     pub(crate) fn install_index_catalog(&self, c: Catalog) {
-        let names: Vec<Vec<u8>> = c.iter().map(|(s, _)| s.name.clone()).collect();
+        let names: Vec<Vec<u8>> = c.iter().map(|(s, _)| s.name().to_vec()).collect();
         // numbered before the generation moves, so a shard that sees the
         // new catalog reads the incarnations that go with it
         self.catalogs.number_incarnations(self.catalogs.index().as_deref(), &c);
@@ -283,13 +282,11 @@ mod tests {
     fn with(global: &[&[u8]], split: &[u8]) -> Catalog {
         let mut c = Catalog::new();
         for name in global {
-            let spec = IndexSpec::single_field(
-                name.to_vec(),
-                b"u:".to_vec(),
-                b"age".to_vec(),
-                ValType::I64,
-                IndexKind::Range,
-            );
+            let spec =
+                IndexSpec::builder(name.to_vec(), b"u:".to_vec(), IndexKind::Range, ValType::I64)
+                    .with_field(b"age".to_vec())
+                    .build()
+                    .unwrap();
             let splits = vec![order_key(ValType::I64, split).unwrap()];
             c.create_with(spec, Partitioning::Global { splits }).unwrap();
         }
