@@ -322,9 +322,10 @@ pub(crate) fn watermark(budget: u64) -> u64 {
 }
 
 /// The unified demote target `used_memory` is held to: `budget·19/20 −
-/// reserved_bytes − overhead_bytes`, saturating. The index/view floor and
-/// the measured overhead live outside `used_memory`, so they lower the
-/// target; the cold stubs live inside it
+/// reserved_bytes − overhead_bytes − growth_reserve`, saturating. The
+/// index/view floor, the measured overhead and the keyspace table's coming
+/// growth are not in `used_memory` (yet), so they lower the target; the cold
+/// stubs live inside it
 /// (their keyspace slots and key bytes are charged from the moment the
 /// key is inserted), so they do not — subtracting them here as well
 /// would count every cold key twice and shrink the hot set by that much.
@@ -332,7 +333,10 @@ pub(crate) fn watermark(budget: u64) -> u64 {
 /// (`TierStats::effective_target` makes the state visible in INFO).
 #[inline]
 pub(crate) fn effective_target(t: &crate::tier::TierState) -> u64 {
-    watermark(t.budget).saturating_sub(t.reserved_bytes).saturating_sub(t.overhead_bytes)
+    watermark(t.budget)
+        .saturating_sub(t.reserved_bytes)
+        .saturating_sub(t.overhead_bytes)
+        .saturating_sub(t.growth_reserve)
 }
 
 /// [`CompactOwner`] over the store map + the rename forward-pointers.

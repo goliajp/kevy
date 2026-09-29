@@ -10,7 +10,7 @@
 //!   of the difference, which lowers the demote target by that much.
 //! - **Freed memory the allocator keeps** — a demoted value's blocks go to
 //!   glibc's free lists and stay resident. When the allocator keeps more
-//!   than 2% of the budget resident beyond what is live, the guard asks it
+//!   than 1% of the budget resident beyond what is live, the guard asks it
 //!   to hand whole free pages back.
 //!
 //! If live memory stays past budget × 1.05 anyway — demotion has nothing
@@ -76,13 +76,18 @@ pub(crate) fn spawn_if_tiered(state: &Arc<RuntimeState>) {
 /// The guard's memory between looks.
 #[derive(Debug, Default)]
 struct Pace {
-    /// Freed bytes the last trim could not hand back: the next trim waits
-    /// until the allocator keeps 1% of budget more than that.
-    kept_floor: u64,
+    /// Looks until the next trim may run.
+    trim_wait: u32,
+    /// The overhead the last walk measured: a new reading takes effect only
+    /// as far as two walks in a row agree, so a table caught mid-growth,
+    /// mapped twice for an instant, does not demote a table's worth of rows.
+    measured: Option<u64>,
     /// Looks since the last walk.
     since_walk: u32,
     /// Walks in a row that found live memory past the line.
     over: u32,
+    /// The shards' summed demote target at the last look.
+    target: u64,
 }
 
 fn run(state: &Weak<RuntimeState>) {
@@ -92,6 +97,13 @@ fn run(state: &Weak<RuntimeState>) {
         let Some(state) = state.upgrade() else { return };
         let Ok(Some(budget)) = crate::resolve_tier_budget(&state.config()) else { continue };
         let t = state.obs.aggregate();
+        // a target that just dropped (an index, a table about to grow) sends
+        // demotion to free blocks: walk, and trim what it leaves, 300 ms on
+        // rather than whenever the second comes round
+        if t.tier.effective_target.saturating_add(budget / 100) < pace.target {
+            pace.since_walk = pace.since_walk.max(WALK_EVERY - 3);
+        }
+        pace.target = t.tier.effective_target;
         look(&state.mem, budget, t.used_memory + t.tier.reserved_bytes, &mut pace);
     }
 }
@@ -101,6 +113,7 @@ fn run(state: &Weak<RuntimeState>) {
 fn look(g: &MemGuard, budget: u64, accounted: u64, pace: &mut Pace) {
     let rss = kevy_sys::process_rss_bytes();
     pace.since_walk += 1;
+    pace.trim_wait = pace.trim_wait.saturating_sub(1);
     // under half the budget nothing needs the walk; its last answer stands, and
     // the first look past it walks at once, before the hot set fills the rest
     if rss <= budget / 2 {
@@ -108,7 +121,12 @@ fn look(g: &MemGuard, budget: u64, accounted: u64, pace: &mut Pace) {
         g.refusing.store(false, Relaxed);
         return;
     }
-    if pace.since_walk < WALK_EVERY {
+    // between walks, what the shards charge plus the last overhead stands in
+    // for what is live: RSS pulling away from it is freed memory piling up,
+    // which is worth a walk and a trim before the second is out
+    let kept_guess = rss.saturating_sub(accounted + g.overhead_bytes.load(Relaxed));
+    let piling = pace.since_walk >= 3 && trim_due(budget, kept_guess, pace);
+    if pace.since_walk < WALK_EVERY && !piling {
         return;
     }
     pace.since_walk = 0;
@@ -117,7 +135,10 @@ fn look(g: &MemGuard, budget: u64, accounted: u64, pace: &mut Pace) {
     g.walk_us.fetch_add(t0.elapsed().as_micros() as u64, Relaxed);
     g.walks.fetch_add(1, Relaxed);
     g.live_bytes.store(live, Relaxed);
-    g.overhead_bytes.store(live.saturating_sub(accounted), Relaxed);
+    let measured = live.saturating_sub(accounted);
+    let overhead = pace.measured.map_or(measured, |last| last.min(measured));
+    pace.measured = Some(measured);
+    g.overhead_bytes.store(overhead, Relaxed);
     trim_if_kept(g, budget, rss.saturating_sub(live), pace);
     // one walk past the line can be a table mid-growth or a demotion
     // batch still catching up; two in a row, a second apart, is not
@@ -125,14 +146,13 @@ fn look(g: &MemGuard, budget: u64, accounted: u64, pace: &mut Pace) {
     g.refusing.store(pace.over >= 2, Relaxed);
 }
 
-/// Hand freed pages back once the allocator keeps more than 2% of the
-/// budget resident beyond what is live, and again whenever that grows by
-/// 1% past what the last trim could not return. Freed blocks that new
-/// allocations take back are not kept any more, so the mark follows the
-/// kept bytes down.
+/// Hand freed pages back once the allocator keeps more than 1% of the
+/// budget resident beyond what is live: at most once a second, and once
+/// every five after a trim that found next to nothing whole to return.
+/// Freed blocks turn into whole free pages as their neighbours are freed
+/// too, so a trim that returned little is worth repeating later.
 fn trim_if_kept(g: &MemGuard, budget: u64, kept: u64, pace: &mut Pace) {
-    pace.kept_floor = pace.kept_floor.min(kept);
-    if kept <= budget / 50 || kept <= pace.kept_floor.saturating_add(budget / 100) {
+    if !trim_due(budget, kept, pace) {
         return;
     }
     let before = kevy_sys::process_rss_bytes();
@@ -142,7 +162,13 @@ fn trim_if_kept(g: &MemGuard, budget: u64, kept: u64, pace: &mut Pace) {
     let given_back = before.saturating_sub(kevy_sys::process_rss_bytes());
     g.trims.fetch_add(1, Relaxed);
     g.trimmed_bytes.fetch_add(given_back, Relaxed);
-    pace.kept_floor = kept.saturating_sub(given_back);
+    pace.trim_wait = if given_back < budget / 400 { WALK_EVERY * 5 } else { WALK_EVERY };
+}
+
+/// More than 1% of the budget kept, and the last trim long enough ago.
+#[inline]
+fn trim_due(budget: u64, kept: u64, pace: &Pace) -> bool {
+    kept > budget / 100 && pace.trim_wait == 0
 }
 
 /// What the process holds live: the allocator's in-use and the keyspace
