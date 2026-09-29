@@ -510,6 +510,8 @@ def run_tier(suite, checks, tier, only=None, area=None):
             cpu_of[c["id"]] = children_cpu() - cpu0
             if r.returncode == 0:
                 results.append((c, "PASS", took, "", True))
+                # a passing measurement gate's numbers are its result
+                keep_log(tier, c["id"], r.stdout + r.stderr)
                 print(f"  ✓ {c['id']:<22} {took:6.1f}s")
             elif r.returncode == 2 and c.get("skip_is_exit_2"):
                 # Exit 2 means "I did not answer the question", not "the answer
