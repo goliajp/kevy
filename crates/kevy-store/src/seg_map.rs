@@ -81,6 +81,10 @@ pub const BUCKET_SPLIT: usize = 512;
 /// # Ok::<(), kevy_store::StoreError>(())
 /// ```
 pub const HS_PROMOTE: usize = 16 * 1024;
+#[path = "seg_map_weight.rs"]
+mod weight;
+pub(crate) use weight::arc_box;
+
 /// Local-depth ceiling — a pathological key population (adversarial
 /// top-bit collisions survive fmix64 only in theory) stops splitting
 /// here and lets the one bucket grow flat instead of looping.
@@ -439,15 +443,6 @@ impl<V: Clone> SegMap<V> {
     #[cfg(test)]
     pub(crate) fn bucket_stats(&self) -> Vec<(usize, usize)> {
         self.buckets.iter().map(|b| (Arc::strong_count(b), b.map.len())).collect()
-    }
-}
-
-impl SegMap<SmallBytes> {
-    /// [`crate::Value::weight`]'s SegHash arm — mirrors the flat Hash
-    /// arm's model (slot bytes + per-pair heap bytes) plus the shell.
-    pub(crate) fn weight_as_hash(&self) -> u64 {
-        self.shell_weight(crate::value::HASH_SLOT_BYTES)
-            + self.iter().map(|(f, v)| f.heap_bytes() as u64 + v.heap_bytes() as u64).sum::<u64>()
     }
 }
 

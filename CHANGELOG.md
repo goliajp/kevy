@@ -2,6 +2,83 @@
 
 ## Unreleased
 
+- **kevy-store: a batched page read answers packed rows from the spill
+  file.** `Store::peek_hash_rows`, the batched read behind `FIELDS`
+  hydration, decoded each cold row read from the spill file and then
+  required it to be a general hash; a packed row decodes as a packed row,
+  and the read panicked. It now answers either form, as the single-row
+  read and the segment-backed half of the same batch already did.
+  Affected since 5.4.0.
+
+- **Declaring a table leaves cold rows cold.** With `packed-rows yes`,
+  `TABLE.DECLARE` packs the table's existing rows, and it read every one
+  of them through the client read path — cold ones included. Each cold
+  row cost a disk read that no counter showed, and the read counted as
+  the row's first touch, so after a declaration the first client read of
+  any cold row promoted it (one read of each row of a mostly cold 60-row
+  table promoted 36; it now promotes none). A cold row the table could
+  hold was worse off: it was put back in memory in packed form without
+  leaving the cold tier's books, so `cold_keys` and `stub_bytes` kept counting it and its
+  record in the spill file was never freed. Packing now leaves a cold row
+  alone — it holds no memory for the packed form to save — and refuses a
+  row the table cannot hold (a field it does not declare) on the row's
+  field names, before copying anything; the rows it does pack are read
+  by name straight out of the hash. Measured with kevy-store's
+  `bench_hash_rows`, a row that cannot pack is refused in 72% less time
+  and one that can is packed in 39% less (with the shared column names
+  above). Affected since 5.4.0.
+
+- **Packed rows share their table's column names.** A packed row is
+  meant to carry no field names — they are the table's — but every row
+  got its own copy of the list, made when it was packed and again each
+  time it came back from the cold tier: 144 bytes for the list and 32 for
+  each name, 304 bytes a row for five columns, charged nowhere. A table's
+  rows now point at one list. The server's write hook also stopped
+  rebuilding that list, and taking the catalog lock, on every write to a
+  declared row. Measured with kevy-store's `bench_hash_rows`, packing a
+  row of five columns takes 23% less time and a cold row's round trip 7%
+  less.
+  `Store::pack_row` takes the table's `ColumnNames` rather than a slice
+  of names, so that every row can be handed the same one. Affected since
+  5.4.0.
+
+- **A hash is charged what it holds.** `used_memory`, `MEMORY USAGE`
+  and the budgets built on them (maxmemory eviction, the tiered store's
+  demotion) got hashes wrong in both directions. The 80-byte box around
+  a hash's table was never charged; its slots were charged 32 bytes
+  where one takes 49 (two 24-byte halves and a control byte); every new
+  field was charged a slot on top of the table capacity already charged;
+  and a write that changed a hash's representation — its first field
+  that did not fit inline, the one that sharded a giant hash, or one a
+  packed row could not hold — was counted twice. A row of four short
+  fields and a 900-byte one holds 1,808 bytes and was charged 1,508 — 3 GB
+  short over ten million rows — and a hash with one 64-byte field held
+  1.6 times its charge. A hash's charge is now the bytes glibc's allocator
+  holds for it — box, table and every field or value too long to sit
+  inline — and a test counts the allocator against it at every write. `hash_field_weight` now answers what a new field
+  adds besides the table: its name's and its value's heap as the
+  allocator holds them. Affected since 1.0.0; the double count since
+  1.25.0.
+
+- **An index's `bytes` counts its `VALUES` table.** An index that
+  declares `VALUES` keeps the stored values in a hash table keyed by row,
+  and that table's own slots — 41 bytes a bucket, 47–94 bytes a row — were
+  left out of `bytes` in `IDX.LIST`, `IDX.VERIFY` and `TABLE.VERIFY`, and
+  so out of the index's `MAXMEM` and the tiered store's reservation for
+  it. Ten million rows under one such index held 0.69 GB more than they
+  reported, and the tier budget spent it on hot data it did not have.
+  Affected since 4.0.0.
+
+- **kevy-alloc no longer writes zeroes into fresh mappings.** The
+  allocator had no `alloc_zeroed`, so a zeroed request went to the
+  default: allocate, then clear every byte. For a block past the size
+  classes that clearing wrote every page of a mapping the kernel had
+  already zeroed and made all of it resident, needed or not — each
+  shard's 64 MiB io_uring receive ring among them, in a server built with
+  `--features kevy-alloc`. A 64 MiB zeroed vector had all of its pages
+  resident before a byte was written; it now has none. A fresh mapping is now handed out as it is; only a reused
+  one is cleared. Affected since 5.0.0.
+
 - **kevy-cli: a bare tool word is a server command.** The tools kevy-cli
   6.4 shipped as bare words (`kevy-cli doctor -p 6004`, `kevy-cli export …`,
   `kevy-cli sql compile … --url h:p`, `kevy-cli digest <prefix>`, and

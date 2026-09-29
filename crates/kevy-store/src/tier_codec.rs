@@ -16,6 +16,7 @@
 
 #[cfg(not(feature = "std"))]
 use crate::nostd_prelude::*;
+use crate::packed_row::{ColumnNames, PackedRow};
 use crate::value::{COLD_TAG_HASH, COLD_TAG_STRING, HashData, SmallBytes, Value};
 
 /// High bit of the hash payload's field count: set when the row was
@@ -75,7 +76,14 @@ fn put_chunk(out: &mut Vec<u8>, bytes: &[u8]) {
 /// Decode one vlog payload back into a live value. Errors only on a
 /// malformed payload — which this process wrote this boot, so a decode
 /// failure is a bug, not corruption to heal (the kevy-vlog doctrine).
-pub(crate) fn decode(tag: u8, payload: Vec<u8>) -> Result<Value, &'static str> {
+///
+/// A packed row comes back on the first of `shapes` that names all its
+/// columns, so it shares its table's names instead of carrying a copy.
+pub(crate) fn decode(
+    tag: u8,
+    payload: Vec<u8>,
+    shapes: &[ColumnNames],
+) -> Result<Value, &'static str> {
     match tag {
         COLD_TAG_STRING => {
             // Re-materialize through the SET encoding rules so a
@@ -84,7 +92,7 @@ pub(crate) fn decode(tag: u8, payload: Vec<u8>) -> Result<Value, &'static str> {
             // only bytes that spill — keeping GET's writev path).
             Ok(crate::string_set::pick_value_for_set_owned(payload))
         }
-        COLD_TAG_HASH => decode_hash(&payload),
+        COLD_TAG_HASH => decode_hash(&payload, shapes),
         _ => Err("tier: unknown cold type tag"),
     }
 }
@@ -104,7 +112,7 @@ pub(crate) fn pairs_fit(n: usize, payload_len: usize) -> usize {
     n.min(payload_len / 8 + 1)
 }
 
-fn decode_hash(p: &[u8]) -> Result<Value, &'static str> {
+fn decode_hash(p: &[u8], shapes: &[ColumnNames]) -> Result<Value, &'static str> {
     let mut cur = 0usize;
     let raw = read_u32(p, &mut cur)?;
     let n = (raw & !PACKED_FLAG) as usize;
@@ -118,7 +126,7 @@ fn decode_hash(p: &[u8]) -> Result<Value, &'static str> {
         return Err("tier: hash payload has trailing bytes");
     }
     if raw & PACKED_FLAG != 0
-        && let Some(r) = rebuild_packed(&pairs)
+        && let Some(r) = rebuild_packed(&pairs, shapes)
     {
         return Ok(Value::PackedRow(r));
     }
@@ -130,15 +138,22 @@ fn decode_hash(p: &[u8]) -> Result<Value, &'static str> {
 }
 
 /// Rebuild the packed form from the payload's own pairs. Only the
-/// columns that were present got written, so the row comes back
-/// declaring exactly those — which answers every verb identically,
-/// since a column absent from the declaration and a column absent from
-/// the row are the same answer. `None` if the row no longer fits the
-/// packed form, and then the general hash carries the same data.
-fn rebuild_packed(pairs: &[(&[u8], &[u8])]) -> Option<crate::packed_row::PackedRow> {
-    let names: crate::packed_row::ColumnNames = pairs.iter().map(|(f, _)| f.to_vec()).collect();
+/// columns that were present got written, so the row comes back on a
+/// shape that names all of them — its table's, normally — or, when no
+/// shape does, on exactly its own columns. Either answers every verb
+/// identically, since a column absent from the declaration and a column
+/// absent from the row are the same answer. `None` if the row no longer
+/// fits the packed form, and then the general hash carries the same data.
+fn rebuild_packed(pairs: &[(&[u8], &[u8])], shapes: &[ColumnNames]) -> Option<PackedRow> {
+    let covers = |s: &&ColumnNames| pairs.iter().all(|(f, _)| s.iter().any(|n| n == f));
+    if let Some(names) = shapes.iter().find(covers) {
+        let vals: Vec<Option<&[u8]>> =
+            names.iter().map(|n| pairs.iter().find(|(f, _)| f == n).map(|(_, v)| *v)).collect();
+        return PackedRow::build(names, &vals);
+    }
+    let names: ColumnNames = pairs.iter().map(|(f, _)| f.to_vec()).collect();
     let vals: Vec<Option<&[u8]>> = pairs.iter().map(|(_, v)| Some(*v)).collect();
-    crate::packed_row::PackedRow::build(&names, &vals)
+    PackedRow::build(&names, &vals)
 }
 
 fn read_u32(p: &[u8], cur: &mut usize) -> Result<u32, &'static str> {

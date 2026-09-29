@@ -320,6 +320,13 @@ impl PackedRow {
         self.0.buf.len() + core::mem::size_of::<PackedInner>()
     }
 
+    /// [`Self::heap_bytes`] as the allocator holds it: the boxed inner and
+    /// the buffer, each a block of its own.
+    pub(crate) fn footprint(&self) -> u64 {
+        let inner = kevy_map::malloc_footprint(core::mem::size_of::<PackedInner>());
+        (inner + kevy_map::malloc_footprint(self.0.buf.len())) as u64
+    }
+
     /// The number of present columns, for `HLEN`.
     ///
     /// ```
@@ -347,6 +354,36 @@ impl PackedRow {
 
 #[cfg(test)]
 mod tests;
+
+/// `v`'s value for each of `names`, in their order — `None` unless `v` is
+/// a hot hash in the general form and every field it holds is one of them.
+///
+/// A row with more fields than the table has columns is refused on its
+/// length alone; otherwise one lookup per column, and a field the table
+/// does not declare shows as a count short of the row's.
+fn declared_columns<'a>(v: &'a crate::Value, names: &[Vec<u8>]) -> Option<Vec<Option<&'a [u8]>>> {
+    use kevy_bytes::SmallBytes;
+    let len = match v {
+        crate::Value::Hash(h) => h.len(),
+        crate::Value::SegHash(h) => h.len(),
+        crate::Value::SmallHashInline(h) => h.len(),
+        _ => return None,
+    };
+    if len > names.len() {
+        return None;
+    }
+    let cols: Vec<Option<&[u8]>> = match v {
+        crate::Value::Hash(h) => {
+            names.iter().map(|n| h.get(n.as_slice()).map(SmallBytes::as_slice)).collect()
+        }
+        crate::Value::SegHash(h) => {
+            names.iter().map(|n| h.get(n).map(SmallBytes::as_slice)).collect()
+        }
+        crate::Value::SmallHashInline(h) => names.iter().map(|n| h.get(n)).collect(),
+        _ => return None,
+    };
+    (cols.iter().flatten().count() == len).then_some(cols)
+}
 
 impl crate::Store {
     /// Whether `key` currently holds the packed representation.
@@ -391,46 +428,71 @@ impl crate::Store {
         self.packed_rows = on;
     }
 
-    /// Whether `key` already holds the packed form — the common case on every
-    /// write after the first, so it is checked before anything reads the row.
-    fn already_packed(&mut self, key: &[u8]) -> bool {
-        self.is_packed(key)
+    /// Whether `key` holds a hot hash in the general form. A row already
+    /// packed (every write after a row's first) and a cold row both answer
+    /// no: a cold row holds no memory to save, and reading it would be a
+    /// disk read nobody asked for — and a first touch, after which the
+    /// client's own first read would promote it.
+    fn hot_general_hash(&mut self, key: &[u8]) -> bool {
+        matches!(
+            self.live_entry(key).map(|e| &e.value),
+            Some(
+                crate::Value::Hash(_) | crate::Value::SmallHashInline(_) | crate::Value::SegHash(_)
+            )
+        )
     }
-
     /// Convert `key`'s hash into the packed form for a table declaring
     /// `names`, if it is a hash that is not packed already.
     ///
     /// A value the row holds under a name the table does not declare would be
     /// lost, so its presence refuses the conversion outright and the row keeps
-    /// the general form. Nothing here may drop a value.
+    /// the general form. Nothing here may drop a value. A cold row is left
+    /// cold and unread: it holds no memory for the packed form to save.
+    ///
+    /// `names` is the table's own list: the row points at it rather than at
+    /// a copy, so pass the same list for every row of a table.
     ///
     /// ```
     /// use kevy_store::Store;
+    /// use kevy_store::packed_row::ColumnNames;
     /// let mut s = Store::new();
     /// s.hset(b"user:1", &[(b"id".as_slice(), b"7".as_slice()), (b"dept", b"eng")])?;
-    /// s.pack_row(b"user:1", &[b"id".to_vec(), b"name".to_vec(), b"dept".to_vec()]);
+    /// let table: ColumnNames = vec![b"id".to_vec(), b"name".to_vec(), b"dept".to_vec()].into();
+    /// s.pack_row(b"user:1", &table);
     /// // the representation changed; what the key answers did not
     /// assert_eq!(s.hget(b"user:1", b"dept")?, Some(&b"eng"[..]));
     /// assert_eq!(s.hlen(b"user:1")?, 2);
     /// # Ok::<(), kevy_store::StoreError>(())
     /// ```
-    pub fn pack_row(&mut self, key: &[u8], names: &[Vec<u8>]) {
-        if self.already_packed(key) {
-            return;
+    pub fn pack_row(&mut self, key: &[u8], names: &ColumnNames) {
+        // a field whose own TTL has passed must not be packed; purging it
+        // can promote, so only a hot row is purged
+        if !self.hfttl.is_empty() {
+            if !self.hot_general_hash(key) {
+                return;
+            }
+            self.purge_hash_ttl(key);
         }
-        let Ok(Some(pairs)) = self.hash_pairs(key) else { return };
-        if pairs.iter().any(|(f, _)| !names.iter().any(|n| n == f)) {
+        let Some(e) = self.live_entry(key) else { return };
+        let Some(row) = declared_columns(&e.value, names).and_then(|c| PackedRow::build(names, &c))
+        else {
             return;
-        }
-        let cols: Vec<Option<&[u8]>> = names
-            .iter()
-            .map(|n| pairs.iter().find(|(f, _)| f == n).map(|(_, v)| v.as_slice()))
-            .collect();
-        let shared: ColumnNames = names.to_vec().into();
-        let Some(row) = PackedRow::build(&shared, &cols) else { return };
+        };
+        self.share_shape(names);
         if let Some(e) = self.live_entry_mut(key) {
             e.value = crate::Value::PackedRow(row);
         }
         self.reweigh_entry(key);
+    }
+
+    /// Keep `names` among the shapes a row from the cold tier is rebuilt
+    /// on. A shape nothing but this list still holds belongs to no table
+    /// and no row any more, so it goes when a new one arrives.
+    pub(crate) fn share_shape(&mut self, names: &ColumnNames) {
+        if self.row_shapes.iter().any(|s| alloc::sync::Arc::ptr_eq(s, names)) {
+            return;
+        }
+        self.row_shapes.retain(|s| alloc::sync::Arc::strong_count(s) > 1);
+        self.row_shapes.push(names.clone());
     }
 }

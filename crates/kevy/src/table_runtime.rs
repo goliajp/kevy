@@ -8,6 +8,7 @@
 //! as "the packed row barely helps" when nothing had been packed at all.
 
 use kevy_store::Store;
+use kevy_store::packed_row::ColumnNames;
 
 use crate::state::Ctx;
 
@@ -26,10 +27,11 @@ pub(crate) fn on_write(ctx: &Ctx<'_>, store: &mut Store, key: &[u8]) {
     if !store.packed_rows_enabled() {
         return;
     }
-    let Some(tables) = ctx.state.catalogs.table() else { return };
-    let Some(spec) = tables.iter().find(|t| key.starts_with(&t.prefix)) else { return };
-    let names: Vec<Vec<u8>> = spec.columns.iter().map(|(n, _)| n.clone()).collect();
-    store.pack_row(key, &names);
+    let mut bf = ctx.shard.packing.borrow_mut();
+    let Some((_, names)) = bf.tables(ctx).iter().find(|(prefix, _)| key.starts_with(prefix)) else {
+        return;
+    };
+    store.pack_row(key, names);
 }
 
 /// One table's un-packed rows, and how far through them this shard is.
@@ -38,17 +40,39 @@ pub(crate) fn on_write(ctx: &Ctx<'_>, store: &mut Store, key: &[u8]) {
 /// reach rows that already exist, and there can be two million of them.
 #[derive(Debug)]
 pub(crate) struct PackJob {
-    names: Vec<Vec<u8>>,
+    names: ColumnNames,
     keys: Vec<Vec<u8>>,
     pos: usize,
 }
 
-/// This shard's packing backfill.
+/// This shard's packing backfill, and its tables' column names.
 #[derive(Debug, Default)]
 pub(crate) struct PackBackfill {
     /// The table-catalog generation these jobs were built from.
     generation: u64,
     jobs: Vec<PackJob>,
+    /// Each declared table's prefix and column names, built once per
+    /// catalog generation. Every row of a table is packed on this one
+    /// list, so the rows share it instead of each holding a copy.
+    tables: Vec<(Vec<u8>, ColumnNames)>,
+    /// The generation `tables` was built from; `None` before the first.
+    tables_generation: Option<u64>,
+}
+
+impl PackBackfill {
+    /// The declared tables, rebuilt only when the catalog has changed.
+    fn tables(&mut self, ctx: &Ctx<'_>) -> &[(Vec<u8>, ColumnNames)] {
+        let generation = ctx.state.catalogs.table_gen();
+        if self.tables_generation != Some(generation) {
+            self.tables = ctx.state.catalogs.table().map_or_else(Vec::new, |tables| {
+                let names =
+                    |t: &kevy_index::TableSpec| t.columns.iter().map(|(n, _)| n.clone()).collect();
+                tables.iter().map(|t| (t.prefix.clone(), names(t))).collect()
+            });
+            self.tables_generation = Some(generation);
+        }
+        &self.tables
+    }
 }
 
 /// Keys converted per tick — the index backfill's batch, so the two
@@ -70,7 +94,7 @@ pub(crate) fn on_tick(ctx: &Ctx<'_>, store: &mut Store) {
     let mut bf = ctx.shard.packing.borrow_mut();
     let generation = ctx.state.catalogs.table_gen();
     if bf.generation != generation {
-        bf.jobs = collect_jobs(ctx, store);
+        bf.jobs = collect_jobs(bf.tables(ctx), store);
         bf.generation = generation;
     }
     let Some(job) = bf.jobs.iter_mut().find(|j| j.pos < j.keys.len()) else { return };
@@ -96,18 +120,13 @@ pub(crate) fn on_tick(ctx: &Ctx<'_>, store: &mut Store) {
 /// Snapshot each declared table's keys on THIS shard. Live writes from now
 /// on hit `on_write` first and pack there; `pack_row` is a no-op on a row
 /// that is already packed, so the two cannot fight.
-fn collect_jobs(ctx: &Ctx<'_>, store: &mut Store) -> Vec<PackJob> {
-    let Some(tables) = ctx.state.catalogs.table() else { return Vec::new() };
+fn collect_jobs(tables: &[(Vec<u8>, ColumnNames)], store: &mut Store) -> Vec<PackJob> {
     tables
         .iter()
-        .map(|t| {
-            let mut pat = t.prefix.clone();
+        .map(|(prefix, names)| {
+            let mut pat = prefix.clone();
             pat.push(b'*');
-            PackJob {
-                names: t.columns.iter().map(|(n, _)| n.clone()).collect(),
-                keys: store.collect_keys(Some(&pat), None),
-                pos: 0,
-            }
+            PackJob { names: names.clone(), keys: store.collect_keys(Some(&pat), None), pos: 0 }
         })
         .collect()
 }

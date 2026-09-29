@@ -130,6 +130,28 @@ unsafe impl GlobalAlloc for KevyAlloc {
         }
     }
 
+    /// Zeroed memory without writing to a fresh mapping.
+    ///
+    /// The default implementation allocates and then zeroes every byte.
+    /// For a block past the size classes that write faults in every page
+    /// of a mapping the kernel had already zeroed, so a large buffer that
+    /// is never filled (a receive ring) becomes resident all the same.
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        if !is_over_aligned(layout) && class::index_of(layout.size(), layout.align()).is_none() {
+            return match crate::large::alloc_zeroed(layout.size(), layout.align()) {
+                Some(p) => p.as_ptr(),
+                None => core::ptr::null_mut(),
+            };
+        }
+        // SAFETY: the caller's layout contract passes through unchanged.
+        let p = unsafe { self.alloc(layout) };
+        if !p.is_null() {
+            // SAFETY: `p` is a live block of at least `layout.size()` bytes.
+            unsafe { core::ptr::write_bytes(p, 0, layout.size()) };
+        }
+        p
+    }
+
     /// Grow or shrink without moving where the size class allows it.
     ///
     /// `GlobalAlloc`'s default implementation always allocates, copies

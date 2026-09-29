@@ -102,6 +102,7 @@ pub use expire::ExpireStats;
 pub use store_admin::DetachedEntries;
 mod hash;
 mod hash_read;
+mod hash_weight;
 pub use hash_read::FieldValuePairs;
 mod hash_ttl;
 pub use hash_ttl::{HExpireCode, HExpireCond};
@@ -233,6 +234,12 @@ pub struct Store {
     /// what makes the packed row measurable: the same binary answers both
     /// ways, so a comparison is one flag apart rather than two builds apart.
     pub(crate) packed_rows: bool,
+    /// The column-name lists packed rows point at, one per table shape.
+    /// A row is packed on its table's list, and a row back from the cold
+    /// tier — whose payload names only the columns it has — is rebuilt on
+    /// the first list here that names all of them, so a table's rows hold
+    /// one list between them instead of a copy each.
+    pub(crate) row_shapes: Vec<packed_row::ColumnNames>,
     /// Coarse cached monotonic clock (ns since [`epoch`]), refreshed by the
     /// reactor loop / reaper tick via [`Self::refresh_clock`]. Lazy expiry on
     /// the read path (`live_entry`) compares deadlines against this instead of

@@ -22,17 +22,13 @@ impl Value {
             Value::Str(s) => s.heap_bytes() as u64,
             // i64 fits in the enum tag's space; no heap.
             Value::Int(_) => 0,
-            // One payload buffer plus the boxed inner; nothing per column.
-            Value::PackedRow(r) => r.heap_bytes() as u64,
+            // One payload buffer plus the boxed inner; the column names
+            // are the table's, shared by all its rows.
+            Value::PackedRow(r) => r.footprint(),
             // Arc<[u8]> heap = the byte slice itself (refcount overhead
             // is amortised across shared clones).
             Value::ArcBulk(a) => a.len() as u64,
-            Value::Hash(h) => {
-                collection_overhead(h.capacity(), HASH_SLOT_BYTES)
-                    + h.iter()
-                        .map(|(f, v)| f.heap_bytes() as u64 + v.heap_bytes() as u64)
-                        .sum::<u64>()
-            }
+            Value::Hash(h) => crate::hash_weight::flat_hash_weight(h),
             Value::List(l) => {
                 (l.capacity() as u64).saturating_mul(LIST_SLOT_BYTES)
                     + l.iter().map(|v| v.capacity() as u64).sum::<u64>()

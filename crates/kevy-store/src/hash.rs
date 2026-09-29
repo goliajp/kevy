@@ -11,7 +11,7 @@ use crate::nostd_prelude::*;
 use crate::seg_map::{HS_PROMOTE, SegMap};
 use crate::small_hash::{self, AddResult as HAddResult, SmallHashData};
 use crate::util::{parse_f64, parse_i64};
-use crate::value::{HashData, SmallBytes, Value, hash_field_weight};
+use crate::value::{HashData, SmallBytes, Value};
 use crate::{Entry, Store, StoreError, now_ns};
 use alloc::sync::Arc;
 
@@ -28,12 +28,6 @@ impl HashRefMut<'_> {
         match self {
             Self::Flat(h) => h.get(field),
             Self::Seg(h) => h.get(field),
-        }
-    }
-    fn insert(&mut self, field: SmallBytes, value: SmallBytes) -> Option<SmallBytes> {
-        match self {
-            Self::Flat(h) => h.insert(field, value),
-            Self::Seg(h) => h.insert(field, value),
         }
     }
 }
@@ -138,7 +132,7 @@ impl Store {
             return self.unpack_then_set(key, field, value);
         }
         self.reweigh_entry(key);
-        Ok(if existed { HsetOutcome::UpdatedInline } else { HsetOutcome::AddedInline })
+        Ok(HsetOutcome::Rebuilt { added: !existed })
     }
 
     /// Leave the packed form for the general one, then apply the write.
@@ -153,7 +147,7 @@ impl Store {
         let Value::Hash(h) = v else { return Err(StoreError::WrongType) };
         let outcome = heap_hash_set(HashRefMut::Flat(Arc::make_mut(h)), field, value);
         self.reweigh_entry(key);
-        Ok(outcome)
+        Ok(outcome.rebuilt())
     }
 
     /// Turn a packed row back into the general hash, in place. A no-op on
@@ -199,6 +193,12 @@ impl Store {
                     delta += w;
                 }
                 HsetOutcome::UpdatedHeap(d) => delta += d,
+                // the entry's weight was recomputed with every pair so far
+                // in it: what the loop had summed is already counted
+                HsetOutcome::Rebuilt { added: new } => {
+                    added += usize::from(new);
+                    delta = 0;
+                }
             }
         }
         self.account_delta(key, delta);
@@ -228,7 +228,7 @@ impl Store {
                 self.account_delta(key, w);
                 Ok(true)
             }
-            HsetOutcome::UpdatedHeap(_) => Ok(true),
+            HsetOutcome::UpdatedHeap(_) | HsetOutcome::Rebuilt { .. } => Ok(true),
         }
     }
 
@@ -288,13 +288,7 @@ impl Store {
                 return Err(StoreError::NotFloat);
             }
             let vb = SmallBytes::from_vec(format!("{next}").into_bytes());
-            let smb = SmallBytes::from_slice(field);
-            let new_field_w = hash_field_weight(&smb, vb.heap_bytes()) as i64;
-            let new_value_heap = vb.heap_bytes() as i64;
-            let wd = match h.insert(smb, vb) {
-                None => new_field_w,
-                Some(old) => new_value_heap - old.heap_bytes() as i64,
-            };
+            let (_, wd) = h.insert_weighed(SmallBytes::from_slice(field), vb);
             (next, wd)
         };
         self.account_delta(key, weight_delta);
@@ -313,13 +307,7 @@ impl Store {
             };
             let next = cur.checked_add(delta).ok_or(StoreError::Overflow)?;
             let vb = SmallBytes::from_vec(next.to_string().into_bytes());
-            let smb = SmallBytes::from_slice(field);
-            let new_field_w = hash_field_weight(&smb, vb.heap_bytes()) as i64;
-            let new_value_heap = vb.heap_bytes() as i64;
-            let wd = match h.insert(smb, vb) {
-                None => new_field_w,
-                Some(old) => new_value_heap - old.heap_bytes() as i64,
-            };
+            let (_, wd) = h.insert_weighed(SmallBytes::from_slice(field), vb);
             (next, wd)
         };
         self.account_delta(key, weight_delta);
@@ -344,10 +332,10 @@ impl Store {
                 HAddResult::Updated => Ok(HsetOutcome::UpdatedInline),
                 HAddResult::NoRoom => {
                     let mut promoted = small_hash::promote(h);
-                    let outcome = heap_hash_set(HashRefMut::Flat(&mut promoted), field, value);
+                    heap_hash_set(HashRefMut::Flat(&mut promoted), field, value);
                     *v = Value::Hash(Arc::new(promoted));
                     self.reweigh_entry(key);
-                    Ok(outcome)
+                    Ok(HsetOutcome::Rebuilt { added: true })
                 }
             },
             Value::PackedRow(_) => self.hset_packed(key, field, value),
@@ -359,11 +347,7 @@ impl Store {
                 let outcome = heap_hash_set(HashRefMut::Seg(&mut seg), field, value);
                 *v = Value::SegHash(Arc::new(seg));
                 self.reweigh_entry(key);
-                // Reweighed from scratch — swallow the per-pair delta.
-                Ok(match outcome {
-                    HsetOutcome::AddedHeap(_) => HsetOutcome::AddedHeap(0),
-                    other => other,
-                })
+                Ok(outcome.rebuilt())
             }
             Value::Hash(h) => Ok(heap_hash_set(HashRefMut::Flat(Arc::make_mut(h)), field, value)),
             Value::SegHash(h) => Ok(heap_hash_set(HashRefMut::Seg(Arc::make_mut(h)), field, value)),
@@ -395,13 +379,9 @@ impl Store {
 /// Set one `(field, value)` pair into a heap-backed hash (either
 /// encoding), charging heap bytes only.
 fn heap_hash_set(mut h: HashRefMut<'_>, field: &[u8], value: &[u8]) -> HsetOutcome {
-    let smb = SmallBytes::from_slice(field);
-    let vb = SmallBytes::from_slice(value);
-    let new_value_heap = vb.heap_bytes() as i64;
-    let new_w = hash_field_weight(&smb, vb.heap_bytes()) as i64;
-    match h.insert(smb, vb) {
-        None => HsetOutcome::AddedHeap(new_w),
-        Some(old) => HsetOutcome::UpdatedHeap(new_value_heap - old.heap_bytes() as i64),
+    match h.insert_weighed(SmallBytes::from_slice(field), SmallBytes::from_slice(value)) {
+        (None, w) => HsetOutcome::AddedHeap(w),
+        (Some(_), w) => HsetOutcome::UpdatedHeap(w),
     }
 }
 
@@ -411,14 +391,9 @@ fn heap_hash_del(mut h: HashRefMut<'_>, fields: &[&[u8]]) -> (usize, i64, bool) 
     let mut r = 0usize;
     let mut d: i64 = 0;
     for f in fields {
-        let old = match &mut h {
-            HashRefMut::Flat(m) => m.remove(*f),
-            HashRefMut::Seg(m) => m.remove(f),
-        };
-        if let Some(old_v) = old {
+        if let Some(w) = h.remove_weighed(f) {
             r += 1;
-            let smb = SmallBytes::from_slice(f);
-            d -= hash_field_weight(&smb, old_v.heap_bytes()) as i64;
+            d -= w as i64;
         }
     }
     let empty = match &h {
@@ -433,8 +408,20 @@ enum HsetOutcome {
     AddedInline,
     /// Field existed in the inline variant (no count bump, no delta).
     UpdatedInline,
-    /// Field was new in the heap variant; carries the new field's weight.
+    /// Field was new in the heap variant; carries the weight it added.
     AddedHeap(i64),
-    /// Field existed in the heap variant; carries the value-length delta.
+    /// Field existed in the heap variant; carries the weight delta.
     UpdatedHeap(i64),
+    /// The value changed representation and the entry was reweighed from
+    /// scratch — this field and every earlier one included.
+    Rebuilt { added: bool },
+}
+
+impl HsetOutcome {
+    /// The same write, reported after a reweigh that already counted it.
+    fn rebuilt(self) -> Self {
+        let added =
+            matches!(self, Self::AddedInline | Self::AddedHeap(_) | Self::Rebuilt { added: true });
+        Self::Rebuilt { added }
+    }
 }
