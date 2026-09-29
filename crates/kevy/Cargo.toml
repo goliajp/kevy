@@ -44,6 +44,8 @@ kevy-alloc = ["dep:kevy-alloc"]
 [dependencies]
 kevy-alloc = { path = "../kevy-alloc", version = "6.4.0", features = ["global"], optional = true }
 kevy-sys = { path = "../kevy-sys", version = "6.4.0" }
+# the keyspace tables mapped outside the allocator, counted by the memory guard
+kevy-madvise = { path = "../kevy-madvise", version = "6.4.0" }
 kevy-noise = { path = "../kevy-noise", version = "6.4.0" }
 kevy-crypto = { path = "../kevy-crypto", version = "6.4.0" }
 kevy-seg = { path = "../kevy-seg", version = "6.4.0" }

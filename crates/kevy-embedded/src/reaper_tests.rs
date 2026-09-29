@@ -6,9 +6,7 @@ use crate::store::Store;
 use std::sync::mpsc;
 
 fn tmp_dir(name: &str) -> std::path::PathBuf {
-    let uniq =
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    std::env::temp_dir().join(format!("kevy-embedded-{name}-{uniq}"))
+    kevy_tmpdir::unique_dir(&format!("embedded-{name}"))
 }
 
 fn upkeep(shard: &Arc<RwLock<Inner>>) -> TickSync {

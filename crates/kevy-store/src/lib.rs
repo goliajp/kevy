@@ -265,6 +265,10 @@ pub struct Store {
     /// Soft byte ceiling. `0` = unlimited; the entire accounting + eviction
     /// machinery short-circuits to a single not-taken branch in that case.
     pub(crate) maxmemory: u64,
+    /// Growing writes refused whatever `maxmemory` says (the tier's hard stop).
+    pub(crate) memory_refused: bool,
+    /// `maxmemory > 0 || memory_refused`: the one field the write path reads.
+    pub(crate) write_gate: bool,
     /// Active eviction policy. Only consulted when `used_memory > maxmemory`.
     pub(crate) eviction_policy: EvictionPolicy,
     /// Total keys evicted by [`Self::try_evict_after_write`] — surfaced via
@@ -478,6 +482,8 @@ mod tests_snapshot;
 mod tests_string_encoding;
 #[cfg(all(test, feature = "std", not(target_arch = "wasm32")))]
 mod tests_tier;
+#[cfg(all(test, feature = "std", not(target_arch = "wasm32")))]
+mod tests_tier_budget;
 #[cfg(all(test, feature = "std", not(target_arch = "wasm32")))]
 mod tests_tier_pack;
 #[cfg(all(test, feature = "std", not(target_arch = "wasm32")))]

@@ -98,11 +98,7 @@ fn with_runtime(
 
 #[test]
 fn config_set_maxmemory_takes_effect_globally() {
-    let dir = std::env::temp_dir().join(format!(
-        "kevy-cfgset-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = kevy_tmpdir::unique_dir("cfgset");
     let port = free_port();
 
     with_runtime(port, &dir, 1, Config::default(), |p| {
@@ -141,11 +137,7 @@ fn config_set_maxmemory_takes_effect_globally() {
 
 #[test]
 fn config_set_appendfsync_round_trips_through_get() {
-    let dir = std::env::temp_dir().join(format!(
-        "kevy-cfgset-fsync-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = kevy_tmpdir::unique_dir("cfgset-fsync");
     let port = free_port();
 
     with_runtime(port, &dir, 1, Config::default(), |p| {
@@ -165,11 +157,7 @@ fn config_set_appendfsync_round_trips_through_get() {
 
 #[test]
 fn config_set_read_only_bind_returns_restart_required_error() {
-    let dir = std::env::temp_dir().join(format!(
-        "kevy-cfgset-ro-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = kevy_tmpdir::unique_dir("cfgset-ro");
     let port = free_port();
 
     with_runtime(port, &dir, 1, Config::default(), |p| {
@@ -187,11 +175,7 @@ fn config_set_read_only_bind_returns_restart_required_error() {
 
 #[test]
 fn config_rewrite_writes_round_trippable_file_from_source_path() {
-    let dir = std::env::temp_dir().join(format!(
-        "kevy-cfgrewrite-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = kevy_tmpdir::unique_dir("cfgrewrite");
     let toml_path = dir.join("kevy.toml");
     // Plant a config with a non-default field so the rewrite has
     // something interesting to verify.
@@ -240,11 +224,7 @@ fn config_rewrite_writes_round_trippable_file_from_source_path() {
 fn config_rewrite_without_source_path_returns_error() {
     // Default config has no source_path. Reply must be the canonical
     // "running without a config file" -ERR.
-    let dir = std::env::temp_dir().join(format!(
-        "kevy-cfgrewrite-nosrc-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = kevy_tmpdir::unique_dir("cfgrewrite-nosrc");
     let port = free_port();
 
     with_runtime(port, &dir, 1, Config::default(), |p| {
@@ -272,11 +252,7 @@ fn config_rewrite_without_source_path_returns_error() {
 /// parameter" in the first second, on a feature that worked.
 #[test]
 fn notify_keyspace_events_is_gettable_and_settable() {
-    let dir = std::env::temp_dir().join(format!(
-        "kevy-cfgnotify-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = kevy_tmpdir::unique_dir("cfgnotify");
     let port = free_port();
 
     with_runtime(port, &dir, 1, Config::default(), |p| {

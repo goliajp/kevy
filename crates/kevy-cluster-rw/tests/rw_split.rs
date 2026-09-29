@@ -9,33 +9,6 @@ use std::sync::{Arc, Mutex};
 
 static START_GATE: Mutex<()> = Mutex::new(());
 
-/// Inline tempdir (no `tempfile` crate — workspace 0-dep rule).
-mod tempdir {
-    use std::path::PathBuf;
-    pub struct TempDir {
-        path: PathBuf,
-    }
-    impl TempDir {
-        pub fn new(label: &str) -> Self {
-            let nanos = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-            let path = std::env::temp_dir().join(format!("{label}-{nanos}"));
-            std::fs::create_dir_all(&path).unwrap();
-            Self { path }
-        }
-        pub fn path(&self) -> &std::path::Path {
-            &self.path
-        }
-    }
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.path);
-        }
-    }
-}
-
 use kevy_cluster_rw::ReadConsistency;
 use kevy_testnet::free_port_block;
 
@@ -44,7 +17,7 @@ struct PrimaryServer {
     replication_base: u16,
     stop: Arc<AtomicBool>,
     handle: Option<std::thread::JoinHandle<()>>,
-    _dir: tempdir::TempDir,
+    _dir: kevy_tmpdir::TmpDir,
 }
 
 impl PrimaryServer {
@@ -53,7 +26,7 @@ impl PrimaryServer {
         let base = free_port_block(1);
         let port = base;
         let replication_base = base + 1;
-        let dir = tempdir::TempDir::new("kevy-rw-primary");
+        let dir = kevy_tmpdir::TmpDir::new("rw-primary");
         let dir_path = dir.path().to_path_buf();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
@@ -102,7 +75,7 @@ struct ReplicaServer {
     handle: Option<std::thread::JoinHandle<()>>,
     runner_stop: Arc<AtomicBool>,
     runner_handle: Option<std::thread::JoinHandle<()>>,
-    _dir: tempdir::TempDir,
+    _dir: kevy_tmpdir::TmpDir,
 }
 
 impl ReplicaServer {
@@ -111,7 +84,7 @@ impl ReplicaServer {
     fn start(upstream_replication_port: u16) -> Self {
         let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let port = free_port_block(1) + 1;
-        let dir = tempdir::TempDir::new("kevy-rw-replica");
+        let dir = kevy_tmpdir::TmpDir::new("rw-replica");
         let dir_path = dir.path().to_path_buf();
         // SAFETY: `set_var` is unsafe because it is not thread-safe. This runs on the test's
         // own thread before the runtime thread that reads the variable is spawned, so no
@@ -548,14 +521,14 @@ struct TrackedReplica {
     rt_port: u16,
     rt_stop: Arc<AtomicBool>,
     rt_handle: Option<std::thread::JoinHandle<()>>,
-    _dir: tempdir::TempDir,
+    _dir: kevy_tmpdir::TmpDir,
 }
 
 impl TrackedReplica {
     fn start(upstream_replication_port: u16) -> Self {
         let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let rt_port = free_port_block(1) + 1;
-        let dir = tempdir::TempDir::new("kevy-tracked-replica");
+        let dir = kevy_tmpdir::TmpDir::new("tracked-replica");
         let dir_path = dir.path().to_path_buf();
         // SAFETY: `set_var` is unsafe because it is not thread-safe. This runs on the test's
         // own thread before the runtime thread that reads the variable is spawned, so no
@@ -799,7 +772,7 @@ fn reconnect_outside_backlog_triggers_snapshot() {
         let base = free_port_block(1);
         let port = base;
         let replication_base = base + 1;
-        let dir = tempdir::TempDir::new("kevy-tiny-primary");
+        let dir = kevy_tmpdir::TmpDir::new("tiny-primary");
         let dir_path = dir.path().to_path_buf();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();

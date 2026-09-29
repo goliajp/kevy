@@ -216,11 +216,7 @@ fn config_rewrite_without_source_returns_no_config_file_error() {
 fn config_rewrite_writes_atomic_round_trip_file() {
     // Direct test of `atomic_write` + `to_toml_string` since the
     // handler short-circuits in the test binary (no source file).
-    let dir = std::env::temp_dir().join(format!(
-        "kevy-config-rewrite-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = kevy_tmpdir::unique_dir("config-rewrite");
     let path = dir.join("kevy.toml");
 
     let mut cfg = Config::default();

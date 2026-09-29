@@ -125,7 +125,7 @@ fn build_info_body(
     // untiered instance's INFO is byte-identical to pre-tiering
     // output (the transparency suite's Shape compare relies on it).
     if totals.tier_enabled && want_section(want, "tiering") {
-        info_tiering(totals, &mut body);
+        info_tiering(totals, &ctx.state.mem, &mut body);
     }
     // `# Allocator` writes nothing when no shard reported — the same
     // byte-stability rule `# Tiering` follows, so a build on the system

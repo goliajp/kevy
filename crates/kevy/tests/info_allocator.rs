@@ -40,11 +40,7 @@ struct Server {
 impl Server {
     fn start(nshards: usize) -> Server {
         let port = free_port();
-        let dir = std::env::temp_dir().join(format!(
-            "kevy-info-alloc-{}",
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = kevy_tmpdir::unique_dir("info-alloc");
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let (stop_thread, dir_thread) = (stop.clone(), dir.clone());
         let handle = std::thread::spawn(move || {

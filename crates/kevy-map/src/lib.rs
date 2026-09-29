@@ -39,6 +39,7 @@ extern crate alloc as alloc_crate;
 mod alloc;
 mod clone;
 mod group;
+mod grow;
 mod into_iter;
 mod iter;
 mod map;

@@ -19,33 +19,6 @@ use kevy_embedded::{Config, Store};
 /// first `Runtime` is still mid-binding).
 static START_GATE: Mutex<()> = Mutex::new(());
 
-/// Stand-in for the `tempfile` crate (workspace 0-dep rule).
-mod tempdir {
-    use std::path::PathBuf;
-    pub struct TempDir {
-        path: PathBuf,
-    }
-    impl TempDir {
-        pub fn new(label: &str) -> Self {
-            let nanos = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-            let path = std::env::temp_dir().join(format!("{label}-{nanos}"));
-            std::fs::create_dir_all(&path).unwrap();
-            Self { path }
-        }
-        pub fn path(&self) -> &std::path::Path {
-            &self.path
-        }
-    }
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.path);
-        }
-    }
-}
-
 use kevy_testnet::free_port_block;
 
 struct Server {
@@ -53,7 +26,7 @@ struct Server {
     replication_base: u16,
     stop: Arc<AtomicBool>,
     handle: Option<std::thread::JoinHandle<()>>,
-    _dir: tempdir::TempDir,
+    _dir: kevy_tmpdir::TmpDir,
 }
 
 impl Server {
@@ -73,7 +46,7 @@ impl Server {
         let base = free_port_block(2);
         let port = base;
         let replication_base = base + 1;
-        let dir = tempdir::TempDir::new("kevy-embed-replica-e2e");
+        let dir = kevy_tmpdir::TmpDir::new("embed-replica-e2e");
         let dir_path = dir.path().to_path_buf();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_t = stop.clone();

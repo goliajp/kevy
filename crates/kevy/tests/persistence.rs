@@ -83,11 +83,7 @@ fn with_runtime_configured<F>(
 
 #[test]
 fn data_survives_restart_via_save() {
-    let dir = std::env::temp_dir().join(format!(
-        "kevy-persist-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = kevy_tmpdir::unique_dir("persist");
     let nshards = 4;
     let port = free_port();
 
@@ -123,11 +119,7 @@ fn data_survives_restart_via_save() {
 
 #[test]
 fn bgrewriteaof_shrinks_log_and_preserves_data() {
-    let dir = std::env::temp_dir().join(format!(
-        "kevy-bgrewrite-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = kevy_tmpdir::unique_dir("bgrewrite");
     let nshards = 4;
     let port = free_port();
 
@@ -190,11 +182,7 @@ fn aof_truncated_tail_is_tolerated_on_restart() {
     // refuse to start. This is the contract `replay_aof` documents and
     // the active reaper / BGREWRITEAOF + auto-trigger machinery all
     // assume holds.
-    let dir = std::env::temp_dir().join(format!(
-        "kevy-truncated-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = kevy_tmpdir::unique_dir("truncated");
     let nshards = 1; // single-shard so we know exactly which AOF to corrupt
     let port = free_port();
 
@@ -248,11 +236,7 @@ fn aof_truncated_tail_is_tolerated_on_restart() {
 #[test]
 fn data_survives_restart_via_aof_without_save() {
     // No SAVE at all — durability comes purely from the AOF replay on startup.
-    let dir = std::env::temp_dir().join(format!(
-        "kevy-aof-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = kevy_tmpdir::unique_dir("aof");
     let nshards = 4;
     let port = free_port();
 
@@ -299,11 +283,7 @@ fn restart_tolerates_corrupt_snapshot() {
     // eprintln path). A corrupt dump-0.rdb should produce a startup warning
     // on stderr but NOT prevent the reactor from coming up; subsequent
     // writes go through normally.
-    let dir = std::env::temp_dir().join(format!(
-        "kevy-corrupt-snap-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = kevy_tmpdir::unique_dir("corrupt-snap");
 
     // Plant a non-snapshot file at dump-0.rdb. kevy-persist's loader
     // recognises a magic header; arbitrary bytes fail the header check.
@@ -333,11 +313,7 @@ fn auto_aof_rewrite_fires_when_threshold_crossed() {
     // and ~250 ms later (a few tick cycles) the shard's tick should
     // have rebuilt the AOF in place. Final size must be ≤ pre-rewrite
     // raw size, and every key still readable across a restart.
-    let dir = std::env::temp_dir().join(format!(
-        "kevy-auto-rewrite-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = kevy_tmpdir::unique_dir("auto-rewrite");
     let nshards = 1; // single-shard so size_bytes() is a single file
     let port = free_port();
     let aof_path = dir.join("aof-0.aof");
@@ -408,11 +384,7 @@ fn auto_aof_rewrite_respects_pct_zero_disable() {
     // `auto_aof_rewrite_pct = 0` disables the tick-driven rewrite —
     // even after crossing the min_size floor, the AOF must keep
     // accumulating until a client calls BGREWRITEAOF explicitly.
-    let dir = std::env::temp_dir().join(format!(
-        "kevy-auto-rewrite-off-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = kevy_tmpdir::unique_dir("auto-rewrite-off");
     let nshards = 1;
     let port = free_port();
     let aof_path = dir.join("aof-0.aof");
@@ -531,11 +503,7 @@ fn read_integer(s: &mut std::net::TcpStream) -> i64 {
 /// `PEXPIREAT`, so the ~3 s spent down is correctly subtracted.
 #[test]
 fn relative_ttl_survives_restart_at_original_deadline() {
-    let dir = std::env::temp_dir().join(format!(
-        "kevy-ttl-restart-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = kevy_tmpdir::unique_dir("ttl-restart");
     let nshards = 2;
 
     let port = free_port();
@@ -643,11 +611,7 @@ fn assert_grouped_stream_restored(c: &mut std::net::TcpStream, tombstone_kept: b
 
 #[test]
 fn stream_groups_survive_bgrewriteaof_restart() {
-    let dir = std::env::temp_dir().join(format!(
-        "kevy-groups-aof-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = kevy_tmpdir::unique_dir("groups-aof");
     let port = free_port();
     with_runtime(port, &dir, 1, |p| {
         let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
@@ -679,11 +643,7 @@ fn stream_groups_survive_bgrewriteaof_restart() {
 
 #[test]
 fn stream_groups_survive_save_restart() {
-    let dir = std::env::temp_dir().join(format!(
-        "kevy-groups-save-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = kevy_tmpdir::unique_dir("groups-save");
     let port = free_port();
     with_runtime(port, &dir, 1, |p| {
         let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
@@ -705,11 +665,7 @@ fn stream_groups_survive_save_restart() {
 /// survive a restart via that reset log, on top of the snapshot.
 #[test]
 fn bgsave_writes_snapshot_in_background_and_keeps_post_save_writes() {
-    let dir = std::env::temp_dir().join(format!(
-        "kevy-bgsave-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = kevy_tmpdir::unique_dir("bgsave");
     let nshards = 4;
     let port = free_port();
     with_runtime(port, &dir, nshards, |p| {
@@ -757,11 +713,7 @@ fn bgsave_writes_snapshot_in_background_and_keeps_post_save_writes() {
 /// in_progress returns to 0 (both refreshed by the reactor tick).
 #[test]
 fn info_persistence_reports_rewrite_completion() {
-    let dir = std::env::temp_dir().join(format!(
-        "kevy-info-persist-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = kevy_tmpdir::unique_dir("info-persist");
     let port = free_port();
     with_runtime(port, &dir, 1, |p| {
         let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
@@ -811,11 +763,7 @@ fn info_persistence_reports_rewrite_completion() {
 /// snapshot file lands on disk.
 #[test]
 fn save_does_not_block_reactor_for_disk_write() {
-    let dir = std::env::temp_dir().join(format!(
-        "kevy-save-async-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = kevy_tmpdir::unique_dir("save-async");
     let nshards = 4;
     let port = free_port();
     with_runtime(port, &dir, nshards, |p| {
@@ -895,11 +843,7 @@ fn save_does_not_block_reactor_for_disk_write() {
 /// returning.
 #[test]
 fn save_at_shutdown_drains_to_disk() {
-    let dir = std::env::temp_dir().join(format!(
-        "kevy-save-shutdown-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = kevy_tmpdir::unique_dir("save-shutdown");
     let nshards = 4;
     let port = free_port();
     with_runtime(port, &dir, nshards, |p| {
@@ -937,11 +881,7 @@ fn save_at_shutdown_drains_to_disk() {
 /// pre-rewrite window.
 #[test]
 fn relative_ttl_frames_do_not_reanchor_on_replay() {
-    let dir = std::env::temp_dir().join(format!(
-        "kevy-ttl-reanchor-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = kevy_tmpdir::unique_dir("ttl-reanchor");
     let port = free_port();
     with_runtime(port, &dir, 1, |p| {
         let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
@@ -983,11 +923,7 @@ fn relative_ttl_frames_do_not_reanchor_on_replay() {
 /// AOF land in that new log and survive a restart.
 #[test]
 fn writes_after_the_bgsave_swap_survive_a_restart() {
-    let dir = std::env::temp_dir().join(format!(
-        "kevy-bgsave-after-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = kevy_tmpdir::unique_dir("bgsave-after");
     let nshards = 4;
     with_runtime(free_port(), &dir, nshards, |p| {
         let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
@@ -1029,11 +965,7 @@ fn writes_after_the_bgsave_swap_survive_a_restart() {
 /// log land in that new log and survive a restart.
 #[test]
 fn writes_after_the_rewrite_swap_survive_a_restart() {
-    let dir = std::env::temp_dir().join(format!(
-        "kevy-rewrite-after-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = kevy_tmpdir::unique_dir("rewrite-after");
     let nshards = 4;
     with_runtime(free_port(), &dir, nshards, |p| {
         let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
@@ -1082,11 +1014,7 @@ fn writes_after_the_rewrite_swap_survive_a_restart() {
 /// field its condition refused keeps the deadline it already had.
 #[test]
 fn conditional_field_ttl_keeps_its_deadlines_across_replay() {
-    let dir = std::env::temp_dir().join(format!(
-        "kevy-field-ttl-reanchor-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = kevy_tmpdir::unique_dir("field-ttl-reanchor");
     let ints = |c: &mut std::net::TcpStream| -> Vec<i64> {
         let mut buf = [0u8; 128];
         let n = c.read(&mut buf).unwrap();
@@ -1127,11 +1055,7 @@ fn conditional_field_ttl_keeps_its_deadlines_across_replay() {
 /// *reverted* — the source key alive again, the destination missing.
 #[test]
 fn mset_and_rename_survive_a_restart() {
-    let dir = std::env::temp_dir().join(format!(
-        "kevy-persist-replayverbs-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = kevy_tmpdir::unique_dir("persist-replayverbs");
     // One shard, so RENAME takes the same-shard atomic op (the
     // cross-shard two-step is a separate record path).
     let nshards = 1;
@@ -1177,11 +1101,7 @@ fn mset_and_rename_survive_a_restart() {
 /// delete would outlive that rollback as a lie.
 #[test]
 fn cross_shard_rename_survives_a_restart() {
-    let dir = std::env::temp_dir().join(format!(
-        "kevy-persist-xrename-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = kevy_tmpdir::unique_dir("persist-xrename");
     let nshards = 4;
 
     // Pick pairs that genuinely straddle two shards — a same-shard pair
@@ -1254,11 +1174,7 @@ fn cross_shard_rename_survives_a_restart() {
 /// (`data_survives_restart_via_save`) and stream groups only.
 #[test]
 fn every_value_type_round_trips_through_a_snapshot() {
-    let dir = std::env::temp_dir().join(format!(
-        "kevy-persist-snaptypes-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = kevy_tmpdir::unique_dir("persist-snaptypes");
     let nshards = 2;
 
     with_runtime_configured(
