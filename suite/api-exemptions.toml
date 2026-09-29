@@ -157,3 +157,55 @@ why = "a lookup of one column's value by name, the by-name counterpart of the ro
 rule = "trait-open"
 item = "kevy_store::tier_serve::enabled::ColdBatchReader"
 why = "implemented outside this crate by the host that issues cold reads (the server's io_uring reader submits a batch to a secondary ring); the trait docs state the contract (one image per read, in order, the exact bytes at the address; an Err fails the whole batch)"
+
+# layer 3
+
+[[exempt]]
+rule = "enum-exhaustive"
+item = "kevy_persist::record::AofFormat"
+why = "the on-disk log encodings; a host-mediated log (kevy-wasm) reads and writes each format with its own code, so a new format must fail to compile there rather than fall into a wildcard arm that parses or writes it as another format"
+
+[[exempt]]
+rule = "enum-exhaustive"
+item = "kevy_persist::record::RecordStep"
+why = "the three outcomes of reading one record from a buffer: complete, needs more bytes, or corrupt; no fourth exists, and an incremental reader must act differently on each (advance, wait, fail), which a wildcard arm cannot choose between"
+
+[[exempt]]
+rule = "enum-exhaustive"
+item = "kevy_replicate::feed::FeedRead"
+why = "the two ways a feed cursor can be unservable: behind the stream or in another generation (Resync, recoverable by a rebuild) or ahead of it (Future, a caller error); no third exists, and callers answer each differently"
+
+[[exempt]]
+rule = "enum-exhaustive"
+item = "kevy_replicate::source::FromOffset"
+why = "the two sides of the backlog window an unservable offset can fall on (evicted below it, or beyond the next offset); no third exists, and the primary answers them oppositely (ship a snapshot, drop the link)"
+
+[[exempt]]
+rule = "enum-exhaustive"
+item = "kevy_verbs::Effect"
+why = "each effect asks a recording caller for a different record; the server's and the embedded engine's recording paths match every variant, so a new effect must fail to compile there rather than fall into a wildcard arm that records nothing and loses the write on replay"
+
+[[exempt]]
+rule = "enum-exhaustive"
+item = "kevy_verbs::record::Consumer"
+why = "whether a group read or claim found its consumer or created it: a yes-or-no fact with no third state, and the recorder matches both"
+
+[[exempt]]
+rule = "enum-exhaustive"
+item = "kevy_verbs::reply::Scores"
+why = "the presence or absence of the WITHSCORES flag; a flag has exactly two states, and the reply writer matches both"
+
+[[exempt]]
+rule = "trait-open"
+item = "kevy_elect::persist::ElectorPersist"
+why = "implemented by the host that owns durable storage (the server's file-backed elect.meta); the trait docs state the contract (save returns only once the pair is durable, load returns (0, None) when nothing was saved)"
+
+[[exempt]]
+rule = "trait-open"
+item = "kevy_persist::SnapshotSource"
+why = "implemented by hosts for their own aggregates (kevy-embedded serializes several shards as one source); the trait docs state the contract (VLOG stubs materialized one value at a time, SEG stubs passed through as stubs, each live key yielded once)"
+
+[[exempt]]
+rule = "trait-open"
+item = "kevy_persist::reshard::ShardLayout"
+why = "implemented by hosts that name their own shard files (kevy-embedded's configured single-file names); the trait docs state the contract (a pure function of its arguments, distinct paths for distinct shards of one layout)"
