@@ -199,3 +199,51 @@ impl<'a, K> Iterator for Range<'a, K> {
 }
 
 impl<K> ExactSizeIterator for Range<'_, K> {}
+
+/// Collects keys into a tree, keeping one of each.
+///
+/// ```
+/// let t: kevy_ranktree::RankTree<u32> = [3, 1, 3, 2].into_iter().collect();
+/// assert_eq!(t.iter().copied().collect::<Vec<_>>(), vec![1, 2, 3]);
+/// ```
+impl<K: Ord> FromIterator<K> for crate::RankTree<K> {
+    fn from_iter<I: IntoIterator<Item = K>>(iter: I) -> Self {
+        let mut t = Self::new();
+        t.extend(iter);
+        t
+    }
+}
+
+/// Inserts every key, skipping ones already present.
+///
+/// ```
+/// let mut t = kevy_ranktree::RankTree::new();
+/// t.extend([5u32, 4, 5]);
+/// assert_eq!(t.len(), 2);
+/// ```
+impl<K: Ord> Extend<K> for crate::RankTree<K> {
+    fn extend<I: IntoIterator<Item = K>>(&mut self, iter: I) {
+        for k in iter {
+            self.insert(k);
+        }
+    }
+}
+
+/// Iterates by reference, ascending — what `for k in &tree` walks.
+///
+/// ```
+/// let t: kevy_ranktree::RankTree<u32> = [2, 1].into_iter().collect();
+/// let mut seen = Vec::new();
+/// for k in &t {
+///     seen.push(*k);
+/// }
+/// assert_eq!(seen, vec![1, 2]);
+/// ```
+impl<'a, K> IntoIterator for &'a crate::RankTree<K> {
+    type Item = &'a K;
+    type IntoIter = Iter<'a, K>;
+
+    fn into_iter(self) -> Iter<'a, K> {
+        self.iter()
+    }
+}

@@ -44,6 +44,12 @@ static SEQ: AtomicU64 = AtomicU64::new(0);
 /// never cleared, so a recycled pid inherited the PREVIOUS run's data files —
 /// `create_dir_all` on an existing directory succeeds silently, and the loader
 /// then read a mix of stale and fresh dumps as though they were one dataset.
+///
+/// # Panics
+///
+/// When the directory cannot be created: a caller with nowhere to put its
+/// files has nothing to do next.
+///
 /// # Examples
 ///
 /// Two calls never collide, and the second call for a label does not
@@ -93,6 +99,10 @@ impl TmpDir {
     /// `label` shows up in the path, so a directory that somehow survives says
     /// which test left it.
     ///
+    /// # Panics
+    ///
+    /// When the directory cannot be created, as [`unique_dir`].
+    ///
     /// # Examples
     ///
     /// ```
@@ -118,6 +128,26 @@ impl TmpDir {
     pub fn path(&self) -> &Path {
         &self.0
     }
+
+    /// Remove the directory now and say whether that worked — what `Drop`
+    /// does, for a caller that cares about the answer. Dropping the guard
+    /// cannot report a failure, and removing a large tree blocks for as
+    /// long as it takes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let dir = kevy_tmpdir::TmpDir::new("close-me");
+    /// let path = dir.path().to_path_buf();
+    /// dir.close()?;
+    /// assert!(!path.exists());
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
+    pub fn close(mut self) -> std::io::Result<()> {
+        // an empty path tells `Drop` there is nothing left to remove
+        let path = std::mem::take(&mut self.0);
+        std::fs::remove_dir_all(path)
+    }
 }
 
 impl AsRef<Path> for TmpDir {
@@ -130,7 +160,9 @@ impl Drop for TmpDir {
     fn drop(&mut self) {
         // Drop cannot report, and a temp directory that outlives its process
         // is the OS's to reclaim.
-        let _ = std::fs::remove_dir_all(&self.0);
+        if !self.0.as_os_str().is_empty() {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
     }
 }
 
