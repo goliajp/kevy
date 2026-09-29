@@ -84,6 +84,59 @@ impl Store {
     pub fn set_max_memory(&mut self, maxmemory: u64, policy: EvictionPolicy) {
         self.maxmemory = maxmemory;
         self.eviction_policy = policy;
+        self.write_gate = maxmemory > 0 || self.memory_refused;
+    }
+
+    /// Refuse every growing write with [`StoreError::OutOfMemory`] (or stop
+    /// refusing), whatever `maxmemory` says: the hard stop for a process
+    /// that holds more memory than its tiering budget allows, which
+    /// demotion cannot fix because the bytes are not in `used_memory`.
+    /// Cheap; a serving layer sets it from its tick.
+    ///
+    /// ```
+    /// use kevy_store::{Store, StoreError};
+    /// let mut s = Store::new();
+    /// assert!(!s.precheck_needed(), "no bound, no refusal: the write path skips the check");
+    /// s.set_memory_refusal(true);
+    /// assert!(s.precheck_needed() && s.memory_refused());
+    /// assert_eq!(s.precheck_for_write(), Err(StoreError::OutOfMemory));
+    /// s.set_memory_refusal(false);
+    /// assert_eq!(s.precheck_for_write(), Ok(()));
+    /// ```
+    #[inline]
+    pub fn set_memory_refusal(&mut self, on: bool) {
+        self.memory_refused = on;
+        self.write_gate = on || self.maxmemory > 0;
+    }
+
+    /// Whether growing writes are being refused (see
+    /// [`Self::set_memory_refusal`]).
+    ///
+    /// ```
+    /// let mut s = kevy_store::Store::new();
+    /// assert!(!s.memory_refused());
+    /// s.set_memory_refusal(true);
+    /// assert!(s.memory_refused());
+    /// ```
+    #[inline]
+    pub fn memory_refused(&self) -> bool {
+        self.memory_refused
+    }
+
+    /// Whether a growing write has to run [`Self::precheck_for_write`]:
+    /// `maxmemory` is set, or writes are being refused. One field read, so
+    /// the unbounded default costs the write path one untaken branch.
+    ///
+    /// ```
+    /// use kevy_store::{EvictionPolicy, Store};
+    /// let mut s = Store::new();
+    /// assert!(!s.precheck_needed());
+    /// s.set_max_memory(1 << 20, EvictionPolicy::AllKeysLru);
+    /// assert!(s.precheck_needed());
+    /// ```
+    #[inline]
+    pub fn precheck_needed(&self) -> bool {
+        self.write_gate
     }
 
     /// Live byte estimate (see field doc).
@@ -202,12 +255,16 @@ impl Store {
     }
 
     /// O(1) precondition check the dispatch layer calls before every write
-    /// command. Returns `Err(OutOfMemory)` only when `maxmemory > 0`, the
+    /// command. Returns `Err(OutOfMemory)` when writes are being refused
+    /// ([`Self::set_memory_refusal`]), or when `maxmemory > 0`, the
     /// budget is already over, AND the policy is `NoEviction` (Redis
     /// behaviour). All other policies let the write proceed and recover via
     /// [`Self::try_evict_after_write`].
     #[inline]
     pub fn precheck_for_write(&self) -> Result<(), StoreError> {
+        if self.memory_refused {
+            return Err(StoreError::OutOfMemory);
+        }
         if self.maxmemory == 0 || self.used_memory <= self.maxmemory {
             return Ok(());
         }

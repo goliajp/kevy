@@ -33,10 +33,11 @@ pub struct TierStats {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub budget: u64,
-    /// The unified demote target: `budget·19/20 − reserved_bytes −
-    /// stub_bytes`, saturating. **0 = the floor alone exceeds the
-    /// budget** — the tier can demote nothing; visible here, never
-    /// silent (RFC §4 row 16).
+    /// The unified demote target `used_memory` is held to: `budget·19/20
+    /// − reserved_bytes`, saturating. Cold stubs are inside `used_memory`
+    /// already, so they do not lower it. **0 = the index floor alone
+    /// exceeds the budget** — the tier can demote nothing; visible here,
+    /// never silent.
     ///
     /// ```
     /// use kevy_store::Store;
@@ -65,7 +66,10 @@ pub struct TierStats {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub reserved_bytes: u64,
-    /// RAM the cold stubs cost (Σ `ENTRY_OVERHEAD + key heap`).
+    /// RAM the cold stubs cost (Σ `ENTRY_OVERHEAD + key heap`) — an
+    /// estimate for the gauge; the stubs are charged in `used_memory`
+    /// through the keyspace table and the key bytes, so this is part of
+    /// it, not in addition to it.
     ///
     /// ```
     /// use kevy_store::{ENTRY_OVERHEAD, SetCondition, Store};
