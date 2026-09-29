@@ -140,6 +140,7 @@ impl TableError {
 }
 
 impl fmt::Display for TableError {
+    // LOC-WAIVER: a pure match table — one wire message per refusal.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Usage => f.write_str(&crate::TABLE_DECLARE_USAGE["ERR ".len()..]),
