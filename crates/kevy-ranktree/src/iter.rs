@@ -10,8 +10,8 @@ use alloc::vec::Vec;
 
 use crate::node::Node;
 
-/// Forward (ascending) iterator. Created by [`crate::RankTree::iter`],
-/// [`crate::RankTree::iter_from`] or [`crate::RankTree::range`].
+/// Forward (ascending) iterator. Created by [`crate::RankTree::iter`] or
+/// [`crate::RankTree::iter_from`].
 /// # Examples
 ///
 /// ```
@@ -173,3 +173,29 @@ impl<'a, K> Iterator for IterRev<'a, K> {
 }
 
 impl<K> ExactSizeIterator for IterRev<'_, K> {}
+
+/// The keys inside a range, ascending. Created by [`crate::RankTree::range`].
+///
+/// ```
+/// let mut t = kevy_ranktree::RankTree::new();
+/// for k in [1u32, 3, 5, 7] { t.insert(k); }
+/// let r = t.range(&(2..6));
+/// assert_eq!(r.len(), 2, "sized from the subtree counts");
+/// assert_eq!(r.copied().collect::<Vec<_>>(), vec![3, 5]);
+/// ```
+#[derive(Debug)]
+pub struct Range<'a, K>(pub(crate) Iter<'a, K>);
+
+impl<'a, K> Iterator for Range<'a, K> {
+    type Item = &'a K;
+
+    fn next(&mut self) -> Option<&'a K> {
+        self.0.next()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.0.size_hint()
+    }
+}
+
+impl<K> ExactSizeIterator for Range<'_, K> {}
