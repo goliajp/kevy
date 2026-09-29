@@ -11,7 +11,7 @@
 //! closure returns. Use it only when the closure genuinely needs
 //! more than one shard and atomicity across them is required.
 
-use crate::{KevyError, KevyResult};
+use crate::KevyResult;
 use std::sync::RwLockWriteGuard;
 
 use crate::shard::shard_idx;
@@ -473,7 +473,7 @@ fn commit_group_all(
     #[cfg(feature = "persist")]
     for g in guards.iter_mut() {
         if let Some(aof) = g.aof.as_mut() {
-            let synced = aof.end_group().map_err(KevyError::from);
+            let synced = aof.end_group().map_err(crate::KevyError::from);
             if commit.is_ok() {
                 commit = synced;
             }

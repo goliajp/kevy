@@ -630,7 +630,7 @@ cmd = "python3 tools/check_feature_lints.py"
 expected = 133
 timeout = 1800
 requires = []
-proves = "every crate alone, and every off-by-default feature, is clippy-zero too"
+proves = "every crate alone, every off-by-default feature, and every crate's minimal cut (one default feature at a time) is clippy-zero too"
 
 [[check]]
 id = "workspace-tests"
