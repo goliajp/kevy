@@ -58,11 +58,7 @@ impl Server {
     /// without leaking 'static.)
     fn start_with_flags(flags: &str, nshards: usize) -> Self {
         let port = free_port();
-        let dir = std::env::temp_dir().join(format!(
-            "kevy-keynotify-{}",
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = kevy_tmpdir::unique_dir("keynotify");
 
         let mut cfg = kevy_config::Config::default();
         cfg.notification.notify_keyspace_events = flags.to_string();

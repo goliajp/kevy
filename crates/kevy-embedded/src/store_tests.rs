@@ -5,11 +5,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 pub(crate) fn tmp_dir(name: &str) -> PathBuf {
-    let mut p = std::env::temp_dir();
-    let uniq =
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    p.push(format!("kevy-embedded-{name}-{uniq}"));
-    p
+    kevy_tmpdir::unique_dir(&format!("embedded-{name}"))
 }
 
 #[test]
