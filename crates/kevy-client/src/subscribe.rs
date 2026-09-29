@@ -42,6 +42,8 @@ use crate::{Target, parse_url, resolve_store};
 /// One subscribed connection. Owns either a TCP socket or an in-process
 /// [`Subscription`]; the variant is chosen by the URL scheme in
 /// [`Subscriber::connect_channels`] / [`Subscriber::connect`].
+///
+#[doc = include_str!("subscribe_docs/subscriber.md")]
 #[derive(Debug)]
 pub struct Subscriber {
     inner: Inner,
@@ -310,6 +312,8 @@ impl Subscriber {
 /// Iterator returned by [`Subscriber::events`]. Yields every pubsub
 /// frame (acks + payloads). See the method docs for termination + error
 /// semantics.
+///
+#[doc = include_str!("subscribe_docs/subscriber_events.md")]
 #[derive(Debug)]
 pub struct SubscriberEvents<'a> {
     sub: &'a mut Subscriber,
@@ -328,6 +332,8 @@ impl Iterator for SubscriberEvents<'_> {
 /// Iterator returned by [`Subscriber::messages`]. Yields one
 /// `(channel, payload)` per published `message` / `pmessage`; ack frames
 /// are silently consumed and not yielded.
+///
+#[doc = include_str!("subscribe_docs/subscriber_messages.md")]
 #[derive(Debug)]
 pub struct SubscriberMessages<'a> {
     sub: &'a mut Subscriber,
