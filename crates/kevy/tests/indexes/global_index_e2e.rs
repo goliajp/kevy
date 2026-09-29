@@ -350,8 +350,12 @@ fn described_splits(w: &mut Wire, name: &[u8]) -> Vec<i64> {
     (0..n).map(|i| lines[4 + 2 * i].parse().unwrap()).collect()
 }
 
+/// Every partition answers: a range over the whole domain reaches all of
+/// them, where a narrow one reaches one and can pass while the others build.
 fn wait_ready(w: &mut Wire, name: &[u8]) {
-    ready(w, &[b"IDX.COUNT", name, b"RANGE", b"0", b"0"]);
+    let r =
+        ready(w, &[b"IDX.COUNT", name, b"RANGE", b"-9223372036854775808", b"9223372036854775807"]);
+    assert!(r.starts_with(b":"), "not a count: {}", text(&r));
 }
 
 #[test]
