@@ -36,6 +36,7 @@ mod tempdir {
     }
 }
 
+use kevy_cluster_rw::ReadConsistency;
 use kevy_testnet::free_port_block;
 
 struct PrimaryServer {
@@ -243,7 +244,10 @@ fn write_lands_on_primary_read_round_robins_to_replica() {
         for i in 0..5 {
             let key = format!("rw-k{i}");
             let reply = client
-                .request_read(&[b"GET".to_vec(), key.as_bytes().to_vec()], false)
+                .request_read(
+                    &[b"GET".to_vec(), key.as_bytes().to_vec()],
+                    ReadConsistency::Eventual,
+                )
                 .expect("read");
             match reply {
                 kevy_resp::Reply::Bulk(_) => {}
@@ -265,8 +269,9 @@ fn write_lands_on_primary_read_round_robins_to_replica() {
     for i in 0..5 {
         let key = format!("rw-k{i}");
         let expected = format!("v{i}");
-        let reply =
-            client.request_read(&[b"GET".to_vec(), key.as_bytes().to_vec()], false).expect("read");
+        let reply = client
+            .request_read(&[b"GET".to_vec(), key.as_bytes().to_vec()], ReadConsistency::Eventual)
+            .expect("read");
         match reply {
             kevy_resp::Reply::Bulk(b) => assert_eq!(b, expected.as_bytes(), "{key}"),
             other => panic!("{key}: unexpected {other:?}"),
@@ -280,7 +285,7 @@ fn write_lands_on_primary_read_round_robins_to_replica() {
         .request_write(&[b"SET".to_vec(), b"rw-consistent".to_vec(), b"yes".to_vec()])
         .expect("write");
     let reply = client
-        .request_read(&[b"GET".to_vec(), b"rw-consistent".to_vec()], true)
+        .request_read(&[b"GET".to_vec(), b"rw-consistent".to_vec()], ReadConsistency::Primary)
         .expect("consistent read");
     match reply {
         kevy_resp::Reply::Bulk(b) => assert_eq!(b, b"yes"),
@@ -304,8 +309,9 @@ fn read_falls_back_to_primary_when_no_replicas() {
     let _ = client
         .request_write(&[b"SET".to_vec(), b"fallback-k".to_vec(), b"v".to_vec()])
         .expect("write");
-    let reply =
-        client.request_read(&[b"GET".to_vec(), b"fallback-k".to_vec()], false).expect("read");
+    let reply = client
+        .request_read(&[b"GET".to_vec(), b"fallback-k".to_vec()], ReadConsistency::Eventual)
+        .expect("read");
     match reply {
         kevy_resp::Reply::Bulk(b) => assert_eq!(b, b"v"),
         other => panic!("unexpected {other:?}"),
@@ -406,7 +412,9 @@ fn types_matrix_one_primary_two_replicas() {
     let mut consecutive = 0u32;
     let mut caught_up = false;
     for _ in 0..400 {
-        let r = client.request_read(&[b"GET".to_vec(), b"t:str".to_vec()], false).expect("read");
+        let r = client
+            .request_read(&[b"GET".to_vec(), b"t:str".to_vec()], ReadConsistency::Eventual)
+            .expect("read");
         if matches!(r, kevy_resp::Reply::Bulk(_)) {
             consecutive += 1;
             if consecutive >= 5 {
@@ -422,12 +430,12 @@ fn types_matrix_one_primary_two_replicas() {
 
     // Run all read queries via consistent reads (primary) AND via
     // round-robin replica reads — both paths should agree on values.
-    for consistent in [true, false] {
+    for consistent in [ReadConsistency::Primary, ReadConsistency::Eventual] {
         let reply =
             client.request_read(&[b"GET".to_vec(), b"t:str".to_vec()], consistent).expect("GET");
         match reply {
-            kevy_resp::Reply::Bulk(b) => assert_eq!(b, b"hello", "consistent={consistent}"),
-            other => panic!("GET t:str (consistent={consistent}): {other:?}"),
+            kevy_resp::Reply::Bulk(b) => assert_eq!(b, b"hello", "consistent={consistent:?}"),
+            other => panic!("GET t:str (consistent={consistent:?}): {other:?}"),
         }
 
         let reply = client
@@ -435,9 +443,9 @@ fn types_matrix_one_primary_two_replicas() {
             .expect("HGETALL");
         match reply {
             kevy_resp::Reply::Array(arr) => {
-                assert_eq!(arr.len(), 4, "HGETALL array len; consistent={consistent}");
+                assert_eq!(arr.len(), 4, "HGETALL array len; consistent={consistent:?}");
             }
-            other => panic!("HGETALL (consistent={consistent}): {other:?}"),
+            other => panic!("HGETALL (consistent={consistent:?}): {other:?}"),
         }
 
         let reply = client
@@ -448,9 +456,9 @@ fn types_matrix_one_primary_two_replicas() {
             .expect("LRANGE");
         match reply {
             kevy_resp::Reply::Array(arr) => {
-                assert_eq!(arr.len(), 3, "LRANGE; consistent={consistent}");
+                assert_eq!(arr.len(), 3, "LRANGE; consistent={consistent:?}");
             }
-            other => panic!("LRANGE (consistent={consistent}): {other:?}"),
+            other => panic!("LRANGE (consistent={consistent:?}): {other:?}"),
         }
 
         let reply = client
@@ -458,9 +466,9 @@ fn types_matrix_one_primary_two_replicas() {
             .expect("SMEMBERS");
         match reply {
             kevy_resp::Reply::Array(arr) => {
-                assert_eq!(arr.len(), 3, "SMEMBERS; consistent={consistent}");
+                assert_eq!(arr.len(), 3, "SMEMBERS; consistent={consistent:?}");
             }
-            other => panic!("SMEMBERS (consistent={consistent}): {other:?}"),
+            other => panic!("SMEMBERS (consistent={consistent:?}): {other:?}"),
         }
 
         let reply = client
@@ -469,9 +477,9 @@ fn types_matrix_one_primary_two_replicas() {
         match reply {
             kevy_resp::Reply::Bulk(b) => {
                 let s = std::str::from_utf8(&b).unwrap();
-                assert!(s.starts_with('1'), "ZSCORE; consistent={consistent}");
+                assert!(s.starts_with('1'), "ZSCORE; consistent={consistent:?}");
             }
-            other => panic!("ZSCORE (consistent={consistent}): {other:?}"),
+            other => panic!("ZSCORE (consistent={consistent:?}): {other:?}"),
         }
     }
 
@@ -499,7 +507,7 @@ fn readconsistent_sees_fresh_write_before_replica_lag() {
     let _ =
         client.request_write(&[b"SET".to_vec(), b"rc:k".to_vec(), b"fresh".to_vec()]).expect("SET");
     let reply = client
-        .request_read(&[b"GET".to_vec(), b"rc:k".to_vec()], true)
+        .request_read(&[b"GET".to_vec(), b"rc:k".to_vec()], ReadConsistency::Primary)
         .expect("READCONSISTENT GET");
     match reply {
         kevy_resp::Reply::Bulk(b) => assert_eq!(b, b"fresh"),

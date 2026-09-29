@@ -203,7 +203,7 @@ peer 请写成扩展的三字段语法：选举流量走 elect 端口，切换�
 | 关注点 | 回答 |
 |---|---|
 | 写入耐久性 | 帧落进本地 store 和 backlog 环之后主节点就 ack。副本随后追赶；`WAIT n timeout` 阻塞到至少 n 个副本确认（副本 ack 不是 fsync——见 availability.md）。 |
-| 读一致性 | 副本可能滞后。通过 `kevy-cluster-rw` 发 `request_read(…, consistent = true)` 把读强制走主节点，或用 `REPL.TOKEN` + `REPL.WAIT` 在副本上实现读己之写。 |
+| 读一致性 | 副本可能滞后。通过 `kevy-cluster-rw` 发 `request_read(…, ReadConsistency::Primary)` 把读强制走主节点，或用 `REPL.TOKEN` + `REPL.WAIT` 在副本上实现读己之写。 |
 | 副本掉队 | 重连请求的 offset 已从环里老化时，主节点就地内联推送一份该 shard 的快照，再从快照末端 offset 衔接实时帧——没有空洞，无需人工介入。快照替换副本键空间期间，副本上的客户端读回答 `-LOADING`（`PING` / `INFO` / `HELLO` 照常应答，健康检查不受影响）。 |
 | backlog 容量估算 | `replication_buffer_size ≈ peak_writes_per_sec × avg_argv_bytes × reconnect_window_seconds`。偏大无害；偏小会退化成快照发送。 |
 | 切主后什么会变 | 写入改发新主节点——配了 `kevy-elect` 就自动，否则手工。已有的 `kevy-cluster-rw` 客户端得知新主后自动改道；切换空档内正在进行的写会显式失败。 |
