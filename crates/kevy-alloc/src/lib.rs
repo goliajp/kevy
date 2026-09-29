@@ -38,7 +38,9 @@
 //!   subdivisions per octave rather than four.
 //! - **Go runtime** — span ownership, and heap accounting as a
 //!   first-class exported thing rather than a debug aid.
-//! - **jemalloc** — decay-style hysteresis before returning pages.
+//! - **mimalloc** — the purge delay: a free page goes back to the OS only
+//!   after it has gone unused for a while, so memory reused within it is
+//!   never faulted back in (see [`PURGE_DELAY`]).
 //! - **torajs-mmalloc** — a working mmap-backed realisation of all of
 //!   the above, plus two lessons it paid for: a missing per-class cap is
 //!   a SIGSEGV rather than a leak, and a cutover without a fast path
@@ -75,16 +77,20 @@ pub mod large;
 pub mod os;
 mod outbound;
 pub mod pagemap;
-mod partials;
+mod purge;
 mod reclaim;
+mod rtree;
 pub mod segment;
 mod snapshot;
+mod spanlist;
 pub mod stats;
+mod tally;
 
 #[cfg(feature = "global")]
 pub use global::{KevyAlloc, thread_reclaim, thread_stats};
-pub use heap::{EMPTY_SPAN_HYSTERESIS, Heap, PER_CLASS_CAP};
+pub use heap::{Heap, PER_CLASS_CAP};
 pub use large::large_stats;
+pub use purge::PURGE_DELAY;
 pub use stats::Stats;
 
 // Send and Sync are part of the public contract: a change that loses

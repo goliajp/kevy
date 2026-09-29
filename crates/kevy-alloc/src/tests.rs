@@ -22,6 +22,13 @@ macro_rules! require_mapping {
     };
 }
 
+/// Sweep until everything freed so far has aged past the purge delay.
+fn sweep_out(heap: &mut Heap) {
+    for _ in 0..=crate::PURGE_DELAY {
+        heap.reclaim();
+    }
+}
+
 #[test]
 fn a_round_trip_leaves_nothing_live() {
     require_mapping!();
@@ -267,7 +274,14 @@ fn m4_emptied_spans_have_their_pages_returned() {
     }
     let idle = heap.snapshot();
     assert_eq!(idle.live, 0);
+    // Inside the purge delay the policy holds everything back: a version
+    // that released the lot at once would satisfy every assertion below
+    // and fault the next burst back in page by page.
     heap.reclaim();
+    let held = heap.snapshot();
+    assert_eq!(held.returned, idle.returned, "pages went back inside the purge delay");
+    assert!(held.hysteresis > idle.hysteresis, "the emptied spans were not held: {held:?}");
+    sweep_out(&mut heap);
     let after = heap.snapshot();
     assert!(after.balanced(), "{after:?}");
     // This used to read `after.hysteresis > idle.hysteresis`, with a
@@ -286,15 +300,7 @@ fn m4_emptied_spans_have_their_pages_returned() {
             idle.returned,
             after.returned
         );
-        // And the policy really does hold some back rather than
-        // releasing everything: `EMPTY_SPAN_HYSTERESIS` spans stay
-        // assigned to their class, resident, per sweep. A version that
-        // released the lot would satisfy the assertion above and be an
-        // mmap storm.
-        assert!(
-            after.hysteresis > 0,
-            "the whole pool was released, so nothing absorbs the next burst"
-        );
+        assert_eq!(after.hysteresis, 0, "emptied spans outlived the purge delay: {after:?}");
         assert!(
             after.predicted_resident() < full.predicted_resident(),
             "predicted residency did not fall: {} -> {}",
@@ -348,7 +354,7 @@ fn reclaimed_spans_are_reusable_and_start_clean() {
         // SAFETY: ours, this size.
         unsafe { heap.dealloc(p, size, 8) };
     }
-    heap.reclaim();
+    sweep_out(&mut heap);
     let mut again = Vec::new();
     for _ in 0..per_span * 4 {
         let p = heap.alloc(size, 8).expect("reclaimed spans must be reusable");
@@ -410,7 +416,7 @@ fn m4_the_kernel_agrees_that_pages_came_back() {
         // SAFETY: ours, this size and alignment.
         unsafe { heap.dealloc(p, size, 8) };
     }
-    heap.reclaim();
+    sweep_out(&mut heap);
     let after = rss_bytes();
     let touched = (count * size) as u64;
     assert!(
@@ -564,7 +570,7 @@ fn v2_pages_return_while_the_span_still_lives() {
     assert!(!survivors.is_empty(), "the last page must hold live slots");
     let before = heap.snapshot();
     assert_eq!(before.returned, 0, "nothing returned before the sweep");
-    heap.reclaim();
+    sweep_out(&mut heap);
     let after = heap.snapshot();
     assert!(after.balanced(), "{after:?}");
     // `returned` is the accounting, not the kernel. On a system whose
@@ -652,7 +658,7 @@ fn v2_densification_migrates_free_space_into_whole_pages() {
             live.push(heap.alloc(size, 8).expect("refill"));
         }
     }
-    heap.reclaim();
+    sweep_out(&mut heap);
     let st = heap.snapshot();
     assert!(st.balanced(), "{st:?}");
     // Same split as `v2_pages_return_while_the_span_still_lives`: this
@@ -707,7 +713,7 @@ fn v2_the_kernel_reclaims_pages_from_spans_with_survivors() {
             unsafe { heap.dealloc(p, size, 8) };
         }
     }
-    heap.reclaim();
+    sweep_out(&mut heap);
     let after = rss_bytes();
     let st = heap.snapshot();
     assert!(st.balanced(), "{st:?}");

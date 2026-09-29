@@ -49,22 +49,25 @@ impl Heap {
         // SAFETY: partial entries are spans this heap assigned and has
         // not released; the segment header outlives them.
         let meta = unsafe { &mut (*seg.as_ptr()).spans[span_ix as usize] };
+        let (was_empty, old_hw) = (meta.live == 0, meta.high_water);
         let Some((word, claimed)) = meta.claim_word() else {
             self.partial[c] = None;
             return None;
         };
+        self.class_live[c] += claimed.count_ones();
+        let slot = class::size_of(c) as u64;
+        if was_empty {
+            self.tally.span_refilled(meta, old_hw, c);
+            self.empty_in_class[c] -= 1;
+        }
+        self.tally.touched += u64::from(meta.high_water - old_hw) * slot;
         // Claimed bits may land in returned pages; a fresh allocation
         // owes nothing to its contents, only the bookkeeping notices.
         if meta.discarded != 0 {
-            let slot_size = class::size_of(c);
-            let lo = u32::from(word) * 64 + claimed.trailing_zeros();
-            let hi = u32::from(word) * 64 + (63 - claimed.leading_zeros());
-            let (pa, _) = crate::pagemap::pages_of_slot(lo, slot_size);
-            let (_, pb) = crate::pagemap::pages_of_slot(hi, slot_size);
-            for p in pa..=pb {
-                meta.discarded &= !(1u16 << p);
-            }
+            let gone = crate::tally::unreturn_claim(meta, word, claimed, old_hw);
+            self.tally.returned -= u64::from(gone) * slot;
         }
+        self.stamp_claim(seg, span_ix as usize, word, claimed);
         // SAFETY: same header liveness as above.
         let base = unsafe { seg.as_ref() }.span_base(span_ix as usize);
         self.claims[c] = Some(Claim { seg, span_ix, word, claimed, taken: 0, base });
@@ -72,9 +75,8 @@ impl Heap {
     }
 
     /// Write a claim's unused bits back to its span. The span regains
-    /// its holes and the hint walks back; a formerly-full span is
-    /// findable again through `adopt_partial`'s scan (the partial ring
-    /// is an optimization, not the source of truth).
+    /// its holes and the hint walks back, and a span that is no longer
+    /// current is filed by its new occupancy.
     pub(super) fn retire_claim(&mut self, c: usize) {
         let Some(cl) = self.claims[c].take() else { return };
         let unused = cl.claimed & !cl.taken;
@@ -85,6 +87,13 @@ impl Heap {
         // segments; the header outlives the claim.
         let meta = unsafe { &mut (*cl.seg.as_ptr()).spans[cl.span_ix as usize] };
         meta.retire_word(cl.word, unused);
+        if meta.live == 0 {
+            self.tally.span_emptied(meta, c);
+            self.empty_in_class[c] += 1;
+        }
+        self.class_live[c] -= unused.count_ones();
+        self.file_span(cl.seg, cl.span_ix as usize);
+        self.note_free(cl.seg, cl.span_ix as usize);
     }
 
     /// Retire every class's claim — the write-back before anything

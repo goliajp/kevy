@@ -34,10 +34,11 @@
 //! ```
 
 use core::ptr::NonNull;
-use core::sync::atomic::{AtomicPtr, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicPtr};
 
 use crate::class::{self, SPAN_BYTES};
 pub use crate::pagemap::{NO_CLASS, SpanMeta};
+pub(crate) use segment_foreign::ForeignTally;
 
 /// Bytes per segment. Power of two: the mask is the lookup.
 ///
@@ -111,25 +112,25 @@ pub struct Segment {
     /// stack of slot addresses. See [`Segment::splice_foreign`] for why this is
     /// push-only.
     pub(crate) foreign: AtomicPtr<u8>,
-    /// Slot bytes parked on `foreign`, so the accounting can price the
-    /// list without walking it. Bytes rather than a count: one list
-    /// carries slots of several classes, so a count cannot be converted
-    /// back.
-    ///
-    /// `AtomicUsize` rather than `AtomicU64` because 32-bit targets
-    /// (Cortex-M among them) have no 64-bit atomic, and a pending
-    /// foreign-free list cannot exceed the address space anyway.
-    pub(crate) foreign_bytes: core::sync::atomic::AtomicUsize,
-    /// Of those, the bytes callers actually asked for.
-    ///
-    /// The owner's `live`/`rounding` counters still include everything on
-    /// this list, because the thread that freed it cannot touch another
-    /// thread's counters. Snapshots move the amount across so it is
-    /// counted once — see `Heap::snapshot`.
-    pub(crate) foreign_live: core::sync::atomic::AtomicUsize,
+    /// Whether this segment is on its heap's stack of segments with
+    /// foreign frees to drain, and its link there (see `segment_foreign`).
+    pub(crate) queued: AtomicBool,
+    pub(crate) queued_next: AtomicPtr<Segment>,
+    /// Slot bytes parked on the foreign lists of every segment of this
+    /// heap. Only the heap's first segment's copy is used; the others
+    /// point at it through `home`, so the owner prices everything
+    /// parked with one read instead of a walk of its segments.
+    pub(crate) parked: ForeignTally,
+    /// The `parked` this segment's splices post to.
+    pub(crate) home: *const ForeignTally,
     /// Per-span bookkeeping, indexed by span number. Index 0 describes
     /// the header span itself and is never assigned a class.
     pub(crate) spans: [SpanMeta; SPANS_PER_SEGMENT],
+    /// Each span's place on its heap's lists (see `spanlist`), beside the
+    /// metadata rather than in it so the metadata stays plain data.
+    pub(crate) links: [crate::spanlist::SpanLink; SPANS_PER_SEGMENT],
+    /// Per span, the sweep each page was last claimed at (see `purge`).
+    pub(crate) stamps: [crate::purge::Stamps; SPANS_PER_SEGMENT],
 }
 
 impl Segment {
@@ -163,10 +164,15 @@ impl Segment {
                 next: core::ptr::null_mut(),
                 owner,
                 foreign: AtomicPtr::new(core::ptr::null_mut()),
-                foreign_bytes: core::sync::atomic::AtomicUsize::new(0),
-                foreign_live: core::sync::atomic::AtomicUsize::new(0),
+                queued: AtomicBool::new(false),
+                queued_next: AtomicPtr::new(core::ptr::null_mut()),
+                parked: ForeignTally::new(),
+                home: core::ptr::null(),
                 spans: [SpanMeta::new(); SPANS_PER_SEGMENT],
+                links: [crate::spanlist::SpanLink::NONE; SPANS_PER_SEGMENT],
+                stamps: [crate::purge::Stamps::NEW; SPANS_PER_SEGMENT],
             });
+            (*seg).home = &raw const (*seg).parked;
         }
         // SAFETY: just written.
         unsafe { NonNull::new_unchecked(seg) }
@@ -245,146 +251,6 @@ impl Segment {
     #[must_use]
     pub fn spans(&self) -> &[SpanMeta; SPANS_PER_SEGMENT] {
         &self.spans
-    }
-
-    /// Slot bytes other threads have freed onto this segment and the
-    /// owner has not drained yet. A relaxed read: under concurrent frees
-    /// it is a moment's value, not a bound.
-    ///
-    /// ```
-    /// # use kevy_alloc::{Heap, segment};
-    /// let mut heap = Heap::new(0);
-    /// if let Some(p) = heap.alloc(64, 8) {
-    ///     // SAFETY: `p` is a small slot this heap handed out.
-    ///     let seg = unsafe { segment::segment_of(p).as_ref() };
-    ///     assert_eq!(seg.foreign_bytes(), 0, "only the owner has freed here");
-    ///     // SAFETY: allocated just above with this size and alignment.
-    ///     unsafe { heap.dealloc(p, 64, 8) };
-    /// }
-    /// ```
-    #[must_use]
-    pub fn foreign_bytes(&self) -> usize {
-        self.foreign_bytes.load(Ordering::Relaxed)
-    }
-
-    /// Of [`Segment::foreign_bytes`], the bytes callers actually asked
-    /// for. A relaxed read, like that one.
-    ///
-    /// ```
-    /// # use kevy_alloc::{Heap, segment};
-    /// let mut heap = Heap::new(0);
-    /// if let Some(p) = heap.alloc(64, 8) {
-    ///     // SAFETY: `p` is a small slot this heap handed out.
-    ///     let seg = unsafe { segment::segment_of(p).as_ref() };
-    ///     assert!(seg.foreign_live() <= seg.foreign_bytes());
-    ///     // SAFETY: allocated just above with this size and alignment.
-    ///     unsafe { heap.dealloc(p, 64, 8) };
-    /// }
-    /// ```
-    #[must_use]
-    pub fn foreign_live(&self) -> usize {
-        self.foreign_live.load(Ordering::Relaxed)
-    }
-
-    /// Splice a pre-linked chain of freed slots onto this segment's
-    /// foreign list, and post the batch's byte sums. One CAS and two
-    /// `fetch_add`s for the whole chain — this is the amortisation M1
-    /// forced: the per-op version of this function was three atomic RMWs
-    /// on this same line for every single foreign free, and cross-shard KV
-    /// paid 18–39 % for it.
-    ///
-    /// The chain format is unchanged from the per-op era: each slot's
-    /// first word links to the next, with the requested size at
-    /// [`FOREIGN_SIZE_OFFSET`] — the owner's drain cannot tell a spliced
-    /// batch from a thousand individual pushes.
-    ///
-    /// # Why this is push-only, and why that matters
-    ///
-    /// A Treiber stack's ABA hazard lives in `pop`: a consumer reads
-    /// `head.next`, and between that read and its compare-and-swap another
-    /// thread can pop, push other nodes, and push the same address back —
-    /// so the CAS succeeds against a stale `next`. torajs-mmalloc documents
-    /// the hazard and accepts it, reasoning that its runtime is
-    /// single-threaded. kevy is not: values are shared across shards on the
-    /// read lane, so a foreign free is ordinary, and inheriting that note
-    /// would be inheriting a bug.
-    ///
-    /// The fix is structural rather than defensive. **Only the owning shard
-    /// ever removes anything, and it removes the entire list with one
-    /// `swap`** ([`Segment::take_foreign`]). There is no compare-and-swap
-    /// on the consumer side, so there is no window for ABA to open.
-    /// Producers only ever push. This is mimalloc's thread-free design, and
-    /// it is strictly simpler than tagged pointers or hazard pointers would
-    /// have been.
-    ///
-    /// # Safety
-    /// `head..tail` must be a chain of live slot addresses belonging to
-    /// this segment, linked through their first words, referenced by
-    /// nobody else; `live_sum`/`bytes_sum` must be the chain's
-    /// requested/slot-byte sums.
-    ///
-    /// ```
-    /// use kevy_alloc::{Heap, segment::{self, FOREIGN_SIZE_OFFSET}};
-    /// let mut owner = Heap::new(1);
-    /// let p = owner.alloc(100, 8).ok_or("no mapping")?;
-    /// // freeing `p` from another shard: size into the slot, then a one-slot chain
-    /// // SAFETY: `p` is a live slot of this class (104 bytes), ours to overwrite.
-    /// unsafe { p.as_ptr().add(FOREIGN_SIZE_OFFSET).cast::<u32>().write(100) };
-    /// // SAFETY: `p` is a live small slot, so it lies inside a segment.
-    /// let seg = unsafe { segment::segment_of(p).as_ref() };
-    /// // SAFETY: a one-slot chain of this segment's slot, with its sums.
-    /// unsafe { seg.splice_foreign(p.as_ptr(), p.as_ptr(), 100, 104) };
-    /// assert_eq!((seg.foreign_live(), seg.foreign_bytes()), (100, 104));
-    /// owner.drain_foreign(); // the owner settles it
-    /// assert_eq!(owner.snapshot().live, 0);
-    /// # Ok::<(), &str>(())
-    /// ```
-    pub unsafe fn splice_foreign(
-        &self,
-        head: *mut u8,
-        tail: *mut u8,
-        live_sum: usize,
-        bytes_sum: usize,
-    ) {
-        self.foreign_live.fetch_add(live_sum, Ordering::Relaxed);
-        self.foreign_bytes.fetch_add(bytes_sum, Ordering::Relaxed);
-        let mut old = self.foreign.load(Ordering::Relaxed);
-        loop {
-            // SAFETY: the tail is ours until the CAS below publishes the
-            // chain; its link word is free to point at the current head.
-            unsafe { tail.cast::<*mut u8>().write(old) };
-            match self.foreign.compare_exchange_weak(
-                old,
-                head,
-                Ordering::Release,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => break,
-                Err(actual) => old = actual,
-            }
-        }
-    }
-
-    /// Take the whole foreign-free list, leaving it empty. Only the owning
-    /// shard may call this — that exclusivity is what makes the structure
-    /// ABA-free (see [`Segment::splice_foreign`]).
-    ///
-    /// ```
-    /// # use kevy_alloc::{Heap, segment};
-    /// let mut heap = Heap::new(0);
-    /// if let Some(p) = heap.alloc(64, 8) {
-    ///     // SAFETY: `p` is a small slot this heap handed out.
-    ///     let seg = unsafe { segment::segment_of(p).as_ref() };
-    ///     assert!(seg.take_foreign().is_null(), "no other thread freed here");
-    ///     // SAFETY: allocated just above with this size and alignment.
-    ///     unsafe { heap.dealloc(p, 64, 8) };
-    /// }
-    /// ```
-    #[must_use]
-    pub fn take_foreign(&self) -> *mut u8 {
-        self.foreign_bytes.store(0, Ordering::Relaxed);
-        self.foreign_live.store(0, Ordering::Relaxed);
-        self.foreign.swap(core::ptr::null_mut(), Ordering::Acquire)
     }
 }
 
@@ -497,3 +363,6 @@ pub unsafe fn foreign_requested(slot: NonNull<u8>) -> usize {
 #[cfg(test)]
 #[path = "segment_tests.rs"]
 mod tests;
+
+#[path = "segment_foreign.rs"]
+mod segment_foreign;

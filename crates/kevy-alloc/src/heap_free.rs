@@ -77,12 +77,19 @@ impl Heap {
     }
 
     /// Move every slot other shards freed back onto its own span's list.
+    ///
+    /// Visits only the segments a splice queued, so the cost follows the
+    /// foreign frees waiting rather than the size of the heap.
     pub fn drain_foreign(&mut self) {
-        let mut seg = self.segments;
-        while !seg.is_null() {
-            // SAFETY: live header from our own list.
-            let s = unsafe { &*seg };
-            let mut node = s.take_foreign();
+        if self.parked.is_null() {
+            return;
+        }
+        // SAFETY: set with the first segment, whose header outlives
+        // every segment that could have held a foreign free.
+        let tally = unsafe { &*self.parked };
+        let (mut live, mut bytes) = (0usize, 0usize);
+        tally.drain_pending(|seg, mut node| {
+            let seg = seg.as_ptr();
             while !node.is_null() {
                 // SAFETY: foreign entries are slot addresses of this
                 // segment, linked through their first word.
@@ -97,6 +104,8 @@ impl Heap {
                 let cls = unsafe { (*seg).spans[ix].class };
                 if cls != NO_CLASS {
                     let c = cls as usize;
+                    live += requested;
+                    bytes += class::size_of(c);
                     self.live_bytes -= requested as u64;
                     self.rounding_bytes -= (class::size_of(c) - requested) as u64;
                     // SAFETY: our segment, exclusive access here.
@@ -104,14 +113,16 @@ impl Heap {
                 }
                 node = next;
             }
-            seg = s.next;
+        });
+        if bytes != 0 {
+            tally.settle(live, bytes);
         }
     }
 
     /// Mark a slot free in its span's bitmap. Nothing is written into
     /// the slot itself — that absence is what makes its pages
-    /// returnable. A span going full → partial is registered in the
-    /// class's partial ring so the slow path finds it in O(1).
+    /// returnable. The span moves to the list its new occupancy grades
+    /// it on, so the slow path finds it in O(1).
     ///
     /// # Safety
     /// `seg` must own `ptr`, and the caller must have exclusive access.
@@ -135,11 +146,14 @@ impl Heap {
         }
         // SAFETY: caller holds exclusive access to this segment.
         let meta = unsafe { &mut (*seg.as_ptr()).spans[ix] };
-        let was_full = u32::from(meta.live) == meta.capacity();
         meta.free_slot(slot);
-        if was_full {
-            self.partials[c].push(seg.as_ptr(), ix);
+        if meta.live == 0 {
+            self.tally.span_emptied(meta, c);
+            self.empty_in_class[c] += 1;
         }
+        self.class_live[c] -= 1;
+        self.file_span(seg, ix);
+        self.note_free(seg, ix);
     }
 }
 
@@ -161,6 +175,7 @@ impl Drop for Heap {
             // SAFETY: live header from our own list; read `next` before
             // the mapping goes away.
             let next = unsafe { (*seg).next };
+            crate::rtree::set(seg as usize, 0);
             // SAFETY: this heap mapped it and is the only owner.
             unsafe {
                 os::unmap(NonNull::new_unchecked(seg.cast::<u8>()), SEGMENT_BYTES);
