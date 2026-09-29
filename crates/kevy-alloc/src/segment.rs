@@ -38,6 +38,7 @@ use core::sync::atomic::AtomicPtr;
 
 use crate::class::{self, SPAN_BYTES};
 pub use crate::pagemap::{NO_CLASS, SpanMeta};
+pub(crate) use segment_foreign::ForeignTally;
 
 /// Bytes per segment. Power of two: the mask is the lookup.
 ///
@@ -111,22 +112,13 @@ pub struct Segment {
     /// stack of slot addresses. See [`Segment::splice_foreign`] for why this is
     /// push-only.
     pub(crate) foreign: AtomicPtr<u8>,
-    /// Slot bytes parked on `foreign`, so the accounting can price the
-    /// list without walking it. Bytes rather than a count: one list
-    /// carries slots of several classes, so a count cannot be converted
-    /// back.
-    ///
-    /// `AtomicUsize` rather than `AtomicU64` because 32-bit targets
-    /// (Cortex-M among them) have no 64-bit atomic, and a pending
-    /// foreign-free list cannot exceed the address space anyway.
-    pub(crate) foreign_bytes: core::sync::atomic::AtomicUsize,
-    /// Of those, the bytes callers actually asked for.
-    ///
-    /// The owner's `live`/`rounding` counters still include everything on
-    /// this list, because the thread that freed it cannot touch another
-    /// thread's counters. Snapshots move the amount across so it is
-    /// counted once — see `Heap::snapshot`.
-    pub(crate) foreign_live: core::sync::atomic::AtomicUsize,
+    /// Slot bytes parked on the foreign lists of every segment of this
+    /// heap. Only the heap's first segment's copy is used; the others
+    /// point at it through `home`, so the owner prices everything
+    /// parked with one read instead of a walk of its segments.
+    pub(crate) parked: ForeignTally,
+    /// The `parked` this segment's splices post to.
+    pub(crate) home: *const ForeignTally,
     /// Per-span bookkeeping, indexed by span number. Index 0 describes
     /// the header span itself and is never assigned a class.
     pub(crate) spans: [SpanMeta; SPANS_PER_SEGMENT],
@@ -166,11 +158,12 @@ impl Segment {
                 next: core::ptr::null_mut(),
                 owner,
                 foreign: AtomicPtr::new(core::ptr::null_mut()),
-                foreign_bytes: core::sync::atomic::AtomicUsize::new(0),
-                foreign_live: core::sync::atomic::AtomicUsize::new(0),
+                parked: ForeignTally::new(),
+                home: core::ptr::null(),
                 spans: [SpanMeta::new(); SPANS_PER_SEGMENT],
                 links: [crate::spanlist::SpanLink::NONE; SPANS_PER_SEGMENT],
             });
+            (*seg).home = &raw const (*seg).parked;
         }
         // SAFETY: just written.
         unsafe { NonNull::new_unchecked(seg) }

@@ -17,8 +17,9 @@
 //! The ceiling that keeps ownership exact is **amortisation**: the free
 //! fast path appends to this heap-local ring — two plain stores, zero
 //! cross-core traffic — and the flush ships a whole batch home as one
-//! pre-linked chain per segment: one CAS splice and two `fetch_add`s
-//! for the lot. The owner's drain sees exactly the format it always saw.
+//! pre-linked chain per segment: one CAS splice, and two `fetch_add`s on
+//! the owning heap's tally, for the lot. The owner's drain sees exactly
+//! the format it always saw.
 //!
 //! Accounting stays exact throughout. A pending slot's bit is still set,
 //! so the owner's counters still cover its bytes — the same staleness

@@ -81,6 +81,7 @@ pub mod segment;
 mod snapshot;
 mod spanlist;
 pub mod stats;
+mod tally;
 
 #[cfg(feature = "global")]
 pub use global::{KevyAlloc, thread_reclaim, thread_stats};

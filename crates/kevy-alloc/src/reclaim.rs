@@ -69,7 +69,7 @@ impl Heap {
                     continue;
                 }
                 if s.spans[ix].live != 0 {
-                    Self::discard_free_pages(s, ix, can_discard);
+                    self.discard_and_tally(s, ix, can_discard);
                     continue;
                 }
                 if kept < EMPTY_SPAN_HYSTERESIS {
@@ -104,6 +104,7 @@ impl Heap {
             self.partial[c] = None;
         }
         self.spans_in_class[c] -= 1;
+        self.tally.span_retired(can_discard);
         self.delist_span(seg, ix);
         s.spans[ix].reset(crate::pagemap::NO_CLASS);
         // Emptied and handed back, which is not the same unassigned as
@@ -125,6 +126,16 @@ impl Heap {
             }
             s.spans[ix].discarded = crate::pagemap::ALL_PAGES_DISCARDED;
         }
+    }
+
+    /// [`Self::discard_free_pages`], then move the free slots whose pages
+    /// all went into the running `returned` total.
+    fn discard_and_tally(&mut self, s: &mut Segment, ix: usize, can_discard: bool) {
+        let before = s.spans[ix].discarded;
+        Self::discard_free_pages(s, ix, can_discard);
+        let meta = &mut s.spans[ix];
+        let gained = crate::tally::returned_after_discard(meta, meta.discarded & !before);
+        self.tally.returned += u64::from(gained) * class::size_of(meta.class as usize) as u64;
     }
 
     /// Hand back every page of a *live* span that no live slot overlaps.
