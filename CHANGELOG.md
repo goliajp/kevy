@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **A command pays less to reach the store.** Every write copied its key
+  for the index hook before the hook checked whether any index exists,
+  and read two thread-locals that only Lua scripts and nondeterministic
+  verbs ever set; the key is now passed by reference and both reads sit
+  behind one flag. A pipeline looked its connection up by hash three
+  times per command; it now keeps the slot for the batch. A forwarded
+  `GET` or `SET` carries its resolved verb, so the owning shard does not
+  match the name again. The envelopes that carry batches between shards
+  are reused instead of reallocated per batch, and `GET` / `INCR` probe
+  the keyspace once instead of twice. Pipelined commands in steady state
+  allocate nothing on this path. Measured on 2 saturated shards: 13–16%
+  fewer instructions per command for `SET`, `GET`, `INCR` and `LPUSH`,
+  and 10–18% more throughput.
+
 - **An embedded `SCAN` page costs what it walks.** `Store::scan` copied
   every key in the store on each call and sliced one page out of the
   copy, so walking a store of n keys cost O(n²) and each page held a copy
