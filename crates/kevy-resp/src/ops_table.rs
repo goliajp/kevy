@@ -36,9 +36,15 @@ pub mod surface {
     pub const REWRITE: u16 = 1 << 5;
 }
 
-/// Keyspace-notification class (neutral mirror of `kevy-rt`'s
-/// `NotifyClass`, which this crate cannot depend on).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Keyspace-notification class of a command (the Redis class letter
+/// each variant names).
+///
+/// ```
+/// use kevy_resp::ops_table::{NotifyKind, spec};
+/// assert_eq!(spec("LPUSH").and_then(|s| s.notify), Some(NotifyKind::List));
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum NotifyKind {
     /// Redis notification class `$` (string commands).
     String,
@@ -57,8 +63,15 @@ pub enum NotifyKind {
 }
 
 /// One registry row: a command's classification + the surfaces it
-/// exists on today.
-#[derive(Debug, Clone, Copy)]
+/// exists on today. The rows are the crate's own [`OP_TABLE`]; read them
+/// with [`spec`].
+///
+/// ```
+/// let get = kevy_resp::ops_table::spec("GET").unwrap();
+/// assert!(!get.write && get.notify.is_none());
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct OpSpec {
     /// Canonical uppercase command name.
     pub name: &'static str,

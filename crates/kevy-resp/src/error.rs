@@ -1,12 +1,30 @@
 //! Protocol-level parsing error shared by request + reply parsers,
 //! plus the command-layer error frame type.
 
-/// Why a buffer could not (yet) be parsed into a command (or reply).
-#[derive(Debug, PartialEq, Eq)]
+/// Why a buffer could not be parsed into a command (or reply). A frame
+/// that is merely incomplete is not an error: the parsers answer
+/// `Ok(None)` for it.
+///
+/// ```
+/// let e = kevy_resp::parse_command(b"*x\r\n").unwrap_err();
+/// assert_eq!(e.to_string(), "malformed frame: bad multibulk count");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum ProtocolError {
     /// A malformed frame that can never become valid (e.g. bad length prefix).
     Malformed(&'static str),
 }
+
+impl std::fmt::Display for ProtocolError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Malformed(why) => write!(f, "malformed frame: {why}"),
+        }
+    }
+}
+
+impl std::error::Error for ProtocolError {}
 
 /// A command-layer error destined for the wire as a RESP error frame.
 ///
@@ -15,7 +33,13 @@ pub enum ProtocolError {
 /// verbatim into a `-<text>\r\n` reply. The dedicated type keeps parse
 /// and dispatch helpers from using bare `&'static str` as an error
 /// currency.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// ```
+/// let e = kevy_resp::CmdError::from("ERR syntax error");
+/// assert_eq!(e.as_wire(), "ERR syntax error");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum CmdError {
     /// The complete wire message for the error frame.
     Wire(&'static str),
