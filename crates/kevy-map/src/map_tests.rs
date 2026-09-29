@@ -790,3 +790,22 @@ fn into_iter_of_an_unallocated_map_is_empty() {
     let s: KevySet<u64> = KevySet::new();
     assert_eq!(s.into_iter().count(), 0);
 }
+
+#[test]
+fn a_mapped_table_hands_back_pages_as_it_grows_and_keeps_every_entry() {
+    // (u64, [u64; 7]) slots are 64 bytes: 2^17 of them fill 8 MiB, so the
+    // growth to 2^18 moves out of a mapped table four huge pages long and
+    // hands the first ones back while later entries are still to move
+    let n = if cfg!(miri) { 2_000 } else { 120_000 };
+    let mut m: KevyMap<u64, [u64; 7]> = KevyMap::new();
+    for i in 0..n {
+        m.insert(i, [i; 7]);
+    }
+    if !cfg!(miri) {
+        assert_eq!(m.capacity(), 1 << 18, "the last growth moved a 2^17 table");
+    }
+    for i in 0..n {
+        assert_eq!(m.get(&i), Some(&[i; 7]), "entry {i} survived the move");
+    }
+    assert_eq!(m.len(), n as usize);
+}

@@ -430,6 +430,7 @@ dependencies = [
  "kevy-index",
  "kevy-lua",
  "kevy-lua-host",
+ "kevy-madvise",
  "kevy-noise",
  "kevy-persist",
  "kevy-replicate",

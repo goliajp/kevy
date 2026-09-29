@@ -32,6 +32,10 @@
 #![warn(missing_docs)]
 #![cfg_attr(not(feature = "std"), no_std)]
 
+mod mapped;
+
+pub use mapped::{mapped_bytes, release_2mb};
+
 #[cfg(target_os = "linux")]
 mod ffi {
     use core::ffi::{c_int, c_void};
@@ -345,6 +349,7 @@ fn mmap_anon_aligned_2mb_linux(len: usize) -> Option<core::ptr::NonNull<u8>> {
         return None;
     }
     let aligned_start = trim_to_aligned(raw, total, rounded);
+    mapped::note_mapped(rounded);
     // Best-effort huge-page hint. EINVAL on unsupported kernels =
     // benign — the mapping still works at 4 KiB pages.
     const MADV_HUGEPAGE: i32 = 14;
@@ -430,6 +435,7 @@ pub unsafe fn munmap_2mb(ptr: core::ptr::NonNull<u8>, len: usize) {
         unsafe {
             let _ = ffi::munmap(ptr.as_ptr() as *mut c_void, rounded);
         }
+        mapped::note_unmapped(rounded);
     }
     #[cfg(not(target_os = "linux"))]
     {

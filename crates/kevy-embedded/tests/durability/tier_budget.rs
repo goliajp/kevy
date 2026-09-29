@@ -139,8 +139,9 @@ fn info_gauges_present_when_tiered_absent_when_not() {
     assert_eq!(t.index_reserved_bytes, 0, "no indexes declared yet");
     assert_eq!(
         t.tier_effective_target,
-        budget * 19 / 20 - t.stub_bytes,
-        "the unified target arithmetic surfaces in the gauges"
+        budget * 19 / 20,
+        "the unified target arithmetic surfaces in the gauges: a cold stub is \
+         charged inside used_memory, not again as a floor"
     );
 }
 
@@ -148,7 +149,9 @@ fn info_gauges_present_when_tiered_absent_when_not() {
 fn reserved_floor_feeds_through_the_manual_tick() {
     let dir = kevy_tmpdir::TmpDir::new("tier-t5-reserved");
     let s = Store::open(tiered_bytes(dir.path(), 10_000_000)).unwrap();
-    for i in 0..50u32 {
+    // 30 keys sit far from the keyspace table's next growth, so no growth
+    // reserve joins the index floor in the target below
+    for i in 0..30u32 {
         s.hset(format!("row:{i}").as_bytes(), &[(b"score".as_slice(), format!("{i}").as_bytes())])
             .unwrap();
     }
@@ -166,19 +169,18 @@ fn reserved_floor_feeds_through_the_manual_tick() {
     assert!(t.index_reserved_bytes > 0, "the tick feeds the index floor");
     assert_eq!(
         t.tier_effective_target,
-        (10_000_000u64 * 19 / 20)
-            .saturating_sub(t.index_reserved_bytes)
-            .saturating_sub(t.stub_bytes),
+        (10_000_000u64 * 19 / 20).saturating_sub(t.index_reserved_bytes),
     );
 }
 
 #[test]
 fn idx_create_refused_when_the_floor_exceeds_the_budget() {
     let dir = kevy_tmpdir::TmpDir::new("tier-t5-floor");
-    // A budget small enough that one real index's segment exceeds its
-    // watermark; big enough that plain writes stay serviceable.
-    let s = Store::open(tiered_bytes(dir.path(), 4096)).unwrap();
-    for i in 0..200u32 {
+    // A budget that holds the keyspace table of 150 rows (about 18 KB, which
+    // stays however cold the rows get) with room to spare, but not that and
+    // one real index's segment as well.
+    let s = Store::open(tiered_bytes(dir.path(), 24 << 10)).unwrap();
+    for i in 0..150u32 {
         s.hset(format!("row:{i}").as_bytes(), &[(b"score".as_slice(), format!("{i}").as_bytes())])
             .unwrap();
     }

@@ -140,8 +140,8 @@ pub struct KevyTierInfo {
     /// # Ok::<(), kevy_embedded::KevyError>(())
     /// ```
     pub tier_budget_bytes: u64,
-    /// The unified demote target (`budget·19/20 − index floor − stub
-    /// floor`, saturating). **0 = the floor alone exceeds the budget.**
+    /// The demote target `used_memory` is held to (`budget·19/20 − index
+    /// floor`, saturating). **0 = the index floor alone exceeds the budget.**
     ///
     /// ```
     /// # use kevy_embedded::{Config, Store};
@@ -150,7 +150,8 @@ pub struct KevyTierInfo {
     /// # s.set(b"cold", &[b'x'; 4096])?;
     /// # assert!(s.debug_force_demote(b"cold"));
     /// let t = s.info().tiering.unwrap();
-    /// assert_eq!(t.tier_effective_target, (1 << 20) * 19 / 20 - t.stub_bytes);
+    /// // a cold key is charged once, inside used_memory: the target stays put
+    /// assert_eq!(t.tier_effective_target, (1 << 20) * 19 / 20);
     /// # Ok::<(), kevy_embedded::KevyError>(())
     /// ```
     pub tier_effective_target: u64,

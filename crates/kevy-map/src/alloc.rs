@@ -134,6 +134,48 @@ impl<K, V> KevyMap<K, V> {
         if self.mmap_backed { size.next_multiple_of(HUGE_PAGE) } else { malloc_footprint(size) }
     }
 
+    /// The bytes [`Self::footprint`] will read once the table has grown to
+    /// twice its capacity (sixteen slots for a map with no table yet): what
+    /// a caller holding memory to a budget sets aside before the growth
+    /// arrives, so the growth does not land on memory it has no room for.
+    ///
+    /// ```
+    /// let mut m: kevy_map::KevyMap<u64, u64> = kevy_map::KevyMap::new();
+    /// m.insert(1, 1);
+    /// let promised = m.grown_footprint();
+    /// while m.room() > 0 {
+    ///     m.insert(m.len() as u64 + 1, 0);
+    /// }
+    /// m.insert(u64::MAX, 0); // no room left: this insert grows the table
+    /// assert_eq!(m.footprint(), promised);
+    /// ```
+    pub fn grown_footprint(&self) -> usize {
+        let cap = if self.cap == 0 { MIN_CAP } else { self.cap * 2 };
+        let size = table_layout::<(K, V)>(cap).0.size();
+        // `alloc_table` maps a table this large directly wherever it can
+        let mapped = size >= THP_BACKED_THRESHOLD && cfg!(target_os = "linux") && !cfg!(miri);
+        if mapped { size.next_multiple_of(HUGE_PAGE) } else { malloc_footprint(size) }
+    }
+
+    /// New keys the table takes before an insert grows it: 0 when the next
+    /// insert rebuilds it (or there is no table yet).
+    ///
+    /// ```
+    /// let mut m: kevy_map::KevyMap<u64, u64> = kevy_map::KevyMap::new();
+    /// assert_eq!(m.room(), 0, "no table yet");
+    /// m.insert(1, 1);
+    /// // sixteen slots hold fourteen keys at the 7/8 load bound
+    /// assert_eq!(m.room(), 14 - 1);
+    /// ```
+    #[inline]
+    pub fn room(&self) -> usize {
+        if self.cap == 0 {
+            0
+        } else {
+            self.threshold().saturating_sub(self.occupied + self.deleted)
+        }
+    }
+
     /// Whether the next insert rebuilds the table before it probes — an
     /// overwrite included, since the check runs before the key is looked up.
     #[inline]
