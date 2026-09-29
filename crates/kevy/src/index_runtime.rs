@@ -365,23 +365,7 @@ fn refresh(ctx: &Ctx<'_>, st: &mut ShardIndexes) {
                     && si.global.as_ref().map_or(!part.is_global(), |g| g.fits((shard, n), inc))
             };
             match st.idx.iter().position(same) {
-                Some(i) => {
-                    let mut si = st.idx.swap_remove(i);
-                    // The index spec survived, but the table's WINDOW
-                    // clause may have changed (REPLACE): reconcile.
-                    // A changed window resets the runtime — the old
-                    // spill is unreachable and swept on first slide.
-                    let want = window_for(catalogs, &si.spec);
-                    let have = si.window.as_ref().map(|w| (w.spec().clone(), w.shape()));
-                    if have != want {
-                        si.window = want.map(|(w, sh)| kevy_window::WindowRt::new(w, sh));
-                    }
-                    let want_text = text_window_for(catalogs, &si.spec);
-                    if si.cold_text.is_some() != want_text {
-                        si.cold_text = want_text.then(TextColdDir::new);
-                    }
-                    next.push(si);
-                }
+                Some(i) => next.push(reconcile_windows(catalogs, st.idx.swap_remove(i))),
                 None => {
                     let mut si = fresh_shard_index(catalogs, spec);
                     si.global = part
@@ -397,6 +381,22 @@ fn refresh(ctx: &Ctx<'_>, st: &mut ShardIndexes) {
     st.generation = generation;
     st.view_gen = u64::MAX;
     set_key_dirs(catalogs, st);
+}
+
+/// The index spec survived, but the table's WINDOW clause may have changed
+/// (REPLACE): a changed window resets the runtime — the old spill is
+/// unreachable and swept on first slide.
+fn reconcile_windows(catalogs: &CatalogState, mut si: ShardIndex) -> ShardIndex {
+    let want = window_for(catalogs, &si.spec);
+    let have = si.window.as_ref().map(|w| (w.spec().clone(), w.shape()));
+    if have != want {
+        si.window = want.map(|(w, sh)| kevy_window::WindowRt::new(w, sh));
+    }
+    let want_text = text_window_for(catalogs, &si.spec);
+    if si.cold_text.is_some() != want_text {
+        si.cold_text = want_text.then(TextColdDir::new);
+    }
+    si
 }
 
 /// Give a key directory to exactly the indexes some view reads by key.
