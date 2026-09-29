@@ -16,15 +16,50 @@ use std::io;
 use std::path::Path;
 
 /// Key→shard routing scheme recorded in `shards.meta`.
+///
+/// ```
+/// use kevy_persist::{Routing, ShardsMeta};
+///
+/// let dir = kevy_tmpdir::unique_dir("routing-doc");
+/// let path = dir.join("shards.meta");
+/// ShardsMeta::new(4, Routing::Slots).write(&path)?;
+/// // bring-up compares the recorded scheme with the one it will run
+/// let recorded = ShardsMeta::read(&path).map(|m| m.routing);
+/// assert_ne!(recorded, Some(Routing::default()), "a re-shard is due");
+/// # std::fs::remove_dir_all(&dir)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 #[non_exhaustive]
 pub enum Routing {
     /// FxFmix word hash (`kevy_hash::KevyHash`) — the default scheme.
+    ///
+    /// ```
+    /// use kevy_persist::{Routing, ShardsMeta};
+    ///
+    /// let dir = kevy_tmpdir::unique_dir("routing-kevyhash-doc");
+    /// let path = dir.join("shards.meta");
+    /// std::fs::write(&path, "4")?; // a v1 file: the bare count
+    /// assert_eq!(ShardsMeta::read(&path).map(|m| m.routing), Some(Routing::KevyHash));
+    /// # std::fs::remove_dir_all(&dir)?;
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     #[default]
     KevyHash,
     /// Redis-cluster slots: CRC16 of the `{hashtag}` & 16383, contiguous
     /// even ranges per shard. Used by single-node cluster mode so external
     /// clients can compute key placement.
+    ///
+    /// ```
+    /// use kevy_persist::{Routing, ShardsMeta};
+    ///
+    /// let dir = kevy_tmpdir::unique_dir("routing-slots-doc");
+    /// let path = dir.join("shards.meta");
+    /// ShardsMeta::new(3, Routing::Slots).write(&path)?;
+    /// assert_eq!(std::fs::read_to_string(&path)?, "3\nslots\n");
+    /// # std::fs::remove_dir_all(&dir)?;
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     Slots,
 }
 
@@ -49,8 +84,28 @@ impl Routing {
 #[non_exhaustive]
 pub struct ShardsMeta {
     /// Number of shards (`aof-{0..n}.aof` / `dump-{0..n}.rdb`).
+    ///
+    /// ```
+    /// use kevy_persist::{Routing, ShardsMeta, layout};
+    ///
+    /// let meta = ShardsMeta::new(2, Routing::KevyHash);
+    /// let dir = std::path::Path::new("/data");
+    /// let logs: Vec<_> = (0..meta.n).map(|i| layout::aof_path(dir, i)).collect();
+    /// assert_eq!(logs, [dir.join("aof-0.aof"), dir.join("aof-1.aof")]);
+    /// ```
     pub n: usize,
     /// Key→shard scheme.
+    ///
+    /// ```
+    /// use kevy_persist::{Routing, ShardsMeta};
+    ///
+    /// let dir = kevy_tmpdir::unique_dir("meta-routing-doc");
+    /// let path = dir.join("shards.meta");
+    /// ShardsMeta::new(1, Routing::Slots).write(&path)?;
+    /// assert_eq!(ShardsMeta::read(&path).map(|m| m.routing), Some(Routing::Slots));
+    /// # std::fs::remove_dir_all(&dir)?;
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub routing: Routing,
 }
 

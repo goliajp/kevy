@@ -44,10 +44,60 @@ pub(crate) struct Stage {
 pub struct StageOpen {
     /// Records the ring held that the log did not, now replayed and
     /// appended to the log.
+    ///
+    /// ```
+    /// use kevy_persist::{Aof, Argv, Fsync};
+    ///
+    /// let dir = std::env::temp_dir().join(format!("stage-rec-doc-{}", std::process::id()));
+    /// std::fs::create_dir_all(&dir)?;
+    /// let (log, ring) = (dir.join("doc.aof"), dir.join("doc.stage"));
+    /// let mut aof = Aof::open(&log, Fsync::EverySec)?;
+    /// aof.open_stage(&ring, 64 * 1024, |_| {})?;
+    /// aof.append(&Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()]))?;
+    /// std::mem::forget(aof); // a killed process: the ring holds the append
+    ///
+    /// let mut aof = Aof::open(&log, Fsync::EverySec)?;
+    /// let mut applied = 0;
+    /// let found = aof.open_stage(&ring, 64 * 1024, |_| applied += 1)?;
+    /// assert_eq!((found.recovered, applied), (1, 1));
+    /// # drop(aof);
+    /// # std::fs::remove_dir_all(&dir)?;
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub recovered: u64,
     /// Why the ring was set aside instead, when it was.
+    ///
+    /// ```
+    /// use kevy_persist::{Aof, Argv, Fsync};
+    ///
+    /// let dir = std::env::temp_dir().join(format!("stage-disc-doc-{}", std::process::id()));
+    /// std::fs::create_dir_all(&dir)?;
+    /// let ring = dir.join("doc.stage");
+    /// Aof::open(&dir.join("a.aof"), Fsync::EverySec)?.open_stage(&ring, 64 * 1024, |_| {})?;
+    /// // a different log, holding a record that ring never saw
+    /// let mut aof = Aof::open(&dir.join("b.aof"), Fsync::Always)?;
+    /// aof.append(&Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()]))?;
+    /// let found = aof.open_stage(&ring, 64 * 1024, |_| {})?;
+    /// assert!(found.discarded.is_some(), "a ring is only trusted by its own log");
+    /// # drop(aof);
+    /// # std::fs::remove_dir_all(&dir)?;
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub discarded: Option<&'static str>,
     /// The ring's records stopped at one that failed its checksum.
+    ///
+    /// ```
+    /// use kevy_persist::{Aof, Fsync};
+    ///
+    /// let dir = std::env::temp_dir().join(format!("stage-torn-doc-{}", std::process::id()));
+    /// std::fs::create_dir_all(&dir)?;
+    /// let mut aof = Aof::open(&dir.join("doc.aof"), Fsync::EverySec)?;
+    /// let found = aof.open_stage(&dir.join("doc.stage"), 64 * 1024, |_| {})?;
+    /// assert!(!found.torn, "no ring, nothing torn");
+    /// # drop(aof);
+    /// # std::fs::remove_dir_all(&dir)?;
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub torn: bool,
 }
 

@@ -23,6 +23,21 @@
 //! | G            | absent               | gen G+1, offset 0 (bumped) |
 //! | G            | `G off` (matching)   | gen G, offset off (resume) |
 //! | G            | mismatched/corrupt   | gen G+1, offset 0 (bumped) |
+//!
+//! ```
+//! use kevy_persist::feed_meta::{boot_position, write_feed_meta};
+//! use kevy_replicate::feed::FeedPosition;
+//!
+//! let dir = kevy_tmpdir::unique_dir("feed-cycle-doc");
+//! let first = boot_position(&dir, 0)?; // fresh dir
+//! write_feed_meta(&dir, 0, FeedPosition::new(first.generation, 10))?; // clean stop
+//! assert_eq!(boot_position(&dir, 0)?, FeedPosition::new(first.generation, 10)); // resumed
+//! let after_crash = boot_position(&dir, 0)?; // no marker this time: unclean
+//! assert_ne!(after_crash.generation, first.generation);
+//! assert_eq!(after_crash.offset, 0);
+//! # std::fs::remove_dir_all(&dir)?;
+//! # Ok::<(), std::io::Error>(())
+//! ```
 
 // Best-effort removal, on paths where the file is being abandoned.
 // A file that will not delete is a stray the next sweep collects,
