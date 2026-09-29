@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **`kevy-cluster-rw` sends every write to the primary.** Its own list of
+  write commands had drifted from the server's: 21 commands the server
+  counts as writes went to a replica, among them `GETEX`, `SETBIT`,
+  `BITOP`, the `HEXPIRE` family, `BZPOPMIN`, `BRPOPLPUSH`, the `Z*STORE`
+  commands, `XREADGROUP`, `GEOADD` and `EVAL`, and `TYPE` went to the
+  primary. The client now reads the keyspace writes from the server's
+  command table and keeps its own list only for the commands that write
+  no key but belong on the primary (transactions, admin, `PUBLISH`,
+  scripts), and a test holds it to the server's classification over
+  every command the server documents.
+
 - **The bindings' read-only error text is the server's.** The default
   message of the read-only error the C++, C#, Go, Python, Tauri and
   TypeScript bindings construct themselves now reads `READONLY You can't

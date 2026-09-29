@@ -18,6 +18,39 @@ fn an_encrypted_client_refuses_a_redirect_it_has_no_key_for() {
     drop(l);
 }
 
+/// The client sends to the primary exactly what the server counts as a
+/// write, plus the commands that write no key but only the primary can
+/// answer for: checked over every verb the server documents.
+#[test]
+fn routes_to_the_primary_what_the_server_counts_as_a_write() {
+    use kevy_rt::Commands;
+    const PRIMARY_ONLY: &[&str] = &[
+        "BGREWRITEAOF",
+        "BGSAVE",
+        "CONFIG",
+        "DISCARD",
+        "EXEC",
+        "MULTI",
+        "PUBLISH",
+        "REPLICAOF",
+        "SAVE",
+        "SLAVEOF",
+        "UNWATCH",
+        "WATCH",
+    ];
+    let server = kevy::KevyCommands::new();
+    let mut differ = Vec::new();
+    for m in kevy::verb_meta::VERB_META {
+        let server_write = server.is_write(&kevy::Argv::from(vec![m.name.as_bytes().to_vec()]));
+        let want = server_write || PRIMARY_ONLY.contains(&m.name);
+        if is_write_verb(m.name.as_bytes()) != want {
+            differ.push(format!("{} (server write: {server_write})", m.name));
+        }
+    }
+    assert!(kevy::verb_meta::VERB_META.len() > 150, "the server's verb table did not load");
+    assert!(differ.is_empty(), "the client routes these unlike the server: {differ:#?}");
+}
+
 #[test]
 fn writes_classified_correctly() {
     for verb in [&b"SET"[..], b"DEL", b"LPUSH", b"HSET", b"ZADD", b"XADD", b"FLUSHDB", b"REPLICAOF"]
