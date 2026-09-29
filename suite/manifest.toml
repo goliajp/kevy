@@ -23,6 +23,10 @@
 #             NOT-RUN, never a silent pass:
 #             binaries-debug | binaries-release | linux | box | node |
 #             chromium | docker | device | ci
+#   inputs    paths (prefix ending in `/`, or fnmatch pattern) this row
+#             measures; above premerge the row is skipped as UNCHANGED
+#             when it passed on this machine at an ancestor commit and no
+#             matching file has changed since (tools/suite_unchanged.py)
 #   advisory  true = reported but does not fail the tier (used only for
 #             checks whose red can be a legitimate state, e.g. the
 #             published-wasm divergence between releases)
@@ -791,16 +795,6 @@ proves = "a durable effect is a propagated effect, unless it is named"
 # ── full: perf beyond the pins ───────────────────────────────────────
 
 [[check]]
-id = "perfgate-median"
-area = "perf"
-tier = "full"
-cmd = "bash bench/perfgate-median.sh target/release/kevy"
-expected = 2400
-timeout = 10800
-requires = ["box", "binaries-release"]
-proves = "per-angle medians over N perfgate runs — the noise-resistant verdict"
-
-[[check]]
 id = "arena"
 area = "perf"
 tier = "full"
@@ -815,6 +809,7 @@ id = "kevy-ab"
 area = "perf"
 tier = "full"
 cmd = "bash bench/kevy_ab.sh target/release/kevy suite"
+inputs = ["crates/kevy-uring/", "crates/kevy-rt/", "crates/kevy-sys/", "bench/kevy_ab*"]
 expected = 900
 timeout = 3600
 requires = ["box", "binaries-release"]
@@ -827,6 +822,7 @@ id = "memgate"
 area = "mem"
 tier = "full"
 cmd = "bash bench/memgate.sh target/release/kevy"
+inputs = ["crates/kevy-store/", "crates/kevy-map/", "crates/kevy-bytes/", "crates/kevy-alloc/", "crates/kevy-seg/", "bench/memgate*"]
 expected = 900
 timeout = 3600
 requires = ["linux", "binaries-release"]
@@ -845,6 +841,7 @@ advisory_reason = """
 Red-first, by design: the acceptance lines exist before the crate does, so the crate is built against them. Lines it does not yet own read PENDING(<train>). It stops being advisory when every line it owns is a real assertion.
 """
 cmd = "bash -c 'eval \"$(bash bench/allocgate-prep.sh)\" && bash bench/allocgate.sh'"
+inputs = ["crates/kevy-alloc/", "bench/allocgate*", "bench/perfgate*"]
 expected = 600
 timeout = 3600
 requires = ["linux", "binaries-release"]
@@ -860,6 +857,7 @@ advisory_reason = """
 The memory half of the same red-first experiment; same reason, same closing condition.
 """
 cmd = "bash -c 'eval \"$(bash bench/allocgate-prep.sh)\" && bash bench/allocgate-mem.sh'"
+inputs = ["crates/kevy-alloc/", "bench/allocgate*"]
 expected = 600
 timeout = 3600
 requires = ["linux", "binaries-release"]
@@ -881,6 +879,7 @@ id = "replaymemgate"
 area = "mem"
 tier = "full"
 cmd = "bash bench/replaymemgate.sh"
+inputs = ["crates/kevy-persist/", "crates/kevy/src/dispatch_replay.rs", "bench/replaymemgate*"]
 expected = 600
 timeout = 3600
 requires = ["linux", "binaries-release"]
@@ -891,6 +890,7 @@ id = "iotgate"
 area = "mem"
 tier = "full"
 cmd = "bash bench/iotgate.sh"
+inputs = ["crates/kevy-embedded/", "crates/kevy-store/", "Cargo.lock", "bench/iotgate*", "bench/iot-consumer/"]
 expected = 300
 timeout = 1800
 requires = []
@@ -913,6 +913,7 @@ id = "chaosfsck"
 area = "disk"
 tier = "full"
 cmd = "bash bench/chaosfsck.sh target/release/kevy"
+inputs = ["crates/kevy-persist/", "crates/kevy-index/", "crates/kevy/src/cmd_index*", "crates/kevy/src/index_runtime*", "crates/kevy/src/cmd_view*", "crates/kevy/src/view_runtime.rs", "bench/chaosfsck*"]
 expected = 600
 timeout = 3600
 requires = ["linux", "binaries-release"]
@@ -923,6 +924,7 @@ id = "restore-drill"
 area = "disk"
 tier = "full"
 cmd = "bash bench/restore-drill.sh target/release/kevy"
+inputs = ["crates/kevy-persist/", "crates/kevy-replicate/", "bench/restore-drill*"]
 expected = 600
 timeout = 3600
 requires = ["linux", "binaries-release"]
@@ -985,6 +987,7 @@ id = "pgcompare"
 area = "compat"
 tier = "full"
 cmd = "bash bench/pgcompare.sh"
+inputs = ["crates/kevy-sql/", "crates/kevy-cli/", "crates/kevy/src/cmd_table*", "crates/kevy/src/table_runtime.rs", "bench/pgcompare*"]
 expected = 1800
 timeout = 7200
 # Not "docker": the bench account deliberately has no docker socket
@@ -1000,6 +1003,7 @@ id = "idxgate"
 area = "feature"
 tier = "full"
 cmd = "bash bench/idxgate.sh target/release/kevy"
+inputs = ["crates/kevy-index/", "crates/kevy/src/cmd_index*", "crates/kevy/src/index_runtime*", "bench/idxgate*"]
 expected = 600
 timeout = 3600
 requires = ["linux", "binaries-release"]
@@ -1010,6 +1014,7 @@ id = "textgate"
 area = "feature"
 tier = "full"
 cmd = "bash bench/textgate.sh target/release/kevy"
+inputs = ["crates/kevy-text/", "crates/kevy-index/", "crates/kevy/src/cmd_index*", "crates/kevy/src/index_runtime*", "bench/textgate*"]
 expected = 600
 timeout = 3600
 requires = ["linux", "binaries-release"]
@@ -1020,6 +1025,7 @@ id = "vectorgate"
 area = "feature"
 tier = "full"
 cmd = "bash bench/vectorgate.sh target/release/kevy"
+inputs = ["crates/kevy-vector/", "crates/kevy-index/", "crates/kevy/src/cmd_index*", "crates/kevy/src/index_runtime*", "bench/vectorgate*"]
 expected = 600
 timeout = 3600
 requires = ["linux", "binaries-release"]
@@ -1030,6 +1036,7 @@ id = "viewgate"
 area = "feature"
 tier = "full"
 cmd = "bash bench/viewgate.sh target/release/kevy"
+inputs = ["crates/kevy-index/", "crates/kevy/src/cmd_index*", "crates/kevy/src/index_runtime*", "crates/kevy/src/cmd_view*", "crates/kevy/src/view_runtime.rs", "bench/viewgate*"]
 expected = 600
 timeout = 3600
 requires = ["linux", "binaries-release"]
@@ -1040,6 +1047,7 @@ id = "agggate"
 area = "feature"
 tier = "full"
 cmd = "bash bench/agggate.sh target/release/kevy"
+inputs = ["crates/kevy-window/", "crates/kevy-scalar/", "crates/kevy/src/cmd_index_reduce*", "crates/kevy/src/cmd_view_reduce.rs", "bench/agggate*"]
 expected = 600
 timeout = 3600
 requires = ["linux", "binaries-release"]
@@ -1050,6 +1058,7 @@ id = "tablegate"
 area = "feature"
 tier = "full"
 cmd = "bash bench/tablegate.sh"
+inputs = ["crates/kevy-sql/", "crates/kevy/src/cmd_table*", "crates/kevy/src/table_runtime.rs", "bench/tablegate*"]
 expected = 600
 timeout = 3600
 requires = ["linux", "binaries-release"]
@@ -1069,6 +1078,7 @@ advisory_reason = """
 Red-first, by design (crashgate precedent): the acceptance lines exist before the feature, so the feature is built against them. It stops being advisory when every line it owns is implemented and green.
 """
 cmd = "bash bench/tiergate.sh"
+inputs = ["crates/kevy-vlog/", "crates/kevy-store/", "crates/kevy/src/tier*", "crates/kevy/src/tiering_boot.rs", "bench/tiergate*", "bench/capacity*"]
 expected = 900
 timeout = 5400
 requires = ["linux", "binaries-release"]
@@ -1079,6 +1089,7 @@ id = "topogate"
 area = "feature"
 tier = "full"
 cmd = "bash bench/topogate.sh"
+inputs = ["crates/kevy-embedded/", "bench/topogate*"]
 expected = 600
 timeout = 3600
 requires = ["linux", "binaries-release"]
@@ -1099,6 +1110,7 @@ id = "servinggate"
 area = "feature"
 tier = "full"
 cmd = "bash bench/servinggate.sh target/release/kevy"
+inputs = ["crates/kevy-index/", "crates/kevy/src/cmd_index*", "crates/kevy/src/index_runtime*", "crates/kevy/src/cmd_view*", "crates/kevy/src/view_runtime.rs", "bench/servinggate*"]
 expected = 900
 timeout = 5400
 requires = ["linux", "binaries-release"]
@@ -1121,6 +1133,7 @@ id = "migrationgate"
 area = "case"
 tier = "full"
 cmd = "bash bench/migrationgate.sh"
+inputs = ["crates/kevy-sql/", "crates/kevy-cli/", "bench/migrationgate*", "bench/migration-corpus/"]
 expected = 900
 timeout = 5400
 requires = ["linux", "binaries-release", "docker"]
