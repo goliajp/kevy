@@ -44,3 +44,32 @@ fn the_index_floor_counts_what_stays_when_everything_is_cold() {
     assert!(!s.tier_index_floor_blocked(wm - table - 1));
     assert!(s.tier_index_floor_blocked(wm - table));
 }
+
+#[test]
+fn tick_demotion_keeps_going_with_no_access_to_move_its_sampler() {
+    // a backfill reads rows without touching them, so the access clock
+    // stands still while the index floor rises; the tick must still sweep
+    // the table instead of re-walking one window that has gone cold
+    let budget = 64 << 20;
+    let (mut s, _d) = tiered("tier-budget-sweep", budget);
+    for i in 0..40_000u32 {
+        s.set(format!("k{i}").as_bytes(), vec![b'v'; 512], None, crate::SetCondition::Always);
+    }
+    assert_eq!(s.tier_stats().cold_keys, 0);
+    let wm = budget * 19 / 20;
+    let floor = wm - s.used_memory() / 4;
+    s.set_tier_reserved(floor);
+    for _ in 0..10_000 {
+        if s.used_memory() + floor <= wm {
+            break;
+        }
+        s.demote_step();
+    }
+    assert!(
+        s.used_memory() + floor <= wm,
+        "demotion stalled at {} cold keys, used {} over a target of {}",
+        s.tier_stats().cold_keys,
+        s.used_memory(),
+        wm - floor
+    );
+}

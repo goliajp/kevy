@@ -132,7 +132,10 @@ fn tail_len_in(buf: &[u8], start: usize, shape: Shape) -> (usize, Option<u32>) {
         varint(buf, &mut at);
     }
     if tag % 2 == 1 {
-        let id = u32::from_le_bytes(buf[at..at + 4].try_into().expect("4 bytes"));
+        let id =
+            u32::from_le_bytes(buf[at..at + 4].try_into().expect(
+                "an out-of-line tail stores its slab id in the four bytes after its varints",
+            ));
         return (at + 4 - start, Some(id));
     }
     (at + (tag / 2).saturating_sub(8) + plen - start, None)
@@ -278,7 +281,9 @@ impl Leaf {
         let vlen = if self.shape.vlens { varint(&self.buf, &mut at) } else { 0 };
         let rest_len = len.saturating_sub(8);
         if tag % 2 == 1 {
-            let id = u32::from_le_bytes(self.buf[at..at + 4].try_into().expect("4 bytes"));
+            let id = u32::from_le_bytes(self.buf[at..at + 4].try_into().expect(
+                "an out-of-line tail stores its slab id in the four bytes after its varints",
+            ));
             let slab = ov.get(id);
             return Tail {
                 len,
