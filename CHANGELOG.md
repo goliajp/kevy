@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **The io_uring receive ring is sized by configuration, and defaults to
+  a quarter of what it was.** Every shard on the io_uring reactor kept a
+  fixed ring of 4,096 16 KiB receive buffers — 64 MiB a shard, 0.6 GB for
+  nine shards, all of it resident once traffic had cycled through it. The
+  count is now `[advanced] recv_buffers` (a power of two, 1 to 32768;
+  `Runtime::with_recv_buffers` in kevy-rt) and defaults to 1,024, 16 MiB a
+  shard. A ring that runs dry was never an error — the receive is
+  re-armed — so the setting trades memory against re-arming under bursts.
+  The default is the smallest that kept throughput on a sweep of 50 to
+  4,000 connections, pipelined and not, 64-byte and 16 KiB values: no
+  median fell below the old ring's (512 fell 8% on the pipelined run and
+  256 fell 6% at 4,000 connections, within that box's noise but not
+  taken). See the tuning guide.
+
 - **A cold row comes back packed when its table can hold it.** Declaring
   a table leaves the rows that are already cold alone — they hold no
   memory for the packed form to save — but they were demoted as general

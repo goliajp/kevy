@@ -161,6 +161,16 @@ impl Config {
             "park_timeout_ms" => self.advanced.park_timeout_ms = value_as_u32(item)?,
             "tick_check_every" => self.advanced.tick_check_every = value_as_u32(item)?,
             "ring_capacity" => self.advanced.ring_capacity = value_as_usize(item)?,
+            "recv_buffers" => {
+                let n = value_as_u32(item)?;
+                if !n.is_power_of_two() || n > 32_768 {
+                    return Err(schema_err(
+                        item,
+                        "recv_buffers must be a power of two, 1 to 32768",
+                    ));
+                }
+                self.advanced.recv_buffers = n;
+            }
             k => return Err(schema_err(item, format!("unknown [advanced] key: {k}"))),
         }
         Ok(())

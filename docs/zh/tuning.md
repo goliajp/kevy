@@ -53,6 +53,16 @@ KEVY_IO_URING=1 kevy --port 6004   # require io_uring, exit if blocked
 KEVY_IO_URING=0 kevy --port 6004   # force epoll
 ```
 
+**接收缓冲区（io_uring）。** 每个 shard 从一个由 16 KiB 缓冲区组成的环接收数据，内核在数据到达时写入其中。环在每个 shard 上占 `recv_buffers` × 16 KiB，流量轮转一遍之后全部常驻内存：默认值 1024 时每个 shard 16 MiB，基准测试中吞吐与之前固定的 4096（每个 shard 64 MiB）没有差别。环被用空不是错误：发现环为空的接收会被重新提交，数据在 socket 里等待。所以这个设置是用内存换突发流量下重新提交的次数。每个 shard 上有数千个连接同时发送时调大；内存更重要时调小。只在启动时读取，必须是 1 到 32768 之间的 2 的幂，对 epoll 和 kqueue reactor 不起作用。
+
+```toml
+[server]
+port = 6004
+
+[advanced]
+recv_buffers = 2048   # 每个 shard 32 MiB
+```
+
 ### 持久化
 
 AOF 策略由 `appendfsync` 控制（配置文件或 `CONFIG SET`）。三个取值与 Redis 语义一致：

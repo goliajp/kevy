@@ -53,6 +53,16 @@ KEVY_IO_URING=1 kevy --port 6004   # require io_uring, exit if blocked
 KEVY_IO_URING=0 kevy --port 6004   # force epoll
 ```
 
+**Receive buffers (io_uring).** Each shard receives into a ring of 16 KiB buffers that the kernel fills as data arrives. The ring holds `recv_buffers` × 16 KiB per shard, and all of it becomes resident once traffic has cycled through it: 16 MiB a shard at the default of 1024, which kept throughput unchanged from the previous fixed 4096 (64 MiB a shard) on the benchmark sweep. A ring that runs dry is not an error — the receive that found it empty is re-armed and the data waits in the socket — so the setting trades memory against re-arming under bursts. Raise it when thousands of connections per shard send at once; lower it when the memory matters more. It is read at startup, must be a power of two from 1 to 32768, and does nothing on the epoll or kqueue reactors.
+
+```toml
+[server]
+port = 6004
+
+[advanced]
+recv_buffers = 2048   # 32 MiB per shard
+```
+
 ### Persistence
 
 AOF policy is controlled by `appendfsync` (config file or `CONFIG SET`). The three values match Redis semantics:
