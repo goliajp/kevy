@@ -26,7 +26,9 @@ trap 'rm -rf "$OUT"' EXIT
 
 for i in $(seq 1 "$N"); do
   echo "perfgate-median: run $i/$N"
-  if ! bash "$HERE/perfgate.sh" "$BIN" >"$OUT/run$i" 2>&1; then
+  # no per-run retest: the N runs are the extra samples, and a retest would
+  # only give the red angles of one run more weight than the others
+  if ! RETEST=0 bash "$HERE/perfgate.sh" "$BIN" >"$OUT/run$i" 2>&1; then
     # FAIL exit is fine (angles below floor still measured); REFUSED is not.
     if grep -q "REFUSED" "$OUT/run$i"; then
       echo "perfgate-median: run $i REFUSED — aborting (a median over a partial set is not a median)" >&2

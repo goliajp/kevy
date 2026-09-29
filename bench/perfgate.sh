@@ -9,10 +9,11 @@
 # cores 0-7 for the server / 8-15 for the load generators). Angles and
 # discipline encode every measurement trap the 2026-06-10 campaign hit:
 #
-#   * pinned-hashtag angle, ONE TEST PER INVOCATION, long N — plain-mode
+#   * pinned-hashtag angle, ONE TEST PER INVOCATION — plain-mode
 #     redis-benchmark pinned per shard via {tag}. `--cluster` client mode is
 #     client-bound (~6.6M) and skews keys across nodes when -t lists several
-#     tests; short N under-amortises ramp by ~30%. Never measure with those.
+#     tests. The ramp is kept out by reading the server's counter over a
+#     window after it, not by amortising it over a long N.
 #   * legacy 8sh fixed-key angle — historical comparability.
 #     Since v4 T4 the same topology also gates the five arena cells
 #     (INCR/SADD/HSET/LPUSH/ZADD) so the observation items ratchet
@@ -45,7 +46,7 @@ BIN=${1:?usage: perfgate.sh <KEVY_BIN> [--update-baseline]}
 MODE=${2:-gate}
 HERE=$(cd "$(dirname "$0")" && pwd)
 BASELINE="$HERE/PERF-BASELINE.json"
-N_PINNED=${N_PINNED:-30000000}   # per process x8 — long N, ramp amortised
+N_PINNED=${N_PINNED:-30000000}   # per process x8 — only has to outlast RAMP + WINDOW
 # The --threads angles measure a wall window, not a request count, so N only
 # has to outlast RAMP + WINDOW at the slowest angle. 60M at ~3M ops/s is 20s
 # of headroom over a 4s measurement.
@@ -123,31 +124,41 @@ server_start() { # $1 = extra flags
   refuse "server did not come up (see $RUNDIR/srv.log)"
 }
 
-sum_rps() { # files...
-  cat "$@" | tr "\r" "\n" | grep -oE "[0-9.]+ requests per second" \
-    | awk '{s+=$1} END {printf "%.0f", s}'
-}
+. "$HERE/perfgate-counter.sh"
 
-run_pinned() { # $1 = get|set, $2 = cluster|compat -> echoes total rps
-  local t=$1 mode=$2 pids=() outs=() port i tag out
+# The eight generators run on while the server's own counter is read across
+# RAMP + WINDOW, then are killed: running 30M requests each to completion
+# cost 9-18 s an angle and measured the same steady state plus the ramp and
+# the ragged finish. INFO's command total is summed over every shard, so one
+# read on 7001 covers the cluster ports too.
+run_pinned() { # $1 = get|set, $2 = cluster|compat -> echoes total ops/s
+  local t=$1 mode=$2 pids=() port i tag c0 t0 c1 t1
   for i in $(seq 0 7); do
     port=7001; [ "$mode" = cluster ] && port=$((7002 + i))
     tag=${TAGS[$i]}
-    out=$RUNDIR/${mode}_${t}_$i.out; outs+=("$out")
     if [ "$t" = set ]; then
       taskset -c 8-15 redis-benchmark -p $port -n "$N_PINNED" -r 1000000 \
-        -c 6 -P 256 -q SET "{$tag}:__rand_int__" v >"$out" 2>&1 &
+        -c 6 -P 256 -q SET "{$tag}:__rand_int__" v >/dev/null 2>&1 &
     else
       taskset -c 8-15 redis-benchmark -p $port -n "$N_PINNED" -r 1000000 \
-        -c 6 -P 256 -q GET "{$tag}:__rand_int__" >"$out" 2>&1 &
+        -c 6 -P 256 -q GET "{$tag}:__rand_int__" >/dev/null 2>&1 &
     fi
     pids+=($!)
   done
-  wait "${pids[@]}"
-  sum_rps "${outs[@]}"
+  sleep "$RAMP"
+  c0=$(srv_cmds); t0=$(date +%s%N)
+  sleep "$WINDOW"
+  c1=$(srv_cmds); t1=$(date +%s%N)
+  kill "${pids[@]}" 2>/dev/null
+  wait "${pids[@]}" 2>/dev/null
+  if [ -z "$c0" ] || [ -z "$c1" ]; then
+    echo "perfgate: INFO stats unreadable during pinned $t/$mode" >&2
+    printf "0"
+    return
+  fi
+  awk -v c0="$c0" -v c1="$c1" -v t0="$t0" -v t1="$t1" \
+    'BEGIN {printf "%.0f", (c1 - c0) / ((t1 - t0) / 1e9)}'
 }
-
-. "$HERE/perfgate-counter.sh"
 
 run_legacy() { # $1 = get|set|incr|... -> steady-state ops/s (fixed key, REUSEPORT)
   steady_rps redis-benchmark -h 127.0.0.1 -p 7001 -t "$1" \
