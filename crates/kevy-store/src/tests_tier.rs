@@ -439,19 +439,19 @@ fn del_and_overwrite_credit_dead_bytes() {
 const OVERHEAD: u64 = crate::value::ENTRY_OVERHEAD;
 
 #[test]
-fn t5_effective_target_subtracts_reserved_and_stub() {
+fn t5_effective_target_subtracts_reserved_only() {
     let budget = 1_000_000u64;
     let (mut s, _d) = tiered("tier-t5-target", budget);
     let wm = budget * 19 / 20;
     assert_eq!(s.tier_stats().effective_target, wm, "fresh tier: no floors");
     s.set_tier_reserved(100_000);
     assert_eq!(s.tier_stats().effective_target, wm - 100_000);
-    // A demotion grows stub_bytes, which lowers the target further.
+    // a cold stub is charged inside used_memory, so it leaves the target alone
     s.set(b"k", vec![b'x'; 4096], None, crate::SetCondition::Always);
     assert!(s.debug_force_demote(b"k"));
     let st = s.tier_stats();
     assert_eq!(st.stub_bytes, OVERHEAD, "short key: stub = ENTRY_OVERHEAD only");
-    assert_eq!(st.effective_target, wm - 100_000 - OVERHEAD);
+    assert_eq!(st.effective_target, wm - 100_000);
 }
 
 #[test]

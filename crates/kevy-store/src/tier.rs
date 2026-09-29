@@ -85,9 +85,10 @@ mod enabled {
         /// premium fixed layer demotion can never reclaim.
         pub(crate) reserved_bytes: u64,
         /// RAM the cold stubs themselves cost (Σ per cold key of
-        /// `ENTRY_OVERHEAD + key heap bytes`) — the other unreclaimable
-        /// floor, maintained incrementally at demote / promote /
-        /// DEL-of-cold / RENAME / FLUSHALL.
+        /// `ENTRY_OVERHEAD + key heap bytes`), maintained incrementally
+        /// at demote / promote / DEL-of-cold / RENAME / FLUSHALL. A gauge:
+        /// the stubs are already inside `used_memory`, so the demote
+        /// target does not subtract it.
         pub(crate) stub_bytes: u64,
         /// Cold stubs RENAMEd away from their record's embedded key:
         /// `(file_id, offset) → current key`. Rename moves the stub
@@ -170,13 +171,19 @@ mod enabled {
 
         /// Whether the index/view floor (`reserved_bytes + extra`)
         /// already exhausts the tier's demotable headroom — the
-        /// IDX.CREATE refusal predicate (RFC §4 row 16). `false` when
-        /// tiering is off.
+        /// IDX.CREATE refusal predicate. What demotion can never reclaim
+        /// is the index floor plus the part of `used_memory` that stays
+        /// when every value is cold: the keyspace table and the cold
+        /// keys' own bytes. `false` when tiering is off.
         pub fn tier_index_floor_blocked(&self, extra: u64) -> bool {
             match &self.tier {
                 Some(t) => {
-                    t.reserved_bytes.saturating_add(extra)
-                        >= crate::tier_demote::watermark(t.budget).saturating_sub(t.stub_bytes)
+                    let cold_key_heap = t
+                        .stub_bytes
+                        .saturating_sub(t.cold_keys.saturating_mul(crate::value::ENTRY_OVERHEAD));
+                    let fixed = self.keyspace_bytes.saturating_add(cold_key_heap);
+                    t.reserved_bytes.saturating_add(extra).saturating_add(fixed)
+                        >= crate::tier_demote::watermark(t.budget)
                 }
                 None => false,
             }

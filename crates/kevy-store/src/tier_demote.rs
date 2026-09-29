@@ -44,7 +44,7 @@ impl Store {
     /// The demotion twin of [`Store::try_evict_after_write`], called
     /// beside it from the write-commit sites. No-op unless tiering is
     /// on AND `used_memory` is past the unified target (the plain
-    /// watermark minus the index/view floor and the stub floor); then
+    /// watermark minus the index/view floor); then
     /// spills at most one batch (a single write never funds an
     /// unbounded spill storm — continuation rides
     /// [`Store::demote_step`] on the tick). Returns keys demoted.
@@ -130,8 +130,7 @@ impl Store {
 
     /// One budgeted demotion batch: sample → demote, ≤ [`SPILL_BATCH`]
     /// records, stop at the unified target or when sampling runs dry.
-    /// The target is re-read per iteration — every demotion grows
-    /// `stub_bytes`, which lowers it. Ends with the compaction trigger.
+    /// Ends with the compaction trigger.
     fn demote_batch(&mut self, visit_bound: usize) -> usize {
         let policy = self.tier.as_ref().expect("gated by caller").policy;
         let mut demoted = 0usize;
@@ -322,17 +321,17 @@ pub(crate) fn watermark(budget: u64) -> u64 {
     budget.saturating_mul(WATERMARK_NUM) / WATERMARK_DEN
 }
 
-/// The unified demote target: `budget·19/20 −
-/// reserved_bytes − stub_bytes`, saturating. Demotion can only reclaim
-/// hot values — the index/view floor and the stubs' own RAM cost are
-/// fixed layers, so pressure on them translates into a lower target
-/// for the hot set. **Saturated to 0** = the floor alone exceeds the
-/// budget; the tier can demote nothing further once every spillable
-/// value is cold (`TierStats::effective_target` makes the state
-/// visible in INFO).
+/// The unified demote target `used_memory` is held to: `budget·19/20 −
+/// reserved_bytes`, saturating. The index/view floor lives outside
+/// `used_memory`, so it lowers the target; the cold stubs live inside it
+/// (their keyspace slots and key bytes are charged from the moment the
+/// key is inserted), so they do not — subtracting them here as well
+/// would count every cold key twice and shrink the hot set by that much.
+/// **Saturated to 0** = the index floor alone exceeds the budget
+/// (`TierStats::effective_target` makes the state visible in INFO).
 #[inline]
 pub(crate) fn effective_target(t: &crate::tier::TierState) -> u64 {
-    watermark(t.budget).saturating_sub(t.reserved_bytes).saturating_sub(t.stub_bytes)
+    watermark(t.budget).saturating_sub(t.reserved_bytes)
 }
 
 /// [`CompactOwner`] over the store map + the rename forward-pointers.
