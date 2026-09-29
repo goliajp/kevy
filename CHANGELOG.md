@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **The bindings' read-only error text is the server's.** The default
+  message of the read-only error the C++, C#, Go, Python, Tauri and
+  TypeScript bindings construct themselves now reads `READONLY You can't
+  write against a read only replica.`, exactly the server's reply. Five
+  of them lacked the closing period, and the Tauri plugin used a
+  different sentence.
+
 - **An embedded replica or closed store answers a malformed write the way
   the server does.** The server refuses a write on a replica before it
   reads the arguments, so `DEL` with no key, `MSET a`, a bare `SET`,

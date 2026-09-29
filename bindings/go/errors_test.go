@@ -96,3 +96,11 @@ func TestServerCloseMidRead(t *testing.T) {
 		t.Fatalf("want Closed/Io/TimedOut, got %v", err)
 	}
 }
+
+// The server's reply to a write on a read-only replica, byte for byte.
+func TestReadOnlyTextIsTheServers(t *testing.T) {
+	const want = "READONLY You can't write against a read only replica."
+	if got := (&KevyError{Kind: KindReadOnly}).Error(); got != want {
+		t.Fatalf("want %q, got %q", want, got)
+	}
+}

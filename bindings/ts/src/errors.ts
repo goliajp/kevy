@@ -69,7 +69,7 @@ export class ProtocolError extends KevyError {
 /** A write rejected because the target is a read-only replica. */
 export class ReadOnlyError extends KevyError {
   constructor() {
-    super("readonly", "READONLY You can't write against a read only replica");
+    super("readonly", "READONLY You can't write against a read only replica.");
     this.name = "ReadOnlyError";
   }
 }
