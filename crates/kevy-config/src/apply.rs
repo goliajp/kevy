@@ -145,11 +145,8 @@ impl Config {
         match item.key.as_str() {
             "notify_keyspace_events" => {
                 let s = value_as_string(item)?;
-                if let Err(c) = crate::parse_notification_flags(&s) {
-                    return Err(schema_err(
-                        item,
-                        format!("unknown notify_keyspace_events flag char {c:?}"),
-                    ));
+                if let Err(e) = s.parse::<crate::NotificationFlags>() {
+                    return Err(schema_err(item, format!("notify_keyspace_events: {e}")));
                 }
                 self.notification.notify_keyspace_events = s;
             }
@@ -219,12 +216,12 @@ impl Config {
             "peers" => {
                 let raw = value_as_list(item)?.join(",");
                 self.cluster.peers = crate::cluster::PeerEntry::parse_list(&raw)
-                    .map_err(|tok| schema_err(item, format!("bad peer token: {tok:?}")))?;
+                    .map_err(|e| schema_err(item, e.to_string()))?;
             }
             "scopes" => {
                 let raw = value_as_list(item)?.join(",");
                 self.cluster.scopes = crate::cluster::ScopeEntry::parse_list(&raw)
-                    .map_err(|tok| schema_err(item, format!("bad scope token: {tok:?}")))?;
+                    .map_err(|e| schema_err(item, e.to_string()))?;
             }
             k => return Err(schema_err(item, format!("unknown [cluster] key: {k}"))),
         }
@@ -379,7 +376,7 @@ fn value_as_size(item: &Item) -> Result<u64, ConfigError> {
     match &item.value {
         Value::Int(n) => u64::try_from(*n)
             .map_err(|_| schema_err(item, format!("size value {n} must be non-negative"))),
-        Value::Str(s) => parse_size(s).map_err(|e| schema_err(item, e)),
+        Value::Str(s) => parse_size(s).map_err(|e| schema_err(item, e.to_string())),
         other @ (Value::Bool(_) | Value::Arr(_)) => {
             Err(schema_err(item, format!("expected size literal, got {other:?}")))
         }

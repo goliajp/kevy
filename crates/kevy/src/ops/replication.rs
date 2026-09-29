@@ -156,6 +156,7 @@ pub(crate) fn cmd_role<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut 
     match cfg.replication.role {
         ReplicationRole::Standalone | ReplicationRole::Primary => emit_master(ctx, out),
         ReplicationRole::Replica => emit_replica(ctx, cfg.replication.upstream.as_deref(), out),
+        other => unimplemented!("no ROLE reply for role {other:?}"),
     }
 }
 

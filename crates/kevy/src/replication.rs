@@ -81,6 +81,7 @@ pub(crate) fn apply<C: Commands>(
                 .with_replication_reconnect_window(cfg.replication.reconnect_window_ms)
         }
         ReplicationRole::Standalone => runtime,
+        other => unimplemented!("no replication wiring for role {other:?}"),
     }
 }
 

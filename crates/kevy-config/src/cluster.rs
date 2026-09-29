@@ -8,6 +8,8 @@
 //! bounded (per-peer TLS, auth, and region are explicitly out of
 //! charter for the election subsystem).
 
+use crate::error::ValueError;
+
 /// `[cluster]` section — single-node cluster mode: keys route by
 /// Redis-cluster slot (CRC16 `{hashtag}` & 16383) and every shard `i`
 /// gets a second, deterministic listener at `port_base + i` that answers
@@ -21,7 +23,8 @@
 /// hold owned vectors). Most call sites just clone the per-tick
 /// `Config` snapshot via `Arc<Config>`, so this is invisible in the
 /// hot path.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Hash)]
+#[non_exhaustive]
 pub struct ClusterSection {
     /// Enable cluster mode. Default `false` (zero change).
     pub enabled: bool,
@@ -98,7 +101,17 @@ pub struct ClusterSection {
 /// stays leaf-level and doesn't depend on kevy-scope (the dependency
 /// direction is kevy-scope ← kevy-config consumer, not the other
 /// way).
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// There is no `Default`: a scope with no prefix and no writer is not a
+/// scope. Build one with [`ScopeEntry::new`] or parse it.
+///
+/// ```
+/// use kevy_config::ScopeEntry;
+/// let s = ScopeEntry::new(b"app:billing:".to_vec(), "n1".into()).with_fallback("n2".into());
+/// assert_eq!(s.to_token(), "app:billing:=n1|n2");
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct ScopeEntry {
     /// Key-prefix bytes the scope owns. Bytes (not String) because
     /// kevy keys are arbitrary; common keys (`app:billing:`) are
@@ -111,6 +124,30 @@ pub struct ScopeEntry {
 }
 
 impl ScopeEntry {
+    /// A scope owning `prefix`, written by node `writer`, with no fallback.
+    ///
+    /// ```
+    /// let s = kevy_config::ScopeEntry::new(b"p:".to_vec(), "w".into());
+    /// assert_eq!((s.writer.as_str(), s.fallback), ("w", None));
+    /// ```
+    #[must_use]
+    pub fn new(prefix: Vec<u8>, writer: String) -> Self {
+        Self { prefix, writer, fallback: None }
+    }
+
+    /// The same scope with `fallback` taking writes while the writer is
+    /// down.
+    ///
+    /// ```
+    /// let s = kevy_config::ScopeEntry::new(b"p:".to_vec(), "w".into()).with_fallback("f".into());
+    /// assert_eq!(s.fallback.as_deref(), Some("f"));
+    /// ```
+    #[must_use]
+    pub fn with_fallback(mut self, fallback: String) -> Self {
+        self.fallback = Some(fallback);
+        self
+    }
+
     /// Render back to the `prefix=writer[|fallback]` token shape —
     /// exact inverse of [`Self::parse_one`] for entries it produced.
     /// The prefix is parsed from TOML text, so it is UTF-8 whenever
@@ -156,7 +193,14 @@ impl ScopeEntry {
     /// tokens are dropped; trailing comma tolerated. Same
     /// error-on-first-bad-token contract as
     /// [`PeerEntry::parse_list`].
-    pub fn parse_list(s: &str) -> Result<Vec<ScopeEntry>, String> {
+    ///
+    /// ```
+    /// use kevy_config::ScopeEntry;
+    /// assert_eq!(ScopeEntry::parse_list("a:=n1, b:=n2|n3")?.len(), 2);
+    /// assert!(ScopeEntry::parse_list("a:=n1,oops").is_err());
+    /// # Ok::<(), kevy_config::ValueError>(())
+    /// ```
+    pub fn parse_list(s: &str) -> Result<Vec<ScopeEntry>, ValueError> {
         let mut out = Vec::new();
         for raw in s.split(',') {
             let token = raw.trim();
@@ -165,7 +209,7 @@ impl ScopeEntry {
             }
             match Self::parse_one(token) {
                 Some(p) => out.push(p),
-                None => return Err(token.to_string()),
+                None => return Err(ValueError::new(format!("bad scope token: {token:?}"))),
             }
         }
         Ok(out)
@@ -190,7 +234,18 @@ impl ScopeEntry {
 /// names where the peer accepts replicas when it does not use the
 /// default base (client port + 10000). A node that follows a newly
 /// elected primary dials this address.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// There is no `Default`: a peer with no id, no host and port 0 is not a
+/// peer, and a default that fills them in would be dialled. Build one
+/// with [`PeerEntry::new`] or parse it.
+///
+/// ```
+/// use kevy_config::PeerEntry;
+/// let p = PeerEntry::new("n1".into(), "10.0.0.1".into(), 6204).with_client_port(6004);
+/// assert_eq!(p.to_token(), "n1@10.0.0.1:6204:6004");
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct PeerEntry {
     /// Peer's stable node id.
     pub node_id: String,
@@ -219,6 +274,45 @@ pub struct PeerEntry {
 }
 
 impl PeerEntry {
+    /// Peer `node_id` at `host`, election port `port`, in the legacy form
+    /// (no client port, default replication base).
+    ///
+    /// ```
+    /// let p = kevy_config::PeerEntry::new("n1".into(), "h".into(), 6204);
+    /// assert_eq!((p.port, p.client_port, p.repl_port_base), (6204, None, None));
+    /// ```
+    #[must_use]
+    pub fn new(node_id: String, host: String, port: u16) -> Self {
+        Self { node_id, host, port, client_port: None, repl_port_base: None }
+    }
+
+    /// The same peer, with its client-facing port.
+    ///
+    /// ```
+    /// let p = kevy_config::PeerEntry::new("n1".into(), "h".into(), 6204).with_client_port(6004);
+    /// assert_eq!(p.client_port, Some(6004));
+    /// ```
+    #[must_use]
+    pub fn with_client_port(mut self, client_port: u16) -> Self {
+        self.client_port = Some(client_port);
+        self
+    }
+
+    /// The same peer, with its replication listener base. Rendered only
+    /// alongside a client port, as the token syntax requires.
+    ///
+    /// ```
+    /// let p = kevy_config::PeerEntry::new("n1".into(), "h".into(), 6204)
+    ///     .with_client_port(6004)
+    ///     .with_repl_port_base(7100);
+    /// assert_eq!(p.to_token(), "n1@h:6204:6004:7100");
+    /// ```
+    #[must_use]
+    pub fn with_repl_port_base(mut self, repl_port_base: u16) -> Self {
+        self.repl_port_base = Some(repl_port_base);
+        self
+    }
+
     /// Render back to the `id@host:port[:client_port[:repl_port_base]]` token shape —
     /// exact inverse of [`Self::parse_one`] for entries it produced.
     pub fn to_token(&self) -> String {
@@ -267,9 +361,16 @@ impl PeerEntry {
     /// Parse the `peers = "..."` value — a comma-separated list of
     /// `id@host:port` tokens. Empty + all-whitespace tokens are
     /// dropped silently (a trailing comma after the last entry is
-    /// tolerated). Returns `Err(token)` on the first unparseable
-    /// token, with the offending token in the error for diagnostic.
-    pub fn parse_list(s: &str) -> Result<Vec<PeerEntry>, String> {
+    /// tolerated). Refuses on the first unparseable token, quoting it.
+    ///
+    /// ```
+    /// use kevy_config::PeerEntry;
+    /// assert_eq!(PeerEntry::parse_list("a@h:1, b@h:2,")?.len(), 2);
+    /// let e = PeerEntry::parse_list("a@h:1,bad").unwrap_err();
+    /// assert_eq!(e.to_string(), "bad peer token: \"bad\"");
+    /// # Ok::<(), kevy_config::ValueError>(())
+    /// ```
+    pub fn parse_list(s: &str) -> Result<Vec<PeerEntry>, ValueError> {
         let mut out = Vec::new();
         for raw in s.split(',') {
             let token = raw.trim();
@@ -278,7 +379,7 @@ impl PeerEntry {
             }
             match Self::parse_one(token) {
                 Some(p) => out.push(p),
-                None => return Err(token.to_string()),
+                None => return Err(ValueError::new(format!("bad peer token: {token:?}"))),
             }
         }
         Ok(out)
@@ -286,169 +387,5 @@ impl PeerEntry {
 }
 
 #[cfg(test)]
-mod peer_entry_tests {
-    use super::*;
-
-    #[test]
-    fn parse_one_basic() {
-        let p = PeerEntry::parse_one("node-1@10.0.0.1:6004").unwrap();
-        assert_eq!(p.node_id, "node-1");
-        assert_eq!(p.host, "10.0.0.1");
-        assert_eq!(p.port, 6004);
-        assert_eq!(p.client_port, None);
-    }
-
-    #[test]
-    fn parse_one_extended_form_sets_client_port() {
-        // `id@host:elect_port:client_port` syntax — added after
-        // finding MISDIRECTED replies used the elect_port instead
-        // of the main client port.
-        let p = PeerEntry::parse_one("node-1@10.0.0.1:6011:6004").unwrap();
-        assert_eq!(p.node_id, "node-1");
-        assert_eq!(p.host, "10.0.0.1");
-        assert_eq!(p.port, 6011);
-        assert_eq!(p.client_port, Some(6004));
-    }
-
-    #[test]
-    fn parse_one_extended_form_dns_host() {
-        let p = PeerEntry::parse_one("primary@db-east.local:6011:6004").unwrap();
-        assert_eq!(p.host, "db-east.local");
-        assert_eq!(p.port, 6011);
-        assert_eq!(p.client_port, Some(6004));
-    }
-
-    #[test]
-    fn parse_one_four_fields_sets_repl_port_base() {
-        let p = PeerEntry::parse_one("node-1@10.0.0.1:6011:6004:7100").unwrap();
-        assert_eq!((p.port, p.client_port, p.repl_port_base), (6011, Some(6004), Some(7100)));
-        assert_eq!(p.to_token(), "node-1@10.0.0.1:6011:6004:7100");
-        assert!(PeerEntry::parse_one("node-1@10.0.0.1:1:2:3:4").is_none());
-        assert!(PeerEntry::parse_one("node-1@10.0.0.1:6011:6004:x").is_none());
-    }
-
-    #[test]
-    fn parse_one_dns_host() {
-        let p = PeerEntry::parse_one("primary@db-east.local:6105").unwrap();
-        assert_eq!(p.host, "db-east.local");
-        assert_eq!(p.port, 6105);
-    }
-
-    #[test]
-    fn parse_one_rejects_empty_id_host_or_bad_port() {
-        assert!(PeerEntry::parse_one("@host:6004").is_none());
-        assert!(PeerEntry::parse_one("id@:6004").is_none());
-        assert!(PeerEntry::parse_one("id@host:NaN").is_none());
-        assert!(PeerEntry::parse_one("id@host:99999").is_none()); // u16 overflow
-        assert!(PeerEntry::parse_one("no-at-or-colon").is_none());
-    }
-
-    #[test]
-    fn parse_list_three_peers_trim_tolerated() {
-        let s = "a@1.1.1.1:6004, b@1.1.1.2:6004 ,c@1.1.1.3:6004";
-        let peers = PeerEntry::parse_list(s).unwrap();
-        assert_eq!(peers.len(), 3);
-        assert_eq!(peers[1].node_id, "b");
-    }
-
-    #[test]
-    fn parse_list_trailing_comma_ok() {
-        let peers = PeerEntry::parse_list("a@h:1,b@h:2,").unwrap();
-        assert_eq!(peers.len(), 2);
-    }
-
-    #[test]
-    fn parse_list_first_bad_token_errs() {
-        let err = PeerEntry::parse_list("a@h:1,bad-token,c@h:3").unwrap_err();
-        assert_eq!(err, "bad-token");
-    }
-
-    #[test]
-    fn parse_list_empty_is_empty() {
-        assert_eq!(PeerEntry::parse_list("").unwrap(), Vec::<PeerEntry>::new());
-        assert_eq!(PeerEntry::parse_list("  ").unwrap(), Vec::<PeerEntry>::new());
-    }
-
-    #[test]
-    fn to_token_round_trips() {
-        for tok in ["node-1@10.0.0.1:6004", "node-1@10.0.0.1:6011:6004", "p@db-east.local:6105"] {
-            let p = PeerEntry::parse_one(tok).unwrap();
-            assert_eq!(p.to_token(), tok);
-            assert_eq!(PeerEntry::parse_one(&p.to_token()), Some(p));
-        }
-    }
-}
-
-#[cfg(test)]
-mod scope_entry_tests {
-    use super::*;
-
-    #[test]
-    fn parse_one_writer_only() {
-        let s = ScopeEntry::parse_one("app:billing:=embed-billing-1").unwrap();
-        assert_eq!(s.prefix, b"app:billing:");
-        assert_eq!(s.writer, "embed-billing-1");
-        assert_eq!(s.fallback, None);
-    }
-
-    #[test]
-    fn parse_one_writer_and_fallback() {
-        let s = ScopeEntry::parse_one("app:billing:=embed-1|fb-server-eu").unwrap();
-        assert_eq!(s.writer, "embed-1");
-        assert_eq!(s.fallback.as_deref(), Some("fb-server-eu"));
-    }
-
-    #[test]
-    fn parse_one_prefix_with_colons() {
-        // Colon-heavy prefixes are the common case; only `=` and `,`
-        // are reserved.
-        let s = ScopeEntry::parse_one("ns:tenant:42:=w").unwrap();
-        assert_eq!(s.prefix, b"ns:tenant:42:");
-    }
-
-    #[test]
-    fn parse_one_rejects_empty_prefix_or_writer() {
-        assert!(ScopeEntry::parse_one("=writer").is_none());
-        assert!(ScopeEntry::parse_one("prefix=").is_none());
-        assert!(ScopeEntry::parse_one("no-equals").is_none());
-    }
-
-    #[test]
-    fn parse_one_rejects_empty_fallback_side() {
-        assert!(ScopeEntry::parse_one("p=writer|").is_none());
-        assert!(ScopeEntry::parse_one("p=|fb").is_none());
-    }
-
-    #[test]
-    fn parse_one_rejects_embedded_comma() {
-        // The split-on-comma in `parse_list` makes commas inside a
-        // token a parse error — operator probably typo'd
-        // `prefix=writer,fallback` instead of `prefix=writer|fallback`.
-        assert!(ScopeEntry::parse_one("p=writer,other").is_none());
-    }
-
-    #[test]
-    fn parse_list_two_scopes() {
-        let v = ScopeEntry::parse_list("app:billing:=w-bill|fb, app:auth:=w-auth").unwrap();
-        assert_eq!(v.len(), 2);
-        assert_eq!(v[0].writer, "w-bill");
-        assert_eq!(v[0].fallback.as_deref(), Some("fb"));
-        assert_eq!(v[1].writer, "w-auth");
-        assert!(v[1].fallback.is_none());
-    }
-
-    #[test]
-    fn parse_list_first_bad_token_errs() {
-        let err = ScopeEntry::parse_list("p1=w1,no-eq,p3=w3").unwrap_err();
-        assert_eq!(err, "no-eq");
-    }
-
-    #[test]
-    fn to_token_round_trips() {
-        for tok in ["app:billing:=embed-billing-1", "app:billing:=embed-1|fb-server-eu"] {
-            let s = ScopeEntry::parse_one(tok).unwrap();
-            assert_eq!(s.to_token(), tok);
-            assert_eq!(ScopeEntry::parse_one(&s.to_token()), Some(s));
-        }
-    }
-}
+#[path = "cluster_tests.rs"]
+mod tests;

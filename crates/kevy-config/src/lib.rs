@@ -30,6 +30,7 @@ mod emit;
 mod enums;
 mod error;
 mod lex;
+mod notify;
 mod parse;
 mod preserve;
 mod replication;
@@ -39,11 +40,12 @@ mod size;
 mod tiering;
 
 pub use cluster::{ClusterSection, PeerEntry, ScopeEntry};
+pub use error::ValueError;
 pub use replication::{ReplicationRole, ReplicationSection};
 pub use schema::{
-    AdvancedSection, AppendFsync, Config, ConfigError, EvictionPolicy, ExpirySection, LogLevel,
-    LogOutput, LogSection, LuaSection, MemorySection, NotificationFlags, NotificationSection,
-    PersistenceSection, ServerSection, SlowlogSection, parse_notification_flags,
+    AdvancedSection, AppendFsync, AuditSection, Config, ConfigError, EvictionPolicy, ExpirySection,
+    FeedSection, LogLevel, LogOutput, LogSection, LuaSection, MemorySection, MetricsSection,
+    NotificationFlags, NotificationSection, PersistenceSection, ServerSection, SlowlogSection,
 };
 pub use secure::{SecureSection, key_from_hex, key_to_hex};
 pub use size::parse_size;
@@ -120,8 +122,16 @@ impl Config {
 
     /// Overlay parsed-from-CLI overrides onto `self`. Pass a struct of
     /// optional values (any `Some(_)` field overrides the corresponding
-    /// schema field). Tests pass a literal; the kevy binary builds one
-    /// from `std::env::args`.
+    /// schema field); the kevy binary builds one from `std::env::args`.
+    ///
+    /// ```
+    /// let mut cli = kevy_config::CliOverrides::default();
+    /// cli.port = Some(7000);
+    /// let mut cfg = kevy_config::Config::default();
+    /// cfg.merge_cli(cli)?;
+    /// assert_eq!(cfg.server.port, 7000);
+    /// # Ok::<(), kevy_config::ConfigError>(())
+    /// ```
     pub fn merge_cli(&mut self, cli: CliOverrides) -> Result<(), ConfigError> {
         if let Some(bind) = cli.bind {
             self.server.bind = bind;
@@ -160,7 +170,8 @@ impl Config {
 ///
 /// Any `Some(_)` field overrides the corresponding schema field. CLI is the
 /// highest-priority source (above env vars and the TOML file).
-#[derive(Default, Debug, Clone, PartialEq, Eq)]
+#[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct CliOverrides {
     /// Override `server.bind` (`--bind A.B.C.D`).
     pub bind: Option<[u8; 4]>,

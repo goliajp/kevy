@@ -331,7 +331,9 @@ impl<C: Commands> Shard<C> {
     /// `lpop` / `rpop` / `lpush` / `rpush` keyspace events, matching the
     /// names Redis fires for the same effects.
     pub(crate) fn notify_list_event(&mut self, key: &[u8], left: bool, popped: bool) {
-        if self.notify_flags.is_empty() || !self.notify_flags.list {
+        if !self.notify_flags.is_active()
+            || !self.notify_flags.contains(crate::NotificationFlags::LIST)
+        {
             return;
         }
         let event: &[u8] = match (popped, left) {

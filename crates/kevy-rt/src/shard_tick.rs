@@ -30,11 +30,11 @@ impl<C: Commands> Shard<C> {
             // Mirror the store-origin event classes into the store's
             // capture mask (all-off keeps every store hook at a single
             // byte test). Channel gating still happens at publish time.
-            let on = !flags.is_empty();
+            let on = flags.is_active();
             self.store.set_notify_capture(
-                on && flags.new_key,
-                on && flags.expired,
-                on && flags.evicted,
+                on && flags.contains(crate::NotificationFlags::NEW_KEY),
+                on && flags.contains(crate::NotificationFlags::EXPIRED),
+                on && flags.contains(crate::NotificationFlags::EVICTED),
             );
         }
         if let Some(t) = live.slowlog_slower_than_micros {

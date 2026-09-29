@@ -9,11 +9,13 @@ use std::path::PathBuf;
 // cap); re-exported here so `crate::schema::{AppendFsync, …}` paths keep
 // working unchanged.
 pub use crate::enums::{AppendFsync, EvictionPolicy, LogLevel, LogOutput};
+pub use crate::notify::NotificationFlags;
 
 // ───────────── sections ─────────────
 
 /// `[server]` section.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct ServerSection {
     /// IPv4 bind address. Default `127.0.0.1`.
     pub bind: [u8; 4],
@@ -65,7 +67,8 @@ impl Default for ServerSection {
 }
 
 /// `[persistence]` section.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct PersistenceSection {
     /// Append-only file enabled. Default `true`.
     pub aof: bool,
@@ -106,7 +109,8 @@ impl Default for PersistenceSection {
 }
 
 /// `[memory]` section.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct MemorySection {
     /// Soft memory ceiling in bytes. `0` = unlimited. Default `0`.
     pub maxmemory: u64,
@@ -121,7 +125,8 @@ impl Default for MemorySection {
 }
 
 /// `[metrics]` section — Prometheus-format HTTP exposition.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
+#[non_exhaustive]
 pub struct MetricsSection {
     /// TCP port for the `/metrics` HTTP endpoint. `0` = OFF (default).
     pub listen_port: u16,
@@ -130,7 +135,8 @@ pub struct MetricsSection {
 /// `[audit]` section — append-only audit log of ADMIN-class
 /// commands (`CONFIG SET` / `CONFIG REWRITE` / `DEBUG` / `FLUSHDB` /
 /// `FLUSHALL` / `CLIENT KILL` / `SCRIPT FLUSH` etc.).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct AuditSection {
     /// Append-only audit log file. Empty string = OFF (default).
     pub log_path: PathBuf,
@@ -143,7 +149,8 @@ impl Default for AuditSection {
 }
 
 /// `[expiry]` section. Controls the TTL background reaper.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct ExpirySection {
     /// Reaper frequency in Hz. Default `10` (every 100 ms).
     pub hz: u32,
@@ -158,7 +165,8 @@ impl Default for ExpirySection {
 }
 
 /// `[log]` section.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct LogSection {
     /// Log verbosity. Default `Info`.
     pub level: LogLevel,
@@ -176,7 +184,8 @@ impl Default for LogSection {
 /// hardcoded `const`s in `kevy-rt`. Defaults match the previously
 /// hardcoded values, so the existing benchmark numbers
 /// translate one-to-one. Tune only if you know what you're doing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct AdvancedSection {
     /// Iterations the per-core reactor spins on `poll(timeout=0)`
     /// before parking on a blocking wait. Higher = lower wake-up
@@ -221,79 +230,17 @@ impl Default for AdvancedSection {
 /// Example: `notify_keyspace_events = "KEA"` enables every event
 /// class on BOTH channels. `"K$"` enables only string events on the
 /// keyspace channel.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct NotificationSection {
     /// Flag string controlling which keyspace notifications fire. Empty
     /// (default) = OFF: writes pay one atomic load + skip, no publish.
     pub notify_keyspace_events: String,
 }
 
-/// Parsed view of [`NotificationSection::notify_keyspace_events`]. The
-/// runtime caches this struct per-shard (hot-reload via the existing
-/// `LiveRuntimeConfig` tick path) so the per-write-command check
-/// reduces to four bool reads on the hot path.
-// struct_excessive_bools: each field mirrors one independent letter of the
-// redis notify-keyspace-events flag string; they are flags, not a state machine.
-#[allow(clippy::struct_excessive_bools)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct NotificationFlags {
-    /// `K` — publish on `__keyspace@<db>__:<key>` channel.
-    pub keyspace: bool,
-    /// `E` — publish on `__keyevent@<db>__:<event>` channel.
-    pub keyevent: bool,
-    /// `g` — DEL / EXPIRE / PERSIST / RENAME / TYPE / FLUSH etc.
-    pub generic: bool,
-    /// `$` — SET / GETSET / INCR* / APPEND / MSET / etc.
-    pub string: bool,
-    /// `l` — LPUSH / RPUSH / LPOP / RPOP / LREM / LSET / LTRIM / …
-    pub list: bool,
-    /// `s` — SADD / SREM / SPOP / SMOVE / …
-    pub set: bool,
-    /// `h` — HSET / HDEL / HINCRBY / HSETNX / …
-    pub hash: bool,
-    /// `z` — ZADD / ZINCRBY / ZREM / ZREMRANGEBY* / …
-    pub zset: bool,
-    /// `t` — XADD / XDEL / XTRIM / XGROUP / XACK / XCLAIM / XREADGROUP …
-    pub stream: bool,
-    /// `x` — `expired` events, fired when a TTL'd key is removed
-    /// (lazily on access or by the active reaper).
-    pub expired: bool,
-    /// `e` — `evicted` events, fired when maxmemory pressure removes
-    /// a key.
-    pub evicted: bool,
-    /// `n` — `new` events, fired when a key is added to the keyspace.
-    /// Not part of the `A` alias (Redis convention).
-    pub new_key: bool,
-}
-
-impl NotificationFlags {
-    /// Notifications are entirely off (no channel enabled OR no class
-    /// enabled). The hot-path emits skip via this check before any
-    /// further classification or string formatting.
-    pub fn is_empty(&self) -> bool {
-        !(self.keyspace || self.keyevent)
-            || !(self.generic
-                || self.string
-                || self.list
-                || self.set
-                || self.hash
-                || self.zset
-                || self.stream
-                || self.expired
-                || self.evicted
-                || self.new_key)
-    }
-}
-
-/// `[slowlog]` section — controls the per-shard slow-command ring
-/// buffer surfaced by `SLOWLOG GET/LEN/RESET`. Default is OFF
-/// (`slower_than_micros = -1`) so the hot path never pays the
-/// `Instant::now()` pair around dispatch (~30 ns/op, ≈9 % at 3 M
-/// ops/s). To enable Redis-style 10 ms tracking, set
-/// `slower_than_micros = 10000` in `[slowlog]` or run
-/// `CONFIG SET slowlog-log-slower-than 10000`.
 /// `[lua]` section — Lua scripting limits.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct LuaSection {
     /// Hard cap on per-`EVAL` Lua execution time in milliseconds.
     /// Matches Redis's `lua-time-limit`. The bridge translates this
@@ -317,8 +264,14 @@ impl Default for LuaSection {
     }
 }
 
-/// `[slowlog]` section — ring buffer of slow commands per shard.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// `[slowlog]` section — the per-shard slow-command ring buffer surfaced
+/// by `SLOWLOG GET/LEN/RESET`. Default is OFF (`slower_than_micros = -1`)
+/// so the hot path never pays the `Instant::now()` pair around dispatch
+/// (~30 ns/op, ≈9 % at 3 M ops/s). To enable Redis-style 10 ms tracking,
+/// set `slower_than_micros = 10000` in `[slowlog]` or run
+/// `CONFIG SET slowlog-log-slower-than 10000`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct SlowlogSection {
     /// Record any command whose execution took at least this many
     /// microseconds (Redis: `< slower_than_micros` is skipped). `-1`
@@ -337,47 +290,20 @@ impl Default for SlowlogSection {
     }
 }
 
-/// Parse a Redis-style `notify_keyspace_events` flag string into
-/// [`NotificationFlags`]. The `A` alias enables every event-class
-/// flag except channels and `n` (Redis convention). An unknown char
-/// is an error carrying the offending character — a typo'd flag
-/// string must fail config admission, not silently drop events.
-pub fn parse_notification_flags(s: &str) -> Result<NotificationFlags, char> {
-    let mut f = NotificationFlags::default();
-    for c in s.chars() {
-        match c {
-            'K' => f.keyspace = true,
-            'E' => f.keyevent = true,
-            'g' => f.generic = true,
-            '$' => f.string = true,
-            'l' => f.list = true,
-            's' => f.set = true,
-            'h' => f.hash = true,
-            'z' => f.zset = true,
-            't' => f.stream = true,
-            'x' => f.expired = true,
-            'e' => f.evicted = true,
-            'n' => f.new_key = true,
-            'A' => {
-                // Alias for "g$lshztxe" — every event class except
-                // `n`, per the Redis contract for `A`.
-                f.generic = true;
-                f.string = true;
-                f.list = true;
-                f.set = true;
-                f.hash = true;
-                f.zset = true;
-                f.stream = true;
-                f.expired = true;
-                f.evicted = true;
-            }
-            other => return Err(other),
-        }
-    }
-    Ok(f)
-}
+/// Complete kevy config: defaults + per-section overrides loaded from
 /// the TOML file + env + CLI.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+///
+/// Every section is plain data with public fields and a [`Default`];
+/// start from [`Config::default`] and assign what differs.
+///
+/// ```
+/// let mut cfg = kevy_config::Config::default();
+/// cfg.server.port = 7000;
+/// cfg.cluster.enabled = true;
+/// assert_eq!(cfg.server.port, 7000);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Default, Hash)]
+#[non_exhaustive]
 pub struct Config {
     /// `[server]` settings.
     pub server: ServerSection,
@@ -426,7 +352,8 @@ pub struct Config {
 /// keeps a mutation backlog (even with no replicas) and serves
 /// `FEED.READ` / `FEED.TAIL` under the `(generation, offset)` cursor
 /// contract (docs/cdc.md).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct FeedSection {
     /// Enable the FEED.* surface. Default `false`.
     pub enabled: bool,

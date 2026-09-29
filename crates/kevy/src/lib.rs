@@ -119,6 +119,7 @@ pub(crate) fn map_eviction_policy(p: kevy_config::EvictionPolicy) -> kevy_store:
         C::VolatileLfu => S::VolatileLfu,
         C::VolatileRandom => S::VolatileRandom,
         C::VolatileTtl => S::VolatileTtl,
+        other => unimplemented!("the store has no eviction policy for {other:?}"),
     }
 }
 
@@ -348,7 +349,7 @@ pub(crate) fn resolve_tier_budget(cfg: &kevy_config::Config) -> Result<Option<u6
                     "[tiering] budget = \"{}\": no memory bound detected on this host \
                      (cgroup v2 memory.max / /proc/meminfo MemAvailable / hw.memsize all \
                      unavailable) — use an absolute budget (\"4gb\")",
-                    spec.as_config_string()
+                    spec.to_config_string()
                 )
             })
         }
@@ -382,6 +383,7 @@ pub(crate) fn map_appendfsync(p: kevy_config::AppendFsync) -> kevy_persist::Fsyn
         C::Always => P::Always,
         C::EverySec => P::EverySec,
         C::No => P::No,
+        other => unimplemented!("the AOF has no fsync policy for {other:?}"),
     }
 }
 

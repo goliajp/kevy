@@ -116,7 +116,7 @@ impl Config {
         let _ = writeln!(
             out,
             "output   = \"{}\"",
-            escape_toml_basic_string(&self.log.output.as_str()),
+            escape_toml_basic_string(&self.log.output.to_config_str()),
         );
         let _ = writeln!(out);
         let _ = writeln!(out, "[notification]");
@@ -341,7 +341,7 @@ fn push_feed(v: &mut Vec<CanonicalPair>, cfg: &Config) {
 /// absence must round-trip to the off default.
 fn push_tiering(v: &mut Vec<CanonicalPair>, cfg: &Config) {
     if let Some(budget) = cfg.tiering.budget {
-        push(v, "tiering", "budget", toml_string(&budget.as_config_string()));
+        push(v, "tiering", "budget", toml_string(&budget.to_config_string()));
     }
     if let Some(dir) = &cfg.tiering.spill_dir {
         push(v, "tiering", "spill_dir", toml_string(&dir.display().to_string()));
@@ -365,7 +365,7 @@ fn push(v: &mut Vec<CanonicalPair>, section: &'static str, key: &'static str, va
 }
 
 fn log_output_str(o: &LogOutput) -> String {
-    o.as_str().into_owned()
+    o.to_config_str().into_owned()
 }
 
 /// `["a", "b"]` — the canonical TOML form for a list.

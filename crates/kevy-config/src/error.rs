@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 /// Reasons `Config::load` / `from_toml_str` can fail.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum ConfigError {
     /// File could not be opened or read.
     IoOpen {
@@ -54,3 +55,30 @@ impl std::fmt::Display for ConfigError {
 }
 
 impl std::error::Error for ConfigError {}
+
+/// A single value's text was refused — a size literal, a key, a budget,
+/// a peer or scope token, a notification flag string. The message says
+/// what was wrong and quotes the offending text.
+///
+/// ```
+/// let e = kevy_config::parse_size("12qb").unwrap_err();
+/// assert!(e.to_string().contains("unknown unit"));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ValueError {
+    msg: String,
+}
+
+impl ValueError {
+    pub(crate) fn new(msg: impl Into<String>) -> Self {
+        Self { msg: msg.into() }
+    }
+}
+
+impl std::fmt::Display for ValueError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.msg)
+    }
+}
+
+impl std::error::Error for ValueError {}
