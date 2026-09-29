@@ -287,7 +287,10 @@ def main() -> int:
             return 2
         docs[c] = json.loads(f.read_bytes())
     found = sorted(set(findings(docs)))
-    if not found:
+    # the floor is on what was looked at: a clean crate has no findings, a
+    # broken selector has no public items
+    items = sum(1 for d in docs.values() for p in d["paths"].values() if p["crate_id"] == 0)
+    if not items:
         print("check_api_guidelines: REFUSED — found no public items at all")
         return 2
     table = tomllib.loads(EXEMPTIONS.read_text()) if EXEMPTIONS.exists() else {}
