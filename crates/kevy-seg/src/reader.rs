@@ -12,6 +12,23 @@ use crate::{SegError, SegMeta};
 
 /// An open segment. Cheap to clone-by-Arc above this crate; internally
 /// one file handle plus the in-memory fence table.
+///
+/// ```
+/// use kevy_seg::{Seg, SegBuilder};
+/// # let dir = kevy_tmpdir::TmpDir::new("seg");
+/// let path = dir.path().join("s.seg");
+/// let mut b = SegBuilder::create(&path)?;
+/// for i in 0..1000u32 {
+///     b.push(format!("k{i:04}").as_bytes(), &i.to_le_bytes())?;
+/// }
+/// b.finish()?;
+///
+/// let seg = Seg::open(&path)?;
+/// assert!(seg.meta().data_pages > 1);
+/// assert_eq!(seg.get(b"k0500")?, Some(500u32.to_le_bytes().to_vec()));
+/// assert_eq!(seg.count_range(b"k0100", b"k0199")?, 100);
+/// # Ok::<(), kevy_seg::SegError>(())
+/// ```
 #[derive(Debug)]
 pub struct Seg {
     f: File,
@@ -265,6 +282,25 @@ impl Seg {
 }
 
 /// Ascending `(key, payload)` iterator over a closed range.
+///
+/// Each item is a `Result`: a page that fails its checksum mid-scan ends
+/// the iteration with that error instead of a short answer.
+///
+/// ```
+/// use kevy_seg::{RangeIter, Seg, SegBuilder};
+/// # let dir = kevy_tmpdir::TmpDir::new("rangeiter");
+/// let path = dir.path().join("s.seg");
+/// let mut b = SegBuilder::create(&path)?;
+/// for (k, v) in [("a", "1"), ("b", "2"), ("c", "3")] {
+///     b.push(k.as_bytes(), v.as_bytes())?;
+/// }
+/// b.finish()?;
+/// let seg = Seg::open(&path)?;
+/// let it: RangeIter<'_> = seg.range(b"b", b"z");
+/// let rows = it.collect::<Result<Vec<_>, _>>()?;
+/// assert_eq!(rows, [(b"b".to_vec(), b"2".to_vec()), (b"c".to_vec(), b"3".to_vec())]);
+/// # Ok::<(), kevy_seg::SegError>(())
+/// ```
 #[derive(Debug)]
 pub struct RangeIter<'a> {
     seg: &'a Seg,
