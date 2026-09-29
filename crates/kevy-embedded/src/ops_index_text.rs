@@ -42,7 +42,7 @@ impl Store {
             values.iter().map(|(n, ty)| kevy_index::ValueSpec::new(*n).with_type(*ty)).collect();
         let spec = IndexSpec::builder(name, prefix, IndexKind::Text, ValType::Str)
             .with_fields(fields)
-            .with_positions(positions == TokenPositions::Record)
+            .with_positions(matches!(positions, TokenPositions::Record))
             .with_values(values);
         self.register_spec(crate::ops_index::built(spec)?)
     }

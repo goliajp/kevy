@@ -95,6 +95,7 @@ impl PubsubEvent {
     /// let ack = PubsubEvent::Subscribe { channel: b"c".to_vec(), count: 1 };
     /// assert_eq!(ack.into_payload(), None);
     /// ```
+    #[inline]
     #[must_use]
     pub fn into_payload(self) -> Option<Vec<u8>> {
         match self {

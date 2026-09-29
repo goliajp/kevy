@@ -444,7 +444,7 @@ pub fn shard_of(key: &[u8], n: usize, routing: Routing) -> usize {
     if n == 1 {
         return 0;
     }
-    if routing == Routing::Slots {
+    if matches!(routing, Routing::Slots) {
         return slot_to_shard(kevy_hash::key_hash_slot(key), n);
     }
     // Respect `{hashtag}` even in non-cluster mode so EVAL

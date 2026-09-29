@@ -124,7 +124,8 @@ impl<C: Commands> Shard<C> {
             Route::Copy => self.start_copy(conn_id, seq, args),
             Route::Rename { nx } => self.start_rename(conn_id, seq, args, nx),
             Route::ListMove { from, to } => {
-                let (from_left, to_left) = (from == ListEnd::Left, to == ListEnd::Left);
+                let (from_left, to_left) =
+                    (matches!(from, ListEnd::Left), matches!(to, ListEnd::Left));
                 self.start_list_move(conn_id, seq, args, from_left, to_left);
             }
             // FEED.* — parse + shard-index dispatch live in

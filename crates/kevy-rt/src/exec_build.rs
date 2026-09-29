@@ -116,7 +116,7 @@ impl<C: Commands> Shard<C> {
                     (0..self.nshards).map(|s| (s, Op::ClientKill(filter.clone()))).collect(),
                     Agg::ClientKill {
                         killed: 0,
-                        oldform: reply == crate::client_ops::KillReply::Status,
+                        oldform: matches!(reply, crate::client_ops::KillReply::Status),
                     },
                 ),
                 // The command layer validates before routing here; an
@@ -183,7 +183,7 @@ impl<C: Commands> Shard<C> {
                     argv.push(b"COUNT");
                     argv.push(cb);
                 }
-                if group.as_ref().is_some_and(|g| g.ack == AckMode::NoAck) {
+                if group.as_ref().is_some_and(|g| matches!(g.ack, AckMode::NoAck)) {
                     argv.push(b"NOACK");
                 }
                 argv.push(b"STREAMS");

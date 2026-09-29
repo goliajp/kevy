@@ -338,12 +338,11 @@ impl<C: Commands> Shard<C> {
     /// here — an unclean stop leaves no marker and the next boot bumps
     /// the generation (see `kevy_persist::feed_meta`).
     pub(crate) fn write_feed_shutdown_marker(&self) {
-        if let Some(f) = &self.replicate {
-            if let Err(e) =
+        if let Some(f) = &self.replicate
+            && let Err(e) =
                 kevy_persist::feed_meta::write_feed_meta(&self.data_dir, self.id, f.tail())
-            {
-                eprintln!("kevy: shard {} feed marker write failed: {e}", self.id);
-            }
+        {
+            eprintln!("kevy: shard {} feed marker write failed: {e}", self.id);
         }
     }
 

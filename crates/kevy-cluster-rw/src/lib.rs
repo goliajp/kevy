@@ -254,7 +254,7 @@ impl ReadWriteClient {
         args: &[Vec<u8>],
         consistency: ReadConsistency,
     ) -> io::Result<Reply> {
-        if consistency == ReadConsistency::Primary || self.replicas.is_empty() {
+        if matches!(consistency, ReadConsistency::Primary) || self.replicas.is_empty() {
             return self.primary.request(args);
         }
         let idx = self.rr_counter % self.replicas.len();

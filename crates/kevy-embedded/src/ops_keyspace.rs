@@ -46,7 +46,7 @@ impl Store {
         // write — captures the deadline that should survive the copy.
         let src_ttl_ms = self.ttl_ms(src);
         // Veto if dst exists and the mode keeps an existing one.
-        if mode != CopyMode::Replace {
+        if !matches!(mode, CopyMode::Replace) {
             // Use a fresh wshard on dst so this works cross-shard.
             let mut g = self.wshard(dst);
             if g.store.key_exists(dst) {
