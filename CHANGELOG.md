@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **The keyspace is charged the table it holds.** Every key was charged a
+  flat 96 bytes for its place in the keyspace table, but the table is an
+  open-addressing array that doubles at 7/8 load and holds all its slots
+  whether keys fill them or not: 73 bytes a slot, so between 83 and 167
+  bytes a key depending on where the table sits in its cycle — 124 at the
+  capacity decomposition's ten million keys, 0.28 GB more than charged.
+  `used_memory` (and maxmemory eviction and the tiered store's demotion,
+  which act on it) now carries the table at the bytes the allocator holds
+  for it, charged when it grows; a key that leaves frees its own bytes and
+  not its slot, which stays with the table, and `FLUSHALL` leaves the
+  emptied table charged. `MEMORY USAGE` reports a key's share of the table.
+  A test counts the allocator against the charge after every insert,
+  delete and flush. A new key costs 4.6% less time to insert (the flat
+  charge's bookkeeping is gone; the growth check is one comparison).
+  `ENTRY_OVERHEAD` now only prices the tiered store's cold stubs.
+
 - **A table declaration no longer copies the keyspace.** `TABLE.DECLARE`
   starts a backfill per compiled index and one that packs the existing
   rows, and each began by copying every key under the table's prefix into

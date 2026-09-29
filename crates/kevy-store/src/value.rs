@@ -284,17 +284,20 @@ pub(crate) const BTREE_SLOT_BYTES: u64 = 40;
 /// size-class rounding), keeping `used_memory` a conservative upper bound —
 /// same policy as [`ENTRY_OVERHEAD`].
 pub(crate) const RANKTREE_SLOT_BYTES: u64 = 64;
-/// Per-entry overhead in the top-level keyspace map: the inline 24-byte
-/// `SmallBytes` key cell + the 64-byte `Entry` (post weight/clock fields) +
-/// metadata. Approximation that errs slightly high so `used_memory` stays a
-/// conservative upper bound vs the actual allocator footprint.
+/// A keyspace slot's amortised cost: the inline 24-byte `SmallBytes` key
+/// cell, the `Entry` and a control byte, over the table's load. The tiered
+/// store charges each cold stub this in `stub_bytes`, the estimate of what
+/// its cold keys cost in memory.
+///
+/// `used_memory` does not use it: the keyspace table is charged there at
+/// its real size, whatever its load.
 ///
 /// ```
 /// use kevy_store::{ENTRY_OVERHEAD, SetCondition, Store};
 /// let mut s = Store::new();
 /// s.set(b"k", b"v".to_vec(), None, SetCondition::Always);
-/// // an inline key and value cost the entry overhead and nothing more
-/// assert_eq!(s.used_memory(), ENTRY_OVERHEAD);
+/// // one key in a sixteen-slot table: the table costs far more than a slot
+/// assert!(s.used_memory() > ENTRY_OVERHEAD);
 /// ```
 pub const ENTRY_OVERHEAD: u64 = 96;
 

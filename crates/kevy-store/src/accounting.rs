@@ -8,13 +8,12 @@
 
 use kevy_hash::KevyHash;
 
-use crate::value::ENTRY_OVERHEAD;
 use crate::{Entry, SmallBytes, Store, apply_delta, evict, key_heap_bytes_for};
 
 impl Store {
     /// Insert a fresh entry, replacing any prior. Stamps `entry.weight` from
-    /// the live value and key, then updates `used_memory` for either the
-    /// new-key (charges [`ENTRY_OVERHEAD`]) or overwrite (weight swap) case.
+    /// the live value and key, then updates `used_memory` by the weight swap
+    /// and by whatever the keyspace table grew to make room.
     pub(crate) fn insert_entry(&mut self, key: SmallBytes, mut entry: Entry) -> Option<Entry> {
         // New-key event capture: the owned key copy is only paid when
         // the capture flag is on (server with `n` notifications).
@@ -31,7 +30,11 @@ impl Store {
         }
         let new_w = entry.weight();
         let new_has_ttl = entry.expire_at_ns.is_some();
+        let cap = self.map.capacity();
         let prev = self.map.insert(key, entry);
+        if self.map.capacity() != cap {
+            self.charge_keyspace_growth();
+        }
         match &prev {
             Some(old) => {
                 // A displaced cold stub's vlog record dies with it.
@@ -39,9 +42,7 @@ impl Store {
                 self.used_memory =
                     self.used_memory.saturating_sub(old.weight()).saturating_add(new_w);
             }
-            None => {
-                self.used_memory = self.used_memory.saturating_add(new_w + ENTRY_OVERHEAD);
-            }
+            None => self.used_memory = self.used_memory.saturating_add(new_w),
         }
         let old_has_ttl = prev.as_ref().is_some_and(|o| o.expire_at_ns.is_some());
         self.adjust_expires(i64::from(new_has_ttl) - i64::from(old_has_ttl));
@@ -55,7 +56,8 @@ impl Store {
     }
 
     /// Remove a key, returning the displaced entry (`None` if absent).
-    /// Frees the entry's cached weight + [`ENTRY_OVERHEAD`]. This is the
+    /// Frees the entry's cached weight; its slot stays, and stays charged,
+    /// with the table. This is the
     /// DISCARD form: a cold stub's vlog record is credited dead. A
     /// caller re-homing the entry intact (RENAME) uses
     /// [`Self::take_entry_keepalive`] instead.
@@ -71,7 +73,7 @@ impl Store {
     pub(crate) fn take_entry_keepalive(&mut self, key: &[u8]) -> Option<Entry> {
         self.clear_hash_key_ttls(key);
         let old = self.map.remove(key)?;
-        self.used_memory = self.used_memory.saturating_sub(old.weight() + ENTRY_OVERHEAD);
+        self.used_memory = self.used_memory.saturating_sub(old.weight());
         if old.expire_at_ns.is_some() {
             self.adjust_expires(-1);
         }
@@ -93,6 +95,17 @@ impl Store {
         if delta > 0 {
             self.update_peak();
         }
+    }
+
+    /// Charge what the keyspace table grew by. The table is charged as a
+    /// whole, at its real size: a slot costs nothing more when a key takes
+    /// it and nothing less when one leaves, and only a growth moves it.
+    #[cold]
+    pub(crate) fn charge_keyspace_growth(&mut self) {
+        let now = self.map.footprint() as u64;
+        let delta = now as i64 - self.keyspace_bytes as i64;
+        self.keyspace_bytes = now;
+        apply_delta(&mut self.used_memory, delta);
     }
 
     /// Recompute `weight` for the entry at `key` from its current value +
