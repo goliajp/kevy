@@ -199,7 +199,11 @@ impl<C: Commands> Shard<C> {
             //
             // Conn lookup happens FIRST so we can pre-check `conn.pending`
             // (and bail without touching the store on out-of-order conns).
-            let Some(conn) = self.conns.get_mut(&conn_id) else { return false };
+            let Some(conn) =
+                crate::conn::conn_at(&mut self.conns, &mut self.conn_slot_hint, conn_id)
+            else {
+                return false;
+            };
             if !conn.pending.is_empty() {
                 return false;
             }
@@ -233,7 +237,10 @@ impl<C: Commands> Shard<C> {
             }
             return true;
         }
-        let Some(conn) = self.conns.get_mut(&conn_id) else { return false };
+        let Some(conn) = crate::conn::conn_at(&mut self.conns, &mut self.conn_slot_hint, conn_id)
+        else {
+            return false;
+        };
         if !conn.pending.is_empty() {
             return false;
         }

@@ -46,7 +46,9 @@ impl<C: Commands> Shard<C> {
                     self.handle_command(conn_id, &argv);
                     drop(argv);
                     off += consumed;
-                    if !self.conns.contains_key(&conn_id) {
+                    if crate::conn::conn_at(&mut self.conns, &mut self.conn_slot_hint, conn_id)
+                        .is_none()
+                    {
                         return BatchOutcome {
                             consumed: off,
                             protocol_error: false,

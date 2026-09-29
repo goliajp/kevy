@@ -28,12 +28,13 @@ impl<C: Commands> Shard<C> {
         // is_write each scanned the verb separately). KevyCommands overrides
         // resolve() with a single match; non-overriding impls still pay 4×.
         let resolved = self.commands.resolve(args);
-        // One conns probe serves the whole pre-dispatch phase — the MULTI
+        // One conns lookup serves the whole pre-dispatch phase — the MULTI
         // check, the per-cmd proto capture, and (for the dispatching hot
-        // arms) the seq assignment. These were three separate map probes
-        // per command (in_multi here + next_seq_for + start_single's proto
-        // read).
-        let Some(c) = self.conns.get_mut(&conn_id) else { return };
+        // arms) the seq assignment.
+        let Some(c) = crate::conn::conn_at(&mut self.conns, &mut self.conn_slot_hint, conn_id)
+        else {
+            return;
+        };
         let in_multi = c.multi.is_some();
         let proto = c.proto;
         let cluster_conn = c.cluster;
@@ -219,7 +220,7 @@ impl<C: Commands> Shard<C> {
         agg: Agg,
         is_quit: bool,
     ) {
-        if let Some(c) = self.conns.get_mut(&conn_id) {
+        if let Some(c) = crate::conn::conn_at(&mut self.conns, &mut self.conn_slot_hint, conn_id) {
             let proto = c.proto;
             c.pending.push_back(PendingSlot { remaining, agg, done: None, proto });
         }

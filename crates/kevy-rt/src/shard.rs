@@ -75,10 +75,12 @@ pub(crate) struct Shard<C: Commands> {
     /// re-pushed (in order) by `flush_backlog` once the peer drains.
     pub(crate) backlog: Vec<VecDeque<Inbound>>,
     pub(crate) wakers: Vec<Arc<Waker>>,
-    // Fx-hashed: these are looked up per command (`conns` twice — start_command
-    // + fold) and per event; std's SipHash on the u64/i32 keys profiled at ~17%
+    // Fx-hashed: looked up per event, and per command through
+    // `conn_slot_hint`; std's SipHash on the u64/i32 keys profiled at ~17%
     // of single-shard CPU, the dominant non-command-CPU cost.
     pub(crate) conns: KevyMap<u64, Conn>,
+    /// Slot of the conn looked up last, for [`crate::conn::conn_at`].
+    pub(crate) conn_slot_hint: usize,
     /// Per-iter "needs arm work" queue
     /// for the io_uring reactor. Populated by:
     ///   - accept handler (new conn, needs recv arm)
