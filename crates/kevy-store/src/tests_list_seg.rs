@@ -143,6 +143,9 @@ fn segged_ops_match_model_semantics() {
 #[test]
 fn accounting_round_trips_through_segged_ops() {
     let mut st = Store::new();
+    // the keyspace table is charged as a whole: allocate it first, so what
+    // comes and goes below is the key alone
+    st.set(b"warm", b"1".to_vec(), None, crate::SetCondition::Always);
     let baseline = st.used_memory();
     rpush_n(&mut st, b"l", SEG_PROMOTE + 200, 2);
     st.lset(b"l", 17, b"x").unwrap();

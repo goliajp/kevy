@@ -10,6 +10,7 @@
 use kevy_store::Store;
 use kevy_store::packed_row::ColumnNames;
 
+use crate::key_walk::KeyWalk;
 use crate::state::Ctx;
 
 /// Give a row under a declared prefix the packed representation.
@@ -41,8 +42,7 @@ pub(crate) fn on_write(ctx: &Ctx<'_>, store: &mut Store, key: &[u8]) {
 #[derive(Debug)]
 pub(crate) struct PackJob {
     names: ColumnNames,
-    keys: Vec<Vec<u8>>,
-    pos: usize,
+    walk: KeyWalk,
 }
 
 /// This shard's packing backfill, and its tables' column names.
@@ -94,39 +94,24 @@ pub(crate) fn on_tick(ctx: &Ctx<'_>, store: &mut Store) {
     let mut bf = ctx.shard.packing.borrow_mut();
     let generation = ctx.state.catalogs.table_gen();
     if bf.generation != generation {
-        bf.jobs = collect_jobs(bf.tables(ctx), store);
+        bf.jobs = start_jobs(bf.tables(ctx));
         bf.generation = generation;
     }
-    let Some(job) = bf.jobs.iter_mut().find(|j| j.pos < j.keys.len()) else { return };
-    let end = (job.pos + BATCH).min(job.keys.len());
-    // Split the borrow: `pack_row` takes the store, the job holds the keys.
-    let slice: Vec<Vec<u8>> = job.keys[job.pos..end].to_vec();
+    let Some(job) = bf.jobs.iter_mut().find(|j| !j.walk.is_done()) else { return };
+    let keys = job.walk.next_batch(store, BATCH);
     let names = job.names.clone();
-    job.pos = end;
-    let done = job.pos >= job.keys.len();
     drop(bf);
-    for key in &slice {
+    for key in &keys {
         store.pack_row(key, &names);
-    }
-    if done {
-        // The key list is the expensive part — a Vec per key, taken while
-        // the rows were still unpacked. Drop it as soon as it is spent
-        // rather than holding it until the next declaration.
-        let mut bf = ctx.shard.packing.borrow_mut();
-        bf.jobs.retain(|j| j.pos < j.keys.len());
     }
 }
 
-/// Snapshot each declared table's keys on THIS shard. Live writes from now
-/// on hit `on_write` first and pack there; `pack_row` is a no-op on a row
-/// that is already packed, so the two cannot fight.
-fn collect_jobs(tables: &[(Vec<u8>, ColumnNames)], store: &mut Store) -> Vec<PackJob> {
+/// Start a walk over each declared table's keys on THIS shard. Live
+/// writes from now on hit `on_write` first and pack there; `pack_row` is a
+/// no-op on a row that is already packed, so the two cannot fight.
+fn start_jobs(tables: &[(Vec<u8>, ColumnNames)]) -> Vec<PackJob> {
     tables
         .iter()
-        .map(|(prefix, names)| {
-            let mut pat = prefix.clone();
-            pat.push(b'*');
-            PackJob { names: names.clone(), keys: store.collect_keys(Some(&pat), None), pos: 0 }
-        })
+        .map(|(prefix, names)| PackJob { names: names.clone(), walk: KeyWalk::new(prefix) })
         .collect()
 }

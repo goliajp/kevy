@@ -326,6 +326,8 @@ pub(crate) struct Shard<C: Commands> {
     /// Reactor loop iterations between wall-clock reads for the tick
     /// check. Replaces the old `TICK_CHECK_EVERY` const.
     pub(crate) tick_check_every: u32,
+    /// Entries in this shard's io_uring provided-buffer ring.
+    pub(crate) recv_buffers: u16,
     /// `false` = compute-only shard (no accept SQE).
     pub(crate) arms_accept: bool,
     /// Per-shard cap (`max_clients / nshards`). `0` = unlimited.

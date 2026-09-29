@@ -72,6 +72,7 @@ mod dispatch_resp3;
 mod elect_persist;
 mod geo_store;
 mod index_runtime;
+mod key_walk;
 mod metrics_http;
 mod ops;
 mod replica_runner;
@@ -319,6 +320,8 @@ fn build_runtime(cfg: &kevy_config::Config, commands: KevyCommands) -> Runtime<K
             cfg.advanced.tick_check_every,
             cfg.advanced.ring_capacity,
         )
+        // the config admits only powers of two up to 32768, all within u16
+        .with_recv_buffers(cfg.advanced.recv_buffers as u16)
         .with_slowlog(cfg.slowlog.slower_than_micros, cfg.slowlog.max_len);
     if cfg.cluster.enabled {
         runtime = runtime

@@ -37,8 +37,8 @@ pub(super) fn clause_chunk(msg: &str) -> Vec<u8> {
 /// `IDX.COUNT … FILTER …`: the per-shard claused count, in the plain
 /// COUNT chunk shape (`[ST_OK][u64]`) so `reduce_count` sums it
 /// unchanged.
-pub(super) fn run_claused_count(ctx: &Ctx<'_>, store: &mut Store, q: &Query) -> Vec<u8> {
-    let res = index_runtime::with_ready_segment(ctx, store, &q.name, |spec, seg, win| {
+pub(super) fn run_claused_count(ctx: &Ctx<'_>, q: &Query) -> Vec<u8> {
+    let res = index_runtime::with_ready_segment(ctx, &q.name, |spec, seg, win| {
         let now = (kevy_store::now_unix_ms() / 1000) as i64;
         let (min, max) = q.bounds_for(spec, now)?;
         super::probe_window(ctx, &q.name, win, &min);
@@ -71,7 +71,7 @@ pub(super) fn run_claused_count(ctx: &Ctx<'_>, store: &mut Store, q: &Query) -> 
 
 pub(super) fn run_claused_query(ctx: &Ctx<'_>, store: &mut Store, q: &Query) -> Vec<u8> {
     let global = super::global::is_global(ctx, &q.name);
-    let res = index_runtime::with_ready_segment(ctx, store, &q.name, |spec, seg, win| {
+    let res = index_runtime::with_ready_segment(ctx, &q.name, |spec, seg, win| {
         let now = (kevy_store::now_unix_ms() / 1000) as i64;
         let (min, max) = q.bounds_for(spec, now)?;
         super::probe_window(ctx, &q.name, win, &min);

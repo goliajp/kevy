@@ -1,6 +1,6 @@
-//! `[advanced]` config knobs — verify the four reactor tuning fields
+//! `[advanced]` config knobs — verify the reactor tuning fields
 //! (`spin_limit` / `park_timeout_ms` / `tick_check_every` /
-//! `ring_capacity`) flow from TOML → `Config` → `Runtime` → `Shard`
+//! `ring_capacity` / `recv_buffers`) flow from TOML → `Config` → `Runtime` → `Shard`
 //! and that a non-default value actually drives the reactor (i.e. the
 //! constants are properly threaded, not just defined as fields).
 //!
@@ -50,6 +50,9 @@ fn advanced_defaults_match_pre_v14_constants() {
     assert_eq!(adv.park_timeout_ms, 50, "PARK_TIMEOUT_MS default");
     assert_eq!(adv.tick_check_every, 256, "TICK_CHECK_EVERY default");
     assert_eq!(adv.ring_capacity, 1024, "RING_CAPACITY default");
+    // 16 MiB a shard, down from a fixed 64 MiB: the smallest ring that kept
+    // throughput on the receive-ring sweep
+    assert_eq!(adv.recv_buffers, 1024, "receive ring default");
 }
 
 #[test]
@@ -59,6 +62,7 @@ fn advanced_section_round_trips_through_toml() {
     cfg.advanced.park_timeout_ms = 20;
     cfg.advanced.tick_check_every = 128;
     cfg.advanced.ring_capacity = 4096;
+    cfg.advanced.recv_buffers = 128;
 
     let toml = cfg.to_toml_string();
     assert!(toml.contains("[advanced]"));
@@ -66,6 +70,7 @@ fn advanced_section_round_trips_through_toml() {
     assert!(toml.contains("park_timeout_ms  = 20"));
     assert!(toml.contains("tick_check_every = 128"));
     assert!(toml.contains("ring_capacity    = 4096"));
+    assert!(toml.contains("recv_buffers     = 128"));
 
     let parsed = kevy_config::Config::from_toml_str(&toml, None).unwrap();
     assert_eq!(parsed.advanced, cfg.advanced);
@@ -114,6 +119,61 @@ fn runtime_with_advanced_runs_cmds_correctly() {
     read_reply(&mut c, b"+OK\r\n");
     c.write_all(&req(&[b"MGET", b"x", b"missing", b"z"])).unwrap();
     read_reply(&mut c, b"*3\r\n$1\r\nX\r\n$-1\r\n$1\r\nZ\r\n");
+
+    stop.store(true, Ordering::Relaxed);
+    let _ = handle.join();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A receive ring far smaller than the traffic in flight: every shard runs
+/// out of buffers while dozens of connections each send a value three
+/// buffers long at once. Running dry has to cost a re-armed receive and
+/// nothing else — every write lands and every reply comes back.
+#[test]
+fn a_receive_ring_that_runs_dry_loses_nothing() {
+    let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let port = free_port();
+    let dir = std::env::temp_dir().join(format!(
+        "kevy-advcfg-ring-{}",
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let (stop_thread, dir_thread) = (stop.clone(), dir.clone());
+    let handle = std::thread::spawn(move || {
+        let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(2))
+            .bind([127, 0, 0, 1], port)
+            .shards(2)
+            .with_data_dir(dir_thread)
+            .with_aof(false)
+            .with_recv_buffers(2);
+        rt.run(stop_thread).unwrap();
+    });
+    kevy_testnet::assert_listening(port, "the server under test");
+
+    let value = vec![b'v'; 40 * 1024];
+    let mut conns: Vec<std::net::TcpStream> = (0..48)
+        .map(|_| {
+            let c = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+            c.set_read_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
+            c
+        })
+        .collect();
+    for (i, c) in conns.iter_mut().enumerate() {
+        c.write_all(&req(&[b"SET", format!("k{i}").as_bytes(), &value])).unwrap();
+    }
+    for c in &mut conns {
+        read_reply(c, b"+OK\r\n");
+    }
+    let mut want = format!("${}\r\n", value.len()).into_bytes();
+    want.extend_from_slice(&value);
+    want.extend_from_slice(b"\r\n");
+    for (i, c) in conns.iter_mut().enumerate() {
+        c.write_all(&req(&[b"GET", format!("k{i}").as_bytes()])).unwrap();
+    }
+    for c in &mut conns {
+        read_reply(c, &want);
+    }
 
     stop.store(true, Ordering::Relaxed);
     let _ = handle.join();

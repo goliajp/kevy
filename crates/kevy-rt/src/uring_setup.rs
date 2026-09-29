@@ -71,15 +71,11 @@ impl<C: Commands> Shard<C> {
     }
 }
 
-/// SQ/CQ depth per-shard. Paired with `PBUF_ENTRIES` — both were bumped
-/// to fix the c=10 000 cliff (deco-axis-k-c10000).
+/// SQ/CQ depth per-shard, raised to fix a cliff at 10,000 connections.
 pub(crate) const URING_ENTRIES: u32 = 2048;
 // The nap rung was removed (see the idle-ladder comment in `run_uring`).
 // URING_NAP_LIMIT / URING_NAP_MICROS / `uring_nap` are gone; spin →
 // park is the whole ladder now.
-/// Shared provided-buffer ring: 4096 × 16K = 64 MiB/shard. Linux multishot
-/// recv terminates on ENOBUFS — must size for max conns (deco-axis-k-c10000).
-pub(crate) const PBUF_ENTRIES: u16 = 4096;
 pub(crate) const PBUF_SIZE: u32 = 16 * 1024;
 pub(crate) const PBUF_GROUP: u16 = 0;
 
@@ -90,9 +86,9 @@ pub(crate) const PBUF_GROUP: u16 = 0;
 /// success here means `run_uring` will start. [`crate::Runtime`] calls this once
 /// before spawning shards to auto-select io_uring with a graceful epoll fallback
 /// — so an unavailable io_uring degrades to epoll instead of failing startup.
-pub(crate) fn io_uring_available() -> bool {
+pub(crate) fn io_uring_available(recv_buffers: u16) -> bool {
     match IoUring::new(URING_ENTRIES) {
-        Ok(ring) => ring.register_buf_ring(PBUF_ENTRIES, PBUF_SIZE, PBUF_GROUP).is_ok(),
+        Ok(ring) => ring.register_buf_ring(recv_buffers, PBUF_SIZE, PBUF_GROUP).is_ok(),
         Err(_) => false,
     }
 }
@@ -113,7 +109,7 @@ pub(crate) fn io_uring_available() -> bool {
 /// same core set as the shard threads, so it loses badly on a fully
 /// subscribed box — it exists so the A/B stays reproducible whenever
 /// the tradeoff is re-judged (spare-core layouts, kernel changes).
-pub(crate) fn build_uring() -> io::Result<(IoUring, kevy_uring::ProvidedBufRing)> {
+pub(crate) fn build_uring(recv_buffers: u16) -> io::Result<(IoUring, kevy_uring::ProvidedBufRing)> {
     let sqpoll = matches!(
         std::env::var("KEVY_SQPOLL").ok().as_deref(),
         Some(v) if !v.is_empty() && v != "0" && v != "off" && v != "no" && v != "false"
@@ -123,6 +119,6 @@ pub(crate) fn build_uring() -> io::Result<(IoUring, kevy_uring::ProvidedBufRing)
     } else {
         IoUring::new(URING_ENTRIES)?
     };
-    let pbuf = ring.register_buf_ring(PBUF_ENTRIES, PBUF_SIZE, PBUF_GROUP)?;
+    let pbuf = ring.register_buf_ring(recv_buffers, PBUF_SIZE, PBUF_GROUP)?;
     Ok((ring, pbuf))
 }

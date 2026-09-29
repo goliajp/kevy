@@ -119,7 +119,7 @@ impl<C: Commands> Runtime<C> {
         // Build every shard up front so a bind/open failure aborts before
         // we spawn.
         let shards = self.build_shards(n, &mut shared, &bio_send, unix_listener)?;
-        let (use_uring, uring_forced) = reactor_choice();
+        let (use_uring, uring_forced) = reactor_choice(self.recv_buffers);
         let mut handles = Vec::with_capacity(n);
         for shard in shards {
             let stop = stop.clone();
@@ -400,9 +400,8 @@ impl<C: Commands> Runtime<C> {
                     .ok()
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(crate::CLIENT_INPUT_HARD_LIMIT),
-                // `Poller::wait` takes the timeout as `i32` (POSIX
-                // poll/epoll convention). The config knob is `u32` —
-                // we clamp to i32::MAX, far above any sane park-timeout.
+                // `Poller::wait` takes an `i32` (POSIX); the knob is a `u32`
+                recv_buffers: self.recv_buffers,
                 park_timeout_ms: self.park_timeout_ms.min(i32::MAX as u32) as i32,
                 tick_check_every: self.tick_check_every,
                 slowlog: crate::exec_slowlog::SlowlogState::new(
@@ -431,12 +430,12 @@ impl<C: Commands> Runtime<C> {
 /// it catches a seccomp-blocked io_uring_setup (Docker's default profile)
 /// and pre-5.19 kernels before any shard loads data. (macOS = kqueue.)
 #[cfg(target_os = "linux")]
-fn reactor_choice() -> (bool, bool) {
+fn reactor_choice(recv_buffers: u16) -> (bool, bool) {
     match std::env::var("KEVY_IO_URING").ok().as_deref() {
         Some("0") | Some("off") | Some("no") | Some("false") => (false, true),
         Some(_) => (true, true),
         None => {
-            let avail = crate::uring_reactor::io_uring_available();
+            let avail = crate::uring_reactor::io_uring_available(recv_buffers);
             eprintln!(
                 "kevy: reactor = {} (io_uring {})",
                 if avail { "io_uring" } else { "epoll" },
@@ -453,7 +452,7 @@ fn reactor_choice() -> (bool, bool) {
 
 /// Non-Linux: always the readiness reactor (kqueue on macOS).
 #[cfg(not(target_os = "linux"))]
-fn reactor_choice() -> (bool, bool) {
+fn reactor_choice(_recv_buffers: u16) -> (bool, bool) {
     (false, false)
 }
 
@@ -475,7 +474,7 @@ fn run_shard_thread<C: Commands>(
     let id = shard.id;
     #[cfg(target_os = "linux")]
     let res = if use_uring {
-        match crate::uring_reactor::build_uring() {
+        match crate::uring_reactor::build_uring(shard.recv_buffers) {
             Ok(pair) => shard.run_uring(pair, stop),
             Err(e) if !uring_forced => {
                 eprintln!(
@@ -491,7 +490,7 @@ fn run_shard_thread<C: Commands>(
     };
     #[cfg(not(target_os = "linux"))]
     let res = {
-        let _ = (use_uring, uring_forced);
+        let _ = (use_uring, uring_forced, shard.recv_buffers);
         shard.run(stop)
     };
     if let Err(e) = res {

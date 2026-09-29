@@ -214,10 +214,10 @@ pub(crate) fn take_ext_out(ctx: &Ctx<'_>) -> Vec<(usize, Vec<u8>)> {
 
 /// Apply a delta another shard's hook sent for a partition this shard owns
 /// (`Commands::apply_ext`).
-pub(crate) fn apply_ext(ctx: &Ctx<'_>, store: &mut Store, payload: &[u8]) {
+pub(crate) fn apply_ext(ctx: &Ctx<'_>, payload: &[u8]) {
     let Some((name, inc, p, delta)) = super::global_wire::decode(payload) else { return };
     let mut st = ctx.shard.indexes.borrow_mut();
-    super::refresh(ctx, &mut st, store);
+    super::refresh(ctx, &mut st);
     let st = &mut *st;
     let role =
         st.idx.iter_mut().find(|si| si.spec.name() == name).and_then(|si| si.global.as_mut());

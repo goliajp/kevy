@@ -3,7 +3,7 @@
 //! `lib.rs` to keep that file under the 500-LOC house rule.
 
 use crate::value::SmallBytes;
-use crate::{ENTRY_OVERHEAD, Entry, EvictionPolicy, Store, StoreError, evict, now_ns};
+use crate::{Entry, EvictionPolicy, Store, StoreError, evict, now_ns};
 use kevy_map::KevyMap;
 
 /// A store's entries, moved out for teardown. It holds memory only — no
@@ -43,6 +43,8 @@ impl Store {
     /// std::thread::spawn(move || drop(entries)).join().unwrap();
     /// ```
     pub fn detach_entries(&mut self) -> DetachedEntries {
+        // the table leaves with the entries; a table built after it is new
+        self.keyspace_bytes = 0;
         DetachedEntries(core::mem::take(&mut self.map))
     }
 
@@ -191,10 +193,12 @@ impl Store {
         }
     }
 
-    /// Cached weight of `key` (dynamic part + [`ENTRY_OVERHEAD`]). Returns
-    /// `None` when the key is absent or expired (no implicit reap).
+    /// Cached weight of `key` plus its share of the keyspace table (the
+    /// table's bytes over its keys). Returns `None` when the key is absent
+    /// or expired (no implicit reap).
     pub fn estimate_key_bytes(&self, key: &[u8]) -> Option<u64> {
-        self.map.get(key).map(|e| e.weight() + ENTRY_OVERHEAD)
+        let share = self.map.footprint().div_ceil(self.map.len().max(1)) as u64;
+        self.map.get(key).map(|e| e.weight() + share)
     }
 
     /// O(1) precondition check the dispatch layer calls before every write

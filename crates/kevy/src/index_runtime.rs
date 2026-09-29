@@ -9,24 +9,26 @@
 //! gates on the `IDX_NONEMPTY` gate bit — the
 //! zero-tax posture: an empty catalog costs one cached-bit branch.
 //!
-//! Backfill (tick-incremental variant): `IDX.CREATE` snapshots
-//! the domain's key list per shard; `on_shard_tick` indexes a bounded
-//! batch per tick until exhausted (non-blocking, no extra threads,
-//! shard-affine). Live writes during the build hit the hook first and
-//! win: the backfill only fills keys the segment doesn't hold yet, so
-//! a newer hook-applied value is never clobbered by a stale scan.
+//! Backfill (tick-incremental variant): `IDX.CREATE` starts a cursor
+//! walk over the domain's keys per shard; `on_shard_tick` indexes a
+//! bounded batch per tick until the walk ends (non-blocking, no extra
+//! threads, shard-affine). Live writes during the build hit the hook
+//! first and win: the backfill only fills keys the segment doesn't hold
+//! yet, so a newer hook-applied value is never clobbered by a stale scan.
 
 use kevy_index::{IndexSpec, Segment};
 use kevy_resp::CmdError;
 use kevy_store::Store;
 
+use crate::key_walk::KeyWalk;
 use crate::state::{CatalogState, Ctx};
 
 /// Per-shard build progress for one index.
 #[derive(Debug)]
 enum BuildState {
-    /// Keys captured at create-time, next position to process.
-    Backfilling { keys: Vec<Vec<u8>>, pos: usize },
+    /// Walking the domain's keys; the walk holds its cursor, not a copy
+    /// of the keys.
+    Backfilling(KeyWalk),
     /// Serving.
     Ready,
     /// Build crossed the spec's MAXMEM budget: declarative
@@ -80,7 +82,7 @@ pub(crate) struct ShardIndexes {
 #[inline]
 pub(crate) fn on_write(ctx: &Ctx<'_>, store: &mut Store, key: &[u8]) {
     let mut st = ctx.shard.indexes.borrow_mut();
-    refresh(ctx, &mut st, store);
+    refresh(ctx, &mut st);
     let st = &mut *st;
     for si in &mut st.idx {
         if key.starts_with(si.spec.prefix()) {
@@ -94,7 +96,7 @@ pub(crate) fn on_write(ctx: &Ctx<'_>, store: &mut Store, key: &[u8]) {
 /// any windowed index whose boundary moved. Gated like [`on_write`].
 pub(crate) fn on_tick(ctx: &Ctx<'_>, store: &mut Store) {
     let mut st = ctx.shard.indexes.borrow_mut();
-    refresh(ctx, &mut st, store);
+    refresh(ctx, &mut st);
     let st = &mut *st;
     let segs_dir = shard_segs_dir(ctx.state, ctx.shard.shard_id());
     // Pass 1: backfills, then the scalar slide. The eviction batch's
@@ -103,7 +105,7 @@ pub(crate) fn on_tick(ctx: &Ctx<'_>, store: &mut Store) {
     // index — a different ShardIndex entry, hence the two passes.
     let mut batches: Vec<(Vec<u8>, Vec<Vec<u8>>)> = Vec::new();
     for si in &mut st.idx {
-        if matches!(si.build, BuildState::Backfilling { .. }) {
+        if matches!(si.build, BuildState::Backfilling(_)) {
             st.stats_dirty = true;
         }
         advance_backfill(store, si, 2048);
@@ -135,10 +137,10 @@ pub(crate) fn on_tick(ctx: &Ctx<'_>, store: &mut Store) {
 /// to its declared-empty shape (found stale by an audit — the
 /// embedded face's `on_commit` reset on FLUSH; this face kept serving
 /// deleted keys out of IDX.QUERY). A mid-backfill index goes straight
-/// to Ready: its snapshot's keys no longer exist.
-pub(crate) fn on_flush(ctx: &Ctx<'_>, store: &mut Store) {
+/// to Ready: the keys it had left to walk no longer exist.
+pub(crate) fn on_flush(ctx: &Ctx<'_>) {
     let mut st = ctx.shard.indexes.borrow_mut();
-    refresh(ctx, &mut st, store);
+    refresh(ctx, &mut st);
     let st = &mut *st;
     for si in &mut st.idx {
         si.seg = new_scalar_seg(&si.spec);
@@ -155,9 +157,9 @@ pub(crate) fn on_flush(ctx: &Ctx<'_>, store: &mut Store) {
 
 /// Served from the generation cache: an idle store recomputes
 /// nothing.
-pub(crate) fn reserved_bytes(ctx: &Ctx<'_>, store: &mut Store) -> u64 {
+pub(crate) fn reserved_bytes(ctx: &Ctx<'_>) -> u64 {
     let mut st = ctx.shard.indexes.borrow_mut();
-    refresh(ctx, &mut st, store);
+    refresh(ctx, &mut st);
     if !st.stats_dirty {
         return st.reserved_cache;
     }
@@ -182,12 +184,11 @@ pub(crate) fn reserved_bytes(ctx: &Ctx<'_>, store: &mut Store) -> u64 {
 /// first) or still backfilling. Wired to IDX.QUERY fan-out in step 2b.
 pub(crate) fn with_ready_segment<R>(
     ctx: &Ctx<'_>,
-    store: &mut Store,
     name: &[u8],
     f: impl FnOnce(&IndexSpec, &Segment, Option<&kevy_window::WindowRt>) -> R,
 ) -> Result<R, CmdError> {
     let mut st = ctx.shard.indexes.borrow_mut();
-    refresh(ctx, &mut st, store);
+    refresh(ctx, &mut st);
     let si = st.idx.iter().find(|si| si.spec.name() == name).ok_or("ERR no such index")?;
     // an owner of a global index answers once every shard has sent its
     // rows' entries (its own among them), whatever its own backfill's state
@@ -197,7 +198,7 @@ pub(crate) fn with_ready_segment<R>(
         (Some(_), _) | (None, BuildState::Ready) => {
             Ok(f(&si.spec, si.entries(), si.window.as_ref()))
         }
-        (None, BuildState::Backfilling { .. }) => building,
+        (None, BuildState::Backfilling(_)) => building,
         (None, BuildState::FailedOverBudget) => {
             Err(CmdError::Wire("INDEXOVERBUDGET index build exceeded MAXMEM"))
         }
@@ -207,16 +208,15 @@ pub(crate) fn with_ready_segment<R>(
 /// Run `f` against a READY aggregate segment.
 pub(crate) fn with_ready_agg<R>(
     ctx: &Ctx<'_>,
-    store: &mut Store,
     name: &[u8],
     f: impl FnOnce(&kevy_index::AggSegment) -> R,
 ) -> Result<R, CmdError> {
     let mut st = ctx.shard.indexes.borrow_mut();
-    refresh(ctx, &mut st, store);
+    refresh(ctx, &mut st);
     let si = st.idx.iter().find(|si| si.spec.name() == name).ok_or("ERR no such index")?;
     match (&si.build, &si.agg) {
         (BuildState::Ready, Some(a)) => Ok(f(a)),
-        (BuildState::Backfilling { .. }, _) => {
+        (BuildState::Backfilling(_), _) => {
             Err(CmdError::Wire("INDEXBUILDING index is still building"))
         }
         (BuildState::FailedOverBudget, _) => {
@@ -229,16 +229,15 @@ pub(crate) fn with_ready_agg<R>(
 /// Run `f` against a READY ANN graph (mutable for REBUILD).
 pub(crate) fn with_ready_ann<R>(
     ctx: &Ctx<'_>,
-    store: &mut Store,
     name: &[u8],
     f: impl FnOnce(&mut kevy_vector::Hnsw) -> R,
 ) -> Result<R, CmdError> {
     let mut st = ctx.shard.indexes.borrow_mut();
-    refresh(ctx, &mut st, store);
+    refresh(ctx, &mut st);
     let si = st.idx.iter_mut().find(|si| si.spec.name() == name).ok_or("ERR no such index")?;
     match (&si.build, &mut si.ann) {
         (BuildState::Ready, Some(g)) => Ok(f(g)),
-        (BuildState::Backfilling { .. }, _) => {
+        (BuildState::Backfilling(_), _) => {
             Err(CmdError::Wire("INDEXBUILDING index is still building"))
         }
         (BuildState::FailedOverBudget, _) => {
@@ -261,11 +260,11 @@ pub(crate) fn with_ready_text_segment<R>(
     ) -> R,
 ) -> Result<R, CmdError> {
     let mut st = ctx.shard.indexes.borrow_mut();
-    refresh(ctx, &mut st, store);
+    refresh(ctx, &mut st);
     let si = st.idx.iter().find(|si| si.spec.name() == name).ok_or("ERR no such index")?;
     match (&si.build, &si.text) {
         (BuildState::Ready, Some(ts)) => Ok(f(store, ts, &si.spec, si.cold_text.as_ref())),
-        (BuildState::Backfilling { .. }, _) => {
+        (BuildState::Backfilling(_), _) => {
             Err(CmdError::Wire("INDEXBUILDING index is still building"))
         }
         (BuildState::FailedOverBudget, _) => {
@@ -280,11 +279,10 @@ pub(crate) fn with_ready_text_segment<R>(
 /// segments resolve to None.
 pub(crate) fn with_segment_resolver<R>(
     ctx: &Ctx<'_>,
-    store: &mut Store,
     f: impl for<'s> FnOnce(&'s dyn Fn(&[u8]) -> Option<&'s Segment>) -> R,
 ) -> R {
     let mut st = ctx.shard.indexes.borrow_mut();
-    refresh(ctx, &mut st, store);
+    refresh(ctx, &mut st);
     let idx = &st.idx;
     // a view probes the rows of this shard, which a global index's
     // entries are not: it resolves to nothing, and the view refuses it
@@ -301,17 +299,16 @@ pub(crate) fn with_segment_resolver<R>(
 /// [`with_ready_segment`] would double-borrow the shard's index list).
 pub(crate) fn with_two_ready_segments<R>(
     ctx: &Ctx<'_>,
-    store: &mut Store,
     a: &[u8],
     b: &[u8],
     f: impl FnOnce(&IndexSpec, &Segment, &IndexSpec, &Segment) -> R,
 ) -> Result<R, CmdError> {
     let mut st = ctx.shard.indexes.borrow_mut();
-    refresh(ctx, &mut st, store);
+    refresh(ctx, &mut st);
     let ia = st.idx.iter().position(|si| si.spec.name() == a).ok_or("ERR no such index")?;
     let ib = st.idx.iter().position(|si| si.spec.name() == b).ok_or("ERR no such index")?;
     for i in [ia, ib] {
-        if matches!(st.idx[i].build, BuildState::Backfilling { .. }) {
+        if matches!(st.idx[i].build, BuildState::Backfilling(_)) {
             return Err(CmdError::Wire("INDEXBUILDING index is still building"));
         }
         // intersecting per shard needs both entries of a row on the row's shard
@@ -325,21 +322,21 @@ pub(crate) fn with_two_ready_segments<R>(
 
 /// The placement table's bytes of global index `name` on this shard (0 for
 /// a local index): IDX.LIST adds it to the entries' bytes.
-pub(crate) fn placed_bytes(ctx: &Ctx<'_>, store: &mut Store, name: &[u8]) -> u64 {
+pub(crate) fn placed_bytes(ctx: &Ctx<'_>, name: &[u8]) -> u64 {
     let mut st = ctx.shard.indexes.borrow_mut();
-    refresh(ctx, &mut st, store);
+    refresh(ctx, &mut st);
     let si = st.idx.iter().find(|si| si.spec.name() == name);
     si.and_then(|si| si.global.as_ref()).map_or(0, |g| g.placed_bytes())
 }
 
 /// Whether this shard's slice of `name` is still backfilling.
-pub(crate) fn segment_building(ctx: &Ctx<'_>, store: &mut Store, name: &[u8]) -> bool {
+pub(crate) fn segment_building(ctx: &Ctx<'_>, name: &[u8]) -> bool {
     let mut st = ctx.shard.indexes.borrow_mut();
-    refresh(ctx, &mut st, store);
+    refresh(ctx, &mut st);
     st.idx.iter().find(|si| si.spec.name() == name).is_some_and(|si| match &si.global {
         // an owner waits for every shard; its own rows are one of them
         Some(g) => !g.ready(),
-        None => matches!(si.build, BuildState::Backfilling { .. }),
+        None => matches!(si.build, BuildState::Backfilling(_)),
     })
 }
 
@@ -394,7 +391,7 @@ fn new_text_seg(spec: &kevy_index::IndexSpec) -> Option<kevy_text::TextSegment> 
 /// Reconcile this shard's segment list with the shared catalog:
 /// keep segments whose spec is unchanged, start backfills for new
 /// ones, drop removed ones.
-fn refresh(ctx: &Ctx<'_>, st: &mut ShardIndexes, store: &mut Store) {
+fn refresh(ctx: &Ctx<'_>, st: &mut ShardIndexes) {
     let catalogs = &ctx.state.catalogs;
     let (shard, n) = (ctx.shard.shard_id(), ctx.state.nshards());
     let generation = catalogs.index_gen();
@@ -431,7 +428,7 @@ fn refresh(ctx: &Ctx<'_>, st: &mut ShardIndexes, store: &mut Store) {
                     next.push(si);
                 }
                 None => {
-                    let mut si = fresh_shard_index(catalogs, spec, store);
+                    let mut si = fresh_shard_index(catalogs, spec);
                     si.global = part
                         .is_global()
                         .then(|| global::GlobalRole::new(spec, part, (shard, n), inc));
@@ -457,13 +454,10 @@ impl ShardIndex {
     }
 }
 
-/// A just-declared index's runtime entry. Snapshots the domain's keys
-/// on THIS shard for the backfill; live writes from now on hit the
-/// hook first and win.
-fn fresh_shard_index(catalogs: &CatalogState, spec: &IndexSpec, store: &mut Store) -> ShardIndex {
-    let mut pat = spec.prefix().to_vec();
-    pat.push(b'*');
-    let keys = store.collect_keys(Some(&pat), None);
+/// A just-declared index's runtime entry. Its backfill walks the
+/// domain's keys on THIS shard; live writes from now on hit the hook
+/// first and win.
+fn fresh_shard_index(catalogs: &CatalogState, spec: &IndexSpec) -> ShardIndex {
     ShardIndex {
         agg: (spec.kind() == kevy_index::IndexKind::Agg).then(kevy_index::AggSegment::new),
         text: new_text_seg(spec),
@@ -473,7 +467,7 @@ fn fresh_shard_index(catalogs: &CatalogState, spec: &IndexSpec, store: &mut Stor
         cold_text: text_window_for(catalogs, spec).then(TextColdDir::new),
         global: None,
         spec: spec.clone(),
-        build: BuildState::Backfilling { keys, pos: 0 },
+        build: BuildState::Backfilling(KeyWalk::new(spec.prefix())),
     }
 }
 

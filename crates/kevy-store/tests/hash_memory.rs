@@ -8,14 +8,14 @@
 //! the harness's other threads do not leak into a measurement.
 //!
 //! The key is short enough to live inline and a string key is written
-//! first, so the keyspace table is already allocated: what moves between
-//! two readings is the hash and nothing else, and `used_memory` must move
-//! by exactly that (plus the entry's fixed overhead when the key is new).
+//! first, so the keyspace table is already allocated and has room: what
+//! moves between two readings is the hash and nothing else, and
+//! `used_memory` must move by exactly that.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
-use kevy_store::{ENTRY_OVERHEAD, SetCondition, Store};
+use kevy_store::{SetCondition, Store};
 
 thread_local! {
     static COUNTING: Cell<bool> = const { Cell::new(false) };
@@ -99,7 +99,7 @@ fn one_hset(fields: usize, value_len: usize, long: bool) -> i64 {
     let (held, charged) = measure(&mut s, |s| {
         s.hset(b"h", &pairs).expect("a hash");
     });
-    charged - ENTRY_OVERHEAD as i64 - held
+    charged - held
 }
 
 #[test]
@@ -138,7 +138,7 @@ fn the_decomposition_row_weighs_1808() {
         s.hset(b"row:00000001", &pairs).expect("a hash");
     });
     assert_eq!(held, 1808);
-    assert_eq!(charged - ENTRY_OVERHEAD as i64, 1808);
+    assert_eq!(charged, 1808);
 }
 
 /// Field by field, up and back down, through every representation change:
@@ -152,9 +152,7 @@ fn every_write_moves_the_charge_by_what_it_moved_on_the_heap() {
         let mut drift = 0i64;
         let mut check = |s: &mut Store, what: &str, f: &mut dyn FnMut(&mut Store)| {
             let (held, charged) = measure(s, |s| f(s));
-            // the first write also creates the entry
-            let fixed = if what == "create" { ENTRY_OVERHEAD as i64 } else { 0 };
-            drift += charged - fixed - held;
+            drift += charged - held;
             assert_eq!(drift, 0, "{what}, {value_len}-byte values: charged {charged}, held {held}");
         };
         check(&mut s, "create", &mut |s| {
