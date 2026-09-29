@@ -411,17 +411,22 @@ impl crate::Store {
     /// lost, so its presence refuses the conversion outright and the row keeps
     /// the general form. Nothing here may drop a value.
     ///
+    /// `names` is the table's own list: the row points at it rather than at
+    /// a copy, so pass the same list for every row of a table.
+    ///
     /// ```
     /// use kevy_store::Store;
+    /// use kevy_store::packed_row::ColumnNames;
     /// let mut s = Store::new();
     /// s.hset(b"user:1", &[(b"id".as_slice(), b"7".as_slice()), (b"dept", b"eng")])?;
-    /// s.pack_row(b"user:1", &[b"id".to_vec(), b"name".to_vec(), b"dept".to_vec()]);
+    /// let table: ColumnNames = vec![b"id".to_vec(), b"name".to_vec(), b"dept".to_vec()].into();
+    /// s.pack_row(b"user:1", &table);
     /// // the representation changed; what the key answers did not
     /// assert_eq!(s.hget(b"user:1", b"dept")?, Some(&b"eng"[..]));
     /// assert_eq!(s.hlen(b"user:1")?, 2);
     /// # Ok::<(), kevy_store::StoreError>(())
     /// ```
-    pub fn pack_row(&mut self, key: &[u8], names: &[Vec<u8>]) {
+    pub fn pack_row(&mut self, key: &[u8], names: &ColumnNames) {
         if self.already_packed(key) {
             return;
         }
@@ -433,11 +438,22 @@ impl crate::Store {
             .iter()
             .map(|n| pairs.iter().find(|(f, _)| f == n).map(|(_, v)| v.as_slice()))
             .collect();
-        let shared: ColumnNames = names.to_vec().into();
-        let Some(row) = PackedRow::build(&shared, &cols) else { return };
+        let Some(row) = PackedRow::build(names, &cols) else { return };
+        self.share_shape(names);
         if let Some(e) = self.live_entry_mut(key) {
             e.value = crate::Value::PackedRow(row);
         }
         self.reweigh_entry(key);
+    }
+
+    /// Keep `names` among the shapes a row from the cold tier is rebuilt
+    /// on. A shape nothing but this list still holds belongs to no table
+    /// and no row any more, so it goes when a new one arrives.
+    pub(crate) fn share_shape(&mut self, names: &ColumnNames) {
+        if self.row_shapes.iter().any(|s| alloc::sync::Arc::ptr_eq(s, names)) {
+            return;
+        }
+        self.row_shapes.retain(|s| alloc::sync::Arc::strong_count(s) > 1);
+        self.row_shapes.push(names.clone());
     }
 }

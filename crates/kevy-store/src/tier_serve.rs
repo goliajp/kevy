@@ -178,7 +178,7 @@ mod enabled {
                 .vlog
                 .read(cref.vref())
                 .expect("tier: vlog read failed — per-boot spill file, this is a process bug");
-            crate::tier_codec::decode(cref.type_tag, payload)
+            crate::tier_codec::decode(cref.type_tag, payload, &self.row_shapes)
                 .expect("tier: cold record decode failed — process bug")
         }
 
@@ -200,7 +200,7 @@ mod enabled {
                 .read(c.vref())
                 .expect("tier: vlog read failed — per-boot spill file, this is a process bug");
             Some(
-                crate::tier_codec::decode(c.type_tag, payload)
+                crate::tier_codec::decode(c.type_tag, payload, &self.row_shapes)
                     .expect("tier: cold record decode failed — process bug"),
             )
         }
@@ -358,7 +358,7 @@ mod enabled {
                     .file
                     .decompress(&frame)
                     .expect("tier: cold record decompress failed — process bug");
-                let value = crate::tier_codec::decode(cref.type_tag, payload)
+                let value = crate::tier_codec::decode(cref.type_tag, payload, &self.row_shapes)
                     .expect("tier: cold record decode failed — process bug");
                 let Value::Hash(h) = &value else {
                     unreachable!("hash-tagged record decodes to a hash")

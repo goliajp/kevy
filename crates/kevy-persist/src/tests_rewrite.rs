@@ -695,7 +695,7 @@ fn rewrite_writes_a_packed_row_and_an_integer_score_back() {
         &[(b"id".as_slice(), b"7".as_slice()), (b"name".as_slice(), b"ann".as_slice())],
     )
     .unwrap();
-    src.pack_row(b"row", &[b"id".to_vec(), b"name".to_vec()]);
+    src.pack_row(b"row", &vec![b"id".to_vec(), b"name".to_vec()].into());
     // an integer-valued score is written in its integer form
     src.zadd(b"z", &[(3.0, b"a".as_slice()), (-2.5, b"b".as_slice())]).unwrap();
     let mut aof = Aof::open(&path, Fsync::Always).unwrap();

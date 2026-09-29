@@ -197,3 +197,56 @@ fn a_sharded_hash_is_charged_what_it_holds() {
         }
     }
 }
+
+/// Packing converts a row to one buffer that points at its table's column
+/// names; the names are the table's, held once, so the row is charged the
+/// buffer and its box and must hold nothing more.
+#[test]
+fn packing_a_row_is_charged_what_it_holds() {
+    let names: kevy_store::packed_row::ColumnNames = vec![
+        b"id".to_vec(),
+        b"status".to_vec(),
+        b"score".to_vec(),
+        b"ts".to_vec(),
+        b"pad".to_vec(),
+    ]
+    .into();
+    let mut s = store();
+    s.set_packed_rows(true);
+    let pad = vec![b'p'; 900];
+    let pairs: [(&[u8], &[u8]); 5] = [
+        (b"id", b"123"),
+        (b"status", b"active"),
+        (b"score", b"42"),
+        (b"ts", b"1700000000"),
+        (b"pad", &pad),
+    ];
+    // the first row of a table also registers its shape with the store,
+    // once per table rather than per row
+    s.hset(b"first", &pairs).expect("a hash");
+    s.pack_row(b"first", &names);
+    s.hset(b"row", &pairs).expect("a hash");
+    let (held, charged) = measure(&mut s, |s| s.pack_row(b"row", &names));
+    assert!(s.is_packed(b"row"));
+    assert_eq!(charged, held, "packing moved the heap by {held} and the charge by {charged}");
+}
+
+/// A write a packed row cannot hold turns it back into a general hash
+/// first; the entry is reweighed then, and the write must not be charged a
+/// second time on top.
+#[test]
+fn leaving_the_packed_form_is_charged_once() {
+    let names: kevy_store::packed_row::ColumnNames = vec![b"id".to_vec(), b"pad".to_vec()].into();
+    let mut s = store();
+    s.set_packed_rows(true);
+    let pad = vec![b'p'; 300];
+    s.hset(b"row", &[(b"id".as_slice(), b"1".as_slice()), (b"pad", &pad)]).expect("a hash");
+    s.pack_row(b"row", &names);
+    assert!(s.is_packed(b"row"));
+    let (held, charged) = measure(&mut s, |s| {
+        s.hset(b"row", &[(b"id".as_slice(), b"2".as_slice()), (b"undeclared", &pad)])
+            .expect("a hash");
+    });
+    assert!(!s.is_packed(b"row"));
+    assert_eq!(charged, held);
+}
