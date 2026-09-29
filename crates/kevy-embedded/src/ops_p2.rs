@@ -43,21 +43,35 @@ impl Store {
         self.wshard(key).store.hkeys(key).map_err(store_err)
     }
 
-    /// `HRANDFIELD key count [WITHVALUES]` — random fields, distinct for a
+    /// `HRANDFIELD key count` — random field names, distinct for a
     /// positive count and with repeats allowed for a negative one.
-    pub fn hrandfield(
+    ///
+    /// ```
+    /// let s = kevy_embedded::Store::open(kevy_embedded::Config::default())?;
+    /// s.hset(b"h", &[(b"f1", b"v1"), (b"f2", b"v2")])?;
+    /// assert_eq!(s.hrandfield(b"h", 5)?.len(), 2);
+    /// assert_eq!(s.hrandfield(b"h", -5)?.len(), 5);
+    /// # Ok::<(), kevy_embedded::KevyError>(())
+    /// ```
+    pub fn hrandfield(&self, key: &[u8], count: i64) -> KevyResult<Vec<Vec<u8>>> {
+        self.wshard(key).store.hrandfield(key, count).map_err(store_err)
+    }
+
+    /// `HRANDFIELD key count WITHVALUES` — [`Self::hrandfield`] with each
+    /// field paired with its value.
+    ///
+    /// ```
+    /// let s = kevy_embedded::Store::open(kevy_embedded::Config::default())?;
+    /// s.hset(b"h", &[(b"f", b"v")])?;
+    /// assert_eq!(s.hrandfield_with_values(b"h", 1)?, vec![(b"f".to_vec(), b"v".to_vec())]);
+    /// # Ok::<(), kevy_embedded::KevyError>(())
+    /// ```
+    pub fn hrandfield_with_values(
         &self,
         key: &[u8],
         count: i64,
-        with_values: bool,
     ) -> KevyResult<kevy_store::FieldValuePairs> {
-        let mut g = self.wshard(key);
-        if with_values {
-            g.store.hrandfield_with_values(key, count).map_err(store_err)
-        } else {
-            let fields = g.store.hrandfield(key, count).map_err(store_err)?;
-            Ok(fields.into_iter().map(|f| (f, Vec::new())).collect())
-        }
+        self.wshard(key).store.hrandfield_with_values(key, count).map_err(store_err)
     }
 
     /// `HVALS key` — every value in `key`'s hash.

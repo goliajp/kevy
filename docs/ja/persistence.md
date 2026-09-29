@@ -140,7 +140,7 @@ v1フォーマットのログはレコードのエンベロープを持たず、
 | 自動リライトの最小サイズ | `auto_aof_rewrite_min_size` | `with_auto_aof_rewrite(pct, min)`の第2引数 | `67108864`（64 MiB） | 両方の閾値を満たしたときだけ成長ルールが発火。 |
 | 自動リライトの絶対上限 | `auto_aof_rewrite_bytes` | `with_auto_rewrite_bytes(n)` | `0`（無効） | 独立トリガ：AOFが`n`バイトを超えたら成長率に関係なくリライト。ライブ調整可（`CONFIG SET auto-aof-rewrite-bytes`）。 |
 | 自動リライトの経過時間 | `auto_aof_rewrite_interval_secs` | `with_auto_rewrite_interval(d)` | `0`（無効） | 独立トリガ：前回リライトからこの時間が経過し、かつログが成長していたらリライト。ライブ調整可。 |
-| resyncリプレイ | `replay_resync`（`[persistence]`） | `with_replay_resync(true)` | `false`（strict） | 起動時のみ。ファイル中央の破損領域で止まらず、その後ろの無事な尾部を復旧する——resyncの節を参照。 |
+| resyncリプレイ | `replay_resync`（`[persistence]`） | `with_replay_mode(ReplayMode::Resync)` | `false`（strict） | 起動時のみ。ファイル中央の破損領域で止まらず、その後ろの無事な尾部を復旧する——resyncの節を参照。 |
 | 永続化ディレクトリ | `data_dir` / 環境変数`KEVY_DIR` | `with_persist(path)` | サーバーは`./data`、組み込みはなし | kevyインスタンスごとに1ディレクトリ。 |
 | リアクター/リーパー周期 | reactor tick、約100ms | バックグラウンドリーパー、または`Store::tick`の呼び出し | 約100ms | `EverySec`のfsync、`No`のバッファ書き出し、自動リライトのチェック、TTLエビクションを駆動。 |
 
@@ -362,7 +362,7 @@ TTLがあるはずなのに`expire_pending_count() == 0`が返るなら、それ
 replay_resync = true
 ```
 
-（組み込みは`Config::with_replay_resync(true)`、手組みのruntimeは`Runtime::with_replay_resync(true)`。設定は起動時のみ——リプレイは最初のライブ設定tickより先に走ります。）
+（組み込みは`Config::with_replay_mode(ReplayMode::Resync)`、手組みのruntimeは`Runtime::with_replay_mode(ReplayMode::Resync)`。設定は起動時のみ——リプレイは最初のライブ設定tickより先に走ります。）
 
 resyncの下では、リプレイは破損領域を跳び越えます：長さ接頭辞・CRC・ちょうど1個の整形式コマンドの解析、の三つが同時に一致する位置まで前方スキャンし（偽の受理には三つ全部を欺く必要があります——候補オフセットあたり約2⁻³²）、そこから適用を再開します。スキップした範囲はすべて報告されます——persist層の`ReplayReport::resynced_ranges`、`Store::open_report()`の`OpenReport::resynced_bytes`——そして`corrupt`フラグは立ったままです：resyncはデータを復旧しますが、ファイルが健全だと宣言はしません。
 

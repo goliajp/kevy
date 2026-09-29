@@ -179,7 +179,7 @@ fn open_live_aofs(
                 Aof::open_after_replay(
                     &layout::aof_path(dir, i),
                     config.appendfsync,
-                    config.replay_mode(),
+                    config.replay_mode,
                     whole,
                 )
                 .map(Some)

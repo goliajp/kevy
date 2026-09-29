@@ -23,7 +23,16 @@ pub struct Snapshot {
 }
 
 /// One entry from [`Snapshot::each_prefix`] / [`Snapshot::keys_prefix`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// ```
+/// let s = kevy_embedded::Store::open(kevy_embedded::Config::default())?;
+/// s.set(b"u:1", b"a")?;
+/// let entries = s.snapshot().keys_prefix(b"u:");
+/// assert_eq!((entries[0].key.as_slice(), entries[0].ttl_ms), (&b"u:1"[..], None));
+/// # Ok::<(), kevy_embedded::KevyError>(())
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct SnapshotEntry {
     /// The key.
     pub key: Vec<u8>,

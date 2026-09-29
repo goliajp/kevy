@@ -79,6 +79,7 @@ dependencies = [
 name = "kevy-persist"
 version = "6.4.0"
 dependencies = [
+ "kevy-replicate",
  "kevy-resp",
  "kevy-store",
  "kevy-sys",

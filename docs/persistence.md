@@ -170,7 +170,7 @@ whose writes are single-shard by construction.
 | Auto-rewrite minimum size | `auto_aof_rewrite_min_size` | second arg of `with_auto_aof_rewrite(pct, min)` | `67108864` (64 MiB) | The growth rule fires only when both thresholds are met. |
 | Auto-rewrite absolute cap | `auto_aof_rewrite_bytes` | `with_auto_rewrite_bytes(n)` | `0` (off) | Independent trigger: rewrite whenever the AOF exceeds `n` bytes, regardless of growth ratio. Live-tunable (`CONFIG SET auto-aof-rewrite-bytes`). |
 | Auto-rewrite staleness | `auto_aof_rewrite_interval_secs` | `with_auto_rewrite_interval(d)` | `0` (off) | Independent trigger: rewrite when this long has passed since the last rewrite AND the log has grown since. Live-tunable. |
-| Resync replay | `replay_resync` (`[persistence]`) | `with_replay_resync(true)` | `false` (strict) | Boot-time only. Recovers the good tail behind a mid-file corrupt region instead of stopping at it — see the resync section. |
+| Resync replay | `replay_resync` (`[persistence]`) | `with_replay_mode(ReplayMode::Resync)` | `false` (strict) | Boot-time only. Recovers the good tail behind a mid-file corrupt region instead of stopping at it — see the resync section. |
 | Persistence directory | `data_dir` / env `KEVY_DIR` | `with_persist(path)` | `./data` (server); none (embedded) | One directory per kevy instance. |
 | Reactor / reaper cadence | reactor tick, ~100 ms | background reaper, or your `Store::tick` calls | ~100 ms | Drives the `EverySec` fsync, the `No` buffer write, auto-rewrite checks, TTL eviction. |
 
@@ -518,8 +518,8 @@ it surrenders data that is provably intact.
 replay_resync = true
 ```
 
-(or `Config::with_replay_resync(true)` embedded, or
-`Runtime::with_replay_resync(true)` on a hand-built runtime; the
+(or `Config::with_replay_mode(ReplayMode::Resync)` embedded, or
+`Runtime::with_replay_mode(ReplayMode::Resync)` on a hand-built runtime; the
 setting is boot-time only — replay happens before the first live
 config tick).
 

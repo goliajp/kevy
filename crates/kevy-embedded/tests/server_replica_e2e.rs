@@ -505,7 +505,7 @@ fn secure_embed_replica_of_secure_server(trusted: [u8; 32]) -> (Server, Store) {
         .without_aof()
         .with_replica_upstream(format!("127.0.0.1:{}", server.replication_base))
         .with_replica_reconnect(Duration::from_millis(50), Duration::from_millis(200))
-        .with_replica_security(LinkKeys { local: replica, peers: vec![trusted] });
+        .with_replica_security(LinkKeys::new(replica).with_peers(vec![trusted]));
     (server, Store::open(cfg).unwrap())
 }
 

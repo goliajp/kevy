@@ -28,7 +28,12 @@ use std::collections::HashSet;
 const MAX_SAMPLES: usize = 1000;
 
 /// The result of [`Snapshot::reconcile`].
-#[derive(Debug, Default, Clone)]
+///
+/// ```
+/// assert!(kevy_embedded::ReconcileReport::default().is_clean());
+/// ```
+#[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct ReconcileReport {
     /// Rows visited under the row prefix.
     pub rows: u64,

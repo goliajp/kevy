@@ -5,45 +5,10 @@
 use kevy_index::IndexSpec;
 
 use super::claused::{ValueFilter, unknown_field, value_test};
+pub(crate) use super::opts::MatchOpts;
 use super::{FieldSpans, HighlightedHit, sync_segs};
 use crate::store::{Store, lock_write};
 use crate::{KevyError, KevyResult};
-
-/// Everything a text MATCH carries beyond its index, query text and
-/// result limit — the embedded twin of the wire's optional clauses.
-///
-/// Grouping them keeps one entry point instead of one per clause, and
-/// [`MatchOpts::default`] is the plain query, so a caller opts into
-/// exactly the clauses it names.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct MatchOpts<'a> {
-    /// `HIGHLIGHT`: `None` = not requested, `Some(&[])` = every indexed
-    /// field, `Some(names)` = only those.
-    pub highlight: Option<&'a [Vec<u8>]>,
-    /// `TYPO n`: edit budget for each bare term; 0 = exact.
-    pub typo: u32,
-    /// `OFFSET n`: hits to skip before `limit` takes effect.
-    pub offset: usize,
-    /// `IN <field…>`: the declared field names to score within; empty =
-    /// the whole document.
-    pub scope: &'a [Vec<u8>],
-    /// `FILTER …`: non-scoring predicates over stored values, ANDed.
-    /// They decide which documents are eligible, not what a term is
-    /// worth, so the corpus statistics stay whole-corpus.
-    pub filters: &'a [ValueFilter<'a>],
-    /// `SORT <field> ASC|DESC`: select by a stored value instead of by
-    /// score. Selecting, not re-ordering — a document that wins on the
-    /// key is chosen even when its score would never have reached the
-    /// page.
-    pub sort: Option<(&'a [u8], bool)>,
-    /// `DISTINCT <field>`: at most one hit per value of a stored field,
-    /// applied during selection so the page holds `limit` distinct
-    /// documents rather than `limit` that then collapse.
-    pub distinct: Option<&'a [u8]>,
-    /// `FACET <field…>`: count each field's values over the whole match
-    /// set. Reported alongside the page rather than shaping it.
-    pub facets: &'a [Vec<u8>],
-}
 
 impl Store {
     /// [`Self::idx_match`] with every optional clause: highlight spans,
@@ -86,9 +51,9 @@ impl Store {
         let distinct =
             grouped.zip(dkey.as_ref()).map(|((field, _), k)| kevy_text::Distinct::new(field, k));
         let key = sorted.map(|(_, _, ty)| move |raw: &[u8]| kevy_index::order_key(ty, raw));
-        let sort = sorted.zip(key.as_ref()).map(|((field, desc, _), k)| {
-            kevy_text::Sort::new(field, k).with_order(sort_order(desc))
-        });
+        let sort = sorted
+            .zip(key.as_ref())
+            .map(|((field, order, _), k)| kevy_text::Sort::new(field, k).with_order(order));
         let boxed = box_tests(tests);
         let filter: Vec<kevy_text::Filter> =
             boxed.iter().map(|(f, t)| kevy_text::Filter::new(*f, t.as_ref())).collect();
@@ -224,10 +189,10 @@ impl Store {
         &self,
         name: &[u8],
         all: &mut Vec<HighlightedHit>,
-        sorted: Option<(usize, bool, kevy_index::ValType)>,
+        sorted: Option<(usize, kevy_index::SortOrder, kevy_index::ValType)>,
         cold_vals: &super::text_cold::ColdVals,
     ) {
-        let Some((field, desc, ty)) = sorted else {
+        let Some((field, order, ty)) = sorted else {
             all.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
             return;
         };
@@ -235,7 +200,6 @@ impl Store {
             .into_iter()
             .map(|h| (self.stored_order_key(name, &h.0, field, ty, cold_vals), h))
             .collect();
-        let order = sort_order(desc);
         keyed.sort_by(|a, b| {
             kevy_text::sorted_order((a.0.as_deref(), &a.1.0), (b.0.as_deref(), &b.1.0), order)
         });
@@ -269,13 +233,13 @@ impl Store {
     fn sort_field(
         &self,
         name: &[u8],
-        sort: Option<(&[u8], bool)>,
-    ) -> KevyResult<Option<(usize, bool, kevy_index::ValType)>> {
-        let Some((field, desc)) = sort else { return Ok(None) };
+        sort: Option<(&[u8], kevy_index::SortOrder)>,
+    ) -> KevyResult<Option<(usize, kevy_index::SortOrder, kevy_index::ValType)>> {
+        let Some((field, order)) = sort else { return Ok(None) };
         let Some((pos, ty)) = self.value_field("SORT", name, Some(field))? else {
             return Ok(None);
         };
-        Ok(Some((pos, desc, ty)))
+        Ok(Some((pos, order, ty)))
     }
 
     /// Each `FACET` field's position paired with the order-preserving
@@ -422,7 +386,19 @@ type RawBucket = (Vec<u8>, Vec<u8>, u64);
 
 /// A faceted query's answer: the page, and per requested `FACET` field
 /// its `(value, count)` buckets over the whole match set.
-#[derive(Debug)]
+///
+/// ```
+/// use kevy_embedded::{Config, MatchOpts, Store, TokenPositions};
+///
+/// let s = Store::open(Config::default())?;
+/// s.idx_create_text(b"ft", b"doc:", &[(b"body", 1.0)], TokenPositions::Omit, &[])?;
+/// s.hset(b"doc:1", &[(b"body", b"rust engine")])?;
+/// let page = s.idx_match_faceted(b"ft", b"rust", 10, MatchOpts::default())?;
+/// assert_eq!(page.hits.len(), 1);
+/// # Ok::<(), kevy_embedded::KevyError>(())
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct MatchPage {
     /// The ranked page — exactly what [`Store::idx_match_with`] returns.
     pub hits: Vec<HighlightedHit>,
@@ -484,9 +460,4 @@ fn hit_highlight(
             Some((name, ranges))
         })
         .collect()
-}
-
-/// The text crate's direction for a parsed `SORT … DESC` flag.
-fn sort_order(desc: bool) -> kevy_text::SortOrder {
-    if desc { kevy_text::SortOrder::Desc } else { kevy_text::SortOrder::Asc }
 }

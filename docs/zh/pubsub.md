@@ -105,20 +105,20 @@ run("kevy://prod-cache:6379")?;
 嵌入方代码手里已经有 `Store` 时，可以跳过 URL 这层间接，直接跟总线打交道：
 
 ```rust
-use kevy_embedded::{Config, PubsubFrame, Store};
+use kevy_embedded::{Config, PubsubEvent, Store};
 
 let store = Store::open(Config::default().with_ttl_reaper_manual())?;
 
 // Subscriber owns the receive queue.
 let sub = store.subscribe(&[b"jobs"]);
-let _ack = sub.recv()?; // PubsubFrame::Subscribe
+let _ack = sub.recv()?; // PubsubEvent::Subscribe
 
 // Any clone of `store` reaches the same bus.
 let writer = store.clone();
 assert_eq!(writer.publish(b"jobs", b"compute-pi"), 1);
 
 match sub.recv()? {
-    PubsubFrame::Message { channel, payload } => {
+    PubsubEvent::Message { channel, payload } => {
         assert_eq!(channel, b"jobs");
         assert_eq!(payload, b"compute-pi");
     }
