@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **kevy-alloc returns memory after it goes quiet, and its bookkeeping no
+  longer grows with the heap.** Each reclaim sweep handed back every free
+  page at once, so a buffer freed and reused a tick later was faulted back
+  in: with kevy-alloc as the global allocator, a server under steady load
+  took thousands of page faults a second. A page now goes back to the OS
+  only after it has been unused for `PURGE_DELAY` sweeps (about a second at
+  the default tick), and everything left over returns within that bound
+  once allocation stops. The allocator statistics a server reads every
+  tick were a walk over every span of the heap; they are running totals
+  now, which on a list growing to millions of elements was 15% of the
+  shard's time. The sweep visits only spans and segments that have work.
+
 - **A command pays less to reach the store.** Every write copied its key
   for the index hook before the hook checked whether any index exists,
   and read two thread-locals that only Lua scripts and nondeterministic
