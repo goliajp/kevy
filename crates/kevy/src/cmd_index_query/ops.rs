@@ -54,14 +54,7 @@ pub(super) fn op_match(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Ve
         // terms too — the reduce unions them across shards — and counts
         // over the query's field scope, so a scoped query's global
         // statistics describe those fields rather than whole documents.
-        let opts = kevy_text::QueryOpts {
-            stats: None,
-            typo: q.typo,
-            fields: &want,
-            filter: &[],
-            sort: None,
-            distinct: None,
-        };
+        let opts = kevy_text::QueryOpts::default().with_typo(q.typo).with_fields(&want);
         let (mut n_docs, mut total_len, mut tokdf) =
             (ts.docs(), ts.total_len_in(&want), ts.query_df_in(&q.text, opts));
         merge_cold_stats(cold, &mut n_docs, &mut total_len, &mut tokdf);

@@ -63,11 +63,12 @@ pub(crate) fn tier_floor_check(shards: &crate::store::Shards) -> crate::KevyResu
 /// positional side-channel when it asked for `WITH POSITIONS`.
 #[cfg(feature = "text")]
 pub(crate) fn new_text(spec: &IndexSpec) -> kevy_text::TextSegment {
-    kevy_text::TextSegment::with_shape(kevy_text::SegmentShape {
-        fields: spec.fields.len(),
-        positions: spec.with_positions,
-        values: spec.values.len(),
-    })
+    kevy_text::TextSegment::with_shape(
+        kevy_text::SegmentShape::default()
+            .with_fields(spec.fields.len())
+            .with_positions(spec.with_positions)
+            .with_values(spec.values.len()),
+    )
 }
 
 #[cfg(feature = "vector")]

@@ -21,7 +21,7 @@ pub use bm25::{BM25_B, BM25_K1};
 pub use segment::sorted_order;
 pub use segment::{
     Bucket, CorpusStats, Distinct, Facet, FacetedMatches, Filter, QueryOpts, SegmentShape, Sort,
-    TextMatch, TextSegment, TextStats,
+    SortOrder, TextMatch, TextSegment, TextStats,
 };
 pub use segment::{Clauses, parse_clauses};
 pub use token::{KevyTokenizer, Tokenizer, tokenize, tokenize_spans};

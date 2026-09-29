@@ -85,8 +85,7 @@ impl Store {
                 found = true;
                 n_docs += ts.docs() as f64;
                 total_len += ts.total_len_in(scope);
-                let opts =
-                    kevy_text::QueryOpts { typo, fields: scope, ..kevy_text::QueryOpts::default() };
+                let opts = kevy_text::QueryOpts::default().with_typo(typo).with_fields(scope);
                 let tokdf = ts.query_df_in(text, opts);
                 // The shard's frozen buckets are pass-1 contributors
                 // like any other shard — the server seam's mirror.
@@ -107,6 +106,6 @@ impl Store {
             return Err(KevyError::NotFound("no such text index".into()));
         }
         let avgdl = if n_docs > 0.0 { total_len as f64 / n_docs } else { 0.0 };
-        Ok(kevy_text::CorpusStats { n_docs, avgdl, df })
+        Ok(kevy_text::CorpusStats::new(n_docs, avgdl, df))
     }
 }

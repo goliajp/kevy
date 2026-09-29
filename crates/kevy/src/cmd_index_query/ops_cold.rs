@@ -147,7 +147,7 @@ fn merge_hits(
         Some(s) => kevy_text::sorted_order(
             (a.okey.as_deref(), &a.key),
             (b.okey.as_deref(), &b.key),
-            s.desc,
+            s.order,
         ),
         None => b
             .score
@@ -163,7 +163,7 @@ fn merge_hits(
         });
     }
     all.truncate(fetch);
-    *hits = all.into_iter().map(|m| kevy_text::TextMatch { key: m.key, score: m.score }).collect();
+    *hits = all.into_iter().map(|m| kevy_text::TextMatch::new(m.key, m.score)).collect();
 }
 
 /// Sum the cold facet counts into the hot ones by value identity —

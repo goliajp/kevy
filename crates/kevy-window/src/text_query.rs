@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 
 use kevy_text::cold::{decode_fwd, posting_df, score_cold, score_cold_phrase};
-use kevy_text::{CorpusStats, sorted_order};
+use kevy_text::{CorpusStats, SortOrder, sorted_order};
 
 use super::TextColdDir;
 
@@ -115,7 +115,7 @@ impl TextColdDir {
             cands.push(ColdHit { key, score, okey });
         }
         let facets = self.count_facets(q, &cands, &values);
-        order_page(&mut cands, q.sort.is_some(), q.sort.is_some_and(|s| s.desc));
+        order_page(&mut cands, q.sort.map(|s| s.order));
         if let Some(d) = q.distinct {
             collapse(&mut cands, d, &values);
         }
@@ -198,10 +198,10 @@ impl TextColdDir {
 /// Order candidates by the page's rule: `sorted_order` under SORT
 /// (a document WITH a value outranks one without, in both
 /// directions), else score-descending with the row key as tiebreak.
-fn order_page(cands: &mut [ColdHit], sorted: bool, desc: bool) {
-    if sorted {
+fn order_page(cands: &mut [ColdHit], sort: Option<SortOrder>) {
+    if let Some(order) = sort {
         cands.sort_by(|a, b| {
-            sorted_order((a.okey.as_deref(), &a.key), (b.okey.as_deref(), &b.key), desc)
+            sorted_order((a.okey.as_deref(), &a.key), (b.okey.as_deref(), &b.key), order)
         });
     } else {
         cands.sort_by(|a, b| {

@@ -347,6 +347,37 @@ pub type FxBuildHasher = BuildHasherDefault<FxHasher>;
 /// h.write_u64(0x0123_4567_89ab_cdef);
 /// assert_eq!(0x0123_4567_89ab_cdefu64.kevy_hash(), h.finish());
 /// ```
+///
+/// # Implementing it
+///
+/// The trait is open: `kevy-map` keys a map by any `K: KevyHash + Eq`, so
+/// a key type of your own implements it. An implementation must uphold:
+///
+/// * **Equal values hash equally.** `a == b` implies
+///   `a.kevy_hash() == b.kevy_hash()`, as with [`core::hash::Hash`].
+/// * **Borrowed forms agree.** If `K: Borrow<Q>` and a map of `K` is
+///   looked up by `&Q`, then `k.kevy_hash() == k.borrow().kevy_hash()` —
+///   the rule `Vec<u8>` and `[u8]` follow here.
+/// * **Every bit moves.** `kevy-map` takes the bucket from the low bits
+///   and a tag from the top seven, so a hash whose high bits barely vary
+///   degrades lookups to a scan. Finishing with [`fmix64`] gives this.
+///
+/// A hash that breaks the first two loses entries; one that breaks the
+/// third is slow but correct.
+///
+/// ```
+/// use kevy_hash::{KevyHash, fmix64};
+///
+/// #[derive(PartialEq, Eq)]
+/// struct Port(u16);
+///
+/// impl KevyHash for Port {
+///     fn kevy_hash(&self) -> u64 {
+///         fmix64(u64::from(self.0) | 1 << 32)
+///     }
+/// }
+/// assert_ne!(Port(1).kevy_hash(), Port(2).kevy_hash());
+/// ```
 pub trait KevyHash {
     /// Compute the final mixed 64-bit hash of `self` in one call.
     fn kevy_hash(&self) -> u64;
