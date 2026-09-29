@@ -28,6 +28,26 @@
 //! pump (the typed ops' `log_frame` path). A store that mixes `cmd` writes
 //! with the durability pump will not see those writes in its replay log.
 //! The typed KV surface remains the durable write path.
+//!
+//! ```
+//! use kevy_wasm::abi_core::*;
+//! use kevy_wasm::abi_cmd::*;
+//! # fn out(h: u32) -> Vec<u8> {
+//! #     // SAFETY: the result buffer stays valid until the next call on `h`.
+//! #     unsafe { std::slice::from_raw_parts(kevy_out_ptr(h), kevy_out_len(h) as usize) }.to_vec()
+//! # }
+//! # fn pack(args: &[&[u8]]) -> Vec<u8> {
+//! #     args.iter().flat_map(|a| (a.len() as u32).to_le_bytes().into_iter().chain(a.iter().copied())).collect()
+//! # }
+//! let h = kevy_open(0);
+//! for argv in [&[&b"SADD"[..], b"s", b"a", b"b"][..], &[b"SCARD", b"s"]] {
+//!     let packed = pack(argv);
+//!     // SAFETY: `packed` is readable for the call.
+//!     unsafe { kevy_cmd(h, packed.as_ptr(), packed.len() as u32) };
+//! }
+//! assert_eq!(out(h), b":2\r\n"); // a verb the typed surface does not have
+//! kevy_close(h);
+//! ```
 
 use crate::{BAD_HANDLE, ERR, Instance, arg, with};
 
@@ -45,6 +65,27 @@ use crate::{BAD_HANDLE, ERR, Instance, arg, with};
 /// handle. A verb-level failure
 /// (`-ERR …`, `WRONGTYPE …`) is a *successful* call whose reply bytes are
 /// a RESP error frame — not a `-1` status.
+///
+/// ```
+/// use kevy_wasm::abi_core::*;
+/// use kevy_wasm::abi_cmd::*;
+/// # fn out(h: u32) -> Vec<u8> {
+/// #     // SAFETY: the result buffer stays valid until the next call on `h`.
+/// #     unsafe { std::slice::from_raw_parts(kevy_out_ptr(h), kevy_out_len(h) as usize) }.to_vec()
+/// # }
+/// # fn pack(args: &[&[u8]]) -> Vec<u8> {
+/// #     args.iter().flat_map(|a| (a.len() as u32).to_le_bytes().into_iter().chain(a.iter().copied())).collect()
+/// # }
+/// let h = kevy_open(0);
+/// let packed = pack(&[b"HSET", b"user", b"name", b"ada"]);
+/// // SAFETY: `packed` is readable for the call.
+/// let n = unsafe { kevy_cmd(h, packed.as_ptr(), packed.len() as u32) };
+/// assert_eq!(n, 4);
+/// assert_eq!(out(h), b":1\r\n");
+/// // SAFETY: as above.
+/// assert_eq!(unsafe { kevy_cmd(h, packed.as_ptr(), 3) }, -1); // truncated argv
+/// kevy_close(h);
+/// ```
 ///
 /// # Safety
 ///
