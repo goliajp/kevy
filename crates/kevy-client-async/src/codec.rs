@@ -17,6 +17,20 @@
 //! `buf` for partial replies + one boxed chunk for reads). Pipelining
 //! reuses this same codec — `run_pipeline` writes N commands in one
 //! batch and reads N replies in sequence.
+//!
+//! ```
+//! # include!("doc_serve.rs");
+//! # #[tokio::main(flavor = "current_thread")]
+//! # async fn main() -> std::io::Result<()> {
+//! # let addr = serve(&[("SET k v", "+OK\r\n"), ("GET k", "$1\r\nv\r\n")]).await?;
+//! use kevy_client_async::AsyncRespCodec;
+//! use kevy_resp::Reply;
+//!
+//! let mut codec = AsyncRespCodec::new(tokio::net::TcpStream::connect(addr).await?);
+//! assert_eq!(codec.request_borrowed(&[b"SET", b"k", b"v"]).await?, Reply::Simple(b"OK".to_vec()));
+//! assert_eq!(codec.request_borrowed(&[b"GET", b"k"]).await?, Reply::Bulk(b"v".to_vec()));
+//! # Ok(()) }
+//! ```
 
 use std::io;
 
@@ -26,6 +40,19 @@ use kevy_resp_client::ReplyReadBuf;
 use crate::transport::{AsyncTransport, read, write_all};
 
 /// Buffered RESP3 codec over an [`AsyncTransport`].
+///
+/// ```
+/// # include!("doc_serve.rs");
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() -> std::io::Result<()> {
+/// # let addr = serve(&[("PING", "+PONG\r\n")]).await?;
+/// use kevy_client_async::AsyncRespCodec;
+/// use kevy_resp::Reply;
+///
+/// let mut codec = AsyncRespCodec::new(tokio::net::TcpStream::connect(addr).await?);
+/// assert_eq!(codec.request_borrowed(&[b"PING"]).await?, Reply::Simple(b"PONG".to_vec()));
+/// # Ok(()) }
+/// ```
 #[derive(Debug)]
 pub struct AsyncRespCodec<T> {
     transport: T,
@@ -42,6 +69,19 @@ impl<T: AsyncTransport> AsyncRespCodec<T> {
     /// Wrap a transport. Matches the blocking client's 8 KiB initial
     /// buffer capacity + 8 KiB read chunk — same memory footprint per
     /// connection as `RespClient`.
+    ///
+    /// ```
+    /// # include!("doc_serve.rs");
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> std::io::Result<()> {
+    /// # let addr = serve(&[("DBSIZE", ":0\r\n")]).await?;
+    /// use kevy_client_async::AsyncRespCodec;
+    /// use kevy_resp::Reply;
+    ///
+    /// let mut codec = AsyncRespCodec::new(tokio::net::TcpStream::connect(addr).await?);
+    /// assert_eq!(codec.request_borrowed(&[b"DBSIZE"]).await?, Reply::Int(0));
+    /// # Ok(()) }
+    /// ```
     pub fn new(transport: T) -> Self {
         Self {
             transport,
@@ -53,6 +93,19 @@ impl<T: AsyncTransport> AsyncRespCodec<T> {
 
     /// Get the underlying transport back (e.g. to swap it or close it
     /// explicitly).
+    ///
+    /// ```
+    /// # include!("doc_serve.rs");
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> std::io::Result<()> {
+    /// # let addr = serve(&[]).await?;
+    /// use kevy_client_async::AsyncRespCodec;
+    ///
+    /// let codec = AsyncRespCodec::new(tokio::net::TcpStream::connect(addr).await?);
+    /// let tcp = codec.into_inner();
+    /// assert_eq!(tcp.peer_addr()?, addr);
+    /// # Ok(()) }
+    /// ```
     pub fn into_inner(self) -> T {
         self.transport
     }
@@ -64,6 +117,20 @@ impl<T: AsyncTransport> AsyncRespCodec<T> {
     /// `&[&[u8]]` (a stack-allocated slice array) and skips the per-call
     /// `Vec<Vec<u8>>` argv heap allocations. This form remains for
     /// callers that already own `Vec<u8>` argvs.
+    ///
+    /// ```
+    /// # include!("doc_serve.rs");
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> std::io::Result<()> {
+    /// # let addr = serve(&[("SET k v", "+OK\r\n")]).await?;
+    /// use kevy_client_async::AsyncRespCodec;
+    /// use kevy_resp::Reply;
+    ///
+    /// let mut codec = AsyncRespCodec::new(tokio::net::TcpStream::connect(addr).await?);
+    /// let argv = vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()];
+    /// assert_eq!(codec.request(&argv).await?, Reply::Simple(b"OK".to_vec()));
+    /// # Ok(()) }
+    /// ```
     pub async fn request(&mut self, args: &[Vec<u8>]) -> io::Result<Reply> {
         self.send(args).await?;
         self.read_reply().await
@@ -73,6 +140,22 @@ impl<T: AsyncTransport> AsyncRespCodec<T> {
     /// `&[b"SET", key, value]` (a stack array of borrowed slices) and the
     /// only allocation is the one-time growth of `self.write_buf`. Async
     /// mirror of `RespClient::request_borrowed`.
+    ///
+    /// ```
+    /// # include!("doc_serve.rs");
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> std::io::Result<()> {
+    /// # let addr = serve(&[("GET k", "$-1\r\n"), ("NOSUCH", "-ERR unknown command\r\n")]).await?;
+    /// use kevy_client_async::AsyncRespCodec;
+    /// use kevy_resp::Reply;
+    ///
+    /// let mut codec = AsyncRespCodec::new(tokio::net::TcpStream::connect(addr).await?);
+    /// assert_eq!(codec.request_borrowed(&[b"GET", b"k"]).await?, Reply::Nil);
+    /// // a server-side error is a reply, not an `Err`
+    /// let reply = codec.request_borrowed(&[b"NOSUCH"]).await?;
+    /// assert_eq!(reply, Reply::Error(b"ERR unknown command".to_vec()));
+    /// # Ok(()) }
+    /// ```
     pub async fn request_borrowed(&mut self, args: &[&[u8]]) -> io::Result<Reply> {
         self.send_borrowed(args).await?;
         self.read_reply().await
@@ -82,6 +165,20 @@ impl<T: AsyncTransport> AsyncRespCodec<T> {
     /// Used by [`crate::subscriber::AsyncSubscriber`]: SUBSCRIBE / PSUBSCRIBE etc.
     /// don't return replies in the conventional sense — the server
     /// pushes ack frames that are drained later by `read_reply`.
+    ///
+    /// ```
+    /// # include!("doc_serve.rs");
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> std::io::Result<()> {
+    /// # let addr = serve(&[("PING", "+PONG\r\n")]).await?;
+    /// use kevy_client_async::AsyncRespCodec;
+    /// use kevy_resp::Reply;
+    ///
+    /// let mut codec = AsyncRespCodec::new(tokio::net::TcpStream::connect(addr).await?);
+    /// codec.send(&[b"PING".to_vec()]).await?;
+    /// assert_eq!(codec.read_reply().await?, Reply::Simple(b"PONG".to_vec()));
+    /// # Ok(()) }
+    /// ```
     pub async fn send(&mut self, args: &[Vec<u8>]) -> io::Result<()> {
         self.write_buf.clear();
         encode_command(&mut self.write_buf, args);
@@ -91,6 +188,20 @@ impl<T: AsyncTransport> AsyncRespCodec<T> {
 
     /// Zero-allocation [`Self::send`] — argv is `&[&[u8]]`. Encodes into
     /// the reused `write_buf`, no per-call argv or output allocation.
+    ///
+    /// ```
+    /// # include!("doc_serve.rs");
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> std::io::Result<()> {
+    /// # let addr = serve(&[("INCR n", ":1\r\n")]).await?;
+    /// use kevy_client_async::AsyncRespCodec;
+    /// use kevy_resp::Reply;
+    ///
+    /// let mut codec = AsyncRespCodec::new(tokio::net::TcpStream::connect(addr).await?);
+    /// codec.send_borrowed(&[b"INCR", b"n"]).await?;
+    /// assert_eq!(codec.read_reply().await?, Reply::Int(1));
+    /// # Ok(()) }
+    /// ```
     pub async fn send_borrowed(&mut self, args: &[&[u8]]) -> io::Result<()> {
         self.write_buf.clear();
         encode_command_borrowed(&mut self.write_buf, args);
@@ -101,6 +212,23 @@ impl<T: AsyncTransport> AsyncRespCodec<T> {
     /// Drain one parsed reply from the read buffer, reading more bytes
     /// from the transport as needed. The pipeline runner calls this N
     /// times after a single batched write.
+    ///
+    /// ```
+    /// # include!("doc_serve.rs");
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> std::io::Result<()> {
+    /// # let addr = serve(&[("INCR n", ":1\r\n"), ("INCR n", ":2\r\n")]).await?;
+    /// use kevy_client_async::AsyncRespCodec;
+    /// use kevy_resp::Reply;
+    ///
+    /// let mut codec = AsyncRespCodec::new(tokio::net::TcpStream::connect(addr).await?);
+    /// // write two commands, then collect both replies in order
+    /// codec.send_borrowed(&[b"INCR", b"n"]).await?;
+    /// codec.send_borrowed(&[b"INCR", b"n"]).await?;
+    /// assert_eq!(codec.read_reply().await?, Reply::Int(1));
+    /// assert_eq!(codec.read_reply().await?, Reply::Int(2));
+    /// # Ok(()) }
+    /// ```
     pub async fn read_reply(&mut self) -> io::Result<Reply> {
         // Destructure so the loop can borrow `transport` and `chunk`
         // disjointly from `buf`.
@@ -127,6 +255,24 @@ impl<T: AsyncTransport> AsyncRespCodec<T> {
     /// Send N commands as one write batch (pipelining), then read N
     /// replies in declaration order. Single network round-trip if the
     /// transport supports it.
+    ///
+    /// ```
+    /// # include!("doc_serve.rs");
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> std::io::Result<()> {
+    /// # let addr = serve(&[("SET k v", "+OK\r\n"), ("GET k", "$1\r\nv\r\n")]).await?;
+    /// use kevy_client_async::AsyncRespCodec;
+    /// use kevy_resp::Reply;
+    ///
+    /// let mut codec = AsyncRespCodec::new(tokio::net::TcpStream::connect(addr).await?);
+    /// let batch = [
+    ///     vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()],
+    ///     vec![b"GET".to_vec(), b"k".to_vec()],
+    /// ];
+    /// let replies = codec.pipeline(&batch).await?;
+    /// assert_eq!(replies, [Reply::Simple(b"OK".to_vec()), Reply::Bulk(b"v".to_vec())]);
+    /// # Ok(()) }
+    /// ```
     pub async fn pipeline(&mut self, batch: &[Vec<Vec<u8>>]) -> io::Result<Vec<Reply>> {
         self.write_buf.clear();
         for args in batch {

@@ -153,6 +153,29 @@ impl Write for ClientStream {
 ///
 /// Holds the stream plus an incremental read buffer so multi-segment replies
 /// reassemble across `read` calls. Not `Sync`; one client per thread.
+///
+/// ```
+/// use kevy_resp_client::{Reply, RespClient};
+/// # fn mock(replies: &'static [&'static [u8]]) -> u16 {
+/// #     let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+/// #     let port = l.local_addr().unwrap().port();
+/// #     std::thread::spawn(move || {
+/// #         let (mut s, _) = l.accept().unwrap();
+/// #         let mut pending = Vec::new();
+/// #         for r in replies {
+/// #             if !kevy_testnet::read_request(&mut s, &mut pending) { break }
+/// #             std::io::Write::write_all(&mut s, r).unwrap();
+/// #         }
+/// #     });
+/// #     port
+/// # }
+/// // a stand-in server that answers two commands
+/// let port = mock(&[b"+OK\r\n", b"$5\r\nworld\r\n"]);
+/// let mut c = RespClient::connect("127.0.0.1", port)?;
+/// assert_eq!(c.request_borrowed(&[b"SET", b"hello", b"world"])?, Reply::Simple(b"OK".to_vec()));
+/// assert_eq!(c.request_borrowed(&[b"GET", b"hello"])?, Reply::Bulk(b"world".to_vec()));
+/// # Ok::<(), std::io::Error>(())
+/// ```
 #[derive(Debug)]
 pub struct RespClient {
     stream: ClientStream,
@@ -174,6 +197,28 @@ pub struct RespClient {
 
 impl RespClient {
     /// Connect to `host:port`, enabling `TCP_NODELAY` (best-effort).
+    ///
+    /// ```
+    /// use kevy_resp_client::{Reply, RespClient};
+    /// # fn mock(replies: &'static [&'static [u8]]) -> u16 {
+    /// #     let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    /// #     let port = l.local_addr().unwrap().port();
+    /// #     std::thread::spawn(move || {
+    /// #         let (mut s, _) = l.accept().unwrap();
+    /// #         let mut pending = Vec::new();
+    /// #         for r in replies {
+    /// #             if !kevy_testnet::read_request(&mut s, &mut pending) { break }
+    /// #             std::io::Write::write_all(&mut s, r).unwrap();
+    /// #         }
+    /// #     });
+    /// #     port
+    /// # }
+    /// let mut c = RespClient::connect("127.0.0.1", mock(&[b"+PONG\r\n"]))?;
+    /// assert_eq!(c.request_borrowed(&[b"PING"])?, Reply::Simple(b"PONG".to_vec()));
+    /// // nothing listens on port 1
+    /// assert!(RespClient::connect("127.0.0.1", 1).is_err());
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub fn connect(host: &str, port: u16) -> io::Result<Self> {
         let stream = TcpStream::connect((host, port))?;
         stream.set_nodelay(true).ok();
@@ -217,6 +262,28 @@ impl RespClient {
     /// `&[&[u8]]` (a stack-allocated slice array) and skips the per-call
     /// `Vec<Vec<u8>>` argv heap allocations. This `request` form remains
     /// for callers that already own `Vec<u8>` argvs.
+    ///
+    /// ```
+    /// use kevy_resp_client::{Reply, RespClient};
+    /// # fn mock(replies: &'static [&'static [u8]]) -> u16 {
+    /// #     let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    /// #     let port = l.local_addr().unwrap().port();
+    /// #     std::thread::spawn(move || {
+    /// #         let (mut s, _) = l.accept().unwrap();
+    /// #         let mut pending = Vec::new();
+    /// #         for r in replies {
+    /// #             if !kevy_testnet::read_request(&mut s, &mut pending) { break }
+    /// #             std::io::Write::write_all(&mut s, r).unwrap();
+    /// #         }
+    /// #     });
+    /// #     port
+    /// # }
+    /// let mut c = RespClient::connect("127.0.0.1", mock(&[b":3\r\n"]))?;
+    /// let key = String::from("counter").into_bytes(); // an argv the caller already owns
+    /// let reply = c.request(&[b"INCRBY".to_vec(), key, b"3".to_vec()])?;
+    /// assert_eq!(reply, Reply::Int(3));
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub fn request(&mut self, args: &[Vec<u8>]) -> io::Result<Reply> {
         self.write_buf.clear();
         encode_command(&mut self.write_buf, args);
@@ -229,6 +296,29 @@ impl RespClient {
     /// only allocation is the one-time growth of `self.write_buf`. The
     /// hot path becomes `write_buf.clear() + encode + write_all + read`,
     /// no per-op heap traffic.
+    ///
+    /// ```
+    /// use kevy_resp_client::{Reply, RespClient};
+    /// # fn mock(replies: &'static [&'static [u8]]) -> u16 {
+    /// #     let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    /// #     let port = l.local_addr().unwrap().port();
+    /// #     std::thread::spawn(move || {
+    /// #         let (mut s, _) = l.accept().unwrap();
+    /// #         let mut pending = Vec::new();
+    /// #         for r in replies {
+    /// #             if !kevy_testnet::read_request(&mut s, &mut pending) { break }
+    /// #             std::io::Write::write_all(&mut s, r).unwrap();
+    /// #         }
+    /// #     });
+    /// #     port
+    /// # }
+    /// let mut c = RespClient::connect("127.0.0.1", mock(&[b"$1\r\nv\r\n", b"-ERR boom\r\n"]))?;
+    /// let key: &[u8] = b"k";
+    /// assert_eq!(c.request_borrowed(&[b"GET", key])?, Reply::Bulk(b"v".to_vec()));
+    /// // a server-side error is a reply, not an `Err`
+    /// assert_eq!(c.request_borrowed(&[b"BOOM"])?, Reply::Error(b"ERR boom".to_vec()));
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub fn request_borrowed(&mut self, args: &[&[u8]]) -> io::Result<Reply> {
         self.write_buf.clear();
         encode_command_borrowed(&mut self.write_buf, args);
@@ -240,6 +330,31 @@ impl RespClient {
     /// `raw` as one write, then read exactly `n` replies. The caller
     /// encodes with [`encode_command`]/[`encode_command_borrowed`]
     /// into one buffer (migration import path: 512-deep batches).
+    ///
+    /// ```
+    /// use kevy_resp::encode_command_borrowed;
+    /// use kevy_resp_client::{Reply, RespClient};
+    /// # fn mock(replies: &'static [&'static [u8]]) -> u16 {
+    /// #     let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    /// #     let port = l.local_addr().unwrap().port();
+    /// #     std::thread::spawn(move || {
+    /// #         let (mut s, _) = l.accept().unwrap();
+    /// #         let mut pending = Vec::new();
+    /// #         for r in replies {
+    /// #             if !kevy_testnet::read_request(&mut s, &mut pending) { break }
+    /// #             std::io::Write::write_all(&mut s, r).unwrap();
+    /// #         }
+    /// #     });
+    /// #     port
+    /// # }
+    /// let mut c = RespClient::connect("127.0.0.1", mock(&[b":1\r\n", b":2\r\n"]))?;
+    /// let mut raw = Vec::new();
+    /// encode_command_borrowed(&mut raw, &[&b"INCR"[..], b"n"]);
+    /// encode_command_borrowed(&mut raw, &[&b"INCR"[..], b"n"]);
+    /// // one write, two replies read back in order
+    /// assert_eq!(c.pipeline_raw(&raw, 2)?, vec![Reply::Int(1), Reply::Int(2)]);
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub fn pipeline_raw(&mut self, raw: &[u8], n: usize) -> io::Result<Vec<Reply>> {
         self.stream.write_all(raw)?;
         let mut out = Vec::with_capacity(n);
@@ -288,6 +403,30 @@ impl RespClient {
     ///
     /// `kevys://host:port?server_key=<hex>[&client_key_file=<path>]`
     /// connects to the encrypted client port; see [`SecureUrl::parse`].
+    ///
+    /// ```
+    /// use kevy_resp_client::{Reply, RespClient};
+    /// # fn mock(replies: &'static [&'static [u8]]) -> u16 {
+    /// #     let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    /// #     let port = l.local_addr().unwrap().port();
+    /// #     std::thread::spawn(move || {
+    /// #         let (mut s, _) = l.accept().unwrap();
+    /// #         let mut pending = Vec::new();
+    /// #         for r in replies {
+    /// #             if !kevy_testnet::read_request(&mut s, &mut pending) { break }
+    /// #             std::io::Write::write_all(&mut s, r).unwrap();
+    /// #         }
+    /// #     });
+    /// #     port
+    /// # }
+    /// // `/0` makes the client send `SELECT 0` before handing it back
+    /// let port = mock(&[b"+OK\r\n", b"+PONG\r\n"]);
+    /// let mut c = RespClient::connect_url(&format!("kevy://127.0.0.1:{port}/0"))?;
+    /// assert_eq!(c.request_borrowed(&[b"PING"])?, Reply::Simple(b"PONG".to_vec()));
+    /// let e = RespClient::connect_url("rediss://127.0.0.1:6379").unwrap_err();
+    /// assert_eq!(e.kind(), std::io::ErrorKind::Unsupported); // no TLS
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub fn connect_url(url: &str) -> io::Result<Self> {
         let (stream, db) = ClientStream::open(url)?;
         let mut client = Self::over(stream);

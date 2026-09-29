@@ -16,6 +16,19 @@ use kevy_resp::{ProtocolError, Reply, TextedReply, parse_reply, parse_reply_keep
 /// consume cursor rather than front-draining after every reply.
 ///
 /// One per connection; holds partial replies across `read` calls.
+///
+/// ```
+/// use kevy_resp_client::{Reply, ReplyReadBuf};
+///
+/// let mut buf = ReplyReadBuf::with_capacity(64);
+/// buf.extend(b"+OK\r\n$5\r\nhel"); // one whole reply and the start of another
+/// assert_eq!(buf.parse_next()?, Some(Reply::Simple(b"OK".to_vec())));
+/// assert_eq!(buf.parse_next()?, None); // the bulk string is still arriving
+/// buf.extend(b"lo\r\n");
+/// assert_eq!(buf.parse_next()?, Some(Reply::Bulk(b"hello".to_vec())));
+/// assert!(buf.pending().is_empty());
+/// # Ok::<(), kevy_resp::ProtocolError>(())
+/// ```
 #[derive(Debug)]
 pub struct ReplyReadBuf {
     buf: Vec<u8>,

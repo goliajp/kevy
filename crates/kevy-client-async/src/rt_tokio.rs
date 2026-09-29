@@ -8,6 +8,19 @@
 //! (initialised-byte tracking, useful for IO_uring); our trait uses a
 //! plain `&mut [u8]`. The adapter is a 3-line shim — no buffering, no
 //! extra allocation, no syscall.
+//!
+//! ```
+//! # include!("doc_serve.rs");
+//! # #[tokio::main(flavor = "current_thread")]
+//! # async fn main() -> std::io::Result<()> {
+//! # let addr = serve(&[("PING", "+PONG\r\n")]).await?;
+//! use kevy_client_async::AsyncConnection;
+//!
+//! // a tokio `TcpStream` is a transport as it is
+//! let tcp = tokio::net::TcpStream::connect(addr).await?;
+//! AsyncConnection::from_transport(tcp).ping().await?;
+//! # Ok(()) }
+//! ```
 
 use core::pin::Pin;
 use core::task::{Context, Poll};
@@ -55,6 +68,19 @@ impl AsyncWrite for TcpStream {
 /// Connect a tokio `TcpStream` to `host:port`, enabling
 /// `TCP_NODELAY` (best-effort), and return it ready to feed into
 /// [`crate::AsyncRespCodec::new`].
+///
+/// ```
+/// # include!("doc_serve.rs");
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() -> std::io::Result<()> {
+/// # let addr = serve(&[("PING", "+PONG\r\n")]).await?;
+/// use kevy_client_async::{AsyncConnection, rt_tokio};
+///
+/// let tcp = rt_tokio::connect("127.0.0.1", addr.port()).await?;
+/// assert!(tcp.nodelay()?);
+/// AsyncConnection::from_transport(tcp).ping().await?;
+/// # Ok(()) }
+/// ```
 pub async fn connect(host: &str, port: u16) -> io::Result<TcpStream> {
     let stream = TcpStream::connect((host, port)).await?;
     stream.set_nodelay(true).ok();

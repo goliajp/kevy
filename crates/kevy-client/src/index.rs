@@ -25,14 +25,22 @@ use crate::{Connection, num_f64, num_u64, string, unexpected};
 /// Declared scalar type for [`Connection::idx_create_range`]
 /// (`TYPE i64|f64|str`). Vector/ANN indexes have extra required
 /// options — declare those via [`Connection::idx_create_raw`].
+///
+#[doc = include_str!("index_docs/idx_type.md")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum IdxType {
     /// `TYPE i64` — signed 64-bit integer field.
+    ///
+    #[doc = include_str!("index_docs/idx_type_i64.md")]
     I64,
     /// `TYPE f64` — finite 64-bit float field.
+    ///
+    #[doc = include_str!("index_docs/idx_type_f64.md")]
     F64,
     /// `TYPE str` — raw bytes, memcmp order.
+    ///
+    #[doc = include_str!("index_docs/idx_type_str.md")]
     Str,
 }
 
@@ -48,41 +56,67 @@ impl IdxType {
 
 /// One `IDX.QUERY` hit: the row's key plus the indexed value's string
 /// form (the same repr the wire carries).
+///
+#[doc = include_str!("index_docs/idx_row.md")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 #[non_exhaustive]
 pub struct IdxRow {
     /// The matching key.
+    ///
+    #[doc = include_str!("index_docs/idx_row_key.md")]
     pub key: Vec<u8>,
     /// The indexed field value, in its wire string form.
+    ///
+    #[doc = include_str!("index_docs/idx_row_value.md")]
     pub value: Vec<u8>,
 }
 
 /// One page of `IDX.QUERY RANGE`/`EQ` results.
+///
+#[doc = include_str!("index_docs/idx_page.md")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 #[non_exhaustive]
 pub struct IdxPage {
     /// Cursor for the next page — `None` when the scan is complete;
     /// otherwise pass it back via `idx_query_range`'s `cursor`.
+    ///
+    #[doc = include_str!("index_docs/idx_page_cursor.md")]
     pub cursor: Option<Vec<u8>>,
     /// The page's hits in `(value, key)` order.
+    ///
+    #[doc = include_str!("index_docs/idx_page_rows.md")]
     pub rows: Vec<IdxRow>,
 }
 
 /// One declared index, as reported by `IDX.LIST`.
+///
+#[doc = include_str!("index_docs/idx_info.md")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 #[non_exhaustive]
 pub struct IdxInfo {
     /// Index name.
+    ///
+    #[doc = include_str!("index_docs/idx_info_name.md")]
     pub name: Vec<u8>,
     /// Key prefix the index covers.
+    ///
+    #[doc = include_str!("index_docs/idx_info_prefix.md")]
     pub prefix: Vec<u8>,
     /// Kind tag (`range` / `unique` / `text` / `ann` / `agg`).
+    ///
+    #[doc = include_str!("index_docs/idx_info_kind.md")]
     pub kind: String,
     /// Build state (`ready` / `building`).
+    ///
+    #[doc = include_str!("index_docs/idx_info_state.md")]
     pub state: String,
     /// Total indexed entries across shards.
+    ///
+    #[doc = include_str!("index_docs/idx_info_entries.md")]
     pub entries: u64,
     /// Total index bytes across shards.
+    ///
+    #[doc = include_str!("index_docs/idx_info_bytes.md")]
     pub bytes: u64,
 }
 
