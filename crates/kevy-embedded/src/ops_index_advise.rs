@@ -51,10 +51,56 @@ pub(crate) fn probe_window(
 #[non_exhaustive]
 pub struct IdxAdvice {
     /// Refusals observed for this family.
+    ///
+    /// ```
+    /// # use kevy_embedded::{Config, IndexValType, IndexValue, Store, TableSpec};
+    /// # let s = Store::open(Config::default())?;
+    /// # let mut t = TableSpec::default();
+    /// # (t.name, t.prefix, t.pk) = (b"ev".to_vec(), b"ev:".to_vec(), b"id".to_vec());
+    /// # t.columns = vec![(b"id".to_vec(), IndexValType::Str), (b"age".to_vec(), IndexValType::I64)];
+    /// # s.table_declare(t)?;
+    /// # let (lo, hi) = (IndexValue::I64(0), IndexValue::I64(99));
+    /// // the table has an `age` column but no index over it
+    /// assert!(s.idx_count(b"ev.age", &lo, &hi).is_err());
+    /// assert!(s.idx_count(b"ev.age", &lo, &hi).is_err());
+    /// assert_eq!(s.idx_advise()[0].count, 2);
+    /// # Ok::<(), kevy_embedded::KevyError>(())
+    /// ```
     pub count: u64,
     /// The access-path name the queries asked for.
+    ///
+    /// ```
+    /// # use kevy_embedded::{Config, IndexValType, IndexValue, Store, TableSpec};
+    /// # let s = Store::open(Config::default())?;
+    /// # let mut t = TableSpec::default();
+    /// # (t.name, t.prefix, t.pk) = (b"ev".to_vec(), b"ev:".to_vec(), b"id".to_vec());
+    /// # t.columns = vec![(b"id".to_vec(), IndexValType::Str), (b"age".to_vec(), IndexValType::I64)];
+    /// # s.table_declare(t)?;
+    /// # let (lo, hi) = (IndexValue::I64(0), IndexValue::I64(99));
+    /// // the table has an `age` column but no index over it
+    /// assert!(s.idx_count(b"ev.age", &lo, &hi).is_err());
+    /// assert!(s.idx_count(b"ev.age", &lo, &hi).is_err());
+    /// assert_eq!(s.idx_advise()[0].name, b"ev.age");
+    /// # Ok::<(), kevy_embedded::KevyError>(())
+    /// ```
     pub name: Vec<u8>,
     /// The declaration command that would have served them.
+    ///
+    /// ```
+    /// # use kevy_embedded::{Config, IndexValType, IndexValue, Store, TableSpec};
+    /// # let s = Store::open(Config::default())?;
+    /// # let mut t = TableSpec::default();
+    /// # (t.name, t.prefix, t.pk) = (b"ev".to_vec(), b"ev:".to_vec(), b"id".to_vec());
+    /// # t.columns = vec![(b"id".to_vec(), IndexValType::Str), (b"age".to_vec(), IndexValType::I64)];
+    /// # s.table_declare(t)?;
+    /// # let (lo, hi) = (IndexValue::I64(0), IndexValue::I64(99));
+    /// // the table has an `age` column but no index over it
+    /// assert!(s.idx_count(b"ev.age", &lo, &hi).is_err());
+    /// assert!(s.idx_count(b"ev.age", &lo, &hi).is_err());
+    /// let advice = &s.idx_advise()[0].advice;
+    /// assert!(advice.contains("INDEX age range"), "{advice}");
+    /// # Ok::<(), kevy_embedded::KevyError>(())
+    /// ```
     pub advice: String,
 }
 

@@ -91,6 +91,22 @@ impl ShardViews {
 }
 
 /// One page of view members plus the resume cursor.
+///
+/// ```
+/// use kevy_embedded::*;
+/// let s = Store::open(Config::default())?;
+/// s.idx_create(b"by_pri", b"t:", b"pri", IndexValType::I64, IndexKind::Range)?;
+/// for (k, pri) in [(&b"t:1"[..], &b"5"[..]), (b"t:2", b"9")] {
+///     s.hset(k, &[(b"pri", pri)])?;
+/// }
+/// let all = ViewTree::Leaf(ViewLeaf::new(b"by_pri".to_vec(), IndexValue::I64(0), IndexValue::I64(99)));
+/// s.view_create(b"urgent", all, b"by_pri", SortOrder::Desc, ViewMode::Virtual)?;
+/// let (members, after): ViewPage = s.view_query(b"urgent", None, 1)?;
+/// assert_eq!(members, [(b"t:2".to_vec(), IndexValue::I64(9))]);
+/// let (rest, _) = s.view_query(b"urgent", after.as_ref(), 10)?; // resume past it
+/// assert_eq!(rest[0].0, b"t:1");
+/// # Ok::<(), kevy_embedded::KevyError>(())
+/// ```
 pub type ViewPage = (Vec<(Vec<u8>, IndexValue)>, Option<(IndexValue, Vec<u8>)>);
 
 #[cfg(feature = "persist")]

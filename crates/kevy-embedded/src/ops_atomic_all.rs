@@ -25,6 +25,19 @@ type ShardUndoEntry = (usize, Vec<u8>, Option<(kevy_store::Value, Option<u64>)>)
 
 /// Context handed to the `atomic_all_shards` closure body. Methods
 /// route to the right shard by hashing the key.
+///
+/// ```
+/// use kevy_embedded::{Config, Store};
+/// let s = Store::open(Config::default().with_shards(4))?;
+/// s.set(b"alice", b"10")?;
+/// // a transfer between keys that may live on different shards
+/// s.atomic_all_shards(|tx| {
+///     tx.incr_by(b"alice", -3)?;
+///     tx.incr_by(b"bob", 3)
+/// })?;
+/// assert_eq!((s.get(b"alice")?, s.get(b"bob")?), (Some(b"7".to_vec()), Some(b"3".to_vec())));
+/// # Ok::<(), kevy_embedded::KevyError>(())
+/// ```
 #[derive(Debug)]
 pub struct AtomicAllShards<'a> {
     pub(crate) guards: Vec<RwLockWriteGuard<'a, Inner>>,

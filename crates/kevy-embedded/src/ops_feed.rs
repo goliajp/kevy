@@ -37,8 +37,31 @@ use crate::store::Store;
 #[non_exhaustive]
 pub struct Change {
     /// Stream offset (monotonic within a generation).
+    ///
+    /// ```
+    /// use kevy_embedded::{Config, Store};
+    ///
+    /// let store = Store::open(Config::default().with_feed(0))?;
+    /// let from = store.changes_tail()?;
+    /// store.set(b"a", b"1")?;
+    /// store.set(b"b", b"2")?;
+    /// let offsets: Vec<u64> = store.changes_since(from, 10, &[])?.changes.iter().map(|c| c.offset).collect();
+    /// assert_eq!(offsets, [from.offset, from.offset + 1]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub offset: u64,
     /// The applied effect's argv (same frames the AOF / a replica sees).
+    ///
+    /// ```
+    /// use kevy_embedded::{Config, Store};
+    ///
+    /// let store = Store::open(Config::default().with_feed(0))?;
+    /// let from = store.changes_tail()?;
+    /// store.hset(b"h", &[(b"f", b"v")])?;
+    /// let argv = &store.changes_since(from, 10, &[])?.changes[0].argv;
+    /// assert_eq!(argv, &[b"HSET".to_vec(), b"h".to_vec(), b"f".to_vec(), b"v".to_vec()]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub argv: Vec<Vec<u8>>,
 }
 
@@ -74,8 +97,35 @@ impl Change {
 #[non_exhaustive]
 pub struct ChangeBatch {
     /// Delivered changes, offset order.
+    ///
+    /// ```
+    /// use kevy_embedded::{Config, Store};
+    ///
+    /// let store = Store::open(Config::default().with_feed(0))?;
+    /// let from = store.changes_tail()?;
+    /// store.set(b"a", b"1")?;
+    /// store.del(&[b"a"])?;
+    /// let batch = store.changes_since(from, 10, &[])?;
+    /// let verbs: Vec<&[u8]> = batch.changes.iter().map(|c| &c.argv[0][..]).collect();
+    /// assert_eq!(verbs, [&b"SET"[..], b"DEL"]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub changes: Vec<Change>,
     /// The cursor to pass to the next `changes_since`.
+    ///
+    /// ```
+    /// use kevy_embedded::{Config, Store};
+    ///
+    /// let store = Store::open(Config::default().with_feed(0))?;
+    /// let from = store.changes_tail()?;
+    /// store.set(b"a", b"1")?;
+    /// store.set(b"b", b"2")?;
+    /// let first = store.changes_since(from, 1, &[])?;
+    /// // resuming at `next` picks up exactly where the first batch stopped
+    /// let rest = store.changes_since(first.next, 10, &[])?;
+    /// assert_eq!(rest.changes[0].argv[1], b"b");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub next: FeedPosition,
 }
 
@@ -110,13 +160,54 @@ impl ChangeBatch {
 pub enum FeedError {
     /// Cursor unservable (stale generation / evicted offsets): rebuild
     /// from a scan, then resume from `tail`.
+    ///
+    /// ```
+    /// use kevy_embedded::{Config, FeedError, FeedPosition, Store};
+    ///
+    /// let store = Store::open(Config::default().with_feed(0))?;
+    /// let tail = store.changes_tail()?;
+    /// let stale = FeedPosition::new(tail.generation - 1, 0); // an older generation
+    /// assert_eq!(store.changes_since(stale, 10, &[]), Err(FeedError::Resync { tail }));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     Resync {
         /// The current generation and the offset to resume from.
+        ///
+        /// ```
+        /// use kevy_embedded::{Config, FeedError, FeedPosition, Store};
+        ///
+        /// let store = Store::open(Config::default().with_feed(0))?;
+        /// store.set(b"k", b"v")?;
+        /// let Err(FeedError::Resync { tail }) = store.changes_since(FeedPosition::new(0, 0), 10, &[]) else {
+        ///     panic!("a generation-0 cursor is stale");
+        /// };
+        /// // after rebuilding from a scan, reading resumes from `tail`
+        /// assert!(store.changes_since(tail, 10, &[])?.changes.is_empty());
+        /// # Ok::<(), Box<dyn std::error::Error>>(())
+        /// ```
         tail: FeedPosition,
     },
     /// Cursor is ahead of the stream — caller bug.
+    ///
+    /// ```
+    /// use kevy_embedded::{Config, FeedError, FeedPosition, Store};
+    ///
+    /// let store = Store::open(Config::default().with_feed(0))?;
+    /// let tail = store.changes_tail()?;
+    /// let ahead = FeedPosition::new(tail.generation, tail.offset + 100);
+    /// assert_eq!(store.changes_since(ahead, 10, &[]), Err(FeedError::Future));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     Future,
     /// The store was opened without `Config::with_feed`.
+    ///
+    /// ```
+    /// use kevy_embedded::{Config, FeedError, Store};
+    ///
+    /// assert_eq!(Store::open(Config::default())?.changes_tail(), Err(FeedError::Disabled));
+    /// assert!(Store::open(Config::default().with_feed(0))?.changes_tail().is_ok());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     Disabled,
 }
 
@@ -197,8 +288,25 @@ fn matches_prefixes(argv: &[Vec<u8>], prefixes: &[&[u8]]) -> bool {
 #[non_exhaustive]
 pub struct PrefixInfo {
     /// Live keys under the prefix.
+    ///
+    /// ```
+    /// let store = kevy_embedded::Store::open(kevy_embedded::Config::default())?;
+    /// store.set(b"user:1", b"a")?;
+    /// store.set(b"user:2", b"b")?;
+    /// store.set(b"order:1", b"c")?;
+    /// assert_eq!(store.info_prefix(b"user:").keys, 2);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub keys: u64,
     /// How many of them carry a TTL.
+    ///
+    /// ```
+    /// let store = kevy_embedded::Store::open(kevy_embedded::Config::default())?;
+    /// store.set(b"s:1", b"a")?;
+    /// store.set_with_ttl(b"s:2", b"b", std::time::Duration::from_secs(60))?;
+    /// assert_eq!(store.info_prefix(b"s:").expires, 1);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub expires: u64,
 }
 
