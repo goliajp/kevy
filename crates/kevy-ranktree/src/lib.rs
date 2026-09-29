@@ -59,7 +59,7 @@ mod tests_invariants;
 
 use core::ops::{Bound, RangeBounds};
 
-pub use iter::{Iter, IterRev};
+pub use iter::{Iter, IterRev, Range};
 use node::Node;
 
 /// An ordered set of `K` with O(log N) order statistics (rank / select).
@@ -356,9 +356,9 @@ impl<K: Ord> RankTree<K> {
     /// assert_eq!(got, vec![3, 5]);
     /// ```
     #[must_use]
-    pub fn range<R: RangeBounds<K>>(&self, bounds: &R) -> Iter<'_, K> {
+    pub fn range<R: RangeBounds<K>>(&self, bounds: &R) -> Range<'_, K> {
         let (lo, hi) = self.bound_ranks(bounds);
-        Iter::new_from(&self.root, lo).capped(hi.saturating_sub(lo))
+        Range(Iter::new_from(&self.root, lo).capped(hi.saturating_sub(lo)))
     }
 
     /// `(first rank inside, first rank past)` for `bounds`.
