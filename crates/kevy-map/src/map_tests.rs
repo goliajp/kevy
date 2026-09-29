@@ -765,3 +765,28 @@ fn a_probe_walks_past_tombstones_to_the_key_beyond() {
         assert_eq!(m.get(format!("k{i}").as_bytes()), None, "k{i} came back");
     }
 }
+
+#[test]
+fn into_iter_moves_each_entry_out_once_and_drops_the_rest() {
+    let counter = Cell::new(0usize);
+    let mut m: KevyMap<u64, DropCount<'_>> = KevyMap::new();
+    for i in 0..100 {
+        m.insert(i, DropCount(&counter));
+    }
+    let mut it = m.into_iter();
+    assert_eq!(it.len(), 100);
+    let taken: Vec<_> = it.by_ref().take(30).collect();
+    assert_eq!((taken.len(), it.len(), counter.get()), (30, 70, 0));
+    drop(it);
+    assert_eq!(counter.get(), 70, "the 70 never yielded drop with the iterator");
+    drop(taken);
+    assert_eq!(counter.get(), 100, "and the yielded ones exactly once, by their owner");
+}
+
+#[test]
+fn into_iter_of_an_unallocated_map_is_empty() {
+    let m: KevyMap<u64, u64> = KevyMap::new();
+    assert_eq!(m.into_iter().next(), None);
+    let s: KevySet<u64> = KevySet::new();
+    assert_eq!(s.into_iter().count(), 0);
+}
