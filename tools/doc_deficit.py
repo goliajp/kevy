@@ -97,8 +97,26 @@ def read_tables():
     return out
 
 
+def doctested_targets():
+    """Names of the targets cargo runs doctests for: libraries built as
+    `lib` or `rlib`. A binary's examples, or a cdylib-only crate's, are never
+    compiled or run, so asking for them would ask for text nobody checks."""
+    import subprocess
+    meta = json.loads(subprocess.run(
+        ["cargo", "metadata", "--no-deps", "--format-version", "1"],
+        cwd=ROOT, capture_output=True, text=True, check=True).stdout)
+    return {
+        t["name"].replace("_", "-")
+        for p in meta["packages"] for t in p["targets"]
+        if {"lib", "rlib"} & set(t["crate_types"])
+    }
+
+
 def main():
     tables = read_tables()
+    tested = doctested_targets()
+    if not tested:
+        refuse("cargo metadata named no library target")
     symbols, items, documented, examples = {}, 0, 0, 0
     for crate, t in sorted(tables.items()):
         items += t["items"]
@@ -106,7 +124,7 @@ def main():
         examples += t["examples"]
         if (d := t["items"] - t["documented"]) > 0:
             symbols[f"{crate}/undocumented"] = d
-        if (e := t["items"] - t["examples"]) > 0:
+        if crate in tested and (e := t["items"] - t["examples"]) > 0:
             symbols[f"{crate}/without-example"] = e
 
     doc = {
