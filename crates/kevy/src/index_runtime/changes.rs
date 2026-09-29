@@ -108,7 +108,12 @@ pub(super) fn old_entry(
         *slot = c.field(s.rule, f);
     }
     let v = si.spec.derive_scalar_refs(&prim[..w])?;
-    let vals = s.fields[w..].iter().map(|&f| c.field(s.rule, f).map(<[u8]>::to_vec)).collect();
+    // only a global index compares stored values (to skip an unchanged
+    // entry); a local one locates the old entry by its value alone
+    let vals = match si.global {
+        Some(_) => s.fields[w..].iter().map(|&f| c.field(s.rule, f).map(<[u8]>::to_vec)).collect(),
+        None => Vec::new(),
+    };
     Some((v, vals))
 }
 

@@ -102,7 +102,7 @@ fn create(w: &mut Wire, name: &[u8], tail: &[&[u8]]) {
 }
 
 #[test]
-fn debug_local_backfill_loses_nothing() {
+fn a_local_backfill_beside_a_global_index_misses_no_row() {
     for global_first in [false, true] {
         let srv = Server::start(4);
         let mut w = srv.wire();
@@ -123,11 +123,10 @@ fn debug_local_backfill_loses_nothing() {
             &mut w,
             &[b"IDX.QUERY", b"age_l", b"RANGE", b"0", b"1000", b"LIMIT", b"10000"],
         ));
-        let n = r.matches("user:").count();
-        let v = text(&call(&mut w, &[b"IDX.VERIFY", b"age_l"]));
-        eprintln!("DEBUG global_first={global_first} hits={n} verify={}", v.replace("\r\n", " "));
         let missing: Vec<u32> = (0..8000).filter(|i| !r.contains(&format!("user:{i}\r"))).collect();
-        eprintln!("DEBUG missing {missing:?}");
+        assert!(missing.is_empty(), "global_first={global_first}: missing {missing:?}");
+        let v = verified(&mut w, b"age_l");
+        assert_eq!((v["drift"], v["missing"]), (0, 0), "global_first={global_first}: {v:?}");
     }
 }
 
@@ -721,7 +720,7 @@ fn listed_size(w: &mut Wire, name: &str) -> (u64, u64) {
 }
 
 #[test]
-fn a_global_index_counts_its_placement_table_in_its_bytes() {
+fn a_global_index_holds_no_more_than_a_local_one() {
     let srv = Server::start(4);
     let mut w = srv.wire();
     create(&mut w, b"age_l", &[]);
@@ -736,9 +735,9 @@ fn a_global_index_counts_its_placement_table_in_its_bytes() {
     assert_eq!((le, ge), (20_000, 20_000));
     let per_row = |b: u64| b as f64 / 20_000.0;
     eprintln!("bytes per row: local {:.1}, global {:.1}", per_row(lb), per_row(gb));
-    // the partitions hold what the local index holds; the rest is placement
-    let placement = gb.saturating_sub(lb) as f64 / 20_000.0;
-    assert!(placement > 20.0, "the placement table is counted: {placement:.1} bytes a row");
+    // the partitions hold the same entries, and a row's shard keeps no map
+    // to its partition: a write names the old value, which names it
+    assert!(gb as f64 <= lb as f64 * 1.1, "local {lb}, global {gb}");
 }
 
 #[test]

@@ -22,6 +22,10 @@ pub(crate) type Rules = Vec<(Vec<u8>, Vec<Vec<u8>>)>;
 pub(crate) struct Drain {
     spare: RowChanges,
     installed: Rules,
+    /// Where each scalar index's read names sit in `installed`.
+    slots: Vec<Option<(usize, Vec<usize>)>>,
+    /// Each index's old value for the change being applied, reused.
+    olds: Vec<Option<IndexValue>>,
     /// The index-list version the installed rules were computed for.
     version: Option<u64>,
 }
@@ -67,6 +71,10 @@ fn locate(rules: &Rules, spec: &IndexSpec) -> Option<(usize, Vec<usize>)> {
     Some((rule, at.collect::<Option<Vec<usize>>>()?))
 }
 
+fn slots_for(ss: &ShardSegs) -> Vec<Option<(usize, Vec<usize>)>> {
+    ss.segs.iter().map(|(s, _)| locate(&ss.drain.installed, s)).collect()
+}
+
 /// The value `c` says the row was indexed under by `spec`.
 fn old_value(
     spec: &IndexSpec,
@@ -93,16 +101,21 @@ pub(crate) fn drain(ss: &mut ShardSegs, store: &mut Store) -> bool {
             // the keyspace was wiped: start over, then add what came after
             crate::ops_index_sync::reset_all_segs(ss);
         }
-        let slots: Vec<_> = ss.segs.iter().map(|(s, _)| locate(&ss.drain.installed, s)).collect();
+        if ss.drain.version != Some(ss.version) {
+            // the index list moved since the slots were computed; the
+            // record still follows the installed rules
+            ss.drain.slots = slots_for(ss);
+        }
+        let mut olds = std::mem::take(&mut ss.drain.olds);
         for c in changes.iter() {
-            let olds: Vec<Option<IndexValue>> = ss
-                .segs
-                .iter()
-                .zip(&slots)
-                .map(|((s, _), at)| old_value(s, at.as_ref(), &c))
-                .collect();
+            olds.clear();
+            let slots = &ss.drain.slots;
+            olds.extend(
+                ss.segs.iter().zip(slots).map(|((s, _), at)| old_value(s, at.as_ref(), &c)),
+            );
             crate::ops_index_sync::apply_one_key(ss, store, c.key(), &olds);
         }
+        ss.drain.olds = olds;
         ss.drain.spare = changes;
         applied = true;
     }
@@ -114,6 +127,7 @@ pub(crate) fn drain(ss: &mut ShardSegs, store: &mut Store) -> bool {
             store.set_row_watch(w);
             ss.drain.installed = want;
         }
+        ss.drain.slots = slots_for(ss);
         ss.drain.version = Some(ss.version);
     }
     applied
