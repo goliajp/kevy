@@ -16,6 +16,21 @@ use crate::value::SmallBytes;
 
 /// One PEL row in primitive form: `(ms, seq, consumer, delivery_time_ms,
 /// delivery_count)`. The persist crate serializes these verbatim.
+///
+/// ```
+/// # use kevy_store::*;
+/// # let mut s = Store::new();
+/// # for t in [1, 2] {
+/// #     let f = vec![(b"f".to_vec(), b"v".to_vec())];
+/// #     s.xadd(b"s", XAddIdSpec::AutoAll, f, MissingStream::Create, t)?;
+/// # }
+/// # s.xgroup_create(b"s", b"g", GroupCreateMode::AtId(StreamId::MIN), MissingStream::Refuse)?;
+/// # s.xreadgroup(b"s", b"g", b"alice", ReadGroupId::New, None, AckMode::Pending, 100)?;
+/// let lg = &s.stream_view(b"s")?.unwrap().export_groups()[0];
+/// let (ms, seq, consumer, delivered_at, count) = lg.pel[0].clone();
+/// assert_eq!((ms, seq, consumer.as_slice(), delivered_at, count), (1, 0, b"alice".as_slice(), 100, 1));
+/// # Ok::<(), kevy_store::StoreError>(())
+/// ```
 pub type LoadedPelEntry = (u64, u64, Vec<u8>, u64, u32);
 
 /// One consumer group decoded into primitive tuples — the dump/load wire
@@ -33,14 +48,71 @@ pub type LoadedPelEntry = (u64, u64, Vec<u8>, u64, u32);
 #[non_exhaustive]
 pub struct LoadedGroup {
     /// Group name.
+    ///
+    /// ```
+    /// # use kevy_store::*;
+    /// # let mut s = Store::new();
+    /// # for t in [1, 2] {
+    /// #     let f = vec![(b"f".to_vec(), b"v".to_vec())];
+    /// #     s.xadd(b"s", XAddIdSpec::AutoAll, f, MissingStream::Create, t)?;
+    /// # }
+    /// # s.xgroup_create(b"s", b"g", GroupCreateMode::AtId(StreamId::MIN), MissingStream::Refuse)?;
+    /// # s.xreadgroup(b"s", b"g", b"alice", ReadGroupId::New, None, AckMode::Pending, 100)?;
+    /// let lg = &s.stream_view(b"s")?.unwrap().export_groups()[0];
+    /// assert_eq!(lg.name, b"g");
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
     pub name: Vec<u8>,
     /// `last_delivered_id` as `(ms, seq)`.
+    ///
+    /// ```
+    /// # use kevy_store::*;
+    /// # let mut s = Store::new();
+    /// # for t in [1, 2] {
+    /// #     let f = vec![(b"f".to_vec(), b"v".to_vec())];
+    /// #     s.xadd(b"s", XAddIdSpec::AutoAll, f, MissingStream::Create, t)?;
+    /// # }
+    /// # s.xgroup_create(b"s", b"g", GroupCreateMode::AtId(StreamId::MIN), MissingStream::Refuse)?;
+    /// # s.xreadgroup(b"s", b"g", b"alice", ReadGroupId::New, None, AckMode::Pending, 100)?;
+    /// let lg = &s.stream_view(b"s")?.unwrap().export_groups()[0];
+    /// assert_eq!(lg.last_delivered, (2, 0));
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
     pub last_delivered: (u64, u64),
     /// `(name, last_seen_ms)` per known consumer. `pel_count` is
     /// recomputed from `pel` on import.
+    ///
+    /// ```
+    /// # use kevy_store::*;
+    /// # let mut s = Store::new();
+    /// # for t in [1, 2] {
+    /// #     let f = vec![(b"f".to_vec(), b"v".to_vec())];
+    /// #     s.xadd(b"s", XAddIdSpec::AutoAll, f, MissingStream::Create, t)?;
+    /// # }
+    /// # s.xgroup_create(b"s", b"g", GroupCreateMode::AtId(StreamId::MIN), MissingStream::Refuse)?;
+    /// # s.xreadgroup(b"s", b"g", b"alice", ReadGroupId::New, None, AckMode::Pending, 100)?;
+    /// let lg = &s.stream_view(b"s")?.unwrap().export_groups()[0];
+    /// assert_eq!(lg.consumers, [(b"alice".to_vec(), 100)]);
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
     pub consumers: Vec<(Vec<u8>, u64)>,
     /// Every PEL row, including tombstones (entries XDEL'd while
     /// pending) — snapshot keeps those; AOF rewrite filters them.
+    ///
+    /// ```
+    /// # use kevy_store::*;
+    /// # let mut s = Store::new();
+    /// # for t in [1, 2] {
+    /// #     let f = vec![(b"f".to_vec(), b"v".to_vec())];
+    /// #     s.xadd(b"s", XAddIdSpec::AutoAll, f, MissingStream::Create, t)?;
+    /// # }
+    /// # s.xgroup_create(b"s", b"g", GroupCreateMode::AtId(StreamId::MIN), MissingStream::Refuse)?;
+    /// # s.xreadgroup(b"s", b"g", b"alice", ReadGroupId::New, None, AckMode::Pending, 100)?;
+    /// let lg = &s.stream_view(b"s")?.unwrap().export_groups()[0];
+    /// let ids: Vec<(u64, u64)> = lg.pel.iter().map(|p| (p.0, p.1)).collect();
+    /// assert_eq!(ids, [(1, 0), (2, 0)]);
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
     pub pel: Vec<LoadedPelEntry>,
 }
 

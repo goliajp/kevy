@@ -12,18 +12,90 @@ use crate::value::SmallBytes;
 /// Snapshot of `XAUTOCLAIM` work in progress: cursor for the next
 /// call, IDs successfully transferred, and IDs skipped because the
 /// stream has since deleted them.
+///
+/// ```
+/// # use kevy_store::*;
+/// # let mut s = Store::new();
+/// # for t in [1, 2] {
+/// #     let f = vec![(b"f".to_vec(), b"v".to_vec())];
+/// #     s.xadd(b"s", XAddIdSpec::AutoAll, f, MissingStream::Create, t)?;
+/// # }
+/// # s.xgroup_create(b"s", b"g", GroupCreateMode::AtId(StreamId::MIN), MissingStream::Refuse)?;
+/// # s.xreadgroup(b"s", b"g", b"alice", ReadGroupId::New, None, AckMode::Pending, 100)?;
+/// let mut stream = s.stream_view(b"s")?.unwrap().clone();
+/// let r = stream.autoclaim(b"g", b"bob", 0, StreamId::MIN, 10, ClaimMode::Deliver, 200)?;
+/// assert_eq!(r.claimed_ids, [StreamId::new(1, 0), StreamId::new(2, 0)]);
+/// assert_eq!(r.next_cursor, StreamId::new(2, 1));
+/// assert!(r.deleted_ids.is_empty());
+/// # Ok::<(), kevy_store::StoreError>(())
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct AutoclaimResult {
     /// Where the next `XAUTOCLAIM` should resume. `0-0` when the scan
     /// reached the end of the pending list.
+    ///
+    /// ```
+    /// # use kevy_store::*;
+    /// # let mut s = Store::new();
+    /// # for t in [1, 2] {
+    /// #     let f = vec![(b"f".to_vec(), b"v".to_vec())];
+    /// #     s.xadd(b"s", XAddIdSpec::AutoAll, f, MissingStream::Create, t)?;
+    /// # }
+    /// # s.xgroup_create(b"s", b"g", GroupCreateMode::AtId(StreamId::MIN), MissingStream::Refuse)?;
+    /// # s.xreadgroup(b"s", b"g", b"alice", ReadGroupId::New, None, AckMode::Pending, 100)?;
+    /// let mut stream = s.stream_view(b"s")?.unwrap().clone();
+    /// // COUNT 1 stops after the first entry; resume from the cursor
+    /// let r = stream.autoclaim(b"g", b"bob", 0, StreamId::MIN, 1, ClaimMode::Deliver, 200)?;
+    /// assert_eq!(r.next_cursor, StreamId::new(1, 1));
+    /// let r = stream.autoclaim(b"g", b"bob", 0, r.next_cursor, 1, ClaimMode::Deliver, 200)?;
+    /// assert_eq!(r.claimed_ids, [StreamId::new(2, 0)]);
+    /// let r = stream.autoclaim(b"g", b"bob", 0, r.next_cursor, 1, ClaimMode::Deliver, 200)?;
+    /// assert_eq!(r.next_cursor, StreamId::MIN, "nothing left to scan");
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
     pub next_cursor: StreamId,
     /// Entries transferred to the claiming consumer, in stream order.
+    ///
+    /// ```
+    /// # use kevy_store::*;
+    /// # let mut s = Store::new();
+    /// # for t in [1, 2] {
+    /// #     let f = vec![(b"f".to_vec(), b"v".to_vec())];
+    /// #     s.xadd(b"s", XAddIdSpec::AutoAll, f, MissingStream::Create, t)?;
+    /// # }
+    /// # s.xgroup_create(b"s", b"g", GroupCreateMode::AtId(StreamId::MIN), MissingStream::Refuse)?;
+    /// # s.xreadgroup(b"s", b"g", b"alice", ReadGroupId::New, None, AckMode::Pending, 100)?;
+    /// let mut stream = s.stream_view(b"s")?.unwrap().clone();
+    /// // only entries idle for at least 150 ms move: none yet at t=200
+    /// let r = stream.autoclaim(b"g", b"bob", 150, StreamId::MIN, 10, ClaimMode::Deliver, 200)?;
+    /// assert!(r.claimed_ids.is_empty());
+    /// let r = stream.autoclaim(b"g", b"bob", 150, StreamId::MIN, 10, ClaimMode::Deliver, 250)?;
+    /// assert_eq!(r.claimed_ids.len(), 2);
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
     pub claimed_ids: Vec<StreamId>,
     /// Entries that were pending but no longer exist — deleted from the
     /// stream while a consumer still held them. XAUTOCLAIM drops them from
     /// the pending list and reports them here rather than claiming a
     /// message with no body.
+    ///
+    /// ```
+    /// # use kevy_store::*;
+    /// # let mut s = Store::new();
+    /// # for t in [1, 2] {
+    /// #     let f = vec![(b"f".to_vec(), b"v".to_vec())];
+    /// #     s.xadd(b"s", XAddIdSpec::AutoAll, f, MissingStream::Create, t)?;
+    /// # }
+    /// # s.xgroup_create(b"s", b"g", GroupCreateMode::AtId(StreamId::MIN), MissingStream::Refuse)?;
+    /// # s.xreadgroup(b"s", b"g", b"alice", ReadGroupId::New, None, AckMode::Pending, 100)?;
+    /// s.xdel(b"s", &[StreamId::new(1, 0)])?;
+    /// let mut stream = s.stream_view(b"s")?.unwrap().clone();
+    /// let r = stream.autoclaim(b"g", b"bob", 0, StreamId::MIN, 10, ClaimMode::Deliver, 200)?;
+    /// assert_eq!(r.deleted_ids, [StreamId::new(1, 0)]);
+    /// assert_eq!(r.claimed_ids, [StreamId::new(2, 0)]);
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
     pub deleted_ids: Vec<StreamId>,
 }
 
@@ -41,19 +113,120 @@ pub struct AutoclaimResult {
 #[non_exhaustive]
 pub struct XClaimOpts {
     /// Only claim entries idle for at least this many ms.
+    ///
+    /// ```
+    /// # use kevy_store::*;
+    /// # let mut s = Store::new();
+    /// # for t in [1, 2] {
+    /// #     let f = vec![(b"f".to_vec(), b"v".to_vec())];
+    /// #     s.xadd(b"s", XAddIdSpec::AutoAll, f, MissingStream::Create, t)?;
+    /// # }
+    /// # s.xgroup_create(b"s", b"g", GroupCreateMode::AtId(StreamId::MIN), MissingStream::Refuse)?;
+    /// # s.xreadgroup(b"s", b"g", b"alice", ReadGroupId::New, None, AckMode::Pending, 100)?;
+    /// // delivered at 100: at 150 the entry has been idle 50 ms
+    /// let opts = XClaimOpts::default().with_min_idle_ms(60);
+    /// assert!(s.xclaim(b"s", b"g", b"bob", &[StreamId::new(1, 0)], &opts, 150)?.is_empty());
+    /// let opts = XClaimOpts::default().with_min_idle_ms(50);
+    /// assert_eq!(s.xclaim(b"s", b"g", b"bob", &[StreamId::new(1, 0)], &opts, 150)?.len(), 1);
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
     pub min_idle_ms: u64,
     /// Override post-claim idle to this many ms (else 0 — XCLAIM resets
     /// the clock so the new owner has the full idle window).
+    ///
+    /// ```
+    /// # use kevy_store::*;
+    /// # let mut s = Store::new();
+    /// # for t in [1, 2] {
+    /// #     let f = vec![(b"f".to_vec(), b"v".to_vec())];
+    /// #     s.xadd(b"s", XAddIdSpec::AutoAll, f, MissingStream::Create, t)?;
+    /// # }
+    /// # s.xgroup_create(b"s", b"g", GroupCreateMode::AtId(StreamId::MIN), MissingStream::Refuse)?;
+    /// # s.xreadgroup(b"s", b"g", b"alice", ReadGroupId::New, None, AckMode::Pending, 100)?;
+    /// // the claimed entry reports 40 ms idle instead of starting from 0
+    /// let opts = XClaimOpts::default().with_idle_ms(40);
+    /// s.xclaim(b"s", b"g", b"bob", &[StreamId::new(1, 0)], &opts, 150)?;
+    /// let rows = s.xpending_extended(b"s", b"g", None, StreamId::MIN, StreamId::MAX, 1, None, 150)?.unwrap().rows;
+    /// assert_eq!(rows[0].idle_ms, 40);
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
     pub idle_override_ms: Option<u64>,
     /// Override post-claim delivery_time_ms to this absolute unix-ms.
     /// Takes precedence over `idle_override_ms` if both set.
+    ///
+    /// ```
+    /// # use kevy_store::*;
+    /// # let mut s = Store::new();
+    /// # for t in [1, 2] {
+    /// #     let f = vec![(b"f".to_vec(), b"v".to_vec())];
+    /// #     s.xadd(b"s", XAddIdSpec::AutoAll, f, MissingStream::Create, t)?;
+    /// # }
+    /// # s.xgroup_create(b"s", b"g", GroupCreateMode::AtId(StreamId::MIN), MissingStream::Refuse)?;
+    /// # s.xreadgroup(b"s", b"g", b"alice", ReadGroupId::New, None, AckMode::Pending, 100)?;
+    /// let opts = XClaimOpts::default().with_time_ms(42);
+    /// s.xclaim(b"s", b"g", b"bob", &[StreamId::new(1, 0)], &opts, 150)?;
+    /// let g = s.stream_group_peek(b"s", b"g").unwrap();
+    /// assert_eq!(g.pending_entry(StreamId::new(1, 0)).unwrap().delivery_time_ms, 42);
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
     pub time_override_ms: Option<u64>,
     /// Override post-claim `delivery_count` (else +=1).
+    ///
+    /// ```
+    /// # use kevy_store::*;
+    /// # let mut s = Store::new();
+    /// # for t in [1, 2] {
+    /// #     let f = vec![(b"f".to_vec(), b"v".to_vec())];
+    /// #     s.xadd(b"s", XAddIdSpec::AutoAll, f, MissingStream::Create, t)?;
+    /// # }
+    /// # s.xgroup_create(b"s", b"g", GroupCreateMode::AtId(StreamId::MIN), MissingStream::Refuse)?;
+    /// # s.xreadgroup(b"s", b"g", b"alice", ReadGroupId::New, None, AckMode::Pending, 100)?;
+    /// let opts = XClaimOpts::default().with_retrycount(7);
+    /// s.xclaim(b"s", b"g", b"bob", &[StreamId::new(1, 0)], &opts, 150)?;
+    /// let g = s.stream_group_peek(b"s", b"g").unwrap();
+    /// assert_eq!(g.pending_entry(StreamId::new(1, 0)).unwrap().delivery_count, 7);
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
     pub retrycount_override: Option<u32>,
     /// `FORCE`: claim even if the entry isn't in the PEL yet (creates
     /// a fresh PEL row with delivery_count=1).
+    ///
+    /// ```
+    /// # use kevy_store::*;
+    /// # let mut s = Store::new();
+    /// # for t in [1, 2] {
+    /// #     let f = vec![(b"f".to_vec(), b"v".to_vec())];
+    /// #     s.xadd(b"s", XAddIdSpec::AutoAll, f, MissingStream::Create, t)?;
+    /// # }
+    /// # s.xgroup_create(b"s", b"g", GroupCreateMode::AtId(StreamId::MIN), MissingStream::Refuse)?;
+    /// # s.xreadgroup(b"s", b"g", b"alice", ReadGroupId::New, None, AckMode::Pending, 100)?;
+    /// let f = vec![(b"f".to_vec(), b"v".to_vec())];
+    /// let id = s.xadd(b"s", XAddIdSpec::AutoAll, f, MissingStream::Create, 3)?.unwrap();
+    /// // never delivered, so not pending: only FORCE claims it
+    /// let plain = XClaimOpts::default();
+    /// assert!(s.xclaim(b"s", b"g", b"bob", &[id], &plain, 150)?.is_empty());
+    /// let forced = XClaimOpts::default().with_force(true);
+    /// assert_eq!(s.xclaim(b"s", b"g", b"bob", &[id], &forced, 150)?.len(), 1);
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
     pub force: bool,
     /// `JUSTID` or a counted redelivery.
+    ///
+    /// ```
+    /// # use kevy_store::*;
+    /// # let mut s = Store::new();
+    /// # for t in [1, 2] {
+    /// #     let f = vec![(b"f".to_vec(), b"v".to_vec())];
+    /// #     s.xadd(b"s", XAddIdSpec::AutoAll, f, MissingStream::Create, t)?;
+    /// # }
+    /// # s.xgroup_create(b"s", b"g", GroupCreateMode::AtId(StreamId::MIN), MissingStream::Refuse)?;
+    /// # s.xreadgroup(b"s", b"g", b"alice", ReadGroupId::New, None, AckMode::Pending, 100)?;
+    /// let opts = XClaimOpts::default().with_mode(ClaimMode::JustId);
+    /// s.xclaim(b"s", b"g", b"bob", &[StreamId::new(1, 0)], &opts, 150)?;
+    /// let e = s.stream_group_peek(b"s", b"g").unwrap().pending_entry(StreamId::new(1, 0)).unwrap();
+    /// assert_eq!((e.consumer.as_slice(), e.delivery_count), (b"bob".as_slice(), 1));
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
     pub mode: ClaimMode,
 }
 

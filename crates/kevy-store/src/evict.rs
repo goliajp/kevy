@@ -12,6 +12,19 @@
 //! `maxmemory-samples = 5`). Random samples avoid the O(`map.len()`) cost of
 //! a "true" global LRU/LFU pick at the price of mild approximation — the
 //! exact same trade-off Redis ships with.
+//!
+//! ```
+//! use kevy_store::{EvictionPolicy, SetCondition, Store};
+//! let mut s = Store::new();
+//! s.set_max_memory(1_000_000, EvictionPolicy::AllKeysLru);
+//! for i in 0..100u32 {
+//!     s.set(&i.to_be_bytes(), vec![b'x'; 100], None, SetCondition::Always);
+//! }
+//! assert_eq!(s.try_evict_after_write(), 0); // under budget: nothing to do
+//! s.set_max_memory(s.used_memory() / 2, EvictionPolicy::AllKeysLru);
+//! assert!(s.try_evict_after_write() > 0);
+//! assert!(s.used_memory() <= s.maxmemory());
+//! ```
 
 #[cfg(not(feature = "std"))]
 use crate::nostd_prelude::*;

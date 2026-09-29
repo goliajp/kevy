@@ -142,9 +142,13 @@ mod string_rmw;
 mod string_set;
 mod tier;
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+mod tier_batch;
+#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 mod tier_codec;
 mod tier_demote;
 mod tier_serve;
+#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+mod tier_stats;
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 pub use segrows::SealedRows;
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
@@ -161,6 +165,7 @@ pub use types::{EvictionPolicy, RenameOutcome, StoreError};
 mod util;
 mod value;
 mod value_cold;
+mod value_enum;
 mod zset;
 mod zset_algebra;
 mod zset_range;
@@ -202,6 +207,16 @@ use kevy_map::KevyMap;
 /// since the shard is single-threaded with no cross-trust keys). Owning the
 /// table also exposes bucket addresses for software prefetch on the batch
 /// driver.
+///
+/// ```
+/// use core::time::Duration;
+/// use kevy_store::{SetCondition, Store};
+/// let mut s = Store::new();
+/// assert!(s.set(b"k", b"v".to_vec(), Some(Duration::from_secs(60)), SetCondition::Always));
+/// assert_eq!(s.type_of(b"k"), "string");
+/// assert_eq!(s.del(&[b"k".as_slice(), b"missing"]), 1);
+/// assert_eq!(s.type_of(b"k"), "none");
+/// ```
 #[derive(Debug, Default)]
 pub struct Store {
     pub(crate) map: KevyMap<SmallBytes, Entry>,
