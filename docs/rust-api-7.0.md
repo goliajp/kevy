@@ -71,6 +71,9 @@ and every public item carries a running example in its documentation.
 - `TierBudgetSpec` is `kevy_config::TierBudgetSpec`; the `tier` feature
   pulls in kevy-config.
 - `LinkKeys::new(local).with_peers(peers)`.
+- `AtomicAllShards::idx_query` / `idx_count` see the transaction's own
+  writes (6.4 saw the last commit); a failed transaction's writes leave
+  the index with its rollback.
 - New: `Change::new(offset, argv)`, `ChangeBatch::new(changes, next)`, and
   re-exports of `SortOrder`, `InsertPosition`, `ReplayMode`,
   `FeedPosition`, `CopyMode`, `TokenPositions`, `PubsubEvent`.
@@ -169,6 +172,12 @@ Types:
   displays `write refused: this is a read-only replica`;
   `KevyError::Store(e)` displays the store error's text and returns it
   from `source()`.
+- New: `Store::set_row_watch(RowWatch)`, `take_row_changes`,
+  `has_row_changes`, `row_watch`, with `RowWatch`, `RowChanges`,
+  `RowChange`: the store records, for keys under a watched prefix, the
+  watched fields as they were before the first write since the last
+  take — what an index needs to drop a row's old entry, whichever path
+  wrote the row.
 - New: `KeyspaceEvent::name()`, `HExpireCond::keyword()`,
   `ZAggregate::keyword()`, `EvictionPolicy::as_str()` / `parse()`.
 - `#[non_exhaustive]`: `KevyError`, `StoreError`, `StreamIdError`,
@@ -225,6 +234,25 @@ Types:
   `merge_group(&mut a, &b)` → `a.merge(&b)`;
   `narrow_advice(spec, i64)` → `spec.narrow_advice(Option<i64>)`;
   `splits_from_sample` → `splits_from_weighted(points, parts)`.
+- A `Segment` keeps no map from key back to entry, so a write names the
+  value the row was indexed under: `apply(key, new)` →
+  `apply(key, old: Option<&IndexValue>, new)`;
+  `apply_with_values(key, new, vals)` → `(key, old, new, vals)`;
+  `remove(key)` → `remove(key, old: &IndexValue)`;
+  `verify_entry(key)` → `contains(&value, key)`;
+  `stored(key, field)` → `stored(&value, key, field) -> Option<Vec<u8>>`;
+  `stored_row(key)` → `stored_row(&value, key) -> Vec<Option<Vec<u8>>>`;
+  `max_value()` returns `Option<IndexValue>`.
+- `scan(after, order)` returns a `Scan` cursor instead of a boxed
+  iterator: `while let Some((value, key)) = scan.next_entry() { … }`;
+  `iter_below(bound)` → `scan_below(bound)`, with `Scan::stored_row()`
+  for the entry's `VALUES`.
+- New: `Segment::for_spec(&IndexSpec)` (the segment an index declares,
+  with its key prefix and value shape), `repack()`, `set_key_dir(bool)` /
+  `key_dir() -> Option<&KeyDir>` (key → value, for indexes a view reads
+  by key), `IndexSpec::derive_scalar_refs`. `PlacementTable` is gone.
+  `each_entry` visits entries in `(value, key)` order; `count` is
+  O(log n).
 - Errors: `CatalogError` (`to_wire()`), `ViewError`, `TableError`
   (`to_wire()`), `WhereError`.
 - New: `IndexValue::encode` / `decode` / `render`, `AggBy::tag`,
