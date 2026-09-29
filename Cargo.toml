@@ -182,6 +182,18 @@ inherits = "release"
 strip = false
 debug = 1
 
+# The release-profile test run. What it has to prove is that the suite
+# holds with optimizations on and debug assertions and overflow checks off,
+# which is where release-only defects come from; those three settings are
+# inherited. Fat LTO over one codegen unit is not part of that question and,
+# applied to every test executable separately, it was most of the run. The
+# shipped fat-LTO server is exercised by the gates that start
+# target/release/kevy.
+[profile.release-tests]
+inherits = "release"
+lto = false
+codegen-units = 16
+
 # Size-optimized profile: opt-level "z" + same hardening. Used to measure
 # the size/perf trade-off of opt-level "z" vs the default release profile.
 # Invoke with `cargo build --profile release-min`.
