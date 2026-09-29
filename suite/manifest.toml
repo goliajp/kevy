@@ -365,6 +365,16 @@ requires = ["linux", "nightly rustdoc"]
 proves = "what the documentation owes — items with no doc, items with no executable example — may only shrink"
 
 [[check]]
+id = "apigate"
+area = "doc"
+tier = "premerge"
+cmd = "python3 tools/check_api_guidelines.py"
+expected = 300
+timeout = 1800
+requires = ["nightly rustdoc"]
+proves = "the public API meets the mechanical Rust API Guidelines, or names why an item is right as it is"
+
+[[check]]
 id = "doctest-run"
 area = "doc"
 tier = "premerge"
