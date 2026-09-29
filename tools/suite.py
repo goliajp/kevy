@@ -34,6 +34,8 @@ import sys
 import time
 import tomllib
 
+import ci_carry
+
 # Line-buffered even when redirected: a tier run under nohup showed a
 # zero-byte log for its whole first hour, which reads as "hung" and is
 # merely buffered.
@@ -479,7 +481,14 @@ def run_tier(suite, checks, tier, only=None, area=None):
     t_start = time.monotonic()
     global RUN_STARTED
     RUN_STARTED = time.time()
+    carry, carry_why = ({}, "") if only or area else ci_carry.carried(ROOT, selected, tier)
+    if carry_why:
+        print(f"  ci-carry: {carry_why}")
     for c in selected:
+        if c["id"] in carry:
+            results.append((c, "CARRIED", 0.0, carry[c["id"]], False))
+            print(f"  ↺ {c['id']:<22} CARRIED  ({carry[c['id']]})")
+            continue
         gap = requirement_gap(c)
         if gap:
             results.append((c, "NOT-RUN", 0.0, gap, False))
@@ -583,6 +592,7 @@ def run_tier(suite, checks, tier, only=None, area=None):
     passed = [r for r in results if r[1] == "PASS"]
     timeouts = [r for r in results if r[1] == "TIMEOUT"]
     skipped = [r for r in results if r[1] == "SKIPPED"]
+    carried_rows = [r for r in results if r[1] == "CARRIED"]
 
     # Real durations land beside the build products so the declared
     # expectations can be corrected from measurement, and cleaning the
@@ -615,14 +625,15 @@ def run_tier(suite, checks, tier, only=None, area=None):
     budget = suite["budgets"].get(tier)
     print(f"\nsuite {tier}: {len(passed)} passed, {len(fails)} failed, "
           f"{len(timeouts)} timed out, {len(advis)} advisory, "
-          f"{len(skipped)} skipped, {len(notrun)} not-run — "
+          f"{len(skipped)} skipped, {len(notrun)} not-run, {len(carried_rows)} carried from CI — "
           f"{wall:.0f}s" + (f" (budget {budget}s)" if budget else ""))
     # The tally must account for every check that was selected. It did not:
     # a TIMEOUT and a SKIPPED were in neither the counts nor the failed list,
     # so `workspace-tests` hit its 5400s ceiling and 53 checks were reported
     # as "43 passed, 2 failed, 1 advisory, 5 not-run". Eleven short of the
     # truth, in a line whose whole job is to be the truth.
-    counted = len(passed) + len(fails) + len(timeouts) + len(advis) + len(skipped) + len(notrun)
+    counted = (len(passed) + len(fails) + len(timeouts) + len(advis) + len(skipped)
+               + len(notrun) + len(carried_rows))
     if counted != len(results):
         print(f"  ✗ the tally covers {counted} of {len(results)} checks — a status this "
               f"runner does not count is a check that disappeared from its own report")

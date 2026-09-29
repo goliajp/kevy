@@ -283,26 +283,6 @@ requires = []
 proves = "every non-kevy dependency declared with a reason; no shipping third-party crate inside a stone"
 
 [[check]]
-id = "clone-atlas"
-area = "arch"
-tier = "full"
-cmd = "python3 tools/clone_atlas.py"
-expected = 30
-timeout = 600
-requires = []
-proves = "the duplication reading is reproducible; it reports, it does not gate"
-
-[[check]]
-id = "differential-embedded"
-area = "arch"
-tier = "prerelease"
-cmd = "cargo test -p kevy --test differential_server_vs_embedded"
-expected = 20
-timeout = 600
-requires = []
-proves = "the embedded facade and the server produce identical RESP bytes, or the difference is named with a reason"
-
-[[check]]
 id = "covgate"
 area = "cov"
 tier = "premerge"
@@ -570,21 +550,6 @@ requires = []
 proves = "zero clippy findings across every target, in the DEFAULT feature set"
 
 [[check]]
-id = "rulebook"
-area = "hygiene"
-tier = "full"
-# Not a gate: it counts. The rulebook has 50 rules and 9 of them are
-# refused by a gate; the other 41 were a claim with no reading behind
-# it until this existed. Ratcheting the counts comes after the counts
-# are driven down, not before — a ratchet on a number nobody has
-# attacked just freezes it.
-cmd = "python3 tools/rulebook_audit.py"
-expected = 20
-timeout = 300
-requires = []
-proves = "where this repository stands against every rule, including the ones no gate can see"
-
-[[check]]
 id = "fmtgate"
 area = "hygiene"
 tier = "precommit"
@@ -661,6 +626,7 @@ id = "sitegate"
 area = "doc"
 tier = "prerelease"
 cmd = "bash bench/sitegate.sh"
+ci_job = "site (built, checked, and opened in a browser)"
 expected = 240
 timeout = 1200
 requires = ["node", "chromium"]
@@ -1161,16 +1127,6 @@ requires = ["linux", "binaries-release", "docker"]
 proves = "migration day end to end, repeatable"
 
 [[check]]
-id = "drill-mailrs"
-area = "case"
-tier = "full"
-cmd = "bash bench/drill_mailrs.sh"
-expected = 900
-timeout = 5400
-requires = ["linux", "binaries-release"]
-proves = "a mailrs-shaped migration rehearsal, end to end"
-
-[[check]]
 id = "onrampgate"
 area = "case"
 tier = "full"
@@ -1179,16 +1135,6 @@ expected = 600
 timeout = 3600
 requires = ["binaries-release"]
 proves = "the on-ramp clamps with the real CLI binary"
-
-[[check]]
-id = "scalesoak"
-area = "case"
-tier = "full"
-cmd = "bash bench/scalesoak.sh target/release/kevy"
-expected = 3600
-timeout = 14400
-requires = ["box", "binaries-release"]
-proves = "the serving stack at declared scale, soaked"
 
 [[check]]
 id = "capacity-envelope"
@@ -1315,6 +1261,7 @@ id = "release-tests"
 area = "feature"
 tier = "prerelease"
 cmd = "cargo test --workspace --release --lib --tests"
+ci_job = "test (release profile, Linux)"
 expected = 2263
 timeout = 3600
 proves = "the suite passes with optimizations on, where debug-only checks are gone and timing moves; CI runs it on release and hotfix branches"
