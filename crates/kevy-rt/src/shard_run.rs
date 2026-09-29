@@ -105,7 +105,7 @@ impl<C: Commands> Shard<C> {
             // backstops it so a bigger-than-budget log can never
             // outrun the batch budget while the reactor is not yet up.
             let mut frames: u64 = 0;
-            let mut torn: Option<String> = None;
+            let mut torn: Option<kevy_store::SegRowsError> = None;
             let apply = |args: kevy_persist::Argv| {
                 if let Some(f) = kevy_persist::segmented_frame(&args) {
                     // The stitch frame re-does a hot-layer eviction; a

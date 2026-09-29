@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::value::{COLD_TAG_HASH, ColdRef, Value};
-use crate::{Store, key_heap_bytes_for, tier_codec};
+use crate::{SegRowsError, Store, key_heap_bytes_for, tier_codec};
 
 /// One shard's row-segment directory: the open segments and their
 /// live/dead record accounting (compaction's future trigger feed).
@@ -133,20 +133,20 @@ impl Store {
     /// every manifest-registered row segment from the previous run —
     /// they are truth, and the AOF's SEGMENTED frames (or a stub
     /// snapshot) will reference them by seq. Idempotent.
-    pub fn enable_seg_rows(&mut self, dir: &Path) -> Result<(), String> {
+    pub fn enable_seg_rows(&mut self, dir: &Path) -> Result<(), SegRowsError> {
         if self.segrows.is_some() {
             return Ok(());
         }
         let mut segs = Vec::new();
         let mut seq = 0u32;
         if dir.exists() {
-            let m = kevy_seg::Manifest::open(dir).map_err(|e| e.to_string())?;
+            let m = kevy_seg::Manifest::open(dir)?;
             for e in m.live().filter(|e| e.meta.starts_with(ROW_TAG)) {
                 let Some(q) = seq_of(&e.file) else {
-                    return Err(format!("row segment '{}' has no parsable seq", e.file));
+                    return Err(SegRowsError::NoSeq { file: e.file.clone() });
                 };
                 let seg = kevy_seg::Seg::open(dir.join(&e.file))
-                    .map_err(|err| format!("open {}: {err}", e.file))?;
+                    .map_err(|source| SegRowsError::Open { file: e.file.clone(), source })?;
                 seq = seq.max(q + 1);
                 segs.push((
                     q,
@@ -205,7 +205,7 @@ impl Store {
         &mut self,
         table: &[u8],
         keys: &[Vec<u8>],
-    ) -> Result<Option<SealedRows>, String> {
+    ) -> Result<Option<SealedRows>, SegRowsError> {
         if self.segrows.is_none() {
             return Ok(None);
         }
@@ -268,29 +268,29 @@ impl Store {
         &mut self,
         table: &[u8],
         rows: &[(&[u8], Vec<u8>)],
-    ) -> Result<u32, String> {
+    ) -> Result<u32, SegRowsError> {
         let sr = self.segrows.as_mut().expect("checked by caller");
-        std::fs::create_dir_all(&sr.dir).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(&sr.dir).map_err(SegRowsError::Io)?;
         let seq = sr.seq;
         let file = format!("row-{}-{}.seg", hex_stem(table), seq);
         sr.seq += 1;
         let path = sr.dir.join(&file);
-        let build = || -> Result<kevy_seg::SegMeta, String> {
-            let mut b = kevy_seg::SegBuilder::create(&path).map_err(|e| e.to_string())?;
+        let build = || -> Result<kevy_seg::SegMeta, kevy_seg::SegError> {
+            let mut b = kevy_seg::SegBuilder::create(&path)?;
             for (k, payload) in rows {
-                b.push(k, payload).map_err(|e| e.to_string())?;
+                b.push(k, payload)?;
             }
-            b.finish().map_err(|e| e.to_string())
+            b.finish()
         };
         let meta = build().inspect_err(|_| {
             let _ = std::fs::remove_file(&path);
         })?;
-        let mut m = kevy_seg::Manifest::open(&sr.dir).map_err(|e| e.to_string())?;
+        let mut m = kevy_seg::Manifest::open(&sr.dir)?;
         m.add(
             kevy_seg::ManifestEntry::new(file.clone(), meta).with_meta([ROW_TAG, table].concat()),
-        )
-        .map_err(|e| e.to_string())?;
-        let seg = kevy_seg::Seg::open(&path).map_err(|e| format!("reopen {file}: {e}"))?;
+        )?;
+        let seg = kevy_seg::Seg::open(&path)
+            .map_err(|source| SegRowsError::Reopen { file: file.clone(), source })?;
         sr.segs.push((seq, SegSlot { seg: Arc::new(seg), file, live: 0, dead: 0 }));
         self.cold_backing = true;
         Ok(seq)
