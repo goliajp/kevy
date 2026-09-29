@@ -53,6 +53,20 @@ impl Keyspace {
         self.map.get_mut(key)
     }
 
+    /// The entry at `slot` (a [`KevyMap::find_slot`] result for `key`, with
+    /// no insert or remove since), for a write: the row is recorded first.
+    #[inline]
+    pub(crate) fn entry_at_mut(&mut self, key: &[u8], slot: usize) -> Option<&mut Entry> {
+        self.note(key);
+        self.map.slot_mut(slot).map(|(_, e)| e)
+    }
+
+    /// [`Self::entry_at_mut`] for a change that keeps the row's content.
+    #[inline]
+    pub(crate) fn entry_at_quiet(&mut self, slot: usize) -> Option<&mut Entry> {
+        self.map.slot_mut(slot).map(|(_, e)| e)
+    }
+
     #[inline]
     pub(crate) fn insert(&mut self, key: SmallBytes, e: Entry) -> Option<Entry> {
         self.note(key.as_slice());
