@@ -443,6 +443,13 @@ fn parse_literal(b: &[u8]) -> Option<i64> {
     Some(Civil::from_date(y, m, d)?.with_time(h, min, s)?.to_epoch())
 }
 
+// Send and Sync are part of the public contract: a change that loses
+// either fails to compile here rather than in a caller.
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<Civil>();
+};
+
 #[cfg(test)]
 #[path = "lib_tests.rs"]
 mod tests;

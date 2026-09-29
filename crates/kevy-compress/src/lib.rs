@@ -476,5 +476,13 @@ pub(crate) fn read_varint(buf: &[u8]) -> Result<(usize, &[u8]), Corrupt> {
     Err(Corrupt)
 }
 
+// Send and Sync are part of the public contract: a change that loses
+// either fails to compile here rather than in a caller.
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<Corrupt>();
+    send_sync::<Dict>();
+};
+
 #[cfg(test)]
 mod tests;

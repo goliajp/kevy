@@ -50,3 +50,15 @@ pub use file_batch::FileRead;
 pub use layout::KernelTimespec;
 pub use pbr::ProvidedBufRing;
 pub use ring::IoUring;
+
+// Send and Sync are part of the public contract: a change that loses
+// either fails to compile here rather than in a caller.
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    const fn send<T: Send>() {}
+    send_sync::<Completion>();
+    send_sync::<FileRead>();
+    send_sync::<KernelTimespec>();
+    send::<IoUring>();
+    send::<ProvidedBufRing>();
+};

@@ -54,6 +54,16 @@ mod insert;
 mod iter;
 mod node;
 mod remove;
+// Send and Sync are part of the public contract: a change that loses
+// either fails to compile here rather than in a caller.
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<RankTree<u64>>();
+    send_sync::<Iter<'static, u64>>();
+    send_sync::<IterRev<'static, u64>>();
+    send_sync::<Range<'static, u64>>();
+};
+
 #[cfg(test)]
 mod tests_invariants;
 

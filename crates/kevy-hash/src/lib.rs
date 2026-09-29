@@ -449,5 +449,12 @@ pub type FxHashMap<K, V> = HashMap<K, V, FxBuildHasher>;
 #[cfg(feature = "std")]
 pub type FxHashSet<T> = HashSet<T, FxBuildHasher>;
 
+// Send and Sync are part of the public contract: a change that loses
+// either fails to compile here rather than in a caller.
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<FxHasher>();
+};
+
 #[cfg(test)]
 mod tests;
