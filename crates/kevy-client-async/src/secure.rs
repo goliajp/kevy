@@ -16,13 +16,18 @@ const TAG: usize = 16;
 
 /// A transport wrapped in Noise: reads open, writes seal.
 ///
-/// ```no_run
-/// # #[cfg(feature = "tokio")]
-/// # async fn demo() -> std::io::Result<()> {
-/// let tcp = kevy_client_async::rt_tokio::connect("127.0.0.1", 6404).await?;
-/// let secure = kevy_client_async::AsyncSecure::handshake(tcp, [0xab; 32], None).await?;
-/// let mut codec = kevy_client_async::AsyncRespCodec::new(secure);
-/// codec.request(&[b"PING".to_vec()]).await?;
+/// ```
+/// # include!("doc_serve.rs");
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() -> std::io::Result<()> {
+/// # let (addr, server_key) = serve_secure(&[("PING", "+PONG\r\n")]).await?;
+/// use kevy_client_async::{AsyncRespCodec, AsyncSecure, rt_tokio};
+/// use kevy_resp::Reply;
+///
+/// let tcp = rt_tokio::connect("127.0.0.1", addr.port()).await?;
+/// let secure = AsyncSecure::handshake(tcp, server_key, None).await?;
+/// let mut codec = AsyncRespCodec::new(secure);
+/// assert_eq!(codec.request(&[b"PING".to_vec()]).await?, Reply::Simple(b"PONG".to_vec()));
 /// # Ok(()) }
 /// ```
 pub struct AsyncSecure<T> {
@@ -54,11 +59,19 @@ impl<T: AsyncTransport> AsyncSecure<T> {
     /// `server_key`; `client` is this side's key pair when the server lists
     /// `client_keys`, `None` for a fresh one per connection.
     ///
-    /// ```no_run
-    /// # #[cfg(feature = "tokio")]
-    /// # async fn demo() -> std::io::Result<()> {
-    /// let tcp = kevy_client_async::rt_tokio::connect("127.0.0.1", 6404).await?;
-    /// let wrong = kevy_client_async::AsyncSecure::handshake(tcp, [0; 32], None).await;
+    /// ```
+    /// # include!("doc_serve.rs");
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> std::io::Result<()> {
+    /// # let (addr, server_key) = serve_secure(&[]).await?;
+    /// use kevy_client_async::{AsyncSecure, rt_tokio};
+    ///
+    /// let tcp = rt_tokio::connect("127.0.0.1", addr.port()).await?;
+    /// AsyncSecure::handshake(tcp, server_key, None).await?;
+    ///
+    /// // a server without the private half of the key is refused
+    /// let tcp = rt_tokio::connect("127.0.0.1", addr.port()).await?;
+    /// let wrong = AsyncSecure::handshake(tcp, [0; 32], None).await;
     /// assert!(wrong.is_err());
     /// # Ok(()) }
     /// ```

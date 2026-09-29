@@ -17,6 +17,22 @@
 //! actually require: a single `AsyncRead + AsyncWrite + Send + Unpin`
 //! thing. Blanket-impl'd for any qualifying type so callers can hand
 //! in any compatible transport.
+//!
+//! ```
+//! # #[tokio::main(flavor = "current_thread")]
+//! # async fn main() -> std::io::Result<()> {
+//! # let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+//! # let mut a = tokio::net::TcpStream::connect(listener.local_addr()?).await?;
+//! # let (mut b, _) = listener.accept().await?;
+//! // `a` and `b` are the two ends of a TCP connection
+//! use kevy_client_async::{read, write_all};
+//!
+//! write_all(&mut a, b"*1\r\n$4\r\nPING\r\n").await?;
+//! let mut buf = [0u8; 64];
+//! let n = read(&mut b, &mut buf).await?;
+//! assert_eq!(&buf[..n], b"*1\r\n$4\r\nPING\r\n");
+//! # Ok(()) }
+//! ```
 
 use core::future::Future;
 use core::pin::Pin;
@@ -64,6 +80,24 @@ pub trait AsyncRead {
     /// Attempt to read bytes into `buf`. Returns the number of bytes
     /// written, or `Pending` if the underlying transport has nothing
     /// available yet.
+    ///
+    /// ```
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> std::io::Result<()> {
+    /// # let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    /// # let mut a = tokio::net::TcpStream::connect(listener.local_addr()?).await?;
+    /// # let (mut b, _) = listener.accept().await?;
+    /// // `a` and `b` are the two ends of a TCP connection
+    /// use core::future::poll_fn;
+    /// use core::pin::Pin;
+    /// use kevy_client_async::{AsyncRead, write_all};
+    ///
+    /// write_all(&mut a, b"hi").await?;
+    /// let mut buf = [0u8; 8];
+    /// let n = poll_fn(|cx| Pin::new(&mut b).poll_read(cx, &mut buf)).await?;
+    /// assert_eq!(&buf[..n], b"hi");
+    /// # Ok(()) }
+    /// ```
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -114,6 +148,25 @@ pub trait AsyncRead {
 pub trait AsyncWrite {
     /// Attempt to write bytes from `buf`. Returns the number of bytes
     /// accepted, or `Pending`.
+    ///
+    /// ```
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> std::io::Result<()> {
+    /// # let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    /// # let mut a = tokio::net::TcpStream::connect(listener.local_addr()?).await?;
+    /// # let (mut b, _) = listener.accept().await?;
+    /// // `a` and `b` are the two ends of a TCP connection
+    /// use core::future::poll_fn;
+    /// use core::pin::Pin;
+    /// use kevy_client_async::{AsyncWrite, read};
+    ///
+    /// let n = poll_fn(|cx| Pin::new(&mut a).poll_write(cx, b"hi")).await?;
+    /// assert_eq!(n, 2); // both bytes accepted
+    /// let mut buf = [0u8; 8];
+    /// let got = read(&mut b, &mut buf).await?;
+    /// assert_eq!(&buf[..got], b"hi");
+    /// # Ok(()) }
+    /// ```
     fn poll_write(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -121,9 +174,44 @@ pub trait AsyncWrite {
     ) -> Poll<io::Result<usize>>;
 
     /// Attempt to flush buffered bytes to the transport.
+    ///
+    /// ```
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> std::io::Result<()> {
+    /// # let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    /// # let mut a = tokio::net::TcpStream::connect(listener.local_addr()?).await?;
+    /// # let (mut b, _) = listener.accept().await?;
+    /// // `a` and `b` are the two ends of a TCP connection
+    /// use core::future::poll_fn;
+    /// use core::pin::Pin;
+    /// use kevy_client_async::{AsyncWrite, write_all};
+    ///
+    /// write_all(&mut a, b"hi").await?;
+    /// // every accepted byte is on its way once this resolves
+    /// poll_fn(|cx| Pin::new(&mut a).poll_flush(cx)).await?;
+    /// # Ok(()) }
+    /// ```
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>>;
 
     /// Initiate / continue a graceful shutdown of the write half.
+    ///
+    /// ```
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> std::io::Result<()> {
+    /// # let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    /// # let mut a = tokio::net::TcpStream::connect(listener.local_addr()?).await?;
+    /// # let (mut b, _) = listener.accept().await?;
+    /// // `a` and `b` are the two ends of a TCP connection
+    /// use core::future::poll_fn;
+    /// use core::pin::Pin;
+    /// use kevy_client_async::{AsyncWrite, read};
+    ///
+    /// poll_fn(|cx| Pin::new(&mut a).poll_close(cx)).await?;
+    /// // the peer sees end of stream
+    /// let mut buf = [0u8; 8];
+    /// assert_eq!(read(&mut b, &mut buf).await?, 0);
+    /// # Ok(()) }
+    /// ```
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>>;
 }
 
@@ -153,6 +241,22 @@ impl<T> AsyncTransport for T where T: AsyncRead + AsyncWrite + Send + Unpin + ?S
 
 /// Future returned by [`read`]: drives a single `poll_read` to
 /// completion.
+///
+/// ```
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() -> std::io::Result<()> {
+/// # let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+/// # let mut a = tokio::net::TcpStream::connect(listener.local_addr()?).await?;
+/// # let (mut b, _) = listener.accept().await?;
+/// // `a` and `b` are the two ends of a TCP connection
+/// use kevy_client_async::{read, transport::Read, write_all};
+///
+/// write_all(&mut a, b"hi").await?;
+/// let mut buf = [0u8; 8];
+/// let pending: Read<'_, _> = read(&mut b, &mut buf); // nothing happens until awaited
+/// assert_eq!(pending.await?, 2);
+/// # Ok(()) }
+/// ```
 #[derive(Debug)]
 pub struct Read<'a, T: ?Sized> {
     transport: &'a mut T,
@@ -161,6 +265,22 @@ pub struct Read<'a, T: ?Sized> {
 
 /// Future returned by [`write_all`]: drives `poll_write` to completion
 /// for the whole buffer (loops on partial writes internally).
+///
+/// ```
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() -> std::io::Result<()> {
+/// # let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+/// # let mut a = tokio::net::TcpStream::connect(listener.local_addr()?).await?;
+/// # let (mut b, _) = listener.accept().await?;
+/// // `a` and `b` are the two ends of a TCP connection
+/// use kevy_client_async::{read, transport::WriteAll, write_all};
+///
+/// let pending: WriteAll<'_, _> = write_all(&mut a, b"hi"); // nothing is sent until awaited
+/// pending.await?;
+/// let mut buf = [0u8; 8];
+/// assert_eq!(read(&mut b, &mut buf).await?, 2);
+/// # Ok(()) }
+/// ```
 #[derive(Debug)]
 pub struct WriteAll<'a, T: ?Sized> {
     transport: &'a mut T,
@@ -170,6 +290,28 @@ pub struct WriteAll<'a, T: ?Sized> {
 
 /// Single-chunk async read. Resolves to the number of bytes read; `0`
 /// = clean EOF.
+///
+/// ```
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() -> std::io::Result<()> {
+/// # let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+/// # let mut a = tokio::net::TcpStream::connect(listener.local_addr()?).await?;
+/// # let (mut b, _) = listener.accept().await?;
+/// // `a` and `b` are the two ends of a TCP connection
+/// use kevy_client_async::{read, write_all};
+///
+/// write_all(&mut a, b"hello").await?;
+/// drop(a);
+/// let (mut buf, mut got) = ([0u8; 8], Vec::new());
+/// loop {
+///     match read(&mut b, &mut buf).await? {
+///         0 => break, // clean end of stream
+///         n => got.extend_from_slice(&buf[..n]),
+///     }
+/// }
+/// assert_eq!(got, b"hello");
+/// # Ok(()) }
+/// ```
 pub fn read<'a, T>(transport: &'a mut T, buf: &'a mut [u8]) -> Read<'a, T>
 where
     T: AsyncRead + Unpin + ?Sized,
@@ -179,6 +321,31 @@ where
 
 /// Async equivalent of `Write::write_all` — succeeds only after every
 /// byte in `buf` is accepted by the transport.
+///
+/// ```
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() -> std::io::Result<()> {
+/// # let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+/// # let mut a = tokio::net::TcpStream::connect(listener.local_addr()?).await?;
+/// # let (mut b, _) = listener.accept().await?;
+/// // `a` and `b` are the two ends of a TCP connection
+/// use kevy_client_async::{read, write_all};
+///
+/// let big = vec![7u8; 1 << 20]; // more than one socket write can take
+/// let reader = tokio::spawn(async move {
+///     let (mut buf, mut total) = ([0u8; 8192], 0);
+///     loop {
+///         match read(&mut b, &mut buf).await? {
+///             0 => return Ok::<_, std::io::Error>(total),
+///             n => total += n,
+///         }
+///     }
+/// });
+/// write_all(&mut a, &big).await?;
+/// drop(a);
+/// assert_eq!(reader.await.unwrap()?, big.len());
+/// # Ok(()) }
+/// ```
 pub fn write_all<'a, T>(transport: &'a mut T, buf: &'a [u8]) -> WriteAll<'a, T>
 where
     T: AsyncWrite + Unpin + ?Sized,

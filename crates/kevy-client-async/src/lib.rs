@@ -56,11 +56,19 @@
 //!
 //! # Example
 //!
-//! ```no_run
-//! # async fn demo() -> std::io::Result<()> {
+//! ```
+//! # include!("doc_serve.rs");
+//! # #[tokio::main(flavor = "current_thread")]
+//! # async fn main() -> std::io::Result<()> {
+//! # let addr = serve(&[
+//! #     ("SET greeting hello", "+OK\r\n"),
+//! #     ("GET greeting", "$5\r\nhello\r\n"),
+//! #     ("INCR hits", ":1\r\n"),
+//! #     ("INCR hits", ":2\r\n"),
+//! # ]).await?;
 //! use kevy_client_async::AsyncConnection;
 //!
-//! let mut c = AsyncConnection::connect("kevy://127.0.0.1:6004").await?;
+//! let mut c = AsyncConnection::connect(&format!("kevy://{addr}")).await?;
 //! c.set(b"greeting", b"hello").await?;
 //! assert_eq!(c.get(b"greeting").await?.as_deref(), Some(&b"hello"[..]));
 //! let replies = c.pipeline().incr(b"hits").incr(b"hits").run(&mut c).await?;
