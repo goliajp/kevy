@@ -30,10 +30,12 @@ pub(super) fn keys(
     store: &mut Store,
     cq: &ComposeQuery,
 ) -> Result<Option<Vec<Vec<u8>>>, kevy_resp::CmdError> {
-    let found =
-        index_runtime::with_two_ready_segments(ctx, &cq.a.name, &cq.b.name, |sa, a, sb, b| {
-            find(cq, store, sa, a, sb, b)
-        })?;
+    let found = index_runtime::with_two_ready_segments(
+        ctx,
+        &cq.a.name,
+        &cq.b.name,
+        |sa, a, sb, b, win| find(cq, store, sa, a, Side { spec: sb, seg: b, windowed: win }),
+    )?;
     let Some(mut keys) = found else { return Ok(None) };
     keys.sort();
     if let Some(cur) = &cq.cursor_key {
@@ -43,14 +45,22 @@ pub(super) fn keys(
     Ok(Some(keys))
 }
 
+/// B's side of an AND: its spec, its segment, and whether a window keeps
+/// only part of its rows hot.
+struct Side<'a> {
+    spec: &'a IndexSpec,
+    seg: &'a Segment,
+    windowed: bool,
+}
+
 fn find(
     cq: &ComposeQuery,
     store: &mut Store,
     sa: &IndexSpec,
     a: &Segment,
-    sb: &IndexSpec,
-    b: &Segment,
+    b: Side<'_>,
 ) -> Option<Vec<Vec<u8>>> {
+    let Side { spec: sb, seg: b, windowed } = b;
     let (min_a, max_a) = super::ops::sub_bounds(&cq.a.shape, sa.ty())?;
     let (min_b, max_b) = super::ops::sub_bounds(&cq.b.shape, sb.ty())?;
     let (a_hits, _) = a.range(&min_a, &max_a, None, usize::MAX);
@@ -68,10 +78,12 @@ fn find(
     }
     let a_keys: Vec<Vec<u8>> = a_keys.collect();
     if b.count(&min_b, &max_b) as usize > WALK_B_UP_TO * a_keys.len().max(1) {
-        // B's field from each row, then whether B holds the row under it
-        // (a row outside a windowed B's hot range is not held)
+        // B's field from each row; an index without a window holds every
+        // row its field derives a value for, and a windowed one only those
+        // still in its hot range, which the tree answers
         let held = |k: &Vec<u8>| {
-            row_value(store, sb, k).is_some_and(|v| in_range(&v) && b.contains(&v, k))
+            row_value(store, sb, k)
+                .is_some_and(|v| in_range(&v) && (!windowed || b.contains(&v, k)))
         };
         return Some(a_keys.into_iter().filter(held).collect());
     }

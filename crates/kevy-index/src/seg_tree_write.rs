@@ -3,7 +3,7 @@
 use std::cmp::Ordering;
 
 use super::{FANOUT, Path, Pos, Tree};
-use crate::seg_leaf::{Ent, Leaf, Probe, head_of};
+use crate::seg_leaf::{Ent, Leaf, Probe, head16_of};
 
 impl Tree {
     /// Insert `key` with `payload`. An equal key already there has its
@@ -87,7 +87,7 @@ impl Tree {
     fn set_sep(&mut self, node: u32, at: usize, sep: Vec<u8>) {
         let n = &mut self.inners[node as usize];
         self.sep_bytes = self.sep_bytes + sep.len() - n.seps[at].len();
-        n.heads[at] = head_of(&sep);
+        n.heads[at] = head16_of(&sep);
         n.seps[at] = sep.into_boxed_slice();
     }
 

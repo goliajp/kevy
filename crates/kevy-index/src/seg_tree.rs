@@ -18,7 +18,9 @@ pub(crate) const FANOUT: usize = 64;
 
 #[derive(Debug, Default)]
 pub(crate) struct Inner {
-    pub(crate) heads: Vec<u64>,
+    /// Each separator's first 16 bytes: most order keys fit, and then
+    /// routing never reads the separator itself.
+    pub(crate) heads: Vec<u128>,
     pub(crate) seps: Vec<Box<[u8]>>,
     pub(crate) kids: Vec<u32>,
     pub(crate) counts: Vec<u32>,
@@ -40,8 +42,7 @@ impl Inner {
         let (mut lo, mut hi) = (0, self.seps.len());
         while lo < hi {
             let mid = (lo + hi) / 2;
-            let s = &self.seps[mid];
-            if cmp_key(p, self.heads[mid], s.len(), s.get(8..).unwrap_or(&[])) == Ordering::Less {
+            if self.cmp_sep(p, mid) == Ordering::Less {
                 hi = mid;
             } else {
                 lo = mid + 1;
@@ -50,8 +51,22 @@ impl Inner {
         lo
     }
 
+    /// The probe against separator `at`.
+    #[inline]
+    fn cmp_sep(&self, p: &Probe<'_>, at: usize) -> Ordering {
+        let (h, s) = (self.heads[at], &self.seps[at]);
+        if p.past {
+            return cmp_key(p, (h >> 64) as u64, s.len(), s.get(8..).unwrap_or(&[]));
+        }
+        match p.head16.cmp(&h) {
+            Ordering::Equal if p.bytes.len().min(s.len()) < 16 => p.bytes.len().cmp(&s.len()),
+            Ordering::Equal => crate::seg_leaf::cmp_bytes(&p.bytes[16..], &s[16..]),
+            o => o,
+        }
+    }
+
     fn insert_sep(&mut self, at: usize, sep: Box<[u8]>) {
-        self.heads.insert(at, crate::seg_leaf::head_of(&sep));
+        self.heads.insert(at, crate::seg_leaf::head16_of(&sep));
         self.seps.insert(at, sep);
     }
 
