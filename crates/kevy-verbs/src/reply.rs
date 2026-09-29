@@ -34,16 +34,6 @@ pub fn wrong_args(out: &mut Vec<u8>, cmd: &str) {
     encode_error(out, &format!("ERR wrong number of arguments for '{cmd}' command"));
 }
 
-/// The wire wording of a keyspace error.
-///
-/// ```
-/// use kevy_store::StoreError;
-/// assert!(kevy_verbs::reply::store_err_msg(&StoreError::WrongType).starts_with("WRONGTYPE"));
-/// ```
-pub fn store_err_msg(e: &StoreError) -> &'static str {
-    e.as_wire()
-}
-
 /// A keyspace error as its RESP error reply.
 ///
 /// ```
@@ -53,7 +43,7 @@ pub fn store_err_msg(e: &StoreError) -> &'static str {
 /// ```
 #[inline]
 pub fn store_err(out: &mut Vec<u8>, e: StoreError) {
-    encode_error(out, store_err_msg(&e));
+    encode_error(out, e.as_wire());
 }
 
 /// `:n` on success, the error reply otherwise.
