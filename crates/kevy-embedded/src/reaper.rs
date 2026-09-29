@@ -271,7 +271,7 @@ pub(crate) fn concurrent_auto_rewrite(
     };
     // Phase 2 — serialize the frozen view + fsync, lock released.
     let keys = match kevy_persist::dump_aof(&tmp, &view) {
-        Ok((keys, _)) => keys,
+        Ok(stats) => stats.keys,
         Err(e) => {
             eprintln!("kevy: embedded auto AOF rewrite (dump) failed: {e}");
             let mut g = lock_inner(inner);

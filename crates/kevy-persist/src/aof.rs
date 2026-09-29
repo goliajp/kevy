@@ -454,7 +454,7 @@ impl Aof {
         self.file.flush()?;
 
         let tmp = crate::aof_util::rewrite_tmp_path(&self.path);
-        let (keys, bytes) = crate::dump_aof(&tmp, store)?;
+        let RewriteStats { keys, bytes } = crate::dump_aof(&tmp, store)?;
 
         // Atomic replacement. After this, the OLD file descriptor in
         // `self.file` is open against an unlinked inode; new writes would
