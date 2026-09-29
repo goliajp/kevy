@@ -16,6 +16,24 @@
 //! Every entry point catches panics: unwinding across an `extern "C"`
 //! boundary is undefined behaviour, and this is a trust boundary — the
 //! caller may be any language runtime.
+//!
+//! ```
+//! use kevy_ffi::{KevyBuf, kevy_buf_free, kevy_close, kevy_cmd, kevy_open_mem};
+//!
+//! let db = kevy_open_mem();
+//! let argv: [&[u8]; 3] = [b"SET", b"greeting", b"hello"];
+//! let ptrs: Vec<*const u8> = argv.iter().map(|a| a.as_ptr()).collect();
+//! let lens: Vec<usize> = argv.iter().map(|a| a.len()).collect();
+//! let mut out = KevyBuf { ptr: std::ptr::null_mut(), len: 0, cap: 0 };
+//! // SAFETY: `db` is live; `ptrs`/`lens` hold 3 entries pointing into `argv`;
+//! // the reply is read before its single free and `db` is closed once.
+//! unsafe {
+//!     assert_eq!(kevy_cmd(db, 3, ptrs.as_ptr(), lens.as_ptr(), &mut out), 0);
+//!     assert_eq!(std::slice::from_raw_parts(out.ptr, out.len), b"+OK\r\n");
+//!     kevy_buf_free(out.ptr, out.len, out.cap);
+//!     kevy_close(db);
+//! }
+//! ```
 
 // `catch_unwind` at the ABI boundary. Its `Err` is the panic payload,
 // and the point of catching it here is that a panic must not cross
@@ -36,21 +54,44 @@ mod frame;
 mod lifecycle;
 mod publish;
 mod report;
+mod scalar;
 mod sub;
 mod sub_raw;
 pub use dispatch::{MGET_MISS, dispatch_packed, get_lent, mget_packed, mset_packed};
 pub use lifecycle::{KevyOpenOptions, kevy_open_with, kevy_shutdown};
 pub use publish::kevy_publish;
 pub use report::{KevyOpenReport, kevy_open_report};
+pub use scalar::{kevy_buf_free_shared, kevy_get, kevy_get_shared, kevy_set};
 pub use sub::{kevy_psubscribe, kevy_sub_close, kevy_sub_next, kevy_sub_wait, kevy_subscribe};
 pub use sub_raw::{kevy_sub_next_raw, kevy_sub_wait_raw};
 
 /// Opaque database handle. A `Box<Store>` on the Rust side.
+///
+/// ```
+/// let db: *mut kevy_ffi::KevyDb = kevy_ffi::kevy_open_mem();
+/// assert!(!db.is_null());
+/// // SAFETY: the handle just opened, closed exactly once.
+/// unsafe { kevy_ffi::kevy_close(db) };
+/// ```
 pub struct KevyDb {
     pub(crate) store: Store,
 }
 
 /// Opaque subscription handle. A `Box<Subscription>` on the Rust side.
+///
+/// ```
+/// use kevy_ffi::{KevySub, kevy_close, kevy_open_mem, kevy_sub_close, kevy_subscribe};
+///
+/// let db = kevy_open_mem();
+/// // SAFETY: `db` is live and the channel name is 4 readable bytes; each
+/// // handle is closed exactly once, the subscription first.
+/// unsafe {
+///     let sub: *mut KevySub = kevy_subscribe(db, b"news".as_ptr(), 4);
+///     assert!(!sub.is_null());
+///     kevy_sub_close(sub);
+///     kevy_close(db);
+/// }
+/// ```
 pub struct KevySub {
     pub(crate) sub: Subscription,
 }
@@ -58,13 +99,77 @@ pub struct KevySub {
 /// A byte buffer owned by kevy, returned to the caller. Free it with
 /// [`kevy_buf_free`]. `ptr` is null only for a miss/error; a present empty
 /// value has a non-null (dangling) `ptr` with `len == 0`.
+///
+/// ```
+/// use kevy_ffi::{KevyBuf, kevy_buf_free, kevy_close, kevy_get, kevy_open_mem, kevy_set};
+///
+/// let db = kevy_open_mem();
+/// let mut out = KevyBuf { ptr: std::ptr::null_mut(), len: 0, cap: 0 };
+/// // SAFETY: `db` is live; every key/value pointer covers its length; the
+/// // buffer is freed once with its triple unchanged; `db` is closed once.
+/// unsafe {
+///     assert_eq!(kevy_set(db, b"k".as_ptr(), 1, b"".as_ptr(), 0, 0), 0);
+///     assert_eq!(kevy_get(db, b"k".as_ptr(), 1, &mut out), 1);
+///     assert!(!out.ptr.is_null() && out.len == 0); // present but empty, not a miss
+///     kevy_buf_free(out.ptr, out.len, out.cap);
+///     kevy_close(db);
+/// }
+/// ```
 #[repr(C)]
 pub struct KevyBuf {
     /// Start of the buffer (allocated by Rust; never free() it).
+    ///
+    /// ```
+    /// use kevy_ffi::{KevyBuf, kevy_buf_free, kevy_close, kevy_get, kevy_open_mem, kevy_set};
+    ///
+    /// let db = kevy_open_mem();
+    /// let mut out = KevyBuf { ptr: std::ptr::null_mut(), len: 0, cap: 0 };
+    /// // SAFETY: `db` is live; every key/value pointer covers its length; the
+    /// // buffer is read before its single free; `db` is closed once.
+    /// unsafe {
+    ///     assert_eq!(kevy_set(db, b"k".as_ptr(), 1, b"value".as_ptr(), 5, 0), 0);
+    ///     assert_eq!(kevy_get(db, b"k".as_ptr(), 1, &mut out), 1);
+    ///     assert_eq!(std::slice::from_raw_parts(out.ptr, out.len), b"value");
+    ///     kevy_buf_free(out.ptr, out.len, out.cap);
+    ///     kevy_close(db);
+    /// }
+    /// ```
     pub ptr: *mut u8,
     /// Length in bytes.
+    ///
+    /// ```
+    /// use kevy_ffi::{KevyBuf, kevy_buf_free, kevy_close, kevy_get, kevy_open_mem, kevy_set};
+    ///
+    /// let db = kevy_open_mem();
+    /// let mut out = KevyBuf { ptr: std::ptr::null_mut(), len: 0, cap: 0 };
+    /// // SAFETY: `db` is live; every key/value pointer covers its length; the
+    /// // buffer is read before its single free; `db` is closed once.
+    /// unsafe {
+    ///     assert_eq!(kevy_set(db, b"k".as_ptr(), 1, b"value".as_ptr(), 5, 0), 0);
+    ///     assert_eq!(kevy_get(db, b"k".as_ptr(), 1, &mut out), 1);
+    ///     assert_eq!(out.len, 5);
+    ///     kevy_buf_free(out.ptr, out.len, out.cap);
+    ///     kevy_close(db);
+    /// }
+    /// ```
     pub len: usize,
     /// Capacity — carried so the Vec can be rebuilt exactly on free.
+    ///
+    /// ```
+    /// use kevy_ffi::{KevyBuf, kevy_buf_free, kevy_close, kevy_get, kevy_open_mem, kevy_set};
+    ///
+    /// let db = kevy_open_mem();
+    /// let mut out = KevyBuf { ptr: std::ptr::null_mut(), len: 0, cap: 0 };
+    /// // SAFETY: `db` is live; every key/value pointer covers its length; the
+    /// // buffer is read before its single free; `db` is closed once.
+    /// unsafe {
+    ///     assert_eq!(kevy_set(db, b"k".as_ptr(), 1, b"value".as_ptr(), 5, 0), 0);
+    ///     assert_eq!(kevy_get(db, b"k".as_ptr(), 1, &mut out), 1);
+    ///     assert!(out.cap >= out.len); // handed back unchanged to the free
+    ///     kevy_buf_free(out.ptr, out.len, out.cap);
+    ///     kevy_close(db);
+    /// }
+    /// ```
     pub cap: usize,
 }
 
@@ -80,9 +185,18 @@ impl KevyBuf {
 }
 
 /// ABI version. Bump only on a breaking change to these signatures.
+///
+/// ```
+/// // a binding refuses a library whose ABI it was not written against
+/// assert_eq!(kevy_ffi::kevy_abi(), kevy_ffi::KEVY_ABI);
+/// ```
 pub const KEVY_ABI: u32 = 1;
 
 /// Returns the ABI version ([`KEVY_ABI`]).
+///
+/// ```
+/// assert_eq!(kevy_ffi::kevy_abi(), 1);
+/// ```
 // NO-UNWIND: returns a constant
 #[unsafe(no_mangle)]
 pub extern "C" fn kevy_abi() -> u32 {
@@ -90,6 +204,13 @@ pub extern "C" fn kevy_abi() -> u32 {
 }
 
 /// Returns the engine version as a static NUL-terminated string.
+///
+/// ```
+/// // SAFETY: the pointer is to a static NUL-terminated string.
+/// let v = unsafe { std::ffi::CStr::from_ptr(kevy_ffi::kevy_version()) };
+/// assert_eq!(v.to_str()?, env!("CARGO_PKG_VERSION"));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 // NO-UNWIND: returns a pointer to a static string
 #[unsafe(no_mangle)]
 pub extern "C" fn kevy_version() -> *const std::ffi::c_char {
@@ -100,6 +221,30 @@ pub extern "C" fn kevy_version() -> *const std::ffi::c_char {
 /// Open a persistent store rooted at `dir` (UTF-8, `dir_len` bytes, not
 /// NUL-terminated). Returns null on failure — invalid UTF-8, or the
 /// directory could not be created/replayed.
+///
+/// ```
+/// use kevy_ffi::{KevyBuf, kevy_buf_free, kevy_close, kevy_get, kevy_open, kevy_set};
+///
+/// let dir = std::env::temp_dir().join(format!("kevy-ffi-open-doc-{}", std::process::id()));
+/// let path = dir.to_str().ok_or("temp dir is not UTF-8")?;
+/// // SAFETY: `path` is `path.len()` readable bytes; every key/value pointer
+/// // covers its length; the buffer is freed once; each handle is closed once.
+/// unsafe {
+///     let db = kevy_open(path.as_ptr(), path.len());
+///     assert!(!db.is_null());
+///     assert_eq!(kevy_set(db, b"k".as_ptr(), 1, b"kept".as_ptr(), 4, 0), 0);
+///     kevy_close(db);
+///
+///     let db = kevy_open(path.as_ptr(), path.len()); // replays the log
+///     let mut out = KevyBuf { ptr: std::ptr::null_mut(), len: 0, cap: 0 };
+///     assert_eq!(kevy_get(db, b"k".as_ptr(), 1, &mut out), 1);
+///     assert_eq!(std::slice::from_raw_parts(out.ptr, out.len), b"kept");
+///     kevy_buf_free(out.ptr, out.len, out.cap);
+///     kevy_close(db);
+/// }
+/// std::fs::remove_dir_all(&dir)?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 ///
 /// # Safety
 /// `dir` must point to `dir_len` readable bytes.
@@ -119,6 +264,18 @@ pub unsafe extern "C" fn kevy_open(dir: *const u8, dir_len: usize) -> *mut KevyD
 }
 
 /// Open a pure in-memory store: no directory, nothing survives the process.
+///
+/// ```
+/// use kevy_ffi::{KevyBuf, kevy_close, kevy_get, kevy_open_mem};
+///
+/// let db = kevy_open_mem();
+/// let mut out = KevyBuf { ptr: std::ptr::null_mut(), len: 0, cap: 0 };
+/// // SAFETY: `db` is live; the key pointer covers its length; closed once.
+/// unsafe {
+///     assert_eq!(kevy_get(db, b"k".as_ptr(), 1, &mut out), 0); // starts empty
+///     kevy_close(db);
+/// }
+/// ```
 // NO-UNWIND: the store is opened inside open_with, which catches
 #[unsafe(no_mangle)]
 pub extern "C" fn kevy_open_mem() -> *mut KevyDb {
@@ -136,6 +293,15 @@ pub(crate) fn open_with(cfg: impl FnOnce() -> Config) -> *mut KevyDb {
 /// Close a store and release everything it holds. `db` must come from
 /// [`kevy_open`] / [`kevy_open_mem`] and must not be used afterwards.
 /// Null is a no-op.
+///
+/// ```
+/// let db = kevy_ffi::kevy_open_mem();
+/// // SAFETY: a live handle, passed exactly once; null is a no-op.
+/// unsafe {
+///     kevy_ffi::kevy_close(db);
+///     kevy_ffi::kevy_close(std::ptr::null_mut());
+/// }
+/// ```
 ///
 /// # Safety
 /// `db` must be a live handle from this library, passed exactly once.
@@ -156,6 +322,27 @@ pub unsafe extern "C" fn kevy_close(db: *mut KevyDb) {
 /// *successful* call with a RESP error in `out`. Non-zero means the call
 /// itself was misused (null handle/args, zero argc, or an internal panic);
 /// `out` is then empty and must not be freed.
+///
+/// ```
+/// use kevy_ffi::{KevyBuf, kevy_buf_free, kevy_close, kevy_cmd, kevy_open_mem};
+///
+/// let db = kevy_open_mem();
+/// let argv: [&[u8]; 2] = [b"INCR", b"hits"];
+/// let ptrs: Vec<*const u8> = argv.iter().map(|a| a.as_ptr()).collect();
+/// let lens: Vec<usize> = argv.iter().map(|a| a.len()).collect();
+/// let mut out = KevyBuf { ptr: std::ptr::null_mut(), len: 0, cap: 0 };
+/// // SAFETY: `db` is live; `ptrs`/`lens` hold 2 entries pointing into `argv`;
+/// // the reply is read before its single free; `db` is closed once.
+/// unsafe {
+///     assert_eq!(kevy_cmd(db, 2, ptrs.as_ptr(), lens.as_ptr(), &mut out), 0);
+///     assert_eq!(std::slice::from_raw_parts(out.ptr, out.len), b":1\r\n");
+///     kevy_buf_free(out.ptr, out.len, out.cap);
+///     // misuse: zero arguments; `out` is left empty and is not freed
+///     assert_eq!(kevy_cmd(db, 0, ptrs.as_ptr(), lens.as_ptr(), &mut out), -1);
+///     assert!(out.ptr.is_null());
+///     kevy_close(db);
+/// }
+/// ```
 ///
 /// # Safety
 /// All pointers must be valid for the lengths given; `out` must point to
@@ -214,6 +401,22 @@ pub unsafe extern "C" fn kevy_cmd(
 /// which half the FFI toolchains (bun:ffi among them) cannot express.
 /// A null `ptr` is a no-op.
 ///
+/// ```
+/// use kevy_ffi::{KevyBuf, kevy_buf_free, kevy_close, kevy_get, kevy_open_mem, kevy_set};
+///
+/// let db = kevy_open_mem();
+/// let mut out = KevyBuf { ptr: std::ptr::null_mut(), len: 0, cap: 0 };
+/// // SAFETY: `db` is live; the buffer is freed once with its triple
+/// // unchanged; `db` is closed once.
+/// unsafe {
+///     assert_eq!(kevy_set(db, b"k".as_ptr(), 1, b"v".as_ptr(), 1, 0), 0);
+///     assert_eq!(kevy_get(db, b"k".as_ptr(), 1, &mut out), 1);
+///     kevy_buf_free(out.ptr, out.len, out.cap);
+///     kevy_buf_free(std::ptr::null_mut(), 0, 0); // a miss's empty buffer: no-op
+///     kevy_close(db);
+/// }
+/// ```
+///
 /// # Safety
 /// The triple must be exactly as returned, freed exactly once.
 // NO-UNWIND: drops a byte buffer, which cannot panic
@@ -226,173 +429,19 @@ pub unsafe extern "C" fn kevy_buf_free(ptr: *mut u8, len: usize, cap: usize) {
     drop(unsafe { Vec::from_raw_parts(ptr, len, cap) });
 }
 
-/// Scalar fast path: `GET` without argv assembly or RESP encoding — the
-/// raw value bytes land in `out`. Returns 1 on hit, 0 on miss, negative on
-/// misuse. This is the lane the mobile bindings' hot path lives on, where
-/// the bar is an mmap KV's synchronous read.
-///
-/// # Safety
-/// `key` must point to `key_len` readable bytes; `out` must be writable.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn kevy_get(
-    db: *mut KevyDb,
-    key: *const u8,
-    key_len: usize,
-    out: *mut KevyBuf,
-) -> i32 {
-    if out.is_null() {
-        return -1;
-    }
-    // SAFETY: covered by this fn's `# Safety` contract, with the null case ruled out by
-    // the checks above.
-    unsafe { out.write(KevyBuf::empty()) };
-    if db.is_null() || key.is_null() {
-        return -1;
-    }
-    // SAFETY: checked non-null above; the contract requires a live `kevy_open*` handle.
-    let store = unsafe { &(*db).store };
-    // SAFETY: the `# Safety` contract above covers this pointer/length pair.
-    let k = unsafe { std::slice::from_raw_parts(key, key_len) };
-    match catch_unwind(AssertUnwindSafe(|| store.get(k))) {
-        Ok(Ok(Some(v))) => {
-            // SAFETY: covered by this fn's `# Safety` contract, with the null case ruled out by
-            // the checks above.
-            unsafe { out.write(KevyBuf::from_vec(v)) };
-            1
-        }
-        Ok(Ok(None)) => 0,
-        _ => -2,
-    }
-}
-
-/// Scalar GET, **zero-copy shared lane**. For a bulk value the engine's
-/// `Arc<Box<[u8]>>` is cloned (a refcount bump, no byte copy) and handed out as
-/// a buffer that VIEWS the Arc's bytes — the analog of MMKV returning a view of
-/// its mmap page; small values get a plain owned Vec (one alloc).
-/// In the returned `KevyBuf`, `ptr`+`len` are the value view and `cap` is an
-/// OPAQUE owner handle. Free ONLY with [`kevy_buf_free_shared`] — never
-/// [`kevy_buf_free`]. 1 = hit, 0 = miss, negative = misuse.
-///
-/// # Safety
-/// `key` must point to `key_len` readable bytes; `out` must be writable.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn kevy_get_shared(
-    db: *mut KevyDb,
-    key: *const u8,
-    key_len: usize,
-    out: *mut KevyBuf,
-) -> i32 {
-    if out.is_null() {
-        return -1;
-    }
-    // SAFETY: covered by this fn's `# Safety` contract, with the null case ruled out by
-    // the checks above.
-    unsafe { out.write(KevyBuf::empty()) };
-    if db.is_null() || key.is_null() {
-        return -1;
-    }
-    // SAFETY: checked non-null above; the contract requires a live `kevy_open*` handle.
-    let store = unsafe { &(*db).store };
-    // SAFETY: the `# Safety` contract above covers this pointer/length pair.
-    let k = unsafe { std::slice::from_raw_parts(key, key_len) };
-    match catch_unwind(AssertUnwindSafe(|| store.get_shared_owned(k))) {
-        Ok(Ok(Some(shared))) => {
-            // `cap` doubles as a tagged owner handle so the shared free knows
-            // how to reclaim: low bit 0 = an Arc raw pointer (bulk, always
-            // 8-aligned so the bit is free); low bit 1 = a Vec (small), with
-            // its capacity in the high bits. Bulk is zero-copy; small is a
-            // single-alloc Vec (never the extra fresh-Arc allocation).
-            let (data, len, cap) = match shared {
-                kevy_embedded::GetShared::Arc(arc) => {
-                    // Read view ptr/len before into_raw (deref coercion
-                    // Arc<Box<[u8]>> -> [u8]; no raw-pointer autoref).
-                    let slice: &[u8] = &arc;
-                    let d = slice.as_ptr() as *mut u8;
-                    let l = slice.len();
-                    let raw = std::sync::Arc::into_raw(arc); // 8-aligned → tag 0
-                    (d, l, raw as usize)
-                }
-                kevy_embedded::GetShared::Bytes(v) => {
-                    let mut v = std::mem::ManuallyDrop::new(v);
-                    (v.as_mut_ptr(), v.len(), (v.capacity() << 1) | 1)
-                }
-            };
-            // SAFETY: covered by this fn's `# Safety` contract, with the null case ruled out by
-            // the checks above.
-            unsafe { out.write(KevyBuf { ptr: data, len, cap }) };
-            1
-        }
-        Ok(Ok(None)) => 0,
-        _ => -2,
-    }
-}
-
-/// Free a buffer returned by [`kevy_get_shared`] — drops the engine `Arc`.
-/// `ptr`/`len` are ignored; `cap` is the opaque owner handle from the shared
-/// GET. Pairs 1:1 with [`kevy_get_shared`]; do NOT mix with [`kevy_buf_free`].
-///
-/// # Safety
-/// `cap` must be a value produced by [`kevy_get_shared`], freed exactly once.
-// NO-UNWIND: drops a byte buffer or an Arc of one, which cannot panic
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn kevy_buf_free_shared(ptr: *mut u8, len: usize, cap: usize) {
-    if cap == 0 {
-        return; // empty sentinel
-    }
-    if cap & 1 == 1 {
-        // Vec-backed small value: capacity in the high bits.
-        // SAFETY: the `# Safety` contract above covers this pointer/length pair.
-        drop(unsafe { Vec::from_raw_parts(ptr, len, cap >> 1) });
-    } else {
-        // Arc-backed bulk value: cap is the Arc raw pointer.
-        // SAFETY: covered by this fn's `# Safety` contract, with the null case ruled out by
-        // the checks above.
-        drop(unsafe { std::sync::Arc::from_raw(cap as *const Box<[u8]>) });
-    }
-}
-
-/// Scalar fast path: `SET`, optionally with a TTL (`ttl_ms` 0 = none).
-/// Returns 0 on success, negative on misuse or a storage error.
-///
-/// # Safety
-/// `key` / `val` must point to their given lengths.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn kevy_set(
-    db: *mut KevyDb,
-    key: *const u8,
-    key_len: usize,
-    val: *const u8,
-    val_len: usize,
-    ttl_ms: u64,
-) -> i32 {
-    if db.is_null() || key.is_null() || val.is_null() {
-        return -1;
-    }
-    // SAFETY: checked non-null above; the contract requires a live `kevy_open*` handle.
-    let store = unsafe { &(*db).store };
-    // SAFETY: the `# Safety` contract above covers this pointer/length pair.
-    let k = unsafe { std::slice::from_raw_parts(key, key_len) };
-    // SAFETY: the `# Safety` contract above covers this pointer/length pair.
-    let v = unsafe { std::slice::from_raw_parts(val, val_len) };
-    let done = catch_unwind(AssertUnwindSafe(|| {
-        if ttl_ms == 0 {
-            store.set(k, v).map(|_| ())
-        } else {
-            store.set_with_ttl(k, v, std::time::Duration::from_millis(ttl_ms)).map(|_| ())
-        }
-    }));
-    match done {
-        Ok(Ok(())) => 0,
-        _ => -2,
-    }
-}
-
 /// Decode the packed argv the byte-array-oriented bindings send (JNI and
 /// N-API both speak it): each argument is a u32-LE length prefix followed
 /// by that many bytes, back to back. `None` on a truncated prefix/body or
 /// zero arguments — misuse, not a protocol error.
 ///
 /// This is a Rust-side helper for the binding shells, not part of the C ABI.
+///
+/// ```
+/// let packed = [&3u32.to_le_bytes()[..], b"GET", &1u32.to_le_bytes(), b"k"].concat();
+/// assert_eq!(kevy_ffi::unpack_argv(&packed), Some(vec![b"GET".to_vec(), b"k".to_vec()]));
+/// assert_eq!(kevy_ffi::unpack_argv(&packed[..5]), None); // body cut short
+/// assert_eq!(kevy_ffi::unpack_argv(&[]), None); // no command at all
+/// ```
 pub fn unpack_argv(packed: &[u8]) -> Option<Vec<Vec<u8>>> {
     let mut args = Vec::new();
     let mut pos = 0usize;

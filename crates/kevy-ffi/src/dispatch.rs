@@ -22,6 +22,25 @@ use crate::{KevyBuf, KevyDb, unpack_argv};
 ///
 /// A Rust-side helper for the binding shells, not part of the C ABI.
 ///
+/// ```
+/// use kevy_ffi::{KevyBuf, dispatch_packed, kevy_buf_free, kevy_close, kevy_open_mem};
+/// # fn pack(args: &[&[u8]]) -> Vec<u8> {
+/// #     args.iter().flat_map(|a| (a.len() as u32).to_le_bytes().into_iter().chain(a.iter().copied())).collect()
+/// # }
+///
+/// let db = kevy_open_mem();
+/// let mut out = KevyBuf { ptr: std::ptr::null_mut(), len: 0, cap: 0 };
+/// // SAFETY: `db` is live; the reply is read before its single free; `db`
+/// // is closed once.
+/// unsafe {
+///     assert_eq!(dispatch_packed(db, &pack(&[b"RPUSH", b"q", b"a", b"b"]), &mut out), 0);
+///     assert_eq!(std::slice::from_raw_parts(out.ptr, out.len), b":2\r\n");
+///     kevy_buf_free(out.ptr, out.len, out.cap);
+///     assert_eq!(dispatch_packed(db, &[9, 0, 0, 0], &mut out), -1); // truncated argv
+///     kevy_close(db);
+/// }
+/// ```
+///
 /// # Safety
 /// `db` must be a live handle from [`crate::kevy_open`] / [`crate::kevy_open_mem`].
 pub unsafe fn dispatch_packed(db: *mut KevyDb, packed: &[u8], out: &mut KevyBuf) -> i32 {
@@ -63,6 +82,22 @@ fn packed_keys(packed: &[u8]) -> Option<Vec<&[u8]>> {
 }
 
 /// The length a missing key's slot carries in [`mget_packed`]'s reply.
+///
+/// ```
+/// use kevy_ffi::{KevyBuf, MGET_MISS, kevy_buf_free, kevy_close, kevy_open_mem, mget_packed};
+///
+/// let db = kevy_open_mem();
+/// let key = [&7u32.to_le_bytes()[..], b"missing"].concat();
+/// let mut out = KevyBuf { ptr: std::ptr::null_mut(), len: 0, cap: 0 };
+/// // SAFETY: `db` is live; the reply is read before its single free; `db`
+/// // is closed once.
+/// unsafe {
+///     assert_eq!(mget_packed(db, &key, &mut out), 0);
+///     assert_eq!(std::slice::from_raw_parts(out.ptr, out.len), MGET_MISS.to_le_bytes());
+///     kevy_buf_free(out.ptr, out.len, out.cap);
+///     kevy_close(db);
+/// }
+/// ```
 pub const MGET_MISS: u32 = u32::MAX;
 
 /// `MGET` for the byte-array bindings: `packed` holds the keys the way
@@ -74,6 +109,28 @@ pub const MGET_MISS: u32 = u32::MAX;
 /// sentinel on any non-zero return and must not be freed.
 ///
 /// A Rust-side helper for the binding shells, not part of the C ABI.
+///
+/// ```
+/// use kevy_ffi::{KevyBuf, MGET_MISS, kevy_buf_free, kevy_close, kevy_open_mem, mget_packed, mset_packed};
+/// # fn pack(args: &[&[u8]]) -> Vec<u8> {
+/// #     args.iter().flat_map(|a| (a.len() as u32).to_le_bytes().into_iter().chain(a.iter().copied())).collect()
+/// # }
+///
+/// let db = kevy_open_mem();
+/// let mut out = KevyBuf { ptr: std::ptr::null_mut(), len: 0, cap: 0 };
+/// // SAFETY: `db` is live; the reply is read before its single free; `db`
+/// // is closed once.
+/// let got = unsafe {
+///     assert_eq!(mset_packed(db, &pack(&[b"a", b"one"])), 0);
+///     assert_eq!(mget_packed(db, &pack(&[b"a", b"b"]), &mut out), 0);
+///     let got = std::slice::from_raw_parts(out.ptr, out.len).to_vec();
+///     kevy_buf_free(out.ptr, out.len, out.cap);
+///     kevy_close(db);
+///     got
+/// };
+/// // slot for "a": its length and bytes; slot for "b": the miss marker alone
+/// assert_eq!(got, [&3u32.to_le_bytes()[..], b"one", &MGET_MISS.to_le_bytes()].concat());
+/// ```
 ///
 /// # Safety
 /// `db` must be a live handle from [`crate::kevy_open`] / [`crate::kevy_open_mem`].
@@ -112,6 +169,22 @@ pub unsafe fn mget_packed(db: *mut KevyDb, packed: &[u8], out: &mut KevyBuf) -> 
 ///
 /// A Rust-side helper for the binding shells, not part of the C ABI.
 ///
+/// ```
+/// use kevy_ffi::{get_lent, kevy_close, kevy_open_mem, mset_packed};
+/// # fn pack(args: &[&[u8]]) -> Vec<u8> {
+/// #     args.iter().flat_map(|a| (a.len() as u32).to_le_bytes().into_iter().chain(a.iter().copied())).collect()
+/// # }
+///
+/// let db = kevy_open_mem();
+/// // SAFETY: `db` is live and closed once.
+/// unsafe {
+///     assert_eq!(mset_packed(db, &pack(&[b"x", b"1", b"y", b"2"])), 0);
+///     assert_eq!(get_lent(db, b"y", |v| v.map(<[u8]>::to_vec)), Ok(Some(b"2".to_vec())));
+///     assert_eq!(mset_packed(db, &pack(&[b"x", b"1", b"lonely"])), -1); // odd count
+///     kevy_close(db);
+/// }
+/// ```
+///
 /// # Safety
 /// `db` must be a live handle from [`crate::kevy_open`] / [`crate::kevy_open_mem`].
 pub unsafe fn mset_packed(db: *mut KevyDb, packed: &[u8]) -> i32 {
@@ -133,6 +206,22 @@ pub unsafe fn mset_packed(db: *mut KevyDb, packed: &[u8]) -> i32 {
 /// `Err(-2)` on a store error (the key holds another type) or a panic.
 ///
 /// A Rust-side helper for the binding shells, not part of the C ABI.
+///
+/// ```
+/// use kevy_ffi::{get_lent, kevy_close, kevy_open_mem, kevy_set};
+///
+/// let db = kevy_open_mem();
+/// // SAFETY: `db` is live; the key/value pointers cover their lengths; `db`
+/// // is closed once.
+/// unsafe {
+///     kevy_set(db, b"k".as_ptr(), 1, b"hello".as_ptr(), 5, 0);
+///     // the closure sees the value in place; here it only measures it
+///     assert_eq!(get_lent(db, b"k", |v| v.map(<[u8]>::len)), Ok(Some(5)));
+///     assert_eq!(get_lent(db, b"nope", |v| v.is_none()), Ok(true));
+///     assert_eq!(get_lent(std::ptr::null_mut(), b"k", |_| ()), Err(-1));
+///     kevy_close(db);
+/// }
+/// ```
 ///
 /// # Safety
 /// `db` must be a live handle from [`crate::kevy_open`] / [`crate::kevy_open_mem`].
