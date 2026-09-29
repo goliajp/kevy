@@ -54,6 +54,7 @@ use std::net::TcpStream;
 /// # Ok::<(), std::io::Error>(())
 /// ```
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum ClientStream {
     /// The plaintext port.
     ///
@@ -315,3 +316,15 @@ pub use pubsub_event::{PubsubEvent, classify_pubsub};
 
 mod read_buf;
 pub use read_buf::ReplyReadBuf;
+
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<ClientStream>();
+    send_sync::<RespClient>();
+    send_sync::<ReplyReadBuf>();
+    send_sync::<PubsubEvent>();
+    send_sync::<SecureUrl>();
+    send_sync::<SecureStream>();
+    send_sync::<SecureWriter>();
+    send_sync::<ParsedUrl>();
+};
