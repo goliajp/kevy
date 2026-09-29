@@ -40,7 +40,7 @@ impl Vlog {
     /// percent (the active file is never compacted), doing at most
     /// `budget` records of work before returning — so a single call
     /// never blocks the caller for a whole-file rewrite. A victim is
-    /// drained across successive calls via [`Vlog::compaction`]; it stays
+    /// drained across successive calls (the log keeps the cursor); it stays
     /// in `files` (readable, pin-safe) until fully drained, then
     /// unlink-on-last-pin + one epoch bump (unchanged retirement
     /// semantics — a ref only becomes invalid when its file is deleted,
@@ -111,7 +111,7 @@ impl Vlog {
         let mut done = 0usize;
         while cur.offset < cur.bytes && done < budget {
             let (key, payload, body_len) = read_record(&cur.handle, cur.offset)?;
-            let old = VlogRef { file_id: cur.file_id, offset: cur.offset, len: body_len };
+            let old = VlogRef::new(cur.file_id, cur.offset, body_len);
             if owner.is_live(&key, old) {
                 let new = self.append_high(&key, &payload)?;
                 owner.moved(&key, old, new);

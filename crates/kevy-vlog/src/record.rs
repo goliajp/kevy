@@ -19,11 +19,17 @@ use super::{HEADER, MAX_BODY, bad, crc32c, split_body};
 use kevy_sys as _;
 use std::fs::{self, File};
 use std::io;
+use std::os::fd::{AsFd, AsRawFd};
 use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 /// The address of one spilled record — what a cold stub holds.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+///
+/// [`Vlog::append`](crate::Vlog::append) hands one out; an owner that
+/// stores the three numbers in its own layout rebuilds it with
+/// [`VlogRef::new`].
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[non_exhaustive]
 pub struct VlogRef {
     /// Which file in the shard's log holds it. Files are append-only and
     /// never renumbered, so this stays valid until compaction rewrites the
@@ -36,6 +42,24 @@ pub struct VlogRef {
 }
 
 impl VlogRef {
+    /// The ref for the record whose header starts at `offset` in file
+    /// `file_id`, with a body of `len` bytes — the three numbers a ref
+    /// from [`Vlog::append`](crate::Vlog::append) carries.
+    ///
+    /// ```
+    /// use kevy_vlog::{Vlog, VlogRef};
+    /// let dir = kevy_tmpdir::TmpDir::new("vlog-ref-new");
+    /// let mut v = Vlog::open(dir.path(), 1 << 20)?;
+    /// let r = v.append(b"k", b"v")?;
+    /// let rebuilt = VlogRef::new(r.file_id, r.offset, r.len);
+    /// assert_eq!(v.read(rebuilt)?, (b"k".to_vec(), b"v".to_vec()));
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
+    #[must_use]
+    pub const fn new(file_id: u32, offset: u64, len: u32) -> Self {
+        VlogRef { file_id, offset, len }
+    }
+
     /// Total on-disk record length: header + body. The image size a
     /// batched reader must fetch at `offset` (see [`verify_image`]).
     #[inline]
@@ -153,13 +177,30 @@ impl VlogFile {
         self.file.read_exact_at(&mut image, r.offset)?;
         Ok(image)
     }
+}
 
-    /// The underlying file descriptor — what an io_uring batch reader
-    /// preps its READ SQEs against. The fd stays valid for the life of
-    /// this pin (the whole point of holding the `Arc<VlogFile>`).
-    pub fn raw_fd(&self) -> i32 {
-        use std::os::fd::AsRawFd;
+/// The underlying file descriptor — what an io_uring batch reader preps
+/// its READ SQEs against. The fd stays valid for the life of this pin
+/// (the whole point of holding the `Arc<VlogFile>`).
+///
+/// ```
+/// use std::os::fd::AsRawFd;
+/// let dir = kevy_tmpdir::TmpDir::new("vlog-fd");
+/// let mut v = kevy_vlog::Vlog::open(dir.path(), 1 << 20)?;
+/// let r = v.append(b"k", b"v")?;
+/// assert!(v.pin(r.file_id).expect("the active file").as_raw_fd() >= 0);
+/// # Ok::<(), std::io::Error>(())
+/// ```
+impl AsRawFd for VlogFile {
+    fn as_raw_fd(&self) -> std::os::fd::RawFd {
         self.file.as_raw_fd()
+    }
+}
+
+/// The descriptor, borrowed for as long as the file is.
+impl AsFd for VlogFile {
+    fn as_fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        self.file.as_fd()
     }
 }
 
@@ -171,8 +212,45 @@ impl Drop for VlogFile {
     }
 }
 
-/// Owner callbacks for [`Vlog::compact_below`] — one object, one borrow,
-/// so the store can capture its map mutably across both phases.
+/// Owner callbacks for [`Vlog::compact_step`](crate::Vlog::compact_step)
+/// and [`Vlog::compact_below`](crate::Vlog::compact_below) — one object,
+/// one borrow, so the store can capture its map mutably across both
+/// phases.
+///
+/// Implemented by whoever holds the refs (the keyspace), so the trait is
+/// open. An implementation must uphold:
+///
+/// - `is_live` answers from the owner's current refs: `true` exactly
+///   when the owner still reaches the record at `old`. A record answered
+///   `false` is not copied and is gone once its file retires.
+/// - `moved` is called only right after `is_live` answered `true` for the
+///   same `(key, old)`, and must repoint the owner from `old` to `new`
+///   before returning: when the victim file finishes draining it is
+///   deleted, and a ref still aimed at it reads a vanished file.
+/// - `key` is the key the record was appended with; an owner that has
+///   since renamed the key resolves it itself.
+///
+/// ```
+/// use kevy_vlog::{CompactOwner, Vlog, VlogRef};
+/// struct One(VlogRef);
+/// impl CompactOwner for One {
+///     fn is_live(&mut self, _key: &[u8], old: VlogRef) -> bool {
+///         old == self.0
+///     }
+///     fn moved(&mut self, _key: &[u8], _old: VlogRef, new: VlogRef) {
+///         self.0 = new;
+///     }
+/// }
+/// let dir = kevy_tmpdir::TmpDir::new("vlog-owner-doc");
+/// let mut v = Vlog::open(dir.path(), 64)?;
+/// let dead = v.append(b"a", &[0; 64])?;
+/// let mut owner = One(v.append(b"b", &[1; 64])?);
+/// v.append(b"c", b"rotate")?;
+/// v.note_dead(dead);
+/// v.compact_below(100, &mut owner)?;
+/// assert_eq!(v.read(owner.0)?.0, b"b");
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub trait CompactOwner {
     /// Is `old` still the owner's live ref for `key`? A record whose ref
     /// was overwritten, deleted, or promoted answers `false` and is
