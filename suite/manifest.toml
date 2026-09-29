@@ -869,7 +869,7 @@ area = "mem"
 tier = "premerge"
 # the unit half, as CI runs it; K1 and K5 need a full-scale capacity run
 cmd = "bash -c 'COMPRESSGATE_UNIT_ONLY=1 bash bench/compressgate.sh'"
-expected = 600
+expected = 10
 timeout = 3600
 requires = ["linux"]
 proves = "compression ratios and speeds hold their recorded lines"
@@ -1273,9 +1273,9 @@ proves = "the AI-facing doors, wire and MCP, answer as their contract says"
 id = "release-tests"
 area = "feature"
 tier = "prerelease"
-cmd = "cargo test --workspace --release --lib --tests"
+cmd = "cargo test --workspace --profile release-tests --lib --tests"
 ci_job = "test (release profile, Linux)"
-expected = 2263
+expected = 360
 timeout = 3600
 proves = "the suite passes with optimizations on, where debug-only checks are gone and timing moves; CI runs it on release and hotfix branches"
 
