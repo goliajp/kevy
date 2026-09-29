@@ -19,6 +19,27 @@ use crate::map::{EMPTY, GROUP_WIDTH, KevyMap, MIN_CAP, table_layout};
 const THP_BACKED_THRESHOLD: usize = 1024 * 1024; // 1 MiB
 
 impl<K, V> KevyMap<K, V> {
+    /// The table's own allocation as the global allocator made it: its
+    /// start and layout. `None` when there is no table, or when a large one
+    /// was mapped directly rather than allocated. What a defrag pass asks
+    /// the allocator about before copying a map.
+    ///
+    /// ```
+    /// use kevy_map::KevyMap;
+    /// let mut m: KevyMap<u32, u32> = KevyMap::new();
+    /// assert!(m.table_allocation().is_none(), "nothing allocated yet");
+    /// m.insert(1, 2);
+    /// let (ptr, layout) = m.table_allocation().ok_or("a table")?;
+    /// assert!(!ptr.is_null() && layout.size() > 0);
+    /// # Ok::<(), &str>(())
+    /// ```
+    #[must_use]
+    pub fn table_allocation(&self) -> Option<(*const u8, Layout)> {
+        (self.cap != 0 && !self.mmap_backed).then(|| {
+            (self.slots_ptr.as_ptr().cast::<u8>().cast_const(), table_layout::<(K, V)>(self.cap).0)
+        })
+    }
+
     /// Allocate a freshly-zeroed table sized for `cap` slots. `cap` must be
     /// a power of two and ≥ `MIN_CAP`. Used by [`crate::KevyMap::with_capacity`]
     /// and by the growth path on rehash.
