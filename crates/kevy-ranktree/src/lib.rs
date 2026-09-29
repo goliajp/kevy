@@ -13,7 +13,7 @@
 //! Redis solves the same problem with a skiplist whose forward pointers carry
 //! spans. Both give O(log N) rank/select; the B-tree was chosen because:
 //!
-//! * **Cache behaviour** — a node holds up to [`node::MAX_KEYS`] keys in one
+//! * **Cache behaviour** — a node holds up to `node::MAX_KEYS` keys in one
 //!   contiguous buffer, so a descent touches ~log₈(N) cache lines where a
 //!   skiplist chases one pointer per level *and* per element during range
 //!   walks. Ordered full scans (persistence rewrites, snapshots) iterate

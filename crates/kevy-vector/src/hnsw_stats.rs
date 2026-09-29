@@ -28,7 +28,7 @@ impl Hnsw {
     /// Counters — O(1): `links_total` and `tombstones`
     /// are maintained at the three mutation sites (link push, shrink,
     /// tombstoning) instead of walking every node per call (this ran
-    /// on every tiering tick). [`Self::recompute_stats`] is the
+    /// on every tiering tick). The test-only `recompute_stats` is the
     /// walking reference the tests hold them to.
     /// # Examples
     ///
