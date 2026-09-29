@@ -8,12 +8,19 @@
 //! `kevy://` (kevy-native alias), `redis://` (standard), and `tcp://`
 //! (plain host:port — no leading SELECT round-trip):
 //!
-//! ```no_run
-//! # use kevy_resp_client::RespClient;
-//! let _ = RespClient::connect_url("kevy://localhost:6379")?;   // alias of redis://
-//! let _ = RespClient::connect_url("kevy://localhost:6379/0")?; // also issues SELECT 0
-//! let _ = RespClient::connect_url("redis://10.0.0.5:6379")?;
-//! let _ = RespClient::connect_url("tcp://kevy.internal:6379")?;
+//! ```
+//! # use kevy_resp_client::{Reply, RespClient};
+//! # mod doc { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs")); }
+//! # let port = doc::serve();
+//! for url in [
+//!     format!("kevy://localhost:{port}"),    // alias of redis://
+//!     format!("kevy://localhost:{port}/0"),  // also issues SELECT 0
+//!     format!("redis://127.0.0.1:{port}"),
+//!     format!("tcp://127.0.0.1:{port}"),
+//! ] {
+//!     let mut c = RespClient::connect_url(&url)?;
+//!     assert_eq!(c.request_borrowed(&[b"PING"])?, Reply::Simple(b"PONG".to_vec()));
+//! }
 //! # Ok::<(), std::io::Error>(())
 //! ```
 //!
@@ -24,12 +31,14 @@
 //!
 //! # Example
 //!
-//! ```no_run
-//! use kevy_resp_client::RespClient;
+//! ```
+//! use kevy_resp_client::{Reply, RespClient};
+//! # mod doc { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs")); }
+//! # let port = doc::serve();
 //!
-//! let mut c = RespClient::connect("127.0.0.1", 6379)?;
+//! let mut c = RespClient::connect("127.0.0.1", port)?;
 //! let reply = c.request(&[b"PING".to_vec()])?;
-//! println!("{reply:?}");
+//! assert_eq!(reply, Reply::Simple(b"PONG".to_vec()));
 //! # Ok::<(), std::io::Error>(())
 //! ```
 
@@ -44,13 +53,18 @@ use std::net::TcpStream;
 /// A connection to a server's plaintext or encrypted client port; either
 /// way a byte stream to run RESP over.
 ///
-/// ```no_run
-/// use std::io::Write;
+/// ```
+/// use std::io::{Read, Write};
 /// use kevy_resp_client::ClientStream;
+/// # mod doc { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs")); }
+/// # let port = doc::serve();
 ///
-/// let mut s = ClientStream::connect_url("kevy://127.0.0.1:6379")?;
+/// let mut s = ClientStream::connect_url(&format!("kevy://127.0.0.1:{port}"))?;
 /// s.socket().set_read_timeout(Some(std::time::Duration::from_secs(1)))?;
 /// s.write_all(b"*1\r\n$4\r\nPING\r\n")?;
+/// let mut reply = [0; 7];
+/// s.read_exact(&mut reply)?;
+/// assert_eq!(&reply, b"+PONG\r\n");
 /// # Ok::<(), std::io::Error>(())
 /// ```
 #[derive(Debug)]
@@ -58,16 +72,31 @@ use std::net::TcpStream;
 pub enum ClientStream {
     /// The plaintext port.
     ///
-    /// ```no_run
-    /// let s = kevy_resp_client::ClientStream::Plain(std::net::TcpStream::connect("127.0.0.1:6379")?);
+    /// ```
+    /// # mod doc { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs")); }
+    /// # let port = doc::serve();
+    /// use std::io::{Read, Write};
+    /// let tcp = std::net::TcpStream::connect(("127.0.0.1", port))?;
+    /// let mut s = kevy_resp_client::ClientStream::Plain(tcp);
+    /// s.write_all(b"*1\r\n$4\r\nPING\r\n")?;
+    /// let mut reply = [0; 7];
+    /// s.read_exact(&mut reply)?;
+    /// assert_eq!(&reply, b"+PONG\r\n");
     /// # Ok::<(), std::io::Error>(())
     /// ```
     Plain(TcpStream),
     /// The encrypted port.
     ///
-    /// ```no_run
-    /// let s = kevy_resp_client::SecureStream::connect("127.0.0.1", 6404, [0xab; 32], None)?;
-    /// let s = kevy_resp_client::ClientStream::Secure(Box::new(s));
+    /// ```
+    /// # mod doc { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs")); }
+    /// # let (port, server_key) = doc::serve_secure();
+    /// let s = kevy_resp_client::SecureStream::connect("127.0.0.1", port, server_key, None)?;
+    /// let mut s = kevy_resp_client::ClientStream::Secure(Box::new(s));
+    /// // the same bytes as on the plaintext port; sealing happens underneath
+    /// std::io::Write::write_all(&mut s, b"*1\r\n$4\r\nPING\r\n")?;
+    /// let mut reply = [0; 7];
+    /// std::io::Read::read_exact(&mut s, &mut reply)?;
+    /// assert_eq!(&reply, b"+PONG\r\n");
     /// # Ok::<(), std::io::Error>(())
     /// ```
     Secure(Box<SecureStream>),
@@ -78,11 +107,12 @@ impl ClientStream {
     /// port, `kevys://` to the encrypted one. A `/db` path is not acted on
     /// here; [`RespClient::connect_url`] issues the `SELECT`.
     ///
-    /// ```no_run
-    /// let s = kevy_resp_client::ClientStream::connect_url(&format!(
-    ///     "kevys://10.0.0.5:6404?server_key={}",
-    ///     "ab".repeat(32)
-    /// ))?;
+    /// ```
+    /// # mod doc { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs")); }
+    /// # let (port, key) = doc::serve_secure();
+    /// use kevy_resp_client::ClientStream;
+    /// let url = format!("kevys://127.0.0.1:{port}?server_key={}", doc::hex(&key));
+    /// assert!(matches!(ClientStream::connect_url(&url)?, ClientStream::Secure(_)));
     /// # Ok::<(), std::io::Error>(())
     /// ```
     pub fn connect_url(url: &str) -> io::Result<Self> {
@@ -104,9 +134,11 @@ impl ClientStream {
 
     /// The TCP socket underneath, for timeouts and shutdown.
     ///
-    /// ```no_run
-    /// let s = kevy_resp_client::ClientStream::connect_url("kevy://127.0.0.1:6379")?;
-    /// println!("{}", s.socket().local_addr()?);
+    /// ```
+    /// # mod doc { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs")); }
+    /// # let port = doc::serve();
+    /// let s = kevy_resp_client::ClientStream::connect_url(&format!("kevy://127.0.0.1:{port}"))?;
+    /// assert_eq!(s.socket().peer_addr()?.port(), port);
     /// # Ok::<(), std::io::Error>(())
     /// ```
     pub fn socket(&self) -> &TcpStream {
@@ -156,21 +188,8 @@ impl Write for ClientStream {
 ///
 /// ```
 /// use kevy_resp_client::{Reply, RespClient};
-/// # fn mock(replies: &'static [&'static [u8]]) -> u16 {
-/// #     let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-/// #     let port = l.local_addr().unwrap().port();
-/// #     std::thread::spawn(move || {
-/// #         let (mut s, _) = l.accept().unwrap();
-/// #         let mut pending = Vec::new();
-/// #         for r in replies {
-/// #             if !kevy_testnet::read_request(&mut s, &mut pending) { break }
-/// #             std::io::Write::write_all(&mut s, r).unwrap();
-/// #         }
-/// #     });
-/// #     port
-/// # }
-/// // a stand-in server that answers two commands
-/// let port = mock(&[b"+OK\r\n", b"$5\r\nworld\r\n"]);
+/// # mod doc { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs")); }
+/// # let port = doc::serve();
 /// let mut c = RespClient::connect("127.0.0.1", port)?;
 /// assert_eq!(c.request_borrowed(&[b"SET", b"hello", b"world"])?, Reply::Simple(b"OK".to_vec()));
 /// assert_eq!(c.request_borrowed(&[b"GET", b"hello"])?, Reply::Bulk(b"world".to_vec()));
@@ -200,20 +219,9 @@ impl RespClient {
     ///
     /// ```
     /// use kevy_resp_client::{Reply, RespClient};
-    /// # fn mock(replies: &'static [&'static [u8]]) -> u16 {
-    /// #     let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    /// #     let port = l.local_addr().unwrap().port();
-    /// #     std::thread::spawn(move || {
-    /// #         let (mut s, _) = l.accept().unwrap();
-    /// #         let mut pending = Vec::new();
-    /// #         for r in replies {
-    /// #             if !kevy_testnet::read_request(&mut s, &mut pending) { break }
-    /// #             std::io::Write::write_all(&mut s, r).unwrap();
-    /// #         }
-    /// #     });
-    /// #     port
-    /// # }
-    /// let mut c = RespClient::connect("127.0.0.1", mock(&[b"+PONG\r\n"]))?;
+    /// # mod doc { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs")); }
+    /// # let port = doc::serve();
+    /// let mut c = RespClient::connect("127.0.0.1", port)?;
     /// assert_eq!(c.request_borrowed(&[b"PING"])?, Reply::Simple(b"PONG".to_vec()));
     /// // nothing listens on port 1
     /// assert!(RespClient::connect("127.0.0.1", 1).is_err());
@@ -229,11 +237,13 @@ impl RespClient {
     /// `server_key` is the server's public key; `client` is this side's
     /// key pair when the server lists `client_keys`, `None` otherwise.
     ///
-    /// ```no_run
-    /// use kevy_resp_client::RespClient;
+    /// ```
+    /// use kevy_resp_client::{Reply, RespClient};
+    /// # mod doc { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs")); }
+    /// # let (port, server_key) = doc::serve_secure();
     ///
-    /// let mut c = RespClient::connect_secure("10.0.0.5", 6404, [0xab; 32], None)?;
-    /// c.request_borrowed(&[b"PING"])?;
+    /// let mut c = RespClient::connect_secure("127.0.0.1", port, server_key, None)?;
+    /// assert_eq!(c.request_borrowed(&[b"PING"])?, Reply::Simple(b"PONG".to_vec()));
     /// # Ok::<(), std::io::Error>(())
     /// ```
     pub fn connect_secure(
@@ -265,20 +275,9 @@ impl RespClient {
     ///
     /// ```
     /// use kevy_resp_client::{Reply, RespClient};
-    /// # fn mock(replies: &'static [&'static [u8]]) -> u16 {
-    /// #     let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    /// #     let port = l.local_addr().unwrap().port();
-    /// #     std::thread::spawn(move || {
-    /// #         let (mut s, _) = l.accept().unwrap();
-    /// #         let mut pending = Vec::new();
-    /// #         for r in replies {
-    /// #             if !kevy_testnet::read_request(&mut s, &mut pending) { break }
-    /// #             std::io::Write::write_all(&mut s, r).unwrap();
-    /// #         }
-    /// #     });
-    /// #     port
-    /// # }
-    /// let mut c = RespClient::connect("127.0.0.1", mock(&[b":3\r\n"]))?;
+    /// # mod doc { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs")); }
+    /// # let port = doc::serve();
+    /// let mut c = RespClient::connect("127.0.0.1", port)?;
     /// let key = String::from("counter").into_bytes(); // an argv the caller already owns
     /// let reply = c.request(&[b"INCRBY".to_vec(), key, b"3".to_vec()])?;
     /// assert_eq!(reply, Reply::Int(3));
@@ -299,24 +298,14 @@ impl RespClient {
     ///
     /// ```
     /// use kevy_resp_client::{Reply, RespClient};
-    /// # fn mock(replies: &'static [&'static [u8]]) -> u16 {
-    /// #     let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    /// #     let port = l.local_addr().unwrap().port();
-    /// #     std::thread::spawn(move || {
-    /// #         let (mut s, _) = l.accept().unwrap();
-    /// #         let mut pending = Vec::new();
-    /// #         for r in replies {
-    /// #             if !kevy_testnet::read_request(&mut s, &mut pending) { break }
-    /// #             std::io::Write::write_all(&mut s, r).unwrap();
-    /// #         }
-    /// #     });
-    /// #     port
-    /// # }
-    /// let mut c = RespClient::connect("127.0.0.1", mock(&[b"$1\r\nv\r\n", b"-ERR boom\r\n"]))?;
+    /// # mod doc { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs")); }
+    /// # let port = doc::serve();
+    /// let mut c = RespClient::connect("127.0.0.1", port)?;
     /// let key: &[u8] = b"k";
+    /// c.request_borrowed(&[b"SET", key, b"v"])?;
     /// assert_eq!(c.request_borrowed(&[b"GET", key])?, Reply::Bulk(b"v".to_vec()));
     /// // a server-side error is a reply, not an `Err`
-    /// assert_eq!(c.request_borrowed(&[b"BOOM"])?, Reply::Error(b"ERR boom".to_vec()));
+    /// assert_eq!(c.request_borrowed(&[b"BOOM"])?, Reply::Error(b"ERR unknown command 'BOOM'".to_vec()));
     /// # Ok::<(), std::io::Error>(())
     /// ```
     pub fn request_borrowed(&mut self, args: &[&[u8]]) -> io::Result<Reply> {
@@ -334,20 +323,9 @@ impl RespClient {
     /// ```
     /// use kevy_resp::encode_command_borrowed;
     /// use kevy_resp_client::{Reply, RespClient};
-    /// # fn mock(replies: &'static [&'static [u8]]) -> u16 {
-    /// #     let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    /// #     let port = l.local_addr().unwrap().port();
-    /// #     std::thread::spawn(move || {
-    /// #         let (mut s, _) = l.accept().unwrap();
-    /// #         let mut pending = Vec::new();
-    /// #         for r in replies {
-    /// #             if !kevy_testnet::read_request(&mut s, &mut pending) { break }
-    /// #             std::io::Write::write_all(&mut s, r).unwrap();
-    /// #         }
-    /// #     });
-    /// #     port
-    /// # }
-    /// let mut c = RespClient::connect("127.0.0.1", mock(&[b":1\r\n", b":2\r\n"]))?;
+    /// # mod doc { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs")); }
+    /// # let port = doc::serve();
+    /// let mut c = RespClient::connect("127.0.0.1", port)?;
     /// let mut raw = Vec::new();
     /// encode_command_borrowed(&mut raw, &[&b"INCR"[..], b"n"]);
     /// encode_command_borrowed(&mut raw, &[&b"INCR"[..], b"n"]);
@@ -406,21 +384,9 @@ impl RespClient {
     ///
     /// ```
     /// use kevy_resp_client::{Reply, RespClient};
-    /// # fn mock(replies: &'static [&'static [u8]]) -> u16 {
-    /// #     let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    /// #     let port = l.local_addr().unwrap().port();
-    /// #     std::thread::spawn(move || {
-    /// #         let (mut s, _) = l.accept().unwrap();
-    /// #         let mut pending = Vec::new();
-    /// #         for r in replies {
-    /// #             if !kevy_testnet::read_request(&mut s, &mut pending) { break }
-    /// #             std::io::Write::write_all(&mut s, r).unwrap();
-    /// #         }
-    /// #     });
-    /// #     port
-    /// # }
+    /// # mod doc { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs")); }
     /// // `/0` makes the client send `SELECT 0` before handing it back
-    /// let port = mock(&[b"+OK\r\n", b"+PONG\r\n"]);
+    /// # let port = doc::serve();
     /// let mut c = RespClient::connect_url(&format!("kevy://127.0.0.1:{port}/0"))?;
     /// assert_eq!(c.request_borrowed(&[b"PING"])?, Reply::Simple(b"PONG".to_vec()));
     /// let e = RespClient::connect_url("rediss://127.0.0.1:6379").unwrap_err();
@@ -454,6 +420,10 @@ pub use kevy_resp::PubsubEvent;
 
 mod read_buf;
 pub use read_buf::ReplyReadBuf;
+
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;
 
 const _: () = {
     const fn send_sync<T: Send + Sync>() {}
