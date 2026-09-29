@@ -231,3 +231,13 @@ why = "the bound every connection type takes, blanket-implemented for each Send 
 rule = "trait-open"
 item = "kevy_rt::commands_trait::Commands"
 why = "the seam the runtime is built around: the kevy server's command set implements it, and so does any embedder's; every method added after the first release has a default, and the trait docs state the contract (classification is a pure function of the argv, resolve agrees with the per-attribute methods, is_write gates durability, the route names every key touched, dispatch writes one reply without blocking, hooks run on the shard thread)"
+
+[[exempt]]
+rule = "get-prefix"
+item = "kevy_embedded::store::Store::get_shared_owned"
+why = "a variant of the Redis GET command (the store-wide lock plus kevy_store::Store::get_shared_owned's zero-copy lane), in the family of get and get_with; Store has no field called shared_owned, so this is not a getter"
+
+[[exempt]]
+rule = "get-prefix"
+item = "kevy_embedded::store::Store::get_with"
+why = "a variant of the Redis GET command that lends the value to a closure under the shard lock, the embedded counterpart of kevy_store::Store::get_shared_with; Store has no field called with, so this is not a getter"

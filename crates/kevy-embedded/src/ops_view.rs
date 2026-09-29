@@ -101,11 +101,10 @@ impl Store {
         name: &[u8],
         tree: Tree,
         order_by: &[u8],
-        desc: bool,
+        order: SortOrder,
         mode: ViewMode,
     ) -> KevyResult<()> {
         self.check_view_refs(&tree, order_by)?;
-        let order = if desc { SortOrder::Desc } else { SortOrder::Asc };
         let spec = ViewSpec::new(name, tree, order_by).with_order(order).with_mode(mode);
         {
             let mut g =

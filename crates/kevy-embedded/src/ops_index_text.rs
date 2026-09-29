@@ -6,6 +6,7 @@
 use kevy_index::{IndexKind, IndexSpec, ValType};
 
 use super::sync_segs;
+use crate::TokenPositions;
 use crate::store::{Store, lock_write};
 use crate::{KevyError, KevyResult};
 
@@ -15,8 +16,9 @@ impl Store {
     /// scopes to. A weight scales that field's term frequencies; 1.0 is
     /// neutral.
     ///
-    /// `positions` records token offsets so phrase queries can verify
-    /// adjacency, at the cost of the positional side-channel's memory.
+    /// `positions` decides whether token offsets are recorded, so phrase
+    /// queries can verify adjacency, at the cost of the positional
+    /// side-channel's memory.
     /// `values` names hash fields stored per document with the type their
     /// bytes compare as — what `FILTER` reads. An index that never
     /// filters declares none.
@@ -25,7 +27,7 @@ impl Store {
         name: &[u8],
         prefix: &[u8],
         fields: &[(&[u8], f32)],
-        positions: bool,
+        positions: TokenPositions,
         values: &[(&[u8], ValType)],
     ) -> KevyResult<()> {
         if prefix.is_empty() {
@@ -40,7 +42,7 @@ impl Store {
             values.iter().map(|(n, ty)| kevy_index::ValueSpec::new(*n).with_type(*ty)).collect();
         let spec = IndexSpec::builder(name, prefix, IndexKind::Text, ValType::Str)
             .with_fields(fields)
-            .with_positions(positions)
+            .with_positions(positions == TokenPositions::Record)
             .with_values(values);
         self.register_spec(crate::ops_index::built(spec)?)
     }

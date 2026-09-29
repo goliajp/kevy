@@ -51,6 +51,14 @@ name = "kevy-compress"
 version = "6.4.0"
 
 [[package]]
+name = "kevy-config"
+version = "6.4.0"
+dependencies = [
+ "kevy-persist",
+ "kevy-store",
+]
+
+[[package]]
 name = "kevy-crypto"
 version = "6.4.0"
 
@@ -58,6 +66,7 @@ version = "6.4.0"
 name = "kevy-embedded"
 version = "6.4.0"
 dependencies = [
+ "kevy-config",
  "kevy-crypto",
  "kevy-hash",
  "kevy-index",
@@ -113,6 +122,7 @@ dependencies = [
 name = "kevy-persist"
 version = "6.4.0"
 dependencies = [
+ "kevy-replicate",
  "kevy-resp",
  "kevy-store",
  "kevy-sys",

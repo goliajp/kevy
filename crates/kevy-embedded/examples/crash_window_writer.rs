@@ -52,7 +52,15 @@ fn main() {
         t
     };
     store.table_declare(spec).expect("declare");
-    store.idx_create_text(b"ev.note", b"r:", &[(b"note", 1.0)], false, &[]).expect("text index");
+    store
+        .idx_create_text(
+            b"ev.note",
+            b"r:",
+            &[(b"note", 1.0)],
+            kevy_embedded::TokenPositions::Omit,
+            &[],
+        )
+        .expect("text index");
 
     let mut out = std::io::stdout().lock();
     for n in 1u64.. {

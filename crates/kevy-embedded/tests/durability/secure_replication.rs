@@ -99,13 +99,13 @@ fn contains(hay: &[u8], needle: &[u8]) -> bool {
 fn replicate_through_proxy(secure: bool) -> Vec<u8> {
     let (w, r) = (key(1), key(2));
     let (writer, addr) =
-        open_writer(secure.then(|| LinkKeys { local: w.clone(), peers: vec![r.public()] }));
+        open_writer(secure.then(|| LinkKeys::new(w.clone()).with_peers(vec![r.public()])));
     writer.set(b"before", MARKER).unwrap();
     let (via, seen) = recording_proxy(addr);
     let replica = open_replica(
         &via,
         if secure { "proxy-secure" } else { "proxy-plain" },
-        secure.then(|| LinkKeys { local: r, peers: vec![w.public()] }),
+        secure.then(|| LinkKeys::new(r).with_peers(vec![w.public()])),
     );
     assert!(arrives(&replica, b"before"), "snapshot did not reach the replica");
     writer.set(b"after", MARKER).unwrap();
@@ -134,11 +134,11 @@ fn secure_link_carries_the_value_but_never_in_the_clear() {
 #[test]
 fn replica_tries_each_trusted_key_until_one_answers() {
     let w = key(1);
-    let (writer, addr) = open_writer(Some(LinkKeys { local: w.clone(), peers: vec![] }));
+    let (writer, addr) = open_writer(Some(LinkKeys::new(w.clone())));
     let replica = open_replica(
         &addr,
         "in-turn",
-        Some(LinkKeys { local: key(2), peers: vec![key(9).public(), w.public()] }),
+        Some(LinkKeys::new(key(2)).with_peers(vec![key(9).public(), w.public()])),
     );
     writer.set(b"k", MARKER).unwrap();
     assert!(arrives(&replica, b"k"));
@@ -146,11 +146,11 @@ fn replica_tries_each_trusted_key_until_one_answers() {
 
 #[test]
 fn replica_expecting_another_primary_key_gets_nothing() {
-    let (writer, addr) = open_writer(Some(LinkKeys { local: key(1), peers: vec![] }));
+    let (writer, addr) = open_writer(Some(LinkKeys::new(key(1))));
     let replica = open_replica(
         &addr,
         "wrong-primary",
-        Some(LinkKeys { local: key(2), peers: vec![key(9).public()] }),
+        Some(LinkKeys::new(key(2)).with_peers(vec![key(9).public()])),
     );
     writer.set(b"k", MARKER).unwrap();
     assert!(stays_away(&replica, b"k"));
@@ -160,16 +160,16 @@ fn replica_expecting_another_primary_key_gets_nothing() {
 fn writer_refuses_a_replica_it_does_not_list() {
     let w = key(1);
     let (writer, addr) =
-        open_writer(Some(LinkKeys { local: w.clone(), peers: vec![key(8).public()] }));
+        open_writer(Some(LinkKeys::new(w.clone()).with_peers(vec![key(8).public()])));
     let replica =
-        open_replica(&addr, "unlisted", Some(LinkKeys { local: key(2), peers: vec![w.public()] }));
+        open_replica(&addr, "unlisted", Some(LinkKeys::new(key(2)).with_peers(vec![w.public()])));
     writer.set(b"k", MARKER).unwrap();
     assert!(stays_away(&replica, b"k"));
 }
 
 #[test]
 fn plaintext_replica_cannot_subscribe_to_a_secure_writer() {
-    let (writer, addr) = open_writer(Some(LinkKeys { local: key(1), peers: vec![] }));
+    let (writer, addr) = open_writer(Some(LinkKeys::new(key(1))));
     writer.set(b"k", MARKER).unwrap();
     let r = ReplicaClient::connect_with(
         addr.as_str(),
@@ -183,6 +183,6 @@ fn secure_replica_without_a_trusted_key_refuses_to_open() {
     let cfg = Config::default()
         .without_aof()
         .with_replica_upstream("127.0.0.1:1")
-        .with_replica_security(LinkKeys { local: key(2), peers: vec![] });
+        .with_replica_security(LinkKeys::new(key(2)));
     assert!(matches!(Store::open(cfg), Err(KevyError::InvalidInput(_))));
 }

@@ -108,9 +108,11 @@ mod info;
 // Unconditional: `OpenReport` rides the DropGuard and the Store
 // handle in every archetype (a no-persist open reports zeros); only
 // the sink WIRING stays persist-gated in config.rs.
+mod assert_traits;
 #[cfg(all(feature = "listener", not(target_arch = "wasm32")))]
 mod listener;
 mod metric;
+mod modes;
 mod op_manifest;
 mod ops;
 mod ops_atomic;
@@ -186,8 +188,10 @@ pub use config_secure::{Keypair, LinkKeys};
 #[cfg(feature = "tier")]
 mod config_tier;
 #[cfg(feature = "persist")]
-pub use config::AppendFsync;
+pub use config::{AppendFsync, ReplayMode};
 pub use info::{KevyInfo, KevyTierCompression, KevyTierInfo};
+#[cfg(feature = "index")]
+pub use kevy_index::SortOrder;
 #[cfg(feature = "index")]
 pub use kevy_index::{AggBy, AnnSpec, GroupStats, Leaf as ViewLeaf, Tree as ViewTree, ViewMode};
 #[cfg(feature = "index")]
@@ -200,12 +204,15 @@ pub use kevy_persist::RewriteStats;
 #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
 pub use kevy_replicate::feed::FeedPosition;
 pub use kevy_store::{
-    ExpireStats, GetShared, HExpireCode, HExpireCond, KevyError, KevyResult, ScoreBound,
-    StoreError, ZAggregate, ZaddFlags, ZaddReport,
+    ExpireStats, GetShared, HExpireCode, HExpireCond, InsertPosition, KevyError, KevyResult,
+    ScoreBound, StoreError, ZAggregate, ZaddFlags, ZaddReport,
 };
 #[cfg(feature = "persist")]
 pub use metric::KevyMetric;
 pub use metric::OpenReport;
+pub use modes::CopyMode;
+#[cfg(feature = "text")]
+pub use modes::TokenPositions;
 #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
 pub use ops_feed::{Change, ChangeBatch, FeedError, PrefixInfo};
 #[cfg(feature = "index")]
@@ -213,9 +220,13 @@ pub use ops_index::IndexPage;
 #[cfg(feature = "index")]
 pub use ops_index::advise::IdxAdvice;
 #[cfg(feature = "index")]
-pub use ops_index::claused::{ScalarPage, ScalarQueryOpts, ValueFilter};
+pub use ops_index::claused::ScalarPage;
 #[cfg(feature = "text")]
-pub use ops_index::highlight::{FacetCounts, MatchOpts, MatchPage};
+pub use ops_index::highlight::{FacetCounts, MatchPage};
+#[cfg(feature = "text")]
+pub use ops_index::opts::MatchOpts;
+#[cfg(feature = "index")]
+pub use ops_index::opts::{ScalarQueryOpts, ValueFilter};
 pub use ops_reconcile::ReconcileReport;
 pub use ops_snapshot_view::{Snapshot, SnapshotEntry};
 #[cfg(feature = "index")]

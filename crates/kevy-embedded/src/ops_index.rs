@@ -62,6 +62,10 @@ pub(crate) mod highlight;
 #[path = "ops_index_claused.rs"]
 pub(crate) mod claused;
 
+// The optional query clauses both of those take.
+#[path = "ops_index_opts.rs"]
+pub(crate) mod opts;
+
 // The auto-declaration loop's observation face (refusal log + advice).
 #[path = "ops_index_advise.rs"]
 pub(crate) mod advise;
