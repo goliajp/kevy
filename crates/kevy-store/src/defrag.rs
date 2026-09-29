@@ -60,6 +60,20 @@ fn bytes_hinted(hint: DefragHint, s: &SmallBytes) -> bool {
     size != 0 && hint(s.as_slice().as_ptr(), size, 1)
 }
 
+/// Whether the block an `Arc` keeps its counts and value in should move.
+/// The block is laid out as std lays it out — the two counts, then the
+/// value — and a hint answers safely for any address, so a layout that
+/// ever differed would only make this answer no.
+fn arc_hinted<T>(hint: DefragHint, a: &Arc<T>) -> bool {
+    let counts = core::alloc::Layout::new::<[usize; 2]>();
+    let Ok((block, offset)) = counts.extend(core::alloc::Layout::new::<T>()) else {
+        return false;
+    };
+    let block = block.pad_to_align();
+    let start = Arc::as_ptr(a).cast::<u8>().wrapping_sub(offset);
+    hint(start, block.size(), block.align())
+}
+
 /// Whether any of `v`'s dominant allocations should move, for values the
 /// walk knows how to copy and nobody shares.
 fn wants_move(hint: DefragHint, v: &Value) -> bool {
@@ -70,7 +84,9 @@ fn wants_move(hint: DefragHint, v: &Value) -> bool {
         }
         Value::Hash(h) => {
             Arc::strong_count(h) == 1
-                && h.iter().any(|(f, x)| bytes_hinted(hint, f) || bytes_hinted(hint, x))
+                && (arc_hinted(hint, h)
+                    || h.table_allocation().is_some_and(|(p, l)| hint(p, l.size(), l.align()))
+                    || h.iter().any(|(f, x)| bytes_hinted(hint, f) || bytes_hinted(hint, x)))
         }
         Value::PackedRow(r) => {
             let b = r.buffer();
