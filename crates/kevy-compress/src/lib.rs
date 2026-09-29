@@ -122,24 +122,10 @@ mod decode;
 mod dict;
 mod encode;
 mod huff;
+mod tag;
 
 pub use dict::Dict;
-
-/// Frame tag: payload is the original bytes verbatim.
-pub const TAG_RAW: u8 = 0;
-/// Frame tag: LZ token stream, history is the output alone.
-pub const TAG_LZ: u8 = 1;
-/// Frame tag: LZ token stream, history is `dict ++ output`.
-pub const TAG_LZ_DICT: u8 = 2;
-/// Frame tag: high (compaction) level — literals Huffman-coded as one
-/// block, byte-aligned sequence stream after it.
-pub const TAG_LZH: u8 = 3;
-/// Frame tag: high level with dictionary history.
-pub const TAG_LZH_DICT: u8 = 4;
-
-/// Longest back-reference the 16-bit offset can express, which also
-/// bounds how much trailing dictionary is reachable.
-pub const MAX_OFFSET: usize = u16::MAX as usize;
+pub use tag::{MAX_OFFSET, TAG_LZ, TAG_LZ_DICT, TAG_LZH, TAG_LZH_DICT, TAG_RAW};
 
 /// Magic prefix of a structured dictionary: `[magic][128 B code
 /// lengths][content]`. The embedded table is the file-scoped entropy

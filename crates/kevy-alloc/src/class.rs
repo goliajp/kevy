@@ -37,6 +37,14 @@
 //! accounting splits slack into touched (`span_free`) and untouched
 //! (`virgin`): only the first is RSS. A large uniform span whose tail is
 //! never reached is close to free in the metric that matters.
+//!
+//! # Examples
+//!
+//! ```
+//! use kevy_alloc::class::{index_of, size_of};
+//! // a 100-byte request is served from the 104-byte class
+//! assert_eq!(size_of(index_of(100, 8).unwrap()), 104);
+//! ```
 
 /// The largest allocation served by a size class. Above this, requests
 /// are mapped directly and returned with `unmap`.
@@ -50,10 +58,25 @@
 /// measured (the mmap-lock convoy finding). glibc recycles those
 /// buffers from its arena with zero syscalls, which is the entire
 /// cross-shard gap. A 64 KiB span still holds 2–8 slots at these sizes.
+///
+/// # Examples
+///
+/// ```
+/// use kevy_alloc::class::{MAX_SMALL, index_of};
+/// assert!(index_of(MAX_SMALL, 8).is_some());
+/// assert_eq!(index_of(MAX_SMALL + 1, 8), None); // mapped directly instead
+/// ```
 pub const MAX_SMALL: usize = 32_768;
 
 /// Alignment every class satisfies natively, because every class is a
 /// multiple of it and spans are aligned far beyond it.
+///
+/// # Examples
+///
+/// ```
+/// use kevy_alloc::class::{CLASSES, MIN_ALIGN};
+/// assert!(CLASSES.iter().all(|&c| c as usize % MIN_ALIGN == 0));
+/// ```
 pub const MIN_ALIGN: usize = 8;
 
 /// Strongest alignment served by picking a suitable class rather than by
@@ -63,12 +86,27 @@ pub const MIN_ALIGN: usize = 8;
 /// 16 matters enough to be worth serving directly — `u128`, `AtomicU64`
 /// pairs and most SIMD vectors ask for it — and it costs only skipping
 /// to the next class when the natural one is not a multiple of 16.
+///
+/// # Examples
+///
+/// ```
+/// use kevy_alloc::class::{MAX_NATIVE_ALIGN, index_of};
+/// assert!(index_of(64, MAX_NATIVE_ALIGN).is_some());
+/// assert_eq!(index_of(64, MAX_NATIVE_ALIGN * 2), None);
+/// ```
 pub const MAX_NATIVE_ALIGN: usize = 16;
 
 /// Every span is this many bytes, whatever class it serves. Uniform
 /// geometry is what lets `dealloc` find a span by masking; see the
 /// module docs for why the variable-size draft lost. 64 KiB gives the
 /// largest class eight slots and the smallest four thousand.
+///
+/// # Examples
+///
+/// ```
+/// use kevy_alloc::class::{MAX_SMALL, SPAN_BYTES, index_of, slots_per_span};
+/// assert_eq!(slots_per_span(index_of(MAX_SMALL, 8).unwrap()), SPAN_BYTES / MAX_SMALL);
+/// ```
 pub const SPAN_BYTES: usize = 64 * 1024;
 
 /// The class table: every size a slot may have, ascending.
@@ -77,6 +115,14 @@ pub const SPAN_BYTES: usize = 64 * 1024;
 /// stone's most important property is that a reviewer can see what it
 /// does; 79 numbers are cheaper to audit than the loop that would emit
 /// them.
+///
+/// # Examples
+///
+/// ```
+/// use kevy_alloc::class::{CLASSES, MAX_SMALL};
+/// assert!(CLASSES.windows(2).all(|w| w[0] < w[1]));
+/// assert_eq!(*CLASSES.last().unwrap() as usize, MAX_SMALL);
+/// ```
 pub const CLASSES: [u32; 79] = [
     // 16..=128 step 8 — finer than the octave rule, and free.
     16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, // 128..=256 step 16
@@ -91,6 +137,13 @@ pub const CLASSES: [u32; 79] = [
 ];
 
 /// Number of size classes.
+///
+/// # Examples
+///
+/// ```
+/// use kevy_alloc::class::{NCLASSES, MAX_SMALL, index_of};
+/// assert_eq!(index_of(MAX_SMALL, 8), Some(NCLASSES - 1));
+/// ```
 pub const NCLASSES: usize = CLASSES.len();
 
 /// Lookup granularity: one table entry per 8 bytes of request size.
@@ -201,6 +254,16 @@ const RECIP: [u32; NCLASSES] = {
 
 /// Divide a span offset by a class's slot size via the reciprocal
 /// table. `off` must be below [`SPAN_BYTES`].
+///
+/// # Examples
+///
+/// ```
+/// use kevy_alloc::class::{index_of, size_of, slot_of_offset};
+/// let i = index_of(100, 8).unwrap();
+/// let slot = size_of(i);
+/// // an interior pointer into slot 3 maps back to slot 3
+/// assert_eq!(slot_of_offset(3 * slot + 5, i), 3);
+/// ```
 #[inline]
 #[must_use]
 pub fn slot_of_offset(off: usize, index: usize) -> u32 {
@@ -208,6 +271,13 @@ pub fn slot_of_offset(off: usize, index: usize) -> u32 {
 }
 
 /// Slots that fit in a span of this class.
+///
+/// # Examples
+///
+/// ```
+/// use kevy_alloc::class::{SPAN_BYTES, index_of, slots_per_span};
+/// assert_eq!(slots_per_span(index_of(16, 8).unwrap()), SPAN_BYTES / 16);
+/// ```
 #[must_use]
 pub const fn slots_per_span(index: usize) -> usize {
     SPAN_BYTES / CLASSES[index] as usize

@@ -123,12 +123,80 @@ pub use waker::Waker;
 #[non_exhaustive]
 pub struct Event {
     /// The file descriptor the event fired on.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use kevy_sys::{Interest, Poller, Waker};
+    ///
+    /// let (poller, a, b) = (Poller::new()?, Waker::new()?, Waker::new()?);
+    /// poller.add(a.read_fd(), Interest::READ)?;
+    /// poller.add(b.read_fd(), Interest::READ)?;
+    /// b.wake()?;
+    /// let mut events = Vec::new();
+    /// poller.wait(&mut events, Some(1000))?;
+    /// // only the descriptor that became ready is named
+    /// assert!(!events.is_empty());
+    /// assert!(events.iter().all(|ev| ev.fd == b.read_fd()));
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub fd: i32,
     /// A `read`/`accept` on `fd` would not block.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use kevy_sys::{Interest, Poller, Socket};
+    ///
+    /// let listener = Socket::tcp_listen([127, 0, 0, 1], 0, 16)?;
+    /// let poller = Poller::new()?;
+    /// poller.add(listener.raw(), Interest::READ)?;
+    /// let _client = std::net::TcpStream::connect(("127.0.0.1", listener.local_port()?))?;
+    /// let mut events = Vec::new();
+    /// poller.wait(&mut events, Some(2000))?;
+    /// // a pending connection makes the listener readable: accept won't block
+    /// assert!(events.iter().any(|ev| ev.fd == listener.raw() && ev.readable));
+    /// let _conn = listener.accept()?;
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub readable: bool,
     /// A `write` on `fd` would not block.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use kevy_sys::{Interest, Poller, Socket};
+    ///
+    /// let listener = Socket::tcp_listen([127, 0, 0, 1], 0, 16)?;
+    /// let _client = std::net::TcpStream::connect(("127.0.0.1", listener.local_port()?))?;
+    /// let conn = listener.accept()?;
+    /// let poller = Poller::new()?;
+    /// poller.add(conn.raw(), Interest::WRITE)?;
+    /// let mut events = Vec::new();
+    /// poller.wait(&mut events, Some(2000))?;
+    /// // a fresh connection has an empty send buffer
+    /// assert!(events.iter().any(|ev| ev.fd == conn.raw() && ev.writable));
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub writable: bool,
     /// Peer hang-up / error — the connection should be closed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use kevy_sys::{Interest, Poller, Socket};
+    ///
+    /// let listener = Socket::tcp_listen([127, 0, 0, 1], 0, 16)?;
+    /// let client = std::net::TcpStream::connect(("127.0.0.1", listener.local_port()?))?;
+    /// let conn = listener.accept()?;
+    /// let poller = Poller::new()?;
+    /// poller.add(conn.raw(), Interest::READ)?;
+    /// drop(client); // the peer goes away
+    /// let mut events = Vec::new();
+    /// poller.wait(&mut events, Some(2000))?;
+    /// assert!(events.iter().any(|ev| ev.fd == conn.raw() && ev.hup));
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub hup: bool,
 }
 
@@ -151,10 +219,56 @@ pub struct Interest(u8);
 
 impl Interest {
     /// Neither readable nor writable.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use kevy_sys::{Interest, Poller, Waker};
+    ///
+    /// let (poller, w) = (Poller::new()?, Waker::new()?);
+    /// poller.add(w.read_fd(), Interest::NONE)?; // registered, but muted
+    /// w.wake()?;
+    /// let mut events = Vec::new();
+    /// assert_eq!(poller.wait(&mut events, Some(50))?, 0);
+    /// assert_eq!(Interest::NONE, Interest::default());
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub const NONE: Self = Self(0);
     /// Readable: a `read`/`accept` would not block.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use kevy_sys::{Interest, Poller, Waker};
+    ///
+    /// let (poller, w) = (Poller::new()?, Waker::new()?);
+    /// poller.add(w.read_fd(), Interest::READ)?;
+    /// w.wake()?;
+    /// let mut events = Vec::new();
+    /// poller.wait(&mut events, Some(1000))?;
+    /// assert!(events.iter().any(|ev| ev.fd == w.read_fd() && ev.readable));
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub const READ: Self = Self(1);
     /// Writable: a `write` would not block.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use kevy_sys::{Interest, Poller, Socket};
+    ///
+    /// let listener = Socket::tcp_listen([127, 0, 0, 1], 0, 16)?;
+    /// let _client = std::net::TcpStream::connect(("127.0.0.1", listener.local_port()?))?;
+    /// let conn = listener.accept()?;
+    /// let poller = Poller::new()?;
+    /// // watch for writability only once there is something queued to send
+    /// poller.add(conn.raw(), Interest::NONE)?;
+    /// poller.modify(conn.raw(), Interest::WRITE)?;
+    /// let mut events = Vec::new();
+    /// poller.wait(&mut events, Some(2000))?;
+    /// assert!(events.iter().any(|ev| ev.fd == conn.raw() && ev.writable));
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub const WRITE: Self = Self(2);
 
     /// Whether this set includes [`Interest::READ`].

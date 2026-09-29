@@ -42,6 +42,23 @@
 //! byte format is exactly `kevy-persist`'s AOF format, so a log written
 //! by a browser tab replays in a native kevy just as well.
 //!
+//! ```
+//! use kevy_wasm::abi_core::*;
+//! use kevy_wasm::abi_kv::*;
+//! # fn out(h: u32) -> Vec<u8> {
+//! #     // SAFETY: the result buffer stays valid until the next call on `h`.
+//! #     unsafe { std::slice::from_raw_parts(kevy_out_ptr(h), kevy_out_len(h) as usize) }.to_vec()
+//! # }
+//! let h = kevy_open(0);
+//! // SAFETY: each pair points at that many readable bytes for the call.
+//! unsafe {
+//!     assert_eq!(kevy_set(h, b"k".as_ptr(), 1, b"hello".as_ptr(), 5), 0);
+//!     assert_eq!(kevy_get(h, b"k".as_ptr(), 1), 1); // hit: the value is in the result buffer
+//! }
+//! assert_eq!(out(h), b"hello");
+//! assert_eq!(kevy_close(h), 0);
+//! ```
+//!
 //! [`kevy_open`]: abi_core::kevy_open
 //! [`kevy_alloc`]: abi_core::kevy_alloc
 //! [`kevy_free`]: abi_core::kevy_free
@@ -61,6 +78,7 @@ pub mod abi_aof;
 pub mod abi_cmd;
 pub mod abi_core;
 pub mod abi_kv;
+mod abi_kv_multi;
 pub mod abi_pubsub;
 
 #[cfg(test)]
@@ -78,6 +96,12 @@ use kevy_store::{KevyError, StoreError};
 /// ABI contract version reported by [`abi_core::kevy_abi_version`].
 /// Bumped on any incompatible change to the export surface or the
 /// packed byte formats, so loaders can refuse a mismatched module.
+///
+/// ```
+/// use kevy_wasm::abi_core::*;
+/// // what a loader checks before any other call
+/// assert_eq!(kevy_abi_version(), kevy_wasm::ABI_VERSION);
+/// ```
 pub const ABI_VERSION: u32 = 1;
 
 /// Success status.
