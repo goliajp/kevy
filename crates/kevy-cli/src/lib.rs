@@ -5,6 +5,16 @@
 //! crate so they're reusable by integration tests / scripts / other tools.
 //! This file is the CLI-specific bit (how a redis-cli user expects bulk
 //! strings quoted, arrays numbered, nil shown as `(nil)`).
+//!
+//! ```
+//! use kevy_cli::{DEFAULT_HOST, format_reply};
+//! # let port = include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs"));
+//! let mut client = kevy_resp_client::RespClient::connect(DEFAULT_HOST, port)?;
+//! client.request_borrowed(&[b"RPUSH", b"langs", b"rust", b"zig"])?;
+//! let reply = client.request_borrowed(&[b"LRANGE", b"langs", b"0", b"-1"])?;
+//! assert_eq!(format_reply(&reply, 0), "1) \"rust\"\n2) \"zig\"");
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -116,8 +126,22 @@ pub mod rcli;
 /// Where a subcommand connects when the caller says nothing. Shared
 /// rather than repeated: two copies of a default is a drift waiting to
 /// be reported as a bug.
+///
+/// ```
+/// use kevy_cli::DEFAULT_HOST;
+/// // loopback, the same default redis-cli has
+/// let ip: std::net::IpAddr = DEFAULT_HOST.parse()?;
+/// assert!(ip.is_loopback());
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub const DEFAULT_HOST: &str = "127.0.0.1";
 /// The port half of the same default.
+///
+/// ```
+/// use kevy_cli::{DEFAULT_HOST, DEFAULT_PORT};
+/// // what `kevy-cli` with no -h / -p connects to
+/// assert_eq!(format!("{DEFAULT_HOST}:{DEFAULT_PORT}"), "127.0.0.1:6379");
+/// ```
 pub const DEFAULT_PORT: u16 = 6379;
 
 /// Prefix bulk ops + diagnostics (`copy-prefix` /
@@ -126,12 +150,27 @@ pub mod bulk;
 
 /// `shadow` — run the old query and the new one side by side and
 /// report where they disagree, in membership AND in order.
+///
+/// ```
+/// use kevy_cli::shadow::{Shape, run};
+/// # let port = include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs"));
+/// let mut client = kevy_resp_client::RespClient::connect("127.0.0.1", port)?;
+/// client.request_borrowed(&[b"ZADD", b"feed", b"1", b"a", b"2", b"b", b"3", b"c"])?;
+/// client.request_borrowed(&[b"RPUSH", b"feed:new", b"a", b"c"])?;
+/// let argv = |s: &str| s.split(' ').map(|w| w.as_bytes().to_vec()).collect::<Vec<_>>();
+/// let r = run(&mut client, &argv("ZRANGE feed 0 -1"), &argv("LRANGE feed:new 0 -1"),
+///     Shape::Flat, Shape::Flat, 3)?;
+/// assert_eq!((r.samples, r.diverged), (3, 3));
+/// let (_, first) = r.first.as_ref().expect("the paths disagree");
+/// assert_eq!(first.missing, [b"b".to_vec()], "the writer that never updated feed:new");
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub mod shadow;
 
-/// `doctor` — every table's VERIFY counters, turned into an exit code
-/// a cron can act on.
 pub mod backfill_keys;
 pub(crate) mod collections;
+/// `doctor` — every table's VERIFY counters, turned into an exit code
+/// a cron can act on.
 pub mod doctor;
 pub mod link;
 pub mod lint;
@@ -139,6 +178,14 @@ mod tools;
 
 /// Pretty-print a reply roughly the way `redis-cli` does. Arrays are
 /// numbered + indented; bulk strings are quoted; nil shows as `(nil)`.
+///
+/// ```
+/// use kevy_cli::{Reply, format_reply};
+/// assert_eq!(format_reply(&Reply::Nil, 0), "(nil)");
+/// assert_eq!(format_reply(&Reply::Int(3), 0), "(integer) 3");
+/// let nested = Reply::Array(vec![Reply::Bulk(b"a".to_vec()), Reply::Array(vec![Reply::Int(1)])]);
+/// assert_eq!(format_reply(&nested, 0), "1) \"a\"\n2)    1) (integer) 1");
+/// ```
 pub fn format_reply(reply: &Reply, indent: usize) -> String {
     match reply {
         Reply::Simple(s) => String::from_utf8_lossy(s).into_owned(),

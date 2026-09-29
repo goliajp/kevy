@@ -17,6 +17,20 @@
 //! ticks fire at the configured cadence without burning a core.
 //!
 //! Out of scope (Phase 1.5): TLS / auth / connection pooling.
+//!
+//! ```
+//! # use std::net::{IpAddr, Ipv4Addr}; use std::time::{Duration, Instant};
+//! # use kevy_elect::{ElectConfig, Elector, PeerAddr, Role, Transport};
+//! # const LOCAL: (IpAddr, u16) = (IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+//! # fn node(id: &str, peers: &[&str], role: Role) -> Elector { let cfg = ElectConfig::default().with_hb_interval(Duration::from_millis(20)).with_down_after(Duration::from_millis(200)); Elector::new(id, peers.iter().map(|p| p.to_string()).collect(), "x:6004", role).with_config(cfg) }
+//! # use kevy_elect::ElectorSnapshot; fn wait(t: &Transport, done: impl Fn(&ElectorSnapshot) -> bool) -> ElectorSnapshot { let end = Instant::now() + Duration::from_secs(20); loop { let s = t.state_snapshot(); if done(&s) || Instant::now() > end { return s; } std::thread::sleep(Duration::from_millis(10)); } }
+//! // a one-node cluster: after the grace window it elects itself
+//! let t = Transport::spawn(node("a", &["a"], Role::Replica), LOCAL, vec![])?;
+//! let snap = wait(&t, |s| s.role == Role::Primary);
+//! assert_eq!(snap.current_primary.as_deref(), Some("a"));
+//! t.shutdown();
+//! # Ok::<(), std::io::Error>(())
+//! ```
 
 // Teardown. `join` returns what the thread panicked with and the
 // thread is already being abandoned; a flush on the way out has
@@ -25,56 +39,14 @@
 
 use std::net::TcpListener;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Sender, channel};
+use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use std::time::Duration;
 
 use crate::elector::Elector;
-use crate::message::Message;
-use crate::transport_loops::{accept_loop, orchestrator_loop, outbound_loop};
-
-/// Maximum buffer the per-connection reader holds before declaring
-/// the framing busted. Election frames are ≤ 256 B; 16 KiB is
-/// generous for misaligned partial reads.
-pub(crate) const READ_BUF_CAP: usize = 16 * 1024;
-
-/// Read-loop sleep on transient EAGAIN-equivalents (peer closed,
-/// I/O error during decode). Keeps the worker from a tight retry
-/// loop while still recovering on reconnect.
-pub(crate) const READ_RETRY_BACKOFF: Duration = Duration::from_millis(100);
-
-/// One inbound event the orchestrator processes. Either a decoded
-/// election message from a peer, or a "the connection from $peer
-/// went down" notification (so the orchestrator can clear any
-/// state that assumed the link was up).
-#[derive(Debug)]
-pub(crate) enum InboundEvent {
-    /// `(from_node_id, msg)`.
-    Message(String, Message),
-    /// An inbound connection failed its handshake, closed, or sent a
-    /// frame that does not decode.
-    InboundConnFailed,
-}
-
-/// Shared state between the orchestrator + worker threads. Wraps
-/// the elector in a Mutex so the per-peer outbound threads can read
-/// the latest `epoch` / `repl_offset` for the next heartbeat
-/// without round-tripping through the orchestrator — but **only the
-/// orchestrator mutates** via `tick` / `on_message`.
-#[derive(Debug)]
-pub(crate) struct Shared {
-    pub(crate) elector: Mutex<Elector>,
-    /// `Some` when every election link must be Noise-authenticated.
-    pub(crate) secure: Option<crate::link::SecureLinks>,
-    /// Per-peer outbound queue. Indexed by `node_id`. Each worker
-    /// drains its own queue + writes onto the persistent TCP
-    /// stream; on stream death the queue is held until the worker
-    /// reconnects. Bounded by `MAX_PENDING_PER_PEER` to prevent a
-    /// dead peer from leaking memory.
-    pub(crate) out_queues:
-        Mutex<std::collections::HashMap<String, std::collections::VecDeque<Message>>>,
-}
+use crate::transport_loops::{
+    InboundEvent, Shared, orchestrator_loop, spawn_listener_thread, spawn_outbound_threads,
+};
 
 /// Topology-change callback:
 /// `(new_local_role, Some(primary_id) when known, has_quorum)`.
@@ -83,9 +55,21 @@ pub(crate) struct Shared {
 /// dynamic). `has_quorum` drives the primary lease: a primary seeing
 /// `false` is on the minority side of a partition and must fence
 /// writes within the `down_after` window.
+///
+/// ```
+/// use std::sync::mpsc::channel;
+/// use kevy_elect::{Role, TopologyCallback};
+///
+/// let (tx, rx) = channel();
+/// let on_change: TopologyCallback = Box::new(move |role, primary, has_quorum| {
+///     let fence = role == Role::Primary && !has_quorum; // stop taking writes
+///     let _ = tx.send((primary, fence));
+/// });
+/// on_change(Role::Primary, Some("a".to_string()), false);
+/// assert_eq!(rx.recv()?, (Some("a".to_string()), true));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub type TopologyCallback = Box<dyn Fn(crate::message::Role, Option<String>, bool) + Send>;
-
-pub(crate) const MAX_PENDING_PER_PEER: usize = 256;
 
 /// Per-peer addressing. Maps `node_id` → outbound dial address.
 ///
@@ -98,10 +82,29 @@ pub(crate) const MAX_PENDING_PER_PEER: usize = 256;
 pub struct PeerAddr {
     /// Peer's stable node id (matches the `node_id` field the
     /// peer puts in its `HB`).
+    ///
+    /// ```
+    /// let peer = kevy_elect::PeerAddr::new("n2", "10.0.0.2", 7004);
+    /// assert_eq!(peer.node_id, "n2"); // the id n2 puts in its heartbeats
+    /// ```
     pub node_id: String,
     /// Peer's elect-control host (IP or DNS).
+    ///
+    /// ```
+    /// let peer = kevy_elect::PeerAddr::new("n2", "db2.internal", 7004);
+    /// assert_eq!(format!("{}:{}", peer.host, peer.port), "db2.internal:7004"); // what gets dialled
+    /// ```
     pub host: String,
     /// Peer's elect-control TCP port.
+    ///
+    /// ```
+    /// use std::net::TcpListener;
+    ///
+    /// let listener = TcpListener::bind("127.0.0.1:0")?;
+    /// let peer = kevy_elect::PeerAddr::new("n2", "127.0.0.1", listener.local_addr()?.port());
+    /// assert_eq!(peer.port, listener.local_addr()?.port());
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub port: u16,
 }
 
@@ -120,6 +123,27 @@ impl PeerAddr {
 /// Public handle to a running transport. Owns the orchestrator +
 /// listener + outbound worker threads. Dropping it signals stop
 /// and joins (best-effort within `JOIN_TIMEOUT`).
+///
+/// Two nodes on loopback; the replica learns the primary from its
+/// heartbeats:
+///
+/// ```
+/// # use std::net::{IpAddr, Ipv4Addr}; use std::time::{Duration, Instant};
+/// # use kevy_elect::{ElectConfig, Elector, PeerAddr, Role, Transport};
+/// # const LOCAL: (IpAddr, u16) = (IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+/// # fn node(id: &str, peers: &[&str], role: Role) -> Elector { let cfg = ElectConfig::default().with_hb_interval(Duration::from_millis(20)).with_down_after(Duration::from_millis(200)); Elector::new(id, peers.iter().map(|p| p.to_string()).collect(), "x:6004", role).with_config(cfg) }
+/// # use kevy_elect::ElectorSnapshot; fn wait(t: &Transport, done: impl Fn(&ElectorSnapshot) -> bool) -> ElectorSnapshot { let end = Instant::now() + Duration::from_secs(20); loop { let s = t.state_snapshot(); if done(&s) || Instant::now() > end { return s; } std::thread::sleep(Duration::from_millis(10)); } }
+/// let ports = kevy_testnet::free_ports(2);
+/// let at = |id: &str, port| PeerAddr::new(id, "127.0.0.1", port);
+/// let a = Transport::spawn(node("a", &["a", "b"], Role::Primary), (LOCAL.0, ports[0]), vec![at("b", ports[1])])?;
+/// let b = Transport::spawn(node("b", &["a", "b"], Role::Replica), (LOCAL.0, ports[1]), vec![at("a", ports[0])])?;
+/// let snap = wait(&b, |s| s.current_primary.is_some());
+/// assert_eq!((snap.role, snap.current_primary.as_deref()), (Role::Replica, Some("a")));
+/// assert!(wait(&b, |s| s.down_peers.is_empty()).down_peers.is_empty()); // a is heard
+/// a.shutdown();
+/// b.shutdown();
+/// # Ok::<(), std::io::Error>(())
+/// ```
 #[derive(Debug)]
 pub struct Transport {
     stop: Arc<AtomicBool>,
@@ -140,6 +164,17 @@ impl Transport {
     /// to (typically `0.0.0.0:elect_port`). `peers` lists every
     /// OTHER node in the cluster (this node's own id is filtered
     /// out by the elector at run-time).
+    ///
+    /// ```
+    /// # use std::net::{IpAddr, Ipv4Addr}; use std::time::{Duration, Instant};
+    /// # use kevy_elect::{ElectConfig, Elector, PeerAddr, Role, Transport};
+    /// # const LOCAL: (IpAddr, u16) = (IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+    /// # fn node(id: &str, peers: &[&str], role: Role) -> Elector { let cfg = ElectConfig::default().with_hb_interval(Duration::from_millis(20)).with_down_after(Duration::from_millis(200)); Elector::new(id, peers.iter().map(|p| p.to_string()).collect(), "x:6004", role).with_config(cfg) }
+    /// let t = Transport::spawn(node("a", &["a"], Role::Primary), LOCAL, vec![])?;
+    /// assert_eq!(t.state_snapshot().role, Role::Primary);
+    /// t.shutdown();
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub fn spawn(
         elector: Elector,
         listen_addr: (std::net::IpAddr, u16),
@@ -155,6 +190,23 @@ impl Transport {
     /// primary_addr))` when a primary is known. The callback MUST be
     /// quick and non-reentrant into the elector (it runs outside the
     /// elector lock but on the tick thread).
+    ///
+    /// ```
+    /// # use std::net::{IpAddr, Ipv4Addr}; use std::time::{Duration, Instant};
+    /// # use kevy_elect::{ElectConfig, Elector, PeerAddr, Role, Transport};
+    /// # const LOCAL: (IpAddr, u16) = (IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+    /// # fn node(id: &str, peers: &[&str], role: Role) -> Elector { let cfg = ElectConfig::default().with_hb_interval(Duration::from_millis(20)).with_down_after(Duration::from_millis(200)); Elector::new(id, peers.iter().map(|p| p.to_string()).collect(), "x:6004", role).with_config(cfg) }
+    /// use std::sync::mpsc::channel;
+    ///
+    /// let (tx, rx) = channel();
+    /// let t = Transport::spawn_with_callback(node("a", &["a"], Role::Replica), LOCAL, vec![],
+    ///     Box::new(move |role, primary, _quorum| { let _ = tx.send((role, primary)); }))?;
+    /// assert_eq!(rx.recv_timeout(Duration::from_secs(20))?, (Role::Replica, None)); // the start
+    /// // the grace window passes and the node elects itself
+    /// assert_eq!(rx.recv_timeout(Duration::from_secs(20))?, (Role::Primary, Some("a".to_string())));
+    /// t.shutdown();
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     // needless_pass_by_value: `peers` is handed to the spawned outbound loops
     // one entry at a time; by-value keeps the pub API an ownership handoff.
     #[allow(clippy::needless_pass_by_value)]
@@ -236,6 +288,19 @@ impl Transport {
 
     /// Read-side snapshot of the elector for `ROLE` / `INFO
     /// replication`. Locks the elector mutex briefly; cheap.
+    ///
+    /// ```
+    /// # use std::net::{IpAddr, Ipv4Addr}; use std::time::{Duration, Instant};
+    /// # use kevy_elect::{ElectConfig, Elector, PeerAddr, Role, Transport};
+    /// # const LOCAL: (IpAddr, u16) = (IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+    /// # fn node(id: &str, peers: &[&str], role: Role) -> Elector { let cfg = ElectConfig::default().with_hb_interval(Duration::from_millis(20)).with_down_after(Duration::from_millis(200)); Elector::new(id, peers.iter().map(|p| p.to_string()).collect(), "x:6004", role).with_config(cfg) }
+    /// let t = Transport::spawn(node("a", &["a", "b"], Role::Primary), LOCAL, vec![])?;
+    /// let snap = t.state_snapshot();
+    /// assert_eq!((snap.role, snap.epoch, snap.current_primary), (Role::Primary, 1, None));
+    /// assert_eq!(snap.down_peers, ["b"]); // never heard from
+    /// t.shutdown();
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     // missing_panics_doc: lock().expect — poisoning means another thread
     // already panicked mid-election; propagating is the only sane behaviour.
     #[allow(clippy::missing_panics_doc)]
@@ -262,6 +327,38 @@ impl Transport {
     }
 
     /// Feed this node's replication offset into the elector.
+    ///
+    /// ```
+    /// # use std::net::{IpAddr, Ipv4Addr}; use std::time::{Duration, Instant};
+    /// # use kevy_elect::{ElectConfig, Elector, PeerAddr, Role, Transport};
+    /// # const LOCAL: (IpAddr, u16) = (IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+    /// # fn node(id: &str, peers: &[&str], role: Role) -> Elector { let cfg = ElectConfig::default().with_hb_interval(Duration::from_millis(20)).with_down_after(Duration::from_millis(200)); Elector::new(id, peers.iter().map(|p| p.to_string()).collect(), "x:6004", role).with_config(cfg) }
+    /// use std::io::Read;
+    /// use std::net::TcpListener;
+    /// use kevy_elect::Message;
+    ///
+    /// // stand in for peer b and read what a sends it
+    /// let b = TcpListener::bind("127.0.0.1:0")?;
+    /// let peers = vec![PeerAddr::new("b", "127.0.0.1", b.local_addr()?.port())];
+    /// let t = Transport::spawn(node("a", &["a", "b"], Role::Primary), LOCAL, peers)?;
+    /// t.set_repl_offset(4242);
+    /// let (mut link, _) = b.accept()?;
+    /// link.set_read_timeout(Some(Duration::from_secs(20)))?;
+    /// let (mut buf, mut chunk, mut seen) = (Vec::new(), [0u8; 256], 0);
+    /// while seen != 4242 {
+    ///     let n = link.read(&mut chunk)?;
+    ///     assert!(n > 0, "link closed");
+    ///     buf.extend_from_slice(&chunk[..n]);
+    ///     while let Ok((msg, used)) = Message::decode(&buf) {
+    ///         buf.drain(..used);
+    ///         if let Message::Hb { repl_offset, .. } = msg {
+    ///             seen = repl_offset; // heartbeats now carry the offset
+    ///         }
+    ///     }
+    /// }
+    /// t.shutdown();
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     // missing_panics_doc: same poisoned-lock rationale as `state_snapshot`.
     #[allow(clippy::missing_panics_doc)]
     pub fn set_repl_offset(&self, offset: u64) {
@@ -270,6 +367,21 @@ impl Transport {
 
     /// Stop the transport. Joins all threads (with best-effort
     /// timeout). Idempotent.
+    ///
+    /// ```
+    /// # use std::net::{IpAddr, Ipv4Addr}; use std::time::{Duration, Instant};
+    /// # use kevy_elect::{ElectConfig, Elector, PeerAddr, Role, Transport};
+    /// # const LOCAL: (IpAddr, u16) = (IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+    /// # fn node(id: &str, peers: &[&str], role: Role) -> Elector { let cfg = ElectConfig::default().with_hb_interval(Duration::from_millis(20)).with_down_after(Duration::from_millis(200)); Elector::new(id, peers.iter().map(|p| p.to_string()).collect(), "x:6004", role).with_config(cfg) }
+    /// use std::net::TcpListener;
+    ///
+    /// let port = kevy_testnet::free_port();
+    /// let t = Transport::spawn(node("a", &["a"], Role::Primary), (LOCAL.0, port), vec![])?;
+    /// t.shutdown();
+    /// // every thread has exited, so the listening port is free again
+    /// drop(TcpListener::bind(("127.0.0.1", port))?);
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub fn shutdown(mut self) {
         self.stop.store(true, Ordering::Relaxed);
         // Drain handles. We can't tell threads to exit a blocking
@@ -289,14 +401,66 @@ impl Drop for Transport {
 }
 
 /// Read-side snapshot returned by [`Transport::state_snapshot`].
+///
+/// ```
+/// # use std::net::{IpAddr, Ipv4Addr}; use std::time::{Duration, Instant};
+/// # use kevy_elect::{ElectConfig, Elector, PeerAddr, Role, Transport};
+/// # const LOCAL: (IpAddr, u16) = (IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+/// # fn node(id: &str, peers: &[&str], role: Role) -> Elector { let cfg = ElectConfig::default().with_hb_interval(Duration::from_millis(20)).with_down_after(Duration::from_millis(200)); Elector::new(id, peers.iter().map(|p| p.to_string()).collect(), "x:6004", role).with_config(cfg) }
+/// # use kevy_elect::ElectorSnapshot; fn wait(t: &Transport, done: impl Fn(&ElectorSnapshot) -> bool) -> ElectorSnapshot { let end = Instant::now() + Duration::from_secs(20); loop { let s = t.state_snapshot(); if done(&s) || Instant::now() > end { return s; } std::thread::sleep(Duration::from_millis(10)); } }
+/// let t = Transport::spawn(node("a", &["a"], Role::Replica), LOCAL, vec![])?;
+/// let ElectorSnapshot { role, epoch, current_primary, down_peers, .. } = wait(&t, |s| s.role == Role::Primary);
+/// assert_eq!((role, epoch, current_primary.as_deref()), (Role::Primary, 2, Some("a")));
+/// assert!(down_peers.is_empty());
+/// t.shutdown();
+/// # Ok::<(), std::io::Error>(())
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct ElectorSnapshot {
     /// Self-perceived role at snapshot time.
+    ///
+    /// ```
+    /// # use std::net::{IpAddr, Ipv4Addr}; use std::time::{Duration, Instant};
+    /// # use kevy_elect::{ElectConfig, Elector, PeerAddr, Role, Transport};
+    /// # const LOCAL: (IpAddr, u16) = (IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+    /// # fn node(id: &str, peers: &[&str], role: Role) -> Elector { let cfg = ElectConfig::default().with_hb_interval(Duration::from_millis(20)).with_down_after(Duration::from_millis(200)); Elector::new(id, peers.iter().map(|p| p.to_string()).collect(), "x:6004", role).with_config(cfg) }
+    /// let t = Transport::spawn(node("a", &["a", "b"], Role::Replica), LOCAL, vec![])?;
+    /// assert_eq!(t.state_snapshot().role, Role::Replica); // until an election says otherwise
+    /// t.shutdown();
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub role: crate::message::Role,
     /// Election epoch at snapshot time.
+    ///
+    /// ```
+    /// # use std::net::{IpAddr, Ipv4Addr}; use std::time::{Duration, Instant};
+    /// # use kevy_elect::{ElectConfig, Elector, PeerAddr, Role, Transport};
+    /// # const LOCAL: (IpAddr, u16) = (IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+    /// # fn node(id: &str, peers: &[&str], role: Role) -> Elector { let cfg = ElectConfig::default().with_hb_interval(Duration::from_millis(20)).with_down_after(Duration::from_millis(200)); Elector::new(id, peers.iter().map(|p| p.to_string()).collect(), "x:6004", role).with_config(cfg) }
+    /// # use kevy_elect::ElectorSnapshot; fn wait(t: &Transport, done: impl Fn(&ElectorSnapshot) -> bool) -> ElectorSnapshot { let end = Instant::now() + Duration::from_secs(20); loop { let s = t.state_snapshot(); if done(&s) || Instant::now() > end { return s; } std::thread::sleep(Duration::from_millis(10)); } }
+    /// let t = Transport::spawn(node("a", &["a"], Role::Replica), LOCAL, vec![])?;
+    /// assert_eq!(t.state_snapshot().epoch, 1);
+    /// assert_eq!(wait(&t, |s| s.role == Role::Primary).epoch, 2); // winning took a new epoch
+    /// t.shutdown();
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub epoch: u64,
     /// Currently-known primary id (`None` until first ANNOUNCE).
+    ///
+    /// ```
+    /// # use std::net::{IpAddr, Ipv4Addr}; use std::time::{Duration, Instant};
+    /// # use kevy_elect::{ElectConfig, Elector, PeerAddr, Role, Transport};
+    /// # const LOCAL: (IpAddr, u16) = (IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+    /// # fn node(id: &str, peers: &[&str], role: Role) -> Elector { let cfg = ElectConfig::default().with_hb_interval(Duration::from_millis(20)).with_down_after(Duration::from_millis(200)); Elector::new(id, peers.iter().map(|p| p.to_string()).collect(), "x:6004", role).with_config(cfg) }
+    /// # use kevy_elect::ElectorSnapshot; fn wait(t: &Transport, done: impl Fn(&ElectorSnapshot) -> bool) -> ElectorSnapshot { let end = Instant::now() + Duration::from_secs(20); loop { let s = t.state_snapshot(); if done(&s) || Instant::now() > end { return s; } std::thread::sleep(Duration::from_millis(10)); } }
+    /// let t = Transport::spawn(node("a", &["a"], Role::Replica), LOCAL, vec![])?;
+    /// assert_eq!(t.state_snapshot().current_primary, None);
+    /// let snap = wait(&t, |s| s.current_primary.is_some());
+    /// assert_eq!(snap.current_primary.as_deref(), Some("a"));
+    /// t.shutdown();
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub current_primary: Option<String>,
     /// Peers (excluding self) whose last `HB` is older than
     /// `ElectConfig::down_after` — i.e. the down-set this node would
@@ -304,46 +468,20 @@ pub struct ElectorSnapshot {
     /// to decide whether the declared scope writer is reachable;
     /// when the writer's id is present, the fallback takes over the
     /// scope's writes.
+    ///
+    /// ```
+    /// # use std::net::{IpAddr, Ipv4Addr}; use std::time::{Duration, Instant};
+    /// # use kevy_elect::{ElectConfig, Elector, PeerAddr, Role, Transport};
+    /// # const LOCAL: (IpAddr, u16) = (IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+    /// # fn node(id: &str, peers: &[&str], role: Role) -> Elector { let cfg = ElectConfig::default().with_hb_interval(Duration::from_millis(20)).with_down_after(Duration::from_millis(200)); Elector::new(id, peers.iter().map(|p| p.to_string()).collect(), "x:6004", role).with_config(cfg) }
+    /// // b and c are declared but no link to either is configured
+    /// let t = Transport::spawn(node("a", &["a", "b", "c"], Role::Primary), LOCAL, vec![])?;
+    /// let snap = t.state_snapshot();
+    /// let scope_writer = "c";
+    /// assert!(snap.down_peers.iter().any(|p| p == scope_writer)); // a fallback would take over
+    /// assert_eq!(snap.down_peers, ["b", "c"]);
+    /// t.shutdown();
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub down_peers: Vec<String>,
-}
-
-// ─────────── per-thread loops ───────────
-
-/// Spawn the accept-side listener thread, appending its handle.
-fn spawn_listener_thread(
-    listener: TcpListener,
-    tx: Sender<InboundEvent>,
-    stop: Arc<AtomicBool>,
-    shared: &Arc<Shared>,
-    handles: &mut Vec<JoinHandle<()>>,
-) -> std::io::Result<()> {
-    let shared = Arc::clone(shared);
-    handles.push(std::thread::Builder::new().name("kevy-elect-listener".to_string()).spawn(
-        move || {
-            accept_loop(listener, tx, stop, shared);
-        },
-    )?);
-    Ok(())
-}
-
-/// Spawn one outbound worker thread per peer, appending the handles.
-fn spawn_outbound_threads(
-    peers: &[PeerAddr],
-    shared: &Arc<Shared>,
-    stop: &Arc<AtomicBool>,
-    handles: &mut Vec<JoinHandle<()>>,
-) -> std::io::Result<()> {
-    for peer in peers {
-        let peer_stop = stop.clone();
-        let peer_shared = shared.clone();
-        let peer_clone = peer.clone();
-        handles.push(
-            std::thread::Builder::new().name(format!("kevy-elect-out-{}", peer.node_id)).spawn(
-                move || {
-                    outbound_loop(peer_clone, peer_shared, peer_stop);
-                },
-            )?,
-        );
-    }
-    Ok(())
 }

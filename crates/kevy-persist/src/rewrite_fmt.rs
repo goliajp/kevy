@@ -50,6 +50,21 @@ pub(crate) fn emit<W: Write, A: kevy_resp::ArgvView + ?Sized>(
 /// Serialize `src`'s whole state to a fresh compacted AOF at `path`
 /// (fsynced): the rewrite image — always the v2 checksummed-record
 /// format. Returns the keys written and the file's size.
+///
+/// ```
+/// use kevy_store::{SetCondition, Store};
+///
+/// let mut store = Store::new();
+/// store.set(b"k", b"v".to_vec(), None, SetCondition::Always);
+/// let dir = kevy_tmpdir::unique_dir("dump-aof-doc");
+/// let path = dir.join("compact.aof");
+/// let stats = kevy_persist::dump_aof(&path, &store)?;
+/// assert_eq!((stats.keys, stats.bytes), (1, std::fs::metadata(&path)?.len()));
+/// let replayed = kevy_persist::replay_aof_quiet(&path, Default::default(), |_| {})?;
+/// assert_eq!(replayed.commands, 1);
+/// # std::fs::remove_dir_all(&dir)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub fn dump_aof<S: crate::SnapshotSource>(path: &Path, src: &S) -> io::Result<crate::RewriteStats> {
     // Drop-behind stride — a multi-GB image left dirty floods the page
     // cache into direct reclaim inside the server's own fault paths
@@ -154,6 +169,19 @@ fn write_hash_ttl_frames<W: Write, S: crate::SnapshotSource>(
 /// host-mediated persistence (targets without a filesystem hand the image
 /// to the host to store). `Vec<u8>` is an infallible `Write`, so no error
 /// path exists.
+///
+/// ```
+/// use kevy_persist::{AofFormat, dump_store_to_buf};
+/// use kevy_store::{SetCondition, Store};
+///
+/// let mut store = Store::new();
+/// store.set(b"k", b"v".to_vec(), None, SetCondition::Always);
+/// // a host without a filesystem stores the image itself
+/// let (image, keys) = dump_store_to_buf(&store, AofFormat::V1);
+/// assert_eq!(keys, 1);
+/// let text = String::from_utf8_lossy(&image);
+/// assert!(text.contains("SET\r\n$1\r\nk\r\n$1\r\nv"));
+/// ```
 pub fn dump_store_to_buf<S: crate::SnapshotSource>(
     src: &S,
     fmt: crate::AofFormat,
@@ -359,6 +387,15 @@ fn decimal_digits(mut x: u64) -> u32 {
 /// [`replay_aof`](crate::replay_aof) parses back. Public so external AOF
 /// producers (host-mediated persistence pumps) emit frames byte-compatible
 /// with kevy-written logs.
+///
+/// ```
+/// use kevy_persist::{Argv, write_multibulk};
+///
+/// let mut frame = Vec::new();
+/// write_multibulk(&mut frame, &Argv::from(vec![b"GET".to_vec(), b"k".to_vec()]))?;
+/// assert_eq!(frame, b"*2\r\n$3\r\nGET\r\n$1\r\nk\r\n");
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub fn write_multibulk<W: Write, A: ArgvView + ?Sized>(mut w: W, args: &A) -> io::Result<()> {
     write!(w, "*{}\r\n", args.len())?;
     for i in 0..args.len() {

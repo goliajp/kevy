@@ -30,6 +30,16 @@ pub(crate) fn quarantine_dropped_tail(path: &Path, from: u64) -> io::Result<Path
 /// COW background-save's log reset starts from this — the post-collect
 /// tee'd writes are appended by `finish_concurrent_rewrite` and the result
 /// swaps over the live AOF (the snapshot now carries the pre-collect state).
+///
+/// ```
+/// let path = std::env::temp_dir().join(format!("aof-base-doc-{}.aof", std::process::id()));
+/// kevy_persist::write_aof_base(&path)?;
+/// assert_eq!(std::fs::read(&path)?, kevy_persist::AOF2_MAGIC);
+/// let report = kevy_persist::replay_aof_quiet(&path, Default::default(), |_| {})?;
+/// assert_eq!(report.commands, 0);
+/// # std::fs::remove_file(&path)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub fn write_aof_base(path: &Path) -> io::Result<()> {
     let mut f = File::create(path)?;
     f.write_all(crate::record::AOF2_MAGIC)?;

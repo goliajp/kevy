@@ -9,25 +9,57 @@
 //! The server runtime, the embedded store, and the reshard engine all
 //! derive their paths from here, so a dir written by one is readable by
 //! the others (the embedded store's custom-filename opt-out aside).
+//!
+//! ```
+//! use kevy_persist::layout;
+//!
+//! let dir = kevy_tmpdir::unique_dir("layout-doc");
+//! kevy_persist::save_snapshot(&kevy_store::Store::new(), &layout::snapshot_path(&dir, 0))?;
+//! std::fs::write(layout::aof_path(&dir, 1), kevy_persist::AOF2_MAGIC)?;
+//! // a dir one writer laid out is read back by anything deriving the same names
+//! assert_eq!(layout::infer_files_n(&dir), 2);
+//! # std::fs::remove_dir_all(&dir)?;
+//! # Ok::<(), std::io::Error>(())
+//! ```
 
 use std::path::{Path, PathBuf};
 
 /// Shard `i`'s snapshot file name.
+///
+/// ```
+/// assert_eq!(kevy_persist::layout::snapshot_file(3), "dump-3.rdb");
+/// ```
 pub fn snapshot_file(i: usize) -> String {
     format!("dump-{i}.rdb")
 }
 
 /// Shard `i`'s AOF file name.
+///
+/// ```
+/// assert_eq!(kevy_persist::layout::aof_file(3), "aof-3.aof");
+/// ```
 pub fn aof_file(i: usize) -> String {
     format!("aof-{i}.aof")
 }
 
 /// Shard `i`'s snapshot path under `dir`.
+///
+/// ```
+/// use std::path::Path;
+/// let p = kevy_persist::layout::snapshot_path(Path::new("/data"), 0);
+/// assert_eq!(p, Path::new("/data/dump-0.rdb"));
+/// ```
 pub fn snapshot_path(dir: &Path, i: usize) -> PathBuf {
     dir.join(snapshot_file(i))
 }
 
 /// Shard `i`'s AOF path under `dir`.
+///
+/// ```
+/// use std::path::Path;
+/// let p = kevy_persist::layout::aof_path(Path::new("/data"), 0);
+/// assert_eq!(p, Path::new("/data/aof-0.aof"));
+/// ```
 pub fn aof_path(dir: &Path, i: usize) -> PathBuf {
     dir.join(aof_file(i))
 }
@@ -58,6 +90,16 @@ pub fn lock_path(dir: &Path) -> PathBuf {
 }
 
 /// The layout record's path under `dir`.
+///
+/// ```
+/// use kevy_persist::{Routing, ShardsMeta, layout};
+///
+/// let dir = kevy_tmpdir::unique_dir("layout-meta-doc");
+/// ShardsMeta::new(2, Routing::KevyHash).write(&layout::shards_meta_path(&dir))?;
+/// assert!(dir.join("shards.meta").exists());
+/// # std::fs::remove_dir_all(&dir)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub fn shards_meta_path(dir: &Path) -> PathBuf {
     dir.join("shards.meta")
 }
@@ -65,12 +107,29 @@ pub fn shards_meta_path(dir: &Path) -> PathBuf {
 /// Shard `i`'s cold-segment directory under `dir` — the segment files
 /// plus the manifest that makes them real. Per shard, like the AOF it
 /// stitches into: replay threads never share a manifest.
+///
+/// ```
+/// use std::path::Path;
+/// let d = kevy_persist::layout::segs_dir(Path::new("/data"), 1);
+/// assert_eq!(d, Path::new("/data/segs-1"));
+/// ```
 pub fn segs_dir(dir: &Path, i: usize) -> PathBuf {
     dir.join(format!("segs-{i}"))
 }
 
 /// Highest `dump-{i}.rdb` / `aof-{i}.aof` index + 1 found in `dir`, or 0
 /// for no per-shard files. The shard count of a meta-less legacy dir.
+///
+/// ```
+/// use kevy_persist::layout;
+///
+/// let dir = kevy_tmpdir::unique_dir("layout-infer-doc");
+/// assert_eq!(layout::infer_files_n(&dir), 0);
+/// std::fs::write(dir.join(layout::aof_file(2)), b"")?; // shards 0 and 1 wrote nothing
+/// assert_eq!(layout::infer_files_n(&dir), 3);
+/// # std::fs::remove_dir_all(&dir)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub fn infer_files_n(dir: &Path) -> usize {
     let mut n = 0usize;
     let Ok(entries) = std::fs::read_dir(dir) else {

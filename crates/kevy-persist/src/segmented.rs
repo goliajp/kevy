@@ -29,16 +29,47 @@ use kevy_resp::ArgvView;
 
 /// The frame's verb. The leading NUL is what makes it internal: no
 /// client-typed RESP verb can start with it.
+///
+/// ```
+/// assert_eq!(kevy_persist::SEGMENTED[0], 0);
+/// assert!(kevy_persist::SEGMENTED.ends_with(b"KEVYSEGMENTED"));
+/// ```
 pub const SEGMENTED: &[u8] = b"\0KEVYSEGMENTED";
 
 /// If `args` is a `SEGMENTED` frame, its segment file name. Replay
 /// drivers check this before ordinary dispatch — an unrecognized
 /// internal frame must never fall through as a silent unknown verb.
+///
+/// ```
+/// use kevy_persist::{Argv, segmented_argv, segmented_frame};
+///
+/// let mut frame = Argv::default();
+/// for part in segmented_argv(b"seg-7.kseg") {
+///     frame.push(part);
+/// }
+/// assert_eq!(segmented_frame(&frame), Some(&b"seg-7.kseg"[..]));
+/// let set = Argv::from(vec![b"SET".to_vec(), b"k".to_vec()]);
+/// assert_eq!(segmented_frame(&set), None);
+/// ```
 pub fn segmented_frame<A: ArgvView + ?Sized>(args: &A) -> Option<&[u8]> {
     (args.len() == 2 && args.get(0) == Some(SEGMENTED)).then(|| args.get(1)).flatten()
 }
 
 /// The `SEGMENTED` frame as an argv, ready for the record writer.
+///
+/// ```
+/// use kevy_persist::{Argv, RecordStep, SEGMENTED, next_record, segmented_argv};
+///
+/// let mut frame = Argv::default();
+/// for part in segmented_argv(b"seg-7.kseg") {
+///     frame.push(part);
+/// }
+/// let mut log = Vec::new();
+/// kevy_persist::write_record_multibulk(&mut log, &frame, &mut Vec::new())?;
+/// let RecordStep::Ok { payload, .. } = next_record(&log, 0) else { panic!("valid record") };
+/// assert!(payload.windows(SEGMENTED.len()).any(|w| w == SEGMENTED));
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub fn segmented_argv(seg_file: &[u8]) -> [&[u8]; 2] {
     [SEGMENTED, seg_file]
 }
