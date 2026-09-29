@@ -1,13 +1,14 @@
 //! The free side of [`Heap`] (child module via `#[path]`, the house
 //! pattern) — claims-first recycling, the small free's routing, the
-//! local bitmap free, and the foreign-free drain. Split from `heap.rs`
-//! for the 500-LOC ceiling; the seam is real: everything here runs on
-//! release paths, nothing on allocation.
+//! local bitmap free, the foreign-free drain, and teardown. Split from
+//! `heap.rs` for the 500-LOC ceiling; the seam is real: everything here
+//! runs on release paths, nothing on allocation.
 
 use core::ptr::NonNull;
 
 use crate::class;
-use crate::segment::{self, NO_CLASS, Segment};
+use crate::os;
+use crate::segment::{self, NO_CLASS, SEGMENT_BYTES, Segment};
 
 use super::Heap;
 
@@ -138,6 +139,33 @@ impl Heap {
         meta.free_slot(slot);
         if was_full {
             self.partials[c].push(seg.as_ptr(), ix);
+        }
+    }
+}
+
+impl Drop for Heap {
+    fn drop(&mut self) {
+        // Claims hold no memory of their own — the segments they point
+        // into are unmapped below — but retiring them keeps the
+        // debug-assert bookkeeping (live counts) honest for any
+        // instrumented teardown that walks spans first.
+        self.flush_claims();
+        // The retention pool is process-wide and bounded, so a heap's
+        // death owes it nothing — but the fuzzer's tight RSS limit
+        // watches every iteration, and draining here keeps single-heap
+        // lifecycles (tests, fuzz) at zero retained bytes. Its per-heap
+        // ancestor forgot the equivalent and leaked a mapping per heap.
+        crate::large::pool_drain();
+        let mut seg = self.segments;
+        while !seg.is_null() {
+            // SAFETY: live header from our own list; read `next` before
+            // the mapping goes away.
+            let next = unsafe { (*seg).next };
+            // SAFETY: this heap mapped it and is the only owner.
+            unsafe {
+                os::unmap(NonNull::new_unchecked(seg.cast::<u8>()), SEGMENT_BYTES);
+            }
+            seg = next;
         }
     }
 }

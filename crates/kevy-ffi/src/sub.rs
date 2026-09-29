@@ -30,6 +30,24 @@ use crate::{KevyBuf, KevyDb, KevySub};
 /// Open a subscription on one channel (call again for more channels — or
 /// subscribe to a pattern with [`kevy_psubscribe`]). Returns null on error.
 ///
+/// ```
+/// use kevy_ffi::{KevyBuf, kevy_buf_free, kevy_close, kevy_open_mem, kevy_publish};
+/// use kevy_ffi::{kevy_sub_close, kevy_sub_next, kevy_subscribe};
+///
+/// let db = kevy_open_mem();
+/// let mut out = KevyBuf { ptr: std::ptr::null_mut(), len: 0, cap: 0 };
+/// // SAFETY: `db` is live; every name pointer covers its length; each frame
+/// // is read before its single free; each handle is closed once.
+/// unsafe {
+///     let sub = kevy_subscribe(db, b"news".as_ptr(), 4);
+///     assert_eq!(kevy_sub_next(sub, &mut out), 1); // the subscribe ack
+///     assert_eq!(std::slice::from_raw_parts(out.ptr, out.len), b"*3\r\n$9\r\nsubscribe\r\n$4\r\nnews\r\n:1\r\n");
+///     kevy_buf_free(out.ptr, out.len, out.cap);
+///     kevy_sub_close(sub);
+///     kevy_close(db);
+/// }
+/// ```
+///
 /// # Safety
 /// `chan` must point to `chan_len` readable bytes; `db` must be live.
 // NO-UNWIND: the subscription is opened inside sub_open, which catches
@@ -45,6 +63,28 @@ pub unsafe extern "C" fn kevy_subscribe(
 }
 
 /// Open a subscription on one glob pattern (`room:*`). Returns null on error.
+///
+/// ```
+/// use kevy_ffi::{KevyBuf, kevy_buf_free, kevy_close, kevy_open_mem, kevy_publish};
+/// use kevy_ffi::{kevy_psubscribe, kevy_sub_close, kevy_sub_next};
+///
+/// let db = kevy_open_mem();
+/// let mut out = KevyBuf { ptr: std::ptr::null_mut(), len: 0, cap: 0 };
+/// // SAFETY: `db` is live; every name pointer covers its length; each frame
+/// // is read before its single free; each handle is closed once.
+/// unsafe {
+///     let sub = kevy_psubscribe(db, b"room:*".as_ptr(), 6);
+///     assert_eq!(kevy_publish(db, b"room:1".as_ptr(), 6, b"hi".as_ptr(), 2), 1);
+///     assert_eq!(kevy_sub_next(sub, &mut out), 1); // the psubscribe ack
+///     kevy_buf_free(out.ptr, out.len, out.cap);
+///     assert_eq!(kevy_sub_next(sub, &mut out), 1);
+///     let frame = std::slice::from_raw_parts(out.ptr, out.len);
+///     assert_eq!(frame, b"*4\r\n$8\r\npmessage\r\n$6\r\nroom:*\r\n$6\r\nroom:1\r\n$2\r\nhi\r\n");
+///     kevy_buf_free(out.ptr, out.len, out.cap);
+///     kevy_sub_close(sub);
+///     kevy_close(db);
+/// }
+/// ```
 ///
 /// # Safety
 /// Same contract as [`kevy_subscribe`].
@@ -89,6 +129,29 @@ unsafe fn sub_open(
 /// <pattern> <channel> <payload>`, and the subscribe/unsubscribe acks);
 /// 0 when nothing is queued; negative on misuse.
 ///
+/// ```
+/// use kevy_ffi::{KevyBuf, kevy_buf_free, kevy_close, kevy_open_mem, kevy_publish};
+/// use kevy_ffi::{kevy_sub_close, kevy_sub_next, kevy_subscribe};
+///
+/// let db = kevy_open_mem();
+/// let mut out = KevyBuf { ptr: std::ptr::null_mut(), len: 0, cap: 0 };
+/// // SAFETY: `db` is live; every name pointer covers its length; each frame
+/// // is read before its single free; each handle is closed once.
+/// unsafe {
+///     let sub = kevy_subscribe(db, b"news".as_ptr(), 4);
+///     kevy_publish(db, b"news".as_ptr(), 4, b"hi".as_ptr(), 2);
+///     let mut frames = Vec::new();
+///     while kevy_sub_next(sub, &mut out) == 1 {
+///         frames.push(std::slice::from_raw_parts(out.ptr, out.len).to_vec());
+///         kevy_buf_free(out.ptr, out.len, out.cap);
+///     }
+///     assert_eq!(frames.len(), 2); // the subscribe ack, then the message
+///     assert_eq!(frames[1], b"*3\r\n$7\r\nmessage\r\n$4\r\nnews\r\n$2\r\nhi\r\n");
+///     kevy_sub_close(sub);
+///     kevy_close(db);
+/// }
+/// ```
+///
 /// # Safety
 /// `sub` must be live; `out` must point to writable [`KevyBuf`] storage.
 #[unsafe(no_mangle)]
@@ -129,6 +192,28 @@ pub unsafe extern "C" fn kevy_sub_next(sub: *mut KevySub, out: *mut KevyBuf) -> 
 /// exposes that wait to the C ABI so a push-style binding (a poller thread
 /// that hops each frame onto a host runtime) can block in the kernel
 /// instead of spinning `kevy_sub_next` and burning a core.
+///
+/// ```
+/// use kevy_ffi::{KevyBuf, kevy_buf_free, kevy_close, kevy_open_mem, kevy_publish};
+/// use kevy_ffi::{kevy_sub_close, kevy_sub_next, kevy_sub_wait, kevy_subscribe};
+///
+/// let db = kevy_open_mem();
+/// let mut out = KevyBuf { ptr: std::ptr::null_mut(), len: 0, cap: 0 };
+/// // SAFETY: `db` is live; every name pointer covers its length; each frame
+/// // is read before its single free; each handle is closed once.
+/// unsafe {
+///     let sub = kevy_subscribe(db, b"news".as_ptr(), 4);
+///     assert_eq!(kevy_sub_next(sub, &mut out), 1); // drain the subscribe ack
+///     kevy_buf_free(out.ptr, out.len, out.cap);
+///     assert_eq!(kevy_sub_wait(sub, 10, &mut out), 0); // nothing within 10 ms
+///     kevy_publish(db, b"news".as_ptr(), 4, b"hi".as_ptr(), 2);
+///     assert_eq!(kevy_sub_wait(sub, 1_000, &mut out), 1);
+///     assert!(std::slice::from_raw_parts(out.ptr, out.len).ends_with(b"$2\r\nhi\r\n"));
+///     kevy_buf_free(out.ptr, out.len, out.cap);
+///     kevy_sub_close(sub);
+///     kevy_close(db);
+/// }
+/// ```
 ///
 /// # Safety
 /// `sub` must be live; `out` must point to writable [`KevyBuf`] storage.
@@ -174,6 +259,22 @@ pub unsafe extern "C" fn kevy_sub_wait(
 
 /// Close a subscription (unsubscribes from everything it held). Null is a
 /// no-op.
+///
+/// ```
+/// use kevy_ffi::{kevy_close, kevy_open_mem, kevy_publish, kevy_sub_close, kevy_subscribe};
+///
+/// let db = kevy_open_mem();
+/// // SAFETY: `db` is live; channel/payload pointers cover their lengths;
+/// // the subscription is closed once, then `db`; null is a no-op.
+/// unsafe {
+///     let sub = kevy_subscribe(db, b"news".as_ptr(), 4);
+///     assert_eq!(kevy_publish(db, b"news".as_ptr(), 4, b"x".as_ptr(), 1), 1);
+///     kevy_sub_close(sub);
+///     assert_eq!(kevy_publish(db, b"news".as_ptr(), 4, b"x".as_ptr(), 1), 0); // unsubscribed
+///     kevy_sub_close(std::ptr::null_mut());
+///     kevy_close(db);
+/// }
+/// ```
 ///
 /// # Safety
 /// `sub` must be a live handle from this library, passed exactly once.

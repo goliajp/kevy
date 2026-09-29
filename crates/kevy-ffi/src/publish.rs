@@ -16,6 +16,21 @@ use crate::KevyDb;
 /// count — the `:N` a framed PUBLISH replies with — or -1 on misuse or a
 /// poisoned store. No argv packing, no reply buffer to allocate or free.
 ///
+/// ```
+/// use kevy_ffi::{kevy_close, kevy_open_mem, kevy_publish, kevy_sub_close, kevy_subscribe};
+///
+/// let db = kevy_open_mem();
+/// // SAFETY: `db` is live; channel/payload pointers cover their lengths;
+/// // each handle is closed once, the subscription first.
+/// unsafe {
+///     assert_eq!(kevy_publish(db, b"news".as_ptr(), 4, b"hi".as_ptr(), 2), 0); // nobody listening
+///     let sub = kevy_subscribe(db, b"news".as_ptr(), 4);
+///     assert_eq!(kevy_publish(db, b"news".as_ptr(), 4, b"hi".as_ptr(), 2), 1);
+///     kevy_sub_close(sub);
+///     kevy_close(db);
+/// }
+/// ```
+///
 /// # Safety
 /// `chan` must point to `chan_len` readable bytes and `payload` to
 /// `payload_len` readable bytes (`payload` may be null only when
