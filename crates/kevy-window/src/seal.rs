@@ -44,13 +44,16 @@ impl WindowRt {
         let path = segs_dir.join(&file);
         let build = || -> Result<kevy_seg::SegMeta, ColdError> {
             let mut b = kevy_seg::SegBuilder::create(&path)?;
-            for (v, k) in seg.iter_below(bound) {
+            let mut below = seg.scan_below(bound);
+            while let Some((v, k)) = below.next_entry() {
+                let key = seg_key(v, k);
                 // The payload carries the row's stored VALUES so the
                 // clause-carrying cold path never re-reads the row
                 // (which may itself have gone cold). No declared
                 // values = the empty payload, the a-train shape.
-                let vals = seg.stored_row(k);
-                b.push(&seg_key(v, k), &encode_seg_values(&vals))?;
+                let vals = below.stored_row();
+                let refs: Vec<Option<&[u8]>> = vals.iter().map(|v| v.as_deref()).collect();
+                b.push(&key, &encode_seg_values(&refs))?;
             }
             Ok(b.finish()?)
         };

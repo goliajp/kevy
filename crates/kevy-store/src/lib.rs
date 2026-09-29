@@ -108,11 +108,15 @@ mod hash_ttl;
 pub use hash_ttl::{HExpireCode, HExpireCond};
 mod keyspace;
 mod keyspace_load;
+mod keyspace_map;
 mod list;
 mod list_read;
 pub mod list_seg;
 mod notify;
 mod rng;
+mod row_watch;
+mod row_watch_store;
+pub use row_watch::{RowChange, RowChanges, RowWatch};
 mod scan;
 pub mod seg_map;
 pub use notify::KeyspaceEvent;
@@ -220,7 +224,7 @@ use kevy_map::KevyMap;
 /// ```
 #[derive(Debug, Default)]
 pub struct Store {
-    pub(crate) map: KevyMap<SmallBytes, Entry>,
+    pub(crate) map: keyspace_map::Keyspace,
     /// The random source. SPOP and SRANDMEMBER promise an ARBITRARY member;
     /// before this they returned the first one in hash-bucket order, which for
     /// a given set is the same member every time.
@@ -466,6 +470,8 @@ mod tests_memory;
 #[cfg(test)]
 #[cfg(test)]
 mod tests_range_past_the_end;
+#[cfg(test)]
+mod tests_row_watch;
 #[cfg(test)]
 mod tests_score_order;
 #[cfg(test)]

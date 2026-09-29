@@ -293,7 +293,7 @@ impl Store {
         if !needs {
             return;
         }
-        let Some(e) = self.map.get_mut(key) else { return };
+        let Some(e) = self.map.get_mut_quiet(key) else { return };
         if let Value::SmallListInline(s) = &e.value {
             let promoted = small_list::promote(s);
             e.value = Value::List(Arc::new(promoted));

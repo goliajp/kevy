@@ -203,12 +203,10 @@ TABLE.DECLARE user PREFIX user: PK id COLUMN id i64 COLUMN age i64 INDEX age ran
   unique index counts `duplicates` across the whole keyspace (a local one
   sees duplicates within a shard). A server restarted with fewer shards
   than an index has partitions keeps an even subset of its split points.
-- **Memory.** Beside the entries, which cost what a local index's do,
-  the row's shard keeps, per global index, each row's key with its
-  partition and a hash of its entry — how it knows which messages a write
-  needs: about `key_len + 28…64` bytes a row (a 24-byte slot at the
-  table's load, and the key). `IDX.LIST` and `IDX.VERIFY` count it in
-  `bytes`.
+- **Memory.** The entries cost what a local index's do, and the row's
+  shard keeps nothing per row for a global index: a write names the value
+  the row was indexed under, and the value names the partition that holds
+  its entry. `IDX.LIST` and `IDX.VERIFY` report the partitions' `bytes`.
 
 ## Consistency + cost model
 
@@ -218,22 +216,28 @@ TABLE.DECLARE user PREFIX user: PK id COLUMN id i64 COLUMN age i64 INDEX age ran
   DBSIZE).
 - An **empty catalog costs one untaken branch per write** (a Relaxed
   atomic load). With indexes declared, a write in an indexed domain
-  pays one hash-field read + one B-tree update per matching index.
-- Memory per index ≈ `rows × (avg_key_len + string_value_len + 58…69)`
-  bytes of heap: one allocation per row shared by both lookup directions
-  — a 32-byte header with the key right behind it, rounded up to 8 bytes
-  — about 16 bytes of ordered-tree slot, and 10–21 bytes of hash-table
-  slot (`string_value_len` is 0 for `i64` / `f64`). The table grows by
-  doubling, so where a row count falls between two growth steps moves
-  the per-row figure inside that range; plan with the top of it. The
-  allocator rounds small blocks up, so resident memory runs above the
-  heap figure, by up to about half for short keys and string values.
-  `IDX.LIST` and `IDX.VERIFY` report the heap figure;
+  pays one hash-field read and one tree update per matching index. Before
+  a write changes a row, the store records its indexed fields, so the
+  update knows which entry to drop whatever wrote the row: a command, a
+  script's inner call, a transaction, expiry, eviction, a replicated
+  frame.
+- Memory per index ≈ `rows × ((value_len + handle_len + 3) / fill + 1)`
+  bytes. An index is a B+ tree of 1,784-byte leaves; an entry is a
+  10-byte slot and whatever of its order key runs past the first eight
+  bytes. `value_len` is 8 for `i64` / `f64` and the string's length plus
+  2 for `str`; `handle_len` is the key without the index's prefix, half
+  that (rounded up) when it is all digits. `fill` is how full the leaves
+  are: 1.0 after a build or `IDX.REBUILD`, which pack them, and 0.6–0.7
+  once rows have been written in random order. Over 1.25 million rows
+  keyed `row:<n>`, an `i64` index measured 15.9 bytes a row packed and
+  23–25 after random writes, a `str` index of ten-byte values 20.2 and
+  30–38. `IDX.LIST` and `IDX.VERIFY` report what the leaves hold;
   `bench/idxgate.sh` checks it against the server's measured RSS.
-- An index that declares `VALUES` stores them per row beside that: a
-  copy of the key, 32 bytes per declared value (and the heap of any value
-  longer than 23 bytes), and 47–94 bytes of its own hash-table slot, so
-  add `avg_key_len + 32 × values + 47…94` per row. `bytes` includes it.
+- An index that declares `VALUES` keeps them in the same entry: a
+  one-byte tag each, then the value — a number of decimal digits at half
+  a byte a digit, anything else as its bytes. Add that to the entry
+  above: a short string and a ten-digit number measured about 10 bytes a
+  row more. `bytes` includes it.
 
 ## Aggregate kind (`KIND agg`) — write-time GROUP BY
 

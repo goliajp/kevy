@@ -16,7 +16,7 @@ kevy-embedded = "7.0.0"
 
 7.0.0 is about four things: an embedded store that keeps every write a
 killed process returned and opens and closes faster; global indexes,
-spread over the shards by value; index rows that cost less than half what
+spread over the shards by value; index rows that cost a quarter or less of what
 they did; and encrypted links — between nodes, and on a second client
 port — all off unless configured
 ([encrypted-links.md](encrypted-links.md)).
@@ -29,7 +29,7 @@ they are in [§9](#9-defects-fixed-that-lost-data).
 |---|---|---|
 | run the server, or talk to kevy over the wire | swap the binary; nothing else | — |
 | may downgrade to 6.4 | open and close cleanly with 7.0 first; re-declare global indexes | 1 |
-| set `MAXMEM` on an index, or size a tiered store near its index floor | index sizes read two to four times the old figure | 2 |
+| set `MAXMEM` on an index, or size a tiered store near its index floor | index sizes read a quarter to a third of the old figure; long string values can read more | 2 |
 | parse `IDX.LIST` or `IDX.DESCRIBE` positionally | each gains a `partitioning` pair | 3 |
 | read an embedded store's change feed or AOF | an `MSET` arrives as one frame per shard | 4 |
 | start two servers on one port by accident | the second one now refuses to start | 5 |
@@ -93,19 +93,23 @@ declared again.
 ## 2. Index sizes are reported as they are
 
 The `bytes` of `IDX.LIST`, `IDX.VERIFY` and `TABLE.VERIFY` was `value + key
-+ 48` per row, which undercounted the heap. It is now what the rows cost:
-about `key + string value + 58…69` bytes per row for a local index — and
-the rows are less than half what 6.4's cost, so the figure is larger than
-before while the memory is smaller. The same figure feeds an
-index's `MAXMEM` and the tiering reservation for indexes, so:
++ 48` per row, an estimate. It is now what the index's leaves hold, and an
+index holds far less than it did: an `i64` index over keys like `row:<n>`
+reports 16–25 bytes a row where 6.4 reported 67, and holds a quarter or
+less of what 6.4's did. The same figure feeds an index's `MAXMEM` and the
+tiering reservation for indexes, so:
 
-- an index declared with a tight `MAXMEM` can now fail its build with
-  `-INDEXOVERBUDGET`;
-- a tiered store sized close to its index floor keeps less data hot, or
-  refuses a new index by name.
+- an index whose `MAXMEM` was sized for 6.4 holds several times the rows
+  before `-INDEXOVERBUDGET`;
+- a tiered store keeps more data hot beside the same indexes.
 
-Re-check those budgets against `IDX.LIST` on a loaded sample. The per-row
-formula is in [indexes.md](indexes.md#consistency--cost-model).
+An index with long string values over non-numeric keys can report more
+than 6.4's estimate once rows arrive in random order, since leaves then
+run 60–70% full.
+
+Check budgets set close to the line against `IDX.LIST` on a loaded
+sample. The per-row formula is in
+[indexes.md](indexes.md#consistency--cost-model).
 
 ## 3. `IDX.LIST` and `IDX.DESCRIBE` gain a pair
 

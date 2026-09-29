@@ -17,11 +17,11 @@ fn i(v: i64) -> IndexValue {
 /// when the tests declare it numeric).
 fn seeded() -> Segment {
     let mut s = Segment::with_values(1);
-    s.apply_with_values(b"u1", Some(i(10)), &[Some(b"tokyo")]);
-    s.apply_with_values(b"u2", Some(i(20)), &[Some(b"osaka")]);
-    s.apply_with_values(b"u3", Some(i(30)), &[None]);
-    s.apply_with_values(b"u4", Some(i(40)), &[Some(b"tokyo")]);
-    s.apply_with_values(b"u5", Some(i(50)), &[Some(b"kyoto")]);
+    s.apply_with_values(b"u1", None, Some(i(10)), &[Some(b"tokyo")]);
+    s.apply_with_values(b"u2", None, Some(i(20)), &[Some(b"osaka")]);
+    s.apply_with_values(b"u3", None, Some(i(30)), &[None]);
+    s.apply_with_values(b"u4", None, Some(i(40)), &[Some(b"tokyo")]);
+    s.apply_with_values(b"u5", None, Some(i(50)), &[Some(b"kyoto")]);
     s
 }
 
@@ -36,30 +36,35 @@ fn keys(hits: &[ScalarHit]) -> Vec<&[u8]> {
 #[test]
 fn values_store_update_delete_follow_the_entry() {
     let mut s = Segment::with_values(1);
-    s.apply_with_values(b"u1", Some(i(1)), &[Some(b"a")]);
-    assert_eq!(s.stored(b"u1", 0), Some(&b"a"[..]));
+    s.apply_with_values(b"u1", None, Some(i(1)), &[Some(b"a")]);
+    assert_eq!(s.stored(&i(1), b"u1", 0), Some(b"a".to_vec()));
     // update replaces
-    s.apply_with_values(b"u1", Some(i(2)), &[Some(b"b")]);
-    assert_eq!(s.stored(b"u1", 0), Some(&b"b"[..]));
+    s.apply_with_values(b"u1", Some(&i(1)), Some(i(2)), &[Some(b"b")]);
+    assert_eq!(s.stored(&i(2), b"u1", 0), Some(b"b".to_vec()));
+    assert_eq!(s.stored(&i(1), b"u1", 0), None, "the old entry left with its values");
     // coerce-failure excludes the row AND drops its values
-    s.apply_with_values(b"u1", None, &[Some(b"c")]);
-    assert_eq!(s.stored(b"u1", 0), None);
+    s.apply_with_values(b"u1", Some(&i(2)), None, &[Some(b"c")]);
+    assert_eq!(s.stored(&i(2), b"u1", 0), None);
     // re-add then remove drops them too
-    s.apply_with_values(b"u1", Some(i(3)), &[Some(b"d")]);
-    s.remove(b"u1");
-    assert_eq!(s.stored(b"u1", 0), None);
-    // a segment without the declaration answers None and stays byte-free
-    let plain = Segment::new();
-    assert_eq!(plain.stored(b"u1", 0), None);
+    s.apply_with_values(b"u1", None, Some(i(3)), &[Some(b"d")]);
+    s.remove(b"u1", &i(3));
+    assert_eq!(s.stored(&i(3), b"u1", 0), None);
+    // a segment without the declaration answers None
+    let mut plain = Segment::new();
+    plain.apply(b"u1", None, Some(i(1)));
+    assert_eq!(plain.stored(&i(1), b"u1", 0), None);
 }
 
 #[test]
 fn values_heap_joins_the_memory_term_only_when_declared() {
     let mut with = Segment::with_values(1);
-    with.apply_with_values(b"u1", Some(i(1)), &[Some(&[b'x'; 100])]);
     let mut without = Segment::new();
-    without.apply(b"u1", Some(i(1)));
-    assert!(with.stats().approx_bytes > without.stats().approx_bytes);
+    for k in 0..1000 {
+        let key = format!("u{k}");
+        with.apply_with_values(key.as_bytes(), None, Some(i(k)), &[Some(&[b'x'; 100])]);
+        without.apply(key.as_bytes(), None, Some(i(k)));
+    }
+    assert!(with.stats().approx_bytes > without.stats().approx_bytes * 5);
 }
 
 #[test]
@@ -77,8 +82,8 @@ fn filter_thins_the_driving_order_and_missing_fails() {
 #[test]
 fn filter_uncoercible_stored_value_is_excluded_not_matched() {
     let mut s = Segment::with_values(1);
-    s.apply_with_values(b"u1", Some(i(1)), &[Some(b"12")]);
-    s.apply_with_values(b"u2", Some(i(2)), &[Some(b"not-a-number")]);
+    s.apply_with_values(b"u1", None, Some(i(1)), &[Some(b"12")]);
+    s.apply_with_values(b"u2", None, Some(i(2)), &[Some(b"not-a-number")]);
     let t = ValueTest::range(ValType::I64, b"0", b"100").unwrap();
     let filters = [(0usize, t)];
     let c = ScalarClauses { filters: &filters, ..clauses() };
@@ -118,8 +123,8 @@ fn sort_orders_by_the_stored_key_missing_last_both_directions() {
 #[test]
 fn sort_key_is_numeric_under_a_numeric_declaration() {
     let mut s = Segment::with_values(1);
-    s.apply_with_values(b"a", Some(i(1)), &[Some(b"9")]);
-    s.apply_with_values(b"b", Some(i(2)), &[Some(b"10")]);
+    s.apply_with_values(b"a", None, Some(i(1)), &[Some(b"9")]);
+    s.apply_with_values(b"b", None, Some(i(2)), &[Some(b"10")]);
     let c = ScalarClauses { sort: Some((0, kevy_text::SortOrder::Asc, ValType::I64)), ..clauses() };
     let page = s.query_claused(&i(0), &i(100), None, &c);
     assert_eq!(keys(&page.hits), vec![&b"a"[..], b"b"], "9 < 10 numerically");
@@ -141,8 +146,8 @@ fn distinct_collapses_during_selection_and_no_value_is_its_own_group() {
 #[test]
 fn distinct_identity_is_the_coerced_value() {
     let mut s = Segment::with_values(1);
-    s.apply_with_values(b"a", Some(i(1)), &[Some(b"1")]);
-    s.apply_with_values(b"b", Some(i(2)), &[Some(b"1.0")]);
+    s.apply_with_values(b"a", None, Some(i(1)), &[Some(b"1")]);
+    s.apply_with_values(b"b", None, Some(i(2)), &[Some(b"1.0")]);
     let c = ScalarClauses { distinct: Some((0, ValType::F64)), ..clauses() };
     let page = s.query_claused(&i(0), &i(100), None, &c);
     assert_eq!(keys(&page.hits), vec![&b"a"[..]], "1 and 1.0 are one f64 value");
@@ -152,9 +157,9 @@ fn distinct_identity_is_the_coerced_value() {
 fn distinct_under_sort_keeps_the_best_group_representative() {
     let mut s = Segment::with_values(2);
     // field 0 = group, field 1 = sort key
-    s.apply_with_values(b"a", Some(i(1)), &[Some(b"g1"), Some(b"5")]);
-    s.apply_with_values(b"b", Some(i(2)), &[Some(b"g1"), Some(b"1")]);
-    s.apply_with_values(b"c", Some(i(3)), &[Some(b"g2"), Some(b"3")]);
+    s.apply_with_values(b"a", None, Some(i(1)), &[Some(b"g1"), Some(b"5")]);
+    s.apply_with_values(b"b", None, Some(i(2)), &[Some(b"g1"), Some(b"1")]);
+    s.apply_with_values(b"c", None, Some(i(3)), &[Some(b"g2"), Some(b"3")]);
     let c = ScalarClauses {
         sort: Some((1, kevy_text::SortOrder::Asc, ValType::I64)),
         distinct: Some((0, ValType::Str)),
@@ -278,7 +283,7 @@ fn count_claused_matches_the_query_total() {
     for i in 0..500u32 {
         let key = format!("k{i:04}").into_bytes();
         let dept: &[u8] = if i % 3 == 0 { b"eng" } else { b"ops" };
-        seg.apply_with_values(&key, Some(IndexValue::I64(i64::from(i))), &[Some(dept)]);
+        seg.apply_with_values(&key, None, Some(IndexValue::I64(i64::from(i))), &[Some(dept)]);
     }
     let eng = ValueTest::eq(ValType::Str, b"eng").unwrap();
     let filters = [(0usize, eng)];
@@ -331,13 +336,7 @@ fn claused_over_matches_the_hot_walk_for_the_same_entries() {
         let items: Vec<ColdEntryRow> =
             [(10i64, &b"u1"[..]), (20, b"u2"), (30, b"u3"), (40, b"u4"), (50, b"u5")]
                 .iter()
-                .map(|&(v, k)| {
-                    (
-                        i(v),
-                        k.to_vec(),
-                        seg.stored_row(k).iter().map(|o| o.map(<[u8]>::to_vec)).collect(),
-                    )
-                })
+                .map(|&(v, k)| (i(v), k.to_vec(), seg.stored_row(&i(v), k)))
                 .collect();
         let (hits, facets) = claused_over(items.into_iter(), c);
         let pair = |hs: &[ScalarHit]| {

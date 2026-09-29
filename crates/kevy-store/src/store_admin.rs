@@ -45,7 +45,7 @@ impl Store {
     pub fn detach_entries(&mut self) -> DetachedEntries {
         // the table leaves with the entries; a table built after it is new
         self.keyspace_bytes = 0;
-        DetachedEntries(core::mem::take(&mut self.map))
+        DetachedEntries(self.map.detach())
     }
 
     /// An empty store with default settings: no maxmemory bound, no

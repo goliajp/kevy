@@ -21,7 +21,7 @@ impl WindowRt {
     /// let mut w = kevy_window::WindowRt::new(WindowSpec::new("ts", 100, 50), WindowShape::PlainI64);
     /// let mut seg = Segment::new();
     /// for ts in [10, 20, 300] {
-    ///     seg.apply(format!("r:{ts}").as_bytes(), Some(IndexValue::I64(ts)));
+    ///     seg.apply(format!("r:{ts}").as_bytes(), None, Some(IndexValue::I64(ts)));
     /// }
     /// assert!(w.slide(b"t.ts", &mut seg, dir.path())?);
     /// assert_eq!(w.cold_count(ValType::I64, &IndexValue::I64(0), &IndexValue::I64(15))?, 1);
@@ -61,7 +61,7 @@ impl WindowRt {
     /// let mut w = kevy_window::WindowRt::new(WindowSpec::new("ts", 100, 50), WindowShape::PlainI64);
     /// let mut seg = Segment::new();
     /// for ts in [10, 20, 300] {
-    ///     seg.apply(format!("r:{ts}").as_bytes(), Some(IndexValue::I64(ts)));
+    ///     seg.apply(format!("r:{ts}").as_bytes(), None, Some(IndexValue::I64(ts)));
     /// }
     /// assert!(w.slide(b"t.ts", &mut seg, dir.path())?);
     /// let (lo, hi) = (IndexValue::I64(0), IndexValue::I64(1_000));
@@ -115,7 +115,7 @@ impl WindowRt {
     /// let mut seg = Segment::with_values(1);
     /// for (ts, status) in [(10, "paid"), (20, "open"), (30, "paid"), (300, "open")] {
     ///     let key = format!("r:{ts}");
-    ///     seg.apply_with_values(key.as_bytes(), Some(IndexValue::I64(ts)), &[Some(status.as_bytes())]);
+    ///     seg.apply_with_values(key.as_bytes(), None, Some(IndexValue::I64(ts)), &[Some(status.as_bytes())]);
     /// }
     /// assert!(w.slide(b"t.ts", &mut seg, dir.path())?);
     /// let (lo, hi) = (IndexValue::I64(0), IndexValue::I64(1_000));
@@ -152,7 +152,7 @@ impl WindowRt {
     /// let mut seg = Segment::with_values(1);
     /// for (ts, status) in [(10, "paid"), (20, "open"), (30, "paid"), (300, "open")] {
     ///     let key = format!("r:{ts}");
-    ///     seg.apply_with_values(key.as_bytes(), Some(IndexValue::I64(ts)), &[Some(status.as_bytes())]);
+    ///     seg.apply_with_values(key.as_bytes(), None, Some(IndexValue::I64(ts)), &[Some(status.as_bytes())]);
     /// }
     /// assert!(w.slide(b"t.ts", &mut seg, dir.path())?);
     /// let (lo, hi) = (IndexValue::I64(0), IndexValue::I64(1_000));

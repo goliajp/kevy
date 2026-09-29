@@ -13,7 +13,7 @@ fn spec() -> WindowSpec {
 /// cold side holds afterwards.
 fn slide_once(w: &mut WindowRt, seg: &mut Segment, dir: &std::path::Path, vals: &[i64]) -> bool {
     for v in vals {
-        seg.apply(format!("r:{v}").as_bytes(), Some(IndexValue::I64(*v)));
+        seg.apply(format!("r:{v}").as_bytes(), None, Some(IndexValue::I64(*v)));
     }
     w.slide(b"t.ts", seg, dir).expect("slide")
 }
@@ -58,7 +58,7 @@ fn a_shadow_does_not_reach_forward_to_a_later_segment() {
     assert!(!cold_keys(&w).contains(&b"r:10".to_vec()), "stale entry hidden");
 
     // The new value slides in its turn, into a LATER segment.
-    seg.apply(b"r:10", Some(IndexValue::I64(150)));
+    seg.apply(b"r:10", None, Some(IndexValue::I64(150)));
     assert!(slide_once(&mut w, &mut seg, dir.path(), &[400]), "second slide");
 
     let keys = cold_keys(&w);
@@ -89,7 +89,7 @@ fn a_shadow_spent_before_the_row_ever_slid_hides_nothing() {
     // Stand in for the false positive: shadow a row that is still hot
     // and has never been cold. (A real one arrives via the bloom; the
     // consequence is identical and this way the test is deterministic.)
-    seg.apply(b"r:0", Some(IndexValue::I64(150)));
+    seg.apply(b"r:0", None, Some(IndexValue::I64(150)));
     w.on_row_write(b"r:0");
 
     assert!(slide_once(&mut w, &mut seg, dir.path(), &[400]), "second slide");

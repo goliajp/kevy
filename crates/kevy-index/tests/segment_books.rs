@@ -1,5 +1,5 @@
-//! The segment's books: the duplicate counter, lookups by key, and the
-//! window cut leaving everything as if each entry had been removed.
+//! The segment's books: the duplicate counter, lookups, and the window
+//! cut leaving everything as if each entry had been removed.
 
 use kevy_index::{IndexValue, Segment};
 
@@ -12,17 +12,17 @@ fn duplicates_follow_one_value_up_and_down() {
     let mut s = Segment::new();
     let dups = |s: &Segment| s.stats().duplicates;
     assert_eq!(dups(&s), 0, "no holders");
-    s.apply(b"a", Some(i(7)));
+    s.apply(b"a", None, Some(i(7)));
     assert_eq!(dups(&s), 0, "one holder");
-    s.apply(b"b", Some(i(7)));
+    s.apply(b"b", None, Some(i(7)));
     assert_eq!(dups(&s), 1, "two holders");
-    s.apply(b"c", Some(i(7)));
+    s.apply(b"c", None, Some(i(7)));
     assert_eq!(dups(&s), 1, "three holders");
-    s.remove(b"c");
+    s.remove(b"c", &i(7));
     assert_eq!(dups(&s), 1, "back to two");
-    s.apply(b"b", Some(i(8)));
+    s.apply(b"b", Some(&i(7)), Some(i(8)));
     assert_eq!(dups(&s), 0, "b moved away: one holder");
-    s.apply(b"a", None);
+    s.apply(b"a", Some(&i(7)), None);
     assert_eq!(dups(&s), 0, "none left");
     assert_eq!(s.eq(&i(7), 10), Vec::<Vec<u8>>::new());
 }
@@ -31,12 +31,12 @@ fn duplicates_follow_one_value_up_and_down() {
 fn duplicates_are_counted_per_value_not_per_extra_holder() {
     let mut s = Segment::new();
     for k in [b"a", b"b", b"c", b"d"] {
-        s.apply(k, Some(i(1)));
+        s.apply(k, None, Some(i(1)));
     }
-    s.apply(b"e", Some(i(2)));
-    s.apply(b"f", Some(i(2)));
+    s.apply(b"e", None, Some(i(2)));
+    s.apply(b"f", None, Some(i(2)));
     assert_eq!(s.stats().duplicates, 2);
-    s.apply(b"a", Some(i(1)));
+    s.apply(b"a", Some(&i(1)), Some(i(1)));
     assert_eq!(s.stats().duplicates, 2, "re-applying the held value changes nothing");
 }
 
@@ -54,9 +54,9 @@ fn windowed() -> Segment {
         (b"i", 3),
     ];
     for (k, v) in rows {
-        s.apply_with_values(k, Some(i(v)), &[Some(k)]);
+        s.apply_with_values(k, None, Some(i(v)), &[Some(k)]);
     }
-    s.apply(b"z", None);
+    s.apply(b"z", None, None);
     s
 }
 
@@ -69,45 +69,57 @@ fn the_window_cut_equals_removing_each_entry() {
     assert_eq!(keys, [&b"i"[..], b"a", b"b", b"c", b"d", b"e"], "tree order, strictly below");
 
     let mut one_by_one = windowed();
-    for k in &keys {
-        one_by_one.remove(k);
+    for (v, k) in &evicted {
+        one_by_one.remove(k, v);
     }
     assert_eq!(cut.stats(), one_by_one.stats());
     assert_eq!(cut.stats().duplicates, 1, "only 10 is still held twice");
-    for k in &keys {
-        assert_eq!(cut.verify_entry(k), None, "a cut key must leave the reverse side");
-        assert_eq!(cut.stored(k, 0), None, "and its stored values");
+    for (v, k) in &evicted {
+        assert!(!cut.contains(v, k), "a cut entry is gone");
+        assert_eq!(cut.stored(v, k, 0), None, "and its stored values");
     }
     let mut left = Vec::new();
     cut.each_entry(|k, v| left.push((k.to_vec(), v.clone())));
     left.sort();
     assert_eq!(left, vec![(b"f".to_vec(), i(10)), (b"g".to_vec(), i(10)), (b"h".to_vec(), i(12))]);
-    assert_eq!(cut.max_value(), Some(&i(12)));
+    assert_eq!(cut.max_value(), Some(i(12)));
 }
 
 #[test]
-fn lookups_by_borrowed_key() {
+fn lookups_by_value_and_key() {
     let mut s = Segment::new();
     let owned: Vec<u8> = b"user:1".to_vec();
-    s.apply(&owned, Some(i(1)));
-    assert_eq!(s.verify_entry(owned.as_slice()), Some(&i(1)));
-    assert_eq!(s.verify_entry(b"user:10"), None);
+    s.apply(&owned, None, Some(i(1)));
+    assert!(s.contains(&i(1), owned.as_slice()));
+    assert!(!s.contains(&i(1), b"user:10"));
 
-    s.apply(b"user:1", Some(i(2)));
-    assert_eq!(s.verify_entry(b"user:1"), Some(&i(2)), "the later value wins");
+    s.apply(b"user:1", Some(&i(1)), Some(i(2)));
+    assert!(s.contains(&i(2), b"user:1"), "the later value wins");
     assert!(s.eq(&i(1), 10).is_empty(), "the earlier value is gone");
     assert_eq!(s.stats().entries, 1);
 
-    s.apply(b"", Some(i(3)));
-    assert_eq!(s.verify_entry(b""), Some(&i(3)), "the empty key is a key");
+    s.apply(b"", None, Some(i(3)));
+    assert!(s.contains(&i(3), b""), "the empty key is a key");
     assert_eq!(s.eq(&i(3), 10), vec![Vec::<u8>::new()]);
 
     let long = vec![0xFFu8; 80];
-    s.apply(&long, Some(i(3)));
-    assert_eq!(s.verify_entry(&long), Some(&i(3)));
+    s.apply(&long, None, Some(i(3)));
+    assert!(s.contains(&i(3), &long));
     assert_eq!(s.count(&i(3), &i(3)), 2);
-    s.remove(&long);
-    assert_eq!(s.verify_entry(&long), None);
+    s.remove(&long, &i(3));
+    assert!(!s.contains(&i(3), &long));
+    assert_eq!(s.stats().entries, 2);
+}
+
+#[test]
+fn a_stale_old_value_removes_nothing() {
+    // a row the build has not reached yet: its write names an old value
+    // the segment never held, and must not disturb anything else
+    let mut s = Segment::new();
+    s.apply(b"a", None, Some(i(1)));
+    s.apply(b"b", Some(&i(1)), Some(i(2)));
+    assert!(s.contains(&i(1), b"a") && s.contains(&i(2), b"b"));
+    s.remove(b"c", &i(9));
     assert_eq!(s.stats().entries, 2);
 }
 
@@ -117,15 +129,13 @@ fn a_segment_can_cross_threads() {
     send_sync::<Segment>();
 }
 
-/// The same operations report the same size in every segment: each hash
-/// table has its own seed, so a figure read off where its removals landed
-/// would differ between two otherwise identical indexes.
+/// The same operations report the same size in every segment.
 #[test]
 fn the_reported_size_does_not_depend_on_the_hash_seed() {
     let build = || {
         let mut s = windowed();
-        for k in [&b"a"[..], b"c", b"e", b"g"] {
-            s.remove(k);
+        for (k, v) in [(&b"a"[..], 5), (b"c", 5), (b"e", 9), (b"g", 10)] {
+            s.remove(k, &i(v));
         }
         s.stats()
     };

@@ -85,11 +85,13 @@ impl Leaf {
 /// use kevy_index::{IndexValue, Leaf, Segment, Tree};
 ///
 /// let mut age = Segment::new();
-/// age.apply(b"u:1", Some(IndexValue::I64(30)));
-/// age.apply(b"u:2", Some(IndexValue::I64(70)));
+/// age.set_key_dir(true);
+/// age.apply(b"u:1", None, Some(IndexValue::I64(30)));
+/// age.apply(b"u:2", None, Some(IndexValue::I64(70)));
 /// let mut city = Segment::new();
-/// city.apply(b"u:1", Some(IndexValue::Str(b"kyoto".to_vec())));
-/// city.apply(b"u:2", Some(IndexValue::Str(b"kyoto".to_vec())));
+/// city.set_key_dir(true);
+/// city.apply(b"u:1", None, Some(IndexValue::Str(b"kyoto".to_vec())));
+/// city.apply(b"u:2", None, Some(IndexValue::Str(b"kyoto".to_vec())));
 ///
 /// let kyoto = IndexValue::Str(b"kyoto".to_vec());
 /// let t = Tree::And(
@@ -160,8 +162,9 @@ impl Tree {
     /// ```
     /// use kevy_index::{IndexValue, Leaf, Segment, Tree};
     /// let mut age = Segment::new();
-    /// age.apply(b"u:1", Some(IndexValue::I64(30)));
-    /// age.apply(b"u:2", Some(IndexValue::I64(70)));
+    /// age.set_key_dir(true);
+    /// age.apply(b"u:1", None, Some(IndexValue::I64(30)));
+    /// age.apply(b"u:2", None, Some(IndexValue::I64(70)));
     /// let t = Tree::Leaf(Leaf::new("age", IndexValue::I64(18), IndexValue::I64(65)));
     /// let seg = |name: &[u8]| (name == b"age").then_some(&age);
     /// assert_eq!(t.eval(&seg), vec![b"u:1".to_vec()]);
@@ -172,7 +175,8 @@ impl Tree {
     }
 
     /// Re-evaluate ONE key's membership (the materialized write hook):
-    /// every leaf is a point probe via the segment's reverse map.
+    /// every leaf is a point probe in the segment's key directory
+    /// ([`Segment::set_key_dir`]); a segment without one holds no key.
     pub fn contains<'a>(&self, key: &[u8], seg: &impl Fn(&[u8]) -> Option<&'a Segment>) -> bool {
         key_in_tree(self, key, seg)
     }
@@ -440,8 +444,8 @@ pub(crate) fn key_in_tree<'a>(
 ) -> bool {
     match tree {
         Tree::Leaf(l) => seg(&l.index)
-            .and_then(|s| s.verify_entry(key))
-            .is_some_and(|v| *v >= l.min && *v <= l.max),
+            .and_then(|s| s.key_dir()?.get(key))
+            .is_some_and(|v| v >= l.min && v <= l.max),
         Tree::And(a, b) => a.contains(key, seg) && b.contains(key, seg),
         Tree::Or(a, b) => a.contains(key, seg) || b.contains(key, seg),
         Tree::Diff(a, b) => a.contains(key, seg) && !b.contains(key, seg),

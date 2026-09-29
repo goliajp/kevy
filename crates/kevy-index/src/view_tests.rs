@@ -8,11 +8,14 @@ fn seg_ab() -> (Segment, Segment) {
     let mut a = Segment::new();
     let mut b = Segment::new();
     for i in 0..10 {
-        a.apply(format!("k{i}").as_bytes(), Some(IndexValue::I64(i)));
+        a.apply(format!("k{i}").as_bytes(), None, Some(IndexValue::I64(i)));
         if i % 2 == 0 {
-            b.apply(format!("k{i}").as_bytes(), Some(IndexValue::Str(b"eng".to_vec())));
+            b.apply(format!("k{i}").as_bytes(), None, Some(IndexValue::Str(b"eng".to_vec())));
         }
     }
+    // per-key membership reads each index's key directory
+    a.set_key_dir(true);
+    b.set_key_dir(true);
     (a, b)
 }
 

@@ -97,7 +97,7 @@ pub(crate) fn commit_write(inner: &mut Inner, parts: &[&[u8]]) -> KevyResult<()>
     #[cfg(feature = "index")]
     if let Some(vreg) = inner.view_reg.clone() {
         let inner = &mut *inner;
-        crate::ops_view::on_commit(&vreg, &mut inner.view_segs, &inner.idx_segs, parts);
+        crate::ops_view::on_commit(&vreg, &mut inner.view_segs, &mut inner.idx_segs, parts);
     }
     inner.store.try_evict_after_write();
     // The demotion twin (tiering): one budgeted spill batch when past

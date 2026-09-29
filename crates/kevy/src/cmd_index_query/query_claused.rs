@@ -94,8 +94,9 @@ pub(super) fn run_claused_query(ctx: &Ctx<'_>, store: &mut Store, q: &Query) -> 
             }
         }
         // a global index's FIELDS come from the partition's stored values
-        let keys: Vec<&[u8]> = page.hits.iter().map(|h| h.key.as_slice()).collect();
-        let stored = global.then(|| super::global::stored_page(spec, seg, &keys, &q.fields));
+        let held: Vec<(&kevy_index::IndexValue, &[u8])> =
+            page.hits.iter().map(|h| (&h.value, h.key.as_slice())).collect();
+        let stored = global.then(|| super::global::stored_page(spec, seg, &held, &q.fields));
         Ok((page, stored.transpose()?))
     });
     match res {

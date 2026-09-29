@@ -154,7 +154,7 @@ impl Store {
     pub fn collect_snapshot(&self) -> SnapshotView {
         let now = now_ns();
         let mut entries = Vec::with_capacity(self.map.len());
-        for (k, e) in &self.map {
+        for (k, e) in self.map.iter() {
             if e.is_expired_at(now) {
                 continue;
             }

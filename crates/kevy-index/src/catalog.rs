@@ -98,8 +98,8 @@ pub enum IndexKind {
     /// ```
     /// use kevy_index::{IndexValue, Segment};
     /// let mut seg = Segment::new();
-    /// seg.apply(b"u:1", Some(IndexValue::I64(30)));
-    /// seg.apply(b"u:2", Some(IndexValue::I64(20)));
+    /// seg.apply(b"u:1", None, Some(IndexValue::I64(30)));
+    /// seg.apply(b"u:2", None, Some(IndexValue::I64(20)));
     /// let (hits, _) = seg.range(&IndexValue::I64(0), &IndexValue::I64(99), None, 10);
     /// assert_eq!(hits[0].0, b"u:2", "value order, not key order");
     /// ```
@@ -110,8 +110,8 @@ pub enum IndexKind {
     /// ```
     /// use kevy_index::{IndexValue, Segment};
     /// let mut seg = Segment::new();
-    /// seg.apply(b"u:1", Some(IndexValue::Str(b"a@x".to_vec())));
-    /// seg.apply(b"u:2", Some(IndexValue::Str(b"a@x".to_vec())));
+    /// seg.apply(b"u:1", None, Some(IndexValue::Str(b"a@x".to_vec())));
+    /// seg.apply(b"u:2", None, Some(IndexValue::Str(b"a@x".to_vec())));
     /// // the second write is not refused; the lookup shows the duplicate
     /// assert_eq!(seg.eq(&IndexValue::Str(b"a@x".to_vec()), 10).len(), 2);
     /// ```

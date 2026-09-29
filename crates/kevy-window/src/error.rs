@@ -21,8 +21,8 @@ pub enum ColdError {
     /// # let dir = kevy_tmpdir::TmpDir::new("cold-error-doc");
     /// let mut w = kevy_window::WindowRt::new(WindowSpec::new("ts", 100, 50), WindowShape::PlainI64);
     /// let mut seg = Segment::new();
-    /// seg.apply(b"r:10", Some(IndexValue::I64(10)));
-    /// seg.apply(b"r:300", Some(IndexValue::I64(300)));
+    /// seg.apply(b"r:10", None, Some(IndexValue::I64(10)));
+    /// seg.apply(b"r:300", None, Some(IndexValue::I64(300)));
     /// let file = dir.path().join("plain-file");
     /// std::fs::write(&file, b"")?;
     /// // a directory cannot be created under a regular file
@@ -39,8 +39,8 @@ pub enum ColdError {
     /// # let dir = kevy_tmpdir::TmpDir::new("cold-error-doc");
     /// let mut w = kevy_window::WindowRt::new(WindowSpec::new("ts", 100, 50), WindowShape::PlainI64);
     /// let mut seg = Segment::new();
-    /// seg.apply(b"r:10", Some(IndexValue::I64(10)));
-    /// seg.apply(b"r:300", Some(IndexValue::I64(300)));
+    /// seg.apply(b"r:10", None, Some(IndexValue::I64(10)));
+    /// seg.apply(b"r:300", None, Some(IndexValue::I64(300)));
     /// let file = dir.path().join("plain-file");
     /// std::fs::write(&file, b"")?;
     /// // the segment directory is a regular file, so its manifest will not open

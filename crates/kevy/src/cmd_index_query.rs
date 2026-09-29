@@ -5,6 +5,7 @@
 //! [`query`] scalar query + admin, [`wire`] chunk/cursor encoding).
 
 mod args;
+mod compose;
 mod global;
 mod ops;
 mod ops_clauses;
