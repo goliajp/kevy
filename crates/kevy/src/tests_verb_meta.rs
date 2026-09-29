@@ -119,10 +119,6 @@ fn route_matches_resolve_route_for_every_verb() {
 /// divergence fails here by name, and so does removing one that still
 /// exists. Reasons are the ones OP_TABLE states at each row.
 const WRITE_FLAG_DIVERGES: &[(&str, &str)] = &[
-    ("BLPOP", "the blocked-serve path executes and AOF-logs the effect as a plain LPOP"),
-    ("BRPOP", "the blocked-serve path executes and AOF-logs the effect as a plain RPOP"),
-    ("RENAME", "routed at the runtime Op level (Route::Rename -> exec_op synthesis)"),
-    ("RENAMENX", "routed at the runtime Op level (Route::Rename -> exec_op synthesis)"),
     ("IDX.CREATE", "catalog mutation, sidecar-persisted; indexes are derived state"),
     ("IDX.DROP", "catalog mutation, sidecar-persisted; indexes are derived state"),
     ("IDX.REBUILD", "catalog mutation, sidecar-persisted; indexes are derived state"),
@@ -142,7 +138,7 @@ const WRITE_FLAG_DIVERGES: &[(&str, &str)] = &[
 /// Nothing held this before: the sibling test above asks whether every
 /// OP_TABLE verb HAS a doc row, never whether the two rows AGREE. The
 /// module header meanwhile claimed the doc face mirrors OP_TABLE's write
-/// column literally, which all fourteen of these have never done.
+/// column literally, which none of these has ever done.
 #[test]
 fn the_write_flag_diverges_only_where_registered() {
     let registered: HashSet<&str> = WRITE_FLAG_DIVERGES.iter().map(|(n, _)| *n).collect();

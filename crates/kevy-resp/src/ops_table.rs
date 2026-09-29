@@ -254,10 +254,10 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("HSETNX",       WR, GROW, Some(N::Hash),   None,    SERVER | ESTORE | REPLAY),
     op("HVALS",        RD, NG,   None,            None,    SERVER | ESTORE),
     // ---- lists --------------------------------------------------------
-    // BLPOP/BRPOP never write directly: the blocked-serve path
-    // executes (and AOF-logs) the effect as a plain LPOP/RPOP.
-    op("BLPOP",        RD, NG,   None,            None,    SERVER | REPLAY),
-    op("BRPOP",        RD, NG,   None,            None,    SERVER | REPLAY),
+    // BLPOP/BRPOP write when they pop, and record the pop as a plain
+    // LPOP/RPOP.
+    op("BLPOP",        WR, NG,   None,            None,    SERVER | REPLAY),
+    op("BRPOP",        WR, NG,   None,            None,    SERVER | REPLAY),
     // Blocking form notifies via its executed effect, not the verb.
     op("BRPOPLPUSH",   WR, GROW, None,            None,    SERVER | REPLAY),
     op("LINDEX",       RD, NG,   None,            None,    SERVER | ESTORE),
@@ -403,12 +403,10 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("PEXPIREAT",    WR, NG,   None,            None,    SERVER | ESTORE | REPLAY | REWRITE),
     op("PTTL",         RD, NG,   None,            None,    SERVER),
     op("RANDOMKEY",    RD, NG,   None,            None,    SERVER | ESTORE),
-    // RENAME/RENAMENX are writes, but the server routes them at the
-    // runtime Op level (Route::Rename → exec_op synthesis) — the
-    // verb-level is_write classification is false by design; the
-    // `write` column mirrors that contract literally.
-    op("RENAME",       RD, NG,   None,            None,    SERVER | ESTORE | REPLAY),
-    op("RENAMENX",     RD, NG,   None,            None,    SERVER | ESTORE | REPLAY),
+    // The server runs RENAME/RENAMENX at the runtime Op level
+    // (Route::Rename), which records the move itself.
+    op("RENAME",       WR, NG,   None,            None,    SERVER | ESTORE | REPLAY),
+    op("RENAMENX",     WR, NG,   None,            None,    SERVER | ESTORE | REPLAY),
     op("SCAN",         RD, NG,   None,            None,    SERVER | ESTORE),
     op("TIME",         RD, NG,   None,            None,    SERVER | ESTORE),
     op("TOUCH",        RD, NG,   None,            None,    SERVER | ESTORE),

@@ -56,27 +56,37 @@ fn exec_answers_exactly_the_table() {
     assert!(probed > 250, "probed only {probed}");
 }
 
-/// The write column agrees with the registry's, except where the
-/// registry records how the server logs a verb rather than its effect.
+/// The write column agrees with the registry's, and the lookup a caller
+/// asks on every command agrees with the table.
 #[test]
 fn the_write_column_matches_the_registry() {
-    // RENAME / RENAMENX are routed at the op level and BLPOP / BRPOP are
-    // logged as the pop they perform, so the registry calls all four
-    // reads; each of them does change the keyspace
-    const ROUTED: &[&str] = &["BLPOP", "BRPOP", "RENAME", "RENAMENX"];
     let mut compared = 0;
     for v in VERBS {
         let Some(row) = OP_TABLE.iter().find(|o| o.name == v.name) else {
             panic!("{}: in VERBS but not in the registry", v.name);
         };
-        if ROUTED.contains(&v.name) {
-            assert!(v.write && !row.write, "{}: the routing exception no longer holds", v.name);
-            continue;
-        }
         assert_eq!(v.write, row.write, "{}: write column disagrees", v.name);
+        assert_eq!(crate::is_write(v.name.as_bytes()), Some(v.write), "{}", v.name);
         compared += 1;
     }
     assert!(compared > 90);
+    for name in ["PING", "COPY", "EVAL", "get"] {
+        assert_eq!(crate::is_write(name.as_bytes()), None, "{name}");
+    }
+}
+
+/// A blocking pop that pops is recorded as the plain pop it performed;
+/// one that pops nothing asks for no record.
+#[test]
+fn a_blocking_pop_records_the_pop_it_performed() {
+    let mut s = Store::new();
+    assert_eq!(run(&mut s, "BLPOP q 0"), (Some(Effect::Unchanged), Vec::new()));
+    assert_eq!(run(&mut s, "BLPOP q r 0"), (Some(Effect::Unchanged), Vec::new()));
+    run(&mut s, "RPUSH q a b");
+    let pop = |v: &str| Some(Effect::Record(vec![v.as_bytes().to_vec(), b"q".to_vec()]));
+    assert_eq!(run(&mut s, "BLPOP q 0").0, pop("LPOP"));
+    assert_eq!(run(&mut s, "BRPOP q 0").0, pop("RPOP"));
+    assert_eq!(run(&mut s, "LLEN q").1, b":0\r\n");
 }
 
 #[test]

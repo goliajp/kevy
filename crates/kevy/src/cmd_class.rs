@@ -4,97 +4,36 @@
 
 use kevy_rt::NotifyKind;
 
-/// Verb-level "is this a write" classification. Mirrors the `is_write` arm in
-/// [`crate::KevyCommands::resolve`] so the local dispatch fast path and the
-/// runtime see the same set; both must include every command that can grow
-/// `used_memory`, so eviction gates them all. Kept in a single place to avoid
-/// drift.
-// >50-LOC exemption: pure data-driven verb match table (no control flow).
-// LOC-WAIVER: data-driven verb list (one matches! arm per write verb).
+/// Verb-level "is this a write" classification: the shared command
+/// layer's registry for every verb it runs, [`is_server_write`] for the
+/// writes the server runs itself. The local dispatch fast path and the
+/// runtime (the replica write gate, the AOF, replication, WATCH) read
+/// this one answer, and every command that can grow `used_memory` is in
+/// it, so eviction gates them all.
+#[inline]
 pub(crate) fn is_write_verb(cmd: &[u8]) -> bool {
+    match kevy_verbs::is_write(cmd) {
+        Some(write) => write,
+        None => is_server_write(cmd),
+    }
+}
+
+/// The writes the server runs outside the shared command layer.
+fn is_server_write(cmd: &[u8]) -> bool {
     matches!(
         cmd,
-        b"SET"
-            | b"SETNX"
-            | b"SETEX"
-            | b"PSETEX"
-            | b"GETSET"
-            | b"GETDEL"
-            | b"INCRBYFLOAT"
+        b"BITOP"
             | b"COPY"
-            | b"BITOP"
-            | b"DEL"
-            | b"UNLINK"
-            | b"INCR"
-            | b"DECR"
-            | b"INCRBY"
-            | b"DECRBY"
-            | b"APPEND"
-            | b"SETBIT"
-            | b"SETRANGE"
-            | b"GETEX"
-            | b"EXPIRE"
-            | b"PEXPIRE"
-            | b"EXPIREAT"
-            | b"PEXPIREAT"
-            | b"HEXPIRE"
-            | b"HPEXPIRE"
-            | b"HPEXPIREAT"
-            | b"HPERSIST"
-            | b"PERSIST"
-            | b"FLUSHDB"
-            | b"FLUSHALL"
-            | b"HSET"
-            | b"HSETNX"
-            | b"HMSET"
-            | b"HDEL"
-            | b"HINCRBY"
-            | b"HINCRBYFLOAT"
-            | b"LINSERT"
-            | b"LPUSH"
-            | b"RPUSH"
-            | b"LPOP"
-            | b"RPOP"
-            | b"LSET"
-            | b"LREM"
-            | b"LTRIM"
-            | b"RPOPLPUSH"
-            | b"BRPOPLPUSH"
-            | b"LMOVE"
-            | b"SADD"
-            | b"SREM"
-            | b"SPOP"
-            | b"ZADD"
-            | b"ZREM"
-            | b"ZINCRBY"
-            | b"ZPOPMIN"
-            | b"ZPOPMIN.BELOW"
-            | b"BZPOPMIN"
-            | b"ZREMRANGEBYRANK"
-            | b"ZREMRANGEBYSCORE"
-            | b"ZINTERSTORE"
-            | b"ZUNIONSTORE"
-            | b"ZDIFFSTORE"
+            // EVAL/EVALSHA count as writes so the Lua wake-bridge drains
+            | b"EVAL"
+            | b"EVALSHA"
+            | b"SDIFFSTORE"
             | b"SINTERSTORE"
             | b"SUNIONSTORE"
-            | b"SDIFFSTORE"
-            | b"GEOADD"
-            | b"GEOSEARCHSTORE"
-            | b"GEORADIUS"
-            | b"GEORADIUSBYMEMBER"
-            | b"XADD"
-            | b"XDEL"
-            | b"XTRIM"
-            | b"XSETID"
-            | b"XGROUP"
-            | b"XREADGROUP"
-            | b"XACK"
-            | b"XCLAIM"
-            | b"XAUTOCLAIM"
             | b"XINTERNAL.CONSUMERSEEN"
-            | b"MSET"
-            // EVAL/EVALSHA count as writes so the Lua wake-bridge drains.
-            | b"EVAL" | b"EVALSHA"
+            | b"ZDIFFSTORE"
+            | b"ZINTERSTORE"
+            | b"ZUNIONSTORE"
     )
 }
 
