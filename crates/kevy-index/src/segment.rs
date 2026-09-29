@@ -18,6 +18,7 @@ use std::ops::Bound;
 
 use crate::rowvalues::RowValues;
 use crate::segment_entry::{ByKey, ByValue, RowRef, row_bytes, share, table_buckets};
+use crate::segment_stats::SegmentStats;
 use crate::value::IndexValue;
 use kevy_text::SortOrder;
 
@@ -33,8 +34,24 @@ use kevy_text::SortOrder;
 #[non_exhaustive]
 pub struct Cursor {
     /// Last value served.
+    ///
+    /// ```
+    /// # use kevy_index::{IndexValue, Segment};
+    /// let mut s = Segment::new();
+    /// for (k, v) in [(b"a", 1), (b"b", 2)] { s.apply(k, Some(IndexValue::I64(v))); }
+    /// let (_, next) = s.range(&IndexValue::I64(0), &IndexValue::I64(9), None, 1);
+    /// assert_eq!(next.expect("more to read").value, IndexValue::I64(1));
+    /// ```
     pub value: IndexValue,
     /// Last key served (tiebreak within a value).
+    ///
+    /// ```
+    /// # use kevy_index::{IndexValue, Segment};
+    /// let mut s = Segment::new();
+    /// for k in [b"x", b"y"] { s.apply(k, Some(IndexValue::I64(5))); }
+    /// let (_, next) = s.range(&IndexValue::I64(5), &IndexValue::I64(5), None, 1);
+    /// assert_eq!(next.expect("more to read").key, b"x", "ties break on the key");
+    /// ```
     pub key: Vec<u8>,
 }
 
@@ -50,21 +67,6 @@ impl Cursor {
     }
 }
 
-/// Sizing + health counters (`IDX.LIST` / memory formula).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub struct SegmentStats {
-    /// Live entries.
-    pub entries: u64,
-    /// Approximate heap bytes (the measured side of the documented
-    /// memory formula).
-    pub approx_bytes: u64,
-    /// Rows excluded because the field failed coercion / was missing.
-    pub coerce_failures: u64,
-    /// Values currently held by more than one key (unique fence).
-    pub duplicates: u64,
-}
-
 // a tree node runs a little over half full, so one 8-byte slot plus its
 // share of the node header comes to about two pointer widths per row
 const TREE_BYTES_PER_ROW: usize = 2 * size_of::<ByValue>();
@@ -77,6 +79,18 @@ pub(crate) type Walk<'s> =
     Map<btree_set::Range<'s, ByValue>, fn(&'s ByValue) -> (&'s IndexValue, &'s [u8])>;
 
 /// One shard's slice of one index.
+///
+/// ```
+/// use kevy_index::{IndexValue, Segment};
+/// let mut s = Segment::new();
+/// s.apply(b"u:1", Some(IndexValue::I64(30)));
+/// s.apply(b"u:2", Some(IndexValue::I64(40)));
+/// let (hits, _) = s.range(&IndexValue::I64(35), &IndexValue::I64(50), None, 10);
+/// assert_eq!(hits, vec![(b"u:2".to_vec(), IndexValue::I64(40))]);
+/// assert_eq!(s.count(&IndexValue::I64(0), &IndexValue::I64(99)), 2);
+/// s.remove(b"u:1");
+/// assert_eq!(s.eq(&IndexValue::I64(30), 10), Vec::<Vec<u8>>::new());
+/// ```
 #[derive(Debug, Default)]
 pub struct Segment {
     tree: BTreeSet<ByValue>,

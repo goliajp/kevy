@@ -54,6 +54,22 @@ pub struct IndexSpec {
 /// What one row looks like to an index: each declared field's raw bytes
 /// with its BM25 weight, and each declared `VALUES` field's raw bytes
 /// (`None` where the row has none).
+///
+/// ```
+/// use kevy_index::{FieldSpec, IndexKind, IndexSpec, RowInputs, ValType, ValueSpec};
+/// let s = IndexSpec::builder("docs", "doc:", IndexKind::Text, ValType::Str)
+///     .with_fields(vec![FieldSpec::new("title").with_weight(2.0), FieldSpec::new("body")])
+///     .with_values(vec![ValueSpec::new("year"), ValueSpec::new("tag")])
+///     .build()?;
+/// let row: RowInputs = s.read_row(|f| match f {
+///     b"title" => Some(b"Rust".to_vec()),
+///     b"year" => Some(b"2026".to_vec()),
+///     _ => None,
+/// });
+/// assert_eq!(row.0, [(b"Rust".to_vec(), 2.0)], "absent fields are skipped");
+/// assert_eq!(row.1, [Some(b"2026".to_vec()), None], "values stay aligned");
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub type RowInputs = (Vec<(Vec<u8>, f32)>, Vec<Option<Vec<u8>>>);
 
 impl IndexSpec {
