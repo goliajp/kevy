@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **`EXPIRE` with a non-positive TTL no longer counts a key that had
+  already lapsed.** `EXPIRE`, `PEXPIRE`, `EXPIREAT` and `PEXPIREAT` first
+  asked whether the key existed, then wrote it, and the two steps read
+  different clocks: the question read the clock the shard refreshes once
+  per batch, the write a fresh one. For a key whose deadline fell between
+  the two, `EXPIRE k 0` and `PEXPIRE k -1` answered 1 and recorded a
+  write for a removal that was in fact the key's own expiry, while
+  `EXPIRE k 100` on the same key answered 0. The write now decides
+  existence itself, so every form answers 0 for such a key and records
+  nothing beyond the expiry. Both the server and the embedded engine ran
+  this code.
+
 - **An embedded `SCAN` page costs what it walks.** `Store::scan` copied
   every key in the store on each call and sliced one page out of the
   copy, so walking a store of n keys cost O(n²) and each page held a copy
