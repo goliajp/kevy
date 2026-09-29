@@ -5,7 +5,6 @@
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpStream};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use kevy_noise::{Frames, Keypair, MAX_MESSAGE, Responder, Transport, frame};
 use kevy_replicate::replica::{ReplicaClient, ReplicaError, ReplicaSecurity};
@@ -138,12 +137,11 @@ impl Dialer {
                 keys,
                 &mut self.last_good,
             ),
-            None => ReplicaClient::connect_at(
+            None => ReplicaClient::connect_with(
                 &target,
-                &self.replica_id,
-                generation,
-                from_offset,
-                Duration::from_secs(5),
+                &kevy_replicate::replica::ConnectOptions::new(&self.replica_id)
+                    .with_generation(generation)
+                    .with_from_offset(from_offset),
             ),
         }
     }
@@ -165,14 +163,13 @@ fn connect_trusted(
     let mut last_err = ReplicaError::HandshakeRejected;
     for i in 0..n {
         let k = (*last_good + i) % n;
-        let sec = ReplicaSecurity { local: keys.local.clone(), primary_key: keys.peers[k] };
-        match ReplicaClient::connect_secure(
+        let sec = ReplicaSecurity::new(keys.local.clone(), keys.peers[k]);
+        match ReplicaClient::connect_with(
             target,
-            replica_id,
-            generation,
-            from_offset,
-            Duration::from_secs(5),
-            &sec,
+            &kevy_replicate::replica::ConnectOptions::new(replica_id)
+                .with_generation(generation)
+                .with_from_offset(from_offset)
+                .with_security(sec),
         ) {
             Ok(c) => {
                 *last_good = k;

@@ -34,7 +34,7 @@ pub fn save_snapshot<S: SnapshotSource>(src: &S, path: &Path) -> io::Result<()> 
 /// that need durability (disk) wrap in `BufWriter<File>` and call
 /// `sync_all` themselves; callers that need bytes (network ship)
 /// pass a `Vec<u8>`.
-pub fn write_snapshot_to<S: SnapshotSource, W: Write>(src: &S, sink: &mut W) -> io::Result<()> {
+pub fn write_snapshot_to<S: SnapshotSource, W: Write>(src: &S, sink: W) -> io::Result<()> {
     write_snapshot_to_with_cursor(src, sink, None)
 }
 
@@ -44,7 +44,7 @@ pub fn write_snapshot_to<S: SnapshotSource, W: Write>(src: &S, sink: &mut W) -> 
 /// stream unchanged.
 pub fn write_snapshot_to_with_cursor<S: SnapshotSource, W: Write>(
     src: &S,
-    sink: &mut W,
+    sink: W,
     cursor: Option<(u64, u64)>,
 ) -> io::Result<()> {
     // Field-TTL records force format v6; collect them first so

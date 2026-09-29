@@ -19,45 +19,11 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
+pub use crate::config::{ElectConfig, ElectJitter};
 use crate::message::{Message, Role};
 use crate::persist::{ElectorPersist, NoPersist};
-
-/// Tunable timeouts. Defaults match the protocol spec — operators
-/// can override via the `[cluster]` config section once the
-/// kevy-server adapter (separate task) wires the live config in.
-#[derive(Debug, Clone, Copy)]
-pub struct ElectConfig {
-    /// Period between outbound `HB` per peer. Default 200 ms.
-    pub hb_interval: Duration,
-    /// Flag a peer DOWN after this duration without an inbound `HB`.
-    /// Default 5 s = 25 × `hb_interval` (a transient 1 s blip
-    /// doesn't trigger an election).
-    pub down_after: Duration,
-    /// Candidate waits this long for quorum `ACCEPT` before backing
-    /// off. Default 3 s.
-    pub election_timeout: Duration,
-    /// Backoff floor after a failed election attempt. Real wait
-    /// adds jitter up to `election_backoff_jitter` to prevent
-    /// dueling candidates from re-running synchronously.
-    pub election_backoff: Duration,
-    /// Random jitter added to `election_backoff` per attempt.
-    /// Default 4 s (so the real range is 1–5 s).
-    pub election_backoff_jitter: Duration,
-}
-
-impl Default for ElectConfig {
-    fn default() -> Self {
-        Self {
-            hb_interval: Duration::from_millis(200),
-            down_after: Duration::from_secs(5),
-            election_timeout: Duration::from_secs(3),
-            election_backoff: Duration::from_secs(1),
-            election_backoff_jitter: Duration::from_secs(4),
-        }
-    }
-}
 
 /// Per-peer scratch the elector keeps. Updated on every inbound `HB`.
 /// `last_epoch` / `last_role` are recorded for future observability
@@ -141,53 +107,12 @@ pub struct Elector {
     pub(crate) persist: Box<dyn ElectorPersist + Send>,
 }
 
-/// Source of jitter for election backoff. Tests use a fixed value;
-/// production uses `ElectJitter::System` which reads `Instant`
-/// + node_id as a poor-mans entropy. Pure-Rust 0-dep — no `rand` crate.
-#[derive(Debug, Clone)]
-pub enum ElectJitter {
-    /// Fixed value (test-friendly, deterministic).
-    Fixed(Duration),
-    /// Hash of `(now_nanos, node_id)` clamped into
-    /// `[0, max_jitter)`. Deterministic enough for production while
-    /// avoiding zero-cost-jitter dueling.
-    System,
-}
-
-impl ElectJitter {
-    /// Sample a jitter value in `[0, max]`.
-    fn sample(&self, max: Duration, now: Instant, node_id: &str) -> Duration {
-        match self {
-            Self::Fixed(d) => *d.min(&max),
-            Self::System => {
-                // Mix `node_id` bytes into a u64 hash and clamp into
-                // `[0, max.as_nanos())`. Coarse but adequate — the
-                // jitter only needs to break ties between dueling
-                // candidates, not be cryptographically random.
-                let mut h: u64 = 1_469_598_103_934_665_603;
-                for b in node_id.as_bytes() {
-                    h = h.wrapping_mul(1_099_511_628_211) ^ u64::from(*b);
-                }
-                // Pull a u64 worth of bits out of `now`'s elapsed-
-                // since-arbitrary-anchor representation. Using the
-                // low 64 bits of `now.elapsed_since(anchor)` would
-                // need an anchor — instead, hash a stable derivation
-                // of `now` via the elector's lazy anchor approach.
-                // For simplicity: mix `node_id` bytes again with a
-                // per-call seed.
-                let _ = now; // placeholder: production jitter wants per-call entropy.
-                let span_ns = max.as_nanos().max(1) as u64;
-                Duration::from_nanos(h % span_ns)
-            }
-        }
-    }
-}
-
 /// One message + recipient that the elector wants to send. The
 /// transport layer drains
 /// `Transport` each loop iteration and writes to the
 /// per-peer TCP connections.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct Outbound {
     /// Recipient. `"*"` (a sentinel — never a valid node_id since
     /// they're ASCII ≤ 32 B and operators don't use stars) means
@@ -205,19 +130,28 @@ impl Outbound {
 
 impl Elector {
     /// Build an elector for a node with the given stable id, peer
-    /// membership (the full list including self), advertised
-    /// `host:port`, and config tunables.
+    /// membership (the full list including self) and advertised
+    /// `host:port`, with the default timeouts ([`ElectConfig::default`])
+    /// and [`ElectJitter::System`]; [`Self::with_config`] and
+    /// [`Self::with_jitter`] change them.
     ///
     /// `start_role` is `Primary` for the bootstrap node (operator-
     /// declared at first start) and `Replica` for the rest.
+    ///
+    /// ```
+    /// use kevy_elect::{Elector, Role};
+    ///
+    /// let e = Elector::new("a", vec!["a".to_string(), "b".to_string()], "10.0.0.1:6004", Role::Replica);
+    /// assert_eq!((e.role(), e.epoch()), (Role::Replica, 1));
+    /// ```
     pub fn new(
         node_id: impl Into<String>,
         peer_ids: Vec<String>,
         my_advertised_addr: impl Into<String>,
         start_role: Role,
-        config: ElectConfig,
-        jitter: ElectJitter,
     ) -> Self {
+        let config = ElectConfig::default();
+        let jitter = ElectJitter::System;
         let node_id = node_id.into();
         Self {
             node_id,
@@ -238,6 +172,38 @@ impl Elector {
             jitter,
             persist: Box::new(NoPersist),
         }
+    }
+
+    /// Replace the timeouts.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use kevy_elect::{ElectConfig, Elector, Role};
+    ///
+    /// let cfg = ElectConfig::default().with_hb_interval(Duration::from_millis(50));
+    /// let e = Elector::new("a", vec!["a".to_string()], "10.0.0.1:6004", Role::Primary).with_config(cfg);
+    /// assert_eq!(e.role(), Role::Primary);
+    /// ```
+    #[must_use]
+    pub fn with_config(mut self, config: ElectConfig) -> Self {
+        self.config = config;
+        self
+    }
+
+    /// Replace the backoff jitter source (tests fix it for determinism).
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use kevy_elect::{ElectJitter, Elector, Role};
+    ///
+    /// let e = Elector::new("a", vec!["a".to_string()], "10.0.0.1:6004", Role::Primary)
+    ///     .with_jitter(ElectJitter::Fixed(Duration::ZERO));
+    /// assert_eq!(e.epoch(), 1);
+    /// ```
+    #[must_use]
+    pub fn with_jitter(mut self, jitter: ElectJitter) -> Self {
+        self.jitter = jitter;
+        self
     }
 
     /// Attach a persistence backend and restore its saved state.

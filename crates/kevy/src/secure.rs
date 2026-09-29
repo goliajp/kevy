@@ -176,17 +176,16 @@ impl ReplLinks {
         let mut last = kevy_replicate::replica::ReplicaError::HandshakeRejected;
         for i in 0..n {
             let idx = (first + i) % n;
-            let sec = kevy_replicate::replica::ReplicaSecurity {
-                local: self.local.clone(),
-                primary_key: self.primaries[idx],
-            };
-            match kevy_replicate::replica::ReplicaClient::connect_secure(
+            let sec = kevy_replicate::replica::ReplicaSecurity::new(
+                self.local.clone(),
+                self.primaries[idx],
+            );
+            match kevy_replicate::replica::ReplicaClient::connect_with(
                 addr,
-                replica_id,
-                generation,
-                from_offset,
-                std::time::Duration::from_secs(5),
-                &sec,
+                &kevy_replicate::replica::ConnectOptions::new(replica_id)
+                    .with_generation(generation)
+                    .with_from_offset(from_offset)
+                    .with_security(sec),
             ) {
                 Ok(c) => {
                     self.last_good.store(idx, Ordering::Relaxed);

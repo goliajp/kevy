@@ -20,16 +20,17 @@ const TAG: usize = 16;
 /// use kevy_noise::Keypair;
 /// use kevy_replicate::replica::ReplicaSecurity;
 ///
-/// let sec = ReplicaSecurity { local: Keypair::from_secret([2; 32]), primary_key: [9; 32] };
+/// let sec = ReplicaSecurity::new(Keypair::from_secret([2; 32]), [9; 32]);
 /// assert_eq!(sec.primary_key, [9; 32]);
 /// ```
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ReplicaSecurity {
     /// The replica's static key pair; a primary with `replica_keys` set
     /// lists its public half.
     ///
     /// ```
-    /// let sec = kevy_replicate::replica::ReplicaSecurity { local: kevy_noise::Keypair::from_secret([2; 32]), primary_key: [9; 32] };
+    /// let sec = kevy_replicate::replica::ReplicaSecurity::new(kevy_noise::Keypair::from_secret([2; 32]), [9; 32]);
     /// assert_ne!(sec.local.public(), [0; 32]);
     /// ```
     pub local: Keypair,
@@ -38,13 +39,30 @@ pub struct ReplicaSecurity {
     ///
     /// ```
     /// let primary = kevy_noise::Keypair::from_secret([1; 32]);
-    /// let sec = kevy_replicate::replica::ReplicaSecurity {
-    ///     local: kevy_noise::Keypair::from_secret([2; 32]),
-    ///     primary_key: primary.public(),
-    /// };
+    /// let sec = kevy_replicate::replica::ReplicaSecurity::new(
+    ///     kevy_noise::Keypair::from_secret([2; 32]),
+    ///     primary.public(),
+    /// );
     /// assert_eq!(sec.primary_key, primary.public());
     /// ```
     pub primary_key: [u8; 32],
+}
+
+impl ReplicaSecurity {
+    /// The replica's key pair `local` and the public key the primary must
+    /// present. Neither has a default: without them the link authenticates
+    /// nobody.
+    ///
+    /// ```
+    /// let sec = kevy_replicate::replica::ReplicaSecurity::new(
+    ///     kevy_noise::Keypair::from_secret([2; 32]),
+    ///     [7; 32],
+    /// );
+    /// assert_eq!(sec.primary_key, [7; 32]);
+    /// ```
+    pub fn new(local: Keypair, primary_key: [u8; 32]) -> Self {
+        Self { local, primary_key }
+    }
 }
 
 pub(crate) struct ClientNoise {
@@ -129,17 +147,17 @@ impl ClientNoise {
 }
 
 impl ReplicaClient {
-    /// [`Self::connect_at`] over a Noise IK link: the primary must present
-    /// `security.primary_key`, and it sees this replica's key before it
-    /// answers. Everything after the handshake is encrypted.
-    pub fn connect_secure<A: std::net::ToSocketAddrs>(
+    /// The Noise IK half of [`Self::connect_with`]: the primary must
+    /// present `security.primary_key`, and it sees this replica's key
+    /// before it answers. Everything after the handshake is encrypted.
+    pub(crate) fn connect_noise<A: std::net::ToSocketAddrs>(
         addr: A,
-        replica_id: &str,
-        generation: u64,
-        from_offset: u64,
-        connect_timeout: std::time::Duration,
+        opts: &crate::replica::ConnectOptions,
         security: &ReplicaSecurity,
     ) -> Result<Self, ReplicaError> {
+        let (generation, from_offset, connect_timeout) =
+            (opts.generation, opts.from_offset, opts.timeout);
+        let replica_id = opts.replica_id.as_str();
         let mut sock = connect_stream(addr, connect_timeout)?;
         sock.set_read_timeout(Some(connect_timeout))?;
         let mut noise = handshake(&mut sock, security)?;

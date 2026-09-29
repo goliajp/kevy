@@ -526,7 +526,7 @@ fn quiet_replay_reports_identically() {
     let mut loud = 0u64;
     let r1 = crate::replay_aof(&path, |_| loud += 1).unwrap();
     let mut quiet = 0u64;
-    let r2 = crate::replay_aof_quiet(&path, false, |_| quiet += 1).unwrap();
+    let r2 = crate::replay_aof_quiet(&path, crate::ReplayMode::Strict, |_| quiet += 1).unwrap();
     assert_eq!(loud, quiet);
     assert_eq!(r1.commands, r2.commands);
     assert_eq!(r1.bytes, r2.bytes);

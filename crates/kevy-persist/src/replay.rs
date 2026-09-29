@@ -6,6 +6,7 @@ use std::fs::File;
 use std::io::{self, Read};
 use std::path::Path;
 
+use crate::modes::{ReplayMode, ReplaySummary};
 use crate::replay_walk::{ReplayStop, Sink, walk_v2};
 use kevy_resp::Argv;
 
@@ -62,7 +63,8 @@ pub fn replay_aof<F: FnMut(Argv)>(path: &Path, mut apply: F) -> io::Result<Repla
 /// drop(aof);
 ///
 /// let mut verbs = Vec::new();
-/// let report = kevy_persist::replay_aof_in_place(&path, false, true, |frame| {
+/// let (mode, summary) = (kevy_persist::ReplayMode::Strict, kevy_persist::ReplaySummary::Quiet);
+/// let report = kevy_persist::replay_aof_in_place(&path, mode, summary, |frame| {
 ///     verbs.push(frame[0].to_vec());
 /// })
 /// .unwrap();
@@ -72,11 +74,12 @@ pub fn replay_aof<F: FnMut(Argv)>(path: &Path, mut apply: F) -> io::Result<Repla
 /// ```
 pub fn replay_aof_in_place<F: FnMut(&mut Argv)>(
     path: &Path,
-    resync: bool,
-    quiet_info: bool,
+    mode: ReplayMode,
+    summary: ReplaySummary,
     mut apply: F,
 ) -> io::Result<ReplayReport> {
-    replay_with(path, resync, quiet_info, Sink::InPlace(&mut apply))
+    let (resync, quiet) = (mode == ReplayMode::Resync, summary == ReplaySummary::Quiet);
+    replay_with(path, resync, quiet, Sink::InPlace(&mut apply))
 }
 
 fn replay_with(
@@ -103,7 +106,7 @@ fn replay_with(
     replay_v1_slice(path, &data, &mut sink, quiet_info)
 }
 
-/// [`replay_aof`] (or, with `resync`, [`replay_aof_resync`]) with the
+/// [`replay_aof`] (or, under [`ReplayMode::Resync`], [`replay_aof_resync`]) with the
 /// informational summary lines suppressed. For embedded callers that
 /// receive the same numbers through a metric sink: the data path has
 /// taken over, so the stderr line would be a duplicate. The corrupt-frame
@@ -111,10 +114,10 @@ fn replay_with(
 /// information, and does not share this switch.
 pub fn replay_aof_quiet<F: FnMut(Argv)>(
     path: &Path,
-    resync: bool,
+    mode: ReplayMode,
     mut apply: F,
 ) -> io::Result<ReplayReport> {
-    replay_with(path, resync, true, Sink::Owned(&mut apply))
+    replay_with(path, mode == ReplayMode::Resync, true, Sink::Owned(&mut apply))
 }
 
 /// The v1 frame loop: parse-apply until clean end, truncated tail, or a

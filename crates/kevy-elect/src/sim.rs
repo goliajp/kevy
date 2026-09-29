@@ -54,9 +54,9 @@ impl Sim {
                     peer_ids.clone(),
                     format!("10.0.0.{}:6004", first_byte_addr(id)),
                     role,
-                    config,
-                    jitter.clone(),
-                );
+                )
+                .with_config(config)
+                .with_jitter(jitter.clone());
                 (id.to_string(), SimNode { elector, alive: true })
             })
             .collect();

@@ -111,14 +111,10 @@ fn connect(
     local: &Keypair,
     primary_key: [u8; 32],
 ) -> Result<ReplicaClient, kevy_replicate::replica::ReplicaError> {
-    let sec = ReplicaSecurity { local: local.clone(), primary_key };
-    ReplicaClient::connect_secure(
+    let sec = ReplicaSecurity::new(local.clone(), primary_key);
+    ReplicaClient::connect_with(
         ("127.0.0.1", p.repl),
-        "secure-replica",
-        0,
-        0,
-        Duration::from_secs(5),
-        &sec,
+        &kevy_replicate::replica::ConnectOptions::new("secure-replica").with_security(sec),
     )
 }
 
@@ -206,7 +202,9 @@ fn a_plaintext_replica_gets_nothing_from_a_secure_primary() {
     let (primary_key, _) = keys();
     let p = Primary::start(ReplicationSecurity { local: primary_key, replica_keys: Vec::new() });
     p.set("secret", "value");
-    let plain =
-        ReplicaClient::connect_at(("127.0.0.1", p.repl), "plain", 0, 0, Duration::from_secs(2));
+    let plain = ReplicaClient::connect_with(
+        ("127.0.0.1", p.repl),
+        &kevy_replicate::replica::ConnectOptions::new("plain").with_timeout(Duration::from_secs(2)),
+    );
     assert!(plain.is_err(), "a plaintext handshake must not be answered");
 }

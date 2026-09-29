@@ -17,15 +17,16 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(2);
 /// use kevy_elect::SecureLinks;
 /// use kevy_noise::Keypair;
 ///
-/// let links = SecureLinks { local: Keypair::from_secret([1; 32]), peer_keys: vec![("n2".into(), [2; 32])] };
+/// let links = SecureLinks::new(Keypair::from_secret([1; 32]), [("n2".to_string(), [2; 32])]);
 /// assert_eq!(links.peer_keys.len(), 1);
 /// ```
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct SecureLinks {
     /// This node's static key pair.
     ///
     /// ```
-    /// let links = kevy_elect::SecureLinks { local: kevy_noise::Keypair::from_secret([1; 32]), peer_keys: vec![] };
+    /// let links = kevy_elect::SecureLinks::new(kevy_noise::Keypair::from_secret([1; 32]), []);
     /// assert_ne!(links.local.public(), [0; 32]);
     /// ```
     pub local: Keypair,
@@ -34,13 +35,30 @@ pub struct SecureLinks {
     ///
     /// ```
     /// let n2 = kevy_noise::Keypair::from_secret([2; 32]);
-    /// let links = kevy_elect::SecureLinks {
-    ///     local: kevy_noise::Keypair::from_secret([1; 32]),
-    ///     peer_keys: vec![("n2".to_string(), n2.public())],
-    /// };
+    /// let links = kevy_elect::SecureLinks::new(
+    ///     kevy_noise::Keypair::from_secret([1; 32]),
+    ///     [("n2".to_string(), n2.public())],
+    /// );
     /// assert_eq!(links.peer_keys[0].0, "n2");
     /// ```
     pub peer_keys: Vec<(String, [u8; 32])>,
+}
+
+impl SecureLinks {
+    /// This node's key pair `local` and the public key of every peer, by
+    /// node id. Neither has a default: a secure link without them
+    /// authenticates nobody.
+    ///
+    /// ```
+    /// let links = kevy_elect::SecureLinks::new(
+    ///     kevy_noise::Keypair::from_secret([1; 32]),
+    ///     [("n2".to_string(), [2; 32]), ("n3".to_string(), [3; 32])],
+    /// );
+    /// assert_eq!(links.peer_keys[1].0, "n3");
+    /// ```
+    pub fn new(local: Keypair, peer_keys: impl IntoIterator<Item = (String, [u8; 32])>) -> Self {
+        Self { local, peer_keys: peer_keys.into_iter().collect() }
+    }
 }
 
 pub(crate) enum Link {
@@ -178,10 +196,8 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let stream = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let (mut accepted, _) = listener.accept().unwrap();
-        let secure = SecureLinks {
-            local: kevy_noise::Keypair::from_secret([1; 32]),
-            peer_keys: vec![("n2".into(), [2; 32])],
-        };
+        let secure =
+            SecureLinks::new(kevy_noise::Keypair::from_secret([1; 32]), [("n2".into(), [2; 32])]);
         let err = initiate(stream, &secure, "n3").err().unwrap();
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
         assert!(err.to_string().contains("n3"));

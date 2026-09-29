@@ -547,6 +547,7 @@ version = "6.4.0"
 name = "kevy-config"
 version = "6.4.0"
 dependencies = [
+ "kevy-persist",
  "kevy-store",
 ]
 

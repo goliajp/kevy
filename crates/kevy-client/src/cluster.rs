@@ -63,14 +63,14 @@ impl ClusterClient {
     /// ```
     pub fn connect_url(url: &str) -> KevyResult<Self> {
         if url.starts_with("kevys://") {
-            let u = kevy_resp_client::parse_secure_url(url)?;
+            let u = kevy_resp_client::SecureUrl::parse(url)?;
             let me =
                 u.client_key_file.as_deref().map(kevy_resp_client::load_client_key).transpose()?;
             let me = me.as_ref();
             let seed = RespClient::connect_secure(&u.host, u.port, u.server_key, me)?;
             return Self::build(seed, |h, p| RespClient::connect_secure(h, p, u.server_key, me));
         }
-        let p = kevy_resp_client::parse_url(url)?;
+        let p = kevy_resp_client::ParsedUrl::parse(url)?;
         Self::build(RespClient::connect(&p.host, p.port)?, RespClient::connect)
     }
 

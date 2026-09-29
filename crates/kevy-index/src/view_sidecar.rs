@@ -28,13 +28,13 @@ impl ViewCatalog {
     }
 
     /// Register; errors on duplicate/cap/structure.
-    pub fn create(&mut self, spec: ViewSpec) -> Result<(), &'static str> {
+    pub fn create(&mut self, spec: ViewSpec) -> Result<(), crate::CatalogError> {
         spec.validate()?;
         if self.specs.len() >= MAX_VIEWS {
-            return Err("ERR view limit reached (64)");
+            return Err(crate::CatalogError::Full(crate::Declared::View));
         }
         if self.specs.iter().any(|s| s.name == spec.name) {
-            return Err("ERR view already exists");
+            return Err(crate::CatalogError::Exists(crate::Declared::View));
         }
         self.specs.push(spec);
         Ok(())

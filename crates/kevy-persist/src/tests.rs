@@ -374,7 +374,7 @@ fn view_aof_round_trips_at_the_collect_instant() {
 
     // dump_aof writes a FILE at this path — the unique dir is its parent.
     let p = kevy_tmpdir::unique_dir("persist").join("view.aof");
-    let (keys, bytes) = dump_aof(&p, &view).unwrap();
+    let crate::RewriteStats { keys, bytes } = dump_aof(&p, &view).unwrap();
     assert_eq!(keys, 6);
     assert!(bytes > 0);
 

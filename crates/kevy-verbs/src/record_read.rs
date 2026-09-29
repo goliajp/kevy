@@ -29,7 +29,7 @@ use std::ops::Bound;
 use kevy_resp::{Argv, ArgvView};
 use kevy_store::{Store, StreamId};
 
-use crate::record::{seen_frame, taken_frames};
+use crate::record::{Consumer, seen_frame, taken_frames};
 
 /// The frames for an `XREADGROUP` `args` just run, `marks` holding, per
 /// stream in `STREAMS` order, the group's last-delivered ID before the
@@ -37,12 +37,12 @@ use crate::record::{seen_frame, taken_frames};
 pub(crate) fn read_frames<A: ArgvView + ?Sized>(
     store: &Store,
     args: &A,
-    marks: &[(StreamId, bool)],
+    marks: &[(StreamId, Consumer)],
 ) -> Vec<Argv> {
     let Some(shape) = Shape::of(args) else { return Vec::new() };
     let (group, consumer) = (&args[2], &args[3]);
     let mut frames = Vec::new();
-    for (k, (prev, made)) in marks.iter().enumerate().take(shape.streams) {
+    for (k, (prev, consumer_was)) in marks.iter().enumerate().take(shape.streams) {
         let key = &args[shape.keys + k];
         let mut claims = Vec::new();
         let mut moved = None;
@@ -62,7 +62,7 @@ pub(crate) fn read_frames<A: ArgvView + ?Sized>(
             }
             moved = Some(setid);
         }
-        if moved.is_some() || *made {
+        if moved.is_some() || *consumer_was == Consumer::Created {
             frames.extend(seen_frame(store, key, group, consumer));
         }
         frames.extend(moved);

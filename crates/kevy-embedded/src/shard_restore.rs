@@ -47,7 +47,7 @@ struct FrameApplier<'a> {
     #[cfg(not(target_arch = "wasm32"))]
     segs_dir: std::path::PathBuf,
     #[cfg(not(target_arch = "wasm32"))]
-    torn: Option<String>,
+    torn: Option<kevy_store::SegRowsError>,
     frames: u64,
 }
 
@@ -108,8 +108,12 @@ fn replay_shard_aof(
     // (`KevyMetric`), so the informational stderr summary would be a
     // duplicate on every open — a real cost for per-command CLI
     // processes. The corrupt-frame WARN prints regardless.
-    let quiet = config.metric_sink.is_some();
-    let r = kevy_persist::replay_aof_in_place(aof, config.replay_resync, quiet, |a| {
+    let summary = if config.metric_sink.is_some() {
+        kevy_persist::ReplaySummary::Quiet
+    } else {
+        kevy_persist::ReplaySummary::Print
+    };
+    let r = kevy_persist::replay_aof_in_place(aof, config.replay_mode(), summary, |a| {
         applier.apply(a);
     })?;
     applier.finish(i)?;

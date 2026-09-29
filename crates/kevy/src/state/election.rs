@@ -20,7 +20,7 @@ use std::sync::{Arc, RwLock};
 use kevy_config::{Config, PeerEntry, ReplicationRole};
 use kevy_elect::{
     PeerAddr, Transport,
-    elector::{ElectConfig, ElectJitter, Elector},
+    elector::{ElectConfig, Elector},
     message::Role,
 };
 
@@ -68,7 +68,6 @@ impl ElectionState {
         }
         let listen_port = resolved_elect_port_base(cfg);
         let elect_cfg = ElectConfig::default();
-        let hb_interval = elect_cfg.hb_interval;
         let (elector, start_role) = build_elector(cfg, elect_cfg, replication);
         // Filter out self when building outbound `PeerAddr` list.
         let self_id = cfg.cluster.node_id.as_str();
@@ -77,15 +76,12 @@ impl ElectionState {
         let [a, b, c, d] = cfg.server.bind;
         let listen = (IpAddr::V4(Ipv4Addr::new(a, b, c, d)), listen_port);
         let on_change = make_topology_callback(cfg, Arc::clone(replication));
-        let secure = link_key.filter(|_| cfg.cluster.secure).map(|local| kevy_elect::SecureLinks {
-            local: local.clone(),
-            peer_keys: cfg.cluster.peer_keys.clone(),
+        let secure = link_key.filter(|_| cfg.cluster.secure).map(|local| {
+            kevy_elect::SecureLinks::new(local.clone(), cfg.cluster.peer_keys.iter().cloned())
         });
         let spawned = match secure {
-            Some(secure) => {
-                Transport::spawn_secure(elector, hb_interval, listen, peers, on_change, secure)
-            }
-            None => Transport::spawn_with_callback(elector, hb_interval, listen, peers, on_change),
+            Some(secure) => Transport::spawn_secure(elector, listen, peers, on_change, secure),
+            None => Transport::spawn_with_callback(elector, listen, peers, on_change),
         };
         match spawned {
             Ok(t) => {
@@ -290,15 +286,9 @@ fn build_elector(
     }
     let peer_ids: Vec<String> = cfg.cluster.peers.iter().map(|p| p.node_id.clone()).collect();
     let advertised_addr = format!("{}:{}", advertised_host(cfg), cfg.server.port);
-    let elector = Elector::new(
-        cfg.cluster.node_id.clone(),
-        peer_ids,
-        advertised_addr,
-        start_role,
-        elect_cfg,
-        ElectJitter::System,
-    )
-    .with_persist(Box::new(persist));
+    let elector = Elector::new(cfg.cluster.node_id.clone(), peer_ids, advertised_addr, start_role)
+        .with_config(elect_cfg)
+        .with_persist(Box::new(persist));
     (elector, start_role)
 }
 
@@ -321,7 +311,7 @@ fn advertised_host(cfg: &Config) -> String {
 }
 
 fn peer_to_addr(p: &PeerEntry) -> PeerAddr {
-    PeerAddr { node_id: p.node_id.clone(), host: p.host.clone(), port: p.port }
+    PeerAddr::new(p.node_id.as_str(), p.host.as_str(), p.port)
 }
 
 #[cfg(test)]

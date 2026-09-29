@@ -65,7 +65,7 @@ impl AsyncClusterClient<AsyncSecure<DefaultTransport>> {
     /// # Ok(()) }
     /// ```
     pub async fn connect_secure_url(url: &str) -> io::Result<Self> {
-        let u = kevy_resp_client::parse_secure_url(url)?;
+        let u = kevy_resp_client::SecureUrl::parse(url)?;
         let me = u.client_key_file.as_deref().map(kevy_resp_client::load_client_key).transpose()?;
         let dial = |h: String, p: u16| {
             let me = me.clone();

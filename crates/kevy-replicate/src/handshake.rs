@@ -30,7 +30,8 @@ use kevy_resp::Argv;
 
 /// Parsed `REPLICATE FROM <generation> <from-offset> ID <replica-id>`
 /// request.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct HandshakeReq {
     /// Feed generation the replica's data reflects. `0` = unknown /
     /// fresh — the primary treats it as "no continuity claim".
@@ -43,8 +44,9 @@ pub struct HandshakeReq {
     pub replica_id: String,
 }
 
-/// Why a [`parse_replicate_from`] call rejected its input.
-#[derive(Debug, PartialEq, Eq)]
+/// Why [`HandshakeReq::parse`] rejected its input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum HandshakeError {
     /// First arg is not "REPLICATE" (case-insensitive).
     BadCommand,
@@ -78,36 +80,48 @@ impl std::fmt::Display for HandshakeError {
 
 impl std::error::Error for HandshakeError {}
 
-/// Parse a `REPLICATE FROM <generation> <offset> ID <id>` command
-/// from an already-decoded [`Argv`] (the caller has run the bytes
-/// through `kevy_resp::parse_command_into` first).
-// missing_panics_doc: the unwraps are guarded by the `len() != 6` arity check
-// above them — unreachable, not a caller-facing panic condition.
-#[allow(clippy::missing_panics_doc)]
-pub fn parse_replicate_from(argv: &Argv) -> Result<HandshakeReq, HandshakeError> {
-    if argv.len() != 6 {
-        return Err(HandshakeError::WrongArity(argv.len()));
+impl HandshakeReq {
+    /// Parse a `REPLICATE FROM <generation> <offset> ID <id>` command
+    /// from an already-decoded [`Argv`] (the caller has run the bytes
+    /// through `kevy_resp::parse_command_into` first).
+    ///
+    /// ```
+    /// use kevy_replicate::handshake::HandshakeReq;
+    ///
+    /// let words = ["REPLICATE", "FROM", "7", "42", "ID", "r1"];
+    /// let argv = kevy_resp::Argv::from(words.iter().map(|w| w.as_bytes().to_vec()).collect::<Vec<_>>());
+    /// let req = HandshakeReq::parse(&argv)?;
+    /// assert_eq!((req.generation, req.from_offset, req.replica_id.as_str()), (7, 42, "r1"));
+    /// # Ok::<(), kevy_replicate::handshake::HandshakeError>(())
+    /// ```
+    // missing_panics_doc: the unwraps are guarded by the `len() != 6` arity check
+    // above them — unreachable, not a caller-facing panic condition.
+    #[allow(clippy::missing_panics_doc)]
+    pub fn parse(argv: &Argv) -> Result<HandshakeReq, HandshakeError> {
+        if argv.len() != 6 {
+            return Err(HandshakeError::WrongArity(argv.len()));
+        }
+        if !eq_ascii_ci(argv.get(0).expect("the argv.len() != 6 return above"), b"REPLICATE") {
+            return Err(HandshakeError::BadCommand);
+        }
+        if !eq_ascii_ci(argv.get(1).expect("the argv.len() != 6 return above"), b"FROM") {
+            return Err(HandshakeError::BadFromKeyword);
+        }
+        let generation = parse_decimal_u64(argv.get(2).expect("the argv.len() != 6 return above"))
+            .ok_or(HandshakeError::BadGeneration)?;
+        let from_offset = parse_decimal_u64(argv.get(3).expect("the argv.len() != 6 return above"))
+            .ok_or(HandshakeError::BadOffset)?;
+        if !eq_ascii_ci(argv.get(4).expect("the argv.len() != 6 return above"), b"ID") {
+            return Err(HandshakeError::BadIdKeyword);
+        }
+        let id_bytes = argv.get(5).expect("the argv.len() != 6 return above");
+        if id_bytes.is_empty() {
+            return Err(HandshakeError::BadReplicaId);
+        }
+        let replica_id =
+            std::str::from_utf8(id_bytes).map_err(|_| HandshakeError::BadReplicaId)?.to_string();
+        Ok(HandshakeReq { generation, from_offset, replica_id })
     }
-    if !eq_ascii_ci(argv.get(0).expect("the argv.len() != 6 return above"), b"REPLICATE") {
-        return Err(HandshakeError::BadCommand);
-    }
-    if !eq_ascii_ci(argv.get(1).expect("the argv.len() != 6 return above"), b"FROM") {
-        return Err(HandshakeError::BadFromKeyword);
-    }
-    let generation = parse_decimal_u64(argv.get(2).expect("the argv.len() != 6 return above"))
-        .ok_or(HandshakeError::BadGeneration)?;
-    let from_offset = parse_decimal_u64(argv.get(3).expect("the argv.len() != 6 return above"))
-        .ok_or(HandshakeError::BadOffset)?;
-    if !eq_ascii_ci(argv.get(4).expect("the argv.len() != 6 return above"), b"ID") {
-        return Err(HandshakeError::BadIdKeyword);
-    }
-    let id_bytes = argv.get(5).expect("the argv.len() != 6 return above");
-    if id_bytes.is_empty() {
-        return Err(HandshakeError::BadReplicaId);
-    }
-    let replica_id =
-        std::str::from_utf8(id_bytes).map_err(|_| HandshakeError::BadReplicaId)?.to_string();
-    Ok(HandshakeReq { generation, from_offset, replica_id })
 }
 
 /// Encode the primary's `+ACK <generation> <current-offset>\r\n`
@@ -173,7 +187,7 @@ mod tests {
     #[test]
     fn parses_fresh_replica_from_zero() {
         let req =
-            parse_replicate_from(&argv(&[b"REPLICATE", b"FROM", b"0", b"0", b"ID", b"replica-a"]))
+            HandshakeReq::parse(&argv(&[b"REPLICATE", b"FROM", b"0", b"0", b"ID", b"replica-a"]))
                 .unwrap();
         assert_eq!(req.generation, 0);
         assert_eq!(req.from_offset, 0);
@@ -182,7 +196,7 @@ mod tests {
 
     #[test]
     fn parses_reconnect_with_generation_and_large_offset() {
-        let req = parse_replicate_from(&argv(&[
+        let req = HandshakeReq::parse(&argv(&[
             b"REPLICATE",
             b"FROM",
             b"7",
@@ -199,7 +213,7 @@ mod tests {
     #[test]
     fn keywords_are_case_insensitive() {
         let req =
-            parse_replicate_from(&argv(&[b"replicate", b"from", b"2", b"1", b"id", b"x"])).unwrap();
+            HandshakeReq::parse(&argv(&[b"replicate", b"from", b"2", b"1", b"id", b"x"])).unwrap();
         assert_eq!(req.generation, 2);
         assert_eq!(req.from_offset, 1);
         assert_eq!(req.replica_id, "x");
@@ -210,62 +224,62 @@ mod tests {
         // The legacy 5-arg (gen-less) form is a WrongArity rejection,
         // not a silent downgrade — 4.0 is a clean wire break.
         let err =
-            parse_replicate_from(&argv(&[b"REPLICATE", b"FROM", b"0", b"ID", b"a"])).unwrap_err();
+            HandshakeReq::parse(&argv(&[b"REPLICATE", b"FROM", b"0", b"ID", b"a"])).unwrap_err();
         assert_eq!(err, HandshakeError::WrongArity(5));
     }
 
     #[test]
     fn wrong_command_rejected() {
-        let err = parse_replicate_from(&argv(&[b"SUBSCRIBE", b"FROM", b"0", b"0", b"ID", b"a"]))
+        let err = HandshakeReq::parse(&argv(&[b"SUBSCRIBE", b"FROM", b"0", b"0", b"ID", b"a"]))
             .unwrap_err();
         assert_eq!(err, HandshakeError::BadCommand);
     }
 
     #[test]
     fn wrong_from_keyword_rejected() {
-        let err = parse_replicate_from(&argv(&[b"REPLICATE", b"AT", b"0", b"0", b"ID", b"a"]))
+        let err = HandshakeReq::parse(&argv(&[b"REPLICATE", b"AT", b"0", b"0", b"ID", b"a"]))
             .unwrap_err();
         assert_eq!(err, HandshakeError::BadFromKeyword);
     }
 
     #[test]
     fn wrong_id_keyword_rejected() {
-        let err = parse_replicate_from(&argv(&[b"REPLICATE", b"FROM", b"0", b"0", b"NAME", b"a"]))
+        let err = HandshakeReq::parse(&argv(&[b"REPLICATE", b"FROM", b"0", b"0", b"NAME", b"a"]))
             .unwrap_err();
         assert_eq!(err, HandshakeError::BadIdKeyword);
     }
 
     #[test]
     fn non_decimal_generation_rejected() {
-        let err = parse_replicate_from(&argv(&[b"REPLICATE", b"FROM", b"NaN", b"0", b"ID", b"a"]))
+        let err = HandshakeReq::parse(&argv(&[b"REPLICATE", b"FROM", b"NaN", b"0", b"ID", b"a"]))
             .unwrap_err();
         assert_eq!(err, HandshakeError::BadGeneration);
     }
 
     #[test]
     fn non_decimal_offset_rejected() {
-        let err = parse_replicate_from(&argv(&[b"REPLICATE", b"FROM", b"1", b"NaN", b"ID", b"a"]))
+        let err = HandshakeReq::parse(&argv(&[b"REPLICATE", b"FROM", b"1", b"NaN", b"ID", b"a"]))
             .unwrap_err();
         assert_eq!(err, HandshakeError::BadOffset);
     }
 
     #[test]
     fn negative_offset_rejected_as_bad_offset() {
-        let err = parse_replicate_from(&argv(&[b"REPLICATE", b"FROM", b"1", b"-1", b"ID", b"a"]))
+        let err = HandshakeReq::parse(&argv(&[b"REPLICATE", b"FROM", b"1", b"-1", b"ID", b"a"]))
             .unwrap_err();
         assert_eq!(err, HandshakeError::BadOffset);
     }
 
     #[test]
     fn empty_replica_id_rejected() {
-        let err = parse_replicate_from(&argv(&[b"REPLICATE", b"FROM", b"0", b"0", b"ID", b""]))
+        let err = HandshakeReq::parse(&argv(&[b"REPLICATE", b"FROM", b"0", b"0", b"ID", b""]))
             .unwrap_err();
         assert_eq!(err, HandshakeError::BadReplicaId);
     }
 
     #[test]
     fn non_utf8_replica_id_rejected() {
-        let err = parse_replicate_from(&argv(&[
+        let err = HandshakeReq::parse(&argv(&[
             b"REPLICATE",
             b"FROM",
             b"0",

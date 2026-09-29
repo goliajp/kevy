@@ -35,6 +35,7 @@
 #![warn(missing_docs)]
 
 mod ast;
+mod declaration_error;
 mod declared;
 mod fold;
 mod fold_parse;
@@ -142,6 +143,7 @@ impl Compilation {
     }
 }
 
+pub use declaration_error::DeclarationError;
 pub use fold::{Folded, fold_select};
 pub use kevy_index::ValType;
 pub use kevy_scalar::Scalar;
@@ -183,6 +185,7 @@ pub fn compile(sql: &str) -> Result<Compilation, SqlError> {
 const _: () = {
     const fn send_sync<T: Send + Sync>() {}
     send_sync::<SqlError>();
+    send_sync::<DeclarationError>();
     send_sync::<CardParam>();
     send_sync::<QueryCard>();
     send_sync::<Compilation>();

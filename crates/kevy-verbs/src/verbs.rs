@@ -6,7 +6,8 @@
 /// let v = kevy_verbs::verb(b"GET").unwrap();
 /// assert_eq!((v.name, v.write), ("GET", false));
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct Verb {
     /// The verb, uppercase.
     pub name: &'static str,

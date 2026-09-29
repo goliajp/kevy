@@ -23,9 +23,7 @@
 #![expect(clippy::let_underscore_must_use, reason = "removing what is already meant to be gone")]
 
 use crate::layout;
-use crate::{
-    Argv, Routing, ShardsMeta, load_snapshot, replay_aof, save_snapshot, write_shards_meta,
-};
+use crate::{Argv, Routing, ShardsMeta, load_snapshot, replay_aof, save_snapshot};
 use kevy_store::Store;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -37,6 +35,11 @@ use std::path::{Path, PathBuf};
 /// Recovery resolves paths through the layout *currently in effect* — a
 /// journal left by a crash is rolled forward under the caller's present
 /// file-name configuration, which must match the one that wrote it.
+///
+/// Implementations are the host's: each must be a pure function of its
+/// arguments (recovery re-derives every path from them after a crash), and
+/// must give distinct shards of one layout distinct paths (two shards
+/// sharing a file would overwrite each other's snapshot at commit).
 pub trait ShardLayout {
     /// Shard `i`'s snapshot path under an `n`-shard layout.
     fn snapshot_path(&self, dir: &Path, i: usize, n: usize) -> PathBuf;
@@ -126,10 +129,7 @@ pub fn commit_reshard<L: ShardLayout>(
 /// exists, the migration is committed and any crash is rolled *forward*.
 fn write_journal(dir: &Path, prev_n: usize, target: ShardsMeta, stamp: u128) -> io::Result<()> {
     use std::io::Write;
-    let routing = match target.routing {
-        Routing::KevyHash => "kevyhash",
-        Routing::Slots => "slots",
-    };
+    let routing = target.routing.tag();
     let body = format!(
         "kevy-reshard-journal v1\nstamp={stamp}\nprev_n={prev_n}\nn={}\nrouting={routing}\n",
         target.n,
@@ -172,7 +172,7 @@ fn finish_reshard<L: ShardLayout>(
             std::fs::rename(&tmp, &dst)?;
         }
     }
-    write_shards_meta(&layout::shards_meta_path(dir), target)?;
+    target.write(&layout::shards_meta_path(dir))?;
     std::fs::remove_file(dir.join(JOURNAL))
 }
 
@@ -241,7 +241,6 @@ fn parse_journal(body: &str) -> Option<(usize, ShardsMeta, u128)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::read_shards_meta;
 
     fn temp_dir(name: &str) -> PathBuf {
         kevy_tmpdir::unique_dir(&format!("reshard-{name}"))
@@ -285,7 +284,7 @@ mod tests {
         assert!(dir.join("dump-0.rdb").exists() && dir.join("dump-1.rdb").exists());
         assert!(!dir.join("dump-0.rdb.reshard").exists());
         assert!(!dir.join(JOURNAL).exists());
-        assert_eq!(read_shards_meta(&dir.join("shards.meta")), Some(TARGET));
+        assert_eq!(ShardsMeta::read(&dir.join("shards.meta")), Some(TARGET));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -306,7 +305,7 @@ mod tests {
         assert!(!dir.join("dump-0.rdb.premigration.7").exists(), "finalized snapshot re-backed-up");
         assert!(dir.join("dump-1.rdb").exists());
         assert!(!dir.join(JOURNAL).exists());
-        assert_eq!(read_shards_meta(&dir.join("shards.meta")), Some(TARGET));
+        assert_eq!(ShardsMeta::read(&dir.join("shards.meta")), Some(TARGET));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

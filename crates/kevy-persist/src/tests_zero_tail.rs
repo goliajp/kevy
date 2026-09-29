@@ -46,7 +46,8 @@ fn a_zero_tail_ends_the_log_cleanly_and_is_cut_without_quarantine() {
 fn the_settled_length_cuts_a_zero_tail_without_a_second_walk() {
     let (path, len) = log_of(3, "zero-tail-settled");
     std::fs::File::options().write(true).open(&path).unwrap().set_len(len + 4096).unwrap();
-    let aof = Aof::open_after_replay(&path, Fsync::No, false, Some(len)).unwrap();
+    let aof =
+        Aof::open_after_replay(&path, Fsync::No, crate::ReplayMode::Strict, Some(len)).unwrap();
     assert!(aof.open_quarantine().is_none());
     drop(aof);
     assert_eq!(std::fs::metadata(&path).unwrap().len(), len);

@@ -15,7 +15,7 @@
 //!   (consumers see an unbroken stream). Absent = unclean stop (or
 //!   fresh dir) → bump the generation, offsets restart at 0.
 //!
-//! Boot decision table ([`load_feed_boot`]):
+//! Boot decision table ([`FeedBoot::load`]):
 //!
 //! | feed-{i}.gen | feed-{i}.meta        | result                     |
 //! |--------------|----------------------|----------------------------|
@@ -42,7 +42,8 @@ fn meta_path(dir: &Path, shard: usize) -> PathBuf {
 }
 
 /// The cursor a shard's feed resumes at, per the boot decision table.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct FeedBoot {
     /// Generation to run at.
     pub generation: u64,
@@ -88,33 +89,43 @@ fn read_meta(dir: &Path, shard: usize) -> Option<(u64, u64)> {
     Some((g, o))
 }
 
-/// Run the boot decision table for one shard: consume the continuity
-/// marker (it is deleted regardless of validity — a crash between now
-/// and the next clean shutdown must read as unclean), bump + persist
-/// the generation when continuity is broken.
-pub fn load_feed_boot(dir: &Path, shard: usize) -> io::Result<FeedBoot> {
-    let highwater: Option<u64> =
-        fs::read_to_string(gen_path(dir, shard)).ok().and_then(|s| s.trim().parse().ok());
-    let marker = read_meta(dir, shard);
-    let _ = fs::remove_file(meta_path(dir, shard));
-    let boot = match (highwater, marker) {
-        // Fresh dir and unclean boot both DRAW a random generation —
-        // a generation is a history identity, not a counter. Fixed
-        // starts (1) or increments (g+1) collide across nodes: every
-        // fresh node called its history "1", a startup election and a
-        // failover promotion both called theirs "2", and a replica's
-        // stale cursor then passed the generation fence into offset
-        // aliasing (the availgate failover wedge).
-        (None, _) => FeedBoot { generation: fresh_generation(0), next_offset: 0 },
-        (Some(g), Some((mg, off))) if mg == g => FeedBoot { generation: g, next_offset: off },
-        (Some(g), _) => FeedBoot { generation: fresh_generation(g), next_offset: 0 },
-    };
-    // Persist the (possibly bumped, possibly fresh) generation as the
-    // new high-water before serving anything under it.
-    if Some(boot.generation) != highwater {
-        write_feed_gen(dir, shard, boot.generation)?;
+impl FeedBoot {
+    /// Run the boot decision table for one shard: consume the continuity
+    /// marker (it is deleted regardless of validity — a crash between now
+    /// and the next clean shutdown must read as unclean), bump + persist
+    /// the generation when continuity is broken.
+    ///
+    /// ```
+    /// let dir = kevy_tmpdir::unique_dir("feedboot-doc");
+    /// let boot = kevy_persist::feed_meta::FeedBoot::load(&dir, 0)?;
+    /// assert_eq!(boot.next_offset, 0);
+    /// # std::fs::remove_dir_all(&dir)?;
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
+    pub fn load(dir: &Path, shard: usize) -> io::Result<FeedBoot> {
+        let highwater: Option<u64> =
+            fs::read_to_string(gen_path(dir, shard)).ok().and_then(|s| s.trim().parse().ok());
+        let marker = read_meta(dir, shard);
+        let _ = fs::remove_file(meta_path(dir, shard));
+        let boot = match (highwater, marker) {
+            // Fresh dir and unclean boot both DRAW a random generation —
+            // a generation is a history identity, not a counter. Fixed
+            // starts (1) or increments (g+1) collide across nodes: every
+            // fresh node called its history "1", a startup election and a
+            // failover promotion both called theirs "2", and a replica's
+            // stale cursor then passed the generation fence into offset
+            // aliasing (the availgate failover wedge).
+            (None, _) => FeedBoot { generation: fresh_generation(0), next_offset: 0 },
+            (Some(g), Some((mg, off))) if mg == g => FeedBoot { generation: g, next_offset: off },
+            (Some(g), _) => FeedBoot { generation: fresh_generation(g), next_offset: 0 },
+        };
+        // Persist the (possibly bumped, possibly fresh) generation as the
+        // new high-water before serving anything under it.
+        if Some(boot.generation) != highwater {
+            write_feed_gen(dir, shard, boot.generation)?;
+        }
+        Ok(boot)
     }
-    Ok(boot)
 }
 
 /// Random nonzero u64 distinct from `old` — mirror of
@@ -149,7 +160,7 @@ mod tests {
     #[test]
     fn fresh_dir_draws_a_random_gen() {
         let d = tmp();
-        let b = load_feed_boot(&d, 0).unwrap();
+        let b = FeedBoot::load(&d, 0).unwrap();
         assert_ne!(b.generation, 0);
         assert_eq!(b.next_offset, 0);
         // gen high-water persisted
@@ -157,7 +168,7 @@ mod tests {
         // Two fresh dirs must not share an identity (the "every fresh
         // node is gen 1" collision).
         let d2 = tmp();
-        let b2 = load_feed_boot(&d2, 0).unwrap();
+        let b2 = FeedBoot::load(&d2, 0).unwrap();
         assert_ne!(b.generation, b2.generation);
         let _ = fs::remove_dir_all(&d);
         let _ = fs::remove_dir_all(&d2);
@@ -166,12 +177,12 @@ mod tests {
     #[test]
     fn clean_shutdown_resumes_cursor() {
         let d = tmp();
-        let b = load_feed_boot(&d, 0).unwrap();
+        let b = FeedBoot::load(&d, 0).unwrap();
         write_feed_meta(&d, 0, b.generation, 42).unwrap();
-        let b2 = load_feed_boot(&d, 0).unwrap();
+        let b2 = FeedBoot::load(&d, 0).unwrap();
         assert_eq!(b2, FeedBoot { generation: b.generation, next_offset: 42 });
         // marker consumed: a crash NOW must draw fresh next time
-        let b3 = load_feed_boot(&d, 0).unwrap();
+        let b3 = FeedBoot::load(&d, 0).unwrap();
         assert_ne!(b3.generation, b.generation);
         assert_ne!(b3.generation, 0);
         assert_eq!(b3.next_offset, 0);
@@ -181,9 +192,9 @@ mod tests {
     #[test]
     fn unclean_boot_bumps_and_persists_highwater() {
         let d = tmp();
-        let g1 = load_feed_boot(&d, 0).unwrap().generation;
+        let g1 = FeedBoot::load(&d, 0).unwrap().generation;
         // no marker written (crash) → fresh identity
-        let b = load_feed_boot(&d, 0).unwrap();
+        let b = FeedBoot::load(&d, 0).unwrap();
         assert_ne!(b.generation, g1);
         assert_ne!(b.generation, 0);
         assert_eq!(fs::read_to_string(d.join("feed-0.gen")).unwrap(), b.generation.to_string());
@@ -193,9 +204,9 @@ mod tests {
     #[test]
     fn mismatched_marker_bumps() {
         let d = tmp();
-        let g1 = load_feed_boot(&d, 0).unwrap().generation;
+        let g1 = FeedBoot::load(&d, 0).unwrap().generation;
         write_feed_meta(&d, 0, 99, 7).unwrap(); // stale/corrupt marker
-        let b = load_feed_boot(&d, 0).unwrap();
+        let b = FeedBoot::load(&d, 0).unwrap();
         assert_ne!(b.generation, g1);
         assert_eq!(b.next_offset, 0);
         let _ = fs::remove_dir_all(&d);
@@ -204,10 +215,10 @@ mod tests {
     #[test]
     fn shards_are_independent() {
         let d = tmp();
-        let g0 = load_feed_boot(&d, 0).unwrap().generation;
+        let g0 = FeedBoot::load(&d, 0).unwrap().generation;
         write_feed_meta(&d, 0, g0, 10).unwrap();
-        let _ = load_feed_boot(&d, 1).unwrap(); // fresh shard 1
-        let b0 = load_feed_boot(&d, 0).unwrap();
+        let _ = FeedBoot::load(&d, 1).unwrap(); // fresh shard 1
+        let b0 = FeedBoot::load(&d, 0).unwrap();
         assert_eq!(b0.next_offset, 10);
         let _ = fs::remove_dir_all(&d);
     }

@@ -144,6 +144,9 @@ pub(crate) fn cmd_role<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut 
                 };
                 return emit_replica_addr(ctx, &host, port, out);
             }
+            // a role this build cannot name falls through to the
+            // replication state and static config below
+            _ => {}
         }
     }
     // Live replication state wins over the static config — dynamic

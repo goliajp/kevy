@@ -92,7 +92,7 @@ fn cmd_scan(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     }
     let o = match kevy_verbs::args::scan_opts(&super::Args(argv)) {
         Ok(o) => o,
-        Err(msg) => return encode_error(out, msg),
+        Err(e) => return encode_error(out, e.as_wire()),
     };
     let (next, mut keys) = s.scan(o.cursor, o.pattern.as_deref(), o.count);
     if let Some(t) = o.type_filter {

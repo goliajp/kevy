@@ -18,7 +18,9 @@
 use kevy_resp::{Argv, ArgvView};
 use kevy_store::{Store, now_unix_ms};
 
-pub use crate::record::{Claim, INTERNAL_REFUSAL, apply_internal, deferred_frames, id_bytes};
+pub use crate::record::{
+    Claim, Consumer, INTERNAL_REFUSAL, apply_internal, deferred_frames, id_bytes,
+};
 
 /// The record of an `SPOP` that removed `popped`: `SREM key member…`.
 /// Replaying `SPOP` itself would draw different members.

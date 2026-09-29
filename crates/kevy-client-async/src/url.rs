@@ -24,7 +24,7 @@ pub fn parse_url(url: &str) -> io::Result<ParsedUrl> {
             ),
         ));
     }
-    kevy_resp_client::parse_url(url)
+    ParsedUrl::parse(url)
 }
 
 #[cfg(test)]
