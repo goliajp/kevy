@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use kevy_text::cold::{decode_fwd, posting_df, score_cold, score_cold_phrase};
 use kevy_text::{CorpusStats, SortOrder, sorted_order};
 
-use super::TextColdDir;
+use super::{ColdHit, ColdPage, TextColdDir};
 
 /// Everything pass 2 asks of the cold directory.
 ///
@@ -33,49 +33,128 @@ use super::TextColdDir;
 #[non_exhaustive]
 pub struct ColdPageQuery<'a> {
     /// Bare terms, sorted and deduplicated (the hot engine's rule).
+    ///
+    /// ```
+    /// let stats = kevy_text::CorpusStats::default();
+    /// let q = kevy_window::ColdPageQuery::parse(b"pear apple pear", &stats, 10);
+    /// assert_eq!(q.bare, [b"apple".to_vec(), b"pear".to_vec()]);
+    /// ```
     pub bare: Vec<Vec<u8>>,
     /// Each phrase's token sequence.
+    ///
+    /// ```
+    /// let stats = kevy_text::CorpusStats::default();
+    /// let q = kevy_window::ColdPageQuery::parse(b"\"red fig\" apple", &stats, 10);
+    /// assert_eq!(q.phrases, [vec![b"red".to_vec(), b"fig".to_vec()]]);
+    /// ```
     pub phrases: Vec<Vec<Vec<u8>>>,
     /// The injected global statistics both passes score with.
+    ///
+    /// ```
+    /// let stats = kevy_text::CorpusStats::new(1_000.0, 12.5, Default::default());
+    /// let q = kevy_window::ColdPageQuery::parse(b"apple", &stats, 10);
+    /// assert_eq!(q.stats.n_docs, 1_000.0);
+    /// ```
     pub stats: &'a CorpusStats,
     /// `FILTER` predicates, ANDed, over the frozen stored values.
+    ///
+    /// ```
+    /// # use kevy_text::{CorpusStats, SegmentShape, TextSegment};
+    /// # let dir = kevy_tmpdir::TmpDir::new("text-cold-doc");
+    /// let mut ts = TextSegment::with_shape(SegmentShape::default().with_values(1));
+    /// for (key, text, colour) in [("d:1", "red apple", "red"), ("d:2", "green apple", "green"), ("d:3", "red fig", "red")] {
+    ///     ts.apply_doc(key.as_bytes(), Some(&[(text.as_bytes().to_vec(), 1.0)]), &[Some(colour.as_bytes())]);
+    /// }
+    /// let mut cold = kevy_window::TextColdDir::new();
+    /// assert!(cold.freeze_batch(&mut ts, b"t.body", &[b"d:1".to_vec(), b"d:2".to_vec()], dir.path())?);
+    /// let stats = CorpusStats::new(3.0, 2.0, Default::default());
+    /// let is_red = |v: &[u8]| v == b"red";
+    /// let filter = [kevy_text::Filter::new(0, &is_red)];
+    /// let q = kevy_window::ColdPageQuery::parse(b"apple", &stats, 10).with_filter(&filter);
+    /// let page = cold.cold_page(&q);
+    /// assert_eq!(page.hits.len(), 1);
+    /// assert_eq!(page.hits[0].key, b"d:1");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub filter: &'a [kevy_text::Filter<'a>],
     /// `SORT`: the page order is the sort key's, not the score's.
+    ///
+    /// ```
+    /// # use kevy_text::{CorpusStats, SegmentShape, TextSegment};
+    /// # let dir = kevy_tmpdir::TmpDir::new("text-cold-doc");
+    /// let mut ts = TextSegment::with_shape(SegmentShape::default().with_values(1));
+    /// for (key, text, colour) in [("d:1", "red apple", "red"), ("d:2", "green apple", "green"), ("d:3", "red fig", "red")] {
+    ///     ts.apply_doc(key.as_bytes(), Some(&[(text.as_bytes().to_vec(), 1.0)]), &[Some(colour.as_bytes())]);
+    /// }
+    /// let mut cold = kevy_window::TextColdDir::new();
+    /// assert!(cold.freeze_batch(&mut ts, b"t.body", &[b"d:1".to_vec(), b"d:2".to_vec()], dir.path())?);
+    /// let stats = CorpusStats::new(3.0, 2.0, Default::default());
+    /// let by_colour = |v: &[u8]| Some(v.to_vec());
+    /// let sort = kevy_text::Sort::new(0, &by_colour);
+    /// let q = kevy_window::ColdPageQuery::parse(b"apple", &stats, 10).with_sort(&sort);
+    /// let keys: Vec<Vec<u8>> = cold.cold_page(&q).hits.into_iter().map(|h| h.key).collect();
+    /// assert_eq!(keys, [b"d:2".to_vec(), b"d:1".to_vec()]); // "green" < "red"
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub sort: Option<&'a kevy_text::Sort<'a>>,
     /// `DISTINCT`: collapse to the best hit per value identity.
+    ///
+    /// ```
+    /// # use kevy_text::{CorpusStats, SegmentShape, TextSegment};
+    /// # let dir = kevy_tmpdir::TmpDir::new("text-cold-doc");
+    /// let mut ts = TextSegment::with_shape(SegmentShape::default().with_values(1));
+    /// for (key, text, colour) in [("d:1", "red apple", "red"), ("d:2", "green apple", "green"), ("d:3", "red fig", "red")] {
+    ///     ts.apply_doc(key.as_bytes(), Some(&[(text.as_bytes().to_vec(), 1.0)]), &[Some(colour.as_bytes())]);
+    /// }
+    /// let mut cold = kevy_window::TextColdDir::new();
+    /// assert!(cold.freeze_batch(&mut ts, b"t.body", &[b"d:1".to_vec(), b"d:2".to_vec()], dir.path())?);
+    /// let stats = CorpusStats::new(3.0, 2.0, Default::default());
+    /// let colour = |v: &[u8]| Some(v.to_vec());
+    /// let distinct = kevy_text::Distinct::new(0, &colour);
+    /// let q = kevy_window::ColdPageQuery::parse(b"red", &stats, 10);
+    /// assert_eq!(cold.cold_page(&q).hits.len(), 1); // only d:1 of the frozen two says "red"
+    /// let q = kevy_window::ColdPageQuery::parse(b"apple", &stats, 10).with_distinct(&distinct);
+    /// assert_eq!(cold.cold_page(&q).hits.len(), 2); // two colours, one hit each
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub distinct: Option<&'a kevy_text::Distinct<'a>>,
     /// `FACET` fields to count over the (filtered) match set.
+    ///
+    /// ```
+    /// # use kevy_text::{CorpusStats, SegmentShape, TextSegment};
+    /// # let dir = kevy_tmpdir::TmpDir::new("text-cold-doc");
+    /// let mut ts = TextSegment::with_shape(SegmentShape::default().with_values(1));
+    /// for (key, text, colour) in [("d:1", "red apple", "red"), ("d:2", "green apple", "green"), ("d:3", "red fig", "red")] {
+    ///     ts.apply_doc(key.as_bytes(), Some(&[(text.as_bytes().to_vec(), 1.0)]), &[Some(colour.as_bytes())]);
+    /// }
+    /// let mut cold = kevy_window::TextColdDir::new();
+    /// assert!(cold.freeze_batch(&mut ts, b"t.body", &[b"d:1".to_vec(), b"d:2".to_vec()], dir.path())?);
+    /// let stats = CorpusStats::new(3.0, 2.0, Default::default());
+    /// let colour = |v: &[u8]| Some(v.to_vec());
+    /// let facets = [kevy_text::Facet::new(0, &colour)];
+    /// let q = kevy_window::ColdPageQuery::parse(b"apple", &stats, 10).with_facets(&facets);
+    /// assert_eq!(cold.cold_page(&q).facets[0].len(), 2); // red and green
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub facets: &'a [kevy_text::Facet<'a>],
     /// How deep a page the merge needs (LIMIT + OFFSET).
+    ///
+    /// ```
+    /// # use kevy_text::{CorpusStats, SegmentShape, TextSegment};
+    /// # let dir = kevy_tmpdir::TmpDir::new("text-cold-doc");
+    /// let mut ts = TextSegment::with_shape(SegmentShape::default().with_values(1));
+    /// for (key, text, colour) in [("d:1", "red apple", "red"), ("d:2", "green apple", "green"), ("d:3", "red fig", "red")] {
+    ///     ts.apply_doc(key.as_bytes(), Some(&[(text.as_bytes().to_vec(), 1.0)]), &[Some(colour.as_bytes())]);
+    /// }
+    /// let mut cold = kevy_window::TextColdDir::new();
+    /// assert!(cold.freeze_batch(&mut ts, b"t.body", &[b"d:1".to_vec(), b"d:2".to_vec()], dir.path())?);
+    /// let stats = CorpusStats::new(3.0, 2.0, Default::default());
+    /// let q = kevy_window::ColdPageQuery::parse(b"apple", &stats, 1);
+    /// assert_eq!(q.fetch, 1);
+    /// assert_eq!(cold.cold_page(&q).hits.len(), 1);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fetch: usize,
-}
-
-/// One cold hit: its page-order ingredients, ready to merge.
-#[derive(Debug, Clone, PartialEq)]
-#[non_exhaustive]
-pub struct ColdHit {
-    /// The row key this hit points at.
-    pub key: Vec<u8>,
-    /// Its BM25 relevance. Comparable across segments because the
-    /// document-frequency corrections are applied before the merge, not
-    /// after — a per-segment score would not be.
-    pub score: f64,
-    /// The sort key, when the query sorts by a stored value.
-    pub okey: Option<Vec<u8>>,
-}
-
-/// The cold half of one shard's pass-2 answer.
-#[derive(Debug, Clone, PartialEq, Default)]
-#[non_exhaustive]
-pub struct ColdPage {
-    /// Best `fetch` cold hits in the page's order.
-    pub hits: Vec<ColdHit>,
-    /// The returned hits' frozen stored values — what the merge reads
-    /// for sort/distinct identities and the origin's okeys/dkeys.
-    pub values: HashMap<Vec<u8>, Vec<Option<Vec<u8>>>>,
-    /// Per requested facet field, (identity, label, count) over the
-    /// filtered cold match set.
-    pub facets: Vec<Vec<kevy_text::Bucket>>,
 }
 
 impl<'a> ColdPageQuery<'a> {
@@ -161,6 +240,21 @@ impl TextColdDir {
     /// live df across every cold segment (one fence descent per token
     /// per segment; the doc/length halves are in-memory numbers, no
     /// I/O at all).
+    ///
+    /// ```
+    /// # use kevy_text::{CorpusStats, SegmentShape, TextSegment};
+    /// # let dir = kevy_tmpdir::TmpDir::new("text-cold-doc");
+    /// let mut ts = TextSegment::with_shape(SegmentShape::default().with_values(1));
+    /// for (key, text, colour) in [("d:1", "red apple", "red"), ("d:2", "green apple", "green"), ("d:3", "red fig", "red")] {
+    ///     ts.apply_doc(key.as_bytes(), Some(&[(text.as_bytes().to_vec(), 1.0)]), &[Some(colour.as_bytes())]);
+    /// }
+    /// let mut cold = kevy_window::TextColdDir::new();
+    /// assert!(cold.freeze_batch(&mut ts, b"t.body", &[b"d:1".to_vec(), b"d:2".to_vec()], dir.path())?);
+    /// let (n_docs, total_len, df) = cold.cold_stats(&[b"apple".to_vec(), b"fig".to_vec()]);
+    /// assert_eq!((n_docs, total_len), (2, 4)); // d:3 is still hot
+    /// assert_eq!(df, [(b"apple".to_vec(), 2), (b"fig".to_vec(), 0)]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn cold_stats(&self, tokens: &[Vec<u8>]) -> (u64, u64, Vec<(Vec<u8>, u32)>) {
         let n_docs: u64 = self.segs.iter().map(|c| c.n_docs).sum();
         let total_len: u64 = self.segs.iter().map(|c| c.total_len).sum();
@@ -182,6 +276,22 @@ impl TextColdDir {
 
     /// Pass-2 contribution: the clause-faithful cold page (see the
     /// module doc for what each clause does here).
+    ///
+    /// ```
+    /// # use kevy_text::{CorpusStats, SegmentShape, TextSegment};
+    /// # let dir = kevy_tmpdir::TmpDir::new("text-cold-doc");
+    /// let mut ts = TextSegment::with_shape(SegmentShape::default().with_values(1));
+    /// for (key, text, colour) in [("d:1", "red apple", "red"), ("d:2", "green apple", "green"), ("d:3", "red fig", "red")] {
+    ///     ts.apply_doc(key.as_bytes(), Some(&[(text.as_bytes().to_vec(), 1.0)]), &[Some(colour.as_bytes())]);
+    /// }
+    /// let mut cold = kevy_window::TextColdDir::new();
+    /// assert!(cold.freeze_batch(&mut ts, b"t.body", &[b"d:1".to_vec(), b"d:2".to_vec()], dir.path())?);
+    /// let stats = CorpusStats::new(3.0, 2.0, Default::default());
+    /// let page = cold.cold_page(&kevy_window::ColdPageQuery::parse(b"green apple", &stats, 10));
+    /// assert_eq!(page.hits[0].key, b"d:2"); // matches both terms
+    /// assert!(page.hits[0].score > page.hits[1].score);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn cold_page(&self, q: &ColdPageQuery) -> ColdPage {
         let acc = self.accumulate(q);
         let need_values = !q.filter.is_empty()

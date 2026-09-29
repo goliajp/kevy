@@ -7,6 +7,24 @@
 //! index is rebuilt from them on boot) — so a failed slide simply
 //! leaves the tree untouched (the batch is read before it is cut),
 //! and a restart drops the segment set and re-slides.
+//!
+//! ```
+//! use kevy_index::{IndexValue, Segment, ValType, WindowShape, WindowSpec};
+//! # let dir = kevy_tmpdir::TmpDir::new("window-doc");
+//! // keep the last 100 units of `ts` hot, evicting in buckets of 50
+//! let mut w = kevy_window::WindowRt::new(WindowSpec::new("ts", 100, 50), WindowShape::PlainI64);
+//! let mut seg = Segment::new();
+//! for ts in [10, 20, 300] {
+//!     seg.apply(format!("r:{ts}").as_bytes(), Some(IndexValue::I64(ts)));
+//! }
+//! assert!(w.slide(b"t.ts", &mut seg, dir.path())?);
+//!
+//! // the two old entries left the tree and are answered from the cold side
+//! let (lo, hi) = (IndexValue::I64(0), IndexValue::I64(1_000));
+//! assert_eq!(seg.count(&lo, &hi), 1);
+//! assert_eq!(w.cold_count(ValType::I64, &lo, &hi)?, 2);
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
 
 //! Every public item here is documented and the lint holds it.
 // Best-effort removal, on paths where the file is being abandoned.
@@ -17,7 +35,9 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+mod cold_read;
 mod error;
+mod seal;
 #[path = "text.rs"]
 mod text;
 
@@ -37,12 +57,26 @@ const _: () = {
 };
 
 use kevy_index::{
-    ColdBloom, ColdEntryRow, FacetBucket, IndexValue, ScalarClauses, ScalarHit, ValType,
-    WindowAudit, WindowShape, WindowSpec, claused_over, decode_seg_key, decode_seg_values,
-    encode_seg_values, seg_bounds, seg_key, values_pass, window_bound,
+    ColdBloom, ValType, WindowAudit, WindowShape, WindowSpec, decode_seg_key, window_bound,
 };
 
 /// One index's window state on one shard.
+///
+/// ```
+/// # use kevy_index::{IndexValue, Segment, ValType, WindowShape, WindowSpec};
+/// # let dir = kevy_tmpdir::TmpDir::new("window-doc");
+/// let mut w = kevy_window::WindowRt::new(WindowSpec::new("ts", 100, 50), WindowShape::PlainI64);
+/// let mut seg = Segment::new();
+/// for ts in [10, 20, 300] {
+///     seg.apply(format!("r:{ts}").as_bytes(), Some(IndexValue::I64(ts)));
+/// }
+/// assert!(w.slide(b"t.ts", &mut seg, dir.path())?);
+/// assert_eq!(w.boundary(), 200);
+/// let cold = w.cold_hits(ValType::I64, &IndexValue::I64(0), &IndexValue::I64(1_000), None, 10)?;
+/// let keys: Vec<&[u8]> = cold.iter().map(|(k, _)| k.as_slice()).collect();
+/// assert_eq!(keys, [&b"r:10"[..], b"r:20"]);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Debug)]
 pub struct WindowRt {
     /// The declared window — width, column and retention — as the catalog
@@ -94,6 +128,13 @@ impl WindowRt {
     /// admitted sets it, no cold segments, and a fresh bloom. Nothing is
     /// read from disk here — a restart rebuilds by replaying, not by
     /// trusting a persisted boundary.
+    ///
+    /// ```
+    /// use kevy_index::{WindowShape, WindowSpec};
+    /// let w = kevy_window::WindowRt::new(WindowSpec::new("ts", 100, 50), WindowShape::PlainI64);
+    /// assert_eq!(w.boundary(), i64::MIN);
+    /// assert!(!w.has_cold());
+    /// ```
     pub fn new(spec: WindowSpec, shape: WindowShape) -> Self {
         Self {
             spec,
@@ -150,6 +191,21 @@ impl WindowRt {
     /// that answers `false` here can skip the cold merge entirely, which
     /// is the common case and the reason this is a field check rather
     /// than a directory scan.
+    ///
+    /// ```
+    /// # use kevy_index::{IndexValue, Segment, WindowShape, WindowSpec};
+    /// # let dir = kevy_tmpdir::TmpDir::new("window-doc");
+    /// let mut w = kevy_window::WindowRt::new(WindowSpec::new("ts", 100, 50), WindowShape::PlainI64);
+    /// let mut seg = Segment::new();
+    /// seg.apply(b"r:10", Some(IndexValue::I64(10)));
+    /// assert!(!w.slide(b"t.ts", &mut seg, dir.path())?); // nothing is out of the window yet
+    /// assert!(!w.has_cold());
+    ///
+    /// seg.apply(b"r:300", Some(IndexValue::I64(300)));
+    /// assert!(w.slide(b"t.ts", &mut seg, dir.path())?);
+    /// assert!(w.has_cold());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn has_cold(&self) -> bool {
         !self.cold.is_empty()
     }
@@ -158,6 +214,20 @@ impl WindowRt {
     /// this are cold. `i64::MIN` = nothing has evicted yet. Read by
     /// the window-narrowing observation (a query's `lower - boundary`
     /// margin), never interpreted beyond ordering.
+    ///
+    /// ```
+    /// # use kevy_index::{IndexValue, Segment, ValType, WindowShape, WindowSpec};
+    /// # let dir = kevy_tmpdir::TmpDir::new("window-doc");
+    /// let mut w = kevy_window::WindowRt::new(WindowSpec::new("ts", 100, 50), WindowShape::PlainI64);
+    /// let mut seg = Segment::new();
+    /// for ts in [10, 20, 300] {
+    ///     seg.apply(format!("r:{ts}").as_bytes(), Some(IndexValue::I64(ts)));
+    /// }
+    /// assert!(w.slide(b"t.ts", &mut seg, dir.path())?);
+    /// // max 300, minus the span of 100, floored to the bucket of 50
+    /// assert_eq!(w.boundary(), 200);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn boundary(&self) -> i64 {
         self.w
     }
@@ -175,6 +245,24 @@ impl WindowRt {
     /// map entry that shadows nothing, which is the point: the reach
     /// is the current sequence, and anything this row is given later
     /// is sealed above it.
+    ///
+    /// ```
+    /// # use kevy_index::{IndexValue, Segment, ValType, WindowShape, WindowSpec};
+    /// # let dir = kevy_tmpdir::TmpDir::new("window-doc");
+    /// let mut w = kevy_window::WindowRt::new(WindowSpec::new("ts", 100, 50), WindowShape::PlainI64);
+    /// let mut seg = Segment::new();
+    /// for ts in [10, 20, 300] {
+    ///     seg.apply(format!("r:{ts}").as_bytes(), Some(IndexValue::I64(ts)));
+    /// }
+    /// assert!(w.slide(b"t.ts", &mut seg, dir.path())?);
+    /// let all = (IndexValue::I64(0), IndexValue::I64(1_000));
+    /// assert_eq!(w.cold_count(ValType::I64, &all.0, &all.1)?, 2);
+    ///
+    /// // r:10 is rewritten: its cold entry is stale and drops out of cold reads
+    /// w.on_row_write(b"r:10");
+    /// assert_eq!(w.cold_count(ValType::I64, &all.0, &all.1)?, 1);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn on_row_write(&mut self, row_key: &[u8]) {
         if self.bloom.contains(row_key) {
             self.tombs.insert(row_key.to_vec(), self.seq);
@@ -189,6 +277,23 @@ impl WindowRt {
     /// range, because the caller wants "everything cold" and building
     /// an unbounded upper bound differs per tree shape — a segment
     /// already knows its own first and last key.
+    ///
+    /// ```
+    /// # use kevy_index::{IndexValue, Segment, ValType, WindowShape, WindowSpec};
+    /// # let dir = kevy_tmpdir::TmpDir::new("window-doc");
+    /// let mut w = kevy_window::WindowRt::new(WindowSpec::new("ts", 100, 50), WindowShape::PlainI64);
+    /// let mut seg = Segment::new();
+    /// for ts in [10, 20, 300] {
+    ///     seg.apply(format!("r:{ts}").as_bytes(), Some(IndexValue::I64(ts)));
+    /// }
+    /// assert!(w.slide(b"t.ts", &mut seg, dir.path())?);
+    /// let a = w.audit(ValType::I64).expect("something has slid");
+    /// assert_eq!((a.boundary, a.shape, a.cold_live), (200, WindowShape::PlainI64, 2));
+    ///
+    /// let fresh = kevy_window::WindowRt::new(WindowSpec::new("ts", 100, 50), WindowShape::PlainI64);
+    /// assert!(fresh.audit(ValType::I64).is_none());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn audit(&self, ty: ValType) -> Option<WindowAudit> {
         if self.w == i64::MIN {
             return None;
@@ -215,133 +320,23 @@ impl WindowRt {
         Some(WindowAudit::new(self.w, self.shape, cold_live))
     }
 
-    /// Cold count of values in `[min, max]`: fast whole-segment
-    /// arithmetic while no tombstones exist (the common state), a
-    /// decode walk once any do. `Err` = a segment refused (corrupt
-    /// derived spill) — the query reports it, never a partial number.
-    pub fn cold_count(
-        &self,
-        ty: ValType,
-        min: &IndexValue,
-        max: &IndexValue,
-    ) -> Result<u64, ColdError> {
-        let (lo, hi) = seg_bounds(min, max);
-        if self.tombs.is_empty() {
-            let mut n = 0u64;
-            for (_, s) in &self.cold {
-                n += s.count_range(&lo, &hi)?;
-            }
-            return Ok(n);
-        }
-        Ok(self.cold_hits(ty, min, max, None, usize::MAX)?.len() as u64)
-    }
-
-    /// Cold hits of `[min, max]` in value order, tombstones skipped
-    /// and — when a page resumes — everything at or before `cursor`
-    /// skipped BEFORE the limit counts, at most `limit`. (Counting
-    /// first and filtering at the merge starves the cold side on any
-    /// page after the first: the limit fills with pre-cursor entries
-    /// that are then all dropped.) Segments hold disjoint ascending
-    /// value ranges (each slide covers `[old_w, new_w)`), so chaining
-    /// them in creation order IS value order. `Err` on a corrupt
-    /// segment — never a silent partial page.
-    pub fn cold_hits(
-        &self,
-        ty: ValType,
-        min: &IndexValue,
-        max: &IndexValue,
-        cursor: Option<&kevy_index::Cursor>,
-        limit: usize,
-    ) -> Result<Vec<(Vec<u8>, IndexValue)>, ColdError> {
-        let (lo, hi) = seg_bounds(min, max);
-        let mut out = Vec::new();
-        for (seq, seg) in &self.cold {
-            for r in seg.range(&lo, &hi) {
-                let (k, _) = r?;
-                let Some((v, row)) = decode_seg_key(ty, &k) else { continue };
-                if self.shadowed(&row, *seq) {
-                    continue;
-                }
-                if cursor.is_some_and(|c| (&v, row.as_slice()) <= (&c.value, c.key.as_slice())) {
-                    continue;
-                }
-                out.push((row, v));
-                if out.len() >= limit {
-                    return Ok(out);
-                }
-            }
-        }
-        Ok(out)
-    }
-
-    /// The clause-carrying cold count: the FILTER predicates applied
-    /// to each live cold entry's payload values. `Err` on a corrupt
-    /// segment — the query reports it, never a partial number.
-    pub fn cold_claused_count(
-        &self,
-        ty: ValType,
-        min: &IndexValue,
-        max: &IndexValue,
-        filters: &[(usize, kevy_index::ValueTest)],
-    ) -> Result<u64, ColdError> {
-        let mut n = 0u64;
-        for (_, _, vals) in self.decode_range(ty, min, max, None)? {
-            if values_pass(&vals, filters) {
-                n += 1;
-            }
-        }
-        Ok(n)
-    }
-
-    /// The clause-carrying cold page: every live cold entry in
-    /// `[min, max]` (past `cursor` when one rides), decoded and fed to
-    /// the shared clause walk — the same FILTER / SORT / DISTINCT /
-    /// FACET semantics the hot tree runs, over the frozen payloads.
-    pub fn cold_claused(
-        &self,
-        ty: ValType,
-        min: &IndexValue,
-        max: &IndexValue,
-        cursor: Option<&kevy_index::Cursor>,
-        c: &ScalarClauses<'_>,
-    ) -> Result<(Vec<ScalarHit>, Vec<Vec<FacetBucket>>), ColdError> {
-        let items = self.decode_range(ty, min, max, cursor)?;
-        Ok(claused_over(items.into_iter(), c))
-    }
-
-    /// Every live cold entry of `[min, max]` past `cursor`, decoded to
-    /// `(value, row_key, payload values)` in value order. `Err` on any
-    /// malformed key or payload — corrupt derived spill refuses.
-    fn decode_range(
-        &self,
-        ty: ValType,
-        min: &IndexValue,
-        max: &IndexValue,
-        cursor: Option<&kevy_index::Cursor>,
-    ) -> Result<Vec<ColdEntryRow>, ColdError> {
-        let (lo, hi) = seg_bounds(min, max);
-        let mut out = Vec::new();
-        for (seq, seg) in &self.cold {
-            for r in seg.range(&lo, &hi) {
-                let (k, payload) = r?;
-                let (v, row) = decode_seg_key(ty, &k).ok_or(ColdError::CorruptKey)?;
-                if self.shadowed(&row, *seq) {
-                    continue;
-                }
-                if cursor.is_some_and(|c| (&v, row.as_slice()) <= (&c.value, c.key.as_slice())) {
-                    continue;
-                }
-                let vals = decode_seg_values(&payload).ok_or(ColdError::CorruptPayload)?;
-                out.push((v, row, vals));
-            }
-        }
-        Ok(out)
-    }
-
     /// The row keys that would evict if the boundary advanced now —
     /// the row-eviction half reads this BEFORE [`Self::slide`] cuts
     /// the index, so a failed row eviction leaves both layers hot and
     /// the next tick retries the whole batch. No state changes.
+    ///
+    /// ```
+    /// use kevy_index::{IndexValue, Segment, WindowShape, WindowSpec};
+    /// let w = kevy_window::WindowRt::new(WindowSpec::new("ts", 100, 50), WindowShape::PlainI64);
+    /// let mut seg = Segment::new();
+    /// for ts in [10, 20, 300] {
+    ///     seg.apply(format!("r:{ts}").as_bytes(), Some(IndexValue::I64(ts)));
+    /// }
+    /// assert_eq!(w.pending_rows(&seg), Some(vec![b"r:10".to_vec(), b"r:20".to_vec()]));
+    ///
+    /// seg.remove(b"r:300"); // now everything is inside the window
+    /// assert_eq!(w.pending_rows(&seg), None);
+    /// ```
     pub fn pending_rows(&self, seg: &kevy_index::Segment) -> Option<Vec<Vec<u8>>> {
         let max = seg.max_value()?.window_value(self.shape)?;
         let target = bucket_floor(max.saturating_sub(self.spec.span), self.spec.bucket);
@@ -357,6 +352,23 @@ impl WindowRt {
     /// into a segment. One comparison when there is nothing to do.
     /// Build-then-cut: an I/O failure leaves the tree untouched and
     /// the boundary unmoved — the next tick retries.
+    ///
+    /// ```
+    /// use kevy_index::{IndexValue, Segment, WindowShape, WindowSpec};
+    /// # let dir = kevy_tmpdir::TmpDir::new("window-doc");
+    /// let mut w = kevy_window::WindowRt::new(WindowSpec::new("ts", 100, 50), WindowShape::PlainI64);
+    /// let mut seg = Segment::new();
+    /// for ts in [10, 20, 300] {
+    ///     seg.apply(format!("r:{ts}").as_bytes(), Some(IndexValue::I64(ts)));
+    /// }
+    /// assert!(w.slide(b"t.ts", &mut seg, dir.path())?);
+    /// assert_eq!(seg.stats().entries, 1); // only r:300 stays in the tree
+    ///
+    /// // a second tick with nothing new is one comparison and moves nothing
+    /// assert!(!w.slide(b"t.ts", &mut seg, dir.path())?);
+    /// assert_eq!(w.idle_ticks(), 1);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn slide(
         &mut self,
         index_name: &[u8],
@@ -378,7 +390,7 @@ impl WindowRt {
             return Ok(false);
         }
         if !self.cleaned {
-            clean_stale_derived(index_name, segs_dir)?;
+            seal::clean_stale_derived(index_name, segs_dir)?;
             self.cleaned = true;
         }
         let file = self.build_segment(index_name, seg, &bound, segs_dir)?;
@@ -397,89 +409,9 @@ impl WindowRt {
         self.w = target;
         Ok(true)
     }
-
-    /// `KEVY_PROBE_SLIDE=1`: one line per slide with what was sealed,
-    /// what left the tree, and how many shadows are outstanding.
-    ///
-    /// This is the instrument that found the stale-tombstone loss. The
-    /// first three numbers refute the obvious theory (the seal drops
-    /// what arrives mid-build — it does not; sealed always equals
-    /// split_off), which is what left the tombstone count as the only
-    /// remaining place the missing rows could be.
-    fn probe(&self, index_name: &[u8], split_off: usize) {
-        if std::env::var_os("KEVY_PROBE_SLIDE").is_none() {
-            return;
-        }
-        let sealed = self.cold.last().map(|c| c.1.meta().records).unwrap_or(0);
-        eprintln!(
-            "PROBE slide {} sealed={sealed} split_off={split_off} tombs={} {}",
-            String::from_utf8_lossy(index_name),
-            self.tombs.len(),
-            if sealed as usize == split_off { "ok" } else { "MISMATCH" }
-        );
-    }
-
-    /// Seal the below-bound prefix into a manifest-registered segment
-    /// file; the tree is not touched.
-    fn build_segment(
-        &mut self,
-        index_name: &[u8],
-        seg: &kevy_index::Segment,
-        bound: &IndexValue,
-        segs_dir: &Path,
-    ) -> Result<String, ColdError> {
-        std::fs::create_dir_all(segs_dir).map_err(ColdError::Io)?;
-        let file = format!("idx-{}-{}.seg", hex_stem(index_name), self.seq);
-        self.seq += 1;
-        let path = segs_dir.join(&file);
-        let build = || -> Result<kevy_seg::SegMeta, ColdError> {
-            let mut b = kevy_seg::SegBuilder::create(&path)?;
-            for (v, k) in seg.iter_below(bound) {
-                // The payload carries the row's stored VALUES so the
-                // clause-carrying cold path never re-reads the row
-                // (which may itself have gone cold). No declared
-                // values = the empty payload, the a-train shape.
-                let vals = seg.stored_row(k);
-                b.push(&seg_key(v, k), &encode_seg_values(&vals))?;
-            }
-            Ok(b.finish()?)
-        };
-        let meta = build().inspect_err(|_| {
-            let _ = std::fs::remove_file(&path);
-        })?;
-        let mut m = kevy_seg::Manifest::open(segs_dir)?;
-        m.add(
-            kevy_seg::ManifestEntry::new(file.clone(), meta)
-                .with_meta([b"idxcold:", index_name].concat()),
-        )?;
-        Ok(file)
-    }
-}
-
-/// Drop a previous run's derived segments for `index_name`: their
-/// manifest entries unregister first, then the files unlink (the
-/// ledger never points at nothing).
-fn clean_stale_derived(index_name: &[u8], segs_dir: &Path) -> Result<(), ColdError> {
-    if !segs_dir.exists() {
-        return Ok(());
-    }
-    let mut m = kevy_seg::Manifest::open(segs_dir)?;
-    let tag = [b"idxcold:", index_name].concat();
-    let stale: Vec<String> = m.live().filter(|e| e.meta == tag).map(|e| e.file.clone()).collect();
-    for f in stale {
-        m.drop_seg(&f)?;
-        let _ = std::fs::remove_file(segs_dir.join(&f));
-    }
-    Ok(())
 }
 
 /// The window boundary advances in whole buckets (floor).
 fn bucket_floor(v: i64, bucket: i64) -> i64 {
     v - v.rem_euclid(bucket)
-}
-
-/// Index names are free bytes; the segment file name needs a safe
-/// stem. Hex is unambiguous and the manifest carries the real name.
-fn hex_stem(name: &[u8]) -> String {
-    name.iter().map(|b| format!("{b:02x}")).collect()
 }
