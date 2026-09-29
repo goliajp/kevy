@@ -33,3 +33,5 @@ kevy-testnet = { path = "../kevy-testnet" }
 kevy = { path = "../kevy", version = "6.4.0" }
 kevy-rt = { path = "../kevy-rt", version = "6.4.0" }
 kevy-replicate = { path = "../kevy-replicate", version = "6.4.0" }
+# the documentation's encrypted-port stand-in runs the Noise responder
+kevy-noise = { path = "../kevy-noise", version = "6.4.0" }
