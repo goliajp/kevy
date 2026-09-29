@@ -134,6 +134,13 @@ impl Drop for TmpDir {
     }
 }
 
+// Send and Sync are part of the public contract: a change that loses
+// either fails to compile here rather than in a caller.
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<TmpDir>();
+};
+
 #[cfg(test)]
 mod tests {
     use super::TmpDir;

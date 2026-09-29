@@ -87,5 +87,15 @@ pub use heap::{EMPTY_SPAN_HYSTERESIS, Heap, PER_CLASS_CAP};
 pub use large::large_stats;
 pub use stats::Stats;
 
+// Send and Sync are part of the public contract: a change that loses
+// either fails to compile here rather than in a caller.
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<Stats>();
+    send_sync::<pagemap::SpanMeta>();
+    #[cfg(feature = "global")]
+    send_sync::<KevyAlloc>();
+};
+
 #[cfg(test)]
 mod tests;

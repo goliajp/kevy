@@ -194,5 +194,19 @@ impl core::ops::BitOrAssign for Interest {
 /// How many raw events to pull from the kernel per `wait` call.
 const WAIT_CAPACITY: usize = 1024;
 
+// Send and Sync are part of the public contract: a change that loses
+// either fails to compile here rather than in a caller.
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<Event>();
+    send_sync::<Interest>();
+    send_sync::<Poller>();
+    send_sync::<Socket>();
+    send_sync::<Waker>();
+    send_sync::<FileMap>();
+    send_sync::<MapSync>();
+    send_sync::<RawMode>();
+};
+
 #[cfg(test)]
 mod tests;

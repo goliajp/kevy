@@ -215,6 +215,25 @@ fn autodetect() -> Option<PathBuf> {
     None
 }
 
+// Send and Sync are part of the public contract: a change that loses
+// either fails to compile here rather than in a caller.
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<Config>();
+    send_sync::<CliOverrides>();
+    send_sync::<ConfigError>();
+    send_sync::<ValueError>();
+    send_sync::<NotificationFlags>();
+    send_sync::<PeerEntry>();
+    send_sync::<ScopeEntry>();
+    send_sync::<TierBudgetSpec>();
+    send_sync::<AppendFsync>();
+    send_sync::<EvictionPolicy>();
+    send_sync::<LogLevel>();
+    send_sync::<LogOutput>();
+    send_sync::<ReplicationRole>();
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;

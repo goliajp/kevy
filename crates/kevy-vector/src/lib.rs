@@ -68,3 +68,13 @@ pub mod count {
 pub use dist::{Distance, parse_vector};
 pub use hnsw::Hnsw;
 pub use params::{HnswParams, VectorStats};
+
+// Send and Sync are part of the public contract: a change that loses
+// either fails to compile here rather than in a caller.
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<Distance>();
+    send_sync::<HnswParams>();
+    send_sync::<VectorStats>();
+    send_sync::<Hnsw>();
+};

@@ -25,3 +25,20 @@ pub use segment::{
 };
 pub use segment::{Clauses, parse_clauses};
 pub use token::{KevyTokenizer, Tokenizer, tokenize, tokenize_spans};
+
+// Send and Sync are part of the public contract: a change that loses
+// either fails to compile here rather than in a caller.
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<TextSegment>();
+    send_sync::<TextMatch>();
+    send_sync::<TextStats>();
+    send_sync::<CorpusStats>();
+    send_sync::<SegmentShape>();
+    send_sync::<FacetedMatches>();
+    send_sync::<SortOrder>();
+    send_sync::<KevyTokenizer>();
+    send_sync::<cold::ColdEntry>();
+    send_sync::<cold::FrozenBucket>();
+    send_sync::<cold::FwdRecord>();
+};
