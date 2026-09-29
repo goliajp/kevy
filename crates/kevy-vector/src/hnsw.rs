@@ -131,7 +131,18 @@ impl Hnsw {
     /// assert_eq!(h.dim(), 128);
     /// assert_eq!(h.stats().vectors, 0);
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// When `params.m < 2`. Node levels are drawn with scale `1/ln(M)`,
+    /// which is infinite at 1 — every node would ask for an unbounded
+    /// number of layers — and a graph with no links at 0.
+    ///
+    /// ```should_panic
+    /// kevy_vector::Hnsw::new(4, kevy_vector::HnswParams::default().with_m(1));
+    /// ```
     pub fn new(dim: usize, params: HnswParams) -> Self {
+        assert!(params.m >= 2, "HNSW needs M >= 2, got {}", params.m);
         Self {
             params,
             dim,
