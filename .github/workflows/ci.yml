@@ -640,8 +640,8 @@ jobs:
           restore-keys: |
             cargo-release-profile-
 
-      - name: Test (workspace, --release --lib --tests)
-        run: cargo test --workspace --release --lib --tests
+      - name: Test (workspace, release-tests profile, --lib --tests)
+        run: cargo test --workspace --profile release-tests --lib --tests
 
   # ───────────── wasm32: kevy-bytes / -store / -embedded must build ─────────────
   wasm:
