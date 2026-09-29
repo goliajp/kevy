@@ -6,7 +6,7 @@
 //! implementations cannot drift.
 
 use crate::ast::{AlterKind, CreateIndex, CreateTable, CreateView, Stmt};
-use crate::{KevyType, SqlError, typemap};
+use crate::{SqlError, ValType, typemap};
 
 /// Mirrors kevy-index `MAX_COMPOSITE_COLS` (asserted by the round-trip
 /// test — a drift fails there, loudly).
@@ -36,13 +36,13 @@ pub(crate) struct Table {
     pub(crate) name: String,
     pub(crate) pk: String,
     /// `(name, type)` in declaration order.
-    pub(crate) columns: Vec<(String, KevyType)>,
+    pub(crate) columns: Vec<(String, ValType)>,
     pub(crate) indexes: Vec<Ix>,
     pub(crate) orderpaths: Vec<OrderPath>,
 }
 
 impl Table {
-    pub(crate) fn column_type(&self, c: &str) -> Option<KevyType> {
+    pub(crate) fn column_type(&self, c: &str) -> Option<ValType> {
         self.columns.iter().find(|(n, _)| n == c).map(|(_, t)| *t)
     }
 

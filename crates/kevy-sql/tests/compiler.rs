@@ -2,7 +2,7 @@
 //! view planning (engine views / cards / named missing-declaration
 //! errors), parameter slots, render_script shape, determinism.
 
-use kevy_sql::{Compilation, KevyType, compile};
+use kevy_sql::{Compilation, ValType, compile};
 
 const SHOP: &str = r"
 -- the cookbook schema
@@ -145,7 +145,7 @@ fn shop_schema_exact_argv() {
     assert_eq!(card.params.len(), 1);
     assert_eq!(card.params[0].n, 1);
     assert_eq!(card.params[0].column, "user_id");
-    assert_eq!(card.params[0].ty, KevyType::I64);
+    assert_eq!(card.params[0].ty, ValType::I64);
 }
 
 #[test]

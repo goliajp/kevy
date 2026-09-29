@@ -20,21 +20,39 @@
 use crate::{QueryCard, SqlError, lex, parse, schema, viewplan};
 
 /// Whether a declared query can be served, and by what.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// ```
+/// let p = kevy_sql::plan(
+///     "CREATE TABLE t (id bigint PRIMARY KEY, n bigint);
+///      CREATE INDEX ON t (n);
+///      CREATE VIEW big AS SELECT * FROM t WHERE n >= 10;
+///      CREATE VIEW odd AS SELECT * FROM t WHERE id = 1;",
+/// )?;
+/// assert!(matches!(p.queries[0].served, kevy_sql::Served::View { .. }));
+/// assert_eq!(p.queries[0].served.paths(), Some(&["t.n".to_string()][..]));
+/// assert!(!p.queries[1].served.is_served());
+/// # Ok::<(), kevy_sql::SqlError>(())
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Served {
-    /// Served by declared access paths, named.
-    Yes {
+    /// Served by the engine holding the whole query as a view.
+    View {
         /// The `table.column` paths this query rides, in argv order.
         paths: Vec<String>,
-        /// The `VIEW.CREATE` argv, when the engine can hold the whole
-        /// query as a view.
-        view: Option<Vec<String>>,
-        /// The runtime template, when it is a card instead.
-        card: Option<QueryCard>,
+        /// The `VIEW.CREATE` argv.
+        argv: Vec<String>,
+    },
+    /// Served by a runtime template the application binds and sends.
+    Card {
+        /// The `table.column` paths this query rides, in argv order.
+        paths: Vec<String>,
+        /// The query card.
+        card: QueryCard,
     },
     /// Not served, with the compiler's own refusal — which names the
     /// alternative rather than only saying no.
-    No {
+    Refused {
         /// The refusal, verbatim.
         reason: String,
     },
@@ -43,12 +61,22 @@ pub enum Served {
 impl Served {
     /// Whether this query can be served as declared.
     pub fn is_served(&self) -> bool {
-        matches!(self, Served::Yes { .. })
+        self.paths().is_some()
+    }
+
+    /// The `table.column` paths a served query rides, in argv order;
+    /// `None` when it is refused.
+    pub fn paths(&self) -> Option<&[String]> {
+        match self {
+            Served::View { paths, .. } | Served::Card { paths, .. } => Some(paths),
+            Served::Refused { .. } => None,
+        }
     }
 }
 
 /// One query's row in the plan.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct PlanEntry {
     /// The view name.
     pub name: String,
@@ -61,7 +89,8 @@ pub struct PlanEntry {
 }
 
 /// A migration plan: what to declare, and what becomes of each query.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct Plan {
     /// `TABLE.DECLARE` argv per table, declaration order.
     pub declares: Vec<Vec<String>>,
@@ -95,7 +124,7 @@ pub fn plan(sql: &str) -> Result<Plan, SqlError> {
     let mut queries = Vec::with_capacity(views.len());
     for v in &views {
         let served = match tables.iter().find(|t| t.name == v.table) {
-            None => Served::No {
+            None => Served::Refused {
                 reason: match dropped.iter().find(|(n, _)| *n == v.table) {
                     Some((_, why)) => {
                         format!("its table '{}' was not declarable — {why}", v.table)
@@ -108,14 +137,12 @@ pub fn plan(sql: &str) -> Result<Plan, SqlError> {
             },
             Some(t) => match viewplan::plan_view(v, t, &mut notes) {
                 Ok(viewplan::Planned::View(argv)) => {
-                    Served::Yes { paths: paths_in(&argv, &t.name), view: Some(argv), card: None }
+                    Served::View { paths: paths_in(&argv, &t.name), argv }
                 }
-                Ok(viewplan::Planned::Card(card)) => Served::Yes {
-                    paths: paths_in(&card.argv, &t.name),
-                    view: None,
-                    card: Some(card),
-                },
-                Err(e) => Served::No { reason: e.message },
+                Ok(viewplan::Planned::Card(card)) => {
+                    Served::Card { paths: paths_in(&card.argv, &t.name), card }
+                }
+                Err(e) => Served::Refused { reason: e.message },
             },
         };
         queries.push(PlanEntry {

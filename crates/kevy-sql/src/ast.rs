@@ -1,7 +1,7 @@
 //! The parsed statement shapes — deliberately exactly as wide as the
 //! compilable subset (everything wider errors by name in the parser).
 
-use crate::KevyType;
+use crate::ValType;
 
 /// One column of a `CREATE TABLE`.
 #[derive(Debug, Clone)]
@@ -10,7 +10,7 @@ pub(crate) struct ColumnDef {
     /// `None` = the SQL type is outside the compilable subset; the
     /// build step turns that into the named error (or a dropped-table
     /// row on the lenient path).
-    pub(crate) ty: Option<KevyType>,
+    pub(crate) ty: Option<ValType>,
     /// The SQL type as written (`bigserial`, `numeric`, …) — drives the
     /// honest-mapping notes.
     pub(crate) sql_ty: String,

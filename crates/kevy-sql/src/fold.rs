@@ -23,7 +23,14 @@ use kevy_scalar::Scalar;
 /// Typed, not pre-rendered — the CLI prints PG text forms while the
 /// probe runner follows sqllogictest's conventions (booleans as 1/0),
 /// and neither should pay for the other's rendering.
-#[derive(Debug)]
+///
+/// ```
+/// let f = kevy_sql::fold_select("SELECT lower('AB');", 0)?;
+/// assert_eq!(f.columns, [kevy_sql::Scalar::Text("ab".into())]);
+/// # Ok::<(), kevy_sql::SqlError>(())
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Folded {
     /// One value per SELECT column.
     pub columns: Vec<kevy_scalar::Scalar>,
