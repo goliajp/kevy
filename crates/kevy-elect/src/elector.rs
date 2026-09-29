@@ -21,43 +21,9 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
+pub use crate::config::ElectConfig;
 use crate::message::{Message, Role};
 use crate::persist::{ElectorPersist, NoPersist};
-
-/// Tunable timeouts. Defaults match the protocol spec — operators
-/// can override via the `[cluster]` config section once the
-/// kevy-server adapter (separate task) wires the live config in.
-#[derive(Debug, Clone, Copy)]
-pub struct ElectConfig {
-    /// Period between outbound `HB` per peer. Default 200 ms.
-    pub hb_interval: Duration,
-    /// Flag a peer DOWN after this duration without an inbound `HB`.
-    /// Default 5 s = 25 × `hb_interval` (a transient 1 s blip
-    /// doesn't trigger an election).
-    pub down_after: Duration,
-    /// Candidate waits this long for quorum `ACCEPT` before backing
-    /// off. Default 3 s.
-    pub election_timeout: Duration,
-    /// Backoff floor after a failed election attempt. Real wait
-    /// adds jitter up to `election_backoff_jitter` to prevent
-    /// dueling candidates from re-running synchronously.
-    pub election_backoff: Duration,
-    /// Random jitter added to `election_backoff` per attempt.
-    /// Default 4 s (so the real range is 1–5 s).
-    pub election_backoff_jitter: Duration,
-}
-
-impl Default for ElectConfig {
-    fn default() -> Self {
-        Self {
-            hb_interval: Duration::from_millis(200),
-            down_after: Duration::from_secs(5),
-            election_timeout: Duration::from_secs(3),
-            election_backoff: Duration::from_secs(1),
-            election_backoff_jitter: Duration::from_secs(4),
-        }
-    }
-}
 
 /// Per-peer scratch the elector keeps. Updated on every inbound `HB`.
 /// `last_epoch` / `last_role` are recorded for future observability
@@ -144,7 +110,8 @@ pub struct Elector {
 /// Source of jitter for election backoff. Tests use a fixed value;
 /// production uses `ElectJitter::System` which reads `Instant`
 /// + node_id as a poor-mans entropy. Pure-Rust 0-dep — no `rand` crate.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum ElectJitter {
     /// Fixed value (test-friendly, deterministic).
     Fixed(Duration),
@@ -187,7 +154,8 @@ impl ElectJitter {
 /// transport layer drains
 /// `Transport` each loop iteration and writes to the
 /// per-peer TCP connections.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct Outbound {
     /// Recipient. `"*"` (a sentinel — never a valid node_id since
     /// they're ASCII ≤ 32 B and operators don't use stars) means

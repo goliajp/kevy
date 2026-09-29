@@ -48,7 +48,8 @@ pub fn encode(msg: &Message) -> Vec<u8> {
 }
 
 /// Errors `decode` can surface.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum DecodeError {
     /// Buffer holds fewer bytes than the framed message header
     /// claims — read more from the socket and retry.
@@ -65,6 +66,23 @@ pub enum DecodeError {
     /// / `candidate`.
     BadRole,
 }
+
+impl std::fmt::Display for DecodeError {
+    /// ```
+    /// assert_eq!(kevy_elect::DecodeError::BadRole.to_string(), "election frame has an unknown role");
+    /// ```
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Truncated => "election frame is incomplete",
+            Self::Bad => "election frame is not a resp multi-bulk array",
+            Self::WrongShape => "election frame has an unknown verb or the wrong arity",
+            Self::BadNumeric => "election frame has a non-numeric epoch or offset",
+            Self::BadRole => "election frame has an unknown role",
+        })
+    }
+}
+
+impl std::error::Error for DecodeError {}
 
 /// Decode one [`Message`] off the front of `buf`. Returns the
 /// decoded message and the number of bytes consumed. The caller

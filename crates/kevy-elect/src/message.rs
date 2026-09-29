@@ -22,7 +22,8 @@
 /// Self-perceived role of a node in its heartbeat. The state
 /// machine in `kevy-elect`'s reactor decides which transitions are
 /// legal; this enum is just what gets put on the wire.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Role {
     /// This node currently accepts writes.
     Primary,
@@ -62,7 +63,8 @@ impl Role {
 
 /// One decoded message off the control wire. The four variants
 /// mirror the four verbs in the protocol spec.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Message {
     /// `HB <epoch> <node_id> <role> <repl_offset>` — heartbeat.
     /// Sent every `hb_interval_ms` (default 200 ms) by every node
