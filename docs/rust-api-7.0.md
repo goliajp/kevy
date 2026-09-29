@@ -428,6 +428,10 @@ Types:
   `owner()`, `spans()`, `foreign_bytes()`, `foreign_live()`;
   `segment::take_foreign(seg)` → `seg.take_foreign()`; `splice_foreign`
   is an `unsafe` method. `Stats` is `#[non_exhaustive]`.
+  `EMPTY_SPAN_HYSTERESIS` is gone: free pages go back to the OS once
+  they have gone unused for `PURGE_DELAY` reclaim sweeps, instead of
+  every sweep keeping the first four empty spans. `Segment::foreign_bytes()`
+  and `foreign_live()` now report the whole owning heap.
 - kevy-map: `KevyMap` and `KevySet` implement `IntoIterator` (`IntoIter`,
   `SetIntoIter`) and compare by contents with `PartialEq` / `Eq`.
 - kevy-ranktree: `range()` returns `Range`; `FromIterator`, `Extend`, and
