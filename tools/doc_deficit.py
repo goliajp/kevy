@@ -147,8 +147,10 @@ def main():
     print(f"docdeficit: {items} public items in {len(tables)} crates — "
           f"{documented} documented ({100 * documented / items:.1f}%), "
           f"{examples} with an executable example ({100 * examples / items:.1f}%)")
-    print(f"  owed: {items - documented} docs, {items - examples} examples "
-          f"across {len(symbols)} keys -> {shown(out)}")
+    owed_examples = sum(v for k, v in symbols.items() if k.endswith("/without-example"))
+    print(f"  owed: {items - documented} docs, {owed_examples} examples "
+          f"across {len(symbols)} keys -> {shown(out)} "
+          f"(binaries and cdylib-only crates carry no examples: cargo never runs them)")
     return 0
 
 
