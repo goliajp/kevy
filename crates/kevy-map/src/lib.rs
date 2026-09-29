@@ -47,6 +47,7 @@ mod map_keyed;
 mod raw_entry;
 mod scan;
 mod set;
+mod slot;
 
 pub use alloc::malloc_footprint;
 pub use into_iter::IntoIter;
