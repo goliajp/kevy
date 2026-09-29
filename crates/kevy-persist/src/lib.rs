@@ -213,6 +213,7 @@ const _: () = {
     send_sync::<RewritePlan>();
     send_sync::<RewriteStats>();
     send_sync::<RewritePolicy>();
+    #[cfg(not(target_arch = "wasm32"))]
     send_sync::<StageOpen>();
     send_sync::<PendingSync>();
     send_sync::<ReplayReport>();
