@@ -89,10 +89,10 @@ fn bloom_never_forgets_and_rarely_lies() {
 fn split_off_below_cuts_strictly_and_balances_the_books() {
     let mut s = Segment::new();
     for i in 0..100i64 {
-        s.apply(format!("row:{i:03}").as_bytes(), Some(v(i)));
+        s.apply(format!("row:{i:03}").as_bytes(), None, Some(v(i)));
     }
     // Two rows share the boundary value: both must stay hot.
-    s.apply(b"row:dup", Some(v(50)));
+    s.apply(b"row:dup", None, Some(v(50)));
     let before = s.stats();
 
     let evicted = s.split_off_below(&v(50));
@@ -110,7 +110,7 @@ fn split_off_below_cuts_strictly_and_balances_the_books() {
 
     // Evicted rows are fully forgotten: re-applying one is an insert,
     // not a replace (the reverse map was drained too).
-    s.apply(b"row:007", Some(v(7)));
+    s.apply(b"row:007", None, Some(v(7)));
     assert_eq!(s.stats().entries, after.entries + 1);
 
     // Emptying cut: everything strictly below MAX goes, books hit zero.
