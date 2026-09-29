@@ -6,8 +6,29 @@
 use std::time::Instant;
 
 use crate::Elector;
-use crate::elector::{Outbound, PeerView};
+use crate::elector::Outbound;
 use crate::message::{Message, Role};
+
+/// Per-peer scratch the elector keeps. Updated on every inbound `HB`.
+/// `last_epoch` / `last_role` are recorded for future observability
+/// surfaces (INFO replication's "seen-from peer" panel) — the
+/// election algorithm itself only consults `last_seen` (DOWN
+/// detector) and `last_repl_offset` (candidate selection).
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+// struct_field_names: the shared `last_` prefix is the point — every field is
+// the latest observation of that quantity from the peer's most recent HB.
+#[allow(clippy::struct_field_names)]
+pub(crate) struct PeerView {
+    /// Most recent `HB` reception time.
+    pub(crate) last_seen: Instant,
+    /// Epoch the peer claimed in its most recent `HB`.
+    pub(crate) last_epoch: u64,
+    /// Role the peer claimed in its most recent `HB`.
+    pub(crate) last_role: Role,
+    /// `repl_offset` the peer claimed in its most recent `HB`.
+    pub(crate) last_repl_offset: u64,
+}
 
 impl Elector {
     pub(crate) fn on_hb(
