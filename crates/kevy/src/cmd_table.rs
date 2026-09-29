@@ -91,7 +91,7 @@ pub(crate) fn cmd_table_declare<A: ArgvView + ?Sized>(
     let argv: Vec<&[u8]> = (0..args.len()).map(|i| &args[i] as &[u8]).collect();
     let (spec, globals) = match parse_table_declare_partitioned(&argv) {
         Ok(s) => s,
-        Err(e) => return encode_error(out, &e),
+        Err(e) => return encode_error(out, &e.to_wire()),
     };
     // The tiering floor discipline IDX.CREATE keeps (RFC §4 row 16):
     // compiled indexes are the fixed layer demotion cannot reclaim.
@@ -100,12 +100,12 @@ pub(crate) fn cmd_table_declare<A: ArgvView + ?Sized>(
     }
     let mut tcat = ctx.state.catalogs.table().map(|c| (*c).clone()).unwrap_or_default();
     if let Err(e) = tcat.create(spec.clone()) {
-        return encode_error(out, &e);
+        return encode_error(out, &e.to_wire());
     }
     let mut icat: Catalog = ctx.state.catalogs.index().map(|c| (*c).clone()).unwrap_or_default();
     let compiled = match spec.compile() {
         Ok(c) => c,
-        Err(e) => return encode_error(out, &e),
+        Err(e) => return encode_error(out, &e.to_wire()),
     };
     let n = ctx.state.nshards();
     if let Err(e) = crate::cmd_table_global::admit(&mut icat, compiled, &globals, sampler, n) {
@@ -132,7 +132,7 @@ pub(crate) fn cmd_table_ensure<A: ArgvView + ?Sized>(
     let argv: Vec<&[u8]> = (0..args.len()).map(|i| &args[i] as &[u8]).collect();
     let (spec, globals) = match parse_table_declare_partitioned(&argv) {
         Ok(s) => s,
-        Err(e) => return encode_error(out, &e),
+        Err(e) => return encode_error(out, &e.to_wire()),
     };
     let existing = ctx.state.catalogs.table().and_then(|c| c.get(&spec.name).cloned());
     match existing {
@@ -168,10 +168,10 @@ pub(crate) fn cmd_table_replace<A: ArgvView + ?Sized>(
     let argv: Vec<&[u8]> = (0..args.len()).map(|i| &args[i] as &[u8]).collect();
     let spec = match parse_table_declare_partitioned(&argv) {
         Ok((s, _)) => s,
-        Err(e) => return encode_error(out, &e),
+        Err(e) => return encode_error(out, &e.to_wire()),
     };
     if let Err(e) = spec.compile() {
-        return encode_error(out, &e);
+        return encode_error(out, &e.to_wire());
     }
     let exists = ctx.state.catalogs.table().and_then(|c| c.get(&spec.name).cloned()).is_some();
     if exists {

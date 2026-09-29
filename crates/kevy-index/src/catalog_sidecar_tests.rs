@@ -217,7 +217,10 @@ mod sidecar_v4_tests {
             .with_field("body")
             .with_group_by("g")
             .with_values(vec![ValueSpec::new("price")]);
-        assert_eq!(s.build().err(), Some("ERR VALUES requires KIND text|range|unique"));
+        assert_eq!(
+            s.build().err().map(|e| e.as_wire()),
+            Some("ERR VALUES requires KIND text|range|unique")
+        );
     }
 }
 

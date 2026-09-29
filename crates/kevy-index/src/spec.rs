@@ -31,8 +31,8 @@ use crate::spec_parts::{AnnSpec, FieldSpec, ValueSpec};
 ///     .with_field("age")
 ///     .with_group_by("city")
 ///     .build();
-/// assert_eq!(bad.err(), Some("ERR GROUPBY requires KIND agg"));
-/// # Ok::<(), &'static str>(())
+/// assert_eq!(bad.err().map(|e| e.as_wire()), Some("ERR GROUPBY requires KIND agg"));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct IndexSpec {
@@ -68,7 +68,7 @@ impl IndexSpec {
     ///     .build()?;
     /// assert_eq!(docs.fields().len(), 2);
     /// assert!(docs.has_positions());
-    /// # Ok::<(), &'static str>(())
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn builder(
         name: impl Into<Vec<u8>>,
@@ -99,7 +99,7 @@ impl IndexSpec {
     /// # use kevy_index::{IndexKind, IndexSpec, ValType};
     /// let s = IndexSpec::builder("n", "p:", IndexKind::Range, ValType::I64).with_field("f").build()?;
     /// assert_eq!(s.name(), b"n");
-    /// # Ok::<(), &'static str>(())
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn name(&self) -> &[u8] {
         &self.name
@@ -111,7 +111,7 @@ impl IndexSpec {
     /// # use kevy_index::{IndexKind, IndexSpec, ValType};
     /// let s = IndexSpec::builder("n", "p:", IndexKind::Range, ValType::I64).with_field("f").build()?;
     /// assert_eq!(s.prefix(), b"p:");
-    /// # Ok::<(), &'static str>(())
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn prefix(&self) -> &[u8] {
         &self.prefix
@@ -124,7 +124,7 @@ impl IndexSpec {
     /// # use kevy_index::{IndexKind, IndexSpec, ValType};
     /// let s = IndexSpec::builder("n", "p:", IndexKind::Range, ValType::I64).with_field("f").build()?;
     /// assert_eq!(s.fields()[0].name, b"f");
-    /// # Ok::<(), &'static str>(())
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn fields(&self) -> &[FieldSpec] {
         &self.fields
@@ -137,7 +137,7 @@ impl IndexSpec {
     /// # use kevy_index::{IndexKind, IndexSpec, ValType};
     /// let s = IndexSpec::builder("n", "p:", IndexKind::Range, ValType::I64).with_field("f").build()?;
     /// assert_eq!(s.field(), b"f");
-    /// # Ok::<(), &'static str>(())
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn field(&self) -> &[u8] {
         self.fields.first().map_or(&[][..], |f| f.name.as_slice())
@@ -149,7 +149,7 @@ impl IndexSpec {
     /// # use kevy_index::{IndexKind, IndexSpec, ValType};
     /// let s = IndexSpec::builder("n", "p:", IndexKind::Range, ValType::F64).with_field("f").build()?;
     /// assert_eq!(s.ty(), ValType::F64);
-    /// # Ok::<(), &'static str>(())
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn ty(&self) -> ValType {
         self.ty
@@ -161,7 +161,7 @@ impl IndexSpec {
     /// # use kevy_index::{IndexKind, IndexSpec, ValType};
     /// let s = IndexSpec::builder("n", "p:", IndexKind::Unique, ValType::Str).with_field("f").build()?;
     /// assert_eq!(s.kind(), IndexKind::Unique);
-    /// # Ok::<(), &'static str>(())
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn kind(&self) -> IndexKind {
         self.kind
@@ -176,7 +176,7 @@ impl IndexSpec {
     ///     .with_max_bytes(4096)
     ///     .build()?;
     /// assert_eq!(s.max_bytes(), 4096);
-    /// # Ok::<(), &'static str>(())
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn max_bytes(&self) -> u64 {
         self.max_bytes
@@ -191,7 +191,7 @@ impl IndexSpec {
     ///     .with_ann(AnnSpec::new(3))
     ///     .build()?;
     /// assert_eq!(s.ann().map(|a| a.dim), Some(3));
-    /// # Ok::<(), &'static str>(())
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn ann(&self) -> Option<AnnSpec> {
         self.ann
@@ -206,7 +206,7 @@ impl IndexSpec {
     ///     .with_group_by("status")
     ///     .build()?;
     /// assert_eq!(s.group_by(), Some(&b"status"[..]));
-    /// # Ok::<(), &'static str>(())
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn group_by(&self) -> Option<&[u8]> {
         self.group_by.as_deref()
@@ -219,7 +219,7 @@ impl IndexSpec {
     /// # use kevy_index::{IndexKind, IndexSpec, ValType};
     /// let s = IndexSpec::builder("t", "d:", IndexKind::Text, ValType::Str).with_field("b").build()?;
     /// assert!(!s.has_positions());
-    /// # Ok::<(), &'static str>(())
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn has_positions(&self) -> bool {
         self.with_positions
@@ -235,7 +235,7 @@ impl IndexSpec {
     ///     .with_values(vec![ValueSpec::new("year").with_type(ValType::I64)])
     ///     .build()?;
     /// assert_eq!(s.values()[0].ty, ValType::I64);
-    /// # Ok::<(), &'static str>(())
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn values(&self) -> &[ValueSpec] {
         &self.values
@@ -252,7 +252,7 @@ impl IndexSpec {
     ///     .with_composite(vec![CompositeCol::new("a", ValType::Str), CompositeCol::new("n", ValType::I64)])
     ///     .build()?;
     /// assert_eq!(s.composite().map(<[_]>::len), Some(2));
-    /// # Ok::<(), &'static str>(())
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn composite(&self) -> Option<&[CompositeCol]> {
         self.composite.as_deref()
@@ -272,7 +272,7 @@ impl IndexSpec {
     /// let s = IndexSpec::builder("n", "p:", IndexKind::Range, ValType::I64).with_field("f").build()?;
     /// let (fields, values) = s.read_row(|f| (f == b"f").then(|| b"7".to_vec()));
     /// assert_eq!((fields, values.len()), (vec![(b"7".to_vec(), 1.0)], 0));
-    /// # Ok::<(), &'static str>(())
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn read_row(&self, mut get: impl FnMut(&[u8]) -> Option<Vec<u8>>) -> RowInputs {
         let mut fields = Vec::with_capacity(self.fields.len());

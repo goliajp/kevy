@@ -204,18 +204,18 @@ fn where_grammar_parses_and_refuses() {
 fn bounds_errors_are_named() {
     let cols = schema();
     let unknown = WhereClause { eqs: vec![(b"nope".to_vec(), b"1".to_vec())], range: None };
-    let e = composite_bounds(&cols, &unknown, 0).unwrap_err();
+    let e = composite_bounds(&cols, &unknown, 0).unwrap_err().to_string();
     assert!(e.contains("'nope'") && e.contains("does not declare"), "{e}");
     // declared but out of order (b before a) — the prefix rule.
     let out_of_order = WhereClause { eqs: vec![(b"b".to_vec(), b"1".to_vec())], range: None };
-    let e = composite_bounds(&cols, &out_of_order, 0).unwrap_err();
+    let e = composite_bounds(&cols, &out_of_order, 0).unwrap_err().to_string();
     assert!(e.contains("leading prefix"), "{e}");
     // a bound that does not coerce.
     let bad = WhereClause {
         eqs: vec![(b"a".to_vec(), b"x".to_vec())],
         range: Some((b"b".to_vec(), b"cheap".to_vec(), b"9".to_vec())),
     };
-    let e = composite_bounds(&cols, &bad, 0).unwrap_err();
+    let e = composite_bounds(&cols, &bad, 0).unwrap_err().to_string();
     assert!(e.contains("not a valid i64"), "{e}");
 }
 
@@ -236,13 +236,22 @@ fn create_guards_refuse_bad_composite_combos_by_name() {
     let range = |n| composite_builder(n, IndexKind::Range, ValType::Str);
 
     let wrong_kind = composite_builder("k", IndexKind::Unique, ValType::Str);
-    assert_eq!(wrong_kind.build().err(), Some("ERR COMPOSITE requires KIND range"));
+    assert_eq!(
+        wrong_kind.build().err().map(|e| e.as_wire()),
+        Some("ERR COMPOSITE requires KIND range")
+    );
 
     let wrong_ty = composite_builder("t", IndexKind::Range, ValType::I64);
-    assert_eq!(wrong_ty.build().err(), Some("ERR COMPOSITE requires TYPE str"));
+    assert_eq!(
+        wrong_ty.build().err().map(|e| e.as_wire()),
+        Some("ERR COMPOSITE requires TYPE str")
+    );
 
     let with_values = range("v").with_values(vec![crate::ValueSpec::new(b"c".to_vec())]);
-    assert_eq!(with_values.build().err(), Some("ERR COMPOSITE cannot combine with VALUES"));
+    assert_eq!(
+        with_values.build().err().map(|e| e.as_wire()),
+        Some("ERR COMPOSITE cannot combine with VALUES")
+    );
 
     let multi_fields =
         range("f").with_fields(vec![FieldSpec::new(b"a".to_vec()), FieldSpec::new(b"b".to_vec())]);
@@ -251,14 +260,23 @@ fn create_guards_refuse_bad_composite_combos_by_name() {
     assert!(multi_fields.build().is_err());
 
     let empty = range("e").with_composite(Vec::new());
-    assert_eq!(empty.build().err(), Some("ERR COMPOSITE needs at least one column"));
+    assert_eq!(
+        empty.build().err().map(|e| e.as_wire()),
+        Some("ERR COMPOSITE needs at least one column")
+    );
 
     let many = (0..9).map(|i| col(&format!("c{i}"), ValType::I64, false)).collect();
     let too_many = range("m").with_composite(many);
-    assert_eq!(too_many.build().err(), Some("ERR COMPOSITE supports at most 8 columns"));
+    assert_eq!(
+        too_many.build().err().map(|e| e.as_wire()),
+        Some("ERR COMPOSITE supports at most 8 columns")
+    );
 
     let vec_col = range("vv").with_composite(vec![col("a", ValType::Vector, false)]);
-    assert_eq!(vec_col.build().err(), Some("ERR COMPOSITE columns must be i64|f64|str"));
+    assert_eq!(
+        vec_col.build().err().map(|e| e.as_wire()),
+        Some("ERR COMPOSITE columns must be i64|f64|str")
+    );
 }
 
 /// The spec-level derivation face: composite read names, primary

@@ -29,7 +29,7 @@
 //! let (hits, next) = seg.range(&IndexValue::I64(30), &IndexValue::I64(50), None, 10);
 //! assert_eq!(hits, vec![(b"user:7".to_vec(), IndexValue::I64(41))]);
 //! assert!(next.is_none());
-//! # Ok::<(), &'static str>(())
+//! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
 #![warn(missing_docs)]
@@ -42,6 +42,7 @@ mod composite;
 mod describe;
 mod describe_table;
 mod describe_view;
+mod error;
 mod partition;
 #[cfg(test)]
 mod partition_tests;
@@ -56,6 +57,7 @@ mod spec_builder;
 mod spec_parts;
 mod table;
 mod table_catalog;
+mod table_error;
 mod table_sidecar;
 mod table_verify;
 mod table_wire;
@@ -76,6 +78,7 @@ pub use describe::{
     describe_table_partitioned, describe_view, index_declaration, index_declaration_partitioned,
     owner_of, table_declaration, table_declaration_partitioned, view_declaration,
 };
+pub use error::{CatalogError, Declared, SpecError, ViewError};
 pub use kevy_text::{SortOrder, sorted_order};
 pub use partition::{Partitioning, partition_owner, splits_from_weighted};
 pub use placement::PlacementTable;
@@ -92,6 +95,7 @@ pub use spec::{IndexSpec, RowInputs};
 pub use spec_builder::IndexSpecBuilder;
 pub use spec_parts::{AnnSpec, FieldSpec, ValueSpec};
 pub use table::{MAX_TABLES, OrderPath, TableCatalog, TableIndex, TableSpec, WindowSpec};
+pub use table_error::{TableError, WhereError, WindowBound};
 pub use table_verify::{IndexVerify, TableEnsure, TableVerify, spec_diff};
 pub use table_wire::{
     GlobalPath, TABLE_DECLARE_USAGE, parse_table_declare, parse_table_declare_partitioned,
@@ -107,6 +111,13 @@ pub use view::{
 const _: () = {
     const fn send_sync<T: Send + Sync>() {}
     send_sync::<Catalog>();
+    send_sync::<CatalogError>();
+    send_sync::<Declared>();
+    send_sync::<SpecError>();
+    send_sync::<ViewError>();
+    send_sync::<TableError>();
+    send_sync::<WhereError>();
+    send_sync::<WindowBound>();
     send_sync::<IndexSpec>();
     send_sync::<IndexSpecBuilder>();
     send_sync::<FieldSpec>();
