@@ -91,7 +91,7 @@ pub(crate) fn run_job(job: PersistJob) -> PersistDone {
         },
         PersistJob::Rewrite { view, tmp } => PersistDone::Rewrite {
             // dump_aof drop-behinds its own cache and sync_all()s.
-            result: kevy_persist::dump_aof(&tmp, &view).map(|(keys, _bytes)| keys),
+            result: kevy_persist::dump_aof(&tmp, &view).map(|stats| stats.keys),
             tmp,
         },
         PersistJob::SwapImage { tmp, live, trash, tail } => run_swap(tmp, live, trash, tail),

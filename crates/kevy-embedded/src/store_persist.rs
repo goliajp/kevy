@@ -112,7 +112,7 @@ impl Store {
         };
         // Phase 2 (unlocked): serialize + fsync the compacted log.
         let keys = match kevy_persist::dump_aof(&tmp, &view) {
-            Ok((keys, _)) => keys,
+            Ok(stats) => stats.keys,
             Err(e) => {
                 let mut g = lock_write(shard);
                 if let Some(aof) = &mut g.aof {
