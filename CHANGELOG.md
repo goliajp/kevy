@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **kevy-alloc no longer writes zeroes into fresh mappings.** The
+  allocator had no `alloc_zeroed`, so a zeroed request went to the
+  default: allocate, then clear every byte. For a block past the size
+  classes that clearing wrote every page of a mapping the kernel had
+  already zeroed and made all of it resident, needed or not — each
+  shard's 64 MiB io_uring receive ring among them, which put 0.6 GB in an
+  idle server built with `--features kevy-alloc` (9 MB with the system
+  allocator). A fresh mapping is now handed out as it is; only a reused
+  one is cleared. Affected since 5.0.0.
+
 - **kevy-cli: a bare tool word is a server command.** The tools kevy-cli
   6.4 shipped as bare words (`kevy-cli doctor -p 6004`, `kevy-cli export …`,
   `kevy-cli sql compile … --url h:p`, `kevy-cli digest <prefix>`, and
