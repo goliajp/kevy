@@ -1,6 +1,6 @@
 Execute a command, appending the RESP reply to `out`. The in-order local
 fast path uses this to write straight into the connection's output buffer
-(no per-command reply `Vec`). Default: delegate to [`dispatch`](Self::dispatch).
+(no per-command reply `Vec`). Default: delegate to [`Self::dispatch`].
 
 ```
 # use kevy_rt::{Argv, ArgvView, Commands, Route, Store, TxnKind};
