@@ -121,7 +121,7 @@ impl ColdRef {
 
 impl SegRows {
     #[expect(clippy::panic, reason = "a torn index must not be served as data")]
-    fn read(&self, cref: ColdRef, key: &[u8]) -> Value {
+    fn read(&self, cref: ColdRef, key: &[u8], shapes: &[crate::packed_row::ColumnNames]) -> Value {
         let slot = self.slot(cref.seg_ix());
         let payload = slot
             .seg
@@ -139,7 +139,7 @@ impl SegRows {
                     cref.seg_ix(),
                 )
             });
-        tier_codec::decode(cref.type_tag, payload)
+        tier_codec::decode(cref.type_tag, payload, shapes)
             .expect("segrows: cold row decode failed — process bug")
     }
 }
@@ -384,7 +384,8 @@ impl Store {
     /// vlog's: a stub pointing at a missing/corrupt record is a
     /// process bug, surfaced loudly.
     pub(crate) fn segrow_read(&self, cref: ColdRef, key: &[u8]) -> Value {
-        self.segrows.as_ref().expect("seg-backed stub ⇒ segrows enabled").read(cref, key)
+        let rows = self.segrows.as_ref().expect("seg-backed stub ⇒ segrows enabled");
+        rows.read(cref, key, &self.row_shapes)
     }
 
     /// A seg-backed stub died (DEL / expiry / promote / FLUSH): the

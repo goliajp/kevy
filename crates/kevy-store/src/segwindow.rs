@@ -40,9 +40,13 @@ impl Store {
                     }
                 }
                 RowState::Absent => {
-                    let weight = crate::tier_codec::decode(crate::value::COLD_TAG_HASH, payload)
-                        .map_err(|reason| SegRowsError::Record { file: name.to_string(), reason })?
-                        .weight();
+                    let weight =
+                        crate::tier_codec::decode(crate::value::COLD_TAG_HASH, payload, &[])
+                            .map_err(|reason| SegRowsError::Record {
+                                file: name.to_string(),
+                                reason,
+                            })?
+                            .weight();
                     self.insert_row_stub(&key, seq, weight);
                     stitched += 1;
                 }

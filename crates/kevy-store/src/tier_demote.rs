@@ -238,6 +238,9 @@ impl Store {
             _ => return false,
         };
         let value = self.tier_read_record(key, cref);
+        if let Value::PackedRow(r) = &value {
+            self.share_shape(r.names());
+        }
         let key_heap = key_heap_bytes_for(key);
         let new_w = key_heap + value.weight();
         let e = self.map.get_mut(key).expect("probed above");

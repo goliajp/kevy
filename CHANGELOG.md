@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **Packed rows share their table's column names.** A packed row is
+  meant to carry no field names — they are the table's — but every row
+  got its own copy of the list, made when it was packed and again each
+  time it came back from the cold tier: 144 bytes for the list and 32 for
+  each name, 304 bytes a row for five columns, charged nowhere. A table's
+  rows now point at one list. The server's write hook also stopped
+  rebuilding that list, and taking the catalog lock, on every write to a
+  declared row. Measured with kevy-store's `bench_hash_rows`, packing a
+  row of five columns takes 23% less time and a cold row's round trip 7%
+  less.
+  `Store::pack_row` takes the table's `ColumnNames` rather than a slice
+  of names, so that every row can be handed the same one. Affected since
+  5.4.0.
+
 - **A hash is charged what it holds.** `used_memory`, `MEMORY USAGE`
   and the budgets built on them (maxmemory eviction, the tiered store's
   demotion) got hashes wrong in both directions. The 80-byte box around

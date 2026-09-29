@@ -295,7 +295,7 @@ pub enum Value {
     /// use kevy_store::{SetCondition, Store, Value};
     /// let mut s = Store::new();
     /// s.hset(b"user:1", &[(b"id".as_slice(), b"7".as_slice())])?;
-    /// s.pack_row(b"user:1", &[b"id".to_vec(), b"name".to_vec()]);
+    /// s.pack_row(b"user:1", &vec![b"id".to_vec(), b"name".to_vec()].into());
     /// let mut hit = false;
     /// s.snapshot_each(|_, v, _| hit |= matches!(v, Value::PackedRow(r) if r.get_named(b"id") == Some(&b"7"[..])));
     /// assert!(hit);
