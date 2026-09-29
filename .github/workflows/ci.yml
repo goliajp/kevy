@@ -610,7 +610,7 @@ jobs:
       - name: repligate (ship + frames + restart)
         run: bash bench/repligate.sh
 
-  # ───────────── release-profile test (release/** + hotfix/** branches only) ─────────────
+  # ───────────── release-profile test (develop, release/**, hotfix/**) ─────────────
   # Catches release-only bugs (compiler eliminates branches, sub-microsecond
   # timings round to zero, etc.) before they reach the publish workflow.
   # Historical incident: v1.4.0 SLOWLOG `elapsed=0` regression — release build
@@ -620,7 +620,9 @@ jobs:
     name: test (release profile, Linux)
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    if: startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/heads/hotfix/')
+    # develop too: a tag cut from a develop commit then finds this job green
+    # for its tree, and a release-only defect shows up before a release branch
+    if: github.ref == 'refs/heads/develop' || startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/heads/hotfix/')
     steps:
       - uses: actions/checkout@v7
 
@@ -640,8 +642,8 @@ jobs:
           restore-keys: |
             cargo-release-profile-
 
-      - name: Test (workspace, --release --lib --tests)
-        run: cargo test --workspace --release --lib --tests
+      - name: Test (workspace, release-tests profile, --lib --tests)
+        run: cargo test --workspace --profile release-tests --lib --tests
 
   # ───────────── wasm32: kevy-bytes / -store / -embedded must build ─────────────
   wasm:
@@ -894,6 +896,7 @@ jobs:
   # ───────────── command parity (correctness gate) ─────────────
   compat-differential:
     name: compat3 differential (kevy == valkey, byte-for-byte)
+    needs: server-release
     runs-on: ubuntu-latest
     timeout-minutes: 25
     # Blocking, unlike the perf smoke above: a divergence is a deterministic
@@ -902,8 +905,13 @@ jobs:
     # diverges from valkey on any check.
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: server-release
+          path: target/release
+      - run: chmod +x target/release/kevy target/release/kevy-cli
       - name: 3-way differential vs the pinned valkey and redis
-        run: bash bench/compat3.sh
+        run: KEVY_BIN=target/release/kevy bash bench/compat3.sh
 
   # ── clientgate — bring your redis client, gated ──────────────────────────
   # kevy speaks RESP; the claim that every ecosystem's mainstream redis
