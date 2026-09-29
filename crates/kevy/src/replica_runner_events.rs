@@ -86,7 +86,7 @@ pub(crate) fn drain_start(
     data_gen: &mut u64,
 ) -> DrainStart {
     let from_offset = client.expected_offset();
-    let ack_gen = client.primary_gen_at_handshake();
+    let ack_gen = client.primary_at_handshake().generation;
     if from_offset == 0 {
         *data_gen = ack_gen;
     }
@@ -121,11 +121,11 @@ pub(crate) fn drain_client(
         drain_start(client, progress, data_gen);
     while !stop.load(Ordering::Relaxed) {
         match client.next_event() {
-            Some(Ok(ReplicaEvent::Ping { generation, primary_offset })) => {
-                progress.record_ping(runner_slot, generation, primary_offset, from_offset);
+            Some(Ok(ReplicaEvent::Ping(tail))) => {
+                progress.record_ping(runner_slot, tail.generation, tail.offset, from_offset);
                 let _ = client.send_ack(from_offset);
                 last_ack = std::time::Instant::now();
-                if !gen_still_matches(generation, ack_gen) {
+                if !gen_still_matches(tail.generation, ack_gen) {
                     return from_offset;
                 }
             }
@@ -292,7 +292,7 @@ mod tests {
     #[test]
     fn event_to_apply_ping_applies_nothing() {
         let mut off = 5;
-        let ping = ReplicaEvent::Ping { generation: 1, primary_offset: 9 };
+        let ping = ReplicaEvent::Ping(kevy_replicate::feed::FeedPosition::new(1, 9));
         assert!(event_to_apply(ping, &mut off).is_none());
         assert_eq!(off, 5, "a heartbeat must not move the offset");
     }

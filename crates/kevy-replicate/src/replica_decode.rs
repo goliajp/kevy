@@ -96,10 +96,10 @@ impl ReplicaClient {
                 self.in_snapshot = true;
                 Some(Ok(ReplicaEvent::SnapshotBegin))
             }
-            Ok(Some((SnapshotMarker::Ping { generation, next_offset }, used))) => {
+            Ok(Some((SnapshotMarker::Ping(tail), used))) => {
                 self.cursor += used;
                 self.maybe_compact_buf();
-                Some(Ok(ReplicaEvent::Ping { generation, primary_offset: next_offset }))
+                Some(Ok(ReplicaEvent::Ping(tail)))
             }
             Ok(Some((SnapshotMarker::End(ack_offset), used))) => {
                 self.cursor += used;

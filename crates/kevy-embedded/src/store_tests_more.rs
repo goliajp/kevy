@@ -219,7 +219,7 @@ fn zset_algebra_store_forms_and_reopen() {
 fn feed_consume_loop_and_prefix() {
     let s = Store::open(Config::default().with_ttl_reaper_manual().with_feed(0)).unwrap();
     assert_eq!(s.feed_shards(), 1);
-    let (g, off) = s.changes_tail().unwrap();
+    let crate::FeedPosition { generation: g, offset: off, .. } = s.changes_tail().unwrap();
     assert_eq!((g, off), (1, 0));
 
     s.set(b"user:1", b"a").unwrap();
@@ -227,20 +227,23 @@ fn feed_consume_loop_and_prefix() {
     s.zadd(b"user:z", &[(1.0, b"m")]).unwrap();
 
     // full stream
-    let batch = s.changes_since(1, 0, 100, &[]).unwrap();
+    let batch = s.changes_since(crate::FeedPosition::new(1, 0), 100, &[]).unwrap();
     assert_eq!(batch.changes.len(), 3);
     assert_eq!(batch.changes[0].argv[0], b"SET".to_vec());
-    assert_eq!(batch.next, (1, 3));
+    assert_eq!(batch.next, crate::FeedPosition::new(1, 3));
     // caught up
-    let empty = s.changes_since(1, 3, 100, &[]).unwrap();
+    let empty = s.changes_since(crate::FeedPosition::new(1, 3), 100, &[]).unwrap();
     assert!(empty.changes.is_empty());
-    assert_eq!(empty.next, (1, 3));
+    assert_eq!(empty.next, crate::FeedPosition::new(1, 3));
     // prefix filter drops sess:, keeps user: (cursor unchanged by filter)
-    let user = s.changes_since(1, 0, 100, &[b"user:"]).unwrap();
+    let user = s.changes_since(crate::FeedPosition::new(1, 0), 100, &[b"user:"]).unwrap();
     assert_eq!(user.changes.len(), 2);
-    assert_eq!(user.next, (1, 3));
+    assert_eq!(user.next, crate::FeedPosition::new(1, 3));
     // future cursor rejected
-    assert!(matches!(s.changes_since(1, 99, 10, &[]), Err(FeedError::Future)));
+    assert!(matches!(
+        s.changes_since(crate::FeedPosition::new(1, 99), 10, &[]),
+        Err(FeedError::Future)
+    ));
     // disabled store answers Disabled
     let off_store = Store::open(Config::default().with_ttl_reaper_manual()).unwrap();
     assert!(matches!(off_store.changes_tail(), Err(FeedError::Disabled)));
@@ -249,18 +252,15 @@ fn feed_consume_loop_and_prefix() {
 #[test]
 fn feed_flushall_bumps_generation() {
     let s = Store::open(Config::default().with_ttl_reaper_manual().with_feed(0)).unwrap();
-    let (g_before, _) = s.changes_tail().unwrap();
+    let crate::FeedPosition { generation: g_before, offset: _, .. } = s.changes_tail().unwrap();
     s.set(b"k", b"v").unwrap();
     s.flushall().unwrap();
-    let (g, off) = s.changes_tail().unwrap();
+    let crate::FeedPosition { generation: g, offset: off, .. } = s.changes_tail().unwrap();
     assert_ne!(g, g_before, "FLUSHALL draws a fresh generation identity");
     assert_ne!(g, 0);
     assert_eq!(off, 0);
-    match s.changes_since(g_before, 0, 10, &[]) {
-        Err(FeedError::Resync { generation, tail }) => {
-            assert_eq!(generation, g);
-            assert_eq!(tail, 0);
-        }
+    match s.changes_since(crate::FeedPosition::new(g_before, 0), 10, &[]) {
+        Err(FeedError::Resync { tail }) => assert_eq!(tail, crate::FeedPosition::new(g, 0)),
         other => panic!("expected Resync, got {other:?}"),
     }
 }
@@ -272,7 +272,7 @@ fn feed_clean_reopen_continues_crash_bumps() {
         .unwrap();
     s.set(b"a", b"1").unwrap();
     s.set(b"b", b"2").unwrap();
-    let (g1, off1) = s.changes_tail().unwrap();
+    let crate::FeedPosition { generation: g1, offset: off1, .. } = s.changes_tail().unwrap();
     assert_ne!(g1, 0);
     assert_eq!(off1, 2);
     drop(s); // clean drop → marker written after AOF flush
@@ -281,9 +281,9 @@ fn feed_clean_reopen_continues_crash_bumps() {
         Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual().with_feed(0))
             .unwrap();
     // clean reopen: same generation, offset continues
-    assert_eq!(s2.changes_tail().unwrap(), (g1, 2));
+    assert_eq!(s2.changes_tail().unwrap(), crate::FeedPosition::new(g1, 2));
     s2.set(b"c", b"3").unwrap();
-    let batch = s2.changes_since(g1, 2, 10, &[]).unwrap();
+    let batch = s2.changes_since(crate::FeedPosition::new(g1, 2), 10, &[]).unwrap();
     assert_eq!(batch.changes.len(), 1);
     assert_eq!(batch.changes[0].offset, 2);
     drop(s2);
@@ -293,7 +293,7 @@ fn feed_clean_reopen_continues_crash_bumps() {
     let s3 =
         Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual().with_feed(0))
             .unwrap();
-    let (g3, off3) = s3.changes_tail().unwrap();
+    let crate::FeedPosition { generation: g3, offset: off3, .. } = s3.changes_tail().unwrap();
     assert_ne!(g3, g1, "unclean reopen draws a fresh generation");
     assert_ne!(g3, 0);
     assert_eq!(off3, 0);

@@ -7,6 +7,7 @@ use std::net::{Shutdown, TcpStream};
 use std::sync::{Arc, Mutex};
 
 use kevy_noise::{Frames, Keypair, MAX_MESSAGE, Responder, Transport, frame};
+use kevy_replicate::feed::FeedPosition;
 use kevy_replicate::replica::{ReplicaClient, ReplicaError, ReplicaSecurity};
 
 use crate::config_secure::LinkKeys;
@@ -140,8 +141,7 @@ impl Dialer {
             None => ReplicaClient::connect_with(
                 &target,
                 &kevy_replicate::replica::ConnectOptions::new(&self.replica_id)
-                    .with_generation(generation)
-                    .with_from_offset(from_offset),
+                    .with_from(FeedPosition::new(generation, from_offset)),
             ),
         }
     }
@@ -167,8 +167,7 @@ fn connect_trusted(
         match ReplicaClient::connect_with(
             target,
             &kevy_replicate::replica::ConnectOptions::new(replica_id)
-                .with_generation(generation)
-                .with_from_offset(from_offset)
+                .with_from(FeedPosition::new(generation, from_offset))
                 .with_security(sec),
         ) {
             Ok(c) => {

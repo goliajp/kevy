@@ -324,7 +324,11 @@ fn save_snapshot_records_feed_cursor() {
             }
             let cur = kevy_persist::read_snapshot_cursor(&dump).unwrap();
             let (g, off) = parse_tail(&cmd(&mut c, &[b"FEED.TAIL", sh.to_string().as_bytes()]));
-            assert_eq!(cur, Some((g, off)), "shard {sh} snapshot cursor = live tail");
+            assert_eq!(
+                cur,
+                Some(kevy_replicate::feed::FeedPosition::new(g, off)),
+                "shard {sh} snapshot cursor = live tail"
+            );
             if off > 0 {
                 seen_any = true;
             }

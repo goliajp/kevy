@@ -19,6 +19,7 @@
 use crate::Commands;
 use crate::replication::ReplicaState;
 use crate::shard::Shard;
+use kevy_replicate::feed::FeedPosition;
 use kevy_replicate::wire::{
     SNAPSHOT_CHUNK_MAX, decode_replconf_ack, encode_ping, encode_snapshot_begin,
     encode_snapshot_chunk, encode_snapshot_end,
@@ -91,7 +92,7 @@ impl<C: Commands> Shard<C> {
         if !due {
             return;
         }
-        conn.output.extend_from_slice(&encode_ping(generation, primary_next));
+        conn.output.extend_from_slice(&encode_ping(FeedPosition::new(generation, primary_next)));
         conn.last_ping = Some(std::time::Instant::now());
         if crate::repl_trace()
             && let ReplicaState::Streaming { sent_offset, generation: cursor_gen, .. } = conn.state

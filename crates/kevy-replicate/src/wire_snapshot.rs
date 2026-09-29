@@ -12,6 +12,7 @@
 //! Markers are RESP simple strings, chunks are RESP bulk strings —
 //! any RESP-aware tool can peek a captured stream.
 
+use crate::feed::FeedPosition;
 use crate::wire::{WireError, find_crlf, parse_decimal, push_u64};
 
 /// Per-chunk cap: a chunk's `$L\r\n` length must not exceed this.
@@ -46,12 +47,7 @@ pub enum SnapshotMarker {
     /// generation. A legacy one-number `+PING <next_offset>\r\n` line
     /// still decodes — `generation` reads as `0`, the "unknown" value
     /// no real feed ever serves (feed generations start at 1).
-    Ping {
-        /// Primary's feed generation at send time.
-        generation: u64,
-        /// Primary's `next_offset` when the heartbeat was emitted.
-        next_offset: u64,
-    },
+    Ping(FeedPosition),
 }
 
 /// Encode the snapshot-begin marker. Allocates the exact 11 bytes.
@@ -84,14 +80,20 @@ pub fn encode_snapshot_chunk(bytes: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Encode the in-stream heartbeat:
+/// Encode the in-stream heartbeat carrying the primary's tail:
 /// `+PING <generation> <next_offset>\r\n`.
-pub fn encode_ping(generation: u64, next_offset: u64) -> Vec<u8> {
+///
+/// ```
+/// use kevy_replicate::feed::FeedPosition;
+///
+/// assert_eq!(kevy_replicate::wire::encode_ping(FeedPosition::new(3, 9)), b"+PING 3 9\r\n");
+/// ```
+pub fn encode_ping(tail: FeedPosition) -> Vec<u8> {
     let mut out = Vec::with_capacity(48);
     out.extend_from_slice(b"+PING ");
-    push_u64(&mut out, generation);
+    push_u64(&mut out, tail.generation);
     out.push(b' ');
-    push_u64(&mut out, next_offset);
+    push_u64(&mut out, tail.offset);
     out.extend_from_slice(b"\r\n");
     out
 }
@@ -187,12 +189,12 @@ pub fn decode_snapshot_marker(buf: &[u8]) -> Result<Option<(SnapshotMarker, usiz
             Some(sp) => {
                 let generation = parse_decimal(&rest[..sp]).ok_or(WireError::BadEnvelope)?;
                 let next_offset = parse_decimal(&rest[sp + 1..]).ok_or(WireError::BadEnvelope)?;
-                SnapshotMarker::Ping { generation, next_offset }
+                SnapshotMarker::Ping(FeedPosition::new(generation, next_offset))
             }
-            None => SnapshotMarker::Ping {
-                generation: 0,
-                next_offset: parse_decimal(rest).ok_or(WireError::BadEnvelope)?,
-            },
+            None => SnapshotMarker::Ping(FeedPosition::new(
+                0,
+                parse_decimal(rest).ok_or(WireError::BadEnvelope)?,
+            )),
         };
         return Ok(Some((marker, eol + 2)));
     }

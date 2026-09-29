@@ -195,8 +195,7 @@ fn one_session(
         None => ReplicaClient::connect_with(
             dial.addr,
             &kevy_replicate::replica::ConnectOptions::new(replica_id)
-                .with_generation(*data_gen)
-                .with_from_offset(from_offset),
+                .with_from(kevy_replicate::feed::FeedPosition::new(*data_gen, from_offset)),
         ),
     };
     match connected {

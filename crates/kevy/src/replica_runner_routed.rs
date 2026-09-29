@@ -83,11 +83,11 @@ pub(crate) fn drain_client_routed(
         drain_start(client, progress, data_gen);
     while !stop.load(Ordering::Relaxed) {
         match client.next_event() {
-            Some(Ok(ReplicaEvent::Ping { generation, primary_offset })) => {
-                progress.record_ping(runner_slot, generation, primary_offset, from_offset);
+            Some(Ok(ReplicaEvent::Ping(tail))) => {
+                progress.record_ping(runner_slot, tail.generation, tail.offset, from_offset);
                 let _ = client.send_ack(from_offset);
                 last_ack = std::time::Instant::now();
-                if !crate::replica_runner_events::gen_still_matches(generation, ack_gen) {
+                if !crate::replica_runner_events::gen_still_matches(tail.generation, ack_gen) {
                     return from_offset;
                 }
             }

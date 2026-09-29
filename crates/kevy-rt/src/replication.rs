@@ -20,6 +20,7 @@
 //! [`Shard::slots`] so a reconnect within
 //! `reconnect_window_ms` is correlatable.
 
+use kevy_replicate::feed::FeedPosition;
 use kevy_replicate::handshake::{HandshakeError, HandshakeReq, encode_ack};
 use kevy_resp::{Argv, parse_command_into};
 use kevy_sys::Socket;
@@ -250,12 +251,12 @@ pub(crate) fn advance_handshake(
     };
     let req = HandshakeReq::parse(&argv)?;
     conn.input.drain(..consumed);
-    conn.output.extend_from_slice(&encode_ack(feed_gen, req.from_offset));
+    conn.output.extend_from_slice(&encode_ack(FeedPosition::new(feed_gen, req.from.offset)));
     conn.write_off = 0;
     conn.state = ReplicaState::AckSent {
         replica_id: req.replica_id,
-        from_offset: req.from_offset,
-        generation: req.generation,
+        from_offset: req.from.offset,
+        generation: req.from.generation,
     };
     Ok(())
 }

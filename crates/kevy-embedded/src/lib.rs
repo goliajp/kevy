@@ -197,6 +197,8 @@ pub use kevy_index::{
 };
 #[cfg(feature = "persist")]
 pub use kevy_persist::RewriteStats;
+#[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
+pub use kevy_replicate::feed::FeedPosition;
 pub use kevy_store::{
     ExpireStats, GetShared, HExpireCode, HExpireCond, KevyError, KevyResult, ScoreBound,
     StoreError, ZAggregate, ZaddFlags, ZaddReport,
