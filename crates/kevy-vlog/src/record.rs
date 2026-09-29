@@ -28,16 +28,57 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// [`Vlog::append`](crate::Vlog::append) hands one out; an owner that
 /// stores the three numbers in its own layout rebuilds it with
 /// [`VlogRef::new`].
+///
+/// ```
+/// let dir = kevy_tmpdir::TmpDir::new("vlog-ref-type");
+/// let mut v = kevy_vlog::Vlog::open(dir.path(), 1 << 20)?;
+/// let first = v.append(b"a", b"1")?;
+/// let second = v.append(b"b", b"2")?;
+/// // records sit back to back in the active file
+/// assert_eq!(second.offset, first.offset + first.disk_len() as u64);
+/// assert_eq!(v.read(second)?.1, b"2");
+/// # Ok::<(), std::io::Error>(())
+/// ```
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 #[non_exhaustive]
 pub struct VlogRef {
     /// Which file in the shard's log holds it. Files are append-only and
     /// never renumbered, so this stays valid until compaction rewrites the
     /// ref — see `epoch`.
+    ///
+    /// ```
+    /// let dir = kevy_tmpdir::TmpDir::new("vlog-ref-file-id");
+    /// // a 1-byte threshold rotates before every record but the first
+    /// let mut v = kevy_vlog::Vlog::open(dir.path(), 1)?;
+    /// let a = v.append(b"a", b"1")?;
+    /// let b = v.append(b"b", b"2")?;
+    /// assert_eq!((a.file_id, b.file_id), (0, 1));
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub file_id: u32,
     /// Byte offset of the record HEADER within the file.
+    ///
+    /// ```
+    /// let dir = kevy_tmpdir::TmpDir::new("vlog-ref-offset");
+    /// let mut v = kevy_vlog::Vlog::open(dir.path(), 1 << 20)?;
+    /// let r = v.append(b"k", b"v")?;
+    /// assert_eq!(r.offset, 0, "the first record starts the file");
+    /// let file = v.pin(r.file_id).expect("the active file");
+    /// assert_eq!(file.read_image(r)?.len(), r.disk_len());
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub offset: u64,
     /// Body length (key_len field + key + payload), excluding the header.
+    ///
+    /// ```
+    /// let dir = kevy_tmpdir::TmpDir::new("vlog-ref-len");
+    /// let mut v = kevy_vlog::Vlog::open(dir.path(), 1 << 20)?;
+    /// let r = v.append(b"key", b"")?;
+    /// // 4-byte key length, the 3-byte key, and an empty value's
+    /// // 2-byte frame header
+    /// assert_eq!(r.len, 4 + 3 + 2);
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub len: u32,
 }
 
@@ -85,6 +126,28 @@ impl VlogRef {
 /// each through here; [`VlogFile::read`] is exactly one fetch + this.
 /// A length or CRC mismatch is `InvalidData` — this process wrote the
 /// record this boot, so a bad image is a bug, never corruption to heal.
+///
+/// Returns the key and the still-encoded frame; decode it with
+/// [`VlogFile::decompress`].
+///
+/// ```
+/// use kevy_vlog::verify_image;
+/// let dir = kevy_tmpdir::TmpDir::new("vlog-verify-image");
+/// let mut v = kevy_vlog::Vlog::open(dir.path(), 1 << 20)?;
+/// let r = v.append(b"k", b"value")?;
+/// let file = v.pin(r.file_id).expect("the active file");
+///
+/// let mut image = file.read_image(r)?;
+/// let (key, frame) = verify_image(r, image.clone())?;
+/// assert_eq!(key, b"k");
+/// assert_eq!(file.decompress(&frame)?, b"value");
+///
+/// // one flipped bit fails the CRC
+/// let last = image.len() - 1;
+/// image[last] ^= 1;
+/// assert!(verify_image(r, image).is_err());
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub fn verify_image(r: VlogRef, mut image: Vec<u8>) -> io::Result<(Vec<u8>, Vec<u8>)> {
     if image.len() != r.disk_len() {
         return Err(bad(format!(
@@ -111,6 +174,29 @@ pub fn verify_image(r: VlogRef, mut image: Vec<u8>) -> io::Result<(Vec<u8>, Vec<
 /// readers hold more. When compaction retires the file it sets
 /// `delete_on_drop`; the underlying file is unlinked by whichever holder
 /// drops last — that is the entire pin protocol.
+///
+/// ```
+/// use kevy_vlog::{CompactOwner, Vlog, VlogRef};
+/// struct NothingLive;
+/// impl CompactOwner for NothingLive {
+///     fn is_live(&mut self, _: &[u8], _: VlogRef) -> bool {
+///         false
+///     }
+///     fn moved(&mut self, _: &[u8], _: VlogRef, _: VlogRef) {}
+/// }
+/// let dir = kevy_tmpdir::TmpDir::new("vlog-file-pin");
+/// // one record per file
+/// let mut v = Vlog::open(dir.path(), 1)?;
+/// let r = v.append(b"a", &[7; 64])?;
+/// v.append(b"b", b"2")?;
+/// let pinned = v.pin(r.file_id).expect("file 0");
+/// v.note_dead(r);
+/// v.compact_below(100, &mut NothingLive)?;
+/// // retired by the log, still readable through the pin
+/// assert!(v.read(r).is_err());
+/// assert_eq!(pinned.read(r)?.1, [7; 64]);
+/// # Ok::<(), std::io::Error>(())
+/// ```
 #[derive(Debug)]
 pub struct VlogFile {
     pub(crate) id: u32,
@@ -133,6 +219,14 @@ pub struct VlogFile {
 
 impl VlogFile {
     /// This file's id, as a `VlogRef` records it.
+    ///
+    /// ```
+    /// let dir = kevy_tmpdir::TmpDir::new("vlog-file-id");
+    /// let mut v = kevy_vlog::Vlog::open(dir.path(), 1 << 20)?;
+    /// let r = v.append(b"k", b"v")?;
+    /// assert_eq!(v.pin_all()[0].id(), r.file_id);
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub fn id(&self) -> u32 {
         self.id
     }
@@ -142,6 +236,17 @@ impl VlogFile {
     /// then [`verify_image`] — a length/CRC mismatch is `InvalidData`
     /// (this process wrote the record this boot; a bad read is a bug,
     /// never "corruption to heal").
+    ///
+    /// ```
+    /// let dir = kevy_tmpdir::TmpDir::new("vlog-file-read");
+    /// let mut v = kevy_vlog::Vlog::open(dir.path(), 1 << 20)?;
+    /// let r = v.append(b"k", b"cold")?;
+    /// let file = v.pin(r.file_id).expect("the active file");
+    /// // another thread can take `file` and read without the log
+    /// let got = std::thread::spawn(move || file.read(r)).join().expect("reader")?;
+    /// assert_eq!(got, (b"k".to_vec(), b"cold".to_vec()));
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub fn read(&self, r: VlogRef) -> io::Result<(Vec<u8>, Vec<u8>)> {
         let (key, frame) = verify_image(r, self.read_image(r)?)?;
         Ok((key, self.decompress(&frame)?))
@@ -165,6 +270,17 @@ impl VlogFile {
     ///
     /// A frame that fails to decode is a process bug by the same doctrine
     /// as a CRC mismatch (this process wrote it this boot).
+    ///
+    /// ```
+    /// let dir = kevy_tmpdir::TmpDir::new("vlog-decompress");
+    /// let mut v = kevy_vlog::Vlog::open(dir.path(), 1 << 20)?;
+    /// let r = v.append(b"k", &[b'x'; 300])?;
+    /// let file = v.pin(r.file_id).expect("the active file");
+    /// let (_, frame) = kevy_vlog::verify_image(r, file.read_image(r)?)?;
+    /// assert!(frame.len() < 300, "stored encoded");
+    /// assert_eq!(file.decompress(&frame)?, [b'x'; 300]);
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub fn decompress(&self, frame: &[u8]) -> io::Result<Vec<u8>> {
         self.parsed.decode(frame).map_err(|e| bad(format!("vlog: {e} at file {}", self.id)))
     }
@@ -172,6 +288,17 @@ impl VlogFile {
     /// Fetch the raw record image (`r.disk_len()` bytes at `r.offset`)
     /// in one pread, UNverified — the batched-read issuance half; pair
     /// with [`verify_image`] on completion.
+    ///
+    /// ```
+    /// let dir = kevy_tmpdir::TmpDir::new("vlog-read-image");
+    /// let mut v = kevy_vlog::Vlog::open(dir.path(), 1 << 20)?;
+    /// let r = v.append(b"k", b"v")?;
+    /// let image = v.pin(r.file_id).expect("the active file").read_image(r)?;
+    /// // the header's first four bytes are the body length the ref carries
+    /// assert_eq!(image.len(), r.disk_len());
+    /// assert_eq!(image[..4], r.len.to_le_bytes());
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub fn read_image(&self, r: VlogRef) -> io::Result<Vec<u8>> {
         let mut image = vec![0u8; r.disk_len()];
         self.file.read_exact_at(&mut image, r.offset)?;
@@ -255,7 +382,59 @@ pub trait CompactOwner {
     /// Is `old` still the owner's live ref for `key`? A record whose ref
     /// was overwritten, deleted, or promoted answers `false` and is
     /// dropped by the compaction.
+    ///
+    /// ```
+    /// use kevy_vlog::{CompactOwner, Vlog, VlogRef};
+    /// // an owner that keeps only the key "keep"
+    /// struct KeepOne(Option<VlogRef>);
+    /// impl CompactOwner for KeepOne {
+    ///     fn is_live(&mut self, key: &[u8], _old: VlogRef) -> bool {
+    ///         key == b"keep"
+    ///     }
+    ///     fn moved(&mut self, _key: &[u8], _old: VlogRef, new: VlogRef) {
+    ///         self.0 = Some(new);
+    ///     }
+    /// }
+    /// let dir = kevy_tmpdir::TmpDir::new("vlog-is-live");
+    /// // two records fill a 40-byte file; the third rotates
+    /// let mut v = Vlog::open(dir.path(), 40)?;
+    /// let drop_me = v.append(b"drop", b"0123456789abcdef")?;
+    /// v.append(b"keep", b"fedcba9876543210")?;
+    /// v.append(b"next", b"rotated")?;
+    /// v.note_dead(drop_me);
+    /// let mut owner = KeepOne(None);
+    /// v.compact_below(100, &mut owner)?;
+    /// let kept = owner.0.expect("the live record moved");
+    /// assert_eq!(v.read(kept)?.0, b"keep");
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     fn is_live(&mut self, key: &[u8], old: VlogRef) -> bool;
     /// The record survived and now lives at `new` — swap the cold ref.
+    ///
+    /// ```
+    /// use kevy_vlog::{CompactOwner, Vlog, VlogRef};
+    /// struct Log(Vec<(VlogRef, VlogRef)>);
+    /// impl CompactOwner for Log {
+    ///     fn is_live(&mut self, _: &[u8], _: VlogRef) -> bool {
+    ///         true
+    ///     }
+    ///     fn moved(&mut self, _: &[u8], old: VlogRef, new: VlogRef) {
+    ///         self.0.push((old, new));
+    ///     }
+    /// }
+    /// let dir = kevy_tmpdir::TmpDir::new("vlog-moved");
+    /// // one record per file
+    /// let mut v = Vlog::open(dir.path(), 1)?;
+    /// let r = v.append(b"a", &[3; 64])?;
+    /// v.append(b"b", b"rotated")?;
+    /// let mut log = Log(Vec::new());
+    /// // a live ratio above 100% selects every sealed file
+    /// v.compact_below(101, &mut log)?;
+    /// let (old, new) = log.0[0];
+    /// assert_eq!(old, r);
+    /// assert_ne!(new.file_id, r.file_id);
+    /// assert_eq!(v.read(new)?.1, [3; 64]);
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     fn moved(&mut self, key: &[u8], old: VlogRef, new: VlogRef);
 }
