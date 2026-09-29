@@ -122,6 +122,11 @@ class Sigma(unittest.TestCase):
         with self.assertRaises(ps.Refused):
             ps.sigma_for(self.base(sigma={}), "a", "C.instr_u", "fp", self.TODAY)
 
+    def test_zero_sigma_refuses(self):
+        b = self.base(sigma={"a": {"C.instr_u": 0.0}})
+        with self.assertRaises(ps.Refused):
+            ps.sigma_for(b, "a", "C.instr_u", "fp", self.TODAY)
+
     def test_stale_refuses(self):
         b = self.base(sigma_recorded="2026-06-01")
         with self.assertRaises(ps.Refused):

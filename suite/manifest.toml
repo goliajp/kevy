@@ -715,6 +715,18 @@ requires = ["box", "binaries-release"]
 proves = "throughput holds the recorded baselines, angle by angle"
 
 [[check]]
+id = "perfgate2"
+area = "perf"
+tier = "prerelease"
+cmd = "bash bench/perfgate2.sh target/release/kevy"
+expected = 1800
+timeout = 7200
+requires = ["box", "binaries-release"]
+advisory = true
+advisory_reason = "shadow period: runs beside perfgate until its sigma is calibrated and the M1-M5 mutants and ten A/A runs pass on the box; then it replaces perfgate and this row stops being advisory"
+proves = "instructions, syscalls and cycles per op, server utilisation and throughput hold against the branch point and the last release, each line on its own calibrated band"
+
+[[check]]
 id = "tailgate"
 area = "perf"
 tier = "prerelease"
