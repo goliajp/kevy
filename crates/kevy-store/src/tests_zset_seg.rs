@@ -129,14 +129,14 @@ fn segmented_ops_match_semantics() {
     assert!(r > n - 200, "bumped to the top score region (rank {r})");
 
     // ZCOUNT / ZRANGEBYSCORE against a countable predicate.
-    let min = crate::value::ScoreBound { value: 100.0, exclusive: false };
-    let max = crate::value::ScoreBound { value: 105.0, exclusive: false };
+    let min = crate::value::ScoreBound::inclusive(100.0);
+    let max = crate::value::ScoreBound::inclusive(105.0);
     let counted = st.zcount(b"z", min, max).unwrap();
     let ranged = st
         .zrange_by_score(
             b"z",
-            crate::value::ScoreBound { value: 100.0, exclusive: false },
-            crate::value::ScoreBound { value: 105.0, exclusive: false },
+            crate::value::ScoreBound::inclusive(100.0),
+            crate::value::ScoreBound::inclusive(105.0),
         )
         .unwrap();
     assert_eq!(counted, ranged.len());

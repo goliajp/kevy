@@ -88,7 +88,7 @@ fn xinfo_groups<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec
         Ok(None) => return encode_error(out, "ERR no such key"),
         Err(e) => return store_err(out, e),
     };
-    let groups: Vec<(&[u8], &ConsumerGroup)> = s.groups_iter().collect();
+    let groups: Vec<(&[u8], &ConsumerGroup)> = s.groups().collect();
     encode_array_len(out, groups.len() as i64);
     for (name, g) in groups {
         emit_group_info(out, name, g, s);
@@ -119,7 +119,7 @@ fn emit_group_info(out: &mut Vec<u8>, name: &[u8], g: &ConsumerGroup, s: &Stream
 
 fn entries_between(s: &StreamData, last_delivered_id: kevy_store::StreamId) -> i64 {
     let mut n = 0i64;
-    for (id, _) in s.iter_entries().skip_while(|(id, _)| *id <= last_delivered_id) {
+    for (id, _) in s.entries().skip_while(|(id, _)| *id <= last_delivered_id) {
         let _ = id;
         n += 1;
     }
@@ -138,7 +138,7 @@ fn xinfo_consumers<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut 
     let Some(g) = s.group(&args[3]) else {
         return encode_error(out, "NOGROUP No such consumer group");
     };
-    let consumers: Vec<(&[u8], &ConsumerState)> = g.consumers_iter().collect();
+    let consumers: Vec<(&[u8], &ConsumerState)> = g.consumers().collect();
     encode_array_len(out, consumers.len() as i64);
     let now = now_unix_ms();
     for (name, c) in consumers {

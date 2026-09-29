@@ -53,7 +53,8 @@ mod enabled {
     /// One planned cold-record read in a [`Store::peek_hash_rows`]
     /// batch. The pinned file keeps the record readable even if a
     /// compaction retires the file mid-batch.
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
+    #[non_exhaustive]
     pub struct ColdRead {
         /// Pinned vlog file the record lives in.
         pub file: Arc<VlogFile>,
@@ -66,6 +67,14 @@ mod enabled {
     /// image, in `reads` order. [`SyncColdRead`] is the ordered
     /// positional-read loop (poller reactors + embedded); the server's
     /// io_uring backend submits the batch to a secondary ring instead.
+    ///
+    /// Open for implementation, so a host can issue the reads its own
+    /// way. An implementation must return exactly one image per read, in
+    /// `reads` order, each the `vref.disk_len()` bytes at `vref.offset` of
+    /// `file` (the store verifies and decodes them, so a wrong byte is
+    /// caught, but a missing or reordered image pairs a record with the
+    /// wrong key); an `Err` fails the whole batch, and the store treats
+    /// none of it as read.
     pub trait ColdBatchReader {
         /// Fetch each `reads[i]`'s raw image (`vref.disk_len()` bytes
         /// at `vref.offset`, unverified — the store runs

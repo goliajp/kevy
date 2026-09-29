@@ -68,11 +68,7 @@ fn assert_agrees(store: &mut Store, key: &[u8], oracle: &[(Vec<u8>, f64)], rng: 
         let b = (rng.next() % 1_000_000) as f64 / 10.0;
         let (lo, hi) = (a.min(b), a.max(b));
         let got = store
-            .zcount(
-                key,
-                ScoreBound { value: lo, exclusive: false },
-                ScoreBound { value: hi, exclusive: true },
-            )
+            .zcount(key, ScoreBound::inclusive(lo), ScoreBound::exclusive(hi))
             .expect("zcount");
         let want = oracle.iter().filter(|(_, s)| *s >= lo && *s < hi).count();
         assert_eq!(got, want, "zcount([{lo}, {hi}))");

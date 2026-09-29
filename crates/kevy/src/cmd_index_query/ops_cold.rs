@@ -96,10 +96,10 @@ fn cold_page_query<'a>(
     facets: &'a [kevy_text::Facet<'a>],
     fetch: usize,
 ) -> ColdPageQuery<'a> {
-    let (mut bare, phrases, _prefixes) = kevy_text::parse_clauses(text);
-    bare.sort();
-    bare.dedup();
-    ColdPageQuery { bare, phrases, stats, filter, sort, distinct, facets, fetch }
+    let mut q = ColdPageQuery::parse(text, stats, fetch).with_filter(filter).with_facets(facets);
+    q.sort = sort;
+    q.distinct = distinct;
+    q
 }
 
 /// One merged candidate: the page-order ingredients of a hot or cold

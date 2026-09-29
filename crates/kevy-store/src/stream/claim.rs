@@ -3,7 +3,7 @@
 //! `AutoclaimResult` return type alongside the methods that produce it.
 
 use super::group::{ConsumerGroup, ensure_consumer};
-use super::{EntryBatch, PelEntry, StreamData, StreamId, XClaimOpts};
+use super::{ClaimMode, EntryBatch, PelEntry, StreamData, StreamId};
 use crate::StoreError;
 #[cfg(not(feature = "std"))]
 use crate::nostd_prelude::*;
@@ -12,7 +12,8 @@ use crate::value::SmallBytes;
 /// Snapshot of `XAUTOCLAIM` work in progress: cursor for the next
 /// call, IDs successfully transferred, and IDs skipped because the
 /// stream has since deleted them.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct AutoclaimResult {
     /// Where the next `XAUTOCLAIM` should resume. `0-0` when the scan
     /// reached the end of the pending list.
@@ -24,6 +25,105 @@ pub struct AutoclaimResult {
     /// the pending list and reports them here rather than claiming a
     /// message with no body.
     pub deleted_ids: Vec<StreamId>,
+}
+
+/// Knobs for `XCLAIM` ([`Store::xclaim`](crate::Store::xclaim)):
+/// `min-idle-ms` plus the `IDLE`/`TIME`/`RETRYCOUNT`/`FORCE`/`JUSTID` flag
+/// tail. The default is `XCLAIM`'s: no idle floor, no overrides, no
+/// `FORCE`, a counted redelivery.
+///
+/// ```
+/// use kevy_store::{ClaimMode, XClaimOpts};
+/// let o = XClaimOpts::default().with_min_idle_ms(500).with_force(true).with_mode(ClaimMode::JustId);
+/// assert_eq!((o.min_idle_ms, o.force, o.mode), (500, true, ClaimMode::JustId));
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
+pub struct XClaimOpts {
+    /// Only claim entries idle for at least this many ms.
+    pub min_idle_ms: u64,
+    /// Override post-claim idle to this many ms (else 0 — XCLAIM resets
+    /// the clock so the new owner has the full idle window).
+    pub idle_override_ms: Option<u64>,
+    /// Override post-claim delivery_time_ms to this absolute unix-ms.
+    /// Takes precedence over `idle_override_ms` if both set.
+    pub time_override_ms: Option<u64>,
+    /// Override post-claim `delivery_count` (else +=1).
+    pub retrycount_override: Option<u32>,
+    /// `FORCE`: claim even if the entry isn't in the PEL yet (creates
+    /// a fresh PEL row with delivery_count=1).
+    pub force: bool,
+    /// `JUSTID` or a counted redelivery.
+    pub mode: ClaimMode,
+}
+
+impl XClaimOpts {
+    /// Claim only entries idle for at least `ms`.
+    ///
+    /// ```
+    /// assert_eq!(kevy_store::XClaimOpts::default().with_min_idle_ms(9).min_idle_ms, 9);
+    /// ```
+    #[must_use]
+    pub fn with_min_idle_ms(mut self, ms: u64) -> Self {
+        self.min_idle_ms = ms;
+        self
+    }
+
+    /// `IDLE ms`: the claimed entry's idle time afterwards.
+    ///
+    /// ```
+    /// assert_eq!(kevy_store::XClaimOpts::default().with_idle_ms(5).idle_override_ms, Some(5));
+    /// ```
+    #[must_use]
+    pub fn with_idle_ms(mut self, ms: u64) -> Self {
+        self.idle_override_ms = Some(ms);
+        self
+    }
+
+    /// `TIME unix-ms`: the claimed entry's delivery time afterwards.
+    ///
+    /// ```
+    /// assert_eq!(kevy_store::XClaimOpts::default().with_time_ms(7).time_override_ms, Some(7));
+    /// ```
+    #[must_use]
+    pub fn with_time_ms(mut self, unix_ms: u64) -> Self {
+        self.time_override_ms = Some(unix_ms);
+        self
+    }
+
+    /// `RETRYCOUNT n`: the claimed entry's delivery count afterwards.
+    ///
+    /// ```
+    /// assert_eq!(kevy_store::XClaimOpts::default().with_retrycount(3).retrycount_override, Some(3));
+    /// ```
+    #[must_use]
+    pub fn with_retrycount(mut self, n: u32) -> Self {
+        self.retrycount_override = Some(n);
+        self
+    }
+
+    /// `FORCE`: claim IDs that are not pending yet.
+    ///
+    /// ```
+    /// assert!(kevy_store::XClaimOpts::default().with_force(true).force);
+    /// ```
+    #[must_use]
+    pub fn with_force(mut self, force: bool) -> Self {
+        self.force = force;
+        self
+    }
+
+    /// `JUSTID`, or a counted redelivery.
+    ///
+    /// ```
+    /// use kevy_store::{ClaimMode, XClaimOpts};
+    /// assert_eq!(XClaimOpts::default().with_mode(ClaimMode::JustId).mode, ClaimMode::JustId);
+    /// ```
+    #[must_use]
+    pub fn with_mode(mut self, mode: ClaimMode) -> Self {
+        self.mode = mode;
+        self
+    }
 }
 
 impl StreamData {
@@ -65,17 +165,10 @@ impl StreamData {
         min_idle_ms: u64,
         start: StreamId,
         count: usize,
-        justid: bool,
+        mode: ClaimMode,
         now_ms: u64,
     ) -> Result<AutoclaimResult, StoreError> {
-        let opts = XClaimOpts {
-            min_idle_ms,
-            idle_override_ms: None,
-            time_override_ms: None,
-            retrycount_override: None,
-            force: false,
-            justid,
-        };
+        let opts = XClaimOpts::default().with_min_idle_ms(min_idle_ms).with_mode(mode);
         let candidates: Vec<StreamId> = {
             let Some(g) = self.groups.get(group) else {
                 return Err(StoreError::NoSuchKey);
@@ -148,7 +241,10 @@ fn claim_one(
         .unwrap_or(now_ms);
     let new_dc = opts.retrycount_override.unwrap_or_else(|| {
         let base = g.pel.get(&id).map_or(0, |p| p.delivery_count);
-        if opts.justid { base.max(1) } else { base.saturating_add(1) }
+        match opts.mode {
+            ClaimMode::JustId => base.max(1),
+            ClaimMode::Deliver => base.saturating_add(1),
+        }
     });
     let prev = g.pel.insert(
         id,

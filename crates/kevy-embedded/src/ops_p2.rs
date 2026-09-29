@@ -51,7 +51,13 @@ impl Store {
         count: i64,
         with_values: bool,
     ) -> KevyResult<kevy_store::FieldValuePairs> {
-        self.wshard(key).store.hrandfield(key, count, with_values).map_err(store_err)
+        let mut g = self.wshard(key);
+        if with_values {
+            g.store.hrandfield_with_values(key, count).map_err(store_err)
+        } else {
+            let fields = g.store.hrandfield(key, count).map_err(store_err)?;
+            Ok(fields.into_iter().map(|f| (f, Vec::new())).collect())
+        }
     }
 
     /// `HVALS key` — every value in `key`'s hash.
@@ -106,11 +112,7 @@ impl Store {
     ) -> KevyResult<Vec<(Vec<u8>, f64)>> {
         self.wshard(key)
             .store
-            .zrange_by_score(
-                key,
-                ScoreBound { value: min, exclusive: false },
-                ScoreBound { value: max, exclusive: false },
-            )
+            .zrange_by_score(key, ScoreBound::inclusive(min), ScoreBound::inclusive(max))
             .map_err(store_err)
     }
 

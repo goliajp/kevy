@@ -13,7 +13,7 @@ use kevy_store::Store;
 use crate::cmd::{self, upper_verb};
 use crate::{
     Argv, KevyCommands, cmd_block, cmd_block_serve, cmd_hello, cmd_resolve, dispatch,
-    map_appendfsync, map_eviction_policy, ops,
+    map_appendfsync, ops,
 };
 
 impl Commands for KevyCommands {
@@ -58,10 +58,7 @@ impl Commands for KevyCommands {
         // 205 MB steady state; the first soak's "6 GB" cap was
         // effectively 48 GB).
         let n = self.state().nshards().max(1) as u64;
-        store.set_max_memory(
-            cfg.memory.maxmemory / n,
-            map_eviction_policy(cfg.memory.maxmemory_policy),
-        );
+        store.set_max_memory(cfg.memory.maxmemory / n, cfg.memory.maxmemory_policy);
     }
 
     fn on_shard_start(&self, shard: usize) {

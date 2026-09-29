@@ -36,8 +36,27 @@ pub type SetData = KevySet<SmallBytes>;
 /// caller to write `old == score` would have skipped a live update and left
 /// `by_member` and `by_score` holding different scores for one member.
 /// NaN cannot arrive: the parser refuses it.
+///
+/// ```
+/// use kevy_store::Score;
+/// assert!(Score::new(-0.0) < Score::new(0.0));
+/// assert_ne!(Score::new(-0.0), Score::new(0.0));
+/// assert_eq!(Score::new(1.5).value(), 1.5);
+/// ```
 #[derive(Debug, Clone, Copy)]
-pub struct Score(pub f64);
+pub struct Score(pub(crate) f64);
+
+impl Score {
+    /// Wrap a score.
+    pub const fn new(score: f64) -> Self {
+        Self(score)
+    }
+
+    /// The score as a float.
+    pub const fn value(self) -> f64 {
+        self.0
+    }
+}
 impl PartialEq for Score {
     fn eq(&self, other: &Self) -> bool {
         self.0.total_cmp(&other.0) == Ordering::Equal
@@ -57,7 +76,15 @@ impl PartialOrd for Score {
 
 /// A score-range endpoint for `ZRANGEBYSCORE`/`ZCOUNT` (inclusive or exclusive).
 /// Use `value = ±INFINITY` for `-inf`/`+inf`.
-#[derive(Debug)]
+///
+/// ```
+/// use kevy_store::ScoreBound;
+/// let lo = ScoreBound::exclusive(1.0);
+/// assert!(lo.exclusive && lo.value == 1.0);
+/// assert!(!ScoreBound::inclusive(f64::INFINITY).exclusive);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct ScoreBound {
     /// The score itself. `f64::INFINITY` / `NEG_INFINITY` carry `+inf` and
     /// `-inf`, which is why this is not an `Option`.
@@ -68,6 +95,16 @@ pub struct ScoreBound {
     pub exclusive: bool,
 }
 impl ScoreBound {
+    /// An endpoint the range includes (`ZRANGEBYSCORE`'s bare form).
+    pub const fn inclusive(value: f64) -> Self {
+        Self { value, exclusive: false }
+    }
+
+    /// An endpoint the range excludes (Redis's `(` prefix).
+    pub const fn exclusive(value: f64) -> Self {
+        Self { value, exclusive: true }
+    }
+
     /// Does `s` satisfy this as a *minimum* bound?
     pub(crate) fn ge_ok(&self, s: f64) -> bool {
         if self.exclusive { s > self.value } else { s >= self.value }
@@ -219,7 +256,7 @@ pub enum Value {
     /// Small values stay on `Str(SmallBytes)` because the inline
     /// cache-line storage beats an Arc indirection for the common case.
     ArcBulk(Arc<Box<[u8]>>),
-    /// A hash below [`HS_PROMOTE`] elements: one map behind one `Arc`, so
+    /// A hash below [`HS_PROMOTE`](crate::seg_map::HS_PROMOTE) elements: one map behind one `Arc`, so
     /// a snapshot pins it whole and the first write during that window
     /// deep-clones it. Past that size it becomes `SegHash`.
     Hash(Arc<HashData>),
@@ -227,7 +264,7 @@ pub enum Value {
     /// directory of `Arc`-shared buckets — a COW write under a live
     /// snapshot view clones one bucket, not the whole value.
     SegHash(Arc<crate::seg_map::SegMap<SmallBytes>>),
-    /// A list below [`SEG_PROMOTE`] elements: one deque behind one `Arc`,
+    /// A list below [`SEG_PROMOTE`](crate::list_seg::SEG_PROMOTE) elements: one deque behind one `Arc`,
     /// with the same whole-value copy-on-write. Past that size it becomes
     /// `SegList`.
     List(Arc<ListData>),
@@ -236,7 +273,7 @@ pub enum Value {
     /// clones one segment, not the whole (possibly multi-GB) value. See
     /// `list_seg.rs` for the promotion contract.
     SegList(Arc<crate::list_seg::SegListData>),
-    /// A set below [`HS_PROMOTE`] elements, on the same terms as `Hash`.
+    /// A set below [`HS_PROMOTE`](crate::seg_map::HS_PROMOTE) elements, on the same terms as `Hash`.
     Set(Arc<SetData>),
     /// A set past `seg_map::HS_PROMOTE` members — the set door of the
     /// same bucket-sharded COW as [`Value::SegHash`].
@@ -256,8 +293,8 @@ pub enum Value {
     /// `Arc<SetData>` — matches valkey's `OBJ_ENCODING_LISTPACK` for
     /// sets, which is what `redis-benchmark -t sadd` default `-r 0`
     /// (cardinality stays at 1 forever, single 20-byte literal member)
-    /// measures. On overflow ([`crate::small_set::SmallSetData::try_add`]
-    /// returns `NoRoom`) the set is promoted to `Value::Set(Arc<SetData>)`
+    /// measures. On overflow (the inline form has no room for another
+    /// member) the set is promoted to `Value::Set(Arc<SetData>)`
     /// — the Swiss-table path that wins for larger cardinalities.
     SmallSetInline(crate::small_set::SmallSetData),
     /// Tiny hashes

@@ -90,7 +90,7 @@ pub enum Effect {
     /// }
     /// let mut store = kevy_store::Store::new();
     /// let argv = kevy_resp::Argv::from(vec![b"XADD".to_vec(), b"s".to_vec(), b"7-*".to_vec(), b"f".to_vec(), b"v".to_vec()]);
-    /// let id = kevy_store::StreamId { ms: 7, seq: 0 };
+    /// let id = kevy_store::StreamId::new(7, 0);
     /// assert_eq!(exec(&mut store, b"XADD", &argv, &mut Vec::new()), Some(Effect::RecordId(2, id)));
     /// ```
     RecordId(usize, StreamId),

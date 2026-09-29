@@ -117,7 +117,9 @@ fn zrange_by_score_excl_honors_each_bound() {
     use kevy_store::ScoreBound;
     let s = s();
     s.zadd(b"z", &[(1.0, b"a"), (2.0, b"b"), (3.0, b"c")]).unwrap();
-    let b = |value, exclusive| ScoreBound { value, exclusive };
+    let b = |value, exclusive| {
+        if exclusive { ScoreBound::exclusive(value) } else { ScoreBound::inclusive(value) }
+    };
     let names = |r: Vec<(Vec<u8>, f64)>| r.into_iter().map(|(m, _)| m).collect::<Vec<_>>();
     assert_eq!(
         names(s.zrange_by_score_excl(b"z", b(1.0, true), b(3.0, false)).unwrap()),

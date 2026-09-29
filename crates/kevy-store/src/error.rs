@@ -24,7 +24,15 @@ pub type KevyResult<T> = core::result::Result<T, KevyError>;
 /// `KevyError::Store(StoreError::WrongType)`, not as stringly `io::Error`
 /// text. `From<io::Error>` / `From<StoreError>` keep `?` ergonomic at
 /// both the OS boundary and the store boundary.
+///
+/// ```
+/// use kevy_store::{KevyError, StoreError};
+/// let e = KevyError::from(StoreError::WrongType);
+/// assert_eq!(e.to_string(), "store error: wrong type for this operation");
+/// assert!(std::error::Error::source(&e).is_some());
+/// ```
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum KevyError {
     /// Structured store-semantic error (wrong type, non-integer,
     /// overflow, out-of-memory, …).
@@ -54,13 +62,11 @@ pub enum KevyError {
 impl fmt::Display for KevyError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Store(e) => write!(f, "store error: {e:?}"),
+            Self::Store(e) => write!(f, "store error: {e}"),
             #[cfg(feature = "std")]
             Self::Io(e) => write!(f, "io error: {e}"),
             Self::Protocol(msg) => write!(f, "protocol error: {msg}"),
-            Self::ReadOnly => {
-                write!(f, "READONLY You can't write against a read only replica")
-            }
+            Self::ReadOnly => f.write_str("write refused: this is a read-only replica"),
             Self::InvalidInput(msg) => write!(f, "invalid input: {msg}"),
             Self::NotFound(what) => write!(f, "not found: {what}"),
             Self::Unsupported(msg) => write!(f, "unsupported: {msg}"),
@@ -73,6 +79,7 @@ impl fmt::Display for KevyError {
 impl core::error::Error for KevyError {
     fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         match self {
+            Self::Store(e) => Some(e),
             #[cfg(feature = "std")]
             Self::Io(e) => Some(e),
             _ => None,

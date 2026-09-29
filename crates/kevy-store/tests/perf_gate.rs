@@ -23,7 +23,7 @@ fn populated() -> (Store, Vec<Vec<u8>>) {
     let mut s = Store::new();
     let keys: Vec<Vec<u8>> = (0..N).map(|i| format!("key:{i:08}").into_bytes()).collect();
     for k in &keys {
-        s.set(k, PAYLOAD.to_vec(), None, false, false);
+        s.set(k, PAYLOAD.to_vec(), None, kevy_store::SetCondition::Always);
     }
     (s, keys)
 }
@@ -63,7 +63,7 @@ fn set_overwrite_under_budget() {
     let median = time_median(ITERS, || {
         let k = &keys[i % N];
         i += 1;
-        s.set(k, PAYLOAD.to_vec(), None, false, false);
+        s.set(k, PAYLOAD.to_vec(), None, kevy_store::SetCondition::Always);
     });
     // Budget 20 µs (SET clones the key + boxes the value; dev ~300 ns–1 µs).
     let budget = Duration::from_micros(20);
@@ -76,7 +76,7 @@ fn incr_under_budget() {
     let mut s = Store::new();
     let keys: Vec<Vec<u8>> = (0..N).map(|i| format!("key:{i:08}").into_bytes()).collect();
     for k in &keys {
-        s.set(k, b"0".to_vec(), None, false, false);
+        s.set(k, b"0".to_vec(), None, kevy_store::SetCondition::Always);
     }
     let mut i = 0usize;
     let median = time_median(ITERS, || {

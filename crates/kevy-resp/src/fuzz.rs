@@ -23,8 +23,11 @@
 use crate::request::parse_command;
 
 /// Std-only LCG PRNG (MMIX constants). Deterministic per seed.
-#[derive(Debug, Clone, Copy)]
-pub struct Lcg(pub u64);
+///
+/// The state is private because zero is the generator's fixed point:
+/// [`Lcg::new`] is the only way in, and it never admits it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Lcg(u64);
 
 impl Lcg {
     /// Seed the generator; zero is replaced, since it is this LCG's
@@ -32,14 +35,27 @@ impl Lcg {
     ///
     /// ```
     /// use kevy_resp::fuzz::Lcg;
-    /// assert_eq!(Lcg::new(7).0, 7);
-    /// assert_ne!(Lcg::new(0).0, 0);
+    /// assert_eq!(Lcg::new(7).state(), 7);
+    /// assert_ne!(Lcg::new(0).state(), 0);
     /// ```
     #[must_use]
     pub const fn new(seed: u64) -> Self {
         // Avoid the zero fixed-point.
         Self(if seed == 0 { 0x9E37_79B9_7F4A_7C15 } else { seed })
     }
+    /// The current state: the seed before the first draw, then the last
+    /// value drawn — what a failing run records to be replayed.
+    ///
+    /// ```
+    /// let mut r = kevy_resp::fuzz::Lcg::new(3);
+    /// let v = r.next_u64();
+    /// assert_eq!(r.state(), v);
+    /// ```
+    #[must_use]
+    pub const fn state(self) -> u64 {
+        self.0
+    }
+
     /// The next 64 bits of the stream.
     ///
     /// Deterministic per seed — the same seed replays the same run.
@@ -75,7 +91,8 @@ impl Lcg {
 }
 
 /// Fuzz strategy. Each picks a different distribution of byte streams.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Strategy {
     /// Pure uniform random bytes.
     Uniform,
@@ -155,7 +172,14 @@ pub fn generate(strategy: Strategy, seed: u64) -> Vec<u8> {
 }
 
 /// Outcome of one fuzz call.
-#[derive(Debug)]
+///
+/// ```
+/// let r = kevy_resp::fuzz::run_one(kevy_resp::fuzz::Strategy::NegativeLengths, 5);
+/// assert!(r.input_len > 0);
+/// assert!(!matches!(r.outcome, kevy_resp::fuzz::FuzzOutcome::Timeout { .. }));
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct FuzzResult {
     /// Which distribution produced the input.
     pub strategy: Strategy,
@@ -170,7 +194,8 @@ pub struct FuzzResult {
 
 /// What one call to the parser did. Anything outside these four is a
 /// failure of the harness's own promise: bounded time, no panic.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum FuzzOutcome {
     /// Parsed a complete frame; `consumed` ≤ input_len.
     Parsed {
@@ -198,10 +223,10 @@ pub enum FuzzOutcome {
 /// ```
 pub const PER_CALL_TIMEOUT_MICROS: u128 = 10_000;
 
-/// Run one fuzz stream. Returns the outcome. Never panics on the
-/// fuzz input — the whole point is that `parse_command` itself
-/// doesn't panic. If the parser DID panic, `std::panic::catch_unwind`
-/// catches it and returns a special record (see [`run_one_caught`]).
+/// Run one fuzz stream and return its outcome. Nothing here catches a
+/// panic: a parser that panics on the generated input panics the caller,
+/// which is exactly the failure the campaign exists to surface, with the
+/// seed in [`FuzzResult`]'s place replayable through [`generate`].
 #[must_use]
 pub fn run_one(strategy: Strategy, seed: u64) -> FuzzResult {
     let input = generate(strategy, seed);
@@ -251,7 +276,8 @@ pub fn run_n(n: u64, base_seed: u64) -> Summary {
 /// assert_eq!(s.parsed + s.incomplete + s.errored, s.total - s.timed_out.len() as u64);
 /// assert!(s.timed_out.is_empty(), "a timeout is a runaway, not a slow machine");
 /// ```
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub struct Summary {
     /// Calls made.
     pub total: u64,

@@ -89,3 +89,20 @@ pub enum RespVersion {
     /// attributes (`|`). Opt-in via `HELLO 3`.
     V3,
 }
+
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<Argv>();
+    send_sync::<ArgvBorrowed<'static>>();
+    send_sync::<ArgvPool>();
+    send_sync::<ArgvIter<'static, Argv>>();
+    send_sync::<CmdError>();
+    send_sync::<ProtocolError>();
+    send_sync::<Reply>();
+    send_sync::<RespVersion>();
+    send_sync::<ops_table::OpSpec>();
+    send_sync::<ops_table::NotifyKind>();
+    send_sync::<fuzz::Lcg>();
+    send_sync::<fuzz::Summary>();
+    send_sync::<fuzz::FuzzResult>();
+};

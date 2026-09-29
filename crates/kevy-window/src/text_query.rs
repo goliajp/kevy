@@ -18,7 +18,19 @@ use kevy_text::{CorpusStats, SortOrder, sorted_order};
 use super::TextColdDir;
 
 /// Everything pass 2 asks of the cold directory.
-#[derive(Debug)]
+///
+/// Built from the MATCH text with [`ColdPageQuery::parse`], then narrowed
+/// by assigning the clause fields or with the `with_*` builders.
+///
+/// ```
+/// let stats = kevy_text::CorpusStats::default();
+/// let q = kevy_window::ColdPageQuery::parse(b"pear apple apple \"red fig\"", &stats, 10);
+/// assert_eq!(q.bare, [b"apple".to_vec(), b"pear".to_vec()]);
+/// assert_eq!(q.phrases.len(), 1);
+/// assert!(q.filter.is_empty() && q.sort.is_none());
+/// ```
+#[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ColdPageQuery<'a> {
     /// Bare terms, sorted and deduplicated (the hot engine's rule).
     pub bare: Vec<Vec<u8>>,
@@ -39,7 +51,8 @@ pub struct ColdPageQuery<'a> {
 }
 
 /// One cold hit: its page-order ingredients, ready to merge.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct ColdHit {
     /// The row key this hit points at.
     pub key: Vec<u8>,
@@ -52,7 +65,8 @@ pub struct ColdHit {
 }
 
 /// The cold half of one shard's pass-2 answer.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Default)]
+#[non_exhaustive]
 pub struct ColdPage {
     /// Best `fetch` cold hits in the page's order.
     pub hits: Vec<ColdHit>,
@@ -62,6 +76,84 @@ pub struct ColdPage {
     /// Per requested facet field, (identity, label, count) over the
     /// filtered cold match set.
     pub facets: Vec<Vec<kevy_text::Bucket>>,
+}
+
+impl<'a> ColdPageQuery<'a> {
+    /// The query for MATCH `text`: bare terms sorted and deduplicated and
+    /// phrases split the hot engine's way, scored against `stats`, `fetch`
+    /// hits deep, with no FILTER, SORT, DISTINCT or FACET clause.
+    ///
+    /// ```
+    /// let stats = kevy_text::CorpusStats::default();
+    /// let q = kevy_window::ColdPageQuery::parse(b"open", &stats, 5);
+    /// assert_eq!((q.bare.len(), q.fetch), (1, 5));
+    /// ```
+    pub fn parse(text: &[u8], stats: &'a CorpusStats, fetch: usize) -> Self {
+        let (mut bare, phrases, _prefixes) = kevy_text::parse_clauses(text);
+        bare.sort();
+        bare.dedup();
+        Self { bare, phrases, stats, filter: &[], sort: None, distinct: None, facets: &[], fetch }
+    }
+
+    /// Keep only documents every one of `filter` passes.
+    ///
+    /// ```
+    /// let stats = kevy_text::CorpusStats::default();
+    /// let any = |_: &[u8]| true;
+    /// let f = [kevy_text::Filter::new(0, &any)];
+    /// let q = kevy_window::ColdPageQuery::parse(b"open", &stats, 5).with_filter(&f);
+    /// assert_eq!(q.filter.len(), 1);
+    /// ```
+    #[must_use]
+    pub fn with_filter(mut self, filter: &'a [kevy_text::Filter<'a>]) -> Self {
+        self.filter = filter;
+        self
+    }
+
+    /// Order the page by a stored value instead of by score.
+    ///
+    /// ```
+    /// let stats = kevy_text::CorpusStats::default();
+    /// let key = |v: &[u8]| Some(v.to_vec());
+    /// let s = kevy_text::Sort::new(0, &key);
+    /// let q = kevy_window::ColdPageQuery::parse(b"open", &stats, 5).with_sort(&s);
+    /// assert!(q.sort.is_some());
+    /// ```
+    #[must_use]
+    pub fn with_sort(mut self, sort: &'a kevy_text::Sort<'a>) -> Self {
+        self.sort = Some(sort);
+        self
+    }
+
+    /// Collapse to the best hit per value identity.
+    ///
+    /// ```
+    /// let stats = kevy_text::CorpusStats::default();
+    /// let key = |v: &[u8]| Some(v.to_vec());
+    /// let d = kevy_text::Distinct::new(0, &key);
+    /// let q = kevy_window::ColdPageQuery::parse(b"open", &stats, 5).with_distinct(&d);
+    /// assert!(q.distinct.is_some());
+    /// ```
+    #[must_use]
+    pub fn with_distinct(mut self, distinct: &'a kevy_text::Distinct<'a>) -> Self {
+        self.distinct = Some(distinct);
+        self
+    }
+
+    /// Count these facet fields over the (filtered) match set.
+    ///
+    /// ```
+    /// let stats = kevy_text::CorpusStats::default();
+    /// let label = |v: &[u8]| Some(v.to_vec());
+    /// let f = [kevy_text::Facet::new(0, &label)];
+    /// let q = kevy_window::ColdPageQuery::parse(b"open", &stats, 5).with_facets(&f);
+    /// assert_eq!(q.facets.len(), 1);
+    /// ```
+    #[must_use]
+    pub fn with_facets(mut self, facets: &'a [kevy_text::Facet<'a>]) -> Self {
+        self.facets = facets;
+        self
+    }
 }
 
 impl TextColdDir {

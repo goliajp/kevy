@@ -77,7 +77,7 @@ pub(crate) fn probe_window(
         return;
     }
     if let Some(cell) = ctx.state.catalogs.usage_cell(name)
-        && let Some(v) = lower.window_value(w.shape)
+        && let Some(v) = lower.window_value(w.shape())
     {
         cell.probe(v.saturating_sub(w.boundary()));
     }

@@ -12,7 +12,7 @@
 /// Index/`get`/`first`/`iter` return `&[u8]` argument slices. It compares equal
 /// to a `Vec<Vec<u8>>` of the same arguments, so call sites and tests read
 /// naturally.
-#[derive(Clone, Default, Debug, Eq)]
+#[derive(Clone, Default, Debug, PartialEq, Eq, Hash)]
 pub struct Argv {
     buf: Vec<u8>,
     ends: Vec<u32>,
@@ -99,12 +99,6 @@ impl PartialEq<Vec<Vec<u8>>> for Argv {
     }
 }
 
-impl PartialEq for Argv {
-    fn eq(&self, other: &Argv) -> bool {
-        self.buf == other.buf && self.ends == other.ends
-    }
-}
-
 /// Build from a vec-of-vecs (test/embedding convenience; the wire path uses
 /// [`parse_command`](crate::parse_command), which builds an [`Argv`] directly
 /// without the intermediate allocations).
@@ -115,6 +109,35 @@ impl From<Vec<Vec<u8>>> for Argv {
             a.push(arg);
         }
         a
+    }
+}
+
+/// Collect argument slices into an argv, in order.
+///
+/// ```
+/// let a: kevy_resp::Argv = [b"GET".as_slice(), b"k"].into_iter().collect();
+/// assert_eq!(a, vec![b"GET".to_vec(), b"k".to_vec()]);
+/// ```
+impl<'a> FromIterator<&'a [u8]> for Argv {
+    fn from_iter<I: IntoIterator<Item = &'a [u8]>>(iter: I) -> Self {
+        let mut a = Argv::default();
+        a.extend(iter);
+        a
+    }
+}
+
+/// Append argument slices, in order.
+///
+/// ```
+/// let mut a = kevy_resp::Argv::from(vec![b"DEL".to_vec()]);
+/// a.extend([b"k1".as_slice(), b"k2"]);
+/// assert_eq!(a.len(), 3);
+/// ```
+impl<'a> Extend<&'a [u8]> for Argv {
+    fn extend<I: IntoIterator<Item = &'a [u8]>>(&mut self, iter: I) {
+        for arg in iter {
+            self.push(arg);
+        }
     }
 }
 

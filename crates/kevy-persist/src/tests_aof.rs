@@ -255,7 +255,7 @@ pub(crate) fn temp_aof(name: &str) -> std::path::PathBuf {
 fn snapshot_cursor_roundtrip_and_legacy_none() {
     let dir = kevy_tmpdir::unique_dir("aof");
     let mut store = kevy_store::Store::new();
-    store.set(b"k", b"v".to_vec(), None, false, false);
+    store.set(b"k", b"v".to_vec(), None, kevy_store::SetCondition::Always);
 
     // v5: cursor written + read back; entries load fine.
     let p5 = dir.join("v5.rdb");
@@ -383,8 +383,8 @@ fn v1_file_upgrades_on_rewrite_and_v2_detects_bit_rot() {
     {
         let mut aof = Aof::open(&path, Fsync::No).unwrap();
         let mut store = Store::new();
-        store.set(b"k", b"v1-era".to_vec(), None, false, false);
-        store.set(b"k2", b"still-v1".to_vec(), None, false, false);
+        store.set(b"k", b"v1-era".to_vec(), None, kevy_store::SetCondition::Always);
+        store.set(b"k2", b"still-v1".to_vec(), None, kevy_store::SetCondition::Always);
         aof.rewrite_from(&store).unwrap();
         // Post-rewrite appends are v2 records.
         aof.append(&cmd(&[b"SET", b"k3", b"v2-era"])).unwrap();

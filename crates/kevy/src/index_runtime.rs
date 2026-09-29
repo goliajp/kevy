@@ -420,7 +420,7 @@ fn refresh(ctx: &Ctx<'_>, st: &mut ShardIndexes, store: &mut Store) {
                     // A changed window resets the runtime — the old
                     // spill is unreachable and swept on first slide.
                     let want = window_for(catalogs, &si.spec);
-                    let have = si.window.as_ref().map(|w| (w.spec.clone(), w.shape));
+                    let have = si.window.as_ref().map(|w| (w.spec().clone(), w.shape()));
                     if have != want {
                         si.window = want.map(|(w, sh)| kevy_window::WindowRt::new(w, sh));
                     }

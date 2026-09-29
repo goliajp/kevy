@@ -47,7 +47,7 @@ impl Commands for Slow {
     }
     fn dispatch<A: ArgvView + ?Sized>(&self, store: &mut Store, args: &A) -> Vec<u8> {
         if args[0].eq_ignore_ascii_case(b"SET") {
-            store.set(&args[1], args[2].to_vec(), None, false, false);
+            store.set(&args[1], args[2].to_vec(), None, kevy_store::SetCondition::Always);
             return b"+OK\r\n".to_vec();
         }
         match store.get(&args[1]) {
@@ -76,7 +76,7 @@ impl Commands for Slow {
     }
     fn apply_ext(&self, store: &mut Store, _: &[u8]) {
         std::thread::sleep(std::time::Duration::from_millis(200));
-        store.set(&keys().1, b"up".to_vec(), None, false, false);
+        store.set(&keys().1, b"up".to_vec(), None, kevy_store::SetCondition::Always);
         self.applied.fetch_add(1, Ordering::SeqCst);
     }
 }

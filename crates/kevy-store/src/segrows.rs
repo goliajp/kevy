@@ -62,14 +62,25 @@ impl SegRows {
 }
 
 /// One sealed eviction batch: the segment's identity and EXACTLY the
-/// keys it holds (the commit's phase-change list).
+/// keys it holds (the commit's phase-change list). Only the store makes
+/// one, so a commit always names a batch that was really sealed.
 #[derive(Debug)]
 pub struct SealedRows {
-    /// The segment's stable seq.
-    pub seq: u32,
-    /// Its file name — what the SEGMENTED frame carries.
-    pub file: String,
+    seq: u32,
+    file: String,
     keys: Vec<Vec<u8>>,
+}
+
+impl SealedRows {
+    /// The segment's stable seq.
+    pub fn seq(&self) -> u32 {
+        self.seq
+    }
+
+    /// Its file name — what the SEGMENTED frame carries.
+    pub fn file(&self) -> &str {
+        &self.file
+    }
 }
 
 /// The manifest meta tag row segments register under.

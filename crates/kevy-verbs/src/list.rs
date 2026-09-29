@@ -3,7 +3,7 @@
 use kevy_resp::{
     ArgvView, encode_array_len, encode_bulk, encode_error, encode_null_bulk, encode_simple_string,
 };
-use kevy_store::Store;
+use kevy_store::{InsertPosition, Store};
 
 use crate::args::{arg_i64, rest_borrowed};
 use crate::reply::{
@@ -207,12 +207,15 @@ fn linsert<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>)
         wrong_args(out, "linsert");
         return Effect::Unchanged;
     }
-    let before = args[2].eq_ignore_ascii_case(b"BEFORE");
-    if !before && !args[2].eq_ignore_ascii_case(b"AFTER") {
+    let position = if args[2].eq_ignore_ascii_case(b"BEFORE") {
+        InsertPosition::Before
+    } else if args[2].eq_ignore_ascii_case(b"AFTER") {
+        InsertPosition::After
+    } else {
         encode_error(out, ERR_SYNTAX);
         return Effect::Unchanged;
-    }
-    let res = store.linsert(&args[1], before, &args[3], &args[4]);
+    };
+    let res = store.linsert(&args[1], position, &args[3], &args[4]);
     let inserted = matches!(res, Ok(n) if n > 0);
     emit_int_result(res, out);
     changed(inserted)

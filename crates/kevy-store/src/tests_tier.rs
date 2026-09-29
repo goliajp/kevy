@@ -101,9 +101,13 @@ fn codec_hash_round_trip_heap_inline_and_empty() {
 #[test]
 fn demote_promote_preserves_value_ttl_lru_watch_and_fires_no_events() {
     let (mut s, _d) = tiered("tier-roundtrip", u64::MAX);
-    s.set_notify_capture(true, true, true);
+    s.set_notify_capture([
+        crate::KeyspaceEvent::New,
+        crate::KeyspaceEvent::Expired,
+        crate::KeyspaceEvent::Evicted,
+    ]);
     let big = vec![b'z'; 4096];
-    s.set(b"k", big.clone(), Some(Duration::from_secs(600)), false, false);
+    s.set(b"k", big.clone(), Some(Duration::from_secs(600)), crate::SetCondition::Always);
     let ttl_before = s.pttl(b"k");
     let lru_before = s.map.get(b"k".as_slice()).unwrap().lru_clock();
     let watch_v = s.record_watch(b"k");
@@ -163,7 +167,7 @@ fn hash_field_ttls_stay_in_ram_and_purge_on_promote() {
 #[test]
 fn wrongtype_on_cold_never_reads_the_vlog() {
     let (mut s, _d) = tiered("tier-wrongtype", u64::MAX);
-    s.set(b"str", vec![b'a'; 1024], None, false, false);
+    s.set(b"str", vec![b'a'; 1024], None, crate::SetCondition::Always);
     s.hset(
         b"h",
         &[
@@ -198,7 +202,7 @@ fn wrongtype_on_cold_never_reads_the_vlog() {
 fn first_read_serves_without_installing_second_read_promotes() {
     let (mut s, _d) = tiered("tier-gate", u64::MAX);
     let big = vec![b'q'; 2048];
-    s.set(b"k", big.clone(), None, false, false);
+    s.set(b"k", big.clone(), None, crate::SetCondition::Always);
     assert!(s.debug_force_demote(b"k"));
 
     // 1st materializing access: identical bytes, still cold.
@@ -216,7 +220,7 @@ fn first_read_serves_without_installing_second_read_promotes() {
 fn shared_lane_reads_never_promote_and_never_mark() {
     let (mut s, _d) = tiered("tier-shared", u64::MAX);
     let big = vec![b'w'; 2048];
-    s.set(b"k", big.clone(), None, false, false);
+    s.set(b"k", big.clone(), None, crate::SetCondition::Always);
     assert!(s.debug_force_demote(b"k"));
     for _ in 0..3 {
         let got = s.get_shared(b"k").unwrap().unwrap();
@@ -235,7 +239,7 @@ fn shared_lane_reads_never_promote_and_never_mark() {
 #[test]
 fn demote_and_promote_accounting_is_exact() {
     let (mut s, _d) = tiered("tier-account", u64::MAX);
-    s.set(b"k", vec![b'a'; 8192], None, false, false);
+    s.set(b"k", vec![b'a'; 8192], None, crate::SetCondition::Always);
     let used_hot = s.used_memory();
     let w_hot = s.map.get(b"k".as_slice()).unwrap().weight();
     assert!(s.debug_force_demote(b"k"));
@@ -261,15 +265,15 @@ fn demote_and_promote_accounting_is_exact() {
 fn demotion_sampler_skips_cold_and_non_spillable() {
     let (mut s, _d) = tiered("tier-sampler", 1); // budget 1 byte → always over watermark
     // Non-spillable population only: Int, small Str, list, set.
-    s.set(b"int", b"42".to_vec(), None, false, false);
-    s.set(b"small", b"tiny".to_vec(), None, false, false);
+    s.set(b"int", b"42".to_vec(), None, crate::SetCondition::Always);
+    s.set(b"small", b"tiny".to_vec(), None, crate::SetCondition::Always);
     s.lpush(b"list", &[&[b'x'; 200][..]]).unwrap();
     s.sadd(b"set", &[&[b'y'; 200][..]]).unwrap();
     assert_eq!(s.try_demote_after_write(), 0, "nothing spillable ⇒ no demotion");
     assert_eq!(s.tier_stats().demotions_total, 0);
 
     // One spillable key: demoted once, then (cold) never re-picked.
-    s.set(b"bulk", vec![b'b'; 4096], None, false, false);
+    s.set(b"bulk", vec![b'b'; 4096], None, crate::SetCondition::Always);
     assert_eq!(s.try_demote_after_write(), 1);
     assert!(is_cold(&s, b"bulk"));
     assert_eq!(s.try_demote_after_write(), 0, "cold keys are not candidates");
@@ -284,7 +288,7 @@ fn a_single_write_spills_at_most_one_batch() {
         // the serving layers' glue) — so one explicit call below sees
         // all 100 candidates at once.
         let key = format!("k{i:03}").into_bytes();
-        s.set(&key, vec![b'v'; 1024], None, false, false);
+        s.set(&key, vec![b'v'; 1024], None, crate::SetCondition::Always);
     }
     let already = s.tier_stats().demotions_total;
     assert_eq!(already, 0);
@@ -299,15 +303,15 @@ fn a_single_write_spills_at_most_one_batch() {
 fn renamed_cold_key_survives_compaction() {
     let (mut s, _d) = tiered("tier-rename-compact", u64::MAX);
     let big = vec![b'r'; 3000];
-    s.set(b"old", big.clone(), None, false, false);
+    s.set(b"old", big.clone(), None, crate::SetCondition::Always);
     // Churn so the stub's file seals with mostly-dead bytes.
     for i in 0..64u32 {
         let key = format!("churn{i}").into_bytes();
-        s.set(&key, vec![b'c'; 5000], None, false, false);
+        s.set(&key, vec![b'c'; 5000], None, crate::SetCondition::Always);
         s.debug_force_demote(&key);
     }
     assert!(s.debug_force_demote(b"old"));
-    assert_eq!(s.rename(b"old", b"new", false), crate::RenameOutcome::Renamed);
+    assert_eq!(s.rename(b"old", b"new"), crate::RenameOutcome::Renamed);
     assert!(is_cold(&s, b"new"), "RENAME moves the stub without a read");
     // Kill the churn keys → their records die; force a compaction pass
     // by rotating (drop enough that ratios fall) and demote-batching.
@@ -315,7 +319,7 @@ fn renamed_cold_key_survives_compaction() {
         s.del(&[format!("churn{i}").as_bytes()]);
     }
     // Direct trigger: run the compaction path via a fresh demote batch.
-    s.set(b"trigger", vec![b't'; 5000], None, false, false);
+    s.set(b"trigger", vec![b't'; 5000], None, crate::SetCondition::Always);
     s.debug_force_demote(b"trigger");
     s.tier_force_compact_for_tests();
     assert_eq!(
@@ -328,7 +332,7 @@ fn renamed_cold_key_survives_compaction() {
 #[test]
 fn flushall_clears_the_cold_tier() {
     let (mut s, _d) = tiered("tier-flush", u64::MAX);
-    s.set(b"k", vec![b'f'; 2048], None, false, false);
+    s.set(b"k", vec![b'f'; 2048], None, crate::SetCondition::Always);
     assert!(s.debug_force_demote(b"k"));
     assert_eq!(s.tier_stats().cold_keys, 1);
     s.flushall();
@@ -343,7 +347,7 @@ fn flushall_clears_the_cold_tier() {
 #[test]
 fn materialize_cold_returns_hot_twin_without_promotion() {
     let (mut s, _d) = tiered("tier-materialize", u64::MAX);
-    s.set(b"bulk", vec![b'm'; 3000], None, false, false);
+    s.set(b"bulk", vec![b'm'; 3000], None, crate::SetCondition::Always);
     s.hset(b"row", &[(b"f".as_slice(), b"v".as_slice())]).unwrap();
     assert!(s.debug_force_demote(b"bulk"));
     assert!(s.debug_force_demote(b"row"));
@@ -377,11 +381,11 @@ fn snapshot_view_pins_survive_file_retirement() {
     s.tier.as_mut().unwrap().vlog = kevy_vlog::Vlog::open(d.path(), 4096).unwrap();
 
     let frozen = noise(3000);
-    s.set(b"pinned", frozen.clone(), None, false, false);
+    s.set(b"pinned", frozen.clone(), None, crate::SetCondition::Always);
     assert!(s.debug_force_demote(b"pinned")); // → file 0
-    s.set(b"filler", noise(3000), None, false, false);
+    s.set(b"filler", noise(3000), None, crate::SetCondition::Always);
     assert!(s.debug_force_demote(b"filler")); // → file 0 (now past rotate)
-    s.set(b"other", noise(3000), None, false, false);
+    s.set(b"other", noise(3000), None, crate::SetCondition::Always);
     assert!(s.debug_force_demote(b"other")); // rotates → file 1
 
     let view = s.collect_snapshot();
@@ -417,13 +421,13 @@ fn snapshot_view_pins_survive_file_retirement() {
 #[test]
 fn del_and_overwrite_credit_dead_bytes() {
     let (mut s, _d) = tiered("tier-dead", u64::MAX);
-    s.set(b"a", vec![b'a'; 1024], None, false, false);
-    s.set(b"b", vec![b'b'; 1024], None, false, false);
+    s.set(b"a", vec![b'a'; 1024], None, crate::SetCondition::Always);
+    s.set(b"b", vec![b'b'; 1024], None, crate::SetCondition::Always);
     assert!(s.debug_force_demote(b"a"));
     assert!(s.debug_force_demote(b"b"));
     assert_eq!(s.del(&[b"a".as_slice()]), 1, "DEL counts the cold key");
     // Overwrite-SET on the raw fast path finds the stub Occupied.
-    s.set(b"b", b"hot".to_vec(), None, false, false);
+    s.set(b"b", b"hot".to_vec(), None, crate::SetCondition::Always);
     assert_eq!(s.get(b"b").unwrap().unwrap().as_ref(), b"hot");
     let st = s.tier_stats();
     assert_eq!(st.cold_keys, 0);
@@ -443,7 +447,7 @@ fn t5_effective_target_subtracts_reserved_and_stub() {
     s.set_tier_reserved(100_000);
     assert_eq!(s.tier_stats().effective_target, wm - 100_000);
     // A demotion grows stub_bytes, which lowers the target further.
-    s.set(b"k", vec![b'x'; 4096], None, false, false);
+    s.set(b"k", vec![b'x'; 4096], None, crate::SetCondition::Always);
     assert!(s.debug_force_demote(b"k"));
     let st = s.tier_stats();
     assert_eq!(st.stub_bytes, OVERHEAD, "short key: stub = ENTRY_OVERHEAD only");
@@ -472,7 +476,7 @@ fn t5_reserved_pressure_triggers_demotion() {
     let budget = 64 * 1024u64;
     let (mut s, _d) = tiered("tier-t5-pressure", budget);
     for i in 0..10u32 {
-        s.set(format!("k{i}").as_bytes(), vec![b'v'; 2048], None, false, false);
+        s.set(format!("k{i}").as_bytes(), vec![b'v'; 2048], None, crate::SetCondition::Always);
     }
     assert_eq!(s.demote_step(), 0, "under the plain watermark: nothing to do");
     s.set_tier_reserved(50 * 1024);
@@ -483,8 +487,8 @@ fn t5_reserved_pressure_triggers_demotion() {
 fn t5_stub_bytes_exact_across_demote_promote_del_rename_flush() {
     let (mut s, _d) = tiered("tier-t5-stub", u64::MAX);
     let long_key = vec![b'L'; 30]; // > 22-byte inline boundary → 30 heap bytes
-    s.set(b"short", vec![b'a'; 2048], None, false, false);
-    s.set(&long_key, vec![b'b'; 2048], None, false, false);
+    s.set(b"short", vec![b'a'; 2048], None, crate::SetCondition::Always);
+    s.set(&long_key, vec![b'b'; 2048], None, crate::SetCondition::Always);
     assert!(s.debug_force_demote(b"short"));
     assert!(s.debug_force_demote(&long_key));
     let st = s.tier_stats();
@@ -494,7 +498,7 @@ fn t5_stub_bytes_exact_across_demote_promote_del_rename_flush() {
 
     // RENAME short → a long name: stub cost re-accounts for the key.
     let long_dst = vec![b'D'; 40];
-    assert!(matches!(s.rename(b"short", &long_dst, false), crate::RenameOutcome::Renamed));
+    assert!(matches!(s.rename(b"short", &long_dst), crate::RenameOutcome::Renamed));
     assert_eq!(s.tier_stats().stub_bytes, (OVERHEAD + 40) + (OVERHEAD + 30));
 
     // Promote (two reads: serve, then install) releases the stub cost.
@@ -511,7 +515,7 @@ fn t5_stub_bytes_exact_across_demote_promote_del_rename_flush() {
     assert_eq!((st.stub_bytes, st.cold_keys, st.cold_bytes), (0, 0, 0));
 
     // FLUSHALL from a re-demoted state zeroes in one stroke.
-    s.set(b"again", vec![b'c'; 2048], None, false, false);
+    s.set(b"again", vec![b'c'; 2048], None, crate::SetCondition::Always);
     assert!(s.debug_force_demote(b"again"));
     assert!(s.tier_stats().stub_bytes > 0);
     s.flushall();
@@ -522,7 +526,7 @@ fn t5_stub_bytes_exact_across_demote_promote_del_rename_flush() {
 #[test]
 fn t5_live_budget_update_does_not_disturb_the_vlog() {
     let (mut s, _d) = tiered("tier-t5-budget", u64::MAX);
-    s.set(b"cold", vec![b'z'; 4096], None, false, false);
+    s.set(b"cold", vec![b'z'; 4096], None, crate::SetCondition::Always);
     assert!(s.debug_force_demote(b"cold"));
     let before = s.tier_stats();
     s.set_tier_budget(123_456);
@@ -541,7 +545,7 @@ fn t5_live_budget_update_does_not_disturb_the_vlog() {
 #[test]
 fn t5_stats_carry_vlog_gauges() {
     let (mut s, _d) = tiered("tier-t5-vlog", u64::MAX);
-    s.set(b"v", noise(1024), None, false, false);
+    s.set(b"v", noise(1024), None, crate::SetCondition::Always);
     assert!(s.debug_force_demote(b"v"));
     let st = s.tier_stats();
     assert_eq!(st.vlog_files, 1);
@@ -556,8 +560,8 @@ fn t5_stats_carry_vlog_gauges() {
 fn max_spill_caps_the_largest_demotable_value() {
     let (mut s, _d) = tiered("tier-maxspill", 1 << 30);
     s.set_tier_max_spill(1024);
-    s.set(b"big", vec![b'a'; 4096], None, false, false); // over the cap
-    s.set(b"small", vec![b'b'; 300], None, false, false); // under the cap
+    s.set(b"big", vec![b'a'; 4096], None, crate::SetCondition::Always); // over the cap
+    s.set(b"small", vec![b'b'; 300], None, crate::SetCondition::Always); // under the cap
     assert!(!s.debug_force_demote(b"big"), "over-cap value must stay hot");
     assert!(!is_cold(&s, b"big"));
     assert!(s.debug_force_demote(b"small"), "under-cap value demotes");
@@ -575,7 +579,7 @@ fn max_spill_caps_the_largest_demotable_value() {
 #[test]
 fn a_dry_tick_backs_off_exponentially_to_the_ceiling() {
     let (mut s, _d) = tiered("tier-backoff", 1); // budget 1 ⇒ always over
-    s.set(b"int", b"42".to_vec(), None, false, false); // nothing spillable
+    s.set(b"int", b"42".to_vec(), None, crate::SetCondition::Always); // nothing spillable
     let skip = |s: &Store| {
         let t = s.tier.as_ref().unwrap();
         (t.tick_skip, t.tick_wait)
@@ -601,12 +605,12 @@ fn a_dry_tick_backs_off_exponentially_to_the_ceiling() {
 #[test]
 fn a_write_path_demotion_wakes_the_backed_off_tick() {
     let (mut s, _d) = tiered("tier-backoff-reset", 1);
-    s.set(b"int", b"42".to_vec(), None, false, false);
+    s.set(b"int", b"42".to_vec(), None, crate::SetCondition::Always);
     for _ in 0..10 {
         let _ = s.demote_step();
     }
     assert!(s.tier.as_ref().unwrap().tick_skip >= 2, "backed off");
-    s.set(b"bulk", vec![b'b'; 4096], None, false, false);
+    s.set(b"bulk", vec![b'b'; 4096], None, crate::SetCondition::Always);
     assert_eq!(s.try_demote_after_write(), 1, "write path samples during the window");
     let t = s.tier.as_ref().unwrap();
     assert_eq!((t.tick_skip, t.tick_wait), (0, 0), "progress resets the tick backoff");
@@ -620,7 +624,7 @@ fn a_write_path_demotion_wakes_the_backed_off_tick() {
 fn a_zero_effective_target_backs_off_like_any_dry_tick() {
     let (mut s, _d) = tiered("tier-backoff-floor", 1 << 20);
     s.set_tier_reserved(1 << 30); // floor >> budget ⇒ effective_target 0
-    s.set(b"bulk", vec![b'b'; 4096], None, false, false);
+    s.set(b"bulk", vec![b'b'; 4096], None, crate::SetCondition::Always);
     assert_eq!(s.demote_step(), 1, "the one spillable value still demotes");
     assert_eq!(s.demote_step(), 0, "then the tick runs dry");
     assert_eq!(s.tier.as_ref().unwrap().tick_skip, 1, "and backs off");

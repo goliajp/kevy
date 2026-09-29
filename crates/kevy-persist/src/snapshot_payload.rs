@@ -187,7 +187,7 @@ pub(crate) fn write_stream_payload<W: Write>(
     w.write_all(&s.max_deleted_id().seq.to_le_bytes())?;
     w.write_all(&s.entries_added().to_le_bytes())?;
     w.write_all(&(s.length() as u32).to_le_bytes())?;
-    for (id, fv) in s.iter_entries() {
+    for (id, fv) in s.entries() {
         w.write_all(&id.ms.to_le_bytes())?;
         w.write_all(&id.seq.to_le_bytes())?;
         w.write_all(&(fv.len() as u32).to_le_bytes())?;

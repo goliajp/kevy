@@ -95,8 +95,8 @@ fn move_scope_ships_prefix_slice_to_mock_target_and_commits() {
 
     // Pre-fill the source store with two keys under the prefix.
     let mut store = Store::new();
-    store.set(b"test:a", b"1".to_vec(), None, false, false);
-    store.set(b"test:b", b"2".to_vec(), None, false, false);
+    store.set(b"test:a", b"1".to_vec(), None, kevy_store::SetCondition::Always);
+    store.set(b"test:b", b"2".to_vec(), None, kevy_store::SetCondition::Always);
 
     // Issue the MOVE-SCOPE command via the public dispatch path.
     let args = argv(&[b"MOVE-SCOPE", b"test:", b"FROM", b"A", b"TO", b"B"]);

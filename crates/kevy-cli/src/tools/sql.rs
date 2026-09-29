@@ -190,14 +190,14 @@ fn print_entries(plan: &kevy_sql::Plan) {
     if !served.is_empty() {
         println!("\n  served:");
         for q in served {
-            let kevy_sql::Served::Yes { paths, .. } = &q.served else { continue };
+            let Some(paths) = q.served.paths() else { continue };
             println!("    {:<24} {}", q.name, paths.join(" + "));
         }
     }
     if !unserved.is_empty() {
         println!("\n  not served:");
         for q in unserved {
-            let kevy_sql::Served::No { reason } = &q.served else { continue };
+            let kevy_sql::Served::Refused { reason } = &q.served else { continue };
             println!("    line {:<5} {}", q.line, q.name);
             println!("      {reason}");
         }
