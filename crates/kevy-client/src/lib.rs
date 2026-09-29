@@ -67,7 +67,6 @@ mod zalgebra;
 
 pub use blocking::ZPopHit;
 pub use cluster::ClusterClient;
-pub use feed::{FeedBatch, FeedFrame};
 pub use index::{IdxInfo, IdxPage, IdxRow, IdxType};
 pub use pipeline::PipelineBuf;
 pub use subscribe::{PubsubEvent, Subscriber, SubscriberEvents, SubscriberMessages};
@@ -75,7 +74,10 @@ pub use transaction::{Transaction, TransactionReplies};
 
 /// Re-exports so downstream code can name the argument/reply/error types
 /// of the wraps without adding kevy-embedded / kevy-resp deps.
-pub use kevy_embedded::{HExpireCode, HExpireCond, KevyError, KevyResult, StoreError, ZAggregate};
+pub use kevy_embedded::{
+    Change, ChangeBatch, FeedPosition, HExpireCode, HExpireCond, KevyError, KevyResult, StoreError,
+    ZAggregate,
+};
 pub use kevy_resp::Reply;
 
 pub(crate) use reply::{
@@ -86,6 +88,7 @@ pub(crate) use url::{Target, parse_url, resolve_store};
 /// One open connection to a kevy backend, opaque about whether the backend
 /// is in-process or over TCP.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Connection {
     /// In-process [`kevy_embedded::Store`]. Boxed because `Store` is
     /// sizeable (carries its `Config`, including the replica
@@ -403,6 +406,25 @@ impl Connection {
         }
     }
 }
+
+// Send and Sync are part of the public contract: a change that loses
+// either fails to compile here rather than in a caller.
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<Connection>();
+    send_sync::<ClusterClient>();
+    send_sync::<IdxInfo>();
+    send_sync::<IdxPage>();
+    send_sync::<IdxRow>();
+    send_sync::<IdxType>();
+    send_sync::<PipelineBuf>();
+    send_sync::<Subscriber>();
+    send_sync::<SubscriberEvents<'static>>();
+    send_sync::<SubscriberMessages<'static>>();
+    send_sync::<Transaction<'static>>();
+    send_sync::<TransactionReplies>();
+    send_sync::<ZPopHit>();
+};
 
 #[cfg(test)]
 #[path = "lib_tests.rs"]

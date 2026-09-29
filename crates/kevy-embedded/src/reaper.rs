@@ -6,9 +6,12 @@
 // set and the next tick retries — but a persistent one (full disk,
 // read-only remount, EIO) means `appendfsync everysec` has quietly
 // become "never" with nothing saying so. Open question §2.
-#![expect(
-    clippy::let_underscore_must_use,
-    reason = "a persistent fsync failure is invisible; an open question"
+#![cfg_attr(
+    feature = "persist",
+    expect(
+        clippy::let_underscore_must_use,
+        reason = "a persistent fsync failure is invisible; an open question"
+    )
 )]
 
 use std::io;

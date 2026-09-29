@@ -179,6 +179,8 @@ match conn {
     Connection::Remote(c)   => {
         // call c.request(&[...]) directly
     }
+    // a backend added in a later version
+    _ => {}
 }
 # Ok(())
 # }
@@ -262,9 +264,10 @@ with optional `LIMIT`.
 score)`), `idx_query_raw`, `idx_drop`, `idx_list` (`IdxInfo`).
 
 **Change feed / CDC** (v2.0.0): `feed_shards`, `feed_tail`,
-`feed_read` (`FeedBatch` of offset-tagged argv frames, prefix
-filtering, `FEEDRESYNC` cursor-rebuild contract shared with the
-embedded `changes_since`).
+`feed_read` (a `ChangeBatch` of offset-tagged argv `Change`s resuming at
+a `FeedPosition` — the embedded `changes_since` types, so both backends
+return the same thing — with prefix filtering and the `FEEDRESYNC`
+cursor-rebuild contract).
 
 **Pipelining** (v2.0.0, remote-only): `pipeline(|p| p.cmd(...))` —
 one write, in-order replies, non-atomic.

@@ -19,13 +19,12 @@ use kevy_resp::{Reply, encode_command_borrowed};
 
 const PIPELINE: usize = 512;
 
-/// Run `export` — walk the keyspace (optionally under `prefix`) and
-/// write rebuild frames to `out_path`. Returns exported key count.
 /// What an export did — including what it did NOT do. The skipped map
 /// is the half that used to be invisible: a type with no rebuild verb
 /// produced no frames, no error and no mention, so a migration could
 /// report success while leaving a whole type behind.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub struct Export {
     /// Keys whose frames are in the file.
     pub keys: u64,
@@ -252,29 +251,74 @@ fn append_ttl_frame(
 }
 
 /// Import stats.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub struct ImportReport {
     /// Commands sent successfully.
     pub sent: u64,
-    /// -ERR replies (counted, not fatal unless `strict`).
+    /// -ERR replies (counted; fatal under [`OnErrorReply::Abort`]).
     pub errors: u64,
     /// Byte offset reached in the source file.
     pub offset: u64,
 }
 
+/// Where an import starts reading its source file.
+///
+/// ```
+/// use kevy_cli::migrate::ImportStart;
+/// // `import --resume`
+/// assert_ne!(ImportStart::Resume, ImportStart::default());
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
+pub enum ImportStart {
+    /// From the first byte, resetting `<src>.progress` before any batch.
+    #[default]
+    Fresh,
+    /// From the offset `<src>.progress` recorded (`--resume`).
+    Resume,
+}
+
+/// What an import does when the server answers a command with an error.
+///
+/// ```
+/// use kevy_cli::migrate::OnErrorReply;
+/// // `import --strict`
+/// assert_ne!(OnErrorReply::Abort, OnErrorReply::default());
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
+pub enum OnErrorReply {
+    /// Count it in [`ImportReport::errors`] and carry on.
+    #[default]
+    Count,
+    /// Stop with an `InvalidData` error naming the reply (`--strict`).
+    Abort,
+}
+
 /// Run `import` — stream `src` (a RESP command file) into the server,
 /// `PIPELINE` commands per batch. The progress file `<src>.progress`
 /// records the safely-applied byte offset after every batch (fsynced);
-/// `resume` starts there. Idempotent replay.
+/// [`ImportStart::Resume`] starts there. Idempotent replay.
+///
+/// ```no_run
+/// // Needs a server on 127.0.0.1:6004.
+/// use kevy_cli::migrate::{ImportStart, OnErrorReply, run_import};
+/// let mut client = kevy_resp_client::RespClient::connect("127.0.0.1", 6004)?;
+/// let path = std::path::Path::new("dump.resp");
+/// let r = run_import(&mut client, path, ImportStart::Resume, OnErrorReply::Abort)?;
+/// println!("{} sent, offset {}", r.sent, r.offset);
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub fn run_import(
     client: &mut dyn Link,
     src: &Path,
-    resume: bool,
-    strict: bool,
+    start: ImportStart,
+    on_error: OnErrorReply,
 ) -> io::Result<ImportReport> {
     // the source first: a missing one must not leave a progress file behind
     let mut f = File::open(src)?;
-    let (mut progress, start) = open_progress(src, resume)?;
+    let (mut progress, start) = open_progress(src, start)?;
     f.seek(SeekFrom::Start(start))?;
     let mut pending: Vec<u8> = Vec::with_capacity(1 << 20);
     let mut report = ImportReport { sent: 0, errors: 0, offset: start };
@@ -292,7 +336,7 @@ pub fn run_import(
             batch_bytes += used;
             batch_cmds += 1;
             if batch_cmds == PIPELINE {
-                flush_batch(client, &pending[..batch_bytes], batch_cmds, strict, &mut report)?;
+                flush_batch(client, &pending[..batch_bytes], batch_cmds, on_error, &mut report)?;
                 pending.drain(..batch_bytes);
                 write_progress(&mut progress, report.offset)?;
                 batch_bytes = 0;
@@ -301,7 +345,7 @@ pub fn run_import(
         }
     }
     if batch_cmds > 0 {
-        flush_batch(client, &pending[..batch_bytes], batch_cmds, strict, &mut report)?;
+        flush_batch(client, &pending[..batch_bytes], batch_cmds, on_error, &mut report)?;
         write_progress(&mut progress, report.offset)?;
     }
     Ok(report)
@@ -311,14 +355,14 @@ fn flush_batch(
     client: &mut dyn Link,
     raw: &[u8],
     n: usize,
-    strict: bool,
+    on_error: OnErrorReply,
     report: &mut ImportReport,
 ) -> io::Result<()> {
     let replies = client.pipeline_raw(raw, n)?;
     for r in replies {
         if let Reply::Error(e) = r {
             report.errors += 1;
-            if strict {
+            if on_error == OnErrorReply::Abort {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     format!("server error (strict): {}", String::from_utf8_lossy(&e)),
@@ -344,7 +388,8 @@ fn flush_batch(
 /// fresh import before its first batch lands and that stale EOF
 /// survives — a later `--resume` then seeks to the end, imports nothing,
 /// and reports success. The migration drill hit exactly that window.
-pub(crate) fn open_progress(src: &Path, resume: bool) -> io::Result<(File, u64)> {
+pub(crate) fn open_progress(src: &Path, start: ImportStart) -> io::Result<(File, u64)> {
+    let resume = start == ImportStart::Resume;
     let path = {
         let mut os = src.as_os_str().to_owned();
         os.push(".progress");

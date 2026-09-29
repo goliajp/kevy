@@ -13,6 +13,7 @@
 
 use super::csv;
 use super::options::Common;
+use crate::migrate::{ImportStart, OnErrorReply};
 use crate::rcli::send::write_out;
 use crate::rcli::session::{Session, eprint_bytes};
 use kevy_resp::Reply;
@@ -33,8 +34,8 @@ struct Plan {
     columns: Vec<Vec<u8>>,
     delimiter: u8,
     null_marker: Option<Vec<u8>>,
-    resume: bool,
-    strict: bool,
+    start: ImportStart,
+    on_error: OnErrorReply,
 }
 
 /// Run `import-csv`; the exit code.
@@ -79,7 +80,7 @@ fn import(
     header_end: usize,
     pk_at: usize,
 ) -> u8 {
-    let (mut progress, start) = match crate::migrate::open_progress(path, plan.resume) {
+    let (mut progress, start) = match crate::migrate::open_progress(path, plan.start) {
         Ok(p) => p,
         Err(e) => {
             return fail(&[
@@ -137,7 +138,7 @@ fn send(s: &mut Session, plan: &Plan, batch: &[Vec<Vec<u8>>]) -> Result<(u64, u6
     for msg in replies.iter().filter_map(|r| if let Reply::Error(m) = r { Some(m) } else { None }) {
         errors += 1;
         eprint_bytes(&[b"(error) ", msg, b"\n"]);
-        if plan.strict {
+        if plan.on_error == OnErrorReply::Abort {
             return Err(3);
         }
     }
@@ -235,8 +236,8 @@ fn read_flags(args: &[Vec<u8>]) -> Option<Plan> {
         columns: Vec::new(),
         delimiter: b',',
         null_marker: None,
-        resume: false,
-        strict: false,
+        start: ImportStart::Fresh,
+        on_error: OnErrorReply::Count,
     };
     let mut i = 0;
     while i < args.len() {
@@ -254,8 +255,8 @@ fn read_flags(args: &[Vec<u8>]) -> Option<Plan> {
             (flag, _) if flag.starts_with(b"--") => {
                 match flag {
                     b"--header" => plan.header = true,
-                    b"--resume" => plan.resume = true,
-                    b"--strict" => plan.strict = true,
+                    b"--resume" => plan.start = ImportStart::Resume,
+                    b"--strict" => plan.on_error = OnErrorReply::Abort,
                     _ => return usage(flag),
                 }
                 i += 1;

@@ -64,12 +64,40 @@ fn scan_page(
     Ok((next.clone(), keys))
 }
 
-/// `delete-prefix`: SCAN + UNLINK, rate-limited. Returns deleted count.
+/// Whether `delete-prefix` deletes what it finds or only counts it.
+///
+/// ```
+/// use kevy_cli::bulk::DeleteMode;
+/// // `delete-prefix --dry-run`
+/// assert_ne!(DeleteMode::DryRun, DeleteMode::default());
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
+pub enum DeleteMode {
+    /// UNLINK every key found.
+    #[default]
+    Unlink,
+    /// Count the keys that would be deleted and touch nothing
+    /// (`--dry-run`).
+    DryRun,
+}
+
+/// `delete-prefix`: SCAN + UNLINK, rate-limited. Returns the deleted
+/// count, or under [`DeleteMode::DryRun`] the count that would be.
+///
+/// ```no_run
+/// // Needs a server on 127.0.0.1:6004.
+/// use kevy_cli::bulk::{DeleteMode, run_delete_prefix};
+/// let mut client = kevy_resp_client::RespClient::connect("127.0.0.1", 6004)?;
+/// let would = run_delete_prefix(&mut client, b"tmp:", 0, DeleteMode::DryRun)?;
+/// println!("would delete {would} keys");
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub fn run_delete_prefix(
     client: &mut dyn Link,
     prefix: &[u8],
     rate: u64,
-    dry_run: bool,
+    mode: DeleteMode,
 ) -> io::Result<u64> {
     let mut pattern = prefix.to_vec();
     pattern.push(b'*');
@@ -79,7 +107,7 @@ pub fn run_delete_prefix(
     loop {
         let (next, keys) = scan_page(client, &cursor, &pattern)?;
         for key in &keys {
-            if dry_run {
+            if mode == DeleteMode::DryRun {
                 n += 1;
                 continue;
             }
@@ -176,7 +204,7 @@ pub fn run_diff(
     a: &mut dyn Link,
     b: &mut dyn Link,
     prefixes: &[Vec<u8>],
-    out: &mut impl Write,
+    mut out: impl Write,
 ) -> io::Result<Vec<Vec<u8>>> {
     let mut bad = Vec::new();
     for p in prefixes {
@@ -197,7 +225,7 @@ pub fn run_diff(
 }
 
 /// `inspect <prefix>`: sample keys, type distribution, sizes.
-pub fn run_inspect(client: &mut dyn Link, prefix: &[u8], out: &mut impl Write) -> io::Result<()> {
+pub fn run_inspect(client: &mut dyn Link, prefix: &[u8], mut out: impl Write) -> io::Result<()> {
     let mut pattern = prefix.to_vec();
     pattern.push(b'*');
     let mut cursor: Vec<u8> = b"0".to_vec();

@@ -10,7 +10,7 @@
 //! shard. For closures that span shards use
 //! [`Store::atomic_all_shards`](crate::Store::atomic_all_shards).
 
-use crate::{KevyError, KevyResult};
+use crate::KevyResult;
 use std::sync::RwLockWriteGuard;
 
 use crate::store::ensure_writable;
@@ -480,7 +480,7 @@ fn commit_group(g: &mut Inner, log: Vec<Vec<Vec<u8>>>) -> KevyResult<()> {
     }
     #[cfg(feature = "persist")]
     if let Some(aof) = g.aof.as_mut() {
-        let synced = aof.end_group().map_err(KevyError::from);
+        let synced = aof.end_group().map_err(crate::KevyError::from);
         commit = commit.and(synced);
     }
     commit
