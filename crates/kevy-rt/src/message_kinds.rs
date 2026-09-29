@@ -185,4 +185,7 @@ pub(crate) struct DispatchMeta {
     /// `Some(i)` = argv[i] is the routed key (Route::Single) — the WATCH
     /// version bump target. `None` for keyless `Route::Local` cmds.
     pub(crate) key_idx: Option<u8>,
+    /// The origin resolve()'s verb id, so the executing shard dispatches
+    /// without matching the verb again.
+    pub(crate) verb: crate::VerbId,
 }

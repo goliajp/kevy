@@ -31,9 +31,13 @@ pub(crate) fn kevy_resolve<A: ArgvView + ?Sized>(repl: &ReplicationState, args: 
     // catch-alls for these two verbs. Field values are byte-identical to
     // what the general path below computes.
     match upper {
-        b"GET" | b"SET" => {
+        b"GET" => {
             let route = if args.len() >= 2 { Route::Single(1) } else { Route::Local };
-            return ResolvedCmd::new(route).with_write(upper == b"SET");
+            return ResolvedCmd::new(route).with_verb(crate::dispatch::VERB_GET);
+        }
+        b"SET" => {
+            let route = if args.len() >= 2 { Route::Single(1) } else { Route::Local };
+            return ResolvedCmd::new(route).with_write(true).with_verb(crate::dispatch::VERB_SET);
         }
         _ => {}
     }

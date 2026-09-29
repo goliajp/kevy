@@ -31,6 +31,7 @@ impl<C: Commands> Shard<C> {
             &mut self.store,
             args,
             proto,
+            meta,
             &mut self.reply_scratch,
         );
         let reply = SmallReply::from_slice(&self.reply_scratch);
@@ -438,7 +439,12 @@ impl<C: Commands> Shard<C> {
                 // name) and point the WATCH bump / notify at the wrong key.
                 if write {
                     let key_idx = (argv.len() >= 2).then(|| (argv.len() - 2) as u8);
-                    let meta = DispatchMeta { is_write: true, wake_idx: None, key_idx };
+                    let meta = DispatchMeta {
+                        is_write: true,
+                        wake_idx: None,
+                        key_idx,
+                        verb: crate::VerbId::UNKNOWN,
+                    };
                     self.post_write_housekeeping(&argv, meta);
                 }
                 let element = if reply.starts_with(b"*1\r\n") {

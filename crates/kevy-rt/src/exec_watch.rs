@@ -255,7 +255,7 @@ impl<C: Commands> Shard<C> {
         args: &A,
         resolved: ResolvedCmd,
     ) {
-        let ResolvedCmd { route, is_quit, is_write, wake_idx, .. } = resolved;
+        let ResolvedCmd { route, is_quit, is_write, wake_idx, verb, .. } = resolved;
         match route {
             // Pub/sub + WATCH inside MULTI is rejected at queue time
             // (`handle_command` errors before queuing). UNWATCH inside MULTI
@@ -277,12 +277,12 @@ impl<C: Commands> Shard<C> {
                 b"-ERR pub/sub or WATCH or HELLO or RENAME not allowed inside MULTI in v2-3a (queued-RENAME orchestration pending v2-3b)\r\n".to_vec(),
             ),
             Route::Local => {
-                let meta = DispatchMeta { is_write, wake_idx, key_idx: None };
+                let meta = DispatchMeta { is_write, wake_idx, key_idx: None, verb };
                 self.start_single_at_seq(conn_id, seq, args, self.id, is_quit, meta);
             }
             Route::Single(idx) => {
                 let shard = self.shard_of(&args[idx]);
-                let meta = DispatchMeta { is_write, wake_idx, key_idx: Some(idx as u8) };
+                let meta = DispatchMeta { is_write, wake_idx, key_idx: Some(idx as u8), verb };
                 self.start_single_at_seq(conn_id, seq, args, shard, is_quit, meta);
             }
             other => self.start_multi_at_seq(conn_id, seq, args, other, is_quit),

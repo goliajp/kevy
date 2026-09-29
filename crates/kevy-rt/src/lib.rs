@@ -213,6 +213,7 @@ mod uring_stall_cadence;
 mod uring_stalldump;
 #[cfg(any(target_os = "linux", test))] // `test` too: pure, tested everywhere
 mod uring_write_linearize;
+mod verb_id;
 
 /// Hard cap on a single connection's accumulated unflushed reply
 /// bytes. A client that stops reading (or a slow pub/sub subscriber)
@@ -257,6 +258,7 @@ pub use runtime::Runtime;
 pub use types::{
     ExtensionReduced, LiveRuntimeConfig, ReplicaAck, ReplicaViewRow, ResolvedCmd, TxnKind,
 };
+pub use verb_id::VerbId;
 
 const _: () = {
     const fn send_sync<T: Send + Sync>() {}

@@ -97,7 +97,7 @@ impl<C: Commands> Shard<C> {
         // One client command at the dispatch boundary (before fan-out, so a
         // multi-key command counts once) — INFO's total_commands_processed.
         self.commands.on_command();
-        let ResolvedCmd { route, is_quit, is_write, block_hint, wake_idx, .. } = resolved;
+        let ResolvedCmd { route, is_quit, is_write, block_hint, wake_idx, verb, .. } = resolved;
         // Role-gated write rejection (read-only replica).
         // `seq` is already assigned by handle_command — resolve it
         // directly (immediate_reply would double-assign and wedge the
@@ -145,7 +145,7 @@ impl<C: Commands> Shard<C> {
                 self.start_repl_barrier(conn_id, seq, offsets, timeout_ms, miss);
             }
             Route::Local => {
-                let meta = DispatchMeta { is_write, wake_idx, key_idx: None };
+                let meta = DispatchMeta { is_write, wake_idx, key_idx: None, verb };
                 self.start_single(conn_id, seq, proto, args, self.id, is_quit, block_hint, meta);
             }
             Route::Single(idx) => {
@@ -168,7 +168,7 @@ impl<C: Commands> Shard<C> {
                 }
                 // Keyed routes put the key at argv[1] (or argv[2] for
                 // XGROUP/XINFO) — well inside u8.
-                let meta = DispatchMeta { is_write, wake_idx, key_idx: Some(idx as u8) };
+                let meta = DispatchMeta { is_write, wake_idx, key_idx: Some(idx as u8), verb };
                 self.start_single(conn_id, seq, proto, args, shard, is_quit, block_hint, meta);
             }
             // Cluster conns get `-CROSSSLOT` on cross-slot multi-key

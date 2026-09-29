@@ -15,24 +15,21 @@ use kevy_resp::{ArgvView, RespVersion};
 use kevy_store::Store;
 use std::time::Instant;
 
-/// Dispatch `args` into `out` under the per-command protocol version.
-/// V2 is the default + the hot path; the V3 arm only fires after a HELLO 3
-/// negotiation upstream. A free function over the disjoint `Shard` fields
-/// so both the inline fast path (`out` = the conn's output buffer, borrowed
-/// from `self.conns`) and `run_dispatch` (`out` = the reply scratch) share
-/// it.
+/// Dispatch `args` into `out` under the per-command protocol version,
+/// with the verb id the origin's resolve() found. A free function over the
+/// disjoint `Shard` fields so both the inline fast path (`out` = the conn's
+/// output buffer, borrowed from `self.conns`) and `run_dispatch` (`out` =
+/// the reply scratch) share it.
 #[inline]
 pub(crate) fn dispatch_proto<C: Commands, A: ArgvView + ?Sized>(
     commands: &C,
     store: &mut Store,
     args: &A,
     proto: RespVersion,
+    meta: DispatchMeta,
     out: &mut Vec<u8>,
 ) {
-    match proto {
-        RespVersion::V2 => commands.dispatch_into(store, args, out),
-        RespVersion::V3 => commands.dispatch_into_resp3(store, args, out),
-    }
+    commands.dispatch_verb_into(store, args, meta.verb, proto, out);
 }
 
 /// L1: case-insensitive 3-byte compare against "GET". Three byte ops
@@ -245,7 +242,7 @@ impl<C: Commands> Shard<C> {
             return false;
         }
         let out_pre_len = conn.output.len();
-        dispatch_proto(&self.commands, &mut self.store, args, proto, &mut conn.output);
+        dispatch_proto(&self.commands, &mut self.store, args, proto, meta, &mut conn.output);
         let wrote_reply = conn.output.len() > out_pre_len;
         // Park-on-miss for BLPOP / BRPOP / XREAD BLOCK that wrote nothing:
         // the reply is deferred to the wake / timeout path.
