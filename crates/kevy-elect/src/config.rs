@@ -17,20 +17,105 @@ use std::time::{Duration, Instant};
 #[non_exhaustive]
 pub struct ElectConfig {
     /// Period between outbound `HB` per peer. Default 200 ms.
+    ///
+    /// ```
+    /// use std::time::{Duration, Instant};
+    /// use kevy_elect::{ElectConfig, Elector, Role};
+    ///
+    /// let cfg = ElectConfig::default().with_hb_interval(Duration::from_millis(100));
+    /// let mut a = Elector::new("a", vec!["a".into(), "b".into()], "a:6004", Role::Primary).with_config(cfg);
+    /// let t0 = Instant::now();
+    /// assert_eq!(a.tick(t0).len(), 1);
+    /// assert!(a.tick(t0 + Duration::from_millis(50)).is_empty()); // not due yet
+    /// assert_eq!(a.tick(t0 + Duration::from_millis(100)).len(), 1);
+    /// ```
     pub hb_interval: Duration,
     /// Flag a peer DOWN after this duration without an inbound `HB`.
     /// Default 5 s = 25 × `hb_interval` (a transient 1 s blip
     /// doesn't trigger an election).
+    ///
+    /// ```
+    /// # use std::time::{Duration, Instant};
+    /// # use kevy_elect::{ElectConfig, ElectJitter, Elector, Message, Role};
+    /// # fn offers(out: &[kevy_elect::Outbound]) -> bool {
+    /// #     out.iter().any(|o| matches!(o.msg, Message::Offer { .. }))
+    /// # }
+    /// # let cfg = ElectConfig::default().with_down_after(Duration::from_secs(2));
+    /// # let mut b = Elector::new("b", vec!["a".into(), "b".into()], "b:6004", Role::Replica)
+    /// #     .with_config(cfg).with_jitter(ElectJitter::Fixed(Duration::ZERO));
+    /// # let t0 = Instant::now();
+    /// # let hb = Message::Hb { epoch: 1, node_id: "a".into(), role: Role::Primary, repl_offset: 0 };
+    /// # b.on_message("a", hb, t0);
+    /// // the primary last spoke at t0
+    /// assert!(!offers(&b.tick(t0 + Duration::from_millis(1999))));
+    /// assert!(offers(&b.tick(t0 + Duration::from_secs(2)))); // now it is DOWN
+    /// ```
     pub down_after: Duration,
     /// Candidate waits this long for quorum `ACCEPT` before backing
     /// off. Default 3 s.
+    ///
+    /// ```
+    /// # use std::time::{Duration, Instant};
+    /// # use kevy_elect::{ElectConfig, ElectJitter, Elector, Message, Role};
+    /// # fn offers(out: &[kevy_elect::Outbound]) -> bool {
+    /// #     out.iter().any(|o| matches!(o.msg, Message::Offer { .. }))
+    /// # }
+    /// # let cfg = ElectConfig::default();
+    /// # let mut b = Elector::new("b", vec!["a".into(), "b".into()], "b:6004", Role::Replica)
+    /// #     .with_config(cfg).with_jitter(ElectJitter::Fixed(Duration::ZERO));
+    /// # let t0 = Instant::now();
+    /// # let hb = Message::Hb { epoch: 1, node_id: "a".into(), role: Role::Primary, repl_offset: 0 };
+    /// # b.on_message("a", hb, t0);
+    /// b.tick(t0 + Duration::from_secs(5)); // offers; nobody answers
+    /// assert_eq!(b.role(), Role::Candidate);
+    /// b.tick(t0 + Duration::from_secs(8)); // 3 s later the candidacy lapses
+    /// assert_eq!(b.role(), Role::Replica);
+    /// ```
     pub election_timeout: Duration,
     /// Backoff floor after a failed election attempt. Real wait
     /// adds jitter up to `election_backoff_jitter` to prevent
     /// dueling candidates from re-running synchronously.
+    ///
+    /// ```
+    /// # use std::time::{Duration, Instant};
+    /// # use kevy_elect::{ElectConfig, ElectJitter, Elector, Message, Role};
+    /// # fn offers(out: &[kevy_elect::Outbound]) -> bool {
+    /// #     out.iter().any(|o| matches!(o.msg, Message::Offer { .. }))
+    /// # }
+    /// # let cfg = ElectConfig::default();
+    /// # let mut b = Elector::new("b", vec!["a".into(), "b".into()], "b:6004", Role::Replica)
+    /// #     .with_config(cfg).with_jitter(ElectJitter::Fixed(Duration::ZERO));
+    /// # let t0 = Instant::now();
+    /// # let hb = Message::Hb { epoch: 1, node_id: "a".into(), role: Role::Primary, repl_offset: 0 };
+    /// # b.on_message("a", hb, t0);
+    /// b.tick(t0 + Duration::from_secs(5)); // first candidacy
+    /// b.tick(t0 + Duration::from_secs(8)); // times out
+    /// assert!(!offers(&b.tick(t0 + Duration::from_millis(8500)))); // backing off
+    /// assert!(offers(&b.tick(t0 + Duration::from_secs(9)))); // 1 s later it tries again
+    /// assert_eq!(b.epoch(), 3);
+    /// ```
     pub election_backoff: Duration,
     /// Random jitter added to `election_backoff` per attempt.
     /// Default 4 s (so the real range is 1–5 s).
+    ///
+    /// ```
+    /// # use std::time::{Duration, Instant};
+    /// # use kevy_elect::{ElectConfig, ElectJitter, Elector, Message, Role};
+    /// # fn offers(out: &[kevy_elect::Outbound]) -> bool {
+    /// #     out.iter().any(|o| matches!(o.msg, Message::Offer { .. }))
+    /// # }
+    /// # let cfg = ElectConfig::default();
+    /// # let mut b = Elector::new("b", vec!["a".into(), "b".into()], "b:6004", Role::Replica)
+    /// #     .with_config(cfg).with_jitter(ElectJitter::Fixed(Duration::from_secs(10)));
+    /// # let t0 = Instant::now();
+    /// # let hb = Message::Hb { epoch: 1, node_id: "a".into(), role: Role::Primary, repl_offset: 0 };
+    /// # b.on_message("a", hb, t0);
+    /// b.tick(t0 + Duration::from_secs(5));
+    /// b.tick(t0 + Duration::from_secs(8)); // times out
+    /// // a 10 s jitter sample is capped at the 4 s maximum: retry at 8 + 1 + 4
+    /// assert!(!offers(&b.tick(t0 + Duration::from_millis(12_999))));
+    /// assert!(offers(&b.tick(t0 + Duration::from_secs(13))));
+    /// ```
     pub election_backoff_jitter: Duration,
 }
 
@@ -116,14 +201,78 @@ impl ElectConfig {
 /// Source of jitter for election backoff. Tests use a fixed value;
 /// production uses `ElectJitter::System` which reads `Instant`
 /// + node_id as a poor-mans entropy. Pure-Rust 0-dep — no `rand` crate.
+///
+/// ```
+/// use std::time::{Duration, Instant};
+/// use kevy_elect::{ElectConfig, ElectJitter, Elector, Message, Role};
+///
+/// // when a candidacy lapses, how long until this node offers again?
+/// fn retry_after(id: &str, jitter: ElectJitter) -> Duration {
+///     let peers = vec!["a".to_string(), id.to_string()];
+///     let mut e = Elector::new(id, peers, "x:6004", Role::Replica).with_jitter(jitter);
+///     let t0 = Instant::now();
+///     let hb = Message::Hb { epoch: 1, node_id: "a".into(), role: Role::Primary, repl_offset: 0 };
+///     e.on_message("a", hb, t0);
+///     e.tick(t0 + Duration::from_secs(5)); // offers
+///     let lapsed = t0 + Duration::from_secs(8);
+///     e.tick(lapsed); // times out
+///     (1..=500)
+///         .map(|i| Duration::from_millis(i * 10))
+///         .find(|d| e.tick(lapsed + *d).iter().any(|o| matches!(o.msg, Message::Offer { .. })))
+///         .expect("retries within backoff + jitter")
+/// }
+///
+/// let fixed = ElectJitter::Fixed(Duration::from_millis(300));
+/// assert_eq!(retry_after("b", fixed.clone()), Duration::from_millis(1300));
+/// assert_eq!(retry_after("c", fixed), Duration::from_millis(1300)); // in lockstep
+/// assert!(retry_after("b", ElectJitter::System) <= ElectConfig::default().election_backoff * 5);
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum ElectJitter {
     /// Fixed value (test-friendly, deterministic).
+    ///
+    /// ```
+    /// # use std::time::{Duration, Instant};
+    /// # use kevy_elect::{ElectConfig, ElectJitter, Elector, Message, Role};
+    /// # fn offers(out: &[kevy_elect::Outbound]) -> bool {
+    /// #     out.iter().any(|o| matches!(o.msg, Message::Offer { .. }))
+    /// # }
+    /// # let cfg = ElectConfig::default();
+    /// # let mut b = Elector::new("b", vec!["a".into(), "b".into()], "b:6004", Role::Replica)
+    /// #     .with_config(cfg).with_jitter(ElectJitter::Fixed(Duration::from_millis(250)));
+    /// # let t0 = Instant::now();
+    /// # let hb = Message::Hb { epoch: 1, node_id: "a".into(), role: Role::Primary, repl_offset: 0 };
+    /// # b.on_message("a", hb, t0);
+    /// b.tick(t0 + Duration::from_secs(5));
+    /// b.tick(t0 + Duration::from_secs(8)); // times out
+    /// // backoff 1 s + exactly 250 ms of jitter
+    /// assert!(!offers(&b.tick(t0 + Duration::from_millis(9249))));
+    /// assert!(offers(&b.tick(t0 + Duration::from_millis(9250))));
+    /// ```
     Fixed(Duration),
     /// Hash of `(now_nanos, node_id)` clamped into
     /// `[0, max_jitter)`. Deterministic enough for production while
     /// avoiding zero-cost-jitter dueling.
+    ///
+    /// ```
+    /// # use std::time::{Duration, Instant};
+    /// # use kevy_elect::{ElectConfig, ElectJitter, Elector, Message, Role};
+    /// # fn offers(out: &[kevy_elect::Outbound]) -> bool {
+    /// #     out.iter().any(|o| matches!(o.msg, Message::Offer { .. }))
+    /// # }
+    /// # let cfg = ElectConfig::default();
+    /// # let mut b = Elector::new("b", vec!["a".into(), "b".into()], "b:6004", Role::Replica)
+    /// #     .with_config(cfg).with_jitter(ElectJitter::System);
+    /// # let t0 = Instant::now();
+    /// # let hb = Message::Hb { epoch: 1, node_id: "a".into(), role: Role::Primary, repl_offset: 0 };
+    /// # b.on_message("a", hb, t0);
+    /// b.tick(t0 + Duration::from_secs(5));
+    /// b.tick(t0 + Duration::from_secs(8)); // times out
+    /// // the retry lands somewhere in backoff + [0, jitter max) = 1–5 s later
+    /// assert!(!offers(&b.tick(t0 + Duration::from_millis(8999))));
+    /// assert!(offers(&b.tick(t0 + Duration::from_secs(13))));
+    /// ```
     System,
 }
 

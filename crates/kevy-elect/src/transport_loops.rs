@@ -2,8 +2,9 @@
 //! pulled out of `transport.rs` so that file stays under the
 //! project's 500-LOC ceiling. The listener / per-peer outbound /
 //! orchestrator threads spawned by `Transport::spawn_with_callback`
-//! run these functions; the handle type, shared state, and spawn
-//! plumbing stay in `transport.rs`.
+//! run these functions, and the helpers that spawn the listener and
+//! outbound threads live here with them; the handle type and shared
+//! state stay in `transport.rs`.
 
 // Socket options are advisory here. `set_nodelay`, `set_read_timeout`
 // and `set_nonblocking` shape latency, not correctness — a kernel that
@@ -13,19 +14,61 @@
 #![expect(clippy::let_underscore_must_use, reason = "socket tuning is advisory to an election")]
 
 use std::net::{Shutdown, TcpListener, TcpStream, ToSocketAddrs};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use crate::elector::Outbound;
+use crate::elector::{Elector, Outbound};
 use crate::link::{Link, initiate, respond};
 use crate::message::Message;
-use crate::transport::{
-    InboundEvent, MAX_PENDING_PER_PEER, PeerAddr, READ_BUF_CAP, READ_RETRY_BACKOFF, Shared,
-    TopologyCallback,
-};
+use crate::transport::{PeerAddr, TopologyCallback};
 use crate::wire::DecodeError;
+
+/// Maximum buffer the per-connection reader holds before declaring
+/// the framing busted. Election frames are ≤ 256 B; 16 KiB is
+/// generous for misaligned partial reads.
+pub(crate) const READ_BUF_CAP: usize = 16 * 1024;
+
+/// Read-loop sleep on transient EAGAIN-equivalents (peer closed,
+/// I/O error during decode). Keeps the worker from a tight retry
+/// loop while still recovering on reconnect.
+pub(crate) const READ_RETRY_BACKOFF: Duration = Duration::from_millis(100);
+
+/// One inbound event the orchestrator processes. Either a decoded
+/// election message from a peer, or a "the connection from $peer
+/// went down" notification (so the orchestrator can clear any
+/// state that assumed the link was up).
+#[derive(Debug)]
+pub(crate) enum InboundEvent {
+    /// `(from_node_id, msg)`.
+    Message(String, Message),
+    /// An inbound connection failed its handshake, closed, or sent a
+    /// frame that does not decode.
+    InboundConnFailed,
+}
+
+/// Shared state between the orchestrator + worker threads. Wraps
+/// the elector in a Mutex so the per-peer outbound threads can read
+/// the latest `epoch` / `repl_offset` for the next heartbeat
+/// without round-tripping through the orchestrator — but **only the
+/// orchestrator mutates** via `tick` / `on_message`.
+#[derive(Debug)]
+pub(crate) struct Shared {
+    pub(crate) elector: Mutex<Elector>,
+    /// `Some` when every election link must be Noise-authenticated.
+    pub(crate) secure: Option<crate::link::SecureLinks>,
+    /// Per-peer outbound queue. Indexed by `node_id`. Each worker
+    /// drains its own queue + writes onto the persistent TCP
+    /// stream; on stream death the queue is held until the worker
+    /// reconnects. Bounded by `MAX_PENDING_PER_PEER` to prevent a
+    /// dead peer from leaking memory.
+    pub(crate) out_queues:
+        Mutex<std::collections::HashMap<String, std::collections::VecDeque<Message>>>,
+}
+
+pub(crate) const MAX_PENDING_PER_PEER: usize = 256;
 
 // needless_pass_by_value: thread entry point — it owns its channel/flag for
 // the thread's whole lifetime; references cannot cross `thread::spawn`.
@@ -336,9 +379,9 @@ mod sender_key_tests {
 
 #[cfg(test)]
 mod tests {
+    use super::InboundEvent;
     use super::drain_frames;
     use crate::message::Message;
-    use crate::transport::InboundEvent;
 
     fn hb(from: &str) -> Vec<u8> {
         (Message::Hb {
@@ -363,4 +406,43 @@ mod tests {
         let mut plain = hb("c");
         assert!(drain_frames(&mut plain, &tx, None));
     }
+}
+
+/// Spawn the accept-side listener thread, appending its handle.
+pub(crate) fn spawn_listener_thread(
+    listener: TcpListener,
+    tx: Sender<InboundEvent>,
+    stop: Arc<AtomicBool>,
+    shared: &Arc<Shared>,
+    handles: &mut Vec<JoinHandle<()>>,
+) -> std::io::Result<()> {
+    let shared = Arc::clone(shared);
+    handles.push(std::thread::Builder::new().name("kevy-elect-listener".to_string()).spawn(
+        move || {
+            accept_loop(listener, tx, stop, shared);
+        },
+    )?);
+    Ok(())
+}
+
+/// Spawn one outbound worker thread per peer, appending the handles.
+pub(crate) fn spawn_outbound_threads(
+    peers: &[PeerAddr],
+    shared: &Arc<Shared>,
+    stop: &Arc<AtomicBool>,
+    handles: &mut Vec<JoinHandle<()>>,
+) -> std::io::Result<()> {
+    for peer in peers {
+        let peer_stop = stop.clone();
+        let peer_shared = shared.clone();
+        let peer_clone = peer.clone();
+        handles.push(
+            std::thread::Builder::new().name(format!("kevy-elect-out-{}", peer.node_id)).spawn(
+                move || {
+                    outbound_loop(peer_clone, peer_shared, peer_stop);
+                },
+            )?,
+        );
+    }
+    Ok(())
 }

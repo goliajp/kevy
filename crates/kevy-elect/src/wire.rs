@@ -1,28 +1,88 @@
 //! Wire encode + decode for [`crate::Message`]. Uses kevy-resp's
 //! RESP2 multi-bulk array shape, identical to the keyspace plane —
 //! tcpdump-friendly text frames, single decoder path workspace-wide.
+//!
+//! ```
+//! use kevy_elect::Message;
+//!
+//! // two frames back to back, as a socket read may deliver them
+//! let mut buf = Message::Accept { epoch: 2, accepter_id: "b".into() }.encode();
+//! buf.extend(Message::Accept { epoch: 2, accepter_id: "c".into() }.encode());
+//! let (first, used) = Message::decode(&buf)?;
+//! let (second, _) = Message::decode(&buf[used..])?;
+//! assert_eq!(first, Message::Accept { epoch: 2, accepter_id: "b".into() });
+//! assert_eq!(second, Message::Accept { epoch: 2, accepter_id: "c".into() });
+//! # Ok::<(), kevy_elect::DecodeError>(())
+//! ```
 
 use kevy_resp::{ArgvBorrowed, parse_command_borrowed};
 
 use crate::message::{Message, Role};
 
 /// Errors [`Message::decode`] can surface.
+///
+/// ```
+/// use kevy_elect::{DecodeError, Message};
+///
+/// // only `Truncated` asks for more bytes; every other error drops the link
+/// let frame = Message::Accept { epoch: 1, accepter_id: "a".into() }.encode();
+/// match Message::decode(&frame[..frame.len() - 1]) {
+///     Err(DecodeError::Truncated) => {} // wait for the rest
+///     other => panic!("expected a partial frame, got {other:?}"),
+/// }
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum DecodeError {
     /// Buffer holds fewer bytes than the framed message header
     /// claims — read more from the socket and retry.
+    ///
+    /// ```
+    /// use kevy_elect::{DecodeError, Message};
+    ///
+    /// let frame = Message::Accept { epoch: 1, accepter_id: "a".into() }.encode();
+    /// assert_eq!(Message::decode(&frame[..5]), Err(DecodeError::Truncated));
+    /// assert!(Message::decode(&frame).is_ok()); // once the rest has arrived
+    /// ```
     Truncated,
     /// Bytes don't parse as a RESP multi-bulk (malformed envelope).
+    ///
+    /// ```
+    /// use kevy_elect::{DecodeError, Message};
+    ///
+    /// // an array element that is not a bulk string
+    /// assert_eq!(Message::decode(b"*1\r\n:1\r\n"), Err(DecodeError::Bad));
+    /// ```
     Bad,
     /// Verb was missing, unknown, or had the wrong arity for its
     /// shape (e.g. `HB` with 3 args instead of 5).
+    ///
+    /// ```
+    /// use kevy_elect::{DecodeError, Message};
+    ///
+    /// assert_eq!(Message::decode(b"*2\r\n$2\r\nHB\r\n$1\r\n1\r\n"), Err(DecodeError::WrongShape));
+    /// assert_eq!(Message::decode(b"*1\r\n$4\r\nPING\r\n"), Err(DecodeError::WrongShape));
+    /// ```
     WrongShape,
     /// A numeric field (epoch / offset) was not a valid decimal
     /// `u64`.
+    ///
+    /// ```
+    /// use kevy_elect::{DecodeError, Message};
+    ///
+    /// let frame = b"*3\r\n$6\r\nACCEPT\r\n$3\r\none\r\n$1\r\nb\r\n";
+    /// assert_eq!(Message::decode(frame), Err(DecodeError::BadNumeric));
+    /// ```
     BadNumeric,
     /// A `role` field on `HB` was not one of `primary` / `replica`
     /// / `candidate`.
+    ///
+    /// ```
+    /// use kevy_elect::{DecodeError, Message};
+    ///
+    /// let frame = b"*5\r\n$2\r\nHB\r\n$1\r\n1\r\n$1\r\na\r\n$6\r\nleader\r\n$1\r\n0\r\n";
+    /// assert_eq!(Message::decode(frame), Err(DecodeError::BadRole));
+    /// ```
     BadRole,
 }
 
