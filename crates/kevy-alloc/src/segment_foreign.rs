@@ -139,7 +139,7 @@ impl Segment {
     ///
     /// The chain format is unchanged from the per-op era: each slot's
     /// first word links to the next, with the requested size at
-    /// [`FOREIGN_SIZE_OFFSET`] — the owner's drain cannot tell a spliced
+    /// [`FOREIGN_SIZE_OFFSET`](crate::segment::FOREIGN_SIZE_OFFSET) — the owner's drain cannot tell a spliced
     /// batch from a thousand individual pushes.
     ///
     /// # Why this is push-only, and why that matters
