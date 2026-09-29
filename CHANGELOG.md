@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- **Demotion keeps up while nothing but a backfill runs.** The sampler
+  that picks rows to demote started each window from a position drawn
+  from the access clock, and a tick demoted at most one batch of 32. A
+  backfill reads rows without touching them, so the clock stood still:
+  the sampler walked the same window every tick, found it cold once its
+  few hot rows had gone, and backed off for seconds, while the index it
+  was making room for grew by 10 MB a second. On D1 (ten million rows,
+  3 GiB) demotion moved about 2,000 rows a second against the 10,000 the
+  build needed, and the index floor pushed resident memory to 1.20 ×
+  budget. The sampler now sweeps the table from where its last window
+  ended, and a tick repeats batches until the store is under target, out
+  of candidates, or half a millisecond has gone. `used_memory` now tracks the
+  target through the build, and the phase's peak falls from 1.20 to
+  1.12–1.14 × budget. What remains is memory the allocator holds in the
+  holes demoted rows leave, which index leaves and a growing keyspace table
+  cannot reuse. A hot read's p99 while an index builds over a cold sweep
+  went from 129 to 201 µs, the cost of demotion now doing its work (the
+  line is 1,056 µs).
+
 - **An index is a counted B+ tree of packed leaves, a quarter or less
   of the memory and faster on every write and range read.** Each row was
   an allocation of its own, held from an ordered set and from a hash set

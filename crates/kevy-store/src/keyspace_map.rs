@@ -96,6 +96,7 @@ impl Keyspace {
 
     /// The table itself, for a pass that rewrites where values live
     /// without changing what they hold (cold-tier compaction).
+    #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
     pub(crate) fn quiet_table(&mut self) -> &mut KevyMap<SmallBytes, Entry> {
         &mut self.map
     }
