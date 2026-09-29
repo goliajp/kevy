@@ -190,6 +190,9 @@ Each of these could lose a write or a deadline without an error:
 - `GETEX key EX|PX` and a conditional `HEXPIRE`, whose deadlines moved at
   restart;
 - a counted `SPOP` over RESP3, recorded without the members it removed;
+- a server's `DESC` materialized view with `TOPK`, built over existing
+  rows, which kept a shard's lowest rows instead of its highest (since
+  3.0.0);
 - on an embedded replica with more than one shard, most keys, which were
   written to a shard its reads did not look in.
 
