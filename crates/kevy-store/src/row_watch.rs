@@ -210,7 +210,21 @@ impl RowChanges {
     }
 }
 
-/// One written row, as [`RowChanges::iter`] lists it.
+/// One written row, as [`RowChanges::iter`] lists it: its key, and the
+/// watched fields as they were before the write.
+///
+/// ```
+/// use kevy_store::{RowWatch, Store};
+/// let mut s = Store::new();
+/// s.hset(b"u:1", &[(b"age", b"30")])?;
+/// s.set_row_watch(RowWatch::new().with_prefix("u:", vec![b"age".to_vec()]));
+/// s.hset(b"u:1", &[(b"age", b"31")])?;
+/// let changes = s.take_row_changes(Default::default());
+/// let c = changes.iter().next().expect("the row was written");
+/// assert_eq!(c.key(), b"u:1");
+/// assert_eq!(c.field(0, 0), Some(&b"30"[..]), "the value before the write");
+/// # Ok::<(), kevy_store::StoreError>(())
+/// ```
 #[derive(Debug, Clone, Copy)]
 pub struct RowChange<'a> {
     c: &'a RowChanges,
