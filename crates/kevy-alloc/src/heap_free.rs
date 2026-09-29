@@ -136,6 +136,7 @@ impl Heap {
         // SAFETY: caller holds exclusive access to this segment.
         let meta = unsafe { &mut (*seg.as_ptr()).spans[ix] };
         meta.free_slot(slot);
+        self.class_live[c] -= 1;
         self.file_span(seg, ix);
     }
 }

@@ -53,6 +53,7 @@ impl Heap {
             self.partial[c] = None;
             return None;
         };
+        self.class_live[c] += claimed.count_ones();
         // Claimed bits may land in returned pages; a fresh allocation
         // owes nothing to its contents, only the bookkeeping notices.
         if meta.discarded != 0 {
@@ -84,6 +85,7 @@ impl Heap {
         // segments; the header outlives the claim.
         let meta = unsafe { &mut (*cl.seg.as_ptr()).spans[cl.span_ix as usize] };
         meta.retire_word(cl.word, unused);
+        self.class_live[c] -= unused.count_ones();
         self.file_span(cl.seg, cl.span_ix as usize);
     }
 
