@@ -125,21 +125,37 @@ jobs:
           # 429s. The 65s × 3 retry from v1.26.5 wasn't long enough — each
           # cargo retry attempt counts against the burst window too.
           #
-          # New ceiling: 35s sleep after every successful publish, so a
-          # 30-crate chain takes ~18 min wall-clock but stays well under
-          # any per-10-min limit. On 429, sleep 300s × up to 5 retries
-          # (max 25 min wait per crate) — enough to outwait even a fully
-          # depleted window.
+          # So the chain counts its own publishes in a 10-minute sliding
+          # window and waits only when 28 of them already sit in it, instead
+          # of sleeping 35s after every one (24 of a 27-minute job were
+          # those sleeps). On 429, sleep 300s × up to 5 retries (max 25 min
+          # wait per crate) — enough to outwait even a fully depleted window.
+          published_at=()
+          pace_window() {
+            local now; now=$(date +%s)
+            local kept=() t
+            for t in ${published_at[@]+"${published_at[@]}"}; do
+              (( now - t < 600 )) && kept+=("$t")
+            done
+            published_at=(${kept[@]+"${kept[@]}"})
+            if (( ${#published_at[@]} >= 28 )); then
+              local wait=$(( published_at[0] + 600 - now + 1 ))
+              echo "pacing: 28 publishes in the last 10 min — waiting ${wait}s"
+              sleep "$wait"
+              published_at=("${published_at[@]:1}")
+            fi
+          }
           publish_or_skip() {
             local crate=$1
             echo "::group::publish $crate"
             local log; log=$(mktemp)
             local attempt
             for attempt in 1 2 3 4 5; do
+              pace_window
               if cargo publish -p "$crate" 2>&1 | tee "$log"; then
                 echo "::endgroup::"
                 echo "✓ published $crate (attempt $attempt)"
-                sleep 35
+                published_at+=("$(date +%s)")
                 return 0
               fi
               if grep -qE "already uploaded|crate version .* is already|already exists on crates.io" "$log"; then
