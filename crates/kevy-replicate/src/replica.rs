@@ -210,6 +210,7 @@ impl ReplicaClient {
     /// println!("primary at generation {}", client.primary_at_handshake().generation);
     /// # Ok::<(), kevy_replicate::replica::ReplicaError>(())
     /// ```
+    #[inline]
     pub fn primary_at_handshake(&self) -> FeedPosition {
         self.primary_at_handshake
     }
