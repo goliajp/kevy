@@ -12,7 +12,7 @@
 //! [`RuntimeState`]: crate::RuntimeState
 
 use kevy_config::Config;
-use kevy_scope::{MigrationState, MigrationTable, OwnershipTable, Routing, Scope};
+use kevy_scope::{MigrationState, MigrationTable, OwnershipTable, Scope};
 
 use super::{RuntimeState, ShardCtx};
 
@@ -156,12 +156,9 @@ impl RuntimeState {
             }),
             None => table.route(key, self_id),
         };
-        match routing {
-            Routing::Owned | Routing::Unknown => None,
-            Routing::Misdirected { target } => {
-                Some(WriteRedirect::Misdirected(scope.resolve_addr(target)))
-            }
-        }
+        routing
+            .misdirected_target()
+            .map(|target| WriteRedirect::Misdirected(scope.resolve_addr(target)))
     }
 }
 

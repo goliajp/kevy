@@ -9,6 +9,7 @@
 /// writer/target ids out of the table — caller copies only when it
 /// needs to log or encode them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Routing<'a> {
     /// `self_node_id` is the declared writer (or active fallback) for
     /// the matching scope. Execute the write locally.

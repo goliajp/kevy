@@ -23,7 +23,8 @@ use std::sync::Mutex;
 /// One in-flight migration. Carries enough metadata so the server
 /// cement can encode `-QUIESCED <prefix> migrating to <host:port>`
 /// without re-resolving the target.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub struct MigrationState {
     /// Source writer node id (the node currently quiescing).
     pub from: String,
@@ -42,6 +43,7 @@ pub struct MigrationTable {
 
 /// Why [`MigrationTable::start`] refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum MigrationError {
     /// A migration for this prefix is already in flight (idempotent
     /// retry would clobber the state).
