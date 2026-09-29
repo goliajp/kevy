@@ -39,7 +39,7 @@ impl<C: Commands> Shard<C> {
             // In-replay demotion — same K-frame watermark
             // drain as the readiness path's replay.
             let mut frames: u64 = 0;
-            let mut torn: Option<String> = None;
+            let mut torn: Option<kevy_store::SegRowsError> = None;
             let apply = |args: kevy_persist::Argv| {
                 if let Some(f) = kevy_persist::segmented_frame(&args) {
                     // Same stitch handling as the readiness path: a

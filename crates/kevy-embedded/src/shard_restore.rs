@@ -47,7 +47,7 @@ struct FrameApplier<'a> {
     #[cfg(not(target_arch = "wasm32"))]
     segs_dir: std::path::PathBuf,
     #[cfg(not(target_arch = "wasm32"))]
-    torn: Option<String>,
+    torn: Option<kevy_store::SegRowsError>,
     frames: u64,
 }
 
