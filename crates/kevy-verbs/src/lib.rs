@@ -259,4 +259,6 @@ const _: () = {
     send_sync::<aof::Claim>();
     send_sync::<aof::Consumer>();
     send_sync::<reply::Scores>();
+    #[cfg(feature = "streams-geo")]
+    send_sync::<geo::StoreSearchError>();
 };

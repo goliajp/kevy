@@ -39,7 +39,6 @@ mod view;
 mod zset_algebra;
 
 use kevy_resp::{encode_array_len, encode_bulk, encode_error, encode_integer, encode_null_bulk};
-use kevy_verbs::reply::store_err_msg;
 
 use crate::store::Store;
 use crate::{KevyError, KevyResult};
@@ -85,7 +84,7 @@ fn dispatch_index(_s: &Store, _up: &[u8], _argv: &[Vec<u8>], _out: &mut Vec<u8>)
 /// its bare `READONLY` prefix, as Redis does.
 fn kevy_err(out: &mut Vec<u8>, e: &KevyError) {
     let msg: String = match e {
-        KevyError::Store(se) => return encode_error(out, store_err_msg(se)),
+        KevyError::Store(se) => return encode_error(out, se.as_wire()),
         KevyError::ReadOnly => {
             return encode_error(out, "READONLY You can't write against a read only replica");
         }
