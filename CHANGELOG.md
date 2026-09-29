@@ -253,6 +253,13 @@
   loss is unchanged: under `no` the OS decides when the data reaches the
   disk, and the `everysec` fsync keeps its once-a-second cadence.
 
+- **A server's `DESC` materialized view with `TOPK` keeps its highest rows
+  when it is built over existing data.** Building or rebuilding the view
+  sorted each shard's rows ascending and kept the first `TOPK × 1.25`, so
+  a shard holding more than that kept its lowest rows, and the view
+  answered with fewer and wrong members. Embedded stores cut from the right
+  end already. Affected since 3.0.0.
+
 - **A counted `SPOP` over RESP3 is recorded by the members it removed.**
   The RESP3 reply path for `SPOP key count` wrote the command itself to the
   AOF and to replicas, so a restart or a replica popped different random
