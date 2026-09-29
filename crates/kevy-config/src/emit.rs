@@ -27,9 +27,9 @@ const SERVICE_SECTIONS: [&str; 8] =
 impl Config {
     /// Render the current config as a standard-template TOML file —
     /// every field, in stable section/key order, with no comments. Used
-    /// by `CONFIG REWRITE` when the comment-preserving splice in
-    /// [`crate::preserve`] has no original file to work from; only
-    /// then are the user's inline comments lost.
+    /// by `CONFIG REWRITE` when the comment-preserving splice has no
+    /// original file to work from; only then are the user's inline
+    /// comments lost.
     ///
     /// Round-trips: feeding the output back through [`Self::from_toml_str`]
     /// reconstructs an equivalent `Config` (modulo `source_path`).

@@ -209,7 +209,7 @@ mod counters {
 
 /// Direct-mapping figures for the whole process.
 ///
-/// Kept apart from [`Heap::snapshot`] rather than folded in, because
+/// Kept apart from [`Heap::snapshot`](crate::Heap::snapshot) rather than folded in, because
 /// summing per-shard snapshots would then count them once per shard.
 /// Each balances on its own, and so does their sum.
 #[must_use]

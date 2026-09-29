@@ -67,7 +67,7 @@ pub fn detected_memory_bound() -> Option<u64> {
 /// - **Linux**: `/proc/self/status` `VmRSS:` (kB — page-size-free,
 ///   unlike statm's page counts).
 /// - **macOS**: `task_info(MACH_TASK_BASIC_INFO).resident_size`
-///   through the hand-written binding in [`crate::ffi`].
+///   through the crate's hand-written binding.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub fn process_rss_bytes() -> u64 {
     std::fs::read_to_string("/proc/self/status").ok().and_then(|s| vmrss_bytes(&s)).unwrap_or(0)

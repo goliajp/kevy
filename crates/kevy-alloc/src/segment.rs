@@ -49,7 +49,7 @@ pub struct Segment {
     /// way home through this.
     pub(crate) owner: usize,
     /// Slots freed by a thread other than the owner, as a lock-free
-    /// stack of slot addresses. See [`push_foreign`] for why this is
+    /// stack of slot addresses. See [`splice_foreign`] for why this is
     /// push-only.
     pub(crate) foreign: AtomicPtr<u8>,
     /// Slot bytes parked on `foreign`, so the accounting can price the
@@ -279,7 +279,7 @@ pub unsafe fn splice_foreign(
 
 /// Take the whole foreign-free list, leaving it empty. Only the owning
 /// shard may call this — that exclusivity is what makes the structure
-/// ABA-free (see [`push_foreign`]).
+/// ABA-free (see [`splice_foreign`]).
 #[must_use]
 pub fn take_foreign(seg: &Segment) -> *mut u8 {
     seg.foreign_bytes.store(0, Ordering::Relaxed);
@@ -287,7 +287,7 @@ pub fn take_foreign(seg: &Segment) -> *mut u8 {
     seg.foreign.swap(core::ptr::null_mut(), Ordering::Acquire)
 }
 
-/// Where [`push_foreign`] stores the requested size inside a free slot,
+/// Where [`splice_foreign`] stores the requested size inside a free slot,
 /// clear of the link that occupies the first word.
 pub const FOREIGN_SIZE_OFFSET: usize = core::mem::size_of::<*mut u8>();
 
@@ -295,10 +295,10 @@ pub const FOREIGN_SIZE_OFFSET: usize = core::mem::size_of::<*mut u8>();
 ///
 /// # Safety
 /// `slot` must still be on a foreign list, untouched since
-/// [`push_foreign`] wrote it.
+/// [`splice_foreign`] wrote it.
 #[must_use]
 pub unsafe fn foreign_requested(slot: NonNull<u8>) -> usize {
-    // SAFETY: written by `push_foreign`, and nothing hands out a slot
+    // SAFETY: written by `splice_foreign`, and nothing hands out a slot
     // while it is queued.
     unsafe { slot.as_ptr().add(FOREIGN_SIZE_OFFSET).cast::<u32>().read() as usize }
 }

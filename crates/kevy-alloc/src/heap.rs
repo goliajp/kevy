@@ -16,7 +16,7 @@
 //! rule ② asks to be stated rather than assumed.
 //!
 //! Cross-shard frees are real (values travel on the shared read lane),
-//! and they are handled by [`segment::push_foreign`] — push-only, so
+//! and they are handled by [`segment::splice_foreign`] — push-only, so
 //! there is no ABA hazard to inherit.
 
 use core::ptr::NonNull;
