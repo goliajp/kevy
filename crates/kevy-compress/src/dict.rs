@@ -7,7 +7,7 @@
 use alloc::vec::Vec;
 
 use crate::{
-    Corrupt, TAG_LZ, TAG_LZ_DICT, TAG_LZH, TAG_LZH_DICT, TAG_RAW, decode, huff, parse_dict,
+    DecodeError, TAG_LZ, TAG_LZ_DICT, TAG_LZH, TAG_LZH_DICT, TAG_RAW, decode, huff, parse_dict,
     read_varint,
 };
 
@@ -103,26 +103,26 @@ impl Dict {
     /// ```
     ///
     /// # Errors
-    /// [`Corrupt`] when the frame does not decode to exactly what its header
+    /// [`DecodeError`] when the frame does not decode to exactly what its header
     /// promises, the same conditions as [`crate::decode`].
-    pub fn decode(&self, frame: &[u8]) -> Result<Vec<u8>, Corrupt> {
-        let (&tag, rest) = frame.split_first().ok_or(Corrupt)?;
+    pub fn decode(&self, frame: &[u8]) -> Result<Vec<u8>, DecodeError> {
+        let (&tag, rest) = frame.split_first().ok_or(DecodeError)?;
         let (orig_len, payload) = read_varint(rest)?;
         match tag {
             TAG_RAW if payload.len() == orig_len => Ok(payload.to_vec()),
-            TAG_RAW => Err(Corrupt),
+            TAG_RAW => Err(DecodeError),
             TAG_LZ => decode::lz(&[], payload, orig_len),
-            TAG_LZ_DICT if self.content.is_empty() => Err(Corrupt),
+            TAG_LZ_DICT if self.content.is_empty() => Err(DecodeError),
             TAG_LZ_DICT => decode::lz(&self.content, payload, orig_len),
             // The 5.0.0 compat retry, as in `decode`: that encoder could emit
             // a shared-table literal block under the dict-less tag.
             TAG_LZH => match decode::lz_high(&[], None, None, payload, orig_len) {
-                Err(Corrupt) if self.lens.is_some() => {
+                Err(DecodeError) if self.lens.is_some() => {
                     decode::lz_high(&[], self.lens.as_ref(), self.table.as_ref(), payload, orig_len)
                 }
                 r => r,
             },
-            TAG_LZH_DICT if self.content.is_empty() => Err(Corrupt),
+            TAG_LZH_DICT if self.content.is_empty() => Err(DecodeError),
             TAG_LZH_DICT => decode::lz_high(
                 &self.content,
                 self.lens.as_ref(),
@@ -130,7 +130,7 @@ impl Dict {
                 payload,
                 orig_len,
             ),
-            _ => Err(Corrupt),
+            _ => Err(DecodeError),
         }
     }
 
