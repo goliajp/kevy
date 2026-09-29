@@ -161,7 +161,7 @@ pub(crate) fn install_new_index(
             ctx.state.install_index_catalog(cat);
             out.extend_from_slice(b"+OK\r\n");
         }
-        Err(e) => encode_error(out, e),
+        Err(e) => encode_error(out, &e.to_wire()),
     }
 }
 

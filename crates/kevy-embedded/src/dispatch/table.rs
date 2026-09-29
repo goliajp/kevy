@@ -47,7 +47,7 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
 fn cmd_declare(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     let refs: Vec<&[u8]> = argv.iter().map(Vec::as_slice).collect();
     match kevy_index::parse_table_declare(&refs) {
-        Err(e) => encode_error(out, &e),
+        Err(e) => encode_error(out, &e.to_wire()),
         Ok(spec) => match s.table_declare(spec) {
             Ok(()) => out.extend_from_slice(b"+OK\r\n"),
             Err(e) => kevy_err(out, &e),
@@ -60,7 +60,7 @@ fn cmd_declare(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
 fn cmd_ensure(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     let refs: Vec<&[u8]> = argv.iter().map(Vec::as_slice).collect();
     match kevy_index::parse_table_declare(&refs) {
-        Err(e) => encode_error(out, &e),
+        Err(e) => encode_error(out, &e.to_wire()),
         Ok(spec) => match s.table_ensure(spec) {
             Ok(kevy_index::TableEnsure::Unchanged) => out.extend_from_slice(b"+UNCHANGED\r\n"),
             // created, or any later outcome that leaves the table as declared
@@ -75,7 +75,7 @@ fn cmd_ensure(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
 fn cmd_replace(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     let refs: Vec<&[u8]> = argv.iter().map(Vec::as_slice).collect();
     match kevy_index::parse_table_declare(&refs) {
-        Err(e) => encode_error(out, &e),
+        Err(e) => encode_error(out, &e.to_wire()),
         Ok(spec) => match s.table_replace(spec) {
             Ok(()) => out.extend_from_slice(b"+OK\r\n"),
             Err(e) => kevy_err(out, &e),

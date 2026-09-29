@@ -28,7 +28,9 @@
 //! index — the same exclusion semantics a scalar coerce failure has.
 
 use crate::catalog::ValType;
+use crate::error::SpecError;
 use crate::spec::IndexSpec;
+use crate::table_error::WhereError;
 use crate::value::{IndexValue, order_key};
 use kevy_text::SortOrder;
 
@@ -241,15 +243,12 @@ pub fn parse_where(
     Some((w, i))
 }
 
-fn declared_list(cols: &[CompositeCol]) -> String {
-    cols.iter()
-        .map(|c| String::from_utf8_lossy(&c.name).into_owned())
-        .collect::<Vec<_>>()
-        .join(", ")
+fn declared_list(cols: &[CompositeCol]) -> Vec<Vec<u8>> {
+    cols.iter().map(|c| c.name.clone()).collect()
 }
 
 /// Encode one WHERE bound value for `col`, or the named error.
-fn bound_component(col: &CompositeCol, raw: &[u8], now: i64) -> Result<Vec<u8>, String> {
+fn bound_component(col: &CompositeCol, raw: &[u8], now: i64) -> Result<Vec<u8>, WhereError> {
     // Resolve `@` time expressions BEFORE the shared encoder: row
     // derivation (`classify_component`) shares `encode_component` and
     // must never interpret data — a row whose i64 field holds "@now"
@@ -263,23 +262,19 @@ fn bound_component(col: &CompositeCol, raw: &[u8], now: i64) -> Result<Vec<u8>, 
                 resolved.as_slice()
             }
             None => {
-                return Err(format!(
-                    "WHERE bound '{}' is not a valid time expression for '{}'",
-                    String::from_utf8_lossy(raw),
-                    String::from_utf8_lossy(&col.name),
-                ));
+                return Err(WhereError::TimeExpression {
+                    bound: raw.to_vec(),
+                    column: col.name.clone(),
+                });
             }
         }
     } else {
         raw
     };
-    encode_component(col, raw).ok_or_else(|| {
-        format!(
-            "WHERE bound '{}' is not a valid {}, which is how this composite declares '{}'",
-            String::from_utf8_lossy(raw),
-            col.ty.tag(),
-            String::from_utf8_lossy(&col.name),
-        )
+    encode_component(col, raw).ok_or_else(|| WhereError::Value {
+        bound: raw.to_vec(),
+        ty: col.ty,
+        column: col.name.clone(),
     })
 }
 
@@ -314,7 +309,7 @@ pub fn composite_bounds(
     cols: &[CompositeCol],
     w: &WhereClause,
     now: i64,
-) -> Result<(Vec<u8>, Vec<u8>), String> {
+) -> Result<(Vec<u8>, Vec<u8>), WhereError> {
     let mut lo = Vec::new();
     let mut hi = Vec::new();
     let mut at = 0usize;
@@ -358,20 +353,16 @@ fn resolve_col<'c>(
     cols: &'c [CompositeCol],
     at: usize,
     name: &[u8],
-) -> Result<&'c CompositeCol, String> {
+) -> Result<&'c CompositeCol, WhereError> {
     if !cols.iter().any(|c| c.name == name) {
-        return Err(format!(
-            "WHERE names column '{}', which this composite does not declare — it declares: {}",
-            String::from_utf8_lossy(name),
-            declared_list(cols),
-        ));
+        return Err(WhereError::UnknownColumn {
+            column: name.to_vec(),
+            declared: declared_list(cols),
+        });
     }
     match cols.get(at) {
         Some(c) if c.name == name => Ok(c),
-        _ => Err(format!(
-            "WHERE columns must be a leading prefix of the composite's declared order ({})",
-            declared_list(cols),
-        )),
+        _ => Err(WhereError::NotLeadingPrefix { declared: declared_list(cols) }),
     }
 }
 
@@ -379,28 +370,28 @@ fn resolve_col<'c>(
 /// `TYPE str` (the derived value IS a byte string), a single declared
 /// FIELD, no stored VALUES, and 1..=[`MAX_COMPOSITE_COLS`] columns of
 /// scalar types. Every refused combo errors by name.
-pub(crate) fn composite_guard(spec: &IndexSpec) -> Result<(), &'static str> {
+pub(crate) fn composite_guard(spec: &IndexSpec) -> Result<(), SpecError> {
     let Some(cols) = &spec.composite else { return Ok(()) };
     if spec.kind != crate::IndexKind::Range {
-        return Err("ERR COMPOSITE requires KIND range");
+        return Err(SpecError::CompositeNeedsRange);
     }
     if spec.ty != ValType::Str {
-        return Err("ERR COMPOSITE requires TYPE str");
+        return Err(SpecError::CompositeNeedsStr);
     }
     if !spec.values.is_empty() {
-        return Err("ERR COMPOSITE cannot combine with VALUES");
+        return Err(SpecError::CompositeWithValues);
     }
     if spec.fields.len() != 1 {
-        return Err("ERR COMPOSITE declares exactly one FIELD");
+        return Err(SpecError::CompositeFieldCount);
     }
     if cols.is_empty() {
-        return Err("ERR COMPOSITE needs at least one column");
+        return Err(SpecError::CompositeNoColumns);
     }
     if cols.len() > MAX_COMPOSITE_COLS {
-        return Err("ERR COMPOSITE supports at most 8 columns");
+        return Err(SpecError::CompositeTooManyColumns);
     }
     if cols.iter().any(|c| matches!(c.ty, ValType::Vector)) {
-        return Err("ERR COMPOSITE columns must be i64|f64|str");
+        return Err(SpecError::CompositeColumnType);
     }
     Ok(())
 }

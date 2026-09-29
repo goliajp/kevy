@@ -81,7 +81,7 @@ pub(crate) fn argv(words: Vec<Vec<u8>>) -> Described {
 /// let Described::Array(fields) = describe_index(&s, []) else { unreachable!() };
 /// assert_eq!(fields[22], Described::Bulk(b"table".to_vec()));
 /// assert_eq!(fields[23], Described::Bulk(b"-".to_vec()));
-/// # Ok::<(), &'static str>(())
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn describe_index<'a>(
     s: &IndexSpec,
@@ -102,7 +102,7 @@ pub fn describe_index<'a>(
 /// let p = Partitioning::Global { splits: vec![order_key(ValType::I64, b"30").unwrap()] };
 /// let Described::Array(fields) = describe_index_partitioned(&s, &p, []) else { unreachable!() };
 /// assert_eq!(fields[24], Described::Bulk(b"partitioning".to_vec()));
-/// # Ok::<(), &'static str>(())
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn describe_index_partitioned<'a>(
     s: &IndexSpec,
@@ -222,7 +222,7 @@ pub fn owner_of<'a>(
 /// let line: Vec<String> =
 ///     index_declaration(&s).iter().map(|w| String::from_utf8_lossy(w).into_owned()).collect();
 /// assert_eq!(line.join(" "), "IDX.CREATE age ON PREFIX user: FIELD age TYPE i64 KIND range MAXMEM 4096");
-/// # Ok::<(), &'static str>(())
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn index_declaration(s: &IndexSpec) -> Vec<Vec<u8>> {
     index_declaration_partitioned(s, &Partitioning::Local)
@@ -241,7 +241,7 @@ pub fn index_declaration(s: &IndexSpec) -> Vec<Vec<u8>> {
 ///     .map(|w| String::from_utf8_lossy(w).into_owned())
 ///     .collect();
 /// assert!(line.join(" ").ends_with("KIND range PARTITION global SPLIT 30"));
-/// # Ok::<(), &'static str>(())
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn index_declaration_partitioned(s: &IndexSpec, part: &Partitioning) -> Vec<Vec<u8>> {
     let mut w: Vec<Vec<u8>> =

@@ -16,6 +16,7 @@ use crate::catalog::{IndexKind, ValType};
 use crate::composite::{CompositeCol, MAX_COMPOSITE_COLS};
 use crate::spec::IndexSpec;
 use crate::spec_parts::ValueSpec;
+use crate::table_error::TableError;
 use kevy_text::SortOrder;
 
 /// One declared secondary index: a column and a scalar kind, plus the
@@ -140,7 +141,7 @@ impl WindowSpec {
 /// t.columns = vec![(b"id".to_vec(), ValType::I64), (b"at".to_vec(), ValType::I64)];
 /// t.indexes.push(TableIndex::new("at", IndexKind::Range));
 /// assert_eq!(t.compile()?[0].name(), b"t.at");
-/// # Ok::<(), String>(())
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 #[non_exhaustive]
@@ -201,9 +202,9 @@ impl TableSpec {
     /// ])?;
     /// let compiled = t.compile()?;
     /// assert_eq!(compiled[0].name(), b"t.at");
-    /// # Ok::<(), String>(())
+    /// # Ok::<(), kevy_index::TableError>(())
     /// ```
-    pub fn compile(&self) -> Result<Vec<IndexSpec>, String> {
+    pub fn compile(&self) -> Result<Vec<IndexSpec>, TableError> {
         compile_table(self)
     }
 
@@ -245,15 +246,15 @@ impl TableSpec {
 
     /// Structural validation — every refusal named. Runs at parse time
     /// AND at catalog admission (a sidecar line re-validates on load).
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), TableError> {
         if self.name.is_empty() {
-            return Err("ERR table name must be non-empty".into());
+            return Err(TableError::EmptyName);
         }
         if self.prefix.is_empty() {
-            return Err("ERR PREFIX must be non-empty".into());
+            return Err(TableError::EmptyPrefix);
         }
         if self.columns.is_empty() {
-            return Err("ERR a table needs at least one COLUMN".into());
+            return Err(TableError::NoColumns);
         }
         self.validate_columns_and_pk()?;
         self.validate_indexes()?;
@@ -265,100 +266,85 @@ impl TableSpec {
     /// bucket <= span, and an access path whose tree tail can answer
     /// max(column) for free: a single-column INDEX on it, or an
     /// ORDERPATH whose FIRST column is it, ascending.
-    fn validate_window(&self) -> Result<(), String> {
+    fn validate_window(&self) -> Result<(), TableError> {
         let Some(w) = &self.window else { return Ok(()) };
         match self.column_type(&w.column) {
-            None => {
-                return Err(format!("ERR WINDOW names unknown column '{}'", show(&w.column)));
-            }
+            None => return Err(TableError::WindowUnknownColumn(w.column.clone())),
             Some(ValType::I64) => {}
-            Some(_) => return Err("ERR WINDOW column must be i64".into()),
+            Some(_) => return Err(TableError::WindowColumnType),
         }
         if w.span <= 0 || w.bucket <= 0 {
-            return Err("ERR WINDOW SPAN and BUCKET must be positive".into());
+            return Err(TableError::WindowNotPositive);
         }
         if w.bucket > w.span {
-            return Err("ERR WINDOW BUCKET must not exceed SPAN".into());
+            return Err(TableError::WindowBucketExceedsSpan);
         }
         let indexed = self.indexes.iter().any(|ix| ix.column == w.column);
         let leads_path = self.orderpaths.iter().any(|op| op.led_ascending_by(&w.column));
         if !indexed && !leads_path {
-            return Err(format!(
-                "ERR WINDOW needs an access path on '{}' (add INDEX {} range, or lead an                  ORDERPATH with it ascending)",
-                show(&w.column),
-                show(&w.column)
-            ));
+            return Err(TableError::WindowNeedsPath(w.column.clone()));
         }
         Ok(())
     }
 
-    fn validate_columns_and_pk(&self) -> Result<(), String> {
+    fn validate_columns_and_pk(&self) -> Result<(), TableError> {
         for (i, (name, ty)) in self.columns.iter().enumerate() {
             if !matches!(ty, ValType::I64 | ValType::F64 | ValType::Str) {
-                return Err("ERR COLUMN type must be i64|f64|str".into());
+                return Err(TableError::ColumnType);
             }
             if self.columns[..i].iter().any(|(n, _)| n == name) {
-                return Err(format!("ERR duplicate COLUMN '{}'", show(name)));
+                return Err(TableError::DuplicateColumn(name.clone()));
             }
         }
         if self.column_type(&self.pk).is_none() {
-            return Err(format!(
-                "ERR PK column '{}' is not declared (add COLUMN {} ...)",
-                show(&self.pk),
-                show(&self.pk)
-            ));
+            return Err(TableError::PkUndeclared(self.pk.clone()));
         }
         Ok(())
     }
 
-    fn validate_indexes(&self) -> Result<(), String> {
+    fn validate_indexes(&self) -> Result<(), TableError> {
         for (i, ix) in self.indexes.iter().enumerate() {
             if !matches!(ix.kind, IndexKind::Range | IndexKind::Unique) {
-                return Err("ERR INDEX kind must be range|unique".into());
+                return Err(TableError::IndexKind);
             }
             if self.column_type(&ix.column).is_none() {
-                return Err(format!("ERR INDEX names unknown column '{}'", show(&ix.column)));
+                return Err(TableError::IndexUnknownColumn(ix.column.clone()));
             }
             if self.indexes[..i].iter().any(|p| p.column == ix.column) {
-                return Err(format!("ERR duplicate INDEX on column '{}'", show(&ix.column)));
+                return Err(TableError::DuplicateIndex(ix.column.clone()));
             }
             for v in &ix.values {
                 if self.column_type(v).is_none() {
-                    return Err(format!("ERR VALUES names unknown column '{}'", show(v)));
+                    return Err(TableError::ValuesUnknownColumn(v.clone()));
                 }
             }
         }
         Ok(())
     }
 
-    fn validate_orderpaths(&self) -> Result<(), String> {
+    fn validate_orderpaths(&self) -> Result<(), TableError> {
         for (i, op) in self.orderpaths.iter().enumerate() {
             if op.on.is_empty() {
-                return Err("ERR ORDERPATH needs ON <col>".into());
+                return Err(TableError::OrderpathNeedsOn);
             }
             if op.on.len() > MAX_COMPOSITE_COLS {
-                return Err("ERR ORDERPATH supports at most 8 columns".into());
+                return Err(TableError::OrderpathTooManyColumns);
             }
             if self.orderpaths[..i].iter().any(|p| p.name == op.name) {
-                return Err(format!("ERR duplicate ORDERPATH '{}'", show(&op.name)));
+                return Err(TableError::DuplicateOrderpath(op.name.clone()));
             }
             // The compiled names share one namespace: `<table>.<col>`
             // vs `<table>.<orderpath>` colliding would be two indexes
             // with one name — refused here, by name, not downstream.
             if self.indexes.iter().any(|ix| ix.column == op.name) {
-                return Err(format!(
-                    "ERR ORDERPATH '{}' collides with INDEX '{}'",
-                    show(&op.name),
-                    show(&op.name)
-                ));
+                return Err(TableError::OrderpathCollides(op.name.clone()));
             }
             for (col, _) in &op.on {
                 if self.column_type(col).is_none() {
-                    return Err(format!(
-                        "ERR ORDERPATH '{}' names unknown column '{}'",
-                        show(&op.name),
-                        show(col)
-                    ));
+                    return Err(TableError::OrderpathUnknownColumn {
+                        path: op.name.clone(),
+                        column: col.clone(),
+                    });
                 }
             }
         }
@@ -368,10 +354,6 @@ impl TableSpec {
 
 pub use crate::table_catalog::TableCatalog;
 
-fn show(b: &[u8]) -> String {
-    String::from_utf8_lossy(b).into_owned()
-}
-
 /// `<table>.<suffix>` — the compiled access-path name.
 pub(crate) fn dotted(table: &[u8], suffix: &[u8]) -> Vec<u8> {
     let mut n = table.to_vec();
@@ -380,13 +362,13 @@ pub(crate) fn dotted(table: &[u8], suffix: &[u8]) -> Vec<u8> {
     n
 }
 
-pub(crate) fn compile_table(t: &TableSpec) -> Result<Vec<IndexSpec>, String> {
+pub(crate) fn compile_table(t: &TableSpec) -> Result<Vec<IndexSpec>, TableError> {
     t.validate()?;
     let col_ty = |col: &[u8]| {
         // Post-validate this is total; the Err arm is the honest form
         // of what `expect` asserted, kept reachable so a validate()
         // gap can never again become a panic.
-        t.column_type(col).ok_or_else(|| format!("ERR column '{}' is not declared", show(col)))
+        t.column_type(col).ok_or_else(|| TableError::ColumnUndeclared(col.to_vec()))
     };
     let mut out = Vec::with_capacity(t.indexes.len() + t.orderpaths.len());
     for ix in &t.indexes {
@@ -395,7 +377,7 @@ pub(crate) fn compile_table(t: &TableSpec) -> Result<Vec<IndexSpec>, String> {
             .values
             .iter()
             .map(|c| Ok(ValueSpec::new(c.clone()).with_type(col_ty(c)?)))
-            .collect::<Result<_, String>>()?;
+            .collect::<Result<_, TableError>>()?;
         let spec = IndexSpec::builder(dotted(&t.name, &ix.column), t.prefix.clone(), ix.kind, ty)
             .with_field(ix.column.clone())
             .with_values(values);
@@ -406,7 +388,7 @@ pub(crate) fn compile_table(t: &TableSpec) -> Result<Vec<IndexSpec>, String> {
             .on
             .iter()
             .map(|(col, order)| Ok(CompositeCol::new(col.clone(), col_ty(col)?).with_order(*order)))
-            .collect::<Result<_, String>>()?;
+            .collect::<Result<_, TableError>>()?;
         let spec = IndexSpec::builder(
             dotted(&t.name, &op.name),
             t.prefix.clone(),

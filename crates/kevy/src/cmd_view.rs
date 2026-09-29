@@ -167,7 +167,7 @@ pub(crate) fn cmd_view_create<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out
             ctx.state.install_view_catalog(cat);
             out.extend_from_slice(b"+OK\r\n");
         }
-        Err(e) => encode_error(out, e),
+        Err(e) => encode_error(out, &e.to_wire()),
     }
 }
 

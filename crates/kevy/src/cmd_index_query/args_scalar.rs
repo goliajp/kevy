@@ -202,7 +202,7 @@ impl Query {
                 ));
             };
             let (lo, hi) = kevy_index::composite_bounds(cols, w, now)
-                .map_err(|e| crate::cmd_index_query::query_claused::clause_chunk(&e))?;
+                .map_err(|e| crate::cmd_index_query::query_claused::clause_chunk(&e.to_string()))?;
             return Ok((IndexValue::Str(lo), IndexValue::Str(hi)));
         }
         self.bounds(spec.ty(), now).ok_or_else(|| vec![crate::cmd_index_query::ST_BADARGS])

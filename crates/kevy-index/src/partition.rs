@@ -9,6 +9,7 @@
 //! splits[p])`, and lives on the shard [`partition_owner`] names. Both are
 //! pure functions of the catalog, so any shard can place any value.
 
+use crate::error::CatalogError;
 use crate::{Catalog, IndexKind, IndexSpec};
 
 /// How an index is spread over the shards.
@@ -211,12 +212,12 @@ pub fn partition_owner(name: &[u8], p: usize, n: usize) -> usize {
 }
 
 /// Why a global partitioning cannot go on this index.
-fn global_guard(spec: &IndexSpec, splits: &[Vec<u8>]) -> Result<(), &'static str> {
+fn global_guard(spec: &IndexSpec, splits: &[Vec<u8>]) -> Result<(), CatalogError> {
     if !matches!(spec.kind, IndexKind::Range | IndexKind::Unique) {
-        return Err("ERR PARTITION global requires KIND range|unique");
+        return Err(CatalogError::GlobalNeedsOrder);
     }
     if splits.windows(2).any(|w| w[0] >= w[1]) {
-        return Err("ERR SPLIT AT values must be strictly increasing");
+        return Err(CatalogError::SplitsOutOfOrder);
     }
     Ok(())
 }
@@ -232,16 +233,16 @@ impl Catalog {
     /// let spec = IndexSpec::builder("age", "user:", IndexKind::Range, ValType::I64).with_field("age").build()?;
     /// let mut c = Catalog::new();
     /// let split = order_key(ValType::I64, b"40").unwrap();
-    /// c.create_with(spec, Partitioning::Global { splits: vec![split] }).unwrap();
+    /// c.create_with(spec, Partitioning::Global { splits: vec![split] })?;
     /// assert_eq!(c.partitioning(b"age").partitions(), 2);
     /// assert!(!c.partitioning(b"other").is_global());
-    /// # Ok::<(), &'static str>(())
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn create_with(
         &mut self,
         spec: IndexSpec,
         partitioning: Partitioning,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), CatalogError> {
         if let Partitioning::Global { splits } = &partitioning {
             global_guard(&spec, splits)?;
         }
@@ -271,7 +272,7 @@ impl Catalog {
     /// c.create_with(spec, Partitioning::Global { splits: vec![] }).unwrap();
     /// assert!(c.set_splits(b"name", vec![b"h".to_vec(), b"q".to_vec()]));
     /// assert_eq!(c.partitioning(b"name").partition_of(b"mia"), 1);
-    /// # Ok::<(), &'static str>(())
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn set_splits(&mut self, name: &[u8], splits: Vec<Vec<u8>>) -> bool {
         if splits.windows(2).any(|w| w[0] >= w[1]) {
@@ -301,7 +302,7 @@ impl IndexSpec {
     /// let enc = s.parse_split_point(b"40").expect("an i64 point");
     /// assert_eq!(s.split_point_text(&enc), b"40");
     /// assert_eq!(s.parse_split_point(b"forty"), None);
-    /// # Ok::<(), &'static str>(())
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn parse_split_point(&self, raw: &[u8]) -> Option<Vec<u8>> {
         parse_split_point(self, raw)
@@ -315,7 +316,7 @@ impl IndexSpec {
     /// let s = IndexSpec::builder("t", "u:", IndexKind::Range, ValType::F64).with_field("t").build()?;
     /// let enc = order_key(ValType::F64, b"2.5").expect("a float");
     /// assert_eq!(s.split_point_text(&enc), b"2.5");
-    /// # Ok::<(), &'static str>(())
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn split_point_text(&self, enc: &[u8]) -> Vec<u8> {
         split_point_text(self, enc)

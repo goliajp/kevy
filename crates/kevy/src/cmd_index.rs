@@ -181,7 +181,7 @@ pub(crate) fn parse_create<A: ArgvView + ?Sized>(
     match build_spec(args, fields, ty, kind, ann, opts) {
         Ok(spec) => Some((spec, part)),
         Err(e) => {
-            encode_error(out, e);
+            encode_error(out, e.as_wire());
             None
         }
     }
@@ -197,7 +197,7 @@ fn build_spec<A: ArgvView + ?Sized>(
     kind: IndexKind,
     ann: Option<kevy_index::AnnSpec>,
     opts: CreateOpts,
-) -> Result<IndexSpec, &'static str> {
+) -> Result<IndexSpec, kevy_index::SpecError> {
     let mut b = IndexSpec::builder(args[1].to_vec(), args[4].to_vec(), kind, ty)
         .with_fields(fields)
         .with_max_bytes(opts.max_bytes)

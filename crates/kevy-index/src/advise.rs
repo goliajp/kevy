@@ -69,7 +69,7 @@ impl AdviseEntry {
     /// ])?)?;
     /// let e = AdviseEntry::new("t.at", AdviseShape::Range, 3);
     /// assert!(e.advice(&cat).is_some_and(|a| a.contains("INDEX at range")));
-    /// # Ok::<(), String>(())
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn advice(&self, cat: &TableCatalog) -> Option<String> {
         advice_of(self, cat)
@@ -404,7 +404,7 @@ impl TableSpec {
     /// let e = AdviseEntry::new("t.at", AdviseShape::Range, 16);
     /// assert_eq!(t.apply_auto(&e), Some(b"t.at".to_vec()));
     /// assert_eq!(t.apply_auto(&e), None, "the budget of one is spent");
-    /// # Ok::<(), String>(())
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn apply_auto(&mut self, e: &AdviseEntry) -> Option<Vec<u8>> {
         apply_auto(self, e)
@@ -427,7 +427,7 @@ impl TableSpec {
     /// ])?;
     /// assert_eq!(t.narrow_advice(None), None, "no query observed yet");
     /// assert!(t.narrow_advice(Some(37)).is_some_and(|a| a.contains("SPAN 70")));
-    /// # Ok::<(), String>(())
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn narrow_advice(&self, margin: Option<i64>) -> Option<String> {
         narrow_advice(self, margin)
