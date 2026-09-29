@@ -11,7 +11,8 @@
 ///
 /// Quorum failover is configured separately via the `[cluster]`
 /// `node_id` + `peers` keys; see [`crate::cluster::ClusterSection`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct ReplicationSection {
     /// Node role. `Standalone` (default) disables the whole subsystem.
     pub role: ReplicationRole,
@@ -105,7 +106,8 @@ impl Default for ReplicationSection {
 }
 
 /// Node role for the `[replication]` subsystem.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
+#[non_exhaustive]
 pub enum ReplicationRole {
     /// Default. Replication subsystem dormant; behaves like pre-v3.
     #[default]

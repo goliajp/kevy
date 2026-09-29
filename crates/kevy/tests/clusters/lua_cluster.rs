@@ -5,7 +5,7 @@
 //! CROSSSLOT enforcement is exercised in isolation from the
 //! default-config tests in `lua_eval.rs`.
 
-use kevy_config::{ClusterSection, Config};
+use kevy_config::Config;
 use kevy_resp::Argv;
 use kevy_store::Store;
 use std::sync::Arc;
@@ -19,10 +19,8 @@ fn argv(parts: &[&[u8]]) -> Argv {
 }
 
 fn cluster_enabled_kevy() -> kevy::KevyCommands {
-    let cfg = Config {
-        cluster: ClusterSection { enabled: true, ..ClusterSection::default() },
-        ..Config::default()
-    };
+    let mut cfg = Config::default();
+    cfg.cluster.enabled = true;
     kevy::KevyCommands::with_state(Arc::new(
         kevy::RuntimeState::new(Arc::new(cfg), std::path::PathBuf::new(), 1).unwrap(),
     ))

@@ -311,7 +311,7 @@ pub(crate) struct Shard<C: Commands> {
     pub(crate) request_batch: Vec<ReqBatch>,
     /// Per-shard cached `notify_keyspace_events` flags — hot-reloaded
     /// off the [`crate::Commands::live_runtime_config`] tick. Empty
-    /// (default) = OFF: every write checks `notify_flags.is_empty()`
+    /// (default) = OFF: every write checks `notify_flags.is_active()`
     /// and skips the publish hot-path. `Copy` so the per-cmd check
     /// fits in a register pair.
     pub(crate) notify_flags: NotificationFlags,

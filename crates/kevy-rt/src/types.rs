@@ -69,15 +69,15 @@ impl NotifyClass {
     /// Whether `flags` enables this event class.
     #[inline]
     pub fn enabled_in(self, flags: &NotificationFlags) -> bool {
-        match self {
-            NotifyClass::Generic => flags.generic,
-            NotifyClass::String => flags.string,
-            NotifyClass::List => flags.list,
-            NotifyClass::Set => flags.set,
-            NotifyClass::Hash => flags.hash,
-            NotifyClass::Zset => flags.zset,
-            NotifyClass::Stream => flags.stream,
-        }
+        flags.contains(match self {
+            NotifyClass::Generic => NotificationFlags::GENERIC,
+            NotifyClass::String => NotificationFlags::STRING,
+            NotifyClass::List => NotificationFlags::LIST,
+            NotifyClass::Set => NotificationFlags::SET,
+            NotifyClass::Hash => NotificationFlags::HASH,
+            NotifyClass::Zset => NotificationFlags::ZSET,
+            NotifyClass::Stream => NotificationFlags::STREAM,
+        })
     }
 }
 

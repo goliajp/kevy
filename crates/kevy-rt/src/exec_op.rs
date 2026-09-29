@@ -271,7 +271,9 @@ impl<C: Commands> Shard<C> {
                     // Keyspace notifications: generic class, two events
                     // (`rename_from` on src, `rename_to` on dst) per
                     // Redis events.c convention.
-                    if !self.notify_flags.is_empty() && self.notify_flags.generic {
+                    if self.notify_flags.is_active()
+                        && self.notify_flags.contains(crate::NotificationFlags::GENERIC)
+                    {
                         self.notify_keyspace_event(b"rename_from", &src);
                         self.notify_keyspace_event(b"rename_to", &dst);
                     }

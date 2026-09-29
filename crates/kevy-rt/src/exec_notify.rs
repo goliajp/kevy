@@ -4,7 +4,7 @@
 //! write arms (Dispatch / Del / MSet / Flush) after the store mutation
 //! has already happened.
 //!
-//! Default-OFF: `notify_flags.is_empty()` short-circuits before any
+//! Default-OFF: `!notify_flags.is_active()` short-circuits before any
 //! string formatting or registry read. Once enabled, the cost is one
 //! cmd→class lookup + one or two cross-shard fan-outs per affected key.
 //!
@@ -46,19 +46,19 @@ impl<C: Commands> Shard<C> {
     /// Fire `__keyspace@0__:<key>` (`K` flag) and / or
     /// `__keyevent@0__:<event>` (`E` flag) for one `(key, event)` pair.
     /// Called by the per-Op notify helpers after they've already
-    /// gated on `notify_flags.is_empty()` + the per-class flag.
+    /// gated on `notify_flags.is_active()` + the per-class flag.
     pub(crate) fn notify_keyspace_event(&mut self, event: &[u8], key: &[u8]) {
         // Allocations are necessary — the channel string mixes a
         // fixed prefix and the key bytes. We hold both as owned Vecs
         // briefly; the broadcast helper takes them by slice and Arc's
         // up the per-target copies.
-        if self.notify_flags.keyspace {
+        if self.notify_flags.contains(crate::NotificationFlags::KEYSPACE) {
             let mut chan = Vec::with_capacity(b"__keyspace@0__:".len() + key.len());
             chan.extend_from_slice(b"__keyspace@0__:");
             chan.extend_from_slice(key);
             self.broadcast_notification(&chan, event);
         }
-        if self.notify_flags.keyevent {
+        if self.notify_flags.contains(crate::NotificationFlags::KEYEVENT) {
             let mut chan = Vec::with_capacity(b"__keyevent@0__:".len() + event.len());
             chan.extend_from_slice(b"__keyevent@0__:");
             chan.extend_from_slice(event);
@@ -71,7 +71,7 @@ impl<C: Commands> Shard<C> {
     /// key (`args[1]` per Redis convention — keyless cmds short-circuit
     /// inside `Commands::notify_class` returning `None`).
     pub(crate) fn maybe_notify_dispatch<A: ArgvView + ?Sized>(&mut self, args: &A) {
-        if self.notify_flags.is_empty() {
+        if !self.notify_flags.is_active() {
             return;
         }
         // Store-origin events first: a `new` fired by this command
@@ -93,12 +93,12 @@ impl<C: Commands> Shard<C> {
 
     /// Multi-key `DEL` — fire `del` per key.
     pub(crate) fn maybe_notify_del(&mut self, keys: &[Vec<u8>]) {
-        if self.notify_flags.is_empty() {
+        if !self.notify_flags.is_active() {
             return;
         }
         self.drain_store_notify();
         self.drain_expired_keys();
-        if !self.notify_flags.generic {
+        if !self.notify_flags.contains(crate::NotificationFlags::GENERIC) {
             return;
         }
         for k in keys {
@@ -108,12 +108,12 @@ impl<C: Commands> Shard<C> {
 
     /// Multi-key `MSET` — fire `set` per key (matches Redis events.c).
     pub(crate) fn maybe_notify_mset(&mut self, pairs: &[(Vec<u8>, Vec<u8>)]) {
-        if self.notify_flags.is_empty() {
+        if !self.notify_flags.is_active() {
             return;
         }
         self.drain_store_notify();
         self.drain_expired_keys();
-        if !self.notify_flags.string {
+        if !self.notify_flags.contains(crate::NotificationFlags::STRING) {
             return;
         }
         for (k, _) in pairs {
@@ -166,7 +166,9 @@ impl<C: Commands> Shard<C> {
     /// channel (no per-key keyspace channel since no specific key
     /// applies). Matches Redis events.c semantics.
     pub(crate) fn maybe_notify_flush(&mut self) {
-        if self.notify_flags.is_empty() || !self.notify_flags.generic || !self.notify_flags.keyevent
+        if !self
+            .notify_flags
+            .contains(crate::NotificationFlags::GENERIC | crate::NotificationFlags::KEYEVENT)
         {
             return;
         }

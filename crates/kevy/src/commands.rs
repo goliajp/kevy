@@ -340,7 +340,9 @@ impl Commands for KevyCommands {
             // (notifications OFF) is unreachable in practice and safe
             // if a foreign path ever slips one through.
             notify_flags: Some(
-                kevy_config::parse_notification_flags(&cfg.notification.notify_keyspace_events)
+                cfg.notification
+                    .notify_keyspace_events
+                    .parse::<kevy_config::NotificationFlags>()
                     .unwrap_or_default(),
             ),
             slowlog_slower_than_micros: Some(cfg.slowlog.slower_than_micros),

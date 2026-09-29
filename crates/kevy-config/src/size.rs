@@ -11,27 +11,36 @@
 //! - Negative numbers
 //! - Empty strings
 
+use crate::error::ValueError;
+
 /// Parse a size literal (`"64mb"`, `"2gb"`, `"512"`, …) into a byte count.
 ///
-/// Returns `Err` with the offending input on parse failure.
-pub fn parse_size(input: &str) -> Result<u64, String> {
+/// A refusal quotes the offending input.
+///
+/// ```
+/// assert_eq!(kevy_config::parse_size("64mb"), Ok(64 * 1024 * 1024));
+/// assert!(kevy_config::parse_size("1.5gb").is_err());
+/// ```
+pub fn parse_size(input: &str) -> Result<u64, ValueError> {
     let s = input.trim();
     if s.is_empty() {
-        return Err(format!("empty size literal: {input:?}"));
+        return Err(ValueError::new(format!("empty size literal: {input:?}")));
     }
     // Split into numeric prefix + unit suffix.
     let split_at = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
     let (num_part, unit_part) = s.split_at(split_at);
     if num_part.is_empty() {
-        return Err(format!("size literal {input:?} has no number"));
+        return Err(ValueError::new(format!("size literal {input:?} has no number")));
     }
-    let n: u64 = num_part
-        .parse()
-        .map_err(|_| format!("size literal {input:?} has invalid number: {num_part:?}"))?;
-    let multiplier = parse_unit(unit_part.trim())
-        .ok_or_else(|| format!("size literal {input:?} has unknown unit: {unit_part:?}"))?;
-    let total =
-        n.checked_mul(multiplier).ok_or_else(|| format!("size literal {input:?} overflows u64"))?;
+    let n: u64 = num_part.parse().map_err(|_| {
+        ValueError::new(format!("size literal {input:?} has invalid number: {num_part:?}"))
+    })?;
+    let multiplier = parse_unit(unit_part.trim()).ok_or_else(|| {
+        ValueError::new(format!("size literal {input:?} has unknown unit: {unit_part:?}"))
+    })?;
+    let total = n
+        .checked_mul(multiplier)
+        .ok_or_else(|| ValueError::new(format!("size literal {input:?} overflows u64")))?;
     // The TOML lexer reads bare integers as i64 and the emitter writes
     // sizes as bare integers, so a size past i64::MAX would serialize
     // but never reparse (the config_toml fuzz target caught the
@@ -39,7 +48,7 @@ pub fn parse_size(input: &str) -> Result<u64, String> {
     // form refused). No real byte budget approaches 8 EiB; refuse at
     // the door so parse and reparse agree.
     if total > i64::MAX as u64 {
-        return Err(format!("size literal {input:?} exceeds the 8 EiB ceiling"));
+        return Err(ValueError::new(format!("size literal {input:?} exceeds the 8 EiB ceiling")));
     }
     Ok(total)
 }

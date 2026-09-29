@@ -8,7 +8,8 @@ use std::path::PathBuf;
 // ───────────── enums ─────────────
 
 /// AOF fsync policy. Matches Redis `appendfsync`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum AppendFsync {
     /// `fsync` after every write command. Zero data-loss but ~50% throughput.
     Always,
@@ -44,7 +45,8 @@ impl AppendFsync {
 
 /// Maxmemory eviction policy. 8 variants matching Redis. `NoEviction`
 /// (default) returns an error on writes once `maxmemory` is hit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum EvictionPolicy {
     /// Refuse writes once `maxmemory` is hit. Default.
     NoEviction,
@@ -95,7 +97,8 @@ impl EvictionPolicy {
 }
 
 /// Log verbosity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum LogLevel {
     /// Very chatty, useful when debugging a kevy internal bug.
     Trace,
@@ -135,7 +138,8 @@ impl LogLevel {
 }
 
 /// Where to write log output.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum LogOutput {
     /// Write to standard error (default).
     Stderr,
@@ -146,16 +150,23 @@ pub enum LogOutput {
 }
 
 impl LogOutput {
-    /// Canonical name. `File(p)` renders as the path string.
-    pub fn as_str(&self) -> std::borrow::Cow<'_, str> {
+    /// Canonical name. `File(p)` renders as the path string, which costs
+    /// an allocation — hence `to_`, not `as_`.
+    ///
+    /// ```
+    /// use kevy_config::LogOutput;
+    /// assert_eq!(LogOutput::Stderr.to_config_str(), "stderr");
+    /// assert_eq!(LogOutput::parse("/var/log/kevy.log").to_config_str(), "/var/log/kevy.log");
+    /// ```
+    pub fn to_config_str(&self) -> std::borrow::Cow<'_, str> {
         match self {
             Self::Stderr => "stderr".into(),
             Self::Stdout => "stdout".into(),
             Self::File(p) => p.display().to_string().into(),
         }
     }
-    /// Inverse of [`Self::as_str`]: `stderr` / `stdout` reserved; any
-    /// other string is treated as a file path.
+    /// Inverse of [`Self::to_config_str`]: `stderr` / `stdout` reserved;
+    /// any other string is treated as a file path.
     pub fn parse(s: &str) -> Self {
         match s {
             "stderr" => Self::Stderr,

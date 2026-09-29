@@ -21,10 +21,9 @@ use kevy_config::{CliOverrides, Config};
 
 let mut cfg = Config::load(None).expect("config error");
 cfg.merge_env(std::env::vars()).expect("bad env value");
-cfg.merge_cli(CliOverrides {
-    bind: Some([0, 0, 0, 0]),
-    ..CliOverrides::default()
-}).expect("bad cli value");
+let mut cli = CliOverrides::default();
+cli.bind = Some([0, 0, 0, 0]);
+cfg.merge_cli(cli).expect("bad cli value");
 
 println!("listening on {:?}:{}", cfg.server.bind, cfg.server.port);
 ```

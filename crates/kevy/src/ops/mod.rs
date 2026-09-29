@@ -231,41 +231,17 @@ fn cmd_shutdown<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut Vec<u8>
 
 // ───────────── value → string converters (shared with config submodule) ─────────────
 
+// the Redis spellings are the config crate's canonical names
 pub(super) fn appendfsync_str(v: kevy_config::AppendFsync) -> &'static str {
-    use kevy_config::AppendFsync::{Always, EverySec, No};
-    match v {
-        Always => "always",
-        EverySec => "everysec",
-        No => "no",
-    }
+    v.as_str()
 }
 
 pub(super) fn eviction_str(v: kevy_config::EvictionPolicy) -> &'static str {
-    use kevy_config::EvictionPolicy::{
-        AllKeysLfu, AllKeysLru, AllKeysRandom, NoEviction, VolatileLfu, VolatileLru,
-        VolatileRandom, VolatileTtl,
-    };
-    match v {
-        NoEviction => "noeviction",
-        AllKeysLru => "allkeys-lru",
-        AllKeysLfu => "allkeys-lfu",
-        AllKeysRandom => "allkeys-random",
-        VolatileLru => "volatile-lru",
-        VolatileLfu => "volatile-lfu",
-        VolatileRandom => "volatile-random",
-        VolatileTtl => "volatile-ttl",
-    }
+    v.as_str()
 }
 
 pub(super) fn log_level_str(v: kevy_config::LogLevel) -> &'static str {
-    use kevy_config::LogLevel::{Debug, Error, Info, Trace, Warn};
-    match v {
-        Trace => "trace",
-        Debug => "debug",
-        Info => "info",
-        Warn => "warning",
-        Error => "error",
-    }
+    v.as_str()
 }
 
 // ───────────── helpers ─────────────
