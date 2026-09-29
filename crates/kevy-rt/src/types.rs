@@ -149,9 +149,10 @@ pub struct LiveRuntimeConfig {
     pub tick_interval_ms: Option<u64>,
     /// `notify_keyspace_events` flags. Parsed by the [`Commands`]
     /// impl from its config source (e.g. kevy reads
-    /// `config_global` + [`kevy_config::parse_notification_flags`]).
-    /// Default-empty flags mean OFF — writes pay one bool-OR check
-    /// and skip every per-key keyspace notification publish.
+    /// `config_global` and parses the flag string into
+    /// [`NotificationFlags`]). Flags with no channel or no event class
+    /// mean OFF — writes pay one mask test and skip every per-key
+    /// keyspace notification publish.
     ///
     /// [`Commands`]: crate::Commands
     pub notify_flags: Option<NotificationFlags>,

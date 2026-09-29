@@ -416,7 +416,7 @@ fn to_char_extended_patterns() {
 /// MICROS_PER_DAY produced 3.15e21 against an i64 ceiling of 9.22e18 —
 /// wrapping in a release build, which sets no `overflow-checks`, and
 /// panicking in this one. Twelve digits of year panicked earlier still,
-/// inside `epoch_from_civil`, before any check could see it.
+/// inside the civil-to-epoch conversion, before any check could see it.
 #[test]
 fn a_date_that_cannot_be_micros_is_not_a_date() {
     use crate::datetime::MICROS_PER_DAY;
@@ -424,7 +424,11 @@ fn a_date_that_cannot_be_micros_is_not_a_date() {
     assert!(crate::parse_date("2020-01-01").is_some(), "ordinary dates are untouched");
     assert!(crate::parse_date("1969-12-31").is_some(), "so is before the epoch");
     assert_eq!(crate::parse_date("99999999-01-01"), None, "accepted, and its micros overflowed");
-    assert_eq!(crate::parse_date("999999999999-01-01"), None, "panicked inside epoch_from_civil");
+    assert_eq!(
+        crate::parse_date("999999999999-01-01"),
+        None,
+        "panicked inside the civil-to-epoch conversion"
+    );
 
     // Whatever the largest accepted year turns out to be, its microseconds
     // must fit — that is the contract, not the constant.
