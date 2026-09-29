@@ -111,6 +111,17 @@ requires = []
 proves = "the repo root and worktree hold no runtime residue"
 
 [[check]]
+id = "perfstats"
+area = "perf"
+tier = "precommit"
+cmd = "python3 -m unittest tools/test_perfstats.py"
+expected = 2
+timeout = 60
+requires = []
+inputs = ["tools/perfstats.py", "tools/perfwindow.py", "tools/test_perfstats.py"]
+proves = "the perf gate's SPRT turns a 3% shift red and an A/A green, and its sample rules discard what they claim to"
+
+[[check]]
 id = "secretgate"
 area = "hygiene"
 tier = "precommit"
