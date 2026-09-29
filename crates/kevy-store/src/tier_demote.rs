@@ -13,6 +13,11 @@ use crate::{Entry, SmallBytes, Store, key_heap_bytes_for, tier_codec};
 
 /// RFC §7: 32 records per demotion call, continuation on the shard tick.
 const SPILL_BATCH: usize = 32;
+/// Time one shard tick may spend demoting while over target. One batch a
+/// tick moved about 300 rows a second a shard, slower than a backfill
+/// grows an index, so the floor rose past the budget; a tick now repeats
+/// batches until it is under target, dry, or this much time is gone.
+const TICK_DEMOTE_BUDGET: std::time::Duration = std::time::Duration::from_millis(1);
 /// Backoff ceiling: a dry sampler doubles its skip up to this
 /// many ticks (~6.4 s at the default 10 Hz tick) — the idle cost of
 /// "over target with nothing left to spill" converges to one bounded
@@ -62,9 +67,9 @@ impl Store {
         n
     }
 
-    /// Tick continuation of [`Store::try_demote_after_write`]: one more
-    /// budgeted batch per shard tick while over the watermark — with
-    /// backoff. A tick whose batch moves nothing while over
+    /// Tick continuation of [`Store::try_demote_after_write`]: batch after
+    /// batch while over the watermark, for at most a millisecond a tick —
+    /// with backoff. A tick whose batch moves nothing while over
     /// target (every spillable value already cold, or the floor alone
     /// exceeds the budget so `effective_target == 0`) doubles the
     /// tick's skip up to a fixed ceiling; any demotion — here
@@ -80,7 +85,15 @@ impl Store {
             return 0;
         }
         let over = self.used_memory > effective_target(self.tier.as_ref().expect("probed above"));
-        let n = self.demote_if_over(crate::evict::DEMOTE_VISIT_WINDOW);
+        let started = std::time::Instant::now();
+        let mut n = 0;
+        loop {
+            let k = self.demote_if_over(crate::evict::DEMOTE_VISIT_WINDOW);
+            n += k;
+            if k == 0 || started.elapsed() >= TICK_DEMOTE_BUDGET {
+                break;
+            }
+        }
         let t = self.tier.as_mut().expect("still enabled");
         if n == 0 && over {
             t.tick_skip = (t.tick_skip * 2).clamp(1, BACKOFF_CEILING_TICKS);
@@ -140,8 +153,9 @@ impl Store {
             if self.used_memory <= target || demoted >= SPILL_BATCH {
                 break;
             }
-            let cap = self.tier.as_ref().expect("gated by caller").max_spill;
-            let victim = crate::evict::sample_pick_with(
+            let t = self.tier.as_ref().expect("gated by caller");
+            let (cap, start) = (t.max_spill, t.hand);
+            let (victim, visited) = crate::evict::sample_pick_at(
                 self,
                 policy,
                 |e| {
@@ -150,7 +164,12 @@ impl Store {
                         && (cap == 0 || e.weight() <= cap)
                 },
                 visit_bound,
+                start,
             );
+            // past the walked window: entries visited times buckets an entry
+            let per = self.map.capacity() / self.map.len().max(1);
+            let hand = start.wrapping_add(visited.max(1) * per.max(1));
+            self.tier.as_mut().expect("gated by caller").hand = hand;
             match victim {
                 None => break,
                 Some(k) if self.demote_in_place(&k) => {
