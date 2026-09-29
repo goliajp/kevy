@@ -150,15 +150,13 @@ fn encoding_oversize_chunk_panics_in_debug() {
 
 #[test]
 fn ping_marker_round_trips_generation_and_offset() {
+    use kevy_replicate::feed::FeedPosition;
     use kevy_replicate::wire::encode_ping;
     for (generation, next_offset) in [(1u64, 0u64), (1, 42), (7, u64::from(u32::MAX))] {
-        let bytes = encode_ping(generation, next_offset);
+        let tail = FeedPosition::new(generation, next_offset);
+        let bytes = encode_ping(tail);
         let (marker, used) = decode_snapshot_marker(&bytes).unwrap().unwrap();
-        assert_eq!(
-            marker,
-            SnapshotMarker::Ping { generation, next_offset },
-            "gen {generation} off {next_offset}"
-        );
+        assert_eq!(marker, SnapshotMarker::Ping(tail), "gen {generation} off {next_offset}");
         assert_eq!(used, bytes.len());
     }
 }
@@ -168,7 +166,7 @@ fn ping_marker_legacy_one_number_form_decodes_with_generation_zero() {
     // Legacy primaries speak `+PING <next_offset>\r\n`; generation 0
     // = "unknown" (real feed generations start at 1).
     let (marker, used) = decode_snapshot_marker(b"+PING 42\r\n").unwrap().unwrap();
-    assert_eq!(marker, SnapshotMarker::Ping { generation: 0, next_offset: 42 });
+    assert_eq!(marker, SnapshotMarker::Ping(kevy_replicate::feed::FeedPosition::new(0, 42)));
     assert_eq!(used, b"+PING 42\r\n".len());
 }
 

@@ -59,7 +59,7 @@ fn replay_covers_list_verbs() {
     {
         let s = Store::open(persist_cfg(&dir)).unwrap();
         s.rpush(b"l", &[b"a", b"c"]).unwrap();
-        s.linsert(b"l", true, b"c", b"b").unwrap();
+        s.linsert(b"l", crate::InsertPosition::Before, b"c", b"b").unwrap();
     }
     let s2 = Store::open(reopen_cfg(&dir)).unwrap();
     assert_eq!(
@@ -119,7 +119,7 @@ fn copy_survives_reopen() {
     {
         let s = Store::open(persist_cfg(&dir)).unwrap();
         s.set(b"src", b"payload").unwrap();
-        assert!(s.copy(b"src", b"dst", false).unwrap());
+        assert!(s.copy(b"src", b"dst", crate::CopyMode::IfAbsent).unwrap());
     }
     let s2 = Store::open(reopen_cfg(&dir)).unwrap();
     assert_eq!(

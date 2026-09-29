@@ -38,7 +38,7 @@ impl Store {
 
     /// `GET key` — `Some(bytes)` on hit, `None` on miss or expired.
     ///
-    /// The lock is **policy-gated** (see [`Self::reads_use_shared_lock`]):
+    /// The lock is **policy-gated**:
     /// whenever the active eviction policy won't consume a per-read LRU/LFU
     /// tick — `maxmemory == 0` (the default), or the `NoEviction` /
     /// `*Random` / `VolatileTtl` policies — this takes the **shared** lock and a
@@ -81,7 +81,7 @@ impl Store {
     /// values come back as an `Arc::clone` — **no byte copy** — so the FFI can
     /// hand JS a buffer viewing the engine's own storage (the win vs the plain
     /// [`Self::get`], which `into_owned`-copies). The lookup is non-mutating;
-    /// the lock is policy-gated like [`Self::get`] ([`Self::reads_use_shared_lock`]).
+    /// the lock is policy-gated like [`Self::get`].
     /// This lane never stamps the LRU clock and never promotes a cold value.
     pub fn get_shared_owned(&self, key: &[u8]) -> KevyResult<Option<kevy_store::GetShared>> {
         if self.reads_use_shared_lock() {

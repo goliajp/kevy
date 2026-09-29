@@ -2,7 +2,7 @@
 //! split from [`crate::cmd`] under the 500-LOC house rule. Re-exported
 //! by `crate::cmd` so call sites keep their `cmd::*` paths.
 
-use kevy_rt::NotifyClass;
+use kevy_rt::NotifyKind;
 
 /// Verb-level "is this a write" classification. Mirrors the `is_write` arm in
 /// [`crate::KevyCommands::resolve`] so the local dispatch fast path and the
@@ -100,7 +100,7 @@ pub(crate) fn is_write_verb(cmd: &[u8]) -> bool {
 
 /// Classify an uppercased verb into a keyspace-notification class. Returns
 /// `None` for read-only / non-notifying commands so the runtime can
-/// short-circuit; otherwise a [`NotifyClass`] the caller matches against
+/// short-circuit; otherwise a [`NotifyKind`] the caller matches against
 /// `NotificationFlags` to decide whether to actually publish.
 ///
 /// Event name = lowercased verb (matches the Redis events.c naming
@@ -108,36 +108,36 @@ pub(crate) fn is_write_verb(cmd: &[u8]) -> bool {
 /// Multi-key cmds (DEL multi / MSET / FLUSHDB) get their own per-Op
 /// hooks (`maybe_notify_del` / `maybe_notify_mset` / `maybe_notify_flush`
 /// in `kevy-rt::exec_notify`); this table covers single-key dispatch only.
-pub(crate) fn notify_class_for_verb(cmd: &[u8]) -> Option<NotifyClass> {
+pub(crate) fn notify_class_for_verb(cmd: &[u8]) -> Option<NotifyKind> {
     Some(match cmd {
         // String — Redis class `$`.
         b"SET" | b"SETNX" | b"SETEX" | b"PSETEX" | b"GETSET" | b"GETDEL" | b"APPEND" | b"INCR"
         | b"DECR" | b"INCRBY" | b"DECRBY" | b"INCRBYFLOAT" | b"SETBIT" | b"SETRANGE" => {
-            NotifyClass::String
+            NotifyKind::String
         }
         // Hash — class `h`.
         b"HSET" | b"HSETNX" | b"HMSET" | b"HDEL" | b"HINCRBY" | b"HINCRBYFLOAT" | b"HEXPIRE"
-        | b"HPEXPIRE" | b"HPEXPIREAT" | b"HPERSIST" => NotifyClass::Hash,
+        | b"HPEXPIRE" | b"HPEXPIREAT" | b"HPERSIST" => NotifyKind::Hash,
         // List — class `l`.
         b"LPUSH" | b"RPUSH" | b"LPOP" | b"RPOP" | b"LSET" | b"LREM" | b"LTRIM" | b"LINSERT"
-        | b"RPOPLPUSH" | b"LMOVE" => NotifyClass::List,
+        | b"RPOPLPUSH" | b"LMOVE" => NotifyKind::List,
         // Set — class `s` (SINTERSTORE/SUNIONSTORE/SDIFFSTORE not yet impl'd).
         b"SADD" | b"SREM" | b"SPOP" | b"SINTERSTORE" | b"SUNIONSTORE" | b"SDIFFSTORE" => {
-            NotifyClass::Set
+            NotifyKind::Set
         }
         // Sorted set — class `z`. GEOADD writes a ZSet under the hood,
         // so it fires `zadd` notifications too (matches Redis).
         b"ZADD" | b"ZREM" | b"ZINCRBY" | b"ZPOPMIN" | b"ZPOPMIN.BELOW" | b"ZREMRANGEBYRANK"
         | b"ZREMRANGEBYSCORE" | b"ZINTERSTORE" | b"ZUNIONSTORE" | b"ZDIFFSTORE" | b"GEOADD" => {
-            NotifyClass::Zset
+            NotifyKind::Zset
         }
         // Stream — class `t`. XADD/XDEL/XTRIM/XGROUP/XACK/XCLAIM/
         // XREADGROUP all fire their lowercased verb name.
         b"XADD" | b"XDEL" | b"XTRIM" | b"XSETID" | b"XGROUP" | b"XACK" | b"XCLAIM"
-        | b"XAUTOCLAIM" | b"XREADGROUP" => NotifyClass::Stream,
+        | b"XAUTOCLAIM" | b"XREADGROUP" => NotifyKind::Stream,
         // Generic — class `g`. (DEL single-key falls here; multi-key DEL
         // is routed through Op::Del + maybe_notify_del directly.)
-        b"DEL" | b"UNLINK" | b"EXPIRE" | b"PEXPIRE" | b"PERSIST" => NotifyClass::Generic,
+        b"DEL" | b"UNLINK" | b"EXPIRE" | b"PEXPIRE" | b"PERSIST" => NotifyKind::Generic,
         // BITOP is in the same position: Redis fires `set` on the
         // destination, and a table keyed off the verb would emit
         // `bitop`.

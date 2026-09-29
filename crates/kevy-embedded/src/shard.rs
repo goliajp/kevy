@@ -179,7 +179,7 @@ fn open_live_aofs(
                 Aof::open_after_replay(
                     &layout::aof_path(dir, i),
                     config.appendfsync,
-                    config.replay_mode(),
+                    config.replay_mode,
                     whole,
                 )
                 .map(Some)
@@ -245,7 +245,7 @@ pub(crate) fn resolve_tier_spec(
             format!("tiering budget percent must be 1..=100, got {p}"),
         ));
     }
-    let total = spec.resolve().ok_or_else(|| {
+    let total = crate::config_tier::resolve(spec).ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::Unsupported,
             "tiering budget auto/percent: no memory bound detected on this host — \

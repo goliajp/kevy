@@ -10,6 +10,7 @@ use crate::snapshot_fmt::{
     write_bytes, write_ttl,
 };
 use crate::snapshot_payload;
+use kevy_replicate::feed::FeedPosition;
 use kevy_store::Value;
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
@@ -38,14 +39,22 @@ pub fn write_snapshot_to<S: SnapshotSource, W: Write>(src: &S, sink: W) -> io::R
     write_snapshot_to_with_cursor(src, sink, None)
 }
 
-/// [`write_snapshot_to`] with the recovery-point header: when
-/// `cursor = Some((generation, offset))` the snapshot records the feed
-/// position it was taken at (format v5); `None` writes the legacy v4
-/// stream unchanged.
+/// [`write_snapshot_to`] with the recovery-point header: when `cursor`
+/// is `Some`, the snapshot records the feed position it was taken at
+/// (format v5); `None` writes the legacy v4 stream unchanged.
+///
+/// ```
+/// let mut bytes = Vec::new();
+/// let store = kevy_store::Store::new();
+/// let at = kevy_replicate::feed::FeedPosition::new(3, 42);
+/// kevy_persist::write_snapshot_to_with_cursor(&store, &mut bytes, Some(at))?;
+/// assert!(bytes.starts_with(b"KEVYSNAP"));
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub fn write_snapshot_to_with_cursor<S: SnapshotSource, W: Write>(
     src: &S,
     sink: W,
-    cursor: Option<(u64, u64)>,
+    cursor: Option<FeedPosition>,
 ) -> io::Result<()> {
     // Field-TTL records force format v6; collect them first so
     // the header version is known before anything is written.
@@ -56,9 +65,9 @@ pub fn write_snapshot_to_with_cursor<S: SnapshotSource, W: Write>(
     let version = snapshot_version(src, !fttl.is_empty(), cursor.is_some());
     w.write_all(&[version])?;
     if version >= VERSION_FEED_CURSOR {
-        let (generation, offset) = cursor.unwrap_or((0, 0));
-        w.write_all(&generation.to_le_bytes())?;
-        w.write_all(&offset.to_le_bytes())?;
+        let at = cursor.unwrap_or_default();
+        w.write_all(&at.generation.to_le_bytes())?;
+        w.write_all(&at.offset.to_le_bytes())?;
     }
     // The source yields *remaining* ms; v3 persists the absolute
     // Unix-ms deadline (now + remaining) so the TTL survives a restart.

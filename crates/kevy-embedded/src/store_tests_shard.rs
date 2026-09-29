@@ -2,7 +2,7 @@
 //! Split from `store_tests.rs` to keep both under the 500-LOC house rule.
 
 use super::tests::tmp_dir;
-use crate::PubsubFrame;
+use crate::PubsubEvent;
 use crate::store::*;
 
 // ───────────────────────── sharding (B2) ─────────────────────────
@@ -105,7 +105,7 @@ fn sharded_pubsub_still_process_wide() {
     assert_eq!(s.publish(b"chan", b"hello"), 1);
     assert_eq!(
         sub.recv().unwrap(),
-        PubsubFrame::Message { channel: b"chan".to_vec(), payload: b"hello".to_vec() }
+        PubsubEvent::Message { channel: b"chan".to_vec(), payload: b"hello".to_vec() }
     );
 }
 

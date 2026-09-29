@@ -1,11 +1,12 @@
-//! The pubsub frame vocabulary shared by every kevy client crate:
-//! [`PubsubEvent`] (one received frame, acks and deliveries alike)
+//! The pubsub frame vocabulary shared by every kevy client crate and the
+//! embedded engine's in-process bus: [`PubsubEvent`] (one received frame,
+//! acks and deliveries alike)
 //! and its `TryFrom<Reply>` (RESP reply → event, handling both RESP2
 //! `*N` arrays and RESP3 `>N` push frames).
 
 use std::io;
 
-use kevy_resp::Reply;
+use crate::Reply;
 
 /// One pubsub frame received from the bus or the wire.
 ///
@@ -65,7 +66,7 @@ pub enum PubsubEvent {
 /// (`*N\r\n…` arrays) and RESP3 (`>N\r\n…` push frames).
 ///
 /// ```
-/// use kevy_resp_client::{PubsubEvent, Reply};
+/// use kevy_resp::{PubsubEvent, Reply};
 ///
 /// let r = Reply::Array(vec![
 ///     Reply::Bulk(b"message".to_vec()),
@@ -75,6 +76,37 @@ pub enum PubsubEvent {
 /// assert!(matches!(PubsubEvent::try_from(r)?, PubsubEvent::Message { .. }));
 /// # Ok::<(), std::io::Error>(())
 /// ```
+impl PubsubEvent {
+    /// The raw message payload, moved out of the event.
+    ///
+    /// `Some(payload)` for the two deliveries ([`Message`](Self::Message)
+    /// and [`Pmessage`](Self::Pmessage)); `None` for every control/ack
+    /// event (subscribe / unsubscribe / …), which carries no payload.
+    /// Consuming `self` lets a scalar drain hand a push subscriber just the
+    /// bytes with no extra copy. The channel and the message-vs-pmessage
+    /// distinction are dropped; a caller that needs either keeps matching
+    /// on the event.
+    ///
+    /// ```
+    /// use kevy_resp::PubsubEvent;
+    ///
+    /// let m = PubsubEvent::Message { channel: b"c".to_vec(), payload: b"p".to_vec() };
+    /// assert_eq!(m.into_payload(), Some(b"p".to_vec()));
+    /// let ack = PubsubEvent::Subscribe { channel: b"c".to_vec(), count: 1 };
+    /// assert_eq!(ack.into_payload(), None);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn into_payload(self) -> Option<Vec<u8>> {
+        match self {
+            PubsubEvent::Message { payload, .. } | PubsubEvent::Pmessage { payload, .. } => {
+                Some(payload)
+            }
+            _ => None,
+        }
+    }
+}
+
 impl TryFrom<Reply> for PubsubEvent {
     type Error = io::Error;
 

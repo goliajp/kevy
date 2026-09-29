@@ -13,6 +13,7 @@
 
 use crate::KevyResult;
 
+use crate::CopyMode;
 use crate::store::ensure_writable;
 use crate::store::{Store, commit_write};
 
@@ -22,9 +23,19 @@ impl Store {
     ///
     /// Semantics:
     /// - `false` if `src` doesn't exist.
-    /// - `false` if `dst` exists and `replace = false`.
+    /// - `false` if `dst` exists and `mode` is [`CopyMode::IfAbsent`].
     /// - Preserves source TTL on the destination via `pexpireat`.
-    pub fn copy(&self, src: &[u8], dst: &[u8], replace: bool) -> KevyResult<bool> {
+    ///
+    /// ```
+    /// use kevy_embedded::{Config, CopyMode, Store};
+    ///
+    /// let s = Store::open(Config::default())?;
+    /// s.set(b"a", b"1")?;
+    /// assert!(s.copy(b"a", b"b", CopyMode::IfAbsent)?);
+    /// assert_eq!(s.get(b"b")?.as_deref(), Some(&b"1"[..]));
+    /// # Ok::<(), kevy_embedded::KevyError>(())
+    /// ```
+    pub fn copy(&self, src: &[u8], dst: &[u8], mode: CopyMode) -> KevyResult<bool> {
         ensure_writable(self)?;
         // Read source under its own shard lock.
         let src_val = match self.get(src)? {
@@ -34,8 +45,8 @@ impl Store {
         // Sample the source's TTL (ms since UNIX epoch) BEFORE the
         // write — captures the deadline that should survive the copy.
         let src_ttl_ms = self.ttl_ms(src);
-        // Veto if dst exists and replace is false.
-        if !replace {
+        // Veto if dst exists and the mode keeps an existing one.
+        if !matches!(mode, CopyMode::Replace) {
             // Use a fresh wshard on dst so this works cross-shard.
             let mut g = self.wshard(dst);
             if g.store.key_exists(dst) {

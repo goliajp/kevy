@@ -14,6 +14,7 @@
 
 use kevy_resp::{Argv, ArgvView};
 use kevy_rt::{BlockHint, BlockKind, Route, Store, XGroupCtx};
+use kevy_store::AckMode;
 
 /// Classify an uppercased verb into its blocking-command hint. The runtime
 /// uses this (via [`crate::KevyCommands::resolve`]) to know whether to park
@@ -276,8 +277,8 @@ pub(crate) fn xreadgroup_route<A: ArgvView + ?Sized>(args: &A) -> Route {
                 if i + 1 >= args.len() {
                     return Route::Local; // cmd_xreadgroup emits the error
                 }
-                let group =
-                    XGroupCtx { group: args[2].to_vec(), consumer: args[3].to_vec(), noack };
+                let ack = if noack { AckMode::NoAck } else { AckMode::Pending };
+                let group = XGroupCtx::new(args[2].to_vec(), args[3].to_vec()).with_ack(ack);
                 return xread_streams_route(args, i + 1, count, Some(group));
             }
             b"COUNT" => {

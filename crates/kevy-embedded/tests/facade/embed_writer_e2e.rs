@@ -197,7 +197,7 @@ fn writer_restart_generation_fence_ships_instead_of_aliasing() {
         writer_a.set(format!("a:{i}").as_bytes(), b"old").unwrap();
     }
     let mut sub = ReplicaClient::connect(addr_a.as_str(), "sub-restart", 0).unwrap();
-    let gen_a = sub.primary_gen_at_handshake();
+    let gen_a = sub.primary_at_handshake().generation;
     assert_ne!(gen_a, 0, "writer must advertise a real generation");
     let (_payload, ack_a) = drain_snapshot(&mut sub);
     assert_eq!(ack_a, 3, "boot A as-of offset");
@@ -217,11 +217,10 @@ fn writer_restart_generation_fence_ships_instead_of_aliasing() {
     let mut sub = ReplicaClient::connect_with(
         addr_b.as_str(),
         &kevy_replicate::replica::ConnectOptions::new("sub-restart")
-            .with_generation(gen_a)
-            .with_from_offset(3),
+            .with_from(kevy_replicate::feed::FeedPosition::new(gen_a, 3)),
     )
     .unwrap();
-    let gen_b = sub.primary_gen_at_handshake();
+    let gen_b = sub.primary_at_handshake().generation;
     assert_ne!(gen_b, gen_a, "each boot mints its own generation");
     // The fence must answer with a FULL snapshot of boot B's
     // keyspace — drain_snapshot panics if a live frame arrives

@@ -78,7 +78,7 @@ fn refusals_render_and_catalog_mutations_clear() {
     // A Filter family: the declared path exists, the field is not
     // stored.
     let filters = [ValueFilter::Eq { field: b"note", value: b"x" }];
-    let opts = ScalarQueryOpts { filters: &filters, ..ScalarQueryOpts::default() };
+    let opts = ScalarQueryOpts::default().with_filters(&filters);
     assert!(s.idx_query_claused(b"ev.at", &lo, &hi, None, 10, opts).is_err());
 
     // A Match family on an undeclared text path.

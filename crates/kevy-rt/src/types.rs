@@ -1,5 +1,5 @@
 //! Public command-classification + live-config types for the [`Commands`]
-//! trait (`ResolvedCmd`, `NotifyClass`, `TxnKind`, `LiveRuntimeConfig`).
+//! trait (`ResolvedCmd`, `TxnKind`, `LiveRuntimeConfig`).
 //! Split out of `lib.rs` (500-LOC house rule); all re-exported from the
 //! crate root, so the public paths (`kevy_rt::TxnKind`, …) are unchanged.
 //!
@@ -15,8 +15,21 @@ use kevy_persist::Fsync;
 /// AOF logging, and the QUIT branch — so the per-cmd `upper_verb` cost goes
 /// from 4× down to 1×.
 ///
+/// Built with [`ResolvedCmd::new`] and the `with_*` methods; every field
+/// but the route has a default (an ordinary, non-blocking, read-only
+/// command outside a transaction).
+///
+/// ```
+/// use kevy_rt::{ResolvedCmd, Route, TxnKind};
+///
+/// let set = ResolvedCmd::new(Route::Single(1)).with_write(true);
+/// assert!(set.is_write && !set.is_quit);
+/// assert_eq!(set.txn_kind, TxnKind::Other);
+/// ```
+///
 /// [`Commands::resolve`]: crate::Commands::resolve
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct ResolvedCmd {
     /// MULTI/EXEC/DISCARD/WATCH classification, so the transaction layer
     /// does not re-parse the verb.
@@ -43,48 +56,108 @@ pub struct ResolvedCmd {
     pub wake_idx: Option<u8>,
 }
 
-/// Keyspace-notification event class — what category a write command
-/// belongs to, so the runtime can match it against the per-conn
-/// notify_keyspace_events flags before publishing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NotifyClass {
-    /// `g` — generic key commands (DEL / EXPIRE / PERSIST / RENAME / TYPE).
-    Generic,
-    /// `$` — string commands (SET / GETSET / INCR / APPEND / MSET).
-    String,
-    /// `l` — list commands (LPUSH / RPUSH / LPOP / LREM / LTRIM / …).
-    List,
-    /// `s` — set commands (SADD / SREM / SPOP / …).
-    Set,
-    /// `h` — hash commands (HSET / HDEL / HINCRBY / …).
-    Hash,
-    /// `z` — sorted-set commands (ZADD / ZREM / ZINCRBY / …).
-    Zset,
-    /// `t` — stream commands (XADD / XDEL / XTRIM / XGROUP / XACK /
-    /// XCLAIM / XREADGROUP / …). Matches Redis's `t` class.
-    Stream,
-}
-
-impl NotifyClass {
-    /// Whether `flags` enables this event class.
+impl ResolvedCmd {
+    /// A command routed by `route`, with every other attribute at its
+    /// default: [`TxnKind::Other`], not QUIT, not a write, not blocking,
+    /// wakes no waiter.
+    ///
+    /// ```
+    /// let ping = kevy_rt::ResolvedCmd::new(kevy_rt::Route::Local);
+    /// assert!(!ping.is_write && ping.wake_idx.is_none());
+    /// ```
     #[inline]
-    pub fn enabled_in(self, flags: &NotificationFlags) -> bool {
-        flags.contains(match self {
-            NotifyClass::Generic => NotificationFlags::GENERIC,
-            NotifyClass::String => NotificationFlags::STRING,
-            NotifyClass::List => NotificationFlags::LIST,
-            NotifyClass::Set => NotificationFlags::SET,
-            NotifyClass::Hash => NotificationFlags::HASH,
-            NotifyClass::Zset => NotificationFlags::ZSET,
-            NotifyClass::Stream => NotificationFlags::STREAM,
-        })
+    #[must_use]
+    pub fn new(route: Route) -> Self {
+        ResolvedCmd {
+            txn_kind: TxnKind::Other,
+            route,
+            is_quit: false,
+            is_write: false,
+            block_hint: BlockHint::None,
+            wake_idx: None,
+        }
+    }
+
+    /// Set [`Self::txn_kind`].
+    ///
+    /// ```
+    /// use kevy_rt::{ResolvedCmd, Route, TxnKind};
+    /// let multi = ResolvedCmd::new(Route::Local).with_txn_kind(TxnKind::Multi);
+    /// assert_eq!(multi.txn_kind, TxnKind::Multi);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn with_txn_kind(mut self, txn_kind: TxnKind) -> Self {
+        self.txn_kind = txn_kind;
+        self
+    }
+
+    /// Set [`Self::is_quit`].
+    ///
+    /// ```
+    /// let quit = kevy_rt::ResolvedCmd::new(kevy_rt::Route::Local).with_quit(true);
+    /// assert!(quit.is_quit);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn with_quit(mut self, is_quit: bool) -> Self {
+        self.is_quit = is_quit;
+        self
+    }
+
+    /// Set [`Self::is_write`].
+    ///
+    /// ```
+    /// let del = kevy_rt::ResolvedCmd::new(kevy_rt::Route::DelKeys).with_write(true);
+    /// assert!(del.is_write);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn with_write(mut self, is_write: bool) -> Self {
+        self.is_write = is_write;
+        self
+    }
+
+    /// Set [`Self::block_hint`].
+    ///
+    /// ```
+    /// use kevy_rt::{BlockHint, BlockKind, ResolvedCmd, Route};
+    ///
+    /// let hint = BlockHint::Block { kind: BlockKind::Blpop, keys: vec![b"q".to_vec()], timeout_ms: 0 };
+    /// let blpop = ResolvedCmd::new(Route::Single(1)).with_block_hint(hint.clone());
+    /// assert_eq!(blpop.block_hint, hint);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn with_block_hint(mut self, block_hint: BlockHint) -> Self {
+        self.block_hint = block_hint;
+        self
+    }
+
+    /// Set [`Self::wake_idx`].
+    ///
+    /// ```
+    /// let lpush = kevy_rt::ResolvedCmd::new(kevy_rt::Route::Single(1)).with_wake_idx(Some(1));
+    /// assert_eq!(lpush.wake_idx, Some(1));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn with_wake_idx(mut self, wake_idx: Option<u8>) -> Self {
+        self.wake_idx = wake_idx;
+        self
     }
 }
 
 /// Outcome of an extension fan-out reduce ([`Commands::extension_reduce`]).
 ///
+/// ```
+/// let done = kevy_rt::ExtensionReduced::Reply(b"+OK\r\n".to_vec());
+/// assert!(matches!(done, kevy_rt::ExtensionReduced::Reply(_)));
+/// ```
+///
 /// [`Commands::extension_reduce`]: crate::Commands::extension_reduce
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum ExtensionReduced {
     /// The final RESP reply bytes for the client.
     Reply(Vec<u8>),
@@ -99,7 +172,12 @@ pub enum ExtensionReduced {
 }
 
 /// Transaction-control classification for a command.
-#[derive(Debug)]
+///
+/// ```
+/// assert_eq!(kevy_rt::TxnKind::default(), kevy_rt::TxnKind::Other);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub enum TxnKind {
     /// `MULTI` — opens a queue on this connection.
     Multi,
@@ -114,6 +192,7 @@ pub enum TxnKind {
     /// that dispatch resolves to +OK at EXEC time.
     Watch,
     /// Everything else: queued inside MULTI, dispatched outside it.
+    #[default]
     Other,
 }
 
@@ -126,8 +205,15 @@ pub enum TxnKind {
 /// One snapshot is built per tick (every 100 ms by default), so its
 /// cost is amortised across thousands of commands.
 ///
+/// ```
+/// let mut live = kevy_rt::LiveRuntimeConfig::default();
+/// live.tick_interval_ms = Some(50);
+/// assert!(live.appendfsync.is_none());
+/// ```
+///
 /// [`Commands`]: crate::Commands
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct LiveRuntimeConfig {
     /// AOF fsync policy. Applied via `Aof::set_fsync` — switching to
     /// `Always` mid-flight also flushes any buffered bytes so the new
@@ -182,8 +268,14 @@ pub struct LiveRuntimeConfig {
 /// `REPLCONF ACK` plus that ACK's age at publication time. `None` in
 /// the view tuple means the replica has never ACKed.
 ///
+/// ```
+/// let ack = kevy_rt::ReplicaAck::new(42, 15);
+/// assert_eq!((ack.acked_offset, ack.ack_age_ms), (42, 15));
+/// ```
+///
 /// [`Commands::on_replication_view`]: crate::Commands::on_replication_view
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub struct ReplicaAck {
     /// Offset from the latest `REPLCONF ACK` (`0` is a real heartbeat
     /// ACK from an empty replica, not a placeholder).
@@ -191,6 +283,20 @@ pub struct ReplicaAck {
     /// Milliseconds since that ACK was received, measured when the
     /// view was published. Feeds the `min_replicas_max_lag_ms` gate.
     pub ack_age_ms: u64,
+}
+
+impl ReplicaAck {
+    /// An ACK of `acked_offset`, received `ack_age_ms` milliseconds before
+    /// the view was published.
+    ///
+    /// ```
+    /// assert_eq!(kevy_rt::ReplicaAck::new(0, 0), kevy_rt::ReplicaAck::default());
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn new(acked_offset: u64, ack_age_ms: u64) -> Self {
+        Self { acked_offset, ack_age_ms }
+    }
 }
 
 /// One replica conn's row in the per-tick replication view:

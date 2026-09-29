@@ -269,7 +269,7 @@ fn build_runtime(cfg: &kevy_config::Config, commands: KevyCommands) -> Runtime<K
         .with_auto_rewrite_interval_secs(cfg.persistence.auto_aof_rewrite_interval_secs)
         // Boot-time only: replay happens before the first tick, so the
         // live-config push (which lands at that tick) is too late for it.
-        .with_replay_resync(cfg.persistence.replay_resync)
+        .with_replay_mode(replay_mode(cfg))
         .with_advanced(
             cfg.advanced.spin_limit,
             cfg.advanced.park_timeout_ms,
@@ -283,7 +283,7 @@ fn build_runtime(cfg: &kevy_config::Config, commands: KevyCommands) -> Runtime<K
             .with_cluster_announce(cfg.cluster.announce_ip, announce_port_base(cfg));
     }
     if cfg.feed.enabled {
-        runtime = runtime.with_feed(true, cfg.feed.feed_buffer_size);
+        runtime = runtime.with_feed(true).with_feed_buffer_size(cfg.feed.feed_buffer_size);
     }
     runtime = wire_tiering(runtime, cfg);
     // UDS: opt-in via `KEVY_UNIX_SOCKET=/path/to/sock` env var. Lets
@@ -421,4 +421,13 @@ mod tests_verb_meta;
 pub(crate) fn kevy_rt_push_tick_frame(seg_file: &str) {
     let argv = kevy_persist::segmented_argv(seg_file.as_bytes());
     kevy_rt::propagation::push_tick_frame(argv.iter().map(|a| a.to_vec()).collect());
+}
+
+/// `[persistence] replay_resync` as the runtime's replay mode.
+fn replay_mode(cfg: &kevy_config::Config) -> kevy_persist::ReplayMode {
+    if cfg.persistence.replay_resync {
+        kevy_persist::ReplayMode::Resync
+    } else {
+        kevy_persist::ReplayMode::Strict
+    }
 }

@@ -113,7 +113,7 @@ fn replay_shard_aof(
     } else {
         kevy_persist::ReplaySummary::Print
     };
-    let r = kevy_persist::replay_aof_in_place(aof, config.replay_mode(), summary, |a| {
+    let r = kevy_persist::replay_aof_in_place(aof, config.replay_mode, summary, |a| {
         applier.apply(a);
     })?;
     applier.finish(i)?;

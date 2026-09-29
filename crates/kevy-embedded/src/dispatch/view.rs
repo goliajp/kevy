@@ -132,7 +132,8 @@ fn cmd_view_create(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
         }
         v => v,
     };
-    match s.view_create(&argv[1], tree, &order_by, desc, mode) {
+    let order = if desc { kevy_index::SortOrder::Desc } else { kevy_index::SortOrder::Asc };
+    match s.view_create(&argv[1], tree, &order_by, order, mode) {
         Ok(()) => out.extend_from_slice(b"+OK\r\n"),
         Err(e) => kevy_err(out, &e),
     }

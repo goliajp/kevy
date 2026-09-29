@@ -62,6 +62,10 @@ pub(crate) mod highlight;
 #[path = "ops_index_claused.rs"]
 pub(crate) mod claused;
 
+// The optional query clauses both of those take.
+#[path = "ops_index_opts.rs"]
+pub(crate) mod opts;
+
 // The auto-declaration loop's observation face (refusal log + advice).
 #[path = "ops_index_advise.rs"]
 pub(crate) mod advise;
@@ -277,7 +281,7 @@ impl Store {
     /// which shard it landed on (see docs/text-search.md).
     ///
     /// Two query-time passes: the first sums each shard's `n_docs`,
-    /// `total_len` and per-query-token `df` into one [`CorpusStats`]; the
+    /// `total_len` and per-query-token `df` into one [`kevy_text::CorpusStats`]; the
     /// second scores every shard against it. Only the query's tokens'
     /// df is aggregated, not a whole-corpus table — the query narrows it.
     #[cfg(feature = "text")]

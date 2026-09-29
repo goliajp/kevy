@@ -59,7 +59,7 @@ impl Connection {
         match self {
             Self::Embedded(s) => {
                 check_embedded_shard(shard)?;
-                s.changes_tail().map_err(feed_err)
+                s.changes_tail().map(|t| (t.generation, t.offset)).map_err(feed_err)
             }
             Self::Remote(c) => {
                 let sh = shard.to_string();
@@ -98,11 +98,15 @@ impl Connection {
             Self::Embedded(s) => {
                 check_embedded_shard(shard)?;
                 let batch = s
-                    .changes_since(generation, offset, count.unwrap_or(256), prefixes)
+                    .changes_since(
+                        kevy_embedded::FeedPosition::new(generation, offset),
+                        count.unwrap_or(256),
+                        prefixes,
+                    )
                     .map_err(feed_err)?;
                 Ok(FeedBatch {
-                    generation: batch.next.0,
-                    next_offset: batch.next.1,
+                    generation: batch.next.generation,
+                    next_offset: batch.next.offset,
                     frames: batch
                         .changes
                         .into_iter()
@@ -131,13 +135,16 @@ fn check_embedded_shard(shard: usize) -> KevyResult<()> {
 /// resync handling code is backend-agnostic.
 fn feed_err(e: FeedError) -> KevyError {
     match e {
-        FeedError::Resync { generation, tail } => {
-            KevyError::Protocol(format!("FEEDRESYNC {generation} {tail}"))
+        FeedError::Resync { tail } => {
+            KevyError::Protocol(format!("FEEDRESYNC {} {}", tail.generation, tail.offset))
         }
         FeedError::Future => KevyError::Protocol("ERR feed cursor ahead of stream".into()),
         FeedError::Disabled => KevyError::Unsupported(
             "feed disabled: open the embedded store with Config::with_feed".into(),
         ),
+        // a refusal this version cannot name still reaches the caller
+        // with its own text
+        other => KevyError::Protocol(format!("ERR feed: {other}")),
     }
 }
 

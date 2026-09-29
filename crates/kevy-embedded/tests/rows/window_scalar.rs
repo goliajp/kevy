@@ -118,21 +118,25 @@ fn embedded_window_slides_and_stays_semantically_equivalent() {
         let filter_tag = [ValueFilter::Eq { field: b"tag", value: b"beta" }];
         let facet_tag = [b"tag".to_vec()];
         let shapes: &[(&str, ScalarQueryOpts)] = &[
-            ("filter-prio", ScalarQueryOpts { filters: &filter_prio, ..Default::default() }),
-            ("filter-tag", ScalarQueryOpts { filters: &filter_tag, ..Default::default() }),
-            ("sort-asc", ScalarQueryOpts { sort: Some((b"prio", false)), ..Default::default() }),
-            ("sort-desc", ScalarQueryOpts { sort: Some((b"prio", true)), ..Default::default() }),
-            ("distinct", ScalarQueryOpts { distinct: Some(b"tag"), ..Default::default() }),
-            ("facet", ScalarQueryOpts { facets: &facet_tag, ..Default::default() }),
-            ("offset", ScalarQueryOpts { offset: 3, ..Default::default() }),
+            ("filter-prio", ScalarQueryOpts::default().with_filters(&filter_prio)),
+            ("filter-tag", ScalarQueryOpts::default().with_filters(&filter_tag)),
+            (
+                "sort-asc",
+                ScalarQueryOpts::default().with_sort(b"prio", kevy_embedded::SortOrder::Asc),
+            ),
+            (
+                "sort-desc",
+                ScalarQueryOpts::default().with_sort(b"prio", kevy_embedded::SortOrder::Desc),
+            ),
+            ("distinct", ScalarQueryOpts::default().with_distinct(b"tag")),
+            ("facet", ScalarQueryOpts::default().with_facets(&facet_tag)),
+            ("offset", ScalarQueryOpts::default().with_offset(3)),
             (
                 "combo",
-                ScalarQueryOpts {
-                    filters: &filter_prio,
-                    sort: Some((b"prio", true)),
-                    offset: 1,
-                    ..Default::default()
-                },
+                ScalarQueryOpts::default()
+                    .with_filters(&filter_prio)
+                    .with_sort(b"prio", kevy_embedded::SortOrder::Desc)
+                    .with_offset(1),
             ),
         ];
         for (label, opts) in shapes {

@@ -27,6 +27,9 @@ pub(crate) fn block_serve_argv<A: ArgvView + ?Sized>(
         BlockKind::Brpoplpush => brpoplpush_serve(args, key),
         BlockKind::XReadBlock => xread_serve(args, key).unwrap_or_else(|| args.to_argv()),
         BlockKind::XReadGroupBlock => xreadgroup_serve(args, key).unwrap_or_else(|| args.to_argv()),
+        // a blocking verb this table predates is single-key until taught
+        // otherwise: replay it as sent, the trait's own default
+        _ => args.to_argv(),
     }
 }
 
@@ -97,6 +100,8 @@ pub(crate) fn block_restore_argv(store: &mut Store, kind: BlockKind, key: &[u8])
         // XREAD is non-destructive and XREADGROUP moves entries into a
         // PEL rather than consuming them. Nothing to put back.
         BlockKind::XReadBlock | BlockKind::XReadGroupBlock => None,
+        // no known undo: the trait's safe default, nothing is put back
+        _ => None,
     }
 }
 
@@ -246,6 +251,9 @@ pub(crate) fn block_ready<A: ArgvView + ?Sized>(
             !tmp.is_empty() && tmp != b"*-1\r\n" && tmp != b"*0\r\n"
         }
         BlockKind::XReadGroupBlock => xreadgroup_ready(store, serve_argv),
+        // readiness this table cannot judge: never wake spuriously, the
+        // trait's default
+        _ => false,
     }
 }
 

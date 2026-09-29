@@ -2,7 +2,7 @@
 //!
 //! Mirrors the Redis/kevy server pub/sub semantics inside a single process:
 //! `Store::publish` walks the channel + pattern subscriber tables and
-//! enqueues a [`PubsubFrame`] onto each matching [`Subscription`]'s
+//! enqueues a [`PubsubEvent`] onto each matching [`Subscription`]'s
 //! `std::sync::mpsc` channel. Each `Subscription` drains its own queue via
 //! [`Subscription::recv`] / [`Subscription::recv_timeout`] /
 //! [`Subscription::try_recv`].
@@ -29,76 +29,9 @@ use std::time::Duration;
 
 use crate::store::Inner;
 
-/// One pub/sub event delivered to a [`Subscription`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PubsubFrame {
-    /// Ack: `SUBSCRIBE` succeeded on `channel`.
-    Subscribe {
-        /// Channel that was just subscribed.
-        channel: Vec<u8>,
-        /// Total channels + patterns this subscription holds after the op.
-        count: usize,
-    },
-    /// Ack: `PSUBSCRIBE` succeeded on `pattern`.
-    Psubscribe {
-        /// Pattern that was just subscribed.
-        pattern: Vec<u8>,
-        /// Total channels + patterns this subscription holds after the op.
-        count: usize,
-    },
-    /// Ack: `UNSUBSCRIBE` removed `channel` (or "all", when `None`).
-    Unsubscribe {
-        /// Channel that was just unsubscribed (`None` = "all").
-        channel: Option<Vec<u8>>,
-        /// Total channels + patterns still held after the op.
-        count: usize,
-    },
-    /// Ack: `PUNSUBSCRIBE` removed `pattern` (or "all", when `None`).
-    Punsubscribe {
-        /// Pattern that was just unsubscribed (`None` = "all").
-        pattern: Option<Vec<u8>>,
-        /// Total channels + patterns still held after the op.
-        count: usize,
-    },
-    /// A `PUBLISH` reached a channel this subscription holds directly.
-    Message {
-        /// Channel the publish was made to.
-        channel: Vec<u8>,
-        /// Raw payload bytes.
-        payload: Vec<u8>,
-    },
-    /// A `PUBLISH` reached a channel matching one of this subscription's
-    /// patterns.
-    Pmessage {
-        /// Pattern the channel matched.
-        pattern: Vec<u8>,
-        /// Channel the publish was made to.
-        channel: Vec<u8>,
-        /// Raw payload bytes.
-        payload: Vec<u8>,
-    },
-}
-
-impl PubsubFrame {
-    /// The raw message payload, moved out of the frame.
-    ///
-    /// `Some(payload)` for the two delivery frames ([`Message`](Self::Message)
-    /// and [`Pmessage`](Self::Pmessage)); `None` for every control/ack frame
-    /// (subscribe / unsubscribe / …), which carries no payload. Consuming
-    /// `self` lets a scalar drain hand a push subscriber just the bytes with
-    /// no extra copy — the pub/sub analog of the KV scalar door. The channel
-    /// and the message-vs-pmessage distinction are dropped; a caller that
-    /// needs either keeps matching on the frame.
-    #[must_use]
-    pub fn into_payload(self) -> Option<Vec<u8>> {
-        match self {
-            PubsubFrame::Message { payload, .. } | PubsubFrame::Pmessage { payload, .. } => {
-                Some(payload)
-            }
-            _ => None,
-        }
-    }
-}
+/// One pub/sub event delivered to a [`Subscription`] — the same type the
+/// network clients receive, so a consumer handles either source alike.
+pub use kevy_resp::PubsubEvent;
 
 // `BusEntry` + `PubsubBus` live in [`crate::pubsub_bus`] — split out so
 // this file stays under the 500-LOC house rule. Re-exported below so
@@ -109,7 +42,7 @@ pub(crate) use crate::pubsub_bus::PubsubBus;
 ///
 /// Drop unsubscribes from everything automatically. While the handle is
 /// alive, [`recv`](Self::recv) / [`recv_timeout`](Self::recv_timeout) /
-/// [`try_recv`](Self::try_recv) drain queued [`PubsubFrame`]s in arrival
+/// [`try_recv`](Self::try_recv) drain queued [`PubsubEvent`]s in arrival
 /// order.
 ///
 /// **Threading.** `Subscription` is `Send + Sync` —
@@ -137,11 +70,11 @@ pub struct Subscription {
     // wait — single consumer at a time; concurrent recv callers
     // serialise and each get a different frame. See type-level
     // doc-comment for the trade-off.
-    receiver: Mutex<Receiver<PubsubFrame>>,
+    receiver: Mutex<Receiver<PubsubEvent>>,
     // `Sender<T>` is also !Sync (Send + Clone but cannot be shared by
     // reference across threads). Wrap so the ack-frame path (called
     // from subscribe/unsubscribe / Drop) can run from any thread.
-    sender: Mutex<Sender<PubsubFrame>>,
+    sender: Mutex<Sender<PubsubEvent>>,
     id: u64,
     channels: HashSet<Vec<u8>>,
     patterns: HashSet<Vec<u8>>,
@@ -165,7 +98,7 @@ impl Subscription {
     /// Clone of the inbound `Sender`. Used both for ack frames (Subscribe /
     /// Unsubscribe / ...) and to register a sender clone inside
     /// `PubsubBus`. Calling this acquires the sender lock briefly (~20 ns).
-    fn sender_clone(&self) -> Sender<PubsubFrame> {
+    fn sender_clone(&self) -> Sender<PubsubEvent> {
         self.sender.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
     }
 
@@ -181,7 +114,7 @@ impl Subscription {
                 self.channels.insert(owned.clone());
             }
             let count = g.bus.count_for(self.id);
-            let _ = s.send(PubsubFrame::Subscribe { channel: owned, count });
+            let _ = s.send(PubsubEvent::Subscribe { channel: owned, count: count as i64 });
         }
     }
 
@@ -197,7 +130,7 @@ impl Subscription {
                 self.patterns.insert(owned.clone());
             }
             let count = g.bus.count_for(self.id);
-            let _ = s.send(PubsubFrame::Psubscribe { pattern: owned, count });
+            let _ = s.send(PubsubEvent::Psubscribe { pattern: owned, count: count as i64 });
         }
     }
 
@@ -217,7 +150,7 @@ impl Subscription {
             let _ = g.bus.remove_channel(self.id, &owned);
             self.channels.remove(&owned);
             let count = g.bus.count_for(self.id);
-            let _ = s.send(PubsubFrame::Unsubscribe { channel: Some(owned), count });
+            let _ = s.send(PubsubEvent::Unsubscribe { channel: Some(owned), count: count as i64 });
         }
     }
 
@@ -234,7 +167,7 @@ impl Subscription {
             let _ = g.bus.remove_pattern(self.id, &owned);
             self.patterns.remove(&owned);
             let count = g.bus.count_for(self.id);
-            let _ = s.send(PubsubFrame::Punsubscribe { pattern: Some(owned), count });
+            let _ = s.send(PubsubEvent::Punsubscribe { pattern: Some(owned), count: count as i64 });
         }
     }
 
@@ -244,13 +177,13 @@ impl Subscription {
         let mut g = self.inner.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         if owned.is_empty() {
             let count = g.bus.count_for(self.id);
-            let _ = s.send(PubsubFrame::Unsubscribe { channel: None, count });
+            let _ = s.send(PubsubEvent::Unsubscribe { channel: None, count: count as i64 });
             return;
         }
         for ch in owned {
             let _ = g.bus.remove_channel(self.id, &ch);
             let count = g.bus.count_for(self.id);
-            let _ = s.send(PubsubFrame::Unsubscribe { channel: Some(ch), count });
+            let _ = s.send(PubsubEvent::Unsubscribe { channel: Some(ch), count: count as i64 });
         }
     }
 
@@ -260,13 +193,13 @@ impl Subscription {
         let mut g = self.inner.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         if owned.is_empty() {
             let count = g.bus.count_for(self.id);
-            let _ = s.send(PubsubFrame::Punsubscribe { pattern: None, count });
+            let _ = s.send(PubsubEvent::Punsubscribe { pattern: None, count: count as i64 });
             return;
         }
         for p in owned {
             let _ = g.bus.remove_pattern(self.id, &p);
             let count = g.bus.count_for(self.id);
-            let _ = s.send(PubsubFrame::Punsubscribe { pattern: Some(p), count });
+            let _ = s.send(PubsubEvent::Punsubscribe { pattern: Some(p), count: count as i64 });
         }
     }
 
@@ -277,14 +210,14 @@ impl Subscription {
     /// `recv`/`recv_timeout` callers serialise behind this one. Concurrent
     /// `try_recv` calls return `Ok(None)` while a `recv` is blocked (no
     /// wait on the lock); see the type-level doc for the trade-off.
-    pub fn recv(&self) -> KevyResult<PubsubFrame> {
+    pub fn recv(&self) -> KevyResult<PubsubEvent> {
         let g = self.receiver.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         g.recv().map_err(|_| KevyError::Closed)
     }
 
     /// Bounded blocking recv. `Err(KevyError::TimedOut)` when `dur`
     /// elapses; `Err(KevyError::Closed)` when the bus is gone.
-    pub fn recv_timeout(&self, dur: Duration) -> KevyResult<PubsubFrame> {
+    pub fn recv_timeout(&self, dur: Duration) -> KevyResult<PubsubEvent> {
         let g = self.receiver.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         g.recv_timeout(dur).map_err(|e| match e {
             RecvTimeoutError::Timeout => KevyError::TimedOut,
@@ -299,7 +232,7 @@ impl Subscription {
     /// `try_recv` itself block — lock contention is reported as `Ok(None)`
     /// (semantically: "no frame available right now"). Same shape callers
     /// already handle for an empty queue.
-    pub fn try_recv(&self) -> KevyResult<Option<PubsubFrame>> {
+    pub fn try_recv(&self) -> KevyResult<Option<PubsubEvent>> {
         let Ok(g) = self.receiver.try_lock() else {
             return Ok(None);
         };

@@ -100,6 +100,7 @@ dependencies = [
 name = "kevy-persist"
 version = "6.4.0"
 dependencies = [
+ "kevy-replicate",
  "kevy-resp",
  "kevy-store",
  "kevy-sys",
@@ -108,6 +109,13 @@ dependencies = [
 [[package]]
 name = "kevy-ranktree"
 version = "6.4.0"
+
+[[package]]
+name = "kevy-replicate"
+version = "6.4.0"
+dependencies = [
+ "kevy-resp",
+]
 
 [[package]]
 name = "kevy-resp"

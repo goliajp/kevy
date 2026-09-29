@@ -7,7 +7,7 @@ use crate::Commands;
 use crate::park_fence;
 use crate::shard::Shard;
 use crate::shard_lifecycle::Accepted;
-use kevy_persist::{load_snapshot, replay_aof};
+use kevy_persist::{Routing, load_snapshot, replay_aof};
 use kevy_resp::ArgvView;
 use std::io;
 use std::path::PathBuf;
@@ -60,7 +60,8 @@ impl<C: Commands> Shard<C> {
     /// Owning shard of `key` under this server's routing scheme.
     #[inline]
     pub(crate) fn shard_of(&self, key: &[u8]) -> usize {
-        crate::reduce::shard_of(key, self.nshards, self.cluster.is_some())
+        let routing = if self.cluster.is_some() { Routing::Slots } else { Routing::KevyHash };
+        crate::reduce::shard_of(key, self.nshards, routing)
     }
 
     /// This shard's snapshot file: `<data_dir>/dump-<id>.rdb`.

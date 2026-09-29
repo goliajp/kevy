@@ -15,17 +15,17 @@ fn publish_to_no_subscribers_returns_zero() {
 #[test]
 fn into_payload_yields_bytes_for_delivery_frames_only() {
     // Delivery frames surrender their payload (moved out, no copy).
-    let m = PubsubFrame::Message { channel: b"c".to_vec(), payload: b"p".to_vec() };
+    let m = PubsubEvent::Message { channel: b"c".to_vec(), payload: b"p".to_vec() };
     assert_eq!(m.into_payload(), Some(b"p".to_vec()));
-    let pm = PubsubFrame::Pmessage {
+    let pm = PubsubEvent::Pmessage {
         pattern: b"c*".to_vec(),
         channel: b"c".to_vec(),
         payload: b"q".to_vec(),
     };
     assert_eq!(pm.into_payload(), Some(b"q".to_vec()));
     // Control/ack frames carry no payload.
-    assert_eq!(PubsubFrame::Subscribe { channel: b"c".to_vec(), count: 1 }.into_payload(), None);
-    assert_eq!(PubsubFrame::Unsubscribe { channel: None, count: 0 }.into_payload(), None);
+    assert_eq!(PubsubEvent::Subscribe { channel: b"c".to_vec(), count: 1 }.into_payload(), None);
+    assert_eq!(PubsubEvent::Unsubscribe { channel: None, count: 0 }.into_payload(), None);
 }
 
 #[test]
@@ -33,12 +33,12 @@ fn subscribe_ack_then_message_delivered() {
     let s = store();
     let sub = s.subscribe(&[b"news"]);
     // Drain the SUBSCRIBE ack.
-    assert_eq!(sub.recv().unwrap(), PubsubFrame::Subscribe { channel: b"news".to_vec(), count: 1 });
+    assert_eq!(sub.recv().unwrap(), PubsubEvent::Subscribe { channel: b"news".to_vec(), count: 1 });
     // Same store handle (or a clone) can publish.
     assert_eq!(s.publish(b"news", b"hello"), 1);
     assert_eq!(
         sub.recv().unwrap(),
-        PubsubFrame::Message { channel: b"news".to_vec(), payload: b"hello".to_vec() }
+        PubsubEvent::Message { channel: b"news".to_vec(), payload: b"hello".to_vec() }
     );
 }
 
@@ -51,7 +51,7 @@ fn store_clone_publishes_reach_other_clones_subscribers() {
     assert_eq!(s2.publish(b"x", b"v"), 1);
     assert_eq!(
         sub.recv().unwrap(),
-        PubsubFrame::Message { channel: b"x".to_vec(), payload: b"v".to_vec() }
+        PubsubEvent::Message { channel: b"x".to_vec(), payload: b"v".to_vec() }
     );
 }
 
@@ -63,7 +63,7 @@ fn psubscribe_glob_match_delivers_pmessage() {
     assert_eq!(s.publish(b"news.tech", b"breaking"), 1);
     assert_eq!(
         sub.recv().unwrap(),
-        PubsubFrame::Pmessage {
+        PubsubEvent::Pmessage {
             pattern: b"news.*".to_vec(),
             channel: b"news.tech".to_vec(),
             payload: b"breaking".to_vec(),
@@ -82,8 +82,8 @@ fn duplicate_subscribe_does_not_duplicate_delivery() {
     // Drain the two acks (one from subscribe(), one from the second call).
     let a1 = sub.recv().unwrap();
     let a2 = sub.recv().unwrap();
-    assert!(matches!(a1, PubsubFrame::Subscribe { count: 1, .. }));
-    assert!(matches!(a2, PubsubFrame::Subscribe { count: 1, .. }));
+    assert!(matches!(a1, PubsubEvent::Subscribe { count: 1, .. }));
+    assert!(matches!(a2, PubsubEvent::Subscribe { count: 1, .. }));
     // Single delivery, despite "double subscribe".
     assert_eq!(s.publish(b"x", b"v"), 1);
     let _ = sub.recv().unwrap();
@@ -97,7 +97,7 @@ fn unsubscribe_removes_then_no_more_messages() {
     let _ = sub.recv().unwrap();
     sub.unsubscribe(&[b"x"]);
     // Drain the unsubscribe ack.
-    assert!(matches!(sub.recv().unwrap(), PubsubFrame::Unsubscribe { channel: Some(_), count: 0 }));
+    assert!(matches!(sub.recv().unwrap(), PubsubEvent::Unsubscribe { channel: Some(_), count: 0 }));
     // Publishes no longer reach us.
     assert_eq!(s.publish(b"x", b"v"), 0);
 }
@@ -111,7 +111,7 @@ fn unsubscribe_all_with_empty_args_drains_every_channel() {
     sub.unsubscribe(&[]);
     // Two unsubscribe acks, one per removed channel.
     for _ in 0..2 {
-        assert!(matches!(sub.recv().unwrap(), PubsubFrame::Unsubscribe { channel: Some(_), .. }));
+        assert!(matches!(sub.recv().unwrap(), PubsubEvent::Unsubscribe { channel: Some(_), .. }));
     }
     // Publishes go nowhere now.
     assert_eq!(s.publish(b"a", b"x"), 0);
@@ -123,7 +123,7 @@ fn unsubscribe_when_no_subs_held_emits_nil_channel_ack() {
     let s = store();
     let mut sub = s.subscribe(&[]); // empty start
     sub.unsubscribe(&[]);
-    assert!(matches!(sub.recv().unwrap(), PubsubFrame::Unsubscribe { channel: None, count: 0 }));
+    assert!(matches!(sub.recv().unwrap(), PubsubEvent::Unsubscribe { channel: None, count: 0 }));
 }
 
 #[test]

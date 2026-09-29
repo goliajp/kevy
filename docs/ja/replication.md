@@ -203,7 +203,7 @@ if let Some(v) = store.get(b"hello")? {
 | 関心事 | 答え |
 |---|---|
 | 書き込み耐久性 | ローカルストアとバックログリングに着地し次第、プライマリがackする。レプリカは後から追いつく。`WAIT n timeout`はn台以上が確認するまでブロックする（レプリカのackはfsyncではない。availability.mdを参照）。 |
-| 読み出し整合性 | レプリカは遅れる可能性がある。`kevy-cluster-rw`経由で`request_read(…, consistent = true)`を送ってプライマリで読むか、レプリカ自体でのread-your-writesには`REPL.TOKEN` + `REPL.WAIT`を使う。 |
+| 読み出し整合性 | レプリカは遅れる可能性がある。`kevy-cluster-rw`経由で`request_read(…, ReadConsistency::Primary)`を送ってプライマリで読むか、レプリカ自体でのread-your-writesには`REPL.TOKEN` + `REPL.WAIT`を使う。 |
 | レプリカが遅れすぎた | 再接続のオフセットがリングから流れ去っていれば、プライマリがそのシャードのスナップショットをインラインで送り、スナップショット末尾のオフセットからライブフレームを再開する。隙間なし、オペレータ操作なし。スナップショット送出がレプリカのキー空間を差し替えている間、レプリカ上のクライアント読み取りは`-LOADING`を返す（`PING`／`INFO`／`HELLO`は応答され続けるので、ヘルスチェックは通り続ける）。 |
 | バックログのサイジング | `replication_buffer_size ≈ peak_writes_per_sec × avg_argv_bytes × reconnect_window_seconds`。大きすぎるのは無害で、小さすぎるとスナップショット送出に落ちる。 |
 | 何がフェイルオーバーするか | 新プライマリへの書き込み。`kevy-elect`構成時は自動、それ以外は手動。既存の`kevy-cluster-rw`クライアントは新プライマリを学習し次第、書き込みを再ルーティングする。切り替えの間隙にあったin-flightの書き込みは大きな音を立てて失敗する。 |

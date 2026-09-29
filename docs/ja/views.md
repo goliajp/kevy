@@ -100,8 +100,8 @@ SQLで言えばこれは`WHERE … AND NOT EXISTS (…)`の形にあたります
 
 ```rust
 use kevy_embedded::{
-    Config, IndexKind, IndexValType, IndexValue, Store, ViewLeaf,
-    ViewMode, ViewTree,
+    Config, IndexKind, IndexValType, IndexValue, SortOrder, Store,
+    ViewLeaf, ViewMode, ViewTree,
 };
 
 fn main() -> kevy_embedded::KevyResult<()> {
@@ -123,7 +123,7 @@ fn main() -> kevy_embedded::KevyResult<()> {
             IndexValue::Str(b"ready".to_vec()),   // EQ = same min/max
         ))),
     );
-    store.view_create(b"ready_jobs", tree, b"j_pri", /*desc*/ true,
+    store.view_create(b"ready_jobs", tree, b"j_pri", SortOrder::Desc,
                       ViewMode::Materialized { top_k: 100 })?;
 
     store.hset(b"job:1", &[
@@ -140,7 +140,7 @@ fn main() -> kevy_embedded::KevyResult<()> {
 }
 ```
 
-- `view_create(name, tree, order_by, desc, mode)`は同期的にビルドします。参照されるインデックス（葉とORDER BY）はすべて、あらかじめ宣言されていなければなりません（そうでなければ`KevyError::InvalidInput`です）。
+- `view_create(name, tree, order_by, order, mode)`は同期的にビルドします。参照されるインデックス（葉とORDER BY）はすべて、あらかじめ宣言されていなければなりません（そうでなければ`KevyError::InvalidInput`です）。
 - `view_query(name, after, limit)`は`(key, order_value)`の行をページングします。返されるカーソルは排他的に再開します（DESCのビューは大きい側からページングします）。`view_count` / `view_list` / `view_drop`が面を完成させます。
 - `VIA`も`FIELDS`もありません——プロセス内の呼び出し側は、自分で参照解決して`hget`でフィールドを読んでください。
 

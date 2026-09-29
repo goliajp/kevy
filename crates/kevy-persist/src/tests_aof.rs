@@ -261,9 +261,17 @@ fn snapshot_cursor_roundtrip_and_legacy_none() {
     let p5 = dir.join("v5.rdb");
     {
         let mut f = std::fs::File::create(&p5).unwrap();
-        crate::write_snapshot_to_with_cursor(&store, &mut f, Some((3, 42))).unwrap();
+        crate::write_snapshot_to_with_cursor(
+            &store,
+            &mut f,
+            Some(kevy_replicate::feed::FeedPosition::new(3, 42)),
+        )
+        .unwrap();
     }
-    assert_eq!(crate::read_snapshot_cursor(&p5).unwrap(), Some((3, 42)));
+    assert_eq!(
+        crate::read_snapshot_cursor(&p5).unwrap(),
+        Some(kevy_replicate::feed::FeedPosition::new(3, 42))
+    );
     let mut loaded = kevy_store::Store::new();
     crate::load_snapshot(&mut loaded, &p5).unwrap();
     assert_eq!(loaded.get(b"k").unwrap().unwrap().as_ref(), b"v");

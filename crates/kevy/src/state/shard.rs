@@ -367,7 +367,7 @@ mod tests {
     fn healthy_replica_count_requires_an_ack() {
         let shard = ShardCtx::default();
         let ip = std::net::Ipv4Addr::LOCALHOST;
-        let ack = |off| Some(kevy_rt::ReplicaAck { acked_offset: off, ack_age_ms: 0 });
+        let ack = |off| Some(kevy_rt::ReplicaAck::new(off, 0));
         shard.set_replication_view(ReplicationView {
             replicas: vec![
                 ("r1".into(), ip, 1, 5, ack(5)),
@@ -382,7 +382,7 @@ mod tests {
     fn healthy_replica_count_excludes_acks_past_the_lag_window() {
         let shard = ShardCtx::default();
         let ip = std::net::Ipv4Addr::LOCALHOST;
-        let ack = |age_ms| Some(kevy_rt::ReplicaAck { acked_offset: 5, ack_age_ms: age_ms });
+        let ack = |age_ms| Some(kevy_rt::ReplicaAck::new(5, age_ms));
         shard.set_replication_view(ReplicationView {
             // One fresh ACK, one exactly at the window edge (counts),
             // one past it (a stalled replica must not satisfy the gate).

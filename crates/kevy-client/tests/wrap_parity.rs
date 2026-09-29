@@ -37,7 +37,8 @@ impl Server {
                 .bind([127, 0, 0, 1], port)
                 .shards(NSHARDS)
                 .with_data_dir(dir_thread)
-                .with_feed(true, 0);
+                .with_feed(true)
+                .with_feed_buffer_size(0);
             rt.run(stop_thread).unwrap();
         });
         kevy_testnet::assert_listening(port, "the server under test");
