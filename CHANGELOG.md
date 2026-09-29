@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+- **An embedded `SCAN` page costs what it walks.** `Store::scan` copied
+  every key in the store on each call and sliced one page out of the
+  copy, so walking a store of n keys cost O(n²) and each page held a copy
+  of the whole keyspace; `keys_iter` and `randomkey` copied it too. The
+  cursor now names a shard and a position in its table, as the server's
+  does, and a page walks from there: a key present throughout is returned
+  at least once, and `count` bounds the walk rather than the page, as in
+  Redis. `keys_iter` returns a `KeysIter` that holds one page. `RANDOMKEY`
+  draws a shard in proportion to its keys and picks from a random point in
+  its table.
+
+- **Sweeps over a prefix walk its keys instead of copying them.**
+  `IDX.VERIFY` and `TABLE.VERIFY`, the sampling a global index's split
+  points start from, and `MOVE-SCOPE`'s export each began by copying every
+  key under the prefix (`MOVE-SCOPE` every key in the shard) and held the
+  copy for the length of the sweep: about 20 bytes a key beyond the rows,
+  on top of whatever the operation itself needs. Each now walks the
+  prefix a batch of 1,024 keys at a time. The sweeps run in one operation
+  and insert nothing, so every key is still visited once.
+
+- **`PREFIX.DIGEST` holds one batch of keys, not a copy of the prefix.**
+  Each shard copied every key under the prefix before sweeping it: on ten
+  million rows, about 200 MB held for the length of the sweep, enough to
+  push a tiered server 6% past its budget. The sweep now walks the keys a
+  batch of 1,024 at a time; it runs in one operation and inserts nothing,
+  so each key is still visited exactly once and the count and digest are
+  unchanged.
+
 - **Demotion keeps up while nothing but a backfill runs.** The sampler
   that picks rows to demote started each window from a position drawn
   from the access clock, and a tick demoted at most one batch of 32. A

@@ -71,6 +71,12 @@ and every public item carries a running example in its documentation.
 - `TierBudgetSpec` is `kevy_config::TierBudgetSpec`; the `tier` feature
   pulls in kevy-config.
 - `LinkKeys::new(local).with_peers(peers)`.
+- `keys_iter(pattern)` returns `KeysIter`, which walks the keyspace a
+  page at a time, instead of `std::vec::IntoIter` over a copy of every
+  key. `scan(cursor, pattern, count)` has the server's contract: the
+  cursor names a shard and a position in it, `count` is how much a page
+  walks (a page may hold more), and a key written during the walk may come
+  back twice. 6.4 copied every key on each call and sliced the copy.
 - `AtomicAllShards::idx_query` / `idx_count` see the transaction's own
   writes (6.4 saw the last commit); a failed transaction's writes leave
   the index with its rollback.
