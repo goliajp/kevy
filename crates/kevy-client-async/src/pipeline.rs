@@ -6,7 +6,7 @@
 //!     .set(b"k1", b"v1")
 //!     .get(b"k2")
 //!     .incr(b"counter")
-//!     .run().await?;
+//!     .run(&mut conn).await?;
 //! ```
 //!
 //! The builder owns no connection — it just accumulates argv vectors.
@@ -207,7 +207,10 @@ impl Pipeline {
     ///
     /// Per-command errors land as `Reply::Error(_)` entries in the
     /// returned vec; outer `Err` means a connection-level failure.
-    pub async fn run(self, conn: &mut AsyncConnection) -> io::Result<Vec<Reply>> {
+    pub async fn run<T: crate::AsyncTransport>(
+        self,
+        conn: &mut AsyncConnection<T>,
+    ) -> io::Result<Vec<Reply>> {
         if self.cmds.is_empty() {
             return Ok(Vec::new());
         }

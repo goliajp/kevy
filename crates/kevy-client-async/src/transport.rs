@@ -25,9 +25,41 @@ use std::io;
 
 /// Async equivalent of [`std::io::Read`] — poll-based, owned-buffer.
 ///
-/// Implementors return `Poll::Pending` to register a waker and resume
-/// when bytes become readable. `0` bytes returned from `Poll::Ready(Ok(0))`
-/// signals clean EOF, mirroring the blocking semantics.
+/// Implement it (with [`AsyncWrite`]) to run the client over a transport
+/// of your own — a Unix socket, an in-memory pipe, another runtime's
+/// stream — and hand it to [`crate::AsyncRespCodec::new`],
+/// [`crate::AsyncConnection::from_transport`] or
+/// [`crate::AsyncSecure::handshake`].
+///
+/// # Contract
+///
+/// - `Poll::Pending` means nothing is readable yet, and the waker in `cx`
+///   has been registered to fire once bytes (or EOF, or an error) arrive;
+///   returning `Pending` without registering it stalls the client forever.
+/// - `Poll::Ready(Ok(n))` with `n > 0` means the first `n` bytes of `buf`
+///   now hold the next bytes of the stream, in order; `n <= buf.len()`.
+/// - `Poll::Ready(Ok(0))` for a non-empty `buf` is clean end of stream,
+///   as with blocking `Read`; the client treats it as the peer closing.
+/// - Errors are `io::Error`s whose kind the caller may match
+///   (`UnexpectedEof`, `ConnectionReset`, …); `Interrupted` is not retried.
+///
+/// ```
+/// use core::pin::Pin;
+/// use core::task::{Context, Poll};
+/// use kevy_client_async::AsyncRead;
+///
+/// /// A transport that replays fixed bytes, then reports end of stream.
+/// struct Canned(&'static [u8]);
+///
+/// impl AsyncRead for Canned {
+///     fn poll_read(mut self: Pin<&mut Self>, _: &mut Context<'_>, buf: &mut [u8]) -> Poll<std::io::Result<usize>> {
+///         let n = self.0.len().min(buf.len());
+///         buf[..n].copy_from_slice(&self.0[..n]);
+///         self.0 = &self.0[n..];
+///         Poll::Ready(Ok(n))
+///     }
+/// }
+/// ```
 pub trait AsyncRead {
     /// Attempt to read bytes into `buf`. Returns the number of bytes
     /// written, or `Pending` if the underlying transport has nothing
@@ -40,6 +72,45 @@ pub trait AsyncRead {
 }
 
 /// Async equivalent of [`std::io::Write`] — poll-based, owned-buffer.
+///
+/// The write half of a custom transport; see [`AsyncRead`].
+///
+/// # Contract
+///
+/// - `Poll::Pending` from any method means the transport cannot make
+///   progress yet, and the waker in `cx` has been registered to fire when
+///   it can.
+/// - `poll_write` returning `Ready(Ok(n))` means the first `n` bytes of
+///   `buf` were accepted, in order, and will reach the peer after any
+///   bytes accepted before them; `Ready(Ok(0))` for a non-empty `buf`
+///   means the transport can accept nothing more, and the client fails
+///   the write with `WriteZero`.
+/// - `poll_flush` resolves once every accepted byte has been handed to the
+///   underlying medium.
+/// - `poll_close` flushes and then shuts down the write half; nothing may
+///   be written after it resolves.
+///
+/// ```
+/// use core::pin::Pin;
+/// use core::task::{Context, Poll};
+/// use kevy_client_async::AsyncWrite;
+///
+/// /// A transport that records everything written to it.
+/// struct Recorder(Vec<u8>);
+///
+/// impl AsyncWrite for Recorder {
+///     fn poll_write(mut self: Pin<&mut Self>, _: &mut Context<'_>, buf: &[u8]) -> Poll<std::io::Result<usize>> {
+///         self.0.extend_from_slice(buf);
+///         Poll::Ready(Ok(buf.len()))
+///     }
+///     fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+///         Poll::Ready(Ok(()))
+///     }
+///     fn poll_close(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+///         Poll::Ready(Ok(()))
+///     }
+/// }
+/// ```
 pub trait AsyncWrite {
     /// Attempt to write bytes from `buf`. Returns the number of bytes
     /// accepted, or `Pending`.
@@ -59,6 +130,16 @@ pub trait AsyncWrite {
 /// Bound used everywhere downstream: codec, `AsyncConnection`,
 /// pipeline runner. Blanket-impl'd so any
 /// `AsyncRead + AsyncWrite + Send + Unpin` value satisfies it.
+///
+/// Do not implement it directly: implement [`AsyncRead`] and
+/// [`AsyncWrite`] (each under its contract) on a `Send + Unpin` type,
+/// and the blanket impl makes it a transport.
+///
+/// ```
+/// fn is_transport<T: kevy_client_async::AsyncTransport>() {}
+/// # #[cfg(feature = "tokio")]
+/// is_transport::<tokio::net::TcpStream>();
+/// ```
 pub trait AsyncTransport: AsyncRead + AsyncWrite + Send + Unpin {}
 
 impl<T> AsyncTransport for T where T: AsyncRead + AsyncWrite + Send + Unpin + ?Sized {}
