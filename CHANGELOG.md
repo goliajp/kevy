@@ -13,10 +13,13 @@
   build needed, and the index floor pushed resident memory to 1.20 ×
   budget. The sampler now sweeps the table from where its last window
   ended, and a tick repeats batches until the store is under target, out
-  of candidates, or a millisecond has gone. `used_memory` now tracks the
-  target through the build, and the phase's peak falls to 1.08 × budget;
-  what remains is memory the allocator holds in holes demoted rows leave,
-  which index leaves and a growing keyspace table cannot reuse.
+  of candidates, or half a millisecond has gone. `used_memory` now tracks the
+  target through the build, and the phase's peak falls from 1.20 to
+  1.12–1.14 × budget. What remains is memory the allocator holds in the
+  holes demoted rows leave, which index leaves and a growing keyspace table
+  cannot reuse. A hot read's p99 while an index builds over a cold sweep
+  went from 129 to 201 µs, the cost of demotion now doing its work (the
+  line is 1,056 µs).
 
 - **An index is a counted B+ tree of packed leaves, a quarter or less
   of the memory and faster on every write and range read.** Each row was

@@ -17,7 +17,7 @@ const SPILL_BATCH: usize = 32;
 /// tick moved about 300 rows a second a shard, slower than a backfill
 /// grows an index, so the floor rose past the budget; a tick now repeats
 /// batches until it is under target, dry, or this much time is gone.
-const TICK_DEMOTE_BUDGET: std::time::Duration = std::time::Duration::from_millis(1);
+const TICK_DEMOTE_BUDGET: std::time::Duration = std::time::Duration::from_micros(500);
 /// Backoff ceiling: a dry sampler doubles its skip up to this
 /// many ticks (~6.4 s at the default 10 Hz tick) — the idle cost of
 /// "over target with nothing left to spill" converges to one bounded
@@ -68,7 +68,7 @@ impl Store {
     }
 
     /// Tick continuation of [`Store::try_demote_after_write`]: batch after
-    /// batch while over the watermark, for at most a millisecond a tick —
+    /// batch while over the watermark, for at most half a millisecond a tick —
     /// with backoff. A tick whose batch moves nothing while over
     /// target (every spillable value already cold, or the floor alone
     /// exceeds the budget so `effective_target == 0`) doubles the
