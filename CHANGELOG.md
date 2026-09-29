@@ -2,6 +2,55 @@
 
 ## Unreleased
 
+- **An index is a counted B+ tree of packed leaves, a quarter or less
+  of the memory and faster on every write and range read.** Each row was
+  an allocation of its own, held from an ordered set and from a hash set
+  keyed back to the entry, and `VALUES` sat in a third map: 95 bytes a
+  row for an `i64` index, 276 with two stored values, 127 for an
+  `ORDERPATH`. An index is now a B+ tree of 1,784-byte leaves; an entry
+  is a 10-byte slot and the part of its order key past the first eight
+  bytes, with a key's digits packed two to a byte and stored values in
+  the same entry. Over 1.25 million rows keyed `row:<n>`: 15.9 bytes a
+  row for an `i64` index once packed (a build and `IDX.REBUILD` pack it)
+  and 23–25 after random writes; 25–40 with two `VALUES`; 21–40 for an
+  `ORDERPATH`. Measured against the previous structure on one arm64 box,
+  alternating builds, three rounds each: inserts 37–77% faster, value
+  changes 47–65%, `IDX.COUNT` O(log n) instead of a walk (a count over 1%
+  of the rows 99.7% faster), `FILTER` / `SORT` / `DISTINCT` / `FACET` 54–81%,
+  range pages 30–41%, window cuts 58–86%. Two operations got slower, and
+  neither serves a query any more: finding one given `(value, key)` —
+  1.1–1.5 µs against 0.4–0.5 µs, the price of holding no map from key
+  back to entry — which a backfill does per row (still 14% faster in all
+  with the cheaper insert) and `COMPOSE AND` now does only against an
+  index with a window; and walking every entry, 38–68 ns a row against
+  23, which `VERIFY` does beside a row read and an allocation per entry.
+  A scan from a cursor over string or `ORDERPATH` values is 2% slower,
+  within the scan's cursor decode. `IDX.LIST`'s `bytes` reports what the
+  leaves hold. A global index keeps no per-row placement table on the
+  row's shard any more: a write names the old value, which names the
+  partition. docs/indexes.md has the per-row formula.
+
+- **Index writes that no hook saw are applied.** An index learned of a
+  write from a hook each command called with the key it wrote. Rows
+  changed any other way kept their old entries until some later write
+  named them: a row evicted by `maxmemory`, a hash field that expired
+  when a read found it past its deadline, a row a Lua script wrote with
+  `redis.call` on a key other than `KEYS[1]`, the `DEL k1 k2`, `MSET` and
+  same-shard `RENAME` frames a replica applied, and a replica's full
+  resynchronisation, which left the old entries under the new keyspace;
+  in an embedded store, expiry, eviction, replication frames and
+  `apply_frame` were not indexed at all. The store now records, for keys
+  under an indexed prefix, the indexed fields as they were before the
+  first write since the last drain, whatever wrote them, and the index
+  drops the old entry and adds the new one from that record after every
+  command and on every tick.
+
+- **An embedded transaction's index reads see its own writes.**
+  `AtomicAllShards::idx_query` and `idx_count` answered from the last
+  commit, so a closure inserting two rows could not check the second
+  against the first; they now answer from the rows written so far, and a
+  closure that fails leaves the index as the rollback leaves the rows.
+
 - **The upgrade guide covers the Rust API and the replies that changed.**
   `docs/upgrading-6.4-to-7.0.md` gains §10, the rules the public Rust API
   now follows and the common edits for an embedded store, and §11, the
