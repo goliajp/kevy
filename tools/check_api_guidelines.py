@@ -22,6 +22,8 @@ and checks what can be decided without judgment:
 - missing-debug: a public type without `Debug` (C-DEBUG)
 - error-impl: a type named `…Error` that is not a `std::error::Error`, or
   not `Send + Sync` (C-GOOD-ERR)
+- string-error: a public function whose error is a `String` or `&str`,
+  which a caller can neither match on nor chain as a source (C-GOOD-ERR)
 
 `#[repr(C)]` and `#[repr(transparent)]` types are exempt from the first two:
 their layout is the contract. Everything else a rule flags must be listed in
@@ -55,6 +57,7 @@ RULES = (
     "trait-open",
     "missing-debug",
     "error-impl",
+    "string-error",
 )
 # crates whose features exclude each other document with their defaults
 DEFAULT_FEATURES_ONLY = {"kevy-client-async"}
@@ -181,6 +184,27 @@ def fn_findings(owner: str, fn: dict):
     takes_self = bool(sig["inputs"]) and sig["inputs"][0][0] == "self"
     if name.startswith("get_") and takes_self:
         yield "get-prefix", f"{owner}{name}", "method named get_…"
+    err = result_error(sig.get("output"))
+    if err in ("String", "str"):
+        yield "string-error", f"{owner}{name}", f"returns Result<_, {err}>"
+
+
+def result_error(ty) -> str | None:
+    """The error type's name when `ty` is a `Result<_, E>`."""
+    rp = ty.get("resolved_path") if isinstance(ty, dict) else None
+    if not rp or rp["path"].split("::")[-1] not in ("Result", "io::Result"):
+        return None
+    args = ((rp.get("args") or {}).get("angle_bracketed") or {}).get("args") or []
+    if len(args) < 2 or "type" not in args[1]:
+        return None
+    e = args[1]["type"]
+    if isinstance(e, dict) and "borrowed_ref" in e:
+        e = e["borrowed_ref"]["type"]
+    if isinstance(e, dict) and e.get("primitive") == "str":
+        return "str"
+    if isinstance(e, dict) and "resolved_path" in e:
+        return e["resolved_path"]["path"].split("::")[-1]
+    return None
 
 
 def findings(docs: dict[str, dict]):
