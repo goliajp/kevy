@@ -18,6 +18,8 @@ pub(crate) use crate::aof_stage::Stage;
 #[cfg(target_arch = "wasm32")]
 pub(crate) use crate::aof_stage_off::{MapHandle, Mapped, Stage, sync_handles};
 use crate::estimate_multibulk_bytes;
+pub use crate::modes::Fsync;
+use crate::modes::ReplayMode;
 use crate::record::RECORD_HEADER;
 use crate::record_pieces::{record_header, write_frame};
 
@@ -43,19 +45,6 @@ pub const AOF_MAGIC: &[u8; 9] = b"KEVYAOF1\n";
 /// 256 KiB holds ~64 4 KiB appends per syscall; per-shard cost is one
 /// such buffer.
 pub(crate) const AOF_BUF_CAP: usize = 256 * 1024;
-
-/// When to fsync the AOF to disk.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Fsync {
-    /// fsync after every write — safest, slowest.
-    Always,
-    /// fsync about once per second; each [`Aof::tick`] (or
-    /// [`Aof::maybe_sync`]) writes the buffer into the kernel.
-    EverySec,
-    /// Never fsync explicitly: each [`Aof::tick`] writes the buffer into
-    /// the kernel, and the OS decides when it reaches the disk.
-    No,
-}
 
 /// An append-only command log. Each write command is appended as a RESP
 /// multi-bulk frame; [`crate::replay_aof`] re-applies them on startup.
@@ -166,7 +155,8 @@ pub struct Aof {
 /// Handoff between the two halves of a non-blocking rewrite: the serialized
 /// keyspace image (produced under the store lock) and the temp path to spill
 /// it to (off-lock). See [`Aof::begin_concurrent_rewrite`].
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct RewritePlan {
     /// The compacted AOF image (magic + one command stream per key).
     pub body: Vec<u8>,
@@ -177,8 +167,10 @@ pub struct RewritePlan {
 }
 
 /// Result of an [`Aof::rewrite_from`] call. Surfaced by `BGREWRITEAOF` /
-/// `INFO persistence`.
-#[derive(Debug, Clone, Copy)]
+/// `INFO persistence`. The default is the empty rewrite (no keys, no
+/// bytes), the starting point for summing several shards' stats.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub struct RewriteStats {
     /// Keys dumped into the new AOF.
     pub keys: u64,
@@ -205,17 +197,18 @@ impl Aof {
     /// kevy-managed. Pre-existing files (legacy bare-RESP or already-
     /// magic'd) are left untouched.
     pub fn open(path: &Path, fsync: Fsync) -> io::Result<Self> {
-        Self::open_with_repair(path, fsync, false)
+        Self::open_with_repair(path, fsync, ReplayMode::Strict)
     }
 
-    /// [`Self::open`] with the repair policy explicit: under `resync`,
+    /// [`Self::open`] with the repair policy explicit: under
+    /// [`ReplayMode::Resync`],
     /// interior corrupt regions are left in place (the resync replay hops
     /// them deterministically each boot until a rewrite compacts them
     /// away) and only the bytes after the LAST recoverable record are
     /// quarantined + truncated — so a mid-file corruption no longer costs
     /// the good tail behind it.
-    pub fn open_with_repair(path: &Path, fsync: Fsync, resync: bool) -> io::Result<Self> {
-        Self::open_after_replay(path, fsync, resync, None)
+    pub fn open_with_repair(path: &Path, fsync: Fsync, mode: ReplayMode) -> io::Result<Self> {
+        Self::open_after_replay(path, fsync, mode, None)
     }
 
     /// [`Self::open_with_repair`] for a file a replay just walked: `settled`
@@ -226,9 +219,10 @@ impl Aof {
     pub fn open_after_replay(
         path: &Path,
         fsync: Fsync,
-        resync: bool,
+        mode: ReplayMode,
         settled: Option<u64>,
     ) -> io::Result<Self> {
+        let resync = mode == ReplayMode::Resync;
         let (file, size, format, quarantined) = Self::prepare_file(path, resync, settled)?;
         Ok(Aof {
             in_txn: false,
@@ -460,7 +454,7 @@ impl Aof {
         self.file.flush()?;
 
         let tmp = crate::aof_util::rewrite_tmp_path(&self.path);
-        let (keys, bytes) = crate::dump_aof(&tmp, store)?;
+        let RewriteStats { keys, bytes } = crate::dump_aof(&tmp, store)?;
 
         // Atomic replacement. After this, the OLD file descriptor in
         // `self.file` is open against an unlinked inode; new writes would

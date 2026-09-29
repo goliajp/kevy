@@ -173,6 +173,9 @@ impl ReplicaServer {
                                         argv: frame.argv,
                                     }
                                 }
+                                // nothing to apply for an event this test
+                                // runner cannot name
+                                _ => continue,
                             };
                             if sender.send(apply).is_err() {
                                 return;
@@ -603,12 +606,11 @@ impl TrackedReplica {
         let handle = std::thread::spawn(move || {
             while !stop.load(Ordering::Relaxed) {
                 let mut from = last_offset.load(std::sync::atomic::Ordering::Relaxed);
-                let conn = kevy_replicate::replica::ReplicaClient::connect_at(
+                let conn = kevy_replicate::replica::ReplicaClient::connect_with(
                     (upstream.0.as_str(), upstream.1),
-                    "tracked",
-                    data_gen.load(std::sync::atomic::Ordering::Relaxed),
-                    from,
-                    std::time::Duration::from_secs(5),
+                    &kevy_replicate::replica::ConnectOptions::new("tracked")
+                        .with_generation(data_gen.load(std::sync::atomic::Ordering::Relaxed))
+                        .with_from_offset(from),
                 );
                 let Ok(mut client) = conn else {
                     std::thread::sleep(std::time::Duration::from_millis(20));
@@ -659,6 +661,9 @@ impl TrackedReplica {
                                         argv: frame.argv,
                                     }
                                 }
+                                // nothing to apply for an event this test
+                                // runner cannot name
+                                _ => continue,
                             };
                             if sender.send(apply).is_err() {
                                 return;

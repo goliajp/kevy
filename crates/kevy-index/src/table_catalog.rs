@@ -31,7 +31,7 @@ impl TableCatalog {
     /// let (w, shape) = cat.window_for(b"t.at").expect("the window column's index slides");
     /// assert_eq!((w.span, shape), (100, WindowShape::PlainI64));
     /// assert!(cat.is_window_driver(b"t.at"));
-    /// # Ok::<(), String>(())
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn window_for(&self, index_name: &[u8]) -> Option<(WindowSpec, crate::WindowShape)> {
         window_for(self, index_name)
@@ -52,7 +52,7 @@ impl TableCatalog {
     ///     b"COLUMN", b"at", b"i64", b"INDEX", b"at", b"range",
     /// ])?)?;
     /// assert!(!cat.is_window_driver(b"t.at"), "a table without a window has no driver");
-    /// # Ok::<(), String>(())
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn is_window_driver(&self, index_name: &[u8]) -> bool {
         window_driver(self, index_name)
@@ -67,7 +67,7 @@ impl TableCatalog {
     /// use kevy_index::{IndexKind, IndexSpec, TableCatalog, ValType};
     /// let text = IndexSpec::builder("t.body", "t:", IndexKind::Text, ValType::Str).with_field("body").build()?;
     /// assert!(!TableCatalog::new().is_windowed_text(&text), "no table t is declared");
-    /// # Ok::<(), &'static str>(())
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn is_windowed_text(&self, spec: &IndexSpec) -> bool {
         window_text_for(self, spec)
@@ -79,13 +79,13 @@ impl TableCatalog {
     }
 
     /// Register; errors on duplicate / cap / structure.
-    pub fn create(&mut self, spec: TableSpec) -> Result<(), String> {
+    pub fn create(&mut self, spec: TableSpec) -> Result<(), crate::CatalogError> {
         spec.validate()?;
         if self.specs.len() >= MAX_TABLES {
-            return Err("ERR table limit reached (64)".into());
+            return Err(crate::CatalogError::Full(crate::Declared::Table));
         }
         if self.specs.iter().any(|s| s.name == spec.name) {
-            return Err("ERR table already exists".into());
+            return Err(crate::CatalogError::Exists(crate::Declared::Table));
         }
         self.specs.push(spec);
         Ok(())

@@ -268,7 +268,7 @@ fn random32() -> io::Result<[u8; 32]> {
 mod tests {
     use super::*;
     use crate::ClientStream;
-    use crate::{load_client_key, parse_secure_url};
+    use crate::{SecureUrl, load_client_key};
     use kevy_noise::Responder;
     use std::net::TcpListener;
     use std::path::Path;
@@ -366,7 +366,7 @@ mod tests {
             format!("kevys://:1?server_key={k}"),
             format!("kevys://h:1?server_key={}", "zz".repeat(32)),
         ] {
-            let e = parse_secure_url(&url).unwrap_err();
+            let e = SecureUrl::parse(&url).unwrap_err();
             assert_eq!(e.kind(), io::ErrorKind::InvalidInput, "{url}");
         }
         assert!(load_client_key(Path::new("/nonexistent/kevy.key")).is_err());

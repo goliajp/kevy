@@ -18,10 +18,10 @@ pub(crate) fn admit(
 ) -> Result<(), String> {
     for ispec in compiled {
         match globals.iter().find(|g| g.path == ispec.name()) {
-            None => icat.create(ispec)?,
+            None => icat.create(ispec).map_err(|e| e.to_wire())?,
             Some(g) => {
                 let part = partitioning(&ispec, g, sampler, nshards)?;
-                icat.create_with(ispec, part)?;
+                icat.create_with(ispec, part).map_err(|e| e.to_wire())?;
             }
         }
     }

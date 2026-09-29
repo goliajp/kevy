@@ -25,7 +25,8 @@ use kevy_resp::Argv;
 use kevy_resp::ArgvView;
 
 /// One encoded mutation frame parked in the backlog.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct Frame {
     /// Monotonic offset the source assigned at push time.
     pub offset: u64,
@@ -35,7 +36,7 @@ pub struct Frame {
 
 /// Reason [`ReplicationSource::frames_from`] cannot serve a replica
 /// from the backlog.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FromOffset {
     /// The replica is asking for an offset we already evicted; the
     /// streaming loop must initiate a snapshot ship.
@@ -280,7 +281,8 @@ mod tests {
         let off = s.push_mutation(&a);
         let frame = s.buf.front().expect("one frame");
         assert_eq!(frame.offset, off);
-        let (decoded_off, decoded_argv, used) = decode_frame(&frame.bytes).expect("decode");
+        let (crate::replica::DecodedFrame { offset: decoded_off, argv: decoded_argv }, used) =
+            decode_frame(&frame.bytes).expect("decode");
         assert_eq!(decoded_off, off);
         assert_eq!(decoded_argv, a);
         assert_eq!(used, frame.bytes.len());
@@ -389,7 +391,7 @@ mod tests {
         assert_eq!(off, 0);
 
         let frame = s.buf.front().expect("one frame");
-        let (decoded_off, decoded_argv, _) =
+        let (crate::replica::DecodedFrame { offset: decoded_off, argv: decoded_argv }, _) =
             crate::wire::decode_frame(&frame.bytes).expect("decode");
         assert_eq!(decoded_off, 0);
         assert_eq!(decoded_argv, argv(&[b"SET", b"foo", b"bar"]));

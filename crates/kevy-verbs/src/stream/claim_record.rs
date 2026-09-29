@@ -7,7 +7,7 @@ use kevy_resp::ArgvView;
 use kevy_store::{Store, StreamId};
 
 use crate::Effect;
-use crate::aof::Claim;
+use crate::aof::{Claim, Consumer};
 
 /// The part of a group's state a claim's record depends on, read before
 /// the claim runs.
@@ -52,8 +52,8 @@ impl Before {
 /// without a heap allocation.
 #[derive(Default)]
 pub(super) struct ReadMarks {
-    first: Option<(StreamId, bool)>,
-    more: Vec<(StreamId, bool)>,
+    first: Option<(StreamId, Consumer)>,
+    more: Vec<(StreamId, Consumer)>,
     changed: bool,
 }
 
@@ -64,16 +64,17 @@ impl ReadMarks {
         key: &[u8],
         group: &[u8],
         consumer: &[u8],
-    ) -> (StreamId, bool) {
+    ) -> (StreamId, Consumer) {
         match store.stream_group_peek(key, group) {
-            Some(g) => (g.last_delivered_id(), g.consumer(consumer).is_none()),
-            None => (StreamId::MIN, false),
+            Some(g) if g.consumer(consumer).is_none() => (g.last_delivered_id(), Consumer::Created),
+            Some(g) => (g.last_delivered_id(), Consumer::Existing),
+            None => (StreamId::MIN, Consumer::Existing),
         }
     }
 
     /// Note a stream's mark and whether the read delivered from it.
-    pub(super) fn push(&mut self, mark: (StreamId, bool), delivered: bool) {
-        self.changed |= delivered || mark.1;
+    pub(super) fn push(&mut self, mark: (StreamId, Consumer), delivered: bool) {
+        self.changed |= delivered || mark.1 == Consumer::Created;
         match self.first {
             None => self.first = Some(mark),
             Some(_) => self.more.push(mark),
@@ -103,6 +104,7 @@ pub(super) fn claim_effect(
     taken: Vec<StreamId>,
     dropped: Vec<StreamId>,
 ) -> Effect {
-    let claim = Claim::new(taken, dropped, !before.consumer_existed);
+    let consumer = if before.consumer_existed { Consumer::Existing } else { Consumer::Created };
+    let claim = Claim::new(taken, dropped, consumer);
     if claim.is_empty() { Effect::Skip } else { Effect::RecordClaim(Box::new(claim)) }
 }

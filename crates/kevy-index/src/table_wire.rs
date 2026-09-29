@@ -4,6 +4,7 @@
 
 use crate::catalog::{IndexKind, ValType};
 use crate::table::{OrderPath, TableIndex, TableSpec, WindowSpec, dotted};
+use crate::table_error::{TableError, WindowBound};
 
 /// The usage line every malformed `TABLE.DECLARE` answers with.
 pub const TABLE_DECLARE_USAGE: &str = "ERR usage: TABLE.DECLARE name PREFIX p PK col COLUMN name i64|f64|str [COLUMN ...] [INDEX col range|unique [VALUES col ...] [GLOBAL [SPLIT AT v ...]]] [ORDERPATH name ON col [DESC] [THEN col [DESC]] ... [GLOBAL [SPLIT AT 0xhex ...]]] [WINDOW col SPAN n BUCKET n] [AUTODECLARE n]";
@@ -53,15 +54,15 @@ fn is_table_kw(a: &[u8]) -> bool {
 }
 
 /// Parse a full `TABLE.DECLARE` argv into a validated [`TableSpec`].
-/// `Err` carries the exact wire error — usage on structural misses,
-/// a named refusal for everything semantic (unknown column, bad type,
+/// [`TableError::to_wire`] words a refusal for the wire — usage on
+/// structural misses, a named refusal for everything semantic (unknown column, bad type,
 /// duplicates …). A `GLOBAL` path is refused by name: this is the parse
 /// for a store whose paths are all local (see
 /// [`parse_table_declare_partitioned`]).
-pub fn parse_table_declare(argv: &[&[u8]]) -> Result<TableSpec, String> {
+pub fn parse_table_declare(argv: &[&[u8]]) -> Result<TableSpec, TableError> {
     let (spec, globals) = parse_table_declare_partitioned(argv)?;
     if !globals.is_empty() {
-        return Err("ERR GLOBAL is a server feature; an embedded store's paths are local".into());
+        return Err(TableError::GlobalNotHere);
     }
     Ok(spec)
 }
@@ -85,7 +86,7 @@ pub fn parse_table_declare(argv: &[&[u8]]) -> Result<TableSpec, String> {
 /// ```
 pub fn parse_table_declare_partitioned(
     argv: &[&[u8]],
-) -> Result<(TableSpec, Vec<GlobalPath>), String> {
+) -> Result<(TableSpec, Vec<GlobalPath>), TableError> {
     let mut spec = table_head(argv)?;
     let mut i = 6;
     let mut globals = Vec::new();
@@ -116,25 +117,25 @@ pub fn parse_table_declare_partitioned(
         } else if kw.eq_ignore_ascii_case(b"AUTODECLARE") {
             i = parse_autodeclare(argv, i + 1, &mut spec)?;
         } else {
-            return Err(TABLE_DECLARE_USAGE.into());
+            return Err(TableError::Usage);
         }
     }
     spec.validate()?;
     if spec.window.is_some() && !globals.is_empty() {
-        return Err("ERR GLOBAL cannot apply to a windowed table's paths: eviction moves a row's entries out on the row's own shard".into());
+        return Err(TableError::GlobalWindowed);
     }
     Ok((spec, globals))
 }
 
 /// `TABLE.DECLARE name PREFIX p PK col` and the first `COLUMN` keyword: the
 /// spec before its clauses.
-fn table_head(argv: &[&[u8]]) -> Result<TableSpec, String> {
+fn table_head(argv: &[&[u8]]) -> Result<TableSpec, TableError> {
     if argv.len() < 9
         || !argv[2].eq_ignore_ascii_case(b"PREFIX")
         || !argv[4].eq_ignore_ascii_case(b"PK")
         || !argv[6].eq_ignore_ascii_case(b"COLUMN")
     {
-        return Err(TABLE_DECLARE_USAGE.into());
+        return Err(TableError::Usage);
     }
     Ok(TableSpec {
         name: argv[1].to_vec(),
@@ -156,7 +157,7 @@ fn parse_global(
     table: &[u8],
     suffix: &[u8],
     globals: &mut Vec<GlobalPath>,
-) -> Result<usize, String> {
+) -> Result<usize, TableError> {
     if !argv.get(at).is_some_and(|a| a.eq_ignore_ascii_case(b"GLOBAL")) {
         return Ok(at);
     }
@@ -164,7 +165,7 @@ fn parse_global(
     let mut split_at = Vec::new();
     if argv.get(i).is_some_and(|a| a.eq_ignore_ascii_case(b"SPLIT")) {
         if !argv.get(i + 1).is_some_and(|a| a.eq_ignore_ascii_case(b"AT")) {
-            return Err(TABLE_DECLARE_USAGE.into());
+            return Err(TableError::Usage);
         }
         i += 2;
         while i < argv.len() && !is_table_kw(argv[i]) {
@@ -172,7 +173,7 @@ fn parse_global(
             i += 1;
         }
         if split_at.is_empty() {
-            return Err("ERR SPLIT AT needs at least one value".into());
+            return Err(TableError::SplitAtEmpty);
         }
     }
     globals.push(GlobalPath { path: dotted(table, suffix), split_at });
@@ -180,26 +181,26 @@ fn parse_global(
 }
 
 /// `COLUMN <name> <i64|f64|str>` — returns the next clause index.
-fn parse_column(argv: &[&[u8]], at: usize, spec: &mut TableSpec) -> Result<usize, String> {
+fn parse_column(argv: &[&[u8]], at: usize, spec: &mut TableSpec) -> Result<usize, TableError> {
     let (Some(name), Some(ty_raw)) = (argv.get(at), argv.get(at + 1)) else {
-        return Err(TABLE_DECLARE_USAGE.into());
+        return Err(TableError::Usage);
     };
     let ty = match ValType::parse(ty_raw) {
         Some(t @ (ValType::I64 | ValType::F64 | ValType::Str)) => t,
-        _ => return Err("ERR COLUMN type must be i64|f64|str".into()),
+        _ => return Err(TableError::ColumnType),
     };
     spec.columns.push((name.to_vec(), ty));
     Ok(at + 2)
 }
 
 /// `INDEX <col> <range|unique> [VALUES <col>…]`.
-fn parse_index(argv: &[&[u8]], at: usize, spec: &mut TableSpec) -> Result<usize, String> {
+fn parse_index(argv: &[&[u8]], at: usize, spec: &mut TableSpec) -> Result<usize, TableError> {
     let (Some(col), Some(kind_raw)) = (argv.get(at), argv.get(at + 1)) else {
-        return Err(TABLE_DECLARE_USAGE.into());
+        return Err(TableError::Usage);
     };
     let kind = match IndexKind::parse(kind_raw) {
         Some(k @ (IndexKind::Range | IndexKind::Unique)) => k,
-        _ => return Err("ERR INDEX kind must be range|unique".into()),
+        _ => return Err(TableError::IndexKind),
     };
     let mut values = Vec::new();
     let mut i = at + 2;
@@ -210,7 +211,7 @@ fn parse_index(argv: &[&[u8]], at: usize, spec: &mut TableSpec) -> Result<usize,
             i += 1;
         }
         if values.is_empty() {
-            return Err("ERR VALUES needs at least one column".into());
+            return Err(TableError::ValuesEmpty);
         }
     }
     spec.indexes.push(TableIndex { column: col.to_vec(), kind, values });
@@ -218,21 +219,21 @@ fn parse_index(argv: &[&[u8]], at: usize, spec: &mut TableSpec) -> Result<usize,
 }
 
 /// `ORDERPATH <name> ON <col> [DESC] [THEN <col> [DESC]]…`.
-fn parse_orderpath(argv: &[&[u8]], at: usize, spec: &mut TableSpec) -> Result<usize, String> {
+fn parse_orderpath(argv: &[&[u8]], at: usize, spec: &mut TableSpec) -> Result<usize, TableError> {
     let (Some(name), Some(on_kw)) = (argv.get(at), argv.get(at + 1)) else {
-        return Err(TABLE_DECLARE_USAGE.into());
+        return Err(TableError::Usage);
     };
     if !on_kw.eq_ignore_ascii_case(b"ON") {
-        return Err("ERR ORDERPATH needs ON <col>".into());
+        return Err(TableError::OrderpathNeedsOn);
     }
     let mut on = Vec::new();
     let mut i = at + 2;
     loop {
         let Some(col) = argv.get(i) else {
-            return Err("ERR ORDERPATH needs ON <col>".into());
+            return Err(TableError::OrderpathNeedsOn);
         };
         if is_table_kw(col) {
-            return Err("ERR ORDERPATH needs ON <col>".into());
+            return Err(TableError::OrderpathNeedsOn);
         }
         let mut order = kevy_text::SortOrder::Asc;
         i += 1;
@@ -245,7 +246,7 @@ fn parse_orderpath(argv: &[&[u8]], at: usize, spec: &mut TableSpec) -> Result<us
             Some(a) if a.eq_ignore_ascii_case(b"THEN") => i += 1,
             Some(a) if is_table_kw(a) => break,
             None => break,
-            Some(_) => return Err(TABLE_DECLARE_USAGE.into()),
+            Some(_) => return Err(TableError::Usage),
         }
     }
     spec.orderpaths.push(OrderPath::new(name.to_vec(), on));
@@ -254,17 +255,17 @@ fn parse_orderpath(argv: &[&[u8]], at: usize, spec: &mut TableSpec) -> Result<us
 
 /// `AUTODECLARE <n>` — the engine may declare at most `n` paths for
 /// this table from observed refusals.
-fn parse_autodeclare(argv: &[&[u8]], at: usize, spec: &mut TableSpec) -> Result<usize, String> {
+fn parse_autodeclare(argv: &[&[u8]], at: usize, spec: &mut TableSpec) -> Result<usize, TableError> {
     if spec.autodeclare != 0 {
-        return Err("ERR duplicate AUTODECLARE clause".into());
+        return Err(TableError::DuplicateAutodeclare);
     }
     let n: usize = argv
         .get(at)
         .and_then(|raw| str::from_utf8(raw).ok())
         .and_then(|t| t.parse().ok())
-        .ok_or("ERR AUTODECLARE needs a positive integer")?;
+        .ok_or(TableError::AutodeclareNotPositive)?;
     if n == 0 {
-        return Err("ERR AUTODECLARE needs a positive integer".into());
+        return Err(TableError::AutodeclareNotPositive);
     }
     spec.autodeclare = n;
     Ok(at + 1)
@@ -272,28 +273,28 @@ fn parse_autodeclare(argv: &[&[u8]], at: usize, spec: &mut TableSpec) -> Result<
 
 /// `WINDOW <col> SPAN <n> BUCKET <n>` — plain integers in the window
 /// column's own units; the engine never assumes a time base.
-fn parse_window(argv: &[&[u8]], at: usize, spec: &mut TableSpec) -> Result<usize, String> {
+fn parse_window(argv: &[&[u8]], at: usize, spec: &mut TableSpec) -> Result<usize, TableError> {
     if spec.window.is_some() {
-        return Err("ERR duplicate WINDOW clause".into());
+        return Err(TableError::DuplicateWindow);
     }
     let (Some(col), Some(span_kw), Some(span_raw), Some(bucket_kw), Some(bucket_raw)) =
         (argv.get(at), argv.get(at + 1), argv.get(at + 2), argv.get(at + 3), argv.get(at + 4))
     else {
-        return Err(TABLE_DECLARE_USAGE.into());
+        return Err(TableError::Usage);
     };
     if !span_kw.eq_ignore_ascii_case(b"SPAN") || !bucket_kw.eq_ignore_ascii_case(b"BUCKET") {
-        return Err(TABLE_DECLARE_USAGE.into());
+        return Err(TableError::Usage);
     }
-    let int = |raw: &[u8], what: &str| -> Result<i64, String> {
+    let int = |raw: &[u8], what: WindowBound| -> Result<i64, TableError> {
         str::from_utf8(raw)
             .ok()
             .and_then(|t| t.parse().ok())
-            .ok_or_else(|| format!("ERR WINDOW {what} must be an integer"))
+            .ok_or(TableError::WindowNotInteger(what))
     };
     spec.window = Some(WindowSpec {
         column: col.to_vec(),
-        span: int(span_raw, "SPAN")?,
-        bucket: int(bucket_raw, "BUCKET")?,
+        span: int(span_raw, WindowBound::Span)?,
+        bucket: int(bucket_raw, WindowBound::Bucket)?,
     });
     Ok(at + 5)
 }

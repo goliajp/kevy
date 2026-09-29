@@ -63,7 +63,7 @@ impl Store {
         crate::ops_index_sync::tier_floor_check(&self.shards)?;
         // TableSpec::compile validates for itself — a bad spec is a named
         // refusal here, never a panic downstream (dogfood F9).
-        let compiled = spec.compile().map_err(KevyError::InvalidInput)?;
+        let compiled = spec.compile().map_err(|e| KevyError::InvalidInput(e.to_string()))?;
         {
             let g = self.tables.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
             if g.get(&spec.name).is_some() {
@@ -77,15 +77,13 @@ impl Store {
             let g = self.indexes.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
             let mut probe = g.1.clone();
             for ispec in &compiled {
-                probe
-                    .create(ispec.clone())
-                    .map_err(|e| KevyError::InvalidInput(strip_err(e).into()))?;
+                probe.create(ispec.clone()).map_err(|e| KevyError::InvalidInput(e.to_string()))?;
             }
         }
         {
             let mut g =
                 self.tables.catalog.write().unwrap_or_else(std::sync::PoisonError::into_inner);
-            g.create(spec).map_err(|e| KevyError::InvalidInput(strip_err(&e).into()))?;
+            g.create(spec).map_err(|e| KevyError::InvalidInput(e.to_string()))?;
         }
         self.persist_table_sidecar();
         for ispec in compiled {
@@ -130,7 +128,7 @@ impl Store {
     /// table is dropped, so a bad replacement leaves the old one
     /// standing.
     pub fn table_replace(&self, spec: TableSpec) -> KevyResult<()> {
-        spec.compile().map_err(KevyError::InvalidInput)?;
+        spec.compile().map_err(|e| KevyError::InvalidInput(e.to_string()))?;
         self.table_drop(&spec.name);
         self.table_declare(spec)
     }
@@ -206,7 +204,7 @@ impl Store {
             g.get(name).cloned()
         }
         .ok_or_else(|| KevyError::NotFound("no such table".into()))?;
-        let compiled = spec.compile().map_err(KevyError::InvalidInput)?;
+        let compiled = spec.compile().map_err(|e| KevyError::InvalidInput(e.to_string()))?;
         let mut per_index: Vec<(Vec<u8>, [u64; 10])> =
             compiled.iter().map(|i| (i.name().to_vec(), [0u64; 10])).collect();
         let mut spot = [0u64; 2];
@@ -264,12 +262,6 @@ impl Store {
 
     #[cfg(not(feature = "persist"))]
     pub(crate) fn persist_table_sidecar(&self) {}
-}
-
-/// Catalog errors carry a leading `ERR ` for the wire; the typed
-/// `KevyError` face re-adds it, so strip here to avoid `ERR ERR`.
-fn strip_err(e: &str) -> &str {
-    e.strip_prefix("ERR ").unwrap_or(e)
 }
 
 /// One shard's contribution to one compiled index's verify counters —

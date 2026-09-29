@@ -133,6 +133,8 @@ pub use snapshot::SnapshotView;
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 mod segrows;
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+mod segrows_error;
+#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 mod segwindow;
 mod stream;
 mod string;
@@ -145,6 +147,8 @@ mod tier_demote;
 mod tier_serve;
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 pub use segrows::SealedRows;
+#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+pub use segrows_error::SegRowsError;
 
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 pub use kevy_vlog::CompressionStats;
@@ -419,6 +423,7 @@ const _: () = {
 const _: () = {
     const fn send_sync<T: Send + Sync>() {}
     send_sync::<SealedRows>();
+    send_sync::<SegRowsError>();
     send_sync::<TierStats>();
     send_sync::<ColdRead>();
     send_sync::<SyncColdRead>();

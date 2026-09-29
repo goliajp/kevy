@@ -795,14 +795,14 @@ fn open_with_repair_under_resync_keeps_the_tail_it_documents_keeping() {
     let resync_path = lying_length_aof("openresync");
     let full = std::fs::metadata(&resync_path).unwrap().len();
 
-    let strict = Aof::open_with_repair(&strict_path, Fsync::No, false).unwrap();
+    let strict = Aof::open_with_repair(&strict_path, Fsync::No, crate::ReplayMode::Strict).unwrap();
     assert!(strict.open_quarantine().is_some(), "strict repair drops the tail");
     assert!(
         std::fs::metadata(&strict_path).unwrap().len() < full,
         "strict repair truncates the file at the lie — that is its contract"
     );
 
-    let kept = Aof::open_with_repair(&resync_path, Fsync::No, true).unwrap();
+    let kept = Aof::open_with_repair(&resync_path, Fsync::No, crate::ReplayMode::Resync).unwrap();
     assert!(
         kept.open_quarantine().is_none(),
         "under resync nothing after the last recoverable record is left to drop"

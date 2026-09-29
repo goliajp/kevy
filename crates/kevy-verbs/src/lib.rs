@@ -137,13 +137,13 @@ pub enum Effect {
     /// }
     /// let read = argv("XREADGROUP GROUP g a STREAMS s >");
     /// let effect = exec(&mut store, b"XREADGROUP", &read, &mut Vec::new()).unwrap();
-    /// assert_eq!(effect, Effect::RecordRead(kevy_store::StreamId::MIN, true));
+    /// assert_eq!(effect, Effect::RecordRead(kevy_store::StreamId::MIN, kevy_verbs::aof::Consumer::Created));
     /// let frames = kevy_verbs::aof::deferred_frames(&store, &read, &effect);
     /// let verbs: Vec<&[u8]> = frames.iter().map(|f| &f[0]).collect();
     /// // the consumer's contact, the group's move, then the delivery
     /// assert_eq!(verbs, [&b"XINTERNAL.CONSUMERSEEN"[..], b"XGROUP", b"XCLAIM"]);
     /// ```
-    RecordRead(StreamId, bool),
+    RecordRead(StreamId, aof::Consumer),
     /// [`Effect::RecordRead`] for an `XREADGROUP` over several streams:
     /// one `(last-delivered before, consumer created)` pair per stream, in
     /// `STREAMS` order.
@@ -164,7 +164,7 @@ pub enum Effect {
     /// };
     /// assert_eq!(marks.len(), 2);
     /// ```
-    RecordReads(Vec<(StreamId, bool)>),
+    RecordReads(Vec<(StreamId, aof::Consumer)>),
     /// Record an `XGROUP CREATECONSUMER` that created its consumer as
     /// `XINTERNAL.CONSUMERSEEN key group consumer t`, `t` the time it was
     /// created at, so a replay does not create it at its own. Carries no
@@ -249,3 +249,16 @@ fn changed(changed: bool) -> Effect {
 
 #[cfg(test)]
 mod tests;
+
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<Effect>();
+    send_sync::<Verb>();
+    send_sync::<args::ScanOpts>();
+    send_sync::<args::ScanOptsError>();
+    send_sync::<aof::Claim>();
+    send_sync::<aof::Consumer>();
+    send_sync::<reply::Scores>();
+    #[cfg(feature = "streams-geo")]
+    send_sync::<geo::StoreSearchError>();
+};

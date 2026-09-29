@@ -474,7 +474,8 @@ fn streaming_replica_receives_set_command_as_wire_frame() {
         }
     }
     let buf = &buf[start..];
-    let (offset, argv, used) = kevy_replicate::wire::decode_frame(buf).expect("decode frame");
+    let (kevy_replicate::replica::DecodedFrame { offset, argv, .. }, used) =
+        kevy_replicate::wire::decode_frame(buf).expect("decode frame");
     assert_eq!(offset, 0);
     assert_eq!(argv.len(), 3);
     assert_eq!(argv.get(0), Some(&b"SET"[..]));
@@ -516,7 +517,7 @@ fn streaming_replica_receives_multiple_frames_in_order() {
                 continue;
             }
             match kevy_replicate::wire::decode_frame(&buf[cursor..]) {
-                Ok((offset, argv, used)) => {
+                Ok((kevy_replicate::replica::DecodedFrame { offset, argv, .. }, used)) => {
                     frames.push((offset, argv));
                     cursor += used;
                     continue;
@@ -594,7 +595,7 @@ fn streaming_replica_receives_only_its_shards_writes() {
             }
             // Try to decode out of what's buffered.
             match kevy_replicate::wire::decode_frame(&buf[cursor..]) {
-                Ok((_, argv, used)) => {
+                Ok((kevy_replicate::replica::DecodedFrame { argv, .. }, used)) => {
                     cursor += used;
                     total_received += 1;
                     all_keys.push(argv.get(1).unwrap().to_vec());
@@ -639,12 +640,10 @@ fn replica_client_handshake_and_receive_set_frame() {
     // Resume-shaped claim (the live generation at offset 0), so the
     // fence serves frames instead of the full snapshot a no-claim
     // cursor now gets — this test is about the frame contract.
-    let mut client = kevy_replicate::replica::ReplicaClient::connect_at(
+    let mut client = kevy_replicate::replica::ReplicaClient::connect_with(
         ("127.0.0.1", server.replication_base),
-        "replica-via-client",
-        live_generation(server.replication_base),
-        0,
-        std::time::Duration::from_secs(5),
+        &kevy_replicate::replica::ConnectOptions::new("replica-via-client")
+            .with_generation(live_generation(server.replication_base)),
     )
     .expect("connect + handshake");
     assert_eq!(client.primary_offset_at_handshake(), 0);
@@ -678,11 +677,10 @@ fn replica_client_handshake_failure_on_closed_port() {
     let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = probe.local_addr().unwrap().port();
     drop(probe);
-    let result = kevy_replicate::replica::ReplicaClient::connect_with_timeout(
+    let result = kevy_replicate::replica::ReplicaClient::connect_with(
         ("127.0.0.1", port),
-        "replica-x",
-        0,
-        std::time::Duration::from_millis(200),
+        &kevy_replicate::replica::ConnectOptions::new("replica-x")
+            .with_timeout(std::time::Duration::from_millis(200)),
     );
     assert!(result.is_err(), "connect to released port should fail, got Ok",);
 }
@@ -959,12 +957,10 @@ fn replica_apply_dispatch_mirrors_primary_store() {
     // in-process recipe.
     let server = Server::start(1);
     // Resume-shaped claim — see replica_client_handshake_and_receive_set_frame.
-    let mut client = kevy_replicate::replica::ReplicaClient::connect_at(
+    let mut client = kevy_replicate::replica::ReplicaClient::connect_with(
         ("127.0.0.1", server.replication_base),
-        "replica-apply",
-        live_generation(server.replication_base),
-        0,
-        std::time::Duration::from_secs(5),
+        &kevy_replicate::replica::ConnectOptions::new("replica-apply")
+            .with_generation(live_generation(server.replication_base)),
     )
     .expect("connect + handshake");
 
@@ -1281,6 +1277,9 @@ impl ReplicaServer {
                                         argv: frame.argv,
                                     }
                                 }
+                                // nothing to apply for an event this test
+                                // runner cannot name
+                                _ => continue,
                             };
                             if sender.send(apply).is_err() {
                                 return;
@@ -2136,12 +2135,11 @@ fn unclean_restart_generation_fence_ships_instead_of_aliasing() {
     // Old-history resume claim: (gen 1, offset 5). Pre-fence, the
     // pump would serve frames 5..10 of the NEW history — silently
     // missing new0..new4. The fence must ship a full snapshot.
-    let mut replica = kevy_replicate::replica::ReplicaClient::connect_at(
+    let mut replica = kevy_replicate::replica::ReplicaClient::connect_with(
         ("127.0.0.1", server.replication_base),
-        "fence-probe",
-        gen1,
-        5,
-        std::time::Duration::from_secs(5),
+        &kevy_replicate::replica::ConnectOptions::new("fence-probe")
+            .with_generation(gen1)
+            .with_from_offset(5),
     )
     .expect("resume handshake");
     assert_ne!(
@@ -2193,12 +2191,11 @@ fn ahead_cursor_ships_snapshot_instead_of_wedging() {
     .expect("probe handshake");
     let live_gen = probe.primary_gen_at_handshake();
     drop(probe);
-    let mut replica = kevy_replicate::replica::ReplicaClient::connect_at(
+    let mut replica = kevy_replicate::replica::ReplicaClient::connect_with(
         ("127.0.0.1", server.replication_base),
-        "ahead-probe",
-        live_gen,
-        999_999,
-        std::time::Duration::from_secs(5),
+        &kevy_replicate::replica::ConnectOptions::new("ahead-probe")
+            .with_generation(live_gen)
+            .with_from_offset(999_999),
     )
     .expect("ahead handshake");
     let mut pings = 0;

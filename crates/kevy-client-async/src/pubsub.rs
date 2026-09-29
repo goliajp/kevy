@@ -4,4 +4,3 @@
 //! no per-crate mirrors).
 
 pub use kevy_resp_client::PubsubEvent;
-pub(crate) use kevy_resp_client::classify_pubsub as classify;

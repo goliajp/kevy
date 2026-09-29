@@ -1,4 +1,4 @@
-//! Fuzz `kevy_persist::read_shards_meta` on arbitrary file bytes.
+//! Fuzz `kevy_persist::ShardsMeta::read` on arbitrary file bytes.
 //!
 //! `shards.meta` is a trust boundary: bring-up parses whatever is on disk
 //! (possibly written by an older/newer kevy, an embedded-store v1 layout,
@@ -6,13 +6,13 @@
 //! Invariants asserted across arbitrary inputs:
 //!
 //!   * never panics, terminates promptly
-//!   * any successfully parsed meta round-trips: write_shards_meta then
-//!     read_shards_meta returns the identical value (parse/print fixpoint,
+//!   * any successfully parsed meta round-trips: `ShardsMeta::write` then
+//!     `ShardsMeta::read` returns the identical value (parse/print fixpoint,
 //!     so a reshard decision is stable across restarts)
 
 #![no_main]
 
-use kevy_persist::{read_shards_meta, write_shards_meta};
+use kevy_persist::ShardsMeta;
 use libfuzzer_sys::fuzz_target;
 use std::io::Write;
 
@@ -26,10 +26,10 @@ fuzz_target!(|data: &[u8]| {
         let mut f = std::fs::File::create(&path).expect("create temp meta");
         f.write_all(data).expect("write temp meta");
     }
-    if let Some(meta) = read_shards_meta(&path) {
+    if let Some(meta) = ShardsMeta::read(&path) {
         // Parse/print fixpoint: what we accepted must re-read identically.
-        write_shards_meta(&path, meta).expect("rewrite meta");
-        assert_eq!(read_shards_meta(&path), Some(meta), "meta round-trip drift");
+        meta.write(&path).expect("rewrite meta");
+        assert_eq!(ShardsMeta::read(&path), Some(meta), "meta round-trip drift");
     }
     let _ = std::fs::remove_file(&path);
 });

@@ -21,7 +21,7 @@
 use crate::source::{FromOffset, ReplicationSource};
 
 /// Why a feed read could not be served from the backlog.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FeedRead {
     /// Cursor unservable (stale generation or evicted offset): rebuild
     /// from a scan, then resume from the carried tail cursor.
@@ -40,8 +40,9 @@ pub enum FeedRead {
 
 /// One decoded feed entry: the offset plus the frame's wire bytes
 /// (envelope + offset + RESP argv — same encoding replicas consume;
-/// [`crate::replica_decode`] parses it).
-#[derive(Debug)]
+/// [`crate::wire::decode_frame`] parses it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct FeedFrame<'a> {
     /// Offset the source assigned at push time.
     pub offset: u64,

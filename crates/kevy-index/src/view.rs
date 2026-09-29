@@ -260,12 +260,12 @@ impl ViewSpec {
     }
 
     /// Validate the structural caps.
-    pub fn validate(&self) -> Result<(), &'static str> {
+    pub fn validate(&self) -> Result<(), crate::ViewError> {
         if self.tree.depth() > MAX_TREE_DEPTH {
-            return Err("ERR view tree deeper than 3");
+            return Err(crate::ViewError::TooDeep);
         }
         if self.tree.leaves() > MAX_TREE_LEAVES {
-            return Err("ERR view tree has more than 4 leaves");
+            return Err(crate::ViewError::TooManyLeaves);
         }
         Ok(())
     }

@@ -49,8 +49,8 @@ pub(crate) fn emit<W: Write, A: kevy_resp::ArgvView + ?Sized>(
 
 /// Serialize `src`'s whole state to a fresh compacted AOF at `path`
 /// (fsynced): the rewrite image — always the v2 checksummed-record
-/// format. Returns `(keys, bytes)`.
-pub fn dump_aof<S: crate::SnapshotSource>(path: &Path, src: &S) -> io::Result<(u64, u64)> {
+/// format. Returns the keys written and the file's size.
+pub fn dump_aof<S: crate::SnapshotSource>(path: &Path, src: &S) -> io::Result<crate::RewriteStats> {
     // Drop-behind stride — a multi-GB image left dirty floods the page
     // cache into direct reclaim inside the server's own fault paths
     // (5.2M pages scanned vs 6.6k without; the S5-E/F finding).
@@ -106,14 +106,14 @@ fn finish_dump<S: crate::SnapshotSource>(
     cold_seqs: &[u32],
     scratch: &mut Vec<u8>,
     keys: u64,
-) -> io::Result<(u64, u64)> {
+) -> io::Result<crate::RewriteStats> {
     write_hash_ttl_frames(&mut w, src, crate::AofFormat::V2, scratch)?;
     crate::segmented::write_segmented_frames(&mut w, src, cold_seqs, scratch)?;
     w.flush()?;
     let inner = w.into_inner().map_err(|e| io::Error::other(e.to_string()))?;
     let bytes = inner.metadata().map_or(0, |m| m.len());
     inner.sync_all()?;
-    Ok((keys, bytes))
+    Ok(crate::RewriteStats { keys, bytes })
 }
 
 /// Hash field TTLs re-emitted as absolute HPEXPIREAT frames (after the
@@ -359,7 +359,7 @@ fn decimal_digits(mut x: u64) -> u32 {
 /// [`replay_aof`](crate::replay_aof) parses back. Public so external AOF
 /// producers (host-mediated persistence pumps) emit frames byte-compatible
 /// with kevy-written logs.
-pub fn write_multibulk<W: Write, A: ArgvView + ?Sized>(w: &mut W, args: &A) -> io::Result<()> {
+pub fn write_multibulk<W: Write, A: ArgvView + ?Sized>(mut w: W, args: &A) -> io::Result<()> {
     write!(w, "*{}\r\n", args.len())?;
     for i in 0..args.len() {
         let a = &args[i];

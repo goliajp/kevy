@@ -81,8 +81,8 @@ Decoding is **incremental**:
 let mut pos = 0;
 loop {
     match decode_frame(&buf[pos..]) {
-        Ok((offset, argv, used)) => {
-            apply(offset, argv);
+        Ok((frame, used)) => {
+            apply(frame.offset, frame.argv);
             pos += used;
         }
         Err(WireError::Truncated) => break, // read more bytes, retry

@@ -36,7 +36,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use kevy_replicate::handshake::{encode_ack, parse_replicate_from};
+use kevy_replicate::handshake::{HandshakeReq, encode_ack};
 use kevy_replicate::wire::{
     SNAPSHOT_CHUNK_MAX, encode_snapshot_begin, encode_snapshot_chunk, encode_snapshot_end,
 };
@@ -377,7 +377,7 @@ fn read_handshake(stream: &mut Wire) -> Option<kevy_replicate::handshake::Handsh
             return None;
         }
         if let Ok(Some((argv, _consumed))) = kevy_resp::parse_command(&buf.clone()) {
-            return parse_replicate_from(&argv).ok();
+            return HandshakeReq::parse(&argv).ok();
         }
         if buf.len() > 64 * 1024 {
             return None;

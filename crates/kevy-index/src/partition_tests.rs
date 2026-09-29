@@ -52,17 +52,14 @@ fn a_global_partitioning_is_refused_where_it_cannot_apply() {
     let mut c = Catalog::new();
     let mut text = spec("t", IndexKind::Text);
     text.ty = ValType::Str;
-    assert_eq!(
-        c.create_with(text, global(&[])),
-        Err("ERR PARTITION global requires KIND range|unique")
-    );
+    assert_eq!(c.create_with(text, global(&[])), Err(crate::CatalogError::GlobalNeedsOrder));
     assert_eq!(
         c.create_with(spec("r", IndexKind::Range), global(&[b"b", b"a"])),
-        Err("ERR SPLIT AT values must be strictly increasing")
+        Err(crate::CatalogError::SplitsOutOfOrder)
     );
     assert_eq!(
         c.create_with(spec("r", IndexKind::Range), global(&[b"a", b"a"])),
-        Err("ERR SPLIT AT values must be strictly increasing")
+        Err(crate::CatalogError::SplitsOutOfOrder)
     );
     assert!(c.get(b"r").is_none(), "a refused index is not half-created");
 }
@@ -175,11 +172,14 @@ fn a_store_whose_paths_are_all_local_refuses_global_by_name() {
     let mut global = argv.to_vec();
     global.push(b"GLOBAL");
     let err = crate::parse_table_declare(&global).unwrap_err();
-    assert!(err.contains("GLOBAL is a server feature"), "{err}");
+    assert_eq!(err, crate::TableError::GlobalNotHere);
     assert!(crate::parse_table_declare(&argv).is_ok());
     // a bare SPLIT without AT is not the grammar
     global.extend_from_slice(&[b"SPLIT".as_slice(), b"5"]);
-    assert!(crate::parse_table_declare_partitioned(&global).unwrap_err().contains("usage"));
+    assert_eq!(
+        crate::parse_table_declare_partitioned(&global).unwrap_err(),
+        crate::TableError::Usage
+    );
 }
 
 #[test]

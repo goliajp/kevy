@@ -252,7 +252,7 @@ fn boot_state(cfg: &Arc<kevy_config::Config>) -> Arc<RuntimeState> {
 fn build_runtime(cfg: &kevy_config::Config, commands: KevyCommands) -> Runtime<KevyCommands> {
     let state = Arc::clone(commands.state());
     let nshards = state.nshards();
-    let fsync = map_appendfsync(cfg.persistence.appendfsync);
+    let fsync = cfg.persistence.appendfsync;
     let mut runtime = Runtime::builder(commands)
         .bind(cfg.server.bind, cfg.server.port)
         .shards(nshards)
@@ -350,19 +350,6 @@ pub(crate) fn cluster_port_base(cfg: &kevy_config::Config) -> u16 {
         // the (base, nshards) range loudly rather than wrapping a listener.
         0 => cfg.server.port.saturating_add(1),
         base => base,
-    }
-}
-
-/// Translate a `kevy_config::AppendFsync` (TOML enum) into the
-/// `kevy_persist::Fsync` mirror.
-pub(crate) fn map_appendfsync(p: kevy_config::AppendFsync) -> kevy_persist::Fsync {
-    use kevy_config::AppendFsync as C;
-    use kevy_persist::Fsync as P;
-    match p {
-        C::Always => P::Always,
-        C::EverySec => P::EverySec,
-        C::No => P::No,
-        other => unimplemented!("the AOF has no fsync policy for {other:?}"),
     }
 }
 

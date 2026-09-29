@@ -12,8 +12,7 @@ use kevy_store::Store;
 
 use crate::cmd::{self, upper_verb};
 use crate::{
-    Argv, KevyCommands, cmd_block, cmd_block_serve, cmd_hello, cmd_resolve, dispatch,
-    map_appendfsync, ops,
+    Argv, KevyCommands, cmd_block, cmd_block_serve, cmd_hello, cmd_resolve, dispatch, ops,
 };
 
 impl Commands for KevyCommands {
@@ -326,7 +325,7 @@ impl Commands for KevyCommands {
         let tick_ms =
             if hz == 0 { Some(0) } else { Some((1000u64 / u64::from(hz)).clamp(1, 10_000)) };
         kevy_rt::LiveRuntimeConfig {
-            appendfsync: Some(map_appendfsync(cfg.persistence.appendfsync)),
+            appendfsync: Some(cfg.persistence.appendfsync),
             auto_aof_rewrite_pct: Some(cfg.persistence.auto_aof_rewrite_percentage),
             auto_aof_rewrite_min_size: Some(cfg.persistence.auto_aof_rewrite_min_size),
             auto_aof_rewrite_bytes: Some(cfg.persistence.auto_aof_rewrite_bytes),

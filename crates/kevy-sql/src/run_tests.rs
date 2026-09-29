@@ -37,7 +37,7 @@ fn what_sql_cannot_say_is_written_as_a_comment() {
          -- not carried by SQL: AUTODECLARE 3\n"
     );
     let quote = "TABLE.DECLARE a\"b PREFIX a: PK id COLUMN id str";
-    assert!(table_ddl(&words(quote)).unwrap_err().contains("no SQL spelling"));
+    assert!(table_ddl(&words(quote)).unwrap_err().to_string().contains("no SQL spelling"));
 }
 
 #[test]
@@ -123,7 +123,7 @@ fn a_select_is_one_literal_query_over_a_declared_table() {
 
 #[test]
 fn a_declaration_that_does_not_read_is_refused_by_name() {
-    let refused = |line: &str| table_ddl(&words(line)).unwrap_err();
+    let refused = |line: &str| table_ddl(&words(line)).unwrap_err().to_string();
     assert!(refused("TABLE.LIST").starts_with("not a TABLE.DECLARE declaration"));
     let head = "TABLE.DECLARE t PREFIX t: PK id";
     assert_eq!(refused(&format!("{head} COLUMN id str COLUMN x")), "COLUMN is cut short");
@@ -152,7 +152,7 @@ fn a_name_sql_cannot_spell_is_refused_wherever_it_appears() {
         "ORDERPATH p ON a THEN q\"x",
     ] {
         let err = table_ddl(&words(&format!("{base} {tail}"))).unwrap_err();
-        assert!(err.contains("no SQL spelling"), "{tail}: {err}");
+        assert!(matches!(err, crate::DeclarationError::Unspellable(_)), "{tail}: {err}");
     }
     let quoted = table_ddl(&words("TABLE.DECLARE T PREFIX T: PK Id COLUMN Id str INDEX Id unique"))
         .expect("renders");

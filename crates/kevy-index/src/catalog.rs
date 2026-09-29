@@ -1,6 +1,7 @@
 //! [`Catalog`] — the index registry: declarations, states, and the
 //! compiled prefix matcher the write-path hook consults.
 
+use crate::error::{CatalogError, Declared};
 use crate::spec::IndexSpec;
 
 /// Declared scalar type of an index (`TYPE i64|f64|str`).
@@ -127,12 +128,12 @@ impl Catalog {
 
     /// Register a new index. Errors on duplicate name / cap; the spec
     /// itself is consistent by construction.
-    pub fn create(&mut self, spec: IndexSpec) -> Result<(), &'static str> {
+    pub fn create(&mut self, spec: IndexSpec) -> Result<(), CatalogError> {
         if self.specs.len() >= MAX_INDEXES {
-            return Err("ERR index limit reached (64)");
+            return Err(CatalogError::Full(Declared::Index));
         }
         if self.specs.iter().any(|(s, _)| s.name == spec.name) {
-            return Err("ERR index already exists");
+            return Err(CatalogError::Exists(Declared::Index));
         }
         self.specs.push((spec, IndexState::Building));
         Ok(())

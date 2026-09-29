@@ -148,7 +148,9 @@ impl Store {
         let next_off = frames.last().map_or(offset, |f| f.offset + 1);
         let mut changes = Vec::with_capacity(frames.len());
         for f in &frames {
-            let Ok((foff, argv, _)) = kevy_replicate::wire::decode_frame(f.bytes) else {
+            let Ok((kevy_replicate::replica::DecodedFrame { offset: foff, argv, .. }, _)) =
+                kevy_replicate::wire::decode_frame(f.bytes)
+            else {
                 continue;
             };
             let owned: Vec<Vec<u8>> = (0..argv.len()).map(|i| argv[i].to_vec()).collect();
@@ -214,7 +216,7 @@ impl Store {
         let budget = usize::try_from(config.feed_buffer_size).unwrap_or(usize::MAX);
         let (generation, next_offset) = match &config.data_dir {
             Some(dir) => {
-                let b = kevy_persist::feed_meta::load_feed_boot(dir, 0)?;
+                let b = kevy_persist::feed_meta::FeedBoot::load(dir, 0)?;
                 (b.generation, b.next_offset)
             }
             None => (1, 0),

@@ -14,6 +14,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+mod config;
 pub mod elector;
 mod elector_inbound;
 mod link;
@@ -35,4 +36,23 @@ mod elector_tests;
 pub use elector::{ElectConfig, ElectJitter, Elector, Outbound};
 pub use message::{Message, Role};
 pub use persist::{ElectorPersist, NoPersist};
-pub use wire::{DecodeError, decode, encode};
+pub use wire::DecodeError;
+
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    const fn send<T: Send>() {}
+    send_sync::<ElectConfig>();
+    send_sync::<ElectJitter>();
+    send_sync::<Outbound>();
+    send_sync::<Message>();
+    send_sync::<Role>();
+    send_sync::<DecodeError>();
+    send_sync::<SecureLinks>();
+    send_sync::<PeerAddr>();
+    send_sync::<ElectorSnapshot>();
+    send_sync::<Transport>();
+    send_sync::<NoPersist>();
+    // the persistence backend is `dyn ElectorPersist + Send`, so the
+    // elector moves between threads but is shared only behind a lock
+    send::<Elector>();
+};

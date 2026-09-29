@@ -54,13 +54,13 @@ pub(crate) fn write_record<W: Write>(w: &mut W, payload: &[u8]) -> io::Result<()
 /// on-disk writer inside this crate uses it too, so there is exactly
 /// one encoding of a record.
 pub fn write_record_multibulk<W: Write, A: ArgvView + ?Sized>(
-    w: &mut W,
+    mut w: W,
     args: &A,
     scratch: &mut Vec<u8>,
 ) -> io::Result<()> {
     scratch.clear();
-    write_multibulk(scratch, args)?;
-    write_record(w, scratch)
+    write_multibulk(&mut *scratch, args)?;
+    write_record(&mut w, scratch)
 }
 
 /// One step of a v2 record walk over an in-memory image.
