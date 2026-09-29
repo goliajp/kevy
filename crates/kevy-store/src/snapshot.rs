@@ -19,6 +19,20 @@ use crate::value::Value;
 use crate::{SmallBytes, Store, now_ns, remaining_ms};
 
 /// A frozen, `Send` view of one store's live entries at a single instant.
+///
+/// ```
+/// use kevy_store::{SetCondition, Store};
+/// let mut s = Store::new();
+/// s.set(b"k", b"before".to_vec(), None, SetCondition::Always);
+/// let view = s.collect_snapshot();
+/// // later writes do not reach the frozen view
+/// s.set(b"k", b"after".to_vec(), None, SetCondition::Always);
+/// s.set(b"new", b"1".to_vec(), None, SetCondition::Always);
+/// assert_eq!(view.len(), 1);
+/// let mut seen = Vec::new();
+/// view.each(|k, v, _| seen.push((k.to_vec(), v.type_name())));
+/// assert_eq!(seen, [(b"k".to_vec(), "string")]);
+/// ```
 #[derive(Debug)]
 pub struct SnapshotView {
     entries: Vec<(SmallBytes, Value, Option<u64>)>,

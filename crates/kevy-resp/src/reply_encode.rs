@@ -4,6 +4,12 @@
 //! initial reserve.
 
 /// `+<s>\r\n`
+///
+/// ```
+/// let mut out = Vec::new();
+/// kevy_resp::encode_simple_string(&mut out, "OK");
+/// assert_eq!(out, b"+OK\r\n");
+/// ```
 pub fn encode_simple_string(out: &mut Vec<u8>, s: &str) {
     out.push(b'+');
     out.extend_from_slice(s.as_bytes());
@@ -11,6 +17,12 @@ pub fn encode_simple_string(out: &mut Vec<u8>, s: &str) {
 }
 
 /// `-<s>\r\n`
+///
+/// ```
+/// let mut out = Vec::new();
+/// kevy_resp::encode_error(&mut out, "ERR unknown command");
+/// assert_eq!(out, b"-ERR unknown command\r\n");
+/// ```
 pub fn encode_error(out: &mut Vec<u8>, s: &str) {
     out.push(b'-');
     out.extend_from_slice(s.as_bytes());
@@ -18,6 +30,12 @@ pub fn encode_error(out: &mut Vec<u8>, s: &str) {
 }
 
 /// `:<n>\r\n`
+///
+/// ```
+/// let mut out = Vec::new();
+/// kevy_resp::encode_integer(&mut out, -42);
+/// assert_eq!(out, b":-42\r\n");
+/// ```
 pub fn encode_integer(out: &mut Vec<u8>, n: i64) {
     out.push(b':');
     push_int(out, n);
@@ -25,6 +43,13 @@ pub fn encode_integer(out: &mut Vec<u8>, n: i64) {
 }
 
 /// `$<len>\r\n<data>\r\n`
+///
+/// ```
+/// let mut out = Vec::new();
+/// kevy_resp::encode_bulk(&mut out, b"a\r\nb");
+/// // binary-safe: the length prefix frames the CRLF inside the payload
+/// assert_eq!(out, b"$4\r\na\r\nb\r\n");
+/// ```
 pub fn encode_bulk(out: &mut Vec<u8>, data: &[u8]) {
     // Reserve the whole frame up front so a fresh reply buffer (the common case:
     // dispatch hands each command an empty `Vec`) fills without repeated reallocs
@@ -39,11 +64,31 @@ pub fn encode_bulk(out: &mut Vec<u8>, data: &[u8]) {
 }
 
 /// `$-1\r\n` — the RESP2 null bulk string.
+///
+/// ```
+/// use kevy_resp::{Reply, encode_null_bulk, parse_reply};
+///
+/// let mut out = Vec::new();
+/// encode_null_bulk(&mut out);
+/// assert_eq!(out, b"$-1\r\n");
+/// assert_eq!(parse_reply(&out)?, Some((Reply::Nil, 5)));
+/// # Ok::<(), kevy_resp::ProtocolError>(())
+/// ```
 pub fn encode_null_bulk(out: &mut Vec<u8>) {
     out.extend_from_slice(b"$-1\r\n");
 }
 
 /// `*<len>\r\n` — an array header; follow with `len` encoded elements.
+///
+/// ```
+/// use kevy_resp::{encode_array_len, encode_bulk, encode_integer};
+///
+/// let mut out = Vec::new();
+/// encode_array_len(&mut out, 2);
+/// encode_bulk(&mut out, b"x");
+/// encode_integer(&mut out, 7);
+/// assert_eq!(out, b"*2\r\n$1\r\nx\r\n:7\r\n");
+/// ```
 pub fn encode_array_len(out: &mut Vec<u8>, len: i64) {
     out.push(b'*');
     push_int(out, len);
@@ -53,6 +98,18 @@ pub fn encode_array_len(out: &mut Vec<u8>, len: i64) {
 /// Encode a command as a RESP multi-bulk request (client → server):
 /// `*N\r\n$len\r\n<arg>\r\n…`. The inverse of
 /// [`parse_command`](crate::parse_command).
+///
+/// ```
+/// use kevy_resp::{encode_command, parse_command};
+///
+/// let args = vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()];
+/// let mut out = Vec::new();
+/// encode_command(&mut out, &args);
+/// assert_eq!(out, b"*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$1\r\nv\r\n");
+/// let (back, _) = parse_command(&out)?.expect("complete frame");
+/// assert_eq!(back, args);
+/// # Ok::<(), kevy_resp::ProtocolError>(())
+/// ```
 pub fn encode_command(out: &mut Vec<u8>, args: &[Vec<u8>]) {
     encode_array_len(out, args.len() as i64);
     for a in args {
@@ -65,6 +122,12 @@ pub fn encode_command(out: &mut Vec<u8>, args: &[Vec<u8>]) {
 /// caller pass a stack-allocated `[&[u8]; N]` and skip the per-call
 /// `Vec<Vec<u8>>` argv allocation — measured win on the
 /// `kevy-client::Connection` single-connection path.
+///
+/// ```
+/// let mut out = Vec::new();
+/// kevy_resp::encode_command_borrowed(&mut out, &[b"GET".as_slice(), b"k"]);
+/// assert_eq!(out, b"*2\r\n$3\r\nGET\r\n$1\r\nk\r\n");
+/// ```
 pub fn encode_command_borrowed<A: AsRef<[u8]>>(out: &mut Vec<u8>, args: &[A]) {
     encode_array_len(out, args.len() as i64);
     for a in args {

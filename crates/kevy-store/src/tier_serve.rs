@@ -42,66 +42,13 @@ fn decoded_hash_fields(value: &crate::Value, fields: &[&[u8]]) -> Vec<Option<Vec
 
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 mod enabled {
-    use std::sync::Arc;
-
-    use kevy_vlog::{VlogFile, VlogRef, verify_image};
+    use kevy_vlog::verify_image;
 
     use crate::value::{COLD_TAG_HASH, ColdRef, Value};
     use crate::{Entry, Store, StoreError};
     use kevy_bytes::SmallBytes;
 
-    /// One planned cold-record read in a [`Store::peek_hash_rows`]
-    /// batch. The pinned file keeps the record readable even if a
-    /// compaction retires the file mid-batch.
-    #[derive(Debug, Clone)]
-    #[non_exhaustive]
-    pub struct ColdRead {
-        /// Pinned vlog file the record lives in.
-        pub file: Arc<VlogFile>,
-        /// Record address; the image to fetch is `vref.disk_len()`
-        /// bytes at `vref.offset`.
-        pub vref: VlogRef,
-    }
-
-    /// The read-issuance half of a cold batch: fetch every record
-    /// image, in `reads` order. [`SyncColdRead`] is the ordered
-    /// positional-read loop (poller reactors + embedded); the server's
-    /// io_uring backend submits the batch to a secondary ring instead.
-    ///
-    /// Open for implementation, so a host can issue the reads its own
-    /// way. An implementation must return exactly one image per read, in
-    /// `reads` order, each the `vref.disk_len()` bytes at `vref.offset` of
-    /// `file` (the store verifies and decodes them, so a wrong byte is
-    /// caught, but a missing or reordered image pairs a record with the
-    /// wrong key); an `Err` fails the whole batch, and the store treats
-    /// none of it as read.
-    pub trait ColdBatchReader {
-        /// Fetch each `reads[i]`'s raw image (`vref.disk_len()` bytes
-        /// at `vref.offset`, unverified — the store runs
-        /// [`verify_image`] + decode on completion). Returns the images
-        /// plus the number of kernel submissions made (1 for the sync
-        /// loop, ceil(n / ring entries) for a ring).
-        fn read_batch(&mut self, reads: &[ColdRead]) -> std::io::Result<(Vec<Vec<u8>>, u64)>;
-    }
-
-    /// The default reader: one ordered `pread` per record.
-    #[derive(Debug)]
-    pub struct SyncColdRead;
-
-    impl ColdBatchReader for SyncColdRead {
-        fn read_batch(&mut self, reads: &[ColdRead]) -> std::io::Result<(Vec<Vec<u8>>, u64)> {
-            let mut images = Vec::with_capacity(reads.len());
-            for r in reads {
-                images.push(r.file.read_image(r.vref)?);
-            }
-            Ok((images, 1))
-        }
-    }
-
-    /// One peeked row: the per-field values of a live hash
-    /// (`Ok(Some(..))`, one `Option` per requested field), a missing
-    /// key (`Ok(None)`), or a non-hash (`Err(WrongType)`).
-    pub type PeekRow = Result<Option<Vec<Option<Vec<u8>>>>, StoreError>;
+    pub use crate::tier_batch::{ColdBatchReader, ColdRead, PeekRow, SyncColdRead};
 
     /// Stage-1 verdict for one peeked key (zero IO — the stub's tag
     /// answers WRONGTYPE without a pread).

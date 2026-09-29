@@ -225,12 +225,32 @@ impl Store {
 #[non_exhaustive]
 pub enum BitOp {
     /// Bitwise AND across source keys.
+    ///
+    /// ```
+    /// use kevy_store::BitOp;
+    /// assert_eq!(BitOp::And.combine(&[vec![0b1100], vec![0b1010]], 1), vec![0b1000]);
+    /// ```
     And,
     /// Bitwise OR across source keys.
+    ///
+    /// ```
+    /// use kevy_store::BitOp;
+    /// assert_eq!(BitOp::Or.combine(&[vec![0b1100], vec![0b1010]], 1), vec![0b1110]);
+    /// ```
     Or,
     /// Bitwise XOR across source keys.
+    ///
+    /// ```
+    /// use kevy_store::BitOp;
+    /// assert_eq!(BitOp::Xor.combine(&[vec![0b1100], vec![0b1010]], 1), vec![0b0110]);
+    /// ```
     Xor,
     /// Bitwise NOT — exactly one source key.
+    ///
+    /// ```
+    /// use kevy_store::BitOp;
+    /// assert_eq!(BitOp::Not.combine(&[vec![0x0f]], 1), vec![0xf0]);
+    /// ```
     Not,
 }
 

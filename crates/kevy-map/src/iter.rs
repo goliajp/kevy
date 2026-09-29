@@ -6,6 +6,16 @@ use core::mem::MaybeUninit;
 use crate::map::KevyMap;
 
 /// `(&K, &V)` iterator over all live entries of a [`KevyMap`]; order unspecified.
+///
+/// ```
+/// use kevy_map::KevyMap;
+/// let mut m: KevyMap<u64, &str> = KevyMap::new();
+/// m.insert(1, "a");
+/// m.insert(2, "b");
+/// let mut pairs: Vec<(u64, &str)> = m.iter().map(|(k, v)| (*k, *v)).collect();
+/// pairs.sort();
+/// assert_eq!(pairs, [(1, "a"), (2, "b")]);
+/// ```
 #[derive(Debug)]
 pub struct Iter<'a, K, V> {
     metadata: &'a [u8],
@@ -68,6 +78,17 @@ impl<'a, K, V> IntoIterator for &'a KevyMap<K, V> {
 
 /// `(&K, &mut V)` iterator over all live entries of a [`KevyMap`]; order
 /// unspecified. Keys stay shared — mutating a key would corrupt its bucket.
+///
+/// ```
+/// use kevy_map::KevyMap;
+/// let mut m: KevyMap<u64, u64> = KevyMap::new();
+/// m.insert(1, 10);
+/// m.insert(2, 20);
+/// for (_, v) in m.iter_mut() {
+///     *v += 1;
+/// }
+/// assert_eq!((m.get(&1), m.get(&2)), (Some(&11), Some(&21)));
+/// ```
 #[derive(Debug)]
 pub struct IterMut<'a, K, V> {
     metadata: &'a [u8],
@@ -111,6 +132,16 @@ impl<'a, K, V> IntoIterator for &'a mut KevyMap<K, V> {
 }
 
 /// `&K` iterator over all live entries of a [`KevyMap`].
+///
+/// ```
+/// use kevy_map::KevyMap;
+/// let mut m: KevyMap<u64, ()> = KevyMap::new();
+/// m.insert(3, ());
+/// m.insert(1, ());
+/// let mut keys: Vec<u64> = m.keys().copied().collect();
+/// keys.sort();
+/// assert_eq!(keys, [1, 3]);
+/// ```
 #[derive(Debug)]
 pub struct Keys<'a, K, V>(Iter<'a, K, V>);
 
@@ -128,6 +159,14 @@ impl<'a, K, V> Iterator for Keys<'a, K, V> {
 }
 
 /// `&V` iterator over all live entries of a [`KevyMap`].
+///
+/// ```
+/// use kevy_map::KevyMap;
+/// let mut m: KevyMap<u64, u64> = KevyMap::new();
+/// m.insert(1, 5);
+/// m.insert(2, 7);
+/// assert_eq!(m.values().sum::<u64>(), 12);
+/// ```
 #[derive(Debug)]
 pub struct Values<'a, K, V>(Iter<'a, K, V>);
 

@@ -39,6 +39,18 @@
 use kevy_bytes::SmallBytes;
 
 /// Inline packed hash storage. 24 bytes total.
+///
+/// ```
+/// use kevy_store::{Store, Value};
+/// let mut s = Store::new();
+/// s.hset(b"h", &[(b"name".as_slice(), b"ada".as_slice())])?;
+/// s.snapshot_each(|_, v, _| {
+///     let Value::SmallHashInline(h) = v else { panic!("a one-field hash stays inline") };
+///     assert_eq!(h.len(), 1);
+///     assert_eq!(h.get(b"name"), Some(&b"ada"[..]));
+/// });
+/// # Ok::<(), kevy_store::StoreError>(())
+/// ```
 #[derive(Debug, Clone)]
 pub struct SmallHashData {
     count: u8,
@@ -215,6 +227,21 @@ impl SmallHashData {
 }
 
 /// Iterator over [`SmallHashData`] yielding `(&[u8] field, &[u8] value)`.
+///
+/// ```
+/// use kevy_store::{Store, Value};
+/// let mut s = Store::new();
+/// s.hset(b"h", &[(b"a".as_slice(), b"1".as_slice()), (b"b", b"2")])?;
+/// let mut pairs = Vec::new();
+/// s.snapshot_each(|_, v, _| {
+///     if let Value::SmallHashInline(h) = v {
+///         pairs = h.iter().map(|(f, v)| (f.to_vec(), v.to_vec())).collect();
+///     }
+/// });
+/// pairs.sort();
+/// assert_eq!(pairs, [(b"a".to_vec(), b"1".to_vec()), (b"b".to_vec(), b"2".to_vec())]);
+/// # Ok::<(), kevy_store::StoreError>(())
+/// ```
 #[derive(Debug)]
 pub struct SmallHashIter<'a> {
     buf: &'a [u8],

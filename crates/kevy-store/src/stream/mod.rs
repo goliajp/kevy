@@ -23,173 +23,11 @@ use kevy_map::KevyMap;
 use crate::StoreError;
 use crate::value::{BTREE_SLOT_BYTES, SmallBytes};
 
-// ───────────── StreamId ─────────────
-
-/// A stream entry's `<ms>-<seq>` identifier. The `Ord` derivation compares
-/// `ms` first then `seq`, which is exactly the monotonic order the protocol
-/// requires; same derivation gives `Eq`, `Hash`, and the `BTreeMap` key bound.
-///
-/// ```
-/// use kevy_store::StreamId;
-/// let id = StreamId::new(5, 2);
-/// assert_eq!((id.ms, id.seq), (5, 2));
-/// assert_eq!(id.encode(), b"5-2");
-/// assert!(id < StreamId::new(6, 0));
-/// ```
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Default)]
-#[non_exhaustive]
-pub struct StreamId {
-    /// Unix milliseconds timestamp component.
-    pub ms: u64,
-    /// Per-ms sequence number, 0-based.
-    pub seq: u64,
-}
-
-impl StreamId {
-    /// The numerically smallest ID; XRANGE `-` start.
-    pub const MIN: StreamId = StreamId::new(0, 0);
-    /// The numerically largest representable ID; XRANGE `+` end.
-    pub const MAX: StreamId = StreamId::new(u64::MAX, u64::MAX);
-
-    /// The ID `<ms>-<seq>`.
-    ///
-    /// ```
-    /// assert_eq!(kevy_store::StreamId::new(0, 0), kevy_store::StreamId::MIN);
-    /// ```
-    pub const fn new(ms: u64, seq: u64) -> Self {
-        Self { ms, seq }
-    }
-
-    /// Render as the canonical `<ms>-<seq>` wire form.
-    pub fn encode(self) -> Vec<u8> {
-        format!("{}-{}", self.ms, self.seq).into_bytes()
-    }
-
-    /// Step one ID past `self`. Saturates at [`Self::MAX`].
-    #[must_use]
-    pub fn next(self) -> Self {
-        if self.seq < u64::MAX {
-            StreamId::new(self.ms, self.seq + 1)
-        } else if self.ms < u64::MAX {
-            StreamId::new(self.ms + 1, 0)
-        } else {
-            StreamId::MAX
-        }
-    }
-}
-
-/// XADD's ID argument: either an explicit `<ms>-<seq>` (both parts may
-/// be `*` to auto-fill `seq` only) or fully auto-generate via `*`.
-///
-/// ```
-/// use kevy_store::{StreamId, XAddIdSpec, parse_xadd_id};
-/// assert_eq!(parse_xadd_id(b"*"), Ok(XAddIdSpec::AutoAll));
-/// assert_eq!(parse_xadd_id(b"7-*"), Ok(XAddIdSpec::AutoSeq(7)));
-/// assert_eq!(parse_xadd_id(b"7-1"), Ok(XAddIdSpec::Explicit(StreamId::new(7, 1))));
-/// ```
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-#[non_exhaustive]
-pub enum XAddIdSpec {
-    /// `*` — generate both `ms` (= current wall-clock) and `seq`.
-    AutoAll,
-    /// `<ms>-*` — caller fixes `ms`, server picks the next free `seq`.
-    AutoSeq(u64),
-    /// `<ms>-<seq>` — caller fully specifies the ID.
-    Explicit(StreamId),
-}
-
-/// Parse an XADD ID argument (`*`, `ms`, `ms-*`, `ms-seq`).
-pub fn parse_xadd_id(s: &[u8]) -> Result<XAddIdSpec, StreamIdError> {
-    if s == b"*" {
-        return Ok(XAddIdSpec::AutoAll);
-    }
-    let txt = core::str::from_utf8(s).map_err(|_| StreamIdError::Invalid)?;
-    match txt.split_once('-') {
-        None => {
-            let ms = txt.parse::<u64>().map_err(|_| StreamIdError::Invalid)?;
-            Ok(XAddIdSpec::Explicit(StreamId::new(ms, 0)))
-        }
-        Some((ms_s, seq_s)) => {
-            let ms = ms_s.parse::<u64>().map_err(|_| StreamIdError::Invalid)?;
-            if seq_s == "*" {
-                Ok(XAddIdSpec::AutoSeq(ms))
-            } else {
-                let seq = seq_s.parse::<u64>().map_err(|_| StreamIdError::Invalid)?;
-                Ok(XAddIdSpec::Explicit(StreamId::new(ms, seq)))
-            }
-        }
-    }
-}
-
-/// Parse an XRANGE `start` ID. Accepts `-` (= [`StreamId::MIN`]), bare
-/// `ms` (seq=0), and full `ms-seq`.
-pub fn parse_range_start(s: &[u8]) -> Result<StreamId, StreamIdError> {
-    if s == b"-" {
-        return Ok(StreamId::MIN);
-    }
-    parse_explicit_id(s)
-}
-
-/// Parse an XRANGE `end` ID. Accepts `+` (= [`StreamId::MAX`]), bare `ms`
-/// (seq=u64::MAX so the entire ms is included), and full `ms-seq`.
-pub fn parse_range_end(s: &[u8]) -> Result<StreamId, StreamIdError> {
-    if s == b"+" {
-        return Ok(StreamId::MAX);
-    }
-    parse_id(s, u64::MAX)
-}
-
-/// Parse a fully-explicit ID for XREAD's per-stream "last-seen" arg
-/// (`0`, `0-0`, `5-2`). `$` is handled by the caller (it means "the
-/// stream's current `last_id`", which only Store can resolve).
-///
-/// A bare `ms` means `<ms>-0`, the first ID of that millisecond.
-///
-/// ```
-/// use kevy_store::{StreamId, parse_explicit_id};
-/// assert_eq!(parse_explicit_id(b"5"), Ok(StreamId::new(5, 0)));
-/// assert_eq!(parse_explicit_id(b"5-2"), Ok(StreamId::new(5, 2)));
-/// assert!(parse_explicit_id(b"$").is_err());
-/// ```
-pub fn parse_explicit_id(s: &[u8]) -> Result<StreamId, StreamIdError> {
-    parse_id(s, 0)
-}
-
-/// `<ms>[-<seq>]`, with `bare_seq` standing in for a missing `-<seq>`.
-fn parse_id(s: &[u8], bare_seq: u64) -> Result<StreamId, StreamIdError> {
-    let txt = core::str::from_utf8(s).map_err(|_| StreamIdError::Invalid)?;
-    let (ms_s, seq) = match txt.split_once('-') {
-        Some((ms_s, seq_s)) => (ms_s, seq_s.parse::<u64>().map_err(|_| StreamIdError::Invalid)?),
-        None => (txt, bare_seq),
-    };
-    let ms = ms_s.parse::<u64>().map_err(|_| StreamIdError::Invalid)?;
-    Ok(StreamId::new(ms, seq))
-}
-
-/// Errors `parse_*_id` may emit. Distinct from `StoreError::NotInteger`
-/// so callers can map to the more specific Redis wire shape (`ERR
-/// Invalid stream ID specified as stream command argument`).
-///
-/// ```
-/// let e = kevy_store::parse_explicit_id(b"x").unwrap_err();
-/// assert_eq!(e.to_string(), "invalid stream id");
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum StreamIdError {
-    /// Couldn't parse the bytes as `<ms>[-<seq>]` / `*` / `-` / `+`.
-    Invalid,
-}
-
-impl core::fmt::Display for StreamIdError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::Invalid => f.write_str("invalid stream id"),
-        }
-    }
-}
-
-impl core::error::Error for StreamIdError {}
+mod id;
+pub use id::{
+    StreamId, StreamIdError, XAddIdSpec, parse_explicit_id, parse_range_end, parse_range_start,
+    parse_xadd_id,
+};
 
 // ───────────── StreamData ─────────────
 
@@ -197,6 +35,16 @@ impl core::error::Error for StreamIdError {}
 /// scalar state Redis exposes via `XINFO STREAM`, plus the consumer
 /// groups map (sprint B). An empty `groups` map costs ~8 bytes and
 /// makes the no-group fast path (sprint A XADD/XREAD) zero-overhead.
+///
+/// ```
+/// use kevy_store::{MissingStream, Store, StreamId, XAddIdSpec};
+/// let mut s = Store::new();
+/// let fields = vec![(b"temp".to_vec(), b"21".to_vec())];
+/// s.xadd(b"s", XAddIdSpec::Explicit(StreamId::new(5, 0)), fields, MissingStream::Create, 0)?;
+/// let stream = s.stream_view(b"s")?.unwrap();
+/// assert_eq!((stream.length(), stream.last_id()), (1, StreamId::new(5, 0)));
+/// # Ok::<(), kevy_store::StoreError>(())
+/// ```
 #[derive(Debug, Default, Clone)]
 pub struct StreamData {
     /// Sorted entries; the `BTreeMap` enforces strict-increasing IDs.
@@ -456,6 +304,15 @@ pub use store::EntryBatch;
 /// Snapshot-loader payload: one stream entry decoded into primitive
 /// tuples `(ms, seq, [(field, value), ...])`. The persist crate emits
 /// these and `Store::load_stream` consumes them.
+///
+/// ```
+/// use kevy_store::{LoadedStreamEntry, Store, StreamId};
+/// let mut s = Store::new();
+/// let entries: Vec<LoadedStreamEntry> = vec![(5, 0, vec![(b"f".to_vec(), b"v".to_vec())])];
+/// s.load_stream(b"s".to_vec(), entries, (5, 0), (0, 0), 1, Vec::new(), None);
+/// assert_eq!(s.xread_dollar_last_id(b"s")?, StreamId::new(5, 0));
+/// # Ok::<(), kevy_store::StoreError>(())
+/// ```
 pub type LoadedStreamEntry = (u64, u64, Vec<(Vec<u8>, Vec<u8>)>);
 
 // ───────────── small helpers (shared with `store.rs`) ─────────────
@@ -465,6 +322,11 @@ pub type LoadedStreamEntry = (u64, u64, Vec<(Vec<u8>, Vec<u8>)>);
 /// back to 0 on a pre-UNIX-EPOCH clock — impossible on supported platforms);
 /// on `wasm32-unknown-unknown`, where `SystemTime::now()` traps, reads the
 /// host-fed wall clock (see `crate::set_wall_clock_ms`, wasm-only).
+///
+/// ```
+/// let now = kevy_store::now_unix_ms();
+/// assert!(now > 1_600_000_000_000); // after September 2020, in milliseconds
+/// ```
 #[cfg(not(any(feature = "external-clock", all(target_arch = "wasm32", target_os = "unknown"))))]
 pub fn now_unix_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)

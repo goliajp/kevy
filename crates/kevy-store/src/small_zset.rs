@@ -32,6 +32,18 @@
 //! - `buf` ([u8; 22]): packed `[score:8][len:1][member:len]` entries.
 
 /// Inline packed sorted-set storage. 24 bytes total.
+///
+/// ```
+/// use kevy_store::{Store, Value};
+/// let mut s = Store::new();
+/// s.zadd(b"z", &[(1.5, b"a".as_slice())])?;
+/// s.snapshot_each(|_, v, _| {
+///     let Value::SmallZSetInline(z) = v else { panic!("a one-member zset stays inline") };
+///     assert_eq!(z.score(b"a"), Some(1.5));
+///     assert_eq!(z.score(b"b"), None);
+/// });
+/// # Ok::<(), kevy_store::StoreError>(())
+/// ```
 #[derive(Debug, Clone)]
 pub struct SmallZSetData {
     count: u8,
@@ -169,6 +181,22 @@ impl SmallZSetData {
 }
 
 /// Iterator over [`SmallZSetData`] yielding `(member, score)`.
+///
+/// ```
+/// use kevy_store::{Store, Value};
+/// let mut s = Store::new();
+/// s.zadd(b"z", &[(2.0, b"b".as_slice())])?;
+/// s.zadd(b"z", &[(1.0, b"a".as_slice())])?;
+/// let mut pairs = Vec::new();
+/// s.snapshot_each(|_, v, _| {
+///     if let Value::SmallZSetInline(z) = v {
+///         pairs = z.iter().map(|(m, sc)| (m.to_vec(), sc)).collect();
+///     }
+/// });
+/// pairs.sort_by(|a, b| a.1.total_cmp(&b.1));
+/// assert_eq!(pairs, [(b"a".to_vec(), 1.0), (b"b".to_vec(), 2.0)]);
+/// # Ok::<(), kevy_store::StoreError>(())
+/// ```
 #[derive(Debug)]
 pub struct SmallZSetIter<'a> {
     buf: &'a [u8],

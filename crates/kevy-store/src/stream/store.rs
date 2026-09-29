@@ -18,6 +18,22 @@ use alloc::sync::Arc;
 /// Cloned-out view of stream entries, the cross-module wire form. Keeps
 /// the same shape Redis sends and lets the callers stay decoupled from
 /// the `SmallBytes` interning the store uses internally.
+///
+/// ```
+/// # use kevy_store::*;
+/// # let mut s = Store::new();
+/// # for t in [1, 2] {
+/// #     let f = vec![(b"f".to_vec(), b"v".to_vec())];
+/// #     s.xadd(b"s", XAddIdSpec::AutoAll, f, MissingStream::Create, t)?;
+/// # }
+/// # s.xgroup_create(b"s", b"g", GroupCreateMode::AtId(StreamId::MIN), MissingStream::Refuse)?;
+/// # s.xreadgroup(b"s", b"g", b"alice", ReadGroupId::New, None, AckMode::Pending, 100)?;
+/// let batch: EntryBatch = s.xrange(b"s", StreamId::MIN, StreamId::MAX, None)?;
+/// assert_eq!(batch.len(), 2);
+/// let (id, fields) = &batch[0];
+/// assert_eq!((*id, fields.as_slice()), (StreamId::new(1, 0), [(b"f".to_vec(), b"v".to_vec())].as_slice()));
+/// # Ok::<(), kevy_store::StoreError>(())
+/// ```
 pub type EntryBatch = Vec<(StreamId, Vec<(Vec<u8>, Vec<u8>)>)>;
 
 impl Store {

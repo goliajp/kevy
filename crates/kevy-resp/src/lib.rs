@@ -44,6 +44,7 @@ pub mod fuzz;
 mod inline_ranges;
 pub mod ops_table;
 mod pubsub_event;
+mod reply;
 mod reply_encode;
 mod reply_encode_resp3;
 mod reply_parse;
@@ -57,6 +58,7 @@ pub use argv_pool::ArgvPool;
 pub use argv_view::{ArgvIter, ArgvView};
 pub use error::{CmdError, ProtocolError};
 pub use pubsub_event::PubsubEvent;
+pub use reply::Reply;
 pub use reply_encode::{
     encode_array_len, encode_bulk, encode_command, encode_command_borrowed, encode_error,
     encode_integer, encode_null_bulk, encode_simple_string,
@@ -65,7 +67,7 @@ pub use reply_encode_resp3::{
     encode_big_number, encode_blob_error, encode_boolean, encode_double, encode_map_header,
     encode_null, encode_push_header, encode_set_header, encode_verbatim,
 };
-pub use reply_parse::{Reply, TextedReply, parse_reply, parse_reply_keeping_double_text};
+pub use reply_parse::{TextedReply, parse_reply, parse_reply_keeping_double_text};
 pub use request::{MAX_BULK_LEN, MAX_MULTIBULK_LEN, parse_command, parse_command_into};
 pub use request_borrowed::parse_command_borrowed;
 
@@ -81,14 +83,41 @@ pub use request_borrowed::parse_command_borrowed;
 /// Stored per-connection in `kevy-rt` and forwarded to dispatch so each
 /// reply encoder can pick the right wire shape — see the kevy v2 RESP3
 /// design notes for the full phase plan.
+///
+/// ```
+/// use kevy_resp::RespVersion;
+///
+/// // a connection starts on RESP2 until the client sends `HELLO 3`
+/// let mut version = RespVersion::default();
+/// assert_eq!(version, RespVersion::V2);
+/// version = RespVersion::V3;
+/// assert_ne!(version, RespVersion::V2);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RespVersion {
     /// RESP2 — every reply is one of the seven legacy prefixes
     /// (`+ - : $ * $-1 *-1`). Default for backward compatibility.
+    ///
+    /// ```
+    /// use kevy_resp::RespVersion;
+    /// assert_eq!(RespVersion::default(), RespVersion::V2);
+    /// ```
     #[default]
     V2,
     /// RESP3 — adds 9 reply prefixes (`% ~ , # = ( _ > !`) plus
     /// attributes (`|`). Opt-in via `HELLO 3`.
+    ///
+    /// ```
+    /// use kevy_resp::{RespVersion, encode_boolean};
+    ///
+    /// // RESP3-only reply types are written once the connection is on V3
+    /// let version = RespVersion::V3;
+    /// let mut out = Vec::new();
+    /// if version == RespVersion::V3 {
+    ///     encode_boolean(&mut out, true);
+    /// }
+    /// assert_eq!(out, b"#t\r\n");
+    /// ```
     V3,
 }
 

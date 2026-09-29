@@ -20,10 +20,35 @@ use core::fmt;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RenameOutcome {
     /// Source removed, destination created (overwriting any prior dst).
+    ///
+    /// ```
+    /// use kevy_store::{RenameOutcome, SetCondition, Store};
+    /// let mut s = Store::new();
+    /// s.set(b"a", b"1".to_vec(), None, SetCondition::Always);
+    /// assert_eq!(s.rename(b"a", b"b"), RenameOutcome::Renamed);
+    /// assert_eq!(s.get(b"b")?.as_deref(), Some(&b"1"[..]));
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
     Renamed,
     /// Source key doesn't exist.
+    ///
+    /// ```
+    /// use kevy_store::{RenameOutcome, Store};
+    /// let mut s = Store::new();
+    /// assert_eq!(s.rename(b"missing", b"b"), RenameOutcome::NoSuchSrc);
+    /// ```
     NoSuchSrc,
     /// `RENAMENX` only — destination already exists, no rename done.
+    ///
+    /// ```
+    /// use kevy_store::{RenameOutcome, SetCondition, Store};
+    /// let mut s = Store::new();
+    /// s.set(b"a", b"1".to_vec(), None, SetCondition::Always);
+    /// s.set(b"b", b"2".to_vec(), None, SetCondition::Always);
+    /// assert_eq!(s.rename_nx(b"a", b"b"), RenameOutcome::DstExists);
+    /// assert_eq!(s.get(b"a")?.as_deref(), Some(&b"1"[..]));
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
     DstExists,
 }
 
@@ -41,20 +66,71 @@ pub enum RenameOutcome {
 #[non_exhaustive]
 pub enum StoreError {
     /// Key holds a different type than the command expects.
+    ///
+    /// ```
+    /// use kevy_store::{Store, StoreError};
+    /// let mut s = Store::new();
+    /// s.rpush(b"l", &[b"x".as_slice()])?;
+    /// assert_eq!(s.get(b"l"), Err(StoreError::WrongType));
+    /// # Ok::<(), StoreError>(())
+    /// ```
     WrongType,
     /// Value is not a base-10 integer (INCR family).
+    ///
+    /// ```
+    /// use kevy_store::{SetCondition, Store, StoreError};
+    /// let mut s = Store::new();
+    /// s.set(b"k", b"ten".to_vec(), None, SetCondition::Always);
+    /// assert_eq!(s.incr_by(b"k", 1), Err(StoreError::NotInteger));
+    /// ```
     NotInteger,
     /// Result would overflow `i64`.
+    ///
+    /// ```
+    /// use kevy_store::{SetCondition, Store, StoreError};
+    /// let mut s = Store::new();
+    /// s.set(b"k", i64::MAX.to_string().into_bytes(), None, SetCondition::Always);
+    /// assert_eq!(s.incr_by(b"k", 1), Err(StoreError::Overflow));
+    /// ```
     Overflow,
     /// Index outside the collection (LSET).
+    ///
+    /// ```
+    /// use kevy_store::{Store, StoreError};
+    /// let mut s = Store::new();
+    /// s.rpush(b"l", &[b"a".as_slice()])?;
+    /// assert_eq!(s.lset(b"l", 5, b"x"), Err(StoreError::OutOfRange));
+    /// # Ok::<(), StoreError>(())
+    /// ```
     OutOfRange,
     /// Key does not exist where the command requires one (LSET).
+    ///
+    /// ```
+    /// use kevy_store::{Store, StoreError};
+    /// let mut s = Store::new();
+    /// assert_eq!(s.lset(b"missing", 0, b"x"), Err(StoreError::NoSuchKey));
+    /// ```
     NoSuchKey,
     /// Value is not a valid float (INCRBYFLOAT).
+    ///
+    /// ```
+    /// use kevy_store::{SetCondition, Store, StoreError};
+    /// let mut s = Store::new();
+    /// s.set(b"k", b"pi".to_vec(), None, SetCondition::Always);
+    /// assert_eq!(s.incr_by_float(b"k", 1.0), Err(StoreError::NotFloat));
+    /// ```
     NotFloat,
     /// `maxmemory` would be exceeded and the active eviction policy is
     /// [`EvictionPolicy::NoEviction`]. Surfaces as Redis's classic OOM error
     /// at the RESP layer.
+    ///
+    /// ```
+    /// use kevy_store::{EvictionPolicy, SetCondition, Store, StoreError};
+    /// let mut s = Store::new();
+    /// s.set_max_memory(1, EvictionPolicy::NoEviction);
+    /// s.set(b"k", b"v".to_vec(), None, SetCondition::Always);
+    /// assert_eq!(s.precheck_for_write(), Err(StoreError::OutOfMemory));
+    /// ```
     OutOfMemory,
 }
 
@@ -108,21 +184,102 @@ impl core::error::Error for StoreError {}
 #[non_exhaustive]
 pub enum EvictionPolicy {
     /// Refuse writes once `maxmemory` is hit. Default.
+    ///
+    /// ```
+    /// use kevy_store::{EvictionPolicy, SetCondition, Store, StoreError};
+    /// let mut s = Store::new();
+    /// s.set_max_memory(1, EvictionPolicy::NoEviction);
+    /// s.set(b"k", b"v".to_vec(), None, SetCondition::Always);
+    /// // nothing is evicted; the next write is refused instead
+    /// assert_eq!(s.try_evict_after_write(), 0);
+    /// assert_eq!(s.precheck_for_write(), Err(StoreError::OutOfMemory));
+    /// ```
     #[default]
     NoEviction,
     /// Approximated LRU across all keys.
+    ///
+    /// ```
+    /// use kevy_store::{EvictionPolicy, SetCondition, Store};
+    /// let mut s = Store::new();
+    /// s.set_max_memory(1, EvictionPolicy::AllKeysLru);
+    /// s.set(b"k", b"v".to_vec(), None, SetCondition::Always);
+    /// assert_eq!(s.try_evict_after_write(), 1);
+    /// assert_eq!(s.dbsize(), 0);
+    /// ```
     AllKeysLru,
     /// Approximated LFU across all keys.
+    ///
+    /// ```
+    /// use kevy_store::{EvictionPolicy, SetCondition, Store};
+    /// let mut s = Store::new();
+    /// s.set_max_memory(1, EvictionPolicy::AllKeysLfu);
+    /// s.set(b"k", b"v".to_vec(), None, SetCondition::Always);
+    /// assert_eq!(s.try_evict_after_write(), 1);
+    /// assert_eq!(s.evictions_total(), 1);
+    /// ```
     AllKeysLfu,
     /// Random key across all keys.
+    ///
+    /// ```
+    /// use kevy_store::{EvictionPolicy, SetCondition, Store};
+    /// let mut s = Store::new();
+    /// s.set_max_memory(1, EvictionPolicy::AllKeysRandom);
+    /// s.set(b"a", b"1".to_vec(), None, SetCondition::Always);
+    /// s.set(b"b", b"2".to_vec(), None, SetCondition::Always);
+    /// assert_eq!(s.try_evict_after_write(), 2);
+    /// ```
     AllKeysRandom,
     /// Approximated LRU across keys with a TTL.
+    ///
+    /// ```
+    /// use core::time::Duration;
+    /// use kevy_store::{EvictionPolicy, SetCondition, Store};
+    /// let mut s = Store::new();
+    /// s.set_max_memory(1, EvictionPolicy::VolatileLru);
+    /// s.set(b"cache", b"1".to_vec(), Some(Duration::from_secs(60)), SetCondition::Always);
+    /// s.set(b"durable", b"2".to_vec(), None, SetCondition::Always);
+    /// // only the key with a TTL is a candidate
+    /// assert_eq!(s.try_evict_after_write(), 1);
+    /// assert_eq!(s.exists(&[b"durable".as_slice()]), 1);
+    /// ```
     VolatileLru,
     /// Approximated LFU across keys with a TTL.
+    ///
+    /// ```
+    /// use core::time::Duration;
+    /// use kevy_store::{EvictionPolicy, SetCondition, Store};
+    /// let mut s = Store::new();
+    /// s.set_max_memory(1, EvictionPolicy::VolatileLfu);
+    /// s.set(b"cache", b"1".to_vec(), Some(Duration::from_secs(60)), SetCondition::Always);
+    /// s.set(b"durable", b"2".to_vec(), None, SetCondition::Always);
+    /// assert_eq!(s.try_evict_after_write(), 1);
+    /// assert_eq!(s.exists(&[b"cache".as_slice()]), 0);
+    /// ```
     VolatileLfu,
     /// Random key from those with a TTL.
+    ///
+    /// ```
+    /// use kevy_store::{EvictionPolicy, SetCondition, Store};
+    /// let mut s = Store::new();
+    /// s.set_max_memory(1, EvictionPolicy::VolatileRandom);
+    /// s.set(b"durable", b"2".to_vec(), None, SetCondition::Always);
+    /// // no key carries a TTL, so nothing can be evicted
+    /// assert_eq!(s.try_evict_after_write(), 0);
+    /// assert_eq!(s.dbsize(), 1);
+    /// ```
     VolatileRandom,
     /// Key with the shortest remaining TTL.
+    ///
+    /// ```
+    /// use core::time::Duration;
+    /// use kevy_store::{EvictionPolicy, SetCondition, Store};
+    /// let mut s = Store::new();
+    /// s.set_max_memory(1, EvictionPolicy::VolatileTtl);
+    /// s.set(b"soon", b"1".to_vec(), Some(Duration::from_secs(5)), SetCondition::Always);
+    /// s.set(b"durable", b"2".to_vec(), None, SetCondition::Always);
+    /// assert_eq!(s.try_evict_after_write(), 1);
+    /// assert_eq!(s.exists(&[b"soon".as_slice()]), 0);
+    /// ```
     VolatileTtl,
 }
 

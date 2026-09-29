@@ -14,6 +14,10 @@ use super::{AckMode, EntryBatch, StreamData, StreamId};
 use crate::StoreError;
 use crate::value::SmallBytes;
 
+#[path = "group_types.rs"]
+mod types;
+pub use types::{ConsumerState, GroupCreateMode, PelEntry, ReadGroupId};
+
 /// One consumer group's state. Sorted PEL plus a map of known
 /// consumers (with cached pel_count for O(1) XINFO answers).
 ///
@@ -83,21 +87,6 @@ impl ConsumerGroup {
     }
 }
 
-impl ConsumerState {
-    /// The consumer's name.
-    pub fn name(&self) -> &[u8] {
-        self.name.as_slice()
-    }
-    /// `XINFO CONSUMERS`' `pending` field.
-    pub fn pending_count(&self) -> usize {
-        self.pel_count
-    }
-    /// Last unix-ms this consumer interacted with the group.
-    pub fn last_seen_ms(&self) -> u64 {
-        self.last_seen_ms
-    }
-}
-
 impl Default for ConsumerGroup {
     fn default() -> Self {
         Self {
@@ -106,45 +95,6 @@ impl Default for ConsumerGroup {
             consumers: KevyMap::default(),
         }
     }
-}
-
-/// One pending entry: who got it, when, and how many times.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub struct PelEntry {
-    /// Owning consumer's name. Used by XPENDING's `consumer` filter
-    /// and XCLAIM's ownership transfer.
-    pub consumer: SmallBytes,
-    /// Last delivery wall-clock (unix-ms). XCLAIM compares idle =
-    /// `now - delivery_time_ms` against its `min-idle-ms` arg.
-    pub delivery_time_ms: u64,
-    /// Number of times this entry has been delivered (=1 on first
-    /// XREADGROUP, +=1 on each XCLAIM that doesn't have JUSTID).
-    pub delivery_count: u32,
-}
-
-/// Per-consumer cached counters so `XINFO CONSUMERS` answers in O(1).
-/// Read through [`ConsumerGroup::consumer`] / [`ConsumerGroup::consumers`].
-#[derive(Clone, Debug)]
-pub struct ConsumerState {
-    /// Consumer name.
-    pub(crate) name: SmallBytes,
-    /// Last wall-clock (unix-ms) the consumer interacted with the
-    /// group (any XREADGROUP / XACK / XCLAIM touch).
-    pub(crate) last_seen_ms: u64,
-    /// Cached size of this consumer's slice of the PEL.
-    pub(crate) pel_count: usize,
-}
-
-/// `XGROUP CREATE` ID argument: either an explicit ID or `$`
-/// (= current stream's `last_id`, resolved by the caller).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum GroupCreateMode {
-    /// `<ms>-<seq>` literal — the group's `last_delivered_id` starts here.
-    AtId(StreamId),
-    /// `$` — resolve to the stream's current `last_id` at create time.
-    AtCurrent,
 }
 
 impl StreamData {
@@ -323,17 +273,6 @@ impl StreamData {
         }
         n
     }
-}
-
-/// XREADGROUP's per-stream ID: either `>` (= new entries) or an explicit
-/// "after this id" for PEL replay.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum ReadGroupId {
-    /// `>` — new entries only.
-    New,
-    /// `<id>` — replay PEL entries strictly after this id.
-    ReplayAfter(StreamId),
 }
 
 /// Idempotent insert: ensure the named consumer exists in this group's
