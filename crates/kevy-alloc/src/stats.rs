@@ -170,7 +170,10 @@ pub struct Stats {
     ///     // SAFETY: each came from this heap with this size and alignment.
     ///     unsafe { heap.dealloc(p, 64, 8) };
     /// }
-    /// heap.reclaim();
+    /// // once they have gone unused for the purge delay
+    /// for _ in 0..=kevy_alloc::PURGE_DELAY {
+    ///     heap.reclaim();
+    /// }
     /// let s = heap.snapshot();
     /// // pages go back only where the system page matches the span geometry
     /// assert_eq!(s.returned > 0, kevy_alloc::os::page_size_matches());
@@ -196,7 +199,7 @@ pub struct Stats {
     /// ```
     pub virgin: u64,
     /// Retained rather than released, and therefore still resident:
-    /// empty spans the per-sweep policy keeps for their class, spans
+    /// empty spans held for their class through the purge delay, spans
     /// whose discard the platform refused, and large mappings parked in
     /// the process-wide retention pool.
     ///
@@ -215,7 +218,7 @@ pub struct Stats {
     ///     unsafe { heap.dealloc(p, 64, 8) };
     /// }
     /// heap.reclaim();
-    /// // some emptied spans are kept for the class instead of being released
+    /// // inside the purge delay the emptied spans stay with their class
     /// assert!(heap.snapshot().hysteresis > 0);
     /// # Ok::<(), &str>(())
     /// ```

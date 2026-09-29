@@ -145,6 +145,8 @@ fn a_claim_into_returned_pages_matches_the_walk() {
     }
     for size in SIZES {
         let mut h = Heap::new(3);
+        // pages go back at the first sweep, so the refill lands in them
+        h.purge_delay = 0;
         let n = 3 * crate::class::SPAN_BYTES / size;
         let held: Vec<_> = (0..n).map(|_| h.alloc(size, 8).expect("mapped")).collect();
         for (i, p) in held.iter().enumerate() {
