@@ -1,0 +1,23 @@
+Mutant M2: a sleep in the idle ladder.
+
+In the io_uring reactor's spin rung, a 20 us thread::sleep every 64 empty
+iterations: the shape of the nap that cost the cross-shard angles 18-21%.
+Sleeping adds no instructions per command, only lost time.
+
+Must turn red: S.util, T.ops. Must stay green: C.instr_u, C.sys.
+
+diff --git a/crates/kevy-rt/src/uring_reactor.rs b/crates/kevy-rt/src/uring_reactor.rs
+index 00f8da07e..18a4bc51a 100644
+--- a/crates/kevy-rt/src/uring_reactor.rs
++++ b/crates/kevy-rt/src/uring_reactor.rs
+@@ -433,6 +433,10 @@ impl<C: Commands> Shard<C> {
+                     // arrived; no effect when there IS work since this
+                     // branch isn't reached.
+                     std::hint::spin_loop();
++                    // mutant M2: a 20 µs sleep every 64 spin iterations
++                    if idle_spins % 64 == 0 {
++                        std::thread::sleep(Duration::from_micros(20));
++                    }
+                 }
+             } else {
+                 idle_spins = 0;

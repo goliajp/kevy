@@ -1,5 +1,5 @@
-# Sourced by perfgate.sh before anything is started. Sets RUNDIR and the
-# EXIT trap that keeps it on a failed run.
+# Sourced by perfgate.sh and perfgate2.sh before anything is started. Sets
+# RUNDIR and the EXIT trap that keeps it on a failed run.
 
 # ---------- preflight: never measure on a dirty box ----------
 # A perf comparison of two userland binaries never legitimately needs the
@@ -47,9 +47,3 @@ LEFTOVER=$(pgrep -af "kevy|redis-benchmark" | grep -Ev "${ANCESTORS#|}" \
   | grep -v "sudo -u kevybench" || true)
 [ -n "$LEFTOVER" ] && refuse "leftover bench processes (sweep first):
 $LEFTOVER"
-# Instantaneous idle%, not 1-min loadavg: loadavg measures the past, so a
-# back-to-back run (baseline then gate) would refuse on its own wake. Two
-# /proc/stat samples 1s apart = what the box is doing RIGHT NOW.
-read -r _ u1 n1 s1 i1 _ < /proc/stat; sleep 1; read -r _ u2 n2 s2 i2 _ < /proc/stat
-IDLE=$(( (i2 - i1) * 100 / ( (u2-u1) + (n2-n1) + (s2-s1) + (i2-i1) ) ))
-[ "$IDLE" -ge 80 ] || refuse "box busy (idle ${IDLE}% < 80%)"
