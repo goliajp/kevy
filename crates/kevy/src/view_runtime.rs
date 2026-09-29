@@ -6,7 +6,7 @@
 //! membership probes see fresh segments). Callers gate both hooks on
 //! the `VIEW_NONEMPTY` gate bit.
 
-use kevy_index::{IndexValue, MaterializedSet, Membership, ViewMode, ViewSpec};
+use kevy_index::{IndexValue, MaterializedSet, Membership, SortOrder, ViewMode, ViewSpec};
 use kevy_resp::CmdError;
 use kevy_store::Store;
 
@@ -282,6 +282,10 @@ fn rebuild_local(ctx: &Ctx<'_>, store: &mut Store, vs: &mut ViewState) {
     if let ViewMode::Materialized { top_k } = spec.mode
         && top_k > 0
     {
+        // the rows a DESC view keeps are the largest: cut from that end
+        if spec.order == SortOrder::Desc {
+            rows.reverse();
+        }
         rows.truncate((top_k + top_k / 4) as usize);
     }
     for (v, k) in rows {

@@ -300,6 +300,37 @@ fn materialized_topk_desc_maintenance() {
 }
 
 #[test]
+fn a_desc_topk_view_built_over_many_rows_keeps_the_highest() {
+    let (srv, _gate) = Server::start();
+    let mut c = srv.connect();
+    // enough rows that every shard holds more than the view keeps
+    for i in 0..200 {
+        let (key, pri) = (format!("job:{i}"), i.to_string());
+        cmd(&mut c, &[b"HSET", key.as_bytes(), b"pri", pri.as_bytes(), b"state", b"ready"]);
+    }
+    for idx in [
+        "IDX.CREATE j_pri ON PREFIX job: FIELD pri TYPE i64 KIND range",
+        "IDX.CREATE j_state ON PREFIX job: FIELD state TYPE str KIND range",
+    ] {
+        let argv: Vec<&[u8]> = idx.split_whitespace().map(str::as_bytes).collect();
+        assert_eq!(cmd(&mut c, &argv), b"+OK\r\n");
+    }
+    let create = "VIEW.CREATE v_hi QUERY ( AND j_pri RANGE 0 1000 j_state EQ ready ) \
+                  ORDER BY j_pri DESC MODE materialized TOPK 5";
+    let argv: Vec<&[u8]> = create.split_whitespace().map(str::as_bytes).collect();
+    assert_eq!(cmd(&mut c, &argv), b"+OK\r\n");
+    let r = ready(&mut c, &[b"VIEW.QUERY", b"v_hi", b"LIMIT", b"5"]);
+    let s = String::from_utf8_lossy(&r);
+    for want in ["job:199\r", "job:198\r", "job:197\r", "job:196\r", "job:195\r"] {
+        assert!(s.contains(want), "{want} missing: {s}");
+    }
+    assert_eq!(cmd(&mut c, &[b"VIEW.REBUILD", b"v_hi"]), b"+OK\r\n");
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let r = cmd(&mut c, &[b"VIEW.QUERY", b"v_hi", b"LIMIT", b"5"]);
+    assert!(String::from_utf8_lossy(&r).contains("job:199\r"), "after rebuild: {r:?}");
+}
+
+#[test]
 fn via_hydration_two_phase() {
     let (srv, _gate) = Server::start();
     let mut c = srv.connect();
