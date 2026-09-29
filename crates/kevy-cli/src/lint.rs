@@ -35,7 +35,8 @@ use crate::link::Link;
 use kevy_resp_client::Reply;
 
 /// What the owner-keyed collections under a prefix look like together.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub struct Overlap {
     /// How many owner collections were read.
     pub owners: usize,
@@ -92,7 +93,8 @@ fn tally(owners: usize, owners_of: &BTreeMap<Vec<u8>, Vec<String>>) -> Overlap {
 }
 
 /// Two columns that agree on most of the rows they both appear in.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub struct Coincidence {
     /// One column.
     pub a: String,

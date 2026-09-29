@@ -3,6 +3,7 @@
 
 use super::argscan::{Scan, unexpected};
 use super::shipped::Shipped;
+use crate::bulk::DeleteMode;
 use crate::link::Link;
 use std::io;
 use std::process::ExitCode;
@@ -13,19 +14,19 @@ pub(crate) type Opener<'a> = &'a mut dyn FnMut(&str) -> Result<Box<dyn Link>, St
 /// What the prefix tools take besides the connection.
 struct Words {
     rate: u64,
-    dry_run: bool,
+    mode: DeleteMode,
     positional: Vec<String>,
 }
 
 fn words(tool: Shipped, args: &[String]) -> Result<Words, String> {
-    let mut w = Words { rate: 0, dry_run: false, positional: Vec::new() };
+    let mut w = Words { rate: 0, mode: DeleteMode::Unlink, positional: Vec::new() };
     let mut scan = Scan::new(args);
     while let Some(word) = scan.next() {
         match word {
             "--rate" if matches!(tool, Shipped::CopyPrefix | Shipped::DeletePrefix) => {
                 w.rate = scan.number("--rate")?
             }
-            "--dry-run" if tool == Shipped::DeletePrefix => w.dry_run = true,
+            "--dry-run" if tool == Shipped::DeletePrefix => w.mode = DeleteMode::DryRun,
             p if !p.starts_with('-') => w.positional.push(p.to_string()),
             other => return Err(unexpected(other)),
         }
@@ -69,8 +70,9 @@ pub(crate) fn run(
             })
         }
         (Shipped::DeletePrefix, [p]) => {
-            crate::bulk::run_delete_prefix(link, p.as_bytes(), w.rate, w.dry_run).map(|n| {
-                println!("{}{n} keys", if w.dry_run { "would delete " } else { "deleted " });
+            crate::bulk::run_delete_prefix(link, p.as_bytes(), w.rate, w.mode).map(|n| {
+                let verb = if w.mode == DeleteMode::DryRun { "would delete " } else { "deleted " };
+                println!("{verb}{n} keys");
                 true
             })
         }
@@ -91,6 +93,11 @@ pub(crate) fn run(
         }
         _ => return fail(tool, "wrong arguments"),
     };
+    exit_code(tool, done)
+}
+
+/// A tool's verdict (`Ok(false)`: it ran and found a difference) as its exit code.
+fn exit_code(tool: Shipped, done: io::Result<bool>) -> ExitCode {
     match done {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::FAILURE,

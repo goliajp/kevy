@@ -32,7 +32,8 @@
 
 /// One verb's documentation row (semantic classification lives in
 /// kevy_resp::ops_table::OP_TABLE — this table is the DOC face).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct VerbMeta {
     /// Canonical uppercase name, as `COMMAND DOCS` reports it and as the
     /// dispatch tables spell it.

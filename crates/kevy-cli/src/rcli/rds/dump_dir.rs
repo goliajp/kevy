@@ -172,8 +172,8 @@ fn declared_prefix(schema: &[u8], table: &[u8]) -> Option<Vec<u8>> {
 /// doctor on the session's connection: tables, bare indexes and views.
 fn doctor(s: &mut Session) -> u8 {
     let Some(conn) = s.conn.as_mut() else { return fail(&[b"load: the connection is gone"]) };
-    let scope = crate::doctor::Scope { indexes: true, views: true };
-    match crate::doctor::run_scoped(conn, false, scope) {
+    let scope = crate::doctor::Scope::default().with_indexes(true).with_views(true);
+    match crate::doctor::run_scoped(conn, crate::doctor::OnWarning::Report, scope) {
         Ok(code) if code == std::process::ExitCode::SUCCESS => 0,
         Ok(_) => 3,
         Err(e) => fail(&[b"load: doctor: ", e.to_string().as_bytes()]),
