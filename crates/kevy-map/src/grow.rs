@@ -44,15 +44,7 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
         let mut released = 0usize;
         for i in 0..old_cap {
             if self.mmap_backed && (i * slot_bytes) - released >= RELEASE_STEP {
-                let upto = (i * slot_bytes) & !(RELEASE_STEP - 1);
-                // SAFETY: slots `[0, i)` have been moved out and are never read
-                // again, and `[released, upto)` lies inside them: a 2 MiB-aligned
-                // range at the start of this table's own aligned mapping.
-                unsafe {
-                    let from = self.slots_ptr.cast::<u8>().add(released);
-                    kevy_madvise::release_2mb(from, upto - released);
-                }
-                released = upto;
+                released = self.release_moved(released, i * slot_bytes);
             }
             // SAFETY: i < old_cap ⇒ metadata in-bounds.
             let meta = unsafe { *self.metadata_ptr.as_ptr().add(i) };
@@ -74,6 +66,21 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
         core::mem::swap(self, &mut new_table);
         // new_table (now the old self) drops; metadata is all DELETED (or EMPTY
         // for previously-empty slots) ⇒ Drop walks but touches no slots.
+    }
+
+    /// Hand back the huge pages of slot bytes `[released, moved)` rounded
+    /// down to a whole page, and answer how far that reached.
+    #[cold]
+    fn release_moved(&self, released: usize, moved: usize) -> usize {
+        let upto = moved & !(RELEASE_STEP - 1);
+        // SAFETY: the slots below `moved` have been moved out and are never
+        // read again, and `[released, upto)` lies inside them: a 2 MiB-aligned
+        // range at the start of this table's own aligned mapping.
+        unsafe {
+            let from = self.slots_ptr.cast::<u8>().add(released);
+            kevy_madvise::release_2mb(from, upto - released);
+        }
+        upto
     }
 
     /// Insert under the assumption that the key isn't already present (used

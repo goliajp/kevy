@@ -53,6 +53,7 @@ pub(super) fn tier_tick(c: &KevyCommands, store: &mut Store, bits: u32, cfg: &ke
         reserved += crate::view_runtime::reserved_bytes(&c.ctx());
     }
     store.set_tier_reserved(reserved);
+    store.tier_reserve_growth();
     let mem = &c.state().mem;
     store.set_tier_overhead(mem.overhead_bytes.load(std::sync::atomic::Ordering::Relaxed) / n);
     let refusing = mem.refusing.load(std::sync::atomic::Ordering::Relaxed);
