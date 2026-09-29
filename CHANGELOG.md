@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **A cold row comes back packed when its table can hold it.** Declaring
+  a table leaves the rows that are already cold alone — they hold no
+  memory for the packed form to save — but they were demoted as general
+  hashes, so the first read that promoted one brought it back as a
+  general hash, and it stayed one. A table declared over a mostly cold
+  keyspace ended up with most of its rows in the form it was declared to
+  replace. Promotion now builds the packed form straight from the record
+  when every field of the row is a column of a declared table, on that
+  table's shared column names; a row with a field no table declares, or
+  a server with `packed_rows` off, promotes as before. Building the packed
+  form costs less than the general hash it replaces: promoting a row of
+  four short fields and a 900-byte one takes 9% less time and leaves 1,000
+  bytes in memory where it left 1,808.
+
 - **The keyspace is charged the table it holds.** Every key was charged a
   flat 96 bytes for its place in the keyspace table, but the table is an
   open-addressing array that doubles at 7/8 load and holds all its slots
