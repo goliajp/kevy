@@ -45,13 +45,36 @@ pub(super) struct ColdSeg {
     pub(super) total_len: u64,
 }
 
+#[path = "text_page.rs"]
+mod page;
 #[path = "text_query.rs"]
 mod query;
-pub use query::{ColdHit, ColdPage, ColdPageQuery};
+pub use page::{ColdHit, ColdPage};
+pub use query::ColdPageQuery;
 
 /// The frozen text segments for one windowed full-text index on one
 /// shard, plus the bloom and tombstones that let a query skip or correct
 /// them without opening a file.
+///
+/// ```
+/// # use kevy_text::{CorpusStats, SegmentShape, TextSegment};
+/// # let dir = kevy_tmpdir::TmpDir::new("text-cold-doc");
+/// let mut ts = TextSegment::with_shape(SegmentShape::default().with_values(1));
+/// for (key, text, colour) in [("d:1", "red apple", "red"), ("d:2", "green apple", "green"), ("d:3", "red fig", "red")] {
+///     ts.apply_doc(key.as_bytes(), Some(&[(text.as_bytes().to_vec(), 1.0)]), &[Some(colour.as_bytes())]);
+/// }
+/// let mut cold = kevy_window::TextColdDir::new();
+/// assert!(cold.freeze_batch(&mut ts, b"t.body", &[b"d:1".to_vec(), b"d:2".to_vec()], dir.path())?);
+/// let stats = CorpusStats::new(3.0, 2.0, Default::default());
+/// // pass 1: the frozen documents' share of the corpus statistics
+/// let (n_docs, total_len, df) = cold.cold_stats(&[b"apple".to_vec()]);
+/// assert_eq!((n_docs, total_len, df), (2, 4, vec![(b"apple".to_vec(), 2)]));
+///
+/// // pass 2: the frozen hits, scored on the injected statistics
+/// let page = cold.cold_page(&kevy_window::ColdPageQuery::parse(b"apple", &stats, 10));
+/// assert_eq!(page.hits.len(), 2);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Debug)]
 pub struct TextColdDir {
     pub(super) segs: Vec<ColdSeg>,
@@ -73,6 +96,12 @@ impl Default for TextColdDir {
 
 impl TextColdDir {
     /// An empty directory: no segments, a fresh bloom, no tombstones.
+    ///
+    /// ```
+    /// let cold = kevy_window::TextColdDir::new();
+    /// assert!(!cold.has_cold());
+    /// assert_eq!(cold.cold_stats(&[b"apple".to_vec()]), (0, 0, vec![(b"apple".to_vec(), 0)]));
+    /// ```
     pub fn new() -> Self {
         Self {
             segs: Vec::new(),
@@ -86,6 +115,18 @@ impl TextColdDir {
 
     /// Whether any segment has been sealed. `false` lets a query stay
     /// entirely in the live index.
+    ///
+    /// ```
+    /// # use kevy_text::TextSegment;
+    /// # let dir = kevy_tmpdir::TmpDir::new("text-cold-doc");
+    /// let mut ts = TextSegment::new();
+    /// ts.apply(b"d:1", Some(b"red apple"));
+    /// let mut cold = kevy_window::TextColdDir::new();
+    /// assert!(!cold.has_cold());
+    /// assert!(cold.freeze_batch(&mut ts, b"t.body", &[b"d:1".to_vec()], dir.path())?);
+    /// assert!(cold.has_cold());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn has_cold(&self) -> bool {
         !self.segs.is_empty()
     }
@@ -93,6 +134,23 @@ impl TextColdDir {
     /// The write path saw this row change: shadow its frozen entries
     /// and withdraw its statistics, exactly, in every segment that
     /// holds it (its forward record says which, and what to subtract).
+    ///
+    /// ```
+    /// # use kevy_text::{CorpusStats, SegmentShape, TextSegment};
+    /// # let dir = kevy_tmpdir::TmpDir::new("text-cold-doc");
+    /// let mut ts = TextSegment::with_shape(SegmentShape::default().with_values(1));
+    /// for (key, text, colour) in [("d:1", "red apple", "red"), ("d:2", "green apple", "green"), ("d:3", "red fig", "red")] {
+    ///     ts.apply_doc(key.as_bytes(), Some(&[(text.as_bytes().to_vec(), 1.0)]), &[Some(colour.as_bytes())]);
+    /// }
+    /// let mut cold = kevy_window::TextColdDir::new();
+    /// assert!(cold.freeze_batch(&mut ts, b"t.body", &[b"d:1".to_vec(), b"d:2".to_vec()], dir.path())?);
+    /// assert_eq!(cold.cold_stats(&[b"apple".to_vec()]).0, 2);
+    ///
+    /// // d:1 is rewritten: its frozen document stops counting, exactly
+    /// cold.on_row_write(b"d:1");
+    /// assert_eq!(cold.cold_stats(&[b"apple".to_vec()]), (1, 2, vec![(b"apple".to_vec(), 1)]));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn on_row_write(&mut self, row_key: &[u8]) {
         if !self.bloom.contains(row_key) {
             return;
@@ -119,6 +177,22 @@ impl TextColdDir {
     /// bucket segment. Failure leaves the hot segment SHRUNK but the
     /// batch unfrozen on disk — acceptable for derived spill (the
     /// entries are rebuildable from rows), reported to the caller.
+    ///
+    /// ```
+    /// # use kevy_text::TextSegment;
+    /// # let dir = kevy_tmpdir::TmpDir::new("text-cold-doc");
+    /// let mut ts = TextSegment::new();
+    /// ts.apply(b"d:1", Some(b"red apple"));
+    /// ts.apply(b"d:2", Some(b"red fig"));
+    /// let mut cold = kevy_window::TextColdDir::new();
+    /// assert!(cold.freeze_batch(&mut ts, b"t.body", &[b"d:1".to_vec()], dir.path())?);
+    /// // the frozen document left the hot segment
+    /// assert_eq!(ts.matches(b"red", 10).len(), 1);
+    ///
+    /// // keys the hot segment does not hold freeze nothing
+    /// assert!(!cold.freeze_batch(&mut ts, b"t.body", &[b"d:9".to_vec()], dir.path())?);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn freeze_batch(
         &mut self,
         ts: &mut TextSegment,

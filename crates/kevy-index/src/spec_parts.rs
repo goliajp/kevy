@@ -22,8 +22,30 @@ use crate::catalog::ValType;
 #[non_exhaustive]
 pub struct FieldSpec {
     /// Hash field name.
+    ///
+    /// ```
+    /// # use kevy_index::{FieldSpec, IndexKind, IndexSpec, ValType};
+    /// let s = IndexSpec::builder("n", "p:", IndexKind::Text, ValType::Str)
+    ///     .with_fields(vec![FieldSpec::new("title")])
+    ///     .build()?;
+    /// // the row's hash field of that name is what gets indexed
+    /// let (fields, _) = s.read_row(|f| (f == s.fields()[0].name.as_slice()).then(|| b"hi".to_vec()));
+    /// assert_eq!(fields, [(b"hi".to_vec(), 1.0)]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub name: Vec<u8>,
     /// BM25 weight; 1.0 is neutral.
+    ///
+    /// ```
+    /// # use kevy_index::{FieldSpec, IndexKind, IndexSpec, ValType};
+    /// let s = IndexSpec::builder("n", "p:", IndexKind::Text, ValType::Str)
+    ///     .with_fields(vec![FieldSpec::new("title").with_weight(3.0)])
+    ///     .build()?;
+    /// // the weight rides with every value the field contributes
+    /// let (fields, _) = s.read_row(|_| Some(b"x".to_vec()));
+    /// assert_eq!(fields[0].1, s.fields()[0].weight);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub weight: f32,
 }
 
@@ -67,8 +89,28 @@ impl FieldSpec {
 #[non_exhaustive]
 pub struct ValueSpec {
     /// Hash field name.
+    ///
+    /// ```
+    /// # use kevy_index::{IndexKind, IndexSpec, ValType, ValueSpec};
+    /// let s = IndexSpec::builder("n", "p:", IndexKind::Range, ValType::I64)
+    ///     .with_field("age")
+    ///     .with_values(vec![ValueSpec::new("city")])
+    ///     .build()?;
+    /// let (_, values) = s.read_row(|f| (f == b"city").then(|| b"kyoto".to_vec()));
+    /// assert_eq!((s.values()[0].name.as_slice(), &values[0]), (&b"city"[..], &Some(b"kyoto".to_vec())));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub name: Vec<u8>,
     /// How the stored bytes compare.
+    ///
+    /// ```
+    /// use kevy_index::{ValType, ValueSpec, order_key};
+    /// let as_text = ValueSpec::new("n");
+    /// let as_number = ValueSpec::new("n").with_type(ValType::I64);
+    /// // "9" sorts above "10" as text, below it as a number
+    /// assert!(order_key(as_text.ty, b"9") > order_key(as_text.ty, b"10"));
+    /// assert!(order_key(as_number.ty, b"9") < order_key(as_number.ty, b"10"));
+    /// ```
     pub ty: ValType,
 }
 
@@ -108,12 +150,55 @@ impl ValueSpec {
 #[non_exhaustive]
 pub struct AnnSpec {
     /// Vector dimensionality (field bytes must be dim×4 f32 LE).
+    ///
+    /// ```
+    /// # use kevy_index::{AnnSpec, IndexKind, IndexSpec, ValType};
+    /// let s = IndexSpec::builder("v", "doc:", IndexKind::Ann, ValType::Vector)
+    ///     .with_field("emb")
+    ///     .with_ann(AnnSpec::new(3))
+    ///     .build()?;
+    /// let dim = s.ann().expect("an ann index").dim;
+    /// // a stored vector is dim little-endian f32s
+    /// let v: Vec<u8> = [0.5f32, 1.0, 2.0].iter().flat_map(|x| x.to_le_bytes()).collect();
+    /// assert_eq!(v.len(), dim as usize * 4);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub dim: u32,
     /// 0=cosine 1=l2 2=ip (kevy-vector's Distance tags).
+    ///
+    /// ```
+    /// # use kevy_index::{AnnSpec, IndexKind, IndexSpec, ValType};
+    /// let s = IndexSpec::builder("v", "doc:", IndexKind::Ann, ValType::Vector)
+    ///     .with_field("emb")
+    ///     .with_ann(AnnSpec::new(3).with_distance(1))
+    ///     .build()?;
+    /// assert_eq!(s.ann().map(|a| a.distance), Some(1), "l2");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub distance: u8,
     /// Max links per node per layer.
+    ///
+    /// ```
+    /// # use kevy_index::{AnnSpec, IndexKind, IndexSpec, ValType};
+    /// let s = IndexSpec::builder("v", "doc:", IndexKind::Ann, ValType::Vector)
+    ///     .with_field("emb")
+    ///     .build();
+    /// // the parameters are required on an ann index
+    /// assert!(s.is_err());
+    /// assert_eq!(kevy_index::AnnSpec::new(3).m, 16, "the IDX.CREATE default");
+    /// ```
     pub m: u16,
     /// Construction beam width.
+    ///
+    /// ```
+    /// # use kevy_index::{AnnSpec, IndexKind, IndexSpec, ValType};
+    /// let s = IndexSpec::builder("v", "doc:", IndexKind::Ann, ValType::Vector)
+    ///     .with_field("emb")
+    ///     .with_ann(AnnSpec::new(3).with_ef(64))
+    ///     .build()?;
+    /// assert_eq!(s.ann().map(|a| a.ef), Some(64));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub ef: u16,
 }
 

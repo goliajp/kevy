@@ -16,12 +16,12 @@ use crate::table::{OrderPath, TableIndex, TableSpec, dotted};
 /// let t = parse_table_declare(&[
 ///     b"TABLE.DECLARE", b"u", b"PREFIX", b"u:", b"PK", b"id",
 ///     b"COLUMN", b"id", b"i64", b"COLUMN", b"age", b"i64", b"INDEX", b"age", b"range",
-/// ])
-/// .unwrap();
+/// ])?;
 /// let Described::Array(fields) = describe_table(&t) else { unreachable!() };
 /// let Described::Array(indexes) = &fields[9] else { unreachable!() };
 /// let Described::Array(index) = &indexes[0] else { unreachable!() };
 /// assert_eq!(index[1], Described::Bulk(b"u.age".to_vec()));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn describe_table(t: &TableSpec) -> Described {
     describe_table_partitioned(t, &Catalog::new())
@@ -39,18 +39,18 @@ pub fn describe_table(t: &TableSpec) -> Described {
 /// let t = parse_table_declare(&[
 ///     b"TABLE.DECLARE", b"u", b"PREFIX", b"u:", b"PK", b"id", b"COLUMN", b"id", b"i64",
 ///     b"COLUMN", b"age", b"i64", b"INDEX", b"age", b"range",
-/// ])
-/// .unwrap();
+/// ])?;
 /// let mut cat = Catalog::new();
-/// for spec in t.compile().unwrap() {
+/// for spec in t.compile()? {
 ///     let splits = vec![order_key(ValType::I64, b"40").unwrap()];
-///     cat.create_with(spec, Partitioning::Global { splits }).unwrap();
+///     cat.create_with(spec, Partitioning::Global { splits })?;
 /// }
 /// let Described::Array(fields) = describe_table_partitioned(&t, &cat) else { unreachable!() };
 /// let Some(Described::Array(decl)) = fields.last() else { unreachable!() };
 /// let tail: Vec<&Described> = decl.iter().rev().take(4).collect();
 /// assert_eq!(tail[0], &Described::Bulk(b"40".to_vec()));
 /// assert_eq!(tail[3], &Described::Bulk(b"GLOBAL".to_vec()));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn describe_table_partitioned(t: &TableSpec, cat: &Catalog) -> Described {
     let columns = t.columns.iter().map(|(c, ty)| Described::Array(vec![b(c), b(ty.tag())]));
@@ -133,13 +133,13 @@ fn table_orderpaths(t: &TableSpec) -> Described {
 /// let t = parse_table_declare(&[
 ///     b"table.declare", b"u", b"prefix", b"u:", b"pk", b"id",
 ///     b"column", b"id", b"I64", b"index", b"id", b"UNIQUE",
-/// ])
-/// .unwrap();
+/// ])?;
 /// let argv = table_declaration(&t);
 /// let refs: Vec<&[u8]> = argv.iter().map(Vec::as_slice).collect();
 /// assert_eq!(refs, [&b"TABLE.DECLARE"[..], b"u", b"PREFIX", b"u:", b"PK", b"id",
 ///     b"COLUMN", b"id", b"i64", b"INDEX", b"id", b"unique"]);
-/// assert_eq!(parse_table_declare(&refs).unwrap(), t);
+/// assert_eq!(parse_table_declare(&refs)?, t);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn table_declaration(t: &TableSpec) -> Vec<Vec<u8>> {
     table_declaration_partitioned(t, &Catalog::new())
@@ -157,15 +157,15 @@ pub fn table_declaration(t: &TableSpec) -> Vec<Vec<u8>> {
 /// let t = parse_table_declare(&[
 ///     b"TABLE.DECLARE", b"u", b"PREFIX", b"u:", b"PK", b"id", b"COLUMN", b"id", b"i64",
 ///     b"INDEX", b"id", b"range",
-/// ])
-/// .unwrap();
+/// ])?;
 /// let mut cat = Catalog::new();
-/// for spec in t.compile().unwrap() {
+/// for spec in t.compile()? {
 ///     let splits = vec![order_key(ValType::I64, b"100").unwrap()];
-///     cat.create_with(spec, Partitioning::Global { splits }).unwrap();
+///     cat.create_with(spec, Partitioning::Global { splits })?;
 /// }
 /// let argv = table_declaration_partitioned(&t, &cat);
 /// assert_eq!(argv[argv.len() - 4..], [b"GLOBAL".to_vec(), b"SPLIT".to_vec(), b"AT".to_vec(), b"100".to_vec()]);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn table_declaration_partitioned(t: &TableSpec, cat: &Catalog) -> Vec<Vec<u8>> {
     let mut w: Vec<Vec<u8>> = vec![

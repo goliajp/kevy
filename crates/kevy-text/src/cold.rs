@@ -7,182 +7,107 @@
 //! recycled doc id, and scores against the same injected
 //! [`crate::CorpusStats`] the hot two-pass query uses — which is what
 //! makes a cold hit's score comparable to a hot hit's by construction.
+//!
+//! ```
+//! use kevy_text::{CorpusStats, TextSegment, cold::score_cold};
+//! use std::collections::HashMap;
+//! let mut hot = TextSegment::new();
+//! hot.apply(b"doc:1", Some(b"rust engine"));
+//! hot.apply(b"doc:2", Some(b"rust client"));
+//! let stats = CorpusStats::new(2.0, 2.0, HashMap::from([(b"rust".to_vec(), 2)]));
+//! let hot_score = hot.matches_scored(b"rust", 1, Some(&stats))[0].score;
+//!
+//! let bucket = hot.freeze_docs(&[b"doc:1".to_vec()]).ok_or("nothing froze")?;
+//! let mut acc = HashMap::new();
+//! score_cold(&bucket.terms[&b"rust".to_vec()], b"rust", &stats, &|_| false, &mut acc)
+//!     .ok_or("malformed")?;
+//! // The same document scores the same whether it is hot or frozen.
+//! assert!((acc[&b"doc:1".to_vec()] - hot_score).abs() < 1e-9);
+//! # Ok::<(), &str>(())
+//! ```
 
 use std::collections::{BTreeMap, HashMap};
 
 use crate::bm25::bm25_score;
-use crate::docblobs::{next_varint as read_varint, put_varint};
 use crate::positions::walk;
 use crate::segment::TextSegment;
+
+#[path = "cold_codec.rs"]
+mod cold_codec;
+pub use cold_codec::{
+    ColdEntry, FwdRecord, decode_fwd, decode_posting, encode_fwd, encode_posting, posting_df,
+};
 
 /// One slide batch's worth of frozen text entries: term → encoded
 /// posting payload, in term order (the segment builder's key order),
 /// plus the bucket's contribution to the corpus statistics.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
-#[non_exhaustive]
-pub struct FrozenBucket {
-    /// term → [`encode_posting`] payload, ascending by term.
-    pub terms: BTreeMap<Vec<u8>, Vec<u8>>,
-    /// row key → [`encode_fwd`] payload, ascending by key — the
-    /// forward records a later tombstone reads back to withdraw this
-    /// document's statistics contribution exactly.
-    pub fwd: BTreeMap<Vec<u8>, Vec<u8>>,
-    /// Documents frozen.
-    pub n_docs: u64,
-    /// Their summed (unweighted) token length.
-    pub total_len: u64,
-}
-
-/// One cold posting entry: what [`encode_posting`] takes and
-/// [`decode_posting`] gives back.
 ///
 /// ```
-/// use kevy_text::cold::{ColdEntry, decode_posting, encode_posting};
-/// let mut e = ColdEntry::default();
-/// e.key = b"doc:1".to_vec();
-/// e.tf = 2;
-/// e.dl = 7;
-/// let back = decode_posting(&encode_posting(&[e.clone()])).ok_or("malformed")?;
-/// assert_eq!(back, vec![e]);
+/// use kevy_text::TextSegment;
+/// let mut seg = TextSegment::new();
+/// seg.apply(b"doc:1", Some(b"rust engine"));
+/// let bucket = seg.freeze_docs(&[b"doc:1".to_vec()]).ok_or("nothing froze")?;
+/// assert_eq!(bucket.n_docs, 1);
+/// assert_eq!(seg.stats().docs, 0, "the freeze withdrew it from the hot index");
 /// # Ok::<(), &str>(())
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 #[non_exhaustive]
-pub struct ColdEntry {
-    /// The document's row key.
-    pub key: Vec<u8>,
-    /// Weighted term frequency.
-    pub tf: u32,
-    /// Document length (unweighted tokens).
-    pub dl: u32,
-    /// The positions blob, verbatim from the hot channel; empty when
-    /// the index was not declared `WITH POSITIONS`.
-    pub positions: Vec<u8>,
-}
-
-/// Encode one term's cold posting list:
-/// `[n varint]` then per doc `[klen][key][tf][dl][plen][pos]`.
-pub fn encode_posting(docs: &[ColdEntry]) -> Vec<u8> {
-    let mut out = Vec::new();
-    put_varint(&mut out, docs.len() as u32);
-    for d in docs {
-        put_varint(&mut out, d.key.len() as u32);
-        out.extend_from_slice(&d.key);
-        put_varint(&mut out, d.tf);
-        put_varint(&mut out, d.dl);
-        put_varint(&mut out, d.positions.len() as u32);
-        out.extend_from_slice(&d.positions);
-    }
-    out
-}
-
-/// The document frequency a payload carries — its header, no walk.
-pub fn posting_df(payload: &[u8]) -> Option<u32> {
-    read_varint(payload, &mut 0)
-}
-
-/// One decoded forward record: the document's length, its terms, and
-/// its stored values (aligned with the declared VALUES order).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
-#[non_exhaustive]
-pub struct FwdRecord {
-    /// Document length (unweighted tokens).
-    pub dl: u32,
-    /// Every term the document held, ascending.
-    pub terms: Vec<Vec<u8>>,
-    /// Stored values; `None` = the document has no value for the field
-    /// (absent is not a value — a predicate never passes on it).
-    pub values: Vec<Option<Vec<u8>>>,
-}
-
-/// Encode one document's forward record:
-/// `[dl][n terms][klen‖term…][n values][per value: 0 | 1‖len‖bytes]`.
-/// A tombstone reads it back to subtract the document from the
-/// segment's corpus statistics — same numbers, exact withdrawal — and
-/// the value-reading clauses (FILTER / SORT / DISTINCT / FACET) read
-/// it to serve a cold hit without touching the row.
-pub fn encode_fwd(dl: u32, terms: &[&[u8]], values: &[Option<&[u8]>]) -> Vec<u8> {
-    let mut out = Vec::new();
-    put_varint(&mut out, dl);
-    put_varint(&mut out, terms.len() as u32);
-    for t in terms {
-        put_varint(&mut out, t.len() as u32);
-        out.extend_from_slice(t);
-    }
-    put_varint(&mut out, values.len() as u32);
-    for v in values {
-        match v {
-            None => put_varint(&mut out, 0),
-            Some(b) => {
-                put_varint(&mut out, 1);
-                put_varint(&mut out, b.len() as u32);
-                out.extend_from_slice(b);
-            }
-        }
-    }
-    out
-}
-
-/// Upper bound on the initial reservation for a count read out of a cold
-/// payload — not a limit on the decode, which returns `None` the moment the
-/// payload cannot supply an entry.
-///
-/// Every entry here costs at least one byte (a varint length, or a varint
-/// tag), so a payload of `len` bytes cannot honour a claim past `len`.
-/// `read_varint` returns u32, so an unbounded claim reserves up to 4.29e9
-/// elements — about 103 GB for a `Vec<Vec<u8>>`. Fifth and sixth of the same
-/// shape this release; the earlier ones came from fuzzers, these from
-/// listing every allocation whose size comes out of the bytes.
-pub(crate) fn entries_fit(n: usize, payload_len: usize) -> usize {
-    n.min(payload_len)
-}
-
-/// Decode a forward record. `None` on any malformed frame.
-pub fn decode_fwd(payload: &[u8]) -> Option<FwdRecord> {
-    let mut at = 0usize;
-    let dl = read_varint(payload, &mut at)?;
-    let n = read_varint(payload, &mut at)? as usize;
-    let mut terms = Vec::with_capacity(entries_fit(n, payload.len()));
-    for _ in 0..n {
-        let klen = read_varint(payload, &mut at)? as usize;
-        terms.push(payload.get(at..at + klen)?.to_vec());
-        at += klen;
-    }
-    let nv = read_varint(payload, &mut at)? as usize;
-    let mut values = Vec::with_capacity(entries_fit(nv, payload.len()));
-    for _ in 0..nv {
-        values.push(match read_varint(payload, &mut at)? {
-            0 => None,
-            1 => {
-                let vlen = read_varint(payload, &mut at)? as usize;
-                let v = payload.get(at..at + vlen)?.to_vec();
-                at += vlen;
-                Some(v)
-            }
-            _ => return None,
-        });
-    }
-    (at == payload.len()).then_some(FwdRecord { dl, terms, values })
-}
-
-/// Decode a payload back to its entries. `None` on any malformed
-/// frame — a corrupt payload is a refusal upstream, never a guess.
-pub fn decode_posting(payload: &[u8]) -> Option<Vec<ColdEntry>> {
-    let mut at = 0usize;
-    let n = read_varint(payload, &mut at)? as usize;
-    let mut out = Vec::with_capacity(entries_fit(n, payload.len()));
-    for _ in 0..n {
-        let klen = read_varint(payload, &mut at)? as usize;
-        let key = payload.get(at..at + klen)?.to_vec();
-        at += klen;
-        let tf = read_varint(payload, &mut at)?;
-        let dl = read_varint(payload, &mut at)?;
-        let plen = read_varint(payload, &mut at)? as usize;
-        let positions = payload.get(at..at + plen)?.to_vec();
-        at += plen;
-        out.push(ColdEntry { key, tf, dl, positions });
-    }
-    (at == payload.len()).then_some(out)
+pub struct FrozenBucket {
+    /// term → [`encode_posting`] payload, ascending by term.
+    ///
+    /// ```
+    /// use kevy_text::{TextSegment, cold::posting_df};
+    /// let mut seg = TextSegment::new();
+    /// seg.apply(b"doc:1", Some(b"rust engine"));
+    /// seg.apply(b"doc:2", Some(b"rust client"));
+    /// let bucket = seg.freeze_docs(&[b"doc:1".to_vec(), b"doc:2".to_vec()]).ok_or("nothing froze")?;
+    /// let terms: Vec<&[u8]> = bucket.terms.keys().map(Vec::as_slice).collect();
+    /// assert_eq!(terms, vec![&b"client"[..], b"engine", b"rust"]);
+    /// assert_eq!(posting_df(&bucket.terms[&b"rust".to_vec()]), Some(2));
+    /// # Ok::<(), &str>(())
+    /// ```
+    pub terms: BTreeMap<Vec<u8>, Vec<u8>>,
+    /// row key → [`encode_fwd`] payload, ascending by key — the
+    /// forward records a later tombstone reads back to withdraw this
+    /// document's statistics contribution exactly.
+    ///
+    /// ```
+    /// use kevy_text::{TextSegment, cold::decode_fwd};
+    /// let mut seg = TextSegment::new();
+    /// seg.apply(b"doc:1", Some(b"rust engine"));
+    /// let bucket = seg.freeze_docs(&[b"doc:1".to_vec()]).ok_or("nothing froze")?;
+    /// let rec = decode_fwd(&bucket.fwd[&b"doc:1".to_vec()]).ok_or("malformed")?;
+    /// assert_eq!(rec.dl, 2);
+    /// assert_eq!(rec.terms, vec![b"engine".to_vec(), b"rust".to_vec()]);
+    /// # Ok::<(), &str>(())
+    /// ```
+    pub fwd: BTreeMap<Vec<u8>, Vec<u8>>,
+    /// Documents frozen.
+    ///
+    /// ```
+    /// use kevy_text::TextSegment;
+    /// let mut seg = TextSegment::new();
+    /// seg.apply(b"doc:1", Some(b"rust"));
+    /// seg.apply(b"doc:2", Some(b"engine"));
+    /// let keys = [b"doc:1".to_vec(), b"doc:2".to_vec(), b"never-indexed".to_vec()];
+    /// let bucket = seg.freeze_docs(&keys).ok_or("nothing froze")?;
+    /// assert_eq!(bucket.n_docs, 2, "a key that was never indexed is skipped");
+    /// # Ok::<(), &str>(())
+    /// ```
+    pub n_docs: u64,
+    /// Their summed (unweighted) token length.
+    ///
+    /// ```
+    /// use kevy_text::TextSegment;
+    /// let mut seg = TextSegment::new();
+    /// seg.apply(b"doc:1", Some(b"rust engine"));
+    /// seg.apply(b"doc:2", Some(b"fast rust client"));
+    /// let bucket = seg.freeze_docs(&[b"doc:1".to_vec(), b"doc:2".to_vec()]).ok_or("nothing froze")?;
+    /// assert_eq!(bucket.total_len, 5);
+    /// # Ok::<(), &str>(())
+    /// ```
+    pub total_len: u64,
 }
 
 /// Accumulate one term's cold contributions into `acc` under the
@@ -190,6 +115,28 @@ pub fn decode_posting(payload: &[u8]) -> Option<Vec<ColdEntry>> {
 /// the same scale as the hot path. `dead` shadows revived/deleted
 /// rows; no MaxScore pruning (a hot-only threshold would LOSE cold
 /// documents, not merely misrank them).
+///
+/// ```
+/// use kevy_text::{CorpusStats, TextSegment, cold::score_cold};
+/// use std::collections::HashMap;
+/// let mut seg = TextSegment::new();
+/// seg.apply(b"doc:1", Some(b"rust rust engine"));
+/// seg.apply(b"doc:2", Some(b"rust client library"));
+/// let bucket = seg.freeze_docs(&[b"doc:1".to_vec(), b"doc:2".to_vec()]).ok_or("nothing froze")?;
+/// let stats = CorpusStats::new(10.0, 3.0, HashMap::from([(b"rust".to_vec(), 2)]));
+/// let payload = &bucket.terms[&b"rust".to_vec()];
+///
+/// let mut acc = HashMap::new();
+/// score_cold(payload, b"rust", &stats, &|_| false, &mut acc).ok_or("malformed")?;
+/// assert!(acc[&b"doc:1".to_vec()] > acc[&b"doc:2".to_vec()], "two hits beat one");
+///
+/// // A row deleted or revived since the freeze is shadowed.
+/// let mut shadowed = HashMap::new();
+/// score_cold(payload, b"rust", &stats, &|k| k == b"doc:1", &mut shadowed).ok_or("malformed")?;
+/// assert_eq!(shadowed.len(), 1);
+/// assert!(score_cold(b"\x05", b"rust", &stats, &|_| false, &mut acc).is_none(), "malformed");
+/// # Ok::<(), &str>(())
+/// ```
 pub fn score_cold(
     payload: &[u8],
     term: &[u8],
@@ -218,6 +165,28 @@ pub fn score_cold(
 /// `rarest_anchor` `None` mirror). Positions blobs travel verbatim
 /// from the hot channel, so a segment frozen without `WITH POSITIONS`
 /// has empty blobs and verifies nothing — exactly the hot refusal.
+///
+/// ```
+/// use kevy_text::{CorpusStats, TextSegment, cold::score_cold_phrase};
+/// use std::collections::HashMap;
+/// let mut seg = TextSegment::with_positions();
+/// seg.apply(b"doc:1", Some(b"rust storage engine"));
+/// seg.apply(b"doc:2", Some(b"engine for rust storage"));
+/// seg.apply(b"doc:3", Some(b"storage engine rust"));
+/// let keys = [b"doc:1".to_vec(), b"doc:2".to_vec(), b"doc:3".to_vec()];
+/// let bucket = seg.freeze_docs(&keys).ok_or("nothing froze")?;
+/// let toks = vec![b"rust".to_vec(), b"storage".to_vec()];
+/// let payloads: Vec<Vec<u8>> = toks.iter().map(|t| bucket.terms[t].clone()).collect();
+/// let stats = CorpusStats::new(3.0, 3.0, HashMap::new());
+///
+/// let mut acc = HashMap::new();
+/// score_cold_phrase(&payloads, &toks, &stats, &|_| false, &mut acc).ok_or("malformed")?;
+/// let mut hits: Vec<&[u8]> = acc.keys().map(Vec::as_slice).collect();
+/// hits.sort();
+/// // doc:3 holds both tokens, but not as "rust storage".
+/// assert_eq!(hits, vec![&b"doc:1"[..], b"doc:2"]);
+/// # Ok::<(), &str>(())
+/// ```
 pub fn score_cold_phrase(
     payloads: &[Vec<u8>],
     toks: &[Vec<u8>],
@@ -264,6 +233,15 @@ pub fn score_cold_phrase(
 /// the ROW rather than the segment (the freeze consumed the stored
 /// copy). Same re-analysis, same span rules, byte-identical output
 /// for the same texts.
+///
+/// ```
+/// use kevy_text::cold::highlight_fields;
+/// let fields = vec![b"Kevy docs".to_vec(), b"a rust engine in rust".to_vec()];
+/// let spans = highlight_fields(&fields, b"rust");
+/// // Field 1 only, with a byte span per occurrence.
+/// assert_eq!(spans, vec![(1, vec![(2, 6), (17, 21)])]);
+/// assert_eq!(&fields[1][2..6], b"rust");
+/// ```
 pub fn highlight_fields(fields: &[Vec<u8>], query: &[u8]) -> Vec<(usize, Vec<(usize, usize)>)> {
     let (bare, phrases, prefixes) = crate::parse_clauses(query);
     let terms: std::collections::HashSet<&[u8]> = bare.iter().map(Vec::as_slice).collect();
@@ -287,6 +265,19 @@ impl TextSegment {
     /// reclaiming the doc record, its postings slots and its positions
     /// in one motion. Keys not indexed are skipped. `None` when
     /// nothing froze.
+    ///
+    /// ```
+    /// use kevy_text::TextSegment;
+    /// let mut seg = TextSegment::new();
+    /// seg.apply(b"doc:1", Some(b"rust engine"));
+    /// seg.apply(b"doc:2", Some(b"rust client"));
+    /// let bucket = seg.freeze_docs(&[b"doc:1".to_vec()]).ok_or("nothing froze")?;
+    /// assert_eq!(bucket.n_docs, 1);
+    /// let left: Vec<Vec<u8>> = seg.matches(b"rust", 10).into_iter().map(|m| m.key).collect();
+    /// assert_eq!(left, vec![b"doc:2".to_vec()], "doc:1 now lives only in the bucket");
+    /// assert!(seg.freeze_docs(&[b"doc:1".to_vec()]).is_none(), "already frozen");
+    /// # Ok::<(), &str>(())
+    /// ```
     pub fn freeze_docs(&mut self, keys: &[Vec<u8>]) -> Option<FrozenBucket> {
         let mut terms: BTreeMap<Vec<u8>, Vec<ColdEntry>> = BTreeMap::new();
         let mut fwd: BTreeMap<Vec<u8>, Vec<u8>> = BTreeMap::new();
@@ -331,34 +322,3 @@ impl TextSegment {
 #[cfg(test)]
 #[path = "cold_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-mod bound_tests {
-    /// A count out of a cold payload cannot size an allocation.
-    ///
-    /// Sixth site of this shape in one release. The first three were found
-    /// by fuzzers pointing at them, which is why the last three were found
-    /// by listing every allocation whose size comes out of the bytes instead
-    /// of waiting for the next crash.
-    #[test]
-    fn a_count_from_a_payload_cannot_size_an_allocation() {
-        use super::entries_fit;
-        assert_eq!(entries_fit(3, 1024), 3, "an honest count is used as-is");
-        assert_eq!(
-            entries_fit(u32::MAX as usize, 40),
-            40,
-            "4.29e9 entries over forty bytes reserves the ceiling, not 103 GB"
-        );
-        // One byte per entry is the floor, so a payload can always honour
-        // `len` of them — an honest payload is never short-reserved.
-        for len in [0usize, 1, 64, 4096] {
-            assert_eq!(entries_fit(len, len), len, "len at {len} still fits exactly");
-        }
-
-        // The decode refuses the lie either way, which is why the assertion
-        // that sees this defect is the one above and not this one.
-        let mut payload = vec![0xffu8, 0xff, 0xff, 0xff, 0x0f]; // varint u32::MAX
-        payload.push(0x00);
-        assert!(super::decode_posting(&payload).is_none());
-    }
-}

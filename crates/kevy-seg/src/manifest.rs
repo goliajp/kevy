@@ -18,84 +18,30 @@ use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use crate::{SegError, SegMeta};
+use crate::{ManifestEntry, SegError};
 
-/// One live segment as the manifest knows it.
+/// The append-only ledger. One per segment directory.
 ///
-/// Built with [`ManifestEntry::new`] from the footer summary
-/// [`SegBuilder::finish`](crate::SegBuilder::finish) returns, so the
-/// mirrored range and count always come from the segment itself.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-/// # Examples
+/// A segment becomes live when the ledger records it, and stops being
+/// live when the ledger records its retirement; both survive a reopen.
 ///
 /// ```
 /// use kevy_seg::{Manifest, ManifestEntry, SegBuilder};
-/// # let dir = std::env::temp_dir().join(format!("kevy-man-doc-{}-{}", std::process::id(), line!()));
-/// # std::fs::create_dir_all(&dir)?;
-/// let mut b = SegBuilder::create(&dir.join("s1.seg"))?;
-/// b.push(b"a", b"1")?;
-/// b.push(b"z", b"2")?;
-/// let mut m = Manifest::open(&dir)?;
-/// m.add(ManifestEntry::new("s1.seg", b.finish()?))?;
-/// // min/max are mirrored from the footer so a reader can skip a
-/// // segment without opening it.
-/// let first = m.live().next().unwrap();
-/// assert_eq!(first.file, "s1.seg");
-/// assert_eq!(first.max_key, b"z".to_vec());
-/// # std::fs::remove_dir_all(&dir).ok();
-/// # Ok::<(), kevy_seg::SegError>(())
+/// # let dir = kevy_tmpdir::TmpDir::new("manifest");
+/// # let dir = dir.path();
+/// for name in ["s1.seg", "s2.seg"] {
+///     let mut b = SegBuilder::create(&dir.join(name))?;
+///     b.push(name.as_bytes(), b"v")?;
+///     Manifest::open(dir)?.add(ManifestEntry::new(name, b.finish()?))?;
+/// }
+/// let mut m = Manifest::open(dir)?;
+/// m.drop_seg("s1.seg")?;
+/// std::fs::remove_file(dir.join("s1.seg"))?;
+///
+/// let live: Vec<String> = Manifest::open(dir)?.live().map(|e| e.file.clone()).collect();
+/// assert_eq!(live, ["s2.seg"]);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
-pub struct ManifestEntry {
-    /// Segment file name (relative to the manifest's directory).
-    pub file: String,
-    /// Caller-opaque metadata (table id, bucket, …).
-    pub meta: Vec<u8>,
-    /// Smallest key in the segment, mirrored from its footer so a
-    /// directory can be served without opening the file.
-    pub min_key: Vec<u8>,
-    /// Largest key in the segment. With `min_key` this is the range a
-    /// reader tests before deciding the segment is worth opening.
-    pub max_key: Vec<u8>,
-    /// Record count, mirrored from the footer. Includes tombstones, so
-    /// it bounds a scan rather than predicting what it yields.
-    pub records: u64,
-}
-
-impl ManifestEntry {
-    /// An entry for `file`, mirroring the footer summary of the segment
-    /// it names. The caller-opaque `meta` starts empty.
-    ///
-    /// ```
-    /// use kevy_seg::{ManifestEntry, SegMeta};
-    /// let e = ManifestEntry::new("s1.seg", SegMeta::default());
-    /// assert_eq!((e.file.as_str(), e.records, e.meta.len()), ("s1.seg", 0, 0));
-    /// ```
-    pub fn new(file: impl Into<String>, seg: SegMeta) -> Self {
-        ManifestEntry {
-            file: file.into(),
-            meta: Vec::new(),
-            min_key: seg.min_key,
-            max_key: seg.max_key,
-            records: seg.records,
-        }
-    }
-
-    /// Attach caller-opaque metadata (table id, bucket, …).
-    ///
-    /// ```
-    /// use kevy_seg::{ManifestEntry, SegMeta};
-    /// let e = ManifestEntry::new("s1.seg", SegMeta::default()).with_meta(b"table:9".to_vec());
-    /// assert_eq!(e.meta, b"table:9");
-    /// ```
-    #[must_use]
-    pub fn with_meta(mut self, meta: Vec<u8>) -> Self {
-        self.meta = meta;
-        self
-    }
-}
-
-/// The append-only ledger. One per segment directory.
 #[derive(Debug)]
 pub struct Manifest {
     dir: PathBuf,
@@ -218,6 +164,27 @@ impl Manifest {
 
     /// Rewrite the ledger as its live set (temp + rename + fsync).
     /// Call when the dead-record fraction is worth the IO.
+    ///
+    /// ```
+    /// use kevy_seg::{Manifest, ManifestEntry, SegMeta};
+    /// # let dir = kevy_tmpdir::TmpDir::new("manifest-compact");
+    /// let ledger = dir.path().join("segs.manifest");
+    /// let mut m = Manifest::open(dir.path())?;
+    /// for i in 0..20 {
+    ///     let name = format!("s{i}.seg");
+    ///     m.add(ManifestEntry::new(name.clone(), SegMeta::default()))?;
+    ///     if i > 0 {
+    ///         m.drop_seg(&name)?;
+    ///     }
+    /// }
+    /// let before = std::fs::metadata(&ledger)?.len();
+    /// m.compact()?;
+    /// // the dropped history is gone; the live set is unchanged
+    /// assert!(std::fs::metadata(&ledger)?.len() < before);
+    /// let live: Vec<String> = Manifest::open(dir.path())?.live().map(|e| e.file.clone()).collect();
+    /// assert_eq!(live, ["s0.seg"]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn compact(&mut self) -> Result<(), SegError> {
         let tmp = self.path.with_extension("manifest.rewrite");
         let mut w = File::create(&tmp)?;

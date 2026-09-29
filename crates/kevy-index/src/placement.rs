@@ -40,6 +40,13 @@ impl Slot {
 /// assert_eq!(t.get(b"user:1"), Some((3, 0xbeef)));
 /// assert_eq!(t.remove(b"user:1"), Some((3, 0xbeef)));
 /// assert!(t.is_empty());
+///
+/// t.insert(b"user:2", 0, 1);
+/// t.insert(b"user:3", 1, 2);
+/// assert_eq!(t.len(), 2);
+/// assert!(t.approx_bytes() > 0);
+/// t.clear();
+/// assert_eq!((t.len(), t.get(b"user:2")), (0, None));
 /// ```
 #[derive(Default)]
 pub struct PlacementTable {

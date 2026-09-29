@@ -24,11 +24,11 @@ use crate::{IndexKind, IndexSpec, ValType};
 ///
 /// let t = parse_table_declare(&[
 ///     b"TABLE.DECLARE", b"t", b"PREFIX", b"t:", b"PK", b"id", b"COLUMN", b"id", b"i64",
-/// ])
-/// .unwrap();
+/// ])?;
 /// let Described::Array(fields) = describe_table(&t) else { unreachable!() };
 /// assert_eq!(fields[0], Described::Bulk(b"name".to_vec()));
 /// assert_eq!(fields[13], Described::Bulk(b"-".to_vec())); // no window
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Described {
@@ -195,11 +195,11 @@ fn index_ann(s: &IndexSpec) -> Described {
 /// let t = parse_table_declare(&[
 ///     b"TABLE.DECLARE", b"u", b"PREFIX", b"u:", b"PK", b"id",
 ///     b"COLUMN", b"id", b"i64", b"INDEX", b"id", b"unique",
-/// ])
-/// .unwrap();
+/// ])?;
 /// let tables = [t];
 /// assert_eq!(owner_of(&tables, b"u.id").map(|t| t.name.as_slice()), Some(&b"u"[..]));
 /// assert!(owner_of(&tables, b"age").is_none());
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn owner_of<'a>(
     tables: impl IntoIterator<Item = &'a TableSpec>,

@@ -51,7 +51,9 @@ mod rowvalues;
 mod segcold;
 mod segment;
 mod segment_claused;
+mod segment_claused_merge;
 mod segment_entry;
+mod segment_stats;
 mod spec;
 mod spec_builder;
 mod spec_parts;
@@ -64,6 +66,7 @@ mod table_wire;
 mod value;
 mod view;
 mod view_materialized;
+mod view_mode;
 mod view_sidecar;
 
 pub use advise::{ADVISE_CAP, AUTODECLARE_AFTER, AdviseEntry, AdviseLog, AdviseShape, UsageCell};
@@ -86,11 +89,12 @@ pub use segcold::{
     ColdBloom, WindowAudit, WindowShape, decode_seg_key, decode_seg_values, encode_seg_values,
     seg_bounds, seg_key, window_bound,
 };
-pub use segment::{Cursor, Segment, SegmentStats};
+pub use segment::{Cursor, Segment};
 pub use segment_claused::{
     ClausedPage, ColdEntryRow, FacetBucket, ScalarClauses, ScalarHit, claused_over, fold_facets,
     merge_claused, sort_facets, values_pass,
 };
+pub use segment_stats::SegmentStats;
 pub use spec::{IndexSpec, RowInputs};
 pub use spec_builder::IndexSpecBuilder;
 pub use spec_parts::{AnnSpec, FieldSpec, ValueSpec};

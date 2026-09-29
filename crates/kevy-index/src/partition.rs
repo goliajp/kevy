@@ -24,12 +24,43 @@ use crate::{Catalog, IndexKind, IndexSpec};
 #[non_exhaustive]
 pub enum Partitioning {
     /// Every shard holds the entries of the rows it owns.
+    ///
+    /// ```
+    /// use kevy_index::{Catalog, IndexKind, IndexSpec, Partitioning, ValType};
+    /// let mut c = Catalog::new();
+    /// c.create(IndexSpec::builder("age", "u:", IndexKind::Range, ValType::I64).with_field("age").build()?)?;
+    /// let p = c.partitioning(b"age");
+    /// assert_eq!(p, &Partitioning::Local, "plain create is local");
+    /// assert_eq!(p.partition_of(b"anything"), 0);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     #[default]
     Local,
     /// The entries are split by value order at these points, strictly
     /// increasing byte strings of the index's order encoding.
+    ///
+    /// ```
+    /// use kevy_index::{Catalog, IndexKind, IndexSpec, Partitioning, ValType, order_key};
+    /// let spec = IndexSpec::builder("age", "u:", IndexKind::Range, ValType::I64).with_field("age").build()?;
+    /// let at = |v: &[u8]| order_key(ValType::I64, v).expect("an i64");
+    /// let mut c = Catalog::new();
+    /// c.create_with(spec, Partitioning::Global { splits: vec![at(b"18"), at(b"65")] })?;
+    /// let p = c.partitioning(b"age");
+    /// assert_eq!(p.partitions(), 3);
+    /// assert_eq!((p.partition_of(&at(b"9")), p.partition_of(&at(b"40")), p.partition_of(&at(b"90"))), (0, 1, 2));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     Global {
         /// The `P - 1` split points.
+        ///
+        /// ```
+        /// use kevy_index::Partitioning;
+        /// let p = Partitioning::Global { splits: vec![b"h".to_vec(), b"q".to_vec()] };
+        /// let Partitioning::Global { splits } = &p else { panic!("declared global") };
+        /// assert_eq!(splits.len() + 1, p.partitions());
+        /// // a split point is the first value of its partition
+        /// assert_eq!(p.partition_of(&splits[0]), 1);
+        /// ```
         splits: Vec<Vec<u8>>,
     },
 }
@@ -269,7 +300,7 @@ impl Catalog {
     ///
     /// let spec = IndexSpec::builder("name", "user:", IndexKind::Range, ValType::Str).with_field("name").build()?;
     /// let mut c = Catalog::new();
-    /// c.create_with(spec, Partitioning::Global { splits: vec![] }).unwrap();
+    /// c.create_with(spec, Partitioning::Global { splits: vec![] })?;
     /// assert!(c.set_splits(b"name", vec![b"h".to_vec(), b"q".to_vec()]));
     /// assert_eq!(c.partitioning(b"name").partition_of(b"mia"), 1);
     /// # Ok::<(), Box<dyn std::error::Error>>(())

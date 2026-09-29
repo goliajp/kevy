@@ -37,35 +37,164 @@ use crate::{QueryCard, SqlError, lex, parse, schema, viewplan};
 #[non_exhaustive]
 pub enum Served {
     /// Served by the engine holding the whole query as a view.
+    ///
+    /// ```
+    /// let p = kevy_sql::plan(
+    ///     "CREATE TABLE orders (id bigint PRIMARY KEY, user_id bigint, status text);
+    ///      CREATE INDEX ON orders (user_id);
+    ///      CREATE VIEW mine AS SELECT * FROM orders WHERE user_id = 7;
+    ///      CREATE VIEW by_user AS SELECT * FROM orders WHERE user_id = $1;
+    ///      CREATE VIEW paid AS SELECT * FROM orders WHERE status = 'paid';",
+    /// )?;
+    /// let kevy_sql::Served::View { argv, .. } = &p.queries[0].served else { unreachable!() };
+    /// assert_eq!(argv[..2], ["VIEW.CREATE", "mine"]);
+    /// # Ok::<(), kevy_sql::SqlError>(())
+    /// ```
     View {
         /// The `table.column` paths this query rides, in argv order.
+        ///
+        /// ```
+        /// let p = kevy_sql::plan(
+        ///     "CREATE TABLE orders (id bigint PRIMARY KEY, user_id bigint, status text);
+        ///      CREATE INDEX ON orders (user_id);
+        ///      CREATE VIEW mine AS SELECT * FROM orders WHERE user_id = 7;
+        ///      CREATE VIEW by_user AS SELECT * FROM orders WHERE user_id = $1;
+        ///      CREATE VIEW paid AS SELECT * FROM orders WHERE status = 'paid';",
+        /// )?;
+        /// let kevy_sql::Served::View { paths, .. } = &p.queries[0].served else { unreachable!() };
+        /// assert_eq!(paths, &["orders.user_id"]);
+        /// # Ok::<(), kevy_sql::SqlError>(())
+        /// ```
         paths: Vec<String>,
         /// The `VIEW.CREATE` argv.
+        ///
+        /// ```
+        /// let p = kevy_sql::plan(
+        ///     "CREATE TABLE orders (id bigint PRIMARY KEY, user_id bigint, status text);
+        ///      CREATE INDEX ON orders (user_id);
+        ///      CREATE VIEW mine AS SELECT * FROM orders WHERE user_id = 7;
+        ///      CREATE VIEW by_user AS SELECT * FROM orders WHERE user_id = $1;
+        ///      CREATE VIEW paid AS SELECT * FROM orders WHERE status = 'paid';",
+        /// )?;
+        /// let kevy_sql::Served::View { argv, .. } = &p.queries[0].served else { unreachable!() };
+        /// assert_eq!(argv.join(" "), "VIEW.CREATE mine QUERY orders.user_id EQ 7 ORDER BY orders.user_id");
+        /// # Ok::<(), kevy_sql::SqlError>(())
+        /// ```
         argv: Vec<String>,
     },
     /// Served by a runtime template the application binds and sends.
+    ///
+    /// ```
+    /// let p = kevy_sql::plan(
+    ///     "CREATE TABLE orders (id bigint PRIMARY KEY, user_id bigint, status text);
+    ///      CREATE INDEX ON orders (user_id);
+    ///      CREATE VIEW mine AS SELECT * FROM orders WHERE user_id = 7;
+    ///      CREATE VIEW by_user AS SELECT * FROM orders WHERE user_id = $1;
+    ///      CREATE VIEW paid AS SELECT * FROM orders WHERE status = 'paid';",
+    /// )?;
+    /// let kevy_sql::Served::Card { card, .. } = &p.queries[1].served else { unreachable!() };
+    /// assert_eq!(card.argv[..4], ["IDX.QUERY", "orders.user_id", "EQ", "$1"]);
+    /// # Ok::<(), kevy_sql::SqlError>(())
+    /// ```
     Card {
         /// The `table.column` paths this query rides, in argv order.
+        ///
+        /// ```
+        /// let p = kevy_sql::plan(
+        ///     "CREATE TABLE orders (id bigint PRIMARY KEY, user_id bigint, status text);
+        ///      CREATE INDEX ON orders (user_id);
+        ///      CREATE VIEW mine AS SELECT * FROM orders WHERE user_id = 7;
+        ///      CREATE VIEW by_user AS SELECT * FROM orders WHERE user_id = $1;
+        ///      CREATE VIEW paid AS SELECT * FROM orders WHERE status = 'paid';",
+        /// )?;
+        /// let kevy_sql::Served::Card { paths, .. } = &p.queries[1].served else { unreachable!() };
+        /// assert_eq!(paths, &["orders.user_id"]);
+        /// # Ok::<(), kevy_sql::SqlError>(())
+        /// ```
         paths: Vec<String>,
         /// The query card.
+        ///
+        /// ```
+        /// let p = kevy_sql::plan(
+        ///     "CREATE TABLE orders (id bigint PRIMARY KEY, user_id bigint, status text);
+        ///      CREATE INDEX ON orders (user_id);
+        ///      CREATE VIEW mine AS SELECT * FROM orders WHERE user_id = 7;
+        ///      CREATE VIEW by_user AS SELECT * FROM orders WHERE user_id = $1;
+        ///      CREATE VIEW paid AS SELECT * FROM orders WHERE status = 'paid';",
+        /// )?;
+        /// let kevy_sql::Served::Card { card, .. } = &p.queries[1].served else { unreachable!() };
+        /// assert_eq!((card.name.as_str(), card.params[0].column.as_str()), ("by_user", "user_id"));
+        /// # Ok::<(), kevy_sql::SqlError>(())
+        /// ```
         card: QueryCard,
     },
     /// Not served, with the compiler's own refusal — which names the
     /// alternative rather than only saying no.
+    ///
+    /// ```
+    /// let p = kevy_sql::plan(
+    ///     "CREATE TABLE orders (id bigint PRIMARY KEY, user_id bigint, status text);
+    ///      CREATE INDEX ON orders (user_id);
+    ///      CREATE VIEW mine AS SELECT * FROM orders WHERE user_id = 7;
+    ///      CREATE VIEW by_user AS SELECT * FROM orders WHERE user_id = $1;
+    ///      CREATE VIEW paid AS SELECT * FROM orders WHERE status = 'paid';",
+    /// )?;
+    /// assert!(matches!(p.queries[2].served, kevy_sql::Served::Refused { .. }));
+    /// # Ok::<(), kevy_sql::SqlError>(())
+    /// ```
     Refused {
         /// The refusal, verbatim.
+        ///
+        /// ```
+        /// let p = kevy_sql::plan(
+        ///     "CREATE TABLE orders (id bigint PRIMARY KEY, user_id bigint, status text);
+        ///      CREATE INDEX ON orders (user_id);
+        ///      CREATE VIEW mine AS SELECT * FROM orders WHERE user_id = 7;
+        ///      CREATE VIEW by_user AS SELECT * FROM orders WHERE user_id = $1;
+        ///      CREATE VIEW paid AS SELECT * FROM orders WHERE status = 'paid';",
+        /// )?;
+        /// let kevy_sql::Served::Refused { reason } = &p.queries[2].served else { unreachable!() };
+        /// assert!(reason.ends_with("add: CREATE INDEX ON orders (status)"));
+        /// # Ok::<(), kevy_sql::SqlError>(())
+        /// ```
         reason: String,
     },
 }
 
 impl Served {
     /// Whether this query can be served as declared.
+    ///
+    /// ```
+    /// let p = kevy_sql::plan(
+    ///     "CREATE TABLE orders (id bigint PRIMARY KEY, user_id bigint, status text);
+    ///      CREATE INDEX ON orders (user_id);
+    ///      CREATE VIEW mine AS SELECT * FROM orders WHERE user_id = 7;
+    ///      CREATE VIEW by_user AS SELECT * FROM orders WHERE user_id = $1;
+    ///      CREATE VIEW paid AS SELECT * FROM orders WHERE status = 'paid';",
+    /// )?;
+    /// let served: Vec<bool> = p.queries.iter().map(|q| q.served.is_served()).collect();
+    /// assert_eq!(served, [true, true, false]);
+    /// # Ok::<(), kevy_sql::SqlError>(())
+    /// ```
     pub fn is_served(&self) -> bool {
         self.paths().is_some()
     }
 
     /// The `table.column` paths a served query rides, in argv order;
     /// `None` when it is refused.
+    ///
+    /// ```
+    /// let p = kevy_sql::plan(
+    ///     "CREATE TABLE orders (id bigint PRIMARY KEY, user_id bigint, status text);
+    ///      CREATE INDEX ON orders (user_id);
+    ///      CREATE VIEW mine AS SELECT * FROM orders WHERE user_id = 7;
+    ///      CREATE VIEW by_user AS SELECT * FROM orders WHERE user_id = $1;
+    ///      CREATE VIEW paid AS SELECT * FROM orders WHERE status = 'paid';",
+    /// )?;
+    /// assert_eq!(p.queries[0].served.paths(), Some(&["orders.user_id".to_string()][..]));
+    /// assert_eq!(p.queries[2].served.paths(), None);
+    /// # Ok::<(), kevy_sql::SqlError>(())
+    /// ```
     pub fn paths(&self) -> Option<&[String]> {
         match self {
             Served::View { paths, .. } | Served::Card { paths, .. } => Some(paths),
@@ -75,37 +204,168 @@ impl Served {
 }
 
 /// One query's row in the plan.
+///
+/// ```
+/// let p = kevy_sql::plan(
+///     "CREATE TABLE orders (id bigint PRIMARY KEY, user_id bigint, status text);
+///      CREATE INDEX ON orders (user_id);
+///      CREATE VIEW mine AS SELECT * FROM orders WHERE user_id = 7;
+///      CREATE VIEW by_user AS SELECT * FROM orders WHERE user_id = $1;
+///      CREATE VIEW paid AS SELECT * FROM orders WHERE status = 'paid';",
+/// )?;
+/// let q = &p.queries[2];
+/// assert_eq!((q.name.as_str(), q.table.as_str(), q.line), ("paid", "orders", 5));
+/// assert!(!q.served.is_served());
+/// # Ok::<(), kevy_sql::SqlError>(())
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct PlanEntry {
     /// The view name.
+    ///
+    /// ```
+    /// let p = kevy_sql::plan(
+    ///     "CREATE TABLE orders (id bigint PRIMARY KEY, user_id bigint, status text);
+    ///      CREATE INDEX ON orders (user_id);
+    ///      CREATE VIEW mine AS SELECT * FROM orders WHERE user_id = 7;
+    ///      CREATE VIEW by_user AS SELECT * FROM orders WHERE user_id = $1;
+    ///      CREATE VIEW paid AS SELECT * FROM orders WHERE status = 'paid';",
+    /// )?;
+    /// let names: Vec<&str> = p.queries.iter().map(|q| q.name.as_str()).collect();
+    /// assert_eq!(names, ["mine", "by_user", "paid"]);
+    /// # Ok::<(), kevy_sql::SqlError>(())
+    /// ```
     pub name: String,
     /// The table it reads.
+    ///
+    /// ```
+    /// let p = kevy_sql::plan(
+    ///     "CREATE TABLE orders (id bigint PRIMARY KEY, user_id bigint, status text);
+    ///      CREATE INDEX ON orders (user_id);
+    ///      CREATE VIEW mine AS SELECT * FROM orders WHERE user_id = 7;
+    ///      CREATE VIEW by_user AS SELECT * FROM orders WHERE user_id = $1;
+    ///      CREATE VIEW paid AS SELECT * FROM orders WHERE status = 'paid';",
+    /// )?;
+    /// assert!(p.queries.iter().all(|q| q.table == "orders"));
+    /// # Ok::<(), kevy_sql::SqlError>(())
+    /// ```
     pub table: String,
     /// 1-based source line, so a refusal points back at the SQL.
+    ///
+    /// ```
+    /// let p = kevy_sql::plan(
+    ///     "CREATE TABLE orders (id bigint PRIMARY KEY, user_id bigint, status text);
+    ///      CREATE INDEX ON orders (user_id);
+    ///      CREATE VIEW mine AS SELECT * FROM orders WHERE user_id = 7;
+    ///      CREATE VIEW by_user AS SELECT * FROM orders WHERE user_id = $1;
+    ///      CREATE VIEW paid AS SELECT * FROM orders WHERE status = 'paid';",
+    /// )?;
+    /// // the refused view is the fifth line of the SQL above
+    /// assert_eq!(p.queries[2].line, 5);
+    /// # Ok::<(), kevy_sql::SqlError>(())
+    /// ```
     pub line: u32,
     /// The verdict.
+    ///
+    /// ```
+    /// let p = kevy_sql::plan(
+    ///     "CREATE TABLE orders (id bigint PRIMARY KEY, user_id bigint, status text);
+    ///      CREATE INDEX ON orders (user_id);
+    ///      CREATE VIEW mine AS SELECT * FROM orders WHERE user_id = 7;
+    ///      CREATE VIEW by_user AS SELECT * FROM orders WHERE user_id = $1;
+    ///      CREATE VIEW paid AS SELECT * FROM orders WHERE status = 'paid';",
+    /// )?;
+    /// assert!(p.queries[0].served.is_served());
+    /// # Ok::<(), kevy_sql::SqlError>(())
+    /// ```
     pub served: Served,
 }
 
 /// A migration plan: what to declare, and what becomes of each query.
+///
+/// ```
+/// let p = kevy_sql::plan(
+///     "CREATE TABLE orders (id bigint PRIMARY KEY, user_id bigint, status text);
+///      CREATE INDEX ON orders (user_id);
+///      CREATE VIEW mine AS SELECT * FROM orders WHERE user_id = 7;
+///      CREATE VIEW by_user AS SELECT * FROM orders WHERE user_id = $1;
+///      CREATE VIEW paid AS SELECT * FROM orders WHERE status = 'paid';",
+/// )?;
+/// assert_eq!(p.declares.len(), 1);
+/// assert_eq!(p.queries.len(), 3);
+/// assert_eq!(p.unserved(), 1);
+/// # Ok::<(), kevy_sql::SqlError>(())
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct Plan {
     /// `TABLE.DECLARE` argv per table, declaration order.
+    ///
+    /// ```
+    /// let p = kevy_sql::plan(
+    ///     "CREATE TABLE orders (id bigint PRIMARY KEY, user_id bigint, status text);
+    ///      CREATE INDEX ON orders (user_id);
+    ///      CREATE VIEW mine AS SELECT * FROM orders WHERE user_id = 7;
+    ///      CREATE VIEW by_user AS SELECT * FROM orders WHERE user_id = $1;
+    ///      CREATE VIEW paid AS SELECT * FROM orders WHERE status = 'paid';",
+    /// )?;
+    /// assert_eq!(p.declares[0][..2], ["TABLE.DECLARE", "orders"]);
+    /// # Ok::<(), kevy_sql::SqlError>(())
+    /// ```
     pub declares: Vec<Vec<String>>,
     /// Every `CREATE VIEW`, served or not, declaration order.
+    ///
+    /// ```
+    /// let p = kevy_sql::plan(
+    ///     "CREATE TABLE orders (id bigint PRIMARY KEY, user_id bigint, status text);
+    ///      CREATE INDEX ON orders (user_id);
+    ///      CREATE VIEW mine AS SELECT * FROM orders WHERE user_id = 7;
+    ///      CREATE VIEW by_user AS SELECT * FROM orders WHERE user_id = $1;
+    ///      CREATE VIEW paid AS SELECT * FROM orders WHERE status = 'paid';",
+    /// )?;
+    /// assert_eq!(p.queries.len(), 3);
+    /// # Ok::<(), kevy_sql::SqlError>(())
+    /// ```
     pub queries: Vec<PlanEntry>,
     /// Honest-mapping notes, as [`crate::Compilation::notes`].
+    ///
+    /// ```
+    /// let p = kevy_sql::plan("CREATE TABLE ev (id bigint PRIMARY KEY, at timestamp);")?;
+    /// assert!(p.notes.iter().any(|n| n.contains("ev.at: timestamp → str")));
+    /// # Ok::<(), kevy_sql::SqlError>(())
+    /// ```
     pub notes: Vec<String>,
     /// Tables (and stray indexes) that could NOT be declared:
     /// `(name, named reason)`. The charter's migration bar reads
     /// "every type either moved or named" — this is the named half.
+    ///
+    /// ```
+    /// let p = kevy_sql::plan(
+    ///     "CREATE TABLE users (id bigint PRIMARY KEY, email text);
+    ///      CREATE TABLE billing (id bigint PRIMARY KEY, amount money);",
+    /// )?;
+    /// assert_eq!(p.declares.len(), 1); // users still declares
+    /// assert_eq!(p.dropped[0].0, "billing");
+    /// assert!(p.dropped[0].1.contains("money"));
+    /// # Ok::<(), kevy_sql::SqlError>(())
+    /// ```
     pub dropped: Vec<(String, String)>,
 }
 
 impl Plan {
     /// How many queries cannot be served as declared.
+    ///
+    /// ```
+    /// let p = kevy_sql::plan(
+    ///     "CREATE TABLE orders (id bigint PRIMARY KEY, user_id bigint, status text);
+    ///      CREATE INDEX ON orders (user_id);
+    ///      CREATE VIEW mine AS SELECT * FROM orders WHERE user_id = 7;
+    ///      CREATE VIEW by_user AS SELECT * FROM orders WHERE user_id = $1;
+    ///      CREATE VIEW paid AS SELECT * FROM orders WHERE status = 'paid';",
+    /// )?;
+    /// assert_eq!(p.unserved(), 1);
+    /// # Ok::<(), kevy_sql::SqlError>(())
+    /// ```
     pub fn unserved(&self) -> usize {
         self.queries.iter().filter(|q| !q.served.is_served()).count()
     }
@@ -116,6 +376,23 @@ impl Plan {
 ///
 /// Errors only on the schema itself — a file whose DDL does not parse
 /// has no plan. A view that cannot be served comes back as an entry.
+///
+/// ```
+/// let p = kevy_sql::plan(
+///     "CREATE TABLE orders (id bigint PRIMARY KEY, user_id bigint, status text);
+///      CREATE INDEX ON orders (user_id);
+///      CREATE VIEW mine AS SELECT * FROM orders WHERE user_id = 7;
+///      CREATE VIEW by_user AS SELECT * FROM orders WHERE user_id = $1;
+///      CREATE VIEW paid AS SELECT * FROM orders WHERE status = 'paid';",
+/// )?;
+/// // one refused view does not stop the other two from being planned
+/// assert_eq!(p.queries.len(), 3);
+/// assert_eq!(p.unserved(), 1);
+///
+/// // a schema that does not parse has no plan at all
+/// assert!(kevy_sql::plan("CREATE TABLE (").is_err());
+/// # Ok::<(), kevy_sql::SqlError>(())
+/// ```
 pub fn plan(sql: &str) -> Result<Plan, SqlError> {
     let toks = lex::lex(sql)?;
     let stmts = parse::parse_script(&toks)?;
