@@ -76,7 +76,7 @@ impl AtomicAllShards<'_> {
         for g in self.guards.iter_mut() {
             let inner = &mut **g;
             sync_segs(&reg, &mut inner.idx_segs, &mut inner.store);
-            if let Some((_, seg)) = inner.idx_segs.segs.iter().find(|(s, _)| s.name == name) {
+            if let Some((_, seg)) = inner.idx_segs.segs.iter().find(|(s, _)| s.name() == name) {
                 found = true;
                 f(seg);
             }

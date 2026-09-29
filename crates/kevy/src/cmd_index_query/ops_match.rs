@@ -47,10 +47,9 @@ fn with_clauses<R>(
         grouped.zip(dkey.as_ref()).map(|((field, _), k)| kevy_text::Distinct::new(field, k));
     let sorted = sort_field(spec, &q.sort)?;
     let key = sorted.map(|(_, _, ty)| move |raw: &[u8]| kevy_index::order_key(ty, raw));
-    let sort = sorted.zip(key.as_ref()).map(|((field, desc, _), k)| {
-        let order = if desc { kevy_text::SortOrder::Desc } else { kevy_text::SortOrder::Asc };
-        kevy_text::Sort::new(field, k).with_order(order)
-    });
+    let sort = sorted
+        .zip(key.as_ref())
+        .map(|((field, order, _), k)| kevy_text::Sort::new(field, k).with_order(order));
     let counted = facet_fields(spec, &q.facets)?;
     let fkeys: Vec<_> = counted
         .iter()
@@ -125,7 +124,7 @@ pub(super) fn order_keys(
             ts.stored_value(&h.key, f)
                 .map(<[u8]>::to_vec)
                 .or_else(|| cold_vals.get(&h.key)?.get(f)?.clone())
-                .and_then(|raw| kevy_index::order_key(spec.values[f].ty, &raw))
+                .and_then(|raw| kevy_index::order_key(spec.values()[f].ty, &raw))
         })
         .collect()
 }
@@ -155,7 +154,7 @@ pub(super) fn hit_highlight(
     spans
         .into_iter()
         .filter_map(|(fi, spans)| {
-            let name = spec.fields.get(fi)?.name.clone();
+            let name = spec.fields().get(fi)?.name.clone();
             if !want.is_empty() && !want.contains(&name) {
                 return None;
             }

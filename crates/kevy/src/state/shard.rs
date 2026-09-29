@@ -355,19 +355,10 @@ mod tests {
         state.install_index_catalog(kevy_index::Catalog::new());
         assert_eq!(shard.gate_bits(state) & TABLE_NONEMPTY, 0);
         let mut tables = kevy_index::TableCatalog::new();
-        tables
-            .create(kevy_index::TableSpec {
-                name: b"t".to_vec(),
-                prefix: b"t:".to_vec(),
-                pk: b"id".to_vec(),
-                columns: vec![(b"id".to_vec(), kevy_index::ValType::Str)],
-                indexes: vec![],
-                orderpaths: vec![],
-                window: None,
-                autodeclare: 0,
-                auto_added: vec![],
-            })
-            .unwrap();
+        let mut t = kevy_index::TableSpec::default();
+        (t.name, t.prefix, t.pk) = (b"t".to_vec(), b"t:".to_vec(), b"id".to_vec());
+        t.columns = vec![(b"id".to_vec(), kevy_index::ValType::Str)];
+        tables.create(t).unwrap();
         state.install_table_catalog(tables);
         assert_ne!(shard.gate_bits(state) & TABLE_NONEMPTY, 0);
     }

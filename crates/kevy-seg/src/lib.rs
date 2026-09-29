@@ -4,6 +4,27 @@
 //! what their records MEAN; how records are laid out, located,
 //! checksummed and retired is identical, so it lives here once.
 //!
+//! ```
+//! use kevy_seg::{Manifest, ManifestEntry, Seg, SegBuilder};
+//!
+//! # let dir = std::env::temp_dir().join(format!("kevy-seg-crate-doc-{}", std::process::id()));
+//! # std::fs::create_dir_all(&dir)?;
+//! // keys go in strictly ascending; the footer seals the file
+//! let mut b = SegBuilder::create(&dir.join("s1.seg"))?;
+//! b.push(b"a", b"1")?;
+//! b.push(b"b", b"2")?;
+//! let meta = b.finish()?;
+//!
+//! // the manifest makes the sealed segment part of the live set
+//! Manifest::open(&dir)?.add(ManifestEntry::new("s1.seg", meta))?;
+//!
+//! let seg = Seg::open(&dir.join("s1.seg"))?;
+//! assert_eq!(seg.get(b"b")?, Some(b"2".to_vec()));
+//! assert_eq!(seg.count_range(b"a", b"z")?, 2);
+//! # std::fs::remove_dir_all(&dir).ok();
+//! # Ok::<(), kevy_seg::SegError>(())
+//! ```
+//!
 //! # Model
 //!
 //! [`SegBuilder`] appends records in strictly ascending key order,
@@ -44,8 +65,33 @@ pub use builder::SegBuilder;
 pub use manifest::{Manifest, ManifestEntry};
 pub use reader::{RangeIter, Seg};
 
+// Send and Sync are part of the public contract: a change that loses
+// either fails to compile here rather than in a caller.
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<Seg>();
+    send_sync::<SegBuilder>();
+    send_sync::<SegMeta>();
+    send_sync::<Manifest>();
+    send_sync::<ManifestEntry>();
+    send_sync::<SegError>();
+};
+
 /// Sealed-segment summary, from the footer.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// ```
+/// # let dir = std::env::temp_dir().join(format!("kevy-segmeta-doc-{}", std::process::id()));
+/// # std::fs::create_dir_all(&dir)?;
+/// let mut b = kevy_seg::SegBuilder::create(&dir.join("a.seg"))?;
+/// b.push(b"k1", b"v")?;
+/// b.push(b"k2", b"v")?;
+/// let meta = b.finish()?;
+/// assert_eq!((meta.records, meta.min_key.as_slice(), meta.max_key.as_slice()), (2, &b"k1"[..], &b"k2"[..]));
+/// # std::fs::remove_dir_all(&dir).ok();
+/// # Ok::<(), kevy_seg::SegError>(())
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub struct SegMeta {
     /// Records in the segment.
     pub records: u64,
@@ -60,6 +106,7 @@ pub struct SegMeta {
 /// Why a segment file was refused at open. Corruption is a refusal,
 /// never a silent partial read.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum SegError {
     /// OS-level failure.
     Io(std::io::Error),

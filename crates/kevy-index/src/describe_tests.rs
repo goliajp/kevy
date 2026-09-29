@@ -1,11 +1,11 @@
 //! Describe replies and the declarations they carry.
 
 use super::*;
-use crate::catalog::{AnnSpec, FieldSpec, ValueSpec};
 use crate::table::TableIndex;
 use crate::table_wire::parse_table_declare;
 use crate::value::IndexValue;
 use crate::view::{Leaf, Tree, ViewMode, ViewSpec};
+use crate::{AnnSpec, FieldSpec, ValueSpec};
 
 fn words(ws: &[&str]) -> Vec<Vec<u8>> {
     ws.iter().map(|w| w.as_bytes().to_vec()).collect()
@@ -99,7 +99,7 @@ fn a_table_declaration_leaves_out_what_the_auto_loop_added() {
 fn a_compiled_index_names_its_table_and_has_no_declaration() {
     let spec = declare(FULL);
     let tables = [spec.clone()];
-    let compiled = compile_table(&spec).expect("compiles");
+    let compiled = spec.compile().expect("compiles");
     for c in &compiled {
         let d = describe_index(c, &tables);
         assert_eq!(field(&d, "table"), &b("order"));
@@ -114,13 +114,11 @@ fn a_compiled_index_names_its_table_and_has_no_declaration() {
 
 #[test]
 fn a_weighted_text_index_is_spelled_with_fields_and_weights() {
-    let mut s = IndexSpec::single_field(
-        b"doc.body".to_vec(),
-        b"doc:".to_vec(),
-        b"title".to_vec(),
-        ValType::Str,
-        IndexKind::Text,
-    );
+    let mut s =
+        IndexSpec::builder(b"doc.body".to_vec(), b"doc:".to_vec(), IndexKind::Text, ValType::Str)
+            .with_field(b"title".to_vec())
+            .build()
+            .unwrap();
     s.fields = vec![FieldSpec { name: b"title".to_vec(), weight: 2.5 }, FieldSpec::new("body")];
     s.with_positions = true;
     s.values = vec![ValueSpec { name: b"year".to_vec(), ty: ValType::I64 }, ValueSpec::new("tag")];
@@ -159,14 +157,11 @@ fn a_weighted_text_index_is_spelled_with_fields_and_weights() {
 
 #[test]
 fn a_single_field_index_is_spelled_with_field() {
-    let mut s = IndexSpec::single_field(
-        b"emb".to_vec(),
-        b"v:".to_vec(),
-        b"vec".to_vec(),
-        ValType::Vector,
-        IndexKind::Ann,
-    );
-    s.ann = Some(AnnSpec { dim: 4, distance: 1, m: 16, ef: 200 });
+    let s = IndexSpec::builder("emb", "v:", IndexKind::Ann, ValType::Vector)
+        .with_field("vec")
+        .with_ann(AnnSpec::new(4).with_distance(1))
+        .build()
+        .unwrap();
     assert_eq!(
         index_declaration(&s),
         words(&[
@@ -205,7 +200,7 @@ fn a_view_declaration_writes_the_tree_as_create_reads_it() {
             leaf("score", IndexValue::F64(0.5), IndexValue::F64(0.5)),
         ),
         order_by: b"age".to_vec(),
-        desc: true,
+        order: kevy_text::SortOrder::Desc,
         mode: ViewMode::Materialized { top_k: 10 },
         via: Some(b"user:{key}".to_vec()),
     };
@@ -242,14 +237,11 @@ fn a_view_declaration_writes_the_tree_as_create_reads_it() {
 
 #[test]
 fn every_index_option_is_described_and_declared() {
-    let mut s = IndexSpec::single_field(
-        b"spend".to_vec(),
-        b"o:".to_vec(),
-        b"total".to_vec(),
-        ValType::F64,
-        IndexKind::Agg,
-    );
-    s.group_by = Some(b"who".to_vec());
+    let s = IndexSpec::builder("spend", "o:", IndexKind::Agg, ValType::F64)
+        .with_field("total")
+        .with_group_by("who")
+        .build()
+        .unwrap();
     assert_eq!(field(&describe_index(&s, []), "groupby"), &b("who"));
     assert_eq!(
         index_declaration(&s),
@@ -269,13 +261,10 @@ fn every_index_option_is_described_and_declared() {
             "who"
         ])
     );
-    let mut text = IndexSpec::single_field(
-        b"t".to_vec(),
-        b"d:".to_vec(),
-        b"body".to_vec(),
-        ValType::Str,
-        IndexKind::Text,
-    );
+    let mut text = IndexSpec::builder(b"t".to_vec(), b"d:".to_vec(), IndexKind::Text, ValType::Str)
+        .with_field(b"body".to_vec())
+        .build()
+        .unwrap();
     text.fields = vec![FieldSpec { name: b"body".to_vec(), weight: 3.0 }];
     let declared = index_declaration(&text);
     assert_eq!(
@@ -284,14 +273,11 @@ fn every_index_option_is_described_and_declared() {
         "one weighted field still needs FIELDS"
     );
     for (code, tag) in [(0, "cosine"), (1, "l2"), (2, "ip"), (9, "unknown")] {
-        let mut ann = IndexSpec::single_field(
-            b"e".to_vec(),
-            b"v:".to_vec(),
-            b"vec".to_vec(),
-            ValType::Vector,
-            IndexKind::Ann,
-        );
-        ann.ann = Some(AnnSpec { dim: 2, distance: code, m: 4, ef: 16 });
+        let ann = IndexSpec::builder("e", "v:", IndexKind::Ann, ValType::Vector)
+            .with_field("vec")
+            .with_ann(AnnSpec::new(2).with_distance(code).with_m(4).with_ef(16))
+            .build()
+            .unwrap();
         let d = describe_index(&ann, []);
         let Described::Array(params) = field(&d, "ann") else { panic!("ann is a group") };
         assert_eq!(params[3], b(tag), "distance code {code}");
@@ -301,7 +287,7 @@ fn every_index_option_is_described_and_declared() {
 #[test]
 fn a_composite_with_no_table_still_has_no_declaration() {
     let spec = declare(FULL);
-    let recent = compile_table(&spec).expect("compiles").remove(2);
+    let recent = spec.compile().expect("compiles").remove(2);
     assert!(recent.composite.is_some());
     let d = describe_index(&recent, []);
     assert_eq!((field(&d, "table"), field(&d, "declaration")), (&b("-"), &b("-")));
@@ -326,7 +312,7 @@ fn a_virtual_view_with_or_and_text_bounds_and_via() {
             leaf("name", IndexValue::Str(b"a".to_vec()), IndexValue::Str(b"b".to_vec())),
         ),
         order_by: b"age".to_vec(),
-        desc: false,
+        order: kevy_text::SortOrder::Asc,
         mode: ViewMode::Virtual,
         via: Some(b"u:{key}".to_vec()),
     };

@@ -94,7 +94,7 @@ pub(crate) fn cold_hit_highlight(
     query: &[u8],
     want: &[Vec<u8>],
 ) -> Vec<crate::ops_index::FieldSpans> {
-    let names: Vec<&[u8]> = spec.fields.iter().map(|f| f.name.as_slice()).collect();
+    let names: Vec<&[u8]> = spec.fields().iter().map(|f| f.name.as_slice()).collect();
     let Ok(Some(vals)) = store.peek_hash_fields(key, &names) else {
         return Vec::new();
     };
@@ -102,7 +102,7 @@ pub(crate) fn cold_hit_highlight(
     kevy_text::cold::highlight_fields(&texts, query)
         .into_iter()
         .filter_map(|(fi, spans)| {
-            let name = spec.fields.get(fi)?.name.clone();
+            let name = spec.fields().get(fi)?.name.clone();
             if !want.is_empty() && !want.contains(&name) {
                 return None;
             }

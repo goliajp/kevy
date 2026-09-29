@@ -610,6 +610,7 @@ name = "kevy-index"
 version = "6.4.0"
 dependencies = [
  "kevy-hash",
+ "kevy-text",
  "kevy-time",
 ]
 

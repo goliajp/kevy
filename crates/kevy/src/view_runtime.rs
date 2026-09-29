@@ -6,7 +6,7 @@
 //! membership probes see fresh segments). Callers gate both hooks on
 //! the `VIEW_NONEMPTY` gate bit.
 
-use kevy_index::{IndexValue, MaterializedSet, ViewMode, ViewSpec, eval_tree, key_in_tree};
+use kevy_index::{IndexValue, MaterializedSet, Membership, ViewMode, ViewSpec};
 use kevy_resp::CmdError;
 use kevy_store::Store;
 
@@ -58,9 +58,12 @@ pub(crate) fn on_write(ctx: &Ctx<'_>, store: &mut Store, key: &[u8]) {
         for vs in &mut st.views {
             let Some(mat) = &mut vs.mat else { continue };
             st.stats_dirty = true;
-            let member = kevy_index::key_in_tree_vals(&vs.spec.tree, &lookup);
-            let order = lookup(&vs.spec.order_by);
-            if mat.apply(key, member, order) {
+            let membership = if vs.spec.tree.contains_values(&lookup) {
+                Membership::Member(lookup(&vs.spec.order_by))
+            } else {
+                Membership::NonMember
+            };
+            if mat.apply(key, membership) {
                 vs.needs_rebuild = true;
             }
         }
@@ -136,9 +139,8 @@ pub(crate) fn shard_page(
         rebuild_local(ctx, store, vs);
         st.stats_dirty = true;
     }
-    let desc = vs.spec.desc;
     match &vs.mat {
-        Some(m) => Ok(m.page(after, limit, desc)),
+        Some(m) => Ok(m.page(after, limit)),
         None => {
             // Virtual: stream the ORDER index in order and probe
             // membership per candidate — O(limit / selectivity)
@@ -146,7 +148,7 @@ pub(crate) fn shard_page(
             // (which measured 9.6ms p99 at 1M×2 components; the
             // RFC clamp is 3ms).
             let spec = vs.spec.clone();
-            Ok(virtual_page(ctx, store, &spec, after, limit, desc))
+            Ok(virtual_page(ctx, store, &spec, after, limit))
         }
     }
 }
@@ -163,7 +165,7 @@ pub(crate) fn shard_stats(
     let st = &mut *st;
     let vs = st.views.iter_mut().find(|v| v.spec.name == name).ok_or("ERR no such view")?;
     match &vs.mat {
-        Some(m) => Ok((m.len() as u64, m.approx_bytes(), m.order_excluded, vs.needs_rebuild)),
+        Some(m) => Ok((m.len() as u64, m.approx_bytes(), m.order_excluded(), vs.needs_rebuild)),
         None => {
             let spec = vs.spec.clone();
             let n = eval_with_order(ctx, store, &spec).len() as u64;
@@ -195,11 +197,12 @@ fn refresh(catalogs: &CatalogState, st: &mut ShardViews) {
             match st.views.iter().position(|v| v.spec == *spec) {
                 Some(i) => next.push(st.views.swap_remove(i)),
                 None => {
+                    // only a materialized view keeps a set; every other mode reads at query time
                     let mat = match spec.mode {
-                        ViewMode::Virtual => None,
                         ViewMode::Materialized { top_k } => {
-                            Some(MaterializedSet::new(top_k, spec.desc))
+                            Some(MaterializedSet::new(top_k, spec.order))
                         }
+                        _ => None,
                     };
                     next.push(ViewState { spec: spec.clone(), needs_rebuild: mat.is_some(), mat });
                 }
@@ -231,16 +234,15 @@ fn virtual_page(
     spec: &ViewSpec,
     after: Option<&(IndexValue, Vec<u8>)>,
     limit: usize,
-    desc: bool,
 ) -> Vec<(IndexValue, Vec<u8>)> {
     crate::index_runtime::with_segment_resolver(ctx, store, |seg| {
         let Some(order_seg) = seg(&spec.order_by) else {
             return Vec::new();
         };
-        let cursor = after.map(|(v, k)| kevy_index::Cursor { value: v.clone(), key: k.clone() });
+        let cursor = after.map(|(v, k)| kevy_index::Cursor::new(v.clone(), k.clone()));
         let mut out = Vec::with_capacity(limit.min(256));
-        for (v, k) in order_seg.scan(cursor.as_ref(), desc) {
-            if key_in_tree(&spec.tree, k, &seg) {
+        for (v, k) in order_seg.scan(cursor.as_ref(), spec.order) {
+            if spec.tree.contains(k, &seg) {
                 out.push((v.clone(), k.to_vec()));
                 if out.len() == limit {
                     break;
@@ -258,7 +260,7 @@ fn eval_with_order(
     spec: &ViewSpec,
 ) -> Vec<(IndexValue, Vec<u8>)> {
     crate::index_runtime::with_segment_resolver(ctx, store, |seg| {
-        let members = eval_tree(&spec.tree, &seg);
+        let members = spec.tree.eval(&seg);
         members
             .into_iter()
             .filter_map(|k| {
@@ -283,7 +285,7 @@ fn rebuild_local(ctx: &Ctx<'_>, store: &mut Store, vs: &mut ViewState) {
         rows.truncate((top_k + top_k / 4) as usize);
     }
     for (v, k) in rows {
-        mat.apply(&k, true, Some(v));
+        mat.apply(&k, Membership::Member(Some(v)));
     }
     vs.needs_rebuild = false;
 }

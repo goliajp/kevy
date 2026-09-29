@@ -7,7 +7,7 @@ use crate::store::Store;
 
 use kevy_index::IndexValue;
 
-use super::super::idx::{encode_cursor, value_repr};
+use super::super::idx::encode_cursor;
 use super::{emit_row, idx_err, tail};
 use kevy_resp::{encode_array_len, encode_bulk, encode_error};
 
@@ -51,7 +51,7 @@ pub(super) fn claused_query(
                 encode_array_len(out, (page.rows.len() * 2 + extra) as i64);
                 for (k, v) in &page.rows {
                     encode_bulk(out, k);
-                    encode_bulk(out, &value_repr(v));
+                    encode_bulk(out, &v.render());
                 }
             } else {
                 encode_array_len(out, (page.rows.len() + extra) as i64);

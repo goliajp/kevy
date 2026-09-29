@@ -83,7 +83,7 @@ pub(crate) fn on_write(ctx: &Ctx<'_>, store: &mut Store, key: &[u8]) {
     refresh(ctx, &mut st, store);
     let st = &mut *st;
     for si in &mut st.idx {
-        if key.starts_with(&si.spec.prefix) {
+        if key.starts_with(si.spec.prefix()) {
             apply_row(store, si, key);
             st.stats_dirty = true;
         }
@@ -111,11 +111,11 @@ pub(crate) fn on_tick(ctx: &Ctx<'_>, store: &mut Store) {
             // Exactly ONE windowed access path per table drives row
             // eviction (two drivers would seal the same batch twice);
             // every other windowed path only slides its own tree.
-            let drives = window_driver(&ctx.state.catalogs, &si.spec.name);
+            let drives = window_driver(&ctx.state.catalogs, si.spec.name());
             if drives && let Some(rows) = win.pending_rows(&si.seg) {
-                batches.push((table_of(&si.spec.name).to_vec(), rows));
+                batches.push((table_of(si.spec.name()).to_vec(), rows));
             }
-            st.stats_dirty |= evict_and_slide(win, &si.spec.name, &mut si.seg, store, dir, drives);
+            st.stats_dirty |= evict_and_slide(win, si.spec.name(), &mut si.seg, store, dir, drives);
         }
     }
     // Pass 2: freeze each batch out of its table's text index.
@@ -144,7 +144,7 @@ pub(crate) fn on_flush(ctx: &Ctx<'_>, store: &mut Store) {
         si.seg = new_scalar_seg(&si.spec);
         si.text = new_text_seg(&si.spec);
         si.ann = new_ann_seg(&si.spec);
-        si.agg = (si.spec.kind == kevy_index::IndexKind::Agg).then(kevy_index::AggSegment::new);
+        si.agg = (si.spec.kind() == kevy_index::IndexKind::Agg).then(kevy_index::AggSegment::new);
         if let Some(g) = &mut si.global {
             g.clear(&si.spec);
         }
@@ -188,7 +188,7 @@ pub(crate) fn with_ready_segment<R>(
 ) -> Result<R, CmdError> {
     let mut st = ctx.shard.indexes.borrow_mut();
     refresh(ctx, &mut st, store);
-    let si = st.idx.iter().find(|si| si.spec.name == name).ok_or("ERR no such index")?;
+    let si = st.idx.iter().find(|si| si.spec.name() == name).ok_or("ERR no such index")?;
     // an owner of a global index answers once every shard has sent its
     // rows' entries (its own among them), whatever its own backfill's state
     let building = Err(CmdError::Wire("INDEXBUILDING index is still building"));
@@ -213,7 +213,7 @@ pub(crate) fn with_ready_agg<R>(
 ) -> Result<R, CmdError> {
     let mut st = ctx.shard.indexes.borrow_mut();
     refresh(ctx, &mut st, store);
-    let si = st.idx.iter().find(|si| si.spec.name == name).ok_or("ERR no such index")?;
+    let si = st.idx.iter().find(|si| si.spec.name() == name).ok_or("ERR no such index")?;
     match (&si.build, &si.agg) {
         (BuildState::Ready, Some(a)) => Ok(f(a)),
         (BuildState::Backfilling { .. }, _) => {
@@ -235,7 +235,7 @@ pub(crate) fn with_ready_ann<R>(
 ) -> Result<R, CmdError> {
     let mut st = ctx.shard.indexes.borrow_mut();
     refresh(ctx, &mut st, store);
-    let si = st.idx.iter_mut().find(|si| si.spec.name == name).ok_or("ERR no such index")?;
+    let si = st.idx.iter_mut().find(|si| si.spec.name() == name).ok_or("ERR no such index")?;
     match (&si.build, &mut si.ann) {
         (BuildState::Ready, Some(g)) => Ok(f(g)),
         (BuildState::Backfilling { .. }, _) => {
@@ -262,7 +262,7 @@ pub(crate) fn with_ready_text_segment<R>(
 ) -> Result<R, CmdError> {
     let mut st = ctx.shard.indexes.borrow_mut();
     refresh(ctx, &mut st, store);
-    let si = st.idx.iter().find(|si| si.spec.name == name).ok_or("ERR no such index")?;
+    let si = st.idx.iter().find(|si| si.spec.name() == name).ok_or("ERR no such index")?;
     match (&si.build, &si.text) {
         (BuildState::Ready, Some(ts)) => Ok(f(store, ts, &si.spec, si.cold_text.as_ref())),
         (BuildState::Backfilling { .. }, _) => {
@@ -290,7 +290,7 @@ pub(crate) fn with_segment_resolver<R>(
     // entries are not: it resolves to nothing, and the view refuses it
     let resolver = |name: &[u8]| -> Option<&Segment> {
         idx.iter()
-            .find(|si| si.spec.name == name && matches!(si.build, BuildState::Ready))
+            .find(|si| si.spec.name() == name && matches!(si.build, BuildState::Ready))
             .filter(|si| si.global.is_none())
             .map(|si| &si.seg)
     };
@@ -308,8 +308,8 @@ pub(crate) fn with_two_ready_segments<R>(
 ) -> Result<R, CmdError> {
     let mut st = ctx.shard.indexes.borrow_mut();
     refresh(ctx, &mut st, store);
-    let ia = st.idx.iter().position(|si| si.spec.name == a).ok_or("ERR no such index")?;
-    let ib = st.idx.iter().position(|si| si.spec.name == b).ok_or("ERR no such index")?;
+    let ia = st.idx.iter().position(|si| si.spec.name() == a).ok_or("ERR no such index")?;
+    let ib = st.idx.iter().position(|si| si.spec.name() == b).ok_or("ERR no such index")?;
     for i in [ia, ib] {
         if matches!(st.idx[i].build, BuildState::Backfilling { .. }) {
             return Err(CmdError::Wire("INDEXBUILDING index is still building"));
@@ -328,7 +328,7 @@ pub(crate) fn with_two_ready_segments<R>(
 pub(crate) fn placed_bytes(ctx: &Ctx<'_>, store: &mut Store, name: &[u8]) -> u64 {
     let mut st = ctx.shard.indexes.borrow_mut();
     refresh(ctx, &mut st, store);
-    let si = st.idx.iter().find(|si| si.spec.name == name);
+    let si = st.idx.iter().find(|si| si.spec.name() == name);
     si.and_then(|si| si.global.as_ref()).map_or(0, |g| g.placed_bytes())
 }
 
@@ -336,7 +336,7 @@ pub(crate) fn placed_bytes(ctx: &Ctx<'_>, store: &mut Store, name: &[u8]) -> u64
 pub(crate) fn segment_building(ctx: &Ctx<'_>, store: &mut Store, name: &[u8]) -> bool {
     let mut st = ctx.shard.indexes.borrow_mut();
     refresh(ctx, &mut st, store);
-    st.idx.iter().find(|si| si.spec.name == name).is_some_and(|si| match &si.global {
+    st.idx.iter().find(|si| si.spec.name() == name).is_some_and(|si| match &si.global {
         // an owner waits for every shard; its own rows are one of them
         Some(g) => !g.ready(),
         None => matches!(si.build, BuildState::Backfilling { .. }),
@@ -348,9 +348,10 @@ pub(crate) fn segment_building(ctx: &Ctx<'_>, store: &mut Store, name: &[u8]) ->
 /// values in the text segment; without the declaration this is the
 /// plain `Segment::new()`, byte-identical to before — A5).
 fn new_scalar_seg(spec: &IndexSpec) -> Segment {
-    let scalar = matches!(spec.kind, kevy_index::IndexKind::Range | kevy_index::IndexKind::Unique);
-    if scalar && !spec.values.is_empty() {
-        Segment::with_values(spec.values.len())
+    let scalar =
+        matches!(spec.kind(), kevy_index::IndexKind::Range | kevy_index::IndexKind::Unique);
+    if scalar && !spec.values().is_empty() {
+        Segment::with_values(spec.values().len())
     } else {
         Segment::new()
     }
@@ -361,7 +362,7 @@ fn new_scalar_seg(spec: &IndexSpec) -> Segment {
 /// A fresh HNSW graph shaped by the spec (None for non-ann kinds) —
 /// shared by the catalog refresh and the FLUSH reset.
 fn new_ann_seg(spec: &kevy_index::IndexSpec) -> Option<kevy_vector::Hnsw> {
-    spec.ann.as_ref().map(|a| {
+    spec.ann().as_ref().map(|a| {
         kevy_vector::Hnsw::new(
             a.dim as usize,
             kevy_vector::HnswParams::default()
@@ -377,15 +378,15 @@ fn new_ann_seg(spec: &kevy_index::IndexSpec) -> Option<kevy_vector::Hnsw> {
 }
 
 fn new_text_seg(spec: &kevy_index::IndexSpec) -> Option<kevy_text::TextSegment> {
-    (spec.kind == kevy_index::IndexKind::Text).then(|| {
+    (spec.kind() == kevy_index::IndexKind::Text).then(|| {
         // The declared field count decides whether the segment keeps the
         // per-field breakdown `IN <field…>` scopes to; one field needs
         // none, because its per-field numbers are the merged ones.
         kevy_text::TextSegment::with_shape(
             kevy_text::SegmentShape::default()
-                .with_fields(spec.fields.len())
-                .with_positions(spec.with_positions)
-                .with_values(spec.values.len()),
+                .with_fields(spec.fields().len())
+                .with_positions(spec.has_positions())
+                .with_values(spec.values().len()),
         )
     })
 }
@@ -405,8 +406,8 @@ fn refresh(ctx: &Ctx<'_>, st: &mut ShardIndexes, store: &mut Store) {
     let mut next: Vec<ShardIndex> = Vec::new();
     if let Some(cat) = cat {
         for (spec, _state) in cat.iter() {
-            let part = cat.partitioning(&spec.name);
-            let inc = catalogs.incarnation(&spec.name);
+            let part = cat.partitioning(spec.name());
+            let inc = catalogs.incarnation(spec.name());
             let same = |si: &ShardIndex| {
                 si.spec == *spec
                     && si.global.as_ref().map_or(!part.is_global(), |g| g.fits((shard, n), inc))
@@ -460,11 +461,11 @@ impl ShardIndex {
 /// on THIS shard for the backfill; live writes from now on hit the
 /// hook first and win.
 fn fresh_shard_index(catalogs: &CatalogState, spec: &IndexSpec, store: &mut Store) -> ShardIndex {
-    let mut pat = spec.prefix.clone();
+    let mut pat = spec.prefix().to_vec();
     pat.push(b'*');
     let keys = store.collect_keys(Some(&pat), None);
     ShardIndex {
-        agg: (spec.kind == kevy_index::IndexKind::Agg).then(kevy_index::AggSegment::new),
+        agg: (spec.kind() == kevy_index::IndexKind::Agg).then(kevy_index::AggSegment::new),
         text: new_text_seg(spec),
         ann: new_ann_seg(spec),
         seg: new_scalar_seg(spec),

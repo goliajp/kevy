@@ -34,7 +34,7 @@ fn seal_row_segment(data_dir: &Path, seq: u32, rows: &[RowSpec<'_>]) -> String {
     let segs = data_dir.join("segs-0");
     std::fs::create_dir_all(&segs).unwrap();
     let file = format!("row-7465-{seq}.seg");
-    let mut b = kevy_seg::SegBuilder::create(&segs.join(&file)).unwrap();
+    let mut b = kevy_seg::SegBuilder::create(segs.join(&file)).unwrap();
     let mut sorted: Vec<_> = rows.to_vec();
     sorted.sort_by(|a, b| a.0.cmp(b.0));
     for (k, fields) in &sorted {
@@ -42,14 +42,8 @@ fn seal_row_segment(data_dir: &Path, seq: u32, rows: &[RowSpec<'_>]) -> String {
     }
     let meta = b.finish().unwrap();
     let mut m = kevy_seg::Manifest::open(&segs).unwrap();
-    m.add(kevy_seg::ManifestEntry {
-        file: file.clone(),
-        meta: b"rowcold:te".to_vec(),
-        min_key: meta.min_key,
-        max_key: meta.max_key,
-        records: meta.records,
-    })
-    .unwrap();
+    m.add(kevy_seg::ManifestEntry::new(file.clone(), meta).with_meta(b"rowcold:te".to_vec()))
+        .unwrap();
     file
 }
 

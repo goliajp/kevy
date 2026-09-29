@@ -194,7 +194,7 @@ pub(super) fn cold_highlight(
     key: &[u8],
     text: &[u8],
 ) -> Vec<(usize, Vec<(usize, usize)>)> {
-    let names: Vec<&[u8]> = spec.fields.iter().map(|f| f.name.as_slice()).collect();
+    let names: Vec<&[u8]> = spec.fields().iter().map(|f| f.name.as_slice()).collect();
     let Ok(Some(vals)) = store.peek_hash_fields(key, &names) else {
         return Vec::new();
     };

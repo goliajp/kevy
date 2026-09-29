@@ -12,25 +12,19 @@ use kevy_index::{IndexKind, IndexValue, TableIndex, TableSpec, ValType};
 /// Columns only, plus one index WITHOUT stored values — each refusal
 /// below is one missing declaration away from serving.
 fn lean_table() -> TableSpec {
-    TableSpec {
-        name: b"ev".to_vec(),
-        prefix: b"ev:".to_vec(),
-        pk: b"id".to_vec(),
-        columns: vec![
+    {
+        let mut t = TableSpec::default();
+        t.name = b"ev".to_vec();
+        t.prefix = b"ev:".to_vec();
+        t.pk = b"id".to_vec();
+        t.columns = vec![
             (b"id".to_vec(), ValType::Str),
             (b"at".to_vec(), ValType::I64),
             (b"age".to_vec(), ValType::I64),
             (b"note".to_vec(), ValType::Str),
-        ],
-        indexes: vec![TableIndex {
-            column: b"at".to_vec(),
-            kind: IndexKind::Range,
-            values: vec![],
-        }],
-        orderpaths: vec![],
-        window: None,
-        autodeclare: 0,
-        auto_added: vec![],
+        ];
+        t.indexes = vec![TableIndex::new(b"at".to_vec(), IndexKind::Range)];
+        t
     }
 }
 

@@ -6,7 +6,7 @@ use kevy_index::{IndexValue, Segment, ValType, WindowShape, WindowSpec};
 use crate::WindowRt;
 
 fn spec() -> WindowSpec {
-    WindowSpec { column: b"ts".to_vec(), span: 100, bucket: 50 }
+    WindowSpec::new("ts", 100, 50)
 }
 
 /// Fill a tree with `ts` values and slide it once, returning what the

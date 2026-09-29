@@ -1,10 +1,10 @@
 //! `TABLE.DESCRIBE` and the declaration that recreates a table. Split
 //! from `describe.rs` for the 500-line cap.
 
+use crate::Partitioning;
 use crate::catalog::Catalog;
 use crate::describe::{Described, argv, b, flag, n, order};
 use crate::table::{OrderPath, TableIndex, TableSpec, dotted};
-use crate::{Partitioning, split_point_text};
 
 /// `TABLE.DESCRIBE`: `name prefix pk columns indexes orderpaths window
 /// autodeclare declaration`, label/value. Indexes and orderpaths carry
@@ -31,8 +31,10 @@ pub fn describe_table(t: &TableSpec) -> Described {
 /// clause, read from the index catalog `cat` the table compiled into.
 ///
 /// ```
-/// use kevy_index::{Catalog, Described, Partitioning, compile_table, describe_table_partitioned,
-///     order_key, parse_table_declare, ValType};
+/// use kevy_index::{
+///     Catalog, Described, Partitioning, ValType, describe_table_partitioned, order_key,
+///     parse_table_declare,
+/// };
 ///
 /// let t = parse_table_declare(&[
 ///     b"TABLE.DECLARE", b"u", b"PREFIX", b"u:", b"PK", b"id", b"COLUMN", b"id", b"i64",
@@ -40,7 +42,7 @@ pub fn describe_table(t: &TableSpec) -> Described {
 /// ])
 /// .unwrap();
 /// let mut cat = Catalog::new();
-/// for spec in compile_table(&t).unwrap() {
+/// for spec in t.compile().unwrap() {
 ///     let splits = vec![order_key(ValType::I64, b"40").unwrap()];
 ///     cat.create_with(spec, Partitioning::Global { splits }).unwrap();
 /// }
@@ -107,7 +109,7 @@ fn table_indexes(t: &TableSpec) -> Described {
 fn table_orderpaths(t: &TableSpec) -> Described {
     let rows = t.orderpaths.iter().map(|op| {
         let path = dotted(&t.name, &op.name);
-        let on = op.on.iter().map(|(c, desc)| Described::Array(vec![b(c), b(order(*desc))]));
+        let on = op.on.iter().map(|(c, o)| Described::Array(vec![b(c), b(order(*o))]));
         Described::Array(vec![
             b("path"),
             b(&path),
@@ -148,8 +150,9 @@ pub fn table_declaration(t: &TableSpec) -> Vec<Vec<u8>> {
 /// replay places every value where it was.
 ///
 /// ```
-/// use kevy_index::{Catalog, Partitioning, compile_table, order_key, parse_table_declare,
-///     table_declaration_partitioned, ValType};
+/// use kevy_index::{
+///     Catalog, Partitioning, ValType, order_key, parse_table_declare, table_declaration_partitioned,
+/// };
 ///
 /// let t = parse_table_declare(&[
 ///     b"TABLE.DECLARE", b"u", b"PREFIX", b"u:", b"PK", b"id", b"COLUMN", b"id", b"i64",
@@ -157,7 +160,7 @@ pub fn table_declaration(t: &TableSpec) -> Vec<Vec<u8>> {
 /// ])
 /// .unwrap();
 /// let mut cat = Catalog::new();
-/// for spec in compile_table(&t).unwrap() {
+/// for spec in t.compile().unwrap() {
 ///     let splits = vec![order_key(ValType::I64, b"100").unwrap()];
 ///     cat.create_with(spec, Partitioning::Global { splits }).unwrap();
 /// }
@@ -216,19 +219,19 @@ fn global_clause(cat: &Catalog, name: &[u8], w: &mut Vec<Vec<u8>>) {
     w.push(b"GLOBAL".to_vec());
     if !splits.is_empty() {
         w.extend([b"SPLIT".to_vec(), b"AT".to_vec()]);
-        w.extend(splits.iter().map(|p| split_point_text(spec, p)));
+        w.extend(splits.iter().map(|p| spec.split_point_text(p)));
     }
 }
 
 /// `ORDERPATH name ON col [DESC] [THEN col [DESC]]… [GLOBAL [SPLIT AT …]]`.
 fn orderpath_clause(t: &TableSpec, op: &OrderPath, cat: &Catalog, w: &mut Vec<Vec<u8>>) {
     w.extend([b"ORDERPATH".to_vec(), op.name.clone(), b"ON".to_vec()]);
-    for (i, (c, desc)) in op.on.iter().enumerate() {
+    for (i, (c, o)) in op.on.iter().enumerate() {
         if i > 0 {
             w.push(b"THEN".to_vec());
         }
         w.push(c.clone());
-        if *desc {
+        if *o == kevy_text::SortOrder::Desc {
             w.push(b"DESC".to_vec());
         }
     }

@@ -7,17 +7,28 @@
 //! absent field, exactly today's NULL semantics. Queries still name
 //! their access path explicitly (`IDX.QUERY <table>.<col> …`).
 //!
-//! [`compile_table`] is the SINGLE implementation both the server and
+//! [`TableSpec::compile`] is the SINGLE implementation both the server and
 //! the embedded store call — the IDX.CREATE parity lesson: a
 //! hand-mirrored compiler is the shape that drifts, and the dispatch
 //! oracle is the net that catches it.
 
-use crate::catalog::{IndexKind, IndexSpec, ValType, ValueSpec};
+use crate::catalog::{IndexKind, ValType};
 use crate::composite::{CompositeCol, MAX_COMPOSITE_COLS};
+use crate::spec::IndexSpec;
+use crate::spec_parts::ValueSpec;
+use kevy_text::SortOrder;
 
 /// One declared secondary index: a column and a scalar kind, plus the
 /// stored `VALUES` columns residual FILTER/SORT read.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// ```
+/// use kevy_index::{IndexKind, TableIndex};
+/// let mut ix = TableIndex::new("at", IndexKind::Range);
+/// ix.values.push(b"city".to_vec());
+/// assert_eq!((ix.column.as_slice(), ix.values.len()), (&b"at"[..], 1));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct TableIndex {
     /// Declared column the index reads.
     pub column: Vec<u8>,
@@ -28,14 +39,52 @@ pub struct TableIndex {
     pub values: Vec<Vec<u8>>,
 }
 
+impl TableIndex {
+    /// An index of `kind` on `column`, storing no `VALUES`.
+    ///
+    /// ```
+    /// use kevy_index::{IndexKind, TableIndex};
+    /// assert!(TableIndex::new("id", IndexKind::Unique).values.is_empty());
+    /// ```
+    pub fn new(column: impl Into<Vec<u8>>, kind: IndexKind) -> TableIndex {
+        TableIndex { column: column.into(), kind, values: Vec::new() }
+    }
+}
+
 /// One composite-sort path (`ORDERPATH` — cookbook §8 mechanized):
 /// compiles to a composite Range index named `<table>.<name>`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// ```
+/// use kevy_index::{OrderPath, SortOrder};
+/// let p = OrderPath::new("recent", vec![(b"at".to_vec(), SortOrder::Desc)]);
+/// assert_eq!(p.on[0].1, SortOrder::Desc);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct OrderPath {
     /// Path name (the compiled index's suffix).
     pub name: Vec<u8>,
-    /// `(column, desc)` in sort-significance order.
-    pub on: Vec<(Vec<u8>, bool)>,
+    /// `(column, direction)` in sort-significance order.
+    pub on: Vec<(Vec<u8>, SortOrder)>,
+}
+
+impl OrderPath {
+    /// Path `name` over `on`, most significant column first.
+    ///
+    /// ```
+    /// use kevy_index::{OrderPath, SortOrder};
+    /// let p = OrderPath::new("by_city", vec![(b"city".to_vec(), SortOrder::Asc)]);
+    /// assert_eq!(p.name, b"by_city");
+    /// ```
+    pub fn new(name: impl Into<Vec<u8>>, on: Vec<(Vec<u8>, SortOrder)>) -> OrderPath {
+        OrderPath { name: name.into(), on }
+    }
+
+    /// Whether this path's first column is `column`, ascending — the
+    /// shape whose tree prefix below a boundary is the out-of-window batch.
+    pub(crate) fn led_ascending_by(&self, column: &[u8]) -> bool {
+        self.on.first().is_some_and(|(c, o)| c == column && *o == SortOrder::Asc)
+    }
 }
 
 /// The sliding value-domain window: rows whose window-column value
@@ -44,7 +93,14 @@ pub struct OrderPath {
 /// interprets the column's i64 beyond ordering, so a window column can
 /// be epoch seconds, epoch millis, a sequence number, anything
 /// monotone with data age.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// ```
+/// use kevy_index::WindowSpec;
+/// let w = WindowSpec::new("at", 86_400, 3_600);
+/// assert_eq!((w.span, w.bucket), (86_400, 3_600));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct WindowSpec {
     /// Declared i64 column the window slides over.
     pub column: Vec<u8>,
@@ -55,8 +111,39 @@ pub struct WindowSpec {
     pub bucket: i64,
 }
 
+impl WindowSpec {
+    /// A window of `span` over i64 column `column`, sliding a `bucket`
+    /// at a time (same units as the column).
+    ///
+    /// ```
+    /// assert_eq!(kevy_index::WindowSpec::new("seq", 100, 10).column, b"seq");
+    /// ```
+    pub fn new(column: impl Into<Vec<u8>>, span: i64, bucket: i64) -> WindowSpec {
+        WindowSpec { column: column.into(), span, bucket }
+    }
+}
+
 /// One declared table.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+///
+/// A declaration callers assemble (or [`parse_table_declare`](crate::parse_table_declare)
+/// parses) and the auto loop edits: its rules span fields — an index
+/// must name a declared column, a window needs an ascending access path —
+/// so they are checked where a table is admitted ([`TableSpec::validate`],
+/// run by [`TableCatalog::create`] and [`TableSpec::compile`]), not per field.
+///
+/// ```
+/// use kevy_index::{IndexKind, TableIndex, TableSpec, ValType};
+/// let mut t = TableSpec::default();
+/// t.name = b"t".to_vec();
+/// t.prefix = b"t:".to_vec();
+/// t.pk = b"id".to_vec();
+/// t.columns = vec![(b"id".to_vec(), ValType::I64), (b"at".to_vec(), ValType::I64)];
+/// t.indexes.push(TableIndex::new("at", IndexKind::Range));
+/// assert_eq!(t.compile()?[0].name(), b"t.at");
+/// # Ok::<(), String>(())
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub struct TableSpec {
     /// Unique catalog name.
     pub name: Vec<u8>,
@@ -90,6 +177,36 @@ pub struct TableSpec {
 pub const MAX_TABLES: usize = 64;
 
 impl TableSpec {
+    /// Compile a table into its access paths: each `INDEX col KIND` becomes
+    /// an IndexSpec named `<table>.<col>` on the table's prefix (FIELD col,
+    /// TYPE from the column decl, VALUES typed from the column decls); each
+    /// `ORDERPATH` becomes a composite Range IndexSpec named
+    /// `<table>.<orderpath>`. Pure — the SINGLE compilation both the server
+    /// and the embedded store install.
+    ///
+    /// **Validates first, itself.** The 4.0 shape took "a validated table"
+    /// on trust and cashed that trust as `expect("validated")` — and the
+    /// typed embedded face never called `validate()` at all, so a spec
+    /// whose ORDERPATH named an undeclared column panicked in here, on a
+    /// consumer's boot path, and restart-looped their container (dogfood
+    /// F9). An invariant a function needs is one it establishes: admission
+    /// has exactly one authority now, and it is this signature. The wire
+    /// path's second validation costs microseconds.
+    ///
+    /// ```
+    /// use kevy_index::parse_table_declare;
+    /// let t = parse_table_declare(&[
+    ///     b"TABLE.DECLARE", b"t", b"PREFIX", b"t:", b"PK", b"id", b"COLUMN", b"id", b"i64",
+    ///     b"COLUMN", b"at", b"i64", b"INDEX", b"at", b"range",
+    /// ])?;
+    /// let compiled = t.compile()?;
+    /// assert_eq!(compiled[0].name(), b"t.at");
+    /// # Ok::<(), String>(())
+    /// ```
+    pub fn compile(&self) -> Result<Vec<IndexSpec>, String> {
+        compile_table(self)
+    }
+
     /// The declared type of `col`, if declared.
     pub fn column_type(&self, col: &[u8]) -> Option<ValType> {
         self.columns.iter().find(|(n, _)| n == col).map(|(_, t)| *t)
@@ -164,10 +281,7 @@ impl TableSpec {
             return Err("ERR WINDOW BUCKET must not exceed SPAN".into());
         }
         let indexed = self.indexes.iter().any(|ix| ix.column == w.column);
-        let leads_path = self
-            .orderpaths
-            .iter()
-            .any(|op| op.on.first().is_some_and(|(c, desc)| c == &w.column && !desc));
+        let leads_path = self.orderpaths.iter().any(|op| op.led_ascending_by(&w.column));
         if !indexed && !leads_path {
             return Err(format!(
                 "ERR WINDOW needs an access path on '{}' (add INDEX {} range, or lead an                  ORDERPATH with it ascending)",
@@ -252,62 +366,7 @@ impl TableSpec {
     }
 }
 
-pub(crate) use crate::table_sidecar::{spec_from_line, spec_to_line};
-
-/// The WINDOW clause a compiled index named `index_name` serves, if
-/// any, with the shape its tree slides in: a windowed table's
-/// single-column INDEX on the window column, or an ORDERPATH the
-/// window column leads ascending (a DESC lead has no tree-prefix
-/// property and never slides). Shared by both engine faces so the
-/// mapping cannot drift.
-pub fn window_for(
-    cat: &TableCatalog,
-    index_name: &[u8],
-) -> Option<(WindowSpec, crate::WindowShape)> {
-    let dot = index_name.iter().position(|&b| b == b'.')?;
-    let (tname, suffix) = (&index_name[..dot], &index_name[dot + 1..]);
-    let t = cat.get(tname)?;
-    let w = t.window.clone()?;
-    if suffix == w.column {
-        return Some((w, crate::WindowShape::PlainI64));
-    }
-    let leads = t.orderpaths.iter().any(|op| {
-        op.name == suffix && op.on.first().is_some_and(|(c, desc)| c == &w.column && !desc)
-    });
-    leads.then_some((w, crate::WindowShape::CompositeLed))
-}
-
-/// Whether a compiled TEXT index belongs to a windowed table — its
-/// documents freeze into cold bucket segments as the window slides.
-/// (The batch discovery lives on the table's window driver; the text
-/// index only needs a cold directory.) Shared by both engine faces.
-pub fn window_text_for(cat: &TableCatalog, spec: &IndexSpec) -> bool {
-    if spec.kind != crate::IndexKind::Text {
-        return false;
-    }
-    let Some(dot) = spec.name.iter().position(|&b| b == b'.') else { return false };
-    cat.get(&spec.name[..dot]).is_some_and(|t| t.window.is_some())
-}
-
-/// Whether `index_name` is its table's row-eviction DRIVER: the one
-/// windowed access path per table that discovers the eviction batch
-/// and seals the rows (every other windowed path only slides its own
-/// tree — two drivers would seal the same batch twice). The
-/// window-column INDEX drives when declared; otherwise the first
-/// ascending-led ORDERPATH does.
-pub fn window_driver(cat: &TableCatalog, index_name: &[u8]) -> bool {
-    let Some(dot) = index_name.iter().position(|&b| b == b'.') else { return false };
-    let (tname, suffix) = (&index_name[..dot], &index_name[dot + 1..]);
-    let Some(t) = cat.get(tname) else { return false };
-    let Some(w) = &t.window else { return false };
-    if t.indexes.iter().any(|ix| ix.column == w.column) {
-        return suffix == w.column;
-    }
-    t.orderpaths
-        .iter()
-        .find(|op| op.on.first().is_some_and(|(c, desc)| c == &w.column && !desc))
-        .is_some_and(|op| op.name == suffix)
-}
+pub use crate::table_catalog::TableCatalog;
 
 fn show(b: &[u8]) -> String {
     String::from_utf8_lossy(b).into_owned()
@@ -321,22 +380,7 @@ pub(crate) fn dotted(table: &[u8], suffix: &[u8]) -> Vec<u8> {
     n
 }
 
-/// Compile a table into its access paths: each `INDEX col KIND` becomes
-/// an IndexSpec named `<table>.<col>` on the table's prefix (FIELD col,
-/// TYPE from the column decl, VALUES typed from the column decls); each
-/// `ORDERPATH` becomes a composite Range IndexSpec named
-/// `<table>.<orderpath>`. Pure — the SINGLE compilation both the server
-/// and the embedded store install.
-///
-/// **Validates first, itself.** The 4.0 shape took "a validated table"
-/// on trust and cashed that trust as `expect("validated")` — and the
-/// typed embedded face never called `validate()` at all, so a spec
-/// whose ORDERPATH named an undeclared column panicked in here, on a
-/// consumer's boot path, and restart-looped their container (dogfood
-/// F9). An invariant a function needs is one it establishes: admission
-/// has exactly one authority now, and it is this signature. The wire
-/// path's second validation costs microseconds.
-pub fn compile_table(t: &TableSpec) -> Result<Vec<IndexSpec>, String> {
+pub(crate) fn compile_table(t: &TableSpec) -> Result<Vec<IndexSpec>, String> {
     t.validate()?;
     let col_ty = |col: &[u8]| {
         // Post-validate this is total; the Err arm is the honest form
@@ -347,122 +391,33 @@ pub fn compile_table(t: &TableSpec) -> Result<Vec<IndexSpec>, String> {
     let mut out = Vec::with_capacity(t.indexes.len() + t.orderpaths.len());
     for ix in &t.indexes {
         let ty = col_ty(&ix.column)?;
-        let mut spec = IndexSpec::single_field(
-            dotted(&t.name, &ix.column),
-            t.prefix.clone(),
-            ix.column.clone(),
-            ty,
-            ix.kind,
-        );
-        spec.values = ix
+        let values = ix
             .values
             .iter()
-            .map(|c| Ok(ValueSpec { name: c.clone(), ty: col_ty(c)? }))
+            .map(|c| Ok(ValueSpec::new(c.clone()).with_type(col_ty(c)?)))
             .collect::<Result<_, String>>()?;
-        out.push(spec);
+        let spec = IndexSpec::builder(dotted(&t.name, &ix.column), t.prefix.clone(), ix.kind, ty)
+            .with_field(ix.column.clone())
+            .with_values(values);
+        out.push(spec.build()?);
     }
     for op in &t.orderpaths {
-        let mut spec = IndexSpec::single_field(
+        let cols = op
+            .on
+            .iter()
+            .map(|(col, order)| Ok(CompositeCol::new(col.clone(), col_ty(col)?).with_order(*order)))
+            .collect::<Result<_, String>>()?;
+        let spec = IndexSpec::builder(
             dotted(&t.name, &op.name),
             t.prefix.clone(),
-            op.on[0].0.clone(),
-            ValType::Str,
             IndexKind::Range,
-        );
-        spec.composite = Some(
-            op.on
-                .iter()
-                .map(|(col, desc)| {
-                    Ok(CompositeCol { name: col.clone(), ty: col_ty(col)?, desc: *desc })
-                })
-                .collect::<Result<_, String>>()?,
-        );
-        out.push(spec);
+            ValType::Str,
+        )
+        .with_field(op.on[0].0.clone())
+        .with_composite(cols);
+        out.push(spec.build()?);
     }
     Ok(out)
-}
-
-/// The table registry (mirrors [`crate::Catalog`]): named specs +
-/// sidecar text round-trip. Cap [`MAX_TABLES`].
-#[derive(Debug, Clone, Default)]
-pub struct TableCatalog {
-    specs: Vec<TableSpec>,
-}
-
-impl TableCatalog {
-    /// Empty catalog.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Register; errors on duplicate / cap / structure.
-    pub fn create(&mut self, spec: TableSpec) -> Result<(), String> {
-        spec.validate()?;
-        if self.specs.len() >= MAX_TABLES {
-            return Err("ERR table limit reached (64)".into());
-        }
-        if self.specs.iter().any(|s| s.name == spec.name) {
-            return Err("ERR table already exists".into());
-        }
-        self.specs.push(spec);
-        Ok(())
-    }
-
-    /// Drop by name; `false` if absent.
-    pub fn drop_table(&mut self, name: &[u8]) -> bool {
-        let n = self.specs.len();
-        self.specs.retain(|s| s.name != name);
-        self.specs.len() != n
-    }
-
-    /// Lookup.
-    pub fn get(&self, name: &[u8]) -> Option<&TableSpec> {
-        self.specs.iter().find(|s| s.name == name)
-    }
-
-    /// Declaration order.
-    pub fn iter(&self) -> impl Iterator<Item = &TableSpec> {
-        self.specs.iter()
-    }
-
-    /// Count.
-    pub fn len(&self) -> usize {
-        self.specs.len()
-    }
-
-    /// Empty?
-    pub fn is_empty(&self) -> bool {
-        self.specs.is_empty()
-    }
-
-    /// Sidecar text (one line per table) — same lifecycle genre as the
-    /// index/view catalogs.
-    pub fn to_sidecar(&self) -> String {
-        let mut out = String::from("kevy-table-catalog v1\n");
-        for s in &self.specs {
-            out.push_str(&spec_to_line(s));
-            out.push('\n');
-        }
-        out
-    }
-
-    /// Parse the sidecar text; `None` on malformed input. Every line
-    /// re-validates — a spec the validator refuses cannot be smuggled
-    /// in through a hand-edited sidecar.
-    pub fn from_sidecar(text: &str) -> Option<TableCatalog> {
-        let mut lines = text.lines();
-        if lines.next()? != "kevy-table-catalog v1" {
-            return None;
-        }
-        let mut c = TableCatalog::new();
-        for line in lines {
-            if line.is_empty() {
-                continue;
-            }
-            c.create(spec_from_line(line)?).ok()?;
-        }
-        Some(c)
-    }
 }
 
 #[cfg(test)]

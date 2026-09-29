@@ -8,7 +8,7 @@ use crate::store::Store;
 
 use kevy_index::{IndexValue, Leaf, Tree, ViewMode};
 
-use super::idx::{decode_cursor, encode_cursor, spec_of, value_repr};
+use super::idx::{decode_cursor, encode_cursor, spec_of};
 use super::{kevy_err, verb_name};
 use kevy_resp::{encode_array_len, encode_bulk, encode_error, encode_integer};
 use kevy_verbs::reply::wrong_args;
@@ -41,7 +41,7 @@ fn parse_leaf(s: &Store, argv: &[Vec<u8>], i: usize) -> Result<(Tree, usize), &'
     let tok = argv.get(i).ok_or("ERR truncated view tree")?;
     let index = tok.to_vec();
     let spec_ty =
-        spec_of(s, &index).map(|sp| sp.ty).ok_or("ERR view leaf references unknown index")?;
+        spec_of(s, &index).map(|sp| sp.ty()).ok_or("ERR view leaf references unknown index")?;
     let shape = argv.get(i + 1).ok_or("ERR truncated view leaf")?;
     if shape.eq_ignore_ascii_case(b"RANGE") {
         let min =
@@ -50,12 +50,12 @@ fn parse_leaf(s: &Store, argv: &[Vec<u8>], i: usize) -> Result<(Tree, usize), &'
         let max =
             IndexValue::parse_literal(spec_ty, argv.get(i + 3).ok_or("ERR truncated view leaf")?)
                 .ok_or("ERR leaf max does not coerce to the index type")?;
-        Ok((Tree::Leaf(Leaf { index, min, max }), i + 4))
+        Ok((Tree::Leaf(Leaf::new(index, min, max)), i + 4))
     } else if shape.eq_ignore_ascii_case(b"EQ") {
         let v =
             IndexValue::parse_literal(spec_ty, argv.get(i + 2).ok_or("ERR truncated view leaf")?)
                 .ok_or("ERR leaf value does not coerce to the index type")?;
-        Ok((Tree::Leaf(Leaf { index, min: v.clone(), max: v }), i + 3))
+        Ok((Tree::Leaf(Leaf::new(index, v.clone(), v)), i + 3))
     } else {
         Err("ERR view leaf shape must be RANGE|EQ")
     }
@@ -191,13 +191,7 @@ fn cmd_view_list(s: &Store, out: &mut Vec<u8>) {
         encode_bulk(out, b"name");
         encode_bulk(out, &spec.name);
         encode_bulk(out, b"mode");
-        encode_bulk(
-            out,
-            match spec.mode {
-                ViewMode::Virtual => b"virtual" as &[u8],
-                ViewMode::Materialized { .. } => b"materialized",
-            },
-        );
+        encode_bulk(out, spec.mode.name().as_bytes());
         encode_bulk(out, b"order_by");
         encode_bulk(out, &spec.order_by);
         encode_bulk(out, b"leaves");
@@ -231,7 +225,7 @@ fn cmd_view_query(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
             encode_array_len(out, (rows.len() * 2) as i64);
             for (k, v) in &rows {
                 encode_bulk(out, k);
-                encode_bulk(out, &value_repr(v));
+                encode_bulk(out, &v.render());
             }
         }
     }

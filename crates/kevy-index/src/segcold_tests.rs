@@ -19,7 +19,7 @@ fn value_order_bytes_pins_to_order_key() {
         for raw in raws {
             let coerced = IndexValue::coerce(ty, &raw).expect("coerces");
             assert_eq!(
-                value_order_bytes(&coerced),
+                coerced.order_bytes(),
                 order_key(ty, &raw).expect("orders"),
                 "{ty:?} {raw:?}"
             );

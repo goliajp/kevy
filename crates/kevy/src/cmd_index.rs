@@ -101,7 +101,7 @@ fn parse_fields<A: ArgvView + ?Sized>(
     let fields = names
         .into_iter()
         .zip(weights)
-        .map(|(name, weight)| kevy_index::FieldSpec { name, weight })
+        .map(|(name, weight)| kevy_index::FieldSpec::new(name).with_weight(weight))
         .collect();
     Ok((fields, i))
 }
@@ -178,7 +178,13 @@ pub(crate) fn parse_create<A: ArgvView + ?Sized>(
     let (ty, kind) = parse_type_kind(args, type_pos, out).ok()?;
     let ann = validate_kind_combo(kind, ty, &opts, out).ok()?;
     let part = std::mem::take(&mut opts.partition);
-    Some((build_spec(args, fields, ty, kind, ann, opts), part))
+    match build_spec(args, fields, ty, kind, ann, opts) {
+        Ok(spec) => Some((spec, part)),
+        Err(e) => {
+            encode_error(out, e);
+            None
+        }
+    }
 }
 
 /// The parsed CREATE's spec. Composite stays `None` here: composite
@@ -191,20 +197,19 @@ fn build_spec<A: ArgvView + ?Sized>(
     kind: IndexKind,
     ann: Option<kevy_index::AnnSpec>,
     opts: CreateOpts,
-) -> IndexSpec {
-    IndexSpec {
-        name: args[1].to_vec(),
-        prefix: args[4].to_vec(),
-        fields,
-        ty,
-        kind,
-        max_bytes: opts.max_bytes,
-        ann,
-        group_by: opts.group_by,
-        with_positions: opts.with_positions,
-        values: opts.values,
-        composite: None,
+) -> Result<IndexSpec, &'static str> {
+    let mut b = IndexSpec::builder(args[1].to_vec(), args[4].to_vec(), kind, ty)
+        .with_fields(fields)
+        .with_max_bytes(opts.max_bytes)
+        .with_positions(opts.with_positions)
+        .with_values(opts.values);
+    if let Some(a) = ann {
+        b = b.with_ann(a);
     }
+    if let Some(g) = opts.group_by {
+        b = b.with_group_by(g);
+    }
+    b.build()
 }
 
 /// Tiering floor refusal: indexes are the premium fixed layer demotion
@@ -438,12 +443,12 @@ fn validate_kind_combo(
     out: &mut Vec<u8>,
 ) -> Result<Option<kevy_index::AnnSpec>, ()> {
     let ann = match (kind, ty) {
-        (IndexKind::Ann, ValType::Vector) if opts.dim > 0 => Some(kevy_index::AnnSpec {
-            dim: opts.dim,
-            distance: opts.distance,
-            m: opts.m,
-            ef: opts.ef,
-        }),
+        (IndexKind::Ann, ValType::Vector) if opts.dim > 0 => Some(
+            kevy_index::AnnSpec::new(opts.dim)
+                .with_distance(opts.distance)
+                .with_m(opts.m)
+                .with_ef(opts.ef),
+        ),
         (IndexKind::Ann, _) => {
             {
                 encode_error(out, "ERR KIND ann requires TYPE vector and DIM");

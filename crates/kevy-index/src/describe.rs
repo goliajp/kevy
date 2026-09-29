@@ -11,9 +11,9 @@
 //! the grammar needs them, the auto loop's additions left out (they are
 //! runtime provenance, not declaration intent — [`TableSpec::sans_auto`]).
 
-use crate::catalog::{IndexKind, IndexSpec, ValType};
-use crate::table::{TableSpec, compile_table};
-use crate::{Partitioning, split_point_text};
+use crate::Partitioning;
+use crate::table::TableSpec;
+use crate::{IndexKind, IndexSpec, ValType};
 
 /// One node of a describe reply. Numbers travel as bulk strings and an
 /// absent part as `-`, the same conventions `TABLE.LIST` uses, so a
@@ -30,7 +30,7 @@ use crate::{Partitioning, split_point_text};
 /// assert_eq!(fields[0], Described::Bulk(b"name".to_vec()));
 /// assert_eq!(fields[13], Described::Bulk(b"-".to_vec())); // no window
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Described {
     /// A bulk string — a name, a keyword, or a number in decimal.
     ///
@@ -77,12 +77,11 @@ pub(crate) fn argv(words: Vec<Vec<u8>>) -> Described {
 /// ```
 /// use kevy_index::{Described, IndexKind, IndexSpec, ValType, describe_index};
 ///
-/// let s = IndexSpec::single_field(
-///     b"age".to_vec(), b"user:".to_vec(), b"age".to_vec(), ValType::I64, IndexKind::Range,
-/// );
+/// let s = IndexSpec::builder("age", "user:", IndexKind::Range, ValType::I64).with_field("age").build()?;
 /// let Described::Array(fields) = describe_index(&s, []) else { unreachable!() };
 /// assert_eq!(fields[22], Described::Bulk(b"table".to_vec()));
 /// assert_eq!(fields[23], Described::Bulk(b"-".to_vec()));
+/// # Ok::<(), &'static str>(())
 /// ```
 pub fn describe_index<'a>(
     s: &IndexSpec,
@@ -99,12 +98,11 @@ pub fn describe_index<'a>(
 /// ```
 /// use kevy_index::{Described, IndexKind, IndexSpec, Partitioning, ValType, describe_index_partitioned, order_key};
 ///
-/// let s = IndexSpec::single_field(
-///     b"age".to_vec(), b"user:".to_vec(), b"age".to_vec(), ValType::I64, IndexKind::Range,
-/// );
+/// let s = IndexSpec::builder("age", "user:", IndexKind::Range, ValType::I64).with_field("age").build()?;
 /// let p = Partitioning::Global { splits: vec![order_key(ValType::I64, b"30").unwrap()] };
 /// let Described::Array(fields) = describe_index_partitioned(&s, &p, []) else { unreachable!() };
 /// assert_eq!(fields[24], Described::Bulk(b"partitioning".to_vec()));
+/// # Ok::<(), &'static str>(())
 /// ```
 pub fn describe_index_partitioned<'a>(
     s: &IndexSpec,
@@ -118,7 +116,7 @@ pub fn describe_index_partitioned<'a>(
         None => b("-"),
         Some(cols) => Described::Array(
             cols.iter()
-                .map(|c| Described::Array(vec![b(&c.name), b(c.ty.tag()), b(order(c.desc))]))
+                .map(|c| Described::Array(vec![b(&c.name), b(c.ty.tag()), b(order(c.order))]))
                 .collect(),
         ),
     };
@@ -169,7 +167,7 @@ fn partitioning_described(s: &IndexSpec, part: &Partitioning) -> Described {
     match part {
         Partitioning::Local => b("local"),
         Partitioning::Global { splits } => {
-            let splits = splits.iter().map(|p| b(split_point_text(s, p))).collect();
+            let splits = splits.iter().map(|p| b(s.split_point_text(p))).collect();
             Described::Array(vec![b("global"), Described::Array(splits)])
         }
     }
@@ -209,7 +207,7 @@ pub fn owner_of<'a>(
 ) -> Option<&'a TableSpec> {
     tables
         .into_iter()
-        .find(|t| compile_table(t).is_ok_and(|compiled| compiled.iter().any(|c| c.name == index)))
+        .find(|t| t.compile().is_ok_and(|compiled| compiled.iter().any(|c| c.name == index)))
 }
 
 /// The `IDX.CREATE` argv that recreates a directly declared index.
@@ -217,13 +215,14 @@ pub fn owner_of<'a>(
 /// ```
 /// use kevy_index::{IndexKind, IndexSpec, ValType, index_declaration};
 ///
-/// let mut s = IndexSpec::single_field(
-///     b"age".to_vec(), b"user:".to_vec(), b"age".to_vec(), ValType::I64, IndexKind::Range,
-/// );
-/// s.max_bytes = 4096;
+/// let s = IndexSpec::builder("age", "user:", IndexKind::Range, ValType::I64)
+///     .with_field("age")
+///     .with_max_bytes(4096)
+///     .build()?;
 /// let line: Vec<String> =
 ///     index_declaration(&s).iter().map(|w| String::from_utf8_lossy(w).into_owned()).collect();
 /// assert_eq!(line.join(" "), "IDX.CREATE age ON PREFIX user: FIELD age TYPE i64 KIND range MAXMEM 4096");
+/// # Ok::<(), &'static str>(())
 /// ```
 pub fn index_declaration(s: &IndexSpec) -> Vec<Vec<u8>> {
     index_declaration_partitioned(s, &Partitioning::Local)
@@ -235,15 +234,14 @@ pub fn index_declaration(s: &IndexSpec) -> Vec<Vec<u8>> {
 /// ```
 /// use kevy_index::{IndexKind, IndexSpec, Partitioning, ValType, index_declaration_partitioned, order_key};
 ///
-/// let s = IndexSpec::single_field(
-///     b"age".to_vec(), b"user:".to_vec(), b"age".to_vec(), ValType::I64, IndexKind::Range,
-/// );
+/// let s = IndexSpec::builder("age", "user:", IndexKind::Range, ValType::I64).with_field("age").build()?;
 /// let p = Partitioning::Global { splits: vec![order_key(ValType::I64, b"30").unwrap()] };
 /// let line: Vec<String> = index_declaration_partitioned(&s, &p)
 ///     .iter()
 ///     .map(|w| String::from_utf8_lossy(w).into_owned())
 ///     .collect();
 /// assert!(line.join(" ").ends_with("KIND range PARTITION global SPLIT 30"));
+/// # Ok::<(), &'static str>(())
 /// ```
 pub fn index_declaration_partitioned(s: &IndexSpec, part: &Partitioning) -> Vec<Vec<u8>> {
     let mut w: Vec<Vec<u8>> =
@@ -268,7 +266,7 @@ pub fn index_declaration_partitioned(s: &IndexSpec, part: &Partitioning) -> Vec<
     if let Partitioning::Global { splits } = part {
         w.extend([b"PARTITION".to_vec(), b"global".to_vec()]);
         for p in splits {
-            w.extend([b"SPLIT".to_vec(), split_point_text(s, p)]);
+            w.extend([b"SPLIT".to_vec(), s.split_point_text(p)]);
         }
     }
     w
@@ -301,8 +299,11 @@ fn index_options(s: &IndexSpec, w: &mut Vec<Vec<u8>>) {
     }
 }
 
-pub(crate) fn order(desc: bool) -> &'static str {
-    if desc { "desc" } else { "asc" }
+pub(crate) fn order(o: kevy_text::SortOrder) -> &'static str {
+    match o {
+        kevy_text::SortOrder::Asc => "asc",
+        kevy_text::SortOrder::Desc => "desc",
+    }
 }
 
 /// The sidecar's distance code as `IDX.CREATE` spells it (kevy-vector's

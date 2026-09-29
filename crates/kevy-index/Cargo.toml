@@ -19,3 +19,4 @@ workspace = true
 [dependencies]
 kevy-hash = { path = "../kevy-hash", version = "6.4.0" }
 kevy-time = { path = "../kevy-time", version = "6.4.0" }
+kevy-text = { path = "../kevy-text", version = "6.4.0" }

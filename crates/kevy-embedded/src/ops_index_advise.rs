@@ -15,7 +15,7 @@
 
 use std::sync::PoisonError;
 
-use kevy_index::{AdviseShape, advice_of};
+use kevy_index::AdviseShape;
 
 use crate::store::Store;
 use crate::{KevyError, KevyResult};
@@ -34,7 +34,7 @@ pub(crate) fn probe_window(
     if win.boundary() == i64::MIN {
         return;
     }
-    if let Some(v) = kevy_index::window_value_of(lower, win.shape) {
+    if let Some(v) = lower.window_value(win.shape) {
         c.probe(v.saturating_sub(win.boundary()));
     }
 }
@@ -67,7 +67,7 @@ impl Store {
             entries
                 .iter()
                 .filter_map(|e| {
-                    advice_of(e, &cat).map(|advice| IdxAdvice {
+                    e.advice(&cat).map(|advice| IdxAdvice {
                         count: e.count,
                         name: e.name.clone(),
                         advice,
@@ -90,10 +90,10 @@ impl Store {
         let mut unused: Vec<IdxAdvice> = Vec::new();
         let tables = self.tables.catalog.read().unwrap_or_else(PoisonError::into_inner);
         for (name, c) in self.indexes.usage.read().unwrap_or_else(PoisonError::into_inner).iter() {
-            let margin = c.min_margin.load(std::sync::atomic::Ordering::Relaxed);
+            let margin = c.min_margin();
             if let Some(dot) = name.iter().position(|&b| b == b'.')
                 && let Some(spec) = tables.get(&name[..dot])
-                && let Some(advice) = kevy_index::narrow_advice(spec, margin)
+                && let Some(advice) = spec.narrow_advice(margin)
             {
                 narrow.push(IdxAdvice { count: 0, name: name.clone(), advice });
             }
@@ -130,7 +130,7 @@ impl Store {
     }
 
     /// The embedded declare-period action — same shared rule
-    /// ([`kevy_index::apply_auto`]), same delta discipline as the
+    /// ([`kevy_index::TableSpec::apply_auto`]), same delta discipline as the
     /// server: a whole new path registers, a changed one (auto
     /// VALUES) rebuilds. Failures leave everything unchanged.
     fn auto_declare(&self, name: &[u8], shape: AdviseShape, count: u64) {
@@ -142,15 +142,14 @@ impl Store {
                 _ => return,
             }
         };
-        let entry =
-            kevy_index::AdviseEntry { name: name.to_vec(), shape, count, sample: Vec::new() };
-        let Some(ledger) = kevy_index::apply_auto(&mut spec, &entry) else { return };
-        let Ok(compiled) = kevy_index::compile_table(&spec) else { return };
+        let entry = kevy_index::AdviseEntry::new(name, shape, count);
+        let Some(ledger) = spec.apply_auto(&entry) else { return };
+        let Ok(compiled) = spec.compile() else { return };
         let path = match ledger.iter().position(|&b| b == b'#') {
             Some(p) => ledger[..p].to_vec(),
             None => ledger,
         };
-        let Some(ispec) = compiled.into_iter().find(|s| s.name == path) else { return };
+        let Some(ispec) = compiled.into_iter().find(|s| s.name() == path) else { return };
         // Registry first, catalog second: once the name is free the
         // only register refusal is the tier floor, probed up front so
         // a refusal leaves the old path standing.
@@ -249,7 +248,7 @@ impl Store {
     pub(crate) fn usage_rekey(&self) {
         let names: Vec<Vec<u8>> = {
             let g = self.indexes.catalog.read().unwrap_or_else(PoisonError::into_inner);
-            g.1.iter().map(|(s, _)| s.name.clone()).collect()
+            g.1.iter().map(|(s, _)| s.name().to_vec()).collect()
         };
         let now_s = (kevy_store::now_unix_ms() / 1000) as i64;
         let mut g = self.indexes.usage.write().unwrap_or_else(PoisonError::into_inner);

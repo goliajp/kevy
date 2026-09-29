@@ -26,14 +26,14 @@ pub(super) fn freeze_text_batches(
         else {
             continue;
         };
-        if table_of(&si.spec.name) != table {
+        if table_of(si.spec.name()) != table {
             continue;
         }
-        match cold.freeze_batch(ts, &si.spec.name, keys, dir) {
+        match cold.freeze_batch(ts, si.spec.name(), keys, dir) {
             Ok(true) => st.stats_dirty = true,
             Ok(false) => {}
             Err(e) => {
-                eprintln!("kevy: text freeze '{}': {e}", String::from_utf8_lossy(&si.spec.name))
+                eprintln!("kevy: text freeze '{}': {e}", String::from_utf8_lossy(si.spec.name()))
             }
         }
     }
@@ -44,7 +44,7 @@ pub(super) fn freeze_text_batches(
 /// tick), with a post-slide malloc_trim: a slide bulk-frees a whole
 /// bucket's values and glibc keeps the arena unless told. Returns
 /// whether the index tree changed. `drives_rows` is the per-table
-/// row-eviction mandate ([`kevy_index::window_driver`]): a non-driver
+/// row-eviction mandate ([`kevy_index::TableCatalog::is_window_driver`]): a non-driver
 /// windowed path slides its own tree and touches no rows.
 pub(super) fn evict_and_slide(
     win: &mut kevy_window::WindowRt,
@@ -88,17 +88,17 @@ pub(super) fn table_of(index_name: &[u8]) -> &[u8] {
     &index_name[..dot]
 }
 
-/// [`kevy_index::window_for`] against the shared catalog state.
+/// [`kevy_index::TableCatalog::window_for`] against the shared catalog state.
 pub(super) fn window_for(
     catalogs: &CatalogState,
     spec: &IndexSpec,
 ) -> Option<(kevy_index::WindowSpec, kevy_index::WindowShape)> {
-    kevy_index::window_for(catalogs.table()?.as_ref(), &spec.name)
+    (catalogs.table()?.as_ref()).window_for(spec.name())
 }
 
-/// [`kevy_index::window_driver`] against the shared catalog state.
+/// [`kevy_index::TableCatalog::is_window_driver`] against the shared catalog state.
 pub(super) fn window_driver(catalogs: &CatalogState, index_name: &[u8]) -> bool {
-    catalogs.table().is_some_and(|t| kevy_index::window_driver(t.as_ref(), index_name))
+    catalogs.table().is_some_and(|t| t.as_ref().is_window_driver(index_name))
 }
 
 /// Whether this compiled index is a windowed table's TEXT index —
@@ -106,7 +106,7 @@ pub(super) fn window_driver(catalogs: &CatalogState, index_name: &[u8]) -> bool 
 /// slides. (The batch discovery lives on the window column's scalar
 /// index; this index only needs a cold directory.)
 pub(super) fn text_window_for(catalogs: &CatalogState, spec: &IndexSpec) -> bool {
-    catalogs.table().is_some_and(|t| kevy_index::window_text_for(t.as_ref(), spec))
+    catalogs.table().is_some_and(|t| t.as_ref().is_windowed_text(spec))
 }
 
 /// The per-shard segment directory, when persistence is on. No data

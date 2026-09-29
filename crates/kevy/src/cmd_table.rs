@@ -2,7 +2,7 @@
 //!
 //! DECLARE/DROP are Local catalog mutations (sidecar-persisted, like
 //! IDX.*/VIEW.*): the parse + compile both live in `kevy_index`
-//! ([`kevy_index::parse_table_declare`] / [`kevy_index::compile_table`])
+//! ([`kevy_index::parse_table_declare`] / [`kevy_index::TableSpec::compile`])
 //! — ONE implementation the embedded dispatch calls too, so the two
 //! wire faces cannot drift (the IDX.CREATE parity lesson).
 //! LIST/VERIFY ride the extension fan-out beside VIEW.*.
@@ -24,9 +24,7 @@
 
 use std::path::Path;
 
-use kevy_index::{
-    Catalog, TableCatalog, TableSpec, compile_table, parse_table_declare_partitioned, spec_diff,
-};
+use kevy_index::{Catalog, TableCatalog, TableSpec, parse_table_declare_partitioned, spec_diff};
 use kevy_resp::{ArgvView, encode_array_len, encode_bulk, encode_error, encode_integer};
 use kevy_rt::ExtensionReduced;
 use kevy_store::Store;
@@ -105,7 +103,7 @@ pub(crate) fn cmd_table_declare<A: ArgvView + ?Sized>(
         return encode_error(out, &e);
     }
     let mut icat: Catalog = ctx.state.catalogs.index().map(|c| (*c).clone()).unwrap_or_default();
-    let compiled = match compile_table(&spec) {
+    let compiled = match spec.compile() {
         Ok(c) => c,
         Err(e) => return encode_error(out, &e),
     };
@@ -140,7 +138,7 @@ pub(crate) fn cmd_table_ensure<A: ArgvView + ?Sized>(
     match existing {
         None => cmd_table_declare(ctx, sampler, args, out),
         Some(cur) if cur.sans_auto() == spec => {
-            let names = compile_table(&spec).map(|c| c.into_iter().map(|i| i.name).collect());
+            let names = spec.compile().map(|c| c.into_iter().map(|i| i.name().to_vec()).collect());
             let icat = ctx.state.catalogs.index().map(|c| (*c).clone()).unwrap_or_default();
             if names.is_ok_and(|n: Vec<Vec<u8>>| {
                 crate::cmd_table_global::same_spread(&icat, &n, &globals)
@@ -172,7 +170,7 @@ pub(crate) fn cmd_table_replace<A: ArgvView + ?Sized>(
         Ok((s, _)) => s,
         Err(e) => return encode_error(out, &e),
     };
-    if let Err(e) = compile_table(&spec) {
+    if let Err(e) = spec.compile() {
         return encode_error(out, &e);
     }
     let exists = ctx.state.catalogs.table().and_then(|c| c.get(&spec.name).cloned()).is_some();
@@ -189,7 +187,9 @@ fn cmd_table_drop_by_name(ctx: &Ctx<'_>, name: &[u8], out: &mut Vec<u8>) {
     let compiled: Vec<Vec<u8>> = tcat
         .get(name)
         .map(|s| {
-            compile_table(s).map(|c| c.into_iter().map(|i| i.name).collect()).unwrap_or_default() // catalog entries were admitted validated
+            s.compile()
+                .map(|c| c.into_iter().map(|i| i.name().to_vec()).collect())
+                .unwrap_or_default() // catalog entries were admitted validated
         })
         .unwrap_or_default();
     if tcat.drop_table(name) {
@@ -215,7 +215,9 @@ pub(crate) fn cmd_table_drop<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out:
     let compiled: Vec<Vec<u8>> = tcat
         .get(&args[1])
         .map(|s| {
-            compile_table(s).map(|c| c.into_iter().map(|i| i.name).collect()).unwrap_or_default() // catalog entries were admitted validated
+            s.compile()
+                .map(|c| c.into_iter().map(|i| i.name().to_vec()).collect())
+                .unwrap_or_default() // catalog entries were admitted validated
         })
         .unwrap_or_default();
     let hit = tcat.drop_table(&args[1]);
@@ -259,7 +261,7 @@ fn op_verify(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     else {
         return vec![ST_NOINDEX];
     };
-    let Ok(compiled) = compile_table(&spec) else {
+    let Ok(compiled) = spec.compile() else {
         // Catalog entries were admitted validated; an Err here means
         // the sidecar was hand-edited — refuse rather than panic.
         return vec![ST_NOINDEX];
@@ -267,7 +269,7 @@ fn op_verify(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     let mut chunk = vec![ST_OK];
     chunk.extend_from_slice(&(compiled.len() as u32).to_le_bytes());
     for ispec in &compiled {
-        match crate::cmd_table_verify::index_verify_counts(ctx, store, &ispec.name) {
+        match crate::cmd_table_verify::index_verify_counts(ctx, store, ispec.name()) {
             Ok(counts) => {
                 for v in counts {
                     chunk.extend_from_slice(&v.to_le_bytes());
@@ -379,7 +381,7 @@ fn reduce_verify(catalogs: &CatalogState, argv: &[Vec<u8>], chunks: &[Vec<u8>]) 
         );
         return out;
     };
-    let n = compile_table(&spec).map(|c| c.len()).unwrap_or_default();
+    let n = spec.compile().map(|c| c.len()).unwrap_or_default();
     for c in chunks {
         match c.first().copied() {
             Some(x) if x == ST_OK => {}
@@ -451,10 +453,10 @@ fn render_verify(out: &mut Vec<u8>, spec: &TableSpec, sums: &[[u64; 10]], spot: 
         b"missing",
     ];
     encode_array_len(out, (sums.len() + 1) as i64);
-    for (ispec, s) in compile_table(spec).unwrap_or_default().iter().zip(sums) {
+    for (ispec, s) in spec.compile().unwrap_or_default().iter().zip(sums) {
         encode_array_len(out, 22);
         encode_bulk(out, b"index");
-        encode_bulk(out, &ispec.name);
+        encode_bulk(out, ispec.name());
         for (label, v) in LABELS.iter().zip(s.iter()) {
             encode_bulk(out, label);
             encode_bulk(out, v.to_string().as_bytes());

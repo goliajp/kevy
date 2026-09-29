@@ -3,7 +3,7 @@
 //! `ops_index.rs` to keep it under the 500-LOC project ceiling;
 //! behaviour unchanged).
 
-use kevy_index::{IndexKind, IndexSpec, Segment};
+use kevy_index::{AggRow, IndexKind, IndexSpec, Segment};
 
 use crate::ops_index::{IndexReg, ShardSegs};
 
@@ -65,15 +65,15 @@ pub(crate) fn tier_floor_check(shards: &crate::store::Shards) -> crate::KevyResu
 pub(crate) fn new_text(spec: &IndexSpec) -> kevy_text::TextSegment {
     kevy_text::TextSegment::with_shape(
         kevy_text::SegmentShape::default()
-            .with_fields(spec.fields.len())
-            .with_positions(spec.with_positions)
-            .with_values(spec.values.len()),
+            .with_fields(spec.fields().len())
+            .with_positions(spec.has_positions())
+            .with_values(spec.values().len()),
     )
 }
 
 #[cfg(feature = "vector")]
 pub(crate) fn new_graph(spec: &IndexSpec) -> kevy_vector::Hnsw {
-    let a = spec.ann.as_ref().expect("ann spec");
+    let a = spec.ann().expect("an ann index carries its parameters");
     kevy_vector::Hnsw::new(
         a.dim as usize,
         kevy_vector::HnswParams::default()
@@ -119,7 +119,7 @@ fn rebuild_seg_lists(
     let mut next_agg: Vec<(IndexSpec, kevy_index::AggSegment)> = Vec::new();
     for (spec, _) in cat.iter() {
         let (segs, st) = (&mut *shard_segs, &mut *store);
-        match spec.kind {
+        match spec.kind() {
             IndexKind::Agg => next_agg.push(take_or_backfill(
                 &mut segs.agg,
                 spec,
@@ -187,7 +187,7 @@ fn take_or_backfill<S>(
         return have.swap_remove(i);
     }
     let mut seg = empty();
-    let mut pat = spec.prefix.clone();
+    let mut pat = spec.prefix().to_vec();
     pat.push(b'*');
     for key in store.collect_keys(Some(&pat), None) {
         apply(store, spec, &mut seg, &key);
@@ -204,18 +204,19 @@ fn apply_agg_key(
     // Both fields in ONE row peek (server twin: `apply_row_agg`) —
     // one record read on a cold row, no promotion, no gate mark; the
     // `Ok(None)`/`Err` arms carry the old `exists()` distinction.
-    let group_field = spec.group_by.as_deref().unwrap_or_default();
+    let group_field = spec.group_by().unwrap_or_default();
     match store.peek_hash_fields(key, &[group_field, spec.field()]) {
         Ok(Some(mut vals)) => {
             let group = vals[0].take();
-            let val = vals[1].take().and_then(|raw| kevy_index::IndexValue::coerce(spec.ty, &raw));
+            let val =
+                vals[1].take().and_then(|raw| kevy_index::IndexValue::coerce(spec.ty(), &raw));
             match (group, val) {
-                (Some(g), Some(v)) => a.apply(key, Some((g, v)), false),
-                _ => a.apply(key, None, true),
+                (Some(g), Some(v)) => a.apply(key, AggRow::Member { group: g, value: v }),
+                _ => a.apply(key, AggRow::Excluded),
             }
         }
-        Ok(None) => a.apply(key, None, false),
-        Err(_) => a.apply(key, None, true),
+        Ok(None) => a.apply(key, AggRow::Removed),
+        Err(_) => a.apply(key, AggRow::Excluded),
     }
 }
 
@@ -251,10 +252,10 @@ fn apply_text_key(
     // read on a cold row, no promotion, no gate mark); `read_row`
     // resolves from the prefetch, not per-field hgets.
     let names: Vec<&[u8]> = spec
-        .fields
+        .fields()
         .iter()
         .map(|f| f.name.as_slice())
-        .chain(spec.values.iter().map(|v| v.name.as_slice()))
+        .chain(spec.values().iter().map(|v| v.name.as_slice()))
         .collect();
     let fetched = store.peek_hash_fields(key, &names).ok().flatten();
     let (fields, values) = spec.read_row(|f| {
@@ -309,7 +310,7 @@ pub(crate) fn on_commit(
 fn apply_text_arm(shard_segs: &mut ShardSegs, store: &mut kevy_store::Store, key: &[u8]) -> bool {
     let mut touched = false;
     for (spec, ts) in &mut shard_segs.text {
-        if key.starts_with(&spec.prefix) {
+        if key.starts_with(spec.prefix()) {
             apply_text_key(store, spec, ts, key);
             touched = true;
         }
@@ -318,7 +319,7 @@ fn apply_text_arm(shard_segs: &mut ShardSegs, store: &mut kevy_store::Store, key
     {
         let ShardSegs { text, cold_text, .. } = &mut *shard_segs;
         for (name, dir) in cold_text.iter_mut() {
-            if text.iter().any(|(s, _)| &s.name == name && key.starts_with(&s.prefix)) {
+            if text.iter().any(|(s, _)| s.name() == name && key.starts_with(s.prefix())) {
                 dir.on_row_write(key);
             }
         }
@@ -332,7 +333,7 @@ fn apply_text_arm(shard_segs: &mut ShardSegs, store: &mut kevy_store::Store, key
 fn apply_one_key(shard_segs: &mut ShardSegs, store: &mut kevy_store::Store, key: &[u8]) -> bool {
     let mut touched = false;
     for (spec, seg) in &mut shard_segs.segs {
-        if key.starts_with(&spec.prefix) {
+        if key.starts_with(spec.prefix()) {
             apply_key(store, spec, seg, key);
             touched = true;
         }
@@ -343,7 +344,7 @@ fn apply_one_key(shard_segs: &mut ShardSegs, store: &mut kevy_store::Store, key:
     {
         let ShardSegs { segs, windows, .. } = &mut *shard_segs;
         for (name, win) in windows.iter_mut() {
-            if segs.iter().any(|(s, _)| &s.name == name && key.starts_with(&s.prefix)) {
+            if segs.iter().any(|(s, _)| s.name() == name && key.starts_with(s.prefix())) {
                 win.on_row_write(key);
             }
         }
@@ -354,13 +355,13 @@ fn apply_one_key(shard_segs: &mut ShardSegs, store: &mut kevy_store::Store, key:
     }
     #[cfg(feature = "vector")]
     for (spec, g) in &mut shard_segs.ann {
-        if key.starts_with(&spec.prefix) {
+        if key.starts_with(spec.prefix()) {
             apply_ann_key(store, spec, g, key);
             touched = true;
         }
     }
     for (spec, a) in &mut shard_segs.agg {
-        if key.starts_with(&spec.prefix) {
+        if key.starts_with(spec.prefix()) {
             apply_agg_key(store, spec, a, key);
             touched = true;
         }
@@ -421,7 +422,11 @@ fn each_written_key(verb: &[u8], parts: &[&[u8]], mut f: impl FnMut(&[u8])) {
 /// side-channel iff it declared `VALUES` (undeclared = the plain
 /// `Segment::new()`, byte-identical to before; A5).
 fn new_scalar(spec: &IndexSpec) -> Segment {
-    if spec.values.is_empty() { Segment::new() } else { Segment::with_values(spec.values.len()) }
+    if spec.values().is_empty() {
+        Segment::new()
+    } else {
+        Segment::with_values(spec.values().len())
+    }
 }
 
 /// The primary field AND every declared VALUES column read with
@@ -444,7 +449,7 @@ fn apply_key(store: &mut kevy_store::Store, spec: &IndexSpec, seg: &mut Segment,
             let primary = spec.derive_scalar(&vals[..w]);
             match primary {
                 None => seg.apply_with_values(key, None, &[]),
-                Some(v) if spec.values.is_empty() => seg.apply(key, Some(v)),
+                Some(v) if spec.values().is_empty() => seg.apply(key, Some(v)),
                 Some(v) => {
                     let refs: Vec<Option<&[u8]>> = vals[w..].iter().map(|o| o.as_deref()).collect();
                     seg.apply_with_values(key, Some(v), &refs);

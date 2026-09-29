@@ -76,8 +76,7 @@ fn apply_auto_declares_each_shape_within_budget() {
     log.observe(b"ghost.x", AdviseShape::Range, &argv); // other table
     log.observe(b"ev.nosuch", AdviseShape::Range, &argv); // ungrounded
     let human = spec.sans_auto();
-    let applied: Vec<Vec<u8>> =
-        log.entries().iter().filter_map(|e| apply_auto(&mut spec, e)).collect();
+    let applied: Vec<Vec<u8>> = log.entries().iter().filter_map(|e| spec.apply_auto(e)).collect();
     assert_eq!(applied.len(), 3, "{applied:?}");
     assert!(spec.indexes.iter().any(|ix| ix.column == b"note"), "Range declared");
     assert!(spec.orderpaths.iter().any(|op| op.name == b"recent"), "Where declared");
@@ -87,7 +86,7 @@ fn apply_auto_declares_each_shape_within_budget() {
     // The budget is spent — a fourth family is refused.
     let mut extra = AdviseLog::new();
     extra.observe(b"ev.id", AdviseShape::Range, &argv);
-    assert!(apply_auto(&mut spec, extra.entries()[0]).is_none(), "budget spent");
+    assert!(spec.apply_auto(extra.entries()[0]).is_none(), "budget spent");
     // The human declaration is recoverable exactly.
     assert_eq!(spec.sans_auto(), human, "sans_auto strips every auto addition");
     // And validate + the sidecar round-trip both hold with auto state.
@@ -101,19 +100,19 @@ fn apply_auto_declares_each_shape_within_budget() {
 #[test]
 fn narrow_advice_needs_a_window_an_observation_and_a_bucket_of_margin() {
     let mut spec = cat().get(b"ev").expect("declared").clone();
-    assert_eq!(narrow_advice(&spec, 100), None, "windowless table never advises");
+    assert_eq!(spec.narrow_advice(Some(100)), None, "windowless table never advises");
     spec.window = Some(crate::WindowSpec { column: b"at".to_vec(), span: 100, bucket: 10 });
-    assert_eq!(narrow_advice(&spec, i64::MAX), None, "unobserved path stays quiet");
-    assert_eq!(narrow_advice(&spec, 0), None, "a query touched the boundary");
-    assert_eq!(narrow_advice(&spec, -5), None, "a query probed the cold side");
-    assert_eq!(narrow_advice(&spec, 7), None, "margin under one bucket");
-    let a = narrow_advice(&spec, 37).expect("bucket-aligned narrowing");
+    assert_eq!(spec.narrow_advice(None), None, "unobserved path stays quiet");
+    assert_eq!(spec.narrow_advice(Some(0)), None, "a query touched the boundary");
+    assert_eq!(spec.narrow_advice(Some(-5)), None, "a query probed the cold side");
+    assert_eq!(spec.narrow_advice(Some(7)), None, "margin under one bucket");
+    let a = spec.narrow_advice(Some(37)).expect("bucket-aligned narrowing");
     assert_eq!(
         a,
         "WINDOW at SPAN 100 — every observed query kept a margin of 37; SPAN 70 still serves them"
     );
     // A margin at (or past) the whole span still leaves one bucket.
-    let a = narrow_advice(&spec, 100).expect("floor at one bucket");
+    let a = spec.narrow_advice(Some(100)).expect("floor at one bucket");
     assert!(a.ends_with("SPAN 10 still serves them"), "{a}");
 }
 
@@ -128,7 +127,7 @@ fn advice_renders_each_shape_and_refuses_ungrounded_names() {
     log.observe(b"ev.at", AdviseShape::Filter(b"note".to_vec()), &argv);
     log.observe(b"ghost.col", AdviseShape::Range, &argv);
     log.observe(b"ev.nosuch", AdviseShape::Range, &argv);
-    let texts: Vec<String> = log.entries().iter().filter_map(|e| advice_of(e, &cat)).collect();
+    let texts: Vec<String> = log.entries().iter().filter_map(|e| e.advice(&cat)).collect();
     assert_eq!(texts.len(), 4, "ungrounded names render nothing: {texts:?}");
     assert!(texts.iter().any(|t| t.contains("INDEX at range")), "{texts:?}");
     assert!(texts.iter().any(|t| t.contains("ORDERPATH recent ON at THEN note")), "{texts:?}");

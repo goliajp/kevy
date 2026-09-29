@@ -300,7 +300,7 @@ pub(super) fn op_compose(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> 
         store,
         &cq.a.name,
         &cq.b.name,
-        |spec_a, seg_a, spec_b, seg_b| compose_keys(&cq, spec_a.ty, seg_a, spec_b.ty, seg_b),
+        |spec_a, seg_a, spec_b, seg_b| compose_keys(&cq, spec_a.ty(), seg_a, spec_b.ty(), seg_b),
     );
     match res {
         Ok(Some(keys)) => {

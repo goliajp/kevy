@@ -7,6 +7,7 @@ use core::fmt;
 
 use kevy_hash::KevyHash;
 
+use crate::into_iter::IntoIter;
 use crate::iter::Iter;
 use crate::map::KevyMap;
 
@@ -55,8 +56,6 @@ impl<K> KevySet<K> {
         SetIter(self.0.iter())
     }
 
-    /// Borrow the underlying map (gives access to the bucket-addr / prefetch
-    /// API).
     /// An iterator that begins at slot `start` and wraps once around the whole
     /// table. Take the first element for an arbitrary member in O(1) expected
     /// time — the pattern SPOP and SRANDMEMBER need, and the one Redis's
@@ -122,6 +121,52 @@ impl<K: fmt::Debug> fmt::Debug for KevySet<K> {
 /// `&K` iterator over all members of a [`KevySet`]; order unspecified.
 #[derive(Debug)]
 pub struct SetIter<'a, K>(Iter<'a, K, ()>);
+
+/// `K` iterator that consumes a [`KevySet`]; order unspecified.
+///
+/// ```
+/// let s: kevy_map::KevySet<u64> = [3, 1].into_iter().collect();
+/// let mut v: Vec<u64> = s.into_iter().collect();
+/// v.sort();
+/// assert_eq!(v, [1, 3]);
+/// ```
+#[derive(Debug)]
+pub struct SetIntoIter<K>(IntoIter<K, ()>);
+
+impl<K> Iterator for SetIntoIter<K> {
+    type Item = K;
+    fn next(&mut self) -> Option<K> {
+        self.0.next().map(|(k, ())| k)
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.0.size_hint()
+    }
+}
+
+impl<K> ExactSizeIterator for SetIntoIter<K> {}
+
+impl<K> IntoIterator for KevySet<K> {
+    type Item = K;
+    type IntoIter = SetIntoIter<K>;
+    fn into_iter(self) -> SetIntoIter<K> {
+        SetIntoIter(self.0.into_iter())
+    }
+}
+
+/// Two sets are equal when they hold the same members.
+///
+/// ```
+/// let a: kevy_map::KevySet<u64> = [1, 2].into_iter().collect();
+/// let b: kevy_map::KevySet<u64> = [2, 1].into_iter().collect();
+/// assert_eq!(a, b);
+/// ```
+impl<K: KevyHash + Eq> PartialEq for KevySet<K> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl<K: KevyHash + Eq> Eq for KevySet<K> {}
 
 impl<'a, K> Iterator for SetIter<'a, K> {
     type Item = &'a K;

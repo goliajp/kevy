@@ -13,10 +13,7 @@
 use crate::catalog::ValType;
 use crate::value::IndexValue;
 
-/// The order-preserving bytes of one value — [`crate::order_key`]'s
-/// transform, taken from an already-coerced [`IndexValue`]. The pin
-/// test holds the two in lockstep.
-pub fn value_order_bytes(v: &IndexValue) -> Vec<u8> {
+pub(crate) fn value_order_bytes(v: &IndexValue) -> Vec<u8> {
     match v {
         IndexValue::Str(s) => s.clone(),
         IndexValue::I64(i) => ((*i as u64) ^ (1 << 63)).to_be_bytes().to_vec(),
@@ -30,7 +27,7 @@ pub fn value_order_bytes(v: &IndexValue) -> Vec<u8> {
 
 /// `(value, row_key)` → the strictly-orderable segment key.
 pub fn seg_key(v: &IndexValue, row_key: &[u8]) -> Vec<u8> {
-    let vb = value_order_bytes(v);
+    let vb = v.order_bytes();
     let mut out = Vec::with_capacity(vb.len() + row_key.len() + 4);
     frame_into(&mut out, &vb);
     frame_into(&mut out, row_key);
@@ -72,9 +69,9 @@ pub fn decode_seg_key(ty: ValType, key: &[u8]) -> Option<(IndexValue, Vec<u8>)> 
 /// terminator is nobody's prefix).
 pub fn seg_bounds(min: &IndexValue, max: &IndexValue) -> (Vec<u8>, Vec<u8>) {
     let mut lo = Vec::new();
-    frame_into(&mut lo, &value_order_bytes(min));
+    frame_into(&mut lo, &min.order_bytes());
     let mut hi = Vec::new();
-    frame_into(&mut hi, &value_order_bytes(max));
+    frame_into(&mut hi, &max.order_bytes());
     *hi.last_mut().expect("frame is never empty") = 0x01;
     (lo, hi)
 }
@@ -84,7 +81,8 @@ pub fn seg_bounds(min: &IndexValue, max: &IndexValue) -> (Vec<u8>, Vec<u8>) {
 /// (ascending — its first component is the column's `order_key` 8B,
 /// so the tree prefix below a boundary is exactly the out-of-window
 /// batch, the property the slide rides).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum WindowShape {
     /// `INDEX <wcol> range` — the tree's values ARE the window column.
     PlainI64,
@@ -107,7 +105,14 @@ pub enum WindowShape {
 ///
 /// One `u64` out of the segment scope, no per-row cold lookup, and the
 /// answer is evidence rather than assumption.
-#[derive(Debug, Clone, Copy)]
+///
+/// ```
+/// use kevy_index::{WindowAudit, WindowShape};
+/// let a = WindowAudit::new(1_000, WindowShape::PlainI64, 42);
+/// assert_eq!((a.boundary, a.cold_live), (1_000, 42));
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct WindowAudit {
     /// Bucket-aligned eviction boundary: entries below it are cold.
     pub boundary: i64,
@@ -117,10 +122,20 @@ pub struct WindowAudit {
     pub cold_live: u64,
 }
 
-/// The window-column value a tree entry carries, under `shape`.
-/// `None` = the entry cannot carry one (wrong variant / short bytes) —
-/// the caller treats the tree as having no boundary to advance.
-pub fn window_value_of(v: &IndexValue, shape: WindowShape) -> Option<i64> {
+impl WindowAudit {
+    /// The audit for a tree of `shape` whose eviction boundary is
+    /// `boundary`, with `cold_live` live cold entries below it.
+    ///
+    /// ```
+    /// use kevy_index::{WindowAudit, WindowShape};
+    /// assert_eq!(WindowAudit::new(0, WindowShape::CompositeLed, 0).shape, WindowShape::CompositeLed);
+    /// ```
+    pub fn new(boundary: i64, shape: WindowShape, cold_live: u64) -> WindowAudit {
+        WindowAudit { boundary, shape, cold_live }
+    }
+}
+
+pub(crate) fn window_value_of(v: &IndexValue, shape: WindowShape) -> Option<i64> {
     match (shape, v) {
         (WindowShape::PlainI64, IndexValue::I64(i)) => Some(*i),
         (WindowShape::CompositeLed, IndexValue::Str(b)) => {
@@ -292,3 +307,30 @@ impl ColdBloom {
 #[cfg(test)]
 #[path = "segcold_tests.rs"]
 mod tests;
+
+impl IndexValue {
+    /// The order-preserving bytes of one value — [`crate::order_key`]'s
+    /// transform, taken from an already-coerced [`IndexValue`]. The pin
+    /// test holds the two in lockstep.
+    ///
+    /// ```
+    /// use kevy_index::IndexValue;
+    /// assert!(IndexValue::I64(-1).order_bytes() < IndexValue::I64(1).order_bytes());
+    /// ```
+    pub fn order_bytes(&self) -> Vec<u8> {
+        value_order_bytes(self)
+    }
+
+    /// The window-column value a tree entry carries, under `shape`.
+    /// `None` = the entry cannot carry one (wrong variant / short bytes) —
+    /// the caller treats the tree as having no boundary to advance.
+    ///
+    /// ```
+    /// use kevy_index::{IndexValue, WindowShape};
+    /// assert_eq!(IndexValue::I64(42).window_value(WindowShape::PlainI64), Some(42));
+    /// assert_eq!(IndexValue::I64(42).window_value(WindowShape::CompositeLed), None);
+    /// ```
+    pub fn window_value(&self, shape: WindowShape) -> Option<i64> {
+        window_value_of(self, shape)
+    }
+}

@@ -14,10 +14,7 @@
 //! one shard to another arrive in order, so an owner that has heard from
 //! all N holds every entry, and answers reads only then.
 
-use kevy_index::{
-    IndexSpec, IndexValue, Partitioning, PlacementTable, Segment, partition_owner,
-    value_order_bytes,
-};
+use kevy_index::{IndexSpec, IndexValue, Partitioning, PlacementTable, Segment, partition_owner};
 use kevy_store::Store;
 
 use crate::state::Ctx;
@@ -58,7 +55,7 @@ impl GlobalRole {
     pub(crate) fn new(spec: &IndexSpec, part: &Partitioning, at: (usize, usize), inc: u64) -> Self {
         let (shard, nshards) = at;
         let owned = (0..part.partitions())
-            .filter(|&p| partition_owner(&spec.name, p, nshards) == shard)
+            .filter(|&p| partition_owner(spec.name(), p, nshards) == shard)
             .map(|p| (p, super::new_scalar_seg(spec)))
             .collect();
         GlobalRole {
@@ -102,7 +99,7 @@ impl GlobalRole {
             }
             return;
         };
-        let enc = value_order_bytes(&value);
+        let enc = value.order_bytes();
         let p = self.part.partition_of(&enc) as u16;
         let h = entry_hash(&enc, values.iter().map(|v| v.as_deref()));
         if prev == Some((p, h)) {
@@ -154,8 +151,8 @@ impl GlobalRole {
     }
 
     fn send(&mut self, spec: &IndexSpec, p: u16, delta: Delta) {
-        let to = partition_owner(&spec.name, p as usize, self.nshards);
-        self.outbox.push((to, super::global_wire::encode(&spec.name, self.inc, p, &delta)));
+        let to = partition_owner(spec.name(), p as usize, self.nshards);
+        self.outbox.push((to, super::global_wire::encode(spec.name(), self.inc, p, &delta)));
     }
 }
 
@@ -222,7 +219,8 @@ pub(crate) fn apply_ext(ctx: &Ctx<'_>, store: &mut Store, payload: &[u8]) {
     let mut st = ctx.shard.indexes.borrow_mut();
     super::refresh(ctx, &mut st, store);
     let st = &mut *st;
-    let role = st.idx.iter_mut().find(|si| si.spec.name == name).and_then(|si| si.global.as_mut());
+    let role =
+        st.idx.iter_mut().find(|si| si.spec.name() == name).and_then(|si| si.global.as_mut());
     if let Some(g) = role.filter(|g| g.inc == inc) {
         g.apply(p, delta);
         st.stats_dirty = true;

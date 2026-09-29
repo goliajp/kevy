@@ -102,10 +102,7 @@ fn scalar_rows(n: usize, long: bool) -> Rows {
 /// grows with every row, so nearly every value is distinct.
 fn composite_rows(n: usize) -> Rows {
     const DEPTS: [&str; 8] = ["eng", "ops", "sales", "hr", "legal", "design", "data", "support"];
-    let cols = [
-        CompositeCol { name: b"dept".to_vec(), ty: ValType::Str, desc: false },
-        CompositeCol { name: b"ts".to_vec(), ty: ValType::I64, desc: false },
-    ];
+    let cols = [CompositeCol::new("dept", ValType::Str), CompositeCol::new("ts", ValType::I64)];
     let keys = (0..n).map(|i| format!("row:{i}").into_bytes()).collect();
     let vals = (0..n)
         .map(|i| {

@@ -19,14 +19,26 @@ pub const TABLE_DECLARE_USAGE: &str = "ERR usage: TABLE.DECLARE name PREFIX p PK
 ///     b"COLUMN", b"at", b"i64", b"INDEX", b"at", b"range", b"GLOBAL",
 /// ])
 /// .unwrap();
-/// assert_eq!(global, [GlobalPath { path: b"t.at".to_vec(), split_at: vec![] }]);
+/// assert_eq!(global, [GlobalPath::new("t.at")]);
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct GlobalPath {
     /// The compiled index's name, `<table>.<column>` or `<table>.<orderpath>`.
     pub path: Vec<u8>,
     /// The `SPLIT AT` values as written; empty = sampled from the rows.
     pub split_at: Vec<Vec<u8>>,
+}
+
+impl GlobalPath {
+    /// Path `path`, its split points sampled from the rows (no `SPLIT AT`).
+    ///
+    /// ```
+    /// assert!(kevy_index::GlobalPath::new("t.at").split_at.is_empty());
+    /// ```
+    pub fn new(path: impl Into<Vec<u8>>) -> GlobalPath {
+        GlobalPath { path: path.into(), split_at: Vec::new() }
+    }
 }
 
 /// A table-declaration clause keyword — the boundary variadic lists
@@ -222,13 +234,13 @@ fn parse_orderpath(argv: &[&[u8]], at: usize, spec: &mut TableSpec) -> Result<us
         if is_table_kw(col) {
             return Err("ERR ORDERPATH needs ON <col>".into());
         }
-        let mut desc = false;
+        let mut order = kevy_text::SortOrder::Asc;
         i += 1;
         if argv.get(i).is_some_and(|a| a.eq_ignore_ascii_case(b"DESC")) {
-            desc = true;
+            order = kevy_text::SortOrder::Desc;
             i += 1;
         }
-        on.push((col.to_vec(), desc));
+        on.push((col.to_vec(), order));
         match argv.get(i) {
             Some(a) if a.eq_ignore_ascii_case(b"THEN") => i += 1,
             Some(a) if is_table_kw(a) => break,
@@ -236,7 +248,7 @@ fn parse_orderpath(argv: &[&[u8]], at: usize, spec: &mut TableSpec) -> Result<us
             Some(_) => return Err(TABLE_DECLARE_USAGE.into()),
         }
     }
-    spec.orderpaths.push(OrderPath { name: name.to_vec(), on });
+    spec.orderpaths.push(OrderPath::new(name.to_vec(), on));
     Ok(i)
 }
 

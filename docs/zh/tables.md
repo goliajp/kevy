@@ -17,7 +17,7 @@ IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20
 
 > **正在从手工维护的索引迁移？**先读 [table-migration.md](table-migration.md)——八条在生产上付过学费的经验，以及"表为什么存在"的实测漂移数字（89% 从未写入、76% 从未移除）。
 
-> **声明绝不 panic。** `TABLE.DECLARE` / `Store::table_declare` 对每一个非法 spec——未知列、重名、缺 PK，无论什么——都以一个具名错误作答，而被拒绝的声明什么也不安装。这是一条硬保证，由 `compile_table` 自行校验来强制，并被持续 fuzz（`table_spec`）：你启动路径上的一个坏 spec 是一行日志，不是一个重启循环。
+> **声明绝不 panic。** `TABLE.DECLARE` / `Store::table_declare` 对每一个非法 spec——未知列、重名、缺 PK，无论什么——都以一个具名错误作答，而被拒绝的声明什么也不安装。这是一条硬保证，由 `TableSpec::compile` 自行校验来强制，并被持续 fuzz（`table_spec`）：你启动路径上的一个坏 spec 是一行日志，不是一个重启循环。
 
 ## 声明模型
 
