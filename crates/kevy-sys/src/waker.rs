@@ -17,18 +17,27 @@ pub struct Waker {
     write_fd: c_int,
 }
 
-/// Create a non-blocking self-pipe waker.
-pub fn waker() -> io::Result<Waker> {
-    let mut fds = [0 as c_int; 2];
-    // SAFETY: `fds` is a live 2-element array on this frame, which is exactly what
-    // `pipe(2)` writes into.
-    if unsafe { ffi::pipe(fds.as_mut_ptr()) } < 0 {
-        return Err(io::Error::last_os_error());
+impl Waker {
+    /// Create a non-blocking self-pipe waker.
+    ///
+    /// ```
+    /// let w = kevy_sys::Waker::new()?;
+    /// w.wake()?;
+    /// w.drain();
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
+    pub fn new() -> io::Result<Waker> {
+        let mut fds = [0 as c_int; 2];
+        // SAFETY: `fds` is a live 2-element array on this frame, which is exactly what
+        // `pipe(2)` writes into.
+        if unsafe { ffi::pipe(fds.as_mut_ptr()) } < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let w = Waker { read_fd: fds[0], write_fd: fds[1] };
+        set_fd_nonblocking(w.read_fd)?;
+        set_fd_nonblocking(w.write_fd)?;
+        Ok(w)
     }
-    let w = Waker { read_fd: fds[0], write_fd: fds[1] };
-    set_fd_nonblocking(w.read_fd)?;
-    set_fd_nonblocking(w.write_fd)?;
-    Ok(w)
 }
 
 impl Waker {

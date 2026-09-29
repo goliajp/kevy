@@ -18,7 +18,7 @@ would compare against `libc` / `nix` / `rustix` / `mio` and find it
 missing too much; it's not a generic foundation, it's the OS-boundary
 piece of the kevy server.
 
-- **Sockets** — `tcp_listen` / `tcp_listen_reuseport` / `unix_listen`
+- **Sockets** — `Socket::tcp_listen` / `tcp_listen_reuseport` / `unix_listen`
   (`AF_UNIX` stream, unlink-before-bind + `chmod 0777`, mirroring
   valkey/redis), non-blocking I/O, `TCP_NODELAY`, owned fds that
   close on drop.
@@ -28,9 +28,9 @@ piece of the kevy server.
   the x86_64 packed `epoll_event`).
 
 ```rust,no_run
-use kevy_sys::{Interest, Poller, tcp_listen};
+use kevy_sys::{Interest, Poller, Socket};
 
-let listener = tcp_listen([127, 0, 0, 1], 6379, 1024)?;
+let listener = Socket::tcp_listen([127, 0, 0, 1], 6379, 1024)?;
 listener.set_nonblocking()?;
 let poller = Poller::new()?;
 poller.add(listener.raw(), Interest::READ)?;

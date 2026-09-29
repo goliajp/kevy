@@ -34,10 +34,10 @@
 //! # Example
 //!
 //! ```no_run
-//! use kevy_sys::{Interest, Poller, tcp_listen};
+//! use kevy_sys::{Interest, Poller, Socket};
 //!
 //! # fn main() -> std::io::Result<()> {
-//! let listener = tcp_listen([127, 0, 0, 1], 6379, 1024)?;
+//! let listener = Socket::tcp_listen([127, 0, 0, 1], 6379, 1024)?;
 //! listener.set_nonblocking()?;
 //!
 //! let poller = Poller::new()?;
@@ -102,10 +102,10 @@ pub use pty::open_pty;
 ))]
 pub use random::fill_random;
 pub use signal::{SIGINT, SIGTERM, SIGXFSZ, install_signal_handler};
-pub use socket::{Socket, tcp_listen, tcp_listen_reuseport, unix_listen};
+pub use socket::Socket;
 pub use term::{RawMode, terminal_columns};
 pub use wait::wait_readable;
-pub use waker::{Waker, waker};
+pub use waker::Waker;
 
 // ---- Poller ----------------------------------------------------------------
 

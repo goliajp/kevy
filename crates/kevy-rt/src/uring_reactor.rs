@@ -220,7 +220,8 @@ impl<C: Commands> Shard<C> {
                         io_work = true;
                         if c.res >= 0 {
                             // SAFETY: a freshly accepted fd we now own.
-                            let sock = unsafe { Socket::from_raw_fd(c.res) };
+                            let sock =
+                                unsafe { <Socket as std::os::fd::FromRawFd>::from_raw_fd(c.res) };
                             // Refuse client conns past max_clients_per_shard
                             // (cluster-bus links exempt as infrastructure).
                             if !cluster

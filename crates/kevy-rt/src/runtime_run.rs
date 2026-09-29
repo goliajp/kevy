@@ -17,7 +17,7 @@ use kevy_map::KevyMap;
 use kevy_persist::Aof;
 use kevy_ring::{Consumer, Producer};
 use kevy_store::Store;
-use kevy_sys::{Poller, Waker, tcp_listen_reuseport, waker};
+use kevy_sys::{Poller, Socket, Waker};
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::sync::atomic::{AtomicBool, AtomicU64};
@@ -63,7 +63,7 @@ impl Shared {
         }
         let mut wakers: Vec<Arc<Waker>> = Vec::with_capacity(n);
         for _ in 0..n {
-            wakers.push(Arc::new(waker()?));
+            wakers.push(Arc::new(Waker::new()?));
         }
         let parked: Vec<Arc<CachePadded<ParkFlag>>> =
             (0..n).map(|_| Arc::new(CachePadded::new(park_fence::new_flag()))).collect();
@@ -114,7 +114,7 @@ impl<C: Commands> Runtime<C> {
         let mut unix_listener: Option<kevy_sys::Socket> = None;
         if let Some(p) = self.unix_socket_path.as_ref() {
             let path_bytes = p.to_string_lossy();
-            unix_listener = Some(kevy_sys::unix_listen(path_bytes.as_bytes(), 1024)?);
+            unix_listener = Some(kevy_sys::Socket::unix_listen(path_bytes.as_bytes(), 1024)?);
         }
         // Build every shard up front so a bind/open failure aborts before
         // we spawn.
@@ -246,14 +246,14 @@ impl<C: Commands> Runtime<C> {
             // Off-accept-set shards skip the SO_REUSEPORT bind so
             // the kernel routes new conns only to the armed subset.
             let listener = if arms_accept {
-                Some(tcp_listen_reuseport(self.ip, self.port, 1024)?)
+                Some(Socket::tcp_listen_reuseport(self.ip, self.port, 1024)?)
             } else {
                 None
             };
             // Cluster mode: a second, deterministic per-shard listener at
             // port_base + id (plain bind — exactly one owner per port).
             let cluster_listener = match self.cluster_port_base {
-                Some(base) => Some(kevy_sys::tcp_listen(self.ip, base + id as u16, 1024)?),
+                Some(base) => Some(kevy_sys::Socket::tcp_listen(self.ip, base + id as u16, 1024)?),
                 None => None,
             };
             // Replication listener (per Issue Ledger I2): per-shard
@@ -261,7 +261,7 @@ impl<C: Commands> Runtime<C> {
             // pattern as cluster. A replica's shard-aware client will
             // connect to every `base + id` to mirror the full keyspace.
             let replication_listener = match self.replication_port_base {
-                Some(base) => Some(kevy_sys::tcp_listen(self.ip, base + id as u16, 1024)?),
+                Some(base) => Some(kevy_sys::Socket::tcp_listen(self.ip, base + id as u16, 1024)?),
                 None => None,
             };
             let aof = if self.enable_aof {
