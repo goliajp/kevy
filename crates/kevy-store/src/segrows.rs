@@ -360,7 +360,11 @@ impl Store {
         let mut e = crate::Entry::new(Value::Cold(stub), None);
         e.set_weight(key_heap);
         crate::apply_delta(&mut self.used_memory, key_heap as i64);
+        let cap = self.map.capacity();
         self.map.insert(crate::SmallBytes::from_slice(key), e);
+        if self.map.capacity() != cap {
+            self.charge_keyspace_growth();
+        }
     }
 
     /// Load one snapshot stub record: the row's identity re-enters the

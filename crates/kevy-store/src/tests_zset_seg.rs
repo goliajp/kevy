@@ -164,6 +164,9 @@ fn segmented_ops_match_semantics() {
 )]
 fn accounting_round_trips_through_segmented_ops() {
     let mut st = Store::new();
+    // the keyspace table is charged as a whole: allocate it first, so what
+    // comes and goes below is the key alone
+    st.set(b"warm", b"1".to_vec(), None, crate::SetCondition::Always);
     let baseline = st.used_memory();
     zadd_n(&mut st, b"z", Z_PROMOTE + 300);
     st.zincrby(b"z", 5.0, b"member-00000007").unwrap();

@@ -255,8 +255,8 @@ pub struct Store {
     /// use, where nothing refreshes the cache so each access reads fresh —
     /// preserving "lazy expiry works without an explicit tick".
     pub(crate) cached_clock: bool,
-    /// Live byte estimate (dynamic per-entry weights + [`ENTRY_OVERHEAD`] per
-    /// key). Compared against [`Self::maxmemory`] to drive eviction.
+    /// Live byte estimate: the per-entry weights plus the keyspace table at
+    /// its real size. Compared against [`Self::maxmemory`] to drive eviction.
     pub(crate) used_memory: u64,
     /// Soft byte ceiling. `0` = unlimited; the entire accounting + eviction
     /// machinery short-circuits to a single not-taken branch in that case.
@@ -269,6 +269,8 @@ pub struct Store {
     /// Monotonic access counter; the upper 32 bits are unused, the lower 32
     /// stamp `Entry::lru_clock` on each access while eviction is enabled.
     pub(crate) clock_counter: u64,
+    /// The keyspace table's bytes as `used_memory` last charged them.
+    pub(crate) keyspace_bytes: u64,
     /// `used_memory` peak across the shard's lifetime; surfaced as
     /// `used_memory_peak` in `INFO memory`.
     pub(crate) used_memory_peak: u64,
