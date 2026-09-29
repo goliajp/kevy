@@ -42,6 +42,8 @@ not a verdict about the engine$(echo "$out" | grep -q client-bound && echo '; CL
 cand_setup() {
   CAND_CPUS=$SRV_CPUS
   unset KEVY_MUTANT_SPIN
+  # the latency angle has no instruction count to size M1 from
+  [[ $ANGLE == *_us ]] && [[ ${MUTANT:-} == M1* ]] && return 0
   case ${MUTANT:-} in
     M4) CAND_CPUS=0-2 ;;
     M1) KEVY_MUTANT_SPIN=$(judge spin --samples "$SAMPLES" --angle "$ANGLE" --frac 0.03) || exit 2 ;;
