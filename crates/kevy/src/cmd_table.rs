@@ -269,7 +269,7 @@ fn op_verify(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     let mut chunk = vec![ST_OK];
     chunk.extend_from_slice(&(compiled.len() as u32).to_le_bytes());
     for ispec in &compiled {
-        match crate::cmd_table_verify::index_verify_counts(ctx, store, &ispec.name()) {
+        match crate::cmd_table_verify::index_verify_counts(ctx, store, ispec.name()) {
             Ok(counts) => {
                 for v in counts {
                     chunk.extend_from_slice(&v.to_le_bytes());
@@ -456,7 +456,7 @@ fn render_verify(out: &mut Vec<u8>, spec: &TableSpec, sums: &[[u64; 10]], spot: 
     for (ispec, s) in spec.compile().unwrap_or_default().iter().zip(sums) {
         encode_array_len(out, 22);
         encode_bulk(out, b"index");
-        encode_bulk(out, &ispec.name());
+        encode_bulk(out, ispec.name());
         for (label, v) in LABELS.iter().zip(s.iter()) {
             encode_bulk(out, label);
             encode_bulk(out, v.to_string().as_bytes());

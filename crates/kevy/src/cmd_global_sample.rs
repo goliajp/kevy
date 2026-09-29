@@ -68,7 +68,7 @@ pub(crate) fn op(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> 
     chunk.extend_from_slice(&(paths.len() as u16).to_le_bytes());
     for spec in &paths {
         chunk.extend_from_slice(&(spec.name().len() as u16).to_le_bytes());
-        chunk.extend_from_slice(&spec.name());
+        chunk.extend_from_slice(spec.name());
         let parts = ctx.state.nshards().max(1);
         put_points(&mut chunk, &quantile_points(store, spec, POINTS_PER_PARTITION * parts));
     }

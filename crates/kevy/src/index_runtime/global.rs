@@ -55,7 +55,7 @@ impl GlobalRole {
     pub(crate) fn new(spec: &IndexSpec, part: &Partitioning, at: (usize, usize), inc: u64) -> Self {
         let (shard, nshards) = at;
         let owned = (0..part.partitions())
-            .filter(|&p| partition_owner(&spec.name(), p, nshards) == shard)
+            .filter(|&p| partition_owner(spec.name(), p, nshards) == shard)
             .map(|p| (p, super::new_scalar_seg(spec)))
             .collect();
         GlobalRole {
@@ -151,8 +151,8 @@ impl GlobalRole {
     }
 
     fn send(&mut self, spec: &IndexSpec, p: u16, delta: Delta) {
-        let to = partition_owner(&spec.name(), p as usize, self.nshards);
-        self.outbox.push((to, super::global_wire::encode(&spec.name(), self.inc, p, &delta)));
+        let to = partition_owner(spec.name(), p as usize, self.nshards);
+        self.outbox.push((to, super::global_wire::encode(spec.name(), self.inc, p, &delta)));
     }
 }
 
