@@ -10,11 +10,18 @@
 //! shard copies the values the allocator names into denser spans, and the
 //! reclaim that follows in the same tick hands back what emptied.
 //!
-//! Paced like demotion — half a millisecond a tick at most — and with a
-//! hysteresis band so a heap does not start and stop on the line. A lap
+//! Paced like demotion — half a millisecond a tick, rising to two while
+//! the free space is past a sixteenth of what is live, so that the holes a
+//! burst of demotion leaves are packed before the next allocation spike
+//! lands on top of them — and with a hysteresis band so a heap does not
+//! start and stop on the line. A lap
 //! of the table that moves nothing ends the pass until the free space has
 //! grown by a quarter again: what is left then is not in values the store
 //! can move (an index leaf, a large collection).
+
+// the pacing is exercised by its tests either way, and driven only by a
+// build that links kevy-alloc
+#![cfg_attr(not(feature = "kevy-alloc"), allow(dead_code))]
 
 use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
@@ -27,8 +34,13 @@ use kevy_store::Store;
 /// allocator, and its hint means nothing about another allocator's memory.
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 
-/// Time one shard tick may spend copying values.
+/// Time one shard tick spends copying values at the band's edge, and at
+/// most, once the free space reaches a sixteenth of what is live. On D1 a
+/// keyspace table's doubling followed the demotion that made room for it
+/// by three seconds; at the base rate the holes took five to pack, and the
+/// doubling landed on them.
 const TICK_BUDGET: Duration = Duration::from_micros(500);
+const TICK_BUDGET_MAX: Duration = Duration::from_millis(2);
 /// Buckets of the table one step walks between clock reads.
 const STEP_BUCKETS: usize = 256;
 
@@ -75,9 +87,9 @@ thread_local! {
 }
 
 /// Whether free space `free` beside `held` bytes calls for a pass: start
-/// above 1/32 (and 4 MiB), stop below 1/128 (and 1 MiB).
+/// above 1/64 (and 4 MiB), stop below 1/256 (and 1 MiB).
 fn wanted(p: Pace, free: u64, held: u64) -> bool {
-    let (start, stop) = ((held / 32).max(4 << 20), (held / 128).max(1 << 20));
+    let (start, stop) = ((held / 64).max(4 << 20), (held / 256).max(1 << 20));
     if p.running {
         return free > stop;
     }
@@ -98,12 +110,22 @@ pub(crate) fn tick(store: &mut Store) {
     let _ = store;
 }
 
-#[cfg_attr(not(feature = "kevy-alloc"), allow(dead_code))]
+/// The tick's time for a pass: the base up to 1/32 of `held` free, rising
+/// in step with the free share to the most at 1/16.
+fn budget(free: u64, held: u64) -> Duration {
+    let (lo, hi) = (held / 32, held / 16);
+    if free <= lo || hi <= lo {
+        return if free > lo { TICK_BUDGET_MAX } else { TICK_BUDGET };
+    }
+    let t = (free.min(hi) - lo) as f64 / (hi - lo) as f64;
+    TICK_BUDGET + (TICK_BUDGET_MAX - TICK_BUDGET).mul_f64(t)
+}
+
 fn run(store: &mut Store, free: u64, held: u64) {
     let mut p = PACE.with(Cell::get);
     p.running = wanted(p, free, held);
     if p.running {
-        let started = Instant::now();
+        let (started, allowed) = (Instant::now(), budget(free, held));
         loop {
             let step = store.defrag_step(STEP_BUCKETS);
             p.moved_this_lap += step.moved;
@@ -114,7 +136,7 @@ fn run(store: &mut Store, free: u64, held: u64) {
                 }
                 p.moved_this_lap = 0;
             }
-            if started.elapsed() >= TICK_BUDGET {
+            if started.elapsed() >= allowed {
                 break;
             }
         }
@@ -132,13 +154,22 @@ mod tests {
     fn a_pass_starts_above_the_band_stops_below_it_and_waits_after_a_dry_lap() {
         let held = 1u64 << 30;
         let idle = Pace::default();
-        assert!(!wanted(idle, held / 40, held), "inside the band: not started");
-        assert!(wanted(idle, held / 20, held), "above 1/32: starts");
+        assert!(!wanted(idle, held / 80, held), "inside the band: not started");
+        assert!(wanted(idle, held / 40, held), "above 1/64: starts");
         let on = Pace { running: true, ..Pace::default() };
-        assert!(wanted(on, held / 40, held), "inside the band: keeps going");
-        assert!(!wanted(on, held / 200, held), "below 1/128: stops");
+        assert!(wanted(on, held / 80, held), "inside the band: keeps going");
+        assert!(!wanted(on, held / 400, held), "below 1/256: stops");
         let parked = Pace { parked_at: held / 20, ..Pace::default() };
         assert!(!wanted(parked, held / 20 + held / 100, held), "a dry lap waits for growth");
         assert!(wanted(parked, held / 10, held), "and resumes once free space grew by a quarter");
+    }
+
+    #[test]
+    fn the_budget_climbs_from_the_base_to_the_most_across_a_thirty_second_of_live() {
+        let held = 1u64 << 30;
+        assert_eq!(budget(held / 64, held), TICK_BUDGET);
+        assert_eq!(budget(held / 8, held), TICK_BUDGET_MAX);
+        let mid = budget(held * 3 / 64, held);
+        assert!(mid > TICK_BUDGET && mid < TICK_BUDGET_MAX, "{mid:?}");
     }
 }

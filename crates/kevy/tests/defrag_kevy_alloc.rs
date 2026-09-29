@@ -46,7 +46,7 @@ fn the_pass_packs_a_heap_that_demotion_left_full_of_holes() {
         x ^= x << 13;
         x ^= x >> 7;
         x ^= x << 17;
-        if x % 3 == 0 {
+        if x.is_multiple_of(3) {
             s.del(&[format!("row:{i}").as_bytes()]);
         } else {
             kept.push(i);
@@ -77,6 +77,6 @@ fn the_pass_packs_a_heap_that_demotion_left_full_of_holes() {
     for i in kept {
         let k = format!("row:{i}");
         assert_eq!(s.hlen(k.as_bytes()).unwrap(), 5, "{k}");
-        assert_eq!(s.hget(k.as_bytes(), b"pad").unwrap().as_deref(), Some(&pad[..]), "{k}");
+        assert_eq!(s.hget(k.as_bytes(), b"pad").unwrap(), Some(&pad[..]), "{k}");
     }
 }
