@@ -1,12 +1,14 @@
 # Upgrading from 6.4 to 7.0
 
 The short version: **no code change for a wire client, and the data
-directory opens as it is.** The major version is for two Rust-side
-changes: `kevy-config`'s section structs gained fields, and kevy-cli's
-tools answer only behind `--kevy`, as 6.x announced. What else needs a
-look is listed below: two new files an embedded store may leave in its
-directory, index sizes that are now reported as they are, and a few
-replies that gained fields.
+directory opens as it is.** The major version is for the Rust side: every
+public API of the workspace now follows the Rust API Guidelines, which
+changed signatures in most crates ([§10](#10-the-rust-api)), and
+kevy-cli's tools answer only behind `--kevy`, as 6.x announced. What else
+needs a look is listed below: two new files an embedded store may leave
+in its directory, index sizes that are now reported as they are, a few
+replies that gained fields, and four that now match Redis where they did
+not ([§11](#11-replies-that-changed)).
 
 ```toml
 kevy-embedded = "7.0.0"
@@ -34,6 +36,8 @@ they are in [§9](#9-defects-fixed-that-lost-data).
 | implement `kevy_rt::Commands` | three new methods, all with defaults | 6 |
 | build `kevy_config` structs with struct literals | new fields to name, or `..Default::default()` | 7 |
 | script `kevy-cli doctor`, `export`, `sql compile` … as bare words | put the tool after `--kevy` | 8 |
+| use a kevy crate as a Rust library | most signatures changed; the compiler names each one | 10 |
+| use `XAUTOCLAIM`'s cursor, or an id like `5-` in `XRANGE` | they now behave as in Redis | 11 |
 | want an index read to reach fewer shards | declare it global | [indexes](indexes.md#global-indexes-partition-global) |
 
 ---
@@ -201,6 +205,63 @@ Each of these could lose a write or a deadline without an error:
 
 The [changelog](https://github.com/goliajp/kevy/blob/develop/CHANGELOG.md)
 has each one in full.
+
+## 10. The Rust API
+
+Every public Rust API of the workspace now follows the
+[Rust API Guidelines](https://rust-lang.github.io/api-guidelines/), so
+code that uses a kevy crate as a library will not compile unchanged. The
+changes follow a few rules, and the compiler points at each place:
+
+- a `bool` parameter is an enum named for its meaning —
+  `store.copy(a, b, true)` is `store.copy(a, b, CopyMode::Replace)`;
+- a struct or enum the library may grow is `#[non_exhaustive]`: build it
+  from `Default` or its `with_*` builders instead of a struct literal, and
+  give a `match` on it a `_` arm;
+- a type with invariants keeps its fields private and offers methods of
+  the same name;
+- a free function that took a type first is a method on that type;
+- an error is a type that implements `std::error::Error`, never a
+  `String`; where its text reached the wire, `as_wire()` or `to_wire()`
+  returns the same text;
+- a (generation, offset) pair of the change feed and replication is one
+  `FeedPosition`.
+
+For an embedded store the common edits are these:
+
+```rust
+// 6.4
+store.copy(b"src", b"dst", true)?;
+store.linsert(b"l", true, b"c", b"b")?;
+let (generation, offset) = store.changes_tail()?;
+let batch = store.changes_since(generation, offset, 100, &[])?;
+// 7.0
+store.copy(b"src", b"dst", CopyMode::Replace)?;
+store.linsert(b"l", InsertPosition::Before, b"c", b"b")?;
+let tail: FeedPosition = store.changes_tail()?;
+let batch = store.changes_since(tail, 100, &[])?;  // batch.next is the next position
+```
+
+[rust-api-7.0.md](rust-api-7.0.md) lists every change, crate by crate, as
+old → new.
+
+## 11. Replies that changed
+
+Four replies changed. The first two now answer as Redis does; the other
+two lost text that was a mistake:
+
+- `XRANGE`, `XREVRANGE` and the other commands that take a stream id
+  refuse `5-`, an id with nothing after the dash, as Redis does. 6.4 read
+  it as `5-<largest sequence>`.
+- `XAUTOCLAIM`'s cursor is the id of the next pending entry, and `0-0`
+  once the list is done; 6.4 returned the last scanned id plus one. One
+  call looks at no more than `COUNT × 10` entries, as in Redis, where 6.4
+  scanned the whole list. A loop that calls until the cursor is `0-0`
+  works on both.
+- An embedded store's `table_declare`, `table_replace` and
+  `table_verify_report` refuse with `-ERR …`, not `-ERR ERR …`.
+- The refusal of a `TABLE.DECLARE … WINDOW` that cannot be served lost 17
+  stray spaces in the middle of its text.
 
 ---
 

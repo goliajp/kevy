@@ -37,7 +37,8 @@
     "views": "Materialised views, kept fresh by the write path.",
     "wasm": "151 KB in a browser tab, persisted to OPFS.",
     "upgrading-6.3-to-6.4": "Nothing to change; five answers that were wrong are now right, from GEOSEARCH near the poles to a regexp alternation.",
-    "upgrading-6.4-to-7.0": "Nothing to change on the wire; new kevy_config fields, kevy-cli tools behind --kevy, what to do before going back to 6.4, and the data-losing defects fixed."
+    "upgrading-6.4-to-7.0": "Nothing to change on the wire; the Rust API brought in line with the API Guidelines, kevy-cli tools behind --kevy, replies that changed, what to do before going back to 6.4, and the data-losing defects fixed.",
+    "rust-api-7.0": "Every public Rust API change in 7.0, crate by crate, old to new."
   },
   "ja": {
     "UPGRADING": "以前のメジャー——2.x から 3.x、および 3.x から 4.0。",
@@ -77,7 +78,8 @@
     "views": "マテリアライズドビュー。書き込みパスが鮮度を保つ。",
     "wasm": "ブラウザのタブに 151 KB、OPFS へ永続化。",
     "upgrading-6.3-to-6.4": "コードの変更は不要。誤っていた 5 つの答えが正しくなりました。極付近の GEOSEARCH から regexp の選択まで。",
-    "upgrading-6.4-to-7.0": "プロトコル側は変更不要。kevy_config の新しいフィールド、--kevy の後ろに移った kevy-cli のツール、6.4 に戻す前にすること、直したデータ喪失の欠陥。"
+    "upgrading-6.4-to-7.0": "プロトコル側は変更不要。API Guidelines に揃えた Rust API、--kevy の後ろに移った kevy-cli のツール、変わった応答、6.4 に戻す前にすること、直したデータ喪失の欠陥。",
+    "rust-api-7.0": "7.0 の Rust 公開 API の変更をクレートごとに旧から新へ。"
   },
   "zh": {
     "UPGRADING": "更早的大版本：2.x 到 3.x，以及 3.x 到 4.0。",
@@ -117,6 +119,7 @@
     "views": "物化视图，由写路径顺手保持新鲜。",
     "wasm": "浏览器标签页里的 151 KB，持久化到 OPFS。",
     "upgrading-6.3-to-6.4": "代码无需改动；五处原本答错的结果现在对了，从两极附近的 GEOSEARCH 到一个 regexp 交替。",
-    "upgrading-6.4-to-7.0": "协议侧无需改动；kevy_config 的新字段、移到 --kevy 后面的 kevy-cli 工具、退回 6.4 之前要做什么、修掉了哪些丢数据的缺陷。"
+    "upgrading-6.4-to-7.0": "协议侧无需改动；按 API Guidelines 整理过的 Rust API、移到 --kevy 后面的 kevy-cli 工具、变了的回复、退回 6.4 之前要做什么、修掉了哪些丢数据的缺陷。",
+    "rust-api-7.0": "7.0 Rust 公开 API 的全部改动，按 crate 列出旧写法和新写法。"
   }
 }
