@@ -104,11 +104,13 @@ impl Heap {
             self.partial[c] = None;
         }
         self.spans_in_class[c] -= 1;
+        self.delist_span(seg, ix);
         s.spans[ix].reset(crate::pagemap::NO_CLASS);
         // Emptied and handed back, which is not the same unassigned as
         // never-assigned: this span's pages were touched. The snapshot
         // needs the difference to tell `returned` from `virgin`.
         s.spans[ix].retired = true;
+        self.push_free_span(seg, ix);
         // Refused on a system whose page size is not `os::PAGE`: see
         // `discard_free_pages` for why reporting a return that did not
         // happen is worse than not returning. The span then stays

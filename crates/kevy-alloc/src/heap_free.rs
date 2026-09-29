@@ -110,8 +110,8 @@ impl Heap {
 
     /// Mark a slot free in its span's bitmap. Nothing is written into
     /// the slot itself — that absence is what makes its pages
-    /// returnable. A span going full → partial is registered in the
-    /// class's partial ring so the slow path finds it in O(1).
+    /// returnable. The span moves to the list its new occupancy grades
+    /// it on, so the slow path finds it in O(1).
     ///
     /// # Safety
     /// `seg` must own `ptr`, and the caller must have exclusive access.
@@ -135,11 +135,8 @@ impl Heap {
         }
         // SAFETY: caller holds exclusive access to this segment.
         let meta = unsafe { &mut (*seg.as_ptr()).spans[ix] };
-        let was_full = u32::from(meta.live) == meta.capacity();
         meta.free_slot(slot);
-        if was_full {
-            self.partials[c].push(seg.as_ptr(), ix);
-        }
+        self.file_span(seg, ix);
     }
 }
 

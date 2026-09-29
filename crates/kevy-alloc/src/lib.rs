@@ -75,10 +75,10 @@ pub mod large;
 pub mod os;
 mod outbound;
 pub mod pagemap;
-mod partials;
 mod reclaim;
 pub mod segment;
 mod snapshot;
+mod spanlist;
 pub mod stats;
 
 #[cfg(feature = "global")]

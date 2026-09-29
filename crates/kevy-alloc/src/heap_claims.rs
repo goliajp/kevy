@@ -72,9 +72,8 @@ impl Heap {
     }
 
     /// Write a claim's unused bits back to its span. The span regains
-    /// its holes and the hint walks back; a formerly-full span is
-    /// findable again through `adopt_partial`'s scan (the partial ring
-    /// is an optimization, not the source of truth).
+    /// its holes and the hint walks back, and a span that is no longer
+    /// current is filed by its new occupancy.
     pub(super) fn retire_claim(&mut self, c: usize) {
         let Some(cl) = self.claims[c].take() else { return };
         let unused = cl.claimed & !cl.taken;
@@ -85,6 +84,7 @@ impl Heap {
         // segments; the header outlives the claim.
         let meta = unsafe { &mut (*cl.seg.as_ptr()).spans[cl.span_ix as usize] };
         meta.retire_word(cl.word, unused);
+        self.file_span(cl.seg, cl.span_ix as usize);
     }
 
     /// Retire every class's claim — the write-back before anything

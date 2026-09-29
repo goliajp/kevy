@@ -130,6 +130,9 @@ pub struct Segment {
     /// Per-span bookkeeping, indexed by span number. Index 0 describes
     /// the header span itself and is never assigned a class.
     pub(crate) spans: [SpanMeta; SPANS_PER_SEGMENT],
+    /// Each span's place on its heap's lists (see `spanlist`), beside the
+    /// metadata rather than in it so the metadata stays plain data.
+    pub(crate) links: [crate::spanlist::SpanLink; SPANS_PER_SEGMENT],
 }
 
 impl Segment {
@@ -166,6 +169,7 @@ impl Segment {
                 foreign_bytes: core::sync::atomic::AtomicUsize::new(0),
                 foreign_live: core::sync::atomic::AtomicUsize::new(0),
                 spans: [SpanMeta::new(); SPANS_PER_SEGMENT],
+                links: [crate::spanlist::SpanLink::NONE; SPANS_PER_SEGMENT],
             });
         }
         // SAFETY: just written.
