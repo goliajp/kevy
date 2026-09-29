@@ -70,7 +70,7 @@ why = "the protocol versions HELLO negotiates, fixed by the RESP specification (
 
 [[exempt]]
 rule = "enum-exhaustive"
-item = "kevy_resp::reply_parse::Reply"
+item = "kevy_resp::reply::Reply"
 why = "RESP3's reply type set, fixed by the protocol specification; decoders and clients match every wire type, and a wildcard arm would silently drop a reply type instead of failing to compile"
 
 [[exempt]]
@@ -120,7 +120,7 @@ why = "the three outcomes RENAME and RENAMENX define (renamed, no such source, d
 
 [[exempt]]
 rule = "enum-exhaustive"
-item = "kevy_store::value::Value"
+item = "kevy_store::value_enum::Value"
 why = "the keyspace's value encodings; kevy-persist's snapshot writer and AOF rewrite each serialize every encoding, so a new one must fail to compile in both rather than fall into a wildcard arm that writes nothing and loses the key on reload"
 
 [[exempt]]
@@ -155,7 +155,7 @@ why = "a lookup of one column's value by name, the by-name counterpart of the ro
 
 [[exempt]]
 rule = "trait-open"
-item = "kevy_store::tier_serve::enabled::ColdBatchReader"
+item = "kevy_store::tier_batch::ColdBatchReader"
 why = "implemented outside this crate by the host that issues cold reads (the server's io_uring reader submits a batch to a secondary ring); the trait docs state the contract (one image per read, in order, the exact bytes at the address; an Err fails the whole batch)"
 
 # layer 3
