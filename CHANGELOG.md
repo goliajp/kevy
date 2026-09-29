@@ -74,9 +74,9 @@
   default: allocate, then clear every byte. For a block past the size
   classes that clearing wrote every page of a mapping the kernel had
   already zeroed and made all of it resident, needed or not — each
-  shard's 64 MiB io_uring receive ring among them, which put 0.6 GB in an
-  idle server built with `--features kevy-alloc` (9 MB with the system
-  allocator). A fresh mapping is now handed out as it is; only a reused
+  shard's 64 MiB io_uring receive ring among them, in a server built with
+  `--features kevy-alloc`. A 64 MiB zeroed vector had all of its pages
+  resident before a byte was written; it now has none. A fresh mapping is now handed out as it is; only a reused
   one is cleared. Affected since 5.0.0.
 
 - **kevy-cli: a bare tool word is a server command.** The tools kevy-cli
