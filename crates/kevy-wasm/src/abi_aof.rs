@@ -30,7 +30,8 @@ use crate::{BAD_HANDLE, Instance, arg, with};
 ///
 /// # Safety
 ///
-/// Pointer/length pairs follow the [`crate::arg`] contract.
+/// Pointer/length pairs follow the crate's
+/// [bytes-in convention](crate#abi-conventions).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kevy_aof_frame_in(h: u32, p: *const u8, l: u32) -> i32 {
     // SAFETY: loader-staged argument buffer, live for this call.

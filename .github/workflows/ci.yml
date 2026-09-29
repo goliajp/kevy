@@ -277,6 +277,11 @@ jobs:
       - name: apigate (the public API meets the mechanical API guidelines)
         if: success() || failure()
         run: python3 tools/check_api_guidelines.py
+      # stable rustdoc, every feature on: a link to a private item or to
+      # nothing renders as dead text on docs.rs and fails nothing else
+      - name: docgate (the API docs build with rustdoc warnings denied)
+        if: success() || failure()
+        run: bash bench/docgate.sh
       - name: upload doc deficit
         if: always() && (steps.doctestgate.outcome == 'success' || steps.doctestgate.outcome == 'failure')
         uses: actions/upload-artifact@v7

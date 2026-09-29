@@ -40,15 +40,16 @@ use crate::{BAD_HANDLE, ERR, Instance, arg, with};
 /// lands in the instance result buffer (RESP2; the wasm build negotiates
 /// no RESP3); the loader parses it into a `Reply`.
 ///
-/// Returns the reply byte length (`>= 0`), [`ERR`] (`-1`) on a
-/// malformed/empty packed argv (message in the result buffer), or
-/// [`BAD_HANDLE`] (`-2`) for an unknown handle. A verb-level failure
+/// Returns the reply byte length (`>= 0`), `-1` on a malformed/empty
+/// packed argv (message in the result buffer), or `-2` for an unknown
+/// handle. A verb-level failure
 /// (`-ERR …`, `WRONGTYPE …`) is a *successful* call whose reply bytes are
 /// a RESP error frame — not a `-1` status.
 ///
 /// # Safety
 ///
-/// Pointer/length pairs follow the [`crate::arg`] contract.
+/// Pointer/length pairs follow the crate's
+/// [bytes-in convention](crate#abi-conventions).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kevy_cmd(h: u32, p: *const u8, l: u32) -> i32 {
     // SAFETY: loader-staged argument buffer, live for this call.

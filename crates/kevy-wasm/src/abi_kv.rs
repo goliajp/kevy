@@ -11,7 +11,8 @@ use crate::{BAD_HANDLE, ERR, OK, arg, with};
 ///
 /// # Safety
 ///
-/// Pointer/length pairs follow the [`crate::arg`] contract.
+/// Pointer/length pairs follow the crate's
+/// [bytes-in convention](crate#abi-conventions).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kevy_set(h: u32, kp: *const u8, kl: u32, vp: *const u8, vl: u32) -> i32 {
     // SAFETY: loader-staged argument buffers, live for this call.
@@ -31,7 +32,8 @@ pub unsafe extern "C" fn kevy_set(h: u32, kp: *const u8, kl: u32, vp: *const u8,
 ///
 /// # Safety
 ///
-/// Pointer/length pairs follow the [`crate::arg`] contract.
+/// Pointer/length pairs follow the crate's
+/// [bytes-in convention](crate#abi-conventions).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kevy_set_ttl(
     h: u32,
@@ -62,7 +64,8 @@ pub unsafe extern "C" fn kevy_set_ttl(
 ///
 /// # Safety
 ///
-/// Pointer/length pairs follow the [`crate::arg`] contract.
+/// Pointer/length pairs follow the crate's
+/// [bytes-in convention](crate#abi-conventions).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kevy_get(h: u32, kp: *const u8, kl: u32) -> i32 {
     // SAFETY: loader-staged argument buffer, live for this call.
@@ -86,7 +89,8 @@ pub unsafe extern "C" fn kevy_get(h: u32, kp: *const u8, kl: u32) -> i32 {
 ///
 /// # Safety
 ///
-/// Pointer/length pairs follow the [`crate::arg`] contract.
+/// Pointer/length pairs follow the crate's
+/// [bytes-in convention](crate#abi-conventions).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kevy_del(h: u32, kp: *const u8, kl: u32) -> i32 {
     // SAFETY: loader-staged argument buffer, live for this call.
@@ -106,7 +110,8 @@ pub unsafe extern "C" fn kevy_del(h: u32, kp: *const u8, kl: u32) -> i32 {
 ///
 /// # Safety
 ///
-/// Pointer/length pairs follow the [`crate::arg`] contract.
+/// Pointer/length pairs follow the crate's
+/// [bytes-in convention](crate#abi-conventions).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kevy_exists(h: u32, kp: *const u8, kl: u32) -> i32 {
     // SAFETY: loader-staged argument buffer, live for this call.
@@ -122,7 +127,8 @@ pub unsafe extern "C" fn kevy_exists(h: u32, kp: *const u8, kl: u32) -> i32 {
 ///
 /// # Safety
 ///
-/// Pointer/length pairs follow the [`crate::arg`] contract.
+/// Pointer/length pairs follow the crate's
+/// [bytes-in convention](crate#abi-conventions).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kevy_expire(h: u32, kp: *const u8, kl: u32, ttl_ms: f64) -> i32 {
     // SAFETY: loader-staged argument buffer, live for this call.
@@ -143,7 +149,8 @@ pub unsafe extern "C" fn kevy_expire(h: u32, kp: *const u8, kl: u32, ttl_ms: f64
 ///
 /// # Safety
 ///
-/// Pointer/length pairs follow the [`crate::arg`] contract.
+/// Pointer/length pairs follow the crate's
+/// [bytes-in convention](crate#abi-conventions).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kevy_persist(h: u32, kp: *const u8, kl: u32) -> i32 {
     // SAFETY: loader-staged argument buffer, live for this call.
@@ -163,7 +170,8 @@ pub unsafe extern "C" fn kevy_persist(h: u32, kp: *const u8, kl: u32) -> i32 {
 ///
 /// # Safety
 ///
-/// Pointer/length pairs follow the [`crate::arg`] contract.
+/// Pointer/length pairs follow the crate's
+/// [bytes-in convention](crate#abi-conventions).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kevy_pttl(h: u32, kp: *const u8, kl: u32) -> f64 {
     // SAFETY: loader-staged argument buffer, live for this call.
@@ -177,7 +185,8 @@ pub unsafe extern "C" fn kevy_pttl(h: u32, kp: *const u8, kl: u32) -> f64 {
 ///
 /// # Safety
 ///
-/// Pointer/length pairs follow the [`crate::arg`] contract.
+/// Pointer/length pairs follow the crate's
+/// [bytes-in convention](crate#abi-conventions).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kevy_incrby(h: u32, kp: *const u8, kl: u32, delta: f64) -> i32 {
     // SAFETY: loader-staged argument buffer, live for this call.
@@ -217,7 +226,8 @@ pub extern "C" fn kevy_flushall(h: u32) -> i32 {
 ///
 /// # Safety
 ///
-/// Pointer/length pairs follow the [`crate::arg`] contract.
+/// Pointer/length pairs follow the crate's
+/// [bytes-in convention](crate#abi-conventions).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kevy_keys(h: u32, pp: *const u8, pl: u32, limit: u32) -> i32 {
     // SAFETY: loader-staged argument buffer, live for this call.
@@ -254,7 +264,8 @@ pub unsafe extern "C" fn kevy_keys(h: u32, pp: *const u8, pl: u32, limit: u32) -
 ///
 /// # Safety
 ///
-/// Pointer/length pairs follow the [`crate::arg`] contract.
+/// Pointer/length pairs follow the crate's
+/// [bytes-in convention](crate#abi-conventions).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kevy_mget(h: u32, kp: *const u8, kl: u32, count: u32) -> i32 {
     // SAFETY: loader-staged argument buffer, live for this call.

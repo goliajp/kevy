@@ -18,7 +18,8 @@ pub const EVENT_PMESSAGE: u8 = 2;
 ///
 /// # Safety
 ///
-/// Pointer/length pairs follow the [`crate::arg`] contract.
+/// Pointer/length pairs follow the crate's
+/// [bytes-in convention](crate#abi-conventions).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kevy_subscribe(h: u32, cp: *const u8, cl: u32) -> u32 {
     // SAFETY: loader-staged argument buffer, live for this call.
@@ -37,7 +38,8 @@ pub unsafe extern "C" fn kevy_subscribe(h: u32, cp: *const u8, cl: u32) -> u32 {
 ///
 /// # Safety
 ///
-/// Pointer/length pairs follow the [`crate::arg`] contract.
+/// Pointer/length pairs follow the crate's
+/// [bytes-in convention](crate#abi-conventions).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kevy_psubscribe(h: u32, pp: *const u8, pl: u32) -> u32 {
     // SAFETY: loader-staged argument buffer, live for this call.
@@ -68,7 +70,8 @@ pub extern "C" fn kevy_unsubscribe(h: u32, sub: u32) -> i32 {
 ///
 /// # Safety
 ///
-/// Pointer/length pairs follow the [`crate::arg`] contract.
+/// Pointer/length pairs follow the crate's
+/// [bytes-in convention](crate#abi-conventions).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kevy_publish(
     h: u32,
