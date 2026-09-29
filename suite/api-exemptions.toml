@@ -35,3 +35,8 @@ why = "the collection lookup by key with mutable access, named as std's HashMap:
 rule = "get-prefix"
 item = "kevy_map::raw_entry::RawOccupiedEntryMut::get_mut"
 why = "mutable access to the entry's value, named as std's OccupiedEntry::get_mut beside get and into_mut; it is not a field getter"
+
+[[exempt]]
+rule = "trait-open"
+item = "kevy_vlog::record::CompactOwner"
+why = "implemented by whoever holds the value-log refs (kevy-store's keyspace) so compaction can ask liveness and repoint moved records; the trait docs state the contract (is_live answers from current refs, moved repoints before returning)"

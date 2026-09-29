@@ -109,7 +109,7 @@ mod uring {
                 .iter()
                 .map(|r| {
                     kevy_uring::FileRead::new(
-                        r.file.raw_fd(),
+                        std::os::fd::AsRawFd::as_raw_fd(&*r.file),
                         r.vref.offset,
                         r.vref.disk_len() as u32,
                     )
