@@ -407,7 +407,7 @@ if [ "${TIERGATE_RUN_IDLE:-0}" = "1" ]; then
 else
   line "L15 idle-cpu (v4.1-V5)"  "PENDING(lx64)" "idle 30s ON <= 3x OFF (mailrs measured 300-500x); body landed, run with TIERGATE_RUN_IDLE=1 KEVY_BIN=…"
 fi
-env_line L12 "L12 D1-envelope"         "10M x 1KiB on 3GB + 2 idx: C4/C5 hold, hydration p95<=10ms"
+env_line L12 "L12 D1-envelope"         "10M x 1KiB on 3GB + 2 idx: RSS <= budget x 1.05 throughout, C4/C5 hold, hydration p95<=10ms"
 env_line L13 "L13 hydration-batch (D3)" "one batched submission per page; preads == rows"
 env_line L14 "L14 mixed-isolation (D4)" "hot p99 unchanged under cold scan + backfill"
 
