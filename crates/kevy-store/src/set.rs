@@ -183,7 +183,7 @@ impl Store {
             if let Some(v) = self.set_value_mut(key)? {
                 match v {
                     Value::SmallSetInline(s) => {
-                        let mut all: Vec<Vec<u8>> = s.iter_slices().map(<[u8]>::to_vec).collect();
+                        let mut all: Vec<Vec<u8>> = s.iter().map(<[u8]>::to_vec).collect();
                         let k = shuffle_prefix(&mut all, count, &mut draws);
                         all.truncate(k);
                         for m in &all {

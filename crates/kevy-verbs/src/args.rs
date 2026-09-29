@@ -79,8 +79,8 @@ pub fn arg_f64(b: &[u8]) -> Option<f64> {
 /// ```
 pub fn parse_score_bound(b: &[u8]) -> Option<ScoreBound> {
     match b.strip_prefix(b"(") {
-        Some(rest) => Some(ScoreBound { value: arg_f64(rest)?, exclusive: true }),
-        None => Some(ScoreBound { value: arg_f64(b)?, exclusive: false }),
+        Some(rest) => Some(ScoreBound::exclusive(arg_f64(rest)?)),
+        None => Some(ScoreBound::inclusive(arg_f64(b)?)),
     }
 }
 

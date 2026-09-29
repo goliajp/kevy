@@ -267,8 +267,7 @@ fn embed_replica_rejects_local_writes_with_readonly() {
     let replica = Store::open(cfg).unwrap();
 
     let err = replica.set(b"k", b"v").expect_err("write should be refused");
-    let msg = err.to_string();
-    assert!(msg.contains("READONLY"), "expected READONLY error, got: {msg}");
+    assert!(matches!(err, kevy_embedded::KevyError::ReadOnly), "expected ReadOnly, got: {err}");
 
     // Reads still work.
     assert_eq!(replica.get(b"k").unwrap(), None);

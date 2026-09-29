@@ -191,7 +191,12 @@ fn after_a_rewrite_the_ring_owes_only_what_came_after_it() {
     let mut store = kevy_store::Store::new();
     for i in 0..5 {
         log.append(&set(i, 20)).unwrap();
-        store.set(format!("k{i}").as_bytes(), vec![b'v'; 20], None, false, false);
+        store.set(
+            format!("k{i}").as_bytes(),
+            vec![b'v'; 20],
+            None,
+            kevy_store::SetCondition::Always,
+        );
     }
     log.rewrite_from(&store).unwrap();
     log.append(&set(7, 20)).unwrap();

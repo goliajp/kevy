@@ -38,7 +38,12 @@ use crate::{SmallBytes, Store, StoreError, Value, now_unix_ms};
 pub type HExpireCode = i8;
 
 /// Condition flags for `HEXPIRE` (`NX`/`XX`/`GT`/`LT`; at most one).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+///
+/// ```
+/// assert_eq!(kevy_store::HExpireCond::default(), kevy_store::HExpireCond::Always);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub enum HExpireCond {
     /// Unconditional.
     #[default]
@@ -52,6 +57,26 @@ pub enum HExpireCond {
     Gt,
     /// Only when the new deadline is earlier (no TTL = always).
     Lt,
+}
+
+impl HExpireCond {
+    /// The command keyword for this condition (`NX` / `XX` / `GT` /
+    /// `LT`), or `None` for the unconditional form, which has none.
+    ///
+    /// ```
+    /// use kevy_store::HExpireCond;
+    /// assert_eq!(HExpireCond::Gt.keyword(), Some("GT"));
+    /// assert_eq!(HExpireCond::Always.keyword(), None);
+    /// ```
+    pub fn keyword(self) -> Option<&'static str> {
+        match self {
+            Self::Always => None,
+            Self::Nx => Some("NX"),
+            Self::Xx => Some("XX"),
+            Self::Gt => Some("GT"),
+            Self::Lt => Some("LT"),
+        }
+    }
 }
 
 impl Store {

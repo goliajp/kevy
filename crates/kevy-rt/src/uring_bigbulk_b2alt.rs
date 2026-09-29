@@ -244,7 +244,7 @@ impl<C: Commands> Shard<C> {
         }
         self.maybe_notify_dispatch(&view);
         self.wake_key(&key);
-        let _ok = self.store.set(&key, body, None, false, false);
+        let _ok = self.store.set(&key, body, None, kevy_store::SetCondition::Always);
         self.note_key_mutated(&key);
         let lua_wakes = crate::lua_wake_bridge::drain_lua_wake_buffer();
         for k in lua_wakes {

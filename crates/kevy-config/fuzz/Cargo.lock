@@ -54,8 +54,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "kevy-bytes"
+version = "6.4.0"
+dependencies = [
+ "kevy-hash",
+]
+
+[[package]]
+name = "kevy-compress"
+version = "6.4.0"
+
+[[package]]
 name = "kevy-config"
 version = "6.4.0"
+dependencies = [
+ "kevy-store",
+]
 
 [[package]]
 name = "kevy-config-fuzz"
@@ -63,6 +77,57 @@ version = "0.0.0"
 dependencies = [
  "kevy-config",
  "libfuzzer-sys",
+]
+
+[[package]]
+name = "kevy-hash"
+version = "6.4.0"
+
+[[package]]
+name = "kevy-madvise"
+version = "6.4.0"
+
+[[package]]
+name = "kevy-map"
+version = "6.4.0"
+dependencies = [
+ "kevy-hash",
+ "kevy-madvise",
+]
+
+[[package]]
+name = "kevy-ranktree"
+version = "6.4.0"
+
+[[package]]
+name = "kevy-seg"
+version = "6.4.0"
+dependencies = [
+ "kevy-sys",
+]
+
+[[package]]
+name = "kevy-store"
+version = "6.4.0"
+dependencies = [
+ "kevy-bytes",
+ "kevy-hash",
+ "kevy-map",
+ "kevy-ranktree",
+ "kevy-seg",
+ "kevy-vlog",
+]
+
+[[package]]
+name = "kevy-sys"
+version = "6.4.0"
+
+[[package]]
+name = "kevy-vlog"
+version = "6.4.0"
+dependencies = [
+ "kevy-compress",
+ "kevy-sys",
 ]
 
 [[package]]

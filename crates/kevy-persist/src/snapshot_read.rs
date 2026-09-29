@@ -309,7 +309,7 @@ fn read_stream_groups<R: Read>(r: &mut R) -> io::Result<Vec<kevy_store::LoadedGr
             let delivery_count = read_u32(r)?;
             pel.push((ms, seq, consumer, delivery_time_ms, delivery_count));
         }
-        groups.push(kevy_store::LoadedGroup { name, last_delivered, consumers, pel });
+        groups.push(kevy_store::LoadedGroup::new(name, last_delivered, consumers, pel));
     }
     Ok(groups)
 }

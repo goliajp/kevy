@@ -126,11 +126,7 @@ fn exit(code: u32) -> ! {
     const ADP_STOPPED_RUN_TIME_ERROR: u32 = 0x2_0023;
     sys_call(
         0x18,
-        if code == 0 {
-            ADP_STOPPED_APPLICATION_EXIT
-        } else {
-            ADP_STOPPED_RUN_TIME_ERROR
-        },
+        if code == 0 { ADP_STOPPED_APPLICATION_EXIT } else { ADP_STOPPED_RUN_TIME_ERROR },
     );
     loop {}
 }
@@ -240,7 +236,7 @@ fn main() -> ! {
     // The sensor-cache shape a real MCU deployment runs.
     for i in 0..64u32 {
         let key = [b's', b'e', b'n', b':', b'0' + (i / 10) as u8, b'0' + (i % 10) as u8];
-        store.set(&key, b"22.5".to_vec(), None, false, false);
+        store.set(&key, b"22.5".to_vec(), None, kevy_store::SetCondition::Always);
     }
     let heap_after_writes = heap_used();
 
@@ -252,7 +248,12 @@ fn main() -> ! {
 
     // TTL: the firmware advances its own clock, then reaps. No threads,
     // no timers — the device's own loop drives expiry.
-    store.set(b"tmp", b"gone".to_vec(), Some(Duration::from_millis(50)), false, false);
+    store.set(
+        b"tmp",
+        b"gone".to_vec(),
+        Some(Duration::from_millis(50)),
+        kevy_store::SetCondition::Always,
+    );
     let before = store.dbsize();
     kevy_store::set_clock_ns(100_000_000); // 100 ms later
     store.tick_expire(64, 8);

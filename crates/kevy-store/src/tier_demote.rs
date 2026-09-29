@@ -67,7 +67,7 @@ impl Store {
     /// backoff. A tick whose batch moves nothing while over
     /// target (every spillable value already cold, or the floor alone
     /// exceeds the budget so `effective_target == 0`) doubles the
-    /// tick's skip up to [`BACKOFF_CEILING_TICKS`]; any demotion — here
+    /// tick's skip up to a fixed ceiling; any demotion — here
     /// or on the write path — resets it. During a backoff window this
     /// is one decrement: the sampler does not run. "Idempotent is not
     /// convergent": before this, an over-target store with nothing left

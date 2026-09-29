@@ -190,7 +190,7 @@ impl SegListData {
 
     /// Iterate `count` elements starting at global `start` — seeks to
     /// the segment in O(segments) instead of skip-walking elements.
-    pub fn iter_range(&self, start: usize, count: usize) -> impl Iterator<Item = &Vec<u8>> {
+    pub fn range(&self, start: usize, count: usize) -> impl Iterator<Item = &Vec<u8>> {
         let (si, off) = if start >= self.len { (self.segs.len(), 0) } else { self.locate(start) };
         self.segs.iter().skip(si).flat_map(|s| s.iter()).skip(off).take(count)
     }

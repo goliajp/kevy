@@ -44,7 +44,7 @@ impl AtomicCtx<'_> {
     /// `NX`/`XX` veto).
     pub fn set(&mut self, key: &[u8], value: &[u8]) -> bool {
         self.snap(key);
-        let ok = self.inner.store.set(key, value.to_vec(), None, false, false);
+        let ok = self.inner.store.set(key, value.to_vec(), None, kevy_store::SetCondition::Always);
         self.log_arg(&[b"SET", key, value]);
         ok
     }
@@ -282,9 +282,6 @@ impl AtomicCtx<'_> {
         pairs: &[(f64, &[u8])],
         flags: kevy_store::ZaddFlags,
     ) -> KevyResult<kevy_store::ZaddReport> {
-        if !flags.valid() {
-            return Err(KevyError::InvalidInput("invalid ZADD flag combo".into()));
-        }
         let rep = self.inner.store.zadd_flags(key, pairs, flags).map_err(store_err)?;
         if !rep.applied.is_empty() {
             let score_strs: Vec<Vec<u8>> =

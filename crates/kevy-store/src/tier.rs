@@ -98,7 +98,8 @@ mod enabled {
     }
 
     /// Tiering gauges — the `INFO # Tiering` feeders.
-    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+    #[non_exhaustive]
     pub struct TierStats {
         /// The RAM budget this shard demotes against (resolved bytes).
         pub budget: u64,

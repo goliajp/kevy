@@ -32,7 +32,7 @@ impl Commands for Counted {
         Route::Single(1)
     }
     fn dispatch<A: ArgvView + ?Sized>(&self, store: &mut Store, args: &A) -> Vec<u8> {
-        store.set(&args[1], b"1".to_vec(), None, false, false);
+        store.set(&args[1], b"1".to_vec(), None, kevy_store::SetCondition::Always);
         b"+OK\r\n".to_vec()
     }
     fn is_quit<A: ArgvView + ?Sized>(&self, _: &A) -> bool {

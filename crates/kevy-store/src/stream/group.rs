@@ -10,23 +10,38 @@ use alloc::collections::BTreeMap;
 
 use kevy_map::KevyMap;
 
-pub(super) use super::claim::AutoclaimResult;
-use super::{EntryBatch, StreamData, StreamId};
+use super::{AckMode, EntryBatch, StreamData, StreamId};
 use crate::StoreError;
 use crate::value::SmallBytes;
 
 /// One consumer group's state. Sorted PEL plus a map of known
 /// consumers (with cached pel_count for O(1) XINFO answers).
+///
+/// Read-only outside the store: each consumer's cached pending count must
+/// equal its share of the PEL, so every change goes through the stream
+/// commands that keep the two together.
+///
+/// ```
+/// use kevy_store::{AckMode, GroupCreateMode, MissingStream, ReadGroupId, StreamId, Store, XAddIdSpec};
+/// let mut s = Store::new();
+/// s.xadd(b"s", XAddIdSpec::Explicit(StreamId::new(1, 1)), vec![(b"f".to_vec(), b"v".to_vec())], MissingStream::Create, 0).unwrap();
+/// s.xgroup_create(b"s", b"g", GroupCreateMode::AtId(StreamId::MIN), MissingStream::Refuse).unwrap();
+/// s.xreadgroup(b"s", b"g", b"alice", ReadGroupId::New, None, AckMode::Pending, 10).unwrap();
+/// let g = s.stream_group_peek(b"s", b"g").unwrap();
+/// assert_eq!(g.last_delivered_id(), StreamId::new(1, 1));
+/// assert_eq!(g.pending_entry(StreamId::new(1, 1)).unwrap().consumer.as_slice(), b"alice");
+/// assert_eq!(g.consumer(b"alice").unwrap().pending_count(), 1);
+/// ```
 #[derive(Debug, Clone)]
 pub struct ConsumerGroup {
     /// Highest ID delivered to any consumer in this group. Bumped by
     /// XREADGROUP with `>`; settable via XGROUP SETID.
-    pub last_delivered_id: StreamId,
+    pub(crate) last_delivered_id: StreamId,
     /// Pending-Entries List: every ID delivered but not yet ACKed.
     /// Sorted by ID for `XPENDING start end` range queries.
-    pub pel: BTreeMap<StreamId, PelEntry>,
+    pub(crate) pel: BTreeMap<StreamId, PelEntry>,
     /// Consumers known to this group (by name).
-    pub consumers: KevyMap<SmallBytes, Box<ConsumerState>>,
+    pub(crate) consumers: KevyMap<SmallBytes, Box<ConsumerState>>,
 }
 
 impl ConsumerGroup {
@@ -38,17 +53,41 @@ impl ConsumerGroup {
     pub fn pending_count(&self) -> usize {
         self.pel.len()
     }
+    /// The pending entry for `id`, if it is pending.
+    pub fn pending_entry(&self, id: StreamId) -> Option<&PelEntry> {
+        self.pel.get(&id)
+    }
+    /// The pending entries with IDs in `range`, in ID order.
+    ///
+    /// ```
+    /// let g = kevy_store::ConsumerGroup::default();
+    /// assert_eq!(g.pending_range(..).count(), 0);
+    /// ```
+    pub fn pending_range(
+        &self,
+        range: impl core::ops::RangeBounds<StreamId>,
+    ) -> impl Iterator<Item = (StreamId, &PelEntry)> {
+        self.pel.range(range).map(|(id, p)| (*id, p))
+    }
     /// Known consumer count — `XINFO GROUPS`'s `consumers`.
     pub fn consumer_count(&self) -> usize {
         self.consumers.len()
     }
+    /// The consumer named `name`, if the group knows it.
+    pub fn consumer(&self, name: &[u8]) -> Option<&ConsumerState> {
+        self.consumers.get(name).map(AsRef::as_ref)
+    }
     /// Iterate `(consumer_name, consumer)` pairs — `XINFO CONSUMERS`.
-    pub fn consumers_iter(&self) -> impl Iterator<Item = (&[u8], &ConsumerState)> {
+    pub fn consumers(&self) -> impl Iterator<Item = (&[u8], &ConsumerState)> {
         self.consumers.iter().map(|(k, v)| (k.as_slice(), v.as_ref()))
     }
 }
 
 impl ConsumerState {
+    /// The consumer's name.
+    pub fn name(&self) -> &[u8] {
+        self.name.as_slice()
+    }
     /// `XINFO CONSUMERS`' `pending` field.
     pub fn pending_count(&self) -> usize {
         self.pel_count
@@ -70,7 +109,8 @@ impl Default for ConsumerGroup {
 }
 
 /// One pending entry: who got it, when, and how many times.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct PelEntry {
     /// Owning consumer's name. Used by XPENDING's `consumer` filter
     /// and XCLAIM's ownership transfer.
@@ -84,81 +124,27 @@ pub struct PelEntry {
 }
 
 /// Per-consumer cached counters so `XINFO CONSUMERS` answers in O(1).
+/// Read through [`ConsumerGroup::consumer`] / [`ConsumerGroup::consumers`].
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
 pub struct ConsumerState {
-    /// Consumer name. Read by XINFO CONSUMERS (sprint C).
-    pub name: SmallBytes,
+    /// Consumer name.
+    pub(crate) name: SmallBytes,
     /// Last wall-clock (unix-ms) the consumer interacted with the
     /// group (any XREADGROUP / XACK / XCLAIM touch).
-    pub last_seen_ms: u64,
+    pub(crate) last_seen_ms: u64,
     /// Cached size of this consumer's slice of the PEL.
-    pub pel_count: usize,
+    pub(crate) pel_count: usize,
 }
 
 /// `XGROUP CREATE` ID argument: either an explicit ID or `$`
 /// (= current stream's `last_id`, resolved by the caller).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum GroupCreateMode {
     /// `<ms>-<seq>` literal — the group's `last_delivered_id` starts here.
     AtId(StreamId),
     /// `$` — resolve to the stream's current `last_id` at create time.
     AtCurrent,
-}
-
-/// Summary form of `XPENDING key group` (only 3 args): total pending,
-/// min/max IDs across the PEL, and per-consumer aggregate counts.
-#[derive(Debug)]
-pub struct PendingSummary {
-    /// Total pending entries across all consumers.
-    pub total: u64,
-    /// Smallest and largest pending IDs, or `None` if the PEL is empty.
-    pub id_range: Option<(StreamId, StreamId)>,
-    /// `(consumer, count)` pairs in arbitrary order.
-    pub by_consumer: Vec<(Vec<u8>, u64)>,
-}
-
-/// Extended form of `XPENDING key group [IDLE ms] start end count
-/// [consumer]`: one row per matching PEL entry.
-#[derive(Debug)]
-pub struct PendingExtended {
-    /// Per-entry rows in ID-ascending order.
-    pub rows: Vec<PendingExtendedRow>,
-}
-
-/// One row of the extended XPENDING reply.
-#[derive(Debug)]
-pub struct PendingExtendedRow {
-    /// Entry ID.
-    pub id: StreamId,
-    /// Owning consumer's name.
-    pub consumer: Vec<u8>,
-    /// Idle time in milliseconds (now - delivery_time_ms).
-    pub idle_ms: u64,
-    /// Delivery count.
-    pub delivery_count: u32,
-}
-
-/// Knobs for [`crate::StreamData`]'s `xclaim`: `min-idle-ms` plus the
-/// `IDLE`/`TIME`/`RETRYCOUNT`/`FORCE`/`JUSTID` flag tail.
-#[derive(Debug)]
-pub struct XClaimOpts {
-    /// Only claim entries idle for at least this many ms.
-    pub min_idle_ms: u64,
-    /// Override post-claim idle to this many ms (else 0 — XCLAIM resets
-    /// the clock so the new owner has the full idle window).
-    pub idle_override_ms: Option<u64>,
-    /// Override post-claim delivery_time_ms to this absolute unix-ms.
-    /// Takes precedence over `idle_override_ms` if both set.
-    pub time_override_ms: Option<u64>,
-    /// Override post-claim `delivery_count` (else +=1).
-    pub retrycount_override: Option<u32>,
-    /// `FORCE`: claim even if the entry isn't in the PEL yet (creates
-    /// a fresh PEL row with delivery_count=1).
-    pub force: bool,
-    /// `JUSTID`: skip the +=1 on `delivery_count` (used by tools that
-    /// don't intend a real redelivery).
-    pub justid: bool,
 }
 
 impl StreamData {
@@ -210,12 +196,12 @@ impl StreamData {
     /// ```
     /// use kevy_store::{GroupCreateMode, StreamId, XAddIdSpec};
     /// let mut s = kevy_store::Store::new();
-    /// s.xadd(b"s", XAddIdSpec::Explicit(StreamId { ms: 1, seq: 1 }), vec![(b"f".to_vec(), b"v".to_vec())], false, 0).unwrap();
-    /// s.xgroup_create(b"s", b"g", GroupCreateMode::AtId(StreamId::MIN), false).unwrap();
+    /// s.xadd(b"s", XAddIdSpec::Explicit(StreamId::new(1, 1)), vec![(b"f".to_vec(), b"v".to_vec())], kevy_store::MissingStream::Create, 0).unwrap();
+    /// s.xgroup_create(b"s", b"g", GroupCreateMode::AtId(StreamId::MIN), kevy_store::MissingStream::Refuse).unwrap();
     /// assert!(s.xgroup_consumer_seen(b"s", b"g", b"c", 40).unwrap());
     /// assert!(!s.xgroup_consumer_seen(b"s", b"g", b"c", 90).unwrap());
     /// let g = s.stream_group_peek(b"s", b"g").unwrap();
-    /// assert_eq!(g.consumers_iter().next().unwrap().1.last_seen_ms(), 90);
+    /// assert_eq!(g.consumers().next().unwrap().1.last_seen_ms(), 90);
     /// ```
     pub fn group_consumer_seen(&mut self, group: &[u8], consumer: &[u8], seen_ms: u64) -> bool {
         let Some(g) = self.groups.get_mut(group) else {
@@ -280,7 +266,7 @@ impl StreamData {
         consumer: &[u8],
         last_seen_arg: ReadGroupId,
         count: Option<usize>,
-        noack: bool,
+        ack: AckMode,
         now_ms: u64,
     ) -> Result<EntryBatch, StoreError> {
         let Some(g) = self.groups.get_mut(group) else {
@@ -306,7 +292,7 @@ impl StreamData {
                 if take.is_empty() {
                     return Ok(Vec::new());
                 }
-                if !noack {
+                if ack == AckMode::Pending {
                     record_deliveries(g, &consumer_smb, &take, now_ms);
                 }
                 let g_mut = self.groups.get_mut(group).expect("present");
@@ -337,70 +323,12 @@ impl StreamData {
         }
         n
     }
-
-    /// `XPENDING key group` — the summary form (4-tuple).
-    pub fn pending_summary(&self, group: &[u8]) -> Option<PendingSummary> {
-        let g = self.groups.get(group)?;
-        let total = g.pel.len() as u64;
-        let id_range = match (g.pel.keys().next(), g.pel.keys().next_back()) {
-            (Some(lo), Some(hi)) => Some((*lo, *hi)),
-            _ => None,
-        };
-        let mut counts: Vec<(Vec<u8>, u64)> = Vec::new();
-        for p in g.pel.values() {
-            if let Some((_, n)) = counts.iter_mut().find(|(name, _)| name == p.consumer.as_slice())
-            {
-                *n += 1;
-            } else {
-                counts.push((p.consumer.to_vec(), 1));
-            }
-        }
-        Some(PendingSummary { total, id_range, by_consumer: counts })
-    }
-
-    /// `XPENDING key group [IDLE ms] start end count [consumer]`.
-    #[allow(clippy::too_many_arguments)]
-    pub fn pending_extended(
-        &self,
-        group: &[u8],
-        idle_min_ms: Option<u64>,
-        start: StreamId,
-        end: StreamId,
-        count: usize,
-        consumer_filter: Option<&[u8]>,
-        now_ms: u64,
-    ) -> Option<PendingExtended> {
-        let g = self.groups.get(group)?;
-        let mut rows = Vec::with_capacity(count.min(g.pel.len()));
-        for (id, p) in g.pel.range(start..=end) {
-            if rows.len() >= count {
-                break;
-            }
-            let idle = now_ms.saturating_sub(p.delivery_time_ms);
-            if let Some(min) = idle_min_ms
-                && idle < min
-            {
-                continue;
-            }
-            if let Some(c) = consumer_filter
-                && p.consumer.as_slice() != c
-            {
-                continue;
-            }
-            rows.push(PendingExtendedRow {
-                id: *id,
-                consumer: p.consumer.to_vec(),
-                idle_ms: idle,
-                delivery_count: p.delivery_count,
-            });
-        }
-        Some(PendingExtended { rows })
-    }
 }
 
 /// XREADGROUP's per-stream ID: either `>` (= new entries) or an explicit
 /// "after this id" for PEL replay.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum ReadGroupId {
     /// `>` — new entries only.
     New,

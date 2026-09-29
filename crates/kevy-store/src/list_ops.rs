@@ -10,7 +10,7 @@
 #[cfg(not(feature = "std"))]
 use crate::nostd_prelude::*;
 use crate::value::Value;
-use crate::{Store, StoreError};
+use crate::{ListEnd, Store, StoreError};
 
 impl Store {
     /// `RPOPLPUSH source destination` — atomically pop one element from
@@ -42,14 +42,14 @@ impl Store {
     }
 
     /// `LMOVE source destination LEFT|RIGHT LEFT|RIGHT` — generalised
-    /// `RPOPLPUSH`. `from_left=true` pops from the head, otherwise the
-    /// tail; `to_left=true` pushes to the head, otherwise the tail.
+    /// `RPOPLPUSH`: pop from `from`'s end of `src`, push onto `to`'s end
+    /// of `dst`.
     pub fn lmove(
         &mut self,
         src: &[u8],
         dst: &[u8],
-        from_left: bool,
-        to_left: bool,
+        from: ListEnd,
+        to: ListEnd,
     ) -> Result<Option<Vec<u8>>, StoreError> {
         match self.live_entry(dst) {
             None => {}
@@ -58,15 +58,17 @@ impl Store {
                 _ => return Err(StoreError::WrongType),
             },
         }
-        let mut popped = if from_left { self.lpop(src, 1)? } else { self.rpop(src, 1)? };
+        let mut popped = match from {
+            ListEnd::Left => self.lpop(src, 1)?,
+            ListEnd::Right => self.rpop(src, 1)?,
+        };
         let Some(v) = popped.pop() else {
             return Ok(None);
         };
-        if to_left {
-            self.lpush(dst, &[v.as_slice()])?;
-        } else {
-            self.rpush(dst, &[v.as_slice()])?;
-        }
+        match to {
+            ListEnd::Left => self.lpush(dst, &[v.as_slice()])?,
+            ListEnd::Right => self.rpush(dst, &[v.as_slice()])?,
+        };
         Ok(Some(v))
     }
 

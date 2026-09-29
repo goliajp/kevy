@@ -31,7 +31,7 @@ impl Store {
     pub fn set(&self, key: &[u8], value: &[u8]) -> KevyResult<bool> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
-        let ok = g.store.set(key, value.to_vec(), None, false, false);
+        let ok = g.store.set(key, value.to_vec(), None, kevy_store::SetCondition::Always);
         commit_write(&mut g, &[b"SET", key, value])?;
         Ok(ok)
     }

@@ -231,9 +231,9 @@ mod tests {
     #[test]
     fn serialize_prefix_emits_set_for_strings() {
         let mut store = fresh_store();
-        store.set(b"app:foo", b"v1".to_vec(), None, false, false);
-        store.set(b"app:bar", b"v2".to_vec(), None, false, false);
-        store.set(b"other:k", b"v3".to_vec(), None, false, false);
+        store.set(b"app:foo", b"v1".to_vec(), None, kevy_store::SetCondition::Always);
+        store.set(b"app:bar", b"v2".to_vec(), None, kevy_store::SetCondition::Always);
+        store.set(b"other:k", b"v3".to_vec(), None, kevy_store::SetCondition::Always);
 
         let (bulk, count) = serialize_prefix(&mut store, b"app:");
         assert_eq!(count, 2, "two string keys under prefix");
@@ -271,7 +271,7 @@ mod tests {
     #[test]
     fn serialize_prefix_carries_every_type_and_the_ttl() {
         let mut store = fresh_store();
-        store.set(b"app:s", b"v".to_vec(), None, false, false);
+        store.set(b"app:s", b"v".to_vec(), None, kevy_store::SetCondition::Always);
         store.hset(b"app:h", &[(b"f".as_slice(), b"v".as_slice())]).unwrap();
         store.rpush(b"app:l", &[b"a".as_slice()]).unwrap();
         store.sadd(b"app:set", &[b"m".as_slice()]).unwrap();
@@ -281,7 +281,7 @@ mod tests {
                 b"app:st",
                 kevy_store::XAddIdSpec::AutoAll,
                 vec![(b"f".to_vec(), b"v".to_vec())],
-                false,
+                kevy_store::MissingStream::Create,
                 1,
             )
             .unwrap();
@@ -289,8 +289,7 @@ mod tests {
             b"app:ttl",
             b"v".to_vec(),
             Some(std::time::Duration::from_secs(60)),
-            false,
-            false,
+            kevy_store::SetCondition::Always,
         );
 
         let (bulk, _count) = serialize_prefix(&mut store, b"app:");
@@ -329,7 +328,7 @@ mod tests {
         let mut store = fresh_store();
         // The target already holds this key as a STRING; the shipped
         // frame rebuilds it as a LIST, and RPUSH on a string is refused.
-        store.set(b"app:x", b"already-a-string".to_vec(), None, false, false);
+        store.set(b"app:x", b"already-a-string".to_vec(), None, kevy_store::SetCondition::Always);
         let mut bulk = Vec::new();
         append_resp_argv(&mut bulk, &[b"RPUSH", b"app:x", b"a"]);
 
@@ -365,7 +364,7 @@ mod tests {
     #[test]
     fn serialize_prefix_skips_non_matching_keys() {
         let mut store = fresh_store();
-        store.set(b"foo", b"v".to_vec(), None, false, false);
+        store.set(b"foo", b"v".to_vec(), None, kevy_store::SetCondition::Always);
         let (bulk, count) = serialize_prefix(&mut store, b"app:");
         assert_eq!(count, 0);
         assert!(bulk.is_empty());

@@ -62,7 +62,7 @@ impl Store {
             // payload — losing the inline encoding bit costs nothing
             // beyond one re-promotion on the first mutation.
             Value::SmallSetInline(s) => {
-                self.load_set(k, s.iter_slices().map(<[u8]>::to_vec).collect(), ttl_ms)
+                self.load_set(k, s.iter().map(<[u8]>::to_vec).collect(), ttl_ms)
             }
             Value::ZSet(z) => {
                 self.load_zset(k, z.ordered().map(|(m, sc)| (m.to_vec(), sc)).collect(), ttl_ms)
@@ -91,7 +91,7 @@ impl Store {
     /// into the primitive tuples [`Self::load_stream`] takes.
     fn load_stream_value(&mut self, k: Vec<u8>, st: &crate::StreamData, ttl_ms: Option<u64>) {
         let entries: Vec<crate::stream::LoadedStreamEntry> = st
-            .iter_entries()
+            .entries()
             .map(|(id, fv)| {
                 let fvv = fv
                     .iter()
@@ -131,7 +131,7 @@ impl Store {
     ) {
         let mut s = crate::stream::StreamData::default();
         for (ms, seq, fv) in entries {
-            let id = crate::stream::StreamId { ms, seq };
+            let id = crate::stream::StreamId::new(ms, seq);
             let fv_small: Vec<(SmallBytes, SmallBytes)> = fv
                 .into_iter()
                 .map(|(f, v)| (SmallBytes::from_vec(f), SmallBytes::from_vec(v)))
@@ -139,8 +139,8 @@ impl Store {
             s.load_entry(id, fv_small);
         }
         s.set_loaded_state(
-            crate::stream::StreamId { ms: last_id.0, seq: last_id.1 },
-            crate::stream::StreamId { ms: max_deleted_id.0, seq: max_deleted_id.1 },
+            crate::stream::StreamId::new(last_id.0, last_id.1),
+            crate::stream::StreamId::new(max_deleted_id.0, max_deleted_id.1),
             entries_added,
         );
         s.import_groups(groups);

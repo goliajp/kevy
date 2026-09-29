@@ -354,10 +354,10 @@ mod tests {
         // Shrink 2 → 1 under custom names: merge, commit, verify the
         // custom-named snapshot landed and the std-named sources moved.
         let mut a = Store::new();
-        a.set(b"alpha", b"1".to_vec(), None, false, false);
+        a.set(b"alpha", b"1".to_vec(), None, kevy_store::SetCondition::Always);
         save_snapshot(&a, &dir.join("dump-0.rdb")).unwrap();
         let mut b = Store::new();
-        b.set(b"beta", b"2".to_vec(), None, false, false);
+        b.set(b"beta", b"2".to_vec(), None, kevy_store::SetCondition::Always);
         save_snapshot(&b, &dir.join("dump-1.rdb")).unwrap();
 
         let mut temp = Store::new();

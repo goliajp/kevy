@@ -25,8 +25,8 @@ impl Before {
             return Before { consumer_existed: false, pending: Vec::new() };
         };
         Before {
-            consumer_existed: g.consumers.get(&args[3]).is_some(),
-            pending: ids.iter().copied().filter(|id| g.pel.contains_key(id)).collect(),
+            consumer_existed: g.consumer(&args[3]).is_some(),
+            pending: ids.iter().copied().filter(|id| g.pending_entry(*id).is_some()).collect(),
         }
     }
 
@@ -40,7 +40,7 @@ impl Before {
         taken: &[StreamId],
     ) -> Vec<StreamId> {
         let still = |id: &StreamId| {
-            store.stream_group_peek(key, group).is_some_and(|g| g.pel.contains_key(id))
+            store.stream_group_peek(key, group).is_some_and(|g| g.pending_entry(*id).is_some())
         };
         self.pending.iter().copied().filter(|id| !taken.contains(id) && !still(id)).collect()
     }
@@ -66,7 +66,7 @@ impl ReadMarks {
         consumer: &[u8],
     ) -> (StreamId, bool) {
         match store.stream_group_peek(key, group) {
-            Some(g) => (g.last_delivered_id, g.consumers.get(consumer).is_none()),
+            Some(g) => (g.last_delivered_id(), g.consumer(consumer).is_none()),
             None => (StreamId::MIN, false),
         }
     }

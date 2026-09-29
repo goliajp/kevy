@@ -282,7 +282,7 @@ fn bench_real_store() {
     let absent = make_keys("absent:", N, 12);
     let mut s = Store::new();
     for k in &keys {
-        s.set(k, b"value-payload-16".to_vec(), None, false, false);
+        s.set(k, b"value-payload-16".to_vec(), None, kevy_store::SetCondition::Always);
     }
     println!("== real Store::get/set (Fx+fmix64 keyspace), N={N} ==");
 
@@ -304,13 +304,13 @@ fn bench_real_store() {
     let st = bench(SAMPLES, INNER, || {
         let k = &keys[i % N];
         i += 1;
-        s.set(k, b"value-payload-16".to_vec(), None, false, false);
+        s.set(k, b"value-payload-16".to_vec(), None, kevy_store::SetCondition::Always);
     });
     st.report("Store::set overwrite");
 
     // INCR path (live_entry_mut): repopulate numeric, then increment in place.
     for k in &keys {
-        s.set(k, b"0".to_vec(), None, false, false);
+        s.set(k, b"0".to_vec(), None, kevy_store::SetCondition::Always);
     }
     i = 0;
     let inc = bench(SAMPLES, INNER, || {

@@ -31,7 +31,7 @@ pub(super) fn maxmemory_tick(c: &KevyCommands, store: &mut Store, cfg: &kevy_con
     let n = c.state().nshards().max(1) as u64;
     store.set_max_memory(
         cfg.memory.maxmemory / n,
-        crate::map_eviction_policy(cfg.memory.maxmemory_policy),
+        cfg.memory.maxmemory_policy,
     );
 }
 

@@ -8,7 +8,7 @@
 use crate::nostd_prelude::*;
 use crate::util::parse_canonical_i64;
 use crate::value::{BULK_THRESHOLD, SmallBytes, Value};
-use crate::{Entry, Store, deadline_at, now_ns};
+use crate::{Entry, SetCondition, Store, deadline_at, now_ns};
 use alloc::sync::Arc;
 use core::time::Duration;
 
@@ -53,7 +53,9 @@ fn take_new_value(slot: &mut Option<Value>) -> Value {
 }
 
 impl Store {
-    /// `SET` — overwrites any existing value/type. NX/XX guards; clears TTL.
+    /// `SET` — overwrites any existing value/type, subject to `cond`
+    /// (`NX` / `XX`); sets or clears the TTL from `expire`. `false` when
+    /// `cond` refused the write.
     /// Takes an owned `Vec` so a >23 B value's allocation is adopted as-is
     /// (no copy). For callers holding a borrowed slice, prefer
     /// [`Self::set_slice`] — it skips the `to_vec` entirely for values that
@@ -63,10 +65,9 @@ impl Store {
         key: &[u8],
         value: Vec<u8>,
         expire: Option<Duration>,
-        nx: bool,
-        xx: bool,
+        cond: SetCondition,
     ) -> bool {
-        self.set_value(key, pick_value_for_set_owned(value), expire, nx, xx)
+        self.set_value(key, pick_value_for_set_owned(value), expire, cond)
     }
 
     /// [`Self::set`] for a borrowed value. Values ≤ 23 B store inline in the
@@ -79,10 +80,9 @@ impl Store {
         key: &[u8],
         value: &[u8],
         expire: Option<Duration>,
-        nx: bool,
-        xx: bool,
+        cond: SetCondition,
     ) -> bool {
-        self.set_value(key, pick_value_for_set(value), expire, nx, xx)
+        self.set_value(key, pick_value_for_set(value), expire, cond)
     }
 
     fn set_value(
@@ -90,8 +90,7 @@ impl Store {
         key: &[u8],
         new_value: Value,
         expire: Option<Duration>,
-        nx: bool,
-        xx: bool,
+        cond: SetCondition,
     ) -> bool {
         // Single-probe overwrite-SET fast path for default
         // `maxmemory == 0` (the bench and production-common case). Goes
@@ -102,9 +101,9 @@ impl Store {
         // to 1 probe. New-key + expired-removed paths still pay the
         // insert_entry probe (same as before).
         if !self.clock_on() {
-            return self.set_value_no_evict(key, new_value, expire, nx, xx);
+            return self.set_value_no_evict(key, new_value, expire, cond);
         }
-        self.set_value_evict(key, new_value, expire, nx, xx)
+        self.set_value_evict(key, new_value, expire, cond)
     }
 
     /// Eviction path (maxmemory > 0) of [`Self::set_value`]: keeps the
@@ -114,8 +113,7 @@ impl Store {
         key: &[u8],
         new_value: Value,
         expire: Option<Duration>,
-        nx: bool,
-        xx: bool,
+        cond: SetCondition,
     ) -> bool {
         let expire_at = expire.map(|d| deadline_at(now_ns(), d));
         let key_heap = crate::key_heap_bytes_for(key);
@@ -127,14 +125,14 @@ impl Store {
         // borrow we couldn't call `self.maybe_offload_drop`.
         let (outcome, old_value) = match self.live_entry_mut(key) {
             Some(e) => {
-                if nx {
+                if cond == SetCondition::IfAbsent {
                     return false;
                 }
                 let (delta, ttl_delta, old) = overwrite_in_place(e, new_value, expire_at, key_heap);
                 (Ok((delta, ttl_delta)), Some(old))
             }
             None => {
-                if xx {
+                if cond == SetCondition::IfPresent {
                     return false;
                 }
                 (Err(Entry::new(new_value, expire_at)), None)
@@ -169,15 +167,14 @@ impl Store {
         key: &[u8],
         new_value: Value,
         expire: Option<Duration>,
-        nx: bool,
-        xx: bool,
+        cond: SetCondition,
     ) -> bool {
         let expire_at = expire.map(|d| deadline_at(now_ns(), d));
         let key_heap = crate::key_heap_bytes_for(key);
         // Hold new_value behind Option so the multi-arm consumption
         // (overwrite arm vs insert-after-expired arm) is moved-once.
         let mut value_slot = Some(new_value);
-        let outcome = self.set_probe_no_evict(key, &mut value_slot, expire_at, key_heap, nx, xx);
+        let outcome = self.set_probe_no_evict(key, &mut value_slot, expire_at, key_heap, cond);
         // Phase 2: bookkeeping + maybe insert. Borrow on self.map is gone.
         let old_value: Option<Value> = match outcome {
             SetOutcome::Refused { drop_first } => {
@@ -227,8 +224,7 @@ impl Store {
         value_slot: &mut Option<Value>,
         expire_at: Option<u64>,
         key_heap: u64,
-        nx: bool,
-        xx: bool,
+        cond: SetCondition,
     ) -> SetOutcome {
         use kevy_map::RawEntryMut;
         let (uc, cn) = (self.cached_clock, self.cached_ns);
@@ -242,12 +238,12 @@ impl Store {
                     let old = occ.remove();
                     // borrow on self.map released by remove(self).
                     self.note_expired_removed(&old);
-                    if xx {
+                    if cond == SetCondition::IfPresent {
                         return SetOutcome::Refused { drop_first: Some(old.value) };
                     }
                     SetOutcome::ExpiredThenInsert { old: old.value }
                 } else {
-                    if nx {
+                    if cond == SetCondition::IfAbsent {
                         return SetOutcome::Refused { drop_first: None };
                     }
                     // Take the old Value before overwriting
@@ -264,7 +260,7 @@ impl Store {
                 }
             }
             RawEntryMut::Vacant(_) => {
-                if xx {
+                if cond == SetCondition::IfPresent {
                     return SetOutcome::Refused { drop_first: None };
                 }
                 SetOutcome::NeedInsert

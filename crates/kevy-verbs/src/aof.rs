@@ -41,7 +41,7 @@ pub fn spop_effect<'a>(key: &'a [u8], popped: &'a [Vec<u8>]) -> Vec<&'a [u8]> {
 ///
 /// ```
 /// let mut store = kevy_store::Store::new();
-/// store.set(b"k", b"v".to_vec(), Some(std::time::Duration::from_secs(60)), false, false);
+/// store.set(b"k", b"v".to_vec(), Some(std::time::Duration::from_secs(60)), kevy_store::SetCondition::Always);
 /// let f = kevy_verbs::aof::deadline_frame(&mut store, b"k").unwrap();
 /// assert_eq!(&f[0], b"PEXPIREAT");
 /// assert!(kevy_verbs::aof::deadline_frame(&mut store, b"missing").is_none());

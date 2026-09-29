@@ -71,7 +71,8 @@ impl<'a> AtomicAllShards<'a> {
     pub fn set(&mut self, key: &[u8], value: &[u8]) -> bool {
         self.snap(key);
         let i = self.idx(key);
-        let ok = self.guards[i].store.set(key, value.to_vec(), None, false, false);
+        let ok =
+            self.guards[i].store.set(key, value.to_vec(), None, kevy_store::SetCondition::Always);
         self.log_arg(i, &[b"SET", key, value]);
         ok
     }
@@ -338,9 +339,6 @@ impl<'a> AtomicAllShards<'a> {
         pairs: &[(f64, &[u8])],
         flags: kevy_store::ZaddFlags,
     ) -> KevyResult<kevy_store::ZaddReport> {
-        if !flags.valid() {
-            return Err(KevyError::InvalidInput("invalid ZADD flag combo".into()));
-        }
         let i = self.idx(key);
         let rep = self.guards[i].store.zadd_flags(key, pairs, flags).map_err(store_err)?;
         if !rep.applied.is_empty() {

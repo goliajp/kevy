@@ -36,7 +36,7 @@ impl Store {
     ///
     /// ```
     /// let mut store = kevy_store::Store::new();
-    /// store.set(b"k", b"v".to_vec(), None, false, false);
+    /// store.set(b"k", b"v".to_vec(), None, kevy_store::SetCondition::Always);
     /// let entries = store.detach_entries();
     /// assert_eq!(entries.len(), 1);
     /// assert_eq!(store.dbsize(), 0);
