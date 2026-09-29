@@ -75,15 +75,14 @@ pub(crate) fn new_graph(spec: &IndexSpec) -> kevy_vector::Hnsw {
     let a = spec.ann.as_ref().expect("ann spec");
     kevy_vector::Hnsw::new(
         a.dim as usize,
-        kevy_vector::HnswParams {
-            m: a.m as usize,
-            ef_construction: a.ef as usize,
-            distance: match a.distance {
+        kevy_vector::HnswParams::default()
+            .with_m(a.m as usize)
+            .with_ef_construction(a.ef as usize)
+            .with_distance(match a.distance {
                 1 => kevy_vector::Distance::L2,
                 2 => kevy_vector::Distance::Ip,
                 _ => kevy_vector::Distance::Cosine,
-            },
-        },
+            }),
     )
 }
 
