@@ -84,6 +84,7 @@ mod secure_front;
 mod state;
 mod table_runtime;
 mod tier_read;
+mod tiering_boot;
 pub mod verb_meta;
 mod view_runtime;
 
@@ -91,16 +92,42 @@ pub use kevy_rt::Argv;
 pub use kevy_scope::OwnershipError;
 pub use kevy_store::Store as KeyspaceStore;
 pub use state::{KevyCommands, RuntimeState};
+pub(crate) use tiering_boot::{resolve_tier_budget, wire_tiering};
 
 /// What to do with a connection after draining its buffered commands.
+///
+/// ```
+/// use kevy::{AfterDrain, KevyCommands, KeyspaceStore, drain_commands};
+/// let (kevy, mut store, mut out) = (KevyCommands::new(), KeyspaceStore::new(), Vec::new());
+/// let mut input = b"*1\r\n$4\r\nPING\r\n".to_vec();
+/// let after = drain_commands(&kevy, &mut store, &mut input, &mut out);
+/// assert_eq!((after, &out[..]), (AfterDrain::KeepOpen, &b"+PONG\r\n"[..]));
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum AfterDrain {
     /// Keep serving this connection — the ordinary outcome.
+    ///
+    /// ```
+    /// use kevy::{AfterDrain, KevyCommands, KeyspaceStore, drain_commands};
+    /// let (kevy, mut store, mut out) = (KevyCommands::new(), KeyspaceStore::new(), Vec::new());
+    /// // half a frame: nothing to answer yet, wait for the rest
+    /// let mut input = b"*1\r\n$4\r\nPI".to_vec();
+    /// assert_eq!(drain_commands(&kevy, &mut store, &mut input, &mut out), AfterDrain::KeepOpen);
+    /// assert!(out.is_empty());
+    /// ```
     KeepOpen,
     /// Close it: the client sent QUIT, or the connection is being shut
     /// down for a reason the drain already replied about. The reply is
     /// written before the close, so this is not an abort.
+    ///
+    /// ```
+    /// use kevy::{AfterDrain, KevyCommands, KeyspaceStore, drain_commands};
+    /// let (kevy, mut store, mut out) = (KevyCommands::new(), KeyspaceStore::new(), Vec::new());
+    /// let mut input = b"*1\r\n$4\r\nQUIT\r\n".to_vec();
+    /// assert_eq!(drain_commands(&kevy, &mut store, &mut input, &mut out), AfterDrain::Close);
+    /// assert_eq!(out, b"+OK\r\n", "the reply goes out before the close");
+    /// ```
     Close,
 }
 
@@ -177,6 +204,14 @@ fn install_signal_handlers(_stop: Arc<AtomicBool>) {
 /// `cfg.persistence.aof`. `threads = 0` (the auto sentinel) runs one
 /// shard; the CLI resolves auto to `available_parallelism()` before
 /// calling in.
+///
+/// ```no_run
+/// // never returns: serves until SIGTERM / SIGINT / SHUTDOWN, then exits the process
+/// let mut cfg = kevy_config::Config::default();
+/// cfg.server.port = 6004;
+/// cfg.server.threads = 2;
+/// kevy::serve(std::sync::Arc::new(cfg));
+/// ```
 pub fn serve(cfg: Arc<kevy_config::Config>) -> ! {
     // a secure link without its keys refuses to start, never falls back to plaintext
     let link_key = secure::link_keypair(&cfg).unwrap_or_else(|e| {
@@ -298,45 +333,6 @@ fn build_runtime(cfg: &kevy_config::Config, commands: KevyCommands) -> Runtime<K
     replication::apply(runtime, cfg, &state)
 }
 
-/// Tiering: resolve the `[tiering]` budget to bytes — auto/percent
-/// probe the OS bound via kevy-sys — and hand the runtime the
-/// process-level number (it splits per shard). A spec that cannot
-/// resolve is a named boot refusal, never a silent off.
-fn wire_tiering(
-    runtime: Runtime<KevyCommands>,
-    cfg: &kevy_config::Config,
-) -> Runtime<KevyCommands> {
-    match resolve_tier_budget(cfg) {
-        Ok(budget) => {
-            runtime.with_tier_budget(budget).with_tier_spill_dir(cfg.tiering.spill_dir.clone())
-        }
-        Err(msg) => {
-            eprintln!("kevy: {msg}");
-            std::process::exit(1);
-        }
-    }
-}
-
-/// Resolve the configured `[tiering] budget` to bytes. `Ok(None)` =
-/// tiering off; `Err` = an auto/percent form with no detectable memory
-/// bound (named refusal at boot; on the tick the caller keeps the last
-/// resolved value instead).
-pub(crate) fn resolve_tier_budget(cfg: &kevy_config::Config) -> Result<Option<u64>, String> {
-    match cfg.tiering.budget {
-        None => Ok(None),
-        Some(spec) => {
-            spec.resolve_with(kevy_sys::detected_memory_bound()).map(Some).ok_or_else(|| {
-                format!(
-                    "[tiering] budget = \"{}\": no memory bound detected on this host \
-                     (cgroup v2 memory.max / /proc/meminfo MemAvailable / hw.memsize all \
-                     unavailable) — use an absolute budget (\"4gb\")",
-                    spec.to_config_string()
-                )
-            })
-        }
-    }
-}
-
 /// `[cluster].announce_port_base`, or `None` when left at `0` so the
 /// listening ports are advertised.
 pub(crate) fn announce_port_base(cfg: &kevy_config::Config) -> Option<u16> {
@@ -357,6 +353,16 @@ pub(crate) fn cluster_port_base(cfg: &kevy_config::Config) -> u16 {
 /// Parse and dispatch every complete command in `input`, appending replies to
 /// `output`. Consumes parsed bytes; leaves a trailing partial frame. Returns
 /// `Close` after a `QUIT` or a protocol error (whose reply is already appended).
+///
+/// ```
+/// use kevy::{AfterDrain, KevyCommands, KeyspaceStore, drain_commands};
+/// let (kevy, mut store, mut out) = (KevyCommands::new(), KeyspaceStore::new(), Vec::new());
+/// // two whole commands and the start of a third
+/// let mut input = b"*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$1\r\nv\r\n*2\r\n$3\r\nGET\r\n$1\r\nk\r\n*1\r\n".to_vec();
+/// assert_eq!(drain_commands(&kevy, &mut store, &mut input, &mut out), AfterDrain::KeepOpen);
+/// assert_eq!(out, b"+OK\r\n$1\r\nv\r\n");
+/// assert_eq!(input, b"*1\r\n", "the partial frame stays for the next read");
+/// ```
 pub fn drain_commands(
     kevy: &KevyCommands,
     store: &mut Store,
@@ -389,6 +395,25 @@ pub fn drain_commands(
 
 /// Blocking single-connection handler. Shares command logic with the reactor;
 /// retained for tests and simple uses.
+///
+/// ```
+/// use std::io::{Read, Write};
+/// let listener = kevy_sys::Socket::tcp_listen([127, 0, 0, 1], 0, 1)?;
+/// let port = listener.local_port()?;
+/// let client = std::thread::spawn(move || -> std::io::Result<Vec<u8>> {
+///     let mut c = std::net::TcpStream::connect(("127.0.0.1", port))?;
+///     c.write_all(b"*1\r\n$4\r\nPING\r\n*1\r\n$4\r\nQUIT\r\n")?;
+///     let mut replies = Vec::new();
+///     c.read_to_end(&mut replies)?;
+///     Ok(replies)
+/// });
+/// let conn = listener.accept()?;
+/// kevy::handle_conn(&kevy::KevyCommands::new(), &conn, &mut kevy::KeyspaceStore::new())?;
+/// drop(conn);
+/// let replies = client.join().map_err(|_| "client thread panicked")??;
+/// assert_eq!(replies, b"+PONG\r\n+OK\r\n");
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn handle_conn(kevy: &KevyCommands, conn: &Socket, store: &mut Store) -> io::Result<()> {
     let mut input: Vec<u8> = Vec::with_capacity(4096);
     let mut output: Vec<u8> = Vec::new();
