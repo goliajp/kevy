@@ -1,6 +1,6 @@
 //! `-u <uri>`: the URI forms redis-cli accepts, and what each part sets.
 //!
-//! Not `kevy_resp_client::parse_url`: that one is the kevy client's URL,
+//! Not `kevy_resp_client::ParsedUrl::parse`: that one is the kevy client's URL,
 //! which refuses credentials because kevy has none. This is redis-cli's,
 //! which carries a user and password to whatever server it names, keeps the
 //! host already set when the URI has none, and has its own messages.
@@ -122,7 +122,7 @@ fn percent_decode(s: &[u8]) -> Result<Vec<u8>, Step> {
 /// CLI and the Rust clients accept exactly the same URLs.
 fn kevys(o: &mut Opts, uri: &[u8]) -> Option<Step> {
     let text = String::from_utf8_lossy(uri);
-    match kevy_resp_client::parse_secure_url(&text) {
+    match kevy_resp_client::SecureUrl::parse(&text) {
         Ok(u) => {
             o.host = u.host.into_bytes();
             o.port = i32::from(u.port);

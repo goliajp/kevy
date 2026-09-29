@@ -21,7 +21,7 @@ use std::io;
 use kevy_resp::Reply;
 
 use crate::codec::AsyncRespCodec;
-use crate::pubsub::{PubsubEvent, classify};
+use crate::pubsub::PubsubEvent;
 use crate::url::parse_url;
 
 use crate::conn::{DefaultTransport, connect_default};
@@ -107,7 +107,7 @@ impl<T: crate::AsyncTransport> AsyncSubscriber<T> {
     async fn await_acks(&mut self, n: usize, want_pattern: bool) -> io::Result<()> {
         let mut seen = 0usize;
         while seen < n {
-            let ev = classify(self.codec.read_reply().await?)?;
+            let ev = PubsubEvent::try_from(self.codec.read_reply().await?)?;
             let is_ack = if want_pattern {
                 matches!(ev, PubsubEvent::Psubscribe { .. })
             } else {
@@ -149,7 +149,7 @@ impl<T: crate::AsyncTransport> AsyncSubscriber<T> {
             return Ok(ev);
         }
         let reply = self.codec.read_reply().await?;
-        classify(reply)
+        PubsubEvent::try_from(reply)
     }
 
     /// Skip subscription-ack frames and return the next published

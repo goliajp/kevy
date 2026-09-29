@@ -114,7 +114,7 @@ impl AsyncConnection<AsyncSecure<DefaultTransport>> {
 pub(crate) async fn connect_secure(
     url: &str,
 ) -> io::Result<(AsyncSecure<DefaultTransport>, Option<u32>)> {
-    let u = kevy_resp_client::parse_secure_url(url)?;
+    let u = kevy_resp_client::SecureUrl::parse(url)?;
     let me = u.client_key_file.as_deref().map(kevy_resp_client::load_client_key).transpose()?;
     let tcp = connect_default(&u.host, u.port).await?;
     Ok((AsyncSecure::handshake(tcp, u.server_key, me.as_ref()).await?, u.db))

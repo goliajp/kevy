@@ -14,7 +14,7 @@ use std::io::{Read, Write};
 
 use kevy_embedded::PubsubFrame;
 use kevy_resp::{Reply, encode_command};
-use kevy_resp_client::{ReplyReadBuf, classify_pubsub};
+use kevy_resp_client::ReplyReadBuf;
 
 use crate::subscribe::PubsubEvent;
 
@@ -88,7 +88,8 @@ pub(crate) fn recv_remote(
             // `KevyError::Protocol`, matching the malformed-parse arm
             // below and the pre-refactor local classifier's contract.
             Ok(Some(reply)) => {
-                return classify_pubsub(reply).map_err(|e| KevyError::Protocol(e.to_string()));
+                return PubsubEvent::try_from(reply)
+                    .map_err(|e| KevyError::Protocol(e.to_string()));
             }
             Ok(None) => {}
             Err(_) => {
