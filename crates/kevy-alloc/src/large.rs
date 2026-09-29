@@ -267,6 +267,7 @@ pub(crate) fn alloc(size: usize, align: usize) -> Option<NonNull<u8>> {
 /// [`alloc`] with every byte zero. A fresh mapping already is, so only a
 /// parked one — written by its previous owner — is cleared; writing zeroes
 /// over a fresh mapping would fault in every page of it.
+#[cfg(feature = "global")]
 pub(crate) fn alloc_zeroed(size: usize, align: usize) -> Option<NonNull<u8>> {
     let (p, fresh) = alloc_tracked(size, align)?;
     if !fresh {
