@@ -16,6 +16,27 @@
 //! start. AOFs are not rewritten — each new snapshot is its shard's full
 //! state and a fresh (empty) log opens on bring-up; the old logs live on in
 //! the `.premigration.<stamp>` backups.
+//!
+//! ```
+//! use kevy_persist::reshard::{StdLayout, commit_reshard, merge_sources, recover_journal};
+//! use kevy_persist::{Routing, ShardsMeta, layout, save_snapshot};
+//! use kevy_store::{SetCondition, Store};
+//!
+//! let dir = kevy_tmpdir::unique_dir("reshard-doc");
+//! for i in 0..2 {
+//!     let mut shard = Store::new();
+//!     shard.set(format!("k{i}").as_bytes(), b"v".to_vec(), None, SetCondition::Always);
+//!     save_snapshot(&shard, &layout::snapshot_path(&dir, i))?;
+//! }
+//! recover_journal(&dir, &StdLayout)?; // startup: finish any interrupted reshard first
+//! // two shards become one
+//! let mut merged = Store::new();
+//! merge_sources(&dir, 2, &StdLayout, &mut merged, |_, _| {})?;
+//! commit_reshard(&dir, 2, ShardsMeta::new(1, Routing::KevyHash), &[merged], &StdLayout)?;
+//! assert_eq!(layout::infer_files_n(&dir), 1);
+//! # std::fs::remove_dir_all(&dir)?;
+//! # Ok::<(), std::io::Error>(())
+//! ```
 
 // Best-effort removal, on paths where the file is being abandoned.
 // A file that will not delete is a stray the next sweep collects,
@@ -40,14 +61,62 @@ use std::path::{Path, PathBuf};
 /// arguments (recovery re-derives every path from them after a crash), and
 /// must give distinct shards of one layout distinct paths (two shards
 /// sharing a file would overwrite each other's snapshot at commit).
+///
+/// ```
+/// use kevy_persist::reshard::{ShardLayout, recover_journal};
+/// use std::path::{Path, PathBuf};
+///
+/// // one shard keeps the host's own file names; more use the standard ones
+/// struct Named;
+/// impl ShardLayout for Named {
+///     fn snapshot_path(&self, dir: &Path, i: usize, n: usize) -> PathBuf {
+///         if n == 1 { dir.join("app.rdb") } else { kevy_persist::layout::snapshot_path(dir, i) }
+///     }
+///     fn aof_path(&self, dir: &Path, i: usize, n: usize) -> PathBuf {
+///         if n == 1 { dir.join("app.aof") } else { kevy_persist::layout::aof_path(dir, i) }
+///     }
+/// }
+/// let dir = kevy_tmpdir::unique_dir("shard-layout-doc");
+/// assert_eq!(Named.aof_path(&dir, 0, 1), dir.join("app.aof"));
+/// recover_journal(&dir, &Named)?; // no journal: nothing to roll forward
+/// # std::fs::remove_dir_all(&dir)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub trait ShardLayout {
     /// Shard `i`'s snapshot path under an `n`-shard layout.
+    ///
+    /// ```
+    /// use kevy_persist::reshard::{ShardLayout, StdLayout};
+    /// use std::path::Path;
+    ///
+    /// let p = StdLayout.snapshot_path(Path::new("/data"), 1, 4);
+    /// assert_eq!(p, Path::new("/data/dump-1.rdb"));
+    /// ```
     fn snapshot_path(&self, dir: &Path, i: usize, n: usize) -> PathBuf;
     /// Shard `i`'s AOF path under an `n`-shard layout.
+    ///
+    /// ```
+    /// use kevy_persist::reshard::{ShardLayout, StdLayout};
+    /// use std::path::Path;
+    ///
+    /// let p = StdLayout.aof_path(Path::new("/data"), 1, 4);
+    /// assert_eq!(p, Path::new("/data/aof-1.aof"));
+    /// ```
     fn aof_path(&self, dir: &Path, i: usize, n: usize) -> PathBuf;
 }
 
 /// The standard per-shard file names, for every shard count.
+///
+/// ```
+/// use kevy_persist::layout;
+/// use kevy_persist::reshard::{ShardLayout, StdLayout};
+/// use std::path::Path;
+///
+/// let dir = Path::new("/data");
+/// // the same names whatever the shard count
+/// assert_eq!(StdLayout.aof_path(dir, 0, 1), layout::aof_path(dir, 0));
+/// assert_eq!(StdLayout.aof_path(dir, 0, 8), layout::aof_path(dir, 0));
+/// ```
 #[derive(Debug)]
 pub struct StdLayout;
 
@@ -74,6 +143,25 @@ fn reshard_tmp(target: &Path) -> PathBuf {
 /// load directly, AOF frames go through `replay` (the caller applies them
 /// with its own command set). Returns the source paths found — they stay in
 /// place; `commit_reshard` backs them up.
+///
+/// ```
+/// use kevy_persist::reshard::{StdLayout, commit_reshard, merge_sources};
+/// use kevy_persist::{Routing, ShardsMeta, layout, save_snapshot};
+/// use kevy_store::{SetCondition, Store};
+///
+/// let dir = kevy_tmpdir::unique_dir("merge-doc");
+/// for (i, key) in [b"a", b"b"].into_iter().enumerate() {
+///     let mut shard = Store::new();
+///     shard.set(key, b"v".to_vec(), None, SetCondition::Always);
+///     save_snapshot(&shard, &layout::snapshot_path(&dir, i))?;
+/// }
+/// let mut temp = Store::new();
+/// let sources = merge_sources(&dir, 2, &StdLayout, &mut temp, |_, _| {})?;
+/// assert_eq!(sources.len(), 2);
+/// assert_eq!(temp.dbsize(), 2);
+/// # std::fs::remove_dir_all(&dir)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub fn merge_sources<L: ShardLayout>(
     dir: &Path,
     src_n: usize,
@@ -102,6 +190,28 @@ pub fn merge_sources<L: ShardLayout>(
 /// finalize — back every `prev_n`-layout source up as
 /// `.premigration.<stamp>`, move the temps into place, record the layout,
 /// drop the journal. Returns the backup stamp.
+///
+/// ```
+/// use kevy_persist::reshard::{StdLayout, commit_reshard, merge_sources};
+/// use kevy_persist::{Routing, ShardsMeta, layout, save_snapshot};
+/// use kevy_store::{SetCondition, Store};
+///
+/// let dir = kevy_tmpdir::unique_dir("commit-doc");
+/// for (i, key) in [b"a", b"b"].into_iter().enumerate() {
+///     let mut shard = Store::new();
+///     shard.set(key, b"v".to_vec(), None, SetCondition::Always);
+///     save_snapshot(&shard, &layout::snapshot_path(&dir, i))?;
+/// }
+/// let mut temp = Store::new();
+/// merge_sources(&dir, 2, &StdLayout, &mut temp, |_, _| {})?;
+/// let target = ShardsMeta::new(1, Routing::KevyHash);
+/// let stamp = commit_reshard(&dir, 2, target, &[temp], &StdLayout)?;
+/// assert_eq!(ShardsMeta::read(&layout::shards_meta_path(&dir)), Some(target));
+/// let backup = format!("dump-1.rdb.premigration.{stamp}");
+/// assert!(dir.join(backup).exists(), "the old layout is kept aside");
+/// # std::fs::remove_dir_all(&dir)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub fn commit_reshard<L: ShardLayout>(
     dir: &Path,
     prev_n: usize,
@@ -188,6 +298,18 @@ fn rename_to_backup(src: &Path, stamp: u128) -> io::Result<()> {
 /// commit point was never reached: the old layout is fully intact, so the
 /// torn journal (and any `.reshard` temps, cleaned by the next
 /// `commit_reshard`) is safely discarded.
+///
+/// ```
+/// use kevy_persist::reshard::{StdLayout, recover_journal};
+///
+/// let dir = kevy_tmpdir::unique_dir("recover-doc");
+/// // a crash mid-journal-write leaves a torn journal: the commit never happened
+/// std::fs::write(dir.join("reshard.journal"), "kevy-resh")?;
+/// recover_journal(&dir, &StdLayout)?;
+/// assert!(!dir.join("reshard.journal").exists());
+/// # std::fs::remove_dir_all(&dir)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub fn recover_journal<L: ShardLayout>(dir: &Path, lay: &L) -> io::Result<()> {
     let path = dir.join(JOURNAL);
     let body = match std::fs::read_to_string(&path) {

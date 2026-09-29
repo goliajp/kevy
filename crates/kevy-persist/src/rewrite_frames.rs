@@ -22,6 +22,23 @@ use crate::rewrite_fmt::write_value_as_commands;
 /// shard, and reproducing the per-type mapping there would be a second
 /// implementation of the one thing `BGREWRITEAOF` already has to get
 /// right for every `Value` variant, TTL and stream shape.
+///
+/// ```
+/// use kevy_persist::SnapshotSource;
+/// use kevy_store::{SetCondition, Store};
+/// use std::time::Duration;
+///
+/// let mut store = Store::new();
+/// store.set(b"k", b"v".to_vec(), Some(Duration::from_secs(60)), SetCondition::Always);
+/// let mut frames = Vec::new();
+/// store.for_each_entry(|key, value, ttl| frames = kevy_persist::value_as_v1_frames(key, value, ttl));
+/// // SET, then the deadline as an absolute PEXPIREAT
+/// let (set, used) = kevy_resp::parse_command(&frames)?.ok_or("incomplete")?;
+/// assert_eq!(set, vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()]);
+/// let (ttl, _) = kevy_resp::parse_command(&frames[used..])?.ok_or("incomplete")?;
+/// assert_eq!(&ttl[0], b"PEXPIREAT");
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn value_as_v1_frames(key: &[u8], value: &Value, ttl_ms: Option<u64>) -> Vec<u8> {
     let mut buf = Vec::new();
     let mut scratch = Vec::new();

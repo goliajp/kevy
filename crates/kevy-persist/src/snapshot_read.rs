@@ -52,6 +52,17 @@ pub fn read_snapshot_cursor(path: &Path) -> io::Result<Option<FeedPosition>> {
 
 /// Load a snapshot from `path` into `store` (entries are inserted, not cleared
 /// first — call on a fresh store). Errors on a bad magic/version or truncation.
+///
+/// ```
+/// let dir = kevy_tmpdir::unique_dir("load-doc");
+/// let path = dir.join("dump.rdb");
+/// std::fs::write(&path, b"not a snapshot")?;
+/// let mut store = kevy_store::Store::new();
+/// let err = kevy_persist::load_snapshot(&mut store, &path).unwrap_err();
+/// assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+/// # std::fs::remove_dir_all(&dir)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub fn load_snapshot(store: &mut Store, path: &Path) -> io::Result<()> {
     let r = BufReader::new(File::open(path)?);
     load_snapshot_from(store, r)
@@ -63,6 +74,19 @@ pub fn load_snapshot(store: &mut Store, path: &Path) -> io::Result<()> {
 /// apply a primary-shipped snapshot to a fresh local store without
 /// touching disk. Entries are inserted, not cleared first — call on
 /// a fresh store. Errors on bad magic/version or truncation.
+///
+/// ```
+/// use kevy_store::{SetCondition, Store};
+///
+/// let mut primary = Store::new();
+/// primary.set(b"k", b"v".to_vec(), None, SetCondition::Always);
+/// let mut shipped = Vec::new();
+/// kevy_persist::write_snapshot_to(&primary, &mut shipped)?;
+/// let mut replica = Store::new();
+/// kevy_persist::load_snapshot_from(&mut replica, std::io::Cursor::new(shipped))?;
+/// assert_eq!(replica.get(b"k").ok().flatten().as_deref(), Some(&b"v"[..]));
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub fn load_snapshot_from<R: Read>(store: &mut Store, r: R) -> io::Result<()> {
     load_snapshot_filtered(store, r, |_| true)
 }
@@ -72,6 +96,22 @@ pub fn load_snapshot_from<R: Read>(store: &mut Store, r: R) -> io::Result<()> {
 /// parsed to stay in frame). The single-source replica path broadcasts
 /// one snapshot payload to every shard and each loads its own hash
 /// slice — no intermediate store, no re-serialization.
+///
+/// ```
+/// use kevy_store::{SetCondition, Store};
+///
+/// let mut primary = Store::new();
+/// for key in [&b"user:1"[..], b"order:1"] {
+///     primary.set(key, b"v".to_vec(), None, SetCondition::Always);
+/// }
+/// let mut shipped = Vec::new();
+/// kevy_persist::write_snapshot_to(&primary, &mut shipped)?;
+/// // this shard owns only the users
+/// let mut shard = Store::new();
+/// kevy_persist::load_snapshot_filtered(&mut shard, shipped.as_slice(), |k| k.starts_with(b"user:"))?;
+/// assert_eq!(shard.dbsize(), 1);
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub fn load_snapshot_filtered<R: Read>(
     store: &mut Store,
     mut r: R,
