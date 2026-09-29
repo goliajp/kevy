@@ -20,11 +20,24 @@
 //!
 //! Worst case (16 B class) is 4096 slots → 512 B of bitmap; 64 spans of
 //! metadata ≈ 34 KB, comfortably inside the 64 KiB header span.
+//!
+//! ```
+//! use kevy_alloc::pagemap::{pages_of_slot, slots_of_page};
+//! // 416-byte slots: slot 9 straddles pages 0 and 1, so page 1 is
+//! // returnable only once slots 9 through 19 are all free
+//! assert_eq!(pages_of_slot(9, 416), (0, 1));
+//! assert_eq!(slots_of_page(1, 416, 157), (9, 19));
+//! ```
 
 use crate::class::{self, SPAN_BYTES};
 use crate::os::PAGE;
 
 /// 4 KiB pages per 64 KiB span.
+///
+/// ```
+/// use kevy_alloc::{class::SPAN_BYTES, os::PAGE, pagemap::PAGES_PER_SPAN};
+/// assert_eq!(PAGES_PER_SPAN * PAGE, SPAN_BYTES);
+/// ```
 pub const PAGES_PER_SPAN: usize = SPAN_BYTES / PAGE;
 
 /// `discarded` with every page set — a whole span handed back at once,
@@ -45,14 +58,44 @@ pub const PAGES_PER_SPAN: usize = SPAN_BYTES / PAGE;
 pub const ALL_PAGES_DISCARDED: u16 = ((1u32 << PAGES_PER_SPAN) - 1) as u16;
 
 /// Bitmap words: enough for the smallest class (16 B → 4096 slots).
+///
+/// ```
+/// use kevy_alloc::class::{index_of, slots_per_span};
+/// use kevy_alloc::pagemap::BITMAP_WORDS;
+/// // one bit per slot of the smallest class
+/// assert_eq!(BITMAP_WORDS * 64, slots_per_span(index_of(16, 8).unwrap()));
+/// ```
 pub const BITMAP_WORDS: usize = SPAN_BYTES / 16 / 64;
 
 /// No class assigned — the span is free for any class to take.
+///
+/// ```
+/// use kevy_alloc::{class::NCLASSES, pagemap::NO_CLASS};
+/// // never a real class index
+/// assert!(usize::from(NO_CLASS) >= NCLASSES);
+/// ```
 pub const NO_CLASS: u8 = 0xFF;
 
 /// Per-span bookkeeping. Deliberately *not* small: the bitmap is the
 /// price of page-granular reclaim, and it lives in the header span,
 /// which exists to be spent on exactly this.
+///
+/// # Examples
+///
+/// ```
+/// use kevy_alloc::{Heap, class::index_of, segment::{self, NO_CLASS}};
+/// let mut heap = Heap::new(0);
+/// let p = heap.alloc(64, 8).ok_or("no mapping")?;
+/// // SAFETY: `p` is a live small slot, so it lies inside a segment.
+/// let seg = unsafe { segment::segment_of(p).as_ref() };
+/// let span = seg.spans()[segment::span_index_of(p)];
+/// assert_eq!(usize::from(span.class()), index_of(64, 8).ok_or("class")?);
+/// // the last span of a fresh segment has not been given a class yet
+/// assert_eq!(seg.spans()[segment::SPANS_PER_SEGMENT - 1].class(), NO_CLASS);
+/// // SAFETY: `p` came from this heap with this size and alignment.
+/// unsafe { heap.dealloc(p, 64, 8) };
+/// # Ok::<(), &str>(())
+/// ```
 #[derive(Debug, Clone, Copy)]
 pub struct SpanMeta {
     /// Size class this span serves, or [`NO_CLASS`].
@@ -112,17 +155,13 @@ impl SpanMeta {
     /// Size class this span serves, or [`NO_CLASS`].
     ///
     /// ```
-    /// # use kevy_alloc::{Heap, segment};
-    /// let mut heap = Heap::new(0);
-    /// if let Some(p) = heap.alloc(64, 8) {
-    ///     // SAFETY: `p` is a small slot this heap handed out.
-    ///     let seg = unsafe { segment::segment_of(p).as_ref() };
-    ///     let span = &seg.spans()[segment::span_index_of(p)];
-    ///     assert_eq!(usize::from(span.class()), kevy_alloc::class::index_of(64, 8).unwrap());
-    ///     assert!(span.live() >= 1);
-    ///     // SAFETY: allocated just above with this size and alignment.
-    ///     unsafe { heap.dealloc(p, 64, 8) };
-    /// }
+    /// # let mut heap = kevy_alloc::Heap::new(0); let p = heap.alloc(64, 8).ok_or("no mapping")?;
+    /// # let mut span = unsafe { kevy_alloc::segment::segment_of(p).as_ref() }.spans()[63]; // SAFETY: `p` is a live small slot
+    /// assert_eq!(span.class(), kevy_alloc::pagemap::NO_CLASS);
+    /// let c = kevy_alloc::class::index_of(400, 8).ok_or("class")?;
+    /// span.reset(c as u8);
+    /// assert_eq!(usize::from(span.class()), c);
+    /// # Ok::<(), &str>(())
     /// ```
     #[must_use]
     pub fn class(&self) -> u8 {
@@ -132,15 +171,13 @@ impl SpanMeta {
     /// Slots handed out and not yet freed.
     ///
     /// ```
-    /// # use kevy_alloc::{Heap, segment};
-    /// let mut heap = Heap::new(0);
-    /// if let Some(p) = heap.alloc(64, 8) {
-    ///     // SAFETY: `p` is a small slot this heap handed out.
-    ///     let seg = unsafe { segment::segment_of(p).as_ref() };
-    ///     assert!(seg.spans()[segment::span_index_of(p)].live() >= 1);
-    ///     // SAFETY: allocated just above with this size and alignment.
-    ///     unsafe { heap.dealloc(p, 64, 8) };
-    /// }
+    /// # let mut heap = kevy_alloc::Heap::new(0); let p = heap.alloc(64, 8).ok_or("no mapping")?;
+    /// # let mut span = unsafe { kevy_alloc::segment::segment_of(p).as_ref() }.spans()[63]; // SAFETY: `p` is a live small slot
+    /// # span.reset(kevy_alloc::class::index_of(400, 8).ok_or("class")? as u8);
+    /// span.alloc_slot();
+    /// span.alloc_slot();
+    /// assert_eq!(span.live(), 2);
+    /// # Ok::<(), &str>(())
     /// ```
     #[must_use]
     pub fn live(&self) -> u16 {
@@ -151,15 +188,13 @@ impl SpanMeta {
     /// pages were never touched and are not resident.
     ///
     /// ```
-    /// # use kevy_alloc::{Heap, segment};
-    /// let mut heap = Heap::new(0);
-    /// if let Some(p) = heap.alloc(64, 8) {
-    ///     // SAFETY: `p` is a small slot this heap handed out.
-    ///     let seg = unsafe { segment::segment_of(p).as_ref() };
-    ///     assert!(seg.spans()[segment::span_index_of(p)].high_water() >= 1);
-    ///     // SAFETY: allocated just above with this size and alignment.
-    ///     unsafe { heap.dealloc(p, 64, 8) };
-    /// }
+    /// # let mut heap = kevy_alloc::Heap::new(0); let p = heap.alloc(64, 8).ok_or("no mapping")?;
+    /// # let mut span = unsafe { kevy_alloc::segment::segment_of(p).as_ref() }.spans()[63]; // SAFETY: `p` is a live small slot
+    /// # span.reset(kevy_alloc::class::index_of(400, 8).ok_or("class")? as u8);
+    /// let i = span.alloc_slot().ok_or("full")?;
+    /// span.free_slot(i);
+    /// assert_eq!(span.high_water(), 1); // slot 0 was touched once
+    /// # Ok::<(), &str>(())
     /// ```
     #[must_use]
     pub fn high_water(&self) -> u16 {
@@ -169,19 +204,13 @@ impl SpanMeta {
     /// Pages returned to the OS, one bit per page of the span.
     ///
     /// ```
-    /// # use kevy_alloc::{Heap, segment};
-    /// let mut heap = Heap::new(0);
-    /// if let Some(p) = heap.alloc(64, 8) {
-    ///     // SAFETY: `p` is a small slot this heap handed out.
-    ///     let seg = unsafe { segment::segment_of(p).as_ref() };
-    ///     let span = &seg.spans()[segment::span_index_of(p)];
-    ///     // the page holding a live slot is resident
-    ///     let slot = segment::slot_index_of(p, usize::from(span.class()));
-    ///     let (page, _) = kevy_alloc::pagemap::pages_of_slot(slot, 64);
-    ///     assert_eq!(span.discarded() & (1 << page), 0);
-    ///     // SAFETY: allocated just above with this size and alignment.
-    ///     unsafe { heap.dealloc(p, 64, 8) };
-    /// }
+    /// # let mut heap = kevy_alloc::Heap::new(0); let p = heap.alloc(64, 8).ok_or("no mapping")?;
+    /// # let mut span = unsafe { kevy_alloc::segment::segment_of(p).as_ref() }.spans()[63]; // SAFETY: `p` is a live small slot
+    /// # span.reset(kevy_alloc::class::index_of(400, 8).ok_or("class")? as u8);
+    /// span.alloc_slot();
+    /// // page 0 holds a live slot, so it is resident
+    /// assert_eq!(span.discarded() & 1, 0);
+    /// # Ok::<(), &str>(())
     /// ```
     #[must_use]
     pub fn discarded(&self) -> u16 {
@@ -192,15 +221,10 @@ impl SpanMeta {
     /// as opposed to never having been assigned at all.
     ///
     /// ```
-    /// # use kevy_alloc::{Heap, segment};
-    /// let mut heap = Heap::new(0);
-    /// if let Some(p) = heap.alloc(64, 8) {
-    ///     // SAFETY: `p` is a small slot this heap handed out.
-    ///     let seg = unsafe { segment::segment_of(p).as_ref() };
-    ///     assert!(!seg.spans()[segment::span_index_of(p)].retired());
-    ///     // SAFETY: allocated just above with this size and alignment.
-    ///     unsafe { heap.dealloc(p, 64, 8) };
-    /// }
+    /// # let mut heap = kevy_alloc::Heap::new(0); let p = heap.alloc(64, 8).ok_or("no mapping")?;
+    /// # let span = unsafe { kevy_alloc::segment::segment_of(p).as_ref() }.spans()[63]; // SAFETY: `p` is a live small slot
+    /// assert!(!span.retired()); // never assigned, not handed back
+    /// # Ok::<(), &str>(())
     /// ```
     #[must_use]
     pub fn retired(&self) -> bool {
@@ -221,12 +245,32 @@ impl SpanMeta {
 
     /// Assign this span to a class, forgetting everything it held.
     /// Only legal when nothing in it is live.
+    ///
+    /// ```
+    /// # let mut heap = kevy_alloc::Heap::new(0); let p = heap.alloc(64, 8).ok_or("no mapping")?;
+    /// # let mut span = unsafe { kevy_alloc::segment::segment_of(p).as_ref() }.spans()[63]; // SAFETY: `p` is a live small slot
+    /// // `span` is a copy of an unassigned span's bookkeeping
+    /// let c = kevy_alloc::class::index_of(400, 8).ok_or("class")?;
+    /// span.reset(c as u8);
+    /// assert_eq!(usize::from(span.class()), c);
+    /// assert_eq!(span.live(), 0);
+    /// # Ok::<(), &str>(())
+    /// ```
     pub fn reset(&mut self, class: u8) {
         debug_assert_eq!(self.live, 0, "resetting a span with live slots");
         *self = Self { class, ..Self::new() };
     }
 
     /// Slots this span can hold, given its class.
+    ///
+    /// ```
+    /// # let mut heap = kevy_alloc::Heap::new(0); let p = heap.alloc(64, 8).ok_or("no mapping")?;
+    /// # let mut span = unsafe { kevy_alloc::segment::segment_of(p).as_ref() }.spans()[63]; // SAFETY: `p` is a live small slot
+    /// assert_eq!(span.capacity(), 0); // no class yet
+    /// span.reset(kevy_alloc::class::index_of(400, 8).ok_or("class")? as u8);
+    /// assert_eq!(span.capacity(), 65_536 / 416);
+    /// # Ok::<(), &str>(())
+    /// ```
     #[must_use]
     pub fn capacity(&self) -> u32 {
         if self.class == NO_CLASS {
@@ -236,6 +280,16 @@ impl SpanMeta {
     }
 
     /// Take the lowest free slot, or `None` when the span is full.
+    ///
+    /// ```
+    /// # let mut heap = kevy_alloc::Heap::new(0); let p = heap.alloc(64, 8).ok_or("no mapping")?;
+    /// # let mut span = unsafe { kevy_alloc::segment::segment_of(p).as_ref() }.spans()[63]; // SAFETY: `p` is a live small slot
+    /// # span.reset(kevy_alloc::class::index_of(400, 8).ok_or("class")? as u8);
+    /// assert_eq!((span.alloc_slot(), span.alloc_slot()), (Some(0), Some(1)));
+    /// span.free_slot(0);
+    /// assert_eq!(span.alloc_slot(), Some(0)); // lowest free slot first
+    /// # Ok::<(), &str>(())
+    /// ```
     pub fn alloc_slot(&mut self) -> Option<u32> {
         let n = self.capacity();
         let words = (n as usize).div_ceil(64);
@@ -274,6 +328,17 @@ impl SpanMeta {
     /// 64:1. Position-awareness coarsens from bit to word — the claim
     /// still takes the LOWEST holed word, so densification's
     /// lowest-first semantics survive at word granularity.
+    ///
+    /// ```
+    /// # let mut heap = kevy_alloc::Heap::new(0); let p = heap.alloc(64, 8).ok_or("no mapping")?;
+    /// # let mut span = unsafe { kevy_alloc::segment::segment_of(p).as_ref() }.spans()[63]; // SAFETY: `p` is a live small slot
+    /// # span.reset(kevy_alloc::class::index_of(400, 8).ok_or("class")? as u8);
+    /// span.alloc_slot(); // slot 0
+    /// // the rest of word 0 is claimed in one go
+    /// assert_eq!(span.claim_word(), Some((0, !1u64)));
+    /// assert_eq!(span.live(), 64);
+    /// # Ok::<(), &str>(())
+    /// ```
     pub fn claim_word(&mut self) -> Option<(u8, u64)> {
         let n = self.capacity();
         let words = (n as usize).div_ceil(64);
@@ -303,6 +368,17 @@ impl SpanMeta {
     /// (or were handed out and locally freed). The exact inverse of
     /// the claim's marking; the hint walks back so lowest-first
     /// allocation sees the holes again.
+    ///
+    /// ```
+    /// # let mut heap = kevy_alloc::Heap::new(0); let p = heap.alloc(64, 8).ok_or("no mapping")?;
+    /// # let mut span = unsafe { kevy_alloc::segment::segment_of(p).as_ref() }.spans()[63]; // SAFETY: `p` is a live small slot
+    /// # span.reset(kevy_alloc::class::index_of(400, 8).ok_or("class")? as u8);
+    /// let (w, claimed) = span.claim_word().ok_or("full")?;
+    /// span.retire_word(w, claimed & !1); // slot 0 was handed out, the rest were not
+    /// assert_eq!(span.live(), 1);
+    /// assert_eq!(span.alloc_slot(), Some(1));
+    /// # Ok::<(), &str>(())
+    /// ```
     pub fn retire_word(&mut self, w: u8, unused: u64) {
         debug_assert_eq!(
             self.bitmap[w as usize] & unused,
@@ -317,6 +393,17 @@ impl SpanMeta {
     }
 
     /// Mark slot `i` free.
+    ///
+    /// ```
+    /// # let mut heap = kevy_alloc::Heap::new(0); let p = heap.alloc(64, 8).ok_or("no mapping")?;
+    /// # let mut span = unsafe { kevy_alloc::segment::segment_of(p).as_ref() }.spans()[63]; // SAFETY: `p` is a live small slot
+    /// # span.reset(kevy_alloc::class::index_of(400, 8).ok_or("class")? as u8);
+    /// let i = span.alloc_slot().ok_or("full")?;
+    /// span.free_slot(i);
+    /// assert!(!span.is_live(i));
+    /// assert_eq!(span.live(), 0);
+    /// # Ok::<(), &str>(())
+    /// ```
     pub fn free_slot(&mut self, i: u32) {
         let w = (i / 64) as usize;
         let m = 1u64 << (i % 64);
@@ -330,12 +417,33 @@ impl SpanMeta {
 
     /// Whether slot `i` is live (or parked foreign, which pins pages
     /// identically).
+    ///
+    /// ```
+    /// # let mut heap = kevy_alloc::Heap::new(0); let p = heap.alloc(64, 8).ok_or("no mapping")?;
+    /// # let mut span = unsafe { kevy_alloc::segment::segment_of(p).as_ref() }.spans()[63]; // SAFETY: `p` is a live small slot
+    /// # span.reset(kevy_alloc::class::index_of(400, 8).ok_or("class")? as u8);
+    /// let i = span.alloc_slot().ok_or("full")?;
+    /// assert!(span.is_live(i));
+    /// assert!(!span.is_live(i + 1));
+    /// # Ok::<(), &str>(())
+    /// ```
     #[must_use]
     pub fn is_live(&self, i: u32) -> bool {
         self.bitmap[(i / 64) as usize] & (1u64 << (i % 64)) != 0
     }
 
     /// Whether any slot in `first..=last` is live.
+    ///
+    /// ```
+    /// # let mut heap = kevy_alloc::Heap::new(0); let p = heap.alloc(64, 8).ok_or("no mapping")?;
+    /// # let mut span = unsafe { kevy_alloc::segment::segment_of(p).as_ref() }.spans()[63]; // SAFETY: `p` is a live small slot
+    /// # span.reset(kevy_alloc::class::index_of(16, 8).ok_or("class")? as u8);
+    /// (0..=70).for_each(|_| { span.alloc_slot(); });
+    /// (0..70).for_each(|i| span.free_slot(i)); // only slot 70 survives, in word 1
+    /// assert!(span.range_has_live(0, 100));
+    /// assert!(!span.range_has_live(0, 69));
+    /// # Ok::<(), &str>(())
+    /// ```
     #[must_use]
     pub fn range_has_live(&self, first: u32, last: u32) -> bool {
         let (fw, lw) = ((first / 64) as usize, (last / 64) as usize);
@@ -356,6 +464,12 @@ impl SpanMeta {
 }
 
 /// The pages slot `i` of a `slot_size` class overlaps, inclusive.
+///
+/// ```
+/// use kevy_alloc::pagemap::pages_of_slot;
+/// assert_eq!(pages_of_slot(0, 416), (0, 0));
+/// assert_eq!(pages_of_slot(9, 416), (0, 1)); // bytes 3744..4160 cross a page
+/// ```
 #[must_use]
 pub fn pages_of_slot(i: u32, slot_size: usize) -> (usize, usize) {
     let start = i as usize * slot_size;
@@ -365,6 +479,13 @@ pub fn pages_of_slot(i: u32, slot_size: usize) -> (usize, usize) {
 
 /// The slots of a `slot_size` class overlapping page `p`, inclusive,
 /// clamped to `nslots`.
+///
+/// ```
+/// use kevy_alloc::pagemap::slots_of_page;
+/// assert_eq!(slots_of_page(0, 416, 157), (0, 9));
+/// // clamped to the span's slot count at the tail
+/// assert_eq!(slots_of_page(15, 416, 157), (147, 156));
+/// ```
 #[must_use]
 pub fn slots_of_page(p: usize, slot_size: usize, nslots: u32) -> (u32, u32) {
     let first = (p * PAGE / slot_size) as u32;
@@ -373,101 +494,5 @@ pub fn slots_of_page(p: usize, slot_size: usize, nslots: u32) -> (u32, u32) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn meta_for(size: usize) -> SpanMeta {
-        let mut m = SpanMeta::new();
-        m.reset(class::index_of(size, 8).unwrap() as u8);
-        m
-    }
-
-    #[test]
-    fn allocation_is_lowest_first_and_exhausts_exactly() {
-        let mut m = meta_for(8192);
-        let cap = m.capacity();
-        for expect in 0..cap {
-            assert_eq!(m.alloc_slot(), Some(expect), "not lowest-first");
-        }
-        assert_eq!(m.alloc_slot(), None, "over-handed past capacity");
-        assert_eq!(m.live as u32, cap);
-    }
-
-    #[test]
-    fn a_freed_low_slot_is_taken_before_a_higher_hole() {
-        let mut m = meta_for(400);
-        for _ in 0..100 {
-            m.alloc_slot();
-        }
-        m.free_slot(3);
-        m.free_slot(97);
-        assert_eq!(m.alloc_slot(), Some(3), "densification broken");
-        assert_eq!(m.alloc_slot(), Some(97));
-    }
-
-    #[test]
-    fn range_has_live_sees_across_word_boundaries() {
-        let mut m = meta_for(16); // 4096 slots, many words
-        for _ in 0..=130 {
-            m.alloc_slot();
-        }
-        for i in 0..=129 {
-            m.free_slot(i);
-        }
-        // Slot 130 is the only survivor, sitting in word 2.
-        assert!(m.range_has_live(0, 200));
-        assert!(m.range_has_live(130, 130));
-        assert!(!m.range_has_live(0, 129));
-        assert!(!m.range_has_live(131, 300));
-    }
-
-    #[test]
-    fn claim_takes_the_lowest_holed_word_and_retire_reverses_it() {
-        let mut m = meta_for(400); // 157 slots -> 3 words, last partial
-        for _ in 0..64 {
-            m.alloc_slot(); // word 0 full
-        }
-        let (w, mask) = m.claim_word().expect("word 1 has holes");
-        assert_eq!(w, 1, "lowest holed word");
-        assert_eq!(mask, !0u64, "all 64 bits were free");
-        assert_eq!(m.live, 128);
-        // The span-side view: word 1 is now full, allocation skips it.
-        assert_eq!(m.alloc_slot(), Some(128), "next span alloc lands in word 2");
-        m.free_slot(128);
-        // Retire half the claim; those bits become allocatable again.
-        m.retire_word(w, 0xFFFF_FFFF);
-        assert_eq!(m.live, 96);
-        assert_eq!(m.alloc_slot(), Some(64), "retired bit is the lowest hole");
-    }
-
-    #[test]
-    fn claim_respects_the_capacity_edge() {
-        let mut m = meta_for(400); // 157 slots: word 2 has 29 valid bits
-        for _ in 0..128 {
-            m.alloc_slot();
-        }
-        let (w, mask) = m.claim_word().expect("partial last word");
-        assert_eq!(w, 2);
-        assert_eq!(mask.count_ones(), 157 - 128, "only valid bits claimed");
-        assert_eq!(m.claim_word(), None, "span exhausted");
-        assert_eq!(m.live as u32, m.capacity());
-    }
-
-    #[test]
-    fn page_and_slot_maps_are_inverses() {
-        for size in [16usize, 400, 416, 4096, 8192] {
-            let slot = class::size_of(class::index_of(size, 8).unwrap());
-            let n = (SPAN_BYTES / slot) as u32;
-            for p in 0..PAGES_PER_SPAN {
-                let (a, b) = slots_of_page(p, slot, n);
-                for i in a..=b {
-                    let (pa, pb) = pages_of_slot(i, slot);
-                    assert!(
-                        pa <= p && p <= pb,
-                        "slot {i} of {slot}B claims pages {pa}..={pb}, not {p}"
-                    );
-                }
-            }
-        }
-    }
-}
+#[path = "pagemap_tests.rs"]
+mod tests;
