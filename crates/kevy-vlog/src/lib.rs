@@ -276,11 +276,7 @@ impl Vlog {
         // every record, which made encode time flat in input size — an
         // 8-byte value cost more than a 6 KiB one.
         let dict = &self.active().handle.parsed;
-        let frame = if high {
-            kevy_compress::encode_high_with(dict, payload)
-        } else {
-            kevy_compress::encode_with(dict, payload)
-        };
+        let frame = if high { dict.encode_high(payload) } else { dict.encode(payload) };
         let body_len = 4 + key.len() + frame.len();
         let mut body = Vec::with_capacity(body_len);
         body.extend_from_slice(&(key.len() as u32).to_le_bytes());

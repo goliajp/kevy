@@ -25,7 +25,7 @@
 //!   measures held-out values against a trained dictionary — the shape
 //!   `kevy-vlog` produces — and reports, per value:
 //!
-//!   | path | `decode` | [`decode_with`] + [`Dict`] |
+//!   | path | `decode` | [`Dict::decode`] |
 //!   |---|---|---|
 //!   | fast | 0.543 GB/s | **2.079 GB/s** |
 //!   | compaction | 0.045 GB/s | **1.265 GB/s** |
@@ -44,7 +44,7 @@
 //!   time was flat in input size — an 8-byte value cost more than a
 //!   6 KiB one, because almost none of the work was about the value.
 //!
-//!   | path | `encode` | [`encode_with`] + [`Dict`] |
+//!   | path | `encode` | [`Dict::encode`] |
 //!   |---|---|---|
 //!   | fast | 35.2 us/value | **0.47 us** |
 //!   | compaction | 38.4 us/value | **2.86 us** |
@@ -123,7 +123,7 @@ mod dict;
 mod encode;
 mod huff;
 
-pub use dict::{Dict, decode_with, encode_high_with, encode_with};
+pub use dict::Dict;
 
 /// Frame tag: payload is the original bytes verbatim.
 pub const TAG_RAW: u8 = 0;
@@ -180,7 +180,7 @@ fn parse_dict(dict: &[u8]) -> (Option<[u8; 256]>, &[u8]) {
 /// // A frame the decoder cannot trust is refused, not half-decoded.
 /// assert!(decode(b"", b"\x01truncated").is_err());
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Corrupt;
 
 impl core::fmt::Display for Corrupt {
@@ -188,6 +188,8 @@ impl core::fmt::Display for Corrupt {
         f.write_str("kevy-compress: corrupt or truncated frame")
     }
 }
+
+impl core::error::Error for Corrupt {}
 
 /// Close a frame, or throw it away and store the input verbatim.
 ///

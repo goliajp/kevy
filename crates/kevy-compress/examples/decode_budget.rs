@@ -89,7 +89,7 @@ fn main() {
         let mut k = 0;
         let dt_held = time(20_000, || {
             k = (k + 1) % frames.len();
-            kevy_compress::decode_with(&parsed, &frames[k]).expect("round trip")
+            parsed.decode(&frames[k]).expect("round trip")
         });
         let mean_len = orig as f64 / held.len() as f64;
         let gbps = mean_len / dt / 1e9;
@@ -100,9 +100,9 @@ fn main() {
             enc(&dict, &held[j])
         });
         let enc_with: fn(&kevy_compress::Dict, &[u8]) -> Vec<u8> = if name.starts_with("encode ") {
-            kevy_compress::encode_with
+            kevy_compress::Dict::encode
         } else {
-            kevy_compress::encode_high_with
+            kevy_compress::Dict::encode_high
         };
         let mut m = 0;
         let et_held = time(2_000, || {
