@@ -144,7 +144,7 @@ mod enabled {
             peek: bool,
         ) -> Result<Option<&Entry>, StoreError> {
             let (cref, expire) = {
-                let e = self.map.get_mut(key).expect("probed live above");
+                let e = self.map.get_mut_quiet(key).expect("probed live above");
                 let Value::Cold(c) = &mut e.value else { unreachable!("cold checked above") };
                 if !peek {
                     c.touched = 1;

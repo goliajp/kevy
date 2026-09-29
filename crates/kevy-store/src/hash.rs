@@ -73,7 +73,7 @@ impl Store {
     /// sharded. Reweighs the entry (the encoding switch changes the
     /// overhead model).
     fn promote_hash_encoding(&mut self, key: &[u8]) {
-        let Some(e) = self.map.get_mut(key) else { return };
+        let Some(e) = self.map.get_mut_quiet(key) else { return };
         match &mut e.value {
             Value::SmallHashInline(s) => {
                 e.value = Value::Hash(Arc::new(small_hash::promote(s)));
@@ -161,7 +161,7 @@ impl Store {
     /// the mutation makes the general arms right for all of them, and the
     /// table's write hook packs the row again afterwards.
     pub(crate) fn unpack_row(&mut self, key: &[u8]) {
-        let Some(e) = self.map.get_mut(key) else { return };
+        let Some(e) = self.map.get_mut_quiet(key) else { return };
         let Value::PackedRow(r) = &e.value else { return };
         let mut flat = HashData::with_capacity(r.len().max(1));
         for (f, val) in r.fields() {

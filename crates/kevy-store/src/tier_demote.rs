@@ -205,7 +205,7 @@ impl Store {
             return false;
         };
         let key_heap = key_heap_bytes_for(key);
-        let e = self.map.get_mut(key).expect("probed above");
+        let e = self.map.get_mut_quiet(key).expect("probed above");
         let old_w = e.weight();
         let value_w = old_w.saturating_sub(key_heap);
         let stub = ColdRef {
@@ -250,7 +250,7 @@ impl Store {
         }
         let key_heap = key_heap_bytes_for(key);
         let new_w = key_heap + value.weight();
-        let e = self.map.get_mut(key).expect("probed above");
+        let e = self.map.get_mut_quiet(key).expect("probed above");
         e.value = value;
         let delta = new_w as i64 - e.weight() as i64;
         e.set_weight(new_w);
@@ -295,8 +295,10 @@ impl Store {
     /// rewrite, so it never blocks the reactor for a whole-file pass.
     /// Returns records processed (0 = nothing below the live threshold).
     fn tier_compact_step(&mut self, budget: usize) -> usize {
+        // a recorded cold row is read before its record can be moved away
+        self.resolve_cold_rows();
         let Some(t) = self.tier.as_mut() else { return 0 };
-        let mut owner = StoreOwner { map: &mut self.map, renames: &mut t.renames };
+        let mut owner = StoreOwner { map: self.map.quiet_table(), renames: &mut t.renames };
         // An IO error mid-compaction leaves untouched files untouched;
         // surfaced loudly (per-boot spill file — a failure is a bug).
         t.vlog
