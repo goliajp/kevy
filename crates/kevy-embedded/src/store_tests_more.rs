@@ -252,7 +252,7 @@ fn feed_consume_loop_and_prefix() {
 #[test]
 fn feed_flushall_bumps_generation() {
     let s = Store::open(Config::default().with_ttl_reaper_manual().with_feed(0)).unwrap();
-    let crate::FeedPosition { generation: g_before, offset: _, .. } = s.changes_tail().unwrap();
+    let g_before = s.changes_tail().unwrap().generation;
     s.set(b"k", b"v").unwrap();
     s.flushall().unwrap();
     let crate::FeedPosition { generation: g, offset: off, .. } = s.changes_tail().unwrap();
