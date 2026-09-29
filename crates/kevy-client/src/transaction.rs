@@ -69,7 +69,7 @@ impl std::fmt::Debug for Transaction<'_> {
 
 impl Connection {
     /// Start a `MULTI` block. Embedded backend returns
-    /// [`io::ErrorKind::Unsupported`].
+    /// [`KevyError::Unsupported`].
     pub fn multi(&mut self) -> KevyResult<Transaction<'_>> {
         match self {
             Self::Embedded(_) => Err(KevyError::Unsupported(

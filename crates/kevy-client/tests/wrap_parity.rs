@@ -7,7 +7,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use kevy_client::{Connection, HExpireCond, IdxType, Reply, ZAggregate};
+use kevy_client::{Connection, FeedPosition, HExpireCond, IdxType, Reply, ZAggregate};
 
 static START_GATE: Mutex<()> = Mutex::new(());
 
@@ -276,33 +276,33 @@ fn feed_shards_tail_read_round_trip() {
     // nonzero generation (identity, not counter).
     let mut hit = None;
     for sh in 0..NSHARDS {
-        let (generation, off) = c.feed_tail(sh).unwrap();
-        assert_ne!(generation, 0, "fresh dir draws a nonzero generation");
-        if off > 0 {
-            hit = Some((sh, generation, off));
+        let tail = c.feed_tail(sh).unwrap();
+        assert_ne!(tail.generation, 0, "fresh dir draws a nonzero generation");
+        if tail.offset > 0 {
+            hit = Some((sh, tail.generation, tail.offset));
             break;
         }
     }
     let (sh, live_gen, tail_off) = hit.expect("some shard saw writes");
+    let start = FeedPosition::new(live_gen, 0);
 
-    let batch = c.feed_read(sh, live_gen, 0, None, &[]).unwrap();
-    assert_eq!(batch.generation, live_gen);
-    assert_eq!(batch.next_offset, tail_off);
-    assert!(!batch.frames.is_empty());
-    let frame = &batch.frames[0];
+    let batch = c.feed_read(sh, start, None, &[]).unwrap();
+    assert_eq!(batch.next, FeedPosition::new(live_gen, tail_off));
+    assert!(!batch.changes.is_empty());
+    let frame = &batch.changes[0];
     assert!(frame.argv[0].eq_ignore_ascii_case(b"SET"), "argv = {:?}", frame.argv);
     assert!(frame.argv[1].starts_with(b"fk"));
 
     // COUNT clamps the page; the cursor still advances monotonically.
-    let page = c.feed_read(sh, live_gen, 0, Some(1), &[]).unwrap();
-    assert_eq!(page.frames.len(), 1);
-    assert!(page.next_offset <= tail_off);
+    let page = c.feed_read(sh, start, Some(1), &[]).unwrap();
+    assert_eq!(page.changes.len(), 1);
+    assert!(page.next.offset <= tail_off);
 
     // A prefix that matches nothing filters every frame out (SET's
     // key layout is cheap to determine → not fail-open).
-    let none = c.feed_read(sh, live_gen, 0, None, &[b"other:"]).unwrap();
-    assert!(none.frames.is_empty());
-    assert_eq!(none.next_offset, tail_off, "filtering never moves the cursor differently");
+    let none = c.feed_read(sh, start, None, &[b"other:"]).unwrap();
+    assert!(none.changes.is_empty());
+    assert_eq!(none.next.offset, tail_off, "filtering never moves the cursor differently");
 }
 
 // ───────────────────────── pipeline ─────────────────────────
