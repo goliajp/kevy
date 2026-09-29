@@ -72,7 +72,7 @@
 //! # kevy_testnet::assert_listening(port, "the example runtime");
 //!
 //! let mut conn = std::net::TcpStream::connect(("127.0.0.1", port))?;
-//! conn.write_all(b"*2\r\n$3\r\nGET\r\n$1\r\nk\r\n")?;
+//! conn.write_all(b"*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$1\r\nv\r\n")?;
 //! let mut reply = [0; 5];
 //! conn.read_exact(&mut reply)?;
 //! assert_eq!(&reply, b"+OK\r\n");
