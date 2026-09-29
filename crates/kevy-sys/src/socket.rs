@@ -222,7 +222,7 @@ impl AsRawFd for Socket {
 /// Wraps an already-open fd (e.g. one accepted by io_uring) into an owning
 /// `Socket` that closes it on drop.
 ///
-/// ```no_run
+/// ```
 /// use std::os::fd::{FromRawFd, IntoRawFd};
 /// let listener = kevy_sys::Socket::tcp_listen([127, 0, 0, 1], 0, 16)?;
 /// let fd = listener.into_raw_fd();
@@ -332,7 +332,7 @@ impl Socket {
     /// Create a blocking IPv4 TCP listener bound to `ip:port` with `SO_REUSEADDR`.
     /// Pass `port == 0` to let the OS assign an ephemeral port.
     ///
-    /// ```no_run
+    /// ```
     /// let listener = kevy_sys::Socket::tcp_listen([127, 0, 0, 1], 0, 16)?;
     /// assert!(listener.local_port()? > 0);
     /// # Ok::<(), std::io::Error>(())
@@ -344,10 +344,11 @@ impl Socket {
     /// Like [`Socket::tcp_listen`] but also sets `SO_REUSEPORT`, so multiple listeners can
     /// share one port (one per thread-per-core shard).
     ///
-    /// ```no_run
+    /// ```
     /// let a = kevy_sys::Socket::tcp_listen_reuseport([127, 0, 0, 1], 0, 16)?;
+    /// // a second listener on the very same port, as each shard binds its own
     /// let b = kevy_sys::Socket::tcp_listen_reuseport([127, 0, 0, 1], a.local_port()?, 16)?;
-    /// # let _ = b;
+    /// assert_eq!(b.local_port()?, a.local_port()?);
     /// # Ok::<(), std::io::Error>(())
     /// ```
     pub fn tcp_listen_reuseport(ip: [u8; 4], port: u16, backlog: i32) -> io::Result<Socket> {
@@ -359,9 +360,13 @@ impl Socket {
     /// option). UDS bypasses the TCP stack — useful when client+server are on
     /// the same host and the TCP loopback round-trip is the bench-shape floor.
     ///
-    /// ```no_run
-    /// let listener = kevy_sys::Socket::unix_listen(b"/tmp/kevy.sock", 128)?;
-    /// # let _ = listener;
+    /// ```
+    /// use std::os::unix::ffi::OsStrExt;
+    /// let path = std::env::temp_dir().join(format!("kevy-{}.sock", std::process::id()));
+    /// let listener = kevy_sys::Socket::unix_listen(path.as_os_str().as_bytes(), 128)?;
+    /// let _client = std::os::unix::net::UnixStream::connect(&path)?;
+    /// assert!(listener.accept().is_ok());
+    /// std::fs::remove_file(&path)?;
     /// # Ok::<(), std::io::Error>(())
     /// ```
     pub fn unix_listen(path: &[u8], backlog: i32) -> io::Result<Socket> {
