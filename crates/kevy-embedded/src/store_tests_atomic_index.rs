@@ -88,26 +88,35 @@ fn atomic_all_shards_query_returns_the_key() {
 }
 
 #[test]
-fn atomic_all_shards_index_read_does_not_see_its_own_writes() {
+fn atomic_all_shards_index_read_sees_its_own_writes() {
     let s = with_email_index();
-    // Documented limit: index maintenance runs at commit, so a row
-    // written earlier in the same closure is not yet indexed. A caller
-    // inserting two rows has to compare them to each other directly.
+    // a closure inserting a row can check the next one against it
     s.atomic_all_shards(|c| {
         let e = eq("brand-new@example.com");
         assert_eq!(c.idx_count(b"email_idx", &e, &e).unwrap(), 0);
         c.hset(b"user:brand-new", &[(b"email", b"brand-new@example.com")])?;
-        assert_eq!(
-            c.idx_count(b"email_idx", &e, &e).unwrap(),
-            0,
-            "own write must not be visible to the index read yet"
-        );
+        assert_eq!(c.idx_count(b"email_idx", &e, &e).unwrap(), 1, "own write is indexed");
         Ok::<_, crate::KevyError>(())
     })
     .unwrap();
-    // ...but it is indexed once the transaction commits.
     let e = eq("brand-new@example.com");
     assert_eq!(s.idx_count(b"email_idx", &e, &e).unwrap(), 1);
+}
+
+#[test]
+fn a_rolled_back_write_leaves_the_index_as_it_was() {
+    let s = with_email_index();
+    let e = eq("gone@example.com");
+    let r = s.atomic_all_shards(|c| {
+        c.hset(b"user:gone", &[(b"email", b"gone@example.com")])?;
+        c.hset(b"user:42", &[(b"email", b"gone@example.com")])?;
+        assert_eq!(c.idx_count(b"email_idx", &e, &e).unwrap(), 2);
+        Err::<(), _>(crate::KevyError::InvalidInput("abort".into()))
+    });
+    assert!(r.is_err());
+    assert_eq!(s.idx_count(b"email_idx", &e, &e).unwrap(), 0, "rolled back");
+    let back = eq("u42@example.com");
+    assert_eq!(s.idx_count(b"email_idx", &back, &back).unwrap(), 1, "the old value is back");
 }
 
 #[test]

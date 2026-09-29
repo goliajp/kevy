@@ -207,7 +207,7 @@ fn a_repacked_build_keeps_every_row() {
         s.apply(
             format!("user:{i}").as_bytes(),
             None,
-            Some(i64::from(i * 7919 % 1000)).map(IndexValue::I64),
+            Some(IndexValue::I64(i64::from(i * 7919 % 1000))),
         );
     }
     assert_eq!(s.range(&i(0), &i(1000), None, usize::MAX).0.len(), 8000);

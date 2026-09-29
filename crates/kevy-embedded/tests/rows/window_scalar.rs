@@ -95,13 +95,15 @@ fn embedded_window_slides_and_stays_semantically_equivalent() {
         std::thread::sleep(Duration::from_millis(25));
     }
 
-    // Memory really shrank: the windowed index's hot tree holds only
-    // the in-window entries, the control still holds all 30.
+    // The windowed index's hot tree holds only the in-window entries, the
+    // control still holds all 30. Bytes are whole leaves and 30 rows fit in
+    // one, so here they can only tie; a cut freeing whole leaves is
+    // asserted where the tree lives
     let ev = s.idx_stats(b"ev.at").expect("stats ev");
     let ctl = s.idx_stats(b"ctl.at").expect("stats ctl");
     assert_eq!(ctl.entries, 30);
     assert!(ev.entries < 30, "nothing left the hot tree: {}", ev.entries);
-    assert!(ev.approx_bytes < ctl.approx_bytes);
+    assert!(ev.approx_bytes <= ctl.approx_bytes);
 
     let compare = |tag: &str| {
         for (lo, hi) in [(-1000, 1000), (0, 100), (150, 250), (200, 300), (400, 500), (50, 50)] {

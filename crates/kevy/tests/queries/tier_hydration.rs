@@ -247,7 +247,10 @@ fn cold_table_digest_backfill_and_hydration_match_the_hot_twin() {
         0,
         "neither backfill nor hydration may promote"
     );
-    assert_eq!(info_gauge(&mut cc, "cold_keys"), cold_keys, "rows stay cold");
+    // the new index joins the budget's floor, which can demote a row more;
+    // none may come back
+    let now_cold = common::at_rest("cold_keys", || info_gauge(&mut cc, "cold_keys"));
+    assert!(now_cold >= cold_keys, "rows stay cold: {now_cold} of {cold_keys}");
 
     // Phase E — ONE measured query on the ready index: reply
     // byte-identical to the hot twin; one read per cold ROW (the page

@@ -400,9 +400,13 @@ fn writes_no_hook_names_still_keep_the_index_honest() {
     let r = cmd(&mut c, &[b"IDX.QUERY", b"w_vals", b"RANGE", b"0", b"99", b"LIMIT", b"50"]);
     assert!(!String::from_utf8_lossy(&r).contains("w:1\r"), "w:1 lost its indexed field");
 
-    // a script that writes a row it was not handed as a key
-    let script = b"redis.call('HSET', KEYS[1], 'age', '70'); redis.call('HSET', 'w:3', 'age', '71'); return 1";
-    ok(&mut c, &[b"EVAL", script, b"1", b"w:2"], "EVAL");
+    // a script that writes a row it was not handed as a key; one hashtag
+    // keeps both rows on the script's shard
+    for key in [&b"w:{s}2"[..], b"w:{s}3"] {
+        ok(&mut c, &[b"HSET", key, b"age", b"40", b"team", b"red"], "HSET seed");
+    }
+    let script = b"redis.call('HSET', KEYS[1], 'age', '70'); redis.call('HSET', 'w:{s}3', 'age', '71'); return 1";
+    ok(&mut c, &[b"EVAL", script, b"1", b"w:{s}2"], "EVAL");
     clean(&mut c, "EVAL writing a row outside KEYS");
 
     // a transaction
