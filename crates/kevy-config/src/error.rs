@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 
 /// Reasons `Config::load` / `from_toml_str` can fail.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum ConfigError {
     /// File could not be opened or read.

@@ -42,7 +42,7 @@ pub struct MigrationTable {
 }
 
 /// Why [`MigrationTable::start`] refused.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum MigrationError {
     /// A migration for this prefix is already in flight (idempotent

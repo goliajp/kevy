@@ -118,7 +118,7 @@ impl IoUringSqe {
 /// assert!(t.tv_nsec < 1_000_000_000, "the remainder never carries a second");
 /// ```
 #[repr(C)]
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct KernelTimespec {
     /// Whole seconds of the (relative) timeout.
     pub tv_sec: i64,

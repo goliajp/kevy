@@ -6,7 +6,7 @@
 use crate::{Routing, Scope};
 
 /// Reasons [`OwnershipTable::new`] can refuse a list of scopes.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum OwnershipError {
     /// Two scopes share an identical prefix — ambiguous ownership.

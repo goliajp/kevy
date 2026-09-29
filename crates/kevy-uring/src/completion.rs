@@ -8,7 +8,7 @@ use crate::ffi::{
 /// the submission with, and `res` (bytes transferred / accepted fd when ≥ 0,
 /// else `-errno`).
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub struct Completion {
     /// The `user_data` tag the submission carried.
     pub user_data: u64,
