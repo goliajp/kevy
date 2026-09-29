@@ -14,18 +14,18 @@
   row for an `i64` index once packed (a build and `IDX.REBUILD` pack it)
   and 23–25 after random writes; 25–40 with two `VALUES`; 21–40 for an
   `ORDERPATH`. Measured against the previous structure on one arm64 box,
-  alternating builds, three rounds each: inserts 37–77% faster, value
+  alternating builds, three rounds each: inserts 41–77% faster, value
   changes 47–65%, `IDX.COUNT` O(log n) instead of a walk (a count over 1%
-  of the rows 99.7% faster), `FILTER` / `SORT` / `DISTINCT` / `FACET` 54–81%,
-  range pages 30–41%, window cuts 58–86%. Two operations got slower, and
+  of the rows 99.7% faster), `FILTER` / `SORT` / `DISTINCT` / `FACET` 55–81%,
+  range pages 32–41%, window cuts 58–87%. Two operations got slower, and
   neither serves a query any more: finding one given `(value, key)` —
   1.1–1.5 µs against 0.4–0.5 µs, the price of holding no map from key
   back to entry — which a backfill does per row (still 14% faster in all
   with the cheaper insert) and `COMPOSE AND` now does only against an
   index with a window; and walking every entry, 38–68 ns a row against
   23, which `VERIFY` does beside a row read and an allocation per entry.
-  A scan from a cursor over string or `ORDERPATH` values is 2% slower,
-  within the scan's cursor decode. `IDX.LIST`'s `bytes` reports what the
+  A scan of 50 entries from a cursor over string or `ORDERPATH` values
+  is 2% slower. `IDX.LIST`'s `bytes` reports what the
   leaves hold. A global index keeps no per-row placement table on the
   row's shard any more: a write names the old value, which names the
   partition. docs/indexes.md has the per-row formula.
