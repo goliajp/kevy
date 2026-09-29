@@ -105,7 +105,15 @@ done
 #    only the index one, so table-catalog.meta walked straight past it
 #    the same afternoon. Same mistake as the shapes list above, one
 #    hour later.
+#
+#    A git worktree parked inside this one is another checkout: its files
+#    are that tree's business, and its running tests would be billed here.
+nested=()
+while read -r wt; do
+    case $wt in "$PWD"/*) nested+=(-path "./${wt#"$PWD"/}" -prune -o) ;; esac
+done < <(git worktree list --porcelain | sed -n 's/^worktree //p')
 elsewhere=$(find . -path ./target -prune -o -path ./.git -prune -o \
+    ${nested[@]+"${nested[@]}"} \
     \( -name '*-catalog.meta' -o -name 'shards.meta' -o -name 'aof-*.aof' \
        -o -name 'dump-*.rdb' -o -name 'feed-*.gen' -o -name 'feed-*.meta' \) \
     -print 2>/dev/null || true)
