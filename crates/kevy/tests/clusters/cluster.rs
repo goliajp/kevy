@@ -89,15 +89,7 @@ impl Server {
         let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let port = free_port_block(if cluster { nshards } else { 0 });
         let cluster_base = port + 1;
-        let dir = dir.unwrap_or_else(|| {
-            std::env::temp_dir().join(format!(
-                "kevy-cluster-{}",
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_nanos()
-            ))
-        });
+        let dir = dir.unwrap_or_else(|| kevy_tmpdir::unique_dir("cluster"));
         std::fs::create_dir_all(&dir).unwrap();
         // The CLUSTER command surface reads the state's config; build one
         // matching this server so SLOTS / INFO report the real topology.

@@ -25,11 +25,7 @@ impl Server {
         // server takes it, and under a parallel run something else can be in that
         // gap. free_port hands out from a block this process owns alone.
         let port = kevy_testnet::free_port();
-        let dir = std::env::temp_dir().join(format!(
-            "kevy-describe-e2e-{}",
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = kevy_tmpdir::unique_dir("describe-e2e");
         let stop = Arc::new(AtomicBool::new(false));
         let (stop_thread, dir_thread) = (stop.clone(), dir.clone());
         let handle = std::thread::spawn(move || {

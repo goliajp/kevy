@@ -242,11 +242,7 @@ fn aof_open_truncates_crash_zero_tail_so_reopen_appends_survive() {
 }
 
 pub(crate) fn temp_aof(name: &str) -> std::path::PathBuf {
-    let mut p = std::env::temp_dir();
-    let uniq =
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    p.push(format!("kevy-{name}-{uniq}.aof"));
-    p
+    crate::tests::unique_file(name, "aof")
 }
 
 // ---- snapshot feed-cursor header -------------------------------------------
