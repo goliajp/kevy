@@ -97,17 +97,14 @@ fn expire<A: ArgvView + ?Sized>(
         encode_error(out, ERR_NOT_INT);
         return Effect::Unchanged;
     };
-    if store.exists(&[&args[1]]) == 0 {
-        encode_integer(out, 0);
-        return Effect::Unchanged;
-    }
-    if n <= 0 {
-        store.del(&[&args[1]]);
-        encode_integer(out, 1);
-        return Effect::Write;
-    }
-    let ms = n.saturating_mul(unit_ms) as u64;
-    let set = store.expire(&args[1], Duration::from_millis(ms));
+    // the probe that writes also decides existence: a separate check reads
+    // the cached clock while the write reads a fresh one, so a key lapsed
+    // between the two would be answered as present yet written as absent
+    let set = if n <= 0 {
+        store.del(&[&args[1]]) == 1
+    } else {
+        store.expire(&args[1], Duration::from_millis(n.saturating_mul(unit_ms) as u64))
+    };
     encode_integer(out, i64::from(set));
     changed(set)
 }
@@ -129,10 +126,6 @@ fn expireat<A: ArgvView + ?Sized>(
         encode_error(out, ERR_NOT_INT);
         return Effect::Unchanged;
     };
-    if store.exists(&[&args[1]]) == 0 {
-        encode_integer(out, 0);
-        return Effect::Unchanged;
-    }
     let deadline_ms = n.saturating_mul(unit_ms).max(0) as u64;
     let set = store.expire_at_unix_ms(&args[1], deadline_ms);
     encode_integer(out, i64::from(set));

@@ -106,3 +106,36 @@ fn spop_is_recorded_as_what_it_removed() {
     assert_eq!(effect, Some(Effect::Record(vec![b"SREM".to_vec(), b"s".to_vec(), b"a".to_vec()])));
     assert_eq!(run(&mut s, "SRANDMEMBER s").0, Some(Effect::Read));
 }
+
+/// A store serving from a cached clock (as the server's shards do) whose
+/// cache is older than a key's deadline: the key is past its deadline by
+/// the fresh clock but not yet by the cached one.
+fn stale_clock_store_with_lapsed_key() -> Store {
+    let mut s = Store::new();
+    s.set_cached_clock(true);
+    s.refresh_clock();
+    run(&mut s, "SET k v PX 20");
+    std::thread::sleep(std::time::Duration::from_millis(60));
+    s
+}
+
+/// EXPIRE decides whether the key exists with the same probe that writes
+/// it, so a key lapsed between two clocks gets one answer, not two: a
+/// non-positive TTL and a positive one both find it gone.
+#[test]
+fn expire_decides_existence_with_the_probe_that_writes() {
+    let lapsed =
+        ["EXPIRE k 0", "PEXPIRE k -1", "EXPIRE k 100", "PEXPIREAT k 1", "EXPIREAT k 99999999999"];
+    for cmd in lapsed {
+        let mut s = stale_clock_store_with_lapsed_key();
+        assert_eq!(run(&mut s, cmd), (Some(Effect::Unchanged), b":0\r\n".to_vec()), "{cmd}");
+        assert_eq!(s.dbsize(), 0, "{cmd}");
+    }
+    let mut s = Store::new();
+    run(&mut s, "SET k v");
+    assert_eq!(run(&mut s, "EXPIRE k 0"), (Some(Effect::Write), b":1\r\n".to_vec()));
+    assert_eq!(run(&mut s, "EXPIRE k 0"), (Some(Effect::Unchanged), b":0\r\n".to_vec()));
+    run(&mut s, "SET k v");
+    assert_eq!(run(&mut s, "PEXPIREAT k 1"), (Some(Effect::Write), b":1\r\n".to_vec()));
+    assert_eq!(s.dbsize(), 0);
+}
