@@ -28,12 +28,13 @@ impl<C: Commands> Shard<C> {
         // is_write each scanned the verb separately). KevyCommands overrides
         // resolve() with a single match; non-overriding impls still pay 4×.
         let resolved = self.commands.resolve(args);
-        // One conns probe serves the whole pre-dispatch phase — the MULTI
+        // One conns lookup serves the whole pre-dispatch phase — the MULTI
         // check, the per-cmd proto capture, and (for the dispatching hot
-        // arms) the seq assignment. These were three separate map probes
-        // per command (in_multi here + next_seq_for + start_single's proto
-        // read).
-        let Some(c) = self.conns.get_mut(&conn_id) else { return };
+        // arms) the seq assignment.
+        let Some(c) = crate::conn::conn_at(&mut self.conns, &mut self.conn_slot_hint, conn_id)
+        else {
+            return;
+        };
         let in_multi = c.multi.is_some();
         let proto = c.proto;
         let cluster_conn = c.cluster;
@@ -96,7 +97,7 @@ impl<C: Commands> Shard<C> {
         // One client command at the dispatch boundary (before fan-out, so a
         // multi-key command counts once) — INFO's total_commands_processed.
         self.commands.on_command();
-        let ResolvedCmd { route, is_quit, is_write, block_hint, wake_idx, .. } = resolved;
+        let ResolvedCmd { route, is_quit, is_write, block_hint, wake_idx, verb, .. } = resolved;
         // Role-gated write rejection (read-only replica).
         // `seq` is already assigned by handle_command — resolve it
         // directly (immediate_reply would double-assign and wedge the
@@ -144,7 +145,7 @@ impl<C: Commands> Shard<C> {
                 self.start_repl_barrier(conn_id, seq, offsets, timeout_ms, miss);
             }
             Route::Local => {
-                let meta = DispatchMeta { is_write, wake_idx, key_idx: None };
+                let meta = DispatchMeta { is_write, wake_idx, key_idx: None, verb };
                 self.start_single(conn_id, seq, proto, args, self.id, is_quit, block_hint, meta);
             }
             Route::Single(idx) => {
@@ -167,7 +168,7 @@ impl<C: Commands> Shard<C> {
                 }
                 // Keyed routes put the key at argv[1] (or argv[2] for
                 // XGROUP/XINFO) — well inside u8.
-                let meta = DispatchMeta { is_write, wake_idx, key_idx: Some(idx as u8) };
+                let meta = DispatchMeta { is_write, wake_idx, key_idx: Some(idx as u8), verb };
                 self.start_single(conn_id, seq, proto, args, shard, is_quit, block_hint, meta);
             }
             // Cluster conns get `-CROSSSLOT` on cross-slot multi-key
@@ -219,7 +220,7 @@ impl<C: Commands> Shard<C> {
         agg: Agg,
         is_quit: bool,
     ) {
-        if let Some(c) = self.conns.get_mut(&conn_id) {
+        if let Some(c) = crate::conn::conn_at(&mut self.conns, &mut self.conn_slot_hint, conn_id) {
             let proto = c.proto;
             c.pending.push_back(PendingSlot { remaining, agg, done: None, proto });
         }
@@ -287,12 +288,12 @@ impl<C: Commands> Shard<C> {
         while mask != 0 {
             let s = mask.trailing_zeros() as usize;
             mask &= mask - 1;
-            if s == self.id || self.request_batch[s].is_empty() {
+            if s == self.id || self.request_batch[s].reqs.is_empty() {
                 continue;
             }
-            let reqs = std::mem::take(&mut self.request_batch[s]);
+            let (reqs, spare) = self.request_batch[s].take();
             self.xshard_inflight += reqs.len() as u64;
-            self.send_to(s, Inbound::RequestBatch { origin: self.id, reqs });
+            self.send_to(s, Inbound::RequestBatch { origin: self.id, reqs, spare });
         }
     }
 

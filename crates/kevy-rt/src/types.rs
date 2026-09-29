@@ -87,6 +87,17 @@ pub struct ResolvedCmd {
     /// assert_eq!(lpush.wake_idx, Some(1));
     /// ```
     pub wake_idx: Option<u8>,
+    /// The implementation's own id for the verb, handed back to
+    /// [`Commands::dispatch_verb_into`] on the shard that executes it.
+    ///
+    /// [`Commands::dispatch_verb_into`]: crate::Commands::dispatch_verb_into
+    ///
+    /// ```
+    /// use kevy_rt::{ResolvedCmd, Route, VerbId};
+    /// let get = ResolvedCmd::new(Route::Single(1)).with_verb(VerbId::new(1));
+    /// assert_eq!(get.verb, VerbId::new(1));
+    /// ```
+    pub verb: crate::VerbId,
 }
 
 impl ResolvedCmd {
@@ -108,6 +119,7 @@ impl ResolvedCmd {
             is_write: false,
             block_hint: BlockHint::None,
             wake_idx: None,
+            verb: crate::VerbId::UNKNOWN,
         }
     }
 
@@ -177,6 +189,20 @@ impl ResolvedCmd {
     #[must_use]
     pub fn with_wake_idx(mut self, wake_idx: Option<u8>) -> Self {
         self.wake_idx = wake_idx;
+        self
+    }
+
+    /// Set [`Self::verb`].
+    ///
+    /// ```
+    /// use kevy_rt::{ResolvedCmd, Route, VerbId};
+    /// let set = ResolvedCmd::new(Route::Single(1)).with_verb(VerbId::new(2));
+    /// assert_eq!(set.verb.get(), 2);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn with_verb(mut self, verb: crate::VerbId) -> Self {
+        self.verb = verb;
         self
     }
 }

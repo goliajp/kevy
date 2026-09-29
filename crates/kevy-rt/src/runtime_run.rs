@@ -323,6 +323,7 @@ impl<C: Commands> Runtime<C> {
                 backlog: (0..n).map(|_| VecDeque::new()).collect(),
                 wakers: shared.wakers.clone(),
                 conns: KevyMap::new(),
+                conn_slot_hint: 0,
                 arm_pending: Vec::new(),
                 closing_uring_conns: Vec::new(),
                 fd_to_conn: KevyMap::new(),
@@ -381,7 +382,7 @@ impl<C: Commands> Runtime<C> {
                 psub_local: HashMap::new(),
                 subs_by_channel: HashMap::new(),
                 publish_batch: (0..n).map(|_| Vec::new()).collect(),
-                request_batch: (0..n).map(|_| Vec::new()).collect(),
+                request_batch: (0..n).map(|_| Default::default()).collect(),
                 // Seed from the live config at construction, not default():
                 // these flags were otherwise blind until the first 100 ms
                 // shard tick, so a write landing before that never fired

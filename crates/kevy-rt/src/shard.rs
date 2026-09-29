@@ -14,9 +14,10 @@
 
 use crate::Commands;
 use crate::NotificationFlags;
+use crate::batch_lane::BatchLane;
 use crate::blocked::BlockedClients;
 use crate::conn::Conn;
-use crate::message::{Inbound, PubMsg, PubSubPatternReg, PubSubReg, ReqBatch};
+use crate::message::{Inbound, PubMsg, PubSubPatternReg, PubSubReg};
 use crate::park_fence::ParkFlag;
 use kevy_map::KevyMap;
 use kevy_persist::Aof;
@@ -75,10 +76,12 @@ pub(crate) struct Shard<C: Commands> {
     /// re-pushed (in order) by `flush_backlog` once the peer drains.
     pub(crate) backlog: Vec<VecDeque<Inbound>>,
     pub(crate) wakers: Vec<Arc<Waker>>,
-    // Fx-hashed: these are looked up per command (`conns` twice — start_command
-    // + fold) and per event; std's SipHash on the u64/i32 keys profiled at ~17%
+    // Fx-hashed: looked up per event, and per command through
+    // `conn_slot_hint`; std's SipHash on the u64/i32 keys profiled at ~17%
     // of single-shard CPU, the dominant non-command-CPU cost.
     pub(crate) conns: KevyMap<u64, Conn>,
+    /// Slot of the conn looked up last, for [`crate::conn::conn_at`].
+    pub(crate) conn_slot_hint: usize,
     /// Per-iter "needs arm work" queue
     /// for the io_uring reactor. Populated by:
     ///   - accept handler (new conn, needs recv arm)
@@ -308,7 +311,7 @@ pub(crate) struct Shard<C: Commands> {
     /// (`flush_requests`) so a -c50 flood costs one cross-core send per shard,
     /// not one per command — amortizing the ring/fold tax that drags many
     /// shards below single-shard throughput.
-    pub(crate) request_batch: Vec<ReqBatch>,
+    pub(crate) request_batch: Vec<BatchLane>,
     /// Per-shard cached `notify_keyspace_events` flags — hot-reloaded
     /// off the [`crate::Commands::live_runtime_config`] tick. Empty
     /// (default) = OFF: every write checks `notify_flags.is_active()`

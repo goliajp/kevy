@@ -26,6 +26,20 @@ pub trait Commands: Clone + Send + 'static {
     ) {
         self.dispatch_into(store, args, out);
     }
+    #[doc = include_str!("commands_docs/dispatch_verb_into.md")]
+    fn dispatch_verb_into<A: ArgvView + ?Sized>(
+        &self,
+        store: &mut Store,
+        args: &A,
+        _verb: crate::VerbId,
+        proto: RespVersion,
+        out: &mut Vec<u8>,
+    ) {
+        match proto {
+            RespVersion::V2 => self.dispatch_into(store, args, out),
+            RespVersion::V3 => self.dispatch_into_resp3(store, args, out),
+        }
+    }
     #[doc = include_str!("commands_docs/notify_class.md")]
     fn notify_class<A: ArgvView + ?Sized>(&self, _args: &A) -> Option<NotifyKind> {
         None
@@ -235,6 +249,7 @@ pub trait Commands: Clone + Send + 'static {
             is_write: self.is_write(args),
             block_hint: self.block_hint(args),
             wake_idx: None,
+            verb: crate::VerbId::UNKNOWN,
         }
     }
 }

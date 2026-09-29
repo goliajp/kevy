@@ -16,7 +16,9 @@ impl<C: Commands> Shard<C> {
     // (Agg, Part) pairing + the finalize dispatch over orchestrator aggs.
     pub(crate) fn fold(&mut self, conn_id: u64, seq: u64, part: Part) {
         let watch_agg: Option<Agg> = {
-            let Some(conn) = self.conns.get_mut(&conn_id) else {
+            let Some(conn) =
+                crate::conn::conn_at(&mut self.conns, &mut self.conn_slot_hint, conn_id)
+            else {
                 return;
             };
             if seq < conn.next_emit {
