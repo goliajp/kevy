@@ -18,6 +18,28 @@ mod kq {
 }
 
 /// Edge/level-readiness poller. macOS: kqueue. Linux: epoll. Same API on both.
+///
+/// # Examples
+///
+/// ```
+/// use kevy_sys::{Interest, Poller, Socket};
+///
+/// let listener = Socket::tcp_listen([127, 0, 0, 1], 0, 16)?;
+/// listener.set_nonblocking()?;
+/// let poller = Poller::new()?;
+/// poller.add(listener.raw(), Interest::READ)?;
+///
+/// let mut events = Vec::new();
+/// assert_eq!(poller.wait(&mut events, Some(10))?, 0); // nobody has connected
+///
+/// let _client = std::net::TcpStream::connect(("127.0.0.1", listener.local_port()?))?;
+/// poller.wait(&mut events, Some(2000))?;
+/// assert!(events.iter().any(|ev| ev.fd == listener.raw() && ev.readable));
+/// let _conn = listener.accept()?;
+///
+/// poller.delete(listener.raw())?; // stop watching before the fd closes
+/// # Ok::<(), std::io::Error>(())
+/// ```
 #[derive(Debug)]
 pub struct Poller {
     kq: c_int,

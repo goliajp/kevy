@@ -4,13 +4,44 @@ use crate::ffi;
 use core::ffi::c_int;
 
 /// `SIGTERM` constant.
+///
+/// # Examples
+///
+/// ```
+/// // the number `kill <pid>` sends when no signal is named
+/// assert_eq!(kevy_sys::SIGTERM, 15);
+/// ```
 pub const SIGTERM: c_int = 15;
 /// `SIGINT` constant (Ctrl-C).
+///
+/// # Examples
+///
+/// ```
+/// // what a terminal sends the foreground process on Ctrl-C
+/// assert_eq!(kevy_sys::SIGINT, 2);
+/// ```
 pub const SIGINT: c_int = 2;
 /// `SIGXFSZ` constant (write would exceed `RLIMIT_FSIZE`).
 /// Default action is `Core` — installing a handler prevents the
 /// kernel from dumping core and lets kevy exit gracefully on
 /// disk-full / fsize-limit conditions.
+///
+/// # Examples
+///
+/// ```
+/// use core::ffi::c_int;
+/// use std::sync::atomic::{AtomicBool, Ordering};
+///
+/// static OVER_LIMIT: AtomicBool = AtomicBool::new(false);
+/// extern "C" fn on_xfsz(_: c_int) {
+///     OVER_LIMIT.store(true, Ordering::Relaxed);
+/// }
+/// assert_eq!(kevy_sys::SIGXFSZ, 25);
+/// // with a handler in place an oversized write fails with EFBIG instead
+/// // of killing the process
+/// kevy_sys::install_signal_handler(kevy_sys::SIGXFSZ, on_xfsz);
+/// assert!(!OVER_LIMIT.load(Ordering::Relaxed));
+/// ```
 pub const SIGXFSZ: c_int = 25;
 
 /// Install a C-style handler for `signum`, a wrapper around `signal(2)`.
@@ -38,6 +69,32 @@ pub const SIGXFSZ: c_int = 25;
 /// `SIG_ERR`, which is what installing on `SIGKILL` or `SIGSTOP` gives
 /// — is silent. Reporting it needs a return type, which is the same
 /// breaking change.
+///
+/// # Examples
+///
+/// ```
+/// use core::ffi::c_int;
+/// use std::sync::atomic::{AtomicBool, Ordering};
+/// use std::time::{Duration, Instant};
+///
+/// static STOP: AtomicBool = AtomicBool::new(false);
+/// // async-signal-safe: one atomic store, nothing else
+/// extern "C" fn on_term(_: c_int) {
+///     STOP.store(true, Ordering::Relaxed);
+/// }
+/// kevy_sys::install_signal_handler(kevy_sys::SIGTERM, on_term);
+///
+/// // deliver SIGTERM to this process; the handler runs instead of the
+/// // default action (terminate), and the loop below sees the flag
+/// let pid = std::process::id().to_string();
+/// std::process::Command::new("kill").args(["-TERM", &pid]).status()?;
+/// let deadline = Instant::now() + Duration::from_secs(5);
+/// while !STOP.load(Ordering::Relaxed) && Instant::now() < deadline {
+///     std::thread::sleep(Duration::from_millis(1));
+/// }
+/// assert!(STOP.load(Ordering::Relaxed));
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub fn install_signal_handler(signum: c_int, handler: extern "C" fn(c_int)) {
     // SAFETY: `signum` is an int and `handler` is a live `extern "C"` fn
     // pointer with the signature `signal(2)` expects, so the call itself

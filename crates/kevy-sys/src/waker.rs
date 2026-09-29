@@ -11,6 +11,28 @@ use std::io;
 /// from another thread. Register `read_fd()` in the poller for
 /// read-readiness; call `wake()` from any thread to make the poll return;
 /// call `drain()` when the read end fires.
+///
+/// # Examples
+///
+/// ```
+/// use std::sync::Arc;
+/// use kevy_sys::{Interest, Poller, Waker};
+///
+/// let waker = Arc::new(Waker::new()?);
+/// let poller = Poller::new()?;
+/// poller.add(waker.read_fd(), Interest::READ)?;
+///
+/// let remote = Arc::clone(&waker);
+/// let t = std::thread::spawn(move || remote.wake());
+/// let mut events = Vec::new();
+/// poller.wait(&mut events, None)?; // blocks until the other thread wakes it
+/// assert!(events.iter().any(|ev| ev.fd == waker.read_fd()));
+/// t.join().unwrap()?;
+///
+/// waker.drain(); // consumed: the next wait times out empty
+/// assert_eq!(poller.wait(&mut events, Some(20))?, 0);
+/// # Ok::<(), std::io::Error>(())
+/// ```
 #[derive(Debug)]
 pub struct Waker {
     read_fd: c_int,
