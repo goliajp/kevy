@@ -43,7 +43,11 @@
   AOF, so after a restart the popped elements were back in the list;
   since 1.18.0, which introduced replication, they never reached a
   replica either. This held both for a pop that found data at once and
-  for a waiter a later push served. A blocking pop that found data at
+  for a waiter a later push served, and a waiter of `BZPOPMIN` (since
+  1.27.3), `BRPOPLPUSH` (since 1.27.7) or `XREADGROUP … BLOCK` (since
+  1.4.0) that a later write served was not recorded either: after a
+  restart, or on a replica, the element was back in its source and the
+  group read had left nothing pending. A blocking pop that found data at
   once (`BZPOPMIN` and `BRPOPLPUSH` included) did not invalidate a
   `WATCH` on the key. Since 1.18.0 a read-only replica ran all four
   commands against its own keyspace and let it drift from the primary. The server now takes its write classification from the same
