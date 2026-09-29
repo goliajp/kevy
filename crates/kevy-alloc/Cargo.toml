@@ -30,3 +30,7 @@ global = []
 [[test]]
 name = "global_alloc"
 required-features = ["global"]
+
+[[test]]
+name = "alloc_zeroed"
+required-features = ["global"]
