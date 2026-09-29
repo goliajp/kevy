@@ -281,7 +281,8 @@ mod tests {
         let off = s.push_mutation(&a);
         let frame = s.buf.front().expect("one frame");
         assert_eq!(frame.offset, off);
-        let (decoded_off, decoded_argv, used) = decode_frame(&frame.bytes).expect("decode");
+        let (crate::replica::DecodedFrame { offset: decoded_off, argv: decoded_argv }, used) =
+            decode_frame(&frame.bytes).expect("decode");
         assert_eq!(decoded_off, off);
         assert_eq!(decoded_argv, a);
         assert_eq!(used, frame.bytes.len());
@@ -390,7 +391,7 @@ mod tests {
         assert_eq!(off, 0);
 
         let frame = s.buf.front().expect("one frame");
-        let (decoded_off, decoded_argv, _) =
+        let (crate::replica::DecodedFrame { offset: decoded_off, argv: decoded_argv }, _) =
             crate::wire::decode_frame(&frame.bytes).expect("decode");
         assert_eq!(decoded_off, 0);
         assert_eq!(decoded_argv, argv(&[b"SET", b"foo", b"bar"]));

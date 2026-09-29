@@ -171,7 +171,10 @@ fn writer_refuses_a_replica_it_does_not_list() {
 fn plaintext_replica_cannot_subscribe_to_a_secure_writer() {
     let (writer, addr) = open_writer(Some(LinkKeys { local: key(1), peers: vec![] }));
     writer.set(b"k", MARKER).unwrap();
-    let r = ReplicaClient::connect_with_timeout(addr.as_str(), "plain", 0, Duration::from_secs(1));
+    let r = ReplicaClient::connect_with(
+        addr.as_str(),
+        &kevy_replicate::replica::ConnectOptions::new("plain").with_timeout(Duration::from_secs(1)),
+    );
     assert!(r.is_err());
 }
 

@@ -53,6 +53,7 @@
 pub mod feed;
 pub mod handshake;
 pub mod replica;
+mod replica_connect;
 mod replica_decode;
 mod replica_error;
 mod replica_secure;
@@ -73,6 +74,7 @@ const _: () = {
     send_sync::<replica::ReplicaClient>();
     send_sync::<replica::ReplicaError>();
     send_sync::<replica::ReplicaSecurity>();
+    send_sync::<replica::ConnectOptions>();
     send_sync::<slot::ReplicaSlot>();
     send_sync::<slot::SlotTable>();
     send_sync::<source::Frame>();

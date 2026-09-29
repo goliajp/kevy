@@ -9,6 +9,7 @@
 //! [`parse_command_into`] reconstructs the same [`Argv`] the primary
 //! applied.
 
+use crate::replica::DecodedFrame;
 use kevy_resp::{Argv, ArgvView, ProtocolError, parse_command_into};
 
 // Snapshot ship helpers live in [`crate::wire_snapshot`] (split out
@@ -109,12 +110,11 @@ pub fn encode_frame<A: ArgvView + ?Sized>(offset: u64, argv: &A) -> Vec<u8> {
 
 /// Decode the first complete frame at the front of `buf`.
 ///
-/// Returns `(offset, argv, used)` on success; `used` is the number of
-/// bytes the frame consumed (advance the caller's read cursor by that
-/// much). On [`WireError::Truncated`], the caller should read more
+/// Returns the frame and the number of bytes it consumed (advance the
+/// caller's read cursor by that much). On [`WireError::Truncated`], the caller should read more
 /// bytes and retry; any other error signals an unrecoverable peer
 /// violation.
-pub fn decode_frame(buf: &[u8]) -> Result<(u64, Argv, usize), WireError> {
+pub fn decode_frame(buf: &[u8]) -> Result<(DecodedFrame, usize), WireError> {
     // Outer envelope: must be exactly `*2\r\n`.
     let after_env = parse_envelope_header(buf)?;
     // Offset line: `:<u64>\r\n`.
@@ -127,7 +127,7 @@ pub fn decode_frame(buf: &[u8]) -> Result<(u64, Argv, usize), WireError> {
         Ok(None) => return Err(WireError::Truncated),
         Err(e) => return Err(WireError::BadPayload(e)),
     };
-    Ok((offset, argv, after_offset + consumed_inner))
+    Ok((DecodedFrame { offset, argv }, after_offset + consumed_inner))
 }
 
 /// Verify the outer `*2\r\n` header and return the cursor position just
@@ -272,7 +272,7 @@ mod tests {
     fn roundtrip_simple_set() {
         let argv = argv_from(&[b"SET", b"foo", b"bar"]);
         let bytes = encode_frame(42, &argv);
-        let (offset, decoded, used) = decode_frame(&bytes).expect("decode");
+        let (DecodedFrame { offset, argv: decoded }, used) = decode_frame(&bytes).expect("decode");
         assert_eq!(offset, 42);
         assert_eq!(decoded, argv);
         assert_eq!(used, bytes.len());
@@ -285,7 +285,7 @@ mod tests {
         for offset in [0u64, 1, i64::MAX as u64] {
             let argv = argv_from(&[b"PING"]);
             let bytes = encode_frame(offset, &argv);
-            let (back, _, _) = decode_frame(&bytes).expect("decode");
+            let (DecodedFrame { offset: back, .. }, _) = decode_frame(&bytes).expect("decode");
             assert_eq!(back, offset);
         }
     }
@@ -306,7 +306,7 @@ mod tests {
         let bin: Vec<u8> = (0u8..=255).collect();
         let argv = argv_from(&[b"HSET", b"key", b"field", &bin, b""]);
         let bytes = encode_frame(7, &argv);
-        let (_, decoded, _) = decode_frame(&bytes).expect("decode");
+        let (DecodedFrame { argv: decoded, .. }, _) = decode_frame(&bytes).expect("decode");
         assert_eq!(decoded.len(), 5);
         assert_eq!(decoded.get(3), Some(bin.as_slice()));
         assert_eq!(decoded.get(4), Some(&b""[..]));
@@ -319,12 +319,14 @@ mod tests {
         let mut buf = a.clone();
         buf.extend_from_slice(&b);
 
-        let (off1, argv1, used1) = decode_frame(&buf).expect("frame 1");
+        let (DecodedFrame { offset: off1, argv: argv1 }, used1) =
+            decode_frame(&buf).expect("frame 1");
         assert_eq!(off1, 1);
         assert_eq!(argv1, argv_from(&[b"SET", b"k", b"a"]));
         assert_eq!(used1, a.len());
 
-        let (off2, argv2, used2) = decode_frame(&buf[used1..]).expect("frame 2");
+        let (DecodedFrame { offset: off2, argv: argv2 }, used2) =
+            decode_frame(&buf[used1..]).expect("frame 2");
         assert_eq!(off2, 2);
         assert_eq!(argv2, argv_from(&[b"DEL", b"k"]));
         assert_eq!(used1 + used2, buf.len());
@@ -339,7 +341,7 @@ mod tests {
         let mut pos = 0;
         let mut last: Option<u64> = None;
         while pos < bytes.len() {
-            let (offset, _, used) = decode_frame(&bytes[pos..]).expect("decode");
+            let (DecodedFrame { offset, .. }, used) = decode_frame(&bytes[pos..]).expect("decode");
             if let Some(prev) = last {
                 assert!(offset > prev, "offset {offset} not > prev {prev}");
             }

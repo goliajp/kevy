@@ -1,4 +1,4 @@
-//! Fuzz `kevy_persist::read_shards_meta` on arbitrary file bytes.
+//! Fuzz `kevy_persist::ShardsMeta::read` on arbitrary file bytes.
 //!
 //! `shards.meta` is a trust boundary: bring-up parses whatever is on disk
 //! (possibly written by an older/newer kevy, an embedded-store v1 layout,
@@ -6,8 +6,8 @@
 //! Invariants asserted across arbitrary inputs:
 //!
 //!   * never panics, terminates promptly
-//!   * any successfully parsed meta round-trips: write_shards_meta then
-//!     read_shards_meta returns the identical value (parse/print fixpoint,
+//!   * any successfully parsed meta round-trips: `ShardsMeta::write` then
+//!     `ShardsMeta::read` returns the identical value (parse/print fixpoint,
 //!     so a reshard decision is stable across restarts)
 
 #![no_main]

@@ -147,17 +147,17 @@ impl ClientNoise {
 }
 
 impl ReplicaClient {
-    /// [`Self::connect_at`] over a Noise IK link: the primary must present
-    /// `security.primary_key`, and it sees this replica's key before it
-    /// answers. Everything after the handshake is encrypted.
-    pub fn connect_secure<A: std::net::ToSocketAddrs>(
+    /// The Noise IK half of [`Self::connect_with`]: the primary must
+    /// present `security.primary_key`, and it sees this replica's key
+    /// before it answers. Everything after the handshake is encrypted.
+    pub(crate) fn connect_noise<A: std::net::ToSocketAddrs>(
         addr: A,
-        replica_id: &str,
-        generation: u64,
-        from_offset: u64,
-        connect_timeout: std::time::Duration,
+        opts: &crate::replica::ConnectOptions,
         security: &ReplicaSecurity,
     ) -> Result<Self, ReplicaError> {
+        let (generation, from_offset, connect_timeout) =
+            (opts.generation, opts.from_offset, opts.timeout);
+        let replica_id = opts.replica_id.as_str();
         let mut sock = connect_stream(addr, connect_timeout)?;
         sock.set_read_timeout(Some(connect_timeout))?;
         let mut noise = handshake(&mut sock, security)?;

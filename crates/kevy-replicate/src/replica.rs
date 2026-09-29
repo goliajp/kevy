@@ -36,6 +36,7 @@ use kevy_resp::Argv;
 use std::io::{self, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 
+pub use crate::replica_connect::ConnectOptions;
 pub use crate::replica_secure::ReplicaSecurity;
 use std::time::Duration;
 
@@ -147,43 +148,27 @@ impl ReplicaClient {
     /// Connect to `addr` with no continuity claim (generation 0),
     /// send `REPLICATE FROM 0 <from_offset> ID <replica_id>`, read
     /// the `+ACK <gen> <offset>` reply, and return a ready-to-iterate
-    /// client. Blocks until the handshake completes or the connect
-    /// times out. Callers resuming with data from a prior session
-    /// must use [`Self::connect_at`] and present that data's
-    /// generation — a gen-0 claim with a nonzero offset makes the
-    /// primary ship a snapshot rather than risk offset aliasing.
+    /// client. Blocks until the handshake completes or 5 s pass.
+    /// Callers resuming with data from a prior session must use
+    /// [`Self::connect_with`] and present that data's generation — a
+    /// gen-0 claim with a nonzero offset makes the primary ship a
+    /// snapshot rather than risk offset aliasing.
     pub fn connect<A: ToSocketAddrs>(
         addr: A,
         replica_id: &str,
         from_offset: u64,
     ) -> Result<Self, ReplicaError> {
-        Self::connect_at(addr, replica_id, 0, from_offset, Duration::from_secs(5))
+        Self::connect_with(addr, &ConnectOptions::new(replica_id).with_from_offset(from_offset))
     }
 
-    /// [`Self::connect`] with an explicit connect timeout. Useful for
-    /// tests that don't want to wait the default 5 s when a port is
-    /// closed.
-    pub fn connect_with_timeout<A: ToSocketAddrs>(
+    /// The plaintext half of [`Self::connect_with`].
+    pub(crate) fn connect_plain<A: ToSocketAddrs>(
         addr: A,
-        replica_id: &str,
-        from_offset: u64,
-        connect_timeout: Duration,
+        opts: &ConnectOptions,
     ) -> Result<Self, ReplicaError> {
-        Self::connect_at(addr, replica_id, 0, from_offset, connect_timeout)
-    }
-
-    /// Full-form connect: present `generation` (the feed generation
-    /// this replica's data reflects; `0` = unknown / fresh) alongside
-    /// `from_offset`. The generation is what makes a resume claim
-    /// safe — the primary only serves `from_offset` continuity when
-    /// the generations match; otherwise it ships a snapshot.
-    pub fn connect_at<A: ToSocketAddrs>(
-        addr: A,
-        replica_id: &str,
-        generation: u64,
-        from_offset: u64,
-        connect_timeout: Duration,
-    ) -> Result<Self, ReplicaError> {
+        let (generation, from_offset, connect_timeout) =
+            (opts.generation, opts.from_offset, opts.timeout);
+        let replica_id = opts.replica_id.as_str();
         let mut sock = connect_stream(addr, connect_timeout)?;
 
         // Send the handshake. `encode_replicate_from` is a private
@@ -321,7 +306,7 @@ pub(crate) fn connect_stream<A: ToSocketAddrs>(
 
 /// Compose a `REPLICATE FROM <gen> <offset> ID <id>` RESP2
 /// multi-bulk request — symmetric to
-/// `handshake::parse_replicate_from` on the primary side.
+/// `HandshakeReq::parse` on the primary side.
 pub(crate) fn encode_replicate_from(
     generation: u64,
     from_offset: u64,
@@ -417,7 +402,7 @@ mod tests {
         let consumed =
             kevy_resp::parse_command_into(&bytes, &mut argv).expect("parse ok").expect("complete");
         assert_eq!(consumed, bytes.len());
-        let req = crate::handshake::parse_replicate_from(&argv).expect("handshake ok");
+        let req = crate::handshake::HandshakeReq::parse(&argv).expect("handshake ok");
         assert_eq!(req.generation, 3);
         assert_eq!(req.from_offset, 42);
         assert_eq!(req.replica_id, "replica-a");
