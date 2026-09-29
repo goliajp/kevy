@@ -230,6 +230,10 @@ TABLE.DECLARE user PREFIX user: PK id COLUMN id i64 COLUMN age i64 INDEX age ran
   heap figure, by up to about half for short keys and string values.
   `IDX.LIST` and `IDX.VERIFY` report the heap figure;
   `bench/idxgate.sh` checks it against the server's measured RSS.
+- An index that declares `VALUES` stores them per row beside that: a
+  copy of the key, 32 bytes per declared value (and the heap of any value
+  longer than 23 bytes), and 47–94 bytes of its own hash-table slot, so
+  add `avg_key_len + 32 × values + 47…94` per row. `bytes` includes it.
 
 ## Aggregate kind (`KIND agg`) — write-time GROUP BY
 

@@ -81,11 +81,15 @@ pub(crate) struct RowValues {
     /// was ~50 ms on the reactor at 10M rows — `Segment::stats()` (hence
     /// the tiering reserved-floor feed) reads it every 100 ms tick.
     heap: u64,
+    /// The most rows the table has held. It never shrinks, so this sizes
+    /// its buckets; `capacity()` would depend on where the seeded hash put
+    /// the removals' tombstones.
+    peak: usize,
 }
 
 impl RowValues {
     pub(crate) fn new(n: usize) -> Self {
-        Self { n, rows: HashMap::new(), heap: 0 }
+        Self { n, rows: HashMap::new(), heap: 0, peak: 0 }
     }
 
     /// Store `key`'s values. A shorter slice than the declared arity
@@ -101,6 +105,7 @@ impl RowValues {
         if let Some(old) = self.rows.insert(key.to_vec(), slots) {
             self.heap = self.heap.saturating_sub(row_bytes(key.len(), &old));
         }
+        self.peak = self.peak.max(self.rows.len());
     }
 
     /// Forget `key`'s values — the withdrawal counterpart of
@@ -122,11 +127,19 @@ impl RowValues {
     }
 
     /// Approximate heap bytes — the stored-value term of the memory
-    /// formula (slot arrays + key copies + spilled values). O(1): the
-    /// running total is maintained by `set`/`clear`.
+    /// formula (the table's own slots, slot arrays, key copies, spilled
+    /// values). O(1): the running total is maintained by `set`/`clear`,
+    /// and the table's size follows from the most rows it has held.
     pub(crate) fn approx_bytes(&self) -> u64 {
-        self.heap
+        self.heap + table_bytes(self.peak)
     }
+}
+
+/// Bytes of the table's one allocation once it has held `peak` rows: a
+/// bucket is one `(key, slots)` pair and one control byte.
+fn table_bytes(peak: usize) -> u64 {
+    let slot = std::mem::size_of::<(Vec<u8>, Box<[Val]>)>();
+    (crate::segment_entry::table_buckets(peak) * (slot + 1)) as u64
 }
 
 #[cfg(test)]
@@ -186,10 +199,15 @@ mod tests {
         rv.set(b"ccc", &[Some(b"1"), Some(b"2")]);
         rv.clear(b"bb");
         rv.clear(b"missing"); // no-op must not perturb the total
-        assert_eq!(rv.approx_bytes(), recompute(&rv), "counter drifted from truth");
+        assert_eq!(rv.heap, recompute(&rv), "counter drifted from truth");
         rv.clear(b"a");
         rv.clear(b"ccc");
-        assert_eq!(rv.approx_bytes(), recompute(&rv));
-        assert_eq!(rv.approx_bytes(), 0, "an empty side-channel costs nothing");
+        assert_eq!(rv.heap, recompute(&rv));
+        assert_eq!(rv.heap, 0, "no row is left holding anything");
+        assert_eq!(
+            rv.approx_bytes(),
+            table_bytes(rv.peak),
+            "the emptied table keeps its buckets, and they are still counted"
+        );
     }
 }

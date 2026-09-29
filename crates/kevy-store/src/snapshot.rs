@@ -106,7 +106,7 @@ impl SnapshotView {
                 .expect("segrows: pinned segment read failed — refused, not healed")
                 .expect("segrows: stub points at a record the segment does not hold");
             return Some(
-                crate::tier_codec::decode(c.type_tag, payload)
+                crate::tier_codec::decode(c.type_tag, payload, &[])
                     .expect("segrows: cold row decode failed — process bug"),
             );
         }
@@ -119,7 +119,7 @@ impl SnapshotView {
             .read(c.vref())
             .expect("tier: pinned vlog read failed — per-boot spill file, this is a process bug");
         Some(
-            crate::tier_codec::decode(c.type_tag, payload)
+            crate::tier_codec::decode(c.type_tag, payload, &[])
                 .expect("tier: cold record decode failed — process bug"),
         )
     }

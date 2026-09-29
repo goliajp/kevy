@@ -802,6 +802,20 @@ fn c6_index_only_queries_touch_zero_cold_rows() {
     assert!(preads <= returned, "one read per ROW at most: {preads} for {returned} rows");
     assert!(preads > 0, "a mostly-cold page must have paid some reads");
     assert_eq!(post[1], 0, "hydration is not an access signal");
+
+    // The declaration also started packing the rows that were already
+    // there. It must have left the cold ones alone: a client's first read
+    // of a cold row is still a first touch, served without promoting.
+    for i in 0..60u32 {
+        let key = format!("row:{i:02}");
+        let fields = bulks(&cmd(&mut c, &[b"HGETALL", key.as_bytes()]));
+        assert_eq!(fields.len(), 8, "HGETALL {key}");
+    }
+    assert_eq!(
+        common::at_rest("promotions_total", || info_gauge(&mut c, "promotions_total")),
+        0,
+        "one read of each row promoted some: the declaration had already touched them"
+    );
 }
 
 /// D2 proper (tablegate L7): a FULLY-cold table — budget crushed to 1 byte

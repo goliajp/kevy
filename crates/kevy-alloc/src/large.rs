@@ -261,17 +261,35 @@ pub fn large_stats() -> Stats {
 /// exactly the right length is waiting. `None` when the OS refuses or
 /// the alignment is stricter than a fresh mapping provides.
 pub(crate) fn alloc(size: usize, align: usize) -> Option<NonNull<u8>> {
+    alloc_tracked(size, align).map(|(p, _)| p)
+}
+
+/// [`alloc`] with every byte zero. A fresh mapping already is, so only a
+/// parked one — written by its previous owner — is cleared; writing zeroes
+/// over a fresh mapping would fault in every page of it.
+#[cfg(feature = "global")]
+pub(crate) fn alloc_zeroed(size: usize, align: usize) -> Option<NonNull<u8>> {
+    let (p, fresh) = alloc_tracked(size, align)?;
+    if !fresh {
+        // SAFETY: the block was just handed out and is `size` bytes long.
+        unsafe { core::ptr::write_bytes(p.as_ptr(), 0, size) };
+    }
+    Some(p)
+}
+
+/// The block and whether it is a fresh mapping (rather than a parked one).
+fn alloc_tracked(size: usize, align: usize) -> Option<(NonNull<u8>, bool)> {
     if align > os::PAGE {
         return None;
     }
     let mapped = os::round_up(size, os::PAGE);
     if let Some(p) = pool_take(mapped) {
         counters::add_live_only(mapped as u64, size as u64);
-        return Some(p);
+        return Some((p, false));
     }
     let p = os::map_aligned(mapped, os::PAGE)?;
     counters::add(mapped as u64, size as u64);
-    Some(p)
+    Some((p, true))
 }
 
 /// # Safety

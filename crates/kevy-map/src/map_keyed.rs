@@ -70,13 +70,17 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
     /// ```
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
         self.maybe_grow();
+        self.insert_with_room(key, value)
+    }
+
+    /// [`Self::insert`] after the growth check, which the caller has made.
+    #[inline]
+    pub(crate) fn insert_with_room(&mut self, key: K, value: V) -> Option<V> {
         let hash = key.kevy_hash();
         match self.probe_with_key(hash, &key) {
             ProbeOutcome::Found(idx) => {
-                // SAFETY: slot is full ⇒ initialised. We replace only the V
-                // field; the old K is kept (std HashMap semantics).
                 // SAFETY: `idx` came from a probe that found a full metadata byte, so the
-                // slot at `idx` holds an initialised `(K, V)` inside the slot allocation.
+                // slot at `idx` holds an initialised `(K, V)`; only its V is replaced.
                 let v_ptr = unsafe {
                     let kv: *mut (K, V) = self.slots_ptr.as_ptr().add(idx).cast::<(K, V)>();
                     ptr::addr_of_mut!((*kv).1)
@@ -104,12 +108,12 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
     }
 
     pub(crate) fn maybe_grow(&mut self) {
-        if self.cap == 0 || (self.occupied + self.deleted) >= self.threshold() {
+        if self.grows_on_insert() {
             self.grow();
         }
     }
 
-    fn grow(&mut self) {
+    pub(crate) fn grow(&mut self) {
         let new_cap = if self.cap == 0 {
             MIN_CAP
         } else {

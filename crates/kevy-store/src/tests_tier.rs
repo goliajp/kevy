@@ -42,7 +42,7 @@ fn codec_bulk_round_trip_incl_empty() {
         let v = Value::ArcBulk(std::sync::Arc::new(payload.clone().into_boxed_slice()));
         let (enc, tag) = tier_codec::encode(&v).expect("bulk is spillable");
         assert_eq!(tag, COLD_TAG_STRING);
-        let back = tier_codec::decode(tag, enc).unwrap();
+        let back = tier_codec::decode(tag, enc, &[]).unwrap();
         let bytes: Vec<u8> = match &back {
             Value::ArcBulk(a) => a.as_ref().to_vec(),
             Value::Str(s) => s.as_slice().to_vec(),
@@ -71,7 +71,7 @@ fn codec_hash_round_trip_heap_inline_and_empty() {
     assert!(matches!(v, Value::Hash(_)), "4 pairs must be heap-backed");
     let (enc, tag) = tier_codec::encode(&v).unwrap();
     assert_eq!(tag, COLD_TAG_HASH);
-    let Value::Hash(h) = tier_codec::decode(tag, enc).unwrap() else {
+    let Value::Hash(h) = tier_codec::decode(tag, enc, &[]).unwrap() else {
         panic!("hash decodes to heap hash")
     };
     assert_eq!(h.len(), 4);
@@ -85,14 +85,14 @@ fn codec_hash_round_trip_heap_inline_and_empty() {
     let vi = s2.map.get(b"i".as_slice()).map(|e| e.value.clone()).unwrap();
     assert!(matches!(vi, Value::SmallHashInline(_)));
     let (enc, tag) = tier_codec::encode(&vi).unwrap();
-    let Value::Hash(h) = tier_codec::decode(tag, enc).unwrap() else {
+    let Value::Hash(h) = tier_codec::decode(tag, enc, &[]).unwrap() else {
         panic!("inline hash decodes to heap hash")
     };
     assert_eq!(h.get(b"a".as_slice()).unwrap().as_slice(), b"1");
 
     // Empty hash payload (n = 0) — legal, round-trips.
     let (enc, tag) = tier_codec::encode(&Value::Hash(std::sync::Arc::default())).unwrap();
-    let Value::Hash(h) = tier_codec::decode(tag, enc).unwrap() else { panic!() };
+    let Value::Hash(h) = tier_codec::decode(tag, enc, &[]).unwrap() else { panic!() };
     assert_eq!(h.len(), 0);
 }
 
@@ -683,7 +683,8 @@ fn packed(s: &mut Store, key: &[u8]) {
     let pad = noise(4096);
     let pairs: [(&[u8], &[u8]); 3] = [(b"id", b"7"), (b"name", b"alice"), (b"pad", pad.as_slice())];
     s.hset(key, &pairs).unwrap();
-    let names: Vec<Vec<u8>> = vec![b"id".to_vec(), b"name".to_vec(), b"pad".to_vec()];
+    let names: crate::packed_row::ColumnNames =
+        vec![b"id".to_vec(), b"name".to_vec(), b"pad".to_vec()].into();
     s.set_packed_rows(true);
     s.pack_row(key, &names);
     assert!(s.is_packed(key), "setup: the row must be packed before the test starts");
@@ -706,6 +707,102 @@ fn a_packed_row_is_spillable_and_comes_back_packed() {
     // undone the saving this representation exists for.
     assert!(s.is_packed(b"row:1"), "promote must rebuild the packed form, not a general hash");
     assert_eq!(s.used_memory(), used_hot, "the round trip is weight-exact");
+}
+
+/// A table's rows hold one list of column names between them — packed
+/// from the catalog's list, and still sharing it after a trip through the
+/// cold tier, whose payload carries only the columns a row has.
+#[test]
+fn packed_rows_share_their_tables_names_through_the_tier() {
+    let (mut s, _d) = tiered("tier-packed-shared-names", u64::MAX);
+    s.set_packed_rows(true);
+    let names: crate::packed_row::ColumnNames =
+        vec![b"id".to_vec(), b"name".to_vec(), b"pad".to_vec()].into();
+    let pad = noise(4096);
+    type Pairs<'a> = &'a [(&'a [u8], &'a [u8])];
+    let rows: [(&[u8], Pairs<'_>); 2] = [
+        (b"row:1", &[(b"id", b"7"), (b"name", b"alice"), (b"pad", &pad)]),
+        // no `name`: its payload names two columns, not the table's three
+        (b"row:2", &[(b"id", b"8"), (b"pad", &pad)]),
+    ];
+    for (key, pairs) in rows {
+        s.hset(key, pairs).unwrap();
+        s.pack_row(key, &names);
+    }
+    let shares = |s: &Store, key: &[u8]| match s.map.get(key).map(|e| &e.value) {
+        Some(Value::PackedRow(r)) => alloc::sync::Arc::ptr_eq(r.names(), &names),
+        other => panic!("{key:?} is not a packed row: {other:?}"),
+    };
+    for (key, _) in rows {
+        assert!(shares(&s, key), "packing gives the row the table's names, not a copy");
+    }
+    for (key, _) in rows {
+        assert!(s.debug_force_demote(key));
+        s.promote_in_place(key);
+        assert!(shares(&s, key), "a promoted row comes back on the table's names");
+    }
+    assert_eq!(s.hget(b"row:2", b"name").unwrap(), None);
+    assert_eq!(s.hlen(b"row:2").unwrap(), 2);
+}
+
+/// A table declaration packs the rows that were already there, and some of
+/// those are cold. Packing is a memory representation: a cold row holds no
+/// memory to save, and reading it would cost a disk read nobody asked for
+/// and a first touch that makes the client's next read promote it.
+#[test]
+fn packing_leaves_a_cold_row_cold_and_unread() {
+    let (mut s, _d) = tiered("tier-pack-cold", u64::MAX);
+    s.set_packed_rows(true);
+    let every: crate::packed_row::ColumnNames =
+        vec![b"id".to_vec(), b"name".to_vec(), b"pad".to_vec()].into();
+    // a table that does not declare `pad`: its rows cannot pack
+    let partial: crate::packed_row::ColumnNames = vec![b"id".to_vec(), b"name".to_vec()].into();
+    let pad = noise(4096);
+    for key in [b"row:1".as_slice(), b"row:2"] {
+        s.hset(key, &[(b"id".as_slice(), b"7".as_slice()), (b"name", b"alice"), (b"pad", &pad)])
+            .unwrap();
+        assert!(s.debug_force_demote(key));
+    }
+    let before = s.tier_stats();
+    s.pack_row(b"row:1", &every);
+    s.pack_row(b"row:2", &partial);
+    let after = s.tier_stats();
+    assert_eq!(after.preads_total, before.preads_total, "packing read a cold row");
+    assert!(is_cold(&s, b"row:1") && is_cold(&s, b"row:2"), "packing installed a cold row");
+    assert_eq!((after.cold_keys, after.stub_bytes), (before.cold_keys, before.stub_bytes));
+    // each client read is still a first touch: served, not promoted
+    for key in [b"row:1".as_slice(), b"row:2"] {
+        assert_eq!(s.hgetall(key).unwrap().len(), 6);
+    }
+    assert_eq!(s.tier_stats().promotions_total, 0);
+}
+
+/// A hot row the table cannot hold is refused on its field names alone,
+/// before any value is copied out of it.
+#[test]
+fn packing_refuses_an_undeclared_field_and_keeps_the_row() {
+    let mut s = Store::new();
+    s.set_packed_rows(true);
+    let partial: crate::packed_row::ColumnNames = vec![b"id".to_vec(), b"name".to_vec()].into();
+    s.hset(b"row", &[(b"id".as_slice(), b"7".as_slice()), (b"pad", &noise(900))]).unwrap();
+    let used = s.used_memory();
+    s.pack_row(b"row", &partial);
+    assert!(!s.is_packed(b"row"));
+    assert_eq!(s.used_memory(), used);
+    assert_eq!(s.hlen(b"row").unwrap(), 2);
+}
+
+/// The page lane — a query's `FIELDS`, a view's hydration — reads cold rows
+/// in one batch, and a packed row comes back from its record as a packed
+/// row, not the general hash.
+#[test]
+fn a_cold_packed_row_answers_a_batched_page_read() {
+    let (mut s, _d) = tiered("tier-packed-page", u64::MAX);
+    packed(&mut s, b"row:1");
+    assert!(s.debug_force_demote(b"row:1"));
+    let rows = s.peek_hash_rows(&[b"row:1"], &[b"name", b"absent"], &mut crate::SyncColdRead);
+    assert_eq!(rows, vec![Ok(Some(vec![Some(b"alice".to_vec()), None]))]);
+    assert!(is_cold(&s, b"row:1"), "a page read is not an access signal");
 }
 
 #[test]
@@ -753,7 +850,7 @@ fn the_packed_payload_carries_its_form_without_a_second_tag() {
     // The tag answers TYPE and gates the WRONGTYPE precheck, and both
     // of those are about the type — which has not changed.
     assert_eq!(tag, COLD_TAG_HASH, "a packed row is tagged as the hash it is");
-    assert!(matches!(tier_codec::decode(tag, payload).unwrap(), Value::PackedRow(_)));
+    assert!(matches!(tier_codec::decode(tag, payload, &[]).unwrap(), Value::PackedRow(_)));
 }
 
 /// A field count out of a cold payload cannot size an allocation.
@@ -784,7 +881,7 @@ fn a_field_count_from_a_payload_cannot_size_an_allocation() {
     payload.extend_from_slice(&u32::MAX.to_le_bytes());
     payload.extend_from_slice(&[0u8; 8]);
     assert!(
-        crate::tier_codec::decode(COLD_TAG_HASH, payload).is_err(),
+        crate::tier_codec::decode(COLD_TAG_HASH, payload, &[]).is_err(),
         "a field count the payload cannot supply is an error either way — \
          which is why the assertion that sees this defect is the one above"
     );
