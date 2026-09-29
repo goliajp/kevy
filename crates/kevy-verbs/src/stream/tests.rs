@@ -132,8 +132,7 @@ fn claim_records_replay_to_the_same_pending_list() {
 fn pel(store: &mut Store) -> Vec<(String, Vec<u8>, u64, u32)> {
     let s = store.stream_view(b"s").unwrap().unwrap();
     let g = s.group(b"g").unwrap();
-    g.pel
-        .iter()
+    g.pending_range(..)
         .map(|(id, p)| {
             let owner = p.consumer.as_slice().to_vec();
             (String::from_utf8(id.encode()).unwrap(), owner, p.delivery_time_ms, p.delivery_count)
@@ -144,10 +143,8 @@ fn pel(store: &mut Store) -> Vec<(String, Vec<u8>, u64, u32)> {
 /// `(consumer, last contact, pending)` of `group` on `key`, by name.
 fn consumers(store: &Store, key: &[u8], group: &[u8]) -> Vec<(Vec<u8>, u64, usize)> {
     let g = store.stream_group_peek(key, group).expect("the group");
-    let mut out: Vec<_> = g
-        .consumers_iter()
-        .map(|(n, c)| (n.to_vec(), c.last_seen_ms(), c.pending_count()))
-        .collect();
+    let mut out: Vec<_> =
+        g.consumers().map(|(n, c)| (n.to_vec(), c.last_seen_ms(), c.pending_count())).collect();
     out.sort();
     out
 }
@@ -159,11 +156,10 @@ type PelRow = (StreamId, Vec<u8>, u64, u32);
 fn group_rows(store: &Store, key: &[u8], group: &[u8]) -> (Vec<PelRow>, StreamId) {
     let g = store.stream_group_peek(key, group).expect("the group");
     let rows = g
-        .pel
-        .iter()
-        .map(|(id, p)| (*id, p.consumer.as_slice().to_vec(), p.delivery_time_ms, p.delivery_count))
+        .pending_range(..)
+        .map(|(id, p)| (id, p.consumer.as_slice().to_vec(), p.delivery_time_ms, p.delivery_count))
         .collect();
-    (rows, g.last_delivered_id)
+    (rows, g.last_delivered_id())
 }
 
 /// One `XREADGROUP` over several streams is recorded stream by stream:
@@ -209,14 +205,10 @@ fn a_read_of_several_streams_replays_stream_by_stream() {
         assert_eq!(consumers(&replayed, key, group), want, "{key:?} {group:?}: {log:#?}");
     }
     let (b_rows, b_last) = group_rows(&live, b"b", b"g");
-    assert_eq!((b_rows.len(), b_last), (1, StreamId { ms: 2, seq: 1 }), "b delivered 2-1 to c3");
+    assert_eq!((b_rows.len(), b_last), (1, StreamId::new(2, 1)), "b delivered 2-1 to c3");
     assert_eq!(b_rows[0].1, b"c3");
     let (a_rows, a_last) = group_rows(&live, b"a", b"n");
-    assert_eq!(
-        (a_rows.len(), a_last),
-        (0, StreamId { ms: 1, seq: 1 }),
-        "NOACK moved a, kept nothing"
-    );
+    assert_eq!((a_rows.len(), a_last), (0, StreamId::new(1, 1)), "NOACK moved a, kept nothing");
 }
 
 /// A server trims to `maxmemory` after a growing write and before it

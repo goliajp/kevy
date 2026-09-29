@@ -37,7 +37,7 @@ fn run(log: &mut Aof) {
         log.append(&set(i, 100)).unwrap();
     }
     let mut store = kevy_store::Store::new();
-    store.set(b"kept", b"v".to_vec(), None, false, false);
+    store.set(b"kept", b"v".to_vec(), None, kevy_store::SetCondition::Always);
     log.rewrite_from(&store).unwrap();
     log.append(&set(99, 10)).unwrap();
     log.sync_now().unwrap();

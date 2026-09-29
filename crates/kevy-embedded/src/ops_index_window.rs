@@ -62,7 +62,7 @@ fn evict_rows(
         Ok(None) => true,
         Ok(Some(batch)) => {
             if let Some(a) = aof {
-                let argv = kevy_persist::segmented_argv(batch.file.as_bytes());
+                let argv = kevy_persist::segmented_argv(batch.file().as_bytes());
                 let owned: Vec<Vec<u8>> = argv.iter().map(|x| x.to_vec()).collect();
                 if let Err(e) = a.append(&owned_argv(&owned)) {
                     eprintln!(

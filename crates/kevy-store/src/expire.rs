@@ -17,7 +17,8 @@ use crate::{Store, now_ns};
 
 /// What [`Store::tick_expire`] saw and did. Surfaced for tests, INFO
 /// keyspace, and (eventually) Wave 2 task #4's crash-safe verifier.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct ExpireStats {
     /// Total TTL-bearing keys sampled across all rounds.
     pub sampled: u32,
@@ -184,9 +185,9 @@ mod tests {
     #[test]
     fn tick_expire_drops_past_deadline() {
         let mut s = Store::new();
-        s.set(b"k1", b"v".to_vec(), Some(Duration::from_millis(1)), false, false);
-        s.set(b"k2", b"v".to_vec(), Some(Duration::from_millis(1)), false, false);
-        s.set(b"perm", b"v".to_vec(), None, false, false);
+        s.set(b"k1", b"v".to_vec(), Some(Duration::from_millis(1)), crate::SetCondition::Always);
+        s.set(b"k2", b"v".to_vec(), Some(Duration::from_millis(1)), crate::SetCondition::Always);
+        s.set(b"perm", b"v".to_vec(), None, crate::SetCondition::Always);
         // Two flake sources, both observed on virtualized CI runners:
         // a single tick may legitimately miss a key (the sampling walk is
         // time-boxed with a rotating start — the a635d65 trade; coverage
@@ -209,8 +210,8 @@ mod tests {
     #[test]
     fn tick_expire_no_op_on_fresh_ttls() {
         let mut s = Store::new();
-        s.set(b"k1", b"v".to_vec(), Some(Duration::from_hours(1)), false, false);
-        s.set(b"k2", b"v".to_vec(), Some(Duration::from_hours(1)), false, false);
+        s.set(b"k1", b"v".to_vec(), Some(Duration::from_hours(1)), crate::SetCondition::Always);
+        s.set(b"k2", b"v".to_vec(), Some(Duration::from_hours(1)), crate::SetCondition::Always);
         let stats = s.tick_expire(20, 16);
         assert_eq!(stats.expired, 0, "no fresh TTL should expire");
         // sampled may be 0..=2 depending on how many our walk hit
@@ -221,7 +222,7 @@ mod tests {
     fn tick_expire_no_op_on_ttl_free_keyspace() {
         let mut s = Store::new();
         for i in 0..50 {
-            s.set(format!("k{i}").as_bytes(), b"v".to_vec(), None, false, false);
+            s.set(format!("k{i}").as_bytes(), b"v".to_vec(), None, crate::SetCondition::Always);
         }
         let stats = s.tick_expire(20, 16);
         assert_eq!(stats.expired, 0);
@@ -235,7 +236,7 @@ mod tests {
     #[test]
     fn tick_expire_zero_args_short_circuit() {
         let mut s = Store::new();
-        s.set(b"k", b"v".to_vec(), Some(Duration::from_millis(1)), false, false);
+        s.set(b"k", b"v".to_vec(), Some(Duration::from_millis(1)), crate::SetCondition::Always);
         std::thread::sleep(Duration::from_millis(5));
         assert_eq!(s.tick_expire(0, 16), ExpireStats::default());
         assert_eq!(s.tick_expire(20, 0), ExpireStats::default());
@@ -255,11 +256,10 @@ mod tests {
                 format!("k{i}").as_bytes(),
                 b"v".to_vec(),
                 Some(Duration::from_millis(1)),
-                false,
-                false,
+                crate::SetCondition::Always,
             );
         }
-        s.set(b"perm", b"v".to_vec(), None, false, false);
+        s.set(b"perm", b"v".to_vec(), None, crate::SetCondition::Always);
         // Sleep-and-tick until converged: on a starved CI VM the monotonic
         // clock can lag the wall-clock sleep, so a fixed pre-sleep + a
         // bounded dry tick loop under-counts (see

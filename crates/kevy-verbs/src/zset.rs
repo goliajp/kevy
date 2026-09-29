@@ -3,7 +3,7 @@
 //! `zset_range`; the multi-key algebra is not here.
 
 use kevy_resp::{ArgvView, CmdError, encode_bulk, encode_error, encode_integer, encode_null_bulk};
-use kevy_store::{Store, ZaddFlags};
+use kevy_store::{ScoreCompare, SetCondition, Store, ZaddFlags};
 
 use crate::args::{arg_f64, arg_i64, parse_score_bound, rest_borrowed};
 use crate::reply::{ERR_NOT_FLOAT, ERR_NOT_INT, emit_int_result, fmt_score, store_err, wrong_args};
@@ -130,38 +130,42 @@ fn removed(res: Result<usize, kevy_store::StoreError>, out: &mut Vec<u8>) -> Eff
 /// ```
 /// let argv = kevy_resp::Argv::from(vec![b"ZADD".to_vec(), b"z".to_vec(), b"NX".to_vec(), b"1".to_vec(), b"m".to_vec()]);
 /// let (flags, incr, first) = kevy_verbs::cmd::parse_zadd_flags(&argv).unwrap();
-/// assert!(flags.nx && !incr && first == 3);
+/// assert!(flags.condition() == kevy_store::SetCondition::IfAbsent && !incr && first == 3);
 /// ```
 pub fn parse_zadd_flags<A: ArgvView + ?Sized>(
     args: &A,
 ) -> Result<(ZaddFlags, bool, usize), CmdError> {
-    let mut f = ZaddFlags::default();
-    let mut incr = false;
+    const CLASH: CmdError =
+        CmdError::Wire("ERR GT, LT, and/or NX options at the same time are not compatible");
+    let (mut nx, mut xx, mut gt, mut lt, mut ch, mut incr) =
+        (false, false, false, false, false, false);
     let mut i = 2;
     while i < args.len() {
-        let a = &args[i];
-        if a.eq_ignore_ascii_case(b"NX") {
-            f.nx = true;
-        } else if a.eq_ignore_ascii_case(b"XX") {
-            f.xx = true;
-        } else if a.eq_ignore_ascii_case(b"GT") {
-            f.gt = true;
-        } else if a.eq_ignore_ascii_case(b"LT") {
-            f.lt = true;
-        } else if a.eq_ignore_ascii_case(b"CH") {
-            f.ch = true;
-        } else if a.eq_ignore_ascii_case(b"INCR") {
-            incr = true;
-        } else {
-            break;
-        }
+        let flag = match args[i].to_ascii_uppercase().as_slice() {
+            b"NX" => &mut nx,
+            b"XX" => &mut xx,
+            b"GT" => &mut gt,
+            b"LT" => &mut lt,
+            b"CH" => &mut ch,
+            b"INCR" => &mut incr,
+            _ => break,
+        };
+        *flag = true;
         i += 1;
     }
-    if !f.valid() {
-        return Err(CmdError::Wire(
-            "ERR GT, LT, and/or NX options at the same time are not compatible",
-        ));
-    }
+    let condition = match (nx, xx) {
+        (false, false) => SetCondition::Always,
+        (true, false) => SetCondition::IfAbsent,
+        (false, true) => SetCondition::IfPresent,
+        (true, true) => return Err(CLASH),
+    };
+    let compare = match (gt, lt) {
+        (false, false) => ScoreCompare::Any,
+        (true, false) => ScoreCompare::Greater,
+        (false, true) => ScoreCompare::Less,
+        (true, true) => return Err(CLASH),
+    };
+    let f = ZaddFlags::new(condition, compare).ok_or(CLASH)?.with_ch(ch);
     Ok((f, incr, i))
 }
 
@@ -199,7 +203,7 @@ fn zadd<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
     }
     match store.zadd_flags(&args[1], &pairs, flags) {
         Ok(rep) => {
-            let n = if flags.ch { rep.changed } else { rep.added };
+            let n = if flags.ch() { rep.changed } else { rep.added };
             emit_int_result(Ok(n as i64), out);
         }
         Err(e) => store_err(out, e),

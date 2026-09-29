@@ -44,7 +44,7 @@ impl<C: Commands> Shard<C> {
                 if let Some(f) = kevy_persist::segmented_frame(&args) {
                     // Same stitch handling as the readiness path: a
                     // missing manifest entry is a named startup refusal.
-                    if let Err(e) = kevy_store::apply_segmented(store, &segs_dir, f) {
+                    if let Err(e) = store.apply_segmented(&segs_dir, f) {
                         torn.get_or_insert(e);
                     }
                     return;

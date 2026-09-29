@@ -51,7 +51,7 @@ pub(super) fn cmd_xread<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: 
                 Err(e) => return store_err(out, e),
             }
         } else {
-            match parse_explicit_id(&last_seen_arg, /*end=*/ false) {
+            match parse_explicit_id(&last_seen_arg) {
                 Ok(id) => id,
                 Err(_) => {
                     return encode_error(

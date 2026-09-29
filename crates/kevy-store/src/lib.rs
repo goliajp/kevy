@@ -30,7 +30,7 @@
 //!
 //! use std::borrow::Cow;
 //! let mut s = Store::new();
-//! s.set(b"greeting", b"hello".to_vec(), None, false, false);
+//! s.set(b"greeting", b"hello".to_vec(), None, kevy_store::SetCondition::Always);
 //! assert_eq!(s.get(b"greeting").unwrap(), Some(Cow::Borrowed(&b"hello"[..])));
 //!
 //! s.hset(b"user:1", &[(b"name".as_slice(), b"alice".as_slice())]).unwrap();
@@ -89,9 +89,11 @@ impl Store {
 }
 mod bitmap;
 mod clock;
+mod cond;
+pub use cond::{InsertPosition, ListEnd, ScoreCompare, SetCondition};
 mod entry;
 mod error;
-pub use bitmap::{BitOp, bitop_combine};
+pub use bitmap::BitOp;
 pub use error::{KevyError, KevyResult};
 pub mod evict;
 pub mod expire;
@@ -147,8 +149,6 @@ pub use segrows::SealedRows;
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 pub use kevy_vlog::CompressionStats;
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
-pub use segwindow::apply_segmented;
-#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 pub use tier::TierStats;
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 pub use tier_serve::{ColdBatchReader, ColdRead, PeekRow, SyncColdRead};
@@ -164,10 +164,11 @@ pub mod zset_seg;
 pub use zset_algebra::{ZAggregate, zdiff, zinter, zintercard, zunion};
 mod zset_flags;
 pub use stream::{
-    AutoclaimResult, ConsumerGroup, ConsumerState, EntryBatch, GroupCreateMode, LoadedGroup,
-    LoadedPelEntry, LoadedStreamEntry, PelEntry, PendingExtended, PendingExtendedRow,
-    PendingSummary, ReadGroupId, StreamData, StreamId, StreamIdError, XAddIdSpec, XClaimOpts,
-    now_unix_ms, parse_explicit_id, parse_range_end, parse_range_start, parse_xadd_id,
+    AckMode, AutoclaimResult, ClaimMode, ConsumerGroup, ConsumerState, EntryBatch, GroupCreateMode,
+    LoadedGroup, LoadedPelEntry, LoadedStreamEntry, MissingStream, PelEntry, PendingExtended,
+    PendingExtendedRow, PendingSummary, ReadGroupId, StreamData, StreamId, StreamIdError,
+    XAddIdSpec, XClaimOpts, now_unix_ms, parse_explicit_id, parse_range_end, parse_range_start,
+    parse_xadd_id,
 };
 pub use string::{GetReply, GetShared};
 pub use util::glob_match;
@@ -315,7 +316,7 @@ pub struct Store {
     /// **Bounded growth**: at `MAX_PENDING_DROPS` items the
     /// `maybe_offload_drop` path force-flushes — protects against
     /// pathological "thousand SETs in one iter never flush" cases
-    /// (would otherwise hold thousands of Box<Value>s in RAM until
+    /// (would otherwise hold thousands of `Box<Value>`s in RAM until
     /// the iter ends).
     #[cfg(feature = "std")]
     pub(crate) pending_drops: Vec<Value>,
@@ -368,6 +369,60 @@ impl Store {
 // so the crate-wide `crate::apply_delta` / `crate::key_heap_bytes_for`
 // paths keep working.
 pub(crate) use util::{apply_delta, key_heap_bytes_for};
+
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<Store>();
+    send_sync::<StoreError>();
+    send_sync::<KevyError>();
+    send_sync::<RenameOutcome>();
+    send_sync::<EvictionPolicy>();
+    send_sync::<SetCondition>();
+    send_sync::<ListEnd>();
+    send_sync::<InsertPosition>();
+    send_sync::<ScoreCompare>();
+    send_sync::<BitOp>();
+    send_sync::<ExpireStats>();
+    send_sync::<DetachedEntries>();
+    send_sync::<HExpireCond>();
+    send_sync::<KeyspaceEvent>();
+    send_sync::<SnapshotView>();
+    send_sync::<ZAggregate>();
+    send_sync::<StreamData>();
+    send_sync::<StreamId>();
+    send_sync::<StreamIdError>();
+    send_sync::<XAddIdSpec>();
+    send_sync::<XClaimOpts>();
+    send_sync::<MissingStream>();
+    send_sync::<AckMode>();
+    send_sync::<ClaimMode>();
+    send_sync::<ConsumerGroup>();
+    send_sync::<ConsumerState>();
+    send_sync::<PelEntry>();
+    send_sync::<GroupCreateMode>();
+    send_sync::<ReadGroupId>();
+    send_sync::<PendingSummary>();
+    send_sync::<PendingExtended>();
+    send_sync::<AutoclaimResult>();
+    send_sync::<LoadedGroup>();
+    send_sync::<GetReply<'static>>();
+    send_sync::<GetShared>();
+    send_sync::<Value>();
+    send_sync::<Score>();
+    send_sync::<ScoreBound>();
+    send_sync::<ZaddFlags>();
+    send_sync::<ZaddReport>();
+    send_sync::<packed_row::PackedRow>();
+};
+
+#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<SealedRows>();
+    send_sync::<TierStats>();
+    send_sync::<ColdRead>();
+    send_sync::<SyncColdRead>();
+};
 
 #[cfg(test)]
 mod tests;

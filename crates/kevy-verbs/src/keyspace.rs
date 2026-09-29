@@ -167,7 +167,7 @@ fn mset<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) ->
     }
     let mut i = 1;
     while i + 1 < args.len() {
-        store.set(&args[i], args[i + 1].to_vec(), None, false, false);
+        store.set(&args[i], args[i + 1].to_vec(), None, kevy_store::SetCondition::Always);
         i += 2;
     }
     encode_simple_string(out, "OK");
@@ -185,7 +185,9 @@ fn rename<A: ArgvView + ?Sized>(
         wrong_args(out, if nx { "renamenx" } else { "rename" });
         return Effect::Unchanged;
     }
-    match store.rename(&args[1], &args[2], nx) {
+    let outcome =
+        if nx { store.rename_nx(&args[1], &args[2]) } else { store.rename(&args[1], &args[2]) };
+    match outcome {
         RenameOutcome::Renamed if nx => encode_integer(out, 1),
         RenameOutcome::Renamed => encode_simple_string(out, "OK"),
         RenameOutcome::DstExists => {

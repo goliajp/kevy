@@ -33,14 +33,35 @@ type ScratchMap<K, V> = alloc::collections::BTreeMap<K, V>;
 type ScratchSet<T> = alloc::collections::BTreeSet<T>;
 
 /// `AGGREGATE` mode for inter/union (Redis 6.2; default `Sum`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// ```
+/// assert_eq!(kevy_store::ZAggregate::default(), kevy_store::ZAggregate::Sum);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub enum ZAggregate {
     /// Weighted sum of scores (the default).
+    #[default]
     Sum,
     /// Minimum weighted score.
     Min,
     /// Maximum weighted score.
     Max,
+}
+
+impl ZAggregate {
+    /// The `AGGREGATE` keyword for this mode.
+    ///
+    /// ```
+    /// assert_eq!(kevy_store::ZAggregate::Max.keyword(), "MAX");
+    /// ```
+    pub fn keyword(self) -> &'static str {
+        match self {
+            Self::Sum => "SUM",
+            Self::Min => "MIN",
+            Self::Max => "MAX",
+        }
+    }
 }
 
 fn agg(a: f64, b: f64, mode: ZAggregate) -> f64 {
@@ -233,11 +254,11 @@ mod tests {
         sm.sort_by(|x, y| x.0.cmp(&y.0));
         assert_eq!(sm, zs(&[("a", 1.0), ("c", 1.0)]));
         assert!(s.zset_or_set_members(b"missing").unwrap().is_empty());
-        s.set(b"str", b"v".to_vec(), None, false, false);
+        s.set(b"str", b"v".to_vec(), None, crate::SetCondition::Always);
         assert!(s.zset_or_set_members(b"str").is_err());
 
         // *STORE overwrite + empty-result-deletes semantics.
-        s.set(b"dst", b"old".to_vec(), None, false, false);
+        s.set(b"dst", b"old".to_vec(), None, crate::SetCondition::Always);
         assert_eq!(s.zstore_result(b"dst", &zs(&[("m", 7.0)])), 1);
         assert_eq!(s.zscore(b"dst", b"m").unwrap(), Some(7.0));
         assert_eq!(s.zstore_result(b"dst", &[]), 0);

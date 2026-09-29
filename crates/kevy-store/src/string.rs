@@ -109,7 +109,7 @@ impl Store {
     ///
     /// ```
     /// let mut s = kevy_store::Store::new();
-    /// s.set(b"k", b"v".to_vec(), None, false, false);
+    /// s.set(b"k", b"v".to_vec(), None, kevy_store::SetCondition::Always);
     /// assert_eq!(s.get_shared_with(b"k", |v| v.map(<[u8]>::len)), Ok(Some(1)));
     /// assert_eq!(s.get_shared_with(b"none", |v| v.is_none()), Ok(true));
     /// ```
@@ -337,9 +337,9 @@ mod lend_tests {
     #[test]
     fn the_lent_bytes_are_the_owned_ones_for_every_string_class() {
         let mut s = Store::new();
-        s.set(b"small", b"v".to_vec(), None, false, false);
-        s.set(b"bulk", vec![7u8; 4096], None, false, false);
-        s.set(b"int", b"-12345".to_vec(), None, false, false);
+        s.set(b"small", b"v".to_vec(), None, crate::SetCondition::Always);
+        s.set(b"bulk", vec![7u8; 4096], None, crate::SetCondition::Always);
+        s.set(b"int", b"-12345".to_vec(), None, crate::SetCondition::Always);
         s.rpush(b"list", &[b"x"]).unwrap();
         for k in [&b"small"[..], b"bulk", b"int", b"missing", b"list"] {
             let lent = s.get_shared_with(k, |v| v.map(<[u8]>::to_vec));

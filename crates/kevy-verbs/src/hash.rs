@@ -172,9 +172,9 @@ fn hrandfield<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u
         return wrong_args(out, "hrandfield");
     }
     if args.len() == 2 {
-        return match store.hrandfield(&args[1], 1, false) {
+        return match store.hrandfield(&args[1], 1) {
             Ok(v) if v.is_empty() => encode_null_bulk(out),
-            Ok(v) => encode_bulk(out, &v[0].0),
+            Ok(v) => encode_bulk(out, &v[0]),
             Err(e) => store_err(out, e),
         };
     }
@@ -185,15 +185,24 @@ fn hrandfield<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u
     if with_values && !args[3].eq_ignore_ascii_case(b"WITHVALUES") {
         return encode_error(out, ERR_SYNTAX);
     }
-    match store.hrandfield(&args[1], count, with_values) {
-        Err(e) => store_err(out, e),
-        Ok(items) => {
-            let n = if with_values { items.len() * 2 } else { items.len() };
-            encode_array_len(out, n as i64);
-            for (f, v) in &items {
-                encode_bulk(out, f);
-                if with_values {
+    if with_values {
+        match store.hrandfield_with_values(&args[1], count) {
+            Err(e) => store_err(out, e),
+            Ok(items) => {
+                encode_array_len(out, (items.len() * 2) as i64);
+                for (f, v) in &items {
+                    encode_bulk(out, f);
                     encode_bulk(out, v);
+                }
+            }
+        }
+    } else {
+        match store.hrandfield(&args[1], count) {
+            Err(e) => store_err(out, e),
+            Ok(fields) => {
+                encode_array_len(out, fields.len() as i64);
+                for f in &fields {
+                    encode_bulk(out, f);
                 }
             }
         }

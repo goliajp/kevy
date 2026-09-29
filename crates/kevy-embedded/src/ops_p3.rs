@@ -43,7 +43,7 @@ impl Store {
         let mut frame: Vec<&[u8]> = Vec::with_capacity(1 + 2 * pairs.len());
         frame.push(b"MSET");
         for &(k, v) in pairs {
-            g.store.set(k, v.to_vec(), None, false, false);
+            g.store.set(k, v.to_vec(), None, kevy_store::SetCondition::Always);
             frame.extend([k, v]);
         }
         commit_write(&mut g, &frame)
@@ -234,7 +234,12 @@ impl Store {
     pub fn linsert(&self, key: &[u8], before: bool, pivot: &[u8], value: &[u8]) -> KevyResult<i64> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
-        let new_len = g.store.linsert(key, before, pivot, value).map_err(store_err)?;
+        let position = if before {
+            kevy_store::InsertPosition::Before
+        } else {
+            kevy_store::InsertPosition::After
+        };
+        let new_len = g.store.linsert(key, position, pivot, value).map_err(store_err)?;
         if new_len > 0 {
             let dir = if before { b"BEFORE".as_slice() } else { b"AFTER".as_slice() };
             commit_write(&mut g, &[b"LINSERT", key, dir, pivot, value])?;

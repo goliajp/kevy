@@ -103,26 +103,6 @@ pub enum AfterDrain {
     Close,
 }
 
-/// Translate a `kevy_config::EvictionPolicy` (the user-facing TOML enum) into
-/// the `kevy_store::EvictionPolicy` mirror. The mapping is one-to-one — the
-/// two enums exist as a dependency-direction trick (kevy-store stays a leaf
-/// crate; kevy-config depends on nothing kevy-store does).
-pub(crate) fn map_eviction_policy(p: kevy_config::EvictionPolicy) -> kevy_store::EvictionPolicy {
-    use kevy_config::EvictionPolicy as C;
-    use kevy_store::EvictionPolicy as S;
-    match p {
-        C::NoEviction => S::NoEviction,
-        C::AllKeysLru => S::AllKeysLru,
-        C::AllKeysLfu => S::AllKeysLfu,
-        C::AllKeysRandom => S::AllKeysRandom,
-        C::VolatileLru => S::VolatileLru,
-        C::VolatileLfu => S::VolatileLfu,
-        C::VolatileRandom => S::VolatileRandom,
-        C::VolatileTtl => S::VolatileTtl,
-        other => unimplemented!("the store has no eviction policy for {other:?}"),
-    }
-}
-
 /// Signal flag flipped by the SIGTERM / SIGINT handler.
 /// Async-signal-safe; AtomicBool::store is signal-safe per the C
 /// memory model.
@@ -374,8 +354,7 @@ pub(crate) fn cluster_port_base(cfg: &kevy_config::Config) -> u16 {
 }
 
 /// Translate a `kevy_config::AppendFsync` (TOML enum) into the
-/// `kevy_persist::Fsync` mirror. Same dependency-direction story as
-/// [`map_eviction_policy`].
+/// `kevy_persist::Fsync` mirror.
 pub(crate) fn map_appendfsync(p: kevy_config::AppendFsync) -> kevy_persist::Fsync {
     use kevy_config::AppendFsync as C;
     use kevy_persist::Fsync as P;

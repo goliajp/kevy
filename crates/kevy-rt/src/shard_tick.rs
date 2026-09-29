@@ -30,11 +30,15 @@ impl<C: Commands> Shard<C> {
             // Mirror the store-origin event classes into the store's
             // capture mask (all-off keeps every store hook at a single
             // byte test). Channel gating still happens at publish time.
+            use kevy_store::KeyspaceEvent as K;
             let on = flags.is_active();
+            let classes = [
+                (crate::NotificationFlags::NEW_KEY, K::New),
+                (crate::NotificationFlags::EXPIRED, K::Expired),
+                (crate::NotificationFlags::EVICTED, K::Evicted),
+            ];
             self.store.set_notify_capture(
-                on && flags.contains(crate::NotificationFlags::NEW_KEY),
-                on && flags.contains(crate::NotificationFlags::EXPIRED),
-                on && flags.contains(crate::NotificationFlags::EVICTED),
+                classes.into_iter().filter(|(f, _)| on && flags.contains(*f)).map(|(_, k)| k),
             );
         }
         if let Some(t) = live.slowlog_slower_than_micros {

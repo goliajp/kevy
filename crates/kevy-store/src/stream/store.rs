@@ -4,9 +4,10 @@
 //! `StreamId` types + entry-side ops) so each file stays under the
 //! project's ≤500-LOC rule.
 
-use super::group::{AutoclaimResult, ReadGroupId};
+use super::group::ReadGroupId;
 use super::{
-    GroupCreateMode, PendingExtended, PendingSummary, StreamData, StreamId, XAddIdSpec, XClaimOpts,
+    AckMode, ClaimMode, GroupCreateMode, MissingStream, PendingExtended, PendingSummary,
+    StreamData, StreamId, XAddIdSpec, XClaimOpts,
 };
 #[cfg(not(feature = "std"))]
 use crate::nostd_prelude::*;
@@ -59,8 +60,8 @@ impl Store {
     /// ```
     /// use kevy_store::{GroupCreateMode, StreamId, XAddIdSpec};
     /// let mut s = kevy_store::Store::new();
-    /// s.xadd(b"s", XAddIdSpec::Explicit(StreamId { ms: 1, seq: 1 }), vec![(b"f".to_vec(), b"v".to_vec())], false, 0).unwrap();
-    /// s.xgroup_create(b"s", b"g", GroupCreateMode::AtId(StreamId::MIN), false).unwrap();
+    /// s.xadd(b"s", XAddIdSpec::Explicit(StreamId::new(1, 1)), vec![(b"f".to_vec(), b"v".to_vec())], kevy_store::MissingStream::Create, 0).unwrap();
+    /// s.xgroup_create(b"s", b"g", GroupCreateMode::AtId(StreamId::MIN), kevy_store::MissingStream::Refuse).unwrap();
     /// assert_eq!(s.stream_group_peek(b"s", b"g").unwrap().pending_count(), 0);
     /// assert!(s.stream_group_peek(b"s", b"nope").is_none());
     /// ```
@@ -80,18 +81,18 @@ impl Store {
     }
 
     /// `XADD key <spec> field value [field value ...]`. Returns the
-    /// assigned ID. `nomkstream` matches Redis's `NOMKSTREAM` flag —
-    /// suppress key creation, returning `Ok(None)`. `now_ms` is the
-    /// wall-clock used for `XAddIdSpec::AutoAll`.
+    /// assigned ID; with [`MissingStream::Refuse`] (`NOMKSTREAM`) a
+    /// missing key stays missing and the answer is `Ok(None)`. `now_ms`
+    /// is the wall-clock used for `XAddIdSpec::AutoAll`.
     pub fn xadd(
         &mut self,
         key: &[u8],
         spec: XAddIdSpec,
         fields: Vec<(Vec<u8>, Vec<u8>)>,
-        nomkstream: bool,
+        missing: MissingStream,
         now_ms: u64,
     ) -> Result<Option<StreamId>, StoreError> {
-        if nomkstream && self.live_entry(key).is_none() {
+        if missing == MissingStream::Refuse && self.live_entry(key).is_none() {
             return Ok(None);
         }
         let id;
@@ -233,17 +234,18 @@ impl Store {
 
     /// `XGROUP CREATE key group <id|$> [MKSTREAM]`. Returns `Ok(true)`
     /// when a fresh group was added; `Ok(false)` if the group already
-    /// existed (caller emits `-BUSYGROUP`). `mkstream` matches Redis:
-    /// auto-create the stream key when missing.
+    /// existed (caller emits `-BUSYGROUP`). A missing key is created
+    /// with [`MissingStream::Create`] (`MKSTREAM`) and refused with
+    /// `NoSuchKey` otherwise.
     pub fn xgroup_create(
         &mut self,
         key: &[u8],
         group: &[u8],
         mode: GroupCreateMode,
-        mkstream: bool,
+        missing: MissingStream,
     ) -> Result<bool, StoreError> {
         let exists = self.live_entry(key).is_some();
-        if !exists && !mkstream {
+        if !exists && missing == MissingStream::Refuse {
             return Err(StoreError::NoSuchKey);
         }
         let s = self.stream_mut(key, true)?.expect("created");
@@ -345,7 +347,7 @@ impl Store {
         consumer: &[u8],
         last_seen: ReadGroupId,
         count: Option<usize>,
-        noack: bool,
+        ack: AckMode,
         now_ms: u64,
     ) -> Result<EntryBatch, StoreError> {
         let result;
@@ -353,7 +355,7 @@ impl Store {
             let Some(s) = self.stream_mut(key, false)? else {
                 return Err(StoreError::NoSuchKey);
             };
-            result = s.readgroup(group, consumer, last_seen, count, noack, now_ms)?;
+            result = s.readgroup(group, consumer, last_seen, count, ack, now_ms)?;
         }
         if !result.is_empty() {
             self.bump_if_watched(key);
@@ -454,7 +456,7 @@ impl Store {
         min_idle_ms: u64,
         start: StreamId,
         count: usize,
-        justid: bool,
+        mode: ClaimMode,
         now_ms: u64,
     ) -> Result<(StreamId, EntryBatch, Vec<StreamId>), StoreError> {
         let payloads;
@@ -464,11 +466,10 @@ impl Store {
             let Some(s) = self.stream_mut(key, false)? else {
                 return Err(StoreError::NoSuchKey);
             };
-            let AutoclaimResult { next_cursor: nc, claimed_ids, deleted_ids: di } =
-                s.autoclaim(group, new_owner, min_idle_ms, start, count, justid, now_ms)?;
-            payloads = s.payloads_for(&claimed_ids);
-            next_cursor = nc;
-            deleted_ids = di;
+            let r = s.autoclaim(group, new_owner, min_idle_ms, start, count, mode, now_ms)?;
+            payloads = s.payloads_for(&r.claimed_ids);
+            next_cursor = r.next_cursor;
+            deleted_ids = r.deleted_ids;
         }
         if !payloads.is_empty() {
             self.bump_if_watched(key);

@@ -66,7 +66,7 @@ pub fn set_override(p: Propagate) {
 ///
 /// ```
 /// use kevy_rt::propagation::{discard_override, set_override_deferred};
-/// let id = kevy_store::StreamId { ms: 1, seq: 0 };
+/// let id = kevy_store::StreamId::new(1, 0);
 /// set_override_deferred(kevy_verbs::Effect::RecordId(2, id));
 /// // a dispatch site that records nothing drops it unbuilt
 /// discard_override();
@@ -129,7 +129,7 @@ mod tests {
 
     #[test]
     fn a_deferred_record_rides_a_suppress_and_does_not_linger() {
-        let id = kevy_store::StreamId { ms: 1, seq: 0 };
+        let id = kevy_store::StreamId::new(1, 0);
         set_override_deferred(kevy_verbs::Effect::RecordId(2, id));
         assert!(matches!(take_override(), Propagate::Suppress));
         assert_eq!(take_deferred(), Some(kevy_verbs::Effect::RecordId(2, id)));

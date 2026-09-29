@@ -118,20 +118,20 @@ fn hrandfield_agrees_with_the_general_hash() {
         v
     };
     assert_eq!(
-        names(p.hrandfield(b"row:1", n, true).unwrap()),
-        names(g.hrandfield(b"row:1", n, true).unwrap()),
+        names(p.hrandfield_with_values(b"row:1", n).unwrap()),
+        names(g.hrandfield_with_values(b"row:1", n).unwrap()),
         "a packed row must sample the same field/value set as the general hash"
     );
 
     // A count past the end is capped identically on both forms.
     assert_eq!(
-        p.hrandfield(b"row:1", n + 10, false).unwrap().len(),
-        g.hrandfield(b"row:1", n + 10, false).unwrap().len()
+        p.hrandfield(b"row:1", n + 10).unwrap().len(),
+        g.hrandfield(b"row:1", n + 10).unwrap().len()
     );
 
     // A negative count returns exactly |count| from both.
-    assert_eq!(p.hrandfield(b"row:1", -5, false).unwrap().len(), 5);
-    assert_eq!(g.hrandfield(b"row:1", -5, false).unwrap().len(), 5);
+    assert_eq!(p.hrandfield(b"row:1", -5).unwrap().len(), 5);
+    assert_eq!(g.hrandfield(b"row:1", -5).unwrap().len(), 5);
 }
 
 /// The mutating verbs a catch-all had been answering for.

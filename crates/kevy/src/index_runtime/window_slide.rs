@@ -60,7 +60,7 @@ pub(super) fn evict_and_slide(
         match sealed {
             Ok(None) => {}
             Ok(Some(batch)) => {
-                crate::kevy_rt_push_tick_frame(&batch.file);
+                crate::kevy_rt_push_tick_frame(batch.file());
                 store.commit_row_eviction(&batch);
             }
             Err(e) => {

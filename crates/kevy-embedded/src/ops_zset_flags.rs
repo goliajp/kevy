@@ -9,35 +9,24 @@
 //! and diverge; the absolute form is deterministic. Same lesson as
 //! the SPOP→SREM propagation fix (log the effect, not the verb).
 
-use crate::{KevyError, KevyResult};
+use crate::KevyResult;
 
 use kevy_store::{ZaddFlags, ZaddReport};
 
 use crate::store::ensure_writable;
 use crate::store::{Store, commit_write, store_err};
 
-fn reject_invalid(flags: ZaddFlags) -> KevyResult<()> {
-    if flags.valid() {
-        Ok(())
-    } else {
-        Err(KevyError::InvalidInput(
-            "GT, LT, and/or NX options at the same time are not compatible".into(),
-        ))
-    }
-}
-
 impl Store {
     /// Flags-aware `ZADD`. See [`ZaddFlags`]; read
     /// [`ZaddReport::changed`] for the `CH` reply shape. The
-    /// monotonic-heal idiom is `zadd_flags(k, pairs, ZaddFlags { gt:
-    /// true, ..Default::default() })`.
+    /// monotonic-heal idiom is `zadd_flags(k, pairs,
+    /// ZaddFlags::new(SetCondition::Always, ScoreCompare::Greater)?)`.
     pub fn zadd_flags(
         &self,
         key: &[u8],
         pairs: &[(f64, &[u8])],
         flags: ZaddFlags,
     ) -> KevyResult<ZaddReport> {
-        reject_invalid(flags)?;
         ensure_writable(self)?;
         let mut g = self.wshard(key);
         let rep = g.store.zadd_flags(key, pairs, flags).map_err(store_err)?;
@@ -65,7 +54,6 @@ impl Store {
         member: &[u8],
         flags: ZaddFlags,
     ) -> KevyResult<Option<f64>> {
-        reject_invalid(flags)?;
         ensure_writable(self)?;
         let mut g = self.wshard(key);
         let next = g.store.zadd_incr(key, delta, member, flags).map_err(store_err)?;

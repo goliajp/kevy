@@ -19,8 +19,8 @@ pub(crate) const MAX_PENDING_DROPS: usize = 64;
 impl Store {
     /// Install the runtime's bio-drop channel. Called
     /// once from `kevy-rt::Runtime::run` per shard before the reactor
-    /// loop starts. After install, [`Self::maybe_offload_drop`] (invoked
-    /// from the SET overwrite fast path) accumulates oversize `Value`s
+    /// loop starts. After install, the SET overwrite fast path
+    /// accumulates displaced oversize `Value`s
     /// into a per-shard batch; the reactor calls
     /// [`Self::flush_pending_drops`] at the end of every iter to ship
     /// the batch in one mpsc send. Bounds the 10 KB-SET p999/max

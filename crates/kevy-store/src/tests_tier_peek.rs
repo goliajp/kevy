@@ -42,7 +42,7 @@ fn peek_fields_hot_cold_missing_wrongtype() {
     let (mut s, _d) = tiered("peek-fields");
     put_row(&mut s, b"hot");
     put_row(&mut s, b"cold");
-    s.set(b"str", vec![b's'; 100], None, false, false);
+    s.set(b"str", vec![b's'; 100], None, crate::SetCondition::Always);
     assert!(s.debug_force_demote(b"cold"));
     assert!(s.debug_force_demote(b"str"));
 
@@ -95,7 +95,7 @@ fn page_peek_mixed_rows_in_order_one_batch() {
     for i in 0..6u8 {
         put_row(&mut s, format!("row:{i}").as_bytes());
     }
-    s.set(b"strval", vec![b'v'; 100], None, false, false);
+    s.set(b"strval", vec![b'v'; 100], None, crate::SetCondition::Always);
     for i in [1u8, 3, 4] {
         assert!(s.debug_force_demote(format!("row:{i}").as_bytes()));
     }
@@ -177,7 +177,7 @@ fn page_peek_plan_is_sorted_by_file_and_offset() {
 fn peek_scope_reads_cold_without_promoting_or_marking() {
     let (mut s, _d) = tiered("peek-scope");
     put_row(&mut s, b"h");
-    s.set(b"v", vec![b'z'; 200], None, false, false);
+    s.set(b"v", vec![b'z'; 200], None, crate::SetCondition::Always);
     let hot_hash = s.hgetall(b"h").unwrap();
     let hot_val = s.get(b"v").unwrap().map(|c| c.to_vec());
     assert!(s.debug_force_demote(b"h"));

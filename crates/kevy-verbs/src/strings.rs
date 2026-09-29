@@ -6,7 +6,7 @@ use std::time::Duration;
 use kevy_resp::{
     ArgvView, encode_bulk, encode_error, encode_integer, encode_null_bulk, encode_simple_string,
 };
-use kevy_store::Store;
+use kevy_store::{SetCondition, Store};
 
 use crate::args::{arg_f64, arg_i64};
 use crate::reply::{
@@ -53,7 +53,7 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
                 wrong_args(out, "setnx");
                 return Some(Effect::Unchanged);
             }
-            let set = store.set_slice(&args[1], &args[2], None, true, false);
+            let set = store.set_slice(&args[1], &args[2], None, kevy_store::SetCondition::IfAbsent);
             encode_integer(out, i64::from(set));
             changed(set)
         }
@@ -136,13 +136,13 @@ pub fn set<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>)
         return Effect::Unchanged;
     }
     let mut expire: Option<Duration> = None;
-    let mut nx = false;
-    let mut xx = false;
+    let mut cond = SetCondition::Always;
     let mut i = 3;
     while i < args.len() {
         match args[i].to_ascii_uppercase().as_slice() {
-            b"NX" => nx = true,
-            b"XX" => xx = true,
+            // NX and XX together is a syntax error, as in Redis
+            b"NX" if cond != SetCondition::IfPresent => cond = SetCondition::IfAbsent,
+            b"XX" if cond != SetCondition::IfAbsent => cond = SetCondition::IfPresent,
             opt @ (b"EX" | b"PX") => {
                 let Some(raw) = args.get(i + 1) else {
                     encode_error(out, ERR_SYNTAX);
@@ -163,11 +163,7 @@ pub fn set<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>)
         }
         i += 1;
     }
-    if nx && xx {
-        encode_error(out, ERR_SYNTAX);
-        return Effect::Unchanged;
-    }
-    let done = store.set_slice(&args[1], &args[2], expire, nx, xx);
+    let done = store.set_slice(&args[1], &args[2], expire, cond);
     if done {
         encode_simple_string(out, "OK");
     } else {
@@ -193,7 +189,12 @@ fn setex<A: ArgvView + ?Sized>(
         return Effect::Unchanged;
     };
     let ms = n.saturating_mul(unit_ms) as u64;
-    store.set_slice(&args[1], &args[3], Some(Duration::from_millis(ms)), false, false);
+    store.set_slice(
+        &args[1],
+        &args[3],
+        Some(Duration::from_millis(ms)),
+        kevy_store::SetCondition::Always,
+    );
     encode_simple_string(out, "OK");
     Effect::Write
 }

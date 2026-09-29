@@ -28,7 +28,7 @@
 //! use kevy_verbs::{Effect, aof::deferred_frames};
 //! let mut store = kevy_store::Store::new();
 //! let argv = kevy_resp::Argv::from(vec![b"XADD".to_vec(), b"s".to_vec(), b"*".to_vec(), b"f".to_vec(), b"v".to_vec()]);
-//! let id = kevy_store::StreamId { ms: 5, seq: 1 };
+//! let id = kevy_store::StreamId::new(5, 1);
 //! let frames = deferred_frames(&mut store, &argv, &Effect::RecordId(2, id));
 //! assert_eq!(&frames[0][2], b"5-1");
 //! ```
@@ -80,7 +80,7 @@ impl Claim {
 ///
 /// ```
 /// let mut buf = [0u8; 41];
-/// let id = kevy_store::StreamId { ms: 1_790_000_000_000, seq: 12 };
+/// let id = kevy_store::StreamId::new(1_790_000_000_000, 12);
 /// assert_eq!(kevy_verbs::aof::id_bytes(&mut buf, id), b"1790000000000-12");
 /// assert_eq!(kevy_verbs::aof::id_bytes(&mut buf, id), id.encode().as_slice());
 /// ```
@@ -169,7 +169,7 @@ pub(crate) fn claim_head(
 /// with that time, whatever the replay's clock says. `None` when the group
 /// or the consumer is gone.
 pub(crate) fn seen_frame(store: &Store, key: &[u8], group: &[u8], consumer: &[u8]) -> Option<Argv> {
-    let seen = store.stream_group_peek(key, group)?.consumers.get(consumer)?.last_seen_ms();
+    let seen = store.stream_group_peek(key, group)?.consumer(consumer)?.last_seen_ms();
     let mut f = Argv::with_capacity(5, 0);
     for part in [CONSUMER_SEEN.as_bytes(), key, group, consumer] {
         f.push(part);
@@ -237,7 +237,7 @@ pub(crate) fn taken_frames(
     let Some(g) = store.stream_group_peek(key, group) else { return Vec::new() };
     let mut by: Vec<((u64, u32), Vec<StreamId>)> = Vec::new();
     for id in ids {
-        let Some(row) = g.pel.get(id) else { continue };
+        let Some(row) = g.pending_entry(*id) else { continue };
         let at = (row.delivery_time_ms, row.delivery_count);
         match by.iter_mut().find(|(k, _)| *k == at) {
             Some((_, same)) => same.push(*id),

@@ -185,25 +185,11 @@ impl Instance {
     }
 }
 
-/// Redis-canonical message for a store-semantic error.
-///
-/// Mirrors the strings kevy-embedded's full RESP dispatcher emits
-/// (`dispatch::util`), duplicated here because that table is `pub(super)`
-/// and unreachable from this crate. The `dispatch_oracle` parity test in
-/// kevy-embedded holds those strings against the server byte for byte, so
-/// this door surfaces exactly the wording a native kevy would.
+/// Redis-canonical message for a store-semantic error: the same text the
+/// server and the embedded dispatcher send, so this door surfaces exactly
+/// the wording a native kevy would.
 fn store_err_canonical(e: &StoreError) -> &'static str {
-    match e {
-        StoreError::WrongType => {
-            "WRONGTYPE Operation against a key holding the wrong kind of value"
-        }
-        StoreError::NotInteger => "ERR value is not an integer or out of range",
-        StoreError::Overflow => "ERR increment or decrement would overflow",
-        StoreError::OutOfRange => "ERR index out of range",
-        StoreError::NoSuchKey => "ERR no such key",
-        StoreError::NotFloat => "ERR value is not a valid float",
-        StoreError::OutOfMemory => "OOM command not allowed when used memory > 'maxmemory'.",
-    }
+    e.as_wire()
 }
 
 /// Handle allocator. Starts at 1 so 0 stays "no instance".

@@ -214,7 +214,11 @@ fn demote_promote_move_tier_counters_only_and_emit_no_events() {
     s.set(b"cold:k", &[b'x'; 4096]).unwrap();
     // Capture every store-origin event kind, then drain the SET's `new`.
     s.with(|st| {
-        st.set_notify_capture(true, true, true);
+        st.set_notify_capture([
+            kevy_store::KeyspaceEvent::New,
+            kevy_store::KeyspaceEvent::Expired,
+            kevy_store::KeyspaceEvent::Evicted,
+        ]);
         st.take_notify_events();
     });
     assert!(s.debug_force_demote(b"cold:k"));

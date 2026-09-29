@@ -152,14 +152,26 @@ impl Store {
         self.reap(key, now) && self.map.contains_key(key)
     }
 
-    /// `RENAME` (or `RENAMENX` if `nx`). Atomic on this shard. Returns
-    /// the outcome so the dispatch layer can emit the right RESP frame
-    /// (RENAME: `+OK` or `-ERR no such key`; RENAMENX: `:1`/`:0`/error).
+    /// `RENAME`: move `src`'s value and TTL to `dst`, replacing whatever
+    /// `dst` held. Atomic on this shard. Returns the outcome so the
+    /// dispatch layer can emit the right RESP frame (`+OK` or `-ERR no
+    /// such key`).
     ///
     /// Cross-shard rename is the runtime's job — by the time this is
     /// called, both `src` and `dst` are guaranteed to live on the same
     /// shard. See `kevy-rt::start_rename` for the cross-shard split.
-    pub fn rename(&mut self, src: &[u8], dst: &[u8], nx: bool) -> RenameOutcome {
+    pub fn rename(&mut self, src: &[u8], dst: &[u8]) -> RenameOutcome {
+        self.rename_if(src, dst, false)
+    }
+
+    /// `RENAMENX`: [`Self::rename`], except that a live `dst` refuses the
+    /// move with [`RenameOutcome::DstExists`] (`:0`), as does renaming a
+    /// key onto itself.
+    pub fn rename_nx(&mut self, src: &[u8], dst: &[u8]) -> RenameOutcome {
+        self.rename_if(src, dst, true)
+    }
+
+    fn rename_if(&mut self, src: &[u8], dst: &[u8], nx: bool) -> RenameOutcome {
         let now = now_ns();
         if !self.reap(src, now) {
             return RenameOutcome::NoSuchSrc;

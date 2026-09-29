@@ -112,7 +112,7 @@ impl<C: Commands> Shard<C> {
                     // manifest that does not hold the segment means the
                     // truth set was damaged — finish the walk, then
                     // refuse startup by name instead of dropping rows.
-                    if let Err(e) = kevy_store::apply_segmented(store, &segs_dir, f) {
+                    if let Err(e) = store.apply_segmented(&segs_dir, f) {
                         torn.get_or_insert(e);
                     }
                     return;

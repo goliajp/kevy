@@ -70,7 +70,7 @@ impl<'a> FrameApplier<'a> {
             // The SEGMENTED stitch: re-do the hot-layer eviction; a
             // manifest miss is a named refusal after the walk (the
             // rows' durable copy is unreachable).
-            if let Err(e) = kevy_store::apply_segmented(self.store, &self.segs_dir, f) {
+            if let Err(e) = self.store.apply_segmented(&self.segs_dir, f) {
                 self.torn.get_or_insert(e);
             }
             return;
