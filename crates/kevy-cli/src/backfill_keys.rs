@@ -32,7 +32,8 @@ use std::process::ExitCode;
 use crate::link::Link;
 
 /// Where a set of item names comes from.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Source {
     /// The members of a set, sorted set, or list key.
     Index(String),
@@ -66,7 +67,8 @@ impl Source {
 }
 
 /// What one source contributed.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub struct SourceReport {
     /// How the source was named on the command line.
     pub label: String,
@@ -78,7 +80,8 @@ pub struct SourceReport {
 }
 
 /// The union, and where each name came from.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub struct Union {
     /// Every name, first-seen order, deduplicated.
     pub names: Vec<Vec<u8>>,

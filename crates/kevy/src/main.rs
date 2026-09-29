@@ -66,7 +66,7 @@ fn handle_keygen() {
         eprintln!("usage: kevy keygen <file>");
         std::process::exit(2);
     };
-    match kevy::secure::keygen(std::path::Path::new(&path)) {
+    match kevy::secure::keygen(&path) {
         Ok(public) => {
             println!("{}", kevy_config::key_to_hex(&public));
             std::process::exit(0);

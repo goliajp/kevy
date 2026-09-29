@@ -12,7 +12,7 @@
 //! // Needs a server on 127.0.0.1:6004.
 //! use kevy_cli::link::Link;
 //! let mut client = kevy_resp_client::RespClient::connect("127.0.0.1", 6004)?;
-//! kevy_cli::doctor::run(&mut client, false)?;
+//! kevy_cli::doctor::run(&mut client, kevy_cli::doctor::OnWarning::Report)?;
 //! # Ok::<(), std::io::Error>(())
 //! ```
 
@@ -20,6 +20,9 @@ use kevy_resp_client::{Reply, RespClient};
 use std::io;
 
 /// A request/reply connection to a RESP server.
+///
+/// Sealed: implemented by [`RespClient`] and by kevy-cli's own redis-cli
+/// connection, the two connections the tools are written against.
 ///
 /// ```no_run
 /// // Needs a server on 127.0.0.1:6004.
@@ -30,7 +33,7 @@ use std::io;
 /// assert_eq!(pong, kevy_resp_client::Reply::Simple(b"PONG".to_vec()));
 /// # Ok::<(), std::io::Error>(())
 /// ```
-pub trait Link {
+pub trait Link: sealed::Sealed {
     /// Send one command and read its reply.
     ///
     /// ```no_run
@@ -57,6 +60,13 @@ pub trait Link {
     /// # Ok::<(), std::io::Error>(())
     /// ```
     fn pipeline_raw(&mut self, raw: &[u8], n: usize) -> io::Result<Vec<Reply>>;
+}
+
+pub(crate) mod sealed {
+    /// The implementors [`super::Link`] admits.
+    pub trait Sealed {}
+    impl Sealed for kevy_resp_client::RespClient {}
+    impl Sealed for crate::rcli::conn::Conn {}
 }
 
 impl Link for RespClient {

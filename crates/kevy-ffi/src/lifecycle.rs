@@ -45,7 +45,7 @@ fn apply(opts: &KevyOpenOptions, mut cfg: Config) -> Config {
     cfg.with_auto_rewrite_interval(std::time::Duration::from_secs(opts.rewrite_interval_secs))
 }
 
-/// [`kevy_open`] with explicit options: durable at `dir` when `dir` is
+/// [`kevy_open`](crate::kevy_open) with explicit options: durable at `dir` when `dir` is
 /// non-null, in-memory when `dir` is null and `dir_len` is 0. A null
 /// `opts` behaves exactly like `kevy_open` / `kevy_open_mem`. Returns
 /// null on failure.

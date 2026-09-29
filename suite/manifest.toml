@@ -324,6 +324,18 @@ requires = ["linux"]
 proves = "the set of never-executed symbols may only shrink — what covgate's percentage cannot hold"
 
 [[check]]
+id = "docgate"
+area = "doc"
+tier = "precommit"
+cmd = "bash bench/docgate.sh"
+# every crate re-documented after a change low in the graph takes 17s on
+# an 8-core box; an unchanged tree, 2s
+expected = 40
+timeout = 900
+requires = []
+proves = "every crate's API documentation builds with rustdoc warnings denied: no link to a private item or to nothing"
+
+[[check]]
 id = "rustdoc-coverage"
 area = "doc"
 tier = "premerge"
@@ -630,7 +642,7 @@ cmd = "python3 tools/check_feature_lints.py"
 expected = 133
 timeout = 1800
 requires = []
-proves = "every crate alone, and every off-by-default feature, is clippy-zero too"
+proves = "every crate alone, every off-by-default feature, and every crate's minimal cut (one default feature at a time) is clippy-zero too"
 
 [[check]]
 id = "workspace-tests"

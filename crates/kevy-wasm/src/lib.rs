@@ -13,7 +13,8 @@
 //!   call takes the handle first. `0` is never a valid handle.
 //! - **Bytes in** cross as `(ptr, len)` pairs pointing into linear
 //!   memory the caller obtained from [`kevy_alloc`] (and returns with
-//!   [`kevy_free`]).
+//!   [`kevy_free`]). Each pair must stay readable, and unwritten, for
+//!   the whole call; `len == 0` is always accepted and means empty.
 //! - **Bytes out** land in a per-instance result buffer read via
 //!   [`kevy_out_ptr`] / [`kevy_out_len`]; the buffer is valid until the
 //!   next call on the same handle, so callers copy out immediately.
@@ -40,6 +41,17 @@
 //! [`kevy_aof_dump`] produces a compacted image for log rewriting. The
 //! byte format is exactly `kevy-persist`'s AOF format, so a log written
 //! by a browser tab replays in a native kevy just as well.
+//!
+//! [`kevy_open`]: abi_core::kevy_open
+//! [`kevy_alloc`]: abi_core::kevy_alloc
+//! [`kevy_free`]: abi_core::kevy_free
+//! [`kevy_out_ptr`]: abi_core::kevy_out_ptr
+//! [`kevy_out_len`]: abi_core::kevy_out_len
+//! [`kevy_tick`]: abi_core::kevy_tick
+//! [`kevy_set_clock`]: abi_core::kevy_set_clock
+//! [`kevy_aof_frames_out`]: abi_aof::kevy_aof_frames_out
+//! [`kevy_aof_frame_in`]: abi_aof::kevy_aof_frame_in
+//! [`kevy_aof_dump`]: abi_aof::kevy_aof_dump
 
 // `write!` into a `String` / `Vec` returns a `Result` because the
 // trait must, not because it can fail.

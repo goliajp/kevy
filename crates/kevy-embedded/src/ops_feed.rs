@@ -42,6 +42,21 @@ pub struct Change {
     pub argv: Vec<Vec<u8>>,
 }
 
+impl Change {
+    /// A change at `offset` carrying `argv` — what a client decoding a
+    /// server's `FEED.READ` reply builds, so both backends hand back
+    /// the same type.
+    ///
+    /// ```
+    /// let c = kevy_embedded::Change::new(7, vec![b"DEL".to_vec(), b"k".to_vec()]);
+    /// assert_eq!((c.offset, c.argv.len()), (7, 2));
+    /// ```
+    #[inline]
+    pub fn new(offset: u64, argv: Vec<Vec<u8>>) -> Self {
+        Self { offset, argv }
+    }
+}
+
 /// A batch of changes plus the cursor to resume from.
 ///
 /// ```
@@ -62,6 +77,22 @@ pub struct ChangeBatch {
     pub changes: Vec<Change>,
     /// The cursor to pass to the next `changes_since`.
     pub next: FeedPosition,
+}
+
+impl ChangeBatch {
+    /// A batch of `changes` resuming at `next` — the decoded form of a
+    /// server's `FEED.READ` reply.
+    ///
+    /// ```
+    /// use kevy_embedded::{ChangeBatch, FeedPosition};
+    /// let caught_up = ChangeBatch::new(Vec::new(), FeedPosition::new(1, 42));
+    /// assert!(caught_up.changes.is_empty());
+    /// assert_eq!(caught_up.next.offset, 42);
+    /// ```
+    #[inline]
+    pub fn new(changes: Vec<Change>, next: FeedPosition) -> Self {
+        Self { changes, next }
+    }
 }
 
 /// Why a feed read could not be served.
