@@ -419,6 +419,7 @@ impl<C: Commands> Shard<C> {
         };
         conn.blocked = false;
         let proto = waiter.proto;
+        let before = conn.output.len();
         match proto {
             RespVersion::V2 => {
                 self.commands.dispatch_into(&mut self.store, &waiter.argv, &mut conn.output)
@@ -427,7 +428,10 @@ impl<C: Commands> Shard<C> {
                 self.commands.dispatch_into_resp3(&mut self.store, &waiter.argv, &mut conn.output)
             }
         }
+        let ran = conn.output.len() > before;
         conn.next_emit += 1;
         self.dirty.push(waiter.conn_id);
+        let key_idx = crate::exec_propagate::served_key_idx(waiter.kind, waiter.argv.len());
+        self.record_served(&waiter.argv, key_idx, ran);
     }
 }

@@ -145,7 +145,19 @@ impl<C: Commands> Shard<C> {
                 self.start_repl_barrier(conn_id, seq, offsets, timeout_ms, miss);
             }
             Route::Local => {
-                let meta = DispatchMeta { is_write, wake_idx, key_idx: None, verb };
+                // a blocking pop that finds data pops the key it names first
+                let key_idx = match &block_hint {
+                    crate::BlockHint::Block {
+                        kind:
+                            crate::BlockKind::Blpop
+                            | crate::BlockKind::Brpop
+                            | crate::BlockKind::Bzpopmin
+                            | crate::BlockKind::Brpoplpush,
+                        ..
+                    } => Some(1),
+                    _ => None,
+                };
+                let meta = DispatchMeta { is_write, wake_idx, key_idx, verb };
                 self.start_single(conn_id, seq, proto, args, self.id, is_quit, block_hint, meta);
             }
             Route::Single(idx) => {

@@ -56,27 +56,37 @@ fn exec_answers_exactly_the_table() {
     assert!(probed > 250, "probed only {probed}");
 }
 
-/// The write column agrees with the registry's, except where the
-/// registry records how the server logs a verb rather than its effect.
+/// The write column agrees with the registry's, and the lookup a caller
+/// asks on every command agrees with the table.
 #[test]
 fn the_write_column_matches_the_registry() {
-    // RENAME / RENAMENX are routed at the op level and BLPOP / BRPOP are
-    // logged as the pop they perform, so the registry calls all four
-    // reads; each of them does change the keyspace
-    const ROUTED: &[&str] = &["BLPOP", "BRPOP", "RENAME", "RENAMENX"];
     let mut compared = 0;
     for v in VERBS {
         let Some(row) = OP_TABLE.iter().find(|o| o.name == v.name) else {
             panic!("{}: in VERBS but not in the registry", v.name);
         };
-        if ROUTED.contains(&v.name) {
-            assert!(v.write && !row.write, "{}: the routing exception no longer holds", v.name);
-            continue;
-        }
         assert_eq!(v.write, row.write, "{}: write column disagrees", v.name);
+        assert_eq!(crate::is_write(v.name.as_bytes()), Some(v.write), "{}", v.name);
         compared += 1;
     }
     assert!(compared > 90);
+    for name in ["PING", "COPY", "EVAL", "get"] {
+        assert_eq!(crate::is_write(name.as_bytes()), None, "{name}");
+    }
+}
+
+/// A blocking pop that pops is recorded as the plain pop it performed;
+/// one that pops nothing asks for no record.
+#[test]
+fn a_blocking_pop_records_the_pop_it_performed() {
+    let mut s = Store::new();
+    assert_eq!(run(&mut s, "BLPOP q 0"), (Some(Effect::Unchanged), Vec::new()));
+    assert_eq!(run(&mut s, "BLPOP q r 0"), (Some(Effect::Unchanged), Vec::new()));
+    run(&mut s, "RPUSH q a b");
+    let pop = |v: &str| Some(Effect::Record(vec![v.as_bytes().to_vec(), b"q".to_vec()]));
+    assert_eq!(run(&mut s, "BLPOP q 0").0, pop("LPOP"));
+    assert_eq!(run(&mut s, "BRPOP q 0").0, pop("RPOP"));
+    assert_eq!(run(&mut s, "LLEN q").1, b":0\r\n");
 }
 
 #[test]
@@ -105,4 +115,37 @@ fn spop_is_recorded_as_what_it_removed() {
     assert_eq!(out, b"*1\r\n$1\r\na\r\n");
     assert_eq!(effect, Some(Effect::Record(vec![b"SREM".to_vec(), b"s".to_vec(), b"a".to_vec()])));
     assert_eq!(run(&mut s, "SRANDMEMBER s").0, Some(Effect::Read));
+}
+
+/// A store serving from a cached clock (as the server's shards do) whose
+/// cache is older than a key's deadline: the key is past its deadline by
+/// the fresh clock but not yet by the cached one.
+fn stale_clock_store_with_lapsed_key() -> Store {
+    let mut s = Store::new();
+    s.set_cached_clock(true);
+    s.refresh_clock();
+    run(&mut s, "SET k v PX 20");
+    std::thread::sleep(std::time::Duration::from_millis(60));
+    s
+}
+
+/// EXPIRE decides whether the key exists with the same probe that writes
+/// it, so a key lapsed between two clocks gets one answer, not two: a
+/// non-positive TTL and a positive one both find it gone.
+#[test]
+fn expire_decides_existence_with_the_probe_that_writes() {
+    let lapsed =
+        ["EXPIRE k 0", "PEXPIRE k -1", "EXPIRE k 100", "PEXPIREAT k 1", "EXPIREAT k 99999999999"];
+    for cmd in lapsed {
+        let mut s = stale_clock_store_with_lapsed_key();
+        assert_eq!(run(&mut s, cmd), (Some(Effect::Unchanged), b":0\r\n".to_vec()), "{cmd}");
+        assert_eq!(s.dbsize(), 0, "{cmd}");
+    }
+    let mut s = Store::new();
+    run(&mut s, "SET k v");
+    assert_eq!(run(&mut s, "EXPIRE k 0"), (Some(Effect::Write), b":1\r\n".to_vec()));
+    assert_eq!(run(&mut s, "EXPIRE k 0"), (Some(Effect::Unchanged), b":0\r\n".to_vec()));
+    run(&mut s, "SET k v");
+    assert_eq!(run(&mut s, "PEXPIREAT k 1"), (Some(Effect::Write), b":1\r\n".to_vec()));
+    assert_eq!(s.dbsize(), 0);
 }

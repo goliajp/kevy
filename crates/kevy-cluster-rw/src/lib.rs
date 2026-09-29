@@ -362,57 +362,58 @@ impl ReadWriteClient {
     }
 }
 
-/// `true` when `verb` is a keyspace-mutating command and so must run
-/// against the primary. Otherwise the command is read-side and a
-/// replica can serve it.
+/// `true` when `verb` must run against the primary: a command the
+/// server counts as a keyspace write, or one that writes no key but
+/// only the primary can answer for. Otherwise a replica can serve it.
 ///
-/// The table mirrors `kevy::cmd::is_write_verb` (server-side) — kept
-/// in sync by review. Verbs not listed here (including PING / ECHO /
-/// CLUSTER / CLIENT / HELLO) are read-side or keyspace-neutral.
+/// The keyspace writes come from the server's command table
+/// (`kevy_resp::ops_table`), the same write column the server's own
+/// classification is held to.
 ///
 /// ```
 /// use kevy_cluster_rw::is_write_verb;
 ///
 /// assert!(is_write_verb(b"SET"));
 /// assert!(is_write_verb(b"hset")); // case-insensitive
+/// assert!(is_write_verb(b"BLPOP")); // a pop writes
 /// assert!(!is_write_verb(b"GET"));
 /// assert!(!is_write_verb(b"PING")); // keyspace-neutral goes read-side
 /// ```
 pub fn is_write_verb(verb: &[u8]) -> bool {
     let mut buf = [0u8; 32];
     let upper = ascii_upper(verb, &mut buf);
+    is_keyspace_write(upper) || runs_on_the_primary(upper)
+}
+
+fn is_keyspace_write(upper: &[u8]) -> bool {
+    use kevy_resp::ops_table::{spec, surface};
+    core::str::from_utf8(upper)
+        .ok()
+        .and_then(spec)
+        .is_some_and(|o| o.write && o.surfaces & surface::SERVER != 0)
+}
+
+/// Commands with no keyspace row that still belong on the primary: a
+/// script may write any key, a transaction's `EXEC` runs its writes,
+/// admin changes the node, and a publish counts the primary's
+/// subscribers.
+fn runs_on_the_primary(upper: &[u8]) -> bool {
     matches!(
         upper,
-        // strings + counters
-        b"SET" | b"SETNX" | b"SETEX" | b"PSETEX" | b"MSET" | b"MSETNX"
-        | b"APPEND" | b"INCR" | b"INCRBY" | b"INCRBYFLOAT"
-        | b"DECR" | b"DECRBY" | b"GETSET" | b"GETDEL"
-        | b"SETRANGE"
-        // generic keyspace
-        | b"DEL" | b"UNLINK" | b"EXPIRE" | b"EXPIREAT" | b"PEXPIRE" | b"PEXPIREAT"
-        | b"PERSIST" | b"RENAME" | b"RENAMENX" | b"TYPE" // TYPE is read but cheap to misclassify
-        | b"COPY" | b"OBJECT"
-        // hash
-        | b"HSET" | b"HSETNX" | b"HMSET" | b"HDEL" | b"HINCRBY" | b"HINCRBYFLOAT"
-        // list
-        | b"LPUSH" | b"RPUSH" | b"LPUSHX" | b"RPUSHX" | b"LPOP" | b"RPOP"
-        | b"LREM" | b"LTRIM" | b"LSET" | b"LINSERT" | b"RPOPLPUSH" | b"LMOVE"
-        | b"BLPOP" | b"BRPOP" | b"BLMOVE"
-        // set
-        | b"SADD" | b"SREM" | b"SPOP" | b"SMOVE" | b"SINTERSTORE" | b"SUNIONSTORE" | b"SDIFFSTORE"
-        // zset
-        | b"ZADD" | b"ZREM" | b"ZINCRBY" | b"ZPOPMIN" | b"ZPOPMAX"
-        | b"ZREMRANGEBYRANK" | b"ZREMRANGEBYSCORE" | b"ZREMRANGEBYLEX"
-        // stream
-        | b"XADD" | b"XDEL" | b"XTRIM" | b"XGROUP" | b"XACK" | b"XCLAIM" | b"XAUTOCLAIM"
-        // server admin (mutates state)
-        | b"FLUSHDB" | b"FLUSHALL" | b"CONFIG" | b"SAVE" | b"BGSAVE" | b"BGREWRITEAOF"
-        | b"REPLICAOF" | b"SLAVEOF"
-        // pub/sub PUBLISH technically mutates subscriber state — route to primary
-        // so the publisher's "delivered count" reflects the primary's registry
-        | b"PUBLISH" | b"SPUBLISH"
-        // txn
-        | b"MULTI" | b"EXEC" | b"DISCARD" | b"WATCH" | b"UNWATCH"
+        b"EVAL"
+            | b"EVALSHA"
+            | b"MULTI"
+            | b"EXEC"
+            | b"DISCARD"
+            | b"WATCH"
+            | b"UNWATCH"
+            | b"CONFIG"
+            | b"SAVE"
+            | b"BGSAVE"
+            | b"BGREWRITEAOF"
+            | b"REPLICAOF"
+            | b"SLAVEOF"
+            | b"PUBLISH"
     )
 }
 

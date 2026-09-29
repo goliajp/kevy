@@ -94,6 +94,13 @@ impl<C: Commands> Shard<C> {
                 self.commands.dispatch_into_resp3(&mut self.store, &argv, &mut reply)
             }
         }
+        match kind {
+            Some(k) => {
+                let key_idx = crate::exec_propagate::served_key_idx(k, argv.len());
+                self.record_served(&argv, key_idx, !reply.is_empty());
+            }
+            None => crate::propagation::discard_override(),
+        }
         reply
     }
 
@@ -120,6 +127,8 @@ impl<C: Commands> Shard<C> {
         };
         let mut sink = Vec::new();
         self.commands.dispatch_into(&mut self.store, &undo, &mut sink);
+        // the undo is a push, so it is recorded like the pop it reverses
+        self.record_served(&undo, 1, !sink.is_empty());
         // The key has data again, so anyone parked on it must be woken --
         // BOTH a cross-shard waiter AND a blocking client on this very
         // shard. `dispatch_into` writes straight to the store, bypassing

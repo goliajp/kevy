@@ -238,3 +238,59 @@ fn every_dispatched_verb_is_in_the_registry_or_named_as_outside_it() {
          NOT_KEYSPACE so the ledger stays exact"
     );
 }
+
+/// A replica refuses a write in the server's words, byte for byte, which
+/// are Redis's: the sentence ends with a period.
+#[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
+#[test]
+fn a_replica_refuses_a_write_in_the_servers_words() {
+    // an upstream nobody listens on: the store stays a replica
+    let s = Store::open_replica("127.0.0.1:1").expect("open replica");
+    let readonly: &[u8] = b"-READONLY You can't write against a read only replica.\r\n";
+    assert_eq!(run(&s, &[b"SET", b"k", b"v"]), readonly);
+    assert_eq!(run(&s, &[b"DEL", b"k"]), readonly);
+}
+
+/// Writes of every family, malformed and well-formed, whichever path
+/// serves them: the shared layer, a facade arm, or one that spans shards.
+const WRITES: &[&[&[u8]]] = &[
+    &[b"DEL"],
+    &[b"DEL", b"k"],
+    &[b"MSET", b"a"],
+    &[b"MSET", b"a", b"1"],
+    &[b"SET"],
+    &[b"SET", b"k"],
+    &[b"SET", b"k", b"v", b"BADOPT"],
+    &[b"EXPIRE", b"k", b"abc"],
+    &[b"HSET", b"h", b"f"],
+    &[b"ZADD", b"z", b"notnum", b"m"],
+    &[b"RENAME", b"a"],
+    &[b"COPY", b"a"],
+    &[b"SUNIONSTORE"],
+];
+
+/// On a replica a write is refused with the server's exact reply before
+/// its arguments are read, as the server does; a read still runs.
+#[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
+#[test]
+fn a_replica_refuses_a_write_before_reading_its_arguments() {
+    // an upstream nobody listens on: the store stays a replica
+    let s = Store::open_replica("127.0.0.1:1").expect("open replica");
+    let readonly: &[u8] = b"-READONLY You can't write against a read only replica.\r\n";
+    for cmd in WRITES {
+        assert_eq!(run(&s, cmd), readonly, "{cmd:?}");
+    }
+    assert_eq!(run(&s, &[b"GET"]), b"-ERR wrong number of arguments for 'get' command\r\n");
+    assert_eq!(run(&s, &[b"GET", b"k"]), b"$-1\r\n");
+}
+
+/// A closed store answers a write with its state the same way.
+#[test]
+fn a_closed_store_refuses_a_write_before_reading_its_arguments() {
+    let s = mem_store();
+    s.shutdown().expect("shutdown");
+    for cmd in WRITES {
+        assert_eq!(run(&s, cmd), b"-ERR connection closed\r\n", "{cmd:?}");
+    }
+    assert_eq!(run(&s, &[b"GET", b"k"]), b"$-1\r\n");
+}
