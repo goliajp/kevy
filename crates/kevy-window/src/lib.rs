@@ -343,7 +343,7 @@ impl WindowRt {
         // number is one below the counter it left behind.
         self.cold.push((
             self.seq - 1,
-            kevy_seg::Seg::open(&segs_dir.join(&file))
+            kevy_seg::Seg::open(segs_dir.join(&file))
                 .map_err(|e| format!("reopen {file}: {e}"))?,
         ));
         self.probe(index_name, batch.len());
@@ -401,13 +401,10 @@ impl WindowRt {
             let _ = std::fs::remove_file(&path);
         })?;
         let mut m = kevy_seg::Manifest::open(segs_dir).map_err(|e| e.to_string())?;
-        m.add(kevy_seg::ManifestEntry {
-            file: file.clone(),
-            meta: [b"idxcold:", index_name].concat(),
-            min_key: meta.min_key,
-            max_key: meta.max_key,
-            records: meta.records,
-        })
+        m.add(
+            kevy_seg::ManifestEntry::new(file.clone(), meta)
+                .with_meta([b"idxcold:", index_name].concat()),
+        )
         .map_err(|e| e.to_string())?;
         Ok(file)
     }

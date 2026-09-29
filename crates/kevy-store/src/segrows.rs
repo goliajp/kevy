@@ -134,7 +134,7 @@ impl Store {
                 let Some(q) = seq_of(&e.file) else {
                     return Err(format!("row segment '{}' has no parsable seq", e.file));
                 };
-                let seg = kevy_seg::Seg::open(&dir.join(&e.file))
+                let seg = kevy_seg::Seg::open(dir.join(&e.file))
                     .map_err(|err| format!("open {}: {err}", e.file))?;
                 seq = seq.max(q + 1);
                 segs.push((
@@ -182,7 +182,7 @@ impl Store {
         });
         // Files the ledger never learned about (a crash mid-build)
         // are plain garbage — the manifest sweep reclaims them.
-        let _ = m.sweep(&sr.dir);
+        let _ = m.sweep();
     }
 
     /// The two-phase producer face: seal the batch (durable half) and
@@ -275,13 +275,9 @@ impl Store {
             let _ = std::fs::remove_file(&path);
         })?;
         let mut m = kevy_seg::Manifest::open(&sr.dir).map_err(|e| e.to_string())?;
-        m.add(kevy_seg::ManifestEntry {
-            file: file.clone(),
-            meta: [ROW_TAG, table].concat(),
-            min_key: meta.min_key,
-            max_key: meta.max_key,
-            records: meta.records,
-        })
+        m.add(
+            kevy_seg::ManifestEntry::new(file.clone(), meta).with_meta([ROW_TAG, table].concat()),
+        )
         .map_err(|e| e.to_string())?;
         let seg = kevy_seg::Seg::open(&path).map_err(|e| format!("reopen {file}: {e}"))?;
         sr.segs.push((seq, SegSlot { seg: Arc::new(seg), file, live: 0, dead: 0 }));
