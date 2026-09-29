@@ -264,9 +264,10 @@ pub use crate::value_cold::{COLD_TAG_HASH, COLD_TAG_STRING, ColdRef};
 pub use crate::value_enum::BioDropSender;
 pub use crate::value_enum::{BULK_THRESHOLD, HEAP_HEAVY_BYTES, Value};
 
-/// Per-bucket footprint for `KevyMap`/`KevySet`-backed collections (open-
-/// addressing Swiss table). Approximation, not exact: includes metadata byte
-/// per slot plus the boxed `K`/`V` cell, padded for 7/8 load factor.
+/// Per-bucket footprint for a sorted set's member map (open-addressing Swiss
+/// table). Approximation, not exact: includes metadata byte per slot plus the
+/// boxed `K`/`V` cell, padded for 7/8 load factor. Hashes are charged their
+/// table's real size instead (`hash_weight`).
 pub(crate) const HASH_SLOT_BYTES: u64 = 32;
 pub(crate) const SET_SLOT_BYTES: u64 = 24;
 /// `VecDeque` ring-buffer slot per stored `Vec<u8>` header (24 B Vec metadata).
