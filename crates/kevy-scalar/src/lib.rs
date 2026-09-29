@@ -17,8 +17,9 @@
 //!
 //! ```
 //! use kevy_scalar::{eval, Scalar};
-//! let out = eval("lower", &[Scalar::Text("HeLLo".into())]).unwrap();
+//! let out = eval("lower", &[Scalar::Text("HeLLo".into())])?;
 //! assert_eq!(out, Scalar::Text("hello".into()));
+//! # Ok::<(), kevy_scalar::ScalarError>(())
 //! ```
 
 #![forbid(unsafe_code)]
@@ -45,6 +46,14 @@ pub use datetime_fmt::{
     parse_date, parse_interval, parse_timestamp, render_date, render_interval, render_timestamp,
 };
 
+// Send and Sync are part of the public contract: a change that loses
+// either fails to compile here rather than in a caller.
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<Scalar>();
+    send_sync::<ScalarError>();
+};
+
 /// A typed scalar value — the closed set the function library speaks.
 ///
 /// Deliberately narrower than SQL's type zoo: kevy's sql face maps
@@ -52,6 +61,7 @@ pub use datetime_fmt::{
 /// → `Text`, boolean → `Bool`, and SQL `NULL` → `Null`. Types the
 /// engine refuses (money, inet, enum, …) never reach this crate.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 /// # Examples
 ///
 /// ```
@@ -136,7 +146,8 @@ impl Scalar {
 /// it into a *named refusal* (the funcgate contract says silent
 /// failure is itself a gate failure), so the message must carry the
 /// function name verbatim.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 /// # Examples
 ///
 /// ```
