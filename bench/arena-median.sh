@@ -1,27 +1,25 @@
 #!/usr/bin/env bash
-# arena-median — N full arena runs, per-cell medians, one ledger table.
+# arena-median — N clean arena rounds, per-cell medians, paired intervals.
 #
-# Why this exists: `perfgate-median` already says that a single run cannot
-# green or red an angle inside the instrument's own band, and it wraps
-# `perfgate` — the gate that measures kevy against a reference commit of
-# ITSELF. The table that goes in front of readers is `arena`'s, and it had
-# no multi-run variant. The noise-resistant instrument was on the private
-# ratchet and not on the public claim.
-#
-# What made that concrete: on 2026-09-01 three arena runs of one unchanged
-# binary disagreed by 26.6% on SADD and 13% on INCR, while valkey's worst
-# cell moved 8.6% and Redis 8's 7.6% across the same three runs. Within-run
-# stdev over five iterations does not predict that; only more runs do.
+# Why this exists: a single arena round cannot separate two engines inside
+# its own spread. On 2026-09-01 three rounds of one unchanged binary
+# disagreed by 26.6% on SADD and 13% on INCR; within-round stdev over five
+# windows does not predict that. And a round taken while something else had
+# the box is not a sample of the engine at all: on 2026-09-28 one such round
+# moved Redis SET by 35.6% and was judged instead of discarded.
 #
 #   bash bench/arena-median.sh <KEVY_BIN> [N]
 #
-# Prints the ledger-shaped table on per-cell medians, the run-to-run spread
-# beside each engine, and the claim medians cannot make on their own:
-# whether kevy's WORST run still beats each competitor's BEST run.
+# Keeps N rounds that arena calls clean (no window with more than 10% foreign
+# load on the box), retaking dirty ones up to 2N attempts. The table is the
+# per-cell median over every window of every clean round, and each ratio is a
+# 99% paired bootstrap interval over those windows (round and window slot
+# paired): an interval that contains 1 is NOISE, and its lower bound is the
+# ratio that can be claimed.
 #
-# Exit: 0 = kevy's worst beats every competitor's best in every cell;
-# 1 = at least one cell needs the median to win (say so in the ledger
-# rather than quietly reporting the median); 2 = a run produced nothing.
+# Exit: 0 = every cell's interval lies above 1 against every competitor;
+# 1 = some cell's does not (say so in the ledger rather than quoting the
+# median); 2 = a round failed or too many were dirty.
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 BIN=${1:?usage: arena-median.sh <KEVY_BIN> [N]}
@@ -29,76 +27,26 @@ N=${2:-3}
 OUT=$(mktemp -d "${TMPDIR:-/tmp}/armed-XXXXXX")
 trap 'rm -rf "$OUT"' EXIT
 
-for i in $(seq 1 "$N"); do
-    echo "arena-median: run $i/$N" >&2
-    if ! bash "$HERE/arena.sh" "$BIN" >"$OUT/run$i" 2>"$OUT/err$i"; then
-        echo "arena-median: run $i failed" >&2
-        tail -3 "$OUT/err$i" >&2
+clean=()
+attempt=0
+while [ "${#clean[@]}" -lt "$N" ]; do
+    attempt=$((attempt + 1))
+    if [ "$attempt" -gt $((2 * N)) ]; then
+        echo "arena-median: only ${#clean[@]} clean rounds in $((2 * N)) attempts — the box is busy" >&2
         exit 2
     fi
-    # arena emits `<engine> <verb> <median> <stdev>`; the run number rides
-    # along so the spread can be computed per cell.
-    awk -v r="$i" '/^(kevy|valkey|redis8|dragonfly) /{print $1, $2, $3, r}' \
-        "$OUT/run$i" >>"$OUT/samples"
+    echo "arena-median: round $attempt (${#clean[@]}/$N clean so far)" >&2
+    ARENA_SAMPLES=$OUT/run$attempt.jsonl bash "$HERE/arena.sh" "$BIN" >"$OUT/run$attempt" 2>"$OUT/err$attempt"
+    rc=$?
+    case $rc in
+        0) clean+=("$OUT/run$attempt.jsonl") ;;
+        3) echo "arena-median: round $attempt dirty — discarded" >&2
+           grep -h "DIRTY\|dirty round" "$OUT/run$attempt" "$OUT/err$attempt" >&2 ;;
+        *) echo "arena-median: round $attempt failed (exit $rc)" >&2
+           tail -3 "$OUT/err$attempt" >&2
+           exit 2 ;;
+    esac
 done
-[ -s "$OUT/samples" ] || { echo "arena-median: no samples parsed from $N runs" >&2; exit 2; }
-
-python3 - "$OUT/samples" "$N" "$HERE/COMPETITOR-ANCHORS.json" <<'PY'
-import statistics, sys
-rows = {}
-for line in open(sys.argv[1]):
-    engine, verb, val, _run = line.split()
-    rows.setdefault((engine, verb), []).append(int(val))
-n = int(sys.argv[2])
-verbs = ["GET", "SET", "INCR", "SADD", "HSET", "LPUSH", "ZADD"]
-engines = ["kevy", "redis8", "valkey", "dragonfly"]
-# The engine labels name a version, because a table heading that says
-# only "Redis 8" describes eleven releases. Read from the anchors file so
-# the heading cannot outlive the pin — see bench/COMPETITOR-ANCHORS.json.
-import json, pathlib
-_pins = {k: v["pinned"] for k, v in json.loads(
-    (pathlib.Path(sys.argv[3])).read_text(encoding="utf-8"))["anchors"].items()}
-label = {"kevy": "kevy", "redis8": f"Redis {_pins['redis']}",
-         "valkey": f"valkey {_pins['valkey']}", "dragonfly": f"Dragonfly {_pins['dragonfly']}"}
-_redis_label = label["redis8"]
-
-med = {k: statistics.median(v) for k, v in rows.items()}
-print(f"# arena-median over {n} runs — per-cell medians\n")
-print("| verb | " + " | ".join(label[e] for e in engines) + f" | vs {_redis_label} |")
-print("|---|" + "---:|" * (len(engines) + 1))
-for v in verbs:
-    cells = " | ".join(f"{med[(e, v)]:,.0f}" for e in engines)
-    print(f"| {v} | {cells} | {med[('kevy', v)] / med[('redis8', v)]:.2f}x |")
-
-print(f"\n## Run-to-run spread over {n} runs\n")
-print("| engine | worst cell | spread |")
-print("|---|---|---:|")
-for e in engines:
-    worst, val = None, -1.0
-    for v in verbs:
-        s = rows[(e, v)]
-        pct = (max(s) - min(s)) / statistics.median(s) * 100
-        if pct > val:
-            worst, val = v, pct
-    print(f"| {label[e]} | {worst} | {val:.1f}% |")
-
-print("\n## kevy's worst run against each competitor's best\n")
-print("| verb | " + " | ".join(f"vs {label[e]}" for e in engines[1:]) + " |")
-print("|---|" + "---:|" * (len(engines) - 1))
-weak = []
-for v in verbs:
-    kmin = min(rows[("kevy", v)])
-    cells = []
-    for e in engines[1:]:
-        r = kmin / max(rows[(e, v)])
-        cells.append(f"{r:.2f}x")
-        if r <= 1.0:
-            weak.append(f"{v} vs {label[e]} ({r:.2f}x)")
-    print(f"| {v} | " + " | ".join(cells) + " |")
-
-if weak:
-    print("\n**Needs the median to win:** " + ", ".join(weak) + ".")
-    print("State that in the ledger entry rather than reporting only the median.")
-    sys.exit(1)
-print("\n**kevy's worst run beats every competitor's best run, in every cell.**")
-PY
+head -20 "$OUT/run$attempt" | grep '^#'
+python3 "$HERE/arena_table.py" median "$HERE/PERF-BASELINE2.json" \
+    "$HERE/COMPETITOR-ANCHORS.json" "${clean[@]}"

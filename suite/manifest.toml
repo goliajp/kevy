@@ -825,7 +825,7 @@ cmd = "bash bench/arena.sh target/release/kevy"
 expected = 1800
 timeout = 7200
 requires = ["box", "binaries-release", "docker"]
-proves = "kevy vs valkey/redis/dragonfly, core-pinned, median-of-5, server-side counters"
+proves = "kevy vs valkey/redis/dragonfly on 4 unshared cores: throughput from server-side counters and cost per op from perf, each cell checked for load-generator headroom"
 
 [[check]]
 id = "kevy-ab"

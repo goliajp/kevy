@@ -3,7 +3,7 @@
 
   perfgate2_window.py --baseline F --angle A --side ref|cand --obs N --win N \
       --srv-pid P --srv-cpus 0-3 --port 7001 --secs 3 [--gens pid:threads,...] \
-      [--lines all|T] [-- latency command...]
+      [--lines all|T] [--perf perfstat|direct] [-- latency command...]
 
 Reads per-CPU /proc/stat, the server's and each generator's utime+stime, the
 server's command counter, and the server's hardware counters (through
@@ -84,13 +84,23 @@ def measure(a, gens):
     if a.lines == "T":
         time.sleep(a.secs)
         return None, None
-    run = subprocess.run(PERFSTAT + [str(a.srv_pid), str(a.secs)],
-                         capture_output=True, text=True)
-    if run.returncode == 2:
-        refuse(f"the server (pid {a.srv_pid}) died during the window")
-    perf = pw.parse_perfstat(run.stdout) if run.returncode == 0 else None
+    if a.perf == "direct":
+        # arena runs as root and attaches to containerised engines too
+        run = subprocess.run(["perf", "stat", "-x,", "-e", ",".join(pw.PERF_EVENTS),
+                              "-p", str(a.srv_pid), "--", "sleep", str(a.secs)],
+                             capture_output=True, text=True)
+        text = run.stderr
+        if run.returncode != 0 and not pathlib.Path(f"/proc/{a.srv_pid}").exists():
+            refuse(f"the server (pid {a.srv_pid}) died during the window")
+    else:
+        run = subprocess.run(PERFSTAT + [str(a.srv_pid), str(a.secs)],
+                             capture_output=True, text=True)
+        text = run.stdout
+        if run.returncode == 2:
+            refuse(f"the server (pid {a.srv_pid}) died during the window")
+    perf = pw.parse_perfstat(text) if run.returncode == 0 else None
     if perf is None:
-        refuse(COUNTER_FIX + f"\n(kevy-perfstat exit {run.returncode}: "
+        refuse(COUNTER_FIX + f"\n(counter reader exit {run.returncode}: "
                f"{(run.stderr or run.stdout).strip()[-300:]})")
     return perf, None
 
@@ -102,6 +112,7 @@ def main():
     for k in ("obs", "win", "srv-pid", "port", "secs"):
         ap.add_argument("--" + k, type=int)
     ap.add_argument("--gens", default="")
+    ap.add_argument("--perf", choices=("perfstat", "direct"), default="perfstat")
     ap.add_argument("latency", nargs="*")
     a = ap.parse_args()
     topo = json.loads(pathlib.Path(a.baseline).read_text())["topology"]
