@@ -60,3 +60,25 @@ pub mod slot;
 pub mod source;
 pub mod wire;
 mod wire_snapshot;
+
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<feed::FeedRead>();
+    send_sync::<feed::FeedFrame<'static>>();
+    send_sync::<feed::FeedSource>();
+    send_sync::<handshake::HandshakeReq>();
+    send_sync::<handshake::HandshakeError>();
+    send_sync::<replica::DecodedFrame>();
+    send_sync::<replica::ReplicaEvent>();
+    send_sync::<replica::ReplicaClient>();
+    send_sync::<replica::ReplicaError>();
+    send_sync::<replica::ReplicaSecurity>();
+    send_sync::<slot::ReplicaSlot>();
+    send_sync::<slot::SlotTable>();
+    send_sync::<source::Frame>();
+    send_sync::<source::FromOffset>();
+    send_sync::<source::ReplicationSource>();
+    send_sync::<source::FramesIter<'static>>();
+    send_sync::<wire::WireError>();
+    send_sync::<wire::SnapshotMarker>();
+};

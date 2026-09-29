@@ -30,7 +30,8 @@ use kevy_resp::Argv;
 
 /// Parsed `REPLICATE FROM <generation> <from-offset> ID <replica-id>`
 /// request.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct HandshakeReq {
     /// Feed generation the replica's data reflects. `0` = unknown /
     /// fresh — the primary treats it as "no continuity claim".
@@ -44,7 +45,8 @@ pub struct HandshakeReq {
 }
 
 /// Why a [`parse_replicate_from`] call rejected its input.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum HandshakeError {
     /// First arg is not "REPLICATE" (case-insensitive).
     BadCommand,

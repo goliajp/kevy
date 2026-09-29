@@ -165,7 +165,7 @@ fn connect_trusted(
     let mut last_err = ReplicaError::HandshakeRejected;
     for i in 0..n {
         let k = (*last_good + i) % n;
-        let sec = ReplicaSecurity { local: keys.local.clone(), primary_key: keys.peers[k] };
+        let sec = ReplicaSecurity::new(keys.local.clone(), keys.peers[k]);
         match ReplicaClient::connect_secure(
             target,
             replica_id,

@@ -41,13 +41,28 @@ use std::time::Duration;
 
 /// A decoded mutation frame the replica should apply to its local
 /// store. Ownership of the [`Argv`] passes to the caller.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct DecodedFrame {
     /// Monotonic offset the primary assigned at apply-time.
     pub offset: u64,
     /// Wire-decoded argv — feed to the dispatcher the same way AOF
     /// replay does (cmd name + arg bytes).
     pub argv: Argv,
+}
+
+impl DecodedFrame {
+    /// The frame at `offset` carrying `argv`.
+    ///
+    /// ```
+    /// use kevy_replicate::replica::DecodedFrame;
+    ///
+    /// let frame = DecodedFrame::new(7, kevy_resp::Argv::from(vec![b"DEL".to_vec(), b"k".to_vec()]));
+    /// assert_eq!(frame.offset, 7);
+    /// ```
+    pub fn new(offset: u64, argv: Argv) -> Self {
+        Self { offset, argv }
+    }
 }
 
 /// Event yielded by [`ReplicaClient::next_event`]. A driver loop
@@ -61,7 +76,8 @@ pub struct DecodedFrame {
 ///   `kevy_persist::load_snapshot`; [`ReplicaClient`] has already
 ///   advanced `expected_offset` to `ack_offset`, so the next
 ///   [`Self::Frame`] arrives at `ack_offset` with no gap.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum ReplicaEvent {
     /// A live mutation frame.
     Frame(DecodedFrame),

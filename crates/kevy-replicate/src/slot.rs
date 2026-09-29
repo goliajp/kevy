@@ -13,7 +13,8 @@
 //! work in `kevy-store`.
 
 /// One connected-or-recently-disconnected replica.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct ReplicaSlot {
     /// Operator-set replica identifier (opaque to the primary other
     /// than for slot bookkeeping).
