@@ -35,8 +35,8 @@ use core::ptr::NonNull;
 use crate::class::{self, NCLASSES};
 use crate::os;
 use crate::outbound::Outbound;
-use crate::partials::PartialRing;
-use crate::segment::{self, FIRST_DATA_SPAN, NO_CLASS, SEGMENT_BYTES, SPANS_PER_SEGMENT, Segment};
+use crate::segment::{self, SEGMENT_BYTES, Segment};
+use crate::spanlist::BINS;
 
 /// Spans one class may hold at once, per heap — a runaway guard, not a
 /// policy. At 64 KiB a span, this bounds one class at roughly 4 GiB per
@@ -129,19 +129,11 @@ pub struct Heap {
     /// flush. See `outbound.rs` for why this shape and not tcache-style
     /// local reuse.
     pub(crate) outbound: Outbound,
-    /// Per-class ring of spans believed to have room — pushed when a
-    /// free makes a full span partial, popped by the slow path before
-    /// it falls back to scanning.
-    ///
-    /// The legacy profile forced this (finding
-    /// the mmap-lock finding's follow-up): with the
-    /// 16–32 KiB classes a span holds 2–8 slots, so churn exhausts one
-    /// every few allocations, and the slow path's two O(segments)
-    /// scans put `Heap::alloc` at 6 % of server self time. This is
-    /// mimalloc's page-queue-per-class, sized as a ring because entries
-    /// may go stale (a span can be reassigned after its entry is
-    /// pushed) — the pop validates and simply discards liars.
-    partials: [PartialRing; NCLASSES],
+    /// Per class, the heads of its spans with room, graded by occupancy
+    /// (see `spanlist`).
+    pub(crate) bins: [[usize; BINS]; NCLASSES],
+    /// Head of the list of spans no class holds.
+    pub(crate) free_spans: usize,
     /// Per-class claimed bitmap word (the far-line amortizer): up to 64
     /// slots of the current span's lowest holed word, handed out and
     /// locally recycled without touching the segment header. One header
@@ -198,7 +190,8 @@ impl Heap {
             live_bytes: 0,
             rounding_bytes: 0,
             outbound: Outbound::new(),
-            partials: [PartialRing::EMPTY; NCLASSES],
+            bins: [[0; BINS]; NCLASSES],
+            free_spans: 0,
             claims: [None; NCLASSES],
             class_cap,
         }
@@ -365,56 +358,25 @@ impl Heap {
         Some(slot)
     }
 
-    /// The current span had nothing. Look wider before asking the OS.
-    ///
-    /// The order matters, and one step here was missing at first: slots
-    /// freed into a span that is *not* the current one land on that
-    /// span's own free list, so without [`Self::adopt_partial`] those
-    /// spans are never revisited. Allocation would keep claiming fresh
-    /// spans past perfectly reusable ones until `PER_CLASS_CAP` refused
-    /// — looking exactly like a leak while every byte was accounted for.
+    /// The current span had nothing. Take the class's fullest span with
+    /// room; failing that, collect what other shards freed and look again;
+    /// failing that, claim a span from the free list (mapping a segment if
+    /// none is left). Each step is O(1) — see `spanlist` for what the two
+    /// segment scans that used to sit here cost.
     fn slow_path(&mut self, c: usize) -> Option<NonNull<u8>> {
-        // O(1) first: spans the free path registered as having room.
-        // Entries can be stale — validate, discard liars.
-        while let Some((seg, ix)) = self.partials[c].pop() {
-            // SAFETY: rings only hold segments from this heap's list,
-            // which live as long as the heap.
-            let m = unsafe { &(*seg).spans[ix] };
-            if m.class as usize == c && u32::from(m.live) < m.capacity() {
-                // SAFETY: non-null by construction of the ring.
-                self.partial[c] = Some((unsafe { NonNull::new_unchecked(seg) }, ix as u8));
+        for drained in [false, true] {
+            if drained {
+                self.drain_foreign();
+            }
+            if let Some((seg, ix)) = self.take_densest(c) {
+                self.partial[c] = Some((seg, ix as u8));
                 if let Some(p) = self.pop_slot(c) {
                     return Some(p);
                 }
             }
         }
-        self.drain_foreign();
-        if self.adopt_partial(c)
-            && let Some(p) = self.pop_slot(c)
-        {
-            return Some(p);
-        }
         self.claim_span(c)?;
         self.pop_slot(c)
-    }
-
-    /// Make some span of class `c` that still has room the current one.
-    fn adopt_partial(&mut self, c: usize) -> bool {
-        let mut seg = self.segments;
-        while !seg.is_null() {
-            // SAFETY: the list holds live segment headers only.
-            let s = unsafe { &*seg };
-            for ix in FIRST_DATA_SPAN..SPANS_PER_SEGMENT {
-                let m = &s.spans[ix];
-                if m.class as usize == c && u32::from(m.live) < m.capacity() {
-                    // SAFETY: `seg` is non-null in this branch.
-                    self.partial[c] = Some((unsafe { NonNull::new_unchecked(seg) }, ix as u8));
-                    return true;
-                }
-            }
-            seg = s.next;
-        }
-        false
     }
 
     /// Take the lowest free slot from the class's current span, without
@@ -440,11 +402,14 @@ impl Heap {
         if self.spans_in_class[c] >= self.class_cap {
             return None;
         }
-        let (seg, ix) = self.find_free_span().or_else(|| {
-            self.map_segment()?;
-            self.find_free_span()
-        })?;
-        // SAFETY: `find_free_span` returns a span of a live segment.
+        let (seg, ix) = match self.pop_free_span() {
+            Some(s) => s,
+            None => {
+                self.map_segment()?;
+                self.pop_free_span()?
+            }
+        };
+        // SAFETY: the free list holds spans of this heap's live segments.
         let meta = unsafe { &mut (*seg.as_ptr()).spans[ix] };
         meta.reset(c as u8);
         self.spans_in_class[c] += 1;
@@ -452,24 +417,8 @@ impl Heap {
         Some(())
     }
 
-    /// First span not assigned to a class, across this heap's segments.
-    fn find_free_span(&self) -> Option<(NonNull<Segment>, usize)> {
-        let mut seg = self.segments;
-        while !seg.is_null() {
-            // SAFETY: the list holds live segment headers only.
-            let s = unsafe { &*seg };
-            for ix in FIRST_DATA_SPAN..SPANS_PER_SEGMENT {
-                if s.spans[ix].class == NO_CLASS {
-                    // SAFETY: `seg` is non-null in this branch.
-                    return Some((unsafe { NonNull::new_unchecked(seg) }, ix));
-                }
-            }
-            seg = s.next;
-        }
-        None
-    }
-
-    /// Map a new segment and link it in. `None` when the OS refuses.
+    /// Map a new segment, link it in and put its spans on the free list.
+    /// `None` when the OS refuses.
     fn map_segment(&mut self) -> Option<()> {
         let base = os::map_aligned(SEGMENT_BYTES, SEGMENT_BYTES)?;
         // SAFETY: a fresh exclusive mapping of exactly one segment.
@@ -477,6 +426,7 @@ impl Heap {
         // SAFETY: just initialised and owned solely by this heap.
         unsafe { (*seg.as_ptr()).next = self.segments };
         self.segments = seg.as_ptr();
+        self.file_new_segment(seg);
         Some(())
     }
 
