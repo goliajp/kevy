@@ -268,7 +268,7 @@ impl<C: Commands> Runtime<C> {
                 Some(Aof::open_with_repair(
                     &kevy_persist::layout::aof_path(&self.data_dir, id),
                     self.appendfsync,
-                    self.replay_resync,
+                    self.replay_mode(),
                 )?)
             } else {
                 None

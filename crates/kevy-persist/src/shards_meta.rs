@@ -16,9 +16,11 @@ use std::io;
 use std::path::Path;
 
 /// Key→shard routing scheme recorded in `shards.meta`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub enum Routing {
     /// FxFmix word hash (`kevy_hash::KevyHash`) — the default scheme.
+    #[default]
     KevyHash,
     /// Redis-cluster slots: CRC16 of the `{hashtag}` & 16383, contiguous
     /// even ranges per shard. Used by single-node cluster mode so external
@@ -27,7 +29,7 @@ pub enum Routing {
 }
 
 impl Routing {
-    fn tag(self) -> &'static str {
+    pub(crate) fn tag(self) -> &'static str {
         match self {
             Routing::KevyHash => "kevyhash",
             Routing::Slots => "slots",
@@ -36,12 +38,33 @@ impl Routing {
 }
 
 /// The shard layout a data dir's per-shard files were written under.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// ```
+/// use kevy_persist::{Routing, ShardsMeta};
+///
+/// let meta = ShardsMeta::new(4, Routing::Slots);
+/// assert_eq!((meta.n, meta.routing), (4, Routing::Slots));
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct ShardsMeta {
     /// Number of shards (`aof-{0..n}.aof` / `dump-{0..n}.rdb`).
     pub n: usize,
     /// Key→shard scheme.
     pub routing: Routing,
+}
+
+impl ShardsMeta {
+    /// `n` shards routed by `routing`. The count has no default: it is the
+    /// layout.
+    ///
+    /// ```
+    /// let meta = kevy_persist::ShardsMeta::new(1, kevy_persist::Routing::KevyHash);
+    /// assert_eq!(meta.n, 1);
+    /// ```
+    pub const fn new(n: usize, routing: Routing) -> Self {
+        Self { n, routing }
+    }
 }
 
 /// Read `shards.meta` from `path`. `None` = no meta / unparseable (callers

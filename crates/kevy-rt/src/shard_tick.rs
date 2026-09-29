@@ -166,12 +166,11 @@ impl<C: Commands> Shard<C> {
     /// every `tick_interval_ms`, so the cost is amortised across thousands
     /// of writes per check. No-op when AOF is disabled or all rules are 0.
     pub(crate) fn maybe_auto_rewrite_aof(&mut self) {
-        let policy = kevy_persist::RewritePolicy {
-            pct: self.auto_aof_rewrite_pct,
-            min_size: self.auto_aof_rewrite_min_size,
-            bytes: self.auto_aof_rewrite_bytes,
-            interval_secs: self.auto_aof_rewrite_interval_secs,
-        };
+        let policy = kevy_persist::RewritePolicy::default()
+            .with_pct(self.auto_aof_rewrite_pct)
+            .with_min_size(self.auto_aof_rewrite_min_size)
+            .with_bytes(self.auto_aof_rewrite_bytes)
+            .with_interval_secs(self.auto_aof_rewrite_interval_secs);
         let Some(aof) = &self.aof else { return };
         if !aof.rewrite_due(policy) {
             return;

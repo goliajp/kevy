@@ -37,6 +37,11 @@ use std::path::{Path, PathBuf};
 /// Recovery resolves paths through the layout *currently in effect* — a
 /// journal left by a crash is rolled forward under the caller's present
 /// file-name configuration, which must match the one that wrote it.
+///
+/// Implementations are the host's: each must be a pure function of its
+/// arguments (recovery re-derives every path from them after a crash), and
+/// must give distinct shards of one layout distinct paths (two shards
+/// sharing a file would overwrite each other's snapshot at commit).
 pub trait ShardLayout {
     /// Shard `i`'s snapshot path under an `n`-shard layout.
     fn snapshot_path(&self, dir: &Path, i: usize, n: usize) -> PathBuf;
@@ -126,10 +131,7 @@ pub fn commit_reshard<L: ShardLayout>(
 /// exists, the migration is committed and any crash is rolled *forward*.
 fn write_journal(dir: &Path, prev_n: usize, target: ShardsMeta, stamp: u128) -> io::Result<()> {
     use std::io::Write;
-    let routing = match target.routing {
-        Routing::KevyHash => "kevyhash",
-        Routing::Slots => "slots",
-    };
+    let routing = target.routing.tag();
     let body = format!(
         "kevy-reshard-journal v1\nstamp={stamp}\nprev_n={prev_n}\nn={}\nrouting={routing}\n",
         target.n,

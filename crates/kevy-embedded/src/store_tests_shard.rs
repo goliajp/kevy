@@ -185,7 +185,7 @@ fn open_rolls_forward_a_committed_reshard() {
     kevy_persist::save_snapshot(&stale, &dir.join("dump-0.rdb")).unwrap();
     kevy_persist::write_shards_meta(
         &dir.join("shards.meta"),
-        kevy_persist::ShardsMeta { n: 1, routing: kevy_persist::Routing::KevyHash },
+        kevy_persist::ShardsMeta::new(1, kevy_persist::Routing::KevyHash),
     )
     .unwrap();
     // Committed-but-unfinished migration to 2 shards: temps + journal.

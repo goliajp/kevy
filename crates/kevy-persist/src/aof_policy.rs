@@ -13,16 +13,19 @@ use crate::aof::Aof;
 /// 100% growth fires, and a real deployment rode that to 12-second replays
 /// and an OOM loop — the absolute and time rules exist to cap exactly that.
 ///
+/// The default has every rule off: the log is never compacted on its own.
+///
 /// ```
 /// use kevy_persist::RewritePolicy;
 ///
-/// let p = RewritePolicy { pct: 100, min_size: 64 << 20, bytes: 0, interval_secs: 0 };
+/// let p = RewritePolicy::default().with_pct(100).with_min_size(64 << 20);
 /// // a 1 MiB log reaches 64 MiB only by growing past any baseline
 /// assert!(!p.baseline_matters(1 << 20));
 /// assert!(p.baseline_matters(48 << 20));
-/// assert!(RewritePolicy { interval_secs: 3600, ..p }.baseline_matters(0));
+/// assert!(p.with_interval_secs(3600).baseline_matters(0));
 /// ```
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub struct RewritePolicy {
     /// Growth percentage past the last-rewrite baseline (0 = rule off).
     pub pct: u32,
@@ -35,6 +38,50 @@ pub struct RewritePolicy {
 }
 
 impl RewritePolicy {
+    /// Set [`RewritePolicy::pct`].
+    ///
+    /// ```
+    /// assert_eq!(kevy_persist::RewritePolicy::default().with_pct(50).pct, 50);
+    /// ```
+    #[must_use]
+    pub fn with_pct(mut self, pct: u32) -> Self {
+        self.pct = pct;
+        self
+    }
+
+    /// Set [`RewritePolicy::min_size`].
+    ///
+    /// ```
+    /// assert_eq!(kevy_persist::RewritePolicy::default().with_min_size(1 << 20).min_size, 1 << 20);
+    /// ```
+    #[must_use]
+    pub fn with_min_size(mut self, bytes: u64) -> Self {
+        self.min_size = bytes;
+        self
+    }
+
+    /// Set [`RewritePolicy::bytes`].
+    ///
+    /// ```
+    /// assert_eq!(kevy_persist::RewritePolicy::default().with_bytes(1 << 30).bytes, 1 << 30);
+    /// ```
+    #[must_use]
+    pub fn with_bytes(mut self, bytes: u64) -> Self {
+        self.bytes = bytes;
+        self
+    }
+
+    /// Set [`RewritePolicy::interval_secs`].
+    ///
+    /// ```
+    /// assert_eq!(kevy_persist::RewritePolicy::default().with_interval_secs(60).interval_secs, 60);
+    /// ```
+    #[must_use]
+    pub fn with_interval_secs(mut self, secs: u64) -> Self {
+        self.interval_secs = secs;
+        self
+    }
+
     /// Whether the growth-rule baseline can change any decision for a log
     /// that is `len` bytes long at open. It cannot when the staleness rule
     /// is off and `len` is so far under `min_size` that growth past the

@@ -42,7 +42,8 @@ fn meta_path(dir: &Path, shard: usize) -> PathBuf {
 }
 
 /// The cursor a shard's feed resumes at, per the boot decision table.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct FeedBoot {
     /// Generation to run at.
     pub generation: u64,

@@ -56,6 +56,7 @@ mod dir_lock;
 mod dump_cache;
 pub mod feed_meta;
 pub mod layout;
+mod modes;
 mod record;
 mod record_pieces;
 mod replay;
@@ -79,13 +80,14 @@ mod stage_recover;
 #[cfg(not(target_arch = "wasm32"))]
 mod stage_ring;
 
-pub use aof::{AOF_MAGIC, Aof, Fsync, RewritePlan, RewriteStats};
+pub use aof::{AOF_MAGIC, Aof, RewritePlan, RewriteStats};
 pub use aof_policy::RewritePolicy;
 #[cfg(not(target_arch = "wasm32"))]
 pub use aof_stage::StageOpen;
 pub use aof_sync::PendingSync;
 pub use aof_util::write_aof_base;
 pub use baseline::estimate_rewrite_size;
+pub use modes::{Fsync, ReplayMode, ReplaySummary};
 pub use record::{AOF2_MAGIC, AofFormat, RecordStep, next_record, write_record_multibulk};
 pub use replay::{
     ReplayReport, replay_aof, replay_aof_in_place, replay_aof_quiet, replay_aof_resync,
@@ -130,6 +132,10 @@ pub use snapshot_write::{
 /// nothing is ever promoted into the hot map. SEG-backed stubs pass
 /// through AS STUBS: their data is truth in the segment directory, and
 /// the consumers persist the reference, not the payload.
+///
+/// Hosts implement it for their own aggregates (the embedded store
+/// serializes several shards as one source). An implementation must uphold
+/// the tiering contract above, and yield each live key exactly once.
 pub trait SnapshotSource {
     /// Visit every live entry as `(key, &value, remaining_ttl_ms)`.
     fn for_each_entry(&self, f: impl FnMut(&[u8], &Value, Option<u64>));
@@ -197,6 +203,27 @@ impl SnapshotSource for kevy_store::SnapshotView {
         self.each_hash_ttl(f);
     }
 }
+
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<Aof>();
+    send_sync::<Fsync>();
+    send_sync::<ReplayMode>();
+    send_sync::<ReplaySummary>();
+    send_sync::<RewritePlan>();
+    send_sync::<RewriteStats>();
+    send_sync::<RewritePolicy>();
+    send_sync::<StageOpen>();
+    send_sync::<PendingSync>();
+    send_sync::<ReplayReport>();
+    send_sync::<AofFormat>();
+    send_sync::<RecordStep<'static>>();
+    send_sync::<Routing>();
+    send_sync::<ShardsMeta>();
+    send_sync::<feed_meta::FeedBoot>();
+    send_sync::<reshard::StdLayout>();
+    send_sync::<DirLock>();
+};
 
 #[cfg(test)]
 mod tests;
