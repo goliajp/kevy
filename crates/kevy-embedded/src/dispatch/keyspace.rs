@@ -83,9 +83,8 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
     true
 }
 
-/// `SCAN cursor [MATCH pattern] [COUNT n] [TYPE type]` — the embedded
-/// cursor is a snapshot offset (single stream), not the server's
-/// shard-encoded cursor; the `[cursor, keys]` envelope is identical.
+/// `SCAN cursor [MATCH pattern] [COUNT n] [TYPE type]` — the cursor has
+/// the server's layout (shard index above a position within the shard).
 fn cmd_scan(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     if argv.len() < 2 {
         return wrong_args(out, "scan");

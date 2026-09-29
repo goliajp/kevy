@@ -242,6 +242,8 @@ assert_eq!(user_keys.len(), 1_000);
 
 The `keys_iter`, `hash_iter`, and `zset_iter` wrappers turn the raw
 `SCAN` / `HSCAN` / `ZSCAN` cursors into ordinary Rust iterators.
+`keys_iter` holds one page of keys at a time, whatever the size of the
+keyspace.
 
 ## Three transaction shapes — which to pick
 
