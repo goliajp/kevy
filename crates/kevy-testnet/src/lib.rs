@@ -4,7 +4,8 @@
 //! came from the same place. Forty-two test files each carried their own
 //! copy of:
 //!
-//! ```ignore
+//! ```
+//! # #[allow(dead_code)]
 //! fn free_port() -> u16 {
 //!     std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
 //! }
@@ -37,6 +38,14 @@
 //! attempts and carried on. That is the more important half. A silent
 //! failure to bind is what turned a port collision into a test asserting
 //! against someone else's data.
+//!
+//! ```
+//! let port = kevy_testnet::free_port();
+//! let server = std::net::TcpListener::bind(("127.0.0.1", port))?;
+//! kevy_testnet::assert_listening(port, "the example server");
+//! assert_eq!(server.local_addr()?.port(), port);
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
 
 // Panicking IS this crate's product. It hands tests a port and the proof a
 // server took it; `assert_listening` says so in its name. A `Result` here
@@ -114,6 +123,16 @@ static NEXT: AtomicU16 = AtomicU16::new(1); // 0 is the anchor
 /// server does the binding, and the moment between this returning and
 /// that happening belongs to nobody — so pair it with [`assert_listening`]
 /// and a lost race becomes a clear failure instead of a strange one.
+///
+/// ```
+/// let a = kevy_testnet::free_port();
+/// let b = kevy_testnet::free_port();
+/// assert_ne!(a, b, "the counter never repeats a port");
+/// let server = std::net::TcpListener::bind(("127.0.0.1", a))?;
+/// kevy_testnet::assert_listening(a, "server on a");
+/// # drop(server);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn free_port() -> u16 {
     let base = block_base();
     for _ in 0..BLOCK * 4 {
@@ -147,6 +166,16 @@ fn nobody_listens(port: u16) -> bool {
 }
 
 /// Wait until something accepts on `port`. `true` if it did.
+///
+/// ```
+/// use std::time::Duration;
+/// let port = kevy_testnet::free_port();
+/// assert!(!kevy_testnet::wait_listening(port, Duration::from_millis(50)));
+/// let server = std::net::TcpListener::bind(("127.0.0.1", port))?;
+/// assert!(kevy_testnet::wait_listening(port, Duration::from_secs(5)));
+/// # drop(server);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn wait_listening(port: u16, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
@@ -165,6 +194,15 @@ pub fn wait_listening(port: u16, timeout: Duration) -> bool {
 /// and "the server never bound" left by the same door. The failure then
 /// surfaced later, somewhere else, as a connection refused or — worse —
 /// as an assertion about another server's data.
+///
+/// ```
+/// let port = kevy_testnet::free_port();
+/// let server = std::net::TcpListener::bind(("127.0.0.1", port))?;
+/// // returns quietly because the listener above accepts
+/// kevy_testnet::assert_listening(port, "the listener above");
+/// # drop(server);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn assert_listening(port: u16, what: &str) {
     assert_listening_within(port, what, Duration::from_secs(10));
 }
@@ -206,6 +244,15 @@ pub fn assert_listening_within(port: u16, what: &str, budget: Duration) {
 /// dropped them together, which widens the window rather than closing it:
 /// every one of the `n` is exposed from the moment it is read until the
 /// last server binds.
+///
+/// ```
+/// let ports = kevy_testnet::free_ports(3);
+/// assert_eq!(ports.len(), 3);
+/// let mut unique = ports.clone();
+/// unique.sort_unstable();
+/// unique.dedup();
+/// assert_eq!(unique.len(), 3, "all distinct");
+/// ```
 pub fn free_ports(n: usize) -> Vec<u16> {
     (0..n).map(|_| free_port()).collect()
 }
@@ -216,6 +263,16 @@ pub fn free_ports(n: usize) -> Vec<u16> {
 ///
 /// Panics if `width` exceeds the block, which is a caller asking for more
 /// than this scheme can promise rather than a transient failure.
+///
+/// ```
+/// let base = kevy_testnet::free_port_block(2);
+/// // base, base + 1 and base + 2 are all bindable right now
+/// let held: Vec<_> = (0..=2)
+///     .map(|i| std::net::TcpListener::bind(("127.0.0.1", base + i)))
+///     .collect::<Result<_, _>>()?;
+/// assert_eq!(held.len(), 3);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn free_port_block(width: usize) -> u16 {
     assert!(
         width < BLOCK as usize,
