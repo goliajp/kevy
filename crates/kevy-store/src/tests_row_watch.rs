@@ -166,13 +166,15 @@ fn eviction_records_the_row_it_drops() {
 }
 
 #[test]
-fn flush_asks_for_a_rebuild_instead_of_a_list() {
+fn flush_starts_over_and_lists_what_came_after() {
     let mut s = seeded();
     s.hset(b"u:2", &[(b"a", b"1")]).expect("hash");
     s.flushall();
     s.hset(b"u:3", &[(b"a", b"1")]).expect("hash");
     let c = s.take_row_changes(RowChanges::default());
-    assert!(c.is_reset() && c.is_empty());
+    assert!(c.is_reset());
+    let after: Vec<(&[u8], bool)> = c.iter().map(|r| (r.key(), r.was_hash())).collect();
+    assert_eq!(after, [(&b"u:3"[..], false)], "the rows written after it, from nothing");
     let mut s = seeded();
     drop(s.detach_entries());
     assert!(s.take_row_changes(RowChanges::default()).is_reset());

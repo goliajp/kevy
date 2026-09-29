@@ -42,6 +42,9 @@ pub(crate) struct ViewReg {
 #[derive(Debug, Default)]
 pub(crate) struct ShardViews {
     pub(crate) version: u64,
+    /// The (view catalog, index list) versions the key directories were
+    /// last set for.
+    pub(crate) dirs_at: (u64, u64),
     pub(crate) views: Vec<ViewState>,
     /// `reserved_bytes` generation cache — see
     /// `ShardSegs::stats_dirty`; same contract, view half. Tier-only,
@@ -137,7 +140,7 @@ impl Store {
             let mut g = lock_write(shard);
             let inner = &mut *g;
             crate::ops_index::sync_segs(&self.indexes, &mut inner.idx_segs, &mut inner.store);
-            sync_views(&self.views, &mut inner.view_segs, &inner.idx_segs);
+            sync_views(&self.views, &mut inner.view_segs, &mut inner.idx_segs);
         }
         Ok(())
     }
@@ -190,7 +193,7 @@ impl Store {
             let mut g = lock_write(shard);
             let inner = &mut *g;
             crate::ops_index::sync_segs(&self.indexes, &mut inner.idx_segs, &mut inner.store);
-            sync_views(&self.views, &mut inner.view_segs, &inner.idx_segs);
+            sync_views(&self.views, &mut inner.view_segs, &mut inner.idx_segs);
             let Some(i) = inner.view_segs.views.iter().position(|v| v.spec.name == name) else {
                 continue;
             };
@@ -277,7 +280,7 @@ fn eval_shard(spec: &ViewSpec, segs: &ShardSegs) -> Vec<(IndexValue, Vec<u8>)> {
     let members = spec.tree.eval(&&r);
     members
         .into_iter()
-        .filter_map(|k| r(&spec.order_by).and_then(|s| s.verify_entry(&k)).map(|v| (v.clone(), k)))
+        .filter_map(|k| r(&spec.order_by).and_then(|s| s.key_dir()?.get(&k)).map(|v| (v, k)))
         .collect()
 }
 
@@ -295,7 +298,8 @@ fn stream_virtual(
     if let Some(order_seg) = r(&spec.order_by) {
         let cursor = after.map(|(v, k)| kevy_index::Cursor::new(v.clone(), k.clone()));
         let mut got = 0usize;
-        for (v, k) in order_seg.scan(cursor.as_ref(), spec.order) {
+        let mut scan = order_seg.scan(cursor.as_ref(), spec.order);
+        while let Some((v, k)) = scan.next_entry() {
             if spec.tree.contains(k, &&r) {
                 all.push((v.clone(), k.to_vec()));
                 got += 1;
@@ -331,9 +335,22 @@ fn rebuild(vs: &mut ViewState, segs: &ShardSegs) {
 }
 
 /// Reconcile with the catalog (under the shard lock).
-pub(crate) fn sync_views(reg: &ViewReg, sv: &mut ShardViews, segs: &ShardSegs) {
+pub(crate) fn sync_views(reg: &ViewReg, sv: &mut ShardViews, segs: &mut ShardSegs) {
     let g = reg.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
     let (ver, cat) = &*g;
+    // a view reads its indexes by key: exactly those keep a key directory
+    if sv.dirs_at != (*ver, segs.version) {
+        let mut read: Vec<Vec<u8>> = Vec::new();
+        for v in cat.iter() {
+            read.push(v.order_by.clone());
+            v.tree.each_leaf(&mut |l| read.push(l.index.clone()));
+        }
+        for (spec, seg) in &mut segs.segs {
+            seg.set_key_dir(read.iter().any(|n| n.as_slice() == spec.name()));
+        }
+        sv.dirs_at = (*ver, segs.version);
+    }
+    let segs = &*segs;
     if sv.version == *ver {
         return;
     }
@@ -363,7 +380,7 @@ pub(crate) fn sync_views(reg: &ViewReg, sv: &mut ShardViews, segs: &ShardSegs) {
 }
 
 /// Write hook — call AFTER `ops_index::on_commit` (same shard lock).
-pub(crate) fn on_commit(reg: &ViewReg, sv: &mut ShardViews, segs: &ShardSegs, parts: &[&[u8]]) {
+pub(crate) fn on_commit(reg: &ViewReg, sv: &mut ShardViews, segs: &mut ShardSegs, parts: &[&[u8]]) {
     {
         let g = reg.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         if g.1.is_empty() {
@@ -371,6 +388,7 @@ pub(crate) fn on_commit(reg: &ViewReg, sv: &mut ShardViews, segs: &ShardSegs, pa
         }
     }
     sync_views(reg, sv, segs);
+    let segs = &*segs;
     let verb = parts.first().copied().unwrap_or(b"");
     if verb.eq_ignore_ascii_case(b"FLUSHALL") || verb.eq_ignore_ascii_case(b"FLUSHDB") {
         for vs in &mut sv.views {
@@ -390,7 +408,7 @@ pub(crate) fn on_commit(reg: &ViewReg, sv: &mut ShardViews, segs: &ShardSegs, pa
             touched = true;
             let r = resolver(segs);
             let membership = if vs.spec.tree.contains(key, &&r) {
-                Membership::Member(r(&vs.spec.order_by).and_then(|s| s.verify_entry(key)).cloned())
+                Membership::Member(r(&vs.spec.order_by).and_then(|s| s.key_dir()?.get(key)))
             } else {
                 Membership::NonMember
             };

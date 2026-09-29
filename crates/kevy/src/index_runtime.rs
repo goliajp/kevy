@@ -56,6 +56,8 @@ struct ShardIndex {
     /// owned partitions, not in `seg`).
     global: Option<global::GlobalRole>,
     build: BuildState,
+    /// Where this index's fields sit in the store's record of old rows.
+    slots: Option<changes::Slots>,
 }
 
 /// One shard's slice of every declared index. Owned by
@@ -74,22 +76,26 @@ pub(crate) struct ShardIndexes {
     reserved_cache: u64,
     /// Some index is global, so writes may queue deltas for other shards.
     any_global: bool,
+    /// The last record taken from the store, lent back to the next take.
+    spare: kevy_store::RowChanges,
+    /// The watch rules installed in the store, and the index-list
+    /// generation they were computed for.
+    installed: changes::Rules,
+    watch_gen: u64,
+    /// The view catalog generation the key directories were set for.
+    view_gen: u64,
 }
 
 /// The write-path hook body (`Commands::on_write`). The caller gates
 /// on `IDX_NONEMPTY`, so entering here means at least one index is
 /// declared.
 #[inline]
-pub(crate) fn on_write(ctx: &Ctx<'_>, store: &mut Store, key: &[u8]) {
+pub(crate) fn on_write(ctx: &Ctx<'_>, store: &mut Store, _key: &[u8]) {
     let mut st = ctx.shard.indexes.borrow_mut();
     refresh(ctx, &mut st);
-    let st = &mut *st;
-    for si in &mut st.idx {
-        if key.starts_with(si.spec.prefix()) {
-            apply_row(store, si, key);
-            st.stats_dirty = true;
-        }
-    }
+    // the store recorded every row written since the last drain, this key
+    // among them, with what each held before
+    changes::drain(store, &mut st);
 }
 
 /// Tick hook: advance backfills a bounded batch per tick, then slide
@@ -97,6 +103,8 @@ pub(crate) fn on_write(ctx: &Ctx<'_>, store: &mut Store, key: &[u8]) {
 pub(crate) fn on_tick(ctx: &Ctx<'_>, store: &mut Store) {
     let mut st = ctx.shard.indexes.borrow_mut();
     refresh(ctx, &mut st);
+    // rows changed without a hook (a field expiring on a read) land here
+    changes::drain(store, &mut st);
     let st = &mut *st;
     let segs_dir = shard_segs_dir(ctx.state, ctx.shard.shard_id());
     // Pass 1: backfills, then the scalar slide. The eviction batch's
@@ -141,7 +149,11 @@ pub(crate) fn on_tick(ctx: &Ctx<'_>, store: &mut Store) {
 pub(crate) fn on_flush(ctx: &Ctx<'_>) {
     let mut st = ctx.shard.indexes.borrow_mut();
     refresh(ctx, &mut st);
-    let st = &mut *st;
+    reset_all(&mut st);
+}
+
+/// Every segment back to its declared-empty shape, every build done.
+fn reset_all(st: &mut ShardIndexes) {
     for si in &mut st.idx {
         si.seg = new_scalar_seg(&si.spec);
         si.text = new_text_seg(&si.spec);
@@ -168,7 +180,6 @@ pub(crate) fn reserved_bytes(ctx: &Ctx<'_>) -> u64 {
         .iter()
         .map(|si| {
             si.entries().stats().approx_bytes
-                + si.global.as_ref().map_or(0, |g| g.placed_bytes())
                 + si.text.as_ref().map_or(0, |t| t.stats().approx_bytes)
                 + si.ann.as_ref().map_or(0, |g| g.stats().approx_bytes)
                 + si.agg.as_ref().map_or(0, |a| a.stats().approx_bytes)
@@ -320,15 +331,6 @@ pub(crate) fn with_two_ready_segments<R>(
     Ok(f(&sa.spec, &sa.seg, &sb.spec, &sb.seg))
 }
 
-/// The placement table's bytes of global index `name` on this shard (0 for
-/// a local index): IDX.LIST adds it to the entries' bytes.
-pub(crate) fn placed_bytes(ctx: &Ctx<'_>, name: &[u8]) -> u64 {
-    let mut st = ctx.shard.indexes.borrow_mut();
-    refresh(ctx, &mut st);
-    let si = st.idx.iter().find(|si| si.spec.name() == name);
-    si.and_then(|si| si.global.as_ref()).map_or(0, |g| g.placed_bytes())
-}
-
 /// Whether this shard's slice of `name` is still backfilling.
 pub(crate) fn segment_building(ctx: &Ctx<'_>, name: &[u8]) -> bool {
     let mut st = ctx.shard.indexes.borrow_mut();
@@ -340,54 +342,6 @@ pub(crate) fn segment_building(ctx: &Ctx<'_>, name: &[u8]) -> bool {
     })
 }
 
-/// A fresh scalar segment for `spec` — with the stored-value
-/// side-channel iff a scalar kind declared `VALUES` (text keeps its
-/// values in the text segment; without the declaration this is the
-/// plain `Segment::new()`, byte-identical to before — A5).
-fn new_scalar_seg(spec: &IndexSpec) -> Segment {
-    let scalar =
-        matches!(spec.kind(), kevy_index::IndexKind::Range | kevy_index::IndexKind::Unique);
-    if scalar && !spec.values().is_empty() {
-        Segment::with_values(spec.values().len())
-    } else {
-        Segment::new()
-    }
-}
-
-/// A fresh text segment for `spec` when it is a text index — with the
-/// positional side-channel iff it was created WITH POSITIONS.
-/// A fresh HNSW graph shaped by the spec (None for non-ann kinds) —
-/// shared by the catalog refresh and the FLUSH reset.
-fn new_ann_seg(spec: &kevy_index::IndexSpec) -> Option<kevy_vector::Hnsw> {
-    spec.ann().as_ref().map(|a| {
-        kevy_vector::Hnsw::new(
-            a.dim as usize,
-            kevy_vector::HnswParams::default()
-                .with_m(a.m as usize)
-                .with_ef_construction(a.ef as usize)
-                .with_distance(match a.distance {
-                    1 => kevy_vector::Distance::L2,
-                    2 => kevy_vector::Distance::Ip,
-                    _ => kevy_vector::Distance::Cosine,
-                }),
-        )
-    })
-}
-
-fn new_text_seg(spec: &kevy_index::IndexSpec) -> Option<kevy_text::TextSegment> {
-    (spec.kind() == kevy_index::IndexKind::Text).then(|| {
-        // The declared field count decides whether the segment keeps the
-        // per-field breakdown `IN <field…>` scopes to; one field needs
-        // none, because its per-field numbers are the merged ones.
-        kevy_text::TextSegment::with_shape(
-            kevy_text::SegmentShape::default()
-                .with_fields(spec.fields().len())
-                .with_positions(spec.has_positions())
-                .with_values(spec.values().len()),
-        )
-    })
-}
-
 /// Reconcile this shard's segment list with the shared catalog:
 /// keep segments whose spec is unchanged, start backfills for new
 /// ones, drop removed ones.
@@ -396,6 +350,7 @@ fn refresh(ctx: &Ctx<'_>, st: &mut ShardIndexes) {
     let (shard, n) = (ctx.shard.shard_id(), ctx.state.nshards());
     let generation = catalogs.index_gen();
     if st.generation == generation {
+        set_key_dirs(catalogs, st);
         return;
     }
     st.stats_dirty = true;
@@ -440,9 +395,37 @@ fn refresh(ctx: &Ctx<'_>, st: &mut ShardIndexes) {
     st.any_global = next.iter().any(|si| si.global.is_some());
     st.idx = next;
     st.generation = generation;
+    st.view_gen = u64::MAX;
+    set_key_dirs(catalogs, st);
+}
+
+/// Give a key directory to exactly the indexes some view reads by key.
+fn set_key_dirs(catalogs: &CatalogState, st: &mut ShardIndexes) {
+    let view_gen = catalogs.view_gen();
+    if st.view_gen == view_gen {
+        return;
+    }
+    let mut read: Vec<Vec<u8>> = Vec::new();
+    if let Some(cat) = catalogs.view() {
+        for spec in cat.iter() {
+            read.push(spec.order_by.clone());
+            spec.tree.each_leaf(&mut |l| read.push(l.index.clone()));
+        }
+    }
+    for si in &mut st.idx {
+        si.seg.set_key_dir(read.iter().any(|n| n.as_slice() == si.spec.name()));
+    }
+    st.view_gen = view_gen;
 }
 
 impl ShardIndex {
+    /// Whether this index finds a row's old entry from the store's record
+    /// (a scalar one); text, vector and aggregate indexes keep their own
+    /// map from row to entry.
+    fn reads_old_rows(&self) -> bool {
+        self.text.is_none() && self.ann.is_none() && self.agg.is_none()
+    }
+
     /// The entries this shard answers for: its own rows' for a local
     /// index, the partition it owns for a global one (none when it owns
     /// none — P ≤ N, and each partition has its own shard).
@@ -468,6 +451,7 @@ fn fresh_shard_index(catalogs: &CatalogState, spec: &IndexSpec) -> ShardIndex {
         global: None,
         spec: spec.clone(),
         build: BuildState::Backfilling(KeyWalk::new(spec.prefix())),
+        slots: None,
     }
 }
 
@@ -485,8 +469,11 @@ mod quantile;
 pub(crate) use quantile::{POINTS_PER_PARTITION, put_points, quantile_points, read_points};
 mod global_wire;
 mod row_apply;
+use row_apply::advance_backfill;
 pub(crate) use row_apply::{RowValue, row_value};
-use row_apply::{advance_backfill, apply_row};
+mod changes;
+mod seg_new;
+use seg_new::{new_ann_seg, new_scalar_seg, new_text_seg};
 
 #[cfg(test)]
 mod tests;

@@ -388,6 +388,26 @@ impl IndexSpec {
         }
     }
 
+    /// [`IndexSpec::derive_scalar`] over borrowed column bytes — for a
+    /// write path that reads the row's fields in place.
+    ///
+    /// ```
+    /// use kevy_index::{IndexKind, IndexSpec, IndexValue, ValType};
+    /// let spec = IndexSpec::builder("age", "u:", IndexKind::Range, ValType::I64).with_field("age").build()?;
+    /// assert_eq!(spec.derive_scalar_refs(&[Some(b"41")]), Some(IndexValue::I64(41)));
+    /// assert_eq!(spec.derive_scalar_refs(&[None]), None, "no field, no entry");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn derive_scalar_refs(&self, prim: &[Option<&[u8]>]) -> Option<IndexValue> {
+        match &self.composite {
+            Some(cols) => match composite_classify(cols, prim) {
+                RowDerivation::Indexed(v) => Some(IndexValue::Str(v)),
+                _ => None,
+            },
+            None => IndexValue::coerce(self.ty, prim.first().copied().flatten()?),
+        }
+    }
+
     /// [`Self::derive_scalar`] with the exclusion cause kept — VERIFY's
     /// row→index direction reads this, the write path reads
     /// `derive_scalar`, and both stand on the same classification.

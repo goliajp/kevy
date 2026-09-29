@@ -147,14 +147,21 @@ pub struct RowChanges {
 
 impl RowChanges {
     /// Whether the whole keyspace was wiped since the last take (FLUSH):
-    /// everything derived must be rebuilt, and no row is listed.
+    /// everything derived starts over empty. The rows listed are those
+    /// written after the wipe, each recorded as it was then — absent.
     ///
     /// ```
     /// use kevy_store::{RowWatch, Store};
     /// let mut s = Store::new();
     /// s.set_row_watch(RowWatch::new().with_prefix("u:", Vec::new()));
+    /// s.hset(b"u:1", &[(b"f", b"v")])?;
     /// s.flushall();
-    /// assert!(s.take_row_changes(Default::default()).is_reset());
+    /// s.hset(b"u:2", &[(b"f", b"v")])?;
+    /// let c = s.take_row_changes(Default::default());
+    /// assert!(c.is_reset());
+    /// let keys: Vec<&[u8]> = c.iter().map(|r| r.key()).collect();
+    /// assert_eq!(keys, [&b"u:2"[..]], "only what came after the wipe");
+    /// # Ok::<(), kevy_store::StoreError>(())
     /// ```
     pub fn is_reset(&self) -> bool {
         self.reset
@@ -324,9 +331,6 @@ impl Journal {
     /// recorded.
     #[inline]
     pub(crate) fn note(&mut self, key: &[u8], cur: Option<&Entry>) {
-        if self.changes.reset {
-            return;
-        }
         let mask = self.watch.mask_of(key);
         if mask == 0 || self.holds(key) {
             return;
@@ -391,8 +395,8 @@ impl Journal {
         }
     }
 
-    /// The whole keyspace went: drop what is recorded and record nothing
-    /// until the take.
+    /// The whole keyspace went: drop what is recorded; rows written from
+    /// here on are recorded as usual, from nothing.
     pub(crate) fn reset(&mut self) {
         self.index.clear();
         self.changes.clear();

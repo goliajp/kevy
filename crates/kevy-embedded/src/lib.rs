@@ -130,6 +130,7 @@ mod ops_feed;
 mod ops_hash_ttl;
 #[cfg(feature = "index")]
 mod ops_index;
+mod ops_index_changes;
 #[cfg(feature = "index")]
 mod ops_index_cold;
 #[cfg(feature = "index")]

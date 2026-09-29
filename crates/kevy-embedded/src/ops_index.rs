@@ -177,6 +177,8 @@ pub(crate) struct ShardSegs {
     pub(crate) stats_dirty: bool,
     #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
     pub(crate) reserved_cache: u64,
+    /// The store record's state between drains.
+    pub(crate) drain: crate::ops_index_changes::Drain,
 }
 
 impl ShardSegs {
