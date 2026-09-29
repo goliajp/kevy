@@ -67,16 +67,49 @@ pub use verbs::{VERBS, Verb, is_streams_geo, verb};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {
     /// A read: nothing to record.
+    ///
+    /// ```
+    /// use kevy_verbs::{Effect, exec};
+    /// let argv = |s: &str| kevy_resp::Argv::from(s.split(' ').map(|p| p.as_bytes().to_vec()).collect::<Vec<_>>());
+    /// let mut store = kevy_store::Store::new();
+    /// assert_eq!(exec(&mut store, b"GET", &argv("GET k"), &mut Vec::new()), Some(Effect::Read));
+    /// ```
     Read,
     /// A write: record the argv as it was run.
+    ///
+    /// ```
+    /// use kevy_verbs::{Effect, exec};
+    /// let argv = |s: &str| kevy_resp::Argv::from(s.split(' ').map(|p| p.as_bytes().to_vec()).collect::<Vec<_>>());
+    /// let mut store = kevy_store::Store::new();
+    /// assert_eq!(exec(&mut store, b"SET", &argv("SET k v"), &mut Vec::new()), Some(Effect::Write));
+    /// ```
     Write,
     /// A write that changed nothing this time, such as `SET … NX` on a
     /// key that exists or `HDEL` of a missing field. Recording the argv
     /// is harmless; a caller that records only changes can skip it.
+    ///
+    /// ```
+    /// use kevy_verbs::{Effect, exec};
+    /// let argv = |s: &str| kevy_resp::Argv::from(s.split(' ').map(|p| p.as_bytes().to_vec()).collect::<Vec<_>>());
+    /// let mut store = kevy_store::Store::new();
+    /// exec(&mut store, b"SET", &argv("SET k v"), &mut Vec::new());
+    /// let nx = argv("SET k w NX");
+    /// assert_eq!(exec(&mut store, b"SET", &nx, &mut Vec::new()), Some(Effect::Unchanged));
+    /// ```
     Unchanged,
     /// Record this frame instead of the argv. A command whose effect is
     /// random (`SPOP`) is recorded as what it did (`SREM key member…`),
     /// so replaying the record cannot pick differently.
+    ///
+    /// ```
+    /// use kevy_verbs::{Effect, exec};
+    /// let argv = |s: &str| kevy_resp::Argv::from(s.split(' ').map(|p| p.as_bytes().to_vec()).collect::<Vec<_>>());
+    /// let mut store = kevy_store::Store::new();
+    /// exec(&mut store, b"SADD", &argv("SADD s only"), &mut Vec::new());
+    /// let effect = exec(&mut store, b"SPOP", &argv("SPOP s"), &mut Vec::new());
+    /// let srem = ["SREM", "s", "only"].map(|w| w.as_bytes().to_vec()).to_vec();
+    /// assert_eq!(effect, Some(Effect::Record(srem)));
+    /// ```
     Record(Vec<Vec<u8>>),
     /// Record the argv with argument `.0` replaced by the ID `.1`: an `XADD`
     /// whose ID was generated (`*`, `ms-*`), recorded as the ID it gave so
@@ -188,6 +221,14 @@ pub enum Effect {
     RecordSeen,
     /// Record nothing, not even the argv: a random command that removed
     /// nothing, or a claim that changed nothing.
+    ///
+    /// ```
+    /// use kevy_verbs::{Effect, exec};
+    /// let argv = |s: &str| kevy_resp::Argv::from(s.split(' ').map(|p| p.as_bytes().to_vec()).collect::<Vec<_>>());
+    /// let mut store = kevy_store::Store::new();
+    /// // popping from a set that does not exist removes nothing
+    /// assert_eq!(exec(&mut store, b"SPOP", &argv("SPOP none"), &mut Vec::new()), Some(Effect::Skip));
+    /// ```
     Skip,
 }
 

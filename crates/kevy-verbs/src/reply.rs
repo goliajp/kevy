@@ -12,15 +12,61 @@ use kevy_resp::{
 use kevy_store::StoreError;
 
 /// Redis's reply to a token that should have been an integer.
+///
+/// ```
+/// use kevy_verbs::reply::ERR_NOT_INT;
+/// let argv = |s: &str| kevy_resp::Argv::from(s.split(' ').map(|p| p.as_bytes().to_vec()).collect::<Vec<_>>());
+/// let mut store = kevy_store::Store::new();
+/// let mut out = Vec::new();
+/// kevy_verbs::exec(&mut store, b"INCRBY", &argv("INCRBY k many"), &mut out);
+/// assert_eq!(out, format!("-{ERR_NOT_INT}\r\n").as_bytes());
+/// ```
 pub const ERR_NOT_INT: &str = "ERR value is not an integer or out of range";
 /// Redis's reply to a token that should have been a float.
+///
+/// ```
+/// use kevy_verbs::reply::ERR_NOT_FLOAT;
+/// let argv = |s: &str| kevy_resp::Argv::from(s.split(' ').map(|p| p.as_bytes().to_vec()).collect::<Vec<_>>());
+/// let mut store = kevy_store::Store::new();
+/// let mut out = Vec::new();
+/// kevy_verbs::exec(&mut store, b"INCRBYFLOAT", &argv("INCRBYFLOAT k many"), &mut out);
+/// assert_eq!(out, format!("-{ERR_NOT_FLOAT}\r\n").as_bytes());
+/// ```
 pub const ERR_NOT_FLOAT: &str = "ERR value is not a valid float";
 /// Redis's reply to a malformed option list.
+///
+/// ```
+/// use kevy_verbs::reply::ERR_SYNTAX;
+/// let argv = |s: &str| kevy_resp::Argv::from(s.split(' ').map(|p| p.as_bytes().to_vec()).collect::<Vec<_>>());
+/// let mut store = kevy_store::Store::new();
+/// let mut out = Vec::new();
+/// kevy_verbs::exec(&mut store, b"SET", &argv("SET k v SOMETIMES"), &mut out);
+/// assert_eq!(out, format!("-{ERR_SYNTAX}\r\n").as_bytes());
+/// ```
 pub const ERR_SYNTAX: &str = "ERR syntax error";
 /// Redis's reply to a command against a key of another type.
+///
+/// ```
+/// use kevy_verbs::reply::WRONGTYPE;
+/// let argv = |s: &str| kevy_resp::Argv::from(s.split(' ').map(|p| p.as_bytes().to_vec()).collect::<Vec<_>>());
+/// let mut store = kevy_store::Store::new();
+/// let mut out = Vec::new();
+/// kevy_verbs::exec(&mut store, b"SET", &argv("SET k abc"), &mut Vec::new());
+/// kevy_verbs::exec(&mut store, b"LPUSH", &argv("LPUSH k x"), &mut out);
+/// assert_eq!(out, format!("-{WRONGTYPE}\r\n").as_bytes());
+/// ```
 pub const WRONGTYPE: &str = "WRONGTYPE Operation against a key holding the wrong kind of value";
 /// Redis's reply to a write refused under `maxmemory` with no eviction,
 /// in the words client libraries match on.
+///
+/// ```
+/// use kevy_resp::RespVersion;
+/// use kevy_verbs::reply::{OOM_ERR, Scores, emit_zrange};
+/// let mut out = Vec::new();
+/// let refused = Err(kevy_store::StoreError::OutOfMemory);
+/// emit_zrange(refused, Scores::Omitted, RespVersion::V2, &mut out);
+/// assert_eq!(out, format!("-{OOM_ERR}\r\n").as_bytes());
+/// ```
 pub const OOM_ERR: &str = "OOM command not allowed when used memory > 'maxmemory'.";
 
 /// The arity refusal, naming the verb the way Redis does (lowercase).
@@ -91,9 +137,26 @@ pub fn emit_bulk_array(res: Result<Vec<Vec<u8>>, StoreError>, out: &mut Vec<u8>)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Scores {
     /// Members only (no `WITHSCORES`).
+    ///
+    /// ```
+    /// use kevy_resp::RespVersion;
+    /// use kevy_verbs::reply::{Scores, emit_zrange};
+    /// let mut out = Vec::new();
+    /// emit_zrange(Ok(vec![(b"m".to_vec(), 2.0)]), Scores::Omitted, RespVersion::V2, &mut out);
+    /// assert_eq!(out, b"*1\r\n$1\r\nm\r\n");
+    /// ```
     #[default]
     Omitted,
     /// Each member with its score (`WITHSCORES`).
+    ///
+    /// ```
+    /// use kevy_resp::RespVersion;
+    /// use kevy_verbs::reply::{Scores, emit_zrange};
+    /// let mut out = Vec::new();
+    /// emit_zrange(Ok(vec![(b"m".to_vec(), 2.0)]), Scores::Included, RespVersion::V3, &mut out);
+    /// // RESP3 nests each pair, the score as a double
+    /// assert_eq!(out, b"*1\r\n*2\r\n$1\r\nm\r\n,2\r\n");
+    /// ```
     Included,
 }
 

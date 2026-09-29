@@ -51,8 +51,41 @@ use crate::Effect;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Consumer {
     /// The consumer was already in the group.
+    ///
+    /// ```
+    /// use kevy_verbs::{Effect, aof::Consumer, exec};
+    /// if kevy_verbs::verb(b"XREADGROUP").is_none() {
+    ///     return; // built without the `streams-geo` feature
+    /// }
+    /// let argv = |s: &str| kevy_resp::Argv::from(s.split(' ').map(|p| p.as_bytes().to_vec()).collect::<Vec<_>>());
+    /// let mut store = kevy_store::Store::new();
+    /// for c in ["XADD s 1-1 f v", "XGROUP CREATE s g 0"] {
+    ///     exec(&mut store, c.split(' ').next().unwrap_or("").as_bytes(), &argv(c), &mut Vec::new());
+    /// }
+    /// let read = argv("XREADGROUP GROUP g a STREAMS s >");
+    /// exec(&mut store, b"XREADGROUP", &read, &mut Vec::new());
+    /// exec(&mut store, b"XADD", &argv("XADD s 1-2 f v"), &mut Vec::new());
+    /// // the second read by `a` finds the consumer the first one made
+    /// let again = exec(&mut store, b"XREADGROUP", &read, &mut Vec::new());
+    /// assert!(matches!(again, Some(Effect::RecordRead(_, Consumer::Existing))));
+    /// ```
     Existing,
     /// The command created the consumer.
+    ///
+    /// ```
+    /// use kevy_verbs::{Effect, aof::Consumer, exec};
+    /// if kevy_verbs::verb(b"XREADGROUP").is_none() {
+    ///     return; // built without the `streams-geo` feature
+    /// }
+    /// let argv = |s: &str| kevy_resp::Argv::from(s.split(' ').map(|p| p.as_bytes().to_vec()).collect::<Vec<_>>());
+    /// let mut store = kevy_store::Store::new();
+    /// for c in ["XADD s 1-1 f v", "XGROUP CREATE s g 0"] {
+    ///     exec(&mut store, c.split(' ').next().unwrap_or("").as_bytes(), &argv(c), &mut Vec::new());
+    /// }
+    /// let read = argv("XREADGROUP GROUP g a STREAMS s >");
+    /// let first = exec(&mut store, b"XREADGROUP", &read, &mut Vec::new());
+    /// assert!(matches!(first, Some(Effect::RecordRead(_, Consumer::Created))));
+    /// ```
     Created,
 }
 
