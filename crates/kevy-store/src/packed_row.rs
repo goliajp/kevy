@@ -320,6 +320,12 @@ impl PackedRow {
         self.0.buf.len() + core::mem::size_of::<PackedInner>()
     }
 
+    /// The row's buffer, where its bytes live: what a defrag pass asks the
+    /// allocator about.
+    pub(crate) fn buffer(&self) -> &[u8] {
+        &self.0.buf
+    }
+
     /// [`Self::heap_bytes`] as the allocator holds it: the boxed inner and
     /// the buffer, each a block of its own.
     pub(crate) fn footprint(&self) -> u64 {

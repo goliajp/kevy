@@ -114,6 +114,7 @@ pub struct SpanMeta {
     /// [`Heap::retire_empty_span`](crate::Heap) when the span is emptied
     /// and its pages go back together.
     pub(crate) discarded: u16,
+    pub(crate) returned_slots: u16,
     /// Set when this span was emptied and handed back to the free pool,
     /// as opposed to never having been assigned at all.
     ///
@@ -238,6 +239,7 @@ impl SpanMeta {
             live: 0,
             high_water: 0,
             discarded: 0,
+            returned_slots: 0,
             retired: false,
             bitmap: [0; BITMAP_WORDS],
         }

@@ -91,6 +91,8 @@ mod bitmap;
 mod clock;
 mod cond;
 pub use cond::{InsertPosition, ListEnd, ScoreCompare, SetCondition};
+mod defrag;
+pub use defrag::{DefragHint, DefragStep};
 mod entry;
 mod error;
 pub use bitmap::BitOp;
@@ -227,6 +229,7 @@ use kevy_map::KevyMap;
 #[derive(Debug, Default)]
 pub struct Store {
     pub(crate) map: keyspace_map::Keyspace,
+    pub(crate) defrag: defrag::DefragState,
     /// The random source. SPOP and SRANDMEMBER promise an ARBITRARY member;
     /// before this they returned the first one in hash-bucket order, which for
     /// a given set is the same member every time.

@@ -22,6 +22,8 @@ use kevy_config::{CliOverrides, Config};
 static GLOBAL: kevy_alloc::KevyAlloc = kevy_alloc::KevyAlloc;
 
 fn main() -> ! {
+    #[cfg(feature = "kevy-alloc")]
+    kevy::kevy_alloc_is_global();
     handle_keygen();
     handle_help_and_version();
     let mut cfg = resolve_config();
