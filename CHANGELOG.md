@@ -253,6 +253,16 @@
   loss is unchanged: under `no` the OS decides when the data reaches the
   disk, and the `everysec` fsync keeps its once-a-second cadence.
 
+- **An embedded store never reads a key past its deadline.** Lazy expiry
+  compared a key's deadline with a clock the background reaper refreshed
+  once a tick (100 ms by default), so a key could still be read for up to a
+  tick after it expired — longer if the reaper thread was held up, as it is
+  while a mobile app is suspended. A read of a key with a TTL now compares
+  against the clock itself; a key without one reads no clock, as before.
+  The cost is one monotonic clock read (about 15 ns on Apple silicon) on
+  reads of keys that have a TTL. The server was not affected: its reactor
+  refreshes the clock every batch. Affected since 1.11.0.
+
 - **`XAUTOCLAIM` answers Redis's cursor and scans no more than it does.**
   The cursor was the last scanned id plus one, so a call that reached the
   end of the pending list returned a cursor instead of `0-0`, and a client

@@ -25,7 +25,7 @@ use kevy_persist::reshard::{ShardLayout, commit_reshard, merge_sources, recover_
 use kevy_persist::{Aof, Routing, ShardsMeta, layout, layout::infer_files_n};
 use kevy_store::Store as Keyspace;
 
-use crate::config::{Config, TtlReaperMode};
+use crate::config::Config;
 #[cfg(feature = "persist")]
 use crate::metric::KevyMetric;
 use crate::metric::OpenReport;
@@ -62,7 +62,9 @@ impl ShardLayout for EmbLayout {
 fn fresh_keyspace(config: &Config) -> Keyspace {
     let mut s = Keyspace::new();
     s.set_max_memory(config.maxmemory, config.eviction_policy);
-    s.set_cached_clock(matches!(config.ttl_reaper, TtlReaperMode::Background));
+    // no cached clock: the reaper refreshes it only once a tick, so a read
+    // could see a key up to a tick past its deadline; a key without a TTL
+    // reads no clock either way, one with a TTL reads it fresh
     s
 }
 
