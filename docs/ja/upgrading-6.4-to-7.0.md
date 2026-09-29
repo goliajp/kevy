@@ -107,6 +107,7 @@ kevy-cli -p 6379 --kevy diff 127.0.0.1:6380 user:        # 一つ目のサーバ
 - `BGSAVE` のあとに書かれたデータ。macOS と、io_uring を使わない Linux で（5.1.0 から）
 - `GETEX key EX|PX` と条件つきの `HEXPIRE` の期限が、再起動で動いていた
 - RESP3 での個数つき `SPOP` が、取り除いたメンバーなしで記録されていた
+- サーバーで `TOPK` つきの `DESC` 実体化ビューを既存の行の上に作ると、シャードごとに最大ではなく最小の行が残っていた（3.0.0 から）
 - 二つ以上のシャードを持つ組み込みレプリカのほとんどのキー。読み取りが探さないシャードに書かれていた
 
 それぞれの詳細は [changelog](https://github.com/goliajp/kevy/blob/develop/CHANGELOG.md) にあります。
