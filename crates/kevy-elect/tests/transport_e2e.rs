@@ -32,23 +32,13 @@ fn build_node(
     let peer_ids: Vec<String> = std::iter::once(node_id.to_string())
         .chain(peers.iter().map(|(id, _)| (*id).to_string()))
         .collect();
-    let elector = Elector::new(
-        node_id,
-        peer_ids,
-        format!("127.0.0.1:{listen_port}"),
-        start_role,
-        fast_cfg(),
-        ElectJitter::Fixed(Duration::from_millis(0)),
-    );
+    let elector = Elector::new(node_id, peer_ids, format!("127.0.0.1:{listen_port}"), start_role)
+        .with_config(fast_cfg())
+        .with_jitter(ElectJitter::Fixed(Duration::from_millis(0)));
     let peer_addrs: Vec<PeerAddr> =
         peers.iter().map(|(id, port)| PeerAddr::new(*id, "127.0.0.1", *port)).collect();
-    Transport::spawn(
-        elector,
-        Duration::from_millis(50),
-        (IpAddr::V4(Ipv4Addr::LOCALHOST), listen_port),
-        peer_addrs,
-    )
-    .expect("spawn transport")
+    Transport::spawn(elector, (IpAddr::V4(Ipv4Addr::LOCALHOST), listen_port), peer_addrs)
+        .expect("spawn transport")
 }
 
 #[test]

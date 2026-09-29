@@ -38,19 +38,13 @@ fn node(
     let ids = std::iter::once(id.to_string())
         .chain(peers.iter().map(|(p, _)| (*p).to_string()))
         .collect();
-    let elector = Elector::new(
-        id,
-        ids,
-        format!("127.0.0.1:{port}"),
-        role,
-        fast_cfg(),
-        ElectJitter::Fixed(Duration::ZERO),
-    );
+    let elector = Elector::new(id, ids, format!("127.0.0.1:{port}"), role)
+        .with_config(fast_cfg())
+        .with_jitter(ElectJitter::Fixed(Duration::ZERO));
     let addrs = peers.iter().map(|(p, port)| PeerAddr::new(*p, "127.0.0.1", *port)).collect();
     let peer_keys = keys.iter().filter(|(p, _)| *p != id).map(|(p, k)| ((*p).to_string(), *k));
     Transport::spawn_secure(
         elector,
-        Duration::from_millis(50),
         (IpAddr::V4(Ipv4Addr::LOCALHOST), port),
         addrs,
         Box::new(|_, _, _| {}),

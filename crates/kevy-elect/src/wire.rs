@@ -6,48 +6,7 @@ use kevy_resp::{ArgvBorrowed, parse_command_borrowed};
 
 use crate::message::{Message, Role};
 
-/// Encode a [`Message`] as a RESP2 multi-bulk array.
-///
-/// Numeric fields ride as decimal bulk strings — matches kevy-
-/// replicate's `REPLICATE FROM <offset> ID <id>` handshake
-/// convention. Pre-sized: every message ≤ 6 fields ≤ 32 bytes
-/// each, so a 256-byte buffer suffices for every variant.
-pub fn encode(msg: &Message) -> Vec<u8> {
-    let mut out = Vec::with_capacity(256);
-    match msg {
-        Message::Hb { epoch, node_id, role, repl_offset } => {
-            push_bulk_array(&mut out, 5);
-            push_bulk(&mut out, b"HB");
-            push_bulk(&mut out, epoch.to_string().as_bytes());
-            push_bulk(&mut out, node_id.as_bytes());
-            push_bulk(&mut out, role.as_str().as_bytes());
-            push_bulk(&mut out, repl_offset.to_string().as_bytes());
-        }
-        Message::Offer { new_epoch, candidate_id, repl_offset } => {
-            push_bulk_array(&mut out, 4);
-            push_bulk(&mut out, b"OFFER");
-            push_bulk(&mut out, new_epoch.to_string().as_bytes());
-            push_bulk(&mut out, candidate_id.as_bytes());
-            push_bulk(&mut out, repl_offset.to_string().as_bytes());
-        }
-        Message::Accept { epoch, accepter_id } => {
-            push_bulk_array(&mut out, 3);
-            push_bulk(&mut out, b"ACCEPT");
-            push_bulk(&mut out, epoch.to_string().as_bytes());
-            push_bulk(&mut out, accepter_id.as_bytes());
-        }
-        Message::Announce { epoch, new_primary_id, new_primary_addr } => {
-            push_bulk_array(&mut out, 4);
-            push_bulk(&mut out, b"ANNOUNCE");
-            push_bulk(&mut out, epoch.to_string().as_bytes());
-            push_bulk(&mut out, new_primary_id.as_bytes());
-            push_bulk(&mut out, new_primary_addr.as_bytes());
-        }
-    }
-    out
-}
-
-/// Errors `decode` can surface.
+/// Errors [`Message::decode`] can surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum DecodeError {
@@ -84,20 +43,79 @@ impl std::fmt::Display for DecodeError {
 
 impl std::error::Error for DecodeError {}
 
-/// Decode one [`Message`] off the front of `buf`. Returns the
-/// decoded message and the number of bytes consumed. The caller
-/// advances its read cursor by `consumed` on success, retries with
-/// more bytes on `Truncated`, and drops the connection on every
-/// other variant.
-pub fn decode(buf: &[u8]) -> Result<(Message, usize), DecodeError> {
-    let (argv, used) = match parse_command_borrowed(buf) {
-        Ok(Some(pair)) => pair,
-        Ok(None) => return Err(DecodeError::Truncated),
-        Err(_) => return Err(DecodeError::Bad),
-    };
-    let verb = argv.first().ok_or(DecodeError::WrongShape)?;
-    let msg = parse_argv_for_verb(verb, &argv)?;
-    Ok((msg, used))
+impl Message {
+    /// Encode a [`Message`] as a RESP2 multi-bulk array.
+    ///
+    /// Numeric fields ride as decimal bulk strings — matches kevy-
+    /// replicate's `REPLICATE FROM <offset> ID <id>` handshake
+    /// convention. Pre-sized: every message ≤ 6 fields ≤ 32 bytes
+    /// each, so a 256-byte buffer suffices for every variant.
+    ///
+    /// ```
+    /// use kevy_elect::Message;
+    ///
+    /// let msg = Message::Accept { epoch: 7, accepter_id: "n2".to_string() };
+    /// let (back, used) = Message::decode(&msg.encode())?;
+    /// assert_eq!((back, used), (msg.clone(), msg.encode().len()));
+    /// # Ok::<(), kevy_elect::DecodeError>(())
+    /// ```
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(256);
+        match self {
+            Message::Hb { epoch, node_id, role, repl_offset } => {
+                push_bulk_array(&mut out, 5);
+                push_bulk(&mut out, b"HB");
+                push_bulk(&mut out, epoch.to_string().as_bytes());
+                push_bulk(&mut out, node_id.as_bytes());
+                push_bulk(&mut out, role.as_str().as_bytes());
+                push_bulk(&mut out, repl_offset.to_string().as_bytes());
+            }
+            Message::Offer { new_epoch, candidate_id, repl_offset } => {
+                push_bulk_array(&mut out, 4);
+                push_bulk(&mut out, b"OFFER");
+                push_bulk(&mut out, new_epoch.to_string().as_bytes());
+                push_bulk(&mut out, candidate_id.as_bytes());
+                push_bulk(&mut out, repl_offset.to_string().as_bytes());
+            }
+            Message::Accept { epoch, accepter_id } => {
+                push_bulk_array(&mut out, 3);
+                push_bulk(&mut out, b"ACCEPT");
+                push_bulk(&mut out, epoch.to_string().as_bytes());
+                push_bulk(&mut out, accepter_id.as_bytes());
+            }
+            Message::Announce { epoch, new_primary_id, new_primary_addr } => {
+                push_bulk_array(&mut out, 4);
+                push_bulk(&mut out, b"ANNOUNCE");
+                push_bulk(&mut out, epoch.to_string().as_bytes());
+                push_bulk(&mut out, new_primary_id.as_bytes());
+                push_bulk(&mut out, new_primary_addr.as_bytes());
+            }
+        }
+        out
+    }
+
+    /// Decode one [`Message`] off the front of `buf`. Returns the
+    /// decoded message and the number of bytes consumed. The caller
+    /// advances its read cursor by `consumed` on success, retries with
+    /// more bytes on `Truncated`, and drops the connection on every
+    /// other variant.
+    ///
+    /// ```
+    /// use kevy_elect::{DecodeError, Message};
+    ///
+    /// let bytes = Message::Accept { epoch: 1, accepter_id: "x".to_string() }.encode();
+    /// assert_eq!(Message::decode(&bytes[..4]), Err(DecodeError::Truncated));
+    /// ```
+    pub fn decode(buf: &[u8]) -> Result<(Message, usize), DecodeError> {
+        let (argv, used) = match parse_command_borrowed(buf) {
+            Ok(Some(pair)) => pair,
+            Ok(None) => return Err(DecodeError::Truncated),
+            Err(_) => return Err(DecodeError::Bad),
+        };
+        let verb = argv.first().ok_or(DecodeError::WrongShape)?;
+        let msg = parse_argv_for_verb(verb, &argv)?;
+        Ok((msg, used))
+    }
 }
 
 fn parse_argv_for_verb(verb: &[u8], argv: &ArgvBorrowed<'_>) -> Result<Message, DecodeError> {
@@ -162,8 +180,8 @@ mod tests {
     use super::*;
 
     fn round_trip(msg: Message) -> Message {
-        let bytes = encode(&msg);
-        let (decoded, used) = decode(&bytes).expect("decode");
+        let bytes = msg.encode();
+        let (decoded, used) = Message::decode(&bytes).expect("decode");
         assert_eq!(used, bytes.len(), "decode must consume the whole frame");
         decoded
     }
@@ -234,23 +252,23 @@ mod tests {
     fn decode_truncated_returns_more() {
         // Half a frame — decoder must surface Truncated so the
         // caller reads more bytes from the socket.
-        let full = encode(&Message::Accept { epoch: 1, accepter_id: "x".to_string() });
+        let full = Message::Accept { epoch: 1, accepter_id: "x".to_string() }.encode();
         let half = &full[..full.len() / 2];
-        assert!(matches!(decode(half), Err(DecodeError::Truncated)));
+        assert!(matches!(Message::decode(half), Err(DecodeError::Truncated)));
     }
 
     #[test]
     fn decode_unknown_verb_errs() {
         // Valid RESP, unknown verb.
         let bytes = b"*2\r\n$4\r\nPING\r\n$2\r\nok\r\n";
-        assert!(matches!(decode(bytes), Err(DecodeError::WrongShape)));
+        assert!(matches!(Message::decode(bytes), Err(DecodeError::WrongShape)));
     }
 
     #[test]
     fn decode_hb_wrong_arity_errs() {
         // `HB` with only 3 args instead of the required 5.
         let bytes = b"*3\r\n$2\r\nHB\r\n$1\r\n1\r\n$4\r\nnode\r\n";
-        assert!(matches!(decode(bytes), Err(DecodeError::WrongShape)));
+        assert!(matches!(Message::decode(bytes), Err(DecodeError::WrongShape)));
     }
 
     #[test]
@@ -263,7 +281,7 @@ mod tests {
         push_bulk(&mut out, b"node-x");
         push_bulk(&mut out, b"leader");
         push_bulk(&mut out, b"0");
-        assert!(matches!(decode(&out), Err(DecodeError::BadRole)));
+        assert!(matches!(Message::decode(&out), Err(DecodeError::BadRole)));
     }
 
     #[test]
@@ -275,7 +293,7 @@ mod tests {
         push_bulk(&mut out, b"node-x");
         push_bulk(&mut out, b"primary");
         push_bulk(&mut out, b"0");
-        assert!(matches!(decode(&out), Err(DecodeError::BadNumeric)));
+        assert!(matches!(Message::decode(&out), Err(DecodeError::BadNumeric)));
     }
 
     #[test]
@@ -287,7 +305,7 @@ mod tests {
         push_bulk(&mut out, b"node-x");
         push_bulk(&mut out, b"primary");
         push_bulk(&mut out, b"0");
-        let (msg, _) = decode(&out).expect("decode");
+        let (msg, _) = Message::decode(&out).expect("decode");
         assert!(matches!(msg, Message::Hb { .. }));
     }
 }
