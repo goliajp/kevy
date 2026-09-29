@@ -6,7 +6,7 @@
 //!
 //! `cargo run -p kevy-ring --example bench_ring --release`
 
-use kevy_bench::{bench, black_box, report};
+use kevy_bench::{bench, black_box};
 use kevy_ring::ring;
 use std::time::Instant;
 
@@ -15,13 +15,11 @@ fn main() {
 
     // Raw ring op cost, no cross-core coherency (one thread).
     let (mut p, mut c) = ring::<u64>(1024);
-    report(
-        "push+pop u64 (same thread)",
-        bench(80, 50_000, || {
-            let _ = p.push(black_box(42u64));
-            black_box(c.pop());
-        }),
-    );
+    bench(80, 50_000, || {
+        let _ = p.push(black_box(42u64));
+        black_box(c.pop());
+    })
+    .report("push+pop u64 (same thread)");
 
     // Cross-thread SPSC: the real cross-core transport floor (head/tail cache
     // lines bounce between the two cores).

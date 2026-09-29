@@ -6,7 +6,7 @@
 //! thread-per-core runtime forwards cross-core; encoders append to a reused
 //! buffer and should be near-free).
 
-use kevy_bench::{bench, black_box, report};
+use kevy_bench::{bench, black_box};
 use kevy_resp::{encode_bulk, encode_integer, encode_simple_string, parse_command};
 
 const SAMPLES: usize = 60;
@@ -22,15 +22,15 @@ fn main() {
     let g = bench(SAMPLES, INNER, || {
         black_box(parse_command(black_box(&get)).unwrap());
     });
-    report("parse GET (2 args)", g);
+    g.report("parse GET (2 args)");
     let s = bench(SAMPLES, INNER, || {
         black_box(parse_command(black_box(&set)).unwrap());
     });
-    report("parse SET (3 args)", s);
+    s.report("parse SET (3 args)");
     let p = bench(SAMPLES, INNER, || {
         black_box(parse_command(black_box(&ping)).unwrap());
     });
-    report("parse PING (inline)", p);
+    p.report("parse PING (inline)");
 
     println!("\n== reply encoders (append to a reused buffer) ==");
     let mut out = Vec::with_capacity(64);
@@ -39,17 +39,17 @@ fn main() {
         encode_bulk(&mut out, black_box(b"value-payload-16"));
         black_box(&out);
     });
-    report("encode_bulk", eb);
+    eb.report("encode_bulk");
     let es = bench(SAMPLES, INNER, || {
         out.clear();
         encode_simple_string(&mut out, black_box("OK"));
         black_box(&out);
     });
-    report("encode_simple_string", es);
+    es.report("encode_simple_string");
     let ei = bench(SAMPLES, INNER, || {
         out.clear();
         encode_integer(&mut out, black_box(12_345));
         black_box(&out);
     });
-    report("encode_integer", ei);
+    ei.report("encode_integer");
 }
