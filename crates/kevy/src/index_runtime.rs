@@ -312,7 +312,7 @@ pub(crate) fn with_two_ready_segments<R>(
     ctx: &Ctx<'_>,
     a: &[u8],
     b: &[u8],
-    f: impl FnOnce(&IndexSpec, &Segment, &IndexSpec, &Segment) -> R,
+    f: impl FnOnce(&IndexSpec, &Segment, &IndexSpec, &Segment, bool) -> R,
 ) -> Result<R, CmdError> {
     let mut st = ctx.shard.indexes.borrow_mut();
     refresh(ctx, &mut st);
@@ -328,7 +328,7 @@ pub(crate) fn with_two_ready_segments<R>(
         }
     }
     let (sa, sb) = (&st.idx[ia], &st.idx[ib]);
-    Ok(f(&sa.spec, &sa.seg, &sb.spec, &sb.seg))
+    Ok(f(&sa.spec, &sa.seg, &sb.spec, &sb.seg, sb.window.is_some()))
 }
 
 /// Whether this shard's slice of `name` is still backfilling.

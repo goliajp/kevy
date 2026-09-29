@@ -33,17 +33,19 @@ pub(crate) const NIL: u32 = u32::MAX;
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Probe<'a> {
     pub(crate) head: u64,
+    /// The first 16 bytes, for the inner nodes' wider heads.
+    pub(crate) head16: u128,
     pub(crate) bytes: &'a [u8],
     pub(crate) past: bool,
 }
 
 impl<'a> Probe<'a> {
     pub(crate) fn new(bytes: &'a [u8]) -> Probe<'a> {
-        Probe { head: head_of(bytes), bytes, past: false }
+        Probe { head: head_of(bytes), head16: head16_of(bytes), bytes, past: false }
     }
 
     pub(crate) fn past(bytes: &'a [u8]) -> Probe<'a> {
-        Probe { head: head_of(bytes), bytes, past: true }
+        Probe { head: head_of(bytes), head16: head16_of(bytes), bytes, past: true }
     }
 }
 
@@ -55,13 +57,32 @@ pub(crate) fn head_of(e: &[u8]) -> u64 {
     u64::from_be_bytes(a)
 }
 
+/// The first 16 bytes of `e` as a big-endian integer, zero-padded.
+pub(crate) fn head16_of(e: &[u8]) -> u128 {
+    let mut a = [0u8; 16];
+    let n = e.len().min(16);
+    a[..n].copy_from_slice(&e[..n]);
+    u128::from_be_bytes(a)
+}
+
+/// Byte-wise order of two slices, without a call for the short ones an
+/// order key's tail usually is: zero-padded, a tie leaves the shorter a
+/// prefix of the longer, which sorts first.
+#[inline]
+pub(crate) fn cmp_bytes(a: &[u8], b: &[u8]) -> Ordering {
+    if a.len() <= 8 && b.len() <= 8 {
+        return head_of(a).cmp(&head_of(b)).then(a.len().cmp(&b.len()));
+    }
+    a.cmp(b)
+}
+
 /// Compare a probe with a stored key given as its head, length and the
 /// bytes past its head.
 pub(crate) fn cmp_key(p: &Probe<'_>, head: u64, len: usize, rest: &[u8]) -> Ordering {
     if !p.past {
         return match p.head.cmp(&head) {
             Ordering::Equal if p.bytes.len().min(len) < 8 => p.bytes.len().cmp(&len),
-            Ordering::Equal => p.bytes[8..].cmp(rest),
+            Ordering::Equal => cmp_bytes(&p.bytes[8..], rest),
             o => o,
         };
     }

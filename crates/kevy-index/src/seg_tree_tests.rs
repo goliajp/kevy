@@ -84,7 +84,7 @@ fn walk(
     let mut total = 0;
     for (j, &kid) in inner.kids.iter().enumerate() {
         if j < inner.seps.len() {
-            assert_eq!(inner.heads[j], head_of(&inner.seps[j]));
+            assert_eq!(inner.heads[j], crate::seg_leaf::head16_of(&inner.seps[j]));
         }
         let klo = if j == 0 { lo } else { Some(&*inner.seps[j - 1]) };
         let khi = if j < inner.seps.len() { Some(&*inner.seps[j]) } else { hi };

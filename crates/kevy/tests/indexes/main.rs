@@ -3,6 +3,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+mod compose_e2e;
 mod describe_e2e;
 mod extension_targets;
 mod global_index_e2e;
