@@ -60,7 +60,12 @@ pub(super) fn info_memory(cfg: &Config, totals: &crate::state::Totals, b: &mut S
 /// `# Tiering`: the unified-budget
 /// gauges summed across shards. Emitted only when tiering is enabled —
 /// see the call site's byte-stability note.
-pub(super) fn info_tiering(totals: &crate::state::Totals, b: &mut String) {
+pub(super) fn info_tiering(
+    totals: &crate::state::Totals,
+    g: &crate::mem_guard::MemGuard,
+    b: &mut String,
+) {
+    use std::sync::atomic::Ordering::Relaxed;
     let t = &totals.tier;
     b.push_str("# Tiering\r\n");
     b.push_str("tiering_enabled:1\r\n");
@@ -82,6 +87,15 @@ pub(super) fn info_tiering(totals: &crate::state::Totals, b: &mut String) {
     b.push_str(&format!("vlog_payload_bytes:{}\r\n", t.vlog_payload_bytes));
     b.push_str(&format!("vlog_frame_header_bytes:{}\r\n", t.vlog_frame_header_bytes));
     b.push_str(&format!("vlog_dict_bytes:{}\r\n", t.vlog_dict_bytes));
+    b.push_str(&format!("tier_rss_line_bytes:{}\r\n", crate::mem_guard::rss_line(t.budget)));
+    b.push_str(&format!("tier_refusing_writes:{}\r\n", u8::from(g.refusing.load(Relaxed))));
+    b.push_str(&format!("tier_live_bytes:{}\r\n", g.live_bytes.load(Relaxed)));
+    b.push_str(&format!("tier_overhead_bytes:{}\r\n", g.overhead_bytes.load(Relaxed)));
+    b.push_str(&format!("heap_walks_total:{}\r\n", g.walks.load(Relaxed)));
+    b.push_str(&format!("heap_walk_us_total:{}\r\n", g.walk_us.load(Relaxed)));
+    b.push_str(&format!("heap_trims_total:{}\r\n", g.trims.load(Relaxed)));
+    b.push_str(&format!("heap_trimmed_bytes:{}\r\n", g.trimmed_bytes.load(Relaxed)));
+    b.push_str(&format!("heap_trim_us_total:{}\r\n", g.trim_us.load(Relaxed)));
     b.push_str("\r\n");
 }
 

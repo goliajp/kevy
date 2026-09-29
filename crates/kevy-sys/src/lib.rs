@@ -70,6 +70,7 @@
 pub(crate) mod addr;
 pub mod checksum;
 pub(crate) mod ffi;
+mod heap;
 mod interrupt;
 mod lockfile;
 mod map;
@@ -88,6 +89,7 @@ mod poller_ep;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod poller_kq;
 
+pub use heap::{HeapStats, heap_stats};
 pub use interrupt::{
     install_interrupt, note_interrupts, sever_on_interrupt, take_noted, take_severed,
 };

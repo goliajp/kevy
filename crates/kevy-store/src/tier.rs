@@ -84,6 +84,11 @@ mod enabled {
         /// Subtracted from the demote watermark: the
         /// premium fixed layer demotion can never reclaim.
         pub(crate) reserved_bytes: u64,
+        /// This shard's share of what the process holds live outside
+        /// `used_memory` and the index floor (buffers, rings, allocator
+        /// overhead), measured by the serving layer. Lowers the target
+        /// like the index floor does.
+        pub(crate) overhead_bytes: u64,
         /// RAM the cold stubs themselves cost (Σ per cold key of
         /// `ENTRY_OVERHEAD + key heap bytes`), maintained incrementally
         /// at demote / promote / DEL-of-cold / RENAME / FLUSHALL. A gauge:
@@ -130,6 +135,7 @@ mod enabled {
                 cold_bytes: 0,
                 max_spill: 0,
                 reserved_bytes: 0,
+                overhead_bytes: 0,
                 stub_bytes: 0,
                 renames: std::collections::HashMap::new(),
             });
@@ -169,6 +175,29 @@ mod enabled {
             }
         }
 
+        /// Feed this shard's share of the memory the process holds live
+        /// outside `used_memory` and the index floor — what a serving
+        /// layer measures from the allocator. It lowers the demote target,
+        /// so the budget bounds the process and not only what the store
+        /// accounts for. No-op when tiering is off.
+        ///
+        /// ```
+        /// use kevy_store::Store;
+        /// # let dir = std::env::temp_dir().join(format!("kevy-doc-overhead-{}", std::process::id()));
+        /// let mut s = Store::new();
+        /// s.enable_tiering(&dir, 1 << 20)?;
+        /// s.set_tier_overhead(1000);
+        /// assert_eq!(s.tier_stats().effective_target, (1 << 20) * 19 / 20 - 1000);
+        /// # std::fs::remove_dir_all(&dir)?;
+        /// # Ok::<(), Box<dyn std::error::Error>>(())
+        /// ```
+        #[inline]
+        pub fn set_tier_overhead(&mut self, bytes: u64) {
+            if let Some(t) = &mut self.tier {
+                t.overhead_bytes = bytes;
+            }
+        }
+
         /// Whether the index/view floor (`reserved_bytes + extra`)
         /// already exhausts the tier's demotable headroom — the
         /// IDX.CREATE refusal predicate. What demotion can never reclaim
@@ -181,7 +210,10 @@ mod enabled {
                     let cold_key_heap = t
                         .stub_bytes
                         .saturating_sub(t.cold_keys.saturating_mul(crate::value::ENTRY_OVERHEAD));
-                    let fixed = self.keyspace_bytes.saturating_add(cold_key_heap);
+                    let fixed = self
+                        .keyspace_bytes
+                        .saturating_add(cold_key_heap)
+                        .saturating_add(t.overhead_bytes);
                     t.reserved_bytes.saturating_add(extra).saturating_add(fixed)
                         >= crate::tier_demote::watermark(t.budget)
                 }
@@ -374,6 +406,10 @@ mod disabled {
         /// No tier backend on this target — no-op.
         #[inline]
         pub fn set_tier_reserved(&mut self, _bytes: u64) {}
+
+        /// No tier backend on this target — no-op.
+        #[inline]
+        pub fn set_tier_overhead(&mut self, _bytes: u64) {}
 
         /// No tier backend on this target — always false.
         #[inline]

@@ -73,6 +73,7 @@ mod elect_persist;
 mod geo_store;
 mod index_runtime;
 mod key_walk;
+mod mem_guard;
 mod metrics_http;
 mod ops;
 mod replica_runner;
@@ -249,6 +250,7 @@ pub fn serve(cfg: Arc<kevy_config::Config>) -> ! {
     state.register_stop_flag(Arc::clone(&stop));
     // Prometheus /metrics endpoint. No-op when port = 0.
     metrics_http::spawn_if_enabled(&state);
+    mem_guard::spawn_if_tiered(&state);
     // Replica runners (if any) live in `state.replication` — they
     // are started by `replication::apply` for the startup
     // `role = "replica"` path and by `REPLICAOF` at runtime.

@@ -79,6 +79,8 @@ pub struct RuntimeState {
     pub(crate) scope: ScopeState,
     pub(crate) catalogs: CatalogState,
     pub(crate) obs: ObsState,
+    /// What the memory guard found (see `crate::mem_guard`).
+    pub(crate) mem: crate::mem_guard::MemGuard,
     /// Replication plane: inbox senders, runner fleet, upstream slot
     /// and the availability flags. `Arc` so narrow long-lived captures
     /// (the elect topology callback, the FAILOVER handover thread)
@@ -145,6 +147,7 @@ impl RuntimeState {
             election: ElectionState::new(nshards),
             catalogs: CatalogState::new(),
             obs: ObsState::new(&cfg.audit.log_path, nshards),
+            mem: crate::mem_guard::MemGuard::default(),
             control_epoch: replication.control_epoch_handle(),
             replication,
             config: RwLock::new(cfg),
