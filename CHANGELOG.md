@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **An embedded replica refuses a write in the server's exact words.**
+  `Store::dispatch_argv` answered `-READONLY You can't write against a
+  read only replica` without the closing period that the server and
+  Redis send, so a client comparing the reply byte for byte saw two
+  different errors.
+
 - **`BLPOP` and `BRPOP` pops are durable and replicated, and a read-only
   replica refuses them and `RENAME` / `RENAMENX`.** The server kept its
   own list of write commands, and these four were missing from it. A
