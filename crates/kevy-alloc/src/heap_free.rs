@@ -78,6 +78,7 @@ impl Heap {
 
     /// Move every slot other shards freed back onto its own span's list.
     pub fn drain_foreign(&mut self) {
+        let (mut live, mut bytes) = (0usize, 0usize);
         let mut seg = self.segments;
         while !seg.is_null() {
             // SAFETY: live header from our own list.
@@ -97,6 +98,8 @@ impl Heap {
                 let cls = unsafe { (*seg).spans[ix].class };
                 if cls != NO_CLASS {
                     let c = cls as usize;
+                    live += requested;
+                    bytes += class::size_of(c);
                     self.live_bytes -= requested as u64;
                     self.rounding_bytes -= (class::size_of(c) - requested) as u64;
                     // SAFETY: our segment, exclusive access here.
@@ -105,6 +108,11 @@ impl Heap {
                 node = next;
             }
             seg = s.next;
+        }
+        if bytes != 0 {
+            // SAFETY: set with the first segment, whose header outlives
+            // every segment that could have held a foreign free.
+            unsafe { &*self.parked }.settle(live, bytes);
         }
     }
 
@@ -136,6 +144,9 @@ impl Heap {
         // SAFETY: caller holds exclusive access to this segment.
         let meta = unsafe { &mut (*seg.as_ptr()).spans[ix] };
         meta.free_slot(slot);
+        if meta.live == 0 {
+            self.tally.span_emptied(meta, c);
+        }
         self.class_live[c] -= 1;
         self.file_span(seg, ix);
     }
