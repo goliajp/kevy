@@ -76,6 +76,7 @@ pub mod os;
 mod outbound;
 pub mod pagemap;
 mod reclaim;
+mod rtree;
 pub mod segment;
 mod snapshot;
 mod spanlist;
