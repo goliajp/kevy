@@ -91,7 +91,7 @@ fn run(s: &Store, v: &Verb, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>) {
             | Effect::RecordReads(_)
             | Effect::RecordSeen),
         ) => record_outcome(&mut g, argv, &e),
-        _ => Ok(()),
+        None | Some(Effect::Read | Effect::Unchanged | Effect::Skip) => Ok(()),
     };
     if let Err(e) = recorded {
         out.truncate(mark);

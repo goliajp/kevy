@@ -60,7 +60,7 @@ pub(crate) use crate::cmd_class::{is_growing_write_verb, is_write_verb, notify_c
 /// the runtime's [`kevy_rt::ScanArgs`]. `Err` carries the exact error
 /// message the runtime puts on the wire (Redis wording).
 pub(crate) fn scan_args<A: ArgvView + ?Sized>(args: &A) -> Result<kevy_rt::ScanArgs, &'static str> {
-    let o = kevy_verbs::args::scan_opts(args)?;
+    let o = kevy_verbs::args::scan_opts(args).map_err(|e| e.as_wire())?;
     Ok(kevy_rt::ScanArgs {
         cursor: o.cursor,
         count: o.count,

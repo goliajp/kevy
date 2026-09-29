@@ -200,7 +200,7 @@ fn exec_shared<A: ArgvView + ?Sized>(
             record_instead(kevy_rt::propagation::Propagate::Suppress);
             true
         }
-        Some(_) => true,
+        Some(Effect::Read | Effect::Write | Effect::Unchanged) => true,
     }
 }
 

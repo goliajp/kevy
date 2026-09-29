@@ -90,41 +90,61 @@ pub fn emit_bulk_array(res: Result<Vec<Vec<u8>>, StoreError>, out: &mut Vec<u8>)
     }
 }
 
+/// Whether a sorted-set range reply carries each member's score: the
+/// presence or absence of `WITHSCORES`.
+///
+/// ```
+/// use kevy_verbs::reply::Scores;
+///
+/// assert_eq!(Scores::default(), Scores::Omitted);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum Scores {
+    /// Members only (no `WITHSCORES`).
+    #[default]
+    Omitted,
+    /// Each member with its score (`WITHSCORES`).
+    Included,
+}
+
 /// A `(member, score)` list as a range reply.
 ///
-/// Without `withscores` both protocols get a flat array of members.
-/// With it, RESP2 interleaves each score as a bulk string, and RESP3
-/// nests `[member, score]` pairs with the score as a double.
+/// With [`Scores::Omitted`] both protocols get a flat array of members.
+/// With [`Scores::Included`], RESP2 interleaves each score as a bulk
+/// string, and RESP3 nests `[member, score]` pairs with the score as a
+/// double.
 ///
 /// ```
 /// use kevy_resp::RespVersion;
+/// use kevy_verbs::reply::{Scores, emit_zrange};
+///
 /// let mut out = Vec::new();
-/// kevy_verbs::reply::emit_zrange(Ok(vec![(b"m".to_vec(), 2.0)]), true, RespVersion::V2, &mut out);
+/// emit_zrange(Ok(vec![(b"m".to_vec(), 2.0)]), Scores::Included, RespVersion::V2, &mut out);
 /// assert_eq!(out, b"*2\r\n$1\r\nm\r\n$1\r\n2\r\n");
 /// ```
 pub fn emit_zrange(
     res: Result<Vec<(Vec<u8>, f64)>, StoreError>,
-    withscores: bool,
+    scores: Scores,
     proto: RespVersion,
     out: &mut Vec<u8>,
 ) {
     match res {
         Err(e) => store_err(out, e),
-        Ok(items) => match (withscores, proto) {
-            (false, _) => {
+        Ok(items) => match (scores, proto) {
+            (Scores::Omitted, _) => {
                 encode_array_len(out, items.len() as i64);
                 for (m, _) in &items {
                     encode_bulk(out, m);
                 }
             }
-            (true, RespVersion::V2) => {
+            (Scores::Included, RespVersion::V2) => {
                 encode_array_len(out, (items.len() * 2) as i64);
                 for (m, sc) in &items {
                     encode_bulk(out, m);
                     encode_bulk(out, &fmt_score(*sc));
                 }
             }
-            (true, RespVersion::V3) => {
+            (Scores::Included, RespVersion::V3) => {
                 encode_array_len(out, items.len() as i64);
                 for (m, sc) in &items {
                     encode_array_len(out, 2);

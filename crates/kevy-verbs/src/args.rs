@@ -123,7 +123,8 @@ pub(crate) fn scan_match<A: ArgvView + ?Sized>(args: &A, start: usize) -> Option
 /// assert_eq!(o.pattern.as_deref(), Some(&b"a*"[..]));
 /// assert_eq!(o.count, 10);
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct ScanOpts {
     /// Where to resume.
     pub cursor: u64,
@@ -135,34 +136,82 @@ pub struct ScanOpts {
     pub type_filter: Option<Vec<u8>>,
 }
 
-/// Parse `SCAN`'s argv. `Err` carries the refusal in Redis's words.
+/// Why [`scan_opts`] refused a `SCAN` argv.
+///
+/// ```
+/// use kevy_verbs::args::ScanOptsError;
+///
+/// assert_eq!(ScanOptsError::InvalidCursor.to_string(), "invalid cursor");
+/// assert_eq!(ScanOptsError::InvalidCursor.as_wire(), "ERR invalid cursor");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ScanOptsError {
+    /// The cursor is not an unsigned integer.
+    InvalidCursor,
+    /// `COUNT`'s value is not an integer.
+    NotInteger,
+    /// An unknown option, an option without its value, or a `COUNT`
+    /// below 1.
+    Syntax,
+}
+
+impl ScanOptsError {
+    /// The refusal as Redis words it on the wire.
+    ///
+    /// ```
+    /// let e = kevy_verbs::args::ScanOptsError::Syntax;
+    /// assert_eq!(e.as_wire(), "ERR syntax error");
+    /// ```
+    pub fn as_wire(&self) -> &'static str {
+        match self {
+            Self::InvalidCursor => "ERR invalid cursor",
+            Self::NotInteger => "ERR value is not an integer or out of range",
+            Self::Syntax => "ERR syntax error",
+        }
+    }
+}
+
+impl std::fmt::Display for ScanOptsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // the wire text without its error code
+        let wire = self.as_wire();
+        f.write_str(wire.split_once(' ').map_or(wire, |(_, text)| text))
+    }
+}
+
+impl std::error::Error for ScanOptsError {}
+
+/// Parse `SCAN`'s argv. [`ScanOptsError::as_wire`] words a refusal as
+/// Redis does.
 ///
 /// ```
 /// let argv = kevy_resp::Argv::from(vec![b"SCAN".to_vec(), b"0".to_vec(), b"COUNT".to_vec(), b"5".to_vec()]);
-/// let o = kevy_verbs::args::scan_opts(&argv).unwrap();
+/// let o = kevy_verbs::args::scan_opts(&argv)?;
 /// assert_eq!((o.cursor, o.count), (0, 5));
+/// # Ok::<(), kevy_verbs::args::ScanOptsError>(())
 /// ```
-pub fn scan_opts<A: ArgvView + ?Sized>(args: &A) -> Result<ScanOpts, &'static str> {
-    let cursor = args.get(1).and_then(arg_u64).ok_or("ERR invalid cursor")?;
+pub fn scan_opts<A: ArgvView + ?Sized>(args: &A) -> Result<ScanOpts, ScanOptsError> {
+    let cursor = args.get(1).and_then(arg_u64).ok_or(ScanOptsError::InvalidCursor)?;
     let mut opts = ScanOpts { cursor, count: 10, pattern: None, type_filter: None };
     let mut i = 2;
     while i < args.len() {
         let opt = &args[i];
         let Some(val) = args.get(i + 1) else {
-            return Err("ERR syntax error");
+            return Err(ScanOptsError::Syntax);
         };
         if opt.eq_ignore_ascii_case(b"MATCH") {
             opts.pattern = Some(val.to_vec());
         } else if opt.eq_ignore_ascii_case(b"COUNT") {
-            let n = arg_i64(val).ok_or("ERR value is not an integer or out of range")?;
+            let n = arg_i64(val).ok_or(ScanOptsError::NotInteger)?;
             if n < 1 {
-                return Err("ERR syntax error");
+                return Err(ScanOptsError::Syntax);
             }
             opts.count = n as usize;
         } else if opt.eq_ignore_ascii_case(b"TYPE") {
             opts.type_filter = Some(val.to_vec());
         } else {
-            return Err("ERR syntax error");
+            return Err(ScanOptsError::Syntax);
         }
         i += 2;
     }

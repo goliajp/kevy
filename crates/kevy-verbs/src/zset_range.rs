@@ -6,7 +6,7 @@ use kevy_store::{Store, StoreError};
 
 use crate::args::{arg_f64, arg_i64, parse_score_bound, scan_match};
 use crate::reply::{
-    ERR_NOT_FLOAT, ERR_NOT_INT, ERR_SYNTAX, emit_zrange, fmt_score, scan_page, store_err,
+    ERR_NOT_FLOAT, ERR_NOT_INT, ERR_SYNTAX, Scores, emit_zrange, fmt_score, scan_page, store_err,
     wrong_args,
 };
 use crate::{Effect, changed, list_move};
@@ -103,8 +103,8 @@ fn by_rank<A: ArgvView + ?Sized>(
     if args.len() < 4 || args.len() > 5 {
         return wrong_args(out, if rev { "zrevrange" } else { "zrange" });
     }
-    let withscores = args.len() == 5;
-    if withscores && !args[4].eq_ignore_ascii_case(b"WITHSCORES") {
+    let scores = if args.len() == 5 { Scores::Included } else { Scores::Omitted };
+    if scores == Scores::Included && !args[4].eq_ignore_ascii_case(b"WITHSCORES") {
         return encode_error(out, ERR_SYNTAX);
     }
     let (Some(start), Some(stop)) = (arg_i64(&args[2]), arg_i64(&args[3])) else {
@@ -115,7 +115,7 @@ fn by_rank<A: ArgvView + ?Sized>(
     } else {
         store.zrange(&args[1], start, stop)
     };
-    emit_zrange(res, withscores, proto, out);
+    emit_zrange(res, scores, proto, out);
 }
 
 /// `ZRANGEBYSCORE key min max …` / `ZREVRANGEBYSCORE key max min …`:
@@ -135,7 +135,7 @@ fn by_score<A: ArgvView + ?Sized>(
     else {
         return encode_error(out, ERR_MIN_MAX);
     };
-    let Some((withscores, limit)) = range_modifiers(args, out) else {
+    let Some((scores, limit)) = range_modifiers(args, out) else {
         return;
     };
     let res = if rev {
@@ -158,7 +158,7 @@ fn by_score<A: ArgvView + ?Sized>(
                     items = items[start..end].to_vec();
                 }
             }
-            emit_zrange(Ok(items), withscores, proto, out);
+            emit_zrange(Ok(items), scores, proto, out);
         }
     }
 }
@@ -168,18 +168,18 @@ fn by_score<A: ArgvView + ?Sized>(
 fn range_modifiers<A: ArgvView + ?Sized>(
     args: &A,
     out: &mut Vec<u8>,
-) -> Option<(bool, Option<(i64, i64)>)> {
-    let mut withscores = false;
+) -> Option<(Scores, Option<(i64, i64)>)> {
+    let mut scores = Scores::Omitted;
     let mut limit: Option<(i64, i64)> = None;
     let mut i = 4;
     while i < args.len() {
         let tok = &args[i];
         if tok.eq_ignore_ascii_case(b"WITHSCORES") {
-            if withscores {
+            if scores == Scores::Included {
                 encode_error(out, ERR_SYNTAX);
                 return None;
             }
-            withscores = true;
+            scores = Scores::Included;
             i += 1;
         } else if tok.eq_ignore_ascii_case(b"LIMIT") {
             if limit.is_some() || i + 2 >= args.len() {
@@ -197,7 +197,7 @@ fn range_modifiers<A: ArgvView + ?Sized>(
             return None;
         }
     }
-    Some((withscores, limit))
+    Some((scores, limit))
 }
 
 /// The optional pop count at `i`: 1 when absent, the refusal otherwise.
