@@ -132,10 +132,12 @@ if [ "$SCALE" = full ]; then
   SAMPLES=2000; PAGES=500; DRAIN=30; ENFORCE=1
 else
   # Tiny: dataset must still exceed the budget so demotion genuinely
-  # engages (D1: ~100MB data vs 64MB; B6: ~410MB vs 256MB — the B6
-  # budget stays above an empty server's baseline RSS so the RSS
-  # record means something even unenforced).
-  D1_ROWS=100000;    D1_BUDGET=$((64 * 1024 ** 2)); THREADS=2
+  # engages (D1: ~180MB of rows vs 128MB; B6: ~410MB vs 256MB). Both
+  # budgets stay above what the process holds before any data — the
+  # receive rings, buffers and binary, ~50MB at two shards, which the
+  # budget now carries — so the indexes still fit beside it and the RSS
+  # record means something even unenforced.
+  D1_ROWS=100000;    D1_BUDGET=$((128 * 1024 ** 2)); THREADS=2
   B6_KEYS=100000;    B6_VAL=4096; B6_BUDGET=$((256 * 1024 ** 2))
   SAMPLES=300; PAGES=100; DRAIN=6; ENFORCE=0
 fi
