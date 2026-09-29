@@ -11,7 +11,7 @@
 
 use std::cmp::Ordering;
 
-use crate::seg_leaf::{Leaf, NIL, Overflow, Probe, cmp_key};
+use crate::seg_leaf::{Leaf, NIL, Overflow, Probe, Shape, cmp_key};
 
 /// Children an inner node holds before it splits.
 pub(crate) const FANOUT: usize = 64;
@@ -122,7 +122,7 @@ pub(crate) struct Tree {
     pub(crate) root: u32,
     pub(crate) height: usize,
     pub(crate) len: usize,
-    pub(crate) payloads: bool,
+    pub(crate) shape: Shape,
     pub(crate) first: u32,
     /// Bytes held by separators, kept as they change.
     pub(crate) sep_bytes: usize,
@@ -131,16 +131,16 @@ pub(crate) struct Tree {
 }
 
 impl Tree {
-    pub(crate) fn new(payloads: bool) -> Tree {
+    pub(crate) fn new(shape: Shape) -> Tree {
         Tree {
-            leaves: vec![Some(Leaf::new(payloads))],
+            leaves: vec![Some(Leaf::new(shape))],
             free_leaves: Vec::new(),
             inners: Vec::new(),
             free_inners: Vec::new(),
             root: 0,
             height: 0,
             len: 0,
-            payloads,
+            shape,
             first: 0,
             sep_bytes: 0,
             ov: Overflow::default(),
@@ -162,7 +162,7 @@ impl Tree {
     }
 
     pub(crate) fn new_leaf(&mut self) -> u32 {
-        let leaf = Leaf::new(self.payloads);
+        let leaf = Leaf::new(self.shape);
         match self.free_leaves.pop() {
             Some(id) => {
                 self.leaves[id as usize] = Some(leaf);

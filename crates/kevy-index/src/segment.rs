@@ -9,6 +9,7 @@
 
 use crate::key_dir::KeyDir;
 use crate::seg_codec::{Codec, Form, be8, put_column};
+use crate::seg_leaf::{Ent, Shape};
 use crate::seg_tree::{Pos, Tree};
 use crate::segment_stats::SegmentStats;
 use crate::spec::IndexSpec;
@@ -96,7 +97,7 @@ impl Default for Segment {
 impl Segment {
     fn with_codec(codec: Codec) -> Segment {
         Segment {
-            tree: Tree::new(codec.arity > 0),
+            tree: Tree::new(shape_of(&codec)),
             codec,
             stats: SegmentStats::default(),
             key_dir: None,
@@ -201,6 +202,7 @@ impl Segment {
         }
         if self.codec.form == Form::Unset {
             self.codec.form = Form::of(&v);
+            self.tree = Tree::new(shape_of(&self.codec));
         }
         if !self.codec.form.admits(&v) {
             // a value of another type than the segment's: excluded
@@ -221,7 +223,8 @@ impl Segment {
         let vlen = self.codec.value_len(&self.ebuf);
         let (codec, ebuf) = (&self.codec, &self.ebuf);
         let mut held = 0;
-        let new = self.tree.insert_seen(ebuf, &self.pbuf, |t, at| {
+        let e = Ent { key: ebuf, vlen, payload: &self.pbuf };
+        let new = self.tree.insert_seen(e, |t, at| {
             held = holders(t, codec, &ebuf[..vlen], t.prev_pos(at), t.normalize(at));
         });
         if new && held == 1 {
@@ -269,17 +272,22 @@ impl Segment {
             return;
         }
         let wide = self.codec.widened_for(key);
-        let mut entries: Vec<(Vec<u8>, Vec<u8>)> = Vec::with_capacity(self.tree.len);
+        let mut entries: Vec<(Vec<u8>, usize, Vec<u8>)> = Vec::with_capacity(self.tree.len);
         let mut w = crate::seg_walk::Walker::new(self, self.tree.first_pos(), false);
         while w.advance() {
             let payload = w.payload().to_vec();
             let (v, k) = w.pair();
             let mut e = Vec::new();
             wide.put_entry(v, k, &mut e);
-            entries.push((e, payload));
+            let vlen = wide.value_len(&e);
+            entries.push((e, vlen, payload));
         }
         self.codec = wide;
-        self.tree.rebuild(entries.iter().map(|(e, p)| (e.as_slice(), p.as_slice())));
+        self.tree.rebuild(entries.iter().map(|(e, vlen, p)| Ent {
+            key: e,
+            vlen: *vlen,
+            payload: p,
+        }));
     }
 
     /// Whether the segment holds `key` under `value`.
@@ -300,12 +308,15 @@ impl Segment {
         if !self.codec.form.admits(value) || !self.codec.fits_key(key) {
             return None;
         }
-        let mut e = Vec::with_capacity(24);
-        self.codec.put_entry(value, key, &mut e);
-        let p = crate::seg_leaf::Probe::new(&e);
-        let pos = self.tree.lower_bound(&p)?;
-        let l = self.tree.leaf(pos.leaf);
-        (l.cmp_at(&p, pos.slot, &self.tree.ov) == std::cmp::Ordering::Equal).then_some(pos)
+        SCRATCH.with(|b| {
+            let mut e = b.borrow_mut();
+            e.clear();
+            self.codec.put_entry(value, key, &mut e);
+            let p = crate::seg_leaf::Probe::new(&e);
+            let pos = self.tree.lower_bound(&p)?;
+            let l = self.tree.leaf(pos.leaf);
+            (l.cmp_at(&p, pos.slot, &self.tree.ov) == std::cmp::Ordering::Equal).then_some(pos)
+        })
     }
 
     /// `key`'s stored value for declared `VALUES` field `field`, where the
@@ -324,7 +335,7 @@ impl Segment {
         }
         let pos = self.find(value, key)?;
         let payload = self.tree.leaf(pos.leaf).tail(pos.slot, &self.tree.ov).payload;
-        crate::seg_codec::nth_column(payload, field).to_vec()
+        crate::seg_codec::nth_column(payload, field).into_vec()
     }
 
     /// Every stored value of the row held under `value`, in declared
@@ -341,7 +352,9 @@ impl Segment {
         let Some(pos) = self.find(value, key) else { return Vec::new() };
         let payload = self.tree.leaf(pos.leaf).tail(pos.slot, &self.tree.ov).payload;
         let mut at = 0;
-        (0..self.codec.arity).map(|_| crate::seg_codec::column(payload, &mut at).to_vec()).collect()
+        (0..self.codec.arity)
+            .map(|_| crate::seg_codec::column(payload, &mut at).into_vec())
+            .collect()
     }
 
     /// Keep a key → value directory beside the entries (`on`), or drop
@@ -426,18 +439,26 @@ impl Segment {
     }
 }
 
+/// What a segment's leaves carry: its stored values, and each value's
+/// length when values are not a fixed 8 bytes.
+fn shape_of(c: &Codec) -> Shape {
+    Shape { payloads: c.arity > 0, vlens: !matches!(c.form, Form::I64 | Form::F64) }
+}
+
+thread_local! {
+    /// An order key being looked up by a `&self` read, so a point lookup
+    /// allocates nothing.
+    static SCRATCH: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 /// How many entries next to a spot hold the value `vb`, counting no
 /// further than 2: walking left from `left` and right from `right`.
 fn holders(t: &Tree, c: &Codec, vb: &[u8], left: Option<Pos>, right: Option<Pos>) -> usize {
     let fixed = matches!(c.form, Form::I64 | Form::F64);
     let head = if fixed { be8(vb) } else { 0 };
-    let mut key = Vec::new();
-    let mut same = |p: Pos| {
-        if fixed {
-            return t.leaf(p.leaf).head(p.slot) == head;
-        }
-        t.entry(p, &mut key);
-        key.starts_with(vb)
+    let same = |p: Pos| {
+        let l = t.leaf(p.leaf);
+        if fixed { l.head(p.slot) == head } else { l.starts_with(p.slot, vb, &t.ov) }
     };
     let mut n = 0;
     let mut at = left;

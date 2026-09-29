@@ -103,10 +103,13 @@ fn write_varint(buf: &mut [u8], mut at: usize, mut n: usize) -> usize {
 
 /// Bytes of the tail starting at `start` in `buf`, and its slab if it
 /// has one.
-fn tail_len_in(buf: &[u8], start: usize, payloads: bool) -> (usize, Option<u32>) {
+fn tail_len_in(buf: &[u8], start: usize, shape: Shape) -> (usize, Option<u32>) {
     let mut at = start;
     let tag = varint(buf, &mut at);
-    let plen = if payloads { varint(buf, &mut at) } else { 0 };
+    let plen = if shape.payloads { varint(buf, &mut at) } else { 0 };
+    if shape.vlens {
+        varint(buf, &mut at);
+    }
     if tag % 2 == 1 {
         let id = u32::from_le_bytes(buf[at..at + 4].try_into().expect("4 bytes"));
         return (at + 4 - start, Some(id));
@@ -149,12 +152,29 @@ impl Overflow {
     }
 }
 
+/// One entry on its way in: the order key, the length of the value at its
+/// start (kept only by trees whose [`Shape`] asks), and the payload.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Ent<'a> {
+    pub(crate) key: &'a [u8],
+    pub(crate) vlen: usize,
+    pub(crate) payload: &'a [u8],
+}
+
+/// What a tree's tails carry besides the order key: a payload, and the
+/// length of the value at the key's start.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Shape {
+    pub(crate) payloads: bool,
+    pub(crate) vlens: bool,
+}
+
 #[derive(Debug)]
 pub(crate) struct Leaf {
     n: u16,
     top: u16,
     dead: u16,
-    payloads: bool,
+    shape: Shape,
     pub(crate) next: u32,
     pub(crate) prev: u32,
     buf: [u8; BUF],
@@ -166,15 +186,17 @@ pub(crate) struct Tail<'a> {
     pub(crate) len: usize,
     pub(crate) rest: &'a [u8],
     pub(crate) payload: &'a [u8],
+    /// The value's length at the key's start, when the tree keeps it.
+    pub(crate) vlen: usize,
 }
 
 impl Leaf {
-    pub(crate) fn new(payloads: bool) -> Box<Leaf> {
+    pub(crate) fn new(shape: Shape) -> Box<Leaf> {
         Box::new(Leaf {
             n: 0,
             top: BUF as u16,
             dead: 0,
-            payloads,
+            shape,
             next: NIL,
             prev: NIL,
             buf: [0; BUF],
@@ -191,8 +213,10 @@ impl Leaf {
 
     /// Page bytes the tail of an entry with an order key of `len` bytes
     /// and a payload of `plen` bytes takes, and whether it goes out of line.
-    fn tail_bytes(&self, len: usize, plen: usize) -> (usize, bool) {
-        let meta = varint_len(2 * len + 1) + if self.payloads { varint_len(plen) } else { 0 };
+    fn tail_bytes(&self, len: usize, plen: usize, vlen: usize) -> (usize, bool) {
+        let meta = varint_len(2 * len + 1)
+            + if self.shape.payloads { varint_len(plen) } else { 0 }
+            + if self.shape.vlens { varint_len(vlen) } else { 0 };
         let body = len.saturating_sub(8) + plen;
         if body > MAX_INLINE { (meta + 4, true) } else { (meta + body, false) }
     }
@@ -210,6 +234,7 @@ impl Leaf {
         usize::from(self.top) - self.len() * SLOT
     }
 
+    #[inline(always)]
     pub(crate) fn head(&self, i: usize) -> u64 {
         let s = i * SLOT;
         let mut a = [0u8; 8];
@@ -222,12 +247,14 @@ impl Leaf {
         usize::from(u16::from_le_bytes([self.buf[s], self.buf[s + 1]]))
     }
 
+    #[inline(always)]
     pub(crate) fn tail<'a>(&'a self, i: usize, ov: &'a Overflow) -> Tail<'a> {
         let start = self.off(i);
         let mut at = start;
         let tag = varint(&self.buf, &mut at);
         let len = tag / 2;
-        let plen = if self.payloads { varint(&self.buf, &mut at) } else { 0 };
+        let plen = if self.shape.payloads { varint(&self.buf, &mut at) } else { 0 };
+        let vlen = if self.shape.vlens { varint(&self.buf, &mut at) } else { 0 };
         let rest_len = len.saturating_sub(8);
         if tag % 2 == 1 {
             let id = u32::from_le_bytes(self.buf[at..at + 4].try_into().expect("4 bytes"));
@@ -236,16 +263,17 @@ impl Leaf {
                 len,
                 rest: &slab[..rest_len],
                 payload: &slab[rest_len..rest_len + plen],
+                vlen,
             };
         }
         let rest_end = at + rest_len;
         let end = rest_end + plen;
-        Tail { len, rest: &self.buf[at..rest_end], payload: &self.buf[rest_end..end] }
+        Tail { len, rest: &self.buf[at..rest_end], payload: &self.buf[rest_end..end], vlen }
     }
 
     /// Page bytes of entry `i`'s tail (no overflow access needed).
     fn tail_len(&self, i: usize) -> (usize, Option<u32>) {
-        tail_len_in(&self.buf, self.off(i), self.payloads)
+        tail_len_in(&self.buf, self.off(i), self.shape)
     }
 
     /// Entry `i`'s order key, appended to `out`.
@@ -254,6 +282,17 @@ impl Leaf {
         let h = self.head(i).to_be_bytes();
         out.extend_from_slice(&h[..t.len.min(8)]);
         out.extend_from_slice(t.rest);
+    }
+
+    /// Whether entry `i`'s order key starts with `pre`.
+    pub(crate) fn starts_with(&self, i: usize, pre: &[u8], ov: &Overflow) -> bool {
+        let t = self.tail(i, ov);
+        if t.len < pre.len() {
+            return false;
+        }
+        let h = self.head(i).to_be_bytes();
+        let n = pre.len().min(8);
+        h[..n] == pre[..n] && (pre.len() <= 8 || t.rest.starts_with(&pre[8..]))
     }
 
     pub(crate) fn cmp_at(&self, p: &Probe<'_>, i: usize, ov: &Overflow) -> Ordering {
@@ -281,21 +320,19 @@ impl Leaf {
     }
 
     /// Put `(key, payload)` in at slot `i`; `false` when it does not fit.
-    pub(crate) fn insert_at(
-        &mut self,
-        i: usize,
-        key: &[u8],
-        payload: &[u8],
-        ov: &mut Overflow,
-    ) -> bool {
-        let (tail, out_of_line) = self.tail_bytes(key.len(), payload.len());
+    pub(crate) fn insert_at(&mut self, i: usize, e: Ent<'_>, ov: &mut Overflow) -> bool {
+        let Ent { key, vlen, payload } = e;
+        let (tail, out_of_line) = self.tail_bytes(key.len(), payload.len(), vlen);
         if !self.make_room(SLOT + tail) {
             return false;
         }
         let top = usize::from(self.top) - tail;
         let mut at = write_varint(&mut self.buf, top, 2 * key.len() + usize::from(out_of_line));
-        if self.payloads {
+        if self.shape.payloads {
             at = write_varint(&mut self.buf, at, payload.len());
+        }
+        if self.shape.vlens {
+            at = write_varint(&mut self.buf, at, vlen);
         }
         let rest = key.get(8..).unwrap_or(&[]);
         if out_of_line {
@@ -375,7 +412,7 @@ impl Leaf {
         for i in 0..self.len() {
             let start = self.off(i);
             // read from the copy: the page is being overwritten in place
-            let (bytes, _) = tail_len_in(&old, start, self.payloads);
+            let (bytes, _) = tail_len_in(&old, start, self.shape);
             top -= bytes;
             self.buf[top..top + bytes].copy_from_slice(&old[start..start + bytes]);
             let s = i * SLOT + 8;

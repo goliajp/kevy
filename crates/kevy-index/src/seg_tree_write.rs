@@ -3,26 +3,21 @@
 use std::cmp::Ordering;
 
 use super::{FANOUT, Path, Pos, Tree};
-use crate::seg_leaf::{Leaf, Probe, head_of};
+use crate::seg_leaf::{Ent, Leaf, Probe, head_of};
 
 impl Tree {
     /// Insert `key` with `payload`. An equal key already there has its
     /// payload replaced; returns whether the key is new.
     #[cfg(test)]
     pub(crate) fn insert(&mut self, key: &[u8], payload: &[u8]) -> bool {
-        self.insert_seen(key, payload, |_, _| {})
+        self.insert_seen(Ent { key, vlen: 0, payload }, |_, _| {})
     }
 
     /// [`Tree::insert`], showing `seen` where a new key goes (the slot it
     /// will take, possibly one past its leaf's end) before the tree
     /// changes.
-    pub(crate) fn insert_seen(
-        &mut self,
-        key: &[u8],
-        payload: &[u8],
-        seen: impl FnOnce(&Tree, Pos),
-    ) -> bool {
-        let p = Probe::new(key);
+    pub(crate) fn insert_seen(&mut self, e: Ent<'_>, seen: impl FnOnce(&Tree, Pos)) -> bool {
+        let p = Probe::new(e.key);
         let mut path = Path::new();
         let id = self.descend(&p, &mut path);
         let at = self.leaf(id).lower_bound(&p, &self.ov);
@@ -31,10 +26,13 @@ impl Tree {
         if !found {
             seen(self, Pos { leaf: id, slot: at });
         }
+        if found && self.leaf(id).tail(at, &self.ov).payload == e.payload {
+            return false;
+        }
         if found {
             let (l, ov) = self.leaf_ov(id);
             l.remove_at(at, ov);
-            if l.insert_at(at, key, payload, ov) {
+            if l.insert_at(at, e, ov) {
                 return false;
             }
             // a longer payload no longer fits: count it out, then back in
@@ -43,10 +41,10 @@ impl Tree {
         }
         self.len += 1;
         let (l, ov) = self.leaf_ov(id);
-        if l.insert_at(at, key, payload, ov) {
+        if l.insert_at(at, e, ov) {
             self.bump(&path, 1);
-        } else if !self.place_beside(&path, id, at, key, payload) {
-            self.split_insert(&mut path, id, at, key, payload);
+        } else if !self.place_beside(&path, id, at, e) {
+            self.split_insert(&mut path, id, at, e);
         }
         !found
     }
@@ -54,14 +52,7 @@ impl Tree {
     /// A full leaf whose new entry lands on its edge: put the entry into
     /// the sibling on that side instead, when they share a parent and it
     /// has room. Keeps runs of ascending or descending writes packed.
-    fn place_beside(
-        &mut self,
-        path: &Path,
-        id: u32,
-        at: usize,
-        key: &[u8],
-        payload: &[u8],
-    ) -> bool {
+    fn place_beside(&mut self, path: &Path, id: u32, at: usize, e: Ent<'_>) -> bool {
         let Some(&(parent, i)) = path.last() else { return false };
         let n = self.leaf(id).len();
         let kids = &self.inners[parent as usize].kids;
@@ -72,17 +63,17 @@ impl Tree {
         };
         let (s, ov) = self.leaf_ov(sib);
         let slot = if front { 0 } else { s.len() };
-        if !s.insert_at(slot, key, payload, ov) {
+        if !s.insert_at(slot, e, ov) {
             return false;
         }
-        let mut sib_path = path.clone();
+        let mut sib_path = *path;
         sib_path.last_mut().expect("a parent").1 = if front { i + 1 } else { i - 1 };
         self.bump(&sib_path, 1);
         // the separator between the two leaves drops to the new entry
         // (front) or rises to this leaf's first entry (back)
         let mut sep = Vec::new();
         let sep_at = if front {
-            sep.extend_from_slice(key);
+            sep.extend_from_slice(e.key);
             i
         } else {
             self.leaf(id).key_into(0, &self.ov, &mut sep);
@@ -102,12 +93,12 @@ impl Tree {
     /// Split full leaf `id` to make room for `key` at `at`: at the insert
     /// point when it is an edge (the new entry opens a leaf of its own),
     /// otherwise down the middle by bytes.
-    fn split_insert(&mut self, path: &mut Path, id: u32, at: usize, key: &[u8], payload: &[u8]) {
+    fn split_insert(&mut self, path: &mut Path, id: u32, at: usize, e: Ent<'_>) {
         let n = self.leaf(id).len();
         let new = self.new_leaf();
         if at == 0 {
             let (l, ov) = self.leaf_ov(new);
-            l.insert_at(0, key, payload, ov);
+            l.insert_at(0, e, ov);
             let mut sep = Vec::new();
             self.leaf(id).key_into(0, &self.ov, &mut sep);
             self.link_before(id, new);
@@ -118,9 +109,9 @@ impl Tree {
         let (left, right, ov) = self.two_leaves(id, new);
         left.move_tail_to(cut, right);
         let fit = if at < cut || (at == cut && at < n) {
-            left.insert_at(at, key, payload, ov)
+            left.insert_at(at, e, ov)
         } else {
-            right.insert_at(at - cut, key, payload, ov)
+            right.insert_at(at - cut, e, ov)
         };
         debug_assert!(fit, "half a leaf has room for one entry");
         let mut sep = Vec::new();

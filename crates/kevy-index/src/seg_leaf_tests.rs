@@ -18,11 +18,11 @@ fn a_leaf_is_one_1784_byte_allocation() {
 #[test]
 fn inserts_keep_slots_in_order_and_heads_decide_first() {
     let mut ov = Overflow::default();
-    let mut l = Leaf::new(false);
+    let mut l = Leaf::new(Shape { payloads: false, vlens: false });
     let ks: [&[u8]; 6] = [b"b", b"", b"a\0", b"a", b"abcdefghij", b"abcdefgh"];
     for k in ks {
         let at = l.lower_bound(&Probe::new(k), &ov);
-        assert!(l.insert_at(at, k, &[], &mut ov));
+        assert!(l.insert_at(at, Ent { key: k, vlen: 0, payload: &[] }, &mut ov));
     }
     let mut want: Vec<Vec<u8>> = ks.iter().map(|k| k.to_vec()).collect();
     want.sort();
@@ -36,9 +36,13 @@ fn inserts_keep_slots_in_order_and_heads_decide_first() {
 #[test]
 fn a_full_leaf_refuses_then_compacts_after_removals() {
     let mut ov = Overflow::default();
-    let mut l = Leaf::new(true);
+    let mut l = Leaf::new(Shape { payloads: true, vlens: false });
     let mut n = 0u32;
-    while l.insert_at(l.len(), &n.to_be_bytes().repeat(3), b"pay", &mut ov) {
+    while l.insert_at(
+        l.len(),
+        Ent { key: &n.to_be_bytes().repeat(3), vlen: 0, payload: b"pay" },
+        &mut ov,
+    ) {
         n += 1;
     }
     assert!(n > 50, "a leaf holds {n}");
@@ -46,7 +50,10 @@ fn a_full_leaf_refuses_then_compacts_after_removals() {
     for _ in 0..10 {
         l.remove_at(0, &mut ov);
     }
-    assert!(l.insert_at(0, &[0; 12], b"pay", &mut ov), "dead bytes are reclaimed");
+    assert!(
+        l.insert_at(0, Ent { key: &[0; 12], vlen: 0, payload: b"pay" }, &mut ov),
+        "dead bytes are reclaimed"
+    );
     assert_eq!(l.len(), before - 9);
     assert_eq!(l.tail(0, &ov).payload, b"pay");
 }
@@ -54,15 +61,15 @@ fn a_full_leaf_refuses_then_compacts_after_removals() {
 #[test]
 fn big_entries_go_out_of_line_and_come_back() {
     let mut ov = Overflow::default();
-    let mut l = Leaf::new(true);
+    let mut l = Leaf::new(Shape { payloads: true, vlens: false });
     let big = vec![7u8; 5000];
-    assert!(l.insert_at(0, &big, b"p", &mut ov));
-    assert!(l.insert_at(1, &[8u8; 10], &vec![1u8; 3000], &mut ov));
+    assert!(l.insert_at(0, Ent { key: &big, vlen: 0, payload: b"p" }, &mut ov));
+    assert!(l.insert_at(1, Ent { key: &[8u8; 10], vlen: 0, payload: &vec![1u8; 3000] }, &mut ov));
     assert!(l.slab_of(0).is_some() && l.slab_of(1).is_some());
     assert_eq!(keys(&l, &ov)[0], big);
     assert_eq!(l.tail(1, &ov).payload.len(), 3000);
     assert_eq!(l.cmp_at(&Probe::new(&big), 0, &ov), Ordering::Equal);
-    let mut other = Leaf::new(true);
+    let mut other = Leaf::new(Shape { payloads: true, vlens: false });
     l.move_tail_to(0, &mut other);
     assert_eq!((l.len(), other.len()), (0, 2), "a slab moves with its entry");
     assert_eq!(keys(&other, &ov)[0], big);
@@ -74,11 +81,11 @@ fn big_entries_go_out_of_line_and_come_back() {
 #[test]
 fn moving_tails_and_dropping_heads_keeps_order() {
     let mut ov = Overflow::default();
-    let mut a = Leaf::new(false);
+    let mut a = Leaf::new(Shape { payloads: false, vlens: false });
     for i in 0..20u8 {
-        a.insert_at(a.len(), &[i; 9], &[], &mut ov);
+        a.insert_at(a.len(), Ent { key: &[i; 9], vlen: 0, payload: &[] }, &mut ov);
     }
-    let mut b = Leaf::new(false);
+    let mut b = Leaf::new(Shape { payloads: false, vlens: false });
     a.move_tail_to(15, &mut b);
     a.remove_head(5, &mut ov);
     let firsts = |l: &Leaf| keys(l, &ov).iter().map(|k| k[0]).collect::<Vec<_>>();
