@@ -5,7 +5,7 @@
 //! / encode logic so the wire format never has two implementations.
 //! What's different here is the IO loop: instead of blocking
 //! `Read::read` we drive the codec on top of any
-//! [`AsyncTransport`][crate::AsyncTransport].
+//! [`AsyncTransport`].
 //!
 //! The state machine is identical to blocking:
 //!
@@ -79,7 +79,7 @@ impl<T: AsyncTransport> AsyncRespCodec<T> {
     }
 
     /// Encode + write a single command without waiting for a reply.
-    /// Used by [`crate::AsyncSubscriber`]: SUBSCRIBE / PSUBSCRIBE etc.
+    /// Used by [`crate::subscriber::AsyncSubscriber`]: SUBSCRIBE / PSUBSCRIBE etc.
     /// don't return replies in the conventional sense — the server
     /// pushes ack frames that are drained later by `read_reply`.
     pub async fn send(&mut self, args: &[Vec<u8>]) -> io::Result<()> {

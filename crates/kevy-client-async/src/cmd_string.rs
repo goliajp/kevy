@@ -1,5 +1,5 @@
 //! Async mirror of the string + generic key commands on
-//! [`kevy_client::Connection`]. Each method here is a 1:1 translation
+//! [`kevy_client::Connection`](https://docs.rs/kevy-client/latest/kevy_client/enum.Connection.html). Each method here is a 1:1 translation
 //! of the corresponding blocking method: same name, same arguments,
 //! same return type modulo `.await`.
 
