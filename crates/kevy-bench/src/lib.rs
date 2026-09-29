@@ -158,19 +158,21 @@ pub fn time_median<F: FnMut()>(iters: usize, mut op: F) -> Duration {
     samples[iters / 2]
 }
 
-/// Print one labelled timing line.
-///
-/// # Examples
-///
-/// ```
-/// let s = kevy_bench::bench(3, 100, || { std::hint::black_box(1u32); });
-/// kevy_bench::report("noop", s); // median / p95 / min, one line
-/// ```
-pub fn report(label: &str, s: Stats) {
-    println!(
-        "  {label:<30} median {:>8} ns   p95 {:>8} ns   min {:>8} ns",
-        s.median_ns, s.p95_ns, s.min_ns
-    );
+impl Stats {
+    /// Print one labelled timing line.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let s = kevy_bench::bench(3, 100, || { std::hint::black_box(1u32); });
+    /// s.report("noop"); // median / p95 / min, one line
+    /// ```
+    pub fn report(&self, label: &str) {
+        println!(
+            "  {label:<30} median {:>8} ns   p95 {:>8} ns   min {:>8} ns",
+            self.median_ns, self.p95_ns, self.min_ns
+        );
+    }
 }
 
 /// Print both timings and the candidate's speedup over the baseline (by median).
@@ -188,8 +190,8 @@ pub fn report(label: &str, s: Stats) {
 /// assert!(ratio > 0.0 && ratio.is_finite());
 /// ```
 pub fn compare(base_label: &str, base: Stats, cand_label: &str, cand: Stats) -> f64 {
-    report(base_label, base);
-    report(cand_label, cand);
+    base.report(base_label);
+    cand.report(cand_label);
     let ratio = base.median_ns as f64 / (cand.median_ns.max(1)) as f64;
     let verdict = if ratio >= 1.0 { "faster" } else { "slower" };
     println!("  → {cand_label} is {ratio:.2}× {verdict} than {base_label} (median)\n");
