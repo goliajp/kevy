@@ -475,7 +475,6 @@ mod tests_live_entry;
 #[cfg(test)]
 mod tests_memory;
 #[cfg(test)]
-#[cfg(test)]
 mod tests_range_past_the_end;
 #[cfg(test)]
 mod tests_row_watch;

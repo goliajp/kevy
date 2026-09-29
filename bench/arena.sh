@@ -71,6 +71,8 @@ SAMPLES=${ARENA_SAMPLES:-$(mktemp)}
 [ -n "${ARENA_SAMPLES:-}" ] || trap 'rm -f "$SAMPLES"' EXIT
 : >"$SAMPLES"
 
+# Competitor versions come from bench/COMPETITOR-ANCHORS.json; each image is
+# asked what it actually is, and a mismatch stops the run.
 . ./anchor-lib.sh   # cwd is this script's directory, set above
 
 VALKEY_PIN=$(anchor_pin valkey)
