@@ -97,6 +97,8 @@ def audit(suite, checks):
         for t in toks:
             inner += shlex.split(t) if (" " in t) else [t]
         for tok in inner:
+            if "=" in tok and tok.split("=", 1)[0].isidentifier():
+                tok = tok.split("=", 1)[1]  # an env assignment's value
             if "/" in tok and not tok.startswith("-") and not (ROOT / tok).exists():
                 if tok.startswith("target/"):
                     continue  # build products are a requirement, not a file check
