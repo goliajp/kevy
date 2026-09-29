@@ -608,9 +608,12 @@ impl TrackedReplica {
                 let mut from = last_offset.load(std::sync::atomic::Ordering::Relaxed);
                 let conn = kevy_replicate::replica::ReplicaClient::connect_with(
                     (upstream.0.as_str(), upstream.1),
-                    &kevy_replicate::replica::ConnectOptions::new("tracked")
-                        .with_generation(data_gen.load(std::sync::atomic::Ordering::Relaxed))
-                        .with_from_offset(from),
+                    &kevy_replicate::replica::ConnectOptions::new("tracked").with_from(
+                        kevy_replicate::feed::FeedPosition::new(
+                            data_gen.load(std::sync::atomic::Ordering::Relaxed),
+                            from,
+                        ),
+                    ),
                 );
                 let Ok(mut client) = conn else {
                     std::thread::sleep(std::time::Duration::from_millis(20));
@@ -619,7 +622,7 @@ impl TrackedReplica {
                 // Same adoption contract as the production runner:
                 // a from-0 session (or a completed ship) delivers a
                 // whole history of the ACK'd generation.
-                let ack_gen = client.primary_gen_at_handshake();
+                let ack_gen = client.primary_at_handshake().generation;
                 if from == 0 {
                     data_gen.store(ack_gen, std::sync::atomic::Ordering::Relaxed);
                 }

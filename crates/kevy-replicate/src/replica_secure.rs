@@ -155,13 +155,12 @@ impl ReplicaClient {
         opts: &crate::replica::ConnectOptions,
         security: &ReplicaSecurity,
     ) -> Result<Self, ReplicaError> {
-        let (generation, from_offset, connect_timeout) =
-            (opts.generation, opts.from_offset, opts.timeout);
+        let connect_timeout = opts.timeout;
         let replica_id = opts.replica_id.as_str();
         let mut sock = connect_stream(addr, connect_timeout)?;
         sock.set_read_timeout(Some(connect_timeout))?;
         let mut noise = handshake(&mut sock, security)?;
-        noise.write(&mut sock, &encode_replicate_from(generation, from_offset, replica_id))?;
+        noise.write(&mut sock, &encode_replicate_from(opts.from, replica_id))?;
         let mut plain = Vec::new();
         let mut chunk = [0u8; 256];
         let line_end = loop {
@@ -175,7 +174,7 @@ impl ReplicaClient {
                 return Err(ReplicaError::HandshakeRejected);
             }
         };
-        let (primary_gen, primary_offset) = parse_ack_line(&plain[..line_end])?;
+        let primary_at_handshake = parse_ack_line(&plain[..line_end])?;
         sock.set_read_timeout(None)?;
         sock.set_nonblocking(false)?;
         let mut buf = Vec::with_capacity(8 * 1024);
@@ -185,9 +184,8 @@ impl ReplicaClient {
             sock,
             buf,
             cursor: 0,
-            primary_offset_at_handshake: primary_offset,
-            primary_gen_at_handshake: primary_gen,
-            expected_offset: from_offset,
+            primary_at_handshake,
+            expected_offset: opts.from.offset,
             in_snapshot: false,
             noise: Some(noise),
         })

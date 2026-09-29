@@ -38,6 +38,13 @@
 //! # Ok::<_, kevy_replicate::replica::ReplicaError>(())
 //! ```
 //!
+//! # Features
+//!
+//! - `secure` (default) — Noise IK encrypted, mutually authenticated
+//!   links: `replica::ReplicaSecurity` and
+//!   `replica::ConnectOptions::with_security`. Off, a replica connects
+//!   in plaintext only and the handshake code is not linked.
+//!
 //! See the `replica_apply_dispatch_mirrors_primary_store` integration
 //! test in `crates/kevy/tests/replication.rs` for the pattern under
 //! the full primary+replica end-to-end harness.
@@ -56,6 +63,10 @@ pub mod replica;
 mod replica_connect;
 mod replica_decode;
 mod replica_error;
+#[cfg(not(feature = "secure"))]
+#[path = "replica_plain.rs"]
+mod replica_secure;
+#[cfg(feature = "secure")]
 mod replica_secure;
 pub mod slot;
 pub mod source;
@@ -64,6 +75,7 @@ mod wire_snapshot;
 
 const _: () = {
     const fn send_sync<T: Send + Sync>() {}
+    send_sync::<feed::FeedPosition>();
     send_sync::<feed::FeedRead>();
     send_sync::<feed::FeedFrame<'static>>();
     send_sync::<feed::FeedSource>();
@@ -73,6 +85,7 @@ const _: () = {
     send_sync::<replica::ReplicaEvent>();
     send_sync::<replica::ReplicaClient>();
     send_sync::<replica::ReplicaError>();
+    #[cfg(feature = "secure")]
     send_sync::<replica::ReplicaSecurity>();
     send_sync::<replica::ConnectOptions>();
     send_sync::<slot::ReplicaSlot>();

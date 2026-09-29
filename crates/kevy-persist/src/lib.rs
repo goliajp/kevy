@@ -221,7 +221,7 @@ const _: () = {
     send_sync::<RecordStep<'static>>();
     send_sync::<Routing>();
     send_sync::<ShardsMeta>();
-    send_sync::<feed_meta::FeedBoot>();
+
     send_sync::<reshard::StdLayout>();
     send_sync::<DirLock>();
 };

@@ -8,15 +8,29 @@ use crate::snapshot_fmt::{
     VERSION, VERSION_ABSOLUTE_TTL, VERSION_FEED_CURSOR, VERSION_RELATIVE_TTL, VERSION_SEG_STUB,
     capped_capacity, read_bytes, read_ttl, read_u8, read_u32, read_u64,
 };
+use kevy_replicate::feed::FeedPosition;
 use kevy_store::Store;
 use std::fs::File;
 use std::io::{self, BufReader, Read};
 use std::path::Path;
 
-/// Read the recovery-point cursor from a snapshot's header:
-/// `Some((generation, offset))` for format v5+, `None` for older
+/// Read the recovery-point cursor from a snapshot's header: the feed
+/// position the snapshot was taken at for format v5+, `None` for older
 /// (cursor-less) snapshots. Does not load entries.
-pub fn read_snapshot_cursor(path: &Path) -> io::Result<Option<(u64, u64)>> {
+///
+/// ```
+/// use kevy_replicate::feed::FeedPosition;
+///
+/// let dir = kevy_tmpdir::unique_dir("cursor-doc");
+/// let path = dir.join("dump.kevy");
+/// let file = std::fs::File::create(&path)?;
+/// let store = kevy_store::Store::new();
+/// kevy_persist::write_snapshot_to_with_cursor(&store, file, Some(FeedPosition::new(3, 42)))?;
+/// assert_eq!(kevy_persist::read_snapshot_cursor(&path)?, Some(FeedPosition::new(3, 42)));
+/// # std::fs::remove_dir_all(&dir)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
+pub fn read_snapshot_cursor(path: &Path) -> io::Result<Option<FeedPosition>> {
     let mut r = BufReader::new(File::open(path)?);
     let mut magic = [0u8; 8];
     r.read_exact(&mut magic)?;
@@ -33,7 +47,7 @@ pub fn read_snapshot_cursor(path: &Path) -> io::Result<Option<(u64, u64)>> {
     r.read_exact(&mut off_bytes)?;
     let generation = u64::from_le_bytes(gen_bytes);
     let offset = u64::from_le_bytes(off_bytes);
-    Ok(Some((generation, offset)))
+    Ok(Some(FeedPosition::new(generation, offset)))
 }
 
 /// Load a snapshot from `path` into `store` (entries are inserted, not cleared

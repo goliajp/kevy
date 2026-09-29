@@ -45,7 +45,7 @@ pub(crate) enum PersistJob {
         aof_reset: Option<PathBuf>,
         /// Feed cursor at view-freeze — written into the
         /// snapshot header (recovery-point contract).
-        cursor: Option<(u64, u64)>,
+        cursor: Option<kevy_replicate::feed::FeedPosition>,
     },
     /// Dump `view` as RESP commands at the AOF's `.rewrite` tmp.
     Rewrite { view: SnapshotView, tmp: PathBuf },
@@ -339,9 +339,8 @@ impl<C: Commands> Shard<C> {
     /// the generation (see `kevy_persist::feed_meta`).
     pub(crate) fn write_feed_shutdown_marker(&self) {
         if let Some(f) = &self.replicate {
-            let (generation, next) = f.tail();
             if let Err(e) =
-                kevy_persist::feed_meta::write_feed_meta(&self.data_dir, self.id, generation, next)
+                kevy_persist::feed_meta::write_feed_meta(&self.data_dir, self.id, f.tail())
             {
                 eprintln!("kevy: shard {} feed marker write failed: {e}", self.id);
             }
@@ -441,7 +440,7 @@ impl<C: Commands> Shard<C> {
 pub(crate) fn write_snapshot_tmp_with_cursor(
     view: &SnapshotView,
     path: &std::path::Path,
-    cursor: Option<(u64, u64)>,
+    cursor: Option<kevy_replicate::feed::FeedPosition>,
 ) -> std::io::Result<PathBuf> {
     let tmp = path.with_extension("rdb.tmp");
     {

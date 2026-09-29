@@ -183,8 +183,7 @@ impl ReplLinks {
             match kevy_replicate::replica::ReplicaClient::connect_with(
                 addr,
                 &kevy_replicate::replica::ConnectOptions::new(replica_id)
-                    .with_generation(generation)
-                    .with_from_offset(from_offset)
+                    .with_from(kevy_replicate::feed::FeedPosition::new(generation, from_offset))
                     .with_security(sec),
             ) {
                 Ok(c) => {

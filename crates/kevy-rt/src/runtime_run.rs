@@ -348,11 +348,11 @@ impl<C: Commands> Runtime<C> {
                     } else {
                         self.replication_buffer_size
                     };
-                    let boot = kevy_persist::feed_meta::FeedBoot::load(&self.data_dir, id)?;
+                    let boot = kevy_persist::feed_meta::boot_position(&self.data_dir, id)?;
                     let mut src = kevy_replicate::source::ReplicationSource::new(
                         usize::try_from(budget).unwrap_or(usize::MAX),
                     );
-                    src.set_next_offset(boot.next_offset);
+                    src.set_next_offset(boot.offset);
                     Some(kevy_replicate::feed::FeedSource::new(boot.generation, src))
                 } else {
                     None

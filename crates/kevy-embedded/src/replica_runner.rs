@@ -269,7 +269,7 @@ fn drain_session(
     // primary advertised at handshake. Adopt it when a whole history
     // lands: at SnapshotEnd, or immediately when the session started
     // from offset 0 (nothing local to contradict).
-    let ack_gen = client.primary_gen_at_handshake();
+    let ack_gen = client.primary_at_handshake().generation;
     if client.expected_offset() == 0 {
         *data_gen = ack_gen;
     }
@@ -277,9 +277,9 @@ fn drain_session(
         match client.next_event() {
             // Heartbeat: ack immediately (keeps the primary's
             // slot fresh); embedded lag view rides a later train.
-            Some(Ok(ReplicaEvent::Ping { generation, .. })) => {
+            Some(Ok(ReplicaEvent::Ping(tail))) => {
                 let _ = client.send_ack(client.expected_offset());
-                if generation != 0 && generation != ack_gen {
+                if tail.generation != 0 && tail.generation != ack_gen {
                     // The primary broke continuity under us (FLUSHALL /
                     // promotion). Re-handshake so its fence re-decides.
                     break;

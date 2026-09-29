@@ -4,8 +4,10 @@
 use std::net::ToSocketAddrs;
 use std::time::Duration;
 
+use crate::feed::FeedPosition;
 use crate::replica::ReplicaClient;
 use crate::replica_error::ReplicaError;
+#[cfg(feature = "secure")]
 use crate::replica_secure::ReplicaSecurity;
 
 /// Everything a replica presents when it connects, beyond the address.
@@ -14,13 +16,13 @@ use crate::replica_secure::ReplicaSecurity;
 ///
 /// ```
 /// use std::time::Duration;
+/// use kevy_replicate::feed::FeedPosition;
 /// use kevy_replicate::replica::ConnectOptions;
 ///
 /// let opts = ConnectOptions::new("replica-a")
-///     .with_generation(7)
-///     .with_from_offset(42)
+///     .with_from(FeedPosition::new(7, 42))
 ///     .with_timeout(Duration::from_secs(1));
-/// assert_eq!((opts.generation, opts.from_offset), (7, 42));
+/// assert_eq!(opts.from, FeedPosition::new(7, 42));
 /// ```
 #[derive(Debug, Clone)]
 #[non_exhaustive]
@@ -28,15 +30,15 @@ pub struct ConnectOptions {
     /// The replica's identifier, operator-set; the primary keys its slot
     /// by it.
     pub replica_id: String,
-    /// The feed generation this replica's data reflects; `0` = unknown or
-    /// fresh. The primary serves `from_offset` continuity only when the
-    /// generations match; otherwise it ships a snapshot.
-    pub generation: u64,
-    /// The offset to resume from.
-    pub from_offset: u64,
+    /// Where to resume: the feed generation this replica's data reflects
+    /// (`0` = unknown or fresh) and the offset within it. The primary
+    /// serves the offset's continuity only when the generations match;
+    /// otherwise it ships a snapshot.
+    pub from: FeedPosition,
     /// How long the connect and the handshake may take.
     pub timeout: Duration,
     /// `Some` to open a Noise IK link instead of a plaintext one.
+    #[cfg(feature = "secure")]
     pub security: Option<ReplicaSecurity>,
 }
 
@@ -45,40 +47,29 @@ impl ConnectOptions {
     ///
     /// ```
     /// let opts = kevy_replicate::replica::ConnectOptions::new("r1");
-    /// assert_eq!((opts.generation, opts.from_offset), (0, 0));
-    /// assert!(opts.security.is_none());
+    /// assert_eq!(opts.from, kevy_replicate::feed::FeedPosition::default());
     /// ```
     pub fn new(replica_id: impl Into<String>) -> Self {
         ConnectOptions {
             replica_id: replica_id.into(),
-            generation: 0,
-            from_offset: 0,
+            from: FeedPosition::default(),
             timeout: Duration::from_secs(5),
+            #[cfg(feature = "secure")]
             security: None,
         }
     }
 
-    /// Set [`ConnectOptions::generation`].
+    /// Set [`ConnectOptions::from`].
     ///
     /// ```
-    /// let opts = kevy_replicate::replica::ConnectOptions::new("r1").with_generation(3);
-    /// assert_eq!(opts.generation, 3);
-    /// ```
-    #[must_use]
-    pub fn with_generation(mut self, generation: u64) -> Self {
-        self.generation = generation;
-        self
-    }
-
-    /// Set [`ConnectOptions::from_offset`].
+    /// use kevy_replicate::feed::FeedPosition;
     ///
-    /// ```
-    /// let opts = kevy_replicate::replica::ConnectOptions::new("r1").with_from_offset(9);
-    /// assert_eq!(opts.from_offset, 9);
+    /// let opts = kevy_replicate::replica::ConnectOptions::new("r1").with_from(FeedPosition::new(3, 9));
+    /// assert_eq!(opts.from, FeedPosition::new(3, 9));
     /// ```
     #[must_use]
-    pub fn with_from_offset(mut self, from_offset: u64) -> Self {
-        self.from_offset = from_offset;
+    pub fn with_from(mut self, from: FeedPosition) -> Self {
+        self.from = from;
         self
     }
 
@@ -104,6 +95,7 @@ impl ConnectOptions {
     /// let opts = ConnectOptions::new("r1").with_security(sec);
     /// assert!(opts.security.is_some());
     /// ```
+    #[cfg(feature = "secure")]
     #[must_use]
     pub fn with_security(mut self, security: ReplicaSecurity) -> Self {
         self.security = Some(security);
@@ -121,7 +113,7 @@ impl ReplicaClient {
     /// ```no_run
     /// use kevy_replicate::replica::{ConnectOptions, ReplicaClient};
     ///
-    /// let opts = ConnectOptions::new("replica-a").with_generation(7).with_from_offset(42);
+    /// let opts = ConnectOptions::new("replica-a").with_from(kevy_replicate::feed::FeedPosition::new(7, 42));
     /// let client = ReplicaClient::connect_with("127.0.0.1:16004", &opts)?;
     /// assert_eq!(client.expected_offset(), 42);
     /// # Ok::<(), kevy_replicate::replica::ReplicaError>(())
@@ -130,9 +122,10 @@ impl ReplicaClient {
         addr: A,
         opts: &ConnectOptions,
     ) -> Result<Self, ReplicaError> {
-        match &opts.security {
-            None => Self::connect_plain(addr, opts),
-            Some(security) => Self::connect_noise(addr, opts, security),
+        #[cfg(feature = "secure")]
+        if let Some(security) = &opts.security {
+            return Self::connect_noise(addr, opts, security);
         }
+        Self::connect_plain(addr, opts)
     }
 }

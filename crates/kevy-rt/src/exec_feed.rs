@@ -15,7 +15,7 @@
 //! are not. Filtering never moves the cursor differently: `next` is
 //! the offset after the last *scanned* frame, matched or not.
 
-use kevy_replicate::feed::FeedRead;
+use kevy_replicate::feed::{FeedPosition, FeedRead};
 use kevy_resp::ArgvView;
 use kevy_resp::CmdError;
 
@@ -164,10 +164,10 @@ impl<C: Commands> Shard<C> {
         let Some(f) = &self.replicate else {
             return Part::Reply(SmallReply::from_vec(feed_disabled()));
         };
-        let (generation, next) = f.tail();
+        let tail = f.tail();
         let mut out = Vec::with_capacity(32);
         out.extend_from_slice(b"*2\r\n");
-        out.extend_from_slice(format!(":{generation}\r\n:{next}\r\n").as_bytes());
+        out.extend_from_slice(format!(":{}\r\n:{}\r\n", tail.generation, tail.offset).as_bytes());
         Part::Reply(SmallReply::from_vec(out))
     }
 
@@ -182,11 +182,11 @@ impl<C: Commands> Shard<C> {
         let Some(f) = &self.replicate else {
             return Part::Reply(SmallReply::from_vec(feed_disabled()));
         };
-        let frames = match f.read(cursor_gen, offset, count) {
+        let frames = match f.read(FeedPosition::new(cursor_gen, offset), count) {
             Ok(v) => v,
-            Err(FeedRead::Resync { generation, tail }) => {
+            Err(FeedRead::Resync { tail }) => {
                 return Part::Reply(SmallReply::from_vec(
-                    format!("-FEEDRESYNC {generation} {tail}\r\n").into_bytes(),
+                    format!("-FEEDRESYNC {} {}\r\n", tail.generation, tail.offset).into_bytes(),
                 ));
             }
             Err(FeedRead::Future) => {
