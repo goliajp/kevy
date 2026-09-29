@@ -97,45 +97,7 @@ mod enabled {
         pub(crate) renames: std::collections::HashMap<(u32, u64), SmallBytes>,
     }
 
-    /// Tiering gauges — the `INFO # Tiering` feeders.
-    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-    #[non_exhaustive]
-    pub struct TierStats {
-        /// The RAM budget this shard demotes against (resolved bytes).
-        pub budget: u64,
-        /// The unified demote target: `budget·19/20 − reserved_bytes −
-        /// stub_bytes`, saturating. **0 = the floor alone exceeds the
-        /// budget** — the tier can demote nothing; visible here, never
-        /// silent (RFC §4 row 16).
-        pub effective_target: u64,
-        /// Index/view memory floor fed by [`Store::set_tier_reserved`].
-        pub reserved_bytes: u64,
-        /// RAM the cold stubs cost (Σ `ENTRY_OVERHEAD + key heap`).
-        pub stub_bytes: u64,
-        /// Keys demoted to the cold tier since boot.
-        pub demotions_total: u64,
-        /// Keys promoted back since boot.
-        pub promotions_total: u64,
-        /// Vlog record reads (serve + promote + peek).
-        pub preads_total: u64,
-        /// No-promote peek record reads only — one per cold row.
-        pub peek_preads_total: u64,
-        /// Batched cold-read submissions — one per page batch on
-        /// the sync reader; kernel submit count on the uring reader.
-        pub batch_submissions_total: u64,
-        /// Currently-cold keys.
-        pub cold_keys: u64,
-        /// Σ original weights of currently-cold values.
-        pub cold_bytes: u64,
-        /// Vlog file count.
-        pub vlog_files: u64,
-        /// Vlog total bytes on disk.
-        pub vlog_bytes: u64,
-        /// Vlog live (non-dead) bytes.
-        pub vlog_live_bytes: u64,
-        /// Vlog compaction epoch (retired-file counter).
-        pub vlog_epoch: u64,
-    }
+    pub use crate::tier_stats::TierStats;
 
     impl ColdRef {
         #[inline]

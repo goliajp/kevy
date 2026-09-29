@@ -24,10 +24,42 @@ use crate::nostd_prelude::*;
 #[non_exhaustive]
 pub enum KeyspaceEvent {
     /// A key was added to the keyspace.
+    ///
+    /// ```
+    /// use kevy_store::{KeyspaceEvent, SetCondition, Store};
+    /// let mut s = Store::new();
+    /// s.set_notify_capture([KeyspaceEvent::New]);
+    /// s.set(b"k", b"v".to_vec(), None, SetCondition::Always);
+    /// s.set(b"k", b"w".to_vec(), None, SetCondition::Always); // not new
+    /// assert_eq!(s.take_notify_events(), [(KeyspaceEvent::New, b"k".to_vec())]);
+    /// ```
     New,
     /// A TTL'd key was removed because its deadline passed.
+    ///
+    /// ```
+    /// use core::time::Duration;
+    /// use kevy_store::{KeyspaceEvent, SetCondition, Store};
+    /// let mut s = Store::new();
+    /// s.set_notify_capture([KeyspaceEvent::Expired]);
+    /// s.set(b"k", b"v".to_vec(), Some(Duration::from_millis(1)), SetCondition::Always);
+    /// while s.get(b"k")?.is_some() {
+    ///     std::thread::sleep(Duration::from_millis(1));
+    /// }
+    /// assert_eq!(s.take_notify_events(), [(KeyspaceEvent::Expired, b"k".to_vec())]);
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
     Expired,
     /// A key was removed by maxmemory eviction.
+    ///
+    /// ```
+    /// use kevy_store::{EvictionPolicy, KeyspaceEvent, SetCondition, Store};
+    /// let mut s = Store::new();
+    /// s.set_notify_capture([KeyspaceEvent::Evicted]);
+    /// s.set_max_memory(1, EvictionPolicy::AllKeysLru);
+    /// s.set(b"k", b"v".to_vec(), None, SetCondition::Always);
+    /// s.try_evict_after_write();
+    /// assert_eq!(s.take_notify_events(), [(KeyspaceEvent::Evicted, b"k".to_vec())]);
+    /// ```
     Evicted,
 }
 

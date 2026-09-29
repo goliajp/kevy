@@ -64,6 +64,18 @@
 use kevy_bytes::SmallBytes;
 
 /// Inline packed set storage. 24 bytes total — see module docs for layout.
+///
+/// ```
+/// use kevy_store::{Store, Value};
+/// let mut s = Store::new();
+/// s.sadd(b"s", &[b"x".as_slice()])?;
+/// s.snapshot_each(|_, v, _| {
+///     let Value::SmallSetInline(m) = v else { panic!("a one-member set stays inline") };
+///     assert!(m.contains(b"x"));
+///     assert!(!m.contains(b"y"));
+/// });
+/// # Ok::<(), kevy_store::StoreError>(())
+/// ```
 #[derive(Debug, Clone)]
 pub struct SmallSetData {
     /// Number of inline members (0..=22 cap, real ceiling is byte-budget).
@@ -199,6 +211,21 @@ impl SmallSetData {
 }
 
 /// Iterator over [`SmallSetData`] members as `&[u8]` slices.
+///
+/// ```
+/// use kevy_store::{Store, Value};
+/// let mut s = Store::new();
+/// s.sadd(b"s", &[b"x".as_slice(), b"y"])?;
+/// let mut members = Vec::new();
+/// s.snapshot_each(|_, v, _| {
+///     if let Value::SmallSetInline(m) = v {
+///         members = m.iter().map(<[u8]>::to_vec).collect();
+///     }
+/// });
+/// members.sort();
+/// assert_eq!(members, [b"x".to_vec(), b"y".to_vec()]);
+/// # Ok::<(), kevy_store::StoreError>(())
+/// ```
 #[derive(Debug)]
 pub struct SmallSetIter<'a> {
     buf: &'a [u8],

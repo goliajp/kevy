@@ -10,6 +10,23 @@
 //! configured `[expiry].hz` cadence (default 10 Hz / every 100 ms);
 //! embedded users without a runtime call it themselves from whatever event
 //! loop they have (mandatory for WASM, which has no threads).
+//!
+//! ```
+//! use core::time::Duration;
+//! use kevy_store::{SetCondition, Store};
+//! let mut s = Store::new();
+//! s.set(b"k", b"v".to_vec(), Some(Duration::from_millis(1)), SetCondition::Always);
+//! // the key is never read again; only the reaper can remove it, and a
+//! // tick samples at random, so drive it the way a runtime would
+//! for _ in 0..500 {
+//!     s.tick_expire(16, 16);
+//!     if s.dbsize() == 0 {
+//!         break;
+//!     }
+//!     std::thread::sleep(Duration::from_millis(2));
+//! }
+//! assert_eq!(s.dbsize(), 0);
+//! ```
 
 #[cfg(not(feature = "std"))]
 use crate::nostd_prelude::*;
@@ -17,15 +34,61 @@ use crate::{Store, now_ns};
 
 /// What [`Store::tick_expire`] saw and did. Surfaced for tests, INFO
 /// keyspace, and (eventually) Wave 2 task #4's crash-safe verifier.
+///
+/// ```
+/// use kevy_store::{ExpireStats, Store};
+/// let mut s = Store::new();
+/// // no TTL-bearing keys: the reaper does no work at all
+/// assert_eq!(s.tick_expire(16, 16), ExpireStats::default());
+/// ```
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct ExpireStats {
     /// Total TTL-bearing keys sampled across all rounds.
+    ///
+    /// ```
+    /// use core::time::Duration;
+    /// use kevy_store::{SetCondition, Store};
+    /// let mut s = Store::new();
+    /// s.set(b"live", b"v".to_vec(), Some(Duration::from_secs(60)), SetCondition::Always);
+    /// // the walk starts at a random bucket, so one key may or may not be seen
+    /// let stats = s.tick_expire(16, 1);
+    /// assert!(stats.sampled <= 1);
+    /// assert_eq!(stats.expired, 0);
+    /// ```
     pub sampled: u32,
     /// How many of those were past their deadline and got removed.
+    ///
+    /// ```
+    /// use core::time::Duration;
+    /// use kevy_store::{SetCondition, Store};
+    /// let mut s = Store::new();
+    /// for k in [b"a", b"b"] {
+    ///     s.set(k, b"v".to_vec(), Some(Duration::from_millis(1)), SetCondition::Always);
+    /// }
+    /// let mut expired = 0;
+    /// for _ in 0..500 {
+    ///     expired += s.tick_expire(16, 16).expired;
+    ///     if s.dbsize() == 0 {
+    ///         break;
+    ///     }
+    ///     std::thread::sleep(Duration::from_millis(2));
+    /// }
+    /// assert_eq!(expired, 2);
+    /// ```
     pub expired: u32,
     /// Rounds executed before the loop exited (either `max_rounds` reached
     /// or in-batch expire-rate dropped below the continuation threshold).
+    ///
+    /// ```
+    /// use core::time::Duration;
+    /// use kevy_store::{SetCondition, Store};
+    /// let mut s = Store::new();
+    /// s.set(b"live", b"v".to_vec(), Some(Duration::from_secs(60)), SetCondition::Always);
+    /// // nothing is due, so the tick stops well short of its 8-round budget
+    /// let stats = s.tick_expire(16, 8);
+    /// assert!((1..=3).contains(&stats.rounds));
+    /// ```
     pub rounds: u32,
 }
 
@@ -111,6 +174,23 @@ impl Store {
     /// Cost when there are no TTL-bearing keys at all: one map-emptiness
     /// check + a single bucket-iter probe per round. Designed so the active
     /// reaper is never a tax on TTL-free workloads.
+    ///
+    /// ```
+    /// use core::time::Duration;
+    /// use kevy_store::{SetCondition, Store};
+    /// let mut s = Store::new();
+    /// s.set(b"k", b"v".to_vec(), Some(Duration::from_millis(1)), SetCondition::Always);
+    /// s.set(b"keep", b"v".to_vec(), None, SetCondition::Always);
+    /// for _ in 0..500 {
+    ///     s.tick_expire(20, 16);
+    ///     if s.dbsize() == 1 {
+    ///         break;
+    ///     }
+    ///     std::thread::sleep(Duration::from_millis(2));
+    /// }
+    /// assert_eq!(s.dbsize(), 1);
+    /// assert_eq!(s.expired_keys_total(), 1);
+    /// ```
     pub fn tick_expire(&mut self, samples_per_round: usize, max_rounds: u32) -> ExpireStats {
         // Refresh the coarse cached clock every tick (the read path's lazy
         // expiry compares against it) — even when there's nothing to reap.
@@ -170,6 +250,19 @@ impl Store {
 
     /// Total keys expired (by lazy reap OR active reaper). Surfaced via
     /// `INFO keyspace` and `MEMORY STATS` once those grow the field.
+    ///
+    /// ```
+    /// use core::time::Duration;
+    /// use kevy_store::{SetCondition, Store};
+    /// let mut s = Store::new();
+    /// s.set(b"k", b"v".to_vec(), Some(Duration::from_millis(1)), SetCondition::Always);
+    /// while s.get(b"k")?.is_some() {
+    ///     std::thread::sleep(Duration::from_millis(1));
+    /// }
+    /// // the read that found it due removed it, and that counts too
+    /// assert_eq!(s.expired_keys_total(), 1);
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
     #[inline]
     pub fn expired_keys_total(&self) -> u64 {
         self.expired_keys_total

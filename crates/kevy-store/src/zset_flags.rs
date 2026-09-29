@@ -74,18 +74,57 @@ impl ZaddFlags {
 }
 
 /// Outcome of a flags-aware `ZADD`.
+///
+/// ```
+/// use kevy_store::{ScoreCompare, SetCondition, Store, ZaddFlags};
+/// let mut s = Store::new();
+/// s.zadd(b"z", &[(5.0, b"a".as_slice())])?;
+/// let gt = ZaddFlags::new(SetCondition::Always, ScoreCompare::Greater).unwrap();
+/// let r = s.zadd_flags(b"z", &[(1.0, b"a".as_slice()), (2.0, b"b")], gt)?;
+/// assert_eq!((r.added, r.changed), (1, 1)); // `a` vetoed, `b` added
+/// # Ok::<(), kevy_store::StoreError>(())
+/// ```
 #[derive(Debug, Clone, PartialEq, Default)]
 #[non_exhaustive]
 pub struct ZaddReport {
     /// Members newly added.
+    ///
+    /// ```
+    /// use kevy_store::{Store, ZaddFlags};
+    /// let mut s = Store::new();
+    /// s.zadd(b"z", &[(1.0, b"a".as_slice())])?;
+    /// let r = s.zadd_flags(b"z", &[(2.0, b"a".as_slice()), (1.0, b"b")], ZaddFlags::default())?;
+    /// assert_eq!(r.added, 1); // only `b` is new
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
     pub added: usize,
     /// Members added or whose score actually changed (`CH` reply).
+    ///
+    /// ```
+    /// use kevy_store::{Store, ZaddFlags};
+    /// let mut s = Store::new();
+    /// s.zadd(b"z", &[(1.0, b"a".as_slice()), (1.0, b"c")])?;
+    /// let pairs = [(2.0, b"a".as_slice()), (1.0, b"b"), (1.0, b"c")];
+    /// let r = s.zadd_flags(b"z", &pairs, ZaddFlags::default().with_ch(true))?;
+    /// assert_eq!(r.changed, 2); // `a` moved, `b` added, `c` unchanged
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
     pub changed: usize,
     /// The `(score, member)` pairs actually applied, in input order —
     /// vetoed pairs are absent. Lets an AOF writer log the *effect*
     /// as a plain unconditional `ZADD` (deterministic on replay; a
     /// conditional replayed against divergent state could veto
     /// differently).
+    ///
+    /// ```
+    /// use kevy_store::{ScoreCompare, SetCondition, Store, ZaddFlags};
+    /// let mut s = Store::new();
+    /// s.zadd(b"z", &[(5.0, b"a".as_slice())])?;
+    /// let lt = ZaddFlags::new(SetCondition::Always, ScoreCompare::Less).unwrap();
+    /// let r = s.zadd_flags(b"z", &[(9.0, b"a".as_slice()), (3.0, b"b")], lt)?;
+    /// assert_eq!(r.applied, [(3.0, b"b".to_vec())]);
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
     pub applied: Vec<(f64, Vec<u8>)>,
 }
 

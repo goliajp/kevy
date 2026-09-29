@@ -12,15 +12,45 @@ use alloc::sync::Arc;
 /// L1 return shape for [`Store::get_for_reply`] — lets the reactor's reply
 /// path choose between memcpy (`Bytes`) and writev zero-copy (`ArcBulk`)
 /// off one keyspace lookup.
+///
+/// ```
+/// use kevy_store::{GetReply, SetCondition, Store};
+/// let mut s = Store::new();
+/// s.set(b"small", b"hi".to_vec(), None, SetCondition::Always);
+/// s.set(b"big", vec![b'x'; 1024], None, SetCondition::Always);
+/// assert!(matches!(s.get_for_reply(b"small")?, Some(GetReply::Bytes(_))));
+/// assert!(matches!(s.get_for_reply(b"big")?, Some(GetReply::ArcBulk(_))));
+/// assert!(s.get_for_reply(b"missing")?.is_none());
+/// # Ok::<(), kevy_store::StoreError>(())
+/// ```
 #[derive(Debug)]
 pub enum GetReply<'a> {
     /// Inline-encoded value — caller memcpys the bytes into its output Vec
     /// (small replies; encoding cost is tiny vs the RTT floor).
+    ///
+    /// ```
+    /// use kevy_store::{GetReply, SetCondition, Store};
+    /// let mut s = Store::new();
+    /// s.set(b"n", b"42".to_vec(), None, SetCondition::Always);
+    /// let Some(GetReply::Bytes(b)) = s.get_for_reply(b"n")? else { panic!() };
+    /// assert_eq!(&*b, b"42");
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
     Bytes(Cow<'a, [u8]>),
     /// Arc-backed bulk. The reactor's reply path pushes
     /// the Arc into the conn's `output_arcs` so the next `writev` iovec
     /// list points DIRECTLY at the value bytes — skipping the per-GET
     /// memcpy that valkey's `tryAvoidBulkStrCopyToReply` likewise avoids.
+    ///
+    /// ```
+    /// use kevy_store::{GetReply, SetCondition, Store};
+    /// let mut s = Store::new();
+    /// s.set(b"big", vec![b'x'; 1024], None, SetCondition::Always);
+    /// let Some(GetReply::ArcBulk(a)) = s.get_for_reply(b"big")? else { panic!() };
+    /// // the reply holds the stored bytes themselves, kept alive by the Arc
+    /// assert_eq!(a.len(), 1024);
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
     ArcBulk(Arc<Box<[u8]>>),
 }
 
@@ -28,11 +58,38 @@ pub enum GetReply<'a> {
 /// ([`Store::get_shared_owned`]). Bulk values ride out as an Arc clone (no
 /// byte copy); small values as a plain Vec (one alloc — cheaper than a fresh
 /// Arc). The FFI's shared free reconstructs whichever the tag says.
+///
+/// ```
+/// use kevy_store::{GetShared, SetCondition, Store};
+/// let mut s = Store::new();
+/// s.set(b"k", b"v".to_vec(), None, SetCondition::Always);
+/// assert!(matches!(s.get_shared_owned(b"k")?, Some(GetShared::Bytes(_))));
+/// assert!(s.get_shared_owned(b"missing")?.is_none());
+/// # Ok::<(), kevy_store::StoreError>(())
+/// ```
 #[derive(Debug)]
 pub enum GetShared {
     /// Bulk value — the engine's Arc, cloned. Zero byte copy.
+    ///
+    /// ```
+    /// use kevy_store::{GetShared, SetCondition, Store};
+    /// let mut s = Store::new();
+    /// s.set(b"big", vec![b'x'; 1024], None, SetCondition::Always);
+    /// let Some(GetShared::Arc(a)) = s.get_shared_owned(b"big")? else { panic!() };
+    /// assert_eq!(a.len(), 1024);
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
     Arc(Arc<Box<[u8]>>),
     /// Small value (Str/Int) — a plain owned Vec, one allocation.
+    ///
+    /// ```
+    /// use kevy_store::{GetShared, SetCondition, Store};
+    /// let mut s = Store::new();
+    /// s.set(b"n", b"7".to_vec(), None, SetCondition::Always);
+    /// let Some(GetShared::Bytes(b)) = s.get_shared_owned(b"n")? else { panic!() };
+    /// assert_eq!(b, b"7");
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
     Bytes(Vec<u8>),
 }
 
