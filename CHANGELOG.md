@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **kevy-store: a batched page read answers packed rows from the spill
+  file.** `Store::peek_hash_rows`, the batched read behind `FIELDS`
+  hydration, decoded each cold row read from the spill file and then
+  required it to be a general hash; a packed row decodes as a packed row,
+  and the read panicked. It now answers either form, as the single-row
+  read and the segment-backed half of the same batch already did.
+  Affected since 5.4.0.
+
 - **Declaring a table leaves cold rows cold.** With `packed-rows yes`,
   `TABLE.DECLARE` packs the table's existing rows, and it read every one
   of them through the client read path — cold ones included. Each cold
