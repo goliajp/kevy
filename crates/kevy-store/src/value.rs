@@ -302,25 +302,25 @@ pub(crate) fn collection_overhead(capacity: usize, per_slot: u64) -> u64 {
     (capacity as u64).saturating_mul(per_slot)
 }
 
-/// Per-field delta a new hash field charges against the entry weight: heap
-/// bytes for the field name (if not inline) + heap bytes for the value (0 when
-/// the value is ≤22 B and lives inline in the slot) + one slot of bucket
-/// overhead. Used when an HSET inserts a brand-new field. Both field and value
-/// inline in the fixed-size slot when short, so only the off-slot footprint is
-/// charged — symmetric with [`set_member_weight`].
+/// What a new hash field adds to its hash's weight besides the table: the
+/// allocator's footprint of the field name's heap and of the value's heap
+/// (`value_heap` bytes), each 0 when it is short enough to sit inline in
+/// the slot. The slot itself is part of the table, which is charged as the
+/// table grows rather than per field.
 ///
 /// ```
 /// use kevy_store::{SmallBytes, hash_field_weight};
 /// let short = SmallBytes::from_slice(b"name");
 /// let long = SmallBytes::from_slice(&[b'f'; 64]);
-/// // an inline field name adds nothing; a spilled one adds its heap bytes
-/// let extra = hash_field_weight(&long, 0) - hash_field_weight(&short, 0);
-/// assert_eq!(extra, long.heap_bytes() as u64);
-/// assert_eq!(hash_field_weight(&short, 100) - hash_field_weight(&short, 0), 100);
+/// // an inline field name and value add nothing
+/// assert_eq!(hash_field_weight(&short, 0), 0);
+/// // a spilled one adds what the allocator holds for it: 64 bytes asked, 80 held
+/// assert_eq!(hash_field_weight(&long, 0), 80);
+/// assert_eq!(hash_field_weight(&short, 900), 912);
 /// ```
 #[inline]
 pub fn hash_field_weight(field: &SmallBytes, value_heap: usize) -> u64 {
-    field.heap_bytes() as u64 + value_heap as u64 + HASH_SLOT_BYTES
+    (kevy_map::malloc_footprint(field.heap_bytes()) + kevy_map::malloc_footprint(value_heap)) as u64
 }
 
 /// Per-member delta a new set member charges. Mirrors [`hash_field_weight`]

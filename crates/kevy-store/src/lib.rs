@@ -102,6 +102,7 @@ pub use expire::ExpireStats;
 pub use store_admin::DetachedEntries;
 mod hash;
 mod hash_read;
+mod hash_weight;
 pub use hash_read::FieldValuePairs;
 mod hash_ttl;
 pub use hash_ttl::{HExpireCode, HExpireCond};
