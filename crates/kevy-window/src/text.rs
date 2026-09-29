@@ -23,6 +23,7 @@
 // and refusing here would abandon the rest of the cleanup.
 #![expect(clippy::let_underscore_must_use, reason = "removing what is already meant to be gone")]
 
+use crate::ColdError;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
@@ -124,13 +125,13 @@ impl TextColdDir {
         index_name: &[u8],
         keys: &[Vec<u8>],
         segs_dir: &Path,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, ColdError> {
         if !self.cleaned {
             clean_stale(index_name, segs_dir)?;
             self.cleaned = true;
         }
         let Some(bucket) = ts.freeze_docs(keys) else { return Ok(false) };
-        std::fs::create_dir_all(segs_dir).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(segs_dir).map_err(ColdError::Io)?;
         let file = format!("txt-{}-{}.seg", hex_stem(index_name), self.seq);
         let seq = self.seq;
         self.seq += 1;
@@ -138,13 +139,13 @@ impl TextColdDir {
         let seg_meta = write_seg_file(&path, &bucket).inspect_err(|_| {
             let _ = std::fs::remove_file(&path);
         })?;
-        let mut m = kevy_seg::Manifest::open(segs_dir).map_err(|e| e.to_string())?;
+        let mut m = kevy_seg::Manifest::open(segs_dir)?;
         let mut meta = TXT_TAG.to_vec();
         meta.extend_from_slice(index_name);
         meta.extend_from_slice(format!(":{}:{}", bucket.n_docs, bucket.total_len).as_bytes());
-        m.add(kevy_seg::ManifestEntry::new(file.clone(), seg_meta).with_meta(meta))
-            .map_err(|e| e.to_string())?;
-        let seg = kevy_seg::Seg::open(&path).map_err(|e| format!("reopen {file}: {e}"))?;
+        m.add(kevy_seg::ManifestEntry::new(file.clone(), seg_meta).with_meta(meta))?;
+        let seg = kevy_seg::Seg::open(&path)
+            .map_err(|source| ColdError::Reopen { file: file.clone(), source })?;
         self.segs.push(ColdSeg { seg, seq, n_docs: bucket.n_docs, total_len: bucket.total_len });
         for k in keys {
             self.bloom.insert(k);
@@ -159,33 +160,33 @@ impl TextColdDir {
 fn write_seg_file(
     path: &Path,
     bucket: &kevy_text::cold::FrozenBucket,
-) -> Result<kevy_seg::SegMeta, String> {
-    let mut b = kevy_seg::SegBuilder::create(path).map_err(|e| e.to_string())?;
+) -> Result<kevy_seg::SegMeta, ColdError> {
+    let mut b = kevy_seg::SegBuilder::create(path)?;
     for (row_key, payload) in &bucket.fwd {
         let mut k = vec![0u8];
         k.extend_from_slice(row_key);
-        b.push(&k, payload).map_err(|e| e.to_string())?;
+        b.push(&k, payload)?;
     }
     for (term, payload) in &bucket.terms {
-        b.push(term, payload).map_err(|e| e.to_string())?;
+        b.push(term, payload)?;
     }
-    b.finish().map_err(|e| e.to_string())
+    Ok(b.finish()?)
 }
 
 /// Drop a previous run's cold text segments for `index_name` (derived
 /// spill: the rebuilt hot index holds everything again).
-fn clean_stale(index_name: &[u8], segs_dir: &Path) -> Result<(), String> {
+fn clean_stale(index_name: &[u8], segs_dir: &Path) -> Result<(), ColdError> {
     if !segs_dir.exists() {
         return Ok(());
     }
-    let mut m = kevy_seg::Manifest::open(segs_dir).map_err(|e| e.to_string())?;
+    let mut m = kevy_seg::Manifest::open(segs_dir)?;
     let mut tag = TXT_TAG.to_vec();
     tag.extend_from_slice(index_name);
     tag.push(b':');
     let stale: Vec<String> =
         m.live().filter(|e| e.meta.starts_with(&tag)).map(|e| e.file.clone()).collect();
     for f in stale {
-        m.drop_seg(&f).map_err(|e| e.to_string())?;
+        m.drop_seg(&f)?;
         let _ = std::fs::remove_file(segs_dir.join(&f));
     }
     Ok(())

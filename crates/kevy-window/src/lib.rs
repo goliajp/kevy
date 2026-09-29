@@ -17,12 +17,14 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+mod error;
 #[path = "text.rs"]
 mod text;
 
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
+pub use error::ColdError;
 pub use text::{ColdHit, ColdPage, ColdPageQuery, TextColdDir};
 
 const _: () = {
@@ -31,6 +33,7 @@ const _: () = {
     send_sync::<TextColdDir>();
     send_sync::<ColdHit>();
     send_sync::<ColdPage>();
+    send_sync::<ColdError>();
 };
 
 use kevy_index::{
@@ -221,12 +224,12 @@ impl WindowRt {
         ty: ValType,
         min: &IndexValue,
         max: &IndexValue,
-    ) -> Result<u64, String> {
+    ) -> Result<u64, ColdError> {
         let (lo, hi) = seg_bounds(min, max);
         if self.tombs.is_empty() {
             let mut n = 0u64;
             for (_, s) in &self.cold {
-                n += s.count_range(&lo, &hi).map_err(|e| e.to_string())?;
+                n += s.count_range(&lo, &hi)?;
             }
             return Ok(n);
         }
@@ -249,12 +252,12 @@ impl WindowRt {
         max: &IndexValue,
         cursor: Option<&kevy_index::Cursor>,
         limit: usize,
-    ) -> Result<Vec<(Vec<u8>, IndexValue)>, String> {
+    ) -> Result<Vec<(Vec<u8>, IndexValue)>, ColdError> {
         let (lo, hi) = seg_bounds(min, max);
         let mut out = Vec::new();
         for (seq, seg) in &self.cold {
             for r in seg.range(&lo, &hi) {
-                let (k, _) = r.map_err(|e| e.to_string())?;
+                let (k, _) = r?;
                 let Some((v, row)) = decode_seg_key(ty, &k) else { continue };
                 if self.shadowed(&row, *seq) {
                     continue;
@@ -280,7 +283,7 @@ impl WindowRt {
         min: &IndexValue,
         max: &IndexValue,
         filters: &[(usize, kevy_index::ValueTest)],
-    ) -> Result<u64, String> {
+    ) -> Result<u64, ColdError> {
         let mut n = 0u64;
         for (_, _, vals) in self.decode_range(ty, min, max, None)? {
             if values_pass(&vals, filters) {
@@ -301,7 +304,7 @@ impl WindowRt {
         max: &IndexValue,
         cursor: Option<&kevy_index::Cursor>,
         c: &ScalarClauses<'_>,
-    ) -> Result<(Vec<ScalarHit>, Vec<Vec<FacetBucket>>), String> {
+    ) -> Result<(Vec<ScalarHit>, Vec<Vec<FacetBucket>>), ColdError> {
         let items = self.decode_range(ty, min, max, cursor)?;
         Ok(claused_over(items.into_iter(), c))
     }
@@ -315,22 +318,20 @@ impl WindowRt {
         min: &IndexValue,
         max: &IndexValue,
         cursor: Option<&kevy_index::Cursor>,
-    ) -> Result<Vec<ColdEntryRow>, String> {
+    ) -> Result<Vec<ColdEntryRow>, ColdError> {
         let (lo, hi) = seg_bounds(min, max);
         let mut out = Vec::new();
         for (seq, seg) in &self.cold {
             for r in seg.range(&lo, &hi) {
-                let (k, payload) = r.map_err(|e| e.to_string())?;
-                let (v, row) =
-                    decode_seg_key(ty, &k).ok_or_else(|| "corrupt cold key".to_string())?;
+                let (k, payload) = r?;
+                let (v, row) = decode_seg_key(ty, &k).ok_or(ColdError::CorruptKey)?;
                 if self.shadowed(&row, *seq) {
                     continue;
                 }
                 if cursor.is_some_and(|c| (&v, row.as_slice()) <= (&c.value, c.key.as_slice())) {
                     continue;
                 }
-                let vals = decode_seg_values(&payload)
-                    .ok_or_else(|| "corrupt cold payload".to_string())?;
+                let vals = decode_seg_values(&payload).ok_or(ColdError::CorruptPayload)?;
                 out.push((v, row, vals));
             }
         }
@@ -361,7 +362,7 @@ impl WindowRt {
         index_name: &[u8],
         seg: &mut kevy_index::Segment,
         segs_dir: &Path,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, ColdError> {
         let Some(max) = seg.max_value().and_then(|v| v.window_value(self.shape)) else {
             self.idle_ticks += 1;
             return Ok(false);
@@ -389,7 +390,8 @@ impl WindowRt {
         // number is one below the counter it left behind.
         self.cold.push((
             self.seq - 1,
-            kevy_seg::Seg::open(segs_dir.join(&file)).map_err(|e| format!("reopen {file}: {e}"))?,
+            kevy_seg::Seg::open(segs_dir.join(&file))
+                .map_err(|source| ColdError::Reopen { file: file.clone(), source })?,
         ));
         self.probe(index_name, batch.len());
         self.w = target;
@@ -425,32 +427,31 @@ impl WindowRt {
         seg: &kevy_index::Segment,
         bound: &IndexValue,
         segs_dir: &Path,
-    ) -> Result<String, String> {
-        std::fs::create_dir_all(segs_dir).map_err(|e| e.to_string())?;
+    ) -> Result<String, ColdError> {
+        std::fs::create_dir_all(segs_dir).map_err(ColdError::Io)?;
         let file = format!("idx-{}-{}.seg", hex_stem(index_name), self.seq);
         self.seq += 1;
         let path = segs_dir.join(&file);
-        let build = || -> Result<kevy_seg::SegMeta, String> {
-            let mut b = kevy_seg::SegBuilder::create(&path).map_err(|e| e.to_string())?;
+        let build = || -> Result<kevy_seg::SegMeta, ColdError> {
+            let mut b = kevy_seg::SegBuilder::create(&path)?;
             for (v, k) in seg.iter_below(bound) {
                 // The payload carries the row's stored VALUES so the
                 // clause-carrying cold path never re-reads the row
                 // (which may itself have gone cold). No declared
                 // values = the empty payload, the a-train shape.
                 let vals = seg.stored_row(k);
-                b.push(&seg_key(v, k), &encode_seg_values(&vals)).map_err(|e| e.to_string())?;
+                b.push(&seg_key(v, k), &encode_seg_values(&vals))?;
             }
-            b.finish().map_err(|e| e.to_string())
+            Ok(b.finish()?)
         };
         let meta = build().inspect_err(|_| {
             let _ = std::fs::remove_file(&path);
         })?;
-        let mut m = kevy_seg::Manifest::open(segs_dir).map_err(|e| e.to_string())?;
+        let mut m = kevy_seg::Manifest::open(segs_dir)?;
         m.add(
             kevy_seg::ManifestEntry::new(file.clone(), meta)
                 .with_meta([b"idxcold:", index_name].concat()),
-        )
-        .map_err(|e| e.to_string())?;
+        )?;
         Ok(file)
     }
 }
@@ -458,15 +459,15 @@ impl WindowRt {
 /// Drop a previous run's derived segments for `index_name`: their
 /// manifest entries unregister first, then the files unlink (the
 /// ledger never points at nothing).
-fn clean_stale_derived(index_name: &[u8], segs_dir: &Path) -> Result<(), String> {
+fn clean_stale_derived(index_name: &[u8], segs_dir: &Path) -> Result<(), ColdError> {
     if !segs_dir.exists() {
         return Ok(());
     }
-    let mut m = kevy_seg::Manifest::open(segs_dir).map_err(|e| e.to_string())?;
+    let mut m = kevy_seg::Manifest::open(segs_dir)?;
     let tag = [b"idxcold:", index_name].concat();
     let stale: Vec<String> = m.live().filter(|e| e.meta == tag).map(|e| e.file.clone()).collect();
     for f in stale {
-        m.drop_seg(&f).map_err(|e| e.to_string())?;
+        m.drop_seg(&f)?;
         let _ = std::fs::remove_file(segs_dir.join(&f));
     }
     Ok(())
