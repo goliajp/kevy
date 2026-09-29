@@ -106,7 +106,9 @@ fn answer(argv: &[Vec<u8>], keys: &Keys) -> Vec<u8> {
             keys.insert(k.clone(), n.to_string().into_bytes());
             format!(":{n}\r\n").into_bytes()
         }
-        _ => format!("-ERR unknown command '{}'\r\n", String::from_utf8_lossy(&argv[0])).into_bytes(),
+        _ => {
+            format!("-ERR unknown command '{}'\r\n", String::from_utf8_lossy(&argv[0])).into_bytes()
+        }
     }
 }
 
