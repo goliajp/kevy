@@ -18,3 +18,20 @@ why = "an analysis callers supply for their own pipelines or tests; the trait do
 rule = "enum-exhaustive"
 item = "kevy_text::segment::segment_opts::SortOrder"
 why = "the two directions of a total order; no third can exist, and callers match both"
+
+# layer 1
+
+[[exempt]]
+rule = "enum-exhaustive"
+item = "kevy_map::raw_entry::RawEntryMut"
+why = "a key is either present or absent in the map, so Occupied and Vacant are the only states an entry can be in; callers match both arms, as with std's hash_map::Entry"
+
+[[exempt]]
+rule = "get-prefix"
+item = "kevy_map::map::KevyMap::get_mut"
+why = "the collection lookup by key with mutable access, named as std's HashMap::get_mut; it is not a field getter"
+
+[[exempt]]
+rule = "get-prefix"
+item = "kevy_map::raw_entry::RawOccupiedEntryMut::get_mut"
+why = "mutable access to the entry's value, named as std's OccupiedEntry::get_mut beside get and into_mut; it is not a field getter"
