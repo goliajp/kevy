@@ -93,6 +93,7 @@ run_against() {
   judge report --samples "$SAMPLES" --baseline "$BASELINE" --fingerprint "$FP" \
     --angles "$(angles)" --ref "$label" --lines "$JUDGE_LINES" $3
   rc=$?
+  [ "$rc" -eq 2 ] && exit 2
   judge ledger --samples "$SAMPLES" --baseline "$BASELINE" --out "$LEDGER" \
     --fingerprint "$FP" --commit "$(git -C "$REPO" rev-parse HEAD)" --ref "$label" >&2
   return $rc
