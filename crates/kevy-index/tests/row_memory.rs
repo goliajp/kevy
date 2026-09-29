@@ -139,7 +139,7 @@ fn measure_with(rows: &Rows, stored: &[&[u8]]) -> Held {
     let mut seg =
         if stored.is_empty() { Segment::new() } else { Segment::with_values(stored.len()) };
     for (k, v) in rows.keys.iter().zip(&rows.vals) {
-        seg.apply_with_values(k, Some(v.clone()), &vals);
+        seg.apply_with_values(k, None, Some(v.clone()), &vals);
     }
     COUNTING.with(|c| c.set(false));
     let held = Held {

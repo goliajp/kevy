@@ -24,8 +24,8 @@
 //!
 //! // one shard's slice, fed by the write path
 //! let mut seg = Segment::new();
-//! seg.apply(b"user:7", IndexValue::coerce(ValType::I64, b"41"));
-//! seg.apply(b"user:9", IndexValue::coerce(ValType::I64, b"29"));
+//! seg.apply(b"user:7", None, IndexValue::coerce(ValType::I64, b"41"));
+//! seg.apply(b"user:9", None, IndexValue::coerce(ValType::I64, b"29"));
 //! let (hits, next) = seg.range(&IndexValue::I64(30), &IndexValue::I64(50), None, 10);
 //! assert_eq!(hits, vec![(b"user:7".to_vec(), IndexValue::I64(41))]);
 //! assert!(next.is_none());
@@ -43,16 +43,18 @@ mod describe;
 mod describe_table;
 mod describe_view;
 mod error;
+mod key_dir;
 mod partition;
 #[cfg(test)]
 mod partition_tests;
-mod placement;
-mod rowvalues;
+mod seg_codec;
+mod seg_leaf;
+mod seg_tree;
+mod seg_walk;
 mod segcold;
 mod segment;
 mod segment_claused;
 mod segment_claused_merge;
-mod segment_entry;
 mod segment_stats;
 mod spec;
 mod spec_builder;
@@ -83,8 +85,9 @@ pub use describe::{
 };
 pub use error::{CatalogError, Declared, SpecError, ViewError};
 pub use kevy_text::{SortOrder, sorted_order};
+pub use key_dir::KeyDir;
 pub use partition::{Partitioning, partition_owner, splits_from_weighted};
-pub use placement::PlacementTable;
+pub use seg_walk::Scan;
 pub use segcold::{
     ColdBloom, WindowAudit, WindowShape, decode_seg_key, decode_seg_values, encode_seg_values,
     seg_bounds, seg_key, window_bound,
@@ -154,7 +157,8 @@ const _: () = {
     send_sync::<RowDerivation>();
     send_sync::<Described>();
     send_sync::<Partitioning>();
-    send_sync::<PlacementTable>();
+    send_sync::<KeyDir>();
+    send_sync::<Scan<'static>>();
     send_sync::<ColdBloom>();
     send_sync::<WindowAudit>();
 };
