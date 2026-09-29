@@ -4,7 +4,8 @@
 //! ceiling; everything here is cross-thread, nothing else in the segment
 //! is.
 
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::ptr::NonNull;
+use core::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
 use super::Segment;
 
@@ -24,17 +25,62 @@ pub(crate) struct ForeignTally {
     /// `rounding` still include them, because the freeing thread cannot
     /// touch the owner's counters; the snapshot moves them across.
     pub(crate) live: AtomicUsize,
+    /// The heap's segments with foreign frees waiting, as a push-only
+    /// stack linked through `Segment::queued_next`, so a drain visits
+    /// those and not every segment the heap owns.
+    pending: AtomicPtr<Segment>,
 }
 
 impl ForeignTally {
     pub(crate) const fn new() -> Self {
-        Self { bytes: AtomicUsize::new(0), live: AtomicUsize::new(0) }
+        Self {
+            bytes: AtomicUsize::new(0),
+            live: AtomicUsize::new(0),
+            pending: AtomicPtr::new(core::ptr::null_mut()),
+        }
     }
 
     /// The owner drained a batch worth these sums.
     pub(crate) fn settle(&self, live: usize, bytes: usize) {
         self.live.fetch_sub(live, Ordering::Relaxed);
         self.bytes.fetch_sub(bytes, Ordering::Relaxed);
+    }
+
+    /// Take every queued segment's foreign list and call `f` with it.
+    ///
+    /// The flag is cleared before the list is taken, and a splice
+    /// publishes its chain before it reads the flag, all sequentially
+    /// consistent: either the splice sees the flag clear and queues the
+    /// segment again, or the take below sees its chain. Relaxed, a
+    /// splice could read a stale set flag after the take, and its chain
+    /// would sit unseen until some later splice to the same segment.
+    pub(crate) fn drain_pending(&self, mut f: impl FnMut(NonNull<Segment>, *mut u8)) {
+        let mut seg = self.pending.swap(core::ptr::null_mut(), Ordering::Acquire);
+        while !seg.is_null() {
+            // SAFETY: only this heap's live segments are queued here.
+            let s = unsafe { &*seg };
+            // read before the flag clears: from then on a splice may
+            // queue the segment again and rewrite the link
+            let next = s.queued_next.load(Ordering::Relaxed);
+            s.queued.store(false, Ordering::SeqCst);
+            let chain = s.foreign.swap(core::ptr::null_mut(), Ordering::SeqCst);
+            // SAFETY: non-null in this loop.
+            f(unsafe { NonNull::new_unchecked(seg) }, chain);
+            seg = next;
+        }
+    }
+
+    fn push_pending(&self, seg: &Segment) {
+        let me = core::ptr::from_ref(seg).cast_mut();
+        let mut head = self.pending.load(Ordering::Relaxed);
+        loop {
+            seg.queued_next.store(head, Ordering::Relaxed);
+            match self.pending.compare_exchange_weak(head, me, Ordering::Release, Ordering::Relaxed)
+            {
+                Ok(_) => return,
+                Err(actual) => head = actual,
+            }
+        }
     }
 }
 
@@ -87,7 +133,9 @@ impl Segment {
     /// `fetch_add`s for the whole chain — this is the amortisation M1
     /// forced: the per-op version of this function was three atomic RMWs
     /// on this same line for every single foreign free, and cross-shard KV
-    /// paid 18–39 % for it.
+    /// paid 18–39 % for it. Then one load of the segment's queued flag,
+    /// and only when the owner has drained the segment since, a swap and
+    /// a push onto its heap's stack of segments to drain.
     ///
     /// The chain format is unchanged from the per-op era: each slot's
     /// first word links to the next, with the requested size at
@@ -151,15 +199,16 @@ impl Segment {
             // SAFETY: the tail is ours until the CAS below publishes the
             // chain; its link word is free to point at the current head.
             unsafe { tail.cast::<*mut u8>().write(old) };
-            match self.foreign.compare_exchange_weak(
-                old,
-                head,
-                Ordering::Release,
-                Ordering::Relaxed,
-            ) {
+            match self.foreign.compare_exchange_weak(old, head, Ordering::SeqCst, Ordering::Relaxed)
+            {
                 Ok(_) => break,
                 Err(actual) => old = actual,
             }
+        }
+        // one push per queueing, however many splices land meanwhile
+        // (see `ForeignTally::drain_pending` for the ordering)
+        if !self.queued.load(Ordering::SeqCst) && !self.queued.swap(true, Ordering::SeqCst) {
+            home.push_pending(self);
         }
     }
 

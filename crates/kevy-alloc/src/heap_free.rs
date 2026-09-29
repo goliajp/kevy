@@ -77,13 +77,19 @@ impl Heap {
     }
 
     /// Move every slot other shards freed back onto its own span's list.
+    ///
+    /// Visits only the segments a splice queued, so the cost follows the
+    /// foreign frees waiting rather than the size of the heap.
     pub fn drain_foreign(&mut self) {
+        if self.parked.is_null() {
+            return;
+        }
+        // SAFETY: set with the first segment, whose header outlives
+        // every segment that could have held a foreign free.
+        let tally = unsafe { &*self.parked };
         let (mut live, mut bytes) = (0usize, 0usize);
-        let mut seg = self.segments;
-        while !seg.is_null() {
-            // SAFETY: live header from our own list.
-            let s = unsafe { &*seg };
-            let mut node = s.take_foreign();
+        tally.drain_pending(|seg, mut node| {
+            let seg = seg.as_ptr();
             while !node.is_null() {
                 // SAFETY: foreign entries are slot addresses of this
                 // segment, linked through their first word.
@@ -107,12 +113,9 @@ impl Heap {
                 }
                 node = next;
             }
-            seg = s.next;
-        }
+        });
         if bytes != 0 {
-            // SAFETY: set with the first segment, whose header outlives
-            // every segment that could have held a foreign free.
-            unsafe { &*self.parked }.settle(live, bytes);
+            tally.settle(live, bytes);
         }
     }
 
@@ -146,9 +149,11 @@ impl Heap {
         meta.free_slot(slot);
         if meta.live == 0 {
             self.tally.span_emptied(meta, c);
+            self.empty_in_class[c] += 1;
         }
         self.class_live[c] -= 1;
         self.file_span(seg, ix);
+        self.note_free(seg, ix);
     }
 }
 

@@ -58,6 +58,7 @@ impl Heap {
         let slot = class::size_of(c) as u64;
         if was_empty {
             self.tally.span_refilled(meta, old_hw, c);
+            self.empty_in_class[c] -= 1;
         }
         self.tally.touched += u64::from(meta.high_water - old_hw) * slot;
         // Claimed bits may land in returned pages; a fresh allocation
@@ -66,6 +67,7 @@ impl Heap {
             let gone = crate::tally::unreturn_claim(meta, word, claimed, old_hw);
             self.tally.returned -= u64::from(gone) * slot;
         }
+        self.stamp_claim(seg, span_ix as usize, word, claimed);
         // SAFETY: same header liveness as above.
         let base = unsafe { seg.as_ref() }.span_base(span_ix as usize);
         self.claims[c] = Some(Claim { seg, span_ix, word, claimed, taken: 0, base });
@@ -87,9 +89,11 @@ impl Heap {
         meta.retire_word(cl.word, unused);
         if meta.live == 0 {
             self.tally.span_emptied(meta, c);
+            self.empty_in_class[c] += 1;
         }
         self.class_live[c] -= unused.count_ones();
         self.file_span(cl.seg, cl.span_ix as usize);
+        self.note_free(cl.seg, cl.span_ix as usize);
     }
 
     /// Retire every class's claim — the write-back before anything

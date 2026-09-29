@@ -34,7 +34,7 @@
 //! ```
 
 use core::ptr::NonNull;
-use core::sync::atomic::AtomicPtr;
+use core::sync::atomic::{AtomicBool, AtomicPtr};
 
 use crate::class::{self, SPAN_BYTES};
 pub use crate::pagemap::{NO_CLASS, SpanMeta};
@@ -112,6 +112,10 @@ pub struct Segment {
     /// stack of slot addresses. See [`Segment::splice_foreign`] for why this is
     /// push-only.
     pub(crate) foreign: AtomicPtr<u8>,
+    /// Whether this segment is on its heap's stack of segments with
+    /// foreign frees to drain, and its link there (see `segment_foreign`).
+    pub(crate) queued: AtomicBool,
+    pub(crate) queued_next: AtomicPtr<Segment>,
     /// Slot bytes parked on the foreign lists of every segment of this
     /// heap. Only the heap's first segment's copy is used; the others
     /// point at it through `home`, so the owner prices everything
@@ -125,6 +129,8 @@ pub struct Segment {
     /// Each span's place on its heap's lists (see `spanlist`), beside the
     /// metadata rather than in it so the metadata stays plain data.
     pub(crate) links: [crate::spanlist::SpanLink; SPANS_PER_SEGMENT],
+    /// Per span, the sweep each page was last claimed at (see `purge`).
+    pub(crate) stamps: [crate::purge::Stamps; SPANS_PER_SEGMENT],
 }
 
 impl Segment {
@@ -158,10 +164,13 @@ impl Segment {
                 next: core::ptr::null_mut(),
                 owner,
                 foreign: AtomicPtr::new(core::ptr::null_mut()),
+                queued: AtomicBool::new(false),
+                queued_next: AtomicPtr::new(core::ptr::null_mut()),
                 parked: ForeignTally::new(),
                 home: core::ptr::null(),
                 spans: [SpanMeta::new(); SPANS_PER_SEGMENT],
                 links: [crate::spanlist::SpanLink::NONE; SPANS_PER_SEGMENT],
+                stamps: [crate::purge::Stamps::NEW; SPANS_PER_SEGMENT],
             });
             (*seg).home = &raw const (*seg).parked;
         }

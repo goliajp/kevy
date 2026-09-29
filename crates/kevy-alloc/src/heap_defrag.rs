@@ -69,9 +69,13 @@ impl Heap {
         {
             return false;
         }
-        let (cap, spans) = (u64::from(meta.capacity()), u64::from(self.spans_in_class[c]));
-        let class_live = u64::from(self.class_live[c]);
-        spans * cap >= class_live + cap && u64::from(meta.live) * spans < class_live
+        // empty spans held through the purge delay are room for the copy,
+        // but not part of the average a span is judged against: counting
+        // them would make every span look dense while the delay runs
+        let spans = u64::from(self.spans_in_class[c]);
+        let occupied = spans - u64::from(self.empty_in_class[c]);
+        let (cap, class_live) = (u64::from(meta.capacity()), u64::from(self.class_live[c]));
+        spans * cap >= class_live + cap && u64::from(meta.live) * occupied < class_live
     }
 }
 
@@ -101,9 +105,9 @@ mod tests {
         let c = class::index_of(size, 8).unwrap();
         let per_span = class::slots_per_span(c);
         let spans_before = heap.spans_in_class[c];
-        // a reclaim between rounds, as the shard tick runs one: emptied
-        // spans leave the class, which raises its average and names the
-        // next sparsest spans
+        // a reclaim between rounds, as the shard tick runs one; emptied
+        // spans no longer count toward the class's average, which raises
+        // it and names the next sparsest spans
         for _ in 0..8 {
             heap.reclaim();
             for p in &mut held {
@@ -117,13 +121,13 @@ mod tests {
                 }
             }
         }
-        heap.reclaim();
+        // the spans the moves emptied go back once the purge delay ends
+        for _ in 0..=crate::PURGE_DELAY {
+            heap.reclaim();
+        }
         let need = held.len().div_ceil(per_span) as u32;
         let after = heap.spans_in_class[c];
-        assert!(
-            after <= need + 1 + u32::from(crate::heap::EMPTY_SPAN_HYSTERESIS),
-            "{spans_before} spans before, {after} after, {need} needed"
-        );
+        assert!(after <= need + 1, "{spans_before} spans before, {after} after, {need} needed");
         assert!(heap.snapshot().balanced());
         for p in held {
             // SAFETY: as above
