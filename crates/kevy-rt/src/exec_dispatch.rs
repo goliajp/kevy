@@ -378,8 +378,7 @@ impl<C: Commands> Shard<C> {
             self.store.bump_if_watched(&args[idx as usize]);
             // Synchronous index maintenance (default no-op; the
             // kevy impl gates on a process-wide catalog-empty atomic).
-            let key = args[idx as usize].to_vec();
-            self.commands.on_write(&mut self.store, &key);
+            self.commands.on_write(&mut self.store, &args[idx as usize]);
         }
         // Propagation override: a verb whose effect is nondeterministic
         // (SPOP's random pick) replaced its wire frame with the
@@ -392,8 +391,15 @@ impl<C: Commands> Shard<C> {
         // `is_applying_replicated` apply path: the take below runs
         // there too, and the frame — if any — goes to the replica's
         // own AOF while the gated push stays suppressed). Deterministic
-        // writes (the overwhelming default) pay one thread-local take.
-        let prop = crate::propagation::take_override();
+        // writes (the overwhelming default) pay one thread-local flag
+        // read: the override and the Lua wake buffer are only taken when
+        // something armed them since the last write.
+        let armed = crate::propagation::take_armed();
+        let prop = if armed {
+            crate::propagation::take_override()
+        } else {
+            crate::propagation::Propagate::AsIs
+        };
         if matches!(prop, crate::propagation::Propagate::AsIs) {
             // A9: AOF off is the default (--no-aof). cold-tag the AOF-enabled
             // branch so the predictor learns the off case + LLVM keeps the
@@ -431,18 +437,19 @@ impl<C: Commands> Shard<C> {
         // wake it. Gated on `wake_idx` (None for non-wake writes), so a
         // None-only workload pays one Option discriminant check per write.
         if let Some(idx) = meta.wake_idx
-            && let Some(key) = args.get(idx as usize).map(<[u8]>::to_vec)
+            && let Some(key) = args.get(idx as usize)
         {
-            self.wake_key(&key);
+            self.wake_key(key);
         }
         // Drain the Lua wake bridge. `redis.call` inside an
         // EVAL script pushes affected write keys to a thread-local
         // buffer (see `crate::lua_wake_bridge`); this is the runtime's
-        // catch-point. The drain is cheap on non-Lua dispatches —
-        // empty buffer → one Vec capacity check.
-        let lua_wakes = crate::lua_wake_bridge::drain_lua_wake_buffer();
-        for key in lua_wakes {
-            self.wake_key(&key);
+        // catch-point. A push arms the flag read above, so a non-Lua
+        // write never touches the buffer.
+        if armed {
+            for key in crate::lua_wake_bridge::drain_lua_wake_buffer() {
+                self.wake_key(&key);
+            }
         }
     }
 

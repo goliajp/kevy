@@ -25,8 +25,9 @@
 //! returns. Single-threaded per shard so a `Cell<Vec<...>>` would
 //! suffice, but `RefCell<Vec<...>>` gives a cleaner `take` shape.
 //!
-//! Zero overhead when no Lua write happens this dispatch (the buffer
-//! stays empty → drain is one capacity-check branch).
+//! Zero overhead when no Lua write happens this dispatch: a push also
+//! sets the propagation module's armed flag, and the post-write step
+//! only drains when that flag is set.
 
 use std::cell::RefCell;
 
@@ -39,7 +40,8 @@ thread_local! {
 /// The runtime drains the buffer after the outer
 /// EVAL dispatch returns and fires `wake_key` for each.
 ///
-/// Cheap: one thread-local lookup + one `Vec::push` per call.
+/// Cheap: one thread-local lookup + one `Vec::push` per call, plus the
+/// flag that tells the post-write step to drain.
 ///
 /// ```
 /// // inside a `redis.call` dispatch closure, after a write that can wake a
@@ -52,6 +54,7 @@ thread_local! {
 /// ```
 pub fn push_lua_wake_key(key: &[u8]) {
     LUA_WAKE_BUFFER.with(|b| b.borrow_mut().push(key.to_vec()));
+    crate::propagation::arm();
 }
 
 /// Drain the per-shard Lua wake buffer. The runtime calls this once
