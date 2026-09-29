@@ -145,6 +145,9 @@ pub struct Heap {
     /// owed back to the span on retire.
     claims: [Option<Claim>; NCLASSES],
     class_cap: u32,
+    /// This heap's key in the segment owner tree (`rtree`), taken when it
+    /// maps its first segment; 0 until then.
+    pub(crate) token: usize,
 }
 
 impl Heap {
@@ -198,6 +201,7 @@ impl Heap {
             free_spans: 0,
             claims: [None; NCLASSES],
             class_cap,
+            token: 0,
         }
     }
 
@@ -425,6 +429,14 @@ impl Heap {
     /// `None` when the OS refuses.
     fn map_segment(&mut self) -> Option<()> {
         let base = os::map_aligned(SEGMENT_BYTES, SEGMENT_BYTES)?;
+        if self.token == 0 {
+            self.token = crate::rtree::new_token();
+        }
+        if !crate::rtree::set(base.as_ptr() as usize, self.token) {
+            // SAFETY: our fresh mapping, not yet referenced anywhere.
+            unsafe { os::unmap(base, SEGMENT_BYTES) };
+            return None;
+        }
         // SAFETY: a fresh exclusive mapping of exactly one segment.
         let seg = unsafe { Segment::init(base, self.id) };
         // SAFETY: just initialised and owned solely by this heap.

@@ -26,11 +26,8 @@ impl Heap {
     ///
     /// `false` for anything that is not a small slot of this heap: a
     /// direct mapping has nowhere denser to go, and another heap's slot is
-    /// that heap's to move.
-    ///
-    /// # Safety
-    /// `ptr` must be a live allocation from this allocator made with
-    /// `size` and `align`.
+    /// that heap's to move. Any address may be asked about: the owner tree
+    /// is consulted before any header is read, and `ptr` itself never is.
     ///
     /// # Examples
     ///
@@ -43,10 +40,9 @@ impl Heap {
     ///     // SAFETY: each came from this heap with this size and alignment.
     ///     unsafe { heap.dealloc(*p, 900, 8) };
     /// }
-    /// // SAFETY: live, from this heap, with this shape.
-    /// assert!(unsafe { heap.should_move(held[1_010], 900, 8) }, "a sparse span's survivor moves");
-    /// // SAFETY: as above.
-    /// assert!(!unsafe { heap.should_move(held[3_999], 900, 8) }, "the span being filled stays");
+    /// assert!(heap.should_move(held[1_010].as_ptr(), 900, 8), "a sparse span's survivor moves");
+    /// assert!(!heap.should_move(held[3_999].as_ptr(), 900, 8), "the span being filled stays");
+    /// assert!(!heap.should_move(&0u8, 1, 1), "not this heap's");
     /// for p in &held[1_000..] {
     ///     // SAFETY: as above.
     ///     unsafe { heap.dealloc(*p, 900, 8) };
@@ -54,20 +50,25 @@ impl Heap {
     /// # Ok::<(), &str>(())
     /// ```
     #[must_use]
-    pub unsafe fn should_move(&self, ptr: NonNull<u8>, size: usize, align: usize) -> bool {
+    pub fn should_move(&self, ptr: *const u8, size: usize, align: usize) -> bool {
         let Some(c) = class::index_of(size, align) else { return false };
-        // SAFETY: a small allocation always lies inside a segment.
-        let seg = unsafe { segment::segment_of(ptr) };
-        // SAFETY: the mask lands on a live header for this allocator's pointers.
+        if self.token == 0 || crate::rtree::owner(ptr as usize) != self.token {
+            return false;
+        }
+        // SAFETY: the owner tree says a segment of this heap is mapped at
+        // this address's segment base, so its header is live and ours.
+        let seg = unsafe { segment::segment_of(NonNull::new_unchecked(ptr.cast_mut())) };
+        // SAFETY: as above.
         let s = unsafe { seg.as_ref() };
-        if s.owner != self.id {
-            return false;
-        }
-        let ix = segment::span_index_of(ptr);
-        if self.partial[c] == Some((seg, ix as u8)) {
-            return false;
-        }
+        // SAFETY: as above; the index is derived from the address alone.
+        let ix = segment::span_index_of(unsafe { NonNull::new_unchecked(ptr.cast_mut()) });
         let meta = &s.spans[ix];
+        if ix < segment::FIRST_DATA_SPAN
+            || usize::from(meta.class) != c
+            || self.partial[c] == Some((seg, ix as u8))
+        {
+            return false;
+        }
         let (cap, spans) = (u64::from(meta.capacity()), u64::from(self.spans_in_class[c]));
         let class_live = u64::from(self.class_live[c]);
         spans * cap >= class_live + cap && u64::from(meta.live) * spans < class_live
@@ -106,8 +107,7 @@ mod tests {
         for _ in 0..8 {
             heap.reclaim();
             for p in &mut held {
-                // SAFETY: live, from this heap, with this shape
-                if unsafe { heap.should_move(*p, size, 8) } {
+                if heap.should_move(p.as_ptr(), size, 8) {
                     let q = heap.alloc(size, 8).unwrap();
                     // SAFETY: both live and of `size` bytes, distinct slots
                     unsafe { core::ptr::copy_nonoverlapping(p.as_ptr(), q.as_ptr(), size) };
@@ -135,13 +135,11 @@ mod tests {
     fn another_heaps_slot_and_a_class_without_a_spare_span_stay() {
         let (mut a, b) = (Heap::new(4), Heap::new(5));
         let held: Vec<NonNull<u8>> = (0..500).map(|_| a.alloc(900, 8).unwrap()).collect();
-        // SAFETY: live, from `a`, with this shape; `b` does not own it
-        assert!(!unsafe { b.should_move(held[0], 900, 8) });
+        assert!(!b.should_move(held[0].as_ptr(), 900, 8), "`b` does not own it");
         // SAFETY: from `a` with this shape
         unsafe { a.dealloc(held[3], 900, 8) };
         // one hole in the whole class: nowhere denser to go
-        // SAFETY: live, from `a`
-        assert!(!unsafe { a.should_move(held[4], 900, 8) });
+        assert!(!a.should_move(held[4].as_ptr(), 900, 8));
         for (i, p) in held.into_iter().enumerate() {
             if i != 3 {
                 // SAFETY: from `a` with this shape

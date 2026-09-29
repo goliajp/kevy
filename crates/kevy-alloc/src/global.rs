@@ -248,10 +248,7 @@ unsafe fn dealloc_over_aligned(ptr: NonNull<u8>, layout: Layout) {
 /// sparser than where a fresh allocation of the same shape would land on
 /// this thread — so that copying it and freeing the original would help
 /// the heap return memory. `false` for anything this thread's heap does
-/// not own, and for direct mappings.
-///
-/// # Safety
-/// `ptr` must be a live allocation from [`KevyAlloc`] made with `layout`.
+/// not own, and for direct mappings; any address may be asked about.
 ///
 /// # Examples
 ///
@@ -263,20 +260,15 @@ unsafe fn dealloc_over_aligned(ptr: NonNull<u8>, layout: Layout) {
 /// let p = unsafe { KevyAlloc.alloc(layout) };
 /// assert!(!p.is_null());
 /// // the only slot of its span, and that span is the one being filled
-/// // SAFETY: live, from `KevyAlloc`, with this layout.
-/// assert!(!unsafe { kevy_alloc::global::should_move(p, layout) });
+/// assert!(!kevy_alloc::global::should_move(p, layout));
 /// // SAFETY: allocated above with this layout.
 /// unsafe { KevyAlloc.dealloc(p, layout) };
 /// # Ok::<(), std::alloc::LayoutError>(())
 /// ```
 #[must_use]
-pub unsafe fn should_move(ptr: *const u8, layout: Layout) -> bool {
-    let Some(p) = NonNull::new(ptr.cast_mut()) else { return false };
-    if is_over_aligned(layout) {
-        return false;
-    }
-    // SAFETY: the caller's contract is `Heap::should_move`'s.
-    with_heap(|h| unsafe { h.should_move(p, layout.size(), layout.align()) }).unwrap_or(false)
+pub fn should_move(ptr: *const u8, layout: Layout) -> bool {
+    !is_over_aligned(layout)
+        && with_heap(|h| h.should_move(ptr, layout.size(), layout.align())).unwrap_or(false)
 }
 
 /// This thread's heap statistics, or `None` past thread teardown.

@@ -159,6 +159,7 @@ impl Drop for Heap {
             // SAFETY: live header from our own list; read `next` before
             // the mapping goes away.
             let next = unsafe { (*seg).next };
+            crate::rtree::set(seg as usize, 0);
             // SAFETY: this heap mapped it and is the only owner.
             unsafe {
                 os::unmap(NonNull::new_unchecked(seg.cast::<u8>()), SEGMENT_BYTES);
