@@ -456,9 +456,10 @@ def requirement_needs_infra(check):
 # ── run ──────────────────────────────────────────────────────────────
 
 def keep_log(tier, check_id, text):
-    """A failed row's whole output. The verdict shows six lines, and a
+    """A row's whole output. A failure's verdict shows six lines, and a
     flake's cause is rarely in the last six; rerunning to see it again is
-    how the evidence of an intermittent failure gets lost."""
+    how the evidence of an intermittent failure gets lost. A pass shows
+    none, and a measurement gate's numbers are the result."""
     path = ROOT / "target" / "suite-logs" / f"{tier}-{check_id}.log"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
