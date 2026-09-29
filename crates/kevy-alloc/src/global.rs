@@ -61,9 +61,19 @@ fn with_heap<R>(f: impl FnOnce(&mut Heap) -> R) -> Option<R> {
 
 /// A `#[global_allocator]` backed by one [`Heap`] per thread.
 ///
-/// ```no_run
+/// ```standalone_crate
 /// #[global_allocator]
 /// static ALLOC: kevy_alloc::KevyAlloc = kevy_alloc::KevyAlloc;
+///
+/// fn main() {
+///     let live = || kevy_alloc::thread_stats().expect("the thread is alive").live;
+///     let before = live();
+///     // every allocation in the program now comes from this thread's heap
+///     let v: Vec<u64> = Vec::with_capacity(100);
+///     assert_eq!(live() - before, 800);
+///     drop(v);
+///     assert_eq!(live(), before);
+/// }
 /// ```
 #[derive(Debug)]
 pub struct KevyAlloc;
