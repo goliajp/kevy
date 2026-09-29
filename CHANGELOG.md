@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **A cold key is charged once.** Since the keyspace table is charged at
+  its real size, a cold key's slot and its key bytes are inside
+  `used_memory` from the moment the key is inserted, and they stay there
+  when its value is demoted. The tiered store also subtracted the same
+  stubs from its demotion target, so every cold key was counted twice
+  and the hot set was held that much below the budget: 0.54 GB of a
+  budget at ten million rows with 5.6 million cold. The target is now
+  `budget·19/20 − index_reserved_bytes`; `stub_bytes` stays in `INFO` as
+  a gauge. The index floor that refuses `IDX.CREATE` / `TABLE.DECLARE`
+  now counts what stays however cold the values get — the keyspace table
+  and the cold keys' own bytes — instead of the stub estimate.
+
 - **The io_uring receive ring is sized by configuration, and defaults to
   a quarter of what it was.** Every shard on the io_uring reactor kept a
   fixed ring of 4,096 16 KiB receive buffers — 64 MiB a shard, 0.6 GB for

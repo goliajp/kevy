@@ -139,8 +139,9 @@ fn info_gauges_present_when_tiered_absent_when_not() {
     assert_eq!(t.index_reserved_bytes, 0, "no indexes declared yet");
     assert_eq!(
         t.tier_effective_target,
-        budget * 19 / 20 - t.stub_bytes,
-        "the unified target arithmetic surfaces in the gauges"
+        budget * 19 / 20,
+        "the unified target arithmetic surfaces in the gauges: a cold stub is \
+         charged inside used_memory, not again as a floor"
     );
 }
 
@@ -166,9 +167,7 @@ fn reserved_floor_feeds_through_the_manual_tick() {
     assert!(t.index_reserved_bytes > 0, "the tick feeds the index floor");
     assert_eq!(
         t.tier_effective_target,
-        (10_000_000u64 * 19 / 20)
-            .saturating_sub(t.index_reserved_bytes)
-            .saturating_sub(t.stub_bytes),
+        (10_000_000u64 * 19 / 20).saturating_sub(t.index_reserved_bytes),
     );
 }
 
