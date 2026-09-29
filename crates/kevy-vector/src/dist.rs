@@ -31,7 +31,7 @@
 
 /// Distance metric. Scores are "smaller = closer" for every variant
 /// (cosine → `1 - cos`, ip → `-dot`), so one ascending merge works.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+///
 /// # Examples
 ///
 /// ```
@@ -42,6 +42,8 @@
 /// assert_eq!(Distance::Ip.tag(), "ip");
 /// assert_eq!(Distance::parse(b"manhattan"), None, "refused, not defaulted");
 /// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub enum Distance {
     /// Cosine distance (vectors pre-normalized at insert).
     #[default]

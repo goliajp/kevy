@@ -364,15 +364,14 @@ fn new_ann_seg(spec: &kevy_index::IndexSpec) -> Option<kevy_vector::Hnsw> {
     spec.ann.as_ref().map(|a| {
         kevy_vector::Hnsw::new(
             a.dim as usize,
-            kevy_vector::HnswParams {
-                m: a.m as usize,
-                ef_construction: a.ef as usize,
-                distance: match a.distance {
+            kevy_vector::HnswParams::default()
+                .with_m(a.m as usize)
+                .with_ef_construction(a.ef as usize)
+                .with_distance(match a.distance {
                     1 => kevy_vector::Distance::L2,
                     2 => kevy_vector::Distance::Ip,
                     _ => kevy_vector::Distance::Cosine,
-                },
-            },
+                }),
         )
     })
 }

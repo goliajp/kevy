@@ -84,7 +84,8 @@ fuzz_target!(|data: &[u8]| {
         _ => Distance::Ip,
     };
     let m = 2 + (data[0] >> 2) as usize % 7; // 2..=8: small M stresses pruning
-    let params = HnswParams { m, ef_construction: 16 + m * 4, distance: metric };
+    let params =
+        HnswParams::default().with_m(m).with_ef_construction(16 + m * 4).with_distance(metric);
     let mut h = Hnsw::new(DIM, params);
     assert_eq!(h.dim(), DIM);
     let mut pos = 1usize;
@@ -125,7 +126,7 @@ fuzz_target!(|data: &[u8]| {
 
     // ---- Phase 2: recall@10 vs brute force (L2, exhaustive beam) ----
     let n = data.len().clamp(8, 200);
-    let params = HnswParams { m: 8, ef_construction: 64, distance: Distance::L2 };
+    let params = HnswParams::default().with_m(8).with_ef_construction(64).with_distance(Distance::L2);
     let mut h = Hnsw::new(DIM, params);
     let mut points: BTreeMap<Vec<u8>, Vec<f32>> = BTreeMap::new();
     for i in 0..n {

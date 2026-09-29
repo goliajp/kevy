@@ -8,7 +8,10 @@
 use crate::dist::Distance;
 
 /// Construction/search parameters (immutable once built).
-#[derive(Debug, Clone, Copy)]
+///
+/// Start from [`HnswParams::default`] and set what differs, with the
+/// `with_*` builders or by assigning the fields.
+///
 /// # Examples
 ///
 /// ```
@@ -19,9 +22,11 @@ use crate::dist::Distance;
 /// assert_eq!((d.m, d.ef_construction), (16, 200));
 /// assert_eq!(d.distance, Distance::Cosine);
 ///
-/// let wide = HnswParams { ef_construction: 400, ..HnswParams::default() };
+/// let wide = HnswParams::default().with_ef_construction(400);
 /// assert_eq!(wide.m, 16, "the rest carries over");
 /// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct HnswParams {
     /// Max bidirectional links per node per layer (layer 0 gets 2M).
     pub m: usize,
@@ -37,8 +42,45 @@ impl Default for HnswParams {
     }
 }
 
+impl HnswParams {
+    /// Set [`HnswParams::m`], the links per node per layer.
+    ///
+    /// ```
+    /// assert_eq!(kevy_vector::HnswParams::default().with_m(32).m, 32);
+    /// ```
+    #[must_use]
+    pub fn with_m(mut self, m: usize) -> Self {
+        self.m = m;
+        self
+    }
+
+    /// Set [`HnswParams::ef_construction`], the construction beam width.
+    ///
+    /// ```
+    /// let p = kevy_vector::HnswParams::default().with_ef_construction(64);
+    /// assert_eq!(p.ef_construction, 64);
+    /// ```
+    #[must_use]
+    pub fn with_ef_construction(mut self, ef_construction: usize) -> Self {
+        self.ef_construction = ef_construction;
+        self
+    }
+
+    /// Set [`HnswParams::distance`], the metric.
+    ///
+    /// ```
+    /// use kevy_vector::{Distance, HnswParams};
+    /// assert_eq!(HnswParams::default().with_distance(Distance::L2).distance, Distance::L2);
+    /// ```
+    #[must_use]
+    pub fn with_distance(mut self, distance: Distance) -> Self {
+        self.distance = distance;
+        self
+    }
+}
+
 /// Sizing counters.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+///
 /// # Examples
 ///
 /// ```
@@ -57,6 +99,8 @@ impl Default for HnswParams {
 /// assert_eq!(s.vectors, 1);
 /// assert_eq!(s.tombstones, 1);
 /// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct VectorStats {
     /// Living vectors.
     pub vectors: u64,
