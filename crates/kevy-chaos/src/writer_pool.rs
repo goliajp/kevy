@@ -14,27 +14,264 @@ use std::thread;
 use std::time::Duration;
 
 /// One entry: a write that was ACK'd by kevy (+OK reply).
+///
+/// ```
+/// # use std::io::Write;
+/// # let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+/// # let port = listener.local_addr()?.port();
+/// # std::thread::spawn(move || {
+/// #     for mut s in listener.incoming().flatten() {
+/// #         std::thread::spawn(move || {
+/// #             let mut pending = Vec::new();
+/// #             while kevy_testnet::read_request(&mut s, &mut pending) {
+/// #                 if s.write_all(b"+OK\r\n").is_err() { break; }
+/// #             }
+/// #         });
+/// #     }
+/// # });
+/// // a stand-in for kevy on `port` that answers every SET with +OK
+/// use kevy_chaos::WriterPool;
+/// use std::sync::Arc;
+/// use std::sync::atomic::{AtomicBool, Ordering};
+///
+/// let stop = Arc::new(AtomicBool::new(false));
+/// let pool = WriterPool::spawn(port, 1, Arc::clone(&stop));
+/// while pool.log.lock().expect("no writer panicked").len() < 3 {
+///     std::thread::sleep(std::time::Duration::from_millis(1));
+/// }
+/// stop.store(true, Ordering::Relaxed);
+/// let log = pool.join();
+/// let acks = log.lock().expect("no writer panicked");
+///
+/// assert_eq!(acks[0].key, b"w0_k0");
+/// assert_eq!(acks[0].value, b"w0_v0");
+/// assert_eq!(acks[0].seq, 0);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AckEntry {
     /// The key kevy acknowledged, exactly as it went out on the wire.
+    ///
+    /// ```
+    /// # use std::io::Write;
+    /// # let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    /// # let port = listener.local_addr()?.port();
+    /// # std::thread::spawn(move || {
+    /// #     for mut s in listener.incoming().flatten() {
+    /// #         std::thread::spawn(move || {
+    /// #             let mut pending = Vec::new();
+    /// #             while kevy_testnet::read_request(&mut s, &mut pending) {
+    /// #                 if s.write_all(b"+OK\r\n").is_err() { break; }
+    /// #             }
+    /// #         });
+    /// #     }
+    /// # });
+    /// // a stand-in for kevy on `port` that answers every SET with +OK
+    /// use kevy_chaos::WriterPool;
+    /// use std::sync::Arc;
+    /// use std::sync::atomic::{AtomicBool, Ordering};
+    ///
+    /// let stop = Arc::new(AtomicBool::new(false));
+    /// let pool = WriterPool::spawn(port, 1, Arc::clone(&stop));
+    /// while pool.log.lock().expect("no writer panicked").len() < 3 {
+    ///     std::thread::sleep(std::time::Duration::from_millis(1));
+    /// }
+    /// stop.store(true, Ordering::Relaxed);
+    /// let log = pool.join();
+    /// let acks = log.lock().expect("no writer panicked");
+    ///
+    /// // writer N writes keys `wN_k<seq>`
+    /// assert_eq!(acks[1].key, b"w0_k1");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub key: Vec<u8>,
     /// The value kevy acknowledged. A reader that survives the crash must
     /// come back holding this one; anything else is a lost or torn write.
+    ///
+    /// ```
+    /// # use std::io::Write;
+    /// # let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    /// # let port = listener.local_addr()?.port();
+    /// # std::thread::spawn(move || {
+    /// #     for mut s in listener.incoming().flatten() {
+    /// #         std::thread::spawn(move || {
+    /// #             let mut pending = Vec::new();
+    /// #             while kevy_testnet::read_request(&mut s, &mut pending) {
+    /// #                 if s.write_all(b"+OK\r\n").is_err() { break; }
+    /// #             }
+    /// #         });
+    /// #     }
+    /// # });
+    /// // a stand-in for kevy on `port` that answers every SET with +OK
+    /// use kevy_chaos::WriterPool;
+    /// use std::sync::Arc;
+    /// use std::sync::atomic::{AtomicBool, Ordering};
+    ///
+    /// let stop = Arc::new(AtomicBool::new(false));
+    /// let pool = WriterPool::spawn(port, 1, Arc::clone(&stop));
+    /// while pool.log.lock().expect("no writer panicked").len() < 3 {
+    ///     std::thread::sleep(std::time::Duration::from_millis(1));
+    /// }
+    /// stop.store(true, Ordering::Relaxed);
+    /// let log = pool.join();
+    /// let acks = log.lock().expect("no writer panicked");
+    ///
+    /// // and the value a recovered server must still hold for that key
+    /// assert_eq!(acks[1].value, b"w0_v1");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub value: Vec<u8>,
     /// Per-writer monotonic sequence number, starting at 0.
+    ///
+    /// ```
+    /// # use std::io::Write;
+    /// # let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    /// # let port = listener.local_addr()?.port();
+    /// # std::thread::spawn(move || {
+    /// #     for mut s in listener.incoming().flatten() {
+    /// #         std::thread::spawn(move || {
+    /// #             let mut pending = Vec::new();
+    /// #             while kevy_testnet::read_request(&mut s, &mut pending) {
+    /// #                 if s.write_all(b"+OK\r\n").is_err() { break; }
+    /// #             }
+    /// #         });
+    /// #     }
+    /// # });
+    /// // a stand-in for kevy on `port` that answers every SET with +OK
+    /// use kevy_chaos::WriterPool;
+    /// use std::sync::Arc;
+    /// use std::sync::atomic::{AtomicBool, Ordering};
+    ///
+    /// let stop = Arc::new(AtomicBool::new(false));
+    /// let pool = WriterPool::spawn(port, 1, Arc::clone(&stop));
+    /// while pool.log.lock().expect("no writer panicked").len() < 3 {
+    ///     std::thread::sleep(std::time::Duration::from_millis(1));
+    /// }
+    /// stop.store(true, Ordering::Relaxed);
+    /// let log = pool.join();
+    /// let acks = log.lock().expect("no writer panicked");
+    ///
+    /// let seqs: Vec<u64> = acks.iter().map(|a| a.seq).collect();
+    /// assert_eq!(seqs, (0..acks.len() as u64).collect::<Vec<_>>());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub seq: u64,
 }
 
 /// Shared, lock-protected log of ACK'd writes from all writers.
+///
+/// ```
+/// # use std::io::Write;
+/// # let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+/// # let port = listener.local_addr()?.port();
+/// # std::thread::spawn(move || {
+/// #     for mut s in listener.incoming().flatten() {
+/// #         std::thread::spawn(move || {
+/// #             let mut pending = Vec::new();
+/// #             while kevy_testnet::read_request(&mut s, &mut pending) {
+/// #                 if s.write_all(b"+OK\r\n").is_err() { break; }
+/// #             }
+/// #         });
+/// #     }
+/// # });
+/// // a stand-in for kevy on `port` that answers every SET with +OK
+/// use kevy_chaos::WriterPool;
+/// use std::sync::Arc;
+/// use std::sync::atomic::{AtomicBool, Ordering};
+///
+/// let stop = Arc::new(AtomicBool::new(false));
+/// let pool = WriterPool::spawn(port, 1, Arc::clone(&stop));
+/// while pool.log.lock().expect("no writer panicked").len() < 3 {
+///     std::thread::sleep(std::time::Duration::from_millis(1));
+/// }
+/// stop.store(true, Ordering::Relaxed);
+/// let log = pool.join();
+/// let acks = log.lock().expect("no writer panicked");
+///
+/// // one log shared by every writer; each entry is a write the server acknowledged
+/// let n = acks.len();
+/// drop(acks);
+/// let log: kevy_chaos::AckLog = log;
+/// assert_eq!(log.lock().expect("no writer panicked").len(), n);
+/// assert!(n >= 3);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub type AckLog = Arc<Mutex<Vec<AckEntry>>>;
 
 /// N writer threads, each connecting to kevy and issuing `SET key value`
 /// repeatedly. Each successful `+OK` reply appends to the shared `AckLog`.
+///
+/// ```
+/// # use std::io::Write;
+/// # let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+/// # let port = listener.local_addr()?.port();
+/// # std::thread::spawn(move || {
+/// #     for mut s in listener.incoming().flatten() {
+/// #         std::thread::spawn(move || {
+/// #             let mut pending = Vec::new();
+/// #             while kevy_testnet::read_request(&mut s, &mut pending) {
+/// #                 if s.write_all(b"+OK\r\n").is_err() { break; }
+/// #             }
+/// #         });
+/// #     }
+/// # });
+/// // a stand-in for kevy on `port` that answers every SET with +OK
+/// use kevy_chaos::WriterPool;
+/// use std::sync::Arc;
+/// use std::sync::atomic::{AtomicBool, Ordering};
+///
+/// let stop = Arc::new(AtomicBool::new(false));
+/// let pool = WriterPool::spawn(port, 1, Arc::clone(&stop));
+/// while pool.log.lock().expect("no writer panicked").len() < 3 {
+///     std::thread::sleep(std::time::Duration::from_millis(1));
+/// }
+/// stop.store(true, Ordering::Relaxed);
+/// let log = pool.join();
+/// let acks = log.lock().expect("no writer panicked");
+///
+/// assert!(acks.len() >= 3);
+/// assert!(acks.iter().all(|a| a.key.starts_with(b"w0_")));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub struct WriterPool {
     handles: Vec<thread::JoinHandle<()>>,
     /// Every write kevy said `+OK` to, across all writers. This is the
     /// claim the recovery check is run against: the pool promises nothing
     /// about writes still in flight, only about the ones already answered.
+    ///
+    /// ```
+    /// # use std::io::Write;
+    /// # let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    /// # let port = listener.local_addr()?.port();
+    /// # std::thread::spawn(move || {
+    /// #     for mut s in listener.incoming().flatten() {
+    /// #         std::thread::spawn(move || {
+    /// #             let mut pending = Vec::new();
+    /// #             while kevy_testnet::read_request(&mut s, &mut pending) {
+    /// #                 if s.write_all(b"+OK\r\n").is_err() { break; }
+    /// #             }
+    /// #         });
+    /// #     }
+    /// # });
+    /// // a stand-in for kevy on `port` that answers every SET with +OK
+    /// use kevy_chaos::WriterPool;
+    /// use std::sync::Arc;
+    /// use std::sync::atomic::{AtomicBool, Ordering};
+    ///
+    /// let stop = Arc::new(AtomicBool::new(false));
+    /// let pool = WriterPool::spawn(port, 1, Arc::clone(&stop));
+    /// while pool.log.lock().expect("no writer panicked").len() < 3 {
+    ///     std::thread::sleep(std::time::Duration::from_millis(1));
+    /// }
+    /// stop.store(true, Ordering::Relaxed);
+    /// let log = pool.join();
+    /// let acks = log.lock().expect("no writer panicked");
+    ///
+    /// // what `join` hands back is this same log
+    /// assert!(acks.len() >= 3);
+    /// assert_eq!(acks[0].key, b"w0_k0");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub log: AckLog,
 }
 
@@ -106,133 +343,4 @@ fn build_set_frame(key: &[u8], value: &[u8]) -> Vec<u8> {
     out.extend_from_slice(value);
     out.extend_from_slice(b"\r\n");
     out
-}
-
-/// Verify that every entry in `acks` is readable from kevy at `port`,
-/// using a SINGLE pipelined TCP connection (one large batched
-/// write, single drain read, parse replies in order). This avoids the
-/// ephemeral-port exhaustion that ruined an earlier run of this suite,
-/// where each GET opened a fresh TCP conn (Mac's ~16 k ephemeral
-/// ports × 60 s TIME_WAIT capped sustainable rate at ~267 conns/s; the
-/// chaos test verifies hundreds of thousands of ACKs per run).
-///
-/// Returns Ok(()) if all match or Err on first corrupted (wrong value)
-/// or lost (nil reply) entry. Use [`pipelined_verify_counts`] when the
-/// caller wants to count instead of fail-fast.
-pub fn verify_all_present(port: u16, acks: &[AckEntry]) -> Result<(), String> {
-    let (present, lost, corrupted) = pipelined_verify_counts(port, acks);
-    if !corrupted.is_empty() {
-        return Err(format!(
-            "CORRUPTION DETECTED — {} keys returned wrong values:\n{}",
-            corrupted.len(),
-            corrupted.join("\n")
-        ));
-    }
-    if lost > 0 {
-        return Err(format!("LOST {lost} of {} ACKs (present {present})", acks.len()));
-    }
-    Ok(())
-}
-
-/// Same as `verify_all_present` but returns counts instead of fail-fast.
-/// Returns `(present, lost, corrupted_descriptions)`.
-pub fn pipelined_verify_counts(port: u16, acks: &[AckEntry]) -> (usize, usize, Vec<String>) {
-    let buf = match pipeline_get_replies(port, acks) {
-        Ok(buf) => buf,
-        Err(e) => return (0, acks.len(), vec![e]),
-    };
-    tally_replies(acks, &buf)
-}
-
-/// Send one pipelined GET per ACK entry and drain the whole reply
-/// stream into a single buffer. Errors carry a human description.
-fn pipeline_get_replies(port: u16, acks: &[AckEntry]) -> Result<Vec<u8>, String> {
-    let mut s = match TcpStream::connect(format!("127.0.0.1:{port}")) {
-        Ok(s) => s,
-        Err(e) => return Err(format!("connect: {e}")),
-    };
-    let _ = s.set_read_timeout(Some(Duration::from_secs(30)));
-    let _ = s.set_write_timeout(Some(Duration::from_secs(30)));
-    // Send-all then drain-all keeps the pipeline simple. The sender
-    // thread half-closes after writing so the read side sees EOF.
-    let mut send_buf = Vec::with_capacity(acks.len() * 32);
-    for ack in acks {
-        send_buf.extend_from_slice(b"*2\r\n$3\r\nGET\r\n");
-        send_buf.extend_from_slice(format!("${}\r\n", ack.key.len()).as_bytes());
-        send_buf.extend_from_slice(&ack.key);
-        send_buf.extend_from_slice(b"\r\n");
-    }
-    let send_handle = std::thread::spawn(move || {
-        s.write_all(&send_buf).map_err(|e| format!("pipeline write: {e}"))?;
-        let _ = s.shutdown(std::net::Shutdown::Write);
-        Ok::<_, String>(s)
-    });
-    let mut s = match send_handle.join() {
-        Ok(Ok(s)) => s,
-        Ok(Err(e)) => return Err(e),
-        Err(_) => return Err("sender thread panicked".into()),
-    };
-    let mut buf = Vec::with_capacity(8 * 1024 * 1024);
-    let mut tmp = vec![0u8; 64 * 1024];
-    loop {
-        match s.read(&mut tmp) {
-            Ok(0) => break,
-            Ok(n) => buf.extend_from_slice(&tmp[..n]),
-            Err(_) => break,
-        }
-    }
-    Ok(buf)
-}
-
-/// Parse replies in order matching the ACK log. Returns
-/// `(present, lost, corrupted_descriptions)`.
-fn tally_replies(acks: &[AckEntry], buf: &[u8]) -> (usize, usize, Vec<String>) {
-    let mut present = 0usize;
-    let mut lost = 0usize;
-    let mut corrupted = Vec::new();
-    let mut pos = 0usize;
-    for ack in acks {
-        match parse_one_reply(buf, pos) {
-            Some((Some(val), next)) => {
-                if val == ack.value {
-                    present += 1;
-                } else {
-                    corrupted.push(format!(
-                        "key={:?} expected={:?} got={:?}",
-                        String::from_utf8_lossy(&ack.key),
-                        String::from_utf8_lossy(&ack.value),
-                        String::from_utf8_lossy(val),
-                    ));
-                }
-                pos = next;
-            }
-            Some((None, next)) => {
-                lost += 1;
-                pos = next;
-            }
-            None => {
-                lost += 1;
-            }
-        }
-    }
-    (present, lost, corrupted)
-}
-
-fn parse_one_reply(buf: &[u8], start: usize) -> Option<(Option<&[u8]>, usize)> {
-    let rest = &buf[start..];
-    if rest.starts_with(b"$-1\r\n") {
-        return Some((None, start + 5));
-    }
-    if rest.first() != Some(&b'$') {
-        return None;
-    }
-    let nl = rest.iter().position(|&b| b == b'\n')?;
-    let len_str = std::str::from_utf8(&rest[1..nl - 1]).ok()?;
-    let len: usize = len_str.parse().ok()?;
-    let body_start = nl + 1;
-    let body_end = body_start + len;
-    if rest.len() < body_end + 2 {
-        return None;
-    }
-    Some((Some(&rest[body_start..body_end]), start + body_end + 2))
 }
