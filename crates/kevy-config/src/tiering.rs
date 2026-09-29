@@ -21,15 +21,48 @@ use crate::size::parse_size;
 const AUTO_PCT: u64 = 70;
 
 /// One tiering budget, as configured (not yet resolved to bytes).
+///
+/// ```
+/// use kevy_config::TierBudgetSpec;
+///
+/// let spec = TierBudgetSpec::parse("50%")?;
+/// assert_eq!(spec.resolve_with(Some(8_000_000_000)), Some(4_000_000_000));
+/// assert_eq!(spec.resolve_with(None), None, "no bound detected: no guess");
+/// # Ok::<(), kevy_config::ValueError>(())
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum TierBudgetSpec {
     /// `"auto"` — 0.70 × the detected memory bound, re-probed on the
     /// shard tick.
+    ///
+    /// ```
+    /// use kevy_config::TierBudgetSpec;
+    ///
+    /// assert_eq!(TierBudgetSpec::parse("auto")?, TierBudgetSpec::Auto);
+    /// assert_eq!(TierBudgetSpec::Auto.resolve_with(Some(1000)), Some(700));
+    /// # Ok::<(), kevy_config::ValueError>(())
+    /// ```
     Auto,
     /// `"70%"` — that percent of the detected bound (1..=100).
+    ///
+    /// ```
+    /// use kevy_config::TierBudgetSpec;
+    ///
+    /// assert_eq!(TierBudgetSpec::parse("25%")?, TierBudgetSpec::Percent(25));
+    /// assert_eq!(TierBudgetSpec::Percent(25).resolve_with(Some(4000)), Some(1000));
+    /// # Ok::<(), kevy_config::ValueError>(())
+    /// ```
     Percent(u8),
     /// `"4gb"` / plain integer — absolute bytes.
+    ///
+    /// ```
+    /// use kevy_config::TierBudgetSpec;
+    ///
+    /// assert_eq!(TierBudgetSpec::parse("4gb")?, TierBudgetSpec::Bytes(4 << 30));
+    /// assert_eq!(TierBudgetSpec::Bytes(4096).resolve_with(None), Some(4096)); // needs no probe
+    /// # Ok::<(), kevy_config::ValueError>(())
+    /// ```
     Bytes(u64),
 }
 
@@ -65,6 +98,15 @@ impl TierBudgetSpec {
     /// Resolve to bytes given the probed memory bound. `Bytes` ignores
     /// the probe; `Auto`/`Percent` return `None` when no bound was
     /// detected (the caller refuses by name — never a silent guess).
+    ///
+    /// ```
+    /// use kevy_config::TierBudgetSpec;
+    ///
+    /// let bound = Some(10 << 30); // e.g. a 10 GiB cgroup limit
+    /// assert_eq!(TierBudgetSpec::Auto.resolve_with(bound), Some((10 << 30) / 100 * 70));
+    /// assert_eq!(TierBudgetSpec::Percent(70).resolve_with(None), None);
+    /// assert_eq!(TierBudgetSpec::Bytes(1 << 20).resolve_with(bound), Some(1 << 20));
+    /// ```
     pub fn resolve_with(self, detected_bound: Option<u64>) -> Option<u64> {
         match self {
             Self::Bytes(b) => Some(b),
@@ -91,13 +133,39 @@ impl TierBudgetSpec {
 
 /// `[tiering]` section. No `budget` key = tiering OFF (today's paths
 /// byte-identical — the A1 gate's precondition).
+///
+/// ```
+/// use kevy_config::{Config, TierBudgetSpec};
+///
+/// assert_eq!(Config::default().tiering.budget, None); // tiering off
+/// let cfg = Config::from_toml_str("[tiering]\nbudget = \"4gb\"\n", None)?;
+/// assert_eq!(cfg.tiering.budget, Some(TierBudgetSpec::Bytes(4 << 30)));
+/// # Ok::<(), kevy_config::ConfigError>(())
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Default, Hash)]
 #[non_exhaustive]
 pub struct TieringSection {
     /// The RAM budget. `None` = tiering off.
+    ///
+    /// ```
+    /// use kevy_config::{Config, TierBudgetSpec};
+    ///
+    /// let cfg = Config::from_toml_str("[tiering]\nbudget = 1048576\n", None)?;
+    /// assert_eq!(cfg.tiering.budget, Some(TierBudgetSpec::Bytes(1 << 20))); // a bare integer is bytes
+    /// # Ok::<(), kevy_config::ConfigError>(())
+    /// ```
     pub budget: Option<TierBudgetSpec>,
     /// Cold-tier spill dir override. `None` = `<data_dir>/tier/`.
     /// Setting it implies tiering on (`budget` defaults to `auto`).
+    ///
+    /// ```
+    /// use kevy_config::{Config, TierBudgetSpec};
+    ///
+    /// let cfg = Config::from_toml_str("[tiering]\nspill_dir = \"/mnt/nvme/kevy-tier\"\n", None)?;
+    /// assert_eq!(cfg.tiering.spill_dir.as_deref().and_then(|p| p.to_str()), Some("/mnt/nvme/kevy-tier"));
+    /// assert_eq!(cfg.tiering.budget, Some(TierBudgetSpec::Auto), "a spill dir alone turns tiering on");
+    /// # Ok::<(), kevy_config::ConfigError>(())
+    /// ```
     pub spill_dir: Option<PathBuf>,
 }
 
