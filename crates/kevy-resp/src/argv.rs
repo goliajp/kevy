@@ -12,6 +12,18 @@
 /// Index/`get`/`first`/`iter` return `&[u8]` argument slices. It compares equal
 /// to a `Vec<Vec<u8>>` of the same arguments, so call sites and tests read
 /// naturally.
+///
+/// ```
+/// use kevy_resp::Argv;
+///
+/// let mut argv = Argv::with_capacity(3, 16);
+/// argv.push(b"SET");
+/// argv.push(b"k");
+/// argv.push(b"v");
+/// assert_eq!(argv.len(), 3);
+/// assert_eq!(&argv[1], b"k");
+/// assert_eq!(argv, vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()]);
+/// ```
 #[derive(Clone, Default, Debug, PartialEq, Eq, Hash)]
 pub struct Argv {
     buf: Vec<u8>,
@@ -142,6 +154,14 @@ impl<'a> Extend<&'a [u8]> for Argv {
 }
 
 /// A parsed command: `argv`, where `argv[0]` is the command name.
+///
+/// ```
+/// use kevy_resp::{Command, parse_command};
+///
+/// let (cmd, _): (Command, usize) = parse_command(b"PING\r\n")?.expect("complete frame");
+/// assert_eq!(cmd.first(), Some(b"PING".as_slice()));
+/// # Ok::<(), kevy_resp::ProtocolError>(())
+/// ```
 pub type Command = Argv;
 
 #[cfg(test)]

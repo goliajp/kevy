@@ -17,6 +17,20 @@ use crate::request::{MAX_MULTIBULK_LEN, find_crlf, parse_bulk_len, parse_int};
 ///
 /// Return shape matches [`crate::parse_command`]: `Ok(Some((argv, consumed)))`,
 /// `Ok(None)` if more bytes are needed, `Err` on malformed input.
+///
+/// ```
+/// use kevy_resp::{ArgvView, parse_command_borrowed};
+///
+/// let buf = b"*2\r\n$4\r\nINCR\r\n$4\r\nhits\r\n";
+/// let (argv, used) = parse_command_borrowed(buf)?.expect("complete frame");
+/// assert_eq!(used, buf.len());
+/// // the argument is a slice of `buf`, not a copy
+/// let key = argv.get(1).expect("key present");
+/// assert_eq!(key, b"hits");
+/// assert!(std::ptr::eq(key.as_ptr(), buf[18..].as_ptr()));
+/// assert!(parse_command_borrowed(b"*2\r\n$4\r\nIN")?.is_none());
+/// # Ok::<(), kevy_resp::ProtocolError>(())
+/// ```
 #[inline]
 pub fn parse_command_borrowed(
     buf: &[u8],

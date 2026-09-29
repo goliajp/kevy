@@ -13,6 +13,13 @@
 #[non_exhaustive]
 pub enum ProtocolError {
     /// A malformed frame that can never become valid (e.g. bad length prefix).
+    ///
+    /// ```
+    /// use kevy_resp::{ProtocolError, parse_command};
+    ///
+    /// let err = parse_command(b"*1\r\n$x\r\n").unwrap_err();
+    /// assert!(matches!(err, ProtocolError::Malformed(_)));
+    /// ```
     Malformed(&'static str),
 }
 
@@ -42,6 +49,15 @@ impl std::error::Error for ProtocolError {}
 #[non_exhaustive]
 pub enum CmdError {
     /// The complete wire message for the error frame.
+    ///
+    /// ```
+    /// use kevy_resp::{CmdError, encode_error};
+    ///
+    /// let CmdError::Wire(text) = CmdError::from("WRONGTYPE bad key") else { unreachable!() };
+    /// let mut out = Vec::new();
+    /// encode_error(&mut out, text);
+    /// assert_eq!(out, b"-WRONGTYPE bad key\r\n");
+    /// ```
     Wire(&'static str),
 }
 
