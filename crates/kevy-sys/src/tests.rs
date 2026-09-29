@@ -6,7 +6,7 @@ fn peer_gone_tracks_the_kernel_not_the_reader() {
     // The whole point of peer_gone is that it asks the kernel, so it sees a
     // dropped peer even when nothing has read the socket. Accept a conn, do
     // not read it, and check both states.
-    let listener = tcp_listen([127, 0, 0, 1], 0, 16).unwrap();
+    let listener = Socket::tcp_listen([127, 0, 0, 1], 0, 16).unwrap();
     let port = listener.local_port().unwrap();
 
     let mut client = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
@@ -37,7 +37,7 @@ fn peer_gone_tracks_the_kernel_not_the_reader() {
 
 #[test]
 fn listen_accept_roundtrip() {
-    let listener = tcp_listen([127, 0, 0, 1], 0, 16).unwrap();
+    let listener = Socket::tcp_listen([127, 0, 0, 1], 0, 16).unwrap();
     let port = listener.local_port().unwrap();
     assert_ne!(port, 0);
 
@@ -59,7 +59,7 @@ fn listen_accept_roundtrip() {
 
 #[test]
 fn poller_signals_listener_readable() {
-    let listener = tcp_listen([127, 0, 0, 1], 0, 16).unwrap();
+    let listener = Socket::tcp_listen([127, 0, 0, 1], 0, 16).unwrap();
     listener.set_nonblocking().unwrap();
     let port = listener.local_port().unwrap();
 
@@ -79,7 +79,7 @@ fn poller_signals_listener_readable() {
 
 #[test]
 fn waker_wakes_poller() {
-    let w = std::sync::Arc::new(waker().unwrap());
+    let w = std::sync::Arc::new(Waker::new().unwrap());
     let poller = Poller::new().unwrap();
     poller.add(w.read_fd(), Interest::READ).unwrap();
 
@@ -95,10 +95,10 @@ fn waker_wakes_poller() {
 
 #[test]
 fn reuseport_allows_shared_port() {
-    let l1 = tcp_listen_reuseport([127, 0, 0, 1], 0, 16).unwrap();
+    let l1 = Socket::tcp_listen_reuseport([127, 0, 0, 1], 0, 16).unwrap();
     let port = l1.local_port().unwrap();
     // A second listener on the SAME port succeeds only because of SO_REUSEPORT.
-    let l2 = tcp_listen_reuseport([127, 0, 0, 1], port, 16).unwrap();
+    let l2 = Socket::tcp_listen_reuseport([127, 0, 0, 1], port, 16).unwrap();
     assert_eq!(l2.local_port().unwrap(), port);
 }
 

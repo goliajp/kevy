@@ -6,7 +6,7 @@ use std::io::{Read, Write};
 /// Run a sequence of (request, expected-reply) pairs over one connection that
 /// shares a single keyspace, asserting each reply.
 fn exchange(steps: &[(&[u8], &[u8])]) {
-    let listener = kevy_sys::tcp_listen([127, 0, 0, 1], 0, 16).unwrap();
+    let listener = kevy_sys::Socket::tcp_listen([127, 0, 0, 1], 0, 16).unwrap();
     let port = listener.local_port().unwrap();
 
     let server = std::thread::spawn(move || {

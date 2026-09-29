@@ -12,6 +12,7 @@ use core::ffi::{c_int, c_void};
 use core::mem::size_of;
 use core::ptr;
 use std::io;
+use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, RawFd};
 
 /// An owned socket file descriptor. Closes itself on drop via our own `close`.
 #[derive(Debug)]
@@ -24,16 +25,6 @@ impl Socket {
     #[inline]
     pub fn raw(&self) -> i32 {
         self.fd
-    }
-
-    /// Wrap an already-open fd (e.g. one accepted by io_uring) into an owning
-    /// `Socket` that closes it on drop.
-    ///
-    /// # Safety
-    /// `fd` must be a valid open descriptor whose ownership is transferred here.
-    #[inline]
-    pub unsafe fn from_raw_fd(fd: i32) -> Socket {
-        Socket { fd }
     }
 
     /// Accept one inbound connection. On a non-blocking listener with no pending
@@ -202,6 +193,41 @@ impl Socket {
     }
 }
 
+impl AsRawFd for Socket {
+    fn as_raw_fd(&self) -> RawFd {
+        self.fd
+    }
+}
+
+/// Wraps an already-open fd (e.g. one accepted by io_uring) into an owning
+/// `Socket` that closes it on drop.
+///
+/// ```no_run
+/// use std::os::fd::{FromRawFd, IntoRawFd};
+/// let listener = kevy_sys::Socket::tcp_listen([127, 0, 0, 1], 0, 16)?;
+/// let fd = listener.into_raw_fd();
+/// // SAFETY: `fd` came out of a socket that gave up ownership of it.
+/// let again = unsafe { kevy_sys::Socket::from_raw_fd(fd) };
+/// assert_eq!(again.raw(), fd);
+/// # Ok::<(), std::io::Error>(())
+/// ```
+impl FromRawFd for Socket {
+    /// # Safety
+    /// `fd` must be a valid open descriptor whose ownership is transferred here.
+    unsafe fn from_raw_fd(fd: RawFd) -> Socket {
+        Socket { fd }
+    }
+}
+
+impl IntoRawFd for Socket {
+    fn into_raw_fd(self) -> RawFd {
+        let fd = self.fd;
+        // ownership of the fd leaves with the return value, so no close
+        core::mem::forget(self);
+        fd
+    }
+}
+
 impl Drop for Socket {
     fn drop(&mut self) {
         // SAFETY: `self.fd` was open for the life of this `Socket` and this is the only
@@ -282,60 +308,81 @@ fn listen_inner(ip: [u8; 4], port: u16, backlog: i32, reuseport: bool) -> io::Re
     Ok(sock)
 }
 
-/// Create a blocking IPv4 TCP listener bound to `ip:port` with `SO_REUSEADDR`.
-/// Pass `port == 0` to let the OS assign an ephemeral port.
-pub fn tcp_listen(ip: [u8; 4], port: u16, backlog: i32) -> io::Result<Socket> {
-    listen_inner(ip, port, backlog, false)
-}
+impl Socket {
+    /// Create a blocking IPv4 TCP listener bound to `ip:port` with `SO_REUSEADDR`.
+    /// Pass `port == 0` to let the OS assign an ephemeral port.
+    ///
+    /// ```no_run
+    /// let listener = kevy_sys::Socket::tcp_listen([127, 0, 0, 1], 0, 16)?;
+    /// assert!(listener.local_port()? > 0);
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
+    pub fn tcp_listen(ip: [u8; 4], port: u16, backlog: i32) -> io::Result<Socket> {
+        listen_inner(ip, port, backlog, false)
+    }
 
-/// Like [`tcp_listen`] but also sets `SO_REUSEPORT`, so multiple listeners can
-/// share one port (one per thread-per-core shard).
-pub fn tcp_listen_reuseport(ip: [u8; 4], port: u16, backlog: i32) -> io::Result<Socket> {
-    listen_inner(ip, port, backlog, true)
-}
+    /// Like [`Socket::tcp_listen`] but also sets `SO_REUSEPORT`, so multiple listeners can
+    /// share one port (one per thread-per-core shard).
+    ///
+    /// ```no_run
+    /// let a = kevy_sys::Socket::tcp_listen_reuseport([127, 0, 0, 1], 0, 16)?;
+    /// let b = kevy_sys::Socket::tcp_listen_reuseport([127, 0, 0, 1], a.local_port()?, 16)?;
+    /// # let _ = b;
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
+    pub fn tcp_listen_reuseport(ip: [u8; 4], port: u16, backlog: i32) -> io::Result<Socket> {
+        listen_inner(ip, port, backlog, true)
+    }
 
-/// Create a blocking AF_UNIX stream listener bound to `path`. Unlinks any
-/// existing file at the path first (mirroring valkey/redis's `unixsocket`
-/// option). UDS bypasses the TCP stack — useful when client+server are on
-/// the same host and the TCP loopback round-trip is the bench-shape floor.
-pub fn unix_listen(path: &[u8], backlog: i32) -> io::Result<Socket> {
-    // Best-effort unlink so subsequent bind doesn't EADDRINUSE on restart.
-    // Convert path to a NUL-terminated CString for libc::unlink.
-    if let Ok(c) = std::ffi::CString::new(path) {
-        // SAFETY: `c` is a live `CString`, so its pointer is NUL-terminated and valid for
-        // the whole call. A failed unlink is deliberately ignored — the bind below is what
-        // decides whether the path was usable.
-        unsafe {
-            ffi::unlink(c.as_ptr());
+    /// Create a blocking AF_UNIX stream listener bound to `path`. Unlinks any
+    /// existing file at the path first (mirroring valkey/redis's `unixsocket`
+    /// option). UDS bypasses the TCP stack — useful when client+server are on
+    /// the same host and the TCP loopback round-trip is the bench-shape floor.
+    ///
+    /// ```no_run
+    /// let listener = kevy_sys::Socket::unix_listen(b"/tmp/kevy.sock", 128)?;
+    /// # let _ = listener;
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
+    pub fn unix_listen(path: &[u8], backlog: i32) -> io::Result<Socket> {
+        // Best-effort unlink so subsequent bind doesn't EADDRINUSE on restart.
+        // Convert path to a NUL-terminated CString for libc::unlink.
+        if let Ok(c) = std::ffi::CString::new(path) {
+            // SAFETY: `c` is a live `CString`, so its pointer is NUL-terminated and valid for
+            // the whole call. A failed unlink is deliberately ignored — the bind below is what
+            // decides whether the path was usable.
+            unsafe {
+                ffi::unlink(c.as_ptr());
+            }
         }
-    }
 
-    // SAFETY: `socket(2)` takes three integers by value — no pointer is dereferenced.
-    // A negative return is checked below before the fd is wrapped.
-    let fd = unsafe { ffi::socket(AF_UNIX, SOCK_STREAM, 0) };
-    if fd < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    let sock = Socket { fd };
+        // SAFETY: `socket(2)` takes three integers by value — no pointer is dereferenced.
+        // A negative return is checked below before the fd is wrapped.
+        let fd = unsafe { ffi::socket(AF_UNIX, SOCK_STREAM, 0) };
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let sock = Socket { fd };
 
-    let (addr, len) = SockaddrUn::new(path)?;
-    // SAFETY: `fd` is owned by `sock` and open. `addr` is a live local and `len` is the
-    // length `SockaddrUn::new` computed for it, so the kernel reads only within it.
-    let r = unsafe { ffi::bind(fd, (&raw const addr).cast::<c_void>(), len) };
-    if r < 0 {
-        return Err(io::Error::last_os_error());
+        let (addr, len) = SockaddrUn::new(path)?;
+        // SAFETY: `fd` is owned by `sock` and open. `addr` is a live local and `len` is the
+        // length `SockaddrUn::new` computed for it, so the kernel reads only within it.
+        let r = unsafe { ffi::bind(fd, (&raw const addr).cast::<c_void>(), len) };
+        if r < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: `fd` is still owned by `sock` and open; `listen(2)` takes both arguments
+        // by value.
+        if unsafe { ffi::listen(fd, backlog) } < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // World-writable so clients with different uid can connect (redis SOP).
+        // Use libc::chmod via CString.
+        if let Ok(c) = std::ffi::CString::new(path) {
+            // SAFETY: `c` is a live `CString`, so its pointer is NUL-terminated and valid for
+            // the whole call.
+            unsafe { ffi::chmod(c.as_ptr(), 0o777) };
+        }
+        Ok(sock)
     }
-    // SAFETY: `fd` is still owned by `sock` and open; `listen(2)` takes both arguments
-    // by value.
-    if unsafe { ffi::listen(fd, backlog) } < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    // World-writable so clients with different uid can connect (redis SOP).
-    // Use libc::chmod via CString.
-    if let Ok(c) = std::ffi::CString::new(path) {
-        // SAFETY: `c` is a live `CString`, so its pointer is NUL-terminated and valid for
-        // the whole call.
-        unsafe { ffi::chmod(c.as_ptr(), 0o777) };
-    }
-    Ok(sock)
 }

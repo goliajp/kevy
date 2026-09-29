@@ -273,7 +273,7 @@ mod tests {
         // advance_handshake; they never read/write/close this socket.
         // fd = -1 makes any accidental I/O call return EBADF rather
         // than silently corrupting an unrelated descriptor.
-        let sock = unsafe { Socket::from_raw_fd(-1) };
+        let sock = unsafe { <Socket as std::os::fd::FromRawFd>::from_raw_fd(-1) };
         ReplicaConn {
             sock,
             fd: -1,
