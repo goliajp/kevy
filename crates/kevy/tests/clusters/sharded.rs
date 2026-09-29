@@ -134,6 +134,41 @@ fn pipelined_order_is_preserved() {
 }
 
 #[test]
+fn interleaved_pipelines_on_two_conns_keep_their_own_order() {
+    // Each conn's replies ride its own pending ring; two conns whose
+    // batches land in the same reactor pass must never see each other's.
+    let srv = Server::start(4);
+    let mut a = srv.connect();
+    let mut b = srv.connect();
+    let (mut batch_a, mut batch_b, mut want_a, mut want_b) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    for i in 0..64u32 {
+        let (ka, kb) = (format!("a{i}"), format!("b{i}"));
+        batch_a.extend_from_slice(&req(&[b"SET", ka.as_bytes(), format!("A{i}").as_bytes()]));
+        batch_a.extend_from_slice(&req(&[b"GET", ka.as_bytes()]));
+        batch_b.extend_from_slice(&req(&[b"INCRBY", kb.as_bytes(), format!("{i}").as_bytes()]));
+        batch_b.extend_from_slice(&req(&[b"GET", kb.as_bytes()]));
+        let va = format!("A{i}");
+        want_a.extend_from_slice(b"+OK\r\n");
+        want_a.extend_from_slice(format!("${}\r\n{va}\r\n", va.len()).as_bytes());
+        let vb = format!("{i}");
+        want_b.extend_from_slice(format!(":{i}\r\n${}\r\n{vb}\r\n", vb.len()).as_bytes());
+    }
+    for round in 0..4 {
+        let (ca, cb) = (batch_a.len() * round / 4, batch_b.len() * round / 4);
+        let (ea, eb) = (batch_a.len() * (round + 1) / 4, batch_b.len() * (round + 1) / 4);
+        a.write_all(&batch_a[ca..ea]).unwrap();
+        b.write_all(&batch_b[cb..eb]).unwrap();
+    }
+    let mut got_a = vec![0u8; want_a.len()];
+    let mut got_b = vec![0u8; want_b.len()];
+    a.read_exact(&mut got_a).unwrap();
+    b.read_exact(&mut got_b).unwrap();
+    assert_eq!(got_a, want_a);
+    assert_eq!(got_b, want_b);
+}
+
+#[test]
 fn fanout_dbsize_del_flush() {
     let srv = Server::start(4);
     let mut c = srv.connect();

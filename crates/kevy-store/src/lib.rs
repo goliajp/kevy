@@ -468,6 +468,8 @@ mod tests;
 #[cfg(test)]
 mod tests_list_seg;
 #[cfg(test)]
+mod tests_live_entry;
+#[cfg(test)]
 mod tests_memory;
 #[cfg(test)]
 #[cfg(test)]

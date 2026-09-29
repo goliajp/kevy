@@ -46,7 +46,9 @@ impl<C: Commands> Shard<C> {
                     self.handle_command(conn_id, &argv);
                     drop(argv);
                     off += consumed;
-                    if !self.conns.contains_key(&conn_id) {
+                    if crate::conn::conn_at(&mut self.conns, &mut self.conn_slot_hint, conn_id)
+                        .is_none()
+                    {
                         return BatchOutcome {
                             consumed: off,
                             protocol_error: false,
@@ -299,16 +301,17 @@ impl<C: Commands> Shard<C> {
                     // Batched single-key dispatches to this (owning) shard:
                     // exec each locally, reply as one `ResponseBatch` to the
                     // origin.
-                    Inbound::RequestBatch { origin, reqs } => {
+                    Inbound::RequestBatch { origin, mut reqs, spare } => {
                         // Aggregation unit = inner requests, not envelopes.
                         did += reqs.len().saturating_sub(1);
-                        let mut resps = Vec::with_capacity(reqs.len());
+                        let mut resps = spare;
+                        resps.reserve(reqs.len());
                         // Fsync-only: the batch aggregates INDEPENDENT
                         // commands from different conns — marking them
                         // atomic would promise more than each origin did.
                         let w0 = self.always_hold_w0();
                         self.aof_begin_fsync_window();
-                        for (conn, seq, argv, proto, meta) in reqs {
+                        for (conn, seq, argv, proto, meta) in reqs.drain(..) {
                             let part = self.run_dispatch(&argv, proto, meta);
                             let Some(part) = self.part_unless_held(origin, w0, conn, seq, part)
                             else {
@@ -324,17 +327,18 @@ impl<C: Commands> Shard<C> {
                         } else {
                             self.aof_end_group_logged();
                         }
-                        self.send_or_hold_response(w0, origin, Inbound::ResponseBatch(resps));
+                        let batch = Inbound::ResponseBatch { resps, spare: reqs };
+                        self.send_or_hold_response(w0, origin, batch);
                     }
                     // Batched replies: fold each by seq, then flush each
                     // touched conn once (dedup — pipelined replies share a
                     // conn).
-                    Inbound::ResponseBatch(resps) => {
+                    Inbound::ResponseBatch { mut resps, spare } => {
                         did += resps.len().saturating_sub(1);
                         self.xshard_inflight =
                             self.xshard_inflight.saturating_sub(resps.len() as u64);
-                        let mut to_flush: Vec<u64> = Vec::new();
-                        for (conn, seq, part, husk) in resps {
+                        let mut to_flush = std::mem::take(&mut self.request_batch[src].to_flush);
+                        for (conn, seq, part, husk) in resps.drain(..) {
                             self.argv_pool.put(husk);
                             self.fold(conn, seq, part);
                             if DIRECT_FLUSH {
@@ -347,9 +351,12 @@ impl<C: Commands> Shard<C> {
                                 self.mark_pending_write_dirty(conn);
                             }
                         }
-                        for conn in to_flush {
+                        self.request_batch[src].recycle(resps, spare);
+                        for &conn in &to_flush {
                             self.flush_conn(conn)?;
                         }
+                        to_flush.clear();
+                        self.request_batch[src].to_flush = to_flush;
                     }
                     // Fire-and-forget batched pub/sub delivery; appended
                     // subscriber output is flushed via `flush_dirty` (epoll)

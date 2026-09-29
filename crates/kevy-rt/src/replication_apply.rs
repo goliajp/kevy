@@ -188,6 +188,7 @@ impl<C: Commands> Shard<C> {
                 crate::Route::Single(idx) => u8::try_from(idx).ok(),
                 _ => None,
             },
+            verb: resolved.verb,
         };
         self.reply_scratch.clear();
         self.commands.dispatch_into(&mut self.store, argv, &mut self.reply_scratch);

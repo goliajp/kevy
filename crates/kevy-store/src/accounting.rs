@@ -186,67 +186,65 @@ impl Store {
     /// Single-lookup lazy-expiring read: the live `Entry` for `key`, or `None` if
     /// absent or expired (expired keys are dropped here, as `reap` would).
     ///
-    /// Two wins over the old `reap(now)`-then-`get` read path: (1) the clock is
-    /// read **only when the entry actually carries a TTL** — most keys don't, so
-    /// the common hit skips `Instant::now()` (~20–40 ns); (2) one fewer keyspace
-    /// lookup on hits (was peek-expiry + `contains_key` + `get` = 3; now peek +
-    /// `get` = 2). The two-phase shape (decide, then mutate/fetch) keeps the
-    /// borrow checker happy without an owning key clone.
+    /// One keyspace probe on a hit: the slot it finds serves the expiry
+    /// check, the access-clock touch and the returned borrow. The clock is
+    /// read only when the entry carries a TTL. An expired key takes the cold
+    /// path through [`Self::drop_expired`], which probes again.
     pub(crate) fn live_entry(&mut self, key: &[u8]) -> Option<&Entry> {
-        // TTL-free fast path. Read cached clock fields
-        // ONLY when the entry actually carries a TTL — most keys don't,
-        // and a prior implementation paid two field reads + a pass
-        // through `is_expired` (which itself short-circuits on None)
-        // unconditionally. Saves ~5 ns / hot lookup across every
-        // collection / string read path.
-        let needs_check = self.map.get(key)?.expire_at_ns.is_some();
-        if needs_check {
-            let (uc, cn) = (self.cached_clock, self.cached_ns);
-            let expired = self.map.get(key).is_some_and(|e| e.is_expired(uc, cn));
-            if expired {
-                self.note_expired(key);
-                self.remove_entry(key);
-                self.expired_keys_total = self.expired_keys_total.saturating_add(1);
-                return None;
-            }
+        let slot = self.map.find_slot(key)?;
+        if self.slot_expired(slot) {
+            self.drop_expired(key);
+            return None;
         }
         if self.clock_on() {
-            self.tick_clock();
-            let c = self.clock_counter as u32;
-            let policy = self.touch_policy();
-            let e = self.map.get_mut_quiet(key)?;
+            let (c, policy) = self.tick_touch();
+            let e = self.map.entry_at_quiet(slot)?;
             evict::touch_on_access(e, policy, c);
             return Some(&*e);
         }
-        self.map.get(key)
+        self.map.slot(slot).map(|(_, e)| e)
     }
 
     /// Mutable [`live_entry`](Self::live_entry): the live `Entry` for `key` by
-    /// `&mut`, or `None` if absent/expired (expired dropped). Same wins — clock
-    /// read only on TTL'd keys, one fewer lookup than `reap`-then-`get_mut`.
+    /// `&mut`, or `None` if absent/expired (expired dropped). Same single
+    /// probe; the row recorder sees the row before it is handed out.
     /// Read-modify commands (INCR/APPEND/…) get the entry once and mutate in
     /// place, preserving any TTL on it.
     pub(crate) fn live_entry_mut(&mut self, key: &[u8]) -> Option<&mut Entry> {
-        // See `live_entry` doc — TTL-free fast path.
-        let needs_check = self.map.get(key)?.expire_at_ns.is_some();
-        if needs_check {
-            let (uc, cn) = (self.cached_clock, self.cached_ns);
-            let expired = self.map.get(key).is_some_and(|e| e.is_expired(uc, cn));
-            if expired {
-                self.note_expired(key);
-                self.remove_entry(key);
-                self.expired_keys_total = self.expired_keys_total.saturating_add(1);
-                return None;
-            }
+        let slot = self.map.find_slot(key)?;
+        if self.slot_expired(slot) {
+            self.drop_expired(key);
+            return None;
         }
         if self.clock_on() {
-            self.tick_clock();
-            let c = self.clock_counter as u32;
-            let policy = self.touch_policy();
-            let e = self.map.get_mut(key)?;
+            let (c, policy) = self.tick_touch();
+            let e = self.map.entry_at_mut(key, slot)?;
             evict::touch_on_access(e, policy, c);
             return Some(e);
         }
-        self.map.get_mut(key)
+        self.map.entry_at_mut(key, slot)
+    }
+
+    /// Whether the entry at `slot` carries a TTL that has passed.
+    #[inline]
+    fn slot_expired(&self, slot: usize) -> bool {
+        let (uc, cn) = (self.cached_clock, self.cached_ns);
+        self.map.slot(slot).is_some_and(|(_, e)| e.expire_at_ns.is_some() && e.is_expired(uc, cn))
+    }
+
+    /// Advance the access clock for a live hit; the value and policy to
+    /// touch the entry with.
+    #[inline]
+    fn tick_touch(&mut self) -> (u32, crate::EvictionPolicy) {
+        self.tick_clock();
+        (self.clock_counter as u32, self.touch_policy())
+    }
+
+    /// Drop an expired `key` found by a read, counted as an expiry.
+    #[cold]
+    fn drop_expired(&mut self, key: &[u8]) {
+        self.note_expired(key);
+        self.remove_entry(key);
+        self.expired_keys_total = self.expired_keys_total.saturating_add(1);
     }
 }
