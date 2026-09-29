@@ -1200,6 +1200,16 @@ timeout = 7200
 requires = ["box", "binaries-release"]
 proves = "the capacity-arc envelope holds at 30M keys"
 
+[[check]]
+id = "tierrssgate"
+area = "mem"
+tier = "full"
+cmd = "bash bench/tierrssgate.sh"
+expected = 60
+timeout = 900
+requires = ["box", "binaries-release"]
+proves = "the tiering budget bounds RSS, not only used_memory: a hash workload four times the budget stays under budget x 1.05 at every sample"
+
 # ── full: doors ──────────────────────────────────────────────────────
 
 [[check]]

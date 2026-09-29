@@ -46,11 +46,7 @@ struct Server {
 impl Server {
     fn start(nshards: usize) -> Server {
         let port = free_port();
-        let dir = std::env::temp_dir().join(format!(
-            "kevy-lua-multishard-{}",
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = kevy_tmpdir::unique_dir("lua-multishard");
         let mut cfg = kevy_config::Config::default();
         cfg.server.port = port;
         cfg.server.threads = nshards;

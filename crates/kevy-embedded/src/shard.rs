@@ -281,6 +281,7 @@ pub(crate) fn tier_tick_upkeep(
     #[cfg(not(feature = "index"))]
     let reserved = 0u64;
     g.store.set_tier_reserved(reserved);
+    g.store.tier_reserve_growth();
 }
 
 /// Read the shard layout meta and either load in place (same layout)

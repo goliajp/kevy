@@ -115,13 +115,13 @@ fn dispatch_with_proto<A: ArgvView + ?Sized>(
             return;
         }
         b"SET" => {
-            // Hoist the maxmemory gate out of the precheck/evict
-            // function calls so the default `maxmemory=0` case is a single
-            // not-taken branch right here, skipping two `#[inline]` function
-            // invocations + their internal branches.
-            if store.maxmemory() > 0 {
+            // Hoist the write gate (maxmemory set, or the memory guard
+            // refusing) out of the precheck/evict function calls so the
+            // default case is a single not-taken branch right here, skipping
+            // two `#[inline]` function invocations + their internal branches.
+            if store.precheck_needed() {
                 if store.precheck_for_write().is_err() {
-                    encode_error(out, OOM_ERR);
+                    encode_error(out, oom_reply(store));
                     return;
                 }
                 kevy_verbs::cmd::set(store, args, out);
@@ -136,11 +136,11 @@ fn dispatch_with_proto<A: ArgvView + ?Sized>(
         }
         _ => {}
     }
-    // OOM precheck for memory-growing writes only. Gated on `maxmemory > 0`
+    // OOM precheck for memory-growing writes only. Gated on the write gate
     // so the default unlimited case skips both calls.
     let is_grow = is_growing_write_verb(cmd);
-    if store.maxmemory() > 0 && is_grow && store.precheck_for_write().is_err() {
-        encode_error(out, OOM_ERR);
+    if store.precheck_needed() && is_grow && store.precheck_for_write().is_err() {
+        encode_error(out, oom_reply(store));
         return;
     }
     let handled = (proto_v3
@@ -168,6 +168,13 @@ fn dispatch_with_proto<A: ArgvView + ?Sized>(
     if is_grow {
         store.try_demote_after_write();
     }
+}
+
+/// The refusal a growing write gets: the memory guard's when it is the one
+/// refusing, Redis's maxmemory reply otherwise.
+#[cold]
+fn oom_reply(store: &Store) -> &'static str {
+    if store.memory_refused() { crate::mem_guard::OVER_BUDGET_ERR } else { OOM_ERR }
 }
 
 /// The single-shard data commands, run by the layer the embedded engine

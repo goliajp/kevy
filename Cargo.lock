@@ -430,6 +430,7 @@ dependencies = [
  "kevy-index",
  "kevy-lua",
  "kevy-lua-host",
+ "kevy-madvise",
  "kevy-noise",
  "kevy-persist",
  "kevy-replicate",
@@ -512,6 +513,7 @@ dependencies = [
  "kevy-resp-client",
  "kevy-rt",
  "kevy-testnet",
+ "kevy-tmpdir",
 ]
 
 [[package]]
@@ -540,6 +542,7 @@ dependencies = [
  "kevy-resp-client",
  "kevy-rt",
  "kevy-testnet",
+ "kevy-tmpdir",
 ]
 
 [[package]]

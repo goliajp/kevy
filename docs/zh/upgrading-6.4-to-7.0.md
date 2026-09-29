@@ -1,6 +1,6 @@
 # 从 6.4 升级到 7.0
 
-一句话版本：**走协议的客户端不用改代码，数据目录原样打开。** 升主版本是因为 Rust 这边的两处改动：`kevy-config` 的配置段结构体加了字段；kevy-cli 的工具只认 `--kevy` 写法，这是 6.x 期间就预告过的。其余需要看一眼的都列在下面：嵌入式存储可能在目录里留下的两种新文件、索引大小现在按实际报告，还有几个回复多了字段。
+一句话版本：**走协议的客户端不用改代码，数据目录原样打开。** 升主版本是因为 Rust 这边：整个 workspace 的公开 API 都按 Rust API Guidelines 整理过，大多数 crate 的签名都变了（[§10](#10-rust-api)）；kevy-cli 的工具只认 `--kevy` 写法，这是 6.x 期间就预告过的。其余需要看一眼的都列在下面：嵌入式存储可能在目录里留下的两种新文件、索引大小现在按实际报告、几个回复多了字段，还有四个回复改成了和 Redis 一致（[§11](#11-变了的回复)）。
 
 ```toml
 kevy-embedded = "7.0.0"
@@ -21,6 +21,8 @@ kevy-embedded = "7.0.0"
 | 实现 `kevy_rt::Commands` | 多了三个方法，都有默认实现 | 6 |
 | 用结构体字面量构造 `kevy_config` 的结构体 | 写上新字段，或者用 `..Default::default()` | 7 |
 | 脚本里以裸词调用 `kevy-cli doctor`、`export`、`sql compile` 等 | 把工具写到 `--kevy` 后面 | 8 |
+| 把 kevy 的 crate 当 Rust 库用 | 大多数签名变了，编译器会逐处指出 | 10 |
+| 用 `XAUTOCLAIM` 的游标，或在 `XRANGE` 里写 `5-` 这样的 id | 行为改成和 Redis 一致 | 11 |
 | 想让一次索引读取只碰更少的 shard | 把它声明成全局索引 | [索引](indexes.md#全局索引partition-global) |
 
 ---
@@ -112,6 +114,43 @@ kevy-cli -p 6379 --kevy diff 127.0.0.1:6380 user:        # 第一个服务端就
 - 多于一个 shard 的嵌入式副本上的大多数键，它们被写进了读取不会去找的 shard。
 
 [changelog](https://github.com/goliajp/kevy/blob/develop/CHANGELOG.md) 里有每一项的完整说明。
+
+## 10. Rust API
+
+整个 workspace 的公开 Rust API 都按 [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/) 整理过，把 kevy 的 crate 当库用的代码不改就编译不过。改动遵循下面几条规则，编译器会指出每一处：
+
+- `bool` 参数换成按含义命名的枚举：`store.copy(a, b, true)` 写成 `store.copy(a, b, CopyMode::Replace)`；
+- 以后可能加字段或变体的结构体和枚举标了 `#[non_exhaustive]`：用 `Default` 或 `with_*` 构造，不再用结构体字面量；对它 `match` 要加 `_` 分支；
+- 有不变量的类型字段私有，改用同名方法读取；
+- 第一个参数是某个类型的自由函数，改成那个类型的方法；
+- 错误都是实现了 `std::error::Error` 的类型，不再是 `String`；原本会发到协议上的错误文本，用 `as_wire()` 或 `to_wire()` 取到的还是原来那句；
+- 变更流和复制里成对出现的 (generation, offset) 合成一个 `FeedPosition`。
+
+嵌入式存储最常见的改法：
+
+```rust
+// 6.4
+store.copy(b"src", b"dst", true)?;
+store.linsert(b"l", true, b"c", b"b")?;
+let (generation, offset) = store.changes_tail()?;
+let batch = store.changes_since(generation, offset, 100, &[])?;
+// 7.0
+store.copy(b"src", b"dst", CopyMode::Replace)?;
+store.linsert(b"l", InsertPosition::Before, b"c", b"b")?;
+let tail: FeedPosition = store.changes_tail()?;
+let batch = store.changes_since(tail, 100, &[])?;  // batch.next 是下一个位置
+```
+
+[rust-api-7.0.md](../rust-api-7.0.md) 按 crate 列出了每一处改动的旧写法和新写法（英文）。
+
+## 11. 变了的回复
+
+有四个回复变了。前两个改成和 Redis 一致，后两个去掉了原本就是错误的文本：
+
+- `XRANGE`、`XREVRANGE` 以及其他接受流 id 的命令，拒绝 `5-` 这种短横线后面什么都没有的 id，和 Redis 一样。6.4 把它当成 `5-<最大序号>`。
+- `XAUTOCLAIM` 的游标是下一个待处理条目的 id，列表扫完时是 `0-0`；6.4 返回的是最后扫到的 id 加一。一次调用最多看 `COUNT × 10` 个条目，和 Redis 一样，6.4 会扫完整个列表。一直调用到游标为 `0-0` 的循环在两个版本上都能用。
+- 嵌入式存储的 `table_declare`、`table_replace` 和 `table_verify_report` 拒绝时回复 `-ERR …`，不再是 `-ERR ERR …`。
+- `TABLE.DECLARE … WINDOW` 无法服务时的拒绝文本，中间多出的 17 个空格去掉了。
 
 ---
 

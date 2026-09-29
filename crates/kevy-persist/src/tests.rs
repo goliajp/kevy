@@ -4,11 +4,16 @@ use std::borrow::Cow;
 use std::time::Duration;
 
 pub(crate) fn temp_file(name: &str) -> std::path::PathBuf {
-    let mut p = std::env::temp_dir();
-    let uniq =
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    p.push(format!("kevy-{name}-{uniq}.rdb"));
-    p
+    unique_file(name, "rdb")
+}
+
+// named after a directory unique by construction across threads and
+// processes; the directory goes at once, so the caller's remove_file
+// still leaves nothing behind
+pub(crate) fn unique_file(name: &str, ext: &str) -> std::path::PathBuf {
+    let dir = kevy_tmpdir::unique_dir(name);
+    std::fs::remove_dir(&dir).unwrap();
+    std::path::PathBuf::from(format!("{}.{ext}", dir.display()))
 }
 
 #[test]

@@ -61,11 +61,7 @@ fn hot_reload_takes_effect_within_one_tick() {
         Arc::new(kevy::RuntimeState::new(Arc::new(cfg), std::path::PathBuf::new(), 1).unwrap());
 
     let port = free_port();
-    let dir = std::env::temp_dir().join(format!(
-        "kevy-slowlog-hot-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = kevy_tmpdir::unique_dir("slowlog-hot");
     let stop = Arc::new(AtomicBool::new(false));
     let stop_thread = stop.clone();
     let dir_thread = dir.clone();

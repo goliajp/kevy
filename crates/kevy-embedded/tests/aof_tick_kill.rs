@@ -37,9 +37,7 @@ fn victim(dir: &str, fsync: AppendFsync, wait: Duration) -> ! {
 /// Run `test` as the victim, SIGKILL it once it is ready, and return
 /// the victim's milliseconds from open to ready plus the surviving keys.
 fn kill_and_count(test: &str, fsync: AppendFsync) -> (u128, usize) {
-    let uniq =
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    let dir = std::env::temp_dir().join(format!("kevy-tick-kill-{test}-{uniq}"));
+    let dir = kevy_tmpdir::unique_dir(&format!("tick-kill-{test}"));
     let mut child = Command::new(std::env::current_exe().unwrap())
         .args(["--exact", test, "--nocapture"])
         .env(VICTIM_DIR, &dir)

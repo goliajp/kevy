@@ -84,10 +84,19 @@ mod enabled {
         /// Subtracted from the demote watermark: the
         /// premium fixed layer demotion can never reclaim.
         pub(crate) reserved_bytes: u64,
+        /// This shard's share of what the process holds live outside
+        /// `used_memory` and the index floor (buffers, rings, allocator
+        /// overhead), measured by the serving layer. Lowers the target
+        /// like the index floor does.
+        pub(crate) overhead_bytes: u64,
+        /// What the keyspace table's next growth will add, set aside while
+        /// the table is within an eighth of it.
+        pub(crate) growth_reserve: u64,
         /// RAM the cold stubs themselves cost (Σ per cold key of
-        /// `ENTRY_OVERHEAD + key heap bytes`) — the other unreclaimable
-        /// floor, maintained incrementally at demote / promote /
-        /// DEL-of-cold / RENAME / FLUSHALL.
+        /// `ENTRY_OVERHEAD + key heap bytes`), maintained incrementally
+        /// at demote / promote / DEL-of-cold / RENAME / FLUSHALL. A gauge:
+        /// the stubs are already inside `used_memory`, so the demote
+        /// target does not subtract it.
         pub(crate) stub_bytes: u64,
         /// Cold stubs RENAMEd away from their record's embedded key:
         /// `(file_id, offset) → current key`. Rename moves the stub
@@ -129,6 +138,8 @@ mod enabled {
                 cold_bytes: 0,
                 max_spill: 0,
                 reserved_bytes: 0,
+                overhead_bytes: 0,
+                growth_reserve: 0,
                 stub_bytes: 0,
                 renames: std::collections::HashMap::new(),
             });
@@ -168,15 +179,82 @@ mod enabled {
             }
         }
 
+        /// Feed this shard's share of the memory the process holds live
+        /// outside `used_memory` and the index floor — what a serving
+        /// layer measures from the allocator. It lowers the demote target,
+        /// so the budget bounds the process and not only what the store
+        /// accounts for. No-op when tiering is off.
+        ///
+        /// ```
+        /// use kevy_store::Store;
+        /// # let dir = std::env::temp_dir().join(format!("kevy-doc-overhead-{}", std::process::id()));
+        /// let mut s = Store::new();
+        /// s.enable_tiering(&dir, 1 << 20)?;
+        /// s.set_tier_overhead(1000);
+        /// assert_eq!(s.tier_stats().effective_target, (1 << 20) * 19 / 20 - 1000);
+        /// # std::fs::remove_dir_all(&dir)?;
+        /// # Ok::<(), Box<dyn std::error::Error>>(())
+        /// ```
+        #[inline]
+        pub fn set_tier_overhead(&mut self, bytes: u64) {
+            if let Some(t) = &mut self.tier {
+                t.overhead_bytes = bytes;
+            }
+        }
+
+        /// While the keyspace table is within an eighth of its next growth,
+        /// set aside the bytes that growth will add, so demotion makes room
+        /// before the bigger table lands instead of after it — by then the
+        /// process holds both. Called from the shard tick; no-op when
+        /// tiering is off.
+        ///
+        /// ```
+        /// use kevy_store::{SetCondition, Store};
+        /// # let dir = std::env::temp_dir().join(format!("kevy-doc-growth-{}", std::process::id()));
+        /// let mut s = Store::new();
+        /// s.enable_tiering(&dir, 1 << 30)?;
+        /// let full = s.tier_stats().effective_target;
+        /// // sixteen slots hold fourteen keys; the fourteenth leaves no room
+        /// for i in 0..14 {
+        ///     s.set(format!("k{i}").as_bytes(), b"v".to_vec(), None, SetCondition::Always);
+        /// }
+        /// s.tier_reserve_growth();
+        /// assert!(s.tier_stats().effective_target < full, "the next table is set aside");
+        /// s.set(b"k14", b"v".to_vec(), None, SetCondition::Always); // grows
+        /// s.tier_reserve_growth();
+        /// assert_eq!(s.tier_stats().effective_target, full, "and released once it is charged");
+        /// # std::fs::remove_dir_all(&dir)?;
+        /// # Ok::<(), Box<dyn std::error::Error>>(())
+        /// ```
+        pub fn tier_reserve_growth(&mut self) {
+            let Some(t) = &mut self.tier else { return };
+            let cap = self.map.capacity();
+            t.growth_reserve = if cap > 0 && self.map.room() <= cap / 8 {
+                (self.map.grown_footprint() as u64).saturating_sub(self.keyspace_bytes)
+            } else {
+                0
+            };
+        }
+
         /// Whether the index/view floor (`reserved_bytes + extra`)
         /// already exhausts the tier's demotable headroom — the
-        /// IDX.CREATE refusal predicate (RFC §4 row 16). `false` when
-        /// tiering is off.
+        /// IDX.CREATE refusal predicate. What demotion can never reclaim
+        /// is the index floor plus the part of `used_memory` that stays
+        /// when every value is cold: the keyspace table and the cold
+        /// keys' own bytes. `false` when tiering is off.
         pub fn tier_index_floor_blocked(&self, extra: u64) -> bool {
             match &self.tier {
                 Some(t) => {
-                    t.reserved_bytes.saturating_add(extra)
-                        >= crate::tier_demote::watermark(t.budget).saturating_sub(t.stub_bytes)
+                    let cold_key_heap = t
+                        .stub_bytes
+                        .saturating_sub(t.cold_keys.saturating_mul(crate::value::ENTRY_OVERHEAD));
+                    let fixed = self
+                        .keyspace_bytes
+                        .saturating_add(cold_key_heap)
+                        .saturating_add(t.overhead_bytes)
+                        .saturating_add(t.growth_reserve);
+                    t.reserved_bytes.saturating_add(extra).saturating_add(fixed)
+                        >= crate::tier_demote::watermark(t.budget)
                 }
                 None => false,
             }
@@ -367,6 +445,14 @@ mod disabled {
         /// No tier backend on this target — no-op.
         #[inline]
         pub fn set_tier_reserved(&mut self, _bytes: u64) {}
+
+        /// No tier backend on this target — no-op.
+        #[inline]
+        pub fn set_tier_overhead(&mut self, _bytes: u64) {}
+
+        /// No tier backend on this target — no-op.
+        #[inline]
+        pub fn tier_reserve_growth(&mut self) {}
 
         /// No tier backend on this target — always false.
         #[inline]
