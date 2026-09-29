@@ -298,6 +298,13 @@ impl Hasher for FxHasher {
 
 /// [`BuildHasher`](std::hash::BuildHasher) for [`FxHasher`]. Seedless, so equal
 /// keys hash equally across instances and process runs.
+///
+/// ```
+/// use std::hash::BuildHasher;
+/// use kevy_hash::FxBuildHasher;
+/// let (a, b) = (FxBuildHasher::default(), FxBuildHasher::default());
+/// assert_eq!(a.hash_one(b"key"), b.hash_one(b"key"), "no per-instance seed");
+/// ```
 pub type FxBuildHasher = BuildHasherDefault<FxHasher>;
 
 /// Single-call hashing for kevy's per-command hot path.
@@ -380,6 +387,14 @@ pub type FxBuildHasher = BuildHasherDefault<FxHasher>;
 /// ```
 pub trait KevyHash {
     /// Compute the final mixed 64-bit hash of `self` in one call.
+    ///
+    /// ```
+    /// use kevy_hash::KevyHash;
+    /// let a = b"user:1".as_slice().kevy_hash();
+    /// assert_eq!(a, b"user:1".to_vec().as_slice().kevy_hash(), "depends only on the bytes");
+    /// assert_ne!(a, b"user:2".as_slice().kevy_hash());
+    /// assert_ne!(1u64.kevy_hash(), 2u64.kevy_hash());
+    /// ```
     fn kevy_hash(&self) -> u64;
 }
 
@@ -442,10 +457,25 @@ impl KevyHash for usize {
 }
 
 /// A [`HashMap`] using [`FxHasher`] instead of SipHash.
+///
+/// ```
+/// use kevy_hash::FxHashMap;
+/// let mut m: FxHashMap<&str, u32> = FxHashMap::default();
+/// m.insert("a", 1);
+/// *m.entry("a").or_insert(0) += 1;
+/// assert_eq!(m["a"], 2);
+/// ```
 #[cfg(feature = "std")]
 pub type FxHashMap<K, V> = HashMap<K, V, FxBuildHasher>;
 
 /// A [`HashSet`] using [`FxHasher`] instead of SipHash.
+///
+/// ```
+/// use kevy_hash::FxHashSet;
+/// let s: FxHashSet<u64> = [1, 2, 2, 3].into_iter().collect();
+/// assert_eq!(s.len(), 3);
+/// assert!(s.contains(&2));
+/// ```
 #[cfg(feature = "std")]
 pub type FxHashSet<T> = HashSet<T, FxBuildHasher>;
 

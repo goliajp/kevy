@@ -17,6 +17,16 @@ use crate::map::KevyMap;
 /// `std::HashSet` only by hashing through [`KevyHash`] (one-call inlinable)
 /// and exposing the underlying `KevyMap`'s bucket-address API via
 /// [`KevySet::as_map`] for callers that want prefetch.
+///
+/// ```
+/// use kevy_map::KevySet;
+/// let mut s: KevySet<Vec<u8>> = KevySet::new();
+/// assert!(s.insert(b"a".to_vec()));
+/// assert!(!s.insert(b"a".to_vec()), "already a member");
+/// assert!(s.contains(b"a".as_slice()));
+/// assert!(s.remove(b"a".as_slice()));
+/// assert!(s.is_empty());
+/// ```
 #[derive(Clone)]
 pub struct KevySet<K>(KevyMap<K, ()>);
 
@@ -119,6 +129,13 @@ impl<K: fmt::Debug> fmt::Debug for KevySet<K> {
 }
 
 /// `&K` iterator over all members of a [`KevySet`]; order unspecified.
+///
+/// ```
+/// let s: kevy_map::KevySet<u64> = [2, 4].into_iter().collect();
+/// let mut v: Vec<u64> = s.iter().copied().collect();
+/// v.sort();
+/// assert_eq!(v, [2, 4]);
+/// ```
 #[derive(Debug)]
 pub struct SetIter<'a, K>(Iter<'a, K, ()>);
 

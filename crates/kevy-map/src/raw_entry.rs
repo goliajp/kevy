@@ -49,15 +49,55 @@ use crate::map::{DELETED, KevyMap, ProbeOutcome};
 /// [`RawOccupiedEntryMut::remove`] consumes `self`, which releases the
 /// outstanding borrow on the map and lets the caller perform the
 /// deletion within the same borrow scope.
+///
+/// ```
+/// use kevy_map::{KevyMap, RawEntryMut};
+/// let mut m: KevyMap<u64, u64> = KevyMap::new();
+/// m.insert(1, 0); // 0 marks an expired value
+/// // look up and drop the expired entry with one probe
+/// if let RawEntryMut::Occupied(e) = m.raw_entry_mut(&1) {
+///     if *e.get() == 0 {
+///         e.remove();
+///     }
+/// }
+/// assert!(m.is_empty());
+/// ```
 #[derive(Debug)]
 pub enum RawEntryMut<'a, K, V> {
     /// The key was present; gives read / mutate / consume access.
+    ///
+    /// ```
+    /// use kevy_map::{KevyMap, RawEntryMut};
+    /// let mut m: KevyMap<u64, u64> = KevyMap::new();
+    /// m.insert(7, 1);
+    /// let RawEntryMut::Occupied(mut e) = m.raw_entry_mut(&7) else { panic!() };
+    /// *e.get_mut() += 1;
+    /// assert_eq!(m.get(&7), Some(&2));
+    /// ```
     Occupied(RawOccupiedEntryMut<'a, K, V>),
     /// The key was absent; `insert(k, v)` writes a new entry.
+    ///
+    /// ```
+    /// use kevy_map::{KevyMap, RawEntryMut};
+    /// let mut m: KevyMap<u64, u64> = KevyMap::new();
+    /// let RawEntryMut::Vacant(e) = m.raw_entry_mut(&7) else { panic!() };
+    /// *e.insert(7, 1) += 1;
+    /// assert_eq!(m.get(&7), Some(&2));
+    /// ```
     Vacant(RawVacantEntryMut<'a, K, V>),
 }
 
 /// Handle to an existing entry, returned by [`RawEntryMut::Occupied`].
+///
+/// ```
+/// use kevy_map::{KevyMap, RawEntryMut};
+/// let mut m: KevyMap<u64, &str> = KevyMap::new();
+/// m.insert(1, "one");
+/// let RawEntryMut::Occupied(e) = m.raw_entry_mut(&1) else { panic!() };
+/// assert_eq!((*e.key(), *e.get()), (1, "one"));
+/// assert_eq!(e.remove(), "one");
+/// assert_eq!(m.get(&1), None);
+/// ```
 #[derive(Debug)]
 pub struct RawOccupiedEntryMut<'a, K, V> {
     map: &'a mut KevyMap<K, V>,
@@ -66,6 +106,14 @@ pub struct RawOccupiedEntryMut<'a, K, V> {
 }
 
 /// Handle to an absent entry, returned by [`RawEntryMut::Vacant`].
+///
+/// ```
+/// use kevy_map::{KevyMap, RawEntryMut};
+/// let mut m: KevyMap<Vec<u8>, u64> = KevyMap::new();
+/// let RawEntryMut::Vacant(e) = m.raw_entry_mut(b"k".as_slice()) else { panic!() };
+/// e.insert(b"k".to_vec(), 3);
+/// assert_eq!(m.get(b"k".as_slice()), Some(&3));
+/// ```
 #[derive(Debug)]
 pub struct RawVacantEntryMut<'a, K, V> {
     map: &'a mut KevyMap<K, V>,

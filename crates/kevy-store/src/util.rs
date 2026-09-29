@@ -114,6 +114,15 @@ pub(crate) fn parse_f64(b: &[u8]) -> Option<f64> {
 }
 
 /// Redis-style glob match (`*`, `?`, `[...]` classes with ranges/`^`, `\` escape).
+///
+/// ```
+/// use kevy_store::glob_match;
+/// assert!(glob_match(b"user:*", b"user:42"));
+/// assert!(glob_match(b"h?llo", b"hallo"));
+/// assert!(glob_match(b"h[^e]llo", b"hallo"));
+/// assert!(!glob_match(b"h[^e]llo", b"hello"));
+/// assert!(glob_match(b"a\\*", b"a*"), "an escaped star is literal");
+/// ```
 pub fn glob_match(pat: &[u8], s: &[u8]) -> bool {
     glob(pat, s)
 }

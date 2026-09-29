@@ -41,11 +41,33 @@ type ScratchSet<T> = alloc::collections::BTreeSet<T>;
 #[non_exhaustive]
 pub enum ZAggregate {
     /// Weighted sum of scores (the default).
+    ///
+    /// ```
+    /// use kevy_store::{ZAggregate, zunion};
+    /// let a = vec![(b"m".to_vec(), 1.0)];
+    /// let b = vec![(b"m".to_vec(), 2.0)];
+    /// assert_eq!(zunion(&[a, b], None, ZAggregate::Sum), [(b"m".to_vec(), 3.0)]);
+    /// ```
     #[default]
     Sum,
     /// Minimum weighted score.
+    ///
+    /// ```
+    /// use kevy_store::{ZAggregate, zinter};
+    /// let a = vec![(b"m".to_vec(), 1.0)];
+    /// let b = vec![(b"m".to_vec(), 5.0)];
+    /// assert_eq!(zinter(&[a, b], None, ZAggregate::Min), [(b"m".to_vec(), 1.0)]);
+    /// ```
     Min,
     /// Maximum weighted score.
+    ///
+    /// ```
+    /// use kevy_store::{ZAggregate, zinter};
+    /// let a = vec![(b"m".to_vec(), 1.0)];
+    /// let b = vec![(b"m".to_vec(), 2.0)];
+    /// // weights apply before aggregating: max(1 * 10, 2 * 1)
+    /// assert_eq!(zinter(&[a, b], Some(&[10.0, 1.0]), ZAggregate::Max), [(b"m".to_vec(), 10.0)]);
+    /// ```
     Max,
 }
 
@@ -78,6 +100,14 @@ fn weight_of(weights: Option<&[f64]>, i: usize) -> f64 {
 
 /// `ZUNIONSTORE` combination: every member of any input, scores
 /// aggregated across the inputs it appears in (weighted).
+///
+/// ```
+/// use kevy_store::{ZAggregate, zunion};
+/// let a = vec![(b"x".to_vec(), 1.0), (b"y".to_vec(), 2.0)];
+/// let b = vec![(b"y".to_vec(), 3.0)];
+/// let out = zunion(&[a, b], Some(&[1.0, 2.0]), ZAggregate::Sum);
+/// assert_eq!(out, [(b"x".to_vec(), 1.0), (b"y".to_vec(), 8.0)]);
+/// ```
 pub fn zunion(
     inputs: &[Vec<(Vec<u8>, f64)>],
     weights: Option<&[f64]>,
@@ -102,6 +132,13 @@ pub fn zunion(
 }
 
 /// `ZINTERSTORE` combination: members present in EVERY input.
+///
+/// ```
+/// use kevy_store::{ZAggregate, zinter};
+/// let a = vec![(b"x".to_vec(), 1.0), (b"y".to_vec(), 2.0)];
+/// let b = vec![(b"y".to_vec(), 3.0)];
+/// assert_eq!(zinter(&[a, b], None, ZAggregate::Sum), [(b"y".to_vec(), 5.0)]);
+/// ```
 pub fn zinter(
     inputs: &[Vec<(Vec<u8>, f64)>],
     weights: Option<&[f64]>,
@@ -131,6 +168,13 @@ pub fn zinter(
 /// `ZDIFFSTORE` combination: members of the first input absent from
 /// every other input; scores from the first input (no weights /
 /// aggregate — Redis 6.2 defines none for ZDIFF).
+///
+/// ```
+/// use kevy_store::zdiff;
+/// let a = vec![(b"x".to_vec(), 1.0), (b"y".to_vec(), 2.0)];
+/// let b = vec![(b"y".to_vec(), 9.0)];
+/// assert_eq!(zdiff(&[a, b]), [(b"x".to_vec(), 1.0)]);
+/// ```
 pub fn zdiff(inputs: &[Vec<(Vec<u8>, f64)>]) -> Vec<(Vec<u8>, f64)> {
     let Some((first, rest)) = inputs.split_first() else {
         return Vec::new();
@@ -142,6 +186,14 @@ pub fn zdiff(inputs: &[Vec<(Vec<u8>, f64)>]) -> Vec<(Vec<u8>, f64)> {
 
 /// `ZINTERCARD` (with optional `LIMIT`, 0 = unlimited): cardinality of
 /// the intersection, short-circuiting at the limit.
+///
+/// ```
+/// use kevy_store::zintercard;
+/// let a = vec![(b"x".to_vec(), 1.0), (b"y".to_vec(), 2.0), (b"z".to_vec(), 3.0)];
+/// let b = vec![(b"x".to_vec(), 0.0), (b"y".to_vec(), 0.0), (b"z".to_vec(), 0.0)];
+/// assert_eq!(zintercard(&[a.clone(), b.clone()], 0), 3);
+/// assert_eq!(zintercard(&[a, b], 2), 2); // stops at the limit
+/// ```
 pub fn zintercard(inputs: &[Vec<(Vec<u8>, f64)>], limit: usize) -> usize {
     let Some((first, rest)) = inputs.split_first() else {
         return 0;

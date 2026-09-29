@@ -15,6 +15,16 @@ use core::fmt;
 use std::io;
 
 /// Unified result alias over [`KevyError`].
+///
+/// ```
+/// use kevy_store::{KevyResult, Store};
+/// fn counter(s: &mut Store) -> KevyResult<i64> {
+///     Ok(s.incr_by(b"hits", 1)?)
+/// }
+/// let mut s = Store::new();
+/// assert_eq!(counter(&mut s)?, 1);
+/// # Ok::<(), kevy_store::KevyError>(())
+/// ```
 pub type KevyResult<T> = core::result::Result<T, KevyError>;
 
 /// The error type of the embeddable stack: `kevy_embedded::Store` and
@@ -36,26 +46,82 @@ pub type KevyResult<T> = core::result::Result<T, KevyError>;
 pub enum KevyError {
     /// Structured store-semantic error (wrong type, non-integer,
     /// overflow, out-of-memory, …).
+    ///
+    /// ```
+    /// use kevy_store::{KevyError, SetCondition, Store, StoreError};
+    /// let mut s = Store::new();
+    /// s.set(b"k", b"text".to_vec(), None, SetCondition::Always);
+    /// let e = KevyError::from(s.incr_by(b"k", 1).unwrap_err());
+    /// assert!(matches!(e, KevyError::Store(StoreError::NotInteger)));
+    /// ```
     Store(StoreError),
     /// Operating-system / transport failure (file, socket, AOF).
+    ///
+    /// ```
+    /// use kevy_store::KevyError;
+    /// let e: KevyError = std::fs::read("/nonexistent/kevy/file").unwrap_err().into();
+    /// let KevyError::Io(io) = &e else { panic!("expected Io") };
+    /// assert_eq!(io.kind(), std::io::ErrorKind::NotFound);
+    /// ```
     #[cfg(feature = "std")]
     Io(io::Error),
     /// RESP-level failure on a client link: a server error reply
     /// (`-ERR …` text preserved verbatim) or a malformed / unexpected
     /// reply shape.
+    ///
+    /// ```
+    /// use kevy_store::KevyError;
+    /// let e = KevyError::Protocol("ERR unknown command".into());
+    /// assert_eq!(e.to_string(), "protocol error: ERR unknown command");
+    /// ```
     Protocol(String),
     /// Write rejected: the target is a read-only replica.
+    ///
+    /// ```
+    /// use kevy_store::KevyError;
+    /// let io: std::io::Error = KevyError::ReadOnly.into();
+    /// assert_eq!(io.kind(), std::io::ErrorKind::PermissionDenied);
+    /// ```
     ReadOnly,
     /// Invalid argument to a typed API (bad flag combination, empty
     /// prefix, malformed URL, …). Rejected before touching any state.
+    ///
+    /// ```
+    /// use kevy_store::KevyError;
+    /// let e = KevyError::InvalidInput("empty prefix".into());
+    /// assert_eq!(e.to_string(), "invalid input: empty prefix");
+    /// ```
     InvalidInput(String),
     /// A named object (index, view, required key) doesn't exist.
+    ///
+    /// ```
+    /// use kevy_store::KevyError;
+    /// let io: std::io::Error = KevyError::NotFound("idx:users".into()).into();
+    /// assert_eq!(io.kind(), std::io::ErrorKind::NotFound);
+    /// ```
     NotFound(String),
     /// The operation isn't available on this backend or build.
+    ///
+    /// ```
+    /// use kevy_store::KevyError;
+    /// let e = KevyError::Unsupported("tiering on wasm".into());
+    /// assert_eq!(e.to_string(), "unsupported: tiering on wasm");
+    /// ```
     Unsupported(String),
     /// A bounded blocking call ran out its timeout.
+    ///
+    /// ```
+    /// use kevy_store::KevyError;
+    /// let io: std::io::Error = KevyError::TimedOut.into();
+    /// assert_eq!(io.kind(), std::io::ErrorKind::TimedOut);
+    /// ```
     TimedOut,
     /// The connection / in-process bus is gone (EOF).
+    ///
+    /// ```
+    /// use kevy_store::KevyError;
+    /// assert_eq!(KevyError::Closed.to_string(), "connection closed");
+    /// ```
     Closed,
 }
 

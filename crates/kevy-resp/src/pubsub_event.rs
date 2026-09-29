@@ -13,51 +13,238 @@ use crate::Reply;
 /// `Unsubscribe` / `Punsubscribe`'s `channel` / `pattern` is `None`
 /// when the server acknowledges "unsubscribed from everything" with a
 /// nil bulk — matching the Redis wire shape.
+///
+/// ```
+/// use kevy_resp::{PubsubEvent, parse_reply};
+///
+/// let (reply, _) = parse_reply(b"*3\r\n$7\r\nmessage\r\n$4\r\nnews\r\n$2\r\nhi\r\n")?
+///     .expect("complete frame");
+/// match PubsubEvent::try_from(reply)? {
+///     PubsubEvent::Message { channel, payload } => {
+///         assert_eq!((channel, payload), (b"news".to_vec(), b"hi".to_vec()));
+///     }
+///     other => panic!("unexpected {other:?}"),
+/// }
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PubsubEvent {
     /// `SUBSCRIBE` ack per channel.
+    ///
+    /// ```
+    /// use kevy_resp::{PubsubEvent, parse_reply};
+    /// let (reply, _) = parse_reply(b"*3\r\n$9\r\nsubscribe\r\n$4\r\nnews\r\n:1\r\n")?.expect("complete frame");
+    /// let event = PubsubEvent::try_from(reply)?;
+    /// assert_eq!(event, PubsubEvent::Subscribe { channel: b"news".to_vec(), count: 1 });
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     Subscribe {
         /// Channel that was just subscribed.
+        ///
+        /// ```
+        /// use kevy_resp::{PubsubEvent, parse_reply};
+        /// let (reply, _) = parse_reply(b"*3\r\n$9\r\nsubscribe\r\n$4\r\nnews\r\n:1\r\n")?.expect("complete frame");
+        /// let event = PubsubEvent::try_from(reply)?;
+        /// let PubsubEvent::Subscribe { channel, .. } = event else { panic!("not subscribe") };
+        /// assert_eq!(channel, b"news");
+        /// # Ok::<(), Box<dyn std::error::Error>>(())
+        /// ```
         channel: Vec<u8>,
         /// Total channels + patterns subscribed.
+        ///
+        /// ```
+        /// use kevy_resp::{PubsubEvent, parse_reply};
+        /// let (reply, _) = parse_reply(b"*3\r\n$9\r\nsubscribe\r\n$4\r\nnews\r\n:1\r\n")?.expect("complete frame");
+        /// let event = PubsubEvent::try_from(reply)?;
+        /// let PubsubEvent::Subscribe { count, .. } = event else { panic!("not subscribe") };
+        /// assert_eq!(count, 1);
+        /// # Ok::<(), Box<dyn std::error::Error>>(())
+        /// ```
         count: i64,
     },
     /// `PSUBSCRIBE` ack per pattern.
+    ///
+    /// ```
+    /// use kevy_resp::{PubsubEvent, parse_reply};
+    /// let (reply, _) = parse_reply(b"*3\r\n$10\r\npsubscribe\r\n$3\r\nn.*\r\n:2\r\n")?.expect("complete frame");
+    /// let event = PubsubEvent::try_from(reply)?;
+    /// assert_eq!(event, PubsubEvent::Psubscribe { pattern: b"n.*".to_vec(), count: 2 });
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     Psubscribe {
         /// Pattern that was just subscribed.
+        ///
+        /// ```
+        /// use kevy_resp::{PubsubEvent, parse_reply};
+        /// let (reply, _) = parse_reply(b"*3\r\n$10\r\npsubscribe\r\n$3\r\nn.*\r\n:2\r\n")?.expect("complete frame");
+        /// let event = PubsubEvent::try_from(reply)?;
+        /// let PubsubEvent::Psubscribe { pattern, .. } = event else { panic!("not psubscribe") };
+        /// assert_eq!(pattern, b"n.*");
+        /// # Ok::<(), Box<dyn std::error::Error>>(())
+        /// ```
         pattern: Vec<u8>,
         /// Total channels + patterns subscribed.
+        ///
+        /// ```
+        /// use kevy_resp::{PubsubEvent, parse_reply};
+        /// let (reply, _) = parse_reply(b"*3\r\n$10\r\npsubscribe\r\n$3\r\nn.*\r\n:2\r\n")?.expect("complete frame");
+        /// let event = PubsubEvent::try_from(reply)?;
+        /// // the connection now holds one channel and this pattern
+        /// let PubsubEvent::Psubscribe { count, .. } = event else { panic!("not psubscribe") };
+        /// assert_eq!(count, 2);
+        /// # Ok::<(), Box<dyn std::error::Error>>(())
+        /// ```
         count: i64,
     },
     /// `UNSUBSCRIBE` ack.
+    ///
+    /// ```
+    /// use kevy_resp::{PubsubEvent, parse_reply};
+    /// let (reply, _) = parse_reply(b"*3\r\n$11\r\nunsubscribe\r\n$4\r\nnews\r\n:0\r\n")?.expect("complete frame");
+    /// let event = PubsubEvent::try_from(reply)?;
+    /// assert_eq!(event, PubsubEvent::Unsubscribe { channel: Some(b"news".to_vec()), count: 0 });
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     Unsubscribe {
         /// Channel just unsubscribed (`None` for "all"/"none" nil bulk).
+        ///
+        /// ```
+        /// use kevy_resp::{PubsubEvent, parse_reply};
+        /// let (reply, _) = parse_reply(b"*3\r\n$11\r\nunsubscribe\r\n$-1\r\n:0\r\n")?.expect("complete frame");
+        /// let event = PubsubEvent::try_from(reply)?;
+        /// // "unsubscribed from everything" arrives as a nil bulk
+        /// let PubsubEvent::Unsubscribe { channel, .. } = event else { panic!("not unsubscribe") };
+        /// assert_eq!(channel, None);
+        /// # Ok::<(), Box<dyn std::error::Error>>(())
+        /// ```
         channel: Option<Vec<u8>>,
         /// Total channels + patterns still subscribed.
+        ///
+        /// ```
+        /// use kevy_resp::{PubsubEvent, parse_reply};
+        /// let (reply, _) = parse_reply(b"*3\r\n$11\r\nunsubscribe\r\n$4\r\nnews\r\n:0\r\n")?.expect("complete frame");
+        /// let event = PubsubEvent::try_from(reply)?;
+        /// let PubsubEvent::Unsubscribe { count, .. } = event else { panic!("not unsubscribe") };
+        /// assert_eq!(count, 0);
+        /// # Ok::<(), Box<dyn std::error::Error>>(())
+        /// ```
         count: i64,
     },
     /// `PUNSUBSCRIBE` ack.
+    ///
+    /// ```
+    /// use kevy_resp::{PubsubEvent, parse_reply};
+    /// let (reply, _) = parse_reply(b"*3\r\n$12\r\npunsubscribe\r\n$3\r\nn.*\r\n:1\r\n")?.expect("complete frame");
+    /// let event = PubsubEvent::try_from(reply)?;
+    /// assert_eq!(event, PubsubEvent::Punsubscribe { pattern: Some(b"n.*".to_vec()), count: 1 });
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     Punsubscribe {
         /// Pattern just unsubscribed (`None` for "all"/"none" nil bulk).
+        ///
+        /// ```
+        /// use kevy_resp::{PubsubEvent, parse_reply};
+        /// let (reply, _) = parse_reply(b"*3\r\n$12\r\npunsubscribe\r\n$-1\r\n:0\r\n")?.expect("complete frame");
+        /// let event = PubsubEvent::try_from(reply)?;
+        /// let PubsubEvent::Punsubscribe { pattern, .. } = event else { panic!("not punsubscribe") };
+        /// assert_eq!(pattern, None);
+        /// # Ok::<(), Box<dyn std::error::Error>>(())
+        /// ```
         pattern: Option<Vec<u8>>,
         /// Total channels + patterns still subscribed.
+        ///
+        /// ```
+        /// use kevy_resp::{PubsubEvent, parse_reply};
+        /// let (reply, _) = parse_reply(b"*3\r\n$12\r\npunsubscribe\r\n$3\r\nn.*\r\n:1\r\n")?.expect("complete frame");
+        /// let event = PubsubEvent::try_from(reply)?;
+        /// // one channel subscription is still active
+        /// let PubsubEvent::Punsubscribe { count, .. } = event else { panic!("not punsubscribe") };
+        /// assert_eq!(count, 1);
+        /// # Ok::<(), Box<dyn std::error::Error>>(())
+        /// ```
         count: i64,
     },
     /// Plain `PUBLISH` delivery on a subscribed channel.
+    ///
+    /// ```
+    /// use kevy_resp::{PubsubEvent, parse_reply};
+    /// // a RESP3 push frame
+    /// let (reply, _) = parse_reply(b">3\r\n$7\r\nmessage\r\n$4\r\nnews\r\n$2\r\nhi\r\n")?.expect("complete frame");
+    /// let event = PubsubEvent::try_from(reply)?;
+    /// assert_eq!(event, PubsubEvent::Message { channel: b"news".to_vec(), payload: b"hi".to_vec() });
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     Message {
         /// Channel the publish was made to.
+        ///
+        /// ```
+        /// use kevy_resp::{PubsubEvent, parse_reply};
+        /// let (reply, _) = parse_reply(b">3\r\n$7\r\nmessage\r\n$4\r\nnews\r\n$2\r\nhi\r\n")?.expect("complete frame");
+        /// let event = PubsubEvent::try_from(reply)?;
+        /// let PubsubEvent::Message { channel, .. } = event else { panic!("not message") };
+        /// assert_eq!(channel, b"news");
+        /// # Ok::<(), Box<dyn std::error::Error>>(())
+        /// ```
         channel: Vec<u8>,
         /// Raw payload bytes.
+        ///
+        /// ```
+        /// use kevy_resp::{PubsubEvent, parse_reply};
+        /// let (reply, _) = parse_reply(b">3\r\n$7\r\nmessage\r\n$4\r\nnews\r\n$2\r\nhi\r\n")?.expect("complete frame");
+        /// let event = PubsubEvent::try_from(reply)?;
+        /// assert_eq!(event.into_payload(), Some(b"hi".to_vec()));
+        /// # Ok::<(), Box<dyn std::error::Error>>(())
+        /// ```
         payload: Vec<u8>,
     },
     /// Pattern-match delivery.
+    ///
+    /// ```
+    /// use kevy_resp::{PubsubEvent, parse_reply};
+    /// let (reply, _) = parse_reply(b"*4\r\n$8\r\npmessage\r\n$3\r\nn.*\r\n$4\r\nnews\r\n$2\r\nhi\r\n")?.expect("complete frame");
+    /// let event = PubsubEvent::try_from(reply)?;
+    /// let expected = PubsubEvent::Pmessage {
+    ///     pattern: b"n.*".to_vec(),
+    ///     channel: b"news".to_vec(),
+    ///     payload: b"hi".to_vec(),
+    /// };
+    /// assert_eq!(event, expected);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     Pmessage {
         /// Pattern the channel matched.
+        ///
+        /// ```
+        /// use kevy_resp::{PubsubEvent, parse_reply};
+        /// let (reply, _) = parse_reply(b"*4\r\n$8\r\npmessage\r\n$3\r\nn.*\r\n$4\r\nnews\r\n$2\r\nhi\r\n")?.expect("complete frame");
+        /// let event = PubsubEvent::try_from(reply)?;
+        /// let PubsubEvent::Pmessage { pattern, .. } = event else { panic!("not pmessage") };
+        /// assert_eq!(pattern, b"n.*");
+        /// # Ok::<(), Box<dyn std::error::Error>>(())
+        /// ```
         pattern: Vec<u8>,
         /// Channel the publish was made to.
+        ///
+        /// ```
+        /// use kevy_resp::{PubsubEvent, parse_reply};
+        /// let (reply, _) = parse_reply(b"*4\r\n$8\r\npmessage\r\n$3\r\nn.*\r\n$4\r\nnews\r\n$2\r\nhi\r\n")?.expect("complete frame");
+        /// let event = PubsubEvent::try_from(reply)?;
+        /// let PubsubEvent::Pmessage { channel, .. } = event else { panic!("not pmessage") };
+        /// assert_eq!(channel, b"news");
+        /// # Ok::<(), Box<dyn std::error::Error>>(())
+        /// ```
         channel: Vec<u8>,
         /// Raw payload bytes.
+        ///
+        /// ```
+        /// use kevy_resp::{PubsubEvent, parse_reply};
+        /// let (reply, _) = parse_reply(b"*4\r\n$8\r\npmessage\r\n$3\r\nn.*\r\n$4\r\nnews\r\n$2\r\nhi\r\n")?.expect("complete frame");
+        /// let event = PubsubEvent::try_from(reply)?;
+        /// let PubsubEvent::Pmessage { payload, .. } = event else { panic!("not pmessage") };
+        /// assert_eq!(payload, b"hi");
+        /// # Ok::<(), Box<dyn std::error::Error>>(())
+        /// ```
         payload: Vec<u8>,
     },
 }
@@ -253,150 +440,5 @@ fn invalid(msg: impl Into<String>) -> io::Error {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Every missing field names its own verb and its own field.
-    ///
-    /// `PubsubEvent::try_from` is six near-identical arms, each repeating the
-    /// verb's name in two or three error strings. That shape has one
-    /// characteristic defect — an arm copied from the one above it and not
-    /// fully renamed — and the error text is the only place it would show.
-    /// A `psubscribe` frame reporting "subscribe: missing channel" sends the
-    /// reader to the wrong arm, and nothing else in the type system or the
-    /// tests would notice.
-    ///
-    /// Table-driven over every arm and every truncation point, which is also
-    /// what covers the eighteen never-executed regions the coverage atlas
-    /// reports here: they are all the refusal side of `it.next()`.
-    #[test]
-    fn every_missing_field_names_its_own_verb_and_field() {
-        // (verb, the fields it consumes in order)
-        let arms: &[(&str, &[&str])] = &[
-            ("subscribe", &["channel", "count"]),
-            ("psubscribe", &["pattern", "count"]),
-            ("unsubscribe", &["channel", "count"]),
-            ("punsubscribe", &["pattern", "count"]),
-            ("message", &["channel", "payload"]),
-            ("pmessage", &["pattern", "channel", "payload"]),
-        ];
-
-        let mut checked = 0;
-        for (verb, fields) in arms {
-            for (n, missing) in fields.iter().enumerate() {
-                // The verb, then every field before the missing one, then
-                // nothing — so `it.next()` returns `None` exactly there.
-                let mut items = vec![Reply::Bulk(verb.as_bytes().to_vec())];
-                items.extend((0..n).map(|_| Reply::Bulk(b"x".to_vec())));
-                let err = PubsubEvent::try_from(Reply::Array(items))
-                    .expect_err("{verb} with {n} fields must not classify")
-                    .to_string();
-                let want = format!("{verb}: missing {missing}");
-                assert!(
-                    err.contains(&want),
-                    "a {verb} frame missing its {missing} said {err:?}, not {want:?}"
-                );
-                checked += 1;
-            }
-        }
-        assert_eq!(checked, 13, "every arm and truncation point was exercised");
-    }
-
-    #[test]
-    fn classify_subscribe_ack() {
-        let r = Reply::Array(vec![
-            Reply::Bulk(b"subscribe".to_vec()),
-            Reply::Bulk(b"chan".to_vec()),
-            Reply::Int(1),
-        ]);
-        assert_eq!(
-            PubsubEvent::try_from(r).unwrap(),
-            PubsubEvent::Subscribe { channel: b"chan".to_vec(), count: 1 }
-        );
-    }
-
-    #[test]
-    fn classify_message_event() {
-        let r = Reply::Array(vec![
-            Reply::Bulk(b"message".to_vec()),
-            Reply::Bulk(b"news".to_vec()),
-            Reply::Bulk(b"hello".to_vec()),
-        ]);
-        assert_eq!(
-            PubsubEvent::try_from(r).unwrap(),
-            PubsubEvent::Message { channel: b"news".to_vec(), payload: b"hello".to_vec() }
-        );
-    }
-
-    #[test]
-    fn classify_pmessage_event() {
-        let r = Reply::Array(vec![
-            Reply::Bulk(b"pmessage".to_vec()),
-            Reply::Bulk(b"news.*".to_vec()),
-            Reply::Bulk(b"news.tech".to_vec()),
-            Reply::Bulk(b"hi".to_vec()),
-        ]);
-        assert_eq!(
-            PubsubEvent::try_from(r).unwrap(),
-            PubsubEvent::Pmessage {
-                pattern: b"news.*".to_vec(),
-                channel: b"news.tech".to_vec(),
-                payload: b"hi".to_vec(),
-            }
-        );
-    }
-
-    #[test]
-    fn classify_unsubscribe_with_nil_channel() {
-        let r = Reply::Array(vec![Reply::Bulk(b"unsubscribe".to_vec()), Reply::Nil, Reply::Int(0)]);
-        assert_eq!(
-            PubsubEvent::try_from(r).unwrap(),
-            PubsubEvent::Unsubscribe { channel: None, count: 0 }
-        );
-    }
-
-    #[test]
-    fn classify_accepts_push_frame() {
-        // RESP3 servers wrap the same shape in a `>N` push frame.
-        let r = Reply::Push(vec![
-            Reply::Bulk(b"message".to_vec()),
-            Reply::Bulk(b"c".to_vec()),
-            Reply::Bulk(b"p".to_vec()),
-        ]);
-        assert_eq!(
-            PubsubEvent::try_from(r).unwrap(),
-            PubsubEvent::Message { channel: b"c".to_vec(), payload: b"p".to_vec() }
-        );
-    }
-
-    #[test]
-    fn classify_accepts_simple_string_fields() {
-        // `take_bulk` accepts `Simple` as well as `Bulk` — a server may
-        // send the kind/channel as simple strings.
-        let r = Reply::Array(vec![
-            Reply::Simple(b"subscribe".to_vec()),
-            Reply::Simple(b"chan".to_vec()),
-            Reply::Int(2),
-        ]);
-        assert_eq!(
-            PubsubEvent::try_from(r).unwrap(),
-            PubsubEvent::Subscribe { channel: b"chan".to_vec(), count: 2 }
-        );
-    }
-
-    #[test]
-    fn classify_rejects_unknown_kind() {
-        let r = Reply::Array(vec![
-            Reply::Bulk(b"bogus".to_vec()),
-            Reply::Bulk(b"x".to_vec()),
-            Reply::Int(0),
-        ]);
-        assert!(PubsubEvent::try_from(r).is_err());
-    }
-
-    #[test]
-    fn classify_rejects_wrong_arity() {
-        let r = Reply::Array(vec![Reply::Bulk(b"subscribe".to_vec()), Reply::Bulk(b"x".to_vec())]);
-        assert!(PubsubEvent::try_from(r).is_err());
-    }
-}
+#[path = "pubsub_event_tests.rs"]
+mod tests;

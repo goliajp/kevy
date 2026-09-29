@@ -64,6 +64,22 @@ impl SegRows {
 /// One sealed eviction batch: the segment's identity and EXACTLY the
 /// keys it holds (the commit's phase-change list). Only the store makes
 /// one, so a commit always names a batch that was really sealed.
+///
+/// ```
+/// use kevy_store::Store;
+/// # let dir = std::env::temp_dir().join(format!("kevy-doc-sealed-{}", std::process::id()));
+/// # let _ = std::fs::remove_dir_all(&dir);
+/// let mut s = Store::new();
+/// s.enable_seg_rows(&dir)?;
+/// s.hset(b"user:1", &[(b"name".as_slice(), b"ada".as_slice())])?;
+/// let sealed = s.seal_rows_to_seg(b"user", &[b"user:1".to_vec()])?.expect("one row sealed");
+/// assert_eq!((sealed.seq(), sealed.file()), (0, "row-75736572-0.seg"));
+/// // after the frame naming `sealed.file()` is logged, the row goes cold
+/// assert_eq!(s.commit_row_eviction(&sealed), 1);
+/// assert_eq!(s.hget(b"user:1", b"name")?, Some(&b"ada"[..]));
+/// # std::fs::remove_dir_all(&dir)?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Debug)]
 pub struct SealedRows {
     seq: u32,
