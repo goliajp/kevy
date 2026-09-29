@@ -213,74 +213,16 @@ impl Store {
 // the padding rules, the 0xff tail of NOT among them. Two
 // implementations of one operator are how two surfaces drift.
 
-/// Combine the source strings under `op` into the `max_len`-byte
-/// destination value (shorter sources zero-padded).
-///
-/// Two rules are easy to get wrong and both are here. A source shorter
-/// than the result reads as zero past its end — so an AND with a short
-/// source clears the tail, and an OR leaves it alone. And NOT does not
-/// stop at its source: Redis inverts the implicit zeros too, so every
-/// byte past the source is `0xff`.
-///
-/// ```
-/// use kevy_store::{BitOp, bitop_combine};
-///
-/// let long = b"\xff\xff".to_vec();
-/// let short = b"\x0f".to_vec();
-/// // AND: the second byte meets an implicit zero.
-/// assert_eq!(bitop_combine(BitOp::And, &[long.clone(), short.clone()], 2), vec![0x0f, 0x00]);
-/// // OR: the implicit zero changes nothing.
-/// assert_eq!(bitop_combine(BitOp::Or, &[long.clone(), short], 2), vec![0xff, 0xff]);
-/// // NOT over a two-byte result from a one-byte source: the tail is 0xff.
-/// assert_eq!(bitop_combine(BitOp::Not, &[vec![0x00]], 2), vec![0xff, 0xff]);
-/// ```
-pub fn bitop_combine(op: BitOp, srcs_bytes: &[Vec<u8>], max_len: usize) -> Vec<u8> {
-    let mut out = vec![0u8; max_len];
-    match op {
-        BitOp::Not => {
-            let s = &srcs_bytes[0];
-            for (i, b) in s.iter().enumerate() {
-                out[i] = !b;
-            }
-            // bytes past s.len() stay 0 — Redis sets them to 0xff
-            // (NOT of implicit zero). Match Redis:
-            for byte in out.iter_mut().skip(s.len()) {
-                *byte = 0xff;
-            }
-        }
-        // AND, OR, XOR. NOT returned above, so the catch-alls below are
-        // XOR — written as `_` rather than `Not => unreachable!()`,
-        // which was four arms that can never run and four regions that
-        // can never be covered.
-        _ => {
-            let init = if op == BitOp::And { 0xff } else { 0x00 };
-            for byte in out.iter_mut() {
-                *byte = init;
-            }
-            for s in srcs_bytes {
-                for (i, b) in out.iter_mut().enumerate() {
-                    let sb = s.get(i).copied().unwrap_or(0);
-                    *b = match op {
-                        BitOp::And => *b & sb,
-                        BitOp::Or => *b | sb,
-                        _ => *b ^ sb,
-                    };
-                }
-            }
-        }
-    }
-    out
-}
-
 /// Operator for the BITOP family.
 ///
 /// ```
-/// use kevy_store::{BitOp, bitop_combine};
+/// use kevy_store::BitOp;
 /// // NOT takes exactly one source; the callers enforce that, and this
 /// // is what it computes.
-/// assert_eq!(bitop_combine(BitOp::Not, &[vec![0b1010_1010]], 1), vec![0b0101_0101]);
+/// assert_eq!(BitOp::Not.combine(&[vec![0b1010_1010]], 1), vec![0b0101_0101]);
 /// ```
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum BitOp {
     /// Bitwise AND across source keys.
     And,
@@ -290,4 +232,66 @@ pub enum BitOp {
     Xor,
     /// Bitwise NOT — exactly one source key.
     Not,
+}
+
+impl BitOp {
+    /// Combine the source strings under this operator into the `max_len`-byte
+    /// destination value (shorter sources zero-padded).
+    ///
+    /// Two rules are easy to get wrong and both are here. A source shorter
+    /// than the result reads as zero past its end — so an AND with a short
+    /// source clears the tail, and an OR leaves it alone. And NOT does not
+    /// stop at its source: Redis inverts the implicit zeros too, so every
+    /// byte past the source is `0xff`.
+    ///
+    /// ```
+    /// use kevy_store::BitOp;
+    ///
+    /// let long = b"\xff\xff".to_vec();
+    /// let short = b"\x0f".to_vec();
+    /// // AND: the second byte meets an implicit zero.
+    /// assert_eq!(BitOp::And.combine(&[long.clone(), short.clone()], 2), vec![0x0f, 0x00]);
+    /// // OR: the implicit zero changes nothing.
+    /// assert_eq!(BitOp::Or.combine(&[long.clone(), short], 2), vec![0xff, 0xff]);
+    /// // NOT over a two-byte result from a one-byte source: the tail is 0xff.
+    /// assert_eq!(BitOp::Not.combine(&[vec![0x00]], 2), vec![0xff, 0xff]);
+    /// ```
+    #[must_use]
+    pub fn combine(self, srcs_bytes: &[Vec<u8>], max_len: usize) -> Vec<u8> {
+        let mut out = vec![0u8; max_len];
+        match self {
+            BitOp::Not => {
+                let s = &srcs_bytes[0];
+                for (i, b) in s.iter().enumerate() {
+                    out[i] = !b;
+                }
+                // bytes past s.len() stay 0 — Redis sets them to 0xff
+                // (NOT of implicit zero). Match Redis:
+                for byte in out.iter_mut().skip(s.len()) {
+                    *byte = 0xff;
+                }
+            }
+            // AND, OR, XOR. NOT returned above, so the catch-alls below are
+            // XOR — written as `_` rather than `Not => unreachable!()`,
+            // which was four arms that can never run and four regions that
+            // can never be covered.
+            _ => {
+                let init = if self == BitOp::And { 0xff } else { 0x00 };
+                for byte in out.iter_mut() {
+                    *byte = init;
+                }
+                for s in srcs_bytes {
+                    for (i, b) in out.iter_mut().enumerate() {
+                        let sb = s.get(i).copied().unwrap_or(0);
+                        *b = match self {
+                            BitOp::And => *b & sb,
+                            BitOp::Or => *b | sb,
+                            _ => *b ^ sb,
+                        };
+                    }
+                }
+            }
+        }
+        out
+    }
 }

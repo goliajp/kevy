@@ -362,26 +362,11 @@ fn drain_commands_handles_quit_and_protocol_error() {
 
 #[test]
 fn config_enum_mapping_round_trips() {
-    // Cover map_eviction_policy + map_appendfsync — pure data maps. If a
-    // policy lands in one enum but the other forgets the case, this fails.
+    // Cover map_appendfsync — a pure data map. If a policy lands in one
+    // enum but the other forgets the case, this fails. The eviction policy
+    // needs no map: the config and the store share one type.
     use kevy_config::AppendFsync as CA;
-    use kevy_config::EvictionPolicy as CE;
     use kevy_persist::Fsync as P;
-    use kevy_store::EvictionPolicy as S;
-
-    let evict_cases = [
-        (CE::NoEviction, S::NoEviction),
-        (CE::AllKeysLru, S::AllKeysLru),
-        (CE::AllKeysLfu, S::AllKeysLfu),
-        (CE::AllKeysRandom, S::AllKeysRandom),
-        (CE::VolatileLru, S::VolatileLru),
-        (CE::VolatileLfu, S::VolatileLfu),
-        (CE::VolatileRandom, S::VolatileRandom),
-        (CE::VolatileTtl, S::VolatileTtl),
-    ];
-    for (src, dst) in evict_cases {
-        assert_eq!(map_eviction_policy(src), dst);
-    }
 
     let fsync_cases = [(CA::Always, P::Always), (CA::EverySec, P::EverySec), (CA::No, P::No)];
     for (src, dst) in fsync_cases {

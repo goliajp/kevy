@@ -48,12 +48,12 @@ pub(crate) fn read_frames<A: ArgvView + ?Sized>(
         let mut moved = None;
         if &args[shape.keys + shape.streams + k] == b">"
             && let Some(g) = store.stream_group_peek(key, group)
-            && g.last_delivered_id != *prev
+            && g.last_delivered_id() != *prev
         {
-            let last = g.last_delivered_id;
+            let last = g.last_delivered_id();
             if !shape.noack {
                 let span = (Bound::Excluded(*prev), Bound::Included(last));
-                let ids: Vec<StreamId> = g.pel.range(span).map(|(id, _)| *id).collect();
+                let ids: Vec<StreamId> = g.pending_range(span).map(|(id, _)| id).collect();
                 claims = taken_frames(store, key, group, consumer, &ids);
             }
             let mut setid = Argv::with_capacity(5, 0);

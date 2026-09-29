@@ -15,7 +15,7 @@
 
 use crate::ast::CreateView;
 use crate::schema::{OrderPath, Table};
-use crate::{CardParam, KevyType, QueryCard, SqlError};
+use crate::{CardParam, QueryCard, SqlError, ValType};
 
 use crate::viewplan_norm::{BV, ColPred, Shape, normalize};
 use crate::viewplan_view::{try_engine_view, view_read_note};
@@ -178,7 +178,7 @@ impl CardB {
         self
     }
 
-    fn bind(&mut self, v: &CreateView, bv: &BV, col: &str, ty: KevyType) -> Result<(), SqlError> {
+    fn bind(&mut self, v: &CreateView, bv: &BV, col: &str, ty: ValType) -> Result<(), SqlError> {
         match bv {
             BV::Lit(x) => self.argv.push(x.clone()),
             BV::Param(n) => {

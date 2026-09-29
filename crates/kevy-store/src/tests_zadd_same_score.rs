@@ -59,7 +59,7 @@ fn the_encoding_ladder() {
     }
     assert_eq!(encoding(&st, b"k"), "seg", "past Z_PROMOTE");
 
-    st.set(b"s", alloc::vec![b'x'; 4], None, false, false);
+    st.set(b"s", alloc::vec![b'x'; 4], None, crate::SetCondition::Always);
     assert_eq!(encoding(&st, b"s"), "not-a-zset");
 }
 

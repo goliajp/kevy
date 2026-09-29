@@ -56,7 +56,14 @@ mod viewplan_view;
 /// Every refusal is *named* and teaches the kevy-shaped alternative —
 /// e.g. `JOIN is not compilable — kevy refuses query-time joins
 /// (Law 3); model the lookup with an indexed FK column …`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// ```
+/// let e = kevy_sql::compile("CREATE TABLE t (id bigint PRIMARY KEY, x money);").unwrap_err();
+/// assert_eq!((e.line, e.col), (1, 40));
+/// assert!(e.to_string().starts_with("line 1, col 40: "));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct SqlError {
     /// 1-based source line.
     pub line: u32,
@@ -80,48 +87,25 @@ impl std::fmt::Display for SqlError {
 
 impl std::error::Error for SqlError {}
 
-/// A kevy column type — the deliberately coarse target of the SQL type
-/// mapping (kevy columns are `i64 | f64 | str`; timestamps and the like
-/// are app-encoded strings).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KevyType {
-    /// 64-bit signed integer (`int`/`integer`/`bigint`/`serial`/`bigserial`).
-    I64,
-    /// 64-bit float (`real`/`float`/`double precision`/`numeric`/`decimal`).
-    F64,
-    /// Byte string (`text`/`varchar`/`char`/`uuid`/`timestamp`/`timestamptz`/
-    /// `date`/`bool`/`boolean`/`json`/`jsonb`).
-    Str,
-}
-
-impl KevyType {
-    /// The wire tag (`i64` / `f64` / `str`) as it appears in
-    /// `TABLE.DECLARE … COLUMN <name> <tag>`.
-    pub fn tag(self) -> &'static str {
-        match self {
-            KevyType::I64 => "i64",
-            KevyType::F64 => "f64",
-            KevyType::Str => "str",
-        }
-    }
-}
-
 /// One `$N` parameter slot of a [`QueryCard`], with the column it binds
 /// and that column's declared type.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct CardParam {
     /// The 1-based parameter number (`$1` → 1).
     pub n: u32,
     /// The declared column the slot binds.
     pub column: String,
-    /// The column's declared kevy type.
-    pub ty: KevyType,
+    /// The column's declared kevy type (`i64`, `f64` or `str`: the SQL
+    /// type mapping never yields another).
+    pub ty: ValType,
 }
 
 /// A compiled runtime template: the exact `IDX.QUERY …` argv with `$N`
 /// slots left in place. The application substitutes real values for the
 /// slots and sends the argv as-is — there is no runtime SQL.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct QueryCard {
     /// The view name the card compiles.
     pub name: String,
@@ -133,7 +117,8 @@ pub struct QueryCard {
 }
 
 /// The result of [`compile`]: engine commands, query cards, and notes.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct Compilation {
     /// Declaration commands in apply order: one `TABLE.DECLARE` per
     /// table (declaration order), then the `VIEW.CREATE`s. Each is an
@@ -158,6 +143,7 @@ impl Compilation {
 }
 
 pub use fold::{Folded, fold_select};
+pub use kevy_index::ValType;
 pub use kevy_scalar::Scalar;
 pub use plan::{Plan, PlanEntry, Served, plan};
 pub use run::{select_card, table_ddl};
@@ -193,3 +179,15 @@ pub fn compile(sql: &str) -> Result<Compilation, SqlError> {
     }
     Ok(Compilation { commands, query_cards, notes })
 }
+
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<SqlError>();
+    send_sync::<CardParam>();
+    send_sync::<QueryCard>();
+    send_sync::<Compilation>();
+    send_sync::<Folded>();
+    send_sync::<Plan>();
+    send_sync::<PlanEntry>();
+    send_sync::<Served>();
+};

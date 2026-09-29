@@ -19,6 +19,36 @@ use crate::argv_borrowed::ArgvBorrowed;
 /// Implemented by both [`Argv`] (owned) and [`ArgvBorrowed`] (zero-copy). The
 /// command runtime takes argvs as `&impl ArgvView`, so the local fast path
 /// can hand a borrowed argv straight to dispatch with no memcpy.
+///
+/// Open for implementation: a transport or a log reader that already
+/// holds a command's arguments in its own layout implements it to reach
+/// the command runtime without copying them into an [`Argv`]. An
+/// implementation must keep the three views of one argument vector in
+/// agreement: `get(i)` is `Some` exactly for `i < len()`, and `self[i]`
+/// returns the same bytes as `get(i)` (panicking past the end, as slice
+/// indexing does). The provided methods rely on nothing else.
+///
+/// ```
+/// use kevy_resp::ArgvView;
+/// struct Pair<'a>(&'a [u8], &'a [u8]);
+/// impl std::ops::Index<usize> for Pair<'_> {
+///     type Output = [u8];
+///     fn index(&self, i: usize) -> &[u8] {
+///         self.get(i).expect("argument index in range")
+///     }
+/// }
+/// impl ArgvView for Pair<'_> {
+///     fn len(&self) -> usize {
+///         2
+///     }
+///     fn get(&self, i: usize) -> Option<&[u8]> {
+///         [self.0, self.1].get(i).copied()
+///     }
+/// }
+/// let p = Pair(b"GET", b"k");
+/// assert_eq!(p.first(), Some(&b"GET"[..]));
+/// assert_eq!(p.to_argv().len(), 2);
+/// ```
 pub trait ArgvView: core::ops::Index<usize, Output = [u8]> {
     /// Number of arguments.
     fn len(&self) -> usize;
@@ -75,7 +105,7 @@ pub trait ArgvView: core::ops::Index<usize, Output = [u8]> {
 /// Returned by [`ArgvView::iter`]. Concrete (rather than `impl Iterator`) so
 /// the method works for both `Argv` and `ArgvBorrowed` callers.
 #[derive(Debug)]
-pub struct ArgvIter<'a, V: ?Sized + ArgvView> {
+pub struct ArgvIter<'a, V: ?Sized> {
     view: &'a V,
     i: usize,
 }

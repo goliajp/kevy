@@ -44,59 +44,9 @@ impl AppendFsync {
     }
 }
 
-/// Maxmemory eviction policy. 8 variants matching Redis. `NoEviction`
-/// (default) returns an error on writes once `maxmemory` is hit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[non_exhaustive]
-pub enum EvictionPolicy {
-    /// Refuse writes once `maxmemory` is hit. Default.
-    #[default]
-    NoEviction,
-    /// Approximated LRU across all keys.
-    AllKeysLru,
-    /// Approximated LFU across all keys.
-    AllKeysLfu,
-    /// Random key across all keys.
-    AllKeysRandom,
-    /// Approximated LRU across keys with a TTL.
-    VolatileLru,
-    /// Approximated LFU across keys with a TTL.
-    VolatileLfu,
-    /// Random key from those with a TTL.
-    VolatileRandom,
-    /// Key with the shortest remaining TTL.
-    VolatileTtl,
-}
-
-impl EvictionPolicy {
-    /// Canonical Redis-compatible name.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::NoEviction => "noeviction",
-            Self::AllKeysLru => "allkeys-lru",
-            Self::AllKeysLfu => "allkeys-lfu",
-            Self::AllKeysRandom => "allkeys-random",
-            Self::VolatileLru => "volatile-lru",
-            Self::VolatileLfu => "volatile-lfu",
-            Self::VolatileRandom => "volatile-random",
-            Self::VolatileTtl => "volatile-ttl",
-        }
-    }
-    /// Inverse of [`Self::as_str`] — case-insensitive.
-    pub fn parse(s: &str) -> Option<Self> {
-        match s.to_ascii_lowercase().as_str() {
-            "noeviction" => Some(Self::NoEviction),
-            "allkeys-lru" => Some(Self::AllKeysLru),
-            "allkeys-lfu" => Some(Self::AllKeysLfu),
-            "allkeys-random" => Some(Self::AllKeysRandom),
-            "volatile-lru" => Some(Self::VolatileLru),
-            "volatile-lfu" => Some(Self::VolatileLfu),
-            "volatile-random" => Some(Self::VolatileRandom),
-            "volatile-ttl" => Some(Self::VolatileTtl),
-            _ => None,
-        }
-    }
-}
+/// Maxmemory eviction policy: the store's own type, which enforces it, so
+/// the parsed config and the keyspace cannot disagree on a policy.
+pub use kevy_store::EvictionPolicy;
 
 /// Log verbosity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]

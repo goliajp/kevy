@@ -16,7 +16,7 @@ use crate::{Store, StoreError};
 /// s.hset(b"h", &[(b"f".as_slice(), b"v".as_slice())]).unwrap();
 ///
 /// // Both halves are owned, so the pairs outlive the borrow of the store.
-/// let pairs: FieldValuePairs = s.hrandfield(b"h", 1, true).unwrap();
+/// let pairs: FieldValuePairs = s.hrandfield_with_values(b"h", 1).unwrap();
 /// assert_eq!(pairs, vec![(b"f".to_vec(), b"v".to_vec())]);
 /// ```
 pub type FieldValuePairs = Vec<(Vec<u8>, Vec<u8>)>;
@@ -156,21 +156,36 @@ impl Store {
     ///                (b"f2".as_slice(), b"v2".as_slice())]).unwrap();
     ///
     /// // A positive count is distinct, and capped at what the hash holds.
-    /// assert_eq!(s.hrandfield(b"h", 9, false).unwrap().len(), 2);
+    /// assert_eq!(s.hrandfield(b"h", 9).unwrap().len(), 2);
     ///
     /// // A negative count returns exactly |count|, repeats allowed — the
     /// // distinction Redis draws between a subset and a sample.
-    /// assert_eq!(s.hrandfield(b"h", -5, false).unwrap().len(), 5);
-    ///
-    /// // `with_values` fills the second half of each pair; without it the
-    /// // value is empty and only the field name means anything.
-    /// let pairs = s.hrandfield(b"h", 2, true).unwrap();
-    /// assert!(pairs.iter().all(|(f, v)| !f.is_empty() && !v.is_empty()));
+    /// assert_eq!(s.hrandfield(b"h", -5).unwrap().len(), 5);
     ///
     /// // A missing key is empty, not an error.
-    /// assert!(s.hrandfield(b"absent", 3, false).unwrap().is_empty());
+    /// assert!(s.hrandfield(b"absent", 3).unwrap().is_empty());
     /// ```
-    pub fn hrandfield(
+    pub fn hrandfield(&mut self, key: &[u8], count: i64) -> Result<Vec<Vec<u8>>, StoreError> {
+        Ok(self.rand_pairs(key, count, false)?.into_iter().map(|(f, _)| f).collect())
+    }
+
+    /// `HRANDFIELD key count WITHVALUES`: [`Self::hrandfield`]'s draw with
+    /// each field's value beside it.
+    ///
+    /// ```
+    /// let mut s = kevy_store::Store::new();
+    /// s.hset(b"h", &[(b"f1".as_slice(), b"v1".as_slice())]).unwrap();
+    /// assert_eq!(s.hrandfield_with_values(b"h", 1).unwrap(), [(b"f1".to_vec(), b"v1".to_vec())]);
+    /// ```
+    pub fn hrandfield_with_values(
+        &mut self,
+        key: &[u8],
+        count: i64,
+    ) -> Result<FieldValuePairs, StoreError> {
+        self.rand_pairs(key, count, true)
+    }
+
+    fn rand_pairs(
         &mut self,
         key: &[u8],
         count: i64,

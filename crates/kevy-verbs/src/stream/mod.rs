@@ -25,8 +25,8 @@ use kevy_resp::{
     ArgvView, encode_array_len, encode_bulk, encode_error, encode_integer, encode_null_bulk,
 };
 use kevy_store::{
-    EntryBatch, Store, StreamId, XAddIdSpec, now_unix_ms, parse_explicit_id, parse_range_end,
-    parse_range_start, parse_xadd_id,
+    EntryBatch, MissingStream, Store, StreamId, XAddIdSpec, now_unix_ms, parse_explicit_id,
+    parse_range_end, parse_range_start, parse_xadd_id,
 };
 
 /// One stream's reply payload — the wire shape `XREAD` emits per
@@ -92,8 +92,7 @@ fn cmd_xadd<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>
         }
     };
     let generated = !matches!(parsed.id, XAddIdSpec::Explicit(_));
-    let id = match store.xadd(&args[1], parsed.id, parsed.fields, parsed.nomkstream, now_unix_ms())
-    {
+    let id = match store.xadd(&args[1], parsed.id, parsed.fields, parsed.missing, now_unix_ms()) {
         Ok(Some(id)) => id,
         Ok(None) => {
             encode_null_bulk(out); // NOMKSTREAM + missing key
@@ -122,7 +121,7 @@ fn xadd_err(out: &mut Vec<u8>, e: kevy_store::StoreError) {
 }
 
 struct XAddParsed {
-    nomkstream: bool,
+    missing: MissingStream,
     /// Where the ID argument sits.
     id_at: usize,
     trim: Option<TrimSpec>,
@@ -137,13 +136,13 @@ enum TrimSpec {
 
 fn parse_xadd_argv<A: ArgvView + ?Sized>(args: &A) -> Result<XAddParsed, CmdError> {
     let mut i = 2;
-    let mut nomkstream = false;
+    let mut missing = MissingStream::Create;
     let mut trim: Option<TrimSpec> = None;
     while i < args.len() {
         let tok = args[i].to_ascii_uppercase();
         match tok.as_slice() {
             b"NOMKSTREAM" => {
-                nomkstream = true;
+                missing = MissingStream::Refuse;
                 i += 1;
             }
             b"MAXLEN" => {
@@ -175,7 +174,7 @@ fn parse_xadd_argv<A: ArgvView + ?Sized>(args: &A) -> Result<XAddParsed, CmdErro
         fields.push((args[i].to_vec(), args[i + 1].to_vec()));
         i += 2;
     }
-    Ok(XAddParsed { nomkstream, id_at, trim, id, fields })
+    Ok(XAddParsed { missing, id_at, trim, id, fields })
 }
 
 /// Skip the optional `=` / `~` modifier and parse the trim threshold.
@@ -204,7 +203,7 @@ fn parse_trim_arg<A: ArgvView + ?Sized>(
             .ok_or("ERR value is not an integer or out of range")?;
         Ok((TrimSpec::MaxLen(n), used))
     } else {
-        let id = parse_explicit_id(val, /*end=*/ false)
+        let id = parse_explicit_id(val)
             .map_err(|_| "ERR Invalid stream ID specified as stream command argument")?;
         Ok((TrimSpec::MinId(id), used))
     }
@@ -287,7 +286,7 @@ fn cmd_xdel<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>
     }
     let mut ids = Vec::with_capacity(args.len() - 2);
     for i in 2..args.len() {
-        match parse_explicit_id(&args[i], /*end=*/ false) {
+        match parse_explicit_id(&args[i]) {
             Ok(id) => ids.push(id),
             Err(_) => {
                 return encode_error(

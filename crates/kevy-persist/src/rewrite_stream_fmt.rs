@@ -31,7 +31,7 @@ pub(crate) fn stream_as_commands<W: Write>(
     scratch: &mut Vec<u8>,
 ) -> io::Result<usize> {
     let mut frames = 0usize;
-    for (id, fv) in s.iter_entries() {
+    for (id, fv) in s.entries() {
         let mut argv: Vec<Vec<u8>> = Vec::with_capacity(3 + fv.len() * 2);
         argv.push(b"XADD".to_vec());
         argv.push(key.to_vec());
@@ -150,7 +150,7 @@ pub(crate) fn write_stream_group_commands<W: Write>(
 ) -> io::Result<usize> {
     let mut frames = 0usize;
     for g in s.export_groups() {
-        let last_delivered = StreamId { ms: g.last_delivered.0, seq: g.last_delivered.1 };
+        let last_delivered = StreamId::new(g.last_delivered.0, g.last_delivered.1);
         let argv = vec![
             b"XGROUP".to_vec(),
             b"CREATE".to_vec(),
@@ -173,7 +173,7 @@ pub(crate) fn write_stream_group_commands<W: Write>(
             frames += 1;
         }
         for (ms, seq, consumer, delivery_time_ms, delivery_count) in &g.pel {
-            let id = StreamId { ms: *ms, seq: *seq };
+            let id = StreamId::new(*ms, *seq);
             if !s.contains_entry(id) {
                 continue;
             }

@@ -47,7 +47,7 @@ fn compile_stops_at_the_first_refusal_and_plan_does_not() {
 #[test]
 fn a_refusal_keeps_naming_the_declaration_that_would_fix_it() {
     let p = plan(MIXED).unwrap();
-    let Served::No { reason } = &p.queries[0].served else { panic!("expected a refusal") };
+    let Served::Refused { reason } = &p.queries[0].served else { panic!("expected a refusal") };
     // Not a new opinion — the compiler's own text, which teaches the
     // fix rather than only saying no.
     assert!(reason.contains("total"), "the refusal names the column: {reason}");
@@ -59,7 +59,7 @@ fn a_refusal_keeps_naming_the_declaration_that_would_fix_it() {
 #[test]
 fn a_served_query_names_the_paths_it_rides() {
     let p = plan(MIXED).unwrap();
-    let Served::Yes { paths, .. } = &p.queries[1].served else { panic!("expected served") };
+    let Some(paths) = p.queries[1].served.paths() else { panic!("expected served") };
     assert_eq!(paths, &["orders.status"]);
 }
 
@@ -108,7 +108,7 @@ fn a_dropped_table_keeps_the_rest_of_the_plan() {
     assert_eq!(p.declares.len(), 1, "users still declares");
     assert_eq!(p.dropped.len(), 1, "billing drops once: {:?}", p.dropped);
     assert!(p.dropped[0].1.contains("money"), "named reason: {}", p.dropped[0].1);
-    let kevy_sql::Served::No { reason } = &p.queries[0].served else {
+    let kevy_sql::Served::Refused { reason } = &p.queries[0].served else {
         panic!("the view over the dropped table cannot be served");
     };
     assert!(reason.contains("not declarable"), "points at the drop: {reason}");

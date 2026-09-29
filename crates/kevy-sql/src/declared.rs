@@ -5,7 +5,7 @@
 //! no words for (a prefix other than `<table>:`, `WINDOW`, `AUTODECLARE`)
 //! are kept beside the table, verbatim, for whoever renders it.
 
-use crate::KevyType;
+use crate::ValType;
 use crate::schema::{Ix, OrderPath, Table};
 
 /// One declaration: the table plus the clauses outside the SQL subset.
@@ -57,11 +57,15 @@ fn clause(argv: &[String], i: usize, d: &mut Declared) -> Result<usize, String> 
     let word = &argv[i];
     let arg = |n: usize| argv.get(i + n).cloned().ok_or_else(|| format!("{word} is cut short"));
     if word.eq_ignore_ascii_case("COLUMN") {
-        let ty = match arg(2)?.to_ascii_lowercase().as_str() {
-            "i64" => KevyType::I64,
-            "f64" => KevyType::F64,
-            "str" => KevyType::Str,
-            other => return Err(format!("column type '{other}' is not i64|f64|str")),
+        let raw = arg(2)?;
+        let ty = match ValType::parse(raw.as_bytes()) {
+            Some(t @ (ValType::I64 | ValType::F64 | ValType::Str)) => t,
+            _ => {
+                return Err(format!(
+                    "column type '{}' is not i64|f64|str",
+                    raw.to_ascii_lowercase()
+                ));
+            }
         };
         d.table.columns.push((arg(1)?, ty));
         Ok(i + 3)

@@ -92,11 +92,7 @@ fn check_keys(keys: &[&[u8]]) -> KevyResult<()> {
 }
 
 fn aggregate_tag(aggregate: ZAggregate) -> &'static [u8] {
-    match aggregate {
-        ZAggregate::Sum => b"SUM",
-        ZAggregate::Min => b"MIN",
-        ZAggregate::Max => b"MAX",
-    }
+    aggregate.keyword().as_bytes()
 }
 
 /// Build `verb dest numkeys key… [WEIGHTS w…] [AGGREGATE tag]` and

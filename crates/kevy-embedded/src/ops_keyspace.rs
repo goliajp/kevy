@@ -45,11 +45,11 @@ impl Store {
             // under dst's shard lock. Log-before-apply avoids cloning
             // the value; an AOF error leaves memory untouched.
             commit_write(&mut g, &[b"SET", dst, &src_val])?;
-            g.store.set(dst, src_val, None, false, false);
+            g.store.set(dst, src_val, None, kevy_store::SetCondition::Always);
         } else {
             let mut g = self.wshard(dst);
             commit_write(&mut g, &[b"SET", dst, &src_val])?;
-            g.store.set(dst, src_val, None, false, false);
+            g.store.set(dst, src_val, None, kevy_store::SetCondition::Always);
         }
         // Re-attach absolute deadline if the source had one.
         if src_ttl_ms > 0 {

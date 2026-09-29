@@ -153,12 +153,7 @@ impl<C: Commands> Shard<C> {
             return;
         }
         for (kind, key) in self.store.take_notify_events() {
-            let event: &[u8] = match kind {
-                kevy_store::KeyspaceEvent::New => b"new",
-                kevy_store::KeyspaceEvent::Expired => b"expired",
-                kevy_store::KeyspaceEvent::Evicted => b"evicted",
-            };
-            self.notify_keyspace_event(event, &key);
+            self.notify_keyspace_event(kind.name().as_bytes(), &key);
         }
     }
 

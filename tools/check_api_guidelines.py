@@ -14,7 +14,11 @@ and checks what can be decided without judgment:
   fine
 - get-prefix: a method on `&self` named `get_…` (C-GETTER)
 - trait-open: a public trait anyone may implement, so adding a method to it
-  is breaking (C-SEALED)
+  is breaking (C-SEALED). A trait is sealed when one of its supertraits is
+  the crate's own and unreachable from the crate root (the sealed pattern:
+  a `pub trait Sealed` in a private module). A supertrait from another
+  crate (`Index`, `Send`) seals nothing, and an unreachable trait is not
+  public API, so it is not reported
 - missing-debug: a public type without `Debug` (C-DEBUG)
 - error-impl: a type named `…Error` that is not a `std::error::Error`, or
   not `Send + Sync` (C-GOOD-ERR)
@@ -123,6 +127,26 @@ class Crate:
     def item(self, i):
         return self.index.get(str(i))
 
+    def reachable(self) -> set[int]:
+        """Ids nameable from the crate root: public modules' items and the
+        targets of re-exports, transitively."""
+        seen: set[int] = set()
+        stack = [self.doc["root"]]
+        while stack:
+            i = stack.pop()
+            if i in seen:
+                continue
+            seen.add(i)
+            it = self.item(i)
+            if not it:
+                continue
+            inner = it["inner"]
+            if "module" in inner:
+                stack.extend(inner["module"]["items"])
+            elif "use" in inner and inner["use"].get("id") is not None:
+                stack.append(inner["use"]["id"])
+        return seen
+
     def public_path(self, i) -> str | None:
         p = self.paths.get(str(i))
         return "::".join(p["path"]) if p and p["crate_id"] == 0 else None
@@ -162,6 +186,7 @@ def fn_findings(owner: str, fn: dict):
 def findings(docs: dict[str, dict]):
     for crate, doc in sorted(docs.items()):
         c = Crate(doc)
+        reach = c.reachable()
         for iid, it in c.index.items():
             if it.get("crate_id") != 0 or it.get("visibility") != "public":
                 continue
@@ -195,9 +220,13 @@ def findings(docs: dict[str, dict]):
                 for m in c.methods(body["impls"]):
                     yield from fn_findings(f"{path}::", m)
             elif "trait" in inner:
+                if int(iid) not in reach:
+                    continue
                 t = inner["trait"]
                 sealed = any(
-                    "trait_bound" in b and not c.public_path(b["trait_bound"]["trait"]["id"])
+                    "trait_bound" in b
+                    and (c.paths.get(str(b["trait_bound"]["trait"]["id"])) or {"crate_id": 0})["crate_id"] == 0
+                    and b["trait_bound"]["trait"]["id"] not in reach
                     for b in t.get("bounds", [])
                 )
                 if not sealed:

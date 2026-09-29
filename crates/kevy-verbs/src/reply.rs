@@ -41,15 +41,7 @@ pub fn wrong_args(out: &mut Vec<u8>, cmd: &str) {
 /// assert!(kevy_verbs::reply::store_err_msg(&StoreError::WrongType).starts_with("WRONGTYPE"));
 /// ```
 pub fn store_err_msg(e: &StoreError) -> &'static str {
-    match e {
-        StoreError::WrongType => WRONGTYPE,
-        StoreError::NotInteger => ERR_NOT_INT,
-        StoreError::Overflow => "ERR increment or decrement would overflow",
-        StoreError::OutOfRange => "ERR index out of range",
-        StoreError::NoSuchKey => "ERR no such key",
-        StoreError::NotFloat => ERR_NOT_FLOAT,
-        StoreError::OutOfMemory => OOM_ERR,
-    }
+    e.as_wire()
 }
 
 /// A keyspace error as its RESP error reply.

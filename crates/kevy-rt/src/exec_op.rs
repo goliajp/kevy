@@ -103,7 +103,7 @@ impl<C: Commands> Shard<C> {
             }
             Op::MSet(pairs) => {
                 for (k, v) in &pairs {
-                    self.store.set(k, v.clone(), None, false, false);
+                    self.store.set(k, v.clone(), None, kevy_store::SetCondition::Always);
                     self.note_key_mutated(k);
                 }
                 if !pairs.is_empty() {
@@ -247,7 +247,11 @@ impl<C: Commands> Shard<C> {
                 // orchestrator instead — until that lands, it errors
                 // out at start_rename).
                 use kevy_store::RenameOutcome;
-                let outcome = self.store.rename(&src, &dst, nx);
+                let outcome = if nx {
+                    self.store.rename_nx(&src, &dst)
+                } else {
+                    self.store.rename(&src, &dst)
+                };
                 let renamed = matches!(outcome, RenameOutcome::Renamed);
                 let reply = match outcome {
                     RenameOutcome::Renamed if nx => b":1\r\n".to_vec(),
@@ -287,7 +291,10 @@ impl<C: Commands> Shard<C> {
                 let moved = if !from_left && to_left {
                     self.store.rpoplpush(&src, &dst)
                 } else {
-                    self.store.lmove(&src, &dst, from_left, to_left)
+                    let end = |left: bool| {
+                        if left { kevy_store::ListEnd::Left } else { kevy_store::ListEnd::Right }
+                    };
+                    self.store.lmove(&src, &dst, end(from_left), end(to_left))
                 };
                 // The same-shard arm answers with the finished reply — the
                 // slot is a plain `Agg::First`, exactly like every other

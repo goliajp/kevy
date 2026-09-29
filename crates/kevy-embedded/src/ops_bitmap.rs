@@ -92,7 +92,7 @@ impl Store {
             self.del(&[dst])?;
             return Ok(0);
         }
-        let out = kevy_store::bitop_combine(op, &srcs_bytes, max_len);
+        let out = op.combine(&srcs_bytes, max_len);
         // Write dst.
         self.set(dst, &out)?;
         Ok(max_len)

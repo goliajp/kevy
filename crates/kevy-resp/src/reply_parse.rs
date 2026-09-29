@@ -17,11 +17,9 @@ use crate::request::{find_crlf, parse_int};
 /// Variants prefixed with `Resp3:` in their doc are only ever produced by
 /// a server speaking RESP3; an `HELLO 2` (or no `HELLO`) session sees the
 /// RESP2 subset (`Simple` / `Error` / `Int` / `Bulk` / `Nil` / `Array`)
-/// exclusively. Adding new variants is non-breaking: an exhaustive
-/// `match` on `Reply` is forced to opt into RESP3 by listing each variant
-/// (rust 2024 will not warn on missing arms only after `#[non_exhaustive]`
-/// — which we deliberately omit so RESP2-only code stays compile-checked
-/// for completeness).
+/// exclusively. The variant set is RESP3's type set and deliberately
+/// exhaustive: a `match` on `Reply` lists every wire type, so a decoder
+/// cannot silently drop one.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Reply {
     /// `+OK`

@@ -29,10 +29,7 @@ pub(super) fn alloc_reclaim_tick() {
 /// the init-time division was overwritten within one tick.
 pub(super) fn maxmemory_tick(c: &KevyCommands, store: &mut Store, cfg: &kevy_config::Config) {
     let n = c.state().nshards().max(1) as u64;
-    store.set_max_memory(
-        cfg.memory.maxmemory / n,
-        crate::map_eviction_policy(cfg.memory.maxmemory_policy),
-    );
+    store.set_max_memory(cfg.memory.maxmemory / n, cfg.memory.maxmemory_policy);
 }
 
 /// The shard tick's tiering upkeep: re-resolve the

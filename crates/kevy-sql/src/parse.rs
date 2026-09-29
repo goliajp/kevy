@@ -5,7 +5,7 @@
 
 use crate::ast::{ColumnDef, CreateIndex, CreateTable, Stmt};
 use crate::lex::{Tok, Token};
-use crate::{KevyType, SqlError, typemap};
+use crate::{SqlError, ValType, typemap};
 
 /// Token cursor. Never advances past `Eof`.
 pub(crate) struct P<'a> {
@@ -362,7 +362,7 @@ fn parse_column_def(p: &mut P<'_>, t: &mut CreateTable) -> Result<(), SqlError> 
 }
 
 /// Parse one SQL type (with optional `(n[, m])` args) and map it.
-fn parse_type(p: &mut P<'_>) -> Result<(Option<KevyType>, String), SqlError> {
+fn parse_type(p: &mut P<'_>) -> Result<(Option<ValType>, String), SqlError> {
     let t = p.peek();
     let Tok::Ident(first) = &t.tok else {
         return Err(p.err_here("expected a column type"));

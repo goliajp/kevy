@@ -21,7 +21,16 @@ pub type LoadedPelEntry = (u64, u64, Vec<u8>, u64, u32);
 /// One consumer group decoded into primitive tuples — the dump/load wire
 /// form shared by snapshot v4, AOF-rewrite filtering, and reshard's
 /// in-memory redistribution.
-#[derive(Debug)]
+///
+/// ```
+/// use kevy_store::{LoadedGroup, StreamData};
+/// let g = LoadedGroup::new(b"g".to_vec(), (1, 0), vec![(b"c".to_vec(), 5)], vec![(1, 0, b"c".to_vec(), 5, 1)]);
+/// let mut s = StreamData::default();
+/// s.import_groups(vec![g.clone()]);
+/// assert_eq!(s.export_groups(), [g]);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct LoadedGroup {
     /// Group name.
     pub name: Vec<u8>,
@@ -33,6 +42,18 @@ pub struct LoadedGroup {
     /// Every PEL row, including tombstones (entries XDEL'd while
     /// pending) — snapshot keeps those; AOF rewrite filters them.
     pub pel: Vec<LoadedPelEntry>,
+}
+
+impl LoadedGroup {
+    /// A group in exchange form, as a loader decodes it.
+    pub fn new(
+        name: Vec<u8>,
+        last_delivered: (u64, u64),
+        consumers: Vec<(Vec<u8>, u64)>,
+        pel: Vec<LoadedPelEntry>,
+    ) -> Self {
+        Self { name, last_delivered, consumers, pel }
+    }
 }
 
 impl StreamData {
@@ -96,17 +117,14 @@ impl StreamData {
                     cs.pel_count += 1;
                 }
                 pel.insert(
-                    StreamId { ms, seq },
+                    StreamId::new(ms, seq),
                     PelEntry { consumer, delivery_time_ms, delivery_count },
                 );
             }
             self.groups.insert(
                 SmallBytes::from_vec(lg.name),
                 Box::new(ConsumerGroup {
-                    last_delivered_id: StreamId {
-                        ms: lg.last_delivered.0,
-                        seq: lg.last_delivered.1,
-                    },
+                    last_delivered_id: StreamId::new(lg.last_delivered.0, lg.last_delivered.1),
                     pel,
                     consumers,
                 }),

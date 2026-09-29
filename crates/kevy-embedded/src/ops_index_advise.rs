@@ -34,7 +34,7 @@ pub(crate) fn probe_window(
     if win.boundary() == i64::MIN {
         return;
     }
-    if let Some(v) = lower.window_value(win.shape) {
+    if let Some(v) = lower.window_value(win.shape()) {
         c.probe(v.saturating_sub(win.boundary()));
     }
 }

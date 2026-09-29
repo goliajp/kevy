@@ -10,8 +10,8 @@ use kevy_resp::{
     encode_simple_string,
 };
 use kevy_store::{
-    GroupCreateMode, ReadGroupId, Store, StreamId, now_unix_ms, parse_explicit_id, parse_range_end,
-    parse_range_start,
+    AckMode, GroupCreateMode, MissingStream, ReadGroupId, Store, StreamId, now_unix_ms,
+    parse_explicit_id, parse_range_end, parse_range_start,
 };
 
 use crate::Effect;
@@ -61,8 +61,12 @@ fn xgroup_create<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Ve
         Ok(m) => m,
         Err(msg) => return encode_error(out, msg.as_wire()),
     };
-    let mkstream = args.len() == 6 && args[5].eq_ignore_ascii_case(b"MKSTREAM");
-    match store.xgroup_create(key, group, mode, mkstream) {
+    let missing = if args.len() == 6 && args[5].eq_ignore_ascii_case(b"MKSTREAM") {
+        MissingStream::Create
+    } else {
+        MissingStream::Refuse
+    };
+    match store.xgroup_create(key, group, mode, missing) {
         Ok(true) => encode_simple_string(out, "OK"),
         Ok(false) => encode_error(out, "BUSYGROUP Consumer Group name already exists"),
         Err(kevy_store::StoreError::NoSuchKey) => encode_error(
@@ -141,7 +145,7 @@ fn parse_id_or_dollar(s: &[u8]) -> Result<GroupCreateMode, CmdError> {
     if s == b"$" {
         return Ok(GroupCreateMode::AtCurrent);
     }
-    parse_explicit_id(s, /*end=*/ false)
+    parse_explicit_id(s)
         .map(GroupCreateMode::AtId)
         .map_err(|_| CmdError::Wire("ERR Invalid stream ID specified as stream command argument"))
 }
@@ -218,7 +222,7 @@ fn xreadgroup_one_stream(
     let last_seen = if last_seen_arg == b">" {
         ReadGroupId::New
     } else {
-        match parse_explicit_id(last_seen_arg, /*end=*/ false) {
+        match parse_explicit_id(last_seen_arg) {
             Ok(id) => ReadGroupId::ReplayAfter(id),
             Err(_) => {
                 encode_error(out, "ERR Invalid stream ID specified as stream command argument");
@@ -232,7 +236,7 @@ fn xreadgroup_one_stream(
         &parsed.consumer,
         last_seen,
         parsed.count,
-        parsed.noack,
+        parsed.ack,
         now_unix_ms(),
     ) {
         Ok(es) => Ok(es),
@@ -262,7 +266,7 @@ struct XReadGroupParsed {
     /// with the "at least one stream reads `>`" check to decide whether
     /// to park the conn when every requested stream is empty.
     block_ms: Option<u64>,
-    noack: bool,
+    ack: AckMode,
     streams: Vec<(Vec<u8>, Vec<u8>)>,
 }
 
@@ -278,7 +282,7 @@ fn parse_xreadgroup_argv<A: ArgvView + ?Sized>(args: &A) -> Result<XReadGroupPar
     let mut i = 4;
     let mut count = None;
     let mut block_ms: Option<u64> = None;
-    let mut noack = false;
+    let mut ack = AckMode::Pending;
     while i < args.len() {
         let tok = args[i].to_ascii_uppercase();
         match tok.as_slice() {
@@ -297,12 +301,12 @@ fn parse_xreadgroup_argv<A: ArgvView + ?Sized>(args: &A) -> Result<XReadGroupPar
                 i += 2;
             }
             b"NOACK" => {
-                noack = true;
+                ack = AckMode::NoAck;
                 i += 1;
             }
             b"STREAMS" => {
                 let streams = parse_xreadgroup_streams(args, i + 1)?;
-                return Ok(XReadGroupParsed { group, consumer, count, block_ms, noack, streams });
+                return Ok(XReadGroupParsed { group, consumer, count, block_ms, ack, streams });
             }
             _ => return Err(CmdError::Wire("ERR syntax error")),
         }
@@ -348,7 +352,7 @@ pub(super) fn cmd_xack<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &
     }
     let mut ids = Vec::with_capacity(args.len() - 3);
     for i in 3..args.len() {
-        match parse_explicit_id(&args[i], /*end=*/ false) {
+        match parse_explicit_id(&args[i]) {
             Ok(id) => ids.push(id),
             Err(_) => {
                 return encode_error(

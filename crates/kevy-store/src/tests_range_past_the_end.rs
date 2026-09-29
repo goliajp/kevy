@@ -25,7 +25,7 @@ fn store() -> Store {
 #[test]
 fn getrange_past_the_end_is_empty() {
     let mut s = store();
-    s.set_slice(b"k", b"hello-world", None, false, false);
+    s.set_slice(b"k", b"hello-world", None, crate::SetCondition::Always);
     assert_eq!(s.getrange(b"k", 0, 4).unwrap(), b"hello".to_vec());
     assert_eq!(s.getrange(b"k", -5, -1).unwrap(), b"world".to_vec());
     // The whole window is past the last index: valkey answers "".

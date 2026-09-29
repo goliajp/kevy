@@ -62,7 +62,7 @@ fn evict_rows(
         Ok(None) => true,
         Ok(Some(batch)) => {
             if let Some(a) = aof {
-                let argv = kevy_persist::segmented_argv(batch.file.as_bytes());
+                let argv = kevy_persist::segmented_argv(batch.file().as_bytes());
                 let owned: Vec<Vec<u8>> = argv.iter().map(|x| x.to_vec()).collect();
                 if let Err(e) = a.append(&owned_argv(&owned)) {
                     eprintln!(
@@ -162,7 +162,7 @@ fn reconcile_window(
         (None, Some((w, sh))) => {
             windows.push((name.to_vec(), WindowRt::new(w, sh)));
         }
-        (Some(i), Some((w, sh))) if windows[i].1.spec != w || windows[i].1.shape != sh => {
+        (Some(i), Some((w, sh))) if *windows[i].1.spec() != w || windows[i].1.shape() != sh => {
             windows[i].1 = WindowRt::new(w, sh);
         }
         _ => {}

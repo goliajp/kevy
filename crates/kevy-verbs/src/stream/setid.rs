@@ -54,6 +54,6 @@ pub(super) fn cmd_xsetid<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out:
 }
 
 fn parse_id(s: &[u8]) -> Result<StreamId, CmdError> {
-    parse_explicit_id(s, /*end=*/ false)
+    parse_explicit_id(s)
         .map_err(|_| CmdError::Wire("ERR Invalid stream ID specified as stream command argument"))
 }
