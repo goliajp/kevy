@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use super::*;
-use crate::seg_leaf::head_of;
+use crate::seg_leaf::{Shape, head_of};
 
 /// Every structural invariant, checked from scratch; returns the entries
 /// in order.
@@ -23,7 +23,7 @@ pub(crate) fn check(t: &Tree) -> Vec<(Vec<u8>, Vec<u8>)> {
     assert_eq!(t.leaf(*leaves.last().unwrap()).next, NIL);
     assert_eq!(t.leaf(leaves[0]).prev, NIL);
     if t.height > 0 {
-        assert!(leaves.iter().all(|&l| t.leaf(l).len() > 0), "no empty leaf under an inner node");
+        assert!(leaves.iter().all(|&l| !t.leaf(l).is_empty()), "no empty leaf under an inner node");
     }
     let seps: usize =
         live_inners(t).map(|i| t.inners[i].seps.iter().map(|s| s.len()).sum::<usize>()).sum();
@@ -123,7 +123,7 @@ fn key_for(r: &mut Rng, shape: u64) -> Vec<u8> {
 
 fn run_model(seed: u64, payloads: bool, ops: usize) {
     let mut r = Rng(seed);
-    let mut t = Tree::new(payloads);
+    let mut t = Tree::new(Shape { payloads, vlens: false });
     let mut m: BTreeMap<Vec<u8>, Vec<u8>> = BTreeMap::new();
     for step in 0..ops {
         let shape = r.below(10).min(2).max(r.below(2));
@@ -134,7 +134,8 @@ fn run_model(seed: u64, payloads: bool, ops: usize) {
             0..=5 => assert_eq!(t.insert(&key, &payload), m.insert(key, payload).is_none()),
             6..=8 => assert_eq!(t.remove(&key), m.remove(&key).is_some()),
             _ => {
-                let cut = t.cut_below(&Probe::new(&key));
+                let mut cut = Vec::new();
+                t.cut_below(&Probe::new(&key), |e| cut.push((e.key.to_vec(), e.payload.to_vec())));
                 let keep = m.split_off(&key);
                 let gone: Vec<(Vec<u8>, Vec<u8>)> =
                     std::mem::replace(&mut m, keep).into_iter().collect();
@@ -181,7 +182,7 @@ fn random_operations_match_a_map() {
 #[test]
 fn ascending_and_descending_runs_pack_leaves_full() {
     for desc in [false, true] {
-        let mut t = Tree::new(false);
+        let mut t = Tree::new(Shape { payloads: false, vlens: false });
         for i in 0..20_000u64 {
             let v = if desc { u64::MAX - i } else { i };
             t.insert(&[v.to_be_bytes().as_slice(), &[1, 2, 3, 4]].concat(), &[]);
@@ -195,7 +196,7 @@ fn ascending_and_descending_runs_pack_leaves_full() {
 #[test]
 fn random_inserts_fill_about_ln2_and_repack_fills_them() {
     let mut r = Rng(7);
-    let mut t = Tree::new(false);
+    let mut t = Tree::new(Shape { payloads: false, vlens: false });
     for _ in 0..50_000 {
         t.insert(&[r.next().to_be_bytes().as_slice(), &[1, 2, 3, 4]].concat(), &[]);
     }
@@ -209,7 +210,7 @@ fn random_inserts_fill_about_ln2_and_repack_fills_them() {
 
 #[test]
 fn stepping_both_ways_visits_every_entry() {
-    let mut t = Tree::new(false);
+    let mut t = Tree::new(Shape { payloads: false, vlens: false });
     for i in 0..5000u32 {
         t.insert(&(i * 7 % 5000).to_be_bytes(), &[]);
     }
@@ -236,7 +237,7 @@ fn stepping_both_ways_visits_every_entry() {
 #[test]
 fn thinning_a_deep_tree_merges_leaves_and_keeps_it_whole() {
     let mut r = Rng(11);
-    let mut t = Tree::new(true);
+    let mut t = Tree::new(Shape { payloads: true, vlens: false });
     let mut m = BTreeMap::new();
     for i in 0..40_000u32 {
         let k = (i.wrapping_mul(2_654_435_761)).to_be_bytes().to_vec();
@@ -261,7 +262,7 @@ fn thinning_a_deep_tree_merges_leaves_and_keeps_it_whole() {
 
 #[test]
 fn removing_everything_leaves_an_empty_root_leaf() {
-    let mut t = Tree::new(true);
+    let mut t = Tree::new(Shape { payloads: true, vlens: false });
     for i in 0..3000u32 {
         t.insert(&i.to_be_bytes(), b"x");
     }

@@ -2,7 +2,7 @@
 //! sorted entries, repacking it, cutting its low end off.
 
 use super::{FANOUT, Path, Pos, Tree};
-use crate::seg_leaf::{NIL, Probe};
+use crate::seg_leaf::{Ent, NIL, Probe};
 
 /// A leaf being filled in order: its id, first key, and entry count.
 type Filled = Vec<(u32, Vec<u8>, usize)>;
@@ -53,29 +53,29 @@ impl Tree {
 
     /// Append an entry past every other, filling the current last leaf
     /// `cur` and opening a new one when it is full.
-    fn append(&mut self, cur: &mut u32, filled: &mut Filled, key: &[u8], payload: &[u8]) {
+    fn append(&mut self, cur: &mut u32, filled: &mut Filled, e: Ent<'_>) {
         let (l, ov) = self.leaf_ov(*cur);
-        if !l.insert_at(l.len(), key, payload, ov) {
+        if !l.insert_at(l.len(), e, ov) {
             let next = self.new_leaf();
             self.link_after(*cur, next);
             *cur = next;
             let (l, ov) = self.leaf_ov(next);
-            let fit = l.insert_at(0, key, payload, ov);
+            let fit = l.insert_at(0, e, ov);
             debug_assert!(fit, "an empty leaf holds any one entry");
         }
         if self.leaf(*cur).len() == 1 {
-            filled.push((*cur, key.to_vec(), 0));
+            filled.push((*cur, e.key.to_vec(), 0));
         }
         self.len += 1;
         filled.last_mut().expect("the current leaf is listed").2 += 1;
     }
 
     /// Replace the whole tree with `entries`, which must come in order.
-    pub(crate) fn rebuild<'e>(&mut self, entries: impl Iterator<Item = (&'e [u8], &'e [u8])>) {
-        *self = Tree::new(self.payloads);
+    pub(crate) fn rebuild<'e>(&mut self, entries: impl Iterator<Item = Ent<'e>>) {
+        *self = Tree::new(self.shape);
         let (mut cur, mut filled) = (self.root, Filled::new());
-        for (key, payload) in entries {
-            self.append(&mut cur, &mut filled, key, payload);
+        for e in entries {
+            self.append(&mut cur, &mut filled, e);
         }
         self.build_inners(filled);
     }
@@ -113,7 +113,7 @@ impl Tree {
     /// Repack every entry into full leaves, in order. Each old leaf is
     /// freed as soon as it has been read, so the extra memory is a leaf.
     pub(crate) fn repack(&mut self) {
-        let mut old = std::mem::replace(self, Tree::new(self.payloads));
+        let mut old = std::mem::replace(self, Tree::new(self.shape));
         let (mut cur, mut filled) = (self.root, Filled::new());
         let mut key = Vec::new();
         let mut id = old.first;
@@ -122,7 +122,12 @@ impl Tree {
             for i in 0..l.len() {
                 key.clear();
                 l.key_into(i, &old.ov, &mut key);
-                self.append(&mut cur, &mut filled, &key, l.tail(i, &old.ov).payload);
+                let t = l.tail(i, &old.ov);
+                self.append(
+                    &mut cur,
+                    &mut filled,
+                    Ent { key: &key, vlen: t.vlen, payload: t.payload },
+                );
             }
             l.release_slabs(0, l.len(), &mut old.ov);
             id = l.next;
@@ -130,9 +135,9 @@ impl Tree {
         self.build_inners(filled);
     }
 
-    /// Detach every entry below the probe, in order.
-    pub(crate) fn cut_below(&mut self, p: &Probe<'_>) -> Vec<(Vec<u8>, Vec<u8>)> {
-        let mut out = Vec::new();
+    /// Detach every entry below the probe, showing each to `seen` (order
+    /// key, payload) in order before it goes.
+    pub(crate) fn cut_below(&mut self, p: &Probe<'_>, mut seen: impl FnMut(Ent<'_>)) {
         let mut key = Vec::new();
         loop {
             let id = self.first;
@@ -142,14 +147,15 @@ impl Tree {
             for i in 0..cut {
                 key.clear();
                 l.key_into(i, &self.ov, &mut key);
-                out.push((key.clone(), l.tail(i, &self.ov).payload.to_vec()));
+                let t = l.tail(i, &self.ov);
+                seen(Ent { key: &key, vlen: t.vlen, payload: t.payload });
             }
             if cut == 0 {
-                return out;
+                return;
             }
             self.drop_front(id, cut);
             if cut < n || self.len == 0 {
-                return out;
+                return;
             }
         }
     }

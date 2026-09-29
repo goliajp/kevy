@@ -1,25 +1,36 @@
 //! Walking a [`Segment`] in order without allocating per entry: the
 //! crate's [`Walker`] and the public, lending [`Scan`] built on it.
 
+use std::cmp::Ordering;
+
 use crate::seg_codec::{Codec, Form, nth_column};
-use crate::seg_leaf::Probe;
+use crate::seg_leaf::{Leaf, NIL, Probe};
 use crate::seg_tree::{Pos, Tree};
 use crate::segment::Segment;
 use crate::value::IndexValue;
 
-/// A position moving through a segment's entries, decoding each one's
-/// key and value only when asked.
+/// A position moving through a segment's entries, reading each one in
+/// place in its leaf and decoding its key and value only when asked.
 #[derive(Debug)]
 pub(crate) struct Walker<'s> {
     tree: &'s Tree,
     codec: &'s Codec,
-    next: Option<Pos>,
+    /// Values are the 8-byte head, so an entry is read without copying.
+    fixed: bool,
+    leaf: Option<&'s Leaf>,
+    slot: usize,
+    started: bool,
     rev: bool,
     /// Walking forward, where to stop: at the first entry not below the
     /// bytes, or (`true`) past every entry they prefix.
     until: Option<(Vec<u8>, bool)>,
-    e: Vec<u8>,
+    /// The stop bytes as a head, for a fixed-width value.
+    until_head: u64,
+    head: u64,
+    rest: &'s [u8],
     payload: &'s [u8],
+    /// The whole order key, assembled only for forms that need it.
+    e: Vec<u8>,
     vlen: usize,
     value: IndexValue,
     value_ok: bool,
@@ -32,11 +43,17 @@ impl<'s> Walker<'s> {
         Walker {
             tree: &seg.tree,
             codec: &seg.codec,
-            next: from,
+            fixed: matches!(seg.codec.form, Form::I64 | Form::F64),
+            leaf: from.map(|p| seg.tree.leaf(p.leaf)),
+            slot: from.map_or(0, |p| p.slot),
+            started: false,
             rev,
             until: None,
-            e: Vec::new(),
+            until_head: 0,
+            head: 0,
+            rest: &[],
             payload: &[],
+            e: Vec::new(),
             vlen: 0,
             value: IndexValue::I64(0),
             value_ok: false,
@@ -48,53 +65,104 @@ impl<'s> Walker<'s> {
     /// Stop at the first entry not below `v`, or with `inclusive` after
     /// the last entry `v` prefixes.
     pub(crate) fn until(mut self, v: Vec<u8>, inclusive: bool) -> Walker<'s> {
+        self.until_head = crate::seg_leaf::head_of(&v);
         self.until = Some((v, inclusive));
         self
     }
 
-    /// Move to the next entry; `false` when there is none.
-    pub(crate) fn advance(&mut self) -> bool {
-        let Some(pos) = self.next else { return false };
-        if let Some((u, inclusive)) = &self.until {
-            let l = self.tree.leaf(pos.leaf);
-            let stop = if *inclusive {
-                l.cmp_at(&Probe::past(u), pos.slot, &self.tree.ov) == std::cmp::Ordering::Less
-            } else {
-                l.cmp_at(&Probe::new(u), pos.slot, &self.tree.ov) != std::cmp::Ordering::Greater
-            };
-            if stop {
-                self.next = None;
-                return false;
-            }
+    /// Step to the next slot, crossing into the neighbouring leaf at an
+    /// edge; `false` past the end.
+    fn step(&mut self) -> bool {
+        let Some(l) = self.leaf else { return false };
+        if !self.started {
+            self.started = true;
+            return true;
         }
-        self.payload = self.tree.entry(pos, &mut self.e);
-        self.vlen = match self.codec.form {
-            Form::I64 | Form::F64 => 8,
-            _ => self.codec.value_len(&self.e),
-        };
-        self.value_ok = false;
-        self.key_ok = false;
-        self.next = if self.rev { self.tree.prev_pos(pos) } else { self.tree.next_pos(pos) };
+        if !self.rev {
+            if self.slot + 1 < l.len() {
+                self.slot += 1;
+                return true;
+            }
+            self.enter(l.next, false)
+        } else {
+            if self.slot > 0 {
+                self.slot -= 1;
+                return true;
+            }
+            self.enter(l.prev, true)
+        }
+    }
+
+    fn enter(&mut self, id: u32, at_end: bool) -> bool {
+        if id == NIL {
+            self.leaf = None;
+            return false;
+        }
+        let l = self.tree.leaf(id);
+        self.leaf = Some(l);
+        self.slot = if at_end { l.len() - 1 } else { 0 };
         true
     }
 
+    /// Move to the next entry; `false` when there is none.
+    pub(crate) fn advance(&mut self) -> bool {
+        if !self.step() {
+            return false;
+        }
+        let l = self.leaf.expect("stepped onto a leaf");
+        if let Some((u, inclusive)) = &self.until {
+            let stop = if self.fixed {
+                // the head is the value itself
+                let h = l.head(self.slot);
+                if *inclusive { h > self.until_head } else { h >= self.until_head }
+            } else if *inclusive {
+                l.cmp_at(&Probe::past(u), self.slot, &self.tree.ov) == Ordering::Less
+            } else {
+                l.cmp_at(&Probe::new(u), self.slot, &self.tree.ov) != Ordering::Greater
+            };
+            if stop {
+                self.leaf = None;
+                return false;
+            }
+        }
+        let t = l.tail(self.slot, &self.tree.ov);
+        (self.head, self.rest, self.payload) = (l.head(self.slot), t.rest, t.payload);
+        if !self.fixed {
+            self.e.clear();
+            self.e.extend_from_slice(&self.head.to_be_bytes()[..t.len.min(8)]);
+            self.e.extend_from_slice(t.rest);
+            self.vlen = t.vlen;
+        }
+        self.value_ok = false;
+        self.key_ok = false;
+        true
+    }
+
+    #[inline(always)]
     pub(crate) fn value(&mut self) -> &IndexValue {
         if !self.value_ok {
-            self.codec.value_into(&self.e[..self.vlen], &mut self.value);
+            if self.fixed {
+                self.codec.value_into(&self.head.to_be_bytes(), &mut self.value);
+            } else {
+                self.codec.value_into(&self.e[..self.vlen], &mut self.value);
+            }
             self.value_ok = true;
         }
         &self.value
     }
 
+    #[inline(always)]
     pub(crate) fn key(&mut self) -> &[u8] {
         if !self.key_ok {
-            self.codec.key_into(&self.e[self.vlen..], &mut self.key);
+            let h = if self.fixed { self.rest } else { &self.e[self.vlen..] };
+            self.codec.key_into(h, &mut self.key);
             self.key_ok = true;
         }
         &self.key
     }
 
     /// Both at once, for callers that want the pair borrowed together.
+    #[inline(always)]
     pub(crate) fn pair(&mut self) -> (&IndexValue, &[u8]) {
         self.value();
         self.key();
@@ -120,7 +188,7 @@ impl<'s> Walker<'s> {
     pub(crate) fn row(&self) -> Vec<Option<Vec<u8>>> {
         let mut at = 0;
         (0..self.codec.arity)
-            .map(|_| crate::seg_codec::column(self.payload, &mut at).to_vec())
+            .map(|_| crate::seg_codec::column(self.payload, &mut at).into_vec())
             .collect()
     }
 }

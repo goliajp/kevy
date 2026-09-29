@@ -37,7 +37,7 @@ impl Segment {
     }
 
     /// The first entry holding a value at or above `v`.
-    fn from_value(&self, v: &IndexValue) -> Option<Pos> {
+    fn start_at_value(&self, v: &IndexValue) -> Option<Pos> {
         match self.edge(v) {
             Edge::Low => self.tree.first_pos(),
             Edge::High => None,
@@ -123,7 +123,7 @@ impl Segment {
     ) -> Walker<'_> {
         let start = match cursor {
             Some(c) => self.after(&c.value, &c.key),
-            None => self.from_value(min),
+            None => self.start_at_value(min),
         };
         self.walk_to(start, max)
     }
@@ -250,28 +250,32 @@ impl Segment {
     /// assert_eq!((s.stats().entries, s.stats().duplicates), (1, 0));
     /// ```
     pub fn split_off_below(&mut self, bound: &IndexValue) -> Vec<(IndexValue, Vec<u8>)> {
-        let raw = match self.edge(bound) {
+        let bound = match self.edge(bound) {
             Edge::Low => return Vec::new(),
-            Edge::High => self.tree.cut_below(&Probe::past(&[])),
-            Edge::At(b) => self.tree.cut_below(&Probe::new(&b)),
+            Edge::High => Vec::new(),
+            Edge::At(b) => b,
         };
-        let mut out = Vec::with_capacity(raw.len());
+        let probe = if bound.is_empty() { Probe::past(&bound) } else { Probe::new(&bound) };
+        let mut out = Vec::new();
         let mut dups = 0u64;
         let mut run = (0usize, Vec::new());
-        for (e, _) in &raw {
-            let vlen = self.codec.value_len(e);
+        let codec = &self.codec;
+        let fixed = !self.tree.shape.vlens;
+        self.tree.cut_below(&probe, |ent| {
+            let e = ent.key;
+            let vlen = if fixed { 8 } else { ent.vlen };
             if run.1.as_slice() == &e[..vlen] {
                 run.0 += 1;
-                if run.0 == 2 {
-                    dups += 1;
-                }
+                dups += u64::from(run.0 == 2);
             } else {
-                run = (1, e[..vlen].to_vec());
+                run.0 = 1;
+                run.1.clear();
+                run.1.extend_from_slice(&e[..vlen]);
             }
             let mut key = Vec::new();
-            self.codec.key_into(&e[vlen..], &mut key);
-            out.push((self.codec.value(&e[..vlen]), key));
-        }
+            codec.key_into(&e[vlen..], &mut key);
+            out.push((codec.value(&e[..vlen]), key));
+        });
         self.note_cut(dups, &out);
         out
     }

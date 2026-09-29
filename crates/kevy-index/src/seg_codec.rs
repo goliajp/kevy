@@ -161,8 +161,10 @@ impl Codec {
     }
 
     /// Overwrite `into` with the value `V` holds, reusing its buffer.
+    #[inline(always)]
     pub(crate) fn value_into(&self, v: &[u8], into: &mut IndexValue) {
         match (&self.form, &mut *into) {
+            (Form::I64, IndexValue::I64(x)) => *x = (be8(v) ^ (1 << 63)) as i64,
             (Form::Composite(_), IndexValue::Str(s)) => {
                 s.clear();
                 s.extend_from_slice(v);
@@ -176,9 +178,15 @@ impl Codec {
     }
 
     /// Write the key `H` stands for into `into`.
+    #[inline(always)]
     pub(crate) fn key_into(&self, h: &[u8], into: &mut Vec<u8>) {
-        into.clear();
-        into.extend_from_slice(&self.prefix);
+        // a buffer that already starts with the prefix keeps it
+        if into.len() >= self.prefix.len() && into.starts_with(&self.prefix) {
+            into.truncate(self.prefix.len());
+        } else {
+            into.clear();
+            into.extend_from_slice(&self.prefix);
+        }
         if self.digits {
             unpack_digits(h, into);
         } else {
@@ -214,19 +222,15 @@ fn frame(s: &[u8], out: &mut Vec<u8>) {
     out.extend_from_slice(&[0, 0]);
 }
 
-fn unframe_into(v: &[u8], out: &mut Vec<u8>) {
-    let mut i = 0;
-    while i + 1 < v.len() {
-        if v[i] == 0 {
-            if v[i + 1] == 0 {
-                return;
-            }
-            i += 1;
-            out.push(0);
-        } else {
-            out.push(v[i]);
+fn unframe_into(mut v: &[u8], out: &mut Vec<u8>) {
+    // copy the runs between zero bytes whole; a zero is an escape or the end
+    while let Some(z) = v.iter().position(|&b| b == 0) {
+        out.extend_from_slice(&v[..z]);
+        if v.get(z + 1) != Some(&0xFF) {
+            return;
         }
-        i += 1;
+        out.push(0);
+        v = &v[z + 2..];
     }
 }
 
@@ -235,10 +239,14 @@ fn unframe_into(v: &[u8], out: &mut Vec<u8>) {
 fn framed_len(e: &[u8], inverted: bool) -> usize {
     let z = if inverted { 0xFF } else { 0 };
     let mut i = 0;
-    while e[i] != z || e[i + 1] != z {
-        i += if e[i] == z { 2 } else { 1 };
+    // jump from one marker byte to the next: an escape or the terminator
+    loop {
+        i += e[i..].iter().position(|&b| b == z).expect("a framed string ends");
+        if e[i + 1] == z {
+            return i + 2;
+        }
+        i += 2;
     }
-    i + 2
 }
 
 fn component_len(e: &[u8], ty: ValType, order: SortOrder) -> usize {
@@ -257,12 +265,30 @@ pub(crate) fn pack_digits(d: &[u8], out: &mut Vec<u8>) {
     }
 }
 
+/// Spread the 8 bytes of `x` to the even bytes of a `u128`.
+#[inline(always)]
+fn spread(x: u64) -> u128 {
+    let mut v = u128::from(x);
+    v = (v | (v << 32)) & 0x0000_0000_FFFF_FFFF_0000_0000_FFFF_FFFF;
+    v = (v | (v << 16)) & 0x0000_FFFF_0000_FFFF_0000_FFFF_0000_FFFF;
+    (v | (v << 8)) & 0x00FF_00FF_00FF_00FF_00FF_00FF_00FF_00FF
+}
+
+#[inline(always)]
 pub(crate) fn unpack_digits(p: &[u8], out: &mut Vec<u8>) {
-    for &b in p {
-        out.push((b >> 4) - 1 + b'0');
-        if b & 0x0F != 0 {
-            out.push((b & 0x0F) - 1 + b'0');
-        }
+    let Some(&last) = p.last() else { return };
+    // eight packed bytes at a time: high nibbles to the even output bytes,
+    // low nibbles to the odd ones, then nibble n + 1 becomes digit n
+    for chunk in p.chunks(8) {
+        // assembled in a register: a stack copy reloaded wider stalls
+        let x = chunk.iter().rev().fold(0u64, |x, &b| x << 8 | u64::from(b));
+        let hi = spread((x >> 4) & 0x0F0F_0F0F_0F0F_0F0F);
+        let lo = spread(x & 0x0F0F_0F0F_0F0F_0F0F);
+        let d = (hi | (lo << 8)) + 0x2F2F_2F2F_2F2F_2F2F_2F2F_2F2F_2F2F_2F2F;
+        out.extend_from_slice(&d.to_le_bytes()[..2 * chunk.len()]);
+    }
+    if last & 0x0F == 0 {
+        out.pop();
     }
 }
 
@@ -276,7 +302,17 @@ pub(crate) fn put_varint(mut n: usize, out: &mut Vec<u8>) {
 }
 
 /// Read a LEB128 varint at `*at`, advancing it.
+#[inline]
 pub(crate) fn varint(b: &[u8], at: &mut usize) -> usize {
+    let first = b[*at];
+    if first < 0x80 {
+        *at += 1;
+        return usize::from(first);
+    }
+    varint_long(b, at)
+}
+
+fn varint_long(b: &[u8], at: &mut usize) -> usize {
     let mut n = 0usize;
     let mut shift = 0;
     loop {
@@ -330,7 +366,7 @@ impl<'a> Column<'a> {
         }
     }
 
-    pub(crate) fn to_vec(self) -> Option<Vec<u8>> {
+    pub(crate) fn into_vec(self) -> Option<Vec<u8>> {
         let mut buf = Vec::new();
         self.bytes(&mut buf).map(<[u8]>::to_vec)
     }
