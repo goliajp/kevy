@@ -1,6 +1,23 @@
 //! kevy-vector — ANN core: HNSW graph with
 //! cosine / L2 / inner-product distances, tombstone deletes filtered
 //! at search time, bounded full rebuild.
+//!
+//! ```
+//! use kevy_vector::{Distance, Hnsw, HnswParams};
+//!
+//! let mut h = Hnsw::new(2, HnswParams::default().with_distance(Distance::L2));
+//! h.apply(b"east", Some(vec![1.0, 0.0]));
+//! h.apply(b"north", Some(vec![0.0, 1.0]));
+//! h.apply(b"far", Some(vec![10.0, 10.0]));
+//!
+//! let near = h.knn(&[0.9, 0.1], 2, 16);
+//! assert_eq!(near[0].0, b"east");
+//! assert_eq!(near[1].0, b"north");
+//!
+//! // A removal is a tombstone until a rebuild.
+//! h.apply(b"east", None);
+//! assert_eq!(h.knn(&[0.9, 0.1], 1, 16)[0].0, b"north");
+//! ```
 
 #![warn(missing_docs)]
 

@@ -2,6 +2,23 @@
 //! script-aware tokenization (Latin words + CJK bigrams),
 //! per-shard inverted segments maintained synchronously with writes,
 //! BM25 ranking with shard-local statistics.
+//!
+//! ```
+//! use kevy_text::TextSegment;
+//!
+//! let mut seg = TextSegment::new();
+//! seg.apply(b"doc:1", Some("Rust storage engine".as_bytes()));
+//! seg.apply(b"doc:2", Some("全文検索 in Rust".as_bytes()));
+//! seg.apply(b"doc:3", Some(b"nothing relevant"));
+//!
+//! let hits = seg.matches(b"rust", 10);
+//! let keys: Vec<&[u8]> = hits.iter().map(|m| m.key.as_slice()).collect();
+//! assert_eq!(keys.len(), 2);
+//! assert!(keys.contains(&&b"doc:1"[..]) && keys.contains(&&b"doc:2"[..]));
+//!
+//! // CJK needs no dictionary: bigrams find a two-character query.
+//! assert_eq!(seg.matches("検索".as_bytes(), 10)[0].key, b"doc:2");
+//! ```
 
 #![warn(missing_docs)]
 

@@ -26,6 +26,20 @@
 //! reads the CQ tail with `Acquire` and publishes the CQ head with
 //! `Release`. `IoUring` owns its ring fd and three mappings, freed on
 //! drop.
+//!
+//! # Example
+//!
+//! ```no_run
+//! use kevy_uring::IoUring;
+//!
+//! let mut ring = IoUring::new(8)?;
+//! assert!(ring.prep_nop(7), "the queue has room");
+//! ring.submit_and_wait(1)?;
+//! let mut tags = Vec::new();
+//! ring.for_each_completion(|c| tags.push(c.user_data));
+//! assert_eq!(tags, vec![7]);
+//! # Ok::<(), std::io::Error>(())
+//! ```
 
 #![cfg(target_os = "linux")]
 #![warn(missing_docs)]
