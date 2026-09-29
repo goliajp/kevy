@@ -35,6 +35,9 @@ fn tick(a: &mut Heap, b: &mut Heap) {
     a.reclaim_with(true);
     agree(a, "a's sweep");
     agree(b, "b's sweep");
+    assert_eq!(a.snapshot().cache, 0, "a foreign free shipped home was not drained");
+    nothing_old_held(a);
+    nothing_old_held(b);
 }
 
 /// A shard's steady state: a fixed set of long-lived values, and per
@@ -132,9 +135,10 @@ fn nothing_young_returned(h: &Heap, used: &HashMap<usize, u32>) {
     }
 }
 
-/// The walk the wheel is judged against: no assigned span is empty,
-/// and no free touched page of a live span is resident.
-fn everything_free_returned(h: &Heap) {
+/// The walk the wheel is judged against: every assigned empty span, and
+/// every resident free touched page of a live span, is one `may_hold`
+/// accepts, given the age of the span's youngest page or of the page.
+fn held_only(h: &Heap, may_hold: impl Fn(u32) -> bool) {
     let mut seg = h.segments;
     while !seg.is_null() {
         // SAFETY: the heap's own segment list.
@@ -144,16 +148,28 @@ fn everything_free_returned(h: &Heap) {
             if m.class == NO_CLASS {
                 continue;
             }
-            assert_ne!(m.live, 0, "an empty span outlived the delay");
             let slot = class::size_of(m.class as usize);
+            let touched = (usize::from(m.high_water) * slot).div_ceil(PAGE);
+            let age = |p: usize| h.epoch.wrapping_sub(s.stamps[ix].0[p]);
+            if m.live == 0 {
+                let youngest = (0..touched).map(age).min().unwrap_or(u32::MAX);
+                assert!(may_hold(youngest), "span {ix} held empty at age {youngest}");
+                continue;
+            }
             for p in 0..PAGES_PER_SPAN {
                 let (lo, hi) = slots_of_page(p, slot, m.capacity());
-                let free = p * PAGE < usize::from(m.high_water) * slot && !m.range_has_live(lo, hi);
-                assert!(!free || m.discarded & (1 << p) != 0, "span {ix} page {p} still held");
+                let free = p < touched && !m.range_has_live(lo, hi) && m.discarded & (1 << p) == 0;
+                assert!(!free || may_hold(age(p)), "span {ix} page {p} held at age {}", age(p));
             }
         }
         seg = s.next;
     }
+}
+
+/// Nothing past the delay is still held: the wheel visited every span
+/// that had something due.
+fn nothing_old_held(h: &Heap) {
+    held_only(h, |age| age <= h.purge_delay);
 }
 
 /// Random churn, then none: at every sweep no recently used page has
@@ -200,7 +216,7 @@ fn decay(seed: u64, delay: u32) {
         tick(&mut a, &mut b);
         nothing_young_returned(&a, &used);
     }
-    everything_free_returned(&a);
+    held_only(&a, |_| false);
 }
 
 #[test]
