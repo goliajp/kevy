@@ -27,7 +27,8 @@ pub const SNAPSHOT_CHUNK_MAX: usize = 64 * 1024;
 pub const SNAPSHOT_LINE_MAX: usize = 256;
 
 /// Decoded snapshot marker, returned by [`decode_snapshot_marker`].
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum SnapshotMarker {
     /// `+SNAPSHOT\r\n` — primary is about to stream snapshot chunks.
     Begin,

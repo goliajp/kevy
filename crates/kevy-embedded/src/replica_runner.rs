@@ -333,8 +333,9 @@ fn snapshot_event(
                 *data_gen = ack_gen;
             }
         }
-        // Ping / Frame are handled by the caller's arms.
-        ReplicaEvent::Ping { .. } | ReplicaEvent::Frame(_) => {}
+        // Ping / Frame are handled by the caller's arms; an event this
+        // runner cannot name carries nothing it applies
+        _ => {}
     }
     true
 }

@@ -176,10 +176,10 @@ impl ReplLinks {
         let mut last = kevy_replicate::replica::ReplicaError::HandshakeRejected;
         for i in 0..n {
             let idx = (first + i) % n;
-            let sec = kevy_replicate::replica::ReplicaSecurity {
-                local: self.local.clone(),
-                primary_key: self.primaries[idx],
-            };
+            let sec = kevy_replicate::replica::ReplicaSecurity::new(
+                self.local.clone(),
+                self.primaries[idx],
+            );
             match kevy_replicate::replica::ReplicaClient::connect_secure(
                 addr,
                 replica_id,

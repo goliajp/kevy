@@ -25,7 +25,8 @@ use kevy_resp::Argv;
 use kevy_resp::ArgvView;
 
 /// One encoded mutation frame parked in the backlog.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct Frame {
     /// Monotonic offset the source assigned at push time.
     pub offset: u64,
@@ -35,7 +36,7 @@ pub struct Frame {
 
 /// Reason [`ReplicationSource::frames_from`] cannot serve a replica
 /// from the backlog.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FromOffset {
     /// The replica is asking for an offset we already evicted; the
     /// streaming loop must initiate a snapshot ship.

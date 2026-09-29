@@ -24,7 +24,8 @@ pub use crate::wire_snapshot::{
 /// the caller (read more bytes and retry); the other variants signal
 /// a corrupt or protocol-violating peer and call for dropping the
 /// connection.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum WireError {
     /// Buffer ended before a complete frame; accumulate more bytes
     /// and call [`decode_frame`] again.
@@ -47,20 +48,17 @@ impl std::fmt::Display for WireError {
             Self::BadEnvelope => write!(f, "wire envelope not *2"),
             Self::BadOffset => write!(f, "wire offset element not RESP integer"),
             Self::NegativeOffset(n) => write!(f, "wire offset is negative: {n}"),
-            Self::BadPayload(e) => write!(f, "wire inner payload malformed: {e:?}"),
+            Self::BadPayload(e) => write!(f, "wire inner payload malformed: {e}"),
         }
     }
 }
 
-impl std::error::Error for WireError {}
-
-impl PartialEq for WireError {
-    fn eq(&self, other: &Self) -> bool {
-        // ProtocolError carries `&'static str` reasons; comparing
-        // discriminants is enough for test assertions. Avoids
-        // forcing PartialEq onto ProtocolError just for the test
-        // surface here.
-        core::mem::discriminant(self) == core::mem::discriminant(other)
+impl std::error::Error for WireError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::BadPayload(e) => Some(e),
+            _ => None,
+        }
     }
 }
 

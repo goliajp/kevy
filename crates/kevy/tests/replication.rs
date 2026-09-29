@@ -1281,6 +1281,9 @@ impl ReplicaServer {
                                         argv: frame.argv,
                                     }
                                 }
+                                // nothing to apply for an event this test
+                                // runner cannot name
+                                _ => continue,
                             };
                             if sender.send(apply).is_err() {
                                 return;

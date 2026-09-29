@@ -36,8 +36,6 @@ pub(crate) fn route_event(
         Ok(())
     };
     match event {
-        // Consumed by drain_client_routed; by-argument unreachable.
-        ReplicaEvent::Ping { .. } => Ok(()),
         ReplicaEvent::SnapshotBegin => send_all(&|| ReplicaApply::SnapshotBegin),
         ReplicaEvent::SnapshotChunk(bytes) => {
             send_all(&|| ReplicaApply::SnapshotChunk(bytes.clone()))
@@ -65,6 +63,9 @@ pub(crate) fn route_event(
                 .send(ReplicaApply::Frame { offset: frame.offset, argv: frame.argv })
                 .map_err(|_| ())
         }
+        // a heartbeat (consumed by drain_client_routed before this) or an
+        // event this runner cannot name: no shard state changes
+        _ => Ok(()),
     }
 }
 

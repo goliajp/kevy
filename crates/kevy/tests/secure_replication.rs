@@ -111,7 +111,7 @@ fn connect(
     local: &Keypair,
     primary_key: [u8; 32],
 ) -> Result<ReplicaClient, kevy_replicate::replica::ReplicaError> {
-    let sec = ReplicaSecurity { local: local.clone(), primary_key };
+    let sec = ReplicaSecurity::new(local.clone(), primary_key);
     ReplicaClient::connect_secure(
         ("127.0.0.1", p.repl),
         "secure-replica",

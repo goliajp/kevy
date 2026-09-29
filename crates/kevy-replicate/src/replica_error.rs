@@ -8,6 +8,7 @@ use std::io;
 
 /// Errors a replica client can surface to its driver loop.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum ReplicaError {
     /// Primary closed the connection or never replied during the
     /// handshake / `+ACK` exchange.
@@ -34,7 +35,7 @@ pub enum ReplicaError {
     UnexpectedInSnapshot,
     /// `next_frame` was called but the next event is a snapshot
     /// marker / chunk. Callers that want the snapshot-aware surface
-    /// must use [`ReplicaClient::next_event`].
+    /// must use [`crate::replica::ReplicaClient::next_event`].
     SnapshotInProgress,
     /// Underlying socket I/O failure.
     Io(io::Error),
@@ -61,7 +62,15 @@ impl std::fmt::Display for ReplicaError {
     }
 }
 
-impl std::error::Error for ReplicaError {}
+impl std::error::Error for ReplicaError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Frame(e) => Some(e),
+            Self::Io(e) => Some(e),
+            _ => None,
+        }
+    }
+}
 
 impl From<io::Error> for ReplicaError {
     fn from(e: io::Error) -> Self {
