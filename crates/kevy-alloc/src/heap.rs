@@ -148,6 +148,11 @@ pub struct Heap {
     /// This heap's key in the segment owner tree (`rtree`), taken when it
     /// maps its first segment; 0 until then.
     pub(crate) token: usize,
+    /// Span-state totals the snapshot reads instead of walking.
+    pub(crate) tally: crate::tally::Tally,
+    /// The foreign-free tally every segment of this heap posts to; null
+    /// until the first segment is mapped.
+    pub(crate) parked: *const segment::ForeignTally,
 }
 
 impl Heap {
@@ -202,6 +207,8 @@ impl Heap {
             claims: [None; NCLASSES],
             class_cap,
             token: 0,
+            tally: crate::tally::Tally::NEW,
+            parked: core::ptr::null(),
         }
     }
 
@@ -419,6 +426,7 @@ impl Heap {
         };
         // SAFETY: the free list holds spans of this heap's live segments.
         let meta = unsafe { &mut (*seg.as_ptr()).spans[ix] };
+        self.tally.span_claimed(meta);
         meta.reset(c as u8);
         self.spans_in_class[c] += 1;
         self.partial[c] = Some((seg, ix as u8));
@@ -439,9 +447,17 @@ impl Heap {
         }
         // SAFETY: a fresh exclusive mapping of exactly one segment.
         let seg = unsafe { Segment::init(base, self.id) };
-        // SAFETY: just initialised and owned solely by this heap.
-        unsafe { (*seg.as_ptr()).next = self.segments };
+        // SAFETY: just initialised and owned solely by this heap; the
+        // first segment is unmapped last, only when the heap drops.
+        unsafe {
+            if self.parked.is_null() {
+                self.parked = (*seg.as_ptr()).home;
+            }
+            (*seg.as_ptr()).home = self.parked;
+            (*seg.as_ptr()).next = self.segments;
+        }
         self.segments = seg.as_ptr();
+        self.tally.segment_mapped();
         self.file_new_segment(seg);
         Some(())
     }

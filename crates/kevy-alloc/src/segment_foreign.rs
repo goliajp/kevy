@@ -4,14 +4,45 @@
 //! ceiling; everything here is cross-thread, nothing else in the segment
 //! is.
 
-use core::sync::atomic::Ordering;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 use super::Segment;
 
+/// Slot bytes other threads have freed onto a heap's segments and the
+/// owner has not drained yet. Posted by the freeing thread before its
+/// chain is published and taken back by the owner for exactly what it
+/// drained, so it never undercounts a published chain.
+///
+/// `AtomicUsize` rather than `AtomicU64` because 32-bit targets
+/// (Cortex-M among them) have no 64-bit atomic, and pending foreign
+/// frees cannot exceed the address space anyway.
+#[derive(Debug)]
+pub(crate) struct ForeignTally {
+    /// Slot bytes.
+    pub(crate) bytes: AtomicUsize,
+    /// Of those, the bytes callers asked for. The owner's `live` and
+    /// `rounding` still include them, because the freeing thread cannot
+    /// touch the owner's counters; the snapshot moves them across.
+    pub(crate) live: AtomicUsize,
+}
+
+impl ForeignTally {
+    pub(crate) const fn new() -> Self {
+        Self { bytes: AtomicUsize::new(0), live: AtomicUsize::new(0) }
+    }
+
+    /// The owner drained a batch worth these sums.
+    pub(crate) fn settle(&self, live: usize, bytes: usize) {
+        self.live.fetch_sub(live, Ordering::Relaxed);
+        self.bytes.fetch_sub(bytes, Ordering::Relaxed);
+    }
+}
+
 impl Segment {
-    /// Slot bytes other threads have freed onto this segment and the
-    /// owner has not drained yet. A relaxed read: under concurrent frees
-    /// it is a moment's value, not a bound.
+    /// Slot bytes other threads have freed onto this segment's heap —
+    /// this segment or any other it owns — and the owner has not drained
+    /// yet. A relaxed read: under concurrent frees it is a moment's
+    /// value, not a bound.
     ///
     /// ```
     /// # use kevy_alloc::{Heap, segment};
@@ -26,7 +57,9 @@ impl Segment {
     /// ```
     #[must_use]
     pub fn foreign_bytes(&self) -> usize {
-        self.foreign_bytes.load(Ordering::Relaxed)
+        // SAFETY: `home` is this segment's own tally or the heap's first
+        // segment's, which stays mapped as long as any of its segments.
+        unsafe { &*self.home }.bytes.load(Ordering::Relaxed)
     }
 
     /// Of [`Segment::foreign_bytes`], the bytes callers actually asked
@@ -45,7 +78,8 @@ impl Segment {
     /// ```
     #[must_use]
     pub fn foreign_live(&self) -> usize {
-        self.foreign_live.load(Ordering::Relaxed)
+        // SAFETY: as in `foreign_bytes`.
+        unsafe { &*self.home }.live.load(Ordering::Relaxed)
     }
 
     /// Splice a pre-linked chain of freed slots onto this segment's
@@ -108,8 +142,10 @@ impl Segment {
         live_sum: usize,
         bytes_sum: usize,
     ) {
-        self.foreign_live.fetch_add(live_sum, Ordering::Relaxed);
-        self.foreign_bytes.fetch_add(bytes_sum, Ordering::Relaxed);
+        // SAFETY: as in `foreign_bytes`.
+        let home = unsafe { &*self.home };
+        home.live.fetch_add(live_sum, Ordering::Relaxed);
+        home.bytes.fetch_add(bytes_sum, Ordering::Relaxed);
         let mut old = self.foreign.load(Ordering::Relaxed);
         loop {
             // SAFETY: the tail is ours until the CAS below publishes the
@@ -131,6 +167,10 @@ impl Segment {
     /// shard may call this — that exclusivity is what makes the structure
     /// ABA-free (see [`Segment::splice_foreign`]).
     ///
+    /// The taken bytes stay in [`Segment::foreign_bytes`] until the heap
+    /// settles them by what it actually drained, which
+    /// [`Heap::drain_foreign`](crate::Heap::drain_foreign) does.
+    ///
     /// ```
     /// # use kevy_alloc::{Heap, segment};
     /// let mut heap = Heap::new(0);
@@ -149,8 +189,6 @@ impl Segment {
         if self.foreign.load(Ordering::Relaxed).is_null() {
             return core::ptr::null_mut();
         }
-        self.foreign_bytes.store(0, Ordering::Relaxed);
-        self.foreign_live.store(0, Ordering::Relaxed);
         self.foreign.swap(core::ptr::null_mut(), Ordering::Acquire)
     }
 }
