@@ -230,7 +230,7 @@ pub use kevy_index::{IndexVerify, OrderPath, TableEnsure, TableIndex, TableSpec,
 // `each_prefix` hands the callback a `kevy_store::Value` — same class of
 // gap: a public signature whose type the facade could not name.
 pub use kevy_store::Value;
-pub use pubsub::{PubsubFrame, Subscription};
+pub use pubsub::{PubsubEvent, Subscription};
 pub use store::{Store, WeakStore};
 
 /// Feed kevy's clocks on `wasm32-unknown-unknown`, which has neither

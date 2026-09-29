@@ -277,7 +277,7 @@ impl Store {
     /// which shard it landed on (see docs/text-search.md).
     ///
     /// Two query-time passes: the first sums each shard's `n_docs`,
-    /// `total_len` and per-query-token `df` into one [`CorpusStats`]; the
+    /// `total_len` and per-query-token `df` into one [`kevy_text::CorpusStats`]; the
     /// second scores every shard against it. Only the query's tokens'
     /// df is aggregated, not a whole-corpus table — the query narrows it.
     #[cfg(feature = "text")]

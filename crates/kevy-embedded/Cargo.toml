@@ -51,7 +51,7 @@ listener = []
 # value log under `<data_dir>/tier/`. Needs `persist` (a disk dir);
 # wasm / mem:// stores reject the config at open. kevy-sys provides
 # the memory-bound probe behind the `auto` / percent budget forms.
-tier = ["persist", "dep:kevy-sys"]
+tier = ["persist", "dep:kevy-sys", "dep:kevy-config"]
 # The stream (X*) and geo (GEO*) commands on `dispatch_argv`, and in the
 # replay of a log or a primary's stream that carries them. On by default:
 # without it a replica drops its primary's stream and geo writes. The
@@ -79,6 +79,8 @@ kevy-hash = { path = "../kevy-hash", version = "6.4.0" }
 kevy-replicate = { path = "../kevy-replicate", version = "6.4.0", default-features = false, optional = true }
 kevy-noise = { path = "../kevy-noise", version = "6.4.0", optional = true }
 kevy-crypto = { path = "../kevy-crypto", version = "6.4.0", optional = true }
+# the tiering budget spec (`TierBudgetSpec`), one type with the server's config
+kevy-config = { path = "../kevy-config", version = "6.4.0", optional = true }
 # kevy-resp: `verb_arity` (the arity column both surfaces read, so the
 # entry checks below do not restate the server's numbers as literals)
 # and `parse_command` (handshake decoding) inside

@@ -43,6 +43,7 @@ mod error;
 pub mod fuzz;
 mod inline_ranges;
 pub mod ops_table;
+mod pubsub_event;
 mod reply_encode;
 mod reply_encode_resp3;
 mod reply_parse;
@@ -55,6 +56,7 @@ pub use argv_borrowed::ArgvBorrowed;
 pub use argv_pool::ArgvPool;
 pub use argv_view::{ArgvIter, ArgvView};
 pub use error::{CmdError, ProtocolError};
+pub use pubsub_event::PubsubEvent;
 pub use reply_encode::{
     encode_array_len, encode_bulk, encode_command, encode_command_borrowed, encode_error,
     encode_integer, encode_null_bulk, encode_simple_string,
@@ -99,6 +101,7 @@ const _: () = {
     send_sync::<CmdError>();
     send_sync::<ProtocolError>();
     send_sync::<Reply>();
+    send_sync::<PubsubEvent>();
     send_sync::<RespVersion>();
     send_sync::<ops_table::OpSpec>();
     send_sync::<ops_table::NotifyKind>();

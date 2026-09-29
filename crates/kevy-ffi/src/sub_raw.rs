@@ -3,7 +3,7 @@
 //! `kevy_sub_next` returns each frame RESP-encoded (`*3…message…`), which a
 //! known-channel push subscriber does not want: it only needs the payload
 //! bytes. These two entry points hand back **just the payload**, moved out of
-//! the delivered [`PubsubFrame`] with no RESP framing and no re-copy — the
+//! the delivered [`PubsubEvent`] with no RESP framing and no re-copy — the
 //! `encode_frame` cost the framed lane pays per frame is gone. Split out of
 //! `lib.rs` for the house 500-LOC rule; a NEW lane, additive to the framed one.
 

@@ -35,7 +35,7 @@ pub struct ReconcileReport {
     /// Distinct derived keys the rows imply.
     pub expected: u64,
     /// Implied by a row, absent from the store — lost derived state.
-    /// Exact count; `missing` holds up to [`MAX_SAMPLES`] examples.
+    /// Exact count; `missing` holds up to 1000 examples.
     pub missing_count: u64,
     /// Example missing keys.
     pub missing: Vec<Vec<u8>>,

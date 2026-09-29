@@ -5,7 +5,7 @@
 //! also drives the TTL tick).
 
 use crate::{BAD_HANDLE, arg, with};
-use kevy_embedded::PubsubFrame;
+use kevy_embedded::PubsubEvent;
 
 /// Packed event kind: a direct channel message.
 pub const EVENT_MESSAGE: u8 = 1;
@@ -100,11 +100,11 @@ pub extern "C" fn kevy_poll_events(h: u32) -> i32 {
         for (id, sub) in subs.iter() {
             while let Ok(Some(frame)) = sub.try_recv() {
                 match frame {
-                    PubsubFrame::Message { channel, payload } => {
+                    PubsubEvent::Message { channel, payload } => {
                         pack_event(out, EVENT_MESSAGE, *id, &[], &channel, &payload);
                         count += 1;
                     }
-                    PubsubFrame::Pmessage { pattern, channel, payload } => {
+                    PubsubEvent::Pmessage { pattern, channel, payload } => {
                         pack_event(out, EVENT_PMESSAGE, *id, &pattern, &channel, &payload);
                         count += 1;
                     }
