@@ -104,13 +104,21 @@ fn run(state: &Weak<RuntimeState>) {
             pace.since_walk = pace.since_walk.max(WALK_EVERY - 3);
         }
         pace.target = t.tier.effective_target;
-        look(&state.mem, budget, t.used_memory + t.tier.reserved_bytes, &mut pace);
+        // under kevy-alloc the shards publish what their heaps hold; glibc's
+        // counters then describe almost nothing
+        let heap = (t.alloc_shards > 0).then(|| {
+            let a = &t.alloc;
+            a.mapped - (a.span_free + a.cache + a.returned + a.virgin + a.hysteresis)
+        });
+        look(&state.mem, budget, t.used_memory + t.tier.reserved_bytes, heap, &mut pace);
     }
 }
 
 /// One look. `accounted` is what the shards charge: `used_memory` plus
-/// the index floor.
-fn look(g: &MemGuard, budget: u64, accounted: u64, pace: &mut Pace) {
+/// the index floor. `heap` is what kevy-alloc's heaps hold live, when it
+/// is the allocator — it returns its own pages, so there is nothing for a
+/// glibc trim to do.
+fn look(g: &MemGuard, budget: u64, accounted: u64, heap: Option<u64>, pace: &mut Pace) {
     let rss = kevy_sys::process_rss_bytes();
     pace.since_walk += 1;
     pace.trim_wait = pace.trim_wait.saturating_sub(1);
@@ -125,13 +133,13 @@ fn look(g: &MemGuard, budget: u64, accounted: u64, pace: &mut Pace) {
     // for what is live: RSS pulling away from it is freed memory piling up,
     // which is worth a walk and a trim before the second is out
     let kept_guess = rss.saturating_sub(accounted + g.overhead_bytes.load(Relaxed));
-    let piling = pace.since_walk >= 3 && trim_due(budget, kept_guess, pace);
+    let piling = heap.is_none() && pace.since_walk >= 3 && trim_due(budget, kept_guess, pace);
     if pace.since_walk < WALK_EVERY && !piling {
         return;
     }
     pace.since_walk = 0;
     let t0 = Instant::now();
-    let live = live_bytes();
+    let live = live_bytes(heap);
     g.walk_us.fetch_add(t0.elapsed().as_micros() as u64, Relaxed);
     g.walks.fetch_add(1, Relaxed);
     g.live_bytes.store(live, Relaxed);
@@ -139,7 +147,9 @@ fn look(g: &MemGuard, budget: u64, accounted: u64, pace: &mut Pace) {
     let overhead = pace.measured.map_or(measured, |last| last.min(measured));
     pace.measured = Some(measured);
     g.overhead_bytes.store(overhead, Relaxed);
-    trim_if_kept(g, budget, rss.saturating_sub(live), pace);
+    if heap.is_none() {
+        trim_if_kept(g, budget, rss.saturating_sub(live), pace);
+    }
     // one walk past the line can be a table mid-growth or a demotion
     // batch still catching up; two in a row, a second apart, is not
     pace.over = if live > rss_line(budget) { pace.over + 1 } else { 0 };
@@ -173,10 +183,12 @@ fn trim_due(budget: u64, kept: u64, pace: &Pace) -> bool {
 
 /// What the process holds live: the allocator's in-use and the keyspace
 /// tables mapped outside it. RSS when the allocator publishes nothing.
-fn live_bytes() -> u64 {
-    match kevy_sys::heap_stats() {
-        Some(h) => h.in_use + kevy_madvise::mapped_bytes() as u64,
-        None => kevy_sys::process_rss_bytes(),
+fn live_bytes(heap: Option<u64>) -> u64 {
+    let mapped = kevy_madvise::mapped_bytes() as u64;
+    match (heap, kevy_sys::heap_stats()) {
+        (Some(h), _) => h + mapped,
+        (None, Some(h)) => h.in_use + mapped,
+        (None, None) => kevy_sys::process_rss_bytes(),
     }
 }
 
@@ -189,7 +201,7 @@ mod tests {
         let g = MemGuard::default();
         let mut pace = Pace::default();
         for _ in 0..WALK_EVERY * 2 {
-            look(&g, u64::MAX / 2, 0, &mut pace);
+            look(&g, u64::MAX / 2, 0, None, &mut pace);
         }
         assert!(!g.refusing.load(Relaxed));
         assert_eq!(g.trims.load(Relaxed) + g.walks.load(Relaxed), 0, "no trim, no walk");
@@ -201,14 +213,14 @@ mod tests {
         let g = MemGuard::default();
         let mut pace = Pace::default();
         for _ in 0..WALK_EVERY {
-            look(&g, 1, 0, &mut pace);
+            look(&g, 1, 0, None, &mut pace);
         }
         assert_eq!(g.walks.load(Relaxed), 1);
         assert!(!g.refusing.load(Relaxed), "one walk over the line is not enough");
         let live = g.live_bytes.load(Relaxed);
         assert!(live > 0 && g.overhead_bytes.load(Relaxed) == live, "nothing accounted");
         for _ in 0..WALK_EVERY {
-            look(&g, 1, 0, &mut pace);
+            look(&g, 1, 0, None, &mut pace);
         }
         assert!(g.refusing.load(Relaxed), "two walks over the line refuse");
     }
@@ -217,7 +229,7 @@ mod tests {
     fn the_overhead_is_what_the_store_does_not_account_for() {
         let g = MemGuard::default();
         let mut pace = Pace { since_walk: WALK_EVERY, ..Pace::default() };
-        look(&g, 1, u64::MAX, &mut pace);
+        look(&g, 1, u64::MAX, None, &mut pace);
         assert_eq!(g.overhead_bytes.load(Relaxed), 0, "everything live is accounted");
     }
 }
