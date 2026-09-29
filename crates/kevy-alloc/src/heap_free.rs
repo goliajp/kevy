@@ -81,7 +81,7 @@ impl Heap {
         while !seg.is_null() {
             // SAFETY: live header from our own list.
             let s = unsafe { &*seg };
-            let mut node = segment::take_foreign(s);
+            let mut node = s.take_foreign();
             while !node.is_null() {
                 // SAFETY: foreign entries are slot addresses of this
                 // segment, linked through their first word.

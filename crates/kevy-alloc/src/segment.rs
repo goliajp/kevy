@@ -49,7 +49,7 @@ pub struct Segment {
     /// way home through this.
     pub(crate) owner: usize,
     /// Slots freed by a thread other than the owner, as a lock-free
-    /// stack of slot addresses. See [`splice_foreign`] for why this is
+    /// stack of slot addresses. See [`Segment::splice_foreign`] for why this is
     /// push-only.
     pub(crate) foreign: AtomicPtr<u8>,
     /// Slot bytes parked on `foreign`, so the accounting can price the
@@ -187,6 +187,90 @@ impl Segment {
     pub fn foreign_live(&self) -> usize {
         self.foreign_live.load(Ordering::Relaxed)
     }
+
+    /// Splice a pre-linked chain of freed slots onto this segment's
+    /// foreign list, and post the batch's byte sums. One CAS and two
+    /// `fetch_add`s for the whole chain — this is the amortisation M1
+    /// forced: the per-op version of this function was three atomic RMWs
+    /// on this same line for every single foreign free, and cross-shard KV
+    /// paid 18–39 % for it.
+    ///
+    /// The chain format is unchanged from the per-op era: each slot's
+    /// first word links to the next, with the requested size at
+    /// [`FOREIGN_SIZE_OFFSET`] — the owner's drain cannot tell a spliced
+    /// batch from a thousand individual pushes.
+    ///
+    /// # Why this is push-only, and why that matters
+    ///
+    /// A Treiber stack's ABA hazard lives in `pop`: a consumer reads
+    /// `head.next`, and between that read and its compare-and-swap another
+    /// thread can pop, push other nodes, and push the same address back —
+    /// so the CAS succeeds against a stale `next`. torajs-mmalloc documents
+    /// the hazard and accepts it, reasoning that its runtime is
+    /// single-threaded. kevy is not: values are shared across shards on the
+    /// read lane, so a foreign free is ordinary, and inheriting that note
+    /// would be inheriting a bug.
+    ///
+    /// The fix is structural rather than defensive. **Only the owning shard
+    /// ever removes anything, and it removes the entire list with one
+    /// `swap`** ([`Segment::take_foreign`]). There is no compare-and-swap
+    /// on the consumer side, so there is no window for ABA to open.
+    /// Producers only ever push. This is mimalloc's thread-free design, and
+    /// it is strictly simpler than tagged pointers or hazard pointers would
+    /// have been.
+    ///
+    /// # Safety
+    /// `head..tail` must be a chain of live slot addresses belonging to
+    /// this segment, linked through their first words, referenced by
+    /// nobody else; `live_sum`/`bytes_sum` must be the chain's
+    /// requested/slot-byte sums.
+    pub unsafe fn splice_foreign(
+        &self,
+        head: *mut u8,
+        tail: *mut u8,
+        live_sum: usize,
+        bytes_sum: usize,
+    ) {
+        self.foreign_live.fetch_add(live_sum, Ordering::Relaxed);
+        self.foreign_bytes.fetch_add(bytes_sum, Ordering::Relaxed);
+        let mut old = self.foreign.load(Ordering::Relaxed);
+        loop {
+            // SAFETY: the tail is ours until the CAS below publishes the
+            // chain; its link word is free to point at the current head.
+            unsafe { tail.cast::<*mut u8>().write(old) };
+            match self.foreign.compare_exchange_weak(
+                old,
+                head,
+                Ordering::Release,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(actual) => old = actual,
+            }
+        }
+    }
+
+    /// Take the whole foreign-free list, leaving it empty. Only the owning
+    /// shard may call this — that exclusivity is what makes the structure
+    /// ABA-free (see [`Segment::splice_foreign`]).
+    ///
+    /// ```
+    /// # use kevy_alloc::{Heap, segment};
+    /// let mut heap = Heap::new(0);
+    /// if let Some(p) = heap.alloc(64, 8) {
+    ///     // SAFETY: `p` is a small slot this heap handed out.
+    ///     let seg = unsafe { segment::segment_of(p).as_ref() };
+    ///     assert!(seg.take_foreign().is_null(), "no other thread freed here");
+    ///     // SAFETY: allocated just above with this size and alignment.
+    ///     unsafe { heap.dealloc(p, 64, 8) };
+    /// }
+    /// ```
+    #[must_use]
+    pub fn take_foreign(&self) -> *mut u8 {
+        self.foreign_bytes.store(0, Ordering::Relaxed);
+        self.foreign_live.store(0, Ordering::Relaxed);
+        self.foreign.swap(core::ptr::null_mut(), Ordering::Acquire)
+    }
 }
 
 /// Recover the segment owning `ptr`.
@@ -221,73 +305,7 @@ pub fn slot_index_of(ptr: NonNull<u8>, class: usize) -> u32 {
     class::slot_of_offset(off, class)
 }
 
-/// Push a slot onto a segment's foreign-free stack.
-///
-/// # Why this is push-only, and why that matters
-///
-/// A Treiber stack's ABA hazard lives in `pop`: a consumer reads
-/// `head.next`, and between that read and its compare-and-swap another
-/// thread can pop, push other nodes, and push the same address back —
-/// so the CAS succeeds against a stale `next`. torajs-mmalloc documents
-/// the hazard and accepts it, reasoning that its runtime is
-/// single-threaded. kevy is not: values are shared across shards on the
-/// read lane, so a foreign free is ordinary, and inheriting that note
-/// would be inheriting a bug.
-///
-/// The fix is structural rather than defensive. **Only the owning shard
-/// ever removes anything, and it removes the entire list with one
-/// `swap`.** There is no compare-and-swap on the consumer side, so
-/// there is no window for ABA to open. Producers only ever push. This
-/// is mimalloc's thread-free design, and it is strictly simpler than
-/// tagged pointers or hazard pointers would have been.
-///
-/// Splice a pre-linked chain of freed slots onto a segment's foreign
-/// list, and post the batch's byte sums. One CAS and two `fetch_add`s
-/// for the whole chain — this is the amortisation M1 forced: the per-op
-/// version of this function was three atomic RMWs on this same line for
-/// every single foreign free, and cross-shard KV paid 18–39 % for it.
-///
-/// The chain format is unchanged from the per-op era: each slot's first
-/// word links to the next, with the requested size at
-/// [`FOREIGN_SIZE_OFFSET`] — the owner's drain cannot tell a spliced
-/// batch from a thousand individual pushes.
-///
-/// # Safety
-/// `head..tail` must be a chain of live slot addresses belonging to
-/// `seg`, linked through their first words, referenced by nobody else;
-/// `live_sum`/`bytes_sum` must be the chain's requested/slot-byte sums.
-pub unsafe fn splice_foreign(
-    seg: &Segment,
-    head: *mut u8,
-    tail: *mut u8,
-    live_sum: usize,
-    bytes_sum: usize,
-) {
-    seg.foreign_live.fetch_add(live_sum, Ordering::Relaxed);
-    seg.foreign_bytes.fetch_add(bytes_sum, Ordering::Relaxed);
-    let mut old = seg.foreign.load(Ordering::Relaxed);
-    loop {
-        // SAFETY: the tail is ours until the CAS below publishes the
-        // chain; its link word is free to point at the current head.
-        unsafe { tail.cast::<*mut u8>().write(old) };
-        match seg.foreign.compare_exchange_weak(old, head, Ordering::Release, Ordering::Relaxed) {
-            Ok(_) => break,
-            Err(actual) => old = actual,
-        }
-    }
-}
-
-/// Take the whole foreign-free list, leaving it empty. Only the owning
-/// shard may call this — that exclusivity is what makes the structure
-/// ABA-free (see [`splice_foreign`]).
-#[must_use]
-pub fn take_foreign(seg: &Segment) -> *mut u8 {
-    seg.foreign_bytes.store(0, Ordering::Relaxed);
-    seg.foreign_live.store(0, Ordering::Relaxed);
-    seg.foreign.swap(core::ptr::null_mut(), Ordering::Acquire)
-}
-
-/// Where [`splice_foreign`] stores the requested size inside a free slot,
+/// Where [`Segment::splice_foreign`] stores the requested size inside a free slot,
 /// clear of the link that occupies the first word.
 pub const FOREIGN_SIZE_OFFSET: usize = core::mem::size_of::<*mut u8>();
 
@@ -295,10 +313,10 @@ pub const FOREIGN_SIZE_OFFSET: usize = core::mem::size_of::<*mut u8>();
 ///
 /// # Safety
 /// `slot` must still be on a foreign list, untouched since
-/// [`splice_foreign`] wrote it.
+/// [`Segment::splice_foreign`] wrote it.
 #[must_use]
 pub unsafe fn foreign_requested(slot: NonNull<u8>) -> usize {
-    // SAFETY: written by `splice_foreign`, and nothing hands out a slot
+    // SAFETY: written by `Segment::splice_foreign`, and nothing hands out a slot
     // while it is queued.
     unsafe { slot.as_ptr().add(FOREIGN_SIZE_OFFSET).cast::<u32>().read() as usize }
 }

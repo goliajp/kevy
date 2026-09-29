@@ -177,7 +177,7 @@ impl Group {
         // SAFETY: head..tail is a chain of slots exclusively ours until
         // the CAS below publishes it.
         unsafe {
-            segment::splice_foreign(seg, self.head, self.tail, self.live_sum, self.bytes_sum);
+            seg.splice_foreign(self.head, self.tail, self.live_sum, self.bytes_sum);
         }
         *self = Self::EMPTY;
     }
