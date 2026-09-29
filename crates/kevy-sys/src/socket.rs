@@ -15,6 +15,26 @@ use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, RawFd};
 
 /// An owned socket file descriptor. Closes itself on drop via our own `close`.
+///
+/// # Examples
+///
+/// ```
+/// use std::io::{Read, Write};
+/// use kevy_sys::Socket;
+///
+/// let listener = Socket::tcp_listen([127, 0, 0, 1], 0, 16)?;
+/// let mut client = std::net::TcpStream::connect(("127.0.0.1", listener.local_port()?))?;
+/// let conn = listener.accept()?;
+/// conn.set_nodelay()?;
+///
+/// client.write_all(b"PING")?;
+/// let mut buf = [0u8; 4];
+/// assert_eq!(conn.read(&mut buf)?, 4);
+/// conn.write_all(b"PONG")?;
+/// client.read_exact(&mut buf)?;
+/// assert_eq!(&buf, b"PONG");
+/// # Ok::<(), std::io::Error>(())
+/// ```
 #[derive(Debug)]
 pub struct Socket {
     pub(crate) fd: c_int,
