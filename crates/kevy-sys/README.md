@@ -28,12 +28,12 @@ piece of the kevy server.
   the x86_64 packed `epoll_event`).
 
 ```rust,no_run
-use kevy_sys::{Poller, tcp_listen};
+use kevy_sys::{Interest, Poller, tcp_listen};
 
 let listener = tcp_listen([127, 0, 0, 1], 6379, 1024)?;
 listener.set_nonblocking()?;
 let poller = Poller::new()?;
-poller.add(listener.raw(), true, false)?;
+poller.add(listener.raw(), Interest::READ)?;
 # Ok::<(), std::io::Error>(())
 ```
 
