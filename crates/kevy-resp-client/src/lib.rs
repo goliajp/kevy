@@ -287,7 +287,7 @@ impl RespClient {
     /// propagates that as [`io::ErrorKind::Other`].
     ///
     /// `kevys://host:port?server_key=<hex>[&client_key_file=<path>]`
-    /// connects to the encrypted client port; see [`parse_secure_url`].
+    /// connects to the encrypted client port; see [`SecureUrl::parse`].
     pub fn connect_url(url: &str) -> io::Result<Self> {
         let (stream, db) = ClientStream::open(url)?;
         let mut client = Self::over(stream);
