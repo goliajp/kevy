@@ -377,19 +377,12 @@ fn gather_cold(
     let Some(dir) = inner.idx_segs.cold_text_of(name).filter(|d| d.has_cold()) else {
         return;
     };
-    let (mut bare, phrases, _prefixes) = kevy_text::parse_clauses(query);
-    bare.sort();
-    bare.dedup();
-    let page = dir.cold_page(&kevy_window::ColdPageQuery {
-        bare,
-        phrases,
-        stats,
-        filter: q.filter,
-        sort: q.sort.as_ref(),
-        distinct: q.distinct.as_ref(),
-        facets,
-        fetch,
-    });
+    let mut cq = kevy_window::ColdPageQuery::parse(query, stats, fetch)
+        .with_filter(q.filter)
+        .with_facets(facets);
+    cq.sort = q.sort.as_ref();
+    cq.distinct = q.distinct.as_ref();
+    let page = dir.cold_page(&cq);
     let spec = inner.idx_segs.text.iter().find(|(s, _)| s.name() == name).map(|(s, _)| s.clone());
     for h in page.hits {
         let hl = highlight.map_or_else(Vec::new, |w| {
