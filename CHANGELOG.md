@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Sweeps over a prefix walk its keys instead of copying them.**
+  `IDX.VERIFY` and `TABLE.VERIFY`, the sampling a global index's split
+  points start from, and `MOVE-SCOPE`'s export each began by copying every
+  key under the prefix (`MOVE-SCOPE` every key in the shard) and held the
+  copy for the length of the sweep: about 20 bytes a key beyond the rows,
+  on top of whatever the operation itself needs. Each now walks the
+  prefix a batch of 1,024 keys at a time. The sweeps run in one operation
+  and insert nothing, so every key is still visited once.
+
 - **`PREFIX.DIGEST` holds one batch of keys, not a copy of the prefix.**
   Each shard copied every key under the prefix before sweeping it: on ten
   million rows, about 200 MB held for the length of the sweep, enough to
