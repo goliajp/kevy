@@ -86,7 +86,7 @@ fn kevy_err(out: &mut Vec<u8>, e: &KevyError) {
     let msg: String = match e {
         KevyError::Store(se) => return encode_error(out, se.as_wire()),
         KevyError::ReadOnly => {
-            return encode_error(out, "READONLY You can't write against a read only replica");
+            return encode_error(out, "READONLY You can't write against a read only replica.");
         }
         KevyError::InvalidInput(m) | KevyError::NotFound(m) | KevyError::Unsupported(m) => {
             format!("ERR {m}")

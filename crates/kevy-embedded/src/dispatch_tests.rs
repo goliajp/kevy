@@ -238,3 +238,15 @@ fn every_dispatched_verb_is_in_the_registry_or_named_as_outside_it() {
          NOT_KEYSPACE so the ledger stays exact"
     );
 }
+
+/// A replica refuses a write in the server's words, byte for byte, which
+/// are Redis's: the sentence ends with a period.
+#[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
+#[test]
+fn a_replica_refuses_a_write_in_the_servers_words() {
+    // an upstream nobody listens on: the store stays a replica
+    let s = Store::open_replica("127.0.0.1:1").expect("open replica");
+    let readonly: &[u8] = b"-READONLY You can't write against a read only replica.\r\n";
+    assert_eq!(run(&s, &[b"SET", b"k", b"v"]), readonly);
+    assert_eq!(run(&s, &[b"DEL", b"k"]), readonly);
+}
