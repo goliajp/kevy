@@ -53,20 +53,75 @@ pub use std::hint::black_box;
 #[non_exhaustive]
 pub struct Stats {
     /// Number of samples collected.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let s = kevy_bench::bench(7, 10, || { std::hint::black_box(1u8); });
+    /// assert_eq!(s.samples, 7); // one timed sample per outer repetition
+    /// ```
     pub samples: usize,
     /// Iterations timed per sample (the divisor applied to each sample).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let s = kevy_bench::bench(3, 250, || { std::hint::black_box(1u8); });
+    /// // each sample's elapsed time was divided by this
+    /// assert_eq!(s.inner, 250);
+    /// ```
     pub inner: usize,
     /// Fastest sample — the least-disturbed run, closest to the true cost.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let s = kevy_bench::bench(20, 100, || { std::hint::black_box(1u8); });
+    /// // no sample was faster, so the median and the mean sit at or above it
+    /// assert!(s.min_ns <= s.median_ns && s.min_ns <= s.mean_ns);
+    /// ```
     pub min_ns: u64,
     /// Median sample — the headline figure, robust to occasional hiccups.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// let s = kevy_bench::bench(3, 1, || std::thread::sleep(Duration::from_micros(200)));
+    /// // a 200 µs sleep never measures shorter than that
+    /// assert!(s.median_ns >= 200_000);
+    /// ```
     pub median_ns: u64,
     /// 95th-percentile sample — tail behaviour under scheduler noise.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let s = kevy_bench::bench(40, 100, || { std::hint::black_box(1u8); });
+    /// assert!(s.p95_ns >= s.median_ns); // the tail sits at or above the median
+    /// ```
     pub p95_ns: u64,
     /// Mean across all samples.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// let s = kevy_bench::bench(4, 1, || std::thread::sleep(Duration::from_micros(100)));
+    /// // every sample took at least the sleep, so their average did too
+    /// assert!(s.mean_ns >= 100_000 && s.mean_ns >= s.min_ns);
+    /// ```
     pub mean_ns: u64,
     /// Sample standard deviation across samples (Bessel-corrected; 0 when
     /// `samples == 1`). Reported alongside the median in baseline tables so
     /// a future delta can be judged against the run-to-run noise band.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let one = kevy_bench::bench(1, 100, || { std::hint::black_box(1u8); });
+    /// assert_eq!(one.stdev_ns, 0); // a single sample has no spread
+    /// ```
     pub stdev_ns: u64,
 }
 
