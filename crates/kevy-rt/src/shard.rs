@@ -14,9 +14,10 @@
 
 use crate::Commands;
 use crate::NotificationFlags;
+use crate::batch_lane::BatchLane;
 use crate::blocked::BlockedClients;
 use crate::conn::Conn;
-use crate::message::{Inbound, PubMsg, PubSubPatternReg, PubSubReg, ReqBatch};
+use crate::message::{Inbound, PubMsg, PubSubPatternReg, PubSubReg};
 use crate::park_fence::ParkFlag;
 use kevy_map::KevyMap;
 use kevy_persist::Aof;
@@ -310,7 +311,7 @@ pub(crate) struct Shard<C: Commands> {
     /// (`flush_requests`) so a -c50 flood costs one cross-core send per shard,
     /// not one per command — amortizing the ring/fold tax that drags many
     /// shards below single-shard throughput.
-    pub(crate) request_batch: Vec<ReqBatch>,
+    pub(crate) request_batch: Vec<BatchLane>,
     /// Per-shard cached `notify_keyspace_events` flags — hot-reloaded
     /// off the [`crate::Commands::live_runtime_config`] tick. Empty
     /// (default) = OFF: every write checks `notify_flags.is_active()`

@@ -107,6 +107,7 @@ mod port_claim;
 #[cfg(debug_assertions)]
 pub use block_xshard_confirm::counters as serve_counters;
 mod aof_writer;
+mod batch_lane;
 mod block_xshard_registry;
 mod block_xshard_target;
 mod blocked;

@@ -288,12 +288,12 @@ impl<C: Commands> Shard<C> {
         while mask != 0 {
             let s = mask.trailing_zeros() as usize;
             mask &= mask - 1;
-            if s == self.id || self.request_batch[s].is_empty() {
+            if s == self.id || self.request_batch[s].reqs.is_empty() {
                 continue;
             }
-            let reqs = std::mem::take(&mut self.request_batch[s]);
+            let (reqs, spare) = self.request_batch[s].take();
             self.xshard_inflight += reqs.len() as u64;
-            self.send_to(s, Inbound::RequestBatch { origin: self.id, reqs });
+            self.send_to(s, Inbound::RequestBatch { origin: self.id, reqs, spare });
         }
     }
 
