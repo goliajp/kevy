@@ -8,6 +8,12 @@
 #   check   — exact reply match (scalars + order-sensitive: GET/LRANGE/ZRANGE…)
 #   checku  — order-insensitive (unordered collections: HGETALL/SMEMBERS/SINTER…)
 set -uo pipefail
+# KEVY_BIN=<release server> runs that binary instead of building the image
+if [ -n "${KEVY_BIN:-}" ]; then
+  KEVY_BIN=$(cd "$(dirname "$KEVY_BIN")" && pwd)/$(basename "$KEVY_BIN")
+  [ -x "$KEVY_BIN" ] || { echo "compat3: $KEVY_BIN is not an executable" >&2; exit 2; }
+  export KEVY_BIN COMPOSE_FILE=docker-compose.yml:docker-compose.hostbin.yml
+fi
 cd "$(dirname "$0")"
 
 . ./anchor-lib.sh || { echo "compat3: cannot load anchor-lib.sh" >&2; exit 2; }

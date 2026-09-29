@@ -894,6 +894,7 @@ jobs:
   # ───────────── command parity (correctness gate) ─────────────
   compat-differential:
     name: compat3 differential (kevy == valkey, byte-for-byte)
+    needs: server-release
     runs-on: ubuntu-latest
     timeout-minutes: 25
     # Blocking, unlike the perf smoke above: a divergence is a deterministic
@@ -902,8 +903,13 @@ jobs:
     # diverges from valkey on any check.
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: server-release
+          path: target/release
+      - run: chmod +x target/release/kevy target/release/kevy-cli
       - name: 3-way differential vs the pinned valkey and redis
-        run: bash bench/compat3.sh
+        run: KEVY_BIN=target/release/kevy bash bench/compat3.sh
 
   # ── clientgate — bring your redis client, gated ──────────────────────────
   # kevy speaks RESP; the claim that every ecosystem's mainstream redis

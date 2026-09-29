@@ -936,7 +936,7 @@ proves = "snapshot S + (gen, O) is an exact restore point, executed"
 id = "compat3"
 area = "compat"
 tier = "premerge"
-cmd = "bash bench/compat3.sh"
+cmd = "KEVY_BIN=target/release/kevy bash bench/compat3.sh"
 expected = 203
 timeout = 3600
 requires = ["docker", "binaries-release"]
