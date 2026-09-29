@@ -61,6 +61,7 @@ mod record;
 mod record_pieces;
 mod replay;
 mod replay_log;
+mod replay_report;
 mod replay_resync;
 mod replay_txn;
 mod replay_walk;
@@ -80,8 +81,9 @@ mod stage_recover;
 #[cfg(not(target_arch = "wasm32"))]
 mod stage_ring;
 
-pub use aof::{AOF_MAGIC, Aof, RewritePlan, RewriteStats};
+pub use aof::{AOF_MAGIC, Aof};
 pub use aof_policy::RewritePolicy;
+pub use aof_rewrite::{RewritePlan, RewriteStats};
 #[cfg(not(target_arch = "wasm32"))]
 pub use aof_stage::StageOpen;
 pub use aof_sync::PendingSync;
@@ -101,6 +103,15 @@ pub use segmented::{SEGMENTED, segmented_argv, segmented_frame};
 /// ran without the inline spill. One shared constant so AOF replay
 /// (whose drive loops live in the callers — kevy-rt / kevy-embedded)
 /// and the snapshot loader stride identically.
+///
+/// ```
+/// // a replay loop demotes every `REPLAY_DEMOTE_INTERVAL` frames
+/// let frames = 5000u64;
+/// let demotions = (1..=frames)
+///     .filter(|n| n.is_multiple_of(kevy_persist::REPLAY_DEMOTE_INTERVAL))
+///     .count();
+/// assert_eq!(demotions, 4);
+/// ```
 pub const REPLAY_DEMOTE_INTERVAL: u64 = 1024;
 pub use dir_lock::DirLock;
 pub use kevy_resp::{Argv, ArgvView};
@@ -136,18 +147,76 @@ pub use snapshot_write::{
 /// Hosts implement it for their own aggregates (the embedded store
 /// serializes several shards as one source). An implementation must uphold
 /// the tiering contract above, and yield each live key exactly once.
+///
+/// ```
+/// use kevy_persist::SnapshotSource;
+/// use kevy_store::{SetCondition, Store, Value};
+///
+/// // two shards snapshotted as one source
+/// struct Both(Store, Store);
+/// impl SnapshotSource for Both {
+///     fn for_each_entry(&self, mut f: impl FnMut(&[u8], &Value, Option<u64>)) {
+///         self.0.for_each_entry(&mut f);
+///         self.1.for_each_entry(&mut f);
+///     }
+/// }
+///
+/// let (mut a, mut b) = (Store::new(), Store::new());
+/// a.set(b"a", b"1".to_vec(), None, SetCondition::Always);
+/// b.set(b"b", b"2".to_vec(), None, SetCondition::Always);
+/// let mut image = Vec::new();
+/// kevy_persist::write_snapshot_to(&Both(a, b), &mut image)?;
+///
+/// let mut back = Store::new();
+/// kevy_persist::load_snapshot_from(&mut back, image.as_slice())?;
+/// assert_eq!(back.dbsize(), 2);
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub trait SnapshotSource {
     /// Visit every live entry as `(key, &value, remaining_ttl_ms)`.
+    ///
+    /// ```
+    /// use kevy_persist::SnapshotSource;
+    /// use kevy_store::{SetCondition, Store};
+    /// use std::time::Duration;
+    ///
+    /// let mut store = Store::new();
+    /// store.set(b"k", b"v".to_vec(), Some(Duration::from_secs(60)), SetCondition::Always);
+    /// let mut seen = Vec::new();
+    /// store.for_each_entry(|key, _value, ttl| seen.push((key.to_vec(), ttl.is_some())));
+    /// assert_eq!(seen, [(b"k".to_vec(), true)]);
+    /// ```
     fn for_each_entry(&self, f: impl FnMut(&[u8], &Value, Option<u64>));
 
     /// Visit every live hash field TTL as `(key, field,
     /// absolute_unix_ms)`. Default = none (sources without the
     /// feature).
+    ///
+    /// ```
+    /// use kevy_persist::SnapshotSource;
+    /// use kevy_store::{HExpireCond, Store};
+    ///
+    /// let mut store = Store::new();
+    /// store.hset(b"h", &[(b"f", b"v")])?;
+    /// let deadline = kevy_store::now_unix_ms() + 60_000;
+    /// store.hexpire_at(b"h", &[b"f"], deadline, HExpireCond::Always)?;
+    /// let mut ttls = Vec::new();
+    /// store.for_each_hash_ttl(|key, field, at| ttls.push((key.to_vec(), field.to_vec(), at)));
+    /// assert_eq!(ttls, [(b"h".to_vec(), b"f".to_vec(), deadline)]);
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
     fn for_each_hash_ttl(&self, _f: impl FnMut(&[u8], &[u8], u64)) {}
 
     /// The live row segments' `(seq, file)` identities — the AOF
     /// rewrite's trailing SEGMENTED frames and the snapshot writer's
     /// version choice read these. Default = none.
+    ///
+    /// ```
+    /// use kevy_persist::SnapshotSource;
+    ///
+    /// // a store that never sealed a row segment references none
+    /// assert!(SnapshotSource::row_seg_files(&kevy_store::Store::new()).is_empty());
+    /// ```
     fn row_seg_files(&self) -> Vec<(u32, String)> {
         Vec::new()
     }

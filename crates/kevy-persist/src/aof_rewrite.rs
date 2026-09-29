@@ -9,9 +9,148 @@ use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use crate::aof::{AOF_BUF_CAP, Aof, RewritePlan, RewriteStats};
+use crate::aof::{AOF_BUF_CAP, Aof};
 use crate::dump_store_to_buf;
 use kevy_store::Store;
+
+/// Handoff between the two halves of a non-blocking rewrite: the serialized
+/// keyspace image (produced under the store lock) and the temp path to spill
+/// it to (off-lock). See [`Aof::begin_concurrent_rewrite`].
+///
+/// ```
+/// use kevy_persist::{Aof, Fsync};
+///
+/// let path = std::env::temp_dir().join(format!("plan-doc-{}.aof", std::process::id()));
+/// let mut aof = Aof::open(&path, Fsync::No)?;
+/// let plan = aof.begin_concurrent_rewrite(&kevy_store::Store::new())?; // under the lock
+/// std::fs::write(&plan.tmp, &plan.body)?; // the slow part, off the lock
+/// aof.finish_concurrent_rewrite(&plan.tmp, plan.keys)?; // under the lock again
+/// assert!(!aof.is_rewriting() && !plan.tmp.exists());
+/// # drop(aof);
+/// # std::fs::remove_file(&path)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct RewritePlan {
+    /// The compacted AOF image (magic + one command stream per key).
+    ///
+    /// ```
+    /// use kevy_persist::{AOF2_MAGIC, Aof, Fsync};
+    /// use kevy_store::{SetCondition, Store};
+    ///
+    /// let path = std::env::temp_dir().join(format!("plan-body-doc-{}.aof", std::process::id()));
+    /// let mut store = Store::new();
+    /// store.set(b"k", b"v".to_vec(), None, SetCondition::Always);
+    /// let mut aof = Aof::open(&path, Fsync::No)?;
+    /// let plan = aof.begin_concurrent_rewrite(&store)?;
+    /// assert!(plan.body.starts_with(AOF2_MAGIC));
+    /// aof.abort_concurrent_rewrite();
+    /// # drop(aof);
+    /// # std::fs::remove_file(&path)?;
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
+    pub body: Vec<u8>,
+    /// Same-directory temp file to spill `body` to before the final swap.
+    ///
+    /// ```
+    /// use kevy_persist::{Aof, Fsync};
+    ///
+    /// let path = std::env::temp_dir().join(format!("plan-tmp-doc-{}.aof", std::process::id()));
+    /// let mut aof = Aof::open(&path, Fsync::No)?;
+    /// let plan = aof.begin_concurrent_rewrite(&kevy_store::Store::new())?;
+    /// assert_eq!(plan.tmp.parent(), path.parent()); // rename stays atomic
+    /// aof.abort_concurrent_rewrite();
+    /// # drop(aof);
+    /// # std::fs::remove_file(&path)?;
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
+    pub tmp: PathBuf,
+    /// Keys captured in `body` (for the resulting [`RewriteStats`]).
+    ///
+    /// ```
+    /// use kevy_persist::{Aof, Argv, Fsync};
+    /// use kevy_store::{SetCondition, Store};
+    ///
+    /// let path = std::env::temp_dir().join(format!("plan-keys-doc-{}.aof", std::process::id()));
+    /// let mut store = Store::new();
+    /// store.set(b"a", b"1".to_vec(), None, SetCondition::Always);
+    /// store.set(b"b", b"2".to_vec(), None, SetCondition::Always);
+    /// let mut aof = Aof::open(&path, Fsync::No)?;
+    /// let plan = aof.begin_concurrent_rewrite(&store)?;
+    /// assert_eq!(plan.keys, 2);
+    /// // spill off-lock; writes landing meanwhile are teed
+    /// std::fs::write(&plan.tmp, &plan.body)?;
+    /// aof.append(&Argv::from(vec![b"SET".to_vec(), b"c".to_vec(), b"3".to_vec()]))?;
+    /// let stats = aof.finish_concurrent_rewrite(&plan.tmp, plan.keys)?;
+    /// assert_eq!(stats.keys, 2);
+    /// let replayed = kevy_persist::replay_aof_quiet(&path, Default::default(), |_| {})?;
+    /// assert_eq!(replayed.commands, 3);
+    /// # drop(aof);
+    /// # std::fs::remove_file(&path)?;
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
+    pub keys: u64,
+}
+
+/// Result of an [`Aof::rewrite_from`] call. Surfaced by `BGREWRITEAOF` /
+/// `INFO persistence`. The default is the empty rewrite (no keys, no
+/// bytes), the starting point for summing several shards' stats.
+///
+/// ```
+/// use kevy_persist::{Aof, Fsync, RewriteStats};
+///
+/// let dir = kevy_tmpdir::unique_dir("stats-doc");
+/// let mut total = RewriteStats::default();
+/// for shard in 0..2 {
+///     let mut aof = Aof::open(&kevy_persist::layout::aof_path(&dir, shard), Fsync::No)?;
+///     let stats = aof.rewrite_from(&kevy_store::Store::new())?;
+///     (total.keys, total.bytes) = (total.keys + stats.keys, total.bytes + stats.bytes);
+/// }
+/// assert_eq!(total.keys, 0);
+/// assert_eq!(total.bytes, 2 * kevy_persist::AOF2_MAGIC.len() as u64);
+/// # std::fs::remove_dir_all(&dir)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
+pub struct RewriteStats {
+    /// Keys dumped into the new AOF.
+    ///
+    /// ```
+    /// use kevy_persist::{Aof, Argv, Fsync};
+    /// use kevy_store::{SetCondition, Store};
+    ///
+    /// let path = std::env::temp_dir().join(format!("stats-keys-doc-{}.aof", std::process::id()));
+    /// let mut aof = Aof::open(&path, Fsync::No)?;
+    /// let mut store = Store::new();
+    /// for _ in 0..3 {
+    ///     // three writes to one key compact to one key
+    ///     store.set(b"k", b"v".to_vec(), None, SetCondition::Always);
+    ///     aof.append(&Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()]))?;
+    /// }
+    /// assert_eq!(aof.rewrite_from(&store)?.keys, 1);
+    /// # drop(aof);
+    /// # std::fs::remove_file(&path)?;
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
+    pub keys: u64,
+    /// New AOF size in bytes.
+    ///
+    /// ```
+    /// use kevy_persist::{Aof, Fsync};
+    ///
+    /// let path = std::env::temp_dir().join(format!("stats-bytes-doc-{}.aof", std::process::id()));
+    /// let mut aof = Aof::open(&path, Fsync::No)?;
+    /// let stats = aof.rewrite_from(&kevy_store::Store::new())?;
+    /// assert_eq!(stats.bytes, std::fs::metadata(&path)?.len());
+    /// assert_eq!(aof.size_bytes(), stats.bytes);
+    /// # drop(aof);
+    /// # std::fs::remove_file(&path)?;
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
+    pub bytes: u64,
+}
 
 impl Aof {
     /// Phase 1 of a **non-blocking** rewrite (Background auto-rewrite). Must be

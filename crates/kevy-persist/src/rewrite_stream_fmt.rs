@@ -14,6 +14,21 @@ use std::io::{self, Write};
 /// non-zero `entries_added` drift), then the consumer-group section.
 /// Returns the number of command frames written so callers that ship
 /// rebuild frames elsewhere (scope migration) can report a frame count.
+///
+/// ```
+/// use kevy_store::{MissingStream, Store, XAddIdSpec};
+///
+/// let mut store = Store::new();
+/// let fields = vec![(b"f".to_vec(), b"v".to_vec())];
+/// store.xadd(b"s", XAddIdSpec::AutoSeq(1), fields, MissingStream::Create, 0)?;
+/// let stream = store.stream_view(b"s")?.ok_or("no stream")?;
+/// let mut out = Vec::new();
+/// let frames = kevy_persist::write_stream_as_commands(&mut out, b"s", stream)?;
+/// assert_eq!(frames, 1, "one XADD, no fixups");
+/// let (xadd, _) = kevy_resp::parse_command(&out)?.ok_or("incomplete")?;
+/// assert_eq!(&xadd[0], b"XADD");
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn write_stream_as_commands<W: Write>(
     mut w: W,
     key: &[u8],

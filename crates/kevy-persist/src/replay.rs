@@ -10,6 +10,8 @@ use crate::modes::{ReplayMode, ReplaySummary};
 use crate::replay_walk::{ReplayStop, Sink, walk_v2};
 use kevy_resp::Argv;
 
+pub use crate::replay_report::ReplayReport;
+
 /// Replay the command log at `path`, calling `apply` for each complete command.
 ///
 /// Always emits a one-line summary to stderr when the file has any bytes,
@@ -43,6 +45,27 @@ use kevy_resp::Argv;
 /// will parse as a valid (if nonsense) command. The summary line is the
 /// signal — an unexpected count of replayed commands at boot is the
 /// operator's cue to inspect the AOF byte-by-byte.
+///
+/// ```
+/// use kevy_persist::{Aof, Argv, Fsync, replay_aof};
+/// use kevy_store::{SetCondition, Store};
+///
+/// let path = std::env::temp_dir().join(format!("replay-aof-doc-{}.aof", std::process::id()));
+/// let mut aof = Aof::open(&path, Fsync::No)?;
+/// aof.append(&Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()]))?;
+/// drop(aof);
+///
+/// // boot: re-apply the log to an empty store
+/// let mut store = Store::new();
+/// replay_aof(&path, |args| {
+///     if args[0] == *b"SET" {
+///         store.set(&args[1], args[2].to_vec(), None, SetCondition::Always);
+///     }
+/// })?;
+/// assert_eq!(store.get(b"k").ok().flatten().as_deref(), Some(&b"v"[..]));
+/// # std::fs::remove_file(&path)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub fn replay_aof<F: FnMut(Argv)>(path: &Path, mut apply: F) -> io::Result<ReplayReport> {
     replay_with(path, false, false, Sink::Owned(&mut apply))
 }
@@ -112,6 +135,21 @@ fn replay_with(
 /// taken over, so the stderr line would be a duplicate. The corrupt-frame
 /// WARN still prints unconditionally — it is an incident signal, not
 /// information, and does not share this switch.
+///
+/// ```
+/// use kevy_persist::{Aof, Argv, Fsync, ReplayMode, replay_aof_quiet};
+///
+/// let path = std::env::temp_dir().join(format!("replay-quiet-doc-{}.aof", std::process::id()));
+/// let mut aof = Aof::open(&path, Fsync::No)?;
+/// aof.append(&Argv::from(vec![b"DEL".to_vec(), b"k".to_vec()]))?;
+/// drop(aof);
+/// let mut seen = Vec::new();
+/// let report = replay_aof_quiet(&path, ReplayMode::Strict, |args| seen.push(args))?;
+/// assert_eq!(report.commands, 1); // reported here, not on stderr
+/// assert_eq!(seen, [vec![b"DEL".to_vec(), b"k".to_vec()]]);
+/// # std::fs::remove_file(&path)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub fn replay_aof_quiet<F: FnMut(Argv)>(
     path: &Path,
     mode: ReplayMode,
@@ -188,37 +226,29 @@ fn replay_v1_slice(
 /// frames over one bad record — this is the lane that gets them back.
 /// v1 files have no checksums to anchor on: they replay strictly here
 /// too (their first rewrite upgrades them into resync's world).
+///
+/// ```
+/// use kevy_persist::{AOF2_MAGIC, Aof, Argv, Fsync, replay_aof_resync};
+///
+/// let path = std::env::temp_dir().join(format!("replay-resync-doc-{}.aof", std::process::id()));
+/// let mut aof = Aof::open(&path, Fsync::Always)?;
+/// for key in [b"a", b"b", b"c"] {
+///     aof.append(&Argv::from(vec![b"SET".to_vec(), key.to_vec(), b"v".to_vec()]))?;
+/// }
+/// drop(aof);
+/// let mut bytes = std::fs::read(&path)?;
+/// bytes[AOF2_MAGIC.len() + 12] ^= 1; // one bad record at the front
+/// std::fs::write(&path, &bytes)?;
+///
+/// let mut keys = Vec::new();
+/// let report = replay_aof_resync(&path, |args| keys.push(args[1].to_vec()))?;
+/// assert!(report.corrupt, "still worth an alert");
+/// assert_eq!(keys, [b"b".to_vec(), b"c".to_vec()]);
+/// # std::fs::remove_file(&path)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub fn replay_aof_resync<F: FnMut(Argv)>(path: &Path, mut apply: F) -> io::Result<ReplayReport> {
     replay_with(path, true, false, Sink::Owned(&mut apply))
-}
-
-/// What one [`replay_aof`] pass restored — and, crucially, what it could
-/// NOT: `dropped_bytes` and `corrupt` are the machine-readable form of the
-/// WARN line, so a host can turn "the AOF lost bytes at boot" into an
-/// alert instead of a needle in stderr (the 3-day silent-loss incident was
-/// exactly this signal going unwatched).
-#[derive(Debug, Clone, Default)]
-#[non_exhaustive]
-pub struct ReplayReport {
-    /// Commands re-applied.
-    pub commands: u64,
-    /// Total file size in bytes (before any repair).
-    pub bytes: u64,
-    /// Bytes actually replayed (the valid prefix).
-    pub replayed_bytes: u64,
-    /// Bytes past the last complete frame — dropped, then quarantined and
-    /// truncated by [`crate::Aof::open`]. The zero tail is not among them.
-    pub dropped_bytes: u64,
-    /// Zeros from the last record to the end of the file: the unused part
-    /// of a mapped log's preallocation, cut off without quarantine.
-    pub zero_tail: u64,
-    /// True when the stop was a corrupt frame (vs a clean end or a
-    /// partial trailing frame).
-    pub corrupt: bool,
-    /// Byte ranges resync skipped over ([`replay_aof_resync`] only):
-    /// each is a corrupt region between two valid records. Empty under
-    /// the strict replay.
-    pub resynced_ranges: Vec<(u64, u64)>,
 }
 
 /// Byte length of the AOF at `path` up to and including the last

@@ -13,6 +13,7 @@ use kevy_store::Store;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use crate::aof_mapped::{MapHandle, Mapped, sync_handles};
+use crate::aof_rewrite::RewriteStats;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use crate::aof_stage::Stage;
 #[cfg(target_arch = "wasm32")]
@@ -33,6 +34,20 @@ use crate::record_pieces::{record_header, write_frame};
 /// Public so host-mediated AOF sinks (a browser pump appending kevy
 /// frames to its own storage, for example) can stamp files that stay
 /// byte-compatible with kevy-written logs.
+///
+/// ```
+/// use kevy_persist::{AOF_MAGIC, Argv, write_multibulk};
+///
+/// // a host-written v1 log: the magic, then bare RESP frames
+/// let path = std::env::temp_dir().join(format!("aof-magic-doc-{}.aof", std::process::id()));
+/// let mut log = AOF_MAGIC.to_vec();
+/// write_multibulk(&mut log, &Argv::from(vec![b"DEL".to_vec(), b"k".to_vec()]))?;
+/// std::fs::write(&path, &log)?;
+/// let report = kevy_persist::replay_aof_quiet(&path, Default::default(), |_| {})?;
+/// assert_eq!(report.commands, 1);
+/// # std::fs::remove_file(&path)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub const AOF_MAGIC: &[u8; 9] = b"KEVYAOF1\n";
 
 /// AOF write buffer capacity. `BufWriter`'s default is 8 KiB — a single
@@ -58,6 +73,21 @@ pub(crate) const AOF_BUF_CAP: usize = 256 * 1024;
 /// [`Aof::rewrite_from`] (BGREWRITEAOF) via the
 /// `auto_aof_rewrite_percentage` + `auto_aof_rewrite_min_size` knobs in
 /// `kevy_config`.
+///
+/// ```
+/// use kevy_persist::{Aof, Argv, Fsync};
+///
+/// let path = std::env::temp_dir().join(format!("aof-type-doc-{}.aof", std::process::id()));
+/// let mut aof = Aof::open(&path, Fsync::Always)?;
+/// let before = aof.size_bytes();
+/// aof.append(&Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()]))?;
+/// assert!(aof.size_bytes() > before);
+/// aof.truncate()?; // a snapshot now holds the state
+/// assert_eq!(aof.size_bytes(), before);
+/// # drop(aof);
+/// # std::fs::remove_file(&path)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
 #[derive(Debug)]
 pub struct Aof {
     pub(crate) file: BufWriter<File>,
@@ -150,32 +180,6 @@ pub struct Aof {
     /// the fsync-proven durable watermark; unlike file offsets it never
     /// resets across a rewrite swap, so held replies cannot wedge.
     pub(crate) queued_seq: u64,
-}
-
-/// Handoff between the two halves of a non-blocking rewrite: the serialized
-/// keyspace image (produced under the store lock) and the temp path to spill
-/// it to (off-lock). See [`Aof::begin_concurrent_rewrite`].
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub struct RewritePlan {
-    /// The compacted AOF image (magic + one command stream per key).
-    pub body: Vec<u8>,
-    /// Same-directory temp file to spill `body` to before the final swap.
-    pub tmp: PathBuf,
-    /// Keys captured in `body` (for the resulting [`RewriteStats`]).
-    pub keys: u64,
-}
-
-/// Result of an [`Aof::rewrite_from`] call. Surfaced by `BGREWRITEAOF` /
-/// `INFO persistence`. The default is the empty rewrite (no keys, no
-/// bytes), the starting point for summing several shards' stats.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[non_exhaustive]
-pub struct RewriteStats {
-    /// Keys dumped into the new AOF.
-    pub keys: u64,
-    /// New AOF size in bytes.
-    pub bytes: u64,
 }
 
 impl Aof {

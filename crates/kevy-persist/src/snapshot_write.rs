@@ -19,6 +19,21 @@ use std::path::Path;
 /// Write a point-in-time snapshot of `src` (a live [`kevy_store::Store`] or a
 /// frozen [`kevy_store::SnapshotView`]) to `path`, atomically: data is written
 /// to `<path>.tmp`, fsynced, then renamed over `path`.
+///
+/// ```
+/// use kevy_store::{SetCondition, Store};
+///
+/// let mut store = Store::new();
+/// store.set(b"k", b"v".to_vec(), None, SetCondition::Always);
+/// let dir = kevy_tmpdir::unique_dir("save-doc");
+/// let path = dir.join("dump.rdb");
+/// kevy_persist::save_snapshot(&store, &path)?;
+/// let mut back = Store::new();
+/// kevy_persist::load_snapshot(&mut back, &path)?;
+/// assert_eq!(back.get(b"k").ok().flatten().as_deref(), Some(&b"v"[..]));
+/// # std::fs::remove_dir_all(&dir)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub fn save_snapshot<S: SnapshotSource>(src: &S, path: &Path) -> io::Result<()> {
     let tmp = write_snapshot_tmp(src, path)?;
     std::fs::rename(&tmp, path)
@@ -35,6 +50,20 @@ pub fn save_snapshot<S: SnapshotSource>(src: &S, path: &Path) -> io::Result<()> 
 /// that need durability (disk) wrap in `BufWriter<File>` and call
 /// `sync_all` themselves; callers that need bytes (network ship)
 /// pass a `Vec<u8>`.
+///
+/// ```
+/// use kevy_store::{SetCondition, Store};
+///
+/// let mut store = Store::new();
+/// store.set(b"k", b"v".to_vec(), None, SetCondition::Always);
+/// // ship over the wire: bytes, no file
+/// let mut wire = Vec::new();
+/// kevy_persist::write_snapshot_to(&store, &mut wire)?;
+/// let mut replica = Store::new();
+/// kevy_persist::load_snapshot_from(&mut replica, wire.as_slice())?;
+/// assert_eq!(replica.dbsize(), 1);
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub fn write_snapshot_to<S: SnapshotSource, W: Write>(src: &S, sink: W) -> io::Result<()> {
     write_snapshot_to_with_cursor(src, sink, None)
 }
@@ -116,6 +145,16 @@ fn snapshot_version<S: SnapshotSource>(src: &S, has_fttl: bool, has_cursor: bool
 /// leisure, then the store-owning thread renames it in the same critical
 /// section that resets the AOF — keeping the snapshot/AOF commit adjacent
 /// instead of seconds apart.
+///
+/// ```
+/// let dir = kevy_tmpdir::unique_dir("snapshot-tmp-doc");
+/// let path = dir.join("dump.rdb");
+/// let tmp = kevy_persist::write_snapshot_tmp(&kevy_store::Store::new(), &path)?;
+/// assert!(tmp.exists() && !path.exists(), "durable, not yet visible");
+/// std::fs::rename(&tmp, &path)?; // the commit, next to the AOF reset
+/// # std::fs::remove_dir_all(&dir)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub fn write_snapshot_tmp<S: SnapshotSource>(
     src: &S,
     path: &Path,

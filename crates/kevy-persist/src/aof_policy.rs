@@ -28,12 +28,77 @@ use crate::aof::Aof;
 #[non_exhaustive]
 pub struct RewritePolicy {
     /// Growth percentage past the last-rewrite baseline (0 = rule off).
+    ///
+    /// ```
+    /// use kevy_persist::{Aof, Argv, Fsync, RewritePolicy};
+    ///
+    /// let path = std::env::temp_dir().join(format!("policy-{}-doc-{}.aof", "pct", std::process::id()));
+    /// let mut aof = Aof::open(&path, Fsync::No)?;
+    /// let set = Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), vec![b'v'; 100]]);
+    /// let doubled = RewritePolicy::default().with_pct(100);
+    /// assert!(!aof.rewrite_due(doubled), "a fresh log has not grown");
+    /// while aof.size_bytes() < 2 * aof.size_at_last_rewrite() {
+    ///     aof.append(&set)?;
+    /// }
+    /// assert!(aof.rewrite_due(doubled));
+    /// # drop(aof);
+    /// # std::fs::remove_file(&path)?;
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub pct: u32,
     /// Minimum size before the growth rule may fire.
+    ///
+    /// ```
+    /// use kevy_persist::{Aof, Argv, Fsync, RewritePolicy};
+    ///
+    /// let path = std::env::temp_dir().join(format!("policy-{}-doc-{}.aof", "min", std::process::id()));
+    /// let mut aof = Aof::open(&path, Fsync::No)?;
+    /// let set = Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), vec![b'v'; 100]]);
+    /// for _ in 0..10 {
+    ///     aof.append(&set)?;
+    /// }
+    /// let growth = RewritePolicy::default().with_pct(100);
+    /// assert!(aof.rewrite_due(growth));
+    /// assert!(!aof.rewrite_due(growth.with_min_size(1 << 20)), "still too small to bother");
+    /// # drop(aof);
+    /// # std::fs::remove_file(&path)?;
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub min_size: u64,
     /// Absolute size cap (0 = rule off).
+    ///
+    /// ```
+    /// use kevy_persist::{Aof, Argv, Fsync, RewritePolicy};
+    ///
+    /// let path = std::env::temp_dir().join(format!("policy-{}-doc-{}.aof", "bytes", std::process::id()));
+    /// let mut aof = Aof::open(&path, Fsync::No)?;
+    /// let set = Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), vec![b'v'; 100]]);
+    /// let cap = RewritePolicy::default().with_bytes(1024);
+    /// assert!(!aof.rewrite_due(cap));
+    /// for _ in 0..10 {
+    ///     aof.append(&set)?;
+    /// }
+    /// assert!(aof.rewrite_due(cap), "past 1 KiB, whatever the growth");
+    /// # drop(aof);
+    /// # std::fs::remove_file(&path)?;
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub bytes: u64,
     /// Rewrite at least this often while the log grows (0 = rule off).
+    ///
+    /// ```
+    /// use kevy_persist::{Aof, Argv, Fsync, RewritePolicy};
+    ///
+    /// let path = std::env::temp_dir().join(format!("policy-{}-doc-{}.aof", "interval", std::process::id()));
+    /// let mut aof = Aof::open(&path, Fsync::No)?;
+    /// let set = Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), vec![b'v'; 100]]);
+    /// let hourly = RewritePolicy::default().with_interval_secs(3600);
+    /// aof.append(&set)?;
+    /// assert!(!aof.rewrite_due(hourly), "grown, but not yet an hour old");
+    /// # drop(aof);
+    /// # std::fs::remove_file(&path)?;
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub interval_secs: u64,
 }
 
