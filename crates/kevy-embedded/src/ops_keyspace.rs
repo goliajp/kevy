@@ -81,23 +81,40 @@ impl Store {
     /// `RANDOMKEY` — return a randomly-chosen existing key, or
     /// `None` when the keyspace is empty.
     ///
-    /// Implementation: snapshot all keys via `collect_keys`, then
-    /// pick a uniform index. For large keyspaces this is O(N); a
-    /// future ship can add a `key_at(rank)` Store method for O(1)
-    /// random pick.
+    /// A shard is drawn in proportion to how many keys it holds, and that
+    /// shard picks from a random point in its table, so the cost does not
+    /// grow with the keyspace.
+    ///
+    /// ```
+    /// # use kevy_embedded::{Config, Store};
+    /// let s = Store::open(Config::default())?;
+    /// assert_eq!(s.randomkey(), None);
+    /// s.set(b"only", b"1")?;
+    /// assert_eq!(s.randomkey(), Some(b"only".to_vec()));
+    /// # Ok::<(), kevy_embedded::KevyError>(())
+    /// ```
     pub fn randomkey(&self) -> Option<Vec<u8>> {
-        let keys = self.collect_keys(None, None);
-        if keys.is_empty() {
+        let sizes: Vec<usize> =
+            self.shards.iter().map(|sh| crate::store_glue::lock_read(sh).store.dbsize()).collect();
+        let total: usize = sizes.iter().sum();
+        if total == 0 {
             return None;
         }
-        // Cheap PRNG via nanosecond clock — embedded in-process so
-        // this just needs decent distribution, not crypto strength.
-        let idx = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.subsec_nanos() as usize)
-            .unwrap_or(0)
-            % keys.len();
-        Some(keys[idx].clone())
+        let mut draw = {
+            let mut g = crate::store_glue::lock_write(&self.shards[0]);
+            g.store.rand_draw() as usize % total
+        };
+        for (i, n) in sizes.iter().enumerate() {
+            if draw < *n {
+                if let Some(k) = crate::store_glue::lock_write(&self.shards[i]).store.random_key() {
+                    return Some(k);
+                }
+                break;
+            }
+            draw -= n;
+        }
+        // the shard drawn emptied since it was counted: any key will do
+        self.shards.iter().find_map(|sh| crate::store_glue::lock_write(sh).store.random_key())
     }
 
     /// `UNLINK key [key ...]` — alias for [`Self::del`]. In Redis
