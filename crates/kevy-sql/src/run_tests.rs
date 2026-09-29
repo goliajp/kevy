@@ -47,7 +47,7 @@ fn a_descending_index_is_an_order_path_that_serves_order_by_desc() {
         "{schema}CREATE VIEW latest AS SELECT id FROM ev WHERE at >= $1 ORDER BY at DESC LIMIT 10;"
     ))
     .expect("parses");
-    let crate::Served::No { reason } = &refused.queries[0].served else {
+    let crate::Served::Refused { reason } = &refused.queries[0].served else {
         panic!("no path reads backwards yet")
     };
     assert!(
@@ -102,7 +102,9 @@ fn a_select_no_path_serves_is_refused_like_sql_plan_refuses_it() {
         "{schema}CREATE VIEW select AS SELECT * FROM orders WHERE total > 3;"
     ))
     .expect("the schema parses");
-    let crate::Served::No { reason } = &plan.queries[0].served else { panic!("plan serves it") };
+    let crate::Served::Refused { reason } = &plan.queries[0].served else {
+        panic!("plan serves it")
+    };
     assert_eq!(&err.message, reason);
 }
 

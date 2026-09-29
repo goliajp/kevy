@@ -9,7 +9,7 @@ use crate::declared::{self, Declared};
 use crate::lex::{Tok, lex};
 use crate::parse::P;
 use crate::schema::Table;
-use crate::{KevyType, QueryCard, SqlError, parse_view, viewplan};
+use crate::{QueryCard, SqlError, ValType, parse_view, viewplan};
 
 /// One `SELECT … FROM t WHERE …` as the `IDX.QUERY` argv that answers
 /// it over `t`'s declared paths. Values are literals; a `$N` slot is a
@@ -177,11 +177,13 @@ fn orderpaths(t: &Table, out: &mut String, lost: &mut Vec<String>) -> Result<(),
     Ok(())
 }
 
-fn sql_type(ty: KevyType) -> &'static str {
+fn sql_type(ty: ValType) -> &'static str {
     match ty {
-        KevyType::I64 => "bigint",
-        KevyType::F64 => "double precision",
-        KevyType::Str => "text",
+        ValType::I64 => "bigint",
+        ValType::F64 => "double precision",
+        ValType::Str => "text",
+        // `declared` admits only the three column types above
+        _ => unreachable!("a declared column is i64, f64 or str"),
     }
 }
 
