@@ -23,6 +23,15 @@
   with `-READONLY You can't write against a read only replica.` An
   `EVAL_RO` script can no longer call them either.
 
+- **`XREADGROUP … BLOCK` works when the stream lives on another shard.**
+  Since 1.5.0 a blocking group read ran on the connection's own shard
+  first; with the stream on another shard it found no group there and
+  answered `-NOGROUP`, whether or not the group existed. With more than
+  one shard that was most connections. It now parks at once and the
+  stream's own shard serves it: at once when the group has something to
+  read or does not exist (the `NOGROUP` a read there gives), otherwise
+  when an entry arrives, like the other blocking commands.
+
 - **`kevy-cluster-rw` sends every write to the primary.** Its own list of
   write commands had drifted from the server's: 21 commands the server
   counts as writes went to a replica, among them `GETEX`, `SETBIT`,

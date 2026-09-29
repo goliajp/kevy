@@ -235,26 +235,31 @@ fn a_served_blocking_command_survives_a_restart_and_reaches_a_replica() {
     assert!(on_replica.is_empty(), "on the replica, these do not hold: {on_replica:#?}");
 }
 
+/// A connection to `node` and a hashtag whose keys live on another shard
+/// than the connection's. A connection's id is `shard + 1 + k * nshards`,
+/// so its shard is known.
+fn waiter_away_from_its_keys(node: &Node, nshards: usize) -> (Wire, u8) {
+    let mut waiter = node.wire();
+    let id = waiter.call(&[b"CLIENT" as &[u8], b"ID"]);
+    let id: u64 = std::str::from_utf8(&id[1..id.len() - 2]).unwrap().parse().unwrap();
+    let waiter_shard = (id - 1) as usize % nshards;
+    let shard = |tag: u8| {
+        kevy_rt::shard_of_key(&[b'{', tag, b'}'], nshards, kevy_persist::Routing::KevyHash)
+    };
+    let tag = (b'a'..=b'z').find(|t| shard(*t) != waiter_shard).expect("a key on another shard");
+    (waiter, tag)
+}
+
 /// Four shards, every key placed away from the waiting connection's
-/// shard. A connection's id is `shard + 1 + k * nshards`, so its shard is
-/// known, and a key on another shard can only be served by the
-/// cross-shard path. The blocking pops only: a blocking group read runs
-/// on the connection's own shard.
+/// shard, so only the cross-shard path can serve it.
 #[test]
 fn a_cross_shard_serve_survives_a_restart() {
     const NSHARDS: usize = 4;
-    let cases: Vec<&Case> = CASES.iter().filter(|c| c.name != "XREADGROUP").collect();
+    let cases: Vec<&Case> = CASES.iter().collect();
     let dir = TmpDir::new("serve-xshard");
     let primary = Node::primary(NSHARDS, &dir);
     let mut writer = primary.wire();
-    let mut waiter = primary.wire();
-    let id = waiter.call(&[b"CLIENT" as &[u8], b"ID"]);
-    let id: u64 = std::str::from_utf8(&id[1..id.len() - 2]).unwrap().parse().unwrap();
-    let waiter_shard = (id - 1) as usize % NSHARDS;
-    let shard = |tag: u8| {
-        kevy_rt::shard_of_key(&[b'{', tag, b'}'], NSHARDS, kevy_persist::Routing::KevyHash)
-    };
-    let tag = (b'a'..=b'z').find(|t| shard(*t) != waiter_shard).expect("a key on another shard");
+    let (mut waiter, tag) = waiter_away_from_its_keys(&primary, NSHARDS);
     for case in &cases {
         park_and_serve(case, tag, &mut waiter, &mut writer);
     }
@@ -265,4 +270,26 @@ fn a_cross_shard_serve_survives_a_restart() {
     let after_restart = wrong_on(&restarted, tag, &cases);
     restarted.stop();
     assert!(after_restart.is_empty(), "after a restart, these do not hold: {after_restart:#?}");
+}
+
+/// A blocking group read on another shard's stream answers at once when
+/// the group is missing, as it does on the stream's own shard, and serves
+/// at once when the group already has something to read.
+#[test]
+fn a_cross_shard_group_read_answers_at_once_when_it_can() {
+    const NSHARDS: usize = 4;
+    let dir = TmpDir::new("serve-xshard-group");
+    let primary = Node::primary(NSHARDS, &dir);
+    let mut writer = primary.wire();
+    let (mut waiter, tag) = waiter_away_from_its_keys(&primary, NSHARDS);
+    let read: Cmd =
+        &[b"XREADGROUP", b"GROUP", b"g", b"c", b"BLOCK", b"0", b"STREAMS", b"{T}s", b">"];
+    let missing = waiter.call(&tagged_cmd(read, tag));
+    assert!(missing.starts_with(b"-NOGROUP"), "{}", String::from_utf8_lossy(&missing));
+    writer.call(&tagged_cmd(&[b"XGROUP", b"CREATE", b"{T}s", b"g", b"0", b"MKSTREAM"], tag));
+    writer.call(&tagged_cmd(&[b"XADD", b"{T}s", b"1-1", b"f", b"v"], tag));
+    let answer: &[u8] =
+        b"*1\r\n*2\r\n$4\r\n{T}s\r\n*1\r\n*2\r\n$3\r\n1-1\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n";
+    assert_eq!(waiter.call(&tagged_cmd(read, tag)), tagged(answer, tag));
+    primary.stop();
 }
