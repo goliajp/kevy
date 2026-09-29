@@ -56,21 +56,21 @@ pub const NO_CLASS: u8 = 0xFF;
 #[derive(Debug, Clone, Copy)]
 pub struct SpanMeta {
     /// Size class this span serves, or [`NO_CLASS`].
-    pub class: u8,
+    pub(crate) class: u8,
     /// Lowest bitmap word that may hold a zero bit — a scan cursor,
     /// maintained so lowest-first allocation is O(words-with-no-hole)
     /// rather than O(words).
     hint: u8,
     /// Slots handed out and not yet freed.
-    pub live: u16,
+    pub(crate) live: u16,
     /// Slots at or above this index have never been handed out; their
     /// pages were never touched and are not resident.
-    pub high_water: u16,
+    pub(crate) high_water: u16,
     /// Pages returned to the OS (`MADV_DONTNEED`). Cleared per page when
     /// an allocation lands back in one; set wholesale by
     /// [`Heap::retire_empty_span`](crate::Heap) when the span is emptied
     /// and its pages go back together.
-    pub discarded: u16,
+    pub(crate) discarded: u16,
     /// Set when this span was emptied and handed back to the free pool,
     /// as opposed to never having been assigned at all.
     ///
@@ -102,13 +102,111 @@ pub struct SpanMeta {
     /// assert!(!never_claimed.1);
     /// assert_ne!(given_back.2, held.2);
     /// ```
-    pub retired: bool,
+    pub(crate) retired: bool,
     /// One bit per slot; set = live (or parked on a foreign list, which
     /// pins the page exactly as a live slot does).
     bitmap: [u64; BITMAP_WORDS],
 }
 
 impl SpanMeta {
+    /// Size class this span serves, or [`NO_CLASS`].
+    ///
+    /// ```
+    /// # use kevy_alloc::{Heap, segment};
+    /// let mut heap = Heap::new(0);
+    /// if let Some(p) = heap.alloc(64, 8) {
+    ///     // SAFETY: `p` is a small slot this heap handed out.
+    ///     let seg = unsafe { segment::segment_of(p).as_ref() };
+    ///     let span = &seg.spans()[segment::span_index_of(p)];
+    ///     assert_eq!(usize::from(span.class()), kevy_alloc::class::index_of(64, 8).unwrap());
+    ///     assert!(span.live() >= 1);
+    ///     // SAFETY: allocated just above with this size and alignment.
+    ///     unsafe { heap.dealloc(p, 64, 8) };
+    /// }
+    /// ```
+    #[must_use]
+    pub fn class(&self) -> u8 {
+        self.class
+    }
+
+    /// Slots handed out and not yet freed.
+    ///
+    /// ```
+    /// # use kevy_alloc::{Heap, segment};
+    /// let mut heap = Heap::new(0);
+    /// if let Some(p) = heap.alloc(64, 8) {
+    ///     // SAFETY: `p` is a small slot this heap handed out.
+    ///     let seg = unsafe { segment::segment_of(p).as_ref() };
+    ///     assert!(seg.spans()[segment::span_index_of(p)].live() >= 1);
+    ///     // SAFETY: allocated just above with this size and alignment.
+    ///     unsafe { heap.dealloc(p, 64, 8) };
+    /// }
+    /// ```
+    #[must_use]
+    pub fn live(&self) -> u16 {
+        self.live
+    }
+
+    /// Slots at or above this index have never been handed out; their
+    /// pages were never touched and are not resident.
+    ///
+    /// ```
+    /// # use kevy_alloc::{Heap, segment};
+    /// let mut heap = Heap::new(0);
+    /// if let Some(p) = heap.alloc(64, 8) {
+    ///     // SAFETY: `p` is a small slot this heap handed out.
+    ///     let seg = unsafe { segment::segment_of(p).as_ref() };
+    ///     assert!(seg.spans()[segment::span_index_of(p)].high_water() >= 1);
+    ///     // SAFETY: allocated just above with this size and alignment.
+    ///     unsafe { heap.dealloc(p, 64, 8) };
+    /// }
+    /// ```
+    #[must_use]
+    pub fn high_water(&self) -> u16 {
+        self.high_water
+    }
+
+    /// Pages returned to the OS, one bit per page of the span.
+    ///
+    /// ```
+    /// # use kevy_alloc::{Heap, segment};
+    /// let mut heap = Heap::new(0);
+    /// if let Some(p) = heap.alloc(64, 8) {
+    ///     // SAFETY: `p` is a small slot this heap handed out.
+    ///     let seg = unsafe { segment::segment_of(p).as_ref() };
+    ///     let span = &seg.spans()[segment::span_index_of(p)];
+    ///     // the page holding a live slot is resident
+    ///     let slot = segment::slot_index_of(p, usize::from(span.class()));
+    ///     let (page, _) = kevy_alloc::pagemap::pages_of_slot(slot, 64);
+    ///     assert_eq!(span.discarded() & (1 << page), 0);
+    ///     // SAFETY: allocated just above with this size and alignment.
+    ///     unsafe { heap.dealloc(p, 64, 8) };
+    /// }
+    /// ```
+    #[must_use]
+    pub fn discarded(&self) -> u16 {
+        self.discarded
+    }
+
+    /// Whether this span was emptied and handed back to the free pool,
+    /// as opposed to never having been assigned at all.
+    ///
+    /// ```
+    /// # use kevy_alloc::{Heap, segment};
+    /// let mut heap = Heap::new(0);
+    /// if let Some(p) = heap.alloc(64, 8) {
+    ///     // SAFETY: `p` is a small slot this heap handed out.
+    ///     let seg = unsafe { segment::segment_of(p).as_ref() };
+    ///     assert!(!seg.spans()[segment::span_index_of(p)].retired());
+    ///     // SAFETY: allocated just above with this size and alignment.
+    ///     unsafe { heap.dealloc(p, 64, 8) };
+    /// }
+    /// ```
+    #[must_use]
+    pub fn retired(&self) -> bool {
+        self.retired
+    }
+
     pub(crate) const fn new() -> Self {
         Self {
             class: NO_CLASS,

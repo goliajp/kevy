@@ -35,7 +35,8 @@
 //!   rather than absorbed into a neighbour.
 
 /// A snapshot of where every mapped byte is.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct Stats {
     /// Total bytes mapped from the OS. The anchor.
     pub mapped: u64,
