@@ -46,9 +46,11 @@ pub(crate) enum PersistJob {
         /// Feed cursor at view-freeze — written into the
         /// snapshot header (recovery-point contract).
         cursor: Option<kevy_replicate::feed::FeedPosition>,
+        /// The frame kept beside the keyspace ([`Commands::snapshot_aux`]).
+        aux: Option<kevy_resp::Argv>,
     },
     /// Dump `view` as RESP commands at the AOF's `.rewrite` tmp.
-    Rewrite { view: SnapshotView, tmp: PathBuf },
+    Rewrite { view: SnapshotView, tmp: PathBuf, aux: Option<kevy_resp::Argv> },
     /// Append a handed-off tee generation to the rewrite tmp and fsync.
     TeeAppend { tmp: PathBuf, bytes: Vec<u8> },
     /// The off-thread half of the final swap: hardlink the live log to
@@ -217,6 +219,19 @@ pub(crate) fn drop_file_cache(f: &std::fs::File) {
 }
 
 impl<C: Commands> Shard<C> {
+    /// Load this shard's snapshot at boot, if it has one, and hand the
+    /// command set the frame kept beside the keyspace.
+    pub(crate) fn load_boot_snapshot(&mut self) {
+        let snap = self.snapshot_path();
+        if !snap.exists() {
+            return;
+        }
+        match crate::persist_jobs::load_snapshot_file(&mut self.store, &snap) {
+            Ok(aux) => self.commands.load_snapshot_aux(aux.as_ref(), false),
+            Err(e) => eprintln!("kevy: shard {} failed to load {}: {e}", self.id, snap.display()),
+        }
+    }
+
     /// `BGSAVE` on this shard: freeze the view, start the AOF tee (the
     /// post-collect writes become the reset log), hand off. Skipped with a
     /// log line if a background job or rewrite is already in flight.
@@ -247,7 +262,9 @@ impl<C: Commands> Shard<C> {
         // frozen in the same no-append window as the view itself, so
         // "snapshot + frames from cursor" is exact.
         let cursor = self.replicate.as_ref().map(|f| f.tail());
-        let job = PersistJob::Save { view, snap_path: self.snapshot_path(), aof_reset, cursor };
+        let aux = self.commands.snapshot_aux();
+        let job =
+            PersistJob::Save { view, snap_path: self.snapshot_path(), aof_reset, cursor, aux };
         if !self.persist.submit(self.id, job) {
             eprintln!("kevy: shard {} persist worker unavailable", self.id);
             if let Some(aof) = &mut self.aof {
@@ -290,7 +307,8 @@ impl<C: Commands> Shard<C> {
                 return;
             }
         };
-        if !self.persist.submit(self.id, PersistJob::Rewrite { view, tmp }) {
+        let aux = self.commands.snapshot_aux();
+        if !self.persist.submit(self.id, PersistJob::Rewrite { view, tmp, aux }) {
             eprintln!("kevy: shard {} persist worker unavailable", self.id);
             self.aof.as_mut().expect("checked").abort_concurrent_rewrite();
         }
@@ -436,8 +454,8 @@ impl<C: Commands> Shard<C> {
 
 /// [`kevy_persist::write_snapshot_tmp`] with the feed-cursor header —
 /// same durable-tmp discipline (fsync before the caller's rename).
-pub(crate) fn write_snapshot_tmp_with_cursor(
-    view: &SnapshotView,
+pub(crate) fn write_snapshot_tmp_with_cursor<S: kevy_persist::SnapshotSource>(
+    view: &S,
     path: &std::path::Path,
     cursor: Option<kevy_replicate::feed::FeedPosition>,
 ) -> std::io::Result<PathBuf> {
