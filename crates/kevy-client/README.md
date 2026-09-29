@@ -12,8 +12,11 @@ URL string.
 
 ```rust
 use kevy_client::Connection;
+# mod doc { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/kevy.rs")); }
+# let port = kevy_testnet::free_port();
+# let _kevy = doc::kevy(port);
 
-let mut conn = Connection::connect("tcp://127.0.0.1:6379")?;
+let mut conn = Connection::connect(&format!("tcp://127.0.0.1:{port}"))?;
 conn.set(b"hello", b"world")?;
 assert_eq!(conn.get(b"hello")?, Some(b"world".to_vec()));
 # Ok::<(), kevy_client::KevyError>(())
@@ -154,13 +157,19 @@ bus.
 and routes each key straight to the owning shard, eliminating the
 cross-shard forwarding hop:
 
-```rust,no_run
+```rust
 use kevy_client::ClusterClient;
+# mod doc { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/kevy.rs")); }
+# let port = kevy_testnet::free_port_block(3);
+# let _kevy = doc::cluster(port, 2); // shard ports port+1, port+2
 
-let mut cc = ClusterClient::connect("127.0.0.1", 6380)?;  // any shard port as seed
-cc.set(b"user:42", b"alice")?;                             // routed by CRC16
-let v = cc.get(b"user:42")?;
+let mut cc = ClusterClient::connect("127.0.0.1", port + 1)?; // any shard port as seed
+cc.set(b"user:42", b"alice")?;                               // routed by CRC16
+assert_eq!(cc.get(b"user:42")?, Some(b"alice".to_vec()));
+cc.set(b"a", b"1")?;
+cc.set(b"b", b"2")?;
 let removed = cc.del(&[&b"a"[..], &b"b"[..], &b"c"[..]])?; // multi-key may span shards
+assert_eq!(removed, 2);
 # Ok::<(), kevy_client::KevyError>(())
 ```
 

@@ -504,8 +504,10 @@ name = "kevy-client"
 version = "6.4.0"
 dependencies = [
  "kevy",
+ "kevy-config",
  "kevy-embedded",
  "kevy-hash",
+ "kevy-noise",
  "kevy-resp",
  "kevy-resp-client",
  "kevy-rt",
