@@ -44,7 +44,7 @@ text = ["index", "dep:kevy-text"]
 vector = ["index", "dep:kevy-vector"]
 # Replication (embed-as-replica + embed-as-writer) and the CDC feed.
 # Needs `persist`: replicated frames replay through the AOF verb table.
-replicate = ["persist", "dep:kevy-replicate", "dep:kevy-noise", "dep:kevy-crypto"]
+replicate = ["persist", "dep:kevy-replicate", "kevy-replicate/secure", "dep:kevy-noise", "dep:kevy-crypto"]
 # Read-only RESP listener (ops tooling against a live embedded store).
 listener = []
 # Transparent tiering (capacity arc): `with_tier_budget` + the cold
@@ -73,9 +73,9 @@ kevy-hash = { path = "../kevy-hash", version = "6.4.0" }
 # links on wasm32 (same pattern as kevy-store's kevy-vlog dep).
 # Phase 2 (v1.20+): embed-as-read-replica reuses the server-side
 # replication wire client (kevy-replicate) so the same protocol drives
-# both server replicas and embed replicas. `default-features = false`
-# keeps the dep lean even though kevy-replicate has no optional features
-# today — explicit intent for when it grows them.
+# both server replicas and embed replicas. `default-features = false`:
+# persist alone links kevy-replicate for its feed position type, and
+# only the `replicate` feature turns on its encrypted links (`secure`).
 kevy-replicate = { path = "../kevy-replicate", version = "6.4.0", default-features = false, optional = true }
 kevy-noise = { path = "../kevy-noise", version = "6.4.0", optional = true }
 kevy-crypto = { path = "../kevy-crypto", version = "6.4.0", optional = true }
