@@ -1,6 +1,6 @@
 Execute a command whose verb [`Self::resolve`] already identified,
 appending the reply for `proto` to `out`. The runtime calls this on the
-shard that executes the command, with the [`VerbId`](crate::VerbId) the
+shard that executes the command, with the [`VerbId`][crate::VerbId] the
 resolve on the connection's shard returned, so an implementation that
 assigns ids can go straight to the verb's handler instead of matching the
 verb name again. Default: ignore the id and call [`Self::dispatch_into`]
