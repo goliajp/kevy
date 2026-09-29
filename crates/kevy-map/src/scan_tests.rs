@@ -132,3 +132,54 @@ fn cursor_stays_within_group_mask() {
     let next = m.scan_step(garbage, |_, _| {});
     assert!(next < ngroups, "cursor {next} escaped the group mask");
 }
+
+#[test]
+fn a_bucket_walk_sees_every_key_once_while_the_capacity_holds() {
+    let mut m: KevyMap<u64, u64> = KevyMap::with_capacity(4_000);
+    for i in 0..3_000u64 {
+        m.insert(i, i);
+    }
+    let cap = m.capacity();
+    let (mut seen, mut at, mut round) = (HashMap::new(), 0, 0u64);
+    while at < m.capacity() {
+        at = m.scan_buckets(at, 64, |k, _| *seen.entry(*k).or_insert(0usize) += 1);
+        // removals and inserts that fit move nothing already placed
+        m.remove(&(round * 7));
+        m.insert(10_000 + round, 0);
+        round += 1;
+    }
+    assert_eq!(m.capacity(), cap, "the test needs a walk without growth");
+    for i in 0..3_000u64 {
+        let removed = i % 7 == 0 && i / 7 < round;
+        if !removed {
+            assert_eq!(seen.get(&i), Some(&1), "key {i} present throughout");
+        }
+    }
+}
+
+#[test]
+fn a_bucket_walk_restarted_on_growth_misses_nothing() {
+    // just under the 7/8 growth threshold of a 4096-bucket table
+    let n = 3_500u64;
+    let mut m: KevyMap<u64, u64> = KevyMap::new();
+    for i in 0..n {
+        m.insert(i, i);
+    }
+    let mut seen: HashMap<u64, usize> = HashMap::new();
+    let first_cap = m.capacity();
+    let (mut at, mut cap, mut next) = (0, first_cap, 1_000_000u64);
+    while at < m.capacity() {
+        if m.capacity() != cap {
+            (at, cap) = (0, m.capacity());
+        }
+        at = m.scan_buckets(at, 16, |k, _| *seen.entry(*k).or_insert(0) += 1);
+        // one insert a group: enough to grow the table mid-walk, too few
+        // to grow it again before a restarted walk can finish
+        m.insert(next, 0);
+        next += 1;
+    }
+    assert!(cap > first_cap, "the test needs growth mid-walk");
+    for i in 0..n {
+        assert!(seen.contains_key(&i), "key {i} present throughout was skipped");
+    }
+}

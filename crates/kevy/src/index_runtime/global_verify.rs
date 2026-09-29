@@ -24,7 +24,7 @@ pub(crate) type Placed = (Vec<u8>, u16, u64);
 /// is not a global index here.
 pub(crate) fn verify_chunk(ctx: &Ctx<'_>, store: &mut Store, name: &[u8]) -> Option<Vec<u8>> {
     let mut st = ctx.shard.indexes.borrow_mut();
-    super::refresh(ctx, &mut st, store);
+    super::refresh(ctx, &mut st);
     let si = st.idx.iter().find(|si| si.spec.name() == name)?;
     let g = si.global.as_ref()?;
     if !g.ready() {

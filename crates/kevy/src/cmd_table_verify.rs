@@ -99,7 +99,7 @@ pub(crate) fn index_verify_counts(
     name: &[u8],
 ) -> Result<[u64; 10], kevy_resp::CmdError> {
     let (spec, entries, stats, window) =
-        index_runtime::with_ready_segment(ctx, store, name, |spec, seg, win| {
+        index_runtime::with_ready_segment(ctx, name, |spec, seg, win| {
             let mut entries: Vec<(Vec<u8>, kevy_index::IndexValue)> = Vec::new();
             seg.each_entry(|k, v| entries.push((k.to_vec(), v.clone())));
             let audit = win.and_then(|w| w.audit(spec.ty()));
