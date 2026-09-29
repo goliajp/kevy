@@ -85,11 +85,7 @@ fn runtime_with_advanced_runs_cmds_correctly() {
     // primary regression coverage for reactor behaviour.
     let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let port = free_port();
-    let dir = std::env::temp_dir().join(format!(
-        "kevy-advcfg-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = kevy_tmpdir::unique_dir("advcfg");
     let stop = Arc::new(AtomicBool::new(false));
     let stop_thread = stop.clone();
     let dir_thread = dir.clone();
@@ -133,11 +129,7 @@ fn runtime_with_advanced_runs_cmds_correctly() {
 fn a_receive_ring_that_runs_dry_loses_nothing() {
     let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let port = free_port();
-    let dir = std::env::temp_dir().join(format!(
-        "kevy-advcfg-ring-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = kevy_tmpdir::unique_dir("advcfg-ring");
     let stop = Arc::new(AtomicBool::new(false));
     let (stop_thread, dir_thread) = (stop.clone(), dir.clone());
     let handle = std::thread::spawn(move || {
