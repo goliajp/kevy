@@ -704,6 +704,16 @@ fn ann_index_knn_embedded() {
         s.idx_create_ann(b"bad", b"g:", b"v", crate::AnnSpec { dim: 0, distance: 0, m: 0, ef: 0 })
             .is_err()
     );
+    assert!(
+        s.idx_create_ann(
+            b"bad_m",
+            b"g:",
+            b"v",
+            crate::AnnSpec { dim: 2, distance: 0, m: 1, ef: 0 }
+        )
+        .is_err(),
+        "M = 1 has no level distribution"
+    );
     assert!(s.idx_knn(b"nope", &[1.0, 2.0], 3, 0).is_err());
 }
 
