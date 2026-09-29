@@ -663,6 +663,13 @@ FeedBatch {
 }
 ```
 
+The Rust reference spells these with kevy-embedded's own types, so both
+backends return one type: `FeedFrame` is `Change { offset, argv }`,
+`FeedBatch` is `ChangeBatch { changes, next }`, and the cursor —
+`feed_tail`'s return, `feed_read`'s argument, `next` — is
+`FeedPosition { generation, offset }`. The fields carry the same values;
+ports keep the names above.
+
 ### 4.8 `PubsubEvent` (non-exhaustive — ports must tolerate future kinds)
 
 ```

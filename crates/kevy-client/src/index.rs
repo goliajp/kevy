@@ -25,7 +25,8 @@ use crate::{Connection, num_f64, num_u64, string, unexpected};
 /// Declared scalar type for [`Connection::idx_create_range`]
 /// (`TYPE i64|f64|str`). Vector/ANN indexes have extra required
 /// options — declare those via [`Connection::idx_create_raw`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum IdxType {
     /// `TYPE i64` — signed 64-bit integer field.
     I64,
@@ -47,7 +48,8 @@ impl IdxType {
 
 /// One `IDX.QUERY` hit: the row's key plus the indexed value's string
 /// form (the same repr the wire carries).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub struct IdxRow {
     /// The matching key.
     pub key: Vec<u8>,
@@ -56,7 +58,8 @@ pub struct IdxRow {
 }
 
 /// One page of `IDX.QUERY RANGE`/`EQ` results.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub struct IdxPage {
     /// Cursor for the next page — `None` when the scan is complete;
     /// otherwise pass it back via `idx_query_range`'s `cursor`.
@@ -66,7 +69,8 @@ pub struct IdxPage {
 }
 
 /// One declared index, as reported by `IDX.LIST`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub struct IdxInfo {
     /// Index name.
     pub name: Vec<u8>,
