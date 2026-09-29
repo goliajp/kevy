@@ -43,6 +43,16 @@
 //!
 //! Constraints: pure Rust, zero dependencies, `no_std`-capable behind the
 //! `alloc` feature, `#![forbid(unsafe_code)]`.
+//!
+//! ```
+//! use kevy_ranktree::RankTree;
+//!
+//! let t: RankTree<u32> = [50, 10, 40, 20, 30].into_iter().collect();
+//! assert_eq!(t.rank_of(&40), Some(3), "rank: how many keys sort before it");
+//! assert_eq!(t.select(1), Some(&20), "select: the key at a rank");
+//! assert_eq!(t.range(&(15..45)).copied().collect::<Vec<_>>(), vec![20, 30, 40]);
+//! assert_eq!(t.count_in(&(15..45)), 3, "counted, not walked");
+//! ```
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

@@ -24,6 +24,17 @@
 //! `Value` into a RESP reply. Shebang parsing, SHA1 cache, EVALSHA,
 //! SCRIPT LOAD/EXISTS/FLUSH, and the `redis.call` host plumbing all
 //! live here.
+//!
+//! ```
+//! let mut bridge = kevy_lua::Bridge::with_no_dispatch();
+//! // KEYS and ARGV are bound per call; the reply is RESP bytes.
+//! let reply = bridge.eval(b"return #KEYS + tonumber(ARGV[1])", &[b"k"], &[b"41"]);
+//! assert_eq!(reply, b":42\r\n");
+//! // EVAL caches the script, so EVALSHA finds it by digest.
+//! let sha = kevy_lua::sha1::sha1(b"return 'hi'");
+//! bridge.eval(b"return 'hi'", &[], &[]);
+//! assert_eq!(bridge.script_exists(&[sha]), vec![true]);
+//! ```
 
 // Seeding a sandbox global. A VM that refuses one fails the script
 // anyway, with its own message — "attempt to index a nil value" says
@@ -236,13 +247,18 @@ impl Bridge {
         }
     }
 
-    /// Compile-or-execute a script and marshal its first return value
-    /// into a RESP reply.
+    /// Run a script and marshal its first return value into a RESP
+    /// reply: the `#!lua version=N` shebang picks the dialect (5.1 when
+    /// absent), `KEYS` and `ARGV` are bound for this call, and the script
+    /// enters the SHA1 cache before it runs, as Redis does. Every failure
+    /// — a bad shebang, a disabled dialect, a Lua error — is a RESP error
+    /// reply, never a panic.
     ///
-    /// P1 scope: default to Lua 5.1, ignore KEYS/ARGV (P3 binds them
-    /// to globals), no `redis.call` (P3), no shebang parsing (P4),
-    /// no SHA1 cache (P5). The point is to confirm
-    /// `EVAL "return 1" 0` produces `:1\r\n`.
+    /// ```
+    /// let mut b = kevy_lua::Bridge::with_no_dispatch();
+    /// assert_eq!(b.eval(b"return 1", &[], &[]), b":1\r\n");
+    /// assert!(b.eval(b"error('boom')", &[], &[]).starts_with(b"-"));
+    /// ```
     pub fn eval(&mut self, script: &[u8], keys: &[&[u8]], args: &[&[u8]]) -> Reply {
         // P4: peel off the `#!lua version=N` shebang first so we know
         // which dialect Vm to route to before parsing the body.

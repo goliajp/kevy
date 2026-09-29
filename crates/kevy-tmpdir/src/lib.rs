@@ -23,6 +23,15 @@
 //! A process id and a monotonic counter, together, cannot collide: the counter
 //! separates threads within a process and the pid separates processes. That is
 //! the whole trick, and it is why this is one crate instead of nine copies.
+//!
+//! ```
+//! let dir = kevy_tmpdir::TmpDir::new("readme");
+//! std::fs::write(dir.path().join("data"), b"x")?;
+//! let path = dir.path().to_path_buf();
+//! drop(dir);
+//! assert!(!path.exists(), "gone with the guard");
+//! # Ok::<(), std::io::Error>(())
+//! ```
 
 // Best-effort removal, on paths where the file is being abandoned.
 // A file that will not delete is a stray the next sweep collects,

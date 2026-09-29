@@ -21,6 +21,20 @@
 //! - datetime literals
 //!
 //! See [`Config`] for the schema, [`Config::load`] for the precedence chain.
+//!
+//! ```
+//! use kevy_config::{AppendFsync, Config};
+//!
+//! let mut cfg = Config::from_toml_str(
+//!     "[server]\nport = 7000\n\n[persistence]\nappendfsync = \"always\"\n",
+//!     None,
+//! )?;
+//! cfg.merge_env([("KEVY_PORT", "7001")])?;
+//! assert_eq!(cfg.server.port, 7001, "env over file");
+//! assert_eq!(cfg.persistence.appendfsync, AppendFsync::Always);
+//! assert!(cfg.to_toml_string().contains("appendfsync"));
+//! # Ok::<(), kevy_config::ConfigError>(())
+//! ```
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
