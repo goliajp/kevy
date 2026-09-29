@@ -397,9 +397,6 @@ fn encode_verify_chunk(
 ) -> Vec<u8> {
     // VERIFY's recheck is a bulk sweep — inside the peek scope a
     // cold row costs one pread and never promotes or marks the gate.
-    let mut pattern = spec.prefix().to_vec();
-    pattern.push(b'*');
-    let row_keys = store.collect_keys(Some(&pattern), None);
     let indexed: std::collections::HashSet<&[u8]> =
         entries.iter().map(|(k, _)| k.as_slice()).collect();
     let (drift, missing) = store.peek_scope(|s| {
@@ -413,8 +410,7 @@ fn encode_verify_chunk(
         // The other direction, from the same classifier TABLE.VERIFY
         // uses — one implementation, so the two faces cannot disagree
         // about what a hole is.
-        let cls =
-            crate::cmd_table_verify::classify_prefix_rows(s, spec, &row_keys, &indexed, window);
+        let cls = crate::cmd_table_verify::classify_prefix_rows(s, spec, &indexed, window);
         (drift, cls[4])
     });
     let mut chunk = vec![ST_OK, b's'];
