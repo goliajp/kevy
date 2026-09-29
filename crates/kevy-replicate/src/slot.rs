@@ -11,19 +11,61 @@
 //! tests pump synthetic timestamps, and the production hook uses a
 //! single `Instant`-derived `u64`. Same pattern as the cached-clock
 //! work in `kevy-store`.
+//!
+//! ```
+//! use kevy_replicate::slot::SlotTable;
+//!
+//! const SEC: u64 = 1_000_000_000;
+//! let mut slots = SlotTable::new();
+//! slots.insert_or_touch("r1", 10, 0); // handshake / ack at t = 0 s
+//! slots.insert_or_touch("r2", 4, 3 * SEC);
+//! assert_eq!(slots.min_acked_offset(), Some(4)); // the backlog must keep offset 4 on
+//!
+//! // a 5 s reconnect window: r1 gives up at t = 5 s
+//! assert_eq!(slots.expire(5 * SEC, 5 * SEC), ["r1"]);
+//! ```
 
 /// One connected-or-recently-disconnected replica.
+///
+/// ```
+/// use kevy_replicate::slot::SlotTable;
+///
+/// let mut slots = SlotTable::new();
+/// slots.insert_or_touch("r1", 42, 1_000);
+/// let slot = slots.get("r1").expect("tracked");
+/// assert_eq!((slot.id.as_str(), slot.acked_offset, slot.last_seen_ns), ("r1", 42, 1_000));
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct ReplicaSlot {
     /// Operator-set replica identifier (opaque to the primary other
     /// than for slot bookkeeping).
+    ///
+    /// ```
+    /// let mut slots = kevy_replicate::slot::SlotTable::new();
+    /// slots.insert_or_touch("replica-a", 0, 0);
+    /// assert_eq!(slots.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["replica-a"]);
+    /// ```
     pub id: String,
     /// Monotonic ns timestamp of the most recent contact (handshake
     /// or ack). Drives expiry under `reconnect_window_ms`.
+    ///
+    /// ```
+    /// let mut slots = kevy_replicate::slot::SlotTable::new();
+    /// slots.insert_or_touch("r1", 0, 100);
+    /// slots.touch_or_insert_unacked("r1", 250); // a later contact
+    /// assert_eq!(slots.get("r1").map(|s| s.last_seen_ns), Some(250));
+    /// ```
     pub last_seen_ns: u64,
     /// Highest offset the replica has acked. The streaming loop
     /// resumes sending from here on reconnect.
+    ///
+    /// ```
+    /// let mut slots = kevy_replicate::slot::SlotTable::new();
+    /// slots.insert_or_touch("r1", 9, 0);
+    /// slots.insert_or_touch("r1", 7, 1); // a stale ack never moves it back
+    /// assert_eq!(slots.get("r1").map(|s| s.acked_offset), Some(9));
+    /// ```
     pub acked_offset: u64,
 }
 
@@ -32,6 +74,16 @@ pub struct ReplicaSlot {
 /// realistic deployments are small (< 16); a linear `Vec` is faster
 /// than a `HashMap` at this size and avoids the cost of the hasher
 /// the rest of the workspace uses.
+///
+/// ```
+/// use kevy_replicate::slot::SlotTable;
+///
+/// let mut slots = SlotTable::new();
+/// slots.insert_or_touch("r1", 3, 0);
+/// slots.insert_or_touch("r1", 8, 1); // upsert, not a second row
+/// assert_eq!(slots.len(), 1);
+/// assert_eq!(slots.min_acked_offset(), Some(8));
+/// ```
 #[derive(Debug, Default)]
 pub struct SlotTable {
     slots: Vec<ReplicaSlot>,
@@ -39,21 +91,47 @@ pub struct SlotTable {
 
 impl SlotTable {
     /// A fresh empty table.
+    ///
+    /// ```
+    /// let slots = kevy_replicate::slot::SlotTable::new();
+    /// assert!(slots.is_empty());
+    /// ```
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Number of slots currently tracked.
+    ///
+    /// ```
+    /// let mut slots = kevy_replicate::slot::SlotTable::new();
+    /// slots.insert_or_touch("r1", 0, 0);
+    /// slots.insert_or_touch("r2", 0, 0);
+    /// assert_eq!(slots.len(), 2);
+    /// ```
     pub fn len(&self) -> usize {
         self.slots.len()
     }
 
     /// Whether the table has no slots.
+    ///
+    /// ```
+    /// let mut slots = kevy_replicate::slot::SlotTable::new();
+    /// assert!(slots.is_empty());
+    /// slots.insert_or_touch("r1", 0, 0);
+    /// assert!(!slots.is_empty());
+    /// ```
     pub fn is_empty(&self) -> bool {
         self.slots.is_empty()
     }
 
     /// Look up a slot by id.
+    ///
+    /// ```
+    /// let mut slots = kevy_replicate::slot::SlotTable::new();
+    /// slots.insert_or_touch("r1", 5, 0);
+    /// assert_eq!(slots.get("r1").map(|s| s.acked_offset), Some(5));
+    /// assert!(slots.get("r2").is_none());
+    /// ```
     pub fn get(&self, id: &str) -> Option<&ReplicaSlot> {
         self.slots.iter().find(|s| s.id == id)
     }
@@ -66,6 +144,15 @@ impl SlotTable {
     /// and let the backlog trim frames the peer may still need. A
     /// previously unseen id is inserted at `acked_offset = 0`
     /// (never acked — the truthful floor).
+    ///
+    /// ```
+    /// let mut slots = kevy_replicate::slot::SlotTable::new();
+    /// slots.insert_or_touch("r1", 12, 100);
+    /// slots.touch_or_insert_unacked("r1", 200); // the link closed at t = 200
+    /// slots.touch_or_insert_unacked("r2", 200); // never acked anything
+    /// assert_eq!(slots.get("r1").map(|s| (s.acked_offset, s.last_seen_ns)), Some((12, 200)));
+    /// assert_eq!(slots.get("r2").map(|s| s.acked_offset), Some(0));
+    /// ```
     pub fn touch_or_insert_unacked(&mut self, id: &str, now_ns: u64) {
         if let Some(s) = self.slots.iter_mut().find(|s| s.id == id) {
             s.last_seen_ns = now_ns;
@@ -75,6 +162,14 @@ impl SlotTable {
     }
 
     /// Iterate over all slots.
+    ///
+    /// ```
+    /// let mut slots = kevy_replicate::slot::SlotTable::new();
+    /// slots.insert_or_touch("r1", 4, 0);
+    /// slots.insert_or_touch("r2", 6, 0);
+    /// let acked: u64 = slots.iter().map(|s| s.acked_offset).sum();
+    /// assert_eq!(acked, 10);
+    /// ```
     pub fn iter(&self) -> impl Iterator<Item = &ReplicaSlot> {
         self.slots.iter()
     }
@@ -85,6 +180,13 @@ impl SlotTable {
     /// peer reporting a lower offset than we already recorded is
     /// almost always a bug; the silent max() here defends the
     /// invariant).
+    ///
+    /// ```
+    /// let mut slots = kevy_replicate::slot::SlotTable::new();
+    /// slots.insert_or_touch("r1", 5, 100); // first contact inserts
+    /// slots.insert_or_touch("r1", 9, 200); // later acks advance
+    /// assert_eq!(slots.get("r1").map(|s| (s.acked_offset, s.last_seen_ns)), Some((9, 200)));
+    /// ```
     pub fn insert_or_touch(&mut self, id: &str, acked_offset: u64, now_ns: u64) {
         if let Some(s) = self.slots.iter_mut().find(|s| s.id == id) {
             s.last_seen_ns = now_ns;
@@ -98,6 +200,13 @@ impl SlotTable {
 
     /// Remove the slot with the given id. Returns `true` if a slot
     /// was actually removed.
+    ///
+    /// ```
+    /// let mut slots = kevy_replicate::slot::SlotTable::new();
+    /// slots.insert_or_touch("r1", 0, 0);
+    /// assert!(slots.remove("r1"));
+    /// assert!(!slots.remove("r1")); // already gone
+    /// ```
     pub fn remove(&mut self, id: &str) -> bool {
         if let Some(pos) = self.slots.iter().position(|s| s.id == id) {
             self.slots.swap_remove(pos);
@@ -110,6 +219,14 @@ impl SlotTable {
     /// Drop slots whose `last_seen_ns + window_ns ≤ now_ns`. Returns
     /// the ids of the dropped slots so callers can fire metrics or
     /// log lines. Order is unspecified (swap-remove internally).
+    ///
+    /// ```
+    /// let mut slots = kevy_replicate::slot::SlotTable::new();
+    /// slots.insert_or_touch("stale", 0, 100);
+    /// slots.insert_or_touch("live", 0, 900);
+    /// assert_eq!(slots.expire(1_000, 500), ["stale"]); // 100 + 500 <= 1000
+    /// assert_eq!(slots.len(), 1);
+    /// ```
     pub fn expire(&mut self, now_ns: u64, window_ns: u64) -> Vec<String> {
         let mut dropped = Vec::new();
         // Walk backward so swap_remove doesn't shift indices we still
@@ -129,6 +246,16 @@ impl SlotTable {
     /// Lowest acked offset across all tracked slots. Useful for the
     /// streaming loop to know how far back the backlog must still
     /// retain frames; `None` when the table is empty.
+    ///
+    /// ```
+    /// use kevy_replicate::slot::SlotTable;
+    ///
+    /// let mut slots = SlotTable::new();
+    /// assert_eq!(slots.min_acked_offset(), None);
+    /// slots.insert_or_touch("fast", 90, 0);
+    /// slots.insert_or_touch("slow", 40, 0);
+    /// assert_eq!(slots.min_acked_offset(), Some(40)); // trim the backlog below 40 only
+    /// ```
     pub fn min_acked_offset(&self) -> Option<u64> {
         self.slots.iter().map(|s| s.acked_offset).min()
     }

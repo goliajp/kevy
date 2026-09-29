@@ -25,6 +25,20 @@
 //! This module owns only the parse + format primitives. Socket I/O,
 //! retry, and "did the primary choose snapshot vs live stream" logic
 //! live in the future replication source/replica modules.
+//!
+//! ```
+//! use kevy_replicate::feed::FeedPosition;
+//! use kevy_replicate::handshake::{HandshakeReq, encode_ack};
+//!
+//! // what a fresh replica sends, as the primary's RESP parser decodes it
+//! let wire = b"*6\r\n$9\r\nREPLICATE\r\n$4\r\nFROM\r\n$1\r\n0\r\n$1\r\n0\r\n$2\r\nID\r\n$2\r\nr1\r\n";
+//! let mut argv = kevy_resp::Argv::default();
+//! kevy_resp::parse_command_into(wire, &mut argv)?;
+//! let req = HandshakeReq::parse(&argv)?;
+//! assert_eq!(req.from, FeedPosition::default()); // no continuity claim: full sync
+//! assert_eq!(encode_ack(FeedPosition::new(5, 0)), b"+ACK 5 0\r\n");
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
 
 use kevy_resp::Argv;
 
@@ -32,6 +46,15 @@ use crate::feed::FeedPosition;
 
 /// Parsed `REPLICATE FROM <generation> <from-offset> ID <replica-id>`
 /// request.
+///
+/// ```
+/// use kevy_replicate::handshake::HandshakeReq;
+///
+/// let argv = |w: &[&str]| kevy_resp::Argv::from(w.iter().map(|w| w.as_bytes().to_vec()).collect::<Vec<_>>());
+/// let req = HandshakeReq::parse(&argv(&["replicate", "from", "3", "17", "id", "r1"]))?;
+/// assert_eq!(req.replica_id, "r1"); // keywords are case-insensitive
+/// # Ok::<(), kevy_replicate::handshake::HandshakeError>(())
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct HandshakeReq {
@@ -39,29 +62,116 @@ pub struct HandshakeReq {
     /// reflects and the offset within it. Generation `0` = unknown /
     /// fresh — the primary treats it as "no continuity claim"; offset
     /// `0` = fresh replica.
+    ///
+    /// ```
+    /// use kevy_replicate::feed::FeedPosition;
+    /// use kevy_replicate::handshake::HandshakeReq;
+    ///
+    /// let argv = |w: &[&str]| kevy_resp::Argv::from(w.iter().map(|w| w.as_bytes().to_vec()).collect::<Vec<_>>());
+    /// let req = HandshakeReq::parse(&argv(&["REPLICATE", "FROM", "3", "17", "ID", "r1"]))?;
+    /// assert_eq!(req.from, FeedPosition::new(3, 17)); // resume at 17 if the primary is still on generation 3
+    /// # Ok::<(), kevy_replicate::handshake::HandshakeError>(())
+    /// ```
     pub from: FeedPosition,
     /// Replica-supplied identifier (operator-set, opaque to the
     /// primary other than for slot bookkeeping).
+    ///
+    /// ```
+    /// use kevy_replicate::handshake::HandshakeReq;
+    /// use kevy_replicate::slot::SlotTable;
+    ///
+    /// let argv = |w: &[&str]| kevy_resp::Argv::from(w.iter().map(|w| w.as_bytes().to_vec()).collect::<Vec<_>>());
+    /// let req = HandshakeReq::parse(&argv(&["REPLICATE", "FROM", "0", "0", "ID", "eu-west-2"]))?;
+    /// let mut slots = SlotTable::new();
+    /// slots.insert_or_touch(&req.replica_id, req.from.offset, 0);
+    /// assert!(slots.get("eu-west-2").is_some());
+    /// # Ok::<(), kevy_replicate::handshake::HandshakeError>(())
+    /// ```
     pub replica_id: String,
 }
 
 /// Why [`HandshakeReq::parse`] rejected its input.
+///
+/// ```
+/// use kevy_replicate::handshake::{HandshakeError, HandshakeReq};
+///
+/// let argv = |w: &[&str]| kevy_resp::Argv::from(w.iter().map(|w| w.as_bytes().to_vec()).collect::<Vec<_>>());
+/// let err = HandshakeReq::parse(&argv(&["REPLICATE", "FROM", "0", "0", "ID", ""])).unwrap_err();
+/// assert_eq!(err, HandshakeError::BadReplicaId);
+/// assert_eq!(err.to_string(), "replica id must be non-empty UTF-8");
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum HandshakeError {
     /// First arg is not "REPLICATE" (case-insensitive).
+    ///
+    /// ```
+    /// use kevy_replicate::handshake::{HandshakeError, HandshakeReq};
+    ///
+    /// let argv = |w: &[&str]| kevy_resp::Argv::from(w.iter().map(|w| w.as_bytes().to_vec()).collect::<Vec<_>>());
+    /// let err = HandshakeReq::parse(&argv(&["SYNC", "FROM", "0", "0", "ID", "r1"])).unwrap_err();
+    /// assert_eq!(err, HandshakeError::BadCommand);
+    /// ```
     BadCommand,
     /// Argument count is not exactly 6.
+    ///
+    /// ```
+    /// use kevy_replicate::handshake::{HandshakeError, HandshakeReq};
+    ///
+    /// let argv = |w: &[&str]| kevy_resp::Argv::from(w.iter().map(|w| w.as_bytes().to_vec()).collect::<Vec<_>>());
+    /// let err = HandshakeReq::parse(&argv(&["REPLICATE", "FROM", "0", "ID", "r1"])).unwrap_err();
+    /// assert_eq!(err, HandshakeError::WrongArity(5));
+    /// ```
     WrongArity(usize),
     /// Second arg is not "FROM" (case-insensitive).
+    ///
+    /// ```
+    /// use kevy_replicate::handshake::{HandshakeError, HandshakeReq};
+    ///
+    /// let argv = |w: &[&str]| kevy_resp::Argv::from(w.iter().map(|w| w.as_bytes().to_vec()).collect::<Vec<_>>());
+    /// let err = HandshakeReq::parse(&argv(&["REPLICATE", "AT", "0", "0", "ID", "r1"])).unwrap_err();
+    /// assert_eq!(err, HandshakeError::BadFromKeyword);
+    /// ```
     BadFromKeyword,
     /// Third arg (generation) did not parse as an unsigned decimal `u64`.
+    ///
+    /// ```
+    /// use kevy_replicate::handshake::{HandshakeError, HandshakeReq};
+    ///
+    /// let argv = |w: &[&str]| kevy_resp::Argv::from(w.iter().map(|w| w.as_bytes().to_vec()).collect::<Vec<_>>());
+    /// let err = HandshakeReq::parse(&argv(&["REPLICATE", "FROM", "g1", "0", "ID", "r1"])).unwrap_err();
+    /// assert_eq!(err, HandshakeError::BadGeneration);
+    /// ```
     BadGeneration,
     /// Fourth arg (offset) did not parse as an unsigned decimal `u64`.
+    ///
+    /// ```
+    /// use kevy_replicate::handshake::{HandshakeError, HandshakeReq};
+    ///
+    /// let argv = |w: &[&str]| kevy_resp::Argv::from(w.iter().map(|w| w.as_bytes().to_vec()).collect::<Vec<_>>());
+    /// let err = HandshakeReq::parse(&argv(&["REPLICATE", "FROM", "1", "-1", "ID", "r1"])).unwrap_err();
+    /// assert_eq!(err, HandshakeError::BadOffset);
+    /// ```
     BadOffset,
     /// Fifth arg is not "ID" (case-insensitive).
+    ///
+    /// ```
+    /// use kevy_replicate::handshake::{HandshakeError, HandshakeReq};
+    ///
+    /// let argv = |w: &[&str]| kevy_resp::Argv::from(w.iter().map(|w| w.as_bytes().to_vec()).collect::<Vec<_>>());
+    /// let err = HandshakeReq::parse(&argv(&["REPLICATE", "FROM", "0", "0", "NAME", "r1"])).unwrap_err();
+    /// assert_eq!(err, HandshakeError::BadIdKeyword);
+    /// ```
     BadIdKeyword,
     /// Replica id is empty or not valid UTF-8.
+    ///
+    /// ```
+    /// use kevy_replicate::handshake::{HandshakeError, HandshakeReq};
+    ///
+    /// let argv = |w: &[&str]| kevy_resp::Argv::from(w.iter().map(|w| w.as_bytes().to_vec()).collect::<Vec<_>>());
+    /// let err = HandshakeReq::parse(&argv(&["REPLICATE", "FROM", "0", "0", "ID", ""])).unwrap_err();
+    /// assert_eq!(err, HandshakeError::BadReplicaId);
+    /// ```
     BadReplicaId,
 }
 
