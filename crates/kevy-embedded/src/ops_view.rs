@@ -13,9 +13,12 @@
 // created them has already replied OK. That is a gap, not a
 // non-event, and it is written up as an open question rather than
 // silently accepted here.
-#![expect(
-    clippy::let_underscore_must_use,
-    reason = "the catalog has no other home; an open question"
+#![cfg_attr(
+    feature = "persist",
+    expect(
+        clippy::let_underscore_must_use,
+        reason = "the catalog has no other home; an open question"
+    )
 )]
 
 use crate::{KevyError, KevyResult};
