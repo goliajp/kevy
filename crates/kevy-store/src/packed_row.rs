@@ -320,6 +320,13 @@ impl PackedRow {
         self.0.buf.len() + core::mem::size_of::<PackedInner>()
     }
 
+    /// [`Self::heap_bytes`] as the allocator holds it: the boxed inner and
+    /// the buffer, each a block of its own.
+    pub(crate) fn footprint(&self) -> u64 {
+        let inner = kevy_map::malloc_footprint(core::mem::size_of::<PackedInner>());
+        (inner + kevy_map::malloc_footprint(self.0.buf.len())) as u64
+    }
+
     /// The number of present columns, for `HLEN`.
     ///
     /// ```

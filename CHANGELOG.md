@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- **A hash is charged what it holds.** `used_memory`, `MEMORY USAGE`
+  and the budgets built on them (maxmemory eviction, the tiered store's
+  demotion) got hashes wrong in both directions. The 80-byte box around
+  a hash's table was never charged; its slots were charged 32 bytes
+  where one takes 49 (two 24-byte halves and a control byte); every new
+  field was charged a slot on top of the table capacity already charged;
+  and a write that changed a hash's representation — its first field
+  that did not fit inline, the one that sharded a giant hash, or one a
+  packed row could not hold — was counted twice. A row of four short
+  fields and a 900-byte one holds 1,808 bytes and was charged 1,508 — 3 GB
+  short over ten million rows — and a hash with one 64-byte field held
+  1.6 times its charge. A hash's charge is now the bytes glibc's allocator
+  holds for it — box, table and every field or value too long to sit
+  inline — and a test counts the allocator against it at every write. `hash_field_weight` now answers what a new field
+  adds besides the table: its name's and its value's heap as the
+  allocator holds them. Affected since 1.0.0; the double count since
+  1.25.0.
+
 - **An index's `bytes` counts its `VALUES` table.** An index that
   declares `VALUES` keeps the stored values in a hash table keyed by row,
   and that table's own slots — 41 bytes a bucket, 47–94 bytes a row — were

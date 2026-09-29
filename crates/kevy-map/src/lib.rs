@@ -47,6 +47,7 @@ mod raw_entry;
 mod scan;
 mod set;
 
+pub use alloc::malloc_footprint;
 pub use into_iter::IntoIter;
 pub use iter::{Iter, IterMut, Keys, Values};
 pub use kevy_hash::KevyHash;
