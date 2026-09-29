@@ -360,11 +360,7 @@ mod enabled {
                     .expect("tier: cold record decompress failed — process bug");
                 let value = crate::tier_codec::decode(cref.type_tag, payload, &self.row_shapes)
                     .expect("tier: cold record decode failed — process bug");
-                let Value::Hash(h) = &value else {
-                    unreachable!("hash-tagged record decodes to a hash")
-                };
-                out[row] =
-                    Ok(Some(fields.iter().map(|f| h.get(*f).map(SmallBytes::to_vec)).collect()));
+                out[row] = Ok(Some(super::decoded_hash_fields(&value, fields)));
             }
         }
     }

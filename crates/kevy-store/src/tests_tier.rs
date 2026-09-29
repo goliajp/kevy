@@ -792,6 +792,19 @@ fn packing_refuses_an_undeclared_field_and_keeps_the_row() {
     assert_eq!(s.hlen(b"row").unwrap(), 2);
 }
 
+/// The page lane — a query's `FIELDS`, a view's hydration — reads cold rows
+/// in one batch, and a packed row comes back from its record as a packed
+/// row, not the general hash.
+#[test]
+fn a_cold_packed_row_answers_a_batched_page_read() {
+    let (mut s, _d) = tiered("tier-packed-page", u64::MAX);
+    packed(&mut s, b"row:1");
+    assert!(s.debug_force_demote(b"row:1"));
+    let rows = s.peek_hash_rows(&[b"row:1"], &[b"name", b"absent"], &mut crate::SyncColdRead);
+    assert_eq!(rows, vec![Ok(Some(vec![Some(b"alice".to_vec()), None]))]);
+    assert!(is_cold(&s, b"row:1"), "a page read is not an access signal");
+}
+
 #[test]
 fn a_cold_packed_row_answers_field_reads_without_promoting() {
     let (mut s, _d) = tiered("tier-packed-peek", u64::MAX);
