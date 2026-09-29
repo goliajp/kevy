@@ -83,7 +83,7 @@ pub(crate) fn on_write(ctx: &Ctx<'_>, store: &mut Store, key: &[u8]) {
     refresh(ctx, &mut st, store);
     let st = &mut *st;
     for si in &mut st.idx {
-        if key.starts_with(&si.spec.prefix()) {
+        if key.starts_with(si.spec.prefix()) {
             apply_row(store, si, key);
             st.stats_dirty = true;
         }
@@ -111,12 +111,11 @@ pub(crate) fn on_tick(ctx: &Ctx<'_>, store: &mut Store) {
             // Exactly ONE windowed access path per table drives row
             // eviction (two drivers would seal the same batch twice);
             // every other windowed path only slides its own tree.
-            let drives = window_driver(&ctx.state.catalogs, &si.spec.name());
+            let drives = window_driver(&ctx.state.catalogs, si.spec.name());
             if drives && let Some(rows) = win.pending_rows(&si.seg) {
-                batches.push((table_of(&si.spec.name()).to_vec(), rows));
+                batches.push((table_of(si.spec.name()).to_vec(), rows));
             }
-            st.stats_dirty |=
-                evict_and_slide(win, &si.spec.name(), &mut si.seg, store, dir, drives);
+            st.stats_dirty |= evict_and_slide(win, si.spec.name(), &mut si.seg, store, dir, drives);
         }
     }
     // Pass 2: freeze each batch out of its table's text index.
@@ -407,8 +406,8 @@ fn refresh(ctx: &Ctx<'_>, st: &mut ShardIndexes, store: &mut Store) {
     let mut next: Vec<ShardIndex> = Vec::new();
     if let Some(cat) = cat {
         for (spec, _state) in cat.iter() {
-            let part = cat.partitioning(&spec.name());
-            let inc = catalogs.incarnation(&spec.name());
+            let part = cat.partitioning(spec.name());
+            let inc = catalogs.incarnation(spec.name());
             let same = |si: &ShardIndex| {
                 si.spec == *spec
                     && si.global.as_ref().map_or(!part.is_global(), |g| g.fits((shard, n), inc))

@@ -171,7 +171,7 @@ pub(crate) fn install_new_index(
 pub(crate) fn fit_partitions(cat: &mut kevy_index::Catalog, n: usize) -> bool {
     let over: Vec<(Vec<u8>, Vec<Vec<u8>>)> = cat
         .iter()
-        .filter_map(|(spec, _)| match cat.partitioning(&spec.name()) {
+        .filter_map(|(spec, _)| match cat.partitioning(spec.name()) {
             kevy_index::Partitioning::Global { splits } if splits.len() >= n.max(1) => {
                 Some((spec.name().to_vec(), splits.clone()))
             }

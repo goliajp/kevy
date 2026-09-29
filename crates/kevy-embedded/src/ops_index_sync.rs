@@ -310,7 +310,7 @@ pub(crate) fn on_commit(
 fn apply_text_arm(shard_segs: &mut ShardSegs, store: &mut kevy_store::Store, key: &[u8]) -> bool {
     let mut touched = false;
     for (spec, ts) in &mut shard_segs.text {
-        if key.starts_with(&spec.prefix()) {
+        if key.starts_with(spec.prefix()) {
             apply_text_key(store, spec, ts, key);
             touched = true;
         }
@@ -319,7 +319,7 @@ fn apply_text_arm(shard_segs: &mut ShardSegs, store: &mut kevy_store::Store, key
     {
         let ShardSegs { text, cold_text, .. } = &mut *shard_segs;
         for (name, dir) in cold_text.iter_mut() {
-            if text.iter().any(|(s, _)| &s.name() == name && key.starts_with(&s.prefix())) {
+            if text.iter().any(|(s, _)| s.name() == name && key.starts_with(s.prefix())) {
                 dir.on_row_write(key);
             }
         }
@@ -333,7 +333,7 @@ fn apply_text_arm(shard_segs: &mut ShardSegs, store: &mut kevy_store::Store, key
 fn apply_one_key(shard_segs: &mut ShardSegs, store: &mut kevy_store::Store, key: &[u8]) -> bool {
     let mut touched = false;
     for (spec, seg) in &mut shard_segs.segs {
-        if key.starts_with(&spec.prefix()) {
+        if key.starts_with(spec.prefix()) {
             apply_key(store, spec, seg, key);
             touched = true;
         }
@@ -344,7 +344,7 @@ fn apply_one_key(shard_segs: &mut ShardSegs, store: &mut kevy_store::Store, key:
     {
         let ShardSegs { segs, windows, .. } = &mut *shard_segs;
         for (name, win) in windows.iter_mut() {
-            if segs.iter().any(|(s, _)| &s.name() == name && key.starts_with(&s.prefix())) {
+            if segs.iter().any(|(s, _)| s.name() == name && key.starts_with(s.prefix())) {
                 win.on_row_write(key);
             }
         }
@@ -355,13 +355,13 @@ fn apply_one_key(shard_segs: &mut ShardSegs, store: &mut kevy_store::Store, key:
     }
     #[cfg(feature = "vector")]
     for (spec, g) in &mut shard_segs.ann {
-        if key.starts_with(&spec.prefix()) {
+        if key.starts_with(spec.prefix()) {
             apply_ann_key(store, spec, g, key);
             touched = true;
         }
     }
     for (spec, a) in &mut shard_segs.agg {
-        if key.starts_with(&spec.prefix()) {
+        if key.starts_with(spec.prefix()) {
             apply_agg_key(store, spec, a, key);
             touched = true;
         }

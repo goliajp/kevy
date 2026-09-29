@@ -61,6 +61,10 @@ pub(crate) struct CatalogState {
     incarnations: Mutex<(u64, HashMap<Vec<u8>, u64>)>,
 }
 
+/// One declared path's `(name, hits, last_hit_s, declared_s, min_margin)`;
+/// `min_margin` is `None` until a windowed query has probed the path.
+pub(crate) type UsageRow = (Vec<u8>, u64, i64, i64, Option<i64>);
+
 impl CatalogState {
     pub(crate) fn new() -> Self {
         Self {
@@ -91,7 +95,7 @@ impl CatalogState {
         let (next, prev) = &mut *incs;
         let mut map = HashMap::new();
         for (spec, _) in new.iter() {
-            let part = new.partitioning(&spec.name());
+            let part = new.partitioning(spec.name());
             if !part.is_global() {
                 continue;
             }
@@ -116,9 +120,8 @@ impl CatalogState {
         self.usage.read().unwrap_or_else(PoisonError::into_inner).get(name).cloned()
     }
 
-    /// Every declared path's `(name, hits, last_hit_s, declared_s,
-    /// min_margin)`.
-    pub(crate) fn usage_snapshot(&self) -> Vec<(Vec<u8>, u64, i64, i64, Option<i64>)> {
+    /// Every declared path's usage row.
+    pub(crate) fn usage_snapshot(&self) -> Vec<UsageRow> {
         self.usage
             .read()
             .unwrap_or_else(PoisonError::into_inner)

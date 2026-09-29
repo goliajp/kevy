@@ -26,14 +26,14 @@ pub(super) fn freeze_text_batches(
         else {
             continue;
         };
-        if table_of(&si.spec.name()) != table {
+        if table_of(si.spec.name()) != table {
             continue;
         }
-        match cold.freeze_batch(ts, &si.spec.name(), keys, dir) {
+        match cold.freeze_batch(ts, si.spec.name(), keys, dir) {
             Ok(true) => st.stats_dirty = true,
             Ok(false) => {}
             Err(e) => {
-                eprintln!("kevy: text freeze '{}': {e}", String::from_utf8_lossy(&si.spec.name()))
+                eprintln!("kevy: text freeze '{}': {e}", String::from_utf8_lossy(si.spec.name()))
             }
         }
     }
@@ -93,7 +93,7 @@ pub(super) fn window_for(
     catalogs: &CatalogState,
     spec: &IndexSpec,
 ) -> Option<(kevy_index::WindowSpec, kevy_index::WindowShape)> {
-    (catalogs.table()?.as_ref()).window_for(&spec.name())
+    (catalogs.table()?.as_ref()).window_for(spec.name())
 }
 
 /// [`kevy_index::TableCatalog::is_window_driver`] against the shared catalog state.

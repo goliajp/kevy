@@ -386,7 +386,7 @@ fn shard_index_counts(
     let mut pat = spec.prefix().to_vec();
     pat.push(b'*');
     let row_keys = inner.store.collect_keys(Some(&pat), None);
-    let window = hot_floor_of(inner, &spec.name(), spec.ty());
+    let window = hot_floor_of(inner, spec.name(), spec.ty());
     let store = &mut inner.store;
     let (drift, fresh) = store.peek_scope(|s| {
         let names = spec.scalar_read_names();

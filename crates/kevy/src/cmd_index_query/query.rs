@@ -305,8 +305,8 @@ pub(super) fn op_explain(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> 
     if !parsed {
         return vec![ST_BADARGS];
     }
-    let building = index_runtime::segment_building(ctx, store, &spec.name());
-    let entries = kind_entries(ctx, store, spec.kind(), &spec.name());
+    let building = index_runtime::segment_building(ctx, store, spec.name());
+    let entries = kind_entries(ctx, store, spec.kind(), spec.name());
     let mut chunk = vec![ST_OK, u8::from(building)];
     chunk.extend_from_slice(&entries.to_le_bytes());
     chunk.push(shape.first().copied().unwrap_or(b'?').to_ascii_uppercase());
@@ -339,29 +339,29 @@ pub(super) fn op_list(ctx: &Ctx<'_>, store: &mut Store) -> Vec<u8> {
     };
     let mut chunk = vec![ST_OK];
     for (spec, _) in cat.iter() {
-        let building = index_runtime::segment_building(ctx, store, &spec.name());
+        let building = index_runtime::segment_building(ctx, store, spec.name());
         // (entries, bytes, coerce_failures/postings, duplicates/tokens)
         let quad = if spec.kind() == kevy_index::IndexKind::Agg {
-            index_runtime::with_ready_agg(ctx, store, &spec.name(), |a| {
+            index_runtime::with_ready_agg(ctx, store, spec.name(), |a| {
                 let st = a.stats();
                 (st.rows, st.approx_bytes, st.excluded, st.groups)
             })
             .unwrap_or_default()
         } else if spec.kind() == kevy_index::IndexKind::Ann {
-            index_runtime::with_ready_ann(ctx, store, &spec.name(), |g| {
+            index_runtime::with_ready_ann(ctx, store, spec.name(), |g| {
                 let st = g.stats();
                 (st.vectors, st.approx_bytes, st.tombstones, st.links)
             })
             .unwrap_or_default()
         } else if spec.kind() == kevy_index::IndexKind::Text {
-            index_runtime::with_ready_text_segment(ctx, store, &spec.name(), |_, ts, _, _| {
+            index_runtime::with_ready_text_segment(ctx, store, spec.name(), |_, ts, _, _| {
                 let st = ts.stats();
                 (st.docs, st.approx_bytes, st.postings, st.tokens)
             })
             .unwrap_or_default()
         } else {
-            let placed = index_runtime::placed_bytes(ctx, store, &spec.name());
-            index_runtime::with_ready_segment(ctx, store, &spec.name(), |_, seg, _| {
+            let placed = index_runtime::placed_bytes(ctx, store, spec.name());
+            index_runtime::with_ready_segment(ctx, store, spec.name(), |_, seg, _| {
                 let st = seg.stats();
                 (st.entries, st.approx_bytes + placed, st.coerce_failures, st.duplicates)
             })

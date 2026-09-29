@@ -133,13 +133,13 @@ fn cmd_idx_list(s: &Store, out: &mut Vec<u8>) {
     };
     encode_array_len(out, specs.len() as i64);
     for spec in &specs {
-        let stats = s.idx_stats(&spec.name()).unwrap_or_default();
-        let (hits, last, _) = s.idx_usage(&spec.name()).unwrap_or((0, 0, 0));
+        let stats = s.idx_stats(spec.name()).unwrap_or_default();
+        let (hits, last, _) = s.idx_usage(spec.name()).unwrap_or((0, 0, 0));
         encode_array_len(out, 20);
         encode_bulk(out, b"name");
-        encode_bulk(out, &spec.name());
+        encode_bulk(out, spec.name());
         encode_bulk(out, b"prefix");
-        encode_bulk(out, &spec.prefix());
+        encode_bulk(out, spec.prefix());
         encode_bulk(out, b"kind");
         encode_bulk(out, spec.kind().tag().as_bytes());
         encode_bulk(out, b"state");
@@ -153,7 +153,7 @@ fn cmd_idx_list(s: &Store, out: &mut Vec<u8>) {
         encode_bulk(out, b"last_hit");
         encode_bulk(out, last.to_string().as_bytes());
         encode_bulk(out, b"auto");
-        encode_bulk(out, if s.is_auto_path(&spec.name()) { b"1" } else { b"0" });
+        encode_bulk(out, if s.is_auto_path(spec.name()) { b"1" } else { b"0" });
         encode_bulk(out, b"partitioning");
         encode_bulk(out, b"local");
     }

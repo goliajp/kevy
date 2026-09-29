@@ -270,13 +270,13 @@ pub(super) fn reduce_list(catalogs: &CatalogState, chunks: &[Vec<u8>]) -> Vec<u8
     encode_array_len(&mut out, n as i64);
     for ((spec, _), s) in cat.iter().zip(&sums) {
         let (hits, last, _) =
-            catalogs.usage_cell(&spec.name()).map(|c| c.read()).unwrap_or((0, 0, 0));
-        let part = cat.partitioning(&spec.name());
+            catalogs.usage_cell(spec.name()).map(|c| c.read()).unwrap_or((0, 0, 0));
+        let part = cat.partitioning(spec.name());
         encode_array_len(&mut out, if part.is_global() { 26 } else { 20 });
         encode_bulk(&mut out, b"name");
-        encode_bulk(&mut out, &spec.name());
+        encode_bulk(&mut out, spec.name());
         encode_bulk(&mut out, b"prefix");
-        encode_bulk(&mut out, &spec.prefix());
+        encode_bulk(&mut out, spec.prefix());
         encode_bulk(&mut out, b"kind");
         encode_bulk(&mut out, spec.kind().tag().as_bytes());
         encode_bulk(&mut out, b"state");
@@ -290,7 +290,7 @@ pub(super) fn reduce_list(catalogs: &CatalogState, chunks: &[Vec<u8>]) -> Vec<u8
         encode_bulk(&mut out, b"last_hit");
         encode_bulk(&mut out, last.to_string().as_bytes());
         encode_bulk(&mut out, b"auto");
-        encode_bulk(&mut out, if catalogs.is_auto_path(&spec.name()) { b"1" } else { b"0" });
+        encode_bulk(&mut out, if catalogs.is_auto_path(spec.name()) { b"1" } else { b"0" });
         encode_partition_stats(&mut out, part, s.1, s.5);
     }
     out

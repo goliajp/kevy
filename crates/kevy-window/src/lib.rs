@@ -343,8 +343,7 @@ impl WindowRt {
         // number is one below the counter it left behind.
         self.cold.push((
             self.seq - 1,
-            kevy_seg::Seg::open(segs_dir.join(&file))
-                .map_err(|e| format!("reopen {file}: {e}"))?,
+            kevy_seg::Seg::open(segs_dir.join(&file)).map_err(|e| format!("reopen {file}: {e}"))?,
         ));
         self.probe(index_name, batch.len());
         self.w = target;

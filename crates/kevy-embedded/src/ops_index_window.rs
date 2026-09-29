@@ -30,12 +30,12 @@ fn evict_and_slide(
     // own tree.
     if drives_rows
         && let Some(rows) = win.pending_rows(seg)
-        && !evict_rows(&spec.name(), &rows, store, aof, segs_dir)
+        && !evict_rows(spec.name(), &rows, store, aof, segs_dir)
     {
         return false;
     }
-    let moved = win.slide(&spec.name(), seg, segs_dir).unwrap_or_else(|e| {
-        eprintln!("kevy-embedded: window slide '{}': {e}", String::from_utf8_lossy(&spec.name()));
+    let moved = win.slide(spec.name(), seg, segs_dir).unwrap_or_else(|e| {
+        eprintln!("kevy-embedded: window slide '{}': {e}", String::from_utf8_lossy(spec.name()));
         false
     });
     // Same bulk-free contract as the server tick: ask glibc to return
@@ -120,15 +120,15 @@ pub(crate) fn window_tick(
         let seg_list = &mut segs.segs;
         let windows = &mut segs.windows;
         for (spec, seg) in seg_list.iter_mut() {
-            reconcile_window(windows, &cat, &spec.name());
-            let Some(win) = windows.iter_mut().find(|(n, _)| n == &spec.name()).map(|(_, w)| w)
+            reconcile_window(windows, &cat, spec.name());
+            let Some(win) = windows.iter_mut().find(|(n, _)| n == spec.name()).map(|(_, w)| w)
             else {
                 continue;
             };
-            let drives = cat.is_window_driver(&spec.name());
+            let drives = cat.is_window_driver(spec.name());
             #[cfg(feature = "text")]
             if drives && let Some(rows) = win.pending_rows(seg) {
-                batches.push((table_of(&spec.name()).to_vec(), rows));
+                batches.push((table_of(spec.name()).to_vec(), rows));
             }
             moved |= evict_and_slide(win, spec, seg, store, aof, segs_dir, drives);
         }
@@ -205,18 +205,18 @@ fn freeze_text_batches(
     let mut changed = false;
     for (table, keys) in batches {
         for (spec, ts) in segs.text.iter_mut() {
-            if table_of(&spec.name()) != table {
+            if table_of(spec.name()) != table {
                 continue;
             }
-            let Some((_, dir)) = segs.cold_text.iter_mut().find(|(n, _)| n == &spec.name()) else {
+            let Some((_, dir)) = segs.cold_text.iter_mut().find(|(n, _)| n == spec.name()) else {
                 continue;
             };
-            match dir.freeze_batch(ts, &spec.name(), keys, segs_dir) {
+            match dir.freeze_batch(ts, spec.name(), keys, segs_dir) {
                 Ok(true) => changed = true,
                 Ok(false) => {}
                 Err(e) => eprintln!(
                     "kevy-embedded: text freeze '{}': {e}",
-                    String::from_utf8_lossy(&spec.name())
+                    String::from_utf8_lossy(spec.name())
                 ),
             }
         }
