@@ -1,10 +1,13 @@
 //! Global partitionings in the catalog and its sidecar.
 
-use crate::catalog::{Catalog, IndexKind, IndexSpec, ValType, ValueSpec};
+use crate::{Catalog, IndexKind, IndexSpec, ValType, ValueSpec};
 use crate::{Partitioning, partition_owner};
 
 fn spec(name: &str, kind: IndexKind) -> IndexSpec {
-    IndexSpec::single_field(name.into(), b"user:".to_vec(), b"age".to_vec(), ValType::I64, kind)
+    IndexSpec::builder(name, b"user:".to_vec(), kind, ValType::I64)
+        .with_field(b"age".to_vec())
+        .build()
+        .unwrap()
 }
 
 fn global(splits: &[&[u8]]) -> Partitioning {
@@ -202,14 +205,14 @@ fn an_orderpath_split_point_reads_back_from_its_hex() {
         b"id",
     ])
     .unwrap();
-    let spec = crate::compile_table(&t).unwrap().into_iter().find(|s| s.name == b"u.by_city");
+    let spec = t.compile().unwrap().into_iter().find(|s| s.name == b"u.by_city");
     let spec = spec.expect("the orderpath compiles");
     let point = vec![0x00, 0x61, 0xff, 0x10];
-    let text = crate::split_point_text(&spec, &point);
+    let text = spec.split_point_text(&point);
     assert_eq!(text, b"0x0061ff10");
-    assert_eq!(crate::parse_split_point(&spec, &text), Some(point));
+    assert_eq!(spec.parse_split_point(&text), Some(point));
     for bad in [&b"0061ff10"[..], b"0x061", b"0xzz"] {
-        assert_eq!(crate::parse_split_point(&spec, bad), None, "{}", String::from_utf8_lossy(bad));
+        assert_eq!(spec.parse_split_point(bad), None, "{}", String::from_utf8_lossy(bad));
     }
 }
 
@@ -217,15 +220,12 @@ fn an_orderpath_split_point_reads_back_from_its_hex() {
 fn a_split_point_reads_back_in_its_column_type() {
     for (ty, raw) in [(ValType::F64, &b"-2.5"[..]), (ValType::Str, b"tokyo"), (ValType::I64, b"-7")]
     {
-        let s = IndexSpec::single_field(
-            b"i".to_vec(),
-            b"u:".to_vec(),
-            b"f".to_vec(),
-            ty,
-            IndexKind::Range,
-        );
-        let enc = crate::parse_split_point(&s, raw).unwrap();
-        assert_eq!(crate::split_point_text(&s, &enc), raw);
+        let s = IndexSpec::builder(b"i".to_vec(), b"u:".to_vec(), IndexKind::Range, ty)
+            .with_field(b"f".to_vec())
+            .build()
+            .unwrap();
+        let enc = s.parse_split_point(raw).unwrap();
+        assert_eq!(s.split_point_text(&enc), raw);
         let part = Partitioning::Global { splits: vec![enc] };
         assert_eq!(part.split_values(ty), [raw.to_vec()]);
     }

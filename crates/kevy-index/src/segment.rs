@@ -19,10 +19,18 @@ use std::ops::Bound;
 use crate::rowvalues::RowValues;
 use crate::segment_entry::{ByKey, ByValue, RowRef, row_bytes, share, table_buckets};
 use crate::value::IndexValue;
+use kevy_text::SortOrder;
 
 /// Opaque pagination cursor: the last `(value, key)` served. Encoded
 /// by the runtime into the wire cursor; `None` = start.
+///
+/// ```
+/// use kevy_index::{Cursor, IndexValue};
+/// let c = Cursor::new(IndexValue::I64(30), b"user:7".to_vec());
+/// assert_eq!(c.key, b"user:7");
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Cursor {
     /// Last value served.
     pub value: IndexValue,
@@ -30,8 +38,21 @@ pub struct Cursor {
     pub key: Vec<u8>,
 }
 
+impl Cursor {
+    /// The cursor just past `(value, key)`, the last entry served.
+    ///
+    /// ```
+    /// use kevy_index::{Cursor, IndexValue};
+    /// assert_eq!(Cursor::new(IndexValue::I64(1), b"k".to_vec()).value, IndexValue::I64(1));
+    /// ```
+    pub fn new(value: IndexValue, key: Vec<u8>) -> Cursor {
+        Cursor { value, key }
+    }
+}
+
 /// Sizing + health counters (`IDX.LIST` / memory formula).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct SegmentStats {
     /// Live entries.
     pub entries: u64,
@@ -298,12 +319,12 @@ impl Segment {
     pub fn scan<'s>(
         &'s self,
         after: Option<&Cursor>,
-        desc: bool,
+        order: SortOrder,
     ) -> Box<dyn Iterator<Item = (&'s IndexValue, &'s [u8])> + 's> {
         let past = after.map_or(Bound::Unbounded, |c| Bound::Excluded((&c.value, &c.key[..])));
-        match desc {
-            false => Box::new(self.walk(past, Bound::Unbounded)),
-            true => Box::new(self.walk(Bound::Unbounded, past).rev()),
+        match order {
+            SortOrder::Asc => Box::new(self.walk(past, Bound::Unbounded)),
+            SortOrder::Desc => Box::new(self.walk(Bound::Unbounded, past).rev()),
         }
     }
 

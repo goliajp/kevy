@@ -27,8 +27,10 @@
 //! longer than [`MAX_STR_COMPONENT`]) is EXCLUDED from the composite
 //! index — the same exclusion semantics a scalar coerce failure has.
 
-use crate::catalog::{IndexSpec, ValType};
+use crate::catalog::ValType;
+use crate::spec::IndexSpec;
 use crate::value::{IndexValue, order_key};
+use kevy_text::SortOrder;
 
 /// One declared composite column: which hash field, how its bytes
 /// coerce/order, and whether this component sorts descending.
@@ -36,14 +38,46 @@ use crate::value::{IndexValue, order_key};
 /// The type is carried per column (not looked up at read time) so the
 /// sidecar reload reproduces the exact same byte derivation — an
 /// encoding the catalog cannot reconstruct is index drift at boot.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// ```
+/// use kevy_index::{CompositeCol, SortOrder, ValType};
+/// let newest_first = CompositeCol::new("at", ValType::I64).with_order(SortOrder::Desc);
+/// assert_eq!(newest_first.order, SortOrder::Desc);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct CompositeCol {
     /// Hash field name.
     pub name: Vec<u8>,
     /// How the column's bytes coerce (i64 | f64 | str).
     pub ty: ValType,
-    /// Descending component (bytes complemented).
-    pub desc: bool,
+    /// Component direction; a descending one has its bytes complemented.
+    pub order: SortOrder,
+}
+
+impl CompositeCol {
+    /// An ascending column `name` of type `ty`.
+    ///
+    /// ```
+    /// use kevy_index::{CompositeCol, SortOrder, ValType};
+    /// assert_eq!(CompositeCol::new("a", ValType::Str).order, SortOrder::Asc);
+    /// ```
+    pub fn new(name: impl Into<Vec<u8>>, ty: ValType) -> CompositeCol {
+        CompositeCol { name: name.into(), ty, order: SortOrder::Asc }
+    }
+
+    /// This column sorted in `order`.
+    ///
+    /// ```
+    /// use kevy_index::{CompositeCol, SortOrder, ValType};
+    /// let c = CompositeCol::new("a", ValType::Str).with_order(SortOrder::Desc);
+    /// assert_eq!(c.order, SortOrder::Desc);
+    /// ```
+    #[must_use]
+    pub fn with_order(mut self, order: SortOrder) -> CompositeCol {
+        self.order = order;
+        self
+    }
 }
 
 /// Hard cap on composite columns per index.
@@ -81,7 +115,7 @@ fn encode_component(col: &CompositeCol, raw: &[u8]) -> Option<Vec<u8>> {
         }
         ValType::Vector => return None,
     };
-    if col.desc {
+    if col.order == SortOrder::Desc {
         for b in &mut framed {
             *b = !*b;
         }
@@ -105,7 +139,7 @@ pub fn composite_encode(cols: &[CompositeCol], vals: &[Option<&[u8]>]) -> Option
 /// F10), and how two rows silently absent for *oversize* components
 /// cost a production hunt (F8/F9). One classification now drives both
 /// the write path and VERIFY, so the causes cannot drift apart.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum RowDerivation {
     /// The row belongs in the index, under this value.
     Indexed(Vec<u8>),
@@ -162,7 +196,8 @@ fn classify_component(col: &CompositeCol, raw: &[u8]) -> RowDerivation {
 /// One parsed `WHERE` clause: an equality prefix plus an optional range
 /// on the next component. Grammar lives here so the server and the
 /// embedded dispatch parse the identical shape.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct WhereClause {
     /// `col EQ v` pairs, wire order.
     pub eqs: Vec<(Vec<u8>, Vec<u8>)>,
@@ -253,15 +288,15 @@ fn bound_component(col: &CompositeCol, raw: &[u8], now: i64) -> Result<Vec<u8>, 
 /// str = unbounded, answered with a dominating pad — see
 /// [`composite_bounds`]).
 fn component_max(col: &CompositeCol) -> Vec<u8> {
-    match (col.ty, col.desc) {
+    match (col.ty, col.order) {
         (ValType::I64 | ValType::F64, _) => vec![0xFF; 8],
-        (ValType::Str, true) => vec![0xFF, 0xFF],
+        (ValType::Str, SortOrder::Desc) => vec![0xFF, 0xFF],
         // An ASC str encoding is at most 2×MAX_STR_COMPONENT escaped
         // bytes + the 2-byte terminator, and always carries a 0x00, so
         // a solid 0xFF run one byte longer strictly dominates every
         // valid encoding. Nothing valid can equal it (no terminator),
         // so the inclusive upper bound stays exact.
-        (ValType::Str, false) => vec![0xFF; MAX_STR_COMPONENT * 2 + 3],
+        (ValType::Str, SortOrder::Asc) => vec![0xFF; MAX_STR_COMPONENT * 2 + 3],
         (ValType::Vector, _) => Vec::new(),
     }
 }
@@ -308,7 +343,7 @@ pub fn composite_bounds(
     // strictly (the ASC-str pad), after which further bytes are moot.
     for col in &cols[at..] {
         let m = component_max(col);
-        let dominates = col.ty == ValType::Str && !col.desc;
+        let dominates = col.ty == ValType::Str && col.order == SortOrder::Asc;
         hi.extend_from_slice(&m);
         if dominates {
             break;

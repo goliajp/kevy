@@ -557,11 +557,7 @@ fn view_create_query_maintain_reopen() {
     use crate::{IndexKind, IndexValType, IndexValue, ViewLeaf, ViewMode, ViewTree};
     let dir = crate::store::test_suites::tests::tmp_dir("view-reopen");
     let leaf = |idx: &str, lo: i64, hi: i64| {
-        ViewTree::Leaf(ViewLeaf {
-            index: idx.into(),
-            min: IndexValue::I64(lo),
-            max: IndexValue::I64(hi),
-        })
+        ViewTree::Leaf(ViewLeaf::new(idx, IndexValue::I64(lo), IndexValue::I64(hi)))
     };
     {
         let s = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
@@ -687,8 +683,13 @@ fn ann_index_knn_embedded() {
         let (x, y) = ((i % 10) as f32, (i / 10) as f32);
         s.hset(format!("g:{i}").as_bytes(), &[(b"v", blob(x, y).as_slice())]).unwrap();
     }
-    s.idx_create_ann(b"g_v", b"g:", b"v", crate::AnnSpec { dim: 2, distance: 1, m: 0, ef: 0 })
-        .unwrap(); // l2, defaults
+    s.idx_create_ann(
+        b"g_v",
+        b"g:",
+        b"v",
+        crate::AnnSpec::new(2).with_distance(1).with_m(0).with_ef(0),
+    )
+    .unwrap(); // l2, defaults
     let hits = s.idx_knn(b"g_v", &[5.1, 7.05], 3, 0).unwrap();
     assert_eq!(hits[0].0, b"g:75".to_vec(), "{hits:?}"); // (5,7)
     assert_eq!(hits.len(), 3);
@@ -701,15 +702,20 @@ fn ann_index_knn_embedded() {
     assert_ne!(hits[0].0, b"g:0".to_vec());
     // bad params + unknown index
     assert!(
-        s.idx_create_ann(b"bad", b"g:", b"v", crate::AnnSpec { dim: 0, distance: 0, m: 0, ef: 0 })
-            .is_err()
+        s.idx_create_ann(
+            b"bad",
+            b"g:",
+            b"v",
+            crate::AnnSpec::new(0).with_distance(0).with_m(0).with_ef(0)
+        )
+        .is_err()
     );
     assert!(
         s.idx_create_ann(
             b"bad_m",
             b"g:",
             b"v",
-            crate::AnnSpec { dim: 2, distance: 0, m: 1, ef: 0 }
+            crate::AnnSpec::new(2).with_distance(0).with_m(1).with_ef(0)
         )
         .is_err(),
         "M = 1 has no level distribution"

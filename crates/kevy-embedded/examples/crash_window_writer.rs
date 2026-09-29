@@ -41,20 +41,15 @@ fn main() {
     // bucket out) plus a text index riding the same rows, so the kill
     // can land mid-freeze too. Idempotent under replay: the catalog
     // survives restarts, re-declaring identically is a no-op.
-    let spec = TableSpec {
-        name: b"ev".to_vec(),
-        prefix: b"r:".to_vec(),
-        pk: b"id".to_vec(),
-        columns: vec![(b"id".to_vec(), ValType::Str), (b"at".to_vec(), ValType::I64)],
-        indexes: vec![TableIndex {
-            column: b"at".to_vec(),
-            kind: IndexKind::Range,
-            values: vec![],
-        }],
-        orderpaths: vec![],
-        window: Some(WindowSpec { column: b"at".to_vec(), span: 50, bucket: 10 }),
-        autodeclare: 0,
-        auto_added: vec![],
+    let spec = {
+        let mut t = TableSpec::default();
+        t.name = b"ev".to_vec();
+        t.prefix = b"r:".to_vec();
+        t.pk = b"id".to_vec();
+        t.columns = vec![(b"id".to_vec(), ValType::Str), (b"at".to_vec(), ValType::I64)];
+        t.indexes = vec![TableIndex::new(b"at".to_vec(), IndexKind::Range)];
+        t.window = Some(WindowSpec::new(b"at".to_vec(), 50, 10));
+        t
     };
     store.table_declare(spec).expect("declare");
     store.idx_create_text(b"ev.note", b"r:", &[(b"note", 1.0)], false, &[]).expect("text index");

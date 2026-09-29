@@ -50,49 +50,6 @@ fn cmd_idx_advise(s: &Store, out: &mut Vec<u8>) {
 
 // ---- shared codecs (server `cmd_index_query::wire` shapes) -----------
 
-pub(super) fn enc_value(out: &mut Vec<u8>, v: &IndexValue) {
-    match v {
-        IndexValue::I64(i) => {
-            out.push(0);
-            out.extend_from_slice(&i.to_le_bytes());
-        }
-        IndexValue::F64(f) => {
-            out.push(1);
-            out.extend_from_slice(&f.to_le_bytes());
-        }
-        IndexValue::Str(s) => {
-            out.push(2);
-            out.extend_from_slice(&(s.len() as u32).to_le_bytes());
-            out.extend_from_slice(s);
-        }
-    }
-}
-
-pub(super) fn dec_value(b: &[u8], pos: &mut usize) -> Option<IndexValue> {
-    let tag = *b.get(*pos)?;
-    *pos += 1;
-    match tag {
-        0 => {
-            let v = i64::from_le_bytes(b.get(*pos..*pos + 8)?.try_into().ok()?);
-            *pos += 8;
-            Some(IndexValue::I64(v))
-        }
-        1 => {
-            let v = f64::from_le_bytes(b.get(*pos..*pos + 8)?.try_into().ok()?);
-            *pos += 8;
-            Some(IndexValue::F64(v))
-        }
-        2 => {
-            let n = u32::from_le_bytes(b.get(*pos..*pos + 4)?.try_into().ok()?) as usize;
-            *pos += 4;
-            let s = b.get(*pos..*pos + n)?.to_vec();
-            *pos += n;
-            Some(IndexValue::Str(s))
-        }
-        _ => None,
-    }
-}
-
 pub(super) fn hex(b: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(b.len() * 2);
     for x in b {
@@ -115,7 +72,7 @@ pub(super) fn unhex(raw: &[u8]) -> Option<Vec<u8>> {
 /// Hex `(value, key)` cursor — the resume point every paged reply carries.
 pub(super) fn encode_cursor(v: &IndexValue, k: &[u8]) -> Vec<u8> {
     let mut payload = Vec::new();
-    enc_value(&mut payload, v);
+    v.encode(&mut payload);
     payload.extend_from_slice(k);
     hex(&payload)
 }
@@ -123,18 +80,9 @@ pub(super) fn encode_cursor(v: &IndexValue, k: &[u8]) -> Vec<u8> {
 pub(super) fn decode_cursor(raw: &[u8]) -> Option<(IndexValue, Vec<u8>)> {
     let bytes = unhex(raw)?;
     let mut pos = 0usize;
-    let value = dec_value(&bytes, &mut pos)?;
+    let value = IndexValue::decode(&bytes, &mut pos)?;
     let key = bytes.get(pos..)?.to_vec();
     Some((value, key))
-}
-
-/// The wire text a hit's value renders as (server `value_repr`).
-pub(super) fn value_repr(v: &IndexValue) -> Vec<u8> {
-    match v {
-        IndexValue::I64(i) => i.to_string().into_bytes(),
-        IndexValue::F64(f) => format!("{f}").into_bytes(),
-        IndexValue::Str(s) => s.clone(),
-    }
 }
 
 /// Snapshot one declared index's spec from the embedded catalog.
@@ -185,15 +133,15 @@ fn cmd_idx_list(s: &Store, out: &mut Vec<u8>) {
     };
     encode_array_len(out, specs.len() as i64);
     for spec in &specs {
-        let stats = s.idx_stats(&spec.name).unwrap_or_default();
-        let (hits, last, _) = s.idx_usage(&spec.name).unwrap_or((0, 0, 0));
+        let stats = s.idx_stats(&spec.name()).unwrap_or_default();
+        let (hits, last, _) = s.idx_usage(&spec.name()).unwrap_or((0, 0, 0));
         encode_array_len(out, 20);
         encode_bulk(out, b"name");
-        encode_bulk(out, &spec.name);
+        encode_bulk(out, &spec.name());
         encode_bulk(out, b"prefix");
-        encode_bulk(out, &spec.prefix);
+        encode_bulk(out, &spec.prefix());
         encode_bulk(out, b"kind");
-        encode_bulk(out, spec.kind.tag().as_bytes());
+        encode_bulk(out, spec.kind().tag().as_bytes());
         encode_bulk(out, b"state");
         encode_bulk(out, b"ready");
         encode_bulk(out, b"entries");
@@ -205,7 +153,7 @@ fn cmd_idx_list(s: &Store, out: &mut Vec<u8>) {
         encode_bulk(out, b"last_hit");
         encode_bulk(out, last.to_string().as_bytes());
         encode_bulk(out, b"auto");
-        encode_bulk(out, if s.is_auto_path(&spec.name) { b"1" } else { b"0" });
+        encode_bulk(out, if s.is_auto_path(&spec.name()) { b"1" } else { b"0" });
         encode_bulk(out, b"partitioning");
         encode_bulk(out, b"local");
     }

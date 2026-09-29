@@ -5,7 +5,7 @@
 //! parser would, minus the value coercion — a mis-derived family
 //! costs one log seat, never a wrong answer.
 
-use kevy_index::{AUTODECLARE_AFTER, AdviseEntry, AdviseShape, apply_auto, compile_table};
+use kevy_index::{AUTODECLARE_AFTER, AdviseEntry, AdviseShape};
 
 use crate::cmd_index_query::{ST_NOFIELD, ST_NOINDEX};
 use crate::state::{CatalogState, RuntimeState};
@@ -74,9 +74,9 @@ fn maybe_autodeclare(state: &RuntimeState, name: &[u8], shape: AdviseShape, coun
     if spec.autodeclare == 0 {
         return;
     }
-    let entry = AdviseEntry { name: name.to_vec(), shape, count, sample: Vec::new() };
-    let Some(ledger) = apply_auto(&mut spec, &entry) else { return };
-    let Ok(compiled) = compile_table(&spec) else { return };
+    let entry = AdviseEntry::new(name, shape, count);
+    let Some(ledger) = spec.apply_auto(&entry) else { return };
+    let Ok(compiled) = spec.compile() else { return };
     let mut new_tcat = (*tcat).clone();
     new_tcat.drop_table(&spec.name);
     if new_tcat.create(spec).is_err() {
@@ -89,7 +89,7 @@ fn maybe_autodeclare(state: &RuntimeState, name: &[u8], shape: AdviseShape, coun
         Some(p) => &ledger[..p],
         None => &ledger[..],
     };
-    let Some(ispec) = compiled.into_iter().find(|s| s.name == path) else { return };
+    let Some(ispec) = compiled.into_iter().find(|s| s.name() == path) else { return };
     // a path rebuilt for its new VALUES keeps how it was spread
     let part = icat.partitioning(path).clone();
     icat.drop_index(path);

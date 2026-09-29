@@ -12,7 +12,7 @@
 
 use std::collections::HashMap;
 
-use kevy_index::{IndexSpec, compile_table, parse_table_declare_partitioned};
+use kevy_index::{IndexSpec, parse_table_declare_partitioned};
 use kevy_resp::{Argv, ArgvView};
 use kevy_store::Store;
 
@@ -46,8 +46,9 @@ fn sampled_paths(upper: &[u8], argv: &[&[u8]]) -> Vec<IndexSpec> {
         };
     }
     let Ok((spec, globals)) = parse_table_declare_partitioned(argv) else { return Vec::new() };
-    let wanted = |s: &IndexSpec| globals.iter().any(|g| g.path == s.name && g.split_at.is_empty());
-    compile_table(&spec).map(|c| c.into_iter().filter(wanted).collect()).unwrap_or_default()
+    let wanted =
+        |s: &IndexSpec| globals.iter().any(|g| g.path == s.name() && g.split_at.is_empty());
+    spec.compile().map(|c| c.into_iter().filter(wanted).collect()).unwrap_or_default()
 }
 
 /// A shard's first phase: its rank buckets of each path, and whether its
@@ -66,8 +67,8 @@ pub(crate) fn op(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> 
         vec![crate::cmd_index_query::ST_OK, u8::from(store.tier_index_floor_blocked(0))];
     chunk.extend_from_slice(&(paths.len() as u16).to_le_bytes());
     for spec in &paths {
-        chunk.extend_from_slice(&(spec.name.len() as u16).to_le_bytes());
-        chunk.extend_from_slice(&spec.name);
+        chunk.extend_from_slice(&(spec.name().len() as u16).to_le_bytes());
+        chunk.extend_from_slice(&spec.name());
         let parts = ctx.state.nshards().max(1);
         put_points(&mut chunk, &quantile_points(store, spec, POINTS_PER_PARTITION * parts));
     }
@@ -121,7 +122,7 @@ mod tests {
     fn paths(line: &str) -> Vec<Vec<u8>> {
         let argv = words(line);
         let upper = argv[0].to_ascii_uppercase();
-        sampled_paths(&upper, &argv).into_iter().map(|s| s.name).collect()
+        sampled_paths(&upper, &argv).into_iter().map(|s| s.name().to_vec()).collect()
     }
 
     #[test]

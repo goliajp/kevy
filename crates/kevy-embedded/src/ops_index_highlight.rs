@@ -134,9 +134,9 @@ impl Store {
         };
         let mut positions = Vec::with_capacity(scope.len());
         for want in scope {
-            let names = || spec.fields.iter().map(|f| f.name.as_slice()).collect::<Vec<_>>();
+            let names = || spec.fields().iter().map(|f| f.name.as_slice()).collect::<Vec<_>>();
             let i = spec
-                .fields
+                .fields()
                 .iter()
                 .position(|f| f.name == *want)
                 .ok_or_else(|| unknown_field("IN", want, "index", &names()))?;
@@ -188,7 +188,7 @@ impl Store {
             let mut g = lock_write(shard);
             let inner = &mut *g;
             sync_segs(&self.indexes, &mut inner.idx_segs, &mut inner.store);
-            if let Some((spec, ts)) = inner.idx_segs.text.iter().find(|(s, _)| s.name == name) {
+            if let Some((spec, ts)) = inner.idx_segs.text.iter().find(|(s, _)| s.name() == name) {
                 // `matches_query_with` parses quoted phrases out of the
                 // raw query text; with none it is the ordinary term query.
                 let r = ts.matches_query_faceted(query, fetch, q, facets);
@@ -321,13 +321,13 @@ impl Store {
         let Some((spec, _)) = guard.1.get(name) else {
             return Err(KevyError::NotFound("no such text index".into()));
         };
-        let stored: Vec<&[u8]> = spec.values.iter().map(|v| v.name.as_slice()).collect();
+        let stored: Vec<&[u8]> = spec.values().iter().map(|v| v.name.as_slice()).collect();
         let pos = spec
-            .values
+            .values()
             .iter()
             .position(|v| v.name == field)
             .ok_or_else(|| unknown_field(clause, field, "store", &stored))?;
-        Ok(Some((pos, spec.values[pos].ty)))
+        Ok(Some((pos, spec.values()[pos].ty)))
     }
 
     /// One row's sort key: its stored value, in the order-preserving
@@ -344,7 +344,7 @@ impl Store {
     ) -> Option<Vec<u8>> {
         for shard in self.shards.iter() {
             let g = lock_write(shard);
-            if let Some((_, ts)) = g.idx_segs.text.iter().find(|(s, _)| s.name == name)
+            if let Some((_, ts)) = g.idx_segs.text.iter().find(|(s, _)| s.name() == name)
                 && let Some(raw) = ts.stored_value(key, field)
             {
                 return kevy_index::order_key(ty, raw);
@@ -390,7 +390,7 @@ fn gather_cold(
         facets,
         fetch,
     });
-    let spec = inner.idx_segs.text.iter().find(|(s, _)| s.name == name).map(|(s, _)| s.clone());
+    let spec = inner.idx_segs.text.iter().find(|(s, _)| s.name() == name).map(|(s, _)| s.clone());
     for h in page.hits {
         let hl = highlight.map_or_else(Vec::new, |w| {
             spec.as_ref().map_or_else(Vec::new, |sp| {
@@ -483,7 +483,7 @@ fn hit_highlight(
     ts.highlight_spans(key, query)
         .into_iter()
         .filter_map(|(fi, spans)| {
-            let name = spec.fields.get(fi)?.name.clone();
+            let name = spec.fields().get(fi)?.name.clone();
             if !want.is_empty() && !want.contains(&name) {
                 return None;
             }

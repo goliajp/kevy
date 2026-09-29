@@ -29,20 +29,7 @@ pub(crate) fn encode(name: &[u8], inc: u64, p: u16, delta: &Delta) -> Vec<u8> {
         Delta::Upsert { key, value, values } => {
             out.push(1);
             put_bytes32(&mut out, key);
-            match value {
-                IndexValue::I64(v) => {
-                    out.push(0);
-                    out.extend_from_slice(&v.to_le_bytes());
-                }
-                IndexValue::F64(v) => {
-                    out.push(1);
-                    out.extend_from_slice(&v.to_bits().to_le_bytes());
-                }
-                IndexValue::Str(v) => {
-                    out.push(2);
-                    put_bytes32(&mut out, v);
-                }
-            }
+            value.encode(&mut out);
             out.extend_from_slice(&(values.len() as u16).to_le_bytes());
             for v in values {
                 match v {

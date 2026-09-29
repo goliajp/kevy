@@ -2,9 +2,9 @@
 //! The declaration path must never panic, whatever the spec says.
 //!
 //! Dogfood F9: a TableSpec whose ORDERPATH named an undeclared column
-//! panicked inside `compile_table` on a consumer's boot path and
+//! panicked inside `TableSpec::compile` on a consumer's boot path and
 //! restart-looped their production container. The fix made
-//! `compile_table` validate for itself and return `Err`; this target is
+//! `TableSpec::compile` validate for itself and return `Err`; this target is
 //! the standing proof that no spec — parsed from arbitrary wire bytes
 //! or assembled from arbitrary parts — can reach a panic again.
 //!
@@ -12,19 +12,19 @@
 //! 1. the wire route: bytes → argv split → `parse_table_declare` →
 //!    (validate) → compile;
 //! 2. the typed route: a TableSpec assembled directly from the raw
-//!    parts, `compile_table` called on it cold — the embedded-face
+//!    parts, `TableSpec::compile` called on it cold — the embedded-face
 //!    shape, which is the one that shipped panicking.
 
 use libfuzzer_sys::fuzz_target;
 
-use kevy_index::{IndexKind, OrderPath, TableIndex, TableSpec, ValType, WindowSpec, compile_table};
+use kevy_index::{IndexKind, OrderPath, SortOrder, TableIndex, TableSpec, ValType, WindowSpec};
 
 fuzz_target!(|data: &[u8]| {
     // Route 1: wire bytes, split on 0xFF into argv-ish chunks.
     let argv: Vec<&[u8]> = data.split(|b| *b == 0xFF).collect();
     if let Ok(spec) = kevy_index::parse_table_declare(&argv) {
         // A parsed spec compiles or refuses; either way, no panic.
-        let _ = compile_table(&spec);
+        let _ = spec.compile();
     }
 
     // Route 2: a typed spec assembled from raw fragments, unvalidated —
@@ -38,27 +38,19 @@ fuzz_target!(|data: &[u8]| {
     };
     let col_a = next();
     let col_b = next();
-    let spec = TableSpec {
-        name: next(),
-        prefix: next(),
-        pk: next(),
-        columns: vec![(col_a.clone(), ty_of(&col_a)), (col_b.clone(), ty_of(&col_b))],
-        indexes: vec![TableIndex {
-            column: next(),
-            kind: if data.len() % 2 == 0 { IndexKind::Range } else { IndexKind::Unique },
-            values: vec![next()],
-        }],
-        orderpaths: vec![OrderPath {
-            name: next(),
-            on: vec![(next(), true), (next(), false)],
-        }],
-        window: (data.len() % 3 == 0).then(|| WindowSpec {
-            column: next(),
-            span: data.len() as i64 - 8,
-            bucket: data.first().copied().unwrap_or(0) as i64 - 4,
-        }),
-        autodeclare: 0,
-        auto_added: vec![],
-    };
-    let _ = compile_table(&spec);
+    let mut spec = TableSpec::default();
+    (spec.name, spec.prefix, spec.pk) = (next(), next(), next());
+    spec.columns = vec![(col_a.clone(), ty_of(&col_a)), (col_b.clone(), ty_of(&col_b))];
+    let kind = if data.len() % 2 == 0 { IndexKind::Range } else { IndexKind::Unique };
+    let mut ix = TableIndex::new(next(), kind);
+    ix.values = vec![next()];
+    spec.indexes = vec![ix];
+    let path = next();
+    let on = vec![(next(), SortOrder::Desc), (next(), SortOrder::Asc)];
+    spec.orderpaths = vec![OrderPath::new(path, on)];
+    spec.window = (data.len() % 3 == 0).then(|| {
+        let bucket = data.first().copied().unwrap_or(0) as i64 - 4;
+        WindowSpec::new(next(), data.len() as i64 - 8, bucket)
+    });
+    let _ = spec.compile();
 });

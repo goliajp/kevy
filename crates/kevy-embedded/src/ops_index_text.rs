@@ -34,26 +34,15 @@ impl Store {
         if fields.is_empty() {
             return Err(KevyError::InvalidInput("a text index needs at least one field".into()));
         }
-        let spec = IndexSpec {
-            name: name.to_vec(),
-            prefix: prefix.to_vec(),
-            fields: fields
-                .iter()
-                .map(|(f, w)| kevy_index::FieldSpec { name: f.to_vec(), weight: *w })
-                .collect(),
-            ty: ValType::Str,
-            kind: IndexKind::Text,
-            max_bytes: 0,
-            ann: None,
-            group_by: None,
-            with_positions: positions,
-            values: values
-                .iter()
-                .map(|(n, ty)| kevy_index::ValueSpec { name: n.to_vec(), ty: *ty })
-                .collect(),
-            composite: None,
-        };
-        self.register_spec(spec)
+        let fields =
+            fields.iter().map(|(f, w)| kevy_index::FieldSpec::new(*f).with_weight(*w)).collect();
+        let values =
+            values.iter().map(|(n, ty)| kevy_index::ValueSpec::new(*n).with_type(*ty)).collect();
+        let spec = IndexSpec::builder(name, prefix, IndexKind::Text, ValType::Str)
+            .with_fields(fields)
+            .with_positions(positions)
+            .with_values(values);
+        self.register_spec(crate::ops_index::built(spec)?)
     }
 
     /// Corpus-wide BM25 statistics for one query, over its field scope.
@@ -81,7 +70,7 @@ impl Store {
             let mut g = lock_write(shard);
             let inner = &mut *g;
             sync_segs(&self.indexes, &mut inner.idx_segs, &mut inner.store);
-            if let Some((_, ts)) = inner.idx_segs.text.iter().find(|(s, _)| s.name == name) {
+            if let Some((_, ts)) = inner.idx_segs.text.iter().find(|(s, _)| s.name() == name) {
                 found = true;
                 n_docs += ts.docs() as f64;
                 total_len += ts.total_len_in(scope);

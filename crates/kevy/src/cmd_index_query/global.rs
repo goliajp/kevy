@@ -11,7 +11,7 @@
 //! and `carried` holds the page so far (a plain hit chunk), so the
 //! runtime keeps no state between phases.
 
-use kevy_index::{Partitioning, Segment, partition_owner, value_order_bytes};
+use kevy_index::{Partitioning, Segment, partition_owner};
 use kevy_store::Store;
 
 use super::args::{Query, Shape};
@@ -62,9 +62,9 @@ pub(crate) fn walk(catalogs: &CatalogState, argv: &[Vec<u8>]) -> Option<(Walk, P
     }
     let now = (kevy_store::now_unix_ms() / 1000) as i64;
     let (min, max) = q.bounds_for(spec, now).ok()?;
-    let first = part.partition_of(&value_order_bytes(&min));
-    let last = part.partition_of(&value_order_bytes(&max)).max(first);
-    let at_cursor = q.cursor(spec.ty).map(|c| part.partition_of(&value_order_bytes(&c.value)));
+    let first = part.partition_of(&min.order_bytes());
+    let last = part.partition_of(&max.order_bytes()).max(first);
+    let at_cursor = q.cursor(spec.ty()).map(|c| part.partition_of(&c.value.order_bytes()));
     let start = at_cursor.map_or(first, |p| p.clamp(first, last));
     let walk = Walk { first, last, start, limit: q.limit, in_order: !q.selects() };
     Some((walk, part.clone()))
@@ -137,8 +137,8 @@ pub(super) fn stored_positions(
     fields
         .iter()
         .map(|f| {
-            spec.values.iter().position(|v| v.name == *f).ok_or_else(|| {
-                let stored: Vec<&[u8]> = spec.values.iter().map(|v| v.name.as_slice()).collect();
+            spec.values().iter().position(|v| v.name == *f).ok_or_else(|| {
+                let stored: Vec<&[u8]> = spec.values().iter().map(|v| v.name.as_slice()).collect();
                 super::ops_clauses::nofield_error("FIELDS on a global index", f, &stored)
             })
         })
@@ -178,13 +178,10 @@ mod tests {
     /// per shard), and `l`, local, over the same field.
     fn catalogs(n: usize) -> crate::RuntimeState {
         let spec = |name: &[u8]| {
-            IndexSpec::single_field(
-                name.to_vec(),
-                b"u:".to_vec(),
-                b"age".to_vec(),
-                ValType::I64,
-                IndexKind::Range,
-            )
+            IndexSpec::builder(name.to_vec(), b"u:".to_vec(), IndexKind::Range, ValType::I64)
+                .with_field(b"age".to_vec())
+                .build()
+                .unwrap()
         };
         let splits =
             (1..n).map(|k| order_key(ValType::I64, (k * 1000 / n).to_string().as_bytes()).unwrap());

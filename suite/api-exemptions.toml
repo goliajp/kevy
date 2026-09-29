@@ -23,6 +23,21 @@ why = "the two directions of a total order; no third can exist, and callers matc
 
 [[exempt]]
 rule = "enum-exhaustive"
+item = "kevy_index::describe::Described"
+why = "the describe reply tree mirrors the two RESP reply shapes it is encoded as (bulk string, array); the server and the embedded dispatch each encode every variant, so a new node kind must fail to compile there instead of falling into a wildcard arm with no encoding"
+
+[[exempt]]
+rule = "enum-exhaustive"
+item = "kevy_index::composite::RowDerivation"
+why = "one classification drives both the write path and TABLE.VERIFY's per-cause counters (indexed, absent, coerce-failed, oversize); every consumer matches each cause, so a new cause must fail to compile until it gets its own counter instead of being folded into an existing one, which is how absent rows once read as coerce failures"
+
+[[exempt]]
+rule = "enum-exhaustive"
+item = "kevy_index::view::Tree"
+why = "the view composition algebra (a leaf, AND, OR, DIFF); every walker — evaluation, membership, explain rendering — must handle each operator, and a wildcard arm has no correct answer for an operator it does not know, so a new one must fail to compile in every walker"
+
+[[exempt]]
+rule = "enum-exhaustive"
 item = "kevy_map::raw_entry::RawEntryMut"
 why = "a key is either present or absent in the map, so Occupied and Vacant are the only states an entry can be in; callers match both arms, as with std's hash_map::Entry"
 

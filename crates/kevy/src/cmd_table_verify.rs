@@ -87,7 +87,7 @@ fn slid_out(
     };
     match index_runtime::row_value(s, spec, key) {
         index_runtime::RowValue::Value(v) => {
-            kevy_index::window_value_of(&v, w.shape).is_some_and(|wv| wv < w.boundary)
+            v.window_value(w.shape).is_some_and(|wv| wv < w.boundary)
         }
         _ => false,
     }
@@ -102,12 +102,12 @@ pub(crate) fn index_verify_counts(
         index_runtime::with_ready_segment(ctx, store, name, |spec, seg, win| {
             let mut entries: Vec<(Vec<u8>, kevy_index::IndexValue)> = Vec::new();
             seg.each_entry(|k, v| entries.push((k.to_vec(), v.clone())));
-            let audit = win.and_then(|w| w.audit(spec.ty));
+            let audit = win.and_then(|w| w.audit(spec.ty()));
             (spec.clone(), entries, seg.stats(), audit)
         })?;
     let indexed: std::collections::HashSet<&[u8]> =
         entries.iter().map(|(k, _)| k.as_slice()).collect();
-    let mut pat = spec.prefix.clone();
+    let mut pat = spec.prefix().to_vec();
     pat.push(b'*');
     let row_keys = store.collect_keys(Some(&pat), None);
     let (drift, fresh) = store.peek_scope(|s| {

@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use kevy_index::{IndexSpec, Partitioning, parse_split_point, splits_from_weighted};
+use kevy_index::{IndexSpec, Partitioning, splits_from_weighted};
 use kevy_resp::{ArgvView, encode_error};
 use kevy_store::Store;
 
@@ -38,7 +38,7 @@ impl Sampler<'_> {
                 index_runtime::quantile_points(store, spec, POINTS_PER_PARTITION * nshards)
             }
             Sampler::Gathered { samples, .. } => {
-                samples.get(&spec.name).cloned().unwrap_or_default()
+                samples.get(spec.name()).cloned().unwrap_or_default()
             }
         }
     }
@@ -115,7 +115,7 @@ fn partitioning(
     }
     let mut splits = Vec::with_capacity(p.split.len());
     for raw in &p.split {
-        let Some(enc) = parse_split_point(spec, raw) else {
+        let Some(enc) = spec.parse_split_point(raw) else {
             encode_error(out, "ERR SPLIT value does not coerce to the index TYPE");
             return Err(());
         };
@@ -171,9 +171,9 @@ pub(crate) fn install_new_index(
 pub(crate) fn fit_partitions(cat: &mut kevy_index::Catalog, n: usize) -> bool {
     let over: Vec<(Vec<u8>, Vec<Vec<u8>>)> = cat
         .iter()
-        .filter_map(|(spec, _)| match cat.partitioning(&spec.name) {
+        .filter_map(|(spec, _)| match cat.partitioning(&spec.name()) {
             kevy_index::Partitioning::Global { splits } if splits.len() >= n.max(1) => {
-                Some((spec.name.clone(), splits.clone()))
+                Some((spec.name().to_vec(), splits.clone()))
             }
             _ => None,
         })
@@ -192,13 +192,10 @@ mod tests {
     #[test]
     fn a_catalog_from_more_shards_keeps_one_partition_per_shard() {
         let spec = |name: &[u8]| {
-            IndexSpec::single_field(
-                name.to_vec(),
-                b"u:".to_vec(),
-                b"a".to_vec(),
-                ValType::Str,
-                IndexKind::Range,
-            )
+            IndexSpec::builder(name.to_vec(), b"u:".to_vec(), IndexKind::Range, ValType::Str)
+                .with_field(b"a".to_vec())
+                .build()
+                .unwrap()
         };
         let splits: Vec<Vec<u8>> = (1..8u8).map(|b| vec![b]).collect();
         let mut cat = Catalog::new();

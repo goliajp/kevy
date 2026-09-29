@@ -48,7 +48,7 @@ pub(super) fn run_claused_count(ctx: &Ctx<'_>, store: &mut Store, q: &Query) -> 
         // segment refuses; never a partial number.
         let cold = match win
             .filter(|w| w.has_cold())
-            .map(|w| w.cold_claused_count(spec.ty, &min, &max, &filters))
+            .map(|w| w.cold_claused_count(spec.ty(), &min, &max, &filters))
             .transpose()
         {
             Ok(n) => n.unwrap_or(0),
@@ -79,20 +79,16 @@ pub(super) fn run_claused_query(ctx: &Ctx<'_>, store: &mut Store, q: &Query) -> 
         let sort = sort_field(spec, &q.sort)?;
         let distinct = distinct_field(spec, &q.distinct)?;
         let facets = facet_fields(spec, &q.facets)?;
-        let clauses = ScalarClauses {
-            filters: &filters,
-            sort,
-            distinct,
-            facets: &facets,
-            // Each shard returns limit+offset: the origin drains the
-            // offset AFTER the merge, and a shard cannot know which of
-            // its hits survive it.
-            fetch: q.limit + q.offset,
-        };
-        let cursor = q.cursor(spec.ty);
+        // Each shard returns limit+offset: the origin drains the
+        // offset AFTER the merge, and a shard cannot know which of
+        // its hits survive it.
+        let mut clauses =
+            ScalarClauses::new(q.limit + q.offset).with_filters(&filters).with_facets(&facets);
+        (clauses.sort, clauses.distinct) = (sort, distinct);
+        let cursor = q.cursor(spec.ty());
         let mut page = seg.query_claused(&min, &max, cursor.as_ref(), &clauses);
         if let Some(w) = win.filter(|w| w.has_cold()) {
-            match w.cold_claused(spec.ty, &min, &max, cursor.as_ref(), &clauses) {
+            match w.cold_claused(spec.ty(), &min, &max, cursor.as_ref(), &clauses) {
                 Ok((chits, cfacets)) => merge_cold_claused(&mut page, chits, cfacets, &clauses),
                 Err(_) => return Err(vec![super::ST_NOINDEX]),
             }
@@ -132,17 +128,13 @@ fn merge_cold_claused(
 ) {
     let all: Vec<(kevy_index::ScalarHit, ())> =
         page.hits.drain(..).chain(chits).map(|h| (h, ())).collect();
-    let merged =
-        kevy_index::merge_claused(all, c.sort.map(|(_, d, _)| d), c.distinct.is_some(), 0, c.fetch);
+    let merged = kevy_index::merge_claused(all, c.sort.map(|(_, order, _)| order), 0, c.fetch);
     page.hits = merged.into_iter().map(|(h, ())| h).collect();
     kevy_index::fold_facets(&mut page.facets, cfacets);
     kevy_index::sort_facets(&mut page.facets);
     page.cursor = match c.selects() || page.hits.len() < c.fetch {
         true => None,
-        false => page
-            .hits
-            .last()
-            .map(|h| kevy_index::Cursor { value: h.value.clone(), key: h.key.clone() }),
+        false => page.hits.last().map(|h| kevy_index::Cursor::new(h.value.clone(), h.key.clone())),
     };
 }
 

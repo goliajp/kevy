@@ -70,7 +70,8 @@ fn check_books(seg: &Segment, model: &Model, keys: &[Vec<u8>]) {
     seen.sort();
     let want: Vec<_> = model.rows.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
     assert_eq!(seen, want, "each_entry");
-    let scanned: Vec<_> = seg.scan(None, false).map(|(v, k)| (v.clone(), k.to_vec())).collect();
+    let scanned: Vec<_> =
+        seg.scan(None, kevy_index::SortOrder::Asc).map(|(v, k)| (v.clone(), k.to_vec())).collect();
     assert_eq!(scanned, model.sorted(), "the tree and the reverse side hold the same rows");
     assert_eq!(seg.max_value(), model.sorted().last().map(|(v, _)| v));
 }
@@ -101,14 +102,21 @@ fn check_range(seg: &Segment, model: &Model, lo: &IndexValue, hi: &IndexValue, p
 fn check_scans(seg: &Segment, model: &Model, rng: &mut Rng) {
     let all = model.sorted();
     let Some((v, k)) = all.get(rng.below(all.len() as u64 + 1) as usize) else { return };
-    let after = Cursor { value: v.clone(), key: k.clone() };
-    let up: Vec<_> = seg.scan(Some(&after), false).map(|(v, k)| (v.clone(), k.to_vec())).collect();
+    let after = Cursor::new(v.clone(), k.clone());
+    let up: Vec<_> = seg
+        .scan(Some(&after), kevy_index::SortOrder::Asc)
+        .map(|(v, k)| (v.clone(), k.to_vec()))
+        .collect();
     let want_up: Vec<_> = all.iter().filter(|e| (&e.0, &e.1) > (v, k)).cloned().collect();
     assert_eq!(up, want_up, "ascending scan past {after:?}");
-    let down: Vec<_> = seg.scan(Some(&after), true).map(|(v, k)| (v.clone(), k.to_vec())).collect();
+    let down: Vec<_> = seg
+        .scan(Some(&after), kevy_index::SortOrder::Desc)
+        .map(|(v, k)| (v.clone(), k.to_vec()))
+        .collect();
     let want_down: Vec<_> = all.iter().rev().filter(|e| (&e.0, &e.1) < (v, k)).cloned().collect();
     assert_eq!(down, want_down, "descending scan past {after:?}");
-    let full_down: Vec<_> = seg.scan(None, true).map(|(v, k)| (v.clone(), k.to_vec())).collect();
+    let full_down: Vec<_> =
+        seg.scan(None, kevy_index::SortOrder::Desc).map(|(v, k)| (v.clone(), k.to_vec())).collect();
     assert_eq!(full_down, all.iter().rev().cloned().collect::<Vec<_>>(), "descending scan");
 }
 

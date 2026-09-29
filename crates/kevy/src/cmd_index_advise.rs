@@ -3,7 +3,6 @@
 //! declarations. A Local dispatch handler like the catalog mutations
 //! (the log is process-global origin state; no shard holds anything).
 
-use kevy_index::advice_of;
 use kevy_resp::{ArgvView, encode_array_len, encode_bulk, encode_error, encode_integer};
 
 use crate::state::Ctx;
@@ -24,7 +23,7 @@ pub(crate) fn cmd_idx_advise<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out:
     let mut rows = Vec::new();
     if let Some(cat) = table.as_deref() {
         for e in &entries {
-            if let Some(advice) = advice_of(e, cat) {
+            if let Some(advice) = e.advice(cat) {
                 rows.push((e.count, e.name.clone(), advice));
             }
         }
@@ -57,7 +56,7 @@ fn reclaim_rows(ctx: &Ctx<'_>, table: Option<&kevy_index::TableCatalog>) -> Vec<
         .filter_map(|(name, _, _, _, margin)| {
             let dot = name.iter().position(|&b| b == b'.')?;
             let spec = table?.get(&name[..dot])?;
-            kevy_index::narrow_advice(spec, *margin).map(|a| (name.clone(), a))
+            spec.narrow_advice(*margin).map(|a| (name.clone(), a))
         })
         .collect();
     narrow.sort();

@@ -10,7 +10,17 @@ use std::collections::{BTreeMap, HashMap};
 use crate::IndexValue;
 
 /// One group's live statistics.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// ```
+/// use kevy_index::{GroupStats, IndexValue};
+/// let mut total = GroupStats::default();
+/// let mut part = GroupStats::default();
+/// (part.count, part.sum, part.min, part.max) = (2, 10.0, Some(IndexValue::I64(3)), Some(IndexValue::I64(7)));
+/// total.merge(&part);
+/// assert_eq!(total.avg(), Some(5.0));
+/// ```
+#[derive(Debug, Clone, Default, PartialEq)]
+#[non_exhaustive]
 pub struct GroupStats {
     /// Rows in the group.
     pub count: u64,
@@ -25,9 +35,89 @@ pub struct GroupStats {
 
 impl GroupStats {
     /// Derived average.
+    ///
+    /// ```
+    /// assert_eq!(kevy_index::GroupStats::default().avg(), None);
+    /// ```
     pub fn avg(&self) -> Option<f64> {
         (self.count > 0).then(|| self.sum / self.count as f64)
     }
+
+    /// This group's standing under `by`, oriented so a larger score ranks
+    /// higher for every metric — the order [`sort_groups`] puts groups in
+    /// (a smaller minimum ranks higher; a group without one ranks last).
+    ///
+    /// ```
+    /// use kevy_index::{AggBy, GroupStats, IndexValue};
+    /// let mut g = GroupStats::default();
+    /// (g.count, g.min) = (3, Some(IndexValue::I64(2)));
+    /// assert_eq!((g.rank_score(AggBy::Count), g.rank_score(AggBy::Min)), (3.0, -2.0));
+    /// assert_eq!(g.rank_score(AggBy::Max), f64::NEG_INFINITY);
+    /// ```
+    pub fn rank_score(&self, by: AggBy) -> f64 {
+        match by {
+            AggBy::Count => self.count as f64,
+            AggBy::Sum => self.sum,
+            AggBy::Max => self.max.as_ref().map_or(f64::NEG_INFINITY, IndexValue::as_f64),
+            AggBy::Min => self.min.as_ref().map_or(f64::NEG_INFINITY, |v| -v.as_f64()),
+        }
+    }
+
+    /// Fold one shard's partial for the same group into this one (reduce
+    /// side): counts and sums add, min and max take the extremes.
+    ///
+    /// ```
+    /// use kevy_index::{GroupStats, IndexValue};
+    /// let mut a = GroupStats::default();
+    /// a.count = 1;
+    /// a.min = Some(IndexValue::I64(5));
+    /// let mut b = GroupStats::default();
+    /// b.count = 1;
+    /// b.min = Some(IndexValue::I64(2));
+    /// a.merge(&b);
+    /// assert_eq!((a.count, a.min), (2, Some(IndexValue::I64(2))));
+    /// ```
+    pub fn merge(&mut self, part: &GroupStats) {
+        self.count += part.count;
+        self.sum += part.sum;
+        self.min = match (self.min.take(), part.min.clone()) {
+            (Some(a), Some(b)) => Some(if b < a { b } else { a }),
+            (a, b) => a.or(b),
+        };
+        self.max = match (self.max.take(), part.max.clone()) {
+            (Some(a), Some(b)) => Some(if b > a { b } else { a }),
+            (a, b) => a.or(b),
+        };
+    }
+}
+
+/// What one row contributes to an aggregate index, as
+/// [`AggSegment::apply`] takes it.
+///
+/// ```
+/// use kevy_index::{AggRow, AggSegment, IndexValue};
+/// let mut s = AggSegment::new();
+/// s.apply(b"o:1", AggRow::Member { group: b"paid".to_vec(), value: IndexValue::I64(30) });
+/// s.apply(b"o:2", AggRow::Excluded);
+/// assert_eq!((s.stats().rows, s.stats().excluded), (1, 1));
+/// s.apply(b"o:1", AggRow::Removed);
+/// assert_eq!(s.rows(), 0);
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum AggRow {
+    /// The row participates: in `group`, contributing `value`.
+    Member {
+        /// The grouping field's raw bytes.
+        group: Vec<u8>,
+        /// The aggregated field, coerced to the index's type.
+        value: IndexValue,
+    },
+    /// The row is gone (deleted, or moved out of the prefix).
+    Removed,
+    /// The row exists but cannot participate: its grouping field is
+    /// missing or its value failed coercion. Counted, unlike a removal.
+    Excluded,
 }
 
 #[derive(Debug)]
@@ -39,7 +129,8 @@ struct Group {
 }
 
 /// Ranking metric for [`AggSegment::top_groups`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub enum AggBy {
     /// By row count (default).
     #[default]
@@ -53,6 +144,21 @@ pub enum AggBy {
 }
 
 impl AggBy {
+    /// The wire tag, as [`AggBy::parse`] reads it.
+    ///
+    /// ```
+    /// use kevy_index::AggBy;
+    /// assert_eq!(AggBy::parse(AggBy::Sum.tag().as_bytes()), Some(AggBy::Sum));
+    /// ```
+    pub fn tag(self) -> &'static str {
+        match self {
+            AggBy::Count => "count",
+            AggBy::Sum => "sum",
+            AggBy::Min => "min",
+            AggBy::Max => "max",
+        }
+    }
+
     /// Wire tag.
     pub fn parse(raw: &[u8]) -> Option<AggBy> {
         if raw.eq_ignore_ascii_case(b"count") {
@@ -70,7 +176,8 @@ impl AggBy {
 }
 
 /// Sizing counters (memory formula / IDX.LIST).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct AggStats {
     /// Live groups.
     pub groups: u64,
@@ -105,14 +212,16 @@ impl AggSegment {
         Self::default()
     }
 
-    /// (Re-)register one row: `Some((group, value))` = row
-    /// participates; `None` = removed or excluded. `excluded_row`
-    /// marks the None case as a coercion/missing-field exclusion
-    /// (counted) rather than a plain delete.
+    /// (Re-)register one row under what it now contributes.
     // missing_panics_doc: the only panic is the "group of live row" expect —
     // an internal rows↔groups invariant, never reachable from caller input.
     #[allow(clippy::missing_panics_doc)]
-    pub fn apply(&mut self, key: &[u8], entry: Option<(Vec<u8>, IndexValue)>, excluded_row: bool) {
+    pub fn apply(&mut self, key: &[u8], row: AggRow) {
+        let (entry, excluded_row) = match row {
+            AggRow::Member { group, value } => (Some((group, value)), false),
+            AggRow::Removed => (None, false),
+            AggRow::Excluded => (None, true),
+        };
         if let Some((group, val)) = &entry
             && self.fast_path_same_group(key, group, val)
         {
@@ -336,152 +445,6 @@ pub fn sort_groups(all: &mut [(Vec<u8>, GroupStats)], by: AggBy) {
     }
 }
 
-/// Merge shard partials for one group (reduce side): counts/sums add,
-/// min/max take extremes.
-pub fn merge_group(into: &mut GroupStats, part: &GroupStats) {
-    into.count += part.count;
-    into.sum += part.sum;
-    into.min = match (into.min.take(), part.min.clone()) {
-        (Some(a), Some(b)) => Some(if b < a { b } else { a }),
-        (a, b) => a.or(b),
-    };
-    into.max = match (into.max.take(), part.max.clone()) {
-        (Some(a), Some(b)) => Some(if b > a { b } else { a }),
-        (a, b) => a.or(b),
-    };
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn seg() -> AggSegment {
-        let mut s = AggSegment::new();
-        // orders: group = status, value = amount
-        for (k, g, v) in [
-            ("o1", "paid", 100),
-            ("o2", "paid", 250),
-            ("o3", "open", 40),
-            ("o4", "paid", 100),
-            ("o5", "open", 999),
-        ] {
-            s.apply(k.as_bytes(), Some((g.as_bytes().to_vec(), IndexValue::I64(v))), false);
-        }
-        s
-    }
-
-    #[test]
-    fn group_stats_exact() {
-        let s = seg();
-        let g = s.group(b"paid");
-        assert_eq!((g.count, g.sum), (3, 450.0));
-        assert_eq!(g.min, Some(IndexValue::I64(100)));
-        assert_eq!(g.max, Some(IndexValue::I64(250)));
-        assert_eq!(g.avg(), Some(150.0));
-        let none = s.group(b"nope");
-        assert_eq!(none.count, 0);
-        assert!(none.min.is_none() && none.avg().is_none());
-    }
-
-    #[test]
-    fn min_max_exact_under_delete_and_update() {
-        let mut s = seg();
-        // delete the paid max (o2=250): max must fall back to 100
-        s.apply(b"o2", None, false);
-        let g = s.group(b"paid");
-        assert_eq!((g.count, g.max.clone()), (2, Some(IndexValue::I64(100))));
-        // duplicate values: removing ONE 100 keeps the other
-        s.apply(b"o1", None, false);
-        let g = s.group(b"paid");
-        assert_eq!((g.count, g.min.clone()), (1, Some(IndexValue::I64(100))));
-        // update moves a row across groups
-        s.apply(b"o3", Some((b"paid".to_vec(), IndexValue::I64(40))), false);
-        assert_eq!(s.group(b"paid").count, 2);
-        assert_eq!(s.group(b"open").count, 1);
-        assert_eq!(s.group(b"paid").min, Some(IndexValue::I64(40)));
-        // last row leaving a group drops the group
-        s.apply(b"o5", None, false);
-        assert_eq!(s.group(b"open").count, 0);
-        assert_eq!(s.stats().groups, 1);
-    }
-
-    #[test]
-    fn top_groups_all_metrics() {
-        let s = seg();
-        let top = s.top_groups(AggBy::Count, 10);
-        assert_eq!(top[0].0, b"paid".to_vec());
-        let top = s.top_groups(AggBy::Sum, 10);
-        assert_eq!(top[0].0, b"open".to_vec(), "open sum 1039 > paid 450");
-        let top = s.top_groups(AggBy::Min, 10);
-        assert_eq!(top[0].0, b"open".to_vec(), "min ascending: 40 first");
-        let top = s.top_groups(AggBy::Max, 1);
-        assert_eq!(top.len(), 1);
-        assert_eq!(top[0].0, b"open".to_vec(), "max 999");
-    }
-
-    #[test]
-    fn excluded_counted_and_merge() {
-        let mut s = seg();
-        s.apply(b"bad1", None, true);
-        s.apply(b"bad2", None, true);
-        assert_eq!(s.stats().excluded, 2);
-        assert!(s.contains(b"o1") && !s.contains(b"bad1"));
-        // cross-shard merge semantics
-        let mut a = s.group(b"paid");
-        let b = seg().group(b"paid");
-        merge_group(&mut a, &b);
-        assert_eq!((a.count, a.sum), (6, 900.0));
-        assert_eq!(a.min, Some(IndexValue::I64(100)));
-        assert_eq!(a.max, Some(IndexValue::I64(250)));
-        // merge with an empty partial keeps extremes
-        let mut e = GroupStats { count: 0, sum: 0.0, min: None, max: None };
-        merge_group(&mut e, &a);
-        assert_eq!(e.max, Some(IndexValue::I64(250)));
-    }
-
-    #[test]
-    fn stats_bytes_nonzero() {
-        let s = seg();
-        let st = s.stats();
-        assert_eq!((st.groups, st.rows), (2, 5));
-        assert!(st.approx_bytes > 0);
-    }
-
-    /// `stats()` reads running counters instead of walking the
-    /// maps. A mixed workload — inserts, the same-group fast path,
-    /// group moves, removals down to empty — holds them to the walking
-    /// reference after every step.
-    #[test]
-    fn running_stats_never_drift_from_the_walking_reference() {
-        let mut s = AggSegment::new();
-        let check = |s: &AggSegment, at: &str| {
-            assert_eq!(s.stats(), s.recompute_stats(), "counter drift after {at}");
-        };
-        let mut x = 0x2545F491u64;
-        let mut next = move || {
-            x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-            (x >> 33) as u32
-        };
-        let groups = [b"eng".as_slice(), b"sales", b"ops"];
-        for round in 0..300u32 {
-            let key = format!("r:{}", next() % 30);
-            match next() % 6 {
-                0 => s.apply(key.as_bytes(), None, false),
-                1 => s.apply(key.as_bytes(), None, true), // excluded
-                _ => {
-                    let g = groups[(next() % 3) as usize].to_vec();
-                    // Small value domain forces shared distinct entries.
-                    let v = IndexValue::I64(i64::from(next() % 7));
-                    s.apply(key.as_bytes(), Some((g, v)), false);
-                }
-            }
-            check(&s, &format!("round {round}"));
-        }
-        for i in 0..30u32 {
-            s.apply(format!("r:{i}").as_bytes(), None, false);
-        }
-        check(&s, "full drain");
-        let end = s.stats();
-        assert_eq!((end.groups, end.rows), (0, 0));
-    }
-}
+#[path = "agg_tests.rs"]
+mod tests;

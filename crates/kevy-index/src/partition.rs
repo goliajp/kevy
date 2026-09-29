@@ -9,7 +9,7 @@
 //! splits[p])`, and lives on the shard [`partition_owner`] names. Both are
 //! pure functions of the catalog, so any shard can place any value.
 
-use crate::catalog::{Catalog, IndexKind, IndexSpec};
+use crate::{Catalog, IndexKind, IndexSpec};
 
 /// How an index is spread over the shards.
 ///
@@ -19,7 +19,8 @@ use crate::catalog::{Catalog, IndexKind, IndexSpec};
 /// let p = Partitioning::Global { splits: vec![b"m".to_vec()] };
 /// assert_eq!((p.partition_of(b"a"), p.partition_of(b"z")), (0, 1));
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub enum Partitioning {
     /// Every shard holds the entries of the rows it owns.
     #[default]
@@ -152,23 +153,7 @@ pub fn splits_from_weighted(mut points: Vec<(Vec<u8>, u64)>, parts: usize) -> Ve
     out
 }
 
-/// The split point `raw`, as written after `SPLIT` or `SPLIT AT`, in
-/// `spec`'s order encoding: a value of the index's type, or — for a
-/// composite (`ORDERPATH`) index, whose points are frames of several
-/// columns — `0x` and the encoded bytes in hex. `None` when it does not
-/// read as either.
-///
-/// ```
-/// use kevy_index::{IndexKind, IndexSpec, ValType, parse_split_point, split_point_text};
-///
-/// let s = IndexSpec::single_field(
-///     b"age".to_vec(), b"u:".to_vec(), b"age".to_vec(), ValType::I64, IndexKind::Range,
-/// );
-/// let enc = parse_split_point(&s, b"40").unwrap();
-/// assert_eq!(split_point_text(&s, &enc), b"40");
-/// assert_eq!(parse_split_point(&s, b"forty"), None);
-/// ```
-pub fn parse_split_point(spec: &IndexSpec, raw: &[u8]) -> Option<Vec<u8>> {
+pub(crate) fn parse_split_point(spec: &IndexSpec, raw: &[u8]) -> Option<Vec<u8>> {
     if spec.composite.is_none() {
         return crate::order_key(spec.ty, raw);
     }
@@ -180,17 +165,7 @@ pub fn parse_split_point(spec: &IndexSpec, raw: &[u8]) -> Option<Vec<u8>> {
     hex.chunks(2).map(|p| Some(digit(p[0])? << 4 | digit(p[1])?)).collect()
 }
 
-/// A split point as [`parse_split_point`] reads it back.
-///
-/// ```
-/// use kevy_index::{IndexKind, IndexSpec, ValType, order_key, split_point_text};
-///
-/// let s = IndexSpec::single_field(
-///     b"t".to_vec(), b"u:".to_vec(), b"t".to_vec(), ValType::F64, IndexKind::Range,
-/// );
-/// assert_eq!(split_point_text(&s, &order_key(ValType::F64, b"2.5").unwrap()), b"2.5");
-/// ```
-pub fn split_point_text(spec: &IndexSpec, enc: &[u8]) -> Vec<u8> {
+pub(crate) fn split_point_text(spec: &IndexSpec, enc: &[u8]) -> Vec<u8> {
     if spec.composite.is_none() {
         return decode_order_key(spec.ty, enc);
     }
@@ -254,14 +229,13 @@ impl Catalog {
     /// ```
     /// use kevy_index::{Catalog, IndexKind, IndexSpec, Partitioning, ValType, order_key};
     ///
-    /// let spec = IndexSpec::single_field(
-    ///     b"age".to_vec(), b"user:".to_vec(), b"age".to_vec(), ValType::I64, IndexKind::Range,
-    /// );
+    /// let spec = IndexSpec::builder("age", "user:", IndexKind::Range, ValType::I64).with_field("age").build()?;
     /// let mut c = Catalog::new();
     /// let split = order_key(ValType::I64, b"40").unwrap();
     /// c.create_with(spec, Partitioning::Global { splits: vec![split] }).unwrap();
     /// assert_eq!(c.partitioning(b"age").partitions(), 2);
     /// assert!(!c.partitioning(b"other").is_global());
+    /// # Ok::<(), &'static str>(())
     /// ```
     pub fn create_with(
         &mut self,
@@ -292,13 +266,12 @@ impl Catalog {
     /// ```
     /// use kevy_index::{Catalog, IndexKind, IndexSpec, Partitioning, ValType};
     ///
-    /// let spec = IndexSpec::single_field(
-    ///     b"name".to_vec(), b"user:".to_vec(), b"name".to_vec(), ValType::Str, IndexKind::Range,
-    /// );
+    /// let spec = IndexSpec::builder("name", "user:", IndexKind::Range, ValType::Str).with_field("name").build()?;
     /// let mut c = Catalog::new();
     /// c.create_with(spec, Partitioning::Global { splits: vec![] }).unwrap();
     /// assert!(c.set_splits(b"name", vec![b"h".to_vec(), b"q".to_vec()]));
     /// assert_eq!(c.partitioning(b"name").partition_of(b"mia"), 1);
+    /// # Ok::<(), &'static str>(())
     /// ```
     pub fn set_splits(&mut self, name: &[u8], splits: Vec<Vec<u8>>) -> bool {
         if splits.windows(2).any(|w| w[0] >= w[1]) {
@@ -311,5 +284,40 @@ impl Catalog {
             }
             None => false,
         }
+    }
+}
+
+impl IndexSpec {
+    /// The split point `raw`, as written after `SPLIT` or `SPLIT AT`, in
+    /// this index's order encoding: a value of the index's type, or — for a
+    /// composite (`ORDERPATH`) index, whose points are frames of several
+    /// columns — `0x` and the encoded bytes in hex. `None` when it does not
+    /// read as either.
+    ///
+    /// ```
+    /// use kevy_index::{IndexKind, IndexSpec, ValType};
+    ///
+    /// let s = IndexSpec::builder("age", "u:", IndexKind::Range, ValType::I64).with_field("age").build()?;
+    /// let enc = s.parse_split_point(b"40").expect("an i64 point");
+    /// assert_eq!(s.split_point_text(&enc), b"40");
+    /// assert_eq!(s.parse_split_point(b"forty"), None);
+    /// # Ok::<(), &'static str>(())
+    /// ```
+    pub fn parse_split_point(&self, raw: &[u8]) -> Option<Vec<u8>> {
+        parse_split_point(self, raw)
+    }
+
+    /// A split point as [`IndexSpec::parse_split_point`] reads it back.
+    ///
+    /// ```
+    /// use kevy_index::{IndexKind, IndexSpec, ValType, order_key};
+    ///
+    /// let s = IndexSpec::builder("t", "u:", IndexKind::Range, ValType::F64).with_field("t").build()?;
+    /// let enc = order_key(ValType::F64, b"2.5").expect("a float");
+    /// assert_eq!(s.split_point_text(&enc), b"2.5");
+    /// # Ok::<(), &'static str>(())
+    /// ```
+    pub fn split_point_text(&self, enc: &[u8]) -> Vec<u8> {
+        split_point_text(self, enc)
     }
 }

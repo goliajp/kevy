@@ -23,25 +23,24 @@ fn run(s: &Store, argv: &[&[u8]]) -> Vec<u8> {
 use kevy_index::{IndexKind, IndexValue, TableIndex, TableSpec, ValType, WindowSpec};
 
 fn table(name: &[u8], windowed: bool) -> TableSpec {
-    TableSpec {
-        name: name.to_vec(),
-        prefix: b"ev:".to_vec(),
-        pk: b"id".to_vec(),
-        columns: vec![
+    {
+        let mut t = TableSpec::default();
+        t.name = name.to_vec();
+        t.prefix = b"ev:".to_vec();
+        t.pk = b"id".to_vec();
+        t.columns = vec![
             (b"id".to_vec(), ValType::Str),
             (b"at".to_vec(), ValType::I64),
             (b"prio".to_vec(), ValType::I64),
             (b"tag".to_vec(), ValType::Str),
-        ],
-        indexes: vec![TableIndex {
-            column: b"at".to_vec(),
-            kind: IndexKind::Range,
-            values: vec![b"at".to_vec(), b"prio".to_vec(), b"tag".to_vec()],
-        }],
-        orderpaths: vec![],
-        window: windowed.then_some(WindowSpec { column: b"at".to_vec(), span: 100, bucket: 10 }),
-        autodeclare: 0,
-        auto_added: vec![],
+        ];
+        t.indexes = vec![{
+            let mut ix = TableIndex::new(b"at".to_vec(), IndexKind::Range);
+            ix.values = vec![b"at".to_vec(), b"prio".to_vec(), b"tag".to_vec()];
+            ix
+        }];
+        t.window = windowed.then_some(WindowSpec::new(b"at".to_vec(), 100, 10));
+        t
     }
 }
 
