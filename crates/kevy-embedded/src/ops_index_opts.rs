@@ -22,19 +22,154 @@ use kevy_index::SortOrder;
 #[non_exhaustive]
 pub enum ValueFilter<'a> {
     /// `field` between `min` and `max`, both inclusive.
+    ///
+    /// ```
+    /// # use kevy_embedded::*;
+    /// # let s = Store::open(Config::default())?;
+    /// # let st = [(&b"status"[..], IndexValType::Str), (b"total", IndexValType::I64)];
+    /// # s.idx_create_with_values(b"by_age", b"u:", b"age", IndexValType::I64, IndexKind::Range, &st)?;
+    /// # let rows = [(&b"u:1"[..], &b"30"[..], &b"paid"[..], &b"5"[..]), (b"u:2", b"40", b"paid", b"20"), (b"u:3", b"50", b"due", b"8")];
+    /// # for (k, age, status, total) in rows {
+    /// #     s.hset(k, &[(b"age", age), (b"status", status), (b"total", total)])?;
+    /// # }
+    /// # let (lo, hi) = (IndexValue::I64(0), IndexValue::I64(99));
+    /// # let keys = |opts| -> KevyResult<Vec<Vec<u8>>> {
+    /// #     Ok(s.idx_query_claused(b"by_age", &lo, &hi, None, 10, opts)?.rows.into_iter().map(|r| r.0).collect())
+    /// # };
+    /// // u:1 (age 30, paid, total 5), u:2 (40, paid, 20), u:3 (50, due, 8)
+    /// let f = [ValueFilter::Range { field: b"total", min: b"5", max: b"10" }];
+    /// assert_eq!(keys(ScalarQueryOpts::default().with_filters(&f))?, [b"u:1".to_vec(), b"u:3".to_vec()]);
+    /// # Ok::<(), kevy_embedded::KevyError>(())
+    /// ```
     Range {
         /// The declared value field to read.
+        ///
+        /// ```
+        /// # use kevy_embedded::*;
+        /// # let s = Store::open(Config::default())?;
+        /// # let st = [(&b"status"[..], IndexValType::Str), (b"total", IndexValType::I64)];
+        /// # s.idx_create_with_values(b"by_age", b"u:", b"age", IndexValType::I64, IndexKind::Range, &st)?;
+        /// # let rows = [(&b"u:1"[..], &b"30"[..], &b"paid"[..], &b"5"[..]), (b"u:2", b"40", b"paid", b"20"), (b"u:3", b"50", b"due", b"8")];
+        /// # for (k, age, status, total) in rows {
+        /// #     s.hset(k, &[(b"age", age), (b"status", status), (b"total", total)])?;
+        /// # }
+        /// # let (lo, hi) = (IndexValue::I64(0), IndexValue::I64(99));
+        /// # let keys = |opts| -> KevyResult<Vec<Vec<u8>>> {
+        /// #     Ok(s.idx_query_claused(b"by_age", &lo, &hi, None, 10, opts)?.rows.into_iter().map(|r| r.0).collect())
+        /// # };
+        /// // u:1 (age 30, paid, total 5), u:2 (40, paid, 20), u:3 (50, due, 8)
+        /// // `total` is declared I64, so the bounds compare as numbers, not bytes
+        /// let f = [ValueFilter::Range { field: b"total", min: b"9", max: b"100" }];
+        /// assert_eq!(keys(ScalarQueryOpts::default().with_filters(&f))?, [b"u:2".to_vec()]);
+        /// # Ok::<(), kevy_embedded::KevyError>(())
+        /// ```
         field: &'a [u8],
         /// Lower bound, inclusive.
+        ///
+        /// ```
+        /// # use kevy_embedded::*;
+        /// # let s = Store::open(Config::default())?;
+        /// # let st = [(&b"status"[..], IndexValType::Str), (b"total", IndexValType::I64)];
+        /// # s.idx_create_with_values(b"by_age", b"u:", b"age", IndexValType::I64, IndexKind::Range, &st)?;
+        /// # let rows = [(&b"u:1"[..], &b"30"[..], &b"paid"[..], &b"5"[..]), (b"u:2", b"40", b"paid", b"20"), (b"u:3", b"50", b"due", b"8")];
+        /// # for (k, age, status, total) in rows {
+        /// #     s.hset(k, &[(b"age", age), (b"status", status), (b"total", total)])?;
+        /// # }
+        /// # let (lo, hi) = (IndexValue::I64(0), IndexValue::I64(99));
+        /// # let keys = |opts| -> KevyResult<Vec<Vec<u8>>> {
+        /// #     Ok(s.idx_query_claused(b"by_age", &lo, &hi, None, 10, opts)?.rows.into_iter().map(|r| r.0).collect())
+        /// # };
+        /// // u:1 (age 30, paid, total 5), u:2 (40, paid, 20), u:3 (50, due, 8)
+        /// let f = [ValueFilter::Range { field: b"total", min: b"8", max: b"99" }];
+        /// assert_eq!(keys(ScalarQueryOpts::default().with_filters(&f))?.len(), 2, "8 itself is in");
+        /// # Ok::<(), kevy_embedded::KevyError>(())
+        /// ```
         min: &'a [u8],
         /// Upper bound, inclusive.
+        ///
+        /// ```
+        /// # use kevy_embedded::*;
+        /// # let s = Store::open(Config::default())?;
+        /// # let st = [(&b"status"[..], IndexValType::Str), (b"total", IndexValType::I64)];
+        /// # s.idx_create_with_values(b"by_age", b"u:", b"age", IndexValType::I64, IndexKind::Range, &st)?;
+        /// # let rows = [(&b"u:1"[..], &b"30"[..], &b"paid"[..], &b"5"[..]), (b"u:2", b"40", b"paid", b"20"), (b"u:3", b"50", b"due", b"8")];
+        /// # for (k, age, status, total) in rows {
+        /// #     s.hset(k, &[(b"age", age), (b"status", status), (b"total", total)])?;
+        /// # }
+        /// # let (lo, hi) = (IndexValue::I64(0), IndexValue::I64(99));
+        /// # let keys = |opts| -> KevyResult<Vec<Vec<u8>>> {
+        /// #     Ok(s.idx_query_claused(b"by_age", &lo, &hi, None, 10, opts)?.rows.into_iter().map(|r| r.0).collect())
+        /// # };
+        /// // u:1 (age 30, paid, total 5), u:2 (40, paid, 20), u:3 (50, due, 8)
+        /// let f = [ValueFilter::Range { field: b"total", min: b"0", max: b"8" }];
+        /// assert_eq!(keys(ScalarQueryOpts::default().with_filters(&f))?.len(), 2, "8 itself is in");
+        /// # Ok::<(), kevy_embedded::KevyError>(())
+        /// ```
         max: &'a [u8],
     },
     /// `field` exactly `value`.
+    ///
+    /// ```
+    /// # use kevy_embedded::*;
+    /// # let s = Store::open(Config::default())?;
+    /// # let st = [(&b"status"[..], IndexValType::Str), (b"total", IndexValType::I64)];
+    /// # s.idx_create_with_values(b"by_age", b"u:", b"age", IndexValType::I64, IndexKind::Range, &st)?;
+    /// # let rows = [(&b"u:1"[..], &b"30"[..], &b"paid"[..], &b"5"[..]), (b"u:2", b"40", b"paid", b"20"), (b"u:3", b"50", b"due", b"8")];
+    /// # for (k, age, status, total) in rows {
+    /// #     s.hset(k, &[(b"age", age), (b"status", status), (b"total", total)])?;
+    /// # }
+    /// # let (lo, hi) = (IndexValue::I64(0), IndexValue::I64(99));
+    /// # let keys = |opts| -> KevyResult<Vec<Vec<u8>>> {
+    /// #     Ok(s.idx_query_claused(b"by_age", &lo, &hi, None, 10, opts)?.rows.into_iter().map(|r| r.0).collect())
+    /// # };
+    /// // u:1 (age 30, paid, total 5), u:2 (40, paid, 20), u:3 (50, due, 8)
+    /// let f = [ValueFilter::Eq { field: b"status", value: b"due" }];
+    /// assert_eq!(keys(ScalarQueryOpts::default().with_filters(&f))?, [b"u:3".to_vec()]);
+    /// # Ok::<(), kevy_embedded::KevyError>(())
+    /// ```
     Eq {
         /// The declared value field to read.
+        ///
+        /// ```
+        /// # use kevy_embedded::*;
+        /// # let s = Store::open(Config::default())?;
+        /// # let st = [(&b"status"[..], IndexValType::Str), (b"total", IndexValType::I64)];
+        /// # s.idx_create_with_values(b"by_age", b"u:", b"age", IndexValType::I64, IndexKind::Range, &st)?;
+        /// # let rows = [(&b"u:1"[..], &b"30"[..], &b"paid"[..], &b"5"[..]), (b"u:2", b"40", b"paid", b"20"), (b"u:3", b"50", b"due", b"8")];
+        /// # for (k, age, status, total) in rows {
+        /// #     s.hset(k, &[(b"age", age), (b"status", status), (b"total", total)])?;
+        /// # }
+        /// # let (lo, hi) = (IndexValue::I64(0), IndexValue::I64(99));
+        /// # let keys = |opts| -> KevyResult<Vec<Vec<u8>>> {
+        /// #     Ok(s.idx_query_claused(b"by_age", &lo, &hi, None, 10, opts)?.rows.into_iter().map(|r| r.0).collect())
+        /// # };
+        /// // u:1 (age 30, paid, total 5), u:2 (40, paid, 20), u:3 (50, due, 8)
+        /// // a field the index does not store is refused, not read as empty
+        /// let f = [ValueFilter::Eq { field: b"email", value: b"x" }];
+        /// assert!(keys(ScalarQueryOpts::default().with_filters(&f)).is_err());
+        /// # Ok::<(), kevy_embedded::KevyError>(())
+        /// ```
         field: &'a [u8],
         /// The value to match.
+        ///
+        /// ```
+        /// # use kevy_embedded::*;
+        /// # let s = Store::open(Config::default())?;
+        /// # let st = [(&b"status"[..], IndexValType::Str), (b"total", IndexValType::I64)];
+        /// # s.idx_create_with_values(b"by_age", b"u:", b"age", IndexValType::I64, IndexKind::Range, &st)?;
+        /// # let rows = [(&b"u:1"[..], &b"30"[..], &b"paid"[..], &b"5"[..]), (b"u:2", b"40", b"paid", b"20"), (b"u:3", b"50", b"due", b"8")];
+        /// # for (k, age, status, total) in rows {
+        /// #     s.hset(k, &[(b"age", age), (b"status", status), (b"total", total)])?;
+        /// # }
+        /// # let (lo, hi) = (IndexValue::I64(0), IndexValue::I64(99));
+        /// # let keys = |opts| -> KevyResult<Vec<Vec<u8>>> {
+        /// #     Ok(s.idx_query_claused(b"by_age", &lo, &hi, None, 10, opts)?.rows.into_iter().map(|r| r.0).collect())
+        /// # };
+        /// // u:1 (age 30, paid, total 5), u:2 (40, paid, 20), u:3 (50, due, 8)
+        /// let f = [ValueFilter::Eq { field: b"total", value: b"20" }];
+        /// assert_eq!(keys(ScalarQueryOpts::default().with_filters(&f))?, [b"u:2".to_vec()]);
+        /// # Ok::<(), kevy_embedded::KevyError>(())
+        /// ```
         value: &'a [u8],
     },
 }
@@ -67,17 +202,117 @@ impl ValueFilter<'_> {
 pub struct ScalarQueryOpts<'a> {
     /// `FILTER …`: non-scoring predicates over stored values, ANDed. A
     /// row without the stored value fails — absent is not a value.
+    ///
+    /// ```
+    /// # use kevy_embedded::*;
+    /// # let s = Store::open(Config::default())?;
+    /// # let st = [(&b"status"[..], IndexValType::Str), (b"total", IndexValType::I64)];
+    /// # s.idx_create_with_values(b"by_age", b"u:", b"age", IndexValType::I64, IndexKind::Range, &st)?;
+    /// # let rows = [(&b"u:1"[..], &b"30"[..], &b"paid"[..], &b"5"[..]), (b"u:2", b"40", b"paid", b"20"), (b"u:3", b"50", b"due", b"8")];
+    /// # for (k, age, status, total) in rows {
+    /// #     s.hset(k, &[(b"age", age), (b"status", status), (b"total", total)])?;
+    /// # }
+    /// # let (lo, hi) = (IndexValue::I64(0), IndexValue::I64(99));
+    /// # let keys = |opts| -> KevyResult<Vec<Vec<u8>>> {
+    /// #     Ok(s.idx_query_claused(b"by_age", &lo, &hi, None, 10, opts)?.rows.into_iter().map(|r| r.0).collect())
+    /// # };
+    /// // u:1 (age 30, paid, total 5), u:2 (40, paid, 20), u:3 (50, due, 8)
+    /// let paid = ValueFilter::Eq { field: b"status", value: b"paid" };
+    /// let big = ValueFilter::Range { field: b"total", min: b"10", max: b"99" };
+    /// let both = [paid, big];
+    /// let opts = ScalarQueryOpts::default().with_filters(&both);
+    /// assert_eq!(keys(opts)?, [b"u:2".to_vec()], "both predicates hold");
+    /// # Ok::<(), kevy_embedded::KevyError>(())
+    /// ```
     pub filters: &'a [ValueFilter<'a>],
     /// `SORT <field> ASC|DESC`: order the page by a stored value; a row
     /// with no usable value sorts last in both directions.
+    ///
+    /// ```
+    /// # use kevy_embedded::*;
+    /// # let s = Store::open(Config::default())?;
+    /// # let st = [(&b"status"[..], IndexValType::Str), (b"total", IndexValType::I64)];
+    /// # s.idx_create_with_values(b"by_age", b"u:", b"age", IndexValType::I64, IndexKind::Range, &st)?;
+    /// # let rows = [(&b"u:1"[..], &b"30"[..], &b"paid"[..], &b"5"[..]), (b"u:2", b"40", b"paid", b"20"), (b"u:3", b"50", b"due", b"8")];
+    /// # for (k, age, status, total) in rows {
+    /// #     s.hset(k, &[(b"age", age), (b"status", status), (b"total", total)])?;
+    /// # }
+    /// # let (lo, hi) = (IndexValue::I64(0), IndexValue::I64(99));
+    /// # let keys = |opts| -> KevyResult<Vec<Vec<u8>>> {
+    /// #     Ok(s.idx_query_claused(b"by_age", &lo, &hi, None, 10, opts)?.rows.into_iter().map(|r| r.0).collect())
+    /// # };
+    /// // u:1 (age 30, paid, total 5), u:2 (40, paid, 20), u:3 (50, due, 8)
+    /// let opts = ScalarQueryOpts::default().with_sort(b"total", SortOrder::Desc);
+    /// assert_eq!(keys(opts)?, [b"u:2".to_vec(), b"u:3".to_vec(), b"u:1".to_vec()]);
+    /// # Ok::<(), kevy_embedded::KevyError>(())
+    /// ```
     pub sort: Option<(&'a [u8], SortOrder)>,
     /// `DISTINCT <field>`: at most one row per coerced value; a row
     /// with no value is its own group.
+    ///
+    /// ```
+    /// # use kevy_embedded::*;
+    /// # let s = Store::open(Config::default())?;
+    /// # let st = [(&b"status"[..], IndexValType::Str), (b"total", IndexValType::I64)];
+    /// # s.idx_create_with_values(b"by_age", b"u:", b"age", IndexValType::I64, IndexKind::Range, &st)?;
+    /// # let rows = [(&b"u:1"[..], &b"30"[..], &b"paid"[..], &b"5"[..]), (b"u:2", b"40", b"paid", b"20"), (b"u:3", b"50", b"due", b"8")];
+    /// # for (k, age, status, total) in rows {
+    /// #     s.hset(k, &[(b"age", age), (b"status", status), (b"total", total)])?;
+    /// # }
+    /// # let (lo, hi) = (IndexValue::I64(0), IndexValue::I64(99));
+    /// # let keys = |opts| -> KevyResult<Vec<Vec<u8>>> {
+    /// #     Ok(s.idx_query_claused(b"by_age", &lo, &hi, None, 10, opts)?.rows.into_iter().map(|r| r.0).collect())
+    /// # };
+    /// // u:1 (age 30, paid, total 5), u:2 (40, paid, 20), u:3 (50, due, 8)
+    /// let opts = ScalarQueryOpts::default().with_distinct(b"status");
+    /// assert_eq!(keys(opts)?.len(), 2, "one paid row, one due row");
+    /// # Ok::<(), kevy_embedded::KevyError>(())
+    /// ```
     pub distinct: Option<&'a [u8]>,
     /// `FACET <field…>`: count each field's values over the whole match
     /// set (FILTER reduces the counts; DISTINCT does not).
+    ///
+    /// ```
+    /// # use kevy_embedded::*;
+    /// # let s = Store::open(Config::default())?;
+    /// # let st = [(&b"status"[..], IndexValType::Str), (b"total", IndexValType::I64)];
+    /// # s.idx_create_with_values(b"by_age", b"u:", b"age", IndexValType::I64, IndexKind::Range, &st)?;
+    /// # let rows = [(&b"u:1"[..], &b"30"[..], &b"paid"[..], &b"5"[..]), (b"u:2", b"40", b"paid", b"20"), (b"u:3", b"50", b"due", b"8")];
+    /// # for (k, age, status, total) in rows {
+    /// #     s.hset(k, &[(b"age", age), (b"status", status), (b"total", total)])?;
+    /// # }
+    /// # let (lo, hi) = (IndexValue::I64(0), IndexValue::I64(99));
+    /// # let keys = |opts| -> KevyResult<Vec<Vec<u8>>> {
+    /// #     Ok(s.idx_query_claused(b"by_age", &lo, &hi, None, 10, opts)?.rows.into_iter().map(|r| r.0).collect())
+    /// # };
+    /// // u:1 (age 30, paid, total 5), u:2 (40, paid, 20), u:3 (50, due, 8)
+    /// let fields = [b"status".to_vec()];
+    /// let opts = ScalarQueryOpts::default().with_facets(&fields);
+    /// let page = s.idx_query_claused(b"by_age", &lo, &hi, None, 10, opts)?;
+    /// assert_eq!(page.facets[0], [(b"paid".to_vec(), 2), (b"due".to_vec(), 1)]);
+    /// # Ok::<(), kevy_embedded::KevyError>(())
+    /// ```
     pub facets: &'a [Vec<u8>],
     /// `OFFSET n`: rows to skip before `limit` takes effect.
+    ///
+    /// ```
+    /// # use kevy_embedded::*;
+    /// # let s = Store::open(Config::default())?;
+    /// # let st = [(&b"status"[..], IndexValType::Str), (b"total", IndexValType::I64)];
+    /// # s.idx_create_with_values(b"by_age", b"u:", b"age", IndexValType::I64, IndexKind::Range, &st)?;
+    /// # let rows = [(&b"u:1"[..], &b"30"[..], &b"paid"[..], &b"5"[..]), (b"u:2", b"40", b"paid", b"20"), (b"u:3", b"50", b"due", b"8")];
+    /// # for (k, age, status, total) in rows {
+    /// #     s.hset(k, &[(b"age", age), (b"status", status), (b"total", total)])?;
+    /// # }
+    /// # let (lo, hi) = (IndexValue::I64(0), IndexValue::I64(99));
+    /// # let keys = |opts| -> KevyResult<Vec<Vec<u8>>> {
+    /// #     Ok(s.idx_query_claused(b"by_age", &lo, &hi, None, 10, opts)?.rows.into_iter().map(|r| r.0).collect())
+    /// # };
+    /// // u:1 (age 30, paid, total 5), u:2 (40, paid, 20), u:3 (50, due, 8)
+    /// let opts = ScalarQueryOpts::default().with_offset(2);
+    /// assert_eq!(keys(opts)?, [b"u:3".to_vec()]);
+    /// # Ok::<(), kevy_embedded::KevyError>(())
+    /// ```
     pub offset: usize,
 }
 
@@ -155,154 +390,5 @@ impl<'a> ScalarQueryOpts<'a> {
     }
 }
 
-/// Everything a text MATCH carries beyond its index, query text and
-/// result limit — the embedded twin of the wire's optional clauses.
-///
-/// Grouping them keeps one entry point instead of one per clause, and
-/// [`MatchOpts::default`] is the plain query, so a caller opts into
-/// exactly the clauses it names.
-///
-/// ```
-/// use kevy_embedded::MatchOpts;
-///
-/// let every_field: &[Vec<u8>] = &[];
-/// let opts = MatchOpts::default().with_highlight(every_field).with_typo(1);
-/// assert_eq!(opts.typo, 1);
-/// ```
 #[cfg(feature = "text")]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub struct MatchOpts<'a> {
-    /// `HIGHLIGHT`: `None` = not requested, `Some(&[])` = every indexed
-    /// field, `Some(names)` = only those.
-    pub highlight: Option<&'a [Vec<u8>]>,
-    /// `TYPO n`: edit budget for each bare term; 0 = exact.
-    pub typo: u32,
-    /// `OFFSET n`: hits to skip before `limit` takes effect.
-    pub offset: usize,
-    /// `IN <field…>`: the declared field names to score within; empty =
-    /// the whole document.
-    pub scope: &'a [Vec<u8>],
-    /// `FILTER …`: non-scoring predicates over stored values, ANDed.
-    /// They decide which documents are eligible, not what a term is
-    /// worth, so the corpus statistics stay whole-corpus.
-    pub filters: &'a [ValueFilter<'a>],
-    /// `SORT <field> ASC|DESC`: select by a stored value instead of by
-    /// score. Selecting, not re-ordering — a document that wins on the
-    /// key is chosen even when its score would never have reached the
-    /// page.
-    pub sort: Option<(&'a [u8], SortOrder)>,
-    /// `DISTINCT <field>`: at most one hit per value of a stored field,
-    /// applied during selection so the page holds `limit` distinct
-    /// documents rather than `limit` that then collapse.
-    pub distinct: Option<&'a [u8]>,
-    /// `FACET <field…>`: count each field's values over the whole match
-    /// set. Reported alongside the page rather than shaping it.
-    pub facets: &'a [Vec<u8>],
-}
-
-#[cfg(feature = "text")]
-impl<'a> MatchOpts<'a> {
-    /// Set [`Self::highlight`] to these field names (`&[]` = every
-    /// indexed field).
-    ///
-    /// ```
-    /// let o = kevy_embedded::MatchOpts::default().with_highlight(&[]);
-    /// assert!(o.highlight.is_some());
-    /// ```
-    #[inline]
-    #[must_use]
-    pub fn with_highlight(mut self, fields: &'a [Vec<u8>]) -> Self {
-        self.highlight = Some(fields);
-        self
-    }
-
-    /// Set [`Self::typo`].
-    ///
-    /// ```
-    /// assert_eq!(kevy_embedded::MatchOpts::default().with_typo(2).typo, 2);
-    /// ```
-    #[inline]
-    #[must_use]
-    pub fn with_typo(mut self, typo: u32) -> Self {
-        self.typo = typo;
-        self
-    }
-
-    /// Set [`Self::offset`].
-    ///
-    /// ```
-    /// assert_eq!(kevy_embedded::MatchOpts::default().with_offset(10).offset, 10);
-    /// ```
-    #[inline]
-    #[must_use]
-    pub fn with_offset(mut self, offset: usize) -> Self {
-        self.offset = offset;
-        self
-    }
-
-    /// Set [`Self::scope`].
-    ///
-    /// ```
-    /// let fields = [b"title".to_vec()];
-    /// assert_eq!(kevy_embedded::MatchOpts::default().with_scope(&fields).scope.len(), 1);
-    /// ```
-    #[inline]
-    #[must_use]
-    pub fn with_scope(mut self, scope: &'a [Vec<u8>]) -> Self {
-        self.scope = scope;
-        self
-    }
-
-    /// Set [`Self::filters`].
-    ///
-    /// ```
-    /// let f = [kevy_embedded::ValueFilter::Eq { field: b"lang", value: b"en" }];
-    /// assert_eq!(kevy_embedded::MatchOpts::default().with_filters(&f).filters.len(), 1);
-    /// ```
-    #[inline]
-    #[must_use]
-    pub fn with_filters(mut self, filters: &'a [ValueFilter<'a>]) -> Self {
-        self.filters = filters;
-        self
-    }
-
-    /// Set [`Self::sort`]: select by `field`, in `order`.
-    ///
-    /// ```
-    /// use kevy_embedded::{MatchOpts, SortOrder};
-    /// assert!(MatchOpts::default().with_sort(b"ts", SortOrder::Desc).sort.is_some());
-    /// ```
-    #[inline]
-    #[must_use]
-    pub fn with_sort(mut self, field: &'a [u8], order: SortOrder) -> Self {
-        self.sort = Some((field, order));
-        self
-    }
-
-    /// Set [`Self::distinct`].
-    ///
-    /// ```
-    /// let o = kevy_embedded::MatchOpts::default().with_distinct(b"author");
-    /// assert_eq!(o.distinct, Some(&b"author"[..]));
-    /// ```
-    #[inline]
-    #[must_use]
-    pub fn with_distinct(mut self, field: &'a [u8]) -> Self {
-        self.distinct = Some(field);
-        self
-    }
-
-    /// Set [`Self::facets`].
-    ///
-    /// ```
-    /// let fields = [b"lang".to_vec()];
-    /// assert_eq!(kevy_embedded::MatchOpts::default().with_facets(&fields).facets.len(), 1);
-    /// ```
-    #[inline]
-    #[must_use]
-    pub fn with_facets(mut self, facets: &'a [Vec<u8>]) -> Self {
-        self.facets = facets;
-        self
-    }
-}
+pub use super::match_opts::MatchOpts;

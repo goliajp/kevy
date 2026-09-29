@@ -63,10 +63,38 @@ pub fn store_keys<A: ArgvView + ?Sized>(verb: &[u8], args: &A) -> Option<(Vec<u8
 #[non_exhaustive]
 pub enum StoreSearchError {
     /// The command's arguments are refused (syntax, arity, a bad value).
+    ///
+    /// ```
+    /// use kevy_verbs::geo::{StoreSearchError, store_search};
+    /// let argv = |s: &str| s.split(' ').map(|p| p.as_bytes().to_vec()).collect::<Vec<_>>();
+    /// let mut store = kevy_store::Store::new();
+    /// // a search with a centre but no BYRADIUS / BYBOX
+    /// let r = store_search(&mut store, &argv("GEOSEARCHSTORE dst src FROMLONLAT 13 38"));
+    /// assert!(matches!(r, Err(StoreSearchError::Refused(_))));
+    /// ```
     Refused(CmdError),
     /// A `FROMMEMBER` / `BYMEMBER` member the source key does not hold.
+    ///
+    /// ```
+    /// use kevy_verbs::geo::{StoreSearchError, store_search};
+    /// let argv = |s: &str| s.split(' ').map(|p| p.as_bytes().to_vec()).collect::<Vec<_>>();
+    /// let mut store = kevy_store::Store::new();
+    /// let add = kevy_resp::Argv::from(argv("GEOADD src 13.361389 38.115556 Palermo"));
+    /// kevy_verbs::exec(&mut store, b"GEOADD", &add, &mut Vec::new());
+    /// let r = store_search(&mut store, &argv("GEOSEARCHSTORE dst src FROMMEMBER Rome BYRADIUS 10 km"));
+    /// assert_eq!(r, Err(StoreSearchError::NoMember));
+    /// ```
     NoMember,
     /// The source key refused (wrong type, out of memory).
+    ///
+    /// ```
+    /// use kevy_verbs::geo::{StoreSearchError, store_search};
+    /// let argv = |s: &str| s.split(' ').map(|p| p.as_bytes().to_vec()).collect::<Vec<_>>();
+    /// let mut store = kevy_store::Store::new();
+    /// kevy_verbs::exec(&mut store, b"SET", &kevy_resp::Argv::from(argv("SET src v")), &mut Vec::new());
+    /// let r = store_search(&mut store, &argv("GEOSEARCHSTORE dst src FROMLONLAT 13 38 BYRADIUS 1 km"));
+    /// assert_eq!(r, Err(StoreSearchError::Store(kevy_store::StoreError::WrongType)));
+    /// ```
     Store(StoreError),
 }
 

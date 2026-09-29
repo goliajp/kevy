@@ -27,8 +27,23 @@ use kevy_resp::ArgvView;
 #[non_exhaustive]
 pub enum ClientKillFilter {
     /// Peer address (`ip:port`) equality.
+    ///
+    /// ```
+    /// use kevy_rt::{Argv, ClientKillFilter};
+    ///
+    /// let argv = Argv::from(vec![b"CLIENT".to_vec(), b"KILL".to_vec(), b"ADDR".to_vec(), b"10.0.0.1:5".to_vec()]);
+    /// let filter = ClientKillFilter::parse(&argv).map(|(f, _)| f);
+    /// assert_eq!(filter, Some(ClientKillFilter::Addr(b"10.0.0.1:5".to_vec())));
+    /// ```
     Addr(Vec<u8>),
     /// Instance-unique conn id equality.
+    ///
+    /// ```
+    /// use kevy_rt::{Argv, ClientKillFilter};
+    ///
+    /// let argv = Argv::from(vec![b"CLIENT".to_vec(), b"KILL".to_vec(), b"ID".to_vec(), b"42".to_vec()]);
+    /// assert_eq!(ClientKillFilter::parse(&argv).map(|(f, _)| f), Some(ClientKillFilter::Id(42)));
+    /// ```
     Id(u64),
 }
 
@@ -45,9 +60,25 @@ pub enum ClientKillFilter {
 pub enum KillReply {
     /// The legacy positional form (`CLIENT KILL addr:port`): `+OK`, or
     /// `-ERR` when no connection matched.
+    ///
+    /// ```
+    /// use kevy_rt::{Argv, ClientKillFilter, KillReply};
+    ///
+    /// // `CLIENT KILL 10.0.0.1:5` — the positional form answers `+OK`.
+    /// let argv = Argv::from(vec![b"CLIENT".to_vec(), b"KILL".to_vec(), b"10.0.0.1:5".to_vec()]);
+    /// assert_eq!(ClientKillFilter::parse(&argv).map(|(_, r)| r), Some(KillReply::Status));
+    /// ```
     Status,
     /// The filtered form (`CLIENT KILL ID …` / `ADDR …`): the number of
     /// connections closed.
+    ///
+    /// ```
+    /// use kevy_rt::{Argv, ClientKillFilter, KillReply};
+    ///
+    /// // `CLIENT KILL ID 7` — the filtered form answers with a count.
+    /// let argv = Argv::from(vec![b"CLIENT".to_vec(), b"KILL".to_vec(), b"ID".to_vec(), b"7".to_vec()]);
+    /// assert_eq!(ClientKillFilter::parse(&argv).map(|(_, r)| r), Some(KillReply::Count));
+    /// ```
     Count,
 }
 

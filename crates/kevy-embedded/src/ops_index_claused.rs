@@ -98,11 +98,63 @@ pub(crate) fn unknown_field(clause: &str, bad: &[u8], verb: &str, offered: &[&[u
 #[non_exhaustive]
 pub struct ScalarPage {
     /// The selected rows, in the page's order.
+    ///
+    /// ```
+    /// # use kevy_embedded::*;
+    /// # let s = Store::open(Config::default())?;
+    /// # let st = [(&b"status"[..], IndexValType::Str)];
+    /// # s.idx_create_with_values(b"by_age", b"u:", b"age", IndexValType::I64, IndexKind::Range, &st)?;
+    /// # for (k, age, status) in [(&b"u:1"[..], &b"30"[..], &b"paid"[..]), (b"u:2", b"40", b"paid"), (b"u:3", b"50", b"due")] {
+    /// #     s.hset(k, &[(b"age", age), (b"status", status)])?;
+    /// # }
+    /// # let (lo, hi) = (IndexValue::I64(0), IndexValue::I64(99));
+    /// // u:1..u:3 aged 30, 40, 50; two paid, one due
+    /// let paid = [ValueFilter::Eq { field: b"status", value: b"paid" }];
+    /// let opts = ScalarQueryOpts::default().with_filters(&paid);
+    /// let page = s.idx_query_claused(b"by_age", &lo, &hi, None, 10, opts)?;
+    /// assert_eq!(page.rows, [(b"u:1".to_vec(), IndexValue::I64(30)), (b"u:2".to_vec(), IndexValue::I64(40))]);
+    /// # Ok::<(), kevy_embedded::KevyError>(())
+    /// ```
     pub rows: Vec<(Vec<u8>, IndexValue)>,
     /// One entry per requested facet field, most frequent first.
+    ///
+    /// ```
+    /// # use kevy_embedded::*;
+    /// # let s = Store::open(Config::default())?;
+    /// # let st = [(&b"status"[..], IndexValType::Str)];
+    /// # s.idx_create_with_values(b"by_age", b"u:", b"age", IndexValType::I64, IndexKind::Range, &st)?;
+    /// # for (k, age, status) in [(&b"u:1"[..], &b"30"[..], &b"paid"[..]), (b"u:2", b"40", b"paid"), (b"u:3", b"50", b"due")] {
+    /// #     s.hset(k, &[(b"age", age), (b"status", status)])?;
+    /// # }
+    /// # let (lo, hi) = (IndexValue::I64(0), IndexValue::I64(99));
+    /// let fields = [b"status".to_vec()];
+    /// let opts = ScalarQueryOpts::default().with_facets(&fields);
+    /// let page = s.idx_query_claused(b"by_age", &lo, &hi, None, 1, opts)?;
+    /// // counted over every match, not just the one-row page
+    /// assert_eq!(page.facets, [vec![(b"paid".to_vec(), 2), (b"due".to_vec(), 1)]]);
+    /// # Ok::<(), kevy_embedded::KevyError>(())
+    /// ```
     pub facets: Vec<Vec<(Vec<u8>, u64)>>,
     /// Resume cursor (`None` under any selection clause, which refuses
     /// cursors at the wire and pages nothing here either).
+    ///
+    /// ```
+    /// # use kevy_embedded::*;
+    /// # let s = Store::open(Config::default())?;
+    /// # let st = [(&b"status"[..], IndexValType::Str)];
+    /// # s.idx_create_with_values(b"by_age", b"u:", b"age", IndexValType::I64, IndexKind::Range, &st)?;
+    /// # for (k, age, status) in [(&b"u:1"[..], &b"30"[..], &b"paid"[..]), (b"u:2", b"40", b"paid"), (b"u:3", b"50", b"due")] {
+    /// #     s.hset(k, &[(b"age", age), (b"status", status)])?;
+    /// # }
+    /// # let (lo, hi) = (IndexValue::I64(0), IndexValue::I64(99));
+    /// let plain = ScalarQueryOpts::default();
+    /// let first = s.idx_query_claused(b"by_age", &lo, &hi, None, 2, plain)?;
+    /// let rest = s.idx_query_claused(b"by_age", &lo, &hi, first.cursor.as_ref(), 2, plain)?;
+    /// assert_eq!(rest.rows[0].0, b"u:3");
+    /// let sorted = plain.with_sort(b"status", SortOrder::Asc);
+    /// assert!(s.idx_query_claused(b"by_age", &lo, &hi, None, 2, sorted)?.cursor.is_none());
+    /// # Ok::<(), kevy_embedded::KevyError>(())
+    /// ```
     pub cursor: Option<Cursor>,
 }
 

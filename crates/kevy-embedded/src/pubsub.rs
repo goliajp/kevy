@@ -58,6 +58,23 @@ pub(crate) use crate::pubsub_bus::PubsubBus;
 ///
 /// If you need broadcast fanout (every subscriber sees every message),
 /// open a separate `Subscription` per consumer — they're cheap.
+///
+/// ```
+/// use kevy_embedded::{Config, PubsubEvent, Store};
+///
+/// let s = Store::open(Config::default())?;
+/// let sub = s.subscribe(&[b"news"]);
+/// // the subscribe ack is queued first
+/// assert!(matches!(sub.recv()?, PubsubEvent::Subscribe { count: 1, .. }));
+/// assert_eq!(s.publish(b"news", b"hello"), 1, "one subscriber received it");
+/// let PubsubEvent::Message { channel, payload } = sub.recv()? else {
+///     panic!("a publish arrives as a message");
+/// };
+/// assert_eq!((channel, payload), (b"news".to_vec(), b"hello".to_vec()));
+/// drop(sub); // unsubscribes
+/// assert_eq!(s.publish(b"news", b"again"), 0);
+/// # Ok::<(), kevy_embedded::KevyError>(())
+/// ```
 #[allow(missing_debug_implementations)]
 pub struct Subscription {
     inner: Arc<RwLock<Inner>>,

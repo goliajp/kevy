@@ -69,12 +69,37 @@ pub enum BlockKind {
     /// `BLPOP key [key ...] timeout` — block until one of the keys has an
     /// element, then pop from the left. On timeout the reply is a nil
     /// ARRAY, not a nil bulk; the shape is part of what this drives.
+    ///
+    /// ```
+    /// use kevy_rt::{BlockHint, BlockKind};
+    ///
+    /// // `BLPOP jobs 5` parks on `jobs` for at most five seconds.
+    /// let hint = BlockHint::Block { kind: BlockKind::Blpop, keys: vec![b"jobs".to_vec()], timeout_ms: 5_000 };
+    /// assert!(matches!(hint, BlockHint::Block { kind: BlockKind::Blpop, .. }));
+    /// ```
     Blpop,
     /// `BRPOP` — the same, popping from the right.
+    ///
+    /// ```
+    /// use kevy_rt::{BlockHint, BlockKind};
+    ///
+    /// // `BRPOP a b 0`: two keys, block forever.
+    /// let keys = vec![b"a".to_vec(), b"b".to_vec()];
+    /// let hint = BlockHint::Block { kind: BlockKind::Brpop, keys, timeout_ms: 0 };
+    /// assert!(matches!(hint, BlockHint::Block { kind: BlockKind::Brpop, ref keys, .. } if keys.len() == 2));
+    /// ```
     Brpop,
     /// `BZPOPMIN key [key ...] timeout` — block until a sorted set has a
     /// member, then pop the lowest-scored one. Same arm-and-serve flow as
     /// `BLPOP`; the reply shape adds a third bulk (the score).
+    ///
+    /// ```
+    /// use kevy_rt::{BlockHint, BlockKind};
+    ///
+    /// // `BZPOPMIN leaderboard 1.5` — the timeout arrives in milliseconds.
+    /// let hint = BlockHint::Block { kind: BlockKind::Bzpopmin, keys: vec![b"leaderboard".to_vec()], timeout_ms: 1_500 };
+    /// assert!(matches!(hint, BlockHint::Block { timeout_ms: 1_500, .. }));
+    /// ```
     Bzpopmin,
     /// `BRPOPLPUSH source destination timeout` — atomic blocking
     /// right-pop from `source` + left-push to `destination`. Parks
@@ -82,14 +107,39 @@ pub enum BlockKind {
     /// success, nil bulk on timeout. Deprecated since Redis 6.2 in
     /// favour of BLMOVE, but Bee Queue (and many older clients)
     /// still emit it.
+    ///
+    /// ```
+    /// use kevy_rt::{BlockHint, BlockKind};
+    ///
+    /// // `BRPOPLPUSH src dst 0` watches only the source.
+    /// let hint = BlockHint::Block { kind: BlockKind::Brpoplpush, keys: vec![b"src".to_vec()], timeout_ms: 0 };
+    /// assert!(matches!(hint, BlockHint::Block { ref keys, .. } if keys == &[b"src".to_vec()]));
+    /// ```
     Brpoplpush,
     /// `XREAD BLOCK` — park until an entry past the given id arrives on
     /// one of the streams. Read-only: no PEL, so a wake serves without
     /// touching group state.
+    ///
+    /// ```
+    /// use kevy_rt::{BlockHint, BlockKind};
+    ///
+    /// // `XREAD BLOCK 100 STREAMS events $` parks on the STREAMS key.
+    /// let hint = BlockHint::Block { kind: BlockKind::XReadBlock, keys: vec![b"events".to_vec()], timeout_ms: 100 };
+    /// assert!(matches!(hint, BlockHint::Block { kind: BlockKind::XReadBlock, .. }));
+    /// ```
     XReadBlock,
     /// `XREADGROUP BLOCK` — the same wait, but a wake is a WRITE: the
     /// delivery updates the group's pending list and last-delivered id on
     /// the stream's own shard, and is logged there.
+    ///
+    /// ```
+    /// use kevy_rt::BlockKind;
+    ///
+    /// // Unlike XREAD, the group form's wake writes group state.
+    /// let is_group_read = |k: BlockKind| k == BlockKind::XReadGroupBlock;
+    /// assert!(is_group_read(BlockKind::XReadGroupBlock));
+    /// assert!(!is_group_read(BlockKind::XReadBlock));
+    /// ```
     XReadGroupBlock,
 }
 
@@ -120,20 +170,61 @@ pub enum BlockKind {
 pub enum BlockHint {
     #[default]
     /// The command does not block — every verb but the handful above.
+    ///
+    /// ```
+    /// use kevy_rt::{BlockHint, ResolvedCmd, Route};
+    ///
+    /// // What a `GET` resolves to: nothing to park on.
+    /// assert_eq!(ResolvedCmd::new(Route::Single(1)).block_hint, BlockHint::None);
+    /// ```
     None,
     /// The command parks until one of `keys` is served or the deadline
     /// passes.
+    ///
+    /// ```
+    /// use kevy_rt::{BlockHint, BlockKind};
+    ///
+    /// let hint = BlockHint::Block { kind: BlockKind::Blpop, keys: vec![b"q".to_vec()], timeout_ms: 0 };
+    /// assert_ne!(hint, BlockHint::None);
+    /// ```
     Block {
         /// Which blocking verb, which decides both the timeout reply shape
         /// and how a wake is retried.
+        ///
+        /// ```
+        /// use kevy_rt::{BlockHint, BlockKind};
+        ///
+        /// let hint = BlockHint::Block { kind: BlockKind::Brpop, keys: vec![b"q".to_vec()], timeout_ms: 0 };
+        /// let BlockHint::Block { kind, .. } = hint else { unreachable!() };
+        /// assert_eq!(kind, BlockKind::Brpop);
+        /// ```
         kind: BlockKind,
         /// The keys to arm on, in the order the caller gave them — a wake
         /// serves the earliest-listed key that has data, not the first to
         /// receive it.
+        ///
+        /// ```
+        /// use kevy_rt::{BlockHint, BlockKind};
+        ///
+        /// // `BLPOP high low 0`: `high` is served first when both have data.
+        /// let keys = vec![b"high".to_vec(), b"low".to_vec()];
+        /// let hint = BlockHint::Block { kind: BlockKind::Blpop, keys, timeout_ms: 0 };
+        /// let BlockHint::Block { keys, .. } = hint else { unreachable!() };
+        /// assert_eq!(keys[0], b"high");
+        /// ```
         keys: Vec<Vec<u8>>,
         /// `0` = block forever (Redis convention). Anything else is the
         /// wall-clock millis the dispatcher will add to `unix_now_ms()` to
         /// derive the waiter's `deadline_ms`.
+        ///
+        /// ```
+        /// use kevy_rt::{BlockHint, BlockKind};
+        ///
+        /// // `BLPOP q 0` blocks forever; `BLPOP q 2` gives up after 2000 ms.
+        /// let hint = BlockHint::Block { kind: BlockKind::Blpop, keys: vec![b"q".to_vec()], timeout_ms: 2_000 };
+        /// let BlockHint::Block { timeout_ms, .. } = hint else { unreachable!() };
+        /// assert_eq!(timeout_ms, 2_000);
+        /// ```
         timeout_ms: u64,
     },
 }

@@ -127,12 +127,39 @@ pub(crate) fn scan_match<A: ArgvView + ?Sized>(args: &A, start: usize) -> Option
 #[non_exhaustive]
 pub struct ScanOpts {
     /// Where to resume.
+    ///
+    /// ```
+    /// let argv = kevy_resp::Argv::from(vec![b"SCAN".to_vec(), b"42".to_vec()]);
+    /// assert_eq!(kevy_verbs::args::scan_opts(&argv)?.cursor, 42);
+    /// # Ok::<(), kevy_verbs::args::ScanOptsError>(())
+    /// ```
     pub cursor: u64,
     /// The work bound per call; Redis's default is 10.
+    ///
+    /// ```
+    /// use kevy_verbs::args::scan_opts;
+    /// assert_eq!(scan_opts(&kevy_resp::Argv::from(vec![b"SCAN".to_vec(), b"0".to_vec()]))?.count, 10);
+    /// assert_eq!(scan_opts(&kevy_resp::Argv::from(vec![b"SCAN".to_vec(), b"0".to_vec(), b"COUNT".to_vec(), b"100".to_vec()]))?.count, 100);
+    /// # Ok::<(), kevy_verbs::args::ScanOptsError>(())
+    /// ```
     pub count: usize,
     /// A glob over key names.
+    ///
+    /// ```
+    /// use kevy_verbs::args::scan_opts;
+    /// assert_eq!(scan_opts(&kevy_resp::Argv::from(vec![b"SCAN".to_vec(), b"0".to_vec()]))?.pattern, None);
+    /// let o = scan_opts(&kevy_resp::Argv::from(vec![b"SCAN".to_vec(), b"0".to_vec(), b"MATCH".to_vec(), b"user:*".to_vec()]))?;
+    /// assert_eq!(o.pattern.as_deref(), Some(&b"user:*"[..]));
+    /// # Ok::<(), kevy_verbs::args::ScanOptsError>(())
+    /// ```
     pub pattern: Option<Vec<u8>>,
     /// Keep only keys of this type (`string`, `hash`, …).
+    ///
+    /// ```
+    /// let o = kevy_verbs::args::scan_opts(&kevy_resp::Argv::from(vec![b"SCAN".to_vec(), b"0".to_vec(), b"TYPE".to_vec(), b"hash".to_vec()]))?;
+    /// assert_eq!(o.type_filter.as_deref(), Some(&b"hash"[..]));
+    /// # Ok::<(), kevy_verbs::args::ScanOptsError>(())
+    /// ```
     pub type_filter: Option<Vec<u8>>,
 }
 
@@ -148,11 +175,30 @@ pub struct ScanOpts {
 #[non_exhaustive]
 pub enum ScanOptsError {
     /// The cursor is not an unsigned integer.
+    ///
+    /// ```
+    /// use kevy_verbs::args::{ScanOptsError, scan_opts};
+    /// let argv = kevy_resp::Argv::from(vec![b"SCAN".to_vec(), b"-1".to_vec()]);
+    /// assert_eq!(scan_opts(&argv), Err(ScanOptsError::InvalidCursor));
+    /// ```
     InvalidCursor,
     /// `COUNT`'s value is not an integer.
+    ///
+    /// ```
+    /// use kevy_verbs::args::{ScanOptsError, scan_opts};
+    /// let argv = kevy_resp::Argv::from(vec![b"SCAN".to_vec(), b"0".to_vec(), b"COUNT".to_vec(), b"many".to_vec()]);
+    /// assert_eq!(scan_opts(&argv), Err(ScanOptsError::NotInteger));
+    /// ```
     NotInteger,
     /// An unknown option, an option without its value, or a `COUNT`
     /// below 1.
+    ///
+    /// ```
+    /// use kevy_verbs::args::{ScanOptsError, scan_opts};
+    /// assert_eq!(scan_opts(&kevy_resp::Argv::from(vec![b"SCAN".to_vec(), b"0".to_vec(), b"COUNT".to_vec(), b"0".to_vec()])), Err(ScanOptsError::Syntax));
+    /// assert_eq!(scan_opts(&kevy_resp::Argv::from(vec![b"SCAN".to_vec(), b"0".to_vec(), b"MATCH".to_vec()])), Err(ScanOptsError::Syntax));
+    /// assert_eq!(scan_opts(&kevy_resp::Argv::from(vec![b"SCAN".to_vec(), b"0".to_vec(), b"LIMIT".to_vec(), b"5".to_vec()])), Err(ScanOptsError::Syntax));
+    /// ```
     Syntax,
 }
 

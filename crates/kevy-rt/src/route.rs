@@ -23,260 +23,320 @@ use kevy_verbs::args::{ScanOpts, ScanOptsError};
 #[non_exhaustive]
 pub enum Route {
     /// Keyless; execute on the connection's own shard (e.g. PING).
+    ///
+    /// ```
+    /// # use kevy_rt::{Route};
+    /// let route = |verb: &str| if verb == "PING" { Route::Local } else { Route::Single(1) };
+    /// assert_eq!(route("PING"), Route::Local);
+    /// ```
     Local,
-    /// Single-key; route by `args[idx]`.
+    #[doc = include_str!("route_docs/single.md")]
     Single(usize),
     /// `args[1..]` are keys; delete each on its shard, sum the counts.
+    ///
+    /// ```
+    /// # use kevy_rt::{Route};
+    /// let route = |verb: &str| if verb == "DEL" { Route::DelKeys } else { Route::Single(1) };
+    /// assert_eq!(route("DEL"), Route::DelKeys);
+    /// ```
     DelKeys,
     /// `args[1..]` are keys; count existing across shards.
+    ///
+    /// ```
+    /// # use kevy_rt::{Route};
+    /// let route = |verb: &str| if verb == "EXISTS" { Route::ExistsKeys } else { Route::Single(1) };
+    /// assert_eq!(route("EXISTS"), Route::ExistsKeys);
+    /// ```
     ExistsKeys,
     /// Sum every shard's key count.
+    ///
+    /// ```
+    /// # use kevy_rt::{Route};
+    /// let route = |verb: &str| if verb == "DBSIZE" { Route::Dbsize } else { Route::Local };
+    /// assert_eq!(route("DBSIZE"), Route::Dbsize);
+    /// ```
     Dbsize,
     /// Flush every shard.
+    ///
+    /// ```
+    /// # use kevy_rt::{Route};
+    /// let route = |verb: &str| if verb == "FLUSHALL" { Route::Flush } else { Route::Local };
+    /// assert_eq!(route("FLUSHALL"), Route::Flush);
+    /// ```
     Flush,
     /// Snapshot every shard's store to disk, synchronously (`SAVE` —
     /// blocks until durable, the Redis contract for the explicit form).
+    ///
+    /// ```
+    /// # use kevy_rt::{Route};
+    /// let route = |verb: &str| if verb == "SAVE" { Route::Save } else { Route::Local };
+    /// assert_eq!(route("SAVE"), Route::Save);
+    /// ```
     Save,
     /// `BGSAVE` — collect a COW view per shard and persist in the
     /// background; the command returns once the views are frozen.
+    ///
+    /// ```
+    /// # use kevy_rt::{Route};
+    /// let route = |verb: &str| if verb == "BGSAVE" { Route::BgSave } else { Route::Local };
+    /// assert_eq!(route("BGSAVE"), Route::BgSave);
+    /// ```
     BgSave,
     /// `BGREWRITEAOF` — rebuild every shard's AOF from in-memory state.
     /// Each shard freezes a COW view and hands the dump to its persist
     /// worker, so the reply returns before the rewrite is durable.
+    ///
+    /// ```
+    /// # use kevy_rt::{Route};
+    /// let route = |verb: &str| if verb == "BGREWRITEAOF" { Route::RewriteAof } else { Route::Local };
+    /// assert_eq!(route("BGREWRITEAOF"), Route::RewriteAof);
+    /// ```
     RewriteAof,
     /// `MSET` — `args[1..]` are key/value pairs, routed per key's shard.
+    ///
+    /// ```
+    /// # use kevy_rt::{Route};
+    /// let route = |verb: &str| if verb == "MSET" { Route::MSet } else { Route::Single(1) };
+    /// assert_eq!(route("MSET"), Route::MSet);
+    /// ```
     MSet,
     /// Cross-shard multi-key gather (`MGET` / `SINTER` / `SUNION` /
     /// `SDIFF` / `ZINTERCARD`): each key's payload is fetched on its
     /// owning shard and the origin reduces them per [`crate::MultiOp`].
+    ///
+    /// ```
+    /// # use kevy_rt::{MultiOp, Route};
+    /// let route = |verb: &str| if verb == "MGET" { Route::Gather(MultiOp::Mget) } else { Route::Single(1) };
+    /// assert_eq!(route("MGET"), Route::Gather(MultiOp::Mget));
+    /// ```
     Gather(crate::MultiOp),
     /// zset/set algebra `*STORE` family: gather sources, combine
     /// per [`crate::message::ZCombine`], materialize at `args[1]`.
+    ///
+    /// ```
+    /// # use kevy_rt::{Route, ZCombine};
+    /// let route = |verb: &str| if verb == "ZUNIONSTORE" { Route::ZAlgebraStore(ZCombine::ZUnion) } else { Route::Single(1) };
+    /// assert_eq!(route("ZUNIONSTORE"), Route::ZAlgebraStore(ZCombine::ZUnion));
+    /// ```
     ZAlgebraStore(crate::ZCombine),
-    /// `BITOP op dst src [src …]` — N sources gathered, combined, and
-    /// stored at a destination that sits at `args[2]`, not `args[1]`.
-    /// `ZAlgebraStore` is the same shape with a different payload: it
-    /// combines set and zset members, not raw bytes.
-    ///
-    /// Carries nothing. An earlier draft carried the operator so the
-    /// router could pick it, which meant parsing the operator twice and
-    /// needing a fallback route for the argv the router could not parse
-    /// — and that fallback led to a dispatch table with no BITOP arm,
-    /// so a malformed BITOP would have been answered "unknown command".
-    /// The route says only that this is a BITOP; every refusal is
-    /// worded once, in `exec_bitop`.
-    ///
-    /// Why it cannot ride `Single(1)`, in one assertion:
-    ///
-    /// ```
-    /// use kevy_persist::Routing;
-    /// use kevy_rt::{Route, shard_of_key};
-    /// // `Single(1)` hashes args[1]. For BITOP that is the OPERATOR.
-    /// let operator = b"AND".as_slice();
-    /// let destination = b"dst".as_slice();
-    /// assert_ne!(shard_of_key(operator, 8, Routing::KevyHash), shard_of_key(destination, 8, Routing::KevyHash));
-    /// assert!(matches!(Route::BitOpStore, Route::BitOpStore));
-    /// ```
+    #[doc = include_str!("route_docs/bitopstore.md")]
     BitOpStore,
-    /// `COPY src dst [REPLACE]` — two keys, so the same hazard the
-    /// rename and list-move routes exist for: left to the catch-all
-    /// `Single(1)` the copy lands in the SOURCE's shard, where no later
-    /// read of the destination will ever look. Same-shard pairs take
-    /// one atomic op; cross-shard pairs run Read → Put, and need no
-    /// rollback because the read does not remove anything.
-    ///
-    /// Why it cannot ride `Single(1)`, in one assertion:
-    ///
-    /// ```
-    /// use kevy_persist::Routing;
-    /// use kevy_rt::{Route, shard_of_key};
-    /// // A pair of ordinary key names on an eight-shard server.
-    /// let (src, dst) = (b"ca".as_slice(), b"cb".as_slice());
-    /// assert_ne!(shard_of_key(src, 8, Routing::KevyHash), shard_of_key(dst, 8, Routing::KevyHash));
-    /// // `Single(1)` hashes args[1] — the SOURCE — and runs the whole
-    /// // command there, so the copy would land in a shard no later read
-    /// // of `dst` ever looks at, while the reply said it worked.
-    /// assert!(matches!(Route::Copy, Route::Copy));
-    /// ```
+    #[doc = include_str!("route_docs/copy.md")]
     Copy,
-    /// Geo `*STORE` family — `GEOSEARCHSTORE dst src …` and
-    /// `GEORADIUS[BYMEMBER] src … STORE|STOREDIST dst`.
-    ///
-    /// These MUST be routed, not left to the catch-all `Route::Single(1)`:
-    /// GEOSEARCHSTORE puts the DESTINATION at `argv[1]` (so the search then
-    /// read the source off the wrong shard — `:0`, or "could not decode
-    /// requested zset member" for FROMMEMBER) while GEORADIUS puts the
-    /// SOURCE there (so the destination was written into the source's
-    /// shard, invisible to every later read of it). Both keys are carried
-    /// here because neither sits at a fixed argv index — the legacy forms
-    /// hide `dst` behind an option-soup scan.
-    ///
-    /// The search runs on `src`'s shard ([`crate::Commands::geo_search`]),
-    /// the write lands on `dst`'s (`Op::ZStoreResult`) — see
-    /// the runtime's geo-store orchestration.
+    #[doc = include_str!("route_docs/geostore.md")]
     GeoStore {
         /// Key the search reads — its shard runs the query.
+        ///
+        /// ```
+        /// use kevy_rt::Route;
+        ///
+        /// // `GEORADIUS cities ... STORE near`: `cities` is searched.
+        /// let route = Route::GeoStore { src: b"cities".to_vec(), dst: b"near".to_vec() };
+        /// assert!(matches!(route, Route::GeoStore { ref src, .. } if src == b"cities"));
+        /// ```
         src: Vec<u8>,
-        /// Key the result is written to — its shard takes the write, which
-        /// is why both keys have to be extracted before routing.
+        #[doc = include_str!("route_docs/geostore_dst.md")]
         dst: Vec<u8>,
     },
     /// `FEED.READ <shard> <gen> <offset> …` — shard-index routed.
+    ///
+    /// ```
+    /// # use kevy_rt::{Route};
+    /// let route = |verb: &str| if verb == "FEED.READ" { Route::FeedRead } else { Route::Single(1) };
+    /// assert_eq!(route("FEED.READ"), Route::FeedRead);
+    /// ```
     FeedRead,
     /// `FEED.TAIL <shard>`.
+    ///
+    /// ```
+    /// # use kevy_rt::{Route};
+    /// let route = |verb: &str| if verb == "FEED.TAIL" { Route::FeedTail } else { Route::Single(1) };
+    /// assert_eq!(route("FEED.TAIL"), Route::FeedTail);
+    /// ```
     FeedTail,
     /// `FEED.SHARDS` — answered locally.
+    ///
+    /// ```
+    /// # use kevy_rt::{Route};
+    /// let route = |verb: &str| if verb == "FEED.SHARDS" { Route::FeedShards } else { Route::Single(1) };
+    /// assert_eq!(route("FEED.SHARDS"), Route::FeedShards);
+    /// ```
     FeedShards,
     /// `PREFIX.STATS <prefix>` — all-shard fanout, summed.
+    ///
+    /// ```
+    /// # use kevy_rt::{Route};
+    /// let route = |verb: &str| if verb == "PREFIX.STATS" { Route::PrefixStats } else { Route::Single(1) };
+    /// assert_eq!(route("PREFIX.STATS"), Route::PrefixStats);
+    /// ```
     PrefixStats,
     /// `CLIENT LIST` — all-shard fanout; each shard renders its conn
     /// table rows, the origin concatenates into one bulk reply.
+    ///
+    /// ```
+    /// use kevy_rt::Route;
+    ///
+    /// let route = |sub: &str| if sub == "LIST" { Route::ClientList } else { Route::Local };
+    /// assert_eq!(route("LIST"), Route::ClientList);
+    /// ```
     ClientList,
-    /// `CLIENT KILL …` — all-shard fanout; each shard closes its
-    /// matching conns, the origin sums (or maps the legacy positional
-    /// form to `+OK` / `-ERR`).
+    #[doc = include_str!("route_docs/clientkill.md")]
     ClientKill,
     /// Extension fan-out (IDX.* reads): every shard runs
     /// `Commands::extension_op`, the origin reduces.
+    ///
+    /// ```
+    /// # use kevy_rt::{Route};
+    /// let route = |verb: &str| if verb == "IDX.SEARCH" { Route::Extension } else { Route::Single(1) };
+    /// assert_eq!(route("IDX.SEARCH"), Route::Extension);
+    /// ```
     Extension,
-    /// `WAIT numreplicas timeout` — all-shard barrier: each
-    /// shard answers (possibly deferred until its replicas ACK or the
-    /// deadline) with how many of its replicas acked its
-    /// `master_repl_offset` at arm time; the origin replies the MIN.
-    /// `timeout_ms == 0` = the Redis "wait forever" form (the runtime
-    /// hard-caps it — see `exec_replwait::WAIT_HARD_CAP_MS`).
+    #[doc = include_str!("route_docs/replwait.md")]
     ReplWait {
-        /// How many replicas the caller wants acked. Reported per shard;
-        /// the origin answers the minimum across them.
+        #[doc = include_str!("route_docs/replwait_numreplicas.md")]
         numreplicas: u32,
-        /// Deadline in milliseconds. `0` is Redis's wait-forever form and
-        /// is hard-capped by the runtime rather than honoured literally.
+        #[doc = include_str!("route_docs/replwait_timeout_ms.md")]
         timeout_ms: u64,
     },
     /// `REPL.TOKEN` on a primary — gather every shard's
     /// `(feed generation, next_offset)` pair into one flat array.
+    ///
+    /// ```
+    /// # use kevy_rt::{Route};
+    /// let route = |verb: &str| if verb == "REPL.TOKEN" { Route::ReplToken } else { Route::Local };
+    /// assert_eq!(route("REPL.TOKEN"), Route::ReplToken);
+    /// ```
     ReplToken,
-    /// `REPL.WAIT` on a replica — all-shard applied barrier:
-    /// shard `i` answers once its replication-apply position reaches
-    /// `offsets[i]` (or the deadline passes). All met → `+OK`; any
-    /// timeout → the pre-built `miss` reply (kevy sends
-    /// `-MISDIRECTED writer is <primary>`). The command layer builds
-    /// `miss` because the upstream address is its knowledge, not the
-    /// runtime's.
+    #[doc = include_str!("route_docs/replbarrier.md")]
     ReplBarrier {
         /// One target apply-position per shard, indexed by shard number.
+        ///
+        /// ```
+        /// use kevy_rt::Route;
+        ///
+        /// // Shard 1 must have applied up to offset 7.
+        /// let route = Route::ReplBarrier { offsets: vec![10, 7], timeout_ms: 100, miss: Vec::new() };
+        /// assert!(matches!(route, Route::ReplBarrier { ref offsets, .. } if offsets[1] == 7));
+        /// ```
         offsets: Vec<u64>,
         /// Deadline in milliseconds for every shard to reach its target.
+        ///
+        /// ```
+        /// use kevy_rt::Route;
+        ///
+        /// let route = Route::ReplBarrier { offsets: vec![0], timeout_ms: 250, miss: Vec::new() };
+        /// assert!(matches!(route, Route::ReplBarrier { timeout_ms: 250, .. }));
+        /// ```
         timeout_ms: u64,
-        /// The reply to send if any shard misses its deadline, pre-built by
-        /// the command layer because it names the upstream primary — the
-        /// runtime does not know that address.
+        #[doc = include_str!("route_docs/replbarrier_miss.md")]
         miss: Vec<u8>,
     },
     /// `KEYS pattern` — every shard returns its matching keys.
-    Keys(Option<Vec<u8>>),
-    /// `SCAN cursor [MATCH pattern] [COUNT count] [TYPE type]` — a real
-    /// cursor iterator: each call visits ~COUNT buckets of ONE shard
-    /// (chaining into the next shard only while the work budget lasts)
-    /// and replies `[next-cursor, keys]`. `Err` carries why the command
-    /// layer refused the arguments (invalid cursor / syntax error); the
-    /// runtime replies its wire form.
     ///
-    /// The cursor is the raw wire cursor: the runtime splits it into
-    /// `(shard, in-shard position)` — shard index in the top 10 bits,
-    /// reverse-binary bucket cursor in the low 54. Cursors are therefore
-    /// only meaningful on the server (and shard count) that issued them,
-    /// like Redis Cluster cursors are per-node.
+    /// ```
+    /// use kevy_rt::Route;
+    ///
+    /// // `KEYS user:*`
+    /// let route = Route::Keys(Some(b"user:*".to_vec()));
+    /// assert!(matches!(route, Route::Keys(Some(ref p)) if p == b"user:*"));
+    /// ```
+    Keys(Option<Vec<u8>>),
+    #[doc = include_str!("route_docs/scan.md")]
     Scan(Result<ScanOpts, ScanOptsError>),
     /// `RANDOMKEY` — one arbitrary key across all shards.
+    ///
+    /// ```
+    /// # use kevy_rt::{Route};
+    /// let route = |verb: &str| if verb == "RANDOMKEY" { Route::RandomKey } else { Route::Local };
+    /// assert_eq!(route("RANDOMKEY"), Route::RandomKey);
+    /// ```
     RandomKey,
     /// `SUBSCRIBE` / `UNSUBSCRIBE` — connection-level (modifies this conn).
+    ///
+    /// ```
+    /// # use kevy_rt::{Route};
+    /// let route = |verb: &str| if verb == "SUBSCRIBE" { Route::Subscribe } else { Route::Single(1) };
+    /// assert_eq!(route("SUBSCRIBE"), Route::Subscribe);
+    /// ```
     Subscribe,
     /// The other half of the pair above: drops this conn's channel
     /// subscriptions, all of them when no channel is named.
+    ///
+    /// ```
+    /// # use kevy_rt::{Route};
+    /// let route = |verb: &str| if verb == "UNSUBSCRIBE" { Route::Unsubscribe } else { Route::Single(1) };
+    /// assert_eq!(route("UNSUBSCRIBE"), Route::Unsubscribe);
+    /// ```
     Unsubscribe,
-    /// `PSUBSCRIBE pattern [pattern ...]` / `PUNSUBSCRIBE [pattern ...]` —
-    /// like Subscribe/Unsubscribe but the conn registers Redis-glob
-    /// patterns; `PUBLISH` to a matching channel delivers a `pmessage`
-    /// frame. Connection-level (modifies this conn + shared pattern
-    /// registry).
+    #[doc = include_str!("route_docs/psubscribe.md")]
     Psubscribe,
     /// The other half of the pattern pair: drops this conn's pattern
     /// subscriptions, all of them when no pattern is named, and removes
     /// them from the shared registry.
+    ///
+    /// ```
+    /// # use kevy_rt::{Route};
+    /// let route = |verb: &str| if verb == "PUNSUBSCRIBE" { Route::Punsubscribe } else { Route::Single(1) };
+    /// assert_eq!(route("PUNSUBSCRIBE"), Route::Punsubscribe);
+    /// ```
     Punsubscribe,
     /// `PUBLISH channel message` — delivered to subscribers on every core.
+    ///
+    /// ```
+    /// # use kevy_rt::{Route};
+    /// let route = |verb: &str| if verb == "PUBLISH" { Route::Publish } else { Route::Single(1) };
+    /// assert_eq!(route("PUBLISH"), Route::Publish);
+    /// ```
     Publish,
     /// `WATCH key [key ...]` — fan-out to record per-shard versions, then
     /// stash the (key, version) pairs in the conn's `watched` set so the
     /// next `EXEC` can validate them. Connection-level.
+    ///
+    /// ```
+    /// # use kevy_rt::{Route};
+    /// let route = |verb: &str| if verb == "WATCH" { Route::Watch } else { Route::Single(1) };
+    /// assert_eq!(route("WATCH"), Route::Watch);
+    /// ```
     Watch,
     /// `UNWATCH` — clear the conn's `watched` set. Connection-level, local.
+    ///
+    /// ```
+    /// # use kevy_rt::{Route};
+    /// let route = |verb: &str| if verb == "UNWATCH" { Route::Unwatch } else { Route::Local };
+    /// assert_eq!(route("UNWATCH"), Route::Unwatch);
+    /// ```
     Unwatch,
-    /// `HELLO [protover [AUTH user pass] [SETNAME name]]` — server
-    /// handshake; on `HELLO 3` flips the conn into RESP3 mode (per-conn
-    /// `proto` field). Reply shape itself is proto-aware (V2: array of
-    /// pairs; V3: Map). Connection-level, dispatch via the
-    /// [`crate::Commands::hello_reply`] hook so embedders set their own server
-    /// metadata.
+    #[doc = include_str!("route_docs/hello.md")]
     Hello,
-    /// `RENAME source destination` / `RENAMENX source destination`. The
-    /// runtime handles the two-shard decision: same-shard renames go
-    /// through one atomic [`crate::Store::rename`] on the owning shard; cross-
-    /// shard renames use the Take→Put orchestrator (lands in v2-3b;
-    /// v2-3a emits `-CROSSSHARD ...` for that case).
+    #[doc = include_str!("route_docs/rename.md")]
     Rename {
         /// `true` for `RENAMENX` (no overwrite — reply `:0` if dst exists).
+        ///
+        /// ```
+        /// use kevy_rt::Route;
+        ///
+        /// // `RENAMENX a b` refuses to overwrite `b`.
+        /// let route = |verb: &str| Route::Rename { nx: verb == "RENAMENX" };
+        /// assert_eq!(route("RENAMENX"), Route::Rename { nx: true });
+        /// ```
         nx: bool,
     },
-    /// `RPOPLPUSH src dst` / `LMOVE src dst LEFT|RIGHT LEFT|RIGHT` /
-    /// `BRPOPLPUSH src dst timeout`, once the blocking form has an element
-    /// to serve.
-    ///
-    /// These MUST be routed, not left to `Route::Single(1)`. The source and
-    /// the destination are different keys and can live on different shards;
-    /// the catch-all route hashes `args[1]` (the source), so the destination
-    /// push executed on the SOURCE's shard and the element was written into
-    /// a keyspace nobody would ever read it from. It returned the moved
-    /// value, so the caller believed it had worked. Measured on an 8-shard
-    /// server: 11 of 12 moves silently lost the element.
-    ///
-    /// Same-shard pairs are one atomic Op on the owning shard. Cross-shard
-    /// pairs run the Take→Push orchestrator (mirroring [`Self::Rename`]),
-    /// which is NOT atomic — see `exec_listmove`.
+    #[doc = include_str!("route_docs/listmove.md")]
     ListMove {
-        /// The end of the source to pop from: the head for
-        /// `LMOVE ... LEFT ...`, the tail for `RPOPLPUSH`.
+        #[doc = include_str!("route_docs/listmove_from.md")]
         from: ListEnd,
-        /// The end of the destination to push onto: the head for
-        /// `RPOPLPUSH` and `LMOVE ... LEFT`, else the tail.
+        #[doc = include_str!("route_docs/listmove_to.md")]
         to: ListEnd,
     },
-    /// `SLOWLOG GET / LEN / RESET / HELP`. The sub-command + parsed
-    /// args are pre-decoded at routing time so the runtime knows
-    /// whether to short-circuit (HELP / error) or fan out across
-    /// shards (GET / LEN / RESET). See [`SlowlogSub::parse`].
+    #[doc = include_str!("route_docs/slowlog.md")]
     Slowlog(SlowlogSub),
-    /// Non-blocking `XREAD` / `XREADGROUP` over **multiple** streams — fan
-    /// each stream out to its owning shard and merge the per-stream replies
-    /// in request order (single-stream forms still route via
-    /// [`Self::Single`]). Each element is `(stream key, last-seen id)`;
-    /// `count` is the optional `COUNT` cap applied per stream; `group`
-    /// `Some` makes each per-shard sub-query an `XREADGROUP` (a write —
-    /// PEL / last-delivered updates happen on each stream's owning shard
-    /// and are AOF-logged there as the rewritten single-stream command).
-    /// The command set builds this only for the non-blocking, ≥2-stream
-    /// forms; blocking reads park on the origin shard instead (see the
-    /// cross-shard BLOCK arbiter).
+    #[doc = include_str!("route_docs/xreadgather.md")]
     XReadGather {
-        /// `(stream key, start id)` per stream, already paired — the wire
-        /// form lists all keys and then all ids, which is not routable.
+        #[doc = include_str!("route_docs/xreadgather_streams.md")]
         streams: Vec<(Vec<u8>, Vec<u8>)>,
-        /// `COUNT`, applied per stream rather than across the gather.
+        #[doc = include_str!("route_docs/xreadgather_count.md")]
         count: Option<usize>,
-        /// `Some` turns each per-shard sub-query into an XREADGROUP, which
-        /// makes it a write: the PEL update happens on the stream's own
-        /// shard and is logged there.
+        #[doc = include_str!("route_docs/xreadgather_group.md")]
         group: Option<XGroupCtx>,
     },
 }
@@ -295,10 +355,28 @@ pub enum Route {
 #[non_exhaustive]
 pub struct XGroupCtx {
     /// Consumer-group name.
+    ///
+    /// ```
+    /// let ctx = kevy_rt::XGroupCtx::new(b"workers".to_vec(), b"w1".to_vec());
+    /// assert_eq!(ctx.group, b"workers");
+    /// ```
     pub group: Vec<u8>,
     /// Consumer name within the group.
+    ///
+    /// ```
+    /// let ctx = kevy_rt::XGroupCtx::new(b"workers".to_vec(), b"w1".to_vec());
+    /// assert_eq!(ctx.consumer, b"w1");
+    /// ```
     pub consumer: Vec<u8>,
     /// Whether deliveries enter the pending list (`NOACK` = they do not).
+    ///
+    /// ```
+    /// use kevy_store::AckMode;
+    ///
+    /// // `XREADGROUP ... NOACK`: deliveries skip the pending list.
+    /// let ctx = kevy_rt::XGroupCtx::new(b"g".to_vec(), b"c".to_vec()).with_ack(AckMode::NoAck);
+    /// assert_eq!(ctx.ack, AckMode::NoAck);
+    /// ```
     pub ack: AckMode,
 }
 

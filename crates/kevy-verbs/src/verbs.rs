@@ -10,8 +10,21 @@
 #[non_exhaustive]
 pub struct Verb {
     /// The verb, uppercase.
+    ///
+    /// ```
+    /// // lookup takes the uppercase verb and hands back its row
+    /// let row = kevy_verbs::verb(b"HSET").ok_or("not in the table")?;
+    /// assert_eq!(row.name, "HSET");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub name: &'static str,
     /// Whether it can change the keyspace.
+    ///
+    /// ```
+    /// let is_write = |v: &[u8]| kevy_verbs::verb(v).map(|row| row.write);
+    /// assert_eq!(is_write(b"DEL"), Some(true));
+    /// assert_eq!(is_write(b"EXISTS"), Some(false));
+    /// ```
     pub write: bool,
 }
 
