@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **The upgrade guide covers the Rust API and the replies that changed.**
+  `docs/upgrading-6.4-to-7.0.md` gains §10, the rules the public Rust API
+  now follows and the common edits for an embedded store, and §11, the
+  four replies that differ from 6.4. `docs/rust-api-7.0.md` lists every
+  public API change of the workspace, crate by crate, old → new.
+
 - **The io_uring receive ring is sized by configuration, and defaults to
   a quarter of what it was.** Every shard on the io_uring reactor kept a
   fixed ring of 4,096 16 KiB receive buffers — 64 MiB a shard, 0.6 GB for
