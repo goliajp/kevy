@@ -10,16 +10,52 @@ use std::io;
 
 /// Parsed URL pieces — scheme validated, host/port resolved, optional
 /// db index extracted.
+///
+/// ```
+/// use kevy_resp_client::{ParsedUrl, RespClient};
+///
+/// let u = ParsedUrl::parse("redis://cache.internal:6380/0")?;
+/// assert_eq!(u, ParsedUrl::parse("kevy://cache.internal:6380/0")?); // same shape
+/// # let l = std::net::TcpListener::bind("127.0.0.1:0")?;
+/// # let u = ParsedUrl::parse(&format!("tcp://127.0.0.1:{}", l.local_addr()?.port()))?;
+/// let c = RespClient::connect(&u.host, u.port)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct ParsedUrl {
     /// Hostname or IP literal.
+    ///
+    /// ```
+    /// use kevy_resp_client::ParsedUrl;
+    ///
+    /// assert_eq!(ParsedUrl::parse("kevy://db.local:6004")?.host, "db.local");
+    /// assert_eq!(ParsedUrl::parse("tcp://10.0.0.5")?.host, "10.0.0.5");
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub host: String,
     /// TCP port; defaults to 6379 (Redis convention) when the URL
     /// omits `:port`.
+    ///
+    /// ```
+    /// use kevy_resp_client::ParsedUrl;
+    ///
+    /// assert_eq!(ParsedUrl::parse("kevy://db.local:6004")?.port, 6004);
+    /// assert_eq!(ParsedUrl::parse("kevy://db.local")?.port, 6379);
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub port: u16,
     /// Optional db index from a `/N` path component. Only valid for
     /// `kevy://` and `redis://`; `tcp://` accepts but ignores a path.
+    ///
+    /// ```
+    /// use kevy_resp_client::ParsedUrl;
+    ///
+    /// assert_eq!(ParsedUrl::parse("redis://db.local/3")?.db, Some(3));
+    /// assert_eq!(ParsedUrl::parse("redis://db.local")?.db, None);
+    /// assert_eq!(ParsedUrl::parse("tcp://db.local/3")?.db, None); // no SELECT on tcp://
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub db: Option<u32>,
 }
 
