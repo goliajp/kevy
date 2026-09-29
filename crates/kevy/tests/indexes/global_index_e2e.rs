@@ -379,12 +379,22 @@ fn described_splits(w: &mut Wire, name: &[u8]) -> Vec<i64> {
     (0..n).map(|i| lines[4 + 2 * i].parse().unwrap()).collect()
 }
 
-/// Every partition answers: a range over the whole domain reaches all of
-/// them, where a narrow one reaches one and can pass while the others build.
+/// `IDX.LIST`'s state is ready only once every shard's part is. A probe
+/// query cannot stand in for it: an integer range reaches no partition of
+/// a string index, and a narrow one reaches one while the others build.
 fn wait_ready(w: &mut Wire, name: &[u8]) {
-    let r =
-        ready(w, &[b"IDX.COUNT", name, b"RANGE", b"-9223372036854775808", b"9223372036854775807"]);
-    assert!(r.starts_with(b":"), "not a count: {}", text(&r));
+    let name = String::from_utf8_lossy(name).into_owned();
+    for _ in 0..400 {
+        let list = text(&call(w, &[b"IDX.LIST"]));
+        let at = list.find(&format!("\r\n{name}\r\n")).expect("listed");
+        let row: Vec<&str> =
+            list[at..].split("\r\n").filter(|s| !s.starts_with(['*', '$'])).collect();
+        if row.iter().position(|s| *s == "state").map(|i| row[i + 1]) == Some("ready") {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    panic!("index {name} never became ready");
 }
 
 #[test]
