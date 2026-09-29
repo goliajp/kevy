@@ -41,8 +41,8 @@ pub(super) fn tier_tick(c: &KevyCommands, store: &mut Store, bits: u32, cfg: &ke
     if !store.tier_enabled() {
         return;
     }
+    let n = c.state().nshards().max(1) as u64;
     if let Ok(Some(total)) = crate::resolve_tier_budget(cfg) {
-        let n = c.state().nshards().max(1) as u64;
         store.set_tier_budget((total / n).max(1));
     }
     let mut reserved = 0u64;
@@ -53,6 +53,12 @@ pub(super) fn tier_tick(c: &KevyCommands, store: &mut Store, bits: u32, cfg: &ke
         reserved += crate::view_runtime::reserved_bytes(&c.ctx());
     }
     store.set_tier_reserved(reserved);
+    let mem = &c.state().mem;
+    store.set_tier_overhead(mem.overhead_bytes.load(std::sync::atomic::Ordering::Relaxed) / n);
+    let refusing = mem.refusing.load(std::sync::atomic::Ordering::Relaxed);
+    if store.memory_refused() != refusing {
+        store.set_memory_refusal(refusing);
+    }
 }
 
 /// Sweep due hash-field TTLs, and announce what the sweep removed.
