@@ -72,6 +72,7 @@ mod dispatch_resp3;
 mod elect_persist;
 mod geo_store;
 mod index_runtime;
+mod key_walk;
 mod metrics_http;
 mod ops;
 mod replica_runner;

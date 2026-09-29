@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- **A table declaration no longer copies the keyspace.** `TABLE.DECLARE`
+  starts a backfill per compiled index and one that packs the existing
+  rows, and each began by copying every key under the table's prefix into
+  a list on every shard — about 72 bytes a key, three lists at once, 2.17
+  GB for ten million rows, freed only as each backfill finished and
+  leaving about a gigabyte of small free chunks glibc could not return.
+  The backfills (and `IDX.CREATE`'s, and the embedded store's) now walk
+  the keyspace with a cursor and hold one batch: on 100,000 rows the build
+  held 79.9 bytes a row above what it keeps and now holds 1.3; the
+  packing backfill held 41.0 and now holds 1.3. The walk goes in storage
+  order, as the copy did, and a query still answers `-INDEXBUILDING` until
+  it has finished; rows written, deleted or renamed during the walk end up
+  indexed as they end. Building both indexes over a million rows takes
+  2.3% less time and packing them 3.6% less. New:
+  `Store::walk_page` and `KevyMap::scan_buckets`, the storage-order walk
+  with its cursor.
+
 - **kevy-store: a batched page read answers packed rows from the spill
   file.** `Store::peek_hash_rows`, the batched read behind `FIELDS`
   hydration, decoded each cold row read from the spill file and then

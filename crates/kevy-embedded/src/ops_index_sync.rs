@@ -173,6 +173,9 @@ fn rebuild_seg_lists(
     shard_segs.mark_stats_dirty();
 }
 
+/// Buckets visited per page of a backfill walk.
+const BACKFILL_PAGE_BUCKETS: usize = 4096;
+
 /// Keep `spec`'s existing segment from `have` (position move), or
 /// backfill a fresh one from this shard's live keys in the spec's
 /// prefix domain.
@@ -189,10 +192,19 @@ fn take_or_backfill<S>(
     let mut seg = empty();
     let mut pat = spec.prefix().to_vec();
     pat.push(b'*');
-    for key in store.collect_keys(Some(&pat), None) {
-        apply(store, spec, &mut seg, &key);
+    // a page of keys at a time rather than a copy of every key under the
+    // prefix; the store is held for the whole walk, so no key is missed
+    let mut cursor = 0;
+    loop {
+        let (next, keys) = store.walk_page(cursor, BACKFILL_PAGE_BUCKETS, Some(&pat));
+        for key in &keys {
+            apply(store, spec, &mut seg, key);
+        }
+        if next == 0 {
+            return (spec.clone(), seg);
+        }
+        cursor = next;
     }
-    (spec.clone(), seg)
 }
 
 fn apply_agg_key(

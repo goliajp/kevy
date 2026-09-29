@@ -88,7 +88,7 @@ pub(crate) fn probe_window(
 fn op_rebuild(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     match argv.get(1) {
         Some(name) if global::is_global(ctx, name) => global::op_rebuild(ctx, store, name),
-        _ => ops::op_rebuild(ctx, store, argv),
+        _ => ops::op_rebuild(ctx, argv),
     }
 }
 
@@ -131,12 +131,12 @@ pub(crate) fn extension_op(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -
         .get(2)
         .is_some_and(|a| a.eq_ignore_ascii_case(b"GROUP") || a.eq_ignore_ascii_case(b"GROUPS"))
     {
-        return ops::op_agg(ctx, store, argv);
+        return ops::op_agg(ctx, argv);
     }
     // Phase 2 of GROUPS (internal): AGG.FETCH <name> <g…> — exact partials
     // for the candidate groups that survived phase-1 ranking.
     if argv.first().is_some_and(|v| v.eq_ignore_ascii_case(b"AGG.FETCH")) {
-        return ops::op_agg_fetch(ctx, store, argv);
+        return ops::op_agg_fetch(ctx, argv);
     }
     if argv.first().is_some_and(|v| v.eq_ignore_ascii_case(b"IDX.REBUILD")) {
         return op_rebuild(ctx, store, argv);

@@ -52,7 +52,7 @@ pub(super) fn run_parsed(ctx: &Ctx<'_>, store: &mut Store, q: &Query, verb: &[u8
             return vec![ST_BADARGS];
         }
         if !q.filters.is_empty() {
-            return super::query_claused::run_claused_count(ctx, store, q);
+            return super::query_claused::run_claused_count(ctx, q);
         }
     }
     // Pure grammar, refused before the segment is consulted: the
@@ -86,11 +86,11 @@ fn verify_kind_stats(ctx: &Ctx<'_>, store: &mut Store, name: &[u8]) -> Option<Ve
     // row also carried two facts in one number (`links +
     // rebuild_recommended`); they travel separately now.
     let res = match kind {
-        kevy_index::IndexKind::Agg => index_runtime::with_ready_agg(ctx, store, name, |a| {
+        kevy_index::IndexKind::Agg => index_runtime::with_ready_agg(ctx, name, |a| {
             let st = a.stats();
             (b'a', vec![st.rows, st.approx_bytes, st.excluded, st.groups])
         }),
-        kevy_index::IndexKind::Ann => index_runtime::with_ready_ann(ctx, store, name, |g| {
+        kevy_index::IndexKind::Ann => index_runtime::with_ready_ann(ctx, name, |g| {
             let st = g.stats();
             (
                 b'v',
@@ -127,40 +127,39 @@ fn verify_kind_stats(ctx: &Ctx<'_>, store: &mut Store, name: &[u8]) -> Option<Ve
 /// Range / Eq / scalar-Verify against this shard's segment.
 fn run_scalar_query(ctx: &Ctx<'_>, store: &mut Store, q: &Query, verb: &[u8]) -> Vec<u8> {
     let global = super::global::is_global(ctx, &q.name);
-    let res =
-        index_runtime::with_ready_segment(ctx, store, &q.name, |spec, seg, win| match q.shape {
-            Shape::Range { .. } | Shape::Eq { .. } | Shape::Where(_) => {
-                let now = (kevy_store::now_unix_ms() / 1000) as i64;
-                let (min, max) = match q.bounds_for(spec, now) {
-                    Ok(b) => b,
-                    Err(chunk) => return HitsOrChunk::Chunk(chunk),
-                };
-                super::probe_window(ctx, &q.name, win, &min);
-                match scalar_range_or_count(q, verb, spec, seg, win, &min, &max) {
-                    HitsOrChunk::Hits(hits) if global => stored_hits_chunk(spec, seg, &hits, q),
-                    other => other,
-                }
+    let res = index_runtime::with_ready_segment(ctx, &q.name, |spec, seg, win| match q.shape {
+        Shape::Range { .. } | Shape::Eq { .. } | Shape::Where(_) => {
+            let now = (kevy_store::now_unix_ms() / 1000) as i64;
+            let (min, max) = match q.bounds_for(spec, now) {
+                Ok(b) => b,
+                Err(chunk) => return HitsOrChunk::Chunk(chunk),
+            };
+            super::probe_window(ctx, &q.name, win, &min);
+            match scalar_range_or_count(q, verb, spec, seg, win, &min, &max) {
+                HitsOrChunk::Hits(hits) if global => stored_hits_chunk(spec, seg, &hits, q),
+                other => other,
             }
-            // VERIFY answers "does the index still agree with the keyspace?".
-            // The segment cannot be walked and the store re-read at the same time
-            // (`with_ready_segment` holds the store), so snapshot the held
-            // (key, value) pairs here and do the recheck outside — which is what
-            // this arm was always shaped for, except the snapshot was collected,
-            // thrown away with `let _ = (...)`, and the drift it was for never
-            // computed. That left an O(N) walk plus an O(N) allocation per shard
-            // per VERIFY, producing nothing, while `verb_meta` and the docs
-            // advertised a drift statistic the reply did not carry.
-            Shape::Verify => {
-                let mut entries: Vec<(Vec<u8>, IndexValue)> = Vec::new();
-                seg.each_entry(|k, v| entries.push((k.to_vec(), v.clone())));
-                HitsOrChunk::Verify {
-                    spec: Box::new(spec.clone()),
-                    entries,
-                    stats: seg.stats(),
-                    window: win.and_then(|w| w.audit(spec.ty())),
-                }
+        }
+        // VERIFY answers "does the index still agree with the keyspace?".
+        // The segment cannot be walked and the store re-read at the same time
+        // (`with_ready_segment` holds the store), so snapshot the held
+        // (key, value) pairs here and do the recheck outside — which is what
+        // this arm was always shaped for, except the snapshot was collected,
+        // thrown away with `let _ = (...)`, and the drift it was for never
+        // computed. That left an O(N) walk plus an O(N) allocation per shard
+        // per VERIFY, producing nothing, while `verb_meta` and the docs
+        // advertised a drift statistic the reply did not carry.
+        Shape::Verify => {
+            let mut entries: Vec<(Vec<u8>, IndexValue)> = Vec::new();
+            seg.each_entry(|k, v| entries.push((k.to_vec(), v.clone())));
+            HitsOrChunk::Verify {
+                spec: Box::new(spec.clone()),
+                entries,
+                stats: seg.stats(),
+                window: win.and_then(|w| w.audit(spec.ty())),
             }
-        });
+        }
+    });
     match res {
         Ok(HitsOrChunk::Chunk(chunk)) => chunk,
         Ok(HitsOrChunk::Hits(hits)) => local_hits_chunk(store, &hits, &q.fields),
@@ -305,7 +304,7 @@ pub(super) fn op_explain(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> 
     if !parsed {
         return vec![ST_BADARGS];
     }
-    let building = index_runtime::segment_building(ctx, store, spec.name());
+    let building = index_runtime::segment_building(ctx, spec.name());
     let entries = kind_entries(ctx, store, spec.kind(), spec.name());
     let mut chunk = vec![ST_OK, u8::from(building)];
     chunk.extend_from_slice(&entries.to_le_bytes());
@@ -317,16 +316,16 @@ pub(super) fn op_explain(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> 
 fn kind_entries(ctx: &Ctx<'_>, store: &mut Store, kind: kevy_index::IndexKind, name: &[u8]) -> u64 {
     match kind {
         kevy_index::IndexKind::Agg => {
-            index_runtime::with_ready_agg(ctx, store, name, |a| a.rows()).unwrap_or_default()
+            index_runtime::with_ready_agg(ctx, name, |a| a.rows()).unwrap_or_default()
         }
         kevy_index::IndexKind::Ann => {
-            index_runtime::with_ready_ann(ctx, store, name, |g| g.vectors()).unwrap_or_default()
+            index_runtime::with_ready_ann(ctx, name, |g| g.vectors()).unwrap_or_default()
         }
         kevy_index::IndexKind::Text => {
             index_runtime::with_ready_text_segment(ctx, store, name, |_, t, _, _| t.docs())
                 .unwrap_or_default()
         }
-        _ => index_runtime::with_ready_segment(ctx, store, name, |_, s, _| s.stats().entries)
+        _ => index_runtime::with_ready_segment(ctx, name, |_, s, _| s.stats().entries)
             .unwrap_or_default(),
     }
 }
@@ -339,16 +338,16 @@ pub(super) fn op_list(ctx: &Ctx<'_>, store: &mut Store) -> Vec<u8> {
     };
     let mut chunk = vec![ST_OK];
     for (spec, _) in cat.iter() {
-        let building = index_runtime::segment_building(ctx, store, spec.name());
+        let building = index_runtime::segment_building(ctx, spec.name());
         // (entries, bytes, coerce_failures/postings, duplicates/tokens)
         let quad = if spec.kind() == kevy_index::IndexKind::Agg {
-            index_runtime::with_ready_agg(ctx, store, spec.name(), |a| {
+            index_runtime::with_ready_agg(ctx, spec.name(), |a| {
                 let st = a.stats();
                 (st.rows, st.approx_bytes, st.excluded, st.groups)
             })
             .unwrap_or_default()
         } else if spec.kind() == kevy_index::IndexKind::Ann {
-            index_runtime::with_ready_ann(ctx, store, spec.name(), |g| {
+            index_runtime::with_ready_ann(ctx, spec.name(), |g| {
                 let st = g.stats();
                 (st.vectors, st.approx_bytes, st.tombstones, st.links)
             })
@@ -360,8 +359,8 @@ pub(super) fn op_list(ctx: &Ctx<'_>, store: &mut Store) -> Vec<u8> {
             })
             .unwrap_or_default()
         } else {
-            let placed = index_runtime::placed_bytes(ctx, store, spec.name());
-            index_runtime::with_ready_segment(ctx, store, spec.name(), |_, seg, _| {
+            let placed = index_runtime::placed_bytes(ctx, spec.name());
+            index_runtime::with_ready_segment(ctx, spec.name(), |_, seg, _| {
                 let st = seg.stats();
                 (st.entries, st.approx_bytes + placed, st.coerce_failures, st.duplicates)
             })

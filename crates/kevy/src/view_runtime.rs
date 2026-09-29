@@ -8,7 +8,6 @@
 
 use kevy_index::{IndexValue, MaterializedSet, Membership, SortOrder, ViewMode, ViewSpec};
 use kevy_resp::CmdError;
-use kevy_store::Store;
 
 use crate::state::{CatalogState, Ctx, ShardCtx};
 
@@ -38,7 +37,7 @@ pub(crate) struct ShardViews {
 /// Write hook — call AFTER `index_runtime::on_write` so segment
 /// probes see the fresh row.
 #[inline]
-pub(crate) fn on_write(ctx: &Ctx<'_>, store: &mut Store, key: &[u8]) {
+pub(crate) fn on_write(ctx: &Ctx<'_>, key: &[u8]) {
     let mut st = ctx.shard.views.borrow_mut();
     refresh(&ctx.state.catalogs, &mut st);
     // Probe each referenced index ONCE for this key, then evaluate
@@ -47,7 +46,7 @@ pub(crate) fn on_write(ctx: &Ctx<'_>, store: &mut Store, key: &[u8]) {
     // tax from 44% to the clamp band).
     let st = &mut *st;
     let referenced = &st.referenced;
-    crate::index_runtime::with_segment_resolver(ctx, store, |seg| {
+    crate::index_runtime::with_segment_resolver(ctx, |seg| {
         let vals: Vec<(&[u8], Option<kevy_index::IndexValue>)> = referenced
             .iter()
             .map(|n| (n.as_slice(), seg(n).and_then(|s| s.verify_entry(key)).cloned()))
@@ -71,13 +70,13 @@ pub(crate) fn on_write(ctx: &Ctx<'_>, store: &mut Store, key: &[u8]) {
 }
 
 /// Tick hook — run scheduled local rebuilds.
-pub(crate) fn on_tick(ctx: &Ctx<'_>, store: &mut Store) {
+pub(crate) fn on_tick(ctx: &Ctx<'_>) {
     let mut st = ctx.shard.views.borrow_mut();
     refresh(&ctx.state.catalogs, &mut st);
     let st = &mut *st;
     for vs in &mut st.views {
         if vs.needs_rebuild {
-            rebuild_local(ctx, store, vs);
+            rebuild_local(ctx, vs);
             st.stats_dirty = true;
         }
     }
@@ -123,7 +122,6 @@ pub(crate) fn reserved_bytes(ctx: &Ctx<'_>) -> u64 {
 /// `(order, key)` ascending (the reduce applies DESC).
 pub(crate) fn shard_page(
     ctx: &Ctx<'_>,
-    store: &mut Store,
     name: &[u8],
     after: Option<&(IndexValue, Vec<u8>)>,
     limit: usize,
@@ -132,11 +130,11 @@ pub(crate) fn shard_page(
     refresh(&ctx.state.catalogs, &mut st);
     let st = &mut *st;
     let vs = st.views.iter_mut().find(|v| v.spec.name == name).ok_or("ERR no such view")?;
-    if referenced_index_building(ctx, store, &vs.spec) {
+    if referenced_index_building(ctx, &vs.spec) {
         return Err(CmdError::Wire("INDEXBUILDING view's base index is still building"));
     }
     if vs.needs_rebuild {
-        rebuild_local(ctx, store, vs);
+        rebuild_local(ctx, vs);
         st.stats_dirty = true;
     }
     match &vs.mat {
@@ -148,18 +146,14 @@ pub(crate) fn shard_page(
             // (which measured 9.6ms p99 at 1M×2 components; the
             // RFC clamp is 3ms).
             let spec = vs.spec.clone();
-            Ok(virtual_page(ctx, store, &spec, after, limit))
+            Ok(virtual_page(ctx, &spec, after, limit))
         }
     }
 }
 
 /// Per-shard stats for LIST/VERIFY: (members, bytes, order_excluded,
 /// building) — virtual views report a fresh evaluation's cardinality.
-pub(crate) fn shard_stats(
-    ctx: &Ctx<'_>,
-    store: &mut Store,
-    name: &[u8],
-) -> Result<(u64, u64, u64, bool), CmdError> {
+pub(crate) fn shard_stats(ctx: &Ctx<'_>, name: &[u8]) -> Result<(u64, u64, u64, bool), CmdError> {
     let mut st = ctx.shard.views.borrow_mut();
     refresh(&ctx.state.catalogs, &mut st);
     let st = &mut *st;
@@ -168,7 +162,7 @@ pub(crate) fn shard_stats(
         Some(m) => Ok((m.len() as u64, m.approx_bytes(), m.order_excluded(), vs.needs_rebuild)),
         None => {
             let spec = vs.spec.clone();
-            let n = eval_with_order(ctx, store, &spec).len() as u64;
+            let n = eval_with_order(ctx, &spec).len() as u64;
             Ok((n, 0, 0, false))
         }
     }
@@ -230,12 +224,11 @@ fn refresh(catalogs: &CatalogState, st: &mut ShardViews) {
 /// Order-driven virtual page (see the call site).
 fn virtual_page(
     ctx: &Ctx<'_>,
-    store: &mut Store,
     spec: &ViewSpec,
     after: Option<&(IndexValue, Vec<u8>)>,
     limit: usize,
 ) -> Vec<(IndexValue, Vec<u8>)> {
-    crate::index_runtime::with_segment_resolver(ctx, store, |seg| {
+    crate::index_runtime::with_segment_resolver(ctx, |seg| {
         let Some(order_seg) = seg(&spec.order_by) else {
             return Vec::new();
         };
@@ -254,12 +247,8 @@ fn virtual_page(
 }
 
 /// Evaluate membership + order for every member on this shard.
-fn eval_with_order(
-    ctx: &Ctx<'_>,
-    store: &mut Store,
-    spec: &ViewSpec,
-) -> Vec<(IndexValue, Vec<u8>)> {
-    crate::index_runtime::with_segment_resolver(ctx, store, |seg| {
+fn eval_with_order(ctx: &Ctx<'_>, spec: &ViewSpec) -> Vec<(IndexValue, Vec<u8>)> {
+    crate::index_runtime::with_segment_resolver(ctx, |seg| {
         let members = spec.tree.eval(&seg);
         members
             .into_iter()
@@ -270,14 +259,14 @@ fn eval_with_order(
     })
 }
 
-fn rebuild_local(ctx: &Ctx<'_>, store: &mut Store, vs: &mut ViewState) {
+fn rebuild_local(ctx: &Ctx<'_>, vs: &mut ViewState) {
     let spec = vs.spec.clone();
     let Some(mat) = &mut vs.mat else {
         vs.needs_rebuild = false;
         return;
     };
     mat.clear();
-    let mut rows = eval_with_order(ctx, store, &spec);
+    let mut rows = eval_with_order(ctx, &spec);
     rows.sort();
     if let ViewMode::Materialized { top_k } = spec.mode
         && top_k > 0
@@ -297,8 +286,8 @@ fn rebuild_local(ctx: &Ctx<'_>, store: &mut Store, vs: &mut ViewState) {
 /// A view is unanswerable while ANY referenced index (leaves + the
 /// order index) is still backfilling — the resolver hides Building
 /// segments, and an empty leaf would silently misreport membership.
-fn referenced_index_building(ctx: &Ctx<'_>, store: &mut Store, spec: &ViewSpec) -> bool {
+fn referenced_index_building(ctx: &Ctx<'_>, spec: &ViewSpec) -> bool {
     let mut names: Vec<Vec<u8>> = vec![spec.order_by.clone()];
     spec.tree.each_leaf(&mut |l| names.push(l.index.clone()));
-    names.iter().any(|n| crate::index_runtime::segment_building(ctx, store, n))
+    names.iter().any(|n| crate::index_runtime::segment_building(ctx, n))
 }
