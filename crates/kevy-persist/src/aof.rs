@@ -9,7 +9,6 @@ use std::sync::atomic::AtomicU64;
 use std::time::Instant;
 
 use kevy_resp::ArgvView;
-use kevy_store::Store;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use crate::aof_mapped::{MapHandle, Mapped, sync_handles};
@@ -450,7 +449,10 @@ impl Aof {
     /// it over the live AOF. The append handle is reopened against the new
     /// file before this call returns, so subsequent `append` calls land in
     /// the rewritten log.
-    pub fn rewrite_from(&mut self, store: &Store) -> io::Result<RewriteStats> {
+    pub fn rewrite_from<S: crate::SnapshotSource>(
+        &mut self,
+        store: &S,
+    ) -> io::Result<RewriteStats> {
         // Flush any pending writes to the OLD file first so the snapshot
         // accounts for everything the caller intended to durabilise.
         self.flush_queued()?;

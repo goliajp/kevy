@@ -120,6 +120,9 @@ pub fn write_snapshot_to_with_cursor<S: SnapshotSource, W: Write>(
         write_bytes(&mut w, f)?;
         w.write_all(&d.to_le_bytes())?;
     }
+    if let Some(frame) = src.aux_frame() {
+        crate::snapshot_aux::write_aux(&mut w, &frame)?;
+    }
     w.write_all(&[OP_EOF])?;
     w.flush()?;
     Ok(())
