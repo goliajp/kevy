@@ -21,7 +21,8 @@ pub fn secure_node() -> (u16, [u8; 32]) {
 fn serve_conn(mut sock: TcpStream, port: u16) {
     let mut frames = kevy_noise::Frames::default();
     let Some(m1) = next_frame(&mut sock, &mut frames) else { return };
-    let (key, eph) = (kevy_noise::Keypair::from_secret([1; 32]), kevy_noise::Keypair::from_secret([2; 32]));
+    let (key, eph) =
+        (kevy_noise::Keypair::from_secret([1; 32]), kevy_noise::Keypair::from_secret([2; 32]));
     let Ok((_, r)) = kevy_noise::Responder::accept(&key, eph, b"kevy-client\x001", &m1) else {
         return;
     };
