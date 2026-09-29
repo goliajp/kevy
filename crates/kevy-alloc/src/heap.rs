@@ -122,6 +122,9 @@ pub struct Heap {
     /// Current span per class, as (segment, span index).
     pub(crate) partial: [Option<(NonNull<Segment>, u8)>; NCLASSES],
     pub(crate) spans_in_class: [u32; NCLASSES],
+    /// Slots the class's spans hold (claimed words included), so a span
+    /// can be compared with its class's average occupancy.
+    pub(crate) class_live: [u32; NCLASSES],
     pub(crate) live_bytes: u64,
     pub(crate) rounding_bytes: u64,
     /// Foreign frees awaiting batched shipment home. The free fast path
@@ -187,6 +190,7 @@ impl Heap {
             segments: core::ptr::null_mut(),
             partial: [None; NCLASSES],
             spans_in_class: [0; NCLASSES],
+            class_live: [0; NCLASSES],
             live_bytes: 0,
             rounding_bytes: 0,
             outbound: Outbound::new(),
@@ -444,6 +448,8 @@ impl Heap {
 
 #[path = "heap_claims.rs"]
 mod heap_claims;
+#[path = "heap_defrag.rs"]
+mod heap_defrag;
 #[path = "heap_free.rs"]
 mod heap_free;
 pub(crate) use heap_claims::Claim;
