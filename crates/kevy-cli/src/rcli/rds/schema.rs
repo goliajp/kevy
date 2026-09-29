@@ -91,7 +91,7 @@ fn sql_table(argv: &[Vec<u8>]) -> Result<Vec<u8>, Vec<u8>> {
         argv.iter().map(|w| String::from_utf8(w.clone()).ok()).collect();
     let words =
         words.ok_or_else(|| b"the declaration is not UTF-8, which SQL text needs".to_vec())?;
-    kevy_sql::table_ddl(&words).map(String::into_bytes).map_err(String::into_bytes)
+    kevy_sql::table_ddl(&words).map(String::into_bytes).map_err(|e| e.to_string().into_bytes())
 }
 
 /// `dump --schema [--table t]… [--as kevy|sql]`; the exit code. Tables
