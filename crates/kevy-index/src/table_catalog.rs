@@ -7,6 +7,33 @@ use crate::table_sidecar::{spec_from_line, spec_to_line};
 
 /// The table registry (mirrors [`crate::Catalog`]): named specs +
 /// sidecar text round-trip. Cap [`MAX_TABLES`].
+///
+/// ```
+/// use kevy_index::{CatalogError, Declared, TableCatalog, parse_table_declare};
+/// let users = parse_table_declare(&[
+///     b"TABLE.DECLARE", b"users", b"PREFIX", b"user:", b"PK", b"id", b"COLUMN", b"id", b"i64",
+///     b"COLUMN", b"age", b"i64", b"INDEX", b"age", b"range",
+/// ])?;
+/// let mut cat = TableCatalog::new();
+/// assert!(cat.is_empty());
+/// cat.create(users.clone())?;
+/// assert_eq!(cat.create(users), Err(CatalogError::Exists(Declared::Table)));
+/// assert_eq!(cat.len(), 1);
+/// assert_eq!(cat.get(b"users").map(|t| t.prefix.as_slice()), Some(&b"user:"[..]));
+/// assert_eq!(cat.iter().map(|t| t.name.as_slice()).collect::<Vec<_>>(), [&b"users"[..]]);
+///
+/// // the sidecar round-trips, and a damaged one is refused whole
+/// let text = cat.to_sidecar();
+/// assert!(text.starts_with("kevy-table-catalog v1\n"));
+/// let back = TableCatalog::from_sidecar(&text).expect("own sidecar parses");
+/// assert_eq!(back.get(b"users"), cat.get(b"users"));
+/// assert!(TableCatalog::from_sidecar("not a catalog").is_none());
+///
+/// assert!(cat.drop_table(b"users"));
+/// assert!(!cat.drop_table(b"users"), "already gone");
+/// assert!(cat.is_empty());
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Debug, Clone, Default)]
 pub struct TableCatalog {
     specs: Vec<TableSpec>,

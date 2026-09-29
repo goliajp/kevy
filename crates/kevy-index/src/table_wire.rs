@@ -7,6 +7,12 @@ use crate::table::{OrderPath, TableIndex, TableSpec, WindowSpec, dotted};
 use crate::table_error::{TableError, WindowBound};
 
 /// The usage line every malformed `TABLE.DECLARE` answers with.
+///
+/// ```
+/// use kevy_index::{TABLE_DECLARE_USAGE, parse_table_declare};
+/// let e = parse_table_declare(&[b"TABLE.DECLARE", b"t"]).unwrap_err();
+/// assert_eq!(e.to_wire(), TABLE_DECLARE_USAGE);
+/// ```
 pub const TABLE_DECLARE_USAGE: &str = "ERR usage: TABLE.DECLARE name PREFIX p PK col COLUMN name i64|f64|str [COLUMN ...] [INDEX col range|unique [VALUES col ...] [GLOBAL [SPLIT AT v ...]]] [ORDERPATH name ON col [DESC] [THEN col [DESC]] ... [GLOBAL [SPLIT AT 0xhex ...]]] [WINDOW col SPAN n BUCKET n] [AUTODECLARE n]";
 
 /// A table path declared `GLOBAL`: spread over the shards by value, as
@@ -18,16 +24,36 @@ pub const TABLE_DECLARE_USAGE: &str = "ERR usage: TABLE.DECLARE name PREFIX p PK
 /// let (_, global) = parse_table_declare_partitioned(&[
 ///     b"TABLE.DECLARE", b"t", b"PREFIX", b"t:", b"PK", b"id", b"COLUMN", b"id", b"i64",
 ///     b"COLUMN", b"at", b"i64", b"INDEX", b"at", b"range", b"GLOBAL",
-/// ])
-/// .unwrap();
+/// ])?;
 /// assert_eq!(global, [GlobalPath::new("t.at")]);
+/// # Ok::<(), kevy_index::TableError>(())
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct GlobalPath {
     /// The compiled index's name, `<table>.<column>` or `<table>.<orderpath>`.
+    ///
+    /// ```
+    /// use kevy_index::parse_table_declare_partitioned;
+    /// let (_, global) = parse_table_declare_partitioned(&[
+    ///     b"TABLE.DECLARE", b"t", b"PREFIX", b"t:", b"PK", b"id", b"COLUMN", b"id", b"i64",
+    ///     b"COLUMN", b"at", b"i64", b"ORDERPATH", b"recent", b"ON", b"at", b"DESC", b"GLOBAL",
+    /// ])?;
+    /// assert_eq!(global[0].path, b"t.recent");
+    /// # Ok::<(), kevy_index::TableError>(())
+    /// ```
     pub path: Vec<u8>,
     /// The `SPLIT AT` values as written; empty = sampled from the rows.
+    ///
+    /// ```
+    /// use kevy_index::parse_table_declare_partitioned;
+    /// let (_, global) = parse_table_declare_partitioned(&[
+    ///     b"TABLE.DECLARE", b"t", b"PREFIX", b"t:", b"PK", b"id", b"COLUMN", b"id", b"i64",
+    ///     b"COLUMN", b"at", b"i64", b"INDEX", b"at", b"range", b"GLOBAL", b"SPLIT", b"AT", b"10", b"20",
+    /// ])?;
+    /// assert_eq!(global[0].split_at, [b"10".to_vec(), b"20".to_vec()]);
+    /// # Ok::<(), kevy_index::TableError>(())
+    /// ```
     pub split_at: Vec<Vec<u8>>,
 }
 
@@ -59,6 +85,23 @@ fn is_table_kw(a: &[u8]) -> bool {
 /// duplicates …). A `GLOBAL` path is refused by name: this is the parse
 /// for a store whose paths are all local (see
 /// [`parse_table_declare_partitioned`]).
+///
+/// ```
+/// use kevy_index::{TableError, parse_table_declare};
+/// let t = parse_table_declare(&[
+///     b"TABLE.DECLARE", b"users", b"PREFIX", b"user:", b"PK", b"id", b"COLUMN", b"id", b"i64",
+///     b"COLUMN", b"age", b"i64", b"INDEX", b"age", b"range",
+/// ])?;
+/// assert_eq!((t.name.as_slice(), t.columns.len()), (&b"users"[..], 2));
+/// assert_eq!(t.compile()?[0].name(), b"users.age");
+///
+/// let global = parse_table_declare(&[
+///     b"TABLE.DECLARE", b"users", b"PREFIX", b"user:", b"PK", b"id", b"COLUMN", b"id", b"i64",
+///     b"COLUMN", b"age", b"i64", b"INDEX", b"age", b"range", b"GLOBAL",
+/// ]);
+/// assert_eq!(global, Err(TableError::GlobalNotHere));
+/// # Ok::<(), TableError>(())
+/// ```
 pub fn parse_table_declare(argv: &[&[u8]]) -> Result<TableSpec, TableError> {
     let (spec, globals) = parse_table_declare_partitioned(argv)?;
     if !globals.is_empty() {
@@ -78,11 +121,11 @@ pub fn parse_table_declare(argv: &[&[u8]]) -> Result<TableSpec, TableError> {
 /// let (t, global) = parse_table_declare_partitioned(&[
 ///     b"TABLE.DECLARE", b"u", b"PREFIX", b"u:", b"PK", b"id", b"COLUMN", b"id", b"i64",
 ///     b"COLUMN", b"age", b"i64", b"INDEX", b"age", b"range", b"GLOBAL", b"SPLIT", b"AT", b"40",
-/// ])
-/// .unwrap();
+/// ])?;
 /// assert_eq!(t.indexes.len(), 1);
 /// assert_eq!(global[0].path, b"u.age");
 /// assert_eq!(global[0].split_at, [b"40".to_vec()]);
+/// # Ok::<(), kevy_index::TableError>(())
 /// ```
 pub fn parse_table_declare_partitioned(
     argv: &[&[u8]],

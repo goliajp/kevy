@@ -13,12 +13,51 @@ use std::fmt::Write as _;
 
 /// The view registry (mirrors [`crate::Catalog`]): named specs +
 /// sidecar text round-trip. Cap 64.
+///
+/// ```
+/// use kevy_index::{CatalogError, Declared, IndexValue, Leaf, Tree, ViewCatalog, ViewSpec};
+///
+/// let adults = || Tree::Leaf(Leaf::new("age", IndexValue::I64(18), IndexValue::I64(200)));
+/// let mut views = ViewCatalog::new();
+/// assert!(views.is_empty());
+/// views.create(ViewSpec::new("adults", adults(), "age"))?;
+/// assert_eq!(
+///     views.create(ViewSpec::new("adults", adults(), "age")),
+///     Err(CatalogError::Exists(Declared::View))
+/// );
+/// assert_eq!(views.len(), 1);
+/// assert_eq!(views.iter().next().map(|v| v.order_by.clone()), Some(b"age".to_vec()));
+///
+/// // the sidecar text restores the same declarations
+/// let text = views.to_sidecar();
+/// let back = ViewCatalog::from_sidecar(&text).ok_or("sidecar did not parse")?;
+/// assert_eq!(back.get(b"adults"), views.get(b"adults"));
+/// assert!(ViewCatalog::from_sidecar("not a sidecar").is_none());
+///
+/// assert!(views.drop_view(b"adults"));
+/// assert!(!views.drop_view(b"adults"));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Debug, Clone, Default)]
 pub struct ViewCatalog {
     specs: Vec<ViewSpec>,
 }
 
 /// Hard cap on declared views.
+///
+/// ```
+/// use kevy_index::{CatalogError, Declared, IndexValue, Leaf, MAX_VIEWS, Tree, ViewCatalog, ViewSpec};
+/// let mut views = ViewCatalog::new();
+/// let spec = |i: usize| {
+///     let t = Tree::Leaf(Leaf::new("age", IndexValue::I64(0), IndexValue::I64(9)));
+///     ViewSpec::new(format!("v{i}"), t, "age")
+/// };
+/// for i in 0..MAX_VIEWS {
+///     views.create(spec(i))?;
+/// }
+/// assert_eq!(views.create(spec(MAX_VIEWS)), Err(CatalogError::Full(Declared::View)));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub const MAX_VIEWS: usize = 64;
 
 impl ViewCatalog {

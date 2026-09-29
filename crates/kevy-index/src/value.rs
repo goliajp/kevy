@@ -7,14 +7,49 @@ use std::cmp::Ordering;
 
 /// One indexed scalar. Ordering is total within a type; the catalog
 /// guarantees a segment only ever holds one variant.
+///
+/// Values enter through [`coerce`](Self::coerce), which applies the
+/// declared type to a field's raw bytes; a row whose field does not
+/// coerce is left out of the index.
+///
+/// ```
+/// use kevy_index::{IndexValue, ValType};
+///
+/// let age = IndexValue::coerce(ValType::I64, b" 41 ");
+/// assert_eq!(age, Some(IndexValue::I64(41)));
+/// assert_eq!(IndexValue::coerce(ValType::I64, b"forty"), None);
+/// assert_eq!(IndexValue::coerce(ValType::F64, b"NaN"), None);
+/// assert_eq!(IndexValue::parse_literal(ValType::F64, b"2.5"), Some(IndexValue::F64(2.5)));
+///
+/// assert_eq!(IndexValue::I64(3).as_f64(), 3.0);
+/// assert_eq!(IndexValue::Str(b"kyoto".to_vec()).approx_bytes(), 5);
+/// assert!(IndexValue::F64(-1.0) < IndexValue::F64(0.5));
+/// ```
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum IndexValue {
     /// `TYPE i64`.
+    ///
+    /// ```
+    /// use kevy_index::{IndexValue, ValType};
+    /// assert_eq!(IndexValue::coerce(ValType::I64, b"-7"), Some(IndexValue::I64(-7)));
+    /// ```
     I64(i64),
     /// `TYPE f64` (never NaN — coercion rejects it).
+    ///
+    /// ```
+    /// use kevy_index::{IndexValue, ValType};
+    /// assert_eq!(IndexValue::coerce(ValType::F64, b"1e3"), Some(IndexValue::F64(1000.0)));
+    /// ```
     F64(f64),
     /// `TYPE str` (raw bytes, memcmp order).
+    ///
+    /// ```
+    /// use kevy_index::{IndexValue, ValType};
+    /// let v = IndexValue::coerce(ValType::Str, b"Zed").unwrap();
+    /// assert_eq!(v, IndexValue::Str(b"Zed".to_vec()));
+    /// assert!(v < IndexValue::Str(b"apple".to_vec()), "bytes compare, not letters");
+    /// ```
     Str(Vec<u8>),
 }
 
@@ -180,6 +215,26 @@ impl IndexValue {
 /// `EQ` is the degenerate range `[v, v]`: stored values are totally
 /// ordered, so equality needs no second code path — and one path cannot
 /// disagree with itself about what a bound means.
+///
+/// ```
+/// use kevy_index::{ValType, ValueTest};
+///
+/// let adults = ValueTest::range(ValType::I64, b"18", b"64").unwrap();
+/// assert!(adults.passes(b"41"));
+/// assert!(!adults.passes(b"70"));
+/// assert!(!adults.passes(b"n/a"), "text in a numeric field is in no range");
+///
+/// let kyoto = ValueTest::eq(ValType::Str, b"kyoto").unwrap();
+/// assert!(kyoto.passes(b"kyoto") && !kyoto.passes(b"osaka"));
+///
+/// // query bounds may be time expressions on i64 fields
+/// let now = 1_000_000;
+/// let last_day = ValueTest::range_at(ValType::I64, b"@now-1d", b"@now", now).unwrap();
+/// assert!(last_day.passes(b"999000") && !last_day.passes(b"1"));
+/// assert!(ValueTest::eq_at(ValType::I64, b"@now", now).unwrap().passes(b"1000000"));
+///
+/// assert_eq!(ValueTest::range(ValType::I64, b"1", b"ten"), None);
+/// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct ValueTest {
     ty: ValType,
@@ -194,6 +249,20 @@ pub struct ValueTest {
 /// data, not an expression, and the write path never comes here).
 /// Non-i64 fields pass through untouched, so a str field matching a
 /// literal "@…" value stays unambiguous.
+///
+/// ```
+/// use kevy_index::{IndexValue, ValType, parse_literal_bound};
+///
+/// let now = 86_400; // seconds
+/// assert_eq!(parse_literal_bound(ValType::I64, b"@now", now), Some(IndexValue::I64(now)));
+/// assert_eq!(parse_literal_bound(ValType::I64, b"@now-1d", now), Some(IndexValue::I64(0)));
+/// assert_eq!(parse_literal_bound(ValType::I64, b"12", now), Some(IndexValue::I64(12)));
+/// // on a str field "@now" is just text
+/// assert_eq!(
+///     parse_literal_bound(ValType::Str, b"@now", now),
+///     Some(IndexValue::Str(b"@now".to_vec()))
+/// );
+/// ```
 pub fn parse_literal_bound(ty: ValType, raw: &[u8], now: i64) -> Option<IndexValue> {
     if ty == ValType::I64 && raw.first() == Some(&b'@') {
         return kevy_time::eval(raw, now).map(IndexValue::I64);
@@ -202,6 +271,15 @@ pub fn parse_literal_bound(ty: ValType, raw: &[u8], now: i64) -> Option<IndexVal
 }
 
 /// [`parse_literal_bound`]'s coercing sibling for FILTER bounds.
+///
+/// ```
+/// use kevy_index::{IndexValue, ValType, coerce_bound};
+///
+/// let now = 5_000;
+/// assert_eq!(coerce_bound(ValType::I64, b"@now", now), Some(IndexValue::I64(5_000)));
+/// assert_eq!(coerce_bound(ValType::F64, b" 0.25 ", now), Some(IndexValue::F64(0.25)));
+/// assert_eq!(coerce_bound(ValType::I64, b"soon", now), None);
+/// ```
 pub fn coerce_bound(ty: ValType, raw: &[u8], now: i64) -> Option<IndexValue> {
     if ty == ValType::I64 && raw.first() == Some(&b'@') {
         return kevy_time::eval(raw, now).map(IndexValue::I64);
@@ -256,6 +334,21 @@ impl ValueTest {
 /// `None` when the raw bytes are not of that type — a document whose
 /// stored value does not coerce has no place in the order, and is sorted
 /// as missing rather than guessed at.
+///
+/// ```
+/// use kevy_index::{ValType, order_key};
+///
+/// let neg = order_key(ValType::I64, b"-5").unwrap();
+/// let pos = order_key(ValType::I64, b"3").unwrap();
+/// assert!(neg < pos, "memcmp order matches numeric order");
+///
+/// let small = order_key(ValType::F64, b"-0.5").unwrap();
+/// let big = order_key(ValType::F64, b"10").unwrap();
+/// assert!(small < big);
+///
+/// assert_eq!(order_key(ValType::Str, b"abc"), Some(b"abc".to_vec()));
+/// assert_eq!(order_key(ValType::I64, b"abc"), None);
+/// ```
 pub fn order_key(ty: ValType, raw: &[u8]) -> Option<Vec<u8>> {
     match IndexValue::coerce(ty, raw)? {
         // Bytes already compare as themselves.
