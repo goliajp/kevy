@@ -28,16 +28,18 @@
 //! on `open` — restart-safe out of the box. Snapshot (`dump-0.rdb`) is
 //! loaded first if present; AOF (`aof-0.aof`) is replayed on top.
 //!
-//! ```no_run
+//! ```
 //! use kevy_embedded::{Store, Config};
 //!
 //! # fn main() -> kevy_embedded::KevyResult<()> {
-//! let s = Store::open(Config::default().with_persist("./data"))?;
+//! # let tmp = kevy_tmpdir::TmpDir::new("embedded-persist");
+//! # let data = tmp.path();
+//! let s = Store::open(Config::default().with_persist(data))?;
 //! s.set(b"counter", b"42")?;
 //! drop(s); // flushes AOF on drop
 //!
 //! // Next process: state survives.
-//! let s2 = Store::open(Config::default().with_persist("./data"))?;
+//! let s2 = Store::open(Config::default().with_persist(data))?;
 //! assert_eq!(s2.get(b"counter")?, Some(b"42".to_vec()));
 //! # Ok(())
 //! # }
@@ -243,6 +245,10 @@ pub use kevy_index::{IndexVerify, OrderPath, TableEnsure, TableIndex, TableSpec,
 pub use kevy_store::Value;
 pub use pubsub::{PubsubEvent, Subscription};
 pub use store::{Store, WeakStore};
+
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;
 
 /// Feed kevy's clocks on `wasm32-unknown-unknown`, which has neither
 /// `Instant` nor `SystemTime`. Without a host-fed clock, TTL operations and

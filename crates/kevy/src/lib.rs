@@ -92,6 +92,11 @@ pub use kevy_rt::Argv;
 pub use kevy_scope::OwnershipError;
 pub use kevy_store::Store as KeyspaceStore;
 pub use state::{KevyCommands, RuntimeState};
+
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;
+
 pub(crate) use tiering_boot::{resolve_tier_budget, wire_tiering};
 
 /// What to do with a connection after draining its buffered commands.
@@ -205,8 +210,10 @@ fn install_signal_handlers(_stop: Arc<AtomicBool>) {
 /// shard; the CLI resolves auto to `available_parallelism()` before
 /// calling in.
 ///
+/// This one is compiled but not run: `serve` never returns, it serves until
+/// SIGTERM / SIGINT / SHUTDOWN and then exits the process.
+///
 /// ```no_run
-/// // never returns: serves until SIGTERM / SIGINT / SHUTDOWN, then exits the process
 /// let mut cfg = kevy_config::Config::default();
 /// cfg.server.port = 6004;
 /// cfg.server.threads = 2;

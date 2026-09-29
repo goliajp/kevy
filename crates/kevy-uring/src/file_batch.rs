@@ -24,10 +24,55 @@ use crate::ring::IoUring;
 #[non_exhaustive]
 pub struct FileRead {
     /// Open file descriptor to read from.
+    ///
+    /// One batch can read from several files, one fd per read.
+    ///
+    /// ```
+    /// use std::os::fd::AsRawFd;
+    /// let dir = kevy_tmpdir::TmpDir::new("uring-fd");
+    /// std::fs::write(dir.path().join("a"), b"aaaa")?;
+    /// std::fs::write(dir.path().join("b"), b"bbbb")?;
+    /// let a = std::fs::File::open(dir.path().join("a"))?;
+    /// let b = std::fs::File::open(dir.path().join("b"))?;
+    /// let reads = [
+    ///     kevy_uring::FileRead::new(a.as_raw_fd(), 0, 4),
+    ///     kevy_uring::FileRead::new(b.as_raw_fd(), 0, 4),
+    /// ];
+    /// let (bufs, _) = kevy_uring::IoUring::new(8)?.read_file_batch(&reads)?;
+    /// assert_eq!(bufs, [b"aaaa".to_vec(), b"bbbb".to_vec()]);
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub fd: i32,
     /// Byte offset of the read within the file.
+    ///
+    /// ```
+    /// use std::os::fd::AsRawFd;
+    /// let dir = kevy_tmpdir::TmpDir::new("uring-offset");
+    /// std::fs::write(dir.path().join("f"), b"hello world")?;
+    /// let f = std::fs::File::open(dir.path().join("f"))?;
+    /// let reads = [kevy_uring::FileRead::new(f.as_raw_fd(), 6, 5)];
+    /// let (bufs, _) = kevy_uring::IoUring::new(8)?.read_file_batch(&reads)?;
+    /// assert_eq!(bufs[0], b"world");
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub offset: u64,
     /// Bytes to read — the completion must deliver exactly this many.
+    ///
+    /// A read that runs past the end of the file comes back short, which
+    /// the batch reports as an error rather than a truncated buffer.
+    ///
+    /// ```
+    /// use std::os::fd::AsRawFd;
+    /// use kevy_uring::FileRead;
+    /// let dir = kevy_tmpdir::TmpDir::new("uring-len");
+    /// std::fs::write(dir.path().join("f"), b"hello")?;
+    /// let f = std::fs::File::open(dir.path().join("f"))?;
+    /// let mut ring = kevy_uring::IoUring::new(8)?;
+    /// let (bufs, _) = ring.read_file_batch(&[FileRead::new(f.as_raw_fd(), 0, 3)])?;
+    /// assert_eq!(bufs[0], b"hel");
+    /// assert!(ring.read_file_batch(&[FileRead::new(f.as_raw_fd(), 0, 9)]).is_err());
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub len: u32,
 }
 

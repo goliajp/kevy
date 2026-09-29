@@ -164,15 +164,20 @@ impl Snapshot {
     /// The snapshot is frozen, so a clean system reports clean no
     /// matter what writers are doing.
     ///
-    /// ```no_run
+    /// ```
     /// # use kevy_embedded::{Store, Config};
-    /// # let store = Store::open(Config::default()).unwrap();
+    /// # let store = Store::open(Config::default())?;
+    /// store.set(b"user:1", b"ann")?;
+    /// store.set(b"email:user:1", b"1")?; // the one key user:1 implies
+    /// store.set(b"dept:gone", b"1")?;    // implied by no row
     /// let report = store.snapshot().reconcile(
     ///     b"user:",
     ///     &[b"email:", b"dept:"],
     ///     |key, _row| vec![[b"email:".as_slice(), key].concat()],
     /// );
-    /// assert!(report.is_clean());
+    /// assert!(!report.is_clean());
+    /// assert_eq!((report.missing_count, report.orphaned), (0, vec![b"dept:gone".to_vec()]));
+    /// # Ok::<(), kevy_embedded::KevyError>(())
     /// ```
     pub fn reconcile(
         &self,

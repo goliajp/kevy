@@ -57,9 +57,13 @@ impl ClusterClient {
     /// encrypted cluster port. Encrypted, every shard is reached through the
     /// encrypted port the server advertises, with the same keys.
     ///
-    /// ```no_run
-    /// let url = format!("kevys://10.0.0.5:6411?server_key={}", "ab".repeat(32));
+    /// ```
+    /// # mod doc { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/secure_node.rs")); }
+    /// # let (port, key) = doc::secure_node();
+    /// # let hex: String = key.iter().map(|b| format!("{b:02x}")).collect();
+    /// let url = format!("kevys://127.0.0.1:{port}?server_key={hex}");
     /// let mut c = kevy_client::ClusterClient::connect_url(&url)?;
+    /// assert_eq!(c.shard_count(), 1);
     /// c.ping()?;
     /// # Ok::<(), kevy_client::KevyError>(())
     /// ```

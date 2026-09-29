@@ -12,17 +12,23 @@ cargo add kevy-cluster-rw
 
 ## Example
 
-```rust,no_run
+```rust
 use kevy_cluster_rw::{ReadConsistency, ReadWriteClient};
+use kevy_resp::Reply;
+# mod doc { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/node.rs")); }
+# let nodes = [(); 3].map(|_| doc::node(kevy_testnet::free_port()));
+# let [primary, replica_a, replica_b] = [0, 1, 2].map(|i| nodes[i].port);
 
 let mut c = ReadWriteClient::connect(
-    ("primary.internal", 6004),
-    &[("replica-a.internal", 6004), ("replica-b.internal", 6004)],
+    ("127.0.0.1", primary),
+    &[("127.0.0.1", replica_a), ("127.0.0.1", replica_b)],
 )?;
 
 c.request(&[b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()])?; // → primary
 let v = c.request(&[b"GET".to_vec(), b"k".to_vec()])?;         // → some replica (round-robin)
 let fresh = c.request_read(&[b"GET".to_vec(), b"k".to_vec()], ReadConsistency::Primary)?;
+assert_eq!(fresh, Reply::Bulk(b"v".to_vec()));
+# assert_eq!(v, Reply::Nil); // these nodes do not replicate
 # Ok::<(), std::io::Error>(())
 ```
 

@@ -103,9 +103,13 @@ impl SecureUrl {
 /// Read a key pair from a file holding the private key as 64 hex
 /// characters, as `kevy keygen` writes it.
 ///
-/// ```no_run
-/// let me = kevy_resp_client::load_client_key(std::path::Path::new("/etc/app/kevy.key"))?;
-/// println!("{:02x?}", me.public());
+/// ```
+/// # let path = std::env::temp_dir().join(format!("kevy-client-{}.key", std::process::id()));
+/// # std::fs::write(&path, format!("{}\n", "07".repeat(32)))?;
+/// // `path` holds the 64 hex characters of a private key
+/// let me = kevy_resp_client::load_client_key(&path)?;
+/// assert_eq!(me.public(), kevy_resp_client::Keypair::from_secret([7; 32]).public());
+/// # std::fs::remove_file(&path)?;
 /// # Ok::<(), std::io::Error>(())
 /// ```
 pub fn load_client_key(path: &Path) -> io::Result<Keypair> {

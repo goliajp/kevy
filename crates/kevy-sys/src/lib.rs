@@ -33,25 +33,30 @@
 //!
 //! # Example
 //!
-//! ```no_run
+//! ```
 //! use kevy_sys::{Interest, Poller, Socket};
 //!
 //! # fn main() -> std::io::Result<()> {
-//! let listener = Socket::tcp_listen([127, 0, 0, 1], 6379, 1024)?;
+//! let listener = Socket::tcp_listen([127, 0, 0, 1], 0, 1024)?;
 //! listener.set_nonblocking()?;
 //!
 //! let poller = Poller::new()?;
 //! poller.add(listener.raw(), Interest::READ)?;
 //!
+//! // a client arrives, so the listener turns readable
+//! let _client = std::net::TcpStream::connect(("127.0.0.1", listener.local_port()?))?;
+//!
 //! let mut events = Vec::new();
 //! poller.wait(&mut events, Some(1000))?; // block up to 1s
+//! let mut accepted = 0;
 //! for ev in &events {
 //!     if ev.fd == listener.raw() && ev.readable {
 //!         let conn = listener.accept()?;
 //!         conn.set_nodelay()?;
-//!         // ... read/write `conn` ...
+//!         accepted += 1;
 //!     }
 //! }
+//! assert_eq!(accepted, 1);
 //! # Ok(())
 //! # }
 //! ```
@@ -106,6 +111,10 @@ pub use socket::Socket;
 pub use term::{RawMode, terminal_columns};
 pub use wait::wait_readable;
 pub use waker::Waker;
+
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;
 
 // ---- Poller ----------------------------------------------------------------
 

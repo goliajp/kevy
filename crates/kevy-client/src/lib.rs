@@ -1,13 +1,21 @@
 //! kevy-client — unified KV facade so downstream code can switch between
 //! in-process embedded and TCP-server backends with one URL string.
 //!
-//! ```no_run
-//! use kevy_client::Connection;
+//! ```
+//! use kevy_client::{Connection, KevyResult};
+//! # mod doc { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/kevy.rs")); }
+//! # let port = kevy_testnet::free_port();
+//! # let _kevy = doc::kevy(port);
 //!
 //! // Same business code regardless of backend:
-//! let mut conn = Connection::connect(std::env::var("MY_KEVY_URL").unwrap().as_str())?;
-//! conn.set(b"hello", b"world")?;
-//! assert_eq!(conn.get(b"hello")?, Some(b"world".to_vec()));
+//! fn business(url: &str) -> KevyResult<()> {
+//!     let mut conn = Connection::connect(url)?;
+//!     conn.set(b"hello", b"world")?;
+//!     assert_eq!(conn.get(b"hello")?, Some(b"world".to_vec()));
+//!     Ok(())
+//! }
+//! business("mem://")?;                             // in-process
+//! business(&format!("kevy://127.0.0.1:{port}"))?; // a kevy server
 //! # Ok::<(), kevy_client::KevyError>(())
 //! ```
 //!
@@ -79,6 +87,10 @@ pub use kevy_embedded::{
     ZAggregate,
 };
 pub use kevy_resp::Reply;
+
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;
 
 pub(crate) use reply::{
     array_to_bulks, num_f64, num_u64, store_err, string, unexpected, vec2, vec3,

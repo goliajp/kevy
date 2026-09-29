@@ -111,6 +111,11 @@ pub use kevy_noise::Keypair;
 pub use secure::AsyncSecure;
 pub use transport::{AsyncRead, AsyncTransport, AsyncWrite, read, write_all};
 
+// the README's examples talk to the tokio stand-in server
+#[cfg(all(doctest, feature = "tokio"))]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;
+
 const _: () = {
     const fn send_sync<T: Send + Sync>() {}
     send_sync::<AsyncConnection>();

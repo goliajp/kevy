@@ -15,10 +15,13 @@
 //! so the locking guarantee transactions add doesn't exist as a
 //! separate concept. Call methods directly instead.
 //!
-//! ```no_run
+//! ```
 //! use kevy_client::Connection;
+//! # mod doc { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/kevy.rs")); }
+//! # let port = kevy_testnet::free_port();
+//! # let _kevy = doc::kevy(port);
 //!
-//! let mut conn = Connection::connect("kevy://localhost:6379")?;
+//! let mut conn = Connection::connect(&format!("kevy://localhost:{port}"))?;
 //! conn.watch(&[b"counter"])?;
 //! let mut txn = conn.multi()?;
 //! txn.incr(b"counter")?

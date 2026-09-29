@@ -42,3 +42,7 @@ kevy-testnet = { path = "../kevy-testnet" }
 # dev-dependency on kevy-client; the normal-dep graph stays acyclic.
 kevy = { path = "../kevy", version = "6.4.0" }
 kevy-rt = { path = "../kevy-rt", version = "6.4.0" }
+# the documentation's in-process servers: a cluster needs the server's
+# config, and an encrypted port stand-in runs the Noise responder
+kevy-config = { path = "../kevy-config", version = "6.4.0" }
+kevy-noise = { path = "../kevy-noise", version = "6.4.0" }
