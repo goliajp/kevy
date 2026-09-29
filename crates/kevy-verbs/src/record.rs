@@ -39,6 +39,23 @@ use kevy_store::{Store, StreamId};
 
 use crate::Effect;
 
+/// Whether a group read or claim found its consumer or created it. A
+/// created consumer is recorded with the time it was made, so a replay
+/// does not make it at its own.
+///
+/// ```
+/// use kevy_verbs::aof::Consumer;
+///
+/// assert_ne!(Consumer::Existing, Consumer::Created);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Consumer {
+    /// The consumer was already in the group.
+    Existing,
+    /// The command created the consumer.
+    Created,
+}
+
 /// What a claim did, for a caller that records it: see the module notes
 /// for the frames it becomes.
 ///
@@ -46,23 +63,33 @@ use crate::Effect;
 /// let c = kevy_verbs::aof::Claim::default();
 /// assert!(c.is_empty(), "a claim that took, dropped and created nothing");
 /// ```
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Claim {
     taken: Vec<StreamId>,
     dropped: Vec<StreamId>,
-    new_consumer: bool,
+    consumer: Consumer,
+}
+
+impl Default for Claim {
+    /// The claim that took and dropped nothing, by a consumer that
+    /// already existed.
+    fn default() -> Self {
+        Claim::new(Vec::new(), Vec::new(), Consumer::Existing)
+    }
 }
 
 impl Claim {
     /// A claim that took `taken`, dropped `dropped` from the pending
-    /// list, and created its consumer when `new_consumer`.
+    /// list, by a `consumer` it found or created.
     ///
     /// ```
-    /// let c = kevy_verbs::aof::Claim::new(Vec::new(), Vec::new(), true);
+    /// use kevy_verbs::aof::{Claim, Consumer};
+    ///
+    /// let c = Claim::new(Vec::new(), Vec::new(), Consumer::Created);
     /// assert!(!c.is_empty());
     /// ```
-    pub fn new(taken: Vec<StreamId>, dropped: Vec<StreamId>, new_consumer: bool) -> Claim {
-        Claim { taken, dropped, new_consumer }
+    pub fn new(taken: Vec<StreamId>, dropped: Vec<StreamId>, consumer: Consumer) -> Claim {
+        Claim { taken, dropped, consumer }
     }
 
     /// Whether the claim changed nothing, so has nothing to record.
@@ -71,7 +98,7 @@ impl Claim {
     /// assert!(kevy_verbs::aof::Claim::default().is_empty());
     /// ```
     pub fn is_empty(&self) -> bool {
-        self.taken.is_empty() && self.dropped.is_empty() && !self.new_consumer
+        self.taken.is_empty() && self.dropped.is_empty() && self.consumer == Consumer::Existing
     }
 }
 
@@ -123,11 +150,13 @@ pub fn deferred_frames<A: ArgvView + ?Sized>(
         }
         Effect::RecordClaim(c) => claim_frames(store, args, c),
         Effect::RecordSeen => seen_frame(store, &args[2], &args[3], &args[4]).into_iter().collect(),
-        Effect::RecordRead(prev, made) => {
-            crate::record_read::read_frames(store, args, &[(*prev, *made)])
+        Effect::RecordRead(prev, consumer) => {
+            crate::record_read::read_frames(store, args, &[(*prev, *consumer)])
         }
         Effect::RecordReads(marks) => crate::record_read::read_frames(store, args, marks),
-        _ => Vec::new(),
+        Effect::Read | Effect::Write | Effect::Unchanged | Effect::Record(_) | Effect::Skip => {
+            Vec::new()
+        }
     }
 }
 
@@ -140,7 +169,7 @@ fn claim_frames<A: ArgvView + ?Sized>(store: &Store, args: &A, c: &Claim) -> Vec
         frames.push(f);
     }
     // first, so the XCLAIM frames find the consumer and leave its time be
-    if c.new_consumer {
+    if c.consumer == Consumer::Created {
         frames.splice(0..0, seen_frame(store, key, group, consumer));
     }
     frames
