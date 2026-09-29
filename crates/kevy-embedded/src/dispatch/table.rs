@@ -62,8 +62,9 @@ fn cmd_ensure(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     match kevy_index::parse_table_declare(&refs) {
         Err(e) => encode_error(out, &e),
         Ok(spec) => match s.table_ensure(spec) {
-            Ok(kevy_index::TableEnsure::Created) => out.extend_from_slice(b"+OK\r\n"),
             Ok(kevy_index::TableEnsure::Unchanged) => out.extend_from_slice(b"+UNCHANGED\r\n"),
+            // created, or any later outcome that leaves the table as declared
+            Ok(_) => out.extend_from_slice(b"+OK\r\n"),
             Err(e) => kevy_err(out, &e),
         },
     }

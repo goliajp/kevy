@@ -9,6 +9,19 @@
 //! a scoped thread-local pointer set inside `LuaHost::eval` and cleared
 //! right after. The dispatch closure consults the pointer.
 //!
+//! ```
+//! use kevy_lua_host::LuaHost;
+//!
+//! // the host state the script's redis.call reaches: here, a call counter
+//! let mut host = LuaHost::<u32>::new(|calls, _argv, _read_only| {
+//!     *calls += 1;
+//!     b":7\r\n".to_vec()
+//! });
+//! let mut calls = 0;
+//! host.eval(&mut calls, b"return redis.call('GET', KEYS[1])", &[b"k"], &[]);
+//! assert_eq!(calls, 1);
+//! ```
+//!
 //! ## Safety contract (read this if you touch the unsafe)
 //!
 //! - `LuaHost<T>` parameterises over the host context type `T` (kevy's
@@ -17,14 +30,15 @@
 //!   dispatch closure does `with_current::<T>(|t| dispatch_fn(t, argv, ro))`.
 //!   The closure carries NO captured state of its own — it just reads
 //!   the scoped pointer.
-//! - `LuaHost::eval(&mut self, &mut T, …)` (and friends) set
-//!   `CURRENT_T = ctx as *mut T` BEFORE delegating to
-//!   `Bridge::eval`, and CLEAR `CURRENT_T = null` after. A `Drop`
-//!   guard ensures the clear even on panic.
-//! - Inside the dispatch closure, `with_current` dereferences
-//!   `CURRENT_T` exactly once per call. The pointer is only ever
-//!   non-null while the outer `&mut T` is borrowed mutably by
-//!   `LuaHost::eval`, so no aliasing exists.
+//! - `LuaHost::eval(&mut self, &mut T, …)` (and friends) install
+//!   `(ctx as *mut T, TypeId::of::<T>())` BEFORE delegating to
+//!   `Bridge::eval`, and restore the previous slot after. A `Drop`
+//!   guard ensures the restore even on panic.
+//! - `with_current::<T>` dereferences the pointer only when the slot's
+//!   type id is `T`'s, and empties the slot while its closure runs. The
+//!   pointer is only ever installed while the outer `&mut T` is borrowed
+//!   mutably by `LuaHost::eval`, and lent to one closure at a time, so
+//!   no aliasing exists.
 //! - kevy is single-threaded per-shard — every shard owns its own
 //!   `LuaHost<T>` and runs on a dedicated thread. The thread-local
 //!   gives correct isolation without any synchronisation overhead.
@@ -37,25 +51,23 @@
 #![warn(missing_docs)]
 
 use kevy_lua::{Bridge, FlushMode, Reply, ScriptSha1};
+use std::any::TypeId;
 use std::cell::Cell;
 use std::marker::PhantomData;
 
-/// Type-erased host context pointer. Set per-call from `LuaHost::eval`
-/// and friends, cleared by the [`ResetCurrent`] RAII guard. The
-/// `usize` type is just "address-sized opaque": we cast to `*mut T`
-/// inside [`with_current`] under the safety contract documented at
-/// the crate root.
-#[doc(hidden)]
-pub type CurrentTag = usize;
+/// The host context installed for the running eval: its address and the
+/// type it was installed as. `None` outside an eval, and while
+/// [`with_current`] has the context lent out.
+type Current = Option<(usize, TypeId)>;
 
 thread_local! {
-    /// Per-thread scoped pointer to the host context, encoded as a
-    /// raw address.
-    static CURRENT: Cell<CurrentTag> = const { Cell::new(0) };
+    /// Per-thread scoped pointer to the host context.
+    static CURRENT: Cell<Current> = const { Cell::new(None) };
 }
 
+/// Puts back what [`CURRENT`] held before, on every exit path.
 struct ResetCurrent {
-    prev: CurrentTag,
+    prev: Current,
 }
 
 impl Drop for ResetCurrent {
@@ -64,14 +76,9 @@ impl Drop for ResetCurrent {
     }
 }
 
-fn set_current<T>(ctx: &mut T) -> ResetCurrent {
-    let new_addr = ctx as *mut T as usize;
-    let prev = CURRENT.with(|c| {
-        let p = c.get();
-        c.set(new_addr);
-        p
-    });
-    ResetCurrent { prev }
+fn set_current<T: 'static>(ctx: &mut T) -> ResetCurrent {
+    let now = Some((ctx as *mut T as usize, TypeId::of::<T>()));
+    ResetCurrent { prev: CURRENT.with(|c| c.replace(now)) }
 }
 
 thread_local! {
@@ -113,20 +120,38 @@ pub fn with_thread_host<T: 'static, R>(
 }
 
 /// Run `f` with a mutable borrow of the currently-set host context.
-/// Returns `None` if `LuaHost::eval` isn't on the stack.
+///
+/// Returns `None` when no `LuaHost::eval` is on the stack, when the
+/// running eval's context is not a `T`, or when an enclosing
+/// `with_current` already holds it — the context is lent to one caller
+/// at a time, so two `&mut T` to it never exist.
 ///
 /// Used inside the dispatch fn passed to [`LuaHost::new`] — call once
 /// per `redis.call`, do the kevy dispatch, return RESP bytes.
+///
+/// ```
+/// use kevy_lua_host::{LuaHost, with_current};
+/// assert_eq!(with_current::<u32, _>(|n| *n), None, "no eval is running");
+/// let mut host = LuaHost::<u32>::new(|n, _argv, _ro| {
+///     *n += 1;
+///     assert_eq!(with_current::<u32, _>(|_| ()), None, "already lent to this call");
+///     b"+OK\r\n".to_vec()
+/// });
+/// let mut calls = 0u32;
+/// host.eval(&mut calls, b"return redis.call('PING')", &[], &[]);
+/// assert_eq!(calls, 1);
+/// ```
 pub fn with_current<T: 'static, R>(f: impl FnOnce(&mut T) -> R) -> Option<R> {
-    let addr = CURRENT.with(Cell::get);
-    if addr == 0 {
+    let (addr, ty) = CURRENT.with(Cell::get)?;
+    if ty != TypeId::of::<T>() {
         return None;
     }
-    // SAFETY: see crate-level docs. The pointer was installed by
-    // `set_current(&mut T)` whose `&mut T` borrow is held for the
-    // duration of `LuaHost::eval` (which is the only call path that
-    // reaches user dispatch code). Single-threaded per shard, so no
-    // aliasing across threads either.
+    let _lent = ResetCurrent { prev: CURRENT.with(|c| c.replace(None)) };
+    // SAFETY: see crate-level docs. The address was installed by
+    // `set_current::<T>` (the type id matched) from a `&mut T` that
+    // `LuaHost::eval` holds for as long as the address is installed, and
+    // the slot is empty while `f` runs, so this is the only live `&mut T`.
+    // Single-threaded per shard, so no aliasing across threads either.
     let r = unsafe { &mut *(addr as *mut T) };
     Some(f(r))
 }
@@ -138,7 +163,7 @@ pub fn with_current<T: 'static, R>(f: impl FnOnce(&mut T) -> R) -> Option<R> {
 /// `KeyspaceStore`, …). It must outlive every `LuaHost::eval` call
 /// (trivially true: kevy holds the `&mut T` while delegating).
 #[derive(Debug)]
-pub struct LuaHost<T: 'static> {
+pub struct LuaHost<T> {
     bridge: Bridge,
     _marker: PhantomData<fn() -> T>,
 }
@@ -344,14 +369,31 @@ mod tests {
     fn nested_eval_calls_restore_outer_context() {
         // Set CURRENT to a sentinel address, call host.eval (which
         // pushes its own), confirm the sentinel comes back after.
-        let sentinel_addr: usize = 0xdead_beef;
-        CURRENT.with(|c| c.set(sentinel_addr));
+        let sentinel = Some((0xdead_beef, TypeId::of::<u8>()));
+        CURRENT.with(|c| c.set(sentinel));
         let mut host = make_host();
         let mut store = ToyStore::default();
         let _ = host.eval(&mut store, b"return 1", &[], &[]);
         let restored = CURRENT.with(Cell::get);
-        assert_eq!(restored, sentinel_addr);
-        CURRENT.with(|c| c.set(0));
+        assert_eq!(restored, sentinel);
+        CURRENT.with(|c| c.set(None));
+    }
+
+    #[test]
+    fn a_context_is_lent_only_as_the_type_it_was_installed_as() {
+        let mut store = ToyStore::default();
+        let _guard = set_current(&mut store);
+        assert_eq!(with_current::<u64, _>(|_| ()), None, "a different type gets nothing");
+        assert_eq!(with_current::<ToyStore, _>(|_| ()), Some(()));
+    }
+
+    #[test]
+    fn a_lent_context_is_not_lent_twice() {
+        let mut store = ToyStore::default();
+        let _guard = set_current(&mut store);
+        let nested = with_current::<ToyStore, _>(|_| with_current::<ToyStore, _>(|_| ()));
+        assert_eq!(nested, Some(None), "the inner borrow finds the slot empty");
+        assert_eq!(with_current::<ToyStore, _>(|_| ()), Some(()), "and it is back afterwards");
     }
 }
 

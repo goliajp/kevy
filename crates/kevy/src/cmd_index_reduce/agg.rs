@@ -31,8 +31,10 @@ pub(super) fn reduce_agg(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> ExtensionReduc
     let (observed, taus) = collect_partials(chunks, by);
     // rank observed by score; θ = k-th best observed score
     let mut ranked: Vec<(Vec<u8>, kevy_index::GroupStats)> = observed.into_iter().collect();
-    ranked.sort_by(|a, b| score(&b.1, by).total_cmp(&score(&a.1, by)).then_with(|| a.0.cmp(&b.0)));
-    let theta = ranked.get(limit - 1).map_or(f64::NEG_INFINITY, |(_, st)| score(st, by));
+    ranked.sort_by(|a, b| {
+        b.1.rank_score(by).total_cmp(&a.1.rank_score(by)).then_with(|| a.0.cmp(&b.0))
+    });
+    let theta = ranked.get(limit - 1).map_or(f64::NEG_INFINITY, |(_, st)| st.rank_score(by));
     // uncertainty: could anything UNSEEN (or unseen mass of a seen
     // group) displace the k-th? Additive: bound = Σ τ; max-type:
     // bound = max τ.
@@ -56,7 +58,7 @@ pub(super) fn reduce_agg(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> ExtensionReduc
     let mut argv2: Vec<Vec<u8>> = vec![
         b"AGG.FETCH".to_vec(),
         argv[1].clone(),
-        format!("BY={} LIMIT={}", tag_of(by), limit).into_bytes(),
+        format!("BY={} LIMIT={}", by.tag(), limit).into_bytes(),
     ];
     argv2.extend(cands);
     continuation(argv2)
@@ -65,10 +67,10 @@ pub(super) fn reduce_agg(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> ExtensionReduc
 /// GROUP (one group): chunks are exact partials already — merge & emit.
 fn reduce_agg_single(chunks: &[Vec<u8>]) -> Vec<u8> {
     let mut out = Vec::new();
-    let mut st = kevy_index::GroupStats { count: 0, sum: 0.0, min: None, max: None };
+    let mut st = kevy_index::GroupStats::default();
     for c in chunks {
         for (_g, part) in decode_agg_chunk(c) {
-            kevy_index::merge_group(&mut st, &part);
+            st.merge(&part);
         }
     }
     encode_array_len(&mut out, 5);
@@ -100,12 +102,12 @@ fn collect_partials(
         let rows = decode_agg_chunk(&c[..c.len().saturating_sub(1)]);
         let exhausted = c.last() == Some(&1);
         if !exhausted {
-            let tau = rows.last().map_or(f64::NEG_INFINITY, |(_, st)| score(st, by));
+            let tau = rows.last().map_or(f64::NEG_INFINITY, |(_, st)| st.rank_score(by));
             taus.push(tau);
         }
         for (g, part) in rows {
             match observed.get_mut(&g) {
-                Some(st) => kevy_index::merge_group(st, &part),
+                Some(st) => st.merge(&part),
                 None => {
                     observed.insert(g, part);
                 }
@@ -130,9 +132,9 @@ fn fetch_candidates(
         .iter()
         .filter(|(_, st)| {
             let upper = if additive {
-                score(st, by) + taus.iter().sum::<f64>()
+                st.rank_score(by) + taus.iter().sum::<f64>()
             } else {
-                score(st, by).max(unseen_bound)
+                st.rank_score(by).max(unseen_bound)
             };
             upper >= theta
         })
@@ -160,7 +162,7 @@ pub(super) fn reduce_agg_fetch(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> 
     for c in chunks {
         for (g, part) in decode_agg_chunk(c) {
             match merged.get_mut(&g) {
-                Some(st) => kevy_index::merge_group(st, &part),
+                Some(st) => st.merge(&part),
                 None => {
                     merged.insert(g, part);
                 }
@@ -185,25 +187,6 @@ pub(super) fn reduce_agg_fetch(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> 
         }
     }
     out
-}
-
-/// Ranking score, oriented bigger-is-better for every metric.
-fn score(st: &kevy_index::GroupStats, by: kevy_index::AggBy) -> f64 {
-    match by {
-        kevy_index::AggBy::Count => st.count as f64,
-        kevy_index::AggBy::Sum => st.sum,
-        kevy_index::AggBy::Max => st.max.as_ref().map_or(f64::NEG_INFINITY, |v| v.as_f64()),
-        kevy_index::AggBy::Min => st.min.as_ref().map_or(f64::NEG_INFINITY, |v| -v.as_f64()),
-    }
-}
-
-fn tag_of(by: kevy_index::AggBy) -> &'static str {
-    match by {
-        kevy_index::AggBy::Count => "count",
-        kevy_index::AggBy::Sum => "sum",
-        kevy_index::AggBy::Min => "min",
-        kevy_index::AggBy::Max => "max",
-    }
 }
 
 /// Internal DEPTH arg (iterative deepening), default 1.
@@ -262,10 +245,9 @@ fn decode_agg_chunk(c: &[u8]) -> Vec<(Vec<u8>, kevy_index::GroupStats)> {
                 _ => mpos += 1,
             }
         }
-        rows.push((
-            g,
-            kevy_index::GroupStats { count, sum, min: vals[0].clone(), max: vals[1].clone() },
-        ));
+        let mut st = kevy_index::GroupStats::default();
+        (st.count, st.sum, st.min, st.max) = (count, sum, vals[0].clone(), vals[1].clone());
+        rows.push((g, st));
     }
     rows
 }

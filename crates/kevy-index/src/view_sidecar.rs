@@ -209,7 +209,7 @@ impl ViewSpec {
             "{} {} {} {} {} {} {}",
             esc(&self.name),
             esc(&self.order_by),
-            u8::from(self.desc),
+            u8::from(self.order == kevy_text::SortOrder::Desc),
             mode,
             k,
             via,
@@ -233,14 +233,11 @@ impl ViewSpec {
         // Re-tokenize the tree tail with ')' handling: split keeps
         // parens attached; tree_de trims them.
         let tree = tree_de_root(&toks, &mut pos)?;
-        Some(ViewSpec {
-            name: unesc(toks[0])?,
-            order_by: unesc(toks[1])?,
-            desc: toks[2] == "1",
-            mode,
-            via,
-            tree,
-        })
+        let order =
+            if toks[2] == "1" { kevy_text::SortOrder::Desc } else { kevy_text::SortOrder::Asc };
+        let v =
+            ViewSpec::new(unesc(toks[0])?, tree, unesc(toks[1])?).with_order(order).with_mode(mode);
+        Some(ViewSpec { via, ..v })
     }
 }
 

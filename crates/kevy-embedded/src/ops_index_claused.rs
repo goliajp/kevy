@@ -50,13 +50,13 @@ impl ValueFilter<'_> {
 /// One `FILTER` predicate resolved against the spec: the stored-value
 /// position it reads, and the test built with that field's DECLARED type.
 pub(crate) fn value_test(spec: &IndexSpec, f: &ValueFilter<'_>) -> KevyResult<(usize, ValueTest)> {
-    let stored: Vec<&[u8]> = spec.values.iter().map(|v| v.name.as_slice()).collect();
+    let stored: Vec<&[u8]> = spec.values().iter().map(|v| v.name.as_slice()).collect();
     let pos = spec
-        .values
+        .values()
         .iter()
         .position(|v| v.name == f.field())
         .ok_or_else(|| unknown_field("FILTER", f.field(), "store", &stored))?;
-    let ty = spec.values[pos].ty;
+    let ty = spec.values()[pos].ty;
     // FILTER bounds speak the `@` time expressions on i64 fields —
     // one grammar across both faces (and, through this shared
     // resolver, the embedded Rust API too).
@@ -80,7 +80,7 @@ pub(crate) fn value_test(spec: &IndexSpec, f: &ValueFilter<'_>) -> KevyResult<(u
 /// derivation for a refused [`resolve`]. Checked in the clause order
 /// [`resolve`] resolves in, so it names the same field the error does.
 fn unstored_field(spec: &IndexSpec, opts: &ScalarQueryOpts<'_>) -> Option<Vec<u8>> {
-    let stored = |f: &[u8]| spec.values.iter().any(|v| v.name == f);
+    let stored = |f: &[u8]| spec.values().iter().any(|v| v.name == f);
     for f in opts.filters {
         if !stored(f.field()) {
             return Some(f.field().to_vec());
@@ -164,20 +164,20 @@ type GatheredPages = (Vec<(ScalarHit, ())>, Vec<Vec<FacetBucket>>);
 /// What the spec-dependent clauses resolve to.
 struct Resolved {
     filters: Vec<(usize, ValueTest)>,
-    sort: Option<(usize, bool, ValType)>,
+    sort: Option<(usize, kevy_index::SortOrder, ValType)>,
     distinct: Option<(usize, ValType)>,
     facets: Vec<(usize, ValType)>,
 }
 
 /// A clause's named stored-value field position + declared type.
 fn value_field(spec: &IndexSpec, clause: &str, field: &[u8]) -> KevyResult<(usize, ValType)> {
-    let stored: Vec<&[u8]> = spec.values.iter().map(|v| v.name.as_slice()).collect();
+    let stored: Vec<&[u8]> = spec.values().iter().map(|v| v.name.as_slice()).collect();
     let pos = spec
-        .values
+        .values()
         .iter()
         .position(|v| v.name == field)
         .ok_or_else(|| unknown_field(clause, field, "store", &stored))?;
-    Ok((pos, spec.values[pos].ty))
+    Ok((pos, spec.values()[pos].ty))
 }
 
 fn resolve(spec: &IndexSpec, opts: &ScalarQueryOpts<'_>) -> KevyResult<Resolved> {
@@ -186,7 +186,8 @@ fn resolve(spec: &IndexSpec, opts: &ScalarQueryOpts<'_>) -> KevyResult<Resolved>
     let sort = match opts.sort {
         Some((field, desc)) => {
             let (pos, ty) = value_field(spec, "SORT", field)?;
-            Some((pos, desc, ty))
+            let order = if desc { kevy_index::SortOrder::Desc } else { kevy_index::SortOrder::Asc };
+            Some((pos, order, ty))
         }
         None => None,
     };
@@ -218,22 +219,10 @@ impl Store {
         if prefix.is_empty() {
             return Err(KevyError::InvalidInput("empty prefix".into()));
         }
-        let spec = IndexSpec {
-            name: name.to_vec(),
-            prefix: prefix.to_vec(),
-            fields: vec![kevy_index::FieldSpec::new(field.to_vec())],
-            ty,
-            kind,
-            max_bytes: 0,
-            ann: None,
-            group_by: None,
-            with_positions: false,
-            values: values
-                .iter()
-                .map(|(n, t)| kevy_index::ValueSpec { name: n.to_vec(), ty: *t })
-                .collect(),
-            composite: None,
-        };
+        let values =
+            values.iter().map(|(n, t)| kevy_index::ValueSpec::new(*n).with_type(*t)).collect();
+        let spec = IndexSpec::builder(name, prefix, kind, ty).with_field(field).with_values(values);
+        let spec = crate::ops_index::built(spec)?;
         self.register_spec(spec)
     }
 
@@ -256,21 +245,14 @@ impl Store {
         let offset = opts.offset.min(10_000);
         let spec = self.claused_spec(name)?;
         let r = self.claused_resolve(name, &spec, &opts)?;
-        let clauses = ScalarClauses {
-            filters: &r.filters,
-            sort: r.sort,
-            distinct: r.distinct,
-            facets: &r.facets,
-            fetch: limit + offset,
-        };
+        let mut clauses = ScalarClauses::new(limit + offset).with_filters(&r.filters);
+        clauses = clauses.with_facets(&r.facets);
+        (clauses.sort, clauses.distinct) = (r.sort, r.distinct);
         let (all, mut facets) = self.gather_claused(name, min, max, cursor, &clauses)?;
-        let sort_desc = r.sort.map(|(_, desc, _)| desc);
-        let all = merge_claused(all, sort_desc, r.distinct.is_some(), offset, limit);
+        let all = merge_claused(all, r.sort.map(|(_, order, _)| order), offset, limit);
         sort_facets(&mut facets);
         let next = (!opts.selects() && all.len() == limit)
-            .then(|| {
-                all.last().map(|(h, ())| Cursor { value: h.value.clone(), key: h.key.clone() })
-            })
+            .then(|| all.last().map(|(h, ())| Cursor::new(h.value.clone(), h.key.clone())))
             .flatten();
         self.observe_hit(name);
         Ok(ScalarPage {
@@ -311,7 +293,7 @@ impl Store {
             #[cfg(not(target_arch = "wasm32"))]
             if let Some(w) = win.filter(|w| w.has_cold()) {
                 total += w
-                    .cold_claused_count(spec.ty, min, max, &r.filters)
+                    .cold_claused_count(spec.ty(), min, max, &r.filters)
                     .map_err(|e| KevyError::Io(std::io::Error::other(e)))?;
             }
             #[cfg(target_arch = "wasm32")]
@@ -369,7 +351,7 @@ impl Store {
             let mut g = lock_write(shard);
             let inner = &mut *g;
             sync_segs(&self.indexes, &mut inner.idx_segs, &mut inner.store);
-            if let Some((_spec, seg)) = inner.idx_segs.segs.iter().find(|(s, _)| s.name == name) {
+            if let Some((_spec, seg)) = inner.idx_segs.segs.iter().find(|(s, _)| s.name() == name) {
                 found = true;
                 #[cfg(not(target_arch = "wasm32"))]
                 if let Some(w) = inner.idx_segs.window_of(name) {
@@ -385,7 +367,7 @@ impl Store {
                 #[cfg(not(target_arch = "wasm32"))]
                 if let Some(w) = inner.idx_segs.window_of(name).filter(|w| w.has_cold()) {
                     let (chits, cfacets) = w
-                        .cold_claused(_spec.ty, min, max, cursor, clauses)
+                        .cold_claused(_spec.ty(), min, max, cursor, clauses)
                         .map_err(|e| KevyError::Io(std::io::Error::other(e)))?;
                     all.extend(chits.into_iter().map(|h| (h, ())));
                     fold_facets(&mut facets, cfacets);

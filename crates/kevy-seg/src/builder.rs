@@ -72,7 +72,8 @@ impl SegBuilder {
     /// assert_eq!(meta.records, 1);
     /// # std::fs::remove_dir_all(&dir).ok();
     /// ```
-    pub fn create(path: &Path) -> Result<Self, SegError> {
+    pub fn create(path: impl AsRef<Path>) -> Result<Self, SegError> {
+        let path = path.as_ref();
         let f = File::create(path)?;
         Ok(Self {
             w: BufWriter::with_capacity(1 << 20, f),

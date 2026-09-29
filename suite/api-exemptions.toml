@@ -18,3 +18,40 @@ why = "an analysis callers supply for their own pipelines or tests; the trait do
 rule = "enum-exhaustive"
 item = "kevy_text::segment::segment_opts::SortOrder"
 why = "the two directions of a total order; no third can exist, and callers match both"
+
+# layer 1
+
+[[exempt]]
+rule = "enum-exhaustive"
+item = "kevy_index::describe::Described"
+why = "the describe reply tree mirrors the two RESP reply shapes it is encoded as (bulk string, array); the server and the embedded dispatch each encode every variant, so a new node kind must fail to compile there instead of falling into a wildcard arm with no encoding"
+
+[[exempt]]
+rule = "enum-exhaustive"
+item = "kevy_index::composite::RowDerivation"
+why = "one classification drives both the write path and TABLE.VERIFY's per-cause counters (indexed, absent, coerce-failed, oversize); every consumer matches each cause, so a new cause must fail to compile until it gets its own counter instead of being folded into an existing one, which is how absent rows once read as coerce failures"
+
+[[exempt]]
+rule = "enum-exhaustive"
+item = "kevy_index::view::Tree"
+why = "the view composition algebra (a leaf, AND, OR, DIFF); every walker — evaluation, membership, explain rendering — must handle each operator, and a wildcard arm has no correct answer for an operator it does not know, so a new one must fail to compile in every walker"
+
+[[exempt]]
+rule = "enum-exhaustive"
+item = "kevy_map::raw_entry::RawEntryMut"
+why = "a key is either present or absent in the map, so Occupied and Vacant are the only states an entry can be in; callers match both arms, as with std's hash_map::Entry"
+
+[[exempt]]
+rule = "get-prefix"
+item = "kevy_map::map::KevyMap::get_mut"
+why = "the collection lookup by key with mutable access, named as std's HashMap::get_mut; it is not a field getter"
+
+[[exempt]]
+rule = "get-prefix"
+item = "kevy_map::raw_entry::RawOccupiedEntryMut::get_mut"
+why = "mutable access to the entry's value, named as std's OccupiedEntry::get_mut beside get and into_mut; it is not a field getter"
+
+[[exempt]]
+rule = "trait-open"
+item = "kevy_vlog::record::CompactOwner"
+why = "implemented by whoever holds the value-log refs (kevy-store's keyspace) so compaction can ask liveness and repoint moved records; the trait docs state the contract (is_live answers from current refs, moved repoints before returning)"

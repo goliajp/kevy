@@ -67,7 +67,7 @@ fn parse_leaf<A: ArgvView + ?Sized>(
     // per the index's declared type.
     let index = tok.to_vec();
     let spec_ty = icat
-        .and_then(|c| c.get(&index).map(|(s, _)| s.ty))
+        .and_then(|c| c.get(&index).map(|(s, _)| s.ty()))
         .ok_or("ERR view leaf references unknown index")?;
     let shape = args.get(i + 1).ok_or("ERR truncated view leaf")?;
     if shape.eq_ignore_ascii_case(b"RANGE") {
@@ -77,12 +77,12 @@ fn parse_leaf<A: ArgvView + ?Sized>(
         let max =
             IndexValue::parse_literal(spec_ty, args.get(i + 3).ok_or("ERR truncated view leaf")?)
                 .ok_or("ERR leaf max does not coerce to the index type")?;
-        Ok((Tree::Leaf(Leaf { index, min, max }), i + 4))
+        Ok((Tree::Leaf(Leaf::new(index, min, max)), i + 4))
     } else if shape.eq_ignore_ascii_case(b"EQ") {
         let v =
             IndexValue::parse_literal(spec_ty, args.get(i + 2).ok_or("ERR truncated view leaf")?)
                 .ok_or("ERR leaf value does not coerce to the index type")?;
-        Ok((Tree::Leaf(Leaf { index, min: v.clone(), max: v }), i + 3))
+        Ok((Tree::Leaf(Leaf::new(index, v.clone(), v)), i + 3))
     } else {
         Err(CmdError::Wire("ERR view leaf shape must be RANGE|EQ"))
     }
@@ -148,7 +148,7 @@ pub(crate) fn cmd_view_create<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out
         return encode_error(out, "ERR ORDER BY references unknown index");
     }
     i += 3;
-    let (desc, mut mode, top_k, via) = match parse_create_opts(args, i) {
+    let (order, mut mode, top_k, via) = match parse_create_opts(args, i) {
         Ok(opts) => opts,
         Err(e) => return encode_error(out, e.as_wire()),
     };
@@ -157,7 +157,9 @@ pub(crate) fn cmd_view_create<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out
     } else if top_k != 0 {
         return encode_error(out, "ERR TOPK requires MODE materialized");
     }
-    let spec = ViewSpec { name: args[1].to_vec(), tree, order_by, desc, mode, via };
+    let mut spec =
+        ViewSpec::new(args[1].to_vec(), tree, order_by).with_order(order).with_mode(mode);
+    spec.via = via;
     let mut cat = ctx.state.catalogs.view().map(|c| (*c).clone()).unwrap_or_default();
     match cat.create(spec) {
         Ok(()) => {
@@ -169,20 +171,20 @@ pub(crate) fn cmd_view_create<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out
     }
 }
 
-/// `(desc, mode, top_k, via)` from the optional `VIEW.CREATE` tail.
-type CreateOpts = (bool, ViewMode, u32, Option<Vec<u8>>);
+/// `(order, mode, top_k, via)` from the optional `VIEW.CREATE` tail.
+type CreateOpts = (kevy_index::SortOrder, ViewMode, u32, Option<Vec<u8>>);
 
 /// Parse the optional `VIEW.CREATE` tail starting at `i`:
 /// `[DESC] [MODE virtual|materialized] [TOPK k] [VIA tpl]`.
 fn parse_create_opts<A: ArgvView + ?Sized>(args: &A, mut i: usize) -> Result<CreateOpts, CmdError> {
-    let mut desc = false;
+    let mut order = kevy_index::SortOrder::Asc;
     let mut mode = ViewMode::Virtual;
     let mut top_k = 0u32;
     let mut via = None;
     while i < args.len() {
         let t = &args[i];
         if t.eq_ignore_ascii_case(b"DESC") {
-            desc = true;
+            order = kevy_index::SortOrder::Desc;
             i += 1;
         } else if t.eq_ignore_ascii_case(b"MODE") {
             let m = match args.get(i + 1) {
@@ -217,7 +219,7 @@ fn parse_create_opts<A: ArgvView + ?Sized>(args: &A, mut i: usize) -> Result<Cre
             return Err(CmdError::Wire("ERR syntax error"));
         }
     }
-    Ok((desc, mode, top_k, via))
+    Ok((order, mode, top_k, via))
 }
 
 /// `VIEW.DROP <name>`.

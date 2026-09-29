@@ -192,16 +192,16 @@ fn main() -> kevy_embedded::KevyResult<()> {
                      IndexKind::Range)?;
 
     let tree = ViewTree::And(
-        Box::new(ViewTree::Leaf(ViewLeaf {
-            index: b"j_pri".to_vec(),
-            min: IndexValue::I64(0),
-            max: IndexValue::I64(100),
-        })),
-        Box::new(ViewTree::Leaf(ViewLeaf {
-            index: b"j_state".to_vec(),
-            min: IndexValue::Str(b"ready".to_vec()),
-            max: IndexValue::Str(b"ready".to_vec()),   // EQ = same min/max
-        })),
+        Box::new(ViewTree::Leaf(ViewLeaf::new(
+            "j_pri",
+            IndexValue::I64(0),
+            IndexValue::I64(100),
+        ))),
+        Box::new(ViewTree::Leaf(ViewLeaf::new(
+            "j_state",
+            IndexValue::Str(b"ready".to_vec()),
+            IndexValue::Str(b"ready".to_vec()),   // EQ = same min/max
+        ))),
     );
     store.view_create(b"ready_jobs", tree, b"j_pri", /*desc*/ true,
                       ViewMode::Materialized { top_k: 100 })?;

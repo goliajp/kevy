@@ -83,7 +83,7 @@ fn hash_body(fields: &[(&[u8], &[u8])]) -> Vec<u8> {
 fn seal_segment(data_dir: &Path, file: &str, rows: &[RowSpec<'_>]) {
     let segs = data_dir.join("segs-0");
     std::fs::create_dir_all(&segs).unwrap();
-    let mut b = kevy_seg::SegBuilder::create(&segs.join(file)).unwrap();
+    let mut b = kevy_seg::SegBuilder::create(segs.join(file)).unwrap();
     let mut sorted: Vec<_> = rows.to_vec();
     sorted.sort_by(|a, b| a.0.cmp(b.0));
     for (k, fields) in &sorted {
@@ -91,14 +91,7 @@ fn seal_segment(data_dir: &Path, file: &str, rows: &[RowSpec<'_>]) {
     }
     let meta = b.finish().unwrap();
     let mut m = kevy_seg::Manifest::open(&segs).unwrap();
-    m.add(kevy_seg::ManifestEntry {
-        file: file.to_string(),
-        meta: b"rowcold:74".to_vec(),
-        min_key: meta.min_key,
-        max_key: meta.max_key,
-        records: meta.records,
-    })
-    .unwrap();
+    m.add(kevy_seg::ManifestEntry::new(file, meta).with_meta(b"rowcold:74".to_vec())).unwrap();
 }
 
 fn append_frame(data_dir: &Path, args: &[&[u8]]) {

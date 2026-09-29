@@ -24,6 +24,19 @@
 //!   ref back ([`CompactOwner::moved`]). Every compaction bumps
 //!   [`Vlog::epoch`] — the O(1) "did my ColdRef move?" check.
 //!
+//! ```
+//! use kevy_vlog::Vlog;
+//!
+//! let dir = kevy_tmpdir::TmpDir::new("vlog-crate-doc");
+//! let mut log = Vlog::open(dir.path(), 1 << 20)?;
+//! let at = log.append(b"user:1", b"a cold value")?;
+//! assert_eq!(log.read(at)?, (b"user:1".to_vec(), b"a cold value".to_vec()));
+//! // the owner overwrote or deleted the key: its bytes are now dead weight
+//! log.note_dead(at);
+//! assert_eq!(log.stats().live_bytes, 0);
+//! # Ok::<(), std::io::Error>(())
+//! ```
+//!
 //! Record layout: `[body_len u32-LE][crc32c u32-LE][key_len u32-LE][key]
 //! [payload]`, CRC over the body (everything after the 8-byte header).
 //! A [`VlogRef`] names `(file_id, header offset, body_len)`.
@@ -107,6 +120,17 @@ mod record;
 pub use accounting::CompressionStats;
 pub use record::{CompactOwner, VlogFile, VlogRef, verify_image};
 
+// Send and Sync are part of the public contract: a change that loses
+// either fails to compile here rather than in a caller.
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<Vlog>();
+    send_sync::<VlogFile>();
+    send_sync::<VlogRef>();
+    send_sync::<VlogStats>();
+    send_sync::<CompressionStats>();
+};
+
 /// Owner-side per-file accounting (bytes are header-inclusive).
 #[derive(Debug)]
 struct FileState {
@@ -117,7 +141,8 @@ struct FileState {
 }
 
 /// Aggregate gauges for INFO (`vlog_size` / `vlog_dead_bytes` feeders).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct VlogStats {
     /// Files in the log, including the one currently being appended to.
     pub files: usize,
@@ -173,7 +198,8 @@ impl Vlog {
     /// assert_eq!(v.stats().files, 1);
     /// assert_eq!(v.stats().live_bytes, 0);
     /// ```
-    pub fn open(dir: &Path, rotate_bytes: u64) -> io::Result<Self> {
+    pub fn open(dir: impl AsRef<Path>, rotate_bytes: u64) -> io::Result<Self> {
+        let dir = dir.as_ref();
         fs::create_dir_all(dir)?;
         for entry in fs::read_dir(dir)? {
             let entry = entry?;

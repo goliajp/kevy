@@ -27,6 +27,11 @@ impl CipherState {
         CipherState { k: Some(k), n: 0 }
     }
 
+    /// Messages this cipher has sealed or opened: the next nonce.
+    pub(crate) fn count(&self) -> u64 {
+        self.n
+    }
+
     /// Encrypt `buf` in place and append the tag; without a key, leave it.
     pub(crate) fn encrypt(&mut self, ad: &[u8], buf: &mut Vec<u8>) -> Result<(), Error> {
         let Some(k) = self.k else { return Ok(()) };

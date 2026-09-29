@@ -9,7 +9,14 @@
 //! that goes.
 
 /// Per-index verification counters, one row of `TABLE.VERIFY`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// ```
+/// let mut v = kevy_index::IndexVerify::new("t.at");
+/// v.entries = 3;
+/// assert_eq!((v.name.as_slice(), v.entries, v.drift), (&b"t.at"[..], 3, 0));
+/// ```
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct IndexVerify {
     /// Compiled index name (`<table>.<column-or-orderpath>`).
     pub name: Vec<u8>,
@@ -49,8 +56,26 @@ pub struct IndexVerify {
     pub checked: u64,
 }
 
+impl IndexVerify {
+    /// All-zero counters for compiled index `name`.
+    ///
+    /// ```
+    /// assert_eq!(kevy_index::IndexVerify::new("t.x").checked, 0);
+    /// ```
+    pub fn new(name: impl Into<Vec<u8>>) -> IndexVerify {
+        IndexVerify { name: name.into(), ..IndexVerify::default() }
+    }
+}
+
 /// The whole `TABLE.VERIFY` answer.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// ```
+/// let mut t = kevy_index::TableVerify::default();
+/// t.per_index.push(kevy_index::IndexVerify::new("t.at"));
+/// assert_eq!((t.per_index.len(), t.spot_rows), (1, 0));
+/// ```
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct TableVerify {
     /// One row per compiled index of the table.
     pub per_index: Vec<IndexVerify>,
@@ -62,7 +87,8 @@ pub struct TableVerify {
 }
 
 /// What `table_ensure` found (the boot verb — see the embedded docs).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum TableEnsure {
     /// The table did not exist; it was declared and its indexes built.
     Created,

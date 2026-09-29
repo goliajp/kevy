@@ -16,8 +16,11 @@
 
 use core::fmt::Write as _;
 
-use crate::catalog::{AnnSpec, Catalog, FieldSpec, IndexKind, IndexSpec, ValType, ValueSpec};
+use kevy_text::SortOrder;
+
+use crate::IndexSpecBuilder;
 use crate::composite::CompositeCol;
+use crate::{AnnSpec, Catalog, FieldSpec, IndexKind, IndexSpec, ValType, ValueSpec};
 
 impl Catalog {
     /// Serialize to the sidecar text form (one line per index:
@@ -155,16 +158,28 @@ fn unhex(s: &str) -> Option<Vec<u8>> {
     (0..s.len()).step_by(2).map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok()).collect()
 }
 
+/// The six columns every line shares, as a builder for `kind`. The spec
+/// is built through [`IndexSpec::builder`] like any other, so a line
+/// whose parts disagree is refused here rather than admitted.
+fn base(parts: &[&str], version: u8, kind: IndexKind) -> Option<IndexSpecBuilder> {
+    let ty = ValType::parse(parts[3].as_bytes())?;
+    let b = IndexSpec::builder(unesc(parts[0])?, unesc(parts[1])?, kind, ty)
+        .with_fields(col_to_fields(parts[2], version >= 2)?)
+        .with_max_bytes(parts[5].parse().ok()?);
+    Some(b)
+}
+
 fn spec_from_line(line: &str, version: u8) -> Option<IndexSpec> {
     let parts: Vec<&str> = line.split('\t').collect();
     if !(parts.len() == 6 || parts.len() == 7) {
         return None;
     }
     let kind = IndexKind::parse(parts[4].as_bytes())?;
-    let (ann, group_by, with_positions) = if parts.len() == 7 {
+    let mut b = base(&parts, version, kind)?;
+    if parts.len() == 7 {
         match kind {
-            IndexKind::Ann => (Some(ann_col(parts[6])?), None, false),
-            IndexKind::Agg => (None, Some(unesc(parts[6])?), false),
+            IndexKind::Ann => b = b.with_ann(ann_col(parts[6])?),
+            IndexKind::Agg => b = b.with_group_by(unesc(parts[6])?),
             // A text index's 7th column carries its own flags; older
             // sidecars never wrote one, so it only appears from v3 on.
             IndexKind::Text if version >= 3 => return text_spec(&parts, version),
@@ -181,22 +196,8 @@ fn spec_from_line(line: &str, version: u8) -> Option<IndexSpec> {
             }
             _ => return None,
         }
-    } else {
-        (None, None, false)
-    };
-    Some(IndexSpec {
-        name: unesc(parts[0])?,
-        prefix: unesc(parts[1])?,
-        fields: col_to_fields(parts[2], version >= 2)?,
-        ty: ValType::parse(parts[3].as_bytes())?,
-        kind,
-        max_bytes: parts[5].parse().ok()?,
-        ann,
-        group_by,
-        with_positions,
-        values: Vec::new(),
-        composite: None,
-    })
+    }
+    b.build().ok()
 }
 
 /// A composite line's 7th column: `comp` head, then one `name:ty:a|d`
@@ -209,7 +210,7 @@ fn composite_col_text(cols: &[CompositeCol]) -> String {
             ",{}:{}:{}",
             esc_field(&c.name),
             c.ty.tag(),
-            if c.desc { 'd' } else { 'a' }
+            if c.order == SortOrder::Desc { 'd' } else { 'a' }
         );
     }
     out
@@ -225,34 +226,16 @@ fn composite_spec(parts: &[&str], version: u8) -> Option<IndexSpec> {
             if segs.len() != 3 {
                 return None;
             }
-            let desc = match segs[2] {
-                "a" => false,
-                "d" => true,
+            let order = match segs[2] {
+                "a" => SortOrder::Asc,
+                "d" => SortOrder::Desc,
                 _ => return None,
             };
-            Some(CompositeCol {
-                name: unesc(segs[0])?,
-                ty: ValType::parse(segs[1].as_bytes())?,
-                desc,
-            })
+            let ty = ValType::parse(segs[1].as_bytes())?;
+            Some(CompositeCol::new(unesc(segs[0])?, ty).with_order(order))
         })
         .collect::<Option<Vec<_>>>()?;
-    if cols.is_empty() {
-        return None;
-    }
-    Some(IndexSpec {
-        name: unesc(parts[0])?,
-        prefix: unesc(parts[1])?,
-        fields: col_to_fields(parts[2], version >= 2)?,
-        ty: ValType::parse(parts[3].as_bytes())?,
-        kind: IndexKind::Range,
-        max_bytes: parts[5].parse().ok()?,
-        ann: None,
-        group_by: None,
-        with_positions: false,
-        values: Vec::new(),
-        composite: Some(cols),
-    })
+    base(parts, version, IndexKind::Range)?.with_composite(cols).build().ok()
 }
 
 /// An ANN line's 7th column: `dim,distance,m,ef`.
@@ -261,31 +244,19 @@ fn ann_col(col: &str) -> Option<AnnSpec> {
     if nums.len() != 4 {
         return None;
     }
-    Some(AnnSpec {
-        dim: nums[0].parse().ok()?,
-        distance: nums[1].parse().ok()?,
-        m: nums[2].parse().ok()?,
-        ef: nums[3].parse().ok()?,
-    })
+    let a = AnnSpec::new(nums[0].parse().ok()?)
+        .with_distance(nums[1].parse().ok()?)
+        .with_m(nums[2].parse().ok()?)
+        .with_ef(nums[3].parse().ok()?);
+    Some(a)
 }
 
 /// A text index's line, whose 7th column is its own flags rather than
 /// the ann / agg forms the shared path handles.
 fn text_spec(parts: &[&str], version: u8) -> Option<IndexSpec> {
     let (with_positions, values) = parse_text_col(parts[6])?;
-    Some(IndexSpec {
-        name: unesc(parts[0])?,
-        prefix: unesc(parts[1])?,
-        fields: col_to_fields(parts[2], version >= 2)?,
-        ty: ValType::parse(parts[3].as_bytes())?,
-        kind: IndexKind::Text,
-        max_bytes: parts[5].parse().ok()?,
-        ann: None,
-        group_by: None,
-        with_positions,
-        values,
-        composite: None,
-    })
+    let b = base(parts, version, IndexKind::Text)?;
+    b.with_positions(with_positions).with_values(values).build().ok()
 }
 
 /// The `VALUES`-bearing 7th column (text v3+, scalar kinds v5+), or
@@ -316,19 +287,7 @@ fn scalar_spec(parts: &[&str], version: u8) -> Option<IndexSpec> {
     if with_positions || values.is_empty() {
         return None;
     }
-    Some(IndexSpec {
-        name: unesc(parts[0])?,
-        prefix: unesc(parts[1])?,
-        fields: col_to_fields(parts[2], version >= 2)?,
-        ty: ValType::parse(parts[3].as_bytes())?,
-        kind: IndexKind::parse(parts[4].as_bytes())?,
-        max_bytes: parts[5].parse().ok()?,
-        ann: None,
-        group_by: None,
-        with_positions: false,
-        values,
-        composite: None,
-    })
+    base(parts, version, IndexKind::parse(parts[4].as_bytes())?)?.with_values(values).build().ok()
 }
 
 /// The inverse of [`values_col`]. `esc_field` escapes commas, so splitting

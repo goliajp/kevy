@@ -20,20 +20,15 @@ fn run(s: &Store, argv: &[&[u8]]) -> Vec<u8> {
 }
 
 fn table(name: &[u8], windowed: bool) -> TableSpec {
-    TableSpec {
-        name: name.to_vec(),
-        prefix: b"ev:".to_vec(),
-        pk: b"id".to_vec(),
-        columns: vec![(b"id".to_vec(), ValType::Str), (b"at".to_vec(), ValType::I64)],
-        indexes: vec![TableIndex {
-            column: b"at".to_vec(),
-            kind: IndexKind::Range,
-            values: vec![],
-        }],
-        orderpaths: vec![],
-        window: windowed.then_some(WindowSpec { column: b"at".to_vec(), span: 100, bucket: 10 }),
-        autodeclare: 0,
-        auto_added: vec![],
+    {
+        let mut t = TableSpec::default();
+        t.name = name.to_vec();
+        t.prefix = b"ev:".to_vec();
+        t.pk = b"id".to_vec();
+        t.columns = vec![(b"id".to_vec(), ValType::Str), (b"at".to_vec(), ValType::I64)];
+        t.indexes = vec![TableIndex::new(b"at".to_vec(), IndexKind::Range)];
+        t.window = windowed.then_some(WindowSpec::new(b"at".to_vec(), 100, 10));
+        t
     }
 }
 

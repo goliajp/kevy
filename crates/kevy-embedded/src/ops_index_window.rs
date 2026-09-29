@@ -26,16 +26,16 @@ fn evict_and_slide(
     drives_rows: bool,
 ) -> bool {
     // Exactly ONE windowed access path per table drives row eviction
-    // (kevy_index::window_driver); every other one slides only its
+    // (`TableCatalog::is_window_driver`); every other one slides only its
     // own tree.
     if drives_rows
         && let Some(rows) = win.pending_rows(seg)
-        && !evict_rows(&spec.name, &rows, store, aof, segs_dir)
+        && !evict_rows(spec.name(), &rows, store, aof, segs_dir)
     {
         return false;
     }
-    let moved = win.slide(&spec.name, seg, segs_dir).unwrap_or_else(|e| {
-        eprintln!("kevy-embedded: window slide '{}': {e}", String::from_utf8_lossy(&spec.name));
+    let moved = win.slide(spec.name(), seg, segs_dir).unwrap_or_else(|e| {
+        eprintln!("kevy-embedded: window slide '{}': {e}", String::from_utf8_lossy(spec.name()));
         false
     });
     // Same bulk-free contract as the server tick: ask glibc to return
@@ -120,20 +120,20 @@ pub(crate) fn window_tick(
         let seg_list = &mut segs.segs;
         let windows = &mut segs.windows;
         for (spec, seg) in seg_list.iter_mut() {
-            reconcile_window(windows, &cat, &spec.name);
-            let Some(win) = windows.iter_mut().find(|(n, _)| n == &spec.name).map(|(_, w)| w)
+            reconcile_window(windows, &cat, spec.name());
+            let Some(win) = windows.iter_mut().find(|(n, _)| n == spec.name()).map(|(_, w)| w)
             else {
                 continue;
             };
-            let drives = kevy_index::window_driver(&cat, &spec.name);
+            let drives = cat.is_window_driver(spec.name());
             #[cfg(feature = "text")]
             if drives && let Some(rows) = win.pending_rows(seg) {
-                batches.push((table_of(&spec.name).to_vec(), rows));
+                batches.push((table_of(spec.name()).to_vec(), rows));
             }
             moved |= evict_and_slide(win, spec, seg, store, aof, segs_dir, drives);
         }
         // An index dropped from the catalog drops its window with it.
-        let names: Vec<Vec<u8>> = seg_list.iter().map(|(s, _)| s.name.clone()).collect();
+        let names: Vec<Vec<u8>> = seg_list.iter().map(|(s, _)| s.name().to_vec()).collect();
         windows.retain(|(n, _)| names.contains(n));
     }
     #[cfg(feature = "text")]
@@ -153,7 +153,7 @@ fn reconcile_window(
     cat: &kevy_index::TableCatalog,
     name: &[u8],
 ) {
-    let want = kevy_index::window_for(cat, name);
+    let want = cat.window_for(name);
     let at = windows.iter().position(|(n, _)| n == name);
     match (at, want) {
         (Some(i), None) => {
@@ -177,7 +177,7 @@ fn reconcile_cold_text(segs: &mut ShardSegs, cat: &kevy_index::TableCatalog) {
     let want: Vec<(Vec<u8>, bool)> = segs
         .text
         .iter()
-        .map(|(spec, _)| (spec.name.clone(), kevy_index::window_text_for(cat, spec)))
+        .map(|(spec, _)| (spec.name().to_vec(), cat.is_windowed_text(spec)))
         .collect();
     for (name, wanted) in &want {
         let at = segs.cold_text.iter().position(|(n, _)| n == name);
@@ -205,18 +205,18 @@ fn freeze_text_batches(
     let mut changed = false;
     for (table, keys) in batches {
         for (spec, ts) in segs.text.iter_mut() {
-            if table_of(&spec.name) != table {
+            if table_of(spec.name()) != table {
                 continue;
             }
-            let Some((_, dir)) = segs.cold_text.iter_mut().find(|(n, _)| n == &spec.name) else {
+            let Some((_, dir)) = segs.cold_text.iter_mut().find(|(n, _)| n == spec.name()) else {
                 continue;
             };
-            match dir.freeze_batch(ts, &spec.name, keys, segs_dir) {
+            match dir.freeze_batch(ts, spec.name(), keys, segs_dir) {
                 Ok(true) => changed = true,
                 Ok(false) => {}
                 Err(e) => eprintln!(
                     "kevy-embedded: text freeze '{}': {e}",
-                    String::from_utf8_lossy(&spec.name)
+                    String::from_utf8_lossy(spec.name())
                 ),
             }
         }

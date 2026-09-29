@@ -139,7 +139,7 @@ mod enabled {
     impl ColdRef {
         #[inline]
         pub(crate) fn vref(self) -> VlogRef {
-            VlogRef { file_id: self.file_id, offset: self.offset, len: self.len }
+            VlogRef::new(self.file_id, self.offset, self.len)
         }
     }
 

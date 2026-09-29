@@ -94,6 +94,13 @@ pub struct Initiator {
     e: Keypair,
 }
 
+// public keys only: the handshake state holds chaining keys
+impl core::fmt::Debug for Initiator {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Initiator").field("local_static", &self.s.public()).finish_non_exhaustive()
+    }
+}
+
 impl Initiator {
     /// Write the first handshake message to a responder whose static
     /// public key is `remote_static`. `ephemeral` must be fresh for every
@@ -172,6 +179,12 @@ pub struct Responder {
     e: Keypair,
     re: [u8; 32],
     rs: [u8; 32],
+}
+
+impl core::fmt::Debug for Responder {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Responder").field("remote_static", &self.rs).finish_non_exhaustive()
+    }
 }
 
 impl Responder {

@@ -34,11 +34,9 @@ use kevy_embedded::{AnnSpec, Config, Store};
 fn main() -> kevy_embedded::KevyResult<()> {
     let store = Store::open(Config::default())?;
 
-    // m / ef of 0 select the defaults (16 / 200);
+    // AnnSpec::new starts at M 16 / EF 200;
     // distance: 0 = cosine, 1 = l2, 2 = ip.
-    store.idx_create_ann(b"embs", b"doc:", b"v", AnnSpec {
-        dim: 4, distance: 0, m: 0, ef: 0,
-    })?;
+    store.idx_create_ann(b"embs", b"doc:", b"v", AnnSpec::new(4).with_distance(0))?;
 
     let v1: Vec<u8> = [0.1f32, 0.2, 0.3, 0.4]
         .iter().flat_map(|f| f.to_le_bytes()).collect();

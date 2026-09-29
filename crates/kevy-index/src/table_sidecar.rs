@@ -117,11 +117,11 @@ fn orderpaths_field(s: &TableSpec) -> String {
         .iter()
         .map(|op| {
             let mut e = tesc(&op.name);
-            for (col, desc) in &op.on {
+            for (col, o) in &op.on {
                 e.push(':');
                 e.push_str(&tesc(col));
                 e.push(':');
-                e.push(if *desc { 'd' } else { 'a' });
+                e.push(if *o == kevy_text::SortOrder::Desc { 'd' } else { 'a' });
             }
             e
         })
@@ -214,13 +214,13 @@ fn orderpath_from_entry(e: &str) -> Option<OrderPath> {
         .chunks(2)
         .map(|pair| {
             let col = tunesc(pair[0])?;
-            let desc = match pair[1] {
-                "a" => false,
-                "d" => true,
+            let order = match pair[1] {
+                "a" => kevy_text::SortOrder::Asc,
+                "d" => kevy_text::SortOrder::Desc,
                 _ => return None,
             };
-            Some((col, desc))
+            Some((col, order))
         })
         .collect::<Option<Vec<_>>>()?;
-    Some(OrderPath { name, on })
+    Some(OrderPath::new(name, on))
 }

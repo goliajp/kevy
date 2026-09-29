@@ -8,7 +8,7 @@
 //! (u64 each), then the held list and the owed list, each `n u32` then
 //! `n × (len u32, key, partition u16, hash u64)`.
 
-use kevy_index::{IndexSpec, value_order_bytes};
+use kevy_index::IndexSpec;
 use kevy_store::Store;
 
 use super::global::{GlobalRole, derive, entry_hash};
@@ -25,7 +25,7 @@ pub(crate) type Placed = (Vec<u8>, u16, u64);
 pub(crate) fn verify_chunk(ctx: &Ctx<'_>, store: &mut Store, name: &[u8]) -> Option<Vec<u8>> {
     let mut st = ctx.shard.indexes.borrow_mut();
     super::refresh(ctx, &mut st, store);
-    let si = st.idx.iter().find(|si| si.spec.name == name)?;
+    let si = st.idx.iter().find(|si| si.spec.name() == name)?;
     let g = si.global.as_ref()?;
     if !g.ready() {
         return Some(vec![crate::cmd_index_query::ST_BUILDING]);
@@ -49,7 +49,7 @@ fn held(g: &GlobalRole) -> (Vec<Placed>, (u64, u64, u64)) {
     let (mut out, mut stats) = (Vec::new(), (0, 0, 0));
     for (p, seg) in &g.owned {
         seg.each_entry(|k, v| {
-            let h = entry_hash(&value_order_bytes(v), seg.stored_row(k));
+            let h = entry_hash(&v.order_bytes(), seg.stored_row(k));
             out.push((k.to_vec(), *p as u16, h));
         });
         let s = seg.stats();
@@ -61,13 +61,13 @@ fn held(g: &GlobalRole) -> (Vec<Placed>, (u64, u64, u64)) {
 /// The entries this shard's rows call for, derived from the rows as they
 /// are now, and how many rows under the prefix derive none.
 fn owed(store: &mut Store, spec: &IndexSpec, g: &GlobalRole) -> (Vec<Placed>, u64) {
-    let mut pat = spec.prefix.clone();
+    let mut pat = spec.prefix().to_vec();
     pat.push(b'*');
     let (mut out, mut excluded) = (Vec::new(), 0);
     for key in store.collect_keys(Some(&pat), None) {
         match derive(store, spec, &key) {
             Some((v, vals)) => {
-                let enc = value_order_bytes(&v);
+                let enc = v.order_bytes();
                 let p = g.part.partition_of(&enc) as u16;
                 out.push((key, p, entry_hash(&enc, vals.iter().map(|v| v.as_deref()))));
             }

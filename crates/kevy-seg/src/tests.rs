@@ -149,13 +149,9 @@ mod manifest {
     use crate::{Manifest, ManifestEntry};
 
     fn entry(file: &str, n: u64) -> ManifestEntry {
-        ManifestEntry {
-            file: file.to_string(),
-            meta: b"table:9/bucket:20260801".to_vec(),
-            min_key: b"a".to_vec(),
-            max_key: b"z".to_vec(),
-            records: n,
-        }
+        let mut seg = crate::SegMeta::default();
+        (seg.min_key, seg.max_key, seg.records) = (b"a".to_vec(), b"z".to_vec(), n);
+        ManifestEntry::new(file, seg).with_meta(b"table:9/bucket:20260801".to_vec())
     }
 
     #[test]
@@ -222,7 +218,7 @@ mod manifest {
         std::fs::write(d.path().join("unrelated.txt"), b"not ours").unwrap();
         m.add(entry("real.seg", 5)).unwrap();
 
-        let mut swept = m.sweep(d.path()).unwrap();
+        let mut swept = m.sweep().unwrap();
         swept.sort();
         assert_eq!(swept, vec!["orphan.seg".to_string()]);
         assert!(d.path().join("real.seg").exists());

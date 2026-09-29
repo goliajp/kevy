@@ -5,9 +5,7 @@
 //! two ways `IDX.CREATE … PARTITION global` takes.
 
 use crate::cmd_index_install::Sampler;
-use kevy_index::{
-    Catalog, GlobalPath, IndexSpec, Partitioning, parse_split_point, splits_from_weighted,
-};
+use kevy_index::{Catalog, GlobalPath, IndexSpec, Partitioning, splits_from_weighted};
 
 /// Admit a table's `compiled` indexes into `icat`, the `GLOBAL` ones with
 /// their partitioning. `Err` is the wire error.
@@ -19,7 +17,7 @@ pub(crate) fn admit(
     nshards: usize,
 ) -> Result<(), String> {
     for ispec in compiled {
-        match globals.iter().find(|g| g.path == ispec.name) {
+        match globals.iter().find(|g| g.path == ispec.name()) {
             None => icat.create(ispec)?,
             Some(g) => {
                 let part = partitioning(&ispec, g, sampler, nshards)?;
@@ -49,17 +47,14 @@ fn explicit_splits(spec: &IndexSpec, g: &GlobalPath, n: usize) -> Result<Vec<Vec
     if g.split_at.len() >= n {
         return Err("ERR SPLIT AT allows at most one point fewer than the shard count".into());
     }
-    let refusal = match spec.composite {
+    let refusal = match spec.composite() {
         None => "ERR SPLIT AT value does not coerce to the column type",
         // a frame of several columns has no single-value text form
         Some(_) => {
             "ERR an ORDERPATH's SPLIT AT values are its encoded order bytes, written 0x<hex> as TABLE.DESCRIBE writes them"
         }
     };
-    g.split_at
-        .iter()
-        .map(|raw| parse_split_point(spec, raw).ok_or_else(|| refusal.into()))
-        .collect()
+    g.split_at.iter().map(|raw| spec.parse_split_point(raw).ok_or_else(|| refusal.into())).collect()
 }
 
 /// Whether the paths `names` are spread in `icat` as `globals` asks — the

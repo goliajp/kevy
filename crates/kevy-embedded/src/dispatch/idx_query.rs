@@ -7,7 +7,7 @@ use crate::store::Store;
 
 use kevy_index::{IndexValue, ValType};
 
-use super::idx::{badargs, decode_cursor, encode_cursor, no_such_index, value_repr};
+use super::idx::{badargs, decode_cursor, encode_cursor, no_such_index};
 // spec_of's only use here is the KNN handler, which is vector-gated.
 #[cfg(feature = "vector")]
 use super::idx::spec_of;
@@ -70,7 +70,7 @@ pub(super) fn emit_row(
     encode_array_len(out, (1 + usize::from(value.is_some()) + fields.len() * 2) as i64);
     encode_bulk(out, key);
     if let Some(v) = value {
-        encode_bulk(out, &value_repr(v));
+        encode_bulk(out, &v.render());
     }
     for f in fields {
         encode_bulk(out, f);
@@ -163,7 +163,7 @@ fn scalar_query(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     let cursor = match tail.cursor_raw.as_deref() {
         None | Some(b"0") => None,
         Some(raw) => match decode_cursor(raw) {
-            Some((v, k)) => Some(kevy_index::Cursor { value: v, key: k }),
+            Some((v, k)) => Some(kevy_index::Cursor::new(v, k)),
             None => return badargs(out, "IDX.QUERY", name),
         },
     };
@@ -195,7 +195,7 @@ fn emit_scalar_page(
         encode_array_len(out, (rows.len() * 2) as i64);
         for (k, v) in rows {
             encode_bulk(out, k);
-            encode_bulk(out, &value_repr(v));
+            encode_bulk(out, &v.render());
         }
     } else {
         encode_array_len(out, rows.len() as i64);
@@ -346,7 +346,7 @@ fn knn(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
         let Some((tail, ef)) = parse_knn_tail(argv) else {
             return badargs(out, "IDX.QUERY", name);
         };
-        let dim = spec.ann.map_or(0, |a| a.dim) as usize;
+        let dim = spec.ann().map_or(0, |a| a.dim) as usize;
         let Some(vec) = kevy_vector::parse_vector(raw_vec, dim) else {
             return badargs(out, "IDX.QUERY", name);
         };
@@ -452,7 +452,7 @@ fn emit_group_stats(out: &mut Vec<u8>, st: &kevy_index::GroupStats) {
     encode_bulk(out, format!("{}", st.sum).as_bytes());
     for v in [&st.min, &st.max] {
         match v {
-            Some(x) => encode_bulk(out, &value_repr(x)),
+            Some(x) => encode_bulk(out, &x.render()),
             None => encode_null_bulk(out),
         }
     }

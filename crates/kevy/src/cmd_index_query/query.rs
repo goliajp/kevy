@@ -76,7 +76,7 @@ pub(super) fn run_parsed(ctx: &Ctx<'_>, store: &mut Store, q: &Query, verb: &[u8
 /// Aggregate / ANN / text indexes answer VERIFY with their own stats
 /// (`None` = scalar kind, fall through to the segment path).
 fn verify_kind_stats(ctx: &Ctx<'_>, store: &mut Store, name: &[u8]) -> Option<Vec<u8>> {
-    let kind = ctx.state.catalogs.index().and_then(|c| c.get(name).map(|(s, _)| s.kind))?;
+    let kind = ctx.state.catalogs.index().and_then(|c| c.get(name).map(|(s, _)| s.kind()))?;
     // Each kind answers with its own numbers UNDER ITS OWN NAMES. These
     // used to be four bare u64s that the reducer labelled positionally
     // with the scalar audit's vocabulary — a healthy 3-doc text index
@@ -157,7 +157,7 @@ fn run_scalar_query(ctx: &Ctx<'_>, store: &mut Store, q: &Query, verb: &[u8]) ->
                     spec: Box::new(spec.clone()),
                     entries,
                     stats: seg.stats(),
-                    window: win.and_then(|w| w.audit(spec.ty)),
+                    window: win.and_then(|w| w.audit(spec.ty())),
                 }
             }
         });
@@ -187,7 +187,7 @@ fn scalar_range_or_count(
 ) -> HitsOrChunk {
     let cold = win.filter(|w| w.has_cold());
     if verb.eq_ignore_ascii_case(b"IDX.COUNT") {
-        let cold_n = match cold.map(|w| w.cold_count(spec.ty, min, max)).transpose() {
+        let cold_n = match cold.map(|w| w.cold_count(spec.ty(), min, max)).transpose() {
             Ok(n) => n.unwrap_or(0),
             Err(_) => return HitsOrChunk::Chunk(vec![ST_NOINDEX]),
         };
@@ -195,9 +195,9 @@ fn scalar_range_or_count(
         chunk.extend_from_slice(&(seg.count(min, max) + cold_n).to_le_bytes());
         return HitsOrChunk::Chunk(chunk);
     }
-    let cursor = q.cursor(spec.ty);
+    let cursor = q.cursor(spec.ty());
     let (hits, _) = seg.range(min, max, cursor.as_ref(), q.limit);
-    match cold.map(|w| w.cold_hits(spec.ty, min, max, cursor.as_ref(), q.limit)).transpose() {
+    match cold.map(|w| w.cold_hits(spec.ty(), min, max, cursor.as_ref(), q.limit)).transpose() {
         Ok(None) => HitsOrChunk::Hits(hits),
         Ok(Some(cold_hits)) => HitsOrChunk::Hits(merge_cold(hits, cold_hits, q.limit)),
         Err(_) => HitsOrChunk::Chunk(vec![ST_NOINDEX]),
@@ -281,7 +281,7 @@ pub(super) fn op_explain(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> 
         return vec![ST_NOINDEX];
     };
     let name = argv.get(1).map(Vec::as_slice).unwrap_or(b"");
-    let Some(spec) = cat.iter().map(|(s, _)| s).find(|s| s.name.as_slice() == name) else {
+    let Some(spec) = cat.iter().map(|(s, _)| s).find(|s| s.name() == name) else {
         return vec![ST_NOINDEX];
     };
     // Dry-run the same parses IDX.QUERY would run — arity/shape errors
@@ -305,8 +305,8 @@ pub(super) fn op_explain(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> 
     if !parsed {
         return vec![ST_BADARGS];
     }
-    let building = index_runtime::segment_building(ctx, store, &spec.name);
-    let entries = kind_entries(ctx, store, spec.kind, &spec.name);
+    let building = index_runtime::segment_building(ctx, store, spec.name());
+    let entries = kind_entries(ctx, store, spec.kind(), spec.name());
     let mut chunk = vec![ST_OK, u8::from(building)];
     chunk.extend_from_slice(&entries.to_le_bytes());
     chunk.push(shape.first().copied().unwrap_or(b'?').to_ascii_uppercase());
@@ -339,29 +339,29 @@ pub(super) fn op_list(ctx: &Ctx<'_>, store: &mut Store) -> Vec<u8> {
     };
     let mut chunk = vec![ST_OK];
     for (spec, _) in cat.iter() {
-        let building = index_runtime::segment_building(ctx, store, &spec.name);
+        let building = index_runtime::segment_building(ctx, store, spec.name());
         // (entries, bytes, coerce_failures/postings, duplicates/tokens)
-        let quad = if spec.kind == kevy_index::IndexKind::Agg {
-            index_runtime::with_ready_agg(ctx, store, &spec.name, |a| {
+        let quad = if spec.kind() == kevy_index::IndexKind::Agg {
+            index_runtime::with_ready_agg(ctx, store, spec.name(), |a| {
                 let st = a.stats();
                 (st.rows, st.approx_bytes, st.excluded, st.groups)
             })
             .unwrap_or_default()
-        } else if spec.kind == kevy_index::IndexKind::Ann {
-            index_runtime::with_ready_ann(ctx, store, &spec.name, |g| {
+        } else if spec.kind() == kevy_index::IndexKind::Ann {
+            index_runtime::with_ready_ann(ctx, store, spec.name(), |g| {
                 let st = g.stats();
                 (st.vectors, st.approx_bytes, st.tombstones, st.links)
             })
             .unwrap_or_default()
-        } else if spec.kind == kevy_index::IndexKind::Text {
-            index_runtime::with_ready_text_segment(ctx, store, &spec.name, |_, ts, _, _| {
+        } else if spec.kind() == kevy_index::IndexKind::Text {
+            index_runtime::with_ready_text_segment(ctx, store, spec.name(), |_, ts, _, _| {
                 let st = ts.stats();
                 (st.docs, st.approx_bytes, st.postings, st.tokens)
             })
             .unwrap_or_default()
         } else {
-            let placed = index_runtime::placed_bytes(ctx, store, &spec.name);
-            index_runtime::with_ready_segment(ctx, store, &spec.name, |_, seg, _| {
+            let placed = index_runtime::placed_bytes(ctx, store, spec.name());
+            index_runtime::with_ready_segment(ctx, store, spec.name(), |_, seg, _| {
                 let st = seg.stats();
                 (st.entries, st.approx_bytes + placed, st.coerce_failures, st.duplicates)
             })
@@ -399,7 +399,7 @@ fn encode_verify_chunk(
 ) -> Vec<u8> {
     // VERIFY's recheck is a bulk sweep — inside the peek scope a
     // cold row costs one pread and never promotes or marks the gate.
-    let mut pattern = spec.prefix.clone();
+    let mut pattern = spec.prefix().to_vec();
     pattern.push(b'*');
     let row_keys = store.collect_keys(Some(&pattern), None);
     let indexed: std::collections::HashSet<&[u8]> =

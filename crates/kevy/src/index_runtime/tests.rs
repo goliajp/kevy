@@ -5,19 +5,10 @@ use crate::RuntimeState;
 use kevy_index::{Catalog, IndexKind, IndexValue, ValType};
 
 fn spec(name: &str) -> IndexSpec {
-    IndexSpec {
-        name: name.into(),
-        prefix: b"user:".to_vec(),
-        fields: vec![kevy_index::FieldSpec::new(b"age".to_vec())],
-        ty: ValType::I64,
-        kind: IndexKind::Range,
-        ann: None,
-        max_bytes: 0,
-        group_by: None,
-        with_positions: false,
-        values: Vec::new(),
-        composite: None,
-    }
+    IndexSpec::builder(name, "user:", IndexKind::Range, ValType::I64)
+        .with_field("age")
+        .build()
+        .unwrap()
 }
 
 fn install_one(state: &RuntimeState, name: &str) {
@@ -56,8 +47,8 @@ fn hook_backfill_and_query_lifecycle() {
     // Tick drains the backfill.
     on_tick(&ctx, &mut store);
     let (hits, stats) = with_ready_segment(&ctx, &mut store, b"t_age", |spec, seg, _| {
-        let min = IndexValue::parse_literal(spec.ty, b"0").unwrap();
-        let max = IndexValue::parse_literal(spec.ty, b"100").unwrap();
+        let min = IndexValue::parse_literal(spec.ty(), b"0").unwrap();
+        let max = IndexValue::parse_literal(spec.ty(), b"100").unwrap();
         (seg.range(&min, &max, None, 10).0, seg.stats())
     })
     .unwrap();
@@ -71,8 +62,8 @@ fn hook_backfill_and_query_lifecycle() {
     store.del(&[b"user:2".as_slice()]);
     on_write(&ctx, &mut store, b"user:2");
     let hits = with_ready_segment(&ctx, &mut store, b"t_age", |spec, seg, _| {
-        let min = IndexValue::parse_literal(spec.ty, b"0").unwrap();
-        let max = IndexValue::parse_literal(spec.ty, b"100").unwrap();
+        let min = IndexValue::parse_literal(spec.ty(), b"0").unwrap();
+        let max = IndexValue::parse_literal(spec.ty(), b"100").unwrap();
         seg.range(&min, &max, None, 10).0
     })
     .unwrap();

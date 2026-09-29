@@ -3,10 +3,11 @@
 //! WHERE grammar, and the CREATE-time guards.
 
 use super::*;
-use crate::catalog::{Catalog, FieldSpec, IndexKind, IndexSpec};
+use crate::{Catalog, FieldSpec, IndexKind, IndexSpec};
 
 fn col(name: &str, ty: ValType, desc: bool) -> CompositeCol {
-    CompositeCol { name: name.into(), ty, desc }
+    let order = if desc { kevy_text::SortOrder::Desc } else { kevy_text::SortOrder::Asc };
+    CompositeCol::new(name, ty).with_order(order)
 }
 
 /// Deterministic xorshift64* — no crates, stable across runs.
@@ -50,7 +51,7 @@ fn model_cmp(cols: &[CompositeCol], a: &[Vec<u8>], b: &[Vec<u8>]) -> std::cmp::O
     for (i, c) in cols.iter().enumerate() {
         let (va, vb) =
             (IndexValue::coerce(c.ty, &a[i]).unwrap(), IndexValue::coerce(c.ty, &b[i]).unwrap());
-        let ord = if c.desc { vb.cmp(&va) } else { va.cmp(&vb) };
+        let ord = c.order.apply(va.cmp(&vb));
         if ord != std::cmp::Ordering::Equal {
             return ord;
         }
@@ -218,52 +219,46 @@ fn bounds_errors_are_named() {
     assert!(e.contains("not a valid i64"), "{e}");
 }
 
+fn composite_builder(name: &str, kind: IndexKind, ty: ValType) -> crate::IndexSpecBuilder {
+    IndexSpec::builder(name, b"t:".to_vec(), kind, ty)
+        .with_field(b"a".to_vec())
+        .with_composite(vec![col("a", ValType::Str, false), col("b", ValType::I64, true)])
+}
+
 fn composite_spec(name: &str) -> IndexSpec {
-    let mut s = IndexSpec::single_field(
-        name.into(),
-        b"t:".to_vec(),
-        b"a".to_vec(),
-        ValType::Str,
-        IndexKind::Range,
-    );
-    s.composite = Some(vec![col("a", ValType::Str, false), col("b", ValType::I64, true)]);
-    s
+    composite_builder(name, IndexKind::Range, ValType::Str).build().unwrap()
 }
 
 #[test]
 fn create_guards_refuse_bad_composite_combos_by_name() {
     let mut c = Catalog::new();
     c.create(composite_spec("ok")).expect("a legal composite creates");
+    let range = |n| composite_builder(n, IndexKind::Range, ValType::Str);
 
-    let mut wrong_kind = composite_spec("k");
-    wrong_kind.kind = IndexKind::Unique;
-    assert_eq!(Catalog::new().create(wrong_kind), Err("ERR COMPOSITE requires KIND range"));
+    let wrong_kind = composite_builder("k", IndexKind::Unique, ValType::Str);
+    assert_eq!(wrong_kind.build().err(), Some("ERR COMPOSITE requires KIND range"));
 
-    let mut wrong_ty = composite_spec("t");
-    wrong_ty.ty = ValType::I64;
-    assert_eq!(Catalog::new().create(wrong_ty), Err("ERR COMPOSITE requires TYPE str"));
+    let wrong_ty = composite_builder("t", IndexKind::Range, ValType::I64);
+    assert_eq!(wrong_ty.build().err(), Some("ERR COMPOSITE requires TYPE str"));
 
-    let mut with_values = composite_spec("v");
-    with_values.values = vec![crate::ValueSpec::new(b"c".to_vec())];
-    assert_eq!(Catalog::new().create(with_values), Err("ERR COMPOSITE cannot combine with VALUES"));
+    let with_values = range("v").with_values(vec![crate::ValueSpec::new(b"c".to_vec())]);
+    assert_eq!(with_values.build().err(), Some("ERR COMPOSITE cannot combine with VALUES"));
 
-    let mut multi_fields = composite_spec("f");
-    multi_fields.fields = vec![FieldSpec::new(b"a".to_vec()), FieldSpec::new(b"b".to_vec())];
+    let multi_fields =
+        range("f").with_fields(vec![FieldSpec::new(b"a".to_vec()), FieldSpec::new(b"b".to_vec())]);
     // The generic non-text multi-field fence fires first — still a
     // named refusal, never accept-and-ignore.
-    assert!(Catalog::new().create(multi_fields).is_err());
+    assert!(multi_fields.build().is_err());
 
-    let mut empty = composite_spec("e");
-    empty.composite = Some(Vec::new());
-    assert_eq!(Catalog::new().create(empty), Err("ERR COMPOSITE needs at least one column"));
+    let empty = range("e").with_composite(Vec::new());
+    assert_eq!(empty.build().err(), Some("ERR COMPOSITE needs at least one column"));
 
-    let mut too_many = composite_spec("m");
-    too_many.composite = Some((0..9).map(|i| col(&format!("c{i}"), ValType::I64, false)).collect());
-    assert_eq!(Catalog::new().create(too_many), Err("ERR COMPOSITE supports at most 8 columns"));
+    let many = (0..9).map(|i| col(&format!("c{i}"), ValType::I64, false)).collect();
+    let too_many = range("m").with_composite(many);
+    assert_eq!(too_many.build().err(), Some("ERR COMPOSITE supports at most 8 columns"));
 
-    let mut vec_col = composite_spec("vv");
-    vec_col.composite = Some(vec![col("a", ValType::Vector, false)]);
-    assert_eq!(Catalog::new().create(vec_col), Err("ERR COMPOSITE columns must be i64|f64|str"));
+    let vec_col = range("vv").with_composite(vec![col("a", ValType::Vector, false)]);
+    assert_eq!(vec_col.build().err(), Some("ERR COMPOSITE columns must be i64|f64|str"));
 }
 
 /// The spec-level derivation face: composite read names, primary
@@ -280,13 +275,10 @@ fn spec_derivation_reads_composite_columns() {
     assert!(spec.derive_scalar(&[Some(b"x".to_vec()), None]).is_none(), "missing col excludes");
 
     // The plain single-field face is unchanged.
-    let plain = IndexSpec::single_field(
-        b"p".to_vec(),
-        b"t:".to_vec(),
-        b"n".to_vec(),
-        ValType::I64,
-        IndexKind::Range,
-    );
+    let plain = IndexSpec::builder(b"p".to_vec(), b"t:".to_vec(), IndexKind::Range, ValType::I64)
+        .with_field(b"n".to_vec())
+        .build()
+        .unwrap();
     assert_eq!(plain.scalar_read_names(), vec![b"n".as_slice()]);
     assert_eq!(plain.primary_width(), 1);
     assert_eq!(plain.derive_scalar(&[Some(b"7".to_vec())]), Some(IndexValue::I64(7)));
