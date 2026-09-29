@@ -52,17 +52,24 @@ fn persistence_round_trip_via_aof() {
 
 #[test]
 fn eviction_works_under_pressure() {
+    // the keyspace tables fifty keys fill, charged whole: the values are
+    // held to 800 bytes above them
+    let sized = Store::open(Config::default().with_ttl_reaper_manual()).unwrap();
+    for i in 0..50 {
+        sized.set(format!("k{i:02}").as_bytes(), b"x").unwrap();
+    }
+    let limit = sized.used_memory() + 800;
     let s = Store::open(
         Config::default()
             .with_ttl_reaper_manual()
-            .with_max_memory(800)
+            .with_max_memory(limit)
             .with_eviction(EvictionPolicy::AllKeysLru),
     )
     .unwrap();
     for i in 0..50 {
-        s.set(format!("k{i:02}").as_bytes(), b"xxxxxxxxxxxxxxxxxxxx").unwrap();
+        s.set(format!("k{i:02}").as_bytes(), &[b'x'; 40]).unwrap();
     }
-    assert!(s.used_memory() <= 800, "got {}", s.used_memory());
+    assert!(s.used_memory() <= limit, "got {}", s.used_memory());
     assert!(s.evictions_total() > 0);
 }
 
