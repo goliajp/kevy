@@ -155,7 +155,7 @@ fn add_span(st: &mut Stats, meta: &crate::segment::SpanMeta) {
         return;
     }
     if meta.live == 0 {
-        // Empty but still assigned: the per-sweep hysteresis is holding
+        // Empty but still assigned: the purge delay is holding
         // it for its class rather than retiring it. Resident and
         // deliberately kept — the contract's `hysteresis`, exactly.
         st.hysteresis += SPAN_BYTES as u64;

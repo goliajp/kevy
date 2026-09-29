@@ -41,21 +41,25 @@ pub(crate) struct SpanLink {
     prev: usize,
     next: usize,
     list: u8,
+    /// The span's place in the purge wheel (see `purge`); list edits
+    /// leave it alone.
+    pub(crate) wheel: crate::purge::WheelLink,
 }
 
 impl SpanLink {
-    pub(crate) const NONE: Self = Self { prev: 0, next: 0, list: 0 };
+    pub(crate) const NONE: Self =
+        Self { prev: 0, next: 0, list: 0, wheel: crate::purge::WheelLink::NONE };
 }
 
 /// A segment's base and a span index, as one word: the base is aligned
 /// to [`SEGMENT_BYTES`], so the index fits in the low bits.
 #[inline]
-fn pack(seg: NonNull<Segment>, ix: usize) -> usize {
+pub(crate) fn pack(seg: NonNull<Segment>, ix: usize) -> usize {
     seg.as_ptr() as usize | ix
 }
 
 #[inline]
-fn unpack(r: usize) -> (NonNull<Segment>, usize) {
+pub(crate) fn unpack(r: usize) -> (NonNull<Segment>, usize) {
     let base = (r & !(SEGMENT_BYTES - 1)) as *mut Segment;
     // SAFETY: only `pack` makes these words, from a non-null segment.
     (unsafe { NonNull::new_unchecked(base) }, r & (SEGMENT_BYTES - 1))
@@ -66,7 +70,7 @@ fn unpack(r: usize) -> (NonNull<Segment>, usize) {
 /// # Safety
 /// `r` must name a span of a segment this heap owns and has not unmapped.
 #[inline]
-unsafe fn link_of<'a>(r: usize) -> &'a mut SpanLink {
+pub(crate) unsafe fn link_of<'a>(r: usize) -> &'a mut SpanLink {
     let (seg, ix) = unpack(r);
     // SAFETY: the caller guarantees a live header; the heap is the only
     // thread that touches links.
@@ -97,7 +101,8 @@ impl Heap {
             unsafe { link_of(head) }.prev = r;
         }
         // SAFETY: the caller's contract.
-        *unsafe { link_of(r) } = SpanLink { prev: 0, next: head, list };
+        let l = unsafe { link_of(r) };
+        (l.prev, l.next, l.list) = (0, head, list);
         *self.head_mut(list, class) = r;
     }
 
@@ -106,7 +111,7 @@ impl Heap {
     /// was listed under (ignored for the free list).
     unsafe fn unlink(&mut self, r: usize, class: u8) {
         // SAFETY: the caller's contract.
-        let SpanLink { prev, next, list } = *unsafe { link_of(r) };
+        let SpanLink { prev, next, list, .. } = *unsafe { link_of(r) };
         if prev == 0 {
             *self.head_mut(list, class) = next;
         } else {
@@ -118,7 +123,8 @@ impl Heap {
             unsafe { link_of(next) }.prev = prev;
         }
         // SAFETY: the caller's contract.
-        *unsafe { link_of(r) } = SpanLink::NONE;
+        let l = unsafe { link_of(r) };
+        (l.prev, l.next, l.list) = (0, 0, 0);
     }
 
     /// Put a classed span on the list the invariant says it belongs on,

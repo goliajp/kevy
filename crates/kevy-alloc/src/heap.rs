@@ -81,26 +81,6 @@ use crate::spanlist::BINS;
 /// ```
 pub const PER_CLASS_CAP: u32 = 16_777_216;
 
-/// Empty spans a heap keeps mapped-but-discarded before releasing the
-/// whole segment. Decay-style hysteresis, after jemalloc: releasing
-/// eagerly turns a churny workload into an mmap/munmap storm.
-///
-/// # Examples
-///
-/// ```
-/// use kevy_alloc::{EMPTY_SPAN_HYSTERESIS, Heap};
-/// let mut heap = Heap::new(0);
-/// // sixteen spans' worth of 64-byte slots, all freed again
-/// let held: Vec<_> = (0..16_384).map(|_| heap.alloc(64, 8)).collect::<Option<_>>().ok_or("no mapping")?;
-/// // SAFETY: each came from this heap with this size and alignment.
-/// held.into_iter().for_each(|p| unsafe { heap.dealloc(p, 64, 8) });
-/// heap.reclaim();
-/// // the sweep keeps this many empty spans for their class
-/// assert_eq!(heap.snapshot().spans_assigned, EMPTY_SPAN_HYSTERESIS as u64);
-/// # Ok::<(), &str>(())
-/// ```
-pub const EMPTY_SPAN_HYSTERESIS: u16 = 4;
-
 /// One shard's heap. Not `Sync`: exactly one thread owns it, which is
 /// what removes the atomics from the fast path.
 ///
@@ -153,6 +133,17 @@ pub struct Heap {
     /// The foreign-free tally every segment of this heap posts to; null
     /// until the first segment is mapped.
     pub(crate) parked: *const segment::ForeignTally,
+    /// Of `spans_in_class`, the spans holding nothing live.
+    pub(crate) empty_in_class: [u32; NCLASSES],
+    /// Sweeps so far: the clock page ages are counted in.
+    pub(crate) epoch: u32,
+    /// Spans due at each sweep, by sweep number modulo the wheel size.
+    pub(crate) wheel: [usize; crate::purge::WHEEL],
+    /// [`PURGE_DELAY`](crate::PURGE_DELAY), unless a test sets another.
+    pub(crate) purge_delay: u32,
+    /// Pages handed back, counted where the discard is issued.
+    #[cfg(test)]
+    pub(crate) discards: u64,
 }
 
 impl Heap {
@@ -209,6 +200,12 @@ impl Heap {
             token: 0,
             tally: crate::tally::Tally::NEW,
             parked: core::ptr::null(),
+            empty_in_class: [0; NCLASSES],
+            epoch: 0,
+            wheel: [0; crate::purge::WHEEL],
+            purge_delay: crate::purge::PURGE_DELAY,
+            #[cfg(test)]
+            discards: 0,
         }
     }
 
@@ -429,6 +426,7 @@ impl Heap {
         self.tally.span_claimed(meta);
         meta.reset(c as u8);
         self.spans_in_class[c] += 1;
+        self.empty_in_class[c] += 1;
         self.partial[c] = Some((seg, ix as u8));
         Some(())
     }
