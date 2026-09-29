@@ -157,7 +157,10 @@ def sigma_for(baseline, angle, line, fingerprint, today):
     if age > baseline.get("sigma_valid_days", 90):
         raise Refused(f"sigma is {age} days old (limit "
                       f"{baseline.get('sigma_valid_days', 90)}) — run --calibrate")
-    return table[angle][line]
+    sigma = table[angle][line]
+    if sigma is not None and sigma <= 0:
+        raise Refused(f"sigma {sigma} for {angle} {line} is not an estimate — run --calibrate")
+    return sigma
 
 
 def _date(text):
