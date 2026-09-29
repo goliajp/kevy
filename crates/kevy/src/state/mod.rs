@@ -41,6 +41,17 @@ use kevy_scope::OwnershipError;
 /// Everything the server knows that is not per-shard keyspace data.
 /// Built once (by [`crate::serve`] or an embedder) and shared across
 /// shards behind an `Arc`.
+///
+/// ```
+/// use std::sync::Arc;
+/// let mut cfg = kevy_config::Config::default();
+/// cfg.server.port = 7000;
+/// let state = Arc::new(kevy::RuntimeState::new(Arc::new(cfg), "", 1)?);
+/// // every shard's command set shares the one state
+/// let kevy = kevy::KevyCommands::with_state(Arc::clone(&state));
+/// assert_eq!(kevy.state().config().server.port, 7000);
+/// # Ok::<(), kevy::OwnershipError>(())
+/// ```
 #[derive(Debug)]
 pub struct RuntimeState {
     /// The live config. Hot-swapped by `CONFIG SET` via
@@ -258,6 +269,16 @@ pub(crate) struct Ctx<'a> {
 /// [`RuntimeState`] plus this shard's private context. The
 /// runtime clones one `KevyCommands` per shard; the manual [`Clone`]
 /// shares the state Arc and rebuilds the shard zone empty.
+///
+/// ```
+/// use kevy::{Argv, KevyCommands, KeyspaceStore};
+/// let kevy = KevyCommands::new();
+/// let shard = kevy.clone();
+/// assert!(std::sync::Arc::ptr_eq(kevy.state(), shard.state()), "clones share the state");
+/// let mut store = KeyspaceStore::new();
+/// let ping = Argv::from(vec![b"PING".to_vec()]);
+/// assert_eq!(shard.dispatch(&mut store, &ping), b"+PONG\r\n");
+/// ```
 #[derive(Debug)]
 pub struct KevyCommands {
     state: Arc<RuntimeState>,

@@ -17,6 +17,16 @@ use kevy_store::SnapshotView;
 use crate::store::{Store, lock_write};
 
 /// A frozen, consistent point-in-time view of the whole store.
+///
+/// ```
+/// let s = kevy_embedded::Store::open(kevy_embedded::Config::default())?;
+/// s.set(b"u:1", b"a")?;
+/// let frozen = s.snapshot();
+/// s.set(b"u:2", b"b")?; // lands after the freeze
+/// assert_eq!(frozen.keys_prefix(b"u:").len(), 1);
+/// assert_eq!(s.snapshot().keys_prefix(b"u:").len(), 2);
+/// # Ok::<(), kevy_embedded::KevyError>(())
+/// ```
 #[derive(Debug)]
 pub struct Snapshot {
     views: Vec<SnapshotView>,
@@ -35,8 +45,25 @@ pub struct Snapshot {
 #[non_exhaustive]
 pub struct SnapshotEntry {
     /// The key.
+    ///
+    /// ```
+    /// let s = kevy_embedded::Store::open(kevy_embedded::Config::default())?;
+    /// s.set(b"u:1", b"a")?;
+    /// s.set(b"other", b"b")?;
+    /// let keys: Vec<Vec<u8>> = s.snapshot().keys_prefix(b"u:").into_iter().map(|e| e.key).collect();
+    /// assert_eq!(keys, [b"u:1".to_vec()]);
+    /// # Ok::<(), kevy_embedded::KevyError>(())
+    /// ```
     pub key: Vec<u8>,
     /// Remaining TTL in ms at freeze time (`None` = no expiry).
+    ///
+    /// ```
+    /// let s = kevy_embedded::Store::open(kevy_embedded::Config::default())?;
+    /// s.set_with_ttl(b"u:1", b"a", std::time::Duration::from_secs(60))?;
+    /// let ttl = s.snapshot().keys_prefix(b"u:")[0].ttl_ms;
+    /// assert!(ttl.is_some_and(|ms| ms > 50_000 && ms <= 60_000));
+    /// # Ok::<(), kevy_embedded::KevyError>(())
+    /// ```
     pub ttl_ms: Option<u64>,
 }
 

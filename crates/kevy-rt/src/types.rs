@@ -33,19 +33,46 @@ use kevy_persist::Fsync;
 pub struct ResolvedCmd {
     /// MULTI/EXEC/DISCARD/WATCH classification, so the transaction layer
     /// does not re-parse the verb.
+    ///
+    /// ```
+    /// use kevy_rt::{ResolvedCmd, Route, TxnKind};
+    /// let exec = ResolvedCmd::new(Route::Local).with_txn_kind(TxnKind::Exec);
+    /// assert_eq!(exec.txn_kind, TxnKind::Exec);
+    /// ```
     pub txn_kind: TxnKind,
     /// Where this command goes: one shard, all of them, or a local answer.
+    ///
+    /// ```
+    /// use kevy_rt::{ResolvedCmd, Route};
+    /// assert_eq!(ResolvedCmd::new(Route::DelKeys).route, Route::DelKeys);
+    /// ```
     pub route: Route,
     /// `QUIT`, which the reactor answers and then closes on rather than
     /// dispatching.
+    ///
+    /// ```
+    /// let quit = kevy_rt::ResolvedCmd::new(kevy_rt::Route::Local).with_quit(true);
+    /// assert!(quit.is_quit && !quit.is_write);
+    /// ```
     pub is_quit: bool,
     /// Whether the command mutates — the AOF and replication gate. Set
     /// from the verb table, not inferred from the route.
+    ///
+    /// ```
+    /// // `SET k v` must reach the AOF and the replicas.
+    /// let set = kevy_rt::ResolvedCmd::new(kevy_rt::Route::Single(1)).with_write(true);
+    /// assert!(set.is_write);
+    /// ```
     pub is_write: bool,
     /// Blocking-command classification (see [`Commands::block_hint`]).
     /// `BlockHint::None` for every non-blocking verb.
     ///
     /// [`Commands::block_hint`]: crate::Commands::block_hint
+    ///
+    /// ```
+    /// use kevy_rt::{BlockHint, ResolvedCmd, Route};
+    /// assert_eq!(ResolvedCmd::new(Route::Single(1)).block_hint, BlockHint::None);
+    /// ```
     pub block_hint: BlockHint,
     /// Index into `args` whose write may wake a `BLPOP` / `XREAD BLOCK`
     /// waiter parked on that key — `Some(1)` for `LPUSH` / `RPUSH` /
@@ -53,6 +80,12 @@ pub struct ResolvedCmd {
     /// dispatcher's wake hook is gated on both this being `Some` *and*
     /// the per-shard `BlockedClients` registry being non-empty, so the
     /// steady-state cost when nobody is parked is one `is_empty()` check.
+    ///
+    /// ```
+    /// // `LPUSH q x` may wake a `BLPOP q` parked on args[1].
+    /// let lpush = kevy_rt::ResolvedCmd::new(kevy_rt::Route::Single(1)).with_wake_idx(Some(1));
+    /// assert_eq!(lpush.wake_idx, Some(1));
+    /// ```
     pub wake_idx: Option<u8>,
 }
 
@@ -160,6 +193,13 @@ impl ResolvedCmd {
 #[non_exhaustive]
 pub enum ExtensionReduced {
     /// The final RESP reply bytes for the client.
+    ///
+    /// ```
+    /// use kevy_rt::ExtensionReduced;
+    /// // Every shard answered; one integer reply goes back to the client.
+    /// let done = ExtensionReduced::Reply(b":3\r\n".to_vec());
+    /// assert!(matches!(done, ExtensionReduced::Reply(ref r) if r == b":3\r\n"));
+    /// ```
     Reply(Vec<u8>),
     /// Not final yet: fan `argv` out as a follow-up extension phase —
     /// to the shards [`Commands::extension_targets`] names for it, every
@@ -168,6 +208,13 @@ pub enum ExtensionReduced {
     /// per-phase bookkeeping.
     ///
     /// [`Commands::extension_targets`]: crate::Commands::extension_targets
+    ///
+    /// ```
+    /// use kevy_rt::ExtensionReduced;
+    /// // A second phase, with its state carried in the argv itself.
+    /// let next = ExtensionReduced::Continue(vec![b"IDX.FETCH".to_vec(), b"phase2".to_vec()]);
+    /// assert!(matches!(next, ExtensionReduced::Continue(ref argv) if argv[1] == b"phase2"));
+    /// ```
     Continue(Vec<Vec<u8>>),
 }
 
@@ -180,19 +227,45 @@ pub enum ExtensionReduced {
 #[non_exhaustive]
 pub enum TxnKind {
     /// `MULTI` — opens a queue on this connection.
+    ///
+    /// ```
+    /// let multi = kevy_rt::ResolvedCmd::new(kevy_rt::Route::Local).with_txn_kind(kevy_rt::TxnKind::Multi);
+    /// assert_eq!(multi.txn_kind, kevy_rt::TxnKind::Multi);
+    /// ```
     Multi,
     /// `EXEC` — runs the queue, or replies nil if a WATCH was broken.
+    ///
+    /// ```
+    /// let exec = kevy_rt::ResolvedCmd::new(kevy_rt::Route::Local).with_txn_kind(kevy_rt::TxnKind::Exec);
+    /// assert_ne!(exec.txn_kind, kevy_rt::TxnKind::Multi);
+    /// ```
     Exec,
     /// `DISCARD` — drops the queue and any WATCH set.
+    ///
+    /// ```
+    /// let txn = |verb: &str| if verb == "DISCARD" { kevy_rt::TxnKind::Discard } else { kevy_rt::TxnKind::Other };
+    /// assert_eq!(txn("DISCARD"), kevy_rt::TxnKind::Discard);
+    /// ```
     Discard,
     /// `WATCH` — outside MULTI runs the fan-out; inside MULTI is rejected
     /// with an error (Redis semantics: `WATCH inside MULTI is not allowed`).
     /// `UNWATCH` is plain [`Self::Other`] — outside MULTI it routes to
     /// [`Route::Unwatch`] (clear + OK); inside MULTI it queues as a no-op
     /// that dispatch resolves to +OK at EXEC time.
+    ///
+    /// ```
+    /// let txn = |verb: &str| if verb == "WATCH" { kevy_rt::TxnKind::Watch } else { kevy_rt::TxnKind::Other };
+    /// // UNWATCH is not in this class.
+    /// assert_eq!(txn("UNWATCH"), kevy_rt::TxnKind::Other);
+    /// ```
     Watch,
     /// Everything else: queued inside MULTI, dispatched outside it.
     #[default]
+    ///
+    /// ```
+    /// // A plain command resolves here unless told otherwise.
+    /// assert_eq!(kevy_rt::ResolvedCmd::new(kevy_rt::Route::Single(1)).txn_kind, kevy_rt::TxnKind::Other);
+    /// ```
     Other,
 }
 
@@ -219,19 +292,61 @@ pub struct LiveRuntimeConfig {
     /// `Always` mid-flight also flushes any buffered bytes so the new
     /// "every write is on disk before reply" contract is honoured from
     /// the next append onward.
+    ///
+    /// ```
+    /// let mut live = kevy_rt::LiveRuntimeConfig::default();
+    /// // `CONFIG SET appendfsync always`
+    /// live.appendfsync = Some(kevy_rt::Fsync::Always);
+    /// assert_eq!(live.appendfsync, Some(kevy_rt::Fsync::Always));
+    /// ```
     pub appendfsync: Option<Fsync>,
     /// `auto_aof_rewrite_percentage`. `0` disables the auto-trigger.
+    ///
+    /// ```
+    /// let mut live = kevy_rt::LiveRuntimeConfig::default();
+    /// // `0`: never rewrite on growth
+    /// live.auto_aof_rewrite_pct = Some(0);
+    /// assert_eq!(live.auto_aof_rewrite_pct, Some(0));
+    /// ```
     pub auto_aof_rewrite_pct: Option<u32>,
     /// Absolute-size auto-rewrite trigger in bytes (0 = rule off).
+    ///
+    /// ```
+    /// let mut live = kevy_rt::LiveRuntimeConfig::default();
+    /// // rewrite once the AOF passes 1 GiB
+    /// live.auto_aof_rewrite_bytes = Some(1 << 30);
+    /// assert_eq!(live.auto_aof_rewrite_bytes, Some(1 << 30));
+    /// ```
     pub auto_aof_rewrite_bytes: Option<u64>,
     /// Time-based auto-rewrite trigger in seconds (0 = rule off).
+    ///
+    /// ```
+    /// let mut live = kevy_rt::LiveRuntimeConfig::default();
+    /// // rewrite at least hourly
+    /// live.auto_aof_rewrite_interval_secs = Some(3600);
+    /// assert_eq!(live.auto_aof_rewrite_interval_secs, Some(3600));
+    /// ```
     pub auto_aof_rewrite_interval_secs: Option<u64>,
     /// `auto_aof_rewrite_min_size` in bytes.
+    ///
+    /// ```
+    /// let mut live = kevy_rt::LiveRuntimeConfig::default();
+    /// // never rewrite below 64 MiB
+    /// live.auto_aof_rewrite_min_size = Some(64 << 20);
+    /// assert_eq!(live.auto_aof_rewrite_min_size, Some(64 << 20));
+    /// ```
     pub auto_aof_rewrite_min_size: Option<u64>,
     /// New tick interval in ms (`1000/hz`). `0` disables ticking
     /// entirely — note that disabling also turns off active TTL
     /// expiry and the auto-rewrite tick path. Lazy expiry on access
     /// always still works.
+    ///
+    /// ```
+    /// let mut live = kevy_rt::LiveRuntimeConfig::default();
+    /// // `hz 20`
+    /// live.tick_interval_ms = Some(50);
+    /// assert_eq!(live.tick_interval_ms, Some(50));
+    /// ```
     pub tick_interval_ms: Option<u64>,
     /// `notify_keyspace_events` flags. Parsed by the [`Commands`]
     /// impl from its config source (e.g. kevy reads
@@ -241,15 +356,36 @@ pub struct LiveRuntimeConfig {
     /// keyspace notification publish.
     ///
     /// [`Commands`]: crate::Commands
+    ///
+    /// ```
+    /// let mut live = kevy_rt::LiveRuntimeConfig::default();
+    /// // No flags: keyspace notifications off.
+    /// live.notify_flags = Some(kevy_rt::NotificationFlags::default());
+    /// assert!(live.notify_flags.is_some());
+    /// ```
     pub notify_flags: Option<NotificationFlags>,
     /// `[slowlog].slower_than_micros` — `-1` disables, `0` records all,
     /// `>0` is the strict micros threshold. `None` keeps the existing
     /// shard setting (set by the [`Runtime`] builder at startup).
     ///
     /// [`Runtime`]: crate::Runtime
+    ///
+    /// ```
+    /// let mut live = kevy_rt::LiveRuntimeConfig::default();
+    /// // Redis's 10 ms threshold
+    /// live.slowlog_slower_than_micros = Some(10_000);
+    /// assert_eq!(live.slowlog_slower_than_micros, Some(10_000));
+    /// ```
     pub slowlog_slower_than_micros: Option<i64>,
     /// `[slowlog].max_len` — ring cap per shard. Shrinking trims the
     /// oldest entries on the next tick application.
+    ///
+    /// ```
+    /// let mut live = kevy_rt::LiveRuntimeConfig::default();
+    /// // keep the newest 128 entries per shard
+    /// live.slowlog_max_len = Some(128);
+    /// assert_eq!(live.slowlog_max_len, Some(128));
+    /// ```
     pub slowlog_max_len: Option<u32>,
     /// Monotonic promotion counter. The command layer bumps
     /// it every time this process is PROMOTED (replica → primary:
@@ -260,6 +396,13 @@ pub struct LiveRuntimeConfig {
     /// failover can never falsely satisfy a REPL.WAIT against the new
     /// primary's unrelated offset space. Not an Option: `0` (the
     /// default) means "never promoted" and embedders pay nothing.
+    ///
+    /// ```
+    /// let mut live = kevy_rt::LiveRuntimeConfig::default();
+    /// assert_eq!(live.promotion_epoch, 0); // never promoted
+    /// live.promotion_epoch += 1; // `REPLICAOF NO ONE`
+    /// assert_eq!(live.promotion_epoch, 1);
+    /// ```
     pub promotion_epoch: u64,
 }
 
@@ -279,9 +422,21 @@ pub struct LiveRuntimeConfig {
 pub struct ReplicaAck {
     /// Offset from the latest `REPLCONF ACK` (`0` is a real heartbeat
     /// ACK from an empty replica, not a placeholder).
+    ///
+    /// ```
+    /// let ack = kevy_rt::ReplicaAck::new(1_000, 0);
+    /// // A primary at offset 1200 has 200 bytes this replica has not confirmed.
+    /// assert_eq!(1_200 - ack.acked_offset, 200);
+    /// ```
     pub acked_offset: u64,
     /// Milliseconds since that ACK was received, measured when the
     /// view was published. Feeds the `min_replicas_max_lag_ms` gate.
+    ///
+    /// ```
+    /// let ack = kevy_rt::ReplicaAck::new(1_000, 250);
+    /// // A `min_replicas_max_lag_ms` of 100 counts this replica as lagging.
+    /// assert!(ack.ack_age_ms > 100);
+    /// ```
     pub ack_age_ms: u64,
 }
 
@@ -304,4 +459,14 @@ impl ReplicaAck {
 /// the identity string the replica presented at handshake — command
 /// layers group per-shard rows by it to render one aggregate entry
 /// per replica process.
+///
+/// ```
+/// use kevy_rt::{ReplicaAck, ReplicaViewRow};
+///
+/// let row: ReplicaViewRow =
+///     ("replica-a".to_string(), std::net::Ipv4Addr::LOCALHOST, 7001, 120, Some(ReplicaAck::new(100, 5)));
+/// let (id, _ip, port, sent, ack) = row;
+/// assert_eq!((id.as_str(), port, sent), ("replica-a", 7001, 120));
+/// assert_eq!(ack.map(|a| sent - a.acked_offset), Some(20));
+/// ```
 pub type ReplicaViewRow = (String, std::net::Ipv4Addr, u16, u64, Option<ReplicaAck>);

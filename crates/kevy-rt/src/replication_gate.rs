@@ -14,7 +14,7 @@
 //!
 //! Usage:
 //!
-//! ```ignore
+//! ```
 //! let _g = kevy_rt::ReplicatedApplyGuard::enter();
 //! // dispatch frame here — any post_write_housekeeping that hits
 //! // this shard's ReplicationSource is suppressed for the duration
@@ -92,6 +92,19 @@ impl Drop for RecordApplyGuard {
 /// frame" for the guard's lifetime. The replica runner
 /// enters this scope before each `dispatch` call so the apply doesn't
 /// re-push the frame into this shard's own backlog.
+///
+/// ```
+/// use kevy_rt::{Argv, ReplicatedApplyGuard, Store};
+/// let mut store = Store::new();
+/// let frame = Argv::from(vec![b"RPUSH".to_vec(), b"q".to_vec(), b"v".to_vec()]);
+/// {
+///     // this write came from upstream: apply it without feeding it back downstream
+///     let _applying = ReplicatedApplyGuard::enter();
+///     store.rpush(&frame[1], &[&frame[2]])?;
+/// } // the scope ends and later writes replicate as usual
+/// assert_eq!(store.llen(b"q")?, 1);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Debug)]
 pub struct ReplicatedApplyGuard {
     /// Prior gate value — supports nesting (caller can enter a second

@@ -101,6 +101,18 @@ thread_local! {
 /// the same thread; callers surface their nested-eval error. A parked
 /// host of a *different* `T` (mixed test harnesses; production uses
 /// one `T` per process) is dropped and rebuilt.
+///
+/// ```
+/// use kevy_lua_host::{LuaHost, with_thread_host};
+/// let build = || LuaHost::<u32>::new(|n, _argv, _ro| format!(":{n}\r\n").into_bytes());
+/// let mut ctx = 5;
+/// let load = |h: &mut LuaHost<u32>| h.script_load(b"return redis.call('GET', 'k')");
+/// let sha = with_thread_host(build, load).ok_or("re-entrant eval")?;
+/// // the second call finds the same host, script cache included
+/// let reply = with_thread_host(build, |h| h.evalsha(&mut ctx, sha, &[], &[]));
+/// assert_eq!(reply.ok_or("re-entrant eval")?, b":5\r\n");
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn with_thread_host<T: 'static, R>(
     build: impl FnOnce() -> LuaHost<T>,
     f: impl FnOnce(&mut LuaHost<T>) -> R,
@@ -162,6 +174,20 @@ pub fn with_current<T: 'static, R>(f: impl FnOnce(&mut T) -> R) -> Option<R> {
 /// `T` is whatever shard state the dispatch closure needs (`Store`,
 /// `KeyspaceStore`, …). It must outlive every `LuaHost::eval` call
 /// (trivially true: kevy holds the `&mut T` while delegating).
+///
+/// ```
+/// use std::collections::HashMap;
+/// use kevy_lua_host::LuaHost;
+///
+/// type Keyspace = HashMap<Vec<u8>, Vec<u8>>;
+/// let mut host = LuaHost::<Keyspace>::new(|ks, argv, _ro| {
+///     ks.insert(argv[1].to_vec(), argv[2].to_vec());
+///     b"+OK\r\n".to_vec()
+/// });
+/// let mut shard = Keyspace::new();
+/// host.eval(&mut shard, b"return redis.call('SET', KEYS[1], ARGV[1])", &[b"k"], &[b"v"]);
+/// assert_eq!(shard.get(&b"k"[..]), Some(&b"v".to_vec()));
+/// ```
 #[derive(Debug)]
 pub struct LuaHost<T> {
     bridge: Bridge,
@@ -180,6 +206,17 @@ impl<T: 'static> LuaHost<T> {
     /// must be `Fn(&mut T, …) -> …` rather than `FnMut`. (kevy's
     /// dispatch path is `&mut self`, so `Fn(&mut T, …)` is exactly
     /// what we need.)
+    ///
+    /// ```
+    /// // the context here is a log of every command the script sent
+    /// let mut host = kevy_lua_host::LuaHost::<Vec<Vec<u8>>>::new(|log, argv, _ro| {
+    ///     log.push(argv[0].to_vec());
+    ///     b"+OK\r\n".to_vec()
+    /// });
+    /// let mut log = Vec::new();
+    /// host.eval(&mut log, b"redis.call('PING') return redis.call('ECHO')", &[], &[]);
+    /// assert_eq!(log, [b"PING".to_vec(), b"ECHO".to_vec()]);
+    /// ```
     pub fn new<F>(dispatch_fn: F) -> Self
     where
         F: Fn(&mut T, &[&[u8]], bool) -> Vec<u8> + 'static,
@@ -195,18 +232,48 @@ impl<T: 'static> LuaHost<T> {
     /// Run a script. Scoped-installs `ctx` so the dispatch closure
     /// can find it via [`with_current`], then delegates to
     /// `Bridge::eval`.
+    ///
+    /// ```
+    /// let mut host = kevy_lua_host::LuaHost::<i64>::new(|n, _argv, _ro| {
+    ///     *n += 1;
+    ///     format!(":{n}\r\n").into_bytes()
+    /// });
+    /// let mut counter = 10;
+    /// let reply = host.eval(&mut counter, b"return redis.call('INCR', KEYS[1])", &[b"c"], &[]);
+    /// assert_eq!(reply, b":11\r\n");
+    /// assert_eq!(counter, 11);
+    /// ```
     pub fn eval(&mut self, ctx: &mut T, script: &[u8], keys: &[&[u8]], args: &[&[u8]]) -> Reply {
         let _guard = set_current(ctx);
         self.bridge.eval(script, keys, args)
     }
 
-    /// Read-only counterpart of [`Self::eval`].
+    /// Read-only counterpart of [`Self::eval`]: the dispatch closure
+    /// receives `read_only = true`.
+    ///
+    /// ```
+    /// let mut host = kevy_lua_host::LuaHost::<Vec<bool>>::new(|seen, _argv, ro| {
+    ///     seen.push(ro);
+    ///     b"+OK\r\n".to_vec()
+    /// });
+    /// let mut seen = Vec::new();
+    /// host.eval(&mut seen, b"return redis.call('GET', 'k')", &[], &[]);
+    /// host.eval_ro(&mut seen, b"return redis.call('GET', 'k')", &[], &[]);
+    /// assert_eq!(seen, [false, true]);
+    /// ```
     pub fn eval_ro(&mut self, ctx: &mut T, script: &[u8], keys: &[&[u8]], args: &[&[u8]]) -> Reply {
         let _guard = set_current(ctx);
         self.bridge.eval_ro(script, keys, args)
     }
 
     /// Run a previously-loaded script by SHA1.
+    ///
+    /// ```
+    /// let mut host = kevy_lua_host::LuaHost::<()>::new(|_, _argv, _ro| Vec::new());
+    /// let sha = host.script_load(b"return tonumber(ARGV[1]) * 2");
+    /// assert_eq!(host.evalsha(&mut (), sha, &[], &[b"21"]), b":42\r\n");
+    /// assert!(host.evalsha(&mut (), [0; 20], &[], &[]).starts_with(b"-NOSCRIPT"));
+    /// ```
     pub fn evalsha(
         &mut self,
         ctx: &mut T,
@@ -218,7 +285,19 @@ impl<T: 'static> LuaHost<T> {
         self.bridge.evalsha(sha1, keys, args)
     }
 
-    /// Read-only `EVALSHA`.
+    /// Read-only `EVALSHA`: the dispatch closure receives
+    /// `read_only = true`.
+    ///
+    /// ```
+    /// let mut host = kevy_lua_host::LuaHost::<Vec<bool>>::new(|seen, _argv, ro| {
+    ///     seen.push(ro);
+    ///     b"+OK\r\n".to_vec()
+    /// });
+    /// let sha = host.script_load(b"return redis.call('GET', 'k')");
+    /// let mut seen = Vec::new();
+    /// host.evalsha_ro(&mut seen, sha, &[], &[]);
+    /// assert_eq!(seen, [true]);
+    /// ```
     pub fn evalsha_ro(
         &mut self,
         ctx: &mut T,
@@ -231,17 +310,38 @@ impl<T: 'static> LuaHost<T> {
     }
 
     /// SCRIPT LOAD — cache without running. No context needed.
+    ///
+    /// ```
+    /// let mut host = kevy_lua_host::LuaHost::<()>::new(|_, _argv, _ro| Vec::new());
+    /// let sha = host.script_load(b"return 1");
+    /// assert_eq!(sha, kevy_lua::sha1::sha1(b"return 1"));
+    /// assert_eq!(host.script_exists(&[sha]), [true]);
+    /// ```
     pub fn script_load(&mut self, script: &[u8]) -> ScriptSha1 {
         self.bridge.script_load(script)
     }
 
     /// SCRIPT EXISTS.
+    ///
+    /// ```
+    /// let mut host = kevy_lua_host::LuaHost::<()>::new(|_, _argv, _ro| Vec::new());
+    /// host.eval(&mut (), b"return 1", &[], &[]);
+    /// let ran = kevy_lua::sha1::sha1(b"return 1");
+    /// assert_eq!(host.script_exists(&[ran, [0; 20]]), [true, false]);
+    /// ```
     #[must_use]
     pub fn script_exists(&self, sha1s: &[ScriptSha1]) -> Vec<bool> {
         self.bridge.script_exists(sha1s)
     }
 
     /// SCRIPT FLUSH.
+    ///
+    /// ```
+    /// let mut host = kevy_lua_host::LuaHost::<()>::new(|_, _argv, _ro| Vec::new());
+    /// let sha = host.script_load(b"return 1");
+    /// host.script_flush(kevy_lua::FlushMode::Sync);
+    /// assert_eq!(host.script_exists(&[sha]), [false]);
+    /// ```
     pub fn script_flush(&mut self, mode: FlushMode) {
         self.bridge.script_flush(mode);
     }
@@ -249,196 +349,30 @@ impl<T: 'static> LuaHost<T> {
     /// Forward [`kevy_lua::Bridge::set_instr_budget`] — set the
     /// per-Vm instruction cap. The operator wires `[lua]
     /// time_limit_ms` here at server startup.
+    ///
+    /// ```
+    /// let mut host = kevy_lua_host::LuaHost::<()>::new(|_, _argv, _ro| Vec::new());
+    /// host.set_instr_budget(1_000);
+    /// assert!(host.eval(&mut (), b"while true do end", &[], &[]).starts_with(b"-"));
+    /// ```
     pub fn set_instr_budget(&mut self, n: i64) {
         self.bridge.set_instr_budget(n);
     }
 
     /// Forward [`kevy_lua::Bridge::set_allowed_dialects`].
+    ///
+    /// ```
+    /// use kevy_lua::LuaVersion;
+    /// let mut host = kevy_lua_host::LuaHost::<()>::new(|_, _argv, _ro| Vec::new());
+    /// host.set_allowed_dialects(&[LuaVersion::Lua51, LuaVersion::Lua54]);
+    /// assert_eq!(host.eval(&mut (), b"#!lua version=5.4\nreturn 3 // 2", &[], &[]), b":1\r\n");
+    /// assert!(host.eval(&mut (), b"#!lua version=5.3\nreturn 1", &[], &[]).starts_with(b"-ERR"));
+    /// ```
     pub fn set_allowed_dialects(&mut self, versions: &[kevy_lua::LuaVersion]) {
         self.bridge.set_allowed_dialects(versions);
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A toy shard-state type. Carries a small in-memory keyspace plus a
-    /// dispatch implementation analogous to kevy's command path.
-    #[derive(Default)]
-    struct ToyStore {
-        kv: std::collections::HashMap<Vec<u8>, Vec<u8>>,
-        calls_seen: u32,
-    }
-
-    impl ToyStore {
-        fn run(&mut self, argv: &[&[u8]], read_only: bool) -> Vec<u8> {
-            self.calls_seen += 1;
-            if argv.is_empty() {
-                return b"-ERR no command\r\n".to_vec();
-            }
-            let cmd: Vec<u8> = argv[0].iter().map(|b| b.to_ascii_uppercase()).collect();
-            // Toy write-flag table (matches kevy's `is_write_verb`
-            // shape; production wiring delegates to kevy::cmd).
-            let is_write = matches!(cmd.as_slice(), b"SET" | b"DEL");
-            if read_only && is_write {
-                return b"-READONLY can't write against a read-only script\r\n".to_vec();
-            }
-            match cmd.as_slice() {
-                b"SET" => {
-                    self.kv.insert(argv[1].to_vec(), argv[2].to_vec());
-                    b"+OK\r\n".to_vec()
-                }
-                b"GET" => match self.kv.get(argv[1]) {
-                    Some(v) => {
-                        let mut out = format!("${}\r\n", v.len()).into_bytes();
-                        out.extend_from_slice(v);
-                        out.extend_from_slice(b"\r\n");
-                        out
-                    }
-                    None => b"$-1\r\n".to_vec(),
-                },
-                b"DEL" => {
-                    let n = self.kv.remove(argv[1]).is_some() as i64;
-                    format!(":{n}\r\n").into_bytes()
-                }
-                _ => b"-ERR unknown\r\n".to_vec(),
-            }
-        }
-    }
-
-    fn make_host() -> LuaHost<ToyStore> {
-        LuaHost::<ToyStore>::new(|store, argv, ro| store.run(argv, ro))
-    }
-
-    #[test]
-    fn eval_calls_dispatch_with_live_store() {
-        let mut host = make_host();
-        let mut store = ToyStore::default();
-        let reply = host.eval(
-            &mut store,
-            b"redis.call('SET', KEYS[1], ARGV[1])\n\
-              return redis.call('GET', KEYS[1])\n",
-            &[b"k"],
-            &[b"hello"],
-        );
-        assert_eq!(reply, b"$5\r\nhello\r\n");
-        assert_eq!(store.kv.get(b"k".as_slice()), Some(&b"hello".to_vec()));
-        assert_eq!(store.calls_seen, 2);
-    }
-
-    #[test]
-    fn eval_ro_blocks_writes() {
-        let mut host = make_host();
-        let mut store = ToyStore::default();
-        let reply =
-            host.eval_ro(&mut store, b"return redis.call('SET', KEYS[1], 'v')", &[b"k"], &[]);
-        assert!(reply.starts_with(b"-READONLY "));
-        assert!(!store.kv.contains_key(b"k".as_slice()));
-    }
-
-    #[test]
-    fn evalsha_round_trip() {
-        let mut host = make_host();
-        let mut store = ToyStore::default();
-        let sha = host.script_load(b"return redis.call('GET', KEYS[1])");
-        store.kv.insert(b"x".to_vec(), b"42".to_vec());
-        let reply = host.evalsha(&mut store, sha, &[b"x"], &[]);
-        assert_eq!(reply, b"$2\r\n42\r\n");
-    }
-
-    #[test]
-    fn dispatch_outside_scope_is_a_clear_error() {
-        // No active `host.eval()` → `with_current` returns None and
-        // the dispatch returns the documented -ERR reply.
-        let r = with_current::<ToyStore, _>(|_| 1);
-        assert!(r.is_none());
-    }
-
-    #[test]
-    fn pointer_is_cleared_after_eval_returns() {
-        let mut host = make_host();
-        let mut store = ToyStore::default();
-        let _ = host.eval(&mut store, b"return 1", &[], &[]);
-        // After eval returns, CURRENT has been reset.
-        let r = with_current::<ToyStore, _>(|_| 1);
-        assert!(r.is_none());
-    }
-
-    #[test]
-    fn nested_eval_calls_restore_outer_context() {
-        // Set CURRENT to a sentinel address, call host.eval (which
-        // pushes its own), confirm the sentinel comes back after.
-        let sentinel = Some((0xdead_beef, TypeId::of::<u8>()));
-        CURRENT.with(|c| c.set(sentinel));
-        let mut host = make_host();
-        let mut store = ToyStore::default();
-        let _ = host.eval(&mut store, b"return 1", &[], &[]);
-        let restored = CURRENT.with(Cell::get);
-        assert_eq!(restored, sentinel);
-        CURRENT.with(|c| c.set(None));
-    }
-
-    #[test]
-    fn a_context_is_lent_only_as_the_type_it_was_installed_as() {
-        let mut store = ToyStore::default();
-        let _guard = set_current(&mut store);
-        assert_eq!(with_current::<u64, _>(|_| ()), None, "a different type gets nothing");
-        assert_eq!(with_current::<ToyStore, _>(|_| ()), Some(()));
-    }
-
-    #[test]
-    fn a_lent_context_is_not_lent_twice() {
-        let mut store = ToyStore::default();
-        let _guard = set_current(&mut store);
-        let nested = with_current::<ToyStore, _>(|_| with_current::<ToyStore, _>(|_| ()));
-        assert_eq!(nested, Some(None), "the inner borrow finds the slot empty");
-        assert_eq!(with_current::<ToyStore, _>(|_| ()), Some(()), "and it is back afterwards");
-    }
-}
-
-#[cfg(test)]
-mod p7e_tests {
-    use super::*;
-
-    /// P7e — set_instr_budget on a busy-ish loop. Default budget is
-    /// 200 M (5 s on modern hardware); we shrink to 100 instructions
-    /// and confirm a 10 000-iter loop trips the budget. Then we
-    /// flush and run the same script under unlimited (0) budget to
-    /// confirm the setter is live.
-    #[test]
-    fn instr_budget_trips_on_long_loop() {
-        let mut host = LuaHost::<()>::new(|_ctx, _argv, _ro| Vec::new());
-        host.set_instr_budget(100); // very tight cap
-        let mut nothing = ();
-        let reply = host.eval(
-            &mut nothing,
-            b"local s = 0\nfor i = 1, 10000 do s = s + i end\nreturn s",
-            &[],
-            &[],
-        );
-        // Budget exceeded → the interpreter surfaces an error → bridge wraps in
-        // -ERR. Don't be picky about the exact wording — just confirm
-        // it's an error, not an integer result.
-        assert!(
-            reply.starts_with(b"-ERR "),
-            "expected -ERR budget reply, got: {:?}",
-            String::from_utf8_lossy(&reply)
-        );
-    }
-
-    #[test]
-    fn unlimited_budget_runs_to_completion() {
-        let mut host = LuaHost::<()>::new(|_ctx, _argv, _ro| Vec::new());
-        host.set_instr_budget(0); // unlimited
-        let mut nothing = ();
-        let reply = host.eval(
-            &mut nothing,
-            b"local s = 0\nfor i = 1, 10000 do s = s + i end\nreturn s",
-            &[],
-            &[],
-        );
-        // 1+...+10000 = 50005000
-        assert_eq!(reply, b":50005000\r\n");
-    }
-}
+#[path = "lib_tests.rs"]
+mod tests;

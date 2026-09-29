@@ -33,9 +33,25 @@ pub enum GeoHits {
     /// `(member, score)` pairs to materialize at the destination. Empty =
     /// the search matched nothing, which deletes the destination (Redis
     /// leaves no key behind on an empty result).
+    ///
+    /// ```
+    /// use kevy_rt::GeoHits;
+    ///
+    /// // Two matches; an empty vector would delete the destination instead.
+    /// let hits = GeoHits::Pairs(vec![(b"rome".to_vec(), 1.0), (b"paris".to_vec(), 2.0)]);
+    /// assert!(matches!(hits, GeoHits::Pairs(ref p) if p[1].0 == b"paris"));
+    /// ```
     Pairs(Vec<(Vec<u8>, f64)>),
     /// Pre-encoded RESP error frame: a syntax error, a WRONGTYPE source, or
     /// a `FROMMEMBER` / `GEORADIUSBYMEMBER` anchor the source doesn't hold.
+    ///
+    /// ```
+    /// use kevy_rt::GeoHits;
+    ///
+    /// // Already a full RESP error frame, sent to the client as is.
+    /// let hits = GeoHits::Error(b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n".to_vec());
+    /// assert!(matches!(hits, GeoHits::Error(ref e) if e.starts_with(b"-WRONGTYPE")));
+    /// ```
     Error(Vec<u8>),
 }
 

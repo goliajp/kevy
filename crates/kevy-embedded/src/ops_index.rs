@@ -42,6 +42,21 @@ use crate::store::{Store, lock_write};
 pub(crate) use crate::ops_index_sync::{each_written_key_pub, on_commit, sync_segs};
 
 /// One page of index hits plus the cursor to resume from.
+///
+/// ```
+/// use kevy_embedded::{Config, IndexKind, IndexPage, IndexValType, IndexValue, Store};
+/// let s = Store::open(Config::default())?;
+/// s.idx_create(b"by_age", b"u:", b"age", IndexValType::I64, IndexKind::Range)?;
+/// for (k, age) in [(&b"u:1"[..], &b"30"[..]), (b"u:2", b"40")] {
+///     s.hset(k, &[(b"age", age)])?;
+/// }
+/// let (lo, hi) = (IndexValue::I64(0), IndexValue::I64(99));
+/// let (rows, cursor): IndexPage = s.idx_query(b"by_age", &lo, &hi, None, 1)?;
+/// assert_eq!(rows, [(b"u:1".to_vec(), IndexValue::I64(30))]);
+/// let (rest, _) = s.idx_query(b"by_age", &lo, &hi, cursor.as_ref(), 10)?; // resume
+/// assert_eq!(rest[0].0, b"u:2");
+/// # Ok::<(), kevy_embedded::KevyError>(())
+/// ```
 pub type IndexPage = (Vec<(Vec<u8>, IndexValue)>, Option<Cursor>);
 
 /// One field's highlight: its name and the `(start, end)` match spans.
@@ -65,7 +80,10 @@ pub(crate) mod highlight;
 #[path = "ops_index_claused.rs"]
 pub(crate) mod claused;
 
-// The optional query clauses both of those take.
+// The optional query clauses both of those take; MATCH's set has its own file.
+#[cfg(feature = "text")]
+#[path = "ops_index_match_opts.rs"]
+pub(crate) mod match_opts;
 #[path = "ops_index_opts.rs"]
 pub(crate) mod opts;
 

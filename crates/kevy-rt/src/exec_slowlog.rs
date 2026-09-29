@@ -172,16 +172,51 @@ impl<C: Commands> Shard<C> {
 pub enum SlowlogSub {
     /// `SLOWLOG GET [count]`. `None` = use Redis default of 10. `Some(n)`
     /// where `n < 0` means "all entries".
+    ///
+    /// ```
+    /// use kevy_rt::{Argv, SlowlogSub};
+    ///
+    /// let argv = Argv::from(vec![b"SLOWLOG".to_vec(), b"GET".to_vec(), b"-1".to_vec()]);
+    /// assert_eq!(SlowlogSub::parse(&argv), SlowlogSub::Get(Some(-1)));
+    /// ```
     Get(Option<i64>),
     /// `SLOWLOG LEN`.
+    ///
+    /// ```
+    /// use kevy_rt::{Argv, SlowlogSub};
+    ///
+    /// let argv = Argv::from(vec![b"SLOWLOG".to_vec(), b"LEN".to_vec()]);
+    /// assert_eq!(SlowlogSub::parse(&argv), SlowlogSub::Len);
+    /// ```
     Len,
     /// `SLOWLOG RESET`.
+    ///
+    /// ```
+    /// use kevy_rt::{Argv, SlowlogSub};
+    ///
+    /// let argv = Argv::from(vec![b"SLOWLOG".to_vec(), b"RESET".to_vec()]);
+    /// assert_eq!(SlowlogSub::parse(&argv), SlowlogSub::Reset);
+    /// ```
     Reset,
     /// `SLOWLOG HELP`.
+    ///
+    /// ```
+    /// use kevy_rt::{Argv, SlowlogSub};
+    ///
+    /// let argv = Argv::from(vec![b"SLOWLOG".to_vec(), b"HELP".to_vec()]);
+    /// assert_eq!(SlowlogSub::parse(&argv), SlowlogSub::Help);
+    /// ```
     Help,
     /// Routing-time error: malformed or unknown subcommand. The byte
     /// slice carries the full RESP error reply (e.g. `-ERR ...\r\n`)
     /// so dispatch is a one-step `Part::Reply`.
+    ///
+    /// ```
+    /// use kevy_rt::{Argv, SlowlogSub};
+    ///
+    /// let argv = Argv::from(vec![b"SLOWLOG".to_vec(), b"NOPE".to_vec()]);
+    /// assert!(matches!(SlowlogSub::parse(&argv), SlowlogSub::Err(ref e) if e.starts_with(b"-ERR")));
+    /// ```
     Err(Vec<u8>),
 }
 

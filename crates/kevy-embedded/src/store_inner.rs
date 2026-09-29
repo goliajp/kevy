@@ -29,6 +29,17 @@ use crate::store::{Shards, Store};
 /// Used by the URL-keyed registry in `kevy-client` so that multiple
 /// `Connection::connect("mem://name")` calls share the same backing store
 /// without leaking it when all strong handles go away.
+///
+/// ```
+/// let s = kevy_embedded::Store::open(kevy_embedded::Config::default())?;
+/// s.set(b"k", b"v")?;
+/// let weak = s.downgrade();
+/// let again = weak.upgrade().ok_or("the store is still alive")?;
+/// assert_eq!(again.get(b"k")?.as_deref(), Some(&b"v"[..]), "same keyspace");
+/// drop((s, again));
+/// assert!(weak.upgrade().is_none(), "the last strong handle is gone");
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Debug, Clone)]
 pub struct WeakStore {
     shards: Weak<Vec<Arc<RwLock<Inner>>>>,

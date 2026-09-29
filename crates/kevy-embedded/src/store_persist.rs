@@ -60,9 +60,13 @@ impl Store {
     /// `Ok(())`, every write acknowledged before this call is on
     /// stable storage. The `EverySec` serving-store idiom:
     ///
-    /// ```ignore
-    /// store.atomic(|c| { /* critical write */ Ok(()) })?;
+    /// ```
+    /// # use kevy_embedded::{AppendFsync, Config, Store};
+    /// # let dir = kevy_tmpdir::TmpDir::new("fsync-aof-doc");
+    /// # let store = Store::open(Config::default().with_persist(dir.path()).with_appendfsync(AppendFsync::EverySec))?;
+    /// store.atomic(|c| c.incr_by(b"orders", 1))?; // the critical write
     /// store.fsync_aof()?; // durable-on-ack for THIS block only
+    /// # Ok::<(), kevy_embedded::KevyError>(())
     /// ```
     ///
     /// Cost: one `fdatasync` per dirty shard; a no-op on clean shards.
