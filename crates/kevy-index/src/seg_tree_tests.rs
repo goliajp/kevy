@@ -8,6 +8,14 @@ use crate::seg_leaf::{Shape, head_of};
 pub(crate) fn check(t: &Tree) -> Vec<(Vec<u8>, Vec<u8>)> {
     let mut out = Vec::new();
     let mut leaves = Vec::new();
+    if t.root == NIL {
+        assert_eq!(
+            (t.len, t.first, t.live_leaves(), t.live_inners()),
+            (0, NIL, 0, 0),
+            "an empty tree holds nothing"
+        );
+        return out;
+    }
     let n = walk(t, t.root, t.height, None, None, &mut out, &mut leaves);
     assert_eq!(n, t.len, "len");
     assert_eq!(out.len(), t.len);
@@ -261,7 +269,7 @@ fn thinning_a_deep_tree_merges_leaves_and_keeps_it_whole() {
 }
 
 #[test]
-fn removing_everything_leaves_an_empty_root_leaf() {
+fn removing_everything_leaves_no_leaf() {
     let mut t = Tree::new(Shape { payloads: true, vlens: false });
     for i in 0..3000u32 {
         t.insert(&i.to_be_bytes(), b"x");
@@ -270,6 +278,6 @@ fn removing_everything_leaves_an_empty_root_leaf() {
         assert!(t.remove(&i.to_be_bytes()));
     }
     check(&t);
-    assert_eq!((t.len, t.height, t.live_leaves()), (0, 0, 1));
+    assert_eq!((t.len, t.height, t.live_leaves()), (0, 0, 0), "the last leaf went too");
     assert!(t.first_pos().is_none() && t.last_pos().is_none());
 }

@@ -10,11 +10,17 @@ type Filled = Vec<(u32, Vec<u8>, usize)>;
 impl Tree {
     /// The first entry, if any.
     pub(crate) fn first_pos(&self) -> Option<Pos> {
+        if self.first == NIL {
+            return None;
+        }
         self.normalize(Pos { leaf: self.first, slot: 0 })
     }
 
     /// The last entry, if any.
     pub(crate) fn last_pos(&self) -> Option<Pos> {
+        if self.root == NIL {
+            return None;
+        }
         let mut node = self.root;
         for _ in 0..self.height {
             node = *self.inners[node as usize].kids.last().expect("an inner node has children");
@@ -54,6 +60,10 @@ impl Tree {
     /// Append an entry past every other, filling the current last leaf
     /// `cur` and opening a new one when it is full.
     fn append(&mut self, cur: &mut u32, filled: &mut Filled, e: Ent<'_>) {
+        if *cur == NIL {
+            self.ensure_root();
+            *cur = self.root;
+        }
         let (l, ov) = self.leaf_ov(*cur);
         if !l.insert_at(l.len(), e, ov) {
             let next = self.new_leaf();
@@ -141,6 +151,9 @@ impl Tree {
         let mut key = Vec::new();
         loop {
             let id = self.first;
+            if id == NIL {
+                return;
+            }
             let l = self.leaf(id);
             let n = l.len();
             let cut = l.lower_bound(p, &self.ov);

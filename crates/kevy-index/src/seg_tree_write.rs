@@ -17,6 +17,7 @@ impl Tree {
     /// will take, possibly one past its leaf's end) before the tree
     /// changes.
     pub(crate) fn insert_seen(&mut self, e: Ent<'_>, seen: impl FnOnce(&Tree, Pos)) -> bool {
+        self.ensure_root();
         let p = Probe::new(e.key);
         let mut path = Path::new();
         let id = self.descend(&p, &mut path);
@@ -193,6 +194,9 @@ impl Tree {
 
     /// [`Tree::remove`], showing `seen` the entry before it goes.
     pub(crate) fn remove_seen(&mut self, key: &[u8], seen: impl FnOnce(&Tree, Pos)) -> bool {
+        if self.root == crate::seg_leaf::NIL {
+            return false;
+        }
         let p = Probe::new(key);
         let mut path = Path::new();
         let id = self.descend(&p, &mut path);
@@ -212,7 +216,14 @@ impl Tree {
     /// After a removal from leaf `id`: drop it when empty, merge it with a
     /// sibling when it has thinned out and the two fit in one.
     pub(crate) fn settle(&mut self, path: &mut Path, id: u32) {
-        let Some(&(parent, i)) = path.last() else { return };
+        let Some(&(parent, i)) = path.last() else {
+            // the root leaf: an empty tree holds none
+            if self.leaf(id).is_empty() {
+                self.free_leaf(id);
+                (self.root, self.first) = (crate::seg_leaf::NIL, crate::seg_leaf::NIL);
+            }
+            return;
+        };
         let l = self.leaf(id);
         if l.is_empty() {
             path.pop();

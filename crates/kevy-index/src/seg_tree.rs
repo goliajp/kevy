@@ -131,17 +131,18 @@ pub(crate) struct Tree {
 }
 
 impl Tree {
+    /// An empty tree. It holds no leaf until the first insert.
     pub(crate) fn new(shape: Shape) -> Tree {
         Tree {
-            leaves: vec![Some(Leaf::new(shape))],
+            leaves: Vec::new(),
             free_leaves: Vec::new(),
             inners: Vec::new(),
             free_inners: Vec::new(),
-            root: 0,
+            root: NIL,
             height: 0,
             len: 0,
             shape,
-            first: 0,
+            first: NIL,
             sep_bytes: 0,
             ov: Overflow::default(),
         }
@@ -219,6 +220,14 @@ impl Tree {
         self.inners.len() - self.free_inners.len()
     }
 
+    /// Give an empty tree its root leaf.
+    pub(crate) fn ensure_root(&mut self) {
+        if self.root == NIL {
+            let id = self.new_leaf();
+            (self.root, self.first) = (id, id);
+        }
+    }
+
     /// The leaf a probe belongs in, and the path to it.
     pub(crate) fn descend(&self, p: &Probe<'_>, path: &mut Path) -> u32 {
         path.clear();
@@ -234,6 +243,9 @@ impl Tree {
 
     /// The first entry at or above the probe (`None` past the end).
     pub(crate) fn lower_bound(&self, p: &Probe<'_>) -> Option<Pos> {
+        if self.root == NIL {
+            return None;
+        }
         let mut path = Path::new();
         let leaf = self.descend(p, &mut path);
         let slot = self.leaf(leaf).lower_bound(p, &self.ov);
@@ -251,6 +263,9 @@ impl Tree {
 
     /// Entries strictly below the probe.
     pub(crate) fn rank(&self, p: &Probe<'_>) -> usize {
+        if self.root == NIL {
+            return 0;
+        }
         let mut node = self.root;
         let mut below = 0usize;
         for _ in 0..self.height {
@@ -381,8 +396,7 @@ impl Tree {
             Some((parent, i)) => self.remove_child(path, parent, i),
             None => {
                 // the whole tree emptied through this node
-                let leaf = self.new_leaf();
-                (self.root, self.height, self.first) = (leaf, 0, leaf);
+                (self.root, self.height, self.first) = (NIL, 0, NIL);
             }
         }
     }

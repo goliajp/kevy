@@ -235,8 +235,8 @@ fn stored_hits_chunk(
     hits: &[(Vec<u8>, IndexValue)],
     q: &Query,
 ) -> HitsOrChunk {
-    let keys: Vec<&[u8]> = hits.iter().map(|(k, _)| k.as_slice()).collect();
-    HitsOrChunk::Chunk(match super::global::stored_page(spec, seg, &keys, &q.fields) {
+    let held: Vec<(&IndexValue, &[u8])> = hits.iter().map(|(k, v)| (v, k.as_slice())).collect();
+    HitsOrChunk::Chunk(match super::global::stored_page(spec, seg, &held, &q.fields) {
         Ok(rows) => encode_hits_chunk(hits, q.fields.len(), &rows),
         Err(chunk) => chunk,
     })
@@ -359,10 +359,9 @@ pub(super) fn op_list(ctx: &Ctx<'_>, store: &mut Store) -> Vec<u8> {
             })
             .unwrap_or_default()
         } else {
-            let placed = index_runtime::placed_bytes(ctx, spec.name());
             index_runtime::with_ready_segment(ctx, spec.name(), |_, seg, _| {
                 let st = seg.stats();
-                (st.entries, st.approx_bytes + placed, st.coerce_failures, st.duplicates)
+                (st.entries, st.approx_bytes, st.coerce_failures, st.duplicates)
             })
             .unwrap_or_default()
         };

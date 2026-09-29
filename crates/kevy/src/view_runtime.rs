@@ -49,7 +49,7 @@ pub(crate) fn on_write(ctx: &Ctx<'_>, key: &[u8]) {
     crate::index_runtime::with_segment_resolver(ctx, |seg| {
         let vals: Vec<(&[u8], Option<kevy_index::IndexValue>)> = referenced
             .iter()
-            .map(|n| (n.as_slice(), seg(n).and_then(|s| s.verify_entry(key)).cloned()))
+            .map(|n| (n.as_slice(), seg(n).and_then(|s| s.key_dir()?.get(key))))
             .collect();
         let lookup = |name: &[u8]| -> Option<kevy_index::IndexValue> {
             vals.iter().find(|(n, _)| *n == name).and_then(|(_, v)| v.clone())
@@ -234,7 +234,8 @@ fn virtual_page(
         };
         let cursor = after.map(|(v, k)| kevy_index::Cursor::new(v.clone(), k.clone()));
         let mut out = Vec::with_capacity(limit.min(256));
-        for (v, k) in order_seg.scan(cursor.as_ref(), spec.order) {
+        let mut scan = order_seg.scan(cursor.as_ref(), spec.order);
+        while let Some((v, k)) = scan.next_entry() {
             if spec.tree.contains(k, &seg) {
                 out.push((v.clone(), k.to_vec()));
                 if out.len() == limit {
@@ -252,9 +253,7 @@ fn eval_with_order(ctx: &Ctx<'_>, spec: &ViewSpec) -> Vec<(IndexValue, Vec<u8>)>
         let members = spec.tree.eval(&seg);
         members
             .into_iter()
-            .filter_map(|k| {
-                seg(&spec.order_by).and_then(|s| s.verify_entry(&k)).map(|v| (v.clone(), k))
-            })
+            .filter_map(|k| seg(&spec.order_by).and_then(|s| s.key_dir()?.get(&k)).map(|v| (v, k)))
             .collect()
     })
 }

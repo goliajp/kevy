@@ -191,6 +191,58 @@ fn window_cuts_keep_a_deep_tree_whole() {
 }
 
 #[test]
+fn a_repacked_build_keeps_every_row() {
+    let spec = crate::IndexSpec::builder("n", "user:", IndexKind::Range, ValType::I64)
+        .with_field("n")
+        .build()
+        .expect("a spec");
+    let mut s = Segment::for_spec(&spec);
+    let mut order: Vec<u32> = (0..8000).collect();
+    let mut x = 7u64;
+    for i in (1..order.len()).rev() {
+        x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        order.swap(i, (x >> 33) as usize % (i + 1));
+    }
+    for i in order {
+        s.apply(
+            format!("user:{i}").as_bytes(),
+            None,
+            Some(i64::from(i * 7919 % 1000)).map(IndexValue::I64),
+        );
+    }
+    assert_eq!(s.range(&i(0), &i(1000), None, usize::MAX).0.len(), 8000);
+    s.repack();
+    let _ = crate::seg_tree::tests::check(&s.tree);
+    assert_eq!(s.range(&i(0), &i(1000), None, usize::MAX).0.len(), 8000);
+    assert_eq!(s.count(&i(0), &i(1000)), 8000);
+    for n in [100u32, 500, 1999, 2000, 2001, 3000] {
+        for seed in 0..20u64 {
+            let mut s = Segment::for_spec(&spec);
+            let mut x = seed;
+            let mut keys: Vec<u32> = (0..n).collect();
+            for i in (1..keys.len()).rev() {
+                x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                keys.swap(i, (x >> 33) as usize % (i + 1));
+            }
+            for k in &keys {
+                s.apply(
+                    format!("user:{}", k * 4).as_bytes(),
+                    None,
+                    Some(i(i64::from(k * 7919 % 1000))),
+                );
+            }
+            s.repack();
+            let _ = crate::seg_tree::tests::check(&s.tree);
+            assert_eq!(
+                s.range(&i(0), &i(1000), None, 10_000).0.len(),
+                n as usize,
+                "n={n} seed={seed}"
+            );
+        }
+    }
+}
+
+#[test]
 fn stats_count_what_the_structures_hold() {
     let mut s = Segment::with_values(1);
     let empty = s.stats().approx_bytes;

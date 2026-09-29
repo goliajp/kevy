@@ -150,18 +150,24 @@ pub(super) fn stored_positions(
 pub(super) fn stored_page(
     spec: &kevy_index::IndexSpec,
     seg: &Segment,
-    keys: &[&[u8]],
+    hits: &[(&kevy_index::IndexValue, &[u8])],
     fields: &[Vec<u8>],
 ) -> Result<Vec<HydrationRow>, Vec<u8>> {
-    Ok(stored_rows(seg, keys, &stored_positions(spec, fields)?))
+    Ok(stored_rows(seg, hits, &stored_positions(spec, fields)?))
 }
 
-/// The hydration rows for `keys`, read from the partition's stored values.
-pub(super) fn stored_rows(seg: &Segment, keys: &[&[u8]], positions: &[usize]) -> Vec<HydrationRow> {
-    let row = |k: &[u8]| -> Hydrated {
-        positions.iter().map(|&p| seg.stored(k, p).map(<[u8]>::to_vec)).collect()
+/// The hydration rows for `hits` (each a value and the key held under
+/// it), read from the partition's stored values.
+pub(super) fn stored_rows(
+    seg: &Segment,
+    hits: &[(&kevy_index::IndexValue, &[u8])],
+    positions: &[usize],
+) -> Vec<HydrationRow> {
+    let row = |(v, k): &(&kevy_index::IndexValue, &[u8])| -> Hydrated {
+        let all = seg.stored_row(v, k);
+        positions.iter().map(|&p| all.get(p).cloned().flatten()).collect()
     };
-    keys.iter().map(|k| Ok(Some(row(k)))).collect()
+    hits.iter().map(|h| Ok(Some(row(h)))).collect()
 }
 
 fn parse_usize(b: &[u8]) -> Option<usize> {

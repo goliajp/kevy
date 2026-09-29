@@ -18,6 +18,8 @@ mod tests_atomic_index;
 mod tests_bitmap;
 #[path = "store_tests_bonus.rs"]
 mod tests_bonus;
+#[path = "store_tests_index_paths.rs"]
+mod tests_index_paths;
 #[path = "store_tests_keyspace.rs"]
 mod tests_keyspace;
 #[path = "store_tests_more.rs"]

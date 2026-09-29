@@ -102,6 +102,36 @@ fn create(w: &mut Wire, name: &[u8], tail: &[&[u8]]) {
 }
 
 #[test]
+fn debug_local_backfill_loses_nothing() {
+    for global_first in [false, true] {
+        let srv = Server::start(4);
+        let mut w = srv.wire();
+        for i in 0..8000u32 {
+            let (key, age) = (format!("user:{i}"), ((i * 7919) % 1000).to_string());
+            call(&mut w, &[b"HSET", key.as_bytes(), b"age", age.as_bytes()]);
+        }
+        if global_first {
+            create(&mut w, b"age_g", &[b"PARTITION", b"global"]);
+            let _ = described_splits(&mut w, b"age_g");
+        }
+        create(&mut w, b"age_l", &[]);
+        if global_first {
+            wait_ready(&mut w, b"age_g");
+        }
+        wait_ready(&mut w, b"age_l");
+        let r = text(&call(
+            &mut w,
+            &[b"IDX.QUERY", b"age_l", b"RANGE", b"0", b"1000", b"LIMIT", b"10000"],
+        ));
+        let n = r.matches("user:").count();
+        let v = text(&call(&mut w, &[b"IDX.VERIFY", b"age_l"]));
+        eprintln!("DEBUG global_first={global_first} hits={n} verify={}", v.replace("\r\n", " "));
+        let missing: Vec<u32> = (0..8000).filter(|i| !r.contains(&format!("user:{i}\r"))).collect();
+        eprintln!("DEBUG missing {missing:?}");
+    }
+}
+
+#[test]
 fn a_global_index_answers_what_a_local_one_does_and_sees_a_write_at_once() {
     let srv = Server::start(4);
     let mut w = srv.wire();

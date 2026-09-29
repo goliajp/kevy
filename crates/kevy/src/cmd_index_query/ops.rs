@@ -295,12 +295,7 @@ pub(super) fn op_compose(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> 
     let Some(cq) = ComposeQuery::parse(argv) else {
         return vec![ST_BADARGS];
     };
-    let res = index_runtime::with_two_ready_segments(
-        ctx,
-        &cq.a.name,
-        &cq.b.name,
-        |spec_a, seg_a, spec_b, seg_b| compose_keys(&cq, spec_a.ty(), seg_a, spec_b.ty(), seg_b),
-    );
+    let res = super::compose::keys(ctx, store, &cq);
     match res {
         Ok(Some(keys)) => {
             let mut chunk = vec![ST_OK];
@@ -321,55 +316,7 @@ pub(super) fn op_compose(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> 
     }
 }
 
-/// The COMPOSE set algebra over two READY segments: AND filters the
-/// A-hits through B's held entries; OR unions both ranges. Key-sorted,
-/// cursor-trimmed, truncated to the limit.
-/// `LIMIT` does NOT bound the work here, and cannot.
-///
-/// Every other shape in this surface is cursor-paged and limit-bounded. This
-/// one is not, and the reason is structural rather than an oversight: a
-/// segment is a `BTreeSet<(value, key)>` — ordered by VALUE — while COMPOSE's
-/// result and its cursor are ordered by KEY. Producing one key-ordered page
-/// therefore requires the whole match set, so a `COMPOSE OR` over two broad
-/// ranges pays for both ranges plus a sort on every page even at `LIMIT 10`.
-///
-/// This is a cost model, not a bug, and the command reference states it. The
-/// only way to bound it would be to page in value order of the driving leaf,
-/// which is a different (and less useful) contract.
-fn compose_keys(
-    cq: &ComposeQuery,
-    ty_a: ValType,
-    seg_a: &kevy_index::Segment,
-    ty_b: ValType,
-    seg_b: &kevy_index::Segment,
-) -> Option<Vec<Vec<u8>>> {
-    let (min_a, max_a) = sub_bounds(&cq.a.shape, ty_a)?;
-    let (min_b, max_b) = sub_bounds(&cq.b.shape, ty_b)?;
-    // usize::MAX is deliberate — see the note above: a key-ordered page needs
-    // the full match set out of a value-ordered index.
-    let (a_hits, _) = seg_a.range(&min_a, &max_a, None, usize::MAX);
-    let mut keys: Vec<Vec<u8>> = if cq.and {
-        a_hits
-            .into_iter()
-            .filter(|(k, _)| seg_b.verify_entry(k).is_some_and(|v| *v >= min_b && *v <= max_b))
-            .map(|(k, _)| k)
-            .collect()
-    } else {
-        let (b_hits, _) = seg_b.range(&min_b, &max_b, None, usize::MAX);
-        let mut all: Vec<Vec<u8>> = a_hits.into_iter().chain(b_hits).map(|(k, _)| k).collect();
-        all.sort();
-        all.dedup();
-        all
-    };
-    keys.sort();
-    if let Some(cur) = &cq.cursor_key {
-        keys.retain(|k| k.as_slice() > cur.as_slice());
-    }
-    keys.truncate(cq.limit);
-    Some(keys)
-}
-
-fn sub_bounds(shape: &Shape, ty: ValType) -> Option<(IndexValue, IndexValue)> {
+pub(super) fn sub_bounds(shape: &Shape, ty: ValType) -> Option<(IndexValue, IndexValue)> {
     match shape {
         Shape::Range { min, max } => {
             Some((IndexValue::parse_literal(ty, min)?, IndexValue::parse_literal(ty, max)?))
