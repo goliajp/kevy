@@ -273,6 +273,10 @@ jobs:
       # exactly when it was wanted. With a bare `always()` it would publish
       # the checked-in copy on a cancelled run, which is the trap the other
       # two had.
+      # runs whatever doctestgate said: the two gates read different things
+      - name: apigate (the public API meets the mechanical API guidelines)
+        if: success() || failure()
+        run: python3 tools/check_api_guidelines.py
       - name: upload doc deficit
         if: always() && (steps.doctestgate.outcome == 'success' || steps.doctestgate.outcome == 'failure')
         uses: actions/upload-artifact@v7

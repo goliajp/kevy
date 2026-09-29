@@ -1,0 +1,3 @@
+# Items the API guidelines gate flags that are right as they are.
+# Each entry: rule (one of the gate's rules), item (the public path the gate
+# prints) and why — the reason it stays, in a sentence a reviewer can check.
