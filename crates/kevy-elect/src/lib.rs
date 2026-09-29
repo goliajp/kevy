@@ -36,7 +36,7 @@ mod elector_tests;
 pub use elector::{ElectConfig, ElectJitter, Elector, Outbound};
 pub use message::{Message, Role};
 pub use persist::{ElectorPersist, NoPersist};
-pub use wire::{DecodeError, decode, encode};
+pub use wire::DecodeError;
 
 const _: () = {
     const fn send_sync<T: Send + Sync>() {}

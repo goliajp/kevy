@@ -142,11 +142,10 @@ impl Transport {
     /// out by the elector at run-time).
     pub fn spawn(
         elector: Elector,
-        hb_interval: Duration,
         listen_addr: (std::net::IpAddr, u16),
         peers: Vec<PeerAddr>,
     ) -> std::io::Result<Self> {
-        Self::spawn_with_callback(elector, hb_interval, listen_addr, peers, Box::new(|_, _, _| {}))
+        Self::spawn_with_callback(elector, listen_addr, peers, Box::new(|_, _, _| {}))
     }
 
     /// Like [`Self::spawn`], with a topology-change
@@ -161,12 +160,11 @@ impl Transport {
     #[allow(clippy::needless_pass_by_value)]
     pub fn spawn_with_callback(
         elector: Elector,
-        hb_interval: Duration,
         listen_addr: (std::net::IpAddr, u16),
         peers: Vec<PeerAddr>,
         on_change: TopologyCallback,
     ) -> std::io::Result<Self> {
-        Self::spawn_inner(elector, hb_interval, listen_addr, peers, on_change, None)
+        Self::spawn_inner(elector, listen_addr, peers, on_change, None)
     }
 
     /// Like [`Self::spawn_with_callback`], with every link encrypted and
@@ -181,33 +179,34 @@ impl Transport {
     /// use kevy_elect::{ElectConfig, ElectJitter, Elector, Role, SecureLinks, Transport};
     /// use kevy_noise::Keypair;
     ///
-    /// let elector = Elector::new("a", vec!["a".to_string()], "127.0.0.1:0", Role::Primary,
-    ///     ElectConfig::default(), ElectJitter::Fixed(Duration::ZERO));
+    /// let elector = Elector::new("a", vec!["a".to_string()], "127.0.0.1:0", Role::Primary)
+    ///     .with_config(ElectConfig::default().with_hb_interval(Duration::from_millis(50)))
+    ///     .with_jitter(ElectJitter::Fixed(Duration::ZERO));
     /// let secure = SecureLinks::new(Keypair::from_secret([1; 32]), []);
-    /// let t = Transport::spawn_secure(elector, Duration::from_millis(50),
-    ///     (IpAddr::V4(Ipv4Addr::LOCALHOST), 0), vec![], Box::new(|_, _, _| {}), secure).unwrap();
+    /// let t = Transport::spawn_secure(elector, (IpAddr::V4(Ipv4Addr::LOCALHOST), 0), vec![],
+    ///     Box::new(|_, _, _| {}), secure)?;
     /// assert_eq!(t.state_snapshot().role, Role::Primary);
     /// t.shutdown();
+    /// # Ok::<(), std::io::Error>(())
     /// ```
     pub fn spawn_secure(
         elector: Elector,
-        hb_interval: Duration,
         listen_addr: (std::net::IpAddr, u16),
         peers: Vec<PeerAddr>,
         on_change: TopologyCallback,
         secure: crate::link::SecureLinks,
     ) -> std::io::Result<Self> {
-        Self::spawn_inner(elector, hb_interval, listen_addr, peers, on_change, Some(secure))
+        Self::spawn_inner(elector, listen_addr, peers, on_change, Some(secure))
     }
 
     fn spawn_inner(
         elector: Elector,
-        hb_interval: Duration,
         listen_addr: (std::net::IpAddr, u16),
         peers: Vec<PeerAddr>,
         on_change: TopologyCallback,
         secure: Option<crate::link::SecureLinks>,
     ) -> std::io::Result<Self> {
+        let hb_interval = elector.config.hb_interval;
         let shared = Arc::new(Shared {
             elector: Mutex::new(elector),
             secure,

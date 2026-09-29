@@ -25,7 +25,7 @@ use crate::transport::{
     InboundEvent, MAX_PENDING_PER_PEER, PeerAddr, READ_BUF_CAP, READ_RETRY_BACKOFF, Shared,
     TopologyCallback,
 };
-use crate::wire::{DecodeError, decode, encode};
+use crate::wire::DecodeError;
 
 // needless_pass_by_value: thread entry point — it owns its channel/flag for
 // the thread's whole lifetime; references cannot cross `thread::spawn`.
@@ -124,7 +124,7 @@ fn inbound_read_loop(
 /// been sent and the caller must drop the connection.
 fn drain_frames(buf: &mut Vec<u8>, tx: &Sender<InboundEvent>, verified: Option<&str>) -> bool {
     while !buf.is_empty() {
-        match decode(buf) {
+        match Message::decode(buf) {
             Ok((msg, used)) => {
                 let from = message_sender(&msg);
                 // on a secure link the key names the sender; a message
@@ -182,7 +182,7 @@ pub(crate) fn outbound_loop(peer: PeerAddr, shared: Arc<Shared>, stop: Arc<Atomi
             std::thread::sleep(Duration::from_millis(1));
             continue;
         };
-        let bytes = encode(&msg);
+        let bytes = msg.encode();
         let Some(s) = stream.as_mut() else {
             continue;
         };
@@ -339,15 +339,15 @@ mod tests {
     use super::drain_frames;
     use crate::message::Message;
     use crate::transport::InboundEvent;
-    use crate::wire::encode;
 
     fn hb(from: &str) -> Vec<u8> {
-        encode(&Message::Hb {
+        (Message::Hb {
             node_id: from.to_string(),
             epoch: 1,
             role: crate::message::Role::Replica,
             repl_offset: 0,
         })
+        .encode()
     }
 
     #[test]
