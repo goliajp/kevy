@@ -30,8 +30,7 @@ pub(crate) fn verify_chunk(ctx: &Ctx<'_>, store: &mut Store, name: &[u8]) -> Opt
     if !g.ready() {
         return Some(vec![crate::cmd_index_query::ST_BUILDING]);
     }
-    let (held, mut stats) = held(g);
-    stats.1 += g.placed_bytes();
+    let (held, stats) = held(g);
     let (owed, coerce_failures) = owed(store, &si.spec, g);
     let mut chunk = vec![crate::cmd_index_query::ST_OK, VERIFY_TAG];
     for n in [stats.0, stats.1, coerce_failures, stats.2] {
@@ -48,10 +47,13 @@ pub(crate) fn verify_chunk(ctx: &Ctx<'_>, store: &mut Store, name: &[u8]) -> Opt
 fn held(g: &GlobalRole) -> (Vec<Placed>, (u64, u64, u64)) {
     let (mut out, mut stats) = (Vec::new(), (0, 0, 0));
     for (p, seg) in &g.owned {
-        seg.each_entry(|k, v| {
-            let h = entry_hash(&v.order_bytes(), seg.stored_row(k));
-            out.push((k.to_vec(), *p as u16, h));
-        });
+        let mut scan = seg.scan(None, kevy_index::SortOrder::Asc);
+        while let Some((v, k)) = scan.next_entry() {
+            let (enc, k) = (v.order_bytes(), k.to_vec());
+            let vals = scan.stored_row();
+            let h = entry_hash(&enc, vals.iter().map(|x| x.as_deref()));
+            out.push((k, *p as u16, h));
+        }
         let s = seg.stats();
         stats = (stats.0 + s.entries, stats.1 + s.approx_bytes, stats.2 + s.duplicates);
     }

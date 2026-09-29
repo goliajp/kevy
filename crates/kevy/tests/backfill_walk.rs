@@ -142,6 +142,21 @@ impl Db {
         score.starts_with(b"-INDEXBUILDING") || path.starts_with(b"-INDEXBUILDING")
     }
 
+    /// What the table's indexes report they hold, summed (`IDX.LIST`'s
+    /// `bytes`).
+    fn index_bytes(&mut self) -> i64 {
+        let reply = String::from_utf8(self.query(&["IDX.LIST"])).expect("utf-8");
+        let mut lines = reply.split("\r\n").filter(|l| !l.starts_with(['*', '$']));
+        let mut total = 0;
+        while let Some(l) = lines.next() {
+            if l == "bytes" {
+                let v = lines.next().expect("a value after bytes");
+                total += v.trim_start_matches(':').parse::<i64>().expect("a byte count");
+            }
+        }
+        total
+    }
+
     /// Every key the score index answers, with the score it holds, read
     /// a page at a time.
     fn score_entries(&mut self) -> BTreeMap<String, i64> {
@@ -218,6 +233,10 @@ fn build(db: &mut Db) -> usize {
 // its 24-byte handle in the list. A walk holds one batch of them.
 const ROWS: u64 = 100_000;
 const HELD_PER_ROW: i64 = 8;
+// The walk visits rows in hash order, so an index's leaves fill to about
+// ln 2 before the final repack packs them: the tree peaks at up to 1/0.69
+// of what it keeps
+const FILL_SLACK: f64 = 1.0 / 0.69 - 1.0;
 
 #[test]
 fn an_index_backfill_holds_one_batch_of_keys() {
@@ -231,20 +250,23 @@ fn an_index_backfill_holds_one_batch_of_keys() {
         ticks = build(&mut db);
     });
     let took = started.elapsed();
-    // the index only grows, so anything held above what it keeps at the
-    // end was transient
+    // anything held above what the build keeps at the end was transient:
+    // the unpacked leaves, and whatever the walk held
     let excess = peak - kept;
+    let slack = (db.index_bytes() as f64 * FILL_SLACK) as i64;
+    let walk = excess - slack;
     eprintln!(
         "index backfill: {ROWS} rows, {ticks} ticks, {took:?}; peak {peak} B, kept {kept} B, \
-         transient {excess} B = {:.1} B/row",
+         transient {excess} B = {:.1} B/row, of which leaf slack at most {slack} B",
         excess as f64 / ROWS as f64
     );
     assert_eq!(db.score_entries().len(), ROWS as usize, "every row is indexed");
     assert!(!db.store.is_packed(b"row:0"), "a row with an undeclared field is never packed");
     assert!(
-        excess < ROWS as i64 * HELD_PER_ROW,
-        "the build held {excess} bytes above what it keeps ({:.1} B/row)",
-        excess as f64 / ROWS as f64
+        walk < ROWS as i64 * HELD_PER_ROW,
+        "the build held {excess} bytes above what it keeps, {walk} beyond the leaves' slack \
+         ({:.1} B/row)",
+        walk as f64 / ROWS as f64
     );
 }
 

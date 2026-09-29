@@ -18,12 +18,11 @@
 //!   returns `limit + offset`.
 
 use std::collections::HashMap;
-use std::ops::Bound;
 
 use crate::catalog::ValType;
 use crate::segment::{Cursor, Segment};
+use crate::value::IndexValue;
 use crate::value::ValueTest;
-use crate::value::{IndexValue, order_key};
 use kevy_text::{SortOrder, sorted_order};
 
 use crate::segment_claused_merge::finish_facets;
@@ -50,7 +49,7 @@ pub struct ScalarClauses<'a> {
     /// # use kevy_index::{IndexValue, ScalarClauses, Segment, SortOrder, ValType, ValueTest};
     /// let mut s = Segment::with_values(1);
     /// for (k, v, city) in [(b"a", 1, "kyoto"), (b"b", 2, "osaka"), (b"c", 3, "kyoto")] {
-    ///     s.apply_with_values(k, Some(IndexValue::I64(v)), &[Some(city.as_bytes())]);
+    ///     s.apply_with_values(k, None, Some(IndexValue::I64(v)), &[Some(city.as_bytes())]);
     /// }
     /// let (lo, hi) = (IndexValue::I64(0), IndexValue::I64(9));
     /// let f = [(0, ValueTest::eq(ValType::Str, b"kyoto").expect("a str test"))];
@@ -65,7 +64,7 @@ pub struct ScalarClauses<'a> {
     /// # use kevy_index::{IndexValue, ScalarClauses, Segment, SortOrder, ValType, ValueTest};
     /// let mut s = Segment::with_values(1);
     /// for (k, v, city) in [(b"a", 1, "kyoto"), (b"b", 2, "osaka"), (b"c", 3, "kyoto")] {
-    ///     s.apply_with_values(k, Some(IndexValue::I64(v)), &[Some(city.as_bytes())]);
+    ///     s.apply_with_values(k, None, Some(IndexValue::I64(v)), &[Some(city.as_bytes())]);
     /// }
     /// let (lo, hi) = (IndexValue::I64(0), IndexValue::I64(9));
     /// let c = ScalarClauses::new(10).with_sort(0, SortOrder::Desc, ValType::Str);
@@ -79,7 +78,7 @@ pub struct ScalarClauses<'a> {
     /// # use kevy_index::{IndexValue, ScalarClauses, Segment, SortOrder, ValType, ValueTest};
     /// let mut s = Segment::with_values(1);
     /// for (k, v, city) in [(b"a", 1, "kyoto"), (b"b", 2, "osaka"), (b"c", 3, "kyoto")] {
-    ///     s.apply_with_values(k, Some(IndexValue::I64(v)), &[Some(city.as_bytes())]);
+    ///     s.apply_with_values(k, None, Some(IndexValue::I64(v)), &[Some(city.as_bytes())]);
     /// }
     /// let (lo, hi) = (IndexValue::I64(0), IndexValue::I64(9));
     /// let c = ScalarClauses::new(10).with_distinct(0, ValType::Str);
@@ -92,7 +91,7 @@ pub struct ScalarClauses<'a> {
     /// # use kevy_index::{IndexValue, ScalarClauses, Segment, SortOrder, ValType, ValueTest};
     /// let mut s = Segment::with_values(1);
     /// for (k, v, city) in [(b"a", 1, "kyoto"), (b"b", 2, "osaka"), (b"c", 3, "kyoto")] {
-    ///     s.apply_with_values(k, Some(IndexValue::I64(v)), &[Some(city.as_bytes())]);
+    ///     s.apply_with_values(k, None, Some(IndexValue::I64(v)), &[Some(city.as_bytes())]);
     /// }
     /// let (lo, hi) = (IndexValue::I64(0), IndexValue::I64(9));
     /// let f = [(0, ValType::Str)];
@@ -107,7 +106,7 @@ pub struct ScalarClauses<'a> {
     /// # use kevy_index::{IndexValue, ScalarClauses, Segment, SortOrder, ValType, ValueTest};
     /// let mut s = Segment::with_values(1);
     /// for (k, v, city) in [(b"a", 1, "kyoto"), (b"b", 2, "osaka"), (b"c", 3, "kyoto")] {
-    ///     s.apply_with_values(k, Some(IndexValue::I64(v)), &[Some(city.as_bytes())]);
+    ///     s.apply_with_values(k, None, Some(IndexValue::I64(v)), &[Some(city.as_bytes())]);
     /// }
     /// let (lo, hi) = (IndexValue::I64(0), IndexValue::I64(9));
     /// let page = s.query_claused(&lo, &hi, None, &ScalarClauses::new(2));
@@ -192,7 +191,7 @@ impl<'a> ScalarClauses<'a> {
 /// ```
 /// # use kevy_index::{IndexValue, ScalarClauses, Segment, SortOrder, ValType};
 /// let mut s = Segment::with_values(1);
-/// s.apply_with_values(b"k", Some(IndexValue::I64(7)), &[Some(b"42")]);
+/// s.apply_with_values(b"k", None, Some(IndexValue::I64(7)), &[Some(b"42")]);
 /// let c = ScalarClauses::new(5).with_sort(0, SortOrder::Asc, ValType::I64);
 /// let hit = &s.query_claused(&IndexValue::I64(0), &IndexValue::I64(9), None, &c).hits[0];
 /// assert_eq!((hit.key.as_slice(), &hit.value), (&b"k"[..], &IndexValue::I64(7)));
@@ -205,7 +204,7 @@ pub struct ScalarHit {
     /// ```
     /// # use kevy_index::{IndexValue, ScalarClauses, Segment, SortOrder, ValType};
     /// let mut s = Segment::with_values(1);
-    /// s.apply_with_values(b"k", Some(IndexValue::I64(7)), &[Some(b"42")]);
+    /// s.apply_with_values(b"k", None, Some(IndexValue::I64(7)), &[Some(b"42")]);
     /// let c = ScalarClauses::new(5).with_sort(0, SortOrder::Asc, ValType::I64);
     /// let hit = &s.query_claused(&IndexValue::I64(0), &IndexValue::I64(9), None, &c).hits[0];
     /// assert_eq!(hit.key, b"k");
@@ -216,7 +215,7 @@ pub struct ScalarHit {
     /// ```
     /// # use kevy_index::{IndexValue, ScalarClauses, Segment, SortOrder, ValType};
     /// let mut s = Segment::with_values(1);
-    /// s.apply_with_values(b"k", Some(IndexValue::I64(7)), &[Some(b"42")]);
+    /// s.apply_with_values(b"k", None, Some(IndexValue::I64(7)), &[Some(b"42")]);
     /// let c = ScalarClauses::new(5).with_sort(0, SortOrder::Asc, ValType::I64);
     /// let hit = &s.query_claused(&IndexValue::I64(0), &IndexValue::I64(9), None, &c).hits[0];
     /// assert_eq!(hit.value, IndexValue::I64(7), "the driving value, not the sort field");
@@ -227,7 +226,7 @@ pub struct ScalarHit {
     /// ```
     /// # use kevy_index::{IndexValue, ScalarClauses, Segment, SortOrder, ValType};
     /// let mut s = Segment::with_values(1);
-    /// s.apply_with_values(b"k", Some(IndexValue::I64(7)), &[Some(b"42")]);
+    /// s.apply_with_values(b"k", None, Some(IndexValue::I64(7)), &[Some(b"42")]);
     /// let c = ScalarClauses::new(5).with_sort(0, SortOrder::Asc, ValType::I64);
     /// let hit = &s.query_claused(&IndexValue::I64(0), &IndexValue::I64(9), None, &c).hits[0];
     /// assert_eq!(hit.okey, kevy_index::order_key(ValType::I64, b"42"));
@@ -238,7 +237,7 @@ pub struct ScalarHit {
     /// ```
     /// # use kevy_index::{IndexValue, ScalarClauses, Segment, SortOrder, ValType};
     /// let mut s = Segment::with_values(1);
-    /// s.apply_with_values(b"k", Some(IndexValue::I64(7)), &[Some(b"42")]);
+    /// s.apply_with_values(b"k", None, Some(IndexValue::I64(7)), &[Some(b"42")]);
     /// let c = ScalarClauses::new(5).with_sort(0, SortOrder::Asc, ValType::I64);
     /// let hit = &s.query_claused(&IndexValue::I64(0), &IndexValue::I64(9), None, &c).hits[0];
     /// assert_eq!(hit.dkey, None, "only a DISTINCT query gives a hit an identity");
@@ -284,7 +283,7 @@ pub(crate) type FacetCounts = HashMap<Vec<u8>, (Vec<u8>, u64)>;
 /// # use kevy_index::{IndexValue, ScalarClauses, Segment, ValType};
 /// let mut s = Segment::with_values(1);
 /// for (k, v) in [(b"a", 1), (b"b", 2), (b"c", 3)] {
-///     s.apply_with_values(k, Some(IndexValue::I64(v)), &[Some(b"x")]);
+///     s.apply_with_values(k, None, Some(IndexValue::I64(v)), &[Some(b"x")]);
 /// }
 /// let (lo, hi) = (IndexValue::I64(0), IndexValue::I64(9));
 /// let page = s.query_claused(&lo, &hi, None, &ScalarClauses::new(2));
@@ -299,7 +298,7 @@ pub struct ClausedPage {
     /// # use kevy_index::{IndexValue, ScalarClauses, Segment, ValType};
     /// let mut s = Segment::with_values(1);
     /// for (k, v) in [(b"a", 1), (b"b", 2), (b"c", 3)] {
-    ///     s.apply_with_values(k, Some(IndexValue::I64(v)), &[Some(b"x")]);
+    ///     s.apply_with_values(k, None, Some(IndexValue::I64(v)), &[Some(b"x")]);
     /// }
     /// let (lo, hi) = (IndexValue::I64(0), IndexValue::I64(9));
     /// let page = s.query_claused(&lo, &hi, None, &ScalarClauses::new(10));
@@ -314,7 +313,7 @@ pub struct ClausedPage {
     /// # use kevy_index::{IndexValue, ScalarClauses, Segment, ValType};
     /// let mut s = Segment::with_values(1);
     /// for (k, v) in [(b"a", 1), (b"b", 2), (b"c", 3)] {
-    ///     s.apply_with_values(k, Some(IndexValue::I64(v)), &[Some(b"x")]);
+    ///     s.apply_with_values(k, None, Some(IndexValue::I64(v)), &[Some(b"x")]);
     /// }
     /// let (lo, hi) = (IndexValue::I64(0), IndexValue::I64(9));
     /// let f = [(0, ValType::Str)];
@@ -329,7 +328,7 @@ pub struct ClausedPage {
     /// # use kevy_index::{IndexValue, ScalarClauses, Segment, ValType};
     /// let mut s = Segment::with_values(1);
     /// for (k, v) in [(b"a", 1), (b"b", 2), (b"c", 3)] {
-    ///     s.apply_with_values(k, Some(IndexValue::I64(v)), &[Some(b"x")]);
+    ///     s.apply_with_values(k, None, Some(IndexValue::I64(v)), &[Some(b"x")]);
     /// }
     /// let (lo, hi) = (IndexValue::I64(0), IndexValue::I64(9));
     /// let c = ScalarClauses::new(2);
@@ -342,42 +341,51 @@ pub struct ClausedPage {
 }
 
 impl Segment {
-    /// Whether `key` satisfies every predicate (ANDed). A row with no
-    /// value for a filtered field never passes; a segment that stores
-    /// no values at all fails every filtered candidate — absent is not
-    /// a value, in either shape.
-    fn passes(&self, key: &[u8], filters: &[(usize, ValueTest)]) -> bool {
-        if filters.is_empty() {
-            return true;
-        }
-        filters.iter().all(|(f, t)| self.stored(key, *f).is_some_and(|raw| t.passes(raw)))
-    }
-
-    /// A stored value's coerced key for a clause: order key under the
-    /// declared type; `None` = no usable value (its own group / sorts
-    /// last).
-    fn clause_key(&self, key: &[u8], field: usize, ty: ValType) -> Option<Vec<u8>> {
-        self.stored(key, field).and_then(|raw| order_key(ty, raw))
-    }
-
     /// The clause-carrying count of `[min, max]`: the full walk with
     /// the FILTER predicates applied, materializing nothing — the
     /// total a claused query would reach, without building pages. The
     /// consumer shape this closes: counting a filtered axis used to
     /// mean fetching every page and taking `len`.
+    ///
+    /// ```
+    /// use kevy_index::{IndexValue, Segment, ValType, ValueTest};
+    /// let mut s = Segment::with_values(1);
+    /// for (k, v, c) in [(b"a", 1, "x"), (b"b", 2, "y"), (b"c", 3, "x")] {
+    ///     s.apply_with_values(k, None, Some(IndexValue::I64(v)), &[Some(c.as_bytes())]);
+    /// }
+    /// let f = [(0, ValueTest::eq(ValType::Str, b"x").expect("a str test"))];
+    /// assert_eq!(s.count_claused(&IndexValue::I64(0), &IndexValue::I64(9), &f), 2);
+    /// ```
     pub fn count_claused(
         &self,
         min: &IndexValue,
         max: &IndexValue,
         filters: &[(usize, ValueTest)],
     ) -> u64 {
-        self.range_iter(min, max, None).filter(|(_, k)| self.passes(k, filters)).count() as u64
+        if filters.is_empty() {
+            return self.count(min, max);
+        }
+        let mut w = self.range_walk(min, max, None);
+        let mut buf = Vec::new();
+        let mut n = 0;
+        while w.advance() {
+            n += u64::from(passes(&w, filters, &mut buf));
+        }
+        n
     }
 
     /// The clause-carrying scan of `[min, max]`. FILTER-only queries
     /// stream in driving order and stay cursor-paged; any selection
     /// clause walks deeper (the whole range for `SORT` / `FACET`) and
     /// returns no cursor.
+    ///
+    /// ```
+    /// use kevy_index::{IndexValue, ScalarClauses, Segment};
+    /// let mut s = Segment::with_values(1);
+    /// s.apply_with_values(b"k", None, Some(IndexValue::I64(1)), &[Some(b"x")]);
+    /// let page = s.query_claused(&IndexValue::I64(0), &IndexValue::I64(9), None, &ScalarClauses::new(5));
+    /// assert_eq!(page.hits.len(), 1);
+    /// ```
     pub fn query_claused(
         &self,
         min: &IndexValue,
@@ -392,15 +400,17 @@ impl Segment {
         // sort key) or faceting (counts before truncation); otherwise
         // the walk stops as soon as the page is full.
         let full_walk = c.sort.is_some() || !c.facets.is_empty();
-        for (v, k) in self.range_iter(min, max, cursor) {
-            if !self.passes(k, c.filters) {
+        let mut w = self.range_walk(min, max, cursor);
+        let mut buf = Vec::new();
+        while w.advance() {
+            if !passes(&w, c.filters, &mut buf) {
                 continue;
             }
-            self.count_facets(k, c, &mut facets);
+            count_facets(&w, c, &mut facets, &mut buf);
             if !full_walk && hits.len() == c.fetch {
                 break;
             }
-            self.select_hit(v, k, c, &mut hits, &mut groups);
+            select_hit(&mut w, c, &mut hits, &mut groups, &mut buf);
         }
         if let Some((_, order, _)) = c.sort {
             hits.sort_by(|a, b| {
@@ -408,83 +418,14 @@ impl Segment {
             });
         }
         hits.truncate(c.fetch);
-        let cursor = self.filter_cursor(c, &hits);
+        let cursor = filter_cursor(c, &hits);
         ClausedPage { hits, facets: finish_facets(facets), cursor }
     }
-
-    /// The streaming `[min, max]` walk, resuming past `cursor`.
-    fn range_iter<'s>(
-        &'s self,
-        min: &IndexValue,
-        max: &IndexValue,
-        cursor: Option<&Cursor>,
-    ) -> impl Iterator<Item = (&'s IndexValue, &'s [u8])> {
-        let lower = match cursor {
-            Some(c) => Bound::Excluded((&c.value, c.key.as_slice())),
-            None => Bound::Included((min, &[][..])),
-        };
-        let max = max.clone();
-        self.walk(lower, Bound::Unbounded).take_while(move |(v, _)| **v <= max)
-    }
-
-    /// Credit one passing candidate to every facet bucket it has a
-    /// value in. Buckets key by the coerced identity; the label is a
-    /// spelling that occurs in the corpus. Rows without a value (or
-    /// with one that does not coerce) are in no bucket.
-    fn count_facets(&self, key: &[u8], c: &ScalarClauses<'_>, facets: &mut [FacetCounts]) {
-        for ((f, ty), counts) in c.facets.iter().zip(facets.iter_mut()) {
-            let Some(raw) = self.stored(key, *f) else { continue };
-            let Some(id) = order_key(*ty, raw) else { continue };
-            let e = counts.entry(id).or_insert_with(|| (raw.to_vec(), 0));
-            e.1 += 1;
-        }
-    }
-
-    /// Push one passing candidate onto the page, collapsing under
-    /// `DISTINCT` during selection: in driving order the first
-    /// occurrence of a value is its best; under `SORT` the better group
-    /// representative by the page's own order replaces the held one.
-    /// Rows with no value are their own group and never collapse.
-    fn select_hit(
-        &self,
-        v: &IndexValue,
-        k: &[u8],
-        c: &ScalarClauses<'_>,
-        hits: &mut Vec<ScalarHit>,
-        groups: &mut HashMap<Vec<u8>, usize>,
-    ) {
-        let okey = c.sort.and_then(|(f, _, ty)| self.clause_key(k, f, ty));
-        let dkey = c.distinct.and_then(|(f, ty)| self.clause_key(k, f, ty));
-        if let Some(id) = &dkey {
-            match groups.entry(id.clone()) {
-                std::collections::hash_map::Entry::Occupied(e) => {
-                    let Some((_, order, _)) = c.sort else { return };
-                    let prev = &mut hits[*e.get()];
-                    if sorted_order((okey.as_deref(), k), (prev.okey.as_deref(), &prev.key), order)
-                        == std::cmp::Ordering::Less
-                    {
-                        *prev = ScalarHit { key: k.to_vec(), value: v.clone(), okey, dkey };
-                    }
-                    return;
-                }
-                std::collections::hash_map::Entry::Vacant(slot) => {
-                    slot.insert(hits.len());
-                }
-            }
-        }
-        hits.push(ScalarHit { key: k.to_vec(), value: v.clone(), okey, dkey });
-    }
-
-    /// The resume cursor for the FILTER-with-CURSOR path: the last
-    /// served `(value, key)`, exactly as the plain range emits it.
-    /// Selection clauses page nothing, so they carry none.
-    fn filter_cursor(&self, c: &ScalarClauses<'_>, hits: &[ScalarHit]) -> Option<Cursor> {
-        if c.selects() || hits.len() < c.fetch {
-            return None;
-        }
-        hits.last().map(|h| Cursor { value: h.value.clone(), key: h.key.clone() })
-    }
 }
+
+#[path = "segment_claused_select.rs"]
+mod select;
+use select::{count_facets, filter_cursor, passes, select_hit};
 
 #[cfg(test)]
 #[path = "segment_claused_tests.rs"]

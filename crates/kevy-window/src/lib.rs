@@ -15,7 +15,7 @@
 //! let mut w = kevy_window::WindowRt::new(WindowSpec::new("ts", 100, 50), WindowShape::PlainI64);
 //! let mut seg = Segment::new();
 //! for ts in [10, 20, 300] {
-//!     seg.apply(format!("r:{ts}").as_bytes(), Some(IndexValue::I64(ts)));
+//!     seg.apply(format!("r:{ts}").as_bytes(), None, Some(IndexValue::I64(ts)));
 //! }
 //! assert!(w.slide(b"t.ts", &mut seg, dir.path())?);
 //!
@@ -68,7 +68,7 @@ use kevy_index::{
 /// let mut w = kevy_window::WindowRt::new(WindowSpec::new("ts", 100, 50), WindowShape::PlainI64);
 /// let mut seg = Segment::new();
 /// for ts in [10, 20, 300] {
-///     seg.apply(format!("r:{ts}").as_bytes(), Some(IndexValue::I64(ts)));
+///     seg.apply(format!("r:{ts}").as_bytes(), None, Some(IndexValue::I64(ts)));
 /// }
 /// assert!(w.slide(b"t.ts", &mut seg, dir.path())?);
 /// assert_eq!(w.boundary(), 200);
@@ -197,11 +197,11 @@ impl WindowRt {
     /// # let dir = kevy_tmpdir::TmpDir::new("window-doc");
     /// let mut w = kevy_window::WindowRt::new(WindowSpec::new("ts", 100, 50), WindowShape::PlainI64);
     /// let mut seg = Segment::new();
-    /// seg.apply(b"r:10", Some(IndexValue::I64(10)));
+    /// seg.apply(b"r:10", None, Some(IndexValue::I64(10)));
     /// assert!(!w.slide(b"t.ts", &mut seg, dir.path())?); // nothing is out of the window yet
     /// assert!(!w.has_cold());
     ///
-    /// seg.apply(b"r:300", Some(IndexValue::I64(300)));
+    /// seg.apply(b"r:300", None, Some(IndexValue::I64(300)));
     /// assert!(w.slide(b"t.ts", &mut seg, dir.path())?);
     /// assert!(w.has_cold());
     /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -221,7 +221,7 @@ impl WindowRt {
     /// let mut w = kevy_window::WindowRt::new(WindowSpec::new("ts", 100, 50), WindowShape::PlainI64);
     /// let mut seg = Segment::new();
     /// for ts in [10, 20, 300] {
-    ///     seg.apply(format!("r:{ts}").as_bytes(), Some(IndexValue::I64(ts)));
+    ///     seg.apply(format!("r:{ts}").as_bytes(), None, Some(IndexValue::I64(ts)));
     /// }
     /// assert!(w.slide(b"t.ts", &mut seg, dir.path())?);
     /// // max 300, minus the span of 100, floored to the bucket of 50
@@ -252,7 +252,7 @@ impl WindowRt {
     /// let mut w = kevy_window::WindowRt::new(WindowSpec::new("ts", 100, 50), WindowShape::PlainI64);
     /// let mut seg = Segment::new();
     /// for ts in [10, 20, 300] {
-    ///     seg.apply(format!("r:{ts}").as_bytes(), Some(IndexValue::I64(ts)));
+    ///     seg.apply(format!("r:{ts}").as_bytes(), None, Some(IndexValue::I64(ts)));
     /// }
     /// assert!(w.slide(b"t.ts", &mut seg, dir.path())?);
     /// let all = (IndexValue::I64(0), IndexValue::I64(1_000));
@@ -284,7 +284,7 @@ impl WindowRt {
     /// let mut w = kevy_window::WindowRt::new(WindowSpec::new("ts", 100, 50), WindowShape::PlainI64);
     /// let mut seg = Segment::new();
     /// for ts in [10, 20, 300] {
-    ///     seg.apply(format!("r:{ts}").as_bytes(), Some(IndexValue::I64(ts)));
+    ///     seg.apply(format!("r:{ts}").as_bytes(), None, Some(IndexValue::I64(ts)));
     /// }
     /// assert!(w.slide(b"t.ts", &mut seg, dir.path())?);
     /// let a = w.audit(ValType::I64).expect("something has slid");
@@ -330,11 +330,11 @@ impl WindowRt {
     /// let w = kevy_window::WindowRt::new(WindowSpec::new("ts", 100, 50), WindowShape::PlainI64);
     /// let mut seg = Segment::new();
     /// for ts in [10, 20, 300] {
-    ///     seg.apply(format!("r:{ts}").as_bytes(), Some(IndexValue::I64(ts)));
+    ///     seg.apply(format!("r:{ts}").as_bytes(), None, Some(IndexValue::I64(ts)));
     /// }
     /// assert_eq!(w.pending_rows(&seg), Some(vec![b"r:10".to_vec(), b"r:20".to_vec()]));
     ///
-    /// seg.remove(b"r:300"); // now everything is inside the window
+    /// seg.remove(b"r:300", &IndexValue::I64(300)); // now everything is inside the window
     /// assert_eq!(w.pending_rows(&seg), None);
     /// ```
     pub fn pending_rows(&self, seg: &kevy_index::Segment) -> Option<Vec<Vec<u8>>> {
@@ -344,7 +344,11 @@ impl WindowRt {
             return None;
         }
         let bound = window_bound(target, self.shape);
-        let rows: Vec<Vec<u8>> = seg.iter_below(&bound).map(|(_, k)| k.to_vec()).collect();
+        let mut below = seg.scan_below(&bound);
+        let mut rows: Vec<Vec<u8>> = Vec::new();
+        while let Some((_, k)) = below.next_entry() {
+            rows.push(k.to_vec());
+        }
         (!rows.is_empty()).then_some(rows)
     }
 
@@ -359,7 +363,7 @@ impl WindowRt {
     /// let mut w = kevy_window::WindowRt::new(WindowSpec::new("ts", 100, 50), WindowShape::PlainI64);
     /// let mut seg = Segment::new();
     /// for ts in [10, 20, 300] {
-    ///     seg.apply(format!("r:{ts}").as_bytes(), Some(IndexValue::I64(ts)));
+    ///     seg.apply(format!("r:{ts}").as_bytes(), None, Some(IndexValue::I64(ts)));
     /// }
     /// assert!(w.slide(b"t.ts", &mut seg, dir.path())?);
     /// assert_eq!(seg.stats().entries, 1); // only r:300 stays in the tree
@@ -385,7 +389,7 @@ impl WindowRt {
             return Ok(false);
         }
         let bound = window_bound(target, self.shape);
-        if seg.iter_below(&bound).next().is_none() {
+        if seg.scan_below(&bound).next_entry().is_none() {
             self.w = target;
             return Ok(false);
         }

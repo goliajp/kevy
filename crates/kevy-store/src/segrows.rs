@@ -193,7 +193,7 @@ impl Store {
         for (_, slot) in &mut sr.segs {
             slot.live = 0;
         }
-        for (_, e) in &self.map {
+        for (_, e) in self.map.iter() {
             if let Value::Cold(c) = &e.value
                 && c.is_seg()
                 && let Some(slot) = sr.slot_mut(c.seg_ix())
@@ -323,7 +323,7 @@ impl Store {
     /// the segment). Preserves TTL/LRU (both None/irrelevant here by
     /// the eviction filter), fires no events, clears no field TTLs.
     pub(crate) fn demote_row_to_seg(&mut self, key: &[u8], seg_ix: u32) -> bool {
-        let Some(e) = self.map.get_mut(key) else { return false };
+        let Some(e) = self.map.get_mut_quiet(key) else { return false };
         if !matches!(e.value, Value::Hash(_) | Value::SmallHashInline(_) | Value::PackedRow(_)) {
             return false;
         }
@@ -367,7 +367,7 @@ impl Store {
         e.set_weight(key_heap);
         crate::apply_delta(&mut self.used_memory, key_heap as i64);
         let cap = self.map.capacity();
-        self.map.insert(crate::SmallBytes::from_slice(key), e);
+        self.map.insert_quiet(crate::SmallBytes::from_slice(key), e);
         if self.map.capacity() != cap {
             self.charge_keyspace_growth();
         }

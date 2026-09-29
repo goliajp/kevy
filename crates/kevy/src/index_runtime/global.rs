@@ -2,10 +2,11 @@
 //! stays on the shard its key hashes to, but its index entry lives in the
 //! partition its value falls in, on the shard that partition's owner is.
 //!
-//! The row's shard keeps, per global index, which partition each of its
-//! rows went to and a hash of what was sent, so a write sends nothing when
-//! the entry did not change, one upsert when it stayed in its partition,
-//! and a delete plus an upsert when it moved. The messages leave through
+//! A write knows the row's entry before and after (the store's record of
+//! the row before the write), so the row's shard sends nothing when the
+//! entry did not change, one upsert naming the old value when it stayed in
+//! its partition, and a delete plus an upsert when it moved. The old value
+//! is what the owner finds the stale entry by. The messages leave through
 //! the runtime's hook-message channel; a client's write waits for them to
 //! be applied before it replies.
 //!
@@ -14,7 +15,7 @@
 //! one shard to another arrive in order, so an owner that has heard from
 //! all N holds every entry, and answers reads only then.
 
-use kevy_index::{IndexSpec, IndexValue, Partitioning, PlacementTable, Segment, partition_owner};
+use kevy_index::{IndexSpec, IndexValue, Partitioning, Segment, partition_owner};
 use kevy_store::Store;
 
 use crate::state::Ctx;
@@ -22,10 +23,16 @@ use crate::state::Ctx;
 /// One entry change, as the row's shard sends it to a partition's owner.
 #[derive(Debug, PartialEq)]
 pub(crate) enum Delta {
-    /// The row left the partition.
-    Delete { key: Vec<u8> },
-    /// The row's entry in the partition is now this.
-    Upsert { key: Vec<u8>, value: IndexValue, values: Vec<Option<Vec<u8>>> },
+    /// The row, held under `value`, left the partition.
+    Delete { key: Vec<u8>, value: IndexValue },
+    /// The row's entry in the partition is now this; it was held under
+    /// `old` when it was in the partition already.
+    Upsert {
+        key: Vec<u8>,
+        old: Option<IndexValue>,
+        value: IndexValue,
+        values: Vec<Option<Vec<u8>>>,
+    },
     /// Shard `from` has sent the entries of every row it held when the
     /// index was created.
     Built { from: usize },
@@ -44,9 +51,6 @@ pub(crate) struct GlobalRole {
     built: Vec<bool>,
     /// The partitions this shard owns, each with its entries.
     pub(crate) owned: Vec<(usize, Segment)>,
-    /// This shard's rows: the partition each entry went to, and a hash of
-    /// the entry, so an unchanged write sends nothing.
-    placed: PlacementTable,
     /// Messages waiting for the runtime to take.
     pub(crate) outbox: Vec<(usize, Vec<u8>)>,
 }
@@ -65,7 +69,6 @@ impl GlobalRole {
             inc,
             built: vec![false; nshards],
             owned,
-            placed: PlacementTable::new(),
             outbox: Vec::new(),
         }
     }
@@ -88,64 +91,73 @@ impl GlobalRole {
         }
     }
 
-    /// The row at `key` was written (or removed): queue what its entry's
-    /// partition owners must apply.
-    pub(crate) fn on_row(&mut self, store: &mut Store, spec: &IndexSpec, key: &[u8]) {
-        let prev = self.placed.get(key);
+    /// The row at `key` was written (or removed), and held `old` before:
+    /// queue what its entry's partition owners must apply.
+    pub(crate) fn on_row(
+        &mut self,
+        store: &mut Store,
+        spec: &IndexSpec,
+        key: &[u8],
+        old: super::row_apply::OldEntry,
+    ) {
+        let prev = old.map(|(v, vals)| {
+            let enc = v.order_bytes();
+            let p = self.part.partition_of(&enc) as u16;
+            (p, entry_hash(&enc, vals.iter().map(|x| x.as_deref())), v)
+        });
         let Some((value, values)) = derive(store, spec, key) else {
-            if let Some((p, _)) = prev {
-                self.placed.remove(key);
-                self.send(spec, p, Delta::Delete { key: key.to_vec() });
+            if let Some((p, _, v)) = prev {
+                self.send(spec, p, Delta::Delete { key: key.to_vec(), value: v });
             }
             return;
         };
         let enc = value.order_bytes();
         let p = self.part.partition_of(&enc) as u16;
         let h = entry_hash(&enc, values.iter().map(|v| v.as_deref()));
-        if prev == Some((p, h)) {
-            return;
-        }
-        if let Some((q, _)) = prev
-            && q != p
-        {
-            self.send(spec, q, Delta::Delete { key: key.to_vec() });
-        }
-        self.placed.insert(key, p, h);
-        self.send(spec, p, Delta::Upsert { key: key.to_vec(), value, values });
+        let old = match prev {
+            Some((q, g, _)) if (q, g) == (p, h) => return,
+            Some((q, _, v)) if q != p => {
+                self.send(spec, q, Delta::Delete { key: key.to_vec(), value: v });
+                None
+            }
+            Some((_, _, v)) => Some(v),
+            None => None,
+        };
+        self.send(spec, p, Delta::Upsert { key: key.to_vec(), old, value, values });
     }
 
     /// Every row and entry gone (FLUSHALL / FLUSHDB runs on every shard).
     pub(crate) fn clear(&mut self, spec: &IndexSpec) {
-        self.placed.clear();
         for (_, seg) in &mut self.owned {
             *seg = super::new_scalar_seg(spec);
         }
     }
 
-    /// Heap bytes of this shard's placement table — the part of a global
-    /// index kept on the rows' side, which no partition's segment counts.
-    pub(crate) fn placed_bytes(&self) -> u64 {
-        self.placed.approx_bytes()
-    }
-
     /// Apply a delta a row's shard sent for partition `p`.
     pub(crate) fn apply(&mut self, p: usize, delta: Delta) {
         if let Delta::Built { from } = delta {
+            let was = self.ready();
             if let Some(b) = self.built.get_mut(from) {
                 *b = true;
+            }
+            if !was && self.ready() {
+                // every shard has sent its rows: pack what arrived in hash order
+                for (_, seg) in &mut self.owned {
+                    seg.repack();
+                }
             }
             return;
         }
         let Some((_, seg)) = self.owned.iter_mut().find(|(q, _)| *q == p) else { return };
         match delta {
             Delta::Built { .. } => {}
-            Delta::Delete { key } => seg.remove(&key),
-            Delta::Upsert { key, value, values } if values.is_empty() => {
-                seg.apply(&key, Some(value))
+            Delta::Delete { key, value } => seg.remove(&key, &value),
+            Delta::Upsert { key, old, value, values } if values.is_empty() => {
+                seg.apply(&key, old.as_ref(), Some(value))
             }
-            Delta::Upsert { key, value, values } => {
+            Delta::Upsert { key, old, value, values } => {
                 let refs: Vec<Option<&[u8]>> = values.iter().map(|v| v.as_deref()).collect();
-                seg.apply_with_values(&key, Some(value), &refs);
+                seg.apply_with_values(&key, old.as_ref(), Some(value), &refs);
             }
         }
     }

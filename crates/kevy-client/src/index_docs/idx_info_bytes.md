@@ -35,8 +35,11 @@ conn.idx_create_range(b"by_age", b"user:", b"age", IdxType::I64)?;
 ready(|| conn.idx_query_eq(b"by_age", b"25", 1))?;
 let before = conn.idx_list()?[0].bytes;
 assert!(before > 0);
-conn.hset(b"user:4", &[(&b"age"[..], &b"57"[..])])?;
-assert!(conn.idx_list()?[0].bytes > before); // grows with the data
+// counted in whole leaves of about a hundred rows: it grows in steps
+for i in 4..1000 {
+    conn.hset(format!("user:{i}").as_bytes(), &[(&b"age"[..], (i % 90).to_string().as_bytes())])?;
+}
+assert!(conn.idx_list()?[0].bytes > before);
 # stop.store(true, Ordering::SeqCst);
 # let _ = std::net::TcpStream::connect(("127.0.0.1", port));
 # server.join().unwrap()?;

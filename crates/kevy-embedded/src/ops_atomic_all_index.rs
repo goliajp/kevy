@@ -14,12 +14,12 @@
 //! time. `atomic_all_shards()` already holds every shard's write lock,
 //! so the same read is both complete and consistent there.
 //!
-//! **These see committed state, not the transaction's own writes.**
-//! Index maintenance runs in `commit_write`, which runs after the
-//! closure returns `Ok`. Checking a value against rows written earlier
-//! in the same closure will not find them; a closure inserting two rows
-//! must compare them to each other itself. The lock makes this the only
-//! gap — nothing another writer does can appear mid-transaction.
+//! **These see the transaction's own writes.** Every read brings the
+//! indexes up to date with the rows written so far, so a closure that
+//! inserts two rows can check the second against the first. A closure
+//! that fails is rolled back, and the next read takes the rollback out
+//! of the indexes too. The lock makes this complete — nothing another
+//! writer does can appear mid-transaction.
 
 use super::AtomicAllShards;
 use crate::KevyResult;
@@ -31,7 +31,7 @@ impl AtomicAllShards<'_> {
     /// `IDX.QUERY name min max` — range or EQ, merged across every
     /// shard in `(value, key)` order.
     ///
-    /// Sees the index as of the last commit; see the module note.
+    /// Sees the transaction's own writes; see the module note.
     pub fn idx_query(
         &mut self,
         name: &[u8],
