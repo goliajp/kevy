@@ -84,7 +84,7 @@ class ProtocolError : public KevyError {
 // `catch (const ReadOnlyError&)` and ErrorKind::ReadOnly stay part of the API.
 class ReadOnlyError : public KevyError {
  public:
-  ReadOnlyError() : KevyError(ErrorKind::ReadOnly, "READONLY You can't write against a read only replica") {}
+  ReadOnlyError() : KevyError(ErrorKind::ReadOnly, "READONLY You can't write against a read only replica.") {}
 };
 class InvalidInputError : public KevyError {
  public:
