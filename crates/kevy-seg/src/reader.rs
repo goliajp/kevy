@@ -43,7 +43,8 @@ impl Seg {
     /// assert!(Seg::open(&bad).is_err());
     /// # std::fs::remove_dir_all(&dir).ok();
     /// ```
-    pub fn open(path: &Path) -> Result<Self, SegError> {
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, SegError> {
+        let path = path.as_ref();
         let f = File::open(path)?;
         let len = f.metadata()?.len();
         if len < TRAILER as u64 {

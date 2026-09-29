@@ -135,21 +135,15 @@ impl TextColdDir {
         let seq = self.seq;
         self.seq += 1;
         let path = segs_dir.join(&file);
-        write_seg_file(&path, &bucket).inspect_err(|_| {
+        let seg_meta = write_seg_file(&path, &bucket).inspect_err(|_| {
             let _ = std::fs::remove_file(&path);
         })?;
         let mut m = kevy_seg::Manifest::open(segs_dir).map_err(|e| e.to_string())?;
         let mut meta = TXT_TAG.to_vec();
         meta.extend_from_slice(index_name);
         meta.extend_from_slice(format!(":{}:{}", bucket.n_docs, bucket.total_len).as_bytes());
-        m.add(kevy_seg::ManifestEntry {
-            file: file.clone(),
-            meta,
-            min_key: bucket.fwd.keys().next().cloned().unwrap_or_default(),
-            max_key: bucket.terms.keys().next_back().cloned().unwrap_or_default(),
-            records: (bucket.fwd.len() + bucket.terms.len()) as u64,
-        })
-        .map_err(|e| e.to_string())?;
+        m.add(kevy_seg::ManifestEntry::new(file.clone(), seg_meta).with_meta(meta))
+            .map_err(|e| e.to_string())?;
         let seg = kevy_seg::Seg::open(&path).map_err(|e| format!("reopen {file}: {e}"))?;
         self.segs.push(ColdSeg { seg, seq, n_docs: bucket.n_docs, total_len: bucket.total_len });
         for k in keys {
@@ -162,7 +156,10 @@ impl TextColdDir {
 /// Write one bucket to disk: forward records first (`\0`-prefixed row
 /// keys sort before every token), then the term postings — the
 /// builder's ascending-key contract holds across the seam.
-fn write_seg_file(path: &Path, bucket: &kevy_text::cold::FrozenBucket) -> Result<(), String> {
+fn write_seg_file(
+    path: &Path,
+    bucket: &kevy_text::cold::FrozenBucket,
+) -> Result<kevy_seg::SegMeta, String> {
     let mut b = kevy_seg::SegBuilder::create(path).map_err(|e| e.to_string())?;
     for (row_key, payload) in &bucket.fwd {
         let mut k = vec![0u8];
@@ -172,7 +169,7 @@ fn write_seg_file(path: &Path, bucket: &kevy_text::cold::FrozenBucket) -> Result
     for (term, payload) in &bucket.terms {
         b.push(term, payload).map_err(|e| e.to_string())?;
     }
-    b.finish().map(|_| ()).map_err(|e| e.to_string())
+    b.finish().map_err(|e| e.to_string())
 }
 
 /// Drop a previous run's cold text segments for `index_name` (derived

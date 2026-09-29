@@ -91,14 +91,7 @@ fn seal_segment(data_dir: &Path, file: &str, rows: &[RowSpec<'_>]) {
     }
     let meta = b.finish().unwrap();
     let mut m = kevy_seg::Manifest::open(&segs).unwrap();
-    m.add(kevy_seg::ManifestEntry {
-        file: file.to_string(),
-        meta: b"rowcold:74".to_vec(),
-        min_key: meta.min_key,
-        max_key: meta.max_key,
-        records: meta.records,
-    })
-    .unwrap();
+    m.add(kevy_seg::ManifestEntry::new(file, meta).with_meta(b"rowcold:74".to_vec())).unwrap();
 }
 
 fn append_frame(data_dir: &Path, args: &[&[u8]]) {
