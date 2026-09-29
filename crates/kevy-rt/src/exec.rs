@@ -10,6 +10,7 @@ use crate::message::{Agg, DispatchMeta, Inbound, Op, Part, PendingSlot, SmallRep
 use crate::shard::Shard;
 use crate::{Commands, ResolvedCmd, Route, TxnKind};
 use kevy_resp::{ArgvView, RespVersion};
+use kevy_store::ListEnd;
 
 impl<C: Commands> Shard<C> {
     /// Apply transaction state (queue inside MULTI), else dispatch the command.
@@ -122,7 +123,9 @@ impl<C: Commands> Shard<C> {
             Route::BitOpStore => self.start_bitop(conn_id, seq, args),
             Route::Copy => self.start_copy(conn_id, seq, args),
             Route::Rename { nx } => self.start_rename(conn_id, seq, args, nx),
-            Route::ListMove { from_left, to_left } => {
+            Route::ListMove { from, to } => {
+                let (from_left, to_left) =
+                    (matches!(from, ListEnd::Left), matches!(to, ListEnd::Left));
                 self.start_list_move(conn_id, seq, args, from_left, to_left);
             }
             // FEED.* — parse + shard-index dispatch live in

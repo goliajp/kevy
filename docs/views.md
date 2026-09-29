@@ -180,8 +180,8 @@ call returns `KevyResult` (4.0's single error currency):
 
 ```rust
 use kevy_embedded::{
-    Config, IndexKind, IndexValType, IndexValue, Store, ViewLeaf,
-    ViewMode, ViewTree,
+    Config, IndexKind, IndexValType, IndexValue, SortOrder, Store,
+    ViewLeaf, ViewMode, ViewTree,
 };
 
 fn main() -> kevy_embedded::KevyResult<()> {
@@ -203,7 +203,7 @@ fn main() -> kevy_embedded::KevyResult<()> {
             IndexValue::Str(b"ready".to_vec()),   // EQ = same min/max
         ))),
     );
-    store.view_create(b"ready_jobs", tree, b"j_pri", /*desc*/ true,
+    store.view_create(b"ready_jobs", tree, b"j_pri", SortOrder::Desc,
                       ViewMode::Materialized { top_k: 100 })?;
 
     store.hset(b"job:1", &[
@@ -220,7 +220,7 @@ fn main() -> kevy_embedded::KevyResult<()> {
 }
 ```
 
-- `view_create(name, tree, order_by, desc, mode)` builds
+- `view_create(name, tree, order_by, order, mode)` builds
   synchronously; every referenced index (leaves + ORDER BY) must
   already be declared (`KevyError::InvalidInput` otherwise).
 - `view_query(name, after, limit)` pages `(key, order_value)` rows;

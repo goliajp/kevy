@@ -7,7 +7,7 @@
 //! `kevy_store::Store` — over N small sets that is faster than
 //! serialising N RESP arrays.
 
-use crate::KevyResult;
+use crate::{InsertPosition, KevyResult};
 use std::collections::BTreeSet;
 use std::time::Duration;
 
@@ -229,19 +229,29 @@ impl Store {
     /// - `Ok(0)` when `key` does not exist;
     /// - `Ok(-1)` when `pivot` was not found in the list.
     ///
-    /// `before = true` matches Redis `LINSERT … BEFORE`, `false`
-    /// matches `LINSERT … AFTER`.
-    pub fn linsert(&self, key: &[u8], before: bool, pivot: &[u8], value: &[u8]) -> KevyResult<i64> {
+    /// ```
+    /// use kevy_embedded::{Config, InsertPosition, Store};
+    ///
+    /// let s = Store::open(Config::default())?;
+    /// s.rpush(b"l", &[b"a", b"c"])?;
+    /// assert_eq!(s.linsert(b"l", InsertPosition::Before, b"c", b"b")?, 3);
+    /// # Ok::<(), kevy_embedded::KevyError>(())
+    /// ```
+    pub fn linsert(
+        &self,
+        key: &[u8],
+        position: InsertPosition,
+        pivot: &[u8],
+        value: &[u8],
+    ) -> KevyResult<i64> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
-        let position = if before {
-            kevy_store::InsertPosition::Before
-        } else {
-            kevy_store::InsertPosition::After
-        };
         let new_len = g.store.linsert(key, position, pivot, value).map_err(store_err)?;
         if new_len > 0 {
-            let dir = if before { b"BEFORE".as_slice() } else { b"AFTER".as_slice() };
+            let dir = match position {
+                InsertPosition::Before => b"BEFORE".as_slice(),
+                InsertPosition::After => b"AFTER".as_slice(),
+            };
             commit_write(&mut g, &[b"LINSERT", key, dir, pivot, value])?;
         }
         Ok(new_len)

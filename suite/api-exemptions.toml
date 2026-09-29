@@ -209,3 +209,35 @@ why = "implemented by hosts for their own aggregates (kevy-embedded serializes s
 rule = "trait-open"
 item = "kevy_persist::reshard::ShardLayout"
 why = "implemented by hosts that name their own shard files (kevy-embedded's configured single-file names); the trait docs state the contract (a pure function of its arguments, distinct paths for distinct shards of one layout)"
+
+# layer 4
+
+[[exempt]]
+rule = "trait-open"
+item = "kevy_client_async::transport::AsyncRead"
+why = "the read half of a caller's own transport (a Unix socket, an in-memory pipe, another runtime's stream) handed to AsyncRespCodec::new, AsyncConnection::from_transport or AsyncSecure::handshake; the trait docs state the contract (Pending registers the waker, Ready(Ok(0)) is end of stream, bytes arrive in order)"
+
+[[exempt]]
+rule = "trait-open"
+item = "kevy_client_async::transport::AsyncWrite"
+why = "the write half of a caller's own transport, implemented outside this crate alongside AsyncRead; the trait docs state the contract (Pending registers the waker, accepted bytes reach the peer in order, Ready(Ok(0)) means nothing more can be accepted, close flushes then shuts the write half)"
+
+[[exempt]]
+rule = "trait-open"
+item = "kevy_client_async::transport::AsyncTransport"
+why = "the bound every connection type takes, blanket-implemented for each Send + Unpin type that implements AsyncRead and AsyncWrite, so a caller's transport qualifies without naming it; its docs say to implement the two halves instead"
+
+[[exempt]]
+rule = "trait-open"
+item = "kevy_rt::commands_trait::Commands"
+why = "the seam the runtime is built around: the kevy server's command set implements it, and so does any embedder's; every method added after the first release has a default, and the trait docs state the contract (classification is a pure function of the argv, resolve agrees with the per-attribute methods, is_write gates durability, the route names every key touched, dispatch writes one reply without blocking, hooks run on the shard thread)"
+
+[[exempt]]
+rule = "get-prefix"
+item = "kevy_embedded::store::Store::get_shared_owned"
+why = "a variant of the Redis GET command (the store-wide lock plus kevy_store::Store::get_shared_owned's zero-copy lane), in the family of get and get_with; Store has no field called shared_owned, so this is not a getter"
+
+[[exempt]]
+rule = "get-prefix"
+item = "kevy_embedded::store::Store::get_with"
+why = "a variant of the Redis GET command that lends the value to a closure under the shard lock, the embedded counterpart of kevy_store::Store::get_shared_with; Store has no field called with, so this is not a getter"

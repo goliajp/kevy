@@ -206,7 +206,7 @@ Replication is **asynchronous by default**. The primary commits and replies befo
 | concern | answer |
 |---|---|
 | Write durability | Acknowledged by the primary as soon as it lands in the local store and the backlog ring. Replicas catch up afterwards; `WAIT n timeout` blocks until ≥ n have acknowledged (a replica ack is not an fsync — see availability.md). |
-| Read consistency | Replicas may lag. Send `request_read(…, consistent = true)` through `kevy-cluster-rw` to force a read at the primary, or use `REPL.TOKEN` + `REPL.WAIT` for read-your-writes on the replica itself. |
+| Read consistency | Replicas may lag. Send `request_read(…, ReadConsistency::Primary)` through `kevy-cluster-rw` to force a read at the primary, or use `REPL.TOKEN` + `REPL.WAIT` for read-your-writes on the replica itself. |
 | Replica falls behind | If the reconnect needs an offset that has aged out of the ring, the primary in-line-ships a snapshot of that shard and resumes live frames at the snapshot's end offset — no gap, no operator action. While the ship is replacing the replica's keyspace, client reads on the replica answer `-LOADING` (`PING` / `INFO` / `HELLO` stay answerable, so health checks keep passing). |
 | Sizing the backlog | `replication_buffer_size ≈ peak_writes_per_sec × avg_argv_bytes × reconnect_window_seconds`. Oversize is harmless; undersize falls back to snapshot ship. |
 | What fails over | Writes to the new primary, automatically when `kevy-elect` is configured, by hand otherwise. Existing `kevy-cluster-rw` clients re-route writes once they learn the new primary; in-flight writes during the gap fail loudly. |

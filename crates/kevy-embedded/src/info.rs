@@ -9,7 +9,17 @@ use crate::store::Store;
 
 /// Snapshot of a store's runtime counters, returned by [`Store::info`]. A
 /// cheap aggregate (one mutex lock); fields mirror the individual accessors.
-#[derive(Debug, Clone)]
+///
+/// ```
+/// let s = kevy_embedded::Store::open(kevy_embedded::Config::default())?;
+/// s.set(b"k", b"v")?;
+/// let info = s.info();
+/// assert_eq!(info.keys, 1);
+/// assert!(info.tiering.is_none());
+/// # Ok::<(), kevy_embedded::KevyError>(())
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct KevyInfo {
     /// Live key count (`DBSIZE`).
     pub keys: usize,
@@ -31,7 +41,14 @@ pub struct KevyInfo {
 
 /// The `# Tiering` gauge set (B12) — summed across shards; field names
 /// mirror the server's `INFO # Tiering` section one-to-one.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+///
+/// ```
+/// let s = kevy_embedded::Store::open(kevy_embedded::Config::default())?;
+/// assert!(s.info().tiering.is_none()); // tiering off: no gauges
+/// # Ok::<(), kevy_embedded::KevyError>(())
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct KevyTierInfo {
     /// The resolved RAM budget (whole store — Σ per-shard slices).
     pub tier_budget_bytes: u64,

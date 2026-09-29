@@ -36,7 +36,7 @@ use kevy_embedded::Subscription;
 use kevy_resp::{Reply, encode_command};
 use kevy_resp_client::ReplyReadBuf;
 
-use crate::subscribe_io::{await_acks, frame_to_event, invalid, recv_remote, send_to, shape};
+use crate::subscribe_io::{await_acks, invalid, recv_remote, send_to, shape};
 use crate::{Target, parse_url, resolve_store};
 
 /// One subscribed connection. Owns either a TCP socket or an in-process
@@ -186,13 +186,10 @@ impl Subscriber {
                 Some(ev) => Ok(ev),
                 None => recv_remote(stream, buf),
             },
-            Inner::Embedded { subscription, timeout } => {
-                let frame = match *timeout {
-                    Some(d) => subscription.recv_timeout(d)?,
-                    None => subscription.recv()?,
-                };
-                Ok(frame_to_event(frame))
-            }
+            Inner::Embedded { subscription, timeout } => Ok(match *timeout {
+                Some(d) => subscription.recv_timeout(d)?,
+                None => subscription.recv()?,
+            }),
         }
     }
 
@@ -359,7 +356,7 @@ fn classify_hello3_reply(reply: Reply) -> KevyResult<PubsubEvent> {
     }
 }
 
-// `send_to` / `recv_remote` / `frame_to_event` / `classify` and the
+// `send_to` / `recv_remote` / `classify` and the
 // per-field reply unwrap helpers live in [`crate::subscribe_io`] —
 // split out so this file stays under the 500-LOC house rule.
 

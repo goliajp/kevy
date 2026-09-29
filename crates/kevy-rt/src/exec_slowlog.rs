@@ -162,7 +162,13 @@ impl<C: Commands> Shard<C> {
 
 /// Parsed `SLOWLOG <sub> [args]` decision — picked at routing time so
 /// the runtime knows whether to fan out or short-circuit.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// ```
+/// let argv = kevy_resp::Argv::from(vec![b"SLOWLOG".to_vec(), b"LEN".to_vec()]);
+/// assert_eq!(kevy_rt::SlowlogSub::parse(&argv), kevy_rt::SlowlogSub::Len);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum SlowlogSub {
     /// `SLOWLOG GET [count]`. `None` = use Redis default of 10. `Some(n)`
     /// where `n < 0` means "all entries".
@@ -233,23 +239,32 @@ pub(crate) fn slowlog_help_bytes() -> Vec<u8> {
     out
 }
 
-/// Parse `args` ( `[verb, sub, ...]` ) into a [`SlowlogSub`]. Verb name
-/// is assumed to already be SLOWLOG (the caller's route table dispatched
-/// to here). Embedders call this from their `Commands::resolve` /
-/// `Commands::route` impl.
-pub fn parse_slowlog_sub<A: ArgvView + ?Sized>(args: &A) -> SlowlogSub {
-    let Some(sub) = args.get(1) else {
-        return SlowlogSub::Err(slowlog_err_bytes("wrong number of arguments for 'slowlog'"));
-    };
-    let mut buf = [0u8; 16];
-    let upper = ascii_upper_into(sub, &mut buf);
-    match upper {
-        b"GET" => parse_slowlog_get(args),
-        b"LEN" if args.len() == 2 => SlowlogSub::Len,
-        b"RESET" if args.len() == 2 => SlowlogSub::Reset,
-        b"HELP" => SlowlogSub::Help,
-        b"LEN" | b"RESET" => SlowlogSub::Err(slowlog_arg_count_err(upper)),
-        _ => SlowlogSub::Err(slowlog_unknown_sub_err(sub)),
+impl SlowlogSub {
+    /// Parse `args` ( `[verb, sub, ...]` ). Verb name is assumed to
+    /// already be SLOWLOG (the caller's route table dispatched to here).
+    /// Embedders call this from their `Commands::resolve` /
+    /// `Commands::route` impl.
+    ///
+    /// ```
+    /// use kevy_rt::SlowlogSub;
+    ///
+    /// let argv = kevy_resp::Argv::from(vec![b"SLOWLOG".to_vec(), b"GET".to_vec(), b"5".to_vec()]);
+    /// assert_eq!(SlowlogSub::parse(&argv), SlowlogSub::Get(Some(5)));
+    /// ```
+    pub fn parse<A: ArgvView + ?Sized>(args: &A) -> SlowlogSub {
+        let Some(sub) = args.get(1) else {
+            return SlowlogSub::Err(slowlog_err_bytes("wrong number of arguments for 'slowlog'"));
+        };
+        let mut buf = [0u8; 16];
+        let upper = ascii_upper_into(sub, &mut buf);
+        match upper {
+            b"GET" => parse_slowlog_get(args),
+            b"LEN" if args.len() == 2 => SlowlogSub::Len,
+            b"RESET" if args.len() == 2 => SlowlogSub::Reset,
+            b"HELP" => SlowlogSub::Help,
+            b"LEN" | b"RESET" => SlowlogSub::Err(slowlog_arg_count_err(upper)),
+            _ => SlowlogSub::Err(slowlog_unknown_sub_err(sub)),
+        }
     }
 }
 

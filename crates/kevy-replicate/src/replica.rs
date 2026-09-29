@@ -31,12 +31,14 @@
 //! - [`ReplicaError::Frame`] — wire-level decode error; same
 //!   action as Truncated (drop + reconnect).
 
+use crate::feed::FeedPosition;
 pub use crate::replica_error::ReplicaError;
 use kevy_resp::Argv;
 use std::io::{self, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 
 pub use crate::replica_connect::ConnectOptions;
+#[cfg(feature = "secure")]
 pub use crate::replica_secure::ReplicaSecurity;
 use std::time::Duration;
 
@@ -82,17 +84,12 @@ impl DecodedFrame {
 pub enum ReplicaEvent {
     /// A live mutation frame.
     Frame(DecodedFrame),
-    /// In-stream heartbeat: the primary's `next_offset` at send
-    /// time. Lets the replica compute lag (applied vs primary) and
-    /// judge link liveness. Occupies no offset space.
-    Ping {
-        /// Primary's feed generation at send time (the
-        /// REPL.TOKEN / REPL.WAIT gen truth). `0` = the primary spoke
-        /// the legacy one-number heartbeat ("unknown").
-        generation: u64,
-        /// Primary's `next_offset` when the heartbeat was emitted.
-        primary_offset: u64,
-    },
+    /// In-stream heartbeat: the primary's tail at send time — its feed
+    /// generation (the REPL.TOKEN / REPL.WAIT gen truth; `0` = the
+    /// primary spoke the legacy one-number heartbeat, "unknown") and its
+    /// `next_offset`. Lets the replica compute lag (applied vs primary)
+    /// and judge link liveness. Occupies no offset space.
+    Ping(FeedPosition),
     /// Snapshot ship begin marker (`+SNAPSHOT\r\n`).
     SnapshotBegin,
     /// One snapshot chunk's payload bytes (RESP bulk string body).
@@ -121,16 +118,13 @@ pub struct ReplicaClient {
     /// drain `buf` only when this passes a high-water mark, so per-
     /// frame work avoids repeated `Vec::drain` shifts.
     pub(crate) cursor: usize,
-    /// Offset the primary advertised at handshake (`+ACK <gen> <N>`
-    /// second value). Informational; useful for gap-detection
-    /// decisions (re-handshake vs full sync).
-    pub(crate) primary_offset_at_handshake: u64,
-    /// Feed generation the primary advertised at handshake
-    /// (`+ACK <gen> <N>` first value). Whatever this session delivers
-    /// (frames or snapshot) belongs to this generation — the caller
-    /// records it as its data's generation once the delivery lands,
-    /// and presents it on the next reconnect.
-    pub(crate) primary_gen_at_handshake: u64,
+    /// What the primary advertised at handshake (`+ACK <gen> <N>`).
+    /// Whatever this session delivers (frames or snapshot) belongs to
+    /// its generation — the caller records it as its data's generation
+    /// once the delivery lands, and presents it on the next reconnect.
+    /// The offset is informational; useful for gap-detection decisions
+    /// (re-handshake vs full sync).
+    pub(crate) primary_at_handshake: FeedPosition,
     /// The next offset we expect from the stream. Initially the
     /// `from_offset` we requested; advances by 1 on each accepted frame.
     pub(crate) expected_offset: u64,
@@ -158,7 +152,10 @@ impl ReplicaClient {
         replica_id: &str,
         from_offset: u64,
     ) -> Result<Self, ReplicaError> {
-        Self::connect_with(addr, &ConnectOptions::new(replica_id).with_from_offset(from_offset))
+        Self::connect_with(
+            addr,
+            &ConnectOptions::new(replica_id).with_from(FeedPosition::new(0, from_offset)),
+        )
     }
 
     /// The plaintext half of [`Self::connect_with`].
@@ -166,21 +163,20 @@ impl ReplicaClient {
         addr: A,
         opts: &ConnectOptions,
     ) -> Result<Self, ReplicaError> {
-        let (generation, from_offset, connect_timeout) =
-            (opts.generation, opts.from_offset, opts.timeout);
+        let connect_timeout = opts.timeout;
         let replica_id = opts.replica_id.as_str();
         let mut sock = connect_stream(addr, connect_timeout)?;
 
         // Send the handshake. `encode_replicate_from` is a private
         // helper so the on-the-wire shape is one place to change.
-        let req = encode_replicate_from(generation, from_offset, replica_id);
+        let req = encode_replicate_from(opts.from, replica_id);
         sock.write_all(&req)?;
 
         // Read the `+ACK <gen> <offset>\r\n` reply. Use a small read
         // timeout so a primary that opens the socket but never
         // replies doesn't hang the replica forever.
         sock.set_read_timeout(Some(connect_timeout))?;
-        let (primary_gen, primary_offset) = read_ack(&mut sock)?;
+        let primary_at_handshake = read_ack(&mut sock)?;
         // Clear the read timeout for normal streaming (replica may sit
         // for minutes with no frames if the primary is idle).
         sock.set_read_timeout(None)?;
@@ -190,30 +186,33 @@ impl ReplicaClient {
             sock,
             buf: Vec::with_capacity(8 * 1024),
             cursor: 0,
-            primary_offset_at_handshake: primary_offset,
-            primary_gen_at_handshake: primary_gen,
-            expected_offset: from_offset,
+            primary_at_handshake,
+            expected_offset: opts.from.offset,
             in_snapshot: false,
             noise: None,
         })
     }
 
-    /// Offset the primary reported at handshake (`+ACK <gen> <N>`
-    /// second value). Informational — exposed so callers can log, and
-    /// so snapshot-ship logic can compare against the local applied
+    /// The position the primary reported at handshake (`+ACK <gen> <N>`).
+    ///
+    /// Everything this session delivers belongs to its generation; a
+    /// heartbeat carrying a DIFFERENT generation mid-session means the
+    /// primary broke continuity under us (FLUSHALL / promotion) — the
+    /// caller should drop the link and re-handshake so the fence decides
+    /// afresh. The offset is informational — exposed so callers can log,
+    /// and so snapshot-ship logic can compare against the local applied
     /// offset to decide resume vs full-sync.
-    pub fn primary_offset_at_handshake(&self) -> u64 {
-        self.primary_offset_at_handshake
-    }
-
-    /// Feed generation the primary reported at handshake
-    /// (`+ACK <gen> <N>` first value). Everything this session
-    /// delivers belongs to this generation; a heartbeat carrying a
-    /// DIFFERENT generation mid-session means the primary broke
-    /// continuity under us (FLUSHALL / promotion) — the caller should
-    /// drop the link and re-handshake so the fence decides afresh.
-    pub fn primary_gen_at_handshake(&self) -> u64 {
-        self.primary_gen_at_handshake
+    ///
+    /// ```no_run
+    /// use kevy_replicate::replica::ReplicaClient;
+    ///
+    /// let client = ReplicaClient::connect("127.0.0.1:16004", "replica-a", 0)?;
+    /// println!("primary at generation {}", client.primary_at_handshake().generation);
+    /// # Ok::<(), kevy_replicate::replica::ReplicaError>(())
+    /// ```
+    #[inline]
+    pub fn primary_at_handshake(&self) -> FeedPosition {
+        self.primary_at_handshake
     }
 
     /// Return a `try_clone`'d handle on the underlying socket. The
@@ -307,15 +306,11 @@ pub(crate) fn connect_stream<A: ToSocketAddrs>(
 /// Compose a `REPLICATE FROM <gen> <offset> ID <id>` RESP2
 /// multi-bulk request — symmetric to
 /// `HandshakeReq::parse` on the primary side.
-pub(crate) fn encode_replicate_from(
-    generation: u64,
-    from_offset: u64,
-    replica_id: &str,
-) -> Vec<u8> {
+pub(crate) fn encode_replicate_from(from: FeedPosition, replica_id: &str) -> Vec<u8> {
     let mut v = Vec::with_capacity(80 + replica_id.len());
     v.extend_from_slice(b"*6\r\n");
-    let gen_str = generation.to_string();
-    let offset_str = from_offset.to_string();
+    let gen_str = from.generation.to_string();
+    let offset_str = from.offset.to_string();
     for arg in [
         b"REPLICATE".as_slice(),
         b"FROM",
@@ -333,11 +328,11 @@ pub(crate) fn encode_replicate_from(
 }
 
 /// Read `+ACK <gen> <offset>\r\n` from `sock`, return the parsed
-/// `(generation, offset)` pair.
+/// position.
 /// Pulls one byte at a time — the reply is < 50 bytes, so the per-
 /// byte syscall cost is negligible and avoids a buffering surface
 /// we'd have to thread into the client struct just for the handshake.
-fn read_ack(sock: &mut TcpStream) -> Result<(u64, u64), ReplicaError> {
+fn read_ack(sock: &mut TcpStream) -> Result<FeedPosition, ReplicaError> {
     let mut line = Vec::with_capacity(32);
     let mut b = [0u8; 1];
     loop {
@@ -359,7 +354,7 @@ fn read_ack(sock: &mut TcpStream) -> Result<(u64, u64), ReplicaError> {
     parse_ack_line(&line)
 }
 
-pub(crate) fn parse_ack_line(line: &[u8]) -> Result<(u64, u64), ReplicaError> {
+pub(crate) fn parse_ack_line(line: &[u8]) -> Result<FeedPosition, ReplicaError> {
     let body = line.strip_suffix(b"\r\n").ok_or(ReplicaError::AckMalformed)?;
     let body = body.strip_prefix(b"+ACK ").ok_or(ReplicaError::AckMalformed)?;
     let s = std::str::from_utf8(body).map_err(|_| ReplicaError::AckMalformed)?;
@@ -368,7 +363,7 @@ pub(crate) fn parse_ack_line(line: &[u8]) -> Result<(u64, u64), ReplicaError> {
     let (gen_s, off_s) = s.split_once(' ').ok_or(ReplicaError::AckMalformed)?;
     let generation = gen_s.parse::<u64>().map_err(|_| ReplicaError::AckMalformed)?;
     let offset = off_s.parse::<u64>().map_err(|_| ReplicaError::AckMalformed)?;
-    Ok((generation, offset))
+    Ok(FeedPosition::new(generation, offset))
 }
 
 #[cfg(test)]
@@ -381,8 +376,7 @@ impl ReplicaClient {
             sock,
             buf: Vec::with_capacity(8 * 1024),
             cursor: 0,
-            primary_offset_at_handshake: expected_offset,
-            primary_gen_at_handshake: 1,
+            primary_at_handshake: FeedPosition::new(1, expected_offset),
             expected_offset,
             in_snapshot: false,
             noise: None,
@@ -397,22 +391,24 @@ mod tests {
     #[test]
     fn encoded_replicate_from_matches_what_primary_parses() {
         // Round-trip: encode here, parse via the primary-side parser.
-        let bytes = encode_replicate_from(3, 42, "replica-a");
+        let bytes = encode_replicate_from(FeedPosition::new(3, 42), "replica-a");
         let mut argv = Argv::default();
         let consumed =
             kevy_resp::parse_command_into(&bytes, &mut argv).expect("parse ok").expect("complete");
         assert_eq!(consumed, bytes.len());
         let req = crate::handshake::HandshakeReq::parse(&argv).expect("handshake ok");
-        assert_eq!(req.generation, 3);
-        assert_eq!(req.from_offset, 42);
+        assert_eq!(req.from, FeedPosition::new(3, 42));
         assert_eq!(req.replica_id, "replica-a");
     }
 
     #[test]
     fn ack_line_parses_gen_and_offset() {
-        assert_eq!(parse_ack_line(b"+ACK 1 0\r\n").unwrap(), (1, 0));
-        assert_eq!(parse_ack_line(b"+ACK 7 42\r\n").unwrap(), (7, 42));
-        assert_eq!(parse_ack_line(b"+ACK 2 12345678\r\n").unwrap(), (2, 12_345_678));
+        assert_eq!(parse_ack_line(b"+ACK 1 0\r\n").unwrap(), FeedPosition::new(1, 0));
+        assert_eq!(parse_ack_line(b"+ACK 7 42\r\n").unwrap(), FeedPosition::new(7, 42));
+        assert_eq!(
+            parse_ack_line(b"+ACK 2 12345678\r\n").unwrap(),
+            FeedPosition::new(2, 12_345_678)
+        );
     }
 
     #[test]

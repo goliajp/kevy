@@ -16,7 +16,9 @@
 use crate::Commands;
 use crate::message::PubMsg;
 use crate::shard::Shard;
+use kevy_config::NotificationFlags;
 use kevy_resp::ArgvView;
+use kevy_resp::ops_table::NotifyKind;
 
 impl<C: Commands> Shard<C> {
     /// Publish `payload` on `channel`, fire-and-forget. Mirrors
@@ -79,7 +81,7 @@ impl<C: Commands> Shard<C> {
         self.drain_store_notify();
         self.drain_expired_keys();
         let Some(class) = self.commands.notify_class(args) else { return };
-        if !class.enabled_in(&self.notify_flags) {
+        if !class_enabled(class, &self.notify_flags) {
             return;
         }
         let Some(verb_raw) = args.first() else { return };
@@ -90,7 +92,27 @@ impl<C: Commands> Shard<C> {
         let event = ascii_lower(verb_raw);
         self.notify_keyspace_event(&event, &key);
     }
+}
 
+/// Whether `flags` enables keyspace events of `class`.
+#[inline]
+fn class_enabled(class: NotifyKind, flags: &NotificationFlags) -> bool {
+    let flag = match class {
+        NotifyKind::Generic => NotificationFlags::GENERIC,
+        NotifyKind::String => NotificationFlags::STRING,
+        NotifyKind::List => NotificationFlags::LIST,
+        NotifyKind::Set => NotificationFlags::SET,
+        NotifyKind::Hash => NotificationFlags::HASH,
+        NotifyKind::Zset => NotificationFlags::ZSET,
+        NotifyKind::Stream => NotificationFlags::STREAM,
+        // a class with no flag here has no way to be switched on, so it
+        // publishes nothing
+        _ => return false,
+    };
+    flags.contains(flag)
+}
+
+impl<C: Commands> Shard<C> {
     /// Multi-key `DEL` — fire `del` per key.
     pub(crate) fn maybe_notify_del(&mut self, keys: &[Vec<u8>]) {
         if !self.notify_flags.is_active() {

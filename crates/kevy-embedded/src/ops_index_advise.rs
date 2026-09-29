@@ -41,7 +41,14 @@ pub(crate) fn probe_window(
 
 /// One [`Store::idx_advise`] row: how often the family was refused,
 /// the access path it asked for, and the declaration that serves it.
-#[derive(Debug, Clone)]
+///
+/// ```
+/// let s = kevy_embedded::Store::open(kevy_embedded::Config::default())?;
+/// assert!(s.idx_advise().is_empty()); // nothing refused yet
+/// # Ok::<(), kevy_embedded::KevyError>(())
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct IdxAdvice {
     /// Refusals observed for this family.
     pub count: u64,

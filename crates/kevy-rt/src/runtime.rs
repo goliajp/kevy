@@ -29,7 +29,7 @@ pub struct Runtime<C: Commands> {
     pub(crate) auto_aof_rewrite_pct: u32,
     pub(crate) auto_aof_rewrite_bytes: u64,
     pub(crate) auto_aof_rewrite_interval_secs: u64,
-    pub(crate) replay_resync: bool,
+    pub(crate) replay_mode: kevy_persist::ReplayMode,
     /// Floor below which auto-rewrite is skipped. Default `64 MiB`.
     pub(crate) auto_aof_rewrite_min_size: u64,
     /// Reactor SPSC ring slot count. See [`DEFAULT_RING_CAPACITY`].
@@ -143,7 +143,7 @@ impl<C: Commands> Runtime<C> {
             auto_aof_rewrite_pct: 100,
             auto_aof_rewrite_bytes: 0,
             auto_aof_rewrite_interval_secs: 0,
-            replay_resync: false,
+            replay_mode: kevy_persist::ReplayMode::Strict,
             auto_aof_rewrite_min_size: 64 * 1024 * 1024,
             ring_capacity: DEFAULT_RING_CAPACITY,
             spin_limit: 256,

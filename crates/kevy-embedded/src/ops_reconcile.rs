@@ -28,14 +28,19 @@ use std::collections::HashSet;
 const MAX_SAMPLES: usize = 1000;
 
 /// The result of [`Snapshot::reconcile`].
-#[derive(Debug, Default, Clone)]
+///
+/// ```
+/// assert!(kevy_embedded::ReconcileReport::default().is_clean());
+/// ```
+#[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct ReconcileReport {
     /// Rows visited under the row prefix.
     pub rows: u64,
     /// Distinct derived keys the rows imply.
     pub expected: u64,
     /// Implied by a row, absent from the store — lost derived state.
-    /// Exact count; `missing` holds up to [`MAX_SAMPLES`] examples.
+    /// Exact count; `missing` holds up to 1000 examples.
     pub missing_count: u64,
     /// Example missing keys.
     pub missing: Vec<Vec<u8>>,

@@ -22,7 +22,13 @@ use crate::shard::Shard;
 /// Public: [`crate::Commands::geo_search`] returns it. The runtime never
 /// interprets the scores — the command layer decides whether they carry the
 /// source geohash or (with `STOREDIST`) the distance in the queried unit.
-#[derive(Debug)]
+///
+/// ```
+/// let hits = kevy_rt::GeoHits::Pairs(vec![(b"rome".to_vec(), 3_480_343_273_302_176.0)]);
+/// assert!(matches!(hits, kevy_rt::GeoHits::Pairs(ref p) if p.len() == 1));
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum GeoHits {
     /// `(member, score)` pairs to materialize at the destination. Empty =
     /// the search matched nothing, which deletes the destination (Redis

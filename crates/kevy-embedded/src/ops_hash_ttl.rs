@@ -65,7 +65,7 @@ impl Store {
     /// `HTTL` — remaining **seconds** per field (`-2` missing, `-1` no TTL).
     ///
     /// Rounded to the nearest second, as the wire verb and Redis both do. For
-    /// the unrounded value use [`Db::hpttl`]. Before 4.0 this method carried the
+    /// the unrounded value use [`Self::hpttl`]. Before 4.0 this method carried the
     /// HTTL name and returned milliseconds, which is a thousand-fold error
     /// waiting to happen in any caller that trusted the name.
     pub fn httl(&self, key: &[u8], fields: &[&[u8]]) -> KevyResult<Vec<i64>> {

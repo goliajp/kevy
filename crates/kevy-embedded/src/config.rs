@@ -8,26 +8,28 @@ use std::time::Duration;
 
 #[cfg(feature = "persist")]
 pub use kevy_persist::Fsync as AppendFsync;
+#[cfg(feature = "persist")]
+pub use kevy_persist::ReplayMode;
 pub use kevy_store::EvictionPolicy;
 
 #[cfg(feature = "tier")]
 pub use crate::config_tier::TierBudgetSpec;
 
-/// How the active TTL reaper runs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TtlReaperMode {
-    /// Spawn a background thread that ticks at the configured interval
-    /// (default 100 ms / 10 Hz, matching Redis's `hz=10`). Default.
-    Background,
-    /// Caller-driven via [`crate::Store::tick`]. Required for WASM
-    /// targets (no threads) and single-threaded apps that don't want a
-    /// background worker.
-    Manual,
-}
+pub use crate::modes::TtlReaperMode;
 
 /// Embedded-store config. Build by chaining `with_*` methods on
-/// [`Config::default`].
+/// [`Config::default`], or assign its public fields.
+///
+/// ```
+/// use kevy_embedded::{Config, Store};
+///
+/// let mut cfg = Config::default().with_ttl_reaper_manual();
+/// cfg.reaper_samples = 40;
+/// let store = Store::open(cfg)?;
+/// # Ok::<(), kevy_embedded::KevyError>(())
+/// ```
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct Config {
     /// Optional READ-ONLY RESP listener address (ops tooling —
     /// redis-cli against a live embedded store). `None` (default) =
@@ -85,10 +87,12 @@ pub struct Config {
     /// Time-based auto-rewrite trigger in seconds (0 = off): compact at
     /// least this often while the log grows.
     pub auto_aof_rewrite_interval_secs: u64,
-    /// Best-effort replay: on a corrupt v2 record, hop to the next valid
+    /// What replay does at a corrupt v2 record: stop there
+    /// ([`ReplayMode::Strict`], the default), or hop to the next valid
     /// record (length + CRC + parse all agree) instead of dropping the
-    /// good tail behind it. Default false (strict).
-    pub replay_resync: bool,
+    /// good tail behind it ([`ReplayMode::Resync`]).
+    #[cfg(feature = "persist")]
+    pub replay_mode: ReplayMode,
     /// Size in bytes of each shard's staging ring (0 = off): appends land
     /// in a shared file mapping, so a process that is killed keeps every
     /// write that returned. Only `EverySec` and `No` stage. Default 4 MiB.
@@ -197,7 +201,8 @@ impl Default for Config {
             auto_aof_rewrite_min_size: 64 * 1024 * 1024,
             auto_aof_rewrite_bytes: 0,
             auto_aof_rewrite_interval_secs: 0,
-            replay_resync: false,
+            #[cfg(feature = "persist")]
+            replay_mode: ReplayMode::Strict,
             stage_bytes: 4 * 1024 * 1024,
             mapped_aof: cfg!(target_vendor = "apple"),
             #[cfg(feature = "persist")]
@@ -293,20 +298,6 @@ impl Config {
     #[must_use]
     pub fn with_auto_rewrite_interval(mut self, interval: std::time::Duration) -> Self {
         self.auto_aof_rewrite_interval_secs = interval.as_secs();
-        self
-    }
-
-    /// Best-effort replay: recover the good records BEHIND a corrupt v2
-    /// record instead of dropping them (a production incident lost a
-    /// 231 MB well-formed tail over one bad frame). The skip is
-    /// deterministic — length + CRC32C + an exactly-one-command parse must
-    /// all agree before a record is trusted — and the open still reports
-    /// `corrupt` so hosts still alert. Strict (default false) remains the
-    /// conservative choice: nothing after the first bad byte is trusted.
-    #[cfg(feature = "persist")]
-    #[must_use]
-    pub fn with_replay_resync(mut self, resync: bool) -> Self {
-        self.replay_resync = resync;
         self
     }
 

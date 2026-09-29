@@ -1,4 +1,4 @@
-//! Async equivalent of [`kevy_client::Connection`] — TCP-only.
+//! Async equivalent of [`kevy_client::Connection`](https://docs.rs/kevy-client/latest/kevy_client/enum.Connection.html) — TCP-only.
 //!
 //! Drop-in mirror: the migration path from blocking is grep-replace
 //! `Connection` → `AsyncConnection` plus `.await` on each call.
@@ -45,7 +45,7 @@ pub(crate) async fn connect_default(host: &str, port: u16) -> io::Result<Default
 
 // ─── AsyncConnection ──────────────────────────────────────────────────
 
-/// Async TCP-RESP connection. Mirrors [`kevy_client::Connection`] but
+/// Async TCP-RESP connection. Mirrors [`kevy_client::Connection`](https://docs.rs/kevy-client/latest/kevy_client/enum.Connection.html) but
 /// drops the `mem://` / `file://` embedded backends — those are
 /// synchronous and have no async story.
 ///
@@ -75,10 +75,22 @@ impl AsyncConnection {
         }
         Ok(Self { codec })
     }
+}
 
+impl<T: crate::AsyncTransport> AsyncConnection<T> {
     /// Direct constructor — useful when the caller wants to manage
-    /// transport setup itself (cluster client, custom socket opts).
-    pub fn from_transport(transport: DefaultTransport) -> Self {
+    /// transport setup itself (custom socket options, a transport of its
+    /// own that implements [`crate::AsyncRead`] and [`crate::AsyncWrite`]).
+    ///
+    /// ```no_run
+    /// # #[cfg(feature = "tokio")]
+    /// # async fn demo() -> std::io::Result<()> {
+    /// let tcp = kevy_client_async::rt_tokio::connect("127.0.0.1", 6004).await?;
+    /// let mut c = kevy_client_async::AsyncConnection::from_transport(tcp);
+    /// c.ping().await?;
+    /// # Ok(()) }
+    /// ```
+    pub fn from_transport(transport: T) -> Self {
         Self { codec: AsyncRespCodec::new(transport) }
     }
 }

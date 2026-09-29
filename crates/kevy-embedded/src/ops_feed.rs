@@ -15,12 +15,26 @@
 use crate::KevyResult;
 use std::sync::{Arc, Mutex};
 
-use kevy_replicate::feed::{FeedRead, FeedSource};
+use kevy_replicate::feed::{FeedPosition, FeedRead, FeedSource};
 
 use crate::store::Store;
 
 /// One mutation delivered by [`Store::changes_since`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// ```
+/// use kevy_embedded::{Config, Store};
+///
+/// let store = Store::open(Config::default().with_feed(0))?;
+/// let from = store.changes_tail()?;
+/// store.set(b"k", b"v")?;
+/// let batch = store.changes_since(from, 10, &[])?;
+/// let change = &batch.changes[0];
+/// assert_eq!(change.offset, from.offset);
+/// assert_eq!(change.argv[0], b"SET");
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct Change {
     /// Stream offset (monotonic within a generation).
     pub offset: u64,
@@ -29,29 +43,81 @@ pub struct Change {
 }
 
 /// A batch of changes plus the cursor to resume from.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// ```
+/// use kevy_embedded::{Config, Store};
+///
+/// let store = Store::open(Config::default().with_feed(0))?;
+/// let from = store.changes_tail()?;
+/// store.set(b"k", b"v")?;
+/// let batch = store.changes_since(from, 10, &[])?;
+/// assert_eq!(batch.changes.len(), 1);
+/// assert_eq!(batch.next.offset, from.offset + 1);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct ChangeBatch {
     /// Delivered changes, offset order.
     pub changes: Vec<Change>,
-    /// `(generation, offset)` to pass to the next `changes_since`.
-    pub next: (u64, u64),
+    /// The cursor to pass to the next `changes_since`.
+    pub next: FeedPosition,
 }
 
 /// Why a feed read could not be served.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// ```
+/// use kevy_embedded::{Config, FeedError, Store};
+///
+/// let store = Store::open(Config::default())?;
+/// assert_eq!(store.changes_tail(), Err(FeedError::Disabled));
+/// assert_eq!(FeedError::Disabled.to_string(), "the store was opened without a change feed");
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum FeedError {
     /// Cursor unservable (stale generation / evicted offsets): rebuild
     /// from a scan, then resume from `tail`.
     Resync {
-        /// Current generation.
-        generation: u64,
-        /// Resume offset.
-        tail: u64,
+        /// The current generation and the offset to resume from.
+        tail: FeedPosition,
     },
     /// Cursor is ahead of the stream — caller bug.
     Future,
     /// The store was opened without `Config::with_feed`.
     Disabled,
+}
+
+impl std::fmt::Display for FeedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Resync { tail } => write!(
+                f,
+                "feed cursor unservable, resync from generation {} offset {}",
+                tail.generation, tail.offset
+            ),
+            Self::Future => f.write_str("feed cursor ahead of stream"),
+            Self::Disabled => f.write_str("the store was opened without a change feed"),
+        }
+    }
+}
+
+impl std::error::Error for FeedError {}
+
+impl FeedError {
+    /// The error line FEED.TAIL / FEED.READ answer with on the embedded
+    /// wire surfaces, unchanged since those verbs shipped.
+    pub(crate) fn wire_text(&self) -> String {
+        match self {
+            Self::Resync { tail } => format!(
+                "ERR feed: Resync {{ generation: {}, tail: {} }}",
+                tail.generation, tail.offset
+            ),
+            Self::Future => "ERR feed: Future".to_owned(),
+            Self::Disabled => "ERR feed: Disabled".to_owned(),
+        }
+    }
 }
 
 /// Multi-key / keyless verbs the fail-open prefix filter never drops
@@ -87,7 +153,17 @@ fn matches_prefixes(argv: &[Vec<u8>], prefixes: &[&[u8]]) -> bool {
 }
 
 /// Per-prefix keyspace stats from [`Store::info_prefix`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// ```
+/// let store = kevy_embedded::Store::open(kevy_embedded::Config::default())?;
+/// store.set(b"user:1", b"a")?;
+/// store.set(b"order:1", b"b")?;
+/// let info = store.info_prefix(b"user:");
+/// assert_eq!((info.keys, info.expires), (1, 0));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub struct PrefixInfo {
     /// Live keys under the prefix.
     pub keys: u64,
@@ -117,35 +193,53 @@ impl Store {
         1
     }
 
-    /// The current `(generation, next_offset)` cursor — where a
+    /// The current cursor: the generation and the next offset — where a
     /// consumer starting fresh (or resuming after a rebuild) begins.
-    pub fn changes_tail(&self) -> Result<(u64, u64), FeedError> {
+    ///
+    /// ```
+    /// use kevy_embedded::{Config, Store};
+    ///
+    /// let store = Store::open(Config::default().with_feed(0))?;
+    /// assert_eq!(store.changes_tail()?.offset, 0);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn changes_tail(&self) -> Result<FeedPosition, FeedError> {
         let feed = self.feed_handle().ok_or(FeedError::Disabled)?;
         let g = feed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         Ok(g.tail())
     }
 
-    /// Deliver up to `limit` changes at cursor `(generation, offset)`,
-    /// optionally prefix-filtered (fail-open on multi-key verbs; the
-    /// filter never affects the returned cursor). At-least-once: after
-    /// a `Resync` rebuild, frames already applied may be seen again.
+    /// Deliver up to `limit` changes at cursor `from`, optionally
+    /// prefix-filtered (fail-open on multi-key verbs; the filter never
+    /// affects the returned cursor). At-least-once: after a `Resync`
+    /// rebuild, frames already applied may be seen again.
+    ///
+    /// ```
+    /// use kevy_embedded::{Config, Store};
+    ///
+    /// let store = Store::open(Config::default().with_feed(0))?;
+    /// let from = store.changes_tail()?;
+    /// store.set(b"user:1", b"a")?;
+    /// store.set(b"order:1", b"b")?;
+    /// let batch = store.changes_since(from, 10, &[b"user:"])?;
+    /// assert_eq!(batch.changes.len(), 1);
+    /// assert_eq!(batch.next.offset, from.offset + 2);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn changes_since(
         &self,
-        generation: u64,
-        offset: u64,
+        from: FeedPosition,
         limit: usize,
         prefixes: &[&[u8]],
     ) -> Result<ChangeBatch, FeedError> {
         let feed = self.feed_handle().ok_or(FeedError::Disabled)?;
         let g = feed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let frames = match g.read(generation, offset, limit.clamp(1, 65536)) {
+        let frames = match g.read(from, limit.clamp(1, 65536)) {
             Ok(v) => v,
-            Err(FeedRead::Resync { generation, tail }) => {
-                return Err(FeedError::Resync { generation, tail });
-            }
+            Err(FeedRead::Resync { tail }) => return Err(FeedError::Resync { tail }),
             Err(FeedRead::Future) => return Err(FeedError::Future),
         };
-        let next_off = frames.last().map_or(offset, |f| f.offset + 1);
+        let next_off = frames.last().map_or(from.offset, |f| f.offset + 1);
         let mut changes = Vec::with_capacity(frames.len());
         for f in &frames {
             let Ok((kevy_replicate::replica::DecodedFrame { offset: foff, argv, .. }, _)) =
@@ -159,7 +253,7 @@ impl Store {
             }
             changes.push(Change { offset: foff, argv: owned });
         }
-        Ok(ChangeBatch { changes, next: (g.generation(), next_off) })
+        Ok(ChangeBatch { changes, next: FeedPosition::new(g.generation(), next_off) })
     }
 
     /// Feed hooks used by `commit_write` / `flushall` / close —
@@ -188,8 +282,7 @@ impl Store {
         dir: &std::path::Path,
     ) {
         let g = shards_feed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let (generation, next) = g.tail();
-        if let Err(e) = kevy_persist::feed_meta::write_feed_meta(dir, 0, generation, next) {
+        if let Err(e) = kevy_persist::feed_meta::write_feed_meta(dir, 0, g.tail()) {
             eprintln!("kevy-embedded: feed marker write failed: {e}");
         }
     }
@@ -214,15 +307,12 @@ impl Store {
             return Ok(None);
         }
         let budget = usize::try_from(config.feed_buffer_size).unwrap_or(usize::MAX);
-        let (generation, next_offset) = match &config.data_dir {
-            Some(dir) => {
-                let b = kevy_persist::feed_meta::FeedBoot::load(dir, 0)?;
-                (b.generation, b.next_offset)
-            }
-            None => (1, 0),
+        let at = match &config.data_dir {
+            Some(dir) => kevy_persist::feed_meta::boot_position(dir, 0)?,
+            None => FeedPosition::new(1, 0),
         };
         let mut src = kevy_replicate::source::ReplicationSource::new(budget);
-        src.set_next_offset(next_offset);
-        Ok(Some(Arc::new(Mutex::new(FeedSource::new(generation, src)))))
+        src.set_next_offset(at.offset);
+        Ok(Some(Arc::new(Mutex::new(FeedSource::new(at.generation, src)))))
     }
 }

@@ -120,7 +120,7 @@ fn s(b: &[u8]) -> String {
 /// CI, where three of them failed on a DEL that answered :1 because
 /// another test had just written the key.
 fn sources(tag: &str) -> [String; 3] {
-    let of = |k: &str| kevy_rt::shard_of_key(k.as_bytes(), SHARDS, false);
+    let of = |k: &str| kevy_rt::shard_of_key(k.as_bytes(), SHARDS, kevy_persist::Routing::KevyHash);
     let mut picked: Vec<String> = Vec::new();
     for i in 0..4000 {
         let k = format!("bop-{tag}-{i}");
@@ -158,7 +158,7 @@ fn seed(w: &mut common::Wire, keys: &[String; 3]) {
 
 #[test]
 fn the_keys_this_file_uses_are_really_on_different_shards() {
-    let of = |k: &str| kevy_rt::shard_of_key(k.as_bytes(), SHARDS, false);
+    let of = |k: &str| kevy_rt::shard_of_key(k.as_bytes(), SHARDS, kevy_persist::Routing::KevyHash);
     for tag in ["and", "not", "wrong", "dur"] {
         let k = sources(tag);
         let (x, y, z) = (of(&k[0]), of(&k[1]), of(&k[2]));

@@ -150,12 +150,12 @@ pub(crate) fn dispatch(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
         b"FEED.SHARDS" if argv.len() == 1 => int(out, s.feed_shards() as i64),
         #[cfg(feature = "replicate")]
         b"FEED.TAIL" if argv.len() == 1 => match s.changes_tail() {
-            Ok((g, o)) => {
+            Ok(tail) => {
                 arr(out, 2);
-                int(out, g as i64);
-                int(out, o as i64);
+                int(out, tail.generation as i64);
+                int(out, tail.offset as i64);
             }
-            Err(e) => err(out, &format!("ERR feed: {e:?}")),
+            Err(e) => err(out, &e.wire_text()),
         },
         #[cfg(feature = "replicate")]
         b"FEED.READ" if argv.len() >= 4 => cmd_feed_read(s, argv, out),
@@ -271,11 +271,12 @@ fn cmd_feed_read(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
         }
         prefixes = argv[5..].iter().map(Vec::as_slice).collect();
     }
-    match s.changes_since(g as u64, o as u64, limit.clamp(1, 10_000) as usize, &prefixes) {
+    let from = crate::FeedPosition::new(g as u64, o as u64);
+    match s.changes_since(from, limit.clamp(1, 10_000) as usize, &prefixes) {
         Ok(batch) => {
             arr(out, 3);
-            int(out, batch.next.0 as i64);
-            int(out, batch.next.1 as i64);
+            int(out, batch.next.generation as i64);
+            int(out, batch.next.offset as i64);
             arr(out, batch.changes.len());
             for f in &batch.changes {
                 arr(out, f.argv.len());
@@ -284,6 +285,6 @@ fn cmd_feed_read(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
                 }
             }
         }
-        Err(e) => err(out, &format!("ERR feed: {e:?}")),
+        Err(e) => err(out, &e.wire_text()),
     }
 }

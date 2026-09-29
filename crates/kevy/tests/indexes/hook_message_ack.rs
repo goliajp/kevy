@@ -25,7 +25,7 @@ static KEYS: Mutex<(Vec<u8>, Vec<u8>)> = Mutex::new((Vec::new(), Vec::new()));
 
 /// Keys with the write on shard `w` and the flag on shard `f`.
 fn keys_for(w: usize, f: usize) -> (Vec<u8>, Vec<u8>) {
-    let at = |k: &[u8]| kevy_rt::shard_of_key(k, SHARDS, false);
+    let at = |k: &[u8]| kevy_rt::shard_of_key(k, SHARDS, kevy_persist::Routing::KevyHash);
     let pick = |p: &str, s: usize| {
         (0..).map(|i| format!("{p}{i}").into_bytes()).find(|k| at(k) == s).unwrap()
     };
@@ -67,7 +67,7 @@ impl Commands for Slow {
     fn on_write(&self, _: &mut Store, key: &[u8]) {
         let (write, flag) = keys();
         if key == write {
-            let to = kevy_rt::shard_of_key(&flag, SHARDS, false);
+            let to = kevy_rt::shard_of_key(&flag, SHARDS, kevy_persist::Routing::KevyHash);
             OUTBOX.with(|o| o.borrow_mut().push((to, b"set".to_vec())));
         }
     }

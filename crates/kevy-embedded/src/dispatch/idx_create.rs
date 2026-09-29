@@ -384,5 +384,10 @@ fn create_text(s: &Store, name: &[u8], prefix: &[u8], p: &Parsed) -> crate::Kevy
         p.fields.iter().map(|f| (f.name.as_slice(), f.weight)).collect();
     let values: Vec<(&[u8], ValType)> =
         p.opts.values.iter().map(|v| (v.name.as_slice(), v.ty)).collect();
-    s.idx_create_text(name, prefix, &fields, p.opts.with_positions, &values)
+    let positions = if p.opts.with_positions {
+        crate::TokenPositions::Record
+    } else {
+        crate::TokenPositions::Omit
+    };
+    s.idx_create_text(name, prefix, &fields, positions, &values)
 }

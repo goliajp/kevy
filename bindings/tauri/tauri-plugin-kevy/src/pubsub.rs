@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use kevy_embedded::{KevyError, PubsubFrame, Store};
+use kevy_embedded::{KevyError, PubsubEvent, Store};
 use serde::Serialize;
 use tauri::ipc::Channel;
 
@@ -33,28 +33,28 @@ pub enum PubsubMsg {
         /// Subscribed channel.
         channel: Vec<u8>,
         /// Total channels + patterns held after the op.
-        count: usize,
+        count: i64,
     },
     /// `PSUBSCRIBE` ack.
     Psubscribe {
         /// Subscribed pattern.
         pattern: Vec<u8>,
         /// Total channels + patterns held after the op.
-        count: usize,
+        count: i64,
     },
     /// `UNSUBSCRIBE` ack (`channel: null` = "all").
     Unsubscribe {
         /// Unsubscribed channel, or `null` for "all".
         channel: Option<Vec<u8>>,
         /// Total still held after the op.
-        count: usize,
+        count: i64,
     },
     /// `PUNSUBSCRIBE` ack (`pattern: null` = "all").
     Punsubscribe {
         /// Unsubscribed pattern, or `null` for "all".
         pattern: Option<Vec<u8>>,
         /// Total still held after the op.
-        count: usize,
+        count: i64,
     },
     /// A message delivered on a directly subscribed channel.
     Message {
@@ -74,20 +74,24 @@ pub enum PubsubMsg {
     },
 }
 
-impl From<PubsubFrame> for PubsubMsg {
-    fn from(f: PubsubFrame) -> Self {
-        match f {
-            PubsubFrame::Subscribe { channel, count } => PubsubMsg::Subscribe { channel, count },
-            PubsubFrame::Psubscribe { pattern, count } => PubsubMsg::Psubscribe { pattern, count },
-            PubsubFrame::Unsubscribe { channel, count } => PubsubMsg::Unsubscribe { channel, count },
-            PubsubFrame::Punsubscribe { pattern, count } => {
+/// Gives back an event whose kind this plugin has no webview shape for.
+impl TryFrom<PubsubEvent> for PubsubMsg {
+    type Error = PubsubEvent;
+
+    fn try_from(f: PubsubEvent) -> Result<Self, PubsubEvent> {
+        Ok(match f {
+            PubsubEvent::Subscribe { channel, count } => PubsubMsg::Subscribe { channel, count },
+            PubsubEvent::Psubscribe { pattern, count } => PubsubMsg::Psubscribe { pattern, count },
+            PubsubEvent::Unsubscribe { channel, count } => PubsubMsg::Unsubscribe { channel, count },
+            PubsubEvent::Punsubscribe { pattern, count } => {
                 PubsubMsg::Punsubscribe { pattern, count }
             }
-            PubsubFrame::Message { channel, payload } => PubsubMsg::Message { channel, payload },
-            PubsubFrame::Pmessage { pattern, channel, payload } => {
+            PubsubEvent::Message { channel, payload } => PubsubMsg::Message { channel, payload },
+            PubsubEvent::Pmessage { pattern, channel, payload } => {
                 PubsubMsg::Pmessage { pattern, channel, payload }
             }
-        }
+            other => return Err(other),
+        })
     }
 }
 
@@ -118,7 +122,9 @@ fn poll_loop(sub: kevy_embedded::Subscription, stop: &AtomicBool, sink: &Channel
     while !stop.load(Ordering::SeqCst) {
         match sub.recv_timeout(POLL_TICK) {
             Ok(frame) => {
-                if sink.send(PubsubMsg::from(frame)).is_err() {
+                // an event kind the webview has no shape for is not forwarded
+                let Ok(msg) = PubsubMsg::try_from(frame) else { continue };
+                if sink.send(msg).is_err() {
                     break; // webview gone — stop draining.
                 }
             }

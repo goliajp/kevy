@@ -4,8 +4,8 @@
 //! writes — keyspace-mutating verbs) and a fleet of **replica**
 //! connections (for reads — round-robin across them, fallback to the
 //! primary when no replica is configured). A per-command
-//! `consistent: bool` knob (`READCONSISTENT` semantics) forces a read
-//! to the primary for callers that need fresh data.
+//! [`ReadConsistency`] (`READCONSISTENT` semantics) forces a read to the
+//! primary for callers that need fresh data.
 //!
 //! Topology model: the operator supplies the primary address + a list of
 //! replica addresses to [`ReadWriteClient::connect`]; the client
@@ -18,8 +18,23 @@
 //! — a small static table mirroring `kevy::cmd`'s server-side rule
 //! (duplicated here on purpose: this crate is downstream of
 //! `kevy-resp-client` only, so it never depends on the server crate).
+//!
+//! ```no_run
+//! use kevy_cluster_rw::{ReadConsistency, ReadWriteClient};
+//!
+//! let mut c = ReadWriteClient::connect(
+//!     ("10.0.0.11", 6004),
+//!     &[("10.0.0.12", 6004), ("10.0.0.13", 6004)],
+//! )?;
+//! c.request(&[b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()])?; // primary
+//! c.request(&[b"GET".to_vec(), b"k".to_vec()])?; // a replica, round-robin
+//! c.request_read(&[b"GET".to_vec(), b"k".to_vec()], ReadConsistency::Primary)?;
+//! # Ok::<(), std::io::Error>(())
+//! ```
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
+
+mod consistency;
 
 use std::collections::HashMap;
 use std::io;
@@ -27,10 +42,18 @@ use std::io;
 use kevy_resp::Reply;
 use kevy_resp_client::RespClient;
 
+pub use consistency::ReadConsistency;
+
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<ReadWriteClient>();
+    send_sync::<ReadConsistency>();
+};
+
 /// Read/write-split cluster client. Owns one `RespClient` to the
 /// primary node + one per replica node. Round-robins reads across
 /// the replica fleet (fallback to primary on empty fleet or
-/// `consistent = true`).
+/// [`ReadConsistency::Primary`]).
 #[derive(Debug)]
 pub struct ReadWriteClient {
     primary: RespClient,
@@ -216,10 +239,22 @@ impl ReadWriteClient {
     }
 
     /// Route a read command to a replica (round-robin); fallback to
-    /// the primary when no replica is configured or when
-    /// `consistent` is `true`.
-    pub fn request_read(&mut self, args: &[Vec<u8>], consistent: bool) -> io::Result<Reply> {
-        if consistent || self.replicas.is_empty() {
+    /// the primary when no replica is configured or when `consistency`
+    /// is [`ReadConsistency::Primary`].
+    ///
+    /// ```no_run
+    /// use kevy_cluster_rw::{ReadConsistency, ReadWriteClient};
+    ///
+    /// let mut c = ReadWriteClient::connect(("10.0.0.11", 6004), &[("10.0.0.12", 6004)])?;
+    /// let reply = c.request_read(&[b"GET".to_vec(), b"k".to_vec()], ReadConsistency::Primary)?;
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
+    pub fn request_read(
+        &mut self,
+        args: &[Vec<u8>],
+        consistency: ReadConsistency,
+    ) -> io::Result<Reply> {
+        if matches!(consistency, ReadConsistency::Primary) || self.replicas.is_empty() {
             return self.primary.request(args);
         }
         let idx = self.rr_counter % self.replicas.len();
@@ -229,14 +264,18 @@ impl ReadWriteClient {
 
     /// Auto-routed command. Classifies `args[0]` via [`is_write_verb`]
     /// and dispatches to either [`Self::request_write`] or
-    /// [`Self::request_read`] (`consistent = false`). Convenience for
+    /// [`Self::request_read`] ([`ReadConsistency::Eventual`]). Convenience for
     /// callers that don't want to make the read/write decision
     /// explicit.
     pub fn request(&mut self, args: &[Vec<u8>]) -> io::Result<Reply> {
         let Some(verb) = args.first() else {
             return self.primary.request(args);
         };
-        if is_write_verb(verb) { self.request_write(args) } else { self.request_read(args, false) }
+        if is_write_verb(verb) {
+            self.request_write(args)
+        } else {
+            self.request_read(args, ReadConsistency::Eventual)
+        }
     }
 }
 

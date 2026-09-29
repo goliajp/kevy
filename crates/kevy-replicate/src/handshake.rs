@@ -28,17 +28,18 @@
 
 use kevy_resp::Argv;
 
+use crate::feed::FeedPosition;
+
 /// Parsed `REPLICATE FROM <generation> <from-offset> ID <replica-id>`
 /// request.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct HandshakeReq {
-    /// Feed generation the replica's data reflects. `0` = unknown /
-    /// fresh — the primary treats it as "no continuity claim".
-    pub generation: u64,
-    /// Offset the replica wants to resume from. `0` = fresh replica.
-    /// Only meaningful within `generation`.
-    pub from_offset: u64,
+    /// Where the replica wants to resume: the feed generation its data
+    /// reflects and the offset within it. Generation `0` = unknown /
+    /// fresh — the primary treats it as "no continuity claim"; offset
+    /// `0` = fresh replica.
+    pub from: FeedPosition,
     /// Replica-supplied identifier (operator-set, opaque to the
     /// primary other than for slot bookkeeping).
     pub replica_id: String,
@@ -91,7 +92,7 @@ impl HandshakeReq {
     /// let words = ["REPLICATE", "FROM", "7", "42", "ID", "r1"];
     /// let argv = kevy_resp::Argv::from(words.iter().map(|w| w.as_bytes().to_vec()).collect::<Vec<_>>());
     /// let req = HandshakeReq::parse(&argv)?;
-    /// assert_eq!((req.generation, req.from_offset, req.replica_id.as_str()), (7, 42, "r1"));
+    /// assert_eq!((req.from.generation, req.from.offset, req.replica_id.as_str()), (7, 42, "r1"));
     /// # Ok::<(), kevy_replicate::handshake::HandshakeError>(())
     /// ```
     // missing_panics_doc: the unwraps are guarded by the `len() != 6` arity check
@@ -120,20 +121,27 @@ impl HandshakeReq {
         }
         let replica_id =
             std::str::from_utf8(id_bytes).map_err(|_| HandshakeError::BadReplicaId)?.to_string();
-        Ok(HandshakeReq { generation, from_offset, replica_id })
+        Ok(HandshakeReq { from: FeedPosition::new(generation, from_offset), replica_id })
     }
 }
 
 /// Encode the primary's `+ACK <generation> <current-offset>\r\n`
-/// response. `generation` is the primary's CURRENT feed generation —
+/// response. `at.generation` is the primary's CURRENT feed generation —
 /// the replica records it as the generation of whatever data this
-/// session delivers (frames or snapshot).
-pub fn encode_ack(generation: u64, current_offset: u64) -> Vec<u8> {
+/// session delivers (frames or snapshot) — and `at.offset` the granted
+/// resume offset.
+///
+/// ```
+/// use kevy_replicate::feed::FeedPosition;
+///
+/// assert_eq!(kevy_replicate::handshake::encode_ack(FeedPosition::new(7, 42)), b"+ACK 7 42\r\n");
+/// ```
+pub fn encode_ack(at: FeedPosition) -> Vec<u8> {
     let mut out = Vec::with_capacity(8 + 20 + 20 + 3);
     out.extend_from_slice(b"+ACK ");
-    push_u64(&mut out, generation);
+    push_u64(&mut out, at.generation);
     out.push(b' ');
-    push_u64(&mut out, current_offset);
+    push_u64(&mut out, at.offset);
     out.extend_from_slice(b"\r\n");
     out
 }
@@ -189,8 +197,7 @@ mod tests {
         let req =
             HandshakeReq::parse(&argv(&[b"REPLICATE", b"FROM", b"0", b"0", b"ID", b"replica-a"]))
                 .unwrap();
-        assert_eq!(req.generation, 0);
-        assert_eq!(req.from_offset, 0);
+        assert_eq!(req.from, FeedPosition::new(0, 0));
         assert_eq!(req.replica_id, "replica-a");
     }
 
@@ -205,8 +212,7 @@ mod tests {
             b"node-7",
         ]))
         .unwrap();
-        assert_eq!(req.generation, 7);
-        assert_eq!(req.from_offset, 4_294_967_296);
+        assert_eq!(req.from, FeedPosition::new(7, 4_294_967_296));
         assert_eq!(req.replica_id, "node-7");
     }
 
@@ -214,8 +220,7 @@ mod tests {
     fn keywords_are_case_insensitive() {
         let req =
             HandshakeReq::parse(&argv(&[b"replicate", b"from", b"2", b"1", b"id", b"x"])).unwrap();
-        assert_eq!(req.generation, 2);
-        assert_eq!(req.from_offset, 1);
+        assert_eq!(req.from, FeedPosition::new(2, 1));
         assert_eq!(req.replica_id, "x");
     }
 
@@ -293,11 +298,11 @@ mod tests {
 
     #[test]
     fn ack_format_for_zero() {
-        assert_eq!(encode_ack(1, 0), b"+ACK 1 0\r\n");
+        assert_eq!(encode_ack(FeedPosition::new(1, 0)), b"+ACK 1 0\r\n");
     }
 
     #[test]
     fn ack_format_for_large_values() {
-        assert_eq!(encode_ack(12, 987_654_321), b"+ACK 12 987654321\r\n");
+        assert_eq!(encode_ack(FeedPosition::new(12, 987_654_321)), b"+ACK 12 987654321\r\n");
     }
 }

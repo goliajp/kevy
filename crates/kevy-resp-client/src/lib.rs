@@ -311,8 +311,7 @@ pub use secure::{SecureStream, SecureWriter};
 mod secure_url;
 pub use secure_url::{SecureUrl, load_client_key};
 
-mod pubsub_event;
-pub use pubsub_event::PubsubEvent;
+pub use kevy_resp::PubsubEvent;
 
 mod read_buf;
 pub use read_buf::ReplyReadBuf;

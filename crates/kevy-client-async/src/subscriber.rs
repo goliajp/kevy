@@ -27,7 +27,7 @@ use crate::url::parse_url;
 use crate::conn::{DefaultTransport, connect_default};
 
 /// Subscribed async TCP-RESP connection. Mirrors
-/// [`kevy_client::Subscriber`] for TCP backends.
+/// [`kevy_client::Subscriber`](https://docs.rs/kevy-client/latest/kevy_client/struct.Subscriber.html) for TCP backends.
 ///
 /// The transport defaults to the runtime's `TcpStream`;
 /// [`Self::connect_secure_url`] gives one over [`crate::AsyncSecure`].

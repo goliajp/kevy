@@ -54,7 +54,7 @@ fn embedded_text_window_freezes_and_stays_semantically_equivalent() {
             name,
             b"ev:",
             &[(b"note", 1.0)],
-            true,
+            kevy_embedded::TokenPositions::Record,
             &[(b"prio", ValType::I64), (b"tag", ValType::Str)],
         )
         .expect("create text index");
@@ -121,24 +121,22 @@ fn embedded_text_window_freezes_and_stays_semantically_equivalent() {
             ("absent", b"absent", MatchOpts::default()),
             ("phrase", b"\"rust engine\"", MatchOpts::default()),
             ("mixed", b"warm \"rust storage\"", MatchOpts::default()),
-            ("filter", b"rust", MatchOpts { filters: &filter_prio, ..Default::default() }),
-            ("sort", b"engine", MatchOpts { sort: Some((b"prio", true)), ..Default::default() }),
-            ("distinct", b"engine", MatchOpts { distinct: Some(b"tag"), ..Default::default() }),
-            ("facet", b"rust", MatchOpts { facets: &facet_tag, ..Default::default() }),
+            ("filter", b"rust", MatchOpts::default().with_filters(&filter_prio)),
             (
-                "highlight",
-                b"\"rust engine\"",
-                MatchOpts { highlight: Some(&hl_all), ..Default::default() },
+                "sort",
+                b"engine",
+                MatchOpts::default().with_sort(b"prio", kevy_embedded::SortOrder::Desc),
             ),
+            ("distinct", b"engine", MatchOpts::default().with_distinct(b"tag")),
+            ("facet", b"rust", MatchOpts::default().with_facets(&facet_tag)),
+            ("highlight", b"\"rust engine\"", MatchOpts::default().with_highlight(&hl_all)),
             (
                 "combo",
                 b"rust",
-                MatchOpts {
-                    filters: &filter_prio,
-                    sort: Some((b"prio", false)),
-                    offset: 1,
-                    ..Default::default()
-                },
+                MatchOpts::default()
+                    .with_filters(&filter_prio)
+                    .with_sort(b"prio", kevy_embedded::SortOrder::Asc)
+                    .with_offset(1),
             ),
         ];
         for (label, query, opts) in shapes {
@@ -180,23 +178,18 @@ fn embedded_text_window_freezes_and_stays_semantically_equivalent() {
         .expect_err("prefix must refuse on cold");
     assert!(format!("{err}").contains("not built yet"), "{err}");
     let err = s
-        .idx_match_faceted(b"ev.note", b"rusk", 5, MatchOpts { typo: 1, ..Default::default() })
+        .idx_match_faceted(b"ev.note", b"rusk", 5, MatchOpts::default().with_typo(1))
         .expect_err("TYPO must refuse on cold");
     assert!(format!("{err}").contains("not built yet"), "{err}");
     let scope = [b"note".to_vec()];
     let err = s
-        .idx_match_faceted(
-            b"ev.note",
-            b"rust",
-            5,
-            MatchOpts { scope: &scope, ..Default::default() },
-        )
+        .idx_match_faceted(b"ev.note", b"rust", 5, MatchOpts::default().with_scope(&scope))
         .expect_err("IN must refuse on cold");
     assert!(format!("{err}").contains("not built yet"), "{err}");
     for (query, opts) in [
         (b"rus*".as_slice(), MatchOpts::default()),
-        (b"rusk", MatchOpts { typo: 1, ..Default::default() }),
-        (b"rust", MatchOpts { scope: &scope, ..Default::default() }),
+        (b"rusk", MatchOpts::default().with_typo(1)),
+        (b"rust", MatchOpts::default().with_scope(&scope)),
     ] {
         s.idx_match_faceted(b"ctl.note", query, 5, opts).expect("control serves");
     }

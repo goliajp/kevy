@@ -36,7 +36,7 @@ thread_local! {
 
 /// Lua's `redis.call` dispatch closure calls this after every
 /// wake-triggering write (LPUSH / RPUSH / XADD / ZADD / ZINCRBY).
-/// The runtime drains via [`drain_lua_wake_buffer`] after the outer
+/// The runtime drains the buffer after the outer
 /// EVAL dispatch returns and fires `wake_key` for each.
 ///
 /// Cheap: one thread-local lookup + one `Vec::push` per call.

@@ -17,7 +17,7 @@ pub(crate) fn trace_session_start(runner_slot: usize, client: &ReplicaClient, da
     kevy_rt::repl_trace_line(format_args!(
         "runner slot {runner_slot}: session up — primary acked \
          gen {} from {}, local data_gen {data_gen}",
-        client.primary_gen_at_handshake(),
+        client.primary_at_handshake().generation,
         client.expected_offset(),
     ));
 }

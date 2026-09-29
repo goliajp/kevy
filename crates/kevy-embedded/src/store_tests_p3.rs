@@ -176,7 +176,7 @@ fn hincrbyfloat_negative_delta() {
 fn linsert_before_pivot() {
     let s = s();
     s.rpush(b"l", &[b"a", b"b", b"d"]).unwrap();
-    let new_len = s.linsert(b"l", true, b"d", b"c").unwrap();
+    let new_len = s.linsert(b"l", crate::InsertPosition::Before, b"d", b"c").unwrap();
     assert_eq!(new_len, 4);
     assert_eq!(
         s.lrange(b"l", 0, -1).unwrap(),
@@ -188,7 +188,7 @@ fn linsert_before_pivot() {
 fn linsert_after_pivot() {
     let s = s();
     s.rpush(b"l", &[b"a", b"b", b"d"]).unwrap();
-    let new_len = s.linsert(b"l", false, b"b", b"c").unwrap();
+    let new_len = s.linsert(b"l", crate::InsertPosition::After, b"b", b"c").unwrap();
     assert_eq!(new_len, 4);
     assert_eq!(
         s.lrange(b"l", 0, -1).unwrap(),
@@ -200,13 +200,13 @@ fn linsert_after_pivot() {
 fn linsert_pivot_not_found_returns_negative_one() {
     let s = s();
     s.rpush(b"l", &[b"a", b"b"]).unwrap();
-    assert_eq!(s.linsert(b"l", true, b"missing", b"x").unwrap(), -1);
+    assert_eq!(s.linsert(b"l", crate::InsertPosition::Before, b"missing", b"x").unwrap(), -1);
 }
 
 #[test]
 fn linsert_absent_key_returns_zero() {
     let s = s();
-    assert_eq!(s.linsert(b"absent", true, b"p", b"v").unwrap(), 0);
+    assert_eq!(s.linsert(b"absent", crate::InsertPosition::Before, b"p", b"v").unwrap(), 0);
 }
 
 // ---- ping_ns ------------------------------------------------------------

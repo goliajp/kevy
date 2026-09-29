@@ -140,7 +140,7 @@ v1 格式的日志没有记录信封，表达不了事务边界；在首次重�
 | 自动重写最小体积 | `auto_aof_rewrite_min_size` | `with_auto_aof_rewrite(pct, min)` 的第二个参数 | `67108864`（64 MiB）| 两个阈值同时满足才触发增长规则。 |
 | 自动重写绝对上限 | `auto_aof_rewrite_bytes` | `with_auto_rewrite_bytes(n)` | `0`（关）| 独立触发器：AOF 超过 `n` 字节即重写，与增长比例无关。可在线调整（`CONFIG SET auto-aof-rewrite-bytes`）。 |
 | 自动重写陈旧度 | `auto_aof_rewrite_interval_secs` | `with_auto_rewrite_interval(d)` | `0`（关）| 独立触发器：距上次重写超过该时长且日志有增长即重写。可在线调整。 |
-| resync 回放 | `replay_resync`（`[persistence]`）| `with_replay_resync(true)` | `false`（strict）| 仅启动时生效。文件中部损坏时恢复其后的完好尾巴，而不是停在损坏处——见 resync 一节。 |
+| resync 回放 | `replay_resync`（`[persistence]`）| `with_replay_mode(ReplayMode::Resync)` | `false`（strict）| 仅启动时生效。文件中部损坏时恢复其后的完好尾巴，而不是停在损坏处——见 resync 一节。 |
 | 持久化目录 | `data_dir` / 环境变量 `KEVY_DIR` | `with_persist(path)` | 服务器 `./data`；嵌入式无 | 每个 kevy 实例一个目录。 |
 | reactor / reaper 节拍 | reactor tick，约 100 ms | 后台 reaper，或自行调用 `Store::tick` | 约 100 ms | 驱动 `EverySec` 的 fsync、`No` 的缓冲写入、自动重写检查、TTL 清理。 |
 
@@ -361,7 +361,7 @@ store.evictions_total();        // total evicted by maxmemory
 replay_resync = true
 ```
 
-（嵌入式用 `Config::with_replay_resync(true)`，手工搭 runtime 用 `Runtime::with_replay_resync(true)`；该设置仅启动时生效——回放先于第一次在线配置 tick。）
+（嵌入式用 `Config::with_replay_mode(ReplayMode::Resync)`，手工搭 runtime 用 `Runtime::with_replay_mode(ReplayMode::Resync)`；该设置仅启动时生效——回放先于第一次在线配置 tick。）
 
 resync 模式下，回放跳过损坏区：向前扫描，直到长度前缀、CRC **和**恰好一条良构命令的解析三者同时吻合的位置（伪接受需要同时骗过三者——每个候选偏移约 2⁻³²），然后从那里继续应用。每段被跳过的区间都会上报——persist 层的 `ReplayReport::resynced_ranges`、`Store::open_report()` 上的 `OpenReport::resynced_bytes`——且 `corrupt` 标志保持竖起：resync 恢复数据，但不宣布文件健康。
 

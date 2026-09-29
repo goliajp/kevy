@@ -151,7 +151,8 @@ impl Server {
                 .shards(nshards)
                 .with_data_dir(dir_path)
                 .with_aof(false)
-                .with_replication(true, 1024 * 1024)
+                .with_replication(true)
+                .with_replication_buffer_size(1024 * 1024)
                 // Scales with `patience()` for the same reason the waits do.
                 // The default is 60s, the same order as an instrumented run of
                 // this suite -- so under covgate the replica's slot expired
@@ -218,7 +219,7 @@ fn live_generation(replication_port: u16) -> u64 {
         0,
     )
     .expect("probe handshake");
-    probe.primary_gen_at_handshake()
+    probe.primary_at_handshake().generation
 }
 
 /// Raw 6-arg 4.0 handshake: `REPLICATE FROM <generation> <offset> ID
@@ -642,11 +643,12 @@ fn replica_client_handshake_and_receive_set_frame() {
     // cursor now gets — this test is about the frame contract.
     let mut client = kevy_replicate::replica::ReplicaClient::connect_with(
         ("127.0.0.1", server.replication_base),
-        &kevy_replicate::replica::ConnectOptions::new("replica-via-client")
-            .with_generation(live_generation(server.replication_base)),
+        &kevy_replicate::replica::ConnectOptions::new("replica-via-client").with_from(
+            kevy_replicate::feed::FeedPosition::new(live_generation(server.replication_base), 0),
+        ),
     )
     .expect("connect + handshake");
-    assert_eq!(client.primary_offset_at_handshake(), 0);
+    assert_eq!(client.primary_at_handshake().offset, 0);
     assert_eq!(client.expected_offset(), 0);
 
     // Run a SET via the main port.
@@ -707,7 +709,8 @@ fn start_small_buffer_primary(buffer_size: u64) -> Server {
             .shards(1)
             .with_data_dir(dir_path)
             .with_aof(false)
-            .with_replication(true, buffer_size)
+            .with_replication(true)
+            .with_replication_buffer_size(buffer_size)
             .with_replication_listener(replication_base);
         let _ = rt.run(stop_thread);
     });
@@ -959,8 +962,9 @@ fn replica_apply_dispatch_mirrors_primary_store() {
     // Resume-shaped claim — see replica_client_handshake_and_receive_set_frame.
     let mut client = kevy_replicate::replica::ReplicaClient::connect_with(
         ("127.0.0.1", server.replication_base),
-        &kevy_replicate::replica::ConnectOptions::new("replica-apply")
-            .with_generation(live_generation(server.replication_base)),
+        &kevy_replicate::replica::ConnectOptions::new("replica-apply").with_from(
+            kevy_replicate::feed::FeedPosition::new(live_generation(server.replication_base), 0),
+        ),
     )
     .expect("connect + handshake");
 
@@ -2111,7 +2115,7 @@ fn unclean_restart_generation_fence_ships_instead_of_aliasing() {
         0,
     )
     .expect("probe handshake");
-    let gen1 = probe.primary_gen_at_handshake();
+    let gen1 = probe.primary_at_handshake().generation;
     assert_ne!(gen1, 0, "fresh dir draws a random feed generation");
     drop(probe);
     drop(client);
@@ -2138,12 +2142,11 @@ fn unclean_restart_generation_fence_ships_instead_of_aliasing() {
     let mut replica = kevy_replicate::replica::ReplicaClient::connect_with(
         ("127.0.0.1", server.replication_base),
         &kevy_replicate::replica::ConnectOptions::new("fence-probe")
-            .with_generation(gen1)
-            .with_from_offset(5),
+            .with_from(kevy_replicate::feed::FeedPosition::new(gen1, 5)),
     )
     .expect("resume handshake");
     assert_ne!(
-        replica.primary_gen_at_handshake(),
+        replica.primary_at_handshake().generation,
         gen1,
         "unclean restart must draw a fresh feed generation"
     );
@@ -2189,13 +2192,12 @@ fn ahead_cursor_ships_snapshot_instead_of_wedging() {
         0,
     )
     .expect("probe handshake");
-    let live_gen = probe.primary_gen_at_handshake();
+    let live_gen = probe.primary_at_handshake().generation;
     drop(probe);
     let mut replica = kevy_replicate::replica::ReplicaClient::connect_with(
         ("127.0.0.1", server.replication_base),
         &kevy_replicate::replica::ConnectOptions::new("ahead-probe")
-            .with_generation(live_gen)
-            .with_from_offset(999_999),
+            .with_from(kevy_replicate::feed::FeedPosition::new(live_gen, 999_999)),
     )
     .expect("ahead handshake");
     let mut pings = 0;
@@ -2346,7 +2348,8 @@ fn promoted_node_ships_its_keyspace_to_a_fresh_cursor() {
             .shards(1)
             .with_data_dir(dir_path)
             .with_aof(false)
-            .with_replication(true, 1024 * 1024)
+            .with_replication(true)
+            .with_replication_buffer_size(1024 * 1024)
             .with_replication_listener(node_repl_base)
             .with_replica_inboxes(receivers);
         let _ = rt.run(stop_thread);

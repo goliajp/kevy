@@ -8,13 +8,13 @@ use std::sync::mpsc::Sender;
 
 use kevy_store::glob_match;
 
-use crate::pubsub::PubsubFrame;
+use crate::pubsub::PubsubEvent;
 
 /// Internal entry in the bus tables.
 #[derive(Debug)]
 struct BusEntry {
     id: u64,
-    sender: Sender<PubsubFrame>,
+    sender: Sender<PubsubEvent>,
 }
 
 /// The pub/sub registry, owned by `crate::store::Inner`.
@@ -50,12 +50,12 @@ impl PubsubBus {
         &self,
         channel: &[u8],
         payload: &[u8],
-    ) -> Vec<(PubsubFrame, Sender<PubsubFrame>)> {
+    ) -> Vec<(PubsubEvent, Sender<PubsubEvent>)> {
         let mut plans = Vec::new();
         if let Some(subs) = self.channels.get(channel) {
             for e in subs {
                 plans.push((
-                    PubsubFrame::Message { channel: channel.to_vec(), payload: payload.to_vec() },
+                    PubsubEvent::Message { channel: channel.to_vec(), payload: payload.to_vec() },
                     e.sender.clone(),
                 ));
             }
@@ -63,7 +63,7 @@ impl PubsubBus {
         for (pat, e) in &self.patterns {
             if glob_match(pat, channel) {
                 plans.push((
-                    PubsubFrame::Pmessage {
+                    PubsubEvent::Pmessage {
                         pattern: pat.clone(),
                         channel: channel.to_vec(),
                         payload: payload.to_vec(),
@@ -78,7 +78,7 @@ impl PubsubBus {
     pub(crate) fn add_channel(
         &mut self,
         id: u64,
-        sender: &Sender<PubsubFrame>,
+        sender: &Sender<PubsubEvent>,
         channel: Vec<u8>,
     ) -> bool {
         let subs = self.channels.entry(channel).or_default();
@@ -92,7 +92,7 @@ impl PubsubBus {
     pub(crate) fn add_pattern(
         &mut self,
         id: u64,
-        sender: &Sender<PubsubFrame>,
+        sender: &Sender<PubsubEvent>,
         pattern: Vec<u8>,
     ) -> bool {
         if self.patterns.iter().any(|(p, e)| p == &pattern && e.id == id) {

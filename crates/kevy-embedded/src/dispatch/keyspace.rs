@@ -139,7 +139,8 @@ fn cmd_copy(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     if argv[1] == argv[2] {
         return encode_error(out, "ERR source and destination objects are the same");
     }
-    match s.copy(&argv[1], &argv[2], replace) {
+    let mode = if replace { crate::CopyMode::Replace } else { crate::CopyMode::IfAbsent };
+    match s.copy(&argv[1], &argv[2], mode) {
         Ok(copied) => encode_integer(out, i64::from(copied)),
         Err(e) => kevy_err(out, &e),
     }
