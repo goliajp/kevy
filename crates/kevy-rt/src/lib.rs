@@ -34,10 +34,11 @@
 //! Implement [`Commands`] for your command set and run it. ([`Store`] is
 //! re-exported so you don't need a separate dependency.)
 //!
-//! ```no_run
+//! ```
 //! use kevy_rt::{ArgvView, Commands, Route, Runtime, Store, TxnKind};
+//! use std::io::{Read, Write};
 //! use std::sync::Arc;
-//! use std::sync::atomic::AtomicBool;
+//! use std::sync::atomic::{AtomicBool, Ordering};
 //!
 //! #[derive(Clone)]
 //! struct MyCommands;
@@ -55,9 +56,31 @@
 //!     fn txn_kind<A: ArgvView + ?Sized>(&self, _args: &A) -> TxnKind { TxnKind::Other }
 //! }
 //!
-//! // One shard per core, listening on 127.0.0.1:6379, until `stop` is set.
-//! let rt = Runtime::builder(MyCommands).bind([127, 0, 0, 1], 6379).shards(4);
-//! rt.run(Arc::new(AtomicBool::new(false))).unwrap();
+//! # let port = kevy_testnet::free_port();
+//! # let dir = std::env::temp_dir().join(format!("kevy-rt-example-{}", std::process::id()));
+//! // Two shards on 127.0.0.1, in memory only, until `stop` is set.
+//! let rt = Runtime::builder(MyCommands)
+//!     .bind([127, 0, 0, 1], port)
+//!     .shards(2)
+//!     .with_aof(false)
+//!     .with_data_dir(&dir);
+//! let stop = Arc::new(AtomicBool::new(false));
+//! let server = std::thread::spawn({
+//!     let stop = Arc::clone(&stop);
+//!     move || rt.run(stop)
+//! });
+//! # kevy_testnet::assert_listening(port, "the example runtime");
+//!
+//! let mut conn = std::net::TcpStream::connect(("127.0.0.1", port))?;
+//! conn.write_all(b"*2\r\n$3\r\nGET\r\n$1\r\nk\r\n")?;
+//! let mut reply = [0; 5];
+//! conn.read_exact(&mut reply)?;
+//! assert_eq!(&reply, b"+OK\r\n");
+//!
+//! stop.store(true, Ordering::Relaxed);
+//! server.join().expect("no shard panicked")?;
+//! # let _ = std::fs::remove_dir_all(&dir);
+//! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 // Almost entirely safe: the only `unsafe` is in `uring_reactor` (Linux io_uring),
 // which needs raw buffer pointers for zero-allocation completion I/O — on the hot
