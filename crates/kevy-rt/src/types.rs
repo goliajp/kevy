@@ -292,6 +292,7 @@ impl ReplicaAck {
     /// ```
     /// assert_eq!(kevy_rt::ReplicaAck::new(0, 0), kevy_rt::ReplicaAck::default());
     /// ```
+    #[inline]
     #[must_use]
     pub const fn new(acked_offset: u64, ack_age_ms: u64) -> Self {
         Self { acked_offset, ack_age_ms }

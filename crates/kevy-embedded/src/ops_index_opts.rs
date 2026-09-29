@@ -88,6 +88,7 @@ impl<'a> ScalarQueryOpts<'a> {
     /// let f = [kevy_embedded::ValueFilter::Eq { field: b"k", value: b"v" }];
     /// assert_eq!(kevy_embedded::ScalarQueryOpts::default().with_filters(&f).filters.len(), 1);
     /// ```
+    #[inline]
     #[must_use]
     pub fn with_filters(mut self, filters: &'a [ValueFilter<'a>]) -> Self {
         self.filters = filters;
@@ -101,6 +102,7 @@ impl<'a> ScalarQueryOpts<'a> {
     /// let o = ScalarQueryOpts::default().with_sort(b"ts", SortOrder::Asc);
     /// assert!(o.sort.is_some());
     /// ```
+    #[inline]
     #[must_use]
     pub fn with_sort(mut self, field: &'a [u8], order: SortOrder) -> Self {
         self.sort = Some((field, order));
@@ -113,6 +115,7 @@ impl<'a> ScalarQueryOpts<'a> {
     /// let o = kevy_embedded::ScalarQueryOpts::default().with_distinct(b"user");
     /// assert_eq!(o.distinct, Some(&b"user"[..]));
     /// ```
+    #[inline]
     #[must_use]
     pub fn with_distinct(mut self, field: &'a [u8]) -> Self {
         self.distinct = Some(field);
@@ -126,6 +129,7 @@ impl<'a> ScalarQueryOpts<'a> {
     /// let o = kevy_embedded::ScalarQueryOpts::default().with_facets(&fields);
     /// assert_eq!(o.facets.len(), 1);
     /// ```
+    #[inline]
     #[must_use]
     pub fn with_facets(mut self, facets: &'a [Vec<u8>]) -> Self {
         self.facets = facets;
@@ -137,6 +141,7 @@ impl<'a> ScalarQueryOpts<'a> {
     /// ```
     /// assert_eq!(kevy_embedded::ScalarQueryOpts::default().with_offset(5).offset, 5);
     /// ```
+    #[inline]
     #[must_use]
     pub fn with_offset(mut self, offset: usize) -> Self {
         self.offset = offset;
@@ -205,6 +210,7 @@ impl<'a> MatchOpts<'a> {
     /// let o = kevy_embedded::MatchOpts::default().with_highlight(&[]);
     /// assert!(o.highlight.is_some());
     /// ```
+    #[inline]
     #[must_use]
     pub fn with_highlight(mut self, fields: &'a [Vec<u8>]) -> Self {
         self.highlight = Some(fields);
@@ -216,6 +222,7 @@ impl<'a> MatchOpts<'a> {
     /// ```
     /// assert_eq!(kevy_embedded::MatchOpts::default().with_typo(2).typo, 2);
     /// ```
+    #[inline]
     #[must_use]
     pub fn with_typo(mut self, typo: u32) -> Self {
         self.typo = typo;
@@ -227,6 +234,7 @@ impl<'a> MatchOpts<'a> {
     /// ```
     /// assert_eq!(kevy_embedded::MatchOpts::default().with_offset(10).offset, 10);
     /// ```
+    #[inline]
     #[must_use]
     pub fn with_offset(mut self, offset: usize) -> Self {
         self.offset = offset;
@@ -239,6 +247,7 @@ impl<'a> MatchOpts<'a> {
     /// let fields = [b"title".to_vec()];
     /// assert_eq!(kevy_embedded::MatchOpts::default().with_scope(&fields).scope.len(), 1);
     /// ```
+    #[inline]
     #[must_use]
     pub fn with_scope(mut self, scope: &'a [Vec<u8>]) -> Self {
         self.scope = scope;
@@ -251,6 +260,7 @@ impl<'a> MatchOpts<'a> {
     /// let f = [kevy_embedded::ValueFilter::Eq { field: b"lang", value: b"en" }];
     /// assert_eq!(kevy_embedded::MatchOpts::default().with_filters(&f).filters.len(), 1);
     /// ```
+    #[inline]
     #[must_use]
     pub fn with_filters(mut self, filters: &'a [ValueFilter<'a>]) -> Self {
         self.filters = filters;
@@ -263,6 +273,7 @@ impl<'a> MatchOpts<'a> {
     /// use kevy_embedded::{MatchOpts, SortOrder};
     /// assert!(MatchOpts::default().with_sort(b"ts", SortOrder::Desc).sort.is_some());
     /// ```
+    #[inline]
     #[must_use]
     pub fn with_sort(mut self, field: &'a [u8], order: SortOrder) -> Self {
         self.sort = Some((field, order));
@@ -275,6 +286,7 @@ impl<'a> MatchOpts<'a> {
     /// let o = kevy_embedded::MatchOpts::default().with_distinct(b"author");
     /// assert_eq!(o.distinct, Some(&b"author"[..]));
     /// ```
+    #[inline]
     #[must_use]
     pub fn with_distinct(mut self, field: &'a [u8]) -> Self {
         self.distinct = Some(field);
@@ -287,6 +299,7 @@ impl<'a> MatchOpts<'a> {
     /// let fields = [b"lang".to_vec()];
     /// assert_eq!(kevy_embedded::MatchOpts::default().with_facets(&fields).facets.len(), 1);
     /// ```
+    #[inline]
     #[must_use]
     pub fn with_facets(mut self, facets: &'a [Vec<u8>]) -> Self {
         self.facets = facets;

@@ -53,6 +53,7 @@ impl FeedPosition {
     /// let at = kevy_replicate::feed::FeedPosition::new(3, 0);
     /// assert_eq!(at.generation, 3);
     /// ```
+    #[inline]
     #[must_use]
     pub const fn new(generation: u64, offset: u64) -> Self {
         Self { generation, offset }
@@ -140,6 +141,7 @@ impl FeedSource {
     /// let feed = FeedSource::new(5, ReplicationSource::new(1 << 20));
     /// assert_eq!(feed.tail(), FeedPosition::new(5, 0));
     /// ```
+    #[inline]
     pub fn tail(&self) -> FeedPosition {
         FeedPosition::new(self.generation, self.source.next_offset())
     }

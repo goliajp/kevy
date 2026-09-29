@@ -310,6 +310,7 @@ impl XGroupCtx {
     /// let ctx = kevy_rt::XGroupCtx::new(b"g".to_vec(), b"c".to_vec());
     /// assert_eq!(ctx.ack, kevy_store::AckMode::Pending);
     /// ```
+    #[inline]
     #[must_use]
     pub fn new(group: Vec<u8>, consumer: Vec<u8>) -> Self {
         Self { group, consumer, ack: AckMode::Pending }
@@ -322,6 +323,7 @@ impl XGroupCtx {
     /// let ctx = kevy_rt::XGroupCtx::new(b"g".to_vec(), b"c".to_vec()).with_ack(AckMode::NoAck);
     /// assert_eq!(ctx.ack, AckMode::NoAck);
     /// ```
+    #[inline]
     #[must_use]
     pub fn with_ack(mut self, ack: AckMode) -> Self {
         self.ack = ack;
