@@ -1187,7 +1187,8 @@ fn cross_shard_rename_survives_a_restart() {
     // Pick pairs that genuinely straddle two shards — a same-shard pair
     // would exercise the atomic op and prove nothing about this path.
     let cross = |a: &[u8], b: &[u8]| {
-        kevy_rt::shard_of_key(a, nshards, false) != kevy_rt::shard_of_key(b, nshards, false)
+        kevy_rt::shard_of_key(a, nshards, kevy_persist::Routing::KevyHash)
+            != kevy_rt::shard_of_key(b, nshards, kevy_persist::Routing::KevyHash)
     };
     assert!(cross(b"src", b"dst"), "test fixture must be cross-shard");
     assert!(cross(b"h:src", b"h:dst"), "hash fixture must be cross-shard");

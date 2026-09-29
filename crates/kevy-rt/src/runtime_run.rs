@@ -268,7 +268,7 @@ impl<C: Commands> Runtime<C> {
                 Some(Aof::open_with_repair(
                     &kevy_persist::layout::aof_path(&self.data_dir, id),
                     self.appendfsync,
-                    self.replay_mode(),
+                    self.replay_mode,
                 )?)
             } else {
                 None
@@ -373,7 +373,7 @@ impl<C: Commands> Runtime<C> {
                 auto_aof_rewrite_pct: self.auto_aof_rewrite_pct,
                 auto_aof_rewrite_bytes: self.auto_aof_rewrite_bytes,
                 auto_aof_rewrite_interval_secs: self.auto_aof_rewrite_interval_secs,
-                replay_resync: self.replay_resync,
+                replay_resync: self.replay_mode == kevy_persist::ReplayMode::Resync,
                 auto_aof_rewrite_min_size: self.auto_aof_rewrite_min_size,
                 dirty: Vec::new(),
                 pubsub: shared.pubsub.clone(),

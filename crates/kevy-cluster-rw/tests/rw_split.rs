@@ -69,7 +69,8 @@ impl PrimaryServer {
                 .shards(1)
                 .with_data_dir(dir_path)
                 .with_aof(false)
-                .with_replication(true, 1024 * 1024)
+                .with_replication(true)
+                .with_replication_buffer_size(1024 * 1024)
                 .with_replication_listener(replication_base);
             let _ = rt.run(stop_thread);
         });
@@ -814,7 +815,8 @@ fn reconnect_outside_backlog_triggers_snapshot() {
                 .shards(1)
                 .with_data_dir(dir_path)
                 .with_aof(false)
-                .with_replication(true, 256) // 256-byte backlog: a few SETs evict the head
+                .with_replication(true)
+                .with_replication_buffer_size(256) // 256-byte backlog: a few SETs evict the head
                 .with_replication_listener(replication_base);
             let _ = rt.run(stop_thread);
         });

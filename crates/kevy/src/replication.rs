@@ -12,9 +12,8 @@ use crate::state::{ReplicationState, RuntimeState};
 
 /// The primary-side keys when `[replication] secure` is on.
 fn link_security(repl: &ReplicationState) -> Option<kevy_rt::ReplicationSecurity> {
-    repl.links().map(|l| kevy_rt::ReplicationSecurity {
-        local: l.local.clone(),
-        replica_keys: l.replicas.clone(),
+    repl.links().map(|l| {
+        kevy_rt::ReplicationSecurity::new(l.local.clone()).with_replica_keys(l.replicas.clone())
     })
 }
 
@@ -59,7 +58,8 @@ pub(crate) fn apply<C: Commands>(
         ReplicationRole::Primary => {
             repl.set_min_replicas(cfg.replication.min_replicas_to_write);
             runtime
-                .with_replication(true, cfg.replication.replication_buffer_size)
+                .with_replication(true)
+                .with_replication_buffer_size(cfg.replication.replication_buffer_size)
                 .with_replication_listener(replication_port_base(cfg))
                 .with_replication_security_opt(link_security(repl))
                 .with_replication_reconnect_window(cfg.replication.reconnect_window_ms)
@@ -75,7 +75,8 @@ pub(crate) fn apply<C: Commands>(
             // (ReplicatedApplyGuard), so the standing cost is the
             // idle backlog buffer.
             runtime
-                .with_replication(true, cfg.replication.replication_buffer_size)
+                .with_replication(true)
+                .with_replication_buffer_size(cfg.replication.replication_buffer_size)
                 .with_replication_listener(replication_port_base(cfg))
                 .with_replication_security_opt(link_security(repl))
                 .with_replication_reconnect_window(cfg.replication.reconnect_window_ms)

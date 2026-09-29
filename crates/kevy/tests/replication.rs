@@ -151,7 +151,8 @@ impl Server {
                 .shards(nshards)
                 .with_data_dir(dir_path)
                 .with_aof(false)
-                .with_replication(true, 1024 * 1024)
+                .with_replication(true)
+                .with_replication_buffer_size(1024 * 1024)
                 // Scales with `patience()` for the same reason the waits do.
                 // The default is 60s, the same order as an instrumented run of
                 // this suite -- so under covgate the replica's slot expired
@@ -708,7 +709,8 @@ fn start_small_buffer_primary(buffer_size: u64) -> Server {
             .shards(1)
             .with_data_dir(dir_path)
             .with_aof(false)
-            .with_replication(true, buffer_size)
+            .with_replication(true)
+            .with_replication_buffer_size(buffer_size)
             .with_replication_listener(replication_base);
         let _ = rt.run(stop_thread);
     });
@@ -2346,7 +2348,8 @@ fn promoted_node_ships_its_keyspace_to_a_fresh_cursor() {
             .shards(1)
             .with_data_dir(dir_path)
             .with_aof(false)
-            .with_replication(true, 1024 * 1024)
+            .with_replication(true)
+            .with_replication_buffer_size(1024 * 1024)
             .with_replication_listener(node_repl_base)
             .with_replica_inboxes(receivers);
         let _ = rt.run(stop_thread);

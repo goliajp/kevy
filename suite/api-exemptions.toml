@@ -226,3 +226,8 @@ why = "the write half of a caller's own transport, implemented outside this crat
 rule = "trait-open"
 item = "kevy_client_async::transport::AsyncTransport"
 why = "the bound every connection type takes, blanket-implemented for each Send + Unpin type that implements AsyncRead and AsyncWrite, so a caller's transport qualifies without naming it; its docs say to implement the two halves instead"
+
+[[exempt]]
+rule = "trait-open"
+item = "kevy_rt::commands_trait::Commands"
+why = "the seam the runtime is built around: the kevy server's command set implements it, and so does any embedder's; every method added after the first release has a default, and the trait docs state the contract (classification is a pure function of the argv, resolve agrees with the per-attribute methods, is_write gates durability, the route names every key touched, dispatch writes one reply without blocking, hooks run on the shard thread)"

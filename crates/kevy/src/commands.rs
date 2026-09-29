@@ -5,7 +5,7 @@
 //! lives here.
 
 use kevy_rt::{
-    ArgvView, BlockKind, Commands, ExtensionReduced, NotifyClass, ResolvedCmd, RespVersion, Route,
+    ArgvView, BlockKind, Commands, ExtensionReduced, NotifyKind, ResolvedCmd, RespVersion, Route,
     TxnKind,
 };
 use kevy_store::Store;
@@ -315,36 +315,35 @@ impl Commands for KevyCommands {
             // The promotion counter still flows — it doesn't
             // clobber any builder choice, and an embedded promotion
             // must fence feed generations too.
-            return kevy_rt::LiveRuntimeConfig {
-                promotion_epoch: self.state().replication.promotion_epoch(),
-                ..kevy_rt::LiveRuntimeConfig::default()
-            };
+            let mut live = kevy_rt::LiveRuntimeConfig::default();
+            live.promotion_epoch = self.state().replication.promotion_epoch();
+            return live;
         }
         let cfg = self.state().config();
         let hz = cfg.expiry.hz;
         let tick_ms =
             if hz == 0 { Some(0) } else { Some((1000u64 / u64::from(hz)).clamp(1, 10_000)) };
-        kevy_rt::LiveRuntimeConfig {
-            appendfsync: Some(cfg.persistence.appendfsync),
-            auto_aof_rewrite_pct: Some(cfg.persistence.auto_aof_rewrite_percentage),
-            auto_aof_rewrite_min_size: Some(cfg.persistence.auto_aof_rewrite_min_size),
-            auto_aof_rewrite_bytes: Some(cfg.persistence.auto_aof_rewrite_bytes),
-            auto_aof_rewrite_interval_secs: Some(cfg.persistence.auto_aof_rewrite_interval_secs),
-            tick_interval_ms: tick_ms,
-            // A flag string with an unknown char can't be installed —
-            // config admission validates it — so the fallback default
-            // (notifications OFF) is unreachable in practice and safe
-            // if a foreign path ever slips one through.
-            notify_flags: Some(
-                cfg.notification
-                    .notify_keyspace_events
-                    .parse::<kevy_config::NotificationFlags>()
-                    .unwrap_or_default(),
-            ),
-            slowlog_slower_than_micros: Some(cfg.slowlog.slower_than_micros),
-            slowlog_max_len: Some(cfg.slowlog.max_len),
-            promotion_epoch: self.state().replication.promotion_epoch(),
-        }
+        let mut live = kevy_rt::LiveRuntimeConfig::default();
+        live.appendfsync = Some(cfg.persistence.appendfsync);
+        live.auto_aof_rewrite_pct = Some(cfg.persistence.auto_aof_rewrite_percentage);
+        live.auto_aof_rewrite_min_size = Some(cfg.persistence.auto_aof_rewrite_min_size);
+        live.auto_aof_rewrite_bytes = Some(cfg.persistence.auto_aof_rewrite_bytes);
+        live.auto_aof_rewrite_interval_secs = Some(cfg.persistence.auto_aof_rewrite_interval_secs);
+        live.tick_interval_ms = tick_ms;
+        // A flag string with an unknown char can't be installed —
+        // config admission validates it — so the fallback default
+        // (notifications OFF) is unreachable in practice and safe
+        // if a foreign path ever slips one through.
+        live.notify_flags = Some(
+            cfg.notification
+                .notify_keyspace_events
+                .parse::<kevy_config::NotificationFlags>()
+                .unwrap_or_default(),
+        );
+        live.slowlog_slower_than_micros = Some(cfg.slowlog.slower_than_micros);
+        live.slowlog_max_len = Some(cfg.slowlog.max_len);
+        live.promotion_epoch = self.state().replication.promotion_epoch();
+        live
     }
 
     fn hello_reply<A: ArgvView + ?Sized>(
@@ -363,7 +362,7 @@ impl Commands for KevyCommands {
         cmd::is_write_verb(upper_verb(name, &mut buf))
     }
 
-    fn notify_class<A: ArgvView + ?Sized>(&self, args: &A) -> Option<NotifyClass> {
+    fn notify_class<A: ArgvView + ?Sized>(&self, args: &A) -> Option<NotifyKind> {
         let name = args.first()?;
         let mut buf = [0u8; 32];
         cmd::notify_class_for_verb(upper_verb(name, &mut buf))

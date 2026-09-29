@@ -14,16 +14,17 @@ const TAG: usize = 16;
 /// use kevy_noise::Keypair;
 /// use kevy_rt::ReplicationSecurity;
 ///
-/// let open = ReplicationSecurity { local: Keypair::from_secret([1; 32]), replica_keys: Vec::new() };
+/// let open = ReplicationSecurity::new(Keypair::from_secret([1; 32]));
 /// assert!(open.replica_keys.is_empty()); // any replica, encrypted
 /// ```
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ReplicationSecurity {
     /// The primary's static key pair; replicas are configured with its
     /// public half.
     ///
     /// ```
-    /// let sec = kevy_rt::ReplicationSecurity { local: kevy_noise::Keypair::from_secret([1; 32]), replica_keys: vec![] };
+    /// let sec = kevy_rt::ReplicationSecurity::new(kevy_noise::Keypair::from_secret([1; 32]));
     /// assert_ne!(sec.local.public(), [0; 32]);
     /// ```
     pub local: Keypair,
@@ -31,13 +32,40 @@ pub struct ReplicationSecurity {
     /// the link is encrypted without being restricted.
     ///
     /// ```
-    /// let only_one = kevy_rt::ReplicationSecurity {
-    ///     local: kevy_noise::Keypair::from_secret([1; 32]),
-    ///     replica_keys: vec![kevy_noise::Keypair::from_secret([2; 32]).public()],
-    /// };
+    /// let only_one = kevy_rt::ReplicationSecurity::new(kevy_noise::Keypair::from_secret([1; 32]))
+    ///     .with_replica_keys(vec![kevy_noise::Keypair::from_secret([2; 32]).public()]);
     /// assert_eq!(only_one.replica_keys.len(), 1);
     /// ```
     pub replica_keys: Vec<[u8; 32]>,
+}
+
+impl ReplicationSecurity {
+    /// This node's key pair `local`, admitting any replica (the link is
+    /// encrypted, not restricted). The key has no default: without it
+    /// the link authenticates nobody.
+    ///
+    /// ```
+    /// let sec = kevy_rt::ReplicationSecurity::new(kevy_noise::Keypair::from_secret([1; 32]));
+    /// assert!(sec.replica_keys.is_empty());
+    /// ```
+    #[must_use]
+    pub fn new(local: Keypair) -> Self {
+        Self { local, replica_keys: Vec::new() }
+    }
+
+    /// Set [`Self::replica_keys`]: admit only replicas holding one of
+    /// these public keys.
+    ///
+    /// ```
+    /// let sec = kevy_rt::ReplicationSecurity::new(kevy_noise::Keypair::from_secret([1; 32]))
+    ///     .with_replica_keys(vec![[2; 32], [3; 32]]);
+    /// assert_eq!(sec.replica_keys.len(), 2);
+    /// ```
+    #[must_use]
+    pub fn with_replica_keys(mut self, replica_keys: Vec<[u8; 32]>) -> Self {
+        self.replica_keys = replica_keys;
+        self
+    }
 }
 
 pub(crate) enum ReplNoise {

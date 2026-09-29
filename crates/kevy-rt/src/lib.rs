@@ -211,12 +211,13 @@ pub(crate) const CLIENT_OUTPUT_HARD_LIMIT: usize = 512 * 1024 * 1024;
 pub(crate) const CLIENT_INPUT_HARD_LIMIT: usize = 1024 * 1024 * 1024;
 
 pub use blocked::{BlockHint, BlockKind};
-pub use client_ops::ClientKillFilter;
+pub use client_ops::{ClientKillFilter, KillReply};
 pub use cluster::{relayed_client, shard_slot_range};
 pub use exec_geostore::GeoHits;
-pub use exec_slowlog::{SlowlogSub, parse_slowlog_sub};
+pub use exec_slowlog::SlowlogSub;
 pub use kevy_config::NotificationFlags;
 pub use kevy_persist::Fsync;
+pub use kevy_resp::ops_table::NotifyKind;
 pub use kevy_resp::{Argv, ArgvBorrowed, ArgvView, RespVersion};
 pub use kevy_store::Store;
 pub use lua_wake_bridge::push_lua_wake_key;
@@ -228,11 +229,39 @@ pub use replica_inbox::{
 };
 pub use replication_gate::{RecordApplyGuard, ReplicatedApplyGuard, applying_record};
 pub use replication_secure::ReplicationSecurity;
-pub use route::{Route, ScanArgs, XGroupCtx};
+pub use route::{Route, XGroupCtx};
 pub use runtime::Runtime;
 pub use types::{
-    ExtensionReduced, LiveRuntimeConfig, NotifyClass, ReplicaAck, ReplicaViewRow, ResolvedCmd,
-    TxnKind,
+    ExtensionReduced, LiveRuntimeConfig, ReplicaAck, ReplicaViewRow, ResolvedCmd, TxnKind,
+};
+
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    // a shard owns its receiver alone
+    const fn send<T: Send>() {}
+    send_sync::<BlockHint>();
+    send_sync::<BlockKind>();
+    send_sync::<ClientKillFilter>();
+    send_sync::<KillReply>();
+    send_sync::<GeoHits>();
+    send_sync::<SlowlogSub>();
+    send_sync::<MultiOp>();
+    send_sync::<ZCombine>();
+    send_sync::<propagation::Propagate>();
+    send_sync::<ReplicaApply>();
+    send_sync::<ReplicaInboxSender>();
+    send::<ReplicaInboxReceiver>();
+    send_sync::<SnapshotGate>();
+    send_sync::<RecordApplyGuard>();
+    send_sync::<ReplicatedApplyGuard>();
+    send_sync::<ReplicationSecurity>();
+    send_sync::<Route>();
+    send_sync::<XGroupCtx>();
+    send_sync::<ExtensionReduced>();
+    send_sync::<LiveRuntimeConfig>();
+    send_sync::<ReplicaAck>();
+    send_sync::<ResolvedCmd>();
+    send_sync::<TxnKind>();
 };
 
 pub use crate::commands_trait::Commands;
