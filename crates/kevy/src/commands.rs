@@ -58,6 +58,7 @@ impl Commands for KevyCommands {
         // effectively 48 GB).
         let n = self.state().nshards().max(1) as u64;
         store.set_max_memory(cfg.memory.maxmemory / n, cfg.memory.maxmemory_policy);
+        crate::defrag_tick::install(store);
     }
 
     fn on_shard_start(&self, shard: usize) {
@@ -277,6 +278,7 @@ impl Commands for KevyCommands {
         tier_tick(self, store, bits, &cfg);
         store.demote_step();
         store.tier_compact_tick(); // vlog compaction + page return, off the query tail
+        crate::defrag_tick::tick(store);
         alloc_reclaim_tick();
 
         maxmemory_tick(self, store, &cfg);
