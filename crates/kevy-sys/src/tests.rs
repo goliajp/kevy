@@ -64,7 +64,7 @@ fn poller_signals_listener_readable() {
     let port = listener.local_port().unwrap();
 
     let poller = Poller::new().unwrap();
-    poller.add(listener.raw(), true, false).unwrap();
+    poller.add(listener.raw(), Interest::READ).unwrap();
 
     let _client = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
 
@@ -81,7 +81,7 @@ fn poller_signals_listener_readable() {
 fn waker_wakes_poller() {
     let w = std::sync::Arc::new(waker().unwrap());
     let poller = Poller::new().unwrap();
-    poller.add(w.read_fd(), true, false).unwrap();
+    poller.add(w.read_fd(), Interest::READ).unwrap();
 
     let w2 = w.clone();
     std::thread::spawn(move || w2.wake().unwrap());

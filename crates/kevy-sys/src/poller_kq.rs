@@ -5,7 +5,7 @@ use core::ffi::c_int;
 use std::io;
 use std::ptr;
 
-use crate::{Event, WAIT_CAPACITY, ffi};
+use crate::{Event, Interest, WAIT_CAPACITY, ffi};
 
 mod kq {
     pub const EVFILT_READ: i16 = -1;
@@ -48,19 +48,17 @@ impl Poller {
         Ok(())
     }
 
-    /// Register `fd`, enabling the read/write filters per the interest flags.
-    pub fn add(&self, fd: i32, read: bool, write: bool) -> io::Result<()> {
-        let r = if read { kq::EV_ENABLE } else { kq::EV_DISABLE };
-        let w = if write { kq::EV_ENABLE } else { kq::EV_DISABLE };
-        self.change(fd, kq::EVFILT_READ, kq::EV_ADD | r)?;
-        self.change(fd, kq::EVFILT_WRITE, kq::EV_ADD | w)?;
+    /// Register `fd`, enabling the read/write filters per `interest`.
+    pub fn add(&self, fd: i32, interest: Interest) -> io::Result<()> {
+        self.change(fd, kq::EVFILT_READ, kq::EV_ADD | toggle(interest.is_readable()))?;
+        self.change(fd, kq::EVFILT_WRITE, kq::EV_ADD | toggle(interest.is_writable()))?;
         Ok(())
     }
 
     /// Change the read/write interest of an already-registered `fd`.
-    pub fn modify(&self, fd: i32, read: bool, write: bool) -> io::Result<()> {
-        self.change(fd, kq::EVFILT_READ, if read { kq::EV_ENABLE } else { kq::EV_DISABLE })?;
-        self.change(fd, kq::EVFILT_WRITE, if write { kq::EV_ENABLE } else { kq::EV_DISABLE })?;
+    pub fn modify(&self, fd: i32, interest: Interest) -> io::Result<()> {
+        self.change(fd, kq::EVFILT_READ, toggle(interest.is_readable()))?;
+        self.change(fd, kq::EVFILT_WRITE, toggle(interest.is_writable()))?;
         Ok(())
     }
 
@@ -143,6 +141,10 @@ impl Drop for Poller {
             ffi::close(self.kq);
         }
     }
+}
+
+fn toggle(on: bool) -> u16 {
+    if on { kq::EV_ENABLE } else { kq::EV_DISABLE }
 }
 
 /// One kernel `kevent` as a poller [`Event`].

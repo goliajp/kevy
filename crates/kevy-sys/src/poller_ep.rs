@@ -5,7 +5,7 @@ use core::ffi::c_int;
 use std::io;
 use std::ptr;
 
-use crate::{Event, WAIT_CAPACITY, ffi};
+use crate::{Event, Interest, WAIT_CAPACITY, ffi};
 
 mod ep {
     pub const EPOLL_CLOEXEC: super::c_int = 0x80000;
@@ -38,19 +38,19 @@ impl Poller {
         Ok(Poller { epfd })
     }
 
-    fn mask(read: bool, write: bool) -> u32 {
+    fn mask(interest: Interest) -> u32 {
         let mut m = ep::EPOLLRDHUP;
-        if read {
+        if interest.is_readable() {
             m |= ep::EPOLLIN;
         }
-        if write {
+        if interest.is_writable() {
             m |= ep::EPOLLOUT;
         }
         m
     }
 
-    fn ctl(&self, op: c_int, fd: i32, read: bool, write: bool) -> io::Result<()> {
-        let mut ev = ffi::EpollEvent { events: Self::mask(read, write), data: fd as u64 };
+    fn ctl(&self, op: c_int, fd: i32, interest: Interest) -> io::Result<()> {
+        let mut ev = ffi::EpollEvent { events: Self::mask(interest), data: fd as u64 };
         // SAFETY: `self.epfd` is open for the life of this `Poller` — `Drop` is the only
         // close. `ev` is a live local and `epoll_ctl(2)` reads it only for the
         // duration of the call.
@@ -61,14 +61,14 @@ impl Poller {
         Ok(())
     }
 
-    /// Register `fd`, enabling the read/write filters per the interest flags.
-    pub fn add(&self, fd: i32, read: bool, write: bool) -> io::Result<()> {
-        self.ctl(ep::EPOLL_CTL_ADD, fd, read, write)
+    /// Register `fd`, enabling the read/write filters per `interest`.
+    pub fn add(&self, fd: i32, interest: Interest) -> io::Result<()> {
+        self.ctl(ep::EPOLL_CTL_ADD, fd, interest)
     }
 
     /// Change the read/write interest of an already-registered `fd`.
-    pub fn modify(&self, fd: i32, read: bool, write: bool) -> io::Result<()> {
-        self.ctl(ep::EPOLL_CTL_MOD, fd, read, write)
+    pub fn modify(&self, fd: i32, interest: Interest) -> io::Result<()> {
+        self.ctl(ep::EPOLL_CTL_MOD, fd, interest)
     }
 
     /// Deregister `fd` from the epoll set.

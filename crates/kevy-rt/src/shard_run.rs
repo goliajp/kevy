@@ -141,12 +141,12 @@ impl<C: Commands> Shard<C> {
         // Off-accept-set shards have no listener (None); skip register.
         let listener_fd = if let Some(l) = &self.listener {
             l.set_nonblocking()?;
-            self.poller.add(l.raw(), true, false)?;
+            self.poller.add(l.raw(), kevy_sys::Interest::READ)?;
             l.raw()
         } else {
             -1
         };
-        self.poller.add(self.waker.read_fd(), true, false)?;
+        self.poller.add(self.waker.read_fd(), kevy_sys::Interest::READ)?;
         // S3: queued appends + writer thread (fsync off the reactor);
         // no-op when opted out or without an AOF.
         self.epoll_aof_setup();
@@ -156,7 +156,7 @@ impl<C: Commands> Shard<C> {
         if let Some(cl) = &self.cluster_listener {
             cl.set_nonblocking()?;
             if self.arms_accept {
-                self.poller.add(cl.raw(), true, false)?;
+                self.poller.add(cl.raw(), kevy_sys::Interest::READ)?;
             }
             cluster_fd = cl.raw();
         }
@@ -169,7 +169,7 @@ impl<C: Commands> Shard<C> {
         if let Some(un) = &self.unix_listener {
             un.set_nonblocking()?;
             if self.arms_accept {
-                self.poller.add(un.raw(), true, false)?;
+                self.poller.add(un.raw(), kevy_sys::Interest::READ)?;
             }
             unix_fd = un.raw();
         }
@@ -179,7 +179,7 @@ impl<C: Commands> Shard<C> {
         let mut replication_fd = -1;
         if let Some(rl) = &self.replication_listener {
             rl.set_nonblocking()?;
-            self.poller.add(rl.raw(), true, false)?;
+            self.poller.add(rl.raw(), kevy_sys::Interest::READ)?;
             replication_fd = rl.raw();
         }
         let waker_fd = self.waker.read_fd();

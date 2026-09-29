@@ -245,7 +245,12 @@ impl<C: Commands> Shard<C> {
             && want_write != conn.want_write
         {
             conn.want_write = want_write;
-            self.poller.modify(fd, true, want_write)?;
+            let interest = if want_write {
+                kevy_sys::Interest::READ | kevy_sys::Interest::WRITE
+            } else {
+                kevy_sys::Interest::READ
+            };
+            self.poller.modify(fd, interest)?;
         }
         Ok(())
     }
@@ -278,7 +283,7 @@ impl<C: Commands> Shard<C> {
             return Ok(false);
         };
         if was_armed {
-            self.poller.modify(fd, true, false)?;
+            self.poller.modify(fd, kevy_sys::Interest::READ)?;
         }
         if !self.aof_lane.held_conns.contains(&conn_id) {
             self.aof_lane.held_conns.push(conn_id);
