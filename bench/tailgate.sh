@@ -134,7 +134,6 @@ one_run() { # $1 = name, $2 = reactor (auto|epoll), $3... = load args
         | awk -v s="${SRV:-0}" -v b="${BENCH:-0}" \
               '$2!=s && $2!=b && $3!~/^(kworker|ksoftirqd|migration|rcu_)/ {t+=$1} END {printf "%.0f", t+0}')
     printf '  [%s] foreign cpu %s%% while probing\n' "$name" "${foreign:-?}"
-    LAST_FOREIGN=${foreign:-999}
     target/release/examples/tail_probe $PORT 60
     kill -9 "$BENCH" 2>/dev/null; wait "$BENCH" 2>/dev/null; BENCH=""
     kill -9 "$SRV" 2>/dev/null; wait "$SRV" 2>/dev/null; SRV=""
@@ -160,7 +159,7 @@ one_run() { # $1 = name, $2 = reactor (auto|epoll), $3... = load args
 # second full sample, and only a trip that repeats is a verdict.
 cell() { # $1 = name, $2 = reactor (auto|epoll), $3... = load args
     local name=$1 reactor=$2; shift 2
-    local p999s=() gaps=() out p g
+    local p999s=() gaps=() out p g foreign
     local taken=0 attempts=0 dirty=0
     while [ "$taken" -lt "$RUNS" ]; do
         attempts=$((attempts + 1))
@@ -180,9 +179,12 @@ cell() { # $1 = name, $2 = reactor (auto|epoll), $3... = load args
         out=$(one_run "$name" "$reactor" "$@")
         i=$((taken + 1))
         echo "$name[$i/$RUNS]: $out"
-        if [ "${LAST_FOREIGN:-0}" -gt "$FOREIGN_MAX" ]; then
+        # read from the output: one_run runs in the $(...) subshell above, so
+        # a variable it sets never reaches this shell, and the guard read 0
+        foreign=$(echo "$out" | grep -oE 'foreign cpu [0-9]+%' | grep -oE '[0-9]+')
+        if [ "${foreign:-999}" -gt "$FOREIGN_MAX" ]; then
             dirty=$((dirty + 1))
-            echo "  ~ $name: discarding this probe — foreign cpu ${LAST_FOREIGN}% > ${FOREIGN_MAX}%"
+            echo "  ~ $name: discarding this probe — foreign cpu ${foreign:-unknown}% > ${FOREIGN_MAX}%"
             continue
         fi
         p=$(echo "$out" | grep -oE 'p999us=[0-9]+' | cut -d= -f2)
