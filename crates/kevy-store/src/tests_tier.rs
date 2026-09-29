@@ -248,8 +248,8 @@ fn demote_and_promote_accounting_is_exact() {
     assert_eq!(s.used_memory(), used_hot - w_hot, "demote reclaims exactly the value weight");
     assert_eq!(
         s.estimate_key_bytes(b"k"),
-        Some(crate::value::ENTRY_OVERHEAD),
-        "MEMORY USAGE is stub-actual"
+        Some(s.map.footprint() as u64),
+        "MEMORY USAGE is stub-actual: the key's share of the table and nothing else"
     );
     assert_eq!(s.tier_stats().cold_bytes, w_hot);
 

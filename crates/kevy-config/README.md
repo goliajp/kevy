@@ -50,7 +50,7 @@ Top wins:
 | `[expiry]` | `hz` · `sample` |
 | `[log]` | `level` · `output` |
 | `[notification]` | `notify_keyspace_events` |
-| `[advanced]` | `spin_limit` · `park_timeout_ms` · `tick_check_every` · `ring_capacity` |
+| `[advanced]` | `spin_limit` · `park_timeout_ms` · `tick_check_every` · `ring_capacity` · `recv_buffers` |
 | `[slowlog]` | `slower_than_micros` · `max_len` |
 | `[cluster]` | `enabled` · `port_base` · `node_id` · `elect_port_base` · `announce_ip` · `announce_port_base` · `secure` · `peer_keys` · `peers` · `scopes` |
 | `[replication]` | `role` · `upstream` · `listen_port_base` · `replication_buffer_size` · `reconnect_window_ms` · `single_source` · `min_replicas_to_write` · `replica_max_staleness_ms` · `min_replicas_max_lag_ms` · `replica_read_only` · `secure` · `upstream_key` · `replica_keys` |

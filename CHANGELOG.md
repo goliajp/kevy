@@ -2,6 +2,67 @@
 
 ## Unreleased
 
+- **The io_uring receive ring is sized by configuration, and defaults to
+  a quarter of what it was.** Every shard on the io_uring reactor kept a
+  fixed ring of 4,096 16 KiB receive buffers — 64 MiB a shard, 0.6 GB for
+  nine shards, all of it resident once traffic had cycled through it. The
+  count is now `[advanced] recv_buffers` (a power of two, 1 to 32768;
+  `Runtime::with_recv_buffers` in kevy-rt) and defaults to 1,024, 16 MiB a
+  shard. A ring that runs dry was never an error — the receive is
+  re-armed — so the setting trades memory against re-arming under bursts.
+  The default is the smallest that kept throughput on a sweep of 50 to
+  4,000 connections, pipelined and not, 64-byte and 16 KiB values: no
+  median fell below the old ring's (512 fell 8% on the pipelined run and
+  256 fell 6% at 4,000 connections, within that box's noise but not
+  taken). See the tuning guide.
+
+- **A cold row comes back packed when its table can hold it.** Declaring
+  a table leaves the rows that are already cold alone — they hold no
+  memory for the packed form to save — but they were demoted as general
+  hashes, so the first read that promoted one brought it back as a
+  general hash, and it stayed one. A table declared over a mostly cold
+  keyspace ended up with most of its rows in the form it was declared to
+  replace. Promotion now builds the packed form straight from the record
+  when every field of the row is a column of a declared table, on that
+  table's shared column names; a row with a field no table declares, or
+  a server with `packed_rows` off, promotes as before. Building the packed
+  form costs less than the general hash it replaces: promoting a row of
+  four short fields and a 900-byte one takes 9% less time and leaves 1,000
+  bytes in memory where it left 1,808.
+
+- **The keyspace is charged the table it holds.** Every key was charged a
+  flat 96 bytes for its place in the keyspace table, but the table is an
+  open-addressing array that doubles at 7/8 load and holds all its slots
+  whether keys fill them or not: 73 bytes a slot, so between 83 and 167
+  bytes a key depending on where the table sits in its cycle — 124 at the
+  capacity decomposition's ten million keys, 0.28 GB more than charged.
+  `used_memory` (and maxmemory eviction and the tiered store's demotion,
+  which act on it) now carries the table at the bytes the allocator holds
+  for it, charged when it grows; a key that leaves frees its own bytes and
+  not its slot, which stays with the table, and `FLUSHALL` leaves the
+  emptied table charged. `MEMORY USAGE` reports a key's share of the table.
+  A test counts the allocator against the charge after every insert,
+  delete and flush. A new key costs 4.6% less time to insert (the flat
+  charge's bookkeeping is gone; the growth check is one comparison).
+  `ENTRY_OVERHEAD` now only prices the tiered store's cold stubs.
+
+- **A table declaration no longer copies the keyspace.** `TABLE.DECLARE`
+  starts a backfill per compiled index and one that packs the existing
+  rows, and each began by copying every key under the table's prefix into
+  a list on every shard — about 72 bytes a key, three lists at once, 2.17
+  GB for ten million rows, freed only as each backfill finished and
+  leaving about a gigabyte of small free chunks glibc could not return.
+  The backfills (and `IDX.CREATE`'s, and the embedded store's) now walk
+  the keyspace with a cursor and hold one batch: on 100,000 rows the build
+  held 79.9 bytes a row above what it keeps and now holds 1.3; the
+  packing backfill held 41.0 and now holds 1.3. The walk goes in storage
+  order, as the copy did, and a query still answers `-INDEXBUILDING` until
+  it has finished; rows written, deleted or renamed during the walk end up
+  indexed as they end. Building both indexes over a million rows takes
+  2.3% less time and packing them 3.6% less. New:
+  `Store::walk_page` and `KevyMap::scan_buckets`, the storage-order walk
+  with its cursor.
+
 - **kevy-store: a batched page read answers packed rows from the spill
   file.** `Store::peek_hash_rows`, the batched read behind `FIELDS`
   hydration, decoded each cold row read from the spill file and then

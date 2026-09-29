@@ -200,15 +200,12 @@ pub(crate) fn row_value(store: &mut Store, spec: &IndexSpec, key: &[u8]) -> RowV
 }
 
 pub(super) fn advance_backfill(store: &mut Store, si: &mut ShardIndex, batch: usize) {
-    let BuildState::Backfilling { keys, pos } = &mut si.build else {
+    let BuildState::Backfilling(walk) = &mut si.build else {
         return;
     };
-    let end = (*pos + batch).min(keys.len());
-    // Split the borrow: take the key slice out while applying.
-    let slice: Vec<Vec<u8>> = keys[*pos..end].to_vec();
-    *pos = end;
-    let done = *pos >= keys.len();
-    for key in &slice {
+    let keys = walk.next_batch(store, batch);
+    let done = walk.is_done();
+    for key in &keys {
         // Hook-applied entries win: only fill keys not yet indexed.
         let already = match (&si.text, &si.ann, &si.agg) {
             (Some(ts), _, _) => ts.contains(key),
@@ -246,8 +243,8 @@ fn apply_row_backfill(store: &mut Store, si: &mut ShardIndex, key: &[u8]) {
         apply_row(store, si, key);
         return;
     }
-    // A key deleted since the snapshot resolves to `Gone` → `remove`,
-    // which is a no-op on a segment that never held it.
+    // A key deleted since the walk read it resolves to `Gone` →
+    // `remove`, which is a no-op on a segment that never held it.
     apply_scalar_row(store, &si.spec, &mut si.seg, key);
     // Windowed index: this row's change may shadow a cold entry
     // (rewrite, delete, revival) — the bloom decides if it earns a

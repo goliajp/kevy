@@ -121,7 +121,13 @@ impl ColdRef {
 
 impl SegRows {
     #[expect(clippy::panic, reason = "a torn index must not be served as data")]
-    fn read(&self, cref: ColdRef, key: &[u8], shapes: &[crate::packed_row::ColumnNames]) -> Value {
+    fn read(
+        &self,
+        cref: ColdRef,
+        key: &[u8],
+        shapes: &[crate::packed_row::ColumnNames],
+        form: tier_codec::RowForm,
+    ) -> Value {
         let slot = self.slot(cref.seg_ix());
         let payload = slot
             .seg
@@ -139,7 +145,7 @@ impl SegRows {
                     cref.seg_ix(),
                 )
             });
-        tier_codec::decode(cref.type_tag, payload, shapes)
+        tier_codec::decode_as(cref.type_tag, payload, shapes, form)
             .expect("segrows: cold row decode failed — process bug")
     }
 }
@@ -360,7 +366,11 @@ impl Store {
         let mut e = crate::Entry::new(Value::Cold(stub), None);
         e.set_weight(key_heap);
         crate::apply_delta(&mut self.used_memory, key_heap as i64);
+        let cap = self.map.capacity();
         self.map.insert(crate::SmallBytes::from_slice(key), e);
+        if self.map.capacity() != cap {
+            self.charge_keyspace_growth();
+        }
     }
 
     /// Load one snapshot stub record: the row's identity re-enters the
@@ -384,8 +394,18 @@ impl Store {
     /// vlog's: a stub pointing at a missing/corrupt record is a
     /// process bug, surfaced loudly.
     pub(crate) fn segrow_read(&self, cref: ColdRef, key: &[u8]) -> Value {
+        self.segrow_read_as(cref, key, tier_codec::RowForm::AsStored)
+    }
+
+    /// [`Self::segrow_read`], choosing which rows come back packed.
+    pub(crate) fn segrow_read_as(
+        &self,
+        cref: ColdRef,
+        key: &[u8],
+        form: tier_codec::RowForm,
+    ) -> Value {
         let rows = self.segrows.as_ref().expect("seg-backed stub ⇒ segrows enabled");
-        rows.read(cref, key, &self.row_shapes)
+        rows.read(cref, key, &self.row_shapes, form)
     }
 
     /// A seg-backed stub died (DEL / expiry / promote / FLUSH): the

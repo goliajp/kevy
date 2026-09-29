@@ -297,7 +297,8 @@ impl Store {
     }
 
     /// Wipe every key in this shard's keyspace (the `FLUSHALL`/`FLUSHDB`
-    /// primitive). Resets `used_memory`; `used_memory_peak` is
+    /// primitive). Resets `used_memory` to the emptied table, which keeps
+    /// its allocation; `used_memory_peak` is
     /// lifetime-cumulative and intentionally not reset.
     ///
     /// Named `flushall` — **not** `flush` — to avoid colliding with
@@ -305,7 +306,8 @@ impl Store {
     /// DESTROYS data; it does not persist it.
     pub fn flushall(&mut self) {
         self.map.clear();
-        self.used_memory = 0;
+        // the table keeps its allocation, so it keeps its charge
+        self.used_memory = self.keyspace_bytes;
         self.expires = 0;
         // Every cold stub died with the map — the whole vlog is dead,
         // and every row segment is garbage.

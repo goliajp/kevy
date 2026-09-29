@@ -273,8 +273,7 @@ impl Store {
     /// expired counter.
     #[inline]
     fn note_expired_removed(&mut self, old: &Entry) {
-        self.used_memory =
-            self.used_memory.saturating_sub(old.weight() + crate::value::ENTRY_OVERHEAD);
+        self.used_memory = self.used_memory.saturating_sub(old.weight());
         if old.expire_at_ns.is_some() {
             self.adjust_expires(-1);
         }

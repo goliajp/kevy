@@ -35,6 +35,7 @@ fn all_fields_non_default() -> Config {
     cfg.advanced.park_timeout_ms = 25;
     cfg.advanced.tick_check_every = 64;
     cfg.advanced.ring_capacity = 2048;
+    cfg.advanced.recv_buffers = 256;
     cfg.slowlog.slower_than_micros = 10_000;
     cfg.slowlog.max_len = 64;
     cfg.cluster.enabled = true;

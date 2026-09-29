@@ -47,7 +47,7 @@ pub(super) fn tier_tick(c: &KevyCommands, store: &mut Store, bits: u32, cfg: &ke
     }
     let mut reserved = 0u64;
     if bits & crate::state::IDX_NONEMPTY != 0 {
-        reserved += crate::index_runtime::reserved_bytes(&c.ctx(), store);
+        reserved += crate::index_runtime::reserved_bytes(&c.ctx());
     }
     if bits & crate::state::VIEW_NONEMPTY != 0 {
         reserved += crate::view_runtime::reserved_bytes(&c.ctx());

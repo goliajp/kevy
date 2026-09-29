@@ -11,6 +11,14 @@ use std::path::PathBuf;
 /// [`Runtime::with_advanced`].
 const DEFAULT_RING_CAPACITY: usize = 1024;
 
+/// Buffers in each shard's provided-buffer ring unless configured: 16 KiB
+/// each, every one of them resident once traffic has cycled through it.
+/// Running out is not an error: a multishot recv that finds the ring empty
+/// ends with ENOBUFS and the reactor re-arms it.
+pub(crate) const DEFAULT_RECV_BUFFERS: u16 = 1024;
+/// The kernel's ceiling on a provided-buffer ring's entries.
+pub(crate) const MAX_RECV_BUFFERS: u16 = 32_768;
+
 /// The public entry point: configure and run the thread-per-core server.
 ///
 /// ```
@@ -50,6 +58,8 @@ pub struct Runtime<C: Commands> {
     pub(crate) auto_aof_rewrite_min_size: u64,
     /// Reactor SPSC ring slot count. See [`DEFAULT_RING_CAPACITY`].
     pub(crate) ring_capacity: usize,
+    /// Entries in each shard's io_uring provided-buffer ring.
+    pub(crate) recv_buffers: u16,
     /// Reactor busy-poll iter limit before parking. Stored as `u32`
     /// for the per-shard counter; the [`Shard`] field carries it
     /// forward into the loop.
@@ -162,6 +172,7 @@ impl<C: Commands> Runtime<C> {
             replay_mode: kevy_persist::ReplayMode::Strict,
             auto_aof_rewrite_min_size: 64 * 1024 * 1024,
             ring_capacity: DEFAULT_RING_CAPACITY,
+            recv_buffers: DEFAULT_RECV_BUFFERS,
             spin_limit: 256,
             accept_shards: None,
             max_clients: 10_000,

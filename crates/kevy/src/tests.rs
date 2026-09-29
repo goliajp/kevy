@@ -135,13 +135,21 @@ fn dispatch_returns_oom_when_no_eviction_at_limit() {
 #[test]
 fn dispatch_evicts_under_allkeys_random() {
     use kevy_store::EvictionPolicy;
+    // the keyspace table thirty keys fill, charged whole: the values are
+    // held to 800 bytes above it
+    let mut sized = Store::new();
+    for i in 0..30 {
+        d(&mut sized, &[b"SET", format!("k{i:02}").as_bytes(), b"x"]);
+    }
+    let limit = sized.used_memory() + 800;
     let mut s = Store::new();
-    s.set_max_memory(800, EvictionPolicy::AllKeysRandom);
+    s.set_max_memory(limit, EvictionPolicy::AllKeysRandom);
+    let value = [b'x'; 40];
     for i in 0..30 {
         let k = format!("k{i:02}");
-        d(&mut s, &[b"SET", k.as_bytes(), b"x"]);
+        d(&mut s, &[b"SET", k.as_bytes(), &value]);
     }
-    assert!(s.used_memory() <= 800, "dispatch should keep us under: {}", s.used_memory());
+    assert!(s.used_memory() <= limit, "dispatch should keep us under: {}", s.used_memory());
     assert!(s.evictions_total() > 0, "AllKeysRandom should have evicted some keys");
 }
 

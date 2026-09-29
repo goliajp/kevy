@@ -6,17 +6,28 @@ use crate::tests::s;
 
 // ───────────── used_memory + eviction (Wave 2 task #1) ─────────────
 
+/// The bytes of a keyspace table that has held `keys` keys at once.
+fn table_for(keys: usize) -> u64 {
+    let mut st = Store::new();
+    for i in 0..keys {
+        st.set(format!("t{i}").as_bytes(), s("v"), None, crate::SetCondition::Always);
+    }
+    st.map.footprint() as u64
+}
+
 #[test]
 fn used_memory_grows_on_insert_shrinks_on_delete() {
     let mut st = Store::new();
     assert_eq!(st.used_memory(), 0);
-    st.set(b"k", s("hello"), None, crate::SetCondition::Always);
+    // values too long to sit inline, so each key adds heap of its own
+    st.set(b"k", s(&"hello".repeat(8)), None, crate::SetCondition::Always);
     let after_one = st.used_memory();
     assert!(after_one > 0, "set should bump used_memory");
-    st.set(b"k2", s("world"), None, crate::SetCondition::Always);
+    st.set(b"k2", s(&"world".repeat(8)), None, crate::SetCondition::Always);
     assert!(st.used_memory() > after_one, "second set should bump again");
     st.del(&[b"k".as_slice(), b"k2".as_slice()]);
-    assert_eq!(st.used_memory(), 0, "all dels should zero used_memory");
+    // the table keeps its slots, and its charge
+    assert_eq!(st.used_memory(), st.map.footprint() as u64, "all dels leave the empty table");
 }
 
 #[test]
@@ -43,14 +54,15 @@ fn used_memory_tracks_collection_growth() {
 }
 
 #[test]
-fn used_memory_zero_on_flush() {
+fn used_memory_on_flush_is_the_emptied_table() {
     let mut st = Store::new();
     for i in 0..20 {
         st.set(format!("k{i}").as_bytes(), s("v"), None, crate::SetCondition::Always);
     }
     assert!(st.used_memory() > 0);
     st.flushall();
-    assert_eq!(st.used_memory(), 0);
+    assert!(st.map.footprint() > 0, "a flush keeps the table's allocation");
+    assert_eq!(st.used_memory(), st.map.footprint() as u64);
 }
 
 #[test]
@@ -73,19 +85,16 @@ fn precheck_zero_cost_when_unlimited() {
 #[test]
 fn allkeys_lru_evicts_least_recent() {
     let mut st = Store::new();
-    st.set_max_memory(2_000, EvictionPolicy::AllKeysLru);
+    // the keys' own bytes are held to 1,000 above the table they fill
+    st.set_max_memory(table_for(50) + 1_000, EvictionPolicy::AllKeysLru);
     // Fill until we cross the limit; the oldest key should be the victim.
     for i in 0..50 {
         let k = format!("k{i:02}");
-        st.set(
-            k.as_bytes(),
-            s("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"),
-            None,
-            crate::SetCondition::Always,
-        );
+        st.set(k.as_bytes(), s(&"x".repeat(60)), None, crate::SetCondition::Always);
         st.try_evict_after_write();
     }
-    assert!(st.used_memory() <= 2_000, "eviction should bring us under: got {}", st.used_memory());
+    let limit = table_for(50) + 1_000;
+    assert!(st.used_memory() <= limit, "eviction should bring us under: got {}", st.used_memory());
     // Earlier keys should be gone; later keys present.
     assert_eq!(st.get(b"k00"), Ok(None));
     assert_eq!(st.get(b"k49").map(|v| v.is_some()), Ok(true));
@@ -94,13 +103,13 @@ fn allkeys_lru_evicts_least_recent() {
 #[test]
 fn allkeys_random_evicts_under_limit() {
     let mut st = Store::new();
-    st.set_max_memory(1_500, EvictionPolicy::AllKeysRandom);
+    st.set_max_memory(table_for(40) + 600, EvictionPolicy::AllKeysRandom);
     for i in 0..40 {
         let k = format!("k{i:02}");
-        st.set(k.as_bytes(), s("yyyyyyyyyyyyyyyyyyyyyy"), None, crate::SetCondition::Always);
+        st.set(k.as_bytes(), s(&"y".repeat(40)), None, crate::SetCondition::Always);
         st.try_evict_after_write();
     }
-    assert!(st.used_memory() <= 1_500);
+    assert!(st.used_memory() <= table_for(40) + 600);
     assert!(st.evictions_total() > 0);
 }
 
@@ -139,9 +148,12 @@ fn volatile_lru_skips_keys_without_ttl() {
 fn memory_usage_reports_key_bytes() {
     let mut st = Store::new();
     st.set(b"short", s("v"), None, crate::SetCondition::Always);
-    let small = st.estimate_key_bytes(b"short").unwrap();
     st.set(b"big", s(&"x".repeat(200)), None, crate::SetCondition::Always);
+    let small = st.estimate_key_bytes(b"short").unwrap();
     let big = st.estimate_key_bytes(b"big").unwrap();
+    // each key carries its half of the table, and nothing but that when
+    // its value sits inline
+    assert_eq!(small, (st.map.footprint() as u64).div_ceil(2));
     assert!(big > small, "large value should report more bytes: {small} vs {big}");
     assert_eq!(st.estimate_key_bytes(b"missing"), None);
 }

@@ -341,6 +341,34 @@ impl<C: Commands> Runtime<C> {
         self
     }
 
+    /// Buffers in each shard's io_uring receive ring (`[advanced]
+    /// recv_buffers`), 16 KiB each: the ring's memory is this times 16 KiB
+    /// per shard, all of it resident once traffic has cycled through the
+    /// ring. Rounded up to a power of two, at most 32,768 (the kernel's
+    /// ceiling). A ring that runs dry costs a re-armed receive, not an
+    /// error. Ignored off Linux and on the epoll reactor.
+    ///
+    /// ```
+    /// use kevy_rt::{ArgvView, Commands, Route, Runtime, Store, TxnKind};
+    /// # #[derive(Clone, Debug)] struct Cmds;
+    /// # impl Commands for Cmds {
+    /// #     fn route<A: ArgvView + ?Sized>(&self, _: &A) -> Route { Route::Local }
+    /// #     fn dispatch<A: ArgvView + ?Sized>(&self, _: &mut Store, _: &A) -> Vec<u8> { b"+OK\r\n".to_vec() }
+    /// #     fn is_quit<A: ArgvView + ?Sized>(&self, _: &A) -> bool { false }
+    /// #     fn is_write<A: ArgvView + ?Sized>(&self, _: &A) -> bool { false }
+    /// #     fn txn_kind<A: ArgvView + ?Sized>(&self, _: &A) -> TxnKind { TxnKind::Other }
+    /// # }
+    /// // 1,000 buffers round up to 1,024: 16 MiB a shard
+    /// let rt = Runtime::builder(Cmds).with_recv_buffers(1000);
+    /// assert!(format!("{rt:?}").contains("recv_buffers: 1024"));
+    /// ```
+    #[must_use]
+    pub fn with_recv_buffers(mut self, buffers: u16) -> Self {
+        let max = crate::runtime::MAX_RECV_BUFFERS;
+        self.recv_buffers = buffers.clamp(1, max).next_power_of_two();
+        self
+    }
+
     /// Set the directory where shards snapshot to / load from. Default: `.`.
     ///
     /// This sets the RUNTIME's directory. It does not reach a

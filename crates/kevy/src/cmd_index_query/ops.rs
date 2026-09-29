@@ -134,10 +134,10 @@ pub(super) fn op_match_score(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>])
 /// `[ST_OK][n][(glen,group,count u64,sum f64,minflag+min,maxflag+max)*]`
 /// — GROUP sends the one requested group; GROUPS sends every local
 /// group (the reduce needs full partials to merge exactly).
-pub(super) fn op_agg(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
+pub(super) fn op_agg(ctx: &Ctx<'_>, argv: &[Vec<u8>]) -> Vec<u8> {
     let single = argv[2].eq_ignore_ascii_case(b"GROUP");
     if single {
-        let res = index_runtime::with_ready_agg(ctx, store, &argv[1], |a| {
+        let res = index_runtime::with_ready_agg(ctx, &argv[1], |a| {
             argv.get(3).map(|g| vec![(g.clone(), a.group(g))])
         });
         return match res {
@@ -161,7 +161,7 @@ pub(super) fn op_agg(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<
         .iter()
         .find_map(|a| std::str::from_utf8(a).ok()?.strip_prefix("DEPTH=")?.parse().ok())
         .unwrap_or(1);
-    let res = index_runtime::with_ready_agg(ctx, store, &argv[1], |a| {
+    let res = index_runtime::with_ready_agg(ctx, &argv[1], |a| {
         if depth == 0 {
             // fallback sentinel: full local materialization (uniform
             // near-tie data is unprunable — see reduce_agg)
@@ -186,8 +186,8 @@ pub(super) fn op_agg(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<
 
 /// Phase 2 of GROUPS (internal): `AGG.FETCH <name> <g…>` — exact partials
 /// for the candidate groups that survived phase-1 ranking.
-pub(super) fn op_agg_fetch(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
-    let res = index_runtime::with_ready_agg(ctx, store, &argv[1], |a| {
+pub(super) fn op_agg_fetch(ctx: &Ctx<'_>, argv: &[Vec<u8>]) -> Vec<u8> {
+    let res = index_runtime::with_ready_agg(ctx, &argv[1], |a| {
         argv[2..].iter().map(|g| (g.clone(), a.group(g))).collect::<Vec<_>>()
     });
     match res {
@@ -198,11 +198,11 @@ pub(super) fn op_agg_fetch(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -
 }
 
 /// `IDX.REBUILD <name>` (ANN tombstone compaction).
-pub(super) fn op_rebuild(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
+pub(super) fn op_rebuild(ctx: &Ctx<'_>, argv: &[Vec<u8>]) -> Vec<u8> {
     let Some(name) = argv.get(1) else {
         return vec![ST_BADARGS];
     };
-    match index_runtime::with_ready_ann(ctx, store, name, |g| g.rebuild()) {
+    match index_runtime::with_ready_ann(ctx, name, |g| g.rebuild()) {
         Ok(()) => vec![ST_OK],
         Err(e) if e.as_wire().starts_with("INDEXBUILDING") => vec![ST_BUILDING],
         Err(_) => vec![ST_NOINDEX],
@@ -216,7 +216,7 @@ pub(super) fn op_knn(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<
     let Some(q) = KnnArgs::parse(argv) else {
         return vec![ST_BADARGS];
     };
-    let res = index_runtime::with_ready_ann(ctx, store, &q.name, |g| {
+    let res = index_runtime::with_ready_ann(ctx, &q.name, |g| {
         kevy_vector::parse_vector(&q.vec, g.dim()).map(|v| g.knn(&v, q.limit, q.ef))
     });
     match res {
@@ -252,7 +252,7 @@ pub(super) fn op_hybrid(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> V
     let m = index_runtime::with_ready_text_segment(ctx, store, &q.text_idx, |_, ts, _, _| {
         ts.matches(&q.text, depth)
     });
-    let k = index_runtime::with_ready_ann(ctx, store, &q.ann_idx, |g| {
+    let k = index_runtime::with_ready_ann(ctx, &q.ann_idx, |g| {
         kevy_vector::parse_vector(&q.vec, g.dim()).map(|v| g.knn(&v, depth, q.ef))
     });
     let (m, k) = match (m, k) {
@@ -297,7 +297,6 @@ pub(super) fn op_compose(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> 
     };
     let res = index_runtime::with_two_ready_segments(
         ctx,
-        store,
         &cq.a.name,
         &cq.b.name,
         |spec_a, seg_a, spec_b, seg_b| compose_keys(&cq, spec_a.ty(), seg_a, spec_b.ty(), seg_b),

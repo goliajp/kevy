@@ -131,6 +131,7 @@ impl Config {
         let _ = writeln!(out, "park_timeout_ms  = {}", self.advanced.park_timeout_ms);
         let _ = writeln!(out, "tick_check_every = {}", self.advanced.tick_check_every);
         let _ = writeln!(out, "ring_capacity    = {}", self.advanced.ring_capacity);
+        let _ = writeln!(out, "recv_buffers     = {}", self.advanced.recv_buffers);
         let _ = writeln!(out);
         let _ = writeln!(out, "[slowlog]");
         let _ = writeln!(out, "slower_than_micros = {}", self.slowlog.slower_than_micros,);
@@ -270,6 +271,7 @@ fn push_advanced(v: &mut Vec<CanonicalPair>, cfg: &Config) {
     push(v, "advanced", "park_timeout_ms", a.park_timeout_ms.to_string());
     push(v, "advanced", "tick_check_every", a.tick_check_every.to_string());
     push(v, "advanced", "ring_capacity", a.ring_capacity.to_string());
+    push(v, "advanced", "recv_buffers", a.recv_buffers.to_string());
 }
 
 fn push_slowlog(v: &mut Vec<CanonicalPair>, cfg: &Config) {

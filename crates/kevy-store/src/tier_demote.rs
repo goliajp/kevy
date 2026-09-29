@@ -237,7 +237,14 @@ impl Store {
             Some(Value::Cold(c)) => *c,
             _ => return false,
         };
-        let value = self.tier_read_record(key, cref);
+        // the row is installed, so a general hash its table could hold
+        // takes the packed form here, built straight from the record
+        let form = if self.packed_rows {
+            crate::tier_codec::RowForm::Declared
+        } else {
+            crate::tier_codec::RowForm::AsStored
+        };
+        let value = self.tier_read_record_as(key, cref, form);
         if let Value::PackedRow(r) = &value {
             self.share_shape(r.names());
         }

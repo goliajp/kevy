@@ -153,7 +153,7 @@ impl Commands for KevyCommands {
         }
         if bits & crate::state::VIEW_NONEMPTY != 0 {
             // Views probe the segments the line above just refreshed.
-            crate::view_runtime::on_write(&self.ctx(), store, key);
+            crate::view_runtime::on_write(&self.ctx(), key);
         }
     }
 
@@ -164,8 +164,8 @@ impl Commands for KevyCommands {
         crate::index_runtime::take_ext_out(&self.ctx())
     }
 
-    fn apply_ext(&self, store: &mut Store, payload: &[u8]) {
-        crate::index_runtime::apply_ext(&self.ctx(), store, payload);
+    fn apply_ext(&self, _store: &mut Store, payload: &[u8]) {
+        crate::index_runtime::apply_ext(&self.ctx(), payload);
     }
 
     fn extension_targets(&self, argv: &[Vec<u8>]) -> Option<Vec<usize>> {
@@ -173,10 +173,10 @@ impl Commands for KevyCommands {
         crate::cmd_index_query::global_targets(&state.catalogs, state.nshards(), argv)
     }
 
-    fn on_flush(&self, store: &mut Store) {
+    fn on_flush(&self, _store: &mut Store) {
         let bits = self.gate_bits();
         if bits & crate::state::IDX_NONEMPTY != 0 {
-            crate::index_runtime::on_flush(&self.ctx(), store);
+            crate::index_runtime::on_flush(&self.ctx());
         }
         if bits & crate::state::VIEW_NONEMPTY != 0 {
             crate::view_runtime::on_flush(&self.ctx());
@@ -248,7 +248,7 @@ impl Commands for KevyCommands {
             crate::index_runtime::on_tick(&self.ctx(), store);
         }
         if bits & crate::state::VIEW_NONEMPTY != 0 {
-            crate::view_runtime::on_tick(&self.ctx(), store);
+            crate::view_runtime::on_tick(&self.ctx());
         }
         if bits & crate::state::TABLE_NONEMPTY != 0 {
             crate::table_runtime::on_tick(&self.ctx(), store);
