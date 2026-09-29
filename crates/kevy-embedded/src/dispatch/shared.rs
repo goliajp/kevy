@@ -56,9 +56,9 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
 }
 
 fn run(s: &Store, v: &Verb, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>) {
-    // a call too short to name a key is refused for its arity alone
+    // the dispatcher refused a write on a store that takes none; this
+    // catches only a shutdown that landed since
     if v.write
-        && argv.len() > 1
         && let Err(e) = ensure_writable(s)
     {
         return super::kevy_err(out, &e);

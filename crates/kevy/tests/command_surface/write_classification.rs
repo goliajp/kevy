@@ -119,3 +119,52 @@ fn a_blocking_pop_that_pops_invalidates_a_watch() {
     }
     assert!(kept.is_empty(), "these pops left the WATCH standing: {kept:?}");
 }
+
+/// An embedded replica answers a write, malformed or not, with the bytes
+/// a server replica answers it with, whichever path serves the verb on
+/// each side.
+#[test]
+fn an_embedded_replica_answers_writes_as_a_server_replica_does() {
+    const CORPUS: &[&str] = &[
+        "DEL",
+        "DEL k",
+        "MSET a",
+        "MSET a 1",
+        "SET",
+        "SET k",
+        "SET k v",
+        "SET k v BADOPT",
+        "EXPIRE k abc",
+        "LPUSH l",
+        "HSET h f",
+        "ZADD z notnum m",
+        "INCRBY k x",
+        "RENAME a",
+        "RENAMENX a b",
+        "COPY a",
+        "SADD s",
+        "SUNIONSTORE",
+        "GET",
+        "GET k",
+    ];
+    let node = Node::start();
+    let mut c = node.wire();
+    let dead = kevy_testnet::free_port();
+    let upstream = dead.to_string();
+    assert_eq!(c.call(&[b"REPLICAOF" as &[u8], b"127.0.0.1", upstream.as_bytes()]), b"+OK\r\n");
+    let embedded = kevy_embedded::Store::open_replica(format!("127.0.0.1:{dead}")).unwrap();
+    let differ: Vec<String> = CORPUS
+        .iter()
+        .filter_map(|cmd| {
+            let argv: Vec<Vec<u8>> = cmd.split(' ').map(|p| p.as_bytes().to_vec()).collect();
+            let server = c.call(&argv);
+            let mut local = Vec::new();
+            embedded.dispatch_argv(&argv, &mut local);
+            (server != local).then(|| {
+                let show = |b: &[u8]| String::from_utf8_lossy(b).trim_end().to_string();
+                format!("{cmd}: server {:?}, embedded {:?}", show(&server), show(&local))
+            })
+        })
+        .collect();
+    assert!(differ.is_empty(), "the two replicas answer differently: {differ:#?}");
+}

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **An embedded replica or closed store answers a malformed write the way
+  the server does.** The server refuses a write on a replica before it
+  reads the arguments, so `DEL` with no key, `MSET a`, a bare `SET`,
+  `RENAME a`, `COPY a` and `SUNIONSTORE` all get `-READONLY`.
+  `Store::dispatch_argv` checked the arguments of these first and
+  answered with the arity error. It now asks the store's state first
+  for every command the server counts as a write, so an embedded replica
+  gives the server's bytes, and a closed store gives its
+  `connection closed` error in the same order.
+
 - **An embedded replica refuses a write in the server's exact words.**
   `Store::dispatch_argv` answered `-READONLY You can't write against a
   read only replica` without the closing period that the server and

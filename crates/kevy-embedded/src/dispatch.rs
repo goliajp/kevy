@@ -52,6 +52,14 @@ pub(crate) fn dispatch(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     // for the verb; an over-long token misses every arm and is unknown
     let mut vbuf = [0u8; 32];
     let up = kevy_verbs::args::upper_verb(verb, &mut vbuf);
+    // the server refuses a write on a closed or replica store before it
+    // reads the arguments, so a malformed write gets the state error too;
+    // the state is asked first, so a writable store never classifies
+    if let Err(e) = crate::store::ensure_writable(s)
+        && is_write(up)
+    {
+        return kevy_err(out, &e);
+    }
     let handled = strings::dispatch(s, up, argv, out)
         || set::dispatch(s, up, argv, out)
         || zset_algebra::dispatch(s, up, argv, out)
@@ -64,6 +72,17 @@ pub(crate) fn dispatch(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
         let shown = String::from_utf8_lossy(verb);
         encode_error(out, &format!("ERR unknown command '{shown}'"));
     }
+}
+
+/// Whether the server counts `up` a write: the shared layer's registry,
+/// then the command table for the verbs the server runs itself.
+fn is_write(up: &[u8]) -> bool {
+    kevy_verbs::is_write(up).unwrap_or_else(|| {
+        core::str::from_utf8(up)
+            .ok()
+            .and_then(kevy_resp::ops_table::spec)
+            .is_some_and(|o| o.write && o.surfaces & kevy_resp::ops_table::surface::SERVER != 0)
+    })
 }
 
 #[cfg(feature = "index")]
