@@ -23,18 +23,62 @@ use std::sync::Mutex;
 /// One in-flight migration. Carries enough metadata so the server
 /// cement can encode `-QUIESCED <prefix> migrating to <host:port>`
 /// without re-resolving the target.
+///
+/// ```
+/// use kevy_scope::MigrationTable;
+///
+/// let t = MigrationTable::new();
+/// t.start(b"app:billing:".to_vec(), "A".into(), "B".into())?;
+/// let st = t.match_migrating(b"app:billing:inv:1").expect("in flight");
+/// assert_eq!((st.from.as_str(), st.to.as_str()), ("A", "B"));
+/// # Ok::<(), kevy_scope::MigrationError>(())
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 #[non_exhaustive]
 pub struct MigrationState {
     /// Source writer node id (the node currently quiescing).
+    ///
+    /// ```
+    /// let t = kevy_scope::MigrationTable::new();
+    /// t.start(b"p:".to_vec(), "A".into(), "B".into())?;
+    /// assert_eq!(t.lookup_migrating(b"p:").map(|s| s.from), Some("A".to_string()));
+    /// # Ok::<(), kevy_scope::MigrationError>(())
+    /// ```
     pub from: String,
     /// Target writer node id (the node receiving the slice).
+    ///
+    /// ```
+    /// let t = kevy_scope::MigrationTable::new();
+    /// t.start(b"p:".to_vec(), "A".into(), "B".into())?;
+    /// // after commit, writes for the prefix follow `to`
+    /// assert_eq!(t.commit(b"p:").map(|s| s.to), Some("B".to_string()));
+    /// # Ok::<(), kevy_scope::MigrationError>(())
+    /// ```
     pub to: String,
 }
 
 /// Per-scope migration tracker. Insert order doesn't matter; lookups
 /// are O(prefix-set-size), expected ≤ tens of entries even in the
 /// largest cluster.
+///
+/// ```
+/// use kevy_scope::MigrationTable;
+///
+/// let t = MigrationTable::new();
+/// t.start(b"app:".to_vec(), "A".into(), "B".into())?;
+/// assert!(t.lookup_migrating(b"app:").is_some());
+///
+/// // commit moves the entry from MIGRATING to MIGRATED
+/// assert_eq!(t.commit(b"app:").map(|s| s.to), Some("B".to_string()));
+/// assert!(t.lookup_migrating(b"app:").is_none());
+/// assert_eq!(t.match_migrated(b"app:k").map(|s| s.to), Some("B".to_string()));
+///
+/// // abort drops an in-flight migration without committing it
+/// t.start(b"cache:".to_vec(), "A".into(), "C".into())?;
+/// assert!(t.abort(b"cache:").is_some());
+/// assert!(t.lookup_migrated(b"cache:").is_none());
+/// # Ok::<(), kevy_scope::MigrationError>(())
+/// ```
 #[derive(Debug, Default)]
 pub struct MigrationTable {
     migrating: Mutex<HashMap<Vec<u8>, MigrationState>>,
@@ -42,15 +86,44 @@ pub struct MigrationTable {
 }
 
 /// Why [`MigrationTable::start`] refused.
+///
+/// ```
+/// use kevy_scope::{MigrationError, MigrationTable};
+///
+/// let t = MigrationTable::new();
+/// t.start(b"p:".to_vec(), "A".into(), "B".into())?;
+/// let err = t.start(b"p:".to_vec(), "A".into(), "B".into()).unwrap_err();
+/// assert_eq!(err.to_string(), "migration for this prefix is already in flight");
+/// # Ok::<(), MigrationError>(())
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum MigrationError {
     /// A migration for this prefix is already in flight (idempotent
     /// retry would clobber the state).
+    ///
+    /// ```
+    /// use kevy_scope::{MigrationError, MigrationTable};
+    ///
+    /// let t = MigrationTable::new();
+    /// t.start(b"p:".to_vec(), "A".into(), "B".into())?;
+    /// assert_eq!(t.start(b"p:".to_vec(), "A".into(), "C".into()), Err(MigrationError::AlreadyMigrating));
+    /// # Ok::<(), MigrationError>(())
+    /// ```
     AlreadyMigrating,
     /// A prior migration's commit hasn't been observed locally yet.
     /// Caller should abort the prior one first or accept the new
     /// state as a no-op.
+    ///
+    /// ```
+    /// use kevy_scope::{MigrationError, MigrationTable};
+    ///
+    /// let t = MigrationTable::new();
+    /// t.start(b"p:".to_vec(), "A".into(), "B".into())?;
+    /// t.commit(b"p:");
+    /// assert_eq!(t.start(b"p:".to_vec(), "B".into(), "C".into()), Err(MigrationError::AlreadyMigrated));
+    /// # Ok::<(), MigrationError>(())
+    /// ```
     AlreadyMigrated,
 }
 
