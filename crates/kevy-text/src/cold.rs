@@ -18,7 +18,8 @@ use crate::segment::TextSegment;
 /// One slide batch's worth of frozen text entries: term → encoded
 /// posting payload, in term order (the segment builder's key order),
 /// plus the bucket's contribution to the corpus statistics.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub struct FrozenBucket {
     /// term → [`encode_posting`] payload, ascending by term.
     pub terms: BTreeMap<Vec<u8>, Vec<u8>>,
@@ -32,8 +33,21 @@ pub struct FrozenBucket {
     pub total_len: u64,
 }
 
-/// One decoded cold posting entry.
-#[derive(Debug)]
+/// One cold posting entry: what [`encode_posting`] takes and
+/// [`decode_posting`] gives back.
+///
+/// ```
+/// use kevy_text::cold::{ColdEntry, decode_posting, encode_posting};
+/// let mut e = ColdEntry::default();
+/// e.key = b"doc:1".to_vec();
+/// e.tf = 2;
+/// e.dl = 7;
+/// let back = decode_posting(&encode_posting(&[e.clone()])).ok_or("malformed")?;
+/// assert_eq!(back, vec![e]);
+/// # Ok::<(), &str>(())
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub struct ColdEntry {
     /// The document's row key.
     pub key: Vec<u8>,
@@ -69,7 +83,8 @@ pub fn posting_df(payload: &[u8]) -> Option<u32> {
 
 /// One decoded forward record: the document's length, its terms, and
 /// its stored values (aligned with the declared VALUES order).
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub struct FwdRecord {
     /// Document length (unweighted tokens).
     pub dl: u32,

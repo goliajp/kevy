@@ -203,9 +203,16 @@ fn merge_ranked(chunks: &[Vec<u8>], m: Merge<'_>) -> Vec<u8> {
     match sort_desc {
         // Order the union exactly as each shard ordered its own page —
         // one definition of that order, in kevy-text, used by both.
-        Some(desc) => all.sort_by(|a, b| {
-            kevy_text::sorted_order((a.okey.as_deref(), &a.key), (b.okey.as_deref(), &b.key), desc)
-        }),
+        Some(desc) => {
+            let order = if desc { kevy_text::SortOrder::Desc } else { kevy_text::SortOrder::Asc };
+            all.sort_by(|a, b| {
+                kevy_text::sorted_order(
+                    (a.okey.as_deref(), &a.key),
+                    (b.okey.as_deref(), &b.key),
+                    order,
+                )
+            });
+        }
         None if ascending => {
             all.sort_by(|a, b| a.score.total_cmp(&b.score).then_with(|| a.key.cmp(&b.key)));
         }

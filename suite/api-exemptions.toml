@@ -1,3 +1,20 @@
 # Items the API guidelines gate flags that are right as they are.
 # Each entry: rule (one of the gate's rules), item (the public path the gate
 # prints) and why — the reason it stays, in a sentence a reviewer can check.
+
+# layer 0
+
+[[exempt]]
+rule = "trait-open"
+item = "kevy_hash::KevyHash"
+why = "kevy-map keys a map by any K: KevyHash + Eq, so key types outside this crate implement it; the trait docs state what an implementation must uphold (equal values hash equally, borrowed forms agree, bits avalanche)"
+
+[[exempt]]
+rule = "trait-open"
+item = "kevy_text::token::Tokenizer"
+why = "an analysis callers supply for their own pipelines or tests; the trait docs state the contract (a pure function of the bytes, total over invalid UTF-8)"
+
+[[exempt]]
+rule = "enum-exhaustive"
+item = "kevy_text::segment::segment_opts::SortOrder"
+why = "the two directions of a total order; no third can exist, and callers match both"

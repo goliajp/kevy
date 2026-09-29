@@ -15,17 +15,9 @@ use crate::fields::FieldStats;
 use crate::positions::Positions;
 use crate::token::tokenize;
 
-/// One ranked hit.
-#[derive(Debug, Clone, PartialEq)]
-pub struct TextMatch {
-    /// Row key.
-    pub key: Vec<u8>,
-    /// Shard-local BM25 score.
-    pub score: f64,
-}
-
 /// Sizing counters (memory formula + IDX.LIST).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct TextStats {
     /// Indexed documents.
     pub docs: u64,
@@ -38,27 +30,17 @@ pub struct TextStats {
     pub approx_bytes: u64,
 }
 
-/// Corpus statistics supplied from outside a segment, for scoring one
-/// shard's documents against the whole corpus rather than its own slice.
-///
-/// A cross-shard text query builds this by summing each shard's local
-/// `n_docs` / `total_len` and, for each query token, its `df`. `df`
-/// need only carry the query's tokens — the values a query actually
-/// scores with — which is why global BM25 does not need a whole-corpus
-/// df table.
-#[derive(Debug)]
-pub struct CorpusStats {
-    /// Total documents across the corpus.
-    pub n_docs: f64,
-    /// Mean document length (unweighted tokens) across the corpus.
-    pub avgdl: f64,
-    /// Global document frequency per query token; a token missing here
-    /// falls back to the segment's local list length.
-    pub df: std::collections::HashMap<Vec<u8>, u32>,
-}
-
 /// What an index declares, in the terms a segment is built from.
-#[derive(Debug, Clone, Copy, Default)]
+///
+/// Start from [`SegmentShape::default`] (one field, no positions, no
+/// values) and set what the index declares.
+///
+/// ```
+/// let s = kevy_text::SegmentShape::default().with_fields(3).with_positions(true).with_values(2);
+/// assert_eq!((s.fields, s.positions, s.values), (3, true, 2));
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct SegmentShape {
     /// Separately scored fields — `IN <field…>` scopes to these. 0 or 1
     /// keeps no per-field breakdown, because with one field the
@@ -72,17 +54,39 @@ pub struct SegmentShape {
     pub values: usize,
 }
 
-/// A non-scoring predicate over a document's stored values.
-///
-/// The test takes raw bytes because this crate does not know what a
-/// number or a date is; the caller coerces. A document with no value for
-/// the field never passes — absent is not a value.
-#[derive(Clone, Copy)]
-pub struct Filter<'a> {
-    /// Which declared value field the predicate reads.
-    pub field: usize,
-    /// The test applied to that field's bytes.
-    pub test: &'a dyn Fn(&[u8]) -> bool,
+impl SegmentShape {
+    /// Set [`SegmentShape::fields`], the separately scored fields.
+    ///
+    /// ```
+    /// assert_eq!(kevy_text::SegmentShape::default().with_fields(2).fields, 2);
+    /// ```
+    #[must_use]
+    pub fn with_fields(mut self, fields: usize) -> Self {
+        self.fields = fields;
+        self
+    }
+
+    /// Set [`SegmentShape::positions`]: record token positions.
+    ///
+    /// ```
+    /// assert!(kevy_text::SegmentShape::default().with_positions(true).positions);
+    /// ```
+    #[must_use]
+    pub fn with_positions(mut self, positions: bool) -> Self {
+        self.positions = positions;
+        self
+    }
+
+    /// Set [`SegmentShape::values`], the value fields stored per document.
+    ///
+    /// ```
+    /// assert_eq!(kevy_text::SegmentShape::default().with_values(1).values, 1);
+    /// ```
+    #[must_use]
+    pub fn with_values(mut self, values: usize) -> Self {
+        self.values = values;
+        self
+    }
 }
 
 /// A field's text and the BM25 weight it was indexed at. Stored per
@@ -455,7 +459,10 @@ fn token_offsets(fields: &[IndexedField]) -> HashMap<Vec<u8>, Vec<u32>> {
 
 #[path = "segment_opts.rs"]
 mod segment_opts;
-pub use segment_opts::{Bucket, Distinct, Facet, FacetedMatches, QueryOpts, Sort};
+pub use segment_opts::{
+    Bucket, CorpusStats, Distinct, Facet, FacetedMatches, Filter, QueryOpts, Sort, SortOrder,
+    TextMatch,
+};
 
 #[path = "segment_query.rs"]
 mod segment_query;
@@ -475,14 +482,3 @@ mod segment_scope;
 #[cfg(test)]
 #[path = "segment_tests.rs"]
 mod tests;
-
-impl core::fmt::Debug for Filter<'_> {
-    /// Prints every field except `test`.
-    ///
-    /// The predicate is a `&dyn Fn`, which has no `Debug` and no stable
-    /// identity worth printing — it shows as `<fn>` so the rest of the
-    /// struct stays inspectable.
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("Filter").field("field", &self.field).field("test", &"<fn>").finish()
-    }
-}

@@ -194,7 +194,7 @@ pub(super) fn decode_gstats_arg(b: &[u8]) -> Option<kevy_text::CorpusStats> {
         pos += 4;
         df.insert(tok, d);
     }
-    Some(kevy_text::CorpusStats { n_docs, avgdl, df })
+    Some(kevy_text::CorpusStats::new(n_docs, avgdl, df))
 }
 
 /// Shared agg chunk encoding: `[ST_OK][n][(glen,g,count,sum,mmlen,mm)*]`.

@@ -79,32 +79,27 @@ impl Store {
         let (scope, tests) = self.resolve_clauses(name, opts.scope, opts.filters)?;
         let sorted = self.sort_field(name, opts.sort)?;
         let fkeys = self.facet_keys(name, opts.facets)?;
-        let fac: Vec<kevy_text::Facet> = fkeys
-            .iter()
-            .map(|(field, k)| kevy_text::Facet { field: *field, key: k.as_ref() })
-            .collect();
+        let fac: Vec<kevy_text::Facet> =
+            fkeys.iter().map(|(field, k)| kevy_text::Facet::new(*field, k.as_ref())).collect();
         let grouped = self.value_field("DISTINCT", name, opts.distinct)?;
         let dkey = grouped.map(|(_, ty)| move |raw: &[u8]| kevy_index::order_key(ty, raw));
         let distinct =
-            grouped.zip(dkey.as_ref()).map(|((field, _), k)| kevy_text::Distinct { field, key: k });
+            grouped.zip(dkey.as_ref()).map(|((field, _), k)| kevy_text::Distinct::new(field, k));
         let key = sorted.map(|(_, _, ty)| move |raw: &[u8]| kevy_index::order_key(ty, raw));
-        let sort = sorted.zip(key.as_ref()).map(|((field, desc, _), k)| kevy_text::Sort {
-            field,
-            desc,
-            key: k,
+        let sort = sorted.zip(key.as_ref()).map(|((field, desc, _), k)| {
+            kevy_text::Sort::new(field, k).with_order(sort_order(desc))
         });
         let boxed = box_tests(tests);
         let filter: Vec<kevy_text::Filter> =
-            boxed.iter().map(|(f, t)| kevy_text::Filter { field: *f, test: t.as_ref() }).collect();
+            boxed.iter().map(|(f, t)| kevy_text::Filter::new(*f, t.as_ref())).collect();
         let stats = self.text_corpus_stats_in(name, query, opts.typo, &scope)?;
-        let q = kevy_text::QueryOpts {
-            stats: Some(&stats),
-            typo: opts.typo,
-            fields: &scope,
-            filter: &filter,
-            sort,
-            distinct,
-        };
+        let mut q = kevy_text::QueryOpts::default()
+            .with_stats(&stats)
+            .with_typo(opts.typo)
+            .with_fields(&scope)
+            .with_filter(&filter);
+        q.sort = sort;
+        q.distinct = distinct;
         let (mut all, facets, cold_vals) =
             self.gather_hits(name, query, fetch, q, &stats, opts.highlight, &fac);
         self.order_page(name, &mut all, sorted, &cold_vals);
@@ -240,8 +235,9 @@ impl Store {
             .into_iter()
             .map(|h| (self.stored_order_key(name, &h.0, field, ty, cold_vals), h))
             .collect();
+        let order = sort_order(desc);
         keyed.sort_by(|a, b| {
-            kevy_text::sorted_order((a.0.as_deref(), &a.1.0), (b.0.as_deref(), &b.1.0), desc)
+            kevy_text::sorted_order((a.0.as_deref(), &a.1.0), (b.0.as_deref(), &b.1.0), order)
         });
         *all = keyed.into_iter().map(|(_, h)| h).collect();
     }
@@ -495,4 +491,9 @@ fn hit_highlight(
             Some((name, ranges))
         })
         .collect()
+}
+
+/// The text crate's direction for a parsed `SORT … DESC` flag.
+fn sort_order(desc: bool) -> kevy_text::SortOrder {
+    if desc { kevy_text::SortOrder::Desc } else { kevy_text::SortOrder::Asc }
 }
