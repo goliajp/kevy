@@ -204,7 +204,7 @@ pub fn run_diff(
     a: &mut dyn Link,
     b: &mut dyn Link,
     prefixes: &[Vec<u8>],
-    out: &mut impl Write,
+    mut out: impl Write,
 ) -> io::Result<Vec<Vec<u8>>> {
     let mut bad = Vec::new();
     for p in prefixes {
@@ -225,7 +225,7 @@ pub fn run_diff(
 }
 
 /// `inspect <prefix>`: sample keys, type distribution, sizes.
-pub fn run_inspect(client: &mut dyn Link, prefix: &[u8], out: &mut impl Write) -> io::Result<()> {
+pub fn run_inspect(client: &mut dyn Link, prefix: &[u8], mut out: impl Write) -> io::Result<()> {
     let mut pattern = prefix.to_vec();
     pattern.push(b'*');
     let mut cursor: Vec<u8> = b"0".to_vec();

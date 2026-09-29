@@ -23,7 +23,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 const MAGIC: &[u8; 8] = b"KEVYBKP1";
 
@@ -41,7 +41,8 @@ const MAGIC: &[u8; 8] = b"KEVYBKP1";
 /// `subdirectories_are_derived_spill_only` pins the set, so a future
 /// directory of TRUTH cannot join the data dir without someone reading
 /// this first.
-pub fn pack(data_dir: &Path, out_path: &Path) -> io::Result<u64> {
+pub fn pack(data_dir: impl AsRef<Path>, out_path: impl AsRef<Path>) -> io::Result<u64> {
+    let (data_dir, out_path) = (data_dir.as_ref(), out_path.as_ref());
     let out = OpenOptions::new().create_new(true).write(true).open(out_path)?;
     let mut w = BufWriter::new(out);
     w.write_all(MAGIC)?;
@@ -113,7 +114,8 @@ fn copy_file_body(w: &mut impl Write, path: &Path, body_len: u64) -> io::Result<
 /// Unpack the container at `in_path` into `target_dir` (created if
 /// missing; refuses to overwrite an existing non-empty dir to avoid
 /// clobbering live data).
-pub fn unpack(in_path: &Path, target_dir: &Path) -> io::Result<u64> {
+pub fn unpack(in_path: impl AsRef<Path>, target_dir: impl AsRef<Path>) -> io::Result<u64> {
+    let (in_path, target_dir) = (in_path.as_ref(), target_dir.as_ref());
     std::fs::create_dir_all(target_dir)?;
     // Refuse to write into a non-empty dir (safety).
     let existing = std::fs::read_dir(target_dir)?.count();
@@ -202,19 +204,10 @@ fn copy_entry_body(
     out.flush()
 }
 
-/// Wrapper around `pack` that accepts string paths for the CLI layer.
-pub fn run_backup(data_dir: PathBuf, out_path: PathBuf) -> io::Result<()> {
-    pack(&data_dir, &out_path).map(|_| ())
-}
-
-/// Wrapper around `unpack` for CLI layer.
-pub fn run_restore(in_path: PathBuf, target_dir: PathBuf) -> io::Result<()> {
-    unpack(&in_path, &target_dir).map(|_| ())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     /// A fresh, empty, uniquely-named directory.
     fn tmp(name: &str) -> PathBuf {

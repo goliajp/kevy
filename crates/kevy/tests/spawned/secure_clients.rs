@@ -27,7 +27,7 @@ fn start() -> Server {
     let dir = std::env::temp_dir().join(format!("kevy-secure-clients-{port}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let server_key = kevy::secure::keygen(&dir.join("server.key")).unwrap();
+    let server_key = kevy::secure::keygen(dir.join("server.key")).unwrap();
     let client_key_file = dir.join("client.key");
     let client_pub = kevy::secure::keygen(&client_key_file).unwrap();
     let toml = format!(

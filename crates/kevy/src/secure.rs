@@ -26,7 +26,7 @@ use kevy_noise::Keypair;
 /// assert!(kevy::secure::keygen(&path).is_err(), "never overwrites a key");
 /// std::fs::remove_file(&path).unwrap();
 /// ```
-pub fn keygen(path: &Path) -> io::Result<[u8; 32]> {
+pub fn keygen(path: impl AsRef<Path>) -> io::Result<[u8; 32]> {
     let mut secret = [0u8; 32];
     kevy_sys::fill_random(&mut secret)?;
     let mut opts = std::fs::OpenOptions::new();

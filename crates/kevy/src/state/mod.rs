@@ -100,17 +100,17 @@ impl RuntimeState {
     ///
     /// ```
     /// use std::sync::Arc;
-    /// let state = kevy::RuntimeState::new(Arc::new(kevy_config::Config::default()), "".into(), 1)?;
+    /// let state = kevy::RuntimeState::new(Arc::new(kevy_config::Config::default()), "", 1)?;
     /// let kevy = kevy::KevyCommands::with_state(Arc::new(state));
     /// # let _ = kevy;
     /// # Ok::<(), kevy::OwnershipError>(())
     /// ```
     pub fn new(
         cfg: Arc<Config>,
-        data_dir: PathBuf,
+        data_dir: impl Into<PathBuf>,
         nshards: usize,
     ) -> Result<Self, OwnershipError> {
-        let mut state = Self::build(cfg, data_dir, nshards)?;
+        let mut state = Self::build(cfg, data_dir.into(), nshards)?;
         *state.config_explicit.get_mut() = true;
         Ok(state)
     }

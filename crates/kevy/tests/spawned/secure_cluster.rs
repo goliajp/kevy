@@ -34,7 +34,7 @@ fn start() -> Node {
     let dir = std::env::temp_dir().join(format!("kevy-secure-cluster-{port}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let key = kevy::secure::keygen(&dir.join("server.key")).unwrap();
+    let key = kevy::secure::keygen(dir.join("server.key")).unwrap();
     let toml = format!(
         "[cluster]\nenabled = true\n[secure]\nprivate_key_file = \"{}\"\nlisten_port = {secure}\n",
         dir.join("server.key").display()
