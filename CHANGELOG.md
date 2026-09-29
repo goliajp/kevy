@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- **`BLPOP` and `BRPOP` pops are durable and replicated, and a read-only
+  replica refuses them and `RENAME` / `RENAMENX`.** The server kept its
+  own list of write commands, and these four were missing from it. Since
+  1.4.0, which introduced `BLPOP` / `BRPOP`, their pops never reached the
+  AOF, so after a restart the popped elements were back in the list;
+  since 1.18.0, which introduced replication, they never reached a
+  replica either. This held both for a pop that found data at once and
+  for a waiter a later push served, and a waiter of `BZPOPMIN` (since
+  1.27.3), `BRPOPLPUSH` (since 1.27.7) or `XREADGROUP … BLOCK` (since
+  1.4.0) that a later write served was not recorded either: after a
+  restart, or on a replica, the element was back in its source and the
+  group read had left nothing pending. A blocking pop that found data at
+  once (`BZPOPMIN` and `BRPOPLPUSH` included) did not invalidate a
+  `WATCH` on the key. Since 1.18.0 a read-only replica ran all four
+  commands against its own keyspace and let it drift from the primary. The server now takes its write classification from the same
+  registry the shared command layer runs from, a served blocking command
+  is recorded like any other write (the pop as the `LPOP` / `RPOP` it
+  performed), and the four commands are refused on a read-only replica
+  with `-READONLY You can't write against a read only replica.` An
+  `EVAL_RO` script can no longer call them either.
+
 - **`kevy-cluster-rw` sends every write to the primary.** Its own list of
   write commands had drifted from the server's: 21 commands the server
   counts as writes went to a replica, among them `GETEX`, `SETBIT`,
@@ -35,27 +56,6 @@
   read only replica` without the closing period that the server and
   Redis send, so a client comparing the reply byte for byte saw two
   different errors.
-
-- **`BLPOP` and `BRPOP` pops are durable and replicated, and a read-only
-  replica refuses them and `RENAME` / `RENAMENX`.** The server kept its
-  own list of write commands, and these four were missing from it. Since
-  1.4.0, which introduced `BLPOP` / `BRPOP`, their pops never reached the
-  AOF, so after a restart the popped elements were back in the list;
-  since 1.18.0, which introduced replication, they never reached a
-  replica either. This held both for a pop that found data at once and
-  for a waiter a later push served, and a waiter of `BZPOPMIN` (since
-  1.27.3), `BRPOPLPUSH` (since 1.27.7) or `XREADGROUP … BLOCK` (since
-  1.4.0) that a later write served was not recorded either: after a
-  restart, or on a replica, the element was back in its source and the
-  group read had left nothing pending. A blocking pop that found data at
-  once (`BZPOPMIN` and `BRPOPLPUSH` included) did not invalidate a
-  `WATCH` on the key. Since 1.18.0 a read-only replica ran all four
-  commands against its own keyspace and let it drift from the primary. The server now takes its write classification from the same
-  registry the shared command layer runs from, a served blocking command
-  is recorded like any other write (the pop as the `LPOP` / `RPOP` it
-  performed), and the four commands are refused on a read-only replica
-  with `-READONLY You can't write against a read only replica.` An
-  `EVAL_RO` script can no longer call them either.
 
 - **`EXPIRE` with a non-positive TTL no longer counts a key that had
   already lapsed.** `EXPIRE`, `PEXPIRE`, `EXPIREAT` and `PEXPIREAT` first
