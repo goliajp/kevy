@@ -12,7 +12,16 @@ use crate::ring::IoUring;
 
 /// One positional read: `len` bytes at `offset` on `fd`. The fd must
 /// stay open until the call returns (the caller's pin/ownership).
-#[derive(Clone, Copy, Debug)]
+///
+/// There is no `Default`: every field is required, and descriptor 0 is
+/// stdin, not "no file".
+///
+/// ```
+/// let r = kevy_uring::FileRead::new(3, 4096, 512);
+/// assert_eq!((r.fd, r.offset, r.len), (3, 4096, 512));
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct FileRead {
     /// Open file descriptor to read from.
     pub fd: i32,
@@ -20,6 +29,18 @@ pub struct FileRead {
     pub offset: u64,
     /// Bytes to read — the completion must deliver exactly this many.
     pub len: u32,
+}
+
+impl FileRead {
+    /// `len` bytes at `offset` on `fd`.
+    ///
+    /// ```
+    /// assert_eq!(kevy_uring::FileRead::new(7, 0, 16).len, 16);
+    /// ```
+    #[must_use]
+    pub fn new(fd: i32, offset: u64, len: u32) -> Self {
+        Self { fd, offset, len }
+    }
 }
 
 /// Check one completion against the read that asked for it, recording
