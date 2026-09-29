@@ -14,14 +14,19 @@
 //!   has no bus and is rejected; use a named bus to actually receive
 //!   messages from a [`crate::Connection::publish`] on the same URL.
 //!
-//! ```no_run
-//! use kevy_client::{Subscriber, PubsubEvent};
+//! ```
+//! use kevy_client::{Connection, PubsubEvent, Subscriber};
+//! # mod doc { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/kevy.rs")); }
+//! # let port = kevy_testnet::free_port();
+//! # let _kevy = doc::kevy(port);
+//! # let url = format!("kevy://localhost:{port}");
 //!
-//! let mut sub = Subscriber::connect_channels("kevy://localhost:6379", &[b"news"])?;
+//! let mut sub = Subscriber::connect_channels(&url, &[b"news"])?;
+//! Connection::connect(&url)?.publish(b"news", b"hello")?;
 //! loop {
 //!     if let PubsubEvent::Message { channel, payload } = sub.recv()? {
-//!         println!("{}: {}", String::from_utf8_lossy(&channel),
-//!                            String::from_utf8_lossy(&payload));
+//!         assert_eq!((&channel[..], &payload[..]), (&b"news"[..], &b"hello"[..]));
+//!         break;
 //!     }
 //! }
 //! # Ok::<(), kevy_client::KevyError>(())
