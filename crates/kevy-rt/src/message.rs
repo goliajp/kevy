@@ -324,12 +324,18 @@ pub(crate) enum Inbound {
     /// Batched single-key dispatches to this (owning) shard; replied as one
     /// `ResponseBatch`. The hot -c50 path: amortizes the cross-core ring/fold
     /// overhead that drags 16 shards below 1 (single-shard is 2.1M GET).
+    /// `spare` is an empty envelope for the replies (see [`crate::batch_lane::BatchLane`]).
     RequestBatch {
         origin: usize,
         reqs: ReqBatch,
+        spare: RespBatch,
     },
-    /// Batched replies for a `RequestBatch`, folded by seq on the origin.
-    ResponseBatch(RespBatch),
+    /// Batched replies for a `RequestBatch`, folded by seq on the origin;
+    /// `spare` is the request envelope, emptied, going home.
+    ResponseBatch {
+        resps: RespBatch,
+        spare: ReqBatch,
+    },
     /// A batch of pub/sub messages `(channel, payload)` to deliver to this
     /// shard's subscribers — fire-and-forget (no reply; the publisher already
     /// replied with the receiver count from the registry). Batched per drain so

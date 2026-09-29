@@ -382,7 +382,7 @@ impl<C: Commands> Runtime<C> {
                 psub_local: HashMap::new(),
                 subs_by_channel: HashMap::new(),
                 publish_batch: (0..n).map(|_| Vec::new()).collect(),
-                request_batch: (0..n).map(|_| Vec::new()).collect(),
+                request_batch: (0..n).map(|_| Default::default()).collect(),
                 // Seed from the live config at construction, not default():
                 // these flags were otherwise blind until the first 100 ms
                 // shard tick, so a write landing before that never fired

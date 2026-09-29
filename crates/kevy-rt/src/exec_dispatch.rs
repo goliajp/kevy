@@ -119,7 +119,7 @@ impl<C: Commands> Shard<C> {
         meta: DispatchMeta,
     ) {
         let argv = self.argv_pool.take_filled(args);
-        self.request_batch[shard].push((conn_id, seq, argv, proto, meta));
+        self.request_batch[shard].reqs.push((conn_id, seq, argv, proto, meta));
         self.request_batch_nonempty |= 1u64 << shard;
     }
 
