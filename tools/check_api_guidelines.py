@@ -92,8 +92,17 @@ def attrs(item: dict) -> list[str]:
     for a in item.get("attrs") or []:
         if isinstance(a, str):
             out.append(a)
-        else:
-            out.extend(str(v) if k == "other" else k for k, v in a.items())
+            continue
+        for k, v in a.items():
+            if k == "other":
+                out.append(str(v))
+            elif k == "repr" and isinstance(v, dict):
+                # format 61 gives repr as {kind, int, ...}; spell it as source does
+                kind = {"c": "C", "rust": None}.get(v.get("kind"), v.get("kind"))
+                parts = [p for p in (kind, v.get("int")) if p]
+                out.append(f"repr({', '.join(parts)})")
+            else:
+                out.append(k)
     return out
 
 
