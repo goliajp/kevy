@@ -15,7 +15,7 @@
 //! ```
 //! use kevy_map::{KevyMap, KevySet};
 //!
-//! let mut m: KevyMap<u64, u64> = KevyMap::new();
+//! let mut m: KevyMap<Vec<u8>, u64> = KevyMap::new();
 //! m.insert(b"user:1".to_vec(), 7);
 //! // borrowed lookup: a byte slice finds a Vec<u8> key without allocating
 //! assert_eq!(m.get(b"user:1".as_slice()), Some(&7));
