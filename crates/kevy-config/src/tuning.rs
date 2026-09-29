@@ -202,11 +202,32 @@ pub struct AdvancedSection {
     /// # Ok::<(), kevy_config::ConfigError>(())
     /// ```
     pub ring_capacity: usize,
+    /// Buffers in each shard's io_uring receive ring, 16 KiB each: the
+    /// ring holds this times 16 KiB per shard, all of it resident once
+    /// traffic has cycled through it. A power of two from 1 to 32768 (the
+    /// kernel's ceiling). A ring that runs dry costs a re-armed receive,
+    /// not an error; raise it for thousands of connections per shard that
+    /// all send at once. Linux io_uring reactor only. Default `1024`.
+    ///
+    /// ```
+    /// assert_eq!(kevy_config::Config::default().advanced.recv_buffers, 1024);
+    /// let cfg = kevy_config::Config::from_toml_str("[advanced]\nrecv_buffers = 4096\n", None)?;
+    /// assert_eq!(cfg.advanced.recv_buffers, 4096); // 64 MiB a shard
+    /// assert!(kevy_config::Config::from_toml_str("[advanced]\nrecv_buffers = 1000\n", None).is_err());
+    /// # Ok::<(), kevy_config::ConfigError>(())
+    /// ```
+    pub recv_buffers: u32,
 }
 
 impl Default for AdvancedSection {
     fn default() -> Self {
-        Self { spin_limit: 256, park_timeout_ms: 50, tick_check_every: 256, ring_capacity: 1024 }
+        Self {
+            spin_limit: 256,
+            park_timeout_ms: 50,
+            tick_check_every: 256,
+            ring_capacity: 1024,
+            recv_buffers: 1024,
+        }
     }
 }
 
