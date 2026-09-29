@@ -129,7 +129,6 @@ fn reshard<C: Commands>(
 /// arm is unreachable by this contract); the target demotes inline to
 /// stay under its own budget (B11).
 fn redistribute(temp: &Store, target: ShardsMeta, stores: &mut [Store]) {
-    let slots = target.routing == Routing::Slots;
     temp.snapshot_each(|key, value, ttl_ms| {
         let hot;
         let value = match temp.materialize_cold(key, value) {
@@ -139,7 +138,7 @@ fn redistribute(temp: &Store, target: ShardsMeta, stores: &mut [Store]) {
             }
             None => value,
         };
-        let t = &mut stores[shard_of(key, target.n, slots)];
+        let t = &mut stores[shard_of(key, target.n, target.routing)];
         t.load_value(key, value, ttl_ms);
         t.try_demote_after_write();
     });

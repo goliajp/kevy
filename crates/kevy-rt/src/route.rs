@@ -3,9 +3,24 @@
 //! runtime's `start_command` matches on it to pick a dispatch shape.
 
 use crate::exec_slowlog::SlowlogSub;
+use kevy_store::AckMode;
+use kevy_store::ListEnd;
+use kevy_verbs::args::{ScanOpts, ScanOptsError};
 
 /// How a command maps onto shards.
-#[derive(Debug, PartialEq)]
+///
+/// Commands grow new shapes over releases, so the set is open: a
+/// [`crate::Commands`] implementation constructs the variants it needs,
+/// and code outside this crate that matches a route keeps a wildcard arm.
+///
+/// ```
+/// use kevy_rt::Route;
+///
+/// let get = Route::Single(1);
+/// assert_ne!(get, Route::Local);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Route {
     /// Keyless; execute on the connection's own shard (e.g. PING).
     Local,
@@ -54,11 +69,12 @@ pub enum Route {
     /// Why it cannot ride `Single(1)`, in one assertion:
     ///
     /// ```
+    /// use kevy_persist::Routing;
     /// use kevy_rt::{Route, shard_of_key};
     /// // `Single(1)` hashes args[1]. For BITOP that is the OPERATOR.
     /// let operator = b"AND".as_slice();
     /// let destination = b"dst".as_slice();
-    /// assert_ne!(shard_of_key(operator, 8, false), shard_of_key(destination, 8, false));
+    /// assert_ne!(shard_of_key(operator, 8, Routing::KevyHash), shard_of_key(destination, 8, Routing::KevyHash));
     /// assert!(matches!(Route::BitOpStore, Route::BitOpStore));
     /// ```
     BitOpStore,
@@ -72,10 +88,11 @@ pub enum Route {
     /// Why it cannot ride `Single(1)`, in one assertion:
     ///
     /// ```
+    /// use kevy_persist::Routing;
     /// use kevy_rt::{Route, shard_of_key};
     /// // A pair of ordinary key names on an eight-shard server.
     /// let (src, dst) = (b"ca".as_slice(), b"cb".as_slice());
-    /// assert_ne!(shard_of_key(src, 8, false), shard_of_key(dst, 8, false));
+    /// assert_ne!(shard_of_key(src, 8, Routing::KevyHash), shard_of_key(dst, 8, Routing::KevyHash));
     /// // `Single(1)` hashes args[1] — the SOURCE — and runs the whole
     /// // command there, so the copy would land in a shard no later read
     /// // of `dst` ever looks at, while the reply said it worked.
@@ -86,7 +103,7 @@ pub enum Route {
     /// `GEORADIUS[BYMEMBER] src … STORE|STOREDIST dst`.
     ///
     /// These MUST be routed, not left to the catch-all `Route::Single(1)`:
-    /// GEOSEARCHSTORE puts the DESTINATION at argv[1] (so the search then
+    /// GEOSEARCHSTORE puts the DESTINATION at `argv[1]` (so the search then
     /// read the source off the wrong shard — `:0`, or "could not decode
     /// requested zset member" for FROMMEMBER) while GEORADIUS puts the
     /// SOURCE there (so the destination was written into the source's
@@ -96,7 +113,7 @@ pub enum Route {
     ///
     /// The search runs on `src`'s shard ([`crate::Commands::geo_search`]),
     /// the write lands on `dst`'s (`Op::ZStoreResult`) — see
-    /// [`crate::exec_geostore`].
+    /// the runtime's geo-store orchestration.
     GeoStore {
         /// Key the search reads — its shard runs the query.
         src: Vec<u8>,
@@ -161,10 +178,16 @@ pub enum Route {
     /// `SCAN cursor [MATCH pattern] [COUNT count] [TYPE type]` — a real
     /// cursor iterator: each call visits ~COUNT buckets of ONE shard
     /// (chaining into the next shard only while the work budget lasts)
-    /// and replies `[next-cursor, keys]`. `Err` carries the pre-parsed
-    /// error message the command layer wants on the wire (invalid
-    /// cursor / syntax error) — the runtime replies it verbatim.
-    Scan(Result<ScanArgs, &'static str>),
+    /// and replies `[next-cursor, keys]`. `Err` carries why the command
+    /// layer refused the arguments (invalid cursor / syntax error); the
+    /// runtime replies its wire form.
+    ///
+    /// The cursor is the raw wire cursor: the runtime splits it into
+    /// `(shard, in-shard position)` — shard index in the top 10 bits,
+    /// reverse-binary bucket cursor in the low 54. Cursors are therefore
+    /// only meaningful on the server (and shard count) that issued them,
+    /// like Redis Cluster cursors are per-node.
+    Scan(Result<ScanOpts, ScanOptsError>),
     /// `RANDOMKEY` — one arbitrary key across all shards.
     RandomKey,
     /// `SUBSCRIBE` / `UNSUBSCRIBE` — connection-level (modifies this conn).
@@ -212,7 +235,7 @@ pub enum Route {
     ///
     /// These MUST be routed, not left to `Route::Single(1)`. The source and
     /// the destination are different keys and can live on different shards;
-    /// the catch-all route hashes args[1] (the source), so the destination
+    /// the catch-all route hashes `args[1]` (the source), so the destination
     /// push executed on the SOURCE's shard and the element was written into
     /// a keyspace nobody would ever read it from. It returned the moved
     /// value, so the caller believed it had worked. Measured on an 8-shard
@@ -222,17 +245,17 @@ pub enum Route {
     /// pairs run the Take→Push orchestrator (mirroring [`Self::Rename`]),
     /// which is NOT atomic — see `exec_listmove`.
     ListMove {
-        /// Pop from the head of the source (`LMOVE ... LEFT ...`) rather
-        /// than the tail (`RPOPLPUSH`).
-        from_left: bool,
-        /// Push onto the head of the destination (`RPOPLPUSH`, `LMOVE ...
-        /// LEFT`) rather than the tail.
-        to_left: bool,
+        /// The end of the source to pop from: the head for
+        /// `LMOVE ... LEFT ...`, the tail for `RPOPLPUSH`.
+        from: ListEnd,
+        /// The end of the destination to push onto: the head for
+        /// `RPOPLPUSH` and `LMOVE ... LEFT`, else the tail.
+        to: ListEnd,
     },
     /// `SLOWLOG GET / LEN / RESET / HELP`. The sub-command + parsed
     /// args are pre-decoded at routing time so the runtime knows
     /// whether to short-circuit (HELP / error) or fan out across
-    /// shards (GET / LEN / RESET). See [`crate::parse_slowlog_sub`].
+    /// shards (GET / LEN / RESET). See [`SlowlogSub::parse`].
     Slowlog(SlowlogSub),
     /// Non-blocking `XREAD` / `XREADGROUP` over **multiple** streams — fan
     /// each stream out to its owning shard and merge the per-stream replies
@@ -258,35 +281,50 @@ pub enum Route {
     },
 }
 
-/// Parsed `SCAN` arguments carried by [`Route::Scan`].
-///
-/// `cursor` is the raw wire cursor: the runtime splits it into
-/// `(shard, in-shard position)` — shard index in the top 10 bits,
-/// reverse-binary bucket cursor in the low 54 (see `exec_scan` for the
-/// documented limits). Cursors are therefore only meaningful on the
-/// server (and shard count) that issued them, like Redis Cluster
-/// cursors are per-node.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ScanArgs {
-    /// Raw wire cursor (`0` starts a sweep).
-    pub cursor: u64,
-    /// `COUNT` — buckets-visited work bound per call (default 10).
-    pub count: usize,
-    /// `MATCH` glob, applied to each visited key.
-    pub pattern: Option<Vec<u8>>,
-    /// `TYPE` — keep only keys whose value type name matches
-    /// (case-insensitive; unknown names match nothing).
-    pub type_filter: Option<Vec<u8>>,
-}
-
 /// The `GROUP <name> <consumer>` (+ `NOACK`) context an `XREADGROUP`
 /// gather carries to each per-stream sub-query.
-#[derive(Debug, PartialEq)]
+///
+/// ```
+/// use kevy_rt::XGroupCtx;
+/// use kevy_store::AckMode;
+///
+/// let ctx = XGroupCtx::new(b"workers".to_vec(), b"w1".to_vec()).with_ack(AckMode::NoAck);
+/// assert_eq!(ctx.ack, AckMode::NoAck);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct XGroupCtx {
     /// Consumer-group name.
     pub group: Vec<u8>,
     /// Consumer name within the group.
     pub consumer: Vec<u8>,
-    /// `NOACK` — deliver without adding to the PEL.
-    pub noack: bool,
+    /// Whether deliveries enter the pending list (`NOACK` = they do not).
+    pub ack: AckMode,
+}
+
+impl XGroupCtx {
+    /// Read as `consumer` of `group`, adding deliveries to the pending
+    /// list (no `NOACK`).
+    ///
+    /// ```
+    /// let ctx = kevy_rt::XGroupCtx::new(b"g".to_vec(), b"c".to_vec());
+    /// assert_eq!(ctx.ack, kevy_store::AckMode::Pending);
+    /// ```
+    #[must_use]
+    pub fn new(group: Vec<u8>, consumer: Vec<u8>) -> Self {
+        Self { group, consumer, ack: AckMode::Pending }
+    }
+
+    /// Set [`Self::ack`].
+    ///
+    /// ```
+    /// use kevy_store::AckMode;
+    /// let ctx = kevy_rt::XGroupCtx::new(b"g".to_vec(), b"c".to_vec()).with_ack(AckMode::NoAck);
+    /// assert_eq!(ctx.ack, AckMode::NoAck);
+    /// ```
+    #[must_use]
+    pub fn with_ack(mut self, ack: AckMode) -> Self {
+        self.ack = ack;
+        self
+    }
 }

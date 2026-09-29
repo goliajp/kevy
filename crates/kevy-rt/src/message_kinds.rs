@@ -35,7 +35,13 @@ pub(crate) enum Gathered {
 /// The multi-key gather reductions computed on the originating shard.
 /// Public: [`crate::Route::Gather`] carries it, and embedders' `route()`
 /// implementations construct it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// ```
+/// let route = kevy_rt::Route::Gather(kevy_rt::MultiOp::Mget);
+/// assert!(matches!(route, kevy_rt::Route::Gather(kevy_rt::MultiOp::Mget)));
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum MultiOp {
     /// `MGET` — values gathered in request order.
     Mget,
@@ -54,7 +60,13 @@ pub enum MultiOp {
 /// Which algebra combination a `*STORE` orchestrator runs after its
 /// gather completes. Public: [`crate::Route::ZAlgebraStore`]
 /// carries it, and embedders' `route()` implementations construct it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// ```
+/// let route = kevy_rt::Route::ZAlgebraStore(kevy_rt::ZCombine::ZUnion);
+/// assert_ne!(route, kevy_rt::Route::ZAlgebraStore(kevy_rt::ZCombine::ZInter));
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum ZCombine {
     /// `ZINTERSTORE`.
     ZInter,

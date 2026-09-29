@@ -2,13 +2,42 @@
 //! implementation. Split from `lib.rs` for the 500-LOC house rule.
 
 use crate::{
-    BlockHint, BlockKind, ExtensionReduced, GeoHits, LiveRuntimeConfig, NotifyClass,
-    ReplicaViewRow, ResolvedCmd, Route, Store, TxnKind,
+    BlockHint, BlockKind, ExtensionReduced, GeoHits, LiveRuntimeConfig, NotifyKind, ReplicaViewRow,
+    ResolvedCmd, Route, Store, TxnKind,
 };
 use kevy_resp::{Argv, ArgvView, RespVersion};
 
 /// Command-set semantics injected into the runtime. Cloned to every core, so it
 /// must be cheap/stateless to clone.
+///
+/// Designed to be implemented outside this crate: the kevy server's
+/// command set implements it, and so can an embedder's. Methods added in
+/// later versions come with a default, so an implementation keeps
+/// compiling.
+///
+/// # Implementation contract
+///
+/// - **Classification is a pure function of the argv.** `route`,
+///   `resolve`, `is_write`, `is_quit`, `txn_kind`, `block_hint`,
+///   `notify_class` and `queue_error` answer the same for the same
+///   arguments on every shard and every call: the runtime asks on the
+///   connection's shard and acts on another.
+/// - **`resolve` agrees with the per-attribute methods.** An override
+///   must return what `route`, `txn_kind`, `is_quit`, `is_write` and
+///   `block_hint` would; the runtime uses either path.
+/// - **`is_write` is the durability gate.** A command that mutates the
+///   store must answer `true`, or its effect is missing from the AOF and
+///   the replication stream.
+/// - **The route names every key the command touches.** A multi-key
+///   command routed [`Route::Single`] runs wholly on that key's shard; a
+///   second key on another shard is silently read or written in the
+///   wrong keyspace.
+/// - **Dispatch writes one complete RESP reply** per command (none only
+///   where a blocking command parks), and runs on the shard thread
+///   without blocking it.
+/// - **Hooks run on the shard thread** at tick or command cadence and
+///   must be cheap when their feature is off; they may keep per-shard
+///   state in thread-locals, since the answering thread *is* the shard.
 pub trait Commands: Clone + Send + 'static {
     /// Classify how a command is routed across shards.
     fn route<A: ArgvView + ?Sized>(&self, args: &A) -> Route;
@@ -38,7 +67,7 @@ pub trait Commands: Clone + Send + 'static {
     /// corresponding flag is enabled; `None` for read-only / no-op /
     /// not-yet-classified commands (those never publish). Default
     /// `None` so non-kevy embedders pay nothing.
-    fn notify_class<A: ArgvView + ?Sized>(&self, _args: &A) -> Option<NotifyClass> {
+    fn notify_class<A: ArgvView + ?Sized>(&self, _args: &A) -> Option<NotifyKind> {
         None
     }
 
@@ -157,7 +186,7 @@ pub trait Commands: Clone + Send + 'static {
     /// conn (in `AckSent`, `Streaming`, or `SnapshotShipping`); the
     /// row's `ack` is `None` until the replica's first `REPLCONF ACK`.
     /// Only called when this shard has a `ReplicationSource`
-    /// installed (i.e. `Runtime::with_replication(true, ...)` was
+    /// installed (i.e. `Runtime::with_replication(true)` was
     /// requested); standalone setups pay nothing. Command layers
     /// that serve `ROLE` / `INFO replication` stash the values in a
     /// thread-local (thread-per-core: the answering thread *is* the
@@ -196,7 +225,7 @@ pub trait Commands: Clone + Send + 'static {
     /// zset and return the `(member, score)` pairs to write — the scores
     /// already in their final form (geohash, or the STOREDIST distance in the
     /// unit the command asked for). The runtime writes them at the
-    /// destination's own shard; see [`crate::exec_geostore`]. A command set
+    /// destination's own shard. A command set
     /// that doesn't route [`Route::GeoStore`] never sees this call.
     fn geo_search(&self, _store: &mut Store, _argv: &[Vec<u8>]) -> GeoHits {
         GeoHits::Error(b"-ERR unknown command\r\n".to_vec())

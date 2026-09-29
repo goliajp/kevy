@@ -14,12 +14,12 @@
 //! [`set_override`] right after mutating the store;
 //! `Shard::post_write_housekeeping` — which runs immediately after
 //! *every* write dispatch on the same thread — consumes it with ONE
-//! [`take_override`] shared by the AOF append and the replication
+//! take of the override shared by the AOF append and the replication
 //! push, so disk and replicas always record the very same frame.
 //! Because the take is unconditional and per-command, an override can
 //! never leak into the next command of a pipelined batch.
 //!
-//! Thread-local by the same precedent as [`crate::replication_gate`]:
+//! Thread-local by the same precedent as [`crate::applying_record`]:
 //! a shard's store is only ever touched by its owning thread, and the
 //! verb body has no other channel to the post-write hooks.
 
@@ -27,7 +27,15 @@ use std::cell::Cell;
 
 /// What the post-write hooks should record for the command that just
 /// executed.
-#[derive(Debug)]
+///
+/// ```
+/// use kevy_rt::propagation::{Propagate, discard_override, set_override};
+///
+/// set_override(Propagate::Replace(vec![b"SREM".to_vec(), b"s".to_vec(), b"m".to_vec()]));
+/// discard_override();
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Propagate {
     /// Record the client's original argv unchanged (the default —
     /// every deterministic verb).

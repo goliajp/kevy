@@ -58,7 +58,13 @@ pub(crate) fn encode_block_timeout(out: &mut Vec<u8>, kind: BlockKind, proto: Re
 
 /// Which blocking command a waiter is parked in. Drives both timeout-nil
 /// shape and wake-retry dispatch.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// ```
+/// let kind = kevy_rt::BlockKind::Blpop;
+/// assert_ne!(kind, kevy_rt::BlockKind::Brpop);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum BlockKind {
     /// `BLPOP key [key ...] timeout` — block until one of the keys has an
     /// element, then pop from the left. On timeout the reply is a nil
@@ -102,7 +108,15 @@ pub enum BlockKind {
 ///
 /// For `BLPOP` / `BRPOP` the keys are list keys; for `XREAD BLOCK` /
 /// `XREADGROUP BLOCK` they are the STREAMS keys (in request order).
-#[derive(Clone, Debug, Default)]
+///
+/// ```
+/// use kevy_rt::{BlockHint, BlockKind};
+///
+/// let blpop = BlockHint::Block { kind: BlockKind::Blpop, keys: vec![b"q".to_vec()], timeout_ms: 0 };
+/// assert_ne!(blpop, BlockHint::default());
+/// ```
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum BlockHint {
     #[default]
     /// The command does not block — every verb but the handful above.

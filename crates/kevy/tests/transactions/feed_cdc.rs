@@ -75,7 +75,8 @@ impl Feed {
                 .bind([127, 0, 0, 1], port)
                 .shards(NSHARDS)
                 .with_data_dir(dir_thread)
-                .with_feed(true, 0);
+                .with_feed(true)
+                .with_feed_buffer_size(0);
             rt.run(stop_thread).unwrap();
         });
         kevy_testnet::assert_listening(port, "the server under test");
@@ -369,11 +370,12 @@ fn prefix_stats_fanout() {
 #[test]
 fn cross_shard_rename_reaches_the_feed_on_both_ends() {
     let cross = |a: &[u8], b: &[u8]| {
-        kevy_rt::shard_of_key(a, NSHARDS, false) != kevy_rt::shard_of_key(b, NSHARDS, false)
+        kevy_rt::shard_of_key(a, NSHARDS, kevy_persist::Routing::KevyHash)
+            != kevy_rt::shard_of_key(b, NSHARDS, kevy_persist::Routing::KevyHash)
     };
     assert!(cross(b"fsrc", b"fdst"), "fixture must straddle two shards");
-    let src_sh = kevy_rt::shard_of_key(b"fsrc", NSHARDS, false);
-    let dst_sh = kevy_rt::shard_of_key(b"fdst", NSHARDS, false);
+    let src_sh = kevy_rt::shard_of_key(b"fsrc", NSHARDS, kevy_persist::Routing::KevyHash);
+    let dst_sh = kevy_rt::shard_of_key(b"fdst", NSHARDS, kevy_persist::Routing::KevyHash);
 
     let srv = Feed::start();
     let mut c = srv.connect();
@@ -425,7 +427,8 @@ fn a_cross_shard_bitop_result_reaches_the_feed_on_the_destination_shard() {
 
     // Sources and destination on three different shards, asked of the
     // function the server routes with rather than assumed.
-    let of = |k: &str| kevy_rt::shard_of_key(k.as_bytes(), NSHARDS, false);
+    let of =
+        |k: &str| kevy_rt::shard_of_key(k.as_bytes(), NSHARDS, kevy_persist::Routing::KevyHash);
     let mut names: Vec<String> = Vec::new();
     for i in 0..4000 {
         let k = format!("bitfeed-{i}");

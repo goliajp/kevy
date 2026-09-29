@@ -11,6 +11,7 @@
 use crate::conn::Conn;
 use crate::message::{Agg, Gathered, MultiOp, SmallReply};
 use kevy_hash::KevyHash;
+use kevy_persist::Routing;
 use kevy_resp::{
     RespVersion, encode_array_len, encode_bulk, encode_error, encode_integer, encode_null_bulk,
     encode_push_header, encode_set_header,
@@ -418,22 +419,32 @@ pub(crate) fn drain_front(conn: &mut Conn) {
 /// hash so a cross-shard routing change doesn't require rehashing the store.
 ///
 /// `n == 1` short-circuits to 0 (every key is local; common when running
-/// `--threads 1` benchmarks). Two routing schemes (`slots`):
+/// `--threads 1` benchmarks). Two routing schemes:
 ///
-/// - `false` (default): `kevy_hash::KevyHash` (FxFmix — word-at-a-time,
-///   ~4× faster than the previous FNV-1a byte loop).
-/// - `true` (cluster mode): Redis-cluster slots — `key_hash_slot` (CRC16 of
-///   the `{hashtag}` & 16383) then [`slot_to_shard`], so external cluster
-///   clients can compute key placement themselves.
+/// - [`Routing::KevyHash`] (default): `kevy_hash::KevyHash` (FxFmix —
+///   word-at-a-time, ~4× faster than the previous FNV-1a byte loop).
+/// - [`Routing::Slots`] (cluster mode): Redis-cluster slots —
+///   `key_hash_slot` (CRC16 of the `{hashtag}` & 16383), then contiguous
+///   even slot ranges per shard ([`crate::shard_slot_range`]), so external
+///   cluster clients can compute key placement themselves.
 ///
 /// The scheme is a startup-time property of the data dir (`shards.meta`),
 /// never flipped at runtime.
+///
+/// ```
+/// use kevy_persist::Routing;
+/// use kevy_rt::shard_of_key;
+///
+/// assert_eq!(shard_of_key(b"k", 1, Routing::KevyHash), 0);
+/// // a hashtag colocates keys under either scheme
+/// assert_eq!(shard_of_key(b"{u1}:a", 8, Routing::Slots), shard_of_key(b"{u1}:b", 8, Routing::Slots));
+/// ```
 #[inline]
-pub fn shard_of(key: &[u8], n: usize, slots: bool) -> usize {
+pub fn shard_of(key: &[u8], n: usize, routing: Routing) -> usize {
     if n == 1 {
         return 0;
     }
-    if slots {
+    if routing == Routing::Slots {
         return slot_to_shard(kevy_hash::key_hash_slot(key), n);
     }
     // Respect `{hashtag}` even in non-cluster mode so EVAL

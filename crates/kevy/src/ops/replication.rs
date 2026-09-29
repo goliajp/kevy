@@ -317,7 +317,7 @@ mod tests {
                     Ipv4Addr::new(10, 0, 0, (i + 1) as u8),
                     50_000 + i as u16,
                     offset,
-                    Some(kevy_rt::ReplicaAck { acked_offset: offset, ack_age_ms: 0 }),
+                    Some(kevy_rt::ReplicaAck::new(offset, 0)),
                 )
             })
             .collect();
@@ -333,7 +333,7 @@ mod tests {
     #[test]
     fn aggregate_folds_one_process_across_shards() {
         let ip = Ipv4Addr::new(10, 0, 0, 9);
-        let ack = |off| Some(kevy_rt::ReplicaAck { acked_offset: off, ack_age_ms: 0 });
+        let ack = |off| Some(kevy_rt::ReplicaAck::new(off, 0));
         let row = |shard: usize, acked| {
             (format!("kevy-replica-7391#{shard}"), ip, 40_000 + shard as u16, 10u64, acked)
         };
@@ -352,7 +352,7 @@ mod tests {
     #[test]
     fn aggregate_reports_syncing_when_any_stream_lacks_an_ack() {
         let ip = Ipv4Addr::new(10, 0, 0, 9);
-        let ack = Some(kevy_rt::ReplicaAck { acked_offset: 5, ack_age_ms: 0 });
+        let ack = Some(kevy_rt::ReplicaAck::new(5, 0));
         let views = vec![
             crate::state::ReplShardView {
                 offset: 10,

@@ -17,7 +17,7 @@ static RAN: [AtomicUsize; SHARDS] = [const { AtomicUsize::new(0) }; SHARDS];
 fn marker(s: usize) -> Vec<u8> {
     (0..)
         .map(|i| format!("m{s}-{i}").into_bytes())
-        .find(|k| kevy_rt::shard_of_key(k, SHARDS, false) == s)
+        .find(|k| kevy_rt::shard_of_key(k, SHARDS, kevy_persist::Routing::KevyHash) == s)
         .unwrap()
 }
 

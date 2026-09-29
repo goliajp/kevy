@@ -10,6 +10,7 @@ use crate::message::{Agg, GatherKind, KvPairs, MultiOp, Op};
 use crate::shard::Shard;
 use kevy_resp::CmdError;
 use kevy_resp::{Argv, ArgvView};
+use kevy_store::AckMode;
 use std::collections::HashMap;
 
 impl<C: Commands> Shard<C> {
@@ -111,9 +112,12 @@ impl<C: Commands> Shard<C> {
                 Agg::ClientList { text: Vec::new() },
             ),
             Route::ClientKill => match crate::client_ops::ClientKillFilter::parse(args) {
-                Some((filter, oldform)) => (
+                Some((filter, reply)) => (
                     (0..self.nshards).map(|s| (s, Op::ClientKill(filter.clone()))).collect(),
-                    Agg::ClientKill { killed: 0, oldform },
+                    Agg::ClientKill {
+                        killed: 0,
+                        oldform: reply == crate::client_ops::KillReply::Status,
+                    },
                 ),
                 // The command layer validates before routing here; an
                 // embedder routing unvalidated argv still gets a clean
@@ -179,7 +183,7 @@ impl<C: Commands> Shard<C> {
                     argv.push(b"COUNT");
                     argv.push(cb);
                 }
-                if group.as_ref().is_some_and(|g| g.noack) {
+                if group.as_ref().is_some_and(|g| g.ack == AckMode::NoAck) {
                     argv.push(b"NOACK");
                 }
                 argv.push(b"STREAMS");

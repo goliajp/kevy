@@ -83,7 +83,8 @@ impl Server {
                 .shards(1)
                 .with_data_dir(dir_path)
                 .with_aof(false)
-                .with_replication(true, 1024 * 1024)
+                .with_replication(true)
+                .with_replication_buffer_size(1024 * 1024)
                 .with_replication_listener(replication_base)
                 .with_replication_security_opt(security);
             let _ = rt.run(stop_t);
@@ -497,10 +498,9 @@ fn secure_embed_replica_of_secure_server(trusted: [u8; 32]) -> (Server, Store) {
     use kevy_embedded::{Keypair, LinkKeys};
     let primary = Keypair::from_secret([1; 32]);
     let replica = Keypair::from_secret([2; 32]);
-    let server = Server::start_with(Some(kevy_rt::ReplicationSecurity {
-        local: primary,
-        replica_keys: vec![replica.public()],
-    }));
+    let server = Server::start_with(Some(
+        kevy_rt::ReplicationSecurity::new(primary).with_replica_keys(vec![replica.public()]),
+    ));
     let cfg = Config::default()
         .without_aof()
         .with_replica_upstream(format!("127.0.0.1:{}", server.replication_base))

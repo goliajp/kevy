@@ -75,7 +75,7 @@ fn info_replication_master_default_shape() {
     // shape with offset/connected folded from the shard view
     // slots. Per-replica list — 3 fake replica processes,
     // offset=42.
-    let ack = |off| Some(kevy_rt::ReplicaAck { acked_offset: off, ack_age_ms: 0 });
+    let ack = |off| Some(kevy_rt::ReplicaAck::new(off, 0));
     let replicas = vec![
         (
             "kevy-replica-7001#0".to_string(),

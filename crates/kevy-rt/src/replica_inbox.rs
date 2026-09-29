@@ -89,7 +89,14 @@ impl std::fmt::Debug for SnapshotGate {
 /// carries an owned [`Argv`] (already decoded by the runner) instead
 /// of a `DecodedFrame { offset, argv }` — the offset is gap-checked
 /// by the runner on the way in, so the shard doesn't need it.
+///
+/// ```
+/// let (tx, _rx) = kevy_rt::replica_inbox_pair();
+/// tx.send(kevy_rt::ReplicaApply::SnapshotBegin)?;
+/// # Ok::<(), std::sync::mpsc::SendError<kevy_rt::ReplicaApply>>(())
+/// ```
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum ReplicaApply {
     /// Upstream started shipping a full snapshot. The shard should
     /// reset its accumulating snapshot buffer.
