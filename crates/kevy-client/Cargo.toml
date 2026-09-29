@@ -36,6 +36,7 @@ kevy-hash = { path = "../kevy-hash", version = "6.4.0" }
 
 [dev-dependencies]
 kevy-testnet = { path = "../kevy-testnet" }
+kevy-tmpdir = { path = "../kevy-tmpdir", version = "6.4.0" }
 # tests/wrap_parity.rs boots an in-process kevy-rt reactor with the
 # full kevy command set (same harness as crates/kevy/tests/*). Path-
 # only (no version) so publish strips them — mirrors kevy's own

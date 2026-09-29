@@ -95,11 +95,7 @@ impl Server {
     fn start(slower_than_micros: i64, max_len: u32, nshards: usize) -> Self {
         let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let port = free_port();
-        let dir = std::env::temp_dir().join(format!(
-            "kevy-slowlog-{}",
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = kevy_tmpdir::unique_dir("slowlog");
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         let dir_thread = dir.clone();
