@@ -16,6 +16,22 @@
 //! `mheap` arena indexing. The divergence from both is that a segment
 //! here is owned by exactly one shard for its whole life — kevy pins a
 //! shard per core, so ownership never has to be negotiated.
+//!
+//! # Examples
+//!
+//! ```
+//! use kevy_alloc::{Heap, segment};
+//! let mut heap = Heap::new(0);
+//! let p = heap.alloc(100, 8).ok_or("no mapping")?;
+//! // everything `dealloc` needs comes from the address: segment, span, class
+//! // SAFETY: `p` is a live small slot, so it lies inside a segment.
+//! let seg = unsafe { segment::segment_of(p).as_ref() };
+//! let span = &seg.spans()[segment::span_index_of(p)];
+//! assert_eq!(kevy_alloc::class::size_of(usize::from(span.class())), 104);
+//! // SAFETY: `p` came from this heap with this size and alignment.
+//! unsafe { heap.dealloc(p, 100, 8) };
+//! # Ok::<(), &str>(())
+//! ```
 
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicPtr, Ordering};
@@ -24,12 +40,42 @@ use crate::class::{self, SPAN_BYTES};
 pub use crate::pagemap::{NO_CLASS, SpanMeta};
 
 /// Bytes per segment. Power of two: the mask is the lookup.
+///
+/// ```
+/// use kevy_alloc::{Heap, segment::SEGMENT_BYTES};
+/// let mut heap = Heap::new(0);
+/// let p = heap.alloc(64, 8).ok_or("no mapping")?;
+/// // masking off the low bits finds the segment base
+/// let base = p.as_ptr() as usize & !(SEGMENT_BYTES - 1);
+/// assert_eq!(base % SEGMENT_BYTES, 0);
+/// assert!(p.as_ptr() as usize - base < SEGMENT_BYTES);
+/// // SAFETY: `p` came from this heap with this size and alignment.
+/// unsafe { heap.dealloc(p, 64, 8) };
+/// # Ok::<(), &str>(())
+/// ```
 pub const SEGMENT_BYTES: usize = 4 * 1024 * 1024;
 
 /// Spans in a segment, including the header span.
+///
+/// ```
+/// use kevy_alloc::{class::SPAN_BYTES, segment::{SEGMENT_BYTES, SPANS_PER_SEGMENT}};
+/// assert_eq!(SPANS_PER_SEGMENT, 64);
+/// assert_eq!(SPANS_PER_SEGMENT * SPAN_BYTES, SEGMENT_BYTES);
+/// ```
 pub const SPANS_PER_SEGMENT: usize = SEGMENT_BYTES / SPAN_BYTES;
 
 /// Span index 0 is the header; allocation spans start at 1.
+///
+/// ```
+/// use kevy_alloc::{Heap, segment::{FIRST_DATA_SPAN, span_index_of}};
+/// let mut heap = Heap::new(0);
+/// let p = heap.alloc(64, 8).ok_or("no mapping")?;
+/// // span 0 is the header, so no slot is ever handed out there
+/// assert!(span_index_of(p) >= FIRST_DATA_SPAN);
+/// // SAFETY: `p` came from this heap with this size and alignment.
+/// unsafe { heap.dealloc(p, 64, 8) };
+/// # Ok::<(), &str>(())
+/// ```
 pub const FIRST_DATA_SPAN: usize = 1;
 
 /// Identifies a live segment header. A pointer that masks to something
@@ -38,6 +84,19 @@ pub const FIRST_DATA_SPAN: usize = 1;
 const MAGIC: u64 = 0x6b65_7679_616c_6c63; // "kevyallc"
 
 /// The header at the base of every segment.
+///
+/// ```
+/// use kevy_alloc::{Heap, segment::{Segment, segment_of}};
+/// let mut heap = Heap::new(3);
+/// let p = heap.alloc(64, 8).ok_or("no mapping")?;
+/// // SAFETY: `p` is a live small slot, so it lies inside a segment.
+/// let seg: &Segment = unsafe { segment_of(p).as_ref() };
+/// assert!(seg.is_valid());
+/// assert_eq!(seg.owner(), 3);
+/// // SAFETY: `p` came from this heap with this size and alignment.
+/// unsafe { heap.dealloc(p, 64, 8) };
+/// # Ok::<(), &str>(())
+/// ```
 #[repr(C)]
 #[derive(Debug)]
 pub struct Segment {
@@ -79,6 +138,21 @@ impl Segment {
     /// # Safety
     /// `base` must be a live, writable, 4 MiB-aligned mapping of
     /// [`SEGMENT_BYTES`] bytes that nothing else references.
+    ///
+    /// ```
+    /// use kevy_alloc::os::{map_aligned, unmap};
+    /// use kevy_alloc::segment::{SEGMENT_BYTES, Segment};
+    /// let base = map_aligned(SEGMENT_BYTES, SEGMENT_BYTES).ok_or("no mapping")?;
+    /// // SAFETY: a fresh, writable, aligned mapping nothing else references.
+    /// let seg = unsafe { Segment::init(base, 9) };
+    /// // SAFETY: `init` just wrote a header there.
+    /// let hdr = unsafe { seg.as_ref() };
+    /// assert!(hdr.is_valid());
+    /// assert_eq!(hdr.owner(), 9);
+    /// // SAFETY: the whole mapping, no longer referenced.
+    /// unsafe { unmap(base, SEGMENT_BYTES) };
+    /// # Ok::<(), &str>(())
+    /// ```
     pub unsafe fn init(base: NonNull<u8>, owner: usize) -> NonNull<Segment> {
         let seg = base.as_ptr().cast::<Segment>();
         // SAFETY: the caller guarantees an exclusive writable mapping
@@ -99,6 +173,19 @@ impl Segment {
     }
 
     /// Base address of span `index` within this segment.
+    ///
+    /// ```
+    /// use kevy_alloc::{Heap, class::SPAN_BYTES, segment};
+    /// let mut heap = Heap::new(0);
+    /// let p = heap.alloc(64, 8).ok_or("no mapping")?;
+    /// // SAFETY: `p` is a live small slot, so it lies inside a segment.
+    /// let seg = unsafe { segment::segment_of(p).as_ref() };
+    /// let base = seg.span_base(segment::span_index_of(p)) as usize;
+    /// assert!(base <= p.as_ptr() as usize && (p.as_ptr() as usize) < base + SPAN_BYTES);
+    /// // SAFETY: `p` came from this heap with this size and alignment.
+    /// unsafe { heap.dealloc(p, 64, 8) };
+    /// # Ok::<(), &str>(())
+    /// ```
     #[must_use]
     pub fn span_base(&self, index: usize) -> *mut u8 {
         let base = core::ptr::from_ref(self) as usize;
@@ -107,6 +194,17 @@ impl Segment {
 
     /// Check the header is one of ours. A false result means a pointer
     /// reached `dealloc` that this allocator never handed out.
+    ///
+    /// ```
+    /// use kevy_alloc::{Heap, segment};
+    /// let mut heap = Heap::new(0);
+    /// let p = heap.alloc(64, 8).ok_or("no mapping")?;
+    /// // SAFETY: `p` is a live small slot, so it lies inside a segment.
+    /// assert!(unsafe { segment::segment_of(p).as_ref() }.is_valid());
+    /// // SAFETY: `p` came from this heap with this size and alignment.
+    /// unsafe { heap.dealloc(p, 64, 8) };
+    /// # Ok::<(), &str>(())
+    /// ```
     #[must_use]
     pub fn is_valid(&self) -> bool {
         self.magic == MAGIC
@@ -224,6 +322,23 @@ impl Segment {
     /// this segment, linked through their first words, referenced by
     /// nobody else; `live_sum`/`bytes_sum` must be the chain's
     /// requested/slot-byte sums.
+    ///
+    /// ```
+    /// use kevy_alloc::{Heap, segment::{self, FOREIGN_SIZE_OFFSET}};
+    /// let mut owner = Heap::new(1);
+    /// let p = owner.alloc(100, 8).ok_or("no mapping")?;
+    /// // freeing `p` from another shard: size into the slot, then a one-slot chain
+    /// // SAFETY: `p` is a live slot of this class (104 bytes), ours to overwrite.
+    /// unsafe { p.as_ptr().add(FOREIGN_SIZE_OFFSET).cast::<u32>().write(100) };
+    /// // SAFETY: `p` is a live small slot, so it lies inside a segment.
+    /// let seg = unsafe { segment::segment_of(p).as_ref() };
+    /// // SAFETY: a one-slot chain of this segment's slot, with its sums.
+    /// unsafe { seg.splice_foreign(p.as_ptr(), p.as_ptr(), 100, 104) };
+    /// assert_eq!((seg.foreign_live(), seg.foreign_bytes()), (100, 104));
+    /// owner.drain_foreign(); // the owner settles it
+    /// assert_eq!(owner.snapshot().live, 0);
+    /// # Ok::<(), &str>(())
+    /// ```
     pub unsafe fn splice_foreign(
         &self,
         head: *mut u8,
@@ -278,6 +393,18 @@ impl Segment {
 /// # Safety
 /// `ptr` must be a slot address previously handed out by a segment of
 /// this allocator (that is, not from the direct-mapping path).
+///
+/// ```
+/// use kevy_alloc::{Heap, segment::{SEGMENT_BYTES, segment_of}};
+/// let mut heap = Heap::new(0);
+/// let p = heap.alloc(64, 8).ok_or("no mapping")?;
+/// // SAFETY: `p` came from a segment, not from the direct-mapping path.
+/// let seg = unsafe { segment_of(p) };
+/// assert_eq!(seg.as_ptr() as usize, p.as_ptr() as usize & !(SEGMENT_BYTES - 1));
+/// // SAFETY: `p` came from this heap with this size and alignment.
+/// unsafe { heap.dealloc(p, 64, 8) };
+/// # Ok::<(), &str>(())
+/// ```
 #[inline]
 #[must_use]
 pub unsafe fn segment_of(ptr: NonNull<u8>) -> NonNull<Segment> {
@@ -288,6 +415,16 @@ pub unsafe fn segment_of(ptr: NonNull<u8>) -> NonNull<Segment> {
 }
 
 /// The span index within a segment holding `ptr`.
+///
+/// ```
+/// use kevy_alloc::{Heap, segment::{FIRST_DATA_SPAN, SPANS_PER_SEGMENT, span_index_of}};
+/// let mut heap = Heap::new(0);
+/// let p = heap.alloc(64, 8).ok_or("no mapping")?;
+/// assert!((FIRST_DATA_SPAN..SPANS_PER_SEGMENT).contains(&span_index_of(p)));
+/// // SAFETY: `p` came from this heap with this size and alignment.
+/// unsafe { heap.dealloc(p, 64, 8) };
+/// # Ok::<(), &str>(())
+/// ```
 #[inline]
 #[must_use]
 pub fn span_index_of(ptr: NonNull<u8>) -> usize {
@@ -295,6 +432,19 @@ pub fn span_index_of(ptr: NonNull<u8>) -> usize {
 }
 
 /// The slot index within its span holding `ptr`, for a given class.
+///
+/// ```
+/// use kevy_alloc::{Heap, class::index_of, segment::slot_index_of};
+/// let mut heap = Heap::new(0);
+/// let c = index_of(64, 8).ok_or("class")?;
+/// let a = heap.alloc(64, 8).ok_or("no mapping")?;
+/// let b = heap.alloc(64, 8).ok_or("no mapping")?;
+/// // a fresh span hands out neighbouring slots, lowest first
+/// assert_eq!(slot_index_of(b, c), slot_index_of(a, c) + 1);
+/// // SAFETY: both came from this heap with this size and alignment.
+/// unsafe { heap.dealloc(a, 64, 8); heap.dealloc(b, 64, 8) };
+/// # Ok::<(), &str>(())
+/// ```
 #[inline]
 #[must_use]
 pub fn slot_index_of(ptr: NonNull<u8>, class: usize) -> u32 {
@@ -307,6 +457,13 @@ pub fn slot_index_of(ptr: NonNull<u8>, class: usize) -> u32 {
 
 /// Where [`Segment::splice_foreign`] stores the requested size inside a free slot,
 /// clear of the link that occupies the first word.
+///
+/// ```
+/// use kevy_alloc::{class::CLASSES, segment::FOREIGN_SIZE_OFFSET};
+/// // the link word comes first; the size (a u32) must fit in every class
+/// assert_eq!(FOREIGN_SIZE_OFFSET, core::mem::size_of::<*mut u8>());
+/// assert!(FOREIGN_SIZE_OFFSET + 4 <= CLASSES[0] as usize);
+/// ```
 pub const FOREIGN_SIZE_OFFSET: usize = core::mem::size_of::<*mut u8>();
 
 /// Read back the requested size a foreign free recorded.
@@ -314,6 +471,22 @@ pub const FOREIGN_SIZE_OFFSET: usize = core::mem::size_of::<*mut u8>();
 /// # Safety
 /// `slot` must still be on a foreign list, untouched since
 /// [`Segment::splice_foreign`] wrote it.
+///
+/// ```
+/// use kevy_alloc::{Heap, segment::{self, FOREIGN_SIZE_OFFSET, foreign_requested}};
+/// let mut owner = Heap::new(1);
+/// let p = owner.alloc(100, 8).ok_or("no mapping")?;
+/// // SAFETY: `p` is a live 104-byte slot, ours to overwrite.
+/// unsafe { p.as_ptr().add(FOREIGN_SIZE_OFFSET).cast::<u32>().write(100) };
+/// // SAFETY: `p` is a live small slot, so it lies inside a segment.
+/// let seg = unsafe { segment::segment_of(p).as_ref() };
+/// // SAFETY: a one-slot chain of this segment's slot, with its sums.
+/// unsafe { seg.splice_foreign(p.as_ptr(), p.as_ptr(), 100, 104) };
+/// // SAFETY: `p` is queued and untouched since the splice.
+/// assert_eq!(unsafe { foreign_requested(p) }, 100);
+/// owner.drain_foreign();
+/// # Ok::<(), &str>(())
+/// ```
 #[must_use]
 pub unsafe fn foreign_requested(slot: NonNull<u8>) -> usize {
     // SAFETY: written by `Segment::splice_foreign`, and nothing hands out a slot
@@ -322,31 +495,5 @@ pub unsafe fn foreign_requested(slot: NonNull<u8>) -> usize {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_header_fits_inside_the_span_it_occupies() {
-        assert!(
-            core::mem::size_of::<Segment>() <= SPAN_BYTES,
-            "the header spills out of span 0 into an allocation span"
-        );
-    }
-
-    #[test]
-    fn geometry_is_maskable() {
-        assert!(SEGMENT_BYTES.is_power_of_two());
-        assert!(SPAN_BYTES.is_power_of_two());
-        assert_eq!(SEGMENT_BYTES % SPAN_BYTES, 0);
-        assert_eq!(SPANS_PER_SEGMENT, 64);
-    }
-
-    #[test]
-    fn the_bitmap_header_still_fits_its_span() {
-        // v2 made SpanMeta deliberately large — the bitmap is the price
-        // of page-granular reclaim, and the header span exists to be
-        // spent on exactly this. The bound that matters is the span.
-        assert!(core::mem::size_of::<SpanMeta>() >= crate::pagemap::BITMAP_WORDS * 8);
-        assert!(core::mem::size_of::<Segment>() <= SPAN_BYTES);
-    }
-}
+#[path = "segment_tests.rs"]
+mod tests;

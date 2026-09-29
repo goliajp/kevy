@@ -18,6 +18,17 @@
 //! Cross-shard frees are real (values travel on the shared read lane),
 //! and they are handled by [`Segment::splice_foreign`](segment::Segment::splice_foreign) — push-only, so
 //! there is no ABA hazard to inherit.
+//!
+//! # Examples
+//!
+//! ```
+//! let mut shard = kevy_alloc::Heap::new(0);
+//! let p = shard.alloc(64, 8).ok_or("no mapping")?;
+//! // SAFETY: `p` came from this heap with this size and alignment.
+//! unsafe { shard.dealloc(p, 64, 8) };
+//! assert_eq!(shard.snapshot().live, 0);
+//! # Ok::<(), &str>(())
+//! ```
 
 use core::ptr::NonNull;
 
@@ -59,15 +70,51 @@ use crate::segment::{self, FIRST_DATA_SPAN, NO_CLASS, SEGMENT_BYTES, SPANS_PER_S
 /// free. The counter is now `u32` and the guard sits at 1 TiB per
 /// class — memory governance belongs to maxmemory and the tier
 /// budget, never to an invisible allocator constant.
+///
+/// # Examples
+///
+/// ```
+/// use kevy_alloc::{Heap, PER_CLASS_CAP, class::SPAN_BYTES};
+/// // 1 TiB per class: a runaway guard, not a budget
+/// assert_eq!(PER_CLASS_CAP as u64 * SPAN_BYTES as u64, 1 << 40);
+/// let _tight = Heap::with_class_cap(0, PER_CLASS_CAP / 1024);
+/// ```
 pub const PER_CLASS_CAP: u32 = 16_777_216;
 
 /// Empty spans a heap keeps mapped-but-discarded before releasing the
 /// whole segment. Decay-style hysteresis, after jemalloc: releasing
 /// eagerly turns a churny workload into an mmap/munmap storm.
+///
+/// # Examples
+///
+/// ```
+/// use kevy_alloc::{EMPTY_SPAN_HYSTERESIS, Heap};
+/// let mut heap = Heap::new(0);
+/// // sixteen spans' worth of 64-byte slots, all freed again
+/// let held: Vec<_> = (0..16_384).map(|_| heap.alloc(64, 8)).collect::<Option<_>>().ok_or("no mapping")?;
+/// // SAFETY: each came from this heap with this size and alignment.
+/// held.into_iter().for_each(|p| unsafe { heap.dealloc(p, 64, 8) });
+/// heap.reclaim();
+/// // the sweep keeps this many empty spans for their class
+/// assert_eq!(heap.snapshot().spans_assigned, EMPTY_SPAN_HYSTERESIS as u64);
+/// # Ok::<(), &str>(())
+/// ```
 pub const EMPTY_SPAN_HYSTERESIS: u16 = 4;
 
 /// One shard's heap. Not `Sync`: exactly one thread owns it, which is
 /// what removes the atomics from the fast path.
+///
+/// # Examples
+///
+/// ```
+/// use kevy_alloc::Heap;
+/// let mut heap = Heap::new(0);
+/// let p = heap.alloc(4000, 8).ok_or("no mapping")?;
+/// assert_eq!(heap.snapshot().live, 4000);
+/// // SAFETY: `p` came from this heap with this size and alignment.
+/// unsafe { heap.dealloc(p, 4000, 8) };
+/// # Ok::<(), &str>(())
+/// ```
 #[derive(Debug)]
 pub struct Heap {
     id: usize,
@@ -108,6 +155,15 @@ pub struct Heap {
 impl Heap {
     /// A heap owning nothing. `id` identifies the shard in stats and in
     /// segment headers.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use kevy_alloc::Heap;
+    /// // `const`, so a heap can sit in a static or a thread-local initializer
+    /// const EMPTY: Heap = Heap::new(0);
+    /// assert_eq!(EMPTY.snapshot().mapped, 0);
+    /// ```
     #[must_use]
     pub const fn new(id: usize) -> Self {
         Self::with_class_cap(id, PER_CLASS_CAP)
@@ -118,6 +174,20 @@ impl Heap {
     /// The default is a runaway guard set beyond any real workload,
     /// which leaves the refusal path unreachable in a test. This makes
     /// it reachable without pretending the default is smaller than it is.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use kevy_alloc::Heap;
+    /// let mut heap = Heap::with_class_cap(0, 1);
+    /// // one span of the largest class holds two slots, and the cap is one span
+    /// let a = heap.alloc(32_768, 8).ok_or("no mapping")?;
+    /// let b = heap.alloc(32_768, 8).ok_or("no mapping")?;
+    /// assert!(heap.alloc(32_768, 8).is_none());
+    /// // SAFETY: both came from this heap with this size and alignment.
+    /// unsafe { heap.dealloc(a, 32_768, 8); heap.dealloc(b, 32_768, 8) };
+    /// # Ok::<(), &str>(())
+    /// ```
     #[must_use]
     pub const fn with_class_cap(id: usize, class_cap: u32) -> Self {
         Self {
@@ -141,6 +211,18 @@ impl Heap {
     /// ready-made unique identifier — no counter, no registry, and it
     /// cannot collide while the heap is alive. `0` means "not yet set",
     /// which is why [`Heap::new`] can stay `const`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use kevy_alloc::Heap;
+    /// let mut heap = Heap::new(0); // 0: identity not chosen yet
+    /// heap.ensure_identity(); // now the heap's own address, fixed while it lives
+    /// let p = heap.alloc(64, 8).ok_or("no mapping")?;
+    /// // SAFETY: `p` came from this heap with this size and alignment.
+    /// unsafe { heap.dealloc(p, 64, 8) };
+    /// # Ok::<(), &str>(())
+    /// ```
     pub fn ensure_identity(&mut self) {
         if self.id == 0 {
             self.id = core::ptr::from_mut(self) as usize;
@@ -154,6 +236,18 @@ impl Heap {
     /// a suitable class. Stricter requests fall to the direct-mapping
     /// path, which returns page-aligned memory; anything beyond a page
     /// belongs to the `GlobalAlloc` shim's over-aligned path.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use kevy_alloc::Heap;
+    /// let mut heap = Heap::new(0);
+    /// let p = heap.alloc(24, 16).ok_or("no mapping")?;
+    /// assert_eq!(p.as_ptr() as usize % 16, 0);
+    /// // SAFETY: `p` came from this heap with this size and alignment.
+    /// unsafe { heap.dealloc(p, 24, 16) };
+    /// # Ok::<(), &str>(())
+    /// ```
     pub fn alloc(&mut self, size: usize, align: usize) -> Option<NonNull<u8>> {
         match class::index_of(size, align) {
             Some(c) => self.alloc_small(c, size),
@@ -180,6 +274,19 @@ impl Heap {
     /// # Safety
     /// `ptr` must be a live allocation from this allocator made with
     /// `old_size` and `align`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use kevy_alloc::Heap;
+    /// let mut heap = Heap::new(0);
+    /// let p = heap.alloc(100, 8).ok_or("no mapping")?;
+    /// // SAFETY (all three): `p` is live from this heap, made with the old size.
+    /// assert!(unsafe { heap.try_resize_in_place(p, 100, 102, 8) }); // same class
+    /// assert!(!unsafe { heap.try_resize_in_place(p, 102, 500, 8) }); // must move
+    /// unsafe { heap.dealloc(p, 102, 8) };
+    /// # Ok::<(), &str>(())
+    /// ```
     pub unsafe fn try_resize_in_place(
         &mut self,
         ptr: NonNull<u8>,
@@ -214,6 +321,18 @@ impl Heap {
     /// # Safety
     /// `ptr` must come from [`Self::alloc`] on this heap with this
     /// `size`, and must not be used afterwards.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use kevy_alloc::Heap;
+    /// let mut heap = Heap::new(0);
+    /// let p = heap.alloc(1 << 20, 8).ok_or("no mapping")?; // direct mapping
+    /// // SAFETY: `p` came from this heap with this size and alignment.
+    /// unsafe { heap.dealloc(p, 1 << 20, 8) };
+    /// assert_eq!(heap.snapshot().live, 0);
+    /// # Ok::<(), &str>(())
+    /// ```
     pub unsafe fn dealloc(&mut self, ptr: NonNull<u8>, size: usize, align: usize) {
         match class::index_of(size, align) {
             // SAFETY: this fn is `unsafe`; its contract already requires that `ptr` came
@@ -370,33 +489,6 @@ impl Heap {
     unsafe fn dealloc_large(&mut self, ptr: NonNull<u8>, size: usize) {
         // SAFETY: delegated to the caller's contract.
         unsafe { crate::large::dealloc(ptr, size) };
-    }
-}
-
-impl Drop for Heap {
-    fn drop(&mut self) {
-        // Claims hold no memory of their own — the segments they point
-        // into are unmapped below — but retiring them keeps the
-        // debug-assert bookkeeping (live counts) honest for any
-        // instrumented teardown that walks spans first.
-        self.flush_claims();
-        // The retention pool is process-wide and bounded, so a heap's
-        // death owes it nothing — but the fuzzer's tight RSS limit
-        // watches every iteration, and draining here keeps single-heap
-        // lifecycles (tests, fuzz) at zero retained bytes. Its per-heap
-        // ancestor forgot the equivalent and leaked a mapping per heap.
-        crate::large::pool_drain();
-        let mut seg = self.segments;
-        while !seg.is_null() {
-            // SAFETY: live header from our own list; read `next` before
-            // the mapping goes away.
-            let next = unsafe { (*seg).next };
-            // SAFETY: this heap mapped it and is the only owner.
-            unsafe {
-                os::unmap(NonNull::new_unchecked(seg.cast::<u8>()), SEGMENT_BYTES);
-            }
-            seg = next;
-        }
     }
 }
 

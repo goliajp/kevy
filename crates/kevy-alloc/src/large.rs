@@ -16,6 +16,20 @@
 //! figure is the one that is meaningful, so it is the one kept, and
 //! [`large_stats`] stays out of `Heap::snapshot` so that summing shards
 //! cannot count it once per shard.
+//!
+//! # Examples
+//!
+//! ```
+//! use kevy_alloc::{Heap, class::MAX_SMALL, large_stats};
+//! let mut heap = Heap::new(0);
+//! // past the largest class: a mapping of its own, page-rounded
+//! let p = heap.alloc(MAX_SMALL + 1, 8).ok_or("no mapping")?;
+//! assert_eq!(p.as_ptr() as usize % kevy_alloc::os::PAGE, 0);
+//! assert!(large_stats().large_count >= 1);
+//! // SAFETY: `p` came from this heap with this size and alignment.
+//! unsafe { heap.dealloc(p, MAX_SMALL + 1, 8) };
+//! # Ok::<(), &str>(())
+//! ```
 
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicU64, Ordering::Relaxed};
@@ -212,6 +226,21 @@ mod counters {
 /// Kept apart from [`Heap::snapshot`](crate::Heap::snapshot) rather than folded in, because
 /// summing per-shard snapshots would then count them once per shard.
 /// Each balances on its own, and so does their sum.
+///
+/// # Examples
+///
+/// ```
+/// use kevy_alloc::{Heap, large_stats};
+/// let mut heap = Heap::new(0);
+/// let p = heap.alloc(100_000, 8).ok_or("no mapping")?;
+/// let s = large_stats();
+/// // process-wide and balanced on its own; other threads may add to it
+/// assert!(s.balanced());
+/// assert!(s.live >= 100_000);
+/// // SAFETY: `p` came from this heap with this size and alignment.
+/// unsafe { heap.dealloc(p, 100_000, 8) };
+/// # Ok::<(), &str>(())
+/// ```
 #[must_use]
 pub fn large_stats() -> Stats {
     use core::sync::atomic::Ordering::Relaxed;
