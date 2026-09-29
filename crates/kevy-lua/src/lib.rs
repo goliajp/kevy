@@ -87,10 +87,17 @@ fn dialect_slot(v: LuaVersion) -> usize {
 /// A wire-level reply: just the encoded RESP bytes.
 pub type Reply = Vec<u8>;
 
-/// SCRIPT FLUSH mode (Redis 6.2+ semantics).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// SCRIPT FLUSH mode (Redis 6.2+ semantics). The default is
+/// [`FlushMode::Sync`], what `SCRIPT FLUSH` without an argument means.
+///
+/// ```
+/// assert_eq!(kevy_lua::FlushMode::default(), kevy_lua::FlushMode::Sync);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub enum FlushMode {
     /// Synchronous — drop the cache before returning.
+    #[default]
     Sync,
     /// Asynchronous — schedule the cache drop. Currently both
     /// modes run as Sync; we keep the tag for future

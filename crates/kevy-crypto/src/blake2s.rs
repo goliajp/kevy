@@ -49,6 +49,19 @@ pub struct Blake2s {
     out_len: usize,
 }
 
+/// Shows the digest length only: in keyed mode the chaining state is
+/// derived from the key, and a debug print is no place for it.
+///
+/// ```
+/// let h = kevy_crypto::blake2s::Blake2s::new_keyed(16, b"secret");
+/// assert_eq!(format!("{h:?}"), "Blake2s { out_len: 16, .. }");
+/// ```
+impl core::fmt::Debug for Blake2s {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Blake2s").field("out_len", &self.out_len).finish_non_exhaustive()
+    }
+}
+
 fn g(v: &mut [u32; 16], (a, b, c, d): (usize, usize, usize, usize), x: u32, y: u32) {
     v[a] = v[a].wrapping_add(v[b]).wrapping_add(x);
     v[d] = (v[d] ^ v[a]).rotate_right(16);
