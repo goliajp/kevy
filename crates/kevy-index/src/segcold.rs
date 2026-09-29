@@ -217,7 +217,7 @@ pub(crate) fn window_value_of(v: &IndexValue, shape: WindowShape) -> Option<i64>
     }
 }
 
-/// The below-boundary bound for `iter_below` / `split_off_below`,
+/// The below-boundary bound for `scan_below` / `split_off_below`,
 /// under `shape`. For the composite shape the bound is the target's
 /// bare 8-byte first component: any key whose first component sorts
 /// below it is below the bound, and a key EQUAL in those 8 bytes is
