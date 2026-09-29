@@ -82,6 +82,7 @@ TABLE.DECLARE user PREFIX user: PK id COLUMN id i64 COLUMN age i64 INDEX age ran
 - 一次写入和它引发的索引更新，在所属 shard 内是原子的（单 reactor 线程 / shard 锁）。跨 shard 查询逐 shard 归并，没有全局快照（SCAN 类，和 DBSIZE 同级）。
 - **空目录的代价是每次写入一个不被走到的分支**（一次 Relaxed 原子读）。一旦声明了索引，落在被索引域里的写入，每命中一个索引就要付一次 hash 字段读 + 一次 B-tree 更新。
 - 每个索引的堆内存 ≈ `rows × (avg_key_len + string_value_len + 58…69)` 字节：两个查找方向共用的每行一次分配（32 字节的头，键紧跟在后面，整体向上取整到 8 字节），有序树的槽位约 16 字节，哈希表的槽位 10–21 字节（`i64` / `f64` 的 `string_value_len` 为 0）。哈希表按倍数扩容，行数落在两次扩容之间的哪个位置，决定每行落在这个区间的哪一端；做规划时按上限算。分配器会把小块向上取整，所以常驻内存比堆的数字高，短键和字符串值时最多高出约一半。`IDX.LIST` 和 `IDX.VERIFY` 报告的是堆的数字；`bench/idxgate.sh` 拿它和服务器实测的 RSS 对账。
+- 声明了 `VALUES` 的索引在此之外按行另存这些值：一份键的副本，每个声明的值 32 字节（超过 23 字节的值另加它的堆），以及它自己的哈希表槽位 47–94 字节，所以每行再加 `avg_key_len + 32 × values + 47…94`。`bytes` 已包含这一项。
 
 ## 聚合 kind（`KIND agg`）——写入时 GROUP BY
 

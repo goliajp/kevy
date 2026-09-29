@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **An index's `bytes` counts its `VALUES` table.** An index that
+  declares `VALUES` keeps the stored values in a hash table keyed by row,
+  and that table's own slots — 41 bytes a bucket, 47–94 bytes a row — were
+  left out of `bytes` in `IDX.LIST`, `IDX.VERIFY` and `TABLE.VERIFY`, and
+  so out of the index's `MAXMEM` and the tiered store's reservation for
+  it. Ten million rows under one such index held 0.69 GB more than they
+  reported, and the tier budget spent it on hot data it did not have.
+  Affected since 4.0.0.
+
 - **kevy-alloc no longer writes zeroes into fresh mappings.** The
   allocator had no `alloc_zeroed`, so a zeroed request went to the
   default: allocate, then clear every byte. For a block past the size

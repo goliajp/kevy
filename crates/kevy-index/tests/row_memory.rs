@@ -125,14 +125,21 @@ struct Held {
 /// Build a segment from `rows` and report, per row, the heap it still
 /// holds, the allocations that heap is split into, and its own estimate.
 fn measure(rows: &Rows) -> Held {
+    measure_with(rows, &[])
+}
+
+/// [`measure`] for an index that also stores `stored` for every row.
+fn measure_with(rows: &Rows, stored: &[&[u8]]) -> Held {
     let n = rows.keys.len() as f64;
+    let vals: Vec<Option<&[u8]>> = stored.iter().map(|v| Some(*v)).collect();
     LIVE_BYTES.with(|c| c.set(0));
     LIVE_GLIBC.with(|c| c.set(0));
     LIVE_ALLOCS.with(|c| c.set(0));
     COUNTING.with(|c| c.set(true));
-    let mut seg = Segment::new();
+    let mut seg =
+        if stored.is_empty() { Segment::new() } else { Segment::with_values(stored.len()) };
     for (k, v) in rows.keys.iter().zip(&rows.vals) {
-        seg.apply(k, Some(v.clone()));
+        seg.apply_with_values(k, Some(v.clone()), &vals);
     }
     COUNTING.with(|c| c.set(false));
     let held = Held {
@@ -202,5 +209,26 @@ fn a_scalar_row_is_one_entry_and_one_key() {
 fn a_composite_row_holds_its_value_once() {
     for n in [FULL, JUST_GROWN] {
         check("composite", &composite_rows(n), 2.2);
+    }
+}
+
+/// The stored-value column is a hash table of its own, keyed by row. Its
+/// slots are as much the index's memory as the rows are.
+#[test]
+fn a_values_row_counts_its_side_table() {
+    for n in [FULL, JUST_GROWN] {
+        let rows = scalar_rows(n, false);
+        for stored in [&[&b"active"[..], b"1700000000"][..], &[b"eng"]] {
+            let h = measure_with(&rows, stored);
+            println!(
+                "values x{}: n={n} held {:.1} B/row (glibc {:.1}), approx_bytes {:.1} B/row",
+                stored.len(),
+                h.bytes,
+                h.glibc,
+                h.approx
+            );
+            let off = (h.approx - h.bytes).abs() / h.bytes;
+            assert!(off <= 0.10, "approx_bytes {:.1} vs held {:.1} ({off:.3})", h.approx, h.bytes);
+        }
     }
 }
