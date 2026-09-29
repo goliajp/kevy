@@ -90,6 +90,14 @@ table_point_get table_filter_sort_page table_write_tax \
 tiered_hotset_get tiered_hotset_set"
 
 . "$HERE/perfgate-preflight.sh"
+# perfgate2 judges per window and per CPU instead; this whole-box check
+# stays with the throughput-only gate
+# Instantaneous idle%, not 1-min loadavg: loadavg measures the past, so a
+# back-to-back run (baseline then gate) would refuse on its own wake. Two
+# /proc/stat samples 1s apart = what the box is doing RIGHT NOW.
+read -r _ u1 n1 s1 i1 _ < /proc/stat; sleep 1; read -r _ u2 n2 s2 i2 _ < /proc/stat
+IDLE=$(( (i2 - i1) * 100 / ( (u2-u1) + (n2-n1) + (s2-s1) + (i2-i1) ) ))
+[ "$IDLE" -ge 80 ] || refuse "box busy (idle ${IDLE}% < 80%)"
 
 server_stop() {
   # HARD GUARD: an empty $BIN makes "^$BIN" == "^", which pkill -f matches

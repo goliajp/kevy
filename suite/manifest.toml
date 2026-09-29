@@ -111,6 +111,17 @@ requires = []
 proves = "the repo root and worktree hold no runtime residue"
 
 [[check]]
+id = "perfstats"
+area = "perf"
+tier = "precommit"
+cmd = "python3 -m unittest tools/test_perfstats.py"
+expected = 2
+timeout = 60
+requires = []
+inputs = ["tools/perfstats.py", "tools/perfwindow.py", "tools/test_perfstats.py"]
+proves = "the perf gate's SPRT turns a 3% shift red and an A/A green, and its sample rules discard what they claim to"
+
+[[check]]
 id = "secretgate"
 area = "hygiene"
 tier = "precommit"
@@ -704,6 +715,18 @@ requires = ["box", "binaries-release"]
 proves = "throughput holds the recorded baselines, angle by angle"
 
 [[check]]
+id = "perfgate2"
+area = "perf"
+tier = "prerelease"
+cmd = "bash bench/perfgate2.sh target/release/kevy"
+expected = 1800
+timeout = 7200
+requires = ["box", "binaries-release"]
+advisory = true
+advisory_reason = "shadow period: runs beside perfgate until its sigma is calibrated and the M1-M5 mutants and ten A/A runs pass on the box; then it replaces perfgate and this row stops being advisory"
+proves = "instructions, syscalls and cycles per op, server utilisation and throughput hold against the branch point and the last release, each line on its own calibrated band"
+
+[[check]]
 id = "tailgate"
 area = "perf"
 tier = "prerelease"
@@ -802,7 +825,7 @@ cmd = "bash bench/arena.sh target/release/kevy"
 expected = 1800
 timeout = 7200
 requires = ["box", "binaries-release", "docker"]
-proves = "kevy vs valkey/redis/dragonfly, core-pinned, median-of-5, server-side counters"
+proves = "kevy vs valkey/redis/dragonfly on 4 unshared cores: throughput from server-side counters and cost per op from perf, each cell checked for load-generator headroom"
 
 [[check]]
 id = "kevy-ab"
