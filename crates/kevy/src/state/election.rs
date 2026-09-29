@@ -77,9 +77,8 @@ impl ElectionState {
         let [a, b, c, d] = cfg.server.bind;
         let listen = (IpAddr::V4(Ipv4Addr::new(a, b, c, d)), listen_port);
         let on_change = make_topology_callback(cfg, Arc::clone(replication));
-        let secure = link_key.filter(|_| cfg.cluster.secure).map(|local| kevy_elect::SecureLinks {
-            local: local.clone(),
-            peer_keys: cfg.cluster.peer_keys.clone(),
+        let secure = link_key.filter(|_| cfg.cluster.secure).map(|local| {
+            kevy_elect::SecureLinks::new(local.clone(), cfg.cluster.peer_keys.iter().cloned())
         });
         let spawned = match secure {
             Some(secure) => {
@@ -321,7 +320,7 @@ fn advertised_host(cfg: &Config) -> String {
 }
 
 fn peer_to_addr(p: &PeerEntry) -> PeerAddr {
-    PeerAddr { node_id: p.node_id.clone(), host: p.host.clone(), port: p.port }
+    PeerAddr::new(p.node_id.as_str(), p.host.as_str(), p.port)
 }
 
 #[cfg(test)]

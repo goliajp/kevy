@@ -49,13 +49,12 @@ pub(crate) const READ_RETRY_BACKOFF: Duration = Duration::from_millis(100);
 /// went down" notification (so the orchestrator can clear any
 /// state that assumed the link was up).
 #[derive(Debug)]
-pub enum InboundEvent {
+pub(crate) enum InboundEvent {
     /// `(from_node_id, msg)`.
     Message(String, Message),
-    /// The accept thread saw a new inbound connection but the
-    /// handshake / first-frame read failed. `String` is the peer
-    /// addr for diagnostics.
-    InboundConnFailed(String),
+    /// An inbound connection failed its handshake, closed, or sent a
+    /// frame that does not decode.
+    InboundConnFailed,
 }
 
 /// Shared state between the orchestrator + worker threads. Wraps
@@ -89,7 +88,13 @@ pub type TopologyCallback = Box<dyn Fn(crate::message::Role, Option<String>, boo
 pub(crate) const MAX_PENDING_PER_PEER: usize = 256;
 
 /// Per-peer addressing. Maps `node_id` → outbound dial address.
-#[derive(Debug, Clone)]
+///
+/// ```
+/// let peer = kevy_elect::PeerAddr::new("n2", "10.0.0.2", 7004);
+/// assert_eq!((peer.node_id.as_str(), peer.port), ("n2", 7004));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct PeerAddr {
     /// Peer's stable node id (matches the `node_id` field the
     /// peer puts in its `HB`).
@@ -98,6 +103,18 @@ pub struct PeerAddr {
     pub host: String,
     /// Peer's elect-control TCP port.
     pub port: u16,
+}
+
+impl PeerAddr {
+    /// The dial address of peer `node_id`.
+    ///
+    /// ```
+    /// let peer = kevy_elect::PeerAddr::new("n3", "db3.internal", 7004);
+    /// assert_eq!(peer.host, "db3.internal");
+    /// ```
+    pub fn new(node_id: impl Into<String>, host: impl Into<String>, port: u16) -> Self {
+        Self { node_id: node_id.into(), host: host.into(), port }
+    }
 }
 
 /// Public handle to a running transport. Owns the orchestrator +
@@ -166,7 +183,7 @@ impl Transport {
     ///
     /// let elector = Elector::new("a", vec!["a".to_string()], "127.0.0.1:0", Role::Primary,
     ///     ElectConfig::default(), ElectJitter::Fixed(Duration::ZERO));
-    /// let secure = SecureLinks { local: Keypair::from_secret([1; 32]), peer_keys: vec![] };
+    /// let secure = SecureLinks::new(Keypair::from_secret([1; 32]), []);
     /// let t = Transport::spawn_secure(elector, Duration::from_millis(50),
     ///     (IpAddr::V4(Ipv4Addr::LOCALHOST), 0), vec![], Box::new(|_, _, _| {}), secure).unwrap();
     /// assert_eq!(t.state_snapshot().role, Role::Primary);
@@ -273,7 +290,8 @@ impl Drop for Transport {
 }
 
 /// Read-side snapshot returned by [`Transport::state_snapshot`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct ElectorSnapshot {
     /// Self-perceived role at snapshot time.
     pub role: crate::message::Role,

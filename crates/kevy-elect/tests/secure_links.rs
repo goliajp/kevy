@@ -13,13 +13,12 @@ use kevy_noise::Keypair;
 use kevy_testnet::free_ports;
 
 fn fast_cfg() -> ElectConfig {
-    ElectConfig {
-        hb_interval: Duration::from_millis(50),
-        down_after: Duration::from_millis(500),
-        election_timeout: Duration::from_millis(500),
-        election_backoff: Duration::from_millis(100),
-        election_backoff_jitter: Duration::from_millis(0),
-    }
+    ElectConfig::default()
+        .with_hb_interval(Duration::from_millis(50))
+        .with_down_after(Duration::from_millis(500))
+        .with_election_timeout(Duration::from_millis(500))
+        .with_election_backoff(Duration::from_millis(100))
+        .with_election_backoff_jitter(Duration::from_millis(0))
 }
 
 fn key(n: u8) -> Keypair {
@@ -47,23 +46,15 @@ fn node(
         fast_cfg(),
         ElectJitter::Fixed(Duration::ZERO),
     );
-    let addrs = peers
-        .iter()
-        .map(|(p, port)| PeerAddr {
-            node_id: (*p).to_string(),
-            host: "127.0.0.1".into(),
-            port: *port,
-        })
-        .collect();
-    let peer_keys =
-        keys.iter().filter(|(p, _)| *p != id).map(|(p, k)| ((*p).to_string(), *k)).collect();
+    let addrs = peers.iter().map(|(p, port)| PeerAddr::new(*p, "127.0.0.1", *port)).collect();
+    let peer_keys = keys.iter().filter(|(p, _)| *p != id).map(|(p, k)| ((*p).to_string(), *k));
     Transport::spawn_secure(
         elector,
         Duration::from_millis(50),
         (IpAddr::V4(Ipv4Addr::LOCALHOST), port),
         addrs,
         Box::new(|_, _, _| {}),
-        SecureLinks { local, peer_keys },
+        SecureLinks::new(local, peer_keys),
     )
     .expect("spawn transport")
 }

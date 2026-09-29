@@ -15,13 +15,12 @@ use kevy_elect::{
 use kevy_testnet::free_ports;
 
 fn fast_cfg() -> ElectConfig {
-    ElectConfig {
-        hb_interval: Duration::from_millis(50),
-        down_after: Duration::from_millis(500),
-        election_timeout: Duration::from_millis(500),
-        election_backoff: Duration::from_millis(100),
-        election_backoff_jitter: Duration::from_millis(0),
-    }
+    ElectConfig::default()
+        .with_hb_interval(Duration::from_millis(50))
+        .with_down_after(Duration::from_millis(500))
+        .with_election_timeout(Duration::from_millis(500))
+        .with_election_backoff(Duration::from_millis(100))
+        .with_election_backoff_jitter(Duration::from_millis(0))
 }
 
 fn build_node(
@@ -41,14 +40,8 @@ fn build_node(
         fast_cfg(),
         ElectJitter::Fixed(Duration::from_millis(0)),
     );
-    let peer_addrs: Vec<PeerAddr> = peers
-        .iter()
-        .map(|(id, port)| PeerAddr {
-            node_id: (*id).to_string(),
-            host: "127.0.0.1".to_string(),
-            port: *port,
-        })
-        .collect();
+    let peer_addrs: Vec<PeerAddr> =
+        peers.iter().map(|(id, port)| PeerAddr::new(*id, "127.0.0.1", *port)).collect();
     Transport::spawn(
         elector,
         Duration::from_millis(50),

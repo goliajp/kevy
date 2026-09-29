@@ -61,7 +61,7 @@ pub(crate) fn accept_loop(
                             }
                         };
                         if let Some((link, verified)) = link {
-                            inbound_read_loop(link, addr_str, verified, tx_clone, stop_clone);
+                            inbound_read_loop(link, verified, tx_clone, stop_clone);
                         }
                     });
             }
@@ -79,7 +79,6 @@ pub(crate) fn accept_loop(
 #[allow(clippy::needless_pass_by_value)]
 fn inbound_read_loop(
     mut link: Link,
-    peer_addr: String,
     verified: Option<String>,
     tx: Sender<InboundEvent>,
     stop: Arc<AtomicBool>,
@@ -94,15 +93,15 @@ fn inbound_read_loop(
     while !stop.load(Ordering::Relaxed) {
         match link.read_into(&mut chunk, &mut buf) {
             Ok(0) => {
-                let _ = tx.send(InboundEvent::InboundConnFailed(peer_addr.clone()));
+                let _ = tx.send(InboundEvent::InboundConnFailed);
                 return;
             }
             Ok(_) => {
                 if buf.len() > READ_BUF_CAP {
-                    let _ = tx.send(InboundEvent::InboundConnFailed(peer_addr.clone()));
+                    let _ = tx.send(InboundEvent::InboundConnFailed);
                     return;
                 }
-                if !drain_frames(&mut buf, &tx, &peer_addr, verified.as_deref()) {
+                if !drain_frames(&mut buf, &tx, verified.as_deref()) {
                     return;
                 }
             }
@@ -113,7 +112,7 @@ fn inbound_read_loop(
                 // Read timeout — fall through to re-check `stop`.
             }
             Err(_) => {
-                let _ = tx.send(InboundEvent::InboundConnFailed(peer_addr.clone()));
+                let _ = tx.send(InboundEvent::InboundConnFailed);
                 return;
             }
         }
@@ -123,12 +122,7 @@ fn inbound_read_loop(
 /// Decode + dispatch every complete frame sitting in `buf`. Returns
 /// `false` when the framing is busted — an `InboundConnFailed` has
 /// been sent and the caller must drop the connection.
-fn drain_frames(
-    buf: &mut Vec<u8>,
-    tx: &Sender<InboundEvent>,
-    peer_addr: &str,
-    verified: Option<&str>,
-) -> bool {
+fn drain_frames(buf: &mut Vec<u8>, tx: &Sender<InboundEvent>, verified: Option<&str>) -> bool {
     while !buf.is_empty() {
         match decode(buf) {
             Ok((msg, used)) => {
@@ -136,7 +130,7 @@ fn drain_frames(
                 // on a secure link the key names the sender; a message
                 // claiming anyone else is a forgery
                 if verified.is_some_and(|id| id != from) {
-                    let _ = tx.send(InboundEvent::InboundConnFailed(peer_addr.to_string()));
+                    let _ = tx.send(InboundEvent::InboundConnFailed);
                     return false;
                 }
                 let _ = tx.send(InboundEvent::Message(from, msg));
@@ -144,7 +138,7 @@ fn drain_frames(
             }
             Err(DecodeError::Truncated) => break,
             Err(_) => {
-                let _ = tx.send(InboundEvent::InboundConnFailed(peer_addr.to_string()));
+                let _ = tx.send(InboundEvent::InboundConnFailed);
                 return false;
             }
         }
@@ -267,7 +261,7 @@ fn pump_inbound(
             outs.extend(e.on_message(&from, msg, now));
             outs.extend(e.tick(now));
         }
-        Ok(InboundEvent::InboundConnFailed(_)) => {
+        Ok(InboundEvent::InboundConnFailed) => {
             // Logged elsewhere; no elector state change here
             // (DOWN detection is driven by the lack of HBs, not
             // by the absence of a TCP socket).
@@ -360,13 +354,13 @@ mod tests {
     fn a_verified_link_drops_a_message_that_claims_another_sender() {
         let (tx, rx) = std::sync::mpsc::channel();
         let mut buf = hb("b");
-        assert!(drain_frames(&mut buf, &tx, "peer", Some("b")));
+        assert!(drain_frames(&mut buf, &tx, Some("b")));
         assert!(matches!(rx.try_recv(), Ok(InboundEvent::Message(from, _)) if from == "b"));
         let mut forged = hb("c");
-        assert!(!drain_frames(&mut forged, &tx, "peer", Some("b")));
-        assert!(matches!(rx.try_recv(), Ok(InboundEvent::InboundConnFailed(_))));
+        assert!(!drain_frames(&mut forged, &tx, Some("b")));
+        assert!(matches!(rx.try_recv(), Ok(InboundEvent::InboundConnFailed)));
         // an unverified (plain) link keeps today's behaviour
         let mut plain = hb("c");
-        assert!(drain_frames(&mut plain, &tx, "peer", None));
+        assert!(drain_frames(&mut plain, &tx, None));
     }
 }
