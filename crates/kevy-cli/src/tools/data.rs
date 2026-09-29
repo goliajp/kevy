@@ -34,7 +34,7 @@ pub(crate) fn backup(args: &[String]) -> ExitCode {
         Ok(p) => p,
         Err(msg) => return fail("backup", &msg, USAGE),
     };
-    report("backup", crate::backup::run_backup(dir, out))
+    report("backup", crate::backup::pack(dir, out).map(|_| ()))
 }
 
 /// `restore --from <in.kevybkp> --to <data_dir>`.
@@ -44,7 +44,7 @@ pub(crate) fn restore(args: &[String]) -> ExitCode {
         Ok(p) => p,
         Err(msg) => return fail("restore", &msg, USAGE),
     };
-    report("restore", crate::backup::run_restore(from, to))
+    report("restore", crate::backup::unpack(from, to).map(|_| ()))
 }
 
 fn report(tool: &str, done: std::io::Result<()>) -> ExitCode {

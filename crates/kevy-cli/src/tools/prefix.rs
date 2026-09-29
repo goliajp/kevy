@@ -80,7 +80,7 @@ pub(crate) fn run(
             .map(|(n, d)| println!("{n} keys {d}"))
             .map(|()| true),
         (Shipped::Inspect, [p]) => {
-            crate::bulk::run_inspect(link, p.as_bytes(), &mut io::stdout()).map(|()| true)
+            crate::bulk::run_inspect(link, p.as_bytes(), io::stdout()).map(|()| true)
         }
         (Shipped::Diff, [other, prefixes @ ..]) if !prefixes.is_empty() => {
             let mut b = match open(other) {
@@ -88,7 +88,7 @@ pub(crate) fn run(
                 Err(msg) => return fail(tool, &msg),
             };
             let prefixes: Vec<Vec<u8>> = prefixes.iter().map(|p| p.as_bytes().to_vec()).collect();
-            crate::bulk::run_diff(link, b.as_mut(), &prefixes, &mut io::stdout())
+            crate::bulk::run_diff(link, b.as_mut(), &prefixes, io::stdout())
                 .map(|bad| bad.is_empty())
         }
         _ => return fail(tool, "wrong arguments"),
