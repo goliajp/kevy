@@ -40,6 +40,16 @@ thread_local! {
 /// EVAL dispatch returns and fires `wake_key` for each.
 ///
 /// Cheap: one thread-local lookup + one `Vec::push` per call.
+///
+/// ```
+/// // inside a `redis.call` dispatch closure, after a write that can wake a
+/// // parked BLPOP / XREAD BLOCK / BZPOPMIN on this key
+/// let mut store = kevy_rt::Store::new();
+/// let n = store.lpush(b"jobs", &[&b"j1"[..]])?;
+/// kevy_rt::push_lua_wake_key(b"jobs");
+/// assert_eq!(n, 1);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn push_lua_wake_key(key: &[u8]) {
     LUA_WAKE_BUFFER.with(|b| b.borrow_mut().push(key.to_vec()));
 }

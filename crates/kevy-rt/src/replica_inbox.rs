@@ -67,6 +67,27 @@ pub(crate) struct InboxSignal {
 /// what readers will see. Clones share one inner value: in broadcast
 /// (single-source) mode every shard holds a clone and the `Drop`
 /// fires when the LAST shard finishes its load.
+///
+/// ```
+/// use std::sync::Arc;
+/// use std::sync::atomic::{AtomicBool, Ordering};
+/// use kevy_rt::SnapshotGate;
+///
+/// static LOADED: AtomicBool = AtomicBool::new(false);
+/// // e.g. lowers a `-LOADING` read gate when the last shard is done
+/// struct OnLoaded;
+/// impl Drop for OnLoaded {
+///     fn drop(&mut self) {
+///         LOADED.store(true, Ordering::SeqCst);
+///     }
+/// }
+/// let gate = SnapshotGate::new(Arc::new(OnLoaded));
+/// let (shard0, shard1) = (gate.clone(), gate);
+/// drop(shard0);
+/// assert!(!LOADED.load(Ordering::SeqCst), "one shard is still loading");
+/// drop(shard1);
+/// assert!(LOADED.load(Ordering::SeqCst));
+/// ```
 #[derive(Clone)]
 pub struct SnapshotGate(#[allow(dead_code)] Arc<dyn std::any::Any + Send + Sync>);
 
@@ -100,8 +121,25 @@ impl std::fmt::Debug for SnapshotGate {
 pub enum ReplicaApply {
     /// Upstream started shipping a full snapshot. The shard should
     /// reset its accumulating snapshot buffer.
+    ///
+    /// ```
+    /// let (tx, _rx) = kevy_rt::replica_inbox_pair();
+    /// // a snapshot is always shipped as Begin, Chunk…, End
+    /// tx.send(kevy_rt::ReplicaApply::SnapshotBegin)?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     SnapshotBegin,
     /// One chunk of snapshot bytes. The shard appends to its buffer.
+    ///
+    /// ```
+    /// let (tx, _rx) = kevy_rt::replica_inbox_pair();
+    /// use kevy_rt::ReplicaApply;
+    /// tx.send(ReplicaApply::SnapshotBegin)?;
+    /// for chunk in [b"KEVY".to_vec(), b"...".to_vec()] {
+    ///     tx.send(ReplicaApply::SnapshotChunk(chunk))?;
+    /// }
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     SnapshotChunk(Vec<u8>),
     /// Upstream finished the snapshot. The shard hands its buffered
     /// bytes to `kevy_persist::load_snapshot_from` (replacing the
@@ -112,27 +150,82 @@ pub enum ReplicaApply {
     /// `gate`: dropped by the shard after the load lands (see
     /// [`SnapshotGate`]); `None` when the runner has nothing to hang
     /// on the completion.
+    ///
+    /// ```
+    /// let (tx, _rx) = kevy_rt::replica_inbox_pair();
+    /// tx.send(kevy_rt::ReplicaApply::SnapshotEnd { ack_offset: 4096, routed: true, gate: None })?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     SnapshotEnd {
         /// Upstream offset the snapshot corresponds to; the shard acks from
         /// here once the load lands.
+        ///
+        /// ```
+        /// use kevy_rt::ReplicaApply;
+        /// let end = ReplicaApply::SnapshotEnd { ack_offset: 4096, routed: true, gate: None };
+        /// // the first live frame after this snapshot sits past offset 4096
+        /// let next = ReplicaApply::Frame { offset: 4097, argv: kevy_rt::Argv::from(vec![b"DEL".to_vec(), b"k".to_vec()]) };
+        /// if let (ReplicaApply::SnapshotEnd { ack_offset, .. }, ReplicaApply::Frame { offset, .. }) = (&end, &next) {
+        ///     assert!(offset > ack_offset);
+        /// }
+        /// ```
         ack_offset: u64,
         /// `true` when each shard received only its own hash slice;
         /// `false` when the whole keyspace was broadcast and each shard
         /// must filter.
+        ///
+        /// ```
+        /// use kevy_rt::ReplicaApply;
+        /// // single-source mode broadcasts the whole keyspace: each shard keeps only its slice
+        /// let broadcast = ReplicaApply::SnapshotEnd { ack_offset: 0, routed: false, gate: None };
+        /// assert!(matches!(broadcast, ReplicaApply::SnapshotEnd { routed: false, .. }));
+        /// ```
         routed: bool,
         /// Dropped by the shard once the load completes, which is how the
         /// runner learns it finished. `None` when nothing is waiting.
+        ///
+        /// ```
+        /// use std::sync::Arc;
+        /// use kevy_rt::{ReplicaApply, SnapshotGate};
+        /// let done = Arc::new(());
+        /// let gate = SnapshotGate::new(Arc::clone(&done) as Arc<dyn std::any::Any + Send + Sync>);
+        /// let end = ReplicaApply::SnapshotEnd { ack_offset: 0, routed: true, gate: Some(gate) };
+        /// assert_eq!(Arc::strong_count(&done), 2);
+        /// drop(end); // what the shard does once the load has landed
+        /// assert_eq!(Arc::strong_count(&done), 1);
+        /// ```
         gate: Option<SnapshotGate>,
     },
     /// One live mutation frame to be applied via `kevy::dispatch`
     /// (inside a [`crate::ReplicatedApplyGuard`] scope so the apply
     /// doesn't re-push into this shard's downstream
     /// `ReplicationSource`).
+    ///
+    /// ```
+    /// let (tx, _rx) = kevy_rt::replica_inbox_pair();
+    /// let argv = kevy_rt::Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()]);
+    /// tx.send(kevy_rt::ReplicaApply::Frame { offset: 17, argv })?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     Frame {
         /// Upstream offset this frame sits at, used for the apply position
         /// and the ack.
+        ///
+        /// ```
+        /// use kevy_rt::{Argv, ReplicaApply};
+        /// let frame = ReplicaApply::Frame { offset: 17, argv: Argv::from(vec![b"PING".to_vec()]) };
+        /// let ReplicaApply::Frame { offset, .. } = frame else { unreachable!() };
+        /// assert_eq!(offset, 17); // the shard acks up to here once it has applied it
+        /// ```
         offset: u64,
         /// The command to apply, already parsed.
+        ///
+        /// ```
+        /// use kevy_rt::{Argv, ReplicaApply};
+        /// let argv = Argv::from(vec![b"INCR".to_vec(), b"n".to_vec()]);
+        /// let ReplicaApply::Frame { argv, .. } = (ReplicaApply::Frame { offset: 0, argv }) else { unreachable!() };
+        /// assert_eq!((&argv[0], &argv[1]), (&b"INCR"[..], &b"n"[..]));
+        /// ```
         argv: Argv,
     },
 }
@@ -140,6 +233,18 @@ pub enum ReplicaApply {
 /// Sender end of a per-shard replica inbox. `Send + Clone + Sync`
 /// (one std::sync::mpsc::Sender, no extra state) so the embedder can
 /// hand it freely to runner threads.
+///
+/// ```
+/// let (tx, rx) = kevy_rt::replica_inbox_pair();
+/// let runner = tx.clone();
+/// std::thread::spawn(move || runner.send(kevy_rt::ReplicaApply::SnapshotBegin))
+///     .join()
+///     .map_err(|_| "runner panicked")??;
+/// // once the shard's receiver is gone, a send says so
+/// drop(rx);
+/// assert!(tx.send(kevy_rt::ReplicaApply::SnapshotBegin).is_err());
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Debug, Clone)]
 pub struct ReplicaInboxSender {
     inner: Sender<ReplicaApply>,
@@ -167,6 +272,13 @@ impl ReplicaInboxSender {
 /// Receiver end. Lives inside the (private) `Shard`; drained every
 /// reactor iteration. Constructed by [`replica_inbox_pair`] and
 /// handed to the runtime via `Runtime::with_replica_inboxes`.
+///
+/// ```
+/// // one pair per shard: senders go to runner threads, receivers to the runtime
+/// let (senders, receivers): (Vec<_>, Vec<kevy_rt::ReplicaInboxReceiver>) =
+///     (0..4).map(|_| kevy_rt::replica_inbox_pair()).unzip();
+/// assert_eq!((senders.len(), receivers.len()), (4, 4));
+/// ```
 #[derive(Debug)]
 pub struct ReplicaInboxReceiver {
     pub(crate) inner: Receiver<ReplicaApply>,
@@ -184,6 +296,14 @@ impl ReplicaInboxReceiver {
 /// Create a matched (sender, receiver) pair for one shard's replica
 /// inbox. The embedder calls this `nshards` times before
 /// `Runtime::run`.
+///
+/// ```
+/// let (tx, rx) = kevy_rt::replica_inbox_pair();
+/// tx.send(kevy_rt::ReplicaApply::SnapshotBegin)?;
+/// drop(rx);
+/// assert!(tx.send(kevy_rt::ReplicaApply::SnapshotBegin).is_err(), "the pair is linked");
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[must_use]
 pub fn replica_inbox_pair() -> (ReplicaInboxSender, ReplicaInboxReceiver) {
     let (tx, rx) = channel();

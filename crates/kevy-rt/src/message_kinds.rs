@@ -44,16 +44,56 @@ pub(crate) enum Gathered {
 #[non_exhaustive]
 pub enum MultiOp {
     /// `MGET` — values gathered in request order.
+    ///
+    /// ```
+    /// use kevy_rt::{MultiOp, Route};
+    ///
+    /// // What a `route()` answers for `MGET a b`: gather every key, reduce at the origin.
+    /// let route = Route::Gather(MultiOp::Mget);
+    /// assert!(matches!(route, Route::Gather(MultiOp::Mget)));
+    /// ```
     Mget,
     /// `SINTER`.
+    ///
+    /// ```
+    /// use kevy_rt::{MultiOp, Route};
+    ///
+    /// // What a `route()` answers for `SINTER a b`: gather every key, reduce at the origin.
+    /// let route = Route::Gather(MultiOp::SInter);
+    /// assert!(matches!(route, Route::Gather(MultiOp::SInter)));
+    /// ```
     SInter,
     /// `SUNION`.
+    ///
+    /// ```
+    /// use kevy_rt::{MultiOp, Route};
+    ///
+    /// // What a `route()` answers for `SUNION a b`: gather every key, reduce at the origin.
+    /// let route = Route::Gather(MultiOp::SUnion);
+    /// assert!(matches!(route, Route::Gather(MultiOp::SUnion)));
+    /// ```
     SUnion,
     /// `SDIFF`.
+    ///
+    /// ```
+    /// use kevy_rt::{MultiOp, Route};
+    ///
+    /// // What a `route()` answers for `SDIFF a b`: gather every key, reduce at the origin.
+    /// let route = Route::Gather(MultiOp::SDiff);
+    /// assert!(matches!(route, Route::Gather(MultiOp::SDiff)));
+    /// ```
     SDiff,
     /// `ZINTERCARD numkeys key… [LIMIT n]` — read-only gathered count.
     /// The `LIMIT` cap is parsed from the argv by the gather builder
     /// (it sits after the keys), not carried here.
+    ///
+    /// ```
+    /// use kevy_rt::{MultiOp, Route};
+    ///
+    /// // What a `route()` answers for `ZINTERCARD 2 a b`: gather every key, reduce at the origin.
+    /// let route = Route::Gather(MultiOp::ZInterCard);
+    /// assert!(matches!(route, Route::Gather(MultiOp::ZInterCard)));
+    /// ```
     ZInterCard,
 }
 
@@ -69,16 +109,64 @@ pub enum MultiOp {
 #[non_exhaustive]
 pub enum ZCombine {
     /// `ZINTERSTORE`.
+    ///
+    /// ```
+    /// use kevy_rt::{Route, ZCombine};
+    ///
+    /// // What a `route()` answers for `ZINTERSTORE dst k1 k2`.
+    /// let route = Route::ZAlgebraStore(ZCombine::ZInter);
+    /// assert!(matches!(route, Route::ZAlgebraStore(ZCombine::ZInter)));
+    /// ```
     ZInter,
     /// `ZUNIONSTORE`.
+    ///
+    /// ```
+    /// use kevy_rt::{Route, ZCombine};
+    ///
+    /// // What a `route()` answers for `ZUNIONSTORE dst k1 k2`.
+    /// let route = Route::ZAlgebraStore(ZCombine::ZUnion);
+    /// assert!(matches!(route, Route::ZAlgebraStore(ZCombine::ZUnion)));
+    /// ```
     ZUnion,
     /// `ZDIFFSTORE`.
+    ///
+    /// ```
+    /// use kevy_rt::{Route, ZCombine};
+    ///
+    /// // What a `route()` answers for `ZDIFFSTORE dst k1 k2`.
+    /// let route = Route::ZAlgebraStore(ZCombine::ZDiff);
+    /// assert!(matches!(route, Route::ZAlgebraStore(ZCombine::ZDiff)));
+    /// ```
     ZDiff,
     /// `SINTERSTORE`.
+    ///
+    /// ```
+    /// use kevy_rt::{Route, ZCombine};
+    ///
+    /// // What a `route()` answers for `SINTERSTORE dst k1 k2`.
+    /// let route = Route::ZAlgebraStore(ZCombine::SInter);
+    /// assert!(matches!(route, Route::ZAlgebraStore(ZCombine::SInter)));
+    /// ```
     SInter,
     /// `SUNIONSTORE`.
+    ///
+    /// ```
+    /// use kevy_rt::{Route, ZCombine};
+    ///
+    /// // What a `route()` answers for `SUNIONSTORE dst k1 k2`.
+    /// let route = Route::ZAlgebraStore(ZCombine::SUnion);
+    /// assert!(matches!(route, Route::ZAlgebraStore(ZCombine::SUnion)));
+    /// ```
     SUnion,
     /// `SDIFFSTORE`.
+    ///
+    /// ```
+    /// use kevy_rt::{Route, ZCombine};
+    ///
+    /// // What a `route()` answers for `SDIFFSTORE dst k1 k2`.
+    /// let route = Route::ZAlgebraStore(ZCombine::SDiff);
+    /// assert!(matches!(route, Route::ZAlgebraStore(ZCombine::SDiff)));
+    /// ```
     SDiff,
 }
 

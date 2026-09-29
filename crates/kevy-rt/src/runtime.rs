@@ -12,6 +12,22 @@ use std::path::PathBuf;
 const DEFAULT_RING_CAPACITY: usize = 1024;
 
 /// The public entry point: configure and run the thread-per-core server.
+///
+/// ```
+/// use kevy_rt::{ArgvView, Commands, Route, Runtime, Store, TxnKind};
+/// # #[derive(Clone, Debug)] struct Cmds;
+/// # impl Commands for Cmds {
+/// #     fn route<A: ArgvView + ?Sized>(&self, _: &A) -> Route { Route::Local }
+/// #     fn dispatch<A: ArgvView + ?Sized>(&self, _: &mut Store, _: &A) -> Vec<u8> { b"+OK\r\n".to_vec() }
+/// #     fn is_quit<A: ArgvView + ?Sized>(&self, _: &A) -> bool { false }
+/// #     fn is_write<A: ArgvView + ?Sized>(&self, _: &A) -> bool { false }
+/// #     fn txn_kind<A: ArgvView + ?Sized>(&self, _: &A) -> TxnKind { TxnKind::Other }
+/// # }
+/// // configured, not yet running: `run(stop)` binds and serves until `stop` is set
+/// let rt = Runtime::builder(Cmds).bind([127, 0, 0, 1], 6004).shards(4).with_aof(false);
+/// let shown = format!("{rt:?}");
+/// assert!(shown.contains("port: 6004") && shown.contains("nshards: 4"));
+/// ```
 #[derive(Debug)]
 pub struct Runtime<C: Commands> {
     pub(crate) ip: [u8; 4],
