@@ -534,6 +534,7 @@ name = "kevy-cluster-rw"
 version = "6.4.0"
 dependencies = [
  "kevy",
+ "kevy-noise",
  "kevy-replicate",
  "kevy-resp",
  "kevy-resp-client",

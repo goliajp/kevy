@@ -2,13 +2,21 @@
 
 /// Where [`crate::ReadWriteClient::request_read`] may serve a read.
 ///
-/// ```no_run
+/// ```
 /// use kevy_cluster_rw::{ReadConsistency, ReadWriteClient};
+/// use kevy_resp::Reply;
+/// # mod doc { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/node.rs")); }
+/// # let (p, r) = (doc::node(kevy_testnet::free_port()), doc::node(kevy_testnet::free_port()));
+/// # let (primary, replica) = (p.port, r.port);
 ///
-/// let mut c = ReadWriteClient::connect(("10.0.0.11", 6004), &[("10.0.0.12", 6004)])?;
+/// let mut c = ReadWriteClient::connect(("127.0.0.1", primary), &[("127.0.0.1", replica)])?;
+/// c.request_write(&[b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()])?;
 /// let get = [b"GET".to_vec(), b"k".to_vec()];
+/// // the nodes here do not replicate, so the replica never catches up
 /// let maybe_stale = c.request_read(&get, ReadConsistency::Eventual)?;
+/// assert_eq!(maybe_stale, Reply::Nil);
 /// let fresh = c.request_read(&get, ReadConsistency::Primary)?;
+/// assert_eq!(fresh, Reply::Bulk(b"v".to_vec()));
 /// # Ok::<(), std::io::Error>(())
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
