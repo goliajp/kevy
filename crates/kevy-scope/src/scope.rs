@@ -8,7 +8,7 @@
 /// The prefix is `Vec<u8>` (not `String`) because keys are arbitrary
 /// bytes in kevy; restricting to UTF-8 would be a stricter contract
 /// than the RESP wire offers.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Scope {
     pub(crate) prefix: Vec<u8>,
     pub(crate) writer: String,

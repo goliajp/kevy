@@ -147,7 +147,7 @@ pub const IORING_OP_WRITE: u8 = 23;
 /// the matching CQE fires (`uring_arm_conns` parks them in the conn's
 /// pending-writes state and drops on completion).
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Iovec {
     /// Pointer to bytes.
     pub iov_base: *const u8,

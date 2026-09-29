@@ -8,13 +8,14 @@ use std::path::PathBuf;
 // ───────────── enums ─────────────
 
 /// AOF fsync policy. Matches Redis `appendfsync`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[non_exhaustive]
 pub enum AppendFsync {
     /// `fsync` after every write command. Zero data-loss but ~50% throughput.
     Always,
     /// Background `fsync` about every second. A power loss loses about 1s
     /// plus the time one fsync takes. Default.
+    #[default]
     EverySec,
     /// No explicit `fsync`; the OS decides when data reaches the disk. A
     /// power loss can lose ~30s.
@@ -45,10 +46,11 @@ impl AppendFsync {
 
 /// Maxmemory eviction policy. 8 variants matching Redis. `NoEviction`
 /// (default) returns an error on writes once `maxmemory` is hit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[non_exhaustive]
 pub enum EvictionPolicy {
     /// Refuse writes once `maxmemory` is hit. Default.
+    #[default]
     NoEviction,
     /// Approximated LRU across all keys.
     AllKeysLru,
@@ -97,7 +99,7 @@ impl EvictionPolicy {
 }
 
 /// Log verbosity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[non_exhaustive]
 pub enum LogLevel {
     /// Very chatty, useful when debugging a kevy internal bug.
@@ -105,6 +107,7 @@ pub enum LogLevel {
     /// Per-command / per-event detail; turn on locally to chase issues.
     Debug,
     /// Default; startup banner, WARNs, errors, key lifecycle events.
+    #[default]
     Info,
     /// Only non-fatal warnings (e.g. unprotected bind) and errors.
     Warn,
@@ -138,10 +141,11 @@ impl LogLevel {
 }
 
 /// Where to write log output.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 #[non_exhaustive]
 pub enum LogOutput {
     /// Write to standard error (default).
+    #[default]
     Stderr,
     /// Write to standard output.
     Stdout,
