@@ -1277,7 +1277,7 @@ cmd = "cargo test --workspace --profile release-tests --lib --tests"
 ci_job = "test (release profile, Linux)"
 expected = 360
 timeout = 3600
-proves = "the suite passes with optimizations on, where debug-only checks are gone and timing moves; CI runs it on release and hotfix branches"
+proves = "the suite passes with optimizations on, where debug-only checks are gone and timing moves; CI runs it on develop, release and hotfix branches"
 
 [[check]]
 id = "wasmcheck"
