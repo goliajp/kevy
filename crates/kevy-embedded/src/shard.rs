@@ -181,7 +181,7 @@ fn open_live_aofs(
                 Aof::open_after_replay(
                     &layout::aof_path(dir, i),
                     config.appendfsync,
-                    config.replay_resync,
+                    config.replay_mode(),
                     whole,
                 )
                 .map(Some)
@@ -306,7 +306,7 @@ fn load_or_reshard(
 
     if same_layout {
         let loaded = load_in_place(dir, config, n, stores)?;
-        write_shards_meta(&meta_path, ShardsMeta { n, routing: Routing::KevyHash })?;
+        write_shards_meta(&meta_path, ShardsMeta::new(n, Routing::KevyHash))?;
         return Ok(loaded);
     }
     {
@@ -378,7 +378,7 @@ fn reshard(
     settle_stages(dir, config, src_n)?;
     let (temp, report) = merge_into_temp(dir, config, src_n)?;
     redistribute(&temp, n, stores);
-    commit_reshard(dir, src_n, ShardsMeta { n, routing: Routing::KevyHash }, stores, &lay)?;
+    commit_reshard(dir, src_n, ShardsMeta::new(n, Routing::KevyHash), stores, &lay)?;
     // The merge scratch vlog is dead once the temp keyspace is gone.
     // The attribute rides the same cfg as the code: a module-level one
     // is unfulfilled in every build where this block is compiled out,

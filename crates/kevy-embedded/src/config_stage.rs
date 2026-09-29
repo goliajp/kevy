@@ -36,11 +36,20 @@ impl Config {
     /// The auto-rewrite rules this config asks for.
     #[cfg(feature = "persist")]
     pub(crate) fn rewrite_policy(&self) -> kevy_persist::RewritePolicy {
-        kevy_persist::RewritePolicy {
-            pct: self.auto_aof_rewrite_pct,
-            min_size: self.auto_aof_rewrite_min_size,
-            bytes: self.auto_aof_rewrite_bytes,
-            interval_secs: self.auto_aof_rewrite_interval_secs,
+        kevy_persist::RewritePolicy::default()
+            .with_pct(self.auto_aof_rewrite_pct)
+            .with_min_size(self.auto_aof_rewrite_min_size)
+            .with_bytes(self.auto_aof_rewrite_bytes)
+            .with_interval_secs(self.auto_aof_rewrite_interval_secs)
+    }
+
+    /// What replay and the AOF open do at a corrupt record.
+    #[cfg(feature = "persist")]
+    pub(crate) fn replay_mode(&self) -> kevy_persist::ReplayMode {
+        if self.replay_resync {
+            kevy_persist::ReplayMode::Resync
+        } else {
+            kevy_persist::ReplayMode::Strict
         }
     }
 }

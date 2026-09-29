@@ -384,4 +384,13 @@ impl<C: Commands> Runtime<C> {
         self.replay_resync = resync;
         self
     }
+
+    /// What replay and the AOF open do at a corrupt record.
+    pub(crate) fn replay_mode(&self) -> kevy_persist::ReplayMode {
+        if self.replay_resync {
+            kevy_persist::ReplayMode::Resync
+        } else {
+            kevy_persist::ReplayMode::Strict
+        }
+    }
 }

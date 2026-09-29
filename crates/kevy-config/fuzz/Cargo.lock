@@ -68,6 +68,7 @@ version = "6.4.0"
 name = "kevy-config"
 version = "6.4.0"
 dependencies = [
+ "kevy-persist",
  "kevy-store",
 ]
 
@@ -96,8 +97,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "kevy-persist"
+version = "6.4.0"
+dependencies = [
+ "kevy-resp",
+ "kevy-store",
+ "kevy-sys",
+]
+
+[[package]]
 name = "kevy-ranktree"
 version = "6.4.0"
+
+[[package]]
+name = "kevy-resp"
+version = "6.4.0"
+dependencies = [
+ "kevy-bytes",
+]
 
 [[package]]
 name = "kevy-seg"

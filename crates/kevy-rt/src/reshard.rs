@@ -35,13 +35,13 @@ pub(crate) fn ensure_layout<C: Commands>(
 ) -> io::Result<()> {
     let meta_path = layout::shards_meta_path(dir);
     recover_journal(dir, &StdLayout)?;
-    let target = ShardsMeta { n, routing };
+    let target = ShardsMeta::new(n, routing);
     let prev = match read_shards_meta(&meta_path) {
         Some(m) => m,
         // Legacy dir (server never wrote meta): the shard count is however
         // many per-shard files exist, the routing is the only scheme that
         // existed. An empty dir trivially "matches" — just record target.
-        None => ShardsMeta { n: layout::infer_files_n(dir), routing: Routing::KevyHash },
+        None => ShardsMeta::new(layout::infer_files_n(dir), Routing::KevyHash),
     };
     if prev.n == 0 || prev == target {
         std::fs::create_dir_all(dir)?;

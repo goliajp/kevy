@@ -7,42 +7,9 @@ use std::path::PathBuf;
 
 // ───────────── enums ─────────────
 
-/// AOF fsync policy. Matches Redis `appendfsync`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[non_exhaustive]
-pub enum AppendFsync {
-    /// `fsync` after every write command. Zero data-loss but ~50% throughput.
-    Always,
-    /// Background `fsync` about every second. A power loss loses about 1s
-    /// plus the time one fsync takes. Default.
-    #[default]
-    EverySec,
-    /// No explicit `fsync`; the OS decides when data reaches the disk. A
-    /// power loss can lose ~30s.
-    No,
-}
-
-impl AppendFsync {
-    /// Canonical Redis-compatible name (`always` / `everysec` / `no`).
-    /// Used by `CONFIG GET appendfsync` and `CONFIG REWRITE`.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Always => "always",
-            Self::EverySec => "everysec",
-            Self::No => "no",
-        }
-    }
-    /// Inverse of [`Self::as_str`] — case-insensitive. `None` for any
-    /// other input; used by both the TOML parser and `CONFIG SET`.
-    pub fn parse(s: &str) -> Option<Self> {
-        match s.to_ascii_lowercase().as_str() {
-            "always" => Some(Self::Always),
-            "everysec" => Some(Self::EverySec),
-            "no" => Some(Self::No),
-            _ => None,
-        }
-    }
-}
+/// AOF fsync policy (Redis `appendfsync`): the log's own type, which
+/// enforces it, so the parsed config and the AOF cannot disagree.
+pub use kevy_persist::Fsync as AppendFsync;
 
 /// Maxmemory eviction policy: the store's own type, which enforces it, so
 /// the parsed config and the keyspace cannot disagree on a policy.

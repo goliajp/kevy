@@ -361,20 +361,6 @@ fn drain_commands_handles_quit_and_protocol_error() {
 }
 
 #[test]
-fn config_enum_mapping_round_trips() {
-    // Cover map_appendfsync — a pure data map. If a policy lands in one
-    // enum but the other forgets the case, this fails. The eviction policy
-    // needs no map: the config and the store share one type.
-    use kevy_config::AppendFsync as CA;
-    use kevy_persist::Fsync as P;
-
-    let fsync_cases = [(CA::Always, P::Always), (CA::EverySec, P::EverySec), (CA::No, P::No)];
-    for (src, dst) in fsync_cases {
-        assert_eq!(std::mem::discriminant(&map_appendfsync(src)), std::mem::discriminant(&dst));
-    }
-}
-
-#[test]
 fn shard_tick_interval_falls_back_to_disabled() {
     // With no `config_init` called (the test process default), the global
     // config returns `Config::default()`. With default hz != 0 we get a

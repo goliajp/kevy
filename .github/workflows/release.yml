@@ -93,7 +93,7 @@ jobs:
             kevy-elect kevy-replicate kevy-resp-client kevy-mcp kevy-ring \
             kevy-scope kevy-text kevy-time kevy-index kevy-scalar \
             kevy-sql kevy-tmpdir kevy-seg kevy-uring kevy-vector kevy-vlog \
-            kevy-store kevy-config kevy-verbs kevy-persist kevy-rt kevy-window kevy-embedded \
+            kevy-store kevy-verbs kevy-persist kevy-config kevy-rt kevy-window kevy-embedded \
             kevy kevy-cli kevy-client kevy-cluster-rw kevy-client-async kevy-wasm | sort -u)
           expected=$(cargo metadata --no-deps --format-version 1 \
             | jq -r '.packages | map(select(.publish == null)) | .[].name' \
@@ -203,7 +203,7 @@ jobs:
             kevy-elect kevy-replicate kevy-resp-client kevy-mcp kevy-ring \
             kevy-scope kevy-text kevy-time kevy-index kevy-scalar \
             kevy-sql kevy-tmpdir kevy-seg kevy-uring kevy-vector kevy-vlog \
-            kevy-store kevy-config kevy-verbs kevy-persist kevy-rt kevy-window kevy-embedded \
+            kevy-store kevy-verbs kevy-persist kevy-config kevy-rt kevy-window kevy-embedded \
             kevy kevy-cli kevy-client kevy-cluster-rw kevy-client-async kevy-wasm; do
             publish_or_skip "$c"
           done

@@ -85,7 +85,7 @@ impl Store {
         let mut agg: Option<RewriteStats> = None;
         for shard in self.shards.iter() {
             if let Some(stats) = self.rewrite_one_shard(shard)? {
-                let acc = agg.get_or_insert(RewriteStats { keys: 0, bytes: 0 });
+                let acc = agg.get_or_insert_with(RewriteStats::default);
                 acc.keys += stats.keys;
                 acc.bytes += stats.bytes;
             }
