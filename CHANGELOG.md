@@ -38,15 +38,15 @@
 
 - **`BLPOP` and `BRPOP` pops are durable and replicated, and a read-only
   replica refuses them and `RENAME` / `RENAMENX`.** The server kept its
-  own list of write commands, and these four were missing from it. A
-  pop from `BLPOP` / `BRPOP` never reached the AOF or the replicas, so
-  after a restart the popped elements were back in the list and a
-  replica never removed them. This held both for a pop that found data
-  at once and for a waiter a later push served. A blocking pop that
-  found data at once (`BZPOPMIN` and `BRPOPLPUSH` included) did not
-  invalidate a `WATCH` on the key. A read-only replica ran all
-  four commands against its own keyspace and let it drift from the
-  primary. The server now takes its write classification from the same
+  own list of write commands, and these four were missing from it. Since
+  1.4.0, which introduced `BLPOP` / `BRPOP`, their pops never reached the
+  AOF, so after a restart the popped elements were back in the list;
+  since 1.18.0, which introduced replication, they never reached a
+  replica either. This held both for a pop that found data at once and
+  for a waiter a later push served. A blocking pop that found data at
+  once (`BZPOPMIN` and `BRPOPLPUSH` included) did not invalidate a
+  `WATCH` on the key. Since 1.18.0 a read-only replica ran all four
+  commands against its own keyspace and let it drift from the primary. The server now takes its write classification from the same
   registry the shared command layer runs from, a served blocking command
   is recorded like any other write (the pop as the `LPOP` / `RPOP` it
   performed), and the four commands are refused on a read-only replica
