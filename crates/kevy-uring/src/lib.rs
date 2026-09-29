@@ -29,7 +29,8 @@
 //!
 //! # Example
 //!
-//! ```no_run
+//! ```
+//! # #[cfg(target_os = "linux")] fn main() -> std::io::Result<()> {
 //! use kevy_uring::IoUring;
 //!
 //! let mut ring = IoUring::new(8)?;
@@ -38,7 +39,8 @@
 //! let mut tags = Vec::new();
 //! ring.for_each_completion(|c| tags.push(c.user_data));
 //! assert_eq!(tags, vec![7]);
-//! # Ok::<(), std::io::Error>(())
+//! # Ok(()) }
+//! # #[cfg(not(target_os = "linux"))] fn main() {}
 //! ```
 
 #![cfg(target_os = "linux")]
@@ -64,6 +66,10 @@ pub use file_batch::FileRead;
 pub use layout::KernelTimespec;
 pub use pbr::ProvidedBufRing;
 pub use ring::IoUring;
+
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;
 
 // Send and Sync are part of the public contract: a change that loses
 // either fails to compile here rather than in a caller.
