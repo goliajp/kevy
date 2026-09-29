@@ -5,8 +5,8 @@
 //! no words for (a prefix other than `<table>:`, `WINDOW`, `AUTODECLARE`)
 //! are kept beside the table, verbatim, for whoever renders it.
 
-use crate::ValType;
 use crate::schema::{Ix, OrderPath, Table};
+use crate::{DeclarationError, ValType};
 
 /// One declaration: the table plus the clauses outside the SQL subset.
 pub(crate) struct Declared {
@@ -27,13 +27,13 @@ fn is_clause(word: &str) -> bool {
 }
 
 /// Read one `TABLE.DECLARE` argv; `Err` names what did not fit.
-pub(crate) fn read(argv: &[String]) -> Result<Declared, String> {
+pub(crate) fn read(argv: &[String]) -> Result<Declared, DeclarationError> {
     let head_ok = argv.len() >= 9
         && kw(argv.first(), "TABLE.DECLARE")
         && kw(argv.get(2), "PREFIX")
         && kw(argv.get(4), "PK");
     if !head_ok {
-        return Err(format!("not a TABLE.DECLARE declaration: {}", argv.join(" ")));
+        return Err(DeclarationError::NotADeclaration(argv.join(" ")));
     }
     let mut d = Declared {
         table: Table {
@@ -53,18 +53,16 @@ pub(crate) fn read(argv: &[String]) -> Result<Declared, String> {
     Ok(d)
 }
 
-fn clause(argv: &[String], i: usize, d: &mut Declared) -> Result<usize, String> {
+fn clause(argv: &[String], i: usize, d: &mut Declared) -> Result<usize, DeclarationError> {
     let word = &argv[i];
-    let arg = |n: usize| argv.get(i + n).cloned().ok_or_else(|| format!("{word} is cut short"));
+    let arg =
+        |n: usize| argv.get(i + n).cloned().ok_or_else(|| DeclarationError::CutShort(word.clone()));
     if word.eq_ignore_ascii_case("COLUMN") {
         let raw = arg(2)?;
         let ty = match ValType::parse(raw.as_bytes()) {
             Some(t @ (ValType::I64 | ValType::F64 | ValType::Str)) => t,
             _ => {
-                return Err(format!(
-                    "column type '{}' is not i64|f64|str",
-                    raw.to_ascii_lowercase()
-                ));
+                return Err(DeclarationError::ColumnType(raw.to_ascii_lowercase()));
             }
         };
         d.table.columns.push((arg(1)?, ty));
@@ -86,19 +84,20 @@ fn clause(argv: &[String], i: usize, d: &mut Declared) -> Result<usize, String> 
         orderpath(argv, i, d)
     } else {
         if !is_clause(word) {
-            return Err(format!("unknown clause '{word}'"));
+            return Err(DeclarationError::UnknownClause(word.clone()));
         }
         let width = if word.eq_ignore_ascii_case("WINDOW") { 6 } else { 2 };
-        let words = argv.get(i..i + width).ok_or_else(|| format!("{word} is cut short"))?;
+        let words =
+            argv.get(i..i + width).ok_or_else(|| DeclarationError::CutShort(word.clone()))?;
         d.beyond_sql.push(words.to_vec());
         Ok(i + width)
     }
 }
 
 /// `ORDERPATH <name> ON <col> [DESC] [THEN <col> [DESC]]…`.
-fn orderpath(argv: &[String], i: usize, d: &mut Declared) -> Result<usize, String> {
+fn orderpath(argv: &[String], i: usize, d: &mut Declared) -> Result<usize, DeclarationError> {
     let (Some(name), true) = (argv.get(i + 1), kw(argv.get(i + 2), "ON")) else {
-        return Err("ORDERPATH needs <name> ON <col>".into());
+        return Err(DeclarationError::OrderpathShape);
     };
     let mut on = Vec::new();
     let mut at = i + 3;

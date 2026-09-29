@@ -9,7 +9,7 @@ use crate::declared::{self, Declared};
 use crate::lex::{Tok, lex};
 use crate::parse::P;
 use crate::schema::Table;
-use crate::{QueryCard, SqlError, ValType, parse_view, viewplan};
+use crate::{DeclarationError, QueryCard, SqlError, ValType, parse_view, viewplan};
 
 /// One `SELECT … FROM t WHERE …` as the `IDX.QUERY` argv that answers
 /// it over `t`'s declared paths. Values are literals; a `$N` slot is a
@@ -34,7 +34,7 @@ pub fn select_card(declarations: &[Vec<String>], select: &str) -> Result<QueryCa
     let v = parse_one_select(select)?;
     let tables = declarations
         .iter()
-        .map(|argv| declared::read(argv).map_err(|e| SqlError::at(v.line, v.col, e)))
+        .map(|argv| declared::read(argv).map_err(|e| SqlError::at(v.line, v.col, e.to_string())))
         .collect::<Result<Vec<Declared>, SqlError>>()?;
     let Some(d) = tables.iter().find(|d| d.table.name == v.table) else {
         return Err(SqlError::at(
@@ -97,7 +97,7 @@ fn parse_one_select(select: &str) -> Result<CreateView, SqlError> {
 /// );
 /// assert_eq!(kevy_sql::compile(&ddl).unwrap().commands, vec![decl]);
 /// ```
-pub fn table_ddl(declaration: &[String]) -> Result<String, String> {
+pub fn table_ddl(declaration: &[String]) -> Result<String, DeclarationError> {
     let d = declared::read(declaration)?;
     let t = &d.table;
     let mut out = String::new();
@@ -122,7 +122,7 @@ pub fn table_ddl(declaration: &[String]) -> Result<String, String> {
     Ok(out)
 }
 
-fn indexes(t: &Table, out: &mut String) -> Result<(), String> {
+fn indexes(t: &Table, out: &mut String) -> Result<(), DeclarationError> {
     for ix in &t.indexes {
         let unique = if ix.unique { "UNIQUE " } else { "" };
         out.push_str(&format!(
@@ -140,7 +140,7 @@ fn indexes(t: &Table, out: &mut String) -> Result<(), String> {
 
 /// A composite index per order path. SQL reads a one-column index as a
 /// plain index, so a one-column order path is noted instead.
-fn orderpaths(t: &Table, out: &mut String, lost: &mut Vec<String>) -> Result<(), String> {
+fn orderpaths(t: &Table, out: &mut String, lost: &mut Vec<String>) -> Result<(), DeclarationError> {
     for op in &t.orderpaths {
         if let [(c, true)] = op.on.as_slice() {
             // One descending column reads back as the same order path.
@@ -166,7 +166,7 @@ fn orderpaths(t: &Table, out: &mut String, lost: &mut Vec<String>) -> Result<(),
             .on
             .iter()
             .map(|(c, desc)| Ok(format!("{}{}", ident(c)?, if *desc { " DESC" } else { "" })))
-            .collect::<Result<Vec<String>, String>>()?
+            .collect::<Result<Vec<String>, DeclarationError>>()?
             .join(", ");
         out.push_str(&format!(
             "CREATE INDEX {} ON {} ({cols});\n",
@@ -190,20 +190,24 @@ fn sql_type(ty: ValType) -> &'static str {
 /// A name as the lexer reads it back: bare when it is already a
 /// lower-case identifier, `"quoted"` otherwise. A `"` inside a name has
 /// no spelling in this dialect, so it is refused rather than mangled.
-fn ident(name: &str) -> Result<String, String> {
+fn ident(name: &str) -> Result<String, DeclarationError> {
     let bare = name.bytes().next().is_some_and(|b| b.is_ascii_lowercase() || b == b'_')
         && name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');
     if bare {
         Ok(name.to_string())
     } else if name.contains('"') {
-        Err(format!("the name '{name}' contains '\"', which has no SQL spelling here"))
+        Err(DeclarationError::Unspellable(name.to_string()))
     } else {
         Ok(format!("\"{name}\""))
     }
 }
 
-fn idents(names: &[String]) -> Result<String, String> {
-    Ok(names.iter().map(|n| ident(n)).collect::<Result<Vec<String>, String>>()?.join(", "))
+fn idents(names: &[String]) -> Result<String, DeclarationError> {
+    Ok(names
+        .iter()
+        .map(|n| ident(n))
+        .collect::<Result<Vec<String>, DeclarationError>>()?
+        .join(", "))
 }
 
 #[cfg(test)]
