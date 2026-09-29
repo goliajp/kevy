@@ -91,12 +91,12 @@ impl ClientStream {
 
     fn open(url: &str) -> io::Result<(Self, Option<u32>)> {
         if url.starts_with("kevys://") {
-            let u = parse_secure_url(url)?;
+            let u = SecureUrl::parse(url)?;
             let me = u.client_key_file.as_deref().map(load_client_key).transpose()?;
             let s = SecureStream::connect(&u.host, u.port, u.server_key, me.as_ref())?;
             return Ok((Self::Secure(Box::new(s)), u.db));
         }
-        let parsed = parse_url(url)?;
+        let parsed = ParsedUrl::parse(url)?;
         let s = TcpStream::connect((parsed.host.as_str(), parsed.port))?;
         s.set_nodelay(true).ok();
         Ok((Self::Plain(s), parsed.db))
@@ -303,16 +303,16 @@ impl RespClient {
 }
 
 mod url;
-pub use url::{ParsedUrl, parse_url};
+pub use url::ParsedUrl;
 
 mod secure;
 pub use kevy_noise::Keypair;
 pub use secure::{SecureStream, SecureWriter};
 mod secure_url;
-pub use secure_url::{SecureUrl, load_client_key, parse_secure_url};
+pub use secure_url::{SecureUrl, load_client_key};
 
 mod pubsub_event;
-pub use pubsub_event::{PubsubEvent, classify_pubsub};
+pub use pubsub_event::PubsubEvent;
 
 mod read_buf;
 pub use read_buf::ReplyReadBuf;

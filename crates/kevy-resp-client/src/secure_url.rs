@@ -9,7 +9,7 @@ use kevy_noise::Keypair;
 /// file holding this client's key pair, if any.
 ///
 /// ```
-/// let u = kevy_resp_client::parse_secure_url(&format!("kevys://h:6404?server_key={}", "ab".repeat(32)))?;
+/// let u = kevy_resp_client::SecureUrl::parse(&format!("kevys://h:6404?server_key={}", "ab".repeat(32)))?;
 /// assert_eq!((u.host.as_str(), u.port, u.server_key), ("h", 6404, [0xab; 32]));
 /// assert_eq!(u.client_key_file, None);
 /// # Ok::<(), std::io::Error>(())
@@ -20,7 +20,7 @@ pub struct SecureUrl {
     /// Hostname or IP literal.
     ///
     /// ```
-    /// let u = kevy_resp_client::parse_secure_url(&format!("kevys://db.internal?server_key={}", "ab".repeat(32)))?;
+    /// let u = kevy_resp_client::SecureUrl::parse(&format!("kevys://db.internal?server_key={}", "ab".repeat(32)))?;
     /// assert_eq!(u.host, "db.internal");
     /// # Ok::<(), std::io::Error>(())
     /// ```
@@ -28,7 +28,7 @@ pub struct SecureUrl {
     /// TCP port of the encrypted client port; 6379 when omitted.
     ///
     /// ```
-    /// let u = kevy_resp_client::parse_secure_url(&format!("kevys://h?server_key={}", "ab".repeat(32)))?;
+    /// let u = kevy_resp_client::SecureUrl::parse(&format!("kevys://h?server_key={}", "ab".repeat(32)))?;
     /// assert_eq!(u.port, 6379);
     /// # Ok::<(), std::io::Error>(())
     /// ```
@@ -36,7 +36,7 @@ pub struct SecureUrl {
     /// Optional db index from a `/N` path component.
     ///
     /// ```
-    /// let u = kevy_resp_client::parse_secure_url(&format!("kevys://h:1/0?server_key={}", "ab".repeat(32)))?;
+    /// let u = kevy_resp_client::SecureUrl::parse(&format!("kevys://h:1/0?server_key={}", "ab".repeat(32)))?;
     /// assert_eq!(u.db, Some(0));
     /// # Ok::<(), std::io::Error>(())
     /// ```
@@ -44,14 +44,14 @@ pub struct SecureUrl {
     /// The server's public key, from `server_key=` (64 hex characters).
     ///
     /// ```
-    /// assert!(kevy_resp_client::parse_secure_url("kevys://h:1").is_err()); // required
+    /// assert!(kevy_resp_client::SecureUrl::parse("kevys://h:1").is_err()); // required
     /// ```
     pub server_key: [u8; 32],
     /// This client's private key file, from `client_key_file=`, in the
     /// format `kevy keygen` writes.
     ///
     /// ```
-    /// let u = kevy_resp_client::parse_secure_url(&format!(
+    /// let u = kevy_resp_client::SecureUrl::parse(&format!(
     ///     "kevys://h:1?server_key={}&client_key_file=/etc/app/kevy.key",
     ///     "ab".repeat(32)
     /// ))?;
@@ -61,35 +61,43 @@ pub struct SecureUrl {
     pub client_key_file: Option<PathBuf>,
 }
 
-/// Parse `kevys://host[:port][/db]?server_key=<hex>[&client_key_file=<path>]`.
-///
-/// ```
-/// use kevy_resp_client::parse_secure_url;
-/// assert!(parse_secure_url("kevy://h:1").is_err()); // not a kevys:// URL
-/// assert!(parse_secure_url("kevys://h:1?server_key=abc").is_err()); // short key
-/// assert!(parse_secure_url(&format!("kevys://h:1?server_key={}&x=1", "ab".repeat(32))).is_err());
-/// ```
-pub fn parse_secure_url(url: &str) -> io::Result<SecureUrl> {
-    let invalid = |m: String| io::Error::new(io::ErrorKind::InvalidInput, m);
-    let rest = url
-        .strip_prefix("kevys://")
-        .ok_or_else(|| invalid(format!("not a kevys:// URL: {url}")))?;
-    let (base, query) = rest.split_once('?').unwrap_or((rest, ""));
-    let plain = crate::parse_url(&format!("kevy://{base}"))?;
-    let (mut server_key, mut client_key_file) = (None, None);
-    for pair in query.split('&').filter(|p| !p.is_empty()) {
-        match pair.split_once('=') {
-            Some(("server_key", v)) => server_key = Some(key_from_hex(v)?),
-            Some(("client_key_file", v)) if !v.is_empty() => {
-                client_key_file = Some(PathBuf::from(v))
+impl SecureUrl {
+    /// Parse `kevys://host[:port][/db]?server_key=<hex>[&client_key_file=<path>]`.
+    ///
+    /// ```
+    /// use kevy_resp_client::SecureUrl;
+    /// assert!(SecureUrl::parse("kevy://h:1").is_err()); // not a kevys:// URL
+    /// assert!(SecureUrl::parse("kevys://h:1?server_key=abc").is_err()); // short key
+    /// assert!(SecureUrl::parse(&format!("kevys://h:1?server_key={}&x=1", "ab".repeat(32))).is_err());
+    /// ```
+    pub fn parse(url: &str) -> io::Result<SecureUrl> {
+        let invalid = |m: String| io::Error::new(io::ErrorKind::InvalidInput, m);
+        let rest = url
+            .strip_prefix("kevys://")
+            .ok_or_else(|| invalid(format!("not a kevys:// URL: {url}")))?;
+        let (base, query) = rest.split_once('?').unwrap_or((rest, ""));
+        let plain = crate::ParsedUrl::parse(&format!("kevy://{base}"))?;
+        let (mut server_key, mut client_key_file) = (None, None);
+        for pair in query.split('&').filter(|p| !p.is_empty()) {
+            match pair.split_once('=') {
+                Some(("server_key", v)) => server_key = Some(key_from_hex(v)?),
+                Some(("client_key_file", v)) if !v.is_empty() => {
+                    client_key_file = Some(PathBuf::from(v))
+                }
+                _ => return Err(invalid(format!("unknown kevys:// parameter: {pair}"))),
             }
-            _ => return Err(invalid(format!("unknown kevys:// parameter: {pair}"))),
         }
+        let server_key = server_key.ok_or_else(|| {
+            invalid("kevys:// needs server_key=<the server's public key>".to_string())
+        })?;
+        Ok(SecureUrl {
+            host: plain.host,
+            port: plain.port,
+            db: plain.db,
+            server_key,
+            client_key_file,
+        })
     }
-    let server_key = server_key.ok_or_else(|| {
-        invalid("kevys:// needs server_key=<the server's public key>".to_string())
-    })?;
-    Ok(SecureUrl { host: plain.host, port: plain.port, db: plain.db, server_key, client_key_file })
 }
 
 /// Read a key pair from a file holding the private key as 64 hex
