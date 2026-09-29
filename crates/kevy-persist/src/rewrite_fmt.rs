@@ -359,7 +359,7 @@ fn decimal_digits(mut x: u64) -> u32 {
 /// [`replay_aof`](crate::replay_aof) parses back. Public so external AOF
 /// producers (host-mediated persistence pumps) emit frames byte-compatible
 /// with kevy-written logs.
-pub fn write_multibulk<W: Write, A: ArgvView + ?Sized>(w: &mut W, args: &A) -> io::Result<()> {
+pub fn write_multibulk<W: Write, A: ArgvView + ?Sized>(mut w: W, args: &A) -> io::Result<()> {
     write!(w, "*{}\r\n", args.len())?;
     for i in 0..args.len() {
         let a = &args[i];

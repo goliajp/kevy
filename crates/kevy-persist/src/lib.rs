@@ -110,7 +110,7 @@ pub(crate) use rewrite_fmt::estimate_multibulk_bytes;
 pub use rewrite_fmt::{dump_aof, dump_store_to_buf, write_multibulk};
 pub use rewrite_frames::value_as_v1_frames;
 pub use rewrite_stream_fmt::write_stream_as_commands;
-pub use shards_meta::{Routing, ShardsMeta, read_shards_meta, write_shards_meta};
+pub use shards_meta::{Routing, ShardsMeta};
 pub(crate) use snapshot_fmt::{SNAPSHOT_BUF_CAP, write_bytes};
 pub use snapshot_read::{
     load_snapshot, load_snapshot_filtered, load_snapshot_from, read_snapshot_cursor,
