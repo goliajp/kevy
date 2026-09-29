@@ -186,7 +186,14 @@ impl Wire {
     /// `Vec<u8>`) and the hand-written cells (which hold `&[u8]`) share
     /// one implementation rather than one each.
     pub fn call<B: AsRef<[u8]>>(&mut self, parts: &[B]) -> Vec<u8> {
-        use std::io::{Read, Write};
+        self.send(parts);
+        self.reply()
+    }
+
+    /// Send one command without waiting for its reply: a blocking command
+    /// whose answer comes later.
+    pub fn send<B: AsRef<[u8]>>(&mut self, parts: &[B]) {
+        use std::io::Write;
         let mut out = format!("*{}\r\n", parts.len()).into_bytes();
         for p in parts {
             let p = p.as_ref();
@@ -195,6 +202,11 @@ impl Wire {
             out.extend_from_slice(b"\r\n");
         }
         self.sock.write_all(&out).unwrap();
+    }
+
+    /// The next whole reply.
+    pub fn reply(&mut self) -> Vec<u8> {
+        use std::io::Read;
         loop {
             if let Some(n) = reply_len(&self.buf) {
                 let reply = self.buf[..n].to_vec();

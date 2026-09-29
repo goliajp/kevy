@@ -55,7 +55,7 @@ public sealed class KevyProtocolException(string text)
 
 /// <summary>The write was rejected by a read-only replica.</summary>
 public sealed class KevyReadOnlyException()
-    : KevyException("READONLY You can't write against a read only replica") { }
+    : KevyException("READONLY You can't write against a read only replica.") { }
 
 /// <summary>A bad argument to a typed API — rejected before touching state.</summary>
 public sealed class KevyInvalidInputException(string message)

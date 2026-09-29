@@ -63,7 +63,7 @@ impl std::fmt::Display for Error {
             Error::Io(m) | Error::Protocol(m) | Error::InvalidInput(m) => write!(f, "{m}"),
             Error::NotFound(m) => write!(f, "not found: {m}"),
             Error::Unsupported(m) => write!(f, "unsupported: {m}"),
-            Error::ReadOnly => write!(f, "READONLY the store is a read-only replica"),
+            Error::ReadOnly => write!(f, "READONLY You can't write against a read only replica."),
             Error::TimedOut => write!(f, "timed out"),
             Error::Closed => write!(f, "connection closed"),
             Error::Other(m) => write!(f, "{m}"),

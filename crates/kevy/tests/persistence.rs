@@ -277,6 +277,85 @@ fn data_survives_restart_via_aof_without_save() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A blocking pop that finds data pops at once, and that pop is in the
+/// AOF: after a restart the popped elements stay popped. Renames replay
+/// too. One shard, so the pop runs on the connection's own shard; four,
+/// so some keys live elsewhere.
+#[test]
+fn blocking_pops_and_renames_survive_restart_via_aof() {
+    for nshards in [1, 4] {
+        let dir = kevy_tmpdir::unique_dir("aof-blocking-pop");
+        with_runtime(free_port(), &dir, nshards, |p| {
+            let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+            c.write_all(&req(&[b"RPUSH", b"q", b"a", b"b", b"c", b"d"])).unwrap();
+            read_reply(&mut c, b":4\r\n");
+            c.write_all(&req(&[b"BLPOP", b"q", b"0"])).unwrap();
+            read_reply(&mut c, b"*2\r\n$1\r\nq\r\n$1\r\na\r\n");
+            c.write_all(&req(&[b"BRPOP", b"q", b"0"])).unwrap();
+            read_reply(&mut c, b"*2\r\n$1\r\nq\r\n$1\r\nd\r\n");
+            c.write_all(&req(&[b"SET", b"{r}1", b"v"])).unwrap();
+            read_reply(&mut c, b"+OK\r\n");
+            c.write_all(&req(&[b"RENAME", b"{r}1", b"{r}2"])).unwrap();
+            read_reply(&mut c, b"+OK\r\n");
+            c.write_all(&req(&[b"RENAMENX", b"{r}2", b"{r}3"])).unwrap();
+            read_reply(&mut c, b":1\r\n");
+        });
+        with_runtime(free_port(), &dir, nshards, |p| {
+            let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+            c.write_all(&req(&[b"LRANGE", b"q", b"0", b"-1"])).unwrap();
+            read_reply(&mut c, b"*2\r\n$1\r\nb\r\n$1\r\nc\r\n");
+            c.write_all(&req(&[b"GET", b"{r}3"])).unwrap();
+            read_reply(&mut c, b"$1\r\nv\r\n");
+            c.write_all(&req(&[b"EXISTS", b"{r}1", b"{r}2"])).unwrap();
+            read_reply(&mut c, b":0\r\n");
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// A blocking pop that parks and is then served by a push: the pop is in
+/// the AOF like any other. With four shards some keys live on another
+/// shard than the waiting connection, so both the in-shard and the
+/// cross-shard serve run.
+#[test]
+fn parked_blocking_pops_survive_restart_via_aof() {
+    let keys: Vec<Vec<u8>> = (0..6).map(|i| format!("w{i}").into_bytes()).collect();
+    for nshards in [1, 4] {
+        let dir = kevy_tmpdir::unique_dir("aof-parked-pop");
+        with_runtime(free_port(), &dir, nshards, |p| {
+            let patience = Some(std::time::Duration::from_secs(10));
+            let mut pusher = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+            pusher.set_read_timeout(patience).unwrap();
+            for key in &keys {
+                let mut waiter = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+                waiter.set_read_timeout(patience).unwrap();
+                waiter.write_all(&req(&[b"BLPOP", key, b"0"])).unwrap();
+                wait_for("the waiter to park", || {
+                    pusher.write_all(&req(&[b"INFO", b"clients"])).unwrap();
+                    let mut buf = [0u8; 4096];
+                    let n = pusher.read(&mut buf).unwrap();
+                    String::from_utf8_lossy(&buf[..n]).contains("blocked_clients:1")
+                });
+                pusher.write_all(&req(&[b"RPUSH", key, b"x", b"y"])).unwrap();
+                read_reply(&mut pusher, b":2\r\n");
+                let mut want = format!("*2\r\n${}\r\n", key.len()).into_bytes();
+                want.extend_from_slice(key);
+                want.extend_from_slice(b"\r\n$1\r\nx\r\n");
+                read_reply(&mut waiter, &want);
+            }
+        });
+        with_runtime(free_port(), &dir, nshards, |p| {
+            let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+            c.set_read_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
+            for key in &keys {
+                c.write_all(&req(&[b"LRANGE", key, b"0", b"-1"])).unwrap();
+                read_reply(&mut c, b"*1\r\n$1\r\ny\r\n");
+            }
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
 #[test]
 fn restart_tolerates_corrupt_snapshot() {
     // Coverage: drive the `load_snapshot` Err branch in shard::run (the

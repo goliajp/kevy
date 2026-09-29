@@ -248,6 +248,7 @@ impl<C: Commands> Shard<C> {
         // the reply is deferred to the wake / timeout path.
         if !wrote_reply && let crate::BlockHint::Block { kind, keys, timeout_ms } = block_hint {
             self.slowlog_maybe(t0, args);
+            self.record_parked(args);
             self.park_dispatch(conn_id, args, kind, keys, timeout_ms, proto);
             return true;
         }

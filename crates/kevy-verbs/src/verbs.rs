@@ -35,166 +35,198 @@ const fn v(name: &'static str, write: bool) -> Verb {
 const RD: bool = false;
 const WR: bool = true;
 
-/// Every verb [`crate::exec`] answers, sorted by name. The stream and geo
-/// rows are there only with the `streams-geo` feature.
-///
-/// ```
-/// let names: Vec<&str> = kevy_verbs::VERBS.iter().map(|v| v.name).collect();
-/// assert!(names.windows(2).all(|w| w[0] < w[1]), "sorted, so lookup can bisect");
-/// assert!(kevy_verbs::VERBS.iter().any(|v| v.name == "LPUSH" && v.write));
-/// ```
-#[rustfmt::skip]
+/// The rows below become both [`VERBS`] and [`is_write`], so the table a
+/// caller reads and the lookup it matches on cannot disagree.
+macro_rules! registry {
+    ($($(#[$cfg:meta])* $name:literal $write:ident,)*) => {
+        /// Every verb [`crate::exec`] answers, sorted by name. The stream and geo
+        /// rows are there only with the `streams-geo` feature.
+        ///
+        /// ```
+        /// let names: Vec<&str> = kevy_verbs::VERBS.iter().map(|v| v.name).collect();
+        /// assert!(names.windows(2).all(|w| w[0] < w[1]), "sorted, so lookup can bisect");
+        /// assert!(kevy_verbs::VERBS.iter().any(|v| v.name == "LPUSH" && v.write));
+        /// ```
+        pub const VERBS: &[Verb] = &[$($(#[$cfg])* v(name($name), $write),)*];
+
+        /// Whether an uppercase verb in [`VERBS`] can change the keyspace;
+        /// `None` for a verb the table does not hold. One `match` over the
+        /// same rows, for a caller that asks on every command.
+        ///
+        /// ```
+        /// assert_eq!(kevy_verbs::is_write(b"BLPOP"), Some(true));
+        /// assert_eq!(kevy_verbs::is_write(b"LRANGE"), Some(false));
+        /// assert_eq!(kevy_verbs::is_write(b"PING"), None);
+        /// ```
+        pub fn is_write(upper: &[u8]) -> Option<bool> {
+            match upper {
+                $($(#[$cfg])* $name => Some($write),)*
+                _ => None,
+            }
+        }
+    };
+}
+
+// only ever evaluated while building VERBS, so a bad row fails the build
+#[expect(clippy::panic, reason = "evaluated at compile time only")]
+const fn name(bytes: &'static [u8]) -> &'static str {
+    match core::str::from_utf8(bytes) {
+        Ok(s) => s,
+        Err(_) => panic!("a verb name is ASCII"),
+    }
+}
+
 // LOC-WAIVER: pure data table — one row per shared verb.
-pub const VERBS: &[Verb] = &[
-    v("APPEND", WR),
-    v("BITCOUNT", RD),
-    v("BITPOS", RD),
-    v("BLPOP", WR),
-    v("BRPOP", WR),
-    v("BRPOPLPUSH", WR),
-    v("BZPOPMIN", WR),
-    v("DBSIZE", RD),
-    v("DECR", WR),
-    v("DECRBY", WR),
-    v("DEL", WR),
-    v("EXISTS", RD),
-    v("EXPIRE", WR),
-    v("EXPIREAT", WR),
-    v("FLUSHALL", WR),
-    v("FLUSHDB", WR),
+registry! {
+    b"APPEND" WR,
+    b"BITCOUNT" RD,
+    b"BITPOS" RD,
+    b"BLPOP" WR,
+    b"BRPOP" WR,
+    b"BRPOPLPUSH" WR,
+    b"BZPOPMIN" WR,
+    b"DBSIZE" RD,
+    b"DECR" WR,
+    b"DECRBY" WR,
+    b"DEL" WR,
+    b"EXISTS" RD,
+    b"EXPIRE" WR,
+    b"EXPIREAT" WR,
+    b"FLUSHALL" WR,
+    b"FLUSHDB" WR,
     #[cfg(feature = "streams-geo")]
-    v("GEOADD", WR),
+    b"GEOADD" WR,
     #[cfg(feature = "streams-geo")]
-    v("GEODIST", RD),
+    b"GEODIST" RD,
     #[cfg(feature = "streams-geo")]
-    v("GEOHASH", RD),
+    b"GEOHASH" RD,
     #[cfg(feature = "streams-geo")]
-    v("GEOPOS", RD),
+    b"GEOPOS" RD,
     #[cfg(feature = "streams-geo")]
-    v("GEORADIUS", WR),
+    b"GEORADIUS" WR,
     #[cfg(feature = "streams-geo")]
-    v("GEORADIUSBYMEMBER", WR),
+    b"GEORADIUSBYMEMBER" WR,
     #[cfg(feature = "streams-geo")]
-    v("GEOSEARCH", RD),
+    b"GEOSEARCH" RD,
     #[cfg(feature = "streams-geo")]
-    v("GEOSEARCHSTORE", WR),
-    v("GET", RD),
-    v("GETBIT", RD),
-    v("GETDEL", WR),
-    v("GETEX", WR),
-    v("GETRANGE", RD),
-    v("GETSET", WR),
-    v("HDEL", WR),
-    v("HEXISTS", RD),
-    v("HEXPIRE", WR),
-    v("HGET", RD),
-    v("HGETALL", RD),
-    v("HINCRBY", WR),
-    v("HINCRBYFLOAT", WR),
-    v("HKEYS", RD),
-    v("HLEN", RD),
-    v("HMGET", RD),
-    v("HMSET", WR),
-    v("HPERSIST", WR),
-    v("HPEXPIRE", WR),
-    v("HPEXPIREAT", WR),
-    v("HPTTL", RD),
-    v("HRANDFIELD", RD),
-    v("HSCAN", RD),
-    v("HSET", WR),
-    v("HSETNX", WR),
-    v("HTTL", RD),
-    v("HVALS", RD),
-    v("INCR", WR),
-    v("INCRBY", WR),
-    v("INCRBYFLOAT", WR),
-    v("LINDEX", RD),
-    v("LINSERT", WR),
-    v("LLEN", RD),
-    v("LMOVE", WR),
-    v("LPOP", WR),
-    v("LPOS", RD),
-    v("LPUSH", WR),
-    v("LRANGE", RD),
-    v("LREM", WR),
-    v("LSET", WR),
-    v("LTRIM", WR),
-    v("MSET", WR),
-    v("PERSIST", WR),
-    v("PEXPIRE", WR),
-    v("PEXPIREAT", WR),
-    v("PSETEX", WR),
-    v("PTTL", RD),
-    v("RENAME", WR),
-    v("RENAMENX", WR),
-    v("RPOP", WR),
-    v("RPOPLPUSH", WR),
-    v("RPUSH", WR),
-    v("SADD", WR),
-    v("SCARD", RD),
-    v("SET", WR),
-    v("SETBIT", WR),
-    v("SETEX", WR),
-    v("SETNX", WR),
-    v("SETRANGE", WR),
-    v("SISMEMBER", RD),
-    v("SMEMBERS", RD),
-    v("SPOP", WR),
-    v("SRANDMEMBER", RD),
-    v("SREM", WR),
-    v("SSCAN", RD),
-    v("STRLEN", RD),
-    v("TOUCH", RD),
-    v("TTL", RD),
-    v("TYPE", RD),
-    v("UNLINK", WR),
+    b"GEOSEARCHSTORE" WR,
+    b"GET" RD,
+    b"GETBIT" RD,
+    b"GETDEL" WR,
+    b"GETEX" WR,
+    b"GETRANGE" RD,
+    b"GETSET" WR,
+    b"HDEL" WR,
+    b"HEXISTS" RD,
+    b"HEXPIRE" WR,
+    b"HGET" RD,
+    b"HGETALL" RD,
+    b"HINCRBY" WR,
+    b"HINCRBYFLOAT" WR,
+    b"HKEYS" RD,
+    b"HLEN" RD,
+    b"HMGET" RD,
+    b"HMSET" WR,
+    b"HPERSIST" WR,
+    b"HPEXPIRE" WR,
+    b"HPEXPIREAT" WR,
+    b"HPTTL" RD,
+    b"HRANDFIELD" RD,
+    b"HSCAN" RD,
+    b"HSET" WR,
+    b"HSETNX" WR,
+    b"HTTL" RD,
+    b"HVALS" RD,
+    b"INCR" WR,
+    b"INCRBY" WR,
+    b"INCRBYFLOAT" WR,
+    b"LINDEX" RD,
+    b"LINSERT" WR,
+    b"LLEN" RD,
+    b"LMOVE" WR,
+    b"LPOP" WR,
+    b"LPOS" RD,
+    b"LPUSH" WR,
+    b"LRANGE" RD,
+    b"LREM" WR,
+    b"LSET" WR,
+    b"LTRIM" WR,
+    b"MSET" WR,
+    b"PERSIST" WR,
+    b"PEXPIRE" WR,
+    b"PEXPIREAT" WR,
+    b"PSETEX" WR,
+    b"PTTL" RD,
+    b"RENAME" WR,
+    b"RENAMENX" WR,
+    b"RPOP" WR,
+    b"RPOPLPUSH" WR,
+    b"RPUSH" WR,
+    b"SADD" WR,
+    b"SCARD" RD,
+    b"SET" WR,
+    b"SETBIT" WR,
+    b"SETEX" WR,
+    b"SETNX" WR,
+    b"SETRANGE" WR,
+    b"SISMEMBER" RD,
+    b"SMEMBERS" RD,
+    b"SPOP" WR,
+    b"SRANDMEMBER" RD,
+    b"SREM" WR,
+    b"SSCAN" RD,
+    b"STRLEN" RD,
+    b"TOUCH" RD,
+    b"TTL" RD,
+    b"TYPE" RD,
+    b"UNLINK" WR,
     #[cfg(feature = "streams-geo")]
-    v("XACK", WR),
+    b"XACK" WR,
     #[cfg(feature = "streams-geo")]
-    v("XADD", WR),
+    b"XADD" WR,
     #[cfg(feature = "streams-geo")]
-    v("XAUTOCLAIM", WR),
+    b"XAUTOCLAIM" WR,
     #[cfg(feature = "streams-geo")]
-    v("XCLAIM", WR),
+    b"XCLAIM" WR,
     #[cfg(feature = "streams-geo")]
-    v("XDEL", WR),
+    b"XDEL" WR,
     #[cfg(feature = "streams-geo")]
-    v("XGROUP", WR),
+    b"XGROUP" WR,
     #[cfg(feature = "streams-geo")]
-    v("XINFO", RD),
+    b"XINFO" RD,
     #[cfg(feature = "streams-geo")]
-    v("XLEN", RD),
+    b"XLEN" RD,
     #[cfg(feature = "streams-geo")]
-    v("XPENDING", RD),
+    b"XPENDING" RD,
     #[cfg(feature = "streams-geo")]
-    v("XRANGE", RD),
+    b"XRANGE" RD,
     #[cfg(feature = "streams-geo")]
-    v("XREAD", RD),
+    b"XREAD" RD,
     #[cfg(feature = "streams-geo")]
-    v("XREADGROUP", WR),
+    b"XREADGROUP" WR,
     #[cfg(feature = "streams-geo")]
-    v("XREVRANGE", RD),
+    b"XREVRANGE" RD,
     #[cfg(feature = "streams-geo")]
-    v("XSETID", WR),
+    b"XSETID" WR,
     #[cfg(feature = "streams-geo")]
-    v("XTRIM", WR),
-    v("ZADD", WR),
-    v("ZCARD", RD),
-    v("ZCOUNT", RD),
-    v("ZINCRBY", WR),
-    v("ZPOPMIN", WR),
-    v("ZPOPMIN.BELOW", WR),
-    v("ZRANGE", RD),
-    v("ZRANGEBYSCORE", RD),
-    v("ZRANK", RD),
-    v("ZREM", WR),
-    v("ZREMRANGEBYRANK", WR),
-    v("ZREMRANGEBYSCORE", WR),
-    v("ZREVRANGE", RD),
-    v("ZREVRANGEBYSCORE", RD),
-    v("ZSCAN", RD),
-    v("ZSCORE", RD),
-];
+    b"XTRIM" WR,
+    b"ZADD" WR,
+    b"ZCARD" RD,
+    b"ZCOUNT" RD,
+    b"ZINCRBY" WR,
+    b"ZPOPMIN" WR,
+    b"ZPOPMIN.BELOW" WR,
+    b"ZRANGE" RD,
+    b"ZRANGEBYSCORE" RD,
+    b"ZRANK" RD,
+    b"ZREM" WR,
+    b"ZREMRANGEBYRANK" WR,
+    b"ZREMRANGEBYSCORE" WR,
+    b"ZREVRANGE" RD,
+    b"ZREVRANGEBYSCORE" RD,
+    b"ZSCAN" RD,
+    b"ZSCORE" RD,
+}
 
 /// Look up an uppercase verb in [`VERBS`].
 ///

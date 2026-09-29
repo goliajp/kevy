@@ -4,8 +4,9 @@
 
 use kevy_resp::{Argv, ArgvView};
 
-use crate::Commands;
+use crate::message::DispatchMeta;
 use crate::shard::Shard;
+use crate::{BlockKind, Commands};
 
 impl<C: Commands> Shard<C> {
     /// Cold sibling of the AsIs arm in [`Self::post_write_housekeeping`]:
@@ -44,6 +45,47 @@ impl<C: Commands> Shard<C> {
         }
     }
 
+    /// Record a command that ran outside the dispatch path — a parked
+    /// blocking command served once its key got data, or the undo that
+    /// puts a cross-shard serve's element back — the way the dispatch
+    /// path records a write: AOF, replicas, WATCH, index upkeep. `ran`
+    /// says whether it answered anything; one that did not (the data was
+    /// already gone) changed nothing, and whatever record it armed is
+    /// dropped rather than left for the next command on this thread.
+    pub(crate) fn record_served<A: ArgvView + ?Sized>(
+        &mut self,
+        argv: &A,
+        key_idx: usize,
+        ran: bool,
+    ) {
+        if !ran || !self.commands.is_write(argv) {
+            crate::propagation::discard_override();
+            return;
+        }
+        let meta = DispatchMeta {
+            is_write: true,
+            wake_idx: None,
+            key_idx: u8::try_from(key_idx).ok(),
+            verb: crate::VerbId::UNKNOWN,
+        };
+        self.post_write_housekeeping(argv, meta);
+    }
+
+    /// A blocking command that parked is not recorded by its argv, which
+    /// would do nothing when replayed, but before parking it may have
+    /// asked for a record of what it did change (a group read creates its
+    /// consumer). Record that now: left armed, the next write on this
+    /// thread would take it as its own and lose its own record.
+    pub(crate) fn record_parked<A: ArgvView + ?Sized>(&mut self, args: &A) {
+        if !crate::propagation::take_armed() {
+            return;
+        }
+        match crate::propagation::take_override() {
+            crate::propagation::Propagate::AsIs => {}
+            prop => self.record_propagation_override(prop, args),
+        }
+    }
+
     fn record_frame(&mut self, argv: &Argv) {
         if self.aof.is_some() {
             self.log_write(argv);
@@ -53,5 +95,14 @@ impl<C: Commands> Shard<C> {
         {
             src.push_mutation(argv);
         }
+    }
+}
+
+/// Where a served blocking command names its key: the stream forms end
+/// `… STREAMS <key> <id>`, every other one names it first.
+pub(crate) fn served_key_idx(kind: BlockKind, argc: usize) -> usize {
+    match kind {
+        BlockKind::XReadBlock | BlockKind::XReadGroupBlock => argc.saturating_sub(2),
+        _ => 1,
     }
 }

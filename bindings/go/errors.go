@@ -102,7 +102,7 @@ func (e *KevyError) Error() string {
 	case KindProtocol:
 		return "protocol error: " + e.Msg
 	case KindReadOnly:
-		return "READONLY You can't write against a read only replica"
+		return "READONLY You can't write against a read only replica."
 	case KindInvalidInput:
 		return "invalid input: " + e.Msg
 	case KindNotFound:

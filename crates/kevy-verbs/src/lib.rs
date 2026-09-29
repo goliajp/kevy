@@ -49,7 +49,7 @@ mod verbs;
 mod zset;
 mod zset_range;
 
-pub use verbs::{VERBS, Verb, is_streams_geo, verb};
+pub use verbs::{VERBS, Verb, is_streams_geo, is_write, verb};
 
 /// What a command did, for a caller that records writes.
 ///

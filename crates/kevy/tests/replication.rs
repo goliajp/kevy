@@ -2417,3 +2417,72 @@ fn promoted_node_ships_its_keyspace_to_a_fresh_cursor() {
     let _ = handle.join();
     primary.shutdown();
 }
+
+/// A blocking pop that finds data pops on the primary, and a replica
+/// pops the same element; a rename moves the key on the replica too.
+#[test]
+fn blocking_pops_and_renames_reach_a_replica() {
+    let primary = Server::start(1);
+    let mut w = std::net::TcpStream::connect(("127.0.0.1", primary.port)).unwrap();
+    send_resp(&mut w, &[b"RPUSH", b"q", b"a", b"b", b"c", b"d"]);
+    assert_eq!(read_line(&mut w), b":4\r\n");
+    send_resp(&mut w, &[b"SET", b"r1", b"v"]);
+    assert_eq!(read_line(&mut w), b"+OK\r\n");
+
+    let replica_commands = kevy::KevyCommands::sharded(1);
+    let receivers = replica_commands.state().take_replica_inboxes().expect("fresh state");
+    let replica_port = free_port_block(1) + 1;
+    let replica_dir = TmpDir::new("kevy-replica-blocking-pop");
+    let replica_dir_path = replica_dir.path().to_path_buf();
+    // SAFETY: see Server::start.
+    unsafe {
+        std::env::set_var("KEVY_IO_URING", "0");
+    }
+    let replica_stop = Arc::new(AtomicBool::new(false));
+    let replica_stop_thread = replica_stop.clone();
+    let replica_handle = std::thread::spawn(move || {
+        let rt = kevy_rt::Runtime::builder(replica_commands)
+            .bind([127, 0, 0, 1], replica_port)
+            .shards(1)
+            .with_data_dir(replica_dir_path)
+            .with_aof(false)
+            .with_replica_inboxes(receivers);
+        let _ = rt.run(replica_stop_thread);
+    });
+    wait_port(replica_port, "server");
+    let mut admin = std::net::TcpStream::connect(("127.0.0.1", replica_port)).unwrap();
+    let base = primary.replication_base.to_string();
+    send_resp(&mut admin, &[b"REPLICAOF", b"127.0.0.1", base.as_bytes()]);
+    assert_eq!(read_line(&mut admin), b"+OK\r\n");
+
+    let mut r = std::net::TcpStream::connect(("127.0.0.1", replica_port)).unwrap();
+    fn settles(s: &mut std::net::TcpStream, probe: &[&[u8]], want: &[u8]) -> bool {
+        for _ in 0..250 {
+            send_resp(s, probe);
+            if read_resp_bulks(s).concat() == want {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        false
+    }
+    assert!(settles(&mut r, &[b"LRANGE", b"q", b"0", b"-1"], b"abcd"), "replica never caught up");
+
+    send_resp(&mut w, &[b"BLPOP", b"q", b"0"]);
+    assert_eq!(read_resp_bulks(&mut w), [b"q".to_vec(), b"a".to_vec()]);
+    send_resp(&mut w, &[b"BRPOP", b"q", b"0"]);
+    assert_eq!(read_resp_bulks(&mut w), [b"q".to_vec(), b"d".to_vec()]);
+    send_resp(&mut w, &[b"RENAME", b"r1", b"r2"]);
+    assert_eq!(read_line(&mut w), b"+OK\r\n");
+    assert!(
+        settles(&mut r, &[b"LRANGE", b"q", b"0", b"-1"], b"bc"),
+        "the replica still holds the elements the primary popped",
+    );
+    assert!(settles(&mut r, &[b"GET", b"r2"], b"v"), "the rename never reached it");
+    assert!(settles(&mut r, &[b"GET", b"r1"], b""), "the renamed key stayed behind");
+
+    replica_stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    let _ = std::net::TcpStream::connect(("127.0.0.1", replica_port));
+    let _ = replica_handle.join();
+    primary.shutdown();
+}

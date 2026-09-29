@@ -2,6 +2,73 @@
 
 ## Unreleased
 
+- **`kevy-cluster-rw` sends every write to the primary.** Its own list of
+  write commands had drifted from the server's: 21 commands the server
+  counts as writes went to a replica, among them `GETEX`, `SETBIT`,
+  `BITOP`, the `HEXPIRE` family, `BZPOPMIN`, `BRPOPLPUSH`, the `Z*STORE`
+  commands, `XREADGROUP`, `GEOADD` and `EVAL`, and `TYPE` went to the
+  primary. The client now reads the keyspace writes from the server's
+  command table and keeps its own list only for the commands that write
+  no key but belong on the primary (transactions, admin, `PUBLISH`,
+  scripts), and a test holds it to the server's classification over
+  every command the server documents.
+
+- **The bindings' read-only error text is the server's.** The default
+  message of the read-only error the C++, C#, Go, Python, Tauri and
+  TypeScript bindings construct themselves now reads `READONLY You can't
+  write against a read only replica.`, exactly the server's reply. Five
+  of them lacked the closing period, and the Tauri plugin used a
+  different sentence.
+
+- **An embedded replica or closed store answers a malformed write the way
+  the server does.** The server refuses a write on a replica before it
+  reads the arguments, so `DEL` with no key, `MSET a`, a bare `SET`,
+  `RENAME a`, `COPY a` and `SUNIONSTORE` all get `-READONLY`.
+  `Store::dispatch_argv` checked the arguments of these first and
+  answered with the arity error. It now asks the store's state first
+  for every command the server counts as a write, so an embedded replica
+  gives the server's bytes, and a closed store gives its
+  `connection closed` error in the same order.
+
+- **An embedded replica refuses a write in the server's exact words.**
+  `Store::dispatch_argv` answered `-READONLY You can't write against a
+  read only replica` without the closing period that the server and
+  Redis send, so a client comparing the reply byte for byte saw two
+  different errors.
+
+- **`BLPOP` and `BRPOP` pops are durable and replicated, and a read-only
+  replica refuses them and `RENAME` / `RENAMENX`.** The server kept its
+  own list of write commands, and these four were missing from it. Since
+  1.4.0, which introduced `BLPOP` / `BRPOP`, their pops never reached the
+  AOF, so after a restart the popped elements were back in the list;
+  since 1.18.0, which introduced replication, they never reached a
+  replica either. This held both for a pop that found data at once and
+  for a waiter a later push served, and a waiter of `BZPOPMIN` (since
+  1.27.3), `BRPOPLPUSH` (since 1.27.7) or `XREADGROUP … BLOCK` (since
+  1.4.0) that a later write served was not recorded either: after a
+  restart, or on a replica, the element was back in its source and the
+  group read had left nothing pending. A blocking pop that found data at
+  once (`BZPOPMIN` and `BRPOPLPUSH` included) did not invalidate a
+  `WATCH` on the key. Since 1.18.0 a read-only replica ran all four
+  commands against its own keyspace and let it drift from the primary. The server now takes its write classification from the same
+  registry the shared command layer runs from, a served blocking command
+  is recorded like any other write (the pop as the `LPOP` / `RPOP` it
+  performed), and the four commands are refused on a read-only replica
+  with `-READONLY You can't write against a read only replica.` An
+  `EVAL_RO` script can no longer call them either.
+
+- **`EXPIRE` with a non-positive TTL no longer counts a key that had
+  already lapsed.** `EXPIRE`, `PEXPIRE`, `EXPIREAT` and `PEXPIREAT` first
+  asked whether the key existed, then wrote it, and the two steps read
+  different clocks: the question read the clock the shard refreshes once
+  per batch, the write a fresh one. For a key whose deadline fell between
+  the two, `EXPIRE k 0` and `PEXPIRE k -1` answered 1 and recorded a
+  write for a removal that was in fact the key's own expiry, while
+  `EXPIRE k 100` on the same key answered 0. The write now decides
+  existence itself, so every form answers 0 for such a key and records
+  nothing beyond the expiry. Both the server and the embedded engine ran
+  this code.
+
 - **kevy-alloc returns memory after it goes quiet, and its bookkeeping no
   longer grows with the heap.** Each reclaim sweep handed back every free
   page at once, so a buffer freed and reused a tick later was faulted back
