@@ -1,6 +1,6 @@
 # 6.4 から 7.0 へのアップグレード
 
-要点：**プロトコル経由のクライアントはコードの変更不要、データディレクトリはそのまま開けます。** メジャーバージョンを上げたのは Rust 側の二つの変更のためです。`kevy-config` の設定セクションの構造体にフィールドが増えたこと、そして 6.x の間に予告していたとおり kevy-cli のツールが `--kevy` の後ろでしか動かなくなったことです。そのほかに確認が必要なものは以下のとおりです。組み込みストアがディレクトリに残しうる新しい二種類のファイル、実際の大きさで報告されるようになったインデックスのサイズ、フィールドが増えたいくつかの応答です。
+要点：**プロトコル経由のクライアントはコードの変更不要、データディレクトリはそのまま開けます。** メジャーバージョンを上げたのは Rust 側のためです。ワークスペースの公開 API をすべて Rust API Guidelines に揃え、ほとんどのクレートでシグネチャが変わりました（[§10](#10-rust-api)）。また 6.x の間に予告していたとおり、kevy-cli のツールは `--kevy` の後ろでしか動かなくなりました。そのほかに確認が必要なものは以下のとおりです。組み込みストアがディレクトリに残しうる新しい二種類のファイル、実際の大きさで報告されるようになったインデックスのサイズ、フィールドが増えたいくつかの応答、そして Redis と同じ動きに直した四つの応答です（[§11](#11-変わった応答)）。
 
 ```toml
 kevy-embedded = "7.0.0"
@@ -21,6 +21,8 @@ kevy-embedded = "7.0.0"
 | `kevy_rt::Commands` を実装している | 既定実装つきのメソッドが三つ増える | 6 |
 | `kevy_config` の構造体を構造体リテラルで作っている | 新しいフィールドを書くか、`..Default::default()` を使う | 7 |
 | スクリプトで `kevy-cli doctor`、`export`、`sql compile` などを裸の単語で呼んでいる | ツールを `--kevy` の後ろに移す | 8 |
+| kevy のクレートを Rust のライブラリとして使っている | ほとんどのシグネチャが変わる。変わった箇所はコンパイラが一つずつ示す | 10 |
+| `XAUTOCLAIM` のカーソルを使っている、または `XRANGE` に `5-` のような ID を渡している | Redis と同じ動きになる | 11 |
 | インデックスの読み取りが触れるシャードを減らしたい | グローバルインデックスとして宣言する | [インデックス](indexes.md#グローバルインデックスpartition-global) |
 
 ---
@@ -112,6 +114,44 @@ kevy-cli -p 6379 --kevy diff 127.0.0.1:6380 user:        # 一つ目のサーバ
 - 二つ以上のシャードを持つ組み込みレプリカのほとんどのキー。読み取りが探さないシャードに書かれていた
 
 それぞれの詳細は [changelog](https://github.com/goliajp/kevy/blob/develop/CHANGELOG.md) にあります。
+
+
+## 10. Rust API
+
+ワークスペースの公開 Rust API はすべて [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/) に揃えたので、kevy のクレートをライブラリとして使うコードはそのままではコンパイルできません。変更はいくつかの規則に従っていて、直す場所はコンパイラが一つずつ示します。
+
+- `bool` の引数は意味を名前にした列挙型になりました。`store.copy(a, b, true)` は `store.copy(a, b, CopyMode::Replace)` です。
+- 今後フィールドやバリアントが増えうる構造体と列挙型は `#[non_exhaustive]` です。構造体リテラルではなく `Default` か `with_*` で作り、`match` には `_` の腕を足します。
+- 不変条件を持つ型はフィールドを非公開にし、同じ名前のメソッドで読みます。
+- ある型を第一引数に取っていた関数は、その型のメソッドになりました。
+- エラーは `String` ではなく、`std::error::Error` を実装した型です。プロトコルに出ていた文面は `as_wire()` か `to_wire()` で同じものが得られます。
+- 変更フィードとレプリケーションで対になっていた (generation, offset) は一つの `FeedPosition` になりました。
+
+組み込みストアでよくある書き換えは次のとおりです。
+
+```rust
+// 6.4
+store.copy(b"src", b"dst", true)?;
+store.linsert(b"l", true, b"c", b"b")?;
+let (generation, offset) = store.changes_tail()?;
+let batch = store.changes_since(generation, offset, 100, &[])?;
+// 7.0
+store.copy(b"src", b"dst", CopyMode::Replace)?;
+store.linsert(b"l", InsertPosition::Before, b"c", b"b")?;
+let tail: FeedPosition = store.changes_tail()?;
+let batch = store.changes_since(tail, 100, &[])?;  // batch.next が次の位置
+```
+
+クレートごとの変更の一覧（旧 → 新）は [rust-api-7.0.md](../rust-api-7.0.md) にあります（英語）。
+
+## 11. 変わった応答
+
+変わった応答は四つです。最初の二つは Redis と同じ動きになり、残りの二つは誤っていた文面を取り除きました。
+
+- `XRANGE`、`XREVRANGE` などストリーム ID を受け取るコマンドは、`5-` のようにハイフンの後ろが空の ID を Redis と同じく拒否します。6.4 は `5-<最大のシーケンス>` として読んでいました。
+- `XAUTOCLAIM` のカーソルは次の保留エントリの ID で、最後まで見終わると `0-0` です。6.4 は最後に見た ID に 1 を足したものを返していました。一回の呼び出しで見るのは Redis と同じく最大 `COUNT × 10` 件で、6.4 は一覧をすべて見ていました。カーソルが `0-0` になるまで呼び続けるループはどちらでも動きます。
+- 組み込みストアの `table_declare`、`table_replace`、`table_verify_report` の拒否は `-ERR ERR …` ではなく `-ERR …` になりました。
+- 提供できない `TABLE.DECLARE … WINDOW` を拒否する文面から、途中の余分な空白 17 個を取り除きました。
 
 ---
 
