@@ -22,9 +22,7 @@ use kevy_hash::KevyHash;
 #[cfg(feature = "persist")]
 use kevy_persist::reshard::{ShardLayout, commit_reshard, merge_sources, recover_journal};
 #[cfg(feature = "persist")]
-use kevy_persist::{
-    Aof, Routing, ShardsMeta, layout, layout::infer_files_n, read_shards_meta, write_shards_meta,
-};
+use kevy_persist::{Aof, Routing, ShardsMeta, layout, layout::infer_files_n};
 use kevy_store::Store as Keyspace;
 
 use crate::config::{Config, TtlReaperMode};
@@ -293,7 +291,7 @@ fn load_or_reshard(
     stores: &mut [Keyspace],
 ) -> io::Result<(OpenReport, Vec<Option<u64>>)> {
     let meta_path = layout::shards_meta_path(dir);
-    let prev = read_shards_meta(&meta_path);
+    let prev = ShardsMeta::read(&meta_path);
     // The embedded store always routes by KevyHash; a dir written by a
     // slots-routing server re-shards (losslessly) on first embedded open.
     let same_layout = match prev {
@@ -306,7 +304,7 @@ fn load_or_reshard(
 
     if same_layout {
         let loaded = load_in_place(dir, config, n, stores)?;
-        write_shards_meta(&meta_path, ShardsMeta::new(n, Routing::KevyHash))?;
+        ShardsMeta::new(n, Routing::KevyHash).write(&meta_path)?;
         return Ok(loaded);
     }
     {

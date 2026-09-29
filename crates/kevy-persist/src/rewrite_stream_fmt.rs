@@ -15,11 +15,11 @@ use std::io::{self, Write};
 /// Returns the number of command frames written so callers that ship
 /// rebuild frames elsewhere (scope migration) can report a frame count.
 pub fn write_stream_as_commands<W: Write>(
-    w: &mut W,
+    mut w: W,
     key: &[u8],
     s: &StreamData,
 ) -> io::Result<usize> {
-    stream_as_commands(w, key, s, crate::AofFormat::V1, &mut Vec::new())
+    stream_as_commands(&mut w, key, s, crate::AofFormat::V1, &mut Vec::new())
 }
 
 /// Format-aware body of [`write_stream_as_commands`].

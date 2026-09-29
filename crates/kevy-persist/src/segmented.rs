@@ -65,7 +65,7 @@ pub(crate) fn write_segmented_frames<W: Write, S: crate::SnapshotSource>(
                 io::Error::other(format!("rewrite: stub references unknown segment seq {seq}"))
             })?;
         let argv = segmented_argv(file.as_bytes());
-        crate::record::write_record_multibulk(w, &Frame2(argv), scratch)?;
+        crate::record::write_record_multibulk(&mut *w, &Frame2(argv), scratch)?;
     }
     Ok(())
 }

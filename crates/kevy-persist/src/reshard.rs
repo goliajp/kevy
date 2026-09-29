@@ -23,9 +23,7 @@
 #![expect(clippy::let_underscore_must_use, reason = "removing what is already meant to be gone")]
 
 use crate::layout;
-use crate::{
-    Argv, Routing, ShardsMeta, load_snapshot, replay_aof, save_snapshot, write_shards_meta,
-};
+use crate::{Argv, Routing, ShardsMeta, load_snapshot, replay_aof, save_snapshot};
 use kevy_store::Store;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -174,7 +172,7 @@ fn finish_reshard<L: ShardLayout>(
             std::fs::rename(&tmp, &dst)?;
         }
     }
-    write_shards_meta(&layout::shards_meta_path(dir), target)?;
+    target.write(&layout::shards_meta_path(dir))?;
     std::fs::remove_file(dir.join(JOURNAL))
 }
 
@@ -243,7 +241,6 @@ fn parse_journal(body: &str) -> Option<(usize, ShardsMeta, u128)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::read_shards_meta;
 
     fn temp_dir(name: &str) -> PathBuf {
         kevy_tmpdir::unique_dir(&format!("reshard-{name}"))
@@ -287,7 +284,7 @@ mod tests {
         assert!(dir.join("dump-0.rdb").exists() && dir.join("dump-1.rdb").exists());
         assert!(!dir.join("dump-0.rdb.reshard").exists());
         assert!(!dir.join(JOURNAL).exists());
-        assert_eq!(read_shards_meta(&dir.join("shards.meta")), Some(TARGET));
+        assert_eq!(ShardsMeta::read(&dir.join("shards.meta")), Some(TARGET));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -308,7 +305,7 @@ mod tests {
         assert!(!dir.join("dump-0.rdb.premigration.7").exists(), "finalized snapshot re-backed-up");
         assert!(dir.join("dump-1.rdb").exists());
         assert!(!dir.join(JOURNAL).exists());
-        assert_eq!(read_shards_meta(&dir.join("shards.meta")), Some(TARGET));
+        assert_eq!(ShardsMeta::read(&dir.join("shards.meta")), Some(TARGET));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

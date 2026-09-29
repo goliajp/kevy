@@ -183,11 +183,9 @@ fn open_rolls_forward_a_committed_reshard() {
     let mut stale = kevy_store::Store::new();
     stale.set(b"stale", b"x".to_vec(), None, kevy_store::SetCondition::Always);
     kevy_persist::save_snapshot(&stale, &dir.join("dump-0.rdb")).unwrap();
-    kevy_persist::write_shards_meta(
-        &dir.join("shards.meta"),
-        kevy_persist::ShardsMeta::new(1, kevy_persist::Routing::KevyHash),
-    )
-    .unwrap();
+    kevy_persist::ShardsMeta::new(1, kevy_persist::Routing::KevyHash)
+        .write(&dir.join("shards.meta"))
+        .unwrap();
     // Committed-but-unfinished migration to 2 shards: temps + journal.
     // Keys are placed on the shard their hash routes to, as a real
     // redistribute would have done.

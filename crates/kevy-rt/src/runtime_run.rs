@@ -348,7 +348,7 @@ impl<C: Commands> Runtime<C> {
                     } else {
                         self.replication_buffer_size
                     };
-                    let boot = kevy_persist::feed_meta::load_feed_boot(&self.data_dir, id)?;
+                    let boot = kevy_persist::feed_meta::FeedBoot::load(&self.data_dir, id)?;
                     let mut src = kevy_replicate::source::ReplicationSource::new(
                         usize::try_from(budget).unwrap_or(usize::MAX),
                     );

@@ -214,7 +214,7 @@ impl Store {
         let budget = usize::try_from(config.feed_buffer_size).unwrap_or(usize::MAX);
         let (generation, next_offset) = match &config.data_dir {
             Some(dir) => {
-                let b = kevy_persist::feed_meta::load_feed_boot(dir, 0)?;
+                let b = kevy_persist::feed_meta::FeedBoot::load(dir, 0)?;
                 (b.generation, b.next_offset)
             }
             None => (1, 0),

@@ -16,7 +16,7 @@
 use crate::Commands;
 use crate::reduce::shard_of;
 use kevy_persist::reshard::{StdLayout, commit_reshard, merge_sources, recover_journal};
-use kevy_persist::{Routing, ShardsMeta, layout, read_shards_meta, write_shards_meta};
+use kevy_persist::{Routing, ShardsMeta, layout};
 use kevy_store::Store;
 use std::io;
 use std::path::Path;
@@ -36,7 +36,7 @@ pub(crate) fn ensure_layout<C: Commands>(
     let meta_path = layout::shards_meta_path(dir);
     recover_journal(dir, &StdLayout)?;
     let target = ShardsMeta::new(n, routing);
-    let prev = match read_shards_meta(&meta_path) {
+    let prev = match ShardsMeta::read(&meta_path) {
         Some(m) => m,
         // Legacy dir (server never wrote meta): the shard count is however
         // many per-shard files exist, the routing is the only scheme that
@@ -45,7 +45,7 @@ pub(crate) fn ensure_layout<C: Commands>(
     };
     if prev.n == 0 || prev == target {
         std::fs::create_dir_all(dir)?;
-        return write_shards_meta(&meta_path, target);
+        return target.write(&meta_path);
     }
     reshard(dir, prev, target, commands, tier_budget, tier_root)
 }
