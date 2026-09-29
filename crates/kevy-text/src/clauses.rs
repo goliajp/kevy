@@ -11,6 +11,14 @@ use crate::token::tokenize;
 
 /// Parsed query clauses: bare terms, phrases (each a token sequence) and
 /// prefix stems.
+///
+/// ```
+/// let (terms, phrases, prefixes): kevy_text::Clauses =
+///     kevy_text::parse_clauses(br#"Fast "full text" sea*"#);
+/// assert_eq!(terms, [b"fast".to_vec()]);
+/// assert_eq!(phrases, [vec![b"full".to_vec(), b"text".to_vec()]]);
+/// assert_eq!(prefixes, [b"sea".to_vec()]);
+/// ```
 pub type Clauses = (Vec<Vec<u8>>, Vec<Vec<Vec<u8>>>, Vec<Vec<u8>>);
 
 /// Split a query into bare terms, quoted phrases, and `word*` prefixes.
