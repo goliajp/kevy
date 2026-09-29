@@ -12,7 +12,7 @@
 //! [`RuntimeState`]: crate::RuntimeState
 
 use kevy_config::Config;
-use kevy_scope::{MigrationState, MigrationTable, OwnershipTable, Scope};
+use kevy_scope::{MigrationState, MigrationTable, OwnershipError, OwnershipTable, Scope};
 
 use super::{RuntimeState, ShardCtx};
 
@@ -45,7 +45,7 @@ impl ScopeState {
     /// scope list fails the linter (duplicate / overlapping prefixes) —
     /// bad config should fail loudly at boot rather than at the first
     /// wrong-shard write.
-    pub(crate) fn from_config(cfg: &Config) -> Result<Self, String> {
+    pub(crate) fn from_config(cfg: &Config) -> Result<Self, OwnershipError> {
         let ownership = build_ownership(cfg)?;
         // Prefer the client-facing `client_port` if set, fall back to
         // the legacy `port` (which is the elect-control port — not what
@@ -183,7 +183,7 @@ pub(crate) fn encode_quiesced(out: &mut Vec<u8>, target: &str) {
 /// warning loudly at boot about scopes with no fallback declared
 /// (a legal availability trade-off, but one the operator should
 /// see).
-fn build_ownership(cfg: &Config) -> Result<Option<OwnershipTable>, String> {
+fn build_ownership(cfg: &Config) -> Result<Option<OwnershipTable>, OwnershipError> {
     if cfg.cluster.scopes.is_empty() {
         return Ok(None);
     }
@@ -199,7 +199,7 @@ fn build_ownership(cfg: &Config) -> Result<Option<OwnershipTable>, String> {
             }
         })
         .collect();
-    let table = OwnershipTable::new(scopes).map_err(|e| e.to_string())?;
+    let table = OwnershipTable::new(scopes)?;
     for s in table.scopes_without_fallback() {
         let prefix_lossy = String::from_utf8_lossy(s.prefix());
         eprintln!(

@@ -187,6 +187,31 @@ pub fn format_reply(reply: &Reply, indent: usize) -> String {
     }
 }
 
+// Send and Sync are part of the public contract: a change that loses
+// either fails to compile here rather than in a caller.
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<backfill_keys::Source>();
+    send_sync::<backfill_keys::SourceReport>();
+    send_sync::<backfill_keys::Union>();
+    send_sync::<bulk::DeleteMode>();
+    send_sync::<bulk::RateLimiter>();
+    send_sync::<doctor::Health>();
+    send_sync::<doctor::OnWarning>();
+    send_sync::<doctor::Scope>();
+    send_sync::<doctor::TableHealth>();
+    send_sync::<lint::Coincidence>();
+    send_sync::<lint::Overlap>();
+    send_sync::<migrate::Export>();
+    send_sync::<migrate::ImportReport>();
+    send_sync::<migrate::ImportStart>();
+    send_sync::<migrate::OnErrorReply>();
+    send_sync::<shadow::Compared>();
+    send_sync::<shadow::Divergence>();
+    send_sync::<shadow::ShadowReport>();
+    send_sync::<shadow::Shape>();
+};
+
 #[cfg(test)]
 mod format_reply_tests {
     use super::format_reply;

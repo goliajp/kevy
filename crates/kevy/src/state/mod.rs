@@ -36,6 +36,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use kevy_config::Config;
+use kevy_scope::OwnershipError;
 
 /// Everything the server knows that is not per-shard keyspace data.
 /// Built once (by [`crate::serve`] or an embedder) and shared across
@@ -93,10 +94,22 @@ impl RuntimeState {
     /// Build the state for an explicit config. `data_dir` is the
     /// sidecar/persistence root (pass an empty path to disable sidecar
     /// persistence); `nshards` must match the runtime this state will
-    /// serve. Returns `Err(msg)` when `[cluster] scopes` fails the
-    /// linter — bad scope config fails at construction, not at the
-    /// first wrong-shard write.
-    pub fn new(cfg: Arc<Config>, data_dir: PathBuf, nshards: usize) -> Result<Self, String> {
+    /// serve. Returns the [`OwnershipError`] when `[cluster] scopes`
+    /// fails the linter — bad scope config fails at construction, not
+    /// at the first wrong-shard write.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// let state = kevy::RuntimeState::new(Arc::new(kevy_config::Config::default()), "".into(), 1)?;
+    /// let kevy = kevy::KevyCommands::with_state(Arc::new(state));
+    /// # let _ = kevy;
+    /// # Ok::<(), kevy::OwnershipError>(())
+    /// ```
+    pub fn new(
+        cfg: Arc<Config>,
+        data_dir: PathBuf,
+        nshards: usize,
+    ) -> Result<Self, OwnershipError> {
         let mut state = Self::build(cfg, data_dir, nshards)?;
         *state.config_explicit.get_mut() = true;
         Ok(state)
@@ -110,7 +123,7 @@ impl RuntimeState {
             .expect("Config::default() declares no scopes")
     }
 
-    fn build(cfg: Arc<Config>, data_dir: PathBuf, nshards: usize) -> Result<Self, String> {
+    fn build(cfg: Arc<Config>, data_dir: PathBuf, nshards: usize) -> Result<Self, OwnershipError> {
         let replication = Arc::new(ReplicationState::new(
             nshards,
             cfg.replication.single_source,
@@ -242,7 +255,7 @@ pub(crate) struct Ctx<'a> {
 }
 
 /// kevy's command set, plugged into the `kevy-rt` runtime: the shared
-/// [`RuntimeState`] plus this shard's private [`ShardCtx`]. The
+/// [`RuntimeState`] plus this shard's private context. The
 /// runtime clones one `KevyCommands` per shard; the manual [`Clone`]
 /// shares the state Arc and rebuilds the shard zone empty.
 #[derive(Debug)]

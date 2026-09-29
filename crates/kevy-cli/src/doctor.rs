@@ -29,7 +29,8 @@ use crate::link::Link;
 use kevy_resp_client::Reply;
 
 /// What `doctor` concluded about one table.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Health {
     /// Every counter where it should be.
     Ok,
@@ -50,7 +51,8 @@ pub enum Health {
 }
 
 /// One table's name and what was concluded about it.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct TableHealth {
     /// The declared table name.
     pub name: String,
@@ -171,27 +173,58 @@ fn classify(groups: &[Reply]) -> Health {
 }
 
 /// Check every table and print one line each. Exit non-zero only on
-/// drift — a warning is information, and a cron that fails on
-/// information stops being read.
-pub fn run(client: &mut dyn Link, warn_is_failure: bool) -> io::Result<ExitCode> {
-    run_scoped(client, warn_is_failure, Scope { indexes: false, views: false })
+/// drift, unless `on_warning` says a warning fails too — by default a
+/// warning is information, and a cron that fails on information stops
+/// being read.
+///
+/// ```no_run
+/// // Needs a kevy server on 127.0.0.1:6004.
+/// use kevy_cli::doctor::{OnWarning, run};
+/// let mut client = kevy_resp_client::RespClient::connect("127.0.0.1", 6004)?;
+/// let code = run(&mut client, OnWarning::Report)?;
+/// assert_eq!(code, std::process::ExitCode::SUCCESS);
+/// # Ok::<(), std::io::Error>(())
+/// ```
+pub fn run(client: &mut dyn Link, on_warning: OnWarning) -> io::Result<ExitCode> {
+    run_scoped(client, on_warning, Scope::default())
 }
 
-/// What `doctor` verifies besides tables.
+/// What a warning (duplicates on an ORDERPATH) does to `doctor`'s exit
+/// code. Drift fails either way.
 ///
 /// ```
-/// // `doctor --indexes --views`
-/// let everything = kevy_cli::doctor::Scope { indexes: true, views: true };
-/// assert!(everything.indexes && everything.views);
+/// use kevy_cli::doctor::OnWarning;
+/// // `doctor --warn-is-failure`
+/// assert_ne!(OnWarning::Fail, OnWarning::default());
 /// ```
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
+pub enum OnWarning {
+    /// Print the warning and still exit successfully.
+    #[default]
+    Report,
+    /// Exit non-zero when anything warned (`--warn-is-failure`).
+    Fail,
+}
+
+/// What `doctor` verifies besides tables. The default is tables only.
+///
+/// ```
+/// use kevy_cli::doctor::Scope;
+/// // `doctor --indexes --views`
+/// let everything = Scope::default().with_indexes(true).with_views(true);
+/// assert!(everything.indexes && everything.views);
+/// assert!(!Scope::default().indexes);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub struct Scope {
     /// Indexes declared on their own (not compiled from a table).
     ///
     /// ```
     /// // `doctor --indexes`: an index `users.age` belongs to table `users`
     /// // and is verified with it; only an index no table compiled is added.
-    /// let s = kevy_cli::doctor::Scope { indexes: true, views: false };
+    /// let s = kevy_cli::doctor::Scope::default().with_indexes(true);
     /// assert!(s.indexes);
     /// ```
     pub indexes: bool,
@@ -199,25 +232,50 @@ pub struct Scope {
     ///
     /// ```
     /// // `doctor --views`: VIEW.VERIFY for every view VIEW.LIST names.
-    /// let s = kevy_cli::doctor::Scope { indexes: false, views: true };
+    /// let s = kevy_cli::doctor::Scope::default().with_views(true);
     /// assert!(s.views);
     /// ```
     pub views: bool,
+}
+
+impl Scope {
+    /// Also verify indexes no table compiled (`--indexes`).
+    ///
+    /// ```
+    /// let s = kevy_cli::doctor::Scope::default().with_indexes(true);
+    /// assert!(s.indexes && !s.views);
+    /// ```
+    pub fn with_indexes(mut self, indexes: bool) -> Self {
+        self.indexes = indexes;
+        self
+    }
+
+    /// Also verify every view (`--views`).
+    ///
+    /// ```
+    /// let s = kevy_cli::doctor::Scope::default().with_views(true);
+    /// assert!(s.views && !s.indexes);
+    /// ```
+    pub fn with_views(mut self, views: bool) -> Self {
+        self.views = views;
+        self
+    }
 }
 
 /// [`run`], also verifying bare indexes and views when `scope` says so.
 ///
 /// ```no_run
 /// // Needs a kevy server on 127.0.0.1:6004.
-/// use kevy_cli::doctor::{Scope, run_scoped};
+/// use kevy_cli::doctor::{OnWarning, Scope, run_scoped};
 /// let mut client = kevy_resp_client::RespClient::connect("127.0.0.1", 6004)?;
-/// let code = run_scoped(&mut client, false, Scope { indexes: true, views: true })?;
+/// let scope = Scope::default().with_indexes(true).with_views(true);
+/// let code = run_scoped(&mut client, OnWarning::Report, scope)?;
 /// assert_eq!(code, std::process::ExitCode::SUCCESS);
 /// # Ok::<(), std::io::Error>(())
 /// ```
 pub fn run_scoped(
     client: &mut dyn Link,
-    warn_is_failure: bool,
+    on_warning: OnWarning,
     scope: Scope,
 ) -> io::Result<ExitCode> {
     let tables = table_names(client)?;
@@ -244,7 +302,7 @@ pub fn run_scoped(
         return Ok(ExitCode::SUCCESS);
     }
     let noun = if scope.indexes || scope.views { "checked" } else { "table(s)" };
-    report(client, &targets, warn_is_failure, noun)
+    report(client, &targets, on_warning, noun)
 }
 
 /// The `name` of every row a LIST verb answers.
@@ -262,7 +320,7 @@ fn listed_names(client: &mut dyn Link, verb: &[u8]) -> io::Result<Vec<String>> {
 fn report(
     client: &mut dyn Link,
     targets: &[(&[u8], &str, String)],
-    warn_is_failure: bool,
+    on_warning: OnWarning,
     noun: &str,
 ) -> io::Result<ExitCode> {
     let (mut bad, mut warned, mut building) = (0u32, 0u32, 0u32);
@@ -293,7 +351,7 @@ fn report(
         "doctor: {} {noun} — {bad} drifted, {warned} warned, {building} still building",
         targets.len()
     );
-    Ok(if bad > 0 || (warn_is_failure && warned > 0) {
+    Ok(if bad > 0 || (on_warning == OnWarning::Fail && warned > 0) {
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS
@@ -302,11 +360,11 @@ fn report(
 
 /// `doctor [--warn-is-failure] [--indexes] [--views]` on `client`.
 pub(crate) fn run_on(client: &mut dyn Link, args: &[String]) -> ExitCode {
-    let mut strict = false;
-    let mut scope = Scope { indexes: false, views: false };
+    let mut on_warning = OnWarning::Report;
+    let mut scope = Scope::default();
     for word in args {
         match word.as_str() {
-            "--warn-is-failure" => strict = true,
+            "--warn-is-failure" => on_warning = OnWarning::Fail,
             "--indexes" => scope.indexes = true,
             "--views" => scope.views = true,
             other => {
@@ -318,7 +376,7 @@ pub(crate) fn run_on(client: &mut dyn Link, args: &[String]) -> ExitCode {
             }
         }
     }
-    match run_scoped(client, strict, scope) {
+    match run_scoped(client, on_warning, scope) {
         Ok(code) => code,
         Err(e) => {
             eprintln!("kevy-cli doctor: {e}");

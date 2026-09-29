@@ -1,18 +1,17 @@
 //! kevy — a single-machine, Redis-compatible key–value server.
 //!
 //! This crate is the server: it supplies the command *semantics* — routing
-//! ([`KevyCommands`]) and execution ([`dispatch`]) — and wires them to the
+//! and execution, both in [`KevyCommands`] — and wires them to the
 //! [kevy-rt] shared-nothing thread-per-core runtime via [`serve`]. The command
-//! logic is also reachable directly (one keyspace, no I/O) through [`dispatch`],
-//! which is handy for embedding or testing. Built from a small stack of
-//! zero-dependency crates: [kevy-sys], [kevy-resp], [kevy-store], [kevy-net],
-//! [kevy-rt], [kevy-persist].
+//! logic is also reachable directly (one keyspace, no I/O) through
+//! [`KevyCommands::dispatch`], which is handy for embedding or testing. Built
+//! from a small stack of zero-dependency crates: [kevy-sys], [kevy-resp],
+//! [kevy-store], [kevy-rt], [kevy-persist].
 //!
 //! [kevy-rt]: https://crates.io/crates/kevy-rt
 //! [kevy-sys]: https://crates.io/crates/kevy-sys
 //! [kevy-resp]: https://crates.io/crates/kevy-resp
 //! [kevy-store]: https://crates.io/crates/kevy-store
-//! [kevy-net]: https://crates.io/crates/kevy-net
 //! [kevy-persist]: https://crates.io/crates/kevy-persist
 //!
 //! # Example
@@ -89,11 +88,13 @@ pub mod verb_meta;
 mod view_runtime;
 
 pub use kevy_rt::Argv;
+pub use kevy_scope::OwnershipError;
 pub use kevy_store::Store as KeyspaceStore;
 pub use state::{KevyCommands, RuntimeState};
 
 /// What to do with a connection after draining its buffered commands.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum AfterDrain {
     /// Keep serving this connection — the ordinary outcome.
     KeepOpen,
@@ -236,8 +237,8 @@ fn boot_state(cfg: &Arc<kevy_config::Config>) -> Arc<RuntimeState> {
     }
     let state = match RuntimeState::new(Arc::clone(cfg), data_dir, nshards) {
         Ok(s) => Arc::new(s),
-        Err(msg) => {
-            eprintln!("kevy: bad [cluster] scopes config: {msg}");
+        Err(e) => {
+            eprintln!("kevy: bad [cluster] scopes config: {e}");
             std::process::exit(1);
         }
     };
@@ -409,6 +410,19 @@ pub fn handle_conn(kevy: &KevyCommands, conn: &Socket, store: &mut Store) -> io:
         input.extend_from_slice(&chunk[..n]);
     }
 }
+
+// Send and Sync are part of the public contract: a change that loses
+// either fails to compile here rather than in a caller. KevyCommands is
+// Send and deliberately not Sync: each shard thread owns its own clone,
+// with per-shard state in cells.
+const _: () = {
+    const fn send<T: Send>() {}
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<AfterDrain>();
+    send::<KevyCommands>();
+    send_sync::<RuntimeState>();
+    send_sync::<verb_meta::VerbMeta>();
+};
 
 #[cfg(test)]
 mod tests;
