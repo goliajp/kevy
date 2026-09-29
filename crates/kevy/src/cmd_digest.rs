@@ -9,6 +9,8 @@ use crate::cmd_index_query::{ST_BADARGS, ST_OK};
 
 const FNV_OFFSET: u64 = 0xCBF2_9CE4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0100_0000_01B3;
+/// Keys held at once while a shard sweeps its prefix.
+const DIGEST_BATCH: usize = 1024;
 
 fn fnv(h: &mut u64, bytes: &[u8]) {
     for &b in bytes {
@@ -76,22 +78,27 @@ pub(crate) fn extension_op(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     let Some(prefix) = argv.get(1) else {
         return vec![ST_BADARGS];
     };
-    let mut pat = prefix.to_vec();
-    pat.push(b'*');
-    let keys = store.collect_keys(Some(&pat), None);
     // The digest sweep is a bulk read — inside the peek scope a
     // cold row costs ONE record read (whole-value decode), never
     // promotes and never advances the 2nd-touch gate (a full-prefix
-    // digest must not thrash the hot tier).
-    let xor = store.peek_scope(|s| {
-        let mut xor = 0u64;
-        for key in &keys {
-            xor ^= row_digest(s, key);
+    // digest must not thrash the hot tier). The keys are walked a batch
+    // at a time rather than copied: a copy of ten million keys held about
+    // 200 MB for the length of the sweep. The sweep inserts nothing and
+    // runs in one op, so the table cannot grow under it and each key is
+    // visited once.
+    let (count, xor) = store.peek_scope(|s| {
+        let mut walk = crate::key_walk::KeyWalk::new(prefix);
+        let (mut count, mut xor) = (0u64, 0u64);
+        while !walk.is_done() {
+            for key in walk.next_batch(s, DIGEST_BATCH) {
+                xor ^= row_digest(s, &key);
+                count += 1;
+            }
         }
-        xor
+        (count, xor)
     });
     let mut chunk = vec![ST_OK];
-    chunk.extend_from_slice(&(keys.len() as u64).to_le_bytes());
+    chunk.extend_from_slice(&count.to_le_bytes());
     chunk.extend_from_slice(&xor.to_le_bytes());
     chunk
 }
@@ -114,4 +121,32 @@ pub(crate) fn extension_reduce(chunks: Vec<Vec<u8>>) -> Vec<u8> {
     kevy_resp::encode_integer(&mut out, count as i64);
     kevy_resp::encode_bulk(&mut out, format!("{xor:016x}").as_bytes());
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_sweep_counts_and_digests_every_row_once_across_batches() {
+        let mut s = Store::new();
+        for i in 0..5_000u32 {
+            let k = format!("row:{i}");
+            s.hset(k.as_bytes(), &[(b"f".as_slice(), format!("v{i}").as_bytes())]).unwrap();
+        }
+        for i in 0..300u32 {
+            s.set(
+                format!("other:{i}").as_bytes(),
+                b"x".to_vec(),
+                None,
+                kevy_store::SetCondition::Always,
+            );
+        }
+        let want =
+            (0..5_000u32).fold(0u64, |x, i| x ^ row_digest(&mut s, format!("row:{i}").as_bytes()));
+        let chunk = extension_op(&mut s, &[b"PREFIX.DIGEST".to_vec(), b"row:".to_vec()]);
+        assert_eq!(chunk[0], ST_OK);
+        assert_eq!(u64::from_le_bytes(chunk[1..9].try_into().unwrap()), 5_000);
+        assert_eq!(u64::from_le_bytes(chunk[9..17].try_into().unwrap()), want);
+    }
 }

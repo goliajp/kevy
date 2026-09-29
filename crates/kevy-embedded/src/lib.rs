@@ -145,6 +145,7 @@ mod ops_p3;
 mod ops_pipeline;
 mod ops_reconcile;
 mod ops_scan;
+pub use ops_scan::KeysIter;
 mod ops_snapshot_view;
 #[cfg(feature = "index")]
 mod ops_table;

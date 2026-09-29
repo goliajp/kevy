@@ -22,15 +22,16 @@ pub(crate) fn quantile_points(
     spec: &IndexSpec,
     points: usize,
 ) -> Vec<(Vec<u8>, u64)> {
-    let mut pat = spec.prefix().to_vec();
-    pat.push(b'*');
     // one buffer for every value: a Vec per row would cost more than the
-    // index itself does per row
+    // index itself does per row; the keys are walked, not copied
     let (mut buf, mut ends) = (Vec::new(), Vec::new());
-    for k in store.collect_keys(Some(&pat), None) {
-        if let Some((v, _)) = super::global::derive(store, spec, &k) {
-            buf.extend_from_slice(&v.order_bytes());
-            ends.push(buf.len());
+    let mut walk = crate::key_walk::KeyWalk::new(spec.prefix());
+    while !walk.is_done() {
+        for k in walk.next_batch(store, 1024) {
+            if let Some((v, _)) = super::global::derive(store, spec, &k) {
+                buf.extend_from_slice(&v.order_bytes());
+                ends.push(buf.len());
+            }
         }
     }
     let at = |i: usize| &buf[if i == 0 { 0 } else { ends[i - 1] }..ends[i]];

@@ -31,35 +31,35 @@ use crate::state::Ctx;
 pub(crate) fn classify_prefix_rows(
     s: &mut Store,
     spec: &kevy_index::IndexSpec,
-    row_keys: &[Vec<u8>],
     indexed: &std::collections::HashSet<&[u8]>,
     window: Option<kevy_index::WindowAudit>,
 ) -> [u64; 5] {
     let names = spec.scalar_read_names();
-    let w = spec.primary_width();
+    let reads = &names[..spec.primary_width()];
     let mut f = [0u64; 5];
     // Holes below the window boundary: candidates for the cold side,
     // reconciled against its own count once the walk is done.
     let mut below = 0u64;
-    for key in row_keys {
-        f[3] += 1;
-        let cls = match s.peek_hash_fields(key, &names[..w]) {
-            Ok(Some(vals)) => spec.classify_scalar(&vals),
-            _ => kevy_index::RowDerivation::Absent,
-        };
-        match cls {
-            kevy_index::RowDerivation::Indexed(_) => {
-                if !indexed.contains(key.as_slice()) {
-                    if slid_out(s, spec, key, window) {
-                        below += 1;
-                    } else {
-                        f[4] += 1;
-                    }
+    // the rows are walked a batch at a time, not copied: the walk runs in
+    // one op and inserts nothing, so each row is seen once
+    let mut walk = crate::key_walk::KeyWalk::new(spec.prefix());
+    while !walk.is_done() {
+        for key in walk.next_batch(s, 1024) {
+            f[3] += 1;
+            let cls = match s.peek_hash_fields(&key, reads) {
+                Ok(Some(vals)) => spec.classify_scalar(&vals),
+                _ => kevy_index::RowDerivation::Absent,
+            };
+            match cls {
+                kevy_index::RowDerivation::Indexed(_) if indexed.contains(key.as_slice()) => {}
+                kevy_index::RowDerivation::Indexed(_) if slid_out(s, spec, &key, window) => {
+                    below += 1;
                 }
+                kevy_index::RowDerivation::Indexed(_) => f[4] += 1,
+                kevy_index::RowDerivation::CoerceFailed => f[0] += 1,
+                kevy_index::RowDerivation::Oversize => f[1] += 1,
+                kevy_index::RowDerivation::Absent => f[2] += 1,
             }
-            kevy_index::RowDerivation::CoerceFailed => f[0] += 1,
-            kevy_index::RowDerivation::Oversize => f[1] += 1,
-            kevy_index::RowDerivation::Absent => f[2] += 1,
         }
     }
     // Every row that slid should have an entry waiting for it. The
@@ -107,9 +107,6 @@ pub(crate) fn index_verify_counts(
         })?;
     let indexed: std::collections::HashSet<&[u8]> =
         entries.iter().map(|(k, _)| k.as_slice()).collect();
-    let mut pat = spec.prefix().to_vec();
-    pat.push(b'*');
-    let row_keys = store.collect_keys(Some(&pat), None);
     let (drift, fresh) = store.peek_scope(|s| {
         let mut drift = 0u64;
         for (key, held) in &entries {
@@ -118,7 +115,7 @@ pub(crate) fn index_verify_counts(
                 _ => drift += 1,
             }
         }
-        (drift, classify_prefix_rows(s, &spec, &row_keys, &indexed, window))
+        (drift, classify_prefix_rows(s, &spec, &indexed, window))
     });
     Ok([
         stats.entries,
