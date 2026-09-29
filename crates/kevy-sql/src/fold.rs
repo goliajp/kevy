@@ -33,12 +33,28 @@ use kevy_scalar::Scalar;
 #[non_exhaustive]
 pub struct Folded {
     /// One value per SELECT column.
+    ///
+    /// ```
+    /// let f = kevy_sql::fold_select("SELECT 1 + 2, upper('a');", 0)?;
+    /// assert_eq!(f.columns, [kevy_sql::Scalar::Int(3), kevy_sql::Scalar::Text("A".into())]);
+    /// # Ok::<(), kevy_sql::SqlError>(())
+    /// ```
     pub columns: Vec<kevy_scalar::Scalar>,
 }
 
 /// Evaluate a table-free `SELECT expr[, expr…];` against the given
 /// clock (epoch microseconds). Refusals are [`SqlError`]s whose text
 /// names the construct — never a silent wrong answer.
+///
+/// ```
+/// let f = kevy_sql::fold_select("SELECT length('kevy') * 2;", 0)?;
+/// assert_eq!(f.columns, [kevy_sql::Scalar::Int(8)]);
+///
+/// // a table query is refused by name rather than folded
+/// let e = kevy_sql::fold_select("SELECT 1 FROM t;", 0).unwrap_err();
+/// assert!(e.message.starts_with("FROM is not foldable"));
+/// # Ok::<(), kevy_sql::SqlError>(())
+/// ```
 pub fn fold_select(sql: &str, now_micros: i64) -> Result<Folded, SqlError> {
     let toks = lex(sql)?;
     let mut p = Parser { t: &toks, i: 0, now: now_micros };

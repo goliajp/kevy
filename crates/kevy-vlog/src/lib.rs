@@ -86,6 +86,14 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 /// Default rotation threshold for the active file (RFC §7: 256 MiB).
+///
+/// ```
+/// let dir = kevy_tmpdir::TmpDir::new("vlog-default-rotate");
+/// let v = kevy_vlog::Vlog::open(dir.path(), kevy_vlog::DEFAULT_ROTATE_BYTES)?;
+/// assert_eq!(kevy_vlog::DEFAULT_ROTATE_BYTES, 256 * 1024 * 1024);
+/// assert_eq!(v.stats().files, 1);
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub const DEFAULT_ROTATE_BYTES: u64 = 256 << 20;
 
 /// Per-record header: `body_len u32-LE | crc32c u32-LE`.
@@ -117,8 +125,10 @@ pub(crate) fn split_body(body: Vec<u8>) -> io::Result<(Vec<u8>, Vec<u8>)> {
 
 mod accounting;
 mod record;
+mod stats;
 pub use accounting::CompressionStats;
 pub use record::{CompactOwner, VlogFile, VlogRef, verify_image};
+pub use stats::VlogStats;
 
 // Send and Sync are part of the public contract: a change that loses
 // either fails to compile here rather than in a caller.
@@ -140,25 +150,18 @@ struct FileState {
     compression: CompressionStats,
 }
 
-/// Aggregate gauges for INFO (`vlog_size` / `vlog_dead_bytes` feeders).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub struct VlogStats {
-    /// Files in the log, including the one currently being appended to.
-    pub files: usize,
-    /// Bytes on disk across all files — what `vlog_size` reports.
-    pub bytes: u64,
-    /// Bytes still referenced by a live stub. `bytes - live_bytes` is the
-    /// dead fraction compaction exists to reclaim, and is what
-    /// `vlog_dead_bytes` reports.
-    pub live_bytes: u64,
-    /// Compaction generation. A `VlogRef` taken before this changed may
-    /// have been moved; see `epoch()`.
-    pub epoch: u64,
-}
-
 /// One shard's value log. Single owner (`&mut` appends, the shard
 /// thread); concurrent readers go through [`Vlog::pin`].
+///
+/// ```
+/// use kevy_vlog::Vlog;
+/// let dir = kevy_tmpdir::TmpDir::new("vlog-type");
+/// let mut v = Vlog::open(dir.path(), 1 << 20)?;
+/// let r = v.append(b"k", b"cold bytes")?;
+/// let file = v.pin(r.file_id).expect("the active file");
+/// assert_eq!(file.read(r)?.1, b"cold bytes");
+/// # Ok::<(), std::io::Error>(())
+/// ```
 #[derive(Debug)]
 pub struct Vlog {
     dir: PathBuf,
@@ -332,6 +335,16 @@ impl Vlog {
 
     /// Read `(key, payload)` for a ref. For readers that outlive the
     /// owner's borrow (serializer threads), use [`Vlog::pin`] instead.
+    ///
+    /// ```
+    /// let dir = kevy_tmpdir::TmpDir::new("vlog-read");
+    /// let mut v = kevy_vlog::Vlog::open(dir.path(), 1 << 20)?;
+    /// let r = v.append(b"k", b"v")?;
+    /// assert_eq!(v.read(r)?, (b"k".to_vec(), b"v".to_vec()));
+    /// let stale = kevy_vlog::VlogRef::new(99, r.offset, r.len);
+    /// assert!(v.read(stale).is_err(), "a file this log never had");
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub fn read(&self, r: VlogRef) -> io::Result<(Vec<u8>, Vec<u8>)> {
         match self.files.iter().find(|s| s.handle.id == r.file_id) {
             Some(s) => s.handle.read(r),
@@ -341,6 +354,15 @@ impl Vlog {
 
     /// Pin a file for concurrent / long-lived reading: the returned Arc
     /// keeps the file on disk across compaction until dropped.
+    ///
+    /// ```
+    /// let dir = kevy_tmpdir::TmpDir::new("vlog-pin-one");
+    /// let mut v = kevy_vlog::Vlog::open(dir.path(), 1 << 20)?;
+    /// let r = v.append(b"k", b"v")?;
+    /// let file = v.pin(r.file_id).expect("the file r names");
+    /// assert_eq!(file.id(), r.file_id);
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub fn pin(&self, file_id: u32) -> Option<Arc<VlogFile>> {
         self.files.iter().find(|s| s.handle.id == file_id).map(|s| Arc::clone(&s.handle))
     }
@@ -370,6 +392,17 @@ impl Vlog {
 
     /// The owner overwrote / deleted / promoted the record at `r`: its
     /// bytes are dead, feeding the compaction trigger.
+    ///
+    /// ```
+    /// let dir = kevy_tmpdir::TmpDir::new("vlog-note-dead");
+    /// let mut v = kevy_vlog::Vlog::open(dir.path(), 1 << 20)?;
+    /// let r = v.append(b"k", b"v")?;
+    /// v.note_dead(r);
+    /// assert_eq!(v.stats().live_bytes, 0);
+    /// // accounting only: the bytes stay readable until compaction
+    /// assert_eq!(v.read(r)?.1, b"v");
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub fn note_dead(&mut self, r: VlogRef) {
         if let Some(s) = self.state_of(r.file_id) {
             s.live = s.live.saturating_sub(HEADER + u64::from(r.len));
@@ -381,6 +414,17 @@ impl Vlog {
     /// no IO — sealed files become full-dead (dropped by the next
     /// [`Self::compact_below`] without a scan); the active file's
     /// garbage bytes fall out at its own retirement.
+    ///
+    /// ```
+    /// let dir = kevy_tmpdir::TmpDir::new("vlog-mark-all-dead");
+    /// let mut v = kevy_vlog::Vlog::open(dir.path(), 1)?;
+    /// v.append(b"a", b"1")?;
+    /// v.append(b"b", b"2")?;
+    /// v.mark_all_dead();
+    /// assert_eq!(v.stats().live_bytes, 0);
+    /// assert!(v.compaction_pending(50), "the sealed file is now all dead");
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub fn mark_all_dead(&mut self) {
         for s in &mut self.files {
             s.live = 0;

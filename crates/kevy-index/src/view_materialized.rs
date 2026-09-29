@@ -8,6 +8,29 @@ use kevy_text::SortOrder;
 /// members with the bounded top-K discipline (keep `K + Δ` where
 /// `Δ = K/4`; underflow requests a local rebuild from the base
 /// indexes — RFC §2).
+///
+/// ```
+/// use kevy_index::{IndexValue, MaterializedSet, Membership, SortOrder};
+///
+/// // top 4 by score, highest first; the set holds K + K/4 = 5
+/// let mut hot = MaterializedSet::new(4, SortOrder::Desc);
+/// for (i, score) in [3, 9, 1, 7, 5, 8].into_iter().enumerate() {
+///     let key = format!("post:{i}");
+///     hot.apply(key.as_bytes(), Membership::Member(Some(IndexValue::I64(score))));
+/// }
+/// assert_eq!(hot.len(), 5, "the lowest score was evicted");
+/// let top: Vec<_> = hot.page(None, 2).into_iter().map(|(v, _)| v).collect();
+/// assert_eq!(top, [IndexValue::I64(9), IndexValue::I64(8)]);
+/// assert!(hot.approx_bytes() > 0);
+///
+/// // removals that drop the set below K ask the caller for a rebuild
+/// hot.apply(b"post:1", Membership::NonMember);
+/// let underflow = hot.apply(b"post:3", Membership::NonMember);
+/// assert!(underflow && hot.len() == 3);
+///
+/// hot.clear();
+/// assert!(hot.is_empty());
+/// ```
 #[derive(Debug, Default)]
 pub struct MaterializedSet {
     set: std::collections::BTreeSet<(IndexValue, Vec<u8>)>,
@@ -38,8 +61,24 @@ pub enum Membership {
     /// The key matches the view's tree, with its value in the view's
     /// order index — `None` when it has none there, which excludes it
     /// (counted, not an error).
+    ///
+    /// ```
+    /// use kevy_index::{IndexValue, MaterializedSet, Membership, SortOrder};
+    /// let mut m = MaterializedSet::new(0, SortOrder::Asc);
+    /// m.apply(b"a", Membership::Member(Some(IndexValue::I64(2))));
+    /// m.apply(b"a", Membership::Member(Some(IndexValue::I64(5))));
+    /// assert_eq!(m.page(None, 9), vec![(IndexValue::I64(5), b"a".to_vec())], "re-applying moves the key");
+    /// ```
     Member(Option<IndexValue>),
     /// The key does not match the tree, or no longer exists.
+    ///
+    /// ```
+    /// use kevy_index::{IndexValue, MaterializedSet, Membership, SortOrder};
+    /// let mut m = MaterializedSet::new(0, SortOrder::Asc);
+    /// m.apply(b"a", Membership::Member(Some(IndexValue::I64(2))));
+    /// m.apply(b"a", Membership::NonMember);
+    /// assert!(m.is_empty());
+    /// ```
     NonMember,
 }
 

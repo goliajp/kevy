@@ -30,9 +30,12 @@
 use crate::catalog::ValType;
 use crate::error::SpecError;
 use crate::spec::IndexSpec;
-use crate::table_error::WhereError;
 use crate::value::{IndexValue, order_key};
 use kevy_text::SortOrder;
+
+#[path = "composite_where.rs"]
+mod clause;
+pub use clause::{WhereClause, composite_bounds, parse_where};
 
 /// One declared composite column: which hash field, how its bytes
 /// coerce/order, and whether this component sorts descending.
@@ -50,10 +53,35 @@ use kevy_text::SortOrder;
 #[non_exhaustive]
 pub struct CompositeCol {
     /// Hash field name.
+    ///
+    /// ```
+    /// use kevy_index::{CompositeCol, ValType, composite_encode};
+    /// let col = CompositeCol::new("region", ValType::Str);
+    /// assert_eq!(col.name, b"region");
+    /// // the caller fetches that field from the row, in declared order
+    /// assert!(composite_encode(&[col], &[Some(b"eu")]).is_some());
+    /// ```
     pub name: Vec<u8>,
     /// How the column's bytes coerce (i64 | f64 | str).
+    ///
+    /// ```
+    /// use kevy_index::{CompositeCol, ValType, composite_encode};
+    /// let at = [CompositeCol::new("at", ValType::I64)];
+    /// assert_eq!(at[0].ty, ValType::I64);
+    /// assert!(composite_encode(&at, &[Some(b"1700000000")]).is_some());
+    /// assert_eq!(composite_encode(&at, &[Some(b"yesterday")]), None, "coerce failure");
+    /// ```
     pub ty: ValType,
     /// Component direction; a descending one has its bytes complemented.
+    ///
+    /// ```
+    /// use kevy_index::{CompositeCol, SortOrder, ValType, composite_encode};
+    /// let asc = [CompositeCol::new("at", ValType::I64)];
+    /// let desc = [CompositeCol::new("at", ValType::I64).with_order(SortOrder::Desc)];
+    /// let enc = |cols: &[CompositeCol], v: &[u8]| composite_encode(cols, &[Some(v)]);
+    /// assert!(enc(&asc, b"1") < enc(&asc, b"2"));
+    /// assert!(enc(&desc, b"1") > enc(&desc, b"2"), "newest first");
+    /// ```
     pub order: SortOrder,
 }
 
@@ -83,17 +111,46 @@ impl CompositeCol {
 }
 
 /// Hard cap on composite columns per index.
+///
+/// ```
+/// use kevy_index::{CompositeCol, IndexKind, IndexSpec, MAX_COMPOSITE_COLS, ValType};
+/// let cols = |n: usize| (0..n).map(|i| CompositeCol::new(format!("c{i}"), ValType::I64)).collect();
+/// let spec = |n| {
+///     IndexSpec::builder("t.p", "t:", IndexKind::Range, ValType::Str)
+///         .with_field("p")
+///         .with_composite(cols(n))
+///         .build()
+/// };
+/// assert!(spec(MAX_COMPOSITE_COLS).is_ok());
+/// assert!(spec(MAX_COMPOSITE_COLS + 1).is_err());
+/// ```
 pub const MAX_COMPOSITE_COLS: usize = 8;
 
 /// Hard cap on one `str` component's raw length. A longer value
 /// excludes the row (documented, conformance-tested) — the same class
 /// of limit a relational B-tree puts on its index row size, and what
 /// keeps [`composite_bounds`]' upper bound finite and exact.
+///
+/// ```
+/// use kevy_index::{CompositeCol, MAX_STR_COMPONENT, ValType, composite_encode};
+/// let cols = [CompositeCol::new("title", ValType::Str)];
+/// let at_cap = vec![b'x'; MAX_STR_COMPONENT];
+/// let over = vec![b'x'; MAX_STR_COMPONENT + 1];
+/// assert!(composite_encode(&cols, &[Some(&at_cap)]).is_some());
+/// assert_eq!(composite_encode(&cols, &[Some(&over)]), None, "the row is excluded");
+/// ```
 pub const MAX_STR_COMPONENT: usize = 255;
 
 /// The named refusal for `WHERE` on an index that declares no
 /// composite columns. Shared verbatim by the server and the embedded
 /// dispatch so the wire wording cannot drift.
+///
+/// ```
+/// use kevy_index::WHERE_NOT_COMPOSITE;
+/// // what a dispatcher replies when the named index has no composite columns
+/// let reply = format!("-ERR {WHERE_NOT_COMPOSITE}");
+/// assert!(reply.contains("requires a composite index"));
+/// ```
 pub const WHERE_NOT_COMPOSITE: &str =
     "WHERE requires a composite index (an ORDERPATH-compiled one) — this index is not one";
 
@@ -128,6 +185,19 @@ fn encode_component(col: &CompositeCol, raw: &[u8]) -> Option<Vec<u8>> {
 /// The row's composite encoding: order-preserving concatenation of the
 /// declared columns. `None` = the row is excluded (a missing column, a
 /// coerce failure, or an over-long `str` component).
+///
+/// ```
+/// use kevy_index::{CompositeCol, SortOrder, ValType, composite_encode};
+/// let cols = [
+///     CompositeCol::new("region", ValType::Str),
+///     CompositeCol::new("at", ValType::I64).with_order(SortOrder::Desc),
+/// ];
+/// let enc = |r: &[u8], at: &[u8]| composite_encode(&cols, &[Some(r), Some(at)]);
+/// // memcmp order = (region ASC, at DESC)
+/// assert!(enc(b"eu", b"20") < enc(b"eu", b"10"));
+/// assert!(enc(b"eu", b"10") < enc(b"us", b"99"));
+/// assert_eq!(composite_encode(&cols, &[Some(b"eu"), None]), None, "missing column");
+/// ```
 pub fn composite_encode(cols: &[CompositeCol], vals: &[Option<&[u8]>]) -> Option<Vec<u8>> {
     composite_classify(cols, vals).into_value()
 }
@@ -141,18 +211,72 @@ pub fn composite_encode(cols: &[CompositeCol], vals: &[Option<&[u8]>]) -> Option
 /// F10), and how two rows silently absent for *oversize* components
 /// cost a production hunt (F8/F9). One classification now drives both
 /// the write path and VERIFY, so the causes cannot drift apart.
+///
+/// ```
+/// use kevy_index::{IndexKind, IndexSpec, RowDerivation, ValType};
+/// let spec = IndexSpec::builder("age", "u:", IndexKind::Range, ValType::I64).with_field("age").build()?;
+/// assert_eq!(spec.classify_scalar(&[Some(b"41".to_vec())]), RowDerivation::Indexed(b"41".to_vec()));
+/// assert_eq!(spec.classify_scalar(&[None]), RowDerivation::Absent);
+/// assert_eq!(spec.classify_scalar(&[Some(b"old".to_vec())]), RowDerivation::CoerceFailed);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum RowDerivation {
     /// The row belongs in the index, under this value.
+    ///
+    /// ```
+    /// use kevy_index::{CompositeCol, IndexKind, IndexSpec, IndexValue, RowDerivation, ValType};
+    /// let spec = IndexSpec::builder("t.p", "t:", IndexKind::Range, ValType::Str)
+    ///     .with_field("p")
+    ///     .with_composite(vec![CompositeCol::new("a", ValType::Str)])
+    ///     .build()?;
+    /// let row = [Some(b"x".to_vec())];
+    /// let RowDerivation::Indexed(enc) = spec.classify_scalar(&row) else { panic!("x indexes") };
+    /// // the framed bytes: raw value, then the 0x00 0x00 terminator
+    /// assert_eq!(enc, b"x\0\0");
+    /// assert_eq!(spec.derive_scalar(&row), Some(IndexValue::Str(enc)));
+    /// // the row read fetches the composite's columns, all of them driving
+    /// assert_eq!((spec.scalar_read_names(), spec.primary_width()), (vec![&b"a"[..]], 1));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     Indexed(Vec<u8>),
     /// A driving column is absent from the row — NULL semantics, the
     /// row is excluded *by design* (Law 3: absence is never an error).
+    ///
+    /// ```
+    /// use kevy_index::{CompositeCol, IndexKind, IndexSpec, RowDerivation, ValType};
+    /// let spec = IndexSpec::builder("t.p", "t:", IndexKind::Range, ValType::Str)
+    ///     .with_field("p")
+    ///     .with_composite(vec![CompositeCol::new("a", ValType::Str), CompositeCol::new("b", ValType::I64)])
+    ///     .build()?;
+    /// assert_eq!(spec.classify_scalar(&[Some(b"x".to_vec()), None]), RowDerivation::Absent);
+    /// assert_eq!(spec.derive_scalar(&[Some(b"x".to_vec()), None]), None);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     Absent,
     /// A present value failed to coerce to the declared type.
+    ///
+    /// ```
+    /// use kevy_index::{IndexKind, IndexSpec, RowDerivation, ValType};
+    /// let spec = IndexSpec::builder("px", "p:", IndexKind::Range, ValType::F64).with_field("px").build()?;
+    /// assert_eq!(spec.classify_scalar(&[Some(b"NaN".to_vec())]), RowDerivation::CoerceFailed);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     CoerceFailed,
     /// A string component exceeded [`MAX_STR_COMPONENT`]; the row is
     /// excluded from this composite (documented bound — hash or bound
     /// the column if every row must index).
+    ///
+    /// ```
+    /// use kevy_index::{CompositeCol, IndexKind, IndexSpec, MAX_STR_COMPONENT, RowDerivation, ValType};
+    /// let spec = IndexSpec::builder("t.p", "t:", IndexKind::Range, ValType::Str)
+    ///     .with_field("p")
+    ///     .with_composite(vec![CompositeCol::new("title", ValType::Str)])
+    ///     .build()?;
+    /// let long = vec![b'x'; MAX_STR_COMPONENT + 1];
+    /// assert_eq!(spec.classify_scalar(&[Some(long)]), RowDerivation::Oversize);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     Oversize,
 }
 
@@ -192,177 +316,6 @@ fn classify_component(col: &CompositeCol, raw: &[u8]) -> RowDerivation {
         // component that did not parse (or a Vector column, which never
         // composites) — a coercion failure either way.
         None => RowDerivation::CoerceFailed,
-    }
-}
-
-/// One parsed `WHERE` clause: an equality prefix plus an optional range
-/// on the next component. Grammar lives here so the server and the
-/// embedded dispatch parse the identical shape.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub struct WhereClause {
-    /// `col EQ v` pairs, wire order.
-    pub eqs: Vec<(Vec<u8>, Vec<u8>)>,
-    /// `RANGE col min max`, at most one, after the equalities.
-    pub range: Option<(Vec<u8>, Vec<u8>, Vec<u8>)>,
-}
-
-/// Parse `WHERE <col> EQ <v> [<col> EQ <v>…] [RANGE <col> <min> <max>]`
-/// starting at `at` (the token after `WHERE`). `stop` names the clause
-/// keywords that end the WHERE block (LIMIT / FILTER / …). Returns the
-/// clause plus the index of the first unconsumed token. `None` = syntax
-/// error (empty WHERE included — accepting one that constrains nothing
-/// would be the accept-and-ignore shape).
-pub fn parse_where(
-    argv: &[Vec<u8>],
-    at: usize,
-    stop: impl Fn(&[u8]) -> bool,
-) -> Option<(WhereClause, usize)> {
-    let mut w = WhereClause::default();
-    let mut i = at;
-    while i < argv.len() && !stop(&argv[i]) {
-        if argv[i].eq_ignore_ascii_case(b"RANGE") {
-            let col = argv.get(i + 1)?.clone();
-            let min = argv.get(i + 2)?.clone();
-            let max = argv.get(i + 3)?.clone();
-            w.range = Some((col, min, max));
-            i += 4;
-            // RANGE is terminal within WHERE: composite-btree semantics
-            // stop at the first ranged component.
-            break;
-        }
-        if !argv.get(i + 1)?.eq_ignore_ascii_case(b"EQ") {
-            return None;
-        }
-        w.eqs.push((argv[i].clone(), argv.get(i + 2)?.clone()));
-        i += 3;
-    }
-    if w.eqs.is_empty() && w.range.is_none() {
-        return None;
-    }
-    Some((w, i))
-}
-
-fn declared_list(cols: &[CompositeCol]) -> Vec<Vec<u8>> {
-    cols.iter().map(|c| c.name.clone()).collect()
-}
-
-/// Encode one WHERE bound value for `col`, or the named error.
-fn bound_component(col: &CompositeCol, raw: &[u8], now: i64) -> Result<Vec<u8>, WhereError> {
-    // Resolve `@` time expressions BEFORE the shared encoder: row
-    // derivation (`classify_component`) shares `encode_component` and
-    // must never interpret data — a row whose i64 field holds "@now"
-    // is a coerce failure, not an expression. Only a QUERY bound
-    // comes through here.
-    let resolved;
-    let raw = if col.ty == ValType::I64 && raw.first() == Some(&b'@') {
-        match kevy_time::eval(raw, now) {
-            Some(i) => {
-                resolved = i.to_string().into_bytes();
-                resolved.as_slice()
-            }
-            None => {
-                return Err(WhereError::TimeExpression {
-                    bound: raw.to_vec(),
-                    column: col.name.clone(),
-                });
-            }
-        }
-    } else {
-        raw
-    };
-    encode_component(col, raw).ok_or_else(|| WhereError::Value {
-        bound: raw.to_vec(),
-        ty: col.ty,
-        column: col.name.clone(),
-    })
-}
-
-/// The memcmp-maximum encoding one component can produce (numeric =
-/// eight `0xFF`; DESC str = the empty string's complemented frame; ASC
-/// str = unbounded, answered with a dominating pad — see
-/// [`composite_bounds`]).
-fn component_max(col: &CompositeCol) -> Vec<u8> {
-    match (col.ty, col.order) {
-        (ValType::I64 | ValType::F64, _) => vec![0xFF; 8],
-        (ValType::Str, SortOrder::Desc) => vec![0xFF, 0xFF],
-        // An ASC str encoding is at most 2×MAX_STR_COMPONENT escaped
-        // bytes + the 2-byte terminator, and always carries a 0x00, so
-        // a solid 0xFF run one byte longer strictly dominates every
-        // valid encoding. Nothing valid can equal it (no terminator),
-        // so the inclusive upper bound stays exact.
-        (ValType::Str, SortOrder::Asc) => vec![0xFF; MAX_STR_COMPONENT * 2 + 3],
-        (ValType::Vector, _) => Vec::new(),
-    }
-}
-
-/// Turn "WHERE a = x [AND b range]" into the byte-range over the
-/// encoded tuple — classic composite-btree semantics: the equality
-/// prefix pins leading components, the optional range constrains the
-/// next one, everything after is unconstrained. The WHERE columns must
-/// be a leading prefix of the composite's declared order — anything
-/// else is a named error, never a scan.
-///
-/// Both bounds are INCLUSIVE and exact over valid encodings (the
-/// segment only ever holds derived encodings).
-pub fn composite_bounds(
-    cols: &[CompositeCol],
-    w: &WhereClause,
-    now: i64,
-) -> Result<(Vec<u8>, Vec<u8>), WhereError> {
-    let mut lo = Vec::new();
-    let mut hi = Vec::new();
-    let mut at = 0usize;
-    for (name, value) in &w.eqs {
-        let col = resolve_col(cols, at, name)?;
-        let enc = bound_component(col, value, now)?;
-        lo.extend_from_slice(&enc);
-        hi.extend_from_slice(&enc);
-        at += 1;
-    }
-    if let Some((name, min, max)) = &w.range {
-        let col = resolve_col(cols, at, name)?;
-        let a = bound_component(col, min, now)?;
-        let b = bound_component(col, max, now)?;
-        // A DESC component reverses the encoded order, so the encoded
-        // interval endpoints swap; byte-wise min/max keeps both
-        // directions on one path.
-        let (emin, emax) = if a <= b { (a, b) } else { (b, a) };
-        lo.extend_from_slice(&emin);
-        hi.extend_from_slice(&emax);
-        at += 1;
-    }
-    // Unconstrained tail components: the lower bound extends by
-    // nothing (any continuation only grows the string); the upper
-    // bound extends by each component's maximum until one dominates
-    // strictly (the ASC-str pad), after which further bytes are moot.
-    for col in &cols[at..] {
-        let m = component_max(col);
-        let dominates = col.ty == ValType::Str && col.order == SortOrder::Asc;
-        hi.extend_from_slice(&m);
-        if dominates {
-            break;
-        }
-    }
-    Ok((lo, hi))
-}
-
-/// The WHERE column at position `at` — which MUST be the composite's
-/// `at`-th declared column (prefix rule), and declared at all.
-fn resolve_col<'c>(
-    cols: &'c [CompositeCol],
-    at: usize,
-    name: &[u8],
-) -> Result<&'c CompositeCol, WhereError> {
-    if !cols.iter().any(|c| c.name == name) {
-        return Err(WhereError::UnknownColumn {
-            column: name.to_vec(),
-            declared: declared_list(cols),
-        });
-    }
-    match cols.get(at) {
-        Some(c) if c.name == name => Ok(c),
-        _ => Err(WhereError::NotLeadingPrefix { declared: declared_list(cols) }),
     }
 }
 

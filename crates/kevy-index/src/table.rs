@@ -13,9 +13,7 @@
 //! oracle is the net that catches it.
 
 use crate::catalog::{IndexKind, ValType};
-use crate::composite::{CompositeCol, MAX_COMPOSITE_COLS};
 use crate::spec::IndexSpec;
-use crate::spec_parts::ValueSpec;
 use crate::table_error::TableError;
 use kevy_text::SortOrder;
 
@@ -32,11 +30,37 @@ use kevy_text::SortOrder;
 #[non_exhaustive]
 pub struct TableIndex {
     /// Declared column the index reads.
+    ///
+    /// ```
+    /// # use kevy_index::TableError;
+    /// # let declare = |s: &str| kevy_index::parse_table_declare(&s.split(' ').map(str::as_bytes).collect::<Vec<_>>());
+    /// let t = declare("TABLE.DECLARE t PREFIX t: PK id COLUMN id i64 COLUMN at i64 INDEX at range")?;
+    /// assert_eq!(t.indexes[0].column, b"at");
+    /// assert_eq!(t.compile()?[0].name(), b"t.at", "the column names the compiled index");
+    /// # Ok::<(), TableError>(())
+    /// ```
     pub column: Vec<u8>,
     /// `Range` or `Unique` — nothing else compiles from a table
     /// (aggregates stay a direct `IDX.CREATE KIND agg` declaration).
+    ///
+    /// ```
+    /// # use kevy_index::{IndexKind, TableError};
+    /// # let declare = |s: &str| kevy_index::parse_table_declare(&s.split(' ').map(str::as_bytes).collect::<Vec<_>>());
+    /// let t = declare("TABLE.DECLARE t PREFIX t: PK id COLUMN id i64 INDEX id unique")?;
+    /// assert_eq!(t.indexes[0].kind, IndexKind::Unique);
+    /// # Ok::<(), TableError>(())
+    /// ```
     pub kind: IndexKind,
     /// Declared columns stored per row (typed from the column decls).
+    ///
+    /// ```
+    /// # use kevy_index::TableError;
+    /// # let declare = |s: &str| kevy_index::parse_table_declare(&s.split(' ').map(str::as_bytes).collect::<Vec<_>>());
+    /// let t = declare("TABLE.DECLARE t PREFIX t: PK id COLUMN id i64 COLUMN city str INDEX id range VALUES city")?;
+    /// assert_eq!(t.indexes[0].values, [b"city".to_vec()]);
+    /// assert_eq!(t.compile()?[0].values().len(), 1, "stored alongside each entry");
+    /// # Ok::<(), TableError>(())
+    /// ```
     pub values: Vec<Vec<u8>>,
 }
 
@@ -64,8 +88,25 @@ impl TableIndex {
 #[non_exhaustive]
 pub struct OrderPath {
     /// Path name (the compiled index's suffix).
+    ///
+    /// ```
+    /// # use kevy_index::TableError;
+    /// # let declare = |s: &str| kevy_index::parse_table_declare(&s.split(' ').map(str::as_bytes).collect::<Vec<_>>());
+    /// let t = declare("TABLE.DECLARE t PREFIX t: PK id COLUMN id i64 ORDERPATH newest ON id DESC")?;
+    /// assert_eq!(t.orderpaths[0].name, b"newest");
+    /// assert_eq!(t.compile()?[0].name(), b"t.newest");
+    /// # Ok::<(), TableError>(())
+    /// ```
     pub name: Vec<u8>,
     /// `(column, direction)` in sort-significance order.
+    ///
+    /// ```
+    /// # use kevy_index::{SortOrder, TableError};
+    /// # let declare = |s: &str| kevy_index::parse_table_declare(&s.split(' ').map(str::as_bytes).collect::<Vec<_>>());
+    /// let t = declare("TABLE.DECLARE t PREFIX t: PK id COLUMN id i64 COLUMN c str ORDERPATH p ON c THEN id DESC")?;
+    /// assert_eq!(t.orderpaths[0].on, [(b"c".to_vec(), SortOrder::Asc), (b"id".to_vec(), SortOrder::Desc)]);
+    /// # Ok::<(), TableError>(())
+    /// ```
     pub on: Vec<(Vec<u8>, SortOrder)>,
 }
 
@@ -104,11 +145,35 @@ impl OrderPath {
 #[non_exhaustive]
 pub struct WindowSpec {
     /// Declared i64 column the window slides over.
+    ///
+    /// ```
+    /// # use kevy_index::TableError;
+    /// # let declare = |s: &str| kevy_index::parse_table_declare(&s.split(' ').map(str::as_bytes).collect::<Vec<_>>());
+    /// let t = declare("TABLE.DECLARE t PREFIX t: PK at COLUMN at i64 INDEX at range WINDOW at SPAN 60 BUCKET 10")?;
+    /// assert_eq!(t.window.map(|w| w.column), Some(b"at".to_vec()));
+    /// # Ok::<(), TableError>(())
+    /// ```
     pub column: Vec<u8>,
     /// Window length, in the column's own units.
+    ///
+    /// ```
+    /// # use kevy_index::TableError;
+    /// # let declare = |s: &str| kevy_index::parse_table_declare(&s.split(' ').map(str::as_bytes).collect::<Vec<_>>());
+    /// let t = declare("TABLE.DECLARE t PREFIX t: PK at COLUMN at i64 INDEX at range WINDOW at SPAN 60 BUCKET 10")?;
+    /// assert_eq!(t.window.map(|w| w.span), Some(60));
+    /// # Ok::<(), TableError>(())
+    /// ```
     pub span: i64,
     /// Slide granularity, same units: the boundary advances in whole
     /// buckets, and an evicted bucket is a segment.
+    ///
+    /// ```
+    /// # use kevy_index::TableError;
+    /// # let declare = |s: &str| kevy_index::parse_table_declare(&s.split(' ').map(str::as_bytes).collect::<Vec<_>>());
+    /// let t = declare("TABLE.DECLARE t PREFIX t: PK at COLUMN at i64 INDEX at range WINDOW at SPAN 60 BUCKET 10")?;
+    /// assert_eq!(t.window.map(|w| w.bucket), Some(10));
+    /// # Ok::<(), TableError>(())
+    /// ```
     pub bucket: i64,
 }
 
@@ -147,34 +212,128 @@ impl WindowSpec {
 #[non_exhaustive]
 pub struct TableSpec {
     /// Unique catalog name.
+    ///
+    /// ```
+    /// # use kevy_index::TableError;
+    /// # let declare = |s: &str| kevy_index::parse_table_declare(&s.split(' ').map(str::as_bytes).collect::<Vec<_>>());
+    /// let t = declare("TABLE.DECLARE users PREFIX user: PK id COLUMN id i64 COLUMN age i64 INDEX age range")?;
+    /// assert_eq!(t.name, b"users");
+    /// assert_eq!(t.compile()?[0].name(), b"users.age", "compiled paths are named under the table");
+    /// # Ok::<(), TableError>(())
+    /// ```
     pub name: Vec<u8>,
     /// Key-prefix domain the table's rows live under.
+    ///
+    /// ```
+    /// # use kevy_index::TableError;
+    /// # let declare = |s: &str| kevy_index::parse_table_declare(&s.split(' ').map(str::as_bytes).collect::<Vec<_>>());
+    /// let t = declare("TABLE.DECLARE users PREFIX user: PK id COLUMN id i64 COLUMN age i64 INDEX age range")?;
+    /// assert_eq!(t.prefix, b"user:");
+    /// assert_eq!(t.compile()?[0].prefix(), b"user:", "every path indexes the rows under it");
+    /// # Ok::<(), TableError>(())
+    /// ```
     pub prefix: Vec<u8>,
     /// Primary-key column (documentation + VERIFY surface; rows are
     /// addressed by their key, exactly as today).
+    ///
+    /// ```
+    /// # use kevy_index::TableError;
+    /// # let declare = |s: &str| kevy_index::parse_table_declare(&s.split(' ').map(str::as_bytes).collect::<Vec<_>>());
+    /// let t = declare("TABLE.DECLARE users PREFIX user: PK id COLUMN id i64 COLUMN age i64 INDEX age range")?;
+    /// assert_eq!(t.pk, b"id");
+    /// # Ok::<(), TableError>(())
+    /// ```
     pub pk: Vec<u8>,
     /// Declared columns with their scalar types, declaration order.
+    ///
+    /// ```
+    /// # use kevy_index::{TableError, ValType};
+    /// # let declare = |s: &str| kevy_index::parse_table_declare(&s.split(' ').map(str::as_bytes).collect::<Vec<_>>());
+    /// let t = declare("TABLE.DECLARE users PREFIX user: PK id COLUMN id i64 COLUMN age i64 INDEX age range")?;
+    /// assert_eq!(t.columns, [(b"id".to_vec(), ValType::I64), (b"age".to_vec(), ValType::I64)]);
+    /// assert_eq!(t.column_type(b"age"), Some(ValType::I64));
+    /// assert_eq!(t.column_type(b"city"), None);
+    /// # Ok::<(), TableError>(())
+    /// ```
     pub columns: Vec<(Vec<u8>, ValType)>,
     /// Declared secondary indexes.
+    ///
+    /// ```
+    /// # use kevy_index::{IndexKind, TableError, TableIndex};
+    /// # let declare = |s: &str| kevy_index::parse_table_declare(&s.split(' ').map(str::as_bytes).collect::<Vec<_>>());
+    /// let t = declare("TABLE.DECLARE users PREFIX user: PK id COLUMN id i64 COLUMN age i64 INDEX age range")?;
+    /// assert_eq!(t.indexes, [TableIndex::new("age", IndexKind::Range)]);
+    /// # Ok::<(), TableError>(())
+    /// ```
     pub indexes: Vec<TableIndex>,
     /// Declared composite-sort paths.
+    ///
+    /// ```
+    /// # use kevy_index::TableError;
+    /// # let declare = |s: &str| kevy_index::parse_table_declare(&s.split(' ').map(str::as_bytes).collect::<Vec<_>>());
+    /// let t = declare("TABLE.DECLARE users PREFIX user: PK id COLUMN id i64 COLUMN age i64 INDEX age range ORDERPATH oldest ON age DESC THEN id")?;
+    /// assert_eq!(t.orderpaths.len(), 1);
+    /// assert_eq!(t.compile()?.len(), 2, "one index and one order path");
+    /// # Ok::<(), TableError>(())
+    /// ```
     pub orderpaths: Vec<OrderPath>,
     /// Optional sliding hot window (`WINDOW <col> SPAN <n> BUCKET <n>`).
+    ///
+    /// ```
+    /// # use kevy_index::{TableError, WindowSpec};
+    /// # let declare = |s: &str| kevy_index::parse_table_declare(&s.split(' ').map(str::as_bytes).collect::<Vec<_>>());
+    /// assert_eq!(declare("TABLE.DECLARE users PREFIX user: PK id COLUMN id i64 COLUMN age i64 INDEX age range")?.window, None);
+    /// let t = declare("TABLE.DECLARE ev PREFIX ev: PK at COLUMN at i64 INDEX at range WINDOW at SPAN 3600 BUCKET 60")?;
+    /// assert_eq!(t.window, Some(WindowSpec::new("at", 3600, 60)));
+    /// # Ok::<(), TableError>(())
+    /// ```
     pub window: Option<WindowSpec>,
     /// `AUTODECLARE <n>`: how many paths the engine may declare for
     /// this table from observed refusals (0 = the loop is off, the
     /// default). Building is addition-safe — the worst case is
     /// bounded wasted memory; dropping stays a human act.
+    ///
+    /// ```
+    /// # use kevy_index::TableError;
+    /// # let declare = |s: &str| kevy_index::parse_table_declare(&s.split(' ').map(str::as_bytes).collect::<Vec<_>>());
+    /// assert_eq!(declare("TABLE.DECLARE users PREFIX user: PK id COLUMN id i64 COLUMN age i64 INDEX age range")?.autodeclare, 0, "off unless declared");
+    /// assert_eq!(declare("TABLE.DECLARE users PREFIX user: PK id COLUMN id i64 COLUMN age i64 INDEX age range AUTODECLARE 3")?.autodeclare, 3);
+    /// # Ok::<(), TableError>(())
+    /// ```
     pub autodeclare: usize,
     /// The paths the auto loop has declared, in declaration order —
     /// its spent budget, and the `auto` marker IDX.LIST shows.
     /// Runtime provenance, not declaration intent: equality checks
     /// that answer "is this the same declaration?" must ignore it
     /// (see [`Self::sans_auto`]).
+    ///
+    /// ```
+    /// # use kevy_index::{IndexKind, TableError, TableIndex};
+    /// # let declare = |s: &str| kevy_index::parse_table_declare(&s.split(' ').map(str::as_bytes).collect::<Vec<_>>());
+    /// let declared = declare("TABLE.DECLARE users PREFIX user: PK id COLUMN id i64 COLUMN age i64 INDEX age range AUTODECLARE 2")?;
+    /// // the engine added an index on id, and records that it did
+    /// let mut grown = declared.clone();
+    /// grown.indexes.push(TableIndex::new("id", IndexKind::Unique));
+    /// grown.auto_added.push(b"users.id".to_vec());
+    /// assert_eq!(grown.sans_auto(), declared, "what the human declared is unchanged");
+    /// # Ok::<(), TableError>(())
+    /// ```
     pub auto_added: Vec<Vec<u8>>,
 }
 
 /// Hard cap on declared tables.
+///
+/// ```
+/// use kevy_index::{CatalogError, Declared, MAX_TABLES, TableCatalog};
+/// # let declare = |s: &str| kevy_index::parse_table_declare(&s.split(' ').map(str::as_bytes).collect::<Vec<_>>());
+/// let mut tables = TableCatalog::new();
+/// for i in 0..MAX_TABLES {
+///     tables.create(declare(&format!("TABLE.DECLARE t{i} PREFIX t{i}: PK id COLUMN id i64"))?)?;
+/// }
+/// let one_more = declare("TABLE.DECLARE extra PREFIX x: PK id COLUMN id i64")?;
+/// assert_eq!(tables.create(one_more), Err(CatalogError::Full(Declared::Table)));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub const MAX_TABLES: usize = 64;
 
 impl TableSpec {
@@ -261,95 +420,6 @@ impl TableSpec {
         self.validate_orderpaths()?;
         self.validate_window()
     }
-
-    /// The window needs an i64 column, positive span/bucket with
-    /// bucket <= span, and an access path whose tree tail can answer
-    /// max(column) for free: a single-column INDEX on it, or an
-    /// ORDERPATH whose FIRST column is it, ascending.
-    fn validate_window(&self) -> Result<(), TableError> {
-        let Some(w) = &self.window else { return Ok(()) };
-        match self.column_type(&w.column) {
-            None => return Err(TableError::WindowUnknownColumn(w.column.clone())),
-            Some(ValType::I64) => {}
-            Some(_) => return Err(TableError::WindowColumnType),
-        }
-        if w.span <= 0 || w.bucket <= 0 {
-            return Err(TableError::WindowNotPositive);
-        }
-        if w.bucket > w.span {
-            return Err(TableError::WindowBucketExceedsSpan);
-        }
-        let indexed = self.indexes.iter().any(|ix| ix.column == w.column);
-        let leads_path = self.orderpaths.iter().any(|op| op.led_ascending_by(&w.column));
-        if !indexed && !leads_path {
-            return Err(TableError::WindowNeedsPath(w.column.clone()));
-        }
-        Ok(())
-    }
-
-    fn validate_columns_and_pk(&self) -> Result<(), TableError> {
-        for (i, (name, ty)) in self.columns.iter().enumerate() {
-            if !matches!(ty, ValType::I64 | ValType::F64 | ValType::Str) {
-                return Err(TableError::ColumnType);
-            }
-            if self.columns[..i].iter().any(|(n, _)| n == name) {
-                return Err(TableError::DuplicateColumn(name.clone()));
-            }
-        }
-        if self.column_type(&self.pk).is_none() {
-            return Err(TableError::PkUndeclared(self.pk.clone()));
-        }
-        Ok(())
-    }
-
-    fn validate_indexes(&self) -> Result<(), TableError> {
-        for (i, ix) in self.indexes.iter().enumerate() {
-            if !matches!(ix.kind, IndexKind::Range | IndexKind::Unique) {
-                return Err(TableError::IndexKind);
-            }
-            if self.column_type(&ix.column).is_none() {
-                return Err(TableError::IndexUnknownColumn(ix.column.clone()));
-            }
-            if self.indexes[..i].iter().any(|p| p.column == ix.column) {
-                return Err(TableError::DuplicateIndex(ix.column.clone()));
-            }
-            for v in &ix.values {
-                if self.column_type(v).is_none() {
-                    return Err(TableError::ValuesUnknownColumn(v.clone()));
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn validate_orderpaths(&self) -> Result<(), TableError> {
-        for (i, op) in self.orderpaths.iter().enumerate() {
-            if op.on.is_empty() {
-                return Err(TableError::OrderpathNeedsOn);
-            }
-            if op.on.len() > MAX_COMPOSITE_COLS {
-                return Err(TableError::OrderpathTooManyColumns);
-            }
-            if self.orderpaths[..i].iter().any(|p| p.name == op.name) {
-                return Err(TableError::DuplicateOrderpath(op.name.clone()));
-            }
-            // The compiled names share one namespace: `<table>.<col>`
-            // vs `<table>.<orderpath>` colliding would be two indexes
-            // with one name — refused here, by name, not downstream.
-            if self.indexes.iter().any(|ix| ix.column == op.name) {
-                return Err(TableError::OrderpathCollides(op.name.clone()));
-            }
-            for (col, _) in &op.on {
-                if self.column_type(col).is_none() {
-                    return Err(TableError::OrderpathUnknownColumn {
-                        path: op.name.clone(),
-                        column: col.clone(),
-                    });
-                }
-            }
-        }
-        Ok(())
-    }
 }
 
 pub use crate::table_catalog::TableCatalog;
@@ -362,45 +432,9 @@ pub(crate) fn dotted(table: &[u8], suffix: &[u8]) -> Vec<u8> {
     n
 }
 
-pub(crate) fn compile_table(t: &TableSpec) -> Result<Vec<IndexSpec>, TableError> {
-    t.validate()?;
-    let col_ty = |col: &[u8]| {
-        // Post-validate this is total; the Err arm is the honest form
-        // of what `expect` asserted, kept reachable so a validate()
-        // gap can never again become a panic.
-        t.column_type(col).ok_or_else(|| TableError::ColumnUndeclared(col.to_vec()))
-    };
-    let mut out = Vec::with_capacity(t.indexes.len() + t.orderpaths.len());
-    for ix in &t.indexes {
-        let ty = col_ty(&ix.column)?;
-        let values = ix
-            .values
-            .iter()
-            .map(|c| Ok(ValueSpec::new(c.clone()).with_type(col_ty(c)?)))
-            .collect::<Result<_, TableError>>()?;
-        let spec = IndexSpec::builder(dotted(&t.name, &ix.column), t.prefix.clone(), ix.kind, ty)
-            .with_field(ix.column.clone())
-            .with_values(values);
-        out.push(spec.build()?);
-    }
-    for op in &t.orderpaths {
-        let cols = op
-            .on
-            .iter()
-            .map(|(col, order)| Ok(CompositeCol::new(col.clone(), col_ty(col)?).with_order(*order)))
-            .collect::<Result<_, TableError>>()?;
-        let spec = IndexSpec::builder(
-            dotted(&t.name, &op.name),
-            t.prefix.clone(),
-            IndexKind::Range,
-            ValType::Str,
-        )
-        .with_field(op.on[0].0.clone())
-        .with_composite(cols);
-        out.push(spec.build()?);
-    }
-    Ok(out)
-}
+#[path = "table_compile.rs"]
+mod compile;
+use compile::compile_table;
 
 #[cfg(test)]
 #[path = "table_tests.rs"]
