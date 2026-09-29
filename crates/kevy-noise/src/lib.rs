@@ -18,14 +18,15 @@
 //! let client = Keypair::from_secret([2; 32]);
 //!
 //! let (m1, init) =
-//!     Initiator::start(&client, &server.public(), Keypair::from_secret([3; 32]), b"kevy", b"").unwrap();
-//! let (_, resp) = Responder::accept(&server, Keypair::from_secret([4; 32]), b"kevy", &m1).unwrap();
+//!     Initiator::start(&client, &server.public(), Keypair::from_secret([3; 32]), b"kevy", b"")?;
+//! let (_, resp) = Responder::accept(&server, Keypair::from_secret([4; 32]), b"kevy", &m1)?;
 //! assert_eq!(resp.remote_static(), client.public());
-//! let (m2, mut server_t) = resp.finish(b"").unwrap();
-//! let (_, mut client_t) = init.finish(&m2).unwrap();
+//! let (m2, mut server_t) = resp.finish(b"")?;
+//! let (_, mut client_t) = init.finish(&m2)?;
 //!
-//! let msg = client_t.seal(b"SET k v").unwrap();
-//! assert_eq!(server_t.open(&msg).unwrap(), b"SET k v");
+//! let msg = client_t.seal(b"SET k v")?;
+//! assert_eq!(server_t.open(&msg)?, b"SET k v");
+//! # Ok::<(), kevy_noise::Error>(())
 //! ```
 
 #![forbid(unsafe_code)]
@@ -41,12 +42,27 @@ mod tests;
 pub use handshake::{Initiator, Keypair, Responder};
 pub use transport::{Frames, MAX_MESSAGE, Opener, Sealer, Transport, frame};
 
+// Send and Sync are part of the public contract: a change that loses
+// either fails to compile here rather than in a caller.
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<Keypair>();
+    send_sync::<Initiator>();
+    send_sync::<Responder>();
+    send_sync::<Transport>();
+    send_sync::<Sealer>();
+    send_sync::<Opener>();
+    send_sync::<Frames>();
+    send_sync::<Error>();
+};
+
 /// Why a handshake or transport message was refused.
 ///
 /// ```
 /// assert_eq!(kevy_noise::Error::Decrypt.to_string(), "message failed authentication");
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Error {
     /// A message failed authentication: altered, replayed, out of order, or
     /// from someone without the keys.
