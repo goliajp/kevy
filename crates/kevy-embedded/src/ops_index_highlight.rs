@@ -379,6 +379,20 @@ type FacetKey = (usize, Box<dyn Fn(&[u8]) -> Option<Vec<u8>>>);
 
 /// One facet field's reported buckets: `(value, count)`, most frequent
 /// first.
+///
+/// ```
+/// use kevy_embedded::*;
+/// let s = Store::open(Config::default())?;
+/// s.idx_create_text(b"ft", b"d:", &[(b"body", 1.0)], TokenPositions::Omit, &[(b"lang", IndexValType::Str)])?;
+/// for (k, lang) in [(&b"d:1"[..], &b"en"[..]), (b"d:2", b"en"), (b"d:3", b"ja")] {
+///     s.hset(k, &[(b"body", b"rust"), (b"lang", lang)])?;
+/// }
+/// let fields = [b"lang".to_vec()];
+/// let page = s.idx_match_faceted(b"ft", b"rust", 10, MatchOpts::default().with_facets(&fields))?;
+/// let langs: &FacetCounts = &page.facets[0];
+/// assert_eq!(langs, &[(b"en".to_vec(), 2), (b"ja".to_vec(), 1)]);
+/// # Ok::<(), kevy_embedded::KevyError>(())
+/// ```
 pub type FacetCounts = Vec<(Vec<u8>, u64)>;
 
 /// One facet bucket in flight, before the grouping identity is dropped.
@@ -401,8 +415,31 @@ type RawBucket = (Vec<u8>, Vec<u8>, u64);
 #[non_exhaustive]
 pub struct MatchPage {
     /// The ranked page — exactly what [`Store::idx_match_with`] returns.
+    ///
+    /// ```
+    /// # use kevy_embedded::*;
+    /// # let s = Store::open(Config::default())?;
+    /// # s.idx_create_text(b"ft", b"d:", &[(b"body", 1.0)], TokenPositions::Omit, &[])?;
+    /// s.hset(b"d:1", &[(b"body", b"rust engine")])?;
+    /// s.hset(b"d:2", &[(b"body", b"go server")])?;
+    /// let page = s.idx_match_faceted(b"ft", b"rust", 10, MatchOpts::default())?;
+    /// assert_eq!(page.hits.iter().map(|h| &h.0[..]).collect::<Vec<_>>(), [&b"d:1"[..]]);
+    /// # Ok::<(), kevy_embedded::KevyError>(())
+    /// ```
     pub hits: Vec<HighlightedHit>,
     /// One entry per requested facet field, most frequent first.
+    ///
+    /// ```
+    /// # use kevy_embedded::*;
+    /// # let s = Store::open(Config::default())?;
+    /// # s.idx_create_text(b"ft", b"d:", &[(b"body", 1.0)], TokenPositions::Omit, &[(b"lang", IndexValType::Str)])?;
+    /// s.hset(b"d:1", &[(b"body", b"rust"), (b"lang", b"en")])?;
+    /// let (none, lang) = (MatchOpts::default(), [b"lang".to_vec()]);
+    /// assert!(s.idx_match_faceted(b"ft", b"rust", 10, none)?.facets.is_empty());
+    /// let page = s.idx_match_faceted(b"ft", b"rust", 10, none.with_facets(&lang))?;
+    /// assert_eq!(page.facets, [vec![(b"en".to_vec(), 1)]]);
+    /// # Ok::<(), kevy_embedded::KevyError>(())
+    /// ```
     pub facets: Vec<FacetCounts>,
 }
 
