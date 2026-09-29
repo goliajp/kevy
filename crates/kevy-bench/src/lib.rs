@@ -49,7 +49,8 @@ pub use std::hint::black_box;
 /// // The order the summary always holds, whatever the machine did.
 /// assert!(s.min_ns <= s.median_ns && s.median_ns <= s.p95_ns);
 /// ```
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub struct Stats {
     /// Number of samples collected.
     pub samples: usize,

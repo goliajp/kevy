@@ -44,14 +44,14 @@ pub struct Segment {
     magic: u64,
     /// Intrusive list of a heap's segments — an allocator cannot use a
     /// `Vec` to track its own memory without recursing into itself.
-    pub next: *mut Segment,
+    pub(crate) next: *mut Segment,
     /// The shard that owns every span here. Foreign frees find their
     /// way home through this.
-    pub owner: usize,
+    pub(crate) owner: usize,
     /// Slots freed by a thread other than the owner, as a lock-free
     /// stack of slot addresses. See [`push_foreign`] for why this is
     /// push-only.
-    pub foreign: AtomicPtr<u8>,
+    pub(crate) foreign: AtomicPtr<u8>,
     /// Slot bytes parked on `foreign`, so the accounting can price the
     /// list without walking it. Bytes rather than a count: one list
     /// carries slots of several classes, so a count cannot be converted
@@ -60,17 +60,17 @@ pub struct Segment {
     /// `AtomicUsize` rather than `AtomicU64` because 32-bit targets
     /// (Cortex-M among them) have no 64-bit atomic, and a pending
     /// foreign-free list cannot exceed the address space anyway.
-    pub foreign_bytes: core::sync::atomic::AtomicUsize,
+    pub(crate) foreign_bytes: core::sync::atomic::AtomicUsize,
     /// Of those, the bytes callers actually asked for.
     ///
     /// The owner's `live`/`rounding` counters still include everything on
     /// this list, because the thread that freed it cannot touch another
     /// thread's counters. Snapshots move the amount across so it is
     /// counted once — see `Heap::snapshot`.
-    pub foreign_live: core::sync::atomic::AtomicUsize,
+    pub(crate) foreign_live: core::sync::atomic::AtomicUsize,
     /// Per-span bookkeeping, indexed by span number. Index 0 describes
     /// the header span itself and is never assigned a class.
-    pub spans: [SpanMeta; SPANS_PER_SEGMENT],
+    pub(crate) spans: [SpanMeta; SPANS_PER_SEGMENT],
 }
 
 impl Segment {
@@ -110,6 +110,82 @@ impl Segment {
     #[must_use]
     pub fn is_valid(&self) -> bool {
         self.magic == MAGIC
+    }
+
+    /// The shard that owns every span here.
+    ///
+    /// ```
+    /// # use kevy_alloc::{Heap, segment};
+    /// let mut heap = Heap::new(7);
+    /// if let Some(p) = heap.alloc(64, 8) {
+    ///     // SAFETY: `p` is a small slot this heap handed out.
+    ///     let seg = unsafe { segment::segment_of(p).as_ref() };
+    ///     assert_eq!(seg.owner(), 7);
+    ///     // SAFETY: allocated just above with this size and alignment.
+    ///     unsafe { heap.dealloc(p, 64, 8) };
+    /// }
+    /// ```
+    #[must_use]
+    pub fn owner(&self) -> usize {
+        self.owner
+    }
+
+    /// Per-span bookkeeping, indexed by span number. Index 0 describes
+    /// the header span itself and is never assigned a class.
+    ///
+    /// ```
+    /// # use kevy_alloc::{Heap, segment};
+    /// let mut heap = Heap::new(0);
+    /// if let Some(p) = heap.alloc(64, 8) {
+    ///     // SAFETY: `p` is a small slot this heap handed out.
+    ///     let seg = unsafe { segment::segment_of(p).as_ref() };
+    ///     assert_eq!(seg.spans()[0].class(), segment::NO_CLASS);
+    ///     // SAFETY: allocated just above with this size and alignment.
+    ///     unsafe { heap.dealloc(p, 64, 8) };
+    /// }
+    /// ```
+    #[must_use]
+    pub fn spans(&self) -> &[SpanMeta; SPANS_PER_SEGMENT] {
+        &self.spans
+    }
+
+    /// Slot bytes other threads have freed onto this segment and the
+    /// owner has not drained yet. A relaxed read: under concurrent frees
+    /// it is a moment's value, not a bound.
+    ///
+    /// ```
+    /// # use kevy_alloc::{Heap, segment};
+    /// let mut heap = Heap::new(0);
+    /// if let Some(p) = heap.alloc(64, 8) {
+    ///     // SAFETY: `p` is a small slot this heap handed out.
+    ///     let seg = unsafe { segment::segment_of(p).as_ref() };
+    ///     assert_eq!(seg.foreign_bytes(), 0, "only the owner has freed here");
+    ///     // SAFETY: allocated just above with this size and alignment.
+    ///     unsafe { heap.dealloc(p, 64, 8) };
+    /// }
+    /// ```
+    #[must_use]
+    pub fn foreign_bytes(&self) -> usize {
+        self.foreign_bytes.load(Ordering::Relaxed)
+    }
+
+    /// Of [`Segment::foreign_bytes`], the bytes callers actually asked
+    /// for. A relaxed read, like that one.
+    ///
+    /// ```
+    /// # use kevy_alloc::{Heap, segment};
+    /// let mut heap = Heap::new(0);
+    /// if let Some(p) = heap.alloc(64, 8) {
+    ///     // SAFETY: `p` is a small slot this heap handed out.
+    ///     let seg = unsafe { segment::segment_of(p).as_ref() };
+    ///     assert!(seg.foreign_live() <= seg.foreign_bytes());
+    ///     // SAFETY: allocated just above with this size and alignment.
+    ///     unsafe { heap.dealloc(p, 64, 8) };
+    /// }
+    /// ```
+    #[must_use]
+    pub fn foreign_live(&self) -> usize {
+        self.foreign_live.load(Ordering::Relaxed)
     }
 }
 
