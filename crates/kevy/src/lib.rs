@@ -466,6 +466,8 @@ mod tests;
 #[cfg(test)]
 mod tests_op_table;
 #[cfg(test)]
+mod tests_verb_id;
+#[cfg(test)]
 mod tests_verb_meta;
 
 /// Queue a SEGMENTED frame for the reactor to log after this tick.

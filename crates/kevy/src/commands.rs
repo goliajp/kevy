@@ -40,6 +40,18 @@ impl Commands for KevyCommands {
         dispatch::dispatch_into_resp3(&self.ctx(), store, args, out);
     }
 
+    fn dispatch_verb_into<A: ArgvView + ?Sized>(
+        &self,
+        store: &mut Store,
+        args: &A,
+        verb: kevy_rt::VerbId,
+        proto: kevy_rt::RespVersion,
+        out: &mut Vec<u8>,
+    ) {
+        let v3 = proto == kevy_rt::RespVersion::V3;
+        dispatch::dispatch_verb_into(&self.ctx(), store, args, verb, v3, out);
+    }
+
     fn is_quit<A: ArgvView + ?Sized>(&self, args: &A) -> bool {
         args.first().is_some_and(|c| c.eq_ignore_ascii_case(b"QUIT"))
     }
