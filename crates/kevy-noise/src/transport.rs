@@ -30,6 +30,16 @@ pub struct Transport {
     hash: [u8; 32],
 }
 
+// counters only: the keys never reach a log line
+impl core::fmt::Debug for Transport {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Transport")
+            .field("sent", &self.send.count())
+            .field("received", &self.recv.count())
+            .finish_non_exhaustive()
+    }
+}
+
 impl Transport {
     pub(crate) fn new(send: CipherState, recv: CipherState, hash: [u8; 32]) -> Self {
         Transport { send, recv, hash }
@@ -136,6 +146,12 @@ pub struct Sealer {
     send: CipherState,
 }
 
+impl core::fmt::Debug for Sealer {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Sealer").field("sent", &self.send.count()).finish_non_exhaustive()
+    }
+}
+
 impl Sealer {
     /// [`Transport::seal`], for this direction alone.
     ///
@@ -168,6 +184,12 @@ impl Sealer {
 /// ```
 pub struct Opener {
     recv: CipherState,
+}
+
+impl core::fmt::Debug for Opener {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Opener").field("received", &self.recv.count()).finish_non_exhaustive()
+    }
 }
 
 impl Opener {
@@ -213,9 +235,16 @@ pub fn frame(msg: &[u8]) -> Result<Vec<u8>, Error> {
 /// f.push(b"bc");
 /// assert_eq!(f.next().as_deref(), Some(&b"abc"[..]));
 /// ```
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Frames {
     buf: Vec<u8>,
+}
+
+// the buffered bytes are ciphertext, but their length is what a reader needs
+impl core::fmt::Debug for Frames {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Frames").field("buffered", &self.buf.len()).finish()
+    }
 }
 
 impl Frames {
