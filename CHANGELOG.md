@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **`PREFIX.DIGEST` holds one batch of keys, not a copy of the prefix.**
+  Each shard copied every key under the prefix before sweeping it: on ten
+  million rows, about 200 MB held for the length of the sweep, enough to
+  push a tiered server 6% past its budget. The sweep now walks the keys a
+  batch of 1,024 at a time; it runs in one operation and inserts nothing,
+  so each key is still visited exactly once and the count and digest are
+  unchanged.
+
 - **Demotion keeps up while nothing but a backfill runs.** The sampler
   that picks rows to demote started each window from a position drawn
   from the access clock, and a tick demoted at most one batch of 32. A
