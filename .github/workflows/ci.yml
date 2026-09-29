@@ -610,7 +610,7 @@ jobs:
       - name: repligate (ship + frames + restart)
         run: bash bench/repligate.sh
 
-  # ───────────── release-profile test (release/** + hotfix/** branches only) ─────────────
+  # ───────────── release-profile test (develop, release/**, hotfix/**) ─────────────
   # Catches release-only bugs (compiler eliminates branches, sub-microsecond
   # timings round to zero, etc.) before they reach the publish workflow.
   # Historical incident: v1.4.0 SLOWLOG `elapsed=0` regression — release build
@@ -620,7 +620,9 @@ jobs:
     name: test (release profile, Linux)
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    if: startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/heads/hotfix/')
+    # develop too: a tag cut from a develop commit then finds this job green
+    # for its tree, and a release-only defect shows up before a release branch
+    if: github.ref == 'refs/heads/develop' || startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/heads/hotfix/')
     steps:
       - uses: actions/checkout@v7
 
