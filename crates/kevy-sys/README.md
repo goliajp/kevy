@@ -27,13 +27,18 @@ piece of the kevy server.
 - Cross-platform `sockaddr_in` / `kevent` / `epoll_event` layouts (incl.
   the x86_64 packed `epoll_event`).
 
-```rust,no_run
+```rust
 use kevy_sys::{Interest, Poller, Socket};
 
-let listener = Socket::tcp_listen([127, 0, 0, 1], 6379, 1024)?;
+let listener = Socket::tcp_listen([127, 0, 0, 1], 0, 1024)?;
 listener.set_nonblocking()?;
 let poller = Poller::new()?;
 poller.add(listener.raw(), Interest::READ)?;
+
+let _client = std::net::TcpStream::connect(("127.0.0.1", listener.local_port()?))?;
+let mut events = Vec::new();
+poller.wait(&mut events, Some(1000))?;
+assert!(events.iter().any(|ev| ev.fd == listener.raw() && ev.readable));
 # Ok::<(), std::io::Error>(())
 ```
 

@@ -17,17 +17,23 @@ the completion queue (CQ) — batching many operations into one
 - **Linux-only**: on every other target the crate compiles to an empty
   module that any caller can `cfg`-gate.
 
-```rust,ignore
-use std::io::Write;
-use std::net::TcpListener;
-use std::os::fd::AsRawFd;
+```rust
+use std::net::{TcpListener, TcpStream};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use kevy_uring::IoUring;
 
 let listener = TcpListener::bind("127.0.0.1:0")?;
+let _client = TcpStream::connect(listener.local_addr()?)?;
 let mut ring = IoUring::new(64)?;
 assert!(ring.prep_accept(listener.as_raw_fd(), /* user_data */ 1));
 ring.submit_and_wait(1)?;
-ring.for_each_completion(|c| println!("accepted fd {}", c.res));
+let mut accepted = None;
+ring.for_each_completion(|c| accepted = Some((c.user_data, c.res)));
+let (tag, fd) = accepted.expect("one completion");
+assert_eq!(tag, 1);
+assert!(fd >= 0, "res is the accepted socket's fd");
+// SAFETY: the kernel just handed this fd to us and nothing else owns it.
+drop(unsafe { OwnedFd::from_raw_fd(fd) });
 # Ok::<(), std::io::Error>(())
 ```
 

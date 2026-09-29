@@ -19,18 +19,7 @@
 //! (duplicated here on purpose: this crate is downstream of
 //! `kevy-resp-client` only, so it never depends on the server crate).
 //!
-//! ```no_run
-//! use kevy_cluster_rw::{ReadConsistency, ReadWriteClient};
-//!
-//! let mut c = ReadWriteClient::connect(
-//!     ("10.0.0.11", 6004),
-//!     &[("10.0.0.12", 6004), ("10.0.0.13", 6004)],
-//! )?;
-//! c.request(&[b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()])?; // primary
-//! c.request(&[b"GET".to_vec(), b"k".to_vec()])?; // a replica, round-robin
-//! c.request_read(&[b"GET".to_vec(), b"k".to_vec()], ReadConsistency::Primary)?;
-//! # Ok::<(), std::io::Error>(())
-//! ```
+#![doc = include_str!("rw_docs/crate_example.md")]
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
@@ -43,6 +32,10 @@ use kevy_resp::Reply;
 use kevy_resp_client::RespClient;
 
 pub use consistency::ReadConsistency;
+
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;
 
 const _: () = {
     const fn send_sync<T: Send + Sync>() {}
@@ -163,15 +156,7 @@ impl ReadWriteClient {
     /// `kevys://host:port?server_key=<hex>[&client_key_file=<path>]` for a
     /// node's encrypted client port (each node has its own key).
     ///
-    /// ```no_run
-    /// use kevy_cluster_rw::ReadWriteClient;
-    /// let key = "ab".repeat(32);
-    /// let c = ReadWriteClient::connect_urls(
-    ///     &format!("kevys://10.0.0.11:6404?server_key={key}"),
-    ///     &[&format!("kevys://10.0.0.12:6404?server_key={key}")],
-    /// )?;
-    /// # Ok::<(), std::io::Error>(())
-    /// ```
+    #[doc = include_str!("rw_docs/connect_urls.md")]
     pub fn connect_urls(primary: &str, replicas: &[&str]) -> io::Result<Self> {
         let replica_conns =
             replicas.iter().map(|u| RespClient::connect_url(u)).collect::<io::Result<Vec<_>>>()?;
@@ -318,13 +303,7 @@ impl ReadWriteClient {
     /// the primary when no replica is configured or when `consistency`
     /// is [`ReadConsistency::Primary`].
     ///
-    /// ```no_run
-    /// use kevy_cluster_rw::{ReadConsistency, ReadWriteClient};
-    ///
-    /// let mut c = ReadWriteClient::connect(("10.0.0.11", 6004), &[("10.0.0.12", 6004)])?;
-    /// let reply = c.request_read(&[b"GET".to_vec(), b"k".to_vec()], ReadConsistency::Primary)?;
-    /// # Ok::<(), std::io::Error>(())
-    /// ```
+    #[doc = include_str!("rw_docs/request_read.md")]
     pub fn request_read(
         &mut self,
         args: &[Vec<u8>],

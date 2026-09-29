@@ -8,13 +8,16 @@ the TCP connect + send-request / read-reply loop on top. Suitable for tests,
 admin tools, and any caller that wants a stripped-down synchronous client
 without dragging in async or extra deps.
 
-```rust,no_run
+```rust
 use kevy_resp::Reply;
 use kevy_resp_client::RespClient;
+# mod doc { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs")); }
+# let port = doc::serve();
 
-let mut c = RespClient::connect("127.0.0.1", 6379).unwrap();
-let reply = c.request(&[b"PING".to_vec()]).unwrap();
+let mut c = RespClient::connect("127.0.0.1", port)?;
+let reply = c.request(&[b"PING".to_vec()])?;
 assert!(matches!(reply, Reply::Simple(b) if b == b"PONG"));
+# Ok::<(), std::io::Error>(())
 ```
 
 Speaks any Redis-compatible server (kevy, Redis 7.x, Valkey).
