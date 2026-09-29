@@ -305,6 +305,15 @@ check XTRIM xs MAXLEN 2
 check XLEN xs
 check XADD xs 1-0 f dup       # ERR id <= top
 check XRANGE missingstream - +  # empty array
+# XAUTOCLAIM's cursor: the next pending id, 0-0 at the end, and a scan of at
+# most COUNT x 10 entries whether or not they are idle enough
+for i in $(seq 1 12); do check XADD xa "$i-0" f v; done
+check XGROUP CREATE xa ga 0
+check XREADGROUP GROUP ga c1 COUNT 100 STREAMS xa ">"
+check XAUTOCLAIM xa ga c2 0 0-0 COUNT 100 JUSTID
+check XAUTOCLAIM xa ga c2 0 0-0 COUNT 2 JUSTID
+check XAUTOCLAIM xa ga c2 100000000 0-0 COUNT 1 JUSTID
+check XAUTOCLAIM xa ga c2 100000000 0-0 COUNT 2 JUSTID
 
 # --- geo (precision-sensitive: byte-exact match IS the test; if redis≠valkey
 #     too on a line, it's float formatting in the references, not a kevy gap) ---
