@@ -331,7 +331,7 @@ impl Store {
     /// Visit every live entry as `(key, &value, ttl_ms)` for snapshotting.
     pub fn snapshot_each<F: FnMut(&[u8], &Value, Option<u64>)>(&self, mut f: F) {
         let now = now_ns();
-        for (k, e) in &self.map {
+        for (k, e) in self.map.iter() {
             if e.is_expired_at(now) {
                 continue;
             }
@@ -430,7 +430,7 @@ impl Store {
         let now = now_ns();
         let mut keys = 0u64;
         let mut expires = 0u64;
-        for (k, e) in &self.map {
+        for (k, e) in self.map.iter() {
             if e.is_expired_at(now) || !k.as_slice().starts_with(prefix) {
                 continue;
             }
@@ -447,7 +447,7 @@ impl Store {
     pub fn collect_keys(&self, pattern: Option<&[u8]>, limit: Option<usize>) -> Vec<Vec<u8>> {
         let now = now_ns();
         let mut out = Vec::new();
-        for (k, e) in &self.map {
+        for (k, e) in self.map.iter() {
             if e.is_expired_at(now) {
                 continue;
             }

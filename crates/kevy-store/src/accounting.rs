@@ -88,7 +88,7 @@ impl Store {
         if delta == 0 {
             return;
         }
-        if let Some(e) = self.map.get_mut(key) {
+        if let Some(e) = self.map.get_mut_quiet(key) {
             e.add_to_weight(delta);
         }
         apply_delta(&mut self.used_memory, delta);
@@ -114,7 +114,7 @@ impl Store {
     /// `Value`'s weight was already cached on the entry.
     pub(crate) fn reweigh_entry(&mut self, key: &[u8]) {
         let key_heap = key_heap_bytes_for(key);
-        let Some(e) = self.map.get_mut(key) else {
+        let Some(e) = self.map.get_mut_quiet(key) else {
             return;
         };
         let new_w = key_heap + e.value.weight();
@@ -214,7 +214,7 @@ impl Store {
             self.tick_clock();
             let c = self.clock_counter as u32;
             let policy = self.touch_policy();
-            let e = self.map.get_mut(key)?;
+            let e = self.map.get_mut_quiet(key)?;
             evict::touch_on_access(e, policy, c);
             return Some(&*e);
         }
