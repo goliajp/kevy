@@ -485,7 +485,9 @@ use window_slide::{
 mod global_verify;
 pub(crate) use global_verify::{Placed, VERIFY_TAG, verify_chunk as global_verify_chunk};
 mod global;
-pub(crate) use global::{SAMPLE_PER_PARTITION, apply_ext, sample as sample_values, take_ext_out};
+pub(crate) use global::{apply_ext, take_ext_out};
+mod quantile;
+pub(crate) use quantile::{POINTS_PER_PARTITION, put_points, quantile_points, read_points};
 mod global_wire;
 mod row_apply;
 pub(crate) use row_apply::{RowValue, row_value};

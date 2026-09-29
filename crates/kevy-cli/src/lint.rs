@@ -181,7 +181,6 @@ fn table_prefix(client: &mut dyn Link, table: &str) -> io::Result<String> {
     Err(io::Error::other(format!("no declared table named '{table}'")))
 }
 
-
 /// What `lint` takes besides the connection.
 struct LintArgs {
     sub: String,

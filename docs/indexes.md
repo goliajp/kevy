@@ -166,9 +166,11 @@ TABLE.DECLARE user PREFIX user: PK id COLUMN id i64 COLUMN age i64 INDEX age ran
 
 - **Split points.** `SPLIT v` (one per point, as the option pairs of
   `IDX.CREATE` require) or `GLOBAL SPLIT AT v…`: at most one fewer than
-  the shard count. Without them every shard sends a sample of its rows
-  — 512 rows each, so 512 per partition — and kevy takes their
-  quantiles: the largest partition starts within about 10% of the mean. An index created over no rows has one partition until
+  the shard count. Without them every shard sorts its rows' values and
+  sends them cut into 256 buckets of equal rank per partition, each as
+  its largest value and its row count; kevy merges them by count. A split
+  is then off by at most one bucket per shard, so the largest partition
+  starts within 2/256 (0.8%) of the mean. An index created over no rows has one partition until
   `IDX.REBUILD` samples again. Every entry of one value lives in one
   partition, so a value held by more than its share of rows cannot be
   split. An `ORDERPATH … GLOBAL` samples, or takes `SPLIT AT` points

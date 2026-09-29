@@ -1,13 +1,14 @@
 //! The two-phase form of a catalog verb that samples a global index's
 //! split points: `IDX.CREATE … PARTITION global` without `SPLIT`, and a
 //! `TABLE.DECLARE` / `ENSURE` / `REPLACE` naming a path `GLOBAL` without
-//! `SPLIT AT`. Every shard sends a sample of its rows' values (the first
-//! phase), and the origin runs the verb with split points taken from all
-//! of them — so the partitions start even whatever share of the rows the
-//! origin holds.
+//! `SPLIT AT`. Every shard sends its rows' values cut into rank buckets
+//! (the first phase), and the origin runs the verb with split points taken
+//! from all of them — so the partitions start even whatever share of the
+//! rows the origin holds.
 //!
 //! Chunk: `[status][tier-blocked u8][paths u16]`, then per path
-//! `name_len u16 | name | n u32 | n × (len u32 | value)`.
+//! `name_len u16 | name | points` (points as `index_runtime::put_points`
+//! writes them).
 
 use std::collections::HashMap;
 
@@ -16,7 +17,7 @@ use kevy_resp::{Argv, ArgvView};
 use kevy_store::Store;
 
 use crate::cmd_index_install::Sampler;
-use crate::index_runtime::{SAMPLE_PER_PARTITION, sample_values};
+use crate::index_runtime::{POINTS_PER_PARTITION, put_points, quantile_points, read_points};
 use crate::state::Ctx;
 
 /// The verbs with a two-phase form, upper-case.
@@ -49,7 +50,7 @@ fn sampled_paths(upper: &[u8], argv: &[&[u8]]) -> Vec<IndexSpec> {
     compile_table(&spec).map(|c| c.into_iter().filter(wanted).collect()).unwrap_or_default()
 }
 
-/// A shard's first phase: its sample of each path, and whether its
+/// A shard's first phase: its rank buckets of each path, and whether its
 /// tiering floor refuses a new index. A table that already exists is not
 /// sampled — `DECLARE` refuses it and `ENSURE` does not rebuild it.
 pub(crate) fn op(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
@@ -67,17 +68,13 @@ pub(crate) fn op(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> 
     for spec in &paths {
         chunk.extend_from_slice(&(spec.name.len() as u16).to_le_bytes());
         chunk.extend_from_slice(&spec.name);
-        let sample = sample_values(store, spec, SAMPLE_PER_PARTITION);
-        chunk.extend_from_slice(&(sample.len() as u32).to_le_bytes());
-        for v in &sample {
-            chunk.extend_from_slice(&(v.len() as u32).to_le_bytes());
-            chunk.extend_from_slice(v);
-        }
+        let parts = ctx.state.nshards().max(1);
+        put_points(&mut chunk, &quantile_points(store, spec, POINTS_PER_PARTITION * parts));
     }
     chunk
 }
 
-/// The origin's second phase: run the verb with every shard's samples.
+/// The origin's second phase: run the verb with every shard's points.
 pub(crate) fn reduce(ctx: &Ctx<'_>, argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> {
     let (mut samples, mut tier_blocked) = (HashMap::new(), false);
     for c in chunks {
@@ -98,26 +95,17 @@ pub(crate) fn reduce(ctx: &Ctx<'_>, argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec
     out
 }
 
-/// Fold one chunk's samples into `samples`; its tier flag, or `None` for a
+/// Fold one chunk's points into `samples`; its tier flag, or `None` for a
 /// chunk this module did not write.
-fn read_chunk(c: &[u8], samples: &mut HashMap<Vec<u8>, Vec<Vec<u8>>>) -> Option<bool> {
-    let mut r = c.get(1..)?;
-    let mut take = |n: usize| -> Option<&[u8]> {
-        let (head, rest) = r.split_at_checked(n)?;
-        r = rest;
-        Some(head)
-    };
-    let blocked = take(1)?[0] != 0;
-    let paths = u16::from_le_bytes(take(2)?.try_into().ok()?);
+fn read_chunk(c: &[u8], samples: &mut HashMap<Vec<u8>, Vec<(Vec<u8>, u64)>>) -> Option<bool> {
+    let blocked = *c.get(1)? != 0;
+    let paths = u16::from_le_bytes(c.get(2..4)?.try_into().ok()?);
+    let mut pos = 4;
     for _ in 0..paths {
-        let len = usize::from(u16::from_le_bytes(take(2)?.try_into().ok()?));
-        let name = take(len)?.to_vec();
-        let n = u32::from_le_bytes(take(4)?.try_into().ok()?);
-        let values = samples.entry(name).or_default();
-        for _ in 0..n {
-            let len = u32::from_le_bytes(take(4)?.try_into().ok()?) as usize;
-            values.push(take(len)?.to_vec());
-        }
+        let len = usize::from(u16::from_le_bytes(c.get(pos..pos + 2)?.try_into().ok()?));
+        let name = c.get(pos + 2..pos + 2 + len)?.to_vec();
+        pos += 2 + len;
+        samples.entry(name).or_default().extend(read_points(c, &mut pos)?);
     }
     Some(blocked)
 }
@@ -156,11 +144,8 @@ mod tests {
         for (name, values) in paths {
             c.extend_from_slice(&(name.len() as u16).to_le_bytes());
             c.extend_from_slice(name);
-            c.extend_from_slice(&(values.len() as u32).to_le_bytes());
-            for v in *values {
-                c.extend_from_slice(&(v.len() as u32).to_le_bytes());
-                c.extend_from_slice(v);
-            }
+            let pts: Vec<(Vec<u8>, u64)> = values.iter().map(|v| (v.to_vec(), 1)).collect();
+            put_points(&mut c, &pts);
         }
         c
     }
@@ -172,8 +157,9 @@ mod tests {
         let b = chunk(true, &[(b"t.a", &[b"3"])]);
         assert_eq!(read_chunk(&a, &mut samples), Some(false));
         assert_eq!(read_chunk(&b, &mut samples), Some(true));
-        assert_eq!(samples[&b"t.a".to_vec()], [b"1".to_vec(), b"2".to_vec(), b"3".to_vec()]);
-        assert_eq!(samples[&b"t.b".to_vec()], [b"9".to_vec()]);
+        let one = |v: &[u8]| (v.to_vec(), 1u64);
+        assert_eq!(samples[&b"t.a".to_vec()], [one(b"1"), one(b"2"), one(b"3")]);
+        assert_eq!(samples[&b"t.b".to_vec()], [one(b"9")]);
         assert_eq!(read_chunk(&a[..a.len() - 1], &mut samples), None, "a cut chunk is refused");
     }
 

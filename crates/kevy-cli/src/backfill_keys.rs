@@ -197,7 +197,6 @@ fn parse_args(args: &[String]) -> Result<Vec<Source>, String> {
     Ok(sources)
 }
 
-
 /// `backfill-keys --from-index K --from-prefix P [--keep-prefix]
 /// --from-file F …` on `client`. Names to stdout, accounting to stderr. A
 /// source that cannot be read is an error rather than an empty

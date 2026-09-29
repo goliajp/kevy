@@ -90,28 +90,62 @@ impl Partitioning {
     }
 }
 
-/// Split points that cut the values `sample` stands for into `parts`
-/// partitions of about equal size: its `parts`-quantiles, strictly
-/// increasing. Fewer come back when the sample has fewer distinct values —
-/// every entry of one value lives in one partition, so a value holding
-/// more than its share cannot be split — and none for an empty sample.
+/// Split points that cut the rows `points` stand for into `parts`
+/// partitions of about equal size. A point is a value and the number of
+/// rows it stands for; the points need not be distinct or in order. Each
+/// split is the value whose rows-before count comes closest to its share,
+/// strictly increasing and never the smallest value (which would leave the
+/// first partition empty). Fewer come back when the rows have too few
+/// distinct values — every entry of one value lives in one partition, so a
+/// value holding more than its share cannot be split — and none for no
+/// rows.
 ///
 /// ```
-/// use kevy_index::splits_from_sample;
+/// use kevy_index::splits_from_weighted;
 ///
-/// let sample: Vec<Vec<u8>> = (0..100u8).map(|v| vec![v]).collect();
-/// assert_eq!(splits_from_sample(sample, 4), [vec![25], vec![50], vec![75]]);
-/// assert_eq!(splits_from_sample(vec![vec![7]; 50], 4), Vec::<Vec<u8>>::new());
+/// let points: Vec<(Vec<u8>, u64)> = (0..100u8).map(|v| (vec![v], 1)).collect();
+/// assert_eq!(splits_from_weighted(points, 4), [vec![25], vec![50], vec![75]]);
+/// // one value with most of the rows stays whole
+/// let heavy = vec![(vec![1], 10), (vec![7], 80), (vec![9], 10)];
+/// assert_eq!(splits_from_weighted(heavy, 4), [vec![7], vec![9]]);
+/// assert!(splits_from_weighted(vec![(vec![7], 50)], 4).is_empty());
 /// ```
-pub fn splits_from_sample(mut sample: Vec<Vec<u8>>, parts: usize) -> Vec<Vec<u8>> {
-    sample.sort_unstable();
-    let m = sample.len();
-    let mut out: Vec<Vec<u8>> = Vec::with_capacity(parts.saturating_sub(1));
+pub fn splits_from_weighted(mut points: Vec<(Vec<u8>, u64)>, parts: usize) -> Vec<Vec<u8>> {
+    points.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+    let mut distinct: Vec<(Vec<u8>, u64)> = Vec::with_capacity(points.len());
+    for (v, w) in points {
+        match distinct.last_mut() {
+            Some((last, lw)) if *last == v => *lw += w,
+            _ => distinct.push((v, w)),
+        }
+    }
+    // before[j]: the rows whose value is below distinct[j]
+    let mut before = Vec::with_capacity(distinct.len() + 1);
+    let mut acc = 0u128;
+    for (_, w) in &distinct {
+        before.push(acc);
+        acc += u128::from(*w);
+    }
+    before.push(acc);
+    let parts = parts.max(1) as u128;
+    let mut out: Vec<Vec<u8>> = Vec::with_capacity(parts as usize - 1);
+    let mut j = 1;
     for k in 1..parts {
-        let q = &sample[k * m / parts.max(1)..];
-        let Some(v) = q.first() else { break };
-        // a point at the smallest value would leave partition 0 empty
-        if Some(v) > sample.first() && out.last() < Some(v) {
+        let target = acc * k / parts;
+        while j + 1 < distinct.len() && before[j + 1] <= target {
+            j += 1;
+        }
+        // distinct[j] starts at or below the target; its successor may be
+        // the closer cut
+        let pick = if j + 1 < distinct.len()
+            && before[j + 1] - target < target.saturating_sub(before[j])
+        {
+            j + 1
+        } else {
+            j
+        };
+        let Some((v, _)) = distinct.get(pick) else { break };
+        if out.last() < Some(v) {
             out.push(v.clone());
         }
     }

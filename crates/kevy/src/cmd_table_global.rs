@@ -6,7 +6,7 @@
 
 use crate::cmd_index_install::Sampler;
 use kevy_index::{
-    Catalog, GlobalPath, IndexSpec, Partitioning, parse_split_point, splits_from_sample,
+    Catalog, GlobalPath, IndexSpec, Partitioning, parse_split_point, splits_from_weighted,
 };
 
 /// Admit a table's `compiled` indexes into `icat`, the `GLOBAL` ones with
@@ -39,7 +39,7 @@ fn partitioning(
     let n = nshards.max(1);
     if g.split_at.is_empty() {
         let sample = sampler.sample(spec, n);
-        return Ok(Partitioning::Global { splits: splits_from_sample(sample, n) });
+        return Ok(Partitioning::Global { splits: splits_from_weighted(sample, n) });
     }
     Ok(Partitioning::Global { splits: explicit_splits(spec, g, n)? })
 }

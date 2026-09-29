@@ -105,9 +105,20 @@ fn max_over_mean(population: &[Vec<u8>], splits: Vec<Vec<u8>>) -> f64 {
     max / (population.len() as f64 / sizes.len() as f64)
 }
 
+/// A shard's contribution as the server builds it: its values in order,
+/// cut by rank into `q` buckets, each its largest value and its size.
+fn bucket_points(mut values: Vec<Vec<u8>>, q: usize) -> Vec<(Vec<u8>, u64)> {
+    values.sort_unstable();
+    let (n, b) = (values.len(), q.min(values.len()));
+    (0..b)
+        .map(|i| (values[(i + 1) * n / b - 1].clone(), ((i + 1) * n / b - i * n / b) as u64))
+        .collect()
+}
+
 #[test]
-fn quantiles_of_a_strided_sample_cut_even_partitions() {
-    // 100_000 distinct values in a scrambled order, as a key walk sees them
+fn rank_buckets_from_every_shard_cut_partitions_within_a_bucket_of_even() {
+    // 100_000 distinct values in a scrambled order, dealt to shards as
+    // hashed keys deal rows
     let mut x: u64 = 0x9e37_79b9_7f4a_7c15;
     let population: Vec<Vec<u8>> = (0..100_000u64)
         .map(|_| {
@@ -115,24 +126,29 @@ fn quantiles_of_a_strided_sample_cut_even_partitions() {
             (x >> 16).to_be_bytes().to_vec()
         })
         .collect();
-    // 512 samples per partition: a partition's share then varies by about
-    // 1/sqrt(512) ≈ 4.4%, and the largest of 16 lands near 2σ
+    // 256 buckets per partition from each shard: a split is off by at most
+    // one bucket per shard, 1/256 of a partition in all, so a partition by
+    // at most 2/256 — where a sample of rows is off by its sampling error
     for parts in [2, 4, 8, 16] {
-        let stride = population.len() / (512 * parts);
-        let sample: Vec<Vec<u8>> = population.iter().step_by(stride).cloned().collect();
-        let splits = crate::splits_from_sample(sample, parts);
+        let mut points = Vec::new();
+        for shard in 0..parts {
+            let rows: Vec<Vec<u8>> =
+                population.iter().skip(shard).step_by(parts).cloned().collect();
+            points.extend(bucket_points(rows, 256 * parts));
+        }
+        let splits = crate::splits_from_weighted(points, parts);
         assert_eq!(splits.len(), parts - 1);
         let skew = max_over_mean(&population, splits);
-        assert!(skew < 1.1, "P={parts}: largest partition {skew:.3}× the mean");
+        assert!(skew <= 1.0 + 2.0 / 256.0, "P={parts}: largest partition {skew:.4}× the mean");
     }
 }
 
 #[test]
 fn a_value_holding_more_than_its_share_is_not_split() {
     // half the rows share one value: it stays whole, the rest still splits
-    let mut sample: Vec<Vec<u8>> = vec![vec![50]; 500];
-    sample.extend((0..500u32).map(|v| vec![(v % 100) as u8]));
-    let splits = crate::splits_from_sample(sample, 4);
+    let mut points: Vec<(Vec<u8>, u64)> = vec![(vec![50], 500)];
+    points.extend((0..500u32).map(|v| (vec![(v % 100) as u8], 1)));
+    let splits = crate::splits_from_weighted(points, 4);
     assert!(splits.windows(2).all(|w| w[0] < w[1]));
     assert!(splits.len() < 3, "{splits:?}");
 }
