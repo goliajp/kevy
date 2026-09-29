@@ -34,14 +34,14 @@
 //! # Example
 //!
 //! ```no_run
-//! use kevy_sys::{Poller, tcp_listen};
+//! use kevy_sys::{Interest, Poller, tcp_listen};
 //!
 //! # fn main() -> std::io::Result<()> {
 //! let listener = tcp_listen([127, 0, 0, 1], 6379, 1024)?;
 //! listener.set_nonblocking()?;
 //!
 //! let poller = Poller::new()?;
-//! poller.add(listener.raw(), /* read */ true, /* write */ false)?;
+//! poller.add(listener.raw(), Interest::READ)?;
 //!
 //! let mut events = Vec::new();
 //! poller.wait(&mut events, Some(1000))?; // block up to 1s
@@ -110,7 +110,17 @@ pub use waker::{Waker, waker};
 // ---- Poller ----------------------------------------------------------------
 
 /// A readiness notification for one file descriptor.
-#[derive(Debug, Clone, Copy)]
+///
+/// Built by [`Poller::wait`]; the fields are for reading.
+///
+/// ```
+/// fn closing(ev: &kevy_sys::Event) -> bool {
+///     ev.hup
+/// }
+/// # let _ = closing;
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub struct Event {
     /// The file descriptor the event fired on.
     pub fd: i32,
@@ -120,6 +130,65 @@ pub struct Event {
     pub writable: bool,
     /// Peer hang-up / error — the connection should be closed.
     pub hup: bool,
+}
+
+/// Which readiness a [`Poller`] watches a descriptor for.
+///
+/// A set of [`Interest::READ`] and [`Interest::WRITE`], combined with `|`.
+/// [`Interest::NONE`] keeps the descriptor registered while reporting
+/// nothing but hang-ups.
+///
+/// ```
+/// use kevy_sys::Interest;
+///
+/// let both = Interest::READ | Interest::WRITE;
+/// assert!(both.is_readable() && both.is_writable());
+/// assert!(!Interest::READ.is_writable());
+/// assert!(!Interest::NONE.is_readable());
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct Interest(u8);
+
+impl Interest {
+    /// Neither readable nor writable.
+    pub const NONE: Self = Self(0);
+    /// Readable: a `read`/`accept` would not block.
+    pub const READ: Self = Self(1);
+    /// Writable: a `write` would not block.
+    pub const WRITE: Self = Self(2);
+
+    /// Whether this set includes [`Interest::READ`].
+    ///
+    /// ```
+    /// assert!(kevy_sys::Interest::READ.is_readable());
+    /// ```
+    #[must_use]
+    pub const fn is_readable(self) -> bool {
+        self.0 & Self::READ.0 != 0
+    }
+
+    /// Whether this set includes [`Interest::WRITE`].
+    ///
+    /// ```
+    /// assert!(kevy_sys::Interest::WRITE.is_writable());
+    /// ```
+    #[must_use]
+    pub const fn is_writable(self) -> bool {
+        self.0 & Self::WRITE.0 != 0
+    }
+}
+
+impl core::ops::BitOr for Interest {
+    type Output = Self;
+    fn bitor(self, rhs: Self) -> Self {
+        Self(self.0 | rhs.0)
+    }
+}
+
+impl core::ops::BitOrAssign for Interest {
+    fn bitor_assign(&mut self, rhs: Self) {
+        self.0 |= rhs.0;
+    }
 }
 
 /// How many raw events to pull from the kernel per `wait` call.

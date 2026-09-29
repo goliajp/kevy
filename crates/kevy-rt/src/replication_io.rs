@@ -50,7 +50,7 @@ impl<C: Commands> Shard<C> {
             match listener.accept() {
                 Ok(sock) => {
                     sock.set_nonblocking()?;
-                    self.poller.add(sock.raw(), true, false)?;
+                    self.poller.add(sock.raw(), kevy_sys::Interest::READ)?;
                     // Capture the replica's peer addr at
                     // accept time so `INFO replication` / `ROLE` can
                     // report it. `peer_addr` errs on a peer that
