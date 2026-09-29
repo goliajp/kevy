@@ -76,6 +76,11 @@ pub struct Stats {
 /// One untimed warm-up sample primes caches/branch predictors first. Pick
 /// `inner` large enough that one sample is comfortably above `Instant`
 /// resolution (≥ a few µs); for ns-scale ops use `inner` in the thousands.
+///
+/// # Panics
+///
+/// When `samples` or `inner` is zero.
+///
 /// # Examples
 ///
 /// ```
@@ -137,6 +142,11 @@ pub fn bench<F: FnMut()>(samples: usize, inner: usize, mut op: F) -> Stats {
 /// dev (unoptimised) is typically 5–25× slower than release, and a loaded host
 /// adds more — so size the budget off the *release* number times a safety factor
 /// and document the observed dev figure alongside it.
+///
+/// # Panics
+///
+/// When `iters` is zero.
+///
 /// # Examples
 ///
 /// ```

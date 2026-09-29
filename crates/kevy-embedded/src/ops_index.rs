@@ -246,7 +246,8 @@ impl Store {
         field: &[u8],
         params: kevy_index::AnnSpec,
     ) -> KevyResult<()> {
-        if params.dim == 0 || params.distance > 2 {
+        // M = 1 has no level distribution (1/ln 1); 0 means the default
+        if params.dim == 0 || params.distance > 2 || params.m == 1 {
             return Err(KevyError::InvalidInput("bad ann parameters".into()));
         }
         let spec = IndexSpec {
