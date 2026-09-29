@@ -34,6 +34,7 @@ DOCS = ROOT / "docs"
 ENGLISH_ONLY = {
     "client-contract.md": "the contract client authors implement, in the language they file issues in",
     "clients.md": "a list of client packages and their install lines",
+    "rust-api-7.0.md": "a list of Rust signatures, old and new, read beside the code",
     "verb-reference.md": "generated verb table, not prose",
 }
 
