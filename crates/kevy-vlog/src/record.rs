@@ -142,8 +142,7 @@ impl VlogFile {
     /// A frame that fails to decode is a process bug by the same doctrine
     /// as a CRC mismatch (this process wrote it this boot).
     pub fn decompress(&self, frame: &[u8]) -> io::Result<Vec<u8>> {
-        kevy_compress::decode_with(&self.parsed, frame)
-            .map_err(|e| bad(format!("vlog: {e} at file {}", self.id)))
+        self.parsed.decode(frame).map_err(|e| bad(format!("vlog: {e} at file {}", self.id)))
     }
 
     /// Fetch the raw record image (`r.disk_len()` bytes at `r.offset`)
