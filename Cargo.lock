@@ -744,6 +744,7 @@ dependencies = [
  "kevy-ring",
  "kevy-store",
  "kevy-sys",
+ "kevy-testnet",
  "kevy-uring",
  "kevy-verbs",
  "loom",

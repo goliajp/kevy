@@ -44,3 +44,7 @@ kevy-uring = { path = "../kevy-uring", version = "6.4.0" }
 # normal `cargo build` / `cargo test` does NOT pull it in.
 [target.'cfg(loom)'.dependencies]
 loom = "0.7"
+
+[dev-dependencies]
+# the crate-level example serves on a port it has to pick first
+kevy-testnet = { path = "../kevy-testnet" }
