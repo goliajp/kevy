@@ -25,6 +25,14 @@ mod text;
 mod tests;
 pub use text::{ColdHit, ColdPage, ColdPageQuery, TextColdDir};
 
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<WindowRt>();
+    send_sync::<TextColdDir>();
+    send_sync::<ColdHit>();
+    send_sync::<ColdPage>();
+};
+
 use kevy_index::{
     ColdBloom, ColdEntryRow, FacetBucket, IndexValue, ScalarClauses, ScalarHit, ValType,
     WindowAudit, WindowShape, WindowSpec, claused_over, decode_seg_key, decode_seg_values,
@@ -37,10 +45,10 @@ pub struct WindowRt {
     /// The declared window — width, column and retention — as the catalog
     /// recorded it. Fixed for the life of the index; everything else here
     /// is state that moves under it.
-    pub spec: WindowSpec,
+    spec: WindowSpec,
     /// Which tree shape the boundary lives in — a plain i64 index or
     /// a composite the window column leads (see [`WindowShape`]).
-    pub shape: WindowShape,
+    shape: WindowShape,
     /// Current boundary (bucket-aligned): entries with value < w are
     /// cold. `i64::MIN` = nothing evicted yet.
     w: i64,
@@ -69,7 +77,7 @@ pub struct WindowRt {
     tombs: HashMap<Vec<u8>, u64>,
     /// Ticks that cost exactly one comparison (the idle-convergence
     /// gate counter).
-    pub idle_ticks: u64,
+    idle_ticks: u64,
     /// Whether this boot's stale derived segments (a previous run's
     /// spill for this index) were dropped yet. Done lazily on the
     /// first slide: they are unreachable (the boundary restarts at
@@ -95,6 +103,44 @@ impl WindowRt {
             idle_ticks: 0,
             cleaned: false,
         }
+    }
+
+    /// The declared window — width, column and retention — as the catalog
+    /// recorded it. Fixed for the life of this state: a changed
+    /// declaration is a new `WindowRt`.
+    ///
+    /// ```
+    /// use kevy_index::{WindowShape, WindowSpec};
+    /// let w = kevy_window::WindowRt::new(WindowSpec::new("ts", 100, 10), WindowShape::PlainI64);
+    /// assert_eq!(w.spec().span, 100);
+    /// ```
+    pub fn spec(&self) -> &WindowSpec {
+        &self.spec
+    }
+
+    /// Which tree shape the boundary lives in — a plain i64 index or a
+    /// composite the window column leads.
+    ///
+    /// ```
+    /// use kevy_index::{WindowShape, WindowSpec};
+    /// let w = kevy_window::WindowRt::new(WindowSpec::new("ts", 100, 10), WindowShape::PlainI64);
+    /// assert_eq!(w.shape(), WindowShape::PlainI64);
+    /// ```
+    pub fn shape(&self) -> WindowShape {
+        self.shape
+    }
+
+    /// Slide ticks that cost exactly one comparison because nothing had
+    /// moved past the boundary — the counter the idle-convergence gate
+    /// reads.
+    ///
+    /// ```
+    /// use kevy_index::{WindowShape, WindowSpec};
+    /// let w = kevy_window::WindowRt::new(WindowSpec::new("ts", 100, 10), WindowShape::PlainI64);
+    /// assert_eq!(w.idle_ticks(), 0);
+    /// ```
+    pub fn idle_ticks(&self) -> u64 {
+        self.idle_ticks
     }
 
     /// Whether any rows have been frozen out of the live tree. A query

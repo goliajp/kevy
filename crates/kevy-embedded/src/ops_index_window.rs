@@ -162,7 +162,7 @@ fn reconcile_window(
         (None, Some((w, sh))) => {
             windows.push((name.to_vec(), WindowRt::new(w, sh)));
         }
-        (Some(i), Some((w, sh))) if windows[i].1.spec != w || windows[i].1.shape != sh => {
+        (Some(i), Some((w, sh))) if *windows[i].1.spec() != w || windows[i].1.shape() != sh => {
             windows[i].1 = WindowRt::new(w, sh);
         }
         _ => {}
