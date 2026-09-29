@@ -137,7 +137,6 @@ pub mod link;
 pub mod lint;
 mod tools;
 
-
 /// Pretty-print a reply roughly the way `redis-cli` does. Arrays are
 /// numbered + indented; bulk strings are quoted; nil shows as `(nil)`.
 pub fn format_reply(reply: &Reply, indent: usize) -> String {

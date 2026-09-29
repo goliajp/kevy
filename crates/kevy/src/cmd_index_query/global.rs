@@ -110,25 +110,20 @@ pub(super) fn op_part(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec
 /// The tag after the status byte of a global index's `IDX.REBUILD` chunk.
 pub(crate) const REBUILD_TAG: u8 = b'g';
 
-/// A shard's half of `IDX.REBUILD` on a global index: a sample of its
-/// rows' values, `[ST_OK][REBUILD_TAG][n u32][(len u32, value)…]`, from
-/// which the origin takes new split points.
+/// A shard's half of `IDX.REBUILD` on a global index: its rows' values in
+/// rank buckets, `[ST_OK][REBUILD_TAG]` and the points, from which the
+/// origin takes new split points.
 pub(super) fn op_rebuild(ctx: &Ctx<'_>, store: &mut Store, name: &[u8]) -> Vec<u8> {
     let Some(spec) = ctx.state.catalogs.index().and_then(|c| c.get(name).map(|(s, _)| s.clone()))
     else {
         return vec![super::ST_NOINDEX];
     };
-    let sample = crate::index_runtime::sample_values(
-        store,
-        &spec,
-        crate::index_runtime::SAMPLE_PER_PARTITION,
-    );
+    let q = crate::index_runtime::POINTS_PER_PARTITION * ctx.state.nshards().max(1);
     let mut chunk = vec![super::ST_OK, REBUILD_TAG];
-    chunk.extend_from_slice(&(sample.len() as u32).to_le_bytes());
-    for v in &sample {
-        chunk.extend_from_slice(&(v.len() as u32).to_le_bytes());
-        chunk.extend_from_slice(v);
-    }
+    crate::index_runtime::put_points(
+        &mut chunk,
+        &crate::index_runtime::quantile_points(store, &spec, q),
+    );
     chunk
 }
 

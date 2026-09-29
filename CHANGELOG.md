@@ -52,8 +52,9 @@
   needs one after another and concatenates them; `COUNT` and the
   selection clauses go only to the partitions the range meets, and
   `IDX.EXPLAIN` names them. A write replies once its entry's owner has
-  applied it. Without split points, kevy takes them from a sample of the
-  rows; `IDX.REBUILD` samples again, and `IDX.LIST` shows the spread
+  applied it. Without split points, every shard sends its rows' values in
+  rank buckets and kevy merges them, so the largest partition starts
+  within 0.8% of the mean; `IDX.REBUILD` takes them again, and `IDX.LIST` shows the spread
   (`partitions`, `max_entries`, `mean_entries`). `FIELDS` on a global
   index answer from its `VALUES`, and a field not stored there is refused
   by name, with `IDX.ADVISE` suggesting it. `IDX.VERIFY` matches every row

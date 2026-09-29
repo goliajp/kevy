@@ -4,11 +4,11 @@
 
 use std::collections::HashMap;
 
-use kevy_index::{IndexSpec, Partitioning, parse_split_point, splits_from_sample};
+use kevy_index::{IndexSpec, Partitioning, parse_split_point, splits_from_weighted};
 use kevy_resp::{ArgvView, encode_error};
 use kevy_store::Store;
 
-use crate::index_runtime::{self, SAMPLE_PER_PARTITION};
+use crate::index_runtime::{self, POINTS_PER_PARTITION};
 use crate::state::Ctx;
 
 /// The partitioning an IDX.CREATE asked for, before its split values are
@@ -24,18 +24,18 @@ pub(crate) enum Sampler<'a> {
     /// The rows of the shard running the command.
     Shard(&'a mut Store),
     /// What every shard sent in the first phase of the two-phase form:
-    /// samples per index name, and whether any shard's tiering floor
+    /// rank buckets per index name, and whether any shard's tiering floor
     /// refuses a new index.
-    Gathered { samples: &'a HashMap<Vec<u8>, Vec<Vec<u8>>>, tier_blocked: bool },
+    Gathered { samples: &'a HashMap<Vec<u8>, Vec<(Vec<u8>, u64)>>, tier_blocked: bool },
 }
 
 impl Sampler<'_> {
-    /// Encoded values sampled for `spec`, up to [`SAMPLE_PER_PARTITION`]
-    /// per partition of `nshards`.
-    pub(crate) fn sample(&mut self, spec: &IndexSpec, nshards: usize) -> Vec<Vec<u8>> {
+    /// Rank buckets of `spec`'s values, [`POINTS_PER_PARTITION`] per
+    /// partition of `nshards` from each shard that sent them.
+    pub(crate) fn sample(&mut self, spec: &IndexSpec, nshards: usize) -> Vec<(Vec<u8>, u64)> {
         match self {
             Sampler::Shard(store) => {
-                index_runtime::sample_values(store, spec, SAMPLE_PER_PARTITION * nshards)
+                index_runtime::quantile_points(store, spec, POINTS_PER_PARTITION * nshards)
             }
             Sampler::Gathered { samples, .. } => {
                 samples.get(&spec.name).cloned().unwrap_or_default()
@@ -98,7 +98,9 @@ fn partitioning(
 ) -> Result<Partitioning, ()> {
     if p.global && p.split.is_empty() {
         let n = nshards.max(1);
-        return Ok(Partitioning::Global { splits: splits_from_sample(sampler.sample(spec, n), n) });
+        return Ok(Partitioning::Global {
+            splits: splits_from_weighted(sampler.sample(spec, n), n),
+        });
     }
     if !p.global {
         if !p.split.is_empty() {
@@ -177,7 +179,8 @@ pub(crate) fn fit_partitions(cat: &mut kevy_index::Catalog, n: usize) -> bool {
         })
         .collect();
     for (name, splits) in &over {
-        cat.set_splits(name, kevy_index::splits_from_sample(splits.clone(), n.max(1)));
+        let points = splits.iter().map(|s| (s.clone(), 1)).collect();
+        cat.set_splits(name, splits_from_weighted(points, n.max(1)));
     }
     !over.is_empty()
 }

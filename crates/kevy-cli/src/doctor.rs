@@ -300,7 +300,6 @@ fn report(
     })
 }
 
-
 /// `doctor [--warn-is-failure] [--indexes] [--views]` on `client`.
 pub(crate) fn run_on(client: &mut dyn Link, args: &[String]) -> ExitCode {
     let mut strict = false;

@@ -352,7 +352,8 @@ fn a_bare_tool_word_is_a_server_command() {
     let dir = scratch("bare");
     let schema = dir.join("s.sql");
     std::fs::write(&schema, "CREATE TABLE t (id bigint PRIMARY KEY);\n").unwrap();
-    let applied = cli(&["-p", &pa, "--kevy", "sql", "compile", schema.to_str().unwrap(), "--apply"]);
+    let applied =
+        cli(&["-p", &pa, "--kevy", "sql", "compile", schema.to_str().unwrap(), "--apply"]);
     assert_eq!(applied.stdout, "TABLE.DECLARE t → OK\n", "{}", applied.stderr);
     let _ = std::fs::remove_dir_all(&dir);
 }

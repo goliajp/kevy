@@ -584,10 +584,11 @@ fn sampled_partitions_start_even_drift_shows_and_a_rebuild_evens_them_again() {
     load(&mut w, 0, 40_000, |i| (i.wrapping_mul(2_654_435_761) >> 8) % 1_000_000);
     create(&mut w, b"g", &[b"PARTITION", b"global"]);
     wait_ready(&mut w, b"g");
-    // every shard sends 512 rows' values: 8,192 samples, 512 per partition
+    // every shard sends its values in 256 rank buckets per partition, so a
+    // split is off by at most 1/256 of a partition and a partition by 2/256
     let (max, mean) = spread(&mut w, "g");
     eprintln!("uniform, N=16: max/mean {:.3}", max / mean);
-    assert!(max / mean <= 1.1, "uniform: {max} / {mean}");
+    assert!(max / mean <= 1.0 + 2.0 / 256.0, "uniform: {max} / {mean}");
     // append-only drift: new rows all above the old largest value
     load(&mut w, 40_000, 60_000, |i| 1_000_000 + i);
     let (max, mean) = spread(&mut w, "g");
@@ -597,7 +598,7 @@ fn sampled_partitions_start_even_drift_shows_and_a_rebuild_evens_them_again() {
     wait_ready(&mut w, b"g");
     let (max, mean) = spread(&mut w, "g");
     eprintln!("rebuilt: max/mean {:.3}", max / mean);
-    assert!(max / mean <= 1.1, "rebuilt: {max} / {mean}");
+    assert!(max / mean <= 1.0 + 2.0 / 256.0, "rebuilt: {max} / {mean}");
 }
 
 #[test]
@@ -651,16 +652,16 @@ fn eq_on_a_global_unique_index_finds_every_holder_of_the_value() {
 }
 
 #[test]
-fn a_shard_holding_512_rows_per_partition_samples_even_partitions() {
+fn every_shard_sends_its_rank_buckets_and_the_partitions_start_even() {
     let srv = Server::start(4);
     let mut w = srv.wire();
-    // 12,000 rows: about 3,000 on the shard that runs CREATE, over 2,048
+    // 12,000 rows, about 3,000 a shard: 1,024 buckets each, of about 3 rows
     load(&mut w, 0, 12_000, |i| (i.wrapping_mul(2_654_435_761) >> 8) % 1_000_000);
     create(&mut w, b"g", &[b"PARTITION", b"global"]);
     wait_ready(&mut w, b"g");
     let (max, mean) = spread(&mut w, "g");
     eprintln!("uniform, N=4: max/mean {:.3}", max / mean);
-    assert!(max / mean <= 1.1, "{max} / {mean}");
+    assert!(max / mean <= 1.0 + 2.0 / 256.0, "{max} / {mean}");
 }
 
 #[test]

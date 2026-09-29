@@ -246,7 +246,6 @@ fn parse_shadow_flags(args: &[String]) -> Result<ShadowArgs, String> {
     Ok(a)
 }
 
-
 /// `shadow --old "<cmd>" --new "<cmd>" [--old-pairs] [--new-flat]
 /// [--samples n]` on `client`.
 ///

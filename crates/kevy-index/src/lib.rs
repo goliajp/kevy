@@ -57,7 +57,7 @@ pub use describe::{
     owner_of, table_declaration, table_declaration_partitioned, view_declaration,
 };
 pub use partition::{
-    Partitioning, parse_split_point, partition_owner, split_point_text, splits_from_sample,
+    Partitioning, parse_split_point, partition_owner, split_point_text, splits_from_weighted,
 };
 pub use placement::PlacementTable;
 pub use segcold::{
