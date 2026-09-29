@@ -10,7 +10,8 @@ use std::io;
 
 /// Parsed URL pieces — scheme validated, host/port resolved, optional
 /// db index extracted.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct ParsedUrl {
     /// Hostname or IP literal.
     pub host: String,
