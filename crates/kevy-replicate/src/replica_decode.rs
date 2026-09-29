@@ -3,7 +3,7 @@
 //! project ceiling. The state-machine helpers live here; the type
 //! definitions, `connect`, and `next_frame` stay in `replica.rs`.
 
-use crate::replica::{DecodedFrame, ReplicaClient, ReplicaError, ReplicaEvent};
+use crate::replica::{ReplicaClient, ReplicaError, ReplicaEvent};
 use crate::wire::{
     SnapshotMarker, WireError, decode_frame, decode_snapshot_chunk, decode_snapshot_marker,
 };
@@ -71,17 +71,17 @@ impl ReplicaClient {
 
     fn try_decode_live_frame(&mut self) -> Option<Result<ReplicaEvent, ReplicaError>> {
         match decode_frame(&self.buf[self.cursor..]) {
-            Ok((offset, argv, used)) => {
+            Ok((frame, used)) => {
                 self.cursor += used;
                 self.maybe_compact_buf();
-                if offset != self.expected_offset {
+                if frame.offset != self.expected_offset {
                     return Some(Err(ReplicaError::OffsetGap {
                         expected: self.expected_offset,
-                        got: offset,
+                        got: frame.offset,
                     }));
                 }
                 self.expected_offset = self.expected_offset.saturating_add(1);
-                Some(Ok(ReplicaEvent::Frame(DecodedFrame { offset, argv })))
+                Some(Ok(ReplicaEvent::Frame(frame)))
             }
             Err(WireError::Truncated) => None,
             Err(e) => Some(Err(ReplicaError::Frame(e))),

@@ -214,9 +214,13 @@ fn writer_restart_generation_fence_ships_instead_of_aliasing() {
     }
 
     // Resume claim from boot A's history: (gen_a, offset 3).
-    let mut sub =
-        ReplicaClient::connect_at(addr_b.as_str(), "sub-restart", gen_a, 3, Duration::from_secs(5))
-            .unwrap();
+    let mut sub = ReplicaClient::connect_with(
+        addr_b.as_str(),
+        &kevy_replicate::replica::ConnectOptions::new("sub-restart")
+            .with_generation(gen_a)
+            .with_from_offset(3),
+    )
+    .unwrap();
     let gen_b = sub.primary_gen_at_handshake();
     assert_ne!(gen_b, gen_a, "each boot mints its own generation");
     // The fence must answer with a FULL snapshot of boot B's

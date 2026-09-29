@@ -148,7 +148,9 @@ impl Store {
         let next_off = frames.last().map_or(offset, |f| f.offset + 1);
         let mut changes = Vec::with_capacity(frames.len());
         for f in &frames {
-            let Ok((foff, argv, _)) = kevy_replicate::wire::decode_frame(f.bytes) else {
+            let Ok((kevy_replicate::replica::DecodedFrame { offset: foff, argv, .. }, _)) =
+                kevy_replicate::wire::decode_frame(f.bytes)
+            else {
                 continue;
             };
             let owned: Vec<Vec<u8>> = (0..argv.len()).map(|i| argv[i].to_vec()).collect();

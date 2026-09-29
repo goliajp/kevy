@@ -203,7 +203,9 @@ impl<C: Commands> Shard<C> {
         let mut body = Vec::new();
         let mut kept = 0usize;
         for fr in &frames {
-            let Ok((foff, argv, _)) = kevy_replicate::wire::decode_frame(fr.bytes) else {
+            let Ok((kevy_replicate::replica::DecodedFrame { offset: foff, argv, .. }, _)) =
+                kevy_replicate::wire::decode_frame(fr.bytes)
+            else {
                 continue; // torn frame cannot occur in-backlog; skip defensively
             };
             if !prefixes.is_empty() && !frame_matches(&self.commands, &argv, &prefixes) {

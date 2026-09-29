@@ -180,13 +180,12 @@ impl ReplLinks {
                 self.local.clone(),
                 self.primaries[idx],
             );
-            match kevy_replicate::replica::ReplicaClient::connect_secure(
+            match kevy_replicate::replica::ReplicaClient::connect_with(
                 addr,
-                replica_id,
-                generation,
-                from_offset,
-                std::time::Duration::from_secs(5),
-                &sec,
+                &kevy_replicate::replica::ConnectOptions::new(replica_id)
+                    .with_generation(generation)
+                    .with_from_offset(from_offset)
+                    .with_security(sec),
             ) {
                 Ok(c) => {
                     self.last_good.store(idx, Ordering::Relaxed);
