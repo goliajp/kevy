@@ -28,6 +28,8 @@ use crate::Connection;
 /// Client-side command buffer for [`Connection::pipeline`]. Each
 /// [`Self::cmd`] appends one RESP-encoded command; the whole buffer is
 /// flushed in a single write.
+///
+#[doc = include_str!("pipeline_docs/pipeline_buf.md")]
 #[derive(Debug, Default)]
 pub struct PipelineBuf {
     buf: Vec<u8>,
