@@ -2,6 +2,50 @@
 
 ## Unreleased
 
+- **The tiering budget bounds the process's resident memory.** Demotion
+  held `used_memory` to the budget, and the process held more: freed rows
+  stayed in glibc's free lists, the keyspace table's doublings landed on
+  top of a full hot set, and receive rings, buffers and allocator overhead
+  were in no one's count. On ten million D1 rows (five fields, one of 900
+  bytes) on a 3 GiB budget the load ended at 1.30 × budget in RSS; it now
+  ends at 0.99 ×, with a peak of 1.10 × during the load, where the eight
+  shards' tables double within the same second. A tiered server now runs
+  a thread of its own that reads RSS every 100 ms; past half the budget it
+  reads what the allocator holds live once a second (`mallinfo2` on glibc,
+  zone statistics on macOS, through hand-written bindings in kevy-sys) and
+  takes whatever `used_memory` and the index floor do not account for off
+  the demote target; when RSS exceeds live memory by more than 1% of the
+  budget it trims the heap; and if live memory stays past budget × 1.05
+  for two readings in a row, every shard refuses growing writes with
+  `-OOM command not allowed when the process holds more memory than the
+  tiering budget allows` until it falls back. The refusal costs the write
+  path nothing new: the check that decides whether a write is prechecked
+  now reads one flag that covers both `maxmemory` and the refusal. The
+  keyspace table's next growth is set aside for its last eighth before it
+  happens, so demotion makes room first. `INFO # Tiering` gains
+  `tier_rss_line_bytes`, `tier_refusing_writes`, `tier_live_bytes`,
+  `tier_overhead_bytes` and the walk and trim counters. The embedded store
+  sets the growth reserve aside too; it does not run the thread, since an
+  embedded process's RSS is its host's.
+
+- **A keyspace table that grows no longer holds itself twice.** Growth
+  moved every entry into a table twice the size and freed the old one at
+  the end, so for the length of the move the process held both: 444 MB
+  to move a 148 MB table into a 294 MB one. A table large enough to be
+  mapped directly now hands the old table's pages back as the move passes
+  them; entries land in the new table in the same order they leave the
+  old one, so it fills as the other empties, and the same growth peaks at
+  302 MB. `KevyMap` gains `room` (new keys before the next growth) and
+  `grown_footprint` (the bytes after it); kevy-madvise gains
+  `mapped_bytes` and `release_2mb`; kevy-sys gains `heap_stats`.
+
+- **The capacity gates measure RSS.** capacity-envelope's D1 phase
+  samples RSS for the whole phase and fails above budget × 1.05, beside
+  its latency lines. `bench/tierrssgate.sh` (the full tier) loads 600,000
+  D1-shaped rows on a 256 MiB budget, reads cold rows back and overwrites
+  a quarter of them, sampling RSS every 200 ms: the previous release
+  peaks at 1.33 × budget, this one at 1.02–1.04 × over five runs.
+
 - **A cold key is charged once.** Since the keyspace table is charged at
   its real size, a cold key's slot and its key bytes are inside
   `used_memory` from the moment the key is inserted, and they stay there
