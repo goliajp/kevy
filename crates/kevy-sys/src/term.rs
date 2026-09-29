@@ -107,9 +107,12 @@ const _: () = assert!(size_of::<Winsize>() == 8);
 ///
 /// # Examples
 ///
-/// ```no_run
+/// ```
+/// use std::os::fd::AsRawFd;
+/// // a pty's child side stands in for the terminal on stdin
+/// let (_parent, child) = kevy_sys::open_pty()?;
 /// // Raw for as long as the guard lives; the old mode is back after it.
-/// let raw = kevy_sys::RawMode::enable(0)?;
+/// let raw = kevy_sys::RawMode::enable(child.as_raw_fd())?;
 /// drop(raw);
 /// # Ok::<(), std::io::Error>(())
 /// ```
