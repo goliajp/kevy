@@ -745,6 +745,53 @@ fn packed_rows_share_their_tables_names_through_the_tier() {
     assert_eq!(s.hlen(b"row:2").unwrap(), 2);
 }
 
+/// A table declaration packs the rows that were already there, and some of
+/// those are cold. Packing is a memory representation: a cold row holds no
+/// memory to save, and reading it would cost a disk read nobody asked for
+/// and a first touch that makes the client's next read promote it.
+#[test]
+fn packing_leaves_a_cold_row_cold_and_unread() {
+    let (mut s, _d) = tiered("tier-pack-cold", u64::MAX);
+    s.set_packed_rows(true);
+    let every: crate::packed_row::ColumnNames =
+        vec![b"id".to_vec(), b"name".to_vec(), b"pad".to_vec()].into();
+    // a table that does not declare `pad`: its rows cannot pack
+    let partial: crate::packed_row::ColumnNames = vec![b"id".to_vec(), b"name".to_vec()].into();
+    let pad = noise(4096);
+    for key in [b"row:1".as_slice(), b"row:2"] {
+        s.hset(key, &[(b"id".as_slice(), b"7".as_slice()), (b"name", b"alice"), (b"pad", &pad)])
+            .unwrap();
+        assert!(s.debug_force_demote(key));
+    }
+    let before = s.tier_stats();
+    s.pack_row(b"row:1", &every);
+    s.pack_row(b"row:2", &partial);
+    let after = s.tier_stats();
+    assert_eq!(after.preads_total, before.preads_total, "packing read a cold row");
+    assert!(is_cold(&s, b"row:1") && is_cold(&s, b"row:2"), "packing installed a cold row");
+    assert_eq!((after.cold_keys, after.stub_bytes), (before.cold_keys, before.stub_bytes));
+    // each client read is still a first touch: served, not promoted
+    for key in [b"row:1".as_slice(), b"row:2"] {
+        assert_eq!(s.hgetall(key).unwrap().len(), 6);
+    }
+    assert_eq!(s.tier_stats().promotions_total, 0);
+}
+
+/// A hot row the table cannot hold is refused on its field names alone,
+/// before any value is copied out of it.
+#[test]
+fn packing_refuses_an_undeclared_field_and_keeps_the_row() {
+    let mut s = Store::new();
+    s.set_packed_rows(true);
+    let partial: crate::packed_row::ColumnNames = vec![b"id".to_vec(), b"name".to_vec()].into();
+    s.hset(b"row", &[(b"id".as_slice(), b"7".as_slice()), (b"pad", &noise(900))]).unwrap();
+    let used = s.used_memory();
+    s.pack_row(b"row", &partial);
+    assert!(!s.is_packed(b"row"));
+    assert_eq!(s.used_memory(), used);
+    assert_eq!(s.hlen(b"row").unwrap(), 2);
+}
+
 #[test]
 fn a_cold_packed_row_answers_field_reads_without_promoting() {
     let (mut s, _d) = tiered("tier-packed-peek", u64::MAX);

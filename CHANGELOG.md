@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- **Declaring a table leaves cold rows cold.** With `packed-rows yes`,
+  `TABLE.DECLARE` packs the table's existing rows, and it read every one
+  of them through the client read path — cold ones included. Each cold
+  row cost a disk read that no counter showed, and the read counted as
+  the row's first touch, so after a declaration the first client read of
+  any cold row promoted it (one read of each row of a mostly cold 60-row
+  table promoted 36; it now promotes none). A cold row the table could
+  hold was worse off: it was put back in memory in packed form without
+  leaving the cold tier's books, so `cold_keys` and `stub_bytes` kept counting it and its
+  record in the spill file was never freed. Packing now leaves a cold row
+  alone — it holds no memory for the packed form to save — and refuses a
+  row the table cannot hold (a field it does not declare) on the row's
+  field names, before copying anything; the rows it does pack are read
+  by name straight out of the hash. Measured with kevy-store's
+  `bench_hash_rows`, a row that cannot pack is refused in 72% less time
+  and one that can is packed in 39% less (with the shared column names
+  above). Affected since 5.4.0.
+
 - **Packed rows share their table's column names.** A packed row is
   meant to carry no field names — they are the table's — but every row
   got its own copy of the list, made when it was packed and again each
