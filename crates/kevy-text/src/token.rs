@@ -38,6 +38,12 @@
 /// ```
 pub trait Tokenizer {
     /// Produce tokens for `text` (UTF-8; invalid bytes are skipped).
+    ///
+    /// ```
+    /// use kevy_text::{KevyTokenizer, Tokenizer};
+    /// let toks = KevyTokenizer.tokens(b"Hello, World \xff!");
+    /// assert_eq!(toks, [b"hello".to_vec(), b"world".to_vec()]);
+    /// ```
     fn tokens(&self, text: &[u8]) -> Vec<Vec<u8>>;
 }
 
