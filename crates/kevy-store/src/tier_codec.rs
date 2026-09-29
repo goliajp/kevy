@@ -73,6 +73,16 @@ fn put_chunk(out: &mut Vec<u8>, bytes: &[u8]) {
     out.extend_from_slice(bytes);
 }
 
+/// Which hash rows a decode hands back in the packed form.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RowForm {
+    /// The form the row was demoted in.
+    AsStored,
+    /// That, and a general hash whose every field is a column of one of
+    /// the shapes packs on it too: a promotion, which installs the row.
+    Declared,
+}
+
 /// Decode one vlog payload back into a live value. Errors only on a
 /// malformed payload — which this process wrote this boot, so a decode
 /// failure is a bug, not corruption to heal (the kevy-vlog doctrine).
@@ -84,6 +94,16 @@ pub(crate) fn decode(
     payload: Vec<u8>,
     shapes: &[ColumnNames],
 ) -> Result<Value, &'static str> {
+    decode_as(tag, payload, shapes, RowForm::AsStored)
+}
+
+/// [`decode`], choosing which hash rows come back packed.
+pub(crate) fn decode_as(
+    tag: u8,
+    payload: Vec<u8>,
+    shapes: &[ColumnNames],
+    form: RowForm,
+) -> Result<Value, &'static str> {
     match tag {
         COLD_TAG_STRING => {
             // Re-materialize through the SET encoding rules so a
@@ -92,7 +112,7 @@ pub(crate) fn decode(
             // only bytes that spill — keeping GET's writev path).
             Ok(crate::string_set::pick_value_for_set_owned(payload))
         }
-        COLD_TAG_HASH => decode_hash(&payload, shapes),
+        COLD_TAG_HASH => decode_hash(&payload, shapes, form),
         _ => Err("tier: unknown cold type tag"),
     }
 }
@@ -112,7 +132,7 @@ pub(crate) fn pairs_fit(n: usize, payload_len: usize) -> usize {
     n.min(payload_len / 8 + 1)
 }
 
-fn decode_hash(p: &[u8], shapes: &[ColumnNames]) -> Result<Value, &'static str> {
+fn decode_hash(p: &[u8], shapes: &[ColumnNames], form: RowForm) -> Result<Value, &'static str> {
     let mut cur = 0usize;
     let raw = read_u32(p, &mut cur)?;
     let n = (raw & !PACKED_FLAG) as usize;
@@ -127,6 +147,11 @@ fn decode_hash(p: &[u8], shapes: &[ColumnNames]) -> Result<Value, &'static str> 
     }
     if raw & PACKED_FLAG != 0
         && let Some(r) = rebuild_packed(&pairs, shapes)
+    {
+        return Ok(Value::PackedRow(r));
+    }
+    if form == RowForm::Declared
+        && let Some(r) = pack_on_shape(&pairs, shapes)
     {
         return Ok(Value::PackedRow(r));
     }
@@ -145,15 +170,26 @@ fn decode_hash(p: &[u8], shapes: &[ColumnNames]) -> Result<Value, &'static str> 
 /// absent from the row are the same answer. `None` if the row no longer
 /// fits the packed form, and then the general hash carries the same data.
 fn rebuild_packed(pairs: &[(&[u8], &[u8])], shapes: &[ColumnNames]) -> Option<PackedRow> {
-    let covers = |s: &&ColumnNames| pairs.iter().all(|(f, _)| s.iter().any(|n| n == f));
-    if let Some(names) = shapes.iter().find(covers) {
-        let vals: Vec<Option<&[u8]>> =
-            names.iter().map(|n| pairs.iter().find(|(f, _)| f == n).map(|(_, v)| *v)).collect();
-        return PackedRow::build(names, &vals);
+    if shapes.iter().any(|s| covers(s, pairs)) {
+        return pack_on_shape(pairs, shapes);
     }
     let names: ColumnNames = pairs.iter().map(|(f, _)| f.to_vec()).collect();
     let vals: Vec<Option<&[u8]>> = pairs.iter().map(|(_, v)| Some(*v)).collect();
     PackedRow::build(&names, &vals)
+}
+
+/// Whether every field of the row is a column of `shape`.
+fn covers(shape: &ColumnNames, pairs: &[(&[u8], &[u8])]) -> bool {
+    pairs.iter().all(|(f, _)| shape.iter().any(|n| n == f))
+}
+
+/// The row packed on the first of `shapes` that names all its fields;
+/// `None` when none does, or when the row is too large to pack.
+fn pack_on_shape(pairs: &[(&[u8], &[u8])], shapes: &[ColumnNames]) -> Option<PackedRow> {
+    let names = shapes.iter().find(|s| covers(s, pairs))?;
+    let vals: Vec<Option<&[u8]>> =
+        names.iter().map(|n| pairs.iter().find(|(f, _)| f == n).map(|(_, v)| *v)).collect();
+    PackedRow::build(names, &vals)
 }
 
 fn read_u32(p: &[u8], cur: &mut usize) -> Result<u32, &'static str> {

@@ -169,8 +169,19 @@ mod enabled {
         /// vlog read/decode failure is a process bug by the vlog's
         /// per-boot doctrine — surfaced loudly, never healed silently.
         pub(crate) fn tier_read_record(&mut self, key: &[u8], cref: ColdRef) -> Value {
+            self.tier_read_record_as(key, cref, crate::tier_codec::RowForm::AsStored)
+        }
+
+        /// [`Self::tier_read_record`], choosing which hash rows come back
+        /// packed.
+        pub(crate) fn tier_read_record_as(
+            &mut self,
+            key: &[u8],
+            cref: ColdRef,
+            form: crate::tier_codec::RowForm,
+        ) -> Value {
             if cref.is_seg() {
-                return self.segrow_read(cref, key);
+                return self.segrow_read_as(cref, key, form);
             }
             let t = self.tier.as_mut().expect("tier enabled");
             t.preads_total += 1;
@@ -178,7 +189,7 @@ mod enabled {
                 .vlog
                 .read(cref.vref())
                 .expect("tier: vlog read failed — per-boot spill file, this is a process bug");
-            crate::tier_codec::decode(cref.type_tag, payload, &self.row_shapes)
+            crate::tier_codec::decode_as(cref.type_tag, payload, &self.row_shapes, form)
                 .expect("tier: cold record decode failed — process bug")
         }
 

@@ -473,6 +473,8 @@ mod tests_string_encoding;
 #[cfg(all(test, feature = "std", not(target_arch = "wasm32")))]
 mod tests_tier;
 #[cfg(all(test, feature = "std", not(target_arch = "wasm32")))]
+mod tests_tier_pack;
+#[cfg(all(test, feature = "std", not(target_arch = "wasm32")))]
 mod tests_tier_peek;
 #[cfg(test)]
 mod tests_zadd_same_score;
