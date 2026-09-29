@@ -253,6 +253,15 @@
   loss is unchanged: under `no` the OS decides when the data reaches the
   disk, and the `everysec` fsync keeps its once-a-second cadence.
 
+- **`XAUTOCLAIM` answers Redis's cursor and scans no more than it does.**
+  The cursor was the last scanned id plus one, so a call that reached the
+  end of the pending list returned a cursor instead of `0-0`, and a client
+  looping until `0-0` made one extra call; a partial call's cursor was not
+  the id Redis returns either. It is now the next pending entry's id, or
+  `0-0` at the end. A call also looked at the whole pending list when few
+  entries were idle enough; it now looks at no more than `COUNT × 10`, as
+  Redis does. Checked against Redis 8.10.2 answering the same commands.
+
 - **A server's `DESC` materialized view with `TOPK` keeps its highest rows
   when it is built over existing data.** Building or rebuilding the view
   sorted each shard's rows ascending and kept the first `TOPK × 1.25`, so

@@ -25,15 +25,15 @@ use crate::value::SmallBytes;
 /// let mut stream = s.stream_view(b"s")?.unwrap().clone();
 /// let r = stream.autoclaim(b"g", b"bob", 0, StreamId::MIN, 10, ClaimMode::Deliver, 200)?;
 /// assert_eq!(r.claimed_ids, [StreamId::new(1, 0), StreamId::new(2, 0)]);
-/// assert_eq!(r.next_cursor, StreamId::new(2, 1));
+/// assert_eq!(r.next_cursor, StreamId::MIN, "the scan reached the end");
 /// assert!(r.deleted_ids.is_empty());
 /// # Ok::<(), kevy_store::StoreError>(())
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct AutoclaimResult {
-    /// Where the next `XAUTOCLAIM` should resume. `0-0` when the scan
-    /// reached the end of the pending list.
+    /// Where the next `XAUTOCLAIM` should resume: the id of the next
+    /// pending entry, or `0-0` when the scan reached the end of the list.
     ///
     /// ```
     /// # use kevy_store::*;
@@ -45,12 +45,11 @@ pub struct AutoclaimResult {
     /// # s.xgroup_create(b"s", b"g", GroupCreateMode::AtId(StreamId::MIN), MissingStream::Refuse)?;
     /// # s.xreadgroup(b"s", b"g", b"alice", ReadGroupId::New, None, AckMode::Pending, 100)?;
     /// let mut stream = s.stream_view(b"s")?.unwrap().clone();
-    /// // COUNT 1 stops after the first entry; resume from the cursor
+    /// // COUNT 1 stops after the first entry; the cursor is the next one
     /// let r = stream.autoclaim(b"g", b"bob", 0, StreamId::MIN, 1, ClaimMode::Deliver, 200)?;
-    /// assert_eq!(r.next_cursor, StreamId::new(1, 1));
+    /// assert_eq!(r.next_cursor, StreamId::new(2, 0));
     /// let r = stream.autoclaim(b"g", b"bob", 0, r.next_cursor, 1, ClaimMode::Deliver, 200)?;
     /// assert_eq!(r.claimed_ids, [StreamId::new(2, 0)]);
-    /// let r = stream.autoclaim(b"g", b"bob", 0, r.next_cursor, 1, ClaimMode::Deliver, 200)?;
     /// assert_eq!(r.next_cursor, StreamId::MIN, "nothing left to scan");
     /// # Ok::<(), kevy_store::StoreError>(())
     /// ```
@@ -327,9 +326,10 @@ impl StreamData {
     }
 
     /// `XAUTOCLAIM key group consumer min-idle-ms start [COUNT n]
-    /// [JUSTID]`. Walks the PEL from `start` onward, claiming the
-    /// first `count` entries whose idle ≥ `min_idle_ms`. Returns
-    /// `(next_cursor_id, claimed_ids, deleted_ids)`.
+    /// [JUSTID]`. Walks the PEL from `start`, looking at no more than
+    /// `count × 10` entries and claiming up to `count` of those idle for at
+    /// least `min_idle_ms`; the cursor is the next pending entry's id, or
+    /// `0-0` at the end of the list.
     #[allow(clippy::too_many_arguments)]
     pub fn autoclaim(
         &mut self,
@@ -342,18 +342,12 @@ impl StreamData {
         now_ms: u64,
     ) -> Result<AutoclaimResult, StoreError> {
         let opts = XClaimOpts::default().with_min_idle_ms(min_idle_ms).with_mode(mode);
-        let candidates: Vec<StreamId> = {
+        let (candidates, next_cursor) = {
             let Some(g) = self.groups.get(group) else {
                 return Err(StoreError::NoSuchKey);
             };
-            g.pel
-                .range(start..=StreamId::MAX)
-                .filter(|(_, p)| now_ms.saturating_sub(p.delivery_time_ms) >= min_idle_ms)
-                .take(count)
-                .map(|(id, _)| *id)
-                .collect()
+            autoclaim_scan(g, start, count, min_idle_ms, now_ms)
         };
-        let next_cursor = candidates.last().map_or(StreamId::MIN, |id| id.next());
         let claimed = self.claim(group, new_owner, &candidates, &opts, now_ms)?;
         let mut deleted = Vec::new();
         for id in &candidates {
@@ -376,6 +370,32 @@ impl StreamData {
             })
             .collect()
     }
+}
+
+/// The pending entries from `start` that one XAUTOCLAIM takes, and the
+/// cursor it answers: a scan of at most `count × 10` entries, idle enough or
+/// not, that stops early once `count` are taken; the cursor is the id of the
+/// next pending entry, or `0-0` when the scan reached the end — what Redis
+/// answers, so a client loop ending on `0-0` ends on the same call.
+fn autoclaim_scan(
+    g: &ConsumerGroup,
+    start: StreamId,
+    count: usize,
+    min_idle_ms: u64,
+    now_ms: u64,
+) -> (Vec<StreamId>, StreamId) {
+    let mut attempts = count.saturating_mul(10);
+    let mut taken = Vec::new();
+    let mut pel = g.pel.range(start..=StreamId::MAX);
+    while attempts > 0 && taken.len() < count {
+        let Some((id, p)) = pel.next() else { break };
+        attempts -= 1;
+        if now_ms.saturating_sub(p.delivery_time_ms) >= min_idle_ms {
+            taken.push(*id);
+        }
+    }
+    let next = pel.next().map_or(StreamId::MIN, |(id, _)| *id);
+    (taken, next)
 }
 
 /// Attempt one XCLAIM. Returns `true` if the entry was successfully
