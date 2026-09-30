@@ -65,7 +65,8 @@ class Server:
         while not all(pm.ping(p) for p in ports):
             if self.proc.poll() is not None or time.time() > deadline:
                 self.stop()
-                die(f"server did not come up: {' '.join(argv)} (log: {data}/server.log)")
+                tail = (data / "server.log").read_text(errors="replace").splitlines()[-5:]
+                die(f"server did not come up: {' '.join(argv)}\n" + "\n".join(tail))
             time.sleep(0.1)
 
     def stop(self):
@@ -183,6 +184,9 @@ def preflight(topo):
 
 
 def main():
+    # a TERM from a timeout unwinds like an error, so every server and
+    # generator this run started is stopped on the way out
+    signal.signal(signal.SIGTERM, lambda *_: die("terminated"))
     a = parse(sys.argv[1:])
     specs = side_specs(a)
     if a.mode == "prepare":
