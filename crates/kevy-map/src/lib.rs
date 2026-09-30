@@ -48,6 +48,8 @@ mod raw_entry;
 mod scan;
 mod set;
 mod slot;
+#[cfg(test)]
+mod std_traits_tests;
 
 pub use alloc::malloc_footprint;
 pub use into_iter::IntoIter;

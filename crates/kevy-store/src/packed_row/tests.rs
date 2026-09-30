@@ -151,3 +151,59 @@ fn the_cost_is_not_flat_in_the_column_count() {
     // Nine more columns of 32 bytes each, plus nine more ends.
     assert_eq!(b - a, 9 * (32 + 2) + 1, "growth is payload + ends + bitmap byte");
 }
+
+fn unix_ms() -> u64 {
+    let d = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).expect("after 1970");
+    u64::try_from(d.as_millis()).expect("fits")
+}
+
+fn names_of(ns: &[&str]) -> ColumnNames {
+    ns.iter().map(|n| n.as_bytes().to_vec()).collect()
+}
+
+#[test]
+fn a_field_past_its_deadline_is_dropped_before_the_row_is_packed() {
+    let mut s = crate::Store::new();
+    s.hset(b"row", &[(b"id".as_slice(), b"7".as_slice()), (b"tmp", b"x")]).unwrap();
+    s.hexpire_at(b"row", &[b"tmp".as_slice()], unix_ms() + 1, crate::HExpireCond::Always).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    s.pack_row(b"row", &names_of(&["id"]));
+    assert!(s.is_packed(b"row"), "only declared fields are left once the dead one is gone");
+    assert_eq!(s.hlen(b"row").unwrap(), 1);
+}
+
+#[test]
+fn with_field_deadlines_set_a_key_that_is_no_hash_is_left_alone() {
+    let mut s = crate::Store::new();
+    s.hset(b"h", &[(b"f".as_slice(), b"v".as_slice())]).unwrap();
+    s.hexpire_at(b"h", &[b"f".as_slice()], unix_ms() + 60_000, crate::HExpireCond::Always).unwrap();
+    s.set(b"str", b"v".to_vec(), None, crate::SetCondition::Always);
+    s.pack_row(b"str", &names_of(&["f"]));
+    s.pack_row(b"missing", &names_of(&["f"]));
+    assert_eq!(s.get(b"str").unwrap().as_deref(), Some(&b"v"[..]));
+    assert_eq!(s.exists(&[b"missing".as_slice()]), 0);
+}
+
+#[test]
+fn a_sharded_hash_is_packed_only_when_the_table_declares_every_field() {
+    let n = crate::seg_map::HS_PROMOTE + 1;
+    let fields: Vec<Vec<u8>> = (0..n).map(|i| format!("f{i}").into_bytes()).collect();
+    let pairs: Vec<(&[u8], &[u8])> = fields.iter().map(|f| (&f[..], &b"v"[..])).collect();
+    let mut s = crate::Store::new();
+    s.hset(b"wide", &pairs).unwrap();
+    assert!(matches!(
+        s.map.get(b"wide".as_slice()).map(|e| &e.value),
+        Some(crate::Value::SegHash(_))
+    ));
+    let short: ColumnNames = fields[..n - 1].to_vec().into();
+    s.pack_row(b"wide", &short);
+    assert!(!s.is_packed(b"wide"), "more fields than columns");
+    let mut undeclared = fields.clone();
+    undeclared[0] = b"other".to_vec();
+    s.pack_row(b"wide", &undeclared.into());
+    assert!(!s.is_packed(b"wide"), "a field the table lacks would be lost");
+    s.pack_row(b"wide", &fields.into());
+    assert!(s.is_packed(b"wide"));
+    assert_eq!(s.hlen(b"wide").unwrap(), n);
+    assert_eq!(s.hget(b"wide", b"f7").unwrap(), Some(&b"v"[..]));
+}

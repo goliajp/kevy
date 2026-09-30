@@ -98,3 +98,22 @@ fn with_packed_rows_off_a_promoted_row_stays_a_general_hash() {
     assert!(!s.is_packed(b"row:1"));
     assert_eq!(s.hlen(b"row:1").unwrap(), 2);
 }
+
+#[test]
+fn with_field_deadlines_set_a_cold_row_keeps_its_table_for_when_it_is_read() {
+    let (mut s, _d) = tiered("tier-pack-with-field-deadlines");
+    let pad = pad();
+    let pairs: [(&[u8], &[u8]); 2] = [(b"id", b"7"), (b"pad", &pad)];
+    cold_row(&mut s, b"row:1", &pairs);
+    // another row's field deadline puts every pack on the purging path
+    s.hset(b"other", &[(b"f".as_slice(), b"v".as_slice())]).unwrap();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap();
+    let far = u64::try_from(now.as_millis()).unwrap() + 3_600_000;
+    s.hexpire_at(b"other", &[b"f".as_slice()], far, crate::HExpireCond::Always).unwrap();
+    let names = table();
+    declare_over(&mut s, b"row:1", &names);
+
+    assert!(s.promote_in_place(b"row:1"));
+    assert!(s.is_packed(b"row:1"), "packed on the table kept while it was cold");
+    assert_eq!(s.hget(b"row:1", b"id").unwrap(), Some(b"7".as_slice()));
+}

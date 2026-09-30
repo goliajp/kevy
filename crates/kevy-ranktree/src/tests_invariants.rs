@@ -120,3 +120,34 @@ fn every_small_permutation_of_inserts_and_removes() {
         }
     }
 }
+
+#[test]
+fn collecting_and_extending_keep_one_of_each_key() {
+    let mut rng = SplitMix(7);
+    let keys: Vec<u64> = (0..2_000).map(|_| rng.next() % 500).collect();
+    let mut t: RankTree<u64> = keys.iter().copied().collect();
+    check(&t);
+    let mut want: Vec<u64> = keys.clone();
+    want.sort_unstable();
+    want.dedup();
+    assert_eq!(t.iter().copied().collect::<Vec<_>>(), want);
+
+    t.extend(400..700u64);
+    check(&t);
+    want.extend(400..700);
+    want.sort_unstable();
+    want.dedup();
+    assert_eq!(t.len(), want.len());
+    assert_eq!(t.iter().copied().collect::<Vec<_>>(), want);
+}
+
+#[test]
+fn a_borrowed_tree_iterates_ascending() {
+    let t: RankTree<i32> = [5, -3, 9, 0].into_iter().collect();
+    let mut seen = Vec::new();
+    for k in &t {
+        seen.push(*k);
+    }
+    assert_eq!(seen, vec![-3, 0, 5, 9]);
+    assert_eq!((&t).into_iter().len(), 4);
+}
