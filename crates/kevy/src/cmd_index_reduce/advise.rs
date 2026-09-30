@@ -60,9 +60,10 @@ fn observe_refusal(
 /// declaration NOW. The refusal path is cold — the query that pushed
 /// the count over still gets its error, and the next one finds the
 /// path building. Failures leave everything unchanged: this is an
-/// engine courtesy, never a correctness surface.
+/// engine courtesy, never a correctness surface. A replica takes its
+/// catalog from its primary and declares nothing.
 fn maybe_autodeclare(state: &RuntimeState, name: &[u8], shape: AdviseShape, count: u64) {
-    if count < AUTODECLARE_AFTER {
+    if count < AUTODECLARE_AFTER || state.replication.is_replica() {
         return;
     }
     let dot = match name.iter().position(|&b| b == b'.') {

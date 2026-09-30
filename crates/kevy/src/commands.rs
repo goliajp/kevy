@@ -223,10 +223,7 @@ impl Commands for KevyCommands {
         chunks: Vec<Vec<u8>>,
         proto: kevy_resp::RespVersion,
     ) -> ExtensionReduced {
-        let ctx = self.ctx();
-        crate::catalog_record::reduced(ctx.state, || {
-            crate::commands_ext::reduce(&ctx, argv, chunks, proto)
-        })
+        crate::commands_ext::reduce(&self.ctx(), argv, chunks, proto)
     }
 
     fn write_denied(&self) -> Option<Vec<u8>> {
