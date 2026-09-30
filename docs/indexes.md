@@ -227,12 +227,34 @@ TABLE.DECLARE user PREFIX user: PK id COLUMN id i64 COLUMN age i64 INDEX age ran
   bytes. `value_len` is 8 for `i64` / `f64` and the string's length plus
   2 for `str`; `handle_len` is the key without the index's prefix, half
   that (rounded up) when it is all digits. `fill` is how full the leaves
-  are: 1.0 after a build or `IDX.REBUILD`, which pack them, and 0.6–0.7
-  once rows have been written in random order. Over 1.25 million rows
-  keyed `row:<n>`, an `i64` index measured 15.9 bytes a row packed and
-  23–25 after random writes, a `str` index of ten-byte values 20.2 and
-  30–38. `IDX.LIST` and `IDX.VERIFY` report what the leaves hold;
-  `bench/idxgate.sh` checks it against the server's measured RSS.
+  are: 1.0 after a build or `IDX.REBUILD`, which pack them, and after the
+  background repack below has rested; between the two it is whatever the
+  writes left. Over 1.25 million rows keyed `row:<n>`, an `i64` index
+  measured 15.9 bytes a row packed and 23–25 after random writes, a `str`
+  index of ten-byte values 20.2 and 30–38. `IDX.LIST` and `IDX.VERIFY`
+  report what the leaves hold; `bench/idxgate.sh` checks it against the
+  server's measured RSS.
+- A write never packs leaves. It splits a full leaf in two, and merges a
+  leaf into a neighbour only when the leaf is under a quarter full and
+  the two fit in three-quarters of one, so what writes alone guarantee is
+  that every leaf holds at least one entry: an entry landing just past a
+  full leaf whose neighbour is full too opens a leaf of its own, and a
+  leaf thinned between two full neighbours stays thin.
+- The shard tick packs them instead (the embedded store's reaper tick
+  too). A hand walks each index segment's leaves in order and pours the
+  next leaf's first entries into the one it stands on while they fit,
+  dropping a leaf that empties; separators, counts and order are kept.
+  It spends at most half a millisecond a tick, four leaves between clock
+  reads, and moves between indexes so a large one does not hold back the
+  rest. Once a whole pass moves nothing the segment rests: every leaf but
+  its last is then too full to take the next leaf's first entry, so it
+  holds more than its 1,768-byte page less its widest entry, and the
+  segment holds at most `1 + entry_bytes / (1768 - widest)` leaves. It
+  wakes again when it has an eighth more leaves or an eighth fewer
+  entries than it rested with. Packing 1.25 million randomly written
+  rows in one segment took 49 ms of one core (21.6 to 15.1 bytes a
+  row), about 100 ticks; 20,000 rows took under a millisecond. With `hz
+  0` there is no shard tick and nothing is packed.
 - An index that declares `VALUES` keeps them in the same entry: a
   one-byte tag each, then the value — a number of decimal digits at half
   a byte a digit, anything else as its bytes. Add that to the entry
