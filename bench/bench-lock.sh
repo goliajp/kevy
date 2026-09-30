@@ -22,8 +22,10 @@ if [ -z "${KEVY_BENCH_LOCK_HELD:-}" ]; then
   export KEVY_BENCH_LOCK_HELD=1
   # a machine with the bench-lock tool: it gives a waiting benchmark
   # priority over builds that start after it, which a bare flock does not
-  if command -v bench-lock >/dev/null 2>&1; then
-    exec bench-lock bench "$BASH" "$0" "$@"
+  # (a non-login ssh shell may not have /usr/local/bin on its PATH)
+  _bench_tool=$(command -v bench-lock || echo /usr/local/bin/bench-lock)
+  if [ -x "$_bench_tool" ]; then
+    exec "$_bench_tool" bench "$BASH" "$0" "$@"
   fi
   case "$(uname -s)" in
     Darwin)
