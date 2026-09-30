@@ -21,7 +21,7 @@ fn sadd_n(st: &mut Store, key: &[u8], n: usize) {
     }
 }
 
-fn is_seghash(st: &Store, key: &[u8]) -> bool {
+pub(crate) fn is_seghash(st: &Store, key: &[u8]) -> bool {
     matches!(st.map.get(key).map(|e| &e.value), Some(Value::SegHash(_)))
 }
 

@@ -1,6 +1,6 @@
 //! Index reads on one shard, end to end through the fan-out halves:
-//! COMPOSE's three ways to test B, VERIFY on a windowed index, and a
-//! global index's refusals.
+//! COMPOSE's three ways to test B, VERIFY on a windowed index, a
+//! global index's refusals, and MATCH's second phase.
 
 use std::collections::BTreeSet;
 
@@ -99,4 +99,16 @@ fn a_global_index_refuses_fields_it_does_not_store_on_a_selecting_page() {
     assert!(stored.contains("tokyo"), "{stored}");
     let refused = text(&s.ext("IDX.QUERY g RANGE 0 100 SORT city DESC FIELDS name"));
     assert!(refused.starts_with("-ERR") && refused.contains("name"), "{refused}");
+}
+
+#[test]
+fn match_scores_in_a_second_phase_against_the_counters_the_first_gathered() {
+    let mut s = Shard::new();
+    s.ok("IDX.CREATE body ON PREFIX r: FIELD body TYPE str KIND text");
+    s.hset("r:1", &[("body", "red fox")]);
+    s.hset("r:2", &[("body", "blue whale")]);
+    s.hset("r:3", &[("body", "red whale")]);
+    s.settle();
+    assert_eq!(keys(&s.ext("IDX.QUERY body MATCH fox")), set(&["r:1"]));
+    assert_eq!(keys(&s.ext("IDX.QUERY body MATCH red")), set(&["r:1", "r:3"]));
 }

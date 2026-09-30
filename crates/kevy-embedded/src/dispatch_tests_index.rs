@@ -166,8 +166,8 @@ fn hybrid_ranks_first_the_row_both_searches_found() {
         &s,
         "IDX.QUERY HYBRID docs MATCH red emb KNN csv:0,0 LIMIT 3 RRFK 60 EF 32 FIELDS title",
     );
-    let at = |k: &str| got.find(k).unwrap_or_else(|| panic!("{k} missing from {got}"));
-    assert!(at("doc:1") < at("doc:2") && at("doc:1") < at("doc:3"), "{got}");
+    let at: Vec<usize> = ["doc:1", "doc:2", "doc:3"].iter().filter_map(|k| got.find(k)).collect();
+    assert!(at.len() == 3 && at[0] < at[1] && at[0] < at[2], "{got}");
     assert!(got.contains("red apple"), "{got}");
     // doc:4 alone matches "pear" and doc:2 is the nearest to (9,9): each
     // tops one list, so their fused scores tie and the key orders them
