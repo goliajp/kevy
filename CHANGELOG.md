@@ -215,8 +215,12 @@ defect.
   CREATECONSUMER` — is now recorded with its time as an internal
   `XINTERNAL.CONSUMERSEEN` frame, which a client that sends it is refused.
   A group read that changes nothing is not recorded, so that contact alone
-  is not carried over. 6.4 replaying an AOF written by this version skips
-  these frames, and loses consumers made only by `XGROUP CREATECONSUMER`.
+  is not carried over. A consumer the command made is recorded as `XGROUP
+  CREATECONSUMER` first, and a group's read counter in an `XGROUP SETID …
+  ENTRIESREAD` frame of its own, so 6.4 replaying an AOF written by this
+  version, or following it as a replica, has every group where it stands
+  and every consumer; it skips the internal frames and counts idle times
+  from its own replay.
 
 - **An embedded store never reads a key past its deadline.** Lazy expiry
   compared a key's deadline with a clock the background reaper refreshed
@@ -614,10 +618,10 @@ defect.
 
 - **`used_memory` counts what the allocator holds, so it reads higher for
   the same data.** Measured on 250,000 keys of strings and hashes, 6.4.0
-  reported 69.2 MB and 7.0 reports 103.5 MB, while the process's RSS went
-  from 220.8 MB to 207.7 MB. A `maxmemory` sized from 6.4's figure starts
-  evicting at about two-thirds of the data it held; the upgrade guide has
-  the details. The parts:
+  reported 77.6 MB and 7.0 reports 103.5 MB, while the process's RSS once
+  loaded went from 163.1 MiB to 134.1 MiB. A `maxmemory` sized from 6.4's
+  figure starts evicting at about three-quarters of the data it held; the
+  upgrade guide has the details. The parts:
   - *The keyspace is charged the table it holds.* Every key was charged a
     flat 96 bytes for its place in the keyspace table, but the table is an
     open-addressing array that doubles at 7/8 load and holds all its slots

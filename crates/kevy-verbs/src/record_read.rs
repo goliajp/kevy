@@ -10,8 +10,9 @@
 //!   consumer 0 id… TIME t RETRYCOUNT n FORCE JUSTID` per `(delivery time,
 //!   delivery count)` they hold, the frame a claim is recorded with.
 //!   `FORCE` makes the rows, which the replay has not yet made;
-//! * how far it moved the group and the read counter it left:
-//!   `XGROUP SETID key group <last-delivered> ENTRIESREAD <n|-1>`.
+//! * how far it moved the group: `XGROUP SETID key group
+//!   <last-delivered>`, and the read counter it left when that is known:
+//!   the same frame again with `ENTRIESREAD n`.
 //!
 //! With `NOACK` no pending entries are made, so no `XCLAIM` frame is
 //! recorded. A read of history (an explicit ID) moves nothing, but each
@@ -20,7 +21,8 @@
 //! count)` the entries hold now.
 //!
 //! A read is the consumer's latest contact with the group, and creates the
-//! consumer if missing. A stream the read delivered from, or made the
+//! consumer if missing; a read that made it records `XGROUP
+//! CREATECONSUMER key group consumer` before its claims. A stream the read delivered from, or made the
 //! consumer on, has its frames end with `XINTERNAL.CONSUMERSEEN key group
 //! consumer t [a]`, `t` that contact and `a` the last time the consumer
 //! was handed an entry: the claim frames before it stamp the consumer with
@@ -35,6 +37,7 @@ use kevy_resp::{Argv, ArgvView};
 use kevy_store::{Store, StreamId};
 
 use crate::record::{Consumer, seen_frame, taken_frames};
+use crate::record_group::{create_consumer_frame, push_setid_frames};
 
 /// The frames for an `XREADGROUP` `args` just run, `marks` holding, per
 /// stream in `STREAMS` order, the group's last-delivered ID before the
@@ -51,7 +54,7 @@ pub(crate) fn read_frames<A: ArgvView + ?Sized>(
     for (k, (prev, consumer_was)) in marks.iter().enumerate().take(shape.streams) {
         let key = &args[shape.keys + k];
         let mut claims = Vec::new();
-        let mut moved = None;
+        let mut moved = false;
         if &args[shape.keys + shape.streams + k] == b">"
             && let Some(g) = store.stream_group_peek(key, group)
             && g.last_delivered_id() != *prev
@@ -62,14 +65,19 @@ pub(crate) fn read_frames<A: ArgvView + ?Sized>(
                 let ids: Vec<StreamId> = g.pending_range(span).map(|(id, _)| id).collect();
                 claims = taken_frames(store, key, group, consumer, &ids);
             }
-            moved = crate::record::setid_frame(store, key, group);
+            moved = true;
         }
         let again = redelivered.get(k).map_or(&[][..], Vec::as_slice);
         if !again.is_empty() {
             claims.extend(taken_frames(store, key, group, consumer, again));
         }
-        let seen = moved.is_some() || *consumer_was == Consumer::Created || !again.is_empty();
-        frames.extend(moved);
+        let seen = moved || *consumer_was == Consumer::Created || !again.is_empty();
+        if moved {
+            push_setid_frames(&mut frames, store, key, group);
+        }
+        if *consumer_was == Consumer::Created {
+            frames.push(create_consumer_frame(key, group, consumer));
+        }
         frames.extend(claims);
         if seen {
             frames.extend(seen_frame(store, key, group, consumer));

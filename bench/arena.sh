@@ -22,7 +22,8 @@
 #     engine exposes the same counter, so the comparison stays like-for-like;
 #   - after a cell's windows, one more window with 16 load threads: if it
 #     beats the cell's best window by more than 2%, the load generator was the
-#     limit and the cell is CLIENT-BOUND, not a result;
+#     limit for that engine, which is LOAD-BOUND there. A competitor that is
+#     LOAD-BOUND gets no ratio; kevy LOAD-BOUND gives a ratio that is a floor;
 #   - competitor versions and image digests, and the box's own settings, are
 #     in the output header. The versions come from
 #     bench/COMPETITOR-ANCHORS.json; each image is asked what it actually is,
@@ -141,9 +142,11 @@ bench_cell() { # $1 engine, $2 test, $3 round
     echo "$out" >>"$SAMPLES"
 }
 
-engine_pid() { # $1 label, $2 pid we spawned
-    if [ "$1" = kevy ]; then echo "$2"
-    else docker inspect -f '{{.State.Pid}}' "arena-$1"; fi
+# The process that listens on the port: a container's own pid can be an init
+# (valkey's and Dragonfly's images start under tini), whose counters stay at
+# zero while the engine it started does the work.
+engine_pid() {
+    ss -Hltnp "sport = :$PORT" | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2
 }
 
 run_engine() { # round, label, start-command...
@@ -159,7 +162,7 @@ run_engine() { # round, label, start-command...
         docker rm -f "arena-$label" >/dev/null 2>&1 || true
         return 0
     fi
-    EPID=$(engine_pid "$label" "$spid")
+    EPID=$(engine_pid)
     for t in $TESTS; do
         bench_cell "$label" "$t" "$round" || { rc=$?; break; }
     done
