@@ -54,7 +54,9 @@ bounded staleness, quorum-fenced writes) — see
 [docs/availability.md](docs/availability.md).
 4.0 sets it in stone: the public Rust API was consolidated once —
 one error type (`KevyError`), one builder, borrowed write faces
-([docs/UPGRADING.md](docs/UPGRADING.md)) — and is frozen add-only;
+([docs/UPGRADING.md](docs/UPGRADING.md)) — and stayed add-only through
+6.x (7.0 changed it once more, to follow the Rust API Guidelines:
+[docs/rust-api-7.0.md](docs/rust-api-7.0.md));
 the runtime is instance-scoped, so one process can run several
 independent kevys; and the same engine now ships to the browser and
 to the edge (the two sections below).
@@ -327,11 +329,15 @@ A complete server is a 768 KB stripped binary that boots into under
 
 **Upgrading?** [docs/upgrading-6.4-to-7.0.md](docs/upgrading-6.4-to-7.0.md)
 is the current hop: nothing to change for a wire client and the data
-directory opens as it is. A Rust caller that builds `kevy_config` structs
-literally names their new fields, and a script that runs `kevy-cli doctor`
-or another tool as a bare word puts it after `--kevy`; the guide also says
-what to do before going back to 6.4, why index sizes now read larger, and
-which data-losing defects were fixed.
+directory opens as it is. Before swapping the binary, check a `maxmemory`
+setting (`used_memory` reads about 1.5 times higher for the same data) and,
+with replicas, upgrade the primary first. A Rust caller follows
+[docs/rust-api-7.0.md](docs/rust-api-7.0.md), a Go caller imports
+`kevy-go/v7`, and a script that runs `kevy-cli doctor` or another tool as
+a bare word puts it after `--kevy`. The guide also says what to do before
+going back to 6.4, and which data-losing defects were fixed; every
+statement in it about mixing versions was measured against the 6.4.0
+binary.
 The hops before it are
 [docs/upgrading-6.3-to-6.4.md](docs/upgrading-6.3-to-6.4.md) and
 [docs/upgrading-6.2-to-6.3.md](docs/upgrading-6.2-to-6.3.md).
@@ -461,13 +467,15 @@ build for `wasm32-unknown-unknown` and `wasm32-wasip1`.
 
 ## Roadmap and stability
 
-The workspace is on the v4.x line. Persistence format, RESP wire
+The workspace is on the 7.x line. Persistence format, RESP wire
 protocol, public Rust API, CLI flags, env vars, TOML schema, and
 eviction semantics are add-only across each major line — and the
-on-disk formats carry across majors: a snapshot or AOF written by
-v2.0 loads as-is on every 3.x and 4.x build (see
-[docs/UPGRADING.md](docs/UPGRADING.md)). Additive features land in
-minor releases without breaking earlier code. The full stability
+on-disk formats carry across majors in the upgrade direction: a
+snapshot or AOF written by v2.0 loads as-is on every 3.x and 4.x
+build, and 7.0 opens a 6.4 directory as it is (see
+[docs/UPGRADING.md](docs/UPGRADING.md) and each hop's guide). Going
+back a major is a documented step, not a guarantee. Additive features
+land in minor releases without breaking earlier code. The full stability
 contract is in
 [`MIGRATION-FROM-VALKEY.md`](MIGRATION-FROM-VALKEY.md#v1x-stability-commitment).
 

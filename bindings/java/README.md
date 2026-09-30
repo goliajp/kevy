@@ -46,9 +46,10 @@ The embedded store is also usable directly (`EmbeddedDb`, §5.2):
 ## Build / test
 
 Maven is the canonical build (`pom.xml`, group `jp.golia`, artifact `kevy`). The
-coordinates are `jp.golia:kevy:7.0.0`, matching the engine version — but
-**nothing is on Maven Central yet**, so resolve it locally
-(`mvn install`) or use `run-tests.sh` below, which needs no Maven at all.
+coordinates are `jp.golia:kevy:7.0.0`, matching the engine version, and
+the artifact is on Maven Central. The jar does not carry `libkevy_jni`, so
+the embedded backend needs one built from the kevy tree (below); a remote
+URL needs nothing else.
 This repo needs neither Maven nor Gradle on `PATH`: `run-tests.sh` builds
 `libkevy_jni` + the `kevy` server with cargo, compiles with `javac`, and
 drives the JUnit 5 conformance suite through the

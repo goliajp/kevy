@@ -14,34 +14,35 @@ kevyのエラーはRESPのsimple-error文字列——`-<PREFIX> <message>\r\n`�
 
 | プレフィックス | 引き金 | 回復／次の一手 |
 |--------|---------------|----------------------|
-| `-ERR unknown command '<cmd>'` | コマンド名が未実装、または認識されない。 | READMEのコマンドカバレッジを確認し、綴りを検証する。 |
-| `-ERR wrong number of arguments for '<cmd>' command` | argcがそのコマンドの受け付ける形と一致しない。 | 文書化された引数の数で再発行する。 |
-| `-ERR value is not an integer or out of range` | パース可能なi64でない値へのINCR/DECR系コマンド、または数値引数が範囲外。 | `SET`でパース可能な整数に上書きするか、入力をクランプする。 |
-| `-ERR no such key` | RENAME / RENAMENX / COPY / GETEX の対象キーが存在しない。 | キーを不在として扱う（必要なら`EXISTS`で事前確認）。 |
-| `-ERR kevy only supports DB 0` | `SELECT N`がN ≠ 0で発行された。 | kevyにマルチDBはない。別インスタンスか名前空間付きキーを使う。 |
-| `-ERR MULTI calls can not be nested` | MULTIブロックの中でさらに`MULTI`が送られた。 | 次のトランザクションを開く前に`EXEC`／`DISCARD`を待つ。 |
-| `-ERR EXEC without MULTI` | 開いたトランザクションがないのに`EXEC`が送られた。 | `MULTI`と対にするか、コマンドを落とす。 |
-| `-ERR DISCARD without MULTI` | 開いたトランザクションがないのに`DISCARD`が送られた。 | `MULTI`と対にするか、コマンドを落とす。 |
-| `-ERR WATCH inside MULTI is not allowed` | MULTIブロックの中で`WATCH`が送られた。 | `WATCH`は`MULTI`の前に発行する。 |
-| `-ERR <cmd> not allowed inside MULTI` | キュー不能なコマンド（pub/sub、`WATCH`、`HELLO`、`RENAME`）がMULTI内でキューされた。 | これらはトランザクションの外で発行する。 |
-| `-ERR Protocol error` | 受信バイト列が正しいRESPでない。 | 再接続してリトライ。続くならクライアントのシリアライザを監査する。 |
-| `-ERR CONFIG SET failed for '<key>': <reason>` | 未知のCONFIGフィールド、または値が範囲外。 | `CONFIG GET *`でサポートされるフィールドと現在値を見る。 |
-| `-ERR CONFIG REWRITE could not write <path>: <io-error>` | 設定TOMLのパスが存在しないか書き込めない。 | `--config`のパスとファイルシステム権限を確認する。 |
-| `-WRONGTYPE Operation against a key holding the wrong kind of value` | 既存の別Redis型のキーに対してコマンドを実行した。 | [WRONGTYPEの規則](#wrongtypeの規則)参照。 |
-| `-EXECABORT Transaction discarded because of previous errors.` | MULTI中にキューしたコマンドが未知の動詞、または引数が少なすぎた。EXECはバッチを拒否し、何も実行しない。 | 問題のコマンドを直してから、再度`MULTI`／キュー／`EXEC`。 |
-| `-MOVED <slot> <host:port>` | キーのハッシュスロットをこのノードが所有していない。 | [クラスタルーティング系リプライ](#クラスタルーティング系リプライ)参照。 |
-| `-CROSSSLOT Keys in request don't hash to the same slot` | 複数キーコマンドが複数のハッシュスロットにまたがった。 | [クラスタルーティング系リプライ](#クラスタルーティング系リプライ)参照。 |
-| `-MISDIRECTED writer is <host:port>` | 書き込みが、このキーのスコープを所有しないノードに着地した。または`REPL.WAIT`がこのレプリカでread-your-writesを提供できなかった（タイムアウトか世代不一致）。 | [クラスタルーティング系リプライ](#クラスタルーティング系リプライ)参照。`REPL.WAIT`の場合は`<host:port>`のプライマリを読む。 |
-| `-QUIESCED migrating to <host:port>` | スロットまたはスコープが移行中でこのノード上で凍結されている。またはノードが`<host:port>`への`FAILOVER`引き継ぎの最中。 | [クラスタルーティング系リプライ](#クラスタルーティング系リプライ)参照。 |
-| `-OOM command not allowed when used memory > 'maxmemory'` | ポリシー`noeviction`で上限超過後に書き込み系コマンドが来た。 | `maxmemory`を上げる、退去ポリシーを設定する（例：`allkeys-lru`）、または`DEL`で空きを作る。既存データは無傷。 |
-| `-READONLY You can't write against a read only replica.` | レプリカノードへ書き込みコマンドが送られた。 | プライマリへ送るか、ルーティングクライアントを使う。 |
-| `-NOREPLICAS Not enough good replicas to write.` | `min_replicas_to_write = N`のプライマリから見える健全なレプリカがN未満。 | バックオフしてリトライ。レプリカを復旧する（[docs/availability.md](https://github.com/goliajp/kevy/blob/develop/docs/availability.md)参照）。 |
-| `-NOREPLICAS primary lost quorum; writes fenced` | electクォーラムのプライマリがピアの厳密過半数へ到達できない（パーティションの少数派側）。書き込みはリース期間だけ自己フェンスする。 | バックオフしてリトライ——パーティションが治ればフェンスは解け、あるいは多数派が新プライマリを選出してルーティングクライアントが見つける。 |
-| `-STALE replica is stale; read the primary or raise replica_max_staleness_ms` | 最後のプライマリハートビートが`replica_max_staleness_ms`の上限より古いレプリカへ読み取りが送られた。 | レプリカが追いつくまでプライマリを読むか、上限を上げる／無効化する。 |
-| `-READONLY can't write against a read-only script` | `EVAL_RO`／`EVALSHA_RO`で評価されたスクリプトが書き込みを試みた。 | 書き込み可能な`EVAL`／`EVALSHA`側を使う。 |
-| `-NOSCRIPT No matching script. Please use EVAL.` | `EVALSHA <sha>`がキャッシュにないスクリプトを要求した。 | 直接`EVAL`を呼ぶ（kevyは自動キャッシュ）か、先に`SCRIPT LOAD`する。 |
-| `-LOADING kevy is loading the dataset in memory` | プライマリからフル再同期スナップショットを受信中のレプリカへ読み取りが送られた。 | 待ってリトライ（ウィンドウはスナップショット転送で有界）。ローディング中も`PING`、`INFO`、`HELLO`は応答されるので、ヘルスチェックと監視は動き続ける。 |
-| `-ERR No such client address in the list` | レガシー形の`CLIENT KILL <addr:port>`がどのコネクションにも一致しなかった。 | `CLIENT LIST`で稼働中コネクションを列挙し、実在の`addr`で再発行する。フィルタ形（`CLIENT KILL ID\|ADDR\|LADDR …`）はエラーではなくカウント0を返す。 |
+| `-ERR unknown command '<cmd>'` | コマンド名が未実装、または認識されない。| READMEのコマンドカバレッジを確認し、綴りを検証する。|
+| `-ERR wrong number of arguments for '<cmd>' command` | argcがそのコマンドの受け付ける形と一致しない。| 文書化された引数の数で再発行する。|
+| `-ERR value is not an integer or out of range` | パース可能なi64でない値へのINCR/DECR系コマンド、または数値引数が範囲外。| `SET`でパース可能な整数に上書きするか、入力をクランプする。|
+| `-ERR no such key` | RENAME / RENAMENX / COPY / GETEX の対象キーが存在しない。| キーを不在として扱う（必要なら`EXISTS`で事前確認）。|
+| `-ERR kevy only supports DB 0` | `SELECT N`がN ≠ 0で発行された。| kevyにマルチDBはない。別インスタンスか名前空間付きキーを使う。|
+| `-ERR MULTI calls can not be nested` | MULTIブロックの中でさらに`MULTI`が送られた。| 次のトランザクションを開く前に`EXEC`／`DISCARD`を待つ。|
+| `-ERR EXEC without MULTI` | 開いたトランザクションがないのに`EXEC`が送られた。| `MULTI`と対にするか、コマンドを落とす。|
+| `-ERR DISCARD without MULTI` | 開いたトランザクションがないのに`DISCARD`が送られた。| `MULTI`と対にするか、コマンドを落とす。|
+| `-ERR WATCH inside MULTI is not allowed` | MULTIブロックの中で`WATCH`が送られた。| `WATCH`は`MULTI`の前に発行する。|
+| `-ERR <cmd> not allowed inside MULTI` | キュー不能なコマンド（pub/sub、`WATCH`、`HELLO`、`RENAME`）がMULTI内でキューされた。| これらはトランザクションの外で発行する。|
+| `-ERR Protocol error` | 受信バイト列が正しいRESPでない。| 再接続してリトライ。続くならクライアントのシリアライザを監査する。|
+| `-ERR CONFIG SET failed for '<key>': <reason>` | 未知のCONFIGフィールド、または値が範囲外。| `CONFIG GET *`でサポートされるフィールドと現在値を見る。|
+| `-ERR CONFIG REWRITE could not write <path>: <io-error>` | 設定TOMLのパスが存在しないか書き込めない。| `--config`のパスとファイルシステム権限を確認する。|
+| `-WRONGTYPE Operation against a key holding the wrong kind of value` | 既存の別Redis型のキーに対してコマンドを実行した。| [WRONGTYPEの規則](#wrongtypeの規則)参照。|
+| `-EXECABORT Transaction discarded because of previous errors.` | MULTI中にキューしたコマンドが未知の動詞、または引数が少なすぎた。EXECはバッチを拒否し、何も実行しない。| 問題のコマンドを直してから、再度`MULTI`／キュー／`EXEC`。|
+| `-MOVED <slot> <host:port>` | キーのハッシュスロットをこのノードが所有していない。| [クラスタルーティング系リプライ](#クラスタルーティング系リプライ)参照。|
+| `-CROSSSLOT Keys in request don't hash to the same slot` | 複数キーコマンドが複数のハッシュスロットにまたがった。| [クラスタルーティング系リプライ](#クラスタルーティング系リプライ)参照。|
+| `-MISDIRECTED writer is <host:port>` | 書き込みが、このキーのスコープを所有しないノードに着地した。または`REPL.WAIT`がこのレプリカでread-your-writesを提供できなかった（タイムアウトか世代不一致）。| [クラスタルーティング系リプライ](#クラスタルーティング系リプライ)参照。`REPL.WAIT`の場合は`<host:port>`のプライマリを読む。|
+| `-QUIESCED migrating to <host:port>` | スロットまたはスコープが移行中でこのノード上で凍結されている。またはノードが`<host:port>`への`FAILOVER`引き継ぎの最中。| [クラスタルーティング系リプライ](#クラスタルーティング系リプライ)参照。|
+| `-OOM command not allowed when used memory > 'maxmemory'` | ポリシー`noeviction`で上限超過後に書き込み系コマンドが来た。| `maxmemory`を上げる、退去ポリシーを設定する（例：`allkeys-lru`）、または`DEL`で空きを作る。既存データは無傷。|
+| `-OOM command not allowed when the process holds more memory than the tiering budget allows` | 階層化したサーバーで、実際に使われているメモリが 2 回続けて階層化の予算 × 1.05 を超え、しかもその書き込みがデータを増やすものだった。| 待つ：降格とヒープの切り詰めでメモリが下がれば、書き込みは自動で再開します。続くなら予算を上げるか、降格できない部分（インデックス、キー空間のテーブル）を減らします。`INFO # Tiering` の `tier_live_bytes` と `tier_rss_line_bytes` で確認できます。既存データは無傷。|
+| `-READONLY You can't write against a read only replica.` | レプリカノードへ書き込みコマンドが送られた。| プライマリへ送るか、ルーティングクライアントを使う。|
+| `-NOREPLICAS Not enough good replicas to write.` | `min_replicas_to_write = N`のプライマリから見える健全なレプリカがN未満。| バックオフしてリトライ。レプリカを復旧する（[docs/availability.md](https://github.com/goliajp/kevy/blob/develop/docs/availability.md)参照）。|
+| `-NOREPLICAS primary lost quorum; writes fenced` | electクォーラムのプライマリがピアの厳密過半数へ到達できない（パーティションの少数派側）。書き込みはリース期間だけ自己フェンスする。| バックオフしてリトライ——パーティションが治ればフェンスは解け、あるいは多数派が新プライマリを選出してルーティングクライアントが見つける。|
+| `-STALE replica is stale; read the primary or raise replica_max_staleness_ms` | 最後のプライマリハートビートが`replica_max_staleness_ms`の上限より古いレプリカへ読み取りが送られた。| レプリカが追いつくまでプライマリを読むか、上限を上げる／無効化する。|
+| `-READONLY can't write against a read-only script` | `EVAL_RO`／`EVALSHA_RO`で評価されたスクリプトが書き込みを試みた。| 書き込み可能な`EVAL`／`EVALSHA`側を使う。|
+| `-NOSCRIPT No matching script. Please use EVAL.` | `EVALSHA <sha>`がキャッシュにないスクリプトを要求した。| 直接`EVAL`を呼ぶ（kevyは自動キャッシュ）か、先に`SCRIPT LOAD`する。|
+| `-LOADING kevy is loading the dataset in memory` | プライマリからフル再同期スナップショットを受信中のレプリカへ読み取りが送られた。| 待ってリトライ（ウィンドウはスナップショット転送で有界）。ローディング中も`PING`、`INFO`、`HELLO`は応答されるので、ヘルスチェックと監視は動き続ける。|
+| `-ERR No such client address in the list` | レガシー形の`CLIENT KILL <addr:port>`がどのコネクションにも一致しなかった。| `CLIENT LIST`で稼働中コネクションを列挙し、実在の`addr`で再発行する。フィルタ形（`CLIENT KILL ID\|ADDR\|LADDR …`）はエラーではなくカウント0を返す。|
 
 ### kevyが決して送出しないプレフィックス
 
@@ -104,7 +105,7 @@ kevyのエラーはRESPのsimple-error文字列——`-<PREFIX> <message>\r\n`�
 | `ERR no such index '<name>' (IDX.LIST enumerates them)` | クエリが存在しないインデックスを名指しした | `IDX.LIST`／`VIEW.LIST`がカタログを列挙する |
 | `INDEXBUILDING index '<name>' is still building (poll IDX.LIST until state=ready)` | クエリが作成後バックフィルとレースした | `IDX.LIST`の`state`をポーリング。docs/migration.md参照 |
 | `INDEXOVERBUDGET index '<name>' build exceeded MAXMEM (raise maxmemory or DROP the index)` | 構築がメモリ予算に当たった | `maxmemory`を上げるか`IDX.DROP` |
-| `FEEDRESYNC <gen> <tail>` | FEEDカーソルがもうサービスできない（世代の増加か、バックログ超過） | 新しいスナップショット＋返されたカーソルから消費を再開。docs/cdc.md参照 |
+| `FEEDRESYNC <gen> <tail>` | FEEDカーソルがもうサービスできない（世代の増加か、バックログ超過）| 新しいスナップショット＋返されたカーソルから消費を再開。docs/cdc.md参照 |
 
 ## このカタログの更新手順
 

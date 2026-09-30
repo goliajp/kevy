@@ -16,7 +16,8 @@
     "./embedded": "./src/embedded.ts"
   },
   "files": [
-    "src"
+    "src",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "test:node": "node --test --test-concurrency=1 --test-timeout=20000 test/*.test.ts",

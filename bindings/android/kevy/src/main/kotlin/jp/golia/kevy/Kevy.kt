@@ -219,7 +219,6 @@ class KevyDB private constructor(private var handle: Long) : AutoCloseable {
         return v.items.mapNotNull { it.asText }
     }
 
-    /** Values for [keys], null per missing key. */
     /** Set every pair in one call; the pairs of one shard are set and
      *  logged together. A key given twice takes its last value. */
     fun mset(vararg pairs: Pair<String, ByteArray>) {
@@ -234,6 +233,7 @@ class KevyDB private constructor(private var handle: Long) : AutoCloseable {
         if (rc != 0) throw KevyException("kevy: mset failed ($rc)")
     }
 
+    /** Values for [keys], null per missing key. */
     fun mget(vararg keys: String): List<ByteArray?> {
         if (keys.isEmpty()) {
             // the framed path answers the arity error

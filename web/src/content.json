@@ -459,7 +459,7 @@
               "q": "Can I survive a machine failure?"
             },
             {
-              "a": "No, and there will not be. No AUTH, no ACLs, no TLS — permanently out of scope. Run kevy on a private network, or behind a proxy that does those things properly. A half-hearted auth layer is worse than an honest absence of one, because it invites people to trust it.",
+              "a": "No, and there will not be. No AUTH, no ACLs, no TLS — permanently out of scope. Run kevy on a private network, or behind a proxy that does those things properly. Since 7.0 kevy can encrypt its own links, off unless configured: between nodes, both ends proven by their keys, and on a second client port for the Rust clients that can be limited to the client keys you list. <a href=\"~/docs/encrypted-links/\">The encrypted-links guide</a> says what that covers and what it costs. A half-hearted auth layer is worse than an honest absence of one, because it invites people to trust it.",
               "q": "Is there authentication?"
             },
             {
@@ -1760,7 +1760,7 @@
               "q": "マシン障害を生き延びられますか"
             },
             {
-              "a": "ありません。今後もありません。AUTH も ACL も TLS も、恒久的に対象外です。kevy はプライベートなネットワークで動かすか、それらを正しく行うプロキシの後ろに置いてください。中途半端な認証層は、正直に何もないことよりも悪いものです。人に信頼させてしまうからです。",
+              "a": "ありません。今後もありません。AUTH も ACL も TLS も、恒久的に対象外です。kevy はプライベートなネットワークで動かすか、それらを正しく行うプロキシの後ろに置いてください。7.0 からは、kevy 自身のリンクを暗号化できます（設定しない限りオフです）。ノード間のリンクでは両端が鍵で身元を証明し、Rust クライアント向けの二つ目のクライアントポートでは、列挙したクライアント鍵だけを受け付けるようにできます。<a href=\"~/docs/encrypted-links/\">暗号化リンクのガイド</a>に、何を守り、どれだけのコストがかかるかがあります。中途半端な認証層は、正直に何もないことよりも悪いものです。人に信頼させてしまうからです。",
               "q": "認証はありますか"
             },
             {
@@ -3061,7 +3061,7 @@
               "q": "机器故障能扛过去吗？"
             },
             {
-              "a": "没有，以后也不会有。没有 AUTH，没有 ACL，没有 TLS——永久不在范围内。把 kevy 跑在内网，或者放在一个真正把这些事做好的代理后面。一层敷衍的认证比坦白没有认证更糟，因为它会引诱人去信任它。",
+              "a": "没有，以后也不会有。没有 AUTH，没有 ACL，没有 TLS——永久不在范围内。把 kevy 跑在内网，或者放在一个真正把这些事做好的代理后面。从 7.0 起，kevy 可以给自己的链路加密，不配置就不开启：节点之间的链路，两端都用密钥证明身份；以及给 Rust 客户端用的第二个客户端端口，可以只接受你列出的客户端密钥。<a href=\"~/docs/encrypted-links/\">加密链路指南</a>写了它覆盖什么、代价多少。一层敷衍的认证比坦白没有认证更糟，因为它会引诱人去信任它。",
               "q": "有认证吗？"
             },
             {

@@ -529,7 +529,7 @@ PAGES["choose"] = {
                 },
                 {
                     "q": "Is there authentication?",
-                    "a": "No, and there will not be. No AUTH, no ACLs, no TLS — permanently out of scope. Run kevy on a private network, or behind a proxy that does those things properly. A half-hearted auth layer is worse than an honest absence of one, because it invites people to trust it.",
+                    "a": "No, and there will not be. No AUTH, no ACLs, no TLS — permanently out of scope. Run kevy on a private network, or behind a proxy that does those things properly. Since 7.0 kevy can encrypt its own links, off unless configured: between nodes, both ends proven by their keys, and on a second client port for the Rust clients that can be limited to the client keys you list. <a href=\"~/docs/encrypted-links/\">The encrypted-links guide</a> says what that covers and what it costs. A half-hearted auth layer is worse than an honest absence of one, because it invites people to trust it.",
                 },
                 {
                     "q": "What if I outgrow it, or just change my mind?",
