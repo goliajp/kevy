@@ -28,7 +28,7 @@ kevy-cli -p 6004 IDX.QUERY posts MATCH "search" LIMIT 10 FIELDS title
 
 - `IDX.EXPLAIN posts MATCH "full-text rust"` — 実行を伴わないパースです。kind、ビルド状態、推定行数、そしてプランの行を返します。
 - `IDX.VERIFY posts` / `IDX.LIST` — entries / bytes / postings / トークン統計を、ライブで。
-- `IDX.DROP posts` — 宣言を落とします（カタログの変更であり、サイドカーに永続化されます）。
+- `IDX.DROP posts` — 宣言を落とします（カタログの変更であり、ログに記録されてレプリケートされます）。
 
 `MATCH`は`LIMIT`（1000以下）と`FIELDS`を受け取ります。`CURSOR`形式は存在しません（理由は「マッチとランキング」を参照）。
 

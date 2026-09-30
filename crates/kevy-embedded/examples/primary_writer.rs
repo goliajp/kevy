@@ -3,7 +3,7 @@
 //!
 //! usage: primary_writer <source-port> <n-keys> [backlog-bytes]
 
-use kevy_embedded::{Config, Store};
+use kevy_embedded::{Config, IndexKind, IndexValType, Store};
 
 fn main() {
     let mut args = std::env::args().skip(1);
@@ -25,6 +25,8 @@ fn main() {
     store.set(b"p:greeting", b"hello").expect("set");
     store.rpush(b"p:list", &[b"a", b"b"]).expect("rpush");
     store.zadd(b"p:zset", &[(1.5, b"m" as &[u8])]).expect("zadd");
+    // the replica takes this index from here: it declares none itself
+    store.idx_create(b"rep_n", b"p:", b"n", IndexValType::I64, IndexKind::Range).expect("index");
     println!("READY");
     let mut i = 0u64;
     loop {

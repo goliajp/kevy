@@ -161,8 +161,8 @@ if your data is strongly multi-modal, index the modes separately
 Same envelope as every index kind ([indexes.md](indexes.md)): a
 write and its graph update are atomic within the owning shard;
 cross-shard queries merge per-shard top-k without a global snapshot
-(SCAN-class). The catalog persists in a data-dir sidecar; graph
-CONTENT is derived state, rebuilt after restart.
+(SCAN-class). The catalog is recorded in the log and every snapshot,
+and replicates; graph CONTENT is derived state, rebuilt after restart.
 
 ## Performance
 

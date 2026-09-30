@@ -92,7 +92,7 @@ VIEW.CREATE assignable
 
 - 只要有任何一个被引用的索引还在 backfill，查询就回答 `-INDEXBUILDING`（一个不完整的索引会悄悄谎报成员关系）——重试纪律与索引查询相同。
 - `VIEW.REBUILD` 保持答案不变（e2e 套件里有断言）；`VIEW.VERIFY` 让漂移可被证伪（成员数 / 字节数 / 排序排除数）。
-- 视图目录持久化在数据目录的 sidecar 文件里；materialized 的**内容**是派生状态——重启后重建，从不进快照。
+- 视图目录记录在日志和每份快照里，并随复制下发；materialized 的**内容**是派生状态——重启后重建，从不进快照。
 
 ## Embedded
 

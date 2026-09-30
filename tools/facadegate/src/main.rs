@@ -141,7 +141,7 @@ fn tables_end_to_end() {
     );
 
     assert_eq!(store.table_list().len(), 1);
-    assert!(store.table_drop(b"threads"));
+    assert!(store.table_drop(b"threads").unwrap());
 }
 
 /// The exact spec that took a consumer's production down (dogfood F9):

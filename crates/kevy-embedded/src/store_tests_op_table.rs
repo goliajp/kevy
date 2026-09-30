@@ -54,6 +54,8 @@ fn estore_manifest_matches_table() {
 #[test]
 fn replay_manifest_matches_table() {
     let mut manifest = replay_verbs();
+    // the restore and a replica take the catalog frame ahead of `apply`
+    manifest.push(kevy_resp::ops_table::CATALOG);
     if !cfg!(feature = "streams-geo") {
         let off = ops_with(surface::REPLAY).into_iter().filter(|n| is_streams_geo(n.as_bytes()));
         // the thirteen stream and geo writes and the internal record verb

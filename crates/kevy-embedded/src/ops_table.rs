@@ -5,20 +5,6 @@
 //! engines cannot compile a table differently (the IDX.CREATE parity
 //! lesson; the dispatch oracle byte-compares the wire faces anyway).
 
-// The sidecar IS the catalog's persistence — `boot` reads it and a
-// directory without one "boots empty". So a rename that fails loses
-// the index definitions at the next start, after the command that
-// created them has already replied OK. That is a gap, not a
-// non-event, and it is written up as an open question rather than
-// silently accepted here.
-#![cfg_attr(
-    feature = "persist",
-    expect(
-        clippy::let_underscore_must_use,
-        reason = "the catalog has no other home; an open question"
-    )
-)]
-
 use std::sync::{Mutex, RwLock};
 
 use kevy_index::{AdviseLog, IndexVerify, TableCatalog, TableEnsure, TableSpec, TableVerify};
@@ -40,9 +26,6 @@ pub(crate) struct TableReg {
 /// Rows the per-shard column spot check samples (mirrors the server).
 const SPOTCHECK_ROWS: usize = 64;
 
-#[cfg(feature = "persist")]
-const SIDECAR: &str = "table-catalog.meta";
-
 /// One `TABLE.VERIFY` result: per compiled index its name + six
 /// counters (entries, bytes, coerce_failures, duplicates, drift,
 /// checked), plus the `(rows, type_mismatches)` spot-check pair.
@@ -59,6 +42,10 @@ impl Store {
     /// errors: names are dry-run against a catalog clone first, so a
     /// collision installs nothing.
     pub fn table_declare(&self, spec: TableSpec) -> KevyResult<()> {
+        self.catalog_change(|| self.declare_table(spec))
+    }
+
+    fn declare_table(&self, spec: TableSpec) -> KevyResult<()> {
         // Tiering floor refusal — the same precheck IDX.CREATE runs,
         // moved ahead of the catalog mutation so a refused declare
         // installs nothing.
@@ -88,7 +75,6 @@ impl Store {
                 self.tables.catalog.write().unwrap_or_else(std::sync::PoisonError::into_inner);
             g.create(spec).map_err(|e| KevyError::InvalidInput(e.to_string()))?;
         }
-        self.persist_table_sidecar();
         for ispec in compiled {
             self.register_spec(ispec)?;
         }
@@ -132,13 +118,20 @@ impl Store {
     /// standing.
     pub fn table_replace(&self, spec: TableSpec) -> KevyResult<()> {
         spec.compile().map_err(|e| KevyError::InvalidInput(e.to_string()))?;
-        self.table_drop(&spec.name);
-        self.table_declare(spec)
+        self.catalog_change(|| {
+            self.drop_table(&spec.name);
+            self.declare_table(spec)
+        })
     }
 
     /// `TABLE.DROP` equivalent — drops the table AND its compiled
-    /// indexes; `false` if absent.
-    pub fn table_drop(&self, name: &[u8]) -> bool {
+    /// indexes; `false` if absent. Refused on a replica and after
+    /// [`Store::shutdown`], like every write.
+    pub fn table_drop(&self, name: &[u8]) -> KevyResult<bool> {
+        self.catalog_change(|| Ok(self.drop_table(name)))
+    }
+
+    fn drop_table(&self, name: &[u8]) -> bool {
         let compiled: Vec<Vec<u8>> = {
             let g = self.tables.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
             g.get(name)
@@ -156,9 +149,8 @@ impl Store {
         };
         if hit {
             for iname in &compiled {
-                self.idx_drop(iname);
+                self.drop_index(iname);
             }
-            self.persist_table_sidecar();
             self.advise_clear();
         }
         hit
@@ -236,35 +228,6 @@ impl Store {
         (report.spot_rows, report.spot_type_mismatches) = (spot[0], spot[1]);
         Ok(report)
     }
-
-    #[cfg(feature = "persist")]
-    pub(crate) fn table_boot(&self) {
-        let Some(dir) = &self.config.data_dir else { return };
-        if let Ok(text) = std::fs::read_to_string(dir.join(SIDECAR))
-            && let Some(cat) = TableCatalog::from_sidecar(&text)
-            && !cat.is_empty()
-        {
-            let mut g =
-                self.tables.catalog.write().unwrap_or_else(std::sync::PoisonError::into_inner);
-            *g = cat;
-        }
-    }
-
-    #[cfg(not(feature = "persist"))]
-    pub(crate) fn table_boot(&self) {}
-
-    #[cfg(feature = "persist")]
-    pub(crate) fn persist_table_sidecar(&self) {
-        let Some(dir) = &self.config.data_dir else { return };
-        let g = self.tables.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let tmp = dir.join("table-catalog.meta.tmp");
-        if std::fs::write(&tmp, g.to_sidecar()).is_ok() {
-            let _ = std::fs::rename(&tmp, dir.join(SIDECAR));
-        }
-    }
-
-    #[cfg(not(feature = "persist"))]
-    pub(crate) fn persist_table_sidecar(&self) {}
 }
 
 /// One shard's contribution to one compiled index's verify counters —
