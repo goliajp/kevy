@@ -6,6 +6,8 @@
 //! The arithmetic of "unique to this source" is pinned without a server
 //! in `kevy_cli::backfill_keys`'s own tests; this is about the reading.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use std::process::{Child, Command};
 
 use kevy_resp_client::RespClient;
@@ -60,7 +62,7 @@ impl Drop for Srv {
 
 fn run(port: u16, args: &[&str]) -> (bool, String, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_kevy-cli"))
-        .args(["backfill-keys", "-p", &port.to_string()])
+        .args(["-p", &port.to_string(), "--kevy", "backfill-keys"])
         .args(args)
         .output()
         .expect("run kevy-cli");

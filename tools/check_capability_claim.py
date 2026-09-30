@@ -37,6 +37,11 @@ CLAIMS = [
     # every file, including its siblings.
     ("tools/site_content/ja.py", re.compile("(\\d+)\\s*(?:" + "\u500b\u306e" + ")?\\s*"
                                             + "\u30b3\u30de\u30f3\u30c9")),
+    # The READMEs point readers at the generated verb reference with a count
+    # in front of the link; it stood at 189 while the reference said 209.
+    ("README.md", re.compile(r"all (\d+) verbs")),
+    ("README.zh-CN.md", re.compile("\u5168\u90e8 (\\d+) \u4e2a verb")),
+    ("README.ja.md", re.compile("\u5168(\\d+) verb")),
 ]
 
 

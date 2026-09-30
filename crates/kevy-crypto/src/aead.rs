@@ -17,7 +17,7 @@ use crate::{chacha20, ct_eq, poly1305::Poly1305};
 /// let wrong_tag = [0u8; 16];
 /// assert_eq!(aead::open(&[1; 32], &[0; 12], b"", &mut buf, &wrong_tag), Err(AuthError));
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AuthError;
 
 impl core::fmt::Display for AuthError {
@@ -25,6 +25,8 @@ impl core::fmt::Display for AuthError {
         f.write_str("authentication tag mismatch")
     }
 }
+
+impl core::error::Error for AuthError {}
 
 fn tag(key: &[u8; 32], nonce: &[u8; 12], aad: &[u8], ciphertext: &[u8]) -> [u8; 16] {
     let block0 = chacha20::block(key, 0, nonce);

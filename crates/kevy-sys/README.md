@@ -18,7 +18,7 @@ would compare against `libc` / `nix` / `rustix` / `mio` and find it
 missing too much; it's not a generic foundation, it's the OS-boundary
 piece of the kevy server.
 
-- **Sockets** — `tcp_listen` / `tcp_listen_reuseport` / `unix_listen`
+- **Sockets** — `Socket::tcp_listen` / `tcp_listen_reuseport` / `unix_listen`
   (`AF_UNIX` stream, unlink-before-bind + `chmod 0777`, mirroring
   valkey/redis), non-blocking I/O, `TCP_NODELAY`, owned fds that
   close on drop.
@@ -27,13 +27,18 @@ piece of the kevy server.
 - Cross-platform `sockaddr_in` / `kevent` / `epoll_event` layouts (incl.
   the x86_64 packed `epoll_event`).
 
-```rust,no_run
-use kevy_sys::{Poller, tcp_listen};
+```rust
+use kevy_sys::{Interest, Poller, Socket};
 
-let listener = tcp_listen([127, 0, 0, 1], 6379, 1024)?;
+let listener = Socket::tcp_listen([127, 0, 0, 1], 0, 1024)?;
 listener.set_nonblocking()?;
 let poller = Poller::new()?;
-poller.add(listener.raw(), true, false)?;
+poller.add(listener.raw(), Interest::READ)?;
+
+let _client = std::net::TcpStream::connect(("127.0.0.1", listener.local_port()?))?;
+let mut events = Vec::new();
+poller.wait(&mut events, Some(1000))?;
+assert!(events.iter().any(|ev| ev.fd == listener.raw() && ev.readable));
 # Ok::<(), std::io::Error>(())
 ```
 

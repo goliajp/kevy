@@ -5,7 +5,7 @@
 use kevy_resp::{
     ArgvView, encode_array_len, encode_bulk, encode_error, encode_integer, encode_null_bulk,
 };
-use kevy_store::{Store, StoreError};
+use kevy_store::{ListEnd, Store, StoreError};
 
 use crate::Effect;
 use crate::args::arg_i64;
@@ -80,11 +80,11 @@ fn moved(
     }
 }
 
-fn side(b: &[u8]) -> Option<bool> {
+fn side(b: &[u8]) -> Option<ListEnd> {
     if b.eq_ignore_ascii_case(b"LEFT") {
-        Some(true)
+        Some(ListEnd::Left)
     } else if b.eq_ignore_ascii_case(b"RIGHT") {
-        Some(false)
+        Some(ListEnd::Right)
     } else {
         None
     }

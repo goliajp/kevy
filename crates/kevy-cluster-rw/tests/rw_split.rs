@@ -9,33 +9,7 @@ use std::sync::{Arc, Mutex};
 
 static START_GATE: Mutex<()> = Mutex::new(());
 
-/// Inline tempdir (no `tempfile` crate — workspace 0-dep rule).
-mod tempdir {
-    use std::path::PathBuf;
-    pub struct TempDir {
-        path: PathBuf,
-    }
-    impl TempDir {
-        pub fn new(label: &str) -> Self {
-            let nanos = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-            let path = std::env::temp_dir().join(format!("{label}-{nanos}"));
-            std::fs::create_dir_all(&path).unwrap();
-            Self { path }
-        }
-        pub fn path(&self) -> &std::path::Path {
-            &self.path
-        }
-    }
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.path);
-        }
-    }
-}
-
+use kevy_cluster_rw::ReadConsistency;
 use kevy_testnet::free_port_block;
 
 struct PrimaryServer {
@@ -43,7 +17,7 @@ struct PrimaryServer {
     replication_base: u16,
     stop: Arc<AtomicBool>,
     handle: Option<std::thread::JoinHandle<()>>,
-    _dir: tempdir::TempDir,
+    _dir: kevy_tmpdir::TmpDir,
 }
 
 impl PrimaryServer {
@@ -52,7 +26,7 @@ impl PrimaryServer {
         let base = free_port_block(1);
         let port = base;
         let replication_base = base + 1;
-        let dir = tempdir::TempDir::new("kevy-rw-primary");
+        let dir = kevy_tmpdir::TmpDir::new("rw-primary");
         let dir_path = dir.path().to_path_buf();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
@@ -68,7 +42,8 @@ impl PrimaryServer {
                 .shards(1)
                 .with_data_dir(dir_path)
                 .with_aof(false)
-                .with_replication(true, 1024 * 1024)
+                .with_replication(true)
+                .with_replication_buffer_size(1024 * 1024)
                 .with_replication_listener(replication_base);
             let _ = rt.run(stop_thread);
         });
@@ -100,7 +75,7 @@ struct ReplicaServer {
     handle: Option<std::thread::JoinHandle<()>>,
     runner_stop: Arc<AtomicBool>,
     runner_handle: Option<std::thread::JoinHandle<()>>,
-    _dir: tempdir::TempDir,
+    _dir: kevy_tmpdir::TmpDir,
 }
 
 impl ReplicaServer {
@@ -109,7 +84,7 @@ impl ReplicaServer {
     fn start(upstream_replication_port: u16) -> Self {
         let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let port = free_port_block(1) + 1;
-        let dir = tempdir::TempDir::new("kevy-rw-replica");
+        let dir = kevy_tmpdir::TmpDir::new("rw-replica");
         let dir_path = dir.path().to_path_buf();
         // SAFETY: `set_var` is unsafe because it is not thread-safe. This runs on the test's
         // own thread before the runtime thread that reads the variable is spawned, so no
@@ -173,6 +148,9 @@ impl ReplicaServer {
                                         argv: frame.argv,
                                     }
                                 }
+                                // nothing to apply for an event this test
+                                // runner cannot name
+                                _ => continue,
                             };
                             if sender.send(apply).is_err() {
                                 return;
@@ -240,7 +218,10 @@ fn write_lands_on_primary_read_round_robins_to_replica() {
         for i in 0..5 {
             let key = format!("rw-k{i}");
             let reply = client
-                .request_read(&[b"GET".to_vec(), key.as_bytes().to_vec()], false)
+                .request_read(
+                    &[b"GET".to_vec(), key.as_bytes().to_vec()],
+                    ReadConsistency::Eventual,
+                )
                 .expect("read");
             match reply {
                 kevy_resp::Reply::Bulk(_) => {}
@@ -262,8 +243,9 @@ fn write_lands_on_primary_read_round_robins_to_replica() {
     for i in 0..5 {
         let key = format!("rw-k{i}");
         let expected = format!("v{i}");
-        let reply =
-            client.request_read(&[b"GET".to_vec(), key.as_bytes().to_vec()], false).expect("read");
+        let reply = client
+            .request_read(&[b"GET".to_vec(), key.as_bytes().to_vec()], ReadConsistency::Eventual)
+            .expect("read");
         match reply {
             kevy_resp::Reply::Bulk(b) => assert_eq!(b, expected.as_bytes(), "{key}"),
             other => panic!("{key}: unexpected {other:?}"),
@@ -277,7 +259,7 @@ fn write_lands_on_primary_read_round_robins_to_replica() {
         .request_write(&[b"SET".to_vec(), b"rw-consistent".to_vec(), b"yes".to_vec()])
         .expect("write");
     let reply = client
-        .request_read(&[b"GET".to_vec(), b"rw-consistent".to_vec()], true)
+        .request_read(&[b"GET".to_vec(), b"rw-consistent".to_vec()], ReadConsistency::Primary)
         .expect("consistent read");
     match reply {
         kevy_resp::Reply::Bulk(b) => assert_eq!(b, b"yes"),
@@ -301,12 +283,16 @@ fn read_falls_back_to_primary_when_no_replicas() {
     let _ = client
         .request_write(&[b"SET".to_vec(), b"fallback-k".to_vec(), b"v".to_vec()])
         .expect("write");
-    let reply =
-        client.request_read(&[b"GET".to_vec(), b"fallback-k".to_vec()], false).expect("read");
+    let reply = client
+        .request_read(&[b"GET".to_vec(), b"fallback-k".to_vec()], ReadConsistency::Eventual)
+        .expect("read");
     match reply {
         kevy_resp::Reply::Bulk(b) => assert_eq!(b, b"v"),
         other => panic!("unexpected {other:?}"),
     }
+    // an auto-routed read verb takes the same fallback
+    let reply = client.request(&[b"GET".to_vec(), b"fallback-k".to_vec()]).expect("auto read");
+    assert_eq!(reply, kevy_resp::Reply::Bulk(b"v".to_vec()));
 
     drop(client);
     primary.shutdown();
@@ -403,7 +389,9 @@ fn types_matrix_one_primary_two_replicas() {
     let mut consecutive = 0u32;
     let mut caught_up = false;
     for _ in 0..400 {
-        let r = client.request_read(&[b"GET".to_vec(), b"t:str".to_vec()], false).expect("read");
+        let r = client
+            .request_read(&[b"GET".to_vec(), b"t:str".to_vec()], ReadConsistency::Eventual)
+            .expect("read");
         if matches!(r, kevy_resp::Reply::Bulk(_)) {
             consecutive += 1;
             if consecutive >= 5 {
@@ -419,12 +407,12 @@ fn types_matrix_one_primary_two_replicas() {
 
     // Run all read queries via consistent reads (primary) AND via
     // round-robin replica reads — both paths should agree on values.
-    for consistent in [true, false] {
+    for consistent in [ReadConsistency::Primary, ReadConsistency::Eventual] {
         let reply =
             client.request_read(&[b"GET".to_vec(), b"t:str".to_vec()], consistent).expect("GET");
         match reply {
-            kevy_resp::Reply::Bulk(b) => assert_eq!(b, b"hello", "consistent={consistent}"),
-            other => panic!("GET t:str (consistent={consistent}): {other:?}"),
+            kevy_resp::Reply::Bulk(b) => assert_eq!(b, b"hello", "consistent={consistent:?}"),
+            other => panic!("GET t:str (consistent={consistent:?}): {other:?}"),
         }
 
         let reply = client
@@ -432,9 +420,9 @@ fn types_matrix_one_primary_two_replicas() {
             .expect("HGETALL");
         match reply {
             kevy_resp::Reply::Array(arr) => {
-                assert_eq!(arr.len(), 4, "HGETALL array len; consistent={consistent}");
+                assert_eq!(arr.len(), 4, "HGETALL array len; consistent={consistent:?}");
             }
-            other => panic!("HGETALL (consistent={consistent}): {other:?}"),
+            other => panic!("HGETALL (consistent={consistent:?}): {other:?}"),
         }
 
         let reply = client
@@ -445,9 +433,9 @@ fn types_matrix_one_primary_two_replicas() {
             .expect("LRANGE");
         match reply {
             kevy_resp::Reply::Array(arr) => {
-                assert_eq!(arr.len(), 3, "LRANGE; consistent={consistent}");
+                assert_eq!(arr.len(), 3, "LRANGE; consistent={consistent:?}");
             }
-            other => panic!("LRANGE (consistent={consistent}): {other:?}"),
+            other => panic!("LRANGE (consistent={consistent:?}): {other:?}"),
         }
 
         let reply = client
@@ -455,9 +443,9 @@ fn types_matrix_one_primary_two_replicas() {
             .expect("SMEMBERS");
         match reply {
             kevy_resp::Reply::Array(arr) => {
-                assert_eq!(arr.len(), 3, "SMEMBERS; consistent={consistent}");
+                assert_eq!(arr.len(), 3, "SMEMBERS; consistent={consistent:?}");
             }
-            other => panic!("SMEMBERS (consistent={consistent}): {other:?}"),
+            other => panic!("SMEMBERS (consistent={consistent:?}): {other:?}"),
         }
 
         let reply = client
@@ -466,9 +454,9 @@ fn types_matrix_one_primary_two_replicas() {
         match reply {
             kevy_resp::Reply::Bulk(b) => {
                 let s = std::str::from_utf8(&b).unwrap();
-                assert!(s.starts_with('1'), "ZSCORE; consistent={consistent}");
+                assert!(s.starts_with('1'), "ZSCORE; consistent={consistent:?}");
             }
-            other => panic!("ZSCORE (consistent={consistent}): {other:?}"),
+            other => panic!("ZSCORE (consistent={consistent:?}): {other:?}"),
         }
     }
 
@@ -496,7 +484,7 @@ fn readconsistent_sees_fresh_write_before_replica_lag() {
     let _ =
         client.request_write(&[b"SET".to_vec(), b"rc:k".to_vec(), b"fresh".to_vec()]).expect("SET");
     let reply = client
-        .request_read(&[b"GET".to_vec(), b"rc:k".to_vec()], true)
+        .request_read(&[b"GET".to_vec(), b"rc:k".to_vec()], ReadConsistency::Primary)
         .expect("READCONSISTENT GET");
     match reply {
         kevy_resp::Reply::Bulk(b) => assert_eq!(b, b"fresh"),
@@ -536,14 +524,14 @@ struct TrackedReplica {
     rt_port: u16,
     rt_stop: Arc<AtomicBool>,
     rt_handle: Option<std::thread::JoinHandle<()>>,
-    _dir: tempdir::TempDir,
+    _dir: kevy_tmpdir::TmpDir,
 }
 
 impl TrackedReplica {
     fn start(upstream_replication_port: u16) -> Self {
         let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let rt_port = free_port_block(1) + 1;
-        let dir = tempdir::TempDir::new("kevy-tracked-replica");
+        let dir = kevy_tmpdir::TmpDir::new("tracked-replica");
         let dir_path = dir.path().to_path_buf();
         // SAFETY: `set_var` is unsafe because it is not thread-safe. This runs on the test's
         // own thread before the runtime thread that reads the variable is spawned, so no
@@ -603,12 +591,14 @@ impl TrackedReplica {
         let handle = std::thread::spawn(move || {
             while !stop.load(Ordering::Relaxed) {
                 let mut from = last_offset.load(std::sync::atomic::Ordering::Relaxed);
-                let conn = kevy_replicate::replica::ReplicaClient::connect_at(
+                let conn = kevy_replicate::replica::ReplicaClient::connect_with(
                     (upstream.0.as_str(), upstream.1),
-                    "tracked",
-                    data_gen.load(std::sync::atomic::Ordering::Relaxed),
-                    from,
-                    std::time::Duration::from_secs(5),
+                    &kevy_replicate::replica::ConnectOptions::new("tracked").with_from(
+                        kevy_replicate::feed::FeedPosition::new(
+                            data_gen.load(std::sync::atomic::Ordering::Relaxed),
+                            from,
+                        ),
+                    ),
                 );
                 let Ok(mut client) = conn else {
                     std::thread::sleep(std::time::Duration::from_millis(20));
@@ -617,7 +607,7 @@ impl TrackedReplica {
                 // Same adoption contract as the production runner:
                 // a from-0 session (or a completed ship) delivers a
                 // whole history of the ACK'd generation.
-                let ack_gen = client.primary_gen_at_handshake();
+                let ack_gen = client.primary_at_handshake().generation;
                 if from == 0 {
                     data_gen.store(ack_gen, std::sync::atomic::Ordering::Relaxed);
                 }
@@ -659,6 +649,9 @@ impl TrackedReplica {
                                         argv: frame.argv,
                                     }
                                 }
+                                // nothing to apply for an event this test
+                                // runner cannot name
+                                _ => continue,
                             };
                             if sender.send(apply).is_err() {
                                 return;
@@ -782,7 +775,7 @@ fn reconnect_outside_backlog_triggers_snapshot() {
         let base = free_port_block(1);
         let port = base;
         let replication_base = base + 1;
-        let dir = tempdir::TempDir::new("kevy-tiny-primary");
+        let dir = kevy_tmpdir::TmpDir::new("tiny-primary");
         let dir_path = dir.path().to_path_buf();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
@@ -798,7 +791,8 @@ fn reconnect_outside_backlog_triggers_snapshot() {
                 .shards(1)
                 .with_data_dir(dir_path)
                 .with_aof(false)
-                .with_replication(true, 256) // 256-byte backlog: a few SETs evict the head
+                .with_replication(true)
+                .with_replication_buffer_size(256) // 256-byte backlog: a few SETs evict the head
                 .with_replication_listener(replication_base);
             let _ = rt.run(stop_thread);
         });

@@ -9,9 +9,10 @@
 //! one place makes that contract obvious.
 
 use kevy_resp::ArgvView;
-use kevy_rt::{MultiOp, ResolvedCmd, Route, TxnKind, parse_slowlog_sub};
+use kevy_rt::{MultiOp, ResolvedCmd, Route, SlowlogSub, TxnKind};
+use kevy_store::ListEnd;
 
-use crate::cmd::{self, scan_args, upper_verb};
+use crate::cmd::{self, upper_verb};
 use crate::cmd_block;
 use crate::state::ReplicationState;
 
@@ -19,14 +20,7 @@ use crate::state::ReplicationState;
 /// fans out into the per-attribute fields the runtime then consumes.
 pub(crate) fn kevy_resolve<A: ArgvView + ?Sized>(repl: &ReplicationState, args: &A) -> ResolvedCmd {
     let Some(name) = args.first() else {
-        return ResolvedCmd {
-            txn_kind: TxnKind::Other,
-            route: Route::Local,
-            is_quit: false,
-            is_write: false,
-            block_hint: kevy_rt::BlockHint::None,
-            wake_idx: None,
-        };
+        return ResolvedCmd::new(Route::Local);
     };
     let mut buf = [0u8; 32];
     let upper = upper_verb(name, &mut buf);
@@ -37,15 +31,13 @@ pub(crate) fn kevy_resolve<A: ArgvView + ?Sized>(repl: &ReplicationState, args: 
     // catch-alls for these two verbs. Field values are byte-identical to
     // what the general path below computes.
     match upper {
-        b"GET" | b"SET" => {
-            return ResolvedCmd {
-                txn_kind: TxnKind::Other,
-                route: if args.len() >= 2 { Route::Single(1) } else { Route::Local },
-                is_quit: false,
-                is_write: upper == b"SET",
-                block_hint: kevy_rt::BlockHint::None,
-                wake_idx: None,
-            };
+        b"GET" => {
+            let route = if args.len() >= 2 { Route::Single(1) } else { Route::Local };
+            return ResolvedCmd::new(route).with_verb(crate::dispatch::VERB_GET);
+        }
+        b"SET" => {
+            let route = if args.len() >= 2 { Route::Single(1) } else { Route::Local };
+            return ResolvedCmd::new(route).with_write(true).with_verb(crate::dispatch::VERB_SET);
         }
         _ => {}
     }
@@ -78,7 +70,12 @@ fn resolve_general<A: ArgvView + ?Sized>(
     let block_hint = cmd_block::block_hint_for_verb(upper, args);
     let wake_idx = cmd_block::wake_idx_for_verb(upper);
 
-    ResolvedCmd { txn_kind, route, is_quit, is_write, block_hint, wake_idx }
+    ResolvedCmd::new(route)
+        .with_txn_kind(txn_kind)
+        .with_quit(is_quit)
+        .with_write(is_write)
+        .with_block_hint(block_hint)
+        .with_wake_idx(wake_idx)
 }
 
 /// [`crate::KevyCommands::route`]'s body — the same verb table
@@ -141,7 +138,7 @@ fn route_for_verb<A: ArgvView + ?Sized>(repl: &ReplicationState, upper: &[u8], a
         b"SUNION" if args.len() >= 2 => Route::Gather(MultiOp::SUnion),
         b"SDIFF" if args.len() >= 2 => Route::Gather(MultiOp::SDiff),
         b"KEYS" if args.len() == 2 => Route::Keys(Some(args[1].to_vec())),
-        b"SCAN" if args.len() >= 2 => Route::Scan(scan_args(args)),
+        b"SCAN" if args.len() >= 2 => Route::Scan(kevy_verbs::args::scan_opts(args)),
         b"RANDOMKEY" if args.len() == 1 => Route::RandomKey,
         b"SUBSCRIBE" if args.len() >= 2 => Route::Subscribe,
         b"UNSUBSCRIBE" => Route::Unsubscribe,
@@ -166,6 +163,12 @@ fn route_for_verb<A: ArgvView + ?Sized>(repl: &ReplicationState, upper: &[u8], a
         b"GEOSEARCHSTORE" | b"GEORADIUS" | b"GEORADIUSBYMEMBER" => {
             crate::geo_store::geo_store_route(upper, args)
                 .unwrap_or(if args.len() >= 2 { Route::Single(1) } else { Route::Local })
+        }
+        // a global index sampled from every shard: two phases, not Local
+        b"IDX.CREATE" | b"TABLE.DECLARE" | b"TABLE.ENSURE" | b"TABLE.REPLACE"
+            if crate::cmd_global_sample::samples(upper, args) =>
+        {
+            Route::Extension
         }
         b"IDX.QUERY" if args.len() >= 4 => Route::Extension,
         b"IDX.EXPLAIN" if args.len() >= 2 => Route::Extension,
@@ -198,11 +201,10 @@ fn route_for_verb<A: ArgvView + ?Sized>(repl: &ReplicationState, upper: &[u8], a
         // BRPOPLPUSH is NOT here: it is a blocking verb, so it stays
         // `Route::Local` and is served through the park/wake path, which has
         // its own destination-routing fix (see `cmd_block`).
-        b"RPOPLPUSH" if args.len() == 3 => Route::ListMove { from_left: false, to_left: true },
+        b"RPOPLPUSH" if args.len() == 3 => Route::ListMove { from: ListEnd::Right, to: ListEnd::Left },
         b"LMOVE" if args.len() == 5 => {
-            let from_left = args[3].eq_ignore_ascii_case(b"LEFT");
-            let to_left = args[4].eq_ignore_ascii_case(b"LEFT");
-            Route::ListMove { from_left, to_left }
+            let end = |a: &[u8]| if a.eq_ignore_ascii_case(b"LEFT") { ListEnd::Left } else { ListEnd::Right };
+            Route::ListMove { from: end(&args[3]), to: end(&args[4]) }
         }
         // BITOP's args[1] is the OPERATOR, not a key: the catch-all
         // would hash the word "AND" and run the command on whatever
@@ -256,7 +258,7 @@ fn route_for_verb<A: ArgvView + ?Sized>(repl: &ReplicationState, upper: &[u8], a
                 Route::Local
             }
         }
-        b"SLOWLOG" => Route::Slowlog(parse_slowlog_sub(args)),
+        b"SLOWLOG" => Route::Slowlog(SlowlogSub::parse(args)),
         b"DEL" | b"UNLINK" => {
             // A one-argument call names no key at all. Routing it to the
             // multi-key path made it an EMPTY delete answering `:0`, where

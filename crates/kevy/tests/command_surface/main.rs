@@ -1,5 +1,7 @@
 //! Single commands and configuration, over the wire.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 #[path = "../common/mod.rs"]
 mod common;
 
@@ -16,3 +18,4 @@ mod scan_is_incremental;
 mod skeleton;
 mod spop_is_random;
 mod srandmember_repeats;
+mod write_classification;

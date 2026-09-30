@@ -72,6 +72,7 @@ fn eval_prepared(d: Distance, a: &[f32], b: &[f32]) -> f32 {
     match d {
         Distance::Cosine | Distance::Ip => 1.0 - dot,
         Distance::L2 => a.iter().zip(b).map(|(x, y)| (x - y) * (x - y)).sum(),
+        other => unimplemented!("no brute-force reference for {other:?}"),
     }
 }
 

@@ -230,10 +230,10 @@ fn apply_hot_set(cfg: &mut Config, key: &[u8], value: &[u8]) -> Result<(), SetEr
         // Turning tiering on/off needs the vlog lifecycle — a restart;
         // the spill dir likewise.
         "tiering-budget" => {
-            cfg.tiering.budget = Some(
-                kevy_config::TierBudgetSpec::parse(value_str)
-                    .map_err(|reason| SetError::BadValue { key: key_str.to_string(), reason })?,
-            );
+            cfg.tiering.budget =
+                Some(kevy_config::TierBudgetSpec::parse(value_str).map_err(|e| {
+                    SetError::BadValue { key: key_str.to_string(), reason: e.to_string() }
+                })?);
             Ok(())
         }
         // The storage form of a declared row. Hot-settable because the two
@@ -270,7 +270,7 @@ fn set_memory(cfg: &mut Config, key: &str, value: &str) -> Result<(), SetError> 
     match key {
         "maxmemory" => {
             cfg.memory.maxmemory = parse_size(value)
-                .map_err(|reason| SetError::BadValue { key: key.to_string(), reason })?;
+                .map_err(|e| SetError::BadValue { key: key.to_string(), reason: e.to_string() })?;
         }
         "maxmemory-policy" => {
             cfg.memory.maxmemory_policy =
@@ -305,11 +305,11 @@ fn set_persistence(cfg: &mut Config, key: &str, value: &str) -> Result<(), SetEr
         }
         "auto-aof-rewrite-min-size" => {
             cfg.persistence.auto_aof_rewrite_min_size = parse_size(value)
-                .map_err(|reason| SetError::BadValue { key: key.to_string(), reason })?;
+                .map_err(|e| SetError::BadValue { key: key.to_string(), reason: e.to_string() })?;
         }
         "auto-aof-rewrite-bytes" => {
             cfg.persistence.auto_aof_rewrite_bytes = parse_size(value)
-                .map_err(|reason| SetError::BadValue { key: key.to_string(), reason })?;
+                .map_err(|e| SetError::BadValue { key: key.to_string(), reason: e.to_string() })?;
         }
         "auto-aof-rewrite-interval-secs" => {
             cfg.persistence.auto_aof_rewrite_interval_secs =
@@ -341,10 +341,9 @@ fn set_expiry(cfg: &mut Config, key: &str, value: &str) -> Result<(), SetError> 
 /// supported keyspace notifications from the config file and had no wire path
 /// to them. Spring Data's expiry listener sets this on connect.
 fn set_notification(cfg: &mut Config, key: &str, value: &str) -> Result<(), SetError> {
-    kevy_config::parse_notification_flags(value).map_err(|c| SetError::BadValue {
-        key: key.to_string(),
-        reason: format!("unknown flag char {c:?}"),
-    })?;
+    value
+        .parse::<kevy_config::NotificationFlags>()
+        .map_err(|e| SetError::BadValue { key: key.to_string(), reason: e.to_string() })?;
     cfg.notification.notify_keyspace_events = value.to_string();
     Ok(())
 }
@@ -365,7 +364,9 @@ fn set_log(cfg: &mut Config, key: &str, value: &str) -> Result<(), SetError> {
             match LogOutput::parse(value) {
                 LogOutput::Stdout => cfg.log.output = LogOutput::Stdout,
                 LogOutput::Stderr => cfg.log.output = LogOutput::Stderr,
-                LogOutput::File(_) => return Err(SetError::ReadOnly(key.to_string())),
+                // a file, or any sink that is not a standard stream, needs
+                // a handle opened at startup
+                _ => return Err(SetError::ReadOnly(key.to_string())),
             }
         }
         _ => return Err(SetError::Unknown(key.to_string())),
@@ -416,7 +417,7 @@ fn config_pairs(cfg: &Config) -> Vec<(&'static str, String)> {
 fn push_tiering_pairs(v: &mut Vec<(&'static str, String)>, cfg: &Config) {
     v.push((
         "tiering-budget",
-        cfg.tiering.budget.map(kevy_config::TierBudgetSpec::as_config_string).unwrap_or_default(),
+        cfg.tiering.budget.map(kevy_config::TierBudgetSpec::to_config_string).unwrap_or_default(),
     ));
     v.push((
         "tiering-spill-dir",

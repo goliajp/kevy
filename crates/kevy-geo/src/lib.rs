@@ -42,17 +42,56 @@
 /// Inclusive latitude bound (degrees). Matches Redis's Web Mercator
 /// limit — the encoding cannot represent the poles because Web Mercator
 /// maps them to ±∞.
+///
+/// ```
+/// use kevy_geo::{GEO_LAT_MIN, encode_score};
+/// assert!(encode_score(0.0, GEO_LAT_MIN).is_some());
+/// assert!(encode_score(0.0, GEO_LAT_MIN - 0.01).is_none(), "the south pole is out");
+/// ```
 pub const GEO_LAT_MIN: f64 = -85.051_128_78;
 /// Inclusive latitude bound (degrees).
+///
+/// ```
+/// use kevy_geo::{GEO_LAT_MAX, encode_score};
+/// assert!(encode_score(0.0, GEO_LAT_MAX).is_some());
+/// assert!(encode_score(0.0, 90.0).is_none(), "the north pole is out");
+/// ```
 pub const GEO_LAT_MAX: f64 = 85.051_128_78;
 /// Inclusive longitude bound (degrees).
+///
+/// ```
+/// use kevy_geo::{GEO_LON_MIN, encode_score};
+/// assert!(encode_score(GEO_LON_MIN, 0.0).is_some());
+/// assert!(encode_score(GEO_LON_MIN - 1.0, 0.0).is_none());
+/// ```
 pub const GEO_LON_MIN: f64 = -180.0;
 /// Inclusive longitude bound (degrees).
+///
+/// ```
+/// use kevy_geo::{GEO_LON_MAX, encode_score};
+/// assert!(encode_score(GEO_LON_MAX, 0.0).is_some());
+/// assert!(encode_score(GEO_LON_MAX + 1.0, 0.0).is_none());
+/// ```
 pub const GEO_LON_MAX: f64 = 180.0;
 /// Mean great-circle Earth radius in metres, matching Redis's constant
 /// exactly (`6_372_797.560_856`). Used by [`haversine_meters`].
+///
+/// ```
+/// use kevy_geo::{EARTH_RADIUS_METERS, haversine_meters};
+/// // one degree of latitude along a meridian is radius * pi / 180
+/// let d = haversine_meters(0.0, 0.0, 0.0, 1.0);
+/// let expected = EARTH_RADIUS_METERS * std::f64::consts::PI / 180.0;
+/// assert!((d - expected).abs() < 1e-6);
+/// ```
 pub const EARTH_RADIUS_METERS: f64 = 6_372_797.560_856;
 /// Bits per axis in the 52-bit interleaved score. Matches Redis.
+///
+/// ```
+/// use kevy_geo::{GEO_STEP, encode_score};
+/// // two axes of GEO_STEP bits each: every score fits below 2^52
+/// let max = encode_score(180.0, 85.05112878).unwrap();
+/// assert!(max < (1u64 << (2 * GEO_STEP)) as f64);
+/// ```
 pub const GEO_STEP: u32 = 26;
 
 mod search;
@@ -317,8 +356,8 @@ mod tests {
     const PALERMO: (f64, f64) = (13.361_389, 38.115_556);
     const CATANIA: (f64, f64) = (15.087_269, 37.502_669);
 
-    // `neighbor_score_ranges` had no test at all. The dead-path atlas
-    // (`tools/coverage_atlas.py`) found every one of this crate's four
+    // `neighbor_score_ranges` had no test at all. A per-region coverage
+    // reading found every one of this crate's four
     // never-executed regions inside it, which is what a public function
     // with zero direct coverage looks like from the outside: exercised
     // through the GEO commands, never at its own edges.

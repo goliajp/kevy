@@ -10,35 +10,80 @@ use std::io;
 
 /// Parsed URL pieces — scheme validated, host/port resolved, optional
 /// db index extracted.
-#[derive(Debug, PartialEq, Eq)]
+///
+/// ```
+/// use kevy_resp_client::{ParsedUrl, RespClient};
+///
+/// let u = ParsedUrl::parse("redis://cache.internal:6380/0")?;
+/// assert_eq!(u, ParsedUrl::parse("kevy://cache.internal:6380/0")?); // same shape
+/// # let l = std::net::TcpListener::bind("127.0.0.1:0")?;
+/// # let u = ParsedUrl::parse(&format!("tcp://127.0.0.1:{}", l.local_addr()?.port()))?;
+/// let c = RespClient::connect(&u.host, u.port)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct ParsedUrl {
     /// Hostname or IP literal.
+    ///
+    /// ```
+    /// use kevy_resp_client::ParsedUrl;
+    ///
+    /// assert_eq!(ParsedUrl::parse("kevy://db.local:6004")?.host, "db.local");
+    /// assert_eq!(ParsedUrl::parse("tcp://10.0.0.5")?.host, "10.0.0.5");
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub host: String,
     /// TCP port; defaults to 6379 (Redis convention) when the URL
     /// omits `:port`.
+    ///
+    /// ```
+    /// use kevy_resp_client::ParsedUrl;
+    ///
+    /// assert_eq!(ParsedUrl::parse("kevy://db.local:6004")?.port, 6004);
+    /// assert_eq!(ParsedUrl::parse("kevy://db.local")?.port, 6379);
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub port: u16,
     /// Optional db index from a `/N` path component. Only valid for
     /// `kevy://` and `redis://`; `tcp://` accepts but ignores a path.
+    ///
+    /// ```
+    /// use kevy_resp_client::ParsedUrl;
+    ///
+    /// assert_eq!(ParsedUrl::parse("redis://db.local/3")?.db, Some(3));
+    /// assert_eq!(ParsedUrl::parse("redis://db.local")?.db, None);
+    /// assert_eq!(ParsedUrl::parse("tcp://db.local/3")?.db, None); // no SELECT on tcp://
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub db: Option<u32>,
 }
 
-/// Parse a TCP-style connection URL. See the module doc for the
-/// accepted shapes.
-pub fn parse_url(url: &str) -> io::Result<ParsedUrl> {
-    let (scheme, rest) = split_scheme(url)?;
-    if rest.contains('@') {
-        return Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "userinfo (user:pass@host) is unsupported — kevy has no AUTH",
-        ));
+impl ParsedUrl {
+    /// Parse a TCP-style connection URL. See the module doc for the
+    /// accepted shapes.
+    ///
+    /// ```
+    /// let u = kevy_resp_client::ParsedUrl::parse("kevy://10.0.0.5:6004/2")?;
+    /// assert_eq!((u.host.as_str(), u.port, u.db), ("10.0.0.5", 6004, Some(2)));
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
+    pub fn parse(url: &str) -> io::Result<ParsedUrl> {
+        let (scheme, rest) = split_scheme(url)?;
+        if rest.contains('@') {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "userinfo (user:pass@host) is unsupported — kevy has no AUTH",
+            ));
+        }
+        let (authority, path) = match rest.split_once('/') {
+            Some((auth, p)) => (auth, Some(p)),
+            None => (rest, None),
+        };
+        let (host, port) = parse_authority(authority)?;
+        let db = parse_db_path(scheme, path)?;
+        Ok(ParsedUrl { host, port, db })
     }
-    let (authority, path) = match rest.split_once('/') {
-        Some((auth, p)) => (auth, Some(p)),
-        None => (rest, None),
-    };
-    let (host, port) = parse_authority(authority)?;
-    let db = parse_db_path(scheme, path)?;
-    Ok(ParsedUrl { host, port, db })
 }
 
 /// Validate the URL scheme and return `(scheme, rest)` where `rest` is
@@ -56,7 +101,7 @@ fn split_scheme(url: &str) -> io::Result<(&str, &str)> {
         )),
         "kevys" => Err(io::Error::new(
             io::ErrorKind::Unsupported,
-            "kevys:// carries keys: parse it with parse_secure_url, or connect with RespClient::connect_url",
+            "kevys:// carries keys: parse it with SecureUrl::parse, or connect with RespClient::connect_url",
         )),
         other => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -107,7 +152,7 @@ mod tests {
     use super::*;
 
     fn parse(u: &str) -> ParsedUrl {
-        parse_url(u).unwrap_or_else(|e| panic!("{u}: {e}"))
+        ParsedUrl::parse(u).unwrap_or_else(|e| panic!("{u}: {e}"))
     }
 
     #[test]
@@ -137,27 +182,27 @@ mod tests {
 
     #[test]
     fn tls_schemes_rejected() {
-        let err = parse_url("rediss://h:6379").unwrap_err();
+        let err = ParsedUrl::parse("rediss://h:6379").unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::Unsupported);
-        let err = parse_url("kevys://h:6379").unwrap_err();
+        let err = ParsedUrl::parse("kevys://h:6379").unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::Unsupported);
     }
 
     #[test]
     fn auth_userinfo_rejected() {
-        let err = parse_url("kevy://user:pass@h:6379").unwrap_err();
+        let err = ParsedUrl::parse("kevy://user:pass@h:6379").unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::Unsupported);
     }
 
     #[test]
     fn unknown_scheme_rejected() {
-        let err = parse_url("memcached://h:11211").unwrap_err();
+        let err = ParsedUrl::parse("memcached://h:11211").unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
     }
 
     #[test]
     fn missing_scheme_rejected() {
-        assert!(parse_url("localhost:6379").is_err());
+        assert!(ParsedUrl::parse("localhost:6379").is_err());
     }
 
     #[test]
@@ -170,18 +215,18 @@ mod tests {
 
     #[test]
     fn bad_port_rejected() {
-        assert!(parse_url("kevy://h:notaport").is_err());
-        assert!(parse_url("kevy://h:99999").is_err()); // > u16::MAX
+        assert!(ParsedUrl::parse("kevy://h:notaport").is_err());
+        assert!(ParsedUrl::parse("kevy://h:99999").is_err()); // > u16::MAX
     }
 
     #[test]
     fn bad_db_rejected() {
-        assert!(parse_url("kevy://h/abc").is_err());
-        assert!(parse_url("kevy://h/-1").is_err());
+        assert!(ParsedUrl::parse("kevy://h/abc").is_err());
+        assert!(ParsedUrl::parse("kevy://h/-1").is_err());
     }
 
     #[test]
     fn empty_host_rejected() {
-        assert!(parse_url("kevy://:6379").is_err());
+        assert!(ParsedUrl::parse("kevy://:6379").is_err());
     }
 }

@@ -2,6 +2,8 @@
 //! echoes back a canned RESP reply for each request, drive it with RespClient,
 //! assert the parsed reply matches.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use kevy_resp::Reply;
 use kevy_resp_client::RespClient;
 use std::io::{Read, Write};
@@ -127,4 +129,13 @@ fn server_close_mid_reply_yields_io_error() {
     let mut c = RespClient::connect("127.0.0.1", port).unwrap();
     let err = c.request(&[b"PING".to_vec()]).unwrap_err();
     assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof);
+}
+
+#[test]
+fn connecting_where_nothing_listens_is_refused() {
+    let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let Err(err) = RespClient::connect("127.0.0.1", port) else {
+        panic!("the listener was dropped, so nothing accepts")
+    };
+    assert_eq!(err.kind(), std::io::ErrorKind::ConnectionRefused);
 }

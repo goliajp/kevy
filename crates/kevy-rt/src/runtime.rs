@@ -11,7 +11,31 @@ use std::path::PathBuf;
 /// [`Runtime::with_advanced`].
 const DEFAULT_RING_CAPACITY: usize = 1024;
 
+/// Buffers in each shard's provided-buffer ring unless configured: 16 KiB
+/// each, every one of them resident once traffic has cycled through it.
+/// Running out is not an error: a multishot recv that finds the ring empty
+/// ends with ENOBUFS and the reactor re-arms it.
+pub(crate) const DEFAULT_RECV_BUFFERS: u16 = 1024;
+/// The kernel's ceiling on a provided-buffer ring's entries.
+pub(crate) const MAX_RECV_BUFFERS: u16 = 32_768;
+
 /// The public entry point: configure and run the thread-per-core server.
+///
+/// ```
+/// use kevy_rt::{ArgvView, Commands, Route, Runtime, Store, TxnKind};
+/// # #[derive(Clone, Debug)] struct Cmds;
+/// # impl Commands for Cmds {
+/// #     fn route<A: ArgvView + ?Sized>(&self, _: &A) -> Route { Route::Local }
+/// #     fn dispatch<A: ArgvView + ?Sized>(&self, _: &mut Store, _: &A) -> Vec<u8> { b"+OK\r\n".to_vec() }
+/// #     fn is_quit<A: ArgvView + ?Sized>(&self, _: &A) -> bool { false }
+/// #     fn is_write<A: ArgvView + ?Sized>(&self, _: &A) -> bool { false }
+/// #     fn txn_kind<A: ArgvView + ?Sized>(&self, _: &A) -> TxnKind { TxnKind::Other }
+/// # }
+/// // configured, not yet running: `run(stop)` binds and serves until `stop` is set
+/// let rt = Runtime::builder(Cmds).bind([127, 0, 0, 1], 6004).shards(4).with_aof(false);
+/// let shown = format!("{rt:?}");
+/// assert!(shown.contains("port: 6004") && shown.contains("nshards: 4"));
+/// ```
 #[derive(Debug)]
 pub struct Runtime<C: Commands> {
     pub(crate) ip: [u8; 4],
@@ -29,11 +53,13 @@ pub struct Runtime<C: Commands> {
     pub(crate) auto_aof_rewrite_pct: u32,
     pub(crate) auto_aof_rewrite_bytes: u64,
     pub(crate) auto_aof_rewrite_interval_secs: u64,
-    pub(crate) replay_resync: bool,
+    pub(crate) replay_mode: kevy_persist::ReplayMode,
     /// Floor below which auto-rewrite is skipped. Default `64 MiB`.
     pub(crate) auto_aof_rewrite_min_size: u64,
     /// Reactor SPSC ring slot count. See [`DEFAULT_RING_CAPACITY`].
     pub(crate) ring_capacity: usize,
+    /// Entries in each shard's io_uring provided-buffer ring.
+    pub(crate) recv_buffers: u16,
     /// Reactor busy-poll iter limit before parking. Stored as `u32`
     /// for the per-shard counter; the [`Shard`] field carries it
     /// forward into the loop.
@@ -143,9 +169,10 @@ impl<C: Commands> Runtime<C> {
             auto_aof_rewrite_pct: 100,
             auto_aof_rewrite_bytes: 0,
             auto_aof_rewrite_interval_secs: 0,
-            replay_resync: false,
+            replay_mode: kevy_persist::ReplayMode::Strict,
             auto_aof_rewrite_min_size: 64 * 1024 * 1024,
             ring_capacity: DEFAULT_RING_CAPACITY,
+            recv_buffers: DEFAULT_RECV_BUFFERS,
             spin_limit: 256,
             accept_shards: None,
             max_clients: 10_000,

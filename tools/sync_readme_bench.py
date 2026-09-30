@@ -22,19 +22,6 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 RESULTS = ROOT / "PERFORMANCE.md"
-ANCHORS = ROOT / "bench/COMPETITOR-ANCHORS.json"
-
-
-def pins():
-    """Which version of each competitor the READMEs are allowed to name.
-
-    These labels used to be spelled out in this file, hardcoded to whatever
-    was current when it was written — a fourth place a competitor version
-    lived, and the one that writes it into three READMEs and the site. bench/COMPETITOR-ANCHORS.json is the
-    only place a competitor version is written down now."""
-    import json
-    return {k: v["pinned"] for k, v in json.loads(
-        ANCHORS.read_text(encoding="utf-8"))["anchors"].items()}
 READMES = ["README.md", "README.zh-CN.md", "README.ja.md"]
 
 
@@ -50,6 +37,7 @@ def latest_arena():
         sys.exit(f"sync_readme_bench: expected one key-value throughput table in "
                  f"PERFORMANCE.md, found {len(blocks)}")
     date, version, table = blocks[0]
+    names = measured_against(table.split("\n")[0], date, version)
     rows = {}
     for line in table.split("\n")[2:]:
         cells = [c.strip() for c in line.strip().strip("|").split("|")]
@@ -78,17 +66,32 @@ def latest_arena():
             )
     if not rows:
         sys.exit("sync_readme_bench: the arena table parsed to nothing")
-    return date, version, rows
+    return date, version, names, rows
+
+
+def measured_against(header, date, version):
+    """The version of each opponent the table was measured against, read
+    from its own heading. A label taken from the current pins would put a
+    newer release's name on an older release's number the day an anchor
+    is raised; the table heading is what was actually run."""
+    names = {}
+    for key, word in (("redis", "Redis"), ("valkey", "valkey"), ("dragonfly", "Dragonfly")):
+        found = re.search(rf"\| {word} ([0-9]+\.[0-9][0-9.]*) \|", header)
+        if not found:
+            sys.exit(f"sync_readme_bench: the key-value throughput table ({date}, "
+                     f"kevy {version}) does not name the {word} version it measured:\n"
+                     f"  {header.strip()}")
+        names[key] = found.group(1)
+    return names
 
 
 def m(n):
     return f"{n / 1e6:.2f} M/s"
 
 
-def build(date, version, rows):
+def build(date, version, names, rows):
     """The two tables, and the sentence that dates them."""
     get, setv = rows["GET"], rows["SET"]
-    pin = pins()
     head = {
         "README.md": ("Workload", "Ratio"),
         "README.zh-CN.md": ("负载", "倍数"),
@@ -105,7 +108,7 @@ def build(date, version, rows):
         c, d = lead[f]
         out[f] = {
             "vs": (
-                f"| {a} | kevy | valkey {pin['valkey']} | {b} |\n"
+                f"| {a} | kevy | valkey {names['valkey']} | {b} |\n"
                 f"|---|---:|---:|---|\n"
                 f"| `GET -c 50 -P 16` | {m(get['kevy'])} | {m(get['valkey'])} | "
                 f"**{get['kevy'] / get['valkey']:.2f}×** |\n"
@@ -115,9 +118,9 @@ def build(date, version, rows):
             "lead": (
                 f"| {c} | {d} |\n"
                 f"|---|---:|\n"
-                f"| valkey {pin['valkey']} | **{get['kevy'] / get['valkey']:.2f}×** |\n"
-                f"| redis {pin['redis']} | **{get['kevy'] / get['redis8']:.2f}×** |\n"
-                f"| dragonfly {pin['dragonfly']} | **{get['kevy'] / get['dragonfly']:.2f}×** |"
+                f"| valkey {names['valkey']} | **{get['kevy'] / get['valkey']:.2f}×** |\n"
+                f"| redis {names['redis']} | **{get['kevy'] / get['redis8']:.2f}×** |\n"
+                f"| dragonfly {names['dragonfly']} | **{get['kevy'] / get['dragonfly']:.2f}×** |"
             ),
             "rate": m(get["kevy"]),
         }
@@ -145,10 +148,9 @@ def _m(n):
     return f"{n / 1_000_000:.2f} M"
 
 
-def write_site(rows, version, check):
+def write_site(rows, version, names, check):
     """rows: {verb: {engine: int}}. Returns a list of complaints."""
     bad = []
-    pin = pins()
     order = ["GET", "SET", "INCR", "SADD", "HSET", "LPUSH", "ZADD"]
 
     def headings(text):
@@ -159,9 +161,9 @@ def write_site(rows, version, check):
         — which argues about margins and needs a human — is left alone."""
         def one_row(m):
             row = m.group(0)
-            row = re.sub(r"Redis [0-9][0-9.]*", f"Redis {pin['redis']}", row)
-            row = re.sub(r"valkey [0-9][0-9.]*", f"valkey {pin['valkey']}", row)
-            row = re.sub(r"Dragonfly( [0-9][0-9.]*)?", f"Dragonfly {pin['dragonfly']}", row)
+            row = re.sub(r"Redis [0-9][0-9.]*", f"Redis {names['redis']}", row)
+            row = re.sub(r"valkey [0-9][0-9.]*", f"valkey {names['valkey']}", row)
+            row = re.sub(r"Dragonfly( [0-9][0-9.]*)?", f"Dragonfly {names['dragonfly']}", row)
             return row
         return re.sub(r'"head": \[[^\]]*\]', one_row, text)
 
@@ -286,8 +288,8 @@ def patterns(name, t, date, version):
 
 def main():
     check = "--check" in sys.argv
-    date, version, rows = latest_arena()
-    tables = build(date, version, rows)
+    date, version, names, rows = latest_arena()
+    tables = build(date, version, names, rows)
     stale = []
 
     for name in READMES:
@@ -313,7 +315,7 @@ def main():
             else:
                 p.write_text(s, encoding="utf-8")
 
-    stale += write_site(rows, version, check)
+    stale += write_site(rows, version, names, check)
     stale += export_site_json(check)
 
     if check:

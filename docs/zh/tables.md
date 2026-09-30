@@ -17,7 +17,7 @@ IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20
 
 > **正在从手工维护的索引迁移？**先读 [table-migration.md](table-migration.md)——八条在生产上付过学费的经验，以及"表为什么存在"的实测漂移数字（89% 从未写入、76% 从未移除）。
 
-> **声明绝不 panic。** `TABLE.DECLARE` / `Store::table_declare` 对每一个非法 spec——未知列、重名、缺 PK，无论什么——都以一个具名错误作答，而被拒绝的声明什么也不安装。这是一条硬保证，由 `compile_table` 自行校验来强制，并被持续 fuzz（`table_spec`）：你启动路径上的一个坏 spec 是一行日志，不是一个重启循环。
+> **声明绝不 panic。** `TABLE.DECLARE` / `Store::table_declare` 对每一个非法 spec——未知列、重名、缺 PK，无论什么——都以一个具名错误作答，而被拒绝的声明什么也不安装。这是一条硬保证，由 `TableSpec::compile` 自行校验来强制，并被持续 fuzz（`table_spec`）：你启动路径上的一个坏 spec 是一行日志，不是一个重启循环。
 
 ## 声明模型
 
@@ -30,7 +30,7 @@ IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20
 
 编译出的名字共用一个命名空间——`<table>.<col>` 与 `<table>.<orderpath>`——所以与被索引列同名的 ORDERPATH 在声明期就被按名拒绝。编译是服务端与嵌入式 store 共用的单一实现（dispatch oracle 在 CI 里对两个面做逐字节比对），并且是**原子的**：任何错误都导致什么也不装——不存在半声明的表。
 
-编译出的索引做的一切，与手工 `IDX.CREATE` 声明的完全相同：同样的回填行为、同样的 `-INDEXBUILDING` 纪律、同样的 sidecar 持久化、同样的预算拒绝（[indexes.md](indexes.md)）。`TABLE.DROP` 删除表和它编译出的所有索引。
+编译出的索引做的一切，与手工 `IDX.CREATE` 声明的完全相同：同样的回填行为、同样的 `-INDEXBUILDING` 纪律、同样的目录记录方式、同样的预算拒绝（[indexes.md](indexes.md)）。`TABLE.DROP` 删除表和它编译出的所有索引。
 
 ## 语法
 
@@ -200,7 +200,7 @@ match store.table_ensure(spec)? {    // 开机动词：验证、编译、同步�
 let tables = store.table_list();
 let report = store.table_verify_report(b"user")?;  // 具名的 fresh 计数
 assert_eq!(report.per_index[0].missing, 0);        //   + 抽查
-store.table_drop(b"user");
+store.table_drop(b"user")?;
 ```
 
 wire 形式（`db.cmd("TABLE.DECLARE", …)`）同样可用，用完全相同的共享语法解析——服务端 / 嵌入式的逐字节一致由 dispatch oracle 在 CI 里钉死。

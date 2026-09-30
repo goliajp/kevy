@@ -2,7 +2,7 @@
   "en": {
     "UPGRADING": "The older majors: 2.x to 3.x and 3.x to 4.0.",
     "accept-shards": "The flag that bought 10.6% by giving fewer cores the listener.",
-    "alloc": "The opt-in allocator: ~10% smaller RSS, priced honestly.",
+    "alloc": "The server's own allocator: pages back to the OS, holes packed, measured against glibc.",
     "async": "Pipelining, and why the engine has no async runtime.",
     "availability": "Failover, epochs, and the writes we will not promise to keep.",
     "boundaries": "What kevy refuses, why, and what to use instead — read before you build on a guess.",
@@ -36,12 +36,14 @@
     "vector-search": "KNN over your keyspace. No embedding model included.",
     "views": "Materialised views, kept fresh by the write path.",
     "wasm": "151 KB in a browser tab, persisted to OPFS.",
-    "upgrading-6.3-to-6.4": "Nothing to change; five answers that were wrong are now right, from GEOSEARCH near the poles to a regexp alternation."
+    "upgrading-6.3-to-6.4": "Nothing to change; five answers that were wrong are now right, from GEOSEARCH near the poles to a regexp alternation.",
+    "upgrading-6.4-to-7.0": "Nothing to change on the wire, but check maxmemory and upgrade a primary before its replicas; the Rust API brought in line with the API Guidelines, kevy-cli tools behind --kevy, replies that changed, what to do before going back to 6.4, and the data-losing defects fixed, with every mixed-version statement measured.",
+    "rust-api-7.0": "Every public Rust API change in 7.0, crate by crate, old to new."
   },
   "ja": {
     "UPGRADING": "以前のメジャー——2.x から 3.x、および 3.x から 4.0。",
     "accept-shards": "listener を持つ core を減らして 10.6% を買ったフラグ。",
-    "alloc": "オプトインのアロケータ —— RSS 約 10% 減、代価は正直に値札どおり。",
+    "alloc": "サーバー独自のアロケータ：ページを OS に返し、穴を詰める。glibc との実測つき。",
     "async": "pipelining と、このエンジンに async runtime が無い理由。",
     "availability": "failover、epoch、そして我々が守ると約束しない書き込み。",
     "boundaries": "kevy が拒むもの、その理由、代わりに使うもの——推測の上に作り始める前に。",
@@ -75,12 +77,14 @@
     "vector-search": "キー空間の上での KNN。embedding モデルは含まない。",
     "views": "マテリアライズドビュー。書き込みパスが鮮度を保つ。",
     "wasm": "ブラウザのタブに 151 KB、OPFS へ永続化。",
-    "upgrading-6.3-to-6.4": "コードの変更は不要。誤っていた 5 つの答えが正しくなりました。極付近の GEOSEARCH から regexp の選択まで。"
+    "upgrading-6.3-to-6.4": "コードの変更は不要。誤っていた 5 つの答えが正しくなりました。極付近の GEOSEARCH から regexp の選択まで。",
+    "upgrading-6.4-to-7.0": "プロトコル側は変更不要。ただし maxmemory を確認し、プライマリをレプリカより先に上げる。API Guidelines に揃えた Rust API、--kevy の後ろに移った kevy-cli のツール、変わった応答、6.4 に戻す前にすること、直したデータ喪失の欠陥。",
+    "rust-api-7.0": "7.0 の Rust 公開 API の変更をクレートごとに旧から新へ。"
   },
   "zh": {
     "UPGRADING": "更早的大版本：2.x 到 3.x，以及 3.x 到 4.0。",
     "accept-shards": "一个开关，把 listener 交给更少的核，换来 10.6%。",
-    "alloc": "可选分配器：RSS 省约 10%，代价照实标价。",
+    "alloc": "服务端自己的分配器：页还给操作系统，空洞压紧，附与 glibc 的实测对比。",
     "async": "pipelining，以及这个引擎为什么没有 async runtime。",
     "availability": "failover、epoch，以及我们不承诺保住的那些写。",
     "boundaries": "kevy 拒绝什么、为什么、改用什么——在你据此动工之前先读。",
@@ -114,6 +118,8 @@
     "vector-search": "在你的键空间上做 KNN。不含 embedding 模型。",
     "views": "物化视图，由写路径顺手保持新鲜。",
     "wasm": "浏览器标签页里的 151 KB，持久化到 OPFS。",
-    "upgrading-6.3-to-6.4": "代码无需改动；五处原本答错的结果现在对了，从两极附近的 GEOSEARCH 到一个 regexp 交替。"
+    "upgrading-6.3-to-6.4": "代码无需改动；五处原本答错的结果现在对了，从两极附近的 GEOSEARCH 到一个 regexp 交替。",
+    "upgrading-6.4-to-7.0": "协议侧无需改动，但要检查 maxmemory，并先升级主节点再升级副本；按 API Guidelines 整理过的 Rust API、移到 --kevy 后面的 kevy-cli 工具、变了的回复、退回 6.4 之前要做什么、修掉了哪些丢数据的缺陷。",
+    "rust-api-7.0": "7.0 Rust 公开 API 的全部改动，按 crate 列出旧写法和新写法。"
   }
 }

@@ -20,7 +20,7 @@ bindings/tauri/
 
 | Command (`plugin:kevy|…`) | Purpose |
 |---|---|
-| `cmd(argv)` | run **any** of kevy's ~184 verbs by argv; returns the decoded RESP reply |
+| `cmd(argv)` | run **any** verb the engine answers by argv; returns the decoded RESP reply |
 | `get` / `set` / `del` / `exists` / `incr` | typed scalar fast paths |
 | `ping` / `dbsize` / `flushall` | keyspace basics |
 | `publish` / `subscribe` / `unsubscribe` | pub/sub, streamed to the webview over a Tauri `Channel` |
@@ -37,7 +37,7 @@ JS without a per-verb command — mirroring the
 ```toml
 [dependencies]
 tauri-plugin-kevy = { path = "../../bindings/tauri/tauri-plugin-kevy" }
-# or, once published: tauri-plugin-kevy = "6"
+# or, once published: tauri-plugin-kevy = "7"
 ```
 
 **2. Register it** in `src-tauri/src/lib.rs`:

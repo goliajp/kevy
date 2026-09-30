@@ -162,7 +162,7 @@ mod tests {
     #[test]
     fn memory_usage_returns_integer_for_present_key() {
         let mut store = Store::new();
-        store.set(b"k", b"v".to_vec(), None, false, false);
+        store.set(b"k", b"v".to_vec(), None, kevy_store::SetCondition::Always);
         let a = argv(&[b"MEMORY", b"USAGE", b"k"]);
         let mut out = Vec::new();
         cmd_memory_usage(&store, &a, &mut out);

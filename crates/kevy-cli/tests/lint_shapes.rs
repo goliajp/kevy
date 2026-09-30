@@ -5,6 +5,8 @@
 //! `kevy_cli::lint`'s own tests. What needs a server is the reading —
 //! and the deliberate difference between the two exit codes.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use std::process::{Child, Command};
 
 use kevy_resp_client::RespClient;
@@ -59,9 +61,8 @@ impl Drop for Srv {
 
 fn lint(port: u16, args: &[&str]) -> (bool, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_kevy-cli"))
-        .args(["lint"])
+        .args(["-p", &port.to_string(), "--kevy", "lint"])
         .args(args)
-        .args(["-p", &port.to_string()])
         .output()
         .expect("run kevy-cli");
     let mut text = String::from_utf8_lossy(&out.stdout).into_owned();

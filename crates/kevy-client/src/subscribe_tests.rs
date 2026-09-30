@@ -23,7 +23,7 @@ fn open_with_empty_channels_rejected() {
 }
 
 // The RESP wire-frame classifier is canonical in `kevy_resp_client`
-// (`classify_pubsub`) and unit-tested there; the sync `recv` path just
+// (`PubsubEvent::try_from`) and unit-tested there; the sync `recv` path just
 // routes through it. Only the embedded-only + URL-routing surface is
 // tested locally.
 

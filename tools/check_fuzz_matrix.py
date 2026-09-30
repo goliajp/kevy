@@ -20,9 +20,14 @@ Floor rule: finding no targets, or parsing no matrix entries, is a broken
 producer and not a pass. The instrument must be able to fail before its
 silence means anything.
 
-Run: python3 tools/check_fuzz_matrix.py
+The daily long run in `.github/workflows/fuzz.yml` takes its matrix from
+`--json`, so the fuzz-smoke list is the only list.
+
+Run: python3 tools/check_fuzz_matrix.py [--json]
 Exit: 0 pass, 1 violation, 2 refused.
 """
+
+import json
 
 import pathlib
 import re
@@ -59,6 +64,9 @@ def targets_in_matrix():
 def main():
     tree = targets_in_tree()
     matrix = targets_in_matrix()
+    if "--json" in sys.argv:
+        print(json.dumps([{"crate": c, "target": t} for c, t in sorted(matrix)]))
+        return 0
     if not tree:
         refuse("no fuzz targets found under crates/*/fuzz/fuzz_targets — "
                "the producer failed, this is not a pass")

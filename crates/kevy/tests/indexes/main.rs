@@ -1,9 +1,15 @@
 //! Secondary indexes end to end: writes, advice, backfill, describe.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 #[path = "../common/mod.rs"]
 mod common;
 
+mod compose_e2e;
 mod describe_e2e;
+mod extension_targets;
+mod global_index_e2e;
+mod hook_message_ack;
 mod idx_advise_e2e;
 mod index_e2e;
 mod index_write_path_coverage;

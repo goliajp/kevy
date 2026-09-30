@@ -1,5 +1,7 @@
 //! The read-only RESP listener against a live embedded store.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use std::io::{Read, Write};
 
 use kevy_embedded::{Config, Store};

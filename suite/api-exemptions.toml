@@ -1,0 +1,243 @@
+# Items the API guidelines gate flags that are right as they are.
+# Each entry: rule (one of the gate's rules), item (the public path the gate
+# prints) and why — the reason it stays, in a sentence a reviewer can check.
+
+# layer 0
+
+[[exempt]]
+rule = "trait-open"
+item = "kevy_hash::KevyHash"
+why = "kevy-map keys a map by any K: KevyHash + Eq, so key types outside this crate implement it; the trait docs state what an implementation must uphold (equal values hash equally, borrowed forms agree, bits avalanche)"
+
+[[exempt]]
+rule = "trait-open"
+item = "kevy_text::token::Tokenizer"
+why = "an analysis callers supply for their own pipelines or tests; the trait docs state the contract (a pure function of the bytes, total over invalid UTF-8)"
+
+[[exempt]]
+rule = "enum-exhaustive"
+item = "kevy_text::segment::segment_opts::SortOrder"
+why = "the two directions of a total order; no third can exist, and callers match both"
+
+# layer 1
+
+[[exempt]]
+rule = "enum-exhaustive"
+item = "kevy_index::describe::Described"
+why = "the describe reply tree mirrors the two RESP reply shapes it is encoded as (bulk string, array); the server and the embedded dispatch each encode every variant, so a new node kind must fail to compile there instead of falling into a wildcard arm with no encoding"
+
+[[exempt]]
+rule = "enum-exhaustive"
+item = "kevy_index::composite::RowDerivation"
+why = "one classification drives both the write path and TABLE.VERIFY's per-cause counters (indexed, absent, coerce-failed, oversize); every consumer matches each cause, so a new cause must fail to compile until it gets its own counter instead of being folded into an existing one, which is how absent rows once read as coerce failures"
+
+[[exempt]]
+rule = "enum-exhaustive"
+item = "kevy_index::view::Tree"
+why = "the view composition algebra (a leaf, AND, OR, DIFF); every walker — evaluation, membership, explain rendering — must handle each operator, and a wildcard arm has no correct answer for an operator it does not know, so a new one must fail to compile in every walker"
+
+[[exempt]]
+rule = "enum-exhaustive"
+item = "kevy_map::raw_entry::RawEntryMut"
+why = "a key is either present or absent in the map, so Occupied and Vacant are the only states an entry can be in; callers match both arms, as with std's hash_map::Entry"
+
+[[exempt]]
+rule = "get-prefix"
+item = "kevy_map::map::KevyMap::get_mut"
+why = "the collection lookup by key with mutable access, named as std's HashMap::get_mut; it is not a field getter"
+
+[[exempt]]
+rule = "get-prefix"
+item = "kevy_map::raw_entry::RawOccupiedEntryMut::get_mut"
+why = "mutable access to the entry's value, named as std's OccupiedEntry::get_mut beside get and into_mut; it is not a field getter"
+
+[[exempt]]
+rule = "trait-open"
+item = "kevy_vlog::record::CompactOwner"
+why = "implemented by whoever holds the value-log refs (kevy-store's keyspace) so compaction can ask liveness and repoint moved records; the trait docs state the contract (is_live answers from current refs, moved repoints before returning)"
+
+# layer 2
+
+[[exempt]]
+rule = "bool-param"
+item = "kevy_resp::reply_encode_resp3::encode_boolean"
+why = "the bool is the value being encoded — RESP3's boolean reply (#t / #f) — not a flag that changes what the function does, so a named enum would only restate true and false"
+
+[[exempt]]
+rule = "enum-exhaustive"
+item = "kevy_resp::RespVersion"
+why = "the protocol versions HELLO negotiates, fixed by the RESP specification (RESP2, RESP3); every reply encoder picks a wire shape per version, so a new version must fail to compile in each encoder rather than fall into a wildcard arm that writes another version's bytes"
+
+[[exempt]]
+rule = "enum-exhaustive"
+item = "kevy_resp::reply::Reply"
+why = "RESP3's reply type set, fixed by the protocol specification; decoders and clients match every wire type, and a wildcard arm would silently drop a reply type instead of failing to compile"
+
+[[exempt]]
+rule = "trait-open"
+item = "kevy_resp::argv_view::ArgvView"
+why = "implemented outside this crate by transports and log readers that hold a command's arguments in their own layout (kevy-persist's segmented frames, kevy-embedded's dispatch, kevy-rt's io_uring big-bulk view); the trait docs state the contract (get(i) is Some exactly for i < len(), self[i] equals get(i))"
+
+[[exempt]]
+rule = "enum-exhaustive"
+item = "kevy_store::cond::InsertPosition"
+why = "LINSERT's BEFORE and AFTER: the two sides of a pivot, and no third can exist; callers match both"
+
+[[exempt]]
+rule = "enum-exhaustive"
+item = "kevy_store::cond::ListEnd"
+why = "the two ends of a list (LEFT, RIGHT); no third can exist, and callers match both"
+
+[[exempt]]
+rule = "enum-exhaustive"
+item = "kevy_store::stream::modes::AckMode"
+why = "the presence or absence of XREADGROUP's NOACK flag; a flag has exactly two states, and callers match both"
+
+[[exempt]]
+rule = "enum-exhaustive"
+item = "kevy_store::stream::modes::ClaimMode"
+why = "the presence or absence of XCLAIM / XAUTOCLAIM's JUSTID flag, which picks both the delivery count and the reply shape; a flag has exactly two states, and callers match both"
+
+[[exempt]]
+rule = "enum-exhaustive"
+item = "kevy_store::stream::modes::MissingStream"
+why = "whether a stream write may create its missing key (XADD's NOMKSTREAM, XGROUP CREATE's MKSTREAM): a yes-or-no choice with no third state, and callers match both"
+
+[[exempt]]
+rule = "enum-exhaustive"
+item = "kevy_store::string::GetReply"
+why = "the two ways a GET reply can carry the value's bytes — copied into the output buffer or referenced for a writev — and a reply path needs its own code for each; a wildcard arm there has no bytes to write"
+
+[[exempt]]
+rule = "enum-exhaustive"
+item = "kevy_store::string::GetShared"
+why = "the two ownership forms a shared GET hands out (an Arc clone or an owned Vec); the FFI's free path must release each the way it was made, so a new form must fail to compile there rather than be freed as the wrong one"
+
+[[exempt]]
+rule = "enum-exhaustive"
+item = "kevy_store::types::RenameOutcome"
+why = "the three outcomes RENAME and RENAMENX define (renamed, no such source, destination exists), each a distinct Redis reply; the command layer matches every one, and a wildcard arm would have no reply to send"
+
+[[exempt]]
+rule = "enum-exhaustive"
+item = "kevy_store::value_enum::Value"
+why = "the keyspace's value encodings; kevy-persist's snapshot writer and AOF rewrite each serialize every encoding, so a new one must fail to compile in both rather than fall into a wildcard arm that writes nothing and loses the key on reload"
+
+[[exempt]]
+rule = "get-prefix"
+item = "kevy_store::Store::get_for_reply"
+why = "a variant of the Redis GET command (the lookup that exposes the value's encoding to the reply path), not a field getter"
+
+[[exempt]]
+rule = "get-prefix"
+item = "kevy_store::Store::get_into_output"
+why = "a variant of the Redis GET command (GET fused with writing the RESP frame), not a field getter"
+
+[[exempt]]
+rule = "get-prefix"
+item = "kevy_store::Store::get_shared"
+why = "a variant of the Redis GET command (the read-only GET for a shared lock), not a field getter"
+
+[[exempt]]
+rule = "get-prefix"
+item = "kevy_store::Store::get_shared_owned"
+why = "a variant of the Redis GET command (the shared GET that returns an owned or Arc-shared value), not a field getter"
+
+[[exempt]]
+rule = "get-prefix"
+item = "kevy_store::Store::get_shared_with"
+why = "a variant of the Redis GET command (the shared GET that lends the bytes to a closure), not a field getter"
+
+[[exempt]]
+rule = "get-prefix"
+item = "kevy_store::packed_row::PackedRow::get_named"
+why = "a lookup of one column's value by name, the by-name counterpart of the row's get(i) as HashMap::get is of a slice's; a PackedRow has no field called named, so this is not a getter"
+
+[[exempt]]
+rule = "trait-open"
+item = "kevy_store::tier_batch::ColdBatchReader"
+why = "implemented outside this crate by the host that issues cold reads (the server's io_uring reader submits a batch to a secondary ring); the trait docs state the contract (one image per read, in order, the exact bytes at the address; an Err fails the whole batch)"
+
+# layer 3
+
+[[exempt]]
+rule = "enum-exhaustive"
+item = "kevy_persist::record::AofFormat"
+why = "the on-disk log encodings; a host-mediated log (kevy-wasm) reads and writes each format with its own code, so a new format must fail to compile there rather than fall into a wildcard arm that parses or writes it as another format"
+
+[[exempt]]
+rule = "enum-exhaustive"
+item = "kevy_persist::record::RecordStep"
+why = "the three outcomes of reading one record from a buffer: complete, needs more bytes, or corrupt; no fourth exists, and an incremental reader must act differently on each (advance, wait, fail), which a wildcard arm cannot choose between"
+
+[[exempt]]
+rule = "enum-exhaustive"
+item = "kevy_replicate::feed::FeedRead"
+why = "the two ways a feed cursor can be unservable: behind the stream or in another generation (Resync, recoverable by a rebuild) or ahead of it (Future, a caller error); no third exists, and callers answer each differently"
+
+[[exempt]]
+rule = "enum-exhaustive"
+item = "kevy_replicate::source::FromOffset"
+why = "the two sides of the backlog window an unservable offset can fall on (evicted below it, or beyond the next offset); no third exists, and the primary answers them oppositely (ship a snapshot, drop the link)"
+
+[[exempt]]
+rule = "enum-exhaustive"
+item = "kevy_verbs::Effect"
+why = "each effect asks a recording caller for a different record; the server's and the embedded engine's recording paths match every variant, so a new effect must fail to compile there rather than fall into a wildcard arm that records nothing and loses the write on replay"
+
+[[exempt]]
+rule = "enum-exhaustive"
+item = "kevy_verbs::record::Consumer"
+why = "whether a group read or claim found its consumer or created it: a yes-or-no fact with no third state, and the recorder matches both"
+
+[[exempt]]
+rule = "enum-exhaustive"
+item = "kevy_verbs::reply::Scores"
+why = "the presence or absence of the WITHSCORES flag; a flag has exactly two states, and the reply writer matches both"
+
+[[exempt]]
+rule = "trait-open"
+item = "kevy_elect::persist::ElectorPersist"
+why = "implemented by the host that owns durable storage (the server's file-backed elect.meta); the trait docs state the contract (save returns only once the pair is durable, load returns (0, None) when nothing was saved)"
+
+[[exempt]]
+rule = "trait-open"
+item = "kevy_persist::SnapshotSource"
+why = "implemented by hosts for their own aggregates (kevy-embedded serializes several shards as one source); the trait docs state the contract (VLOG stubs materialized one value at a time, SEG stubs passed through as stubs, each live key yielded once)"
+
+[[exempt]]
+rule = "trait-open"
+item = "kevy_persist::reshard::ShardLayout"
+why = "implemented by hosts that name their own shard files (kevy-embedded's configured single-file names); the trait docs state the contract (a pure function of its arguments, distinct paths for distinct shards of one layout)"
+
+# layer 4
+
+[[exempt]]
+rule = "trait-open"
+item = "kevy_client_async::transport::AsyncRead"
+why = "the read half of a caller's own transport (a Unix socket, an in-memory pipe, another runtime's stream) handed to AsyncRespCodec::new, AsyncConnection::from_transport or AsyncSecure::handshake; the trait docs state the contract (Pending registers the waker, Ready(Ok(0)) is end of stream, bytes arrive in order)"
+
+[[exempt]]
+rule = "trait-open"
+item = "kevy_client_async::transport::AsyncWrite"
+why = "the write half of a caller's own transport, implemented outside this crate alongside AsyncRead; the trait docs state the contract (Pending registers the waker, accepted bytes reach the peer in order, Ready(Ok(0)) means nothing more can be accepted, close flushes then shuts the write half)"
+
+[[exempt]]
+rule = "trait-open"
+item = "kevy_client_async::transport::AsyncTransport"
+why = "the bound every connection type takes, blanket-implemented for each Send + Unpin type that implements AsyncRead and AsyncWrite, so a caller's transport qualifies without naming it; its docs say to implement the two halves instead"
+
+[[exempt]]
+rule = "trait-open"
+item = "kevy_rt::commands_trait::Commands"
+why = "the seam the runtime is built around: the kevy server's command set implements it, and so does any embedder's; every method added after the first release has a default, and the trait docs state the contract (classification is a pure function of the argv, resolve agrees with the per-attribute methods, is_write gates durability, the route names every key touched, dispatch writes one reply without blocking, hooks run on the shard thread)"
+
+[[exempt]]
+rule = "get-prefix"
+item = "kevy_embedded::store::Store::get_shared_owned"
+why = "a variant of the Redis GET command (the store-wide lock plus kevy_store::Store::get_shared_owned's zero-copy lane), in the family of get and get_with; Store has no field called shared_owned, so this is not a getter"
+
+[[exempt]]
+rule = "get-prefix"
+item = "kevy_embedded::store::Store::get_with"
+why = "a variant of the Redis GET command that lends the value to a closure under the shard lock, the embedded counterpart of kevy_store::Store::get_shared_with; Store has no field called with, so this is not a getter"

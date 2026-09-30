@@ -55,29 +55,37 @@ impl<C: Commands> Shard<C> {
             }
         }
         if dst_shard == self.id {
-            let part = self.exec_op(op);
-            self.fold(conn_id, seq, part);
+            self.exec_local(conn_id, seq, op);
         } else {
             self.send_to(dst_shard, Inbound::Request { origin: self.id, conn: conn_id, seq, op });
         }
     }
 
-    /// Re-arm the slot for a continuation phase and fan the new
-    /// argv to every shard (stateless two-phase — see exec.rs fold).
+    /// Re-arm the slot for a continuation phase and fan the new argv
+    /// out to the shards it needs (stateless two-phase — see exec.rs fold).
     pub(crate) fn start_extension_phase(&mut self, conn_id: u64, seq: u64, argv: Vec<Vec<u8>>) {
         // One buffer, N refcount bumps — the phase-2 argv is as shared as
         // the phase-1 one, and for the same reason.
         let argv: std::sync::Arc<[Vec<u8>]> = argv.into();
+        let targets = self.extension_fanout(&argv);
         if let Some(c) = self.conns.get_mut(&conn_id) {
             let idx = (seq - c.next_emit) as usize;
             if let Some(slot) = c.pending.get_mut(idx) {
-                slot.remaining = self.nshards as u32;
+                slot.remaining = targets.len() as u32;
                 slot.agg = Agg::ExtensionGather { argv: argv.clone(), chunks: Vec::new() };
             }
         }
-        let targets: Vec<(usize, Op)> =
-            (0..self.nshards).map(|s| (s, Op::Extension { argv: argv.clone() })).collect();
         self.dispatch_targets(conn_id, seq, targets);
+    }
+
+    /// One `Op::Extension` per shard the phase's argv needs
+    /// ([`Commands::extension_targets`]; every shard when it names none).
+    pub(crate) fn extension_fanout(&self, argv: &std::sync::Arc<[Vec<u8>]>) -> Vec<(usize, Op)> {
+        let op = |s| (s, Op::Extension { argv: argv.clone() });
+        match self.commands.extension_targets(argv) {
+            Some(shards) => shards.into_iter().map(op).collect(),
+            None => (0..self.nshards).map(op).collect(),
+        }
     }
 
     /// Complete an extension fan-out slot with the reduced reply.

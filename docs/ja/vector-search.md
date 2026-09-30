@@ -22,7 +22,7 @@ kevy-cli -p 6004 IDX.QUERY embs KNN "csv:0.1,0.2,0.3,0.4" LIMIT 2 FIELDS title
 
 応答は`key, distance`の組の昇順です（最も近いものが先）。`FIELDS`は、各ヒットを所有するシャード上で、同じ呼び出しの中でハッシュフィールドをhydrateします。本番では、ベクトルの値はクライアントライブラリが書くバイナリのblob（リトルエンディアンf32の`dim × 4`バイト）です。上の`csv:`形式はデバッグ用の便宜です。
 
-補助verbは、ほかのどのkindとも同じように効きます。`IDX.EXPLAIN embs KNN …`（実行を伴わないパースとプラン）、`IDX.VERIFY` / `IDX.LIST`（ライブの統計）、`IDX.DROP`。`IDX.REBUILD`はANN固有です——「削除と再構築」を参照してください。
+補助verbは、ほかのどのkindとも同じように効きます。`IDX.EXPLAIN embs KNN …`（実行を伴わないパースとプラン）、`IDX.VERIFY` / `IDX.LIST`（ライブの統計）、`IDX.DROP`。ANNインデックスでは`IDX.REBUILD`がグラフを詰め直します——「削除と再構築」を参照してください。
 
 ## クイックスタート（組み込み）
 
@@ -34,11 +34,9 @@ use kevy_embedded::{AnnSpec, Config, Store};
 fn main() -> kevy_embedded::KevyResult<()> {
     let store = Store::open(Config::default())?;
 
-    // m / ef of 0 select the defaults (16 / 200);
+    // AnnSpec::new starts at M 16 / EF 200;
     // distance: 0 = cosine, 1 = l2, 2 = ip.
-    store.idx_create_ann(b"embs", b"doc:", b"v", AnnSpec {
-        dim: 4, distance: 0, m: 0, ef: 0,
-    })?;
+    store.idx_create_ann(b"embs", b"doc:", b"v", AnnSpec::new(4).with_distance(0))?;
 
     let v1: Vec<u8> = [0.1f32, 0.2, 0.3, 0.4]
         .iter().flat_map(|f| f.to_le_bytes()).collect();
@@ -98,7 +96,7 @@ IDX.QUERY HYBRID posts MATCH "rust storage" embs KNN <f32-le-blob>
 
 ## 整合性
 
-どのインデックスkindとも同じ包絡線です（[indexes.md](indexes.md)）。書き込みとそのグラフ更新は所有シャードの内側でアトミックです。シャードをまたぐクエリは、グローバルスナップショットなしにシャードごとのtop-kをマージします（SCANクラス）。カタログはデータディレクトリのサイドカーに永続化されます。グラフの**内容**は派生状態であり、再起動後に再構築されます。
+どのインデックスkindとも同じ包絡線です（[indexes.md](indexes.md)）。書き込みとそのグラフ更新は所有シャードの内側でアトミックです。シャードをまたぐクエリは、グローバルスナップショットなしにシャードごとのtop-kをマージします（SCANクラス）。カタログはログと各スナップショットに記録され、レプリケーションで配られます。グラフの**内容**は派生状態であり、再起動後に再構築されます。
 
 ## パフォーマンス
 

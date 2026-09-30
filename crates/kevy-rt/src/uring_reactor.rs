@@ -220,7 +220,8 @@ impl<C: Commands> Shard<C> {
                         io_work = true;
                         if c.res >= 0 {
                             // SAFETY: a freshly accepted fd we now own.
-                            let sock = unsafe { Socket::from_raw_fd(c.res) };
+                            let sock =
+                                unsafe { <Socket as std::os::fd::FromRawFd>::from_raw_fd(c.res) };
                             // Refuse client conns past max_clients_per_shard
                             // (cluster-bus links exempt as infrastructure).
                             if !cluster
@@ -272,6 +273,8 @@ impl<C: Commands> Shard<C> {
             // discarded; with the dirty-set arm loop, the marks are
             // load-bearing.
             self.flush_backlog();
+            // unacknowledged hook messages (see `exec_ext`)
+            self.send_ext(false);
             self.flush_requests();
             self.flush_publish();
             self.flush_wakes();

@@ -15,14 +15,14 @@ fn s() -> Store {
 #[test]
 fn copy_absent_src_returns_false() {
     let s = s();
-    assert!(!s.copy(b"absent", b"dst", false).unwrap());
+    assert!(!s.copy(b"absent", b"dst", crate::CopyMode::IfAbsent).unwrap());
 }
 
 #[test]
 fn copy_to_new_dst_succeeds() {
     let s = s();
     s.set(b"src", b"value").unwrap();
-    assert!(s.copy(b"src", b"dst", false).unwrap());
+    assert!(s.copy(b"src", b"dst", crate::CopyMode::IfAbsent).unwrap());
     assert_eq!(s.get(b"src").unwrap(), Some(b"value".to_vec()));
     assert_eq!(s.get(b"dst").unwrap(), Some(b"value".to_vec()));
 }
@@ -32,7 +32,7 @@ fn copy_to_existing_dst_vetoes_without_replace() {
     let s = s();
     s.set(b"src", b"v1").unwrap();
     s.set(b"dst", b"existing").unwrap();
-    assert!(!s.copy(b"src", b"dst", false).unwrap());
+    assert!(!s.copy(b"src", b"dst", crate::CopyMode::IfAbsent).unwrap());
     assert_eq!(s.get(b"dst").unwrap(), Some(b"existing".to_vec()));
 }
 
@@ -41,7 +41,7 @@ fn copy_with_replace_overwrites() {
     let s = s();
     s.set(b"src", b"v1").unwrap();
     s.set(b"dst", b"existing").unwrap();
-    assert!(s.copy(b"src", b"dst", true).unwrap());
+    assert!(s.copy(b"src", b"dst", crate::CopyMode::Replace).unwrap());
     assert_eq!(s.get(b"dst").unwrap(), Some(b"v1".to_vec()));
 }
 
@@ -50,7 +50,7 @@ fn copy_preserves_ttl_on_dst() {
     let s = s();
     s.set(b"src", b"v").unwrap();
     s.pexpire(b"src", 60_000).unwrap();
-    assert!(s.copy(b"src", b"dst", false).unwrap());
+    assert!(s.copy(b"src", b"dst", crate::CopyMode::IfAbsent).unwrap());
     let ttl = s.ttl_ms(b"dst");
     assert!((1..=60_000).contains(&ttl), "expected TTL preserved on dst, got {ttl}");
 }
@@ -112,7 +112,7 @@ fn touch_zero_for_all_missing() {
 fn copy_short_ttl_survives() {
     let s = s();
     s.set_with_ttl(b"src", b"v", Duration::from_secs(2)).unwrap();
-    assert!(s.copy(b"src", b"dst", false).unwrap());
+    assert!(s.copy(b"src", b"dst", crate::CopyMode::IfAbsent).unwrap());
     let ttl = s.ttl_ms(b"dst");
     assert!(ttl > 0 && ttl <= 2000, "got {ttl}");
 }

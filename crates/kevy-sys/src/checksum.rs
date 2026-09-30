@@ -8,10 +8,33 @@
 //! Callers keep their own safe software fallback (and wasm32 targets
 //! never link this crate at all), so the contract here is narrow:
 //! hardware answer or `None`.
+//!
+//! # Examples
+//!
+//! ```
+//! use kevy_sys::checksum::{crc32c, try_crc32c_hw};
+//!
+//! let record = b"set k v";
+//! // the front always answers; the hardware probe agrees wherever it runs
+//! let sum = crc32c(record);
+//! assert!(try_crc32c_hw(record).is_none_or(|hw| hw == sum));
+//! ```
 
 /// CRC32C (Castagnoli, init/final-xor all-ones) of `data` using the CPU's
 /// checksum instructions — `None` when this machine has none (the caller
 /// falls back to its software table).
+///
+/// # Examples
+///
+/// ```
+/// use kevy_sys::checksum::try_crc32c_hw;
+///
+/// match try_crc32c_hw(b"123456789") {
+///     // the standard CRC32C check value
+///     Some(crc) => assert_eq!(crc, 0xE306_9283),
+///     None => {} // no checksum instructions here: use a software table
+/// }
+/// ```
 #[must_use]
 pub fn try_crc32c_hw(data: &[u8]) -> Option<u32> {
     try_crc32c_hw_append(0, data)
@@ -129,6 +152,17 @@ fn crc32c_sw(data: &[u8]) -> u32 {
 /// slicing-by-8 table otherwise. One public front so every consumer
 /// (AOF envelope, vlog records, immutable segments) speaks the same
 /// checksum without re-owning the fallback.
+///
+/// # Examples
+///
+/// ```
+/// use kevy_sys::checksum::crc32c;
+///
+/// assert_eq!(crc32c(b"123456789"), 0xE306_9283); // the standard check value
+/// assert_eq!(crc32c(b""), 0);
+/// // one flipped bit changes the sum, which is what a reader checks for
+/// assert_ne!(crc32c(b"set k v"), crc32c(b"set k w"));
+/// ```
 #[must_use]
 pub fn crc32c(data: &[u8]) -> u32 {
     try_crc32c_hw(data).unwrap_or_else(|| crc32c_sw(data))

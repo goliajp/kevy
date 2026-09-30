@@ -24,7 +24,10 @@ build_slice() { # slice platform triple...
   local slice=$1 platform=$2; shift 2
   local triples=("$@") dylibs=()
   for t in "${triples[@]}"; do
-    cargo build -q -p kevy-ffi --target "$t" --release
+    # The builder's home stays out of a library that ships on pub.dev,
+    # as in the static and Android builds.
+    RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$HOME=~" \
+      cargo build -q -p kevy-ffi --target "$t" --release
     dylibs+=("target/$t/release/libkevy_ffi.dylib")
   done
   local fwdir="$OUT/$slice/$FW.framework"

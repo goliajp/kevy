@@ -18,8 +18,9 @@
 //!     again, `FORCE` recreates a row the command itself forced.
 //!   - each pending entry dropped because the stream no longer holds it:
 //!     `XCLAIM key group consumer 0 id… JUSTID`, which drops it again.
-//!   - nothing taken or dropped, but the consumer is new: `XGROUP
-//!     CREATECONSUMER key group consumer`.
+//!   - last, the consumer's times as the claim left them (see
+//!     [`Effect::RecordSeen`]): replayed, the frames before it stamp the
+//!     consumer with the replay's clock, and this sets them back.
 //!
 //!   `LASTID` is not used: a claim here never moves the group's
 //!   last-delivered ID, and the parser does not take the option.
@@ -28,16 +29,89 @@
 //! use kevy_verbs::{Effect, aof::deferred_frames};
 //! let mut store = kevy_store::Store::new();
 //! let argv = kevy_resp::Argv::from(vec![b"XADD".to_vec(), b"s".to_vec(), b"*".to_vec(), b"f".to_vec(), b"v".to_vec()]);
-//! let id = kevy_store::StreamId { ms: 5, seq: 1 };
+//! let id = kevy_store::StreamId::new(5, 1);
 //! let frames = deferred_frames(&mut store, &argv, &Effect::RecordId(2, id));
 //! assert_eq!(&frames[0][2], b"5-1");
 //! ```
 
-use kevy_resp::ops_table::CONSUMER_SEEN;
+use kevy_resp::ops_table::{CONSUMER_SEEN, PENDING};
 use kevy_resp::{Argv, ArgvView};
 use kevy_store::{Store, StreamId};
 
 use crate::Effect;
+
+/// Whether a group read or claim found its consumer or created it. A
+/// created consumer is recorded with the time it was made, so a replay
+/// does not make it at its own.
+///
+/// ```
+/// use kevy_verbs::aof::Consumer;
+///
+/// assert_ne!(Consumer::Existing, Consumer::Created);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Consumer {
+    /// The consumer was already in the group.
+    ///
+    /// ```
+    /// use kevy_verbs::{Effect, aof::Consumer, exec};
+    /// if kevy_verbs::verb(b"XREADGROUP").is_none() {
+    ///     return; // built without the `streams-geo` feature
+    /// }
+    /// let argv = |s: &str| kevy_resp::Argv::from(s.split(' ').map(|p| p.as_bytes().to_vec()).collect::<Vec<_>>());
+    /// let mut store = kevy_store::Store::new();
+    /// for c in ["XADD s 1-1 f v", "XGROUP CREATE s g 0"] {
+    ///     exec(&mut store, c.split(' ').next().unwrap_or("").as_bytes(), &argv(c), &mut Vec::new());
+    /// }
+    /// let read = argv("XREADGROUP GROUP g a STREAMS s >");
+    /// exec(&mut store, b"XREADGROUP", &read, &mut Vec::new());
+    /// exec(&mut store, b"XADD", &argv("XADD s 1-2 f v"), &mut Vec::new());
+    /// // the second read by `a` finds the consumer the first one made
+    /// let again = exec(&mut store, b"XREADGROUP", &read, &mut Vec::new());
+    /// assert!(matches!(again, Some(Effect::RecordRead(_, Consumer::Existing))));
+    /// ```
+    Existing,
+    /// The command created the consumer.
+    ///
+    /// ```
+    /// use kevy_verbs::{Effect, aof::Consumer, exec};
+    /// if kevy_verbs::verb(b"XREADGROUP").is_none() {
+    ///     return; // built without the `streams-geo` feature
+    /// }
+    /// let argv = |s: &str| kevy_resp::Argv::from(s.split(' ').map(|p| p.as_bytes().to_vec()).collect::<Vec<_>>());
+    /// let mut store = kevy_store::Store::new();
+    /// for c in ["XADD s 1-1 f v", "XGROUP CREATE s g 0"] {
+    ///     exec(&mut store, c.split(' ').next().unwrap_or("").as_bytes(), &argv(c), &mut Vec::new());
+    /// }
+    /// let read = argv("XREADGROUP GROUP g a STREAMS s >");
+    /// let first = exec(&mut store, b"XREADGROUP", &read, &mut Vec::new());
+    /// assert!(matches!(first, Some(Effect::RecordRead(_, Consumer::Created))));
+    /// ```
+    Created,
+}
+
+/// What a group read that went over consumers' history did, for a caller
+/// that records it: per stream, in `STREAMS` order, the group's
+/// last-delivered ID before the read, whether the read created the
+/// consumer, and the entries it delivered again.
+///
+/// ```
+/// use kevy_verbs::aof::{Consumer, History};
+/// let h = History::new(vec![(kevy_store::StreamId::MIN, Consumer::Existing)], vec![Vec::new()]);
+/// assert_eq!(h, h.clone());
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct History {
+    marks: Vec<(StreamId, Consumer)>,
+    redelivered: Vec<Vec<StreamId>>,
+}
+
+impl History {
+    /// See [`History`]; `redelivered` may be shorter than `marks`.
+    pub fn new(marks: Vec<(StreamId, Consumer)>, redelivered: Vec<Vec<StreamId>>) -> History {
+        History { marks, redelivered }
+    }
+}
 
 /// What a claim did, for a caller that records it: see the module notes
 /// for the frames it becomes.
@@ -46,23 +120,48 @@ use crate::Effect;
 /// let c = kevy_verbs::aof::Claim::default();
 /// assert!(c.is_empty(), "a claim that took, dropped and created nothing");
 /// ```
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Claim {
     taken: Vec<StreamId>,
     dropped: Vec<StreamId>,
-    new_consumer: bool,
+    consumer: Consumer,
+    /// `LASTID` moved the group's last-delivered ID.
+    moved: bool,
+}
+
+impl Default for Claim {
+    /// The claim that took and dropped nothing, by a consumer that
+    /// already existed.
+    fn default() -> Self {
+        Claim::new(Vec::new(), Vec::new(), Consumer::Existing)
+    }
 }
 
 impl Claim {
     /// A claim that took `taken`, dropped `dropped` from the pending
-    /// list, and created its consumer when `new_consumer`.
+    /// list, by a `consumer` it found or created.
     ///
     /// ```
-    /// let c = kevy_verbs::aof::Claim::new(Vec::new(), Vec::new(), true);
+    /// use kevy_verbs::aof::{Claim, Consumer};
+    ///
+    /// let c = Claim::new(Vec::new(), Vec::new(), Consumer::Created);
     /// assert!(!c.is_empty());
     /// ```
-    pub fn new(taken: Vec<StreamId>, dropped: Vec<StreamId>, new_consumer: bool) -> Claim {
-        Claim { taken, dropped, new_consumer }
+    pub fn new(taken: Vec<StreamId>, dropped: Vec<StreamId>, consumer: Consumer) -> Claim {
+        Claim { taken, dropped, consumer, moved: false }
+    }
+
+    /// The same claim, noting whether its `LASTID` moved the group's
+    /// last-delivered ID.
+    ///
+    /// ```
+    /// let c = kevy_verbs::aof::Claim::default().with_moved(true);
+    /// assert!(!c.is_empty(), "moving the group is a change");
+    /// ```
+    #[must_use]
+    pub fn with_moved(mut self, moved: bool) -> Claim {
+        self.moved = moved;
+        self
     }
 
     /// Whether the claim changed nothing, so has nothing to record.
@@ -71,7 +170,10 @@ impl Claim {
     /// assert!(kevy_verbs::aof::Claim::default().is_empty());
     /// ```
     pub fn is_empty(&self) -> bool {
-        self.taken.is_empty() && self.dropped.is_empty() && !self.new_consumer
+        self.taken.is_empty()
+            && self.dropped.is_empty()
+            && self.consumer == Consumer::Existing
+            && !self.moved
     }
 }
 
@@ -80,7 +182,7 @@ impl Claim {
 ///
 /// ```
 /// let mut buf = [0u8; 41];
-/// let id = kevy_store::StreamId { ms: 1_790_000_000_000, seq: 12 };
+/// let id = kevy_store::StreamId::new(1_790_000_000_000, 12);
 /// assert_eq!(kevy_verbs::aof::id_bytes(&mut buf, id), b"1790000000000-12");
 /// assert_eq!(kevy_verbs::aof::id_bytes(&mut buf, id), id.encode().as_slice());
 /// ```
@@ -121,28 +223,54 @@ pub fn deferred_frames<A: ArgvView + ?Sized>(
             }
             vec![f]
         }
+        Effect::RecordAdd(at, id, kept) => vec![add_frame(args, *at, *id, *kept)],
         Effect::RecordClaim(c) => claim_frames(store, args, c),
         Effect::RecordSeen => seen_frame(store, &args[2], &args[3], &args[4]).into_iter().collect(),
-        Effect::RecordRead(prev, made) => {
-            crate::record_read::read_frames(store, args, &[(*prev, *made)])
+        Effect::RecordRead(prev, consumer) => {
+            crate::record_read::read_frames(store, args, &[(*prev, *consumer)], &[])
         }
-        Effect::RecordReads(marks) => crate::record_read::read_frames(store, args, marks),
-        _ => Vec::new(),
+        Effect::RecordReads(marks) => crate::record_read::read_frames(store, args, marks, &[]),
+        Effect::RecordHistory(h) => {
+            crate::record_read::read_frames(store, args, &h.marks, &h.redelivered)
+        }
+        Effect::Read | Effect::Write | Effect::Unchanged | Effect::Record(_) | Effect::Skip => {
+            Vec::new()
+        }
     }
+}
+
+/// `XADD key [NOMKSTREAM] [MAXLEN = kept] id field value…`.
+fn add_frame<A: ArgvView + ?Sized>(args: &A, at: usize, id: StreamId, kept: u64) -> Argv {
+    let refuse = (2..at).any(|i| args[i].eq_ignore_ascii_case(b"NOMKSTREAM"));
+    let mut f = Argv::with_capacity(args.len() + 3, 0);
+    f.push(&args[0]);
+    f.push(&args[1]);
+    if refuse {
+        f.push(b"NOMKSTREAM");
+    }
+    if kept != u64::MAX {
+        f.push(b"MAXLEN");
+        f.push(b"=");
+        f.push(kept.to_string().as_bytes());
+    }
+    f.push(id_bytes(&mut [0u8; 41], id));
+    for i in at + 1..args.len() {
+        f.push(&args[i]);
+    }
+    f
 }
 
 fn claim_frames<A: ArgvView + ?Sized>(store: &Store, args: &A, c: &Claim) -> Vec<Argv> {
     let (key, group, consumer) = (&args[1], &args[2], &args[3]);
-    let mut frames = taken_frames(store, key, group, consumer, &c.taken);
+    let mut frames: Vec<Argv> =
+        c.moved.then(|| setid_frame(store, key, group)).flatten().into_iter().collect();
+    frames.extend(taken_frames(store, key, group, consumer, &c.taken));
     if !c.dropped.is_empty() {
         let mut f = claim_head(key, group, consumer, &c.dropped, 1);
         f.push(b"JUSTID");
         frames.push(f);
     }
-    // first, so the XCLAIM frames find the consumer and leave its time be
-    if c.new_consumer {
-        frames.splice(0..0, seen_frame(store, key, group, consumer));
-    }
+    frames.extend(seen_frame(store, key, group, consumer));
     frames
 }
 
@@ -164,17 +292,36 @@ pub(crate) fn claim_head(
     f
 }
 
-/// `XINTERNAL.CONSUMERSEEN key group consumer t`, `t` the consumer's last
-/// contact with the group as it stands now: replayed, the consumer exists
-/// with that time, whatever the replay's clock says. `None` when the group
-/// or the consumer is gone.
+/// `XGROUP SETID key group <last-delivered> ENTRIESREAD <n|-1>`: where the
+/// group stands now. `None` when the group is gone.
+pub(crate) fn setid_frame(store: &Store, key: &[u8], group: &[u8]) -> Option<Argv> {
+    let g = store.stream_group_peek(key, group)?;
+    let read = g.entries_read().map_or_else(|| "-1".to_owned(), |n| n.to_string());
+    let mut f = Argv::with_capacity(7, 0);
+    for part in
+        [&b"XGROUP"[..], b"SETID", key, group, &g.last_delivered_id().encode(), b"ENTRIESREAD"]
+    {
+        f.push(part);
+    }
+    f.push(read.as_bytes());
+    Some(f)
+}
+
+/// `XINTERNAL.CONSUMERSEEN key group consumer t [a]`, `t` the consumer's
+/// last contact with the group as it stands now and `a` the last time it
+/// was handed an entry, absent if it never was: replayed, the consumer
+/// exists with those times, whatever the replay's clock says. `None` when
+/// the group or the consumer is gone.
 pub(crate) fn seen_frame(store: &Store, key: &[u8], group: &[u8], consumer: &[u8]) -> Option<Argv> {
-    let seen = store.stream_group_peek(key, group)?.consumers.get(consumer)?.last_seen_ms();
-    let mut f = Argv::with_capacity(5, 0);
+    let c = store.stream_group_peek(key, group)?.consumer(consumer)?;
+    let mut f = Argv::with_capacity(6, 0);
     for part in [CONSUMER_SEEN.as_bytes(), key, group, consumer] {
         f.push(part);
     }
-    f.push(seen.to_string().as_bytes());
+    f.push(c.last_seen_ms().to_string().as_bytes());
+    if let Some(active) = c.last_active_ms() {
+        f.push(active.to_string().as_bytes());
+    }
     Some(f)
 }
 
@@ -183,11 +330,11 @@ pub(crate) fn seen_frame(store: &Store, key: &[u8], group: &[u8], consumer: &[u8
 /// ```
 /// assert!(kevy_verbs::aof::INTERNAL_REFUSAL.starts_with("ERR "));
 /// ```
-pub const INTERNAL_REFUSAL: &str = "ERR XINTERNAL.CONSUMERSEEN is written by kevy to its own records and is not accepted from a client";
+pub const INTERNAL_REFUSAL: &str = "ERR the XINTERNAL verbs are written by kevy to its own records and are not accepted from a client";
 
 /// Apply an internal record frame, one kevy writes and no client may send
-/// (see [`kevy_resp::ops_table::CONSUMER_SEEN`]), appending its reply to
-/// `out`. `false` = `args` is not an internal record frame; `out` is
+/// (see [`kevy_resp::ops_table::CONSUMER_SEEN`] and
+/// [`kevy_resp::ops_table::PENDING`]), appending its reply to `out`. `false` = `args` is not an internal record frame; `out` is
 /// untouched. Only a caller applying a record — a replay, a replica —
 /// calls this; a client's command goes through [`crate::exec`], which does
 /// not answer these verbs.
@@ -210,18 +357,53 @@ pub fn apply_internal<A: ArgvView + ?Sized>(
     args: &A,
     out: &mut Vec<u8>,
 ) -> bool {
-    if !args.get(0).is_some_and(|v| v.eq_ignore_ascii_case(CONSUMER_SEEN.as_bytes())) {
+    let Some(verb) = args.get(0) else {
+        return false;
+    };
+    if verb.eq_ignore_ascii_case(PENDING.as_bytes()) {
+        apply_pending(store, args, out);
+        return true;
+    }
+    if !verb.eq_ignore_ascii_case(CONSUMER_SEEN.as_bytes()) {
         return false;
     }
-    let Some(seen) = (args.len() == 5).then(|| crate::args::arg_u64(&args[4])).flatten() else {
+    let time = |i: usize| crate::args::arg_u64(&args[i]);
+    let (seen, active) = match args.len() {
+        5 => (time(4), None),
+        6 => (time(4), time(5).map(Some)),
+        _ => (None, None),
+    };
+    let (Some(seen), true) = (seen, args.len() == 5 || active.is_some()) else {
         kevy_resp::encode_error(out, "ERR malformed internal consumer record");
         return true;
     };
-    match store.xgroup_consumer_seen(&args[1], &args[2], &args[3], seen) {
+    let (key, group, consumer) = (&args[1], &args[2], &args[3]);
+    let made = store.xgroup_consumer_seen(key, group, consumer, seen);
+    let made = match (made, active) {
+        (Ok(made), Some(at)) => {
+            store.xgroup_consumer_active(key, group, consumer, at).map(|_| made)
+        }
+        (made, _) => made,
+    };
+    match made {
         Ok(made) => kevy_resp::encode_integer(out, i64::from(made)),
         Err(e) => crate::reply::store_err(out, e),
     }
     true
+}
+
+/// `XINTERNAL.PENDING key group consumer delivery-ms delivery-count id`.
+fn apply_pending<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
+    let n = |i: usize| args.get(i).and_then(crate::args::arg_u64);
+    let id = args.get(6).and_then(|id| kevy_store::parse_explicit_id(id).ok());
+    let (7, Some(at), Some(count), Some(id)) = (args.len(), n(4), n(5), id) else {
+        kevy_resp::encode_error(out, "ERR malformed internal pending record");
+        return;
+    };
+    match store.xgroup_restore_pending(&args[1], &args[2], &args[3], id, at, count) {
+        Ok(put) => kevy_resp::encode_integer(out, i64::from(put)),
+        Err(e) => crate::reply::store_err(out, e),
+    }
 }
 
 /// One `XCLAIM … TIME t RETRYCOUNT n FORCE JUSTID` per `(delivery time,
@@ -235,9 +417,9 @@ pub(crate) fn taken_frames(
     ids: &[StreamId],
 ) -> Vec<Argv> {
     let Some(g) = store.stream_group_peek(key, group) else { return Vec::new() };
-    let mut by: Vec<((u64, u32), Vec<StreamId>)> = Vec::new();
+    let mut by: Vec<((u64, u64), Vec<StreamId>)> = Vec::new();
     for id in ids {
-        let Some(row) = g.pel.get(id) else { continue };
+        let Some(row) = g.pending_entry(*id) else { continue };
         let at = (row.delivery_time_ms, row.delivery_count);
         match by.iter_mut().find(|(k, _)| *k == at) {
             Some((_, same)) => same.push(*id),

@@ -12,25 +12,19 @@ use kevy_index::{IndexKind, IndexValue, TableIndex, TableSpec, ValType};
 /// Columns only, plus one index WITHOUT stored values — each refusal
 /// below is one missing declaration away from serving.
 fn lean_table() -> TableSpec {
-    TableSpec {
-        name: b"ev".to_vec(),
-        prefix: b"ev:".to_vec(),
-        pk: b"id".to_vec(),
-        columns: vec![
+    {
+        let mut t = TableSpec::default();
+        t.name = b"ev".to_vec();
+        t.prefix = b"ev:".to_vec();
+        t.pk = b"id".to_vec();
+        t.columns = vec![
             (b"id".to_vec(), ValType::Str),
             (b"at".to_vec(), ValType::I64),
             (b"age".to_vec(), ValType::I64),
             (b"note".to_vec(), ValType::Str),
-        ],
-        indexes: vec![TableIndex {
-            column: b"at".to_vec(),
-            kind: IndexKind::Range,
-            values: vec![],
-        }],
-        orderpaths: vec![],
-        window: None,
-        autodeclare: 0,
-        auto_added: vec![],
+        ];
+        t.indexes = vec![TableIndex::new(b"at".to_vec(), IndexKind::Range)];
+        t
     }
 }
 
@@ -84,7 +78,7 @@ fn refusals_render_and_catalog_mutations_clear() {
     // A Filter family: the declared path exists, the field is not
     // stored.
     let filters = [ValueFilter::Eq { field: b"note", value: b"x" }];
-    let opts = ScalarQueryOpts { filters: &filters, ..ScalarQueryOpts::default() };
+    let opts = ScalarQueryOpts::default().with_filters(&filters);
     assert!(s.idx_query_claused(b"ev.at", &lo, &hi, None, 10, opts).is_err());
 
     // A Match family on an undeclared text path.
@@ -114,6 +108,6 @@ fn refusals_render_and_catalog_mutations_clear() {
     assert_eq!(s.idx_advise().len(), expect, "ungrounded family withheld");
 
     // Any catalog mutation clears the slate.
-    assert!(s.idx_drop(b"ev.at"));
+    assert!(s.idx_drop(b"ev.at").unwrap());
     assert!(s.idx_advise().is_empty(), "mutation clears the log");
 }

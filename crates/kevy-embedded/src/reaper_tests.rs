@@ -6,9 +6,7 @@ use crate::store::Store;
 use std::sync::mpsc;
 
 fn tmp_dir(name: &str) -> std::path::PathBuf {
-    let uniq =
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    std::env::temp_dir().join(format!("kevy-embedded-{name}-{uniq}"))
+    kevy_tmpdir::unique_dir(&format!("embedded-{name}"))
 }
 
 fn upkeep(shard: &Arc<RwLock<Inner>>) -> TickSync {
@@ -60,4 +58,17 @@ fn a_write_lands_while_the_everysec_sync_is_outstanding() {
     assert_eq!(reopened.get(b"during").unwrap(), Some(vec![b'b'; 4096]));
     drop(reopened);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn closing_a_store_does_not_wait_out_the_reaper_tick() {
+    let config = Config::default()
+        .with_persist(tmp_dir("reaper-close"))
+        .with_reaper_interval(Duration::from_secs(10));
+    let store = Store::open(config).unwrap();
+    store.set(b"k", b"v").unwrap();
+    let t0 = std::time::Instant::now();
+    drop(store);
+    // a close that sleeps out the tick takes the full ten seconds
+    assert!(t0.elapsed() < Duration::from_secs(1), "close took {:?}", t0.elapsed());
 }

@@ -12,22 +12,21 @@
 # nobody reads. So a red here means one thing only: a release was announced
 # that a user cannot install.
 #
-# Daily rather than per-push because the answer changes when a registry
-# changes, not when the code does, and because 50-odd requests to nine
-# public registries on every pull request would make CI flaky in a way that
-# teaches people to ignore it.
+# After a release rather than per-push because the answer changes when a
+# release publishes, not when the code does, and because 50-odd requests to
+# nine public registries on every pull request would make CI flaky in a way
+# that teaches people to ignore it.
 name: channel parity — does the world have what we shipped
 
 on:
-  schedule:
-    - cron: '17 6 * * *'
-  # And when a release ends, because that is the one moment the answer is
-  # supposed to change. Daily alone left a window: v6.1.0's npm job refused
-  # a door it could not build, four publishable doors behind it never got
-  # their turn, and nothing would have asked a registry about any of them
-  # until the next morning. Red here after a release means the release is
-  # not finished — including when the remaining doors are the ones a Linux
-  # runner cannot build and a person still has to publish by hand.
+  # When a release ends, because that is the one moment the answer is
+  # supposed to change: v6.1.0's npm job refused a door it could not build,
+  # and four publishable doors behind it never got their turn. Red here
+  # after a release means the release is not finished. The tag publishes
+  # every door except PyPI, NuGet and Maven Central, which the owner
+  # dispatches, so right after a release those three are expected here
+  # until then; each door found behind is printed with what publishes it.
+  # Dispatch this again after those three to confirm the release is whole.
   workflow_run:
     workflows: ['Release']  # exact `name:` of release.yml — matching is by name
     types: [completed]

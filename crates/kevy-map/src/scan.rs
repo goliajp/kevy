@@ -74,6 +74,44 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
         v.wrapping_add(1).reverse_bits()
     }
 
+    /// Visit buckets `[start, start + count)` in storage order and return
+    /// where the next call should start; a return of [`Self::capacity`]
+    /// means the walk reached the end.
+    ///
+    /// The order [`KevyMap::iter`] uses, so neighbouring entries come out
+    /// together and nothing is rehashed to find its place. Positions hold
+    /// only while the capacity does: removals leave their slot and inserts
+    /// never move an entry, but a growth moves every one. A walk that lets
+    /// the map change between calls restarts when the capacity changes;
+    /// [`KevyMap::scan_step`] is the walk that needs no restart, at the
+    /// price of hashing every entry it visits.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut m = kevy_map::KevyMap::new();
+    /// for i in 0..100u32 { m.insert(i, i); }
+    /// let (mut seen, mut at) = (Vec::new(), 0);
+    /// while at < m.capacity() {
+    ///     at = m.scan_buckets(at, 32, |k, _| seen.push(*k));
+    /// }
+    /// seen.sort_unstable();
+    /// assert_eq!(seen, (0..100).collect::<Vec<_>>());
+    /// ```
+    pub fn scan_buckets(&self, start: usize, count: usize, mut f: impl FnMut(&K, &V)) -> usize {
+        let end = start.saturating_add(count).min(self.cap);
+        for p in start..end {
+            // SAFETY: p < cap ⇒ metadata pointer in-bounds.
+            let meta = unsafe { *self.metadata_ptr.as_ptr().add(p) };
+            if meta & 0x80 == 0 {
+                // SAFETY: occupied slot ⇒ initialised.
+                let kv = unsafe { (*self.slots_ptr.as_ptr().add(p)).assume_init_ref() };
+                f(&kv.0, &kv.1);
+            }
+        }
+        end
+    }
+
     /// Call `f` for every entry whose *home* bucket (`hash & mask`) lies
     /// in aligned group `g` (buckets `[16g, 16g + 16)`).
     ///

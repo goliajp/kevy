@@ -37,9 +37,11 @@ fn records(store: &mut Store, cmd: &str, e: Option<Effect>) -> Vec<String> {
         Some(Effect::Record(f)) => vec![frame(&f)],
         Some(
             e @ (Effect::RecordId(..)
+            | Effect::RecordAdd(..)
             | Effect::RecordClaim(_)
             | Effect::RecordRead(..)
             | Effect::RecordReads(_)
+            | Effect::RecordHistory(_)
             | Effect::RecordSeen),
         ) => {
             let frames = crate::aof::deferred_frames(&*store, &argv(cmd), &e);
@@ -57,12 +59,10 @@ fn a_generated_id_is_recorded_as_the_id_it_gave() {
     let mut s = Store::new();
     let (e, reply) = run(&mut s, "XADD s NOMKSTREAM MAXLEN ~ 2 * f v");
     assert_eq!(e, Some(Effect::Unchanged), "{reply}");
+    // an approximate trim that removed nothing is recorded without it
     let (e, reply) = run(&mut s, "XADD s MAXLEN ~ 2 * f v");
     let id = reply.split("\r\n").nth(1).unwrap().to_string();
-    assert_eq!(
-        records(&mut s, "XADD s MAXLEN ~ 2 * f v", e),
-        vec![format!("XADD s MAXLEN ~ 2 {id} f v")]
-    );
+    assert_eq!(records(&mut s, "XADD s MAXLEN ~ 2 * f v", e), vec![format!("XADD s {id} f v")]);
     let (e, _) = run(&mut s, "XADD s2 7-* f v");
     assert_eq!(records(&mut s, "XADD s2 7-* f v", e), vec!["XADD s2 7-0 f v".to_string()]);
     let (e, _) = run(&mut s, "XADD s2 8-1 f v");
@@ -129,11 +129,10 @@ fn claim_records_replay_to_the_same_pending_list() {
 }
 
 /// `(id, owner, delivery time, delivery count)` of group `g` on `s`.
-fn pel(store: &mut Store) -> Vec<(String, Vec<u8>, u64, u32)> {
+fn pel(store: &mut Store) -> Vec<(String, Vec<u8>, u64, u64)> {
     let s = store.stream_view(b"s").unwrap().unwrap();
     let g = s.group(b"g").unwrap();
-    g.pel
-        .iter()
+    g.pending_range(..)
         .map(|(id, p)| {
             let owner = p.consumer.as_slice().to_vec();
             (String::from_utf8(id.encode()).unwrap(), owner, p.delivery_time_ms, p.delivery_count)
@@ -141,29 +140,29 @@ fn pel(store: &mut Store) -> Vec<(String, Vec<u8>, u64, u32)> {
         .collect()
 }
 
-/// `(consumer, last contact, pending)` of `group` on `key`, by name.
-fn consumers(store: &Store, key: &[u8], group: &[u8]) -> Vec<(Vec<u8>, u64, usize)> {
+/// `(consumer, last contact, last active, pending)` of `group` on `key`,
+/// by name.
+fn consumers(store: &Store, key: &[u8], group: &[u8]) -> Vec<(Vec<u8>, u64, Option<u64>, usize)> {
     let g = store.stream_group_peek(key, group).expect("the group");
     let mut out: Vec<_> = g
-        .consumers_iter()
-        .map(|(n, c)| (n.to_vec(), c.last_seen_ms(), c.pending_count()))
+        .consumers()
+        .map(|(n, c)| (n.to_vec(), c.last_seen_ms(), c.last_active_ms(), c.pending_count()))
         .collect();
     out.sort();
     out
 }
 
 /// `(id, owner, delivery time, delivery count)`.
-type PelRow = (StreamId, Vec<u8>, u64, u32);
+type PelRow = (StreamId, Vec<u8>, u64, u64);
 
 /// The pending rows of `group` on `key`, and the group's last-delivered ID.
 fn group_rows(store: &Store, key: &[u8], group: &[u8]) -> (Vec<PelRow>, StreamId) {
     let g = store.stream_group_peek(key, group).expect("the group");
     let rows = g
-        .pel
-        .iter()
-        .map(|(id, p)| (*id, p.consumer.as_slice().to_vec(), p.delivery_time_ms, p.delivery_count))
+        .pending_range(..)
+        .map(|(id, p)| (id, p.consumer.as_slice().to_vec(), p.delivery_time_ms, p.delivery_count))
         .collect();
-    (rows, g.last_delivered_id)
+    (rows, g.last_delivered_id())
 }
 
 /// One `XREADGROUP` over several streams is recorded stream by stream:
@@ -209,14 +208,10 @@ fn a_read_of_several_streams_replays_stream_by_stream() {
         assert_eq!(consumers(&replayed, key, group), want, "{key:?} {group:?}: {log:#?}");
     }
     let (b_rows, b_last) = group_rows(&live, b"b", b"g");
-    assert_eq!((b_rows.len(), b_last), (1, StreamId { ms: 2, seq: 1 }), "b delivered 2-1 to c3");
+    assert_eq!((b_rows.len(), b_last), (1, StreamId::new(2, 1)), "b delivered 2-1 to c3");
     assert_eq!(b_rows[0].1, b"c3");
     let (a_rows, a_last) = group_rows(&live, b"a", b"n");
-    assert_eq!(
-        (a_rows.len(), a_last),
-        (0, StreamId { ms: 1, seq: 1 }),
-        "NOACK moved a, kept nothing"
-    );
+    assert_eq!((a_rows.len(), a_last), (0, StreamId::new(1, 1)), "NOACK moved a, kept nothing");
 }
 
 /// A server trims to `maxmemory` after a growing write and before it
@@ -289,7 +284,7 @@ fn an_empty_read_records_nothing() {
     for c in ["XADD s 1-1 a 1", "XGROUP CREATE s g 0", "XREADGROUP GROUP g a STREAMS s >"] {
         run(&mut s, c);
     }
-    for poll in ["XREADGROUP GROUP g a STREAMS s >", "XREADGROUP GROUP g a STREAMS s 0"] {
+    for poll in ["XREADGROUP GROUP g a STREAMS s >", "XREADGROUP GROUP g a STREAMS s 1-1"] {
         let (e, _) = run(&mut s, poll);
         assert_eq!(e, Some(Effect::Skip), "{poll}");
     }
@@ -344,5 +339,155 @@ fn a_dropped_entry_is_recorded_as_a_drop() {
     let (e, reply) = run(&mut s, "XCLAIM s g a 0 1-1 JUSTID");
     assert_eq!(reply, "*0\r\n");
     let rec = records(&mut s, "XCLAIM s g a 0 1-1 JUSTID", e);
-    assert_eq!(rec, vec!["XCLAIM s g a 0 1-1 JUSTID".to_string()]);
+    assert_eq!(rec.len(), 2, "{rec:?}");
+    assert_eq!(rec[0], "XCLAIM s g a 0 1-1 JUSTID");
+    assert!(rec[1].starts_with("XINTERNAL.CONSUMERSEEN s g a "), "the claim's contact: {rec:?}");
+}
+
+/// A known consumer's read that delivers from one stream and not the
+/// other records the stream it delivered from and nothing for the other.
+#[test]
+fn a_known_consumer_records_only_the_stream_that_delivered() {
+    let mut s = Store::new();
+    for c in ["XADD a 1-1 x 1", "XADD b 1-1 y 1", "XGROUP CREATE a g 0", "XGROUP CREATE b g 0"] {
+        run(&mut s, c);
+    }
+    run(&mut s, "XREADGROUP GROUP g c STREAMS a b > >");
+    run(&mut s, "XADD a 2-1 x 2");
+    let read = "XREADGROUP GROUP g c STREAMS a b > >";
+    let (e, _) = run(&mut s, read);
+    let rec = records(&mut s, read, e);
+    assert!(rec.iter().all(|f| !f.split(' ').any(|t| t == "b")), "{rec:?}");
+    assert!(rec.iter().any(|f| f == "XGROUP SETID a g 2-1 ENTRIESREAD 2"), "{rec:?}");
+}
+
+/// An argv that is not a well-formed group read records nothing.
+#[test]
+fn a_read_record_of_an_argv_without_streams_is_empty() {
+    let s = Store::new();
+    let effect = Effect::RecordRead(StreamId::new(0, 0), crate::aof::Consumer::Created);
+    for cmd in ["XREADGROUP GROUP g c COUNT 1 NOACK", "XREADGROUP GROUP g c STREAMS a b >"] {
+        assert!(crate::aof::deferred_frames(&s, &argv(cmd), &effect).is_empty(), "{cmd}");
+    }
+}
+
+#[test]
+fn xpending_names_a_missing_group_and_a_key_that_is_not_a_stream_in_both_forms() {
+    let mut s = Store::new();
+    run(&mut s, "XADD s 1-1 f v");
+    run(&mut s, "SET str v");
+    for cmd in ["XPENDING s nog", "XPENDING s nog - + 10"] {
+        let want = "-NOGROUP No such key 's' or consumer group 'nog'\r\n";
+        assert_eq!(run(&mut s, cmd).1, want, "{cmd}");
+    }
+    for cmd in ["XPENDING str g", "XPENDING str g - + 10"] {
+        assert!(run(&mut s, cmd).1.starts_with("-WRONGTYPE"), "{cmd}");
+    }
+}
+
+/// The names in an `XINFO` reply, in the order it lists them.
+fn named(reply: &str) -> Vec<String> {
+    let parts: Vec<&str> = reply.split("\r\n").collect();
+    (1..parts.len().saturating_sub(2))
+        .filter(|&i| parts[i] == "name")
+        .map(|i| parts[i + 2].to_string())
+        .collect()
+}
+
+/// Consumers and groups are listed by name in byte order, whatever order
+/// they were made or read in. The expected replies are what a Redis 8.10
+/// and a valkey 9.1 server answered for this script, byte for byte where
+/// kevy's reply carries the same fields.
+#[test]
+fn consumers_and_groups_are_listed_by_name() {
+    let mut s = Store::new();
+    for c in [
+        "XADD s 1-0 f a",
+        "XADD s 2-0 f b",
+        "XADD s 3-0 f c",
+        "XADD s 4-0 f d",
+        "XGROUP CREATE s g 0",
+        "XREADGROUP GROUP g bob COUNT 1 STREAMS s >",
+        "XREADGROUP GROUP g alice COUNT 1 STREAMS s >",
+        "XREADGROUP GROUP g zed COUNT 1 STREAMS s >",
+        "XREADGROUP GROUP g bob COUNT 1 STREAMS s >",
+        "XGROUP CREATECONSUMER s g carol",
+        "XGROUP CREATECONSUMER s g aaron",
+        "XGROUP CREATE s g2 0",
+        "XGROUP CREATE s a2 0",
+    ] {
+        run(&mut s, c);
+    }
+    assert_eq!(
+        run(&mut s, "XPENDING s g").1,
+        "*4\r\n:4\r\n$3\r\n1-0\r\n$3\r\n4-0\r\n*3\r\n\
+         *2\r\n$5\r\nalice\r\n$1\r\n1\r\n\
+         *2\r\n$3\r\nbob\r\n$1\r\n2\r\n\
+         *2\r\n$3\r\nzed\r\n$1\r\n1\r\n"
+    );
+    assert_eq!(
+        named(&run(&mut s, "XINFO CONSUMERS s g").1),
+        ["aaron", "alice", "bob", "carol", "zed"]
+    );
+    assert_eq!(named(&run(&mut s, "XINFO GROUPS s").1), ["a2", "g", "g2"]);
+}
+
+/// The order is by bytes: not case-folded, not numeric, a prefix first.
+#[test]
+fn consumer_order_is_byte_order() {
+    let mut s = Store::new();
+    let names = ["zed", "ab", "Bob", "a", "alice", "b10", "b9"];
+    for i in 1..=names.len() {
+        run(&mut s, &format!("XADD s {i}-0 f v"));
+    }
+    run(&mut s, "XGROUP CREATE s g 0");
+    for n in names {
+        run(&mut s, &format!("XREADGROUP GROUP g {n} COUNT 1 STREAMS s >"));
+        run(&mut s, &format!("XGROUP CREATECONSUMER s g {n}x"));
+    }
+    let summary = run(&mut s, "XPENDING s g").1;
+    let listed: Vec<&str> =
+        summary.split("\r\n").filter(|p| p.chars().any(char::is_alphabetic)).collect();
+    assert_eq!(listed, ["Bob", "a", "ab", "alice", "b10", "b9", "zed"]);
+    assert_eq!(
+        named(&run(&mut s, "XINFO CONSUMERS s g").1),
+        [
+            "Bob", "Bobx", "a", "ab", "abx", "alice", "alicex", "ax", "b10", "b10x", "b9", "b9x",
+            "zed", "zedx"
+        ]
+    );
+}
+
+/// Every XGROUP subcommand refuses the wrong number of arguments, a key
+/// of another type, and an ID it cannot read, each with its own answer.
+#[test]
+fn xgroup_refuses_its_arguments_and_the_wrong_type_by_subcommand() {
+    let mut s = Store::new();
+    run(&mut s, "SET str v");
+    run(&mut s, "XGROUP CREATE s g $ MKSTREAM");
+    let wrongtype = "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n";
+    let arity =
+        |sub: &str| format!("-ERR wrong number of arguments for 'xgroup|{sub}' command\r\n");
+    let cases = [
+        ("XGROUP CREATE s", arity("create")),
+        ("XGROUP DESTROY s", arity("destroy")),
+        ("XGROUP SETID s", arity("setid")),
+        ("XGROUP CREATECONSUMER s g", arity("createconsumer")),
+        ("XGROUP DELCONSUMER s g", arity("delconsumer")),
+        ("XGROUP CREATE str g $", wrongtype.to_string()),
+        ("XGROUP DESTROY str g", wrongtype.to_string()),
+        ("XGROUP SETID str g $", wrongtype.to_string()),
+        ("XGROUP CREATECONSUMER str g c", wrongtype.to_string()),
+        ("XGROUP DELCONSUMER str g c", wrongtype.to_string()),
+    ];
+    for (cmd, want) in cases {
+        assert_eq!(run(&mut s, cmd).1, want, "{cmd}");
+    }
+    assert_eq!(
+        run(&mut s, "XGROUP NOPE s").1,
+        "-ERR unknown subcommand 'NOPE'. Try XGROUP HELP.\r\n"
+    );
+    for cmd in ["XGROUP CREATE s g2 notanid", "XGROUP SETID s g notanid"] {
+        assert!(run(&mut s, cmd).1.starts_with("-ERR"), "{cmd}");
+    }
 }

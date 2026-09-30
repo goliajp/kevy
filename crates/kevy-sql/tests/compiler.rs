@@ -2,7 +2,9 @@
 //! view planning (engine views / cards / named missing-declaration
 //! errors), parameter slots, render_script shape, determinism.
 
-use kevy_sql::{Compilation, KevyType, compile};
+#![allow(clippy::unwrap_used, clippy::panic)]
+
+use kevy_sql::{Compilation, ValType, compile};
 
 const SHOP: &str = r"
 -- the cookbook schema
@@ -145,7 +147,7 @@ fn shop_schema_exact_argv() {
     assert_eq!(card.params.len(), 1);
     assert_eq!(card.params[0].n, 1);
     assert_eq!(card.params[0].column, "user_id");
-    assert_eq!(card.params[0].ty, KevyType::I64);
+    assert_eq!(card.params[0].ty, ValType::I64);
 }
 
 #[test]
@@ -354,6 +356,21 @@ fn open_ranges_fill_type_extremes() {
     .unwrap_err();
     assert!(e.message.contains("no finite upper bound"), "{e}");
     assert!(e.message.contains("BETWEEN"), "{e}");
+}
+
+#[test]
+fn open_lower_ends_fill_the_type_minimum_and_an_open_f64_top_is_inf() {
+    let base = format!(
+        "{DEPT}CREATE INDEX ON emp (age);\nCREATE INDEX ON emp (salary);\nCREATE INDEX ON emp (name);\n"
+    );
+    let c = compile(&format!("{base}CREATE VIEW v AS SELECT * FROM emp WHERE age <= 65;")).unwrap();
+    assert_eq!(&leaf_of(&c)[3..7], ["emp.age", "RANGE", "-9223372036854775808", "65"]);
+    let c =
+        compile(&format!("{base}CREATE VIEW v AS SELECT * FROM emp WHERE salary >= 1.5;")).unwrap();
+    assert_eq!(&leaf_of(&c)[3..7], ["emp.salary", "RANGE", "1.5", "inf"]);
+    let c =
+        compile(&format!("{base}CREATE VIEW v AS SELECT * FROM emp WHERE name <= 'm';")).unwrap();
+    assert_eq!(&leaf_of(&c)[3..7], ["emp.name", "RANGE", "", "m"]);
 }
 
 #[test]

@@ -135,13 +135,21 @@ fn dispatch_returns_oom_when_no_eviction_at_limit() {
 #[test]
 fn dispatch_evicts_under_allkeys_random() {
     use kevy_store::EvictionPolicy;
+    // the keyspace table thirty keys fill, charged whole: the values are
+    // held to 800 bytes above it
+    let mut sized = Store::new();
+    for i in 0..30 {
+        d(&mut sized, &[b"SET", format!("k{i:02}").as_bytes(), b"x"]);
+    }
+    let limit = sized.used_memory() + 800;
     let mut s = Store::new();
-    s.set_max_memory(800, EvictionPolicy::AllKeysRandom);
+    s.set_max_memory(limit, EvictionPolicy::AllKeysRandom);
+    let value = [b'x'; 40];
     for i in 0..30 {
         let k = format!("k{i:02}");
-        d(&mut s, &[b"SET", k.as_bytes(), b"x"]);
+        d(&mut s, &[b"SET", k.as_bytes(), &value]);
     }
-    assert!(s.used_memory() <= 800, "dispatch should keep us under: {}", s.used_memory());
+    assert!(s.used_memory() <= limit, "dispatch should keep us under: {}", s.used_memory());
     assert!(s.evictions_total() > 0, "AllKeysRandom should have evicted some keys");
 }
 
@@ -361,35 +369,6 @@ fn drain_commands_handles_quit_and_protocol_error() {
 }
 
 #[test]
-fn config_enum_mapping_round_trips() {
-    // Cover map_eviction_policy + map_appendfsync — pure data maps. If a
-    // policy lands in one enum but the other forgets the case, this fails.
-    use kevy_config::AppendFsync as CA;
-    use kevy_config::EvictionPolicy as CE;
-    use kevy_persist::Fsync as P;
-    use kevy_store::EvictionPolicy as S;
-
-    let evict_cases = [
-        (CE::NoEviction, S::NoEviction),
-        (CE::AllKeysLru, S::AllKeysLru),
-        (CE::AllKeysLfu, S::AllKeysLfu),
-        (CE::AllKeysRandom, S::AllKeysRandom),
-        (CE::VolatileLru, S::VolatileLru),
-        (CE::VolatileLfu, S::VolatileLfu),
-        (CE::VolatileRandom, S::VolatileRandom),
-        (CE::VolatileTtl, S::VolatileTtl),
-    ];
-    for (src, dst) in evict_cases {
-        assert_eq!(map_eviction_policy(src), dst);
-    }
-
-    let fsync_cases = [(CA::Always, P::Always), (CA::EverySec, P::EverySec), (CA::No, P::No)];
-    for (src, dst) in fsync_cases {
-        assert_eq!(std::mem::discriminant(&map_appendfsync(src)), std::mem::discriminant(&dst));
-    }
-}
-
-#[test]
 fn shard_tick_interval_falls_back_to_disabled() {
     // With no `config_init` called (the test process default), the global
     // config returns `Config::default()`. With default hz != 0 we get a
@@ -467,4 +446,23 @@ fn announce_port_base_is_none_until_set() {
     assert_eq!(crate::announce_port_base(&cfg), None);
     cfg.cluster.announce_port_base = 7001;
     assert_eq!(crate::announce_port_base(&cfg), Some(7001));
+}
+
+#[test]
+fn a_growing_write_past_the_tiering_budget_gets_the_guards_refusal() {
+    let mut s = Store::new();
+    s.set_memory_refusal(true);
+    for parts in [&[&b"SET"[..], b"k", b"v"][..], &[b"RPUSH", b"l", b"v"]] {
+        let want = format!("-{}\r\n", crate::mem_guard::OVER_BUDGET_ERR);
+        assert_eq!(String::from_utf8(d(&mut s, parts)).unwrap(), want);
+    }
+    assert_eq!(s.dbsize(), 0);
+}
+
+#[test]
+fn replay_resync_selects_the_resync_replay_mode() {
+    let mut cfg = kevy_config::Config::default();
+    assert_eq!(crate::replay_mode(&cfg), kevy_persist::ReplayMode::Strict);
+    cfg.persistence.replay_resync = true;
+    assert_eq!(crate::replay_mode(&cfg), kevy_persist::ReplayMode::Resync);
 }

@@ -29,7 +29,7 @@ kevy-cli -p 6004 --kevy describe+ users     # 同上，再跑一次 TABLE.VERIFY
 
 对表，`describe` 显示前缀和主键，每一列的声明类型和读它的编译路径，以及每条访问路径的
 构建状态。对索引，显示字段、存储值和编译出它的表；对视图，显示组合树和排序。列信息来自
-`TABLE.DESCRIBE`，6.5 之前的服务端没有这个命令。
+`TABLE.DESCRIBE`，7.0 之前的服务端没有这个命令。
 
 ## 查询
 
@@ -146,7 +146,6 @@ Valkey 的命令，`backup`、`digest` 是 Redis 8 的命令，而且命令表�
 的工具从不占用裸词，都放在 `--kevy` 这一个选项后面，就像 redis-cli 自己的集群管理放在
 `--cluster` 后面一样。
 
-kevy-cli 6.4 以裸词发布的工具（`kevy-cli doctor -p 6004`、`kevy-cli export …`、
-`kevy-cli sql compile …`）在 7.0 之前仍然可用，每次运行会打印一行提示，给出对应的
-`--kevy` 写法。`backup` 和 `restore` 只有在带自己的参数（`--data-dir`/`--to`、
-`--from`/`--to`）时才是工具；`digest <前缀>` 在 7.0 之前仍然是工具。
+kevy-cli 6.4 以裸词发布过这些工具（`kevy-cli doctor -p 6004`、`kevy-cli export …`、
+`kevy-cli sql compile … --url h:p`）。从 7.0 起，这些词和其他词一样发给服务端：
+连接选项写在前面，工具写在 `--kevy` 后面，例如 `kevy-cli -p 6004 --kevy doctor`。

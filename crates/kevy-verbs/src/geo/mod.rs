@@ -21,8 +21,10 @@
 mod radius;
 mod search;
 mod store;
+#[cfg(test)]
+mod tests;
 
-pub use store::{store_keys, store_search};
+pub use store::{StoreSearchError, store_keys, store_search};
 
 use kevy_geo::{decode_score, encode_base32_geohash, encode_score, haversine_meters};
 use kevy_resp::CmdError;

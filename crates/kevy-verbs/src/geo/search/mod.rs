@@ -176,11 +176,8 @@ fn collect_hits(
 ) -> Result<Vec<Hit>, kevy_store::StoreError> {
     let mut hits = Vec::new();
     for (min, max) in ranges {
-        let members = store.zrange_by_score(
-            key,
-            ScoreBound { value: *min, exclusive: false },
-            ScoreBound { value: *max, exclusive: false },
-        )?;
+        let members =
+            store.zrange_by_score(key, ScoreBound::inclusive(*min), ScoreBound::inclusive(*max))?;
         for (member, score) in members {
             let (mlon, mlat) = decode_score(score);
             if !in_shape(opts.shape, clon, clat, mlon, mlat) {

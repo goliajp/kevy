@@ -6,7 +6,7 @@ use std::io::{Read, Write};
 
 /// Connect, run one round-trip closure, return the server thread for joining.
 fn with_server<F: FnOnce(&mut std::net::TcpStream)>(body: F) {
-    let listener = kevy_sys::tcp_listen([127, 0, 0, 1], 0, 16).unwrap();
+    let listener = kevy_sys::Socket::tcp_listen([127, 0, 0, 1], 0, 16).unwrap();
     let port = listener.local_port().unwrap();
 
     let server = std::thread::spawn(move || {

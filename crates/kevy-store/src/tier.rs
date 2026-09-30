@@ -36,110 +36,14 @@ mod enabled {
     use crate::value::{ColdRef, Value};
     use crate::{EvictionPolicy, SmallBytes, Store};
 
-    /// Per-shard tiering state — present only when tiering is enabled
-    /// (`tier: Option<TierState>`; `None` = today's paths, the A1 gate's
-    /// precondition).
-    #[derive(Debug)]
-    pub(crate) struct TierState {
-        pub(crate) vlog: Vlog,
-        pub(crate) budget: u64,
-        /// Demotion victim scoring (RFC §7: tiered-lru default).
-        pub(crate) policy: EvictionPolicy,
-        pub(crate) demotions_total: u64,
-        /// Demote-sampler backoff: ticks left to skip before
-        /// the next over-target sample walk. "Idempotent is not
-        /// convergent" — a store that is over target with nothing left
-        /// to spill (every spillable value already cold, or the floor
-        /// alone exceeds the budget so `effective_target == 0`) used to
-        /// re-walk the sample window every tick forever.
-        pub(crate) tick_wait: u32,
-        /// Current backoff width: doubles on every dry tick batch up
-        /// to [`crate::tier_demote::BACKOFF_CEILING_TICKS`], resets to
-        /// 0 on any demotion (tick or write path — the write path
-        /// always samples immediately, so a fresh spillable value
-        /// never waits out the window).
-        pub(crate) tick_skip: u32,
-        pub(crate) promotions_total: u64,
-        /// Every vlog record read (serve, promote, peek) — the
-        /// WRONGTYPE-without-read proof counter.
-        pub(crate) preads_total: u64,
-        /// Record reads made by NO-PROMOTE peeks only: hydration,
-        /// backfill, digest, scope-move. One per cold ROW — the
-        /// preads==rows (not rows×fields) proof counter.
-        pub(crate) peek_preads_total: u64,
-        /// Batched cold-read submissions: one per
-        /// [`Store::peek_hash_rows`] page with ≥1 cold row, weighted by
-        /// the reader's kernel submission count — the one-batch-per-page
-        /// proof counter.
-        pub(crate) batch_submissions_total: u64,
-        pub(crate) cold_keys: u64,
-        pub(crate) cold_bytes: u64,
-        /// Largest value weight demotion may spill (bytes; 0 =
-        /// unlimited). Bounds the pread-under-shard-lock hold time on
-        /// the embedded RwLock shape (RFC §7: embedded default 256 KiB,
-        /// server unlimited) — an over-cap value simply stays hot.
-        pub(crate) max_spill: u64,
-        /// Index/view memory floor (Σ segment `approx_bytes` on this
-        /// shard), fed per shard tick by [`Store::set_tier_reserved`].
-        /// Subtracted from the demote watermark: the
-        /// premium fixed layer demotion can never reclaim.
-        pub(crate) reserved_bytes: u64,
-        /// RAM the cold stubs themselves cost (Σ per cold key of
-        /// `ENTRY_OVERHEAD + key heap bytes`) — the other unreclaimable
-        /// floor, maintained incrementally at demote / promote /
-        /// DEL-of-cold / RENAME / FLUSHALL.
-        pub(crate) stub_bytes: u64,
-        /// Cold stubs RENAMEd away from their record's embedded key:
-        /// `(file_id, offset) → current key`. Rename moves the stub
-        /// without a pread, so the on-disk key goes stale; compaction's
-        /// `is_live`/`moved` consult this map on a primary-key miss.
-        /// Usually empty; entries die with their stub.
-        pub(crate) renames: std::collections::HashMap<(u32, u64), SmallBytes>,
-    }
+    pub(crate) use crate::tier_state::TierState;
 
-    /// Tiering gauges — the `INFO # Tiering` feeders.
-    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-    pub struct TierStats {
-        /// The RAM budget this shard demotes against (resolved bytes).
-        pub budget: u64,
-        /// The unified demote target: `budget·19/20 − reserved_bytes −
-        /// stub_bytes`, saturating. **0 = the floor alone exceeds the
-        /// budget** — the tier can demote nothing; visible here, never
-        /// silent (RFC §4 row 16).
-        pub effective_target: u64,
-        /// Index/view memory floor fed by [`Store::set_tier_reserved`].
-        pub reserved_bytes: u64,
-        /// RAM the cold stubs cost (Σ `ENTRY_OVERHEAD + key heap`).
-        pub stub_bytes: u64,
-        /// Keys demoted to the cold tier since boot.
-        pub demotions_total: u64,
-        /// Keys promoted back since boot.
-        pub promotions_total: u64,
-        /// Vlog record reads (serve + promote + peek).
-        pub preads_total: u64,
-        /// No-promote peek record reads only — one per cold row.
-        pub peek_preads_total: u64,
-        /// Batched cold-read submissions — one per page batch on
-        /// the sync reader; kernel submit count on the uring reader.
-        pub batch_submissions_total: u64,
-        /// Currently-cold keys.
-        pub cold_keys: u64,
-        /// Σ original weights of currently-cold values.
-        pub cold_bytes: u64,
-        /// Vlog file count.
-        pub vlog_files: u64,
-        /// Vlog total bytes on disk.
-        pub vlog_bytes: u64,
-        /// Vlog live (non-dead) bytes.
-        pub vlog_live_bytes: u64,
-        /// Vlog compaction epoch (retired-file counter).
-        pub vlog_epoch: u64,
-    }
+    pub use crate::tier_stats::TierStats;
 
     impl ColdRef {
         #[inline]
         pub(crate) fn vref(self) -> VlogRef {
-            VlogRef { file_id: self.file_id, offset: self.offset, len: self.len }
+            VlogRef::new(self.file_id, self.offset, self.len)
         }
     }
 
@@ -158,6 +62,7 @@ mod enabled {
                 demotions_total: 0,
                 tick_wait: 0,
                 tick_skip: 0,
+                hand: 0,
                 promotions_total: 0,
                 preads_total: 0,
                 peek_preads_total: 0,
@@ -166,6 +71,8 @@ mod enabled {
                 cold_bytes: 0,
                 max_spill: 0,
                 reserved_bytes: 0,
+                overhead_bytes: 0,
+                growth_reserve: 0,
                 stub_bytes: 0,
                 renames: std::collections::HashMap::new(),
             });
@@ -205,15 +112,82 @@ mod enabled {
             }
         }
 
+        /// Feed this shard's share of the memory the process holds live
+        /// outside `used_memory` and the index floor — what a serving
+        /// layer measures from the allocator. It lowers the demote target,
+        /// so the budget bounds the process and not only what the store
+        /// accounts for. No-op when tiering is off.
+        ///
+        /// ```
+        /// use kevy_store::Store;
+        /// # let dir = std::env::temp_dir().join(format!("kevy-doc-overhead-{}", std::process::id()));
+        /// let mut s = Store::new();
+        /// s.enable_tiering(&dir, 1 << 20)?;
+        /// s.set_tier_overhead(1000);
+        /// assert_eq!(s.tier_stats().effective_target, (1 << 20) * 19 / 20 - 1000);
+        /// # std::fs::remove_dir_all(&dir)?;
+        /// # Ok::<(), Box<dyn std::error::Error>>(())
+        /// ```
+        #[inline]
+        pub fn set_tier_overhead(&mut self, bytes: u64) {
+            if let Some(t) = &mut self.tier {
+                t.overhead_bytes = bytes;
+            }
+        }
+
+        /// While the keyspace table is within an eighth of its next growth,
+        /// set aside the bytes that growth will add, so demotion makes room
+        /// before the bigger table lands instead of after it — by then the
+        /// process holds both. Called from the shard tick; no-op when
+        /// tiering is off.
+        ///
+        /// ```
+        /// use kevy_store::{SetCondition, Store};
+        /// # let dir = std::env::temp_dir().join(format!("kevy-doc-growth-{}", std::process::id()));
+        /// let mut s = Store::new();
+        /// s.enable_tiering(&dir, 1 << 30)?;
+        /// let full = s.tier_stats().effective_target;
+        /// // sixteen slots hold fourteen keys; the fourteenth leaves no room
+        /// for i in 0..14 {
+        ///     s.set(format!("k{i}").as_bytes(), b"v".to_vec(), None, SetCondition::Always);
+        /// }
+        /// s.tier_reserve_growth();
+        /// assert!(s.tier_stats().effective_target < full, "the next table is set aside");
+        /// s.set(b"k14", b"v".to_vec(), None, SetCondition::Always); // grows
+        /// s.tier_reserve_growth();
+        /// assert_eq!(s.tier_stats().effective_target, full, "and released once it is charged");
+        /// # std::fs::remove_dir_all(&dir)?;
+        /// # Ok::<(), Box<dyn std::error::Error>>(())
+        /// ```
+        pub fn tier_reserve_growth(&mut self) {
+            let Some(t) = &mut self.tier else { return };
+            let cap = self.map.capacity();
+            t.growth_reserve = if cap > 0 && self.map.room() <= cap / 8 {
+                (self.map.grown_footprint() as u64).saturating_sub(self.keyspace_bytes)
+            } else {
+                0
+            };
+        }
+
         /// Whether the index/view floor (`reserved_bytes + extra`)
         /// already exhausts the tier's demotable headroom — the
-        /// IDX.CREATE refusal predicate (RFC §4 row 16). `false` when
-        /// tiering is off.
+        /// IDX.CREATE refusal predicate. What demotion can never reclaim
+        /// is the index floor plus the part of `used_memory` that stays
+        /// when every value is cold: the keyspace table and the cold
+        /// keys' own bytes. `false` when tiering is off.
         pub fn tier_index_floor_blocked(&self, extra: u64) -> bool {
             match &self.tier {
                 Some(t) => {
-                    t.reserved_bytes.saturating_add(extra)
-                        >= crate::tier_demote::watermark(t.budget).saturating_sub(t.stub_bytes)
+                    let cold_key_heap = t
+                        .stub_bytes
+                        .saturating_sub(t.cold_keys.saturating_mul(crate::value::ENTRY_OVERHEAD));
+                    let fixed = self
+                        .keyspace_bytes
+                        .saturating_add(cold_key_heap)
+                        .saturating_add(t.overhead_bytes)
+                        .saturating_add(t.growth_reserve);
+                    t.reserved_bytes.saturating_add(extra).saturating_add(fixed)
+                        >= crate::tier_demote::watermark(t.budget)
                 }
                 None => false,
             }
@@ -404,6 +378,14 @@ mod disabled {
         /// No tier backend on this target — no-op.
         #[inline]
         pub fn set_tier_reserved(&mut self, _bytes: u64) {}
+
+        /// No tier backend on this target — no-op.
+        #[inline]
+        pub fn set_tier_overhead(&mut self, _bytes: u64) {}
+
+        /// No tier backend on this target — no-op.
+        #[inline]
+        pub fn tier_reserve_growth(&mut self) {}
 
         /// No tier backend on this target — always false.
         #[inline]

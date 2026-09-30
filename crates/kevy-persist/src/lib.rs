@@ -38,9 +38,15 @@
 #![warn(missing_docs)]
 
 mod aof;
+#[cfg(not(target_arch = "wasm32"))]
+mod aof_mapped;
 mod aof_policy;
 mod aof_queue;
 mod aof_rewrite;
+#[cfg(not(target_arch = "wasm32"))]
+mod aof_stage;
+#[cfg(target_arch = "wasm32")]
+mod aof_stage_off;
 mod aof_sync;
 mod aof_txn;
 mod aof_util;
@@ -50,32 +56,49 @@ mod dir_lock;
 mod dump_cache;
 pub mod feed_meta;
 pub mod layout;
+mod log_base;
+mod modes;
 mod record;
 mod record_pieces;
 mod replay;
 mod replay_log;
+mod replay_report;
 mod replay_resync;
 mod replay_txn;
 mod replay_walk;
 pub mod reshard;
+mod reshard_journal;
 mod rewrite_chunk;
 mod rewrite_fmt;
 mod rewrite_frames;
 mod rewrite_stream_fmt;
 mod segmented;
 mod shards_meta;
+mod snapshot_aux;
+mod snapshot_commit;
 mod snapshot_fmt;
+mod snapshot_group_reads;
 mod snapshot_payload;
 mod snapshot_read;
 mod snapshot_write;
+#[cfg(not(target_arch = "wasm32"))]
+mod stage_recover;
+#[cfg(not(target_arch = "wasm32"))]
+mod stage_ring;
 
-pub use aof::{AOF_MAGIC, Aof, Fsync, RewritePlan, RewriteStats};
+pub use aof::{AOF_MAGIC, Aof};
 pub use aof_policy::RewritePolicy;
+pub use aof_rewrite::{RewritePlan, RewriteStats};
+#[cfg(not(target_arch = "wasm32"))]
+pub use aof_stage::StageOpen;
 pub use aof_sync::PendingSync;
-pub use aof_util::write_aof_base;
 pub use baseline::estimate_rewrite_size;
+pub use log_base::{is_log_base, settle_snapshot};
+pub use modes::{Fsync, ReplayMode, ReplaySummary};
 pub use record::{AOF2_MAGIC, AofFormat, RecordStep, next_record, write_record_multibulk};
-pub use replay::{ReplayReport, replay_aof, replay_aof_quiet, replay_aof_resync};
+pub use replay::{
+    ReplayReport, replay_aof, replay_aof_in_place, replay_aof_quiet, replay_aof_resync,
+};
 pub use segmented::{SEGMENTED, segmented_argv, segmented_frame};
 
 /// How often bulk-load paths check the tiering demote watermark:
@@ -85,6 +108,15 @@ pub use segmented::{SEGMENTED, segmented_argv, segmented_frame};
 /// ran without the inline spill. One shared constant so AOF replay
 /// (whose drive loops live in the callers — kevy-rt / kevy-embedded)
 /// and the snapshot loader stride identically.
+///
+/// ```
+/// // a replay loop demotes every `REPLAY_DEMOTE_INTERVAL` frames
+/// let frames = 5000u64;
+/// let demotions = (1..=frames)
+///     .filter(|n| n.is_multiple_of(kevy_persist::REPLAY_DEMOTE_INTERVAL))
+///     .count();
+/// assert_eq!(demotions, 4);
+/// ```
 pub const REPLAY_DEMOTE_INTERVAL: u64 = 1024;
 pub use dir_lock::DirLock;
 pub use kevy_resp::{Argv, ArgvView};
@@ -94,14 +126,17 @@ pub(crate) use rewrite_fmt::estimate_multibulk_bytes;
 pub use rewrite_fmt::{dump_aof, dump_store_to_buf, write_multibulk};
 pub use rewrite_frames::value_as_v1_frames;
 pub use rewrite_stream_fmt::write_stream_as_commands;
-pub use shards_meta::{Routing, ShardsMeta, read_shards_meta, write_shards_meta};
+pub use shards_meta::{Routing, ShardsMeta};
+pub use snapshot_aux::WithAux;
 pub(crate) use snapshot_fmt::{SNAPSHOT_BUF_CAP, write_bytes};
 pub use snapshot_read::{
-    load_snapshot, load_snapshot_filtered, load_snapshot_from, read_snapshot_cursor,
+    load_snapshot, load_snapshot_filtered, load_snapshot_from, load_snapshot_with_aux,
+    read_snapshot_cursor,
 };
 pub(crate) use snapshot_write::write_stream_groups;
 pub use snapshot_write::{
-    save_snapshot, write_snapshot_tmp, write_snapshot_to, write_snapshot_to_with_cursor,
+    save_snapshot, write_snapshot_tmp, write_snapshot_tmp_with_cursor, write_snapshot_to,
+    write_snapshot_to_with_cursor,
 };
 
 /// Anything that can enumerate `(key, &Value, ttl_ms)` triples for
@@ -116,20 +151,96 @@ pub use snapshot_write::{
 /// nothing is ever promoted into the hot map. SEG-backed stubs pass
 /// through AS STUBS: their data is truth in the segment directory, and
 /// the consumers persist the reference, not the payload.
+///
+/// Hosts implement it for their own aggregates (the embedded store
+/// serializes several shards as one source). An implementation must uphold
+/// the tiering contract above, and yield each live key exactly once.
+///
+/// ```
+/// use kevy_persist::SnapshotSource;
+/// use kevy_store::{SetCondition, Store, Value};
+///
+/// // two shards snapshotted as one source
+/// struct Both(Store, Store);
+/// impl SnapshotSource for Both {
+///     fn for_each_entry(&self, mut f: impl FnMut(&[u8], &Value, Option<u64>)) {
+///         self.0.for_each_entry(&mut f);
+///         self.1.for_each_entry(&mut f);
+///     }
+/// }
+///
+/// let (mut a, mut b) = (Store::new(), Store::new());
+/// a.set(b"a", b"1".to_vec(), None, SetCondition::Always);
+/// b.set(b"b", b"2".to_vec(), None, SetCondition::Always);
+/// let mut image = Vec::new();
+/// kevy_persist::write_snapshot_to(&Both(a, b), &mut image)?;
+///
+/// let mut back = Store::new();
+/// kevy_persist::load_snapshot_from(&mut back, image.as_slice())?;
+/// assert_eq!(back.dbsize(), 2);
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub trait SnapshotSource {
     /// Visit every live entry as `(key, &value, remaining_ttl_ms)`.
+    ///
+    /// ```
+    /// use kevy_persist::SnapshotSource;
+    /// use kevy_store::{SetCondition, Store};
+    /// use std::time::Duration;
+    ///
+    /// let mut store = Store::new();
+    /// store.set(b"k", b"v".to_vec(), Some(Duration::from_secs(60)), SetCondition::Always);
+    /// let mut seen = Vec::new();
+    /// store.for_each_entry(|key, _value, ttl| seen.push((key.to_vec(), ttl.is_some())));
+    /// assert_eq!(seen, [(b"k".to_vec(), true)]);
+    /// ```
     fn for_each_entry(&self, f: impl FnMut(&[u8], &Value, Option<u64>));
 
     /// Visit every live hash field TTL as `(key, field,
     /// absolute_unix_ms)`. Default = none (sources without the
     /// feature).
+    ///
+    /// ```
+    /// use kevy_persist::SnapshotSource;
+    /// use kevy_store::{HExpireCond, Store};
+    ///
+    /// let mut store = Store::new();
+    /// store.hset(b"h", &[(b"f", b"v")])?;
+    /// let deadline = kevy_store::now_unix_ms() + 60_000;
+    /// store.hexpire_at(b"h", &[b"f"], deadline, HExpireCond::Always)?;
+    /// let mut ttls = Vec::new();
+    /// store.for_each_hash_ttl(|key, field, at| ttls.push((key.to_vec(), field.to_vec(), at)));
+    /// assert_eq!(ttls, [(b"h".to_vec(), b"f".to_vec(), deadline)]);
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
     fn for_each_hash_ttl(&self, _f: impl FnMut(&[u8], &[u8], u64)) {}
 
     /// The live row segments' `(seq, file)` identities — the AOF
     /// rewrite's trailing SEGMENTED frames and the snapshot writer's
     /// version choice read these. Default = none.
+    ///
+    /// ```
+    /// use kevy_persist::SnapshotSource;
+    ///
+    /// // a store that never sealed a row segment references none
+    /// assert!(SnapshotSource::row_seg_files(&kevy_store::Store::new()).is_empty());
+    /// ```
     fn row_seg_files(&self) -> Vec<(u32, String)> {
         Vec::new()
+    }
+
+    /// A record frame the runtime keeps beside the keyspace (the server's
+    /// index catalog is one). A snapshot stores it as its last record and a
+    /// rewritten log as its last frame, so it survives both. Default =
+    /// none.
+    ///
+    /// ```
+    /// use kevy_persist::SnapshotSource;
+    ///
+    /// assert!(SnapshotSource::aux_frame(&kevy_store::Store::new()).is_none());
+    /// ```
+    fn aux_frame(&self) -> Option<Argv> {
+        None
     }
 }
 
@@ -184,13 +295,59 @@ impl SnapshotSource for kevy_store::SnapshotView {
     }
 }
 
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<Aof>();
+    send_sync::<Fsync>();
+    send_sync::<ReplayMode>();
+    send_sync::<ReplaySummary>();
+    send_sync::<RewritePlan>();
+    send_sync::<RewriteStats>();
+    send_sync::<RewritePolicy>();
+    #[cfg(not(target_arch = "wasm32"))]
+    send_sync::<StageOpen>();
+    send_sync::<PendingSync>();
+    send_sync::<ReplayReport>();
+    send_sync::<AofFormat>();
+    send_sync::<RecordStep<'static>>();
+    send_sync::<Routing>();
+    send_sync::<ShardsMeta>();
+
+    send_sync::<reshard::StdLayout>();
+    send_sync::<DirLock>();
+};
+
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod tests_aof;
 #[cfg(test)]
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+mod tests_fail;
+#[cfg(test)]
+mod tests_log_base;
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
+mod tests_log_base_fail;
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
+mod tests_mapped;
+#[cfg(test)]
+mod tests_policy;
+#[cfg(test)]
 mod tests_rewrite;
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
+mod tests_stage;
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
+mod tests_stage_aof;
 #[cfg(test)]
 mod tests_sync;
 #[cfg(test)]
 mod tests_tier_stream;
+#[cfg(test)]
+mod tests_txn_tail;
+#[cfg(test)]
+#[cfg(unix)]
+mod tests_zero_tail;

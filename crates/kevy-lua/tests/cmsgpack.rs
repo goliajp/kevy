@@ -3,6 +3,8 @@
 //! the cmsgpack source file so src/cmsgpack.rs stays under the
 //! 500-LOC house rule.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use kevy_lua::Bridge;
 
 fn unwrap_int(reply: &[u8]) -> i64 {

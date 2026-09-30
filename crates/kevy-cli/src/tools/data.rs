@@ -3,6 +3,7 @@
 
 use super::argscan::{Scan, unexpected};
 use crate::link::Link;
+use crate::migrate::{ImportStart, OnErrorReply};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -33,7 +34,7 @@ pub(crate) fn backup(args: &[String]) -> ExitCode {
         Ok(p) => p,
         Err(msg) => return fail("backup", &msg, USAGE),
     };
-    report("backup", crate::backup::run_backup(dir, out))
+    report("backup", crate::backup::pack(dir, out).map(|_| ()))
 }
 
 /// `restore --from <in.kevybkp> --to <data_dir>`.
@@ -43,7 +44,7 @@ pub(crate) fn restore(args: &[String]) -> ExitCode {
         Ok(p) => p,
         Err(msg) => return fail("restore", &msg, USAGE),
     };
-    report("restore", crate::backup::run_restore(from, to))
+    report("restore", crate::backup::unpack(from, to).map(|_| ()))
 }
 
 fn report(tool: &str, done: std::io::Result<()>) -> ExitCode {
@@ -59,19 +60,24 @@ fn report(tool: &str, done: std::io::Result<()>) -> ExitCode {
 /// What `export`/`import` take besides the connection.
 struct Stream {
     prefix: Option<Vec<u8>>,
-    resume: bool,
-    strict: bool,
+    start: ImportStart,
+    on_error: OnErrorReply,
     file: String,
 }
 
 fn stream_args(args: &[String], export: bool) -> Result<Stream, String> {
-    let mut s = Stream { prefix: None, resume: false, strict: false, file: String::new() };
+    let mut s = Stream {
+        prefix: None,
+        start: ImportStart::Fresh,
+        on_error: OnErrorReply::Count,
+        file: String::new(),
+    };
     let mut scan = Scan::new(args);
     while let Some(word) = scan.next() {
         match word {
             "--prefix" if export => s.prefix = Some(scan.value("--prefix")?.as_bytes().to_vec()),
-            "--resume" if !export => s.resume = true,
-            "--strict" if !export => s.strict = true,
+            "--resume" if !export => s.start = ImportStart::Resume,
+            "--strict" if !export => s.on_error = OnErrorReply::Abort,
             w if !w.starts_with('-') && s.file.is_empty() => s.file = w.to_string(),
             other => return Err(unexpected(other)),
         }
@@ -101,8 +107,8 @@ pub(crate) fn import(link: &mut dyn Link, args: &[String]) -> ExitCode {
         Ok(s) => s,
         Err(msg) => return fail("import", &msg, "[--resume] [--strict] <file>"),
     };
-    let done = crate::migrate::run_import(link, Path::new(&s.file), s.resume, s.strict).map(|r| {
-        if s.resume && r.sent == 0 && r.errors == 0 {
+    let done = crate::migrate::run_import(link, Path::new(&s.file), s.start, s.on_error).map(|r| {
+        if s.start == ImportStart::Resume && r.sent == 0 && r.errors == 0 {
             // A no-op resume reads as a silent failure without this.
             println!("imported: already complete (offset {}), nothing to resume", r.offset)
         } else {

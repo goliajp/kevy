@@ -21,7 +21,7 @@ use kevy_persist::Aof;
 
 use crate::config::Config;
 use crate::pubsub::PubsubBus;
-#[cfg(feature = "persist")]
+#[cfg(any(feature = "persist", not(target_arch = "wasm32")))]
 use crate::store::lock_write;
 use crate::store::{Shards, Store};
 
@@ -30,6 +30,17 @@ use crate::store::{Shards, Store};
 /// Used by the URL-keyed registry in `kevy-client` so that multiple
 /// `Connection::connect("mem://name")` calls share the same backing store
 /// without leaking it when all strong handles go away.
+///
+/// ```
+/// let s = kevy_embedded::Store::open(kevy_embedded::Config::default())?;
+/// s.set(b"k", b"v")?;
+/// let weak = s.downgrade();
+/// let again = weak.upgrade().ok_or("the store is still alive")?;
+/// assert_eq!(again.get(b"k")?.as_deref(), Some(&b"v"[..]), "same keyspace");
+/// drop((s, again));
+/// assert!(weak.upgrade().is_none(), "the last strong handle is gone");
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Debug, Clone)]
 pub struct WeakStore {
     shards: Weak<Vec<Arc<RwLock<Inner>>>>,
@@ -60,7 +71,7 @@ impl WeakStore {
             #[cfg(feature = "index")]
             views: self.views_weak.upgrade()?,
             #[cfg(feature = "index")]
-            tables: guard.tables.clone(),
+            tables: guard.catalog.tables.clone(),
             // The report rides the DropGuard (engine lifetime), so a
             // resurrection that outlives every full Store handle
             // still reports the ORIGINAL boot's replay verdict.
@@ -120,6 +131,10 @@ pub(crate) struct Inner {
     pub(crate) view_segs: crate::ops_view::ShardViews,
     #[cfg(feature = "index")]
     pub(crate) view_reg: Option<Arc<crate::ops_view::ViewReg>>,
+    /// The catalog registries and where the catalog stands as recorded
+    /// state (the replica runner and the snapshot writers reach it here).
+    #[cfg(feature = "index")]
+    pub(crate) catalog: Option<Arc<crate::catalog_record::CatalogRegs>>,
 }
 
 impl Inner {
@@ -145,6 +160,8 @@ impl Inner {
             view_segs: crate::ops_view::ShardViews::default(),
             #[cfg(feature = "index")]
             view_reg: None,
+            #[cfg(feature = "index")]
+            catalog: None,
         }
     }
 }
@@ -163,11 +180,11 @@ pub(crate) struct DropGuard {
     /// original boot's report — even after every full handle dropped
     /// while a subscription kept the engine alive.
     pub(crate) open_report: Arc<crate::metric::OpenReport>,
-    /// The table registry — owned by the guard (engine lifetime) for
+    /// The catalog registries — owned by the guard (engine lifetime) for
     /// the same reason as `open_report`: a `WeakStore::upgrade` after
     /// every full handle dropped must still see the declared tables.
     #[cfg(feature = "index")]
-    pub(crate) tables: Arc<crate::ops_table::TableReg>,
+    pub(crate) catalog: Arc<crate::catalog_record::CatalogRegs>,
     pub(crate) reaper_stop: Option<Arc<AtomicBool>>,
     pub(crate) reaper_join: Mutex<Option<JoinHandle<()>>>,
     // Read by the persist flush; without it the strong ref still
@@ -224,6 +241,7 @@ impl Drop for DropGuard {
         if let Some(j) =
             self.reaper_join.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
         {
+            j.thread().unpark();
             let _ = j.join();
         }
         #[cfg(feature = "persist")]
@@ -245,5 +263,23 @@ impl Drop for DropGuard {
         if let Some((feed, dir)) = &self.feed_close {
             Store::feed_write_close_marker(feed, dir);
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        self.free_entries_off_thread();
+    }
+}
+
+impl DropGuard {
+    /// Freeing the entries is most of the cost of closing a large store,
+    /// and nothing after the close depends on it, so a thread does it. The
+    /// parts that hold files (the AOF, the tier log) stay behind and close
+    /// here, before the directory lock is released. If the thread cannot
+    /// start, the closure holding the entries drops here instead.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn free_entries_off_thread(&self) {
+        let entries: Vec<kevy_store::DetachedEntries> =
+            self.shards_for_flush.iter().map(|s| lock_write(s).store.detach_entries()).collect();
+        let _ = std::thread::Builder::new()
+            .name(String::from("kevy-embedded-free"))
+            .spawn(move || drop(entries));
     }
 }

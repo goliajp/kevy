@@ -13,7 +13,8 @@
 //!   call takes the handle first. `0` is never a valid handle.
 //! - **Bytes in** cross as `(ptr, len)` pairs pointing into linear
 //!   memory the caller obtained from [`kevy_alloc`] (and returns with
-//!   [`kevy_free`]).
+//!   [`kevy_free`]). Each pair must stay readable, and unwritten, for
+//!   the whole call; `len == 0` is always accepted and means empty.
 //! - **Bytes out** land in a per-instance result buffer read via
 //!   [`kevy_out_ptr`] / [`kevy_out_len`]; the buffer is valid until the
 //!   next call on the same handle, so callers copy out immediately.
@@ -40,6 +41,34 @@
 //! [`kevy_aof_dump`] produces a compacted image for log rewriting. The
 //! byte format is exactly `kevy-persist`'s AOF format, so a log written
 //! by a browser tab replays in a native kevy just as well.
+//!
+//! ```
+//! use kevy_wasm::abi_core::*;
+//! use kevy_wasm::abi_kv::*;
+//! # fn out(h: u32) -> Vec<u8> {
+//! #     // SAFETY: the result buffer stays valid until the next call on `h`.
+//! #     unsafe { std::slice::from_raw_parts(kevy_out_ptr(h), kevy_out_len(h) as usize) }.to_vec()
+//! # }
+//! let h = kevy_open(0);
+//! // SAFETY: each pair points at that many readable bytes for the call.
+//! unsafe {
+//!     assert_eq!(kevy_set(h, b"k".as_ptr(), 1, b"hello".as_ptr(), 5), 0);
+//!     assert_eq!(kevy_get(h, b"k".as_ptr(), 1), 1); // hit: the value is in the result buffer
+//! }
+//! assert_eq!(out(h), b"hello");
+//! assert_eq!(kevy_close(h), 0);
+//! ```
+//!
+//! [`kevy_open`]: abi_core::kevy_open
+//! [`kevy_alloc`]: abi_core::kevy_alloc
+//! [`kevy_free`]: abi_core::kevy_free
+//! [`kevy_out_ptr`]: abi_core::kevy_out_ptr
+//! [`kevy_out_len`]: abi_core::kevy_out_len
+//! [`kevy_tick`]: abi_core::kevy_tick
+//! [`kevy_set_clock`]: abi_core::kevy_set_clock
+//! [`kevy_aof_frames_out`]: abi_aof::kevy_aof_frames_out
+//! [`kevy_aof_frame_in`]: abi_aof::kevy_aof_frame_in
+//! [`kevy_aof_dump`]: abi_aof::kevy_aof_dump
 
 // `write!` into a `String` / `Vec` returns a `Result` because the
 // trait must, not because it can fail.
@@ -49,8 +78,15 @@ pub mod abi_aof;
 pub mod abi_cmd;
 pub mod abi_core;
 pub mod abi_kv;
+mod abi_kv_multi;
 pub mod abi_pubsub;
 
+#[cfg(test)]
+#[path = "abi_catalog_tests.rs"]
+mod catalog_tests;
+#[cfg(test)]
+#[path = "abi_stream_tests.rs"]
+mod stream_tests;
 #[cfg(test)]
 #[path = "abi_tests.rs"]
 mod tests;
@@ -66,6 +102,12 @@ use kevy_store::{KevyError, StoreError};
 /// ABI contract version reported by [`abi_core::kevy_abi_version`].
 /// Bumped on any incompatible change to the export surface or the
 /// packed byte formats, so loaders can refuse a mismatched module.
+///
+/// ```
+/// use kevy_wasm::abi_core::*;
+/// // what a loader checks before any other call
+/// assert_eq!(kevy_abi_version(), kevy_wasm::ABI_VERSION);
+/// ```
 pub const ABI_VERSION: u32 = 1;
 
 /// Success status.
@@ -185,25 +227,11 @@ impl Instance {
     }
 }
 
-/// Redis-canonical message for a store-semantic error.
-///
-/// Mirrors the strings kevy-embedded's full RESP dispatcher emits
-/// (`dispatch::util`), duplicated here because that table is `pub(super)`
-/// and unreachable from this crate. The `dispatch_oracle` parity test in
-/// kevy-embedded holds those strings against the server byte for byte, so
-/// this door surfaces exactly the wording a native kevy would.
+/// Redis-canonical message for a store-semantic error: the same text the
+/// server and the embedded dispatcher send, so this door surfaces exactly
+/// the wording a native kevy would.
 fn store_err_canonical(e: &StoreError) -> &'static str {
-    match e {
-        StoreError::WrongType => {
-            "WRONGTYPE Operation against a key holding the wrong kind of value"
-        }
-        StoreError::NotInteger => "ERR value is not an integer or out of range",
-        StoreError::Overflow => "ERR increment or decrement would overflow",
-        StoreError::OutOfRange => "ERR index out of range",
-        StoreError::NoSuchKey => "ERR no such key",
-        StoreError::NotFloat => "ERR value is not a valid float",
-        StoreError::OutOfMemory => "OOM command not allowed when used memory > 'maxmemory'.",
-    }
+    e.as_wire()
 }
 
 /// Handle allocator. Starts at 1 so 0 stays "no instance".

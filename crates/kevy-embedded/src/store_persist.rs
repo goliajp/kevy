@@ -60,9 +60,13 @@ impl Store {
     /// `Ok(())`, every write acknowledged before this call is on
     /// stable storage. The `EverySec` serving-store idiom:
     ///
-    /// ```ignore
-    /// store.atomic(|c| { /* critical write */ Ok(()) })?;
+    /// ```
+    /// # use kevy_embedded::{AppendFsync, Config, Store};
+    /// # let dir = kevy_tmpdir::TmpDir::new("fsync-aof-doc");
+    /// # let store = Store::open(Config::default().with_persist(dir.path()).with_appendfsync(AppendFsync::EverySec))?;
+    /// store.atomic(|c| c.incr_by(b"orders", 1))?; // the critical write
     /// store.fsync_aof()?; // durable-on-ack for THIS block only
+    /// # Ok::<(), kevy_embedded::KevyError>(())
     /// ```
     ///
     /// Cost: one `fdatasync` per dirty shard; a no-op on clean shards.
@@ -85,7 +89,7 @@ impl Store {
         let mut agg: Option<RewriteStats> = None;
         for shard in self.shards.iter() {
             if let Some(stats) = self.rewrite_one_shard(shard)? {
-                let acc = agg.get_or_insert(RewriteStats { keys: 0, bytes: 0 });
+                let acc = agg.get_or_insert_with(RewriteStats::default);
                 acc.keys += stats.keys;
                 acc.bytes += stats.bytes;
             }
@@ -99,8 +103,9 @@ impl Store {
         let start = Instant::now();
         // Phase 1 (locked): freeze the COW view + start the tee —
         // O(n)-shallow, no serialization under the lock.
-        let (view, tmp, before_bytes) = {
+        let (view, aux, tmp, before_bytes) = {
             let mut g = lock_write(shard);
+            let aux = crate::shard_restore::catalog_aux(&g);
             let Inner { store, aof, .. } = &mut *g;
             let Some(aof) = aof else { return Ok(None) };
             if aof.is_rewriting() {
@@ -108,11 +113,12 @@ impl Store {
             }
             let before = aof.size_bytes();
             let view = store.collect_snapshot();
-            (view, aof.begin_view_rewrite()?, before)
+            (view, aux, aof.begin_view_rewrite()?, before)
         };
         // Phase 2 (unlocked): serialize + fsync the compacted log.
-        let keys = match kevy_persist::dump_aof(&tmp, &view) {
-            Ok((keys, _)) => keys,
+        let image = kevy_persist::WithAux::new(&view, aux.as_ref());
+        let keys = match kevy_persist::dump_aof(&tmp, &image) {
+            Ok(stats) => stats.keys,
             Err(e) => {
                 let mut g = lock_write(shard);
                 if let Some(aof) = &mut g.aof {
@@ -152,11 +158,21 @@ impl Store {
     /// Speaks the same verb set `Store::open` replays from an on-disk
     /// AOF; unknown verbs are skipped (forward compatibility with logs
     /// written by a newer kevy). Keyed verbs route to the owning shard;
-    /// `FLUSHALL`/`FLUSHDB` reach every shard. The frame is **not**
+    /// `FLUSHALL`/`FLUSHDB` reach every shard. A catalog frame (the
+    /// declared indexes, views and tables) replaces the store's catalog
+    /// when it is newer, or when the store has recorded none of its own,
+    /// and the indexes rebuild from the keyspace. The frame is **not**
     /// re-appended to any AOF — this is the read-back half of the pump,
     /// so re-logging would double-apply on the next replay.
     pub fn apply_frame(&self, args: &Argv) {
         let Some(verb) = args.first() else { return };
+        // the index, view and table catalog is store-wide state, not a
+        // key: it is taken whole when newer, as a native open takes it
+        #[cfg(feature = "index")]
+        if crate::shard_restore::is_catalog(args) {
+            self.guard.catalog.adopt_fed(args);
+            return;
+        }
         if verb.eq_ignore_ascii_case(b"FLUSHALL") || verb.eq_ignore_ascii_case(b"FLUSHDB") {
             for shard in self.shards.iter() {
                 crate::replay::apply(&mut lock_write(shard).store, args);
@@ -175,20 +191,29 @@ impl Store {
     /// AOF rewrite puts on disk). The write half of host-mediated
     /// persistence: hosts without a filesystem hand this buffer to their
     /// own storage, replacing the accumulated append log, and feed it
-    /// back through [`Self::apply_frame`] on the next open.
+    /// back through [`Self::apply_frame`] on the next open. Once the store
+    /// has recorded an index, view or table catalog, the image ends the
+    /// first shard's commands with the catalog frame.
     ///
     /// Each shard is frozen copy-on-write and serialized off-lock, so
     /// concurrent readers and writers on other shards are not blocked
     /// for the duration of the dump.
     pub fn dump_aof_buf(&self) -> Vec<u8> {
         let mut out = Vec::new();
+        // the catalog, once one was recorded, rides the first shard's
+        // image, the way a native rewrite keeps it beside the keyspace
+        #[cfg(feature = "index")]
+        let aux = self.guard.catalog.fed_aux();
+        #[cfg(not(feature = "index"))]
+        let aux: Option<Argv> = None;
         for (i, shard) in self.shards.iter().enumerate() {
             let view = lock_write(shard).store.collect_snapshot();
+            let image = kevy_persist::WithAux::new(&view, if i == 0 { aux.as_ref() } else { None });
             // V2, like every other rewrite output: the wasm door's
             // host-mediated pump replays both formats, and its dump is
             // the log's upgrade point (mirroring the native
             // first-rewrite upgrade).
-            let (buf, _keys) = kevy_persist::dump_store_to_buf(&view, kevy_persist::AofFormat::V2);
+            let (buf, _keys) = kevy_persist::dump_store_to_buf(&image, kevy_persist::AofFormat::V2);
             if i == 0 {
                 out = buf;
             } else {
@@ -222,9 +247,14 @@ impl Store {
 /// (unlocked): serialize the view to the snapshot's durable tmp.
 /// Phase 3 (write lock): commit — snapshot rename and tee'd AOF reset
 /// adjacent, so the snapshot/log commit window stays microseconds.
+/// A shard's frozen view, the catalog frame beside it, and the log reset
+/// the save started.
+type Frozen = (kevy_store::SnapshotView, Option<kevy_persist::Argv>, Option<std::path::PathBuf>);
+
 pub(crate) fn save_shard_snapshot(shard: &RwLock<Inner>, path: &std::path::Path) -> KevyResult<()> {
-    let (view, reset_tmp) = freeze_for_save(shard)?;
-    let tmp = match kevy_persist::write_snapshot_tmp(&view, path) {
+    let (view, aux, reset_tmp) = freeze_for_save(shard)?;
+    let image = kevy_persist::WithAux::new(&view, aux.as_ref());
+    let tmp = match kevy_persist::write_snapshot_tmp(&image, path) {
         Ok(t) => t,
         Err(e) => {
             if reset_tmp.is_some()
@@ -236,38 +266,36 @@ pub(crate) fn save_shard_snapshot(shard: &RwLock<Inner>, path: &std::path::Path)
         }
     };
     let mut g = lock_write(shard);
-    std::fs::rename(&tmp, path)?;
-    if let (Some(reset), Some(aof)) = (reset_tmp, &mut g.aof) {
-        let swap = kevy_persist::write_aof_base(&reset)
-            .and_then(|()| aof.finish_concurrent_rewrite(&reset, 0));
-        if let Err(e) = swap {
-            aof.abort_concurrent_rewrite();
-            let _ = std::fs::remove_file(&reset);
-            return Err(e.into());
+    match (reset_tmp, &mut g.aof) {
+        (Some(reset), Some(aof)) => {
+            if let Err(e) = aof.commit_snapshot(&tmp, path, &reset) {
+                let _ = std::fs::remove_file(&tmp);
+                return Err(e.into());
+            }
         }
+        _ => std::fs::rename(&tmp, path)?,
     }
     Ok(())
 }
 
-/// Phase-1 helper: collect the view and start the tee under one write
-/// lock. A racing background auto-rewrite owns the tee; it runs its
+/// Phase-1 helper: collect the view and the catalog frame beside it, and
+/// start the tee, under one write lock. A racing background auto-rewrite owns the tee; it runs its
 /// slow half off-lock and finishes in milliseconds, so wait it out
 /// (bounded) rather than saving a snapshot whose log would double-
 /// apply on replay.
-fn freeze_for_save(
-    shard: &RwLock<Inner>,
-) -> KevyResult<(kevy_store::SnapshotView, Option<std::path::PathBuf>)> {
+fn freeze_for_save(shard: &RwLock<Inner>) -> KevyResult<Frozen> {
     for _ in 0..2000 {
         {
             let mut g = lock_write(shard);
+            let aux = crate::shard_restore::catalog_aux(&g);
             let Inner { store, aof, .. } = &mut *g;
             match aof {
                 Some(a) if a.is_rewriting() => {} // racing rewrite — retry
                 Some(a) => {
                     let view = store.collect_snapshot();
-                    return Ok((view, Some(a.begin_view_rewrite()?)));
+                    return Ok((view, aux, Some(a.begin_view_rewrite()?)));
                 }
-                None => return Ok((store.collect_snapshot(), None)),
+                None => return Ok((store.collect_snapshot(), aux, None)),
             }
         }
         std::thread::sleep(std::time::Duration::from_millis(5));

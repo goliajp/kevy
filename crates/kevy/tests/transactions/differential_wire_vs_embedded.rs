@@ -49,11 +49,7 @@ impl Server {
     fn start_single_shard() -> Self {
         let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let port = kevy_testnet::free_port();
-        let dir = std::env::temp_dir().join(format!(
-            "kevy-diffwire-{}",
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = kevy_tmpdir::unique_dir("diffwire");
         let stop = Arc::new(AtomicBool::new(false));
         let (st, d) = (stop.clone(), dir.clone());
         let handle = std::thread::spawn(move || {
@@ -313,8 +309,8 @@ const CORPUS: &[&str] = &[
     "EXISTS wren2",
     // ── the branches, not just the happy path ──
     // The verbs above were driven once each, which reaches a handler and
-    // nothing inside it. `deadgate` said so on the first CI run after
-    // they were wired: eleven symbols joined the never-executed set,
+    // nothing inside it. The first coverage run after
+    // they were wired showed it: eleven symbols joined the never-executed set,
     // `cmd_getex` with 52 regions and `cmd_bitpos` with 26 — the option
     // forms and the refusals, none of them touched.
     //
@@ -414,9 +410,26 @@ const CORPUS: &[&str] = &[
     "COPY xnosuch xdst",
     "COPY xs",
     "GET xcopy",
+    // COPY clones a value of any type, not only a string
+    "COPY xh xhcopy",
+    "HGETALL xhcopy",
+    "COPY xl xlcopy",
+    "LRANGE xlcopy 0 -1",
+    "COPY xz xzcopy",
+    "ZRANGE xzcopy 0 -1 WITHSCORES",
+    "SADD xset a b",
+    "COPY xset xsetcopy",
+    "SCARD xsetcopy",
+    "XADD xst 1-1 f v",
+    "COPY xst xstcopy",
+    "XRANGE xstcopy - +",
+    "COPY xh xcopy",
+    "COPY xh xcopy REPLACE",
+    "TYPE xcopy",
+    "HGETALL xcopy",
     // The error arm each of these has and none of the lines above
     // reaches: the store refusing because the key holds another type.
-    // `deadgate` counted them one by one.
+    // Coverage counted them one by one.
     "GETRANGE xl 0 1",
     "SETRANGE xl 0 x",
     "GETEX xl EX 100",

@@ -20,10 +20,24 @@
 //! against the live kevy via TCP, then runs `kevy-cli backup` once
 //! the snapshot has flushed. (kevy-cli backup can do this in one
 //! call too — see the `--bgsave` flag.)
+//!
+//! ```
+//! use kevy_cli::backup::{pack, unpack};
+//! let data = kevy_tmpdir::TmpDir::new("backup-data");
+//! std::fs::write(data.path().join("aof-0.aof"), b"*1\r\n$4\r\nPING\r\n")?;
+//! let files = kevy_tmpdir::TmpDir::new("backup-files");
+//! let bundle = files.path().join("nightly.kevybkp");
+//! pack(data.path(), &bundle)?;
+//!
+//! let restored = kevy_tmpdir::TmpDir::new("backup-restored");
+//! unpack(&bundle, restored.path())?;
+//! assert_eq!(std::fs::read(restored.path().join("aof-0.aof"))?, b"*1\r\n$4\r\nPING\r\n");
+//! # Ok::<(), std::io::Error>(())
+//! ```
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 const MAGIC: &[u8; 8] = b"KEVYBKP1";
 
@@ -41,7 +55,21 @@ const MAGIC: &[u8; 8] = b"KEVYBKP1";
 /// `subdirectories_are_derived_spill_only` pins the set, so a future
 /// directory of TRUTH cannot join the data dir without someone reading
 /// this first.
-pub fn pack(data_dir: &Path, out_path: &Path) -> io::Result<u64> {
+///
+/// ```
+/// use kevy_cli::backup::pack;
+/// let data = kevy_tmpdir::TmpDir::new("pack-data");
+/// std::fs::write(data.path().join("dump-0.rdb"), [7u8; 100])?;
+/// std::fs::create_dir(data.path().join("tier"))?; // derived spill: not packed
+/// let out = kevy_tmpdir::TmpDir::new("pack-out");
+/// let bundle = out.path().join("b.kevybkp");
+/// assert_eq!(pack(data.path(), &bundle)?, 100, "body bytes packed");
+/// // never overwrites an existing backup
+/// assert!(pack(data.path(), &bundle).is_err());
+/// # Ok::<(), std::io::Error>(())
+/// ```
+pub fn pack(data_dir: impl AsRef<Path>, out_path: impl AsRef<Path>) -> io::Result<u64> {
+    let (data_dir, out_path) = (data_dir.as_ref(), out_path.as_ref());
     let out = OpenOptions::new().create_new(true).write(true).open(out_path)?;
     let mut w = BufWriter::new(out);
     w.write_all(MAGIC)?;
@@ -113,7 +141,24 @@ fn copy_file_body(w: &mut impl Write, path: &Path, body_len: u64) -> io::Result<
 /// Unpack the container at `in_path` into `target_dir` (created if
 /// missing; refuses to overwrite an existing non-empty dir to avoid
 /// clobbering live data).
-pub fn unpack(in_path: &Path, target_dir: &Path) -> io::Result<u64> {
+///
+/// ```
+/// use kevy_cli::backup::{pack, unpack};
+/// let data = kevy_tmpdir::TmpDir::new("unpack-data");
+/// std::fs::write(data.path().join("aof-0.aof"), b"log")?;
+/// let out = kevy_tmpdir::TmpDir::new("unpack-out");
+/// let bundle = out.path().join("b.kevybkp");
+/// pack(data.path(), &bundle)?;
+///
+/// let fresh = kevy_tmpdir::TmpDir::new("unpack-fresh");
+/// assert_eq!(unpack(&bundle, fresh.path())?, 3);
+/// // a second restore into the same, now non-empty, directory is refused
+/// let err = unpack(&bundle, fresh.path()).unwrap_err();
+/// assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+/// # Ok::<(), std::io::Error>(())
+/// ```
+pub fn unpack(in_path: impl AsRef<Path>, target_dir: impl AsRef<Path>) -> io::Result<u64> {
+    let (in_path, target_dir) = (in_path.as_ref(), target_dir.as_ref());
     std::fs::create_dir_all(target_dir)?;
     // Refuse to write into a non-empty dir (safety).
     let existing = std::fs::read_dir(target_dir)?.count();
@@ -202,19 +247,10 @@ fn copy_entry_body(
     out.flush()
 }
 
-/// Wrapper around `pack` that accepts string paths for the CLI layer.
-pub fn run_backup(data_dir: PathBuf, out_path: PathBuf) -> io::Result<()> {
-    pack(&data_dir, &out_path).map(|_| ())
-}
-
-/// Wrapper around `unpack` for CLI layer.
-pub fn run_restore(in_path: PathBuf, target_dir: PathBuf) -> io::Result<()> {
-    unpack(&in_path, &target_dir).map(|_| ())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     /// A fresh, empty, uniquely-named directory.
     fn tmp(name: &str) -> PathBuf {

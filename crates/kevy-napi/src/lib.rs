@@ -7,10 +7,10 @@
 //! thin, both inherited from the JNI gate:
 //!
 //! - **Buffers in, Buffer out.** The JS side packs argv into one flat
-//!   Buffer (u32-LE length prefix per argument — [`unpack_argv`]'s format),
-//!   so no array or string APIs are ever touched (the open report's and the
-//!   open options' plain objects are the exceptions); see [`napi`] for the
-//!   eighteen-symbol surface.
+//!   Buffer (u32-LE length prefix per argument — [`kevy_ffi::unpack_argv`]'s
+//!   format), so no array or string APIs are ever touched (the open report's
+//!   and the open options' plain objects are the exceptions); the crate's
+//!   private `napi` module declares the eighteen-symbol surface.
 //! - **Handles are externals.** `*mut KevyDb` / `*mut KevySub` travel as
 //!   opaque externals with no finalizer — close is explicit, exactly like
 //!   the bun:ffi door, and the JS wrapper nulls its reference after.

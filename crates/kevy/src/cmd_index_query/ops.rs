@@ -8,7 +8,7 @@ use super::args::{ComposeQuery, HybridArgs, KnnArgs, MatchArgs, Shape};
 use super::wire::{
     decode_gstats_arg, encode_agg_chunk, encode_hydration_row, encode_stats_chunk, peek_hydration,
 };
-use super::{ST_BADARGS, ST_BUILDING, ST_NOINDEX, ST_OK, ST_OVERBUDGET};
+use super::{ST_BADARGS, ST_BUILDING, ST_CLAUSE, ST_NOINDEX, ST_OK, ST_OVERBUDGET};
 use crate::index_runtime;
 use crate::state::Ctx;
 
@@ -54,14 +54,7 @@ pub(super) fn op_match(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Ve
         // terms too — the reduce unions them across shards — and counts
         // over the query's field scope, so a scoped query's global
         // statistics describe those fields rather than whole documents.
-        let opts = kevy_text::QueryOpts {
-            stats: None,
-            typo: q.typo,
-            fields: &want,
-            filter: &[],
-            sort: None,
-            distinct: None,
-        };
+        let opts = kevy_text::QueryOpts::default().with_typo(q.typo).with_fields(&want);
         let (mut n_docs, mut total_len, mut tokdf) =
             (ts.docs(), ts.total_len_in(&want), ts.query_df_in(&q.text, opts));
         merge_cold_stats(cold, &mut n_docs, &mut total_len, &mut tokdf);
@@ -141,10 +134,10 @@ pub(super) fn op_match_score(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>])
 /// `[ST_OK][n][(glen,group,count u64,sum f64,minflag+min,maxflag+max)*]`
 /// — GROUP sends the one requested group; GROUPS sends every local
 /// group (the reduce needs full partials to merge exactly).
-pub(super) fn op_agg(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
+pub(super) fn op_agg(ctx: &Ctx<'_>, argv: &[Vec<u8>]) -> Vec<u8> {
     let single = argv[2].eq_ignore_ascii_case(b"GROUP");
     if single {
-        let res = index_runtime::with_ready_agg(ctx, store, &argv[1], |a| {
+        let res = index_runtime::with_ready_agg(ctx, &argv[1], |a| {
             argv.get(3).map(|g| vec![(g.clone(), a.group(g))])
         });
         return match res {
@@ -168,7 +161,7 @@ pub(super) fn op_agg(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<
         .iter()
         .find_map(|a| std::str::from_utf8(a).ok()?.strip_prefix("DEPTH=")?.parse().ok())
         .unwrap_or(1);
-    let res = index_runtime::with_ready_agg(ctx, store, &argv[1], |a| {
+    let res = index_runtime::with_ready_agg(ctx, &argv[1], |a| {
         if depth == 0 {
             // fallback sentinel: full local materialization (uniform
             // near-tie data is unprunable — see reduce_agg)
@@ -193,8 +186,8 @@ pub(super) fn op_agg(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<
 
 /// Phase 2 of GROUPS (internal): `AGG.FETCH <name> <g…>` — exact partials
 /// for the candidate groups that survived phase-1 ranking.
-pub(super) fn op_agg_fetch(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
-    let res = index_runtime::with_ready_agg(ctx, store, &argv[1], |a| {
+pub(super) fn op_agg_fetch(ctx: &Ctx<'_>, argv: &[Vec<u8>]) -> Vec<u8> {
+    let res = index_runtime::with_ready_agg(ctx, &argv[1], |a| {
         argv[2..].iter().map(|g| (g.clone(), a.group(g))).collect::<Vec<_>>()
     });
     match res {
@@ -204,14 +197,28 @@ pub(super) fn op_agg_fetch(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -
     }
 }
 
-/// `IDX.REBUILD <name>` (ANN tombstone compaction).
-pub(super) fn op_rebuild(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
+/// `IDX.REBUILD <name>` on a local index: a range or unique index packs
+/// its leaves, an ANN index compacts its tombstones; a text or aggregate
+/// index is refused by kind.
+pub(super) fn op_rebuild(ctx: &Ctx<'_>, argv: &[Vec<u8>]) -> Vec<u8> {
     let Some(name) = argv.get(1) else {
         return vec![ST_BADARGS];
     };
-    match index_runtime::with_ready_ann(ctx, store, name, |g| g.rebuild()) {
-        Ok(()) => vec![ST_OK],
+    match index_runtime::rebuild_local(ctx, name) {
+        Ok(None) => vec![ST_OK],
+        Ok(Some(kind)) => {
+            let mut chunk = vec![ST_CLAUSE];
+            chunk.extend_from_slice(
+                format!(
+                    "IDX.REBUILD applies to range, unique, ann and global indexes; this is a {} index",
+                    kind.tag()
+                )
+                .as_bytes(),
+            );
+            chunk
+        }
         Err(e) if e.as_wire().starts_with("INDEXBUILDING") => vec![ST_BUILDING],
+        Err(e) if e.as_wire().starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
         Err(_) => vec![ST_NOINDEX],
     }
 }
@@ -223,7 +230,7 @@ pub(super) fn op_knn(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<
     let Some(q) = KnnArgs::parse(argv) else {
         return vec![ST_BADARGS];
     };
-    let res = index_runtime::with_ready_ann(ctx, store, &q.name, |g| {
+    let res = index_runtime::with_ready_ann(ctx, &q.name, |g| {
         kevy_vector::parse_vector(&q.vec, g.dim()).map(|v| g.knn(&v, q.limit, q.ef))
     });
     match res {
@@ -259,7 +266,7 @@ pub(super) fn op_hybrid(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> V
     let m = index_runtime::with_ready_text_segment(ctx, store, &q.text_idx, |_, ts, _, _| {
         ts.matches(&q.text, depth)
     });
-    let k = index_runtime::with_ready_ann(ctx, store, &q.ann_idx, |g| {
+    let k = index_runtime::with_ready_ann(ctx, &q.ann_idx, |g| {
         kevy_vector::parse_vector(&q.vec, g.dim()).map(|v| g.knn(&v, depth, q.ef))
     });
     let (m, k) = match (m, k) {
@@ -302,13 +309,7 @@ pub(super) fn op_compose(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> 
     let Some(cq) = ComposeQuery::parse(argv) else {
         return vec![ST_BADARGS];
     };
-    let res = index_runtime::with_two_ready_segments(
-        ctx,
-        store,
-        &cq.a.name,
-        &cq.b.name,
-        |spec_a, seg_a, spec_b, seg_b| compose_keys(&cq, spec_a.ty, seg_a, spec_b.ty, seg_b),
-    );
+    let res = super::compose::keys(ctx, store, &cq);
     match res {
         Ok(Some(keys)) => {
             let mut chunk = vec![ST_OK];
@@ -329,55 +330,7 @@ pub(super) fn op_compose(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> 
     }
 }
 
-/// The COMPOSE set algebra over two READY segments: AND filters the
-/// A-hits through B's held entries; OR unions both ranges. Key-sorted,
-/// cursor-trimmed, truncated to the limit.
-/// `LIMIT` does NOT bound the work here, and cannot.
-///
-/// Every other shape in this surface is cursor-paged and limit-bounded. This
-/// one is not, and the reason is structural rather than an oversight: a
-/// segment is a `BTreeSet<(value, key)>` — ordered by VALUE — while COMPOSE's
-/// result and its cursor are ordered by KEY. Producing one key-ordered page
-/// therefore requires the whole match set, so a `COMPOSE OR` over two broad
-/// ranges pays for both ranges plus a sort on every page even at `LIMIT 10`.
-///
-/// This is a cost model, not a bug, and the command reference states it. The
-/// only way to bound it would be to page in value order of the driving leaf,
-/// which is a different (and less useful) contract.
-fn compose_keys(
-    cq: &ComposeQuery,
-    ty_a: ValType,
-    seg_a: &kevy_index::Segment,
-    ty_b: ValType,
-    seg_b: &kevy_index::Segment,
-) -> Option<Vec<Vec<u8>>> {
-    let (min_a, max_a) = sub_bounds(&cq.a.shape, ty_a)?;
-    let (min_b, max_b) = sub_bounds(&cq.b.shape, ty_b)?;
-    // usize::MAX is deliberate — see the note above: a key-ordered page needs
-    // the full match set out of a value-ordered index.
-    let (a_hits, _) = seg_a.range(&min_a, &max_a, None, usize::MAX);
-    let mut keys: Vec<Vec<u8>> = if cq.and {
-        a_hits
-            .into_iter()
-            .filter(|(k, _)| seg_b.verify_entry(k).is_some_and(|v| *v >= min_b && *v <= max_b))
-            .map(|(k, _)| k)
-            .collect()
-    } else {
-        let (b_hits, _) = seg_b.range(&min_b, &max_b, None, usize::MAX);
-        let mut all: Vec<Vec<u8>> = a_hits.into_iter().chain(b_hits).map(|(k, _)| k).collect();
-        all.sort();
-        all.dedup();
-        all
-    };
-    keys.sort();
-    if let Some(cur) = &cq.cursor_key {
-        keys.retain(|k| k.as_slice() > cur.as_slice());
-    }
-    keys.truncate(cq.limit);
-    Some(keys)
-}
-
-fn sub_bounds(shape: &Shape, ty: ValType) -> Option<(IndexValue, IndexValue)> {
+pub(super) fn sub_bounds(shape: &Shape, ty: ValType) -> Option<(IndexValue, IndexValue)> {
     match shape {
         Shape::Range { min, max } => {
             Some((IndexValue::parse_literal(ty, min)?, IndexValue::parse_literal(ty, max)?))

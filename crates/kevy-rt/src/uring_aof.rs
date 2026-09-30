@@ -184,13 +184,13 @@ impl<C: Commands> Shard<C> {
             return;
         }
         let due = match aof.fsync_policy() {
-            kevy_persist::Fsync::Always => {
-                aof.queued_is_empty() && aof.queued_watermark() > o.durable_watermark
-            }
             kevy_persist::Fsync::EverySec => {
                 o.dirty_since_sync && o.last_sync.elapsed().as_secs() >= 1
             }
             kevy_persist::Fsync::No => false,
+            // always, and any policy this writer cannot name: prove every
+            // record, the choice that never loses an acknowledged write
+            _ => aof.queued_is_empty() && aof.queued_watermark() > o.durable_watermark,
         };
         if !due {
             return;

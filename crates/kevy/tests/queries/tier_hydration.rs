@@ -79,11 +79,7 @@ impl Server {
     fn start(tier_budget: Option<u64>) -> Self {
         let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let port = kevy_testnet::free_port();
-        let dir = std::env::temp_dir().join(format!(
-            "kevy-tierhyd-{}",
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = kevy_tmpdir::unique_dir("tierhyd");
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         let dir_thread = dir.clone();
@@ -247,7 +243,10 @@ fn cold_table_digest_backfill_and_hydration_match_the_hot_twin() {
         0,
         "neither backfill nor hydration may promote"
     );
-    assert_eq!(info_gauge(&mut cc, "cold_keys"), cold_keys, "rows stay cold");
+    // the new index joins the budget's floor, which can demote a row more;
+    // none may come back
+    let now_cold = common::at_rest("cold_keys", || info_gauge(&mut cc, "cold_keys"));
+    assert!(now_cold >= cold_keys, "rows stay cold: {now_cold} of {cold_keys}");
 
     // Phase E — ONE measured query on the ready index: reply
     // byte-identical to the hot twin; one read per cold ROW (the page

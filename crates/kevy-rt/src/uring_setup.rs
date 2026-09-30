@@ -6,7 +6,7 @@
 use std::io;
 use std::sync::Arc;
 
-use kevy_persist::{load_snapshot, replay_aof};
+use kevy_persist::replay_aof;
 use kevy_uring::IoUring;
 
 use crate::Commands;
@@ -26,12 +26,7 @@ impl<C: Commands> Shard<C> {
         }
         let segs_dir = kevy_persist::layout::segs_dir(&self.data_dir, self.id);
         self.store.enable_seg_rows(&segs_dir).map_err(std::io::Error::other)?;
-        let snap = self.snapshot_path();
-        if snap.exists()
-            && let Err(e) = load_snapshot(&mut self.store, &snap)
-        {
-            eprintln!("kevy: shard {} failed to load {}: {e}", self.id, snap.display());
-        }
+        self.load_boot_snapshot()?;
         if self.aof.is_some() {
             let aof_path = self.aof_path();
             let commands = &self.commands;
@@ -39,12 +34,12 @@ impl<C: Commands> Shard<C> {
             // In-replay demotion — same K-frame watermark
             // drain as the readiness path's replay.
             let mut frames: u64 = 0;
-            let mut torn: Option<String> = None;
+            let mut torn: Option<kevy_store::SegRowsError> = None;
             let apply = |args: kevy_persist::Argv| {
                 if let Some(f) = kevy_persist::segmented_frame(&args) {
                     // Same stitch handling as the readiness path: a
                     // missing manifest entry is a named startup refusal.
-                    if let Err(e) = kevy_store::apply_segmented(store, &segs_dir, f) {
+                    if let Err(e) = store.apply_segmented(&segs_dir, f) {
                         torn.get_or_insert(e);
                     }
                     return;
@@ -65,21 +60,16 @@ impl<C: Commands> Shard<C> {
             }
             self.commands.on_replay_report(report.dropped_bytes, report.corrupt);
         }
-        self.store.sweep_orphan_row_segs();
-        self.store.demote_to_watermark();
+        self.finish_restore();
         Ok(())
     }
 }
 
-/// SQ/CQ depth per-shard. Paired with `PBUF_ENTRIES` — both were bumped
-/// to fix the c=10 000 cliff (deco-axis-k-c10000).
+/// SQ/CQ depth per-shard, raised to fix a cliff at 10,000 connections.
 pub(crate) const URING_ENTRIES: u32 = 2048;
 // The nap rung was removed (see the idle-ladder comment in `run_uring`).
 // URING_NAP_LIMIT / URING_NAP_MICROS / `uring_nap` are gone; spin →
 // park is the whole ladder now.
-/// Shared provided-buffer ring: 4096 × 16K = 64 MiB/shard. Linux multishot
-/// recv terminates on ENOBUFS — must size for max conns (deco-axis-k-c10000).
-pub(crate) const PBUF_ENTRIES: u16 = 4096;
 pub(crate) const PBUF_SIZE: u32 = 16 * 1024;
 pub(crate) const PBUF_GROUP: u16 = 0;
 
@@ -90,9 +80,9 @@ pub(crate) const PBUF_GROUP: u16 = 0;
 /// success here means `run_uring` will start. [`crate::Runtime`] calls this once
 /// before spawning shards to auto-select io_uring with a graceful epoll fallback
 /// — so an unavailable io_uring degrades to epoll instead of failing startup.
-pub(crate) fn io_uring_available() -> bool {
+pub(crate) fn io_uring_available(recv_buffers: u16) -> bool {
     match IoUring::new(URING_ENTRIES) {
-        Ok(ring) => ring.register_buf_ring(PBUF_ENTRIES, PBUF_SIZE, PBUF_GROUP).is_ok(),
+        Ok(ring) => ring.register_buf_ring(recv_buffers, PBUF_SIZE, PBUF_GROUP).is_ok(),
         Err(_) => false,
     }
 }
@@ -113,7 +103,7 @@ pub(crate) fn io_uring_available() -> bool {
 /// same core set as the shard threads, so it loses badly on a fully
 /// subscribed box — it exists so the A/B stays reproducible whenever
 /// the tradeoff is re-judged (spare-core layouts, kernel changes).
-pub(crate) fn build_uring() -> io::Result<(IoUring, kevy_uring::ProvidedBufRing)> {
+pub(crate) fn build_uring(recv_buffers: u16) -> io::Result<(IoUring, kevy_uring::ProvidedBufRing)> {
     let sqpoll = matches!(
         std::env::var("KEVY_SQPOLL").ok().as_deref(),
         Some(v) if !v.is_empty() && v != "0" && v != "off" && v != "no" && v != "false"
@@ -123,6 +113,6 @@ pub(crate) fn build_uring() -> io::Result<(IoUring, kevy_uring::ProvidedBufRing)
     } else {
         IoUring::new(URING_ENTRIES)?
     };
-    let pbuf = ring.register_buf_ring(PBUF_ENTRIES, PBUF_SIZE, PBUF_GROUP)?;
+    let pbuf = ring.register_buf_ring(recv_buffers, PBUF_SIZE, PBUF_GROUP)?;
     Ok((ring, pbuf))
 }

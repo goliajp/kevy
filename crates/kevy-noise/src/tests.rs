@@ -253,3 +253,26 @@ fn split_halves_keep_each_direction_in_order() {
     assert_eq!(s_rx.open(&up[0]), Err(Error::Decrypt), "a replay is refused");
     assert_eq!(c_tx.seal(&vec![0; crate::MAX_MESSAGE]).err(), Some(Error::TooLong));
 }
+
+#[test]
+fn debug_output_names_public_state_and_no_key_material() {
+    let (server, client) = (Keypair::from_secret([1; 32]), Keypair::from_secret([2; 32]));
+    let (m1, init) =
+        Initiator::start(&client, &server.public(), Keypair::from_secret([3; 32]), b"", b"")
+            .unwrap();
+    let local = format!("Initiator {{ local_static: {:?}, .. }}", client.public());
+    assert_eq!(format!("{init:?}"), local);
+    let (_, resp) = Responder::accept(&server, Keypair::from_secret([4; 32]), b"", &m1).unwrap();
+    let remote = format!("Responder {{ remote_static: {:?}, .. }}", client.public());
+    assert_eq!(format!("{resp:?}"), remote);
+    let (m2, s) = resp.finish(b"").unwrap();
+    let (_, mut c) = init.finish(&m2).unwrap();
+    c.seal(b"x").unwrap();
+    assert_eq!(format!("{c:?}"), "Transport { sent: 1, received: 0, .. }");
+    let (tx, rx) = s.split();
+    assert_eq!(format!("{tx:?}"), "Sealer { sent: 0, .. }");
+    assert_eq!(format!("{rx:?}"), "Opener { received: 0, .. }");
+    let mut f = Frames::default();
+    f.push(&[0, 3, 1]);
+    assert_eq!(format!("{f:?}"), "Frames { buffered: 3 }");
+}

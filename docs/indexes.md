@@ -35,8 +35,8 @@ range|unique [MAXMEM <bytes>]`
   and aggregates**. A 58-table schema converted this way needed roughly
   19. Read naively, "58 tables vs 64 indexes" looks nearly blocked; it
   is not, but only if the modelling rule is applied.
-- Up to 64 indexes. The catalog persists in a data-dir sidecar;
-  the index CONTENT is derived state — it is never snapshotted or
+- Up to 64 indexes. The catalog is recorded in the log and every
+  snapshot, and replicates; the index CONTENT is derived state — it is never snapshotted or
   AOF-logged, and rebuilds in the background after a restart
   (`-INDEXBUILDING` until ready; data availability never waits).
 
@@ -151,6 +151,63 @@ needs under 20 read as "one per global query shape". If you are
 approaching 64, the question to ask is which of them are really
 parent-child navigation wearing an index costume.
 
+## Global indexes (`PARTITION global`)
+
+An index is local by default: every shard indexes the rows it holds, so
+every query goes to every shard and the origin merges their pages. A
+**global** index is cut by value into partitions, one per shard. A row
+stays on the shard its key hashes to; its entry lives in the partition
+its value falls in.
+
+```
+IDX.CREATE by_age ON PREFIX user: FIELD age TYPE i64 KIND range PARTITION global SPLIT 30 SPLIT 60
+TABLE.DECLARE user PREFIX user: PK id COLUMN id i64 COLUMN age i64 INDEX age range GLOBAL SPLIT AT 30 60
+```
+
+- **Split points.** `SPLIT v` (one per point, as the option pairs of
+  `IDX.CREATE` require) or `GLOBAL SPLIT AT v…`: at most one fewer than
+  the shard count. Without them every shard sorts its rows' values and
+  sends them cut into 256 buckets of equal rank per partition, each as
+  its largest value and its row count; kevy merges them by count. A split
+  is then off by at most one bucket per shard, so the largest partition
+  starts within 2/256 (0.8%) of the mean. An index created over no rows has one partition until
+  `IDX.REBUILD` samples again. Every entry of one value lives in one
+  partition, so a value held by more than its share of rows cannot be
+  split. An `ORDERPATH … GLOBAL` samples, or takes `SPLIT AT` points
+  written the way `TABLE.DESCRIBE` writes them: `0x` and the path's
+  encoded order bytes, since a point there spans several columns.
+- **Reads.** An `EQ`, or a `RANGE` inside one partition, reads one shard.
+  A page in `(value, key)` order walks the partitions it needs one after
+  another and concatenates them — no merge of N pages. `IDX.COUNT` and
+  the selection clauses (`SORT`, `DISTINCT`, `FACET`, `OFFSET`) go to the
+  partitions the range meets. `IDX.EXPLAIN` names them.
+- **Writes.** A write that changes a row's entry sends one message to the
+  entry's partition (two when the entry moves partitions), and the
+  client's reply waits until the partition has applied it: a read sent
+  after the reply sees the write.
+- **`FIELDS` come from `VALUES`.** The partition holds the entry, not the
+  row, so a global index answers `FIELDS` from the columns it stores. A
+  field it does not store is refused by name, and `IDX.ADVISE` suggests
+  adding it to `VALUES`.
+- **Kinds and limits.** `range` and `unique` only. Not with `COMPOSE` or
+  views (both need a row's entries on the row's own shard), not on a
+  windowed table, not in an embedded store — each refused by name.
+- **Building.** Queries answer `-INDEXBUILDING` until every shard has
+  sent the entries of the rows it held; a query never sees a partial
+  partition.
+- **Operating.** `IDX.LIST` reports `partitioning` for every index, and
+  for a global one `partitions`, `max_entries` and `mean_entries` —
+  skew shows as the ratio of the last two. `IDX.REBUILD <name>` samples
+  again and rebuilds. `IDX.VERIFY` matches every row against the entry
+  its partition holds, so `drift` and `missing` are exact, and a global
+  unique index counts `duplicates` across the whole keyspace (a local one
+  sees duplicates within a shard). A server restarted with fewer shards
+  than an index has partitions keeps an even subset of its split points.
+- **Memory.** The entries cost what a local index's do, and the row's
+  shard keeps nothing per row for a global index: a write names the value
+  the row was indexed under, and the value names the partition that holds
+  its entry. `IDX.LIST` and `IDX.VERIFY` report the partitions' `bytes`.
+
 ## Consistency + cost model
 
 - A write and its index update are atomic within the owning shard
@@ -159,17 +216,50 @@ parent-child navigation wearing an index costume.
   DBSIZE).
 - An **empty catalog costs one untaken branch per write** (a Relaxed
   atomic load). With indexes declared, a write in an indexed domain
-  pays one hash-field read + one B-tree update per matching index.
-- Memory per index ≈ `rows × (avg_key_len + string_value_len + 82…93)`
-  bytes of heap: a 56-byte row shared by both lookup directions, about
-  16 bytes of ordered-tree slot, and 10–21 bytes of hash-table slot
-  (`string_value_len` is 0 for `i64` / `f64`). The table grows by
-  doubling, so where a row count falls between two growth steps moves
-  the per-row figure inside that range; plan with the top of it. The
-  allocator rounds small blocks up, so resident memory runs above the
-  heap figure, by up to about half for short keys and string values.
-  `IDX.LIST` and `IDX.VERIFY` report the heap figure;
-  `bench/idxgate.sh` checks it against the server's measured RSS.
+  pays one hash-field read and one tree update per matching index. Before
+  a write changes a row, the store records its indexed fields, so the
+  update knows which entry to drop whatever wrote the row: a command, a
+  script's inner call, a transaction, expiry, eviction, a replicated
+  frame.
+- Memory per index ≈ `rows × ((value_len + handle_len + 3) / fill + 1)`
+  bytes. An index is a B+ tree of 1,784-byte leaves; an entry is a
+  10-byte slot and whatever of its order key runs past the first eight
+  bytes. `value_len` is 8 for `i64` / `f64` and the string's length plus
+  2 for `str`; `handle_len` is the key without the index's prefix, half
+  that (rounded up) when it is all digits. `fill` is how full the leaves
+  are: 1.0 after a build, which packs them (a global index's
+  `IDX.REBUILD` builds it again), and after the background repack below
+  has rested; between the two it is whatever the writes left. Over 1.25 million rows keyed `row:<n>`, an `i64` index
+  measured 15.9 bytes a row packed and 23–25 after random writes, a `str`
+  index of ten-byte values 20.2 and 30–38. `IDX.LIST` and `IDX.VERIFY`
+  report what the leaves hold; `bench/idxgate.sh` checks it against the
+  server's measured RSS.
+- A write never packs leaves. It splits a full leaf in two, and merges a
+  leaf into a neighbour only when the leaf is under a quarter full and
+  the two fit in three-quarters of one, so what writes alone guarantee is
+  that every leaf holds at least one entry: an entry landing just past a
+  full leaf whose neighbour is full too opens a leaf of its own, and a
+  leaf thinned between two full neighbours stays thin.
+- The shard tick packs them instead (the embedded store's reaper tick
+  too). A hand walks each index segment's leaves in order and pours the
+  next leaf's first entries into the one it stands on while they fit,
+  dropping a leaf that empties; separators, counts and order are kept.
+  It spends at most half a millisecond a tick, four leaves between clock
+  reads, and moves between indexes so a large one does not hold back the
+  rest. Once a whole pass moves nothing the segment rests: every leaf but
+  its last is then too full to take the next leaf's first entry, so it
+  holds more than its 1,768-byte page less its widest entry, and the
+  segment holds at most `1 + entry_bytes / (1768 - widest)` leaves. It
+  wakes again when it has an eighth more leaves or an eighth fewer
+  entries than it rested with. Packing 1.25 million randomly written
+  rows in one segment took 49 ms of one core (21.6 to 15.1 bytes a
+  row), about 100 ticks; 20,000 rows took under a millisecond. With
+  `[expiry] hz = 0` there is no shard tick and nothing is packed.
+- An index that declares `VALUES` keeps them in the same entry: a
+  one-byte tag each, then the value — a number of decimal digits at half
+  a byte a digit, anything else as its bytes. Add that to the entry
+  above: a short string and a ten-digit number measured about 10 bytes a
+  row more. `bytes` includes it.
 
 ## Aggregate kind (`KIND agg`) — write-time GROUP BY
 

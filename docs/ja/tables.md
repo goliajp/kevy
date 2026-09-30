@@ -17,7 +17,7 @@ IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20
 
 > **手書きインデックスからの移行なら**、まず [table-migration.md](table-migration.md) を読んでください——本番で対価を払って得た 8 つの教訓と、テーブルが存在する理由そのものである実測ドリフト（89 % が書かれず、76 % が消されず）が載っています。
 
-> **宣言はけっしてpanicしません。** `TABLE.DECLARE` / `Store::table_declare`は、不正なspec——未知のカラム、名前の衝突、PKの欠落、その他なんであれ——のすべてに名前つきのエラーで答え、拒否された宣言は何ひとつインストールしません。これは硬い保証であり、`compile_table`が自分自身で検証することによって強制され、継続的にfuzzされています（`table_spec`）：起動パス上の悪いspecは、再起動ループではなく1行のログです。
+> **宣言はけっしてpanicしません。** `TABLE.DECLARE` / `Store::table_declare`は、不正なspec——未知のカラム、名前の衝突、PKの欠落、その他なんであれ——のすべてに名前つきのエラーで答え、拒否された宣言は何ひとつインストールしません。これは硬い保証であり、`TableSpec::compile`が自分自身で検証することによって強制され、継続的にfuzzされています（`table_spec`）：起動パス上の悪いspecは、再起動ループではなく1行のログです。
 
 ## 宣言モデル
 
@@ -30,7 +30,7 @@ IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20
 
 コンパイルされた名前はひとつの名前空間を共有します——`<table>.<col>` と `<table>.<orderpath>`——ので、インデックス済みカラムと同名の ORDERPATH は宣言時に、名前つきで拒否されます。コンパイルはサーバーと組み込みストアが共有する単一の実装で（dispatch oracle が CI で両面をバイト比較します）、しかも**原子的**です。どんなエラーでも何もインストールされません——半分だけ宣言されたテーブルは存在しません。
 
-コンパイルされたインデックスがすることは、手書きの `IDX.CREATE` がすることと同じです。同じ埋め戻しの挙動、同じ `-INDEXBUILDING` の規律、同じサイドカー永続化、同じ予算による拒否（[indexes.md](indexes.md)）。`TABLE.DROP` はテーブルと、それがコンパイルしたすべてのインデックスを落とします。
+コンパイルされたインデックスがすることは、手書きの `IDX.CREATE` がすることと同じです。同じ埋め戻しの挙動、同じ `-INDEXBUILDING` の規律、同じカタログの記録、同じ予算による拒否（[indexes.md](indexes.md)）。`TABLE.DROP` はテーブルと、それがコンパイルしたすべてのインデックスを落とします。
 
 ## 文法
 
@@ -200,7 +200,7 @@ match store.table_ensure(spec)? {    // 起動の動詞：検証・コンパイ�
 let tables = store.table_list();
 let report = store.table_verify_report(b"user")?;  // 名前つきの新鮮なカウンタ
 assert_eq!(report.per_index[0].missing, 0);        //   + 抜き取り検査
-store.table_drop(b"user");
+store.table_drop(b"user")?;
 ```
 
 ワイヤ形式（`db.cmd("TABLE.DECLARE", …)`）も使え、同一の共有文法でパースされます——サーバーと組み込みのバイト一致は、CI の dispatch oracle が固定しています。

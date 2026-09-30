@@ -9,7 +9,7 @@ use kevy_resp::{ArgvView, CmdError, encode_error, encode_integer};
 use kevy_store::Store;
 
 use crate::Effect;
-use crate::args::arg_f64;
+use crate::args::{arg_f64, upper_verb};
 use crate::reply::store_err;
 
 use super::parse_unit;
@@ -113,8 +113,9 @@ fn run_radius(
 pub(super) fn legacy_store_dst<A: ArgvView + ?Sized>(args: &A, start: usize) -> Option<Vec<u8>> {
     let mut dst = None;
     let mut i = start;
+    let mut buf = [0u8; 32];
     while i < args.len() {
-        let step = match args[i].to_ascii_uppercase().as_slice() {
+        let step = match upper_verb(&args[i], &mut buf) {
             b"STORE" | b"STOREDIST" => {
                 dst = Some(args.get(i + 1)?.to_vec());
                 2

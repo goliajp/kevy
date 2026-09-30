@@ -121,6 +121,6 @@ fn note_ingested_key(ctx: &Ctx<'_>, store: &mut Store, key: &[u8]) {
         crate::index_runtime::on_write(ctx, store, key);
     }
     if ctx.state.catalogs.view_nonempty() {
-        crate::view_runtime::on_write(ctx, store, key);
+        crate::view_runtime::on_write(ctx);
     }
 }

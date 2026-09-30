@@ -7,7 +7,7 @@ use crate::nostd_prelude::*;
 
 use alloc::sync::Arc;
 
-use crate::value::Value;
+use crate::value::{SetData, Value, ZSetData};
 use crate::{SmallBytes, Store};
 
 impl Store {
@@ -62,7 +62,7 @@ impl Store {
             // payload — losing the inline encoding bit costs nothing
             // beyond one re-promotion on the first mutation.
             Value::SmallSetInline(s) => {
-                self.load_set(k, s.iter_slices().map(<[u8]>::to_vec).collect(), ttl_ms)
+                self.load_set(k, s.iter().map(<[u8]>::to_vec).collect(), ttl_ms)
             }
             Value::ZSet(z) => {
                 self.load_zset(k, z.ordered().map(|(m, sc)| (m.to_vec(), sc)).collect(), ttl_ms)
@@ -91,7 +91,7 @@ impl Store {
     /// into the primitive tuples [`Self::load_stream`] takes.
     fn load_stream_value(&mut self, k: Vec<u8>, st: &crate::StreamData, ttl_ms: Option<u64>) {
         let entries: Vec<crate::stream::LoadedStreamEntry> = st
-            .iter_entries()
+            .entries()
             .map(|(id, fv)| {
                 let fvv = fv
                     .iter()
@@ -131,7 +131,7 @@ impl Store {
     ) {
         let mut s = crate::stream::StreamData::default();
         for (ms, seq, fv) in entries {
-            let id = crate::stream::StreamId { ms, seq };
+            let id = crate::stream::StreamId::new(ms, seq);
             let fv_small: Vec<(SmallBytes, SmallBytes)> = fv
                 .into_iter()
                 .map(|(f, v)| (SmallBytes::from_vec(f), SmallBytes::from_vec(v)))
@@ -139,11 +139,46 @@ impl Store {
             s.load_entry(id, fv_small);
         }
         s.set_loaded_state(
-            crate::stream::StreamId { ms: last_id.0, seq: last_id.1 },
-            crate::stream::StreamId { ms: max_deleted_id.0, seq: max_deleted_id.1 },
+            crate::stream::StreamId::new(last_id.0, last_id.1),
+            crate::stream::StreamId::new(max_deleted_id.0, max_deleted_id.1),
             entries_added,
         );
         s.import_groups(groups);
         self.insert_loaded(key, Value::Stream(Arc::new(s)), ttl_ms);
+    }
+
+    /// Install a set from a snapshot or AOF replay. Duplicate members in
+    /// the input collapse, as they would on SADD.
+    pub fn load_set(&mut self, key: Vec<u8>, members: Vec<Vec<u8>>, ttl_ms: Option<u64>) {
+        // Same encoding switch a live SADD applies: a giant set loads
+        // straight into buckets, COW-ready.
+        if members.len() > crate::seg_map::HS_PROMOTE {
+            let mut seg = crate::seg_map::SegMap::default();
+            for m in members {
+                seg.insert(SmallBytes::from_vec(m), ());
+            }
+            self.insert_loaded(key, Value::SegSet(Arc::new(seg)), ttl_ms);
+            return;
+        }
+        let set_data: SetData = members.into_iter().map(SmallBytes::from_vec).collect();
+        self.insert_loaded(key, Value::Set(Arc::new(set_data)), ttl_ms);
+    }
+
+    /// Install a sorted set from a snapshot or AOF replay as
+    /// `(member, score)` pairs. Order in the input does not matter — the
+    /// set orders itself, as it would on ZADD.
+    pub fn load_zset(&mut self, key: Vec<u8>, pairs: Vec<(Vec<u8>, f64)>, ttl_ms: Option<u64>) {
+        let mut z = ZSetData::default();
+        for (m, score) in pairs {
+            z.insert(&m, score);
+        }
+        // Same encoding switch a live ZADD applies: giant zsets load
+        // straight into the segmented representation, COW-ready.
+        let value = if z.len() > crate::zset_seg::Z_PROMOTE {
+            Value::SegZSet(Arc::new(crate::zset_seg::SegZSetData::from_flat(&z)))
+        } else {
+            Value::ZSet(Arc::new(z))
+        };
+        self.insert_loaded(key, value, ttl_ms);
     }
 }

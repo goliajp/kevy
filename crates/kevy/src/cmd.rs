@@ -1,6 +1,6 @@
 //! Command helpers shared by the dispatcher.
 
-use kevy_resp::{ArgvView, encode_array_len, encode_bulk, encode_error, encode_integer};
+use kevy_resp::{encode_array_len, encode_bulk, encode_error, encode_integer};
 
 pub(crate) use kevy_verbs::args::{arg_f64, arg_i64, upper_verb};
 pub(crate) use kevy_verbs::reply::{OOM_ERR, fmt_score, store_err, wrong_args};
@@ -55,16 +55,3 @@ pub(crate) fn cmd_hello(out: &mut Vec<u8>) {
 /// `is_growing_write_verb`) live in [`crate::cmd_class`]; re-exported here
 /// so dispatchers keep their `cmd::*` paths.
 pub(crate) use crate::cmd_class::{is_growing_write_verb, is_write_verb, notify_class_for_verb};
-
-/// Parse `SCAN cursor [MATCH pattern] [COUNT count] [TYPE type]` into
-/// the runtime's [`kevy_rt::ScanArgs`]. `Err` carries the exact error
-/// message the runtime puts on the wire (Redis wording).
-pub(crate) fn scan_args<A: ArgvView + ?Sized>(args: &A) -> Result<kevy_rt::ScanArgs, &'static str> {
-    let o = kevy_verbs::args::scan_opts(args)?;
-    Ok(kevy_rt::ScanArgs {
-        cursor: o.cursor,
-        count: o.count,
-        pattern: o.pattern,
-        type_filter: o.type_filter,
-    })
-}

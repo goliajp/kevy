@@ -1,26 +1,112 @@
 # Changelog
 
-## Unreleased
+## 7.0.0 — the Rust API brought to the guidelines, embedded writes that survive a kill, global indexes, encrypted links
 
-- **A client connecting while the server starts is no longer reset.** The
-  check that refuses a port another server listens on opened a listener
-  for a moment and closed it; a connect that arrived in that moment was
-  accepted into it and then reset. The check now connects to the port
-  instead, which answers the same question and accepts nothing. It also
-  gives a listener that is going away 200 ms to go: io_uring releases a
-  killed server's listeners about 10 ms after the process exits, and a
-  restart inside that window was refused as if another server held the
-  port.
+A major release, for four reasons that reach past a running server. The
+public Rust API of every crate now follows the Rust API Guidelines, and
+most signatures changed ([docs/rust-api-7.0.md](docs/rust-api-7.0.md)
+lists each one, old → new). `kevy-config`'s section structs gained public
+fields, which breaks any struct literal that names them all. The Go module
+moved to `github.com/goliajp/kevy-go/v7`. And a data directory 7.0 has
+written holds log frames — and, after a process was killed, files — that
+6.4 does not understand, so going back takes a step first.
 
-- **Writes made during an AOF rewrite's final swap reach the new log.**
-  The rewrite renames the new log over the old one on a background thread
-  and holds appends until the rename lands. On the io_uring reactor the
-  hold did not stop appends: a write in that window went to the old file
-  and was gone at the next start. On both reactors, a write in that window
-  also kept the swap from ever completing, so the shard stopped writing
-  its AOF until shutdown, and a crash lost everything since. Appends now
-  wait for the rename, and the swap completes with them queued. Affected
-  since 5.0.0, for `BGREWRITEAOF` and automatic rewrites alike.
+A wire client needs no code change, and a 6.4 data directory opens as it
+is. Read [docs/upgrading-6.4-to-7.0.md](docs/upgrading-6.4-to-7.0.md)
+(also in Chinese and Japanese) before upgrading if you set `maxmemory`
+(`used_memory` reads about 1.5 times higher for the same data), run
+replicas (upgrade the primary first), may go back to 6.4, script kevy-cli
+tools as bare words, or use kevy as a Rust library. Every statement there
+about mixing versions was measured against the 6.4.0 release binary.
+
+Most of the entries below are fixes. Several had been losing or changing
+data for a long time — blocking pops that never reached the log (since
+1.4.0), catalog commands that never reached a replica (since 3.0.0),
+writes made after a `BGSAVE` on macOS and on Linux without io_uring
+(since 5.1.0) — and each fix names the first release that had the
+defect.
+
+### Fixes: data that was lost, merged or never reached a replica
+
+- **A restart after a snapshot and then an AOF rewrite applies each
+  write once.** A snapshot resets a shard's AOF to the writes made after
+  it, and a restart loads the snapshot and replays the AOF over it. A
+  rewrite then turns the AOF into a complete image, but the snapshot
+  stayed beside it and the restart still loaded it first. So since
+  1.0.0 on the server, and since 1.16.0 in the embedded store
+  (`save_snapshot` then `rewrite_aof`), a `BGSAVE` or `SAVE` followed by
+  a `BGREWRITEAOF` or an automatic rewrite brought back every list
+  element pushed before the rewrite twice (`a b c` read `a b c a b c`),
+  on every shard. Strings, hashes, sets, sorted sets and streams were
+  rewritten as commands that replace a value or refuse a duplicate, and
+  kept their values. The same held for a replica restarted after a full
+  sync, which rewrites its AOF, over the snapshot it had saved before,
+  and for a reshard of such a directory. The AOF now opens with a record
+  naming the snapshot it continues, or none for a rewrite image, and
+  every snapshot file ends with its own id: a restart loads a snapshot
+  only under the AOF that continues it, and refuses to start, naming
+  both files, when that snapshot is missing or replaced. A snapshot
+  commit keeps the snapshot it replaces until the AOF reset is in
+  place, so a crash between the two restores a matching pair; before,
+  a crash there also replayed the old AOF over the new snapshot. A
+  `BGSAVE` whose AOF reset cannot start is skipped instead of committing
+  a snapshot the AOF would repeat. A directory written before this
+  release restores as it did: its files do not say which came last, so
+  a directory that already holds a snapshot and a rewritten AOF from an
+  earlier release is still restored as both on its first start. A
+  `BGSAVE` on the earlier release just before upgrading leaves a
+  snapshot and an AOF that restore once.
+
+- **In the browser, writes made through `cmd` are saved.** Since 4.0.0,
+  the first release of the wasm package with persistence and with
+  `cmd`, only the typed methods (`set`, `del`, `incrby`, …) reached the
+  log the package keeps in OPFS or IndexedDB. A write through `cmd`
+  (a hash, a list, a sorted set, anything the typed methods do not
+  wrap) changed the running store and was lost at the next `open()`,
+  unless an automatic compaction had happened to run in between. It now
+  reaches the log as the frames a native AOF would hold for it.
+
+- **In the browser, declared indexes, views and tables survive a
+  reload.** Since 5.2.0, when the browser build gained them, the rows
+  came back after a reload and the indexes over them did not: the replay
+  skipped the catalog record, and a compacted image did not carry it. The
+  replay now installs the catalog the way a native open does, the image
+  carries it, and the indexes rebuild from the replayed keys.
+
+- **`COPY … REPLACE` and a cross-shard `RENAME` over an existing key
+  replay and replicate to the value the client saw.** The server records
+  the placed value as the commands that rebuild it, and those commands
+  add to a key rather than replace it. So a restart from the AOF, and
+  every replica, merged the value into what the destination held (a hash
+  kept its old fields, a list or set its old members), or kept the old
+  value when its type differed and answered `WRONGTYPE` from then on.
+  This has affected `COPY` since 6.0.0, on one shard or across two, and
+  a `RENAME` whose two keys live on different shards since 5.0.0. A
+  `DEL` of the destination is now recorded before the value. An AOF
+  rewrite and a snapshot were not affected: both write the value as it
+  is in memory.
+
+- **`BLPOP` and `BRPOP` pops are durable and replicated, and a read-only
+  replica refuses them and `RENAME` / `RENAMENX`.** The server kept its
+  own list of write commands, and these four were missing from it. Since
+  1.4.0, which introduced `BLPOP` / `BRPOP`, their pops never reached the
+  AOF, so after a restart the popped elements were back in the list;
+  since 1.18.0, which introduced replication, they never reached a
+  replica either. This held both for a pop that found data at once and
+  for a waiter a later push served, and a waiter of `BZPOPMIN` (since
+  1.27.3), `BRPOPLPUSH` (since 1.27.8) or `XREADGROUP … BLOCK` (since
+  1.4.0) that a later write served was not recorded either: after a
+  restart, or on a replica, the element was back in its source and the
+  group read had left nothing pending. A blocking pop that found data at
+  once (`BZPOPMIN` and `BRPOPLPUSH` included) did not invalidate a
+  `WATCH` on the key. And since 3.17.0, when a replica began refusing
+  writes, a read-only replica still ran all four commands against its own
+  keyspace and let it drift from the primary. The server now takes its
+  write classification from the same registry the shared command layer
+  runs from, a served blocking command is recorded like any other write
+  (the pop as the `LPOP` / `RPOP` it performed), and the four commands are
+  refused on a read-only replica with `-READONLY You can't write against a
+  read only replica.` An `EVAL_RO` script can no longer call them either.
 
 - **Writes made after a `BGSAVE` survive a restart on macOS, and on Linux
   without io_uring.** On the epoll and kqueue reactors a writer thread
@@ -32,25 +118,358 @@
   `BGREWRITEAOF`. Affected since 5.1.0; the io_uring reactor and
   `KEVY_AOF_OFFLOAD=0` were not affected.
 
+- **Writes made during an AOF rewrite's final swap reach the new log.**
+  The rewrite renames the new log over the old one on a background thread
+  and holds appends until the rename lands. On the io_uring reactor the
+  hold did not stop appends: a write in that window went to the old file
+  and was gone at the next start. On both reactors, a write in that window
+  also kept the swap from ever completing, so the shard stopped writing
+  its AOF until shutdown, and a crash lost everything since. Appends now
+  wait for the rename, and the swap completes with them queued. Affected
+  since 5.0.0 on io_uring and 5.1.0 on epoll and kqueue, for
+  `BGREWRITEAOF` and automatic rewrites alike.
+
+- **Writes made after a crash inside a transaction survive the next
+  restart.** A process that died between a transaction's begin and commit
+  markers — an embedded `atomic()` block, a server `MULTI`/`EXEC`, a batch
+  of pipelined writes — could leave the begin marker and part of the
+  transaction in the AOF. Replay rightly dropped that part, but the open
+  kept it in the log, so the next session appended after an open begin
+  marker; at the restart after that, replay read every one of those writes
+  as part of the unfinished transaction and dropped them too, up to the
+  next transaction. The open now cuts the unfinished transaction off the
+  log (it is kept aside in the quarantine file, as a torn tail is) before
+  anything new is appended. Affected since 4.0.0.
+
+- **A hash field's own TTL survives a background AOF rewrite.** The
+  non-blocking rewrite, which an embedded store runs whenever the log
+  outgrows its auto-rewrite threshold, builds the new log in memory; that
+  image carried every value and key TTL but not the per-field deadlines
+  set with `HEXPIRE` and its siblings, so after the rewrite and a restart
+  those fields never expired. The wasm package's host-mediated log image
+  is built the same way and lost them too. The synchronous rewrite
+  (`BGREWRITEAOF` on a server, `rewrite_aof` on an embedded store) was not
+  affected. Affected since 3.0.0.
+
+- **Deadlines set relative to now keep their instant across a restart.**
+  The absolute-deadline frame that follows a relative `HEXPIRE` /
+  `HPEXPIRE` copied the command's `NX|XX|GT|LT`; on replay the condition
+  refused it, and the field counted its TTL again from the replay
+  (affected since 3.0.0). The frame now names each field's deadline as it
+  stands after the command, with no condition, and the embedded
+  `hexpire` / `hpexpire_at` no longer record fields their condition
+  refused, which a replay used to give the new deadline. `GETEX key
+  EX|PX` on a server is now followed in the AOF by the absolute
+  `PEXPIREAT`, as `EXPIRE` and `SET … EX` are; before, a restart counted
+  its TTL again from the replay (affected since 6.0.0).
+
+- **A counted `SPOP` over RESP3 is recorded by the members it removed.**
+  The RESP3 reply path for `SPOP key count` wrote the command itself to the
+  AOF and to replicas, so a restart or a replica popped different random
+  members. It now records `SREM key member…`, as the RESP2 path always did,
+  and an empty pop records nothing. Affected since 6.3.0.
+
+- **Stream writes replay and replicate as they were answered.** `XADD`
+  with a generated id (`*`, `ms-*`) was recorded as typed, so a restart
+  from the AOF, and every replica, generated ids of its own; `XCLAIM` and
+  `XAUTOCLAIM` were recorded as typed and, run again at another time
+  against their `min-idle-time`, claimed other entries or none; and a
+  group read with `>` stamped the entries it delivered with the replay's
+  clock, so after a restart every pending entry looked just delivered.
+  An `XADD` is now recorded with the id it gave; a claim as one `XCLAIM
+  … 0 id… TIME t RETRYCOUNT n FORCE JUSTID` per outcome (and `XGROUP
+  CREATECONSUMER` when it only created the consumer); an `XREADGROUP` as
+  the same `XCLAIM` frames for the entries it delivered plus `XGROUP
+  SETID` for how far it moved the group. A change-feed or replica
+  consumer that reads `XREADGROUP`, `XCLAIM` or `XAUTOCLAIM` frames sees
+  these instead; 6.4 reads all of them. Affected since 1.4.0 in the AOF
+  and 1.18.0 on replicas.
+
+- **Recording a write's deadline no longer removes the key.** The server
+  followed a relative-TTL write (`EXPIRE`, `SET … EX|PX`, `GETEX …`) with
+  a `PEXPIREAT` computed by reading the key's TTL, and that read reaped a
+  key whose TTL ran out in between: the key was removed without an
+  `expired` notification, counted in `expired_keys`, and the deadline
+  frame was not written. The deadline is now read without reaping and
+  recorded as it stands, and replay expires the key. Affected since
+  1.8.1.
+
+- **`EXPIRE` with a non-positive TTL no longer counts a key that had
+  already lapsed.** `EXPIRE`, `PEXPIRE`, `EXPIREAT` and `PEXPIREAT` first
+  asked whether the key existed, then wrote it, and the two steps read
+  different clocks: the question read the clock the shard refreshes once
+  per batch, the write a fresh one. For a key whose deadline fell between
+  the two, `EXPIRE k 0` and `PEXPIRE k -1` answered 1 and recorded a
+  write for a removal that was in fact the key's own expiry, while
+  `EXPIRE k 100` on the same key answered 0. The write now decides
+  existence itself, so every form answers 0 for such a key and records
+  nothing beyond the expiry. Both the server and the embedded engine ran
+  this code. Affected since 1.11.0.
+
+- **Stream consumers keep their idle times across a restart and on a
+  replica.** Replaying the AOF, or applying a primary's stream, gave every
+  consumer the replay's clock as its last contact, so after a restart
+  `XINFO CONSUMERS` showed every consumer as just seen (since 1.4.0; on a
+  replica since 1.18.0). Each contact that changes a group — a read that
+  moves the group's cursor or creates a consumer, a claim, `XGROUP
+  CREATECONSUMER` — is now recorded with its time as an internal
+  `XINTERNAL.CONSUMERSEEN` frame, which a client that sends it is refused.
+  A group read that changes nothing is not recorded, so that contact alone
+  is not carried over. 6.4 replaying an AOF written by this version skips
+  these frames, and loses consumers made only by `XGROUP CREATECONSUMER`.
+
+- **An embedded store never reads a key past its deadline.** Lazy expiry
+  compared a key's deadline with a clock the background reaper refreshed
+  once a tick (100 ms by default), so a key could still be read for up to a
+  tick after it expired — longer if the reaper thread was held up, as it is
+  while a mobile app is suspended. A read of a key with a TTL now compares
+  against the clock itself; a key without one reads no clock, as before.
+  The cost is one monotonic clock read (about 15 ns on Apple silicon) on
+  reads of keys that have a TTL. The server was not affected: its reactor
+  refreshes the clock every batch. Affected since 1.11.0.
+
+- **Embedded `COPY` copies a key of any type, as the server does.** Since
+  2.0.13 `Store::copy` and the embedded `COPY` verb read the source as a
+  string, so a hash, list, set, sorted set or stream source answered
+  `WRONGTYPE` and was not copied. The copy now clones the value and its
+  remaining TTL. With an AOF, a replica source or a change feed, it is
+  recorded as the commands that rebuild the value, after a `DEL` when it
+  replaced a key, so a reopen does not merge the copy into the old value.
+
+- **An embedded `SET` with `NX`, `XX` or a TTL is one operation.** Over
+  `Store::dispatch_argv`, `SET k v NX EX s` set the value and then its
+  TTL under two locks, so another thread could read the value without
+  its TTL; `SET … XX` checked existence under one lock and wrote under
+  another; and `EXPIRE` / `PEXPIRE` / `EXPIREAT` / `PEXPIREAT` answered
+  from an existence check taken apart from the write. `set_with_ttl` now
+  logs `SET k v PX ms` before its `PEXPIREAT`, and replay honours a
+  logged `EX` / `PX`, so a crash between the two frames leaves an
+  expiring key rather than a permanent one. Affected since 4.0.0.
+
 - **An embedded replica opened with more than one shard reads every key.**
   A replica placed each replicated write with the cluster slot hash and
   loaded a full snapshot into its first shard, while its reads look a key
   up by the store's own hash; with more than one shard most keys were
   written where reads never look. Writes and snapshots now land in the
   shard the store's reads use. Single-shard replicas (the default) were
-  not affected.
+  not affected. Affected since 1.22.0.
 
-- **Stream consumers keep their idle times across a restart and on a
-  replica.** Replaying the AOF, or applying a primary's stream, gave every
-  consumer the replay's clock as its last contact, so after a restart
-  `XINFO CONSUMERS` showed every consumer as just seen. Each contact that
-  changes a group — a read that moves the group's cursor or creates a
-  consumer, a claim, `XGROUP CREATECONSUMER` — is now recorded with its time
-  as an internal `XINTERNAL.CONSUMERSEEN` frame, which a client that sends
-  it is refused. A group read that changes nothing is not recorded, so that
-  contact alone is not carried over. An older kevy replaying an AOF written by this one
-  skips these frames, and loses consumers made only by `XGROUP
-  CREATECONSUMER`.
+- **An embedded replica applies every write its primary records.**
+  `SETEX`, `PSETEX`, `SETNX`, `MSET`, `HMSET`, `GETEX`, `UNLINK`,
+  `RPOPLPUSH`, `LMOVE`, the blocking pops and `ZPOPMIN.BELOW` used to be
+  skipped on replay. A logged `SET … NX` / `XX` is now applied with its
+  condition, as the primary ran it: a primary also logs a `SET NX` that
+  lost, and applying that one unconditionally handed a held key to the
+  caller that lost it. Stream and geo writes are applied too (see the
+  embedded stream and geo commands below). Affected since 1.22.0.
+
+### Fixes: indexes, views and tables
+
+- **`IDX.REBUILD` packs a local range or unique index.** Since 3.0.0 it
+  reached only vector (ANN) and global indexes; on a ready local range
+  or unique index it answered `ERR no such index`, although the index
+  documentation says a rebuild packs an index's leaves. It now packs
+  them on every shard and answers `+OK`. A text or agg index, which has
+  nothing to pack or compact, is refused with an error that names its
+  kind: `ERR IDX.REBUILD '<name>': IDX.REBUILD applies to range, unique,
+  ann and global indexes; this is a text index`.
+
+- **Indexes, views and tables reach a replica, and a read-only replica
+  refuses to declare its own.** The server kept its index, view and
+  table catalog in three side files (`index-catalog.meta`,
+  `view-catalog.meta`, `table-catalog.meta`) that never entered the log,
+  so a replica got neither the primary's catalog in its full sync nor a
+  later `IDX.CREATE` / `VIEW.CREATE` / `TABLE.DECLARE` on the stream
+  (indexes and views since 3.0.0, tables since 4.0.0), and since 3.17.0 a
+  read-only replica accepted all of them against its own keyspace. Every
+  catalog command is now recorded as one internal `XINTERNAL.CATALOG`
+  frame carrying the whole catalog (including a global index's split
+  points), every snapshot and rewritten log keeps the current one, and a
+  reshard carries it into the new layout. A replica takes the primary's
+  catalog in its full sync and each change on the stream, and a read-only
+  replica answers every catalog command (`IDX.CREATE` / `DROP` /
+  `REBUILD`, `VIEW.CREATE` / `DROP` / `REBUILD`, `TABLE.DECLARE` /
+  `ENSURE` / `REPLACE` / `DROP`) with `-READONLY You can't write against a
+  read only replica.`; nor does a replica declare query paths for itself
+  under `AUTODECLARE` any more. The side files are no longer written. A 6.4 data
+  directory opens with its catalog: the first start reads the side files
+  once, records the catalog in the log and sends it to the replicas on
+  the stream, so a replica that stays connected while its primary is
+  upgraded receives it, and removes them; a side file
+  that does not parse stays where it is. No shard serves a client until
+  every shard has restored, so a query cannot land before the catalog it
+  depends on. The embedded store keeps its catalog the same way, and the
+  two interoperate: an embedded replica takes a server primary's catalog
+  and a server replica an embedded writer's. An embedded replica refuses
+  every catalog method with `KevyError::ReadOnly`, and a closed store
+  with `KevyError::Closed`; `idx_drop`, `view_drop` and `table_drop` now
+  return `KevyResult<bool>`. The frame sits after the snapshot's end
+  marker, where 6.4.0 stops reading, so 6.4.0 still loads a 7.0 snapshot;
+  it opens a 7.0 directory with every key and no catalog. A replica that
+  was already connected when its primary first started as 7.0 gets the
+  imported catalog only at the next catalog command or when it restarts;
+  [the upgrade guide](docs/upgrading-6.4-to-7.0.md) gives the order to
+  upgrade in.
+
+- **Catalog commands run at the same time no longer undo each other.**
+  An `IDX.CREATE`, `VIEW.CREATE`, `TABLE.DECLARE` or any other catalog
+  command copied the catalog, changed the copy and installed it, and the
+  server runs a command on the shard its connection lives on. Two
+  connections on different shards could copy the same catalog, and the
+  second install dropped the first command's change, which had already
+  answered `OK`; a view over an index declared a moment before then
+  answered that the index was unknown. With four connections declaring
+  at once a test lost between 14 and 71 of the declared names on every
+  run. A change now installs only onto the catalog it was computed from
+  and is computed again otherwise, and the version it is recorded under
+  moves together with the catalog it records, so a restart and a
+  replica keep every change. Affected since 3.0.0.
+
+- **A materialized view holds every row its indexes hold.** Since 3.0.0
+  a shard built a materialized view on its next tick even while an index
+  the view reads was still backfilling: the view was built from the rows
+  the backfill had reached, and the rest never entered it. A view
+  declared right after its index over more than 2,048 rows on a shard
+  answered `VIEW.QUERY` with part of its members for good, until a
+  `VIEW.REBUILD`. An index a view reads, dropped and declared again, was
+  not followed either: a write while it rebuilt took the written row out
+  of the view. A view is now built only once every index it reads is
+  ready, again whenever one of them is built again, and it takes in
+  every row its indexes take in, including rows a snapshot load, an
+  expiry or a resync changed without a command.
+
+- **A server's `DESC` materialized view with `TOPK` keeps its highest rows
+  when it is built over existing data.** Building or rebuilding the view
+  sorted each shard's rows ascending and kept the first `TOPK × 1.25`, so
+  a shard holding more than that kept its lowest rows, and the view
+  answered with fewer and wrong members. Embedded stores cut from the right
+  end already. Affected since 3.0.0.
+
+- **Index writes that no hook saw are applied.** An index learned of a
+  write from a hook each command called with the key it wrote. Rows
+  changed any other way kept their old entries until some later write
+  named them: a row evicted by `maxmemory`, a hash field that expired
+  when a read found it past its deadline, a row a Lua script wrote with
+  `redis.call` on a key other than `KEYS[1]`, the `DEL k1 k2`, `MSET` and
+  same-shard `RENAME` frames a replica applied, and a replica's full
+  resynchronisation, which left the old entries under the new keyspace;
+  in an embedded store, expiry, eviction, replication frames and
+  `apply_frame` were not indexed at all. The store now records, for keys
+  under an indexed prefix, the indexed fields as they were before the
+  first write since the last drain, whatever wrote them, and the index
+  drops the old entry and adds the new one from that record after every
+  command and on every tick.
+
+- **An embedded transaction's index reads see its own writes.**
+  `AtomicAllShards::idx_query` and `idx_count` answered from the last
+  commit, so a closure inserting two rows could not check the second
+  against the first; they now answer from the rows written so far, and a
+  closure that fails leaves the index as the rollback leaves the rows.
+
+- **`kevy_index::sort_groups` ranks a group without a maximum last under
+  `AggBy::Max`.** Since 3.8.0 it put such groups first, while
+  `AggBy::Min` put a group without a minimum last and
+  `GroupStats::rank_score` scores a missing extreme lowest. Only a
+  caller of the `kevy-index` crate that ranks empty `GroupStats` saw
+  this: `IDX.QUERY … GROUPS` on the server and `Store::idx_groups` rank
+  only groups that hold a row, and every such group has a maximum.
+
+- **With `packed-rows yes`, every shard packs a declared table's rows.**
+  `TABLE.DECLARE` published the index catalog and then the table catalog,
+  and only the first told the shards to re-read their state. A shard that
+  looked in between kept running as if no table were declared: rows
+  already on it stayed in the unpacked form, and rows written to it later
+  were not packed either, until some other declaration or setting change
+  reached it. Only memory was affected — an unpacked row answers the same.
+  Affected since 5.4.0.
+
+- **Declaring a table leaves cold rows cold.** With `packed-rows yes`,
+  `TABLE.DECLARE` packs the table's existing rows, and it read every one
+  of them through the client read path — cold ones included. Each cold
+  row cost a disk read that no counter showed, and the read counted as
+  the row's first touch, so after a declaration the first client read of
+  any cold row promoted it (one read of each row of a mostly cold 60-row
+  table promoted 36; it now promotes none). A cold row the table could
+  hold was worse off: it was put back in memory in packed form without
+  leaving the cold tier's books, so `cold_keys` and `stub_bytes` kept
+  counting it and its record in the spill file was never freed. Packing
+  now leaves a cold row alone — it holds no memory for the packed form to
+  save — and refuses a row the table cannot hold (a field it does not
+  declare) on the row's field names, before copying anything; the rows it
+  does pack are read by name straight out of the hash. Measured with
+  kevy-store's `bench_hash_rows`, a row that cannot pack is refused in 72%
+  less time and one that can is packed in 39% less (with the shared column
+  names below). Affected since 5.4.0.
+
+- **kevy-store: a batched page read answers packed rows from the spill
+  file.** `Store::peek_hash_rows`, the batched read behind `FIELDS`
+  hydration, decoded each cold row read from the spill file and then
+  required it to be a general hash; a packed row decodes as a packed row,
+  and the read panicked. It now answers either form, as the single-row
+  read and the segment-backed half of the same batch already did.
+  Affected since 5.4.0.
+
+### Other fixes
+
+- **`XPENDING`, `XINFO CONSUMERS` and `XINFO GROUPS` list consumers and
+  groups by name.** The `XPENDING` summary listed consumers in the order
+  their oldest pending entry appeared, and the two `XINFO` forms in the
+  order of kevy's internal table. Redis 8.10 and valkey 9.1 list them by
+  name in byte order (`Bob` before `a`, `b10` before `b9`), and so does
+  kevy now, on the server, in the embedded engine and in the browser.
+  `bench/compat3.sh` checks the summary against both.
+
+- **`XREADGROUP … BLOCK` works when the stream lives on another shard.**
+  Since 1.5.0 a blocking group read ran on the connection's own shard
+  first; with the stream on another shard it found no group there and
+  answered `-NOGROUP`, whether or not the group existed. With more than
+  one shard that was most connections. It now parks at once and the
+  stream's own shard serves it: at once when the group has something to
+  read or does not exist (the `NOGROUP` a read there gives), otherwise
+  when an entry arrives, like the other blocking commands.
+
+- **`XRANGE`, `XREVRANGE` and `XPENDING` with a range that runs backwards
+  no longer stop the server.** `XRANGE s 3 2`, and an `XPENDING` whose
+  start is after its end, panicked the shard, and a release build, which
+  aborts on a panic, went down with it. They answer an empty list, as
+  valkey does. Affected since 1.4.0.
+
+- **`XADD` at the last possible ID is refused instead of going
+  backwards.** With a stream's last ID at the largest sequence of its
+  millisecond, an `XADD` with a generated ID (`*` or `<ms>-*`) wrapped the
+  sequence round in a release build and added an entry below the last
+  one. It now answers as valkey does: `*` takes the next millisecond,
+  `<ms>-*` is refused as not above the last entry, and with no ID left at
+  all both answer `ERR The stream has exhausted the last possible ID,
+  unable to add more items`. Affected since 1.4.0.
+
+- **A multi-stream `XREADGROUP` refused by one stream reads none.** With
+  the streams on different shards, a read that one stream refused (no
+  such group, a bad ID) had already read the others: their entries were
+  delivered, the group moved on and the consumer was made, and the client
+  saw only the error. Every stream is now checked on its own shard before
+  any is read, and the refusal is the first in the order the streams were
+  named. Affected since 1.14.0.
+
+- **An AOF rewrite keeps a pending entry whose stream entry is gone.** A
+  rewrite put each pending entry back with an `XCLAIM`, which cannot
+  claim an entry the stream no longer holds, so the rows of entries
+  deleted or trimmed while pending were dropped: after the rewrite and a
+  restart, `XPENDING` no longer listed them and `XAUTOCLAIM` no longer
+  reported them deleted. A snapshot kept them. The rewrite now writes
+  such a row as an internal `XINTERNAL.PENDING` record, which replay and
+  a replica apply and a client is refused. Affected since 1.15.0.
+
+- **`kevy-cluster-rw` sends every write to the primary.** Its own list of
+  write commands had drifted from the server's: 21 commands the server
+  counts as writes went to a replica, among them `GETEX`, `SETBIT`,
+  `BITOP`, the `HEXPIRE` family, `BZPOPMIN`, `BRPOPLPUSH`, the `Z*STORE`
+  commands, `XREADGROUP`, `GEOADD` and `EVAL`, and `TYPE` went to the
+  primary. The client now reads the keyspace writes from the server's
+  command table and keeps its own list only for the commands that write
+  no key but belong on the primary (transactions, admin, `PUBLISH`,
+  scripts), and a test holds it to the server's classification over
+  every command the server documents. Affected since 1.18.0.
 
 - **A `QUIT` queued inside `MULTI` closes the connection on io_uring.**
   After `EXEC` ran it, the io_uring reactor sent the replies and then kept
@@ -59,108 +478,410 @@
   It now closes as it does on epoll, and the disconnect for exceeding the
   output buffer limit takes the same path. Affected since 1.25.0.
 
-- **A `premerge` suite tier holds everything CI checks on a push.** The
-  coverage and documentation ratchets, the doctest run, the feature-lint
-  clippy and the generated-docs check ran in CI but in no tier run before a
-  merge, so a merge could be green locally and red on develop.
-  `python3 tools/suite.py premerge` now runs them, and `ci-parity` fails
-  when CI gains a check no tier runs, unless the manifest says why only CI
-  can run it.
+- **`FAILOVER` and election failover follow a non-default replication
+  port.** Both used to assume the new primary accepts replicas at its
+  client port + 10000, so a node with a different `[replication]
+  listen_port_base` was followed at the wrong port and the old primary
+  never caught up. `INFO replication` now reports `repl_port_base`,
+  `FAILOVER` reads it from the target, and a `[cluster] peers` entry takes
+  an optional fourth field, `id@host:elect_port:client_port:repl_port_base`,
+  for election failover. Affected since 3.17.0.
+
+- **Config string values keep non-ASCII characters.** A `kevy.toml` path
+  or value with Chinese or Japanese text was read back garbled. Affected
+  since 1.0.0.
+
+- **kevy-lua-host lends the host context only as its own type, once.**
+  `with_current::<T>` handed out the installed context whatever `T` the
+  caller named, and a nested call gave a second `&mut` to the same
+  value; both were undefined behaviour reachable from safe code. It now
+  returns `None` for the wrong type or while the context is already
+  lent. `CurrentTag` is removed. Affected since 1.27.0.
+
+- **An HNSW graph refuses `M` below 2.** Levels are drawn with scale
+  `1/ln M`, infinite at 1, so `M = 1` asked for an unbounded number of
+  layers. `kevy_vector::Hnsw::new` now panics by name, and
+  `Store::idx_create_ann` returns `InvalidInput`. `IDX.CREATE … M`
+  already required 4–64. Affected since 3.0.0.
+
+- `kevy-cli --kevy import` of a file that does not exist no longer leaves a
+  `<file>.progress` behind.
+
+### Behaviour changes
+
+- **A server whose snapshot does not load, or whose shard stops, stops
+  instead of serving.** Since 1.0.0 a shard whose `dump-<i>.rdb` failed
+  to load (cut short, overwritten, unreadable) logged `failed to load`
+  and served whatever part of the file it had read, and the writes that
+  followed landed on top; since the same release a shard that stopped
+  with an error left the other shards serving without it. Startup now
+  fails with `shard <i>: <file> does not load: <error>`, the process
+  exits with status 1, and the same holds for any shard that stops with
+  an error while running: every shard stops and the server exits naming
+  the error. A startup that refuses a log whose snapshot is missing or
+  replaced stops the same way. There is no switch to start anyway: move
+  the file aside, or restore it from a backup. The embedded store
+  already failed to open on such a snapshot; its error now names the
+  file.
+
+- **`XINFO` answers as a Redis server does, field for field.** Measured
+  against valkey 9.1.2 and Redis 8.10.2 over the wire, both protocols:
+  `XINFO GROUPS` lists `entries-read` before `lag`, and both are now kept
+  and reported the way those servers keep them: a group counts the
+  entries it has read past, `XGROUP CREATE` and `XGROUP SETID` take
+  `ENTRIESREAD`, and where a deletion makes the count unknowable the
+  reply is nil, not an estimate (a group that has read nothing answered 0
+  where the servers answer nil). `XINFO CONSUMERS` adds `inactive`, the
+  time since a read or a claim last handed the consumer an entry (-1 if
+  none ever did), and a claim now counts as the consumer's contact, which
+  `idle` measures from. `XINFO STREAM … FULL [COUNT n]` is new. Under
+  RESP3 the replies are maps with null for a missing value. The field
+  order of `XINFO STREAM`, the error texts (an unknown subcommand, a bad
+  option, a missing group, which names the group and the key) and the
+  help text are the servers'. Trimming (`XTRIM`, `XADD … MAXLEN|MINID`)
+  no longer raises `max-deleted-entry-id`, which only `XDEL` does. The
+  read counter and each consumer's last active time survive a restart, an
+  AOF rewrite, a snapshot and a replica, like the rest of the group.
+  Where Redis 8.10 and valkey 9.1 disagree, kevy answers as valkey does.
+
+- **The rest of the stream commands answer as valkey does.** Measured
+  against valkey 9.1.2 and Redis 8.10.2 over the wire, both protocols,
+  every `X*` command and its options; where the two disagree, kevy answers
+  as valkey does.
+  - *A read of a consumer's history is a delivery.* `XREADGROUP … STREAMS
+    key <id>` raises the delivery count of each entry it hands back and
+    resets its delivery time, `NOACK` or not; an entry deleted since comes
+    back with no fields (`[id, nil]`, `_` under RESP3) and is not counted;
+    a stream whose history is empty is still listed, as `[key, []]`. A
+    new delivery of an entry that is still pending (after `XGROUP SETID`
+    moved the group back) starts its count again at 1, for its new owner.
+    The counts survive a restart, an AOF rewrite, a snapshot and a
+    replica. A count stops at 9223372036854775807 where valkey's wraps
+    round to a negative number.
+  - *`XREADGROUP` checks every stream before it reads any.* The key, the
+    group and the ID of each; a refused command reads nothing, also when
+    its streams live on different shards (see Other fixes). `+` and `$`
+    are refused with valkey's texts, and so is an unbalanced stream list.
+  - *`XREAD`* takes `+` for the last entry; a `COUNT` of 0 or less reads
+    everything; a negative `BLOCK` is refused (`ERR timeout is negative`),
+    and so is `>` outside `XREADGROUP`. A blocking `XREAD` or `XREADGROUP`
+    that times out answers `*-1` under RESP2, where it answered `$-1`.
+  - *RESP3.* `XREAD` and `XREADGROUP` answer a map of stream to entries,
+    and a missing reply is `_` in `XRANGE`, `XREVRANGE`, `XADD`,
+    `XPENDING`, `XCLAIM` and `XAUTOCLAIM`, on the server and through a
+    gather across shards.
+  - *`XAUTOCLAIM`* lists an entry deleted while pending in its third
+    element whatever the idle time asked for, drops it from the pending
+    list and counts it toward `COUNT`. A `COUNT` of 0 or less or above
+    2^43 is refused with `ERR COUNT must be > 0`; the start may be `-`,
+    `+` or an exclusive `(id`.
+  - *`XCLAIM`* takes `LASTID`, which moves the group's last delivered ID
+    up whether or not anything is claimed. A missing key or group answers
+    `NOGROUP No such key '<key>' or consumer group '<group>'` (it answered
+    `ERR no such key`), before the arguments are read. `IDLE`, `TIME` and
+    `RETRYCOUNT` refuse a bad value with valkey's texts; the later of
+    `IDLE` and `TIME` wins, a time in the future is now, and a negative
+    `RETRYCOUNT` is ignored.
+  - *`XADD` and `XTRIM`* take `LIMIT`, and an approximate trim (`~`)
+    removes only whole nodes of the stream's layout from the head, as
+    valkey's does: at most 100 entries or 4 KB of fields to a node, up to
+    `LIMIT` entries (10000 unless given, 0 for no limit). It trimmed
+    exactly. An approximate trim is recorded as the exact trim it made, so
+    a replay removes the same entries. The options are read, and refused,
+    in valkey's order and with its texts (a negative `MAXLEN` or `LIMIT`,
+    `LIMIT` without `~`, `MAXLEN` with `MINID`, an ID of `0-0`, a stream
+    at the last possible ID), and `XTRIM` refuses arguments it does not
+    take, which it ignored.
+  - *`XRANGE` and `XREVRANGE`* take exclusive bounds (`(id`); a `COUNT` of
+    0 or less answers nil on a stream (an empty array on a missing key),
+    and the last of repeated `COUNT`s wins.
+  - *`XPENDING`* takes exclusive bounds and `IDLE`; a negative count
+    answers an empty list, and a missing key or group answers valkey's
+    `NOGROUP` text.
+  - *`XACK`* on a missing key or group answers 0 before it reads the IDs.
+  - *`XSETID`* checks in valkey's order with its texts: a missing key is
+    `ERR no such key`, then `MAXDELETEDID` above the ID, the ID below the
+    stream's max deleted ID or its last entry, `ENTRIESADDED` below the
+    length; a negative `ENTRIESADDED` is refused, and a repeated option's
+    last value wins.
+  - *`XGROUP`* has `HELP`; `DESTROY`, `CREATECONSUMER` and `DELCONSUMER` on
+    a missing key are refused as valkey refuses them (they answered 0), and
+    an unknown subcommand gets valkey's text.
+  - *`XINFO STREAM`*'s `radix-tree-keys` and `radix-tree-nodes` are the
+    node and tree-node counts valkey's layout holds for the same history,
+    and `lag` on a stream a trim emptied is 0.
+  `bench/compat3.sh` drives the new cases against both servers.
+
+- **`used_memory` counts what the allocator holds, so it reads higher for
+  the same data.** Measured on 250,000 keys of strings and hashes, 6.4.0
+  reported 69.2 MB and 7.0 reports 103.5 MB, while the process's RSS went
+  from 220.8 MB to 207.7 MB. A `maxmemory` sized from 6.4's figure starts
+  evicting at about two-thirds of the data it held; the upgrade guide has
+  the details. The parts:
+  - *The keyspace is charged the table it holds.* Every key was charged a
+    flat 96 bytes for its place in the keyspace table, but the table is an
+    open-addressing array that doubles at 7/8 load and holds all its slots
+    whether keys fill them or not: 73 bytes a slot, so between 83 and 167
+    bytes a key depending on where the table sits in its cycle — 124 at
+    ten million keys, 0.28 GB more than charged. `used_memory` (and
+    `maxmemory` eviction and the tiered store's demotion, which act on it)
+    now carries the table at the bytes the allocator holds for it, charged
+    when it grows; a key that leaves frees its own bytes and not its slot,
+    which stays with the table, and `FLUSHALL` leaves the emptied table
+    charged. `MEMORY USAGE` reports a key's share of the table. A new key
+    costs 4.6% less time to insert (the flat charge's bookkeeping is gone).
+    `ENTRY_OVERHEAD` now only prices the tiered store's cold stubs.
+  - *A hash is charged what it holds.* The 80-byte box around a hash's
+    table was never charged; its slots were charged 32 bytes where one
+    takes 49; every new field was charged a slot on top of the table
+    capacity already charged; and a write that changed a hash's
+    representation — its first field that did not fit inline, the one that
+    sharded a giant hash, or one a packed row could not hold — was counted
+    twice. A row of four short fields and a 900-byte one holds 1,808 bytes
+    and was charged 1,508, and a hash with one 64-byte field held 1.6 times
+    its charge. A hash's charge is now the bytes the allocator holds for it
+    — box, table and every field or value too long to sit inline — and a
+    test counts the allocator against it at every write.
+    `hash_field_weight` now answers what a new field adds besides the
+    table. The undercount has been there since 1.0.0, the double count
+    since 1.25.0.
+  - *A cold key is charged once.* A cold key's slot and key bytes are
+    inside `used_memory` from the moment the key is inserted and stay there
+    when its value is demoted, and the tiered store also subtracted the
+    same stubs from its demotion target, so the hot set was held that much
+    below the budget: 0.54 GB of a budget at ten million rows with 5.6
+    million cold. The target is now `budget·19/20 − index_reserved_bytes`;
+    `stub_bytes` stays in `INFO` as a gauge. The index floor that refuses
+    `IDX.CREATE` / `TABLE.DECLARE` now counts what stays however cold the
+    values get — the keyspace table and the cold keys' own bytes.
+
+- **A tiered server holds its resident memory to the budget, and refuses
+  growing writes past it.** Demotion held `used_memory` to the budget, and
+  the process held more: freed rows stayed in glibc's free lists, the
+  keyspace table's doublings landed on top of a full hot set, and receive
+  rings, buffers and allocator overhead were in no one's count. On ten
+  million rows of five fields (one of 900 bytes) on a 3 GiB budget the
+  load ended at 1.30 × budget in RSS; it now ends at 0.99 ×, with a peak of
+  1.10 × while the eight shards' tables double within the same second. A
+  tiered server now runs a thread of its own that reads RSS every 100 ms;
+  past half the budget it reads what the allocator holds live once a
+  second (`mallinfo2` on glibc, zone statistics on macOS, through
+  hand-written bindings in kevy-sys) and takes whatever `used_memory` and
+  the index floor do not account for off the demote target; when RSS
+  exceeds live memory by more than 1% of the budget it trims the heap; and
+  if live memory stays past budget × 1.05 for two readings in a row, every
+  shard refuses growing writes with `-OOM command not allowed when the
+  process holds more memory than the tiering budget allows` until it falls
+  back. The check that decides whether a write is prechecked now reads one
+  flag that covers both `maxmemory` and the refusal, so the write path
+  pays nothing new. The keyspace table's next growth is set aside for its
+  last eighth before it happens, so demotion makes room first. `INFO #
+  Tiering` gains `tier_rss_line_bytes`, `tier_refusing_writes`,
+  `tier_live_bytes`, `tier_overhead_bytes` and the walk and trim
+  counters. The embedded store sets the growth reserve aside too; it does
+  not run the thread, since an embedded process's RSS is its host's.
+
+- **An index's `bytes` is what its leaves hold.** The `bytes` of
+  `IDX.LIST`, `IDX.VERIFY` and `TABLE.VERIFY` was `value + key + 48` a row,
+  an estimate, and left out an index's `VALUES` table (47–94 bytes a row;
+  since 4.0.0). It is now what the index's leaves hold (see the B+ tree
+  below): smaller than 6.4's figure for a large index — an `i64` index
+  over keys like `row:<n>` reports 16–25 bytes a row where 6.4 reported 67
+  — and larger for a small one, since every shard that holds a row holds at
+  least one 1,784-byte leaf. The same figure feeds an index's `MAXMEM` and
+  the tiering reservation for indexes (`index_reserved_bytes`).
+  `bench/idxgate.sh` checks it against the server's resident memory,
+  measured as the RSS difference between a server with the index and one
+  without.
+
+- **A replica's catalog comes from its primary only.** See the catalog
+  fix above: a read-only replica refuses `IDX.CREATE`, `VIEW.CREATE`,
+  `TABLE.DECLARE` and the other catalog commands it used to run against
+  its own keyspace, and one that declared indexes of its own under 6.4
+  loses them at its first full sync under 7.0.
 
 - **A server refuses a port another server already holds.** Every shard
   listens with `SO_REUSEPORT`, and on its own that let a second kevy
   started by the same user on the same port join the first one's
   listeners: both ran, and each took a share of the connections, so writes
-  seemed to vanish from whichever one a client read back. The server now
-  claims the port once without `SO_REUSEPORT` before its shards bind, and
-  a port in use stops startup with `Address already in use`, as Redis
-  does.
+  seemed to vanish from whichever one a client read back (since 1.0.0).
+  The server now checks the port once before its shards bind, by
+  connecting to it rather than listening on it, so a client that connects
+  while the server starts is not taken and reset; a port in use stops
+  startup with `Address already in use`, as Redis does. A listener that is
+  going away gets 200 ms to go: io_uring releases a killed server's
+  listeners about 10 ms after the process exits, and a restart inside that
+  window is not refused.
 
-- **The embedded `everysec` fsync no longer holds the shard lock.** The
-  background reaper ran `fdatasync` (`F_FULLFSYNC` on Apple platforms)
-  while holding the shard's write lock, so every write to that shard
-  waited for the disk. It now writes the buffer into the kernel under the
-  lock and runs the fsync after releasing it. Writes that arrive while the
-  fsync runs are covered by the next one, so the power-loss window is
-  about one second plus one reaper tick plus the time one fsync takes. The
+- **kevy-cli: a bare tool word is a server command.** The tools kevy-cli
+  6.4 shipped as bare words (`kevy-cli doctor -p 6004`, `kevy-cli export …`,
+  `kevy-cli sql compile … --url h:p`, `kevy-cli digest <prefix>`, and
+  `backup`/`restore` in their file shapes) printed a deprecation line
+  through 6.x and are gone: the word goes to the server, as it does in
+  redis-cli. Write `kevy-cli [-h host] [-p port] --kevy <tool> …`. The
+  library entry points that served them — `kevy_cli::route_tool`,
+  `doctor::run_doctor_cli`, `shadow::run_shadow_cli`, `lint::run_lint_cli`
+  and `backfill_keys::run_backfill_keys_cli` — are removed with them.
+
+- **Stream replies that now match Redis.** `XRANGE`, `XREVRANGE` and the
+  other commands that take a stream id refuse `5-`, an id with nothing
+  after the dash, with `ERR Invalid stream ID specified as stream command
+  argument`; 6.4 read it as `5-<largest sequence>`. `XAUTOCLAIM`'s cursor
+  was the last scanned id plus one, so a call that reached the end of the
+  pending list returned a cursor instead of `0-0`, and a client looping
+  until `0-0` made one extra call; a partial call's cursor was not the id
+  Redis returns either. It is now the next pending entry's id, or `0-0` at
+  the end. A call also looked at the whole pending list when few entries
+  were idle enough; it now looks at no more than `COUNT × 10`, as Redis
+  does (affected since 1.4.0). Checked against Redis 8.10.2 answering the
+  same commands.
+
+- **Two refusals lost stray text.** An embedded store's `table_declare`,
+  `table_replace` and `table_verify_report` refuse with `-ERR …`, not
+  `-ERR ERR …`, and the refusal of a `TABLE.DECLARE … WINDOW` without an
+  access path lost 17 stray spaces from the middle of its text. A
+  `kevy.toml` with an unknown character in `notify_keyspace_events` is
+  refused with `unknown flag char …` rather than `unknown
+  notify_keyspace_events flag char …`.
+
+- **The io_uring receive ring is sized by configuration, and defaults to
+  a quarter of what it was.** Every shard on the io_uring reactor kept a
+  fixed ring of 4,096 16 KiB receive buffers — 64 MiB a shard, 0.6 GB for
+  nine shards, all of it resident once traffic had cycled through it. The
+  count is now `[advanced] recv_buffers` (a power of two, 1 to 32768;
+  `Runtime::with_recv_buffers` in kevy-rt) and defaults to 1,024, 16 MiB a
+  shard. A ring that runs dry was never an error — the receive is
+  re-armed — so the setting trades memory against re-arming under bursts.
+  The default is the smallest that kept throughput on a sweep of 50 to
+  4,000 connections, pipelined and not, 64-byte and 16 KiB values: no
+  median fell below the old ring's (512 fell 8% on the pipelined run and
+  256 fell 6% at 4,000 connections, within that box's noise but not
+  taken). See the tuning guide.
+
+- **io_uring: no more 200 µs stalls for clients that pause between
+  batches.** After a batch of work forwarded from other shards, an owner
+  shard used to sleep for 200 µs, deaf to new input; a client whose keys
+  lived on another shard and that paused between pipelined batches — any
+  application doing work on the replies, and every client behind a proxy
+  — waited out that sleep on every batch (measured: 298 µs per batch of
+  32 instead of 32 µs). The owner now keeps polling for those 200 µs and
+  picks up new work at once. The cost is CPU: up to 200 µs of one core
+  after each burst of forwarded work, before the shard parks. Affected
+  since 3.0.0.
+
+- **The read-only error is the server's, word for word, everywhere.** The
+  default message of the read-only error the C++, C#, Go, Python, Tauri
+  and TypeScript bindings construct themselves now reads `READONLY You
+  can't write against a read only replica.`, exactly the server's reply;
+  five of them lacked the closing period, and the Tauri plugin used a
+  different sentence (since 4.0.0). An embedded replica's
+  `Store::dispatch_argv` also answered without the closing period that the
+  server and Redis send. And the server refuses a write on a replica
+  before it reads the arguments, so `DEL` with no key, `MSET a`, a bare
+  `SET`, `RENAME a`, `COPY a` and `SUNIONSTORE` all get `-READONLY`, where
+  `dispatch_argv` checked their arguments first and answered with the
+  arity error; it now asks the store's state first for every command the
+  server counts as a write, so an embedded replica gives the server's
+  bytes, and a closed store gives its `connection closed` error in the
+  same order (since 4.0.0).
+
+- **An embedded `MSET` logs one frame per shard.** Each key used to be set
+  under its own lock and logged as its own `SET`, so a crash could keep any
+  prefix of the pairs. Now the pairs of one shard are set under one lock
+  and logged as one `MSET` frame: a shard's share survives a crash whole or
+  not at all (across shards there is still no such guarantee, as in Redis
+  Cluster). The AOF, a replica and the change feed see `MSET` frames where
+  they used to see one `SET` per key; a feed consumer that reads only `SET`
+  events should read `MSET` too, as it already must for a server.
+
+- **An embedded `SCAN` page costs what it walks.** `Store::scan` copied
+  every key in the store on each call and sliced one page out of the
+  copy, so walking a store of n keys cost O(n²) and each page held a copy
+  of the whole keyspace (since 2.0.10); `keys_iter` and `randomkey` copied
+  it too. The cursor now names a shard and a position in its table, as the
+  server's does, and a page walks from there: a key present throughout is
+  returned at least once, and `count` bounds the walk rather than the
+  page, as in Redis. `keys_iter` returns a `KeysIter` that holds one page.
+  `RANDOMKEY` draws a shard in proportion to its keys and picks from a
+  random point in its table.
+
+### The embedded store: what a kill keeps, and opening and closing
+
+- **An embedded store that is killed keeps every write that returned.**
+  Under `EverySec` and `No`, appends used to wait in a user-space buffer
+  until the next tick or fsync, so a process killed in between — a crash,
+  `SIGKILL`, the iOS or Android memory killer — lost them. Appends now land
+  in memory the kernel owns the moment the append returns:
+  - On Apple platforms the embedded store appends through a map of its
+    AOF. `write()` on a file on iOS and macOS costs several microseconds
+    per call, and a sustained stream of large values was bounded by it.
+    The AOF now keeps a preallocated tail (4 MiB, doubling to 64 MiB)
+    mapped into memory, and an append is a copy into it; `fsync` becomes
+    `msync` plus `F_FULLFSYNC`. A killed process leaves the tail's unused
+    part as zeros, which the next open trims; a clean close truncates the
+    file to its records. `Config::with_mapped_aof(false)` goes back to
+    `write()` and a staging ring.
+  - Elsewhere, appends go to a staging ring: a small file
+    (`aof-<i>.aof.stage`, 4 MiB by default) mapped into memory. The ring
+    drains into the AOF on every tick, and the next open replays whatever
+    a killed process left in it — in the directory itself or in a copy of
+    it taken after the kill, as a backup is. A burst of writes that fits
+    in the ring no longer calls `write()` on the caller's thread; a
+    sustained stream larger than the ring is still bounded by how fast the
+    drain can `write()` it. `Config::with_stage_ring(0)` turns staging
+    off.
+
+  Power loss is bounded as before, by the fsync policy. `Always` uses
+  neither. 6.4 knows neither the zero tail nor the ring: given a directory
+  straight after a kill it reports the zeros as a corrupt tail and
+  quarantines them, and loses what was in the ring. After a process kill,
+  downgrade only once the store has been opened and closed cleanly by this
+  version.
+
+- **`appendfsync no` and `everysec` write the AOF buffer into the kernel
+  on every tick, and the `everysec` fsync no longer holds the shard
+  lock.** The embedded engine, and the server with `KEVY_AOF_OFFLOAD=0`,
+  kept records in the 256 KiB user-space buffer until it filled (or, under
+  `everysec`, until the next fsync), so a killed process could lose writes
+  made seconds or minutes earlier under `no`, and about a second of writes
+  under `everysec`. A killed process with staging turned off now loses at
+  most one tick of writes (100 ms by default in the embedded engine; one
+  reactor iteration on the server). The embedded background reaper also
+  ran `fdatasync` (`F_FULLFSYNC` on Apple platforms) while holding the
+  shard's write lock, so every write to that shard waited for the disk; it
+  now writes the buffer into the kernel under the lock and runs the fsync
+  after releasing it. Writes that arrive while the fsync runs are covered
+  by the next one, so the power-loss window under `everysec` is about one
+  second plus one reaper tick plus the time one fsync takes. The
   documented "≤ 1 s" never included the tick or the fsync; the docs now
   state the window this way, and state what a killed process loses
   separately. `Store::fsync_aof()` still returns only once every earlier
   write is on disk. `kevy-persist` adds `Aof::tick` and `PendingSync` for
-  callers that want the same split.
-- **`appendfsync no` and `everysec` write the AOF buffer into the kernel
-  on every tick.** The embedded engine, and the server with
-  `KEVY_AOF_OFFLOAD=0`, kept records in the 256 KiB user-space buffer
-  until it filled (or, under `everysec`, until the next fsync), so a
-  killed process could lose writes made seconds or minutes earlier under
-  `no`, and about a second of writes under `everysec`. A killed process
-  now loses at most one tick of writes (100 ms by default
-  in the embedded engine; one reactor iteration on the server). Power
-  loss is unchanged: under `no` the OS decides when the data reaches the
-  disk, and the `everysec` fsync keeps its once-a-second cadence.
+  callers that want the same split. Power loss under `no` is unchanged:
+  the OS decides when the data reaches the disk.
 
-- **A counted `SPOP` over RESP3 is recorded by the members it removed.**
-  The RESP3 reply path for `SPOP key count` wrote the command itself to the
-  AOF and to replicas, so a restart or a replica popped different random
-  members. It now records `SREM key member…`, as the RESP2 path always did,
-  and an empty pop records nothing.
-- **A conditional `HEXPIRE` keeps its deadlines across a restart.** The
-  absolute-deadline frame that follows a relative `HEXPIRE`/`HPEXPIRE`
-  copied the command's `NX|XX|GT|LT`; on replay the condition refused it,
-  and the field counted its TTL again from the replay. The frame now names
-  each field's deadline as it stands after the command, with no condition.
-  The embedded `hexpire`/`hpexpire_at` no longer record fields their
-  condition refused, which a replay used to give the new deadline.
+- **Closing an embedded store returns at once.** Closing joins the
+  background reaper thread, which slept out its tick without looking at
+  the stop signal, so every close waited up to the reaper interval
+  (100 ms by default) — on an iPhone 15, closing a store just after
+  opening it took 110 ms. The reaper now wakes when the store closes.
+  Freeing the keys, the rest of the cost, now happens on a thread after
+  the close returns: closing 100,000 keys went from 7.4 ms to 0.04 ms on
+  an M-series Mac. The AOF and the tier log still close before the call
+  returns, and a close after writes still waits for their final fsync.
 
-- **Scalar and ORDERPATH indexes hold each row once.** An index kept every
-  row's key and value twice (once in the ordered tree, once in the
-  key-to-value map) and, for the duplicate count, a third copy of every
-  distinct value. Both lookup directions now point at one shared row, and
-  the duplicate count reads the tree. Counted on the heap, an `i64` index
-  with short keys drops from 155–211 to 92–102 bytes per row, and an
-  ORDERPATH index (a string department plus a timestamp) from 265–321 to
-  109–119; the ranges are the two ends of the hash table's growth steps.
-  Re-applying the value a key already holds no longer touches the index.
-- **An index's reported size is now its real size, which is two to four
-  times the old figure.** `approx_bytes` (the `bytes` of `IDX.VERIFY`,
-  `IDX.LIST` and `TABLE.VERIFY`) used to be `value + key + 48` per row and
-  undercounted the heap. It is now the shared row (56 bytes plus the key
-  and any string value), one ordered-tree slot and the reverse set's
-  buckets: about `key + string value + 82…93` bytes per row. The same
-  figure feeds a `MAXMEM` budget and the tiering reservation for indexes
-  (`index_reserved_bytes`), so after upgrading an index declared with a
-  tight `MAXMEM` can fail its build with `-INDEXOVERBUDGET`, and a tiered
-  store sized close to its index floor keeps less data hot or refuses a
-  new index. Re-check budgets against `IDX.LIST` on a loaded sample; the
-  per-row formula is in `docs/indexes.md`.
-- `bench/idxgate.sh` checks the reported index size against the server's
-  resident memory, measured as the RSS difference between a server with
-  the index and one without; before, it compared the figure with the
-  formula that produced it.
+- **Opening an embedded store is about 2.8× faster.** Two passes over the
+  data were redundant: open serialised the whole keyspace to estimate the
+  auto-rewrite baseline, which cannot change any rewrite decision while
+  the log is under half of `auto_aof_rewrite_min_size` (64 MiB by
+  default) and no staleness trigger is set; and it walked each AOF a
+  second time to find a torn tail the replay had just shown was not
+  there. Replay also reuses one argument buffer across records instead of
+  allocating one per record. Opening 10,000 keys of 256 bytes went from
+  5.4 ms to 1.9 ms on an M-series Mac; 50,000 from 32 ms to 9.4 ms.
+  `kevy_persist::replay_aof_in_place` is the new by-reference replay
+  entry.
 
-- **One implementation of each single-key command.** The server and the
-  embedded engine now run their single-key data commands through the same
-  code, the new `kevy-verbs` crate: argv grammar, checks, the store call,
-  the reply and its error wording. `Store::dispatch_argv` — the path every
-  language binding uses — records such a write as the command it ran,
-  followed by `PEXPIREAT` / `HPEXPIREAT` when it moved a deadline by a
-  relative amount; the CDC feed carries those frames as well. The typed
-  `Store` methods record what they did before. Server replies are
-  unchanged. Over `dispatch_argv`, `INCRBYFLOAT` now answers with the
-  stored value's own digits, as the server does, and a malformed write on
-  a closed or replica store is refused as closed or `READONLY` rather than
-  for its arity.
-- **An embedded replica applies every write its primary records, except
-  stream and geo.** `SETEX`, `PSETEX`, `SETNX`, `MSET`, `HMSET`, `GETEX`,
-  `UNLINK`, `RPOPLPUSH`, `LMOVE`, the blocking pops and `ZPOPMIN.BELOW`
-  used to be skipped on replay. A logged `SET … NX` / `XX` is now applied
-  with its condition, as the primary ran it: a primary also logs a
-  `SET NX` that lost, and applying that one unconditionally handed a held
-  key to the caller that lost it.
-- **Server: `GETEX key EX|PX` keeps its deadline across a restart.** The
-  AOF now follows it with the absolute `PEXPIREAT`, as it does for
-  `EXPIRE` and `SET … EX`; before, a restart counted the TTL again from
-  the replay.
 - **Persistent embedded writes copy the value twice, not five times.**
   Logging a write used to copy every argument into an owned argv, copy it
   again into that argv's buffer, and encode the frame into a scratch
@@ -174,97 +895,456 @@
   written to the AOF and when it is fsynced are unchanged.
   `kevy_sys::checksum::try_crc32c_hw_append` continues a CRC32C across
   pieces.
-- **Encrypted clients in cluster mode.** Every shard's cluster port gets an
-  encrypted twin (`[secure] cluster_port_base`, `announce_cluster_port_base`),
-  and a client that came in encrypted is told those ports in `-MOVED` and
-  `CLUSTER SLOTS` / `NODES` / `SHARDS`, while plaintext clients still see the
-  plaintext ones. `ClusterClient::connect_url`,
-  `AsyncClusterClient::connect_secure_url`, `kevy-cli -c`, the `kevy-cli
-  --cluster` tools and `ReadWriteClient::connect_urls` accept `kevys://`.
-  `kevy_rt::relayed_client` and `Runtime::with_secure_cluster_announce`
-  carry this through the runtime.
-- `kevy-cli --kevy import` of a file that does not exist no longer leaves a
-  `<file>.progress` behind.
-- `kevy-cli -u kevys://host:port[/db]?server_key=<hex>[&client_key_file=<path>]`
-  connects to kevy's encrypted client port, for one-shot commands, the
-  REPL and `--pipe` alike. `kevy-resp-client` gains `SecureStream::handshake`
-  over an already-open socket, `SecureStream::buffered` and
-  `SecureStream::writer` (a `SecureWriter` for a second thread, sealing in
-  wire order).
-- **io_uring: no more 200 µs stalls for clients that pause between
-  batches.** After a batch of work forwarded from other shards, an owner
-  shard used to sleep for 200 µs, deaf to new input; a client whose keys
-  lived on another shard and that paused between pipelined batches — any
-  application doing work on the replies, and every client behind a proxy
-  — waited out that sleep on every batch (measured: 298 µs per batch of
-  32 instead of 32 µs). The owner now keeps polling for those 200 µs and
-  picks up new work at once. The cost is CPU: up to 200 µs of one core
-  after each burst of forwarded work, before the shard parks.
+
+- **One implementation of each single-key command.** The server and the
+  embedded engine now run their single-key data commands through the same
+  code, the new `kevy-verbs` crate: argv grammar, checks, the store call,
+  the reply and its error wording. `Store::dispatch_argv` — the path every
+  language binding uses — records such a write as the command it ran,
+  followed by `PEXPIREAT` / `HPEXPIREAT` when it moved a deadline by a
+  relative amount; the CDC feed carries those frames as well. The typed
+  `Store` methods record what they did before. The server's replies to
+  these commands are unchanged. Over `dispatch_argv`, `INCRBYFLOAT` now answers with the
+  stored value's own digits, as the server does.
+
+- **Android: batch reads and writes no longer go through the command
+  path.** `KevyDB.mget` used to encode an `MGET`, run it and parse the RESP
+  reply in Kotlin; it now makes one native call that hands back the values
+  packed, copied once. The typed surface gains `KevyDB.mset(vararg pairs)`,
+  on the same kind of lane. A `get` of a short key allocates nothing of its
+  own: the key is read onto the stack and the value copied straight from
+  the store into the new array. Measured on a Galaxy S22 (SM-S9010,
+  Android 16) against MMKV 2.4.2 (`bench/mmkvgate`): a 256-byte batch read
+  went from 2.0× MMKV's time to about even, a batch write from 1.5× to
+  1.26×, and a 16-byte read from 1.09× to 0.77×.
+
+### Performance and memory
+
+- **The server runs on kevy-alloc by default.** The `kevy` crate's
+  `kevy-alloc` feature is now a default feature, so the server binary —
+  from `cargo install`, the release archives, the container image and
+  `@goliapkg/kevy-bin` — allocates through kevy's own allocator instead
+  of glibc malloc, returns free pages on the shard tick and packs the
+  holes demotion leaves (the defrag pass below). Against glibc on the
+  same commit (aarch64 Linux, server on 2 cores, `redis-benchmark -c 60`,
+  five rotated rounds): `LPUSH` +11.3%, `ZADD` +11.4%, `HSET` +3.1%,
+  `SADD` +1.4%, `GET` and `SET` level, `INCR` −2.2%, which an exact
+  instruction count (callgrind, x86-64) puts at 2015 against 2016
+  instructions a command; every write command costs as many instructions
+  or fewer. `INFO modules` reports
+  `module:name=alloc,impl=kevy-alloc`, and now names the allocator the
+  process runs on rather than the one compiled in, so a program using
+  the `kevy` library under its own allocator reports `impl=system`.
+  `--no-default-features` builds the server on the system allocator;
+  nothing else changes with it. docs/alloc.md has the measurements and
+  the reasons to build without it.
+
+- **An index is a counted B+ tree of packed leaves, a quarter or less
+  of the memory and faster on every write and range read.** Each row was
+  an allocation of its own, held from an ordered set and from a hash set
+  keyed back to the entry, and `VALUES` sat in a third map: 95 bytes a
+  row for an `i64` index, 276 with two stored values, 127 for an
+  `ORDERPATH`. An index is now a B+ tree of 1,784-byte leaves; an entry
+  is a 10-byte slot and the part of its order key past the first eight
+  bytes, with a key's digits packed two to a byte and stored values in
+  the same entry. Over 1.25 million rows keyed `row:<n>`: 15.9 bytes a
+  row for an `i64` index once packed and 23–25 after random writes; 25–40
+  with two `VALUES`; 21–40 for an `ORDERPATH`. Measured against the
+  previous structure on one arm64 box, alternating builds, three rounds
+  each: inserts 41–77% faster, value changes 47–65%, `IDX.COUNT` O(log n)
+  instead of a walk (a count over 1% of the rows 99.7% faster), `FILTER` /
+  `SORT` / `DISTINCT` / `FACET` 55–81%, range pages 32–41%, window cuts
+  58–87%. Two operations got slower, and neither serves a query any more:
+  finding one given `(value, key)` — 1.1–1.5 µs against 0.4–0.5 µs, the
+  price of holding no map from key back to entry — which a backfill does
+  per row (still 14% faster in all with the cheaper insert) and `COMPOSE
+  AND` now does only against an index with a window; and walking every
+  entry, 38–68 ns a row against 23, which `VERIFY` does beside a row read
+  and an allocation per entry. A scan of 50 entries from a cursor over
+  string or `ORDERPATH` values is 2% slower. A global index keeps no
+  per-row placement table on the row's shard: a write names the old
+  value, which names the partition. Re-applying the value a key already
+  holds no longer touches the index. docs/indexes.md has the per-row
+  formula.
+
+- **An index packs its leaves in the background, so its size no longer
+  depends on the order its rows were written in.** A write splits a full
+  leaf in two and merges a leaf only once it is under a quarter full and
+  fits into a neighbour within three-quarters, so writes alone left
+  leaves anywhere from one entry to full: the same 20,000 rows took 14.5
+  bytes a row written in order and 23.8 as 100 interleaved ascending
+  runs, and a million rows took 39 after deleting half of them at
+  random. The shard tick, and an embedded store's reaper tick, now walk
+  each index's leaves and pour the next leaf's first entries into the
+  one before while they fit, dropping a leaf that empties: at most half a
+  millisecond a tick, four leaves between clock reads. Once a pass moves
+  nothing an index rests, with every leaf but its last too full to take
+  the next leaf's first entry, until it has an eighth more leaves or an
+  eighth fewer entries. The 20,000 rows then take 15.5 bytes a row in a
+  local index and 14.6 in a global one whatever order they came in, and
+  1.25 million random writes pack from 21.6 to 15.1 in 49 ms of one core.
+  Writes and lookups are unchanged: counted in instructions against the
+  previous build, inserts, deletes and lookups each differ by 0.3% or
+  less. With `[expiry] hz = 0` there is no shard tick and nothing packs.
+
+- **A command pays less to reach the store.** Every write copied its key
+  for the index hook before the hook checked whether any index exists,
+  and read two thread-locals that only Lua scripts and nondeterministic
+  verbs ever set; the key is now passed by reference and both reads sit
+  behind one flag. A pipeline looked its connection up by hash three
+  times per command; it now keeps the slot for the batch. A forwarded
+  `GET` or `SET` carries its resolved verb, so the owning shard does not
+  match the name again. The envelopes that carry batches between shards
+  are reused instead of reallocated per batch, and `GET` / `INCR` probe
+  the keyspace once instead of twice. Pipelined commands in steady state
+  allocate nothing on this path. Measured on 2 saturated shards: 13–16%
+  fewer instructions per command for `SET`, `GET`, `INCR` and `LPUSH`,
+  and 10–18% more throughput.
+
+- **kevy-alloc returns memory after it goes quiet, and its bookkeeping no
+  longer grows with the heap.** Each reclaim sweep handed back every free
+  page at once, so a buffer freed and reused a tick later was faulted back
+  in: with kevy-alloc as the global allocator, a server under steady load
+  took thousands of page faults a second. A page now goes back to the OS
+  only after it has been unused for `PURGE_DELAY` sweeps (about a second at
+  the default tick), and everything left over returns within that bound
+  once allocation stops. The allocator statistics a server reads every
+  tick were a walk over every span of the heap; they are running totals
+  now, which on a list growing to millions of elements was 15% of the
+  shard's time. The sweep visits only spans and segments that have work.
+
+- **kevy-alloc no longer writes zeroes into fresh mappings.** The
+  allocator had no `alloc_zeroed`, so a zeroed request went to the
+  default: allocate, then clear every byte. For a block past the size
+  classes that clearing wrote every page of a mapping the kernel had
+  already zeroed and made all of it resident, needed or not — each
+  shard's 64 MiB io_uring receive ring among them, in a server built with
+  `--features kevy-alloc`. A 64 MiB zeroed vector had all of its pages
+  resident before a byte was written; it now has none. A fresh mapping is
+  handed out as it is; only a reused one is cleared. Affected since 5.0.0.
+
+- **A server on kevy-alloc defragments its heap.**
+  Demoted rows leave holes, and a page goes back to the OS only once
+  nothing on it is live. Each shard tick now copies the values kevy-alloc
+  names as sitting in sparse spans (strings, hash tables and their blocks)
+  into denser ones, and the reclaim that follows returns what emptied. A
+  pass starts when the free space inside spans exceeds 1/64 of live
+  memory (at least 4 MiB), stops below 1/256 (at least 1 MiB), takes
+  0.5 ms a tick rising to 2 ms once free space reaches 1/16, and rests
+  after a lap that moved nothing until free space grows by a quarter.
+  Under kevy-alloc the tiering memory guard reads the allocator's own
+  figures and does not trim glibc. kevy-alloc finds a span with room in
+  O(1), fullest first. New: `kevy::kevy_alloc_is_global`,
+  `Store::set_defrag_hint`, `Store::defrag_step`,
+  `kevy_alloc::global::should_move`. A build on the system allocator is
+  unchanged.
+
+- **A keyspace table that grows no longer holds itself twice.** Growth
+  moved every entry into a table twice the size and freed the old one at
+  the end, so for the length of the move the process held both: 444 MB
+  to move a 148 MB table into a 294 MB one. A table large enough to be
+  mapped directly now hands the old table's pages back as the move passes
+  them; entries land in the new table in the same order they leave the
+  old one, so it fills as the other empties, and the same growth peaks at
+  302 MB. `KevyMap` gains `room` (new keys before the next growth) and
+  `grown_footprint` (the bytes after it); kevy-madvise gains
+  `mapped_bytes` and `release_2mb`; kevy-sys gains `heap_stats`.
+
+- **Demotion keeps up while nothing but a backfill runs.** The sampler
+  that picks rows to demote started each window from a position drawn
+  from the access clock, and a tick demoted at most one batch of 32. A
+  backfill reads rows without touching them, so the clock stood still:
+  the sampler walked the same window every tick, found it cold once its
+  few hot rows had gone, and backed off for seconds, while the index it
+  was making room for grew by 10 MB a second. On ten million rows in a
+  3 GiB budget demotion moved about 2,000 rows a second against the
+  10,000 the build needed, and the index floor pushed resident memory to
+  1.20 × budget. The sampler now sweeps the table from where its last
+  window ended, and a tick repeats batches until the store is under
+  target, out of candidates, or half a millisecond has gone.
+  `used_memory` now tracks the target through the build, and the phase's
+  peak falls from 1.20 to 1.12–1.14 × budget. A hot read's p99 while an
+  index builds over a cold sweep went from 129 to 201 µs, the cost of
+  demotion now doing its work (the line is 1,056 µs).
+
+- **A table declaration no longer copies the keyspace, and neither does
+  any sweep over a prefix.** `TABLE.DECLARE` starts a backfill per
+  compiled index and one that packs the existing rows, and each began by
+  copying every key under the table's prefix into a list on every shard
+  — about 72 bytes a key, three lists at once, 2.17 GB for ten million
+  rows, freed only as each backfill finished and leaving about a gigabyte
+  of small free chunks glibc could not return. The backfills (and
+  `IDX.CREATE`'s, and the embedded store's) now walk the keyspace with a
+  cursor and hold one batch: on 100,000 rows the build held 79.9 bytes a
+  row above what it keeps and now holds 1.3; the packing backfill held
+  41.0 and now holds 1.3. The walk goes in storage order, as the copy
+  did, and a query still answers `-INDEXBUILDING` until it has finished;
+  rows written, deleted or renamed during the walk end up indexed as they
+  end. Building both indexes over a million rows takes 2.3% less time and
+  packing them 3.6% less. `IDX.VERIFY`, `TABLE.VERIFY`, the sampling a
+  global index's split points start from, `MOVE-SCOPE`'s export and
+  `PREFIX.DIGEST` each also began by copying every key under the prefix
+  (`MOVE-SCOPE` every key in the shard) and held the copy for the length of
+  the sweep — on ten million rows `PREFIX.DIGEST` held about 200 MB,
+  enough to push a tiered server 6% past its budget. Each now walks the
+  prefix a batch of 1,024 keys at a time; they run in one operation and
+  insert nothing, so every key is still visited once and the count and
+  digest are unchanged. New: `Store::walk_page` and
+  `KevyMap::scan_buckets`, the storage-order walk with its cursor.
+
+- **A cold row comes back packed when its table can hold it.** Declaring
+  a table leaves the rows that are already cold alone — they hold no
+  memory for the packed form to save — but they were demoted as general
+  hashes, so the first read that promoted one brought it back as a
+  general hash, and it stayed one. A table declared over a mostly cold
+  keyspace ended up with most of its rows in the form it was declared to
+  replace. Promotion now builds the packed form straight from the record
+  when every field of the row is a column of a declared table, on that
+  table's shared column names; a row with a field no table declares, or
+  a server with `packed_rows` off, promotes as before. Promoting a row of
+  four short fields and a 900-byte one takes 9% less time and leaves 1,000
+  bytes in memory where it left 1,808.
+
+- **Packed rows share their table's column names.** A packed row is
+  meant to carry no field names — they are the table's — but every row
+  got its own copy of the list, made when it was packed and again each
+  time it came back from the cold tier: 144 bytes for the list and 32 for
+  each name, 304 bytes a row for five columns, charged nowhere. A table's
+  rows now point at one list. The server's write hook also stopped
+  rebuilding that list, and taking the catalog lock, on every write to a
+  declared row. Measured with kevy-store's `bench_hash_rows`, packing a
+  row of five columns takes 23% less time and a cold row's round trip 7%
+  less. `Store::pack_row` takes the table's `ColumnNames` rather than a
+  slice of names, so that every row can be handed the same one. Affected
+  since 5.4.0.
+
+- **`ZADD` makes no heap allocation to read its arguments.** Each call
+  copied every option token to uppercase it, copied its score to
+  lowercase it before parsing, and put a single score and member in a
+  vector of their own: three allocations and three frees per command.
+  Options are now matched on the stack, a score goes straight to the
+  float parser (which already takes every `inf` spelling), and one pair
+  stays on the stack. Counted with callgrind on one x86_64 host, a
+  pipelined `ZADD` into a growing set costs the server 6,154 instructions
+  where 7.0 before this change spent 6,755 and 6.4.0 spent 6,881. The
+  option tokens of `SET` and the legacy `GEORADIUS ... STORE` form are
+  matched the same way, and every command that takes a float (`ZINCRBY`,
+  `ZRANGEBYSCORE`, `INCRBYFLOAT`, the `GEO` commands and the rest) skips
+  the lowercase copy.
+
+### New features
+
+- **Global indexes: one index spread over the shards by value.** A default
+  index is local — every shard indexes its own rows, so every read goes to
+  every shard and the origin merges their pages. `IDX.CREATE … PARTITION
+  global [SPLIT v]…` and `TABLE.DECLARE … INDEX col kind GLOBAL [SPLIT AT
+  v…]` (or `ORDERPATH … GLOBAL`) cut the index into value-ordered
+  partitions, one per shard; a row stays where its key hashes, its entry
+  goes to its value's partition. An `EQ`, or a `RANGE` inside one
+  partition, reads one shard; a page in order walks the partitions it
+  needs one after another and concatenates them; `COUNT` and the
+  selection clauses go only to the partitions the range meets, and
+  `IDX.EXPLAIN` names them. A write replies once its entry's owner has
+  applied it. Without split points, every shard sends its rows' values in
+  rank buckets and kevy merges them, so the largest partition starts
+  within 0.8% of the mean; `IDX.REBUILD` takes them again, and `IDX.LIST`
+  shows the spread (`partitions`, `max_entries`, `mean_entries`).
+  `FIELDS` on a global index answer from its `VALUES`, and a field not
+  stored there is refused by name, with `IDX.ADVISE` suggesting it.
+  `IDX.VERIFY` matches every row against the entry its owner holds, and a
+  global unique index counts duplicates across the whole keyspace. Range
+  and unique kinds only; not for `COMPOSE`, views, windowed tables or
+  embedded stores, each refused by name. `IDX.LIST` now names every
+  index's `partitioning`, `local` or `global`, and `IDX.DESCRIBE` names it
+  before `declaration`. The catalog, global indexes included, is kept in
+  the log (see the catalog fix above), so 6.4 opens a directory holding a
+  global index with no indexes at all.
+
+- **Encrypted links between kevy nodes, off unless configured.**
+  Replication and the election control plane can run over Noise IK
+  (X25519, ChaCha20-Poly1305, BLAKE2s) with both ends authenticated by
+  their keys. `kevy keygen <file>` writes a node key; `[secure]
+  private_key_file`, `[cluster] secure` / `peer_keys` and `[replication]
+  secure` / `upstream_key` / `replica_keys` turn it on. A link turned on
+  without the keys it needs refuses to start instead of falling back to
+  plaintext, and replicas follow a failover to the new primary without new
+  configuration. Embedded stores encrypt the same links in code:
+  `Config::with_writer_security` and `Config::with_replica_security` take
+  a `LinkKeys` (this store's `Keypair` and the keys it accepts). The
+  handshake matches the server's, so embedded replicas can follow a secure
+  server and server replicas a secure embedded writer. See
+  `docs/encrypted-links.md`.
+
 - **An encrypted client port, off unless configured.** `[secure]
   listen_port` opens a second client port that speaks only kevy's Noise IK
   protocol, and `client_keys` limits which client keys may use it; the
-  plaintext port is unchanged. The Rust clients connect with
+  plaintext port is unchanged, and there is still no TLS or AUTH on it.
+  The Rust clients connect with
   `kevys://host:port?server_key=<hex>[&client_key_file=<path>]`:
   `kevy-resp-client` (`RespClient::connect_url`, `SecureStream`,
   `ClientStream`), `kevy-client` (`Connection`, `Subscriber`) and
   `kevy-client-async` (`AsyncConnection::connect_secure_url`,
-  `AsyncSubscriber::connect_secure_url`). `CLIENT LIST` shows each
-  encrypted client's own address. See `docs/encrypted-links.md` for the
-  measured cost.
-- `CLIENT SETPEER`, enabled only by `Runtime::with_peer_token`, lets a
-  relaying front end name the client it relays for.
-- `AsyncConnection` and `AsyncSubscriber` take a transport type parameter
-  that defaults to the runtime's `TcpStream`, so existing code keeps its
-  types.
-- `kevy_noise::Transport::split` separates the sending and receiving
-  halves of a session.
-- **Encrypted links between kevy nodes, off unless configured.** Replication
-  and the election control plane can run over Noise IK (X25519,
-  ChaCha20-Poly1305, BLAKE2s) with both ends authenticated by their keys.
-  `kevy keygen <file>` writes a node key; `[secure] private_key_file`,
-  `[cluster] secure` / `peer_keys` and `[replication] secure` /
-  `upstream_key` / `replica_keys` turn it on. A link turned on without the
-  keys it needs refuses to start instead of falling back to plaintext, and
-  replicas follow a failover to the new primary without new
-  configuration. Client connections are unchanged: still no TLS or AUTH,
-  still fronted by a proxy. See `docs/encrypted-links.md`.
-- Embedded stores encrypt the same links in code:
-  `Config::with_writer_security` and `Config::with_replica_security` take
-  a `LinkKeys` (this store's `Keypair` and the keys it accepts). The
-  handshake matches the server's, so embedded replicas can follow a secure
-  server and server replicas a secure embedded writer.
-- Config string values keep non-ASCII characters: a `kevy.toml` path or
-  value with Chinese or Japanese text was read back garbled.
-- New crates `kevy-crypto` (the primitives, no dependencies, checked against
-  the RFC, Wycheproof and BLAKE2 vectors) and `kevy-noise` (the IK handshake
-  and transport without I/O, checked against the cacophony and snow
-  vectors).
-- `kevy-sys` gains `fill_random` (getrandom(2) on Linux and Android,
-  getentropy(3) on macOS and iOS).
-- **Cluster mode works behind a proxy or NAT.** `[cluster] announce_ip` and
-  `announce_port_base` set the address and first port that `CLUSTER
+  `AsyncSubscriber::connect_secure_url`). `kevy-cli -u
+  kevys://host:port[/db]?server_key=<hex>[&client_key_file=<path>]` uses
+  it for one-shot commands, the REPL and `--pipe` alike. `CLIENT LIST`
+  shows each encrypted client's own address. See
+  `docs/encrypted-links.md` for the measured cost.
+
+- **Encrypted clients in cluster mode.** Every shard's cluster port gets an
+  encrypted twin (`[secure] cluster_port_base`,
+  `announce_cluster_port_base`), and a client that came in encrypted is
+  told those ports in `-MOVED` and `CLUSTER SLOTS` / `NODES` / `SHARDS`,
+  while plaintext clients still see the plaintext ones.
+  `ClusterClient::connect_url`, `AsyncClusterClient::connect_secure_url`,
+  `kevy-cli -c`, the `kevy-cli --cluster` tools and
+  `ReadWriteClient::connect_urls` accept `kevys://`.
+
+- **Cluster mode works behind a proxy or NAT.** `[cluster] announce_ip`
+  and `announce_port_base` set the address and first port that `CLUSTER
   SLOTS`, `CLUSTER NODES`, `CLUSTER SHARDS` and `-MOVED` advertise, so a
   key-aware client follows redirects to the proxy instead of to kevy's own
   ports. Both are unset by default, and nothing changes until you set them.
+
+- **The embedded engine serves the stream and geo commands, and an
+  embedded replica applies them.** `Store::dispatch_argv`, the path every
+  language binding uses, now runs `XADD`, `XRANGE`, `XREVRANGE`, `XREAD`,
+  `XREADGROUP`, `XACK`, `XCLAIM`, `XAUTOCLAIM`, `XGROUP`, `XINFO`,
+  `XPENDING`, `XTRIM`, `XDEL`, `XSETID`, `XLEN` and the `GEO*` commands
+  through the server's own code, and a log or a primary's stream that
+  carries them is replayed. Before, the engine did not know these
+  commands, and an embedded replica of a server dropped every stream and
+  geo write its primary sent (since embedded replicas arrived in 1.22.0).
+  A read that asks to `BLOCK` is refused with `ERR the embedded engine
+  cannot block; call without BLOCK`, and an `XREAD` / `XREADGROUP` or a
+  geo store whose keys live on different shards with `CROSSSLOT`. The new
+  `streams-geo` feature of kevy-embedded is on by default.
+
+- **The browser package has streams and geo, and its `cmd` writes
+  persist.** `@goliapkg/kevy` is built with `streams-geo`, so `cmd`
+  reaches every stream and geo command above. A read with `BLOCK`
+  answers the same `ERR the embedded engine cannot block; call without
+  BLOCK`: a tab has one thread, and parking it would freeze the page, so
+  read without `BLOCK` on a timer or when a pub/sub message announces an
+  entry. Writes through `cmd` now reach the persistence pump as the
+  frames a native AOF would hold (an `XADD *` with the id it chose, a
+  group read with the deliveries it made), so a stream and its consumer
+  groups survive a reload from OPFS or IndexedDB (see the fix above for
+  what this did to every other `cmd` write). The module is 619 KB
+  gzipped, up from 539 KB. kevy-embedded gains an off-by-default
+  `host-log` feature for this (`Store::dispatch_argv_recorded`, the
+  frames a command's write records, for a host that keeps the log
+  itself), and `Store::apply_frame` now takes a catalog frame.
+
+- **`INFO # Tiering` reports where compressed value bytes went.** New
+  fields `vlog_raw_bytes`, `vlog_payload_bytes`, `vlog_frame_header_bytes`
+  and `vlog_dict_bytes`; `(payload + frame headers) / raw` is the ratio
+  over what the value log holds. The embedded store answers the same
+  through `Store::tier_compression()` (`KevyTierCompression`) and its
+  listener's `INFO`. See the tiering guide.
+
+- `CLIENT SETPEER`, enabled only by `Runtime::with_peer_token`, lets a
+  relaying front end name the client it relays for.
+
+### Rust API
+
+- **Every public API of the workspace follows the Rust API Guidelines.**
+  A `bool` parameter is an enum named for its meaning (`CopyMode`,
+  `InsertPosition`, …); a struct or enum the library may grow is
+  `#[non_exhaustive]` and built from `Default` or `with_*` builders; a type
+  with invariants keeps its fields private behind methods of the same
+  name; a free function that took a type first is a method on it; an error
+  is a type implementing `std::error::Error`, never a `String`, with
+  `as_wire()` / `to_wire()` where its text reached the wire; a (generation,
+  offset) pair of the change feed and replication is one `FeedPosition`.
+  [docs/rust-api-7.0.md](docs/rust-api-7.0.md) lists every change, crate by
+  crate, old → new, and §13 of the upgrade guide gives the common edits for
+  an embedded store. `tools/check_api_guidelines.py` (apigate) checks the
+  public API against the mechanical guidelines on every merge, with each
+  exemption and its reason in `suite/api-exemptions.toml`.
+
+- **kevy-config: new fields on the section structs.** `ClusterSection`
+  gains `announce_ip`, `announce_port_base`, `secure` and `peer_keys`;
+  `PeerEntry` gains `repl_port_base`; `ReplicationSection` gains `secure`,
+  `upstream_key` and `replica_keys`; `AdvancedSection` gains
+  `recv_buffers`; `Config` gains `secure` (`SecureSection`). A struct
+  literal that names every field no longer compiles; add the new ones, or
+  end it with `..Default::default()` where the struct has a default (all
+  of them but `PeerEntry`).
+
+- **kevy-rt: commands can send messages between shards, hold a reply
+  until they are applied, and keep state beside the keyspace.**
+  `Commands::take_ext_out` hands the runtime what a write's hooks queued
+  for other shards, `Commands::apply_ext` applies one on its shard, and a
+  client's write replies after every shard it sent to has applied it.
+  `Commands::extension_targets` names the shards an extension read (and
+  each of its follow-up phases) needs, instead of all of them.
+  `snapshot_aux`, `load_snapshot_aux` and `on_restored` let a command set
+  keep state of its own in every snapshot and rewritten log and settle it
+  once every shard has restored. All of them default to the old behaviour.
+
+- New crates: `kevy-verbs` (the single-key commands the server and the
+  embedded engine share), `kevy-crypto` (the primitives, no dependencies,
+  checked against the RFC, Wycheproof and BLAKE2 vectors) and
+  `kevy-noise` (the IK handshake and transport without I/O, checked
+  against the cacophony and snow vectors). `kevy_noise::Transport::split`
+  separates the sending and receiving halves of a session.
+
+- `kevy-resp-client` gains `SecureStream::handshake` over an already-open
+  socket, `SecureStream::buffered` and `SecureStream::writer` (a
+  `SecureWriter` for a second thread, sealing in wire order).
+  `AsyncConnection` and `AsyncSubscriber` take a transport type parameter
+  that defaults to the runtime's `TcpStream`, so existing code keeps its
+  types. `kevy_rt::relayed_client` and
+  `Runtime::with_secure_cluster_announce` carry encrypted cluster ports
+  through the runtime.
+
+- `kevy-sys` gains `fill_random` (getrandom(2) on Linux and Android,
+  getentropy(3) on macOS and iOS).
+
+- The Go module is `github.com/goliajp/kevy-go/v7`.
+
+- Tauri plugin: the Rust `Error` gains `Other` (`kind()` is `"Other"`),
+  a pub/sub event's `count` is an `i64`, and an event kind the plugin
+  does not know is no longer forwarded to the webview. The JavaScript
+  API is unchanged.
+
+### Tooling and documentation
+
+- **A `premerge` suite tier holds everything CI checks on a push.** The
+  coverage and documentation ratchets, the doctest run, the feature-lint
+  clippy and the generated-docs check ran in CI but in no tier run before a
+  merge, so a merge could be green locally and red on develop.
+  `python3 tools/suite.py premerge` now runs them, and `ci-parity` fails
+  when CI gains a check no tier runs, unless the manifest says why only CI
+  can run it.
+
+- **The capacity gates measure RSS.** capacity-envelope's D1 phase
+  samples RSS for the whole phase and fails above budget × 1.05, beside
+  its latency lines. `bench/tierrssgate.sh` (the full tier) loads 600,000
+  D1-shaped rows on a 256 MiB budget, reads cold rows back and overwrites
+  a quarter of them, sampling RSS every 200 ms: the previous release
+  peaks at 1.33 × budget, this one at 1.02–1.04 × over five runs.
+
+- **The upgrade guide and the Rust API reference.**
+  `docs/upgrading-6.4-to-7.0.md` covers what to check before and after
+  the upgrade, with every mixed-version statement measured against the
+  6.4.0 binary, and `docs/rust-api-7.0.md` lists every public API change
+  of the workspace, crate by crate, old → new.
+
 - `docs/deploy-behind-a-proxy.md` now requires client certificates in all
   three terminator configurations and shows how to issue them. Without
   them the proxy encrypts traffic for anyone who connects, and kevy has no
-  AUTH of its own.
-- The same chapter shows how to run replication and election between hosts
-  through stunnel with client certificates, including failover: peers are
-  named by their local tunnel ports, with the replication port in the new
-  fourth `peers` field. Verified with three nodes of one shard each.
+  AUTH of its own. The same chapter shows how to run replication and
+  election between hosts through stunnel with client certificates,
+  including failover: peers are named by their local tunnel ports, with
+  the replication port in the new fourth `peers` field. Verified with
+  three nodes of one shard each.
+
 - `docs/cluster.md` said shard `i` binds `port_base + 1 + i`; it binds
   `port_base + i`, with `port_base` defaulting to `port + 1`.
+
 - The warning printed for a non-loopback bind no longer says AUTH/TLS is
   coming in a later version.
-- **`FAILOVER` and election failover follow a non-default replication port.**
-  Both used to assume the new primary accepts replicas at its client port
-  + 10000, so a node with a different `[replication].listen_port_base` was
-  followed at the wrong port and the old primary never caught up.
-  `INFO replication` now reports `repl_port_base`, `FAILOVER` reads it from
-  the target, and a `[cluster] peers` entry takes an optional fourth field,
-  `id@host:elect_port:client_port:repl_port_base`, for election failover.
 
 ## 6.4.0 — the quality release: what a reader can check, and what a gate can
 

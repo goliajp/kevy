@@ -5,6 +5,8 @@
 //! [`query`] scalar query + admin, [`wire`] chunk/cursor encoding).
 
 mod args;
+mod compose;
+mod global;
 mod ops;
 mod ops_clauses;
 mod query;
@@ -14,6 +16,9 @@ mod wire;
 pub(crate) use args::{
     ComposeQuery, FilterArg, FilterShape, HybridArgs, KnnArgs, MatchArgs, Query, parse_groups_args,
     parse_match_score,
+};
+pub(crate) use global::{
+    PART_ORIG, PART_VERB, REBUILD_TAG, targets as global_targets, walk as global_walk,
 };
 pub(crate) use wire::{decode_value, decode_view_cursor, encode_value, hex, peek_hydration};
 
@@ -73,9 +78,18 @@ pub(crate) fn probe_window(
         return;
     }
     if let Some(cell) = ctx.state.catalogs.usage_cell(name)
-        && let Some(v) = kevy_index::window_value_of(lower, w.shape)
+        && let Some(v) = lower.window_value(w.shape())
     {
         cell.probe(v.saturating_sub(w.boundary()));
+    }
+}
+
+/// `IDX.REBUILD <name>`: a global index re-samples its split points, an ANN
+/// index compacts its tombstones.
+fn op_rebuild(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
+    match argv.get(1) {
+        Some(name) if global::is_global(ctx, name) => global::op_rebuild(ctx, store, name),
+        _ => ops::op_rebuild(ctx, argv),
     }
 }
 
@@ -85,6 +99,9 @@ pub(crate) fn extension_op(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -
     let verb = argv.first().map(Vec::as_slice).unwrap_or(b"");
     if verb.eq_ignore_ascii_case(b"IDX.LIST") {
         return query::op_list(ctx, store);
+    }
+    if verb.eq_ignore_ascii_case(PART_VERB) {
+        return global::op_part(ctx, store, argv);
     }
     if argv.get(1).is_some_and(|a| a.eq_ignore_ascii_case(b"HYBRID")) {
         return ops::op_hybrid(ctx, store, argv);
@@ -115,16 +132,18 @@ pub(crate) fn extension_op(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -
         .get(2)
         .is_some_and(|a| a.eq_ignore_ascii_case(b"GROUP") || a.eq_ignore_ascii_case(b"GROUPS"))
     {
-        return ops::op_agg(ctx, store, argv);
+        return ops::op_agg(ctx, argv);
     }
     // Phase 2 of GROUPS (internal): AGG.FETCH <name> <g…> — exact partials
     // for the candidate groups that survived phase-1 ranking.
     if argv.first().is_some_and(|v| v.eq_ignore_ascii_case(b"AGG.FETCH")) {
-        return ops::op_agg_fetch(ctx, store, argv);
+        return ops::op_agg_fetch(ctx, argv);
     }
-    // IDX.REBUILD <name> (ANN tombstone compaction)
     if argv.first().is_some_and(|v| v.eq_ignore_ascii_case(b"IDX.REBUILD")) {
-        return ops::op_rebuild(ctx, store, argv);
+        return op_rebuild(ctx, store, argv);
     }
     query::op_query(ctx, store, argv, verb)
 }
+
+#[cfg(test)]
+mod shard_tests;

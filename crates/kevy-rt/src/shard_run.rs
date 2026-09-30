@@ -7,7 +7,7 @@ use crate::Commands;
 use crate::park_fence;
 use crate::shard::Shard;
 use crate::shard_lifecycle::Accepted;
-use kevy_persist::{load_snapshot, replay_aof};
+use kevy_persist::{Routing, replay_aof};
 use kevy_resp::ArgvView;
 use std::io;
 use std::path::PathBuf;
@@ -60,7 +60,8 @@ impl<C: Commands> Shard<C> {
     /// Owning shard of `key` under this server's routing scheme.
     #[inline]
     pub(crate) fn shard_of(&self, key: &[u8]) -> usize {
-        crate::reduce::shard_of(key, self.nshards, self.cluster.is_some())
+        let routing = if self.cluster.is_some() { Routing::Slots } else { Routing::KevyHash };
+        crate::reduce::shard_of(key, self.nshards, routing)
     }
 
     /// This shard's snapshot file: `<data_dir>/dump-<id>.rdb`.
@@ -80,9 +81,9 @@ impl<C: Commands> Shard<C> {
     // LOC-WAIVER: busy-poll reactor main loop (per-iter perf-sensitive).
     pub(crate) fn run(mut self, stop: Arc<AtomicBool>) -> io::Result<()> {
         self.announce_to_commands();
-        // Restore: snapshot (state as of last SAVE) then replay the AOF (writes
-        // since that SAVE). The AOF is truncated at each SAVE, so this never
-        // double-applies. Replay goes straight to the store (no re-logging).
+        // Restore: the snapshot the AOF continues (none under a rewritten,
+        // complete AOF), then the AOF. Replay goes straight to the store
+        // (no re-logging).
         // Row segments are truth: load the registered set FIRST — a
         // v7 snapshot's stub records and the AOF's SEGMENTED frames
         // both resolve against it.
@@ -90,12 +91,7 @@ impl<C: Commands> Shard<C> {
         if let Err(e) = self.store.enable_seg_rows(&segs_dir) {
             return Err(io::Error::other(format!("shard {}: {e}", self.id)));
         }
-        let snap = self.snapshot_path();
-        if snap.exists()
-            && let Err(e) = load_snapshot(&mut self.store, &snap)
-        {
-            eprintln!("kevy: shard {} failed to load {}: {e}", self.id, snap.display());
-        }
+        self.load_boot_snapshot()?;
         if self.aof.is_some() {
             let aof_path = self.aof_path();
             let commands = &self.commands;
@@ -105,14 +101,14 @@ impl<C: Commands> Shard<C> {
             // backstops it so a bigger-than-budget log can never
             // outrun the batch budget while the reactor is not yet up.
             let mut frames: u64 = 0;
-            let mut torn: Option<String> = None;
+            let mut torn: Option<kevy_store::SegRowsError> = None;
             let apply = |args: kevy_persist::Argv| {
                 if let Some(f) = kevy_persist::segmented_frame(&args) {
                     // The stitch frame re-does a hot-layer eviction; a
                     // manifest that does not hold the segment means the
                     // truth set was damaged — finish the walk, then
                     // refuse startup by name instead of dropping rows.
-                    if let Err(e) = kevy_store::apply_segmented(store, &segs_dir, f) {
+                    if let Err(e) = store.apply_segmented(&segs_dir, f) {
                         torn.get_or_insert(e);
                     }
                     return;
@@ -133,20 +129,17 @@ impl<C: Commands> Shard<C> {
             }
             self.commands.on_replay_report(report.dropped_bytes, report.corrupt);
         }
-        // Segments nothing references after restore are orphans (a
-        // crash between sealing and the frame): sweep them.
-        self.store.sweep_orphan_row_segs();
-        self.store.demote_to_watermark();
+        self.finish_restore();
 
         // Off-accept-set shards have no listener (None); skip register.
         let listener_fd = if let Some(l) = &self.listener {
             l.set_nonblocking()?;
-            self.poller.add(l.raw(), true, false)?;
+            self.poller.add(l.raw(), kevy_sys::Interest::READ)?;
             l.raw()
         } else {
             -1
         };
-        self.poller.add(self.waker.read_fd(), true, false)?;
+        self.poller.add(self.waker.read_fd(), kevy_sys::Interest::READ)?;
         // S3: queued appends + writer thread (fsync off the reactor);
         // no-op when opted out or without an AOF.
         self.epoll_aof_setup();
@@ -156,7 +149,7 @@ impl<C: Commands> Shard<C> {
         if let Some(cl) = &self.cluster_listener {
             cl.set_nonblocking()?;
             if self.arms_accept {
-                self.poller.add(cl.raw(), true, false)?;
+                self.poller.add(cl.raw(), kevy_sys::Interest::READ)?;
             }
             cluster_fd = cl.raw();
         }
@@ -169,7 +162,7 @@ impl<C: Commands> Shard<C> {
         if let Some(un) = &self.unix_listener {
             un.set_nonblocking()?;
             if self.arms_accept {
-                self.poller.add(un.raw(), true, false)?;
+                self.poller.add(un.raw(), kevy_sys::Interest::READ)?;
             }
             unix_fd = un.raw();
         }
@@ -179,7 +172,7 @@ impl<C: Commands> Shard<C> {
         let mut replication_fd = -1;
         if let Some(rl) = &self.replication_listener {
             rl.set_nonblocking()?;
-            self.poller.add(rl.raw(), true, false)?;
+            self.poller.add(rl.raw(), kevy_sys::Interest::READ)?;
             replication_fd = rl.raw();
         }
         let waker_fd = self.waker.read_fd();
@@ -311,6 +304,9 @@ impl<C: Commands> Shard<C> {
             slow.mark("inbound");
             // Re-push anything that overflowed a full ring last iteration.
             self.flush_backlog();
+            // Hook messages no client waits on (expiry, replica apply,
+            // backfill) go out unacknowledged, ahead of the batch below.
+            self.send_ext(false);
             // Send this iteration's batched single-key dispatches (one per target).
             self.flush_requests();
             // Send this iteration's batched pub/sub deliveries (one per target).

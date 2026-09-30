@@ -41,12 +41,7 @@
 //!    `i` and its mirror index, so a group load starting near the end of the
 //!    table reads real bytes rather than falling off the allocation.
 //!
-//! # Growth
-//!
-//! Growth rebuilds rather than rehashes in place, and reinserts through
-//! `insert_known_unique`, which skips the key comparison entirely — the old
-//! table already proved every key distinct. That turns the rehash into one
-//! `match_byte(EMPTY)` per key.
+//! Growth lives in `grow.rs`.
 
 use core::borrow::Borrow;
 use core::ptr;
@@ -54,7 +49,7 @@ use core::ptr;
 use kevy_hash::KevyHash;
 
 use crate::group::Group;
-use crate::map::{DELETED, EMPTY, GROUP_WIDTH, KevyMap, MIN_CAP, ProbeOutcome, h2};
+use crate::map::{DELETED, EMPTY, GROUP_WIDTH, KevyMap, ProbeOutcome, h2};
 
 impl<K: KevyHash + Eq, V> KevyMap<K, V> {
     /// Insert `(key, value)`. Returns the old value if `key` was already
@@ -70,13 +65,17 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
     /// ```
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
         self.maybe_grow();
+        self.insert_with_room(key, value)
+    }
+
+    /// [`Self::insert`] after the growth check, which the caller has made.
+    #[inline]
+    pub(crate) fn insert_with_room(&mut self, key: K, value: V) -> Option<V> {
         let hash = key.kevy_hash();
         match self.probe_with_key(hash, &key) {
             ProbeOutcome::Found(idx) => {
-                // SAFETY: slot is full ⇒ initialised. We replace only the V
-                // field; the old K is kept (std HashMap semantics).
                 // SAFETY: `idx` came from a probe that found a full metadata byte, so the
-                // slot at `idx` holds an initialised `(K, V)` inside the slot allocation.
+                // slot at `idx` holds an initialised `(K, V)`; only its V is replaced.
                 let v_ptr = unsafe {
                     let kv: *mut (K, V) = self.slots_ptr.as_ptr().add(idx).cast::<(K, V)>();
                     ptr::addr_of_mut!((*kv).1)
@@ -104,79 +103,8 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
     }
 
     pub(crate) fn maybe_grow(&mut self) {
-        if self.cap == 0 || (self.occupied + self.deleted) >= self.threshold() {
+        if self.grows_on_insert() {
             self.grow();
-        }
-    }
-
-    fn grow(&mut self) {
-        let new_cap = if self.cap == 0 {
-            MIN_CAP
-        } else {
-            self.cap
-                .checked_mul(2)
-                .expect("a capacity that overflows usize could not have been allocated")
-        };
-        let mut new_table = Self::alloc_table(new_cap);
-        // Move every live entry over. After ptr::read'ing a slot we mark its
-        // metadata DELETED, so any subsequent Drop (incl. panic unwind) won't
-        // double-free; the old allocation will free with all-DELETED metadata.
-        //
-        // Only iterate the real slot range `[0, cap)`; the trailing mirror
-        // bytes are bookkeeping for SIMD-load wraparound, not real slots.
-        // Direct metadata writes are safe here because the old `self` table
-        // is going away (we swap with new_table then drop), so a stale mirror
-        // doesn't matter.
-        let old_cap = self.cap;
-        for i in 0..old_cap {
-            // SAFETY: i < old_cap ⇒ metadata in-bounds.
-            let meta = unsafe { *self.metadata_ptr.as_ptr().add(i) };
-            if meta & 0x80 == 0 {
-                // SAFETY: full slot ⇒ initialised; we mark DELETED immediately
-                // so this byte is never re-read as occupied.
-                let (k, v) = unsafe { ptr::read(self.slots_ptr.as_ptr().add(i) as *const (K, V)) };
-                // SAFETY: `i < cap`, so this is inside the metadata range. Writing DELETED
-                // immediately is what keeps the `ptr::read` above from being a double move:
-                // the byte is never seen as occupied again.
-                unsafe { *self.metadata_ptr.as_ptr().add(i) = DELETED };
-                let hash = k.kevy_hash();
-                new_table.insert_known_unique(hash, k, v);
-            }
-        }
-        // All occupied entries are now in new_table; the old self has no live slots.
-        self.occupied = 0;
-        self.deleted = 0;
-        core::mem::swap(self, &mut new_table);
-        // new_table (now the old self) drops; metadata is all DELETED (or EMPTY
-        // for previously-empty slots) ⇒ Drop walks but touches no slots.
-    }
-
-    /// Insert under the assumption that the key isn't already present (used
-    /// by `grow` to repopulate the new table). Skips the duplicate-key
-    /// check. Uses a 16-slot SIMD group scan to find the first EMPTY.
-    fn insert_known_unique(&mut self, hash: u64, k: K, v: V) {
-        let h2v = h2(hash);
-        let mut group_start = (hash as usize) & self.mask;
-        loop {
-            // SAFETY: metadata is `cap + GROUP_WIDTH` bytes; group_start
-            // is in `[0, cap)`; the load reads 16 bytes which lie inside the
-            // buffer thanks to the mirror tail.
-            let g = unsafe { Group::load(self.metadata_ptr.as_ptr().add(group_start)) };
-            if let Some(m) = g.match_byte(EMPTY).lowest_set() {
-                let slot = (group_start + m) & self.mask;
-                self.set_meta(slot, h2v);
-                // SAFETY: slot < cap.
-                unsafe {
-                    (*self.slots_ptr.as_ptr().add(slot)).write((k, v));
-                }
-                self.occupied += 1;
-                return;
-            }
-            // Linear probing by GROUP_WIDTH (tried triangular — at our 7/8
-            // load factor and group-scan-aware probe, linear wins on cache
-            // locality; triangular's anti-clustering only pays off at higher
-            // load factors than we run).
-            group_start = (group_start + GROUP_WIDTH) & self.mask;
         }
     }
 

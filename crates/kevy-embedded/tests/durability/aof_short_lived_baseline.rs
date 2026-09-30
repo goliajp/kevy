@@ -18,7 +18,12 @@ fn aof_size(dir: &std::path::Path) -> u64 {
         .flatten()
         .flatten()
         .filter(|e| e.file_name().to_string_lossy().ends_with(".aof"))
-        .map(|e| e.metadata().map_or(0, |m| m.len()))
+        // a log that maps its appends ends in its preallocation's zeros
+        // while it is open; no record ends in a zero
+        .map(|e| {
+            std::fs::read(e.path())
+                .map_or(0, |b| b.iter().rposition(|&x| x != 0).map_or(0, |i| i + 1) as u64)
+        })
         .sum()
 }
 

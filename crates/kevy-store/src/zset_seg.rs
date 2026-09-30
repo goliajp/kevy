@@ -13,6 +13,17 @@
 //! rank arithmetic, microseconds even at hundreds of millions of
 //! members. Design rationale: the element-COW RFC under
 //! the element-COW RFC.
+//!
+//! ```
+//! use kevy_store::zset_seg::SegZSetData;
+//! let mut z = SegZSetData::default();
+//! z.insert(b"b", 2.0);
+//! z.insert(b"a", 1.0);
+//! let view = z.clone(); // pins the current contents
+//! z.insert(b"a", 3.0);
+//! assert_eq!(view.score_of(b"a"), Some(1.0));
+//! assert_eq!(z.ordered().map(|(m, _)| m).collect::<Vec<_>>(), [&b"b"[..], b"a"]);
+//! ```
 
 #[cfg(not(feature = "std"))]
 use crate::nostd_prelude::*;
@@ -23,12 +34,34 @@ use kevy_ranktree::RankTree;
 
 /// Flat `Value::ZSet` size at which a write promotes to the segmented
 /// representation.
+///
+/// ```
+/// use kevy_store::Store;
+/// use kevy_store::zset_seg::Z_PROMOTE;
+/// let mut s = Store::new();
+/// let members: Vec<Vec<u8>> = (0..=Z_PROMOTE).map(|i| i.to_string().into_bytes()).collect();
+/// let pairs: Vec<(f64, &[u8])> = members.iter().map(|m| (1.0, m.as_slice())).collect();
+/// assert_eq!(s.zadd(b"z", &pairs)?, Z_PROMOTE + 1);
+/// assert_eq!(s.zcard(b"z")?, Z_PROMOTE + 1);
+/// # Ok::<(), kevy_store::StoreError>(())
+/// ```
 pub const Z_PROMOTE: usize = 16 * 1024;
 /// Entries per score-ordered segment tree; one segment is the per-write
 /// COW clone bound, and — as with `seg_map::BUCKET_SPLIT` — the grain
 /// score-scattered write bursts aggregate over per tick. 2K entries
 /// keeps a burst's per-tick clone total under the tick bar (empirically
 /// sized alongside `BUCKET_SPLIT` — see its note).
+///
+/// ```
+/// use kevy_store::zset_seg::{SegZSetData, ZSEG_CAP};
+/// let mut z = SegZSetData::default();
+/// for i in 0..3 * ZSEG_CAP {
+///     z.insert(&i.to_be_bytes(), -(i as f64));
+/// }
+/// // spread over several segments, the order is still global
+/// let first = z.ordered().next().unwrap();
+/// assert_eq!(first.1, -((3 * ZSEG_CAP - 1) as f64));
+/// ```
 pub const ZSEG_CAP: usize = 512;
 
 type ZKey = (Score, SmallBytes);
@@ -36,6 +69,14 @@ type ZKey = (Score, SmallBytes);
 /// A giant sorted set: sharded member→score map + ordered segment
 /// trees. Segments are non-empty and range-disjoint; `maxes[i]` caches
 /// `segs[i]`'s largest key for O(log segments) routing.
+///
+/// ```
+/// use kevy_store::zset_seg::SegZSetData;
+/// let mut z = SegZSetData::default();
+/// z.insert(b"low", 1.0);
+/// z.insert(b"high", 9.0);
+/// assert_eq!(z.rank_of(b"high", 9.0), Some(1));
+/// ```
 #[derive(Debug, Clone, Default)]
 pub struct SegZSetData {
     by_member: SegMap<f64>,
@@ -46,24 +87,56 @@ pub struct SegZSetData {
 impl SegZSetData {
     #[inline]
     /// Members across every segment, as a running count.
+    ///
+    /// ```
+    /// use kevy_store::zset_seg::SegZSetData;
+    /// let mut z = SegZSetData::default();
+    /// z.insert(b"a", 1.0);
+    /// z.insert(b"a", 2.0); // an update, not a new member
+    /// assert_eq!(z.len(), 1);
+    /// ```
     pub fn len(&self) -> usize {
         self.by_member.len()
     }
 
     #[inline]
     /// Whether the sorted set holds no members.
+    ///
+    /// ```
+    /// use kevy_store::zset_seg::SegZSetData;
+    /// let mut z = SegZSetData::default();
+    /// assert!(z.is_empty());
+    /// z.insert(b"a", 1.0);
+    /// assert!(!z.is_empty());
+    /// ```
     pub fn is_empty(&self) -> bool {
         self.by_member.is_empty()
     }
 
     /// One member's score, or `None` if it is not present. A lookup
     /// through the member index, not a walk of the score order.
+    ///
+    /// ```
+    /// use kevy_store::zset_seg::SegZSetData;
+    /// let mut z = SegZSetData::default();
+    /// z.insert(b"a", 1.5);
+    /// assert_eq!(z.score_of(b"a"), Some(1.5));
+    /// assert_eq!(z.score_of(b"b"), None);
+    /// ```
     pub fn score_of(&self, member: &[u8]) -> Option<f64> {
         self.by_member.get(member).copied()
     }
 
     /// Membership, on the same index path as `score_of` and without
     /// reading the score.
+    ///
+    /// ```
+    /// use kevy_store::zset_seg::SegZSetData;
+    /// let mut z = SegZSetData::default();
+    /// z.insert(b"a", 1.0);
+    /// assert!(z.contains_member(b"a"));
+    /// assert!(!z.contains_member(b"b"));
+    /// ```
     pub fn contains_member(&self, member: &[u8]) -> bool {
         self.by_member.contains_key(member)
     }
@@ -77,6 +150,14 @@ impl SegZSetData {
 
     /// Insert or update; returns whether the member was new. COW cost:
     /// one member bucket + one segment tree.
+    ///
+    /// ```
+    /// use kevy_store::zset_seg::SegZSetData;
+    /// let mut z = SegZSetData::default();
+    /// assert!(z.insert(b"a", 1.0)); // new
+    /// assert!(!z.insert(b"a", 2.0)); // score update
+    /// assert_eq!(z.score_of(b"a"), Some(2.0));
+    /// ```
     pub fn insert(&mut self, member: &[u8], score: f64) -> bool {
         let smb = SmallBytes::from_slice(member);
         let old = self.by_member.insert(smb.clone(), score);
@@ -111,6 +192,14 @@ impl SegZSetData {
     }
 
     /// Remove a member; returns whether it was present.
+    ///
+    /// ```
+    /// use kevy_store::zset_seg::SegZSetData;
+    /// let mut z = SegZSetData::default();
+    /// z.insert(b"a", 1.0);
+    /// assert!(z.remove(b"a"));
+    /// assert!(!z.remove(b"a"));
+    /// ```
     pub fn remove(&mut self, member: &[u8]) -> bool {
         let Some(sc) = self.by_member.remove(member) else {
             return false;
@@ -155,12 +244,32 @@ impl SegZSetData {
     }
 
     /// `(member, score)` pairs in ascending `(score, member)` order.
+    ///
+    /// ```
+    /// use kevy_store::zset_seg::SegZSetData;
+    /// let mut z = SegZSetData::default();
+    /// z.insert(b"b", 2.0);
+    /// z.insert(b"a", 2.0);
+    /// z.insert(b"c", 1.0);
+    /// let got: Vec<(&[u8], f64)> = z.ordered().collect();
+    /// assert_eq!(got, [(&b"c"[..], 1.0), (b"a", 2.0), (b"b", 2.0)]);
+    /// ```
     pub fn ordered(&self) -> impl Iterator<Item = (&[u8], f64)> {
         self.segs.iter().flat_map(|t| t.iter()).map(|(s, m)| (m.as_slice(), s.0))
     }
 
     /// Like [`Self::ordered`] but starting at ascending `rank` — an
     /// O(segments) prefix walk, then a seek inside the hit segment.
+    ///
+    /// ```
+    /// use kevy_store::zset_seg::SegZSetData;
+    /// let mut z = SegZSetData::default();
+    /// for (m, s) in [(b"a", 1.0), (b"b", 2.0), (b"c", 3.0)] {
+    ///     z.insert(m, s);
+    /// }
+    /// let tail: Vec<&[u8]> = z.ordered_from(1).map(|(m, _)| m).collect();
+    /// assert_eq!(tail, [&b"b"[..], b"c"]);
+    /// ```
     pub fn ordered_from(&self, rank: usize) -> impl Iterator<Item = (&[u8], f64)> {
         let (si, off) = self.locate_rank(rank);
         self.segs[si..]
@@ -184,6 +293,15 @@ impl SegZSetData {
     }
 
     /// The ascending rank of `member` (whose score is `score`).
+    ///
+    /// ```
+    /// use kevy_store::zset_seg::SegZSetData;
+    /// let mut z = SegZSetData::default();
+    /// z.insert(b"a", 1.0);
+    /// z.insert(b"b", 2.0);
+    /// assert_eq!(z.rank_of(b"b", 2.0), Some(1));
+    /// assert_eq!(z.rank_of(b"b", 5.0), None); // the score must match
+    /// ```
     pub fn rank_of(&self, member: &[u8], score: f64) -> Option<usize> {
         let key = (Score(score), SmallBytes::from_slice(member));
         if self.segs.is_empty() {
@@ -195,12 +313,34 @@ impl SegZSetData {
     }
 
     /// First rank whose score satisfies `min` as a lower bound.
+    ///
+    /// ```
+    /// use kevy_store::ScoreBound;
+    /// use kevy_store::zset_seg::SegZSetData;
+    /// let mut z = SegZSetData::default();
+    /// for (m, s) in [(b"a", 1.0), (b"b", 2.0), (b"c", 3.0)] {
+    ///     z.insert(m, s);
+    /// }
+    /// assert_eq!(z.score_start_rank(&ScoreBound::inclusive(2.0)), 1);
+    /// assert_eq!(z.score_start_rank(&ScoreBound::exclusive(2.0)), 2);
+    /// ```
     pub fn score_start_rank(&self, min: &ScoreBound) -> usize {
         self.frontier_rank(|s| !min.ge_ok(s))
     }
 
     /// One past the last rank whose score satisfies `max` as an upper
     /// bound.
+    ///
+    /// ```
+    /// use kevy_store::ScoreBound;
+    /// use kevy_store::zset_seg::SegZSetData;
+    /// let mut z = SegZSetData::default();
+    /// for (m, s) in [(b"a", 1.0), (b"b", 2.0), (b"c", 3.0)] {
+    ///     z.insert(m, s);
+    /// }
+    /// assert_eq!(z.score_end_rank(&ScoreBound::inclusive(2.0)), 2);
+    /// assert_eq!(z.score_end_rank(&ScoreBound::exclusive(2.0)), 1);
+    /// ```
     pub fn score_end_rank(&self, max: &ScoreBound) -> usize {
         self.frontier_rank(|s| max.le_ok(s))
     }
@@ -222,6 +362,18 @@ impl SegZSetData {
 
     /// Build from the flat representation: ordered chunks become
     /// segment trees; members re-shard through the SegMap insert.
+    ///
+    /// ```
+    /// use kevy_store::zset_seg::SegZSetData;
+    /// use kevy_store::{Store, Value};
+    /// let mut s = Store::new();
+    /// s.zadd(b"z", &[(1.0, b"a".as_slice()), (2.0, b"b"), (3.0, b"c")])?;
+    /// let Some((Value::ZSet(flat), _)) = s.clone_with_ttl(b"z") else { unreachable!() };
+    /// let seg = SegZSetData::from_flat(&flat);
+    /// assert_eq!(seg.len(), 3);
+    /// assert_eq!(seg.score_of(b"b"), Some(2.0));
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
     pub fn from_flat(flat: &crate::value::ZSetData) -> Self {
         let mut out = SegZSetData::default();
         let mut cur = RankTree::new();

@@ -96,7 +96,7 @@ class ProtocolError(KevyError):
 class ReadOnlyError(KevyError):
     """Write rejected: the target is a read-only replica."""
 
-    def __init__(self, message: str = "READONLY You can't write against a read only replica"):
+    def __init__(self, message: str = "READONLY You can't write against a read only replica."):
         super().__init__(message)
 
 

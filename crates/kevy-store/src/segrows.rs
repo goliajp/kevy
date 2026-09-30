@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::value::{COLD_TAG_HASH, ColdRef, Value};
-use crate::{Store, key_heap_bytes_for, tier_codec};
+use crate::{SegRowsError, Store, key_heap_bytes_for, tier_codec};
 
 /// One shard's row-segment directory: the open segments and their
 /// live/dead record accounting (compaction's future trigger feed).
@@ -62,14 +62,41 @@ impl SegRows {
 }
 
 /// One sealed eviction batch: the segment's identity and EXACTLY the
-/// keys it holds (the commit's phase-change list).
+/// keys it holds (the commit's phase-change list). Only the store makes
+/// one, so a commit always names a batch that was really sealed.
+///
+/// ```
+/// use kevy_store::Store;
+/// # let dir = std::env::temp_dir().join(format!("kevy-doc-sealed-{}", std::process::id()));
+/// # let _ = std::fs::remove_dir_all(&dir);
+/// let mut s = Store::new();
+/// s.enable_seg_rows(&dir)?;
+/// s.hset(b"user:1", &[(b"name".as_slice(), b"ada".as_slice())])?;
+/// let sealed = s.seal_rows_to_seg(b"user", &[b"user:1".to_vec()])?.expect("one row sealed");
+/// assert_eq!((sealed.seq(), sealed.file()), (0, "row-75736572-0.seg"));
+/// // after the frame naming `sealed.file()` is logged, the row goes cold
+/// assert_eq!(s.commit_row_eviction(&sealed), 1);
+/// assert_eq!(s.hget(b"user:1", b"name")?, Some(&b"ada"[..]));
+/// # std::fs::remove_dir_all(&dir)?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Debug)]
 pub struct SealedRows {
-    /// The segment's stable seq.
-    pub seq: u32,
-    /// Its file name — what the SEGMENTED frame carries.
-    pub file: String,
+    seq: u32,
+    file: String,
     keys: Vec<Vec<u8>>,
+}
+
+impl SealedRows {
+    /// The segment's stable seq.
+    pub fn seq(&self) -> u32 {
+        self.seq
+    }
+
+    /// Its file name — what the SEGMENTED frame carries.
+    pub fn file(&self) -> &str {
+        &self.file
+    }
 }
 
 /// The manifest meta tag row segments register under.
@@ -94,7 +121,13 @@ impl ColdRef {
 
 impl SegRows {
     #[expect(clippy::panic, reason = "a torn index must not be served as data")]
-    fn read(&self, cref: ColdRef, key: &[u8]) -> Value {
+    fn read(
+        &self,
+        cref: ColdRef,
+        key: &[u8],
+        shapes: &[crate::packed_row::ColumnNames],
+        form: tier_codec::RowForm,
+    ) -> Value {
         let slot = self.slot(cref.seg_ix());
         let payload = slot
             .seg
@@ -112,7 +145,7 @@ impl SegRows {
                     cref.seg_ix(),
                 )
             });
-        tier_codec::decode(cref.type_tag, payload)
+        tier_codec::decode_as(cref.type_tag, payload, shapes, form)
             .expect("segrows: cold row decode failed — process bug")
     }
 }
@@ -122,20 +155,20 @@ impl Store {
     /// every manifest-registered row segment from the previous run —
     /// they are truth, and the AOF's SEGMENTED frames (or a stub
     /// snapshot) will reference them by seq. Idempotent.
-    pub fn enable_seg_rows(&mut self, dir: &Path) -> Result<(), String> {
+    pub fn enable_seg_rows(&mut self, dir: &Path) -> Result<(), SegRowsError> {
         if self.segrows.is_some() {
             return Ok(());
         }
         let mut segs = Vec::new();
         let mut seq = 0u32;
         if dir.exists() {
-            let m = kevy_seg::Manifest::open(dir).map_err(|e| e.to_string())?;
+            let m = kevy_seg::Manifest::open(dir)?;
             for e in m.live().filter(|e| e.meta.starts_with(ROW_TAG)) {
                 let Some(q) = seq_of(&e.file) else {
-                    return Err(format!("row segment '{}' has no parsable seq", e.file));
+                    return Err(SegRowsError::NoSeq { file: e.file.clone() });
                 };
-                let seg = kevy_seg::Seg::open(&dir.join(&e.file))
-                    .map_err(|err| format!("open {}: {err}", e.file))?;
+                let seg = kevy_seg::Seg::open(dir.join(&e.file))
+                    .map_err(|source| SegRowsError::Open { file: e.file.clone(), source })?;
                 seq = seq.max(q + 1);
                 segs.push((
                     q,
@@ -160,7 +193,7 @@ impl Store {
         for (_, slot) in &mut sr.segs {
             slot.live = 0;
         }
-        for (_, e) in &self.map {
+        for (_, e) in self.map.iter() {
             if let Value::Cold(c) = &e.value
                 && c.is_seg()
                 && let Some(slot) = sr.slot_mut(c.seg_ix())
@@ -182,7 +215,7 @@ impl Store {
         });
         // Files the ledger never learned about (a crash mid-build)
         // are plain garbage — the manifest sweep reclaims them.
-        let _ = m.sweep(&sr.dir);
+        let _ = m.sweep();
     }
 
     /// The two-phase producer face: seal the batch (durable half) and
@@ -194,7 +227,7 @@ impl Store {
         &mut self,
         table: &[u8],
         keys: &[Vec<u8>],
-    ) -> Result<Option<SealedRows>, String> {
+    ) -> Result<Option<SealedRows>, SegRowsError> {
         if self.segrows.is_none() {
             return Ok(None);
         }
@@ -257,33 +290,29 @@ impl Store {
         &mut self,
         table: &[u8],
         rows: &[(&[u8], Vec<u8>)],
-    ) -> Result<u32, String> {
+    ) -> Result<u32, SegRowsError> {
         let sr = self.segrows.as_mut().expect("checked by caller");
-        std::fs::create_dir_all(&sr.dir).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(&sr.dir).map_err(SegRowsError::Io)?;
         let seq = sr.seq;
         let file = format!("row-{}-{}.seg", hex_stem(table), seq);
         sr.seq += 1;
         let path = sr.dir.join(&file);
-        let build = || -> Result<kevy_seg::SegMeta, String> {
-            let mut b = kevy_seg::SegBuilder::create(&path).map_err(|e| e.to_string())?;
+        let build = || -> Result<kevy_seg::SegMeta, kevy_seg::SegError> {
+            let mut b = kevy_seg::SegBuilder::create(&path)?;
             for (k, payload) in rows {
-                b.push(k, payload).map_err(|e| e.to_string())?;
+                b.push(k, payload)?;
             }
-            b.finish().map_err(|e| e.to_string())
+            b.finish()
         };
         let meta = build().inspect_err(|_| {
             let _ = std::fs::remove_file(&path);
         })?;
-        let mut m = kevy_seg::Manifest::open(&sr.dir).map_err(|e| e.to_string())?;
-        m.add(kevy_seg::ManifestEntry {
-            file: file.clone(),
-            meta: [ROW_TAG, table].concat(),
-            min_key: meta.min_key,
-            max_key: meta.max_key,
-            records: meta.records,
-        })
-        .map_err(|e| e.to_string())?;
-        let seg = kevy_seg::Seg::open(&path).map_err(|e| format!("reopen {file}: {e}"))?;
+        let mut m = kevy_seg::Manifest::open(&sr.dir)?;
+        m.add(
+            kevy_seg::ManifestEntry::new(file.clone(), meta).with_meta([ROW_TAG, table].concat()),
+        )?;
+        let seg = kevy_seg::Seg::open(&path)
+            .map_err(|source| SegRowsError::Reopen { file: file.clone(), source })?;
         sr.segs.push((seq, SegSlot { seg: Arc::new(seg), file, live: 0, dead: 0 }));
         self.cold_backing = true;
         Ok(seq)
@@ -294,7 +323,7 @@ impl Store {
     /// the segment). Preserves TTL/LRU (both None/irrelevant here by
     /// the eviction filter), fires no events, clears no field TTLs.
     pub(crate) fn demote_row_to_seg(&mut self, key: &[u8], seg_ix: u32) -> bool {
-        let Some(e) = self.map.get_mut(key) else { return false };
+        let Some(e) = self.map.get_mut_quiet(key) else { return false };
         if !matches!(e.value, Value::Hash(_) | Value::SmallHashInline(_) | Value::PackedRow(_)) {
             return false;
         }
@@ -337,7 +366,11 @@ impl Store {
         let mut e = crate::Entry::new(Value::Cold(stub), None);
         e.set_weight(key_heap);
         crate::apply_delta(&mut self.used_memory, key_heap as i64);
-        self.map.insert(crate::SmallBytes::from_slice(key), e);
+        let cap = self.map.capacity();
+        self.map.insert_quiet(crate::SmallBytes::from_slice(key), e);
+        if self.map.capacity() != cap {
+            self.charge_keyspace_growth();
+        }
     }
 
     /// Load one snapshot stub record: the row's identity re-enters the
@@ -361,7 +394,18 @@ impl Store {
     /// vlog's: a stub pointing at a missing/corrupt record is a
     /// process bug, surfaced loudly.
     pub(crate) fn segrow_read(&self, cref: ColdRef, key: &[u8]) -> Value {
-        self.segrows.as_ref().expect("seg-backed stub ⇒ segrows enabled").read(cref, key)
+        self.segrow_read_as(cref, key, tier_codec::RowForm::AsStored)
+    }
+
+    /// [`Self::segrow_read`], choosing which rows come back packed.
+    pub(crate) fn segrow_read_as(
+        &self,
+        cref: ColdRef,
+        key: &[u8],
+        form: tier_codec::RowForm,
+    ) -> Value {
+        let rows = self.segrows.as_ref().expect("seg-backed stub ⇒ segrows enabled");
+        rows.read(cref, key, &self.row_shapes, form)
     }
 
     /// A seg-backed stub died (DEL / expiry / promote / FLUSH): the

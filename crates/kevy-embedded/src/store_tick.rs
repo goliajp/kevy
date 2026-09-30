@@ -23,6 +23,8 @@ impl Store {
                 crate::shard::tier_tick_upkeep(&mut g, self.config.tier_budget, self.shards.len());
                 let _ = g.store.demote_step();
                 let _ = g.store.tier_compact_tick();
+                #[cfg(feature = "index")]
+                crate::ops_index_tidy::tick(&mut g.idx_segs);
                 // The window tick rides the manual cadence exactly as it
                 // rides the background reaper's — a Manual-mode store
                 // with a windowed table must slide too, not silently
@@ -47,12 +49,7 @@ impl Store {
             #[cfg(feature = "persist")]
             crate::reaper::concurrent_auto_rewrite(
                 shard,
-                kevy_persist::RewritePolicy {
-                    pct: self.config.auto_aof_rewrite_pct,
-                    min_size: self.config.auto_aof_rewrite_min_size,
-                    bytes: self.config.auto_aof_rewrite_bytes,
-                    interval_secs: self.config.auto_aof_rewrite_interval_secs,
-                },
+                self.config.rewrite_policy(),
                 self.config.metric_sink.as_ref(),
             );
         }

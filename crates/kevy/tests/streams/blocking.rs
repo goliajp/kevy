@@ -5,8 +5,7 @@
 //! 1. **Hit immediately** — non-empty list / fresh stream entry already
 //!    available → the command returns at once without parking the conn.
 //! 2. **Timeout** — empty, `BLOCK ms` elapses → the reactor's tick fires
-//!    a nil reply (shape per command: `*-1` for BLPOP/BRPOP, `$-1` for
-//!    XREAD/XREADGROUP) and unblocks the conn.
+//!    a nil reply (`*-1` for every one of them) and unblocks the conn.
 //! 3. **Wake** — empty + a sibling conn pushes / XADDs the watched key
 //!    → the oldest waiter is popped, its command replays, and the
 //!    reply lands on the parked conn.
@@ -125,11 +124,7 @@ impl Server {
     fn start(nshards: usize) -> Self {
         let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let port = free_port();
-        let dir = std::env::temp_dir().join(format!(
-            "kevy-blocking-{}",
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = kevy_tmpdir::unique_dir("blocking");
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         let dir_thread = dir.clone();
@@ -253,7 +248,7 @@ fn xread_block_returns_immediately_when_stream_has_entry() {
 }
 
 #[test]
-fn xread_block_times_out_with_nil_bulk_when_no_entries() {
+fn xread_block_times_out_with_a_nil_array_when_no_entries() {
     let srv = Server::start(1);
     let mut c = srv.connect();
     // Create the stream so `$` resolves; otherwise xread_dollar_last_id
@@ -264,7 +259,7 @@ fn xread_block_times_out_with_nil_bulk_when_no_entries() {
     let t0 = std::time::Instant::now();
     let reply = read_reply(&mut c);
     let elapsed = t0.elapsed();
-    assert_eq!(reply, b"$-1\r\n", "XREAD BLOCK timeout must return nil bulk");
+    assert_eq!(reply, b"*-1\r\n", "XREAD BLOCK timeout is a nil array");
     assert!(elapsed >= std::time::Duration::from_millis(80));
 }
 
@@ -344,7 +339,7 @@ fn xreadgroup_block_times_out_when_no_new_entries() {
     let t0 = std::time::Instant::now();
     let reply = read_reply(&mut c);
     let elapsed = t0.elapsed();
-    assert_eq!(reply, b"$-1\r\n", "XREADGROUP BLOCK timeout returns nil bulk");
+    assert_eq!(reply, b"*-1\r\n", "XREADGROUP BLOCK timeout is a nil array");
     assert!(elapsed >= std::time::Duration::from_millis(80));
 }
 

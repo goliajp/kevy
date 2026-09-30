@@ -30,7 +30,7 @@
 //!
 //! use std::borrow::Cow;
 //! let mut s = Store::new();
-//! s.set(b"greeting", b"hello".to_vec(), None, false, false);
+//! s.set(b"greeting", b"hello".to_vec(), None, kevy_store::SetCondition::Always);
 //! assert_eq!(s.get(b"greeting").unwrap(), Some(Cow::Borrowed(&b"hello"[..])));
 //!
 //! s.hset(b"user:1", &[(b"name".as_slice(), b"alice".as_slice())]).unwrap();
@@ -89,26 +89,36 @@ impl Store {
 }
 mod bitmap;
 mod clock;
+mod cond;
+pub use cond::{InsertPosition, ListEnd, ScoreCompare, SetCondition};
+mod defrag;
+pub use defrag::{DefragHint, DefragStep};
 mod entry;
 mod error;
-pub use bitmap::{BitOp, bitop_combine};
+pub use bitmap::BitOp;
 pub use error::{KevyError, KevyResult};
 pub mod evict;
 pub mod expire;
 pub(crate) use entry::Entry;
 pub use expire::ExpireStats;
+pub use store_admin::DetachedEntries;
 mod hash;
 mod hash_read;
+mod hash_weight;
 pub use hash_read::FieldValuePairs;
 mod hash_ttl;
 pub use hash_ttl::{HExpireCode, HExpireCond};
 mod keyspace;
 mod keyspace_load;
+mod keyspace_map;
 mod list;
 mod list_read;
 pub mod list_seg;
 mod notify;
 mod rng;
+mod row_watch;
+mod row_watch_store;
+pub use row_watch::{RowChange, RowChanges, RowWatch};
 mod scan;
 pub mod seg_map;
 pub use notify::KeyspaceEvent;
@@ -130,6 +140,8 @@ pub use snapshot::SnapshotView;
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 mod segrows;
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+mod segrows_error;
+#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 mod segwindow;
 mod stream;
 mod string;
@@ -137,16 +149,22 @@ mod string_rmw;
 mod string_set;
 mod tier;
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+mod tier_batch;
+#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 mod tier_codec;
 mod tier_demote;
 mod tier_serve;
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+mod tier_state;
+#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+mod tier_stats;
+#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 pub use segrows::SealedRows;
+#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+pub use segrows_error::SegRowsError;
 
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 pub use kevy_vlog::CompressionStats;
-#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
-pub use segwindow::apply_segmented;
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 pub use tier::TierStats;
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
@@ -156,6 +174,7 @@ pub use types::{EvictionPolicy, RenameOutcome, StoreError};
 mod util;
 mod value;
 mod value_cold;
+mod value_enum;
 mod zset;
 mod zset_algebra;
 mod zset_range;
@@ -163,10 +182,11 @@ pub mod zset_seg;
 pub use zset_algebra::{ZAggregate, zdiff, zinter, zintercard, zunion};
 mod zset_flags;
 pub use stream::{
-    AutoclaimResult, ConsumerGroup, ConsumerState, EntryBatch, GroupCreateMode, LoadedGroup,
-    LoadedPelEntry, LoadedStreamEntry, PelEntry, PendingExtended, PendingExtendedRow,
-    PendingSummary, ReadGroupId, StreamData, StreamId, StreamIdError, XAddIdSpec, XClaimOpts,
-    now_unix_ms, parse_explicit_id, parse_range_end, parse_range_start, parse_xadd_id,
+    APPROX_TRIM_LIMIT, AckMode, AutoclaimResult, ClaimMode, ConsumerGroup, ConsumerState,
+    EntryBatch, GroupBatch, GroupCreateMode, LoadedGroup, LoadedPelEntry, LoadedStreamEntry,
+    MissingStream, PelEntry, PendingExtended, PendingExtendedRow, PendingSummary, ReadGroupId,
+    StreamData, StreamId, StreamIdError, TrimMode, TrimTo, XAddIdSpec, XClaimOpts, now_unix_ms,
+    parse_explicit_id, parse_range_end, parse_range_start, parse_xadd_id,
 };
 pub use string::{GetReply, GetShared};
 pub use util::glob_match;
@@ -196,9 +216,20 @@ use kevy_map::KevyMap;
 /// since the shard is single-threaded with no cross-trust keys). Owning the
 /// table also exposes bucket addresses for software prefetch on the batch
 /// driver.
+///
+/// ```
+/// use core::time::Duration;
+/// use kevy_store::{SetCondition, Store};
+/// let mut s = Store::new();
+/// assert!(s.set(b"k", b"v".to_vec(), Some(Duration::from_secs(60)), SetCondition::Always));
+/// assert_eq!(s.type_of(b"k"), "string");
+/// assert_eq!(s.del(&[b"k".as_slice(), b"missing"]), 1);
+/// assert_eq!(s.type_of(b"k"), "none");
+/// ```
 #[derive(Debug, Default)]
 pub struct Store {
-    pub(crate) map: KevyMap<SmallBytes, Entry>,
+    pub(crate) map: keyspace_map::Keyspace,
+    pub(crate) defrag: defrag::DefragState,
     /// The random source. SPOP and SRANDMEMBER promise an ARBITRARY member;
     /// before this they returned the first one in hash-bucket order, which for
     /// a given set is the same member every time.
@@ -212,6 +243,12 @@ pub struct Store {
     /// what makes the packed row measurable: the same binary answers both
     /// ways, so a comparison is one flag apart rather than two builds apart.
     pub(crate) packed_rows: bool,
+    /// The column-name lists packed rows point at, one per table shape.
+    /// A row is packed on its table's list, and a row back from the cold
+    /// tier — whose payload names only the columns it has — is rebuilt on
+    /// the first list here that names all of them, so a table's rows hold
+    /// one list between them instead of a copy each.
+    pub(crate) row_shapes: Vec<packed_row::ColumnNames>,
     /// Coarse cached monotonic clock (ns since [`epoch`]), refreshed by the
     /// reactor loop / reaper tick via [`Self::refresh_clock`]. Lazy expiry on
     /// the read path (`live_entry`) compares deadlines against this instead of
@@ -227,12 +264,16 @@ pub struct Store {
     /// use, where nothing refreshes the cache so each access reads fresh —
     /// preserving "lazy expiry works without an explicit tick".
     pub(crate) cached_clock: bool,
-    /// Live byte estimate (dynamic per-entry weights + [`ENTRY_OVERHEAD`] per
-    /// key). Compared against [`Self::maxmemory`] to drive eviction.
+    /// Live byte estimate: the per-entry weights plus the keyspace table at
+    /// its real size. Compared against [`Self::maxmemory`] to drive eviction.
     pub(crate) used_memory: u64,
     /// Soft byte ceiling. `0` = unlimited; the entire accounting + eviction
     /// machinery short-circuits to a single not-taken branch in that case.
     pub(crate) maxmemory: u64,
+    /// Growing writes refused whatever `maxmemory` says (the tier's hard stop).
+    pub(crate) memory_refused: bool,
+    /// `maxmemory > 0 || memory_refused`: the one field the write path reads.
+    pub(crate) write_gate: bool,
     /// Active eviction policy. Only consulted when `used_memory > maxmemory`.
     pub(crate) eviction_policy: EvictionPolicy,
     /// Total keys evicted by [`Self::try_evict_after_write`] — surfaced via
@@ -241,6 +282,8 @@ pub struct Store {
     /// Monotonic access counter; the upper 32 bits are unused, the lower 32
     /// stamp `Entry::lru_clock` on each access while eviction is enabled.
     pub(crate) clock_counter: u64,
+    /// The keyspace table's bytes as `used_memory` last charged them.
+    pub(crate) keyspace_bytes: u64,
     /// `used_memory` peak across the shard's lifetime; surfaced as
     /// `used_memory_peak` in `INFO memory`.
     pub(crate) used_memory_peak: u64,
@@ -314,7 +357,7 @@ pub struct Store {
     /// **Bounded growth**: at `MAX_PENDING_DROPS` items the
     /// `maybe_offload_drop` path force-flushes — protects against
     /// pathological "thousand SETs in one iter never flush" cases
-    /// (would otherwise hold thousands of Box<Value>s in RAM until
+    /// (would otherwise hold thousands of `Box<Value>`s in RAM until
     /// the iter ends).
     #[cfg(feature = "std")]
     pub(crate) pending_drops: Vec<Value>,
@@ -356,11 +399,6 @@ impl Store {
     pub fn row_seg_files(&self) -> Vec<(u32, alloc::string::String)> {
         Vec::new()
     }
-
-    /// A v7 snapshot cannot load where the segment backend is absent.
-    pub fn load_row_stub(&mut self, _key: Vec<u8>, _seq: u32, _weight: u32) {
-        panic!("row-segment snapshot record on a target without the segment backend");
-    }
 }
 
 // Accounting micro-helpers live in `util` (500-LOC split); re-exported
@@ -368,15 +406,73 @@ impl Store {
 // paths keep working.
 pub(crate) use util::{apply_delta, key_heap_bytes_for};
 
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<Store>();
+    send_sync::<StoreError>();
+    send_sync::<KevyError>();
+    send_sync::<RenameOutcome>();
+    send_sync::<EvictionPolicy>();
+    send_sync::<SetCondition>();
+    send_sync::<ListEnd>();
+    send_sync::<InsertPosition>();
+    send_sync::<ScoreCompare>();
+    send_sync::<BitOp>();
+    send_sync::<ExpireStats>();
+    send_sync::<DetachedEntries>();
+    send_sync::<HExpireCond>();
+    send_sync::<KeyspaceEvent>();
+    send_sync::<SnapshotView>();
+    send_sync::<ZAggregate>();
+    send_sync::<StreamData>();
+    send_sync::<StreamId>();
+    send_sync::<StreamIdError>();
+    send_sync::<XAddIdSpec>();
+    send_sync::<XClaimOpts>();
+    send_sync::<MissingStream>();
+    send_sync::<AckMode>();
+    send_sync::<ClaimMode>();
+    send_sync::<ConsumerGroup>();
+    send_sync::<ConsumerState>();
+    send_sync::<PelEntry>();
+    send_sync::<GroupCreateMode>();
+    send_sync::<ReadGroupId>();
+    send_sync::<PendingSummary>();
+    send_sync::<PendingExtended>();
+    send_sync::<AutoclaimResult>();
+    send_sync::<LoadedGroup>();
+    send_sync::<GetReply<'static>>();
+    send_sync::<GetShared>();
+    send_sync::<Value>();
+    send_sync::<Score>();
+    send_sync::<ScoreBound>();
+    send_sync::<ZaddFlags>();
+    send_sync::<ZaddReport>();
+    send_sync::<packed_row::PackedRow>();
+};
+
+#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<SealedRows>();
+    send_sync::<SegRowsError>();
+    send_sync::<TierStats>();
+    send_sync::<ColdRead>();
+    send_sync::<SyncColdRead>();
+};
+
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod tests_list_seg;
 #[cfg(test)]
+mod tests_live_entry;
+#[cfg(test)]
 mod tests_memory;
 #[cfg(test)]
-#[cfg(test)]
 mod tests_range_past_the_end;
+#[cfg(test)]
+mod tests_row_watch;
 #[cfg(test)]
 mod tests_score_order;
 #[cfg(test)]
@@ -387,6 +483,10 @@ mod tests_snapshot;
 mod tests_string_encoding;
 #[cfg(all(test, feature = "std", not(target_arch = "wasm32")))]
 mod tests_tier;
+#[cfg(all(test, feature = "std", not(target_arch = "wasm32")))]
+mod tests_tier_budget;
+#[cfg(all(test, feature = "std", not(target_arch = "wasm32")))]
+mod tests_tier_pack;
 #[cfg(all(test, feature = "std", not(target_arch = "wasm32")))]
 mod tests_tier_peek;
 #[cfg(test)]

@@ -3,6 +3,8 @@
 //! then run a query card with real arguments — the full declaration →
 //! runtime story the cookbook chapter tells.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use std::process::{Child, Command, Stdio};
 
 use kevy_resp_client::RespClient;
@@ -96,7 +98,7 @@ fn write_schema(tag: &str) -> std::path::PathBuf {
 #[test]
 fn compile_prints_the_script() {
     let f = write_schema("print");
-    let out = cli(&["sql", "compile", f.to_str().unwrap()]);
+    let out = cli(&["--kevy", "sql", "compile", f.to_str().unwrap()]);
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let s = String::from_utf8(out.stdout).unwrap();
     assert!(s.contains("TABLE.DECLARE users PREFIX users: PK id"), "{s}");
@@ -109,7 +111,7 @@ fn compile_prints_the_script() {
 fn compile_error_is_the_teaching_refusal() {
     let p = std::env::temp_dir().join(format!("kevy-sql-cli-bad-{}.sql", std::process::id()));
     std::fs::write(&p, "CREATE VIEW v AS SELECT * FROM a JOIN b ON a.x = b.x;").unwrap();
-    let out = cli(&["sql", "compile", p.to_str().unwrap()]);
+    let out = cli(&["--kevy", "sql", "compile", p.to_str().unwrap()]);
     assert!(!out.status.success());
     let e = String::from_utf8(out.stderr).unwrap();
     assert!(e.contains("JOIN is not compilable"), "{e}");
@@ -121,8 +123,8 @@ fn compile_error_is_the_teaching_refusal() {
 fn apply_declares_then_a_card_query_serves() {
     let srv = Srv::start("serve");
     let f = write_schema("serve");
-    let url = format!("127.0.0.1:{}", srv.port);
-    let out = cli(&["sql", "compile", f.to_str().unwrap(), "--apply", "--url", &url]);
+    let port = srv.port.to_string();
+    let out = cli(&["-p", &port, "--kevy", "sql", "compile", f.to_str().unwrap(), "--apply"]);
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let s = String::from_utf8(out.stdout).unwrap();
     assert!(s.contains("TABLE.DECLARE users \u{2192} OK"), "{s}");
@@ -227,12 +229,12 @@ fn poll_keys(c: &mut RespClient, argv: &[Vec<u8>]) -> Vec<String> {
 fn apply_stops_on_error_reply_nonzero_exit() {
     let srv = Srv::start("twice");
     let f = write_schema("twice");
-    let url = format!("127.0.0.1:{}", srv.port);
-    let ok = cli(&["sql", "compile", f.to_str().unwrap(), "--apply", "--url", &url]);
+    let port = srv.port.to_string();
+    let ok = cli(&["-p", &port, "--kevy", "sql", "compile", f.to_str().unwrap(), "--apply"]);
     assert!(ok.status.success());
     // A second apply re-declares: the first TABLE.DECLARE errors
     // (table exists), the apply stops there, exit is non-zero.
-    let again = cli(&["sql", "compile", f.to_str().unwrap(), "--apply", "--url", &url]);
+    let again = cli(&["-p", &port, "--kevy", "sql", "compile", f.to_str().unwrap(), "--apply"]);
     assert!(!again.status.success());
     let e = String::from_utf8(again.stderr).unwrap();
     assert!(e.contains("apply stopped at the error above"), "{e}");

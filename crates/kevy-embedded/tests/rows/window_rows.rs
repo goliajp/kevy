@@ -20,20 +20,15 @@ fn run(s: &Store, argv: &[&[u8]]) -> Vec<u8> {
 }
 
 fn table(name: &[u8], windowed: bool) -> TableSpec {
-    TableSpec {
-        name: name.to_vec(),
-        prefix: b"ev:".to_vec(),
-        pk: b"id".to_vec(),
-        columns: vec![(b"id".to_vec(), ValType::Str), (b"at".to_vec(), ValType::I64)],
-        indexes: vec![TableIndex {
-            column: b"at".to_vec(),
-            kind: IndexKind::Range,
-            values: vec![],
-        }],
-        orderpaths: vec![],
-        window: windowed.then_some(WindowSpec { column: b"at".to_vec(), span: 100, bucket: 10 }),
-        autodeclare: 0,
-        auto_added: vec![],
+    {
+        let mut t = TableSpec::default();
+        t.name = name.to_vec();
+        t.prefix = b"ev:".to_vec();
+        t.pk = b"id".to_vec();
+        t.columns = vec![(b"id".to_vec(), ValType::Str), (b"at".to_vec(), ValType::I64)];
+        t.indexes = vec![TableIndex::new(b"at".to_vec(), IndexKind::Range)];
+        t.window = windowed.then_some(WindowSpec::new(b"at".to_vec(), 100, 10));
+        t
     }
 }
 
@@ -56,9 +51,20 @@ fn seed(s: &Store) {
             ],
         );
     }
-    // Out-of-window by value, but TTL'd: must stay hot.
+    // Out-of-window by value, but TTL'd: must stay hot. Every store seeded
+    // in one run gets the same absolute deadline, so the windowed store and
+    // its control agree on the TTL however far apart they were seeded.
     run(s, &[b"HSET", b"ev:ttl", b"id", b"ev:ttl", b"at", b"5", b"note", b"short-lived"]);
-    run(s, &[b"EXPIRE", b"ev:ttl", b"1000"]);
+    run(s, &[b"EXPIREAT", b"ev:ttl", ttl_deadline().as_bytes()]);
+}
+
+/// One unix deadline, 1000 s after the first store asked for it.
+fn ttl_deadline() -> &'static str {
+    static AT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    AT.get_or_init(|| {
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap();
+        (now.as_secs() + 1000).to_string()
+    })
 }
 
 fn wait_for_row_segment(dir: &std::path::Path) {
@@ -228,6 +234,15 @@ fn scan_all(s: &Store) -> Vec<Vec<u8>> {
     }
 }
 
+/// The log's bytes: a file that maps its appends ends in the zeros of its
+/// preallocation while the store is open, and no record ends in a zero.
+fn log_bytes(path: &std::path::Path) -> Vec<u8> {
+    let mut bytes = std::fs::read(path).unwrap();
+    let end = bytes.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1);
+    bytes.truncate(end);
+    bytes
+}
+
 /// The persistence payoff: a rewrite drops cold-row data from the AOF
 /// (trailing SEGMENTED frames re-establish the stubs), and a snapshot
 /// carries stub records so a SAVE'd store restarts cold without the
@@ -251,10 +266,10 @@ fn rewrite_and_snapshot_stop_carrying_cold_rows() {
 
     // Rewrite: the log sheds the cold rows' data and gains the frames.
     s.fsync_aof().expect("fsync");
-    let before = std::fs::metadata(d.path().join("aof-0.aof")).unwrap().len();
+    let before = log_bytes(&d.path().join("aof-0.aof")).len();
     s.rewrite_aof().expect("rewrite").expect("stats");
-    let aof = std::fs::read(d.path().join("aof-0.aof")).unwrap();
-    assert!(aof.len() < before as usize, "rewrite did not shrink: {} -> {}", before, aof.len());
+    let aof = log_bytes(&d.path().join("aof-0.aof"));
+    assert!(aof.len() < before, "rewrite did not shrink: {} -> {}", before, aof.len());
     let text = String::from_utf8_lossy(&aof).into_owned();
     assert!(!text.contains("row number 10"), "cold row data re-entered the rewritten log");
     assert!(text.contains("KEVYSEGMENTED"), "rewritten log carries no stitch frame");

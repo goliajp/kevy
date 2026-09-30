@@ -70,7 +70,7 @@ fn aof_bytes(dir: &std::path::Path) -> Vec<u8> {
             let p = e.path();
             if p.is_dir() {
                 stack.push(p);
-            } else {
+            } else if p.extension().is_some_and(|x| x == "aof") {
                 all.extend(std::fs::read(&p).unwrap());
             }
         }

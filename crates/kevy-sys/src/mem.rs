@@ -19,6 +19,18 @@ use std::path::Path;
 /// resolves (exotic platform, masked /proc, cgroup v1-only host with
 /// no readable meminfo). Callers treat `None` as "auto/percent budgets
 /// cannot resolve" — a named refusal, never a silent guess.
+///
+/// # Examples
+///
+/// ```
+/// let bound = kevy_sys::detected_memory_bound();
+/// // an `auto` budget takes a share of it; None means it cannot resolve
+/// let budget = bound.map(|b| b / 4);
+/// if let Some(b) = bound {
+///     assert!(b >= 1 << 20, "any machine running this has at least a MiB");
+///     assert_eq!(budget, Some(b / 4));
+/// }
+/// ```
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub fn detected_memory_bound() -> Option<u64> {
     let cg = cgroup_v2_limit(Path::new("/sys/fs/cgroup/memory.max"));
@@ -31,6 +43,18 @@ pub fn detected_memory_bound() -> Option<u64> {
 
 /// The detected memory bound in bytes (`hw.memsize`), or `None` when
 /// the sysctl fails.
+///
+/// # Examples
+///
+/// ```
+/// let bound = kevy_sys::detected_memory_bound();
+/// // an `auto` budget takes a share of it; None means it cannot resolve
+/// let budget = bound.map(|b| b / 4);
+/// if let Some(b) = bound {
+///     assert!(b >= 1 << 20, "any machine running this has at least a MiB");
+///     assert_eq!(budget, Some(b / 4));
+/// }
+/// ```
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub fn detected_memory_bound() -> Option<u64> {
     let mut val: u64 = 0;
@@ -50,6 +74,18 @@ pub fn detected_memory_bound() -> Option<u64> {
 }
 
 /// No probe on other targets.
+///
+/// # Examples
+///
+/// ```
+/// let bound = kevy_sys::detected_memory_bound();
+/// // an `auto` budget takes a share of it; None means it cannot resolve
+/// let budget = bound.map(|b| b / 4);
+/// if let Some(b) = bound {
+///     assert!(b >= 1 << 20, "any machine running this has at least a MiB");
+///     assert_eq!(budget, Some(b / 4));
+/// }
+/// ```
 #[cfg(not(any(
     target_os = "linux",
     target_os = "android",
@@ -67,7 +103,20 @@ pub fn detected_memory_bound() -> Option<u64> {
 /// - **Linux**: `/proc/self/status` `VmRSS:` (kB — page-size-free,
 ///   unlike statm's page counts).
 /// - **macOS**: `task_info(MACH_TASK_BASIC_INFO).resident_size`
-///   through the hand-written binding in [`crate::ffi`].
+///   through the crate's hand-written binding.
+///
+/// # Examples
+///
+/// ```
+/// let touched = vec![1u8; 16 << 20]; // 16 MiB, every page written
+/// let rss = kevy_sys::process_rss_bytes();
+/// if cfg!(any(target_os = "linux", target_os = "android", target_os = "macos", target_os = "ios")) {
+///     assert!(rss >= 16 << 20, "the touched pages are resident");
+/// } else {
+///     assert_eq!(rss, 0); // no probe on this target
+/// }
+/// drop(touched);
+/// ```
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub fn process_rss_bytes() -> u64 {
     std::fs::read_to_string("/proc/self/status").ok().and_then(|s| vmrss_bytes(&s)).unwrap_or(0)
@@ -82,6 +131,19 @@ fn vmrss_bytes(status: &str) -> Option<u64> {
 }
 
 /// See the Linux twin above.
+///
+/// # Examples
+///
+/// ```
+/// let touched = vec![1u8; 16 << 20]; // 16 MiB, every page written
+/// let rss = kevy_sys::process_rss_bytes();
+/// if cfg!(any(target_os = "linux", target_os = "android", target_os = "macos", target_os = "ios")) {
+///     assert!(rss >= 16 << 20, "the touched pages are resident");
+/// } else {
+///     assert_eq!(rss, 0); // no probe on this target
+/// }
+/// drop(touched);
+/// ```
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub fn process_rss_bytes() -> u64 {
     // struct mach_task_basic_info: virtual_size u64, resident_size
@@ -104,6 +166,19 @@ pub fn process_rss_bytes() -> u64 {
 }
 
 /// No probe on other targets — 0, stated rather than guessed.
+///
+/// # Examples
+///
+/// ```
+/// let touched = vec![1u8; 16 << 20]; // 16 MiB, every page written
+/// let rss = kevy_sys::process_rss_bytes();
+/// if cfg!(any(target_os = "linux", target_os = "android", target_os = "macos", target_os = "ios")) {
+///     assert!(rss >= 16 << 20, "the touched pages are resident");
+/// } else {
+///     assert_eq!(rss, 0); // no probe on this target
+/// }
+/// drop(touched);
+/// ```
 #[cfg(not(any(
     target_os = "linux",
     target_os = "android",
@@ -151,6 +226,18 @@ fn meminfo_available(path: &Path) -> Option<u64> {
 /// the binding exists only on `linux/gnu`; musl and every other
 /// platform are a `false` no-op — the caller treats trimming as
 /// best-effort, never as accounting.
+///
+/// # Examples
+///
+/// ```
+/// let many: Vec<Vec<u8>> = (0..1024).map(|_| vec![1u8; 4096]).collect();
+/// drop(many);
+/// // best-effort: whether anything went back to the OS is the allocator's call
+/// let released = kevy_sys::malloc_trim_now();
+/// if !cfg!(all(target_os = "linux", target_env = "gnu")) {
+///     assert!(!released, "only glibc can trim");
+/// }
+/// ```
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 pub fn malloc_trim_now() -> bool {
     unsafe extern "C" {
@@ -162,6 +249,18 @@ pub fn malloc_trim_now() -> bool {
 }
 
 /// No glibc on this target — nothing to trim.
+///
+/// # Examples
+///
+/// ```
+/// let many: Vec<Vec<u8>> = (0..1024).map(|_| vec![1u8; 4096]).collect();
+/// drop(many);
+/// // best-effort: whether anything went back to the OS is the allocator's call
+/// let released = kevy_sys::malloc_trim_now();
+/// if !cfg!(all(target_os = "linux", target_env = "gnu")) {
+///     assert!(!released, "only glibc can trim");
+/// }
+/// ```
 #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
 pub fn malloc_trim_now() -> bool {
     false
@@ -175,6 +274,23 @@ pub fn malloc_trim_now() -> bool {
 /// the reactor's page faults (the S5-E/F lock profile: `evict_folios`
 /// running inside kevy threads). Only CLEAN pages drop — callers fsync
 /// first. Best-effort: `true` when the kernel accepted the advice.
+///
+/// # Examples
+///
+/// ```
+/// use std::io::Write;
+/// use std::os::fd::AsRawFd;
+///
+/// let path = std::env::temp_dir().join(format!("fadvise-doc-{}", std::process::id()));
+/// let mut f = std::fs::File::create(&path)?;
+/// f.write_all(&[7u8; 64 << 10])?;
+/// f.sync_all()?; // only clean pages can be dropped
+/// let dropped = kevy_sys::fadvise_dontneed_all(f.as_raw_fd());
+/// assert_eq!(dropped, cfg!(target_os = "linux"));
+/// drop(f);
+/// std::fs::remove_file(&path)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
 #[cfg(target_os = "linux")]
 pub fn fadvise_dontneed_all(fd: std::os::fd::RawFd) -> bool {
     const POSIX_FADV_DONTNEED: core::ffi::c_int = 4;
@@ -193,6 +309,23 @@ pub fn fadvise_dontneed_all(fd: std::os::fd::RawFd) -> bool {
 }
 
 /// No fadvise on this target — the advice is a no-op.
+///
+/// # Examples
+///
+/// ```
+/// use std::io::Write;
+/// use std::os::fd::AsRawFd;
+///
+/// let path = std::env::temp_dir().join(format!("fadvise-doc-{}", std::process::id()));
+/// let mut f = std::fs::File::create(&path)?;
+/// f.write_all(&[7u8; 64 << 10])?;
+/// f.sync_all()?; // only clean pages can be dropped
+/// let dropped = kevy_sys::fadvise_dontneed_all(f.as_raw_fd());
+/// assert_eq!(dropped, cfg!(target_os = "linux"));
+/// drop(f);
+/// std::fs::remove_file(&path)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
 #[cfg(not(target_os = "linux"))]
 pub fn fadvise_dontneed_all(_fd: std::os::fd::RawFd) -> bool {
     false

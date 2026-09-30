@@ -11,14 +11,16 @@
 //! let set = Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec(), b"EX".to_vec(), b"100".to_vec()]);
 //! let mut out = Vec::new();
 //! kevy_verbs::exec(&mut store, b"SET", &set, &mut out);
-//! let follow = kevy_verbs::aof::ttl_followup(&mut store, &set);
+//! let follow = kevy_verbs::aof::ttl_followup(&store, &set);
 //! assert_eq!(&follow[0][0], b"PEXPIREAT", "a relative TTL gets a deadline frame");
 //! ```
 
 use kevy_resp::{Argv, ArgvView};
-use kevy_store::{Store, now_unix_ms};
+use kevy_store::Store;
 
-pub use crate::record::{Claim, INTERNAL_REFUSAL, apply_internal, deferred_frames, id_bytes};
+pub use crate::record::{
+    Claim, Consumer, History, INTERNAL_REFUSAL, apply_internal, deferred_frames, id_bytes,
+};
 
 /// The record of an `SPOP` that removed `popped`: `SREM key member…`.
 /// Replaying `SPOP` itself would draw different members.
@@ -41,17 +43,15 @@ pub fn spop_effect<'a>(key: &'a [u8], popped: &'a [Vec<u8>]) -> Vec<&'a [u8]> {
 ///
 /// ```
 /// let mut store = kevy_store::Store::new();
-/// store.set(b"k", b"v".to_vec(), Some(std::time::Duration::from_secs(60)), false, false);
-/// let f = kevy_verbs::aof::deadline_frame(&mut store, b"k").unwrap();
+/// store.set(b"k", b"v".to_vec(), Some(std::time::Duration::from_secs(60)), kevy_store::SetCondition::Always);
+/// let f = kevy_verbs::aof::deadline_frame(&store, b"k").unwrap();
 /// assert_eq!(&f[0], b"PEXPIREAT");
-/// assert!(kevy_verbs::aof::deadline_frame(&mut store, b"missing").is_none());
+/// assert!(kevy_verbs::aof::deadline_frame(&store, b"missing").is_none());
 /// ```
-pub fn deadline_frame(store: &mut Store, key: &[u8]) -> Option<Argv> {
-    let pttl = store.pttl(key);
-    if pttl < 0 {
-        return None;
-    }
-    let abs = now_unix_ms().saturating_add(pttl as u64);
+pub fn deadline_frame(store: &Store, key: &[u8]) -> Option<Argv> {
+    // read, never reap: a write whose TTL ran out before its record was
+    // made is recorded with that past deadline, and replay expires it
+    let abs = store.deadline_unix_ms(key)?;
     let mut f = Argv::with_capacity(3, 0);
     f.push(b"PEXPIREAT");
     f.push(key);
@@ -75,10 +75,10 @@ pub fn deadline_frame(store: &mut Store, key: &[u8]) -> Option<Argv> {
 /// let mut store = kevy_store::Store::new();
 /// let set = kevy_resp::Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec(), b"EX".to_vec(), b"60".to_vec()]);
 /// kevy_verbs::exec(&mut store, b"SET", &set, &mut Vec::new());
-/// let f = kevy_verbs::aof::ttl_followup(&mut store, &set);
+/// let f = kevy_verbs::aof::ttl_followup(&store, &set);
 /// assert_eq!(&f[0][0], b"PEXPIREAT");
 /// ```
-pub fn ttl_followup<A: ArgvView + ?Sized>(store: &mut Store, args: &A) -> Vec<Argv> {
+pub fn ttl_followup<A: ArgvView + ?Sized>(store: &Store, args: &A) -> Vec<Argv> {
     let Some(verb) = args.get(0) else { return Vec::new() };
     if verb.eq_ignore_ascii_case(b"HEXPIRE") || verb.eq_ignore_ascii_case(b"HPEXPIRE") {
         return field_deadline_frames(store, args);
@@ -174,7 +174,7 @@ mod tests {
         let set = argv(&[b"HPEXPIRE", b"h", b"1", b"FIELDS", b"1", b"f"]);
         crate::exec(&mut store, b"HPEXPIRE", &set, &mut out);
         std::thread::sleep(std::time::Duration::from_millis(5));
-        let f = ttl_followup(&mut store, &set);
+        let f = ttl_followup(&store, &set);
         assert_eq!(f.len(), 1, "a passed deadline is still recorded, and replays as a removal");
         assert!(
             store.hash_field_deadlines(b"h", &[b"f"])[0].is_some(),
@@ -198,15 +198,15 @@ mod tests {
             &[b"HEXPIRE", b"h", b"9", b"FIELDS", b"1", b"gone"],
             &[b"HEXPIRE", b"h", b"9", b"FIELDS", b"1", b"f"],
         ] {
-            assert!(ttl_followup(&mut store, &argv(bad)).is_empty(), "{bad:?}");
+            assert!(ttl_followup(&store, &argv(bad)).is_empty(), "{bad:?}");
         }
         // a count past the fields given is refused by the command itself
         let over = argv(&[b"HEXPIRE", b"h", b"60", b"FIELDS", b"9", b"f", b"g"]);
         crate::exec(&mut store, b"HEXPIRE", &over, &mut out);
-        assert!(ttl_followup(&mut store, &over).is_empty());
+        assert!(ttl_followup(&store, &over).is_empty());
         let set = argv(&[b"HEXPIRE", b"h", b"60", b"FIELDS", b"2", b"f", b"g"]);
         crate::exec(&mut store, b"HEXPIRE", &set, &mut out);
-        let f = ttl_followup(&mut store, &set);
+        let f = ttl_followup(&store, &set);
         assert_eq!(f.len(), 1, "one deadline, one frame");
         assert_eq!((&f[0][3], &f[0][4], f[0].len()), (&b"FIELDS"[..], &b"2"[..], 7));
     }

@@ -4,6 +4,8 @@
 //! Same pattern as crates/kevy-resp-client/tests/roundtrip.rs — keeps the
 //! test self-contained (no real kevy server thread needed).
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use kevy_client::KevyError;
 use kevy_client::{PubsubEvent, Subscriber};
 use std::io::{Read, Write};

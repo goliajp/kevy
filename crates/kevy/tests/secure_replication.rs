@@ -2,6 +2,8 @@
 //! replica client both run here, so the encrypted paths on each side are
 //! the ones under test.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -43,7 +45,8 @@ impl Primary {
                 .shards(1)
                 .with_data_dir(dir_path)
                 .with_aof(false)
-                .with_replication(true, 1024 * 1024)
+                .with_replication(true)
+                .with_replication_buffer_size(1024 * 1024)
                 .with_replication_listener(repl)
                 .with_replication_security(security);
             let _ = rt.run(stop_thread);
@@ -111,14 +114,10 @@ fn connect(
     local: &Keypair,
     primary_key: [u8; 32],
 ) -> Result<ReplicaClient, kevy_replicate::replica::ReplicaError> {
-    let sec = ReplicaSecurity { local: local.clone(), primary_key };
-    ReplicaClient::connect_secure(
+    let sec = ReplicaSecurity::new(local.clone(), primary_key);
+    ReplicaClient::connect_with(
         ("127.0.0.1", p.repl),
-        "secure-replica",
-        0,
-        0,
-        Duration::from_secs(5),
-        &sec,
+        &kevy_replicate::replica::ConnectOptions::new("secure-replica").with_security(sec),
     )
 }
 
@@ -140,10 +139,9 @@ fn wait_for_set(client: &mut ReplicaClient, key: &[u8]) {
 #[test]
 fn writes_reach_a_replica_holding_the_right_keys() {
     let (primary_key, replica_key) = keys();
-    let p = Primary::start(ReplicationSecurity {
-        local: primary_key.clone(),
-        replica_keys: vec![replica_key.public()],
-    });
+    let p = Primary::start(
+        ReplicationSecurity::new(primary_key.clone()).with_replica_keys(vec![replica_key.public()]),
+    );
     p.set("before", "1");
     let mut client = connect(&p, &replica_key, primary_key.public()).expect("secure handshake");
     p.set("after", "2");
@@ -169,7 +167,7 @@ fn writes_reach_a_replica_holding_the_right_keys() {
 #[test]
 fn a_replica_expecting_another_primary_key_fails_the_handshake() {
     let (primary_key, replica_key) = keys();
-    let p = Primary::start(ReplicationSecurity { local: primary_key, replica_keys: Vec::new() });
+    let p = Primary::start(ReplicationSecurity::new(primary_key));
     let wrong = Keypair::from_secret([7; 32]).public();
     assert!(connect(&p, &replica_key, wrong).is_err());
 }
@@ -177,10 +175,9 @@ fn a_replica_expecting_another_primary_key_fails_the_handshake() {
 #[test]
 fn a_replica_outside_replica_keys_is_refused() {
     let (primary_key, replica_key) = keys();
-    let p = Primary::start(ReplicationSecurity {
-        local: primary_key.clone(),
-        replica_keys: vec![replica_key.public()],
-    });
+    let p = Primary::start(
+        ReplicationSecurity::new(primary_key.clone()).with_replica_keys(vec![replica_key.public()]),
+    );
     let stranger = Keypair::from_secret([8; 32]);
     assert!(connect(&p, &stranger, primary_key.public()).is_err());
     // the listed replica still gets in afterwards
@@ -190,10 +187,7 @@ fn a_replica_outside_replica_keys_is_refused() {
 #[test]
 fn an_empty_replica_list_admits_any_replica_encrypted() {
     let (primary_key, _) = keys();
-    let p = Primary::start(ReplicationSecurity {
-        local: primary_key.clone(),
-        replica_keys: Vec::new(),
-    });
+    let p = Primary::start(ReplicationSecurity::new(primary_key.clone()));
     let anyone = Keypair::from_secret([9; 32]);
     let mut client =
         connect(&p, &anyone, primary_key.public()).expect("open primary admits any key");
@@ -204,9 +198,11 @@ fn an_empty_replica_list_admits_any_replica_encrypted() {
 #[test]
 fn a_plaintext_replica_gets_nothing_from_a_secure_primary() {
     let (primary_key, _) = keys();
-    let p = Primary::start(ReplicationSecurity { local: primary_key, replica_keys: Vec::new() });
+    let p = Primary::start(ReplicationSecurity::new(primary_key));
     p.set("secret", "value");
-    let plain =
-        ReplicaClient::connect_at(("127.0.0.1", p.repl), "plain", 0, 0, Duration::from_secs(2));
+    let plain = ReplicaClient::connect_with(
+        ("127.0.0.1", p.repl),
+        &kevy_replicate::replica::ConnectOptions::new("plain").with_timeout(Duration::from_secs(2)),
+    );
     assert!(plain.is_err(), "a plaintext handshake must not be answered");
 }

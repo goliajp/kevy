@@ -9,9 +9,18 @@ use std::sync::atomic::AtomicU64;
 use std::time::Instant;
 
 use kevy_resp::ArgvView;
-use kevy_store::Store;
 
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use crate::aof_mapped::{MapHandle, Mapped, sync_handles};
+use crate::aof_rewrite::RewriteStats;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use crate::aof_stage::Stage;
+#[cfg(target_arch = "wasm32")]
+pub(crate) use crate::aof_stage_off::{MapHandle, Mapped, Stage, sync_handles};
 use crate::estimate_multibulk_bytes;
+pub use crate::modes::Fsync;
+use crate::modes::ReplayMode;
+use crate::record::RECORD_HEADER;
 use crate::record_pieces::{record_header, write_frame};
 
 /// 9-byte file-format header written at the start of every kevy-managed
@@ -24,6 +33,20 @@ use crate::record_pieces::{record_header, write_frame};
 /// Public so host-mediated AOF sinks (a browser pump appending kevy
 /// frames to its own storage, for example) can stamp files that stay
 /// byte-compatible with kevy-written logs.
+///
+/// ```
+/// use kevy_persist::{AOF_MAGIC, Argv, write_multibulk};
+///
+/// // a host-written v1 log: the magic, then bare RESP frames
+/// let path = std::env::temp_dir().join(format!("aof-magic-doc-{}.aof", std::process::id()));
+/// let mut log = AOF_MAGIC.to_vec();
+/// write_multibulk(&mut log, &Argv::from(vec![b"DEL".to_vec(), b"k".to_vec()]))?;
+/// std::fs::write(&path, &log)?;
+/// let report = kevy_persist::replay_aof_quiet(&path, Default::default(), |_| {})?;
+/// assert_eq!(report.commands, 1);
+/// # std::fs::remove_file(&path)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub const AOF_MAGIC: &[u8; 9] = b"KEVYAOF1\n";
 
 /// AOF write buffer capacity. `BufWriter`'s default is 8 KiB — a single
@@ -37,19 +60,6 @@ pub const AOF_MAGIC: &[u8; 9] = b"KEVYAOF1\n";
 /// such buffer.
 pub(crate) const AOF_BUF_CAP: usize = 256 * 1024;
 
-/// When to fsync the AOF to disk.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Fsync {
-    /// fsync after every write — safest, slowest.
-    Always,
-    /// fsync about once per second; each [`Aof::tick`] (or
-    /// [`Aof::maybe_sync`]) writes the buffer into the kernel.
-    EverySec,
-    /// Never fsync explicitly: each [`Aof::tick`] writes the buffer into
-    /// the kernel, and the OS decides when it reaches the disk.
-    No,
-}
-
 /// An append-only command log. Each write command is appended as a RESP
 /// multi-bulk frame; [`crate::replay_aof`] re-applies them on startup.
 ///
@@ -62,6 +72,21 @@ pub enum Fsync {
 /// [`Aof::rewrite_from`] (BGREWRITEAOF) via the
 /// `auto_aof_rewrite_percentage` + `auto_aof_rewrite_min_size` knobs in
 /// `kevy_config`.
+///
+/// ```
+/// use kevy_persist::{Aof, Argv, Fsync};
+///
+/// let path = std::env::temp_dir().join(format!("aof-type-doc-{}.aof", std::process::id()));
+/// let mut aof = Aof::open(&path, Fsync::Always)?;
+/// let before = aof.size_bytes();
+/// aof.append(&Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()]))?;
+/// assert!(aof.size_bytes() > before);
+/// aof.truncate()?; // a snapshot now holds the state
+/// assert_eq!(aof.size_bytes(), before);
+/// # drop(aof);
+/// # std::fs::remove_file(&path)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
 #[derive(Debug)]
 pub struct Aof {
     pub(crate) file: BufWriter<File>,
@@ -121,6 +146,16 @@ pub struct Aof {
     /// file keeps appending V1 until its first rewrite upgrades it —
     /// mixing formats within one file would corrupt it.
     pub(crate) format: crate::AofFormat,
+    /// `Some` = staged appends (see `aof_stage`): records land in a shared
+    /// mapping first and reach `file` on each drain.
+    pub(crate) stage: Option<Stage>,
+    /// `Some` = mapped appends (see `aof_mapped`): records are copied into a
+    /// mapping of the file's preallocated tail; `file` is never written.
+    pub(crate) mapped: Option<Mapped>,
+    /// This log maps its appends whenever it can: kept while the mapping is
+    /// taken down around a file swap, so the swap maps the new file.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) maps: bool,
     /// `Some` = queued-append mode (RFC v3-aof-offload S1): encoded
     /// record bytes accumulate here instead of hitting `file`, and the
     /// DRIVER (the io_uring reactor) drains them via
@@ -146,29 +181,6 @@ pub struct Aof {
     pub(crate) queued_seq: u64,
 }
 
-/// Handoff between the two halves of a non-blocking rewrite: the serialized
-/// keyspace image (produced under the store lock) and the temp path to spill
-/// it to (off-lock). See [`Aof::begin_concurrent_rewrite`].
-#[derive(Debug)]
-pub struct RewritePlan {
-    /// The compacted AOF image (magic + one command stream per key).
-    pub body: Vec<u8>,
-    /// Same-directory temp file to spill `body` to before the final swap.
-    pub tmp: PathBuf,
-    /// Keys captured in `body` (for the resulting [`RewriteStats`]).
-    pub keys: u64,
-}
-
-/// Result of an [`Aof::rewrite_from`] call. Surfaced by `BGREWRITEAOF` /
-/// `INFO persistence`.
-#[derive(Debug, Clone, Copy)]
-pub struct RewriteStats {
-    /// Keys dumped into the new AOF.
-    pub keys: u64,
-    /// New AOF size in bytes.
-    pub bytes: u64,
-}
-
 impl Aof {
     /// The on-disk record format this file currently speaks.
     ///
@@ -188,32 +200,33 @@ impl Aof {
     /// kevy-managed. Pre-existing files (legacy bare-RESP or already-
     /// magic'd) are left untouched.
     pub fn open(path: &Path, fsync: Fsync) -> io::Result<Self> {
-        Self::open_with_repair(path, fsync, false)
+        Self::open_with_repair(path, fsync, ReplayMode::Strict)
     }
 
-    /// [`Self::open`] with the repair policy explicit: under `resync`,
+    /// [`Self::open`] with the repair policy explicit: under
+    /// [`ReplayMode::Resync`],
     /// interior corrupt regions are left in place (the resync replay hops
     /// them deterministically each boot until a rewrite compacts them
     /// away) and only the bytes after the LAST recoverable record are
     /// quarantined + truncated — so a mid-file corruption no longer costs
     /// the good tail behind it.
-    pub fn open_with_repair(path: &Path, fsync: Fsync, resync: bool) -> io::Result<Self> {
-        let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-        let mut size = file.metadata().map_or(0, |m| m.len());
-        let mut quarantined = None;
-        let mut format = crate::AofFormat::V2;
-        if size == 0 {
-            // Fresh file: stamp the (v2) magic header so the replayer can
-            // distinguish kevy-written AOFs from accidental writes.
-            file.write_all(crate::record::AOF2_MAGIC)?;
-            file.sync_data()?;
-            size = crate::record::AOF2_MAGIC.len() as u64;
-        } else {
-            // Existing file: keep appending in ITS format. V1 (magic'd or
-            // legacy bare-RESP) upgrades to V2 at the next rewrite.
-            format = crate::replay::sniff_format(path)?;
-            quarantined = crate::aof_util::repair_tail(path, &mut file, &mut size, resync)?;
-        }
+    pub fn open_with_repair(path: &Path, fsync: Fsync, mode: ReplayMode) -> io::Result<Self> {
+        Self::open_after_replay(path, fsync, mode, None)
+    }
+
+    /// [`Self::open_with_repair`] for a file a replay just walked: `settled`
+    /// is where it stopped, when it dropped nothing, so anything past it is
+    /// a mapped log's unused zero preallocation. A v2 file is cut back to
+    /// that length without the second walk the repair would make — with
+    /// the same parser, it would stop at the same byte.
+    pub fn open_after_replay(
+        path: &Path,
+        fsync: Fsync,
+        mode: ReplayMode,
+        settled: Option<u64>,
+    ) -> io::Result<Self> {
+        let resync = mode == ReplayMode::Resync;
+        let (file, size, format, quarantined) = Self::prepare_file(path, resync, settled)?;
         Ok(Aof {
             in_txn: false,
             file: BufWriter::with_capacity(AOF_BUF_CAP, file),
@@ -237,7 +250,37 @@ impl Aof {
             queue: None,
             queued_offset: size,
             queued_seq: 0,
+            stage: None,
+            mapped: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            maps: false,
         })
+    }
+
+    /// Open `path` for appending: a fresh file gets the v2 magic, an existing
+    /// one keeps its format (v1 upgrades at the next rewrite) and has its
+    /// tail settled. Returns the file, its length, its format and where a
+    /// repaired tail was quarantined.
+    fn prepare_file(
+        path: &Path,
+        resync: bool,
+        settled: Option<u64>,
+    ) -> io::Result<(File, u64, crate::AofFormat, Option<PathBuf>)> {
+        let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+        let mut size = file.metadata().map_or(0, |m| m.len());
+        if size == 0 {
+            // stamp the magic so the replayer can tell a kevy-written log
+            // from an accidental write
+            file.write_all(crate::record::AOF2_MAGIC)?;
+            file.sync_data()?;
+            size = crate::record::AOF2_MAGIC.len() as u64;
+            return Ok((file, size, crate::AofFormat::V2, None));
+        }
+        let format = crate::replay::sniff_format(path)?;
+        let settled = settled.filter(|_| format == crate::AofFormat::V2);
+        let quarantined =
+            crate::aof_util::settle_tail(path, &mut file, &mut size, settled, resync)?;
+        Ok((file, size, format, quarantined))
     }
 
     /// The quarantine file `open` wrote while repairing a dropped tail, if
@@ -272,6 +315,7 @@ impl Aof {
         self.fsync = fsync;
         if upgrading_to_always {
             self.flush_queued()?;
+            self.stop_mapping()?;
         }
         if upgrading_to_always && (self.dirty || self.sync_unconfirmed()) {
             self.file.flush()?;
@@ -295,6 +339,17 @@ impl Aof {
         if let Some(q) = &mut self.queue {
             write_frame(q, own, args)?;
             self.queued_seq += 1;
+        } else if let Some(m) = &mut self.mapped {
+            write_frame(m, own, args)?;
+        } else if let Some(h) = own.filter(|_| self.stage.is_some()) {
+            let len = RECORD_HEADER + u32::from_le_bytes([h[0], h[1], h[2], h[3]]) as usize;
+            let staged = self.stage_record(len, |mut slot| {
+                write_frame(&mut slot, Some(h), args).expect("the slot is the record's exact size");
+            })?;
+            if !staged {
+                write_frame(&mut self.file, own, args)?;
+                self.stage_bypassed()?;
+            }
         } else {
             write_frame(&mut self.file, own, args)?;
         }
@@ -329,6 +384,7 @@ impl Aof {
     /// the freshly-trimmed log still identify as kevy-managed.
     pub fn truncate(&mut self) -> io::Result<()> {
         self.flush_queued()?;
+        self.unmap()?;
         self.file.flush()?;
         let f = self.file.get_mut();
         f.set_len(0)?;
@@ -341,7 +397,7 @@ impl Aof {
         self.queued_offset = self.size_bytes;
         self.size_at_last_rewrite = crate::record::AOF2_MAGIC.len() as u64;
         self.last_rewrite_at = Instant::now();
-        Ok(())
+        self.after_file_change()
     }
 
     /// Estimated current AOF size in bytes (file content as of last append).
@@ -393,14 +449,18 @@ impl Aof {
     /// it over the live AOF. The append handle is reopened against the new
     /// file before this call returns, so subsequent `append` calls land in
     /// the rewritten log.
-    pub fn rewrite_from(&mut self, store: &Store) -> io::Result<RewriteStats> {
+    pub fn rewrite_from<S: crate::SnapshotSource>(
+        &mut self,
+        store: &S,
+    ) -> io::Result<RewriteStats> {
         // Flush any pending writes to the OLD file first so the snapshot
         // accounts for everything the caller intended to durabilise.
         self.flush_queued()?;
+        self.unmap()?;
         self.file.flush()?;
 
         let tmp = crate::aof_util::rewrite_tmp_path(&self.path);
-        let (keys, bytes) = crate::dump_aof(&tmp, store)?;
+        let RewriteStats { keys, bytes } = crate::dump_aof(&tmp, store)?;
 
         // Atomic replacement. After this, the OLD file descriptor in
         // `self.file` is open against an unlinked inode; new writes would
@@ -415,6 +475,7 @@ impl Aof {
         self.last_rewrite_at = Instant::now();
         self.dirty = false;
         self.rewrites_total = self.rewrites_total.saturating_add(1);
+        self.after_file_change()?;
         Ok(RewriteStats { keys, bytes })
     }
 

@@ -7,46 +7,11 @@ use kevy_store::Store;
 use super::ST_OK;
 
 pub(crate) fn encode_value(out: &mut Vec<u8>, v: &IndexValue) {
-    match v {
-        IndexValue::I64(i) => {
-            out.push(0);
-            out.extend_from_slice(&i.to_le_bytes());
-        }
-        IndexValue::F64(f) => {
-            out.push(1);
-            out.extend_from_slice(&f.to_le_bytes());
-        }
-        IndexValue::Str(s) => {
-            out.push(2);
-            out.extend_from_slice(&(s.len() as u32).to_le_bytes());
-            out.extend_from_slice(s);
-        }
-    }
+    v.encode(out);
 }
 
 pub(crate) fn decode_value(b: &[u8], pos: &mut usize) -> Option<IndexValue> {
-    let tag = *b.get(*pos)?;
-    *pos += 1;
-    match tag {
-        0 => {
-            let v = i64::from_le_bytes(b.get(*pos..*pos + 8)?.try_into().ok()?);
-            *pos += 8;
-            Some(IndexValue::I64(v))
-        }
-        1 => {
-            let v = f64::from_le_bytes(b.get(*pos..*pos + 8)?.try_into().ok()?);
-            *pos += 8;
-            Some(IndexValue::F64(v))
-        }
-        2 => {
-            let n = u32::from_le_bytes(b.get(*pos..*pos + 4)?.try_into().ok()?) as usize;
-            *pos += 4;
-            let s = b.get(*pos..*pos + n)?.to_vec();
-            *pos += n;
-            Some(IndexValue::Str(s))
-        }
-        _ => None,
-    }
+    IndexValue::decode(b, pos)
 }
 
 pub(crate) fn decode_view_cursor(raw: &[u8]) -> Option<(IndexValue, Vec<u8>)> {
@@ -68,7 +33,7 @@ pub(super) fn decode_cursor(raw: &[u8]) -> Option<Cursor> {
     let mut pos = 0usize;
     let value = decode_value(&bytes, &mut pos)?;
     let key = bytes.get(pos..)?.to_vec();
-    Some(Cursor { value, key })
+    Some(Cursor::new(value, key))
 }
 
 pub(super) fn unhex(raw: &[u8]) -> Option<Vec<u8>> {
@@ -194,7 +159,7 @@ pub(super) fn decode_gstats_arg(b: &[u8]) -> Option<kevy_text::CorpusStats> {
         pos += 4;
         df.insert(tok, d);
     }
-    Some(kevy_text::CorpusStats { n_docs, avgdl, df })
+    Some(kevy_text::CorpusStats::new(n_docs, avgdl, df))
 }
 
 /// Shared agg chunk encoding: `[ST_OK][n][(glen,g,count,sum,mmlen,mm)*]`.

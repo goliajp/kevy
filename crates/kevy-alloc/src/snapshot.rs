@@ -1,44 +1,111 @@
 //! Turning a heap into a [`Stats`] snapshot.
 //!
 //! Split out of `heap.rs` for the file-size rule, and the seam is a real
-//! one: everything here reads, nothing allocates, and it runs on an INFO
-//! call rather than per operation. Only `live` and `rounding` have to be
-//! maintained as allocations happen — they depend on the size a caller
-//! asked for, which nothing else records. The rest is derived by walking
-//! the segments when someone asks.
+//! one: everything here reads, nothing allocates. The engine reads it on
+//! every shard tick, so it must not cost time in proportion to the heap:
+//! it reads the running totals in `tally` plus one pass over the
+//! classes. The walk that defines what those totals mean is kept below,
+//! test-only, as the oracle they are checked against.
 
-use crate::class;
-use crate::class::SPAN_BYTES;
+use core::sync::atomic::Ordering::Relaxed;
+
+use crate::class::{self, NCLASSES};
 use crate::heap::Heap;
-use crate::segment::{FIRST_DATA_SPAN, NO_CLASS, SEGMENT_BYTES, SPANS_PER_SEGMENT};
+use crate::segment::SEGMENT_BYTES;
 use crate::stats::Stats;
+use crate::tally::SPAN;
+#[cfg(test)]
+use crate::{class::SPAN_BYTES, segment::NO_CLASS};
 
 impl Heap {
     /// Where every mapped byte is.
     ///
-    /// Walks the segments rather than maintaining seven counters on the
-    /// hot path: only `live` and `rounding` depend on the requested size
-    /// and must be tracked as allocations happen. Stats are read on INFO,
-    /// not per operation.
+    /// Reads totals kept as span state changes rather than walking the
+    /// segments, so the cost is fixed by the number of size classes, not
+    /// by the size of the heap.
     #[must_use]
     pub fn snapshot(&self) -> Stats {
-        let mut st =
-            Stats { live: self.live_bytes, rounding: self.rounding_bytes, ..Stats::default() };
+        let t = &self.tally;
+        // Slots freed by another thread are still inside this heap's
+        // `live`/`rounding` totals, because that thread could not reach
+        // across to adjust them. Move the amount over here so every byte
+        // is counted exactly once.
+        let (parked, parked_live) = if self.parked.is_null() {
+            (0, 0)
+        } else {
+            // SAFETY: set with the first segment, mapped while the heap lives.
+            let p = unsafe { &*self.parked };
+            (p.bytes.load(Relaxed) as u64, p.live.load(Relaxed) as u64)
+        };
+        // Claimed-word bits count as held span-side (they pin pages
+        // exactly as live slots do), but no caller holds them: they are
+        // resident, allocatable bytes, which is `span_free`.
+        let held = self.held_bytes();
+        let assigned = t.assigned_spans();
+        Stats {
+            mapped: t.segments * SEGMENT_BYTES as u64,
+            live: self.live_bytes - parked_live,
+            rounding: self.rounding_total(held) - (parked - parked_live),
+            cache: parked,
+            span_free: t.touched - held - t.returned + self.claims_unused_bytes(),
+            returned: t.returned_spans * SPAN + t.returned,
+            virgin: t.virgin_spans * SPAN + (assigned - t.empty_spans) * SPAN - t.touched,
+            hysteresis: (t.held_spans + t.empty_spans) * SPAN,
+            segment_overhead: t.segments * SPAN,
+            large_count: 0,
+            spans_assigned: assigned,
+        }
+    }
+
+    /// Slot bytes of every class this heap has handed out or claimed.
+    fn held_bytes(&self) -> u64 {
+        let mut held = 0u64;
+        for c in 0..NCLASSES {
+            held += u64::from(self.class_live[c]) * class::size_of(c) as u64;
+        }
+        held
+    }
+
+    /// Slot bytes beyond what the live allocations asked for, parked
+    /// foreign frees included.
+    ///
+    /// Derived rather than kept as a running total: every path that moves
+    /// it moves `class_live`, a claim's unused bits or `live_bytes` by the
+    /// same amount, so a counter would only repeat that arithmetic on
+    /// every allocation and free.
+    fn rounding_total(&self, held: u64) -> u64 {
+        held - self.claims_unused_bytes() - self.live_bytes
+    }
+
+    /// The definition [`Self::snapshot`] is kept equal to: every span of
+    /// every segment classified from its metadata, and every foreign
+    /// list walked node by node.
+    #[cfg(test)]
+    pub(crate) fn snapshot_walked(&self) -> Stats {
+        use crate::segment::{FIRST_DATA_SPAN, SPANS_PER_SEGMENT};
+        let rounding = self.rounding_total(self.held_bytes());
+        let mut st = Stats { live: self.live_bytes, rounding, ..Stats::default() };
         let mut seg = self.segments;
         while !seg.is_null() {
             // SAFETY: live header from our own list.
             let s = unsafe { &*seg };
             st.mapped += SEGMENT_BYTES as u64;
             st.segment_overhead += SPAN_BYTES as u64;
-            // Slots freed by another thread are still inside this
-            // heap's `live`/`rounding` totals, because that thread could
-            // not reach across to adjust them. Move the amount over here
-            // so every byte is counted exactly once.
-            let parked = s.foreign_bytes.load(core::sync::atomic::Ordering::Relaxed) as u64;
-            let parked_live = s.foreign_live.load(core::sync::atomic::Ordering::Relaxed) as u64;
-            st.cache += parked;
-            st.live -= parked_live;
-            st.rounding -= parked - parked_live;
+            let mut node = s.foreign.load(core::sync::atomic::Ordering::Acquire);
+            while !node.is_null() {
+                // SAFETY: a published chain of this segment's slots; only
+                // this thread, the owner, ever unlinks it.
+                let p = unsafe { core::ptr::NonNull::new_unchecked(node) };
+                // SAFETY: as above; the freeing thread wrote the size.
+                let requested = unsafe { crate::segment::foreign_requested(p) } as u64;
+                let cls = s.spans[crate::segment::span_index_of(p)].class as usize;
+                let slot = class::size_of(cls) as u64;
+                st.cache += slot;
+                st.live -= requested;
+                st.rounding -= slot - requested;
+                // SAFETY: linked through the slot's first word.
+                node = unsafe { node.cast::<*mut u8>().read() };
+            }
             for ix in FIRST_DATA_SPAN..SPANS_PER_SEGMENT {
                 add_span(&mut st, &s.spans[ix]);
                 if s.spans[ix].class != NO_CLASS {
@@ -47,10 +114,6 @@ impl Heap {
             }
             seg = s.next;
         }
-        // Claimed-word bits the heap holds locally: span-side they
-        // count as live (they pin pages exactly as live slots do), but
-        // no caller holds them — they are resident, allocatable bytes,
-        // which is the definition of `span_free`.
         st.span_free += self.claims_unused_bytes();
         st
     }
@@ -58,7 +121,7 @@ impl Heap {
 
 /// Which bucket a span with no class belongs in. Three, not one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Unassigned {
+pub(crate) enum Unassigned {
     /// Carved with the segment and never claimed: mapped, never touched.
     Virgin,
     /// Emptied, retired, and its pages handed back.
@@ -76,7 +139,7 @@ enum Unassigned {
 /// a function that takes the two facts as arguments is what lets a test
 /// see all three anywhere — and `Held` is the case worth seeing, because
 /// it is the one where reclaim does nothing.
-fn unassigned_bucket(retired: bool, discarded: u16) -> Unassigned {
+pub(crate) fn unassigned_bucket(retired: bool, discarded: u16) -> Unassigned {
     if !retired {
         Unassigned::Virgin
     } else if discarded == crate::pagemap::ALL_PAGES_DISCARDED {
@@ -98,6 +161,7 @@ fn unassigned_bucket(retired: bool, discarded: u16) -> Unassigned {
 /// it existed for. `returned` — the term page-granular reclaim was
 /// built to produce — read 0 on a workload that had just emptied
 /// 20,000 values, while 89 % of the map sat under `hysteresis`.
+#[cfg(test)]
 fn add_span(st: &mut Stats, meta: &crate::segment::SpanMeta) {
     if meta.class == NO_CLASS {
         match unassigned_bucket(meta.retired, meta.discarded) {
@@ -108,7 +172,7 @@ fn add_span(st: &mut Stats, meta: &crate::segment::SpanMeta) {
         return;
     }
     if meta.live == 0 {
-        // Empty but still assigned: the per-sweep hysteresis is holding
+        // Empty but still assigned: the purge delay is holding
         // it for its class rather than retiring it. Resident and
         // deliberately kept — the contract's `hysteresis`, exactly.
         st.hysteresis += SPAN_BYTES as u64;

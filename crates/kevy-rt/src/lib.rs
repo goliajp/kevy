@@ -34,10 +34,11 @@
 //! Implement [`Commands`] for your command set and run it. ([`Store`] is
 //! re-exported so you don't need a separate dependency.)
 //!
-//! ```no_run
+//! ```
 //! use kevy_rt::{ArgvView, Commands, Route, Runtime, Store, TxnKind};
+//! use std::io::{Read, Write};
 //! use std::sync::Arc;
-//! use std::sync::atomic::AtomicBool;
+//! use std::sync::atomic::{AtomicBool, Ordering};
 //!
 //! #[derive(Clone)]
 //! struct MyCommands;
@@ -55,9 +56,31 @@
 //!     fn txn_kind<A: ArgvView + ?Sized>(&self, _args: &A) -> TxnKind { TxnKind::Other }
 //! }
 //!
-//! // One shard per core, listening on 127.0.0.1:6379, until `stop` is set.
-//! let rt = Runtime::builder(MyCommands).bind([127, 0, 0, 1], 6379).shards(4);
-//! rt.run(Arc::new(AtomicBool::new(false))).unwrap();
+//! # let port = kevy_testnet::free_port();
+//! # let dir = std::env::temp_dir().join(format!("kevy-rt-example-{}", std::process::id()));
+//! // Two shards on 127.0.0.1, in memory only, until `stop` is set.
+//! let rt = Runtime::builder(MyCommands)
+//!     .bind([127, 0, 0, 1], port)
+//!     .shards(2)
+//!     .with_aof(false)
+//!     .with_data_dir(&dir);
+//! let stop = Arc::new(AtomicBool::new(false));
+//! let server = std::thread::spawn({
+//!     let stop = Arc::clone(&stop);
+//!     move || rt.run(stop)
+//! });
+//! # kevy_testnet::assert_listening(port, "the example runtime");
+//!
+//! let mut conn = std::net::TcpStream::connect(("127.0.0.1", port))?;
+//! conn.write_all(b"*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$1\r\nv\r\n")?;
+//! let mut reply = [0; 5];
+//! conn.read_exact(&mut reply)?;
+//! assert_eq!(&reply, b"+OK\r\n");
+//!
+//! stop.store(true, Ordering::Relaxed);
+//! server.join().expect("no shard panicked")?;
+//! # let _ = std::fs::remove_dir_all(&dir);
+//! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 // Almost entirely safe: the only `unsafe` is in `uring_reactor` (Linux io_uring),
 // which needs raw buffer pointers for zero-allocation completion I/O — on the hot
@@ -84,6 +107,7 @@ mod port_claim;
 #[cfg(debug_assertions)]
 pub use block_xshard_confirm::counters as serve_counters;
 mod aof_writer;
+mod batch_lane;
 mod block_xshard_registry;
 mod block_xshard_target;
 mod blocked;
@@ -98,6 +122,7 @@ mod exec_client_intercept;
 mod exec_copy;
 mod exec_crossslot;
 mod exec_dispatch;
+mod exec_ext;
 mod exec_feed;
 mod exec_fold;
 mod exec_geostore;
@@ -114,6 +139,7 @@ mod exec_scan;
 mod exec_slowlog;
 mod exec_txn;
 mod exec_watch;
+mod exec_xread;
 mod exec_zalgebra;
 mod inbox;
 mod lua_wake_bridge;
@@ -144,10 +170,12 @@ mod replication_pump;
 mod replication_secure;
 mod replication_trace;
 mod reshard;
+mod restore_gate;
 mod route;
 mod runtime;
 mod runtime_builders;
 mod runtime_run;
+mod runtime_thread;
 mod shard;
 mod shard_flush;
 mod shard_lifecycle;
@@ -189,6 +217,7 @@ mod uring_stall_cadence;
 mod uring_stalldump;
 #[cfg(any(target_os = "linux", test))] // `test` too: pure, tested everywhere
 mod uring_write_linearize;
+mod verb_id;
 
 /// Hard cap on a single connection's accumulated unflushed reply
 /// bytes. A client that stops reading (or a slow pub/sub subscriber)
@@ -210,12 +239,13 @@ pub(crate) const CLIENT_OUTPUT_HARD_LIMIT: usize = 512 * 1024 * 1024;
 pub(crate) const CLIENT_INPUT_HARD_LIMIT: usize = 1024 * 1024 * 1024;
 
 pub use blocked::{BlockHint, BlockKind};
-pub use client_ops::ClientKillFilter;
+pub use client_ops::{ClientKillFilter, KillReply};
 pub use cluster::{relayed_client, shard_slot_range};
 pub use exec_geostore::GeoHits;
-pub use exec_slowlog::{SlowlogSub, parse_slowlog_sub};
+pub use exec_slowlog::SlowlogSub;
 pub use kevy_config::NotificationFlags;
 pub use kevy_persist::Fsync;
+pub use kevy_resp::ops_table::NotifyKind;
 pub use kevy_resp::{Argv, ArgvBorrowed, ArgvView, RespVersion};
 pub use kevy_store::Store;
 pub use lua_wake_bridge::push_lua_wake_key;
@@ -227,11 +257,40 @@ pub use replica_inbox::{
 };
 pub use replication_gate::{RecordApplyGuard, ReplicatedApplyGuard, applying_record};
 pub use replication_secure::ReplicationSecurity;
-pub use route::{Route, ScanArgs, XGroupCtx};
+pub use route::{Route, XGroupCtx};
 pub use runtime::Runtime;
 pub use types::{
-    ExtensionReduced, LiveRuntimeConfig, NotifyClass, ReplicaAck, ReplicaViewRow, ResolvedCmd,
-    TxnKind,
+    ExtensionReduced, LiveRuntimeConfig, ReplicaAck, ReplicaViewRow, ResolvedCmd, TxnKind,
+};
+pub use verb_id::VerbId;
+
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    // a shard owns its receiver alone
+    const fn send<T: Send>() {}
+    send_sync::<BlockHint>();
+    send_sync::<BlockKind>();
+    send_sync::<ClientKillFilter>();
+    send_sync::<KillReply>();
+    send_sync::<GeoHits>();
+    send_sync::<SlowlogSub>();
+    send_sync::<MultiOp>();
+    send_sync::<ZCombine>();
+    send_sync::<propagation::Propagate>();
+    send_sync::<ReplicaApply>();
+    send_sync::<ReplicaInboxSender>();
+    send::<ReplicaInboxReceiver>();
+    send_sync::<SnapshotGate>();
+    send_sync::<RecordApplyGuard>();
+    send_sync::<ReplicatedApplyGuard>();
+    send_sync::<ReplicationSecurity>();
+    send_sync::<Route>();
+    send_sync::<XGroupCtx>();
+    send_sync::<ExtensionReduced>();
+    send_sync::<LiveRuntimeConfig>();
+    send_sync::<ReplicaAck>();
+    send_sync::<ResolvedCmd>();
+    send_sync::<TxnKind>();
 };
 
 pub use crate::commands_trait::Commands;

@@ -1,6 +1,5 @@
-//! The tools kevy-cli shipped as bare words before `--kevy` existed. Under
-//! `--kevy` they run on the session's connection; as bare words they keep
-//! their 6.4 form for the rest of 6.x, with a deprecation line (RFC §13.5).
+//! The tools kevy-cli shipped as bare words before `--kevy` existed. They
+//! run under `--kevy`, on the session's connection.
 
 /// One shipped tool.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

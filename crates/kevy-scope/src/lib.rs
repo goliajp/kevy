@@ -53,3 +53,16 @@ pub use migration::{MigrationError, MigrationState, MigrationTable};
 pub use ownership::{OwnershipError, OwnershipTable};
 pub use routing::Routing;
 pub use scope::Scope;
+
+// Send and Sync are part of the public contract: a change that loses
+// either fails to compile here rather than in a caller.
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<MigrationError>();
+    send_sync::<MigrationState>();
+    send_sync::<MigrationTable>();
+    send_sync::<OwnershipError>();
+    send_sync::<OwnershipTable>();
+    send_sync::<Routing<'static>>();
+    send_sync::<Scope>();
+};

@@ -22,10 +22,11 @@ pub(super) fn scope_positions(
 ) -> Result<Vec<usize>, Vec<u8>> {
     let mut out = Vec::with_capacity(scope.len());
     for want in scope {
-        match spec.fields.iter().position(|f| f.name == *want) {
+        match spec.fields().iter().position(|f| f.name == *want) {
             Some(i) => out.push(i),
             None => {
-                let declared: Vec<&[u8]> = spec.fields.iter().map(|f| f.name.as_slice()).collect();
+                let declared: Vec<&[u8]> =
+                    spec.fields().iter().map(|f| f.name.as_slice()).collect();
                 return Err(clause_error("IN", want, "index", &declared));
             }
         }
@@ -45,7 +46,7 @@ fn clause_error(clause: &str, bad: &[u8], verb: &str, offered: &[&[u8]]) -> Vec<
 /// [`clause_error`]'s field-not-STORED sibling: same explanation, but
 /// tagged ST_NOFIELD with the field carried structurally, so the
 /// origin reduce can feed the advise log without parsing prose.
-fn nofield_error(clause: &str, bad: &[u8], offered: &[&[u8]]) -> Vec<u8> {
+pub(super) fn nofield_error(clause: &str, bad: &[u8], offered: &[&[u8]]) -> Vec<u8> {
     let mut chunk = vec![crate::cmd_index_query::ST_NOFIELD];
     let f = &bad[..bad.len().min(255)];
     chunk.push(f.len() as u8);
@@ -99,11 +100,11 @@ pub(super) fn filter_tests(
     use super::args::FilterShape;
     let mut out = Vec::with_capacity(filters.len());
     for f in filters {
-        let Some(pos) = spec.values.iter().position(|v| v.name == f.field) else {
-            let stored: Vec<&[u8]> = spec.values.iter().map(|v| v.name.as_slice()).collect();
+        let Some(pos) = spec.values().iter().position(|v| v.name == f.field) else {
+            let stored: Vec<&[u8]> = spec.values().iter().map(|v| v.name.as_slice()).collect();
             return Err(nofield_error("FILTER", &f.field, &stored));
         };
-        let ty = spec.values[pos].ty;
+        let ty = spec.values()[pos].ty;
         let (test, raw) = match &f.shape {
             FilterShape::Range { min, max } => {
                 (kevy_index::ValueTest::range_at(ty, min, max, now), min)
@@ -141,11 +142,11 @@ pub(super) fn distinct_field(
     distinct: &Option<Vec<u8>>,
 ) -> Result<Option<(usize, kevy_index::ValType)>, Vec<u8>> {
     let Some(field) = distinct else { return Ok(None) };
-    let Some(pos) = spec.values.iter().position(|v| v.name == *field) else {
-        let stored: Vec<&[u8]> = spec.values.iter().map(|v| v.name.as_slice()).collect();
+    let Some(pos) = spec.values().iter().position(|v| v.name == *field) else {
+        let stored: Vec<&[u8]> = spec.values().iter().map(|v| v.name.as_slice()).collect();
         return Err(nofield_error("DISTINCT", field, &stored));
     };
-    Ok(Some((pos, spec.values[pos].ty)))
+    Ok(Some((pos, spec.values()[pos].ty)))
 }
 
 /// Resolve a `FACET <field…>` clause: each named field's stored-value
@@ -157,11 +158,11 @@ pub(super) fn facet_fields(
 ) -> Result<Vec<(usize, kevy_index::ValType)>, Vec<u8>> {
     let mut out = Vec::with_capacity(facets.len());
     for field in facets {
-        let Some(pos) = spec.values.iter().position(|v| v.name == *field) else {
-            let stored: Vec<&[u8]> = spec.values.iter().map(|v| v.name.as_slice()).collect();
+        let Some(pos) = spec.values().iter().position(|v| v.name == *field) else {
+            let stored: Vec<&[u8]> = spec.values().iter().map(|v| v.name.as_slice()).collect();
             return Err(nofield_error("FACET", field, &stored));
         };
-        out.push((pos, spec.values[pos].ty));
+        out.push((pos, spec.values()[pos].ty));
     }
     Ok(out)
 }
@@ -169,11 +170,12 @@ pub(super) fn facet_fields(
 pub(super) fn sort_field(
     spec: &kevy_index::IndexSpec,
     sort: &Option<(Vec<u8>, bool)>,
-) -> Result<Option<(usize, bool, kevy_index::ValType)>, Vec<u8>> {
+) -> Result<Option<(usize, kevy_index::SortOrder, kevy_index::ValType)>, Vec<u8>> {
     let Some((field, desc)) = sort else { return Ok(None) };
-    let Some(pos) = spec.values.iter().position(|v| v.name == *field) else {
-        let stored: Vec<&[u8]> = spec.values.iter().map(|v| v.name.as_slice()).collect();
+    let Some(pos) = spec.values().iter().position(|v| v.name == *field) else {
+        let stored: Vec<&[u8]> = spec.values().iter().map(|v| v.name.as_slice()).collect();
         return Err(nofield_error("SORT", field, &stored));
     };
-    Ok(Some((pos, *desc, spec.values[pos].ty)))
+    let order = if *desc { kevy_index::SortOrder::Desc } else { kevy_index::SortOrder::Asc };
+    Ok(Some((pos, order, spec.values()[pos].ty)))
 }

@@ -15,9 +15,10 @@
 
 use std::io;
 
-use std::process::ExitCode;
-
 use kevy_resp_client::Reply;
+
+mod command;
+pub(crate) use command::run_on;
 
 /// One side's reading of a reply: the row keys in order, each with the
 /// sort value it was ordered by (empty when the shape does not carry
@@ -28,21 +29,64 @@ type Rows = Vec<(Vec<u8>, Vec<u8>)>;
 /// `ZRANGE … WITHSCORES` as a plain list silently treats every score as
 /// a row key and reports a divergence on every sample — so the two
 /// ambiguous shapes are told apart by the caller, not by a heuristic.
-#[derive(Debug, Clone, Copy, PartialEq)]
+///
+/// ```
+/// use kevy_cli::Reply;
+/// use kevy_cli::shadow::{Shape, compare, rows_of};
+/// let reply = Reply::Array(vec![Reply::Bulk(b"a".to_vec()), Reply::Bulk(b"1".to_vec())]);
+/// // the same reply read two ways: two rows, or one row with its score
+/// assert_eq!(rows_of(&reply, Shape::Flat).len(), 2);
+/// assert_eq!(rows_of(&reply, Shape::Pairs), vec![(b"a".to_vec(), b"1".to_vec())]);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Shape {
     /// `[cursor, [key, sortval, key, sortval, …]]` — kevy's paged
     /// index reply. Detected, not declared: a two-element array whose
     /// second element is an array cannot be anything else here.
+    ///
+    /// ```
+    /// use kevy_cli::Reply;
+    /// use kevy_cli::shadow::{Shape, rows_of};
+    /// // IDX.QUERY: a cursor, then key / sort value pairs
+    /// let page = Reply::Array(vec![Reply::Bulk(b"0".to_vec()), Reply::Array(vec![Reply::Bulk(b"user:7".to_vec()), Reply::Bulk(b"42".to_vec())])]);
+    /// assert_eq!(rows_of(&page, Shape::Paged), vec![(b"user:7".to_vec(), b"42".to_vec())]);
+    /// ```
     Paged,
     /// `[a, b, c, …]` — every element is a row key.
+    ///
+    /// ```
+    /// use kevy_cli::Reply;
+    /// use kevy_cli::shadow::{Shape, rows_of};
+    /// // SMEMBERS, LRANGE, ZRANGE without scores: every element is a key
+    /// let rows = rows_of(&Reply::Array(vec![Reply::Bulk(b"a".to_vec()), Reply::Bulk(b"b".to_vec())]), Shape::Flat);
+    /// assert_eq!(rows, vec![(b"a".to_vec(), vec![]), (b"b".to_vec(), vec![])]);
+    /// ```
     Flat,
     /// `[member, score, member, score, …]` — `WITHSCORES` and friends.
+    ///
+    /// ```
+    /// use kevy_cli::Reply;
+    /// use kevy_cli::shadow::{Shape, rows_of};
+    /// // ZRANGE … WITHSCORES
+    /// let reply = Reply::Array(vec![Reply::Bulk(b"a".to_vec()), Reply::Bulk(b"1.5".to_vec())]);
+    /// assert_eq!(rows_of(&reply, Shape::Pairs), vec![(b"a".to_vec(), b"1.5".to_vec())]);
+    /// ```
     Pairs,
 }
 
 /// Read a reply into ordered rows under `shape`. `Paged` is recognised
 /// from the reply itself, so passing `Flat` for a kevy index reply
 /// still does the right thing rather than reporting nonsense.
+///
+/// ```
+/// use kevy_cli::Reply;
+/// use kevy_cli::shadow::{Shape, rows_of};
+/// let page = Reply::Array(vec![Reply::Bulk(b"0".to_vec()), Reply::Array(vec![Reply::Bulk(b"k".to_vec()), Reply::Bulk(b"9".to_vec())])]);
+/// // a paged reply is recognised even when the caller said Flat
+/// assert_eq!(rows_of(&page, Shape::Flat), rows_of(&page, Shape::Paged));
+/// assert!(rows_of(&Reply::Int(1), Shape::Flat).is_empty(), "not a list: no rows");
+/// ```
 pub fn rows_of(reply: &Reply, shape: Shape) -> Rows {
     let Reply::Array(items) = reply else { return Vec::new() };
     if let [Reply::Bulk(_), Reply::Array(inner)] = items.as_slice() {
@@ -70,13 +114,50 @@ fn pairs(items: &[Reply]) -> Rows {
 }
 
 /// What one comparison found.
-#[derive(Debug)]
+///
+/// ```
+/// use kevy_cli::Reply;
+/// use kevy_cli::shadow::{Shape, compare, rows_of};
+/// let old = rows_of(&Reply::Array(vec![Reply::Bulk(b"a".to_vec()), Reply::Bulk(b"b".to_vec())]), Shape::Flat);
+/// let new = rows_of(&Reply::Array(vec![Reply::Bulk(b"b".to_vec()), Reply::Bulk(b"a".to_vec())]), Shape::Flat);
+/// let d = compare(&old, &new).first.expect("same rows, different order");
+/// assert_eq!((d.at, d.old.map(|r| r.0), d.new.map(|r| r.0)), (0, Some(b"a".to_vec()), Some(b"b".to_vec())));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub struct Divergence {
     /// Position of the first place the two orders differ.
+    ///
+    /// ```
+    /// use kevy_cli::Reply;
+    /// use kevy_cli::shadow::{Shape, compare, rows_of};
+    /// let old = rows_of(&Reply::Array(vec![Reply::Bulk(b"a".to_vec()), Reply::Bulk(b"b".to_vec())]), Shape::Flat);
+    /// let new = rows_of(&Reply::Array(vec![Reply::Bulk(b"a".to_vec()), Reply::Bulk(b"c".to_vec())]), Shape::Flat);
+    /// assert_eq!(compare(&old, &new).first.map(|d| d.at), Some(1));
+    /// ```
     pub at: usize,
     /// The old side's row and the value it was ordered by.
+    ///
+    /// ```
+    /// use kevy_cli::Reply;
+    /// use kevy_cli::shadow::{Shape, compare, rows_of};
+    /// let old = rows_of(&Reply::Array(vec![Reply::Bulk(b"a".to_vec()), Reply::Bulk(b"5".to_vec())]), Shape::Pairs);
+    /// let new = rows_of(&Reply::Array(vec![]), Shape::Pairs);
+    /// let d = compare(&old, &new).first.unwrap();
+    /// assert_eq!(d.old, Some((b"a".to_vec(), b"5".to_vec())), "the row and its sort value");
+    /// ```
     pub old: Option<(Vec<u8>, Vec<u8>)>,
     /// The new side's, at the same position.
+    ///
+    /// ```
+    /// use kevy_cli::Reply;
+    /// use kevy_cli::shadow::{Shape, compare, rows_of};
+    /// let old = rows_of(&Reply::Array(vec![Reply::Bulk(b"a".to_vec())]), Shape::Flat);
+    /// let new = rows_of(&Reply::Array(vec![Reply::Bulk(b"a".to_vec()), Reply::Bulk(b"b".to_vec())]), Shape::Flat);
+    /// let d = compare(&old, &new).first.unwrap();
+    /// assert_eq!(d.new, Some((b"b".to_vec(), vec![])));
+    /// assert_eq!(d.old, None, "the old side ended here");
+    /// ```
     pub new: Option<(Vec<u8>, Vec<u8>)>,
 }
 
@@ -84,18 +165,63 @@ pub struct Divergence {
 /// difference. Membership and order are reported separately because
 /// they fail for different reasons: a missing row is a writer nobody
 /// updated, a reordering is score drift.
-#[derive(Debug)]
+///
+/// ```
+/// use kevy_cli::Reply;
+/// use kevy_cli::shadow::{Shape, compare, rows_of};
+/// let old = rows_of(&Reply::Array(vec![Reply::Bulk(b"a".to_vec()), Reply::Bulk(b"b".to_vec())]), Shape::Flat);
+/// let new = rows_of(&Reply::Array(vec![Reply::Bulk(b"a".to_vec()), Reply::Bulk(b"c".to_vec())]), Shape::Flat);
+/// let c = compare(&old, &new);
+/// assert_eq!((c.missing, c.extra), (vec![b"b".to_vec()], vec![b"c".to_vec()]));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub struct Compared {
     /// Rows the old path returns and the new one does not.
+    ///
+    /// ```
+    /// use kevy_cli::Reply;
+    /// use kevy_cli::shadow::{Shape, compare, rows_of};
+    /// let old = rows_of(&Reply::Array(vec![Reply::Bulk(b"a".to_vec()), Reply::Bulk(b"b".to_vec())]), Shape::Flat);
+    /// let new = rows_of(&Reply::Array(vec![Reply::Bulk(b"a".to_vec())]), Shape::Flat);
+    /// assert_eq!(compare(&old, &new).missing, [b"b".to_vec()]);
+    /// ```
     pub missing: Vec<Vec<u8>>,
     /// Rows the new path returns and the old one does not.
+    ///
+    /// ```
+    /// use kevy_cli::Reply;
+    /// use kevy_cli::shadow::{Shape, compare, rows_of};
+    /// let old = rows_of(&Reply::Array(vec![Reply::Bulk(b"a".to_vec())]), Shape::Flat);
+    /// let new = rows_of(&Reply::Array(vec![Reply::Bulk(b"a".to_vec()), Reply::Bulk(b"b".to_vec())]), Shape::Flat);
+    /// assert_eq!(compare(&old, &new).extra, [b"b".to_vec()]);
+    /// ```
     pub extra: Vec<Vec<u8>>,
     /// The first position where the two orders differ, if any.
+    ///
+    /// ```
+    /// use kevy_cli::Reply;
+    /// use kevy_cli::shadow::{Shape, compare, rows_of};
+    /// let old = rows_of(&Reply::Array(vec![Reply::Bulk(b"a".to_vec()), Reply::Bulk(b"b".to_vec())]), Shape::Flat);
+    /// let new = rows_of(&Reply::Array(vec![Reply::Bulk(b"b".to_vec()), Reply::Bulk(b"a".to_vec())]), Shape::Flat);
+    /// let c = compare(&old, &new);
+    /// assert!(c.missing.is_empty() && c.extra.is_empty(), "same membership");
+    /// assert_eq!(c.first.map(|d| d.at), Some(0), "but not the same order");
+    /// ```
     pub first: Option<Divergence>,
 }
 
 /// Compare two readings: what is missing, what is extra, and where the
 /// orders first part company.
+///
+/// ```
+/// use kevy_cli::Reply;
+/// use kevy_cli::shadow::{Shape, compare, rows_of};
+/// let old = rows_of(&Reply::Array(vec![Reply::Bulk(b"a".to_vec()), Reply::Bulk(b"b".to_vec())]), Shape::Flat);
+/// let new = rows_of(&Reply::Array(vec![Reply::Bulk(b"a".to_vec()), Reply::Bulk(b"b".to_vec())]), Shape::Flat);
+/// let c = compare(&old, &new);
+/// assert!(c.missing.is_empty() && c.extra.is_empty() && c.first.is_none());
+/// ```
 pub fn compare(old: &Rows, new: &Rows) -> Compared {
     let old_set: std::collections::HashSet<&[u8]> = old.iter().map(|(k, _)| k.as_slice()).collect();
     let new_set: std::collections::HashSet<&[u8]> = new.iter().map(|(k, _)| k.as_slice()).collect();
@@ -120,13 +246,68 @@ pub fn compare(old: &Rows, new: &Rows) -> Compared {
 }
 
 /// Outcome of a shadow run — the paste-able conclusion.
-#[derive(Debug)]
+///
+/// ```
+/// use kevy_cli::shadow::{Shape, print_report, run};
+/// # let port = include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs"));
+/// let mut client = kevy_resp_client::RespClient::connect("127.0.0.1", port)?;
+/// # client.request_borrowed(&[b"ZADD", b"feed", b"1", b"a", b"2", b"b", b"3", b"c"])?;
+/// # client.request_borrowed(&[b"RPUSH", b"feed:new", b"a", b"c"])?;
+/// # let argv = |s: &str| s.split(' ').map(|w| w.as_bytes().to_vec()).collect::<Vec<_>>();
+/// let r = run(&mut client, &argv("ZRANGE feed 0 -1"), &argv("LRANGE feed:new 0 -1"),
+///     Shape::Flat, Shape::Flat, 3)?;
+/// print_report(&r);
+/// assert!(r.diverged > 0);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub struct ShadowReport {
     /// How many times both sides were asked.
+    ///
+    /// ```
+    /// use kevy_cli::shadow::{Shape, run};
+    /// # let port = include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs"));
+    /// let mut client = kevy_resp_client::RespClient::connect("127.0.0.1", port)?;
+    /// # client.request_borrowed(&[b"ZADD", b"feed", b"1", b"a", b"2", b"b", b"3", b"c"])?;
+    /// # client.request_borrowed(&[b"RPUSH", b"feed:new", b"a", b"c"])?;
+    /// # let argv = |s: &str| s.split(' ').map(|w| w.as_bytes().to_vec()).collect::<Vec<_>>();
+    /// let r = run(&mut client, &argv("ZRANGE feed 0 -1"), &argv("LRANGE feed:new 0 -1"),
+    ///     Shape::Flat, Shape::Flat, 3)?;
+    /// assert_eq!(r.samples, 3);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub samples: u64,
     /// How many of those disagreed in membership or order.
+    ///
+    /// ```
+    /// use kevy_cli::shadow::{Shape, run};
+    /// # let port = include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs"));
+    /// let mut client = kevy_resp_client::RespClient::connect("127.0.0.1", port)?;
+    /// # client.request_borrowed(&[b"ZADD", b"feed", b"1", b"a", b"2", b"b", b"3", b"c"])?;
+    /// # client.request_borrowed(&[b"RPUSH", b"feed:new", b"a", b"c"])?;
+    /// # let argv = |s: &str| s.split(' ').map(|w| w.as_bytes().to_vec()).collect::<Vec<_>>();
+    /// let same = argv("ZRANGE feed 0 -1");
+    /// let r = run(&mut client, &same, &same, Shape::Flat, Shape::Flat, 2)?;
+    /// assert_eq!(r.diverged, 0, "a path agrees with itself");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub diverged: u64,
     /// The first sample that disagreed, and how.
+    ///
+    /// ```
+    /// use kevy_cli::shadow::{Shape, run};
+    /// # let port = include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs"));
+    /// let mut client = kevy_resp_client::RespClient::connect("127.0.0.1", port)?;
+    /// # client.request_borrowed(&[b"ZADD", b"feed", b"1", b"a", b"2", b"b", b"3", b"c"])?;
+    /// # client.request_borrowed(&[b"RPUSH", b"feed:new", b"a", b"c"])?;
+    /// # let argv = |s: &str| s.split(' ').map(|w| w.as_bytes().to_vec()).collect::<Vec<_>>();
+    /// let r = run(&mut client, &argv("ZRANGE feed 0 -1"), &argv("LRANGE feed:new 0 -1"),
+    ///     Shape::Flat, Shape::Flat, 3)?;
+    /// let (sample, c) = r.first.expect("diverged");
+    /// assert_eq!((sample, c.missing), (0, vec![b"b".to_vec()]));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub first: Option<(u64, Compared)>,
 }
 
@@ -137,6 +318,21 @@ pub struct ShadowReport {
 /// between the two reads shows up as a divergence, which is why a
 /// single disagreement is a lead rather than a verdict — the report
 /// carries the count so a rate can be read off it.
+///
+/// ```
+/// use kevy_cli::shadow::{Shape, run};
+/// # let port = include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs"));
+/// let mut client = kevy_resp_client::RespClient::connect("127.0.0.1", port)?;
+/// # client.request_borrowed(&[b"ZADD", b"feed", b"1", b"a", b"2", b"b", b"3", b"c"])?;
+/// # client.request_borrowed(&[b"RPUSH", b"feed:new", b"a", b"c"])?;
+/// # let argv = |s: &str| s.split(' ').map(|w| w.as_bytes().to_vec()).collect::<Vec<_>>();
+/// // the new path, once its writer is fixed
+/// client.request_borrowed(&[b"RPUSH", b"feed:fixed", b"a", b"b", b"c"])?;
+/// let r = run(&mut client, &argv("ZRANGE feed 0 -1"), &argv("LRANGE feed:fixed 0 -1"),
+///     Shape::Flat, Shape::Flat, 5)?;
+/// assert_eq!((r.samples, r.diverged), (5, 0));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn run(
     client: &mut dyn crate::link::Link,
     old_cmd: &[Vec<u8>],
@@ -166,6 +362,21 @@ pub fn run(
 /// Print the report the way lesson 4 asks for: the first divergence
 /// with **both** sort keys, because that one line names the drifting
 /// writer.
+///
+/// ```
+/// use kevy_cli::shadow::{Shape, print_report, run};
+/// # let port = include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs"));
+/// let mut client = kevy_resp_client::RespClient::connect("127.0.0.1", port)?;
+/// # client.request_borrowed(&[b"ZADD", b"feed", b"1", b"a", b"2", b"b", b"3", b"c"])?;
+/// # client.request_borrowed(&[b"RPUSH", b"feed:new", b"a", b"c"])?;
+/// # let argv = |s: &str| s.split(' ').map(|w| w.as_bytes().to_vec()).collect::<Vec<_>>();
+/// let r = run(&mut client, &argv("ZRANGE feed 0 -1"), &argv("LRANGE feed:new 0 -1"),
+///     Shape::Flat, Shape::Flat, 3)?;
+/// // "shadow: 3 samples, 3 diverged (first at sample 0)", then
+/// // "MISSING from the new path (1): b" and the order difference
+/// print_report(&r);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn print_report(r: &ShadowReport) {
     let show = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
     match &r.first {
@@ -208,84 +419,6 @@ pub fn print_report(r: &ShadowReport) {
                 println!("    identical sets in different orders is score drift, and a paged UI");
                 println!("    shows it to users as churn — compare the two sort values above");
             }
-        }
-    }
-}
-
-/// Everything `shadow` takes from the command line.
-struct ShadowArgs {
-    old: Option<String>,
-    new: Option<String>,
-    old_shape: Shape,
-    new_shape: Shape,
-    samples: u64,
-}
-
-fn parse_shadow_flags(args: &[String]) -> Result<ShadowArgs, String> {
-    // A kevy paged reply is recognised from its shape. The ambiguity
-    // that needs declaring is member/score pairs versus a plain list,
-    // and only on the old side in practice.
-    let mut a = ShadowArgs {
-        old: None,
-        new: None,
-        old_shape: Shape::Flat,
-        new_shape: Shape::Paged,
-        samples: 1,
-    };
-    let mut scan = crate::tools::argscan::Scan::new(args);
-    while let Some(word) = scan.next() {
-        match word {
-            "--old" => a.old = Some(scan.value("--old")?.to_string()),
-            "--new" => a.new = Some(scan.value("--new")?.to_string()),
-            "--old-pairs" => a.old_shape = Shape::Pairs,
-            "--new-flat" => a.new_shape = Shape::Flat,
-            "--samples" => a.samples = scan.number("--samples")?,
-            other => return Err(crate::tools::argscan::unexpected(other)),
-        }
-    }
-    Ok(a)
-}
-
-/// `shadow [-h host] [-p port] --old "<cmd>" --new "<cmd>"
-/// [--old-pairs] [--new-flat] [--samples n]`: connects with its own
-/// `-h`/`-p` (the pre-`--kevy` form), then [`run_on`] the rest.
-pub fn run_shadow_cli(args: &[String]) -> ExitCode {
-    crate::tools::bare::with_private_connection("shadow", args, run_on)
-}
-
-/// `shadow --old "<cmd>" --new "<cmd>" [--old-pairs] [--new-flat]
-/// [--samples n]` on `client`.
-///
-/// Both sides are whole commands, quoted, because the old path is
-/// whatever the application already runs — a ZRANGE, an LRANGE, a
-/// SMEMBERS — and the new one is an `IDX.QUERY`. Nothing here knows
-/// which; it compares the two orders of row keys they produce. Exits
-/// non-zero on any divergence, so a cutover script can gate on it
-/// without parsing the text.
-pub(crate) fn run_on(client: &mut dyn crate::link::Link, args: &[String]) -> ExitCode {
-    let parsed = parse_shadow_flags(args);
-    let Ok(ShadowArgs { old: Some(old), new: Some(new), old_shape, new_shape, samples }) = parsed
-    else {
-        if let Err(msg) = parsed {
-            eprintln!("kevy-cli shadow: {msg}");
-        }
-        eprintln!(
-            "usage: kevy-cli --kevy shadow --old \"<command>\" --new \"<command>\" \
-             [--old-pairs] [--new-flat] [--samples n]"
-        );
-        return ExitCode::FAILURE;
-    };
-    let split =
-        |s: &str| -> Vec<Vec<u8>> { s.split_whitespace().map(|t| t.as_bytes().to_vec()).collect() };
-    match run(client, &split(&old), &split(&new), old_shape, new_shape, samples) {
-        Ok(report) => {
-            print_report(&report);
-            // A divergence is a finding, not a crash.
-            if report.diverged > 0 { ExitCode::FAILURE } else { ExitCode::SUCCESS }
-        }
-        Err(e) => {
-            eprintln!("kevy-cli shadow: {e}");
-            ExitCode::FAILURE
         }
     }
 }

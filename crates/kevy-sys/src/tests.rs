@@ -6,7 +6,7 @@ fn peer_gone_tracks_the_kernel_not_the_reader() {
     // The whole point of peer_gone is that it asks the kernel, so it sees a
     // dropped peer even when nothing has read the socket. Accept a conn, do
     // not read it, and check both states.
-    let listener = tcp_listen([127, 0, 0, 1], 0, 16).unwrap();
+    let listener = Socket::tcp_listen([127, 0, 0, 1], 0, 16).unwrap();
     let port = listener.local_port().unwrap();
 
     let mut client = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
@@ -37,7 +37,7 @@ fn peer_gone_tracks_the_kernel_not_the_reader() {
 
 #[test]
 fn listen_accept_roundtrip() {
-    let listener = tcp_listen([127, 0, 0, 1], 0, 16).unwrap();
+    let listener = Socket::tcp_listen([127, 0, 0, 1], 0, 16).unwrap();
     let port = listener.local_port().unwrap();
     assert_ne!(port, 0);
 
@@ -59,12 +59,12 @@ fn listen_accept_roundtrip() {
 
 #[test]
 fn poller_signals_listener_readable() {
-    let listener = tcp_listen([127, 0, 0, 1], 0, 16).unwrap();
+    let listener = Socket::tcp_listen([127, 0, 0, 1], 0, 16).unwrap();
     listener.set_nonblocking().unwrap();
     let port = listener.local_port().unwrap();
 
     let poller = Poller::new().unwrap();
-    poller.add(listener.raw(), true, false).unwrap();
+    poller.add(listener.raw(), Interest::READ).unwrap();
 
     let _client = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
 
@@ -79,9 +79,9 @@ fn poller_signals_listener_readable() {
 
 #[test]
 fn waker_wakes_poller() {
-    let w = std::sync::Arc::new(waker().unwrap());
+    let w = std::sync::Arc::new(Waker::new().unwrap());
     let poller = Poller::new().unwrap();
-    poller.add(w.read_fd(), true, false).unwrap();
+    poller.add(w.read_fd(), Interest::READ).unwrap();
 
     let w2 = w.clone();
     std::thread::spawn(move || w2.wake().unwrap());
@@ -95,10 +95,10 @@ fn waker_wakes_poller() {
 
 #[test]
 fn reuseport_allows_shared_port() {
-    let l1 = tcp_listen_reuseport([127, 0, 0, 1], 0, 16).unwrap();
+    let l1 = Socket::tcp_listen_reuseport([127, 0, 0, 1], 0, 16).unwrap();
     let port = l1.local_port().unwrap();
     // A second listener on the SAME port succeeds only because of SO_REUSEPORT.
-    let l2 = tcp_listen_reuseport([127, 0, 0, 1], port, 16).unwrap();
+    let l2 = Socket::tcp_listen_reuseport([127, 0, 0, 1], port, 16).unwrap();
     assert_eq!(l2.local_port().unwrap(), port);
 }
 
@@ -112,4 +112,30 @@ fn fill_random_fills_more_than_one_getentropy_chunk() {
     let mut again = [0u8; 1000];
     crate::fill_random(&mut again).unwrap();
     assert_ne!(buf, again);
+}
+
+#[test]
+fn interests_combine_with_or() {
+    let both = Interest::READ | Interest::WRITE;
+    assert!(both.is_readable() && both.is_writable());
+    let mut grown = Interest::NONE;
+    assert!(!grown.is_readable() && !grown.is_writable());
+    grown |= Interest::WRITE;
+    assert!(grown.is_writable() && !grown.is_readable());
+    grown |= Interest::READ;
+    assert!(grown.is_readable());
+}
+
+#[test]
+fn a_socket_lends_and_gives_up_its_fd() {
+    use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd};
+    let listener = Socket::tcp_listen([127, 0, 0, 1], 0, 16).unwrap();
+    let port = listener.local_port().unwrap();
+    let fd = listener.as_raw_fd();
+    assert_eq!(fd, listener.raw());
+    assert_eq!(listener.into_raw_fd(), fd);
+    // SAFETY: `fd` came out of a socket that gave up ownership of it, so the
+    // listener was not closed and this is now its only owner
+    let again = unsafe { Socket::from_raw_fd(fd) };
+    assert_eq!(again.local_port().unwrap(), port, "giving up the fd did not close it");
 }

@@ -1,8 +1,11 @@
 //! Export → import round-trip against two real servers.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use std::process::{Child, Command};
 
-use kevy_cli::migrate::{run_export, run_import};
+use kevy_cli::bulk::DeleteMode;
+use kevy_cli::migrate::{ImportStart, OnErrorReply, run_export, run_import};
 use kevy_resp_client::RespClient;
 
 struct Srv {
@@ -124,7 +127,7 @@ fn export_import_roundtrip_digest_equal() {
     assert_eq!(n, 1004, "500+500 rows + list/set/zset/ttl");
 
     let mut cd = dst.client();
-    let rep = run_import(&mut cd, &file, false, true).unwrap();
+    let rep = run_import(&mut cd, &file, ImportStart::Fresh, OnErrorReply::Abort).unwrap();
     assert_eq!(rep.errors, 0);
     assert!(rep.sent >= 1004, "at least one frame per key: {}", rep.sent);
 
@@ -147,7 +150,7 @@ fn export_import_roundtrip_digest_equal() {
     // REPLACED .resp, and this line matched it bug-for-bug, so the pair
     // passed while both were wrong about the name.
     std::fs::write(progress_of(&file2), b"0").unwrap();
-    let rep2 = run_import(&mut cd, &file2, true, true).unwrap();
+    let rep2 = run_import(&mut cd, &file2, ImportStart::Resume, OnErrorReply::Abort).unwrap();
     assert_eq!(rep2.errors, 0, "idempotent replay");
     assert_eq!(digest(&mut cd, "mig:"), ds);
     let _ = std::fs::remove_dir_all(&dir);
@@ -182,13 +185,13 @@ fn bulk_ops_and_diff() {
     let _ = da;
 
     // dry-run counts without deleting
-    let n = kevy_cli::bulk::run_delete_prefix(&mut c, b"ck:", 0, true).unwrap();
+    let n = kevy_cli::bulk::run_delete_prefix(&mut c, b"ck:", 0, DeleteMode::DryRun).unwrap();
     assert_eq!(n, 201);
     let (still, _) = kevy_cli::bulk::run_digest(&mut c, b"ck:").unwrap();
     assert_eq!(still, 201);
     // rate-limited real delete: 201 keys at 400/s ≈ 0.5s (±20% gate lives in onrampgate)
     let t0 = std::time::Instant::now();
-    let n = kevy_cli::bulk::run_delete_prefix(&mut c, b"ck:", 400, false).unwrap();
+    let n = kevy_cli::bulk::run_delete_prefix(&mut c, b"ck:", 400, DeleteMode::Unlink).unwrap();
     let dt = t0.elapsed().as_secs_f64();
     assert_eq!(n, 201);
     assert!(dt > 0.3, "rate limit engaged: {dt:.2}s");
@@ -208,7 +211,7 @@ fn bulk_ops_and_diff() {
     let file = dir.join("bk.resp");
     let mut c1c = srv.client();
     kevy_cli::migrate::run_export(&mut c1c, Some(b"bk:"), &file).unwrap();
-    kevy_cli::migrate::run_import(&mut c2, &file, false, true).unwrap();
+    kevy_cli::migrate::run_import(&mut c2, &file, ImportStart::Fresh, OnErrorReply::Abort).unwrap();
     let mut out = Vec::new();
     let bad = kevy_cli::bulk::run_diff(&mut c1c, &mut c2, &[b"bk:".to_vec()], &mut out).unwrap();
     assert!(bad.is_empty(), "{}", String::from_utf8_lossy(&out));
@@ -300,13 +303,13 @@ fn a_fresh_import_ignores_stale_progress_and_resume_honors_it() {
     std::fs::write(progress_of(&dump), eof.to_string()).unwrap();
 
     // resume=true honors the (stale) offset: nothing lands.
-    let rep = run_import(&mut c, &dump, true, true).unwrap();
+    let rep = run_import(&mut c, &dump, ImportStart::Resume, OnErrorReply::Abort).unwrap();
     assert_eq!(rep.sent, 0, "resume from EOF imports nothing");
     let r = c.request_borrowed(&[b"EXISTS", b"stale:k1"]).unwrap();
     assert_eq!(format!("{r:?}"), "Int(0)");
 
     // resume=false starts at 0 no matter what the file claims…
-    let rep = run_import(&mut c, &dump, false, true).unwrap();
+    let rep = run_import(&mut c, &dump, ImportStart::Fresh, OnErrorReply::Abort).unwrap();
     assert_eq!(rep.sent, 1, "a fresh import starts at zero");
     let r = c.request_borrowed(&[b"EXISTS", b"stale:k1"]).unwrap();
     assert_eq!(format!("{r:?}"), "Int(1)");

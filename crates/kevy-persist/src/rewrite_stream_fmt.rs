@@ -14,12 +14,27 @@ use std::io::{self, Write};
 /// non-zero `entries_added` drift), then the consumer-group section.
 /// Returns the number of command frames written so callers that ship
 /// rebuild frames elsewhere (scope migration) can report a frame count.
+///
+/// ```
+/// use kevy_store::{MissingStream, Store, XAddIdSpec};
+///
+/// let mut store = Store::new();
+/// let fields = vec![(b"f".to_vec(), b"v".to_vec())];
+/// store.xadd(b"s", XAddIdSpec::AutoSeq(1), fields, MissingStream::Create, 0)?;
+/// let stream = store.stream_view(b"s")?.ok_or("no stream")?;
+/// let mut out = Vec::new();
+/// let frames = kevy_persist::write_stream_as_commands(&mut out, b"s", stream)?;
+/// assert_eq!(frames, 1, "one XADD, no fixups");
+/// let (xadd, _) = kevy_resp::parse_command(&out)?.ok_or("incomplete")?;
+/// assert_eq!(&xadd[0], b"XADD");
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn write_stream_as_commands<W: Write>(
-    w: &mut W,
+    mut w: W,
     key: &[u8],
     s: &StreamData,
 ) -> io::Result<usize> {
-    stream_as_commands(w, key, s, crate::AofFormat::V1, &mut Vec::new())
+    stream_as_commands(&mut w, key, s, crate::AofFormat::V1, &mut Vec::new())
 }
 
 /// Format-aware body of [`write_stream_as_commands`].
@@ -31,7 +46,7 @@ pub(crate) fn stream_as_commands<W: Write>(
     scratch: &mut Vec<u8>,
 ) -> io::Result<usize> {
     let mut frames = 0usize;
-    for (id, fv) in s.iter_entries() {
+    for (id, fv) in s.entries() {
         let mut argv: Vec<Vec<u8>> = Vec::with_capacity(3 + fv.len() * 2);
         argv.push(b"XADD".to_vec());
         argv.push(key.to_vec());
@@ -76,13 +91,15 @@ pub(crate) fn write_stream_id_fixup<W: Write>(
         emit(w, &Argv::from(argv), fmt, scratch)?;
         frames += 1;
     }
-    // What replaying the commands emitted so far yields. The only no-key
-    // case left is the virgin empty stream (groups-only) — its scalars
-    // are all zero by construction, so skipping XSETID there is exact.
+    // What replaying the commands emitted so far yields: a trim leaves the
+    // highest deleted ID alone, so the MAXLEN 0 trick leaves it at 0-0.
+    // The only no-key case left is the virgin empty stream (groups-only)
+    // — its scalars are all zero by construction, so skipping XSETID
+    // there is exact.
     let natural = if len > 0 {
         (s.last_entry().map_or(StreamId::MIN, |(id, _)| id), len, StreamId::MIN)
     } else {
-        (last, u64::from(last != StreamId::MIN), last)
+        (last, u64::from(last != StreamId::MIN), StreamId::MIN)
     };
     if natural != (last, added, mxd) {
         let argv = vec![
@@ -131,16 +148,18 @@ fn xclaim_argv(
     ]
 }
 
-/// Consumer-group section of a stream rewrite: `XGROUP CREATE … MKSTREAM`
-/// (MKSTREAM covers groups on a virgin empty stream), one internal
-/// `XINTERNAL.CONSUMERSEEN key group consumer t` per known consumer, which
-/// makes it with its last contact with the group,
-/// then one `XCLAIM … TIME t RETRYCOUNT n FORCE JUSTID` per live PEL row —
-/// full delivery_time/count fidelity, the same technique Redis's own AOF
-/// rewrite uses. Tombstone PEL rows (entry XDEL'd while
-/// pending) are skipped: XCLAIM purges rather than re-creates those, so
-/// only the snapshot path preserves them (accepted trade-off — no RESP
-/// verb can recreate a PEL row for a deleted entry).
+/// Consumer-group section of a stream rewrite: `XGROUP CREATE … MKSTREAM
+/// [ENTRIESREAD n]` (MKSTREAM covers groups on a virgin empty stream; the
+/// read counter when known), one `XCLAIM … TIME t RETRYCOUNT n FORCE
+/// JUSTID` per live PEL row — full delivery_time/count fidelity, the same
+/// technique Redis's own AOF rewrite uses — then one internal
+/// `XINTERNAL.CONSUMERSEEN key group consumer t [a]` per known consumer,
+/// which makes it with its last contact and its last active time, after
+/// the claims that stamp it with the replay's clock. A pending row whose
+/// entry is gone (deleted or trimmed while pending) is put back by an
+/// internal `XINTERNAL.PENDING key group consumer t n id` instead: no
+/// client command makes such a row again, and a history read and
+/// `XAUTOCLAIM` still answer it.
 pub(crate) fn write_stream_group_commands<W: Write>(
     w: &mut W,
     key: &[u8],
@@ -150,8 +169,8 @@ pub(crate) fn write_stream_group_commands<W: Write>(
 ) -> io::Result<usize> {
     let mut frames = 0usize;
     for g in s.export_groups() {
-        let last_delivered = StreamId { ms: g.last_delivered.0, seq: g.last_delivered.1 };
-        let argv = vec![
+        let last_delivered = StreamId::new(g.last_delivered.0, g.last_delivered.1);
+        let mut argv = vec![
             b"XGROUP".to_vec(),
             b"CREATE".to_vec(),
             key.to_vec(),
@@ -159,28 +178,70 @@ pub(crate) fn write_stream_group_commands<W: Write>(
             last_delivered.encode(),
             b"MKSTREAM".to_vec(),
         ];
+        if let Some(n) = g.entries_read {
+            argv.push(b"ENTRIESREAD".to_vec());
+            argv.push(n.to_string().into_bytes());
+        }
         emit(w, &Argv::from(argv), fmt, scratch)?;
         frames += 1;
-        for (consumer, last_seen_ms) in &g.consumers {
-            let argv = vec![
-                kevy_resp::ops_table::CONSUMER_SEEN.as_bytes().to_vec(),
-                key.to_vec(),
-                g.name.clone(),
-                consumer.clone(),
-                last_seen_ms.to_string().into_bytes(),
-            ];
-            emit(w, &Argv::from(argv), fmt, scratch)?;
-            frames += 1;
-        }
         for (ms, seq, consumer, delivery_time_ms, delivery_count) in &g.pel {
-            let id = StreamId { ms: *ms, seq: *seq };
-            if !s.contains_entry(id) {
-                continue;
-            }
-            let argv = xclaim_argv(key, &g.name, consumer, id, *delivery_time_ms, *delivery_count);
+            let id = StreamId::new(*ms, *seq);
+            let argv = if s.contains_entry(id) {
+                xclaim_argv(key, &g.name, consumer, id, *delivery_time_ms, *delivery_count)
+            } else {
+                pending_argv(key, &g.name, consumer, id, *delivery_time_ms, *delivery_count)
+            };
             emit(w, &Argv::from(argv), fmt, scratch)?;
             frames += 1;
         }
+        frames += write_consumer_times(w, key, &g, fmt, scratch)?;
     }
     Ok(frames)
+}
+
+/// The internal frame that puts back a pending row whose entry is gone.
+fn pending_argv(
+    key: &[u8],
+    group: &[u8],
+    consumer: &[u8],
+    id: StreamId,
+    delivery_time_ms: u64,
+    delivery_count: u64,
+) -> Vec<Vec<u8>> {
+    vec![
+        kevy_resp::ops_table::PENDING.as_bytes().to_vec(),
+        key.to_vec(),
+        group.to_vec(),
+        consumer.to_vec(),
+        delivery_time_ms.to_string().into_bytes(),
+        delivery_count.to_string().into_bytes(),
+        id.encode(),
+    ]
+}
+
+/// One `XINTERNAL.CONSUMERSEEN key group consumer t [a]` per consumer of
+/// `g`: its last contact, and its last active time when it has one.
+fn write_consumer_times<W: Write>(
+    w: &mut W,
+    key: &[u8],
+    g: &kevy_store::LoadedGroup,
+    fmt: crate::AofFormat,
+    scratch: &mut Vec<u8>,
+) -> io::Result<usize> {
+    let mut active: Vec<&(Vec<u8>, u64)> = g.active.iter().collect();
+    active.sort_unstable();
+    for (consumer, last_seen_ms) in &g.consumers {
+        let mut argv = vec![
+            kevy_resp::ops_table::CONSUMER_SEEN.as_bytes().to_vec(),
+            key.to_vec(),
+            g.name.clone(),
+            consumer.clone(),
+            last_seen_ms.to_string().into_bytes(),
+        ];
+        if let Ok(i) = active.binary_search_by(|(name, _)| name.as_slice().cmp(consumer)) {
+            argv.push(active[i].1.to_string().into_bytes());
+        }
+        emit(w, &Argv::from(argv), fmt, scratch)?;
+    }
+    Ok(g.consumers.len())
 }

@@ -20,7 +20,7 @@ impl Store {
     pub fn setnx(&self, key: &[u8], value: &[u8]) -> KevyResult<bool> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
-        let ok = g.store.set(key, value.to_vec(), None, /*nx=*/ true, /*xx=*/ false);
+        let ok = g.store.set(key, value.to_vec(), None, kevy_store::SetCondition::IfAbsent);
         if ok {
             commit_write(&mut g, &[b"SET", key, value, b"NX"])?;
         }
@@ -41,7 +41,7 @@ impl Store {
     pub fn set_with_ttl(&self, key: &[u8], value: &[u8], ttl: Duration) -> KevyResult<bool> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
-        let ok = g.store.set(key, value.to_vec(), Some(ttl), false, false);
+        let ok = g.store.set(key, value.to_vec(), Some(ttl), kevy_store::SetCondition::Always);
         let ms = ttl.as_millis().min(u128::from(u64::MAX)).to_string();
         commit_write(&mut g, &[b"SET", key, value, b"PX", ms.as_bytes()])?;
         commit_deadline(&mut g, key)?;

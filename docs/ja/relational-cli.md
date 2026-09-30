@@ -32,7 +32,7 @@ kevy-cli -p 6004 --kevy describe+ users     # 同じ内容のあと TABLE.VERIFY
 テーブルに対しては、プレフィックスと主キー、各列の宣言された型とその列を読むコンパイル済み
 パス、各アクセスパスの構築状態を表示します。インデックスに対してはフィールド、保存値、
 それをコンパイルしたテーブルを、ビューに対しては合成ツリーと並び順を表示します。列の情報は
-`TABLE.DESCRIBE` から取得するため、6.5 より前のサーバーでは使えません。
+`TABLE.DESCRIBE` から取得するため、7.0 より前のサーバーでは使えません。
 
 ## クエリ
 
@@ -159,7 +159,7 @@ kevy-cli -p 6004 --kevy query IDX.QUERY users.age RANGE 18 65 --null NULL --expa
 `--kevy` という一つのオプションの後ろに置きます。redis-cli 自身のクラスタ管理が
 `--cluster` の後ろにあるのと同じです。
 
-kevy-cli 6.4 が裸の単語で出していたツール（`kevy-cli doctor -p 6004`、`kevy-cli export …`、
-`kevy-cli sql compile …`）は 7.0 まで動き、実行のたびに `--kevy` での書き方を 1 行示します。
-`backup` と `restore` は自分のフラグの形（`--data-dir`/`--to`、`--from`/`--to`）のときだけ
-ツールです。`digest <prefix>` は 7.0 まではツールのままです。
+kevy-cli 6.4 はこれらのツールを裸の単語で出していました（`kevy-cli doctor -p 6004`、
+`kevy-cli export …`、`kevy-cli sql compile … --url h:p`）。7.0 からは、これらの単語もほかの
+単語と同じくサーバーに送られます。接続オプションを先に、ツールを `--kevy` の後ろに書きます。
+例：`kevy-cli -p 6004 --kevy doctor`。

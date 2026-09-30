@@ -31,6 +31,8 @@ pub enum Error {
     TimedOut,
     /// The in-process pub/sub bus is gone.
     Closed,
+    /// A `KevyError` kind newer than this plugin build, with its message.
+    Other(String),
 }
 
 /// A command result carrying this plugin's [`Error`].
@@ -49,6 +51,7 @@ impl Error {
             Error::Unsupported(_) => "Unsupported",
             Error::TimedOut => "TimedOut",
             Error::Closed => "Closed",
+            Error::Other(_) => "Other",
         }
     }
 }
@@ -60,9 +63,10 @@ impl std::fmt::Display for Error {
             Error::Io(m) | Error::Protocol(m) | Error::InvalidInput(m) => write!(f, "{m}"),
             Error::NotFound(m) => write!(f, "not found: {m}"),
             Error::Unsupported(m) => write!(f, "unsupported: {m}"),
-            Error::ReadOnly => write!(f, "READONLY the store is a read-only replica"),
+            Error::ReadOnly => write!(f, "READONLY You can't write against a read only replica."),
             Error::TimedOut => write!(f, "timed out"),
             Error::Closed => write!(f, "connection closed"),
+            Error::Other(m) => write!(f, "{m}"),
         }
     }
 }
@@ -81,6 +85,9 @@ impl From<KevyError> for Error {
             KevyError::Unsupported(m) => Error::Unsupported(m),
             KevyError::TimedOut => Error::TimedOut,
             KevyError::Closed => Error::Closed,
+            // no kind of our own to give it: keep the text rather than
+            // file it under one that says something it did not
+            other => Error::Other(other.to_string()),
         }
     }
 }

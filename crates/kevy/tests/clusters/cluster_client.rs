@@ -25,11 +25,7 @@ impl Server {
     fn start(n: usize) -> Server {
         let port = free_port_block(n);
         let cluster_base = port + 1;
-        let dir = std::env::temp_dir().join(format!(
-            "kevy-cluster-client-{}",
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = kevy_tmpdir::unique_dir("cluster-client");
         // CLUSTER SLOTS reads the process-wide config; install one matching
         // this server (own binary ⇒ first-init-wins is uncontested).
         let mut cfg = kevy_config::Config::default();

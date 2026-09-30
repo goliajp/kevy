@@ -23,8 +23,8 @@ pub(super) fn reduce_explain(
         .and_then(|cat| {
             cat.iter()
                 .map(|(s, _)| s)
-                .find(|s| Some(s.name.as_slice()) == argv.get(1).map(Vec::as_slice))
-                .map(|s| format!("{:?}", s.kind).to_ascii_lowercase())
+                .find(|s| Some(s.name()) == argv.get(1).map(Vec::as_slice))
+                .map(|s| format!("{:?}", s.kind()).to_ascii_lowercase())
         })
         .unwrap_or_else(|| "?".into());
     let shape = match shape_b {
@@ -37,10 +37,7 @@ pub(super) fn reduce_explain(
         _ => "query",
     };
     let state = if building { "building" } else { "ready" };
-    let plan = format!(
-        "single-index scan: kind={kind} shape={shape}, {} shard(s) fan-out, merge at origin",
-        chunks.len()
-    );
+    let plan = plan_line(catalogs, argv, &kind, shape, chunks.len());
     encode_array_len(&mut out, 4);
     for (k, v) in [
         ("kind", kind.as_str()),
@@ -53,6 +50,32 @@ pub(super) fn reduce_explain(
         encode_bulk(&mut out, v.as_bytes());
     }
     out
+}
+
+/// EXPLAIN's plan: which shards a read goes to, and how the origin
+/// assembles their answers.
+fn plan_line(
+    catalogs: &CatalogState,
+    argv: &[Vec<u8>],
+    kind: &str,
+    shape: &str,
+    n: usize,
+) -> String {
+    let Some((w, part)) = crate::cmd_index_query::global_walk(catalogs, argv) else {
+        return format!(
+            "single-index scan: kind={kind} shape={shape}, {n} shard(s) fan-out, merge at origin"
+        );
+    };
+    let assembly = match w.in_order {
+        true => "one partition per phase from the cursor's, pages concatenated at origin",
+        false => "each partition met answers, merge at origin",
+    };
+    format!(
+        "global index scan: kind={kind} shape={shape}, partition(s) {}..={} of {}, {assembly}",
+        w.first,
+        w.last,
+        part.partitions()
+    )
 }
 
 /// Sum the per-shard EXPLAIN chunks: `(est_rows, building, shape byte)`.
@@ -247,14 +270,15 @@ pub(super) fn reduce_list(catalogs: &CatalogState, chunks: &[Vec<u8>]) -> Vec<u8
     encode_array_len(&mut out, n as i64);
     for ((spec, _), s) in cat.iter().zip(&sums) {
         let (hits, last, _) =
-            catalogs.usage_cell(&spec.name).map(|c| c.read()).unwrap_or((0, 0, 0));
-        encode_array_len(&mut out, 18);
+            catalogs.usage_cell(spec.name()).map(|c| c.read()).unwrap_or((0, 0, 0));
+        let part = cat.partitioning(spec.name());
+        encode_array_len(&mut out, if part.is_global() { 26 } else { 20 });
         encode_bulk(&mut out, b"name");
-        encode_bulk(&mut out, &spec.name);
+        encode_bulk(&mut out, spec.name());
         encode_bulk(&mut out, b"prefix");
-        encode_bulk(&mut out, &spec.prefix);
+        encode_bulk(&mut out, spec.prefix());
         encode_bulk(&mut out, b"kind");
-        encode_bulk(&mut out, spec.kind.tag().as_bytes());
+        encode_bulk(&mut out, spec.kind().tag().as_bytes());
         encode_bulk(&mut out, b"state");
         encode_bulk(&mut out, if s.0 { b"building" } else { b"ready" });
         encode_bulk(&mut out, b"entries");
@@ -266,15 +290,42 @@ pub(super) fn reduce_list(catalogs: &CatalogState, chunks: &[Vec<u8>]) -> Vec<u8
         encode_bulk(&mut out, b"last_hit");
         encode_bulk(&mut out, last.to_string().as_bytes());
         encode_bulk(&mut out, b"auto");
-        encode_bulk(&mut out, if catalogs.is_auto_path(&spec.name) { b"1" } else { b"0" });
+        encode_bulk(&mut out, if catalogs.is_auto_path(spec.name()) { b"1" } else { b"0" });
+        encode_partition_stats(&mut out, part, s.1, s.5);
     }
     out
 }
 
-/// Per-index `(building, entries, bytes, extra1, extra2)` summed
-/// across the shard chunks — [`reduce_list`]'s parse half.
-fn list_sums(chunks: &[Vec<u8>], n: usize) -> Vec<(bool, u64, u64, u64, u64)> {
-    let mut sums = vec![(false, 0u64, 0u64, 0u64, 0u64); n];
+/// `partitioning local|global`; a global index adds how many partitions it
+/// has and the largest and mean partition's entries, which is how skew
+/// shows. Every entry of a global index lives in its partition's owner, so
+/// the largest shard's count is the largest partition's.
+fn encode_partition_stats(
+    out: &mut Vec<u8>,
+    part: &kevy_index::Partitioning,
+    total: u64,
+    max: u64,
+) {
+    encode_bulk(out, b"partitioning");
+    if !part.is_global() {
+        encode_bulk(out, b"local");
+        return;
+    }
+    encode_bulk(out, b"global");
+    let p = part.partitions();
+    encode_bulk(out, b"partitions");
+    encode_bulk(out, p.to_string().as_bytes());
+    encode_bulk(out, b"max_entries");
+    encode_bulk(out, max.to_string().as_bytes());
+    encode_bulk(out, b"mean_entries");
+    encode_bulk(out, format!("{:.1}", total as f64 / p as f64).as_bytes());
+}
+
+/// Per-index `(building, entries, bytes, extra1, extra2, max entries)`,
+/// summed across the shard chunks but for the last, the largest one shard
+/// holds — [`reduce_list`]'s parse half.
+fn list_sums(chunks: &[Vec<u8>], n: usize) -> Vec<ListSums> {
+    let mut sums = vec![(false, 0u64, 0u64, 0u64, 0u64, 0u64); n];
     for c in chunks {
         let mut pos = 1usize;
         for s in sums.iter_mut().take(n) {
@@ -287,7 +338,10 @@ fn list_sums(chunks: &[Vec<u8>], n: usize) -> Vec<(bool, u64, u64, u64, u64)> {
                     w.try_into().expect("the get(pos..pos + 8) above returned Some"),
                 );
                 match slot {
-                    1 => s.1 += v,
+                    1 => {
+                        s.1 += v;
+                        s.5 = s.5.max(v);
+                    }
                     2 => s.2 += v,
                     3 => s.3 += v,
                     _ => s.4 += v,
@@ -298,6 +352,8 @@ fn list_sums(chunks: &[Vec<u8>], n: usize) -> Vec<(bool, u64, u64, u64, u64)> {
     }
     sums
 }
+
+type ListSums = (bool, u64, u64, u64, u64, u64);
 
 /// Six counters per shard, summed. `drift` and `checked` are the two the verb
 /// exists for: `checked` is how many held entries were re-read against the

@@ -38,13 +38,13 @@ enabled = true
 
 ```rust
 let store = kevy_embedded::Store::open(Config::default().with_feed(0))?;
-let (gen, off) = store.changes_tail()?;             // start cursor
-let batch = store.changes_since(gen, off, 256, &[b"user:"])?;
+let from = store.changes_tail()?;                   // start cursor
+let batch = store.changes_since(from, 256, &[b"user:"])?;
 for change in &batch.changes { /* change.offset, change.argv */ }
-let (gen, off) = batch.next;                        // resume here
+let from = batch.next;                              // resume here
 ```
 
-`feed_shards()`は1を返します。組み込みの書き込みパスは全シャードを1本のストリームに直列化するため、同じコンシューマループが両方の面に対してそのまま動きます。`FeedError::Resync { generation, tail }`が`-FEEDRESYNC`に対応します。
+`feed_shards()`は1を返します。組み込みの書き込みパスは全シャードを1本のストリームに直列化するため、同じコンシューマループが両方の面に対してそのまま動きます。`FeedError::Resync { tail }`が`-FEEDRESYNC`に対応します。
 
 ## 配送セマンティクス
 

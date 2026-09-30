@@ -61,15 +61,15 @@ fn is_time_field(field: &str) -> bool {
 fn field_of_ts(func: &'static str, field: &str, us: i64) -> Result<Scalar, ScalarError> {
     let secs = us.div_euclid(MICROS_PER_SEC);
     let frac_us = us.rem_euclid(MICROS_PER_SEC);
-    let c = kevy_time::civil_from_epoch(secs);
+    let c = kevy_time::Civil::from_epoch(secs);
     let out = match field {
-        "year" => c.y as f64,
-        "quarter" => f64::from((c.m - 1) / 3 + 1),
-        "month" => f64::from(c.m),
-        "day" => f64::from(c.d),
-        "hour" => f64::from(c.h),
-        "minute" => f64::from(c.min),
-        "second" => f64::from(c.s) + frac_us as f64 / 1e6,
+        "year" => c.year() as f64,
+        "quarter" => f64::from((c.month() - 1) / 3 + 1),
+        "month" => f64::from(c.month()),
+        "day" => f64::from(c.day()),
+        "hour" => f64::from(c.hour()),
+        "minute" => f64::from(c.minute()),
+        "second" => f64::from(c.second()) + frac_us as f64 / 1e6,
         "epoch" => us as f64 / 1e6,
         "dow" => (us.div_euclid(MICROS_PER_DAY) + 4).rem_euclid(7) as f64,
         "doy" => doy(c) as f64,
@@ -82,10 +82,16 @@ fn field_of_ts(func: &'static str, field: &str, us: i64) -> Result<Scalar, Scala
 
 /// Day of year: distance from Jan 1 of the same year, 1-based.
 fn doy(c: kevy_time::Civil) -> i64 {
-    let jan1 =
-        kevy_time::epoch_from_civil(kevy_time::Civil { m: 1, d: 1, h: 0, min: 0, s: 0, ..c });
-    let this = kevy_time::epoch_from_civil(kevy_time::Civil { h: 0, min: 0, s: 0, ..c });
+    let jan1 = midnight(c.year(), 1, 1).to_epoch();
+    let this = midnight(c.year(), c.month(), c.day()).to_epoch();
     (this - jan1) / 86_400 + 1
+}
+
+/// Midnight on a date taken from, or truncated from, a timestamp. A
+/// timestamp is `i64` microseconds, so its year is within about ±292,000
+/// and every midnight of it fits an `i64` epoch in seconds.
+fn midnight(y: i64, m: u32, d: u32) -> kevy_time::Civil {
+    kevy_time::Civil::from_date(y, m, d).expect("a timestamp's dates fit an i64 epoch")
 }
 
 /// Interval component decomposition (probe 11): each field reads its
@@ -124,29 +130,32 @@ fn date_trunc(args: &[Scalar]) -> Result<Scalar, ScalarError> {
         _ => return Err(ScalarError::Arity { func: FUNC, got: args.len() }),
     };
     let secs = us.div_euclid(MICROS_PER_SEC);
-    let mut c = kevy_time::civil_from_epoch(secs);
-    match field.as_str() {
-        "year" => (c.m, c.d, c.h, c.min, c.s) = (1, 1, 0, 0, 0),
-        "quarter" => (c.m, c.d, c.h, c.min, c.s) = ((c.m - 1) / 3 * 3 + 1, 1, 0, 0, 0),
-        "month" => (c.d, c.h, c.min, c.s) = (1, 0, 0, 0),
+    let c = kevy_time::Civil::from_epoch(secs);
+    let (y, m, d, h, min) = (c.year(), c.month(), c.day(), c.hour(), c.minute());
+    let start = match field.as_str() {
+        "year" => (y, 1, 1, 0, 0),
+        "quarter" => (y, (m - 1) / 3 * 3 + 1, 1, 0, 0),
+        "month" => (y, m, 1, 0, 0),
         "week" => {
             // ISO week starts Monday; dow: 0=Sun..6=Sat.
             let dow = (secs.div_euclid(86_400) + 4).rem_euclid(7);
             let back = (dow + 6) % 7;
-            let day0 = kevy_time::epoch_from_civil(kevy_time::Civil { h: 0, min: 0, s: 0, ..c });
+            let day0 = secs - secs.rem_euclid(86_400);
             return Ok(Scalar::Timestamp((day0 - back * 86_400) * MICROS_PER_SEC));
         }
-        "day" => (c.h, c.min, c.s) = (0, 0, 0),
-        "hour" => (c.min, c.s) = (0, 0),
-        "minute" => c.s = 0,
+        "day" => (y, m, d, 0, 0),
+        "hour" => (y, m, d, h, 0),
+        "minute" => (y, m, d, h, min),
         "second" => {
             return Ok(Scalar::Timestamp(secs * MICROS_PER_SEC));
         }
         _ => {
             return Err(ScalarError::Domain { func: FUNC, what: "unknown truncation field" });
         }
-    }
-    Ok(Scalar::Timestamp(kevy_time::epoch_from_civil(c) * MICROS_PER_SEC))
+    };
+    let (y, m, d, h, min) = start;
+    let t = midnight(y, m, d).with_time(h, min, 0).expect("fields read from a Civil");
+    Ok(Scalar::Timestamp(t.to_epoch() * MICROS_PER_SEC))
 }
 
 /// `age(later, earlier)` — PG's calendar decomposition: whole years
@@ -163,8 +172,8 @@ fn age(args: &[Scalar]) -> Result<Scalar, ScalarError> {
     };
     let (later, earlier, neg) = if a >= b { (a, b, false) } else { (b, a, true) };
     let (ls, es) = (later.div_euclid(MICROS_PER_SEC), earlier.div_euclid(MICROS_PER_SEC));
-    let (lc, ec) = (kevy_time::civil_from_epoch(ls), kevy_time::civil_from_epoch(es));
-    let mut months = (lc.y - ec.y) * 12 + i64::from(lc.m) - i64::from(ec.m);
+    let (lc, ec) = (kevy_time::Civil::from_epoch(ls), kevy_time::Civil::from_epoch(es));
+    let mut months = (lc.year() - ec.year()) * 12 + i64::from(lc.month()) - i64::from(ec.month());
     // Borrow a month whenever the shifted-earlier lands past later.
     while kevy_time::add_months(es, months) * MICROS_PER_SEC + earlier.rem_euclid(MICROS_PER_SEC)
         > later
@@ -180,4 +189,37 @@ fn age(args: &[Scalar]) -> Result<Scalar, ScalarError> {
     } else {
         Scalar::Interval { months, days, micros }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn field(name: &str, us: i64) -> f64 {
+        match field_of_ts("extract", name, us) {
+            Ok(Scalar::Float(f)) => f,
+            other => panic!("{name}: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_calendar_fields_of_a_timestamp() {
+        let us = crate::parse_timestamp("2024-03-15 10:20:45.123456").unwrap();
+        assert_eq!(field("quarter", us), 1.0);
+        assert_eq!(field("day", us), 15.0);
+        assert_eq!(field("minute", us), 20.0);
+        assert_eq!(field("epoch", us), 1_710_498_045.123_456);
+        assert_eq!(field("dow", us), 5.0, "a friday");
+        assert_eq!(field("doy", us), 75.0, "31 + 29 + 15 in a leap year");
+        let last = crate::parse_timestamp("2024-12-31 23:59:59").unwrap();
+        assert_eq!((field("quarter", last), field("doy", last)), (4.0, 366.0));
+    }
+
+    #[test]
+    fn the_calendar_fields_before_the_epoch() {
+        let us = crate::parse_timestamp("1969-12-31 23:59:00").unwrap();
+        assert_eq!(field("epoch", us), -60.0);
+        assert_eq!(field("dow", us), 3.0, "a wednesday");
+        assert_eq!(field("doy", us), 365.0);
+    }
 }

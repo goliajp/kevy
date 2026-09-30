@@ -3,7 +3,7 @@
 This is the NEW Python embedded door the contract's §5 asks for. It binds
 ``libkevy_ffi`` (crates/kevy-ffi, ``KEVY_ABI = 1``) with ctypes — no
 C-extension build — pairing the one generic ``kevy_cmd`` argv path with the
-RESP parser in :mod:`kevy._reply`. All ~184 verbs are reachable through
+RESP parser in :mod:`kevy._reply`. Every verb the engine answers is reachable through
 ``DB.cmd``; ``DB.get``/``DB.set`` are the scalar fast paths; ``DB.subscribe``
 gives a polled/blocking subscription handle (§5.2). The wire is bytes.
 """

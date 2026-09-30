@@ -8,17 +8,10 @@
 //! Cost when replication is off = one `Option::is_none()` check; cost
 //! with no streaming replicas = one extra `Vec::is_empty()` after.
 
-// Best effort. What matters is reported by the path that owns the
-// outcome — the next read, the next tick, the returned value — and
-// this call is the notification, not the result.
-#![expect(
-    clippy::let_underscore_must_use,
-    reason = "best effort, with the real outcome reported elsewhere"
-)]
-
 use crate::Commands;
 use crate::replication::ReplicaState;
 use crate::shard::Shard;
+use kevy_replicate::feed::FeedPosition;
 use kevy_replicate::wire::{
     SNAPSHOT_CHUNK_MAX, decode_replconf_ack, encode_ping, encode_snapshot_begin,
     encode_snapshot_chunk, encode_snapshot_end,
@@ -91,7 +84,7 @@ impl<C: Commands> Shard<C> {
         if !due {
             return;
         }
-        conn.output.extend_from_slice(&encode_ping(generation, primary_next));
+        conn.output.extend_from_slice(&encode_ping(FeedPosition::new(generation, primary_next)));
         conn.last_ping = Some(std::time::Instant::now());
         if crate::repl_trace()
             && let ReplicaState::Streaming { sent_offset, generation: cursor_gen, .. } = conn.state
@@ -370,20 +363,11 @@ impl<C: Commands> Shard<C> {
                 self.id, self.replicas[idx].fd,
             ));
         }
-        let view = self.store.collect_snapshot();
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::Builder::new()
-            .name(format!("kevy-snapshot-{replica_id}"))
-            .spawn(move || {
-                let mut buf = Vec::new();
-                if kevy_persist::write_snapshot_to(&view, &mut buf).is_ok() {
-                    let _ = tx.send(buf);
-                }
-                // On serialization error, drop tx → receiver-side
-                // try_recv returns Disconnected; pump_snapshot_chunks
-                // treats that as a fatal error and closes the conn.
-            })
-            .expect("spawn snapshot serializer thread");
+        let rx = crate::persist_jobs::spawn_serializer(
+            self.store.collect_snapshot(),
+            self.commands.snapshot_aux(),
+            &replica_id,
+        );
         let conn = &mut self.replicas[idx];
         conn.output.extend_from_slice(&encode_snapshot_begin());
         conn.state = ReplicaState::SnapshotShipping {

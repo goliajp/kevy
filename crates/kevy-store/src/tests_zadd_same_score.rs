@@ -24,10 +24,10 @@ use crate::zset_seg::Z_PROMOTE;
 /// Which of the three sorted-set encodings a key is on, or `"absent"`.
 ///
 /// One function with every arm rather than two `matches!` predicates,
-/// because deadgate names any symbol owning a never-executed region and a
+/// because coverage charges a never-executed region to the symbol owning it, and a
 /// two-arm `matches!` that is only ever called where it is true owns one.
 /// The test below walks all four arms, which is both what keeps this out of
-/// the dead set and a statement of the encoding ladder these tests rely on.
+/// the never-executed set and a statement of the encoding ladder these tests rely on.
 fn encoding(st: &Store, key: &[u8]) -> &'static str {
     match st.map.get(key).map(|e| &e.value) {
         None => "absent",
@@ -59,7 +59,7 @@ fn the_encoding_ladder() {
     }
     assert_eq!(encoding(&st, b"k"), "seg", "past Z_PROMOTE");
 
-    st.set(b"s", alloc::vec![b'x'; 4], None, false, false);
+    st.set(b"s", alloc::vec![b'x'; 4], None, crate::SetCondition::Always);
     assert_eq!(encoding(&st, b"s"), "not-a-zset");
 }
 

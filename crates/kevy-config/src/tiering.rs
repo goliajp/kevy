@@ -12,6 +12,7 @@
 use std::path::PathBuf;
 
 use crate::apply::{schema_err, value_as_string};
+use crate::error::ValueError;
 use crate::parse::{Item, Value};
 use crate::schema::{Config, ConfigError};
 use crate::size::parse_size;
@@ -20,14 +21,48 @@ use crate::size::parse_size;
 const AUTO_PCT: u64 = 70;
 
 /// One tiering budget, as configured (not yet resolved to bytes).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// ```
+/// use kevy_config::TierBudgetSpec;
+///
+/// let spec = TierBudgetSpec::parse("50%")?;
+/// assert_eq!(spec.resolve_with(Some(8_000_000_000)), Some(4_000_000_000));
+/// assert_eq!(spec.resolve_with(None), None, "no bound detected: no guess");
+/// # Ok::<(), kevy_config::ValueError>(())
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum TierBudgetSpec {
     /// `"auto"` — 0.70 × the detected memory bound, re-probed on the
     /// shard tick.
+    ///
+    /// ```
+    /// use kevy_config::TierBudgetSpec;
+    ///
+    /// assert_eq!(TierBudgetSpec::parse("auto")?, TierBudgetSpec::Auto);
+    /// assert_eq!(TierBudgetSpec::Auto.resolve_with(Some(1000)), Some(700));
+    /// # Ok::<(), kevy_config::ValueError>(())
+    /// ```
     Auto,
     /// `"70%"` — that percent of the detected bound (1..=100).
+    ///
+    /// ```
+    /// use kevy_config::TierBudgetSpec;
+    ///
+    /// assert_eq!(TierBudgetSpec::parse("25%")?, TierBudgetSpec::Percent(25));
+    /// assert_eq!(TierBudgetSpec::Percent(25).resolve_with(Some(4000)), Some(1000));
+    /// # Ok::<(), kevy_config::ValueError>(())
+    /// ```
     Percent(u8),
     /// `"4gb"` / plain integer — absolute bytes.
+    ///
+    /// ```
+    /// use kevy_config::TierBudgetSpec;
+    ///
+    /// assert_eq!(TierBudgetSpec::parse("4gb")?, TierBudgetSpec::Bytes(4 << 30));
+    /// assert_eq!(TierBudgetSpec::Bytes(4096).resolve_with(None), Some(4096)); // needs no probe
+    /// # Ok::<(), kevy_config::ValueError>(())
+    /// ```
     Bytes(u64),
 }
 
@@ -35,27 +70,43 @@ impl TierBudgetSpec {
     /// Parse the wire/TOML/env text form. Accepts `auto`, `N%`
     /// (1..=100), and any [`parse_size`] literal (`4gb`, `512mb`, bare
     /// bytes). Garbage errors by name.
-    pub fn parse(s: &str) -> Result<Self, String> {
+    ///
+    /// ```
+    /// use kevy_config::TierBudgetSpec;
+    /// assert_eq!(TierBudgetSpec::parse("70%"), Ok(TierBudgetSpec::Percent(70)));
+    /// assert!(TierBudgetSpec::parse("0%").is_err());
+    /// ```
+    pub fn parse(s: &str) -> Result<Self, ValueError> {
         let t = s.trim();
         if t.eq_ignore_ascii_case("auto") {
             return Ok(Self::Auto);
         }
         if let Some(pct) = t.strip_suffix('%') {
-            let p: u64 = pct
-                .trim()
-                .parse()
-                .map_err(|_| format!("tiering budget percent {s:?} is not a number"))?;
+            let p: u64 = pct.trim().parse().map_err(|_| {
+                ValueError::new(format!("tiering budget percent {s:?} is not a number"))
+            })?;
             if p == 0 || p > 100 {
-                return Err(format!("tiering budget percent {s:?} must be 1..=100"));
+                return Err(ValueError::new(format!(
+                    "tiering budget percent {s:?} must be 1..=100"
+                )));
             }
             return Ok(Self::Percent(p as u8));
         }
-        parse_size(t).map(Self::Bytes).map_err(|e| format!("tiering budget: {e}"))
+        parse_size(t).map(Self::Bytes).map_err(|e| ValueError::new(format!("tiering budget: {e}")))
     }
 
     /// Resolve to bytes given the probed memory bound. `Bytes` ignores
     /// the probe; `Auto`/`Percent` return `None` when no bound was
     /// detected (the caller refuses by name — never a silent guess).
+    ///
+    /// ```
+    /// use kevy_config::TierBudgetSpec;
+    ///
+    /// let bound = Some(10 << 30); // e.g. a 10 GiB cgroup limit
+    /// assert_eq!(TierBudgetSpec::Auto.resolve_with(bound), Some((10 << 30) / 100 * 70));
+    /// assert_eq!(TierBudgetSpec::Percent(70).resolve_with(None), None);
+    /// assert_eq!(TierBudgetSpec::Bytes(1 << 20).resolve_with(bound), Some(1 << 20));
+    /// ```
     pub fn resolve_with(self, detected_bound: Option<u64>) -> Option<u64> {
         match self {
             Self::Bytes(b) => Some(b),
@@ -65,7 +116,13 @@ impl TierBudgetSpec {
     }
 
     /// The canonical config-file text form (`auto` / `70%` / bytes).
-    pub fn as_config_string(self) -> String {
+    ///
+    /// ```
+    /// use kevy_config::TierBudgetSpec;
+    /// assert_eq!(TierBudgetSpec::Percent(70).to_config_string(), "70%");
+    /// assert_eq!(TierBudgetSpec::Bytes(4096).to_config_string(), "4096");
+    /// ```
+    pub fn to_config_string(self) -> String {
         match self {
             Self::Auto => "auto".to_string(),
             Self::Percent(p) => format!("{p}%"),
@@ -76,12 +133,39 @@ impl TierBudgetSpec {
 
 /// `[tiering]` section. No `budget` key = tiering OFF (today's paths
 /// byte-identical — the A1 gate's precondition).
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+///
+/// ```
+/// use kevy_config::{Config, TierBudgetSpec};
+///
+/// assert_eq!(Config::default().tiering.budget, None); // tiering off
+/// let cfg = Config::from_toml_str("[tiering]\nbudget = \"4gb\"\n", None)?;
+/// assert_eq!(cfg.tiering.budget, Some(TierBudgetSpec::Bytes(4 << 30)));
+/// # Ok::<(), kevy_config::ConfigError>(())
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Default, Hash)]
+#[non_exhaustive]
 pub struct TieringSection {
     /// The RAM budget. `None` = tiering off.
+    ///
+    /// ```
+    /// use kevy_config::{Config, TierBudgetSpec};
+    ///
+    /// let cfg = Config::from_toml_str("[tiering]\nbudget = 1048576\n", None)?;
+    /// assert_eq!(cfg.tiering.budget, Some(TierBudgetSpec::Bytes(1 << 20))); // a bare integer is bytes
+    /// # Ok::<(), kevy_config::ConfigError>(())
+    /// ```
     pub budget: Option<TierBudgetSpec>,
     /// Cold-tier spill dir override. `None` = `<data_dir>/tier/`.
     /// Setting it implies tiering on (`budget` defaults to `auto`).
+    ///
+    /// ```
+    /// use kevy_config::{Config, TierBudgetSpec};
+    ///
+    /// let cfg = Config::from_toml_str("[tiering]\nspill_dir = \"/mnt/nvme/kevy-tier\"\n", None)?;
+    /// assert_eq!(cfg.tiering.spill_dir.as_deref().and_then(|p| p.to_str()), Some("/mnt/nvme/kevy-tier"));
+    /// assert_eq!(cfg.tiering.budget, Some(TierBudgetSpec::Auto), "a spill dir alone turns tiering on");
+    /// # Ok::<(), kevy_config::ConfigError>(())
+    /// ```
     pub spill_dir: Option<PathBuf>,
 }
 
@@ -103,9 +187,12 @@ impl Config {
     /// The `KEVY_TIER_BUDGET` env arm — all three forms; plain bytes
     /// stay back-compat with the original plain-bytes-only knob.
     pub(crate) fn apply_env_tier_budget(&mut self, value: &str) -> Result<(), ConfigError> {
-        self.tiering.budget = Some(TierBudgetSpec::parse(value).map_err(|msg| {
-            ConfigError::Schema { line: 0, field: "[env] KEVY_TIER_BUDGET".into(), msg }
-        })?);
+        self.tiering.budget =
+            Some(TierBudgetSpec::parse(value).map_err(|e| ConfigError::Schema {
+                line: 0,
+                field: "[env] KEVY_TIER_BUDGET".into(),
+                msg: e.to_string(),
+            })?);
         Ok(())
     }
 }
@@ -117,7 +204,7 @@ fn budget_from_item(item: &Item) -> Result<TierBudgetSpec, ConfigError> {
         Value::Int(n) => u64::try_from(*n)
             .map(TierBudgetSpec::Bytes)
             .map_err(|_| schema_err(item, format!("tiering budget {n} must be non-negative"))),
-        Value::Str(s) => TierBudgetSpec::parse(s).map_err(|e| schema_err(item, e)),
+        Value::Str(s) => TierBudgetSpec::parse(s).map_err(|e| schema_err(item, e.to_string())),
         other @ (Value::Bool(_) | Value::Arr(_)) => Err(schema_err(
             item,
             format!("expected \"auto\" | \"70%\" | \"4gb\" | bytes, got {other:?}"),
@@ -145,7 +232,7 @@ mod tests {
     #[test]
     fn garbage_rejected_by_name() {
         for bad in ["", "yes", "0%", "101%", "x%", "12qb"] {
-            let e = TierBudgetSpec::parse(bad).unwrap_err();
+            let e = TierBudgetSpec::parse(bad).unwrap_err().to_string();
             assert!(e.contains("tiering budget"), "{bad:?}: {e}");
         }
     }
@@ -237,7 +324,7 @@ mod tests {
             TierBudgetSpec::Percent(35),
             TierBudgetSpec::Bytes(4 * 1024 * 1024 * 1024),
         ] {
-            let text = spec.as_config_string();
+            let text = spec.to_config_string();
             assert_eq!(TierBudgetSpec::parse(&text).unwrap(), spec, "{text}");
         }
     }

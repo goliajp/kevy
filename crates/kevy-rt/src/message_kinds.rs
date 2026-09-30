@@ -35,38 +35,138 @@ pub(crate) enum Gathered {
 /// The multi-key gather reductions computed on the originating shard.
 /// Public: [`crate::Route::Gather`] carries it, and embedders' `route()`
 /// implementations construct it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// ```
+/// let route = kevy_rt::Route::Gather(kevy_rt::MultiOp::Mget);
+/// assert!(matches!(route, kevy_rt::Route::Gather(kevy_rt::MultiOp::Mget)));
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum MultiOp {
     /// `MGET` — values gathered in request order.
+    ///
+    /// ```
+    /// use kevy_rt::{MultiOp, Route};
+    ///
+    /// // What a `route()` answers for `MGET a b`: gather every key, reduce at the origin.
+    /// let route = Route::Gather(MultiOp::Mget);
+    /// assert!(matches!(route, Route::Gather(MultiOp::Mget)));
+    /// ```
     Mget,
     /// `SINTER`.
+    ///
+    /// ```
+    /// use kevy_rt::{MultiOp, Route};
+    ///
+    /// // What a `route()` answers for `SINTER a b`: gather every key, reduce at the origin.
+    /// let route = Route::Gather(MultiOp::SInter);
+    /// assert!(matches!(route, Route::Gather(MultiOp::SInter)));
+    /// ```
     SInter,
     /// `SUNION`.
+    ///
+    /// ```
+    /// use kevy_rt::{MultiOp, Route};
+    ///
+    /// // What a `route()` answers for `SUNION a b`: gather every key, reduce at the origin.
+    /// let route = Route::Gather(MultiOp::SUnion);
+    /// assert!(matches!(route, Route::Gather(MultiOp::SUnion)));
+    /// ```
     SUnion,
     /// `SDIFF`.
+    ///
+    /// ```
+    /// use kevy_rt::{MultiOp, Route};
+    ///
+    /// // What a `route()` answers for `SDIFF a b`: gather every key, reduce at the origin.
+    /// let route = Route::Gather(MultiOp::SDiff);
+    /// assert!(matches!(route, Route::Gather(MultiOp::SDiff)));
+    /// ```
     SDiff,
     /// `ZINTERCARD numkeys key… [LIMIT n]` — read-only gathered count.
     /// The `LIMIT` cap is parsed from the argv by the gather builder
     /// (it sits after the keys), not carried here.
+    ///
+    /// ```
+    /// use kevy_rt::{MultiOp, Route};
+    ///
+    /// // What a `route()` answers for `ZINTERCARD 2 a b`: gather every key, reduce at the origin.
+    /// let route = Route::Gather(MultiOp::ZInterCard);
+    /// assert!(matches!(route, Route::Gather(MultiOp::ZInterCard)));
+    /// ```
     ZInterCard,
 }
 
 /// Which algebra combination a `*STORE` orchestrator runs after its
 /// gather completes. Public: [`crate::Route::ZAlgebraStore`]
 /// carries it, and embedders' `route()` implementations construct it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// ```
+/// let route = kevy_rt::Route::ZAlgebraStore(kevy_rt::ZCombine::ZUnion);
+/// assert_ne!(route, kevy_rt::Route::ZAlgebraStore(kevy_rt::ZCombine::ZInter));
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum ZCombine {
     /// `ZINTERSTORE`.
+    ///
+    /// ```
+    /// use kevy_rt::{Route, ZCombine};
+    ///
+    /// // What a `route()` answers for `ZINTERSTORE dst k1 k2`.
+    /// let route = Route::ZAlgebraStore(ZCombine::ZInter);
+    /// assert!(matches!(route, Route::ZAlgebraStore(ZCombine::ZInter)));
+    /// ```
     ZInter,
     /// `ZUNIONSTORE`.
+    ///
+    /// ```
+    /// use kevy_rt::{Route, ZCombine};
+    ///
+    /// // What a `route()` answers for `ZUNIONSTORE dst k1 k2`.
+    /// let route = Route::ZAlgebraStore(ZCombine::ZUnion);
+    /// assert!(matches!(route, Route::ZAlgebraStore(ZCombine::ZUnion)));
+    /// ```
     ZUnion,
     /// `ZDIFFSTORE`.
+    ///
+    /// ```
+    /// use kevy_rt::{Route, ZCombine};
+    ///
+    /// // What a `route()` answers for `ZDIFFSTORE dst k1 k2`.
+    /// let route = Route::ZAlgebraStore(ZCombine::ZDiff);
+    /// assert!(matches!(route, Route::ZAlgebraStore(ZCombine::ZDiff)));
+    /// ```
     ZDiff,
     /// `SINTERSTORE`.
+    ///
+    /// ```
+    /// use kevy_rt::{Route, ZCombine};
+    ///
+    /// // What a `route()` answers for `SINTERSTORE dst k1 k2`.
+    /// let route = Route::ZAlgebraStore(ZCombine::SInter);
+    /// assert!(matches!(route, Route::ZAlgebraStore(ZCombine::SInter)));
+    /// ```
     SInter,
     /// `SUNIONSTORE`.
+    ///
+    /// ```
+    /// use kevy_rt::{Route, ZCombine};
+    ///
+    /// // What a `route()` answers for `SUNIONSTORE dst k1 k2`.
+    /// let route = Route::ZAlgebraStore(ZCombine::SUnion);
+    /// assert!(matches!(route, Route::ZAlgebraStore(ZCombine::SUnion)));
+    /// ```
     SUnion,
     /// `SDIFFSTORE`.
+    ///
+    /// ```
+    /// use kevy_rt::{Route, ZCombine};
+    ///
+    /// // What a `route()` answers for `SDIFFSTORE dst k1 k2`.
+    /// let route = Route::ZAlgebraStore(ZCombine::SDiff);
+    /// assert!(matches!(route, Route::ZAlgebraStore(ZCombine::SDiff)));
+    /// ```
     SDiff,
 }
 
@@ -85,4 +185,7 @@ pub(crate) struct DispatchMeta {
     /// `Some(i)` = argv[i] is the routed key (Route::Single) — the WATCH
     /// version bump target. `None` for keyless `Route::Local` cmds.
     pub(crate) key_idx: Option<u8>,
+    /// The origin resolve()'s verb id, so the executing shard dispatches
+    /// without matching the verb again.
+    pub(crate) verb: crate::VerbId,
 }

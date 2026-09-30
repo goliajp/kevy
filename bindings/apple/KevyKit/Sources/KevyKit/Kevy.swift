@@ -1,7 +1,7 @@
 // KevyKit — kevy embedded, Swift-shaped.
 //
 // The typed methods mirror the other kevy packages (set/get/del/incr/…);
-// cmd() reaches all 184 verbs. Typed methods throw on a protocol error —
+// cmd() reaches every verb the engine answers. Typed methods throw on a protocol error —
 // a typed call has one meaning, so "-WRONGTYPE" is a failure. cmd()
 // returns .error(…) as a VALUE for callers driving the raw verb surface.
 //

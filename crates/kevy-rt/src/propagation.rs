@@ -14,29 +14,98 @@
 //! [`set_override`] right after mutating the store;
 //! `Shard::post_write_housekeeping` — which runs immediately after
 //! *every* write dispatch on the same thread — consumes it with ONE
-//! [`take_override`] shared by the AOF append and the replication
+//! take of the override shared by the AOF append and the replication
 //! push, so disk and replicas always record the very same frame.
-//! Because the take is unconditional and per-command, an override can
-//! never leak into the next command of a pipelined batch.
+//! Every setter also arms a flag that the post-write step reads on every
+//! write, so an override is always taken by the write that set it and
+//! can never leak into the next command of a pipelined batch.
 //!
-//! Thread-local by the same precedent as [`crate::replication_gate`]:
+//! Thread-local by the same precedent as [`crate::applying_record`]:
 //! a shard's store is only ever touched by its owning thread, and the
 //! verb body has no other channel to the post-write hooks.
+//!
+//! ```
+//! use kevy_rt::propagation::{Propagate, set_override};
+//! // SPOP took `b` from `s`: the AOF and replicas get `SREM s b`, not a second draw
+//! let frame = ["SREM", "s", "b"].map(|w| w.as_bytes().to_vec()).to_vec();
+//! set_override(Propagate::Replace(frame));
+//! # kevy_rt::propagation::discard_override();
+//! ```
 
 use std::cell::Cell;
 
 /// What the post-write hooks should record for the command that just
 /// executed.
-#[derive(Debug)]
+///
+/// ```
+/// use kevy_rt::propagation::{Propagate, discard_override, set_override};
+///
+/// set_override(Propagate::Replace(vec![b"SREM".to_vec(), b"s".to_vec(), b"m".to_vec()]));
+/// discard_override();
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Propagate {
     /// Record the client's original argv unchanged (the default —
     /// every deterministic verb).
+    ///
+    /// ```
+    /// use kevy_rt::propagation::Propagate;
+    /// // what a verb records, from what it did
+    /// fn record(verb: &[u8], key: &[u8], popped: &[&[u8]]) -> Propagate {
+    ///     match (verb, popped) {
+    ///         (b"SPOP", []) => Propagate::Suppress,
+    ///         (b"SPOP", _) => {
+    ///             let mut frame = vec![b"SREM".to_vec(), key.to_vec()];
+    ///             frame.extend(popped.iter().map(|m| m.to_vec()));
+    ///             Propagate::Replace(frame)
+    ///         }
+    ///         _ => Propagate::AsIs,
+    ///     }
+    /// }
+    /// assert_eq!(record(b"SET", b"k", &[]), Propagate::AsIs);
+    /// ```
     AsIs,
     /// Record this argv instead of the client's (e.g. `SREM key
     /// <popped…>` for a non-empty SPOP).
+    ///
+    /// ```
+    /// use kevy_rt::propagation::Propagate;
+    /// // what a verb records, from what it did
+    /// fn record(verb: &[u8], key: &[u8], popped: &[&[u8]]) -> Propagate {
+    ///     match (verb, popped) {
+    ///         (b"SPOP", []) => Propagate::Suppress,
+    ///         (b"SPOP", _) => {
+    ///             let mut frame = vec![b"SREM".to_vec(), key.to_vec()];
+    ///             frame.extend(popped.iter().map(|m| m.to_vec()));
+    ///             Propagate::Replace(frame)
+    ///         }
+    ///         _ => Propagate::AsIs,
+    ///     }
+    /// }
+    /// let srem = ["SREM", "s", "a"].map(|w| w.as_bytes().to_vec()).to_vec();
+    /// assert_eq!(record(b"SPOP", b"s", &[b"a"]), Propagate::Replace(srem));
+    /// ```
     Replace(Vec<Vec<u8>>),
     /// Record nothing (e.g. SPOP against a missing/empty set — a no-op
     /// verb must not reach disk or replicas at all).
+    ///
+    /// ```
+    /// use kevy_rt::propagation::Propagate;
+    /// // what a verb records, from what it did
+    /// fn record(verb: &[u8], key: &[u8], popped: &[&[u8]]) -> Propagate {
+    ///     match (verb, popped) {
+    ///         (b"SPOP", []) => Propagate::Suppress,
+    ///         (b"SPOP", _) => {
+    ///             let mut frame = vec![b"SREM".to_vec(), key.to_vec()];
+    ///             frame.extend(popped.iter().map(|m| m.to_vec()));
+    ///             Propagate::Replace(frame)
+    ///         }
+    ///         _ => Propagate::AsIs,
+    ///     }
+    /// }
+    /// assert_eq!(record(b"SPOP", b"empty", &[]), Propagate::Suppress);
+    /// ```
     Suppress,
 }
 
@@ -48,14 +117,48 @@ thread_local! {
     /// `Suppress` in [`OVERRIDE`]: a write with nowhere to be recorded
     /// never has its frames built.
     static DEFERRED: Cell<Option<kevy_verbs::Effect>> = const { Cell::new(None) };
+    /// Set by every writer of [`OVERRIDE`], [`DEFERRED`] and the Lua wake
+    /// buffer. A plain `bool` has no destructor, so reading it is one load
+    /// with no lazy-init check; the post-write step reads only this on a
+    /// deterministic non-Lua write.
+    static ARMED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Note that a post-write input (override, deferred record, Lua wake key)
+/// is pending for the post-write step to take.
+#[inline]
+pub(crate) fn arm() {
+    ARMED.with(|a| a.set(true));
+}
+
+/// Whether anything was armed since the last call, clearing the flag.
+#[inline]
+pub(crate) fn take_armed() -> bool {
+    ARMED.with(|a| a.replace(false))
+}
+
+/// Whether anything is armed, leaving the flag as it is.
+#[inline]
+pub(crate) fn is_armed() -> bool {
+    ARMED.with(Cell::get)
 }
 
 /// Install a propagation override for the command currently executing.
 /// Called from the verb body, after the store mutation; consumed by
 /// the post-write housekeeping of that same command.
+///
+/// ```
+/// use kevy_rt::propagation::{Propagate, set_override};
+/// // a verb body, right after its SPOP removed nothing
+/// set_override(Propagate::Suppress);
+/// // a later call replaces it: the last one set is what gets recorded
+/// set_override(Propagate::AsIs);
+/// # kevy_rt::propagation::discard_override();
+/// ```
 pub fn set_override(p: Propagate) {
     OVERRIDE.with(|c| c.set(Some(p)));
     DEFERRED.with(Cell::take);
+    arm();
 }
 
 /// Record the command currently executing by the frames its `effect`
@@ -66,7 +169,7 @@ pub fn set_override(p: Propagate) {
 ///
 /// ```
 /// use kevy_rt::propagation::{discard_override, set_override_deferred};
-/// let id = kevy_store::StreamId { ms: 1, seq: 0 };
+/// let id = kevy_store::StreamId::new(1, 0);
 /// set_override_deferred(kevy_verbs::Effect::RecordId(2, id));
 /// // a dispatch site that records nothing drops it unbuilt
 /// discard_override();
@@ -74,6 +177,7 @@ pub fn set_override(p: Propagate) {
 pub fn set_override_deferred(effect: kevy_verbs::Effect) {
     OVERRIDE.with(|c| c.set(Some(Propagate::Suppress)));
     DEFERRED.with(|d| d.set(Some(effect)));
+    arm();
 }
 
 /// The effect [`set_override_deferred`] left, taken with the `Suppress`
@@ -83,9 +187,9 @@ pub(crate) fn take_deferred() -> Option<kevy_verbs::Effect> {
 }
 
 /// Take (and clear) the pending override — [`Propagate::AsIs`] when no
-/// verb set one. `Shard::post_write_housekeeping` calls this exactly
-/// once per write, before both the AOF append and the replication
-/// push, so the two recorders share one decision.
+/// verb set one. `Shard::post_write_housekeeping` calls this once per
+/// write that found the armed flag set, before both the AOF append and
+/// the replication push, so the two recorders share one decision.
 pub(crate) fn take_override() -> Propagate {
     OVERRIDE.with(Cell::take).unwrap_or(Propagate::AsIs)
 }
@@ -95,6 +199,14 @@ pub(crate) fn take_override() -> Propagate {
 /// pairing — AOF replay, reshard merge, an inner Lua `redis.call` —
 /// where a nondeterministic verb would otherwise leave its override
 /// armed for whatever command runs next on the thread.
+///
+/// ```
+/// use kevy_rt::propagation::{Propagate, discard_override, set_override};
+/// // replaying an AOF frame runs SPOP's body, which arms an override...
+/// set_override(Propagate::Replace(vec![b"SREM".to_vec(), b"s".to_vec(), b"m".to_vec()]));
+/// // ...that replay must not leave behind for the next command
+/// discard_override();
+/// ```
 pub fn discard_override() {
     OVERRIDE.with(Cell::take);
     DEFERRED.with(Cell::take);
@@ -129,7 +241,7 @@ mod tests {
 
     #[test]
     fn a_deferred_record_rides_a_suppress_and_does_not_linger() {
-        let id = kevy_store::StreamId { ms: 1, seq: 0 };
+        let id = kevy_store::StreamId::new(1, 0);
         set_override_deferred(kevy_verbs::Effect::RecordId(2, id));
         assert!(matches!(take_override(), Propagate::Suppress));
         assert_eq!(take_deferred(), Some(kevy_verbs::Effect::RecordId(2, id)));
@@ -139,6 +251,22 @@ mod tests {
         set_override_deferred(kevy_verbs::Effect::RecordId(2, id));
         set_override(Propagate::Replace(vec![b"SREM".to_vec()]));
         assert_eq!(take_deferred(), None, "a later override replaces it");
+    }
+
+    #[test]
+    fn every_pending_input_arms_the_post_write_step() {
+        let _ = take_armed();
+        assert!(!take_armed(), "nothing set: the post-write step skips the takes");
+        set_override(Propagate::Suppress);
+        assert!(take_armed());
+        assert!(!take_armed(), "the flag clears on read");
+        assert!(matches!(take_override(), Propagate::Suppress));
+        set_override_deferred(kevy_verbs::Effect::RecordId(2, kevy_store::StreamId::new(1, 0)));
+        assert!(take_armed());
+        discard_override();
+        crate::push_lua_wake_key(b"q");
+        assert!(take_armed());
+        assert_eq!(crate::lua_wake_bridge::drain_lua_wake_buffer(), vec![b"q".to_vec()]);
     }
 
     #[test]
@@ -162,6 +290,11 @@ thread_local! {
 }
 
 /// Queue one internal frame for the reactor to log after this tick.
+///
+/// ```
+/// // a tick that sealed a segment asks for it to be logged to the AOF
+/// kevy_rt::propagation::push_tick_frame(vec![b"SEGMENTED".to_vec(), b"seg-000001".to_vec()]);
+/// ```
 pub fn push_tick_frame(argv: Vec<Vec<u8>>) {
     TICK_FRAMES.with(|q| q.borrow_mut().push(argv));
 }

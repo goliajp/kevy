@@ -14,11 +14,13 @@
 //!
 //! Run: `cargo run -p kevy-store --example bench_keyspace --release`
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use std::collections::HashMap;
 use std::collections::hash_map::RandomState;
 use std::hash::{BuildHasher, Hasher};
 
-use kevy_bench::{bench, black_box, compare, report};
+use kevy_bench::{bench, black_box, compare};
 use kevy_store::Store;
 
 /// FNV-1a 64-bit — identical constants to kevy-rt's shard router
@@ -282,7 +284,7 @@ fn bench_real_store() {
     let absent = make_keys("absent:", N, 12);
     let mut s = Store::new();
     for k in &keys {
-        s.set(k, b"value-payload-16".to_vec(), None, false, false);
+        s.set(k, b"value-payload-16".to_vec(), None, kevy_store::SetCondition::Always);
     }
     println!("== real Store::get/set (Fx+fmix64 keyspace), N={N} ==");
 
@@ -292,25 +294,25 @@ fn bench_real_store() {
         i += 1;
         black_box(s.get(k).ok());
     });
-    report("Store::get hit", g);
+    g.report("Store::get hit");
     i = 0;
     let m = bench(SAMPLES, INNER, || {
         let k = &absent[i % N];
         i += 1;
         black_box(s.get(k).ok());
     });
-    report("Store::get miss", m);
+    m.report("Store::get miss");
     i = 0;
     let st = bench(SAMPLES, INNER, || {
         let k = &keys[i % N];
         i += 1;
-        s.set(k, b"value-payload-16".to_vec(), None, false, false);
+        s.set(k, b"value-payload-16".to_vec(), None, kevy_store::SetCondition::Always);
     });
-    report("Store::set overwrite", st);
+    st.report("Store::set overwrite");
 
     // INCR path (live_entry_mut): repopulate numeric, then increment in place.
     for k in &keys {
-        s.set(k, b"0".to_vec(), None, false, false);
+        s.set(k, b"0".to_vec(), None, kevy_store::SetCondition::Always);
     }
     i = 0;
     let inc = bench(SAMPLES, INNER, || {
@@ -318,7 +320,7 @@ fn bench_real_store() {
         i += 1;
         black_box(s.incr_by(k, 1).ok());
     });
-    report("Store::incr_by", inc);
+    inc.report("Store::incr_by");
     println!();
 }
 

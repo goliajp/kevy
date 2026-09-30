@@ -424,8 +424,8 @@ mod tests {
 
     #[test]
     fn audit_records_one_sanitised_line() {
-        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        let path: PathBuf = std::env::temp_dir().join(format!("kevy-audit-{nanos}"));
+        let dir = kevy_tmpdir::TmpDir::new("audit");
+        let path: PathBuf = dir.path().join("audit.log");
         let obs = ObsState::new(&path, 1);
         obs.audit_record(&[b"DEBUG", b"tab\there"]);
         let text = std::fs::read_to_string(&path).unwrap();

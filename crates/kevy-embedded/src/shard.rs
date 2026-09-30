@@ -22,15 +22,15 @@ use kevy_hash::KevyHash;
 #[cfg(feature = "persist")]
 use kevy_persist::reshard::{ShardLayout, commit_reshard, merge_sources, recover_journal};
 #[cfg(feature = "persist")]
-use kevy_persist::{
-    Aof, Routing, ShardsMeta, layout, layout::infer_files_n, read_shards_meta, write_shards_meta,
-};
+use kevy_persist::{Aof, Routing, ShardsMeta, layout, layout::infer_files_n};
 use kevy_store::Store as Keyspace;
 
-use crate::config::{Config, TtlReaperMode};
+use crate::config::Config;
 #[cfg(feature = "persist")]
 use crate::metric::KevyMetric;
 use crate::metric::OpenReport;
+#[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
+pub(crate) use crate::shard_tier::{resolve_tier_budget, tier_tick_upkeep};
 use crate::store::Inner;
 
 /// Route a key to its shard. `n == 1` short-circuits to 0; power-of-two `n`
@@ -64,21 +64,27 @@ impl ShardLayout for EmbLayout {
 fn fresh_keyspace(config: &Config) -> Keyspace {
     let mut s = Keyspace::new();
     s.set_max_memory(config.maxmemory, config.eviction_policy);
-    s.set_cached_clock(matches!(config.ttl_reaper, TtlReaperMode::Background));
+    // no cached clock: the reaper refreshes it only once a tick, so a read
+    // could see a key up to a tick past its deadline; a key without a TTL
+    // reads no clock either way, one with a TTL reads it fresh
     s
 }
 
 /// Build the `n` shard `Inner`s for `config`, loading / migrating persistence.
 /// The `bus` lives on shard 0 (pub/sub is process-wide, not sharded); other
 /// shards get an idle bus that is never touched.
-pub(crate) fn build_shards(config: &Config) -> io::Result<(Vec<Arc<RwLock<Inner>>>, OpenReport)> {
+/// The built shards, the open's report, and the newest catalog frame the
+/// restore met.
+pub(crate) type Built = (Vec<Arc<RwLock<Inner>>>, OpenReport, Option<kevy_resp::Argv>);
+
+pub(crate) fn build_shards(config: &Config) -> io::Result<Built> {
     let n = config.shards.max(1);
     #[allow(unused_mut)] // mut is the persist path's (load/reshard) need
     let mut stores: Vec<Keyspace> = (0..n).map(|_| fresh_keyspace(config)).collect();
 
     // Without the `persist` feature the build is always pure in-memory.
     #[cfg(not(feature = "persist"))]
-    return Ok((into_inners_mem(stores), OpenReport::default()));
+    return Ok((into_inners_mem(stores), OpenReport::default(), None));
 
     #[cfg(feature = "persist")]
     build_shards_persist(config, n, stores)
@@ -87,12 +93,8 @@ pub(crate) fn build_shards(config: &Config) -> io::Result<(Vec<Arc<RwLock<Inner>
 /// Persistence bring-up half of [`build_shards`]: load / migrate the
 /// on-disk layout, then open each shard's live AOF.
 #[cfg(feature = "persist")]
-fn build_shards_persist(
-    config: &Config,
-    n: usize,
-    mut stores: Vec<Keyspace>,
-) -> io::Result<(Vec<Arc<RwLock<Inner>>>, OpenReport)> {
-    let Some(dir) = config.data_dir.clone() else {
+fn build_shards_persist(config: &Config, n: usize, mut stores: Vec<Keyspace>) -> io::Result<Built> {
+    let Some(dir) = crate::store_wire::disk_dir(config).cloned() else {
         // Pure in-memory: no persistence, no AOF — and no disk for a
         // cold tier: tiering config on a mem-only store is a named
         // refusal, never a silent ignore.
@@ -103,7 +105,8 @@ fn build_shards_persist(
                 "tiering requires a disk data dir (with_persist); a memory-only store has no cold tier",
             ));
         }
-        return Ok((into_inners(stores, (0..n).map(|_| None).collect()), OpenReport::default()));
+        let inners = into_inners(stores, (0..n).map(|_| None).collect());
+        return Ok((inners, OpenReport::default(), None));
     };
     std::fs::create_dir_all(&dir)?;
     // Complete (or safely discard) a reshard a crash interrupted, before
@@ -115,46 +118,81 @@ fn build_shards_persist(
     // wipe-at-open contract precedes the refill, so a reopen never
     // double-counts.
     enable_tiering(config, &dir, &mut stores)?;
-    let mut report = load_or_reshard(&dir, config, n, &mut stores)?;
+    let mut catalog = None;
+    let (mut report, walked) = load_or_reshard(&dir, config, n, &mut stores, &mut catalog)?;
+    let mut aofs = open_live_aofs(config, &dir, &walked, &mut report)?;
+    prepare_aofs(config, &dir, &mut stores, &mut aofs, &mut report, &mut catalog)?;
+    Ok((into_inners(stores, aofs), report, catalog))
+}
 
-    let mut aofs = open_live_aofs(config, &dir, n, &mut report)?;
+/// Settle each AOF's staging ring and set how it takes appends, sweep the
+/// segments no frame claimed, then anchor each AOF's growth-rule baseline.
+#[cfg(feature = "persist")]
+fn prepare_aofs(
+    config: &Config,
+    dir: &Path,
+    stores: &mut [Keyspace],
+    aofs: &mut [Option<Aof>],
+    report: &mut OpenReport,
+    catalog: &mut Option<kevy_resp::Argv>,
+) -> io::Result<()> {
+    #[cfg(target_arch = "wasm32")]
+    let _ = (dir, &report, &catalog);
+    #[cfg(not(target_arch = "wasm32"))]
+    for (i, (aof, store)) in aofs.iter_mut().zip(stores.iter_mut()).enumerate() {
+        if let Some(aof) = aof {
+            crate::shard_restore::open_stage(dir, config, i, store, aof, report, catalog)?;
+        }
+        // Only now is a sealed segment with no SEGMENTED frame an orphan:
+        // the ring may have owed the log that frame, and a segment swept
+        // before it lands leaves the frame naming nothing.
+        store.sweep_orphan_row_segs();
+    }
     // Anchor each AOF's growth-rule baseline to the live image's estimated
     // rewrite size. `Aof::open` can only baseline at the file size, which
     // for a short-lived process re-opening the same directory resets the
     // growth ratio every run — the log then grows without bound while the
     // live keyspace stays tiny (a CLI reusing one store directory paid
-    // 100 MB of file for 3 live keys). The estimate is O(keys), zero-alloc.
+    // 100 MB of file for 3 live keys). The estimate serialises every key,
+    // so it runs only where the baseline can change a decision.
+    let policy = config.rewrite_policy();
     for (aof, store) in aofs.iter_mut().zip(stores.iter()) {
-        if let Some(aof) = aof {
+        if let Some(aof) = aof
+            && policy.baseline_matters(aof.size_bytes())
+        {
             aof.anchor_rewrite_baseline(kevy_persist::estimate_rewrite_size(store));
         }
     }
-    Ok((into_inners(stores, aofs), report))
+    Ok(())
 }
 
 /// Open each shard's live AOF for append (if persistence is on). The
 /// open repairs (quarantines + truncates) any dropped tail replay just
-/// tolerated — the quarantine paths land in `report`.
+/// tolerated — the quarantine paths land in `report`. `walked[i]` is where shard
+/// i's replay stopped, when it dropped nothing.
 #[cfg(feature = "persist")]
 fn open_live_aofs(
     config: &Config,
     dir: &Path,
-    n: usize,
+    walked: &[Option<u64>],
     report: &mut OpenReport,
 ) -> io::Result<Vec<Option<Aof>>> {
     let aofs: Vec<Option<Aof>> = if config.aof {
-        (0..n)
-            .map(|i| {
-                Aof::open_with_repair(
+        walked
+            .iter()
+            .enumerate()
+            .map(|(i, &whole)| {
+                Aof::open_after_replay(
                     &layout::aof_path(dir, i),
                     config.appendfsync,
-                    config.replay_resync,
+                    config.replay_mode,
+                    whole,
                 )
                 .map(Some)
             })
             .collect::<io::Result<_>>()?
     } else {
-        (0..n).map(|_| None).collect()
+        walked.iter().map(|_| None).collect()
     };
     for aof in aofs.iter().flatten() {
         if let Some(q) = aof.open_quarantine() {
@@ -186,69 +224,6 @@ fn enable_tiering(config: &Config, dir: &Path, stores: &mut [Keyspace]) -> io::R
     Ok(())
 }
 
-/// Resolve the configured tier budget spec to a PER-SHARD byte count
-/// (whole-store budget / `nshards`, floored at 1). Named refusals:
-/// percent out of 1..=100, auto/percent with no detectable bound.
-#[cfg(all(feature = "persist", feature = "tier", not(target_arch = "wasm32")))]
-pub(crate) fn resolve_tier_budget(config: &Config, nshards: usize) -> io::Result<u64> {
-    let spec = config
-        .tier_budget
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "tiering is not configured"))?;
-    resolve_tier_spec(spec, nshards)
-}
-
-/// Spec-level half of [`resolve_tier_budget`] — also the reaper tick's
-/// re-resolution entry (auto/percent re-probe the memory bound live).
-#[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
-pub(crate) fn resolve_tier_spec(
-    spec: crate::config::TierBudgetSpec,
-    nshards: usize,
-) -> io::Result<u64> {
-    use crate::config::TierBudgetSpec;
-    if let TierBudgetSpec::Percent(p) = spec
-        && !(1..=100).contains(&p)
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("tiering budget percent must be 1..=100, got {p}"),
-        ));
-    }
-    let total = spec.resolve().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::Unsupported,
-            "tiering budget auto/percent: no memory bound detected on this host — \
-             use with_tier_budget(bytes)",
-        )
-    })?;
-    Ok((total / nshards.max(1) as u64).max(1))
-}
-
-/// Per-tick tiering upkeep: re-resolve a probe-backed budget and
-/// feed the index/view memory floor into the unified watermark. Runs
-/// under the shard lock the tick already holds; one branch when
-/// tiering is off.
-#[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
-pub(crate) fn tier_tick_upkeep(
-    g: &mut crate::store::Inner,
-    spec: Option<crate::config::TierBudgetSpec>,
-    nshards: usize,
-) {
-    use crate::config::TierBudgetSpec;
-    if !g.store.tier_enabled() {
-        return;
-    }
-    if let Some(spec @ (TierBudgetSpec::Auto | TierBudgetSpec::Percent(_))) = spec
-        && let Ok(per_shard) = resolve_tier_spec(spec, nshards)
-    {
-        g.store.set_tier_budget(per_shard);
-    }
-    #[cfg(feature = "index")]
-    let reserved = g.idx_segs.reserved_bytes() + g.view_segs.reserved_bytes();
-    #[cfg(not(feature = "index"))]
-    let reserved = 0u64;
-    g.store.set_tier_reserved(reserved);
-}
-
 /// Read the shard layout meta and either load in place (same layout)
 /// or re-shard (losslessly) into the configured `n`.
 #[cfg(feature = "persist")]
@@ -257,9 +232,10 @@ fn load_or_reshard(
     config: &Config,
     n: usize,
     stores: &mut [Keyspace],
-) -> io::Result<OpenReport> {
+    catalog: &mut Option<kevy_resp::Argv>,
+) -> io::Result<(OpenReport, Vec<Option<u64>>)> {
     let meta_path = layout::shards_meta_path(dir);
-    let prev = read_shards_meta(&meta_path);
+    let prev = ShardsMeta::read(&meta_path);
     // The embedded store always routes by KevyHash; a dir written by a
     // slots-routing server re-shards (losslessly) on first embedded open.
     let same_layout = match prev {
@@ -271,9 +247,9 @@ fn load_or_reshard(
     };
 
     if same_layout {
-        let report = load_in_place(dir, config, n, stores)?;
-        write_shards_meta(&meta_path, ShardsMeta { n, routing: Routing::KevyHash })?;
-        return Ok(report);
+        let loaded = load_in_place(dir, config, stores, catalog)?;
+        ShardsMeta::new(n, Routing::KevyHash).write(&meta_path)?;
+        return Ok(loaded);
     }
     {
         let src_n = prev.map(|m| m.n).or_else(|| {
@@ -284,7 +260,7 @@ fn load_or_reshard(
         // stale meta from a larger prior n would otherwise trigger a second
         // re-shard next open, whose sources were already renamed to
         // `.premigration` (the shrink-to-one open would come up empty).
-        reshard(dir, config, n, src_n, stores)
+        Ok((reshard(dir, config, n, src_n, stores, catalog)?, vec![None; n]))
     }
 }
 
@@ -293,17 +269,20 @@ fn load_or_reshard(
 fn load_in_place(
     dir: &Path,
     config: &Config,
-    _n: usize,
     stores: &mut [Keyspace],
-) -> io::Result<OpenReport> {
+    catalog: &mut Option<kevy_resp::Argv>,
+) -> io::Result<(OpenReport, Vec<Option<u64>>)> {
     let mut report = OpenReport::default();
     let start = Instant::now();
+    let mut walked = Vec::with_capacity(stores.len());
     for (i, store) in stores.iter_mut().enumerate() {
-        crate::shard_restore::restore_one_shard(dir, config, i, store, &mut report)?;
+        let restored =
+            crate::shard_restore::restore_one_shard(dir, config, i, store, &mut report, catalog);
+        walked.push(restored?);
     }
     report.elapsed_ms = start.elapsed().as_millis() as u64;
     emit_replay(config, &report);
-    Ok(report)
+    Ok((report, walked))
 }
 
 /// Re-shard: load every source file into one temp keyspace, redistribute
@@ -313,6 +292,20 @@ fn load_in_place(
 /// the sources backed up (`.premigration.<nanos>`) and the temps finalized.
 /// A crash at any point either leaves the old layout intact or is rolled
 /// forward by `build_shards`' recovery on the next open. Each shard's fresh
+/// Before the layout changes, each old shard's staging ring hands what it
+/// owes to that shard's AOF, which the merge then reads; the ring goes.
+#[cfg(all(feature = "persist", not(target_arch = "wasm32")))]
+fn settle_stages(dir: &Path, config: &Config, src_n: usize) -> io::Result<()> {
+    for i in 0..src_n {
+        let stage = layout::stage_path(dir, i);
+        if stage.exists() {
+            let mut aof = Aof::open(&layout::aof_path(dir, i), config.appendfsync)?;
+            aof.settle_stage(&stage, |_| {})?;
+        }
+    }
+    Ok(())
+}
+
 /// AOF opens after this returns; the snapshot is the full migrated state.
 #[cfg(feature = "persist")]
 fn reshard(
@@ -321,13 +314,17 @@ fn reshard(
     n: usize,
     prev_n: Option<usize>,
     stores: &mut [Keyspace],
+    catalog: &mut Option<kevy_resp::Argv>,
 ) -> io::Result<OpenReport> {
     let lay = EmbLayout;
     // Source layout: prior shard files, or a legacy single AOF/snapshot.
     let src_n = prev_n.unwrap_or(1);
-    let (temp, report) = merge_into_temp(dir, config, src_n)?;
+    #[cfg(not(target_arch = "wasm32"))]
+    settle_stages(dir, config, src_n)?;
+    let (temp, report) = merge_into_temp(dir, config, src_n, catalog)?;
     redistribute(&temp, n, stores);
-    commit_reshard(dir, src_n, ShardsMeta { n, routing: Routing::KevyHash }, stores, &lay)?;
+    let target = ShardsMeta::new(n, Routing::KevyHash);
+    commit_reshard(dir, src_n, target, stores, catalog.as_ref(), &lay)?;
     // The merge scratch vlog is dead once the temp keyspace is gone.
     // The attribute rides the same cfg as the code: a module-level one
     // is unfulfilled in every build where this block is compiled out,
@@ -351,6 +348,7 @@ fn merge_into_temp(
     dir: &Path,
     config: &Config,
     src_n: usize,
+    catalog: &mut Option<kevy_resp::Argv>,
 ) -> io::Result<(Keyspace, OpenReport)> {
     let lay = EmbLayout;
     let mut temp = fresh_keyspace(config);
@@ -364,6 +362,10 @@ fn merge_into_temp(
     let mut total_cmds = 0u64;
     let start = Instant::now();
     merge_sources(dir, src_n, &lay, &mut temp, |store, args| {
+        if crate::shard_restore::is_catalog(&args) {
+            crate::shard_restore::keep_newest(catalog, args);
+            return;
+        }
         total_cmds += 1;
         crate::replay::apply(store, &args);
         if total_cmds.is_multiple_of(kevy_persist::REPLAY_DEMOTE_INTERVAL) {

@@ -92,7 +92,7 @@ SQLで言えばこれは`WHERE … AND NOT EXISTS (…)`の形にあたります
 
 - 参照しているインデックスのいずれかがまだバックフィル中のあいだ、クエリは`-INDEXBUILDING`を返します（部分的なインデックスは、メンバーシップを黙って誤報告してしまうからです）。リトライの作法はインデックスクエリと同じです。
 - `VIEW.REBUILD`は答えを保存します（e2eスイートで表明されています）。`VIEW.VERIFY`はドリフトを反証可能にします（members / bytes / order-exclusions）。
-- ビューのカタログはデータディレクトリのサイドカーに永続化されます。materializedの**内容**は派生状態です——再起動後に再構築され、スナップショットには決して入りません。
+- ビューのカタログはログと各スナップショットに記録され、レプリケーションで配られます。materializedの**内容**は派生状態です——再起動後に再構築され、スナップショットには決して入りません。
 
 ## 組み込み
 
@@ -100,8 +100,8 @@ SQLで言えばこれは`WHERE … AND NOT EXISTS (…)`の形にあたります
 
 ```rust
 use kevy_embedded::{
-    Config, IndexKind, IndexValType, IndexValue, Store, ViewLeaf,
-    ViewMode, ViewTree,
+    Config, IndexKind, IndexValType, IndexValue, SortOrder, Store,
+    ViewLeaf, ViewMode, ViewTree,
 };
 
 fn main() -> kevy_embedded::KevyResult<()> {
@@ -112,18 +112,18 @@ fn main() -> kevy_embedded::KevyResult<()> {
                      IndexKind::Range)?;
 
     let tree = ViewTree::And(
-        Box::new(ViewTree::Leaf(ViewLeaf {
-            index: b"j_pri".to_vec(),
-            min: IndexValue::I64(0),
-            max: IndexValue::I64(100),
-        })),
-        Box::new(ViewTree::Leaf(ViewLeaf {
-            index: b"j_state".to_vec(),
-            min: IndexValue::Str(b"ready".to_vec()),
-            max: IndexValue::Str(b"ready".to_vec()),   // EQ = same min/max
-        })),
+        Box::new(ViewTree::Leaf(ViewLeaf::new(
+            "j_pri",
+            IndexValue::I64(0),
+            IndexValue::I64(100),
+        ))),
+        Box::new(ViewTree::Leaf(ViewLeaf::new(
+            "j_state",
+            IndexValue::Str(b"ready".to_vec()),
+            IndexValue::Str(b"ready".to_vec()),   // EQ = same min/max
+        ))),
     );
-    store.view_create(b"ready_jobs", tree, b"j_pri", /*desc*/ true,
+    store.view_create(b"ready_jobs", tree, b"j_pri", SortOrder::Desc,
                       ViewMode::Materialized { top_k: 100 })?;
 
     store.hset(b"job:1", &[
@@ -140,7 +140,7 @@ fn main() -> kevy_embedded::KevyResult<()> {
 }
 ```
 
-- `view_create(name, tree, order_by, desc, mode)`は同期的にビルドします。参照されるインデックス（葉とORDER BY）はすべて、あらかじめ宣言されていなければなりません（そうでなければ`KevyError::InvalidInput`です）。
+- `view_create(name, tree, order_by, order, mode)`は同期的にビルドします。参照されるインデックス（葉とORDER BY）はすべて、あらかじめ宣言されていなければなりません（そうでなければ`KevyError::InvalidInput`です）。
 - `view_query(name, after, limit)`は`(key, order_value)`の行をページングします。返されるカーソルは排他的に再開します（DESCのビューは大きい側からページングします）。`view_count` / `view_list` / `view_drop`が面を完成させます。
 - `VIA`も`FIELDS`もありません——プロセス内の呼び出し側は、自分で参照解決して`hget`でフィールドを読んでください。
 

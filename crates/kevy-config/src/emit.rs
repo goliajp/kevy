@@ -27,9 +27,9 @@ const SERVICE_SECTIONS: [&str; 8] =
 impl Config {
     /// Render the current config as a standard-template TOML file —
     /// every field, in stable section/key order, with no comments. Used
-    /// by `CONFIG REWRITE` when the comment-preserving splice in
-    /// [`crate::preserve`] has no original file to work from; only
-    /// then are the user's inline comments lost.
+    /// by `CONFIG REWRITE` when the comment-preserving splice has no
+    /// original file to work from; only then are the user's inline
+    /// comments lost.
     ///
     /// Round-trips: feeding the output back through [`Self::from_toml_str`]
     /// reconstructs an equivalent `Config` (modulo `source_path`).
@@ -116,7 +116,7 @@ impl Config {
         let _ = writeln!(
             out,
             "output   = \"{}\"",
-            escape_toml_basic_string(&self.log.output.as_str()),
+            escape_toml_basic_string(&self.log.output.to_config_str()),
         );
         let _ = writeln!(out);
         let _ = writeln!(out, "[notification]");
@@ -131,6 +131,7 @@ impl Config {
         let _ = writeln!(out, "park_timeout_ms  = {}", self.advanced.park_timeout_ms);
         let _ = writeln!(out, "tick_check_every = {}", self.advanced.tick_check_every);
         let _ = writeln!(out, "ring_capacity    = {}", self.advanced.ring_capacity);
+        let _ = writeln!(out, "recv_buffers     = {}", self.advanced.recv_buffers);
         let _ = writeln!(out);
         let _ = writeln!(out, "[slowlog]");
         let _ = writeln!(out, "slower_than_micros = {}", self.slowlog.slower_than_micros,);
@@ -270,6 +271,7 @@ fn push_advanced(v: &mut Vec<CanonicalPair>, cfg: &Config) {
     push(v, "advanced", "park_timeout_ms", a.park_timeout_ms.to_string());
     push(v, "advanced", "tick_check_every", a.tick_check_every.to_string());
     push(v, "advanced", "ring_capacity", a.ring_capacity.to_string());
+    push(v, "advanced", "recv_buffers", a.recv_buffers.to_string());
 }
 
 fn push_slowlog(v: &mut Vec<CanonicalPair>, cfg: &Config) {
@@ -341,7 +343,7 @@ fn push_feed(v: &mut Vec<CanonicalPair>, cfg: &Config) {
 /// absence must round-trip to the off default.
 fn push_tiering(v: &mut Vec<CanonicalPair>, cfg: &Config) {
     if let Some(budget) = cfg.tiering.budget {
-        push(v, "tiering", "budget", toml_string(&budget.as_config_string()));
+        push(v, "tiering", "budget", toml_string(&budget.to_config_string()));
     }
     if let Some(dir) = &cfg.tiering.spill_dir {
         push(v, "tiering", "spill_dir", toml_string(&dir.display().to_string()));
@@ -365,7 +367,7 @@ fn push(v: &mut Vec<CanonicalPair>, section: &'static str, key: &'static str, va
 }
 
 fn log_output_str(o: &LogOutput) -> String {
-    o.as_str().into_owned()
+    o.to_config_str().into_owned()
 }
 
 /// `["a", "b"]` — the canonical TOML form for a list.

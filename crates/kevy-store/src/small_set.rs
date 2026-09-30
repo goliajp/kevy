@@ -64,6 +64,18 @@
 use kevy_bytes::SmallBytes;
 
 /// Inline packed set storage. 24 bytes total — see module docs for layout.
+///
+/// ```
+/// use kevy_store::{Store, Value};
+/// let mut s = Store::new();
+/// s.sadd(b"s", &[b"x".as_slice()])?;
+/// s.snapshot_each(|_, v, _| {
+///     let Value::SmallSetInline(m) = v else { panic!("a one-member set stays inline") };
+///     assert!(m.contains(b"x"));
+///     assert!(!m.contains(b"y"));
+/// });
+/// # Ok::<(), kevy_store::StoreError>(())
+/// ```
 #[derive(Debug, Clone)]
 pub struct SmallSetData {
     /// Number of inline members (0..=22 cap, real ceiling is byte-budget).
@@ -138,18 +150,12 @@ impl SmallSetData {
     /// Linear scan for `member`. ≤22 bytes of packed entries fit in one
     /// cache line; loop is unrolled by the optimiser at small counts.
     pub fn contains(&self, member: &[u8]) -> bool {
-        self.iter_slices().any(|m| m == member)
+        self.iter().any(|m| m == member)
     }
 
     /// Iterator over the packed entries as `&[u8]` slices. Owns nothing.
-    pub fn iter_slices(&self) -> SmallSetIter<'_> {
-        SmallSetIter { buf: &self.buf[..self.used as usize], cursor: 0 }
-    }
-
-    /// Alias for [`Self::iter_slices`] — matches the `iter` shape used by
-    /// other collection types in this crate.
     pub fn iter(&self) -> SmallSetIter<'_> {
-        self.iter_slices()
+        SmallSetIter { buf: &self.buf[..self.used as usize], cursor: 0 }
     }
 
     /// Try to append `member`. See [`AddResult`].
@@ -205,6 +211,21 @@ impl SmallSetData {
 }
 
 /// Iterator over [`SmallSetData`] members as `&[u8]` slices.
+///
+/// ```
+/// use kevy_store::{Store, Value};
+/// let mut s = Store::new();
+/// s.sadd(b"s", &[b"x".as_slice(), b"y"])?;
+/// let mut members = Vec::new();
+/// s.snapshot_each(|_, v, _| {
+///     if let Value::SmallSetInline(m) = v {
+///         members = m.iter().map(<[u8]>::to_vec).collect();
+///     }
+/// });
+/// members.sort();
+/// assert_eq!(members, [b"x".to_vec(), b"y".to_vec()]);
+/// # Ok::<(), kevy_store::StoreError>(())
+/// ```
 #[derive(Debug)]
 pub struct SmallSetIter<'a> {
     buf: &'a [u8],
@@ -230,7 +251,7 @@ impl<'a> Iterator for SmallSetIter<'a> {
 /// Used when an upgrade is forced by an oversized member or full buffer.
 pub(crate) fn promote(inline: &SmallSetData) -> crate::value::SetData {
     let mut s = crate::value::SetData::with_capacity(inline.len().max(1));
-    for m in inline.iter_slices() {
+    for m in inline.iter() {
         s.insert(SmallBytes::from_slice(m));
     }
     s
@@ -271,7 +292,7 @@ mod tests {
         assert!(matches!(s.try_add(b"b"), AddResult::Added));
         assert!(matches!(s.try_add(b"a"), AddResult::AlreadyPresent));
         assert_eq!(s.len(), 2);
-        let v: Vec<&[u8]> = s.iter_slices().collect();
+        let v: Vec<&[u8]> = s.iter().collect();
         assert_eq!(v, vec![b"a".as_slice(), b"b".as_slice()]);
     }
 
@@ -304,7 +325,7 @@ mod tests {
         assert!(s.contains(b"aa"));
         assert!(!s.contains(b"bbb"));
         assert!(s.contains(b"cc"));
-        let v: Vec<&[u8]> = s.iter_slices().collect();
+        let v: Vec<&[u8]> = s.iter().collect();
         assert_eq!(v, vec![b"aa".as_slice(), b"cc".as_slice()]);
     }
 

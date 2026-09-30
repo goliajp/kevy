@@ -39,21 +39,17 @@ fn with_clauses<R>(
     ) -> R,
 ) -> Result<R, Vec<u8>> {
     let tests = boxed_preds(spec, &q.filters, now)?;
-    let filter: Vec<kevy_text::Filter> = tests
-        .iter()
-        .map(|(field, test)| kevy_text::Filter { field: *field, test: test.as_ref() })
-        .collect();
+    let filter: Vec<kevy_text::Filter> =
+        tests.iter().map(|(field, test)| kevy_text::Filter::new(*field, test.as_ref())).collect();
     let grouped = distinct_field(spec, &q.distinct)?;
     let dkey = grouped.map(|(_, ty)| move |raw: &[u8]| kevy_index::order_key(ty, raw));
     let distinct =
-        grouped.zip(dkey.as_ref()).map(|((field, _), k)| kevy_text::Distinct { field, key: k });
+        grouped.zip(dkey.as_ref()).map(|((field, _), k)| kevy_text::Distinct::new(field, k));
     let sorted = sort_field(spec, &q.sort)?;
     let key = sorted.map(|(_, _, ty)| move |raw: &[u8]| kevy_index::order_key(ty, raw));
-    let sort = sorted.zip(key.as_ref()).map(|((field, desc, _), k)| kevy_text::Sort {
-        field,
-        desc,
-        key: k,
-    });
+    let sort = sorted
+        .zip(key.as_ref())
+        .map(|((field, order, _), k)| kevy_text::Sort::new(field, k).with_order(order));
     let counted = facet_fields(spec, &q.facets)?;
     let fkeys: Vec<_> = counted
         .iter()
@@ -65,7 +61,7 @@ fn with_clauses<R>(
     let facets: Vec<kevy_text::Facet> = counted
         .iter()
         .zip(&fkeys)
-        .map(|((field, _), k)| kevy_text::Facet { field: *field, key: k })
+        .map(|((field, _), k)| kevy_text::Facet::new(*field, k))
         .collect();
     Ok(f(&filter, sort, distinct, &facets))
 }
@@ -88,14 +84,13 @@ pub(super) fn scored_hits(
     let grouped = distinct_field(spec, &q.distinct)?;
     let now = (kevy_store::now_unix_ms() / 1000) as i64;
     with_clauses(spec, q, now, |filter, sort, distinct, facets| {
-        let opts = kevy_text::QueryOpts {
-            stats: Some(stats),
-            typo: q.typo,
-            fields: &scope,
-            filter,
-            sort,
-            distinct,
-        };
+        let mut opts = kevy_text::QueryOpts::default()
+            .with_stats(stats)
+            .with_typo(q.typo)
+            .with_fields(&scope)
+            .with_filter(filter);
+        opts.sort = sort;
+        opts.distinct = distinct;
         let r = ts.matches_query_faceted(&q.text, q.limit + q.offset, opts, facets);
         let (mut hits, mut counts) = (r.hits, r.facets);
         let cold_vals = cold_seam::merge_cold_page(
@@ -129,7 +124,7 @@ pub(super) fn order_keys(
             ts.stored_value(&h.key, f)
                 .map(<[u8]>::to_vec)
                 .or_else(|| cold_vals.get(&h.key)?.get(f)?.clone())
-                .and_then(|raw| kevy_index::order_key(spec.values[f].ty, &raw))
+                .and_then(|raw| kevy_index::order_key(spec.values()[f].ty, &raw))
         })
         .collect()
 }
@@ -159,7 +154,7 @@ pub(super) fn hit_highlight(
     spans
         .into_iter()
         .filter_map(|(fi, spans)| {
-            let name = spec.fields.get(fi)?.name.clone();
+            let name = spec.fields().get(fi)?.name.clone();
             if !want.is_empty() && !want.contains(&name) {
                 return None;
             }

@@ -16,7 +16,9 @@ impl<C: Commands> Shard<C> {
     // (Agg, Part) pairing + the finalize dispatch over orchestrator aggs.
     pub(crate) fn fold(&mut self, conn_id: u64, seq: u64, part: Part) {
         let watch_agg: Option<Agg> = {
-            let Some(conn) = self.conns.get_mut(&conn_id) else {
+            let Some(conn) =
+                crate::conn::conn_at(&mut self.conns, &mut self.conn_slot_hint, conn_id)
+            else {
                 return;
             };
             if seq < conn.next_emit {
@@ -102,7 +104,11 @@ impl<C: Commands> Shard<C> {
                 }
                 // Cross-shard XREAD gather: drop each stream's element into
                 // its request-order slot.
-                (Agg::XReadGather { slots }, Part::XReadElement { index, element }) => {
+                (Agg::XReadGather { slots }, Part::XReadElement { index, element })
+                | (
+                    Agg::XReadGroupCheck { refusals: slots, .. },
+                    Part::XReadElement { index, element },
+                ) => {
                     if let Some(slot) = slots.get_mut(index as usize) {
                         *slot = element;
                     }
@@ -161,6 +167,7 @@ impl<C: Commands> Shard<C> {
                         | Agg::GeoStore { .. }
                         | Agg::ExtensionGather { .. }
                         | Agg::ScanPage { .. }
+                        | Agg::XReadGroupCheck { .. }
                 ) {
                     Some(agg)
                 } else {
@@ -184,10 +191,17 @@ impl<C: Commands> Shard<C> {
                 Agg::ZStoreGather { .. } => self.finalize_zstore_agg(conn_id, seq, agg),
                 Agg::GeoStore { .. } => self.finalize_geostore_agg(conn_id, seq, agg),
                 Agg::ScanPage { .. } => self.finalize_scan_agg(conn_id, seq, agg),
+                Agg::XReadGroupCheck { refusals, reads } => {
+                    self.finalize_xread_check(conn_id, seq, refusals, reads);
+                }
                 Agg::ExtensionGather { argv, chunks } => {
                     let proto =
                         self.conns.get(&conn_id).map_or(kevy_resp::RespVersion::V2, |c| c.proto);
-                    match self.commands.extension_reduce(&argv, chunks, proto) {
+                    let reduced = self.commands.extension_reduce(&argv, chunks, proto);
+                    if crate::propagation::is_armed() {
+                        self.record_armed(&kevy_resp::Argv::from(argv.to_vec()));
+                    }
+                    match reduced {
                         crate::ExtensionReduced::Reply(reply) => {
                             self.fill_extension_slot(conn_id, seq, reply);
                         }

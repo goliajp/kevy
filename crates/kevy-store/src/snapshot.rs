@@ -19,6 +19,20 @@ use crate::value::Value;
 use crate::{SmallBytes, Store, now_ns, remaining_ms};
 
 /// A frozen, `Send` view of one store's live entries at a single instant.
+///
+/// ```
+/// use kevy_store::{SetCondition, Store};
+/// let mut s = Store::new();
+/// s.set(b"k", b"before".to_vec(), None, SetCondition::Always);
+/// let view = s.collect_snapshot();
+/// // later writes do not reach the frozen view
+/// s.set(b"k", b"after".to_vec(), None, SetCondition::Always);
+/// s.set(b"new", b"1".to_vec(), None, SetCondition::Always);
+/// assert_eq!(view.len(), 1);
+/// let mut seen = Vec::new();
+/// view.each(|k, v, _| seen.push((k.to_vec(), v.type_name())));
+/// assert_eq!(seen, [(b"k".to_vec(), "string")]);
+/// ```
 #[derive(Debug)]
 pub struct SnapshotView {
     entries: Vec<(SmallBytes, Value, Option<u64>)>,
@@ -92,7 +106,7 @@ impl SnapshotView {
                 .expect("segrows: pinned segment read failed — refused, not healed")
                 .expect("segrows: stub points at a record the segment does not hold");
             return Some(
-                crate::tier_codec::decode(c.type_tag, payload)
+                crate::tier_codec::decode(c.type_tag, payload, &[])
                     .expect("segrows: cold row decode failed — process bug"),
             );
         }
@@ -105,7 +119,7 @@ impl SnapshotView {
             .read(c.vref())
             .expect("tier: pinned vlog read failed — per-boot spill file, this is a process bug");
         Some(
-            crate::tier_codec::decode(c.type_tag, payload)
+            crate::tier_codec::decode(c.type_tag, payload, &[])
                 .expect("tier: cold record decode failed — process bug"),
         )
     }
@@ -140,7 +154,7 @@ impl Store {
     pub fn collect_snapshot(&self) -> SnapshotView {
         let now = now_ns();
         let mut entries = Vec::with_capacity(self.map.len());
-        for (k, e) in &self.map {
+        for (k, e) in self.map.iter() {
             if e.is_expired_at(now) {
                 continue;
             }
