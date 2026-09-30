@@ -62,7 +62,9 @@ NEAR = re.compile(r"wasm|WebAssembly|gzip|gzipped|packed|回線|ブラウザ|浏
 # build ("655 KB IoT" sits on a line that also says "the browser"), and it
 # is a different artifact with its own budget. Naming it excludes the claim
 # rather than letting this gate rewrite a number it does not measure.
-NOT_OURS = re.compile(r"IoT|no_std|chip|チップ|芯片|core tier|`core`", re.I)
+# A threshold written as a formula (the browser log compacts past
+# `max(512 KB, ...)`) is a setting, not the size of anything.
+NOT_OURS = re.compile(r"IoT|no_std|chip|チップ|芯片|core tier|`core`|max\(", re.I)
 
 TOLERANCE = 0.10
 PACKED = re.compile(r"packed|パック|打包", re.I)
