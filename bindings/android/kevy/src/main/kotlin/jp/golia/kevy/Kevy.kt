@@ -2,7 +2,7 @@
 //
 // The typed methods mirror the other kevy packages (set/get/del/incrBy/…)
 // and throw KevyException on a protocol error — a typed call has one
-// meaning, so "-WRONGTYPE" is a failure. cmd() reaches all 184 verbs and
+// meaning, so "-WRONGTYPE" is a failure. cmd() reaches every verb the engine answers and
 // returns protocol errors as values (KevyValue.Error).
 //
 //   val db = KevyDB.open(context.filesDir.resolve("kevy").path)

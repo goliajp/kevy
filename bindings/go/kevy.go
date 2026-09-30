@@ -152,7 +152,7 @@ func (d *DB) Cmd(args ...string) (Reply, error) {
 }
 
 // CmdBytes is Cmd for binary-safe arguments — the universal command path
-// through which every one of kevy's ~184 verbs is reachable.
+// through which every verb the engine answers is reachable.
 func (d *DB) CmdBytes(args ...[]byte) (Reply, error) {
 	if d.p == nil {
 		return Reply{}, errors.New("kevy: closed handle")
