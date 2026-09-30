@@ -985,9 +985,24 @@ defect.
   A read that asks to `BLOCK` is refused with `ERR the embedded engine
   cannot block; call without BLOCK`, and an `XREAD` / `XREADGROUP` or a
   geo store whose keys live on different shards with `CROSSSLOT`. The new
-  `streams-geo` feature of kevy-embedded is on by default; the wasm
-  package leaves it out, where it would add about an eighth to the
-  module.
+  `streams-geo` feature of kevy-embedded is on by default.
+
+- **The browser package has streams and geo, and its `cmd` writes
+  persist.** `@goliapkg/kevy` is built with `streams-geo`, so `cmd`
+  reaches every stream and geo command above. A read with `BLOCK`
+  answers the same `ERR the embedded engine cannot block; call without
+  BLOCK`: a tab has one thread, and parking it would freeze the page, so
+  read without `BLOCK` on a timer or when a pub/sub message announces an
+  entry. Writes through `cmd` now reach the persistence pump as the
+  frames a native AOF would hold (an `XADD *` with the id it chose, a
+  group read with the deliveries it made), so a stream and its consumer
+  groups survive a reload from OPFS or IndexedDB. Until now no write
+  through `cmd` reached the browser's log, and all of them were lost at
+  the next `open()` unless a compaction had run. The module is 602 KB
+  gzipped, up from 539 KB. kevy-embedded gains an off-by-default
+  `host-log` feature for this (`Store::dispatch_argv_recorded`, the
+  frames a command's write records, for a host that keeps the log
+  itself).
 
 - **`INFO # Tiering` reports where compressed value bytes went.** New
   fields `vlog_raw_bytes`, `vlog_payload_bytes`, `vlog_frame_header_bytes`

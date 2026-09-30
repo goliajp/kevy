@@ -53,8 +53,8 @@ fn log_argv(aof: &mut Option<Aof>, parts: &[&[u8]]) -> KevyResult<()> {
 }
 
 /// Whether a write on this shard is recorded anywhere a frame of it
-/// would reach: the AOF, the embed-as-writer replication source, or the
-/// change feed.
+/// would reach: the AOF, the embed-as-writer replication source, the
+/// change feed, or a recorded dispatch's caller.
 pub(crate) fn records_writes(inner: &Inner) -> bool {
     #[cfg(feature = "persist")]
     if inner.aof.is_some() {
@@ -62,6 +62,10 @@ pub(crate) fn records_writes(inner: &Inner) -> bool {
     }
     #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
     if inner.writer_source.is_some() || inner.feed.is_some() {
+        return true;
+    }
+    #[cfg(feature = "host-log")]
+    if crate::host_log::active() {
         return true;
     }
     let _ = inner;
@@ -78,6 +82,8 @@ pub(crate) fn records_writes(inner: &Inner) -> bool {
 pub(crate) fn commit_write(inner: &mut Inner, parts: &[&[u8]]) -> KevyResult<()> {
     #[cfg(feature = "persist")]
     log_argv(&mut inner.aof, parts)?;
+    #[cfg(feature = "host-log")]
+    crate::host_log::push(parts);
     #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
     if let Some(src) = &inner.writer_source {
         crate::replica_source::push_into(src, parts);

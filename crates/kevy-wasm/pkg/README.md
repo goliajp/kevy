@@ -1,8 +1,8 @@
 # @goliapkg/kevy
 
-[kevy](https://github.com/goliajp/kevy) in the browser: a Redis-compatible engine (values, TTLs, counters, pub/sub) compiled to WebAssembly, with real persistence (OPFS, IndexedDB fallback) and cross-tab pub/sub. Zero dependencies — a bare wasm module plus a hand-written ES-module loader.
+[kevy](https://github.com/goliajp/kevy) in the browser: a Redis-compatible engine (values, TTLs, counters, pub/sub, streams with consumer groups, geo) compiled to WebAssembly, with real persistence (OPFS, IndexedDB fallback) and cross-tab pub/sub. Zero dependencies — a bare wasm module plus a hand-written ES-module loader.
 
-The build carries every feature a browser can host, so `cmd` also reaches the rest of the data layer — `IDX.*` (secondary indexes, full-text, vector search), `VIEW.*` and `TABLE.*`. What is left out needs something the browser cannot provide: replication a network peer, the RESP listener a TCP socket, tiering a disk directory. Streams and geo, which the native embedded engine serves since 7.0, are not in this build; transactions and scripting are outside the embedded engine's verb surface on every platform.
+The build carries every feature a browser can host, so `cmd` also reaches the rest of the data layer — `IDX.*` (secondary indexes, full-text, vector search), `VIEW.*` and `TABLE.*` — and the stream (`X*`) and geo (`GEO*`) commands. What is left out needs something the browser cannot provide: replication a network peer, the RESP listener a TCP socket, tiering a disk directory. Transactions and scripting are outside the embedded engine's verb surface on every platform. Nothing waits: `XREAD` / `XREADGROUP` with `BLOCK` answer an error (a tab has one thread, and parking it would freeze the page), so read without `BLOCK` on a timer or when a pub/sub message says there is something new. Writes through `cmd` persist like the typed ones, so a stream and its consumer groups survive a reload.
 
 ```js
 import { open } from "@goliapkg/kevy";

@@ -47,6 +47,10 @@ SOURCES = [
     # list stopped at the English chapter.
     "docs/zh/wasm.md",
     "docs/ja/wasm.md",
+    # The translated READMEs quoted 231 KB packed and 218 KB gzipped for a
+    # 602 KB module, because this list named only the English one.
+    "README.zh-CN.md",
+    "README.ja.md",
 ]
 
 # A claim is "<n> KB" within a few words of something naming the browser

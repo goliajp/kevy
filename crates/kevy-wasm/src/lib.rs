@@ -82,6 +82,9 @@ mod abi_kv_multi;
 pub mod abi_pubsub;
 
 #[cfg(test)]
+#[path = "abi_stream_tests.rs"]
+mod stream_tests;
+#[cfg(test)]
 #[path = "abi_tests.rs"]
 mod tests;
 
