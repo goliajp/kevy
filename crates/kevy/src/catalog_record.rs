@@ -81,7 +81,10 @@ fn frame(state: &RuntimeState, at: (u64, u64)) -> Vec<Vec<u8>> {
 fn recorded<T>(state: &RuntimeState, silent_if_unchanged: bool, run: impl FnOnce() -> T) -> T {
     let before = state.catalogs.generation();
     let out = run();
-    if kevy_rt::applying_record() {
+    // a replica's catalog moves only by its primary's frames: a read's
+    // reduce sees one land on another shard as a change, and a version
+    // minted for it here would shadow the primary's frame of that number
+    if kevy_rt::applying_record() || state.replication.is_replica() {
         return out;
     }
     // another shard's change moves the generation too; this one then
@@ -268,4 +271,49 @@ fn import(
     crate::cmd_index_install::fit_partitions(&mut icat, state.nshards());
     install(state, icat, vcat, tcat);
     record(&Argv::from(next_frame(state)))
+}
+
+#[cfg(test)]
+mod tests {
+    use kevy_index::{IndexKind, IndexSpec, ValType};
+
+    use super::*;
+
+    /// The primary's frame at `version` of lineage 7, declaring `names`.
+    fn primarys_frame(version: u64, names: &[&[u8]]) -> Argv {
+        let mut cat = Catalog::new();
+        for name in names {
+            let spec =
+                IndexSpec::builder(name.to_vec(), b"u:".to_vec(), IndexKind::Range, ValType::I64)
+                    .with_field(b"age".to_vec())
+                    .build()
+                    .unwrap();
+            cat.create(spec).unwrap();
+        }
+        let text = cat.to_sidecar().into_bytes();
+        let verb = kevy_resp::ops_table::CATALOG.as_bytes().to_vec();
+        Argv::from(vec![
+            verb,
+            b"7".to_vec(),
+            version.to_string().into_bytes(),
+            text,
+            vec![],
+            vec![],
+        ])
+    }
+
+    #[test]
+    fn a_replicas_read_leaves_its_primarys_next_frame_to_apply() {
+        let cfg = std::sync::Arc::new(kevy_config::Config::default());
+        let state = RuntimeState::new(cfg, std::path::PathBuf::new(), 2).unwrap();
+        state.replication.force_replica_flag();
+        let mut out = Vec::new();
+        // a read's reduce on one shard while another applies frame 1
+        recorded(&state, false, || apply(&state, &primarys_frame(1, &[b"a"]), &mut out));
+        apply(&state, &primarys_frame(2, &[b"a", b"b"]), &mut out);
+        let index = state.catalogs.index().unwrap();
+        let held: Vec<&[u8]> = index.iter().map(|(s, _)| s.name()).collect();
+        assert_eq!(held, [&b"a"[..], b"b"]);
+        assert_eq!(*state.catalogs.record.lock(), (7, 2));
+    }
 }
