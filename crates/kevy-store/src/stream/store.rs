@@ -36,6 +36,29 @@ use alloc::sync::Arc;
 /// ```
 pub type EntryBatch = Vec<(StreamId, Vec<(Vec<u8>, Vec<u8>)>)>;
 
+/// What a group read hands back: each entry with its fields, or with none
+/// when a read of a consumer's history names an entry the stream no
+/// longer holds.
+///
+/// ```
+/// use kevy_store::{AckMode, GroupCreateMode, MissingStream, ReadGroupId, Store, StreamId, XAddIdSpec};
+/// let mut s = Store::new();
+/// for ms in 1..=2 {
+///     let f = vec![(b"f".to_vec(), b"v".to_vec())];
+///     s.xadd(b"s", XAddIdSpec::Explicit(StreamId::new(ms, 0)), f, MissingStream::Create, 0)?;
+/// }
+/// s.xgroup_create(b"s", b"g", GroupCreateMode::AtId(StreamId::MIN), MissingStream::Refuse)?;
+/// s.xreadgroup(b"s", b"g", b"c", ReadGroupId::New, None, AckMode::Pending, 10)?;
+/// s.xdel(b"s", &[StreamId::new(1, 0)])?;
+/// let history = ReadGroupId::ReplayAfter(StreamId::MIN);
+/// let got: GroupBatch = s.xreadgroup(b"s", b"g", b"c", history, None, AckMode::Pending, 20)?;
+/// assert_eq!(got[0], (StreamId::new(1, 0), None), "deleted, still pending");
+/// assert!(got[1].1.is_some());
+/// # use kevy_store::GroupBatch;
+/// # Ok::<(), kevy_store::StoreError>(())
+/// ```
+pub type GroupBatch = Vec<(StreamId, Option<Vec<(Vec<u8>, Vec<u8>)>>)>;
+
 impl Store {
     pub(super) fn stream_mut(
         &mut self,
@@ -195,40 +218,17 @@ impl Store {
 
     /// `XTRIM key MAXLEN n`. Returns number removed.
     pub fn xtrim_maxlen(&mut self, key: &[u8], maxlen: u64) -> Result<u64, StoreError> {
-        let n;
-        {
-            let Some(s) = self.stream_mut(key, false)? else {
-                return Ok(0);
-            };
-            n = s.trim_maxlen(maxlen as usize);
-        }
-        if n > 0 {
-            self.bump_if_watched(key);
-            self.reweigh_entry(key);
-        }
-        Ok(n as u64)
+        self.xtrim(key, super::TrimTo::MaxLen(maxlen), super::TrimMode::Exact)
     }
 
     /// `XTRIM key MINID id`. Returns number removed.
     pub fn xtrim_minid(&mut self, key: &[u8], minid: StreamId) -> Result<u64, StoreError> {
-        let n;
-        {
-            let Some(s) = self.stream_mut(key, false)? else {
-                return Ok(0);
-            };
-            n = s.trim_minid(minid);
-        }
-        if n > 0 {
-            self.bump_if_watched(key);
-            self.reweigh_entry(key);
-        }
-        Ok(n as u64)
+        self.xtrim(key, super::TrimTo::MinId(minid), super::TrimMode::Exact)
     }
 
     /// `XSETID key last-id [ENTRIESADDED n] [MAXDELETEDID id]`. Returns
-    /// `NoSuchKey` for a missing key (dispatch maps it to Redis's
-    /// "requires the key to exist" wording), `OutOfRange` when `last_id`
-    /// is below the stream's top entry.
+    /// `NoSuchKey` for a missing key (answered as `ERR no such key`),
+    /// `OutOfRange` when `last_id` is below the stream's top entry.
     pub fn xsetid(
         &mut self,
         key: &[u8],
@@ -365,7 +365,7 @@ impl Store {
         count: Option<usize>,
         ack: AckMode,
         now_ms: u64,
-    ) -> Result<EntryBatch, StoreError> {
+    ) -> Result<super::GroupBatch, StoreError> {
         let result;
         {
             let Some(s) = self.stream_mut(key, false)? else {

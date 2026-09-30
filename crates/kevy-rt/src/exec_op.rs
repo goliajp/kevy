@@ -421,6 +421,10 @@ impl<C: Commands> Shard<C> {
                 self.slowlog.buf.clear();
                 Part::Ok
             }
+            Op::XReadCheck { index, argv } => Part::XReadElement {
+                index,
+                element: self.commands.xreadgroup_refusal(&mut self.store, &argv),
+            },
             Op::XReadOne { index, argv, write } => {
                 // Single-stream non-blocking XREAD/XREADGROUP on the
                 // stream's owning shard (`$` resolves to this shard's

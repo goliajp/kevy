@@ -1,17 +1,19 @@
-//! A consumer group's read counter and its consumers' last active times,
-//! carried in a snapshot beside the stream they belong to.
+//! A consumer group's read counter, its consumers' last active times, and
+//! the delivery counts too large for the stream record, carried in a
+//! snapshot beside the stream they belong to.
 //!
-//! The stream record's group section predates both, so each group that
-//! has either travels as one `OP_GROUP_READS` record after `OP_EOF` (and
-//! after the aux frame, when there is one), where a reader from before the
-//! record stops: `[key][group][known u8][entries_read u64 LE if known]
-//! [n u32 LE][consumer, active_ms u64 LE]*`. A reader from before it loads
-//! the groups with the counter unknown and no consumer active, which is
-//! what those readers answered anyway.
+//! The stream record's group section predates the first two and holds a
+//! delivery count in 32 bits, so each group that needs any of these
+//! travels as one `OP_GROUP_READS` record after `OP_EOF` (and after the
+//! aux frame, when there is one), where a reader from before the record
+//! stops: `[key][group][known u8][entries_read u64 LE if known]
+//! [n u32 LE][consumer, active_ms u64 LE]*[m u32 LE][ms u64 LE, seq u64 LE,
+//! count u64 LE]*`. A reader from before it loads the groups with the
+//! counter unknown, no consumer active and such counts at `u32::MAX`.
 
 use std::io::{self, Read, Write};
 
-use kevy_store::{Store, StreamData, Value};
+use kevy_store::{Store, StreamData, StreamId, Value};
 
 use crate::snapshot_fmt::{OP_GROUP_READS, read_bytes, read_u8, read_u32, read_u64, write_bytes};
 
@@ -21,6 +23,8 @@ pub(crate) struct GroupReads {
     group: Vec<u8>,
     entries_read: Option<u64>,
     active: Vec<(Vec<u8>, u64)>,
+    /// Pending entries whose delivery count passes `u32::MAX`.
+    wide: Vec<(StreamId, u64)>,
 }
 
 /// The records `value` at `key` needs: none unless it is a stream with a
@@ -36,7 +40,12 @@ fn collect_stream(key: &[u8], s: &StreamData, into: &mut Vec<GroupReads>) {
             .consumers()
             .filter_map(|(c, cs)| cs.last_active_ms().map(|at| (c.to_vec(), at)))
             .collect();
-        if g.entries_read().is_none() && active.is_empty() {
+        let wide: Vec<(StreamId, u64)> = g
+            .pending_range(..)
+            .filter(|(_, p)| p.delivery_count > u64::from(u32::MAX))
+            .map(|(id, p)| (id, p.delivery_count))
+            .collect();
+        if g.entries_read().is_none() && active.is_empty() && wide.is_empty() {
             continue;
         }
         into.push(GroupReads {
@@ -44,6 +53,7 @@ fn collect_stream(key: &[u8], s: &StreamData, into: &mut Vec<GroupReads>) {
             group: name.to_vec(),
             entries_read: g.entries_read(),
             active,
+            wide,
         });
     }
 }
@@ -63,6 +73,12 @@ pub(crate) fn write<W: Write>(w: &mut W, r: &GroupReads) -> io::Result<()> {
     for (consumer, at) in &r.active {
         write_bytes(w, consumer)?;
         w.write_all(&at.to_le_bytes())?;
+    }
+    w.write_all(&(r.wide.len() as u32).to_le_bytes())?;
+    for (id, count) in &r.wide {
+        w.write_all(&id.ms.to_le_bytes())?;
+        w.write_all(&id.seq.to_le_bytes())?;
+        w.write_all(&count.to_le_bytes())?;
     }
     Ok(())
 }
@@ -86,6 +102,12 @@ pub(crate) fn read_and_apply<R: Read>(
         let consumer = read_bytes(r)?;
         active.push((consumer, read_u64(r)?));
     }
+    let m = read_u32(r)? as usize;
+    let mut wide = Vec::with_capacity(m.min(1024));
+    for _ in 0..m {
+        let id = StreamId::new(read_u64(r)?, read_u64(r)?);
+        wide.push((id, read_u64(r)?));
+    }
     if !keep(&key) {
         return Ok(());
     }
@@ -97,12 +119,17 @@ pub(crate) fn read_and_apply<R: Read>(
                 store.xgroup_consumer_active(&key, &group, &consumer, Some(at)).map(drop)
             })
         })
+        .and_then(|_| {
+            wide.into_iter().try_for_each(|(id, count)| {
+                store.xgroup_set_delivery_count(&key, &group, id, count).map(drop)
+            })
+        })
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.as_wire()))
 }
 
 #[cfg(test)]
 mod tests {
-    use kevy_store::{AckMode, GroupCreateMode, MissingStream, ReadGroupId, StreamId, XAddIdSpec};
+    use kevy_store::{AckMode, GroupCreateMode, MissingStream, ReadGroupId, XAddIdSpec};
 
     use super::*;
 

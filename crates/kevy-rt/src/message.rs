@@ -253,6 +253,15 @@ pub(crate) enum Op {
         argv: Argv,
         write: bool,
     },
+    /// The check an `XREADGROUP` split across shards runs on each
+    /// stream's shard before any is read: `argv` is the same
+    /// single-stream rewrite [`Op::XReadOne`] would run, only checked
+    /// (`Commands::xreadgroup_refusal`), never read. Reply:
+    /// [`Part::XReadElement`] carrying the refusal, or no element.
+    XReadCheck {
+        index: u32,
+        argv: Argv,
+    },
 }
 
 /// A RESP reply fragment with a 30-byte inline arm. The forwarded-dispatch

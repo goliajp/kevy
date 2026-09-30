@@ -127,22 +127,32 @@ pub fn parse_xadd_id(s: &[u8]) -> Result<XAddIdSpec, StreamIdError> {
     if s == b"*" {
         return Ok(XAddIdSpec::AutoAll);
     }
-    let txt = core::str::from_utf8(s).map_err(|_| StreamIdError::Invalid)?;
-    match txt.split_once('-') {
-        None => {
-            let ms = txt.parse::<u64>().map_err(|_| StreamIdError::Invalid)?;
-            Ok(XAddIdSpec::Explicit(StreamId::new(ms, 0)))
-        }
-        Some((ms_s, seq_s)) => {
-            let ms = ms_s.parse::<u64>().map_err(|_| StreamIdError::Invalid)?;
-            if seq_s == "*" {
-                Ok(XAddIdSpec::AutoSeq(ms))
-            } else {
-                let seq = seq_s.parse::<u64>().map_err(|_| StreamIdError::Invalid)?;
-                Ok(XAddIdSpec::Explicit(StreamId::new(ms, seq)))
+    match s.iter().position(|&b| b == b'-') {
+        None => Ok(XAddIdSpec::Explicit(StreamId::new(id_part(s)?, 0))),
+        Some(dash) => {
+            let ms = id_part(&s[..dash])?;
+            let seq_s = &s[dash + 1..];
+            if seq_s == b"*" {
+                return Ok(XAddIdSpec::AutoSeq(ms));
             }
+            Ok(XAddIdSpec::Explicit(StreamId::new(ms, id_part(seq_s)?)))
         }
     }
+}
+
+/// One number of an ID, read as a Redis server reads it: leading white
+/// space and a `+` are allowed, then only digits, at least one, within
+/// `u64`.
+fn id_part(s: &[u8]) -> Result<u64, StreamIdError> {
+    let start = s.iter().position(|b| !b" \t\n\x0b\x0c\r".contains(b)).unwrap_or(s.len());
+    let digits = s[start..].strip_prefix(b"+").unwrap_or(&s[start..]);
+    if digits.is_empty() || !digits.iter().all(u8::is_ascii_digit) {
+        return Err(StreamIdError::Invalid);
+    }
+    digits
+        .iter()
+        .try_fold(0u64, |n, d| n.checked_mul(10)?.checked_add(u64::from(d - b'0')))
+        .ok_or(StreamIdError::Invalid)
 }
 
 /// Parse an XRANGE `start` ID. Accepts `-` (= [`StreamId::MIN`]), bare
@@ -155,10 +165,11 @@ pub fn parse_xadd_id(s: &[u8]) -> Result<XAddIdSpec, StreamIdError> {
 /// # Ok::<(), kevy_store::StreamIdError>(())
 /// ```
 pub fn parse_range_start(s: &[u8]) -> Result<StreamId, StreamIdError> {
-    if s == b"-" {
-        return Ok(StreamId::MIN);
+    match s {
+        b"-" => Ok(StreamId::MIN),
+        b"+" => Ok(StreamId::MAX),
+        _ => parse_explicit_id(s),
     }
-    parse_explicit_id(s)
 }
 
 /// Parse an XRANGE `end` ID. Accepts `+` (= [`StreamId::MAX`]), bare `ms`
@@ -172,10 +183,11 @@ pub fn parse_range_start(s: &[u8]) -> Result<StreamId, StreamIdError> {
 /// # Ok::<(), kevy_store::StreamIdError>(())
 /// ```
 pub fn parse_range_end(s: &[u8]) -> Result<StreamId, StreamIdError> {
-    if s == b"+" {
-        return Ok(StreamId::MAX);
+    match s {
+        b"+" => Ok(StreamId::MAX),
+        b"-" => Ok(StreamId::MIN),
+        _ => parse_id(s, u64::MAX),
     }
-    parse_id(s, u64::MAX)
 }
 
 /// Parse a fully-explicit ID for XREAD's per-stream "last-seen" arg
@@ -196,13 +208,10 @@ pub fn parse_explicit_id(s: &[u8]) -> Result<StreamId, StreamIdError> {
 
 /// `<ms>[-<seq>]`, with `bare_seq` standing in for a missing `-<seq>`.
 fn parse_id(s: &[u8], bare_seq: u64) -> Result<StreamId, StreamIdError> {
-    let txt = core::str::from_utf8(s).map_err(|_| StreamIdError::Invalid)?;
-    let (ms_s, seq) = match txt.split_once('-') {
-        Some((ms_s, seq_s)) => (ms_s, seq_s.parse::<u64>().map_err(|_| StreamIdError::Invalid)?),
-        None => (txt, bare_seq),
-    };
-    let ms = ms_s.parse::<u64>().map_err(|_| StreamIdError::Invalid)?;
-    Ok(StreamId::new(ms, seq))
+    match s.iter().position(|&b| b == b'-') {
+        Some(dash) => Ok(StreamId::new(id_part(&s[..dash])?, id_part(&s[dash + 1..])?)),
+        None => Ok(StreamId::new(id_part(s)?, bare_seq)),
+    }
 }
 
 /// Errors `parse_*_id` may emit. Distinct from `StoreError::NotInteger`

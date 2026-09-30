@@ -4,7 +4,7 @@
 //! (500-LOC house rule); `message` re-exports everything, so paths are
 //! unchanged. All crate-private.
 
-use crate::message::{Gathered, MultiOp, SmallReply, ZCombine};
+use crate::message::{Gathered, MultiOp, Op, SmallReply, ZCombine};
 use kevy_resp::{Argv, RespVersion};
 use std::collections::HashMap;
 
@@ -126,6 +126,15 @@ pub(crate) enum Agg {
     /// streams skipped (`*-1` if all empty), matching single-shard XREAD.
     XReadGather {
         slots: Vec<Option<Vec<u8>>>,
+    },
+    /// The first round of a cross-shard `XREADGROUP`: every stream's
+    /// [`Op::XReadCheck`] refusal lands in `refusals` by request index.
+    /// With none, `reads` (the [`Op::XReadOne`] legs) ship as an
+    /// [`Agg::XReadGather`]; otherwise the first refusal is the reply
+    /// and nothing is read.
+    XReadGroupCheck {
+        refusals: Vec<Option<Vec<u8>>>,
+        reads: Vec<(usize, Op)>,
     },
     /// `EXEC` pre-execution accumulator: a non-empty WATCH set fans
     /// `CheckWatch` out to every shard that owns a watched key. Each

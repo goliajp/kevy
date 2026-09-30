@@ -213,6 +213,10 @@ impl Commands for KevyCommands {
         crate::geo_store::geo_search(store, argv)
     }
 
+    fn xreadgroup_refusal(&self, store: &mut Store, argv: &kevy_resp::Argv) -> Option<Vec<u8>> {
+        kevy_verbs::cmd::xreadgroup_refusal(store, argv)
+    }
+
     fn extension_op(&self, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
         crate::commands_ext::op(&self.ctx(), store, argv)
     }

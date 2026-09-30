@@ -104,7 +104,11 @@ impl<C: Commands> Shard<C> {
                 }
                 // Cross-shard XREAD gather: drop each stream's element into
                 // its request-order slot.
-                (Agg::XReadGather { slots }, Part::XReadElement { index, element }) => {
+                (Agg::XReadGather { slots }, Part::XReadElement { index, element })
+                | (
+                    Agg::XReadGroupCheck { refusals: slots, .. },
+                    Part::XReadElement { index, element },
+                ) => {
                     if let Some(slot) = slots.get_mut(index as usize) {
                         *slot = element;
                     }
@@ -163,6 +167,7 @@ impl<C: Commands> Shard<C> {
                         | Agg::GeoStore { .. }
                         | Agg::ExtensionGather { .. }
                         | Agg::ScanPage { .. }
+                        | Agg::XReadGroupCheck { .. }
                 ) {
                     Some(agg)
                 } else {
@@ -186,6 +191,9 @@ impl<C: Commands> Shard<C> {
                 Agg::ZStoreGather { .. } => self.finalize_zstore_agg(conn_id, seq, agg),
                 Agg::GeoStore { .. } => self.finalize_geostore_agg(conn_id, seq, agg),
                 Agg::ScanPage { .. } => self.finalize_scan_agg(conn_id, seq, agg),
+                Agg::XReadGroupCheck { refusals, reads } => {
+                    self.finalize_xread_check(conn_id, seq, refusals, reads);
+                }
                 Agg::ExtensionGather { argv, chunks } => {
                     let proto =
                         self.conns.get(&conn_id).map_or(kevy_resp::RespVersion::V2, |c| c.proto);

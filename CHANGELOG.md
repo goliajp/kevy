@@ -428,6 +428,38 @@ defect.
   read or does not exist (the `NOGROUP` a read there gives), otherwise
   when an entry arrives, like the other blocking commands.
 
+- **`XRANGE`, `XREVRANGE` and `XPENDING` with a range that runs backwards
+  no longer stop the server.** `XRANGE s 3 2`, and an `XPENDING` whose
+  start is after its end, panicked the shard, and a release build, which
+  aborts on a panic, went down with it. They answer an empty list, as
+  valkey does. Affected since 1.4.0.
+
+- **`XADD` at the last possible ID is refused instead of going
+  backwards.** With a stream's last ID at the largest sequence of its
+  millisecond, an `XADD` with a generated ID (`*` or `<ms>-*`) wrapped the
+  sequence round in a release build and added an entry below the last
+  one. It now answers as valkey does: `*` takes the next millisecond,
+  `<ms>-*` is refused as not above the last entry, and with no ID left at
+  all both answer `ERR The stream has exhausted the last possible ID,
+  unable to add more items`. Affected since 1.4.0.
+
+- **A multi-stream `XREADGROUP` refused by one stream reads none.** With
+  the streams on different shards, a read that one stream refused (no
+  such group, a bad ID) had already read the others: their entries were
+  delivered, the group moved on and the consumer was made, and the client
+  saw only the error. Every stream is now checked on its own shard before
+  any is read, and the refusal is the first in the order the streams were
+  named. Affected since 1.14.0.
+
+- **An AOF rewrite keeps a pending entry whose stream entry is gone.** A
+  rewrite put each pending entry back with an `XCLAIM`, which cannot
+  claim an entry the stream no longer holds, so the rows of entries
+  deleted or trimmed while pending were dropped: after the rewrite and a
+  restart, `XPENDING` no longer listed them and `XAUTOCLAIM` no longer
+  reported them deleted. A snapshot kept them. The rewrite now writes
+  such a row as an internal `XINTERNAL.PENDING` record, which replay and
+  a replica apply and a client is refused. Affected since 1.15.0.
+
 - **`kevy-cluster-rw` sends every write to the primary.** Its own list of
   write commands had drifted from the server's: 21 commands the server
   counts as writes went to a replica, among them `GETEX`, `SETBIT`,
@@ -511,6 +543,74 @@ defect.
   read counter and each consumer's last active time survive a restart, an
   AOF rewrite, a snapshot and a replica, like the rest of the group.
   Where Redis 8.10 and valkey 9.1 disagree, kevy answers as valkey does.
+
+- **The rest of the stream commands answer as valkey does.** Measured
+  against valkey 9.1.2 and Redis 8.10.2 over the wire, both protocols,
+  every `X*` command and its options; where the two disagree, kevy answers
+  as valkey does.
+  - *A read of a consumer's history is a delivery.* `XREADGROUP … STREAMS
+    key <id>` raises the delivery count of each entry it hands back and
+    resets its delivery time, `NOACK` or not; an entry deleted since comes
+    back with no fields (`[id, nil]`, `_` under RESP3) and is not counted;
+    a stream whose history is empty is still listed, as `[key, []]`. A
+    new delivery of an entry that is still pending (after `XGROUP SETID`
+    moved the group back) starts its count again at 1, for its new owner.
+    The counts survive a restart, an AOF rewrite, a snapshot and a
+    replica. A count stops at 9223372036854775807 where valkey's wraps
+    round to a negative number.
+  - *`XREADGROUP` checks every stream before it reads any.* The key, the
+    group and the ID of each; a refused command reads nothing, also when
+    its streams live on different shards (see Other fixes). `+` and `$`
+    are refused with valkey's texts, and so is an unbalanced stream list.
+  - *`XREAD`* takes `+` for the last entry; a `COUNT` of 0 or less reads
+    everything; a negative `BLOCK` is refused (`ERR timeout is negative`),
+    and so is `>` outside `XREADGROUP`. A blocking `XREAD` or `XREADGROUP`
+    that times out answers `*-1` under RESP2, where it answered `$-1`.
+  - *RESP3.* `XREAD` and `XREADGROUP` answer a map of stream to entries,
+    and a missing reply is `_` in `XRANGE`, `XREVRANGE`, `XADD`,
+    `XPENDING`, `XCLAIM` and `XAUTOCLAIM`, on the server and through a
+    gather across shards.
+  - *`XAUTOCLAIM`* lists an entry deleted while pending in its third
+    element whatever the idle time asked for, drops it from the pending
+    list and counts it toward `COUNT`. A `COUNT` of 0 or less or above
+    2^43 is refused with `ERR COUNT must be > 0`; the start may be `-`,
+    `+` or an exclusive `(id`.
+  - *`XCLAIM`* takes `LASTID`, which moves the group's last delivered ID
+    up whether or not anything is claimed. A missing key or group answers
+    `NOGROUP No such key '<key>' or consumer group '<group>'` (it answered
+    `ERR no such key`), before the arguments are read. `IDLE`, `TIME` and
+    `RETRYCOUNT` refuse a bad value with valkey's texts; the later of
+    `IDLE` and `TIME` wins, a time in the future is now, and a negative
+    `RETRYCOUNT` is ignored.
+  - *`XADD` and `XTRIM`* take `LIMIT`, and an approximate trim (`~`)
+    removes only whole nodes of the stream's layout from the head, as
+    valkey's does: at most 100 entries or 4 KB of fields to a node, up to
+    `LIMIT` entries (10000 unless given, 0 for no limit). It trimmed
+    exactly. An approximate trim is recorded as the exact trim it made, so
+    a replay removes the same entries. The options are read, and refused,
+    in valkey's order and with its texts (a negative `MAXLEN` or `LIMIT`,
+    `LIMIT` without `~`, `MAXLEN` with `MINID`, an ID of `0-0`, a stream
+    at the last possible ID), and `XTRIM` refuses arguments it does not
+    take, which it ignored.
+  - *`XRANGE` and `XREVRANGE`* take exclusive bounds (`(id`); a `COUNT` of
+    0 or less answers nil on a stream (an empty array on a missing key),
+    and the last of repeated `COUNT`s wins.
+  - *`XPENDING`* takes exclusive bounds and `IDLE`; a negative count
+    answers an empty list, and a missing key or group answers valkey's
+    `NOGROUP` text.
+  - *`XACK`* on a missing key or group answers 0 before it reads the IDs.
+  - *`XSETID`* checks in valkey's order with its texts: a missing key is
+    `ERR no such key`, then `MAXDELETEDID` above the ID, the ID below the
+    stream's max deleted ID or its last entry, `ENTRIESADDED` below the
+    length; a negative `ENTRIESADDED` is refused, and a repeated option's
+    last value wins.
+  - *`XGROUP`* has `HELP`; `DESTROY`, `CREATECONSUMER` and `DELCONSUMER` on
+    a missing key are refused as valkey refuses them (they answered 0), and
+    an unknown subcommand gets valkey's text.
+  - *`XINFO STREAM`*'s `radix-tree-keys` and `radix-tree-nodes` are the
+    node and tree-node counts valkey's layout holds for the same history,
+    and `lag` on a stream a trim emptied is 0.
+  `bench/compat3.sh` drives the new cases against both servers.
 
 - **`used_memory` counts what the allocator holds, so it reads higher for
   the same data.** Measured on 250,000 keys of strings and hashes, 6.4.0

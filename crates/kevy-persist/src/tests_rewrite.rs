@@ -14,6 +14,10 @@ use std::time::Duration;
 /// canonical mutating verbs the rewriter emits back into Store mutations.
 /// Mirrors a subset of kevy's dispatch — enough for the verbs
 /// `dump_store_to_aof` actually emits.
+/// The clock a replay in these tests runs at, later than any time the
+/// sources were built at.
+const REPLAY_NOW_MS: u64 = 1 << 40;
+
 pub(crate) fn apply_for_test(store: &mut Store, args: &Argv) {
     let verb = args[0].to_ascii_uppercase();
     match verb.as_slice() {
@@ -125,6 +129,11 @@ pub(crate) fn apply_for_test(store: &mut Store, args: &Argv) {
                 store.xgroup_consumer_active(&args[1], &args[2], &args[3], Some(active)).unwrap();
             }
         }
+        b"XINTERNAL.PENDING" => {
+            let n = |i: usize| std::str::from_utf8(&args[i]).unwrap().parse().unwrap();
+            let id = kevy_store::parse_explicit_id(&args[6]).unwrap();
+            store.xgroup_restore_pending(&args[1], &args[2], &args[3], id, n(4), n(5)).unwrap();
+        }
         b"XCLAIM" => {
             // Fixed rewrite shape:
             // XCLAIM key g consumer 0 id TIME t RETRYCOUNT n FORCE JUSTID
@@ -139,7 +148,9 @@ pub(crate) fn apply_for_test(store: &mut Store, args: &Argv) {
                 .with_retrycount(std::str::from_utf8(&args[9]).unwrap().parse().unwrap())
                 .with_force(true)
                 .with_mode(kevy_store::ClaimMode::JustId);
-            store.xclaim(&args[1], &args[2], &args[3], &[id], &opts, 0).unwrap();
+            // a claim never dates a delivery later than the time it runs,
+            // and a replay runs after everything it restores
+            store.xclaim(&args[1], &args[2], &args[3], &[id], &opts, REPLAY_NOW_MS).unwrap();
         }
         other => panic!("unexpected verb in AOF rewrite: {:?}", String::from_utf8_lossy(other)),
     }
@@ -380,8 +391,7 @@ fn rewrite_reconstructs_stream_groups() {
     let mut dst = Store::new();
     replay_aof(&path, |args| apply_for_test(&mut dst, &args)).unwrap();
 
-    // st — full group fidelity minus the tombstone (XCLAIM cannot
-    // recreate a PEL row for a deleted entry; documented trade-off).
+    // st — full group fidelity, the row of the deleted 2-1 included
     let v = dst.stream_view(b"st").unwrap().unwrap();
     assert_eq!(
         (v.length(), v.last_id(), v.entries_added(), v.max_deleted_id()),
@@ -389,12 +399,15 @@ fn rewrite_reconstructs_stream_groups() {
     );
     let g = v.group(b"g").expect("group must survive the rewrite");
     assert_eq!(g.last_delivered_id(), id(3, 1));
-    assert_eq!(g.pending_count(), 2); // 2-1 tombstone dropped by design
-    let p1 = g.pending_entry(id(1, 1)).unwrap();
-    assert_eq!(
-        (p1.consumer.as_slice(), p1.delivery_time_ms, p1.delivery_count),
-        (&b"c1"[..], 1000, 1)
-    );
+    assert_eq!(g.pending_count(), 3);
+    for pending in [1, 2] {
+        let p = g.pending_entry(id(pending, 1)).unwrap();
+        assert_eq!(
+            (p.consumer.as_slice(), p.delivery_time_ms, p.delivery_count),
+            (&b"c1"[..], 1000, 1),
+            "{pending}-1"
+        );
+    }
     let p3 = g.pending_entry(id(3, 1)).unwrap();
     assert_eq!(
         (p3.consumer.as_slice(), p3.delivery_time_ms, p3.delivery_count),
@@ -409,7 +422,7 @@ fn rewrite_reconstructs_stream_groups() {
     assert_eq!(
         consumers,
         vec![
-            (b"c1".to_vec(), 1, 1000, Some(1000)),
+            (b"c1".to_vec(), 2, 1000, Some(1000)),
             (b"c2".to_vec(), 1, 2000, Some(2000)),
             (b"c3".to_vec(), 0, 3000, None),
         ]

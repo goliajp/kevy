@@ -12,24 +12,22 @@
     reason = "the discarded value is a count, not an error report"
 )]
 
+mod add;
 mod claim;
 mod claim_record;
 mod group;
 mod info;
 pub use info::xinfo;
+mod opts;
 mod read;
 use read::cmd_xread;
+mod readgroup;
+pub use readgroup::xreadgroup_refusal;
 mod setid;
 mod xgroup;
 
-use kevy_resp::CmdError;
-use kevy_resp::{
-    ArgvView, encode_array_len, encode_bulk, encode_error, encode_integer, encode_null_bulk,
-};
-use kevy_store::{
-    EntryBatch, MissingStream, Store, StreamId, XAddIdSpec, now_unix_ms, parse_explicit_id,
-    parse_range_end, parse_range_start, parse_xadd_id,
-};
+use kevy_resp::{ArgvView, encode_array_len, encode_bulk, encode_error, encode_integer};
+use kevy_store::{EntryBatch, Store, parse_explicit_id};
 
 /// One stream's reply payload — the wire shape `XREAD` emits per
 /// stream (key + entries).
@@ -46,16 +44,16 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
     out: &mut Vec<u8>,
 ) -> Option<Effect> {
     match cmd {
-        b"XADD" => return Some(cmd_xadd(store, args, out)),
+        b"XADD" => return Some(add::cmd_xadd(store, args, out)),
         b"XLEN" => cmd_xlen(store, args, out),
         b"XRANGE" => cmd_range(store, args, out, /*rev=*/ false),
         b"XREVRANGE" => cmd_range(store, args, out, /*rev=*/ true),
         b"XDEL" => cmd_xdel(store, args, out),
-        b"XTRIM" => cmd_xtrim(store, args, out),
+        b"XTRIM" => return Some(add::cmd_xtrim(store, args, out)),
         b"XSETID" => setid::cmd_xsetid(store, args, out),
         b"XREAD" => cmd_xread(store, args, out),
         b"XGROUP" => return Some(xgroup::cmd_xgroup(store, args, out)),
-        b"XREADGROUP" => return Some(group::cmd_xreadgroup(store, args, out)),
+        b"XREADGROUP" => return Some(readgroup::cmd_xreadgroup(store, args, out)),
         b"XACK" => group::cmd_xack(store, args, out),
         b"XPENDING" => group::cmd_xpending(store, args, out),
         b"XCLAIM" => return Some(claim::cmd_xclaim(store, args, out)),
@@ -70,152 +68,8 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
 /// verb that can change a stream or a group, nothing for a read. `XADD`,
 /// `XREADGROUP` and the claims decide their own record.
 fn effect(cmd: &[u8]) -> Effect {
-    let write = matches!(cmd, b"XDEL" | b"XTRIM" | b"XSETID" | b"XACK");
+    let write = matches!(cmd, b"XDEL" | b"XSETID" | b"XACK");
     if write { Effect::Write } else { Effect::Read }
-}
-
-// ───────────── XADD ─────────────
-
-/// `XADD key [NOMKSTREAM] [MAXLEN [=|~] N | MINID [=|~] id [LIMIT N]]
-/// <id|*> field value [field value ...]`
-///
-/// An ID the command generated (`*`, `ms-*`) is recorded as the ID it
-/// gave ([`Effect::RecordId`]), every other argument as it came.
-fn cmd_xadd<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) -> Effect {
-    if args.len() < 5 {
-        wrong_args(out, "xadd");
-        return Effect::Write;
-    }
-    let parsed = match parse_xadd_argv(args) {
-        Ok(p) => p,
-        Err(msg) => {
-            encode_error(out, msg.as_wire());
-            return Effect::Write;
-        }
-    };
-    let generated = !matches!(parsed.id, XAddIdSpec::Explicit(_));
-    let id = match store.xadd(&args[1], parsed.id, parsed.fields, parsed.missing, now_unix_ms()) {
-        Ok(Some(id)) => id,
-        Ok(None) => {
-            encode_null_bulk(out); // NOMKSTREAM + missing key
-            return Effect::Unchanged;
-        }
-        Err(e) => {
-            xadd_err(out, e);
-            return Effect::Write;
-        }
-    };
-    if let Some(trim) = parsed.trim {
-        apply_trim(store, &args[1], trim);
-    }
-    encode_bulk(out, crate::aof::id_bytes(&mut [0u8; 41], id));
-    if generated { Effect::RecordId(parsed.id_at, id) } else { Effect::Write }
-}
-
-fn xadd_err(out: &mut Vec<u8>, e: kevy_store::StoreError) {
-    match e {
-        kevy_store::StoreError::OutOfRange => encode_error(
-            out,
-            "ERR The ID specified in XADD is equal or smaller than the target stream top item",
-        ),
-        e => store_err(out, e),
-    }
-}
-
-struct XAddParsed {
-    missing: MissingStream,
-    /// Where the ID argument sits.
-    id_at: usize,
-    trim: Option<TrimSpec>,
-    id: XAddIdSpec,
-    fields: Vec<(Vec<u8>, Vec<u8>)>,
-}
-
-enum TrimSpec {
-    MaxLen(u64),
-    MinId(StreamId),
-}
-
-fn parse_xadd_argv<A: ArgvView + ?Sized>(args: &A) -> Result<XAddParsed, CmdError> {
-    let mut i = 2;
-    let mut missing = MissingStream::Create;
-    let mut trim: Option<TrimSpec> = None;
-    while i < args.len() {
-        let tok = args[i].to_ascii_uppercase();
-        match tok.as_slice() {
-            b"NOMKSTREAM" => {
-                missing = MissingStream::Refuse;
-                i += 1;
-            }
-            b"MAXLEN" => {
-                let (spec, used) = parse_trim_arg(args, i + 1, /*maxlen=*/ true)?;
-                trim = Some(spec);
-                i += 1 + used;
-            }
-            b"MINID" => {
-                let (spec, used) = parse_trim_arg(args, i + 1, /*maxlen=*/ false)?;
-                trim = Some(spec);
-                i += 1 + used;
-            }
-            _ => break,
-        }
-    }
-    if i + 2 >= args.len() {
-        return Err(CmdError::Wire("ERR wrong number of arguments for 'xadd' command"));
-    }
-    let id_at = i;
-    let id = parse_xadd_id(&args[i])
-        .map_err(|_| "ERR Invalid stream ID specified as stream command argument")?;
-    i += 1;
-    let rest = args.len() - i;
-    if !rest.is_multiple_of(2) || rest == 0 {
-        return Err(CmdError::Wire("ERR wrong number of arguments for 'xadd' command"));
-    }
-    let mut fields = Vec::with_capacity(rest / 2);
-    while i < args.len() {
-        fields.push((args[i].to_vec(), args[i + 1].to_vec()));
-        i += 2;
-    }
-    Ok(XAddParsed { missing, id_at, trim, id, fields })
-}
-
-/// Skip the optional `=` / `~` modifier and parse the trim threshold.
-/// `~` is "approximate" in Redis (radix-tree-aligned); we accept it for
-/// wire compatibility but always trim exactly. Returns the number of
-/// args consumed (1 or 2).
-fn parse_trim_arg<A: ArgvView + ?Sized>(
-    args: &A,
-    start: usize,
-    maxlen: bool,
-) -> Result<(TrimSpec, usize), CmdError> {
-    let mut used = 0usize;
-    let mut idx = start;
-    if let Some(t) = args.get(idx)
-        && (t == b"=" || t == b"~")
-    {
-        idx += 1;
-        used += 1;
-    }
-    let val = args.get(idx).ok_or("ERR syntax error")?;
-    used += 1;
-    if maxlen {
-        let n: u64 = std::str::from_utf8(val)
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .ok_or("ERR value is not an integer or out of range")?;
-        Ok((TrimSpec::MaxLen(n), used))
-    } else {
-        let id = parse_explicit_id(val)
-            .map_err(|_| "ERR Invalid stream ID specified as stream command argument")?;
-        Ok((TrimSpec::MinId(id), used))
-    }
-}
-
-fn apply_trim(store: &mut Store, key: &[u8], trim: TrimSpec) {
-    let _ = match trim {
-        TrimSpec::MaxLen(n) => store.xtrim_maxlen(key, n),
-        TrimSpec::MinId(id) => store.xtrim_minid(key, id),
-    };
 }
 
 // ───────────── XLEN ─────────────
@@ -232,52 +86,49 @@ fn cmd_xlen<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>
 
 // ───────────── XRANGE / XREVRANGE ─────────────
 
+/// `XRANGE key start end [COUNT n]`, `XREVRANGE key end start [COUNT
+/// n]`: every argument is read before the key is looked at. A `COUNT` of
+/// zero or less answers the null array on a stream that exists.
 fn cmd_range<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>, rev: bool) {
-    if !(4..=6).contains(&args.len()) {
+    if args.len() < 4 {
         return wrong_args(out, if rev { "xrevrange" } else { "xrange" });
     }
-    // XREVRANGE swaps start/end at the argv layer (high → low).
     let (s_arg, e_arg) = if rev { (&args[3], &args[2]) } else { (&args[2], &args[3]) };
-    let Ok(start) = parse_range_start(s_arg) else {
-        return encode_error(out, "ERR Invalid stream ID specified as stream command argument");
+    let bounds = opts::interval_start(s_arg).and_then(|s| Ok((s, opts::interval_end(e_arg)?)));
+    let (start, end) = match bounds {
+        Ok(b) => b,
+        Err(e) => return encode_error(out, e.as_wire()),
     };
-    let Ok(end) = parse_range_end(e_arg) else {
-        return encode_error(out, "ERR Invalid stream ID specified as stream command argument");
-    };
-    let count = match parse_optional_count(args, 4) {
-        Ok(c) => c,
-        Err(msg) => return encode_error(out, msg.as_wire()),
-    };
-    let entries = match (rev, store.xrange(&args[1], start, end, count)) {
-        (false, Ok(es)) => es,
-        (true, _) => match store.xrevrange(&args[1], start, end, count) {
-            Ok(es) => es,
-            Err(e) => return store_err(out, e),
-        },
-        (false, Err(e)) => return store_err(out, e),
-    };
-    emit_entries(out, &entries);
-}
-
-/// Decode an optional `COUNT n` tail at argv index `start` (the `COUNT`
-/// literal is at index `start`, the integer at `start + 1`). Returns
-/// `Ok(None)` when the tail is absent.
-fn parse_optional_count<A: ArgvView + ?Sized>(
-    args: &A,
-    start: usize,
-) -> Result<Option<usize>, CmdError> {
-    if start >= args.len() {
-        return Ok(None);
+    let mut count = None;
+    let mut i = 4;
+    while i < args.len() {
+        if !args[i].eq_ignore_ascii_case(b"COUNT") || i + 1 == args.len() {
+            return encode_error(out, "ERR syntax error");
+        }
+        match opts::strict_i64(&args[i + 1]) {
+            Some(n) => count = Some(n),
+            None => return encode_error(out, crate::reply::ERR_NOT_INT),
+        }
+        i += 2;
     }
-    if !args[start].eq_ignore_ascii_case(b"COUNT") {
-        return Err(CmdError::Wire("ERR syntax error"));
+    if let Some(n) = count.filter(|n| *n <= 0) {
+        let _ = n;
+        return match store.stream_view(&args[1]) {
+            Ok(Some(_)) => encode_array_len(out, -1),
+            Ok(None) => encode_array_len(out, 0),
+            Err(e) => store_err(out, e),
+        };
     }
-    let n = args.get(start + 1).ok_or("ERR syntax error")?;
-    let n: usize = std::str::from_utf8(n)
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .ok_or("ERR value is not an integer or out of range")?;
-    Ok(Some(n))
+    let count = count.map(|n| n as usize);
+    let entries = if rev {
+        store.xrevrange(&args[1], start, end, count)
+    } else {
+        store.xrange(&args[1], start, end, count)
+    };
+    match entries {
+        Ok(es) => emit_entries(out, &es),
+        Err(e) => store_err(out, e),
+    }
 }
 
 // ───────────── XDEL / XTRIM ─────────────
@@ -299,32 +150,6 @@ fn cmd_xdel<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>
         }
     }
     match store.xdel(&args[1], &ids) {
-        Ok(n) => encode_integer(out, n as i64),
-        Err(e) => store_err(out, e),
-    }
-}
-
-fn cmd_xtrim<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
-    if args.len() < 4 {
-        return wrong_args(out, "xtrim");
-    }
-    let mode = args[2].to_ascii_uppercase();
-    let spec = match mode.as_slice() {
-        b"MAXLEN" => match parse_trim_arg(args, 3, /*maxlen=*/ true) {
-            Ok((s, _)) => s,
-            Err(msg) => return encode_error(out, msg.as_wire()),
-        },
-        b"MINID" => match parse_trim_arg(args, 3, /*maxlen=*/ false) {
-            Ok((s, _)) => s,
-            Err(msg) => return encode_error(out, msg.as_wire()),
-        },
-        _ => return encode_error(out, "ERR syntax error"),
-    };
-    let n = match spec {
-        TrimSpec::MaxLen(n) => store.xtrim_maxlen(&args[1], n),
-        TrimSpec::MinId(id) => store.xtrim_minid(&args[1], id),
-    };
-    match n {
         Ok(n) => encode_integer(out, n as i64),
         Err(e) => store_err(out, e),
     }

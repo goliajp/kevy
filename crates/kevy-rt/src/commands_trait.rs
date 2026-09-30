@@ -135,6 +135,11 @@ pub trait Commands: Clone + Send + 'static {
         GeoHits::Error(b"-ERR unknown command\r\n".to_vec())
     }
 
+    #[doc = include_str!("commands_docs/xreadgroup_refusal.md")]
+    fn xreadgroup_refusal(&self, _store: &mut Store, _argv: &Argv) -> Option<Vec<u8>> {
+        None
+    }
+
     #[doc = include_str!("commands_docs/write_denied.md")]
     fn write_denied(&self) -> Option<Vec<u8>> {
         None

@@ -1,0 +1,1475 @@
+== XINFO on missing keys, empty streams and deletions
+FLUSHALL	+OK\r\n
+XINFO STREAM nokey	-ERR no such key\r\n
+XINFO GROUPS nokey	-ERR no such key\r\n
+XINFO CONSUMERS nokey g	-ERR no such key\r\n
+SET str v	+OK\r\n
+XINFO STREAM str	-WRONGTYPE Operation against a key holding the wrong kind of value\r\n
+XINFO GROUPS str	-WRONGTYPE Operation against a key holding the wrong kind of value\r\n
+XINFO CONSUMERS str g	-WRONGTYPE Operation against a key holding the wrong kind of value\r\n
+XINFO	-ERR wrong number of arguments for 'xinfo' command\r\n
+XINFO BOGUS	-ERR unknown subcommand 'BOGUS'. Try XINFO HELP.\r\n
+XINFO STREAM	-ERR wrong number of arguments for 'xinfo|stream' command\r\n
+XINFO GROUPS	-ERR wrong number of arguments for 'xinfo|groups' command\r\n
+XINFO GROUPS a b	-ERR wrong number of arguments for 'xinfo|groups' command\r\n
+XINFO CONSUMERS s	-ERR wrong number of arguments for 'xinfo|consumers' command\r\n
+XINFO CONSUMERS s g x	-ERR wrong number of arguments for 'xinfo|consumers' command\r\n
+XINFO HELP	*9\r\n+XINFO <subcommand> [<arg> [value] [opt] ...]. Subcommands are:\r\n+CONSUMERS <key> <groupname>\r\n+    Show consumers of <groupname>.\r\n+GROUPS <key>\r\n+    Show the stream consumer groups.\r\n+STREAM <key> [FULL [COUNT <count>]\r\n+    Show information about the stream.\r\n+HELP\r\n+    Print this help.\r\n
+XINFO HELP extra	-ERR wrong number of arguments for 'xinfo|help' command\r\n
+xinfo help	*9\r\n+XINFO <subcommand> [<arg> [value] [opt] ...]. Subcommands are:\r\n+CONSUMERS <key> <groupname>\r\n+    Show consumers of <groupname>.\r\n+GROUPS <key>\r\n+    Show the stream consumer groups.\r\n+STREAM <key> [FULL [COUNT <count>]\r\n+    Show information about the stream.\r\n+HELP\r\n+    Print this help.\r\n
+XADD s 1-1 a 1	$3\r\n1-1\r\n
+XADD s 2-1 b 2 c 3	$3\r\n2-1\r\n
+XADD s 3-1 d 4	$3\r\n3-1\r\n
+XINFO CONSUMERS s nogroup	-NOGROUP No such consumer group 'nogroup' for key name 's'\r\n
+XINFO STREAM s	*20\r\n$6\r\nlength\r\n:3\r\n$15\r\nradix-tree-keys\r\n:1\r\n$16\r\nradix-tree-nodes\r\n:2\r\n$17\r\nlast-generated-id\r\n$3\r\n3-1\r\n$20\r\nmax-deleted-entry-id\r\n$3\r\n0-0\r\n$13\r\nentries-added\r\n:3\r\n$23\r\nrecorded-first-entry-id\r\n$3\r\n1-1\r\n$6\r\ngroups\r\n:0\r\n$11\r\nfirst-entry\r\n*2\r\n$3\r\n1-1\r\n*2\r\n$1\r\na\r\n$1\r\n1\r\n$10\r\nlast-entry\r\n*2\r\n$3\r\n3-1\r\n*2\r\n$1\r\nd\r\n$1\r\n4\r\n
+XINFO STREAM s FULL	?
+XINFO STREAM s full COUNT 1	?
+XINFO STREAM s FULL COUNT 0	?
+XINFO STREAM s FULL COUNT -1	?
+XINFO STREAM s FULL COUNT x	-ERR value is not an integer or out of range\r\n
+XINFO STREAM s FULL COUNT	-ERR unknown subcommand or wrong number of arguments for 'STREAM'. Try XINFO HELP.\r\n
+XINFO STREAM s BOGUS	-ERR unknown subcommand or wrong number of arguments for 'STREAM'. Try XINFO HELP.\r\n
+XINFO STREAM s FULL BOGUS 1	-ERR unknown subcommand or wrong number of arguments for 'STREAM'. Try XINFO HELP.\r\n
+XINFO STREAM s x y z	-ERR unknown subcommand or wrong number of arguments for 'STREAM'. Try XINFO HELP.\r\n
+XINFO GROUPS s	*0\r\n
+XGROUP CREATE s g0 0	+OK\r\n
+XGROUP CREATE s g1 $	+OK\r\n
+XGROUP CREATE s g2 0 ENTRIESREAD 1	+OK\r\n
+XINFO GROUPS s	*3\r\n*12\r\n$4\r\nname\r\n$2\r\ng0\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:3\r\n*12\r\n$4\r\nname\r\n$2\r\ng1\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n3-1\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:0\r\n*12\r\n$4\r\nname\r\n$2\r\ng2\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n:1\r\n$3\r\nlag\r\n:2\r\n
+XREADGROUP GROUP g0 alice COUNT 1 STREAMS s >	*1\r\n*2\r\n$1\r\ns\r\n*1\r\n*2\r\n$3\r\n1-1\r\n*2\r\n$1\r\na\r\n$1\r\n1\r\n
+XINFO GROUPS s	*3\r\n*12\r\n$4\r\nname\r\n$2\r\ng0\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n1-1\r\n$12\r\nentries-read\r\n:1\r\n$3\r\nlag\r\n:2\r\n*12\r\n$4\r\nname\r\n$2\r\ng1\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n3-1\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:0\r\n*12\r\n$4\r\nname\r\n$2\r\ng2\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n:1\r\n$3\r\nlag\r\n:2\r\n
+XREADGROUP GROUP g0 bob STREAMS s >	*1\r\n*2\r\n$1\r\ns\r\n*2\r\n*2\r\n$3\r\n2-1\r\n*4\r\n$1\r\nb\r\n$1\r\n2\r\n$1\r\nc\r\n$1\r\n3\r\n*2\r\n$3\r\n3-1\r\n*2\r\n$1\r\nd\r\n$1\r\n4\r\n
+XINFO GROUPS s	*3\r\n*12\r\n$4\r\nname\r\n$2\r\ng0\r\n$9\r\nconsumers\r\n:2\r\n$7\r\npending\r\n:3\r\n$17\r\nlast-delivered-id\r\n$3\r\n3-1\r\n$12\r\nentries-read\r\n:3\r\n$3\r\nlag\r\n:0\r\n*12\r\n$4\r\nname\r\n$2\r\ng1\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n3-1\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:0\r\n*12\r\n$4\r\nname\r\n$2\r\ng2\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n:1\r\n$3\r\nlag\r\n:2\r\n
+XINFO CONSUMERS s g0	?
+XDEL s 2-1	:1\r\n
+XINFO GROUPS s	*3\r\n*12\r\n$4\r\nname\r\n$2\r\ng0\r\n$9\r\nconsumers\r\n:2\r\n$7\r\npending\r\n:3\r\n$17\r\nlast-delivered-id\r\n$3\r\n3-1\r\n$12\r\nentries-read\r\n:3\r\n$3\r\nlag\r\n:0\r\n*12\r\n$4\r\nname\r\n$2\r\ng1\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n3-1\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:0\r\n*12\r\n$4\r\nname\r\n$2\r\ng2\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n:1\r\n$3\r\nlag\r\n$-1\r\n
+XINFO STREAM s	*20\r\n$6\r\nlength\r\n:2\r\n$15\r\nradix-tree-keys\r\n:1\r\n$16\r\nradix-tree-nodes\r\n:2\r\n$17\r\nlast-generated-id\r\n$3\r\n3-1\r\n$20\r\nmax-deleted-entry-id\r\n$3\r\n2-1\r\n$13\r\nentries-added\r\n:3\r\n$23\r\nrecorded-first-entry-id\r\n$3\r\n1-1\r\n$6\r\ngroups\r\n:3\r\n$11\r\nfirst-entry\r\n*2\r\n$3\r\n1-1\r\n*2\r\n$1\r\na\r\n$1\r\n1\r\n$10\r\nlast-entry\r\n*2\r\n$3\r\n3-1\r\n*2\r\n$1\r\nd\r\n$1\r\n4\r\n
+XACK s g0 1-1	:1\r\n
+XINFO STREAM empty	-ERR no such key\r\n
+XADD e 1-1 a 1	$3\r\n1-1\r\n
+XDEL e 1-1	:1\r\n
+XINFO STREAM e	*20\r\n$6\r\nlength\r\n:0\r\n$15\r\nradix-tree-keys\r\n:0\r\n$16\r\nradix-tree-nodes\r\n:1\r\n$17\r\nlast-generated-id\r\n$3\r\n1-1\r\n$20\r\nmax-deleted-entry-id\r\n$3\r\n1-1\r\n$13\r\nentries-added\r\n:1\r\n$23\r\nrecorded-first-entry-id\r\n$3\r\n0-0\r\n$6\r\ngroups\r\n:0\r\n$11\r\nfirst-entry\r\n$-1\r\n$10\r\nlast-entry\r\n$-1\r\n
+XINFO STREAM e FULL	?
+== lag and entries-read around deletions, reads and SETID
+FLUSHALL	+OK\r\n
+# A: plain progression and XDEL placements
+XADD a 1-0 f v	$3\r\n1-0\r\n
+XADD a 2-0 f v	$3\r\n2-0\r\n
+XADD a 3-0 f v	$3\r\n3-0\r\n
+XADD a 4-0 f v	$3\r\n4-0\r\n
+XADD a 5-0 f v	$3\r\n5-0\r\n
+XGROUP CREATE a g 0	+OK\r\n
+XGROUP CREATE a g2 0	+OK\r\n
+XGROUP CREATE a g3 0	+OK\r\n
+XREADGROUP GROUP g c COUNT 2 STREAMS a >	*1\r\n*2\r\n$1\r\na\r\n*2\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XREADGROUP GROUP g3 c COUNT 4 STREAMS a >	*1\r\n*2\r\n$1\r\na\r\n*4\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n3-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n4-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XINFO GROUPS a	*3\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:2\r\n$17\r\nlast-delivered-id\r\n$3\r\n2-0\r\n$12\r\nentries-read\r\n:2\r\n$3\r\nlag\r\n:3\r\n*12\r\n$4\r\nname\r\n$2\r\ng2\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:5\r\n*12\r\n$4\r\nname\r\n$2\r\ng3\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:4\r\n$17\r\nlast-delivered-id\r\n$3\r\n4-0\r\n$12\r\nentries-read\r\n:4\r\n$3\r\nlag\r\n:1\r\n
+# delete after last-delivered of g (tombstone ahead of g)
+XDEL a 4-0	:1\r\n
+XINFO GROUPS a	*3\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:2\r\n$17\r\nlast-delivered-id\r\n$3\r\n2-0\r\n$12\r\nentries-read\r\n:2\r\n$3\r\nlag\r\n$-1\r\n*12\r\n$4\r\nname\r\n$2\r\ng2\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n$-1\r\n*12\r\n$4\r\nname\r\n$2\r\ng3\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:4\r\n$17\r\nlast-delivered-id\r\n$3\r\n4-0\r\n$12\r\nentries-read\r\n:4\r\n$3\r\nlag\r\n$-1\r\n
+XREADGROUP GROUP g c COUNT 1 STREAMS a >	*1\r\n*2\r\n$1\r\na\r\n*1\r\n*2\r\n$3\r\n3-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XINFO GROUPS a	*3\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:3\r\n$17\r\nlast-delivered-id\r\n$3\r\n3-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n$-1\r\n*12\r\n$4\r\nname\r\n$2\r\ng2\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n$-1\r\n*12\r\n$4\r\nname\r\n$2\r\ng3\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:4\r\n$17\r\nlast-delivered-id\r\n$3\r\n4-0\r\n$12\r\nentries-read\r\n:4\r\n$3\r\nlag\r\n$-1\r\n
+XREADGROUP GROUP g c COUNT 10 STREAMS a >	*1\r\n*2\r\n$1\r\na\r\n*1\r\n*2\r\n$3\r\n5-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XINFO GROUPS a	*3\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:4\r\n$17\r\nlast-delivered-id\r\n$3\r\n5-0\r\n$12\r\nentries-read\r\n:5\r\n$3\r\nlag\r\n:0\r\n*12\r\n$4\r\nname\r\n$2\r\ng2\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n$-1\r\n*12\r\n$4\r\nname\r\n$2\r\ng3\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:4\r\n$17\r\nlast-delivered-id\r\n$3\r\n4-0\r\n$12\r\nentries-read\r\n:4\r\n$3\r\nlag\r\n$-1\r\n
+XREADGROUP GROUP g2 c COUNT 10 STREAMS a >	*1\r\n*2\r\n$1\r\na\r\n*4\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n3-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n5-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XINFO GROUPS a	*3\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:4\r\n$17\r\nlast-delivered-id\r\n$3\r\n5-0\r\n$12\r\nentries-read\r\n:5\r\n$3\r\nlag\r\n:0\r\n*12\r\n$4\r\nname\r\n$2\r\ng2\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:4\r\n$17\r\nlast-delivered-id\r\n$3\r\n5-0\r\n$12\r\nentries-read\r\n:5\r\n$3\r\nlag\r\n:0\r\n*12\r\n$4\r\nname\r\n$2\r\ng3\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:4\r\n$17\r\nlast-delivered-id\r\n$3\r\n4-0\r\n$12\r\nentries-read\r\n:4\r\n$3\r\nlag\r\n$-1\r\n
+XADD a 6-0 f v	$3\r\n6-0\r\n
+XINFO GROUPS a	*3\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:4\r\n$17\r\nlast-delivered-id\r\n$3\r\n5-0\r\n$12\r\nentries-read\r\n:5\r\n$3\r\nlag\r\n:1\r\n*12\r\n$4\r\nname\r\n$2\r\ng2\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:4\r\n$17\r\nlast-delivered-id\r\n$3\r\n5-0\r\n$12\r\nentries-read\r\n:5\r\n$3\r\nlag\r\n:1\r\n*12\r\n$4\r\nname\r\n$2\r\ng3\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:4\r\n$17\r\nlast-delivered-id\r\n$3\r\n4-0\r\n$12\r\nentries-read\r\n:4\r\n$3\r\nlag\r\n$-1\r\n
+# delete first entry (before everything)
+XDEL a 1-0	:1\r\n
+XINFO GROUPS a	*3\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:4\r\n$17\r\nlast-delivered-id\r\n$3\r\n5-0\r\n$12\r\nentries-read\r\n:5\r\n$3\r\nlag\r\n:1\r\n*12\r\n$4\r\nname\r\n$2\r\ng2\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:4\r\n$17\r\nlast-delivered-id\r\n$3\r\n5-0\r\n$12\r\nentries-read\r\n:5\r\n$3\r\nlag\r\n:1\r\n*12\r\n$4\r\nname\r\n$2\r\ng3\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:4\r\n$17\r\nlast-delivered-id\r\n$3\r\n4-0\r\n$12\r\nentries-read\r\n:4\r\n$3\r\nlag\r\n$-1\r\n
+XADD a 7-0 f v	$3\r\n7-0\r\n
+XINFO GROUPS a	*3\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:4\r\n$17\r\nlast-delivered-id\r\n$3\r\n5-0\r\n$12\r\nentries-read\r\n:5\r\n$3\r\nlag\r\n:2\r\n*12\r\n$4\r\nname\r\n$2\r\ng2\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:4\r\n$17\r\nlast-delivered-id\r\n$3\r\n5-0\r\n$12\r\nentries-read\r\n:5\r\n$3\r\nlag\r\n:2\r\n*12\r\n$4\r\nname\r\n$2\r\ng3\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:4\r\n$17\r\nlast-delivered-id\r\n$3\r\n4-0\r\n$12\r\nentries-read\r\n:4\r\n$3\r\nlag\r\n$-1\r\n
+# B: fresh group at 0 on stream with deletions only at head
+XADD b 1-0 f v	$3\r\n1-0\r\n
+XADD b 2-0 f v	$3\r\n2-0\r\n
+XADD b 3-0 f v	$3\r\n3-0\r\n
+XDEL b 1-0	:1\r\n
+XGROUP CREATE b g 0	+OK\r\n
+XINFO GROUPS b	*1\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:2\r\n
+XREADGROUP GROUP g c COUNT 1 STREAMS b >	*1\r\n*2\r\n$1\r\nb\r\n*1\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XINFO GROUPS b	*1\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n2-0\r\n$12\r\nentries-read\r\n:2\r\n$3\r\nlag\r\n:1\r\n
+# C: XDEL the last entry
+XADD c 1-0 f v	$3\r\n1-0\r\n
+XADD c 2-0 f v	$3\r\n2-0\r\n
+XADD c 3-0 f v	$3\r\n3-0\r\n
+XGROUP CREATE c g 0	+OK\r\n
+XGROUP CREATE c z $	+OK\r\n
+XDEL c 3-0	:1\r\n
+XINFO GROUPS c	*2\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n$-1\r\n*12\r\n$4\r\nname\r\n$1\r\nz\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n3-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:0\r\n
+XREADGROUP GROUP g x COUNT 10 STREAMS c >	*1\r\n*2\r\n$1\r\nc\r\n*2\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XINFO GROUPS c	*2\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:2\r\n$17\r\nlast-delivered-id\r\n$3\r\n2-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n$-1\r\n*12\r\n$4\r\nname\r\n$1\r\nz\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n3-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:0\r\n
+# D: SETID
+XADD d 1-0 f v	$3\r\n1-0\r\n
+XADD d 2-0 f v	$3\r\n2-0\r\n
+XADD d 3-0 f v	$3\r\n3-0\r\n
+XADD d 4-0 f v	$3\r\n4-0\r\n
+XGROUP CREATE d g 0	+OK\r\n
+XGROUP SETID d g 2-0	+OK\r\n
+XINFO GROUPS d	*1\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n2-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n$-1\r\n
+XGROUP SETID d g $	+OK\r\n
+XINFO GROUPS d	*1\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n4-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:0\r\n
+XGROUP SETID d g 0	+OK\r\n
+XINFO GROUPS d	*1\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:4\r\n
+XGROUP SETID d g 2-0 ENTRIESREAD 2	+OK\r\n
+XINFO GROUPS d	*1\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n2-0\r\n$12\r\nentries-read\r\n:2\r\n$3\r\nlag\r\n:2\r\n
+XGROUP SETID d g 2-0 ENTRIESREAD 0	+OK\r\n
+XINFO GROUPS d	*1\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n2-0\r\n$12\r\nentries-read\r\n:0\r\n$3\r\nlag\r\n:4\r\n
+XGROUP SETID d g 2-0 ENTRIESREAD 10	+OK\r\n
+XINFO GROUPS d	*1\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n2-0\r\n$12\r\nentries-read\r\n:10\r\n$3\r\nlag\r\n:-6\r\n
+XGROUP SETID d g 2-0 ENTRIESREAD -1	+OK\r\n
+XINFO GROUPS d	*1\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n2-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n$-1\r\n
+XGROUP SETID d g 2-0 ENTRIESREAD -2	-ERR value for ENTRIESREAD must be positive or -1\r\n
+XGROUP SETID d g 2-0 ENTRIESREAD x	-ERR value is not an integer or out of range\r\n
+XGROUP SETID d g 2-0 ENTRIESREAD	-ERR unknown subcommand or wrong number of arguments for 'SETID'. Try XGROUP HELP.\r\n
+XGROUP SETID d g 2-0 BOGUS 1	-ERR unknown subcommand or wrong number of arguments for 'SETID'. Try XGROUP HELP.\r\n
+XGROUP SETID d g 1-5 ENTRIESREAD 1	+OK\r\n
+XINFO GROUPS d	*1\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n1-5\r\n$12\r\nentries-read\r\n:1\r\n$3\r\nlag\r\n:3\r\n
+XREADGROUP GROUP g x COUNT 1 STREAMS d >	*1\r\n*2\r\n$1\r\nd\r\n*1\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XINFO GROUPS d	*1\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n2-0\r\n$12\r\nentries-read\r\n:2\r\n$3\r\nlag\r\n:2\r\n
+XGROUP SETID d g 4-0 ENTRIESREAD 1	+OK\r\n
+XINFO GROUPS d	*1\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n4-0\r\n$12\r\nentries-read\r\n:1\r\n$3\r\nlag\r\n:3\r\n
+XGROUP SETID d g 9-0	+OK\r\n
+XINFO GROUPS d	*1\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n9-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n$-1\r\n
+XGROUP SETID d g 9-0 ENTRIESREAD 7	+OK\r\n
+XINFO GROUPS d	*1\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n9-0\r\n$12\r\nentries-read\r\n:7\r\n$3\r\nlag\r\n:-3\r\n
+# E: CREATE ENTRIESREAD variants
+XADD e 1-0 f v	$3\r\n1-0\r\n
+XADD e 2-0 f v	$3\r\n2-0\r\n
+XADD e 3-0 f v	$3\r\n3-0\r\n
+XGROUP CREATE e a 0 ENTRIESREAD 0	+OK\r\n
+XGROUP CREATE e b 0 ENTRIESREAD 3	+OK\r\n
+XGROUP CREATE e c $ ENTRIESREAD 1	+OK\r\n
+XGROUP CREATE e d 2-0 ENTRIESREAD 2	+OK\r\n
+XGROUP CREATE e f 2-0 ENTRIESREAD 5	+OK\r\n
+XGROUP CREATE e h 2-0 ENTRIESREAD -1	+OK\r\n
+XGROUP CREATE e i 2-0 ENTRIESREAD -3	-ERR value for ENTRIESREAD must be positive or -1\r\n
+XGROUP CREATE e j 2-0 MKSTREAM ENTRIESREAD 1	+OK\r\n
+XGROUP CREATE e k 2-0 ENTRIESREAD 1 MKSTREAM	+OK\r\n
+XGROUP CREATE e l 2-0 ENTRIESREAD 1 ENTRIESREAD 2	-ERR unknown subcommand or wrong number of arguments for 'CREATE'. Try XGROUP HELP.\r\n
+XINFO GROUPS e	*8\r\n*12\r\n$4\r\nname\r\n$1\r\na\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n:0\r\n$3\r\nlag\r\n:3\r\n*12\r\n$4\r\nname\r\n$1\r\nb\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n:3\r\n$3\r\nlag\r\n:0\r\n*12\r\n$4\r\nname\r\n$1\r\nc\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n3-0\r\n$12\r\nentries-read\r\n:1\r\n$3\r\nlag\r\n:2\r\n*12\r\n$4\r\nname\r\n$1\r\nd\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n2-0\r\n$12\r\nentries-read\r\n:2\r\n$3\r\nlag\r\n:1\r\n*12\r\n$4\r\nname\r\n$1\r\nf\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n2-0\r\n$12\r\nentries-read\r\n:5\r\n$3\r\nlag\r\n:-2\r\n*12\r\n$4\r\nname\r\n$1\r\nh\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n2-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n$-1\r\n*12\r\n$4\r\nname\r\n$1\r\nj\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n2-0\r\n$12\r\nentries-read\r\n:1\r\n$3\r\nlag\r\n:2\r\n*12\r\n$4\r\nname\r\n$1\r\nk\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n2-0\r\n$12\r\nentries-read\r\n:1\r\n$3\r\nlag\r\n:2\r\n
+XREADGROUP GROUP a x COUNT 1 STREAMS e >	*1\r\n*2\r\n$1\r\ne\r\n*1\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XREADGROUP GROUP f x COUNT 1 STREAMS e >	*1\r\n*2\r\n$1\r\ne\r\n*1\r\n*2\r\n$3\r\n3-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XREADGROUP GROUP b x COUNT 1 STREAMS e >	*1\r\n*2\r\n$1\r\ne\r\n*1\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XINFO GROUPS e	*8\r\n*12\r\n$4\r\nname\r\n$1\r\na\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n1-0\r\n$12\r\nentries-read\r\n:1\r\n$3\r\nlag\r\n:2\r\n*12\r\n$4\r\nname\r\n$1\r\nb\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n1-0\r\n$12\r\nentries-read\r\n:1\r\n$3\r\nlag\r\n:2\r\n*12\r\n$4\r\nname\r\n$1\r\nc\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n3-0\r\n$12\r\nentries-read\r\n:1\r\n$3\r\nlag\r\n:2\r\n*12\r\n$4\r\nname\r\n$1\r\nd\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n2-0\r\n$12\r\nentries-read\r\n:2\r\n$3\r\nlag\r\n:1\r\n*12\r\n$4\r\nname\r\n$1\r\nf\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n3-0\r\n$12\r\nentries-read\r\n:6\r\n$3\r\nlag\r\n:-3\r\n*12\r\n$4\r\nname\r\n$1\r\nh\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n2-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n$-1\r\n*12\r\n$4\r\nname\r\n$1\r\nj\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n2-0\r\n$12\r\nentries-read\r\n:1\r\n$3\r\nlag\r\n:2\r\n*12\r\n$4\r\nname\r\n$1\r\nk\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n2-0\r\n$12\r\nentries-read\r\n:1\r\n$3\r\nlag\r\n:2\r\n
+XGROUP CREATE m g 0 ENTRIESREAD 3 MKSTREAM	+OK\r\n
+XINFO GROUPS m	*1\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n:3\r\n$3\r\nlag\r\n:0\r\n
+XGROUP CREATE m2 g $ MKSTREAM	+OK\r\n
+XINFO GROUPS m2	*1\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:0\r\n
+# F: XSETID on the stream
+XADD f 1-0 f v	$3\r\n1-0\r\n
+XADD f 2-0 f v	$3\r\n2-0\r\n
+XADD f 3-0 f v	$3\r\n3-0\r\n
+XGROUP CREATE f g 0	+OK\r\n
+XREADGROUP GROUP g x COUNT 1 STREAMS f >	*1\r\n*2\r\n$1\r\nf\r\n*1\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XSETID f 3-0 ENTRIESADDED 10 MAXDELETEDID 2-5	+OK\r\n
+XINFO GROUPS f	*1\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n1-0\r\n$12\r\nentries-read\r\n:1\r\n$3\r\nlag\r\n$-1\r\n
+XINFO STREAM f	*20\r\n$6\r\nlength\r\n:3\r\n$15\r\nradix-tree-keys\r\n:1\r\n$16\r\nradix-tree-nodes\r\n:2\r\n$17\r\nlast-generated-id\r\n$3\r\n3-0\r\n$20\r\nmax-deleted-entry-id\r\n$3\r\n2-5\r\n$13\r\nentries-added\r\n:10\r\n$23\r\nrecorded-first-entry-id\r\n$3\r\n1-0\r\n$6\r\ngroups\r\n:1\r\n$11\r\nfirst-entry\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n$10\r\nlast-entry\r\n*2\r\n$3\r\n3-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XSETID f 9-0	+OK\r\n
+XINFO GROUPS f	*1\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n1-0\r\n$12\r\nentries-read\r\n:1\r\n$3\r\nlag\r\n$-1\r\n
+XADD f 10-0 f v	$4\r\n10-0\r\n
+XINFO GROUPS f	*1\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n1-0\r\n$12\r\nentries-read\r\n:1\r\n$3\r\nlag\r\n$-1\r\n
+XREADGROUP GROUP g x COUNT 10 STREAMS f >	*1\r\n*2\r\n$1\r\nf\r\n*3\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n3-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$4\r\n10-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XINFO GROUPS f	*1\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:4\r\n$17\r\nlast-delivered-id\r\n$4\r\n10-0\r\n$12\r\nentries-read\r\n:11\r\n$3\r\nlag\r\n:0\r\n
+# G: XTRIM
+XADD t 1-0 f v	$3\r\n1-0\r\n
+XADD t 2-0 f v	$3\r\n2-0\r\n
+XADD t 3-0 f v	$3\r\n3-0\r\n
+XADD t 4-0 f v	$3\r\n4-0\r\n
+XGROUP CREATE t g 0	+OK\r\n
+XGROUP CREATE t h 0	+OK\r\n
+XREADGROUP GROUP h x COUNT 3 STREAMS t >	*1\r\n*2\r\n$1\r\nt\r\n*3\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n3-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XTRIM t MAXLEN 2	:2\r\n
+XINFO GROUPS t	*2\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:2\r\n*12\r\n$4\r\nname\r\n$1\r\nh\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:3\r\n$17\r\nlast-delivered-id\r\n$3\r\n3-0\r\n$12\r\nentries-read\r\n:3\r\n$3\r\nlag\r\n:1\r\n
+XINFO STREAM t	*20\r\n$6\r\nlength\r\n:2\r\n$15\r\nradix-tree-keys\r\n:1\r\n$16\r\nradix-tree-nodes\r\n:2\r\n$17\r\nlast-generated-id\r\n$3\r\n4-0\r\n$20\r\nmax-deleted-entry-id\r\n$3\r\n0-0\r\n$13\r\nentries-added\r\n:4\r\n$23\r\nrecorded-first-entry-id\r\n$3\r\n3-0\r\n$6\r\ngroups\r\n:2\r\n$11\r\nfirst-entry\r\n*2\r\n$3\r\n3-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n$10\r\nlast-entry\r\n*2\r\n$3\r\n4-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XREADGROUP GROUP g x COUNT 1 STREAMS t >	*1\r\n*2\r\n$1\r\nt\r\n*1\r\n*2\r\n$3\r\n3-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XINFO GROUPS t	*2\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n3-0\r\n$12\r\nentries-read\r\n:3\r\n$3\r\nlag\r\n:1\r\n*12\r\n$4\r\nname\r\n$1\r\nh\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:3\r\n$17\r\nlast-delivered-id\r\n$3\r\n3-0\r\n$12\r\nentries-read\r\n:3\r\n$3\r\nlag\r\n:1\r\n
+# H: empty stream groups
+XADD u 1-0 f v	$3\r\n1-0\r\n
+XDEL u 1-0	:1\r\n
+XGROUP CREATE u g 0	+OK\r\n
+XGROUP CREATE u h $	+OK\r\n
+XINFO GROUPS u	*2\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:0\r\n*12\r\n$4\r\nname\r\n$1\r\nh\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n1-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:0\r\n
+== lag after reads that cross deletions
+FLUSHALL	+OK\r\n
+XADD p 1-0 f v	$3\r\n1-0\r\n
+XADD p 2-0 f v	$3\r\n2-0\r\n
+XADD p 3-0 f v	$3\r\n3-0\r\n
+XADD p 4-0 f v	$3\r\n4-0\r\n
+XGROUP CREATE p g 0	+OK\r\n
+XGROUP CREATE p v 0 ENTRIESREAD 0	+OK\r\n
+XREADGROUP GROUP g c COUNT 1 STREAMS p >	*1\r\n*2\r\n$1\r\np\r\n*1\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XDEL p 1-0 2-0	:2\r\n
+XINFO GROUPS p	*2\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n1-0\r\n$12\r\nentries-read\r\n:1\r\n$3\r\nlag\r\n$-1\r\n*12\r\n$4\r\nname\r\n$1\r\nv\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n:0\r\n$3\r\nlag\r\n:2\r\n
+XREADGROUP GROUP g c COUNT 1 STREAMS p >	*1\r\n*2\r\n$1\r\np\r\n*1\r\n*2\r\n$3\r\n3-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XREADGROUP GROUP v c COUNT 1 STREAMS p >	*1\r\n*2\r\n$1\r\np\r\n*1\r\n*2\r\n$3\r\n3-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XINFO GROUPS p	*2\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:2\r\n$17\r\nlast-delivered-id\r\n$3\r\n3-0\r\n$12\r\nentries-read\r\n:3\r\n$3\r\nlag\r\n:1\r\n*12\r\n$4\r\nname\r\n$1\r\nv\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n3-0\r\n$12\r\nentries-read\r\n:3\r\n$3\r\nlag\r\n:1\r\n
+XADD q 1-0 f v	$3\r\n1-0\r\n
+XADD q 2-0 f v	$3\r\n2-0\r\n
+XADD q 3-0 f v	$3\r\n3-0\r\n
+XADD q 4-0 f v	$3\r\n4-0\r\n
+XDEL q 1-0	:1\r\n
+XGROUP CREATE q a 0 ENTRIESREAD 1	+OK\r\n
+XGROUP CREATE q b 0 ENTRIESREAD 3	+OK\r\n
+XGROUP CREATE q c 1-0 ENTRIESREAD 1	+OK\r\n
+XGROUP CREATE q d 1-0	+OK\r\n
+XINFO GROUPS q	*4\r\n*12\r\n$4\r\nname\r\n$1\r\na\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n:1\r\n$3\r\nlag\r\n:3\r\n*12\r\n$4\r\nname\r\n$1\r\nb\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n:3\r\n$3\r\nlag\r\n:3\r\n*12\r\n$4\r\nname\r\n$1\r\nc\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n1-0\r\n$12\r\nentries-read\r\n:1\r\n$3\r\nlag\r\n:3\r\n*12\r\n$4\r\nname\r\n$1\r\nd\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n1-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:3\r\n
+XREADGROUP GROUP a x COUNT 1 STREAMS q >	*1\r\n*2\r\n$1\r\nq\r\n*1\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XREADGROUP GROUP b x COUNT 1 STREAMS q >	*1\r\n*2\r\n$1\r\nq\r\n*1\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XREADGROUP GROUP c x COUNT 1 STREAMS q >	*1\r\n*2\r\n$1\r\nq\r\n*1\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XREADGROUP GROUP d x COUNT 2 STREAMS q >	*1\r\n*2\r\n$1\r\nq\r\n*2\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n3-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XINFO GROUPS q	*4\r\n*12\r\n$4\r\nname\r\n$1\r\na\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n2-0\r\n$12\r\nentries-read\r\n:2\r\n$3\r\nlag\r\n:2\r\n*12\r\n$4\r\nname\r\n$1\r\nb\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n2-0\r\n$12\r\nentries-read\r\n:2\r\n$3\r\nlag\r\n:2\r\n*12\r\n$4\r\nname\r\n$1\r\nc\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n2-0\r\n$12\r\nentries-read\r\n:2\r\n$3\r\nlag\r\n:2\r\n*12\r\n$4\r\nname\r\n$1\r\nd\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:2\r\n$17\r\nlast-delivered-id\r\n$3\r\n3-0\r\n$12\r\nentries-read\r\n:3\r\n$3\r\nlag\r\n:1\r\n
+# P4 empty with A>0 and ER
+XADD r 1-0 f v	$3\r\n1-0\r\n
+XADD r 2-0 f v	$3\r\n2-0\r\n
+XDEL r 1-0 2-0	:2\r\n
+XGROUP CREATE r a 0 ENTRIESREAD 5	+OK\r\n
+XGROUP CREATE r b 9-0	+OK\r\n
+XGROUP CREATE r c 0 ENTRIESREAD 1	+OK\r\n
+XINFO GROUPS r	*3\r\n*12\r\n$4\r\nname\r\n$1\r\na\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n:5\r\n$3\r\nlag\r\n:-3\r\n*12\r\n$4\r\nname\r\n$1\r\nb\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n9-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n$-1\r\n*12\r\n$4\r\nname\r\n$1\r\nc\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n:1\r\n$3\r\nlag\r\n:1\r\n
+XADD r 3-0 f v	$3\r\n3-0\r\n
+XINFO GROUPS r	*3\r\n*12\r\n$4\r\nname\r\n$1\r\na\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n:5\r\n$3\r\nlag\r\n:1\r\n*12\r\n$4\r\nname\r\n$1\r\nb\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n9-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n$-1\r\n*12\r\n$4\r\nname\r\n$1\r\nc\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n:1\r\n$3\r\nlag\r\n:1\r\n
+# P5/P6 nil ER in middle
+XADD w 1-0 f v	$3\r\n1-0\r\n
+XADD w 2-0 f v	$3\r\n2-0\r\n
+XADD w 3-0 f v	$3\r\n3-0\r\n
+XADD w 4-0 f v	$3\r\n4-0\r\n
+XGROUP CREATE w g 1-0	+OK\r\n
+XINFO GROUPS w	*1\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n1-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:3\r\n
+XREADGROUP GROUP g x COUNT 1 STREAMS w >	*1\r\n*2\r\n$1\r\nw\r\n*1\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XINFO GROUPS w	*1\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n2-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n$-1\r\n
+XREADGROUP GROUP g x COUNT 5 STREAMS w >	*1\r\n*2\r\n$1\r\nw\r\n*2\r\n*2\r\n$3\r\n3-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n4-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XINFO GROUPS w	*1\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:3\r\n$17\r\nlast-delivered-id\r\n$3\r\n4-0\r\n$12\r\nentries-read\r\n:4\r\n$3\r\nlag\r\n:0\r\n
+XREADGROUP GROUP g x COUNT 5 STREAMS w >	*-1\r\n
+XINFO GROUPS w	*1\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:3\r\n$17\r\nlast-delivered-id\r\n$3\r\n4-0\r\n$12\r\nentries-read\r\n:4\r\n$3\r\nlag\r\n:0\r\n
+# L beyond last with nil, then XADD
+XGROUP SETID w g 9-0	+OK\r\n
+XADD w 10-0 f v	$4\r\n10-0\r\n
+XINFO GROUPS w	*1\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:3\r\n$17\r\nlast-delivered-id\r\n$3\r\n9-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n$-1\r\n
+XREADGROUP GROUP g x COUNT 5 STREAMS w >	*1\r\n*2\r\n$1\r\nw\r\n*1\r\n*2\r\n$4\r\n10-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XINFO GROUPS w	*1\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:4\r\n$17\r\nlast-delivered-id\r\n$4\r\n10-0\r\n$12\r\nentries-read\r\n:5\r\n$3\r\nlag\r\n:0\r\n
+# ER valid but the read passes over entries: noack
+XADD n 1-0 f v	$3\r\n1-0\r\n
+XADD n 2-0 f v	$3\r\n2-0\r\n
+XADD n 3-0 f v	$3\r\n3-0\r\n
+XGROUP CREATE n g 0	+OK\r\n
+XREADGROUP GROUP g x COUNT 1 NOACK STREAMS n >	*1\r\n*2\r\n$1\r\nn\r\n*1\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XINFO GROUPS n	*1\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n1-0\r\n$12\r\nentries-read\r\n:1\r\n$3\r\nlag\r\n:2\r\n
+XINFO CONSUMERS n g	?
+XREADGROUP GROUP g x STREAMS n 0	*1\r\n*2\r\n$1\r\nn\r\n*0\r\n
+XINFO GROUPS n	*1\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n1-0\r\n$12\r\nentries-read\r\n:1\r\n$3\r\nlag\r\n:2\r\n
+# ENTRIESREAD position
+XGROUP CREATE n h 0 ENTRIESREAD	-ERR unknown subcommand or wrong number of arguments for 'CREATE'. Try XGROUP HELP.\r\n
+XGROUP CREATE n h 0 BOGUS	-ERR unknown subcommand or wrong number of arguments for 'CREATE'. Try XGROUP HELP.\r\n
+XGROUP CREATE n h 0 ENTRIESREAD 1 BOGUS	-ERR unknown subcommand or wrong number of arguments for 'CREATE'. Try XGROUP HELP.\r\n
+XGROUP CREATE n h 0 entriesread 1	+OK\r\n
+XGROUP CREATE n h2 0 ENTRIESREAD 9223372036854775807	+OK\r\n
+XGROUP CREATE n h3 0 ENTRIESREAD 9223372036854775808	-ERR value is not an integer or out of range\r\n
+XINFO GROUPS n	*3\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n1-0\r\n$12\r\nentries-read\r\n:1\r\n$3\r\nlag\r\n:2\r\n*12\r\n$4\r\nname\r\n$1\r\nh\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n:1\r\n$3\r\nlag\r\n:2\r\n*12\r\n$4\r\nname\r\n$2\r\nh2\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n:9223372036854775807\r\n$3\r\nlag\r\n:-9223372036854775804\r\n
+XGROUP CREATE n h 0 ENTRIESREAD 1	-BUSYGROUP Consumer Group name already exists\r\n
+XGROUP CREATE nokey h 0 ENTRIESREAD -5	-ERR value for ENTRIESREAD must be positive or -1\r\n
+XGROUP CREATE n h 0 ENTRIESREAD -5	-ERR value for ENTRIESREAD must be positive or -1\r\n
+XGROUP SETID n nog 0 ENTRIESREAD 1	-NOGROUP No such consumer group 'nog' for key name 'n'\r\n
+XGROUP SETID n nog 0 ENTRIESREAD -5	-ERR value for ENTRIESREAD must be positive or -1\r\n
+XGROUP SETID nokey g 0	-ERR The XGROUP subcommand requires the key to exist. Note that for CREATE you may want to use the MKSTREAM option to create an empty stream automatically.\r\n
+== reads, deletions and the read counter
+FLUSHALL	+OK\r\n
+XADD a 1-0 f v	$3\r\n1-0\r\n
+XADD a 2-0 f v	$3\r\n2-0\r\n
+XADD a 3-0 f v	$3\r\n3-0\r\n
+XADD a 4-0 f v	$3\r\n4-0\r\n
+XADD a 5-0 f v	$3\r\n5-0\r\n
+XDEL a 1-0 2-0 3-0	:3\r\n
+XGROUP CREATE a g00 0	+OK\r\n
+XGROUP CREATE a g10 1-0	+OK\r\n
+XGROUP CREATE a g20 2-0	+OK\r\n
+XGROUP CREATE a g30 3-0	+OK\r\n
+XGROUP CREATE a g35 3-5	+OK\r\n
+XGROUP CREATE a g40 4-0	+OK\r\n
+XGROUP CREATE a g45 4-5	+OK\r\n
+XGROUP CREATE a g50 5-0	+OK\r\n
+XGROUP CREATE a g90 9-0	+OK\r\n
+XINFO GROUPS a	*9\r\n*12\r\n$4\r\nname\r\n$3\r\ng00\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:2\r\n*12\r\n$4\r\nname\r\n$3\r\ng10\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n1-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n$-1\r\n*12\r\n$4\r\nname\r\n$3\r\ng20\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n2-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n$-1\r\n*12\r\n$4\r\nname\r\n$3\r\ng30\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n3-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:2\r\n*12\r\n$4\r\nname\r\n$3\r\ng35\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n3-5\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:2\r\n*12\r\n$4\r\nname\r\n$3\r\ng40\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n4-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:1\r\n*12\r\n$4\r\nname\r\n$3\r\ng45\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n4-5\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n$-1\r\n*12\r\n$4\r\nname\r\n$3\r\ng50\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n5-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:0\r\n*12\r\n$4\r\nname\r\n$3\r\ng90\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n9-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n$-1\r\n
+XREADGROUP GROUP g00 x COUNT 1 STREAMS a >	*1\r\n*2\r\n$1\r\na\r\n*1\r\n*2\r\n$3\r\n4-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XREADGROUP GROUP g10 x COUNT 1 STREAMS a >	*1\r\n*2\r\n$1\r\na\r\n*1\r\n*2\r\n$3\r\n4-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XREADGROUP GROUP g20 x COUNT 1 STREAMS a >	*1\r\n*2\r\n$1\r\na\r\n*1\r\n*2\r\n$3\r\n4-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XREADGROUP GROUP g30 x COUNT 1 STREAMS a >	*1\r\n*2\r\n$1\r\na\r\n*1\r\n*2\r\n$3\r\n4-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XREADGROUP GROUP g35 x COUNT 1 STREAMS a >	*1\r\n*2\r\n$1\r\na\r\n*1\r\n*2\r\n$3\r\n4-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XREADGROUP GROUP g40 x COUNT 1 STREAMS a >	*1\r\n*2\r\n$1\r\na\r\n*1\r\n*2\r\n$3\r\n5-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XINFO GROUPS a	*9\r\n*12\r\n$4\r\nname\r\n$3\r\ng00\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n4-0\r\n$12\r\nentries-read\r\n:4\r\n$3\r\nlag\r\n:1\r\n*12\r\n$4\r\nname\r\n$3\r\ng10\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n4-0\r\n$12\r\nentries-read\r\n:4\r\n$3\r\nlag\r\n:1\r\n*12\r\n$4\r\nname\r\n$3\r\ng20\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n4-0\r\n$12\r\nentries-read\r\n:4\r\n$3\r\nlag\r\n:1\r\n*12\r\n$4\r\nname\r\n$3\r\ng30\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n4-0\r\n$12\r\nentries-read\r\n:4\r\n$3\r\nlag\r\n:1\r\n*12\r\n$4\r\nname\r\n$3\r\ng35\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n4-0\r\n$12\r\nentries-read\r\n:4\r\n$3\r\nlag\r\n:1\r\n*12\r\n$4\r\nname\r\n$3\r\ng40\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n5-0\r\n$12\r\nentries-read\r\n:5\r\n$3\r\nlag\r\n:0\r\n*12\r\n$4\r\nname\r\n$3\r\ng45\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n4-5\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n$-1\r\n*12\r\n$4\r\nname\r\n$3\r\ng50\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n5-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:0\r\n*12\r\n$4\r\nname\r\n$3\r\ng90\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n9-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n$-1\r\n
+XADD b 1-0 f v	$3\r\n1-0\r\n
+XADD b 2-0 f v	$3\r\n2-0\r\n
+XADD b 3-0 f v	$3\r\n3-0\r\n
+XADD b 4-0 f v	$3\r\n4-0\r\n
+XADD b 5-0 f v	$3\r\n5-0\r\n
+XDEL b 4-0	:1\r\n
+XGROUP CREATE b g1 0	+OK\r\n
+XGROUP CREATE b g2 0	+OK\r\n
+XGROUP CREATE b g3 0 ENTRIESREAD 0	+OK\r\n
+XGROUP CREATE b g4 0	+OK\r\n
+XGROUP CREATE b g5 1-0 ENTRIESREAD 1	+OK\r\n
+XREADGROUP GROUP g1 x COUNT 2 STREAMS b >	*1\r\n*2\r\n$1\r\nb\r\n*2\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XREADGROUP GROUP g2 x COUNT 1 STREAMS b >	*1\r\n*2\r\n$1\r\nb\r\n*1\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XREADGROUP GROUP g3 x COUNT 2 STREAMS b >	*1\r\n*2\r\n$1\r\nb\r\n*2\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XREADGROUP GROUP g4 x COUNT 3 STREAMS b >	*1\r\n*2\r\n$1\r\nb\r\n*3\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n3-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XREADGROUP GROUP g5 x COUNT 1 STREAMS b >	*1\r\n*2\r\n$1\r\nb\r\n*1\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XINFO GROUPS b	*5\r\n*12\r\n$4\r\nname\r\n$2\r\ng1\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:2\r\n$17\r\nlast-delivered-id\r\n$3\r\n2-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n$-1\r\n*12\r\n$4\r\nname\r\n$2\r\ng2\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n1-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n$-1\r\n*12\r\n$4\r\nname\r\n$2\r\ng3\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:2\r\n$17\r\nlast-delivered-id\r\n$3\r\n2-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n$-1\r\n*12\r\n$4\r\nname\r\n$2\r\ng4\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:3\r\n$17\r\nlast-delivered-id\r\n$3\r\n3-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n$-1\r\n*12\r\n$4\r\nname\r\n$2\r\ng5\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n2-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n$-1\r\n
+XADD c 1-0 f v	$3\r\n1-0\r\n
+XADD c 2-0 f v	$3\r\n2-0\r\n
+XADD c 3-0 f v	$3\r\n3-0\r\n
+XADD c 4-0 f v	$3\r\n4-0\r\n
+XDEL c 1-0	:1\r\n
+XGROUP CREATE c f2 2-0	+OK\r\n
+XGROUP CREATE c f3 3-0	+OK\r\n
+XGROUP CREATE c e0 0 ENTRIESREAD 5	+OK\r\n
+XGROUP CREATE c e1 1-0 ENTRIESREAD 5	+OK\r\n
+XGROUP CREATE c e2 2-0 ENTRIESREAD 5	+OK\r\n
+XINFO GROUPS c	*5\r\n*12\r\n$4\r\nname\r\n$2\r\ne0\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n:5\r\n$3\r\nlag\r\n:3\r\n*12\r\n$4\r\nname\r\n$2\r\ne1\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n1-0\r\n$12\r\nentries-read\r\n:5\r\n$3\r\nlag\r\n:3\r\n*12\r\n$4\r\nname\r\n$2\r\ne2\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n2-0\r\n$12\r\nentries-read\r\n:5\r\n$3\r\nlag\r\n:-1\r\n*12\r\n$4\r\nname\r\n$2\r\nf2\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n2-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:2\r\n*12\r\n$4\r\nname\r\n$2\r\nf3\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n3-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n$-1\r\n
+XREADGROUP GROUP e0 x COUNT 1 STREAMS c >	*1\r\n*2\r\n$1\r\nc\r\n*1\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XREADGROUP GROUP e1 x COUNT 1 STREAMS c >	*1\r\n*2\r\n$1\r\nc\r\n*1\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XREADGROUP GROUP e2 x COUNT 1 STREAMS c >	*1\r\n*2\r\n$1\r\nc\r\n*1\r\n*2\r\n$3\r\n3-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XREADGROUP GROUP f2 x COUNT 1 STREAMS c >	*1\r\n*2\r\n$1\r\nc\r\n*1\r\n*2\r\n$3\r\n3-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XINFO GROUPS c	*5\r\n*12\r\n$4\r\nname\r\n$2\r\ne0\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n2-0\r\n$12\r\nentries-read\r\n:2\r\n$3\r\nlag\r\n:2\r\n*12\r\n$4\r\nname\r\n$2\r\ne1\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n2-0\r\n$12\r\nentries-read\r\n:2\r\n$3\r\nlag\r\n:2\r\n*12\r\n$4\r\nname\r\n$2\r\ne2\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n3-0\r\n$12\r\nentries-read\r\n:6\r\n$3\r\nlag\r\n:-2\r\n*12\r\n$4\r\nname\r\n$2\r\nf2\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n3-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n$-1\r\n*12\r\n$4\r\nname\r\n$2\r\nf3\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n3-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n$-1\r\n
+XADD d 1-0 f v	$3\r\n1-0\r\n
+XADD d 2-0 f v	$3\r\n2-0\r\n
+XADD d 3-0 f v	$3\r\n3-0\r\n
+XGROUP CREATE d h1 0 ENTRIESREAD 3	+OK\r\n
+XGROUP CREATE d h2 1-0 ENTRIESREAD 7	+OK\r\n
+XGROUP CREATE d h3 1-0 ENTRIESREAD 7	+OK\r\n
+XGROUP CREATE d h4 2-0 ENTRIESREAD 7	+OK\r\n
+XREADGROUP GROUP h1 x COUNT 2 STREAMS d >	*1\r\n*2\r\n$1\r\nd\r\n*2\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XREADGROUP GROUP h2 x COUNT 1 STREAMS d >	*1\r\n*2\r\n$1\r\nd\r\n*1\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XREADGROUP GROUP h3 x COUNT 2 STREAMS d >	*1\r\n*2\r\n$1\r\nd\r\n*2\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n3-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XREADGROUP GROUP h4 x COUNT 1 STREAMS d >	*1\r\n*2\r\n$1\r\nd\r\n*1\r\n*2\r\n$3\r\n3-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XINFO GROUPS d	*4\r\n*12\r\n$4\r\nname\r\n$2\r\nh1\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:2\r\n$17\r\nlast-delivered-id\r\n$3\r\n2-0\r\n$12\r\nentries-read\r\n:2\r\n$3\r\nlag\r\n:1\r\n*12\r\n$4\r\nname\r\n$2\r\nh2\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n2-0\r\n$12\r\nentries-read\r\n:8\r\n$3\r\nlag\r\n:-5\r\n*12\r\n$4\r\nname\r\n$2\r\nh3\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:2\r\n$17\r\nlast-delivered-id\r\n$3\r\n3-0\r\n$12\r\nentries-read\r\n:9\r\n$3\r\nlag\r\n:-6\r\n*12\r\n$4\r\nname\r\n$2\r\nh4\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n3-0\r\n$12\r\nentries-read\r\n:8\r\n$3\r\nlag\r\n:-5\r\n
+XGROUP CREATE e k 0 ENTRIESREAD 2 MKSTREAM	+OK\r\n
+XGROUP CREATE e k2 $ MKSTREAM	+OK\r\n
+XADD e 1-0 f v	$3\r\n1-0\r\n
+XINFO GROUPS e	*2\r\n*12\r\n$4\r\nname\r\n$1\r\nk\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n:2\r\n$3\r\nlag\r\n:-1\r\n*12\r\n$4\r\nname\r\n$2\r\nk2\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:1\r\n
+XREADGROUP GROUP k x COUNT 1 STREAMS e >	*1\r\n*2\r\n$1\r\ne\r\n*1\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XINFO GROUPS e	*2\r\n*12\r\n$4\r\nname\r\n$1\r\nk\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n1-0\r\n$12\r\nentries-read\r\n:1\r\n$3\r\nlag\r\n:0\r\n*12\r\n$4\r\nname\r\n$2\r\nk2\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:1\r\n
+== ENTRIESREAD and SETID against the stream's counters
+FLUSHALL	+OK\r\n
+XADD s 1-0 f v1	$3\r\n1-0\r\n
+XADD s 2-0 f v2	$3\r\n2-0\r\n
+XADD s 3-0 f v3	$3\r\n3-0\r\n
+XADD s 4-0 f v4	$3\r\n4-0\r\n
+XADD s 5-0 f v5	$3\r\n5-0\r\n
+XADD s 6-0 f v6	$3\r\n6-0\r\n
+XADD s 7-0 f v7	$3\r\n7-0\r\n
+XADD s 8-0 f v8	$3\r\n8-0\r\n
+XADD s 9-0 f v9	$3\r\n9-0\r\n
+XADD s 10-0 f v10	$4\r\n10-0\r\n
+XADD s 11-0 f v11	$4\r\n11-0\r\n
+XADD s 12-0 f v12	$4\r\n12-0\r\n
+XADD s 13-0 f v13	$4\r\n13-0\r\n
+XGROUP CREATE s g 0	+OK\r\n
+XREADGROUP GROUP g a COUNT 12 STREAMS s >	*1\r\n*2\r\n$1\r\ns\r\n*12\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$2\r\nv1\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$2\r\nv2\r\n*2\r\n$3\r\n3-0\r\n*2\r\n$1\r\nf\r\n$2\r\nv3\r\n*2\r\n$3\r\n4-0\r\n*2\r\n$1\r\nf\r\n$2\r\nv4\r\n*2\r\n$3\r\n5-0\r\n*2\r\n$1\r\nf\r\n$2\r\nv5\r\n*2\r\n$3\r\n6-0\r\n*2\r\n$1\r\nf\r\n$2\r\nv6\r\n*2\r\n$3\r\n7-0\r\n*2\r\n$1\r\nf\r\n$2\r\nv7\r\n*2\r\n$3\r\n8-0\r\n*2\r\n$1\r\nf\r\n$2\r\nv8\r\n*2\r\n$3\r\n9-0\r\n*2\r\n$1\r\nf\r\n$2\r\nv9\r\n*2\r\n$4\r\n10-0\r\n*2\r\n$1\r\nf\r\n$3\r\nv10\r\n*2\r\n$4\r\n11-0\r\n*2\r\n$1\r\nf\r\n$3\r\nv11\r\n*2\r\n$4\r\n12-0\r\n*2\r\n$1\r\nf\r\n$3\r\nv12\r\n
+XINFO STREAM s FULL	?
+XINFO STREAM s FULL COUNT 3	?
+XINFO STREAM s FULL COUNT 20	?
+XINFO STREAM nokey BOGUS	-ERR no such key\r\n
+XINFO STREAM nokey FULL COUNT x	-ERR no such key\r\n
+XINFO STREAM nokey FULL	-ERR no such key\r\n
+SET str v	+OK\r\n
+XINFO STREAM str FULL	-WRONGTYPE Operation against a key holding the wrong kind of value\r\n
+XINFO STREAM str BOGUS	-WRONGTYPE Operation against a key holding the wrong kind of value\r\n
+XINFO STREAM s FULL COUNT 1 extra	-ERR unknown subcommand or wrong number of arguments for 'STREAM'. Try XINFO HELP.\r\n
+XINFO STREAM s COUNT 1	-ERR unknown subcommand or wrong number of arguments for 'STREAM'. Try XINFO HELP.\r\n
+XINFO STREAM s FULL FULL	-ERR unknown subcommand or wrong number of arguments for 'STREAM'. Try XINFO HELP.\r\n
+XINFO CONSUMERS str nogroup	-WRONGTYPE Operation against a key holding the wrong kind of value\r\n
+XINFO CONSUMERS nokey nogroup	-ERR no such key\r\n
+xinfo bogus	-ERR unknown subcommand 'bogus'. Try XINFO HELP.\r\n
+XINFO Help	*9\r\n+XINFO <subcommand> [<arg> [value] [opt] ...]. Subcommands are:\r\n+CONSUMERS <key> <groupname>\r\n+    Show consumers of <groupname>.\r\n+GROUPS <key>\r\n+    Show the stream consumer groups.\r\n+STREAM <key> [FULL [COUNT <count>]\r\n+    Show information about the stream.\r\n+HELP\r\n+    Print this help.\r\n
+XINFO help a	-ERR wrong number of arguments for 'xinfo|help' command\r\n
+XINFO STREAM s FULL COUNT 99999999999999999999	-ERR value is not an integer or out of range\r\n
+XINFO STREAM s FULL COUNT 9223372036854775807	?
+XGROUP SETID s g	-ERR wrong number of arguments for 'xgroup|setid' command\r\n
+XGROUP CREATE s g	-ERR wrong number of arguments for 'xgroup|create' command\r\n
+XGROUP CREATE s g2 0 MKSTREAM MKSTREAM	+OK\r\n
+XGROUP CREATE s g3 0 ENTRIESREAD 1 MKSTREAM extra	-ERR unknown subcommand or wrong number of arguments for 'CREATE'. Try XGROUP HELP.\r\n
+XGROUP CREATE s g4 0 extra	-ERR unknown subcommand or wrong number of arguments for 'CREATE'. Try XGROUP HELP.\r\n
+XGROUP SETID s g 0 extra	-ERR unknown subcommand or wrong number of arguments for 'SETID'. Try XGROUP HELP.\r\n
+XGROUP SETID s g 0 ENTRIESREAD 1 extra	-ERR unknown subcommand or wrong number of arguments for 'SETID'. Try XGROUP HELP.\r\n
+XGROUP SETID s nog 0	-NOGROUP No such consumer group 'nog' for key name 's'\r\n
+XGROUP SETID s g 0 entriesread 2	+OK\r\n
+XGROUP CREATE s g5 0 ENTRIESREAD 1 MKSTREAM	+OK\r\n
+XGROUP SETID nokey g 0 ENTRIESREAD x	-ERR value is not an integer or out of range\r\n
+XGROUP SETID s g bad	-ERR Invalid stream ID specified as stream command argument\r\n
+XGROUP SETID s g bad ENTRIESREAD 1	-ERR Invalid stream ID specified as stream command argument\r\n
+XGROUP SETID s g 0 ENTRIESREAD 1.5	-ERR value is not an integer or out of range\r\n
+XGROUP CREATE s g6 bad ENTRIESREAD x	-ERR value is not an integer or out of range\r\n
+XGROUP CREATE nokey g6 0 ENTRIESREAD x	-ERR value is not an integer or out of range\r\n
+XGROUP CREATE str g6 0 ENTRIESREAD 1	-WRONGTYPE Operation against a key holding the wrong kind of value\r\n
+XGROUP CREATE s g ENTRIESREAD 1	-ERR unknown subcommand or wrong number of arguments for 'CREATE'. Try XGROUP HELP.\r\n
+XINFO GROUPS s	*3\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:12\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n:2\r\n$3\r\nlag\r\n:11\r\n*12\r\n$4\r\nname\r\n$2\r\ng2\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:13\r\n*12\r\n$4\r\nname\r\n$2\r\ng5\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n:1\r\n$3\r\nlag\r\n:12\r\n
+== XGROUP CREATE and SETID argument checks
+FLUSHALL	+OK\r\n
+XADD s 1-0 f v	$3\r\n1-0\r\n
+xinfo stream s bogus	-ERR unknown subcommand or wrong number of arguments for 'stream'. Try XINFO HELP.\r\n
+xgroup create s g 0 bogus	-ERR unknown subcommand or wrong number of arguments for 'create'. Try XGROUP HELP.\r\n
+xgroup setid s g 0 bogus	-ERR unknown subcommand or wrong number of arguments for 'setid'. Try XGROUP HELP.\r\n
+XGROUP create s g 0 ENTRIESREAD	-ERR unknown subcommand or wrong number of arguments for 'create'. Try XGROUP HELP.\r\n
+XGROUP CREATE s g 0 ENTRIESREAD -1	+OK\r\n
+XINFO GROUPS s	*1\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:1\r\n
+XGROUP CREATE s g 0 MKSTREAM ENTRIESREAD 5	-BUSYGROUP Consumer Group name already exists\r\n
+XGROUP CREATE s g2 0 ENTRIESREAD -2 MKSTREAM	-ERR value for ENTRIESREAD must be positive or -1\r\n
+XGROUP CREATE nokey g2 0 ENTRIESREAD 2 BOGUS	-ERR unknown subcommand or wrong number of arguments for 'CREATE'. Try XGROUP HELP.\r\n
+XGROUP CREATE s g 0 ENTRIESREAD 1 ENTRIESREAD x	-ERR value is not an integer or out of range\r\n
+XGROUP CREATE s g 0 ENTRIESREAD x ENTRIESREAD 1	-ERR value is not an integer or out of range\r\n
+XGROUP CREATE s g3 0 ENTRIESREAD 2 ENTRIESREAD 3	-ERR unknown subcommand or wrong number of arguments for 'CREATE'. Try XGROUP HELP.\r\n
+XGROUP SETID s g 0 ENTRIESREAD 1 ENTRIESREAD 2	-ERR unknown subcommand or wrong number of arguments for 'SETID'. Try XGROUP HELP.\r\n
+XGROUP SETID s g 0 MKSTREAM	-ERR unknown subcommand or wrong number of arguments for 'SETID'. Try XGROUP HELP.\r\n
+XGROUP SETID s g $ ENTRIESREAD 1	+OK\r\n
+XINFO GROUPS s	*1\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n1-0\r\n$12\r\nentries-read\r\n:1\r\n$3\r\nlag\r\n:0\r\n
+XGROUP SETID nokey g 0	-ERR The XGROUP subcommand requires the key to exist. Note that for CREATE you may want to use the MKSTREAM option to create an empty stream automatically.\r\n
+XGROUP SETID nokey g 0 ENTRIESREAD -3	-ERR value for ENTRIESREAD must be positive or -1\r\n
+XGROUP CREATE nokey g bad	-ERR The XGROUP subcommand requires the key to exist. Note that for CREATE you may want to use the MKSTREAM option to create an empty stream automatically.\r\n
+XGROUP SETID nokey g bad	-ERR The XGROUP subcommand requires the key to exist. Note that for CREATE you may want to use the MKSTREAM option to create an empty stream automatically.\r\n
+XGROUP SETID s nog bad	-NOGROUP No such consumer group 'nog' for key name 's'\r\n
+== lag after trims
+FLUSHALL	+OK\r\n
+XADD t 1-0 f v	$3\r\n1-0\r\n
+XADD t 2-0 f v	$3\r\n2-0\r\n
+XADD t 3-0 f v	$3\r\n3-0\r\n
+XADD t 4-0 f v	$3\r\n4-0\r\n
+XADD t 5-0 f v	$3\r\n5-0\r\n
+XGROUP CREATE t g 0	+OK\r\n
+XGROUP CREATE t h 0	+OK\r\n
+XREADGROUP GROUP h c COUNT 1 STREAMS t >	*1\r\n*2\r\n$1\r\nt\r\n*1\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XTRIM t MINID 3-0	:2\r\n
+XINFO STREAM t	*20\r\n$6\r\nlength\r\n:3\r\n$15\r\nradix-tree-keys\r\n:1\r\n$16\r\nradix-tree-nodes\r\n:2\r\n$17\r\nlast-generated-id\r\n$3\r\n5-0\r\n$20\r\nmax-deleted-entry-id\r\n$3\r\n0-0\r\n$13\r\nentries-added\r\n:5\r\n$23\r\nrecorded-first-entry-id\r\n$3\r\n3-0\r\n$6\r\ngroups\r\n:2\r\n$11\r\nfirst-entry\r\n*2\r\n$3\r\n3-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n$10\r\nlast-entry\r\n*2\r\n$3\r\n5-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XINFO GROUPS t	*2\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:3\r\n*12\r\n$4\r\nname\r\n$1\r\nh\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n1-0\r\n$12\r\nentries-read\r\n:1\r\n$3\r\nlag\r\n:4\r\n
+XADD t MAXLEN 2 6-0 f v	$3\r\n6-0\r\n
+XINFO STREAM t	*20\r\n$6\r\nlength\r\n:2\r\n$15\r\nradix-tree-keys\r\n:1\r\n$16\r\nradix-tree-nodes\r\n:2\r\n$17\r\nlast-generated-id\r\n$3\r\n6-0\r\n$20\r\nmax-deleted-entry-id\r\n$3\r\n0-0\r\n$13\r\nentries-added\r\n:6\r\n$23\r\nrecorded-first-entry-id\r\n$3\r\n5-0\r\n$6\r\ngroups\r\n:2\r\n$11\r\nfirst-entry\r\n*2\r\n$3\r\n5-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n$10\r\nlast-entry\r\n*2\r\n$3\r\n6-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XINFO GROUPS t	*2\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:2\r\n*12\r\n$4\r\nname\r\n$1\r\nh\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n1-0\r\n$12\r\nentries-read\r\n:1\r\n$3\r\nlag\r\n:5\r\n
+XTRIM t MAXLEN 0	:2\r\n
+XINFO STREAM t	*20\r\n$6\r\nlength\r\n:0\r\n$15\r\nradix-tree-keys\r\n:0\r\n$16\r\nradix-tree-nodes\r\n:1\r\n$17\r\nlast-generated-id\r\n$3\r\n6-0\r\n$20\r\nmax-deleted-entry-id\r\n$3\r\n0-0\r\n$13\r\nentries-added\r\n:6\r\n$23\r\nrecorded-first-entry-id\r\n$3\r\n0-0\r\n$6\r\ngroups\r\n:2\r\n$11\r\nfirst-entry\r\n$-1\r\n$10\r\nlast-entry\r\n$-1\r\n
+XINFO GROUPS t	*2\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:0\r\n*12\r\n$4\r\nname\r\n$1\r\nh\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n1-0\r\n$12\r\nentries-read\r\n:1\r\n$3\r\nlag\r\n:5\r\n
+XADD t MINID 9-0 7-0 f v	$3\r\n7-0\r\n
+XINFO STREAM t	*20\r\n$6\r\nlength\r\n:0\r\n$15\r\nradix-tree-keys\r\n:0\r\n$16\r\nradix-tree-nodes\r\n:1\r\n$17\r\nlast-generated-id\r\n$3\r\n7-0\r\n$20\r\nmax-deleted-entry-id\r\n$3\r\n0-0\r\n$13\r\nentries-added\r\n:7\r\n$23\r\nrecorded-first-entry-id\r\n$3\r\n0-0\r\n$6\r\ngroups\r\n:2\r\n$11\r\nfirst-entry\r\n$-1\r\n$10\r\nlast-entry\r\n$-1\r\n
+XDEL t 99-0	:0\r\n
+XINFO STREAM t	*20\r\n$6\r\nlength\r\n:0\r\n$15\r\nradix-tree-keys\r\n:0\r\n$16\r\nradix-tree-nodes\r\n:1\r\n$17\r\nlast-generated-id\r\n$3\r\n7-0\r\n$20\r\nmax-deleted-entry-id\r\n$3\r\n0-0\r\n$13\r\nentries-added\r\n:7\r\n$23\r\nrecorded-first-entry-id\r\n$3\r\n0-0\r\n$6\r\ngroups\r\n:2\r\n$11\r\nfirst-entry\r\n$-1\r\n$10\r\nlast-entry\r\n$-1\r\n
+XADD u 1-0 f v	$3\r\n1-0\r\n
+XADD u 2-0 f v	$3\r\n2-0\r\n
+XDEL u 1-0	:1\r\n
+XTRIM u MAXLEN 0	:1\r\n
+XINFO STREAM u	*20\r\n$6\r\nlength\r\n:0\r\n$15\r\nradix-tree-keys\r\n:0\r\n$16\r\nradix-tree-nodes\r\n:1\r\n$17\r\nlast-generated-id\r\n$3\r\n2-0\r\n$20\r\nmax-deleted-entry-id\r\n$3\r\n1-0\r\n$13\r\nentries-added\r\n:2\r\n$23\r\nrecorded-first-entry-id\r\n$3\r\n0-0\r\n$6\r\ngroups\r\n:0\r\n$11\r\nfirst-entry\r\n$-1\r\n$10\r\nlast-entry\r\n$-1\r\n
+== lag and entries-read, mixed
+FLUSHALL	+OK\r\n
+XINFO STREAM nokey	-ERR no such key\r\n
+XINFO GROUPS nokey	-ERR no such key\r\n
+XINFO CONSUMERS nokey g	-ERR no such key\r\n
+SET str v	+OK\r\n
+XINFO STREAM str	-WRONGTYPE Operation against a key holding the wrong kind of value\r\n
+XINFO STREAM str FULL	-WRONGTYPE Operation against a key holding the wrong kind of value\r\n
+XINFO GROUPS str	-WRONGTYPE Operation against a key holding the wrong kind of value\r\n
+XINFO CONSUMERS str g	-WRONGTYPE Operation against a key holding the wrong kind of value\r\n
+XINFO	-ERR wrong number of arguments for 'xinfo' command\r\n
+XINFO bogus	-ERR unknown subcommand 'bogus'. Try XINFO HELP.\r\n
+XINFO STREAM	-ERR wrong number of arguments for 'xinfo|stream' command\r\n
+XINFO GROUPS a b	-ERR wrong number of arguments for 'xinfo|groups' command\r\n
+XINFO CONSUMERS s	-ERR wrong number of arguments for 'xinfo|consumers' command\r\n
+XINFO HELP	*9\r\n+XINFO <subcommand> [<arg> [value] [opt] ...]. Subcommands are:\r\n+CONSUMERS <key> <groupname>\r\n+    Show consumers of <groupname>.\r\n+GROUPS <key>\r\n+    Show the stream consumer groups.\r\n+STREAM <key> [FULL [COUNT <count>]\r\n+    Show information about the stream.\r\n+HELP\r\n+    Print this help.\r\n
+XINFO help extra	-ERR wrong number of arguments for 'xinfo|help' command\r\n
+XADD s 1-1 a 1	$3\r\n1-1\r\n
+XADD s 2-1 b 2 c 3	$3\r\n2-1\r\n
+XADD s 3-1 d 4	$3\r\n3-1\r\n
+XINFO CONSUMERS s nogroup	-NOGROUP No such consumer group 'nogroup' for key name 's'\r\n
+XINFO STREAM s	*20\r\n$6\r\nlength\r\n:3\r\n$15\r\nradix-tree-keys\r\n:1\r\n$16\r\nradix-tree-nodes\r\n:2\r\n$17\r\nlast-generated-id\r\n$3\r\n3-1\r\n$20\r\nmax-deleted-entry-id\r\n$3\r\n0-0\r\n$13\r\nentries-added\r\n:3\r\n$23\r\nrecorded-first-entry-id\r\n$3\r\n1-1\r\n$6\r\ngroups\r\n:0\r\n$11\r\nfirst-entry\r\n*2\r\n$3\r\n1-1\r\n*2\r\n$1\r\na\r\n$1\r\n1\r\n$10\r\nlast-entry\r\n*2\r\n$3\r\n3-1\r\n*2\r\n$1\r\nd\r\n$1\r\n4\r\n
+XINFO STREAM s full count 1	?
+XINFO STREAM s FULL COUNT 0	?
+XINFO STREAM s FULL COUNT x	-ERR value is not an integer or out of range\r\n
+XINFO STREAM s FULL COUNT	-ERR unknown subcommand or wrong number of arguments for 'STREAM'. Try XINFO HELP.\r\n
+XINFO stream s bogus	-ERR unknown subcommand or wrong number of arguments for 'stream'. Try XINFO HELP.\r\n
+XINFO GROUPS s	*0\r\n
+XGROUP CREATE s g0 0	+OK\r\n
+XGROUP CREATE s g1 $	+OK\r\n
+XGROUP CREATE s g2 0 ENTRIESREAD 1	+OK\r\n
+XINFO GROUPS s	*3\r\n*12\r\n$4\r\nname\r\n$2\r\ng0\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:3\r\n*12\r\n$4\r\nname\r\n$2\r\ng1\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n3-1\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:0\r\n*12\r\n$4\r\nname\r\n$2\r\ng2\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n:1\r\n$3\r\nlag\r\n:2\r\n
+XREADGROUP GROUP g0 alice COUNT 1 STREAMS s >	*1\r\n*2\r\n$1\r\ns\r\n*1\r\n*2\r\n$3\r\n1-1\r\n*2\r\n$1\r\na\r\n$1\r\n1\r\n
+XINFO GROUPS s	*3\r\n*12\r\n$4\r\nname\r\n$2\r\ng0\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n1-1\r\n$12\r\nentries-read\r\n:1\r\n$3\r\nlag\r\n:2\r\n*12\r\n$4\r\nname\r\n$2\r\ng1\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n3-1\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:0\r\n*12\r\n$4\r\nname\r\n$2\r\ng2\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n:1\r\n$3\r\nlag\r\n:2\r\n
+XREADGROUP GROUP g0 bob STREAMS s >	*1\r\n*2\r\n$1\r\ns\r\n*2\r\n*2\r\n$3\r\n2-1\r\n*4\r\n$1\r\nb\r\n$1\r\n2\r\n$1\r\nc\r\n$1\r\n3\r\n*2\r\n$3\r\n3-1\r\n*2\r\n$1\r\nd\r\n$1\r\n4\r\n
+XINFO GROUPS s	*3\r\n*12\r\n$4\r\nname\r\n$2\r\ng0\r\n$9\r\nconsumers\r\n:2\r\n$7\r\npending\r\n:3\r\n$17\r\nlast-delivered-id\r\n$3\r\n3-1\r\n$12\r\nentries-read\r\n:3\r\n$3\r\nlag\r\n:0\r\n*12\r\n$4\r\nname\r\n$2\r\ng1\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n3-1\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:0\r\n*12\r\n$4\r\nname\r\n$2\r\ng2\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n:1\r\n$3\r\nlag\r\n:2\r\n
+XDEL s 2-1	:1\r\n
+XINFO GROUPS s	*3\r\n*12\r\n$4\r\nname\r\n$2\r\ng0\r\n$9\r\nconsumers\r\n:2\r\n$7\r\npending\r\n:3\r\n$17\r\nlast-delivered-id\r\n$3\r\n3-1\r\n$12\r\nentries-read\r\n:3\r\n$3\r\nlag\r\n:0\r\n*12\r\n$4\r\nname\r\n$2\r\ng1\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n3-1\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:0\r\n*12\r\n$4\r\nname\r\n$2\r\ng2\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n:1\r\n$3\r\nlag\r\n$-1\r\n
+XINFO STREAM s	*20\r\n$6\r\nlength\r\n:2\r\n$15\r\nradix-tree-keys\r\n:1\r\n$16\r\nradix-tree-nodes\r\n:2\r\n$17\r\nlast-generated-id\r\n$3\r\n3-1\r\n$20\r\nmax-deleted-entry-id\r\n$3\r\n2-1\r\n$13\r\nentries-added\r\n:3\r\n$23\r\nrecorded-first-entry-id\r\n$3\r\n1-1\r\n$6\r\ngroups\r\n:3\r\n$11\r\nfirst-entry\r\n*2\r\n$3\r\n1-1\r\n*2\r\n$1\r\na\r\n$1\r\n1\r\n$10\r\nlast-entry\r\n*2\r\n$3\r\n3-1\r\n*2\r\n$1\r\nd\r\n$1\r\n4\r\n
+XADD e 1-1 a 1	$3\r\n1-1\r\n
+XDEL e 1-1	:1\r\n
+XGROUP CREATE e g 0	+OK\r\n
+XINFO STREAM e	*20\r\n$6\r\nlength\r\n:0\r\n$15\r\nradix-tree-keys\r\n:0\r\n$16\r\nradix-tree-nodes\r\n:1\r\n$17\r\nlast-generated-id\r\n$3\r\n1-1\r\n$20\r\nmax-deleted-entry-id\r\n$3\r\n1-1\r\n$13\r\nentries-added\r\n:1\r\n$23\r\nrecorded-first-entry-id\r\n$3\r\n0-0\r\n$6\r\ngroups\r\n:1\r\n$11\r\nfirst-entry\r\n$-1\r\n$10\r\nlast-entry\r\n$-1\r\n
+XINFO STREAM e FULL	?
+XADD a 1-0 f v	$3\r\n1-0\r\n
+XADD a 2-0 f v	$3\r\n2-0\r\n
+XADD a 3-0 f v	$3\r\n3-0\r\n
+XADD a 4-0 f v	$3\r\n4-0\r\n
+XADD a 5-0 f v	$3\r\n5-0\r\n
+XDEL a 1-0 2-0 3-0	:3\r\n
+XGROUP CREATE a g00 0	+OK\r\n
+XGROUP CREATE a g10 1-0	+OK\r\n
+XGROUP CREATE a g30 3-0	+OK\r\n
+XGROUP CREATE a g40 4-0	+OK\r\n
+XGROUP CREATE a g45 4-5	+OK\r\n
+XGROUP CREATE a g50 5-0	+OK\r\n
+XGROUP CREATE a g90 9-0	+OK\r\n
+XGROUP CREATE a e5 0 ENTRIESREAD 5	+OK\r\n
+XINFO GROUPS a	*8\r\n*12\r\n$4\r\nname\r\n$2\r\ne5\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n:5\r\n$3\r\nlag\r\n:2\r\n*12\r\n$4\r\nname\r\n$3\r\ng00\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:2\r\n*12\r\n$4\r\nname\r\n$3\r\ng10\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n1-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n$-1\r\n*12\r\n$4\r\nname\r\n$3\r\ng30\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n3-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:2\r\n*12\r\n$4\r\nname\r\n$3\r\ng40\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n4-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:1\r\n*12\r\n$4\r\nname\r\n$3\r\ng45\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n4-5\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n$-1\r\n*12\r\n$4\r\nname\r\n$3\r\ng50\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n5-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:0\r\n*12\r\n$4\r\nname\r\n$3\r\ng90\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n9-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n$-1\r\n
+XREADGROUP GROUP g10 x COUNT 1 STREAMS a >	*1\r\n*2\r\n$1\r\na\r\n*1\r\n*2\r\n$3\r\n4-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XREADGROUP GROUP e5 x COUNT 1 STREAMS a >	*1\r\n*2\r\n$1\r\na\r\n*1\r\n*2\r\n$3\r\n4-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XINFO GROUPS a	*8\r\n*12\r\n$4\r\nname\r\n$2\r\ne5\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n4-0\r\n$12\r\nentries-read\r\n:4\r\n$3\r\nlag\r\n:1\r\n*12\r\n$4\r\nname\r\n$3\r\ng00\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:2\r\n*12\r\n$4\r\nname\r\n$3\r\ng10\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n4-0\r\n$12\r\nentries-read\r\n:4\r\n$3\r\nlag\r\n:1\r\n*12\r\n$4\r\nname\r\n$3\r\ng30\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n3-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:2\r\n*12\r\n$4\r\nname\r\n$3\r\ng40\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n4-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:1\r\n*12\r\n$4\r\nname\r\n$3\r\ng45\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n4-5\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n$-1\r\n*12\r\n$4\r\nname\r\n$3\r\ng50\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n5-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:0\r\n*12\r\n$4\r\nname\r\n$3\r\ng90\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n9-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n$-1\r\n
+XADD d 1-0 f v	$3\r\n1-0\r\n
+XADD d 2-0 f v	$3\r\n2-0\r\n
+XADD d 3-0 f v	$3\r\n3-0\r\n
+XADD d 4-0 f v	$3\r\n4-0\r\n
+XGROUP CREATE d g 0	+OK\r\n
+XGROUP SETID d g 2-0	+OK\r\n
+XINFO GROUPS d	*1\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n2-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n$-1\r\n
+XGROUP SETID d g 2-0 ENTRIESREAD 10	+OK\r\n
+XINFO GROUPS d	*1\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n2-0\r\n$12\r\nentries-read\r\n:10\r\n$3\r\nlag\r\n:-6\r\n
+XGROUP SETID d g $	+OK\r\n
+XINFO GROUPS d	*1\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n4-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:0\r\n
+XGROUP SETID d g 1-5 ENTRIESREAD 1	+OK\r\n
+XREADGROUP GROUP g x COUNT 1 STREAMS d >	*1\r\n*2\r\n$1\r\nd\r\n*1\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XINFO GROUPS d	*1\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n2-0\r\n$12\r\nentries-read\r\n:2\r\n$3\r\nlag\r\n:2\r\n
+XGROUP SETID d g 2-0 ENTRIESREAD -2	-ERR value for ENTRIESREAD must be positive or -1\r\n
+XGROUP SETID d g 2-0 ENTRIESREAD x	-ERR value is not an integer or out of range\r\n
+XGROUP SETID d g 2-0 ENTRIESREAD 1 ENTRIESREAD 2	-ERR unknown subcommand or wrong number of arguments for 'SETID'. Try XGROUP HELP.\r\n
+XGROUP SETID d nog 0	-NOGROUP No such consumer group 'nog' for key name 'd'\r\n
+XGROUP SETID nokey g 0	-ERR The XGROUP subcommand requires the key to exist. Note that for CREATE you may want to use the MKSTREAM option to create an empty stream automatically.\r\n
+XGROUP CREATE d h 0 ENTRIESREAD 3 MKSTREAM extra	-ERR unknown subcommand or wrong number of arguments for 'CREATE'. Try XGROUP HELP.\r\n
+XGROUP CREATE m g 0 ENTRIESREAD 3 MKSTREAM	+OK\r\n
+XINFO GROUPS m	*1\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n:3\r\n$3\r\nlag\r\n:0\r\n
+XADD t 1-0 f v	$3\r\n1-0\r\n
+XADD t 2-0 f v	$3\r\n2-0\r\n
+XADD t 3-0 f v	$3\r\n3-0\r\n
+XADD t 4-0 f v	$3\r\n4-0\r\n
+XGROUP CREATE t g 0	+OK\r\n
+XGROUP CREATE t h 0	+OK\r\n
+XREADGROUP GROUP h x COUNT 3 STREAMS t >	*1\r\n*2\r\n$1\r\nt\r\n*3\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n3-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XTRIM t MAXLEN 2	:2\r\n
+XINFO STREAM t	*20\r\n$6\r\nlength\r\n:2\r\n$15\r\nradix-tree-keys\r\n:1\r\n$16\r\nradix-tree-nodes\r\n:2\r\n$17\r\nlast-generated-id\r\n$3\r\n4-0\r\n$20\r\nmax-deleted-entry-id\r\n$3\r\n0-0\r\n$13\r\nentries-added\r\n:4\r\n$23\r\nrecorded-first-entry-id\r\n$3\r\n3-0\r\n$6\r\ngroups\r\n:2\r\n$11\r\nfirst-entry\r\n*2\r\n$3\r\n3-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n$10\r\nlast-entry\r\n*2\r\n$3\r\n4-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XINFO GROUPS t	*2\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:2\r\n*12\r\n$4\r\nname\r\n$1\r\nh\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:3\r\n$17\r\nlast-delivered-id\r\n$3\r\n3-0\r\n$12\r\nentries-read\r\n:3\r\n$3\r\nlag\r\n:1\r\n
+XADD f 1-0 f v	$3\r\n1-0\r\n
+XADD f 2-0 f v	$3\r\n2-0\r\n
+XADD f 3-0 f v	$3\r\n3-0\r\n
+XGROUP CREATE f g 0	+OK\r\n
+XREADGROUP GROUP g x COUNT 1 STREAMS f >	*1\r\n*2\r\n$1\r\nf\r\n*1\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XSETID f 3-0 ENTRIESADDED 10 MAXDELETEDID 2-5	+OK\r\n
+XINFO GROUPS f	*1\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n1-0\r\n$12\r\nentries-read\r\n:1\r\n$3\r\nlag\r\n$-1\r\n
+XADD f 10-0 f v	$4\r\n10-0\r\n
+XREADGROUP GROUP g x COUNT 10 STREAMS f >	*1\r\n*2\r\n$1\r\nf\r\n*3\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n3-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$4\r\n10-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XINFO GROUPS f	*1\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:4\r\n$17\r\nlast-delivered-id\r\n$4\r\n10-0\r\n$12\r\nentries-read\r\n:11\r\n$3\r\nlag\r\n:0\r\n
+XINFO STREAM m FULL	?
+== XADD options and NOMKSTREAM
+FLUSHALL	+OK\r\n
+XADD a NOMKSTREAM 1-1 f v	$-1\r\n
+EXISTS a	:0\r\n
+XADD a 1-1 f v	$3\r\n1-1\r\n
+XADD a 1-1 f v	-ERR The ID specified in XADD is equal or smaller than the target stream top item\r\n
+XADD a 0-0 f v	-ERR The ID specified in XADD must be greater than 0-0\r\n
+XADD a 0-1 f v	-ERR The ID specified in XADD is equal or smaller than the target stream top item\r\n
+XADD b 0-1 f v	$3\r\n0-1\r\n
+XADD b 0-0 f v	-ERR The ID specified in XADD must be greater than 0-0\r\n
+XADD b2 0-0 f v	-ERR The ID specified in XADD must be greater than 0-0\r\n
+XADD b3 0-* f v	$3\r\n0-1\r\n
+XADD a 1-* f v	$3\r\n1-2\r\n
+XADD a 1-* f v	$3\r\n1-3\r\n
+XADD a 2-* f v	$3\r\n2-0\r\n
+XADD a 1-5 f v	-ERR The ID specified in XADD is equal or smaller than the target stream top item\r\n
+XADD a 0-* f v	-ERR The ID specified in XADD is equal or smaller than the target stream top item\r\n
+XADD a abc f v	-ERR Invalid stream ID specified as stream command argument\r\n
+XADD a 1- f v	-ERR Invalid stream ID specified as stream command argument\r\n
+XADD a -1 f v	-ERR Invalid stream ID specified as stream command argument\r\n
+XADD a 1-2-3 f v	-ERR Invalid stream ID specified as stream command argument\r\n
+XADD a 3 f v	$3\r\n3-0\r\n
+XADD a 3-x f v	-ERR Invalid stream ID specified as stream command argument\r\n
+XADD a +1-1 f v	-ERR The ID specified in XADD is equal or smaller than the target stream top item\r\n
+XADD a 4-1 f	-ERR wrong number of arguments for 'xadd' command\r\n
+XADD a 4-1	-ERR wrong number of arguments for 'xadd' command\r\n
+XADD a	-ERR wrong number of arguments for 'xadd' command\r\n
+XADD a 5-1 f v g	-ERR wrong number of arguments for 'xadd' command\r\n
+XADD a 5-1 f v f w	$3\r\n5-1\r\n
+XRANGE a 5-1 5-1	*1\r\n*2\r\n$3\r\n5-1\r\n*4\r\n$1\r\nf\r\n$1\r\nv\r\n$1\r\nf\r\n$1\r\nw\r\n
+XADD a MAXLEN 2 6-1 f v	$3\r\n6-1\r\n
+XLEN a	:2\r\n
+XRANGE a - +	*2\r\n*2\r\n$3\r\n5-1\r\n*4\r\n$1\r\nf\r\n$1\r\nv\r\n$1\r\nf\r\n$1\r\nw\r\n*2\r\n$3\r\n6-1\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XADD a MAXLEN = 2 7-1 f v	$3\r\n7-1\r\n
+XADD a MAXLEN ~ 2 8-1 f v	$3\r\n8-1\r\n
+XLEN a	:3\r\n
+XADD a MAXLEN ~ 2 LIMIT 10 9-1 f v	$3\r\n9-1\r\n
+XLEN a	:4\r\n
+XADD a MAXLEN 2 LIMIT 10 10-1 f v	-ERR syntax error, LIMIT cannot be used without the special ~ option\r\n
+XADD a MAXLEN = 2 LIMIT 10 10-2 f v	-ERR syntax error, LIMIT cannot be used without the special ~ option\r\n
+XADD a MAXLEN -1 11-1 f v	-ERR The MAXLEN argument must be >= 0.\r\n
+XADD a MAXLEN x 11-1 f v	-ERR value is not an integer or out of range\r\n
+XADD a MAXLEN 11-1 f v	-ERR value is not an integer or out of range\r\n
+XADD a MINID 8-1 12-1 f v	$4\r\n12-1\r\n
+XADD a MINID = 9-0 13-1 f v	$4\r\n13-1\r\n
+XADD a MINID ~ 9-0 14-1 f v	$4\r\n14-1\r\n
+XADD a MINID bad 15-1 f v	-ERR Invalid stream ID specified as stream command argument\r\n
+XADD a MAXLEN 5 MINID 1 15-1 f v	-ERR syntax error, MAXLEN and MINID options at the same time are not compatible\r\n
+XADD a MAXLEN ~ 5 LIMIT -1 16-1 f v	-ERR The LIMIT argument must be >= 0.\r\n
+XADD a MAXLEN ~ 5 LIMIT x 16-1 f v	-ERR value is not an integer or out of range\r\n
+XADD a LIMIT 5 16-1 f v	-ERR syntax error, LIMIT cannot be used without specifying a trimming strategy\r\n
+XADD a MAXLEN ~ 5 LIMIT 0 16-2 f v	$4\r\n16-2\r\n
+XADD a NOMKSTREAM MAXLEN 5 17-1 f v	$4\r\n17-1\r\n
+XADD a MAXLEN 5 NOMKSTREAM 18-1 f v	$4\r\n18-1\r\n
+XADD a nomkstream maxlen 5 19-1 f v	$4\r\n19-1\r\n
+XADD a MAXLEN 5 MAXLEN 3 20-1 f v	-ERR syntax error, MAXLEN and MINID options at the same time are not compatible\r\n
+XADD a NOMKSTREAM NOMKSTREAM 21-1 f v	$4\r\n21-1\r\n
+XADD a MAXLEN ~ 1000 22-1 f v	$4\r\n22-1\r\n
+XRANGE a - +	*7\r\n*2\r\n$4\r\n14-1\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$4\r\n16-2\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$4\r\n17-1\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$4\r\n18-1\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$4\r\n19-1\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$4\r\n21-1\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$4\r\n22-1\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XLEN a	:7\r\n
+XLEN nokey	:0\r\n
+XLEN a b	-ERR wrong number of arguments for 'xlen' command\r\n
+SET str v	+OK\r\n
+XADD str 1-1 f v	-WRONGTYPE Operation against a key holding the wrong kind of value\r\n
+XLEN str	-WRONGTYPE Operation against a key holding the wrong kind of value\r\n
+XADD c MAXLEN 0 1-1 f v	$3\r\n1-1\r\n
+EXISTS c	:1\r\n
+XLEN c	:0\r\n
+XINFO STREAM c	*20\r\n$6\r\nlength\r\n:0\r\n$15\r\nradix-tree-keys\r\n:0\r\n$16\r\nradix-tree-nodes\r\n:1\r\n$17\r\nlast-generated-id\r\n$3\r\n1-1\r\n$20\r\nmax-deleted-entry-id\r\n$3\r\n0-0\r\n$13\r\nentries-added\r\n:1\r\n$23\r\nrecorded-first-entry-id\r\n$3\r\n0-0\r\n$6\r\ngroups\r\n:0\r\n$11\r\nfirst-entry\r\n$-1\r\n$10\r\nlast-entry\r\n$-1\r\n
+XADD d NOMKSTREAM MAXLEN 0 1-1 f v	$-1\r\n
+EXISTS d	:0\r\n
+XADD e 18446744073709551615-18446744073709551615 f v	$41\r\n18446744073709551615-18446744073709551615\r\n
+XADD e 18446744073709551615-18446744073709551615 f v	-ERR The stream has exhausted the last possible ID, unable to add more items\r\n
+XADD e MAXLEN 0 18446744073709551615-* f v	-ERR The stream has exhausted the last possible ID, unable to add more items\r\n
+XADD e 18446744073709551615-* f v	-ERR The stream has exhausted the last possible ID, unable to add more items\r\n
+XADD e2 18446744073709551615-* f v	$22\r\n18446744073709551615-0\r\n
+XADD e2 18446744073709551615-* f v	$22\r\n18446744073709551615-1\r\n
+== ranges, XSETID and XTRIM
+FLUSHALL	+OK\r\n
+XADD s 1-0 f a	$3\r\n1-0\r\n
+XADD s 1-1 f b	$3\r\n1-1\r\n
+XADD s 2-0 f c	$3\r\n2-0\r\n
+XADD s 3-5 f d	$3\r\n3-5\r\n
+XADD s 18446744073709551615-0 f e	$22\r\n18446744073709551615-0\r\n
+XRANGE s - +	*5\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\na\r\n*2\r\n$3\r\n1-1\r\n*2\r\n$1\r\nf\r\n$1\r\nb\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nc\r\n*2\r\n$3\r\n3-5\r\n*2\r\n$1\r\nf\r\n$1\r\nd\r\n*2\r\n$22\r\n18446744073709551615-0\r\n*2\r\n$1\r\nf\r\n$1\r\ne\r\n
+XRANGE s 1 1	*2\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\na\r\n*2\r\n$3\r\n1-1\r\n*2\r\n$1\r\nf\r\n$1\r\nb\r\n
+XRANGE s 1 2	*3\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\na\r\n*2\r\n$3\r\n1-1\r\n*2\r\n$1\r\nf\r\n$1\r\nb\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nc\r\n
+XRANGE s (1 +	*4\r\n*2\r\n$3\r\n1-1\r\n*2\r\n$1\r\nf\r\n$1\r\nb\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nc\r\n*2\r\n$3\r\n3-5\r\n*2\r\n$1\r\nf\r\n$1\r\nd\r\n*2\r\n$22\r\n18446744073709551615-0\r\n*2\r\n$1\r\nf\r\n$1\r\ne\r\n
+XRANGE s (1-0 +	*4\r\n*2\r\n$3\r\n1-1\r\n*2\r\n$1\r\nf\r\n$1\r\nb\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nc\r\n*2\r\n$3\r\n3-5\r\n*2\r\n$1\r\nf\r\n$1\r\nd\r\n*2\r\n$22\r\n18446744073709551615-0\r\n*2\r\n$1\r\nf\r\n$1\r\ne\r\n
+XRANGE s - (3-5	*3\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\na\r\n*2\r\n$3\r\n1-1\r\n*2\r\n$1\r\nf\r\n$1\r\nb\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nc\r\n
+XRANGE s (1-0 (3-5	*2\r\n*2\r\n$3\r\n1-1\r\n*2\r\n$1\r\nf\r\n$1\r\nb\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nc\r\n
+XRANGE s (- +	-ERR Invalid stream ID specified as stream command argument\r\n
+XRANGE s - (+	-ERR Invalid stream ID specified as stream command argument\r\n
+XRANGE s (18446744073709551615-18446744073709551615 +	-ERR invalid start ID for the interval\r\n
+XRANGE s - (0-0	-ERR invalid end ID for the interval\r\n
+XRANGE s (1-1 (2-0	*0\r\n
+XRANGE s 3 2	*0\r\n
+XRANGE s 2-0 2-0	*1\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nc\r\n
+XRANGE s - + COUNT 2	*2\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\na\r\n*2\r\n$3\r\n1-1\r\n*2\r\n$1\r\nf\r\n$1\r\nb\r\n
+XRANGE s - + COUNT 0	*-1\r\n
+XRANGE s - + COUNT -1	*-1\r\n
+XRANGE s - + COUNT x	-ERR value is not an integer or out of range\r\n
+XRANGE s - + COUNT	-ERR syntax error\r\n
+XRANGE s - + COUNT 1 COUNT 2	*2\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\na\r\n*2\r\n$3\r\n1-1\r\n*2\r\n$1\r\nf\r\n$1\r\nb\r\n
+XRANGE s - + count 1	*1\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\na\r\n
+XRANGE s - + BOGUS 1	-ERR syntax error\r\n
+XRANGE s - + COUNT 1 extra	-ERR syntax error\r\n
+XRANGE s x +	-ERR Invalid stream ID specified as stream command argument\r\n
+XRANGE s - x	-ERR Invalid stream ID specified as stream command argument\r\n
+XRANGE s 1-x +	-ERR Invalid stream ID specified as stream command argument\r\n
+XRANGE s -1 +	-ERR Invalid stream ID specified as stream command argument\r\n
+XRANGE s 1- +	-ERR Invalid stream ID specified as stream command argument\r\n
+XRANGE s 18446744073709551616 +	-ERR Invalid stream ID specified as stream command argument\r\n
+XRANGE s - 18446744073709551615	*5\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\na\r\n*2\r\n$3\r\n1-1\r\n*2\r\n$1\r\nf\r\n$1\r\nb\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nc\r\n*2\r\n$3\r\n3-5\r\n*2\r\n$1\r\nf\r\n$1\r\nd\r\n*2\r\n$22\r\n18446744073709551615-0\r\n*2\r\n$1\r\nf\r\n$1\r\ne\r\n
+XRANGE s 18446744073709551615 +	*1\r\n*2\r\n$22\r\n18446744073709551615-0\r\n*2\r\n$1\r\nf\r\n$1\r\ne\r\n
+XRANGE nokey - +	*0\r\n
+XRANGE s -	-ERR wrong number of arguments for 'xrange' command\r\n
+XREVRANGE s + -	*5\r\n*2\r\n$22\r\n18446744073709551615-0\r\n*2\r\n$1\r\nf\r\n$1\r\ne\r\n*2\r\n$3\r\n3-5\r\n*2\r\n$1\r\nf\r\n$1\r\nd\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nc\r\n*2\r\n$3\r\n1-1\r\n*2\r\n$1\r\nf\r\n$1\r\nb\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\na\r\n
+XREVRANGE s + - COUNT 2	*2\r\n*2\r\n$22\r\n18446744073709551615-0\r\n*2\r\n$1\r\nf\r\n$1\r\ne\r\n*2\r\n$3\r\n3-5\r\n*2\r\n$1\r\nf\r\n$1\r\nd\r\n
+XREVRANGE s (3-5 -	*3\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nc\r\n*2\r\n$3\r\n1-1\r\n*2\r\n$1\r\nf\r\n$1\r\nb\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\na\r\n
+XREVRANGE s + (1-1	*3\r\n*2\r\n$22\r\n18446744073709551615-0\r\n*2\r\n$1\r\nf\r\n$1\r\ne\r\n*2\r\n$3\r\n3-5\r\n*2\r\n$1\r\nf\r\n$1\r\nd\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nc\r\n
+XREVRANGE s 2 1	*3\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nc\r\n*2\r\n$3\r\n1-1\r\n*2\r\n$1\r\nf\r\n$1\r\nb\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\na\r\n
+XREVRANGE s 1 2	*0\r\n
+XREVRANGE s (+ -	-ERR Invalid stream ID specified as stream command argument\r\n
+XREVRANGE s + (-	-ERR Invalid stream ID specified as stream command argument\r\n
+XREVRANGE s + - COUNT 0	*-1\r\n
+XREVRANGE s + - COUNT -3	*-1\r\n
+XREVRANGE s 1 1	*2\r\n*2\r\n$3\r\n1-1\r\n*2\r\n$1\r\nf\r\n$1\r\nb\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\na\r\n
+SET str v	+OK\r\n
+XRANGE str - +	-WRONGTYPE Operation against a key holding the wrong kind of value\r\n
+XREVRANGE str + -	-WRONGTYPE Operation against a key holding the wrong kind of value\r\n
+XDEL s 1-1 9-9 1-1	:1\r\n
+XDEL s 1-1	:0\r\n
+XDEL s x	-ERR Invalid stream ID specified as stream command argument\r\n
+XDEL s 2-0 x	-ERR Invalid stream ID specified as stream command argument\r\n
+XDEL s	-ERR wrong number of arguments for 'xdel' command\r\n
+XDEL nokey 1-1	:0\r\n
+XDEL str 1-1	-WRONGTYPE Operation against a key holding the wrong kind of value\r\n
+XDEL s 1	:1\r\n
+XRANGE s - +	*3\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nc\r\n*2\r\n$3\r\n3-5\r\n*2\r\n$1\r\nf\r\n$1\r\nd\r\n*2\r\n$22\r\n18446744073709551615-0\r\n*2\r\n$1\r\nf\r\n$1\r\ne\r\n
+XTRIM s	-ERR wrong number of arguments for 'xtrim' command\r\n
+XTRIM s MAXLEN	-ERR wrong number of arguments for 'xtrim' command\r\n
+XTRIM s MAXLEN 10 extra	-ERR syntax error\r\n
+XTRIM s BOGUS 1	-ERR syntax error\r\n
+XTRIM s MAXLEN -1	-ERR The MAXLEN argument must be >= 0.\r\n
+XTRIM s MINID x	-ERR Invalid stream ID specified as stream command argument\r\n
+XTRIM s MINID -1	-ERR Invalid stream ID specified as stream command argument\r\n
+XTRIM s MINID 3	:1\r\n
+XRANGE s - +	*2\r\n*2\r\n$3\r\n3-5\r\n*2\r\n$1\r\nf\r\n$1\r\nd\r\n*2\r\n$22\r\n18446744073709551615-0\r\n*2\r\n$1\r\nf\r\n$1\r\ne\r\n
+XTRIM nokey MAXLEN 0	:0\r\n
+XTRIM str MAXLEN 0	-WRONGTYPE Operation against a key holding the wrong kind of value\r\n
+XTRIM s MAXLEN 1 LIMIT 5	-ERR syntax error, LIMIT cannot be used without the special ~ option\r\n
+XTRIM s maxlen = 1	:1\r\n
+XRANGE s - +	*1\r\n*2\r\n$22\r\n18446744073709551615-0\r\n*2\r\n$1\r\nf\r\n$1\r\ne\r\n
+XSETID s 1-0	-ERR The ID specified in XSETID is smaller than current max_deleted_entry_id\r\n
+XSETID s 18446744073709551615-0	+OK\r\n
+XSETID s 18446744073709551615-5	+OK\r\n
+XINFO STREAM s	*20\r\n$6\r\nlength\r\n:1\r\n$15\r\nradix-tree-keys\r\n:1\r\n$16\r\nradix-tree-nodes\r\n:2\r\n$17\r\nlast-generated-id\r\n$22\r\n18446744073709551615-5\r\n$20\r\nmax-deleted-entry-id\r\n$3\r\n1-1\r\n$13\r\nentries-added\r\n:5\r\n$23\r\nrecorded-first-entry-id\r\n$22\r\n18446744073709551615-0\r\n$6\r\ngroups\r\n:0\r\n$11\r\nfirst-entry\r\n*2\r\n$22\r\n18446744073709551615-0\r\n*2\r\n$1\r\nf\r\n$1\r\ne\r\n$10\r\nlast-entry\r\n*2\r\n$22\r\n18446744073709551615-0\r\n*2\r\n$1\r\nf\r\n$1\r\ne\r\n
+XSETID s 18446744073709551615-6 ENTRIESADDED 1	+OK\r\n
+XSETID s 18446744073709551615-6 ENTRIESADDED 10	+OK\r\n
+XSETID s 18446744073709551615-6 ENTRIESADDED 10 MAXDELETEDID 18446744073709551615-7	-ERR The ID specified in XSETID is smaller than the provided max_deleted_entry_id\r\n
+XSETID s 18446744073709551615-6 ENTRIESADDED 10 MAXDELETEDID 5-0	+OK\r\n
+XSETID s 18446744073709551615-6 ENTRIESADDED -1	-ERR entries_added must be positive\r\n
+XSETID s 18446744073709551615-6 ENTRIESADDED x	-ERR value is not an integer or out of range\r\n
+XSETID s 18446744073709551615-6 MAXDELETEDID x	-ERR Invalid stream ID specified as stream command argument\r\n
+XSETID s 18446744073709551615-6 BOGUS 1	-ERR syntax error\r\n
+XSETID s 18446744073709551615-6 ENTRIESADDED	-ERR syntax error\r\n
+XSETID s 18446744073709551615-7 entriesadded 11 maxdeletedid 1-0	+OK\r\n
+XINFO STREAM s	*20\r\n$6\r\nlength\r\n:1\r\n$15\r\nradix-tree-keys\r\n:1\r\n$16\r\nradix-tree-nodes\r\n:2\r\n$17\r\nlast-generated-id\r\n$22\r\n18446744073709551615-7\r\n$20\r\nmax-deleted-entry-id\r\n$3\r\n1-0\r\n$13\r\nentries-added\r\n:11\r\n$23\r\nrecorded-first-entry-id\r\n$22\r\n18446744073709551615-0\r\n$6\r\ngroups\r\n:0\r\n$11\r\nfirst-entry\r\n*2\r\n$22\r\n18446744073709551615-0\r\n*2\r\n$1\r\nf\r\n$1\r\ne\r\n$10\r\nlast-entry\r\n*2\r\n$22\r\n18446744073709551615-0\r\n*2\r\n$1\r\nf\r\n$1\r\ne\r\n
+XSETID nokey 1-0	-ERR no such key\r\n
+XSETID str 1-0	-WRONGTYPE Operation against a key holding the wrong kind of value\r\n
+XSETID s	-ERR wrong number of arguments for 'xsetid' command\r\n
+XSETID s x	-ERR Invalid stream ID specified as stream command argument\r\n
+XSETID s $	-ERR Invalid stream ID specified as stream command argument\r\n
+XSETID s +	-ERR Invalid stream ID specified as stream command argument\r\n
+XADD e 1-1 f v	$3\r\n1-1\r\n
+XDEL e 1-1	:1\r\n
+XSETID e 0-0	-ERR The ID specified in XSETID is smaller than current max_deleted_entry_id\r\n
+XINFO STREAM e	*20\r\n$6\r\nlength\r\n:0\r\n$15\r\nradix-tree-keys\r\n:0\r\n$16\r\nradix-tree-nodes\r\n:1\r\n$17\r\nlast-generated-id\r\n$3\r\n1-1\r\n$20\r\nmax-deleted-entry-id\r\n$3\r\n1-1\r\n$13\r\nentries-added\r\n:1\r\n$23\r\nrecorded-first-entry-id\r\n$3\r\n0-0\r\n$6\r\ngroups\r\n:0\r\n$11\r\nfirst-entry\r\n$-1\r\n$10\r\nlast-entry\r\n$-1\r\n
+XSETID e 0-5	-ERR The ID specified in XSETID is smaller than current max_deleted_entry_id\r\n
+XSETID e 0-0 ENTRIESADDED 5 MAXDELETEDID 0-0	-ERR The ID specified in XSETID is smaller than current max_deleted_entry_id\r\n
+XINFO STREAM e	*20\r\n$6\r\nlength\r\n:0\r\n$15\r\nradix-tree-keys\r\n:0\r\n$16\r\nradix-tree-nodes\r\n:1\r\n$17\r\nlast-generated-id\r\n$3\r\n1-1\r\n$20\r\nmax-deleted-entry-id\r\n$3\r\n1-1\r\n$13\r\nentries-added\r\n:1\r\n$23\r\nrecorded-first-entry-id\r\n$3\r\n0-0\r\n$6\r\ngroups\r\n:0\r\n$11\r\nfirst-entry\r\n$-1\r\n$10\r\nlast-entry\r\n$-1\r\n
+XSETID e 5-0 MAXDELETEDID 9-0	-ERR The ID specified in XSETID is smaller than the provided max_deleted_entry_id\r\n
+XSETID e 5-0 ENTRIESADDED 0	+OK\r\n
+XINFO STREAM e	*20\r\n$6\r\nlength\r\n:0\r\n$15\r\nradix-tree-keys\r\n:0\r\n$16\r\nradix-tree-nodes\r\n:1\r\n$17\r\nlast-generated-id\r\n$3\r\n5-0\r\n$20\r\nmax-deleted-entry-id\r\n$3\r\n1-1\r\n$13\r\nentries-added\r\n:0\r\n$23\r\nrecorded-first-entry-id\r\n$3\r\n0-0\r\n$6\r\ngroups\r\n:0\r\n$11\r\nfirst-entry\r\n$-1\r\n$10\r\nlast-entry\r\n$-1\r\n
+== XPENDING and XACK
+FLUSHALL	+OK\r\n
+XADD s 1-0 f a	$3\r\n1-0\r\n
+XADD s 2-0 f b	$3\r\n2-0\r\n
+XADD s 3-0 f c	$3\r\n3-0\r\n
+XADD s 4-0 f d	$3\r\n4-0\r\n
+XADD s 5-0 f e	$3\r\n5-0\r\n
+XGROUP CREATE s g 0	+OK\r\n
+XREADGROUP GROUP g alice COUNT 2 STREAMS s >	*1\r\n*2\r\n$1\r\ns\r\n*2\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\na\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nb\r\n
+XREADGROUP GROUP g bob COUNT 2 STREAMS s >	*1\r\n*2\r\n$1\r\ns\r\n*2\r\n*2\r\n$3\r\n3-0\r\n*2\r\n$1\r\nf\r\n$1\r\nc\r\n*2\r\n$3\r\n4-0\r\n*2\r\n$1\r\nf\r\n$1\r\nd\r\n
+XACK s g 1-0 1-0 9-9	:1\r\n
+XACK s g x	-ERR Invalid stream ID specified as stream command argument\r\n
+XACK s g 1-0 x	-ERR Invalid stream ID specified as stream command argument\r\n
+XACK s g	-ERR wrong number of arguments for 'xack' command\r\n
+XACK s nog 2-0	:0\r\n
+XACK nokey g 2-0	:0\r\n
+SET str v	+OK\r\n
+XACK str g 2-0	-WRONGTYPE Operation against a key holding the wrong kind of value\r\n
+XACK s g 2	:1\r\n
+XPENDING s g	*4\r\n:2\r\n$3\r\n3-0\r\n$3\r\n4-0\r\n*1\r\n*2\r\n$3\r\nbob\r\n$1\r\n2\r\n
+XPENDING s g - + 10	~*2\r\n*4\r\n$3\r\n3-0\r\n$3\r\nbob\r\n:~\r\n:1\r\n*4\r\n$3\r\n4-0\r\n$3\r\nbob\r\n:~\r\n:1\r\n
+XPENDING s g - + 10 bob	~*2\r\n*4\r\n$3\r\n3-0\r\n$3\r\nbob\r\n:~\r\n:1\r\n*4\r\n$3\r\n4-0\r\n$3\r\nbob\r\n:~\r\n:1\r\n
+XPENDING s g - + 10 nobody	~*0\r\n
+XPENDING s g IDLE 0 - + 10	~*2\r\n*4\r\n$3\r\n3-0\r\n$3\r\nbob\r\n:~\r\n:1\r\n*4\r\n$3\r\n4-0\r\n$3\r\nbob\r\n:~\r\n:1\r\n
+XPENDING s g IDLE 99999999 - + 10	~*0\r\n
+XPENDING s g IDLE -1 - + 10	~*2\r\n*4\r\n$3\r\n3-0\r\n$3\r\nbob\r\n:~\r\n:1\r\n*4\r\n$3\r\n4-0\r\n$3\r\nbob\r\n:~\r\n:1\r\n
+XPENDING s g IDLE x - + 10	-ERR value is not an integer or out of range\r\n
+XPENDING s g IDLE 0 - + 10 alice	~*0\r\n
+XPENDING s g (2-0 + 10	~*2\r\n*4\r\n$3\r\n3-0\r\n$3\r\nbob\r\n:~\r\n:1\r\n*4\r\n$3\r\n4-0\r\n$3\r\nbob\r\n:~\r\n:1\r\n
+XPENDING s g - (4-0 10	~*1\r\n*4\r\n$3\r\n3-0\r\n$3\r\nbob\r\n:~\r\n:1\r\n
+XPENDING s g 3 3 10	~*1\r\n*4\r\n$3\r\n3-0\r\n$3\r\nbob\r\n:~\r\n:1\r\n
+XPENDING s g 4 3 10	~*0\r\n
+XPENDING s g - + 0	~*0\r\n
+XPENDING s g - + -1	~*0\r\n
+XPENDING s g - + x	-ERR value is not an integer or out of range\r\n
+XPENDING s g - +	-ERR syntax error\r\n
+XPENDING s g -	-ERR syntax error\r\n
+XPENDING s g - + 10 bob extra	~*2\r\n*4\r\n$3\r\n3-0\r\n$3\r\nbob\r\n:~\r\n:1\r\n*4\r\n$3\r\n4-0\r\n$3\r\nbob\r\n:~\r\n:1\r\n
+XPENDING s g IDLE 0	-ERR syntax error\r\n
+XPENDING s g IDLE	-ERR syntax error\r\n
+XPENDING s nog	-NOGROUP No such key 's' or consumer group 'nog'\r\n
+XPENDING s nog - + 10	-NOGROUP No such key 's' or consumer group 'nog'\r\n
+XPENDING nokey g	-NOGROUP No such key 'nokey' or consumer group 'g'\r\n
+XPENDING nokey g - + 10	-NOGROUP No such key 'nokey' or consumer group 'g'\r\n
+XPENDING str g	-WRONGTYPE Operation against a key holding the wrong kind of value\r\n
+XPENDING s g x + 10	-ERR Invalid stream ID specified as stream command argument\r\n
+XPENDING s g - x 10	-ERR Invalid stream ID specified as stream command argument\r\n
+XPENDING s g - + 10 bob	~*2\r\n*4\r\n$3\r\n3-0\r\n$3\r\nbob\r\n:~\r\n:1\r\n*4\r\n$3\r\n4-0\r\n$3\r\nbob\r\n:~\r\n:1\r\n
+XGROUP CREATECONSUMER s g carol	:1\r\n
+XPENDING s g	*4\r\n:2\r\n$3\r\n3-0\r\n$3\r\n4-0\r\n*1\r\n*2\r\n$3\r\nbob\r\n$1\r\n2\r\n
+XGROUP DELCONSUMER s g bob	:2\r\n
+XPENDING s g	*4\r\n:0\r\n$-1\r\n$-1\r\n*-1\r\n
+XGROUP DESTROY nokey g	-ERR The XGROUP subcommand requires the key to exist. Note that for CREATE you may want to use the MKSTREAM option to create an empty stream automatically.\r\n
+XGROUP CREATECONSUMER nokey g c	-ERR The XGROUP subcommand requires the key to exist. Note that for CREATE you may want to use the MKSTREAM option to create an empty stream automatically.\r\n
+XGROUP DELCONSUMER nokey g c	-ERR The XGROUP subcommand requires the key to exist. Note that for CREATE you may want to use the MKSTREAM option to create an empty stream automatically.\r\n
+XGROUP DESTROY s nog	:0\r\n
+XGROUP CREATECONSUMER s nog c	-NOGROUP No such consumer group 'nog' for key name 's'\r\n
+XGROUP DELCONSUMER s nog c	-NOGROUP No such consumer group 'nog' for key name 's'\r\n
+XGROUP DESTROY str g	-WRONGTYPE Operation against a key holding the wrong kind of value\r\n
+XGROUP CREATECONSUMER str g c	-WRONGTYPE Operation against a key holding the wrong kind of value\r\n
+XGROUP DELCONSUMER str g c	-WRONGTYPE Operation against a key holding the wrong kind of value\r\n
+XGROUP DELCONSUMER s g nobody	:0\r\n
+XGROUP HELP	*17\r\n+XGROUP <subcommand> [<arg> [value] [opt] ...]. Subcommands are:\r\n+CREATE <key> <groupname> <id|$> [option]\r\n+    Create a new consumer group. Options are:\r\n+    * MKSTREAM\r\n+      Create the empty stream if it does not exist.\r\n+    * ENTRIESREAD entries_read\r\n+      Set the group's entries_read counter (internal use).\r\n+CREATECONSUMER <key> <groupname> <consumer>\r\n+    Create a new consumer in the specified group.\r\n+DELCONSUMER <key> <groupname> <consumer>\r\n+    Remove the specified consumer.\r\n+DESTROY <key> <groupname>\r\n+    Remove the specified group.\r\n+SETID <key> <groupname> <id|$> [ENTRIESREAD entries_read]\r\n+    Set the current group ID and entries_read counter.\r\n+HELP\r\n+    Print this help.\r\n
+XGROUP help extra	-ERR wrong number of arguments for 'xgroup|help' command\r\n
+XGROUP BOGUS	-ERR unknown subcommand 'BOGUS'. Try XGROUP HELP.\r\n
+XGROUP	-ERR wrong number of arguments for 'xgroup' command\r\n
+XGROUP DESTROY s	-ERR wrong number of arguments for 'xgroup|destroy' command\r\n
+XGROUP DESTROY s g extra	-ERR wrong number of arguments for 'xgroup|destroy' command\r\n
+XGROUP CREATECONSUMER s g	-ERR wrong number of arguments for 'xgroup|createconsumer' command\r\n
+XGROUP CREATECONSUMER s g c extra	-ERR wrong number of arguments for 'xgroup|createconsumer' command\r\n
+XGROUP DELCONSUMER s g	-ERR wrong number of arguments for 'xgroup|delconsumer' command\r\n
+XGROUP SETID s g	-ERR wrong number of arguments for 'xgroup|setid' command\r\n
+XGROUP CREATE s g	-ERR wrong number of arguments for 'xgroup|create' command\r\n
+XGROUP CREATE s g2 0 MKSTREAM	+OK\r\n
+XGROUP CREATE nokey2 g 0	-ERR The XGROUP subcommand requires the key to exist. Note that for CREATE you may want to use the MKSTREAM option to create an empty stream automatically.\r\n
+XGROUP DESTROY s g2	:1\r\n
+XGROUP DESTROY s g2	:0\r\n
+== XCLAIM and XAUTOCLAIM options
+FLUSHALL	+OK\r\n
+XADD s 1-0 f a	$3\r\n1-0\r\n
+XADD s 2-0 f b	$3\r\n2-0\r\n
+XADD s 3-0 f c	$3\r\n3-0\r\n
+XADD s 4-0 f d	$3\r\n4-0\r\n
+XADD s 5-0 f e	$3\r\n5-0\r\n
+XADD s 6-0 f g	$3\r\n6-0\r\n
+XGROUP CREATE s g 0	+OK\r\n
+XREADGROUP GROUP g alice COUNT 4 STREAMS s >	*1\r\n*2\r\n$1\r\ns\r\n*4\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\na\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nb\r\n*2\r\n$3\r\n3-0\r\n*2\r\n$1\r\nf\r\n$1\r\nc\r\n*2\r\n$3\r\n4-0\r\n*2\r\n$1\r\nf\r\n$1\r\nd\r\n
+XCLAIM s g bob 0 1-0	*1\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\na\r\n
+XCLAIM s g bob 0 1-0 JUSTID	*1\r\n$3\r\n1-0\r\n
+XCLAIM s g bob 0 1-0 2-0 RETRYCOUNT 5	*2\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\na\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nb\r\n
+XCLAIM s g bob 0 2-0 TIME 1000 JUSTID	*1\r\n$3\r\n2-0\r\n
+XCLAIM s g bob 0 3-0 IDLE 99999999999 JUSTID	*1\r\n$3\r\n3-0\r\n
+XCLAIM s g bob 99999999 3-0 JUSTID	*1\r\n$3\r\n3-0\r\n
+XCLAIM s g bob 0 3-0 IDLE -5 JUSTID	*1\r\n$3\r\n3-0\r\n
+XCLAIM s g bob 0 3-0 TIME -5 JUSTID	*1\r\n$3\r\n3-0\r\n
+XCLAIM s g bob 0 3-0 RETRYCOUNT -1 JUSTID	*1\r\n$3\r\n3-0\r\n
+XCLAIM s g bob 0 3-0 RETRYCOUNT x JUSTID	-ERR Invalid RETRYCOUNT option argument for XCLAIM\r\n
+XCLAIM s g bob 0 3-0 IDLE x	-ERR Invalid IDLE option argument for XCLAIM\r\n
+XCLAIM s g bob 0 3-0 TIME x	-ERR Invalid TIME option argument for XCLAIM\r\n
+XCLAIM s g bob 0 5-0 JUSTID	*0\r\n
+XCLAIM s g bob 0 5-0 FORCE JUSTID	*1\r\n$3\r\n5-0\r\n
+XCLAIM s g bob 0 6-0 FORCE	*1\r\n*2\r\n$3\r\n6-0\r\n*2\r\n$1\r\nf\r\n$1\r\ng\r\n
+XCLAIM s g bob 0 9-0 FORCE JUSTID	*0\r\n
+XCLAIM s g bob 0 4-0 LASTID 9-0 JUSTID	*1\r\n$3\r\n4-0\r\n
+XINFO GROUPS s	*1\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:2\r\n$7\r\npending\r\n:6\r\n$17\r\nlast-delivered-id\r\n$3\r\n9-0\r\n$12\r\nentries-read\r\n:4\r\n$3\r\nlag\r\n:2\r\n
+XCLAIM s g bob 0 4-0 LASTID 1-0 JUSTID	*1\r\n$3\r\n4-0\r\n
+XINFO GROUPS s	*1\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:2\r\n$7\r\npending\r\n:6\r\n$17\r\nlast-delivered-id\r\n$3\r\n9-0\r\n$12\r\nentries-read\r\n:4\r\n$3\r\nlag\r\n:2\r\n
+XCLAIM s g bob 0 4-0 LASTID x JUSTID	-ERR Invalid stream ID specified as stream command argument\r\n
+XCLAIM s g bob 0 4-0 BOGUS	-ERR Unrecognized XCLAIM option 'BOGUS'\r\n
+XCLAIM s g bob 0 4-0 IDLE	-ERR Unrecognized XCLAIM option 'IDLE'\r\n
+XCLAIM s g bob 0 x	-ERR Unrecognized XCLAIM option 'x'\r\n
+XCLAIM s g bob 0 4-0 x	-ERR Unrecognized XCLAIM option 'x'\r\n
+XCLAIM s g bob x 4-0	-ERR Invalid min-idle-time argument for XCLAIM\r\n
+XCLAIM s g bob -1 4-0 JUSTID	*1\r\n$3\r\n4-0\r\n
+XCLAIM s g bob 0	-ERR wrong number of arguments for 'xclaim' command\r\n
+XCLAIM s nog bob 0 4-0	-NOGROUP No such key 's' or consumer group 'nog'\r\n
+XCLAIM nokey g bob 0 4-0	-NOGROUP No such key 'nokey' or consumer group 'g'\r\n
+SET str v	+OK\r\n
+XCLAIM str g bob 0 4-0	-WRONGTYPE Operation against a key holding the wrong kind of value\r\n
+XCLAIM s g bob 0 4-0 justid force	*1\r\n$3\r\n4-0\r\n
+XDEL s 2-0	:1\r\n
+XCLAIM s g carol 0 1-0 2-0 JUSTID	*1\r\n$3\r\n1-0\r\n
+XPENDING s g - + 10	~*5\r\n*4\r\n$3\r\n1-0\r\n$5\r\ncarol\r\n:~\r\n:5\r\n*4\r\n$3\r\n3-0\r\n$3\r\nbob\r\n:~\r\n:1\r\n*4\r\n$3\r\n4-0\r\n$3\r\nbob\r\n:~\r\n:1\r\n*4\r\n$3\r\n5-0\r\n$3\r\nbob\r\n:~\r\n:1\r\n*4\r\n$3\r\n6-0\r\n$3\r\nbob\r\n:~\r\n:2\r\n
+XCLAIM s g carol 0 4-0 JUSTID RETRYCOUNT 3	*1\r\n$3\r\n4-0\r\n
+XPENDING s g - + 10	~*5\r\n*4\r\n$3\r\n1-0\r\n$5\r\ncarol\r\n:~\r\n:5\r\n*4\r\n$3\r\n3-0\r\n$3\r\nbob\r\n:~\r\n:1\r\n*4\r\n$3\r\n4-0\r\n$5\r\ncarol\r\n:~\r\n:3\r\n*4\r\n$3\r\n5-0\r\n$3\r\nbob\r\n:~\r\n:1\r\n*4\r\n$3\r\n6-0\r\n$3\r\nbob\r\n:~\r\n:2\r\n
+XCLAIM s g carol 0 4-0 FORCE	*1\r\n*2\r\n$3\r\n4-0\r\n*2\r\n$1\r\nf\r\n$1\r\nd\r\n
+XPENDING s g - + 10	~*5\r\n*4\r\n$3\r\n1-0\r\n$5\r\ncarol\r\n:~\r\n:5\r\n*4\r\n$3\r\n3-0\r\n$3\r\nbob\r\n:~\r\n:1\r\n*4\r\n$3\r\n4-0\r\n$5\r\ncarol\r\n:~\r\n:4\r\n*4\r\n$3\r\n5-0\r\n$3\r\nbob\r\n:~\r\n:1\r\n*4\r\n$3\r\n6-0\r\n$3\r\nbob\r\n:~\r\n:2\r\n
+XREADGROUP GROUP g dave COUNT 1 STREAMS s >	*-1\r\n
+XREADGROUP GROUP g dave STREAMS s 0	*1\r\n*2\r\n$1\r\ns\r\n*0\r\n
+XREADGROUP GROUP g dave STREAMS s 0	*1\r\n*2\r\n$1\r\ns\r\n*0\r\n
+XPENDING s g - + 10	~*5\r\n*4\r\n$3\r\n1-0\r\n$5\r\ncarol\r\n:~\r\n:5\r\n*4\r\n$3\r\n3-0\r\n$3\r\nbob\r\n:~\r\n:1\r\n*4\r\n$3\r\n4-0\r\n$5\r\ncarol\r\n:~\r\n:4\r\n*4\r\n$3\r\n5-0\r\n$3\r\nbob\r\n:~\r\n:1\r\n*4\r\n$3\r\n6-0\r\n$3\r\nbob\r\n:~\r\n:2\r\n
+XAUTOCLAIM s g erin 0 0-0 COUNT 1	*3\r\n$3\r\n3-0\r\n*1\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\na\r\n*0\r\n
+XAUTOCLAIM s g erin 0 0-0 COUNT 100	*3\r\n$3\r\n0-0\r\n*5\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\na\r\n*2\r\n$3\r\n3-0\r\n*2\r\n$1\r\nf\r\n$1\r\nc\r\n*2\r\n$3\r\n4-0\r\n*2\r\n$1\r\nf\r\n$1\r\nd\r\n*2\r\n$3\r\n5-0\r\n*2\r\n$1\r\nf\r\n$1\r\ne\r\n*2\r\n$3\r\n6-0\r\n*2\r\n$1\r\nf\r\n$1\r\ng\r\n*0\r\n
+XAUTOCLAIM s g erin 0 0-0 JUSTID	*3\r\n$3\r\n0-0\r\n*5\r\n$3\r\n1-0\r\n$3\r\n3-0\r\n$3\r\n4-0\r\n$3\r\n5-0\r\n$3\r\n6-0\r\n*0\r\n
+XADD s 7-0 f h	$3\r\n7-0\r\n
+XREADGROUP GROUP g frank STREAMS s >	*-1\r\n
+XDEL s 7-0 3-0	:2\r\n
+XAUTOCLAIM s g erin 99999999 0-0	*3\r\n$3\r\n0-0\r\n*0\r\n*1\r\n$3\r\n3-0\r\n
+XAUTOCLAIM s g erin 99999999 0-0 COUNT 1	*3\r\n$3\r\n0-0\r\n*0\r\n*0\r\n
+XAUTOCLAIM s g erin 0 0-0	*3\r\n$3\r\n0-0\r\n*4\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\na\r\n*2\r\n$3\r\n4-0\r\n*2\r\n$1\r\nf\r\n$1\r\nd\r\n*2\r\n$3\r\n5-0\r\n*2\r\n$1\r\nf\r\n$1\r\ne\r\n*2\r\n$3\r\n6-0\r\n*2\r\n$1\r\nf\r\n$1\r\ng\r\n*0\r\n
+XAUTOCLAIM s g erin 0 0-0 COUNT 0	-ERR COUNT must be > 0\r\n
+XAUTOCLAIM s g erin 0 0-0 COUNT -1	-ERR COUNT must be > 0\r\n
+XAUTOCLAIM s g erin 0 0-0 COUNT x	-ERR COUNT must be > 0\r\n
+XAUTOCLAIM s g erin 0 0-0 COUNT 99999999999	*3\r\n$3\r\n0-0\r\n*4\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\na\r\n*2\r\n$3\r\n4-0\r\n*2\r\n$1\r\nf\r\n$1\r\nd\r\n*2\r\n$3\r\n5-0\r\n*2\r\n$1\r\nf\r\n$1\r\ne\r\n*2\r\n$3\r\n6-0\r\n*2\r\n$1\r\nf\r\n$1\r\ng\r\n*0\r\n
+XAUTOCLAIM s g erin 0 (0-0	*3\r\n$3\r\n0-0\r\n*4\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\na\r\n*2\r\n$3\r\n4-0\r\n*2\r\n$1\r\nf\r\n$1\r\nd\r\n*2\r\n$3\r\n5-0\r\n*2\r\n$1\r\nf\r\n$1\r\ne\r\n*2\r\n$3\r\n6-0\r\n*2\r\n$1\r\nf\r\n$1\r\ng\r\n*0\r\n
+XAUTOCLAIM s g erin 0 x	-ERR Invalid stream ID specified as stream command argument\r\n
+XAUTOCLAIM s g erin x 0	-ERR Invalid min-idle-time argument for XAUTOCLAIM\r\n
+XAUTOCLAIM s g erin -1 0	*3\r\n$3\r\n0-0\r\n*4\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\na\r\n*2\r\n$3\r\n4-0\r\n*2\r\n$1\r\nf\r\n$1\r\nd\r\n*2\r\n$3\r\n5-0\r\n*2\r\n$1\r\nf\r\n$1\r\ne\r\n*2\r\n$3\r\n6-0\r\n*2\r\n$1\r\nf\r\n$1\r\ng\r\n*0\r\n
+XAUTOCLAIM s g erin 0 0 BOGUS	-ERR syntax error\r\n
+XAUTOCLAIM s g erin 0 0 JUSTID extra	-ERR syntax error\r\n
+XAUTOCLAIM s g erin 0	-ERR wrong number of arguments for 'xautoclaim' command\r\n
+XAUTOCLAIM s nog erin 0 0	-NOGROUP No such key 's' or consumer group 'nog'\r\n
+XAUTOCLAIM nokey g erin 0 0	-NOGROUP No such key 'nokey' or consumer group 'g'\r\n
+XAUTOCLAIM str g erin 0 0	-WRONGTYPE Operation against a key holding the wrong kind of value\r\n
+XAUTOCLAIM s g erin 0 - COUNT 1	*3\r\n$3\r\n4-0\r\n*1\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\na\r\n*0\r\n
+XAUTOCLAIM s g erin 0 + COUNT 1	*3\r\n$3\r\n0-0\r\n*0\r\n*0\r\n
+XPENDING s g - + 10	~*4\r\n*4\r\n$3\r\n1-0\r\n$4\r\nerin\r\n:~\r\n:12\r\n*4\r\n$3\r\n4-0\r\n$4\r\nerin\r\n:~\r\n:9\r\n*4\r\n$3\r\n5-0\r\n$4\r\nerin\r\n:~\r\n:6\r\n*4\r\n$3\r\n6-0\r\n$4\r\nerin\r\n:~\r\n:7\r\n
+== XAUTOCLAIM over deleted entries
+FLUSHALL	+OK\r\n
+XADD s 1-0 f v	$3\r\n1-0\r\n
+XADD s 2-0 f v	$3\r\n2-0\r\n
+XADD s 3-0 f v	$3\r\n3-0\r\n
+XADD s 4-0 f v	$3\r\n4-0\r\n
+XADD s 5-0 f v	$3\r\n5-0\r\n
+XADD s 6-0 f v	$3\r\n6-0\r\n
+XADD s 7-0 f v	$3\r\n7-0\r\n
+XADD s 8-0 f v	$3\r\n8-0\r\n
+XGROUP CREATE s g 0	+OK\r\n
+XREADGROUP GROUP g a STREAMS s >	*1\r\n*2\r\n$1\r\ns\r\n*8\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n3-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n4-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n5-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n6-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n7-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n8-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XDEL s 2-0 3-0 5-0	:3\r\n
+XAUTOCLAIM s g b 0 0 COUNT 1	*3\r\n$3\r\n2-0\r\n*1\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*0\r\n
+XPENDING s g - + 10	~*8\r\n*4\r\n$3\r\n1-0\r\n$1\r\nb\r\n:~\r\n:2\r\n*4\r\n$3\r\n2-0\r\n$1\r\na\r\n:~\r\n:1\r\n*4\r\n$3\r\n3-0\r\n$1\r\na\r\n:~\r\n:1\r\n*4\r\n$3\r\n4-0\r\n$1\r\na\r\n:~\r\n:1\r\n*4\r\n$3\r\n5-0\r\n$1\r\na\r\n:~\r\n:1\r\n*4\r\n$3\r\n6-0\r\n$1\r\na\r\n:~\r\n:1\r\n*4\r\n$3\r\n7-0\r\n$1\r\na\r\n:~\r\n:1\r\n*4\r\n$3\r\n8-0\r\n$1\r\na\r\n:~\r\n:1\r\n
+XAUTOCLAIM s g b 0 0 COUNT 2 JUSTID	*3\r\n$3\r\n3-0\r\n*1\r\n$3\r\n1-0\r\n*1\r\n$3\r\n2-0\r\n
+XPENDING s g - + 10	~*7\r\n*4\r\n$3\r\n1-0\r\n$1\r\nb\r\n:~\r\n:2\r\n*4\r\n$3\r\n3-0\r\n$1\r\na\r\n:~\r\n:1\r\n*4\r\n$3\r\n4-0\r\n$1\r\na\r\n:~\r\n:1\r\n*4\r\n$3\r\n5-0\r\n$1\r\na\r\n:~\r\n:1\r\n*4\r\n$3\r\n6-0\r\n$1\r\na\r\n:~\r\n:1\r\n*4\r\n$3\r\n7-0\r\n$1\r\na\r\n:~\r\n:1\r\n*4\r\n$3\r\n8-0\r\n$1\r\na\r\n:~\r\n:1\r\n
+XADD d 1-0 f v	$3\r\n1-0\r\n
+XADD d 2-0 f v	$3\r\n2-0\r\n
+XADD d 3-0 f v	$3\r\n3-0\r\n
+XADD d 4-0 f v	$3\r\n4-0\r\n
+XADD d 5-0 f v	$3\r\n5-0\r\n
+XGROUP CREATE d g 0	+OK\r\n
+XREADGROUP GROUP g a STREAMS d >	*1\r\n*2\r\n$1\r\nd\r\n*5\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n3-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n4-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n5-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XDEL d 1-0 2-0 3-0 4-0	:4\r\n
+XAUTOCLAIM d g b 99999999 0 COUNT 1	*3\r\n$3\r\n2-0\r\n*0\r\n*1\r\n$3\r\n1-0\r\n
+XPENDING d g - + 10	~*4\r\n*4\r\n$3\r\n2-0\r\n$1\r\na\r\n:~\r\n:1\r\n*4\r\n$3\r\n3-0\r\n$1\r\na\r\n:~\r\n:1\r\n*4\r\n$3\r\n4-0\r\n$1\r\na\r\n:~\r\n:1\r\n*4\r\n$3\r\n5-0\r\n$1\r\na\r\n:~\r\n:1\r\n
+XADD e 1-0 f v	$3\r\n1-0\r\n
+XGROUP CREATE e g 0	+OK\r\n
+XREADGROUP GROUP g a STREAMS e >	*1\r\n*2\r\n$1\r\ne\r\n*1\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XCLAIM e g b 0 1-0 IDLE 1000 JUSTID	*1\r\n$3\r\n1-0\r\n
+XPENDING e g - + 10	~*1\r\n*4\r\n$3\r\n1-0\r\n$1\r\nb\r\n:~\r\n:1\r\n
+XCLAIM e g b 0 1-0 IDLE -5000 JUSTID	*1\r\n$3\r\n1-0\r\n
+XPENDING e g - + 10	~*1\r\n*4\r\n$3\r\n1-0\r\n$1\r\nb\r\n:~\r\n:1\r\n
+XCLAIM e g b 0 1-0 TIME -5 JUSTID	*1\r\n$3\r\n1-0\r\n
+XPENDING e g - + 10	~*1\r\n*4\r\n$3\r\n1-0\r\n$1\r\nb\r\n:~\r\n:1\r\n
+XCLAIM e g b 0 1-0 TIME 99999999999999 JUSTID	*1\r\n$3\r\n1-0\r\n
+XPENDING e g - + 10	~*1\r\n*4\r\n$3\r\n1-0\r\n$1\r\nb\r\n:~\r\n:1\r\n
+XCLAIM e g b 0 1-0 RETRYCOUNT -1 JUSTID	*1\r\n$3\r\n1-0\r\n
+XPENDING e g - + 10	~*1\r\n*4\r\n$3\r\n1-0\r\n$1\r\nb\r\n:~\r\n:1\r\n
+XCLAIM e g b 0 1-0 RETRYCOUNT 4294967296 JUSTID	*1\r\n$3\r\n1-0\r\n
+XPENDING e g - + 10	~*1\r\n*4\r\n$3\r\n1-0\r\n$1\r\nb\r\n:~\r\n:4294967296\r\n
+XCLAIM e g b 0 1-0 RETRYCOUNT 9223372036854775807 JUSTID	*1\r\n$3\r\n1-0\r\n
+XPENDING e g - + 10	~*1\r\n*4\r\n$3\r\n1-0\r\n$1\r\nb\r\n:~\r\n:9223372036854775807\r\n
+XCLAIM e g b 0 1-0 IDLE 99999999999999999999 JUSTID	-ERR Invalid IDLE option argument for XCLAIM\r\n
+XCLAIM e g b 0 1-0 IDLE 5 TIME 7 JUSTID	*1\r\n$3\r\n1-0\r\n
+XPENDING e g IDLE -1 - + 10	~*1\r\n*4\r\n$3\r\n1-0\r\n$1\r\nb\r\n:~\r\n:9223372036854775807\r\n
+XPENDING e g IDLE 9223372036854775807 - + 10	~*0\r\n
+XPENDING e g - + 9223372036854775807	~*1\r\n*4\r\n$3\r\n1-0\r\n$1\r\nb\r\n:~\r\n:9223372036854775807\r\n
+XPENDING e g - + -9223372036854775808	~*0\r\n
+XCLAIM e g b -5 1-0 JUSTID	*1\r\n$3\r\n1-0\r\n
+XCLAIM e g b 9223372036854775807 1-0 JUSTID	*0\r\n
+XCLAIM e g b 0 1-0 2-0 JUSTID LASTID 5-0	*1\r\n$3\r\n1-0\r\n
+XINFO GROUPS e	*1\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:2\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n5-0\r\n$12\r\nentries-read\r\n:1\r\n$3\r\nlag\r\n:0\r\n
+XCLAIM e g b 0 1-0 JUSTID LASTID 5-0 LASTID 6-0	*1\r\n$3\r\n1-0\r\n
+XINFO GROUPS e	*1\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:2\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n6-0\r\n$12\r\nentries-read\r\n:1\r\n$3\r\nlag\r\n:0\r\n
+XREADGROUP GROUP g c STREAMS e >	*-1\r\n
+XAUTOCLAIM e g b 0 0 COUNT 1 JUSTID LASTID 9-0	-ERR syntax error\r\n
+XAUTOCLAIM e g b 0 0 COUNT 1024	*3\r\n$3\r\n0-0\r\n*1\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*0\r\n
+XAUTOCLAIM e g b 0 0 COUNT 1025	*3\r\n$3\r\n0-0\r\n*1\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*0\r\n
+XAUTOCLAIM e g b 0 0 COUNT 1 COUNT 2	*3\r\n$3\r\n0-0\r\n*1\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*0\r\n
+XAUTOCLAIM e g b 0 0 JUSTID JUSTID	*3\r\n$3\r\n0-0\r\n*1\r\n$3\r\n1-0\r\n*0\r\n
+XAUTOCLAIM e g b 0 0 count 1 justid	*3\r\n$3\r\n0-0\r\n*1\r\n$3\r\n1-0\r\n*0\r\n
+== XSETID checks in order
+FLUSHALL	+OK\r\n
+XADD s 1-0 f v	$3\r\n1-0\r\n
+XADD s 2-0 f v	$3\r\n2-0\r\n
+XADD s 3-0 f v	$3\r\n3-0\r\n
+XDEL s 2-0	:1\r\n
+XSETID s 1-5	-ERR The ID specified in XSETID is smaller than current max_deleted_entry_id\r\n
+XSETID s 2-5	-ERR The ID specified in XSETID is smaller than the target stream top item\r\n
+XSETID s 3-0	+OK\r\n
+XSETID s 2-0	-ERR The ID specified in XSETID is smaller than the target stream top item\r\n
+XSETID s 4-0 ENTRIESADDED 2	+OK\r\n
+XSETID s 4-0 ENTRIESADDED 1	-ERR The entries_added specified in XSETID is smaller than the target stream length\r\n
+XSETID s 4-0 ENTRIESADDED 0	-ERR The entries_added specified in XSETID is smaller than the target stream length\r\n
+XSETID s 4-0 MAXDELETEDID 1-0	+OK\r\n
+XINFO STREAM s	*20\r\n$6\r\nlength\r\n:2\r\n$15\r\nradix-tree-keys\r\n:1\r\n$16\r\nradix-tree-nodes\r\n:2\r\n$17\r\nlast-generated-id\r\n$3\r\n4-0\r\n$20\r\nmax-deleted-entry-id\r\n$3\r\n1-0\r\n$13\r\nentries-added\r\n:2\r\n$23\r\nrecorded-first-entry-id\r\n$3\r\n1-0\r\n$6\r\ngroups\r\n:0\r\n$11\r\nfirst-entry\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n$10\r\nlast-entry\r\n*2\r\n$3\r\n3-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XSETID s 4-0 MAXDELETEDID 4-0	+OK\r\n
+XSETID s 4-0 MAXDELETEDID 4-1	-ERR The ID specified in XSETID is smaller than the provided max_deleted_entry_id\r\n
+XSETID s 4-0 ENTRIESADDED 5 ENTRIESADDED 6	+OK\r\n
+XSETID s 4-0 MAXDELETEDID 1-0 MAXDELETEDID 2-0	+OK\r\n
+XINFO STREAM s	*20\r\n$6\r\nlength\r\n:2\r\n$15\r\nradix-tree-keys\r\n:1\r\n$16\r\nradix-tree-nodes\r\n:2\r\n$17\r\nlast-generated-id\r\n$3\r\n4-0\r\n$20\r\nmax-deleted-entry-id\r\n$3\r\n2-0\r\n$13\r\nentries-added\r\n:6\r\n$23\r\nrecorded-first-entry-id\r\n$3\r\n1-0\r\n$6\r\ngroups\r\n:0\r\n$11\r\nfirst-entry\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n$10\r\nlast-entry\r\n*2\r\n$3\r\n3-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XSETID s 4-0 ENTRIESADDED 7 MAXDELETEDID 3-0 extra	-ERR syntax error\r\n
+XSETID s 4-0 ENTRIESADDED 7 extra	-ERR syntax error\r\n
+XSETID s 4-0 extra	-ERR syntax error\r\n
+XSETID s 1-0 ENTRIESADDED x	-ERR value is not an integer or out of range\r\n
+XSETID s 1-0 MAXDELETEDID 9-0	-ERR The ID specified in XSETID is smaller than the provided max_deleted_entry_id\r\n
+XSETID s 5-0 MAXDELETEDID -	-ERR Invalid stream ID specified as stream command argument\r\n
+XSETID s 5-0 MAXDELETEDID +	-ERR Invalid stream ID specified as stream command argument\r\n
+XSETID s +	-ERR Invalid stream ID specified as stream command argument\r\n
+XSETID s -	-ERR Invalid stream ID specified as stream command argument\r\n
+XSETID s 5	+OK\r\n
+XINFO STREAM s	*20\r\n$6\r\nlength\r\n:2\r\n$15\r\nradix-tree-keys\r\n:1\r\n$16\r\nradix-tree-nodes\r\n:2\r\n$17\r\nlast-generated-id\r\n$3\r\n5-0\r\n$20\r\nmax-deleted-entry-id\r\n$3\r\n2-0\r\n$13\r\nentries-added\r\n:6\r\n$23\r\nrecorded-first-entry-id\r\n$3\r\n1-0\r\n$6\r\ngroups\r\n:0\r\n$11\r\nfirst-entry\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n$10\r\nlast-entry\r\n*2\r\n$3\r\n3-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XADD t 1-0 f v	$3\r\n1-0\r\n
+XSETID t 0-0	-ERR The ID specified in XSETID is smaller than the target stream top item\r\n
+XDEL t 1-0	:1\r\n
+XSETID t 0-0 MAXDELETEDID 0-0	-ERR The ID specified in XSETID is smaller than current max_deleted_entry_id\r\n
+XSETID t 1-0	+OK\r\n
+XINFO STREAM t	*20\r\n$6\r\nlength\r\n:0\r\n$15\r\nradix-tree-keys\r\n:0\r\n$16\r\nradix-tree-nodes\r\n:1\r\n$17\r\nlast-generated-id\r\n$3\r\n1-0\r\n$20\r\nmax-deleted-entry-id\r\n$3\r\n1-0\r\n$13\r\nentries-added\r\n:1\r\n$23\r\nrecorded-first-entry-id\r\n$3\r\n0-0\r\n$6\r\ngroups\r\n:0\r\n$11\r\nfirst-entry\r\n$-1\r\n$10\r\nlast-entry\r\n$-1\r\n
+XADD u 1-0 f v	$3\r\n1-0\r\n
+XSETID u 1-0 ENTRIESADDED 0	-ERR The entries_added specified in XSETID is smaller than the target stream length\r\n
+XSETID u 1-0 ENTRIESADDED 18446744073709551615	-ERR value is not an integer or out of range\r\n
+XSETID u 1-0 ENTRIESADDED 9223372036854775807	+OK\r\n
+XINFO STREAM u	*20\r\n$6\r\nlength\r\n:1\r\n$15\r\nradix-tree-keys\r\n:1\r\n$16\r\nradix-tree-nodes\r\n:2\r\n$17\r\nlast-generated-id\r\n$3\r\n1-0\r\n$20\r\nmax-deleted-entry-id\r\n$3\r\n0-0\r\n$13\r\nentries-added\r\n:9223372036854775807\r\n$23\r\nrecorded-first-entry-id\r\n$3\r\n1-0\r\n$6\r\ngroups\r\n:0\r\n$11\r\nfirst-entry\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n$10\r\nlast-entry\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+== XREAD and XREADGROUP refusals, nothing read
+FLUSHALL	+OK\r\n
+XADD s 1-0 f v	$3\r\n1-0\r\n
+XREAD STREAMS s >	-ERR The > ID can be specified only when calling XREADGROUP using the GROUP <group> <consumer> option.\r\n
+XREAD STREAMS nokey >	-ERR The > ID can be specified only when calling XREADGROUP using the GROUP <group> <consumer> option.\r\n
+XTRIM s LIMIT 5	-ERR syntax error, LIMIT cannot be used without specifying a trimming strategy\r\n
+XTRIM s LIMIT 5 MAXLEN 1	-ERR syntax error, LIMIT cannot be used without the special ~ option\r\n
+XRANGE nokey - + COUNT 0	*0\r\n
+XRANGE nokey - + COUNT -1	*0\r\n
+XREVRANGE nokey + - COUNT 0	*0\r\n
+XRANGE s - + COUNT 0 COUNT 1	*1\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XREAD COUNT 1 COUNT 0 STREAMS s 0	*1\r\n*2\r\n$1\r\ns\r\n*1\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XGROUP CREATE s g 0	+OK\r\n
+XREADGROUP GROUP g c STREAMS s nokey > >	-NOGROUP No such key 'nokey' or consumer group 'g' in XREADGROUP with GROUP option\r\n
+XINFO CONSUMERS s g	*0\r\n
+XREADGROUP GROUP g c STREAMS s s > x	-ERR Invalid stream ID specified as stream command argument\r\n
+XINFO CONSUMERS s g	*0\r\n
+XREADGROUP GROUP g c STREAMS s s > +	-ERR The + ID is meaningless in the context of XREADGROUP: you want to read the history of this consumer by specifying a proper ID, or use the > ID to get new messages. The + ID would just return an empty result set.\r\n
+XINFO CONSUMERS s g	*0\r\n
+XADD s 2-0 f v	$3\r\n2-0\r\n
+XREADGROUP GROUP g c STREAMS s s > >	*1\r\n*2\r\n$1\r\ns\r\n*2\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XREADGROUP GROUP g c STREAMS s s 0 0	*2\r\n*2\r\n$1\r\ns\r\n*2\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$1\r\ns\r\n*2\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XACK s g x	-ERR Invalid stream ID specified as stream command argument\r\n
+XACK s g 1-0 x	-ERR Invalid stream ID specified as stream command argument\r\n
+XPENDING s g	*4\r\n:2\r\n$3\r\n1-0\r\n$3\r\n2-0\r\n*1\r\n*2\r\n$1\r\nc\r\n$1\r\n2\r\n
+== XINFO after deletions and group changes
+FLUSHALL	+OK\r\n
+XADD xe 1-0 f v	$3\r\n1-0\r\n
+XADD xe 2-0 f v	$3\r\n2-0\r\n
+XADD xe 3-0 f v	$3\r\n3-0\r\n
+XADD xe 4-0 f v	$3\r\n4-0\r\n
+XGROUP CREATE xe g0 0	+OK\r\n
+XGROUP CREATE xe g1 0 ENTRIESREAD 1	+OK\r\n
+XGROUP CREATE xe g2 $	+OK\r\n
+XINFO GROUPS xe	*3\r\n*12\r\n$4\r\nname\r\n$2\r\ng0\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:4\r\n*12\r\n$4\r\nname\r\n$2\r\ng1\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n:1\r\n$3\r\nlag\r\n:3\r\n*12\r\n$4\r\nname\r\n$2\r\ng2\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n4-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:0\r\n
+XDEL xe 3-0	:1\r\n
+XINFO GROUPS xe	*3\r\n*12\r\n$4\r\nname\r\n$2\r\ng0\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n$-1\r\n*12\r\n$4\r\nname\r\n$2\r\ng1\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n:1\r\n$3\r\nlag\r\n$-1\r\n*12\r\n$4\r\nname\r\n$2\r\ng2\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n4-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:0\r\n
+XGROUP SETID xe g1 2-0 ENTRIESREAD 2	+OK\r\n
+XGROUP SETID xe nog 0	-NOGROUP No such consumer group 'nog' for key name 'xe'\r\n
+XINFO GROUPS xe	*3\r\n*12\r\n$4\r\nname\r\n$2\r\ng0\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n$-1\r\n*12\r\n$4\r\nname\r\n$2\r\ng1\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n2-0\r\n$12\r\nentries-read\r\n:2\r\n$3\r\nlag\r\n$-1\r\n*12\r\n$4\r\nname\r\n$2\r\ng2\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n4-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:0\r\n
+XINFO STREAM xe FULL COUNT 2	?
+XINFO CONSUMERS xe g0	*0\r\n
+XINFO CONSUMERS xe nog	-NOGROUP No such consumer group 'nog' for key name 'xe'\r\n
+XINFO STREAM missingstream	-ERR no such key\r\n
+XINFO STREAM xe BOGUS	-ERR unknown subcommand or wrong number of arguments for 'STREAM'. Try XINFO HELP.\r\n
+XINFO BOGUS	-ERR unknown subcommand 'BOGUS'. Try XINFO HELP.\r\n
+XINFO HELP	*9\r\n+XINFO <subcommand> [<arg> [value] [opt] ...]. Subcommands are:\r\n+CONSUMERS <key> <groupname>\r\n+    Show consumers of <groupname>.\r\n+GROUPS <key>\r\n+    Show the stream consumer groups.\r\n+STREAM <key> [FULL [COUNT <count>]\r\n+    Show information about the stream.\r\n+HELP\r\n+    Print this help.\r\n
+== XINFO after a trim
+FLUSHALL	+OK\r\n
+XADD xs 1-0 f a	$3\r\n1-0\r\n
+XADD xs 2-0 f b	$3\r\n2-0\r\n
+XADD xs 3-0 f c	$3\r\n3-0\r\n
+XDEL xs 2-0	:1\r\n
+XGROUP CREATE xs g1 0	+OK\r\n
+XREADGROUP GROUP g1 c1 COUNT 10 STREAMS xs >	*1\r\n*2\r\n$2\r\nxs\r\n*2\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\na\r\n*2\r\n$3\r\n3-0\r\n*2\r\n$1\r\nf\r\n$1\r\nc\r\n
+XACK xs g1 1-0	:1\r\n
+XADD xs 4-0 f d	$3\r\n4-0\r\n
+XTRIM xs MAXLEN 2	:1\r\n
+XADD xs 1-0 f dup	-ERR The ID specified in XADD is equal or smaller than the target stream top item\r\n
+XINFO STREAM xs	*20\r\n$6\r\nlength\r\n:2\r\n$15\r\nradix-tree-keys\r\n:1\r\n$16\r\nradix-tree-nodes\r\n:2\r\n$17\r\nlast-generated-id\r\n$3\r\n4-0\r\n$20\r\nmax-deleted-entry-id\r\n$3\r\n2-0\r\n$13\r\nentries-added\r\n:4\r\n$23\r\nrecorded-first-entry-id\r\n$3\r\n3-0\r\n$6\r\ngroups\r\n:1\r\n$11\r\nfirst-entry\r\n*2\r\n$3\r\n3-0\r\n*2\r\n$1\r\nf\r\n$1\r\nc\r\n$10\r\nlast-entry\r\n*2\r\n$3\r\n4-0\r\n*2\r\n$1\r\nf\r\n$1\r\nd\r\n
+XINFO GROUPS xs	*1\r\n*12\r\n$4\r\nname\r\n$2\r\ng1\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n3-0\r\n$12\r\nentries-read\r\n:3\r\n$3\r\nlag\r\n:1\r\n
+XADD xo 1-0 f v	$3\r\n1-0\r\n
+XADD xo 2-0 f v	$3\r\n2-0\r\n
+XGROUP CREATE xo g 0	+OK\r\n
+XREADGROUP GROUP g bob COUNT 1 STREAMS xo >	*1\r\n*2\r\n$2\r\nxo\r\n*1\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XINFO GROUPS xo	*1\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n1-0\r\n$12\r\nentries-read\r\n:1\r\n$3\r\nlag\r\n:1\r\n
+== XREAD and XREADGROUP forms
+FLUSHALL	+OK\r\n
+XADD a1 1-0 f v	$3\r\n1-0\r\n
+XADD b1 1-0 f v	$3\r\n1-0\r\n
+XADD c1 1-0 f v	$3\r\n1-0\r\n
+XADD d1 1-0 f v	$3\r\n1-0\r\n
+XGROUP CREATE a1 g 0	+OK\r\n
+XGROUP CREATE b1 g 0	+OK\r\n
+XGROUP CREATE c1 g 0	+OK\r\n
+XGROUP CREATE d1 g 0	+OK\r\n
+XREAD STREAMS a1 b1 c1 d1 0 0 0 0	*4\r\n*2\r\n$2\r\na1\r\n*1\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$2\r\nb1\r\n*1\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$2\r\nc1\r\n*1\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$2\r\nd1\r\n*1\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XREAD STREAMS a1 b1 c1 d1 + + + +	*4\r\n*2\r\n$2\r\na1\r\n*1\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$2\r\nb1\r\n*1\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$2\r\nc1\r\n*1\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$2\r\nd1\r\n*1\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XREAD STREAMS a1 b1 nokey d1 $ $ $ $	*-1\r\n
+XREAD COUNT -1 STREAMS a1 b1 0 0	*2\r\n*2\r\n$2\r\na1\r\n*1\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$2\r\nb1\r\n*1\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XREADGROUP GROUP g c STREAMS a1 b1 c1 d1 > > > >	*4\r\n*2\r\n$2\r\na1\r\n*1\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$2\r\nb1\r\n*1\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$2\r\nc1\r\n*1\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$2\r\nd1\r\n*1\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XREADGROUP GROUP g c STREAMS a1 b1 c1 d1 0 0 0 0	*4\r\n*2\r\n$2\r\na1\r\n*1\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$2\r\nb1\r\n*1\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$2\r\nc1\r\n*1\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$2\r\nd1\r\n*1\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XREADGROUP GROUP g c2 STREAMS a1 b1 c1 d1 0 0 0 0	*4\r\n*2\r\n$2\r\na1\r\n*0\r\n*2\r\n$2\r\nb1\r\n*0\r\n*2\r\n$2\r\nc1\r\n*0\r\n*2\r\n$2\r\nd1\r\n*0\r\n
+XREADGROUP GROUP g c2 STREAMS a1 b1 c1 d1 > > 0 >	*1\r\n*2\r\n$2\r\nc1\r\n*0\r\n
+XREADGROUP GROUP g c COUNT -1 STREAMS a1 b1 0 0	*2\r\n*2\r\n$2\r\na1\r\n*1\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$2\r\nb1\r\n*1\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+== XADD argument order
+FLUSHALL	+OK\r\n
+XADD s 1-1 f v x	-ERR wrong number of arguments for 'xadd' command\r\n
+XADD s bad f v x	-ERR Invalid stream ID specified as stream command argument\r\n
+XADD s bad f	-ERR wrong number of arguments for 'xadd' command\r\n
+XADD s MAXLEN 5 1-1 f v x	-ERR wrong number of arguments for 'xadd' command\r\n
+XADD s MAXLEN x 1-1 f v x	-ERR value is not an integer or out of range\r\n
+XADD s NOMKSTREAM bad f v x	-ERR Invalid stream ID specified as stream command argument\r\n
+SET str v	+OK\r\n
+XADD str 1-1 f v x	-ERR wrong number of arguments for 'xadd' command\r\n
+XADD str bad f v x	-ERR Invalid stream ID specified as stream command argument\r\n
+XADD s 1-1 f	-ERR wrong number of arguments for 'xadd' command\r\n
+XADD s 1-1	-ERR wrong number of arguments for 'xadd' command\r\n
+XADD s MAXLEN 1 1-1 f	-ERR wrong number of arguments for 'xadd' command\r\n
+XADD s LIMIT 1 1-1 f v x	-ERR syntax error, LIMIT cannot be used without specifying a trimming strategy\r\n
+XADD s MAXLEN ~ 1 LIMIT 1 bad f v x	-ERR Invalid stream ID specified as stream command argument\r\n
+XADD s MAXLEN ~ 1 LIMIT x 1-1 f v x	-ERR value is not an integer or out of range\r\n
+XADD s MAXLEN ~ 1 LIMIT	-ERR Invalid stream ID specified as stream command argument\r\n
+XADD s MAXLEN ~ 1 LIMIT 5	-ERR wrong number of arguments for 'xadd' command\r\n
+XADD s MAXLEN	-ERR wrong number of arguments for 'xadd' command\r\n
+XADD s MAXLEN 1	-ERR wrong number of arguments for 'xadd' command\r\n
+XADD s MAXLEN 1 f	-ERR Invalid stream ID specified as stream command argument\r\n
+XADD s MAXLEN 1 f v	-ERR Invalid stream ID specified as stream command argument\r\n
+XADD s MAXLEN 1 * f v	?
+XADD s NOMKSTREAM	-ERR wrong number of arguments for 'xadd' command\r\n
+XADD s NOMKSTREAM *	-ERR wrong number of arguments for 'xadd' command\r\n
+XADD s NOMKSTREAM * f	-ERR wrong number of arguments for 'xadd' command\r\n
+XADD s * f v g	-ERR wrong number of arguments for 'xadd' command\r\n
+XADD s *	-ERR wrong number of arguments for 'xadd' command\r\n
+XADD s * f	-ERR wrong number of arguments for 'xadd' command\r\n
+== XADD and XTRIM option edges
+FLUSHALL	+OK\r\n
+XADD s LIMIT 1 bad f v	-ERR Invalid stream ID specified as stream command argument\r\n
+XADD s LIMIT 1 1-1 f	-ERR syntax error, LIMIT cannot be used without specifying a trimming strategy\r\n
+XADD s MAXLEN = 1-1 f v	-ERR value is not an integer or out of range\r\n
+XADD s NOMKSTREAM NOMKSTREAM MAXLEN	-ERR Invalid stream ID specified as stream command argument\r\n
+XADD s NOMKSTREAM NOMKSTREAM NOMKSTREAM MAXLEN =	-ERR value is not an integer or out of range\r\n
+XADD s MAXLEN -1 bad f v	-ERR The MAXLEN argument must be >= 0.\r\n
+XADD s MAXLEN 1 MINID 1 bad f v	-ERR syntax error, MAXLEN and MINID options at the same time are not compatible\r\n
+XADD s MAXLEN 1 MAXLEN	-ERR Invalid stream ID specified as stream command argument\r\n
+XADD s MAXLEN 1 LIMIT 1 bad f v	-ERR Invalid stream ID specified as stream command argument\r\n
+XADD s MAXLEN 1 LIMIT 1 1-1 f	-ERR syntax error, LIMIT cannot be used without the special ~ option\r\n
+XADD s MAXLEN ~ 1 LIMIT -1 1-1 f	-ERR The LIMIT argument must be >= 0.\r\n
+XADD s 0-0 f	-ERR wrong number of arguments for 'xadd' command\r\n
+XADD s MINID bad 1-1 f v	-ERR Invalid stream ID specified as stream command argument\r\n
+XADD s MINID ~ bad 1-1 f v	-ERR Invalid stream ID specified as stream command argument\r\n
+XADD s MAXLEN ~ 1 LIMIT 1 LIMIT	-ERR Invalid stream ID specified as stream command argument\r\n
+XADD s MAXLEN 1 NOMKSTREAM 1-1 f v	$-1\r\n
+XTRIM s LIMIT 1	-ERR syntax error, LIMIT cannot be used without specifying a trimming strategy\r\n
+XTRIM s LIMIT 1 MAXLEN 1	-ERR syntax error, LIMIT cannot be used without the special ~ option\r\n
+XTRIM s MAXLEN 1 LIMIT	-ERR syntax error\r\n
+XTRIM s MAXLEN ~ 1 LIMIT	-ERR syntax error\r\n
+XTRIM s MAXLEN	-ERR wrong number of arguments for 'xtrim' command\r\n
+XTRIM s MAXLEN ~	-ERR value is not an integer or out of range\r\n
+XTRIM s MAXLEN 1 x	-ERR syntax error\r\n
+XTRIM s x	-ERR wrong number of arguments for 'xtrim' command\r\n
+XTRIM s MAXLEN = x	-ERR value is not an integer or out of range\r\n
+== XADD checks before the type
+FLUSHALL	+OK\r\n
+SET str v	+OK\r\n
+XADD s LIMIT 1 0-0 f v	-ERR syntax error, LIMIT cannot be used without specifying a trimming strategy\r\n
+XADD str 0-0 f v	-ERR The ID specified in XADD must be greater than 0-0\r\n
+XADD str LIMIT 1 1-1 f v	-ERR syntax error, LIMIT cannot be used without specifying a trimming strategy\r\n
+XADD str 1-1 f	-ERR wrong number of arguments for 'xadd' command\r\n
+XADD s NOMKSTREAM 0-0 f v	-ERR The ID specified in XADD must be greater than 0-0\r\n
+XADD s MAXLEN ~ 1 LIMIT	-ERR Invalid stream ID specified as stream command argument\r\n
+XADD s MAXLEN ~ 1 LIMIT 2 MAXLEN	-ERR Invalid stream ID specified as stream command argument\r\n
+== XTRIM option edges
+FLUSHALL	+OK\r\n
+XADD s 1-1 f v	$3\r\n1-1\r\n
+XTRIM s MAXLEN 1 MAXLEN	-ERR syntax error\r\n
+XTRIM s MAXLEN 1 MINID	-ERR syntax error\r\n
+XTRIM s MAXLEN 1 MAXLEN 2	-ERR syntax error, MAXLEN and MINID options at the same time are not compatible\r\n
+XTRIM s MAXLEN 1 MINID 2	-ERR syntax error, MAXLEN and MINID options at the same time are not compatible\r\n
+XTRIM s LIMIT 1 LIMIT	-ERR syntax error\r\n
+XTRIM s MAXLEN ~ 1 LIMIT 2 LIMIT 3	:0\r\n
+XTRIM s MAXLEN = 1 LIMIT 2	-ERR syntax error, LIMIT cannot be used without the special ~ option\r\n
+XTRIM s MINID ~	-ERR Invalid stream ID specified as stream command argument\r\n
+XTRIM s MINID = ~	-ERR Invalid stream ID specified as stream command argument\r\n
+XTRIM s MAXLEN ~ =	-ERR value is not an integer or out of range\r\n
+XTRIM s MAXLEN ~ ~ 1	-ERR value is not an integer or out of range\r\n
+XTRIM s NOMKSTREAM MAXLEN 1	-ERR syntax error\r\n
+XTRIM nokey MAXLEN 1	:0\r\n
+XTRIM nokey MAXLEN x	-ERR value is not an integer or out of range\r\n
+XTRIM nokey MAXLEN 1 x	-ERR syntax error\r\n
+SET str v	+OK\r\n
+XTRIM str MAXLEN 1	-WRONGTYPE Operation against a key holding the wrong kind of value\r\n
+XTRIM str MAXLEN x	-ERR value is not an integer or out of range\r\n
+XTRIM str MAXLEN 1 LIMIT 1	-ERR syntax error, LIMIT cannot be used without the special ~ option\r\n
+XADD s MAXLEN ~ ~ 1-2 f v	-ERR value is not an integer or out of range\r\n
+XADD s MAXLEN ~ 1 LIMIT 0 1-3 f v	$3\r\n1-3\r\n
+XADD s MINID 1-5 1-4 f v	$3\r\n1-4\r\n
+XLEN s	:0\r\n
+== history reads, claims, options and refusals
+FLUSHALL	+OK\r\n
+XADD xs 1-0 f a	$3\r\n1-0\r\n
+XADD xo 1-0 f a	$3\r\n1-0\r\n
+XADD xp 1-0 f v	$3\r\n1-0\r\n
+XADD xp 2-0 f v	$3\r\n2-0\r\n
+XADD xp 3-0 f v	$3\r\n3-0\r\n
+XADD xp 4-0 f v	$3\r\n4-0\r\n
+XADD xp 5-0 f v	$3\r\n5-0\r\n
+XGROUP CREATE xp g 0	+OK\r\n
+XREADGROUP GROUP g c COUNT 3 STREAMS xp >	*1\r\n*2\r\n$2\r\nxp\r\n*3\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n3-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XREADGROUP GROUP g c STREAMS xp 0	*1\r\n*2\r\n$2\r\nxp\r\n*3\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n3-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XDEL xp 2-0	:1\r\n
+XREADGROUP GROUP g c STREAMS xp 0	*1\r\n*2\r\n$2\r\nxp\r\n*3\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n2-0\r\n*-1\r\n*2\r\n$3\r\n3-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XREADGROUP GROUP g c2 STREAMS xp 0	*1\r\n*2\r\n$2\r\nxp\r\n*0\r\n
+XPENDING xp g	*4\r\n:3\r\n$3\r\n1-0\r\n$3\r\n3-0\r\n*1\r\n*2\r\n$1\r\nc\r\n$1\r\n3\r\n
+XPENDING xp g IDLE 100000000 - + 10	~*0\r\n
+XAUTOCLAIM xp g c3 100000000 0 COUNT 10 JUSTID	*3\r\n$3\r\n0-0\r\n*0\r\n*1\r\n$3\r\n2-0\r\n
+XCLAIM xp g c3 0 1-0 JUSTID	*1\r\n$3\r\n1-0\r\n
+XCLAIM xp g c3 0 5-0 JUSTID FORCE LASTID 5-0	*1\r\n$3\r\n5-0\r\n
+XINFO GROUPS xp	*1\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:3\r\n$7\r\npending\r\n:3\r\n$17\r\nlast-delivered-id\r\n$3\r\n5-0\r\n$12\r\nentries-read\r\n:3\r\n$3\r\nlag\r\n:2\r\n
+XCLAIM xp g c3 x 1-0	-ERR Invalid min-idle-time argument for XCLAIM\r\n
+XCLAIM xp g c3 0 1-0 BOGUS	-ERR Unrecognized XCLAIM option 'BOGUS'\r\n
+XCLAIM missingstream g c3 0 1-0	-NOGROUP No such key 'missingstream' or consumer group 'g'\r\n
+XREADGROUP GROUP g newc STREAMS xp missingstream xs xo > > > >	-NOGROUP No such key 'missingstream' or consumer group 'g' in XREADGROUP with GROUP option\r\n
+XINFO GROUPS xp	*1\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:3\r\n$7\r\npending\r\n:3\r\n$17\r\nlast-delivered-id\r\n$3\r\n5-0\r\n$12\r\nentries-read\r\n:3\r\n$3\r\nlag\r\n:2\r\n
+XGROUP DESTROY missingstream g	-ERR The XGROUP subcommand requires the key to exist. Note that for CREATE you may want to use the MKSTREAM option to create an empty stream automatically.\r\n
+XGROUP CREATECONSUMER missingstream g c	-ERR The XGROUP subcommand requires the key to exist. Note that for CREATE you may want to use the MKSTREAM option to create an empty stream automatically.\r\n
+XGROUP DELCONSUMER missingstream g c	-ERR The XGROUP subcommand requires the key to exist. Note that for CREATE you may want to use the MKSTREAM option to create an empty stream automatically.\r\n
+XGROUP HELP	*17\r\n+XGROUP <subcommand> [<arg> [value] [opt] ...]. Subcommands are:\r\n+CREATE <key> <groupname> <id|$> [option]\r\n+    Create a new consumer group. Options are:\r\n+    * MKSTREAM\r\n+      Create the empty stream if it does not exist.\r\n+    * ENTRIESREAD entries_read\r\n+      Set the group's entries_read counter (internal use).\r\n+CREATECONSUMER <key> <groupname> <consumer>\r\n+    Create a new consumer in the specified group.\r\n+DELCONSUMER <key> <groupname> <consumer>\r\n+    Remove the specified consumer.\r\n+DESTROY <key> <groupname>\r\n+    Remove the specified group.\r\n+SETID <key> <groupname> <id|$> [ENTRIESREAD entries_read]\r\n+    Set the current group ID and entries_read counter.\r\n+HELP\r\n+    Print this help.\r\n
+XADD xp NOMKSTREAM 6-0 f v	$3\r\n6-0\r\n
+XADD missingstream NOMKSTREAM 1-0 f v	$-1\r\n
+XADD xp MAXLEN = 5 7-0 f v	$3\r\n7-0\r\n
+XADD xp MINID ~ 3-0 LIMIT 10 8-0 f v	$3\r\n8-0\r\n
+XADD xp MAXLEN 1 LIMIT 1 9-0 f v	-ERR syntax error, LIMIT cannot be used without the special ~ option\r\n
+XADD xp 0-0 f v	-ERR The ID specified in XADD must be greater than 0-0\r\n
+XADD xp MAXLEN 1 MAXLEN	-ERR Invalid stream ID specified as stream command argument\r\n
+XADD xn 1-0 f v	$3\r\n1-0\r\n
+XADD xn 2-0 f v	$3\r\n2-0\r\n
+XADD xn 3-0 f v	$3\r\n3-0\r\n
+XADD xn 4-0 f v	$3\r\n4-0\r\n
+XADD xn 5-0 f v	$3\r\n5-0\r\n
+XADD xn 6-0 f v	$3\r\n6-0\r\n
+XADD xn 7-0 f v	$3\r\n7-0\r\n
+XADD xn 8-0 f v	$3\r\n8-0\r\n
+XADD xn 9-0 f v	$3\r\n9-0\r\n
+XADD xn 10-0 f v	$4\r\n10-0\r\n
+XADD xn 11-0 f v	$4\r\n11-0\r\n
+XADD xn 12-0 f v	$4\r\n12-0\r\n
+XADD xn 13-0 f v	$4\r\n13-0\r\n
+XADD xn 14-0 f v	$4\r\n14-0\r\n
+XADD xn 15-0 f v	$4\r\n15-0\r\n
+XADD xn 16-0 f v	$4\r\n16-0\r\n
+XADD xn 17-0 f v	$4\r\n17-0\r\n
+XADD xn 18-0 f v	$4\r\n18-0\r\n
+XADD xn 19-0 f v	$4\r\n19-0\r\n
+XADD xn 20-0 f v	$4\r\n20-0\r\n
+XADD xn 21-0 f v	$4\r\n21-0\r\n
+XADD xn 22-0 f v	$4\r\n22-0\r\n
+XADD xn 23-0 f v	$4\r\n23-0\r\n
+XADD xn 24-0 f v	$4\r\n24-0\r\n
+XADD xn 25-0 f v	$4\r\n25-0\r\n
+XADD xn 26-0 f v	$4\r\n26-0\r\n
+XADD xn 27-0 f v	$4\r\n27-0\r\n
+XADD xn 28-0 f v	$4\r\n28-0\r\n
+XADD xn 29-0 f v	$4\r\n29-0\r\n
+XADD xn 30-0 f v	$4\r\n30-0\r\n
+XADD xn 31-0 f v	$4\r\n31-0\r\n
+XADD xn 32-0 f v	$4\r\n32-0\r\n
+XADD xn 33-0 f v	$4\r\n33-0\r\n
+XADD xn 34-0 f v	$4\r\n34-0\r\n
+XADD xn 35-0 f v	$4\r\n35-0\r\n
+XADD xn 36-0 f v	$4\r\n36-0\r\n
+XADD xn 37-0 f v	$4\r\n37-0\r\n
+XADD xn 38-0 f v	$4\r\n38-0\r\n
+XADD xn 39-0 f v	$4\r\n39-0\r\n
+XADD xn 40-0 f v	$4\r\n40-0\r\n
+XADD xn 41-0 f v	$4\r\n41-0\r\n
+XADD xn 42-0 f v	$4\r\n42-0\r\n
+XADD xn 43-0 f v	$4\r\n43-0\r\n
+XADD xn 44-0 f v	$4\r\n44-0\r\n
+XADD xn 45-0 f v	$4\r\n45-0\r\n
+XADD xn 46-0 f v	$4\r\n46-0\r\n
+XADD xn 47-0 f v	$4\r\n47-0\r\n
+XADD xn 48-0 f v	$4\r\n48-0\r\n
+XADD xn 49-0 f v	$4\r\n49-0\r\n
+XADD xn 50-0 f v	$4\r\n50-0\r\n
+XADD xn 51-0 f v	$4\r\n51-0\r\n
+XADD xn 52-0 f v	$4\r\n52-0\r\n
+XADD xn 53-0 f v	$4\r\n53-0\r\n
+XADD xn 54-0 f v	$4\r\n54-0\r\n
+XADD xn 55-0 f v	$4\r\n55-0\r\n
+XADD xn 56-0 f v	$4\r\n56-0\r\n
+XADD xn 57-0 f v	$4\r\n57-0\r\n
+XADD xn 58-0 f v	$4\r\n58-0\r\n
+XADD xn 59-0 f v	$4\r\n59-0\r\n
+XADD xn 60-0 f v	$4\r\n60-0\r\n
+XADD xn 61-0 f v	$4\r\n61-0\r\n
+XADD xn 62-0 f v	$4\r\n62-0\r\n
+XADD xn 63-0 f v	$4\r\n63-0\r\n
+XADD xn 64-0 f v	$4\r\n64-0\r\n
+XADD xn 65-0 f v	$4\r\n65-0\r\n
+XADD xn 66-0 f v	$4\r\n66-0\r\n
+XADD xn 67-0 f v	$4\r\n67-0\r\n
+XADD xn 68-0 f v	$4\r\n68-0\r\n
+XADD xn 69-0 f v	$4\r\n69-0\r\n
+XADD xn 70-0 f v	$4\r\n70-0\r\n
+XADD xn 71-0 f v	$4\r\n71-0\r\n
+XADD xn 72-0 f v	$4\r\n72-0\r\n
+XADD xn 73-0 f v	$4\r\n73-0\r\n
+XADD xn 74-0 f v	$4\r\n74-0\r\n
+XADD xn 75-0 f v	$4\r\n75-0\r\n
+XADD xn 76-0 f v	$4\r\n76-0\r\n
+XADD xn 77-0 f v	$4\r\n77-0\r\n
+XADD xn 78-0 f v	$4\r\n78-0\r\n
+XADD xn 79-0 f v	$4\r\n79-0\r\n
+XADD xn 80-0 f v	$4\r\n80-0\r\n
+XADD xn 81-0 f v	$4\r\n81-0\r\n
+XADD xn 82-0 f v	$4\r\n82-0\r\n
+XADD xn 83-0 f v	$4\r\n83-0\r\n
+XADD xn 84-0 f v	$4\r\n84-0\r\n
+XADD xn 85-0 f v	$4\r\n85-0\r\n
+XADD xn 86-0 f v	$4\r\n86-0\r\n
+XADD xn 87-0 f v	$4\r\n87-0\r\n
+XADD xn 88-0 f v	$4\r\n88-0\r\n
+XADD xn 89-0 f v	$4\r\n89-0\r\n
+XADD xn 90-0 f v	$4\r\n90-0\r\n
+XADD xn 91-0 f v	$4\r\n91-0\r\n
+XADD xn 92-0 f v	$4\r\n92-0\r\n
+XADD xn 93-0 f v	$4\r\n93-0\r\n
+XADD xn 94-0 f v	$4\r\n94-0\r\n
+XADD xn 95-0 f v	$4\r\n95-0\r\n
+XADD xn 96-0 f v	$4\r\n96-0\r\n
+XADD xn 97-0 f v	$4\r\n97-0\r\n
+XADD xn 98-0 f v	$4\r\n98-0\r\n
+XADD xn 99-0 f v	$4\r\n99-0\r\n
+XADD xn 100-0 f v	$5\r\n100-0\r\n
+XADD xn 101-0 f v	$5\r\n101-0\r\n
+XADD xn 102-0 f v	$5\r\n102-0\r\n
+XADD xn 103-0 f v	$5\r\n103-0\r\n
+XADD xn 104-0 f v	$5\r\n104-0\r\n
+XADD xn 105-0 f v	$5\r\n105-0\r\n
+XADD xn 106-0 f v	$5\r\n106-0\r\n
+XADD xn 107-0 f v	$5\r\n107-0\r\n
+XADD xn 108-0 f v	$5\r\n108-0\r\n
+XADD xn 109-0 f v	$5\r\n109-0\r\n
+XADD xn 110-0 f v	$5\r\n110-0\r\n
+XADD xn 111-0 f v	$5\r\n111-0\r\n
+XADD xn 112-0 f v	$5\r\n112-0\r\n
+XADD xn 113-0 f v	$5\r\n113-0\r\n
+XADD xn 114-0 f v	$5\r\n114-0\r\n
+XADD xn 115-0 f v	$5\r\n115-0\r\n
+XADD xn 116-0 f v	$5\r\n116-0\r\n
+XADD xn 117-0 f v	$5\r\n117-0\r\n
+XADD xn 118-0 f v	$5\r\n118-0\r\n
+XADD xn 119-0 f v	$5\r\n119-0\r\n
+XADD xn 120-0 f v	$5\r\n120-0\r\n
+XADD xn 121-0 f v	$5\r\n121-0\r\n
+XADD xn 122-0 f v	$5\r\n122-0\r\n
+XADD xn 123-0 f v	$5\r\n123-0\r\n
+XADD xn 124-0 f v	$5\r\n124-0\r\n
+XADD xn 125-0 f v	$5\r\n125-0\r\n
+XADD xn 126-0 f v	$5\r\n126-0\r\n
+XADD xn 127-0 f v	$5\r\n127-0\r\n
+XADD xn 128-0 f v	$5\r\n128-0\r\n
+XADD xn 129-0 f v	$5\r\n129-0\r\n
+XADD xn 130-0 f v	$5\r\n130-0\r\n
+XADD xn 131-0 f v	$5\r\n131-0\r\n
+XADD xn 132-0 f v	$5\r\n132-0\r\n
+XADD xn 133-0 f v	$5\r\n133-0\r\n
+XADD xn 134-0 f v	$5\r\n134-0\r\n
+XADD xn 135-0 f v	$5\r\n135-0\r\n
+XADD xn 136-0 f v	$5\r\n136-0\r\n
+XADD xn 137-0 f v	$5\r\n137-0\r\n
+XADD xn 138-0 f v	$5\r\n138-0\r\n
+XADD xn 139-0 f v	$5\r\n139-0\r\n
+XADD xn 140-0 f v	$5\r\n140-0\r\n
+XADD xn 141-0 f v	$5\r\n141-0\r\n
+XADD xn 142-0 f v	$5\r\n142-0\r\n
+XADD xn 143-0 f v	$5\r\n143-0\r\n
+XADD xn 144-0 f v	$5\r\n144-0\r\n
+XADD xn 145-0 f v	$5\r\n145-0\r\n
+XADD xn 146-0 f v	$5\r\n146-0\r\n
+XADD xn 147-0 f v	$5\r\n147-0\r\n
+XADD xn 148-0 f v	$5\r\n148-0\r\n
+XADD xn 149-0 f v	$5\r\n149-0\r\n
+XADD xn 150-0 f v	$5\r\n150-0\r\n
+XTRIM xn MAXLEN ~ 10 LIMIT 20	:0\r\n
+XTRIM xn MAXLEN ~ 60	:0\r\n
+XTRIM xn MAXLEN ~ 50	:100\r\n
+XLEN xn	:50\r\n
+XINFO STREAM xn	*20\r\n$6\r\nlength\r\n:50\r\n$15\r\nradix-tree-keys\r\n:1\r\n$16\r\nradix-tree-nodes\r\n:2\r\n$17\r\nlast-generated-id\r\n$5\r\n150-0\r\n$20\r\nmax-deleted-entry-id\r\n$3\r\n0-0\r\n$13\r\nentries-added\r\n:150\r\n$23\r\nrecorded-first-entry-id\r\n$5\r\n101-0\r\n$6\r\ngroups\r\n:0\r\n$11\r\nfirst-entry\r\n*2\r\n$5\r\n101-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n$10\r\nlast-entry\r\n*2\r\n$5\r\n150-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XRANGE xp (3-0 + COUNT 2	*2\r\n*2\r\n$3\r\n4-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n5-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XREVRANGE xp (7-0 - COUNT 1	*1\r\n*2\r\n$3\r\n6-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XRANGE xp - + COUNT 0	*-1\r\n
+XREAD STREAMS xp +	*1\r\n*2\r\n$2\r\nxp\r\n*1\r\n*2\r\n$3\r\n8-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XREAD STREAMS xp $	*-1\r\n
+XSETID xp 9-0 ENTRIESADDED 100 MAXDELETEDID 8-0	+OK\r\n
+XSETID xp 1-0	-ERR The ID specified in XSETID is smaller than current max_deleted_entry_id\r\n
+XSETID missingstream 1-0	-ERR no such key\r\n
+XINFO STREAM xp	*20\r\n$6\r\nlength\r\n:6\r\n$15\r\nradix-tree-keys\r\n:1\r\n$16\r\nradix-tree-nodes\r\n:2\r\n$17\r\nlast-generated-id\r\n$3\r\n9-0\r\n$20\r\nmax-deleted-entry-id\r\n$3\r\n8-0\r\n$13\r\nentries-added\r\n:100\r\n$23\r\nrecorded-first-entry-id\r\n$3\r\n3-0\r\n$6\r\ngroups\r\n:1\r\n$11\r\nfirst-entry\r\n*2\r\n$3\r\n3-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n$10\r\nlast-entry\r\n*2\r\n$3\r\n8-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+== lag on a stream emptied by a trim
+FLUSHALL	+OK\r\n
+XADD s 1-0 f v	$3\r\n1-0\r\n
+XADD s 2-0 f v	$3\r\n2-0\r\n
+XADD s 3-0 f v	$3\r\n3-0\r\n
+XADD s 4-0 f v	$3\r\n4-0\r\n
+XADD s 5-0 f v	$3\r\n5-0\r\n
+XGROUP CREATE s g1 0	+OK\r\n
+XGROUP CREATE s g2 2-0	+OK\r\n
+XGROUP CREATE s g3 4-0	+OK\r\n
+XGROUP CREATE s g4 5-0	+OK\r\n
+XGROUP CREATE s g5 $ ENTRIESREAD 3	+OK\r\n
+XDEL s 4-0	:1\r\n
+XINFO GROUPS s	*5\r\n*12\r\n$4\r\nname\r\n$2\r\ng1\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n$-1\r\n*12\r\n$4\r\nname\r\n$2\r\ng2\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n2-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n$-1\r\n*12\r\n$4\r\nname\r\n$2\r\ng3\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n4-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n$-1\r\n*12\r\n$4\r\nname\r\n$2\r\ng4\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n5-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:0\r\n*12\r\n$4\r\nname\r\n$2\r\ng5\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n5-0\r\n$12\r\nentries-read\r\n:3\r\n$3\r\nlag\r\n:2\r\n
+XTRIM s MAXLEN 0	:4\r\n
+XINFO GROUPS s	*5\r\n*12\r\n$4\r\nname\r\n$2\r\ng1\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:0\r\n*12\r\n$4\r\nname\r\n$2\r\ng2\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n2-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:0\r\n*12\r\n$4\r\nname\r\n$2\r\ng3\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n4-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:0\r\n*12\r\n$4\r\nname\r\n$2\r\ng4\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n5-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:0\r\n*12\r\n$4\r\nname\r\n$2\r\ng5\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n5-0\r\n$12\r\nentries-read\r\n:3\r\n$3\r\nlag\r\n:2\r\n
+XINFO STREAM s	*20\r\n$6\r\nlength\r\n:0\r\n$15\r\nradix-tree-keys\r\n:0\r\n$16\r\nradix-tree-nodes\r\n:1\r\n$17\r\nlast-generated-id\r\n$3\r\n5-0\r\n$20\r\nmax-deleted-entry-id\r\n$3\r\n4-0\r\n$13\r\nentries-added\r\n:5\r\n$23\r\nrecorded-first-entry-id\r\n$3\r\n0-0\r\n$6\r\ngroups\r\n:5\r\n$11\r\nfirst-entry\r\n$-1\r\n$10\r\nlast-entry\r\n$-1\r\n
+XADD s 6-0 f v	$3\r\n6-0\r\n
+XINFO GROUPS s	*5\r\n*12\r\n$4\r\nname\r\n$2\r\ng1\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:1\r\n*12\r\n$4\r\nname\r\n$2\r\ng2\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n2-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n$-1\r\n*12\r\n$4\r\nname\r\n$2\r\ng3\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n4-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:1\r\n*12\r\n$4\r\nname\r\n$2\r\ng4\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n5-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:1\r\n*12\r\n$4\r\nname\r\n$2\r\ng5\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n5-0\r\n$12\r\nentries-read\r\n:3\r\n$3\r\nlag\r\n:3\r\n
+XDEL s 6-0	:1\r\n
+XINFO GROUPS s	*5\r\n*12\r\n$4\r\nname\r\n$2\r\ng1\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:0\r\n*12\r\n$4\r\nname\r\n$2\r\ng2\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n2-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:0\r\n*12\r\n$4\r\nname\r\n$2\r\ng3\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n4-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:0\r\n*12\r\n$4\r\nname\r\n$2\r\ng4\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n5-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:0\r\n*12\r\n$4\r\nname\r\n$2\r\ng5\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n5-0\r\n$12\r\nentries-read\r\n:3\r\n$3\r\nlag\r\n:3\r\n
+XGROUP CREATE s g6 7-0	+OK\r\n
+XGROUP SETID s g1 3-0 ENTRIESREAD 1	+OK\r\n
+XINFO GROUPS s	*6\r\n*12\r\n$4\r\nname\r\n$2\r\ng1\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n3-0\r\n$12\r\nentries-read\r\n:1\r\n$3\r\nlag\r\n:5\r\n*12\r\n$4\r\nname\r\n$2\r\ng2\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n2-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:0\r\n*12\r\n$4\r\nname\r\n$2\r\ng3\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n4-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:0\r\n*12\r\n$4\r\nname\r\n$2\r\ng4\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n5-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:0\r\n*12\r\n$4\r\nname\r\n$2\r\ng5\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n5-0\r\n$12\r\nentries-read\r\n:3\r\n$3\r\nlag\r\n:3\r\n*12\r\n$4\r\nname\r\n$2\r\ng6\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n7-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n$-1\r\n
+FLUSHALL	+OK\r\n
+XADD s 1-0 f v	$3\r\n1-0\r\n
+XADD s 2-0 f v	$3\r\n2-0\r\n
+XADD s 3-0 f v	$3\r\n3-0\r\n
+XGROUP CREATE s g1 0	+OK\r\n
+XGROUP CREATE s g2 2-0	+OK\r\n
+XTRIM s MAXLEN 0	:3\r\n
+XINFO GROUPS s	*2\r\n*12\r\n$4\r\nname\r\n$2\r\ng1\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:0\r\n*12\r\n$4\r\nname\r\n$2\r\ng2\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n2-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:0\r\n
+== reads of an emptied stream
+FLUSHALL	+OK\r\n
+XADD s 1-0 f v	$3\r\n1-0\r\n
+XADD s 2-0 f v	$3\r\n2-0\r\n
+XADD s 3-0 f v	$3\r\n3-0\r\n
+XADD s 4-0 f v	$3\r\n4-0\r\n
+XGROUP CREATE s g1 0	+OK\r\n
+XGROUP CREATE s g2 2-0	+OK\r\n
+XDEL s 3-0	:1\r\n
+XTRIM s MAXLEN 0	:3\r\n
+XREADGROUP GROUP g2 c COUNT 5 STREAMS s >	*-1\r\n
+XREADGROUP GROUP g1 c COUNT 5 STREAMS s >	*-1\r\n
+XINFO GROUPS s	*2\r\n*12\r\n$4\r\nname\r\n$2\r\ng1\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:0\r\n*12\r\n$4\r\nname\r\n$2\r\ng2\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n2-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:0\r\n
+XADD s 5-0 f v	$3\r\n5-0\r\n
+XINFO GROUPS s	*2\r\n*12\r\n$4\r\nname\r\n$2\r\ng1\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:1\r\n*12\r\n$4\r\nname\r\n$2\r\ng2\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n2-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n$-1\r\n
+XREADGROUP GROUP g2 c COUNT 5 STREAMS s >	*1\r\n*2\r\n$1\r\ns\r\n*1\r\n*2\r\n$3\r\n5-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XINFO GROUPS s	*2\r\n*12\r\n$4\r\nname\r\n$2\r\ng1\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:1\r\n*12\r\n$4\r\nname\r\n$2\r\ng2\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:1\r\n$17\r\nlast-delivered-id\r\n$3\r\n5-0\r\n$12\r\nentries-read\r\n:5\r\n$3\r\nlag\r\n:0\r\n
+== delivery counts: history reads, re-deliveries and claims
+FLUSHALL	+OK\r\n
+XADD s 1-0 f v	$3\r\n1-0\r\n
+XADD s 2-0 f v	$3\r\n2-0\r\n
+XADD s 3-0 f v	$3\r\n3-0\r\n
+XGROUP CREATE s g 0	+OK\r\n
+XREADGROUP GROUP g a STREAMS s >	*1\r\n*2\r\n$1\r\ns\r\n*3\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n3-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XPENDING s g - + 10	~*3\r\n*4\r\n$3\r\n1-0\r\n$1\r\na\r\n:~\r\n:1\r\n*4\r\n$3\r\n2-0\r\n$1\r\na\r\n:~\r\n:1\r\n*4\r\n$3\r\n3-0\r\n$1\r\na\r\n:~\r\n:1\r\n
+# a read of the history hands every entry out again
+XREADGROUP GROUP g a STREAMS s 0	*1\r\n*2\r\n$1\r\ns\r\n*3\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n3-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XPENDING s g - + 10	~*3\r\n*4\r\n$3\r\n1-0\r\n$1\r\na\r\n:~\r\n:2\r\n*4\r\n$3\r\n2-0\r\n$1\r\na\r\n:~\r\n:2\r\n*4\r\n$3\r\n3-0\r\n$1\r\na\r\n:~\r\n:2\r\n
+XREADGROUP GROUP g a COUNT 1 STREAMS s 1-0	*1\r\n*2\r\n$1\r\ns\r\n*1\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XPENDING s g - + 10	~*3\r\n*4\r\n$3\r\n1-0\r\n$1\r\na\r\n:~\r\n:2\r\n*4\r\n$3\r\n2-0\r\n$1\r\na\r\n:~\r\n:3\r\n*4\r\n$3\r\n3-0\r\n$1\r\na\r\n:~\r\n:2\r\n
+XREADGROUP GROUP g a NOACK STREAMS s 0	*1\r\n*2\r\n$1\r\ns\r\n*3\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n3-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XPENDING s g - + 10	~*3\r\n*4\r\n$3\r\n1-0\r\n$1\r\na\r\n:~\r\n:3\r\n*4\r\n$3\r\n2-0\r\n$1\r\na\r\n:~\r\n:4\r\n*4\r\n$3\r\n3-0\r\n$1\r\na\r\n:~\r\n:3\r\n
+# an entry deleted since comes back with no fields and is not counted
+XDEL s 2-0	:1\r\n
+XREADGROUP GROUP g a STREAMS s 0	*1\r\n*2\r\n$1\r\ns\r\n*3\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n2-0\r\n*-1\r\n*2\r\n$3\r\n3-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XPENDING s g - + 10	~*3\r\n*4\r\n$3\r\n1-0\r\n$1\r\na\r\n:~\r\n:4\r\n*4\r\n$3\r\n2-0\r\n$1\r\na\r\n:~\r\n:4\r\n*4\r\n$3\r\n3-0\r\n$1\r\na\r\n:~\r\n:4\r\n
+# a new delivery of a pending entry starts its count again, for its new owner
+XGROUP SETID s g 0	+OK\r\n
+XREADGROUP GROUP g b COUNT 1 STREAMS s >	*1\r\n*2\r\n$1\r\ns\r\n*1\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XPENDING s g - + 10	~*3\r\n*4\r\n$3\r\n1-0\r\n$1\r\nb\r\n:~\r\n:1\r\n*4\r\n$3\r\n2-0\r\n$1\r\na\r\n:~\r\n:4\r\n*4\r\n$3\r\n3-0\r\n$1\r\na\r\n:~\r\n:4\r\n
+XREADGROUP GROUP g b NOACK STREAMS s >	*1\r\n*2\r\n$1\r\ns\r\n*1\r\n*2\r\n$3\r\n3-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XPENDING s g - + 10	~*3\r\n*4\r\n$3\r\n1-0\r\n$1\r\nb\r\n:~\r\n:1\r\n*4\r\n$3\r\n2-0\r\n$1\r\na\r\n:~\r\n:4\r\n*4\r\n$3\r\n3-0\r\n$1\r\na\r\n:~\r\n:4\r\n
+XREADGROUP GROUP g b STREAMS s 0	*1\r\n*2\r\n$1\r\ns\r\n*1\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XPENDING s g - + 10	~*3\r\n*4\r\n$3\r\n1-0\r\n$1\r\nb\r\n:~\r\n:2\r\n*4\r\n$3\r\n2-0\r\n$1\r\na\r\n:~\r\n:4\r\n*4\r\n$3\r\n3-0\r\n$1\r\na\r\n:~\r\n:4\r\n
+# claims count a delivery unless JUSTID, and RETRYCOUNT sets the count
+XCLAIM s g c 0 3-0	*1\r\n*2\r\n$3\r\n3-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XPENDING s g - + 10	~*3\r\n*4\r\n$3\r\n1-0\r\n$1\r\nb\r\n:~\r\n:2\r\n*4\r\n$3\r\n2-0\r\n$1\r\na\r\n:~\r\n:4\r\n*4\r\n$3\r\n3-0\r\n$1\r\nc\r\n:~\r\n:5\r\n
+XCLAIM s g c 0 3-0 JUSTID	*1\r\n$3\r\n3-0\r\n
+XPENDING s g - + 10	~*3\r\n*4\r\n$3\r\n1-0\r\n$1\r\nb\r\n:~\r\n:2\r\n*4\r\n$3\r\n2-0\r\n$1\r\na\r\n:~\r\n:4\r\n*4\r\n$3\r\n3-0\r\n$1\r\nc\r\n:~\r\n:5\r\n
+XCLAIM s g c 0 3-0 RETRYCOUNT 9223372036854775806	*1\r\n*2\r\n$3\r\n3-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XPENDING s g - + 10	~*3\r\n*4\r\n$3\r\n1-0\r\n$1\r\nb\r\n:~\r\n:2\r\n*4\r\n$3\r\n2-0\r\n$1\r\na\r\n:~\r\n:4\r\n*4\r\n$3\r\n3-0\r\n$1\r\nc\r\n:~\r\n:9223372036854775806\r\n
+XREADGROUP GROUP g c STREAMS s 0	*1\r\n*2\r\n$1\r\ns\r\n*1\r\n*2\r\n$3\r\n3-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n
+XPENDING s g - + 10	~*3\r\n*4\r\n$3\r\n1-0\r\n$1\r\nb\r\n:~\r\n:2\r\n*4\r\n$3\r\n2-0\r\n$1\r\na\r\n:~\r\n:4\r\n*4\r\n$3\r\n3-0\r\n$1\r\nc\r\n:~\r\n:9223372036854775807\r\n
+XAUTOCLAIM s g d 0 0 COUNT 1	*3\r\n$3\r\n2-0\r\n*1\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*0\r\n
+XPENDING s g - + 10	~*3\r\n*4\r\n$3\r\n1-0\r\n$1\r\nd\r\n:~\r\n:3\r\n*4\r\n$3\r\n2-0\r\n$1\r\na\r\n:~\r\n:4\r\n*4\r\n$3\r\n3-0\r\n$1\r\nc\r\n:~\r\n:9223372036854775807\r\n
