@@ -8,12 +8,12 @@
 
 use kevy_resp::CmdError;
 
-use kevy_index::{Catalog, IndexValue, Leaf, Tree, ViewMode, ViewSpec};
+use kevy_index::{Catalog, IndexValue, Leaf, Tree, ViewCatalog, ViewMode, ViewSpec};
 use kevy_resp::{ArgvView, encode_error, encode_integer};
 use kevy_store::Store;
 
 use crate::cmd_index_query::{ST_BUILDING, ST_NOINDEX, ST_OK, encode_value};
-use crate::state::Ctx;
+use crate::state::{CatalogBase, CatalogChange, Ctx};
 use crate::view_runtime;
 
 /// One leaf of a view tree: an index name, a shape, and the literals that
@@ -97,43 +97,64 @@ pub(crate) fn cmd_view_create<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out
             "ERR usage: VIEW.CREATE name QUERY <tree> ORDER BY idx [DESC] [MODE v|m] [TOPK k] [VIA tpl]",
         );
     }
-    let icat = ctx.state.catalogs.index();
+    // the view is checked against the index catalog it commits onto
+    loop {
+        let base = ctx.state.catalog_base();
+        let Some(cat) = view_created(&base, args, out) else { return };
+        let change = CatalogChange { view: Some(cat), ..CatalogChange::default() };
+        if ctx.state.commit_catalogs(&base, change) {
+            return out.extend_from_slice(b"+OK\r\n");
+        }
+    }
+}
+
+/// The view catalog with the view `args` declares added, checked against
+/// `base`'s indexes; `None` once the reply holds the refusal.
+fn view_created<A: ArgvView + ?Sized>(
+    base: &CatalogBase,
+    args: &A,
+    out: &mut Vec<u8>,
+) -> Option<ViewCatalog> {
+    let icat = base.index.clone();
     let (tree, mut i) = match parse_tree(icat.as_deref(), args, 3, 1) {
         Ok(t) => t,
-        Err(e) => return encode_error(out, e.as_wire()),
+        Err(e) => return refused(out, e.as_wire()),
     };
     if !(args.get(i).is_some_and(|t| t.eq_ignore_ascii_case(b"ORDER"))
         && args.get(i + 1).is_some_and(|t| t.eq_ignore_ascii_case(b"BY")))
     {
-        return encode_error(out, "ERR ORDER BY <index> is required");
+        return refused(out, "ERR ORDER BY <index> is required");
     }
     let Some(order_by) = args.get(i + 2).map(|t| t.to_vec()) else {
-        return encode_error(out, "ERR ORDER BY <index> is required");
+        return refused(out, "ERR ORDER BY <index> is required");
     };
     if icat.as_deref().and_then(|c| c.get(&order_by).map(|_| ())).is_none() {
-        return encode_error(out, "ERR ORDER BY references unknown index");
+        return refused(out, "ERR ORDER BY references unknown index");
     }
     i += 3;
     let (order, mut mode, top_k, via) = match parse_create_opts(args, i) {
         Ok(opts) => opts,
-        Err(e) => return encode_error(out, e.as_wire()),
+        Err(e) => return refused(out, e.as_wire()),
     };
     if let ViewMode::Materialized { .. } = mode {
         mode = ViewMode::Materialized { top_k };
     } else if top_k != 0 {
-        return encode_error(out, "ERR TOPK requires MODE materialized");
+        return refused(out, "ERR TOPK requires MODE materialized");
     }
     let mut spec =
         ViewSpec::new(args[1].to_vec(), tree, order_by).with_order(order).with_mode(mode);
     spec.via = via;
-    let mut cat = ctx.state.catalogs.view().map(|c| (*c).clone()).unwrap_or_default();
+    let mut cat = base.view_owned();
     match cat.create(spec) {
-        Ok(()) => {
-            ctx.state.install_view_catalog(cat);
-            out.extend_from_slice(b"+OK\r\n");
-        }
-        Err(e) => encode_error(out, &e.to_wire()),
+        Ok(()) => Some(cat),
+        Err(e) => refused(out, &e.to_wire()),
     }
+}
+
+/// Write the refusal `msg` into the reply; no catalog to install.
+fn refused<T>(out: &mut Vec<u8>, msg: &str) -> Option<T> {
+    encode_error(out, msg);
+    None
 }
 
 /// `(order, mode, top_k, via)` from the optional `VIEW.CREATE` tail.
@@ -192,11 +213,17 @@ pub(crate) fn cmd_view_drop<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: 
     if args.len() != 2 {
         return encode_error(out, "ERR usage: VIEW.DROP name");
     }
-    let mut cat = ctx.state.catalogs.view().map(|c| (*c).clone()).unwrap_or_default();
-    let hit = cat.drop_view(&args[1]);
-    if hit {
-        ctx.state.install_view_catalog(cat);
-    }
+    let hit = loop {
+        let base = ctx.state.catalog_base();
+        let mut cat = base.view_owned();
+        if !cat.drop_view(&args[1]) {
+            break false;
+        }
+        let change = CatalogChange { view: Some(cat), ..CatalogChange::default() };
+        if ctx.state.commit_catalogs(&base, change) {
+            break true;
+        }
+    };
     encode_integer(out, i64::from(hit));
 }
 

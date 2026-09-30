@@ -61,6 +61,46 @@ pub(crate) struct CatalogState {
     incarnations: Mutex<(u64, HashMap<Vec<u8>, u64>)>,
     /// Where the catalog stands as recorded state.
     pub(crate) record: crate::catalog_record::RecordState,
+    /// Held while the catalogs are installed or read as one: a change
+    /// commits only onto the catalogs it was computed from. Taken by
+    /// catalog changes and by the recording of them, never on a command's
+    /// data path, which reads the generations and the installed `Arc`s.
+    /// After `record.at` when both are held.
+    writer: Mutex<()>,
+}
+
+/// The catalogs at one moment, and the generation they carry: what a
+/// catalog change is computed from.
+pub(crate) struct CatalogBase {
+    pub(crate) index: Option<Arc<Catalog>>,
+    pub(crate) view: Option<Arc<ViewCatalog>>,
+    pub(crate) table: Option<Arc<TableCatalog>>,
+    generation: u64,
+}
+
+impl CatalogBase {
+    /// A copy of the index catalog to change.
+    pub(crate) fn index_owned(&self) -> Catalog {
+        self.index.as_deref().cloned().unwrap_or_default()
+    }
+
+    /// A copy of the view catalog to change.
+    pub(crate) fn view_owned(&self) -> ViewCatalog {
+        self.view.as_deref().cloned().unwrap_or_default()
+    }
+
+    /// A copy of the table catalog to change.
+    pub(crate) fn table_owned(&self) -> TableCatalog {
+        self.table.as_deref().cloned().unwrap_or_default()
+    }
+}
+
+/// The catalogs a change installs; `None` leaves that one as it is.
+#[derive(Default)]
+pub(crate) struct CatalogChange {
+    pub(crate) index: Option<Catalog>,
+    pub(crate) view: Option<ViewCatalog>,
+    pub(crate) table: Option<TableCatalog>,
 }
 
 /// One declared path's `(name, hits, last_hit_s, declared_s, min_margin)`;
@@ -81,7 +121,19 @@ impl CatalogState {
             usage: RwLock::new(HashMap::new()),
             incarnations: Mutex::new((0, HashMap::new())),
             record: crate::catalog_record::RecordState::default(),
+            writer: Mutex::new(()),
         }
+    }
+
+    /// How many installs the catalogs have seen: moves on any change and
+    /// never goes back.
+    pub(crate) fn generation(&self) -> u64 {
+        self.index_gen().wrapping_add(self.view_gen()).wrapping_add(self.table_gen())
+    }
+
+    /// Hold the catalogs still: no change commits while the guard lives.
+    pub(crate) fn hold(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.writer.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// The incarnation of global index `name` in the installed catalog
@@ -241,6 +293,46 @@ impl CatalogState {
 }
 
 impl RuntimeState {
+    /// The catalogs as one consistent base to compute a change from.
+    pub(crate) fn catalog_base(&self) -> CatalogBase {
+        let c = &self.catalogs;
+        let _held = c.hold();
+        CatalogBase {
+            index: c.index(),
+            view: c.view(),
+            table: c.table(),
+            generation: c.generation(),
+        }
+    }
+
+    /// Install `change` if the catalogs are still the ones `base` saw;
+    /// `false` when another change landed first, and the caller computes
+    /// its change again from a new base. Two changes computed from the
+    /// same catalogs can then never both install, the later dropping the
+    /// earlier.
+    pub(crate) fn commit_catalogs(&self, base: &CatalogBase, change: CatalogChange) -> bool {
+        let _held = self.catalogs.hold();
+        if self.catalogs.generation() != base.generation {
+            return false;
+        }
+        self.install_catalogs(change);
+        true
+    }
+
+    /// Install what `change` holds: the index catalog first, so a table
+    /// or view never names an index the shards cannot see yet.
+    pub(crate) fn install_catalogs(&self, change: CatalogChange) {
+        if let Some(c) = change.index {
+            self.install_index_catalog(c);
+        }
+        if let Some(c) = change.table {
+            self.install_table_catalog(c);
+        }
+        if let Some(c) = change.view {
+            self.install_view_catalog(c);
+        }
+    }
+
     /// Swap in a new index catalog (IDX.CREATE / IDX.DROP / sidecar
     /// boot). Bumps the generation (shards refresh their segment
     /// lists lazily), then the control epoch (writer protocol step ②
