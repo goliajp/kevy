@@ -40,6 +40,7 @@ permanently red is a gate nobody reads.
 Exit 0 every door has it · 1 a door is behind · 2 the run could not tell
 """
 
+import fnmatch
 import json
 import pathlib
 import re
@@ -412,12 +413,22 @@ FORMATS = [
 MANIFEST_ROOTS = ("bindings", "packaging", "crates")
 
 
+def tracked_manifests():
+    """Every tracked file under MANIFEST_ROOTS. A door ships from a checkout,
+    so an untracked manifest is not one, and asking git is how this avoids
+    walking node_modules and build output (a recursive glob took 7 s)."""
+    names = subprocess.run(["git", "ls-files", "-z", "--", *MANIFEST_ROOTS], cwd=ROOT,
+                           capture_output=True, text=True, check=True).stdout.split("\0")
+    return [ROOT / n for n in names if n]
+
+
 def binding_doors(excused):
-    """Doors found under MANIFEST_ROOTS, one glob per manifest format."""
+    """Doors found under MANIFEST_ROOTS, one pattern per manifest format."""
     out = []
+    tracked = tracked_manifests()
     for kind, pattern, read, probe in FORMATS:
-        for base in MANIFEST_ROOTS:
-            for f in sorted((ROOT / base).glob(pattern)):
+        leaf = pattern.rsplit("/", 1)[-1]
+        for f in sorted(t for t in tracked if fnmatch.fnmatch(t.name, leaf)):
                 if demo(f) or any(x in f.parents or x == f.parent for x in excused):
                     continue
                 got = read(f.read_text(encoding="utf-8"))
