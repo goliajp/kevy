@@ -3,6 +3,8 @@
 //! set (the same harness as crates/kevy/tests/*), with the change feed
 //! and a persistent data dir enabled so FEED.* and IDX.* are live.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

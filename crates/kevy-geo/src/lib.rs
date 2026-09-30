@@ -356,8 +356,8 @@ mod tests {
     const PALERMO: (f64, f64) = (13.361_389, 38.115_556);
     const CATANIA: (f64, f64) = (15.087_269, 37.502_669);
 
-    // `neighbor_score_ranges` had no test at all. The dead-path atlas
-    // (`tools/coverage_atlas.py`) found every one of this crate's four
+    // `neighbor_score_ranges` had no test at all. A per-region coverage
+    // reading found every one of this crate's four
     // never-executed regions inside it, which is what a public function
     // with zero direct coverage looks like from the outside: exercised
     // through the GEO commands, never at its own edges.

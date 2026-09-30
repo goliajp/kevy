@@ -3,6 +3,8 @@
 //! and it reaches a replica on the stream and in a full sync. A replica
 //! has only what its primary has.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 #[path = "common/mod.rs"]
 mod common;
 

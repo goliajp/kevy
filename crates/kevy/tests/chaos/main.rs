@@ -1,5 +1,7 @@
 //! Chaos runs against a real server: crashes, drains, resource exhaustion, partitions, soaks.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 mod aof_compat_matrix_chaos;
 mod audit_log_chaos;
 mod backup_restore_chaos;

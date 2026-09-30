@@ -1,5 +1,7 @@
 //! Windowed and indexed reads over rows.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 mod idx_advise;
 mod index_repack;
 mod partition_local_only;

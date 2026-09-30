@@ -11,6 +11,8 @@
 //!
 //! For the budget, use `examples/decode_budget`, which holds values out
 //! of the dictionary's training set.
+
+#![allow(clippy::unwrap_used, clippy::panic)]
 fn main() {
     let mut text = Vec::new();
     for i in 0..80 {

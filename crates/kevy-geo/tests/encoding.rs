@@ -3,6 +3,7 @@
 //! valkey/Redis clients: same (lon, lat) → same ZSet score → same
 //! base32 11-char `GEOHASH`.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
 // Palermo / Catania coordinates are quoted verbatim from the Redis docs;
 // adding digit separators would obscure the cross-reference. The float==
 // comparisons are intentional bit-exact contract checks (cell-midpoint

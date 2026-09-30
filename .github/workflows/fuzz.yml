@@ -1,10 +1,13 @@
 name: Fuzz
 
-# Cross-arch fuzz on Linux x86_64 — the production target. The local fuzz
-# rounds during development are mac aarch64 only; this job re-fuzzes under
-# Linux's different optimizer profile + sanitizer behaviour on every push
-# to develop and once a day on schedule, time-boxed so CI minutes stay
-# bounded.
+# The long fuzz run: every target in CI's fuzz-smoke matrix, five minutes
+# each, on Linux x86_64 (the production target). Daily rather than per-push:
+# every push already fuzzes each target for 60 s in ci.yml, and a long run
+# on every push held most of the org's shared runners for half an hour.
+#
+# One list. The matrix is read from ci.yml's fuzz-smoke job by
+# tools/check_fuzz_matrix.py, which also holds that list to the targets in
+# the tree, so a target added there is fuzzed here too.
 #
 # Charter note: cargo-fuzz and libfuzzer-sys are crates.io dev-only tools
 # (same exemption as cargo-llvm-cov). They never enter the runtime
@@ -12,38 +15,7 @@ name: Fuzz
 # uses its own isolated workspace.
 
 on:
-  push:
-    branches: [develop]
-    paths:
-      - 'crates/kevy-resp/**'
-      - 'crates/kevy-bytes/**'
-      - 'crates/kevy-persist/**'
-      - 'crates/kevy-hash/**'
-      - 'crates/kevy-map/**'
-      - 'crates/kevy-ring/**'
-      - 'crates/kevy-config/**'
-      - 'crates/kevy-text/**'
-      - 'crates/kevy-store/**'
-      - 'crates/kevy-vector/**'
-      - 'crates/kevy-vlog/**'
-      - 'crates/kevy-sql/**'
-      - '.github/workflows/fuzz.yml'
-  pull_request:
-    paths:
-      - 'crates/kevy-resp/**'
-      - 'crates/kevy-bytes/**'
-      - 'crates/kevy-persist/**'
-      - 'crates/kevy-hash/**'
-      - 'crates/kevy-map/**'
-      - 'crates/kevy-ring/**'
-      - 'crates/kevy-config/**'
-      - 'crates/kevy-text/**'
-      - 'crates/kevy-store/**'
-      - 'crates/kevy-vector/**'
-      - 'crates/kevy-vlog/**'
-      - 'crates/kevy-sql/**'
   schedule:
-    # Daily at 08:00 UTC. Catches drift on develop even without a code push.
     - cron: '0 8 * * *'
   workflow_dispatch:
     inputs:
@@ -52,45 +24,40 @@ on:
         required: false
         default: '300'
 
+permissions:
+  contents: read
+
 jobs:
+  targets:
+    name: the fuzz-smoke list
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      include: ${{ steps.list.outputs.include }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: list
+        run: echo "include=$(python3 tools/check_fuzz_matrix.py --json)" >> "$GITHUB_OUTPUT"
+
   fuzz:
     name: Fuzz ${{ matrix.crate }}/${{ matrix.target }} (linux x86_64)
+    needs: targets
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
-      # the org shares 20 runners; seventeen targets at once held most of
-      # them through the first minutes of the CI run on the same push
+      # the org shares 20 runners
       max-parallel: 4
       matrix:
-        include:
-          - { crate: kevy-resp,    target: parse_command }
-          - { crate: kevy-resp,    target: parse_reply }
-          - { crate: kevy-bytes,   target: cross_arm }
-          - { crate: kevy-persist, target: replay_aof }
-          - { crate: kevy-persist, target: shards_meta }
-          - { crate: kevy-hash,    target: key_hash_slot }
-          - { crate: kevy-seg,     target: seg_roundtrip }
-          - { crate: kevy-seg,     target: seg_open }
-          - { crate: kevy-map,     target: map_ops }
-          - { crate: kevy-ring,    target: ring_spsc }
-          - { crate: kevy-config,  target: config_toml }
-          - { crate: kevy-text,    target: text_index }
-          - { crate: kevy-store,   target: store_zset }
-          - { crate: kevy-vlog,    target: vlog_churn }
-          - { crate: kevy-sql,     target: sql_compile }
-          - { crate: kevy-vector,  target: hnsw_ops }
-          - { crate: kevy-alloc,   target: heap_churn }
+        include: ${{ fromJSON(needs.targets.outputs.include) }}
     env:
-      # Honour workflow_dispatch input; default to 300 s (5 min) per target.
       FUZZ_SECONDS: ${{ github.event.inputs.duration_seconds || '300' }}
     steps:
       - uses: actions/checkout@v7
 
-      # cargo-fuzz needs the nightly toolchain (libfuzzer-sys + the
-      # `-Zsanitizer` machinery aren't in stable). The repo root's
-      # rust-toolchain.toml pins channel=stable, so we explicitly invoke
-      # nightly per-command via `cargo +nightly …`.
+      # cargo-fuzz needs nightly (libfuzzer-sys and the -Zsanitizer
+      # machinery are not on stable); `cargo +nightly` overrides the stable
+      # channel the repository pins.
       - name: Install nightly toolchain
         run: rustup toolchain install nightly --component rust-src --no-self-update
 
@@ -107,14 +74,10 @@ jobs:
           restore-keys: |
             fuzz-${{ matrix.crate }}-${{ matrix.target }}-${{ runner.os }}-
 
+      # -max_total_time bounds wall-clock; any libfuzzer crash fails the
+      # step and the offending input is uploaded below.
       - name: Run ${{ matrix.crate }}/${{ matrix.target }} for ${{ env.FUZZ_SECONDS }}s
         working-directory: crates/${{ matrix.crate }}/fuzz
-        # `cargo +nightly` overrides the stable channel pinned by the
-        # repo-root rust-toolchain.toml; cargo-fuzz then inherits nightly
-        # for its inner `cargo build` invocation. -max_total_time bounds
-        # wall-clock so the job can't run away. Any libfuzzer crash trips
-        # the step (non-zero exit) and uploads the offending input as an
-        # artifact.
         run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=${{ env.FUZZ_SECONDS }}
 
       - name: Upload crash artefacts on failure

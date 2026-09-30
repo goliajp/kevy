@@ -8,7 +8,7 @@
 //! that probe opens has the feed on — so the flush happened, and the
 //! function ran, as a side effect of a test about arity. Teaching that
 //! probe to skip verbs whose bare call is complete took the coverage
-//! away with it, and `deadgate` named the function the same day.
+//! away with it, and the coverage run showed the function dead the same day.
 //!
 //! Coverage acquired that way is coverage nobody can reason about. This
 //! asks for the behaviour directly.

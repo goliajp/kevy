@@ -7,6 +7,8 @@
 //! complete: two full runtimes with separate ports, data dirs and
 //! catalogs run side by side, and nothing leaks across.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::Arc;

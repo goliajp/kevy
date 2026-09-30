@@ -6,6 +6,8 @@
 //!
 //! `cargo run -p kevy --example bench_cmd --release`
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use kevy::{KevyCommands, KeyspaceStore as Store};
 use kevy_bench::{bench, black_box};
 use kevy_resp::parse_command;

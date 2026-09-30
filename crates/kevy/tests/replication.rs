@@ -3,6 +3,8 @@
 //! live frames with acked-offset tracking, ships snapshots, and
 //! honors dynamic `REPLICAOF` — plus the WAIT / REPL.* barrier verbs.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};

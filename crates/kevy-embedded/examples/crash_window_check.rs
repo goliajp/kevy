@@ -15,6 +15,8 @@
 //!   self-heal).
 //!
 //! Exits 0 on success; panics (non-zero) on any violation.
+
+#![allow(clippy::unwrap_used, clippy::panic)]
 use kevy_embedded::{Config, MatchOpts, Store};
 use kevy_index::IndexValue;
 use std::time::Duration;

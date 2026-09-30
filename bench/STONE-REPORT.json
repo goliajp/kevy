@@ -1,11 +1,9 @@
 {
   "version": "7.0.0",
-  "dead_platform": "linux",
+  "platform": "linux",
   "stones": [
     {
       "crate": "kevy-alloc",
-      "dead_regions": 75,
-      "measured_regions": 2858,
       "packaged": true,
       "built": true,
       "tested": true,
@@ -29,8 +27,6 @@
     },
     {
       "crate": "kevy-bytes",
-      "dead_regions": 17,
-      "measured_regions": 498,
       "packaged": false,
       "built": false,
       "tested": false,
@@ -57,8 +53,6 @@
     },
     {
       "crate": "kevy-hash",
-      "dead_regions": 32,
-      "measured_regions": 329,
       "packaged": false,
       "built": false,
       "tested": false,
@@ -85,8 +79,6 @@
     },
     {
       "crate": "kevy-compress",
-      "dead_regions": 32,
-      "measured_regions": 1970,
       "packaged": true,
       "built": true,
       "tested": true,
@@ -110,8 +102,6 @@
     },
     {
       "crate": "kevy-map",
-      "dead_regions": 20,
-      "measured_regions": 1569,
       "packaged": false,
       "built": false,
       "tested": false,
@@ -138,8 +128,6 @@
     },
     {
       "crate": "kevy-madvise",
-      "dead_regions": 17,
-      "measured_regions": 166,
       "packaged": true,
       "built": true,
       "tested": true,
@@ -163,8 +151,6 @@
     },
     {
       "crate": "kevy-ranktree",
-      "dead_regions": 14,
-      "measured_regions": 922,
       "packaged": true,
       "built": true,
       "tested": true,
@@ -188,8 +174,6 @@
     },
     {
       "crate": "kevy-ring",
-      "dead_regions": 17,
-      "measured_regions": 172,
       "packaged": false,
       "built": false,
       "tested": false,
@@ -216,8 +200,6 @@
     },
     {
       "crate": "kevy-seg",
-      "dead_regions": 112,
-      "measured_regions": 1324,
       "packaged": false,
       "built": false,
       "tested": false,
@@ -244,8 +226,6 @@
     },
     {
       "crate": "kevy-time",
-      "dead_regions": 22,
-      "measured_regions": 356,
       "packaged": true,
       "built": true,
       "tested": true,
@@ -269,8 +249,6 @@
     },
     {
       "crate": "kevy-crypto",
-      "dead_regions": 2,
-      "measured_regions": 994,
       "packaged": true,
       "built": true,
       "tested": true,
@@ -294,8 +272,6 @@
     },
     {
       "crate": "kevy-noise",
-      "dead_regions": 14,
-      "measured_regions": 583,
       "packaged": false,
       "built": false,
       "tested": false,
@@ -323,8 +299,6 @@
     },
     {
       "crate": "kevy-sys",
-      "dead_regions": 153,
-      "measured_regions": 1411,
       "packaged": true,
       "built": true,
       "tested": true,
@@ -348,8 +322,6 @@
     },
     {
       "crate": "kevy-uring",
-      "dead_regions": 243,
-      "measured_regions": 1059,
       "packaged": false,
       "built": false,
       "tested": false,
@@ -376,8 +348,6 @@
     },
     {
       "crate": "kevy-text",
-      "dead_regions": 120,
-      "measured_regions": 4244,
       "packaged": true,
       "built": true,
       "tested": true,
@@ -401,8 +371,6 @@
     },
     {
       "crate": "kevy-vector",
-      "dead_regions": 36,
-      "measured_regions": 915,
       "packaged": true,
       "built": true,
       "tested": true,
@@ -426,8 +394,6 @@
     },
     {
       "crate": "kevy-geo",
-      "dead_regions": 4,
-      "measured_regions": 413,
       "packaged": true,
       "built": true,
       "tested": true,
@@ -451,8 +417,6 @@
     },
     {
       "crate": "kevy-scalar",
-      "dead_regions": 717,
-      "measured_regions": 4597,
       "packaged": false,
       "built": false,
       "tested": false,
@@ -479,8 +443,6 @@
     },
     {
       "crate": "kevy-tmpdir",
-      "dead_regions": 5,
-      "measured_regions": 129,
       "packaged": true,
       "built": true,
       "tested": true,
@@ -504,8 +466,6 @@
     },
     {
       "crate": "kevy-bench",
-      "dead_regions": 4,
-      "measured_regions": 132,
       "packaged": true,
       "built": true,
       "tested": true,

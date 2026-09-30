@@ -1,6 +1,8 @@
 //! Mock-RESP round-trip for `Transaction` — drives the MULTI / QUEUED /
 //! EXEC / DISCARD wire shapes against a tiny scripted server.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use kevy_client::Connection;
 use kevy_client::KevyError;
 use kevy_resp::Reply;
