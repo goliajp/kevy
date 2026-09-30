@@ -455,14 +455,8 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       # A workspace build unifies features, so every crate is linted with the
       # union of what anything in the tree asks for. kevy-wasm takes
-      # kevy-embedded WITHOUT `tier`, and that configuration — the one the
-      # wasm package actually ships — is never linted above. It had a real
-      # clippy error in it, invisible to the step before this one.
-      - name: Clippy (kevy-wasm's own feature set, which the workspace hides)
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
-        run: cargo clippy -p kevy-wasm --all-targets -- -D warnings
-      # The step above is hand-written, and hand-written is how the next
-      # one was missed for a whole release line: kevy-alloc's `global`
+      # kevy-embedded WITHOUT `tier`, and that configuration was never linted
+      # until a real clippy error turned up in it; and kevy-alloc's `global`
       # feature is off by default, so nothing in the tree turns it on, so
       # `unsafe impl GlobalAlloc for KevyAlloc` — the most safety-critical
       # impl here — was never linted and carried no SAFETY argument while

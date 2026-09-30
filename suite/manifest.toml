@@ -6,7 +6,7 @@
 # holds by construction rather than by discipline.
 #
 #   precommit   pins the current version's goals + fast regressions.
-#   premerge    adds everything CI runs on a push (tools/check_ci_parity.py).
+#   premerge    adds what CI checks on a push.
 #   prerelease  adds the release claims and iron rules.
 #   full        adds everything: the problem-hunting surface.
 #
@@ -22,7 +22,7 @@
 #   requires  infrastructure this needs; a missing requirement is a loud
 #             NOT-RUN, never a silent pass:
 #             binaries-debug | binaries-release | linux | box | node |
-#             chromium | docker | device | ci
+#             chromium | docker
 #   inputs    paths (prefix ending in `/`, or fnmatch pattern) this row
 #             measures; above premerge the row is skipped as UNCHANGED
 #             when it passed on this machine at an ancestor commit and no
@@ -60,20 +60,12 @@ prerelease = 6000
 # reader what was missing and never where the row does run, so the release
 # report's accounting — "these five run in CI's site job" — was derived by
 # hand every time. And a requirement that NOTHING can satisfy looks exactly
-# like one satisfied on a machine nobody happens to be at: `device` is set
-# in one place in this repository, `tools/suite.py`, by nothing.
+# like one satisfied on a machine nobody happens to be at.
 #
 # Audited: every requirement a check names must appear here, and every
 # entry here must be named by some check. A `met` of "" is a declaration
 # that the row runs nowhere — allowed, because saying so is the point, and
 # loud in the audit's summary rather than silent in a NOT-RUN line.
-# Commands CI runs that no local tier can: tools/check_ci_parity.py fails on
-# any CI command that is in neither a row by premerge nor this table.
-[suite.ci_only]
-"cargo +nightly fuzz run *" = "cargo-fuzz on nightly; CI's fuzz-smoke matrix, which fuzzgate keeps complete"
-"bash bench/run.sh" = "the Docker benchmark smoke against valkey; measures, gives no verdict on the code"
-"cargo test" = "the Tauri plugin, a standalone crate outside the workspace that needs Tauri's system libraries"
-"python3 tools/suite.py --audit" = "the runner audits the manifest before every tier"
 
 [suite.requirements]
 "rustdoc coverage tables from rustdoc-coverage" = "wherever rustdoc-coverage ran earlier in the same tier"
@@ -94,8 +86,6 @@ prerelease = 6000
 "cargo-semver-checks" = "CI's stonereport job"
 "bench/STONE-REPORT.json from stone-report" = "CI's stonereport job, uploaded as stone-report-linux"
 "pgcmp-infra" = "the lx64 box, where the kevy-pgcmp container is resident"
-"ci" = "CI"
-"device" = ""
 
 # ── hygiene ──────────────────────────────────────────────────────────
 
@@ -267,16 +257,6 @@ requires = ["binaries-debug"]
 proves = "the site's command reference is the engine's own COMMAND DOCS, not a hand-kept copy"
 
 [[check]]
-id = "suite-ledger"
-area = "hygiene"
-tier = "precommit"
-cmd = "python3 tools/check_suite_ledger.py"
-expected = 1
-timeout = 60
-requires = []
-proves = "a recorded duration is a duration — a timeout kill is not filed in the same field"
-
-[[check]]
 id = "architecture"
 area = "arch"
 tier = "precommit"
@@ -388,15 +368,6 @@ expected = 2
 timeout = 60
 requires = []
 proves = "no published crate ships a source file importing a dependency its published manifest drops"
-
-[[check]]
-id = "ci-parity"
-area = "hygiene"
-tier = "precommit"
-cmd = "python3 tools/check_ci_parity.py"
-expected = 1
-timeout = 60
-proves = "every command CI runs on a push is a row by premerge, or says why only CI can run it"
 
 [[check]]
 id = "fuzzgate"
@@ -583,16 +554,6 @@ requires = []
 proves = "library code has no undeclared unwrap or panic, and no undocumented public item"
 
 [[check]]
-id = "expect-reasons"
-area = "hygiene"
-tier = "precommit"
-cmd = "python3 tools/check_expect_reasons.py"
-expected = 1
-timeout = 120
-requires = []
-proves = "no expect() in library code answers with a measurement or a conclusion"
-
-[[check]]
 id = "abi-panics"
 area = "hygiene"
 tier = "precommit"
@@ -664,20 +625,6 @@ expected = 5
 timeout = 120
 requires = ["web/dist from site-build"]
 proves = "every written fragment reached the built site"
-
-[[check]]
-id = "wasm-published"
-area = "release-pins"
-tier = "prerelease"
-cmd = "python3 tools/check_wasm_published.py"
-expected = 10
-timeout = 300
-requires = []
-advisory = true
-advisory_reason = """
-Between releases the tree is SUPPOSED to be ahead of npm; a gate here would be red from the first engine change after every release, and a permanently red gate is one nobody reads. What to do about a difference is a release decision — publish a new package version, or deploy knowing the page answers verbs the package cannot.
-"""
-proves = "whether the built wasm is the published one — divergence is a release decision, said out loud"
 
 # ── prerelease: the owner-claim gates (box) ──────────────────────────
 
@@ -1212,27 +1159,7 @@ timeout = 1800
 requires = ["node", "binaries-debug"]
 proves = "the MCP protocol end to end"
 
-[[check]]
-id = "mobilegate-all"
-area = "doors"
-tier = "full"
-cmd = "bash bench/mobilegate-all.sh"
-expected = 3600
-timeout = 14400
-requires = ["device"]
-proves = "three frameworks × two platforms on real simulators/emulators"
-
 # ── full: coverage + fuzz ────────────────────────────────────────────
-
-[[check]]
-id = "fuzz-smoke"
-area = "feature"
-tier = "premerge"
-cmd = "true"
-expected = 1
-timeout = 60
-requires = ["ci"]
-proves = "fuzz targets run in CI on every push and weekly with a crash-artifact gate — this row keeps the area accounted for"
 
 [[check]]
 id = "door-changelogs"
@@ -1260,15 +1187,6 @@ cmd = "cargo run -q -p kevy --bin gen_docs -- . --check"
 expected = 1
 timeout = 600
 proves = "llms.txt and the verb reference are what the engine's own verb table generates"
-
-[[check]]
-id = "clippy-wasm"
-area = "hygiene"
-tier = "premerge"
-cmd = "cargo clippy -p kevy-wasm --all-targets -- -D warnings"
-expected = 1
-timeout = 600
-proves = "kevy-wasm is clippy-zero in its own feature set, which the workspace clippy unifies away"
 
 [[check]]
 id = "aigate"

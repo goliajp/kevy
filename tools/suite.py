@@ -12,7 +12,7 @@ The manifest (suite/manifest.toml) is the single source of truth for
 what is checked; this runner is deliberately dumb about content and
 strict about accounting:
 
-- A missing requirement (box, device, docker…) is a loud NOT-RUN row in
+- A missing requirement (box, docker, a browser…) is a loud NOT-RUN row in
   the verdict, never a silent pass. "full minus these" is said out loud.
 - A check that cannot be found fails the AUDIT — a deleted gate cannot
   quietly leave the suite. Every one of this repository's worst greens
@@ -184,8 +184,8 @@ def audit(suite, checks):
 
 def requirement_needs_infra(check):
     """Checks whose requirements are inherently absent on some hosts do
-    not count against the local budget arithmetic (box/device/ci)."""
-    return bool({"box", "device", "ci"} & set(check.get("requires", [])))
+    not count against the local budget arithmetic."""
+    return "box" in check.get("requires", [])
 
 
 # ── run ──────────────────────────────────────────────────────────────
