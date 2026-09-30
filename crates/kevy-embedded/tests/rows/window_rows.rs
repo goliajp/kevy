@@ -51,9 +51,20 @@ fn seed(s: &Store) {
             ],
         );
     }
-    // Out-of-window by value, but TTL'd: must stay hot.
+    // Out-of-window by value, but TTL'd: must stay hot. Every store seeded
+    // in one run gets the same absolute deadline, so the windowed store and
+    // its control agree on the TTL however far apart they were seeded.
     run(s, &[b"HSET", b"ev:ttl", b"id", b"ev:ttl", b"at", b"5", b"note", b"short-lived"]);
-    run(s, &[b"EXPIRE", b"ev:ttl", b"1000"]);
+    run(s, &[b"EXPIREAT", b"ev:ttl", ttl_deadline().as_bytes()]);
+}
+
+/// One unix deadline, 1000 s after the first store asked for it.
+fn ttl_deadline() -> &'static str {
+    static AT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    AT.get_or_init(|| {
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap();
+        (now.as_secs() + 1000).to_string()
+    })
 }
 
 fn wait_for_row_segment(dir: &std::path::Path) {
