@@ -86,7 +86,7 @@ impl Commands for KevyCommands {
     }
 
     fn snapshot_aux(&self) -> Option<kevy_rt::Argv> {
-        crate::catalog_record::snapshot_aux(self.state())
+        Some(crate::catalog_record::snapshot_aux(self.state()))
     }
 
     fn load_snapshot_aux(&self, frame: Option<&kevy_rt::Argv>, full_sync: bool) {
