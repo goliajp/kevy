@@ -18,6 +18,14 @@ mod tests_atomic_index;
 mod tests_bitmap;
 #[path = "store_tests_bonus.rs"]
 mod tests_bonus;
+#[cfg(all(feature = "text", feature = "vector"))]
+#[path = "store_tests_catalog.rs"]
+mod tests_catalog;
+#[path = "store_tests_facade.rs"]
+mod tests_facade;
+#[cfg(feature = "index")]
+#[path = "store_tests_index_drain.rs"]
+mod tests_index_drain;
 #[path = "store_tests_index_paths.rs"]
 mod tests_index_paths;
 #[path = "store_tests_keyspace.rs"]

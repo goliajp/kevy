@@ -92,6 +92,16 @@ mod peer_entry_tests {
             assert_eq!(PeerEntry::parse_one(&p.to_token()), Some(p));
         }
     }
+
+    #[test]
+    fn a_built_peer_is_the_one_its_token_parses_to() {
+        let legacy = PeerEntry::new("n1".into(), "10.0.0.1".into(), 6204);
+        assert_eq!(legacy.to_token(), "n1@10.0.0.1:6204");
+        let full = legacy.clone().with_client_port(6004).with_repl_port_base(7100);
+        assert_eq!(full.to_token(), "n1@10.0.0.1:6204:6004:7100");
+        assert_eq!(PeerEntry::parse_one(&full.to_token()), Some(full));
+        assert_eq!(PeerEntry::parse_one(&legacy.to_token()), Some(legacy));
+    }
 }
 
 mod scope_entry_tests {
@@ -164,5 +174,15 @@ mod scope_entry_tests {
             assert_eq!(s.to_token(), tok);
             assert_eq!(ScopeEntry::parse_one(&s.to_token()), Some(s));
         }
+    }
+
+    #[test]
+    fn a_built_scope_is_the_one_its_token_parses_to() {
+        let plain = ScopeEntry::new(b"app:".to_vec(), "w1".into());
+        assert_eq!(plain.to_token(), "app:=w1");
+        let backed = plain.clone().with_fallback("f1".into());
+        assert_eq!(backed.to_token(), "app:=w1|f1");
+        assert_eq!(ScopeEntry::parse_one("app:=w1|f1"), Some(backed));
+        assert_eq!(ScopeEntry::parse_one("app:=w1"), Some(plain));
     }
 }

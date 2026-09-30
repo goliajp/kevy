@@ -268,6 +268,84 @@ fn thinning_a_deep_tree_merges_leaves_and_keeps_it_whole() {
     assert!(t.live_leaves() * 3 < leaves, "thinned leaves merged: {} of {leaves}", t.live_leaves());
 }
 
+fn nth_leaf(t: &Tree, n: usize) -> u32 {
+    (0..n).fold(t.first, |id, _| t.leaf(id).next)
+}
+
+fn key_at(t: &Tree, id: u32, i: usize) -> Vec<u8> {
+    let mut k = Vec::new();
+    t.leaf(id).key_into(i, &t.ov, &mut k);
+    k
+}
+
+/// Even eight-byte keys inserted ascending: packed leaves under one root.
+fn even_tree() -> Tree {
+    let mut t = Tree::new(Shape { payloads: false, vlens: false });
+    for i in 0..3000u64 {
+        t.insert(&(2 * i).to_be_bytes(), &[]);
+    }
+    assert_eq!(t.height, 1, "one inner level");
+    t
+}
+
+/// Take the first key out of the `n`th leaf and put a larger one in its
+/// place, so the leaf is full again and starts above its separator.
+fn raise_first_key(t: &mut Tree, n: usize) -> Vec<u8> {
+    let l = nth_leaf(t, n);
+    let first = key_at(t, l, 0);
+    assert!(t.remove(&first));
+    let above = u64::from_be_bytes(first.as_slice().try_into().unwrap()) + 1;
+    assert!(t.insert(&above.to_be_bytes(), &[]));
+    first
+}
+
+#[test]
+fn a_key_below_a_full_leaf_goes_to_its_left_neighbour_when_that_has_room() {
+    let mut t = even_tree();
+    let p = nth_leaf(&t, 3);
+    let p_len = t.leaf(p).len();
+    assert!(t.remove(&key_at(&t, p, p_len - 1)));
+    let first = raise_first_key(&mut t, 4);
+    let leaves = t.live_leaves();
+    assert!(t.insert(&first, &[]));
+    assert_eq!((t.leaf(p).len(), key_at(&t, p, p_len - 1)), (p_len, first));
+    assert_eq!(t.live_leaves(), leaves, "no leaf was split");
+    assert_eq!(check(&t).len(), 3000);
+}
+
+#[test]
+fn a_key_below_a_full_leaf_opens_a_leaf_when_its_neighbour_is_full() {
+    let mut t = even_tree();
+    let first = raise_first_key(&mut t, 7);
+    let leaves = t.live_leaves();
+    assert!(t.insert(&first, &[]));
+    assert_eq!(t.live_leaves(), leaves + 1);
+    let new = nth_leaf(&t, 7);
+    assert_eq!((t.leaf(new).len(), key_at(&t, new, 0)), (1, first));
+    assert_eq!(t.leaf(new).prev, nth_leaf(&t, 6));
+    assert_eq!(check(&t).len(), 3001);
+}
+
+#[test]
+fn inner_nodes_freed_by_removals_are_taken_again_by_later_splits() {
+    let mut t = Tree::new(Shape { payloads: false, vlens: false });
+    let key = |i: u64| i.to_be_bytes();
+    for i in 0..40_000u64 {
+        t.insert(&key(i), &[]);
+    }
+    assert!(t.height >= 2);
+    for i in 0..30_000u64 {
+        assert!(t.remove(&key(i)));
+    }
+    let freed = t.free_inners.len();
+    assert!(freed > 0, "emptied inner nodes are freed");
+    for i in 40_000..80_000u64 {
+        t.insert(&key(i), &[]);
+    }
+    assert!(t.free_inners.len() < freed, "{} of {freed} still free", t.free_inners.len());
+    assert_eq!(check(&t).len(), 50_000);
+}
+
 #[test]
 fn removing_everything_leaves_no_leaf() {
     let mut t = Tree::new(Shape { payloads: true, vlens: false });

@@ -328,3 +328,48 @@ impl core::fmt::Debug for Facet<'_> {
         f.debug_struct("Facet").field("field", &self.field).field("key", &"<fn>").finish()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Distinct, Facet, Filter, Sort, SortOrder};
+    use crate::{QueryOpts, SegmentShape, TextSegment};
+
+    #[test]
+    fn a_clause_prints_its_field_and_hides_its_function() {
+        let test = |_: &[u8]| true;
+        let key = |v: &[u8]| Some(v.to_vec());
+        assert_eq!(format!("{:?}", Filter::new(2, &test)), r#"Filter { field: 2, test: "<fn>" }"#);
+        assert_eq!(
+            format!("{:?}", Sort::new(1, &key).with_order(SortOrder::Desc)),
+            r#"Sort { field: 1, order: Desc, key: "<fn>" }"#
+        );
+        assert_eq!(
+            format!("{:?}", Distinct::new(3, &key)),
+            r#"Distinct { field: 3, key: "<fn>" }"#
+        );
+        assert_eq!(format!("{:?}", Facet::new(4, &key)), r#"Facet { field: 4, key: "<fn>" }"#);
+    }
+
+    #[test]
+    fn sort_and_distinct_built_onto_query_opts_shape_the_page() {
+        let mut seg = TextSegment::with_shape(SegmentShape::default().with_values(1));
+        for (k, text, brand) in
+            [("a", "red shoe", "acme"), ("b", "red hat", "zeta"), ("c", "red cap", "acme")]
+        {
+            seg.apply_doc(
+                k.as_bytes(),
+                Some(&[(text.as_bytes().to_vec(), 1.0)]),
+                &[Some(brand.as_bytes())],
+            );
+        }
+        let raw = |v: &[u8]| Some(v.to_vec());
+
+        let desc = QueryOpts::default().with_sort(Sort::new(0, &raw).with_order(SortOrder::Desc));
+        assert_eq!(desc.sort.map(|s| s.order), Some(SortOrder::Desc));
+        assert_eq!(seg.matches_query_with(b"red", 1, desc)[0].key, b"b");
+
+        let per_brand = QueryOpts::default().with_distinct(Distinct::new(0, &raw));
+        assert_eq!(per_brand.distinct.map(|d| d.field), Some(0));
+        assert_eq!(seg.matches_query_with(b"red", 10, per_brand).len(), 2, "one hit per brand");
+    }
+}

@@ -2,6 +2,15 @@ use super::*;
 use std::borrow::Cow;
 use std::time::Duration;
 
+#[path = "tests_accessors.rs"]
+mod accessors;
+#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+#[path = "tests_errors.rs"]
+mod errors;
+#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+#[path = "tests_seg_cold.rs"]
+mod seg_cold;
+
 pub(crate) fn s(x: &str) -> Vec<u8> {
     x.as_bytes().to_vec()
 }

@@ -78,3 +78,22 @@ fn a_region_too_small_to_promote_is_not_advised() {
     advise_hugepage(buf.as_ptr(), buf.len());
     assert_eq!(last_advised_bytes(), 0, "advised a region that cannot be promoted");
 }
+
+/// A release shorter than one huge page gives nothing back: only whole
+/// 2 MiB pages are dropped, so the bytes survive.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_release_shorter_than_a_huge_page_keeps_the_bytes() {
+    let len = HUGE_PAGE * 2;
+    let p = mmap_anon_aligned_2mb(len).expect("a 4 MiB anonymous mapping");
+    // SAFETY: `p` is this test's live mapping of `len` bytes; the first
+    // byte is written, released short, read back, then released whole
+    unsafe {
+        p.as_ptr().write(7);
+        release_2mb(p, HUGE_PAGE - 1);
+        assert_eq!(p.as_ptr().read(), 7, "a partial page was released");
+        release_2mb(p, HUGE_PAGE);
+        assert_eq!(p.as_ptr().read(), 0, "a whole page was kept");
+        munmap_2mb(p, len);
+    }
+}

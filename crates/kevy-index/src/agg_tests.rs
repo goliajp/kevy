@@ -132,3 +132,84 @@ fn running_stats_never_drift_from_the_walking_reference() {
     let end = s.stats();
     assert_eq!((end.groups, end.rows), (0, 0));
 }
+
+const EVERY_BY: [AggBy; 4] = [AggBy::Count, AggBy::Sum, AggBy::Min, AggBy::Max];
+
+#[test]
+fn every_metric_reads_back_from_its_tag_in_any_case() {
+    for by in EVERY_BY {
+        assert_eq!(AggBy::parse(by.tag().as_bytes()), Some(by));
+        assert_eq!(AggBy::parse(by.tag().to_uppercase().as_bytes()), Some(by));
+    }
+    assert_eq!(EVERY_BY.map(AggBy::tag), ["count", "sum", "min", "max"]);
+    assert_eq!(AggBy::parse(b"avg"), None);
+}
+
+fn stats(count: u64, sum: f64, min: Option<i64>, max: Option<i64>) -> GroupStats {
+    GroupStats { count, sum, min: min.map(IndexValue::I64), max: max.map(IndexValue::I64) }
+}
+
+#[test]
+fn a_rank_score_grows_with_standing_and_an_absent_extreme_ranks_last() {
+    let g = stats(3, 12.5, Some(2), Some(9));
+    assert_eq!(EVERY_BY.map(|by| g.rank_score(by)), [3.0, 12.5, -2.0, 9.0]);
+    let empty = stats(0, 0.0, None, None);
+    assert_eq!(empty.rank_score(AggBy::Min), f64::NEG_INFINITY);
+    assert_eq!(empty.rank_score(AggBy::Max), f64::NEG_INFINITY);
+}
+
+fn names(all: &[(Vec<u8>, GroupStats)]) -> Vec<&str> {
+    all.iter().map(|(g, _)| std::str::from_utf8(g).unwrap()).collect()
+}
+
+#[test]
+fn groups_rank_by_each_metric_with_absent_extremes_last_and_ties_by_name() {
+    let mut all = vec![
+        (b"e".to_vec(), stats(1, 1.0, None, None)),
+        (b"d".to_vec(), stats(2, 5.0, Some(4), Some(4))),
+        (b"c".to_vec(), stats(2, 5.0, Some(1), Some(8))),
+        (b"b".to_vec(), stats(1, 9.0, None, None)),
+        (b"a".to_vec(), stats(3, 2.0, Some(4), Some(8))),
+    ];
+    sort_groups(&mut all, AggBy::Count);
+    assert_eq!(names(&all), ["a", "c", "d", "b", "e"]);
+    sort_groups(&mut all, AggBy::Sum);
+    assert_eq!(names(&all), ["b", "c", "d", "a", "e"]);
+    sort_groups(&mut all, AggBy::Min);
+    assert_eq!(names(&all), ["c", "a", "d", "b", "e"]);
+    // every pairing of present and absent extremes, from the reverse order
+    all.reverse();
+    sort_groups(&mut all, AggBy::Min);
+    assert_eq!(names(&all), ["c", "a", "d", "b", "e"]);
+    for _ in 0..2 {
+        sort_groups(&mut all, AggBy::Max);
+        let present: Vec<&str> =
+            names(&all).into_iter().filter(|g| !matches!(*g, "b" | "e")).collect();
+        assert_eq!(present, ["a", "c", "d"], "larger maximum first, ties by name");
+        all.reverse();
+    }
+    let mut full = vec![
+        (b"d".to_vec(), stats(1, 0.0, Some(4), Some(4))),
+        (b"c".to_vec(), stats(1, 0.0, Some(1), Some(8))),
+        (b"a".to_vec(), stats(1, 0.0, Some(4), Some(8))),
+    ];
+    sort_groups(&mut full, AggBy::Max);
+    assert_eq!(names(&full), ["a", "c", "d"]);
+    // two groups compare both ways round
+    for by in [AggBy::Min, AggBy::Max] {
+        for first_has in [true, false] {
+            let (with, without) = (
+                (b"w".to_vec(), stats(1, 0.0, Some(1), Some(1))),
+                (b"o".to_vec(), stats(1, 0.0, None, None)),
+            );
+            let mut two = if first_has { vec![with, without] } else { vec![without, with] };
+            sort_groups(&mut two, by);
+            let mut got = names(&two);
+            got.sort_unstable();
+            assert_eq!(got, ["o", "w"], "{by:?}");
+            if by == AggBy::Min {
+                assert_eq!(names(&two), ["w", "o"], "a group without a minimum ranks last");
+            }
+        }
+    }
+}

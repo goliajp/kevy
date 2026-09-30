@@ -463,3 +463,7 @@ impl From<TableError> for CatalogError {
         Self::Table(e)
     }
 }
+
+#[cfg(test)]
+#[path = "error_tests.rs"]
+mod tests;

@@ -205,4 +205,17 @@ mod tests {
         let got = resolve_host("[::1]");
         assert!(matches!(got, Some(IpAddr::V6(_))));
     }
+
+    #[test]
+    fn a_secure_primary_serves_with_its_own_key_and_the_configured_replicas() {
+        let repl = ReplicationState::new(1, false, 6004);
+        assert!(link_security(&repl).is_none(), "no secure link configured");
+        let local = kevy_noise::Keypair::from_secret([3; 32]);
+        let mut cfg = Config::default();
+        cfg.replication.replica_keys = vec![[4; 32], [5; 32]];
+        repl.set_links(crate::secure::ReplLinks::from_config(&cfg, &local));
+        let sec = link_security(&repl).expect("links are set");
+        assert_eq!(sec.local.public(), local.public());
+        assert_eq!(sec.replica_keys, vec![[4; 32], [5; 32]]);
+    }
 }

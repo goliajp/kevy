@@ -144,3 +144,6 @@ pub(crate) fn extension_op(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -
     }
     query::op_query(ctx, store, argv, verb)
 }
+
+#[cfg(test)]
+mod shard_tests;

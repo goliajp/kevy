@@ -489,3 +489,6 @@ mod hydrate_tests {
         assert_eq!(s.tier_stats().promotions_total, 0);
     }
 }
+
+#[cfg(test)]
+mod create_tests;

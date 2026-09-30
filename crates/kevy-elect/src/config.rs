@@ -304,3 +304,29 @@ impl ElectJitter {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn system_jitter_stays_under_its_bound_and_differs_between_nodes() {
+        let (now, max) = (Instant::now(), Duration::from_millis(500));
+        let draws: Vec<Duration> = ["node-a", "node-b", "node-c"]
+            .iter()
+            .map(|n| ElectJitter::System.sample(max, now, n))
+            .collect();
+        assert!(draws.iter().all(|&d| d < max), "{draws:?}");
+        assert!(
+            draws[0] != draws[1] || draws[1] != draws[2],
+            "dueling nodes must not all tie: {draws:?}"
+        );
+        assert_eq!(
+            ElectJitter::System.sample(max, now, "node-a"),
+            draws[0],
+            "a draw is a function of the node"
+        );
+        assert_eq!(ElectJitter::System.sample(Duration::ZERO, now, "node-a"), Duration::ZERO);
+        assert_eq!(ElectJitter::Fixed(Duration::from_secs(9)).sample(max, now, "node-a"), max);
+    }
+}

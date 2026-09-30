@@ -134,3 +134,23 @@ fn a_scoped_set_by_id_is_redirected_like_one_by_name() {
         assert_eq!(by_id.dbsize(), by_name.dbsize());
     }
 }
+
+#[test]
+fn a_set_into_a_moving_scope_is_quiesced_by_id_and_by_name() {
+    let mut cfg = kevy_config::Config::default();
+    cfg.cluster.node_id = "A".to_string();
+    cfg.cluster.peers =
+        kevy_config::PeerEntry::parse_list("A@127.0.0.1:6004,B@10.0.0.99:6004").unwrap();
+    cfg.cluster.scopes = kevy_config::ScopeEntry::parse_list("app:=A").unwrap();
+    let state = crate::RuntimeState::new(std::sync::Arc::new(cfg), std::path::PathBuf::new(), 1);
+    let c = KevyCommands::with_state(std::sync::Arc::new(state.unwrap()));
+    c.state().scope.migration_start(b"app:".to_vec(), "A".into(), "B".into()).unwrap();
+    let args = argv(&[b"SET", b"app:foo", b"v"]);
+    let verb = c.resolve(&args).verb;
+    let (mut by_name, mut by_id) = (Store::new(), Store::new());
+    assert_eq!(c.dispatch(&mut by_name, &args), b"-QUIESCED migrating to 10.0.0.99:6004\r\n");
+    let mut got = Vec::new();
+    c.dispatch_verb_into(&mut by_id, &args, verb, RespVersion::V2, &mut got);
+    assert_eq!(got, b"-QUIESCED migrating to 10.0.0.99:6004\r\n");
+    assert_eq!(by_id.dbsize() + by_name.dbsize(), 0, "neither wrote");
+}

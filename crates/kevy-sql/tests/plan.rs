@@ -64,6 +64,17 @@ fn a_served_query_names_the_paths_it_rides() {
 }
 
 #[test]
+fn a_parameterised_query_names_the_paths_its_card_rides() {
+    let p = plan(&format!(
+        "{MIXED}CREATE INDEX ON orders (total);\nCREATE VIEW by_total_again AS SELECT * FROM orders WHERE total = $1;"
+    ))
+    .unwrap();
+    let q = p.queries.last().unwrap();
+    assert!(matches!(q.served, Served::Card { .. }), "{:?}", q.served);
+    assert_eq!(q.served.paths(), Some(&["orders.total".to_string()][..]));
+}
+
+#[test]
 fn the_declarations_come_out_alongside_the_verdicts() {
     let p = plan(MIXED).unwrap();
     assert_eq!(p.declares.len(), 1);

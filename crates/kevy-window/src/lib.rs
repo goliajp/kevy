@@ -44,6 +44,9 @@ mod text;
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "tests_cold.rs"]
+mod tests_cold;
 pub use error::ColdError;
 pub use text::{ColdHit, ColdPage, ColdPageQuery, TextColdDir};
 

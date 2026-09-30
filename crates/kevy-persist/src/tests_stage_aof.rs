@@ -29,7 +29,10 @@ fn replayed(path: &std::path::Path) -> Vec<Vec<Vec<u8>>> {
 
 /// Open the log and its ring the way a store does, collecting what the
 /// ring hands back.
-fn reopen(aof: &std::path::Path, ring: &std::path::Path) -> (Aof, crate::StageOpen, Vec<Argv>) {
+pub(crate) fn reopen(
+    aof: &std::path::Path,
+    ring: &std::path::Path,
+) -> (Aof, crate::StageOpen, Vec<Argv>) {
     let mut log = Aof::open(aof, Fsync::EverySec).unwrap();
     let mut got = Vec::new();
     let found = log.open_stage(ring, CAP, |a| got.push(std::mem::take(a))).unwrap();

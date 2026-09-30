@@ -81,6 +81,15 @@ mod tests {
     }
 
     #[test]
+    fn digits_past_u64_are_an_invalid_number() {
+        let e = parse_size("18446744073709551616mb").unwrap_err();
+        assert_eq!(
+            e.to_string(),
+            "size literal \"18446744073709551616mb\" has invalid number: \"18446744073709551616\""
+        );
+    }
+
+    #[test]
     fn bare_integer_is_bytes() {
         assert_eq!(parse_size("0").unwrap(), 0);
         assert_eq!(parse_size("512").unwrap(), 512);

@@ -211,3 +211,7 @@ pub(crate) fn window_driver(cat: &TableCatalog, index_name: &[u8]) -> bool {
         .find(|op| op.led_ascending_by(&w.column))
         .is_some_and(|op| op.name == suffix)
 }
+
+#[cfg(test)]
+#[path = "table_catalog_tests.rs"]
+mod tests;

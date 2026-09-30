@@ -74,3 +74,21 @@ fn hook_backfill_and_query_lifecycle() {
     ctx.state.install_index_catalog(Catalog::new());
     assert!(!ctx.state.catalogs.index_nonempty());
 }
+
+/// The shard tick reads the index gate before the catalog, so a drop of
+/// the last index can land in between.
+#[test]
+fn a_tick_after_the_last_index_dropped_releases_the_shard_segments() {
+    let cmds = crate::KevyCommands::new();
+    let ctx = cmds.ctx();
+    let mut store = Store::new();
+    store.hset(b"user:1", &[(b"age".as_slice(), b"30".as_slice())]).unwrap();
+    install_one(ctx.state, "t_age");
+    on_tick(&ctx, &mut store);
+    let entries = with_ready_segment(&ctx, b"t_age", |_, seg, _| seg.stats().entries);
+    assert_eq!(entries.unwrap(), 1);
+    ctx.state.install_index_catalog(Catalog::new());
+    on_tick(&ctx, &mut store);
+    assert!(ctx.shard.indexes.borrow().idx.is_empty());
+    assert!(with_ready_segment(&ctx, b"t_age", |_, _, _| ()).is_err());
+}

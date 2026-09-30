@@ -211,4 +211,37 @@ mod tests {
         assert_eq!(cat.partitioning(b"narrow").partitions(), 2, "one that fits is left alone");
         assert!(!super::fit_partitions(&mut cat, 4), "and a fitted catalog stays");
     }
+
+    #[test]
+    fn a_global_index_created_on_one_shard_splits_at_that_shards_rows() {
+        let cfg = std::sync::Arc::new(kevy_config::Config::default());
+        let state = crate::RuntimeState::new(cfg, std::path::PathBuf::new(), 2).unwrap();
+        let mut s = crate::index_runtime::test_shard::Shard::with_state(state);
+        for age in 0..100 {
+            s.hset(&format!("u:{age}"), &[("age", &age.to_string())]);
+        }
+        s.ok("IDX.CREATE g ON PREFIX u: FIELD age TYPE i64 KIND range PARTITION global");
+        let icat = s.cmds.state().catalogs.index().unwrap();
+        let Partitioning::Global { splits } = icat.partitioning(b"g") else { panic!("global") };
+        let key = |v: &[u8]| kevy_index::order_key(ValType::I64, v).unwrap();
+        assert_eq!(splits.len(), 1);
+        assert!(key(b"40") < splits[0] && splits[0] < key(b"60"), "the median of 0..100");
+    }
+
+    #[test]
+    fn a_create_the_catalog_refuses_leaves_the_catalog_as_it_was() {
+        let mut s = crate::index_runtime::test_shard::Shard::new();
+        let create = "IDX.CREATE g ON PREFIX u: FIELD age TYPE i64 KIND range";
+        s.ok(create);
+        let again = crate::index_runtime::test_shard::text(&s.run(create));
+        assert!(again.starts_with("-") && again.contains("exists"), "{again}");
+        for bad in [
+            "IDX.CREATE h ON PREFIX u: FIELD age TYPO i64 KIND range",
+            "IDX.CREATE h ON PREFIX u: FIELD age TYPE bogus KIND range",
+        ] {
+            let reply = crate::index_runtime::test_shard::text(&s.run(bad));
+            assert!(reply.starts_with("-ERR"), "{bad}: {reply}");
+        }
+        assert_eq!(s.cmds.state().catalogs.index().unwrap().iter().count(), 1);
+    }
 }

@@ -367,3 +367,16 @@ pub(crate) fn from_unixtime(args: &[Scalar]) -> Result<Scalar, ScalarError> {
         _ => Err(ScalarError::Arity { func: FUNC, got: args.len() }),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_date_needs_exactly_three_numeric_parts() {
+        for bad in ["", "y-01-01", "2024", "2024-mm-01", "2024-01", "2024-01-dd", "2024-01-01-05"] {
+            assert_eq!(parse_date(bad), None, "{bad:?}");
+        }
+        assert_eq!(parse_date(" 1970-01-02 "), Some(1));
+    }
+}

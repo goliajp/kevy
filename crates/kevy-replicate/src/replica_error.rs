@@ -236,6 +236,28 @@ mod tests {
     }
 
     #[test]
+    fn the_source_chain_reaches_the_frame_or_socket_error_and_stops_elsewhere() {
+        use std::error::Error;
+        let frame: ReplicaError = WireError::NegativeOffset(-3).into();
+        assert_eq!(
+            frame.to_string(),
+            "replication frame decode error: wire offset is negative: -3"
+        );
+        assert_eq!(
+            frame.source().map(ToString::to_string).as_deref(),
+            Some("wire offset is negative: -3")
+        );
+        let io: ReplicaError = io::Error::new(io::ErrorKind::ConnectionReset, "peer reset").into();
+        assert_eq!(io.to_string(), "replication socket I/O error: peer reset");
+        assert_eq!(io.source().map(ToString::to_string).as_deref(), Some("peer reset"));
+        for e in
+            [ReplicaError::HandshakeRejected, ReplicaError::Truncated, ReplicaError::AckMalformed]
+        {
+            assert!(e.source().is_none(), "{e} has no source");
+        }
+    }
+
+    #[test]
     fn from_wire_error_other_maps_to_frame() {
         let e: ReplicaError = WireError::BadEnvelope.into();
         assert!(matches!(e, ReplicaError::Frame(_)));

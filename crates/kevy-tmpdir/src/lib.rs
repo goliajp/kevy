@@ -215,4 +215,19 @@ mod tests {
         };
         assert!(!p.exists(), "TmpDir did not clean up after itself");
     }
+
+    #[test]
+    fn close_removes_the_tree_and_reports_a_failure() {
+        let d = TmpDir::new("close");
+        let p = d.path().to_path_buf();
+        std::fs::create_dir(p.join("sub")).unwrap();
+        std::fs::write(p.join("sub/f"), b"x").unwrap();
+        d.close().unwrap();
+        assert!(!p.exists(), "close left the directory behind");
+
+        let gone = TmpDir::new("close-gone");
+        std::fs::remove_dir_all(gone.path()).unwrap();
+        let err = gone.close().unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+    }
 }

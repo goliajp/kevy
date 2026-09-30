@@ -321,6 +321,39 @@ mod tests {
     }
 
     #[test]
+    fn a_mapping_is_never_empty() {
+        let path = tmp("never-empty");
+        let f =
+            File::options().read(true).write(true).create(true).truncate(true).open(&path).unwrap();
+        f.set_len(4096).unwrap();
+        let m = FileMap::map(&f, 4096).unwrap();
+        assert!(!m.is_empty());
+        assert_eq!(m.len(), 4096);
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn an_offset_past_i64_is_refused() {
+        let path = tmp("far-offset");
+        let f =
+            File::options().read(true).write(true).create(true).truncate(true).open(&path).unwrap();
+        let err = FileMap::map_at(&f, u64::MAX, 4096).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(err.to_string(), "offset past i64");
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn a_read_only_file_cannot_be_mapped_for_writing() {
+        let path = tmp("read-only");
+        std::fs::write(&path, [0u8; 4096]).unwrap();
+        let f = File::open(&path).unwrap();
+        let err = FileMap::map(&f, 4096).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied, "{err}");
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn an_empty_mapping_is_refused() {
         let path = tmp("empty");
         let f =
