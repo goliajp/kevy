@@ -257,6 +257,37 @@ fn a_row_under_one_rule_carries_no_fields_for_the_others() {
 }
 
 #[test]
+fn a_field_past_the_rule_is_none_and_not_the_next_rows() {
+    let mut s = Store::new();
+    s.set_row_watch(RowWatch::new().with_prefix("u:", vec![b"a".to_vec()]));
+    s.hset(b"u:1", &[(b"a", b"1")]).expect("hash");
+    s.hset(b"u:2", &[(b"a", b"2")]).expect("hash");
+    s.take_row_changes(RowChanges::default());
+    s.hset(b"u:1", &[(b"a", b"3")]).expect("hash");
+    s.hset(b"u:2", &[(b"a", b"4")]).expect("hash");
+    let c = s.take_row_changes(RowChanges::default());
+    let rows: Vec<_> = c.iter().map(|r| (r.field(0, 0), r.field(0, 1))).collect();
+    assert_eq!(rows, [(Some(&b"1"[..]), None), (Some(&b"2"[..]), None)]);
+}
+
+#[test]
+fn a_field_past_one_rule_is_none_and_not_the_next_rules() {
+    let mut s = Store::new();
+    s.set_row_watch(
+        RowWatch::new()
+            .with_prefix("u:", vec![b"a".to_vec()])
+            .with_prefix("u:x", vec![b"b".to_vec()]),
+    );
+    s.hset(b"u:x1", &[(b"a", b"1"), (b"b", b"2")]).expect("hash");
+    s.take_row_changes(RowChanges::default());
+    s.hset(b"u:x1", &[(b"a", b"3")]).expect("hash");
+    let c = s.take_row_changes(RowChanges::default());
+    let r = c.iter().next().expect("one row");
+    assert_eq!((r.field(0, 0), r.field(1, 0)), (Some(&b"1"[..]), Some(&b"2"[..])));
+    assert_eq!(r.field(0, 1), None, "past rule 0's fields");
+}
+
+#[test]
 fn a_sharded_row_records_its_old_fields() {
     let mut s = watched();
     let fields: Vec<Vec<u8>> =
