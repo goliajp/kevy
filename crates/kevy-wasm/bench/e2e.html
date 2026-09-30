@@ -85,6 +85,98 @@ async function persistReload(backend) {
   await db.close();
 }
 
+// A reply as plain JSON-able data: bulks as text, errors as "ERR:<message>".
+const plain = (v) =>
+  v instanceof Uint8Array
+    ? td.decode(v)
+    : Array.isArray(v)
+      ? v.map(plain)
+      : v instanceof Error
+        ? "ERR:" + v.message
+        : v;
+const ask = (db, ...argv) => plain(db.cmd(...argv));
+
+// A stream with a group: one delivery acknowledged, one claimed by a
+// second consumer, a third consumer that has read nothing; and a geo set.
+function populateStreams(db) {
+  for (const [id, v] of [["1-1", "a"], ["2-1", "b"], ["3-1", "c"]]) {
+    assert(ask(db, "XADD", "s", id, "f", v) === id, "XADD " + id);
+  }
+  const auto = ask(db, "XADD", "s", "*", "f", "d");
+  assert(/^\d+-\d+$/.test(auto), "XADD * returns an id (" + auto + ")");
+  assert(ask(db, "XGROUP", "CREATE", "s", "g", "0") === "OK", "XGROUP CREATE");
+  const read = ask(db, "XREADGROUP", "GROUP", "g", "alice", "COUNT", "3", "STREAMS", "s", ">");
+  assert(JSON.stringify(read[0][1].map((e) => e[0])) === '["1-1","2-1","3-1"]', "XREADGROUP delivers three");
+  assert(ask(db, "XACK", "s", "g", "1-1") === 1, "XACK");
+  const claimed = ask(db, "XAUTOCLAIM", "s", "g", "bob", "0", "0", "COUNT", "1");
+  assert(claimed[1][0][0] === "2-1", "XAUTOCLAIM moves 2-1 to bob");
+  assert(ask(db, "XGROUP", "CREATECONSUMER", "s", "g", "carol") === 1, "XGROUP CREATECONSUMER");
+  assert(ask(db, "GEOADD", "city", "139.6917", "35.6895", "tokyo", "135.5023", "34.6937", "osaka") === 2, "GEOADD");
+  return auto;
+}
+
+// What a reload must reproduce; none of it depends on the clock.
+function streamState(db) {
+  return JSON.stringify([
+    ask(db, "XRANGE", "s", "-", "+"),
+    ask(db, "XLEN", "s"),
+    ask(db, "XPENDING", "s", "g"),
+    [ask(db, "XINFO", "CONSUMERS", "s", "g")].flat().map((c) => (Array.isArray(c) ? c[1] : c)).sort(),
+    ask(db, "GEODIST", "city", "tokyo", "osaka", "km"),
+    ask(db, "GEOSEARCH", "city", "FROMMEMBER", "tokyo", "BYRADIUS", "500", "km", "ASC"),
+  ]);
+}
+
+async function streamsGeo() {
+  const db = await open({ wasm: WASM, broadcast: false });
+  const auto = populateStreams(db);
+  assert(ask(db, "XLEN", "s") === 4, "XLEN");
+  const range = ask(db, "XRANGE", "s", "2-1", "+");
+  assert(range.length === 3 && range[0][1][1] === "b", "XRANGE from 2-1");
+  const read = ask(db, "XREAD", "COUNT", "1", "STREAMS", "s", "2-1");
+  assert(read[0][0] === "s" && read[0][1][0][0] === "3-1", "XREAD after 2-1");
+  const pending = ask(db, "XPENDING", "s", "g");
+  pending[3].sort(); // the consumer order is not part of the contract checked here
+  assert(JSON.stringify(pending) === '[2,"2-1","3-1",[["alice","1"],["bob","1"]]]', "XPENDING summary " + JSON.stringify(pending));
+  const detail = ask(db, "XPENDING", "s", "g", "-", "+", "10", "alice");
+  assert(detail.length === 1 && detail[0][0] === "3-1", "XPENDING for alice");
+  assert(ask(db, "XREADGROUP", "GROUP", "g", "carol", "STREAMS", "s", ">")[0][1][0][0] === auto, "the fourth entry is new to the group");
+  const km = Number(ask(db, "GEODIST", "city", "tokyo", "osaka", "km"));
+  assert(km > 390 && km < 410, "GEODIST tokyo-osaka ~400 km (" + km + ")");
+  assert(JSON.stringify(ask(db, "GEOSEARCH", "city", "FROMLONLAT", "139.7", "35.7", "BYRADIUS", "50", "km")) === '["tokyo"]', "GEOSEARCH by radius");
+  for (const argv of [
+    ["XREAD", "BLOCK", "0", "STREAMS", "s", "$"],
+    ["XREADGROUP", "GROUP", "g", "alice", "BLOCK", "100", "STREAMS", "s", ">"],
+  ]) {
+    const r = db.cmd(...argv);
+    assert(r instanceof Error && /cannot block/.test(r.message), argv[0] + " BLOCK is refused: " + (r && r.message));
+  }
+  await db.close();
+}
+
+async function persistStreams(backend) {
+  const name = "e2e-streams-" + backend;
+  const opts = { wasm: WASM, broadcast: false, persist: { name, backend } };
+  let db = await open(opts);
+  db.flushall();
+  populateStreams(db);
+  db.set("typed", "v");
+  const before = streamState(db);
+  await db.close();
+
+  db = await open(opts);
+  assert(streamState(db) === before, backend + ": streams and groups survive a reload from the log");
+  assert(db.getText("typed") === "v", backend + ": typed and cmd writes share the log");
+  assert(ask(db, "XREADGROUP", "GROUP", "g", "alice", "STREAMS", "s", ">")[0][1].length === 1, backend + ": the group resumes after its last delivery");
+  const after = streamState(db);
+  await db.compact();
+  await db.close();
+
+  db = await open(opts);
+  assert(streamState(db) === after, backend + ": streams and groups survive a compacted image");
+  await db.close();
+}
+
 async function localPubsub() {
   const db = await open({ wasm: WASM, broadcast: false });
   const got = new Promise((r) =>
@@ -123,6 +215,9 @@ async function main() {
   await run("memory", memoryFace);
   await run("persist-opfs", () => persistReload("opfs"));
   await run("persist-idb", () => persistReload("idb"));
+  await run("streams-geo", streamsGeo);
+  await run("persist-streams-opfs", () => persistStreams("opfs"));
+  await run("persist-streams-idb", () => persistStreams("idb"));
   await run("pubsub-local", localPubsub);
   if (q.get("dualtab") !== "0") await run("pubsub-crosstab", crossTab);
   log("ALL PASS");

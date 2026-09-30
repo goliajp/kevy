@@ -61,9 +61,14 @@ tier = ["persist", "dep:kevy-sys", "dep:kevy-config"]
 # replay of a log or a primary's stream that carries them. On by default:
 # without it a replica drops its primary's stream and geo writes. The
 # code is linked only where a dispatch or a replay reaches it; the
-# browser build leaves the feature out, where it adds about an eighth to
-# the module.
+# browser build turns it on as well, where it adds about an eighth to the
+# module.
 streams-geo = ["kevy-verbs/streams-geo"]
+# `Store::dispatch_argv_recorded`: a command run with the frames its write
+# records handed to the caller, for a host that keeps the log itself (the
+# browser package, which has no file for an AOF). Off by default: it adds
+# a check to every recorded write.
+host-log = []
 
 [dependencies]
 kevy-store = { path = "../kevy-store", version = "7.0.0" }

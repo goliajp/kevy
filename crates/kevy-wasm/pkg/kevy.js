@@ -482,20 +482,28 @@ export class Kevy {
    * verbs; `cmd` reaches every other verb in the module (LPUSH, HSET,
    * ZADD, SETRANGE, …) by funnelling through the full engine dispatcher.
    *
-   * The wasm module ships the `core` + `persist` verb closure, so `cmd`
-   * reaches the string/hash/list/set/zset/bitmap/keyspace/misc surfaces.
-   * Index (`IDX.*` / `VIEW.*`) and replication verbs are NOT in this build
+   * The wasm module carries every feature a browser can host, so `cmd`
+   * reaches the string/hash/list/set/zset/bitmap/keyspace/misc surfaces,
+   * `IDX.*` / `VIEW.*` / `TABLE.*`, and the stream (`X*`) and geo (`GEO*`)
+   * commands. Transactions and scripting are outside the embedded engine
    * and come back as an unknown-command error (a returned {@link
-   * KevyError}) — the correct, expected answer, not a loader bug.
+   * KevyError}).
+   *
+   * Nothing waits: `XREAD`/`XREADGROUP` with `BLOCK` return an error
+   * saying the engine cannot block, and the blocking pops (`BLPOP`, …)
+   * are unknown commands. A tab has one thread; parking it would freeze
+   * the page. Read without `BLOCK` on a timer, or on a pub/sub message
+   * published next to the write.
    *
    * Reply mapping (RESP2): `+OK` → string, `:N` → number/bigint, `$…` →
    * `Uint8Array` (`null` on a null bulk), `*…` → `Array` (`null` on a null
    * array), `-ERR …` → a returned {@link KevyError}. Use {@link text} to
    * decode a bulk to a string.
    *
-   * Note: writes issued via `cmd` are NOT mirrored into the persistence
-   * pump — the typed setters (`set`/`del`/`incrby`/…) are the durable
-   * write path. Reach for `cmd` for verbs the typed surface does not wrap.
+   * With persistence on, a write through `cmd` reaches storage like a
+   * typed one: the engine hands the pump the frames a native AOF would
+   * hold for it (an `XADD *` as the id it chose, a group read as the
+   * deliveries it made).
    *
    * @param {...Bytes} args verb then its arguments, e.g. `cmd("SET","k","v")`.
    * @returns {string | number | bigint | Uint8Array | Array<any> | null | KevyError}
@@ -520,7 +528,9 @@ export class Kevy {
     // #check throws. A verb-level `-ERR`/`WRONGTYPE` is a *successful* call
     // whose reply bytes decode to a returned KevyError.
     this.#check(this.#e.kevy_cmd(this.#h, ptr, off - ptr));
-    return parseReply(this.#out());
+    const reply = parseReply(this.#out());
+    this.#dirty();
+    return reply;
   }
 
   /** One manual TTL sweep + event poll. Returns expired-key count. */

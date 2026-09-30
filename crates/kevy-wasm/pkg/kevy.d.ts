@@ -110,14 +110,15 @@ export class Kevy {
   /** KEYS matching a Redis glob (default all), up to limit (0 = all). */
   keys(pattern?: string, limit?: number): string[];
   /**
-   * Raw command channel — run any verb the wasm build compiled in (`core`
-   * + `persist`: strings/hash/list/set/zset/bitmap/keyspace/misc) and get
-   * the decoded RESP2 reply. The universal escape hatch the client
-   * contract mandates for verbs the typed methods do not wrap. Index
-   * (`IDX.*`/`VIEW.*`) and replication verbs are not in this build and
-   * return an unknown-command {@link KevyError}. Writes via `cmd` are not
-   * mirrored into the persistence pump — use the typed setters for durable
-   * writes.
+   * Raw command channel — run any verb the wasm build compiled in
+   * (strings/hash/list/set/zset/bitmap/keyspace/misc, `IDX.*`/`VIEW.*`/
+   * `TABLE.*`, streams `X*` and geo `GEO*`) and get the decoded RESP2
+   * reply. The universal escape hatch the client contract mandates for
+   * verbs the typed methods do not wrap. Transactions and scripting return
+   * an unknown-command {@link KevyError}. Nothing blocks: `XREAD` /
+   * `XREADGROUP` with `BLOCK` return an error, and the blocking pops are
+   * unknown commands. With persistence on, writes via `cmd` reach storage
+   * like the typed setters' writes.
    */
   cmd(...args: Bytes[]): Reply;
   /** One manual TTL sweep + event poll. Returns expired-key count. */
