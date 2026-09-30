@@ -21,6 +21,7 @@ use kevy_persist::Aof;
 
 use crate::config::Config;
 use crate::pubsub::PubsubBus;
+#[cfg(any(feature = "persist", not(target_arch = "wasm32")))]
 use crate::store::lock_write;
 use crate::store::{Shards, Store};
 
