@@ -77,6 +77,7 @@ mod shards_meta;
 mod snapshot_aux;
 mod snapshot_commit;
 mod snapshot_fmt;
+mod snapshot_group_reads;
 mod snapshot_payload;
 mod snapshot_read;
 mod snapshot_write;

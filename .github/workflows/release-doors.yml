@@ -164,21 +164,27 @@ jobs:
     runs-on: [self-hosted, mini]
     timeout-minutes: 120
     steps:
-      # mini is also a benchmark machine. A benchmark holds this lock for
-      # its whole measurement; the build waits for it to be free.
-      - name: Wait for the machine's bench lock
+      # mini is also a benchmark machine, and the machine's bench lock is a
+      # reader-writer lock: this build holds it shared for the whole job, so
+      # it waits out a measurement in progress and a measurement waits for it.
+      - name: Hold the machine's bench lock (shared) for this job
         run: |
           lock="${KEVY_BENCH_LOCK:-/Users/Shared/bench.lock}"
-          echo "waiting on $lock (up to 30 minutes)"
-          rc=0
-          /usr/bin/lockf -k -t 1800 "$lock" true || rc=$?
-          if [ "$rc" = 75 ]; then
-            echo "::error::$lock was still held after 30 minutes — a benchmark is running on mini"
-            exit 1
-          elif [ "$rc" != 0 ]; then
-            echo "::error::lockf on $lock failed with exit $rc"
-            exit 1
-          fi
+          flag="$RUNNER_TEMP/bench-lock.held"
+          rm -f "$flag"
+          echo "taking $lock shared (waiting up to 30 minutes for a benchmark to finish)"
+          # -o: only flock holds the lock, so ending flock releases it
+          # shellcheck disable=SC2016 # $1 belongs to the inner sh
+          nohup /opt/homebrew/bin/flock -o -s -w 1800 "$lock" \
+            sh -c 'touch "$1"; exec sleep 14400' sh "$flag" > /dev/null 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/bench-lock.pid"
+          for _ in $(seq 1810); do
+            [ -e "$flag" ] && { echo "held"; exit 0; }
+            kill -0 "$(cat "$RUNNER_TEMP/bench-lock.pid")" 2>/dev/null || break
+            sleep 1
+          done
+          echo "::error::$lock was not free within 30 minutes — a benchmark is running on mini"
+          exit 1
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.resolve.outputs.ref }}
@@ -242,6 +248,15 @@ jobs:
           path: ${{ runner.temp }}/mobile-engine.tgz
           if-no-files-found: error
           retention-days: 7
+      - name: Release the bench lock
+        if: always()
+        run: |
+          pid_file="$RUNNER_TEMP/bench-lock.pid"
+          if [ -f "$pid_file" ]; then
+            pid=$(cat "$pid_file")
+            pkill -P "$pid" 2>/dev/null || true
+            kill "$pid" 2>/dev/null || true
+          fi
 
   # ───────────── npm: expo-kevy, react-native-kevy-nitro ─────────────
   mobile-npm:

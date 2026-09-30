@@ -82,6 +82,9 @@ fn state(h: u32) -> Vec<String> {
             h,
             &[b"GEOSEARCH", b"g:city", b"FROMMEMBER", b"tokyo", b"BYRADIUS", b"500", b"km", b"ASC"],
         ),
+        // every time FULL shows is absolute: the consumers' contact and
+        // activity, the deliveries; and the group's read counter
+        cmd(h, &[b"XINFO", b"STREAM", b"s", b"FULL"]),
     ]
 }
 

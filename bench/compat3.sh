@@ -326,6 +326,30 @@ for i in 1 2 3 4 5; do check XADD xo "$i-0" f v; done
 check XGROUP CREATE xo g 0
 for c in bob alice zed bob Bob; do check XREADGROUP GROUP g "$c" COUNT 1 STREAMS xo ">"; done
 check XPENDING xo g
+# XINFO: the replies that carry no clock. A deletion behind a group makes
+# its lag unknowable (nil); a trim is not a deletion. Redis 8.10 answers
+# XINFO STREAM with six more fields than valkey, so that line is expected
+# in the redis-vs-valkey column.
+check XINFO STREAM xs
+check XINFO GROUPS xs
+check XINFO GROUPS xo
+for i in 1 2 3 4; do check XADD xe "$i-0" f v; done
+check XGROUP CREATE xe g0 0
+check XGROUP CREATE xe g1 0 ENTRIESREAD 1
+check XGROUP CREATE xe g2 '$'
+check XINFO GROUPS xe
+check XDEL xe 3-0
+check XINFO GROUPS xe
+check XGROUP SETID xe g1 2-0 ENTRIESREAD 2
+check XGROUP SETID xe nog 0
+check XINFO GROUPS xe
+check XINFO STREAM xe FULL COUNT 2
+check XINFO CONSUMERS xe g0
+check XINFO CONSUMERS xe nog
+check XINFO STREAM missingstream
+check XINFO STREAM xe BOGUS
+check XINFO BOGUS
+check XINFO HELP
 
 # --- geo (precision-sensitive: byte-exact match IS the test; if redis≠valkey
 #     too on a line, it's float formatting in the references, not a kevy gap) ---

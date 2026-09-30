@@ -4,13 +4,14 @@
 #
 #   . "$(dirname "$0")/bench-lock.sh"
 #
-# The lock is machine-wide and shared with other projects' benchmarks and
-# with heavy CI jobs, which wait for it before building. It only keeps
-# those jobs from starting in the middle of a measurement; it says nothing
-# about whether the box was quiet, which is what each script's own
-# preflight checks are for.
+# The lock is machine-wide, a reader-writer lock: builds and tests hold it
+# shared for their whole run, and a benchmark holds it exclusive for its
+# whole measurement, so it starts once the builds in flight are done and
+# new ones wait for it. It says nothing about whether the box was quiet,
+# which is what each script's own preflight checks are for.
 #
-#   macOS  /Users/Shared/bench.lock   /usr/bin/lockf (macOS has no flock)
+#   macOS  /Users/Shared/bench.lock   flock (Homebrew), else /usr/bin/lockf;
+#                                     the two take the same lock
 #   Linux  /var/lock/bench.lock       flock
 #
 # KEVY_BENCH_LOCK overrides the path. A script run by another that already
@@ -21,6 +22,11 @@ if [ -z "${KEVY_BENCH_LOCK_HELD:-}" ]; then
   case "$(uname -s)" in
     Darwin)
       _bench_lock=${KEVY_BENCH_LOCK:-/Users/Shared/bench.lock}
+      if [ -x /opt/homebrew/bin/flock ]; then
+        /opt/homebrew/bin/flock -n "$_bench_lock" true 2>/dev/null \
+          || echo "bench lock $_bench_lock is held — waiting for it" >&2
+        exec /opt/homebrew/bin/flock "$_bench_lock" "$BASH" "$0" "$@"
+      fi
       /usr/bin/lockf -k -t 0 "$_bench_lock" true 2>/dev/null \
         || echo "bench lock $_bench_lock is held — waiting for it" >&2
       exec /usr/bin/lockf -k "$_bench_lock" "$BASH" "$0" "$@"

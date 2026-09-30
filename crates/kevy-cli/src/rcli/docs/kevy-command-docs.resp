@@ -3866,16 +3866,16 @@ $6
 stream
 $6
 syntax
-$151
-XGROUP CREATE key group id|$ [MKSTREAM] | DESTROY key group | SETID key group id|$ | CREATECONSUMER key group consumer | DELCONSUMER key group consumer
+$205
+XGROUP CREATE key group id|$ [MKSTREAM] [ENTRIESREAD entries-read] | DESTROY key group | SETID key group id|$ [ENTRIESREAD entries-read] | CREATECONSUMER key group consumer | DELCONSUMER key group consumer
 $10
 complexity
 $94
 CREATE / DESTROY: O(1) plus an O(N*F) reweigh. SETID / CREATECONSUMER: O(1). DELCONSUMER: O(P)
 $6
 compat
-$210
-differs: CREATE / SETID / DESTROY / CREATECONSUMER / DELCONSUMER / MKSTREAM are supported, but on a missing key the non-CREATE subcommands return 0 or NOGROUP instead of Redis's error, and XGROUP HELP is absent
+$232
+differs: CREATE / SETID (with MKSTREAM and ENTRIESREAD) / DESTROY / CREATECONSUMER / DELCONSUMER are supported, but on a missing key DESTROY / CREATECONSUMER / DELCONSUMER return 0 instead of Redis's error, and XGROUP HELP is absent
 $5
 flags
 *1
@@ -3898,16 +3898,16 @@ $6
 stream
 $6
 syntax
-$58
-XINFO STREAM key | GROUPS key | CONSUMERS key group | HELP
+$79
+XINFO STREAM key [FULL [COUNT count]] | GROUPS key | CONSUMERS key group | HELP
 $10
 complexity
-$170
-STREAM: O(1). GROUPS: O(G*N + G log G) — 'lag' is a linear walk of every entry, once per group, and the groups are sorted by name. CONSUMERS: O(C log C), sorted by name
+$266
+STREAM: O(log N). GROUPS: O(G log N + G log G) — 'lag' reads the stream's head once per group, and the groups are sorted by name. CONSUMERS: O(C log C), sorted by name. STREAM FULL: O(K + G * (P log C + C log C)) for K entries shown and P pending entries per group
 $6
 compat
-$323
-differs: STREAM / GROUPS / CONSUMERS / HELP only — XINFO STREAM FULL is absent; radix-tree-keys and nodes are synthetic (we have no radix tree), entries-read is approximated (GROUPS lists 'lag' before 'entries-read', and answers 0 where Redis answers nil for a group that has read nothing), and CONSUMERS omits 'inactive'
+$474
+differs: answers field for field as valkey 9.1 does; against Redis 8.10, XINFO STREAM lacks the six idmp-* / pids-* / iids-* fields of an XADD option kevy does not have, radix-tree-keys and radix-tree-nodes are counted as if the stream were held in 100-entry nodes (there is no radix tree), and where the two disagree on 'lag' and 'entries-read' — an ENTRIESREAD above entries-added, a group before the first entry with a deletion behind it — kevy answers as valkey does
 $5
 flags
 *1

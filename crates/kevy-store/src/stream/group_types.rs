@@ -3,6 +3,8 @@
 //! Split from `group.rs` to keep it under the 500-LOC cap.
 
 use super::StreamId;
+#[cfg(not(feature = "std"))]
+use crate::nostd_prelude::*;
 use crate::value::SmallBytes;
 
 /// One pending entry: who got it, when, and how many times.
@@ -103,8 +105,11 @@ pub struct ConsumerState {
     /// Consumer name.
     pub(crate) name: SmallBytes,
     /// Last wall-clock (unix-ms) the consumer interacted with the
-    /// group (any XREADGROUP / XACK / XCLAIM touch).
+    /// group: any XREADGROUP, XCLAIM or XAUTOCLAIM by it.
     pub(crate) last_seen_ms: u64,
+    /// Last wall-clock (unix-ms) a read or a claim put an entry in its
+    /// pending list; `None` until one does.
+    pub(crate) last_active_ms: Option<u64>,
     /// Cached size of this consumer's slice of the PEL.
     pub(crate) pel_count: usize,
 }
@@ -168,6 +173,16 @@ pub enum GroupCreateMode {
 }
 
 impl ConsumerState {
+    /// A consumer first seen at `seen_ms`, holding nothing and never
+    /// handed an entry.
+    pub(crate) fn new(name: &[u8], seen_ms: u64) -> Box<ConsumerState> {
+        Box::new(ConsumerState {
+            name: SmallBytes::from_slice(name),
+            last_seen_ms: seen_ms,
+            last_active_ms: None,
+            pel_count: 0,
+        })
+    }
     /// The consumer's name.
     pub fn name(&self) -> &[u8] {
         self.name.as_slice()
@@ -179,6 +194,25 @@ impl ConsumerState {
     /// Last unix-ms this consumer interacted with the group.
     pub fn last_seen_ms(&self) -> u64 {
         self.last_seen_ms
+    }
+    /// Last unix-ms a read or a claim gave this consumer an entry to
+    /// hold; `None` if none ever has (`XINFO`'s `active-time` of -1).
+    ///
+    /// ```
+    /// # use kevy_store::*;
+    /// # let mut s = Store::new();
+    /// # let f = vec![(b"f".to_vec(), b"v".to_vec())];
+    /// # s.xadd(b"s", XAddIdSpec::AutoAll, f, MissingStream::Create, 1)?;
+    /// s.xgroup_create(b"s", b"g", GroupCreateMode::AtId(StreamId::MIN), MissingStream::Refuse)?;
+    /// s.xgroup_create_consumer(b"s", b"g", b"idle", 50)?;
+    /// s.xreadgroup(b"s", b"g", b"busy", ReadGroupId::New, None, AckMode::Pending, 100)?;
+    /// let g = s.stream_group_peek(b"s", b"g").unwrap();
+    /// assert_eq!(g.consumer(b"idle").unwrap().last_active_ms(), None);
+    /// assert_eq!(g.consumer(b"busy").unwrap().last_active_ms(), Some(100));
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
+    pub fn last_active_ms(&self) -> Option<u64> {
+        self.last_active_ms
     }
 }
 
