@@ -430,9 +430,17 @@ impl Tree {
 #[path = "seg_tree_write.rs"]
 mod write;
 
+#[path = "seg_tree_tidy.rs"]
+mod tidy;
+pub(crate) use tidy::Tidy;
+
 #[path = "seg_tree_bulk.rs"]
 pub(crate) mod bulk;
 
 #[cfg(test)]
 #[path = "seg_tree_tests.rs"]
 pub(crate) mod tests;
+
+#[cfg(test)]
+#[path = "seg_tidy_tests.rs"]
+mod tidy_tests;
