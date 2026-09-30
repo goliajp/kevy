@@ -63,6 +63,20 @@
   it opens a 7.0 directory with every key and no catalog (see [the
   upgrade guide](docs/upgrading-6.4-to-7.0.md)).
 
+- **Catalog commands run at the same time no longer undo each other.**
+  An `IDX.CREATE`, `VIEW.CREATE`, `TABLE.DECLARE` or any other catalog
+  command copied the catalog, changed the copy and installed it, and the
+  server runs a command on the shard its connection lives on. Two
+  connections on different shards could copy the same catalog, and the
+  second install dropped the first command's change, which had already
+  answered `OK`; a view over an index declared a moment before then
+  answered that the index was unknown. With four connections declaring
+  at once a test lost between 14 and 71 of the declared names on every
+  run. A change now installs only onto the catalog it was computed from
+  and is computed again otherwise, and the version it is recorded under
+  moves together with the catalog it records, so a restart and a
+  replica keep every change.
+
 - **`kevy-cluster-rw` sends every write to the primary.** Its own list of
   write commands had drifted from the server's: 21 commands the server
   counts as writes went to a replica, among them `GETEX`, `SETBIT`,

@@ -14,14 +14,14 @@
 //! even when that one is older, since it comes from another lineage.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use kevy_index::{Catalog, TableCatalog, ViewCatalog};
 use kevy_resp::{Argv, ArgvView, encode_error, encode_simple_string};
 use kevy_rt::propagation::{Propagate, set_override};
 use kevy_store::Store;
 
-use crate::state::{Ctx, RuntimeState};
+use crate::state::{CatalogChange, Ctx, RuntimeState};
 
 /// The files the catalog lived in before it was recorded state (6.4 and
 /// earlier). Read once, when every shard has restored and neither log nor
@@ -31,24 +31,34 @@ pub(crate) const SIDECARS: [&str; 3] =
 
 #[derive(Debug, Default)]
 pub(crate) struct RecordState {
-    /// `(lineage, version)`; lineage 0 = nothing recorded yet.
+    /// `(lineage, version)`; lineage 0 = nothing recorded yet. Taken before
+    /// the catalogs' own hold when both are held.
     at: Mutex<(u64, u64)>,
     restored: AtomicUsize,
 }
 
 impl RecordState {
-    fn at(&self) -> (u64, u64) {
-        *self.at.lock().unwrap_or_else(PoisonError::into_inner)
+    fn lock(&self) -> MutexGuard<'_, (u64, u64)> {
+        self.at.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
-/// How many catalog installs this state has seen: moves on any change.
-fn installs(state: &RuntimeState) -> u64 {
-    let c = &state.catalogs;
-    c.index_gen().wrapping_add(c.view_gen()).wrapping_add(c.table_gen())
+/// The catalog as it now stands, recorded at the next version. The
+/// version moves and the catalog is read with no change able to land in
+/// between, so a higher version never records less than a lower one:
+/// replay, which keeps the highest, keeps every change.
+fn next_frame(state: &RuntimeState) -> Vec<Vec<u8>> {
+    let mut at = state.catalogs.record.lock();
+    let _held = state.catalogs.hold();
+    if at.0 == 0 {
+        at.0 = kevy_store::now_unix_ms().max(1);
+    }
+    at.1 += 1;
+    frame(state, *at)
 }
 
-/// The current catalog as the frame that records it at `at`.
+/// The current catalog as the frame that records it at `at`. The caller
+/// holds the catalogs still.
 fn frame(state: &RuntimeState, at: (u64, u64)) -> Vec<Vec<u8>> {
     let c = &state.catalogs;
     let index = c.index().map(|x| x.to_sidecar()).unwrap_or_default();
@@ -64,29 +74,20 @@ fn frame(state: &RuntimeState, at: (u64, u64)) -> Vec<Vec<u8>> {
     ]
 }
 
-/// Move the catalog to its next version, minting a lineage on the first.
-fn next_version(state: &RuntimeState) -> (u64, u64) {
-    let mut at = state.catalogs.record.at.lock().unwrap_or_else(PoisonError::into_inner);
-    if at.0 == 0 {
-        at.0 = kevy_store::now_unix_ms().max(1);
-    }
-    at.1 += 1;
-    *at
-}
-
 /// Run a catalog command and record what it changed. A command that
 /// changed nothing records nothing, not even its own argv: the catalog is
 /// recorded only as its frame. A frame applied from a log or a primary is
 /// recorded by the frame itself.
 fn recorded<T>(state: &RuntimeState, silent_if_unchanged: bool, run: impl FnOnce() -> T) -> T {
-    let before = installs(state);
+    let before = state.catalogs.generation();
     let out = run();
     if kevy_rt::applying_record() {
         return out;
     }
-    if installs(state) != before {
-        let at = next_version(state);
-        set_override(Propagate::Replace(frame(state, at)));
+    // another shard's change moves the generation too; this one then
+    // records the catalog with both, which is still the catalog
+    if state.catalogs.generation() != before {
+        set_override(Propagate::Replace(next_frame(state)));
     } else if silent_if_unchanged {
         set_override(Propagate::Suppress);
     }
@@ -143,7 +144,7 @@ fn adopt<A: ArgvView + ?Sized>(state: &RuntimeState, args: &A, full_sync: bool) 
     let (index, view, table) = (text(3)?, text(4)?, text(5)?);
     // held across the install: shards replay their logs at once, and two
     // frames installed in parts would leave a catalog neither of them holds
-    let mut held = state.catalogs.record.at.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut held = state.catalogs.record.lock();
     if (lineage, version) <= *held && !(full_sync && lineage != held.0) {
         return Some(());
     }
@@ -161,16 +162,14 @@ fn adopt<A: ArgvView + ?Sized>(state: &RuntimeState, args: &A, full_sync: bool) 
 /// is left alone, so its indexes are not rebuilt.
 fn install(state: &RuntimeState, icat: Catalog, vcat: ViewCatalog, tcat: TableCatalog) {
     let c = &state.catalogs;
+    let _held = c.hold();
     let differs = |held: Option<String>, new: String| held.unwrap_or_default() != new;
-    if differs(c.index().map(|x| x.to_sidecar()), icat.to_sidecar()) {
-        state.install_index_catalog(icat);
-    }
-    if differs(c.table().map(|x| x.to_sidecar()), tcat.to_sidecar()) {
-        state.install_table_catalog(tcat);
-    }
-    if differs(c.view().map(|x| x.to_sidecar()), vcat.to_sidecar()) {
-        state.install_view_catalog(vcat);
-    }
+    let change = CatalogChange {
+        index: differs(c.index().map(|x| x.to_sidecar()), icat.to_sidecar()).then_some(icat),
+        table: differs(c.table().map(|x| x.to_sidecar()), tcat.to_sidecar()).then_some(tcat),
+        view: differs(c.view().map(|x| x.to_sidecar()), vcat.to_sidecar()).then_some(vcat),
+    };
+    state.install_catalogs(change);
 }
 
 /// `XINTERNAL.CATALOG …` from the log or a primary.
@@ -183,8 +182,9 @@ pub(crate) fn apply<A: ArgvView + ?Sized>(state: &RuntimeState, args: &A, out: &
 
 /// The frame a snapshot or a rewritten log keeps beside the keyspace.
 pub(crate) fn snapshot_aux(state: &RuntimeState) -> Option<Argv> {
-    let at = state.catalogs.record.at();
-    (at.0 != 0).then(|| Argv::from(frame(state, at)))
+    let at = state.catalogs.record.lock();
+    let _held = state.catalogs.hold();
+    (at.0 != 0).then(|| Argv::from(frame(state, *at)))
 }
 
 /// The frame a loaded snapshot carried: newer wins at boot; a full sync
@@ -197,7 +197,7 @@ pub(crate) fn load_snapshot_aux(state: &RuntimeState, aux: Option<&Argv>, full_s
             }
         }
         None if full_sync => {
-            let mut held = state.catalogs.record.at.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut held = state.catalogs.record.lock();
             if held.0 != 0 {
                 install(state, Catalog::new(), ViewCatalog::new(), TableCatalog::new());
                 *held = (0, 0);
@@ -220,7 +220,7 @@ pub(crate) fn shard_restored(state: &RuntimeState, record: &mut dyn FnMut(&Argv)
     if dir.as_os_str().is_empty() || state.replication.is_replica() {
         return;
     }
-    let superseded = r.at().0 != 0;
+    let superseded = r.lock().0 != 0;
     if !superseded && !import(state, &dir, record) {
         return;
     }
@@ -267,6 +267,5 @@ fn import(
     }
     crate::cmd_index_install::fit_partitions(&mut icat, state.nshards());
     install(state, icat, vcat, tcat);
-    let at = next_version(state);
-    record(&Argv::from(frame(state, at)))
+    record(&Argv::from(next_frame(state)))
 }
