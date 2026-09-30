@@ -59,3 +59,24 @@ fn bulk(out: &mut Vec<u8>, b: &[u8]) {
     out.extend_from_slice(b);
     out.extend_from_slice(b"\r\n");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_unsubscribe_ack_names_its_channel_or_sends_a_nil_bulk() {
+        let named = PubsubEvent::Unsubscribe { channel: Some(b"news".to_vec()), count: 2 };
+        assert_eq!(encode_frame(&named), b"*3\r\n$11\r\nunsubscribe\r\n$4\r\nnews\r\n:2\r\n");
+        let all = PubsubEvent::Unsubscribe { channel: None, count: 0 };
+        assert_eq!(encode_frame(&all), b"*3\r\n$11\r\nunsubscribe\r\n$-1\r\n:0\r\n");
+    }
+
+    #[test]
+    fn a_punsubscribe_ack_names_its_pattern_or_sends_a_nil_bulk() {
+        let named = PubsubEvent::Punsubscribe { pattern: Some(b"n.*".to_vec()), count: 1 };
+        assert_eq!(encode_frame(&named), b"*3\r\n$12\r\npunsubscribe\r\n$3\r\nn.*\r\n:1\r\n");
+        let all = PubsubEvent::Punsubscribe { pattern: None, count: 0 };
+        assert_eq!(encode_frame(&all), b"*3\r\n$12\r\npunsubscribe\r\n$-1\r\n:0\r\n");
+    }
+}

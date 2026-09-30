@@ -357,6 +357,21 @@ fn open_ranges_fill_type_extremes() {
 }
 
 #[test]
+fn open_lower_ends_fill_the_type_minimum_and_an_open_f64_top_is_inf() {
+    let base = format!(
+        "{DEPT}CREATE INDEX ON emp (age);\nCREATE INDEX ON emp (salary);\nCREATE INDEX ON emp (name);\n"
+    );
+    let c = compile(&format!("{base}CREATE VIEW v AS SELECT * FROM emp WHERE age <= 65;")).unwrap();
+    assert_eq!(&leaf_of(&c)[3..7], ["emp.age", "RANGE", "-9223372036854775808", "65"]);
+    let c =
+        compile(&format!("{base}CREATE VIEW v AS SELECT * FROM emp WHERE salary >= 1.5;")).unwrap();
+    assert_eq!(&leaf_of(&c)[3..7], ["emp.salary", "RANGE", "1.5", "inf"]);
+    let c =
+        compile(&format!("{base}CREATE VIEW v AS SELECT * FROM emp WHERE name <= 'm';")).unwrap();
+    assert_eq!(&leaf_of(&c)[3..7], ["emp.name", "RANGE", "", "m"]);
+}
+
+#[test]
 fn literal_typing_is_checked() {
     let base = format!("{DEPT}CREATE INDEX ON emp (age);\nCREATE INDEX ON emp (dept);\n");
     let e =

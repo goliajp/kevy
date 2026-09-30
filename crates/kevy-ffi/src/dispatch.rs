@@ -285,6 +285,39 @@ mod tests {
     }
 
     #[test]
+    fn a_lent_get_reads_in_place_and_refuses_a_null_handle_or_another_type() {
+        let db = crate::kevy_open_mem();
+        // SAFETY: `db` is the live handle just opened; every buffer is local.
+        unsafe {
+            assert_eq!(mset_packed(db, &pack(&[b"s", b"hello"])), 0);
+            let mut out = KevyBuf::empty();
+            assert_eq!(dispatch_packed(db, &pack(&[b"RPUSH", b"l", b"x"]), &mut out), 0);
+            crate::kevy_buf_free(out.ptr, out.len, out.cap);
+            assert_eq!(get_lent(db, b"s", |v| v.map(<[u8]>::to_vec)), Ok(Some(b"hello".to_vec())));
+            assert_eq!(get_lent(db, b"absent", |v| v.is_none()), Ok(true));
+            assert_eq!(get_lent(db, b"l", |_| ()), Err(-2), "a list is not a string");
+            assert_eq!(get_lent(std::ptr::null_mut(), b"s", |_| ()), Err(-1));
+            crate::kevy_close(db);
+        }
+    }
+
+    #[test]
+    fn a_packed_mset_on_a_shut_down_handle_is_a_store_error() {
+        let db = crate::kevy_open_mem();
+        // SAFETY: `db` is the live handle just opened; every buffer is local.
+        unsafe {
+            assert_eq!(crate::kevy_shutdown(db), 0);
+            assert_eq!(mset_packed(db, &pack(&[b"a", b"1"])), -2);
+            assert_eq!(
+                get_lent(db, b"a", |v| v.is_none()),
+                Ok(true),
+                "the refused pair was not set"
+            );
+            crate::kevy_close(db);
+        }
+    }
+
+    #[test]
     fn pairs_are_set_and_a_lone_key_is_refused() {
         let db = crate::kevy_open_mem();
         // SAFETY: `db` is the live handle just opened; every buffer is local.

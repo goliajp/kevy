@@ -172,3 +172,22 @@ fn encoded_bytes_are_exactly_what_spec_says() {
     let expected = b"*2\r\n:99\r\n*3\r\n$3\r\nSET\r\n$3\r\nfoo\r\n$3\r\nbar\r\n";
     assert_eq!(bytes, expected);
 }
+
+#[test]
+fn only_a_malformed_payload_has_a_source_and_it_is_the_protocol_error() {
+    use std::error::Error;
+    let e = WireError::BadPayload(ProtocolError::Malformed("bad bulk length"));
+    assert_eq!(e.to_string(), "wire inner payload malformed: malformed frame: bad bulk length");
+    assert_eq!(
+        e.source().map(ToString::to_string).as_deref(),
+        Some("malformed frame: bad bulk length")
+    );
+    for e in [
+        WireError::Truncated,
+        WireError::BadEnvelope,
+        WireError::BadOffset,
+        WireError::NegativeOffset(-1),
+    ] {
+        assert!(e.source().is_none(), "{e} has no source");
+    }
+}
