@@ -1514,6 +1514,11 @@ fn server_replica_applies_the_internal_consumer_record() {
 /// none. Doubles as a discard-the-reply consumer for the pop storm.
 fn read_resp_bulks(s: &mut std::net::TcpStream) -> Vec<Vec<u8>> {
     let head = read_line(s);
+    read_resp_bulks_after(head, s)
+}
+
+/// [`read_resp_bulks`] for a reply whose first line was already read.
+fn read_resp_bulks_after(head: Vec<u8>, s: &mut std::net::TcpStream) -> Vec<Vec<u8>> {
     match head[0] {
         b'+' | b':' => Vec::new(),
         b'$' => {
@@ -2459,7 +2464,9 @@ fn blocking_pops_and_renames_reach_a_replica() {
     fn settles(s: &mut std::net::TcpStream, probe: &[&[u8]], want: &[u8]) -> bool {
         for _ in 0..250 {
             send_resp(s, probe);
-            if read_resp_bulks(s).concat() == want {
+            let head = read_line(s);
+            // `-LOADING` while the join's snapshot lands is not an answer yet
+            if !head.starts_with(b"-") && read_resp_bulks_after(head, s).concat() == want {
                 return true;
             }
             std::thread::sleep(std::time::Duration::from_millis(20));
