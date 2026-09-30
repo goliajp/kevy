@@ -24,7 +24,7 @@ VERBS = ["GET", "SET", "INCR", "SADD", "HSET", "LPUSH", "ZADD"]
 ENGINES = ["kevy", "redis8", "valkey", "dragonfly"]
 # a probe with twice the load threads that lands this far above the best of
 # the cell's own windows in that round means the load generator, not the
-# engine, set the cell
+# engine, set that engine's number in the cell
 PROBE_GAIN_MAX = 1.02
 FOREIGN_NOTE = 0.05
 
@@ -59,20 +59,26 @@ def throughput(table, engines, label, bound):
     print("| verb | " + " | ".join(label[e] for e in engines) + " |")
     print("|---|" + "---:|" * len(engines))
     for v in VERBS:
-        row = ["CLIENT-BOUND" if v in bound else
-               f"{statistics.median(x['ops'] for x in table[(e, v)]['win'].values()):,.0f}"
-               if table[(e, v)]["win"] else "—" for e in engines]
+        row = []
+        for e in engines:
+            ws = table[(e, v)]["win"]
+            if not ws:
+                row.append("—")
+                continue
+            ops = f"{statistics.median(x['ops'] for x in ws.values()):,.0f}"
+            row.append(f"≥ {ops} LOAD-BOUND" if (e, v) in bound else ops)
         print(f"| {v} | " + " | ".join(row) + " |")
 
 
 def intervals(table, engines, label, bound):
+    """kevy / other per cell. A competitor the load generator held back has
+    no ratio: its own number is below what it can do. kevy held back gives a
+    ratio that is a floor, marked ≥, and still a claim that holds."""
     print("\n## kevy / other, 99% paired bootstrap interval (lower bound = the claim that holds)\n")
     print("| verb | " + " | ".join(f"vs {label[e]}" for e in engines[1:]) + " |")
     print("|---|" + "---:|" * (len(engines) - 1))
-    weak = []
+    weak, claims = [], 0
     for v in VERBS:
-        if v in bound:
-            continue
         row = []
         for e in engines[1:]:
             k, o = table[("kevy", v)]["win"], table[(e, v)]["win"]
@@ -80,12 +86,17 @@ def intervals(table, engines, label, bound):
             if not slots:
                 row.append("—")
                 continue
+            if (e, v) in bound:
+                row.append("— (competitor LOAD-BOUND)")
+                continue
             lo, hi = pr.bootstrap_ratio([k[s]["ops"] for s in slots], [o[s]["ops"] for s in slots])
-            row.append(f"{lo:.2f}x–{hi:.2f}x" + (" NOISE" if lo <= 1.0 <= hi else ""))
+            floor = "≥ " if ("kevy", v) in bound else ""
+            row.append(f"{floor}{lo:.2f}x–{hi:.2f}x" + (" NOISE" if lo <= 1.0 <= hi else ""))
+            claims += 1
             if lo <= 1.0:
                 weak.append(f"{v} vs {label[e]}")
         print(f"| {v} | " + " | ".join(row) + " |")
-    return weak
+    return weak, claims
 
 
 def cost(table):
@@ -111,24 +122,24 @@ def main():
     label = {"kevy": "kevy", "redis8": f"Redis {pins['redis']}",
              "valkey": f"valkey {pins['valkey']}", "dragonfly": f"Dragonfly {pins['dragonfly']}"}
     engines = [e for e in ENGINES if any(k[0] == e for k in table)]
-    bound = {v for (_, v), c in table.items() if client_bound(c)}
+    bound = {cell for cell, c in table.items() if client_bound(c)}
     rounds = len({r for c in table.values() for r, _ in c["win"]})
     print(f"\n# arena over {rounds} rounds — per-cell medians of every window\n")
     throughput(table, engines, label, bound)
-    weak = intervals(table, engines, label, bound)
+    weak, claims = intervals(table, engines, label, bound)
     cost(table)
     busy = sorted({f"{e} {v}" for (e, v), c in table.items()
                    if any(x["foreign"] > FOREIGN_NOTE for x in c["win"].values())})
     if busy:
         print(f"\n# note: other processes used more than {FOREIGN_NOTE:.0%} of the box during "
               + ", ".join(busy) + " — if those cells matter, run arena again")
-    if all(v in bound for v in VERBS):
-        print("\n**No cell was set by the engines: every one is CLIENT-BOUND.**")
+    if claims == 0:
+        print("\n**No ratio could be taken: every competitor cell was LOAD-BOUND or missing.**")
         return 1
     if weak:
         print("\n**Not separated from 1 at 99%:** " + ", ".join(weak) + ".")
         return 1
-    print("\n**Every cell that is not CLIENT-BOUND: kevy's lower bound is above 1 against every competitor.**")
+    print(f"\n**All {claims} ratios: kevy's lower bound is above 1.**")
     return 0
 
 
