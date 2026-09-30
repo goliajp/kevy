@@ -16,7 +16,9 @@ use kevy_rt::Commands as _;
 #[inline]
 pub(super) fn alloc_reclaim_tick() {
     #[cfg(feature = "kevy-alloc")]
-    kevy_alloc::thread_reclaim();
+    if crate::defrag_tick::active() {
+        kevy_alloc::thread_reclaim();
+    }
 }
 
 /// Re-apply maxmemory + eviction policy in case `CONFIG SET` has

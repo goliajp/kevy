@@ -60,6 +60,7 @@ kevy-embedded = "7.0.0"
 | use a kevy crate as a Rust library | most signatures changed; the compiler names each one | 13 |
 | use the Go module, or match a binding's read-only error text | import `/v7`; the text gained its closing period | 14 |
 | use the stream commands, an id like `5-`, or `EXPIRE` on a key about to lapse | they now answer as valkey and Redis do; a blocking `XREAD` that times out answers `*-1` | 15 |
+| preload an allocator, set `MALLOC_*` variables, or read `INFO modules` | the server runs on kevy-alloc; build with `--no-default-features` for the system allocator | 17 |
 | want an index read to reach fewer shards | declare it global | [indexes](indexes.md#global-indexes-partition-global) |
 
 ---
@@ -579,6 +580,36 @@ without an error; the version is the first release that had it:
 
 The [changelog](https://github.com/goliajp/kevy/blob/develop/CHANGELOG.md)
 has each one in full.
+
+## 17. The server runs on kevy-alloc
+
+The server binary now allocates through kevy's own allocator,
+`kevy-alloc`, instead of the system allocator (glibc malloc on Linux).
+It returns free pages to the OS, and a compaction pass on the shard tick
+packs the holes that demotion and deletes leave; what it does and what
+it measured is in [alloc.md](alloc.md). Nothing to configure. What a
+6.4 operator sees change:
+
+- `INFO modules` reads `module:name=alloc,impl=kevy-alloc` (6.4:
+  `impl=system`).
+- `INFO allocator` has a section: `alloc_mapped`, `alloc_live` and the
+  other terms every mapped byte falls into. 6.4 had none on its release
+  builds.
+- A tiered server's memory guard reads those figures and never trims:
+  `heap_trims_total` stays 0.
+- `LD_PRELOAD` allocators, glibc's `MALLOC_*` environment variables and
+  malloc-hooking profilers no longer act on the server's allocations.
+
+To keep the system allocator, build with `--no-default-features`
+(`kevy-alloc` is the `kevy` crate's only default feature, so nothing else
+changes):
+
+```sh
+cargo install kevy --version 7.0.0 --no-default-features
+```
+
+The release binaries and the container image are the default build, so a
+server on the system allocator is one you build from source.
 
 ---
 

@@ -127,7 +127,8 @@ demote target = budget·19/20 − index_reserved_bytes − overhead − growth r
   the effective target saturates to 0 — visible in `INFO`, not hidden.
 - **The overhead is measured, not assumed.** Receive rings, connection
   buffers, allocator overhead, an index holding more than it reports:
-  the server reads what the allocator holds live (glibc's `mallinfo2`,
+  the server reads what the allocator holds live (kevy-alloc's own
+  figures; on a build with the system allocator, glibc's `mallinfo2` or
   macOS's zone statistics) once a second while RSS is past half the
   budget, and whatever `used_memory` and the index floor do not cover
   is taken off the target (`tier_overhead_bytes`).
@@ -148,12 +149,17 @@ The budget is a bound on **resident memory**, RSS ≤ budget × 1.05, not
 only on the store's own accounting. Two things stand between the two,
 and a separate thread in the server (never a shard) handles them:
 
-- **Freed memory the allocator keeps.** A demoted value's blocks go
-  back to glibc's free lists and stay resident until the allocator is
-  asked to return whole pages. When RSS exceeds what is live by more
-  than 1% of the budget, the server trims the heap (`malloc_trim`), at
-  most once a second — once every five seconds after a trim that found
-  next to nothing whole to return.
+- **Freed memory the allocator keeps.** A demoted value leaves a hole
+  where it sat. The server's allocator, kevy-alloc, returns every 4 KiB
+  page that holds nothing live on the shard tick, and a compaction pass
+  copies values out of sparse spans so their pages empty too
+  ([alloc.md](alloc.md)). On a build with the system allocator
+  (`--no-default-features`), the blocks go back to glibc's free lists
+  and stay resident until the allocator is asked to return whole pages:
+  when RSS exceeds what is live by more than 1% of the budget, the
+  server trims the heap (`malloc_trim`), at most once a second — once
+  every five seconds after a trim that found next to nothing whole to
+  return.
 - **Live memory past the line.** If what the process holds live stays
   past budget × 1.05 for two consecutive readings a second apart —
   demotion has nothing left it can demote — every shard refuses growing
@@ -161,13 +167,14 @@ and a separate thread in the server (never a shard) handles them:
   memory than the tiering budget allows` until it falls back under.
   Reads, deletes and every other shrinking command keep working.
 
-The allocator reading and the trim lock each allocator arena while they
-walk it (milliseconds on a fragmented heap), which is why they run on
+On the system allocator, the reading and the trim lock each allocator
+arena while they walk it (milliseconds on a fragmented heap), which is
+why they run on
 their own thread and only when RSS calls for them; `heap_walk_us_total`
 and `heap_trim_us_total` say what they cost. The embedded store does
 not run this thread: an embedded process's RSS is its host's.
 
-Measured on a 16-core x86_64 Linux box (glibc 2.41), D1's rows (five
+Measured on a 16-core x86_64 Linux box on the system allocator (glibc 2.41), D1's rows (five
 fields, one of 900 bytes) at ten million rows on a 3 GiB budget, before
 any index: RSS at the end of the load went from 1.30 × budget to
 0.99 ×, and its peak during the load from 1.30 × to 1.10 ×. What remains

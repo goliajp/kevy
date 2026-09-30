@@ -2,7 +2,7 @@
   "en": {
     "UPGRADING": "The older majors: 2.x to 3.x and 3.x to 4.0.",
     "accept-shards": "The flag that bought 10.6% by giving fewer cores the listener.",
-    "alloc": "The opt-in allocator: ~10% smaller RSS, priced honestly.",
+    "alloc": "The server's own allocator: pages back to the OS, holes packed, measured against glibc.",
     "async": "Pipelining, and why the engine has no async runtime.",
     "availability": "Failover, epochs, and the writes we will not promise to keep.",
     "boundaries": "What kevy refuses, why, and what to use instead — read before you build on a guess.",
@@ -43,7 +43,7 @@
   "ja": {
     "UPGRADING": "以前のメジャー——2.x から 3.x、および 3.x から 4.0。",
     "accept-shards": "listener を持つ core を減らして 10.6% を買ったフラグ。",
-    "alloc": "オプトインのアロケータ —— RSS 約 10% 減、代価は正直に値札どおり。",
+    "alloc": "サーバー独自のアロケータ：ページを OS に返し、穴を詰める。glibc との実測つき。",
     "async": "pipelining と、このエンジンに async runtime が無い理由。",
     "availability": "failover、epoch、そして我々が守ると約束しない書き込み。",
     "boundaries": "kevy が拒むもの、その理由、代わりに使うもの——推測の上に作り始める前に。",
@@ -84,7 +84,7 @@
   "zh": {
     "UPGRADING": "更早的大版本：2.x 到 3.x，以及 3.x 到 4.0。",
     "accept-shards": "一个开关，把 listener 交给更少的核，换来 10.6%。",
-    "alloc": "可选分配器：RSS 省约 10%，代价照实标价。",
+    "alloc": "服务端自己的分配器：页还给操作系统，空洞压紧，附与 glibc 的实测对比。",
     "async": "pipelining，以及这个引擎为什么没有 async runtime。",
     "availability": "failover、epoch，以及我们不承诺保住的那些写。",
     "boundaries": "kevy 拒绝什么、为什么、改用什么——在你据此动工之前先读。",

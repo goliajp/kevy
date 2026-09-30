@@ -35,6 +35,7 @@ kevy-embedded = "7.0.0"
 | kevy のクレートを Rust のライブラリとして使っている | ほとんどのシグネチャが変わる。変わった箇所はコンパイラが一つずつ示す | 13 |
 | Go モジュールを使っている、またはバインディングの読み取り専用エラーの文面で照合している | `/v7` を import する。文面の末尾に句点（ピリオド）が付いた | 14 |
 | ストリームのコマンド、`5-` のような ID、期限切れ間近のキーへの `EXPIRE` を使っている | valkey や Redis と同じ応答になる。タイムアウトしたブロッキング `XREAD` は `*-1` を返す | 15 |
+| アロケータをプリロードしている、`MALLOC_*` 変数を設定している、または `INFO modules` を読んでいる | サーバーは kevy-alloc で動く。システムアロケータにするには `--no-default-features` でビルドする | 17 |
 | インデックスの読み取りが触れるシャードを減らしたい | グローバルインデックスとして宣言する | [インデックス](indexes.md#グローバルインデックスpartition-global) |
 
 ---
@@ -298,6 +299,23 @@ let dropped: bool = store.idx_drop(b"by_age")?;     // a closed store or a repli
 - 組み込みストアで：TTL つきのキーが、期限を過ぎてもリーパーの最大 1 周期分読めていた（1.11.0 から）。文字列以外の `COPY` が `WRONGTYPE` を返していた（2.0.13 から）。`SET … NX EX` が値と TTL を別々のロックの下で設定していたため、その間でクラッシュすると期限の切れないキーが残った（4.0.0 から）。組み込みレプリカが、ストリームと geo の書き込みをすべて捨てていた。また（シャードが二つ以上のとき）ほとんどのキーを、読み取りが探さないシャードに書いていた（1.22.0 から）
 
 それぞれの詳細は [changelog](https://github.com/goliajp/kevy/blob/develop/CHANGELOG.md) にあります。
+
+## 17. サーバーは kevy-alloc で動く
+
+サーバーのバイナリは、システムアロケータ（Linux では glibc malloc）ではなく、kevy 独自のアロケータ `kevy-alloc` で割り当てるようになりました。空いたページを OS に返し、シャードの tick 上の整理パスが降格や削除の残す穴を詰めます。何をするか、何を測ったかは [alloc.md](alloc.md) にあります。設定は要りません。6.4 から上げると次の点が変わります：
+
+- `INFO modules` は `module:name=alloc,impl=kevy-alloc` になる（6.4 は `impl=system`）
+- `INFO allocator` にセクションが出る：`alloc_mapped`、`alloc_live` と、マップされた各バイトが属するほかの項目。6.4 のリリースビルドにはなかった
+- 階層化したサーバーのメモリガードはこれらの数値を読み、trim は一度もしない：`heap_trims_total` は 0 のまま
+- `LD_PRELOAD` で差し込むアロケータ、glibc の `MALLOC_*` 環境変数、malloc をフックするプロファイラは、サーバーの割り当てに効かなくなる
+
+システムアロケータのままにするには、`--no-default-features` でビルドします（`kevy-alloc` は `kevy` crate の唯一のデフォルト feature なので、ほかは何も変わりません）：
+
+```sh
+cargo install kevy --version 7.0.0 --no-default-features
+```
+
+リリースのバイナリとコンテナイメージはデフォルトビルドなので、システムアロケータのサーバーはソースからビルドすることになります。
 
 ---
 
