@@ -20,7 +20,12 @@ categories = ["database-implementations", "caching", "embedded"]
 # cannot declare, and `cargo package` would ship source that does not
 # compile. The rest ship and compile — excluding the whole suite to silence
 # a few files would throw away working tests.
-exclude = ["examples/embed_vs_server.rs", "tests/server_replica_e2e.rs", "tests/listener_e2e.rs"]
+exclude = [
+    "examples/embed_vs_server.rs",
+    "tests/server_replica_e2e.rs",
+    "tests/listener_e2e.rs",
+    "tests/catalog_server_replica.rs",
+]
 [lints]
 workspace = true
 

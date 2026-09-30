@@ -259,30 +259,6 @@ fn saved_frame(dir: &Path) -> Option<kevy_persist::Argv> {
         .unwrap()
 }
 
-/// A server replica of an embedded primary: one of its shards applies the
-/// first catalog frame from its stream, then another loads a full sync
-/// served from a snapshot taken before any declaration. The catalog stays.
-#[test]
-fn a_server_replica_keeps_the_catalog_when_an_older_embedded_snapshot_lands_last() {
-    use kevy_rt::Commands;
-    let dir = TmpDir::new("emb-catalog-older-snapshot");
-    let s = Store::open(config(&dir, 1)).unwrap();
-    assert!(s.save_snapshot().unwrap());
-    let older = saved_frame(dir.path());
-    ok(&s, "IDX.CREATE age ON PREFIX user: FIELD age TYPE i64 KIND range");
-    assert!(s.save_snapshot().unwrap());
-    let frame = saved_frame(dir.path()).expect("the declaration was recorded");
-    let replica = kevy::KevyCommands::sharded(2);
-    {
-        let _applying = kevy_rt::RecordApplyGuard::enter();
-        assert_eq!(replica.dispatch(&mut kevy_rt::Store::new(), &frame), b"+OK\r\n");
-    }
-    replica.load_snapshot_aux(older.as_ref(), true);
-    let held = replica.snapshot_aux().expect("the replica holds a catalog");
-    assert_eq!((&held[1], &held[2]), (&frame[1], &frame[2]));
-    assert!(String::from_utf8_lossy(&held[3]).contains("age"));
-}
-
 /// A directory from before 7.0 opens and its catalog gets a lineage: from
 /// the side files it imports (recorded at version 1), or, with none, one
 /// of its own at version 0 that the next open keeps.
