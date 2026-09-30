@@ -8,8 +8,8 @@ impl Segment {
     /// stays half full until this walks past it. A hand keeps its place
     /// between calls; once a whole pass packs nothing, every leaf but the
     /// last is too full to take its successor's first entry, and calls
-    /// return `false` at once until the segment's leaves per entry have
-    /// grown by an eighth. Meant for a maintenance tick with a time budget:
+    /// return `false` at once until the segment has an eighth more leaves
+    /// or an eighth fewer entries than it rested with. Meant for a maintenance tick with a time budget:
     /// call it in small steps until it returns `false` or the budget runs
     /// out.
     ///

@@ -6,8 +6,9 @@
 //! the one it stands on for as long as the entries fit, dropping the next
 //! leaf once it empties; separators and counts move with the entries. A
 //! lap that pours nothing leaves every leaf but the last too full to take
-//! its successor's first entry. The tree then rests until its leaves per
-//! entry have grown by an eighth.
+//! its successor's first entry. The tree then rests until it has an
+//! eighth more leaves or an eighth fewer entries than it rested with:
+//! splits have opened half-empty leaves, or deletes have hollowed them.
 
 use super::{Inner, Path, Tree};
 use crate::seg_leaf::{Probe, head16_of};
@@ -28,11 +29,7 @@ impl Tree {
     /// Walk up to `leaves` steps of the hand; whether work remains.
     pub(crate) fn tidy(&mut self, t: &mut Tidy, leaves: usize) -> bool {
         if let Some((l0, n0)) = t.rest {
-            let drifted = if n0 == 0 {
-                self.live_leaves() > 2
-            } else {
-                self.live_leaves() * n0 * 8 > l0 * self.len * 9
-            };
+            let drifted = self.live_leaves() * 8 > l0 * 9 + 8 || self.len * 9 < n0 * 8;
             if !drifted {
                 return false;
             }
