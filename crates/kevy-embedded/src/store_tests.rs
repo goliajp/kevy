@@ -297,6 +297,48 @@ fn save_snapshot_resets_aof_no_double_replay() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `save_snapshot` then `rewrite_aof`: the rewritten log is a complete
+/// image, so a reopen must not load the snapshot under it. Before the fix
+/// every write from before the rewrite was applied twice.
+#[test]
+fn a_rewrite_after_a_snapshot_reopens_each_write_once() {
+    let dir = tmp_dir("save-then-rewrite");
+    let config = || Config::default().with_persist(&dir).with_ttl_reaper_manual().with_shards(2);
+    let keys: Vec<Vec<u8>> = (0..8).map(|i| format!("k{i}").into_bytes()).collect();
+    let write = |s: &Store, tag: &str| {
+        for k in &keys {
+            s.rpush(k, &[tag.as_bytes()]).unwrap();
+            s.append(&[b"s:", k.as_slice()].concat(), tag.as_bytes()).unwrap();
+            s.hincrby(&[b"h:", k.as_slice()].concat(), b"f", 5).unwrap();
+        }
+    };
+    // per key: the list, the appended string, the incremented field
+    type Read = (Vec<Vec<u8>>, Option<Vec<u8>>, Option<Vec<u8>>);
+    let read = |s: &Store| -> Vec<Read> {
+        keys.iter()
+            .map(|k| {
+                let list = s.lrange(k, 0, -1).unwrap();
+                let text = s.get(&[b"s:", k.as_slice()].concat()).unwrap();
+                let count = s.hget(&[b"h:", k.as_slice()].concat(), b"f").unwrap();
+                (list, text, count)
+            })
+            .collect()
+    };
+    let before = {
+        let s = Store::open(config()).unwrap();
+        write(&s, "a");
+        assert!(s.save_snapshot().unwrap());
+        write(&s, "b");
+        assert!(s.rewrite_aof().unwrap().is_some());
+        write(&s, "c");
+        read(&s)
+    };
+    assert_eq!(before[0].0, [b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]);
+    let s2 = Store::open(config()).unwrap();
+    assert_eq!(read(&s2), before);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // open_report(): the machine-readable twin of the boot WARN line. A clean
 // open reports zero drops; an open over a damaged AOF reports the dropped
 // bytes, the corrupt flag, and the quarantine file the repair wrote — the

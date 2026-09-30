@@ -170,7 +170,7 @@ pub enum ReplaySummary {
     /// use kevy_persist::{ReplayMode, ReplaySummary, replay_aof_in_place};
     ///
     /// let path = std::env::temp_dir().join(format!("summary-print-doc-{}.aof", std::process::id()));
-    /// kevy_persist::write_aof_base(&path)?;
+    /// std::fs::write(&path, kevy_persist::AOF2_MAGIC)?;
     /// // prints `replayed 0 commands …` on stderr as it returns
     /// let report = replay_aof_in_place(&path, ReplayMode::Strict, ReplaySummary::Print, |_| {})?;
     /// assert_eq!(report.commands, 0);
@@ -186,7 +186,7 @@ pub enum ReplaySummary {
     /// use kevy_persist::{ReplayMode, ReplaySummary, replay_aof_in_place};
     ///
     /// let path = std::env::temp_dir().join(format!("summary-quiet-doc-{}.aof", std::process::id()));
-    /// kevy_persist::write_aof_base(&path)?;
+    /// std::fs::write(&path, kevy_persist::AOF2_MAGIC)?;
     /// // the same numbers, handed back instead of printed
     /// let report = replay_aof_in_place(&path, ReplayMode::Strict, ReplaySummary::Quiet, |_| {})?;
     /// assert_eq!((report.commands, report.dropped_bytes), (0, 0));

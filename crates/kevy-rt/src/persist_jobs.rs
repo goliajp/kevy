@@ -83,7 +83,7 @@ pub(crate) fn run_tee_append(tmp: PathBuf, mut bytes: Vec<u8>) -> PersistDone {
 pub(crate) fn run_job(job: PersistJob) -> PersistDone {
     match job {
         PersistJob::Save { view, snap_path, aof_reset, cursor, aux } => PersistDone::Save {
-            result: crate::persist_worker::write_snapshot_tmp_with_cursor(
+            result: kevy_persist::write_snapshot_tmp_with_cursor(
                 &kevy_persist::WithAux::new(&view, aux.as_ref()),
                 &snap_path,
                 cursor,

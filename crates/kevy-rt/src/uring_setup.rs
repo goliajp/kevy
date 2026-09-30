@@ -26,7 +26,7 @@ impl<C: Commands> Shard<C> {
         }
         let segs_dir = kevy_persist::layout::segs_dir(&self.data_dir, self.id);
         self.store.enable_seg_rows(&segs_dir).map_err(std::io::Error::other)?;
-        self.load_boot_snapshot();
+        self.load_boot_snapshot()?;
         if self.aof.is_some() {
             let aof_path = self.aof_path();
             let commands = &self.commands;
