@@ -568,11 +568,11 @@ proves = "failover converges; WAIT tells the truth; staleness is bounded"
 id = "cookbook"
 area = "case"
 tier = "prerelease"
-cmd = "bash -c 'r=0; bash bench/cookbook_smoke.sh || r=1; bash bench/onrampgate.sh || r=1; exit $r'"
-expected = 720
-timeout = 4800
+cmd = "bash bench/cookbook_smoke.sh"
+expected = 120
+timeout = 1200
 requires = ["binaries-release"]
-proves = "every kevy-cli line in the cookbook runs green as written, and the on-ramp holds its clamps with the real CLI: a 1M-row export/import round trip, resume after kill -9, rate-limited delete, stream-slice migration"
+proves = "every kevy-cli line in the cookbook runs green as written"
 
 [[check]]
 id = "crossgate"
@@ -883,14 +883,38 @@ tier = "full"
 # still prints in the run log.
 advisory = true
 advisory_reason = """
-Red-first, by design (crashgate precedent): the acceptance lines exist before the feature, so the feature is built against them. It stops being advisory when every line it owns is implemented and green. The RSS bound (tierrssgate) runs in this row too and shares its advisory status until then; its own verdict line is in the run log.
+Red-first, by design (crashgate precedent): the acceptance lines exist before the feature, so the feature is built against them. It stops being advisory when every line it owns is implemented and green.
 """
-cmd = "bash -c 'r=0; bash bench/tierrssgate.sh || r=1; bash bench/tiergate.sh || r=1; exit $r'"
-inputs = ["crates/kevy-vlog/", "crates/kevy-store/", "crates/kevy/src/tier*", "crates/kevy/src/tiering_boot.rs", "bench/tiergate*", "bench/tierrssgate*", "bench/capacity*"]
-expected = 960
-timeout = 6300
+cmd = "bash bench/tiergate.sh"
+inputs = ["crates/kevy-vlog/", "crates/kevy-store/", "crates/kevy/src/tier*", "crates/kevy/src/tiering_boot.rs", "bench/tiergate*", "bench/capacity*"]
+expected = 900
+timeout = 5400
+requires = ["linux", "binaries-release"]
+proves = "transparent tiering: budgets, demotion, cold reads"
+
+# Enforcing, unlike tiergate above: the RSS bound is a 7.0 acceptance line
+# and must be able to fail.
+[[check]]
+id = "tierrssgate"
+area = "mem"
+tier = "full"
+cmd = "bash bench/tierrssgate.sh"
+expected = 60
+timeout = 900
 requires = ["box", "binaries-release"]
-proves = "transparent tiering: budgets, demotion, cold reads, and the budget bounds RSS and not only used_memory"
+proves = "the tiering budget bounds RSS, not only used_memory: a hash workload four times the budget stays under budget x 1.05 at every sample"
+
+# Full, not prerelease: a 1M-row round trip and a throughput clamp cost
+# about ten minutes, which a release does not pay for.
+[[check]]
+id = "onrampgate"
+area = "case"
+tier = "full"
+cmd = "bash bench/onrampgate.sh"
+expected = 600
+timeout = 3600
+requires = ["binaries-release"]
+proves = "the on-ramp clamps with the real CLI binary: a 1M-row export/import round trip, import throughput of at least 200k cmd/s, resume after kill -9, rate-limited delete, stream-slice migration"
 
 [[check]]
 id = "topogate"
