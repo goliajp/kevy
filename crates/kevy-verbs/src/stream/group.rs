@@ -1,5 +1,5 @@
-//! Consumer-group dispatch: `XGROUP` / `XREADGROUP` / `XACK` /
-//! `XPENDING` / `XCLAIM` / `XAUTOCLAIM` — sprint B of v2-7. Argv-soup
+//! Consumer-group dispatch: `XREADGROUP` / `XACK` / `XPENDING` (`XGROUP`
+//! is in `xgroup.rs`, the claims in `claim.rs`). Argv-soup
 //! parsers translate the legacy Redis shapes into the structured
 //! API on `Store` (see `kevy_store::stream::store`); reply emitters
 //! match the exact array shapes Redis returns.
@@ -7,11 +7,10 @@
 use kevy_resp::CmdError;
 use kevy_resp::{
     ArgvView, encode_array_len, encode_bulk, encode_error, encode_integer, encode_null_bulk,
-    encode_simple_string,
 };
 use kevy_store::{
-    AckMode, GroupCreateMode, MissingStream, ReadGroupId, Store, StreamId, now_unix_ms,
-    parse_explicit_id, parse_range_end, parse_range_start,
+    AckMode, ReadGroupId, Store, StreamId, now_unix_ms, parse_explicit_id, parse_range_end,
+    parse_range_start,
 };
 
 use crate::Effect;
@@ -19,136 +18,6 @@ use crate::reply::{store_err, wrong_args};
 
 use super::claim_record::ReadMarks;
 use super::emit_entries;
-
-// ───────────── XGROUP ─────────────
-
-/// `XGROUP CREATE | DESTROY | SETID | CREATECONSUMER | DELCONSUMER`
-pub(super) fn cmd_xgroup<A: ArgvView + ?Sized>(
-    store: &mut Store,
-    args: &A,
-    out: &mut Vec<u8>,
-) -> Effect {
-    if args.len() < 2 {
-        wrong_args(out, "xgroup");
-        return Effect::Write;
-    }
-    let sub = args[1].to_ascii_uppercase();
-    match sub.as_slice() {
-        b"CREATE" => xgroup_create(store, args, out),
-        b"DESTROY" => xgroup_destroy(store, args, out),
-        b"SETID" => xgroup_setid(store, args, out),
-        b"CREATECONSUMER" => return xgroup_create_consumer(store, args, out),
-        b"DELCONSUMER" => xgroup_del_consumer(store, args, out),
-        other => encode_error(
-            out,
-            &format!(
-                "ERR Unknown XGROUP subcommand or wrong number of arguments for '{}'",
-                String::from_utf8_lossy(other),
-            ),
-        ),
-    }
-    Effect::Write
-}
-
-fn xgroup_create<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
-    // XGROUP CREATE key group <id|$> [MKSTREAM]
-    if !(5..=6).contains(&args.len()) {
-        return wrong_args(out, "xgroup|create");
-    }
-    let key = &args[2];
-    let group = &args[3];
-    let mode = match parse_id_or_dollar(&args[4]) {
-        Ok(m) => m,
-        Err(msg) => return encode_error(out, msg.as_wire()),
-    };
-    let missing = if args.len() == 6 && args[5].eq_ignore_ascii_case(b"MKSTREAM") {
-        MissingStream::Create
-    } else {
-        MissingStream::Refuse
-    };
-    match store.xgroup_create(key, group, mode, missing) {
-        Ok(true) => encode_simple_string(out, "OK"),
-        Ok(false) => encode_error(out, "BUSYGROUP Consumer Group name already exists"),
-        Err(kevy_store::StoreError::NoSuchKey) => encode_error(
-            out,
-            "ERR The XGROUP subcommand requires the key to exist. \
-             Note that for CREATE you may want to use the MKSTREAM option to create an empty stream automatically.",
-        ),
-        Err(e) => store_err(out, e),
-    }
-}
-
-fn xgroup_destroy<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
-    if args.len() != 4 {
-        return wrong_args(out, "xgroup|destroy");
-    }
-    match store.xgroup_destroy(&args[2], &args[3]) {
-        Ok(true) => encode_integer(out, 1),
-        Ok(false) => encode_integer(out, 0),
-        Err(e) => store_err(out, e),
-    }
-}
-
-fn xgroup_setid<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
-    if args.len() != 5 {
-        return wrong_args(out, "xgroup|setid");
-    }
-    let mode = match parse_id_or_dollar(&args[4]) {
-        Ok(m) => m,
-        Err(msg) => return encode_error(out, msg.as_wire()),
-    };
-    match store.xgroup_setid(&args[2], &args[3], mode) {
-        Ok(true) => encode_simple_string(out, "OK"),
-        Ok(false) => encode_error(out, "NOGROUP No such consumer group"),
-        Err(e) => store_err(out, e),
-    }
-}
-
-/// `XGROUP CREATECONSUMER key group consumer`. A consumer this creates
-/// is recorded with the time it was created at ([`Effect::RecordSeen`]).
-fn xgroup_create_consumer<A: ArgvView + ?Sized>(
-    store: &mut Store,
-    args: &A,
-    out: &mut Vec<u8>,
-) -> Effect {
-    if args.len() != 5 {
-        wrong_args(out, "xgroup|createconsumer");
-        return Effect::Write;
-    }
-    match store.xgroup_create_consumer(&args[2], &args[3], &args[4], now_unix_ms()) {
-        Ok(true) => {
-            encode_integer(out, 1);
-            Effect::RecordSeen
-        }
-        Ok(false) => {
-            encode_integer(out, 0);
-            Effect::Unchanged
-        }
-        Err(e) => {
-            store_err(out, e);
-            Effect::Write
-        }
-    }
-}
-
-fn xgroup_del_consumer<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
-    if args.len() != 5 {
-        return wrong_args(out, "xgroup|delconsumer");
-    }
-    match store.xgroup_del_consumer(&args[2], &args[3], &args[4]) {
-        Ok(n) => encode_integer(out, n as i64),
-        Err(e) => store_err(out, e),
-    }
-}
-
-fn parse_id_or_dollar(s: &[u8]) -> Result<GroupCreateMode, CmdError> {
-    if s == b"$" {
-        return Ok(GroupCreateMode::AtCurrent);
-    }
-    parse_explicit_id(s)
-        .map(GroupCreateMode::AtId)
-        .map_err(|_| CmdError::Wire("ERR Invalid stream ID specified as stream command argument"))
-}
 
 // ───────────── XREADGROUP ─────────────
 

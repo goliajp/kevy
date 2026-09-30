@@ -16,9 +16,11 @@ mod claim;
 mod claim_record;
 mod group;
 mod info;
+pub use info::xinfo;
 mod read;
 use read::cmd_xread;
 mod setid;
+mod xgroup;
 
 use kevy_resp::CmdError;
 use kevy_resp::{
@@ -52,13 +54,13 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
         b"XTRIM" => cmd_xtrim(store, args, out),
         b"XSETID" => setid::cmd_xsetid(store, args, out),
         b"XREAD" => cmd_xread(store, args, out),
-        b"XGROUP" => return Some(group::cmd_xgroup(store, args, out)),
+        b"XGROUP" => return Some(xgroup::cmd_xgroup(store, args, out)),
         b"XREADGROUP" => return Some(group::cmd_xreadgroup(store, args, out)),
         b"XACK" => group::cmd_xack(store, args, out),
         b"XPENDING" => group::cmd_xpending(store, args, out),
         b"XCLAIM" => return Some(claim::cmd_xclaim(store, args, out)),
         b"XAUTOCLAIM" => return Some(claim::cmd_xautoclaim(store, args, out)),
-        b"XINFO" => info::cmd_xinfo(store, args, out),
+        b"XINFO" => info::xinfo(store, args, out, kevy_resp::RespVersion::V2),
         _ => return None,
     }
     Some(effect(cmd))
@@ -347,3 +349,5 @@ pub(super) fn emit_entries(out: &mut Vec<u8>, entries: &EntryBatch) {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_info;

@@ -239,23 +239,20 @@ impl StreamData {
         removed
     }
 
-    /// XTRIM MAXLEN — keep the most recent `n` entries.
+    /// XTRIM MAXLEN — keep the most recent `n` entries. A trim takes
+    /// entries from the head, so it leaves `max_deleted_id` alone: that
+    /// marks a hole XDEL made among the entries, which a trim never does.
     pub(crate) fn trim_maxlen(&mut self, n: usize) -> usize {
         let len = self.entries.len();
         if len <= n {
             return 0;
         }
         let drop = len - n;
-        let mut removed = 0;
         let drop_ids: Vec<StreamId> = self.entries.keys().copied().take(drop).collect();
-        for id in drop_ids {
-            self.entries.remove(&id);
-            if id > self.max_deleted_id {
-                self.max_deleted_id = id;
-            }
-            removed += 1;
+        for id in &drop_ids {
+            self.entries.remove(id);
         }
-        removed
+        drop_ids.len()
     }
 
     /// Approximate heap footprint for `Value::weight`. Walks the entry
@@ -274,22 +271,20 @@ impl StreamData {
         (self.entries.len() as u64).saturating_mul(BTREE_SLOT_BYTES) + entry_sum
     }
 
-    /// XTRIM MINID — drop every entry with ID < `floor`.
+    /// XTRIM MINID — drop every entry with ID < `floor`. Like
+    /// [`Self::trim_maxlen`], it leaves `max_deleted_id` alone.
     pub(crate) fn trim_minid(&mut self, floor: StreamId) -> usize {
         let drop_ids: Vec<StreamId> = self.entries.range(..floor).map(|(id, _)| *id).collect();
-        let removed = drop_ids.len();
-        for id in drop_ids {
-            self.entries.remove(&id);
-            if id > self.max_deleted_id {
-                self.max_deleted_id = id;
-            }
+        for id in &drop_ids {
+            self.entries.remove(id);
         }
-        removed
+        drop_ids.len()
     }
 }
 
 mod claim;
 mod group;
+mod lag;
 mod load;
 mod modes;
 mod pending;

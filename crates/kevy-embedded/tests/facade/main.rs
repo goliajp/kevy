@@ -4,3 +4,4 @@ mod argv_and_typed_agree;
 mod embed_writer_e2e;
 mod expiry_on_time;
 mod streams_in_memory;
+mod xinfo;

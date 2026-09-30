@@ -322,6 +322,14 @@ impl StreamData {
             }
             claimed.push(*id);
         }
+        // a claim is the consumer's contact whatever it takes, and makes it
+        // active when it takes something
+        if let Some(cs) = g.consumers.get_mut(new_owner) {
+            cs.last_seen_ms = now_ms;
+            if !claimed.is_empty() {
+                cs.last_active_ms = Some(now_ms);
+            }
+        }
         Ok(claimed)
     }
 
