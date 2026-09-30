@@ -365,3 +365,16 @@ fn a_read_record_of_an_argv_without_streams_is_empty() {
         assert!(crate::aof::deferred_frames(&s, &argv(cmd), &effect).is_empty(), "{cmd}");
     }
 }
+
+#[test]
+fn xpending_names_a_missing_group_and_a_key_that_is_not_a_stream_in_both_forms() {
+    let mut s = Store::new();
+    run(&mut s, "XADD s 1-1 f v");
+    run(&mut s, "SET str v");
+    for cmd in ["XPENDING s nog", "XPENDING s nog - + 10"] {
+        assert_eq!(run(&mut s, cmd).1, "-NOGROUP No such consumer group\r\n", "{cmd}");
+    }
+    for cmd in ["XPENDING str g", "XPENDING str g - + 10"] {
+        assert!(run(&mut s, cmd).1.starts_with("-WRONGTYPE"), "{cmd}");
+    }
+}
