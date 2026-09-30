@@ -238,19 +238,11 @@ PROBES = {
     "web-deps": lambda: _have_web_deps(),
     "pgcmp-infra": lambda: _have_pgcmp_infra(),
     "wasm-artifact": lambda: _have_wasm_artifact(),
-    "device": lambda: _have_device(),
     "nightly rustdoc": lambda: _have_nightly_rustdoc(),
     "rustdoc coverage tables from rustdoc-coverage": lambda: _fresh_doc_coverage(),
     "cargo-semver-checks": lambda: _have_semver_checks(),
     "bench/STONE-REPORT.json from stone-report": lambda: _fresh_stone_report(),
-    "ci": lambda: (False, "runs in CI, not locally"),
 }
-
-
-def _have_device():
-    if os.environ.get("KEVY_DEVICE") == "1":
-        return True, ""
-    return False, "no device session (set KEVY_DEVICE=1 on the machine that has one)"
 
 
 def children_cpu():
