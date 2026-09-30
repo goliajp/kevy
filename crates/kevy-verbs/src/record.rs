@@ -18,6 +18,9 @@
 //!     again, `FORCE` recreates a row the command itself forced.
 //!   - each pending entry dropped because the stream no longer holds it:
 //!     `XCLAIM key group consumer 0 id… JUSTID`, which drops it again.
+//!   - first, when the claim made its consumer: `XGROUP CREATECONSUMER
+//!     key group consumer`, which a reader that skips the internal frame
+//!     below still takes.
 //!   - last, the consumer's times as the claim left them (see
 //!     [`Effect::RecordSeen`]): replayed, the frames before it stamp the
 //!     consumer with the replay's clock, and this sets them back.
@@ -39,6 +42,7 @@ use kevy_resp::{Argv, ArgvView};
 use kevy_store::{Store, StreamId};
 
 use crate::Effect;
+use crate::record_group::{create_consumer_frame, group_frames, push_setid_frames};
 
 /// Whether a group read or claim found its consumer or created it. A
 /// created consumer is recorded with the time it was made, so a replay
@@ -225,7 +229,13 @@ pub fn deferred_frames<A: ArgvView + ?Sized>(
         }
         Effect::RecordAdd(at, id, kept) => vec![add_frame(args, *at, *id, *kept)],
         Effect::RecordClaim(c) => claim_frames(store, args, c),
-        Effect::RecordSeen => seen_frame(store, &args[2], &args[3], &args[4]).into_iter().collect(),
+        Effect::RecordSeen => {
+            let (key, group, consumer) = (&args[2], &args[3], &args[4]);
+            let mut frames = vec![create_consumer_frame(key, group, consumer)];
+            frames.extend(seen_frame(store, key, group, consumer));
+            frames
+        }
+        Effect::RecordGroup => group_frames(store, args),
         Effect::RecordRead(prev, consumer) => {
             crate::record_read::read_frames(store, args, &[(*prev, *consumer)], &[])
         }
@@ -262,8 +272,13 @@ fn add_frame<A: ArgvView + ?Sized>(args: &A, at: usize, id: StreamId, kept: u64)
 
 fn claim_frames<A: ArgvView + ?Sized>(store: &Store, args: &A, c: &Claim) -> Vec<Argv> {
     let (key, group, consumer) = (&args[1], &args[2], &args[3]);
-    let mut frames: Vec<Argv> =
-        c.moved.then(|| setid_frame(store, key, group)).flatten().into_iter().collect();
+    let mut frames = Vec::new();
+    if c.moved {
+        push_setid_frames(&mut frames, store, key, group);
+    }
+    if c.consumer == Consumer::Created {
+        frames.push(create_consumer_frame(key, group, consumer));
+    }
     frames.extend(taken_frames(store, key, group, consumer, &c.taken));
     if !c.dropped.is_empty() {
         let mut f = claim_head(key, group, consumer, &c.dropped, 1);
@@ -290,21 +305,6 @@ pub(crate) fn claim_head(
         f.push(&id.encode());
     }
     f
-}
-
-/// `XGROUP SETID key group <last-delivered> ENTRIESREAD <n|-1>`: where the
-/// group stands now. `None` when the group is gone.
-pub(crate) fn setid_frame(store: &Store, key: &[u8], group: &[u8]) -> Option<Argv> {
-    let g = store.stream_group_peek(key, group)?;
-    let read = g.entries_read().map_or_else(|| "-1".to_owned(), |n| n.to_string());
-    let mut f = Argv::with_capacity(7, 0);
-    for part in
-        [&b"XGROUP"[..], b"SETID", key, group, &g.last_delivered_id().encode(), b"ENTRIESREAD"]
-    {
-        f.push(part);
-    }
-    f.push(read.as_bytes());
-    Some(f)
 }
 
 /// `XINTERNAL.CONSUMERSEEN key group consumer t [a]`, `t` the consumer's

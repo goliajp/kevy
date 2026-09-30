@@ -169,13 +169,12 @@ jobs:
       # it waits out a measurement in progress and a measurement waits for it.
       - name: Hold the machine's bench lock (shared) for this job
         run: |
-          lock="${KEVY_BENCH_LOCK:-/Users/Shared/bench.lock}"
           flag="$RUNNER_TEMP/bench-lock.held"
           rm -f "$flag"
-          echo "taking $lock shared (waiting up to 30 minutes for a benchmark to finish)"
-          # -o: only flock holds the lock, so ending flock releases it
+          echo "taking the bench lock as a heavy job (waiting up to 30 minutes for a benchmark to finish)"
+          # the lock is held while the inner sh runs; the release step ends it
           # shellcheck disable=SC2016 # $1 belongs to the inner sh
-          nohup /opt/homebrew/bin/flock -o -s -w 1800 "$lock" \
+          nohup /usr/local/bin/bench-lock heavy \
             sh -c 'touch "$1"; exec sleep 14400' sh "$flag" > /dev/null 2>&1 &
           echo "$!" > "$RUNNER_TEMP/bench-lock.pid"
           for _ in $(seq 1810); do
@@ -183,7 +182,8 @@ jobs:
             kill -0 "$(cat "$RUNNER_TEMP/bench-lock.pid")" 2>/dev/null || break
             sleep 1
           done
-          echo "::error::$lock was not free within 30 minutes — a benchmark is running on mini"
+          /usr/local/bin/bench-lock status || true
+          echo "::error::the bench lock was not free within 30 minutes — a benchmark is running on mini"
           exit 1
       - uses: actions/checkout@v7
         with:

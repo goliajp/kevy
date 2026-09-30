@@ -267,8 +267,13 @@ fn embed_writer_sends_stream_writes_as_what_they_did() {
         || std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis();
     let (from, read, to) = (now(), call("XREADGROUP GROUP g c STREAMS s >"), now());
     assert!(read.starts_with("*1\r\n"), "{read}");
+    // the move in the form a 6.4 reader takes, then the read counter
+    let setid = words(&next_frame(&mut client, Duration::from_secs(2)));
+    assert_eq!(setid, ["XGROUP", "SETID", "s", "g", &id]);
     let setid = words(&next_frame(&mut client, Duration::from_secs(2)));
     assert_eq!(setid, ["XGROUP", "SETID", "s", "g", &id, "ENTRIESREAD", "1"]);
+    let made = words(&next_frame(&mut client, Duration::from_secs(2)));
+    assert_eq!(made, ["XGROUP", "CREATECONSUMER", "s", "g", "c"]);
     let claim = words(&next_frame(&mut client, Duration::from_secs(2)));
     assert_eq!(claim[..6], ["XCLAIM", "s", "g", "c", "0", &id]);
     assert_eq!(claim[8..], ["RETRYCOUNT", "1", "FORCE", "JUSTID"]);

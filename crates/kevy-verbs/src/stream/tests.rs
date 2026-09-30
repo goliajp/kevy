@@ -42,7 +42,8 @@ fn records(store: &mut Store, cmd: &str, e: Option<Effect>) -> Vec<String> {
             | Effect::RecordRead(..)
             | Effect::RecordReads(_)
             | Effect::RecordHistory(_)
-            | Effect::RecordSeen),
+            | Effect::RecordSeen
+            | Effect::RecordGroup),
         ) => {
             let frames = crate::aof::deferred_frames(&*store, &argv(cmd), &e);
             frames
@@ -97,7 +98,9 @@ fn claim_records_replay_to_the_same_pending_list() {
         let (e, _) = run(&mut live, c);
         let rec = records(&mut live, c, e);
         let ours = |f: &String| {
-            f.starts_with("XCLAIM s g ") || f.starts_with("XINTERNAL.CONSUMERSEEN s g ")
+            f.starts_with("XCLAIM s g ")
+                || f.starts_with("XGROUP CREATECONSUMER s g ")
+                || f.starts_with("XINTERNAL.CONSUMERSEEN s g ")
         };
         assert!(!rec.is_empty() && rec.iter().all(ours), "{rec:?}");
         log.extend(rec);
@@ -277,7 +280,7 @@ fn read_records_replay_to_the_same_group() {
 /// A read that delivers nothing and makes no consumer is not recorded,
 /// its contact with the group included: a consumer that only polls comes
 /// back from a restart with the contact of its last recorded read. A read
-/// that makes its consumer is recorded as that consumer's contact alone.
+/// that makes its consumer is recorded as that consumer made, and its contact.
 #[test]
 fn an_empty_read_records_nothing() {
     let mut s = Store::new();
@@ -291,8 +294,9 @@ fn an_empty_read_records_nothing() {
     let history = "XREADGROUP GROUP g newbie STREAMS s 0";
     let (e, _) = run(&mut s, history);
     let rec = records(&mut s, history, e);
-    assert_eq!(rec.len(), 1, "{rec:?}");
-    assert!(rec[0].starts_with("XINTERNAL.CONSUMERSEEN s g newbie "), "{rec:?}");
+    assert_eq!(rec.len(), 2, "{rec:?}");
+    assert_eq!(rec[0], "XGROUP CREATECONSUMER s g newbie", "{rec:?}");
+    assert!(rec[1].starts_with("XINTERNAL.CONSUMERSEEN s g newbie "), "{rec:?}");
 }
 
 /// A client cannot send the internal record verb through `exec`: it is
@@ -318,8 +322,9 @@ fn a_claim_that_changes_nothing_records_nothing() {
     // the consumer is new: that much changed
     let (e, _) = run(&mut s, "XAUTOCLAIM s g idle 999999 0");
     let rec = records(&mut s, "XAUTOCLAIM s g idle 999999 0", e);
-    assert_eq!(rec.len(), 1, "{rec:?}");
-    assert!(rec[0].starts_with("XINTERNAL.CONSUMERSEEN s g idle "), "{rec:?}");
+    assert_eq!(rec.len(), 2, "{rec:?}");
+    assert_eq!(rec[0], "XGROUP CREATECONSUMER s g idle", "{rec:?}");
+    assert!(rec[1].starts_with("XINTERNAL.CONSUMERSEEN s g idle "), "{rec:?}");
     let (e, _) = run(&mut s, "XAUTOCLAIM s g idle 999999 0");
     assert_eq!(e, Some(Effect::Skip));
     let (e, _) = run(&mut s, "XCLAIM s g a 999999 1-1");
