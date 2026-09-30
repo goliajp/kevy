@@ -26,8 +26,8 @@ kevy 以三种形态交付，全部构建自同一个引擎：
 - **嵌入式库**——`kevy-embedded` 是去掉网络层的同一个引擎。把它放进
   Rust 二进制里，直接调用 `Store`。纯 Rust、零依赖，feature 分档从
   裸 `core` KV 一路到完整的索引/复制面——并且两个极端都够得着：
-  浏览器（npm 上的 [`@goliapkg/kevy`](docs/zh/wasm.md)）和 655 KB
-  的 IoT 构建（[docs/iot.md](docs/iot.md)）。
+  浏览器（npm 上的 [`@goliapkg/kevy`](docs/zh/wasm.md)）和
+  655 KB 的 IoT 构建（[docs/iot.md](docs/iot.md)）。
 - **客户端**——`kevy-client`（阻塞式）与 `kevy-client-async`（每种
   运行时一个 feature flag：tokio / smol / async-std）。两者都接受
   一个 URL，所以同一段代码既能对接 TCP 服务器（`kevy://host:port`），
@@ -210,8 +210,8 @@ let v = conn.get(b"k").await?;
 kevy 在浏览器里是一个真正的存储：npm 包
 [`@goliapkg/kevy`](https://www.npmjs.com/package/@goliapkg/kevy) 把
 编译到 `wasm32-unknown-unknown` 的引擎装进一个手写的 ES module
-loader——没有 wasm-bindgen，边界两侧都是零依赖；六个文件，打包约
-231 KB（过网络时 gzip 后 218 KB）。
+loader——没有 wasm-bindgen，边界两侧都是零依赖；七个文件，打包约
+617 KB（过网络时 gzip 后 602 KB）。
 
 ```sh
 npm install @goliapkg/kevy

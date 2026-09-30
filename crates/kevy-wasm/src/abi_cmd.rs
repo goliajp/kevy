@@ -7,27 +7,32 @@
 //! # Feature reach
 //!
 //! The wasm module is built with every feature a browser can host —
-//! `core`, `persist`, `index`, `text`, `vector` — so `cmd` reaches the
-//! string/hash/list/set/zset, bitmap, keyspace and misc surfaces *and*
-//! `IDX.*` / `VIEW.*` / `TABLE.*`. What is left out needs something the
-//! browser cannot provide: `replicate` a network peer, `listener` a TCP
-//! socket, `tier` a disk directory.
+//! `core`, `persist`, `index`, `text`, `vector`, `streams-geo` — so `cmd`
+//! reaches the string/hash/list/set/zset, bitmap, keyspace and misc
+//! surfaces, `IDX.*` / `VIEW.*` / `TABLE.*`, and the stream (`X*`) and
+//! geo (`GEO*`) commands. What is left out needs something the browser
+//! cannot provide: `replicate` a network peer, `listener` a TCP socket,
+//! `tier` a disk directory. Verbs outside the embedded surface
+//! (transactions, scripting) answer `unknown command`, and for those it
+//! is the correct answer rather than a build mistake.
 //!
-//! It was built `["core", "persist"]` until 2026-08, which meant the
-//! project's own landing page demonstrated secondary indexes against an
-//! engine compiled without them, and answered its own example with
-//! `unknown command`. Verbs outside the embedded surface (streams,
-//! transactions, geo, scripting — the ESTORE_OPS manifest is the
-//! boundary) still answer that way, and for those it is the correct
-//! answer rather than a build mistake.
+//! # Blocking
 //!
-//! # Persistence note
+//! Nothing here waits. The module runs on the page's (or a worker's) one
+//! thread, and a call that parked it would freeze the tab without ever
+//! seeing the write that could wake it. `XREAD … BLOCK` and
+//! `XREADGROUP … BLOCK` answer an error that says so; the blocking pops
+//! (`BLPOP`, `BRPOP`, …) are not in the embedded surface and answer
+//! `unknown command`. Poll without `BLOCK` from a timer, or publish on a
+//! channel next to the write and read when the message arrives.
 //!
-//! `cmd` runs through [`kevy_embedded::Store::dispatch_argv`] directly, so
-//! writes issued this way are **not** mirrored into the host-mediated AOF
-//! pump (the typed ops' `log_frame` path). A store that mixes `cmd` writes
-//! with the durability pump will not see those writes in its replay log.
-//! The typed KV surface remains the durable write path.
+//! # Persistence
+//!
+//! With frame capture on ([`crate::abi_core::OPEN_CAPTURE_AOF`]), a write
+//! through `cmd` queues the frames a native AOF would hold for it, the
+//! same pump the typed ops feed: an `XADD *` as the id it chose, a group
+//! read as the deliveries it made, a relative expiry as its deadline. A
+//! stream and its consumer groups survive a reload like any other key.
 //!
 //! ```
 //! use kevy_wasm::abi_core::*;
@@ -100,13 +105,24 @@ pub unsafe extern "C" fn kevy_cmd(h: u32, p: *const u8, l: u32) -> i32 {
             return inst.fail("cmd: malformed or empty packed argv");
         };
         inst.out.clear();
-        // Disjoint field borrows: `store` reads, `out` is written.
-        let Instance { store, out, .. } = inst;
-        store.dispatch_argv(&argv, out);
-        if out.len() > i32::MAX as usize {
+        if inst.capture_aof {
+            let mut frames: Vec<Vec<Vec<u8>>> = Vec::new();
+            inst.store.dispatch_argv_recorded(&argv, &mut inst.out, |f| {
+                frames.push(f.iter().map(|p| p.to_vec()).collect());
+            });
+            for f in &frames {
+                let parts: Vec<&[u8]> = f.iter().map(Vec::as_slice).collect();
+                inst.log_frame(&parts);
+            }
+        } else {
+            // Disjoint field borrows: `store` reads, `out` is written.
+            let Instance { store, out, .. } = inst;
+            store.dispatch_argv(&argv, out);
+        }
+        if inst.out.len() > i32::MAX as usize {
             return ERR;
         }
-        out.len() as i32
+        inst.out.len() as i32
     })
 }
 

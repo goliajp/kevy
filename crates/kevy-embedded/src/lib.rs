@@ -98,6 +98,7 @@
 //! | `vector` | HNSW vector index segments (implies `index`) |
 //! | `replicate` | embed-as-replica / embed-as-writer + CDC feed (implies `persist`) |
 //! | `listener` | the read-only RESP listener |
+//! | `host-log` | `Store::dispatch_argv_recorded`: the frames a command's write records, for a host that keeps the log itself |
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
@@ -106,6 +107,8 @@ mod config;
 mod config_secure;
 mod config_stage;
 mod dispatch;
+#[cfg(feature = "host-log")]
+mod host_log;
 mod info;
 // Unconditional: `OpenReport` rides the DropGuard and the Store
 // handle in every archetype (a no-persist open reports zeros); only

@@ -78,7 +78,7 @@ export function renderCommandIndex(
   const t = L[lang]
   const root = up(depth)
   const langRoot = (l: Lang) => (l === 'en' ? root : `${root}${l}/`)
-  // Grouped: 191 verbs in one alphabetical run is a list nobody reads. The
+  // Grouped: every verb in one alphabetical run is a list nobody reads. The
   // groups come from the engine's own table.
   const groups = new Map<string, Command[]>()
   for (const c of cmds) {

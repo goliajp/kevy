@@ -1,6 +1,9 @@
 import { ArrowDown, ArrowUpRight } from 'lucide-react'
 import { useEffect, useState } from 'react'
 
+// The command count is the reference's, which is generated from the
+// engine's verb table; a literal here said 191 while the server answered 209.
+import commandTable from './commands.json'
 import { CodeBlock } from './components/CodeBlock'
 import { LINKS as FOOTER_LINKS } from './components/Footer'
 import { Layout } from './components/Layout'
@@ -127,7 +130,7 @@ export function App() {
               </div>
             </div>
             <div className="figure">
-              <div className="v">191</div>
+              <div className="v">{commandTable.commands.length}</div>
               <div className="k">
                 <T k="front.fig.commands" />
               </div>

@@ -92,9 +92,9 @@ const dict: Dict = {
   'term.prompt': { en: 'type a command', zh: '输入命令', ja: 'コマンドを入力' },
   'term.reset': { en: 'clear', zh: '清空', ja: 'クリア' },
   'term.reach': {
-    en: '112 of the 191 server verbs — the embedded surface. Arrow keys walk history; a pasted block runs line by line.',
-    zh: '服务端 191 条动词中的 112 条 —— 嵌入式面。方向键翻历史，整段粘贴逐行执行。',
-    ja: 'サーバーの 191 動詞のうち 112——組み込み面。矢印キーで履歴、貼り付けたブロックは一行ずつ実行。',
+    en: 'The embedded engine, streams and geo included, running in this tab. Arrow keys walk history; a pasted block runs line by line.',
+    zh: '嵌入式引擎在这个标签页里运行，stream 和 geo 都在。方向键翻历史，整段粘贴逐行执行。',
+    ja: '組み込みエンジンがこのタブで動いています。ストリームと geo も含みます。矢印キーで履歴、貼り付けたブロックは一行ずつ実行。',
   },
   'term.booting': { en: 'starting engine…', zh: '正在启动引擎…', ja: 'エンジン起動中…' },
   'term.live': { en: 'live', zh: '运行中', ja: '実行中' },
