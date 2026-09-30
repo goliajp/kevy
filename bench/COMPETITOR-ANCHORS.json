@@ -26,14 +26,6 @@
           "pattern": "image: redis:([0-9][0-9.]*)"
         },
         {
-          "file": "bench/loopback_c1.sh",
-          "pattern": "redis:([0-9][0-9.]*)"
-        },
-        {
-          "file": "bench/loopback_c50.sh",
-          "pattern": "redis:([0-9][0-9.]*)"
-        },
-        {
           "file": "bench/pubsub_loopback.sh",
           "pattern": "redis:([0-9][0-9.]*)"
         },
@@ -47,25 +39,9 @@
           "what": "prose: printed into reports"
         },
         {
-          "file": "bench/loopback_c1.sh",
-          "pattern": "redis ([0-9]+\\.[0-9][0-9.]*)",
-          "what": "prose: printed into reports"
-        },
-        {
-          "file": "bench/loopback_c50.sh",
-          "pattern": "redis ([0-9]+\\.[0-9][0-9.]*)",
-          "what": "prose: printed into reports"
-        },
-        {
           "file": "bench/pubsub_loopback.sh",
           "pattern": "redis ([0-9]+\\.[0-9][0-9.]*)",
           "what": "prose: printed into reports"
-        },
-        {
-          "file": "bench/arena-median.sh",
-          "pattern": "Redis ([0-9]+\\.[0-9][0-9.]*)",
-          "mode": "derive",
-          "what": "table heading for the multi-run ledger table"
         },
         {
           "file": "bench/arena_serving.py",
@@ -108,14 +84,6 @@
           "pattern": "image: valkey/valkey:([0-9][0-9.]*)"
         },
         {
-          "file": "bench/loopback_c1.sh",
-          "pattern": "valkey/valkey:([0-9][0-9.]*)"
-        },
-        {
-          "file": "bench/loopback_c50.sh",
-          "pattern": "valkey/valkey:([0-9][0-9.]*)"
-        },
-        {
           "file": "bench/pubsub_loopback.sh",
           "pattern": "valkey/valkey:([0-9][0-9.]*)"
         },
@@ -130,25 +98,9 @@
           "what": "prose: printed into reports"
         },
         {
-          "file": "bench/loopback_c1.sh",
-          "pattern": "valkey ([0-9]+\\.[0-9][0-9.]*)",
-          "what": "prose: printed into reports"
-        },
-        {
-          "file": "bench/loopback_c50.sh",
-          "pattern": "valkey ([0-9]+\\.[0-9][0-9.]*)",
-          "what": "prose: printed into reports"
-        },
-        {
           "file": "bench/pubsub_loopback.sh",
           "pattern": "valkey ([0-9]+\\.[0-9][0-9.]*)",
           "what": "prose: printed into reports"
-        },
-        {
-          "file": "bench/arena-median.sh",
-          "pattern": "valkey ([0-9]+\\.[0-9][0-9.]*)",
-          "mode": "derive",
-          "what": "table heading for the multi-run ledger table"
         }
       ]
     },
@@ -166,12 +118,6 @@
           "file": "bench/arena.sh",
           "pattern": "dragonflydb/dragonfly:v([0-9][0-9.]*)",
           "mode": "derive"
-        },
-        {
-          "file": "bench/arena-median.sh",
-          "pattern": "Dragonfly ([0-9]+\\.[0-9][0-9.]*)",
-          "mode": "derive",
-          "what": "table heading for the multi-run ledger table"
         }
       ]
     },

@@ -49,7 +49,7 @@ kevy 是一台**服务引擎**（serving engine）：给那些原本会把业务
 
 数字是棘轮，只升不降。现行的线（实测值在 [PERFORMANCE.md](https://github.com/goliajp/kevy/blob/develop/PERFORMANCE.md)）：
 
-- Redis 对等吞吐：12 角 perfgate，下限 = 基线 × 0.92。
+- 吞吐：perfgate 在同一次运行里与上一个构建并排测量——吞吐 ≥ 0.92 倍，每条命令的指令数 ≤ 1.03 倍，每条命令的周期数 ≤ 1.05 倍。
 - 补水后的行列表分页 p99 < 1ms；视图分页 < 1ms；穿过 index + view 钩子的写扇出 p99 < 200µs——全部是在一台扛着完整栈的服务器上。
 - IDX.QUERY p99 < 2ms @ 100 万行；MATCH p95 < 20ms @ 100 万文档；KNN p95 < 30ms 且 recall@10 ≥ 0.90 @ 100 万 × 128 维。
 - 崩溃诚实：写到一半 kill -9 → 重放 → 派生状态与一次全新重建完全一致。恢复点 = 快照 + `(gen, offset)`。

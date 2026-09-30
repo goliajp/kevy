@@ -1,0 +1,53 @@
+{
+  "_doc": "Settings of bench/perfgate.sh. There are no recorded numbers here: every run measures its reference build beside the candidate, on the same box, in the same run. limits and noise apply to the per-round ratio B / A; a metric whose rounds disagree across its limit by more than its noise bound is NOISY, and the answer is to run it again.",
+  "reference": "merge-base",
+  "rounds": 5,
+  "windows": 2,
+  "window_secs": 3,
+  "ramp_secs": 1,
+  "idle_min": 0.95,
+  "limits": {
+    "ops": 0.92,
+    "instr": 1.03,
+    "cycles": 1.05,
+    "p95_us": 1.20
+  },
+  "noise": {
+    "ops": 0.04,
+    "instr": 0.01,
+    "cycles": 0.025,
+    "p95_us": 0.10
+  },
+  "angles": [
+    "pinned_get",
+    "pinned_set",
+    "pinned_incr",
+    "pinned_sadd",
+    "pinned_hset",
+    "pinned_lpush",
+    "pinned_zadd",
+    "compat_get",
+    "compat_set",
+    "xshard_set",
+    "onekey_get",
+    "onekey_set",
+    "zinterstore",
+    "hybrid_p95"
+  ],
+  "boxes": {
+    "lx64": {
+      "_note": "cpu n and n+8 share a physical core: the server gets 0-3, their siblings 8-11 stay empty, the load gets both threads of 4-7",
+      "srv_cpus": "0-3",
+      "srv_threads": 4,
+      "cli_cpus": "4-7,12-15",
+      "cli_threads": 8
+    },
+    "firefly": {
+      "_note": "RK3588: 0-3 are Cortex-A55, 4-7 Cortex-A76; the server gets the two fastest A76 cores, the load the rest",
+      "srv_cpus": "6-7",
+      "srv_threads": 2,
+      "cli_cpus": "0-5",
+      "cli_threads": 6
+    }
+  }
+}

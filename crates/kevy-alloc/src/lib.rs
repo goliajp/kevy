@@ -28,7 +28,8 @@
 //! Part of an experiment, not a settled design. Every claim here is
 //! under test, and a premise that measurement kills gets changed rather
 //! than worked around — see the allocator RFC
-//! and ROADMAP rule ⑤. The gate is `bench/allocgate.sh`.
+//! and ROADMAP rule ⑤. Its cost is measured as two server builds side
+//! by side, `bash bench/perfgate.sh compare HEAD HEAD+kevy-alloc`.
 //!
 //! # Standing on shoulders, and where we step off
 //!

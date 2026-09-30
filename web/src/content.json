@@ -317,7 +317,7 @@
           "caption": "Two scripts. Everything on this page comes out of them.",
           "h2": "Reproduce it",
           "t": "code",
-          "text": "git clone https://github.com/goliajp/kevy && cd kevy\n\n# four-way: kevy, Redis 8, valkey, Dragonfly\nbash bench/arena.sh\n\n# the regression gate CI runs on every push\nbash bench/perfgate.sh"
+          "text": "git clone https://github.com/goliajp/kevy && cd kevy\ncargo build --release -p kevy\n\n# four-way: kevy, Redis 8, valkey, Dragonfly\nbash bench/arena.sh target/release/kevy\n\n# two kevy builds side by side: the last release against this tree\nbash bench/perfgate.sh compare last-release HEAD"
         }
       ],
       "desc": "kevy 6.2.2 against Redis 8.10.1, valkey 9.1.2 and Dragonfly 1.40.2 on one machine — including the commands where kevy is barely ahead.",
@@ -1622,7 +1622,7 @@
           "caption": "スクリプトは 2 つ。このページの内容は、すべてそこから出てきます。",
           "h2": "再現する",
           "t": "code",
-          "text": "git clone https://github.com/goliajp/kevy && cd kevy\n\n# four-way: kevy, Redis 8, valkey, Dragonfly\nbash bench/arena.sh\n\n# the regression gate CI runs on every push\nbash bench/perfgate.sh"
+          "text": "git clone https://github.com/goliajp/kevy && cd kevy\ncargo build --release -p kevy\n\n# four-way: kevy, Redis 8, valkey, Dragonfly\nbash bench/arena.sh target/release/kevy\n\n# two kevy builds side by side: the last release against this tree\nbash bench/perfgate.sh compare last-release HEAD"
         }
       ],
       "desc": "1 台のマシンでの kevy 6.2.2 と Redis 8.10.1、valkey 9.1.2、Dragonfly 1.40.2 の比較——kevy がかろうじて上回っているだけのコマンドも含めて。",
@@ -2927,7 +2927,7 @@
           "caption": "两个脚本。这一页上的所有东西都是它们跑出来的。",
           "h2": "自己复现",
           "t": "code",
-          "text": "git clone https://github.com/goliajp/kevy && cd kevy\n\n# four-way: kevy, Redis 8, valkey, Dragonfly\nbash bench/arena.sh\n\n# the regression gate CI runs on every push\nbash bench/perfgate.sh"
+          "text": "git clone https://github.com/goliajp/kevy && cd kevy\ncargo build --release -p kevy\n\n# four-way: kevy, Redis 8, valkey, Dragonfly\nbash bench/arena.sh target/release/kevy\n\n# two kevy builds side by side: the last release against this tree\nbash bench/perfgate.sh compare last-release HEAD"
         }
       ],
       "desc": "kevy 6.2.2 在一台机器上对打 Redis 8.10.1、valkey 9.1.2 和 Dragonfly 1.40.2——也包括 kevy 只是勉强领先的那几条命令。",

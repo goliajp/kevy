@@ -1,8 +1,0 @@
-{
-  "M1": {"red": ["C.instr_u"]},
-  "M1b": {"not_red": ["C.instr_u"]},
-  "M2": {"red": ["S.util", "T.ops"], "green": ["C.instr_u", "C.sys"]},
-  "M3": {"red": ["S.cyc"], "green": ["C.instr_u"]},
-  "M4": {"red_any": ["T.ops", "S.util", "C.instr_u", "S.cyc"]},
-  "M5": {"red": ["C.sys"]}
-}
