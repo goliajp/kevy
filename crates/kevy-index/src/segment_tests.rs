@@ -317,3 +317,25 @@ fn a_walker_decodes_its_value_once_and_has_no_column_past_the_declared() {
     let mut buf = Vec::new();
     assert_eq!(w.column(0, &mut buf), None, "a segment without VALUES stores no column");
 }
+
+#[test]
+fn tidy_packs_a_shuffled_segment_in_steps_then_rests_with_every_row() {
+    let n = 5_000i64;
+    let mut s = Segment::new();
+    for k in 0..n {
+        s.apply(format!("k{k}").as_bytes(), None, Some(i(k * 7919 % n)));
+    }
+    let before = s.stats().approx_bytes;
+    let mut calls = 0;
+    while s.tidy(4) {
+        calls += 1;
+    }
+    assert!(calls > 1, "four leaves a call take more than one call");
+    assert!(s.stats().approx_bytes < before);
+    assert!(!s.tidy(4), "a packed segment rests");
+    assert_eq!(s.stats().entries, n as u64);
+    assert_eq!(s.count(&i(0), &i(n - 1)), n as u64);
+    let (page, _) = s.range(&i(100), &i(102), None, 10);
+    let values: Vec<&IndexValue> = page.iter().map(|(_, v)| v).collect();
+    assert_eq!(values, [&i(100), &i(101), &i(102)]);
+}
