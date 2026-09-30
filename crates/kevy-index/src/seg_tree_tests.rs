@@ -160,7 +160,7 @@ fn run_model(seed: u64, payloads: bool, ops: usize) {
             let want: Vec<(Vec<u8>, Vec<u8>)> =
                 m.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
             assert_eq!(got, want, "step {step}");
-            super::fill_tests::check_fill(&t, widest);
+            super::fill_tests::check_fill(&t, widest, super::balance::HALF);
             ranks_agree(&t, &m, &mut r);
         }
     }

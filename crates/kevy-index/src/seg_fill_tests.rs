@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use super::balance::FILL;
+use super::balance::{FILL, HALF};
 use super::tests::check;
 use super::*;
 use crate::seg_codec::{Codec, Form};
@@ -31,16 +31,16 @@ pub(crate) fn span(shape: Shape, key: &[u8], payload: &[u8]) -> usize {
     Leaf::new(shape).span_of(&Ent { key, vlen: 0, payload })
 }
 
-/// Every leaf but the tree's first and last holds at least [`FILL`]
-/// bytes less two of the widest entry the tree has held; returns the
-/// least and mean fill of those leaves.
-pub(crate) fn check_fill(t: &Tree, widest: usize) -> (f64, f64) {
+/// Every leaf but the tree's first and last holds at least `floor` bytes
+/// less two of the widest entry the tree has held; returns the least and
+/// mean fill of those leaves.
+pub(crate) fn check_fill(t: &Tree, widest: usize, floor: usize) -> (f64, f64) {
     let (mut least, mut sum, mut n) = (usize::MAX, 0, 0);
     let mut id = t.first;
     while id != NIL {
         let l = t.leaf(id);
         if l.prev != NIL && l.next != NIL {
-            assert!(l.used() + 2 * widest >= FILL, "leaf {id} holds {} bytes", l.used());
+            assert!(l.used() + 2 * widest >= floor, "leaf {id} holds {} bytes", l.used());
             (least, sum, n) = (least.min(l.used()), sum + l.used(), n + 1);
         }
         id = l.next;
@@ -50,9 +50,9 @@ pub(crate) fn check_fill(t: &Tree, widest: usize) -> (f64, f64) {
 }
 
 /// Leaves the invariant allows for `bytes` of entries no wider than
-/// `widest`: two ends plus the rest at the least fill.
-fn most_leaves(bytes: usize, widest: usize) -> usize {
-    2 + bytes / (FILL - 2 * widest)
+/// `widest`: two ends plus the rest at `floor` less two entries.
+fn most_leaves(bytes: usize, widest: usize, floor: usize) -> usize {
+    2 + bytes / (floor - 2 * widest)
 }
 
 /// Order keys shaped like an i64 index over `user:<id>` rows with
@@ -108,9 +108,9 @@ fn every_leaf_but_the_ends_stays_two_thirds_full_whatever_the_order() {
         }
         assert!(t.height >= 2, "{name}: leaves under several parents");
         check(&t);
-        check_fill(&t, widest);
+        check_fill(&t, widest, FILL);
         assert!(
-            t.live_leaves() <= most_leaves(bytes, widest),
+            t.live_leaves() <= most_leaves(bytes, widest, FILL),
             "{name}: {} leaves",
             t.live_leaves()
         );
@@ -127,8 +127,8 @@ fn every_leaf_but_the_ends_stays_two_thirds_full_whatever_the_order() {
             }
             let got: Vec<Vec<u8>> = check(&t).into_iter().map(|(k, _)| k).collect();
             assert!(got.iter().eq(want.iter()), "{name}: entries after a delete batch");
-            check_fill(&t, widest);
-            assert!(t.live_leaves() <= most_leaves(bytes, widest), "{name}: after deletes");
+            check_fill(&t, widest, HALF);
+            assert!(t.live_leaves() <= most_leaves(bytes, widest, HALF), "{name}: after deletes");
         }
         assert_eq!(t.live_leaves(), 0);
     }
@@ -143,16 +143,16 @@ fn payloads_rewritten_shorter_refill_their_leaves() {
         t.insert(&entry(i), &[7; 40]);
     }
     let widest = span(shape, &entry(19_999), &[7; 40]);
-    check_fill(&t, widest);
+    check_fill(&t, widest, FILL);
     Rng(3).shuffle(&mut ids);
     for (n, &i) in ids.iter().enumerate() {
         assert!(!t.insert(&entry(i), &[1]), "a rewrite, not a new key");
         if n % 997 == 0 {
-            check_fill(&t, widest);
+            check_fill(&t, widest, HALF);
         }
     }
     assert_eq!(check(&t).len(), ids.len());
-    check_fill(&t, widest);
+    check_fill(&t, widest, HALF);
 }
 
 #[test]
@@ -168,9 +168,10 @@ fn an_index_segment_keeps_the_bound_in_every_order() {
         }
         // a 10-byte slot, the tag, and at most 3 packed digits past the value
         let widest = 10 + 1 + 3;
-        let (least, mean) = check_fill(&s.tree, widest);
+        let (least, mean) = check_fill(&s.tree, widest, FILL);
         let leaves = s.tree.live_leaves();
-        assert!(leaves <= most_leaves(ids.len() * widest, widest), "{name}: {leaves} leaves");
+        let most = most_leaves(ids.len() * widest, widest, FILL);
+        assert!(leaves <= most, "{name}: {leaves} leaves");
         let per_row = s.stats().approx_bytes as f64 / ids.len() as f64;
         eprintln!(
             "{name:>8}: {leaves} leaves, fill least {least:.3} mean {mean:.3}, {per_row:.1} B/row"

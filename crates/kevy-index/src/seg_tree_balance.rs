@@ -1,11 +1,13 @@
 //! Keeping every leaf but the tree's first and last at least two-thirds
-//! full, whatever order entries arrive and leave in.
+//! full while only inserts reach it and half full after deletes, whatever
+//! order entries arrive and leave in.
 //!
-//! A full leaf whose new entry lands on its edge hands the entry to the
-//! neighbour on that side; otherwise it deals its entries, the new one
-//! and a neighbour's evenly over the two leaves, and only when both are
-//! full over three. A leaf that drops below two-thirds on a delete deals
-//! itself and both neighbours over as few leaves as hold them. Entries
+//! A full leaf deals its entries, the new one and a neighbour's evenly
+//! over the two leaves when the neighbour has room, and otherwise over
+//! three. A leaf that drops below half on a delete deals itself and both
+//! neighbours over as few leaves as hold them: when no leaf goes, each
+//! keeps about two-thirds, so the next refill is a sixth of a leaf of
+//! deletes away; when one goes, it pays back a leaf a split made. Entries
 //! cross between leaves under different parents: the separator between
 //! two neighbouring leaves sits in the deepest inner node both descend
 //! through.
@@ -18,10 +20,15 @@ use super::deal::Group;
 use super::{Inner, Path, Tree};
 use crate::seg_leaf::{Ent, Leaf, NIL, head16_of};
 
-/// Bytes a leaf that is neither the tree's first nor its last holds,
-/// short by at most two entries: a cut between leaves falls on an entry
-/// boundary, up to one entry off at each end.
+/// Bytes a deal aims to leave in a leaf that is neither the tree's first
+/// nor its last, and what every such leaf holds, less two of the widest
+/// entry, while only inserts have reached it.
 pub(crate) const FILL: usize = Leaf::capacity() * 2 / 3;
+
+/// Below this a leaf that is neither end is refilled from its neighbours,
+/// and what every such leaf holds, less two of the widest entry, once
+/// deletes have reached it.
+pub(crate) const HALF: usize = Leaf::capacity() / 2;
 
 impl Tree {
     /// Leaf `id` at the end of `path` has no room for `e` at slot `at`.
@@ -31,9 +38,6 @@ impl Tree {
         if path.len == 0 || (at == n && last) || (at == 0 && first) {
             // the root leaf, or a new end of the tree: open a leaf
             self.split_insert(path, id, at, e);
-            return;
-        }
-        if (at == n || at == 0) && self.place_beside(path, id, at == n, e) {
             return;
         }
         let side = [false, true].map(|right| self.beside(path, right));
@@ -55,25 +59,7 @@ impl Tree {
         debug_assert!(dealt, "two full leaves deal over three");
     }
 
-    /// Put `e` into the neighbour past this leaf's edge when it has room.
-    fn place_beside(&mut self, path: &Path, id: u32, right: bool, e: Ent<'_>) -> bool {
-        let (sp, sid) = self.beside(path, right).expect("a leaf past this edge");
-        let (s, ov) = self.leaf_ov(sid);
-        let slot = if right { 0 } else { s.len() };
-        if !s.insert_at(slot, e, ov) {
-            return false;
-        }
-        self.bump(&sp, 1);
-        if right {
-            let (node, at) = parting(path, &sp);
-            put_sep(&mut self.inners, &mut self.sep_bytes, node, at, [e.key, &[]]);
-        } else {
-            self.boundary(&sp, path, id);
-        }
-        true
-    }
-
-    /// Leaf `id` at the end of `path` has thinned below [`FILL`]: deal it
+    /// Leaf `id` at the end of `path` has thinned below [`HALF`]: deal it
     /// and its neighbours over as few leaves as hold them. An end leaf
     /// only merges into its neighbour.
     pub(crate) fn refill(&mut self, path: &Path, id: u32) {

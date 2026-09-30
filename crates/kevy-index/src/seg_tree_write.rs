@@ -35,7 +35,7 @@ impl Tree {
             l.remove_at(at, ov);
             if l.insert_at(at, e, ov) {
                 // a shorter payload thins the leaf like a delete
-                if l.used() < super::balance::FILL {
+                if l.used() < super::balance::HALF {
                     self.settle(&mut path, id);
                 }
                 return false;
@@ -178,7 +178,7 @@ impl Tree {
     }
 
     /// After a removal from leaf `id`: drop it when empty, refill it from
-    /// its neighbours when it has thinned below two-thirds.
+    /// its neighbours when it has thinned below half.
     pub(crate) fn settle(&mut self, path: &mut Path, id: u32) {
         let Some(&(parent, i)) = path.last() else {
             // the root leaf: an empty tree holds none
@@ -197,7 +197,7 @@ impl Tree {
             self.shrink_root();
             return;
         }
-        if l.used() >= super::balance::FILL {
+        if l.used() >= super::balance::HALF {
             return;
         }
         self.refill(path, id);
