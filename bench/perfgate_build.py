@@ -31,13 +31,17 @@ def last_release():
 
 
 def resolve_rev(rev):
+    """(name to print, commit sha)"""
+    name = rev
     if rev == "last-release":
         rev = last_release()
+        name = rev
     elif rev == "merge-base":
         head = git("rev-parse", "HEAD")
         mb = git("merge-base", "HEAD", "origin/develop")
         rev = mb if mb != head else last_release()
-    return rev, git("rev-parse", "--verify", f"{rev}^{{commit}}")
+        name = "merge-base with origin/develop" if mb != head else rev
+    return name, git("rev-parse", "--verify", f"{rev}^{{commit}}")
 
 
 def split_spec(spec):
