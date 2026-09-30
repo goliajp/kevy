@@ -8,8 +8,8 @@
 #      SNAPSHOT ship and converges — the closed v1.21 anti-scope.
 #   3. Replica restart within the backlog window resumes by frames
 #      and converges again.
-#   4. The replica serves its own derived state on replicated data:
-#      IDX.CREATE + IDX.QUERY answer on the replica.
+#   4. The replica serves the primary's index over replicated data,
+#      and refuses to declare one of its own (READONLY).
 #
 # Usage: bash bench/repligate.sh
 set -u
@@ -134,17 +134,19 @@ if [ "$D3" != "$D4" ] || [ "$D4" != "$D4B" ] || [ "$N" -lt 50003 ]; then
 fi
 echo "repligate: restart re-synced + stable: $D3"
 
-# clamp 4: replica-local derived state over replicated data (writer
-# stays paused so the backfill snapshot is stable)
-$CLI -p $REPPORT IDX.CREATE rep_n ON PREFIX p: FIELD n TYPE i64 KIND range >/dev/null
+# clamp 4: the writer's index answers on the replica over replicated
+# data (writer stays paused so the backfill snapshot is stable); the
+# replica declares nothing of its own
+MINE=$($CLI -p $REPPORT IDX.CREATE mine ON PREFIX p: FIELD n TYPE i64 KIND range 2>&1 || true)
+echo "$MINE" | grep -q "READONLY" || { echo "repligate: FAIL — the replica took IDX.CREATE: $MINE"; exit 1; }
 OK=0
 for _ in $(seq 60); do
     R=$($CLI -p $REPPORT IDX.QUERY rep_n RANGE 100 110 LIMIT 20 2>/dev/null || true)
     echo "$R" | grep -q "p:105" && { OK=1; break; }
     sleep 0.5
 done
-[ $OK = 1 ] || { echo "repligate: FAIL — replica-local index never answered"; exit 1; }
-echo "repligate: replica-local IDX.QUERY answers over replicated data"
+[ $OK = 1 ] || { echo "repligate: FAIL — the primary's index never answered on the replica"; exit 1; }
+echo "repligate: the primary's index answers on the replica, which refuses its own"
 
 # clamp 5 (T8 generation fence): SIGKILL the writer, restart it on the
 # same port. The new boot mints a NEW feed generation and restarts

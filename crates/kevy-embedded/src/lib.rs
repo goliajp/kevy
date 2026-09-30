@@ -146,6 +146,8 @@ mod ops_pipeline;
 mod ops_reconcile;
 mod ops_scan;
 pub use ops_scan::KeysIter;
+#[cfg(feature = "index")]
+mod catalog_record;
 mod ops_snapshot_view;
 #[cfg(feature = "index")]
 mod ops_table;
@@ -177,6 +179,8 @@ mod replica_wire;
 mod shard;
 #[cfg(feature = "persist")]
 mod shard_restore;
+#[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
+mod shard_tier;
 mod store;
 mod store_inner;
 #[cfg(feature = "persist")]

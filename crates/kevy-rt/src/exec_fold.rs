@@ -189,7 +189,11 @@ impl<C: Commands> Shard<C> {
                 Agg::ExtensionGather { argv, chunks } => {
                     let proto =
                         self.conns.get(&conn_id).map_or(kevy_resp::RespVersion::V2, |c| c.proto);
-                    match self.commands.extension_reduce(&argv, chunks, proto) {
+                    let reduced = self.commands.extension_reduce(&argv, chunks, proto);
+                    if crate::propagation::is_armed() {
+                        self.record_armed(&kevy_resp::Argv::from(argv.to_vec()));
+                    }
+                    match reduced {
                         crate::ExtensionReduced::Reply(reply) => {
                             self.fill_extension_slot(conn_id, seq, reply);
                         }

@@ -401,3 +401,31 @@ pub(crate) fn build_serve_entries<C: Commands, A: ArgvView + ?Sized>(
 ) -> Vec<(Vec<u8>, Argv)> {
     keys.iter().map(|k| (k.clone(), commands.block_serve_argv(args, kind, k))).collect()
 }
+
+impl<C: Commands> Shard<C> {
+    /// Whether a blocking command must park before running here at all,
+    /// because running it on this shard would act on the wrong keyspace.
+    ///
+    /// A `BRPOPLPUSH` whose destination lives on another shard would push
+    /// into THIS shard's keyspace, where no later read of the destination
+    /// looks, and the caller would be told it worked. A group read whose
+    /// stream lives on another shard would find no group here and answer
+    /// `NOGROUP`. Parked, the cross-shard arbiter arms on the owning
+    /// shard, serves there at once if it can, and otherwise waits.
+    pub(crate) fn parks_before_running<A: ArgvView + ?Sized>(
+        &self,
+        args: &A,
+        kind: BlockKind,
+        keys: &[Vec<u8>],
+    ) -> bool {
+        match kind {
+            BlockKind::Brpoplpush => {
+                args.len() == 4
+                    && !keys.is_empty()
+                    && self.shard_of(&args[2]) != self.shard_of(&keys[0])
+            }
+            BlockKind::XReadGroupBlock => keys.iter().any(|k| self.shard_of(k) != self.id),
+            _ => false,
+        }
+    }
+}

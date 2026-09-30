@@ -39,6 +39,46 @@
   with `-READONLY You can't write against a read only replica.` An
   `EVAL_RO` script can no longer call them either.
 
+- **`XREADGROUP … BLOCK` works when the stream lives on another shard.**
+  Since 1.5.0 a blocking group read ran on the connection's own shard
+  first; with the stream on another shard it found no group there and
+  answered `-NOGROUP`, whether or not the group existed. With more than
+  one shard that was most connections. It now parks at once and the
+  stream's own shard serves it: at once when the group has something to
+  read or does not exist (the `NOGROUP` a read there gives), otherwise
+  when an entry arrives, like the other blocking commands.
+
+- **Indexes, views and tables reach a replica, and a read-only replica
+  refuses to declare its own.** The server kept its index, view and
+  table catalog in three side files (`index-catalog.meta`,
+  `view-catalog.meta`, `table-catalog.meta`) that never entered the log,
+  so since 1.18.0 a replica got neither the primary's catalog in its
+  full sync nor a later `IDX.CREATE` / `VIEW.CREATE` / `TABLE.DECLARE`
+  on the stream, and a read-only replica accepted all of them against
+  its own keyspace. Every catalog command is now recorded as one
+  internal `XINTERNAL.CATALOG` frame carrying the whole catalog
+  (including a global index's split points), every snapshot and
+  rewritten log keeps the current one, and a reshard carries it into the
+  new layout. A replica takes the primary's catalog in its full sync and
+  each change on the stream, and a read-only replica answers every
+  catalog command (`IDX.CREATE` / `DROP` / `REBUILD`, `VIEW.CREATE` /
+  `DROP` / `REBUILD`, `TABLE.DECLARE` / `ENSURE` / `REPLACE` / `DROP`)
+  with `-READONLY You can't write against a read only replica.` The
+  side files are no longer written. A 6.4 data directory opens with its
+  catalog: the first start reads the side files once, records the
+  catalog in the log, and removes them; a side file that does not parse
+  stays where it is. No shard serves a client until every shard has
+  restored, so a query cannot land before the catalog it depends on.
+  The embedded store keeps its catalog the same way, and the two
+  interoperate: an embedded replica takes a server primary's catalog and
+  a server replica an embedded writer's. An embedded replica refuses
+  every catalog method with `KevyError::ReadOnly`, and a closed store
+  with `KevyError::Closed`; `idx_drop`, `view_drop` and `table_drop` now
+  return `KevyResult<bool>`. The frame sits after the snapshot's end
+  marker, where 6.4.0 stops reading, so 6.4.0 still loads a 7.0 snapshot;
+  it opens a 7.0 directory with every key and no catalog (see [the
+  upgrade guide](docs/upgrading-6.4-to-7.0.md)).
+
 - **`kevy-cluster-rw` sends every write to the primary.** Its own list of
   write commands had drifted from the server's: 21 commands the server
   counts as writes went to a replica, among them `GETEX`, `SETBIT`,

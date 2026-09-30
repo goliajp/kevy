@@ -11,7 +11,6 @@ use std::time::Instant;
 
 use crate::aof::{AOF_BUF_CAP, Aof};
 use crate::dump_store_to_buf;
-use kevy_store::Store;
 
 /// Handoff between the two halves of a non-blocking rewrite: the serialized
 /// keyspace image (produced under the store lock) and the temp path to spill
@@ -161,7 +160,10 @@ impl Aof {
     /// write), and finally calls [`Self::finish_concurrent_rewrite`] under the
     /// lock again. Writes that land during the off-lock spill are captured by
     /// the tee and appended after the snapshot, so nothing is lost.
-    pub fn begin_concurrent_rewrite(&mut self, store: &Store) -> io::Result<RewritePlan> {
+    pub fn begin_concurrent_rewrite<S: crate::SnapshotSource>(
+        &mut self,
+        store: &S,
+    ) -> io::Result<RewritePlan> {
         self.flush_queued()?;
         let (body, keys) = dump_store_to_buf(store, crate::AofFormat::V2);
         self.rewrite_tee = Some(Vec::new());

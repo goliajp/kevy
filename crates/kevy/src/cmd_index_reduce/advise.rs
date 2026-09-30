@@ -96,8 +96,6 @@ fn maybe_autodeclare(state: &RuntimeState, name: &[u8], shape: AdviseShape, coun
     if icat.create_with(ispec, part).is_err() {
         return;
     }
-    crate::cmd_table::persist_sidecar(state.sidecar_dir(), &new_tcat);
-    crate::cmd_index::persist_sidecar(state.sidecar_dir(), &icat);
     state.install_index_catalog(icat);
     state.install_table_catalog(new_tcat);
 }

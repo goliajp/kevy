@@ -81,6 +81,18 @@ impl Commands for KevyCommands {
         self.shard_ctx().set_stats_slot(self.state().obs.slot(shard));
     }
 
+    fn on_restored(&self, record: &mut dyn FnMut(&kevy_rt::Argv) -> bool) {
+        crate::catalog_record::shard_restored(self.state(), record);
+    }
+
+    fn snapshot_aux(&self) -> Option<kevy_rt::Argv> {
+        crate::catalog_record::snapshot_aux(self.state())
+    }
+
+    fn load_snapshot_aux(&self, frame: Option<&kevy_rt::Argv>, full_sync: bool) {
+        crate::catalog_record::load_snapshot_aux(self.state(), frame, full_sync);
+    }
+
     fn on_data_dir(&self, dir: &std::path::Path) {
         // So `CONFIG GET dir` answers with the directory this server
         // writes to, rather than with whatever its configuration was
@@ -210,7 +222,10 @@ impl Commands for KevyCommands {
         chunks: Vec<Vec<u8>>,
         proto: kevy_resp::RespVersion,
     ) -> ExtensionReduced {
-        crate::commands_ext::reduce(&self.ctx(), argv, chunks, proto)
+        let ctx = self.ctx();
+        crate::catalog_record::reduced(ctx.state, || {
+            crate::commands_ext::reduce(&ctx, argv, chunks, proto)
+        })
     }
 
     fn write_denied(&self) -> Option<Vec<u8>> {

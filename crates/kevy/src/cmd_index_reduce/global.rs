@@ -88,7 +88,6 @@ pub(super) fn rebuild(
     if !cat.set_splits(name, splits) {
         return None;
     }
-    crate::cmd_index::persist_sidecar(state.sidecar_dir(), &cat);
     state.install_index_catalog(cat);
     Some(b"+OK\r\n".to_vec())
 }

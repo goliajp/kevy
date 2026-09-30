@@ -21,7 +21,10 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
             if argv.len() != 2 {
                 encode_error(out, "ERR usage: VIEW.DROP name");
             } else {
-                encode_integer(out, i64::from(s.view_drop(&argv[1])));
+                match s.view_drop(&argv[1]) {
+                    Ok(hit) => encode_integer(out, i64::from(hit)),
+                    Err(e) => kevy_err(out, &e),
+                }
             }
         }
         b"VIEW.LIST" => cmd_view_list(s, out),

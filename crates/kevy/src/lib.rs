@@ -41,6 +41,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
+mod catalog_record;
 mod cmd;
 mod cmd_block;
 mod cmd_block_serve;
@@ -273,8 +274,7 @@ pub fn serve(cfg: Arc<kevy_config::Config>) -> ! {
 /// Build the [`RuntimeState`] for one server boot: create the data
 /// dir (a precondition of AOF, index catalogs, elect.meta and
 /// replication state — fail here with a named error, not later with
-/// a bare ENOENT), validate `[cluster] scopes`, and load the index /
-/// view sidecars.
+/// a bare ENOENT) and validate `[cluster] scopes`.
 fn boot_state(cfg: &Arc<kevy_config::Config>) -> Arc<RuntimeState> {
     let data_dir = cfg.server.data_dir.clone();
     let nshards = cfg.server.threads.max(1);
@@ -282,17 +282,13 @@ fn boot_state(cfg: &Arc<kevy_config::Config>) -> Arc<RuntimeState> {
         eprintln!("kevy: cannot create data dir {}: {e}", data_dir.display());
         std::process::exit(1);
     }
-    let state = match RuntimeState::new(Arc::clone(cfg), data_dir, nshards) {
+    match RuntimeState::new(Arc::clone(cfg), data_dir, nshards) {
         Ok(s) => Arc::new(s),
         Err(e) => {
             eprintln!("kevy: bad [cluster] scopes config: {e}");
             std::process::exit(1);
         }
-    };
-    cmd_index::boot(&state);
-    cmd_view::boot(&state);
-    cmd_table::boot(&state);
-    state
+    }
 }
 
 /// Assemble the configured [`Runtime`]: the builder chain plus the

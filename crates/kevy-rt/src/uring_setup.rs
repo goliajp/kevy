@@ -6,7 +6,7 @@
 use std::io;
 use std::sync::Arc;
 
-use kevy_persist::{load_snapshot, replay_aof};
+use kevy_persist::replay_aof;
 use kevy_uring::IoUring;
 
 use crate::Commands;
@@ -26,12 +26,7 @@ impl<C: Commands> Shard<C> {
         }
         let segs_dir = kevy_persist::layout::segs_dir(&self.data_dir, self.id);
         self.store.enable_seg_rows(&segs_dir).map_err(std::io::Error::other)?;
-        let snap = self.snapshot_path();
-        if snap.exists()
-            && let Err(e) = load_snapshot(&mut self.store, &snap)
-        {
-            eprintln!("kevy: shard {} failed to load {}: {e}", self.id, snap.display());
-        }
+        self.load_boot_snapshot();
         if self.aof.is_some() {
             let aof_path = self.aof_path();
             let commands = &self.commands;
@@ -65,8 +60,7 @@ impl<C: Commands> Shard<C> {
             }
             self.commands.on_replay_report(report.dropped_bytes, report.corrupt);
         }
-        self.store.sweep_orphan_row_segs();
-        self.store.demote_to_watermark();
+        self.finish_restore();
         Ok(())
     }
 }

@@ -1,0 +1,4 @@
+kevy-index-catalog v4
+user_age	user:	age:1	i64	range	0
+user_plan	user:	plan:1	str	range	0
+users.email	users:	email:1	str	unique	0

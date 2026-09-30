@@ -58,7 +58,7 @@ dispatch oracle byte-compares the two faces in CI), and it is
 
 Everything a compiled index does is what a hand-declared `IDX.CREATE`
 does: same backfill behavior, same `-INDEXBUILDING` discipline, same
-sidecar persistence, same budget refusal
+catalog recording, same budget refusal
 ([indexes.md](indexes.md)). `TABLE.DROP` drops the table and every
 index it compiled.
 
@@ -406,7 +406,7 @@ match store.table_ensure(spec)? {    // the boot verb: validated,
 let tables = store.table_list();
 let report = store.table_verify_report(b"user")?;  // named fresh counters
 assert_eq!(report.per_index[0].missing, 0);        //   + spot check
-store.table_drop(b"user");
+store.table_drop(b"user")?;
 ```
 
 The wire form (`db.cmd("TABLE.DECLARE", …)`) works too and parses

@@ -77,6 +77,11 @@ and every public item carries a running example in its documentation.
   cursor names a shard and a position in it, `count` is how much a page
   walks (a page may hold more), and a key written during the walk may come
   back twice. 6.4 copied every key on each call and sliced the copy.
+- `idx_drop`, `view_drop` and `table_drop` return `KevyResult<bool>`.
+  Every catalog method (`idx_create*`, `view_create`, `table_declare`,
+  `table_ensure`, `table_replace` and the drops) is refused on a replica
+  with `KevyError::ReadOnly` and after `shutdown` with `KevyError::Closed`,
+  like every write.
 - `AtomicAllShards::idx_query` / `idx_count` see the transaction's own
   writes (6.4 saw the last commit); a failed transaction's writes leave
   the index with its rollback.
@@ -313,6 +318,10 @@ Types:
   `write_snapshot_to_with_cursor(src, sink, Option<FeedPosition>)`.
   `Routing` (default `KevyHash`) and `RewritePlan` are
   `#[non_exhaustive]`.
+- A snapshot and a rewritten log can carry one frame beside the keyspace:
+  `SnapshotSource::aux_frame` (default `None`), `WithAux::new(src, aux)`,
+  `load_snapshot_with_aux`. `reshard::commit_reshard(dir, prev_n, target,
+  stores, aux, layout)` takes the frame the new snapshots carry.
 - kevy-replicate: `feed::FeedPosition { generation, offset }`
   (`#[non_exhaustive]`, `Copy`, `Default`, `const fn new`) replaces every
   (generation, offset) pair: `FeedSource::tail()`,
@@ -351,6 +360,8 @@ Types:
   `with_feed_buffer_size(bytes)`; `with_replay_resync(bool)` →
   `with_replay_mode(ReplayMode)`.
 - `shard_of_key(key, n, bool)` → `shard_of_key(key, n, Routing)`.
+- New `Commands` methods, with defaults: `snapshot_aux`,
+  `load_snapshot_aux(frame, full_sync)` and `on_restored(record)`.
 - `#[non_exhaustive]`: `Route`, `BlockHint`, `BlockKind`,
   `ClientKillFilter`, `GeoHits`, `SlowlogSub`, `MultiOp`, `ZCombine`,
   `Propagate`, `ReplicaApply`, `ExtensionReduced`, `TxnKind` (`Copy`,

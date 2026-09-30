@@ -30,10 +30,22 @@ fn is_server_write(cmd: &[u8]) -> bool {
             | b"SDIFFSTORE"
             | b"SINTERSTORE"
             | b"SUNIONSTORE"
+            | b"XINTERNAL.CATALOG"
             | b"XINTERNAL.CONSUMERSEEN"
             | b"ZDIFFSTORE"
             | b"ZINTERSTORE"
             | b"ZUNIONSTORE"
+            // the catalog commands: recorded, and refused on a replica
+            | b"IDX.CREATE"
+            | b"IDX.DROP"
+            | b"IDX.REBUILD"
+            | b"TABLE.DECLARE"
+            | b"TABLE.DROP"
+            | b"TABLE.ENSURE"
+            | b"TABLE.REPLACE"
+            | b"VIEW.CREATE"
+            | b"VIEW.DROP"
+            | b"VIEW.REBUILD"
     )
 }
 
