@@ -176,12 +176,15 @@ fn a_composite_spec_stores_the_encoding_as_it_is() {
 
 #[test]
 fn window_cuts_keep_a_deep_tree_whole() {
+    // miri interprets every step; four thousand rows still make three levels
+    let n = if cfg!(miri) { 4_000i64 } else { 60_000 };
     let mut s = Segment::with_values(2);
-    for k in 0..60_000i64 {
-        let key = format!("row:{}", k * 7919 % 60_000);
+    for k in 0..n {
+        let key = format!("row:{}", k * 7919 % n);
         s.apply_with_values(key.as_bytes(), None, Some(i(k % 997)), &[Some(b"c1"), Some(b"12")]);
     }
     let _ = crate::seg_tree::tests::check(&s.tree);
+    assert!(s.tree.height >= 2, "a deep tree, not {} levels", s.tree.height + 1);
     for b in [5, 100, 400, 996] {
         s.split_off_below(&i(b));
         let got = crate::seg_tree::tests::check(&s.tree);
@@ -197,7 +200,14 @@ fn a_repacked_build_keeps_every_row() {
         .build()
         .expect("a spec");
     let mut s = Segment::for_spec(&spec);
-    let mut order: Vec<u32> = (0..8000).collect();
+    // miri interprets every step: it checks the moves on one row count
+    // either side of the boundary; the sweep over every size is native
+    let (rows, seeds, sizes): (u32, u64, &[u32]) = if cfg!(miri) {
+        (500, 1, &[100, 2001])
+    } else {
+        (8_000, 20, &[100, 500, 1999, 2000, 2001, 3000])
+    };
+    let mut order: Vec<u32> = (0..rows).collect();
     let mut x = 7u64;
     for i in (1..order.len()).rev() {
         x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
@@ -210,13 +220,13 @@ fn a_repacked_build_keeps_every_row() {
             Some(IndexValue::I64(i64::from(i * 7919 % 1000))),
         );
     }
-    assert_eq!(s.range(&i(0), &i(1000), None, usize::MAX).0.len(), 8000);
+    assert_eq!(s.range(&i(0), &i(1000), None, usize::MAX).0.len(), rows as usize);
     s.repack();
     let _ = crate::seg_tree::tests::check(&s.tree);
-    assert_eq!(s.range(&i(0), &i(1000), None, usize::MAX).0.len(), 8000);
-    assert_eq!(s.count(&i(0), &i(1000)), 8000);
-    for n in [100u32, 500, 1999, 2000, 2001, 3000] {
-        for seed in 0..20u64 {
+    assert_eq!(s.range(&i(0), &i(1000), None, usize::MAX).0.len(), rows as usize);
+    assert_eq!(s.count(&i(0), &i(1000)), u64::from(rows));
+    for &n in sizes {
+        for seed in 0..seeds {
             let mut s = Segment::for_spec(&spec);
             let mut x = seed;
             let mut keys: Vec<u32> = (0..n).collect();
@@ -246,7 +256,8 @@ fn a_repacked_build_keeps_every_row() {
 fn stats_count_what_the_structures_hold() {
     let mut s = Segment::with_values(1);
     let empty = s.stats().approx_bytes;
-    for k in 0..10_000 {
+    let n = if cfg!(miri) { 1_000 } else { 10_000 };
+    for k in 0..n {
         s.apply_with_values(format!("r{k}").as_bytes(), None, Some(i(k)), &[Some(b"v")]);
     }
     let full = s.stats().approx_bytes;
@@ -320,7 +331,8 @@ fn a_walker_decodes_its_value_once_and_has_no_column_past_the_declared() {
 
 #[test]
 fn tidy_packs_a_shuffled_segment_in_steps_then_rests_with_every_row() {
-    let n = 5_000i64;
+    // miri interprets every step; a thousand rows still span many leaves
+    let n = if cfg!(miri) { 1_000i64 } else { 5_000 };
     let mut s = Segment::new();
     for k in 0..n {
         s.apply(format!("k{k}").as_bytes(), None, Some(i(k * 7919 % n)));
