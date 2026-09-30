@@ -129,10 +129,7 @@ impl<C: Commands> Shard<C> {
             }
             self.commands.on_replay_report(report.dropped_bytes, report.corrupt);
         }
-        // Segments nothing references after restore are orphans (a
-        // crash between sealing and the frame): sweep them.
-        self.store.sweep_orphan_row_segs();
-        self.store.demote_to_watermark();
+        self.finish_restore();
 
         // Off-accept-set shards have no listener (None); skip register.
         let listener_fd = if let Some(l) = &self.listener {

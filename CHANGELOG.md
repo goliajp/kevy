@@ -32,6 +32,29 @@
   read or does not exist (the `NOGROUP` a read there gives), otherwise
   when an entry arrives, like the other blocking commands.
 
+- **Indexes, views and tables reach a replica, and a read-only replica
+  refuses to declare its own.** The server kept its index, view and
+  table catalog in three side files (`index-catalog.meta`,
+  `view-catalog.meta`, `table-catalog.meta`) that never entered the log,
+  so since 1.18.0 a replica got neither the primary's catalog in its
+  full sync nor a later `IDX.CREATE` / `VIEW.CREATE` / `TABLE.DECLARE`
+  on the stream, and a read-only replica accepted all of them against
+  its own keyspace. Every catalog command is now recorded as one
+  internal `XINTERNAL.CATALOG` frame carrying the whole catalog
+  (including a global index's split points), every snapshot and
+  rewritten log keeps the current one, and a reshard carries it into the
+  new layout. A replica takes the primary's catalog in its full sync and
+  each change on the stream, and a read-only replica answers every
+  catalog command (`IDX.CREATE` / `DROP` / `REBUILD`, `VIEW.CREATE` /
+  `DROP` / `REBUILD`, `TABLE.DECLARE` / `ENSURE` / `REPLACE` / `DROP`)
+  with `-READONLY You can't write against a read only replica.` The
+  side files are no longer written. A 6.4 data directory opens with its
+  catalog: the first start reads the side files once, records the
+  catalog in the log, and removes them. No shard serves a client until
+  every shard has restored, so a query cannot land before the catalog
+  it depends on. A 6.4 binary cannot read the catalog back from a 7.0
+  directory; see [the upgrade guide](docs/upgrading-6.4-to-7.0.md).
+
 - **`kevy-cluster-rw` sends every write to the primary.** Its own list of
   write commands had drifted from the server's: 21 commands the server
   counts as writes went to a replica, among them `GETEX`, `SETBIT`,

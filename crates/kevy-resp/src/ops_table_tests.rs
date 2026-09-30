@@ -60,6 +60,16 @@ fn every_logged_verb_is_replayable() {
                 | "SINTERSTORE"
                 | "SUNIONSTORE"
                 | "SDIFFSTORE"
+                // the catalog commands log the whole catalog as one
+                // XINTERNAL.CATALOG frame
+                | "IDX.CREATE"
+                | "IDX.DROP"
+                | "TABLE.DECLARE"
+                | "TABLE.ENSURE"
+                | "TABLE.REPLACE"
+                | "TABLE.DROP"
+                | "VIEW.CREATE"
+                | "VIEW.DROP"
         );
         assert!(
             replayable || ledgered || logs_as_other_verb,

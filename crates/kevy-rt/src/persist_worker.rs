@@ -232,6 +232,19 @@ impl<C: Commands> Shard<C> {
         }
     }
 
+    /// The end of a shard's startup restore: sweep the row segments
+    /// nothing references (a crash between sealing and the frame), settle
+    /// under the tier budget, let the command set record what it found,
+    /// and wait until every other shard has restored too.
+    pub(crate) fn finish_restore(&mut self) {
+        self.store.sweep_orphan_row_segs();
+        self.store.demote_to_watermark();
+        let (aof, id) = (&mut self.aof, self.id);
+        self.commands.on_restored(&mut |f| crate::persist_jobs::record_durably(aof, id, f));
+        self.restore_gate.arrive(self.id);
+        self.restore_gate.wait();
+    }
+
     /// `BGSAVE` on this shard: freeze the view, start the AOF tee (the
     /// post-collect writes become the reset log), hand off. Skipped with a
     /// log line if a background job or rewrite is already in flight.

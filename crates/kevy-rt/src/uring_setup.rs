@@ -60,8 +60,7 @@ impl<C: Commands> Shard<C> {
             }
             self.commands.on_replay_report(report.dropped_bytes, report.corrupt);
         }
-        self.store.sweep_orphan_row_segs();
-        self.store.demote_to_watermark();
+        self.finish_restore();
         Ok(())
     }
 }

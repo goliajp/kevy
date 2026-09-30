@@ -379,7 +379,7 @@ fn reshard(
     settle_stages(dir, config, src_n)?;
     let (temp, report) = merge_into_temp(dir, config, src_n)?;
     redistribute(&temp, n, stores);
-    commit_reshard(dir, src_n, ShardsMeta::new(n, Routing::KevyHash), stores, &lay)?;
+    commit_reshard(dir, src_n, ShardsMeta::new(n, Routing::KevyHash), stores, None, &lay)?;
     // The merge scratch vlog is dead once the temp keyspace is gone.
     // The attribute rides the same cfg as the code: a module-level one
     // is unfulfilled in every build where this block is compiled out,
