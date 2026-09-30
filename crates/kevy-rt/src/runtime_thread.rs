@@ -4,8 +4,9 @@
 
 use crate::Commands;
 use crate::shard::Shard;
+use std::io;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Reactor selection on Linux:
 ///   KEVY_IO_URING unset → auto: try io_uring, fall back to epoll if the
@@ -57,8 +58,8 @@ pub(crate) fn run_shard_thread<C: Commands>(
     stop: Arc<AtomicBool>,
     use_uring: bool,
     uring_forced: bool,
-) {
-    let (id, gate) = (shard.id, Arc::clone(&shard.restore_gate));
+) -> io::Result<()> {
+    let (id, gate, halt) = (shard.id, Arc::clone(&shard.restore_gate), Arc::clone(&stop));
     #[cfg(target_os = "linux")]
     let res = if use_uring {
         match crate::uring_reactor::build_uring(shard.recv_buffers) {
@@ -80,9 +81,12 @@ pub(crate) fn run_shard_thread<C: Commands>(
         let _ = (use_uring, uring_forced, shard.recv_buffers);
         shard.run(stop)
     };
-    if let Err(e) = res {
+    if let Err(e) = &res {
         eprintln!("kevy: shard {id} exited with error: {e}");
+        // a server missing a shard would serve part of its keyspace
+        halt.store(true, Ordering::Relaxed);
     }
     // a shard that stopped before it restored must not hold the others
     gate.arrive(id);
+    res
 }
