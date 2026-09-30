@@ -2808,7 +2808,7 @@
     "kevy_wasm::abi_kv::kevy_expire": 20,
     "kevy_wasm::abi_kv::kevy_flushall": 4,
     "kevy_wasm::abi_kv::kevy_keys": 1,
-    "kevy_wasm::abi_kv::kevy_mget": 48,
+    "kevy_wasm::abi_kv_multi::kevy_mget": 48,
     "kevy_wasm::abi_kv::kevy_persist": 5,
     "kevy_wasm::abi_kv::kevy_set": 4,
     "kevy_wasm::abi_kv::kevy_set_ttl": 4,

@@ -26,13 +26,13 @@
 # asking whether that other gate still runs.
 
 [[dead]]
-symbol = "kevy_wasm::abi_kv::kevy_mget"
+symbol = "kevy_wasm::abi_kv_multi::kevy_mget"
 regions = 6
 kind = "unreachable"
 delete = false
 reason = """
 The `None` arms of two `off.checked_add(..)` calls at
-crates/kevy-wasm/src/abi_kv.rs, and the same shape in `unpack_argv`.
+crates/kevy-wasm/src/abi_kv_multi.rs, and the same shape in `unpack_argv`.
 
 `off` is bounded by the buffer and the added length is a u32, so on a 64-bit
 host the sum cannot overflow and the arm cannot be taken. On wasm32 — where
