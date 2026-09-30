@@ -30,7 +30,8 @@ fn a_frame_missing_or_mangling_any_part_is_refused_and_changes_nothing() {
     let index = "IDX.CREATE age ON PREFIX u: FIELD age TYPE i64 KIND range";
     let mut store = Store::new();
     cmds.dispatch(&mut store, &Argv::from(words(index)));
-    let held = snapshot_aux(state).expect("the create was recorded");
+    let held = snapshot_aux(state);
+    assert_ne!(held[1], b"0"[..], "the create was recorded");
     let good_index = held[3].to_vec();
     let cases: [&[&[u8]]; 11] = [
         &[],
@@ -49,7 +50,7 @@ fn a_frame_missing_or_mangling_any_part_is_refused_and_changes_nothing() {
         assert_eq!(applied(state, parts), MALFORMED, "{parts:?}");
     }
     assert!(state.catalogs.index().is_some_and(|c| c.get(b"age").is_some()));
-    assert_eq!(snapshot_aux(state), Some(held));
+    assert_eq!(snapshot_aux(state), held);
 }
 
 #[test]
@@ -73,7 +74,7 @@ fn a_snapshot_whose_catalog_frame_does_not_parse_leaves_the_catalog_as_it_was() 
     let state = cmds.state();
     load_snapshot_aux(state, Some(&frame(&[b"1", b"1", b"not a catalog", b"", b""])), false);
     assert!(state.catalogs.index().is_none_or(|c| c.is_empty()));
-    assert!(snapshot_aux(state).is_none(), "nothing was adopted");
+    assert_eq!(*state.catalogs.record.lock(), (0, 0), "nothing was adopted");
 }
 
 #[test]
@@ -86,7 +87,7 @@ fn a_catalog_change_applied_from_a_record_records_no_frame_of_its_own() {
         cmds.dispatch(&mut store, &Argv::from(words(index)));
     }
     assert!(cmds.state().catalogs.index().is_some_and(|c| c.get(b"age").is_some()));
-    assert!(snapshot_aux(cmds.state()).is_none(), "no version was minted");
+    assert_eq!(*cmds.state().catalogs.record.lock(), (0, 0), "no version was minted");
     kevy_rt::propagation::discard_override();
 }
 
@@ -120,5 +121,34 @@ fn the_last_shard_restored_without_a_data_directory_imports_nothing() {
         true
     });
     assert_eq!(recorded, 0);
-    assert!(snapshot_aux(&state).is_none());
+    assert_eq!(*state.catalogs.record.lock(), (0, 0));
+}
+
+/// A node whose every shard has finished its startup restore.
+fn restored(nshards: usize) -> KevyCommands {
+    let cmds = KevyCommands::sharded(nshards);
+    for _ in 0..nshards {
+        shard_restored(cmds.state(), &mut |_| true);
+    }
+    cmds
+}
+
+/// Shard Y's full sync is served from a snapshot taken before the
+/// primary's first change; shard X's stream then carries that change and
+/// is applied first. The older snapshot landing last keeps the catalog.
+#[test]
+fn a_full_sync_older_than_frames_another_shard_applied_keeps_the_catalog() {
+    use kevy_rt::Commands;
+    let primary = restored(2);
+    let older = primary.snapshot_aux();
+    let index = "IDX.CREATE age ON PREFIX u: FIELD age TYPE i64 KIND range";
+    primary.dispatch(&mut Store::new(), &Argv::from(words(index)));
+    let frame = primary.snapshot_aux().expect("the create was recorded");
+    let replica = restored(2);
+    replica.state().replication.force_replica_flag();
+    apply(replica.state(), &frame, &mut Vec::new());
+    replica.load_snapshot_aux(older.as_ref(), true);
+    assert!(replica.state().catalogs.index().is_some_and(|c| c.get(b"age").is_some()));
+    let held = replica.snapshot_aux().unwrap();
+    assert_eq!((&held[1], &held[2]), (&frame[1], &frame[2]));
 }

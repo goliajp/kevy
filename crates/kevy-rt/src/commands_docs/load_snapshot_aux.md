@@ -1,8 +1,9 @@
 Take back the frame [`Commands::snapshot_aux`] kept beside a snapshot
 this shard just loaded: at boot, before the log replays over it
 (`full_sync = false`), or on a replica after a full sync from its primary
-(`full_sync = true`), where the primary's state replaces whatever the
-replica held, `None` included. The default ignores it.
+(`full_sync = true`), where it is the primary's state as of that
+snapshot and `None` means the primary kept nothing beside it. The default
+ignores it.
 
 ```
 # use kevy_rt::{ArgvView, Commands, Route, Store, TxnKind};

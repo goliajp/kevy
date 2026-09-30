@@ -43,7 +43,7 @@ pub(crate) fn boot_backbone(config: &crate::config::Config) -> KevyResult<Backbo
     let (shards, open_report, restored) = crate::shard::build_shards(config)?;
     let shards: Shards = Arc::new(shards);
     #[cfg(feature = "index")]
-    let catalog = wire_registries(&shards, restored.as_ref());
+    let catalog = wire_registries(&shards, restored.as_ref(), !opens_replica(config));
     #[cfg(not(feature = "index"))]
     drop(restored);
     let (reaper_stop, reaper_join) = crate::reaper::spawn_reaper(
@@ -137,16 +137,33 @@ pub(crate) fn wire_blocker(shards: &Shards) -> Arc<crate::ops_blocking::Blocker>
     blocker
 }
 
+/// Whether `config` opens a replica.
+#[cfg(feature = "index")]
+fn opens_replica(config: &crate::config::Config) -> bool {
+    #[cfg(feature = "replicate")]
+    return config.replica_upstream.is_some();
+    #[cfg(not(feature = "replicate"))]
+    {
+        let _ = config;
+        false
+    }
+}
+
 /// Create the store-level catalog registries holding the newest catalog
-/// frame the restore met, and hand every shard's `Inner` a clone.
+/// frame the restore met, with a lineage on a primary, and hand every
+/// shard's `Inner` a clone.
 #[cfg(feature = "index")]
 fn wire_registries(
     shards: &Shards,
     restored: Option<&kevy_resp::Argv>,
+    primary: bool,
 ) -> Arc<crate::catalog_record::CatalogRegs> {
     let tables = Arc::new(crate::ops_table::TableReg::default());
     let regs = Arc::new(crate::catalog_record::CatalogRegs::new(tables));
     regs.adopt(restored, false);
+    if primary {
+        regs.mint();
+    }
     for shard in shards.iter() {
         let mut g = lock_write(shard);
         g.idx_reg = Some(regs.indexes.clone());
