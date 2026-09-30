@@ -136,13 +136,17 @@ fn idles(reply: &str) -> Vec<i64> {
         .collect()
 }
 
-/// `XINFO CONSUMERS`' idle column, which counts from the consumer's last
-/// contact, blanked.
+/// `XINFO CONSUMERS`' idle and inactive columns, which count from the
+/// consumer's last contact and last activity, blanked; an inactive of -1
+/// (never handed an entry) is kept.
 fn blank_consumer_idle(reply: &str) -> String {
     let mut t: Vec<String> = reply.split("\r\n").map(str::to_string).collect();
     for i in 0..t.len() {
         if t[i] == "idle" && i + 1 < t.len() {
             t[i + 1] = ":idle".into();
+        }
+        if t[i] == "inactive" && i + 1 < t.len() && t[i + 1] != ":-1" {
+            t[i + 1] = ":inactive".into();
         }
     }
     t.join("\r\n")

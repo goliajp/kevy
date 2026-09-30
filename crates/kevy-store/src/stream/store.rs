@@ -37,7 +37,7 @@ use alloc::sync::Arc;
 pub type EntryBatch = Vec<(StreamId, Vec<(Vec<u8>, Vec<u8>)>)>;
 
 impl Store {
-    fn stream_mut(
+    pub(super) fn stream_mut(
         &mut self,
         key: &[u8],
         create: bool,
