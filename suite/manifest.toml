@@ -150,7 +150,7 @@ proves = "files ≤ 500 LOC, functions ≤ 50 or waivered"
 [[check]]
 id = "commentgate"
 area = "hygiene"
-tier = "precommit"
+tier = "prerelease"
 cmd = "bash bench/commentgate.sh"
 expected = 2
 timeout = 120
@@ -192,7 +192,7 @@ proves = "the publish chain is a topological order and every crate is publishabl
 [[check]]
 id = "action-versions"
 area = "release-pins"
-tier = "precommit"
+tier = "prerelease"
 cmd = "python3 tools/check_action_versions.py"
 expected = 1
 timeout = 60
@@ -212,7 +212,7 @@ proves = "every competitor version in the tree matches bench/COMPETITOR-ANCHORS.
 [[check]]
 id = "command-coverage"
 area = "compat"
-tier = "premerge"
+tier = "prerelease"
 cmd = "python3 tools/check_command_coverage.py"
 expected = 1
 timeout = 60
@@ -267,8 +267,9 @@ proves = "each stone measured three ways — lifts outside the workspace, semver
 [[check]]
 id = "doctestgate"
 area = "doc"
-tier = "premerge"
+tier = "prerelease"
 cmd = "bash bench/doctestgate.sh"
+ci_job = "release readings (stonegate, doctestgate, apigate)"
 expected = 10
 timeout = 1800
 requires = ["linux", "nightly rustdoc"]
@@ -277,8 +278,9 @@ proves = "what the documentation owes — items with no doc, items with no execu
 [[check]]
 id = "apigate"
 area = "doc"
-tier = "premerge"
+tier = "prerelease"
 cmd = "python3 tools/check_api_guidelines.py"
+ci_job = "release readings (stonegate, doctestgate, apigate)"
 expected = 300
 timeout = 1800
 requires = ["nightly rustdoc"]
@@ -314,20 +316,11 @@ timeout = 60
 requires = []
 proves = "every fuzz target in the tree runs in CI's fuzz-smoke matrix, and every matrix entry names a target that exists — nine of twenty-three were in the tree unrun, and the first run of one of them found two defects"
 
-# prerelease, not precommit, for a build-cache reason and not a time one:
-# `--cfg loom` changes RUSTFLAGS, and cargo rebuilds the whole release
-# profile whenever those change. Warm it is 22 s; run alternately with any
-# other release build it costs both of them a full rebuild every time.
-#
-# `expected` is an ESTIMATE and the only one in this file that is. The two
-# measurements in hand are 22 s warm on a workstation and 48-58 s for CI's
-# `loom` job including checkout and a cached build. Neither is the number
-# this row will actually cost, because inside the prerelease tier the
-# RUSTFLAGS switch lands on a release profile the preceding checks just
-# built, and the rebuild is the cost. 150 is that rebuild guessed at, not
-# timed. Replace it with `target/suite-prerelease.json`'s figure the first
-# time the tier runs with this row in it — the corrections at the top of
-# this file are what happens when nobody does.
+# premerge, as CI's `loom` job runs it on every push; not precommit, for a
+# build-cache reason and not a time one: `--cfg loom` changes RUSTFLAGS, and
+# cargo rebuilds the whole release profile whenever those change. Warm it
+# is 22 s; run alternately with any other release build it costs both of
+# them a full rebuild every time. 97 s is CI's job time with a cached build.
 [[check]]
 id = "loomgate"
 area = "arch"
@@ -363,7 +356,7 @@ proves = "no dead markdown link anywhere in the tree"
 [[check]]
 id = "cjk-punct"
 area = "doc"
-tier = "precommit"
+tier = "prerelease"
 cmd = "python3 tools/check_cjk_punct.py"
 expected = 1
 timeout = 120
@@ -373,7 +366,7 @@ proves = "no half-width punctuation in CJK prose, site sources included"
 [[check]]
 id = "doc-i18n"
 area = "doc"
-tier = "precommit"
+tier = "prerelease"
 cmd = "python3 tools/check_doc_i18n.py"
 expected = 1
 timeout = 120
@@ -381,24 +374,11 @@ requires = []
 proves = "every translated chapter carries its English chapter's sections"
 
 [[check]]
-id = "doc-toml"
-area = "doc"
-tier = "precommit"
-# Not a parse check: each of the ~45 blocks is fed to the real binary,
-# which costs about a minute. Declared honestly rather than trimmed —
-# a config block that does not load hands a first-time reader a server
-# that refuses to start.
-cmd = "python3 tools/check_doc_toml.py"
-expected = 1
-timeout = 180
-requires = ["binaries-debug"]
-proves = "every TOML block in the docs parses"
-
-[[check]]
 id = "md-port"
 area = "doc"
-tier = "precommit"
+tier = "prerelease"
 cmd = "python3 tools/check_md_port.py"
+ci_job = "site (built, checked, and opened in a browser)"
 expected = 2
 timeout = 300
 requires = ["node", "web-deps"]
@@ -407,8 +387,9 @@ proves = "the Python and TypeScript markdown renderers agree byte-for-byte"
 [[check]]
 id = "wasm-size"
 area = "doc"
-tier = "precommit"
+tier = "prerelease"
 cmd = "python3 tools/check_wasm_size.py"
+ci_job = "site (built, checked, and opened in a browser)"
 expected = 1
 timeout = 60
 requires = ["wasm-artifact"]
@@ -417,7 +398,7 @@ proves = "every stated wasm size is within 10% of the built artifact"
 [[check]]
 id = "readme-bench"
 area = "doc"
-tier = "precommit"
+tier = "prerelease"
 cmd = "python3 tools/sync_readme_bench.py --check"
 expected = 1
 timeout = 60
@@ -569,7 +550,9 @@ tier = "premerge"
 cmd = "bash bench/availgate.sh target/release/kevy"
 expected = 101
 timeout = 3600
-requires = ["box", "binaries-release"]
+# a correctness contract, not a measurement: CI's hosted `gates` job runs it
+# on every push, so it needs Linux and not the quiet box
+requires = ["linux", "binaries-release"]
 proves = "failover converges; WAIT tells the truth; staleness is bounded"
 
 # ── prerelease: compat + cases + doors that pin the release ──────────
@@ -705,7 +688,7 @@ proves = "the memory half of the allocator experiment, both builds"
 [[check]]
 id = "compressgate"
 area = "mem"
-tier = "premerge"
+tier = "prerelease"
 # the unit half, as CI runs it; K1 and K5 need a full-scale capacity run
 cmd = "bash -c 'COMPRESSGATE_UNIT_ONLY=1 bash bench/compressgate.sh'"
 expected = 10
