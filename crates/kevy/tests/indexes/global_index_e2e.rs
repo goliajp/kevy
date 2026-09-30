@@ -729,8 +729,43 @@ fn listed_size(w: &mut Wire, name: &str) -> (u64, u64) {
     (get("entries").unwrap(), get("bytes").unwrap())
 }
 
+/// `bytes` of `name` once the shard ticks' repack has stopped changing
+/// it. A tick with packing left does some within its half millisecond, so
+/// the same figure over five ticks (a tick is 100 ms) is a segment at rest.
+fn packed_size(w: &mut Wire, name: &str) -> u64 {
+    let (mut last, mut same) = (listed_size(w, name).1, 0);
+    for _ in 0..300 {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let now = listed_size(w, name).1;
+        same = if now == last { same + 1 } else { 0 };
+        if same == 5 {
+            return now;
+        }
+        last = now;
+    }
+    panic!("{name}'s bytes never settled");
+}
+
+/// The most bytes an i64 index over `user:0..rows` may hold in `segments`
+/// segments once the repack has rested. An entry takes a 10-byte slot
+/// holding the value, a tag byte and the id's digits packed two to a byte,
+/// 14 bytes at most; a rested segment's leaves are all too full to take
+/// their successor's first entry but the last, so each holds more than
+/// 1768 - 14 of its page. A leaf is a 1784-byte allocation and its
+/// separator an order key of 11 bytes at most. What the writes grew and a
+/// repack does not give back: 5,000 rows a segment never took more than
+/// 128 leaves (their leaves stay over a third full), so each segment has
+/// at most a root and two inner nodes of 65 × 32 bytes and arenas of 256
+/// leaf and 4 inner slots.
+fn packed_bound(rows: u32, segments: f64) -> f64 {
+    let entries: usize = (0..rows).map(|i| 11 + i.to_string().len().div_ceil(2)).sum();
+    let leaves = segments + entries as f64 / (1768.0 - 14.0);
+    let grown = segments * (3.0 * 2080.0 + 256.0 * 8.0 + 4.0 * 96.0);
+    leaves * (1784.0 + 11.0) + grown
+}
+
 #[test]
-fn a_global_index_holds_no_more_than_a_local_one() {
+fn local_and_global_indexes_pack_to_the_rested_bound() {
     let srv = Server::start(4);
     let mut w = srv.wire();
     create(&mut w, b"age_l", &[]);
@@ -740,14 +775,22 @@ fn a_global_index_holds_no_more_than_a_local_one() {
         &[b"PARTITION", b"global", b"SPLIT", b"25", b"SPLIT", b"50", b"SPLIT", b"75"],
     );
     load(&mut w, 0, 20_000, |i| i % 100);
-    let (le, lb) = listed_size(&mut w, "age_l");
-    let (ge, gb) = listed_size(&mut w, "age_g");
+    let (le, ge) = (listed_size(&mut w, "age_l").0, listed_size(&mut w, "age_g").0);
     assert_eq!((le, ge), (20_000, 20_000));
-    let per_row = |b: u64| b as f64 / 20_000.0;
-    eprintln!("bytes per row: local {:.1}, global {:.1}", per_row(lb), per_row(gb));
-    // the partitions hold the same entries, and a row's shard keeps no map
-    // to its partition: a write names the old value, which names it
-    assert!(gb as f64 <= lb as f64 * 1.1, "local {lb}, global {gb}");
+    // four shards' segments and four partitions hold the same entries, and
+    // a row's shard keeps no map to its partition: a write names the old
+    // value, which names it
+    let (lb, gb) = (packed_size(&mut w, "age_l"), packed_size(&mut w, "age_g"));
+    let bound = packed_bound(20_000, 4.0);
+    let per_row = |b: f64| b / 20_000.0;
+    eprintln!(
+        "bytes per row at rest: local {:.2}, global {:.2}, bound {:.2}",
+        per_row(lb as f64),
+        per_row(gb as f64),
+        per_row(bound)
+    );
+    assert!(lb as f64 <= bound, "local {lb}, bound {bound:.0}");
+    assert!(gb as f64 <= bound, "global {gb}, bound {bound:.0}");
 }
 
 #[test]
