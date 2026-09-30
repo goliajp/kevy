@@ -61,6 +61,7 @@ EXAMPLE_APPS = (
 THIRD_PARTY = ("node_modules", "package-lock.json", "/target/", "/.build/", "Cargo.lock")
 
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
+PODSPEC_RE = re.compile(r"(\bs\.version\s*=\s*['\"])(\d+\.\d+\.\d+)(['\"])")
 
 
 # Directories this gate walks and then throws away. `skip` already
@@ -226,6 +227,19 @@ def layer23_manifests(v: str, bad: list) -> int:
             checked += 1
             if m.group(1) != v:
                 bad.append(f"{p}: {m.group(1)} != {v}")
+
+    # CocoaPods specs. flutter_kevy.podspec said 5.0.0 through three majors
+    # because the gate had never been taught the format; a spec that reads
+    # package.json instead of writing a number cannot drift, so only a
+    # literal counts, and one is required somewhere.
+    for f in sorted(walk_suffix(ROOT / "bindings", ".podspec")):
+        if skip(f):
+            continue
+        m = PODSPEC_RE.search(f.read_text(encoding="utf-8"))
+        if m:
+            checked += 1
+            if m.group(2) != v:
+                bad.append(f"{f.relative_to(ROOT)}: s.version {m.group(2)} != {v}")
 
     # Maven poms. Their absence from this gate is how the Java door sat at
     # 5.0.0 through a release that moved everything else — the gate could
