@@ -20,7 +20,7 @@
   1.25 million random writes pack from 21.6 to 15.1 in 49 ms of one core.
   Writes and lookups are unchanged: counted in instructions against the
   previous build, inserts, deletes and lookups each differ by 0.3% or
-  less. With `hz 0` there is no shard tick and nothing packs.
+  less. With `[expiry] hz = 0` there is no shard tick and nothing packs.
 
 - **`BLPOP` and `BRPOP` pops are durable and replicated, and a read-only
   replica refuses them and `RENAME` / `RENAMENX`.** The server kept its
