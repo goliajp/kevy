@@ -305,18 +305,13 @@ impl RuntimeState {
         }
     }
 
-    /// Install `change` if the catalogs are still the ones `base` saw;
-    /// `false` when another change landed first, and the caller computes
-    /// its change again from a new base. Two changes computed from the
-    /// same catalogs can then never both install, the later dropping the
-    /// earlier.
+    /// Install `change` if the catalogs are still the ones `base` saw, and
+    /// record it; `false` when another change landed first, and the caller
+    /// computes its change again from a new base. Two changes computed
+    /// from the same catalogs can then never both install, the later
+    /// dropping the earlier.
     pub(crate) fn commit_catalogs(&self, base: &CatalogBase, change: CatalogChange) -> bool {
-        let _held = self.catalogs.hold();
-        if self.catalogs.generation() != base.generation {
-            return false;
-        }
-        self.install_catalogs(change);
-        true
+        crate::catalog_record::commit(self, base.generation, change)
     }
 
     /// Install what `change` holds: the index catalog first, so a table
@@ -415,3 +410,7 @@ mod tests {
         assert!(cats.incarnation(b"a") > a2);
     }
 }
+
+#[cfg(test)]
+#[path = "catalogs_tests.rs"]
+mod recording_tests;
