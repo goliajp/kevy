@@ -134,3 +134,15 @@ fn advice_renders_each_shape_and_refuses_ungrounded_names() {
     assert!(texts.iter().any(|t| t.contains("KIND text")), "{texts:?}");
     assert!(texts.iter().any(|t| t.contains("VALUES note")), "{texts:?}");
 }
+
+#[test]
+fn a_window_that_cannot_narrow_gets_no_advice() {
+    let with = |span, bucket| {
+        let mut t = cat().get(b"ev").expect("ev").clone();
+        t.window = Some(crate::WindowSpec::new("at", span, bucket));
+        t
+    };
+    assert!(narrow_advice(&with(100, 10), Some(37)).is_some_and(|a| a.contains("SPAN 70")));
+    assert_eq!(narrow_advice(&with(100, 0), Some(37)), None, "no bucket to round to");
+    assert_eq!(narrow_advice(&with(10, 10), Some(37)), None, "already one bucket wide");
+}

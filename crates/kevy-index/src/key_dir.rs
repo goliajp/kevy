@@ -295,4 +295,16 @@ mod tests {
         // 24-byte slots at 3/8 to 7/8 load, a ten-byte key, a nine-byte value
         assert!(per_row < 24.0 / 0.375 + 30.0, "{per_row:.1} bytes a row");
     }
+
+    #[test]
+    fn an_empty_directory_answers_before_it_has_slots() {
+        let mut t = KeyDir::new();
+        assert!(t.is_empty());
+        assert_eq!(t.get(b"k"), None);
+        t.remove(b"k");
+        assert_eq!(format!("{t:?}"), "KeyDir { len: 0, .. }");
+        t.put(b"k", &IndexValue::I64(3));
+        assert!(!t.is_empty());
+        assert_eq!(format!("{t:?}"), "KeyDir { len: 1, .. }");
+    }
 }

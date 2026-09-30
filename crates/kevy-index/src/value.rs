@@ -370,6 +370,10 @@ pub fn order_key(ty: ValType, raw: &[u8]) -> Option<Vec<u8>> {
 }
 
 #[cfg(test)]
+#[path = "value_codec_tests.rs"]
+mod codec_tests;
+
+#[cfg(test)]
 mod order_key_tests {
     use super::*;
 
