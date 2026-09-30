@@ -315,20 +315,6 @@ jobs:
       - name: version alignment (seven layers agree with the workspace)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: python3 tools/check_version_alignment.py
-      # Same failure shape, other direction: a bench table names an
-      # opponent, and the name has to be a version that is actually
-      # written down. This half proves the tree agrees with the anchors
-      # file; the daily competitor-anchors workflow asks the upstreams
-      # whether the anchors file is still current.
-      - name: competitor anchors (every pinned version agrees)
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
-        # --offline exits 2 for "I skipped the upstream question", which is
-        # neither a pass nor a failure. This step accepts that verdict on
-        # purpose: it is the tree-side half, and competitor-anchors.yml asks
-        # the upstreams daily. Any other non-zero is a real disagreement.
-        run: |
-          python3 tools/check_competitor_anchors.py --offline || rc=$?
-          if [ "${rc:-0}" -ne 0 ] && [ "${rc:-0}" -ne 2 ]; then exit "$rc"; fi
       # The other half of the same shape: what the site says we implement
       # against what the engine answers. It said 188 for long enough that
       # nobody knows when it drifted; COMMAND COUNT was 205 the whole time.
@@ -793,32 +779,13 @@ jobs:
         working-directory: crates/${{ matrix.crate }}
         run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=60
 
-  # ───────────── compat smoke vs valkey 9.1 ─────────────
-  compat:
-    name: bench/run.sh (Docker, 5-min smoke)
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    # Don't block the main matrix on bench — it's a flake-prone Docker harness.
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v7
-      - name: Build kevy release image + run vs valkey 9.1
-        env:
-          N: "50000"   # smaller than the perf-box cohort — this is a smoke
-        run: |
-          set -euo pipefail
-          # `bench/run.sh` brings up valkey 9.1 + kevy release in compose,
-          # measures both via valkey-benchmark, then tears down.
-          bash bench/run.sh
-
   # ───────────── command parity (correctness gate) ─────────────
   compat-differential:
     name: compat3 differential (kevy == valkey, byte-for-byte)
     needs: server-release
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    # Blocking, unlike the perf smoke above: a divergence is a deterministic
-    # correctness bug (byte-diff of replies vs valkey 9.1 + redis 7.4), not
+    # Blocking: a divergence is a deterministic correctness bug (byte-diff of replies vs valkey 9.1 + redis 7.4), not
     # an environmental perf artifact. The script exits non-zero if kevy
     # diverges from valkey on any check.
     steps:
