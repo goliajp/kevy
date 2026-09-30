@@ -253,8 +253,8 @@ TABLE.DECLARE user PREFIX user: PK id COLUMN id i64 COLUMN age i64 INDEX age ran
   wakes again when it has an eighth more leaves or an eighth fewer
   entries than it rested with. Packing 1.25 million randomly written
   rows in one segment took 49 ms of one core (21.6 to 15.1 bytes a
-  row), about 100 ticks; 20,000 rows took under a millisecond. With `hz
-  0` there is no shard tick and nothing is packed.
+  row), about 100 ticks; 20,000 rows took under a millisecond. With
+  `[expiry] hz = 0` there is no shard tick and nothing is packed.
 - An index that declares `VALUES` keeps them in the same entry: a
   one-byte tag each, then the value — a number of decimal digits at half
   a byte a digit, anything else as its bytes. Add that to the entry
