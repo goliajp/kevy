@@ -2,6 +2,8 @@
 //! replica client both run here, so the encrypted paths on each side are
 //! the ones under test.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};

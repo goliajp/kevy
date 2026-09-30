@@ -1,6 +1,8 @@
 //! The tools kevy-cli shipped before `--kevy`, reached through it on the
 //! session's connection; a bare tool word is a server command.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use std::process::{Child, Command, Stdio};
 
 struct Srv {

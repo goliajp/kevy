@@ -200,6 +200,20 @@ pub const CONSUMER_SEEN: &str = "XINTERNAL.CONSUMERSEEN";
 /// ```
 pub const CATALOG: &str = "XINTERNAL.CATALOG";
 
+/// The internal record verb that puts back a pending entry of a stream
+/// consumer group, the entry it names still in the stream or not:
+/// `XINTERNAL.PENDING key group consumer delivery-ms delivery-count id`.
+/// A rewritten log writes one for each pending entry whose stream entry
+/// is gone, which no client command can make again. A client that sends
+/// it is refused.
+///
+/// ```
+/// use kevy_resp::ops_table::{PENDING, spec, surface};
+/// let row = spec(PENDING).unwrap();
+/// assert!(row.write && row.surfaces == surface::REPLAY, "applied, never served");
+/// ```
+pub const PENDING: &str = "XINTERNAL.PENDING";
+
 /// The registry. One row per command. Kept grouped by type family and
 /// alphabetical inside each group so a missing row is easy to spot.
 ///
@@ -346,6 +360,7 @@ pub const OP_TABLE: &[OpSpec] = &[
     // internal: applied from a record, refused from a client
     op(CONSUMER_SEEN,  WR, NG,   None,            None,    REPLAY),
     op(CATALOG,        WR, NG,   None,            None,    REPLAY),
+    op(PENDING,        WR, NG,   None,            None,    REPLAY),
     // ---- geo (zset-backed; embedded replay as streams) ----------------
     op("GEOADD",       WR, GROW, Some(N::Zset),   None,    SERVER | REPLAY),
     op("GEODIST",      RD, NG,   None,            None,    SERVER),

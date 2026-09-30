@@ -182,11 +182,11 @@ pub mod zset_seg;
 pub use zset_algebra::{ZAggregate, zdiff, zinter, zintercard, zunion};
 mod zset_flags;
 pub use stream::{
-    AckMode, AutoclaimResult, ClaimMode, ConsumerGroup, ConsumerState, EntryBatch, GroupCreateMode,
-    LoadedGroup, LoadedPelEntry, LoadedStreamEntry, MissingStream, PelEntry, PendingExtended,
-    PendingExtendedRow, PendingSummary, ReadGroupId, StreamData, StreamId, StreamIdError,
-    XAddIdSpec, XClaimOpts, now_unix_ms, parse_explicit_id, parse_range_end, parse_range_start,
-    parse_xadd_id,
+    APPROX_TRIM_LIMIT, AckMode, AutoclaimResult, ClaimMode, ConsumerGroup, ConsumerState,
+    EntryBatch, GroupBatch, GroupCreateMode, LoadedGroup, LoadedPelEntry, LoadedStreamEntry,
+    MissingStream, PelEntry, PendingExtended, PendingExtendedRow, PendingSummary, ReadGroupId,
+    StreamData, StreamId, StreamIdError, TrimMode, TrimTo, XAddIdSpec, XClaimOpts, now_unix_ms,
+    parse_explicit_id, parse_range_end, parse_range_start, parse_xadd_id,
 };
 pub use string::{GetReply, GetShared};
 pub use util::glob_match;
@@ -398,11 +398,6 @@ impl Store {
     /// Cfg twin of the segrows accessor: always empty.
     pub fn row_seg_files(&self) -> Vec<(u32, alloc::string::String)> {
         Vec::new()
-    }
-
-    /// A v7 snapshot cannot load where the segment backend is absent.
-    pub fn load_row_stub(&mut self, _key: Vec<u8>, _seq: u32, _weight: u32) {
-        panic!("row-segment snapshot record on a target without the segment backend");
     }
 }
 

@@ -209,10 +209,24 @@ fn load_segstub_record<R: Read>(
     r.read_exact(&mut seq)?;
     let mut weight = [0u8; 4];
     r.read_exact(&mut weight)?;
-    if keep(&key) {
-        store.load_row_stub(key, u32::from_le_bytes(seq), u32::from_le_bytes(weight));
+    if !keep(&key) {
+        return Ok(());
     }
-    Ok(())
+    // the browser build keeps no row segments, so a snapshot that points
+    // into them cannot be loaded there
+    #[cfg(target_arch = "wasm32")]
+    return {
+        let _ = (store, seq, weight);
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "snapshot holds a cold-row record, and this target has no row segments",
+        ))
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        store.load_row_stub(key, u32::from_le_bytes(seq), u32::from_le_bytes(weight));
+        Ok(())
+    }
 }
 
 /// One `OP_HFTTL` record: `[key][field][deadline_ms: u64 LE]`.
@@ -380,7 +394,8 @@ fn read_stream_groups<R: Read>(r: &mut R) -> io::Result<Vec<kevy_store::LoadedGr
             let seq = read_u64(r)?;
             let consumer = read_bytes(r)?;
             let delivery_time_ms = read_u64(r)?;
-            let delivery_count = read_u32(r)?;
+            // a count past 32 bits follows in the group reads record
+            let delivery_count = u64::from(read_u32(r)?);
             pel.push((ms, seq, consumer, delivery_time_ms, delivery_count));
         }
         groups.push(kevy_store::LoadedGroup::new(name, last_delivered, consumers, pel));

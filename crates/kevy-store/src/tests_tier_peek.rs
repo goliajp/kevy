@@ -3,6 +3,8 @@
 //! (never rows × fields), one batch submission per page — and that no
 //! peek ever promotes or advances the 2nd-touch gate.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use crate::value::Value;
 use crate::{ColdBatchReader, ColdRead, Store, StoreError, SyncColdRead};
 

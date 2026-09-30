@@ -166,15 +166,17 @@ fn stream_and_geo_writes_survive_a_restart_across_shards() {
 
 fn time_dependent_round_trip(shards: usize) {
     const READS: &[&str] =
-        &["XRANGE s - +", "XRANGE s2 - +", "XPENDING s g - + 10", "XINFO GROUPS s"];
+        &["XRANGE s - +", "XRANGE s2 - +", "XPENDING s g - + 10", "XINFO GROUPS s", "XLEN s"];
     let dir = kevy_tmpdir::TmpDir::new("replay-streams-time");
+    let dropped: String;
     let before: Vec<String> = {
         let s = open(dir.path(), shards);
-        for i in 0..4 {
+        for i in 0..150 {
             ok(&s, &format!("XADD s * f {i}"));
-            std::thread::sleep(std::time::Duration::from_millis(3));
         }
-        ok(&s, "XADD s MAXLEN ~ 3 * f 4");
+        // an approximate trim takes whole nodes of 100 entries: the first
+        ok(&s, "XADD s MAXLEN ~ 50 * f 150");
+        assert_eq!(call(&s, "XLEN s"), b":51\r\n");
         assert!(call(&s, "XADD s2 7-* f v").starts_with(b"$3\r\n7-0"));
         assert!(call(&s, "XADD s2 7-* f w").starts_with(b"$3\r\n7-1"));
         ok(&s, "XGROUP CREATE s g 0");
@@ -191,7 +193,8 @@ fn time_dependent_round_trip(shards: usize) {
         assert_eq!(call(&s, &format!("XDEL s {second}")), b":1\r\n");
         let auto =
             String::from_utf8_lossy(&call(&s, "XAUTOCLAIM s g c3 100 0 COUNT 3")).into_owned();
-        assert!(auto.ends_with(&format!("*1\r\n$15\r\n{second}\r\n")), "{auto}");
+        assert!(auto.ends_with(&format!("*1\r\n${}\r\n{second}\r\n", second.len())), "{auto}");
+        dropped = second;
         READS.iter().map(|r| blank_idle(&String::from_utf8_lossy(&call(&s, r)))).collect()
     };
     let s = open(dir.path(), shards);
@@ -199,9 +202,10 @@ fn time_dependent_round_trip(shards: usize) {
         let a = blank_idle(&String::from_utf8_lossy(&call(&s, read)));
         assert_eq!(&a, b, "{shards} shard(s), {read}: changed across the restart");
     }
-    assert!(before[0].starts_with("*2\r\n"), "{}", before[0]);
+    assert!(before[0].starts_with("*50\r\n"), "{}", before[0]);
+    assert_eq!(before[4], ":50\r\n");
     assert!(before[2].contains("c2") && before[2].contains("c3"), "{}", before[2]);
-    assert!(before[2].starts_with("*2\r\n"), "the dropped entry left the list: {}", before[2]);
+    assert!(!before[2].contains(&dropped), "the dropped entry left the list: {}", before[2]);
 }
 
 /// A generated ID and an idle-gated claim replay as they were answered.
@@ -460,6 +464,8 @@ fn the_internal_record_verb_is_refused_from_a_caller_and_applied_from_a_frame() 
     let want = format!("-{}\r\n", kevy_verbs::aof::INTERNAL_REFUSAL);
     assert_eq!(String::from_utf8_lossy(&call(&s, "XINTERNAL.CONSUMERSEEN s g c 1")), want);
     assert_eq!(call(&s, "XINFO CONSUMERS s g"), b"*0\r\n", "a refused record made a consumer");
+    assert_eq!(String::from_utf8_lossy(&call(&s, "XINTERNAL.PENDING s g c 1 1 1-0")), want);
+    assert_eq!(call(&s, "XPENDING s g - + 10"), b"*0\r\n", "a refused record made a row");
     let frame: Vec<Vec<u8>> = ["XINTERNAL.CONSUMERSEEN", "s", "g", "c", "1"]
         .iter()
         .map(|p| p.as_bytes().to_vec())

@@ -17,6 +17,8 @@
 //!   bytes stay what they were before this existed — the same
 //!   requirement `# Tiering` carries.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use std::io::{Read, Write};
 
 // The feature links kevy-alloc; this attribute is what makes it the

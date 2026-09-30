@@ -1,6 +1,8 @@
 //! `kevy-cli -u kevys://…` against a real kevy with its encrypted client
 //! port open and one client key listed.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};

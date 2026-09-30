@@ -10,12 +10,13 @@ use alloc::collections::BTreeMap;
 
 use kevy_map::KevyMap;
 
-use super::{AckMode, EntryBatch, StreamData, StreamId};
+use super::{AckMode, GroupBatch, StreamData, StreamId};
 use crate::StoreError;
 use crate::value::SmallBytes;
 
 #[path = "group_types.rs"]
 mod types;
+pub(super) use types::delivered_again;
 pub use types::{ConsumerState, GroupCreateMode, PelEntry, ReadGroupId};
 
 /// One consumer group's state. Sorted PEL plus a map of known
@@ -253,7 +254,7 @@ impl StreamData {
         count: Option<usize>,
         ack: AckMode,
         now_ms: u64,
-    ) -> Result<EntryBatch, StoreError> {
+    ) -> Result<GroupBatch, StoreError> {
         let Some(g) = self.groups.get_mut(group) else {
             return Err(StoreError::NoSuchKey);
         };
@@ -286,10 +287,10 @@ impl StreamData {
                 let n = take.len() as u64;
                 g.entries_read = tally.after_read(g.last_delivered_id, g.entries_read, n, to);
                 g.last_delivered_id = to;
-                Ok(super::clone_entries(take))
+                Ok(super::clone_entries(take).into_iter().map(|(id, fv)| (id, Some(fv))).collect())
             }
             ReadGroupId::ReplayAfter(after) => {
-                Ok(replay_pel_entries(g, &self.entries, &consumer_smb, after, count))
+                Ok(replay_pel_entries(g, &self.entries, &consumer_smb, after, count, now_ms))
             }
         }
     }
@@ -314,33 +315,39 @@ impl StreamData {
 
 /// Idempotent insert: ensure the named consumer exists in this group's
 /// roster so subsequent `pel_count`/`last_seen_ms` updates have a slot.
-/// The `XREADGROUP … <id>` replay arm: PEL entries owned by `consumer`
-/// with id strictly after `after`, joined against the live entry map
-/// (XDEL'd tombstones are skipped), capped at `count`.
+/// The `XREADGROUP … <id>` replay arm: the pending entries `consumer`
+/// holds after `after`, at most `count`. Each one the stream still holds
+/// is delivered again, its delivery count raised and its delivery time
+/// set to `now_ms`; one the stream no longer holds comes back without
+/// fields, and unchanged.
 fn replay_pel_entries(
-    g: &ConsumerGroup,
+    g: &mut ConsumerGroup,
     entries: &alloc::collections::BTreeMap<StreamId, Vec<(SmallBytes, SmallBytes)>>,
     consumer: &SmallBytes,
     after: StreamId,
     count: Option<usize>,
-) -> EntryBatch {
-    let mut hit: Vec<(StreamId, Vec<(SmallBytes, SmallBytes)>)> = Vec::new();
-    for (id, pel_entry) in g.pel.range(after.next()..=StreamId::MAX) {
-        if pel_entry.consumer != *consumer {
-            continue;
-        }
-        if let Some(fv) = entries.get(id) {
-            hit.push((*id, fv.clone()));
-        }
-        if let Some(n) = count
-            && hit.len() >= n
-        {
+    now_ms: u64,
+) -> GroupBatch {
+    let mut hit: GroupBatch = Vec::new();
+    if after == StreamId::MAX {
+        return hit;
+    }
+    let limit = count.unwrap_or(usize::MAX);
+    for (id, p) in g.pel.range_mut(after.next()..=StreamId::MAX) {
+        if hit.len() >= limit {
             break;
         }
+        if p.consumer != *consumer {
+            continue;
+        }
+        let fields = entries.get(id).map(|fv| {
+            p.delivery_count = delivered_again(p.delivery_count);
+            p.delivery_time_ms = now_ms;
+            fv.iter().map(|(f, v)| (f.to_vec(), v.to_vec())).collect()
+        });
+        hit.push((*id, fields));
     }
-    hit.into_iter()
-        .map(|(id, fv)| (id, fv.iter().map(|(f, v)| (f.to_vec(), v.to_vec())).collect()))
-        .collect()
+    hit
 }
 
 /// Make the named consumer if missing, and note `now_ms` as its contact.
@@ -369,10 +376,9 @@ fn record_deliveries(
             new_for_consumer += 1;
             PelEntry { consumer: consumer.clone(), delivery_time_ms: now_ms, delivery_count: 0 }
         });
+        // an entry already pending (the group was moved back) is delivered
+        // afresh: to this consumer, once, now
         if entry.consumer != *consumer {
-            // Ownership transfer via the read path is unusual; Redis
-            // does it on `>` reads only when the PEL already had an
-            // entry from a previous owner — treat as XCLAIM-style.
             if let Some(prev) = g.consumers.get_mut(entry.consumer.as_slice()) {
                 prev.pel_count = prev.pel_count.saturating_sub(1);
             }
@@ -380,7 +386,7 @@ fn record_deliveries(
             new_for_consumer += 1;
         }
         entry.delivery_time_ms = now_ms;
-        entry.delivery_count = entry.delivery_count.saturating_add(1);
+        entry.delivery_count = 1;
     }
     if let Some(cs) = g.consumers.get_mut(consumer.as_slice()) {
         cs.pel_count = cs.pel_count.saturating_add(new_for_consumer);

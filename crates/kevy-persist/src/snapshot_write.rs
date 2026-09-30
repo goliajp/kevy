@@ -302,7 +302,9 @@ pub(crate) fn write_stream_groups<W: Write>(
             w.write_all(&seq.to_le_bytes())?;
             write_bytes(w, consumer)?;
             w.write_all(&delivery_time_ms.to_le_bytes())?;
-            w.write_all(&delivery_count.to_le_bytes())?;
+            // a count past 32 bits goes in the group reads record
+            let count = u32::try_from(*delivery_count).unwrap_or(u32::MAX);
+            w.write_all(&count.to_le_bytes())?;
         }
     }
     Ok(())

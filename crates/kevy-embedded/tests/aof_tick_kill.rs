@@ -2,6 +2,8 @@
 //! in the kernel, so it survives a SIGKILL of the process (power loss is
 //! a separate matter). Each test re-runs its own binary as the victim.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};

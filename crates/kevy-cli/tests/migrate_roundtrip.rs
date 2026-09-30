@@ -1,5 +1,7 @@
 //! Export → import round-trip against two real servers.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use std::process::{Child, Command};
 
 use kevy_cli::bulk::DeleteMode;

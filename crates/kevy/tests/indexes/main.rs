@@ -1,5 +1,7 @@
 //! Secondary indexes end to end: writes, advice, backfill, describe.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 #[path = "../common/mod.rs"]
 mod common;
 

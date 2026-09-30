@@ -1,5 +1,7 @@
 //! Text, window, view and tiered reads end to end.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 #[path = "../common/mod.rs"]
 mod common;
 

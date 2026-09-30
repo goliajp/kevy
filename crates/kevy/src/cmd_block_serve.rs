@@ -272,8 +272,11 @@ fn xreadgroup_ready<A: ArgvView + ?Sized>(store: &mut Store, serve_argv: &A) -> 
                 return false;
             };
             // no such key or group, or the wrong type: serving answers the
-            // error, which is what a read on this shard answers at once
-            if store.stream_group_peek(key, &group).is_none() {
+            // error, which is what a read on this shard answers at once;
+            // and a read of history answers at once, whatever it finds
+            if store.stream_group_peek(key, &group).is_none()
+                || serve_argv.get(i + 2).is_some_and(|id| id != b">")
+            {
                 return true;
             }
             return store.xreadgroup_has_new(key, &group).unwrap_or(true);

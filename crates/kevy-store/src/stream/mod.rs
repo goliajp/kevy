@@ -61,6 +61,9 @@ pub struct StreamData {
     /// Consumer groups keyed by name (sprint B). Boxed so the
     /// `StreamData` struct stays compact when no groups are attached.
     pub(super) groups: KevyMap<SmallBytes, Box<group::ConsumerGroup>>,
+    /// Where the entries would sit in a Redis server's nodes, for the
+    /// approximate trims.
+    pub(super) nodes: nodes::Nodes,
 }
 
 impl StreamData {
@@ -122,6 +125,7 @@ impl StreamData {
     /// touching scalar state. Used by `Store::load_stream`; the loader
     /// pumps every entry then calls [`Self::set_loaded_state`] once.
     pub fn load_entry(&mut self, id: StreamId, fields: Vec<(SmallBytes, SmallBytes)>) {
+        self.nodes.append(id, &fields);
         self.entries.insert(id, fields);
     }
 
@@ -142,6 +146,7 @@ impl StreamData {
     /// the ID via [`StreamData::resolve_xadd_id`] so monotonicity holds.
     pub(crate) fn insert(&mut self, id: StreamId, fields: Vec<(SmallBytes, SmallBytes)>) {
         debug_assert!(id > self.last_id || (id == StreamId::MIN && self.last_id == StreamId::MIN));
+        self.nodes.append(id, &fields);
         self.entries.insert(id, fields);
         self.last_id = id;
         self.entries_added += 1;
@@ -151,34 +156,22 @@ impl StreamData {
     /// rejecting any spec that would not be strictly greater than
     /// `self.last_id`. `now_ms` is injected so tests can pin wall-clock.
     pub fn resolve_xadd_id(&self, spec: XAddIdSpec, now_ms: u64) -> Result<StreamId, StoreError> {
+        let last = self.last_id;
+        if last == StreamId::MAX {
+            return Err(StoreError::StreamExhausted);
+        }
         let candidate = match spec {
-            XAddIdSpec::AutoAll => {
-                let ms = now_ms.max(self.last_id.ms);
-                if ms == self.last_id.ms {
-                    StreamId::new(ms, self.last_id.seq + 1)
-                } else {
-                    StreamId::new(ms, 0)
-                }
+            XAddIdSpec::AutoAll if now_ms > last.ms => StreamId::new(now_ms, 0),
+            XAddIdSpec::AutoAll => last.next(),
+            XAddIdSpec::AutoSeq(ms) if ms > last.ms => StreamId::new(ms, 0),
+            XAddIdSpec::AutoSeq(ms) if ms < last.ms || last.seq == u64::MAX => {
+                return Err(StoreError::OutOfRange);
             }
-            XAddIdSpec::AutoSeq(ms) => {
-                if ms < self.last_id.ms {
-                    return Err(StoreError::OutOfRange);
-                }
-                if ms == self.last_id.ms {
-                    StreamId::new(ms, self.last_id.seq + 1)
-                } else {
-                    StreamId::new(ms, 0)
-                }
+            XAddIdSpec::AutoSeq(ms) => StreamId::new(ms, last.seq + 1),
+            XAddIdSpec::Explicit(id) if id <= last || id == StreamId::MIN => {
+                return Err(StoreError::OutOfRange);
             }
-            XAddIdSpec::Explicit(id) => {
-                if id <= self.last_id {
-                    return Err(StoreError::OutOfRange);
-                }
-                if id == StreamId::MIN {
-                    return Err(StoreError::OutOfRange);
-                }
-                id
-            }
+            XAddIdSpec::Explicit(id) => id,
         };
         Ok(candidate)
     }
@@ -190,6 +183,9 @@ impl StreamData {
         end: StreamId,
         count: Option<usize>,
     ) -> Vec<(StreamId, &[(SmallBytes, SmallBytes)])> {
+        if start > end {
+            return Vec::new();
+        }
         let iter = self.entries.range(start..=end).map(|(id, fv)| (*id, fv.as_slice()));
         match count {
             Some(n) => iter.take(n).collect(),
@@ -204,6 +200,9 @@ impl StreamData {
         end: StreamId,
         count: Option<usize>,
     ) -> Vec<(StreamId, &[(SmallBytes, SmallBytes)])> {
+        if start > end {
+            return Vec::new();
+        }
         let iter = self.entries.range(start..=end).rev().map(|(id, fv)| (*id, fv.as_slice()));
         match count {
             Some(n) => iter.take(n).collect(),
@@ -230,6 +229,7 @@ impl StreamData {
         let mut removed = 0usize;
         for id in ids {
             if self.entries.remove(id).is_some() {
+                self.nodes.delete(*id);
                 removed += 1;
                 if *id > self.max_deleted_id {
                     self.max_deleted_id = *id;
@@ -237,22 +237,6 @@ impl StreamData {
             }
         }
         removed
-    }
-
-    /// XTRIM MAXLEN — keep the most recent `n` entries. A trim takes
-    /// entries from the head, so it leaves `max_deleted_id` alone: that
-    /// marks a hole XDEL made among the entries, which a trim never does.
-    pub(crate) fn trim_maxlen(&mut self, n: usize) -> usize {
-        let len = self.entries.len();
-        if len <= n {
-            return 0;
-        }
-        let drop = len - n;
-        let drop_ids: Vec<StreamId> = self.entries.keys().copied().take(drop).collect();
-        for id in &drop_ids {
-            self.entries.remove(id);
-        }
-        drop_ids.len()
     }
 
     /// Approximate heap footprint for `Value::weight`. Walks the entry
@@ -270,16 +254,6 @@ impl StreamData {
             .sum();
         (self.entries.len() as u64).saturating_mul(BTREE_SLOT_BYTES) + entry_sum
     }
-
-    /// XTRIM MINID — drop every entry with ID < `floor`. Like
-    /// [`Self::trim_maxlen`], it leaves `max_deleted_id` alone.
-    pub(crate) fn trim_minid(&mut self, floor: StreamId) -> usize {
-        let drop_ids: Vec<StreamId> = self.entries.range(..floor).map(|(id, _)| *id).collect();
-        for id in &drop_ids {
-            self.entries.remove(id);
-        }
-        drop_ids.len()
-    }
 }
 
 mod claim;
@@ -287,14 +261,17 @@ mod group;
 mod lag;
 mod load;
 mod modes;
+mod nodes;
 mod pending;
+mod restore;
 mod store;
 pub use claim::{AutoclaimResult, XClaimOpts};
 pub use group::{ConsumerGroup, ConsumerState, GroupCreateMode, PelEntry, ReadGroupId};
 pub use load::{LoadedGroup, LoadedPelEntry};
 pub use modes::{AckMode, ClaimMode, MissingStream};
+pub use nodes::{APPROX_TRIM_LIMIT, TrimMode, TrimTo};
 pub use pending::{PendingExtended, PendingExtendedRow, PendingSummary};
-pub use store::EntryBatch;
+pub use store::{EntryBatch, GroupBatch};
 
 /// Snapshot-loader payload: one stream entry decoded into primitive
 /// tuples `(ms, seq, [(field, value), ...])`. The persist crate emits

@@ -195,7 +195,8 @@ impl Store {
     }
 }
 
-#[cfg(all(test, feature = "persist"))]
+#[cfg(test)]
+#[cfg(feature = "persist")]
 #[path = "catalog_record_tests.rs"]
 mod tests;
 

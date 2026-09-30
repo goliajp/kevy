@@ -7,6 +7,8 @@
 //! one test: nothing else runs beside it. The client side allocates
 //! nothing inside a window.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::io::{Read, Write};
 use std::sync::Arc;

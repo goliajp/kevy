@@ -51,7 +51,7 @@ fn emit_group(
         encode_id(out, id);
         encode_bulk(out, p.consumer.as_slice());
         encode_integer(out, p.delivery_time_ms as i64);
-        encode_integer(out, i64::from(p.delivery_count));
+        encode_integer(out, i64::try_from(p.delivery_count).unwrap_or(i64::MAX));
     }
     field(out, "consumers");
     emit_consumers(out, g, limit, proto);
@@ -87,7 +87,7 @@ fn emit_consumers(out: &mut Vec<u8>, g: &ConsumerGroup, limit: usize, proto: Res
             encode_array_len(out, 3);
             encode_id(out, *id);
             encode_integer(out, p.delivery_time_ms as i64);
-            encode_integer(out, i64::from(p.delivery_count));
+            encode_integer(out, i64::try_from(p.delivery_count).unwrap_or(i64::MAX));
         }
     }
 }

@@ -5,6 +5,8 @@
 //! `kevy_cli::lint`'s own tests. What needs a server is the reading —
 //! and the deliberate difference between the two exit codes.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use std::process::{Child, Command};
 
 use kevy_resp_client::RespClient;
