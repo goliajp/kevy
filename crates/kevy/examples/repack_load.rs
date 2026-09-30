@@ -174,10 +174,18 @@ fn value_space(rows: u64) -> u64 {
 }
 
 fn ping(port: u16) {
+    // a previous run's listener can linger a moment and reset the
+    // connection: any failure here means not ready yet, never a verdict
+    let answered = || -> std::io::Result<bool> {
+        let mut s = std::net::TcpStream::connect(("127.0.0.1", port))?;
+        s.set_read_timeout(Some(Duration::from_secs(1)))?;
+        s.write_all(b"*1\r\n$4\r\nPING\r\n")?;
+        let mut buf = [0u8; 7];
+        s.read_exact(&mut buf)?;
+        Ok(&buf == b"+PONG\r\n")
+    };
     for _ in 0..100 {
-        if let Ok(mut c) = Conn::open(port)
-            && matches!(c.call(&[b"PING"]), Reply::Ok)
-        {
+        if answered().unwrap_or(false) {
             return;
         }
         std::thread::sleep(Duration::from_millis(100));
