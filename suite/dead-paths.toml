@@ -487,6 +487,19 @@ fail.
 """
 
 [[dead]]
+symbol = "kevy::index_runtime::test_shard::Shard::ext"
+regions = 1
+kind = "unreachable"
+delete = false
+reason = """
+index_runtime/test_shard.rs:50, the `_ => panic!` arm of the test harness's
+reduce loop: `kevy_rt::ExtensionReduced` is `#[non_exhaustive]` in kevy-rt
+(types.rs), so this crate must keep a wildcard arm, and both variants it has
+today (Reply, Continue) are matched by name above it. The arm runs only for a
+variant added later.
+"""
+
+[[dead]]
 symbol = "kevy::mem_guard::live_bytes"
 regions = 1
 kind = "unreachable"
@@ -1601,6 +1614,22 @@ reason = """
 packed_row/store_ops.rs:33, `_ => return None` in the second match: the first
 match (lines 16-21) already returned None for every variant other than
 Hash/SegHash/SmallHashInline; the arm keeps the second match exhaustive
+"""
+
+[[dead]]
+symbol = "kevy_store::row_watch::RowChange::field"
+regions = 1
+kind = "unreachable"
+delete = false
+reason = """
+row_watch.rs:299, the first `?` (`self.c.vals.get(..)` missing): the checks
+above it return None unless the item was a hash, `rule` is set in its mask and
+`field` is below `widths[rule]`, and Journal::project appended exactly
+`widths[r]` values for every rule in the mask, starting at the item's `first`
+(record and resolve both set `first` to `vals.len()` just before projecting;
+take copies `widths` into the next record). So the index is always inside
+`vals`. The `?` stays as a fallback: were that bookkeeping ever wrong, a public
+accessor answers "no such field" instead of panicking
 """
 
 [[dead]]

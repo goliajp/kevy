@@ -95,9 +95,6 @@ fn a_demoted_string_is_lent_as_the_bytes_it_held() {
     assert_eq!(lent(&s, b"small"), Ok(Some(b"hello".to_vec())));
     assert_eq!(lent(&s, b"digits"), Ok(Some(b"42".to_vec())));
     for k in [&b"big"[..], b"small", b"digits"] {
-        assert!(
-            matches!(s.map.get(k).map(|e| &e.value), Some(Value::Cold(_))),
-            "lent, not promoted"
-        );
+        assert!(crate::tests_tier::is_cold(&s, k), "lent, not promoted");
     }
 }

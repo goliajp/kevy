@@ -152,3 +152,27 @@ fn a_full_sync_older_than_frames_another_shard_applied_keeps_the_catalog() {
     let held = replica.snapshot_aux().unwrap();
     assert_eq!((&held[1], &held[2]), (&frame[1], &frame[2]));
 }
+
+/// A 6.4 primary's snapshot carries no catalog frame, because it
+/// replicates no catalog: a full sync from it drops the catalog the
+/// replica held, while a restore of such a snapshot keeps it.
+#[test]
+fn a_full_sync_from_a_snapshot_with_no_catalog_frame_drops_the_catalog() {
+    use kevy_rt::Commands;
+    let primary = restored(1);
+    let index = "IDX.CREATE age ON PREFIX u: FIELD age TYPE i64 KIND range";
+    primary.dispatch(&mut Store::new(), &Argv::from(words(index)));
+    let frame = primary.snapshot_aux().expect("the create was recorded");
+    let replica = restored(1);
+    replica.state().replication.force_replica_flag();
+    apply(replica.state(), &frame, &mut Vec::new());
+    let holds_age =
+        |c: &KevyCommands| c.state().catalogs.index().is_some_and(|i| i.get(b"age").is_some());
+    replica.load_snapshot_aux(None, false);
+    assert!(holds_age(&replica), "a restore without a frame changes nothing");
+    replica.load_snapshot_aux(None, true);
+    assert!(!holds_age(&replica));
+    assert_eq!(*replica.state().catalogs.record.lock(), (0, 0));
+    replica.load_snapshot_aux(None, true);
+    assert_eq!(*replica.state().catalogs.record.lock(), (0, 0), "nothing held, nothing to drop");
+}
