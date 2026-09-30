@@ -8,22 +8,29 @@ ios-sim-arm64 / macos-arm64 static libraries).
 
 ```swift
 // Package.swift
-.package(url: "https://github.com/goliajp/kevy", from: "5.3.0")
+.package(url: "https://github.com/goliajp/kevy", from: "7.0.0")
 ```
 
 The package manifest lives at the **repository root** — SwiftPM resolves
 a package from the root of the repository it clones, so that is the only
 place it can be reached from. Sources, tests and `Artifacts/` stay here.
 
-```swift
-```
+> **The URL form does not resolve yet.** The root `Package.swift` points
+> its binary target at `bindings/apple/KevyKit/Artifacts/Kevy.xcframework`,
+> a build product that is not in git, so a clone of the tag has no
+> xcframework to link. Until the manifest pins a release URL and checksum
+> instead, build the xcframework in a checkout and depend on the checkout
+> by path:
+>
+> ```sh
+> bash packaging/apple/build-xcframework.sh bindings/apple/KevyKit/Artifacts
+> ```
+>
+> ```swift
+> .package(path: "/path/to/kevy")
+> ```
 
-> **Pre-release.** `v5.3.0` is tagged, but the repo root carries no
-> `Package.swift` — SwiftPM cannot resolve the URL form above yet.
-> Until the package manifest is hoisted, depend on the package by path:
-> `.package(path: "/path/to/kevy/bindings/apple/KevyKit")`, after
-> `bash packaging/apple/build-xcframework.sh` has produced
-> `Artifacts/Kevy.xcframework`.
+Changes are listed in [CHANGELOG.md](./CHANGELOG.md).
 
 ```swift
 import KevyKit

@@ -25,7 +25,8 @@
     "ios/KevyEngine.xcframework",
     "KevyNitro.podspec",
     "nitro.json",
-    "README.md"
+    "README.md",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "specs": "nitrogen --logLevel=\"debug\"",

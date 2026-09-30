@@ -16,7 +16,8 @@
     "kevy.d.ts",
     "kevy-opfs-worker.js",
     "kevy.wasm",
-    "README.md"
+    "README.md",
+    "CHANGELOG.md"
   ],
   "sideEffects": false,
   "keywords": [
