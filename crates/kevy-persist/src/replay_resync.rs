@@ -68,7 +68,9 @@ fn resync_slice(
                 crate::record::RecordStep::Ok { payload, consumed } => {
                     match kevy_resp::parse_command(payload) {
                         Ok(Some((mut args, used))) if used == payload.len() => {
-                            if let Some(f) = apply.as_mut() {
+                            if let Some(f) = apply.as_mut()
+                                && crate::log_base::base_of(&args).is_none()
+                            {
                                 f.deliver(&mut args);
                             }
                             w += consumed;

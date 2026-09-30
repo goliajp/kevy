@@ -1339,3 +1339,173 @@ fn every_value_type_round_trips_through_a_snapshot() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Read one whole RESP reply, raw.
+fn read_resp(s: &mut std::net::TcpStream) -> Vec<u8> {
+    let mut out = Vec::new();
+    read_resp_into(s, &mut out);
+    out
+}
+
+fn read_resp_into(s: &mut std::net::TcpStream, out: &mut Vec<u8>) {
+    let start = out.len();
+    let mut byte = [0u8; 1];
+    loop {
+        s.read_exact(&mut byte).unwrap();
+        out.push(byte[0]);
+        if out.len() - start >= 3 && out.ends_with(b"\r\n") {
+            break;
+        }
+    }
+    let line = std::str::from_utf8(&out[start + 1..out.len() - 2]).unwrap();
+    let n: i64 = line.parse().unwrap_or(0);
+    match out[start] {
+        b'$' if n >= 0 => {
+            let mut body = vec![0u8; n as usize + 2];
+            s.read_exact(&mut body).unwrap();
+            out.extend_from_slice(&body);
+        }
+        b'*' | b'%' | b'~' => {
+            let items = if out[start] == b'%' { 2 * n } else { n };
+            for _ in 0..items.max(0) {
+                read_resp_into(s, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Every key the pairing tests write, and the command that reads it back.
+fn pairing_reads() -> Vec<Vec<Vec<u8>>> {
+    let mut reads = Vec::new();
+    for i in 0..8 {
+        let k = |p: &str| format!("{p}{i}").into_bytes();
+        reads.push(vec![b"LRANGE".to_vec(), k("l"), b"0".to_vec(), b"-1".to_vec()]);
+        reads.push(vec![b"XRANGE".to_vec(), k("x"), b"-".to_vec(), b"+".to_vec()]);
+        reads.push(vec![b"GET".to_vec(), k("s")]);
+        reads.push(vec![b"HGET".to_vec(), k("h"), b"f".to_vec()]);
+    }
+    reads
+}
+
+/// Non-idempotent writes, tagged `tag`, on keys spread over every shard.
+/// Each `junk` key is overwritten, so a rewritten log no longer holds
+/// `<tag>-old`.
+fn pairing_writes(c: &mut std::net::TcpStream, tag: &str) {
+    for i in 0..8 {
+        let k = |p: &str| format!("{p}{i}").into_bytes();
+        let v = |s: &str| format!("{tag}-{s}").into_bytes();
+        let cmds: [Vec<Vec<u8>>; 6] = [
+            vec![b"RPUSH".to_vec(), k("l"), v("a"), v("b"), v("c")],
+            vec![b"XADD".to_vec(), k("x"), b"*".to_vec(), b"f".to_vec(), v("1")],
+            vec![b"APPEND".to_vec(), k("s"), v("x")],
+            vec![b"HINCRBY".to_vec(), k("h"), b"f".to_vec(), b"5".to_vec()],
+            vec![b"SET".to_vec(), k("junk"), v("old")],
+            vec![b"SET".to_vec(), k("junk"), v("new")],
+        ];
+        for cmd in cmds {
+            let parts: Vec<&[u8]> = cmd.iter().map(Vec::as_slice).collect();
+            c.write_all(&req(&parts)).unwrap();
+            let reply = read_resp(c);
+            assert_ne!(reply.first(), Some(&b'-'), "{}", String::from_utf8_lossy(&reply));
+        }
+    }
+}
+
+fn read_all(c: &mut std::net::TcpStream) -> Vec<Vec<u8>> {
+    pairing_reads()
+        .iter()
+        .map(|cmd| {
+            let parts: Vec<&[u8]> = cmd.iter().map(Vec::as_slice).collect();
+            c.write_all(&req(&parts)).unwrap();
+            read_resp(c)
+        })
+        .collect()
+}
+
+fn aof_holds(dir: &std::path::Path, s: usize, needle: &[u8]) -> bool {
+    std::fs::read(dir.join(format!("aof-{s}.aof")))
+        .is_ok_and(|b| b.windows(needle.len()).any(|w| w == needle))
+}
+
+/// Restart `dir` and compare every key with what the client read before.
+fn assert_restores(dir: &std::path::Path, nshards: usize, before: &[Vec<u8>]) {
+    with_runtime(free_port(), dir, nshards, |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        c.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+        let after = read_all(&mut c);
+        for ((cmd, b), a) in pairing_reads().iter().zip(before).zip(&after) {
+            assert_eq!(
+                String::from_utf8_lossy(a),
+                String::from_utf8_lossy(b),
+                "{} {} after the restart",
+                String::from_utf8_lossy(&cmd[0]),
+                String::from_utf8_lossy(&cmd[1]),
+            );
+        }
+    });
+}
+
+/// BGSAVE, then BGREWRITEAOF: the rewritten log is a complete image, and a
+/// restart must not load the snapshot under it. Before the fix every write
+/// from before the rewrite was applied twice (a list read `a b c a b c`).
+#[test]
+fn a_rewrite_after_a_bgsave_restores_each_write_once() {
+    let dir = kevy_tmpdir::unique_dir("pair-save-rewrite");
+    let nshards = 2;
+    let mut before = Vec::new();
+    with_runtime(free_port(), &dir, nshards, |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        pairing_writes(&mut c, "pre");
+        c.write_all(&req(&[b"BGSAVE"])).unwrap();
+        read_reply(&mut c, b"+OK\r\n");
+        wait_for("every snapshot and log reset", || {
+            (0..nshards)
+                .all(|s| dir.join(format!("dump-{s}.rdb")).exists() && !aof_holds(&dir, s, b"pre-"))
+        });
+        pairing_writes(&mut c, "mid");
+        // a shard skips a rewrite while a background job is in flight
+        wait_for("every rewritten log", || {
+            c.write_all(&req(&[b"BGREWRITEAOF"])).unwrap();
+            read_reply(&mut c, b"+OK\r\n");
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            (0..nshards).all(|s| aof_holds(&dir, s, b"pre-") && !aof_holds(&dir, s, b"mid-old"))
+        });
+        pairing_writes(&mut c, "post");
+        before = read_all(&mut c);
+    });
+    assert!(String::from_utf8_lossy(&before[0]).contains("mid-a"), "the lists were written");
+    assert_restores(&dir, nshards, &before);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The other order: a BGSAVE after a rewrite starts a log that continues
+/// the snapshot, and a restart restores the snapshot and that log over it.
+#[test]
+fn a_bgsave_after_a_rewrite_restores_each_write_once() {
+    let dir = kevy_tmpdir::unique_dir("pair-rewrite-save");
+    let nshards = 2;
+    let mut before = Vec::new();
+    with_runtime(free_port(), &dir, nshards, |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        pairing_writes(&mut c, "pre");
+        c.write_all(&req(&[b"BGREWRITEAOF"])).unwrap();
+        read_reply(&mut c, b"+OK\r\n");
+        wait_for("every rewritten log", || {
+            (0..nshards).all(|s| aof_holds(&dir, s, b"pre-new") && !aof_holds(&dir, s, b"pre-old"))
+        });
+        pairing_writes(&mut c, "mid");
+        // a shard skips a BGSAVE while its rewrite's teardown is in flight
+        wait_for("every snapshot and log reset", || {
+            c.write_all(&req(&[b"BGSAVE"])).unwrap();
+            read_reply(&mut c, b"+OK\r\n");
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            (0..nshards)
+                .all(|s| dir.join(format!("dump-{s}.rdb")).exists() && !aof_holds(&dir, s, b"mid-"))
+        });
+        pairing_writes(&mut c, "post");
+        before = read_all(&mut c);
+    });
+    assert_restores(&dir, nshards, &before);
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -221,15 +221,22 @@ pub(crate) fn drop_file_cache(f: &std::fs::File) {
 impl<C: Commands> Shard<C> {
     /// Load this shard's snapshot at boot, if it has one, and hand the
     /// command set the frame kept beside the keyspace.
-    pub(crate) fn load_boot_snapshot(&mut self) {
+    /// A log that is a complete image restores alone; one that continues
+    /// a snapshot restores over exactly that snapshot, or startup is
+    /// refused by name.
+    pub(crate) fn load_boot_snapshot(&mut self) -> io::Result<()> {
         let snap = self.snapshot_path();
-        if !snap.exists() {
-            return;
+        let log = self.aof.is_some().then(|| self.aof_path());
+        let loads = kevy_persist::settle_snapshot(&snap, log.as_deref())
+            .map_err(|e| io::Error::new(e.kind(), format!("shard {}: {e}", self.id)))?;
+        if !loads {
+            return Ok(());
         }
         match crate::persist_jobs::load_snapshot_file(&mut self.store, &snap) {
             Ok(aux) => self.commands.load_snapshot_aux(aux.as_ref(), false),
             Err(e) => eprintln!("kevy: shard {} failed to load {}: {e}", self.id, snap.display()),
         }
+        Ok(())
     }
 
     /// The end of a shard's startup restore: sweep the row segments
@@ -261,12 +268,11 @@ impl<C: Commands> Shard<C> {
             Some(aof) => match aof.begin_view_rewrite() {
                 Ok(tmp) => Some(tmp),
                 Err(e) => {
-                    // Snapshot still proceeds; the AOF just isn't reset, so
-                    // a replay stays correct (snapshot ∪ full log ⊇ state —
-                    // the log is replayed over the *older* snapshot only
-                    // until the next successful save).
-                    eprintln!("kevy: shard {} bgsave aof tee failed: {e}", self.id);
-                    None
+                    // A snapshot committed without its log reset would be
+                    // restored under a log that repeats its writes; the
+                    // previous snapshot and the live log stay the pair.
+                    eprintln!("kevy: shard {} bgsave skipped: aof tee failed: {e}", self.id);
+                    return;
                 }
             },
             None => None,
@@ -434,20 +440,17 @@ impl<C: Commands> Shard<C> {
     pub(crate) fn commit_persist_done(&mut self, done: PersistDone) {
         match done {
             PersistDone::Save { result: Ok(tmp), snap_path, aof_reset } => {
-                if let Err(e) = std::fs::rename(&tmp, &snap_path) {
-                    eprintln!("kevy: shard {} bgsave rename failed: {e}", self.id);
-                    self.abort_persist_tee(aof_reset);
+                let Some((reset_tmp, aof)) = aof_reset.zip(self.aof.as_mut()) else {
+                    if let Err(e) = std::fs::rename(&tmp, &snap_path) {
+                        eprintln!("kevy: shard {} bgsave rename failed: {e}", self.id);
+                    }
                     return;
-                }
-                if let (Some(reset_tmp), Some(aof)) = (aof_reset, &mut self.aof) {
-                    let swap = kevy_persist::write_aof_base(&reset_tmp)
-                        .and_then(|()| aof.finish_concurrent_rewrite(&reset_tmp, 0));
-                    if let Err(e) = swap {
-                        eprintln!("kevy: shard {} bgsave aof reset failed: {e}", self.id);
-                        aof.abort_concurrent_rewrite();
-                        let _ = std::fs::remove_file(&reset_tmp);
-                    } else {
-                        self.on_aof_reopened();
+                };
+                match aof.commit_snapshot(&tmp, &snap_path, &reset_tmp) {
+                    Ok(_) => self.on_aof_reopened(),
+                    Err(e) => {
+                        eprintln!("kevy: shard {} bgsave commit failed: {e}", self.id);
+                        let _ = std::fs::remove_file(&tmp);
                     }
                 }
             }
@@ -463,20 +466,4 @@ impl<C: Commands> Shard<C> {
             }
         }
     }
-}
-
-/// [`kevy_persist::write_snapshot_tmp`] with the feed-cursor header —
-/// same durable-tmp discipline (fsync before the caller's rename).
-pub(crate) fn write_snapshot_tmp_with_cursor<S: kevy_persist::SnapshotSource>(
-    view: &S,
-    path: &std::path::Path,
-    cursor: Option<kevy_replicate::feed::FeedPosition>,
-) -> std::io::Result<PathBuf> {
-    let tmp = path.with_extension("rdb.tmp");
-    {
-        let mut file = std::fs::File::create(&tmp)?;
-        kevy_persist::write_snapshot_to_with_cursor(view, &mut file, cursor)?;
-        file.sync_all()?;
-    }
-    Ok(tmp)
 }

@@ -26,13 +26,14 @@ pub(crate) fn restore_one_shard(
     #[cfg(not(target_arch = "wasm32"))]
     store.enable_seg_rows(&layout::segs_dir(dir, i)).map_err(io::Error::other)?;
     let snap = layout::snapshot_path(dir, i);
-    if snap.exists() {
+    let aof = layout::aof_path(dir, i);
+    let log = aof.exists().then_some(aof.as_path());
+    if kevy_persist::settle_snapshot(&snap, log)? {
         let file = io::BufReader::new(std::fs::File::open(&snap)?);
         if let Some(frame) = load_snapshot_with_aux(store, file, |_| true)? {
             keep_newest(catalog, frame);
         }
     }
-    let aof = layout::aof_path(dir, i);
     let mut whole = None;
     if aof.exists() {
         whole = replay_shard_aof(dir, config, i, store, &aof, report, catalog)?;

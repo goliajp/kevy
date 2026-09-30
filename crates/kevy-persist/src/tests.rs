@@ -365,7 +365,13 @@ fn view_snapshot_bytes_match_store_snapshot() {
     let p_view = dir.join(format!("kevy-e3-view-{}.rdb", std::process::id()));
     save_snapshot(&s, &p_store).unwrap();
     save_snapshot(&view, &p_view).unwrap();
-    assert_eq!(std::fs::read(&p_store).unwrap(), std::fs::read(&p_view).unwrap());
+    // each file ends with its own id; the entries before it are the same
+    let body = |p: &std::path::Path| {
+        let mut b = std::fs::read(p).unwrap();
+        b.truncate(b.len() - 16);
+        b
+    };
+    assert_eq!(body(&p_store), body(&p_view));
     let _ = std::fs::remove_file(&p_store);
     let _ = std::fs::remove_file(&p_view);
 }
@@ -408,9 +414,10 @@ fn a_row_sealed_to_a_segment_is_left_out_of_the_estimate() {
     s.hset(b"user:1", &[(b"name".as_slice(), b"ada".as_slice())]).unwrap();
     let sealed = s.seal_rows_to_seg(b"user", &[b"user:1".to_vec()]).unwrap().expect("sealed");
     assert_eq!(s.commit_row_eviction(&sealed), 1);
-    assert_eq!(crate::estimate_rewrite_size(&s), crate::AOF2_MAGIC.len() as u64);
+    let empty = crate::estimate_rewrite_size(&Store::new());
+    assert_eq!(crate::estimate_rewrite_size(&s), empty);
     let written = dump_aof(&d.path().join("seg.aof"), &s).unwrap();
-    assert!(written.bytes > crate::AOF2_MAGIC.len() as u64, "the segment frame is written");
+    assert!(written.bytes > empty, "the segment frame is written");
 }
 
 /// A shard's snapshot that carries a frame hands it to the merge like a

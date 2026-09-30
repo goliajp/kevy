@@ -74,6 +74,7 @@ pub fn dump_aof<S: crate::SnapshotSource>(path: &Path, src: &S) -> io::Result<cr
     let mut w = BufWriter::with_capacity(SNAPSHOT_BUF_CAP, f);
     let mut scratch = Vec::new();
     w.write_all(crate::record::AOF2_MAGIC)?;
+    crate::log_base::write_image_base(&mut w, &mut scratch)?;
     let mut keys = 0u64;
     let mut err: Option<io::Error> = None;
     let mut cold_seqs: Vec<u32> = Vec::new();
@@ -195,6 +196,9 @@ pub fn dump_store_to_buf<S: crate::SnapshotSource>(
         crate::AofFormat::V2 => crate::record::AOF2_MAGIC,
     });
     let mut scratch = Vec::new();
+    if fmt == crate::AofFormat::V2 {
+        let _ = crate::log_base::write_image_base(&mut buf, &mut scratch);
+    }
     let mut keys = 0u64;
     src.for_each_entry(|key, value, ttl_ms| {
         let _ = crate::rewrite_frames::write_value_into_vec(

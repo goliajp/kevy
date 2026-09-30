@@ -56,6 +56,7 @@ mod dir_lock;
 mod dump_cache;
 pub mod feed_meta;
 pub mod layout;
+mod log_base;
 mod modes;
 mod record;
 mod record_pieces;
@@ -74,6 +75,7 @@ mod rewrite_stream_fmt;
 mod segmented;
 mod shards_meta;
 mod snapshot_aux;
+mod snapshot_commit;
 mod snapshot_fmt;
 mod snapshot_payload;
 mod snapshot_read;
@@ -89,8 +91,8 @@ pub use aof_rewrite::{RewritePlan, RewriteStats};
 #[cfg(not(target_arch = "wasm32"))]
 pub use aof_stage::StageOpen;
 pub use aof_sync::PendingSync;
-pub use aof_util::write_aof_base;
 pub use baseline::estimate_rewrite_size;
+pub use log_base::settle_snapshot;
 pub use modes::{Fsync, ReplayMode, ReplaySummary};
 pub use record::{AOF2_MAGIC, AofFormat, RecordStep, next_record, write_record_multibulk};
 pub use replay::{
@@ -132,7 +134,8 @@ pub use snapshot_read::{
 };
 pub(crate) use snapshot_write::write_stream_groups;
 pub use snapshot_write::{
-    save_snapshot, write_snapshot_tmp, write_snapshot_to, write_snapshot_to_with_cursor,
+    save_snapshot, write_snapshot_tmp, write_snapshot_tmp_with_cursor, write_snapshot_to,
+    write_snapshot_to_with_cursor,
 };
 
 /// Anything that can enumerate `(key, &Value, ttl_ms)` triples for
@@ -319,6 +322,8 @@ mod tests;
 mod tests_aof;
 #[cfg(all(test, unix, not(target_arch = "wasm32")))]
 mod tests_fail;
+#[cfg(test)]
+mod tests_log_base;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests_mapped;
 #[cfg(test)]
