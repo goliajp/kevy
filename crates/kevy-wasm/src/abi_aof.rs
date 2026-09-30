@@ -214,9 +214,11 @@ fn feed_v1(inst: &mut Instance) -> i32 {
     loop {
         match kevy_resp::parse_command(&inst.aof_in_carry[pos..]) {
             Ok(Some((args, consumed))) => {
-                inst.store.apply_frame(&args);
+                if !kevy_persist::is_log_base(&args) {
+                    inst.store.apply_frame(&args);
+                    applied += 1;
+                }
                 pos += consumed;
-                applied += 1;
             }
             Ok(None) => break, // incomplete tail — keep for the next chunk
             Err(e) => {
@@ -240,9 +242,11 @@ fn feed_v2(inst: &mut Instance) -> i32 {
             kevy_persist::RecordStep::Ok { payload, consumed } => {
                 match kevy_resp::parse_command(payload) {
                     Ok(Some((args, used))) if used == payload.len() => {
-                        inst.store.apply_frame(&args);
+                        if !kevy_persist::is_log_base(&args) {
+                            inst.store.apply_frame(&args);
+                            applied += 1;
+                        }
                         pos += consumed;
-                        applied += 1;
                     }
                     _ => {
                         // Checksum passed but the payload is not exactly

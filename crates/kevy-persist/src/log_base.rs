@@ -72,6 +72,17 @@ pub(crate) fn base_of<A: ArgvView + ?Sized>(args: &A) -> Option<u64> {
     Some(u64::from_le_bytes(args.get(1)?.try_into().ok()?))
 }
 
+/// Whether `args` is the record that opens a log and names the snapshot it
+/// continues. A replay skips it and does not count it as a write.
+///
+/// ```
+/// let write: kevy_persist::Argv = vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()].into();
+/// assert!(!kevy_persist::is_log_base(&write));
+/// ```
+pub fn is_log_base<A: ArgvView + ?Sized>(args: &A) -> bool {
+    base_of(args).is_some()
+}
+
 /// Read the first record of the log at `path`.
 pub(crate) fn read_log_head(path: &Path) -> io::Result<LogHead> {
     let mut file = match File::open(path) {
