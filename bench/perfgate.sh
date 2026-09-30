@@ -39,7 +39,9 @@
 # 0 pass, 1 fail, 3 noisy, 2 when it could not measure; `compare` prints the
 # same verdicts and exits 0.
 #
-# The only checks before measuring: the box must be at least 95% idle, and
+# The only checks before measuring: the box must be at least 95% idle
+# (PERFGATE_IDLE_MIN=0 measures a busy box anyway, for a correctness run whose
+# numbers nobody quotes), and
 # the machine's bench lock is held for the whole run (builds happen before
 # it is taken). After the run it names the other processes that used CPU.
 # Topology per box is in bench/perfgate.json, picked by hostname or

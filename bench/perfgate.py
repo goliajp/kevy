@@ -173,13 +173,14 @@ def resolve(specs, build_missing):
 
 def preflight(topo):
     idle = pm.idle_fraction()
+    need = float(os.environ.get("PERFGATE_IDLE_MIN", CONFIG["idle_min"]))
     print(f"# box {topo['box']}: idle {idle:.1%} before start, load average "
           f"{os.getloadavg()[0]:.2f}", flush=True)
-    if idle < CONFIG["idle_min"]:
+    if idle < need:
         before = pm.process_ticks()
         time.sleep(1)
         busy = pm.foreign_processes(before, pm.process_ticks())
-        die(f"box busy (idle {idle:.1%} < {CONFIG['idle_min']:.0%}); run again when it is "
+        die(f"box busy (idle {idle:.1%} < {need:.0%}); run again when it is "
             "quiet. Using the CPU now: " + ", ".join(f"{c} ({p}) {s:.2f}s" for c, p, s in busy))
 
 
