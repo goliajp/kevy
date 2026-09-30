@@ -183,9 +183,7 @@ fn groups_rank_by_each_metric_with_absent_extremes_last_and_ties_by_name() {
     assert_eq!(names(&all), ["c", "a", "d", "b", "e"]);
     for _ in 0..2 {
         sort_groups(&mut all, AggBy::Max);
-        let present: Vec<&str> =
-            names(&all).into_iter().filter(|g| !matches!(*g, "b" | "e")).collect();
-        assert_eq!(present, ["a", "c", "d"], "larger maximum first, ties by name");
+        assert_eq!(names(&all), ["a", "c", "d", "b", "e"], "larger maximum first, ties by name");
         all.reverse();
     }
     let mut full = vec![
@@ -204,12 +202,7 @@ fn groups_rank_by_each_metric_with_absent_extremes_last_and_ties_by_name() {
             );
             let mut two = if first_has { vec![with, without] } else { vec![without, with] };
             sort_groups(&mut two, by);
-            let mut got = names(&two);
-            got.sort_unstable();
-            assert_eq!(got, ["o", "w"], "{by:?}");
-            if by == AggBy::Min {
-                assert_eq!(names(&two), ["w", "o"], "a group without a minimum ranks last");
-            }
+            assert_eq!(names(&two), ["w", "o"], "{by:?}: a group without one ranks last");
         }
     }
 }
