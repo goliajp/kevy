@@ -106,3 +106,20 @@ fn a_materialized_view_follows_the_multi_key_writes() {
     s.rename(b"u:2", b"u:20").unwrap();
     assert_eq!(members(&s, b"adults"), ["u:20", "u:3"], "RENAME");
 }
+
+#[test]
+fn a_materialized_view_takes_in_the_rows_written_after_a_flush() {
+    let s = store();
+    adults(&s);
+    s.flushall().unwrap();
+    assert!(members(&s, b"adults").is_empty());
+    s.hset(b"u:7", &[(b"age", b"70")]).unwrap();
+    s.hset(b"u:8", &[(b"age", b"8")]).unwrap();
+    assert_eq!(every_i64(&s, b"age"), [b"u:7".to_vec(), b"u:8".to_vec()]);
+    assert_eq!(members(&s, b"adults"), ["u:7"], "a view kept across the flush");
+    s.view_drop(b"adults").unwrap();
+    let tree = ViewTree::Leaf(ViewLeaf::new("age", IndexValue::I64(18), IndexValue::I64(200)));
+    let mode = ViewMode::Materialized { top_k: 0 };
+    s.view_create(b"adults", tree, b"age", kevy_index::SortOrder::Asc, mode).unwrap();
+    assert_eq!(members(&s, b"adults"), ["u:7"], "a view declared again after the flush");
+}
