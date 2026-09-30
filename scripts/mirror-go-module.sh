@@ -4,6 +4,13 @@
 #
 #   bash scripts/mirror-go-module.sh              # generate + verify
 #   bash scripts/mirror-go-module.sh --push 5.1.0 # ... then push + tag
+#   bash scripts/mirror-go-module.sh --dry-run 5.1.0
+#                                  # ... everything --push does, ending in
+#                                  # `git push --dry-run`
+#
+# Re-running --push for a version kevy-go already has is not an error when
+# the tag holds exactly the tree generated here: it says so and exits 0
+# without pushing. A tag holding anything else is a failure.
 #
 # WHY A MIRROR AT ALL
 #
@@ -39,13 +46,19 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SRC="$ROOT/bindings/go"
 MODULE="github.com/goliajp/kevy-go/v7"
-REPO="git@github.com:goliajp/kevy-go.git"
+# Overridable so the push path can be exercised against a local bare
+# repository; a release uses the default.
+REPO="${KEVY_GO_REPO:-git@github.com:goliajp/kevy-go.git}"
 
 PUSH_VERSION=""
-if [ "${1:-}" = "--push" ]; then
-    PUSH_VERSION="${2:-}"
-    [ -n "$PUSH_VERSION" ] || { echo "✗ --push needs a version, e.g. --push 5.1.0" >&2; exit 2; }
-fi
+DRY_RUN=0
+case "${1:-}" in
+    --push|--dry-run)
+        [ "$1" = "--dry-run" ] && DRY_RUN=1
+        PUSH_VERSION="${2:-}"
+        [ -n "$PUSH_VERSION" ] || { echo "✗ $1 needs a version, e.g. $1 5.1.0" >&2; exit 2; }
+        ;;
+esac
 
 # Built outside the kevy tree on purpose. Under it, the tagged files'
 # `${SRCDIR}/../../crates/...` paths would still resolve, and a mirror
@@ -156,7 +169,11 @@ if [ -z "$PUSH_VERSION" ]; then
     exit 0
 fi
 
-echo "→ pushing $MODULE v$PUSH_VERSION"
+if [ "$DRY_RUN" = 1 ]; then
+    echo "→ rehearsing the push of $MODULE v$PUSH_VERSION (nothing is pushed)"
+else
+    echo "→ pushing $MODULE v$PUSH_VERSION"
+fi
 # The tag must match the version the rest of the release ships, and Go's
 # semantic import versioning requires the module path to carry /vN for
 # major >= 2. A mismatch between the two is not a build error — it is a
@@ -171,11 +188,21 @@ esac
 
 WORK="$STAGE/push"
 git clone --quiet "$REPO" "$WORK"
-if git -C "$WORK" rev-parse "v$PUSH_VERSION" >/dev/null 2>&1; then
-    echo "✗ v$PUSH_VERSION is already tagged on kevy-go." >&2
-    echo "  A Go module version is immutable once the proxy has fetched it:" >&2
-    echo "  moving the tag does not change what anyone downloads. Ship the" >&2
-    echo "  next patch version instead." >&2
+if git -C "$WORK" rev-parse -q --verify "refs/tags/v$PUSH_VERSION" >/dev/null; then
+    # A re-run of a release that already reached kevy-go. Whether that is
+    # fine is a question about content: the tag must hold exactly the tree
+    # generated above. Anything else is a published version that differs
+    # from this tree, and a Go module version is immutable once the proxy
+    # has fetched it — moving the tag does not change what anyone
+    # downloads.
+    git -C "$WORK" checkout --quiet "refs/tags/v$PUSH_VERSION"
+    if diff -r -x '.git' "$WORK" "$OUT" > "$STAGE/tagged.txt" 2>&1; then
+        echo "  ✓ already published v$PUSH_VERSION, content matches"
+        exit 0
+    fi
+    echo "✗ v$PUSH_VERSION is already tagged on kevy-go with DIFFERENT content:" >&2
+    sed 's/^/    /' "$STAGE/tagged.txt" | head -40 >&2
+    echo "  Ship the next patch version instead." >&2
     exit 1
 fi
 find "$WORK" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
@@ -196,6 +223,13 @@ git -C "$WORK" tag "v$PUSH_VERSION"
 # the checksum database — records "unknown revision" and caches that
 # answer for far longer than the window lasted. --atomic makes the ref
 # update all-or-nothing on the server.
+if [ "$DRY_RUN" = 1 ]; then
+    # --dry-run still talks to the remote, so a key without write access
+    # fails here rather than on release day.
+    git -C "$WORK" push --dry-run --atomic origin HEAD:main "v$PUSH_VERSION"
+    echo "  dry run: would push $(git -C "$WORK" rev-parse --short HEAD) to main and tag v$PUSH_VERSION"
+    exit 0
+fi
 git -C "$WORK" push --quiet --atomic origin HEAD:main "v$PUSH_VERSION"
 echo "  ✓ pushed and tagged v$PUSH_VERSION"
 
