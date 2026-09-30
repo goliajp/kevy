@@ -378,3 +378,76 @@ fn xpending_names_a_missing_group_and_a_key_that_is_not_a_stream_in_both_forms()
         assert!(run(&mut s, cmd).1.starts_with("-WRONGTYPE"), "{cmd}");
     }
 }
+
+/// The names in an `XINFO` reply, in the order it lists them.
+fn named(reply: &str) -> Vec<String> {
+    let parts: Vec<&str> = reply.split("\r\n").collect();
+    (1..parts.len().saturating_sub(2))
+        .filter(|&i| parts[i] == "name")
+        .map(|i| parts[i + 2].to_string())
+        .collect()
+}
+
+/// Consumers and groups are listed by name in byte order, whatever order
+/// they were made or read in. The expected replies are what a Redis 8.10
+/// and a valkey 9.1 server answered for this script, byte for byte where
+/// kevy's reply carries the same fields.
+#[test]
+fn consumers_and_groups_are_listed_by_name() {
+    let mut s = Store::new();
+    for c in [
+        "XADD s 1-0 f a",
+        "XADD s 2-0 f b",
+        "XADD s 3-0 f c",
+        "XADD s 4-0 f d",
+        "XGROUP CREATE s g 0",
+        "XREADGROUP GROUP g bob COUNT 1 STREAMS s >",
+        "XREADGROUP GROUP g alice COUNT 1 STREAMS s >",
+        "XREADGROUP GROUP g zed COUNT 1 STREAMS s >",
+        "XREADGROUP GROUP g bob COUNT 1 STREAMS s >",
+        "XGROUP CREATECONSUMER s g carol",
+        "XGROUP CREATECONSUMER s g aaron",
+        "XGROUP CREATE s g2 0",
+        "XGROUP CREATE s a2 0",
+    ] {
+        run(&mut s, c);
+    }
+    assert_eq!(
+        run(&mut s, "XPENDING s g").1,
+        "*4\r\n:4\r\n$3\r\n1-0\r\n$3\r\n4-0\r\n*3\r\n\
+         *2\r\n$5\r\nalice\r\n$1\r\n1\r\n\
+         *2\r\n$3\r\nbob\r\n$1\r\n2\r\n\
+         *2\r\n$3\r\nzed\r\n$1\r\n1\r\n"
+    );
+    assert_eq!(
+        named(&run(&mut s, "XINFO CONSUMERS s g").1),
+        ["aaron", "alice", "bob", "carol", "zed"]
+    );
+    assert_eq!(named(&run(&mut s, "XINFO GROUPS s").1), ["a2", "g", "g2"]);
+}
+
+/// The order is by bytes: not case-folded, not numeric, a prefix first.
+#[test]
+fn consumer_order_is_byte_order() {
+    let mut s = Store::new();
+    let names = ["zed", "ab", "Bob", "a", "alice", "b10", "b9"];
+    for i in 1..=names.len() {
+        run(&mut s, &format!("XADD s {i}-0 f v"));
+    }
+    run(&mut s, "XGROUP CREATE s g 0");
+    for n in names {
+        run(&mut s, &format!("XREADGROUP GROUP g {n} COUNT 1 STREAMS s >"));
+        run(&mut s, &format!("XGROUP CREATECONSUMER s g {n}x"));
+    }
+    let summary = run(&mut s, "XPENDING s g").1;
+    let listed: Vec<&str> =
+        summary.split("\r\n").filter(|p| p.chars().any(char::is_alphabetic)).collect();
+    assert_eq!(listed, ["Bob", "a", "ab", "alice", "b10", "b9", "zed"]);
+    assert_eq!(
+        named(&run(&mut s, "XINFO CONSUMERS s g").1),
+        [
+            "Bob", "Bobx", "a", "ab", "abx", "alice", "alicex", "ax", "b10", "b10x", "b9", "b9x",
+            "zed", "zedx"
+        ]
+    );
+}

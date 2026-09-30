@@ -121,7 +121,7 @@ function streamState(db) {
     ask(db, "XRANGE", "s", "-", "+"),
     ask(db, "XLEN", "s"),
     ask(db, "XPENDING", "s", "g"),
-    [ask(db, "XINFO", "CONSUMERS", "s", "g")].flat().map((c) => (Array.isArray(c) ? c[1] : c)).sort(),
+    [ask(db, "XINFO", "CONSUMERS", "s", "g")].flat().map((c) => (Array.isArray(c) ? c[1] : c)),
     ask(db, "GEODIST", "city", "tokyo", "osaka", "km"),
     ask(db, "GEOSEARCH", "city", "FROMMEMBER", "tokyo", "BYRADIUS", "500", "km", "ASC"),
   ]);
@@ -136,7 +136,6 @@ async function streamsGeo() {
   const read = ask(db, "XREAD", "COUNT", "1", "STREAMS", "s", "2-1");
   assert(read[0][0] === "s" && read[0][1][0][0] === "3-1", "XREAD after 2-1");
   const pending = ask(db, "XPENDING", "s", "g");
-  pending[3].sort(); // the consumer order is not part of the contract checked here
   assert(JSON.stringify(pending) === '[2,"2-1","3-1",[["alice","1"],["bob","1"]]]', "XPENDING summary " + JSON.stringify(pending));
   const detail = ask(db, "XPENDING", "s", "g", "-", "+", "10", "alice");
   assert(detail.length === 1 && detail[0][0] === "3-1", "XPENDING for alice");
@@ -174,6 +173,46 @@ async function persistStreams(backend) {
 
   db = await open(opts);
   assert(streamState(db) === after, backend + ": streams and groups survive a compacted image");
+  await db.close();
+}
+
+// Declared indexes, a view and a table are rebuilt on reload, from the
+// log and from a compacted image, and answer queries each time.
+async function persistIndexes(backend) {
+  const name = "e2e-indexes-" + backend;
+  const opts = { wasm: WASM, broadcast: false, persist: { name, backend } };
+  const queries = (db) =>
+    JSON.stringify([
+      ask(db, "IDX.QUERY", "by_city", "EQ", "tokyo", "LIMIT", "10"),
+      ask(db, "IDX.QUERY", "by_age", "RANGE", "30", "60", "LIMIT", "10"),
+      ask(db, "VIEW.QUERY", "tokyo_by_age", "LIMIT", "10"),
+      ask(db, "TABLE.LIST"),
+    ]);
+  let db = await open(opts);
+  db.flushall();
+  for (const argv of [
+    ["HSET", "user:1", "name", "alice", "city", "tokyo", "age", "34"],
+    ["HSET", "user:2", "name", "bob", "city", "osaka", "age", "41"],
+    ["IDX.CREATE", "by_city", "ON", "PREFIX", "user:", "FIELD", "city", "TYPE", "str", "KIND", "range"],
+    ["IDX.CREATE", "by_age", "ON", "PREFIX", "user:", "FIELD", "age", "TYPE", "i64", "KIND", "range"],
+    ["VIEW.CREATE", "tokyo_by_age", "QUERY", "by_city", "EQ", "tokyo", "ORDER", "BY", "by_age", "DESC"],
+    ["TABLE.DECLARE", "people", "PREFIX", "p:", "PK", "id", "COLUMN", "id", "i64", "COLUMN", "name", "str"],
+    ["HSET", "user:3", "name", "carol", "city", "tokyo", "age", "52"],
+  ]) {
+    const r = ask(db, ...argv);
+    assert(!(typeof r === "string" && r.startsWith("ERR:")), backend + ": " + argv[0] + " " + r);
+  }
+  const want = queries(db);
+  assert(want.includes("user:3") && want.includes("people"), backend + ": the queries answer before the reload");
+  await db.close();
+
+  db = await open(opts);
+  assert(queries(db) === want, backend + ": indexes, view and table rebuilt from the log");
+  await db.compact();
+  await db.close();
+
+  db = await open(opts);
+  assert(queries(db) === want, backend + ": indexes, view and table rebuilt from a compacted image");
   await db.close();
 }
 
@@ -218,6 +257,8 @@ async function main() {
   await run("streams-geo", streamsGeo);
   await run("persist-streams-opfs", () => persistStreams("opfs"));
   await run("persist-streams-idb", () => persistStreams("idb"));
+  await run("persist-indexes-opfs", () => persistIndexes("opfs"));
+  await run("persist-indexes-idb", () => persistIndexes("idb"));
   await run("pubsub-local", localPubsub);
   if (q.get("dualtab") !== "0") await run("pubsub-crosstab", crossTab);
   log("ALL PASS");

@@ -30,7 +30,7 @@ db.publish("events", "hi from this or any other tab");
 await db.flush();                  // 耐久性屏障
 ```
 
-写入以 kevy append-only 日志的形式流进存储，下次以同一个 `persist.name` 调用 `open()` 时重放。4.0 起日志说带校验和的 v2 记录格式（`KEVYAOF2`——见 [persistence.md](persistence.md)）：存储字节里的位翻转在重放时被拒绝，而不是静默应用。4.0 之前的 tab 存下的日志照常重放（v1，永久可读），并在首次 compaction 时升格 v2；从浏览器 tab 泵出的日志依旧能在原生 kevy 里原样重放，反之亦然。整个包共七个文件（打包 617 KB，过网络 gzip 后 602 KB）：wasm 模块、loader、OPFS worker、手写的 TypeScript 类型，加上常规的 README、changelog 和 manifest。边界两侧都是零依赖。
+写入以 kevy append-only 日志的形式流进存储，下次以同一个 `persist.name` 调用 `open()` 时重放。4.0 起日志说带校验和的 v2 记录格式（`KEVYAOF2`——见 [persistence.md](persistence.md)）：存储字节里的位翻转在重放时被拒绝，而不是静默应用。4.0 之前的 tab 存下的日志照常重放（v1，永久可读），并在首次 compaction 时升格 v2；从浏览器 tab 泵出的日志依旧能在原生 kevy 里原样重放，反之亦然。整个包共七个文件（打包 633 KB，过网络 gzip 后 619 KB）：wasm 模块、loader、OPFS worker、手写的 TypeScript 类型，加上常规的 README、changelog 和 manifest。边界两侧都是零依赖。
 
 ## Loader API
 
@@ -83,7 +83,7 @@ kevy 的零依赖法则延伸到工具链：边界两侧都没有绑定生成器
 
 经 `cmd` 的写同样如此。引擎交给泵的是 native AOF 会为这条命令存下的帧，而不是它的 argv：`XADD *` 记下它选出的 id，组读取记下它做出的投递，相对过期记下绝对期限。重载之后，stream 和它的消费者组原样回来，条目、pending 列表、最后投递的 id 都一样。6.x 及以前，经 `cmd` 的写从不进日志，下次 open 时就丢了，除非中间跑过一次 compaction。
 
-有一样东西在浏览器里回不来：索引、视图和表的定义。日志里记着它们（native kevy 重放时会恢复），但浏览器的重放跳过这些记录，所以重载后数据还在，`IDX.CREATE` 要重新执行。
+声明过的索引、视图和表也会回来。每次 `IDX.CREATE`、`VIEW.CREATE`、`TABLE.DECLARE` 或删除，都会把整个 catalog 记成一帧，压缩后的镜像带着最新的那一帧；下次 open 时 catalog 先装回去，索引再从重放出来的键重建，所以重载后的查询和重载前答得一样。7.0 之前，每次重载都会丢掉它们。
 
 **浏览器 tab 写出的日志能原样在 native kevy 里重放**——同一个 magic 头、同样的帧。把 `.aof` 从 OPFS 拷出来、指给 native embedded store（或服务器），键空间就回来了。反向同样成立：入站泵接受 native 写的日志。损坏的尾巴遵循 native 重放契约——完好前缀被应用、尾巴被丢弃，下一次 compaction 从在线状态重写存储。
 
