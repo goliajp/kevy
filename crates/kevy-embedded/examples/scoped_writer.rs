@@ -15,6 +15,8 @@
 //! cluster-aware reader pointed at `127.0.0.1:16204` (the example
 //! prints the bound address on startup).
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use std::time::Duration;
 
 use kevy_embedded::{Config, Store};

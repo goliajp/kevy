@@ -18,6 +18,8 @@
 //! so catch most kills — a kill inside one tests the file, not the ring.
 //! --no-auto-rewrite lets the log grow past the automatic compaction
 //! threshold, for a gate that needs a log much larger than its live data.
+
+#![allow(clippy::unwrap_used, clippy::panic)]
 use std::io::Write as _;
 
 use kevy_embedded::{AppendFsync, Config, Store};

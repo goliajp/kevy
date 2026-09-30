@@ -198,7 +198,8 @@ impl From<KevyError> for io::Error {
     }
 }
 
-#[cfg(all(test, feature = "std"))]
+#[cfg(test)]
+#[cfg(feature = "std")]
 mod io_interop_tests {
     use super::*;
 

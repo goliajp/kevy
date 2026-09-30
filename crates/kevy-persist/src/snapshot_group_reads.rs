@@ -111,15 +111,20 @@ pub(crate) fn read_and_apply<R: Read>(
     if !keep(&key) {
         return Ok(());
     }
-    let bad = |e: kevy_store::StoreError| io::Error::new(io::ErrorKind::InvalidData, e.as_wire());
-    store.xgroup_set_entries_read(&key, &group, entries_read).map_err(bad)?;
-    for (consumer, at) in active {
-        store.xgroup_consumer_active(&key, &group, &consumer, Some(at)).map_err(bad)?;
-    }
-    for (id, count) in wide {
-        store.xgroup_set_delivery_count(&key, &group, id, count).map_err(bad)?;
-    }
-    Ok(())
+    // one key throughout: a key the first call accepts, the rest accept
+    store
+        .xgroup_set_entries_read(&key, &group, entries_read)
+        .and_then(|_| {
+            active.into_iter().try_for_each(|(consumer, at)| {
+                store.xgroup_consumer_active(&key, &group, &consumer, Some(at)).map(drop)
+            })
+        })
+        .and_then(|_| {
+            wide.into_iter().try_for_each(|(id, count)| {
+                store.xgroup_set_delivery_count(&key, &group, id, count).map(drop)
+            })
+        })
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.as_wire()))
 }
 
 #[cfg(test)]
@@ -176,6 +181,55 @@ mod tests {
         let mut none = Store::new();
         crate::load_snapshot_filtered(&mut none, image.as_slice(), |_| false).unwrap();
         assert_eq!(none.dbsize(), 0);
+    }
+
+    /// A snapshot cut anywhere inside the records fails to load rather than
+    /// loading part of a record, and a record naming a key that is not a
+    /// stream is refused by type. The counter an unknown group carries
+    /// comes back unknown.
+    #[test]
+    fn a_cut_or_mismatched_record_fails_the_load() {
+        let mut s = stream_with_reads();
+        s.xgroup_set_entries_read(b"s", b"g", None).unwrap();
+        s.set(b"t", b"v".to_vec(), None, kevy_store::SetCondition::Always);
+        let want = reads(&s);
+        assert_eq!(want[0].1, None, "g's counter is unknown and its consumer active");
+        let mut image = Vec::new();
+        crate::write_snapshot_to(&s, &mut image).unwrap();
+        let mut back = Store::new();
+        crate::load_snapshot_from(&mut back, image.as_slice()).unwrap();
+        assert_eq!(reads(&back), want);
+        let mut records = Vec::new();
+        crate::SnapshotSource::for_each_entry(&s, |k, v, _| collect(k, v, &mut records));
+        let mut tail = Vec::new();
+        for r in &records {
+            write(&mut tail, r).unwrap();
+        }
+        let start = image.len() - tail.len();
+        // every cut strictly inside a record (a cut between records is a
+        // clean end a reader from before them also makes)
+        let mut bounds = vec![start];
+        let mut at = start;
+        for r in &records {
+            let mut one = Vec::new();
+            write(&mut one, r).unwrap();
+            at += one.len();
+            bounds.push(at);
+        }
+        for cut in start..image.len() {
+            if bounds.contains(&cut) {
+                continue;
+            }
+            let loaded = crate::load_snapshot_from(&mut Store::new(), &image[..cut]);
+            assert!(loaded.is_err(), "a cut at {cut} of {} loaded", image.len());
+        }
+        // the first record, renamed onto the string `t`
+        let mut wrong = image.clone();
+        let key_at = start + 1 + 4;
+        assert_eq!(wrong[key_at], b's');
+        wrong[key_at] = b't';
+        let err = crate::load_snapshot_from(&mut Store::new(), wrong.as_slice()).unwrap_err();
+        assert!(err.to_string().contains("WRONGTYPE"), "{err}");
     }
 
     /// A reader that stops at `OP_EOF` loads every entry and group: the

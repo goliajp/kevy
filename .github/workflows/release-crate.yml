@@ -1,18 +1,15 @@
-name: Release a single crate (reusable)
+name: Release one crate
 
-# Reusable workflow that publishes ONE crate to crates.io, tags the
-# release as `<crate>-v<version>`, and creates a matching GitHub
-# release. Called from per-crate `release-<crate>.yml` wrappers via
-# `workflow_call`. The shared body lives here so changes (e.g. tighter
-# gates, retry logic, sigstore signing) land in one place.
+# Publishes ONE crate to crates.io at the workspace version, tags it
+# `<crate>-v<version>`, and creates a matching GitHub release. Dispatched by
+# hand from the Actions tab with the crate's name (for example kevy-client).
 #
 # Two release routes in the repo:
 #
 #   * release.yml — workspace-wide. Pushing a `vX.Y.Z` tag triggers
-#     a verify + 16-crate publish chain. Use this for a coordinated
-#     workspace bump.
+#     a verify + publish chain. Use this for a coordinated workspace bump.
 #
-#   * release-<crate>.yml (this body) — per-crate, manually dispatched.
+#   * release-crate.yml (this file) — per-crate, manually dispatched.
 #     Use this to re-send ONE crate at the workspace version when the
 #     tag workflow failed to deliver it (rate limit, registry outage).
 #     It is not for a crate on a version line of its own: no crate has
@@ -20,7 +17,7 @@ name: Release a single crate (reusable)
 #     declares its own `version =`. Tag scheme `<crate>-v<version>`
 #     keeps the tag namespace orthogonal to the workspace `vX.Y.Z` line.
 #
-# Dispatch flow (per-crate):
+# Dispatch flow:
 #   resolve version from Cargo.toml → refuse if `<crate>-v<version>`
 #   already exists → build --release → test --release → cargo publish
 #   (skip-success on "already uploaded" — supports backfilling a
@@ -31,7 +28,7 @@ name: Release a single crate (reusable)
 # phantom tag pointing at a commit whose crate never reached crates.io.
 
 on:
-  workflow_call:
+  workflow_dispatch:
     inputs:
       crate:
         description: 'Crate directory under crates/ (e.g. kevy-client)'
@@ -41,9 +38,6 @@ on:
         description: 'Build + test + cargo publish --dry-run; do not publish, tag, or release'
         type: boolean
         default: false
-    secrets:
-      CARGO_REGISTRY_TOKEN:
-        required: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -58,6 +52,9 @@ jobs:
       contents: write
     env:
       CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      # the input reaches the shell only through this variable, and only
+      # after the first step has checked it names a workspace crate
+      CRATE: ${{ inputs.crate }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -76,7 +73,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          crate='${{ inputs.crate }}'
+          crate="$CRATE"
+          if ! [[ "$crate" =~ ^kevy[a-z0-9-]*$ ]]; then
+            echo "::error::'$crate' is not a kevy crate name"
+            exit 1
+          fi
           dir="crates/$crate"
           if [ ! -f "$dir/Cargo.toml" ]; then
             echo "::error::No Cargo.toml at $dir/Cargo.toml"
@@ -110,7 +111,7 @@ jobs:
           set -euo pipefail
           tag='${{ steps.ver.outputs.tag }}'
           if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
-            echo "::error::Tag $tag already exists locally — bump crates/${{ inputs.crate }}/Cargo.toml first (or the inherited workspace version)."
+            echo "::error::Tag $tag already exists locally — bump crates/$CRATE/Cargo.toml first (or the inherited workspace version)."
             exit 1
           fi
           if git ls-remote --tags origin "refs/tags/$tag" | grep -q "refs/tags/$tag"; then
@@ -119,14 +120,14 @@ jobs:
           fi
 
       - name: Build --release (gate)
-        run: cargo build -p ${{ inputs.crate }} --release
+        run: cargo build -p "$CRATE" --release
 
       - name: Test --release (gate)
-        run: cargo test -p ${{ inputs.crate }} --profile release-tests --lib --tests
+        run: cargo test -p "$CRATE" --profile release-tests --lib --tests
 
       - name: cargo publish (dry-run)
         if: ${{ inputs.dry_run }}
-        run: cargo publish -p ${{ inputs.crate }} --dry-run
+        run: cargo publish -p "$CRATE" --dry-run
 
       # Real publish path. We treat "already uploaded" as a success so
       # this workflow can backfill a per-crate tag for a version that
@@ -139,15 +140,15 @@ jobs:
         run: |
           set -euo pipefail
           log=$(mktemp)
-          if cargo publish -p ${{ inputs.crate }} 2>&1 | tee "$log"; then
-            echo "✓ published ${{ inputs.crate }}"
+          if cargo publish -p "$CRATE" 2>&1 | tee "$log"; then
+            echo "✓ published $CRATE"
             exit 0
           fi
           if grep -qE "already uploaded|crate version .* is already|already exists on crates.io" "$log"; then
-            echo "↷ ${{ inputs.crate }} ${{ steps.ver.outputs.version }} already on crates.io — backfilling per-crate tag."
+            echo "↷ $CRATE ${{ steps.ver.outputs.version }} already on crates.io — backfilling per-crate tag."
             exit 0
           fi
-          echo "::error::cargo publish failed for ${{ inputs.crate }}"
+          echo "::error::cargo publish failed for $CRATE"
           exit 1
 
       - name: Tag the released version
@@ -158,7 +159,7 @@ jobs:
           tag='${{ steps.ver.outputs.tag }}'
           git config user.name  'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git tag "$tag" -m "${{ inputs.crate }} ${{ steps.ver.outputs.version }}"
+          git tag "$tag" -m "$CRATE ${{ steps.ver.outputs.version }}"
           git push origin "$tag"
 
       - name: Create GitHub release
@@ -170,6 +171,6 @@ jobs:
           set -euo pipefail
           tag='${{ steps.ver.outputs.tag }}'
           gh release create "$tag" \
-            --title "${{ inputs.crate }} v${{ steps.ver.outputs.version }}" \
+            --title "$CRATE v${{ steps.ver.outputs.version }}" \
             --generate-notes \
             --target "$GITHUB_SHA"

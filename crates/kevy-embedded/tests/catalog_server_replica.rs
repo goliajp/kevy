@@ -3,6 +3,7 @@
 //! Needs the server crate, which the published package does not carry.
 
 #![cfg(all(feature = "index", feature = "replicate", not(target_arch = "wasm32")))]
+#![allow(clippy::unwrap_used, clippy::panic)]
 
 use std::path::Path;
 

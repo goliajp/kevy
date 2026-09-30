@@ -5,6 +5,8 @@
 //! (kevy-index is a dev-dependency only; the runtime crate stays
 //! pure-std 0-dep.)
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use kevy_sql::compile;
 
 const SHOP: &str = r"

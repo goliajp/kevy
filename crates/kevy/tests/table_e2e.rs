@@ -7,6 +7,8 @@
 //! explicitly-named IDX access paths; nothing here parses SQL, plans a
 //! query, or enforces a schema at query time.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use std::io::{Read, Write};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};

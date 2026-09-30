@@ -5,6 +5,8 @@
 //! WRONGTYPE at runtime, or a silently empty answer. The compiler cannot
 //! hold this. These do.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use kevy_store::packed_row::{ColumnNames, PackedRow};
 use kevy_store::{Store, Value};
 

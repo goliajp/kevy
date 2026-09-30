@@ -457,3 +457,35 @@ fn consumer_order_is_byte_order() {
         ]
     );
 }
+
+/// Every XGROUP subcommand refuses the wrong number of arguments, a key
+/// of another type, and an ID it cannot read, each with its own answer.
+#[test]
+fn xgroup_refuses_its_arguments_and_the_wrong_type_by_subcommand() {
+    let mut s = Store::new();
+    run(&mut s, "SET str v");
+    run(&mut s, "XGROUP CREATE s g $ MKSTREAM");
+    let wrongtype = "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n";
+    let arity =
+        |sub: &str| format!("-ERR wrong number of arguments for 'xgroup|{sub}' command\r\n");
+    let cases = [
+        ("XGROUP CREATE s", arity("create")),
+        ("XGROUP DESTROY s", arity("destroy")),
+        ("XGROUP SETID s", arity("setid")),
+        ("XGROUP CREATECONSUMER s g", arity("createconsumer")),
+        ("XGROUP DELCONSUMER s g", arity("delconsumer")),
+        ("XGROUP CREATE str g $", wrongtype.to_string()),
+        ("XGROUP DESTROY str g", wrongtype.to_string()),
+        ("XGROUP SETID str g $", wrongtype.to_string()),
+        ("XGROUP CREATECONSUMER str g c", wrongtype.to_string()),
+        ("XGROUP DELCONSUMER str g c", wrongtype.to_string()),
+    ];
+    for (cmd, want) in cases {
+        assert_eq!(run(&mut s, cmd).1, want, "{cmd}");
+    }
+    let unknown = run(&mut s, "XGROUP NOPE s").1;
+    assert!(unknown.starts_with("-ERR Unknown XGROUP subcommand"), "{unknown}");
+    for cmd in ["XGROUP CREATE s g2 notanid", "XGROUP SETID s g notanid"] {
+        assert!(run(&mut s, cmd).1.starts_with("-ERR"), "{cmd}");
+    }
+}
