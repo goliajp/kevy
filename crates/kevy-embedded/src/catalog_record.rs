@@ -202,7 +202,9 @@ mod sidecars {
         /// a lineage), otherwise read once and recorded, and removed once
         /// the record is on disk.
         pub(crate) fn settle_sidecars(&self) -> KevyResult<()> {
-            let Some(dir) = self.config.data_dir.clone() else { return Ok(()) };
+            let Some(dir) = crate::store_wire::disk_dir(&self.config).cloned() else {
+                return Ok(());
+            };
             if self.guard.catalog.at().1 == 0 && !self.import_sidecars(&dir)? {
                 return Ok(());
             }
