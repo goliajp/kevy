@@ -258,22 +258,16 @@ impl StreamData {
             return Err(StoreError::NoSuchKey);
         };
         let consumer_smb = SmallBytes::from_slice(consumer);
-        ensure_consumer(g, &consumer_smb, now_ms);
-        if let Some(cs) = g.consumers.get_mut(consumer_smb.as_slice()) {
-            cs.last_seen_ms = now_ms;
-        }
+        seen_consumer(g, &consumer_smb, now_ms);
         match last_seen_arg {
             ReadGroupId::New => {
                 let start = g.last_delivered_id.next();
-                let entries: Vec<(StreamId, &[(SmallBytes, SmallBytes)])> = self
+                let take: Vec<(StreamId, &[(SmallBytes, SmallBytes)])> = self
                     .entries
                     .range(start..=StreamId::MAX)
                     .map(|(id, fv)| (*id, fv.as_slice()))
+                    .take(count.unwrap_or(usize::MAX))
                     .collect();
-                let take = match count {
-                    Some(n) => entries.into_iter().take(n).collect::<Vec<_>>(),
-                    None => entries,
-                };
                 let Some(&(to, _)) = take.last() else {
                     return Ok(Vec::new());
                 };
@@ -347,6 +341,14 @@ fn replay_pel_entries(
     hit.into_iter()
         .map(|(id, fv)| (id, fv.iter().map(|(f, v)| (f.to_vec(), v.to_vec())).collect()))
         .collect()
+}
+
+/// Make the named consumer if missing, and note `now_ms` as its contact.
+fn seen_consumer(g: &mut ConsumerGroup, name: &SmallBytes, now_ms: u64) {
+    ensure_consumer(g, name, now_ms);
+    if let Some(cs) = g.consumers.get_mut(name.as_slice()) {
+        cs.last_seen_ms = now_ms;
+    }
 }
 
 pub(super) fn ensure_consumer(g: &mut ConsumerGroup, name: &SmallBytes, now_ms: u64) {

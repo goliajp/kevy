@@ -192,22 +192,34 @@ pub(crate) fn write_stream_group_commands<W: Write>(
             emit(w, &Argv::from(argv), fmt, scratch)?;
             frames += 1;
         }
-        let mut active: Vec<&(Vec<u8>, u64)> = g.active.iter().collect();
-        active.sort_unstable();
-        for (consumer, last_seen_ms) in &g.consumers {
-            let mut argv = vec![
-                kevy_resp::ops_table::CONSUMER_SEEN.as_bytes().to_vec(),
-                key.to_vec(),
-                g.name.clone(),
-                consumer.clone(),
-                last_seen_ms.to_string().into_bytes(),
-            ];
-            if let Ok(i) = active.binary_search_by(|(name, _)| name.as_slice().cmp(consumer)) {
-                argv.push(active[i].1.to_string().into_bytes());
-            }
-            emit(w, &Argv::from(argv), fmt, scratch)?;
-            frames += 1;
-        }
+        frames += write_consumer_times(w, key, &g, fmt, scratch)?;
     }
     Ok(frames)
+}
+
+/// One `XINTERNAL.CONSUMERSEEN key group consumer t [a]` per consumer of
+/// `g`: its last contact, and its last active time when it has one.
+fn write_consumer_times<W: Write>(
+    w: &mut W,
+    key: &[u8],
+    g: &kevy_store::LoadedGroup,
+    fmt: crate::AofFormat,
+    scratch: &mut Vec<u8>,
+) -> io::Result<usize> {
+    let mut active: Vec<&(Vec<u8>, u64)> = g.active.iter().collect();
+    active.sort_unstable();
+    for (consumer, last_seen_ms) in &g.consumers {
+        let mut argv = vec![
+            kevy_resp::ops_table::CONSUMER_SEEN.as_bytes().to_vec(),
+            key.to_vec(),
+            g.name.clone(),
+            consumer.clone(),
+            last_seen_ms.to_string().into_bytes(),
+        ];
+        if let Ok(i) = active.binary_search_by(|(name, _)| name.as_slice().cmp(consumer)) {
+            argv.push(active[i].1.to_string().into_bytes());
+        }
+        emit(w, &Argv::from(argv), fmt, scratch)?;
+    }
+    Ok(g.consumers.len())
 }
