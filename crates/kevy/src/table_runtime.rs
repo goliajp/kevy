@@ -106,6 +106,12 @@ pub(crate) fn on_tick(ctx: &Ctx<'_>, store: &mut Store) {
     }
 }
 
+/// A snapshot load put rows in place without the write hook, after any
+/// walk this shard ran: walk every table again at the next tick.
+pub(crate) fn on_snapshot_loaded(ctx: &Ctx<'_>) {
+    ctx.shard.packing.borrow_mut().generation = u64::MAX;
+}
+
 /// Start a walk over each declared table's keys on THIS shard. Live
 /// writes from now on hit `on_write` first and pack there; `pack_row` is a
 /// no-op on a row that is already packed, so the two cannot fight.
@@ -115,3 +121,6 @@ fn start_jobs(tables: &[(Vec<u8>, ColumnNames)]) -> Vec<PackJob> {
         .map(|(prefix, names)| PackJob { names: names.clone(), walk: KeyWalk::new(prefix) })
         .collect()
 }
+
+#[cfg(test)]
+mod tests;

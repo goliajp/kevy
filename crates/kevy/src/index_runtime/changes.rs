@@ -69,8 +69,10 @@ pub(super) fn drain(store: &mut Store, st: &mut ShardIndexes) {
         if changes.is_reset() {
             // the keyspace was wiped: start over, then add what came after
             super::reset_all(st);
+            st.touched.wipe();
         }
         for c in changes.iter() {
+            st.touched.push(c.key());
             for si in &mut st.idx {
                 if c.key().starts_with(si.spec.prefix()) {
                     apply(store, si, &c);
