@@ -57,7 +57,9 @@ verbコントラクト（`COMMAND DOCS`、自動生成リファレンス、`kevy
 ください。
 4.0はこれらを確定させます。公開Rust APIは一度だけ整備され——エラー
 型の統一（`KevyError`）、builderの統一、書き込み面の借用スライス化
-（[docs/UPGRADING.md](docs/UPGRADING.md)）——以後は追加のみで凍結。
+（[docs/UPGRADING.md](docs/UPGRADING.md)）——6.x の間は追加のみでした（7.0 で
+Rust API Guidelines に合わせてもう一度変わりました。[docs/rust-api-7.0.md](docs/rust-api-7.0.md)
+を参照）。
 ランタイムはインスタンススコープになり、一つのプロセスで独立した
 複数のkevyを走らせられます。そして同じエンジンがブラウザにも
 エッジデバイスにも届きます（下の二つのセクション）。
@@ -84,9 +86,9 @@ ANN recall ≥ 0.9 — [設計マップ](docs/designing-on-kevy.md)、
 
 | 状況 | 選ぶもの |
 |---|---|
-| すでにRedisクライアントライブラリがあり、より速く軽いRedisが欲しい | サーバー（`kevy`） |
-| Rustアプリがあり、別プロセスを起動したくない | 組み込みライブラリ（`kevy-embedded`） |
-| RustからkevyまたはRedisサーバーと話したい | `kevy-client`（ブロッキング） |
+| すでにRedisクライアントライブラリがあり、より速く軽いRedisが欲しい | サーバー（`kevy`）|
+| Rustアプリがあり、別プロセスを起動したくない | 組み込みライブラリ（`kevy-embedded`）|
+| RustからkevyまたはRedisサーバーと話したい | `kevy-client`（ブロッキング）|
 | `tokio` / `smol` / `async-std`のRustで書いている | `kevy-client-async` |
 | URL一つで組み込みとサーバーを切り替えられる同一コードが欲しい | `kevy-client` + `kevy-embedded` |
 
@@ -104,7 +106,7 @@ raw コマンド経路から届きます。うち6言語は、push のたびにC
 | Go | `go get github.com/redis/go-redis/v9` | `client.Do(ctx, ...)` |
 | .NET | `dotnet add package StackExchange.Redis` | `db.Execute(...)` |
 | Python | `pip install redis` | `execute_command(...)` |
-| C | `hiredis`（パッケージマネージャで） | `redisCommand(...)` |
+| C | `hiredis`（パッケージマネージャで）| `redisCommand(...)` |
 | Rust | `cargo add kevy-client` | 型付きAPI＋`cmd(...)` |
 
 言語ごとの完全な例は [docs/clients.md](docs/clients.md)（英語）にあります。
@@ -126,7 +128,7 @@ npm i @goliapkg/kevy-electron                    # Electron
 ```
 ```xml
 <dependency>                                     <!-- Java / Kotlin -->
-  <groupId>jp.golia</groupId><artifactId>kevy</artifactId><version>6.4.0</version>
+  <groupId>jp.golia</groupId><artifactId>kevy</artifactId><version>7.0.0</version>
 </dependency>
 ```
 
@@ -329,12 +331,23 @@ Pub/subと組み込みの2行はそれぞれ別のハーネスによるもので
 完全なサーバーはストリップ後768 KBのバイナリで、5 MB未満のRSSで
 起動します。
 
-**アップグレードは？** [docs/UPGRADING.md](docs/UPGRADING.md)が
-両方のホップを一か所でカバーします——3.x → 4.0（ワイヤとディスクは
-そのまま。Rust APIは一度だけ変わり、リネームごとに対照表と規則が
-あります）と2.x → 3.x（バイナリ差し替え + 依存バージョンアップ）
-です。アップグレード方向では、スナップショットとAOFはメジャーを
-またいでそのまま読み込めます。
+**アップグレードは？** 今のホップは[docs/ja/upgrading-6.4-to-7.0.md](docs/ja/upgrading-6.4-to-7.0.md)
+です。プロトコル経由のクライアントはコードの変更不要で、データ
+ディレクトリはそのまま開けます。バイナリを差し替える前に `maxmemory`
+を確認してください（同じデータで `used_memory` が約 1.5 倍に読めます）。
+レプリカがあるならプライマリを先に上げます。Rust から使う場合は
+[docs/rust-api-7.0.md](docs/rust-api-7.0.md)に従い、Go からは `kevy-go/v7`
+を import し、`kevy-cli doctor` などのツールを裸の単語で呼ぶスクリプトは
+ツールを `--kevy` の後ろに移します。6.4 に戻す前にすること、直した
+データ喪失の欠陥もガイドにあり、バージョン混在についての記述はどれも
+6.4.0 のバイナリに対して実測しています。その前のホップは
+[docs/ja/upgrading-6.3-to-6.4.md](docs/ja/upgrading-6.3-to-6.4.md)と
+[docs/ja/upgrading-6.2-to-6.3.md](docs/ja/upgrading-6.2-to-6.3.md)です。
+[docs/UPGRADING.md](docs/UPGRADING.md)はそれより古いメジャーを扱います——
+3.x → 4.0（ワイヤとディスクはそのまま。Rust APIは一度だけ変わり、
+リネームごとに対照表と規則があります）と2.x → 3.x（バイナリ差し替え +
+依存バージョンアップ）です。アップグレード方向では、スナップショットと
+AOFはメジャーをまたいでそのまま読み込めます。
 
 ## 互換性
 
@@ -384,7 +397,7 @@ kevyに対してエンドツーエンドで検証済みのクライアントラ�
 | [`kevy-uring`](crates/kevy-uring) | 純粋Rustのio_uringバインディング。liburingにリンクしない |
 | [`kevy-geo`](crates/kevy-geo) | 地理空間コマンドプリミティブ |
 | [`kevy-wasm`](crates/kevy-wasm) | ブラウザビルド。手書きC ABI + `@goliapkg/kevy`ローダー |
-| [`kevy-lua`](crates/kevy-lua) | Luaスクリプトブリッジ（[luna](https://github.com/goliajp/luna)ランタイムによる） |
+| [`kevy-lua`](crates/kevy-lua) | Luaスクリプトブリッジ（[luna](https://github.com/goliajp/luna)ランタイムによる）|
 
 残りのクレート（`kevy-store`、`kevy-verbs`、`kevy-rt`、`kevy-persist`、`kevy-sys`、
 `kevy-elect`、`kevy-replicate`、`kevy-scope`、`kevy-lua-host`、
@@ -402,10 +415,10 @@ kevyに対してエンドツーエンドで検証済みのクライアントラ�
 
 | トピック | ドキュメント |
 |---|---|
-| RDSワークロードのマッピング（SQL → kevy） | [`docs/rds-workloads.md`](docs/rds-workloads.md) |
+| RDSワークロードのマッピング（SQL → kevy）| [`docs/rds-workloads.md`](docs/rds-workloads.md) |
 | 移行プレイブックとツールチェーン | [`docs/migration.md`](docs/migration.md) |
 | 設定チューニング | [`docs/ja/tuning.md`](docs/ja/tuning.md) |
-| 永続化（AOF + RDB） | [`docs/ja/persistence.md`](docs/ja/persistence.md) |
+| 永続化（AOF + RDB）| [`docs/ja/persistence.md`](docs/ja/persistence.md) |
 | Pub/Sub | [`docs/ja/pubsub.md`](docs/ja/pubsub.md) |
 | レプリケーション | [`docs/ja/replication.md`](docs/ja/replication.md) |
 | クラスタモード | [`docs/ja/cluster.md`](docs/ja/cluster.md) |
@@ -449,12 +462,15 @@ macOSでビルドできます。`kevy-embedded`とその依存クロージャは
 
 ## ロードマップと安定性
 
-ワークスペースはv4.xラインに乗っています。永続化フォーマット、RESP
+ワークスペースは7.xラインに乗っています。永続化フォーマット、RESP
 ワイヤプロトコル、公開Rust API、CLIフラグ、環境変数、TOMLスキーマ、
 エビクションセマンティクスは各メジャーラインを通じて追加のみです。
-さらにオンディスクフォーマットはメジャーをまたいで引き継がれます。
-v2.0で書かれたスナップショットやAOFは、すべての3.x・4.xビルドで
-そのまま読み込めます（[docs/UPGRADING.md](docs/UPGRADING.md)を参照）。追加
+さらにアップグレード方向では、オンディスクフォーマットはメジャーを
+またいで引き継がれます。v2.0で書かれたスナップショットやAOFは、
+すべての3.x・4.xビルドでそのまま読み込め、7.0は6.4のディレクトリを
+そのまま開けます（[docs/UPGRADING.md](docs/UPGRADING.md)と各ホップの
+ガイドを参照）。一つ前のメジャーに戻すのは文書化された手順が必要で、
+そのまま使えることは保証しません。追加
 機能は既存コードを壊すことなくマイナーリリースで導入されます。完全な
 安定性契約は
 [`MIGRATION-FROM-VALKEY.md`](MIGRATION-FROM-VALKEY.md#v1x-stability-commitment)
