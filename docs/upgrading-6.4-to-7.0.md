@@ -70,19 +70,21 @@ kevy-embedded = "7.0.0"
 Measured against the 6.4.0 release binary (built from the `v6.4.0` tag)
 and 7.0.0, two shards each, on Linux with the io_uring reactor, and for
 the embedded store also on macOS. The data set held strings, a key TTL,
-a hash with a field TTL, a list, a set, a sorted set, a stream with a
-consumer group (one consumer made by a read, one by `XGROUP
-CREATECONSUMER`), two indexes, a table and a materialized view, with a
-`BGSAVE` part-way so that some writes lived only in the log.
+a hash with a field TTL, a list, a set, a sorted set, streams with
+consumer groups (one given its read counter with `ENTRIESREAD`, one read
+with `NOACK`; consumers made by reads, by a claim and by `XGROUP
+CREATECONSUMER`; pending entries deleted and trimmed while pending), two
+indexes, a table and a materialized view, with a `BGSAVE` part-way so
+that some writes lived only in the log.
 
 | Case | Keys, TTLs, field TTLs, streams | Indexes, views, tables |
 |---|---|---|
 | 6.4.0 directory opened by 7.0 | all there | all there; the side files are moved into the log and removed |
-| 7.0 directory opened by 6.4.0, from the log | all there, except a consumer made only by `XGROUP CREATECONSUMER` | none |
+| 7.0 directory opened by 6.4.0, from the log | all there; once 7.0 has rewritten the log, not the pending entries whose stream entries were deleted or trimmed while pending | none |
 | 7.0 directory opened by 6.4.0, from a snapshot and the log | all there | none |
 | 7.0 reopening after 6.4.0 wrote to it | all there, including what 6.4.0 wrote | back, unless 6.4.0 rewrote the log (§1) |
 | 6.4.0 primary → 7.0 replica | full sync and live stream converge | none; see §2 |
-| 7.0 primary → 6.4.0 replica | full sync and live stream converge; a consumer made by `XGROUP CREATECONSUMER` arrives only at the next full sync | none |
+| 7.0 primary → 6.4.0 replica | full sync and live stream converge | none |
 
 6.4.0 skips the new frames without logging anything. **A backup is a
 copy**: a copied directory serves what the original did, including one
@@ -159,16 +161,22 @@ with every value as 7.0 served it.
 
 ### The catalog and consumer contacts
 
-Three more things in the log are new, for a server and an embedded
+Four more things in the log are new, for a server and an embedded
 store alike:
 
-- A stream group's consumer contacts are recorded as internal
-  `XINTERNAL.CONSUMERSEEN` frames. 6.4 skips them, and so loses a
-  consumer made only by `XGROUP CREATECONSUMER` when it rebuilds the
-  group from the log; a consumer that is in a snapshot survives.
+- A consumer's last contact and last active time are recorded as
+  internal `XINTERNAL.CONSUMERSEEN` frames, after an `XGROUP
+  CREATECONSUMER` frame for a consumer the command made. 6.4 takes the
+  second and skips the first, so it has every consumer, with idle times
+  counted from when it replayed the log, as 6.4 always counted them.
+- A group's read counter (`entries-read` in `XINFO GROUPS`) is recorded
+  in a frame of its own, `XGROUP SETID … ENTRIESREAD n`, after one that
+  moves the group without it. 6.4 refuses the option and skips that
+  frame; its group still stands where 7.0's does.
 - A rewritten log puts back a pending entry whose stream entry is gone
   (deleted or trimmed while it was pending) as an internal
-  `XINTERNAL.PENDING` frame, where 6.4's rewrite dropped the entry.
+  `XINTERNAL.PENDING` frame, where 6.4's rewrite dropped the entry. 6.4
+  skips the frame, so it has no such row, as after its own rewrite.
 - The index, view and table catalog is no longer kept in
   `index-catalog.meta`, `view-catalog.meta` and `table-catalog.meta`.
   7.0 records each change in the log as one internal `XINTERNAL.CATALOG`
@@ -241,20 +249,22 @@ counted, and each slot was charged 32 bytes where it takes 49). 7.0
 charges the keyspace table and each hash the bytes the allocator holds
 for them, so `used_memory`, `MEMORY USAGE`, `maxmemory` eviction and the
 tiered store's demotion all see the larger, real figure. The process
-does not use more memory; more of it is counted.
+does not hold more memory once the data is in; more of it is counted.
 
 Measured on the same 250,000 keys (200,000 strings of 32 bytes, 50,000
-hashes of four fields, one of 200 bytes) on two shards:
+hashes of four fields, one of 200 bytes) on two shards, loaded through
+one pipelined connection, read five seconds after the load:
 
 | | 6.4.0 | 7.0 |
 |---|---:|---:|
-| `used_memory` | 69,200,000 | 103,543,040 |
-| process RSS | 220.8 MB | 207.7 MB |
-| `MEMORY USAGE` of a string | 128 | 200 |
-| `MEMORY USAGE` of a hash | 872 | 1,272 |
+| `used_memory` | 77,600,000 | 103,543,040 |
+| process RSS | 163.1 MiB | 134.1 MiB |
+| peak RSS during the load | 171.2 MiB | 196.4 MiB |
+| `MEMORY USAGE` of a string | 128 | 201 |
+| `MEMORY USAGE` of a hash | 1,040 | 1,272 |
 
 A `maxmemory` sized from 6.4's `used_memory` therefore starts evicting at
-about two-thirds of the data it held before. Size it against RSS, or
+about three-quarters of the data it held before. Size it against RSS, or
 raise it by the ratio you measure on your own data.
 
 A tiered server (`--tiering-budget`) also watches its resident memory
