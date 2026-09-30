@@ -177,15 +177,6 @@ def _fresh_doc_coverage():
     return False, "rustdoc-coverage did not write the tables in target/doc in this run"
 
 
-def _fresh_dead_set():
-    """deadgate's reading of this run's corpus. The file is tracked, so a
-    stone report over it without a fresh run reads another tree's corpus."""
-    p = ROOT / "bench/DEAD-SET.json"
-    if p.exists() and p.stat().st_mtime >= RUN_STARTED:
-        return True, ""
-    return False, "deadgate did not write bench/DEAD-SET.json in this run"
-
-
 def _fresh_stone_report():
     """The report stone-report wrote in this run. The file is tracked, so
     existing proves nothing: stonegate would judge the checked-in copy."""
@@ -250,7 +241,6 @@ PROBES = {
     "device": lambda: _have_device(),
     "nightly rustdoc": lambda: _have_nightly_rustdoc(),
     "rustdoc coverage tables from rustdoc-coverage": lambda: _fresh_doc_coverage(),
-    "bench/DEAD-SET.json from deadgate": lambda: _fresh_dead_set(),
     "cargo-semver-checks": lambda: _have_semver_checks(),
     "bench/STONE-REPORT.json from stone-report": lambda: _fresh_stone_report(),
     "ci": lambda: (False, "runs in CI, not locally"),

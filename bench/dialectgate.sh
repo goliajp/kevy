@@ -45,7 +45,7 @@ port = int(sys.argv[1])
 # was compiling an unrelated project — thirty rustc processes, none of them
 # this one's — and the answer to that is not a larger constant, it is the
 # knob the rest of the suite already turns: KEVY_TEST_PATIENCE, which
-# covgate and deadgate set to 6 and the replication tests read for the same
+# covgate sets to 6 and the replication tests read for the same
 # reason. A budget tuned on an idle machine is a flake scheduled for the
 # first busy one, and the second busy one after that.
 budget = 60 * float(os.environ.get("KEVY_TEST_PATIENCE", "1"))

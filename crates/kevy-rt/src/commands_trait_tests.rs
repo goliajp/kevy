@@ -1,7 +1,7 @@
 //! The optional `on_*` hooks have default bodies so an existing
 //! [`Commands`](crate::Commands) implementor gains them without
 //! changing — and a default body nothing calls is a never-executed
-//! region. `deadgate` named the first one the day it was added.
+//! region. The first one showed up dead in coverage the day it was added.
 //!
 //! Split out of `commands_trait.rs`, which crossed the 500-LOC house
 //! rule the moment a second hook arrived with its example.
@@ -34,7 +34,7 @@ impl Commands for Minimal {
 /// The optional hooks have default bodies so an existing
 /// implementor gains them without changing — and a default body
 /// nothing calls is a never-executed region, which is how this test
-/// came to exist: `deadgate` named `on_query_buffer_exceeded` the
+/// came to exist: `on_query_buffer_exceeded` showed up dead in coverage the
 /// day it was added. Calling them from the smallest possible
 /// implementor is both the coverage and the claim: this trait can
 /// be implemented with five methods.
