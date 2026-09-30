@@ -156,7 +156,7 @@ fn rest(argv: &[Vec<u8>], from: usize) -> Vec<&[u8]> {
 }
 
 /// An argv as the shared command layer reads it.
-struct Args<'a>(&'a [Vec<u8>]);
+pub(crate) struct Args<'a>(pub(crate) &'a [Vec<u8>]);
 
 impl core::ops::Index<usize> for Args<'_> {
     type Output = [u8];
