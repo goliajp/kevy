@@ -1,0 +1,431 @@
+# The release doors that used to be opened by hand after the tag: the Go
+# module mirror, the Flutter package mirror, the two npm packages that
+# carry the prebuilt mobile engine, and the site.
+#
+# Called by release.yml once crates.io and the GitHub release exist. Each
+# door is its own job, so one that fails does not hide another; the only
+# ordering is a real dependency (the mobile doors need the engine the mini
+# job builds).
+#
+# PyPI, NuGet and Maven Central stay workflow_dispatch in their own
+# workflows: those channels cannot be withdrawn, so a tag does not publish
+# them.
+#
+# Dispatch with dry_run (the default) to rehearse: every door builds and
+# verifies everything and prints what it would push or publish, and nothing
+# leaves the runner. A tag that does not exist yet is rehearsed on the
+# commit the dispatch runs from, whose Cargo.toml must already carry that
+# version.
+#
+# Re-running a door for a version it already published compares what is
+# published with what this run built. The same content passes and pushes
+# nothing; different content fails.
+name: release doors
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+      dry_run:
+        type: boolean
+        default: false
+    secrets:
+      NPM_TOKEN:
+        required: true
+      KEVY_GO_DEPLOY_KEY:
+        required: true
+      KEVY_FLUTTER_DEPLOY_KEY:
+        required: true
+  # Only a tag push (through release.yml) and a dispatch reach this file,
+  # never a pull request: the mini runner is in a runner group open to
+  # public repositories.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (vX.Y.Z). May not exist yet when dry_run is on.'
+        type: string
+        required: true
+      dry_run:
+        description: 'Build and verify everything, push and publish nothing'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  resolve:
+    name: resolve the tag
+    runs-on: ubuntu-latest
+    outputs:
+      ref: ${{ steps.r.outputs.ref }}
+      version: ${{ steps.r.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: r
+        env:
+          TAG: ${{ inputs.tag }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          # Final releases only: none of these doors has a pre-release
+          # channel, and the site would announce an rc as the release.
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::tag must be vX.Y.Z, got '$TAG'"
+            exit 1
+          fi
+          V="${TAG#v}"
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null; then
+            ref="refs/tags/$TAG"
+          elif [ "$DRY_RUN" = "true" ]; then
+            ref="$GITHUB_SHA"
+            echo "::notice::$TAG does not exist yet; rehearsing on $GITHUB_SHA"
+          else
+            echo "::error::$TAG does not exist, and publishing needs the tag"
+            exit 1
+          fi
+          git fetch --quiet --depth 1 origin "$ref"
+          got=$(git show FETCH_HEAD:Cargo.toml | sed -n 's/^version = "\(.*\)"$/\1/p' | head -1)
+          if [ "$got" != "$V" ]; then
+            echo "::error::$ref has workspace version '$got', not $V"
+            exit 1
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+  # ───────────── Go: github.com/goliajp/kevy-go ─────────────
+  go:
+    name: go module mirror
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      V: ${{ needs.resolve.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.ref }}
+      - uses: actions/setup-go@v7
+        with:
+          go-version: 'stable'
+          cache-dependency-path: bindings/go/go.mod
+      # The mirror runs its tests against a real server, and a missing
+      # binary is a failure there rather than a skip.
+      - name: Build the server the mirror's tests run against
+        run: |
+          rustup toolchain install stable --no-self-update
+          rustup default stable
+          cargo build --release -p kevy --bin kevy
+      - name: Deploy key for goliajp/kevy-go
+        env:
+          KEY: ${{ secrets.KEVY_GO_DEPLOY_KEY }}
+        run: bash scripts/deploy-key.sh "$KEY"
+      - name: Generate, verify, push (or rehearse the push)
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            bash scripts/mirror-go-module.sh --dry-run "$V"
+          else
+            bash scripts/mirror-go-module.sh --push "$V"
+          fi
+      # A pushed tag is not a published module until the proxy serves it,
+      # and the proxy caches a miss for longer than the push takes. Asked by
+      # content: the .mod must be this module's go.mod.
+      - name: The module proxy serves it
+        if: ${{ !inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          module=$(sed -n 's/^module //p' bindings/go/go.mod)
+          url="https://proxy.golang.org/$module/@v/v$V.mod"
+          for _ in $(seq 1 30); do
+            if curl -sf "$url" | grep -qx "module $module"; then
+              echo "✓ $url names $module"
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "::error::the Go proxy does not serve $module v$V after 15 minutes ($url)"
+          exit 1
+
+  # ───────────── the prebuilt mobile engine (mini) ─────────────
+  # Xcode and the Android NDK exist on mini and on no hosted runner. This
+  # job only builds: no registry token and no deploy key reaches the
+  # self-hosted runner. What it builds travels to the jobs below as an
+  # artifact.
+  natives:
+    name: build the mobile engine (mini)
+    needs: resolve
+    runs-on: [self-hosted, mini]
+    timeout-minutes: 120
+    steps:
+      # mini is also a benchmark machine. A benchmark holds this lock for
+      # its whole measurement; the build waits for it to be free.
+      - name: Wait for the machine's bench lock
+        run: |
+          lock="${KEVY_BENCH_LOCK:-/Users/Shared/bench.lock}"
+          echo "waiting on $lock (up to 30 minutes)"
+          rc=0
+          /usr/bin/lockf -k -t 1800 "$lock" true || rc=$?
+          if [ "$rc" = 75 ]; then
+            echo "::error::$lock was still held after 30 minutes — a benchmark is running on mini"
+            exit 1
+          elif [ "$rc" != 0 ]; then
+            echo "::error::lockf on $lock failed with exit $rc"
+            exit 1
+          fi
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.ref }}
+      - name: Toolchains
+        run: |
+          set -euo pipefail
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          ndk=$(find "$HOME/Library/Android/sdk/ndk" -mindepth 1 -maxdepth 1 -name '27.*' | sort -V | tail -1)
+          if [ -z "$ndk" ]; then
+            echo "::error::no Android NDK 27.x under ~/Library/Android/sdk/ndk"
+            exit 1
+          fi
+          echo "ANDROID_NDK_HOME=$ndk" >> "$GITHUB_ENV"
+          echo "NDK: $ndk"
+          export PATH="$HOME/.cargo/bin:$PATH"
+          rustup toolchain install stable --no-self-update
+          rustup default stable
+          rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios \
+            aarch64-apple-darwin aarch64-linux-android x86_64-linux-android
+          xcodebuild -version
+      - name: Build the engine and vendor it into each door
+        run: |
+          set -euo pipefail
+          bash packaging/apple/build-xcframework.sh bindings/apple/KevyKit/Artifacts
+          bash packaging/android/build-ffi-jnilibs.sh
+          bash packaging/android/build-jnilibs.sh
+          (cd bindings/nitro && bash scripts/prepare-native.sh)
+          (cd bindings/expo && bash scripts/prepare-native.sh)
+          (cd bindings/flutter && bash scripts/prepare-native.sh)
+      # Layer 6 sees every vendored artifact only on the machine that
+      # built them, and it refuses one that names its builder.
+      - name: Every vendored engine reports the version
+        run: python3 tools/check_version_alignment.py
+      - name: No artifact names the machine that built it
+        run: |
+          set -euo pipefail
+          found=$(grep -rlF "$HOME" bindings/nitro/ios bindings/nitro/android/src/main/jniLibs \
+                  bindings/expo/ios bindings/expo/android/src/main/jniLibs \
+                  bindings/flutter/ios/kevy_ffi.xcframework bindings/flutter/android/src/main/jniLibs || true)
+          if [ -n "$found" ]; then
+            echo "::error::these artifacts carry the builder's home path:"
+            echo "$found"
+            exit 1
+          fi
+      # Every path prepare-native.sh wrote. tar keeps the framework's
+      # layout and modes, which the artifact upload alone does not.
+      - name: Pack the vendored engine
+        run: |
+          tar -czf "$RUNNER_TEMP/mobile-engine.tgz" \
+            bindings/nitro/ios/KevyEngine.xcframework \
+            bindings/nitro/android/src/main/jniLibs \
+            bindings/expo/ios/Kevy.xcframework \
+            bindings/expo/android/src/main/jniLibs \
+            bindings/expo/android/src/main/java \
+            bindings/flutter/ios/kevy_ffi.xcframework \
+            bindings/flutter/android/src/main/jniLibs
+          ls -l "$RUNNER_TEMP/mobile-engine.tgz"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: mobile-engine
+          path: ${{ runner.temp }}/mobile-engine.tgz
+          if-no-files-found: error
+          retention-days: 7
+
+  # ───────────── npm: expo-kevy, react-native-kevy-nitro ─────────────
+  mobile-npm:
+    name: npm packages with the prebuilt engine
+    needs: [resolve, natives]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      V: ${{ needs.resolve.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.ref }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: mobile-engine
+          path: ${{ runner.temp }}
+      - run: tar -xzf "$RUNNER_TEMP/mobile-engine.tgz"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+      # The doors are the npm packages that vendor a prebuilt engine, which
+      # is what a prepare-native.sh next to a package.json means. The same
+      # rule makes release.yml's binding loop leave them to this job.
+      - name: Pack and publish (or rehearse)
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -uo pipefail
+          packs="$RUNNER_TEMP/packs"
+          mkdir -p "$packs"
+          flag=""
+          [ "$DRY_RUN" = "true" ] && flag="--dry-run"
+          doors=0
+          failed=""
+          for s in bindings/*/scripts/prepare-native.sh; do
+            dir=${s%/scripts/prepare-native.sh}
+            [ -f "$dir/package.json" ] || continue
+            [ "$(node -p "require('./$dir/package.json').private ? 1 : 0")" = "0" ] || continue
+            doors=$((doors + 1))
+            name=$(node -p "require('./$dir/package.json').name")
+            echo "::group::$name"
+            # npm 10 prints an array here, npm 12 an object keyed by name.
+            file=$(cd "$dir" && npm version "$V" --no-git-tag-version --allow-same-version >/dev/null \
+                   && npm pack --pack-destination "$packs" --json | node -p \
+                     "const j=JSON.parse(require('fs').readFileSync(0,'utf8'));
+                      (Array.isArray(j)?j[0]:Object.values(j)[0]).filename")
+            if [ -z "$file" ] || [ ! -f "$packs/$file" ]; then
+              failed="$failed $name"; echo "::endgroup::"; continue
+            fi
+            python3 packaging/npm/publish-prebuilt.py "$packs/$file" "$V" $flag || failed="$failed $name"
+            echo "::endgroup::"
+          done
+          if [ "$doors" -lt 2 ]; then
+            echo "::error::found $doors npm package(s) with a prebuilt engine; expected expo-kevy and react-native-kevy-nitro"
+            exit 1
+          fi
+          if [ -n "$failed" ]; then
+            echo "::error::not published:$failed"
+            exit 1
+          fi
+
+  # ───────────── pub.dev: flutter_kevy through goliajp/kevy-flutter ─────────────
+  flutter:
+    name: flutter package mirror
+    needs: [resolve, natives]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      V: ${{ needs.resolve.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.ref }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: mobile-engine
+          path: ${{ runner.temp }}
+      - run: tar -xzf "$RUNNER_TEMP/mobile-engine.tgz"
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Deploy key for goliajp/kevy-flutter
+        env:
+          KEY: ${{ secrets.KEVY_FLUTTER_DEPLOY_KEY }}
+        run: bash scripts/deploy-key.sh "$KEY"
+      - name: Generate, verify, push (or rehearse the push)
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            bash scripts/mirror-flutter-package.sh --dry-run "$V"
+          else
+            bash scripts/mirror-flutter-package.sh --push "$V"
+          fi
+      # The tag starts kevy-flutter's own publish workflow. pub.dev accepts
+      # its upload only once the package's Admin tab allows publishing from
+      # GitHub Actions for goliajp/kevy-flutter; until the owner turns that
+      # on, this step fails and the version is published by hand (the
+      # mirror step printed how).
+      - name: pub.dev serves it, with the engine inside
+        if: ${{ !inputs.dry_run }}
+        run: python3 scripts/wait-pub-dev.py flutter_kevy "$V"
+
+  # ───────────── the site: kevy.golia.jp ─────────────
+  # The site is served from the `site` branch of this repository: a single
+  # orphan commit whose root is the built site. t01 pulls that branch every
+  # few minutes and serves it, so a push to it IS a deploy, within minutes,
+  # to every reader. Nothing but a real release pushes it; a rehearsal
+  # builds and verifies locally and never pushes, not to any ref.
+  site:
+    name: site
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    env:
+      V: ${{ needs.resolve.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.ref }}
+      - name: Rust + the wasm target
+        run: |
+          rustup toolchain install stable --no-self-update
+          rustup default stable
+          rustup target add wasm32-unknown-unknown
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 'lts/*'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      # Every page's version comes from Cargo.toml at build time; the wasm
+      # engine is built from this checkout first.
+      - run: npm run build
+        working-directory: web
+      - name: check (versions, links, reproducibility)
+        run: node check.mjs
+        working-directory: web
+      - name: The build is this release, with its index at the root
+        run: |
+          set -euo pipefail
+          test -f web/dist/index.html || { echo "::error::web/dist/index.html is missing"; exit 1; }
+          got=$(node -p "require('./web/dist/build.json').version")
+          if [ "$got" != "$V" ]; then
+            echo "::error::the built site says $got, the release is $V"
+            exit 1
+          fi
+      - name: a browser Chromium for verify.mjs
+        run: npx playwright install --with-deps chromium
+        working-directory: web
+      - name: verify the build, served locally
+        run: |
+          set -euo pipefail
+          (cd web/dist && exec python3 -m http.server 6040 >/dev/null 2>&1) &
+          for _ in $(seq 1 30); do
+            curl -sf -o /dev/null http://localhost:6040/ && break
+            sleep 1
+          done
+          (cd web && node verify.mjs http://localhost:6040)
+      - name: Push the site branch (or say what would be pushed)
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: bash scripts/push-site-branch.sh web/dist "$V"
+      # t01 pulls within minutes. The deployed site is asked, by content:
+      # its build.json must name this version and this commit, and then the
+      # whole of verify.mjs runs against it.
+      - name: kevy.golia.jp serves it
+        if: ${{ !inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          want=$(cat web/dist/build.json)
+          for _ in $(seq 1 45); do
+            got=$(curl -sf https://kevy.golia.jp/build.json || true)
+            if [ "$got" = "$want" ]; then
+              echo "✓ kevy.golia.jp/build.json: $got"
+              cd web && exec node verify.mjs https://kevy.golia.jp
+            fi
+            sleep 20
+          done
+          echo "::error::kevy.golia.jp does not serve $want after 15 minutes (last: ${got:-no answer})"
+          exit 1
