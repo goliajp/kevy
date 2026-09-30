@@ -189,6 +189,10 @@ fn zadd_takes_each_condition_and_refuses_the_clashing_ones() {
     for cmd in ["ZADD z GT LT 1 m", "ZADD z NX GT 1 m", "ZADD z NX LT 1 m"] {
         assert_eq!(run(&mut s, cmd).1, clash, "{cmd}");
     }
+    // a condition on a key of another type is refused by type, as plain ZADD is
+    let wrongtype = b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n";
+    run(&mut s, "SET str v");
+    assert_eq!(run(&mut s, "ZADD str XX 1 m").1, wrongtype);
 }
 
 #[test]

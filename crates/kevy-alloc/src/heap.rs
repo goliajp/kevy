@@ -409,11 +409,10 @@ impl Heap {
     ///
     /// The handout comes from the class's claimed word; only when it
     /// runs dry does the span header get touched again (one claim per
-    /// 64 slots — the far-line amortizer).
+    /// 64 slots — the far-line amortizer). Every caller arrives with the
+    /// claimed word already dry: `alloc_small` tried it first, and nothing
+    /// on the slow path claims a word before calling here.
     fn pop_slot(&mut self, c: usize) -> Option<NonNull<u8>> {
-        if let Some(p) = self.pop_claimed(c) {
-            return Some(p);
-        }
         self.refill_claim(c)?;
         self.pop_claimed(c)
     }
