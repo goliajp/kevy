@@ -13,10 +13,9 @@ Competitor versions are pinned in
 harness refuses to produce a number when a running engine reports a
 different version.
 
-A benchmark is a benchmark: when a run looks disturbed — the harness
-prints how much of the box other processes used, and says when a load
-generator was the limit — it is run again, not reasoned about. Two tools
-produce everything below that runs on a server:
+When a run looks disturbed — the harness prints how much of the box
+other processes used, and says when a load generator was the limit — it
+is run again. Two tools measure the server:
 
 - `bash bench/arena.sh <kevy-binary>` — kevy against the pinned
   competitors, three rounds, per-cell medians with a 99 % paired interval
