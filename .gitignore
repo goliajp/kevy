@@ -95,7 +95,7 @@ bench/iot-consumer/target/
 bench/mcu-probe/target/
 bench/iot-consumer/riscv-out
 
-# perfgate builds the reference binary from the baseline commit and caches it here.
+# perfgate builds the git revs it is given and caches the binaries here.
 bench/.perfgate-ref/
 # capacity-envelope.sh writes its per-run verdicts here (tiergate consumes them).
 bench/.capacity-envelope-results

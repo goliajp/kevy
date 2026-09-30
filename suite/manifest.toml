@@ -104,15 +104,15 @@ requires = []
 proves = "the repo root and worktree hold no runtime residue"
 
 [[check]]
-id = "perfstats"
+id = "perfreport"
 area = "perf"
 tier = "precommit"
-cmd = "python3 -m unittest tools/test_perfstats.py"
+cmd = "python3 -m unittest tools/test_perfreport.py"
 expected = 2
 timeout = 60
 requires = []
-inputs = ["tools/perfstats.py", "tools/perfwindow.py", "tools/test_perfstats.py"]
-proves = "the perf gate's SPRT turns a 3% shift red and an A/A green, and its sample rules discard what they claim to"
+inputs = ["tools/perfreport.py", "tools/test_perfreport.py"]
+proves = "perfgate reads counters and per-op lines right, fails a limit every round crosses, and calls rounds that disagree across a limit noisy"
 
 [[check]]
 id = "secretgate"
@@ -512,23 +512,12 @@ proves = "kill -9 at any point loses nothing the server acknowledged"
 id = "perfgate"
 area = "perf"
 tier = "prerelease"
-cmd = "bash bench/perfgate.sh target/release/kevy"
-expected = 420
-timeout = 3600
-requires = ["box", "binaries-release"]
-proves = "throughput holds the recorded baselines, angle by angle"
-
-[[check]]
-id = "perfgate2"
-area = "perf"
-tier = "prerelease"
-cmd = "bash bench/perfgate2.sh target/release/kevy"
-expected = 1800
+# a NOISY verdict exits 3: the rounds disagreed across a limit, run it again
+cmd = "bash bench/perfgate.sh gate target/release/kevy"
+expected = 1500
 timeout = 7200
 requires = ["box", "binaries-release"]
-advisory = true
-advisory_reason = "shadow period: runs beside perfgate until its sigma is calibrated and the M1-M5 mutants and ten A/A runs pass on the box; then it replaces perfgate and this row stops being advisory"
-proves = "instructions, syscalls and cycles per op, server utilisation and throughput hold against the branch point and the last release, each line on its own calibrated band"
+proves = "throughput, instructions per op and cycles per op hold against the reference build, measured beside it in the same run"
 
 [[check]]
 id = "tailgate"
@@ -628,21 +617,10 @@ id = "arena"
 area = "perf"
 tier = "full"
 cmd = "bash bench/arena.sh target/release/kevy"
-expected = 1800
+expected = 2400
 timeout = 7200
 requires = ["box", "binaries-release", "docker"]
-proves = "kevy vs valkey/redis/dragonfly on 4 unshared cores: throughput from server-side counters and cost per op from perf, each cell checked for load-generator headroom"
-
-[[check]]
-id = "kevy-ab"
-area = "perf"
-tier = "full"
-cmd = "bash bench/kevy_ab.sh target/release/kevy suite"
-inputs = ["crates/kevy-uring/", "crates/kevy-rt/", "crates/kevy-sys/", "bench/kevy_ab*"]
-expected = 900
-timeout = 3600
-requires = ["box", "binaries-release"]
-proves = "epoll vs io_uring on one binary, isolated cores"
+proves = "kevy vs valkey/redis/dragonfly on 4 unshared cores over three rounds: throughput from server-side counters with paired intervals, cost per op from perf, each cell checked for load-generator headroom"
 
 # ── full: memory ─────────────────────────────────────────────────────
 
@@ -656,41 +634,6 @@ expected = 900
 timeout = 3600
 requires = ["linux", "binaries-release"]
 proves = "bytes/entry match each declared memory formula within tolerance"
-
-[[check]]
-id = "allocgate"
-area = "mem"
-tier = "full"
-# M2 records a REAL measured trade (allocator ON costs ~13% on
-# pub/sub — the header-free finding) and three lines await capacity
-# trains. The kevy-alloc feature ships OFF; this ledger tracks the
-# experiment, red by design until its decision lands.
-advisory = true
-advisory_reason = """
-Red-first, by design: the acceptance lines exist before the crate does, so the crate is built against them. Lines it does not yet own read PENDING(<train>). It stops being advisory when every line it owns is a real assertion.
-"""
-cmd = "bash -c 'eval \"$(bash bench/allocgate-prep.sh)\" && bash bench/allocgate.sh'"
-inputs = ["crates/kevy-alloc/", "bench/allocgate*", "bench/perfgate*"]
-expected = 600
-timeout = 3600
-requires = ["linux", "binaries-release"]
-proves = "the allocator's fragmentation and RSS budget"
-
-[[check]]
-id = "allocgate-mem"
-area = "mem"
-tier = "full"
-# The other half of the same experiment ledger.
-advisory = true
-advisory_reason = """
-The memory half of the same red-first experiment; same reason, same closing condition.
-"""
-cmd = "bash -c 'eval \"$(bash bench/allocgate-prep.sh)\" && bash bench/allocgate-mem.sh'"
-inputs = ["crates/kevy-alloc/", "bench/allocgate*"]
-expected = 600
-timeout = 3600
-requires = ["linux", "binaries-release"]
-proves = "the memory half of the allocator experiment, both builds"
 
 [[check]]
 id = "compressgate"

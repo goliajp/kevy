@@ -15,8 +15,7 @@
 #   Linux  /var/lock/bench.lock       flock
 #
 # KEVY_BENCH_LOCK overrides the path. A script run by another that already
-# holds the lock (perfgate-median running perfgate, say) does not take it
-# again: the environment says it is held.
+# holds the lock does not take it again: the environment says it is held.
 if [ -z "${KEVY_BENCH_LOCK_HELD:-}" ]; then
   export KEVY_BENCH_LOCK_HELD=1
   case "$(uname -s)" in

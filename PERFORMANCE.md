@@ -13,6 +13,21 @@ Competitor versions are pinned in
 harness refuses to produce a number when a running engine reports a
 different version.
 
+When a run looks disturbed — the harness prints how much of the box
+other processes used, and says when a load generator was the limit — it
+is run again. Two tools measure the server:
+
+- `bash bench/arena.sh <kevy-binary>` — kevy against the pinned
+  competitors, three rounds, per-cell medians with a 99 % paired interval
+  on each ratio. Run once per release, when numbers are published.
+- `bash bench/perfgate.sh compare A B` — two kevy builds on one box in one
+  run (a path, or a git rev such as `v6.4.0`, `HEAD` or
+  `HEAD+kevy-alloc`), alternating which goes first, reporting throughput,
+  instructions, cycles and syscalls per command as B / A with the spread
+  across rounds. `bash bench/perfgate.sh callgrind A B` counts instructions
+  per command per function under valgrind, which does not depend on what
+  else the machine is doing.
+
 ## Key-value throughput — 2026-09-07 — kevy 6.3.0
 
 `-c 50 -P 16`, one engine at a time, server on cores 0-7 and client on
@@ -39,7 +54,7 @@ Reproduce:
 
 ```sh
 cargo build --release -p kevy
-bash bench/arena-median.sh target/release/kevy 3
+bash bench/arena.sh target/release/kevy
 ```
 
 ## Transport: TCP loopback and Unix socket — kevy 1.25 (2026-06-22)

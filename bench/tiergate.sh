@@ -152,7 +152,7 @@ l4_replay_spill() { # $1 = budget, $2 = floor -> "PASS ..." | "FAIL: why"
     awk '/replayed .* in [0-9]+ ms/{for(i=1;i<=NF;i++) if($i=="in") {v=$(i+1)+0; if(v>m) m=v}} END{print m+0}' "$log"
     echo "$n" >&2
   }
-  # Median-of-3 on the ratio, same doctrine as perfgate-median: the
+  # Median-of-3 on the ratio: the
   # quiet-box band at 8x over budget is 0.44-0.55, so a single run
   # against a 0.45 floor is a coin toss even with the writeback settle.
   local ratios="" plain_ms tiered_ms plain_n tiered_n rep

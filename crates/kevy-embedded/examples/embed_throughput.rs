@@ -104,7 +104,7 @@ fn main() {
     println!();
     println!("Compare against `redis-benchmark -c1 -P1 -n 300000` running");
     println!("against the same host's kevy / valkey / redis server (see");
-    println!("bench/loopback_c1.sh).");
+    println!("`CONC=1 PIPE=1 bash bench/arena.sh`).");
 }
 
 fn hostname() -> String {

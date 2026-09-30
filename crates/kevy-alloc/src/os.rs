@@ -14,7 +14,7 @@
 //! pages, which is the property the whole experiment rests on. Widening
 //! a crate whose name is its contract costs more than three extern
 //! declarations, so the boundary lives here — which is also why
-//! `kevy-alloc` is in the recorded unsafe set (allocgate M8).
+//! `kevy-alloc` carries its own `unsafe` extern block.
 //!
 //! # Examples
 //!
