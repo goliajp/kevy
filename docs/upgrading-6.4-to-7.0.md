@@ -8,13 +8,14 @@ binary:
   of strings and hashes — because it now counts what the allocator holds.
   A `maxmemory` set close to what 6.4 reported starts evicting sooner
   ([§4](#4-used_memory-reads-higher-for-the-same-data)).
-- With replicas, upgrade the primary first, or restart each replica once
-  after the primary runs 7.0; otherwise a replica goes without indexes,
-  views and tables until the next catalog command
-  ([§2](#2-replicated-setups-upgrade-the-primary-first)).
+- With replicas, a replica holds no indexes, views or tables while its
+  primary runs 6.4, and takes the primary's catalog once the primary
+  runs 7.0 ([§2](#2-replicated-setups-upgrade-the-primary-first)).
 - Going back to 6.4 loses the index, view and table catalog unless you
-  kept the side files from before the upgrade, and an embedded store
-  killed under 7.0 needs one clean open and close under 7.0 first
+  kept the side files from before the upgrade; an embedded store killed
+  under 7.0 needs one clean open and close under 7.0 first; and a
+  directory whose last step was a log rewrite after a snapshot needs one
+  more save under 7.0, or 6.4 applies part of its writes twice
   ([§1](#1-going-back-to-64-what-the-directory-may-hold)).
 - A Rust caller needs edits; the compiler names each one
   ([§13](#13-the-rust-api)).
@@ -45,9 +46,9 @@ kevy-embedded = "7.0.0"
 |---|---|---|
 | run the server, or talk to kevy over the wire | swap the binary; check `maxmemory` | 4 |
 | set `maxmemory`, or run a tiered server | `used_memory` reads about 1.5× higher for the same data; a tiered server also refuses growing writes while the process holds more than its budget | 4 |
-| run replicas | upgrade the primary first, or restart each replica after it; a replica's own index declarations are dropped | 2 |
+| run replicas | either order works; a replica takes the primary's catalog once the primary runs 7.0, and its own index declarations are dropped | 2 |
 | send `BLPOP`, `BRPOP`, `RENAME`, `RENAMENX` or a catalog command to a replica | refused with `READONLY` | 3 |
-| may downgrade to 6.4 | open and close cleanly with 7.0 first; keep the catalog side files from before the upgrade | 1 |
+| may downgrade to 6.4 | stop 7.0 with `SHUTDOWN SAVE` (embedded: `save_snapshot`, then close); keep the catalog side files from before the upgrade | 1 |
 | set `MAXMEM` on an index, or size a tiered store near its index floor | index sizes read differently: smaller for large indexes, about 1.8 KB a shard at least | 5 |
 | parse `IDX.LIST` or `IDX.DESCRIBE` positionally | each gains a `partitioning` pair | 6 |
 | read the change feed or the AOF | an embedded `MSET` arrives as one frame per shard; stream writes arrive in the form a replay needs | 7 |
@@ -126,6 +127,35 @@ the two off; `AppendFsync::Always` uses neither. With both off, a killed
 process loses what was in the buffer, as in 6.4 (measured: 44 to 80
 writes in these runs).
 
+### A snapshot and a rewritten log
+
+7.0 starts every AOF with an internal record that names the snapshot the
+log continues, or says the log is a complete image after a rewrite, and
+ends every snapshot file with that snapshot's id; a restart loads a
+snapshot only under the log that continues it. 6.4 knows neither: it
+loads whatever snapshot is there and replays the whole log over it. Its
+snapshot reader stops before the id, and its replay counts the record as
+one command and skips it. Measured, with directories 7.0 wrote on two
+shards (server and embedded store) and then opened with 6.4.0, comparing
+lists, appended strings, incremented hash fields and streams:
+
+| What 7.0 did last before it stopped | 6.4.0 serves what 7.0 served |
+|---|---|
+| writes only (no snapshot) | yes |
+| a snapshot, then writes | yes |
+| a log rewrite, with no snapshot in the directory | yes |
+| a snapshot, then a log rewrite, then writes | no: every list element pushed before the rewrite comes back twice; strings, hashes and streams are right |
+| the above, then another snapshot | yes |
+
+The failing row is 6.4's own rule: a 6.4 server that ran `BGSAVE` and
+then `BGREWRITEAOF` doubles the same lists at its next start (fixed in
+7.0, [§16](#16-defects-fixed-that-lost-or-changed-data)). So **before
+going back, stop 7.0 with `SHUTDOWN SAVE`** (an embedded store: call
+`save_snapshot()`, then close it): the last step is then a snapshot, and
+the log holds only the writes after it. Measured: a server stopped with
+`SHUTDOWN SAVE` right after a snapshot and a rewrite opens under 6.4.0
+with every value as 7.0 served it.
+
 ### The catalog and consumer contacts
 
 Two more things in the log are new, for a server and an embedded store
@@ -171,15 +201,17 @@ replica that had declared an index of its own:
 - **Replicas first.** A 7.0 replica of a 6.4.0 primary has no indexes,
   views or tables — and refuses to declare any (§3) — so every index
   query on it fails with `no such index` until the primary runs 7.0.
-  And when the primary then restarts as 7.0, a replica that stays
-  connected still has no catalog: the primary's import is not sent to it.
-  It gets the catalog at the next catalog command on the primary
-  (`IDX.CREATE`, `TABLE.DECLARE`, …) or when the replica restarts.
+  When the primary then restarts as 7.0, it reads its catalog from its
+  side files and sends it on the stream, so a replica that stays
+  connected has the primary's catalog as soon as it has caught up
+  (measured with a 6.4.0 primary replaced by 7.0 under a connected 7.0
+  replica).
 
-So upgrade the primary first, then each replica. If the replicas already
-run 7.0, restart each one once after the primary does. A replica that
-declared indexes of its own under 6.4 needs them declared on the primary
-instead ([replication](replication.md#trade-offs-and-limits)).
+Either order ends with every replica holding the primary's catalog;
+upgrading the primary first keeps the time without indexes on the
+replicas shortest. A replica that declared indexes of its own under 6.4
+needs them declared on the primary instead
+([replication](replication.md#trade-offs-and-limits)).
 
 ## 3. A replica refuses more writes
 
@@ -479,6 +511,10 @@ mistake:
 Each of these could lose a write, a deadline or a key, or change a value,
 without an error; the version is the first release that had it:
 
+- every list element pushed before an AOF rewrite that followed a
+  snapshot, which a restart applied twice, because it loaded the snapshot
+  under the rewritten log (since 1.0.0 on the server, 1.16.0 in an
+  embedded store);
 - `COPY … REPLACE` (since 6.0.0) and a `RENAME` across shards (since
   5.0.0) replayed and replicated into what the destination held, merging
   a hash's fields or a list's elements into the old value;

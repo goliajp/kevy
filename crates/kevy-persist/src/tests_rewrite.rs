@@ -343,6 +343,8 @@ fn rewrite_reconstructs_stream_groups() {
     src.xreadgroup(b"st", b"g", b"c2", ReadGroupId::New, None, kevy_store::AckMode::Pending, 2000)
         .unwrap();
     src.xdel(b"st", &[id(2, 1)]).unwrap();
+    // c3: made by XGROUP CREATECONSUMER, never handed an entry
+    src.xgroup_create_consumer(b"st", b"g", b"c3", 3000).unwrap();
     // deltail: groupless, tail entry deleted → scalars need XSETID.
     for ms in [7u64, 8] {
         let (k, fields) = f("deltail");
@@ -406,7 +408,11 @@ fn rewrite_reconstructs_stream_groups() {
     // the claims replay later than the reads ran; the times are the reads'
     assert_eq!(
         consumers,
-        vec![(b"c1".to_vec(), 1, 1000, Some(1000)), (b"c2".to_vec(), 1, 2000, Some(2000))]
+        vec![
+            (b"c1".to_vec(), 1, 1000, Some(1000)),
+            (b"c2".to_vec(), 1, 2000, Some(2000)),
+            (b"c3".to_vec(), 0, 3000, None),
+        ]
     );
     assert_eq!(g.entries_read(), Some(3), "the read counter survives the rewrite");
 

@@ -223,7 +223,7 @@ impl<C: Commands> Shard<C> {
     /// command set the frame kept beside the keyspace.
     /// A log that is a complete image restores alone; one that continues
     /// a snapshot restores over exactly that snapshot, or startup is
-    /// refused by name.
+    /// refused by name, as it is for a snapshot that does not load.
     pub(crate) fn load_boot_snapshot(&mut self) -> io::Result<()> {
         let snap = self.snapshot_path();
         let log = self.aof.is_some().then(|| self.aof_path());
@@ -232,10 +232,15 @@ impl<C: Commands> Shard<C> {
         if !loads {
             return Ok(());
         }
-        match crate::persist_jobs::load_snapshot_file(&mut self.store, &snap) {
-            Ok(aux) => self.commands.load_snapshot_aux(aux.as_ref(), false),
-            Err(e) => eprintln!("kevy: shard {} failed to load {}: {e}", self.id, snap.display()),
-        }
+        // a snapshot loaded in part would be served, and written over,
+        // as if it were whole
+        let aux = crate::persist_jobs::load_snapshot_file(&mut self.store, &snap).map_err(|e| {
+            io::Error::new(
+                e.kind(),
+                format!("shard {}: {} does not load: {e}", self.id, snap.display()),
+            )
+        })?;
+        self.commands.load_snapshot_aux(aux.as_ref(), false);
         Ok(())
     }
 
