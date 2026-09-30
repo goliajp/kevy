@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **A materialized view holds every row its indexes hold.** Since 3.0.0
+  a shard built a materialized view on its next tick even while an index
+  the view reads was still backfilling: the view was built from the rows
+  the backfill had reached, and the rest never entered it. A view
+  declared right after its index over more than 2,048 rows on a shard
+  answered `VIEW.QUERY` with part of its members for good, until a
+  `VIEW.REBUILD`. An index a view reads, dropped and declared again, was
+  not followed either: a write while it rebuilt took the written row out
+  of the view. A view is now built only once every index it reads is
+  ready, again whenever one of them is built again, and it takes in
+  every row its indexes take in, including rows a snapshot load, an
+  expiry or a resync changed without a command.
+
 - **`BLPOP` and `BRPOP` pops are durable and replicated, and a read-only
   replica refuses them and `RENAME` / `RENAMENX`.** The server kept its
   own list of write commands, and these four were missing from it. Since
