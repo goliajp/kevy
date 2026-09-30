@@ -224,6 +224,40 @@ fn a_promoted_replica_goes_on_from_its_primarys_catalog() {
     replica.stop();
 }
 
+/// A replica takes its catalog from its primary only: queries that would
+/// earn a table an engine-declared path on a primary declare nothing on
+/// it, and the primary's next change still applies.
+#[test]
+fn a_replica_declares_nothing_for_the_queries_it_refuses() {
+    let (pdir, rdir) = (TmpDir::new("catalog-primary-auto"), TmpDir::new("catalog-replica-auto"));
+    let primary = Node::primary(2, &pdir);
+    let replica = Node::replica(&primary, 2, &rdir);
+    let mut p = primary.wire();
+    // both shards' full syncs done before the declaration, whose frame
+    // reaches the replica on one shard's stream only
+    for i in 0..16 {
+        assert_eq!(call(&mut p, &format!("SET probe:{i} 1")), b"+OK\r\n");
+    }
+    let mut r = replica.wire();
+    common::until("the replica to catch up", || {
+        (0..16).all(|i| call(&mut r, &format!("GET probe:{i}")) == b"$1\r\n1\r\n")
+    });
+    ok(&mut p, "TABLE.DECLARE auto PREFIX a: PK id COLUMN id str COLUMN age i64 AUTODECLARE 2");
+    assert_eq!(call(&mut p, "HSET a:1 id 1 age 30"), b":2\r\n");
+    let want = steady(&primary);
+    assert_eq!(settled(&replica, &want), want);
+    for _ in 0..kevy_index::AUTODECLARE_AFTER {
+        assert!(call(&mut r, "IDX.QUERY auto.age RANGE 0 100").starts_with(b"-ERR"));
+    }
+    assert_eq!(catalog(&replica), want);
+    ok(&mut p, "IDX.CREATE later ON PREFIX a: FIELD age TYPE i64 KIND range");
+    let want = steady(&primary);
+    assert!(want[0].contains("\"later\""), "{want:?}");
+    assert_eq!(settled(&replica, &want), want);
+    replica.stop();
+    primary.stop();
+}
+
 /// A sidecar that does not parse is not taken for an empty catalog: it
 /// stays where it is.
 #[test]
