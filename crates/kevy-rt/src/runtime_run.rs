@@ -126,16 +126,22 @@ impl<C: Commands> Runtime<C> {
         for shard in shards {
             let stop = stop.clone();
             handles.push(std::thread::spawn(move || {
-                crate::runtime_thread::run_shard_thread(shard, stop, use_uring, uring_forced);
+                crate::runtime_thread::run_shard_thread(shard, stop, use_uring, uring_forced)
             }));
         }
+        // the first shard error, which stopped every shard
+        let mut first: io::Result<()> = Ok(());
         for h in handles {
-            let _ = h.join();
+            if let Ok(Err(e)) = h.join()
+                && first.is_ok()
+            {
+                first = Err(e);
+            }
         }
         // Bio shutdown: see the bio-spawn comment above.
         drop(bio_send);
         let _ = bio_handle.join();
-        Ok(())
+        first
     }
 
     /// Reject a cluster / replication port range that overflows u16 up

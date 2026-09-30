@@ -29,8 +29,13 @@ pub(crate) fn restore_one_shard(
     let aof = layout::aof_path(dir, i);
     let log = aof.exists().then_some(aof.as_path());
     if kevy_persist::settle_snapshot(&snap, log)? {
-        let file = io::BufReader::new(std::fs::File::open(&snap)?);
-        if let Some(frame) = load_snapshot_with_aux(store, file, |_| true)? {
+        // a snapshot loaded in part would be served, and written over,
+        // as if it were whole
+        let named = |e: io::Error| {
+            io::Error::new(e.kind(), format!("{} does not load: {e}", snap.display()))
+        };
+        let file = io::BufReader::new(std::fs::File::open(&snap).map_err(named)?);
+        if let Some(frame) = load_snapshot_with_aux(store, file, |_| true).map_err(named)? {
             keep_newest(catalog, frame);
         }
     }
