@@ -218,7 +218,8 @@ fn writes_alone_leave_no_fill_floor() {
 
 #[test]
 fn an_index_segment_packs_whatever_order_its_rows_came_in() {
-    let n = 20_000u32;
+    // miri interprets every step; a thousand rows still span many leaves
+    let n = if cfg!(miri) { 500u32 } else { 20_000 };
     let ids: Vec<u32> = (0..n).collect();
     let mut sorted = ids.clone();
     sorted.sort_by_key(|&i| entry(i));
