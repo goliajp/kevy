@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **`kevy_index::sort_groups` ranks a group without a maximum last under
+  `AggBy::Max`.** Since 3.8.0 it put such groups first, while
+  `AggBy::Min` put a group without a minimum last and
+  `GroupStats::rank_score` scores a missing extreme lowest. Only a
+  caller of the `kevy-index` crate that ranks empty `GroupStats` saw
+  this: `IDX.QUERY … GROUPS` on the server and `Store::idx_groups` rank
+  only groups that hold a row, and every such group has a maximum.
+
 - **A materialized view holds every row its indexes hold.** Since 3.0.0
   a shard built a materialized view on its next tick even while an index
   the view reads was still backfilling: the view was built from the rows
