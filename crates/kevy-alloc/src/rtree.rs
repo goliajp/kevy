@@ -117,4 +117,20 @@ mod tests {
         assert!(set(base, 0));
         assert_eq!(owner(base), 0);
     }
+
+    #[test]
+    fn a_region_no_segment_ever_used_answers_nobody_and_clears_without_a_leaf() {
+        // the last root slot: above every user-space mapping
+        let r = (1 << ROOT_BITS) - 1;
+        let far = r << (SEG_SHIFT + LEAF_BITS);
+        assert_eq!(owner(far + 12_345), 0);
+        assert!(set(far, 0), "clearing an absent entry succeeds");
+        assert!(ROOT[r].load(Ordering::Acquire).is_null(), "a clear maps no leaf");
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn a_segment_past_the_covered_width_cannot_be_recorded() {
+        assert!(!set(1 << ADDR_BITS, new_token()));
+    }
 }

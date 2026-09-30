@@ -128,6 +128,8 @@ fn k3_every_truncation_is_refused_and_bit_flips_are_not_detected() {
 
     assert_eq!(decode(&[], &[]), Err(DecodeError));
     assert_eq!(decode(&[], &[9, 0]), Err(DecodeError), "unknown tag must reject");
+    let e = decode(&[], &[9, 0]).unwrap_err();
+    assert_eq!(e.to_string(), "kevy-compress: corrupt or truncated frame");
 }
 
 /// K4, the structural criterion: N identical values against a shared
