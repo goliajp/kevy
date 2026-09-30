@@ -14,8 +14,8 @@ keywords = ["toml", "config", "kevy", "redis", "kv"]
 categories = ["config", "parsing", "database-implementations"]
 
 [dependencies]
-kevy-persist = { path = "../kevy-persist", version = "6.4.0" }
-kevy-store = { path = "../kevy-store", version = "6.4.0" }
+kevy-persist = { path = "../kevy-persist", version = "7.0.0" }
+kevy-store = { path = "../kevy-store", version = "7.0.0" }
 
 [lints]
 workspace = true

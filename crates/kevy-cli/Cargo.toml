@@ -31,17 +31,17 @@ name = "kevy-cli"
 path = "src/main.rs"
 
 [dependencies]
-kevy-tmpdir = { path = "../kevy-tmpdir", version = "6.4.0" }
-kevy-embedded = { path = "../kevy-embedded", version = "6.4.0" }
-kevy-hash = { path = "../kevy-hash", version = "6.4.0" }
-kevy-persist = { path = "../kevy-persist", version = "6.4.0" }
-kevy-resp = { path = "../kevy-resp", version = "6.4.0" }
-kevy-resp-client = { path = "../kevy-resp-client", version = "6.4.0" }
-kevy-scalar = { path = "../kevy-scalar", version = "6.4.0" }
-kevy-sql = { path = "../kevy-sql", version = "6.4.0" }
-kevy-store = { path = "../kevy-store", version = "6.4.0" }
-kevy-sys = { path = "../kevy-sys", version = "6.4.0" }
+kevy-tmpdir = { path = "../kevy-tmpdir", version = "7.0.0" }
+kevy-embedded = { path = "../kevy-embedded", version = "7.0.0" }
+kevy-hash = { path = "../kevy-hash", version = "7.0.0" }
+kevy-persist = { path = "../kevy-persist", version = "7.0.0" }
+kevy-resp = { path = "../kevy-resp", version = "7.0.0" }
+kevy-resp-client = { path = "../kevy-resp-client", version = "7.0.0" }
+kevy-scalar = { path = "../kevy-scalar", version = "7.0.0" }
+kevy-sql = { path = "../kevy-sql", version = "7.0.0" }
+kevy-store = { path = "../kevy-store", version = "7.0.0" }
+kevy-sys = { path = "../kevy-sys", version = "7.0.0" }
 
 [dev-dependencies]
 kevy-testnet = { path = "../kevy-testnet" }
-kevy-noise = { path = "../kevy-noise", version = "6.4.0" }
+kevy-noise = { path = "../kevy-noise", version = "7.0.0" }
