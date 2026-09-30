@@ -356,29 +356,68 @@ fn parked_blocking_pops_survive_restart_via_aof() {
     }
 }
 
-#[test]
-fn restart_tolerates_corrupt_snapshot() {
-    // Coverage: drive the `load_snapshot` Err branch in shard::run (the
-    // eprintln path). A corrupt dump-0.rdb should produce a startup warning
-    // on stderr but NOT prevent the reactor from coming up; subsequent
-    // writes go through normally.
-    let dir = kevy_tmpdir::unique_dir("corrupt-snap");
-
-    // Plant a non-snapshot file at dump-0.rdb. kevy-persist's loader
-    // recognises a magic header; arbitrary bytes fail the header check.
-    std::fs::write(dir.join("dump-0.rdb"), b"NOT A REAL KEVY SNAPSHOT").unwrap();
-
-    let port = free_port();
-    with_runtime(port, &dir, 1, |p| {
-        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
-        c.write_all(&req(&[b"PING"])).unwrap();
-        read_reply(&mut c, b"+PONG\r\n");
-        c.write_all(&req(&[b"SET", b"after-corrupt", b"ok"])).unwrap();
-        read_reply(&mut c, b"+OK\r\n");
-        c.write_all(&req(&[b"GET", b"after-corrupt"])).unwrap();
-        read_reply(&mut c, b"$2\r\nok\r\n");
+/// Start a runtime on `dir` that is expected not to start, and return the
+/// error it stops with.
+fn start_refused(dir: &std::path::Path, nshards: usize, aof: bool) -> String {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let dir = dir.to_path_buf();
+    std::thread::spawn(move || {
+        let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(nshards))
+            .bind([127, 0, 0, 1], free_port())
+            .shards(nshards)
+            .with_data_dir(dir)
+            .with_aof(aof);
+        drop(tx.send(rt.run(Arc::new(AtomicBool::new(false)))));
     });
+    let result =
+        rx.recv_timeout(std::time::Duration::from_secs(20)).expect("the runtime kept running");
+    result.expect_err("the runtime started").to_string()
+}
 
+/// Two shards' snapshots with a key each, and no AOF when `aof` is off.
+fn saved_two_shards(name: &str, aof: bool) -> std::path::PathBuf {
+    let dir = kevy_tmpdir::unique_dir(name);
+    with_runtime_configured(
+        free_port(),
+        &dir,
+        2,
+        move |rt| rt.with_aof(aof),
+        |p| {
+            let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+            for i in 0..40u32 {
+                c.write_all(&req(&[b"RPUSH", format!("l{i}").as_bytes(), b"a", b"b"])).unwrap();
+                read_reply(&mut c, b":2\r\n");
+            }
+            c.write_all(&req(&[b"SAVE"])).unwrap();
+            read_reply(&mut c, b"+OK\r\n");
+            wait_for("both snapshots", || {
+                (0..2).all(|s| dir.join(format!("dump-{s}.rdb")).exists())
+            });
+        },
+    );
+    dir
+}
+
+/// A snapshot that does not load stops the server before it serves,
+/// naming the file: loading part of it would serve part of the keyspace,
+/// and the next writes would land on top of it. Before, the shard logged
+/// the error and served what it had loaded.
+#[test]
+fn a_snapshot_that_does_not_load_stops_the_server() {
+    // cut in half, without an AOF
+    let dir = saved_two_shards("snap-truncated", false);
+    let dump = dir.join("dump-0.rdb");
+    let bytes = std::fs::read(&dump).unwrap();
+    std::fs::write(&dump, &bytes[..bytes.len() / 2]).unwrap();
+    let err = start_refused(&dir, 2, false);
+    assert!(err.contains("dump-0.rdb does not load"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    // not a snapshot at all, under an AOF that names none
+    let dir = kevy_tmpdir::unique_dir("snap-garbage");
+    std::fs::write(dir.join("dump-0.rdb"), b"NOT A REAL KEVY SNAPSHOT").unwrap();
+    let err = start_refused(&dir, 1, true);
+    assert!(err.contains("dump-0.rdb does not load"), "{err}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1507,5 +1546,124 @@ fn a_bgsave_after_a_rewrite_restores_each_write_once() {
         before = read_all(&mut c);
     });
     assert_restores(&dir, nshards, &before);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `appendonly` is fixed for the life of a server: `CONFIG SET` refuses it,
+/// so an AOF only ever starts at a start. One that starts beside a
+/// snapshot a server without an AOF saved continues that snapshot, and a
+/// restart restores each write once; a snapshot saved later continues in
+/// the log's record.
+#[test]
+fn an_aof_turned_on_at_a_restart_continues_the_snapshot_before_it() {
+    let dir = kevy_tmpdir::unique_dir("aof-turned-on");
+    let push = |c: &mut std::net::TcpStream, tag: &str| {
+        for i in 0..8u32 {
+            let item = format!("{tag}-{i}");
+            c.write_all(&req(&[b"RPUSH", format!("l{i}").as_bytes(), item.as_bytes()])).unwrap();
+            read_resp(c);
+        }
+    };
+    with_runtime_configured(
+        free_port(),
+        &dir,
+        2,
+        |rt| rt.with_aof(false),
+        |p| {
+            let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+            push(&mut c, "off");
+            c.write_all(&req(&[b"CONFIG", b"SET", b"appendonly", b"yes"])).unwrap();
+            let reply = read_resp(&mut c);
+            assert!(reply.starts_with(b"-ERR"), "{}", String::from_utf8_lossy(&reply));
+            c.write_all(&req(&[b"SAVE"])).unwrap();
+            read_reply(&mut c, b"+OK\r\n");
+            wait_for("both snapshots", || {
+                (0..2).all(|s| dir.join(format!("dump-{s}.rdb")).exists())
+            });
+        },
+    );
+    assert!(!dir.join("aof-0.aof").exists());
+    let mut before = Vec::new();
+    with_runtime(free_port(), &dir, 2, |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        push(&mut c, "on");
+        for i in 0..8u32 {
+            c.write_all(&req(&[b"LRANGE", format!("l{i}").as_bytes(), b"0", b"-1"])).unwrap();
+            before.push(read_resp(&mut c));
+        }
+    });
+    assert_eq!(before[0], b"*2\r\n$5\r\noff-0\r\n$4\r\non-0\r\n");
+    let lists = |p: u16| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        (0..8u32)
+            .map(|i| {
+                c.write_all(&req(&[b"LRANGE", format!("l{i}").as_bytes(), b"0", b"-1"])).unwrap();
+                read_resp(&mut c)
+            })
+            .collect::<Vec<_>>()
+    };
+    with_runtime(free_port(), &dir, 2, |p| {
+        assert_eq!(lists(p), before, "the snapshot, then the new log, once");
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        let old = std::fs::metadata(dir.join("dump-0.rdb")).unwrap().modified().unwrap();
+        wait_for("a snapshot the log continues", || {
+            c.write_all(&req(&[b"BGSAVE"])).unwrap();
+            read_reply(&mut c, b"+OK\r\n");
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            (0..2).all(|s| {
+                std::fs::metadata(dir.join(format!("dump-{s}.rdb")))
+                    .and_then(|m| m.modified())
+                    .is_ok_and(|t| t > old)
+                    && aof_holds(&dir, s, b"KEVYLOGBASE")
+            })
+        });
+    });
+    with_runtime(free_port(), &dir, 2, |p| assert_eq!(lists(p), before, "after the next snapshot"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An AOF left behind while a server ran without one is older than the
+/// snapshot that server saved: a start with the AOF on again refuses,
+/// naming both files, rather than replay the old log over the newer
+/// snapshot, and leaves the log where it is.
+#[test]
+fn a_log_older_than_the_snapshot_beside_it_is_refused() {
+    let dir = kevy_tmpdir::unique_dir("aof-on-off-on");
+    with_runtime(free_port(), &dir, 1, |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        c.write_all(&req(&[b"RPUSH", b"l", b"a"])).unwrap();
+        read_reply(&mut c, b":1\r\n");
+        wait_for("a snapshot", || {
+            c.write_all(&req(&[b"BGSAVE"])).unwrap();
+            read_reply(&mut c, b"+OK\r\n");
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            dir.join("dump-0.rdb").exists()
+        });
+        c.write_all(&req(&[b"RPUSH", b"l", b"b"])).unwrap();
+        read_reply(&mut c, b":2\r\n");
+    });
+    let log = std::fs::read(dir.join("aof-0.aof")).unwrap();
+    with_runtime_configured(
+        free_port(),
+        &dir,
+        1,
+        |rt| rt.with_aof(false),
+        |p| {
+            let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+            c.write_all(&req(&[b"RPUSH", b"l", b"c"])).unwrap();
+            read_reply(&mut c, b":2\r\n");
+            let old = std::fs::metadata(dir.join("dump-0.rdb")).unwrap().modified().unwrap();
+            c.write_all(&req(&[b"SAVE"])).unwrap();
+            read_reply(&mut c, b"+OK\r\n");
+            wait_for("the new snapshot", || {
+                std::fs::metadata(dir.join("dump-0.rdb"))
+                    .and_then(|m| m.modified())
+                    .is_ok_and(|t| t > old)
+            });
+        },
+    );
+    let err = start_refused(&dir, 1, true);
+    assert!(err.contains("aof-0.aof holds the writes after snapshot"), "{err}");
+    assert_eq!(std::fs::read(dir.join("aof-0.aof")).unwrap(), log, "the log is left as it was");
     let _ = std::fs::remove_dir_all(&dir);
 }

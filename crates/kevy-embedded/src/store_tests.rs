@@ -339,6 +339,35 @@ fn a_rewrite_after_a_snapshot_reopens_each_write_once() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A snapshot that does not load fails the open, naming the file, rather
+/// than opening a store that holds part of it.
+#[test]
+fn a_snapshot_that_does_not_load_fails_the_open() {
+    // without an AOF the loader finds the cut; with one, the log names a
+    // snapshot the cut file no longer carries the id of
+    for (aof, says) in [(false, "dump-0.rdb does not load"), (true, "carries no snapshot id")] {
+        let dir = tmp_dir("snapshot-truncated");
+        let config = || {
+            let c = Config::default().with_persist(&dir).with_ttl_reaper_manual();
+            if aof { c } else { c.without_aof() }
+        };
+        {
+            let s = Store::open(config()).unwrap();
+            for i in 0..200 {
+                s.rpush(format!("l{i}").as_bytes(), &[b"a", b"b"]).unwrap();
+            }
+            assert!(s.save_snapshot().unwrap());
+        }
+        let dump = dir.join("dump-0.rdb");
+        let bytes = std::fs::read(&dump).unwrap();
+        std::fs::write(&dump, &bytes[..bytes.len() / 2]).unwrap();
+        let Err(err) = Store::open(config()) else { panic!("the open succeeded") };
+        let err = err.to_string();
+        assert!(err.contains(says), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
 // open_report(): the machine-readable twin of the boot WARN line. A clean
 // open reports zero drops; an open over a damaged AOF reports the dropped
 // bytes, the corrupt flag, and the quarantine file the repair wrote — the
