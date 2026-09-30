@@ -920,6 +920,25 @@ defect.
 
 ### Performance and memory
 
+- **The server runs on kevy-alloc by default.** The `kevy` crate's
+  `kevy-alloc` feature is now a default feature, so the server binary —
+  from `cargo install`, the release archives, the container image and
+  `@goliapkg/kevy-bin` — allocates through kevy's own allocator instead
+  of glibc malloc, returns free pages on the shard tick and packs the
+  holes demotion leaves (the defrag pass below). Against glibc on the
+  same commit (aarch64 Linux, server on 2 cores, `redis-benchmark -c 60`,
+  five rotated rounds): `LPUSH` +11.3%, `ZADD` +11.4%, `HSET` +3.1%,
+  `SADD` +1.4%, `GET` and `SET` level, `INCR` −2.2%, which an exact
+  instruction count (callgrind, x86-64) puts at 2015 against 2016
+  instructions a command; every write command costs as many instructions
+  or fewer. `INFO modules` reports
+  `module:name=alloc,impl=kevy-alloc`, and now names the allocator the
+  process runs on rather than the one compiled in, so a program using
+  the `kevy` library under its own allocator reports `impl=system`.
+  `--no-default-features` builds the server on the system allocator;
+  nothing else changes with it. docs/alloc.md has the measurements and
+  the reasons to build without it.
+
 - **An index is a counted B+ tree of packed leaves, a quarter or less
   of the memory and faster on every write and range read.** Each row was
   an allocation of its own, held from an ordered set and from a hash set
@@ -1004,7 +1023,7 @@ defect.
   resident before a byte was written; it now has none. A fresh mapping is
   handed out as it is; only a reused one is cleared. Affected since 5.0.0.
 
-- **A server built with `--features kevy-alloc` defragments its heap.**
+- **A server on kevy-alloc defragments its heap.**
   Demoted rows leave holes, and a page goes back to the OS only once
   nothing on it is live. Each shard tick now copies the values kevy-alloc
   names as sitting in sparse spans (strings, hash tables and their blocks)
@@ -1017,8 +1036,8 @@ defect.
   figures and does not trim glibc. kevy-alloc finds a span with room in
   O(1), fullest first. New: `kevy::kevy_alloc_is_global`,
   `Store::set_defrag_hint`, `Store::defrag_step`,
-  `kevy_alloc::global::should_move`. The default build, on the system
-  allocator, is unchanged.
+  `kevy_alloc::global::should_move`. A build on the system allocator is
+  unchanged.
 
 - **A keyspace table that grows no longer holds itself twice.** Growth
   moved every entry into a table twice the size and freed the old one at

@@ -25,10 +25,9 @@
 //!
 //! # Status
 //!
-//! Part of an experiment, not a settled design. Every claim here is
-//! under test, and a premise that measurement kills gets changed rather
-//! than worked around — see the allocator RFC
-//! and ROADMAP rule ⑤. The gate is `bench/allocgate.sh`.
+//! The kevy server's allocator: since 7.0 the server binary installs
+//! `KevyAlloc` (the `global` feature) as its global allocator by default, and builds on the
+//! system allocator only with `--no-default-features`.
 //!
 //! # Standing on shoulders, and where we step off
 //!

@@ -3,11 +3,11 @@
 A per-shard, mmap-backed, **header-free** allocator, written for kevy's
 share-nothing engine. Pure Rust, zero dependencies, `no_std`-friendly.
 
-> **Status: experimental.** This is part of an ongoing v5 experiment, not
-> a settled design. Its premises are under test and may change. It is not
-> wired into kevy by default: `crates/kevy/src/main.rs:20` installs it
-> behind the off-by-default `kevy-alloc` feature, so a stock build
-> still runs on the system allocator.
+> **The kevy server's allocator.** Since 7.0 the `kevy` server binary
+> installs it as the global allocator by default (the `kevy` crate's
+> `kevy-alloc` feature; `--no-default-features` builds the server on the
+> system allocator). Measurements and the reasons to build without it are
+> in [docs/alloc.md](https://github.com/goliajp/kevy/blob/develop/docs/alloc.md).
 
 ## Why
 
