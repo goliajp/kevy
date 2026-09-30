@@ -26,6 +26,15 @@ use alloc::sync::Arc;
 /// to a denser span if copied. The store only asks about allocations its
 /// values own, with the layout they were made with; a hint must still
 /// answer safely for any address (`kevy_alloc::global::should_move` does).
+///
+/// ```
+/// use kevy_store::{DefragHint, Store};
+/// // a hint that never asks for a move: installing it changes nothing
+/// let never: DefragHint = |_, _, _| false;
+/// let mut s = Store::new();
+/// s.set_defrag_hint(Some(never));
+/// assert_eq!(s.defrag_step(64).moved, 0);
+/// ```
 pub type DefragHint = fn(ptr: *const u8, size: usize, align: usize) -> bool;
 
 /// The store's side of a defrag pass: the hint, and where the walk is.
@@ -48,8 +57,26 @@ pub(crate) struct DefragState {
 #[non_exhaustive]
 pub struct DefragStep {
     /// Values copied to a fresh allocation.
+    ///
+    /// ```
+    /// use kevy_store::{SetCondition, Store};
+    /// // with every allocation hinted to move, the one heap-held value is copied
+    /// let mut s = Store::new();
+    /// s.set_slice(b"k", &[7u8; 64], None, SetCondition::Always);
+    /// s.set_defrag_hint(Some(|_, _, _| true));
+    /// let mut moved = 0;
+    /// while !{ let step = s.defrag_step(64); moved += step.moved; step.lap_done } {}
+    /// assert_eq!(moved, 1);
+    /// ```
     pub moved: usize,
     /// The walk reached the end of the table and starts over next time.
+    ///
+    /// ```
+    /// use kevy_store::Store;
+    /// // an empty table is walked in one step
+    /// let mut s = Store::new();
+    /// assert!(s.defrag_step(1).lap_done);
+    /// ```
     pub lap_done: bool,
 }
 
