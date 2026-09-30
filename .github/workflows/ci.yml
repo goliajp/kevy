@@ -236,6 +236,10 @@ jobs:
         env:
           KEVY_TEST_PATIENCE: "3"
         run: cargo test --workspace --lib --tests
+      # The server builds on kevy-alloc by default; this is the build on
+      # the system allocator, where INFO must name no allocator section.
+      - name: Test (server on the system allocator)
+        run: cargo test -p kevy --no-default-features --test info_allocator
       # `--lib --tests` is exactly the pair that EXCLUDES doctests, so until
       # this step existed every example in the documentation was compiled by
       # nobody — including the ones a gate counts as verification. The
