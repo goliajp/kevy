@@ -22,7 +22,7 @@ redis-cli -p 6379 GET hello
 kevy ships in three forms, all built from the same engine:
 
 - **Server** — a Redis-wire-compatible daemon. Speaks RESP2, replies are
-  reply-checked byte-for-byte against valkey 9.1 for 95 commands.
+  reply-checked byte-for-byte against valkey 9.1 for 96 commands.
 - **Embedded library** — `kevy-embedded` is the same engine without the
   network. Drop it into a Rust binary and call `Store` directly. Pure
   Rust, zero dependencies, feature-tiered from a bare `core` KV up to
@@ -230,7 +230,7 @@ kevy runs in the browser as a real store: the npm package
 [`@goliapkg/kevy`](https://www.npmjs.com/package/@goliapkg/kevy) ships
 the engine compiled to `wasm32-unknown-unknown` behind a hand-written
 ES-module loader — no wasm-bindgen, zero dependencies on either side
-of the boundary; seven files, 617 KB packed (602 KB gzipped over the wire).
+of the boundary; seven files, 633 KB packed (619 KB gzipped over the wire).
 
 ```sh
 npm install @goliapkg/kevy
@@ -349,7 +349,7 @@ as-is across majors in the upgrade direction.
 
 ## Compatibility
 
-95 commands are reply-checked byte-for-byte against valkey 9.1,
+96 commands are reply-checked byte-for-byte against valkey 9.1,
 covering all five Redis data types (String, Hash, List, Set, Sorted
 Set) plus Streams, Pub/Sub (channel + pattern), Transactions (`MULTI` /
 `EXEC` / `WATCH` / `UNWATCH`), Blocking pops, and the standard
