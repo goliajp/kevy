@@ -477,6 +477,26 @@ defect.
 
 ### Behaviour changes
 
+- **`XINFO` answers as a Redis server does, field for field.** Measured
+  against valkey 9.1.2 and Redis 8.10.2 over the wire, both protocols:
+  `XINFO GROUPS` lists `entries-read` before `lag`, and both are now kept
+  and reported the way those servers keep them: a group counts the
+  entries it has read past, `XGROUP CREATE` and `XGROUP SETID` take
+  `ENTRIESREAD`, and where a deletion makes the count unknowable the
+  reply is nil, not an estimate (a group that has read nothing answered 0
+  where the servers answer nil). `XINFO CONSUMERS` adds `inactive`, the
+  time since a read or a claim last handed the consumer an entry (-1 if
+  none ever did), and a claim now counts as the consumer's contact, which
+  `idle` measures from. `XINFO STREAM … FULL [COUNT n]` is new. Under
+  RESP3 the replies are maps with null for a missing value. The field
+  order of `XINFO STREAM`, the error texts (an unknown subcommand, a bad
+  option, a missing group, which names the group and the key) and the
+  help text are the servers'. Trimming (`XTRIM`, `XADD … MAXLEN|MINID`)
+  no longer raises `max-deleted-entry-id`, which only `XDEL` does. The
+  read counter and each consumer's last active time survive a restart, an
+  AOF rewrite, a snapshot and a replica, like the rest of the group.
+  Where Redis 8.10 and valkey 9.1 disagree, kevy answers as valkey does.
+
 - **`used_memory` counts what the allocator holds, so it reads higher for
   the same data.** Measured on 250,000 keys of strings and hashes, 6.4.0
   reported 69.2 MB and 7.0 reports 103.5 MB, while the process's RSS went

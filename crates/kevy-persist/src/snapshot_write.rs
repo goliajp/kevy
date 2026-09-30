@@ -103,6 +103,7 @@ pub fn write_snapshot_to_with_cursor<S: SnapshotSource, W: Write>(
     let now = kevy_store::now_unix_ms();
     // Enumeration is infallible; capture the first write error to surface.
     let mut err: Option<io::Error> = None;
+    let mut group_reads = Vec::new();
     src.for_each_entry(|key, value, ttl| {
         let deadline = ttl.map(|ms| now.saturating_add(ms));
         if err.is_none()
@@ -110,6 +111,7 @@ pub fn write_snapshot_to_with_cursor<S: SnapshotSource, W: Write>(
         {
             err = Some(e);
         }
+        crate::snapshot_group_reads::collect(key, value, &mut group_reads);
     });
     if let Some(e) = err {
         return Err(e);
@@ -123,6 +125,9 @@ pub fn write_snapshot_to_with_cursor<S: SnapshotSource, W: Write>(
     w.write_all(&[OP_EOF])?;
     if let Some(frame) = src.aux_frame() {
         crate::snapshot_aux::write_aux(&mut w, &frame)?;
+    }
+    for r in &group_reads {
+        crate::snapshot_group_reads::write(&mut w, r)?;
     }
     w.flush()?;
     Ok(())

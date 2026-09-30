@@ -18,8 +18,9 @@
 //!     again, `FORCE` recreates a row the command itself forced.
 //!   - each pending entry dropped because the stream no longer holds it:
 //!     `XCLAIM key group consumer 0 id… JUSTID`, which drops it again.
-//!   - nothing taken or dropped, but the consumer is new: `XGROUP
-//!     CREATECONSUMER key group consumer`.
+//!   - last, the consumer's times as the claim left them (see
+//!     [`Effect::RecordSeen`]): replayed, the frames before it stamp the
+//!     consumer with the replay's clock, and this sets them back.
 //!
 //!   `LASTID` is not used: a claim here never moves the group's
 //!   last-delivered ID, and the parser does not take the option.
@@ -201,10 +202,7 @@ fn claim_frames<A: ArgvView + ?Sized>(store: &Store, args: &A, c: &Claim) -> Vec
         f.push(b"JUSTID");
         frames.push(f);
     }
-    // first, so the XCLAIM frames find the consumer and leave its time be
-    if c.consumer == Consumer::Created {
-        frames.splice(0..0, seen_frame(store, key, group, consumer));
-    }
+    frames.extend(seen_frame(store, key, group, consumer));
     frames
 }
 
@@ -226,17 +224,21 @@ pub(crate) fn claim_head(
     f
 }
 
-/// `XINTERNAL.CONSUMERSEEN key group consumer t`, `t` the consumer's last
-/// contact with the group as it stands now: replayed, the consumer exists
-/// with that time, whatever the replay's clock says. `None` when the group
-/// or the consumer is gone.
+/// `XINTERNAL.CONSUMERSEEN key group consumer t [a]`, `t` the consumer's
+/// last contact with the group as it stands now and `a` the last time it
+/// was handed an entry, absent if it never was: replayed, the consumer
+/// exists with those times, whatever the replay's clock says. `None` when
+/// the group or the consumer is gone.
 pub(crate) fn seen_frame(store: &Store, key: &[u8], group: &[u8], consumer: &[u8]) -> Option<Argv> {
-    let seen = store.stream_group_peek(key, group)?.consumer(consumer)?.last_seen_ms();
-    let mut f = Argv::with_capacity(5, 0);
+    let c = store.stream_group_peek(key, group)?.consumer(consumer)?;
+    let mut f = Argv::with_capacity(6, 0);
     for part in [CONSUMER_SEEN.as_bytes(), key, group, consumer] {
         f.push(part);
     }
-    f.push(seen.to_string().as_bytes());
+    f.push(c.last_seen_ms().to_string().as_bytes());
+    if let Some(active) = c.last_active_ms() {
+        f.push(active.to_string().as_bytes());
+    }
     Some(f)
 }
 
@@ -275,11 +277,25 @@ pub fn apply_internal<A: ArgvView + ?Sized>(
     if !args.get(0).is_some_and(|v| v.eq_ignore_ascii_case(CONSUMER_SEEN.as_bytes())) {
         return false;
     }
-    let Some(seen) = (args.len() == 5).then(|| crate::args::arg_u64(&args[4])).flatten() else {
+    let time = |i: usize| crate::args::arg_u64(&args[i]);
+    let (seen, active) = match args.len() {
+        5 => (time(4), None),
+        6 => (time(4), time(5).map(Some)),
+        _ => (None, None),
+    };
+    let (Some(seen), true) = (seen, args.len() == 5 || active.is_some()) else {
         kevy_resp::encode_error(out, "ERR malformed internal consumer record");
         return true;
     };
-    match store.xgroup_consumer_seen(&args[1], &args[2], &args[3], seen) {
+    let (key, group, consumer) = (&args[1], &args[2], &args[3]);
+    let made = store.xgroup_consumer_seen(key, group, consumer, seen);
+    let made = match (made, active) {
+        (Ok(made), Some(at)) => {
+            store.xgroup_consumer_active(key, group, consumer, at).map(|_| made)
+        }
+        (made, _) => made,
+    };
+    match made {
         Ok(made) => kevy_resp::encode_integer(out, i64::from(made)),
         Err(e) => crate::reply::store_err(out, e),
     }

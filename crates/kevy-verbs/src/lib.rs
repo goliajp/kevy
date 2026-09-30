@@ -146,10 +146,10 @@ pub enum Effect {
     /// let effect = exec(&mut store, b"XCLAIM", &claim, &mut Vec::new()).unwrap();
     /// assert!(matches!(effect, Effect::RecordClaim(_)));
     /// let frames = kevy_verbs::aof::deferred_frames(&mut store, &claim, &effect);
-    /// // b is new, so its contact comes first, then the claim
-    /// assert_eq!(&frames[0][0], b"XINTERNAL.CONSUMERSEEN");
-    /// let head: Vec<&[u8]> = (0..6).map(|i| &frames[1][i]).collect();
+    /// // the claim, then b's times as the claim left them
+    /// let head: Vec<&[u8]> = (0..6).map(|i| &frames[0][i]).collect();
     /// assert_eq!(head, [&b"XCLAIM"[..], b"s", b"g", b"b", b"0", b"1-1"]);
+    /// assert_eq!(&frames[1][0], b"XINTERNAL.CONSUMERSEEN");
     /// ```
     RecordClaim(Box<aof::Claim>),
     /// Record a one-stream `XREADGROUP` as what it left, not as a read a
@@ -173,8 +173,8 @@ pub enum Effect {
     /// assert_eq!(effect, Effect::RecordRead(kevy_store::StreamId::MIN, kevy_verbs::aof::Consumer::Created));
     /// let frames = kevy_verbs::aof::deferred_frames(&store, &read, &effect);
     /// let verbs: Vec<&[u8]> = frames.iter().map(|f| &f[0]).collect();
-    /// // the consumer's contact, the group's move, then the delivery
-    /// assert_eq!(verbs, [&b"XINTERNAL.CONSUMERSEEN"[..], b"XGROUP", b"XCLAIM"]);
+    /// // the group's move, the delivery, then the consumer's times
+    /// assert_eq!(verbs, [&b"XGROUP"[..], b"XCLAIM", b"XINTERNAL.CONSUMERSEEN"]);
     /// ```
     RecordRead(StreamId, aof::Consumer),
     /// [`Effect::RecordRead`] for an `XREADGROUP` over several streams:
