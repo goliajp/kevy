@@ -38,10 +38,10 @@ pub(super) fn tick(st: &mut ShardIndexes) {
             if !matches!(si.build, BuildState::Ready) {
                 continue;
             }
-            let mut more = si.seg.tidy(STEP_LEAVES);
+            let mut more = step(&mut si.seg);
             if let Some(g) = &mut si.global {
                 for (_, seg) in &mut g.owned {
-                    more |= seg.tidy(STEP_LEAVES);
+                    more |= step(seg);
                 }
             }
             if more {
@@ -54,3 +54,33 @@ pub(super) fn tick(st: &mut ShardIndexes) {
         }
     }
 }
+
+/// One segment's step of packing.
+#[cfg(not(feature = "harness-repack-off"))]
+#[inline(always)]
+fn pack(seg: &mut kevy_index::Segment) -> bool {
+    seg.tidy(STEP_LEAVES)
+}
+
+/// The harness build that measures the server without the repack: every
+/// segment reads as having nothing to pack, so a tick walks the indexes
+/// once and returns.
+#[cfg(feature = "harness-repack-off")]
+fn pack(_: &mut kevy_index::Segment) -> bool {
+    let _ = STEP_LEAVES;
+    false
+}
+
+#[cfg(not(feature = "harness-repack-trace"))]
+use pack as step;
+#[cfg(not(feature = "harness-repack-trace"))]
+pub(super) use tick as run;
+
+// The harness build that times every step and tick.
+#[cfg(feature = "harness-repack-trace")]
+#[path = "tidy_trace.rs"]
+mod trace;
+#[cfg(feature = "harness-repack-trace")]
+pub(super) use trace::run;
+#[cfg(feature = "harness-repack-trace")]
+use trace::step;

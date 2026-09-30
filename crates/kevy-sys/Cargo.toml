@@ -16,4 +16,10 @@ categories = ["os", "network-programming", "external-ffi-bindings"]
 [lints]
 workspace = true
 
+[features]
+# `thread_usage`: a thread's CPU time, faults and context switches, read
+# around a stretch of code by instrumented builds; off in every shipped
+# build.
+thread-usage = []
+
 [dependencies]
