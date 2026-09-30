@@ -97,7 +97,9 @@ fi
 
 # ---- the box --------------------------------------------------------------
 
-LEFTOVER=$(pgrep -fl 'kevy-(head|norepack|trace|v640)|repack_load|tidy_steps' | grep -v pgrep || true)
+# by process name: a full command line that merely mentions a binary path
+# (REPACK_V64_BIN=…/kevy-v640 in the invoking shell) is not a leftover
+LEFTOVER=$(pgrep -lx 'kevy-(head|norepack|trace|v640)|repack_load|tidy_steps' || true)
 if [ -n "$LEFTOVER" ]; then
     echo "repack-tail: REFUSED — leftover harness processes:" >&2
     echo "$LEFTOVER" >&2
