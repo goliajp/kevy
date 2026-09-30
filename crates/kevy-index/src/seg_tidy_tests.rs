@@ -170,6 +170,33 @@ fn a_tree_that_rested_small_still_wakes_as_it_grows() {
 }
 
 #[test]
+fn deletes_alone_leave_no_fill_floor() {
+    // a leaf thinned to one entry between two full neighbours stays: a
+    // delete merges a leaf under a quarter full only into a neighbour
+    // the two fit in three-quarters of
+    let mut t = Tree::new(Shape { payloads: false, vlens: false });
+    for i in 0..20_000u32 {
+        t.insert(&i.to_be_bytes(), &[]);
+    }
+    let mid = t.leaf(t.leaf(t.first).next).next;
+    let n = t.leaf(mid).len();
+    let mut keys = Vec::new();
+    for i in 1..n {
+        let mut k = Vec::new();
+        t.leaf(mid).key_into(i, &t.ov, &mut k);
+        keys.push(k);
+    }
+    for k in &keys {
+        assert!(t.remove(k));
+    }
+    assert_eq!(t.leaf(mid).len(), 1, "an interior leaf with one entry");
+    let mut tidy = Tidy::default();
+    run_to_rest(&mut t, &mut tidy);
+    check_packed(&t);
+    assert_eq!(check(&t).len(), 20_000 - keys.len());
+}
+
+#[test]
 fn writes_alone_leave_no_fill_floor() {
     // an entry landing just past a full leaf whose right neighbour is
     // full too opens a leaf of its own, however the rest is packed
