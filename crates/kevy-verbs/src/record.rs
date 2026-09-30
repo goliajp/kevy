@@ -262,8 +262,10 @@ fn add_frame<A: ArgvView + ?Sized>(args: &A, at: usize, id: StreamId, kept: u64)
 
 fn claim_frames<A: ArgvView + ?Sized>(store: &Store, args: &A, c: &Claim) -> Vec<Argv> {
     let (key, group, consumer) = (&args[1], &args[2], &args[3]);
-    let mut frames: Vec<Argv> =
-        c.moved.then(|| setid_frame(store, key, group)).flatten().into_iter().collect();
+    let mut frames = Vec::new();
+    if c.moved {
+        push_setid_frames(&mut frames, store, key, group);
+    }
     frames.extend(taken_frames(store, key, group, consumer, &c.taken));
     if !c.dropped.is_empty() {
         let mut f = claim_head(key, group, consumer, &c.dropped, 1);
@@ -292,19 +294,29 @@ pub(crate) fn claim_head(
     f
 }
 
-/// `XGROUP SETID key group <last-delivered> ENTRIESREAD <n|-1>`: where the
-/// group stands now. `None` when the group is gone.
-pub(crate) fn setid_frame(store: &Store, key: &[u8], group: &[u8]) -> Option<Argv> {
-    let g = store.stream_group_peek(key, group)?;
-    let read = g.entries_read().map_or_else(|| "-1".to_owned(), |n| n.to_string());
-    let mut f = Argv::with_capacity(7, 0);
-    for part in
-        [&b"XGROUP"[..], b"SETID", key, group, &g.last_delivered_id().encode(), b"ENTRIESREAD"]
-    {
+/// Where the group stands now: `XGROUP SETID key group <last-delivered>`,
+/// which leaves the read counter unknown, then the same with `ENTRIESREAD
+/// n` when the counter is known. Two frames because a 6.4 reader takes the
+/// first and skips the second, so its group still moves. Nothing when the
+/// group is gone.
+pub(crate) fn push_setid_frames(frames: &mut Vec<Argv>, store: &Store, key: &[u8], group: &[u8]) {
+    let Some(g) = store.stream_group_peek(key, group) else {
+        return;
+    };
+    let id = g.last_delivered_id().encode();
+    let mut f = Argv::with_capacity(5, 0);
+    for part in [&b"XGROUP"[..], b"SETID", key, group, &id] {
         f.push(part);
     }
-    f.push(read.as_bytes());
-    Some(f)
+    frames.push(f);
+    if let Some(n) = g.entries_read() {
+        let mut f = Argv::with_capacity(7, 0);
+        for part in [&b"XGROUP"[..], b"SETID", key, group, &id, b"ENTRIESREAD"] {
+            f.push(part);
+        }
+        f.push(n.to_string().as_bytes());
+        frames.push(f);
+    }
 }
 
 /// `XINTERNAL.CONSUMERSEEN key group consumer t [a]`, `t` the consumer's
