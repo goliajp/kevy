@@ -114,7 +114,10 @@ nested=()
 while read -r wt; do
     case $wt in "$PWD"/*) nested+=(-path "./${wt#"$PWD"/}" -prune -o) ;; esac
 done < <(git worktree list --porcelain | sed -n 's/^worktree //p')
-elsewhere=$(find . -path ./target -prune -o -path ./.git -prune -o \
+# build and package output is never a test's cwd: prune it by name
+# wherever it sits (node_modules, a fuzz crate's target, an Xcode .build)
+elsewhere=$(find . -path ./.git -prune -o \
+    \( -name target -o -name node_modules -o -name .build \) -prune -o \
     ${nested[@]+"${nested[@]}"} \
     \( -name '*-catalog.meta' -o -name 'shards.meta' -o -name 'aof-*.aof' \
        -o -name 'dump-*.rdb' -o -name 'feed-*.gen' -o -name 'feed-*.meta' \) \
