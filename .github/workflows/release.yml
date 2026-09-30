@@ -336,6 +336,13 @@ jobs:
               continue
             fi
             considered=$((considered + 1))
+            # A door that vendors a prebuilt engine (a prepare-native.sh
+            # next to its package.json) is published by release-doors.yml,
+            # which builds that engine on a machine with Xcode and the NDK.
+            if [ -f "$dir/scripts/prepare-native.sh" ]; then
+              echo "$name — published by release-doors.yml with its prebuilt engine"
+              continue
+            fi
             if npm view "$name@$V" version >/dev/null 2>&1; then
               echo "$name@$V already published"
               already=$((already + 1))
@@ -433,6 +440,25 @@ jobs:
       tag: ${{ github.ref_name }}
     secrets:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  # ───────────── the doors that used to be opened by hand ─────────────
+  # Go module mirror, Flutter package mirror, the two npm packages with the
+  # prebuilt mobile engine, and the site. After release-notes, like
+  # npm-platform: crates.io and the GitHub release exist by then. Final
+  # tags only — none of these has a pre-release channel.
+  doors:
+    needs: release-notes
+    if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')
+    permissions:
+      contents: write   # the site job pushes the `site` branch
+    uses: ./.github/workflows/release-doors.yml
+    with:
+      tag: ${{ github.ref_name }}
+      dry_run: false
+    secrets:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      KEVY_GO_DEPLOY_KEY: ${{ secrets.KEVY_GO_DEPLOY_KEY }}
+      KEVY_FLUTTER_DEPLOY_KEY: ${{ secrets.KEVY_FLUTTER_DEPLOY_KEY }}
 
   # ───────────── build the kevy server binary for every supported target ─────────────
   # All targets build NATIVELY on their respective GitHub-hosted runner — each
