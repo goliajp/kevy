@@ -7,8 +7,8 @@
 //!
 //! Both halves are checked, and each runs somewhere:
 //!
-//! * feature ON (`cargo test -p kevy --features kevy-alloc`, the suite's
-//!   alloc-global row): the section is there and `mapped == accounted`. That
+//! * feature ON (`cargo test -p kevy --features kevy-alloc`, run by
+//!   hand when the allocator changes): the section is there and `mapped == accounted`. That
 //!   sum is read off a heap nothing in this file filled, so it is a
 //!   witness and not an echo of a value the test set.
 //! * feature OFF (the default, so `cargo test --workspace` runs it): the

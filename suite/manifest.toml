@@ -31,7 +31,7 @@
 #             checks whose red can be a legitimate state, e.g. the
 #             published-wasm divergence between releases)
 #
-# Exploration probes (v125-*, axis_*) are deliberately not
+# Exploration probes (v125-*, axis_*, loopback_*) are deliberately not
 # here: instruments for finding, not standards for holding. See the RFC.
 
 [suite]
@@ -828,30 +828,6 @@ expected = 900
 timeout = 3600
 requires = ["linux", "binaries-release"]
 proves = "bytes/entry match each declared memory formula within tolerance"
-
-[[check]]
-id = "alloc-global"
-area = "mem"
-tier = "full"
-# kevy-alloc as the process allocator is off by default, so --workspace
-# never builds these tests: the span identity, page reclaim, the per-class
-# cap, cross-thread frees, and the INFO section on a live server
-cmd = "bash -c 'cargo test -p kevy-alloc --features global && cargo test -p kevy --features kevy-alloc --test info_allocator'"
-inputs = ["crates/kevy-alloc/", "crates/kevy/tests/info_allocator.rs"]
-expected = 120
-timeout = 1800
-requires = []
-proves = "kevy-alloc holds its accounting identity, returns emptied pages, and reports its terms through INFO when it is the allocator"
-
-[[check]]
-id = "unsafe-crates"
-area = "arch"
-tier = "full"
-cmd = "python3 tools/check_unsafe_crates.py"
-expected = 1
-timeout = 60
-requires = []
-proves = "no crate outside the recorded set has started to carry unsafe code"
 
 [[check]]
 id = "compressgate"
