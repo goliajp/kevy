@@ -19,11 +19,12 @@ replicas (upgrade the primary first), may go back to 6.4, script kevy-cli
 tools as bare words, or use kevy as a Rust library. Every statement there
 about mixing versions was measured against the 6.4.0 release binary.
 
-Most of the rest are fixes. Several had been losing or changing data for
-a long time — blocking pops that never reached the log (since 1.4.0),
-catalog commands that never reached a replica (since 3.0.0), writes made
-after a `BGSAVE` (since 5.1.0) — and each entry below names the first
-release that had the defect.
+Most of the entries below are fixes. Several had been losing or changing
+data for a long time — blocking pops that never reached the log (since
+1.4.0), catalog commands that never reached a replica (since 3.0.0),
+writes made after a `BGSAVE` on macOS and on Linux without io_uring
+(since 5.1.0) — and each fix names the first release that had the
+defect.
 
 ### Fixes: data that was lost, merged or never reached a replica
 
