@@ -3388,7 +3388,7 @@
     "kevy_wasm::abi_kv::kevy_expire": 20,
     "kevy_wasm::abi_kv::kevy_flushall": 4,
     "kevy_wasm::abi_kv::kevy_keys": 1,
-    "kevy_wasm::abi_kv::kevy_mget": 48,
+    "kevy_wasm::abi_kv_multi::kevy_mget": 48,
     "kevy_wasm::abi_kv::kevy_persist": 5,
     "kevy_wasm::abi_kv::kevy_set": 4,
     "kevy_wasm::abi_kv::kevy_set_ttl": 4,
@@ -3694,7 +3694,7 @@
       "accepted": [
         "::match_migrating",
         "kevy_rt::shard_flush::splice_output_arcs",
-        "kevy_wasm::abi_kv::kevy_mget"
+        "kevy_wasm::abi_kv_multi::kevy_mget"
       ],
       "reason": "Three movements, three different reasons. (1) kevy_wasm::abi_kv::kevy_mget 42 -> 48: mine. The checked_add at the wasm ABI boundary adds a None arm that cannot be taken on a 64-bit host, so six regions are genuinely and permanently unreachable where this is measured \u2014 the price of making an overflow fail by construction instead of by a wrap that happened to land right. (2) kevy_rt::shard_flush::splice_output_arcs 2 -> 39: not mine, and one sample. Same position ::match_migrating was in at v1, so the same answer: accepted here, not registered. The rule for next time is the one that finding wrote \u2014 if it recurs it earns an unstable entry, and if a different shard_flush symbol appears instead, the registration should be by the kevy_rt::shard_flush:: prefix. (3) ::match_migrating joined again, which is the recurrence that rule was waiting for; registered in suite/dead-paths.toml this commit. Observed on linux from CI run 33144113383.",
       "delta": 44
