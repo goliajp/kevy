@@ -424,13 +424,13 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
   - complexity: CREATE / DESTROY: O(1) plus an O(N*F) reweigh. SETID / CREATECONSUMER: O(1). DELCONSUMER: O(P)
   - compat: differs: CREATE / SETID / DESTROY / CREATECONSUMER / DELCONSUMER / MKSTREAM are supported, but on a missing key the non-CREATE subcommands return 0 or NOGROUP instead of Redis's error, and XGROUP HELP is absent
 - `XINFO STREAM key | GROUPS key | CONSUMERS key group | HELP` [readonly] — Introspect a stream, its groups, or its consumers.
-  - complexity: STREAM: O(1). GROUPS: O(G*N) — 'lag' is a linear walk of every entry, once per group. CONSUMERS: O(C)
-  - compat: differs: STREAM / GROUPS / CONSUMERS / HELP only — XINFO STREAM FULL is absent; radix-tree-keys and nodes are synthetic (we have no radix tree), entries-read is approximated, and CONSUMERS omits 'inactive'
+  - complexity: STREAM: O(1). GROUPS: O(G*N + G log G) — 'lag' is a linear walk of every entry, once per group, and the groups are sorted by name. CONSUMERS: O(C log C), sorted by name
+  - compat: differs: STREAM / GROUPS / CONSUMERS / HELP only — XINFO STREAM FULL is absent; radix-tree-keys and nodes are synthetic (we have no radix tree), entries-read is approximated (GROUPS lists 'lag' before 'entries-read', and answers 0 where Redis answers nil for a group that has read nothing), and CONSUMERS omits 'inactive'
 - `XLEN key` [readonly] — Return the number of entries in a stream.
   - complexity: O(1)
   - compat: full
 - `XPENDING key group [[IDLE min-idle-time] start end count [consumer]]` [readonly] — Inspect pending entries of a consumer group (summary or extended form).
-  - complexity: summary: O(P*C) — the per-consumer tally is a linear find per PEL row. extended: O(log P + K)
+  - complexity: summary: O(P*C + C log C) — the per-consumer tally is a linear find per PEL row, then sorted by name. extended: O(log P + K)
   - compat: full
 - `XRANGE key start end [COUNT count]` [readonly] — Return stream entries within an ID range.
   - complexity: O(log N + M) — a B-tree range descent, COUNT applied lazily

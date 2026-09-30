@@ -371,6 +371,14 @@ defect.
 
 ### Other fixes
 
+- **`XPENDING`, `XINFO CONSUMERS` and `XINFO GROUPS` list consumers and
+  groups by name.** The `XPENDING` summary listed consumers in the order
+  their oldest pending entry appeared, and the two `XINFO` forms in the
+  order of kevy's internal table. Redis 8.10 and valkey 9.1 list them by
+  name in byte order (`Bob` before `a`, `b10` before `b9`), and so does
+  kevy now, on the server, in the embedded engine and in the browser.
+  `bench/compat3.sh` checks the summary against both.
+
 - **`XREADGROUP … BLOCK` works when the stream lives on another shard.**
   Since 1.5.0 a blocking group read ran on the connection's own shard
   first; with the stream on another shard it found no group there and
@@ -1013,7 +1021,7 @@ defect.
   frames a native AOF would hold (an `XADD *` with the id it chose, a
   group read with the deliveries it made), so a stream and its consumer
   groups survive a reload from OPFS or IndexedDB (see the fix above for
-  what this did to every other `cmd` write). The module is 602 KB
+  what this did to every other `cmd` write). The module is 619 KB
   gzipped, up from 539 KB. kevy-embedded gains an off-by-default
   `host-log` feature for this (`Store::dispatch_argv_recorded`, the
   frames a command's write records, for a host that keeps the log

@@ -22,7 +22,7 @@ redis-cli -p 6379 GET hello
 
 kevyは同一のエンジンから三つの形態で提供されます。
 
-- **サーバー** — Redisワイヤ互換のデーモンです。RESP2を話し、95個の
+- **サーバー** — Redisワイヤ互換のデーモンです。RESP2を話し、96個の
   コマンドについてvalkey 9.1と返答をバイト単位で照合しています。
 - **組み込みライブラリ** — `kevy-embedded`はネットワークのない同じ
   エンジンです。Rustバイナリに組み込んで`Store`を直接呼び出せます。
@@ -232,7 +232,7 @@ kevyはブラウザの中で本物のストアとして動きます。npmパッ�
 [`@goliapkg/kevy`](https://www.npmjs.com/package/@goliapkg/kevy)は、
 `wasm32-unknown-unknown`向けにコンパイルしたエンジンを手書きの
 ESモジュールローダーに包んで出荷します——wasm-bindgenなし、境界の
-両側とも依存ゼロ。七ファイル、パックで617 KB（回線上はgzipで602 KB）です。
+両側とも依存ゼロ。七ファイル、パックで633 KB（回線上はgzipで619 KB）です。
 
 ```sh
 npm install @goliapkg/kevy
@@ -351,7 +351,7 @@ AOFはメジャーをまたいでそのまま読み込めます。
 
 ## 互換性
 
-95個のコマンドがvalkey 9.1と返答をバイト単位で照合されており、Redisの
+96個のコマンドがvalkey 9.1と返答をバイト単位で照合されており、Redisの
 5つのデータ型（String、Hash、List、Set、Sorted Set）すべてに加えて
 Streams、Pub/Sub（channel + pattern）、トランザクション（`MULTI` /
 `EXEC` / `WATCH` / `UNWATCH`）、ブロッキングpop、および標準的な

@@ -88,7 +88,9 @@ fn xinfo_groups<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec
         Ok(None) => return encode_error(out, "ERR no such key"),
         Err(e) => return store_err(out, e),
     };
-    let groups: Vec<(&[u8], &ConsumerGroup)> = s.groups().collect();
+    // by name, in byte order, as a Redis server lists them
+    let mut groups: Vec<(&[u8], &ConsumerGroup)> = s.groups().collect();
+    groups.sort_unstable_by_key(|(name, _)| *name);
     encode_array_len(out, groups.len() as i64);
     for (name, g) in groups {
         emit_group_info(out, name, g, s);
@@ -138,7 +140,9 @@ fn xinfo_consumers<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut 
     let Some(g) = s.group(&args[3]) else {
         return encode_error(out, "NOGROUP No such consumer group");
     };
-    let consumers: Vec<(&[u8], &ConsumerState)> = g.consumers().collect();
+    // by name, in byte order, as a Redis server lists them
+    let mut consumers: Vec<(&[u8], &ConsumerState)> = g.consumers().collect();
+    consumers.sort_unstable_by_key(|(name, _)| *name);
     encode_array_len(out, consumers.len() as i64);
     let now = now_unix_ms();
     for (name, c) in consumers {

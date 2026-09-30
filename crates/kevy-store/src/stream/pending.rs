@@ -60,7 +60,7 @@ pub struct PendingSummary {
     /// # Ok::<(), kevy_store::StoreError>(())
     /// ```
     pub id_range: Option<(StreamId, StreamId)>,
-    /// `(consumer, count)` pairs in arbitrary order.
+    /// `(consumer, count)` pairs, by consumer name in byte order.
     ///
     /// ```
     /// # use kevy_store::*;
@@ -73,8 +73,7 @@ pub struct PendingSummary {
     /// # s.xreadgroup(b"s", b"g", b"alice", ReadGroupId::New, None, AckMode::Pending, 100)?;
     /// let opts = XClaimOpts::default();
     /// s.xclaim(b"s", b"g", b"bob", &[StreamId::new(2, 0)], &opts, 200)?;
-    /// let mut by = s.xpending_summary(b"s", b"g")?.unwrap().by_consumer;
-    /// by.sort();
+    /// let by = s.xpending_summary(b"s", b"g")?.unwrap().by_consumer;
     /// assert_eq!(by, [(b"alice".to_vec(), 1), (b"bob".to_vec(), 1)]);
     /// # Ok::<(), kevy_store::StoreError>(())
     /// ```
@@ -227,6 +226,8 @@ impl StreamData {
                 counts.push((p.consumer.to_vec(), 1));
             }
         }
+        // consumers by name, in byte order, as a Redis server lists them
+        counts.sort_unstable_by(|a, b| a.0.cmp(&b.0));
         Some(PendingSummary { total, id_range, by_consumer: counts })
     }
 

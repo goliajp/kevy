@@ -29,3 +29,25 @@ fn group_reads_and_claims_run_without_a_log() {
     let wrong = run(&s, &[b"XREADGROUP", b"GROUP", b"g", b"c1", b"STREAMS", b"str", b">"]);
     assert!(wrong.starts_with(b"-"), "{:?}", String::from_utf8_lossy(&wrong));
 }
+
+/// The embedded engine lists a group's consumers by name, as the server
+/// and a Redis server do: the summary below is the reply Redis 8.10 gave
+/// for the same script, byte for byte.
+#[test]
+fn the_pending_summary_lists_consumers_by_name() {
+    let s = Store::open(Config::default()).expect("open");
+    for id in [&b"1-0"[..], b"2-0", b"3-0", b"4-0"] {
+        run(&s, &[b"XADD", b"s", id, b"f", b"v"]);
+    }
+    run(&s, &[b"XGROUP", b"CREATE", b"s", b"g", b"0"]);
+    for c in [&b"bob"[..], b"alice", b"zed", b"bob"] {
+        run(&s, &[b"XREADGROUP", b"GROUP", b"g", c, b"COUNT", b"1", b"STREAMS", b"s", b">"]);
+    }
+    assert_eq!(
+        run(&s, &[b"XPENDING", b"s", b"g"]),
+        b"*4\r\n:4\r\n$3\r\n1-0\r\n$3\r\n4-0\r\n*3\r\n\
+          *2\r\n$5\r\nalice\r\n$1\r\n1\r\n\
+          *2\r\n$3\r\nbob\r\n$1\r\n2\r\n\
+          *2\r\n$3\r\nzed\r\n$1\r\n1\r\n"
+    );
+}
