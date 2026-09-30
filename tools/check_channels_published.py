@@ -74,6 +74,37 @@ NOT_PUBLISHED = {
     "bindings/cpp": "consumed by CMake FetchContent against the tag; no registry",
 }
 
+# Who opens each door, so a door found behind names what did not run.
+#
+# Everything is published by the tag. The three dispatch doors are the
+# owner's decision: those registries cannot take a version back, so a tag
+# alone never publishes to them, and between the tag and the dispatch
+# they are behind by design.
+BY_DISPATCH = {
+    "pypi": "owner dispatches pypi.yml with publish: true",
+    "nuget": "owner dispatches nuget.yml with publish: true",
+    "maven": "owner dispatches maven-central.yml from the tag with publish: true",
+}
+BY_TAG = {
+    "crates.io": "release.yml publish",
+    "npm": "release.yml npm / npm-platform; a package with a prebuilt engine: "
+           "release-doors.yml mobile-npm",
+    "go": "release-doors.yml go (kevy-go mirror), then the Go proxy",
+    "pub.dev": "release-doors.yml flutter pushes the kevy-flutter tag, whose "
+               "publish.yml uploads — which pub.dev accepts only once its Admin "
+               "tab allows GitHub Actions for goliajp/kevy-flutter; until then, "
+               "`flutter pub publish` by hand from that tag",
+    "site": "release-doors.yml site (the `site` branch)",
+    "github": "release.yml release-notes",
+    "ghcr": "docker.yml",
+    "dockerhub": "docker.yml",
+}
+
+
+def publisher(kind: str) -> str:
+    return BY_DISPATCH.get(kind) or BY_TAG.get(kind, "nothing — this door has no publisher")
+
+
 # Sample and smoke projects. They carry a version because their manifest
 # format demands one, not because anybody installs them.
 DEMO = ("example/", "barern-example/", "smoke/", "node_modules/", "/target/")
@@ -524,6 +555,13 @@ def main() -> int:
               "A gate that silently skips a door is the gate that was missing.")
         return 2
 
+    unowned = sorted({k for k, *_ in ds if k not in BY_TAG and k not in BY_DISPATCH})
+    if unowned:
+        print(f"door kinds nothing is recorded as publishing: {', '.join(unowned)}")
+        print("Add each to BY_TAG with the job that publishes it, or to "
+              "BY_DISPATCH with the reason a person does.")
+        return 2
+
     behind, unknown, ahead, ok = [], [], [], 0
     for kind, name, ask, src, declared in ds:
         want = v
@@ -550,7 +588,8 @@ def main() -> int:
         elif got:
             ok += 1
         else:
-            behind.append(f"{kind:<10} {name:<28} does not serve {want}   ({rel})")
+            behind.append(f"{kind:<10} {name:<28} does not serve {want}   ({rel})\n"
+                          f"{'':<13}← {publisher(kind)}")
 
     if unknown:
         print(f"cannot tell whether {v} reached every door:")
