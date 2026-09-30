@@ -14,34 +14,35 @@ kevy 的错误以 RESP simple-error 字符串传输：`-<PREFIX> <message>\r\n`�
 
 | 前缀 | 触发时机 | 恢复 / 下一步 |
 |--------|---------------|----------------------|
-| `-ERR unknown command '<cmd>'` | 命令名未实现或不识别。 | 查 README 命令覆盖表；确认拼写。 |
-| `-ERR wrong number of arguments for '<cmd>' command` | argc 与命令接受的形状不符。 | 按文档的参数个数重发。 |
-| `-ERR value is not an integer or out of range` | INCR/DECR 类命令作用在无法解析为 i64 的值上，或数值参数越界。 | 用 `SET` 覆盖成可解析的整数；夹紧输入。 |
-| `-ERR no such key` | RENAME / RENAMENX / COPY / GETEX 的目标 key 不存在。 | 按 key 不存在处理（必要时先用 `EXISTS` 预检）。 |
-| `-ERR kevy only supports DB 0` | `SELECT N` 且 N ≠ 0。 | kevy 没有多 DB；用独立实例或 key 命名空间。 |
-| `-ERR MULTI calls can not be nested` | 已在 MULTI 块内又发 `MULTI`。 | 等 `EXEC` / `DISCARD` 之后再开新事务。 |
-| `-ERR EXEC without MULTI` | 没有打开的事务却发了 `EXEC`。 | 与 `MULTI` 配对，或丢弃该命令。 |
-| `-ERR DISCARD without MULTI` | 没有打开的事务却发了 `DISCARD`。 | 与 `MULTI` 配对，或丢弃该命令。 |
-| `-ERR WATCH inside MULTI is not allowed` | 在 MULTI 块内发 `WATCH`。 | 在 `MULTI` 之前发 `WATCH`。 |
-| `-ERR <cmd> not allowed inside MULTI` | 不能排队的命令（pub/sub、`WATCH`、`HELLO`、`RENAME`）被排进了 MULTI。 | 把这些命令放在事务之外。 |
-| `-ERR Protocol error` | 入站字节不是合法 RESP。 | 重连重试；若持续出现，审计客户端序列化器。 |
-| `-ERR CONFIG SET failed for '<key>': <reason>` | CONFIG 字段未知或取值越界。 | `CONFIG GET *` 查看支持的字段与当前值。 |
-| `-ERR CONFIG REWRITE could not write <path>: <io-error>` | 配置 TOML 路径缺失或不可写。 | 检查 `--config` 路径与文件系统权限。 |
-| `-WRONGTYPE Operation against a key holding the wrong kind of value` | 命令作用在已存在但类型不同的 key 上。 | 见 [Wrong-type 规则](#wrong-type-规则)。 |
-| `-EXECABORT Transaction discarded because of previous errors.` | MULTI 期间某条排队命令是未知动词或参数过少，EXEC 拒绝整批、什么都不执行。 | 修正出错的排队命令，重新 `MULTI` / 排队 / `EXEC`。 |
-| `-MOVED <slot> <host:port>` | key 的哈希槽不属于本节点。 | 见[集群路由回复](#集群路由回复)。 |
-| `-CROSSSLOT Keys in request don't hash to the same slot` | 多 key 命令跨了多个哈希槽。 | 见[集群路由回复](#集群路由回复)。 |
-| `-MISDIRECTED writer is <host:port>` | 写入落在了不拥有该 key scope 的节点上，或 `REPL.WAIT` 在此副本上无法提供读己之写（超时或 generation 不匹配）。 | 见[集群路由回复](#集群路由回复)；对 `REPL.WAIT`，去 `<host:port>` 读主节点。 |
-| `-QUIESCED migrating to <host:port>` | 槽或 scope 正在迁移、在本节点冻结，或节点正处于向 `<host:port>` 的 `FAILOVER` 交接中。 | 见[集群路由回复](#集群路由回复)。 |
-| `-OOM command not allowed when used memory > 'maxmemory'` | 超限后在 `noeviction` 策略下发写类命令。 | 调高 `maxmemory`、设置逐出策略（如 `allkeys-lru`），或 `DEL` 腾出空间。已有数据完好。 |
-| `-READONLY You can't write against a read only replica.` | 向副本节点发送写命令。 | 发给主节点，或使用路由客户端。 |
-| `-NOREPLICAS Not enough good replicas to write.` | `min_replicas_to_write = N` 的主节点看到的健康副本少于 N。 | 退避重试；恢复副本（见 [docs/availability.md](availability.md)）。 |
-| `-NOREPLICAS primary lost quorum; writes fenced` | elect 多数派主节点联系不上严格多数的同僚（分区少数侧）；写入在租约窗口内自我围栏。 | 退避重试——分区愈合后围栏解除，或多数派选出新主节点、路由客户端会找到它。 |
-| `-STALE replica is stale; read the primary or raise replica_max_staleness_ms` | 读请求发给了上一次主节点心跳早于其 `replica_max_staleness_ms` 界限的副本。 | 在副本追平前读主节点，或调高/关闭该界限。 |
-| `-READONLY can't write against a read-only script` | 通过 `EVAL_RO` / `EVALSHA_RO` 求值的脚本尝试写入。 | 改用可写的 `EVAL` / `EVALSHA` 变体。 |
-| `-NOSCRIPT No matching script. Please use EVAL.` | `EVALSHA <sha>` 请求的脚本不在缓存中。 | 直接调 `EVAL`（kevy 自动缓存）或先 `SCRIPT LOAD`。 |
-| `-LOADING kevy is loading the dataset in memory` | 副本正在从主节点接收 full-resync 快照期间收到读请求。 | 等待重试（窗口以快照传送时长为界）；loading 期间 `PING`、`INFO`、`HELLO` 照常应答，健康检查与监控不中断。 |
-| `-ERR No such client address in the list` | 旧式 `CLIENT KILL <addr:port>` 没有匹配到任何连接。 | 用 `CLIENT LIST` 列出在线连接后按现存 `addr` 重发；过滤式形态（`CLIENT KILL ID\|ADDR\|LADDR …`）返回计数 0 而不报错。 |
+| `-ERR unknown command '<cmd>'` | 命令名未实现或不识别。| 查 README 命令覆盖表；确认拼写。|
+| `-ERR wrong number of arguments for '<cmd>' command` | argc 与命令接受的形状不符。| 按文档的参数个数重发。|
+| `-ERR value is not an integer or out of range` | INCR/DECR 类命令作用在无法解析为 i64 的值上，或数值参数越界。| 用 `SET` 覆盖成可解析的整数；夹紧输入。|
+| `-ERR no such key` | RENAME / RENAMENX / COPY / GETEX 的目标 key 不存在。| 按 key 不存在处理（必要时先用 `EXISTS` 预检）。|
+| `-ERR kevy only supports DB 0` | `SELECT N` 且 N ≠ 0。| kevy 没有多 DB；用独立实例或 key 命名空间。|
+| `-ERR MULTI calls can not be nested` | 已在 MULTI 块内又发 `MULTI`。| 等 `EXEC` / `DISCARD` 之后再开新事务。|
+| `-ERR EXEC without MULTI` | 没有打开的事务却发了 `EXEC`。| 与 `MULTI` 配对，或丢弃该命令。|
+| `-ERR DISCARD without MULTI` | 没有打开的事务却发了 `DISCARD`。| 与 `MULTI` 配对，或丢弃该命令。|
+| `-ERR WATCH inside MULTI is not allowed` | 在 MULTI 块内发 `WATCH`。| 在 `MULTI` 之前发 `WATCH`。|
+| `-ERR <cmd> not allowed inside MULTI` | 不能排队的命令（pub/sub、`WATCH`、`HELLO`、`RENAME`）被排进了 MULTI。| 把这些命令放在事务之外。|
+| `-ERR Protocol error` | 入站字节不是合法 RESP。| 重连重试；若持续出现，审计客户端序列化器。|
+| `-ERR CONFIG SET failed for '<key>': <reason>` | CONFIG 字段未知或取值越界。| `CONFIG GET *` 查看支持的字段与当前值。|
+| `-ERR CONFIG REWRITE could not write <path>: <io-error>` | 配置 TOML 路径缺失或不可写。| 检查 `--config` 路径与文件系统权限。|
+| `-WRONGTYPE Operation against a key holding the wrong kind of value` | 命令作用在已存在但类型不同的 key 上。| 见 [Wrong-type 规则](#wrong-type-规则)。|
+| `-EXECABORT Transaction discarded because of previous errors.` | MULTI 期间某条排队命令是未知动词或参数过少，EXEC 拒绝整批、什么都不执行。| 修正出错的排队命令，重新 `MULTI` / 排队 / `EXEC`。|
+| `-MOVED <slot> <host:port>` | key 的哈希槽不属于本节点。| 见[集群路由回复](#集群路由回复)。|
+| `-CROSSSLOT Keys in request don't hash to the same slot` | 多 key 命令跨了多个哈希槽。| 见[集群路由回复](#集群路由回复)。|
+| `-MISDIRECTED writer is <host:port>` | 写入落在了不拥有该 key scope 的节点上，或 `REPL.WAIT` 在此副本上无法提供读己之写（超时或 generation 不匹配）。| 见[集群路由回复](#集群路由回复)；对 `REPL.WAIT`，去 `<host:port>` 读主节点。|
+| `-QUIESCED migrating to <host:port>` | 槽或 scope 正在迁移、在本节点冻结，或节点正处于向 `<host:port>` 的 `FAILOVER` 交接中。| 见[集群路由回复](#集群路由回复)。|
+| `-OOM command not allowed when used memory > 'maxmemory'` | 超限后在 `noeviction` 策略下发写类命令。| 调高 `maxmemory`、设置逐出策略（如 `allkeys-lru`），或 `DEL` 腾出空间。已有数据完好。|
+| `-OOM command not allowed when the process holds more memory than the tiering budget allows` | 分层存储的服务器连续两次读数中，实际占用的内存都超过分层预算 × 1.05，而这次写入会让数据变大。| 等一等：降级和堆整理会把内存压回去，写入会自动恢复。如果一直这样，调高预算，或者减少不能降级的部分（索引、键空间表）；`INFO # Tiering` 里有 `tier_live_bytes` 和 `tier_rss_line_bytes`。已有数据完好。|
+| `-READONLY You can't write against a read only replica.` | 向副本节点发送写命令。| 发给主节点，或使用路由客户端。|
+| `-NOREPLICAS Not enough good replicas to write.` | `min_replicas_to_write = N` 的主节点看到的健康副本少于 N。| 退避重试；恢复副本（见 [docs/availability.md](availability.md)）。|
+| `-NOREPLICAS primary lost quorum; writes fenced` | elect 多数派主节点联系不上严格多数的同僚（分区少数侧）；写入在租约窗口内自我围栏。| 退避重试——分区愈合后围栏解除，或多数派选出新主节点、路由客户端会找到它。|
+| `-STALE replica is stale; read the primary or raise replica_max_staleness_ms` | 读请求发给了上一次主节点心跳早于其 `replica_max_staleness_ms` 界限的副本。| 在副本追平前读主节点，或调高/关闭该界限。|
+| `-READONLY can't write against a read-only script` | 通过 `EVAL_RO` / `EVALSHA_RO` 求值的脚本尝试写入。| 改用可写的 `EVAL` / `EVALSHA` 变体。|
+| `-NOSCRIPT No matching script. Please use EVAL.` | `EVALSHA <sha>` 请求的脚本不在缓存中。| 直接调 `EVAL`（kevy 自动缓存）或先 `SCRIPT LOAD`。|
+| `-LOADING kevy is loading the dataset in memory` | 副本正在从主节点接收 full-resync 快照期间收到读请求。| 等待重试（窗口以快照传送时长为界）；loading 期间 `PING`、`INFO`、`HELLO` 照常应答，健康检查与监控不中断。|
+| `-ERR No such client address in the list` | 旧式 `CLIENT KILL <addr:port>` 没有匹配到任何连接。| 用 `CLIENT LIST` 列出在线连接后按现存 `addr` 重发；过滤式形态（`CLIENT KILL ID\|ADDR\|LADDR …`）返回计数 0 而不报错。|
 
 ### kevy 从不发出的前缀
 
@@ -105,7 +106,7 @@ kevy 有意不在协议层做认证与授权；下面这些 Redis 兼容前缀�
 | `ERR no such index '<name>' (IDX.LIST enumerates them)` | 查询点名了不存在的索引 | `IDX.LIST` / `VIEW.LIST` 枚举目录 |
 | `INDEXBUILDING index '<name>' is still building (poll IDX.LIST until state=ready)` | 查询撞上了建索引后的回填窗口 | 轮询 `IDX.LIST` 的 `state`；见 [docs/migration.md](migration.md) |
 | `INDEXOVERBUDGET index '<name>' build exceeded MAXMEM (raise maxmemory or DROP the index)` | 构建触到内存预算 | 调高 `maxmemory` 或 `IDX.DROP` |
-| `FEEDRESYNC <gen> <tail>` | FEED 游标不再可服务（generation 递增或超出 backlog） | 从新快照 + 返回的游标重启消费；见 [docs/cdc.md](cdc.md) |
+| `FEEDRESYNC <gen> <tail>` | FEED 游标不再可服务（generation 递增或超出 backlog）| 从新快照 + 返回的游标重启消费；见 [docs/cdc.md](cdc.md) |
 
 ## 更新这份目录
 

@@ -15,6 +15,7 @@
     "ios",
     "android",
     "expo-module.config.json",
+    "CHANGELOG.md",
     "!android/build"
   ],
   "scripts": {

@@ -227,9 +227,9 @@ TABLE.DECLARE user PREFIX user: PK id COLUMN id i64 COLUMN age i64 INDEX age ran
   bytes. `value_len` is 8 for `i64` / `f64` and the string's length plus
   2 for `str`; `handle_len` is the key without the index's prefix, half
   that (rounded up) when it is all digits. `fill` is how full the leaves
-  are: 1.0 after a build or `IDX.REBUILD`, which pack them, and after the
-  background repack below has rested; between the two it is whatever the
-  writes left. Over 1.25 million rows keyed `row:<n>`, an `i64` index
+  are: 1.0 after a build, which packs them (a global index's
+  `IDX.REBUILD` builds it again), and after the background repack below
+  has rested; between the two it is whatever the writes left. Over 1.25 million rows keyed `row:<n>`, an `i64` index
   measured 15.9 bytes a row packed and 23–25 after random writes, a `str`
   index of ten-byte values 20.2 and 30–38. `IDX.LIST` and `IDX.VERIFY`
   report what the leaves hold; `bench/idxgate.sh` checks it against the

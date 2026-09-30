@@ -9,10 +9,8 @@ structures, pub/sub, and persistence you can read (AOF + snapshots).
 - Both come from the platform package `optionalDependencies` resolve;
   nothing compiles on install.
 
-> **Pre-release.** This document tracks kevy **7.0.0**. The package is
-> not on npm yet, so the command below does not resolve — until it is,
-> use the in-repo copy: `npm install /path/to/kevy/bindings/node` after
-> `cargo build -p kevy-ffi -p kevy-napi`.
+This document tracks kevy **7.0.0**. Changes are listed in
+[CHANGELOG.md](https://github.com/goliajp/kevy/blob/develop/bindings/node/CHANGELOG.md).
 
 ```bash
 npm install @goliapkg/kevy-node   # or: bun add @goliapkg/kevy-node

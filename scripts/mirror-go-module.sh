@@ -87,6 +87,7 @@ if grep -l '^import "C"' "$OUT"/*.go 2>/dev/null; then
 fi
 
 cp "$SRC/go.mod" "$OUT/"
+cp "$SRC/CHANGELOG.md" "$OUT/"
 cp "$ROOT/LICENSE-APACHE" "$ROOT/LICENSE-MIT" "$OUT/" 2>/dev/null || true
 
 # The README a user meets at github.com/goliajp/kevy-go: it must open by

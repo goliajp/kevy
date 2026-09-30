@@ -13,7 +13,8 @@
     "kevy-cli": "bin/kevy-cli.js"
   },
   "files": [
-    "bin/"
+    "bin/",
+    "CHANGELOG.md"
   ],
   "optionalDependencies": {
     "@goliapkg/kevy-bin-linux-x64": "7.0.0",

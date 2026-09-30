@@ -14,7 +14,8 @@
     "index.js",
     "resp.js",
     "bun.js",
-    "node.js"
+    "node.js",
+    "CHANGELOG.md"
   ],
   "optionalDependencies": {
     "@goliapkg/kevy-node-darwin-arm64": "7.0.0",
