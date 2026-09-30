@@ -73,3 +73,15 @@ fn tick_demotion_keeps_going_with_no_access_to_move_its_sampler() {
         wm - floor
     );
 }
+
+#[test]
+fn over_the_target_with_no_keys_left_demotion_stops_with_nothing_to_move() {
+    let (mut s, _d) = tiered("tier-budget-empty", 1 << 20);
+    s.set(b"k", vec![b'v'; 4096], None, crate::SetCondition::Always);
+    s.flushall();
+    // the emptied table keeps its charge, and the overhead leaves no room for it
+    assert!(s.used_memory() > 0);
+    s.set_tier_overhead(1 << 30);
+    assert_eq!(s.demote_to_watermark(), 0);
+    assert_eq!(s.tier_stats().cold_keys, 0);
+}
