@@ -174,7 +174,7 @@ def resolve(specs, build_missing):
 def preflight(topo):
     idle = pm.idle_fraction()
     print(f"# box {topo['box']}: idle {idle:.1%} before start, load average "
-          f"{os.getloadavg()[0]:.2f}")
+          f"{os.getloadavg()[0]:.2f}", flush=True)
     if idle < CONFIG["idle_min"]:
         before = pm.process_ticks()
         time.sleep(1)
