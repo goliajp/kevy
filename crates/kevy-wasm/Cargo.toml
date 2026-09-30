@@ -40,11 +40,20 @@ crate-type = ["cdylib", "rlib"]
 # prose promising indexes live in the engine. A demo that cannot do the
 # thing being claimed argues against the claim.
 #
+# Streams and geo (`streams-geo`) are computation like the rest, so they
+# are in too. A stream read that asks to BLOCK is refused with an error
+# naming the reason: a browser tab has no thread to park.
+#
+# `host-log` hands `cmd`'s writes to the persistence pump as the frames a
+# native AOF would hold, so a write through the raw command channel is as
+# durable as a typed one, and a stream or a consumer group, which only
+# `cmd` can write, survives a reload.
+#
 # The three left out are left out because a browser has nowhere to put
 # them, not to save bytes: `replicate` needs a network peer, `listener`
 # needs a TCP socket, and `tier` needs a disk directory — its own docs
 # say a wasm store rejects the config at open.
-kevy-embedded = { path = "../kevy-embedded", version = "7.0.0", default-features = false, features = ["core", "persist", "index", "text", "vector"] }
+kevy-embedded = { path = "../kevy-embedded", version = "7.0.0", default-features = false, features = ["core", "persist", "index", "text", "vector", "streams-geo", "host-log"] }
 # Clock access: TTL frames record absolute deadlines, anchored to the
 # host-fed wall clock.
 kevy-store = { path = "../kevy-store", version = "7.0.0" }
