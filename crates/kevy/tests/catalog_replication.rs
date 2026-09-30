@@ -224,6 +224,77 @@ fn a_promoted_replica_goes_on_from_its_primarys_catalog() {
     replica.stop();
 }
 
+/// A replica that follows another primary takes that primary's catalog,
+/// an empty one included.
+#[test]
+fn a_replica_that_follows_a_primary_with_no_catalog_holds_none() {
+    let (adir, bdir) = (TmpDir::new("catalog-primary-a"), TmpDir::new("catalog-primary-b"));
+    let rdir = TmpDir::new("catalog-replica-switch");
+    let a = Node::primary(2, &adir);
+    let replica = Node::replica(&a, 2, &rdir);
+    let want = declared_on(&a);
+    assert_eq!(settled(&replica, &want), want);
+    let b = Node::primary(2, &bdir);
+    let empty = steady(&b);
+    assert!(empty[0].ends_with("[]"), "{empty:?}");
+    let upstream = b.replication_base.to_string();
+    ok(&mut replica.wire(), &format!("REPLICAOF 127.0.0.1 {upstream}"));
+    assert_eq!(settled(&replica, &empty), empty);
+    replica.stop();
+    a.stop();
+    b.stop();
+}
+
+/// The catalog's `(lineage, version)` shard 0's snapshot in `dir` carries.
+fn saved_at(dir: &Path) -> (Vec<u8>, Vec<u8>) {
+    let file = std::fs::File::open(dir.join("dump-0.rdb")).unwrap();
+    let mut store = kevy_store::Store::new();
+    let image = std::io::BufReader::new(file);
+    let aux = kevy_persist::load_snapshot_with_aux(&mut store, image, |_| true).unwrap();
+    let aux = aux.expect("the snapshot carries the catalog's frame");
+    (aux[1].to_vec(), aux[2].to_vec())
+}
+
+/// Save every shard of `node` afresh and read what shard 0 kept.
+fn saved(node: &Node, dir: &Path) -> (Vec<u8>, Vec<u8>) {
+    // a node listens before its shards have restored, and serves after:
+    // the snapshots it may still be reading stay until it answers
+    assert_eq!(call(&mut node.wire(), "EXISTS none"), b":0\r\n");
+    let dump = |i: usize| dir.join(format!("dump-{i}.rdb"));
+    for i in 0..2 {
+        drop(std::fs::remove_file(dump(i)));
+    }
+    assert!(call(&mut node.wire(), "BGSAVE").starts_with(b"+"));
+    common::until("both shards to save", || (0..2).all(|i| dump(i).exists()));
+    saved_at(dir)
+}
+
+/// A catalog nothing was ever declared in still has a record: a save
+/// keeps it, a rewrite keeps it, and a start from either takes it back.
+#[test]
+fn an_empty_catalog_keeps_its_record_through_saves_rewrites_and_restarts() {
+    let dir = TmpDir::new("catalog-empty-record");
+    let node = Node::primary(2, &dir);
+    let first = saved(&node, dir.path());
+    assert!(first.0 != b"0" && first.1 == b"0", "{first:?}");
+    assert!(call(&mut node.wire(), "BGREWRITEAOF").starts_with(b"+"));
+    common::until("every shard's log to be rewritten with the catalog", || {
+        every_log_holds(dir.path(), b"XINTERNAL.CATALOG")
+    });
+    node.stop();
+    // from the rewritten logs alone
+    for i in 0..2 {
+        std::fs::remove_file(dir.path().join(format!("dump-{i}.rdb"))).unwrap();
+    }
+    let node = Node::primary(2, &dir);
+    assert_eq!(saved(&node, dir.path()), first, "after the rewrite");
+    node.stop();
+    // from the snapshots that save left
+    let node = Node::primary(2, &dir);
+    assert_eq!(saved(&node, dir.path()), first, "after the save");
+    node.stop();
+}
+
 /// A replica takes its catalog from its primary only: queries that would
 /// earn a table an engine-declared path on a primary declare nothing on
 /// it, and the primary's next change still applies.
@@ -232,16 +303,7 @@ fn a_replica_declares_nothing_for_the_queries_it_refuses() {
     let (pdir, rdir) = (TmpDir::new("catalog-primary-auto"), TmpDir::new("catalog-replica-auto"));
     let primary = Node::primary(2, &pdir);
     let replica = Node::replica(&primary, 2, &rdir);
-    let mut p = primary.wire();
-    // both shards' full syncs done before the declaration, whose frame
-    // reaches the replica on one shard's stream only
-    for i in 0..16 {
-        assert_eq!(call(&mut p, &format!("SET probe:{i} 1")), b"+OK\r\n");
-    }
-    let mut r = replica.wire();
-    common::until("the replica to catch up", || {
-        (0..16).all(|i| call(&mut r, &format!("GET probe:{i}")) == b"$1\r\n1\r\n")
-    });
+    let (mut p, mut r) = (primary.wire(), replica.wire());
     ok(&mut p, "TABLE.DECLARE auto PREFIX a: PK id COLUMN id str COLUMN age i64 AUTODECLARE 2");
     assert_eq!(call(&mut p, "HSET a:1 id 1 age 30"), b":2\r\n");
     let want = steady(&primary);

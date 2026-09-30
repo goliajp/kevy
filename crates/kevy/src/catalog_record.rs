@@ -8,10 +8,12 @@
 //! when it is newer than what the node holds: `(lineage, version)` orders
 //! them, so frames replayed from several shards' logs, in whatever order
 //! the shards reach them, leave the newest. The lineage is minted by the
-//! first change a node records, carried by every frame, and adopted by
-//! whoever applies one, so a promoted replica goes on from its primary's
-//! versions. A full sync replaces a replica's catalog with its primary's
-//! even when that one is older, since it comes from another lineage.
+//! first change a node records or the first snapshot a primary takes,
+//! carried by every frame, and adopted by whoever applies one, so a
+//! promoted replica goes on from its primary's versions. A full sync
+//! takes its snapshot's frame the same way, except that a frame from
+//! another lineage (another primary) replaces the catalog even when it is
+//! older.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -49,11 +51,16 @@ impl RecordState {
 /// version never records less than a lower one, and replay, which keeps
 /// the highest, keeps every change.
 fn next_frame(state: &RuntimeState, at: &mut (u64, u64)) -> Vec<Vec<u8>> {
+    mint(at);
+    at.1 += 1;
+    frame(state, *at)
+}
+
+/// Give a node that has recorded nothing its lineage.
+fn mint(at: &mut (u64, u64)) {
     if at.0 == 0 {
         at.0 = kevy_store::now_unix_ms().max(1);
     }
-    at.1 += 1;
-    frame(state, *at)
 }
 
 /// Install `change` if the catalogs still carry `generation`, and record
@@ -175,15 +182,28 @@ pub(crate) fn apply<A: ArgvView + ?Sized>(state: &RuntimeState, args: &A, out: &
     }
 }
 
-/// The frame a snapshot or a rewritten log keeps beside the keyspace.
-pub(crate) fn snapshot_aux(state: &RuntimeState) -> Option<Argv> {
-    let at = state.catalogs.record.lock();
+/// The frame a snapshot or a rewritten log keeps beside the keyspace:
+/// one always, an empty catalog included, so a snapshot's lineage says
+/// whose catalog it holds. A primary that has recorded nothing mints its
+/// lineage here once every shard has restored (a restored frame may
+/// still bring one until then); a replica only takes its primary's.
+pub(crate) fn snapshot_aux(state: &RuntimeState) -> Argv {
+    let mut at = state.catalogs.record.lock();
     let _held = state.catalogs.hold();
-    (at.0 != 0).then(|| Argv::from(frame(state, *at)))
+    let restored = state.catalogs.record.restored.load(Ordering::Acquire) >= state.nshards();
+    if restored && !state.replication.is_replica() {
+        mint(&mut at);
+    }
+    Argv::from(frame(state, *at))
 }
 
-/// The frame a loaded snapshot carried: newer wins at boot; a full sync
-/// replaces the catalog with the primary's, an empty one included.
+/// The frame a loaded snapshot carried, taken as a frame from the log or
+/// the stream is: newer wins, so a full sync of one shard, served from a
+/// snapshot older than frames another shard already applied, leaves the
+/// catalog as they did; a full sync from another lineage (another
+/// primary) replaces it, an empty one included. A snapshot with no frame
+/// comes from a primary with no replicated catalog (a 6.4 server, or an
+/// embedded store that has recorded none), so a replica of it holds none.
 pub(crate) fn load_snapshot_aux(state: &RuntimeState, aux: Option<&Argv>, full_sync: bool) {
     match aux {
         Some(frame) => {
