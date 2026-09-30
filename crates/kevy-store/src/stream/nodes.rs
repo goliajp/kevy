@@ -27,6 +27,34 @@ const NODE_MAX_BYTES: usize = 4096;
 /// names no `LIMIT`: 100 nodes' worth.
 pub const APPROX_TRIM_LIMIT: usize = 100 * NODE_MAX_ENTRIES as usize;
 
+/// How a trim goes about it: `XTRIM`'s `=` and `~`.
+///
+/// ```
+/// use kevy_store::{APPROX_TRIM_LIMIT, TrimMode};
+/// assert_ne!(TrimMode::Exact, TrimMode::Approximate { limit: APPROX_TRIM_LIMIT });
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum TrimMode {
+    /// Entry by entry until what the trim keeps is all that is left.
+    ///
+    /// ```
+    /// assert_eq!(kevy_store::TrimMode::Exact, kevy_store::TrimMode::Exact);
+    /// ```
+    Exact,
+    /// Whole nodes from the head only, and no more than `limit` entries
+    /// (0 for no limit).
+    ///
+    /// ```
+    /// let m = kevy_store::TrimMode::Approximate { limit: 0 };
+    /// assert!(matches!(m, kevy_store::TrimMode::Approximate { limit: 0 }));
+    /// ```
+    Approximate {
+        /// Entries the trim may remove, 0 for no limit.
+        limit: usize,
+    },
+}
+
 /// What a trim keeps: the last `n` entries, or the entries from an ID on.
 ///
 /// ```
@@ -140,17 +168,21 @@ impl StreamData {
         if keys.is_empty() { 1 } else { radix_subtree(&keys, 0) }
     }
 
-    /// Trim to `to`, returning how many entries went. `approx` removes
-    /// whole nodes from the head only, at most `limit` entries (0 = no
-    /// limit); exact goes on entry by entry until `to` holds.
-    pub fn trim(&mut self, to: TrimTo, approx: bool, limit: usize) -> usize {
+    /// Trim to `to` as `mode` says, returning how many entries went. A trim
+    /// leaves `max_deleted_id` alone: that marks a hole a deletion made
+    /// among the entries, which a trim from the head never does.
+    pub fn trim(&mut self, to: TrimTo, mode: TrimMode) -> usize {
+        let limit = match mode {
+            TrimMode::Approximate { limit } => limit,
+            TrimMode::Exact => 0,
+        };
         let mut removed = 0usize;
         while let Some(head) = self.nodes.list.front() {
             let whole = match to {
                 TrimTo::MaxLen(n) => (self.entries.len() - head.live as usize) as u64 >= n,
                 TrimTo::MinId(min) => head.last < min,
             };
-            if !whole || (approx && limit != 0 && removed + head.live as usize > limit) {
+            if !whole || (limit != 0 && removed + head.live as usize > limit) {
                 break;
             }
             let last = head.last;
@@ -160,11 +192,10 @@ impl StreamData {
             }
             self.nodes.list.pop_front();
         }
-        if approx {
+        if mode != TrimMode::Exact {
             return removed;
         }
-        loop {
-            let Some((&first, _)) = self.entries.first_key_value() else { break };
+        while let Some((&first, _)) = self.entries.first_key_value() {
             let over = match to {
                 TrimTo::MaxLen(n) => self.entries.len() as u64 > n,
                 TrimTo::MinId(min) => first < min,
@@ -186,25 +217,25 @@ impl crate::Store {
     /// key.
     ///
     /// ```
-    /// use kevy_store::{MissingStream, Store, StreamId, TrimTo, XAddIdSpec};
+    /// use kevy_store::{MissingStream, Store, StreamId, TrimMode, TrimTo, XAddIdSpec};
     /// let mut s = Store::new();
     /// for ms in 1..=150 {
     ///     let f = vec![(b"f".to_vec(), b"v".to_vec())];
     ///     s.xadd(b"s", XAddIdSpec::Explicit(StreamId::new(ms, 0)), f, MissingStream::Create, 0)?;
     /// }
-    /// assert_eq!(s.xtrim(b"s", TrimTo::MaxLen(120), true, 0)?, 0, "the head node holds 100");
-    /// assert_eq!(s.xtrim(b"s", TrimTo::MaxLen(120), false, 0)?, 30);
+    /// let nodes = TrimMode::Approximate { limit: 0 };
+    /// assert_eq!(s.xtrim(b"s", TrimTo::MaxLen(120), nodes)?, 0, "the head node holds 100");
+    /// assert_eq!(s.xtrim(b"s", TrimTo::MaxLen(120), TrimMode::Exact)?, 30);
     /// # Ok::<(), kevy_store::StoreError>(())
     /// ```
     pub fn xtrim(
         &mut self,
         key: &[u8],
         to: TrimTo,
-        approx: bool,
-        limit: usize,
+        mode: TrimMode,
     ) -> Result<u64, crate::StoreError> {
         let n = match self.stream_mut(key, false)? {
-            Some(s) => s.trim(to, approx, limit),
+            Some(s) => s.trim(to, mode),
             None => return Ok(0),
         };
         if n > 0 {
@@ -373,26 +404,40 @@ mod tests {
     #[test]
     fn an_approximate_trim_takes_whole_nodes() {
         let mut s = stream(251, |_| vec![(&b"f"[..], b"v".to_vec())]);
-        assert_eq!(s.trim(TrimTo::MaxLen(120), true, APPROX_TRIM_LIMIT), 100);
-        assert_eq!(s.trim(TrimTo::MaxLen(10), true, APPROX_TRIM_LIMIT), 100);
+        assert_eq!(
+            s.trim(TrimTo::MaxLen(120), TrimMode::Approximate { limit: APPROX_TRIM_LIMIT }),
+            100
+        );
+        assert_eq!(
+            s.trim(TrimTo::MaxLen(10), TrimMode::Approximate { limit: APPROX_TRIM_LIMIT }),
+            100
+        );
         assert_eq!(s.length(), 51);
-        assert_eq!(s.trim(TrimTo::MaxLen(0), true, 0), 51);
+        assert_eq!(s.trim(TrimTo::MaxLen(0), TrimMode::Approximate { limit: 0 }), 51);
         let mut t = stream(350, |_| vec![(&b"f"[..], b"v".to_vec())]);
         assert_eq!(
-            t.trim(TrimTo::MaxLen(10), true, 150),
+            t.trim(TrimTo::MaxLen(10), TrimMode::Approximate { limit: 150 }),
             100,
             "a second node would pass the limit"
         );
         let min = |ms| TrimTo::MinId(StreamId::new(ms, 0));
-        assert_eq!(t.trim(min(150), true, 0), 0, "the head node, 101..=200, holds 150 and on");
-        assert_eq!(t.trim(min(201), true, 0), 100);
+        assert_eq!(
+            t.trim(min(150), TrimMode::Approximate { limit: 0 }),
+            0,
+            "the head node, 101..=200, holds 150 and on"
+        );
+        assert_eq!(t.trim(min(201), TrimMode::Approximate { limit: 0 }), 100);
     }
 
     #[test]
     fn an_exact_trim_and_deletions_leave_the_node_and_its_count() {
         let mut s = stream(250, |_| vec![(&b"f"[..], b"v".to_vec())]);
-        assert_eq!(s.trim(TrimTo::MaxLen(240), false, 0), 10);
-        assert_eq!(s.trim(TrimTo::MaxLen(150), true, 0), 90, "the head node held 90");
+        assert_eq!(s.trim(TrimTo::MaxLen(240), TrimMode::Exact), 10);
+        assert_eq!(
+            s.trim(TrimTo::MaxLen(150), TrimMode::Approximate { limit: 0 }),
+            90,
+            "the head node held 90"
+        );
         let mut d = stream(50, |_| vec![(&b"f"[..], b"v".to_vec())]);
         let gone: Vec<StreamId> = (1..=10).map(|i| StreamId::new(i, 0)).collect();
         d.del_ids(&gone);

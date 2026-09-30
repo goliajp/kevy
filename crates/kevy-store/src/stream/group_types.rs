@@ -63,7 +63,9 @@ pub struct PelEntry {
     /// ```
     pub delivery_time_ms: u64,
     /// Number of times this entry has been delivered (=1 on first
-    /// XREADGROUP, +=1 on each XCLAIM that doesn't have JUSTID).
+    /// XREADGROUP, +=1 on each XCLAIM that doesn't have JUSTID and on each
+    /// read of the consumer's history), held at `i64::MAX`, the most a
+    /// reply carries.
     ///
     /// ```
     /// # use kevy_store::*;
@@ -80,6 +82,13 @@ pub struct PelEntry {
     /// # Ok::<(), kevy_store::StoreError>(())
     /// ```
     pub delivery_count: u64,
+}
+
+/// A delivery count after one more delivery. It stops at `i64::MAX`
+/// rather than wrap, so every count a reply or a record carries is one
+/// `XCLAIM … RETRYCOUNT` accepts back.
+pub(crate) fn delivered_again(count: u64) -> u64 {
+    count.saturating_add(1).min(i64::MAX.unsigned_abs())
 }
 
 /// Per-consumer cached counters so `XINFO CONSUMERS` answers in O(1).

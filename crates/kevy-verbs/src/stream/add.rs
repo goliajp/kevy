@@ -8,7 +8,9 @@
 //! none.
 
 use kevy_resp::{ArgvView, CmdError, encode_bulk, encode_error, encode_integer, encode_null_bulk};
-use kevy_store::{MissingStream, Store, StreamId, XAddIdSpec, now_unix_ms, parse_xadd_id};
+use kevy_store::{
+    MissingStream, Store, StreamId, TrimMode, XAddIdSpec, now_unix_ms, parse_xadd_id,
+};
 
 use super::opts::{BAD_ID, Trim, TrimParser};
 use crate::Effect;
@@ -54,7 +56,7 @@ pub(super) fn cmd_xadd<A: ArgvView + ?Sized>(
     encode_bulk(out, crate::aof::id_bytes(&mut [0u8; 41], id));
     let generated = !matches!(parsed.id, XAddIdSpec::Explicit(_));
     match parsed.trim {
-        Some(t) if t.approx => {
+        Some(t) if t.mode != TrimMode::Exact => {
             let kept = trimmed.filter(|n| *n > 0).map_or(u64::MAX, |_| stream_len(store, &args[1]));
             Effect::RecordAdd(parsed.id_at, id, kept)
         }
@@ -96,12 +98,14 @@ fn parse_xadd_argv<A: ArgvView + ?Sized>(args: &A) -> Result<XAddParsed, CmdErro
             None => break,
         }
     }
-    let rest = args.len().saturating_sub(i + 1);
-    if rest == 0 || !rest.is_multiple_of(2) {
-        return Err(CmdError::Wire("ERR wrong number of arguments for 'xadd' command"));
-    }
+    let wrong = CmdError::Wire("ERR wrong number of arguments for 'xadd' command");
+    let id = args.get(i).ok_or(wrong)?;
+    let id = parse_xadd_id(id).map_err(|_| CmdError::Wire(BAD_ID))?;
     let trim = trim.finish()?;
-    let id = parse_xadd_id(&args[i]).map_err(|_| CmdError::Wire(BAD_ID))?;
+    let rest = args.len() - i - 1;
+    if rest == 0 || !rest.is_multiple_of(2) {
+        return Err(wrong);
+    }
     if id == XAddIdSpec::Explicit(StreamId::MIN) {
         return Err(CmdError::Wire("ERR The ID specified in XADD must be greater than 0-0"));
     }
@@ -109,7 +113,7 @@ fn parse_xadd_argv<A: ArgvView + ?Sized>(args: &A) -> Result<XAddParsed, CmdErro
 }
 
 fn trim(store: &mut Store, key: &[u8], t: Trim) -> u64 {
-    store.xtrim(key, t.to, t.approx, t.limit).unwrap_or(0)
+    store.xtrim(key, t.to, t.mode).unwrap_or(0)
 }
 
 fn stream_len(store: &mut Store, key: &[u8]) -> u64 {
@@ -126,33 +130,14 @@ pub(super) fn cmd_xtrim<A: ArgvView + ?Sized>(
         wrong_args(out, "xtrim");
         return Effect::Write;
     }
-    let mut parser = TrimParser::default();
-    let mut i = 2;
-    while i < args.len() {
-        match parser.take(args, i) {
-            Ok(Some(n)) => i += n,
-            Ok(None) => {
-                encode_error(out, "ERR syntax error");
-                return Effect::Write;
-            }
-            Err(e) => {
-                encode_error(out, e.as_wire());
-                return Effect::Write;
-            }
-        }
-    }
-    let t = match parser.finish() {
-        Ok(Some(t)) => t,
-        Ok(None) => {
-            encode_error(out, "ERR syntax error");
-            return Effect::Write;
-        }
+    let t = match parse_xtrim_argv(args) {
+        Ok(t) => t,
         Err(e) => {
             encode_error(out, e.as_wire());
             return Effect::Write;
         }
     };
-    let n = match store.xtrim(&args[1], t.to, t.approx, t.limit) {
+    let n = match store.xtrim(&args[1], t.to, t.mode) {
         Ok(n) => n,
         Err(e) => {
             store_err(out, e);
@@ -160,7 +145,7 @@ pub(super) fn cmd_xtrim<A: ArgvView + ?Sized>(
         }
     };
     encode_integer(out, n as i64);
-    match (t.approx, n) {
+    match (t.mode != TrimMode::Exact, n) {
         (_, 0) => Effect::Unchanged,
         (true, _) => {
             let kept = stream_len(store, &args[1]).to_string().into_bytes();
@@ -174,4 +159,15 @@ pub(super) fn cmd_xtrim<A: ArgvView + ?Sized>(
         }
         (false, _) => Effect::Write,
     }
+}
+
+/// XTRIM's options, every argument after the key one of them.
+fn parse_xtrim_argv<A: ArgvView + ?Sized>(args: &A) -> Result<Trim, CmdError> {
+    let syntax = CmdError::Wire("ERR syntax error");
+    let mut parser = TrimParser::default();
+    let mut i = 2;
+    while i < args.len() {
+        i += parser.take(args, i)?.ok_or(syntax)?;
+    }
+    parser.finish()?.ok_or(syntax)
 }

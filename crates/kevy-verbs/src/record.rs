@@ -34,7 +34,7 @@
 //! assert_eq!(&frames[0][2], b"5-1");
 //! ```
 
-use kevy_resp::ops_table::CONSUMER_SEEN;
+use kevy_resp::ops_table::{CONSUMER_SEEN, PENDING};
 use kevy_resp::{Argv, ArgvView};
 use kevy_store::{Store, StreamId};
 
@@ -330,11 +330,11 @@ pub(crate) fn seen_frame(store: &Store, key: &[u8], group: &[u8], consumer: &[u8
 /// ```
 /// assert!(kevy_verbs::aof::INTERNAL_REFUSAL.starts_with("ERR "));
 /// ```
-pub const INTERNAL_REFUSAL: &str = "ERR XINTERNAL.CONSUMERSEEN is written by kevy to its own records and is not accepted from a client";
+pub const INTERNAL_REFUSAL: &str = "ERR the XINTERNAL verbs are written by kevy to its own records and are not accepted from a client";
 
 /// Apply an internal record frame, one kevy writes and no client may send
-/// (see [`kevy_resp::ops_table::CONSUMER_SEEN`]), appending its reply to
-/// `out`. `false` = `args` is not an internal record frame; `out` is
+/// (see [`kevy_resp::ops_table::CONSUMER_SEEN`] and
+/// [`kevy_resp::ops_table::PENDING`]), appending its reply to `out`. `false` = `args` is not an internal record frame; `out` is
 /// untouched. Only a caller applying a record — a replay, a replica —
 /// calls this; a client's command goes through [`crate::exec`], which does
 /// not answer these verbs.
@@ -357,7 +357,14 @@ pub fn apply_internal<A: ArgvView + ?Sized>(
     args: &A,
     out: &mut Vec<u8>,
 ) -> bool {
-    if !args.get(0).is_some_and(|v| v.eq_ignore_ascii_case(CONSUMER_SEEN.as_bytes())) {
+    let Some(verb) = args.get(0) else {
+        return false;
+    };
+    if verb.eq_ignore_ascii_case(PENDING.as_bytes()) {
+        apply_pending(store, args, out);
+        return true;
+    }
+    if !verb.eq_ignore_ascii_case(CONSUMER_SEEN.as_bytes()) {
         return false;
     }
     let time = |i: usize| crate::args::arg_u64(&args[i]);
@@ -383,6 +390,20 @@ pub fn apply_internal<A: ArgvView + ?Sized>(
         Err(e) => crate::reply::store_err(out, e),
     }
     true
+}
+
+/// `XINTERNAL.PENDING key group consumer delivery-ms delivery-count id`.
+fn apply_pending<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
+    let n = |i: usize| args.get(i).and_then(crate::args::arg_u64);
+    let id = args.get(6).and_then(|id| kevy_store::parse_explicit_id(id).ok());
+    let (7, Some(at), Some(count), Some(id)) = (args.len(), n(4), n(5), id) else {
+        kevy_resp::encode_error(out, "ERR malformed internal pending record");
+        return;
+    };
+    match store.xgroup_restore_pending(&args[1], &args[2], &args[3], id, at, count) {
+        Ok(put) => kevy_resp::encode_integer(out, i64::from(put)),
+        Err(e) => crate::reply::store_err(out, e),
+    }
 }
 
 /// One `XCLAIM … TIME t RETRYCOUNT n FORCE JUSTID` per `(delivery time,

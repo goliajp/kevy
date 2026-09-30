@@ -275,8 +275,9 @@ fn internal_record<A: ArgvView + ?Sized>(
     args: &A,
     out: &mut Vec<u8>,
 ) -> bool {
-    let catalog = cmd == kevy_resp::ops_table::CATALOG.as_bytes();
-    if !catalog && cmd != kevy_resp::ops_table::CONSUMER_SEEN.as_bytes() {
+    use kevy_resp::ops_table::{CATALOG, CONSUMER_SEEN, PENDING};
+    let catalog = cmd == CATALOG.as_bytes();
+    if !catalog && cmd != CONSUMER_SEEN.as_bytes() && cmd != PENDING.as_bytes() {
         return false;
     }
     if !kevy_rt::applying_record() {

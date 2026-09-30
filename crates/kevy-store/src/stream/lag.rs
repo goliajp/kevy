@@ -9,6 +9,8 @@
 //! lie in the span it would have to count across:
 //!
 //! * at the last ID ever added, it is `entries-added`;
+//! * on a stream left empty, anywhere up to that ID, it is
+//!   `entries-added` too: nothing is left to hand out;
 //! * before the first live entry, or on it, it is the entries no longer
 //!   in the stream (plus one on it), provided no deletion lies among the
 //!   live entries and none lies between the ID and the first live entry
@@ -321,11 +323,13 @@ mod tests {
     }
 
     #[test]
-    fn an_emptied_stream_knows_the_counter_only_past_its_last_deletion() {
+    fn an_emptied_stream_leaves_nothing_to_hand_out_up_to_its_last_id() {
         // three added, all gone, the highest deletion at 2
         let t = tally(&[], 3, 2, 3);
-        assert_eq!(t.lag(id(1), None), None, "before the last deletion");
-        assert_eq!(t.lag(id(2), None), Some(0), "at it: everything is gone and read");
+        assert_eq!(t.lag(id(1), None), Some(0), "before the last deletion");
+        assert_eq!(t.lag(id(2), None), Some(0), "at it");
+        assert_eq!(t.lag(id(4), None), None, "past the last ID");
+        assert_eq!(t.lag(id(1), Some(1)), Some(2), "a counter set by hand is taken as it is");
     }
 
     /// The store-level setters answer a missing key, a key of another type,

@@ -483,8 +483,10 @@ fn xgroup_refuses_its_arguments_and_the_wrong_type_by_subcommand() {
     for (cmd, want) in cases {
         assert_eq!(run(&mut s, cmd).1, want, "{cmd}");
     }
-    let unknown = run(&mut s, "XGROUP NOPE s").1;
-    assert!(unknown.starts_with("-ERR Unknown XGROUP subcommand"), "{unknown}");
+    assert_eq!(
+        run(&mut s, "XGROUP NOPE s").1,
+        "-ERR unknown subcommand 'NOPE'. Try XGROUP HELP.\r\n"
+    );
     for cmd in ["XGROUP CREATE s g2 notanid", "XGROUP SETID s g notanid"] {
         assert!(run(&mut s, cmd).1.starts_with("-ERR"), "{cmd}");
     }

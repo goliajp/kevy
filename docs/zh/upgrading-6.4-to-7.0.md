@@ -34,7 +34,7 @@ kevy-embedded = "7.0.0"
 | 脚本里以裸词调用 `kevy-cli doctor`、`export`、`sql compile` 等 | 把工具写到 `--kevy` 后面 | 12 |
 | 把 kevy 的 crate 当 Rust 库用 | 大多数签名变了，编译器会逐处指出 | 13 |
 | 用 Go 模块，或者匹配绑定层只读错误的文本 | import `/v7`；错误文本末尾补上了句点 | 14 |
-| 用 `XAUTOCLAIM` 的游标、`5-` 这样的 id，或者对快要过期的键发 `EXPIRE` | 行为改成和 Redis 一致 | 15 |
+| 用流命令、`5-` 这样的 id，或者对快要过期的键发 `EXPIRE` | 回复改成和 valkey、Redis 一致；超时的阻塞 `XREAD` 回复 `*-1` | 15 |
 | 想让一次索引读取只碰更少的 shard | 把它声明成全局索引 | [索引](indexes.md#全局索引partition-global) |
 
 ---
@@ -90,9 +90,10 @@ kevy-embedded = "7.0.0"
 
 ### catalog 和消费者接触记录
 
-日志里还有两处是新的，服务器和嵌入式存储都一样：
+日志里还有三处是新的，服务器和嵌入式存储都一样：
 
 - 流消费组里消费者的接触记成内部的 `XINTERNAL.CONSUMERSEEN` 帧。6.4 会跳过它们，所以从日志重建消费组时，会丢掉只由 `XGROUP CREATECONSUMER` 创建的消费者；在快照里的消费者不受影响。
+- 重写过的日志把待处理期间从流里消失（被删除或被裁剪）的条目的待处理行记成内部的 `XINTERNAL.PENDING` 帧；6.4 的重写会丢掉这一行。
 - 索引、视图和表的 catalog 不再存放在 `index-catalog.meta`、`view-catalog.meta` 和 `table-catalog.meta` 里。7.0 把每次改动记成日志里的一个内部 `XINTERNAL.CATALOG` 帧，帧里带着完整的 catalog；每份快照都保存当前的 catalog；7.0 第一次在 6.4 的目录上启动时，会把 catalog 从这三个文件里搬出来，然后删掉它们。
 
 这对退回意味着什么，实测结果如下：
@@ -199,7 +200,7 @@ let repl = ReplicationSection { role, upstream, listen_port_base, ..Default::def
 
 ## 11. 给嵌入运行时的 Rust 用户
 
-`kevy_rt::Commands` 多了 `take_ext_out`、`apply_ext` 和 `extension_targets`，默认实现都保持 6.4 的行为。它们在 shard 之间传递消息（一次写入要等这些消息都应用完才回复），并让一次扩展读取点名它需要的 shard。全局索引就建在它们之上。另外还多了 `snapshot_aux`、`load_snapshot_aux` 和 `on_restored`，默认实现不在键空间之外保存任何东西：命令集可以借它们把自己的状态存进每份快照和每个重写过的日志，并在所有 shard 恢复完之后统一处理一次。索引、视图和表的 catalog 就是这样保存的（§1）。
+`kevy_rt::Commands` 多了 `take_ext_out`、`apply_ext` 和 `extension_targets`，默认实现都保持 6.4 的行为。它们在 shard 之间传递消息（一次写入要等这些消息都应用完才回复），并让一次扩展读取点名它需要的 shard。全局索引就建在它们之上。另外还多了 `snapshot_aux`、`load_snapshot_aux` 和 `on_restored`，默认实现不在键空间之外保存任何东西：命令集可以借它们把自己的状态存进每份快照和每个重写过的日志，并在所有 shard 恢复完之后统一处理一次。索引、视图和表的 catalog 就是这样保存的（§1）。另外还多了 `xreadgroup_refusal`，默认实现什么都不拒绝：处理 `XREADGROUP` 的命令集在这里回复这条命令会拒绝的内容，这样跨多个 shard 读取流时，能在任何一个 shard 读取之前先逐个检查。
 
 ## 12. kevy-cli：工具只在 `--kevy` 后面
 
@@ -269,6 +270,7 @@ let dropped: bool = store.idx_drop(b"by_age")?;     // a closed store or a repli
 
 - `XRANGE`、`XREVRANGE` 以及其他接受流 id 的命令，拒绝 `5-` 这种短横线后面什么都没有的 id，回复 `ERR Invalid stream ID specified as stream command argument`。6.4 把它当成 `5-<最大序号>`。
 - `XAUTOCLAIM` 的游标是下一个待处理条目的 id，列表扫完时是 `0-0`；6.4 返回的是最后扫到的 id 加一，所以扫到末尾的那次调用回复的是一个游标而不是 `0-0`。一次调用最多看 `COUNT × 10` 个条目，和 Redis 一样，6.4 会扫完整个列表。一直调用到游标为 `0-0` 的循环在两个版本上都能用，在 7.0 上少调一次。
+- 流命令的其余部分也改成和 valkey 9.1 一样的回复，逐条变化见 CHANGELOG。客户端最可能碰到的是：超时的阻塞 `XREAD` 和 `XREADGROUP` 在 RESP2 下回复 `*-1`（6.4 是 `$-1`），在 RESP3 下两者都回复从流到条目的 map；带 id 的 `XREADGROUP` 会把消费者的待处理条目重新交出去并增加投递次数，已删除的条目不带字段地列出；近似裁剪（`MAXLEN ~`、`MINID ~`）只按 100 个条目的节点整块删，所以在 6.4 精确裁剪的场合常常什么都不删；键或消费组不存在时 `XCLAIM` 回复 `NOGROUP`（6.4 是 `ERR no such key`），并支持 `LASTID`；键不存在时 `XGROUP DESTROY`、`CREATECONSUMER` 和 `DELCONSUMER` 会被拒绝（6.4 回复 0）。
 - `EXPIRE`、`PEXPIRE`、`EXPIREAT` 和 `PEXPIREAT` 带非正 TTL，作用在截止时间恰好在命令执行期间到期的键上时，回复 0，什么都不记录；6.4 回复 1 并记录一次删除。
 - `INFO replication` 报告 `repl_port_base`。
 - 嵌入式存储的 `table_declare`、`table_replace` 和 `table_verify_report` 拒绝时回复 `-ERR …`，不再是 `-ERR ERR …`。

@@ -427,7 +427,7 @@ pub(super) fn claim_one(
         let base = g.pel.get(&id).map_or(1, |p| p.delivery_count);
         match opts.mode {
             ClaimMode::JustId => base.max(1),
-            ClaimMode::Deliver => base.saturating_add(1),
+            ClaimMode::Deliver => super::group::delivered_again(base),
         }
     });
     let prev = g.pel.insert(
@@ -438,7 +438,7 @@ pub(super) fn claim_one(
     true
 }
 
-fn transfer_ownership_counts(
+pub(super) fn transfer_ownership_counts(
     g: &mut ConsumerGroup,
     prev: Option<&PelEntry>,
     new_owner: &SmallBytes,

@@ -209,7 +209,7 @@ pub(crate) fn xread_route<A: ArgvView + ?Sized>(args: &A) -> Route {
             b"BLOCK" => return Route::Local,
             b"COUNT" => {
                 // Malformed COUNT → route single so cmd_xread emits the error.
-                match args.get(i + 1).and_then(|b| stream_count(b)) {
+                match args.get(i + 1).and_then(stream_count) {
                     Some(c) => count = c,
                     None => return Route::Single(1),
                 }
@@ -291,7 +291,7 @@ pub(crate) fn xreadgroup_route<A: ArgvView + ?Sized>(args: &A) -> Route {
             b"COUNT" => {
                 // Malformed COUNT → single-key route so the command body
                 // emits the precise syntax error.
-                match args.get(i + 1).and_then(|b| stream_count(b)) {
+                match args.get(i + 1).and_then(stream_count) {
                     Some(c) => count = c,
                     None => return Route::Single(1),
                 }

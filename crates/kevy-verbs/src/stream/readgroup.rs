@@ -8,7 +8,9 @@
 //! hands back counts as delivered again.
 
 use kevy_resp::{ArgvView, CmdError, encode_array_len, encode_bulk, encode_error};
-use kevy_store::{AckMode, GroupBatch, ReadGroupId, Store, now_unix_ms, parse_explicit_id};
+use kevy_store::{
+    AckMode, GroupBatch, ReadGroupId, Store, StoreError, now_unix_ms, parse_explicit_id,
+};
 
 use super::claim_record::ReadMarks;
 use super::opts::{BAD_ID, strict_i64};
@@ -34,39 +36,46 @@ pub(super) fn cmd_xreadgroup<A: ArgvView + ?Sized>(
             return Effect::Write;
         }
     };
-    let mut reads = Vec::with_capacity(parsed.streams);
-    for k in 0..parsed.streams {
-        match check_stream(store, args, &parsed, k) {
-            Ok(from) => reads.push(from),
-            Err(e) => {
-                encode_error(out, &e);
-                return Effect::Write;
-            }
+    let reads: Result<Vec<ReadGroupId>, String> =
+        (0..parsed.streams).map(|k| check_stream(store, args, &parsed, k)).collect();
+    let reads = match reads {
+        Ok(reads) => reads,
+        Err(e) => {
+            encode_error(out, &e);
+            return Effect::Write;
         }
-    }
+    };
     let blocking = parsed.block && reads.iter().all(|r| *r == ReadGroupId::New);
+    let (reply, marks) = match read_all(store, args, &parsed, reads) {
+        Ok(read) => read,
+        Err(e) => {
+            store_err(out, e);
+            return Effect::Write;
+        }
+    };
+    if !(reply.is_empty() && blocking) {
+        emit_reply(out, args, parsed.keys, &reply);
+    }
+    marks.effect()
+}
+
+/// Read every stream from where it was checked to start: the batches to
+/// answer, by stream, and what to record.
+fn read_all<A: ArgvView + ?Sized>(
+    store: &mut Store,
+    args: &A,
+    parsed: &Parsed,
+    reads: Vec<ReadGroupId>,
+) -> Result<(Vec<(usize, GroupBatch)>, ReadMarks), StoreError> {
+    let (group, consumer) = (parsed.group(args), parsed.consumer(args));
     let mut reply: Vec<(usize, GroupBatch)> = Vec::new();
     let mut marks = ReadMarks::default();
     let now = now_unix_ms();
     for (k, from) in reads.into_iter().enumerate() {
         let key = &args[parsed.keys + k];
-        let mark = ReadMarks::read(store, key, parsed.group(args), parsed.consumer(args));
-        let got = store.xreadgroup(
-            key,
-            parsed.group(args),
-            parsed.consumer(args),
-            from,
-            parsed.count,
-            parsed.ack,
-            now,
-        );
-        let entries = match got {
-            Ok(es) => es,
-            Err(e) => {
-                store_err(out, e);
-                return Effect::Write;
-            }
-        };
+        let mark = ReadMarks::read(store, key, group, consumer);
+        let entries =
+            store.xreadgroup(key, group, consumer, from, parsed.count, parsed.ack, now)?;
         let history = from != ReadGroupId::New;
         let redelivered = if history {
             entries.iter().filter(|e| e.1.is_some()).map(|e| e.0).collect()
@@ -78,10 +87,7 @@ pub(super) fn cmd_xreadgroup<A: ArgvView + ?Sized>(
             reply.push((k, entries));
         }
     }
-    if !(reply.is_empty() && blocking) {
-        emit_reply(out, args, parsed.keys, &reply);
-    }
-    marks.effect()
+    Ok((reply, marks))
 }
 
 /// The refusal `XREADGROUP` gives `args` before it reads anything, or

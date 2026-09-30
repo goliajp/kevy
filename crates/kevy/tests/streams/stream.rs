@@ -9,7 +9,7 @@ static START_GATE: Mutex<()> = Mutex::new(());
 
 use kevy_testnet::free_port;
 
-fn req(parts: &[&[u8]]) -> Vec<u8> {
+pub(super) fn req(parts: &[&[u8]]) -> Vec<u8> {
     let mut v = format!("*{}\r\n", parts.len()).into_bytes();
     for p in parts {
         v.extend_from_slice(format!("${}\r\n", p.len()).as_bytes());
@@ -68,7 +68,7 @@ fn read_len(s: &mut std::net::TcpStream, out: &mut Vec<u8>) -> i64 {
     std::str::from_utf8(line).unwrap().parse().unwrap()
 }
 
-struct Server {
+pub(super) struct Server {
     port: u16,
     dir: std::path::PathBuf,
     stop: Arc<AtomicBool>,
@@ -76,7 +76,7 @@ struct Server {
 }
 
 impl Server {
-    fn start(nshards: usize) -> Self {
+    pub(super) fn start(nshards: usize) -> Self {
         let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let port = free_port();
         let dir = kevy_tmpdir::unique_dir("stream");
@@ -94,7 +94,7 @@ impl Server {
         Self { port, dir, stop, handle: Some(handle) }
     }
 
-    fn connect(&self) -> std::net::TcpStream {
+    pub(super) fn connect(&self) -> std::net::TcpStream {
         let s = std::net::TcpStream::connect(("127.0.0.1", self.port)).unwrap();
         s.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
         s
@@ -398,7 +398,7 @@ fn xsetid_bumps_clock_and_rejects_rollback() {
     let srv = Server::start(1);
     let mut c = srv.connect();
     c.write_all(&req(&[b"XSETID", b"nope", b"1-0"])).unwrap();
-    assert_eq!(read_reply(&mut c), b"-ERR The XSETID command requires the key to exist.\r\n");
+    assert_eq!(read_reply(&mut c), b"-ERR no such key\r\n");
     c.write_all(&req(&[b"XADD", b"s", b"5-1", b"f", b"v"])).unwrap();
     assert_eq!(read_reply(&mut c), b"$3\r\n5-1\r\n");
     c.write_all(&req(&[b"XSETID", b"s", b"4-0"])).unwrap();

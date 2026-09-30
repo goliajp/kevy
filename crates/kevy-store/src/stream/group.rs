@@ -16,6 +16,7 @@ use crate::value::SmallBytes;
 
 #[path = "group_types.rs"]
 mod types;
+pub(super) use types::delivered_again;
 pub use types::{ConsumerState, GroupCreateMode, PelEntry, ReadGroupId};
 
 /// One consumer group's state. Sorted PEL plus a map of known
@@ -340,7 +341,7 @@ fn replay_pel_entries(
             continue;
         }
         let fields = entries.get(id).map(|fv| {
-            p.delivery_count = p.delivery_count.saturating_add(1);
+            p.delivery_count = delivered_again(p.delivery_count);
             p.delivery_time_ms = now_ms;
             fv.iter().map(|(f, v)| (f.to_vec(), v.to_vec())).collect()
         });
