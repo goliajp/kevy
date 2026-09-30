@@ -2,8 +2,8 @@
 //!
 //! One design decision carries this whole crate: there is **no per-verb C
 //! function**. `kevy_cmd` takes argv and returns the RESP-encoded reply —
-//! the same path the embedded RESP listener serves — so all 184 verbs are
-//! reachable through one symbol, and a new verb needs zero ABI change.
+//! the same path the embedded RESP listener serves — so every verb the
+//! engine answers is reachable through one symbol, and a new verb needs zero ABI change.
 //! Language bindings pair it with a ~150-line RESP parser; RESP is the one
 //! encoding every Redis-adjacent ecosystem already speaks.
 //!

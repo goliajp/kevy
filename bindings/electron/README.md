@@ -74,7 +74,7 @@ See [`example/`](./example) for a runnable app (SET/GET + a live pub/sub demo).
 
 Async, `contextIsolation`-safe. Typed verbs **throw** on a protocol error
 (the TS client idiom); `cmd()` is the neutral escape hatch that returns a
-protocol error as a `KevyError` **value** and reaches all ~184 verbs.
+protocol error as a `KevyError` **value** and reaches every verb the engine answers.
 
 | Method | Returns |
 |---|---|

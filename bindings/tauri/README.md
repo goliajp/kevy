@@ -20,7 +20,7 @@ bindings/tauri/
 
 | Command (`plugin:kevy|…`) | Purpose |
 |---|---|
-| `cmd(argv)` | run **any** of kevy's ~184 verbs by argv; returns the decoded RESP reply |
+| `cmd(argv)` | run **any** verb the engine answers by argv; returns the decoded RESP reply |
 | `get` / `set` / `del` / `exists` / `incr` | typed scalar fast paths |
 | `ping` / `dbsize` / `flushall` | keyspace basics |
 | `publish` / `subscribe` / `unsubscribe` | pub/sub, streamed to the webview over a Tauri `Channel` |

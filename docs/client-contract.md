@@ -733,8 +733,8 @@ Each language also ships a **kevy-embedded** — the in-process store the
 `mem://` / `file://` client URLs use. The canonical minimal shape is the
 already-shipped **C ABI** in `crates/kevy-ffi` (every non-Rust door binds to
 it). The ABI is deliberately tiny: **there is no per-verb C function** — one
-`kevy_cmd` takes argv and returns the RESP-encoded reply, so all ~184 verbs
-are reachable through one symbol and a new verb needs zero ABI change. Each
+`kevy_cmd` takes argv and returns the RESP-encoded reply, so every verb the
+engine answers is reachable through one symbol and a new verb needs zero ABI change. Each
 binding pairs it with a small RESP parser.
 
 ### 5.1 C ABI surface (canonical; `KEVY_ABI = 1`)
