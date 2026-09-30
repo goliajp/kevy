@@ -4,6 +4,8 @@
 //! the catalog as it stood, so two computed from the same catalog must not
 //! both install, the later dropping the earlier.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 #[path = "common/mod.rs"]
 mod common;
 

@@ -4,6 +4,8 @@
 //! from the verbs' replies (TABLE.LIST, IDX.QUERY, FEED.READ, …) and the
 //! formats the tools promise, not captured from the tools.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use std::io::Write;
 use std::process::{Child, Command, Stdio};
 

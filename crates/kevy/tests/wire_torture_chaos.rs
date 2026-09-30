@@ -18,6 +18,8 @@
 //! cargo test -p kevy --test wire_torture_chaos --release -- --ignored --nocapture
 //! ```
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;

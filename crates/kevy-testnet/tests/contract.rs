@@ -1,3 +1,7 @@
+//! The contract of kevy-testnet itself: ports it hands out are free, blocks
+//! are contiguous, and a readiness wait that never sees a listener fails.
+
+#![allow(clippy::unwrap_used, clippy::panic)]
 use std::time::Duration;
 
 #[test]

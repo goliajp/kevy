@@ -1,5 +1,7 @@
 //! Transactions, propagation, the change feed and the wire-vs-embedded differential.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 #[path = "../common/mod.rs"]
 mod common;
 

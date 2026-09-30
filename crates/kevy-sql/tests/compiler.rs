@@ -2,6 +2,8 @@
 //! view planning (engine views / cards / named missing-declaration
 //! errors), parameter slots, render_script shape, determinism.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use kevy_sql::{Compilation, ValType, compile};
 
 const SHOP: &str = r"

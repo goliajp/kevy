@@ -3,6 +3,8 @@
 //! then run a query card with real arguments — the full declaration →
 //! runtime story the cookbook chapter tells.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use std::process::{Child, Command, Stdio};
 
 use kevy_resp_client::RespClient;

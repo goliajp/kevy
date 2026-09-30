@@ -64,16 +64,21 @@ jobs:
           KEVY_IO_URING: "0"
         run: bash bench/covgate.sh
 
-  # ───────────── the stone bar, on the enforcing platform ─────────────
+  # ───────────── release readings: the stone bar, the doc deficit, the API ─────────────
+  # Questions a release answers, not a push: whether each stone meets its
+  # bar, whether what the documentation owes has grown, and whether the
+  # public API meets the mechanical guidelines. Release and hotfix branches
+  # only; the prerelease tier carries this job's verdict for the same tree.
+  #
   # Taken on Linux, and only on Linux. Code switched off by cfg is absent
   # from a reading taken anywhere else: kevy-uring does not compile off
   # Linux, and the bar would then judge a stone the producer never looked at.
   # Waivers have been written in suite/stone-waivers.toml on the strength
   # of a macOS reading before: it said the crate has zero tests, and on
-  # Linux it has twelve. stonegate now refuses a report from anywhere else, which is
-  # what makes this job the only place the verdict can come from.
-  stonereport:
-    name: stonegate (the stone bar, on Linux)
+  # Linux it has twelve. stonegate refuses a report from anywhere else.
+  release-readings:
+    name: release readings (stonegate, doctestgate, apigate)
+    if: startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/heads/hotfix/')
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -97,7 +102,24 @@ jobs:
             ~/.cargo/registry
             target
           key: stone-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      # doctestgate runs the rustdoc coverage pass itself, so it measures
+      # what it just built rather than whatever was left in target/doc.
+      - name: doctestgate (what the documentation owes may only shrink)
+        id: doctestgate
+        run: bash bench/doctestgate.sh
+      - name: upload doc deficit
+        if: always() && (steps.doctestgate.outcome == 'success' || steps.doctestgate.outcome == 'failure')
+        uses: actions/upload-artifact@v7
+        with:
+          name: doc-deficit-linux
+          path: bench/DOC-DEFICIT.json
+          if-no-files-found: error
+      # runs whatever doctestgate said: the gates read different things
+      - name: apigate (the public API meets the mechanical API guidelines)
+        if: success() || failure()
+        run: python3 tools/check_api_guidelines.py
       - name: stone report (three readings per stone)
+        if: success() || failure()
         id: stonereport
         run: python3 tools/stone_report.py
       - name: stonegate (every stone meets the bar or carries a waiver)
@@ -163,57 +185,6 @@ jobs:
           fi
           echo "tracked stone report: $got"
 
-  # ───────────── doc deficit: what the documentation owes ─────────────
-  docdeficit:
-    name: doctestgate (documentation deficit)
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@v7
-      # rustdoc's coverage mode is nightly-only. Measuring documentation by
-      # grepping for `///` instead would count a comment that documents
-      # nothing and miss #[doc = ...], so the right answer when nightly is
-      # absent is to refuse, not to approximate.
-      - name: Install Rust (nightly)
-        run: |
-          rustup toolchain install nightly --no-self-update
-      - uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            target
-          key: doc-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-      # doctestgate runs the rustdoc coverage pass itself, so it measures
-      # what it just built rather than whatever was left in target/doc.
-      # 2,677 public items, 94.1% carrying prose and 0.7% carrying an
-      # executable example: this gates the deficit, not the coverage.
-      - name: doctestgate (what the documentation owes may only shrink)
-        id: doctestgate
-        run: bash bench/doctestgate.sh
-      # The third of these, and now they all say the same thing: publish the
-      # reading when the gate RAN, whatever it said. Without a condition this
-      # step is skipped on failure, so the deficit the gate refused over —
-      # the evidence for judging whether the refusal was right — went missing
-      # exactly when it was wanted. With a bare `always()` it would publish
-      # the checked-in copy on a cancelled run, which is the trap the other
-      # two had.
-      # runs whatever doctestgate said: the two gates read different things
-      - name: apigate (the public API meets the mechanical API guidelines)
-        if: success() || failure()
-        run: python3 tools/check_api_guidelines.py
-      # stable rustdoc, every feature on: a link to a private item or to
-      # nothing renders as dead text on docs.rs and fails nothing else
-      - name: docgate (the API docs build with rustdoc warnings denied)
-        if: success() || failure()
-        run: bash bench/docgate.sh
-      - name: upload doc deficit
-        if: always() && (steps.doctestgate.outcome == 'success' || steps.doctestgate.outcome == 'failure')
-        uses: actions/upload-artifact@v7
-        with:
-          name: doc-deficit-linux
-          path: bench/DOC-DEFICIT.json
-          if-no-files-found: error
-
   # ───────────── native cargo test on the OS matrix ─────────────
   test:
     name: test (${{ matrix.target }})
@@ -276,24 +247,14 @@ jobs:
       # cannot be the check.
       - name: rootgate (repo root is not a data directory)
         run: bash bench/rootgate.sh
-      - name: generated docs parity (llms.txt / verb-reference == VERB_META)
+      # Everything derived from the verb table: llms.txt, the verb
+      # reference, the site's command reference, and the command counts the
+      # site and the READMEs publish. The site said 188 commands while the
+      # engine answered 205, and the READMEs said 98 while the differential
+      # corpus drove 81; nothing held either number.
+      - name: gen-docs (every document derived from the verb table agrees with it)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
-        run: cargo run -p kevy --bin gen_docs -- . --check
-      # The headline compatibility claim is the one number in the READMEs
-      # that a reader will act on, and it is the only one measured against
-      # a real valkey and a real redis rather than against kevy's own
-      # second implementation. It said 98 in four documents while the
-      # corpus drove 81; nothing had held it since a docs rewrite wrote it.
-      # flutter_kevy's changelog stopped at 5.3.0 while its pubspec was
-      # bumped twice. `dart pub publish` warns about it in a dry run
-      # nobody was reading, and pub.dev shows that file to whoever is
-      # deciding whether to depend on the package.
-      - name: door changelogs (each names the version its manifest ships)
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
-        run: python3 tools/check_door_changelogs.py
-      - name: compat claim (the READMEs' command count is the corpus's)
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
-        run: python3 tools/check_compat_claim.py
+        run: bash bench/gendocs.sh
       - name: CJK punctuation (no half-width commas in Chinese/Japanese prose)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: python3 tools/check_cjk_punct.py
@@ -311,16 +272,11 @@ jobs:
         run: python3 tools/check_publish_order.py
       # A bump that moves the Cargo manifests and forgets the language
       # doors ships a version that is true in one layer and false in
-      # five. 5.1.0 did exactly that until this gate existed.
-      - name: version alignment (seven layers agree with the workspace)
+      # five. 5.1.0 did exactly that until this gate existed. It also
+      # holds each door's changelog to the version its manifest ships.
+      - name: version alignment (seven layers and the door changelogs agree with the workspace)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: python3 tools/check_version_alignment.py
-      # The other half of the same shape: what the site says we implement
-      # against what the engine answers. It said 188 for long enough that
-      # nobody knows when it drifted; COMMAND COUNT was 205 the whole time.
-      - name: the published command count is the engine's
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
-        run: python3 tools/check_capability_claim.py
       - name: every Redis command is implemented, exempt, or owned
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: python3 tools/check_command_coverage.py
@@ -430,6 +386,11 @@ jobs:
       - name: fmtgate (cargo fmt --all --check)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: cargo fmt --all --check
+      # stable rustdoc, every feature on: a link to a private item or to
+      # nothing renders as dead text on docs.rs and fails nothing else
+      - name: docgate (the API docs build with rustdoc warnings denied)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: bash bench/docgate.sh
       # Named for what it runs. It used to say "all features", which this
       # workspace cannot do: kevy-client-async's runtime features (tokio /
       # smol / async-std) are mutually exclusive by contract, with a
@@ -457,18 +418,11 @@ jobs:
       # platform — which is the first mistake this pair of steps records.
       - name: Clippy (the configurations --workspace never compiles)
         run: python3 tools/check_feature_lints.py
-      # Library code only. The rule is scoped there, and a test that
-      # unwraps is stating a precondition rather than ducking one — the
-      # same survey read 2,425 `unwrap` sites with tests compiled and 71
-      # without. Both legs: a deny that holds on one platform says nothing
-      # about the code the other one compiles.
-      - name: Clippy (no unwrap, panic, or undocumented public item in library code)
-        run: cargo clippy --workspace --lib --bins -- -D clippy::unwrap_used -D clippy::panic -D missing_docs
 
   # ───────────── contract gates: availability / AI / replication ─────────────
   # The executable behavior contracts: availgate's clamps (replication
   # truth, crash failover, the consistency ladder), aigate (discovery /
-  # self-explaining errors / MCP wire), mcpgate (MCP protocol e2e),
+  # self-explaining errors / MCP wire, and the MCP protocol e2e),
   # repligate (snapshot ship + live frames + restart resync). Real
   # processes, release binaries, one hard gate.
   #
@@ -507,10 +461,10 @@ jobs:
           cargo build --release -p kevy-embedded --example primary_writer
       - name: availgate (16 clamps, 4 phases)
         run: bash bench/availgate.sh target/release/kevy
-      - name: aigate (wire + MCP)
-        run: bash bench/aigate.sh target/release/kevy
-      - name: mcpgate (MCP protocol e2e — full tool matrix + error fidelity)
-        run: bash bench/mcpgate.sh target/release/kevy
+      - name: aigate (wire + MCP, and the MCP protocol end to end)
+        run: |
+          bash bench/aigate.sh target/release/kevy
+          bash bench/mcpgate.sh target/release/kevy
       - name: repligate (ship + frames + restart)
         run: bash bench/repligate.sh
 
@@ -1473,7 +1427,7 @@ jobs:
       # classified, shipping deps pointing down the layers.
       - name: the suite manifest holds its invariants
         run: python3 tools/suite.py --audit
-      - name: crate layering follows the model
+      - name: crate layering follows the model, and every dependency is declared
         run: python3 tools/check_architecture.py
       # The size the site quotes is the size of the wasm it ships. It said
       # 218 KB in three languages for a build that was 481 KB, because the

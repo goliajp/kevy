@@ -29,6 +29,8 @@ The layers, and why each one bites on its own:
    wrong number, it resolves to the wrong major forever. Added in
    6.0.0, which is why everything else here still said six.
 
+Then every door's changelog must name that version (check_door_changelogs).
+
 Run: python3 tools/check_version_alignment.py
 """
 
@@ -38,6 +40,8 @@ import pathlib
 import re
 import subprocess
 import sys
+
+import check_door_changelogs
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
@@ -491,4 +495,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(max(main(), check_door_changelogs.main()))
