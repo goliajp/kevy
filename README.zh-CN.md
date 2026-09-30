@@ -211,7 +211,7 @@ kevy 在浏览器里是一个真正的存储：npm 包
 [`@goliapkg/kevy`](https://www.npmjs.com/package/@goliapkg/kevy) 把
 编译到 `wasm32-unknown-unknown` 的引擎装进一个手写的 ES module
 loader——没有 wasm-bindgen，边界两侧都是零依赖；七个文件，打包约
-633 KB（过网络时 gzip 后 619 KB）。
+653 KB（过网络时 gzip 后 639 KB）。
 
 ```sh
 npm install @goliapkg/kevy
