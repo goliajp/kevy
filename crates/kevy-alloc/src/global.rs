@@ -5,6 +5,12 @@
 //! own segments, and a free that arrives on the wrong thread is handed
 //! back through the owning segment's push-only foreign list.
 //!
+//! ```
+//! // a thread reaches its own heap with no setup
+//! assert!(kevy_alloc::global::thread_stats().is_some());
+//! kevy_alloc::global::thread_reclaim();
+//! ```
+//!
 //! # Two hazards this file exists to handle
 //!
 //! **Thread exit must not unmap live memory.** kevy shares values across
@@ -74,6 +80,18 @@ fn with_heap<R>(f: impl FnOnce(&mut Heap) -> R) -> Option<R> {
 ///     drop(v);
 ///     assert_eq!(live(), before);
 /// }
+/// ```
+///
+/// It can also be called directly, as any `GlobalAlloc`:
+///
+/// ```
+/// use std::alloc::{GlobalAlloc, Layout};
+/// let layout = Layout::new::<u64>();
+/// // SAFETY: a non-zero layout; freed below with the same layout.
+/// let p = unsafe { kevy_alloc::KevyAlloc.alloc(layout) };
+/// assert!(!p.is_null());
+/// // SAFETY: allocated above with this layout.
+/// unsafe { kevy_alloc::KevyAlloc.dealloc(p, layout) };
 /// ```
 #[derive(Debug)]
 pub struct KevyAlloc;
