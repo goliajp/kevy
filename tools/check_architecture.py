@@ -18,6 +18,9 @@ Until 5.3 the model lived in prose. This makes it a gate:
   kevy-testnet).
 - The floor rule applies to the gate itself: finding zero crates or an
   empty layer map is a failure of the selector, not a pass.
+- **Every dependency outside the kevy-* family is declared**, with a
+  reason, in suite/dependencies.toml (`check_dependencies.py`, run second
+  so one row answers both questions about the dependency graph).
 
 Run: python3 tools/check_architecture.py
 """
@@ -27,6 +30,8 @@ import pathlib
 import subprocess
 import sys
 import tomllib
+
+import check_dependencies
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 MAP = ROOT / "suite/architecture.toml"
@@ -40,7 +45,7 @@ ALLOWED = {
 }
 
 
-def main():
+def layering():
     layers = tomllib.loads(MAP.read_text(encoding="utf-8"))["layers"]
     layer_of = {}
     for layer, crates in layers.items():
@@ -107,6 +112,10 @@ def main():
         f"{edges} shipping edges all point downward"
     )
     return 0
+
+
+def main():
+    return max(layering(), check_dependencies.main())
 
 
 if __name__ == "__main__":

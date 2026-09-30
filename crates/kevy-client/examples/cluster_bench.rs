@@ -9,6 +9,8 @@
 //! `seed_port` = any cluster port (server `port + 1`); the topology is
 //! discovered via CLUSTER SLOTS.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use std::time::Instant;
 
 use kevy_client::ClusterClient;

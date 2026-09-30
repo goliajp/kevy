@@ -6,6 +6,8 @@
 //! and reports, which is the point of it being a separate subcommand
 //! from `compile --apply`.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use std::process::Command;
 
 const SERVED: &str = r"

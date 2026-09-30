@@ -75,6 +75,30 @@ fn hook_backfill_and_query_lifecycle() {
     assert!(!ctx.state.catalogs.index_nonempty());
 }
 
+/// `IDX.REBUILD` and the vector query answer an index's state: still
+/// building before its first tick, over its budget once the build breaks
+/// `MAXMEM`, and not a vector index or no index at all by name.
+#[test]
+fn rebuild_and_knn_answer_a_building_an_over_budget_and_a_missing_index() {
+    use super::test_shard::{Shard, text};
+    let mut s = Shard::new();
+    for i in 0..200 {
+        s.hset(&format!("user:{i}"), &[("age", &i.to_string())]);
+    }
+    s.ok("IDX.CREATE age ON PREFIX user: FIELD age TYPE i64 KIND range");
+    assert!(text(&s.ext("IDX.REBUILD age")).starts_with("-INDEXBUILDING"), "before a tick");
+    // the origin routes only `IDX.REBUILD <name>` here; a shard handed less says so
+    assert!(text(&s.ext("IDX.REBUILD")).contains("bad arguments"));
+    s.ok("IDX.CREATE tiny ON PREFIX user: FIELD age TYPE i64 KIND range MAXMEM 64");
+    s.settle();
+    assert_eq!(text(&s.ext("IDX.REBUILD age")), "+OK\r\n");
+    assert!(text(&s.ext("IDX.REBUILD tiny")).starts_with("-INDEXOVERBUDGET"));
+    let knn = |s: &mut Shard, name: &str| text(&s.ext(&format!("IDX.QUERY {name} KNN csv:1,2,3")));
+    assert!(knn(&mut s, "tiny").starts_with("-INDEXOVERBUDGET"), "{}", knn(&mut s, "tiny"));
+    assert!(knn(&mut s, "age").starts_with("-ERR"), "{}", knn(&mut s, "age"));
+    assert!(knn(&mut s, "nope").starts_with("-ERR no such index"), "{}", knn(&mut s, "nope"));
+}
+
 /// The shard tick reads the index gate before the catalog, so a drop of
 /// the last index can land in between.
 #[test]

@@ -5,6 +5,7 @@
 //! production traffic takes.
 
 #![cfg(not(target_arch = "wasm32"))]
+#![allow(clippy::unwrap_used, clippy::panic)]
 
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};

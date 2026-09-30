@@ -1,5 +1,7 @@
 //! Sharding, cluster mode and cross-shard commands.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 #[path = "../common/mod.rs"]
 mod common;
 

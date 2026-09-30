@@ -14,6 +14,8 @@
 //!
 //! Run: `cargo run -p kevy-store --example bench_keyspace --release`
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use std::collections::HashMap;
 use std::collections::hash_map::RandomState;
 use std::hash::{BuildHasher, Hasher};

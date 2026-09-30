@@ -106,13 +106,10 @@ pub(crate) fn rebuild(ctx: &Ctx<'_>, name: &[u8]) -> Result<Option<IndexKind>, C
         }
     }
     let kind = si.spec.kind();
-    match kind {
-        IndexKind::Ann => {
-            if let Some(g) = &mut si.ann {
-                g.rebuild();
-            }
-        }
-        IndexKind::Range | IndexKind::Unique => {
+    // an ANN index holds its graph in `ann`; every other kind leaves it empty
+    match (kind, &mut si.ann) {
+        (_, Some(g)) => g.rebuild(),
+        (IndexKind::Range | IndexKind::Unique, None) => {
             si.seg.repack();
             st.stats_dirty = true;
         }

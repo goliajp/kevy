@@ -3,6 +3,8 @@
 //! `tests/` dir so the line count is exempt from the project's 500-LOC
 //! source-file cap; only the public API is exercised.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use kevy_config::{Config, ConfigError};
 
 fn rewrite(src: &str) -> String {
