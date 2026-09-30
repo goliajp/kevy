@@ -97,21 +97,21 @@ fn walk(
 
 const CHECK_EVERY: usize = 7;
 
-struct Rng(u64);
+pub(crate) struct Rng(pub(crate) u64);
 
 impl Rng {
-    fn next(&mut self) -> u64 {
+    pub(crate) fn next(&mut self) -> u64 {
         self.0 ^= self.0 << 13;
         self.0 ^= self.0 >> 7;
         self.0 ^= self.0 << 17;
         self.0
     }
-    fn below(&mut self, n: u64) -> u64 {
+    pub(crate) fn below(&mut self, n: u64) -> u64 {
         self.next() % n
     }
 }
 
-fn key_for(r: &mut Rng, shape: u64) -> Vec<u8> {
+pub(crate) fn key_for(r: &mut Rng, shape: u64) -> Vec<u8> {
     match shape {
         // 12-byte keys over a small space, so inserts hit existing keys
         0 => [r.below(400).to_be_bytes().as_slice(), &[0, 0, 0, 1]].concat(),
@@ -163,7 +163,7 @@ fn run_model(seed: u64, payloads: bool, ops: usize) {
     assert_eq!(got.len(), m.len());
 }
 
-fn ranks_agree(t: &Tree, m: &BTreeMap<Vec<u8>, Vec<u8>>, r: &mut Rng) {
+pub(crate) fn ranks_agree(t: &Tree, m: &BTreeMap<Vec<u8>, Vec<u8>>, r: &mut Rng) {
     for _ in 0..20 {
         let shape = r.below(3);
         let k = key_for(r, shape);
