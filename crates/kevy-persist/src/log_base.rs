@@ -69,7 +69,7 @@ pub(crate) fn base_of<A: ArgvView + ?Sized>(args: &A) -> Option<u64> {
     if args.len() != 2 || args.get(0) != Some(LOG_BASE) {
         return None;
     }
-    Some(u64::from_le_bytes(args.get(1)?.try_into().ok()?))
+    args.get(1).and_then(|id| <[u8; 8]>::try_from(id).ok()).map(u64::from_le_bytes)
 }
 
 /// Whether `args` is the record that opens a log and names the snapshot it
@@ -131,8 +131,10 @@ pub(crate) fn fresh_snapshot_id() -> u64 {
 /// Append a fresh id footer to a snapshot being written; returns the id.
 pub(crate) fn write_snapshot_id<W: Write>(w: &mut W) -> io::Result<u64> {
     let id = fresh_snapshot_id();
-    w.write_all(SNAPSHOT_ID_TAG)?;
-    w.write_all(&id.to_le_bytes())?;
+    let mut footer = [0u8; FOOTER];
+    footer[..SNAPSHOT_ID_TAG.len()].copy_from_slice(SNAPSHOT_ID_TAG);
+    footer[SNAPSHOT_ID_TAG.len()..].copy_from_slice(&id.to_le_bytes());
+    w.write_all(&footer)?;
     Ok(id)
 }
 
