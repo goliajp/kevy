@@ -3,7 +3,7 @@
 use std::cmp::Ordering;
 
 use super::{FANOUT, Path, Pos, Tree};
-use crate::seg_leaf::{Ent, Leaf, Probe, head16_of};
+use crate::seg_leaf::{Ent, Leaf, Probe};
 
 impl Tree {
     /// Insert `key` with `payload`. An equal key already there has its
@@ -34,6 +34,10 @@ impl Tree {
             let (l, ov) = self.leaf_ov(id);
             l.remove_at(at, ov);
             if l.insert_at(at, e, ov) {
+                // a shorter payload thins the leaf like a delete
+                if l.used() < super::balance::FILL {
+                    self.settle(&mut path, id);
+                }
                 return false;
             }
             // a longer payload no longer fits: count it out, then back in
@@ -44,57 +48,16 @@ impl Tree {
         let (l, ov) = self.leaf_ov(id);
         if l.insert_at(at, e, ov) {
             self.bump(&path, 1);
-        } else if !self.place_beside(&path, id, at, e) {
-            self.split_insert(&mut path, id, at, e);
+        } else {
+            self.overflow(&mut path, id, at, e);
         }
         !found
-    }
-
-    /// A full leaf whose new entry lands on its edge: put the entry into
-    /// the sibling on that side instead, when they share a parent and it
-    /// has room. Keeps runs of ascending or descending writes packed.
-    fn place_beside(&mut self, path: &Path, id: u32, at: usize, e: Ent<'_>) -> bool {
-        let Some(&(parent, i)) = path.last() else { return false };
-        let n = self.leaf(id).len();
-        let kids = &self.inners[parent as usize].kids;
-        let (sib, front) = match at {
-            _ if at == n && i + 1 < kids.len() => (kids[i + 1], true),
-            0 if i > 0 => (kids[i - 1], false),
-            _ => return false,
-        };
-        let (s, ov) = self.leaf_ov(sib);
-        let slot = if front { 0 } else { s.len() };
-        if !s.insert_at(slot, e, ov) {
-            return false;
-        }
-        let mut sib_path = *path;
-        sib_path.last_mut().expect("a parent").1 = if front { i + 1 } else { i - 1 };
-        self.bump(&sib_path, 1);
-        // the separator between the two leaves drops to the new entry
-        // (front) or rises to this leaf's first entry (back)
-        let mut sep = Vec::new();
-        let sep_at = if front {
-            sep.extend_from_slice(e.key);
-            i
-        } else {
-            self.leaf(id).key_into(0, &self.ov, &mut sep);
-            i - 1
-        };
-        self.set_sep(parent, sep_at, sep);
-        true
-    }
-
-    fn set_sep(&mut self, node: u32, at: usize, sep: Vec<u8>) {
-        let n = &mut self.inners[node as usize];
-        self.sep_bytes = self.sep_bytes + sep.len() - n.seps[at].len();
-        n.heads[at] = head16_of(&sep);
-        n.seps[at] = sep.into_boxed_slice();
     }
 
     /// Split full leaf `id` to make room for `key` at `at`: at the insert
     /// point when it is an edge (the new entry opens a leaf of its own),
     /// otherwise down the middle by bytes.
-    fn split_insert(&mut self, path: &mut Path, id: u32, at: usize, e: Ent<'_>) {
+    pub(crate) fn split_insert(&mut self, path: &mut Path, id: u32, at: usize, e: Ent<'_>) {
         let n = self.leaf(id).len();
         let new = self.new_leaf();
         if at == 0 {
@@ -108,7 +71,8 @@ impl Tree {
         }
         let cut = if at == n { n } else { self.middle(id) };
         let (left, right, ov) = self.two_leaves(id, new);
-        left.move_tail_to(cut, right);
+        let n = left.len();
+        left.move_span(cut, n, right, 0);
         let fit = if at < cut || (at == cut && at < n) {
             left.insert_at(at, e, ov)
         } else {
@@ -148,7 +112,7 @@ impl Tree {
 
     /// Add `delta` to every count on `path` but the last, which the caller
     /// fixes up itself.
-    fn bump_above(&mut self, path: &Path, delta: i32) {
+    pub(crate) fn bump_above(&mut self, path: &Path, delta: i32) {
         for &(node, at) in path.iter().rev().skip(1) {
             let c = &mut self.inners[node as usize].counts[at];
             *c = c.wrapping_add_signed(delta);
@@ -213,8 +177,8 @@ impl Tree {
         true
     }
 
-    /// After a removal from leaf `id`: drop it when empty, merge it with a
-    /// sibling when it has thinned out and the two fit in one.
+    /// After a removal from leaf `id`: drop it when empty, refill it from
+    /// its neighbours when it has thinned below two-thirds.
     pub(crate) fn settle(&mut self, path: &mut Path, id: u32) {
         let Some(&(parent, i)) = path.last() else {
             // the root leaf: an empty tree holds none
@@ -233,32 +197,9 @@ impl Tree {
             self.shrink_root();
             return;
         }
-        if l.used() * 4 >= Leaf::capacity() {
+        if l.used() >= super::balance::FILL {
             return;
         }
-        let kids = &self.inners[parent as usize].kids;
-        let right = (i + 1 < kids.len()).then(|| (kids[i], kids[i + 1], i + 1));
-        let left = (i > 0).then(|| (kids[i - 1], kids[i], i));
-        for (a, b, gone) in [right, left].into_iter().flatten() {
-            if self.leaf(a).used() + self.leaf(b).used() <= Leaf::capacity() * 3 / 4 {
-                self.merge(path, a, b, gone);
-                return;
-            }
-        }
-    }
-
-    /// Move leaf `b`'s entries onto the end of `a`, its left sibling under
-    /// the same parent (child `gone - 1`), and drop `b`.
-    fn merge(&mut self, path: &mut Path, a: u32, b: u32, gone: usize) {
-        let (left, right, _) = self.two_leaves(a, b);
-        right.move_tail_to(0, left);
-        let (parent, _) = path.pop().expect("a parent");
-        let p = &mut self.inners[parent as usize];
-        p.counts[gone - 1] += p.counts[gone];
-        p.counts[gone] = 0;
-        self.unlink(b);
-        self.free_leaf(b);
-        self.remove_child(path, parent, gone);
-        self.shrink_root();
+        self.refill(path, id);
     }
 }
