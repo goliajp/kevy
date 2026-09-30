@@ -193,23 +193,24 @@ let mut store = Store::new_in(&mut arena);""",
             "h2": "Same protocol. More throughput.",
             "intro": (
                 "RESP2 and RESP3, 209 commands — redis-cli and your client library "
-                "connect unchanged. One machine, 16 cores, loopback, median of five."
+                "connect unchanged. One machine, 4 cores per engine, loopback, median of 15 windows."
             ),
             "rows": [
-                ["GET", 7800299, 5597865, "1.39×", False],
-                ["SET", 6918058, 2573396, "2.69×", False],
-                ["INCR", 6133940, 3459395, "1.77×", False],
-                ["SADD", 5600597, 3690483, "1.52×", False],
-                ["HSET", 4287217, 3021325, "1.42×", False],
-                ["LPUSH", 3213470, 2862374, "1.12×", True],
-                ["ZADD", 3053101, 2773929, "1.10×", True],
+                ["GET", 8726283, 5467748, "1.60×", False],
+                ["SET", 7409590, 2861941, "≥ 2.59×", False],
+                ["INCR", 7249946, 3788318, "1.91×", False],
+                ["SADD", 6919570, 4204106, "1.65×", False],
+                ["HSET", 5393670, 3352393, "≥ 1.61×", False],
+                ["LPUSH", 4424738, 3220774, "1.37×", False],
+                ["ZADD", 4980252, 3112253, "≥ 1.60×", False],
             ],
-            "us": "kevy 6.3.0",
-            "them": "Redis 8.10.1",
+            "us": "kevy 7.0.0",
+            "them": "Redis 8.10.2",
             "thin": "under 15% — your workload decides, not the engine",
             "note": (
-                "<b>LPUSH and ZADD are only 10% and 15% ahead.</b> If lists or sorted "
-                "sets are your hot path, speed is not the reason to switch. "
+                "<b>LPUSH is the narrowest lead: 1.37×.</b> If lists are your hot path, "
+                "measure your own workload before you switch for speed. A ≥ marks a "
+                "number the load generator set; kevy does at least that. "
                 "<a href=\"~/benchmarks/\">Full table, against valkey and Dragonfly "
                 "too.</a> Migration is three commands — "
                 "<a href=\"~/migrate/\">export, import, digest</a> — and works in "
@@ -323,7 +324,7 @@ PAGES["migrate"] = {
                 },
                 {
                     "title": "It is faster on the operations you already run",
-                    "body": "1.33× on GET, 2.66× on SET, 2.05× on INCR against Redis 8.10.1 on the same machine. Read the whole table before you count on it, though — LPUSH and ZADD are only 10% and 15% ahead, and if lists or sorted sets are your hot path this is not the reason to move.",
+                    "body": "1.60× on GET, at least 2.59× on SET, 1.91× on INCR against Redis 8.10.2 on the same machine. Read the whole table before you count on it, though — LPUSH leads by 1.37×, the narrowest row, and at that margin your value sizes and key distribution weigh as much as the engine.",
                 },
                 {
                     "title": "Your dataset no longer has to fit in RAM",
@@ -1463,26 +1464,28 @@ PAGES["benchmarks"] = {
             "t": "table",
             "h2": "Four engines, one machine",
             "intro": (
-                "50 connections, small values. Median of five runs, counted from each "
-                "server's own command counter over a three-second steady window rather "
-                "than from the benchmark client's reported rate."
+                "50 connections, pipelines of 16, small values, each engine on 4 cores. "
+                "Median of 15 windows (3 rounds of 5), counted from each server's own "
+                "command counter over three-second windows rather than from the "
+                "benchmark client's reported rate. A ≥ marks a number the load "
+                "generator set: the engine does at least that, and such a competitor "
+                "number gets no ratio."
             ),
-            "head": ["", "kevy 6.3.0", "Redis 8.10.1", "valkey 9.1.2", "Dragonfly 1.40.2", "vs Redis 8.10.1"],
+            "head": ["", "kevy 7.0.0", "Redis 8.10.2", "valkey 9.1.2", "Dragonfly 2.0.0", "vs Redis 8.10.2"],
             "rows": [
-                ["GET", "7,489,119", "5,631,398", "2,980,764", "2,845,704", "*1.33×"],
-                ["SET", "6,824,662", "2,567,607", "1,683,227", "1,943,358", "*2.66×"],
-                ["INCR", "6,753,558", "3,294,927", "2,279,738", "1,953,406", "*2.05×"],
-                ["SADD", "6,152,617", "3,753,131", "2,214,659", "1,899,967", "*1.64×"],
-                ["HSET", "4,002,580", "2,966,288", "1,857,532", "1,773,498", "*1.35×"],
-                ["LPUSH", "3,142,699", "2,860,306", "1,859,265", "1,505,141", "!1.10×"],
-                ["ZADD", "3,242,967", "2,818,626", "1,786,230", "1,794,335", "!1.15×"],
+                ["GET", "8,726,283", "5,467,748", "4,041,855", "≥ 3,364,079", "*1.60×"],
+                ["SET", "≥ 7,409,590", "2,861,941", "2,011,380", "2,019,740", "*≥ 2.59×"],
+                ["INCR", "7,249,946", "3,788,318", "2,750,827", "2,223,491", "*1.91×"],
+                ["SADD", "6,919,570", "4,204,106", "2,728,331", "1,911,038", "*1.65×"],
+                ["HSET", "≥ 5,393,670", "3,352,393", "2,283,589", "1,964,211", "*≥ 1.61×"],
+                ["LPUSH", "4,424,738", "3,220,774", "2,260,722", "1,700,519", "*1.37×"],
+                ["ZADD", "≥ 4,980,252", "3,112,253", "2,159,811", "1,804,781", "*≥ 1.60×"],
             ],
             "note": (
-                "<b>LPUSH is 10% ahead of Redis 8.10.1, and ZADD 15%.</b> At that margin "
-                "your value sizes and key distribution decide the winner, not the "
-                "engine — so if lists or sorted sets are your hot path, benchmark your "
-                "own workload and do not switch for speed. The rows are coloured that "
-                "way on purpose."
+                "<b>LPUSH is 37% ahead of Redis 8.10.2, the narrowest row.</b> At that "
+                "margin your value sizes and key distribution weigh as much as the "
+                "engine — if lists are your hot path, benchmark your own workload "
+                "before you switch for speed."
             ),
         },
         {
@@ -1491,7 +1494,7 @@ PAGES["benchmarks"] = {
             "body": [
                 "<b>It is loopback.</b> There is no network here, and in a real "
                 "deployment the network is usually what you are waiting for. An engine "
-                "2.6× faster at GET will not make your p99 2.6× better if most of your "
+                "2× faster at GET will not make your p99 2× better if most of your "
                 "latency is the wire.",
                 "<b>The values are small.</b> At 64 KB per value the whole thing "
                 "becomes bound by the kernel's TCP path and the gap closes to single "
